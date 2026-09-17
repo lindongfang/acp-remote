@@ -10,22 +10,34 @@
     "schemaSha256": "3c17bd6385d90cf672d8a661fddc359d73422cf8b8ce6865213d25cfd4c0eca7",
     "checkedAt": "2026-09-18"
   },
+  "nodeLinkPolicy": {
+    "hopLimit": 1,
+    "rawAcp": "byte_exact_or_explicit_raw_unavailable",
+    "capabilityRule": "end_to_end_intersection",
+    "unsupportedRule": "explicit_never_silent",
+    "contentPersistence": "owner_only_default",
+    "trustModel": "access_node_principal",
+    "remoteSessionCreate": "exported_agent_and_workspace_template_only",
+    "routeFencing": "attachment_generation",
+    "tests": ["wire.raw_roundtrip", "capability.gate", "node_link.contract", "facade.contract"]
+  },
   "testFamilies": [
     { "id": "wire.decode_encode", "owner": "acp-protocol" },
     { "id": "wire.raw_roundtrip", "owner": "acp-protocol" },
-    { "id": "capability.gate", "owner": "agent-host/acp-facade" },
-    { "id": "broker.semantic", "owner": "broker-core" },
+    { "id": "capability.gate", "owner": "agent-host/server::acp_facade" },
+    { "id": "broker.semantic", "owner": "core::broker" },
     { "id": "storage.replay", "owner": "storage-sqlite" },
-    { "id": "sync.contract", "owner": "sync-server" },
+    { "id": "sync.contract", "owner": "server::sync" },
     { "id": "client.presentation", "owner": "clients/app" },
-    { "id": "facade.contract", "owner": "acp-facade" },
-    { "id": "agent.compat", "owner": "compat-tests" }
+    { "id": "facade.contract", "owner": "server::acp_facade" },
+    { "id": "agent.compat", "owner": "compat-tests" },
+    { "id": "node_link.contract", "owner": "node-link-client/server::node_link" }
   ],
   "methods": [
-    { "id": "method.initialize", "wireName": "initialize", "direction": "client_to_agent", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "snapshot", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract", "agent.compat"] },
+    { "id": "method.initialize", "wireName": "initialize", "direction": "client_to_agent", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "snapshot", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "capability.gate", "node_link.contract", "facade.contract", "agent.compat"] },
     { "id": "method.authenticate", "wireName": "authenticate", "direction": "client_to_agent", "kind": "request", "requirement": "conditional", "capability": "InitializeResponse.authMethods", "delivery": "conditional_mvp", "layers": { "acp": "native", "broker": "local_service", "sync": "not_exposed", "pwa": "not_applicable", "facade": "advertise_if_end_to_end" }, "tests": ["wire.decode_encode", "capability.gate", "agent.compat"] },
     { "id": "method.logout", "wireName": "logout", "direction": "client_to_agent", "kind": "request", "requirement": "optional", "capability": "agentCapabilities.auth.logout", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "explicit_unsupported", "pwa": "explicit_unsupported", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract"] },
-    { "id": "method.session_new", "wireName": "session/new", "direction": "client_to_agent", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "not_exposed", "pwa": "explicit_unsupported", "facade": "advertise_if_end_to_end" }, "tests": ["wire.decode_encode", "broker.semantic", "storage.replay", "agent.compat"] },
+{ "id": "method.session_new", "wireName": "session/new", "direction": "client_to_agent", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "not_exposed", "pwa": "explicit_unsupported", "facade": "advertise_if_end_to_end" }, "tests": ["wire.decode_encode", "broker.semantic", "storage.replay", "node_link.contract", "agent.compat"] },
     { "id": "method.session_load", "wireName": "session/load", "direction": "client_to_agent", "kind": "request", "requirement": "optional", "capability": "agentCapabilities.loadSession", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "explicit_unsupported", "pwa": "explicit_unsupported", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract"] },
     { "id": "method.session_list", "wireName": "session/list", "direction": "client_to_agent", "kind": "request", "requirement": "optional", "capability": "agentCapabilities.sessionCapabilities.list", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "explicit_unsupported", "pwa": "explicit_unsupported", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "sync.contract"] },
     { "id": "method.session_delete", "wireName": "session/delete", "direction": "client_to_agent", "kind": "request", "requirement": "optional", "capability": "agentCapabilities.sessionCapabilities.delete", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "explicit_unsupported", "pwa": "explicit_unsupported", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract"] },
@@ -33,9 +45,9 @@
     { "id": "method.session_close", "wireName": "session/close", "direction": "client_to_agent", "kind": "request", "requirement": "optional", "capability": "agentCapabilities.sessionCapabilities.close", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "explicit_unsupported", "pwa": "explicit_unsupported", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract"] },
     { "id": "method.session_set_mode", "wireName": "session/set_mode", "direction": "client_to_agent", "kind": "request", "requirement": "conditional", "capability": "NewSessionResponse.modes", "delivery": "conditional_mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "advertise_if_end_to_end" }, "tests": ["wire.decode_encode", "capability.gate", "broker.semantic", "sync.contract", "client.presentation"] },
     { "id": "method.session_set_config_option", "wireName": "session/set_config_option", "direction": "client_to_agent", "kind": "request", "requirement": "conditional", "capability": "NewSessionResponse.configOptions", "delivery": "conditional_mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "advertise_if_end_to_end" }, "tests": ["wire.decode_encode", "capability.gate", "broker.semantic", "sync.contract", "client.presentation"] },
-    { "id": "method.session_prompt", "wireName": "session/prompt", "direction": "client_to_agent", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "baseline" }, "tests": ["wire.decode_encode", "broker.semantic", "storage.replay", "sync.contract", "client.presentation", "agent.compat"] },
-    { "id": "method.session_cancel", "wireName": "session/cancel", "direction": "client_to_agent", "kind": "notification", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "baseline" }, "tests": ["wire.decode_encode", "broker.semantic", "sync.contract", "agent.compat"] },
-    { "id": "method.session_update", "wireName": "session/update", "direction": "agent_to_client", "kind": "notification", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "broker.semantic", "storage.replay", "sync.contract", "client.presentation", "facade.contract", "agent.compat"] },
+    { "id": "method.session_prompt", "wireName": "session/prompt", "direction": "client_to_agent", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "baseline" }, "tests": ["wire.decode_encode", "broker.semantic", "storage.replay", "node_link.contract", "sync.contract", "client.presentation", "agent.compat"] },
+    { "id": "method.session_cancel", "wireName": "session/cancel", "direction": "client_to_agent", "kind": "notification", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "baseline" }, "tests": ["wire.decode_encode", "broker.semantic", "node_link.contract", "sync.contract", "agent.compat"] },
+    { "id": "method.session_update", "wireName": "session/update", "direction": "agent_to_client", "kind": "notification", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "event", "pwa": "view_only", "facade": "baseline" }, "tests": ["wire.decode_encode", "wire.raw_roundtrip", "broker.semantic", "storage.replay", "node_link.contract", "sync.contract", "client.presentation", "facade.contract", "agent.compat"] },
     { "id": "method.session_request_permission", "wireName": "session/request_permission", "direction": "agent_to_client", "kind": "request", "requirement": "baseline", "capability": null, "delivery": "mvp", "layers": { "acp": "native", "broker": "project_and_preserve", "sync": "command", "pwa": "full", "facade": "baseline" }, "tests": ["wire.decode_encode", "broker.semantic", "storage.replay", "sync.contract", "client.presentation", "agent.compat"] },
     { "id": "method.fs_read_text_file", "wireName": "fs/read_text_file", "direction": "agent_to_client", "kind": "request", "requirement": "optional", "capability": "clientCapabilities.fs.readTextFile", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "not_exposed", "pwa": "not_applicable", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract"] },
     { "id": "method.fs_write_text_file", "wireName": "fs/write_text_file", "direction": "agent_to_client", "kind": "request", "requirement": "optional", "capability": "clientCapabilities.fs.writeTextFile", "delivery": "post_mvp", "layers": { "acp": "native", "broker": "explicit_unsupported", "sync": "not_exposed", "pwa": "not_applicable", "facade": "not_advertised" }, "tests": ["wire.decode_encode", "capability.gate", "facade.contract"] },
@@ -98,6 +110,8 @@
     { "id": "invariant.unknown_fields_byte_exact", "fixture": "../../../fixtures/acp/v1/unknown-fields-and-large-integer.json", "expectation": "byte_exact", "tests": ["wire.raw_roundtrip", "storage.replay", "sync.contract"] },
     { "id": "invariant.tool_call_stays_structured", "fixture": "../../../fixtures/acp/v1/tool-call-with-diff.json", "expectation": "structured_not_text", "tests": ["broker.semantic", "sync.contract", "client.presentation"] },
     { "id": "invariant.capability_truthful", "fixture": "../../../fixtures/acp/v1/initialize-capabilities.json", "expectation": "truthful_negotiation", "tests": ["capability.gate", "facade.contract"] },
-    { "id": "invariant.future_update_visible", "fixture": "../../../fixtures/acp/v1/future-session-update.json", "expectation": "explicit_unsupported", "tests": ["wire.raw_roundtrip", "sync.contract", "client.presentation"] }
+    { "id": "invariant.future_update_visible", "fixture": "../../../fixtures/acp/v1/future-session-update.json", "expectation": "explicit_unsupported", "tests": ["wire.raw_roundtrip", "sync.contract", "client.presentation"] },
+    { "id": "invariant.node_link_raw_byte_exact", "fixture": "../../../fixtures/acp/v1/unknown-fields-and-large-integer.json", "expectation": "byte_exact", "tests": ["wire.raw_roundtrip", "node_link.contract", "storage.replay"] },
+    { "id": "invariant.node_link_capability_intersection", "fixture": "../../../fixtures/acp/v1/initialize-capabilities.json", "expectation": "truthful_negotiation", "tests": ["capability.gate", "node_link.contract", "facade.contract"] }
   ]
 }

@@ -10,6 +10,7 @@
 - [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md)：模块名称、职责、依赖方向和 crate 边界的唯一权威来源。
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
 - [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md)：客户端与 Daemon 之间认证、消息、游标、重放、幂等和 wire schema 的权威来源。
+- [docs/NODE_LINK_PROTOCOL.md](docs/NODE_LINK_PROTOCOL.md)：ACP Remote 节点之间资源导出/导入、权威、认证、授权、重放和幂等边界的权威来源。
 - [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)：系统威胁模型、信任边界、授权、数据保护、供应链和安全验收的权威来源。
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
@@ -20,16 +21,18 @@
 
 ## 2. 项目定位
 
-ACP Remote 是运行在用户电脑上的本地优先 ACP 中转站：
+ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
-- 电脑端是会话和安全状态的唯一权威，只能由电脑端创建会话。
-- 手机端可以查看已有会话、继续对话、处理通知、选择或切换模型，但不能创建会话。
+- 一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；同一节点可以同时承担 Owner 和 Access 角色。
+- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 只持久化来源引用、cursor、ACK、requestId、命令终态引用和 local sequence 映射，不持久化 prompt、回复、diff、终端或 ACP raw 正文。
+- 手机、电脑、Zed、PWA 和 CLI 是客户端形态，不是固定权限角色；能力由 principal scope、Export Policy 和端到端 capability 决定。
+- Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`，以支持 Zed 的正常 `session/new`；当前 PWA MVP 可以不展示创建入口。
 - Zed 是可选客户端，项目不得与 Zed 强绑定。
-- Daemon 是底层 ACP Agent 的唯一 ACP Client，负责 Codex、Oh My Pi 等 Agent 的生命周期。
-- 第一阶段不提供应用级云服务器或持久云中继；电脑离线时，远程控制不可用。
+- 对直接管理的 Agent，Owner Node Daemon 是其唯一 ACP Client，负责 Codex、Oh My Pi 等 Agent 的生命周期；Access Node 通过 Node Link 访问，不直接接管远程 Agent stdio。
+- 第一阶段不提供应用级云服务器或持久云中继；Owner Node 离线时，远程控制不可用。
 - LAN、Tailscale 或其他网络路径都是可替换的部署方式，核心不能依赖 Tailscale SDK、CLI 或身份体系。
 - 核心、Daemon 和 CLI 使用 Rust；npm 只负责分发预编译二进制，最终用户不应被要求安装 Rust 工具链。
-- 前端第一阶段只实现由 Daemon 本地托管的 Web/PWA；Android/iOS 原生客户端属于后续阶段。
+- Node Link 是首个产品纵向切片；前端首个交付仍只实现由 Daemon 本地托管的 Web/PWA，Android/iOS 原生客户端属于后续阶段。
 
 不要在没有明确需求的情况下引入账号中心、云数据库、遥测平台、第三方消息中继或厂商锁定的网络能力。
 
@@ -51,7 +54,7 @@ ACP Remote 是运行在用户电脑上的本地优先 ACP 中转站：
 ### 会话与消息不变量
 
 - 同一个会话同时最多有一个 active turn；不同会话可以并行。
-- Agent 事件必须先持久化成功，再向客户端广播。
+- Owned Agent 事件必须由 Owner 的 `SessionStore` 先持久化成功，再向客户端广播；imported 事件已经由 Owner 持久化，Access 必须先提交无正文 `RemoteDeliveryStore` 收据再向本地客户端广播。
 - `persist_deltas: false` 只允许 turn 完成后压缩或清理短期 delta，不允许未持久化就广播带 sequence 的事件。
 - 事件采用至少一次投递，客户端按稳定 `eventId` 去重。
 - 可重试命令必须携带稳定 `requestId`；客户端重试不得造成第二次接受或派发，外部 Agent 崩溃窗口无法确认时必须显式进入 `uncertain`。
@@ -60,11 +63,11 @@ ACP Remote 是运行在用户电脑上的本地优先 ACP 中转站：
 
 ### 安全不变量
 
-- 网络可达不等于应用授权，Tailscale 身份不能代替 ACP Remote 设备身份。
-- 首次扫码用于建立长期设备信任；正常重连不要求重复扫码。
-- 默认安全 Profile 是可信 HTTPS/WSS + ECDSA P-256 设备签名 challenge-response；TLS 终止点必须位于用户电脑的可信边界内。
-- 长期 Host/设备签名密钥和 TLS 单次连接临时密钥必须分离。
-- Host/设备 wire signature 固定为 64-byte P1363 `r || s` + 无填充 base64url；签名/HMAC 不直接使用普通 JSON，必须使用 Sync Protocol 定义的域分离长度前缀 transcript。
+- 网络可达不等于应用授权，Tailscale 身份不能代替 ACP Remote 设备或节点身份。
+- 首次扫码用于建立长期设备/节点信任；正常重连不要求重复扫码。
+- 默认安全 Profile 是可信 HTTPS/WSS + ECDSA P-256 身份签名 challenge-response；TLS 终止点必须位于对应节点主机的可信边界内。
+- 长期 Node/设备签名密钥和 TLS 单次连接临时密钥必须分离。
+- Node/设备 wire signature 固定为 64-byte P1363 `r || s` + 无填充 base64url；签名/HMAC 不直接使用普通 JSON，必须使用对应协议定义的域分离长度前缀 transcript。
 - 一个 PWA 设备身份只绑定一个 canonical origin；Origin 变化必须重新配对，禁止通过导出私钥实现跨 Origin 迁移。
 - 每个新 WSS 连接完整执行 challenge-response，不引入长期 bearer session/refresh token。
 - 每个业务命令都要根据已认证设备及其 scope 授权。
@@ -77,38 +80,39 @@ ACP Remote 是运行在用户电脑上的本地优先 ACP 中转站：
 计划中的主要边界为：
 
 ```text
-domain
+core
 acp-protocol
 sync-protocol
-application-ports
-broker-core
+node-link-protocol
 agent-host
+node-link-client
 storage-sqlite
-device-auth
-sync-server
-acp-facade
-daemon
-cli
+identity-auth
+server
+app
 ```
 
-这些名称首先表示职责边界，不要求项目第一天就拆成同等数量的 crate。只有需要阻止反向依赖、被多个入口复用、拥有独立协议/平台实现或需要独立测试时才拆 crate。
+物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate。
 
 依赖必须指向更稳定的内层：
 
 ```text
-composition -> adapters -> ports -> domain
-composition -> broker   -> ports -> domain
-adapters    -> wire protocols
+app              -> server / backends / identity-auth / core
+server           -> core + wire protocols
+outbound adapters-> core + wire protocols
+core use_cases   -> core ports + core model
 ```
 
 必须遵守：
 
-- `domain` 不依赖 Tokio、Axum、SQLite、WebSocket、子进程、ACP DTO 或具体 Agent。
-- `broker-core` 不直接依赖网络、SQLite、Noise、子进程、Codex、OMP 或 Tailscale。
-- `sync-server`、`acp-facade` 和 `cli` 是平级入站适配器，只调用应用入口，不能互相调用。
-- `storage-sqlite`、`agent-host` 等出站适配器之间不能互相调用。
+- `core` 不依赖任何 wire protocol、Tokio runtime、Axum、SQLite、WebSocket、子进程、ACP DTO 或具体 Agent。
+- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。
+- `server::sync`、`server::node_link`、`server::acp_facade` 是平级入站适配器，只调用 `core::use_cases`，不能互相调用。
+- `storage-sqlite`、`agent-host`、`node-link-client` 等出站适配器之间不能互相调用。
 - ACP DTO 只存在于 ACP 边界，Sync DTO 只存在于同步协议边界，数据库 record 只存在于 SQLite 适配器。
-- `daemon` 是组合根，可以装配具体实现，但不能承载业务规则。
+- 禁止定义巨型 `AgentRuntime`；本地和远程 backend 通过 `AgentCatalog`、`SessionBackendFactory` 和会话级 `SessionEndpoint` 实现。
+- Owned session 使用 `SessionStore` 单次事务提交状态、事件和幂等；imported session 使用无正文 `RemoteDeliveryStore`，不得复用 owned content 写入路径。
+- `app` 是组合根，可以装配具体实现，但不能承载业务规则。
 - 禁止创建万能 `common`、`helpers` 或 `utils` 模块；代码应放到拥有其语义的模块中。
 - 不要为了复用几行代码破坏依赖方向。
 
@@ -122,7 +126,7 @@ adapters    -> wire protocols
 - Agent 特有能力优先通过 capability/extension 表达，不在核心中堆积 Agent 名称判断。
 - ACP 版本变化应集中在 `acp-protocol` 和适配器边界处理。
 
-### 手机同步协议
+### 客户端同步协议
 
 - 协议必须显式版本化，并通过 feature negotiation 演进。
 - 命令、事件、ACK、快照和错误使用明确的结构化类型。
@@ -132,9 +136,19 @@ adapters    -> wire protocols
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
 - Sync wire 变更必须同步维护 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例。
 
+### Node Link
+
+- Node Link 与客户端 Sync Protocol 是不同边界，不能直接复用 wire DTO 或把 ACP stdio 透明隧道化。
+- Owner Node 保存 origin event/sequence、命令终态和会话正文；Access Node 默认只保存无正文的交付索引，并保留来源身份、cursor、摘要和 local sequence 映射。
+- 第一阶段采用节点级信任：Owner 认证并授权 Access Node，Access 对本地 Zed/PWA/CLI 负责；`localPrincipalRef` 只用于审计归因，不是 Owner 直接认证的最终用户身份。
+- 有效权限是 Owner Export grant、Access 本地授权和实际 capability 的交集；节点配对不产生传递信任。
+- 第一阶段 imported Agent 只能提供给本节点客户端，禁止再次通过 Node Link 导出。
+- 第一阶段 Node Link 必须把 Zed `session/new` 映射为受限远程 `session.create`；请求不得携带任意 Owner 路径或 Provider/MCP 凭据。
+- 跨节点可重试命令保持稳定 requestId；崩溃窗口仍必须进入 `uncertain`，不能在 Access Node 擅自重试副作用。
+
 ### 前端客户端
 
-- 使用 TypeScript 与 Expo/React Native 通用工程；第一阶段只构建 Web/PWA。
+- 使用 TypeScript 与 Expo/React Native 通用工程；前端首个交付只构建 Web/PWA，并位于 Node Link 首个纵向切片之后。
 - 页面不能直接操作 WebSocket、浏览器数据库、SecureStore、SQLite 或平台生命周期。
 - 协议 DTO、客户端领域状态和 UI view model 必须分离。
 - 连接、认证、重放和命令状态使用明确状态机，不使用可能产生非法组合的一组布尔值。
@@ -145,10 +159,10 @@ adapters    -> wire protocols
 
 ## 6. 持久化规则
 
-- SQLite 是本地权威事件日志和状态存储，不把内存广播队列当作事实来源。
+- Owner Node 的 SQLite 是其本地 Agent/会话的权威事件日志。默认 `no-content-cache` 下，Access Node SQLite 只能保存 import、来源引用、cursor/ACK、幂等记录、命令终态引用和无正文交付索引；正文通过 Owner 重放获取，不把内存广播队列当作事实来源。
 - 需要原子性的状态变化和事件追加必须放在同一事务中。
 - schema 变更必须提供可重复执行或版本化 migration，并测试旧数据库升级。
-- 长期保存最终消息、关键结构化事件、权限结果、状态变化和必要摘要。
+- Owner Node 长期保存最终消息、关键结构化事件、权限结果、状态变化和必要摘要；本条不得被解释为允许 Access Node 默认复制远程会话正文。
 - 流式 delta、终端噪声和大型附件使用 TTL、大小上限或压缩策略。
 - 清理原始噪声不能破坏仍在承诺期内的重放、审计和 ACP 语义保真。
 
@@ -192,14 +206,15 @@ cargo test --workspace --all-features
 
 根据改动选择对应测试：
 
-- `domain`：状态转换、值对象和不变量。
+- `core`：状态转换、值对象、owned/imported 分流、每会话串行、事务提交和不变量。
 - `acp-protocol`：官方 fixture、未知字段往返、扩展 payload 和版本兼容。
-- `broker-core`：fake ports、并发、幂等、先存后发和每会话串行。
 - `agent-host`：fake ACP child、超时、取消、崩溃和乱序响应。
-- `storage-sqlite`：migration、事务、TTL、容量限制和崩溃恢复。
-- `device-auth`：配对过期、重放、密钥变化、撤销和错误权限。
-- `sync-server`：认证、限流、backpressure、ACK 和断线续传。
-- `acp-facade`：ACP contract、能力协商真实性、扩展透传和会话重放。
+- `node-link-client`：fake Owner、attachment generation、显式重连、origin 去重和 uncertain。
+- `storage-sqlite`：migration、owned 原子提交、imported 无正文约束、TTL、容量限制和崩溃恢复。
+- `identity-auth`：设备/节点配对过期、重放、密钥变化、无传递信任、撤销和错误权限。
+- `server::sync`：认证、限流、backpressure、ACK 和断线续传。
+- `server::node_link`：Export 过滤、attachment、节点认证、ACK 和撤销。
+- `server::acp_facade`：ACP contract、能力协商真实性、扩展透传和会话重放。
 
 普通 CI 使用可控的 fake ACP Agent。真实 Codex/OMP 测试属于可选兼容性套件，不应成为普通单元测试的硬依赖。
 
@@ -213,6 +228,7 @@ cargo test --workspace --all-features
 - crate、模块职责或依赖方向变化：更新 `docs/MODULE_ARCHITECTURE.md`。
 - 前端阶段、客户端行为或平台边界变化：更新 `docs/FRONTEND_DESIGN.md`。
 - ACP 方法、通知、content、capability 或各层支持状态变化：更新 `docs/ACP_COMPATIBILITY_MATRIX.md`、机器矩阵和相应 fixture；运行 `node scripts/check-acp-compatibility.mjs`。
+- 节点角色、Export/Import、跨节点身份、授权、cursor 或命令语义变化：更新 `docs/NODE_LINK_PROTOCOL.md`，并同步安全、模块与协议测试资产。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。

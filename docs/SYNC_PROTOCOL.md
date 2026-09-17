@@ -2,7 +2,7 @@
 
 > 状态：编码前协议基线（Draft）  
 > 协议版本：1  
-> 日期：2026-09-17  
+> 日期：2026-09-18
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
 ## 1. 文档职责
@@ -15,7 +15,7 @@
 - cursor、重放、幂等、排序、背压和版本兼容规则。
 - ACP 原始 payload 在 Sync Protocol 中的承载边界。
 
-本文不定义 ACP 本身的语义、Broker 内部领域模型、SQLite schema 或 UI 组件。发生冲突时：
+本文不定义 ACP 本身的语义、Broker 内部领域模型、SQLite schema、UI 组件或 ACP Remote 节点间协议。Node Link 由 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 独立定义，不能直接复用本文 wire DTO。发生冲突时：
 
 - 产品权限和保留策略以 [INITIAL_DESIGN.md](./INITIAL_DESIGN.md) 为准。
 - 模块职责和依赖以 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) 为准。
@@ -23,6 +23,8 @@
 - 本文只负责把上述决策落实成可互操作的 wire contract。
 
 规范中的“必须”“不得”“应”“可以”分别表示强制要求、强制禁止、推荐要求和可选行为。
+
+术语说明：Sync v1 的 wire 字段沿用 `hostId`、`hostPublicKey` 和 `hostProof`；在节点化架构中，它们表示当前向客户端提供 Sync 服务的 ACP Remote Node。Node Link 使用独立 Node Identity transcript，不复用这些设备配对消息。
 
 ## 2. 设计目标与不变量
 
@@ -51,13 +53,15 @@ Sync Protocol 提供适合客户端消费的公共视图，但公共视图不是
 
 ### 2.3 权威性与投递语义
 
-- Daemon 是会话、授权、事件日志和命令状态的唯一权威。
-- 事件必须先持久化，再广播。
+- 对本地 Agent/会话，当前 Daemon 是资源权威；对 imported Agent/会话，Owner Node 是资源权威，当前 Access Node 只对本地身份、无正文交付索引和 local sequence 负责。
+- 本地资源事件必须先写入当前节点的权威事件日志再广播。远程资源事件已由 Owner 先持久化；Access 在向本地客户端广播前只提交 origin cursor、eventId/type/digest 和 local sequence 映射，默认不得复制正文。
 - 事件采用至少一次投递，客户端按 `eventId` 去重。
 - 同一事件日志实例内，`globalSequence` 严格递增；同一会话内，`sessionSequence` 严格递增。
 - `requestId` 保证客户端重试不会创建第二次命令接受或第二次 Agent 派发。
 - 不宣称网络或外部 Agent 副作用“恰好一次”；崩溃窗口无法确认时必须返回 `uncertain`，不得自动重复派发。
 - 慢客户端不得阻塞 Agent、Broker 或其他客户端。
+
+当前 Sync v1 baseline 只完整定义本节点资源。Access Node 向客户端暴露 imported resource 前，必须通过后续协商 feature/schema 增加 `ownerNodeId`、`exportId`、origin cursor、在线状态和 `no-content-cache`；在该 feature 落地前不得把远程资源伪装成本地权威会话。该模式下 snapshot 和 replay 正文必须在线回源 Owner，客户端不得持久化正文。
 
 ## 3. Transport Profile
 
@@ -1048,7 +1052,7 @@ schema -> authenticated device -> scope -> state/version
 
 ### 11.3 首批命令
 
-手机默认可授权：
+Sync v1 baseline 可以授予：
 
 ```text
 session.list
@@ -1064,7 +1068,7 @@ elicitation.respond
 command.status
 ```
 
-电脑端专属或默认禁止手机：
+Sync v1 尚未定义，或仅允许 Node 本地管理入口：
 
 ```text
 session.create
@@ -1322,7 +1326,7 @@ v1 默认上限：
 - 改变排序、ACK、cursor 或幂等语义。
 - 改变 transcript codec、算法、domain 或 field tag。
 - 引入 binary framing、压缩、附件传输或不同 Transport Profile。
-- 让手机获得创建会话等新的产品权限，除协议 feature 外还需要产品设计确认。
+- 增加 `session.create`、imported resource origin 等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。
 
 ### 16.3 数据迁移
 

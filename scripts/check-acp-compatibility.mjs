@@ -100,6 +100,13 @@ if (matrix) {
   if (matrix.protocol?.wireVersion !== 1) errors.push("protocol.wireVersion must be 1");
   if (!/^[0-9a-f]{40}$/.test(matrix.protocol?.sourceCommit ?? "")) errors.push("protocol.sourceCommit must be pinned");
   if (!/^[0-9a-f]{64}$/.test(matrix.protocol?.schemaSha256 ?? "")) errors.push("protocol.schemaSha256 must be pinned");
+  if (matrix.nodeLinkPolicy?.hopLimit !== 1) errors.push("nodeLinkPolicy.hopLimit must be 1 for the first release");
+  if (matrix.nodeLinkPolicy?.capabilityRule !== "end_to_end_intersection") errors.push("nodeLinkPolicy must require end-to-end capability intersection");
+  if (matrix.nodeLinkPolicy?.rawAcp !== "byte_exact_or_explicit_raw_unavailable") errors.push("nodeLinkPolicy must preserve raw ACP or fail explicitly");
+  if (matrix.nodeLinkPolicy?.contentPersistence !== "owner_only_default") errors.push("nodeLinkPolicy must keep session content on the Owner by default");
+  if (matrix.nodeLinkPolicy?.trustModel !== "access_node_principal") errors.push("nodeLinkPolicy must use the Access Node as the first-release principal");
+  if (matrix.nodeLinkPolicy?.remoteSessionCreate !== "exported_agent_and_workspace_template_only") errors.push("nodeLinkPolicy must constrain remote session creation to exported Agents and workspace templates");
+  if (matrix.nodeLinkPolicy?.routeFencing !== "attachment_generation") errors.push("nodeLinkPolicy must fence stale session routes with attachment generations");
 
   const familyIds = new Set((matrix.testFamilies ?? []).map((family) => family.id));
   const allRows = [
@@ -110,6 +117,9 @@ if (matrix) {
     for (const test of row.tests ?? []) {
       if (!familyIds.has(test)) errors.push(`${row.id}: unknown test family ${test}`);
     }
+  }
+  for (const test of matrix.nodeLinkPolicy?.tests ?? []) {
+    if (!familyIds.has(test)) errors.push(`nodeLinkPolicy: unknown test family ${test}`);
   }
 
   compareSet("methods", checkRows("methods", matrix.methods, "wireName"), expected.methods);
@@ -122,10 +132,15 @@ if (matrix) {
     if (method.requirement === "optional" && !method.capability) errors.push(`${method.id}: optional method lacks capability gate`);
     if (method.layers?.facade === "baseline" && method.requirement !== "baseline") errors.push(`${method.id}: facade baseline overclaims a non-baseline method`);
   }
+  for (const wireName of ["initialize", "session/new", "session/prompt", "session/cancel", "session/update"]) {
+    const method = (matrix.methods ?? []).find((row) => row.wireName === wireName);
+    if (!method?.tests?.includes("node_link.contract")) errors.push(`${wireName}: first Node Link vertical slice requires node_link.contract`);
+  }
 
   const requiredInvariants = new Set([
     "invariant.unknown_fields_byte_exact", "invariant.tool_call_stays_structured",
-    "invariant.capability_truthful", "invariant.future_update_visible"
+    "invariant.capability_truthful", "invariant.future_update_visible",
+    "invariant.node_link_raw_byte_exact", "invariant.node_link_capability_intersection"
   ]);
   const invariantIds = new Set();
   for (const item of matrix.invariants ?? []) {

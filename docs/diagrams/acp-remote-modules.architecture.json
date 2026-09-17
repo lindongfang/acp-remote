@@ -2,38 +2,48 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "ACP Remote 模块边界与依赖方向",
+    "title": "ACP Remote 节点与 Agent 访问架构",
     "locale": "zh-CN",
+    "output": "acp-remote-modules.html",
     "quality_profile": "showcase",
-    "viewBox": [1280, 820],
     "views": [
-      { "id": "entry", "label": "多入口复用", "focus": ["clients", "inbound-adapters", "wire-protocols", "app-ports"], "note": "Mobile、CLI 与 Zed 在边界终止各自协议，共用同一组应用用例。" },
-      { "id": "core", "label": "最小核心", "focus": ["app-ports", "broker-core", "domain"], "note": "Broker 只表达会话、队列、路由和幂等规则，不认识网络、数据库或子进程。" },
-      { "id": "adapters", "label": "适配器替换", "focus": ["app-ports", "outbound-adapters", "agents"], "note": "具体 Agent、SQLite 与设备认证实现核心定义的端口，彼此不直接依赖。" }
+      { "id": "remote-zed", "label": "远程 Zed 访问", "focus": ["remoteClients", "accessIngress", "accessBroker", "nodeClient", "nodeServer", "ownerBroker", "agentHost", "agent"], "note": "Zed 只连接本机 ACP facade，跨节点认证、授权与重放由两端 ACP Remote 负责。" },
+      { "id": "direct-client", "label": "客户端直接访问", "focus": ["directClients", "nodeServer", "ownerBroker", "storage", "agentHost", "agent"], "note": "PWA、手机或电脑客户端也可以直接连接资源归属节点，不要求经过访问节点。" },
+      { "id": "authority", "label": "权威与持久化", "focus": ["accessBroker", "ownerBroker", "storage", "agentHost"], "note": "Agent 与会话正文只由资源归属节点持久化；访问节点仅保存无正文交付索引和来源游标。" }
     ]
   },
   "components": [
-    { "id": "wire-protocols", "type": "backend", "label": "Wire Protocols", "sublabel": "acp-protocol · sync-protocol", "pos": [600, 70], "size": [210, 72], "tag": "只含 schema / codec" },
-    { "id": "clients", "type": "external", "label": "客户端", "sublabel": "Mobile · CLI · Zed", "pos": [20, 270], "size": [130, 72] },
-    { "id": "inbound-adapters", "type": "frontend", "label": "Inbound Adapters", "sublabel": "sync-server · acp-facade", "pos": [280, 270], "size": [190, 72] },
-    { "id": "app-ports", "type": "messagebus", "label": "Application Ports", "sublabel": "入站用例 · 出站接口", "pos": [620, 270], "size": [190, 72], "tag": "稳定契约" },
-    { "id": "broker-core", "type": "backend", "label": "broker-core", "sublabel": "Session Actor · 路由 · 幂等", "pos": [940, 270], "size": [190, 72], "tag": "纯业务核心" },
-    { "id": "agents", "type": "external", "label": "ACP Agents", "sublabel": "Codex · OMP · Others", "pos": [280, 500], "size": [190, 72] },
-    { "id": "outbound-adapters", "type": "backend", "label": "Outbound Adapters", "sublabel": "agent-host · sqlite · auth", "pos": [620, 500], "size": [190, 72] },
-    { "id": "domain", "type": "backend", "label": "domain", "sublabel": "Session · Event · Command", "pos": [940, 500], "size": [190, 72], "tag": "零 I/O" }
+    { "id": "remoteClients", "type": "external", "label": "远程本地客户端", "sublabel": "Zed / CLI / Desktop", "pos": [35, 310], "size": [140, 68] },
+    { "id": "accessIngress", "type": "frontend", "label": "Server Adapters", "sublabel": "sync / acp_facade", "pos": [215, 310], "size": [140, 68] },
+    { "id": "accessBroker", "type": "backend", "label": "Access Core", "sublabel": "用例 / 无正文索引", "pos": [395, 310], "size": [140, 68] },
+    { "id": "nodeClient", "type": "security", "label": "Node Link Client", "sublabel": "节点身份与授权", "pos": [395, 475], "size": [140, 68] },
+    { "id": "directClients", "type": "external", "label": "直接访问客户端", "sublabel": "PWA / 手机 / 电脑", "pos": [590, 80], "size": [145, 68] },
+    { "id": "nodeServer", "type": "security", "label": "Server / Node Link", "sublabel": "入站 adapter 与验签", "pos": [590, 310], "size": [145, 68] },
+    { "id": "ownerBroker", "type": "backend", "label": "Owner Core", "sublabel": "会话用例与权威", "pos": [775, 310], "size": [145, 68] },
+    { "id": "storage", "type": "database", "label": "SQLite Event Log", "sublabel": "权威事件与游标", "pos": [775, 475], "size": [145, 68] },
+    { "id": "agentHost", "type": "backend", "label": "Agent Host", "sublabel": "进程 / ACP stdio", "pos": [960, 310], "size": [140, 68] },
+    { "id": "agent", "type": "external", "label": "ACP Agent", "sublabel": "Codex / OMP / 其他", "pos": [1140, 310], "size": [140, 68] },
+    { "id": "companyClients", "type": "external", "label": "公司本地客户端", "sublabel": "Zed / CLI", "pos": [960, 80], "size": [140, 68] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "远程访问节点（可选）", "wraps": ["accessIngress", "accessBroker", "nodeClient"], "pad": 24 },
+    { "kind": "region", "label": "公司资源归属节点", "wraps": ["nodeServer", "ownerBroker", "storage", "agentHost"], "pad": 24 }
   ],
   "connections": [
-    { "id": "client-entry", "from": "clients", "to": "inbound-adapters", "label": "HTTP/WS · ACP stdio", "variant": "emphasis", "labelDy": -18 },
-    { "id": "entry-schema", "from": "inbound-adapters", "to": "wire-protocols" },
-    { "id": "entry-use-cases", "from": "inbound-adapters", "to": "app-ports", "variant": "emphasis" },
-    { "id": "core-contracts", "from": "broker-core", "to": "app-ports", "label": "实现用例 · 使用端口", "variant": "emphasis", "labelDy": -18 },
-    { "id": "core-domain", "from": "broker-core", "to": "domain", "label": "领域规则", "labelAt": [1035, 356] },
-    { "id": "adapters-contracts", "from": "outbound-adapters", "to": "app-ports", "label": "实现出站端口", "labelDx": 60 },
-    { "id": "adapter-agent", "from": "outbound-adapters", "to": "agents", "label": "ACP JSON-RPC / stdio", "variant": "emphasis", "labelDy": -18 }
+    { "id": "remoteToIngress", "from": "remoteClients", "to": "accessIngress", "label": "本机 ACP / HTTPS", "variant": "emphasis", "labelDy": 58 },
+    { "id": "ingressToAccess", "from": "accessIngress", "to": "accessBroker", "label": "应用命令", "labelDy": 58 },
+    { "id": "accessToLink", "from": "accessBroker", "to": "nodeClient", "label": "导入 Agent", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "nodeLink", "from": "nodeClient", "to": "nodeServer", "label": "Node Link · WSS + 双向节点认证", "variant": "security", "fromSide": "right", "toSide": "bottom" },
+    { "id": "directToOwner", "from": "directClients", "to": "nodeServer", "label": "Sync / Node Link", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "nodeToOwner", "from": "nodeServer", "to": "ownerBroker", "label": "授权后的命令", "labelDy": 58 },
+    { "id": "ownerToStore", "from": "ownerBroker", "to": "storage", "label": "先持久化后广播", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "ownerToHost", "from": "ownerBroker", "to": "agentHost", "label": "Agent backend port", "labelDy": 58 },
+    { "id": "hostToAgent", "from": "agentHost", "to": "agent", "label": "ACP stdio", "variant": "emphasis", "labelDy": 58 },
+    { "id": "companyToOwner", "from": "companyClients", "to": "ownerBroker", "label": "本机 ACP / CLI", "fromSide": "bottom", "toSide": "top" }
   ],
   "cards": [
-    { "dot": "cyan", "title": "基础层", "items": ["domain：稳定领域类型，不含 I/O", "acp-protocol / sync-protocol：只含 wire schema 与 codec", "application-ports：跨层唯一契约"] },
-    { "dot": "emerald", "title": "核心与适配器", "items": ["broker-core：会话状态机、串行队列、路由与幂等", "inbound：sync-server、acp-facade", "outbound：agent-host、storage-sqlite、device-auth"] },
-    { "dot": "violet", "title": "组合与扩展", "items": ["daemon 是唯一知道所有具体实现的组合根", "新增客户端或 Agent 优先新增适配器", "适配器之间禁止相互依赖"] }
+    { "dot": "cyan", "title": "节点角色", "items": ["同一 ACP Remote 可同时导入和导出 Agent", "资源归属由 Agent/会话决定，不由手机或电脑形态决定"] },
+    { "dot": "rose", "title": "安全边界", "items": ["节点配对形成长期信任，但不自动建立传递信任", "有效权限 = Owner 导出授权 ∩ Access 本地授权"] },
+    { "dot": "emerald", "title": "一致性", "items": ["Owner Node 是会话和事件权威", "跨节点至少一次投递，保留 originEventId 与来源游标"] }
   ]
 }

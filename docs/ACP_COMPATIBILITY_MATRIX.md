@@ -17,10 +17,11 @@ ACP 兼容性不能只用一个 `supported: true/false` 表示。每项能力必
 1. 上游 Agent 是否声明该能力；
 2. `agent-host` / `acp-protocol` 是否能接收并保真；
 3. Broker 是否理解、持久化并保持原语义；
-4. Sync 是否有结构化表示或明确的 raw fallback；
-5. PWA 是否能操作、只读展示或明确显示不支持；
-6. `acp-facade` 是否确实能够向 IDE 宣告该能力；
-7. 哪些 fixture、契约测试和端到端测试证明上述结论。
+4. Node Link 是否能跨节点保持 raw ACP、origin 和 capability gate；
+5. Sync 是否有结构化表示或明确的 raw fallback；
+6. PWA 是否能操作、只读展示或明确显示不支持；
+7. `acp-facade` 是否确实能够向 IDE 宣告该能力；
+8. 哪些 fixture、契约测试和端到端测试证明上述结论。
 
 ## 2. 权威来源与版本固定
 
@@ -60,11 +61,13 @@ ACP 兼容性不能只用一个 `supported: true/false` 表示。每项能力必
 | `toolCallContents` | tool result content/diff/terminal | 不得文本化，生命周期保持 |
 | `capabilities` | 初始化时影响行为的 capability path | 宣告必须与端到端实际能力一致 |
 
+`nodeLinkPolicy` 是跨全部矩阵行的额外强制层：第一阶段只允许一个 Node Link hop；raw ACP 必须字节保真或显式 `rawUnavailable`；能力只能取 Agent、Owner、Export、Node Link、Access 与最终客户端的交集；会话正文默认只由 Owner 持久化；Owner 以 Access Node 为授权 principal；远程建会话只能选择已导出的 Agent 和 workspace template；live session route 使用 attachment generation 阻止旧连接 frame 误投递。
+
 每行的 `layers` 不是实现状态，而是目标行为：
 
 - `native`：保持 ACP 原生语义；
 - `project_and_preserve`：创建公共领域视图，同时保留 ACP raw document；
-- `local_service`：由 Daemon 作为 ACP Client 在电脑端提供服务；
+- `local_service`：由 Owner Node Daemon 作为 ACP Client 在资源归属节点提供服务；
 - `command` / `event` / `snapshot`：通过对应 Sync 语义暴露；
 - `view_only`：PWA 能明确展示但不能发起；
 - `explicit_unsupported`：必须返回/展示明确不支持；
@@ -93,6 +96,7 @@ ACP 兼容性不能只用一个 `supported: true/false` 表示。每项能力必
 | `client.presentation` | PWA 可操作、只读或显式降级，不静默隐藏 |
 | `facade.contract` | 对 IDE 的方法、响应、通知和 capability negotiation 符合 ACP |
 | `agent.compat` | fake Agent 常规 CI；Codex/OMP 为可选真实兼容套件 |
+| `node_link.contract` | 跨节点 raw/origin 保真、capability 交集、无正文 Access 索引、节点级授权、受限建会话、断线重放与明确不支持 |
 
 矩阵结构检查由以下命令执行：
 
@@ -106,7 +110,7 @@ node scripts/check-acp-compatibility.mjs
 
 第一阶段至少必须通过：
 
-1. `initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` 的 fake Agent 端到端测试；
+1. `initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` 的 fake Agent 端到端测试，并覆盖 Owner—Access Node Link；
 2. 全部 11 种 `session/update` 的解码与 raw 保真测试，即使 PWA 尚不能完整呈现其中某项；
 3. text prompt 输入；Agent 输出的五种 content block 均不会静默丢失；
 4. tool call、diff、terminal、permission、elicitation 保持结构化或明确降级；

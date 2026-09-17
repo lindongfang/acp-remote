@@ -6,7 +6,7 @@
 
 ## 背景
 
-ACP Remote 不使用应用级云中继，客户端直接连接用户电脑。第一阶段客户端是 PWA，因此页面、Service Worker、WebCrypto、摄像头和 WebSocket 都需要可信 secure context。网络可达和 Tailscale 身份不能替代 ACP Remote 自己的设备身份与权限。
+ACP Remote 不使用应用级云中继，PWA 直接连接一个 ACP Remote 服务节点。页面、Service Worker、WebCrypto、摄像头和 WebSocket 都需要可信 secure context。网络可达和 Tailscale 身份不能替代 ACP Remote 自己的设备身份与权限。本 ADR 只约束 PWA/设备到节点的 Sync 连接；节点间 Node Link 使用独立身份与 transcript。
 
 原设计建议使用 Noise 同时完成双向认证与应用层加密。但 PWA 即使使用 Noise，仍需要 HTTPS 才能满足浏览器安全要求；在 WSS 内再实现 Noise 会引入浏览器 WASM、密钥处理、跨语言互操作、framing 和实现审计成本。
 
@@ -30,7 +30,7 @@ Noise 不进入第一阶段，也不是原生客户端的默认路径。只有�
 
 ## 信任边界
 
-正式模式要求 TLS 终止点位于用户电脑的可信边界内：
+正式模式要求 TLS 终止点位于服务节点主机的可信边界内：
 
 ```text
 Client
@@ -105,11 +105,11 @@ repeated(fieldTag, byteLength, rawBytes)
 
 ## 首次配对
 
-1. 电脑创建一次性 `pairingId`、256-bit `pairingSecret` 和过期时间。
+1. 服务节点本地管理入口创建一次性 `pairingId`、256-bit `pairingSecret` 和过期时间。
 2. 二维码包含 HTTPS endpoint、`hostId`、host public key 与一次性配对数据。
 3. PWA 确认 `window.isSecureContext`，生成不可导出的设备密钥。
 4. PWA 使用 `pairingSecret` 对规范 pairing transcript 计算 HMAC-SHA256 proof，Daemon 验证后才接受设备公钥。
-5. 双方对包含 Host/设备公钥及随机 nonce 的 transcript 进行签名，并使用独立 domain tag 从 HMAC-SHA256 结果派生相同的短验证码；用户在电脑端确认。
+5. 双方对包含 Host/设备公钥及随机 nonce 的 transcript 进行签名，并使用独立 domain tag 从 HMAC-SHA256 结果派生相同的短验证码；用户在服务节点本地确认。
 6. Daemon 保存 device public key 与 scopes；为支持 `approved` 状态的可靠轮询，`pairingSecret` 只保留到该设备首次 WSS 认证成功或原过期时间，随后立即清除。它不得延长、复用或转成长期 bearer token。
 
 二维码若使用 URL，秘密数据放在 fragment 而不是 query；PWA 读取后立即从地址栏和历史条目中清除。完整字段、规范编码和错误码在 Sync Protocol 中定义。

@@ -1,8 +1,8 @@
 # ACP Remote 前端设计
 
 > 状态：编码前客户端约束  
-> 版本：0.1  
-> 日期：2026-09-17  
+> 版本：0.2
+> 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 后端模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)
 
@@ -17,6 +17,7 @@
 - Web/PWA 威胁模型、内容渲染、缓存和平台安全验收以 `SECURITY_DESIGN.md` 为准。
 - Rust crate 职责和依赖以 `MODULE_ARCHITECTURE.md` 为准。
 - ACP 能力在 PWA 中是完整操作、只读展示还是显式降级，以 `ACP_COMPATIBILITY_MATRIX.md` 为准。
+- imported Agent/会话的 Owner、在线状态和缓存语义以 `NODE_LINK_PROTOCOL.md` 为准。
 - 前端阶段、客户端分层与平台能力以本文为准。
 
 ## 2. 已确认决策
@@ -24,19 +25,20 @@
 ### 2.1 实现路线
 
 - 客户端采用 TypeScript 和 Expo/React Native 通用工程。
-- **前端第一阶段只实现 Web/PWA，不实现 Android/iOS 原生包。**
-- 第一阶段 PWA 用于验证真实端到端产品链路，不另建一套临时 UI。
+- **前端的首个交付只实现 Web/PWA，不实现 Android/iOS 原生包。**
+- 项目先完成 Owner—Access—Zed 的 Node Link 纵向切片，再实现 PWA；PWA 复用已验证的 Broker 和协议边界，不另建一套临时核心。
 - 后续 Android/iOS 尽量复用页面、领域状态、Sync Client 和协议类型，通过平台适配器补齐原生能力。
 - PWA 是首个可用客户端，但不被视为原生安全存储、后台连接和系统通知的等价实现。
 
 ### 2.2 产品边界
 
-所有客户端遵守相同权限：
+设备形态不定义权限。客户端行为由当前节点、principal scope、Owner Export Policy 和端到端 capability 的交集决定：
 
-- 只能访问电脑端已经创建的会话。
+- 可以访问当前节点本地拥有或从其他节点导入、且已授权的 Agent/会话。
 - 可以查看历史和实时事件、继续对话、取消 turn、处理权限请求、选择模型和调用 Agent 暴露且被允许的能力。
-- 不能创建会话、改变工作目录、配置 Provider 凭据、扩大沙箱权限或直接发送任意 ACP JSON-RPC。
-- UI 隐藏按钮不是安全措施；Daemon 必须独立执行授权。
+- 当前 PWA v1 不展示会话创建；Node Link 已支持的 `session.create` 只能选择 Owner 导出的 Agent 与 workspace template，未来 PWA 只增加该受限入口。
+- 客户端不能提交任意 Owner 路径、配置 Provider 凭据、扩大沙箱权限或直接发送任意 ACP JSON-RPC。
+- UI 隐藏按钮不是安全措施；Access 与 Owner Node 必须分别执行授权。
 
 ## 3. 前端总体架构
 
@@ -90,7 +92,7 @@ clients/
 - 页面不能直接读写 WebSocket、IndexedDB、SecureStore 或 SQLite。
 - 平台差异集中在 `platform/`，不能散布大量 `Platform.OS` 分支。
 - 协议 DTO 与 UI view model 分离，组件不直接依赖 wire payload。
-- 客户端只保存缓存和设备侧同步状态，Daemon 仍是会话事实来源。
+- 客户端只保存策略允许的设备侧同步状态。对 imported resource 默认 `no-content-cache`，会话正文只在内存中；Owner 仍是会话事实来源。
 - 不在客户端复制 Broker 的权限、会话串行或 Agent 生命周期规则。
 
 ## 4. 第一阶段：Web/PWA 客户端
@@ -190,8 +192,8 @@ unpaired
 最低要求：
 
 - 只有进入 `online` 后，客户端才能把命令显示为已被服务器接受。
-- `replaying` 阶段可以展示缓存，但必须标记尚未追平。
-- 未完成 snapshot 写入独立暂存区；只有数量和 digest 验证成功后才能原子替换缓存，断线时丢弃整个未完成 snapshot 并重新请求。
+- `replaying` 阶段只有本节点资源或未来显式允许正文缓存的资源可以展示持久缓存，并必须标记尚未追平；imported resource 默认等待 Owner 回源。
+- 未完成 snapshot 写入独立暂存区；`no-content-cache` 资源使用内存暂存，其他允许缓存的资源只有数量和 digest 验证成功后才能原子替换缓存。断线时丢弃未完成 snapshot 并重新请求。
 - 连接断开时不能把本地输入伪装成已经发送；第一阶段默认不离线排队 prompt。
 - `identity_changed` 必须阻止自动信任新主机密钥。
 - `revoked` 必须清理会话密钥和受保护缓存，并要求重新配对。
@@ -220,18 +222,18 @@ draft -> submitting -> accepted -> completed | failed | rejected | uncertain
 
 ## 7. 本地数据边界
 
-PWA 第一阶段只缓存改善体验所需的数据：
+PWA 首个版本只持久化连接和恢复所需的最小数据：
 
 - 已配对主机的非秘密元数据。
 - 当前 PWA 身份绑定的 canonical origin。
-- 最近会话快照和精简历史。
 - 最后确认的 global/session cursor。
 - 客户端 UI 偏好。
 - 待确认命令的 `requestId` 和最小恢复信息。
 
 规则：
 
-- 缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
+- imported resource 遵守 `no-content-cache`，不得把会话摘要、prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。
+- 对当前节点本地拥有的资源，只有节点本地策略显式允许时才缓存精简历史；缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
 - 敏感字段不得因方便调试而进入普通浏览器存储。
 - 必须设置大小上限、版本和迁移策略。
 - 清除缓存与撤销设备是不同操作；清除设备密钥后必须重新配对。
@@ -273,7 +275,7 @@ Android/iOS 应复用：
 
 PWA MVP 至少满足：
 
-1. 只能查看和操作电脑已创建的会话，无法通过 UI 或构造普通命令创建会话。
+1. 只能查看和操作当前节点可见的已有会话；PWA v1 无法通过 UI 或构造普通命令创建会话。
 2. 能完成配对、认证、订阅、历史追平和实时切换。
 3. 网络断开后自动重连，并从最后 ACK cursor 补发，不重复显示事件。
 4. prompt 重试不会导致 Agent 重复执行。
@@ -281,7 +283,7 @@ PWA MVP 至少满足：
 6. 未知 ACP 扩展不会丢失、崩溃或被伪装成普通文本。
 7. 慢速渲染或后台标签页不会阻塞 Agent 和其他客户端。
 8. 浏览器数据清理后不会继续冒充原设备，而是要求重新配对。
-9. Daemon 离线时明确只展示缓存，不允许把 prompt 表示为已发送。
+9. 远程 Owner 离线时 imported resource 不展示正文，只展示连接与资源元数据；任何离线输入都不能表示为已发送。
 10. PWA 构建可以由 Daemon 本地托管，不需要应用级云服务器。
 
 ## 10. 测试边界
@@ -290,7 +292,7 @@ PWA MVP 至少满足：
 - 状态机：连接、认证、重放、在线、断线、撤销、身份变化。
 - 幂等：接受响应丢失、重试、重复事件和 cursor 回退。
 - 组件：结构化 ACP 事件、未知事件和能力降级。
-- 存储：缓存迁移、容量限制、清除和损坏恢复。
+- 存储：同步元数据迁移、容量限制、清除和损坏恢复，并验证 imported resource 正文不会落盘。
 - 浏览器端到端：Daemon fake/fixture、真实 WebSocket、重连和慢客户端。
 - 安全：敏感信息不进入日志、URL、普通存储或错误页面。
 

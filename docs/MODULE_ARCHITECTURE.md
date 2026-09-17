@@ -1,21 +1,22 @@
 # ACP Remote 模块架构
 
-> 状态：编码前模块边界设计  
-> 版本：0.1  
-> 日期：2026-09-17  
+> 状态：编码前模块边界设计
+> 版本：0.2
+> 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
+> 已接受决策：[ADR-0003](./adr/0003-pi-inspired-module-boundaries.md)
 
 ## 1. 设计理念
 
-本项目参考 Pi/Oh My Pi 的分层理念，但不机械复制其目录结构：
+本项目参考 Pi/Oh My Pi 的模块理念，但不机械复制其 TypeScript 目录结构：
 
 - 保持核心最小，只保留不可替代的业务规则。
-- 同一个核心支持 CLI、手机和 Zed 等多个入口。
-- 协议、业务核心、基础设施和 UI 分离。
+- 同一个核心支持 CLI、PWA、手机、Zed 和其他 ACP Remote Node 等多个入口。
+- wire protocol、客户端、服务端、会话核心、持久化后端和应用组合分离。
 - 每个模块只有一个主要变化原因。
 - 高级行为优先通过适配器和配置扩展。
 
-Pi 将模型访问、Agent 循环、Coding Agent 应用和 TUI 分成不同包，同一引擎可以从交互终端、RPC、SDK 和 ACP 等入口使用。ACP Remote 采用相同思想：一个 Broker 核心，多种入站方式，多种可替换的基础设施实现。
+Pi 当前进一步把远程会话能力拆成独立 `protocol`、`client`、`server`、`agent-core` 和 SQLite session backend：协议只处理传输中立的信封与 framing，client/server 不解释应用业务 payload，核心不引入平台 SQLite。Oh My Pi 同样从 interactive、RPC、SDK、ACP 等入口复用同一 session engine。ACP Remote 采用相同原则：一个会话核心，多种 wire protocol，多种入站入口，以及本地/远程两种 Agent backend。
 
 本项目的最小核心是：
 
@@ -30,111 +31,158 @@ Pi 将模型访问、Agent 循环、Coding Agent 应用和 TUI 分成不同包�
 ## 2. 总体依赖规则
 
 ```text
-Clients
-   │
-   ▼
-Inbound Adapters ──> Wire Protocols
-   │
-   ▼
-Application Ports <── Broker Core
-   ▲                     │
-   │                     ▼
-Outbound Adapters      Domain
-   │
-   ▼
-ACP Agents / SQLite / Platform Security
+Clients / Peer Nodes
+        │
+        ▼
+server adapters ───────> wire protocol crates
+        │
+        ▼
+core::use_cases ───────> core::model
+        │
+        ├──────────────> core::ports
+        │                       ▲
+        ▼                       │
+agent-host / node-link-client / storage-sqlite / identity-auth
 ```
 
 依赖只允许指向更稳定的模块：
 
 ```text
-composition -> adapters -> ports -> domain
-composition -> broker   -> ports -> domain
-adapters    -> wire protocols
+app             -> server / backends / identity-auth / core
+server          -> core + corresponding wire protocols
+outbound backend-> core + corresponding wire protocols
+core::use_cases -> core::ports + core::model
+wire protocols  -> no core or infrastructure dependency
 ```
 
 禁止：
 
 ```text
-domain -> broker
-broker -> axum/sqlx/tokio::process/Noise implementation
-storage -> agent-host
-sync-server -> storage-sqlite
-agent-host -> sync-server
+core -> axum/sqlx/tokio::process/Noise implementation
+wire protocol -> core/domain model
+storage-sqlite -> agent-host
+server::sync -> server::node_link
+agent-host -> server
 adapter A -> adapter B
 ```
 
-适配器之间只能通过核心定义的端口协作。
+适配器之间只能通过 `core` 定义的 use case 或 port 协作。协议 crate 只拥有 wire schema、codec、framing、limits 和版本协商，不拥有业务领域类型；wire 与 core 的 mapper 属于使用该协议的 adapter。
 
 ### 2.1 客户端边界
 
-客户端不属于 Rust Broker 的内部依赖图，通过版本化 `sync-protocol` 与 `sync-server` 通信。wire contract 以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) 为准；系统安全边界以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 为准；前端阶段、分层、PWA 限制和后续原生 adapter 约束以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) 为准。
+UI 客户端不属于 Rust core，通过版本化 `sync-protocol` 与 `server::sync` 通信。ACP Remote 节点通过独立的 `node-link-protocol` 通信。wire contract 分别以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) 和 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 为准；系统安全边界以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 为准；前端阶段、分层、PWA 限制和后续原生 adapter 约束以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) 为准。
 
 ```text
 PWA / Android / iOS
         ↓ Sync Protocol
-sync-server -> application ports -> broker-core
+server::sync -> core::use_cases
+
+Access Node
+        ↓ Node Link Protocol
+server::node_link -> core::use_cases
+core -> SessionBackendFactory -> node-link-client -> Owner Node
 ```
 
-- 第一阶段只实现 PWA，后续原生客户端不能绕过 Sync Protocol 直接调用 Broker。
+- 前端首个交付只实现 PWA，并位于 Node Link 首个纵向切片之后；后续原生客户端不能绕过 Sync Protocol 直接调用 Broker。
 - 客户端可以共享协议类型、状态机和 feature 层，但不能复制服务端业务规则。
 - Web/Native 存储、密钥、相机和生命周期差异必须通过客户端平台 adapter 隔离。
 - PWA 的安全降级不能反向降低 Daemon 的认证与授权要求。
 
-## 3. Rust Workspace
+## 3. 建议的 Rust Workspace
 
 ```text
 crates/
-├─ domain/
+├─ core/                    领域、用例、端口与会话协调
 ├─ acp-protocol/
 ├─ sync-protocol/
-├─ application-ports/
-├─ broker-core/
-├─ agent-host/
-├─ storage-sqlite/
-├─ device-auth/
-├─ sync-server/
-├─ acp-facade/
-├─ daemon/
-└─ cli/
+├─ node-link-protocol/
+├─ agent-host/              本地 ACP Agent backend
+├─ node-link-client/        远程 Agent backend
+├─ storage-sqlite/          core 持久化后端
+├─ identity-auth/           身份、配对、签名与平台 keystore
+├─ server/                  sync / node-link / acp-facade 入站模块
+└─ app/                     daemon、CLI 与组合根
 ```
 
-这些是明确的依赖边界，不代表每个内部概念都必须拆成 crate。只有需要编译期禁止反向依赖、被多个入口复用、拥有独立协议或独立平台实现的部分才提升为 crate。
+这组物理 crate 刻意少于逻辑模块数，接近 Pi 的“core + protocol + client + server + backend + app”划分。`model`、`use_cases`、`ports` 和 `broker` 先作为 `core` 内部模块；`sync`、`node_link` 和 `acp_facade` 先作为 `server` 内部平级模块。只有出现独立发布、编译隔离或明显构建成本后才继续拆 crate。
+
+协议 crate 是例外：ACP、Sync 和 Node Link 分别拥有独立兼容周期与 fixture，必须从第一天物理隔离，且不得依赖 `core`。
 
 ## 4. 模块职责
 
-### 4.1 `domain`
+### 4.1 `core`
 
-唯一职责：定义与传输和持久化无关的领域语言。
+唯一职责：承载与传输、数据库和具体 Agent 无关的会话业务。参考 Pi `agent-core`，首日把稳定且共同演进的领域、用例、端口和协调逻辑放在一个 crate 内，而不是为了目录整齐拆成三个相互依赖的 crate。
 
-包含：
+内部模块：
 
 ```text
-HostId / DeviceId / SessionId / EventId / RequestId
-Session / SessionState / TurnState
-Command / CommandResult
-Event / EventKind / EventOrigin
+core::model       值对象、状态机、事件与不变量
+core::use_cases   Session/Model/Permission/Export/Subscription 用例
+core::ports       backend、事务存储、身份仓库、时钟等能力接口
+core::broker      Session Actor、命令协调与事件提交
+core::testing     fake ports 和契约测试工具，仅测试 feature 导出
+```
+
+`model` 至少包含：
+
+```text
+NodeId / DeviceId / ExportId / SessionId / EventId / RequestId
+OwnedSessionRef / RemoteSessionRef / OriginEventRef
+Session / SessionState / TurnState / ResourceOrigin
+Command / CommandResult / CommandTerminal
+Event / EventKind / EventOrigin / PersistencePolicy
 ModelRef / AgentRef / Capability
 PermissionRequest / PermissionDecision
-Sequence / Version
+Sequence / Version / AttachmentGeneration
 ```
 
 规则：
 
-- 不依赖 Tokio、Axum、SQLite、WebSocket、子进程和具体 Agent。
-- 领域类型不包含 HTTP 状态码、数据库列名或 JSON-RPC method 名。
-- ID 使用 newtype，不在核心到处传裸 `String`。
-- 状态转换由领域方法验证，适配器不能直接修改状态字段。
+- `core` 不依赖任何 wire protocol、Tokio runtime、Axum、SQLite、WebSocket、子进程和具体 Agent。
+- 领域类型不包含 HTTP 状态码、数据库列名、JSON-RPC method 或 Node Link wire discriminator。
+- ID 使用 newtype；状态转换由领域方法验证，adapter 不能直接修改状态字段。
+- Owned 与 imported session 必须在类型或 `ResourceOrigin` 上可区分，禁止依靠 nullable `ownerNodeId` 猜测持久化规则。
+- `core::broker` 实现每会话串行、active turn、授权调用点、幂等、permission first-writer-wins、模型切换时机和先提交后发布。
+
+入站 use case 按能力拆分：
+
+```text
+SessionCommands / SessionQueries
+ModelCommands
+PermissionCommands
+SubscriptionQueries
+DeviceManagement
+ExportManagement
+RemoteCatalogQueries
+```
+
+出站 port 不使用巨型 `AgentRuntime`，而采用会话级能力：
+
+```text
+AgentCatalog             枚举可用 Agent 与能力
+SessionBackendFactory    受约束地 create/open SessionEndpoint
+SessionEndpoint          prompt/cancel/set-mode/events，绑定单个 live session
+SessionStore             原子提交 owned session 状态、事件与 requestId 幂等
+RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
+TrustStore               设备、节点、Export grant 与撤销元数据
+EventPublisher           发布已经提交的事件或远程交付
+Clock / IdGenerator      可测试时间与 ID
+```
+
+`SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
 ### 4.2 `acp-protocol`
 
 唯一职责：描述并编解码 ACP wire protocol。
 
-包含 JSON-RPC envelope、ACP DTO、capability negotiation、领域映射和协议 fixture。协议类型必须保留未知字段与 Agent 扩展 payload，使合法但尚未被 Broker 理解的能力仍可转发或重放；显式 mapper 可以生成公共领域视图，但不得以映射为由丢失原始语义。ACP 覆盖集合与跨层验收合同以 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) 和 `compatibility/acp/v1/matrix.json` 为准。它不启动子进程、不管理会话、不访问数据库，也不包含手机协议和具体 Agent 业务。
+包含 JSON-RPC envelope、ACP wire DTO、codec、raw document、capability wire schema、limits 和协议 fixture。协议类型必须保留未知字段与 Agent 扩展 payload。ACP 覆盖集合与跨层验收合同以 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) 和 `compatibility/acp/v1/matrix.json` 为准。
+
+它不依赖 `core`，不包含领域 mapper，不启动子进程、不管理会话、不访问数据库。ACP wire 到公共领域视图的 mapper 位于 `agent-host` 或 `server::acp_facade`，因为映射方向取决于 adapter 角色。
 
 ### 4.3 `sync-protocol`
 
-唯一职责：定义电脑与手机之间的版本化 wire protocol。
+唯一职责：定义 UI 客户端与其所连接 ACP Remote Node 之间的版本化 wire protocol。
 
 具体消息、transcript、游标、重放和兼容语义由 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) 定义；本模块不得另行发明第二套格式。
 
@@ -148,82 +196,49 @@ Pairing DTO
 ProtocolVersion / Feature negotiation
 ```
 
-它不允许客户端发送任意 ACP JSON-RPC；wire DTO 与领域类型通过显式 mapper 转换。
+它不允许客户端发送任意 ACP JSON-RPC，也不依赖 `core`。Sync wire 与 core 的 mapper 位于 `server::sync`。
 
-### 4.4 `application-ports`
+### 4.4 `node-link-protocol`
 
-唯一职责：定义跨层稳定接口，分为：
+唯一职责：定义两个 ACP Remote Node 之间的版本化 wire protocol。
 
-```text
-inbound    外部调用系统的用例
-outbound   Broker 完成用例所需的能力
-```
+包含 Node handshake、Export catalog、resource snapshot/event/ACK、跨节点 command、origin cursor、错误和 feature negotiation。完整语义以 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 为准。
 
-建议入站端口：
+它不能直接复用 Sync DTO 冒充节点协议，也不能把 ACP stdio 透明封装成网络 tunnel。它不依赖 `core`；Node Link wire 与 core 的 mapper 位于 `node-link-client` 和 `server::node_link`。
 
-```text
-SessionUseCases
-ModelUseCases
-PermissionUseCases
-SubscriptionUseCases
-DeviceManagementUseCases
-```
+### 4.5 `agent-host`
 
-建议出站端口：
-
-```text
-AgentRuntime       创建、恢复、prompt、cancel、set model
-SessionRepository  会话元数据和快照
-EventJournal       追加与读取有序事件
-CommandDeduper     requestId 幂等记录
-DeviceRepository   配对设备和权限
-EventPublisher     通知实时订阅者
-Clock              可测试时间
-IdGenerator        可测试 ID
-```
-
-端口签名只能使用领域类型或专门的应用输入/输出类型，不能泄漏 `sqlx::Error`、`axum::Response` 或 ACP DTO。端口按能力拆分，避免巨型 `AppService`。
-
-### 4.5 `broker-core`
-
-唯一职责：实现核心业务规则。
-
-包含 Session Actor、每会话串行队列、active turn 约束、prompt 排队、模型切换时机、授权调用点、命令幂等、Agent 事件公共视图、先持久化后发布、permission first-writer-wins 和快照生成。公共视图用于业务决策，不能替代或截断需要透传、持久化或重放的 ACP 原始语义。
-
-它只能依赖：
-
-```text
-domain
-application-ports
-```
-
-它不能依赖网络、SQLite、子进程、Noise、Codex、OMP 或 Tailscale。测试使用内存 fake ports，不启动真实基础设施。
-
-### 4.6 `agent-host`
-
-唯一职责：实现 `AgentRuntime` 出站端口。
+唯一职责：把一个本地 ACP 子进程实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
 
 包含：
 
 - 启动和监督 ACP Agent 子进程。
 - stdin/stdout JSON-RPC transport。
-- request ID 与原生 session ID 映射。
+- request ID、ACP session ID 与 live endpoint generation 映射。
 - capability negotiation。
 - stderr 日志、超时、取消和进程树清理。
 - 通用 Agent profile registry。
 - 隔离的兼容性 quirk。
 
-优先使用一个通用 ACP 实现。Codex、OMP 的差异优先表示为 capability/profile 数据，只有无法数据化的差异才建立专属 module。
+wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` 与公共领域 view 同时交给 core，不能只交规范化文本。优先使用一个通用 ACP 实现；Codex、OMP 差异优先表示为 capability/profile 数据。
+
+### 4.6 `node-link-client`
+
+唯一职责：把 Owner Node 导出的远程 Agent 实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
+
+它负责 Import 配置、catalog、live attachment、无正文交付索引、跨节点 requestId、origin cursor 和显式重连。参考 Pi client，客户端连接逻辑依赖最小 `NodeLinkTransport` 接口；WSS 是一个 transport 实现，协议和 session backend 不感知 Tailscale 或 socket 细节。
+
+默认 `no-content-cache` 下不得把 prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 Access SQLite；正文重放回源 Owner。断线后只自动恢复订阅和安全查询，不自动重放副作用命令。`agent-host` 与 `node-link-client` 是平级 backend，不能互相调用。
 
 ### 4.7 `storage-sqlite`
 
 唯一职责：实现持久化端口。
 
-包含 schema、migration、SessionRepository、EventJournal、CommandDeduper、设备非秘密元数据、事务、容量清理、快照和 TTL。
+包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
 
 它不解析 ACP、不广播 WebSocket、不执行会话状态转换、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
 
-### 4.8 `device-auth`
+### 4.8 `identity-auth`
 
 唯一职责：实现设备身份、配对、认证和授权。
 
@@ -236,84 +251,93 @@ authorization/
 keystore/
 ```
 
-它负责 Host/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、设备权限、撤销和平台安全存储。TLS/WSS 负责默认 Profile 的临时连接密钥与传输保护；上层只看到认证后的 `Actor` 和授权结果，看不到原始私钥或具体密码学类型。Noise 只作为未来可选 Transport Profile，不进入第一阶段。
+它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销和平台安全存储。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
 
-### 4.9 `sync-server`
+### 4.9 `server`
 
-唯一职责：把 HTTP/WebSocket 请求适配为应用用例。
+唯一职责：承载所有入站协议 adapter，类似 Pi server 对连接、attachment 和应用服务路由的集中承载，但不把各协议合并成一个 wire format。
 
-包含连接生命周期、`sync-protocol` 编解码、认证接入、subscribe/snapshot/event/ACK、输入限制、rate limit 和 backpressure。
+内部平级模块：
 
-它不能直接查询 SQLite、启动 Agent 或自行决定设备权限。
+```text
+server::sync         HTTP/WSS、设备认证、snapshot/event/ACK
+server::node_link    节点认证、Export catalog、resource/command/ACK
+server::acp_facade   ACP stdio facade，供 Zed/IDE 使用
+server::transport    listener 与连接级 backpressure；不放业务命令
+```
 
-### 4.10 `acp-facade`
+三个 adapter 只能调用 `core::use_cases`，不能互相调用、查询 SQLite、启动 Agent 或直接调用 `node-link-client`。每个 adapter 自己拥有 wire/core mapper；共享的只有通用连接生命周期原语，禁止抽出“万能消息 DTO”。
 
-唯一职责：把应用用例暴露为可选的 ACP stdio Agent，供 Zed 和其他 ACP Client 使用。
+Node Link 和 Sync attachment 必须具有 connection generation 或 attachment ID。重新认证/重新订阅会生成新 generation，延迟到达的旧连接 frame 必须被拒绝，不能误投递到新会话绑定。
 
-它与 `sync-server` 是平级入站适配器；两者不能互相调用，只调用相同的入站端口。
+### 4.10 `app`
 
-它必须如实执行 capability negotiation：只声明端到端实际可用的能力；对可保留语义的扩展进行透传；无法安全提供的能力返回明确的不支持结果，不得静默降级或伪装为普通文本。
+唯一职责：发布 `acp-remote` 可执行程序并作为组合根。它装配 daemon、CLI、server、backend、配置、后台任务、单实例锁、健康状态和 graceful shutdown，但不得承载业务规则。
 
-### 4.11 `daemon`
-
-唯一职责：组合并运行完整进程。
-
-它负责配置、连接池、具体适配器装配、后台任务、单实例锁、健康状态和 graceful shutdown。Daemon 是唯一允许依赖所有具体实现的 crate，但不得承载业务规则。
-
-### 4.12 `cli`
-
-唯一职责：参数解析、输出格式化和调用应用接口。
+CLI 子命令：
 
 ```text
 daemon start|stop|status
 session create|list
 device pair|list|revoke
+node pair|list|revoke
+export create|list|revoke
+import add|list|remove
 acp-stdio
 doctor
 ```
 
-CLI 不能复制 Broker 业务规则。
+CLI 通过 core use case 或受认证的本地管理 transport 工作，不能复制 core 业务规则。`app` 是唯一允许依赖所有具体 crate 的位置。
 
 ## 5. 依赖矩阵
 
 `✓` 表示允许直接依赖：
 
-| From / To | domain | acp-protocol | sync-protocol | ports | broker | agent-host | sqlite | auth |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| domain | — |  |  |  |  |  |  |  |
-| acp-protocol | ✓ | — |  |  |  |  |  |  |
-| sync-protocol | ✓ |  | — |  |  |  |  |  |
-| application-ports | ✓ |  |  | — |  |  |  |  |
-| broker-core | ✓ |  |  | ✓ | — |  |  |  |
-| agent-host | ✓ | ✓ |  | ✓ |  | — |  |  |
-| storage-sqlite | ✓ |  |  | ✓ |  |  | — |  |
-| device-auth | ✓ |  | ✓ | ✓ |  |  |  | — |
-| sync-server | ✓ |  | ✓ | ✓ |  |  |  | ✓ |
-| acp-facade | ✓ | ✓ |  | ✓ |  |  |  |  |
-| daemon | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| From / To | core | acp-protocol | sync-protocol | node-link-protocol | identity-auth |
+|---|---:|---:|---:|---:|---:|
+| core | — |  |  |  |  |
+| acp-protocol |  | — |  |  |  |
+| sync-protocol |  |  | — |  |  |
+| node-link-protocol |  |  |  | — |  |
+| agent-host | ✓ | ✓ |  |  |  |
+| node-link-client | ✓ | ✓ |  | ✓ |  |
+| storage-sqlite | ✓ |  |  |  |  |
+| identity-auth | ✓ |  | ✓ | ✓ | — |
+| server | ✓ | ✓ | ✓ | ✓ | ✓ |
+| app | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-`sync-server -> device-auth` 可在接口稳定后通过认证端口消除；早期允许直接依赖，但不得向外泄漏具体加密类型。
+额外规则：
+
+- 三个 protocol crate 彼此也不直接依赖；包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
+- `server` 对 `identity-auth` 的依赖只用于完成连接认证；业务授权仍由 core 对 `Actor + grant facts` 执行。
+- `app` 可以依赖全部具体 crate，但只做装配；任何其他 crate 不得依赖 `app`。
 
 ## 6. 组合根
 
-依赖注入只发生在 `daemon`：
+依赖注入只发生在 `app`：
 
 ```rust
 let store = SqliteStore::open(config.database).await?;
-let auth = DeviceAuth::new(platform_keystore, store.devices());
-let agents = ProcessAgentHost::new(config.agents);
+let auth = IdentityAuth::new(platform_keystore, store.identities());
+let local = ProcessAgentBackend::new(config.agents);
+let remote = NodeLinkBackend::new(config.imports, auth.node_identity());
+let backends = RoutedSessionBackend::new(local, remote);
 
-let broker = Broker::new(BrokerDeps {
-    sessions: store.sessions(),
-    events: store.events(),
-    deduper: store.commands(),
-    agents,
+let core = Core::new(CoreDeps {
+    sessions: store.session_store(),
+    remote_deliveries: store.remote_delivery_store(),
+    backends,
     publisher: EventHub::new(),
     clock: SystemClock,
     ids: SecureIds,
 });
 
-let sync = SyncServer::new(broker.clone(), auth, config.network);
+let server = Server::new(ServerDeps {
+    use_cases: core.use_cases(),
+    auth,
+    sync: config.sync,
+    node_link: config.node_link,
+});
 ```
 
 示例只表达装配关系，不锁定最终构造 API。
@@ -323,42 +347,55 @@ let sync = SyncServer::new(broker.clone(), auth, config.network);
 命令路径：
 
 ```text
-sync-server / acp-facade / cli
--> inbound port
--> broker-core
--> AgentRuntime
--> agent-host
+server::sync / server::node_link / server::acp_facade / app::cli
+-> core::use_cases
+-> SessionBackendFactory / SessionEndpoint
+-> agent-host | node-link-client
 -> ACP Agent
 ```
 
-事件路径：
+Owned session 事件路径：
 
 ```text
 ACP Agent
--> agent-host
--> normalized domain event
--> broker-core
--> EventJournal append
+-> agent-host mapper（公共 view + ACP raw）
+-> core::broker
+-> SessionStore::commit（state + event + dedupe 同一事务）
 -> EventPublisher publish
 -> subscribers
 ```
 
-只有 Broker 可以决定事件何时成为已提交事件；AgentHost 不得绕过 Broker 直接广播。
+Imported session 事件路径：
+
+```text
+Owner 已提交事件
+-> node-link-client mapper
+-> core::broker
+-> RemoteDeliveryStore::commit_receipt（无正文索引）
+-> EventPublisher publish（正文仅内存）
+-> local subscribers
+```
+
+Owned 事件只有 core 可以决定何时提交。Imported 事件的业务提交权属于 Owner，Access core 只能提交交付收据，不能把它写成第二份权威 `SessionStore` 内容。
 
 ## 8. 错误边界
 
 ```text
-domain            DomainError
-application       UseCaseError / PortError
+core::model       DomainError
+core::use_cases   UseCaseError / PortError
 acp-protocol      AcpCodecError
 sync-protocol     SyncCodecError
+node-link-protocol NodeLinkCodecError
 agent-host        AgentHostError -> PortError
+node-link-client  NodeLinkClientError -> PortError
 storage-sqlite    StorageError -> PortError
-sync-server       TransportError / HTTP mapping
+server::sync      TransportError / HTTP mapping
+server::node_link NodeLinkTransportError / wire mapping
+server::acp_facade AcpFacadeError / JSON-RPC mapping
 ```
 
 - 外部错误在适配器边界映射。
-- `sqlx::Error` 不得进入 Broker。
+- `sqlx::Error` 不得进入 core。
 - JSON-RPC error code 不得成为领域错误。
 - 用户稳定错误码与内部诊断链分离。
 - 日志可以保留 source chain，但不能泄漏密钥或完整消息。
@@ -367,15 +404,15 @@ sync-server       TransportError / HTTP mapping
 
 ### 新增 Agent
 
-如果 Agent 正确实现 ACP，只需增加启动 profile、环境变量白名单和 contract tests，不修改 Broker。仅在协议存在真实差异时增加专属 mapper/quirk。
+如果 Agent 正确实现 ACP，只需增加启动 profile、环境变量白名单和 contract tests，不修改 core。仅在协议存在真实差异时增加专属 mapper/quirk。
 
 ### 新增客户端
 
-新增入站适配器并复用 `application-ports`。除非出现新的业务用例，否则不修改 Broker。
+在 `server` 增加入站模块并复用 `core::use_cases`。除非出现新的业务用例，否则不修改 core。
 
 ### 新增存储
 
-实现既有 repository/journal 端口。内存实现服务于测试，其他本地数据库不改变 Broker。
+实现 `SessionStore`、`RemoteDeliveryStore` 等既有事务端口。内存实现服务于测试，其他本地数据库不改变 core。
 
 ### 暂不设计动态插件 ABI
 
@@ -384,9 +421,9 @@ sync-server       TransportError / HTTP mapping
 ## 10. 防止模块腐化
 
 1. 禁止 `common` 或万能 `utils`；工具函数放在拥有其语义的模块。
-2. 禁止跨适配器调用，例如 `sync-server -> storage-sqlite`。
+2. 禁止跨适配器调用，例如 `server::sync -> storage-sqlite` 或 `server::node_link -> node-link-client`。
 3. ACP DTO 只存在于 ACP 边界，Sync DTO 只存在于同步边界，DB record 只存在于 SQLite 适配器。
-4. 一个状态只有一个权威写入者：Session 属于 Broker，进程属于 AgentHost，连接属于 SyncServer，设备信任属于 DeviceAuth。
+4. 一个状态只有一个权威写入者：Session 属于 Owner core，进程属于 AgentHost，连接属于对应 server/client adapter，节点/设备信任属于 IdentityAuth。
 5. 仅当需要阻止反向依赖、多入口复用、独立协议、平台实现或独立测试时才拆新 crate。
 6. 文件数量增加本身不是拆 crate 的理由。
 
@@ -399,33 +436,35 @@ sync-server       TransportError / HTTP mapping
 模块实现必须满足：
 
 1. `acp-protocol` 对未知字段和扩展 payload 往返保真。
-2. `broker-core` 只规范化参与业务决策的公共视图，不把公共视图当作完整 ACP 消息。
+2. `core::broker` 只使用参与业务决策的公共视图，不把公共视图当作完整 ACP 消息。
 3. `agent-host` 不擅自改变 Agent 消息的结构化语义。
-4. `acp-facade` 如实协商端到端能力，不虚报支持。
+4. `server::acp_facade` 如实协商端到端能力，不虚报支持。
 5. `sync-protocol` 可以提供移动端友好的表示，但必须能表达结构化能力、明确降级和不支持状态。
 6. 任一边界无法处理某项能力时必须显式失败，不能丢弃、曲解或静默转成文本。
+7. `node-link-client` 与 `server::node_link` 跨节点时必须保留 ACP raw payload、origin identity 和 capability gate；Access Node facade 只能宣告完整链路交集。
 
 ## 11. 测试边界
 
 | 模块 | 测试重点 |
 |---|---|
-| domain | 状态转换、值对象、不变量 |
+| core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
 | acp-protocol | 官方 fixture、未知字段往返保真、扩展 payload、版本兼容 |
 | sync-protocol | 编解码、协商、恶意输入 |
-| broker-core | fake ports、并发、幂等、先存后发、公共视图不损失原始语义 |
+| node-link-protocol | 节点握手、catalog、origin cursor、命令幂等、版本协商 |
 | agent-host | fake ACP child、超时、崩溃、乱序响应 |
-| storage-sqlite | migration、事务、TTL、容量限制 |
-| device-auth | 配对过期、重放、撤销、错误密钥 |
-| sync-server | auth、backpressure、续传、限流 |
-| acp-facade | ACP contract、能力协商真实性、扩展透传、外部 turn 重放 |
-| daemon | 组合冒烟、关闭顺序、单实例 |
+| node-link-client | fake Owner、attachment generation、显式重连、origin 去重、capability 收缩、uncertain |
+| storage-sqlite | migration、owned 原子提交、imported 无正文约束、TTL、容量限制 |
+| identity-auth | 设备/节点配对过期、重放、无传递信任、grant 交集和撤销 |
+| server::sync | auth、backpressure、续传、限流 |
+| server::node_link | Export 过滤、节点 auth、attachment、ACK、backpressure、撤销 |
+| server::acp_facade | ACP contract、能力协商真实性、扩展透传、外部 turn 重放 |
+| app | 组合冒烟、关闭顺序、单实例 |
 
 端到端测试使用可控的 fake ACP Agent。真实 Codex/OMP 测试作为可选兼容性套件，不作为普通 CI 的硬依赖。各模块测试使用机器矩阵中的 row/test ID 建立证据，矩阵结构先由 `node scripts/check-acp-compatibility.mjs` 检查。
 
 ## 12. 保持开放的决策
 
-- `application-ports` 独立成 crate，还是先作为 `broker-core::ports` module。
-- `device-auth` 是否拆成纯状态机与平台 keystore 两个 crate。
+- `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate。
 - CLI 使用 local socket、named pipe，还是受限 HTTP API 管理 Daemon。
 - 是否为同步协议生成 TypeScript/Kotlin/Swift 类型。
 - 是否公开部分 crate 到 crates.io；第一阶段可全部保持 workspace-private。
@@ -439,5 +478,6 @@ sync-server       TransportError / HTTP mapping
 
 ## 14. 参考
 
-- Pi 保持核心最小，通过 extensions、skills、prompts 和 packages 扩展：<https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent>
+- Pi 当前将 session engine、wire protocol、client、server 和 SQLite backend 分开，并保持 protocol transport-neutral：<https://github.com/earendil-works/pi/tree/main/packages>
+- Pi protocol/client/server 对 routed envelope、logical server identity、session attachment 和 transport abstraction 的说明：<https://github.com/earendil-works/pi/tree/main/packages/protocol>
 - Oh My Pi 将 AI、Agent Core、Coding Agent、TUI 和 native 能力拆分，并从 interactive、RPC、SDK、ACP 等入口复用同一引擎：<https://github.com/dankalish/oh-my-pi>

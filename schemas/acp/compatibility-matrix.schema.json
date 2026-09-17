@@ -4,7 +4,7 @@
   "title": "ACP Remote compatibility matrix",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "revision", "protocol", "testFamilies", "methods", "sessionUpdates", "contentBlocks", "toolCallContents", "capabilities", "invariants"],
+  "required": ["schemaVersion", "revision", "protocol", "nodeLinkPolicy", "testFamilies", "methods", "sessionUpdates", "contentBlocks", "toolCallContents", "capabilities", "invariants"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "revision": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
@@ -19,6 +19,22 @@
         "schemaUrl": { "type": "string", "format": "uri" },
         "schemaSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "checkedAt": { "type": "string", "format": "date" }
+      }
+    },
+    "nodeLinkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hopLimit", "rawAcp", "capabilityRule", "unsupportedRule", "contentPersistence", "trustModel", "remoteSessionCreate", "routeFencing", "tests"],
+      "properties": {
+        "hopLimit": { "const": 1 },
+        "rawAcp": { "const": "byte_exact_or_explicit_raw_unavailable" },
+        "capabilityRule": { "const": "end_to_end_intersection" },
+        "unsupportedRule": { "const": "explicit_never_silent" },
+        "contentPersistence": { "const": "owner_only_default" },
+        "trustModel": { "const": "access_node_principal" },
+        "remoteSessionCreate": { "const": "exported_agent_and_workspace_template_only" },
+        "routeFencing": { "const": "attachment_generation" },
+        "tests": { "$ref": "#/$defs/tests" }
       }
     },
     "testFamilies": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/testFamily" } },
