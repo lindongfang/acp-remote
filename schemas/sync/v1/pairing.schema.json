@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/pairing.schema.json",
+  "title": "ACP Remote Pairing v1 HTTP Payloads",
+  "oneOf": [
+    { "$ref": "#/$defs/qrPayload" },
+    { "$ref": "#/$defs/claimRequest" },
+    { "$ref": "#/$defs/claimResponse" },
+    { "$ref": "#/$defs/statusRequest" },
+    { "$ref": "#/$defs/statusResponse" },
+    { "$ref": "#/$defs/httpError" }
+  ],
+  "$defs": {
+    "canonicalOrigin": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/?#]+$",
+      "maxLength": 2048
+    },
+    "qrPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pairingProtocol", "hostId", "hostPublicKey", "canonicalOrigin", "pairingId", "pairingSecret", "expiresAt"],
+      "properties": {
+        "pairingProtocol": { "const": "acp-remote-pairing-v1" },
+        "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "hostPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" },
+        "canonicalOrigin": { "$ref": "#/$defs/canonicalOrigin" },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "pairingSecret": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "expiresAt": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "claimRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingId", "hostId", "deviceId", "deviceName", "clientKind", "canonicalOrigin", "devicePublicKey", "clientNonce", "proof"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deviceName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "clientKind": { "enum": ["pwa", "android", "ios", "desktop"] },
+        "canonicalOrigin": { "$ref": "#/$defs/canonicalOrigin" },
+        "devicePublicKey": { "$ref": "common.schema.json#/$defs/base64url65" },
+        "clientNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "proof": { "$ref": "common.schema.json#/$defs/base64url32" }
+      }
+    },
+    "claimResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingRequestId", "serverNonce", "hostProof", "status", "expiresAt"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingRequestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "serverNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "hostProof": { "$ref": "common.schema.json#/$defs/base64url64" },
+        "status": { "const": "pending_confirmation" },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    },
+    "statusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "hostId", "deviceId", "pairingId", "pairingRequestId", "requestNonce", "proof"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "pairingRequestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "proof": { "$ref": "common.schema.json#/$defs/base64url32" }
+      }
+    },
+    "statusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingRequestId", "status", "expiresAt"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingRequestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "status": { "enum": ["pending_confirmation", "approved", "rejected", "expired", "consumed"] },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "device": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deviceId", "name", "scopes"],
+          "properties": {
+            "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "scopes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          }
+        },
+        "host": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hostId", "hostPublicKey"],
+          "properties": {
+            "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "hostPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "approved" } }, "required": ["status"] },
+          "then": { "required": ["device", "host"] },
+          "else": {
+            "not": { "anyOf": [{ "required": ["device"] }, { "required": ["host"] }] }
+          }
+        }
+      ]
+    },
+    "httpError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "correlationId", "details"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z0-9_.-]+$", "maxLength": 128 },
+        "message": { "type": "string", "maxLength": 1024 },
+        "retryable": { "type": "boolean" },
+        "correlationId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "details": { "type": "object" }
+      }
+    }
+  }
+}

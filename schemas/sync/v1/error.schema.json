@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/error.schema.json",
+  "title": "ACP Remote Sync v1 Error and Control Messages",
+  "oneOf": [
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/ping" },
+    { "$ref": "#/$defs/pong" }
+  ],
+  "$defs": {
+    "postAuthBase": {
+      "type": "object",
+      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" }
+      }
+    },
+    "error": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "error" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "message", "retryable", "correlationId", "details"],
+              "properties": {
+                "code": { "type": "string", "pattern": "^[a-z0-9_.-]+$", "maxLength": 128 },
+                "message": { "type": "string", "maxLength": 1024 },
+                "retryable": { "type": "boolean" },
+                "correlationId": {
+                  "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+                },
+                "details": { "type": "object" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ping": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "control.ping" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["nonce"],
+              "properties": { "nonce": { "$ref": "common.schema.json#/$defs/base64url16" } }
+            }
+          }
+        }
+      ]
+    },
+    "pong": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "control.pong" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["nonce"],
+              "properties": { "nonce": { "$ref": "common.schema.json#/$defs/base64url16" } }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

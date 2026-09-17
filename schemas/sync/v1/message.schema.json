@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/message.schema.json",
+  "title": "ACP Remote Sync Protocol v1 WSS Message",
+  "oneOf": [
+    { "$ref": "auth.schema.json" },
+    { "$ref": "sync.schema.json" },
+    { "$ref": "event.schema.json" },
+    { "$ref": "command.schema.json" },
+    { "$ref": "error.schema.json" }
+  ]
+}

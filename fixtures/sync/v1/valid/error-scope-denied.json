@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "error",
+  "messageId": "250b67d5-6d16-4bb5-a8ce-d87079cc9502",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "13",
+  "body": {
+    "code": "authorization.scope_denied",
+    "message": "Device is not allowed to change the model.",
+    "retryable": false,
+    "correlationId": "6dfa044f-05f8-4a02-b4a1-a4d9d034298b",
+    "details": {}
+  }
+}
+

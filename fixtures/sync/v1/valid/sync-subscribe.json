@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.subscribe",
+  "messageId": "a5255ab1-287f-4d55-a9ce-dbb9d567d875",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "1",
+  "body": {
+    "cursor": {
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2280"
+    },
+    "scope": "machine"
+  }
+}
+

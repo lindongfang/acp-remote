@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/event.schema.json",
+  "title": "ACP Remote Sync v1 Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+  "properties": {
+    "protocolVersion": { "const": 1 },
+    "type": { "const": "event" },
+    "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["globalSequence", "sessionSequence", "eventId", "sessionId", "eventType", "causationRequestId", "origin", "createdAt", "payload"],
+      "properties": {
+        "globalSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "sessionSequence": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/decimalString" }, { "type": "null" }]
+        },
+        "eventId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "eventType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9_.-]+$"
+        },
+        "causationRequestId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "origin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "deviceId"],
+          "properties": {
+            "kind": { "enum": ["agent", "device", "desktop", "daemon"] },
+            "deviceId": {
+              "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+            }
+          }
+        },
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["view"],
+          "properties": {
+            "view": { "type": "object" },
+            "acp": { "$ref": "common.schema.json#/$defs/rawAcp" }
+          }
+        }
+      }
+    }
+  }
+}
+

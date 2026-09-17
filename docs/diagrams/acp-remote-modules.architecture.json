@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ACP Remote 模块边界与依赖方向",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1280, 820],
+    "views": [
+      { "id": "entry", "label": "多入口复用", "focus": ["clients", "inbound-adapters", "wire-protocols", "app-ports"], "note": "Mobile、CLI 与 Zed 在边界终止各自协议，共用同一组应用用例。" },
+      { "id": "core", "label": "最小核心", "focus": ["app-ports", "broker-core", "domain"], "note": "Broker 只表达会话、队列、路由和幂等规则，不认识网络、数据库或子进程。" },
+      { "id": "adapters", "label": "适配器替换", "focus": ["app-ports", "outbound-adapters", "agents"], "note": "具体 Agent、SQLite 与设备认证实现核心定义的端口，彼此不直接依赖。" }
+    ]
+  },
+  "components": [
+    { "id": "wire-protocols", "type": "backend", "label": "Wire Protocols", "sublabel": "acp-protocol · sync-protocol", "pos": [600, 70], "size": [210, 72], "tag": "只含 schema / codec" },
+    { "id": "clients", "type": "external", "label": "客户端", "sublabel": "Mobile · CLI · Zed", "pos": [20, 270], "size": [130, 72] },
+    { "id": "inbound-adapters", "type": "frontend", "label": "Inbound Adapters", "sublabel": "sync-server · acp-facade", "pos": [280, 270], "size": [190, 72] },
+    { "id": "app-ports", "type": "messagebus", "label": "Application Ports", "sublabel": "入站用例 · 出站接口", "pos": [620, 270], "size": [190, 72], "tag": "稳定契约" },
+    { "id": "broker-core", "type": "backend", "label": "broker-core", "sublabel": "Session Actor · 路由 · 幂等", "pos": [940, 270], "size": [190, 72], "tag": "纯业务核心" },
+    { "id": "agents", "type": "external", "label": "ACP Agents", "sublabel": "Codex · OMP · Others", "pos": [280, 500], "size": [190, 72] },
+    { "id": "outbound-adapters", "type": "backend", "label": "Outbound Adapters", "sublabel": "agent-host · sqlite · auth", "pos": [620, 500], "size": [190, 72] },
+    { "id": "domain", "type": "backend", "label": "domain", "sublabel": "Session · Event · Command", "pos": [940, 500], "size": [190, 72], "tag": "零 I/O" }
+  ],
+  "connections": [
+    { "id": "client-entry", "from": "clients", "to": "inbound-adapters", "label": "HTTP/WS · ACP stdio", "variant": "emphasis", "labelDy": -18 },
+    { "id": "entry-schema", "from": "inbound-adapters", "to": "wire-protocols" },
+    { "id": "entry-use-cases", "from": "inbound-adapters", "to": "app-ports", "variant": "emphasis" },
+    { "id": "core-contracts", "from": "broker-core", "to": "app-ports", "label": "实现用例 · 使用端口", "variant": "emphasis", "labelDy": -18 },
+    { "id": "core-domain", "from": "broker-core", "to": "domain", "label": "领域规则", "labelAt": [1035, 356] },
+    { "id": "adapters-contracts", "from": "outbound-adapters", "to": "app-ports", "label": "实现出站端口", "labelDx": 60 },
+    { "id": "adapter-agent", "from": "outbound-adapters", "to": "agents", "label": "ACP JSON-RPC / stdio", "variant": "emphasis", "labelDy": -18 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "基础层", "items": ["domain：稳定领域类型，不含 I/O", "acp-protocol / sync-protocol：只含 wire schema 与 codec", "application-ports：跨层唯一契约"] },
+    { "dot": "emerald", "title": "核心与适配器", "items": ["broker-core：会话状态机、串行队列、路由与幂等", "inbound：sync-server、acp-facade", "outbound：agent-host、storage-sqlite、device-auth"] },
+    { "dot": "violet", "title": "组合与扩展", "items": ["daemon 是唯一知道所有具体实现的组合根", "新增客户端或 Agent 优先新增适配器", "适配器之间禁止相互依赖"] }
+  ]
+}

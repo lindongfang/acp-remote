@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "6dfa044f-05f8-4a02-b4a1-a4d9d034298b",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "11",
+  "body": {
+    "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "command": "session.prompt",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "payload": {
+      "content": [{ "type": "text", "text": "hello" }],
+      "arbitraryAcp": { "method": "session/new" }
+    }
+  }
+}
+

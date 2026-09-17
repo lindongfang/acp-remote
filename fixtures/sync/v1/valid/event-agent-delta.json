@@ -1,0 +1,31 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "42",
+  "body": {
+    "globalSequence": "2318",
+    "sessionSequence": "109",
+    "eventId": "da702ba1-f49f-4e16-a677-a7744dfedba6",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "agent.message.delta",
+    "causationRequestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "origin": { "kind": "agent", "deviceId": null },
+    "createdAt": "2026-09-17T12:10:00.123Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaIndex": "0",
+        "text": "处理中"
+      },
+      "acp": {
+        "mediaType": "application/json",
+        "rawJson": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{}}",
+        "byteLength": "55",
+        "sha256": "6gOptlWLzG9v6mKUcJImqbrnhj6zbfCj-JFFxlIbrWk"
+      }
+    }
+  }
+}

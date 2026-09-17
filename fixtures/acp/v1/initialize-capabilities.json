@@ -1,0 +1,34 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "loadSession": true,
+      "promptCapabilities": {
+        "image": true,
+        "audio": false,
+        "embeddedContext": true
+      },
+      "mcpCapabilities": {
+        "http": true,
+        "sse": false
+      },
+      "sessionCapabilities": {
+        "list": {},
+        "resume": {},
+        "close": {}
+      },
+      "auth": {
+        "logout": {}
+      },
+      "_meta": {
+        "example.com/agent-feature": true
+      }
+    },
+    "agentInfo": {
+      "name": "fixture-agent",
+      "version": "1.0.0"
+    }
+  }
+}

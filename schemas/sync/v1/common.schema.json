@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/common.schema.json",
+  "title": "ACP Remote Sync v1 Common Types",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "decimalString": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "base64url16": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 22, "maxLength": 22 }
+      ]
+    },
+    "base64url32": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 43, "maxLength": 43 }
+      ]
+    },
+    "base64url64": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 86, "maxLength": 86 }
+      ]
+    },
+    "base64url65": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 87, "maxLength": 87 }
+      ]
+    },
+    "featureId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9.-]+$"
+    },
+    "featureList": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/featureId" }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serverEpoch", "globalSequence"],
+      "properties": {
+        "serverEpoch": { "$ref": "#/$defs/uuid" },
+        "globalSequence": { "$ref": "#/$defs/decimalString" }
+      }
+    },
+    "publicError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "details"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9_.-]+$"
+        },
+        "message": { "type": "string", "maxLength": 1024 },
+        "retryable": { "type": "boolean" },
+        "details": { "type": "object" }
+      }
+    },
+    "modelRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelId", "displayName"],
+      "properties": {
+        "modelId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "modeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modeId", "displayName"],
+      "properties": {
+        "modeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "sessionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "title", "agent", "state", "currentModel", "currentMode", "version", "createdAt", "updatedAt"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/uuid" },
+        "title": { "type": ["string", "null"], "maxLength": 512 },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentId", "name"],
+          "properties": {
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "name": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        },
+        "state": {
+          "enum": ["idle", "queued", "running", "waiting_input", "waiting_permission", "failed", "closed"]
+        },
+        "currentModel": {
+          "oneOf": [{ "$ref": "#/$defs/modelRef" }, { "type": "null" }]
+        },
+        "currentMode": {
+          "oneOf": [{ "$ref": "#/$defs/modeRef" }, { "type": "null" }]
+        },
+        "version": { "$ref": "#/$defs/decimalString" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "promptContentBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "text" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 262144 }
+      }
+    },
+    "rawAcp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mediaType", "rawJson", "byteLength", "sha256"],
+          "properties": {
+            "mediaType": { "const": "application/json" },
+            "rawJson": { "type": "string" },
+            "byteLength": { "$ref": "#/$defs/decimalString" },
+            "sha256": { "$ref": "#/$defs/base64url32" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mediaType", "rawUnavailable"],
+          "properties": {
+            "mediaType": { "const": "application/json" },
+            "rawUnavailable": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason", "byteLength", "sha256"],
+              "properties": {
+                "reason": { "enum": ["size_limit", "retention_expired", "storage_failure"] },
+                "byteLength": { "$ref": "#/$defs/decimalString" },
+                "sha256": {
+                  "oneOf": [{ "$ref": "#/$defs/base64url32" }, { "type": "null" }]
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "description": "Public interoperability vector. Never use this key in production.",
+  "domain": "acp-remote/host-challenge/v1",
+  "input": {
+    "protocolVersion": 1,
+    "hostId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    "deviceId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "canonicalOrigin": "https://pc.example.test",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "serverNonceHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "connectionId": "20212223-2425-4627-a829-2a2b2c2d2e2f",
+    "negotiatedFeatures": [
+      "acp.raw-payload.v1",
+      "core.command-status.v1",
+      "core.event-ack.v1",
+      "core.snapshot.v1"
+    ]
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAHGFjcC1yZW1vdGUvaG9zdC1jaGFsbGVuZ2UvdjEACAABAAAAAgABAAIAAAAQAAECAwQFRgeICQoLDA0ODwADAAAAEBAREhMUFUYXmBkaGxwdHh8ABgAAABdodHRwczovL3BjLmV4YW1wbGUudGVzdAAJAAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAAoAAAAgICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8ACwAAABAgISIjJCVGJ6gpKissLS4vAAwAAABMYWNwLnJhdy1wYXlsb2FkLnYxAGNvcmUuY29tbWFuZC1zdGF0dXMudjEAY29yZS5ldmVudC1hY2sudjEAY29yZS5zbmFwc2hvdC52MQ",
+    "transcriptSha256Hex": "63fd636a148723e992fd2adefa5ef524ee8e0293cfb60b32ae65a95a7cd796eb",
+    "publicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+    "privateJwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "Um1zxR11No0Zno_0Oa-mvkiEplsKKEDBn4rotj6AkGo",
+      "y": "KIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+      "d": "viq2e67z5g1bU-m9xHVTPc-pNneAeKyl8XC1rRjTmYc"
+    },
+    "p1363Signature": "Ibs4zNLWQ0f6ne4D--LdxQI2poA7yVY1QFCIeIhZRa4BHja45SrQeFd94_KfJvp_N_JdzhKdAXaWkI_9YNiQog"
+  }
+}
+

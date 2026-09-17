@@ -1,0 +1,18 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "8c20101a-f45a-4a80-b4c6-55db123944fd",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "12",
+  "body": {
+    "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "status": "accepted",
+    "acceptedAt": "2026-09-17T12:11:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+    },
+    "error": null
+  }
+}
+

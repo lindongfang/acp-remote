@@ -1,0 +1,20 @@
+{
+  "protocolVersion": 1,
+  "type": "auth.authenticated",
+  "messageId": "8a536862-9a18-4766-b4ce-a2e478734980",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "1",
+  "body": {
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "scopes": ["session.list", "session.read", "session.prompt"],
+    "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+    "headGlobalSequence": "2318",
+    "heartbeatIntervalMs": 30000,
+    "limits": {
+      "maxMessageBytes": 1048576,
+      "maxPromptBytes": 262144,
+      "maxReplayEventsPerBatch": 500
+    }
+  }
+}
+

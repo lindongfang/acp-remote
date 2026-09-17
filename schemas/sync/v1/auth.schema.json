@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/auth.schema.json",
+  "title": "ACP Remote Sync v1 Authentication Messages",
+  "oneOf": [
+    { "$ref": "#/$defs/clientHello" },
+    { "$ref": "#/$defs/serverChallenge" },
+    { "$ref": "#/$defs/clientProof" },
+    { "$ref": "#/$defs/authenticated" }
+  ],
+  "$defs": {
+    "clientHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "auth.client_hello" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minProtocolVersion", "maxProtocolVersion", "hostId", "deviceId", "clientKind", "clientNonce", "supportedFeatures", "requiredFeatures"],
+          "properties": {
+            "minProtocolVersion": { "const": 1 },
+            "maxProtocolVersion": { "const": 1 },
+            "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "clientKind": { "enum": ["pwa", "android", "ios", "desktop"] },
+            "clientNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+            "supportedFeatures": { "$ref": "common.schema.json#/$defs/featureList" },
+            "requiredFeatures": { "$ref": "common.schema.json#/$defs/featureList" }
+          }
+        }
+      }
+    },
+    "serverChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "auth.server_challenge" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selectedProtocolVersion", "hostId", "connectionId", "serverNonce", "selectedFeatures", "hostProof"],
+          "properties": {
+            "selectedProtocolVersion": { "const": 1 },
+            "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "serverNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+            "selectedFeatures": { "$ref": "common.schema.json#/$defs/featureList" },
+            "hostProof": { "$ref": "common.schema.json#/$defs/base64url64" }
+          }
+        }
+      }
+    },
+    "clientProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "auth.client_proof" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["connectionId", "deviceId", "deviceProof"],
+          "properties": {
+            "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "deviceProof": { "$ref": "common.schema.json#/$defs/base64url64" }
+          }
+        }
+      }
+    },
+    "authenticated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "auth.authenticated" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["deviceId", "scopes", "serverEpoch", "headGlobalSequence", "heartbeatIntervalMs", "limits"],
+          "properties": {
+            "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "scopes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+            },
+            "serverEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
+            "headGlobalSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+            "heartbeatIntervalMs": { "type": "integer", "minimum": 1000, "maximum": 300000 },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["maxMessageBytes", "maxPromptBytes", "maxReplayEventsPerBatch"],
+              "properties": {
+                "maxMessageBytes": { "type": "integer", "minimum": 1024 },
+                "maxPromptBytes": { "type": "integer", "minimum": 1 },
+                "maxReplayEventsPerBatch": { "type": "integer", "minimum": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

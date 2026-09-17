@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "auth.client_hello",
+  "messageId": "ed93263a-3628-4668-82aa-c0f551589fec",
+  "body": {
+    "minProtocolVersion": 1,
+    "maxProtocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "clientKind": "pwa",
+    "clientNonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "supportedFeatures": [
+      "acp.raw-payload.v1",
+      "core.command-status.v1",
+      "core.event-ack.v1",
+      "core.snapshot.v1"
+    ],
+    "requiredFeatures": ["core.event-ack.v1"]
+  }
+}
+

@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/command.schema.json",
+  "title": "ACP Remote Sync v1 Commands",
+  "oneOf": [
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/commandResult" }
+  ],
+  "$defs": {
+    "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "command" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "body": {
+          "oneOf": [
+            { "$ref": "#/$defs/sessionList" },
+            { "$ref": "#/$defs/sessionRead" },
+            { "$ref": "#/$defs/sessionPrompt" },
+            { "$ref": "#/$defs/sessionCancel" },
+            { "$ref": "#/$defs/modelList" },
+            { "$ref": "#/$defs/modelSet" },
+            { "$ref": "#/$defs/modeList" },
+            { "$ref": "#/$defs/modeSet" },
+            { "$ref": "#/$defs/permissionResolve" },
+            { "$ref": "#/$defs/elicitationRespond" },
+            { "$ref": "#/$defs/commandStatus" }
+          ]
+        }
+      }
+    },
+    "sessionList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.list" },
+        "payload": { "type": "object", "additionalProperties": false }
+      }
+    },
+    "sessionRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.read" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["include"],
+          "properties": {
+            "include": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "enum": ["messages", "turns", "pending_interactions", "models", "capabilities"] }
+            }
+          }
+        }
+      }
+    },
+    "sessionPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.prompt" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["content"],
+          "properties": {
+            "content": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "$ref": "common.schema.json#/$defs/promptContentBlock" }
+            }
+          }
+        }
+      }
+    },
+    "sessionCancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.cancel" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["turnId"],
+          "properties": { "turnId": { "$ref": "common.schema.json#/$defs/uuid" } }
+        }
+      }
+    },
+    "modelList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.model.list" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": { "type": "object", "additionalProperties": false }
+      }
+    },
+    "modelSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "expectedVersion", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.model.set" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "expectedVersion": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["modelId"],
+          "properties": { "modelId": { "type": "string", "minLength": 1, "maxLength": 256 } }
+        }
+      }
+    },
+    "modeList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.mode.list" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": { "type": "object", "additionalProperties": false }
+      }
+    },
+    "modeSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "expectedVersion", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.mode.set" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "expectedVersion": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["modeId"],
+          "properties": { "modeId": { "type": "string", "minLength": 1, "maxLength": 256 } }
+        }
+      }
+    },
+    "permissionResolve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "permission.resolve" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["interactionId", "optionId"],
+          "properties": {
+            "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "optionId": { "type": "string", "minLength": 1, "maxLength": 128 }
+          }
+        }
+      }
+    },
+    "elicitationRespond": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "sessionId", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "elicitation.respond" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "payload": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["interactionId", "action", "values"],
+              "properties": {
+                "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "action": { "const": "submit" },
+                "values": { "type": "object" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["interactionId", "action", "values"],
+              "properties": {
+                "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "action": { "const": "cancel" },
+                "values": { "type": "null" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "commandStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "payload"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "command.status" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targetRequestId"],
+          "properties": { "targetRequestId": { "$ref": "#/$defs/requestId" } }
+        }
+      }
+    },
+    "commandResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "command.result" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestId", "status", "acceptedAt", "result", "error"],
+          "properties": {
+            "requestId": { "$ref": "#/$defs/requestId" },
+            "status": { "enum": ["accepted", "completed", "failed", "rejected", "uncertain"] },
+            "acceptedAt": {
+              "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+            },
+            "terminalEventId": {
+              "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+            },
+            "result": { "type": ["object", "null"] },
+            "error": {
+              "oneOf": [{ "$ref": "common.schema.json#/$defs/publicError" }, { "type": "null" }]
+            }
+          }
+        }
+      }
+    }
+  }
+}

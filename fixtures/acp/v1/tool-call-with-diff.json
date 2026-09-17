@@ -1,0 +1,23 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "sess_tool_1",
+    "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "tool_1",
+      "title": "Edit example file",
+      "name": "edit_file",
+      "kind": "edit",
+      "status": "completed",
+      "content": [
+        {
+          "type": "diff",
+          "path": "C:\\workspace\\example.txt",
+          "oldText": "before\n",
+          "newText": "after\n"
+        }
+      ]
+    }
+  }
+}

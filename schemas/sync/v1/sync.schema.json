@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/sync.schema.json",
+  "title": "ACP Remote Sync v1 Synchronization Messages",
+  "oneOf": [
+    { "$ref": "#/$defs/subscribe" },
+    { "$ref": "#/$defs/caughtUp" },
+    { "$ref": "#/$defs/resetRequired" },
+    { "$ref": "#/$defs/snapshotRequest" },
+    { "$ref": "#/$defs/snapshotBegin" },
+    { "$ref": "#/$defs/snapshotChunk" },
+    { "$ref": "#/$defs/snapshotEnd" },
+    { "$ref": "#/$defs/ack" }
+  ],
+  "$defs": {
+    "postAuthBase": {
+      "type": "object",
+      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" }
+      }
+    },
+    "subscribe": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.subscribe" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cursor", "scope"],
+              "properties": {
+                "cursor": { "oneOf": [{ "$ref": "common.schema.json#/$defs/cursor" }, { "type": "null" }] },
+                "scope": { "const": "machine" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "caughtUp": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.caught_up" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cursor"],
+              "properties": { "cursor": { "$ref": "common.schema.json#/$defs/cursor" } }
+            }
+          }
+        }
+      ]
+    },
+    "resetRequired": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.reset_required" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason", "snapshotAvailable"],
+              "properties": {
+                "reason": { "enum": ["initial_sync", "epoch_mismatch", "cursor_expired", "cache_incompatible"] },
+                "snapshotAvailable": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "snapshotRequest": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.snapshot_request" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {
+                "reason": { "enum": ["initial_sync", "epoch_mismatch", "cursor_expired", "cache_incompatible"] }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "snapshotBegin": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.snapshot_begin" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["snapshotId", "cursor", "schemaVersion", "chunkCount"],
+              "properties": {
+                "snapshotId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "cursor": { "$ref": "common.schema.json#/$defs/cursor" },
+                "schemaVersion": { "const": 1 },
+                "chunkCount": { "type": "integer", "minimum": 0, "maximum": 100000 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "snapshotChunk": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.snapshot_chunk" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["snapshotId", "chunkIndex", "resource", "items"],
+              "properties": {
+                "snapshotId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "chunkIndex": { "type": "integer", "minimum": 0 },
+                "resource": { "enum": ["sessions", "messages", "turns", "pending_interactions", "models", "capabilities"] },
+                "items": { "type": "array", "maxItems": 10000 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "snapshotEnd": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.snapshot_end" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["snapshotId", "cursor", "chunkCount", "snapshotDigest"],
+              "properties": {
+                "snapshotId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "cursor": { "$ref": "common.schema.json#/$defs/cursor" },
+                "chunkCount": { "type": "integer", "minimum": 0, "maximum": 100000 },
+                "snapshotDigest": { "$ref": "common.schema.json#/$defs/base64url32" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ack": {
+      "allOf": [
+        { "$ref": "#/$defs/postAuthBase" },
+        {
+          "type": "object",
+          "unevaluatedProperties": false,
+          "properties": {
+            "type": { "const": "sync.ack" },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["cursor"],
+              "properties": { "cursor": { "$ref": "common.schema.json#/$defs/cursor" } }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+  "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+  "deviceName": "Test Phone",
+  "clientKind": "pwa",
+  "canonicalOrigin": "https://pc.example.test",
+  "devicePublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+  "clientNonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "proof": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+}
+
