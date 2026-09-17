@@ -68,6 +68,14 @@ function compareSet(label, actual, wanted) {
 }
 
 function checkRows(groupName, rows, key) {
+  const allowedLayers = {
+    acp: new Set(["native", "raw_preserve", "transport_control"]),
+    broker: new Set(["project_and_preserve", "local_service", "pass_through", "explicit_unsupported", "not_applicable"]),
+    sync: new Set(["command", "event", "snapshot", "raw_fallback", "explicit_unsupported", "not_exposed"]),
+    pwa: new Set(["full", "view_only", "explicit_unsupported", "not_applicable"]),
+    facade: new Set(["baseline", "advertise_if_end_to_end", "not_advertised", "not_applicable"])
+  };
+  const allowedDeliveries = new Set(["mvp", "conditional_mvp", "post_mvp", "always"]);
   const ids = new Set();
   const values = new Set();
   for (const row of rows ?? []) {
@@ -78,6 +86,10 @@ function checkRows(groupName, rows, key) {
     if (!row.layers || Object.keys(row.layers).sort().join(",") !== "acp,broker,facade,pwa,sync") {
       errors.push(`${row.id}: layers must contain exactly acp, broker, sync, pwa, facade`);
     }
+    for (const [layer, value] of Object.entries(row.layers ?? {})) {
+      if (!allowedLayers[layer]?.has(value)) errors.push(`${row.id}: invalid ${layer} behavior ${value}`);
+    }
+    if (!allowedDeliveries.has(row.delivery)) errors.push(`${row.id}: invalid delivery ${row.delivery}`);
     if (!Array.isArray(row.tests) || row.tests.length === 0) errors.push(`${row.id}: tests must not be empty`);
     if (Object.values(row.layers ?? {}).includes("silent_drop")) errors.push(`${row.id}: silent_drop is forbidden`);
   }

@@ -116,6 +116,8 @@ node scripts/check-acp-compatibility.mjs
 
 `session/list`、`session/delete`、`session/resume`、`session/close`、完整 config option、文件服务和 terminal 服务可以排在后续阶段，但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
 
+这里的 ACP `session/list` 是底层 Agent 的可选原生方法，不等同于 ACP Remote 自己列出 Daemon 会话的 Sync `session.list`。同理，`promptCapabilities.image/audio/embeddedContext` 只约束 Client 向 Agent 发送的 prompt 内容；Agent 输出中出现相同 content block 时仍必须保留并明确呈现，不能因未宣告 prompt 输入能力而丢弃。
+
 ## 6. Agent 实现差异
 
 通用矩阵描述 ACP 规范与产品合同，不把 Codex 或 OMP 的当前行为写死到核心。实际兼容结果以后记录为独立 report：
