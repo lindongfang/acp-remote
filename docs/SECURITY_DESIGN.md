@@ -174,9 +174,11 @@ Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管
 
 优先顺序（已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定）：
 
-1. CLI 前台进程内调用或 stdio：`daemon start|stop|status`、`doctor`、`acp-stdio` 等 CLI 自有命令在此完成。
+1. CLI 前台进程内调用或 stdio：`daemon start|stop|status`、`doctor` 等 CLI 自有命令在此完成。
 2. 带当前 OS 用户 ACL 的 Windows Named Pipe / Unix domain socket：运行中 Daemon 的设备配对与撤销、节点配对与撤销、Export 管理、Import 管理、审计导出都走这里，两端共用 `core::use_cases` 的同一组 `DeviceManagement`、`ExportManagement`、`RemoteCatalogQueries`。
 3. 只有在单独设计本地认证、Origin/CSRF 和权限模型后，才允许 loopback HTTP 管理 API；当前不实现。
+
+本地通道还承载 `acp-remote acp-stdio` 与 Daemon 之间的 ACP 会话流：facade 常驻 Daemon，CLI 侧只是 stdin/stdout 的字节泵，因此这条流是长期、双向、需要背压的，与上面的请求/响应管理载荷分开定义。Daemon 未运行时 `acp-stdio` 以明确错误退出，不得自行打开数据库或启动第二套核心。
 
 约束：
 

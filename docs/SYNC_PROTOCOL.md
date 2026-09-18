@@ -865,6 +865,7 @@ remoteOrigin = {
 - Owner 不可达时 `session.read` 返回 `resource.remote_unavailable`，同时把该会话的 `origin.online` 置为 `false` 并广播一次 `session.origin.online_changed`；恢复可达后同样以该事件把 `online` 置回 `true`。
 - Owner 离线期间客户端不得把远程会话的输入标记为已发送或已接受；本地 draft 可以保留，但必须显式标记为未提交。
 - `session.list` 只返回该设备有权查看的本地会话与 imported 摘要，两者使用同一 `SessionSummary` 形状；不得为远程会话发明第二套字段。
+- imported 事件没有可回放的本地正文：`sync.subscribe` 从 cursor 增量重放时，Access 必须按 origin cursor 向 Owner 重新获取对应事件后再交付；无法回源的区间（例如已超出 Owner 的保留窗口或 Owner 离线）必须以 `sync.reset_required`（`reason` 取 `cursor_expired` 或 `epoch_mismatch`）让客户端重建会话视图，不得发送只有 `sha256`/digest 而没有内容的伪事件，也不得把内存中的临时投递当作可重放历史。
 
 未协商该 feature 时，Access 不得返回任何 `origin.kind = "remote"` 的会话，也不得发送带非空 `remoteOrigin` 的事件。
 

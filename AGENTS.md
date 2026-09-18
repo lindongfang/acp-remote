@@ -85,6 +85,7 @@ core
 acp-protocol
 sync-protocol
 node-link-protocol
+acpr-transcript
 agent-host
 node-link-client
 storage-sqlite
@@ -93,7 +94,7 @@ server
 app
 ```
 
-物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate。
+物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`），不通过横向依赖复用。
 
 依赖必须指向更稳定的内层：
 
@@ -107,9 +108,10 @@ core use_cases   -> core ports + core model
 必须遵守：
 
 - `core` 不依赖任何 wire protocol、Tokio runtime、Axum、SQLite、WebSocket、子进程、ACP DTO 或具体 Agent。
-- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。
-- `server::sync`、`server::node_link`、`server::acp_facade` 是平级入站适配器，只调用 `core::use_cases`，不能互相调用。
+- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。三个协议 crate 彼此不直接依赖，共享的 transcript codec 结构来自叶子 crate `acpr-transcript`（协议 crate 只在测试中依赖它）。
+- `server::sync`、`server::node_link`、`server::acp_facade`、`server::local_admin` 是平级入站适配器，只调用 `core::use_cases`，不能互相调用。
 - `storage-sqlite`、`agent-host`、`node-link-client` 等出站适配器之间不能互相调用。
+- 需要其它模块的能力时通过端口或函数签名传入（组合根装配），不要 import 隔壁模块的实现。
 - ACP DTO 只存在于 ACP 边界，Sync DTO 只存在于同步协议边界，数据库 record 只存在于 SQLite 适配器。
 - 禁止定义巨型 `AgentRuntime`；本地和远程 backend 通过 `AgentCatalog`、`SessionBackendFactory` 和会话级 `SessionEndpoint` 实现。
 - Owned session 使用 `SessionStore` 单次事务提交状态、事件和幂等；imported session 使用无正文 `RemoteDeliveryStore`，不得复用 owned content 写入路径。

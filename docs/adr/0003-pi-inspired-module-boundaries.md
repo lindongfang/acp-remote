@@ -27,3 +27,5 @@ Pi 的当前结构把 session/agent 核心、transport-neutral protocol、client
 - 本地 Agent 与远程 Agent 共享会话级能力接口，而不共享进程或传输细节。
 - SQLite 原子性在 port 层可表达，Access `no-content-cache` 也有独立存储端口保证。
 - 如果某个内部模块未来需要独立发布、平台实现或编译隔离，再通过 ADR 提升为 crate。
+
+后续：[ADR-0005](./0005-shared-transcript-codec.md) 在本决策之上新增第 11 个叶子 crate `acpr-transcript`（Sync 与 Node Link 共用的 transcript codec 结构），协议 crate 仍互不依赖。

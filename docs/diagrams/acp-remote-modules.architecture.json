@@ -7,43 +7,46 @@
     "output": "acp-remote-modules.html",
     "quality_profile": "showcase",
     "views": [
-      { "id": "remote-zed", "label": "远程 Zed 访问", "focus": ["remoteClients", "accessIngress", "accessBroker", "nodeClient", "nodeServer", "ownerBroker", "agentHost", "agent"], "note": "Zed 只连接本机 ACP facade，跨节点认证、授权与重放由两端 ACP Remote 负责。" },
-      { "id": "direct-client", "label": "客户端直接访问", "focus": ["directClients", "nodeServer", "ownerBroker", "storage", "agentHost", "agent"], "note": "PWA、手机或电脑客户端也可以直接连接资源归属节点，不要求经过访问节点。" },
-      { "id": "authority", "label": "权威与持久化", "focus": ["accessBroker", "ownerBroker", "storage", "agentHost"], "note": "Agent 与会话正文只由资源归属节点持久化；访问节点仅保存无正文交付索引和来源游标。" }
+      { "id": "remote-zed", "label": "远程 Zed 访问", "focus": ["remoteClients", "accessIngress", "accessBroker", "nodeClient", "nodeServer", "ownerBroker", "agentHost", "agent"], "note": "Zed 只连接本机 ACP facade；跨节点流量进入 Owner 的 server::node_link，再调用 Owner Core。" },
+      { "id": "direct-client", "label": "客户端直接访问", "focus": ["directClients", "accessIngress", "nodeServer", "ownerBroker", "storage", "agentHost", "agent"], "note": "PWA/手机/电脑可以直连资源归属节点；连到访问节点时，除该节点自身资源外还能看到它从 Owner 导入的会话（origin 标记为 remote，正文回源 Owner）。" },
+      { "id": "authority", "label": "权威与持久化", "focus": ["accessBroker", "accessStore", "ownerBroker", "storage", "agentHost"], "note": "Agent 与会话正文只由资源归属节点持久化；访问节点仅保存无正文交付索引和来源游标。" }
     ]
   },
   "components": [
     { "id": "remoteClients", "type": "external", "label": "远程本地客户端", "sublabel": "Zed / CLI / Desktop", "pos": [35, 310], "size": [140, 68] },
-    { "id": "accessIngress", "type": "frontend", "label": "Server Adapters", "sublabel": "sync / acp_facade", "pos": [215, 310], "size": [140, 68] },
-    { "id": "accessBroker", "type": "backend", "label": "Access Core", "sublabel": "用例 / 无正文索引", "pos": [395, 310], "size": [140, 68] },
-    { "id": "nodeClient", "type": "security", "label": "Node Link Client", "sublabel": "节点身份与授权", "pos": [395, 475], "size": [140, 68] },
+    { "id": "accessIngress", "type": "frontend", "label": "Server Adapters", "sublabel": "sync / ACP / admin", "pos": [215, 310], "size": [140, 68] },
+    { "id": "accessBroker", "type": "backend", "label": "Core", "sublabel": "imported 会话路径", "pos": [395, 310], "size": [140, 68] },
+    { "id": "accessStore", "type": "database", "label": "Remote Delivery Store", "sublabel": "无正文收据 / cursor", "pos": [215, 475], "size": [140, 68] },
+    { "id": "nodeClient", "type": "security", "label": "Node Link Client", "sublabel": "远程 Agent backend", "pos": [395, 475], "size": [140, 68] },
     { "id": "directClients", "type": "external", "label": "直接访问客户端", "sublabel": "PWA / 手机 / 电脑", "pos": [590, 80], "size": [145, 68] },
-    { "id": "nodeServer", "type": "security", "label": "Server / Node Link", "sublabel": "入站 adapter 与验签", "pos": [590, 310], "size": [145, 68] },
-    { "id": "ownerBroker", "type": "backend", "label": "Owner Core", "sublabel": "会话用例与权威", "pos": [775, 310], "size": [145, 68] },
+    { "id": "nodeServer", "type": "security", "label": "Server Adapters", "sublabel": "link / sync / ACP / admin", "pos": [590, 310], "size": [145, 68] },
+    { "id": "ownerBroker", "type": "backend", "label": "Core", "sublabel": "owned 会话权威", "pos": [775, 310], "size": [145, 68] },
     { "id": "storage", "type": "database", "label": "SQLite Event Log", "sublabel": "权威事件与游标", "pos": [775, 475], "size": [145, 68] },
     { "id": "agentHost", "type": "backend", "label": "Agent Host", "sublabel": "进程 / ACP stdio", "pos": [960, 310], "size": [140, 68] },
     { "id": "agent", "type": "external", "label": "ACP Agent", "sublabel": "Codex / OMP / 其他", "pos": [1140, 310], "size": [140, 68] },
     { "id": "companyClients", "type": "external", "label": "公司本地客户端", "sublabel": "Zed / CLI", "pos": [960, 80], "size": [140, 68] }
   ],
   "boundaries": [
-    { "kind": "region", "label": "远程访问节点（可选）", "wraps": ["accessIngress", "accessBroker", "nodeClient"], "pad": 24 },
+    { "kind": "region", "label": "远程访问节点（可选）", "wraps": ["accessIngress", "accessBroker", "accessStore", "nodeClient"], "pad": 24 },
     { "kind": "region", "label": "公司资源归属节点", "wraps": ["nodeServer", "ownerBroker", "storage", "agentHost"], "pad": 24 }
   ],
   "connections": [
-    { "id": "remoteToIngress", "from": "remoteClients", "to": "accessIngress", "label": "本机 ACP / HTTPS", "variant": "emphasis", "labelDy": 58 },
-    { "id": "ingressToAccess", "from": "accessIngress", "to": "accessBroker", "label": "应用命令", "labelDy": 58 },
-    { "id": "accessToLink", "from": "accessBroker", "to": "nodeClient", "label": "导入 Agent", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
-    { "id": "nodeLink", "from": "nodeClient", "to": "nodeServer", "label": "Node Link · WSS + 双向节点认证", "variant": "security", "fromSide": "right", "toSide": "bottom" },
-    { "id": "directToOwner", "from": "directClients", "to": "nodeServer", "label": "Sync / Node Link", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "remoteToIngress", "from": "remoteClients", "to": "accessIngress", "label": "本机 ACP（stdio ↔ 本地 IPC）", "variant": "emphasis", "labelDy": 58 },
+    { "id": "ingressToAccess", "from": "accessIngress", "to": "accessBroker", "label": "用例", "route": "straight" },
+    { "id": "accessToStore", "from": "accessBroker", "to": "accessStore", "label": "先提交无正文收据", "fromSide": "left", "toSide": "right" },
+    { "id": "accessToLink", "from": "accessBroker", "to": "nodeClient", "label": "SessionEndpoint port", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "nodeLink", "from": "nodeClient", "to": "nodeServer", "label": "server::node_link · WSS（双向）", "variant": "security", "fromSide": "right", "toSide": "bottom" },
+    { "id": "directToOwner", "from": "directClients", "to": "nodeServer", "label": "Sync（WSS）", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "directToAccess", "from": "directClients", "to": "accessIngress", "label": "Sync（WSS）", "variant": "dashed", "toSide": "top" },
     { "id": "nodeToOwner", "from": "nodeServer", "to": "ownerBroker", "label": "授权后的命令", "labelDy": 58 },
     { "id": "ownerToStore", "from": "ownerBroker", "to": "storage", "label": "先持久化后广播", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
     { "id": "ownerToHost", "from": "ownerBroker", "to": "agentHost", "label": "Agent backend port", "labelDy": 58 },
     { "id": "hostToAgent", "from": "agentHost", "to": "agent", "label": "ACP stdio", "variant": "emphasis", "labelDy": 58 },
-    { "id": "companyToOwner", "from": "companyClients", "to": "ownerBroker", "label": "本机 ACP / CLI", "fromSide": "bottom", "toSide": "top" }
+    { "id": "companyToOwner", "from": "companyClients", "to": "nodeServer", "label": "ACP stdio / 本地管理 IPC", "fromSide": "bottom", "toSide": "top" }
   ],
   "cards": [
-    { "dot": "cyan", "title": "节点角色", "items": ["同一 ACP Remote 可同时导入和导出 Agent", "资源归属由 Agent/会话决定，不由手机或电脑形态决定"] },
-    { "dot": "rose", "title": "安全边界", "items": ["节点配对形成长期信任，但不自动建立传递信任", "有效权限 = Owner 导出授权 ∩ Access 本地授权"] },
-    { "dot": "emerald", "title": "一致性", "items": ["Owner Node 是会话和事件权威", "跨节点至少一次投递，保留 originEventId 与来源游标"] }
+    { "dot": "cyan", "title": "节点与模块边界", "items": ["同一 ACP Remote 可同时导入和导出 Agent", "server::{sync,node_link,acp_facade,local_admin} 是四个平级入站适配器", "acpr-transcript 是无协议语义、无项目依赖的共享叶子 crate"] },
+    { "dot": "rose", "title": "安全边界", "items": ["节点配对形成长期信任，但不自动建立传递信任", "有效权限 = Owner 导出授权 ∩ Access 本地授权", "配对、撤销与 Export 管理只走平台本地 IPC"] },
+    { "dot": "emerald", "title": "一致性", "items": ["Owner Node 是会话和事件权威", "跨节点至少一次投递，保留 originEventId 与来源游标", "imported 事件先落无正文收据再转发；正文与重放均在线回源 Owner"] }
   ]
 }
