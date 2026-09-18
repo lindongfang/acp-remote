@@ -1,7 +1,8 @@
 # ACP Remote 模块架构
 
-> 状态：编码前模块边界设计
-> 版本：0.2
+> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite` 已实现，见 `README.md` 的 crate 表）
+> 版本：0.3
+> 修订记录（2026-09-18）：补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1。  
 > 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 > 已接受决策：[ADR-0003](./adr/0003-pi-inspired-module-boundaries.md)
@@ -44,16 +45,19 @@ core::use_cases ───────> core::model
         │                       ▲
         ▼                       │
 agent-host / node-link-client / storage-sqlite / identity-auth
+        │
+        └──────────────> identity-keystore（平台安全存储，仅 app 装配）
 ```
 
 依赖只允许指向更稳定的模块：
 
 ```text
-app             -> server / backends / identity-auth / core
+app             -> server / backends / identity-auth / identity-keystore / core
 server          -> core + corresponding wire protocols
 outbound backend-> core + corresponding wire protocols
 core::use_cases -> core::ports + core::model
 wire protocols  -> no core or infrastructure dependency
+identity-keystore -> identity-auth（实现其 keystore 端口）
 ```
 
 禁止：
@@ -69,11 +73,11 @@ adapter A -> adapter B
 
 适配器之间只能通过 `core` 定义的 use case 或 port 协作。协议 crate 只拥有 wire schema、codec、framing、limits 和版本协商，不拥有业务领域类型；wire 与 core 的 mapper 属于使用该协议的 adapter。
 
-平级模块共享的底层实现放在叶子 crate：`acpr-transcript`（[ADR-0005](./adr/0005-shared-transcript-codec.md)）只拥有长度前缀 transcript 的编码与解码，不拥有任何 domain/tag 取值或协议语义。协议 crate 不互相依赖，Node Link 复用 Sync 的 codec 结构靠的是"共同依赖同一个叶子 crate"，而不是"一个协议 crate 依赖另一个"。
+平级模块共享的底层实现放在叶子 crate：`acpr-transcript`（[ADR-0005](./adr/0005-shared-transcript-codec.md)）只拥有长度前缀 transcript 的编码与解码，不拥有任何 domain/tag 取值或协议语义；`acpr-wire`（[ADR-0007](./adr/0007-shared-wire-value-crate.md)）只拥有跨协议共用的 wire 值对象与字段校验机制（uuid/decimalString/timestamp/base64url/featureList/rawAcp、`Nullable`、`RawObject`、`ExtraFields`、泛型 `PublicError`），不拥有任何协议词表。协议 crate 不互相依赖，Node Link 复用 Sync 的 codec 结构与值对象靠的是"共同依赖同一个叶子 crate"，而不是"一个协议 crate 依赖另一个"。
 
 ### 2.1 客户端边界
 
-UI 客户端不属于 Rust core，通过版本化 `sync-protocol` 与 `server::sync` 通信。ACP Remote 节点通过独立的 `node-link-protocol` 通信。wire contract 分别以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) 和 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 为准；系统安全边界以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 为准；前端阶段、分层、PWA 限制和后续原生 adapter 约束以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) 为准。
+UI 客户端不属于 Rust core，通过版本化 `sync-protocol` 与 `server::sync` 通信。ACP Remote 节点通过独立的 `node-link-protocol` 通信。CLI 与运行中的 Daemon 通过平台本地 IPC 通信，其信封、framing 与方法集以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为准。wire contract 分别以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) 和 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 为准；系统安全边界以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 为准；前端阶段、分层、PWA 限制和后续原生 adapter 约束以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) 为准。
 
 ```text
 PWA / Android / iOS
@@ -99,11 +103,13 @@ crates/
 ├─ acp-protocol/
 ├─ sync-protocol/
 ├─ node-link-protocol/
-├─ acpr-transcript/         叶 crate：Sync 与 Node Link 共用的 transcript codec 结构
+├─ acpr-transcript/         叶 crate：Sync 与 Node Link 共用的 transcript codec 与表驱动校验
+├─ acpr-wire/               叶 crate：跨协议共用的 wire 值对象与字段校验机制
 ├─ agent-host/              本地 ACP Agent backend
 ├─ node-link-client/        远程 Agent backend
 ├─ storage-sqlite/          core 持久化后端
-├─ identity-auth/           身份、配对、签名与平台 keystore
+├─ identity-auth/           身份、配对、签名与授权的纯状态机（不含平台 API）
+├─ identity-keystore/       平台安全存储实现（DPAPI/CNG、Keychain、Secret Service）
 ├─ server/                  sync / node-link / acp-facade / local-admin 入站模块
 └─ app/                     daemon、CLI 与组合根
 ```
@@ -112,16 +118,20 @@ crates/
 
 协议 crate 是例外：ACP、Sync 和 Node Link 分别拥有独立兼容周期与 fixture，必须从第一天物理隔离，且不得依赖 `core`。
 
+`core` 的包名与库名不同：包名是 `core`（与上表、§5 矩阵一致），**库名是 `acp_core`**——一个名为 `core` 的依赖会在依赖方的宏展开里遮蔽 sysroot 的 `core`（`thiserror::Error` 展开出的 `core::fmt` 会解析到本 crate 而编译失败）。依赖方照旧在 `Cargo.toml` 写 `core = { path = "../core" }`，代码里用 `acp_core::…`；本文档其余部分的 `core::model`/`core::use_cases`/`core::ports`/`core::broker` 均指 `acp_core::…`。
+
+平台安全存储是第二处例外：`identity-keystore` 独立成 crate 是为了隔离平台依赖（原生 keystore API 与 `cfg` 分支），让 `identity-auth` 的状态机在所有平台都能编译与单测（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
+
 ### 3.1 Workspace 基线
 
 创建 workspace 时固定以下基线，避免各 crate 各自漂移：
 
 - `edition = "2024"`（与 `rust-version = "1.85"` 一致，edition 2024 的最低工具链即 1.85），`resolver = "3"`。
 - `[workspace.package]` 统一 `version`、`edition`、`rust-version`、`license`、`repository`；第一阶段全部 crate `publish = false`（`§12` 的"是否公开部分 crate"仍未定）。
-- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等），crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。
+- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256`（ECDSA P-256）+ `sha2` + `hmac` + `base64`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
-- workspace 成员就是 §3 列出的十一个 crate；新增 crate 必须先改本节。
+- workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十二个；不得为凑齐列表创建只有占位实现的空 crate。
 
 ## 4. 模块职责
 
@@ -139,18 +149,19 @@ core::broker      Session Actor、命令协调与事件提交
 core::testing     fake ports 和契约测试工具，仅测试 feature 导出
 ```
 
-`model` 至少包含：
-
 ```text
-NodeId / DeviceId / ExportId / SessionId / EventId / RequestId
-OwnedSessionRef / RemoteSessionRef / OriginEventRef
-Session / SessionState / TurnState / ResourceOrigin
-Command / CommandResult / CommandTerminal
-Event / EventKind / EventOrigin / PersistencePolicy
-AgentRef / ConfigOptionId / Capability
-PermissionRequest / PermissionDecision
-Sequence / Version / AttachmentGeneration
+NodeId / DeviceId / ExportId / ImportId / SessionId / EventId / RequestId / TurnId / InteractionId / PairingId / AttachmentId
+OwnedSessionRef / RemoteSessionRef / OriginEventRef / SessionReference
+Session / SessionSummary / SessionSnapshot / SessionState / Turn / TurnState / ResourceOrigin
+ClientCommand / CommandPayload / CommandReceipt / CommandRecord / CommandTerminalRecord / CommandStatus / CommandKind
+InteractionId / InteractionKind / InteractionOption / PermissionDecision / InteractionResolution / PendingInteraction / Resolution
+Event / EventType / EventKind / EventOrigin / EventPayload / AcpRaw / PersistencePolicy / StoredPolicy
+AgentRef / AgentDescriptor / CapabilitySet / ConfigOptionId / ConfigOption / ConfigValue / ModeRef / ModeId
+Sequence / Version / AttachmentGeneration / ServerEpoch / OriginEpoch / GlobalCursor / OriginCursor / LocalCursor / Timestamp / Digest
+Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord / AuditRecord / AuditAction
 ```
+
+以上是**冻结全量**；每个类型的形状与不变量见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3。
 
 规则：
 
@@ -177,17 +188,26 @@ RemoteCatalogQueries
 ```text
 AgentCatalog             枚举可用 Agent 与能力
 SessionBackendFactory    受约束地 create/open SessionEndpoint
-SessionEndpoint          prompt/cancel/set-mode/list-config/set-config/read-history/events，绑定单个 live session
-SessionStore             原子提交 owned session 状态、事件与 requestId 幂等
+SessionEndpoint          prompt/cancel/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session
+SessionStore             原子提交 owned session 状态、事件与 requestId 幂等；提供 head 与一致性读视图
 RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
-TrustStore               设备、节点、Export grant 与撤销元数据
+TrustStore               设备、节点配对、信任与撤销元数据
+ExportStore              Owner Export 与 Access Import 记录
+AuditStore               不含内容的审计记录（读写）
+AttachmentStore          内容寻址附件字节与 LRU 清理
 EventPublisher           发布已经提交的事件或远程交付
-Clock / IdGenerator      可测试时间与 ID
+EventSink                后端事件通道；调用顺序即提交顺序
+ReadView                 一致性读视图，`sync.snapshot_*` 的 barrier
+Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交事务内分配）
 ```
+
+签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
 `read-history` 服务于 Sync 的 `session.read`：owned session 由 `storage-sqlite` 从本地事件日志回答，imported session 必须由 `node-link-client` 在线向 Owner 取，Access 不得把它写进本地正文缓存；Owner 不可达时返回可区分的错误，由 `server::sync` 映射成 `resource.remote_unavailable`。远程可达性变化通过 `EventPublisher` 以 `session.origin.online_changed` 暴露给客户端，不在 core 里维护独立的在线状态缓存。
+
+端口签名、值对象形状、用例入口与 broker 事务顺序已冻结在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3–§6；本节只保留职责边界与依赖规则。
 
 ### 4.2 `acp-protocol`
 
@@ -206,12 +226,16 @@ Clock / IdGenerator      可测试时间与 ID
 包含：
 
 ```text
-Handshake envelope
+Handshake envelope（信封 + 连接生命周期：认证前后连接字段规则、Phase 校验）
 Subscribe / Snapshot / Event / Ack
 ClientCommand / CommandAccepted / CommandRejected
 Pairing DTO
 ProtocolVersion / Feature negotiation
+Heartbeat（control.ping / control.pong）
+Connection error lifecycle（error body 与 34 个错误码，认证前后两种信封形状）
 ```
+
+信封的 `body` 在传输层保持原文承载（`RawValue`），家族 body 由调用方显式解析——这条同时适用于已实现的家族与后续增量，`AGENTS.md` §3 的保真要求不允许中间经通用 DTO 往返。
 
 它不允许客户端发送任意 ACP JSON-RPC，也不依赖 `core`。Sync wire 与 core 的 mapper 位于 `server::sync`。
 
@@ -264,9 +288,11 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 它不解析 ACP、不广播 WebSocket、不执行会话状态转换、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
 
+v1 的表结构（`owned_*` / `imported_*`）、PRAGMA、migration、保留与容量策略、崩溃恢复与失败关闭已冻结在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7–§8。
+
 ### 4.8 `identity-auth`
 
-唯一职责：实现设备身份、配对、认证和授权。
+唯一职责：实现设备身份、配对、认证和授权——**纯状态机，不依赖任何平台 API**。
 
 内部可分：
 
@@ -274,10 +300,10 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 pairing/
 handshake/
 authorization/
-keystore/
+port/          # keystore 端口定义（trait），实现见 identity-keystore
 ```
 
-它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销和平台安全存储。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
+它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销，以及**通过端口**访问平台安全存储（[ADR-0006](./adr/0006-identity-keystore-split.md)）。所有密钥读写都经过组合根注入的端口：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
 
 `pack.*`、`preset.*`、`grant.*` 只是授权管理的输入形式：由 `authorization/` 按 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 展开成命令级 scope 后才写入设备记录或随 wire 下发（`SECURITY_DESIGN.md` §10.2）。core 只看到展开后的 scope 与 grant facts，不认识 pack/preset 名称。
 
@@ -297,7 +323,7 @@ server::transport    listener 与连接级 backpressure；不放业务命令
 
 四个 adapter 只能调用 `core::use_cases`，不能互相调用、查询 SQLite、启动 Agent 或直接调用 `node-link-client`。每个 adapter 自己拥有 wire/core mapper；共享的只有通用连接生命周期原语，禁止抽出“万能消息 DTO”。
 
-`server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
+`server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。该通道的 endpoint、访问控制、framing、管理信封、方法集与本地错误码以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为唯一权威来源。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
 
 Node Link 和 Sync attachment 必须具有 connection generation 或 attachment ID。重新认证/重新订阅会生成新 generation，延迟到达的旧连接 frame 必须被拒绝，不能误投递到新会话绑定。
 
@@ -322,40 +348,65 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 ### 4.11 `acpr-transcript`
 
-唯一职责：实现 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §6.2 定义的签名/HMAC 输入编码——magic `ACPR`、`codecVersion`、`domainTag`、严格递增且唯一的 `fieldTag`、长度前缀字段——以及对应的解码与校验错误。它是叶 crate（[ADR-0005](./adr/0005-shared-transcript-codec.md)）：不依赖任何其他项目 crate。
+唯一职责：实现 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §6.2 定义的签名/HMAC 输入编码——magic `ACPR`、`codecVersion`、`domainTag`、严格递增且唯一的 `fieldTag`、长度前缀字段——以及对应的解码与校验错误。`table` 模块在此之上提供表驱动层：泛型表类型（`DomainSpec`/`FieldSpec`/`FieldType`/`Proof`）与"按表校验并编解码"（字段数量、tag 成员、定长宽度）。它是叶 crate（[ADR-0005](./adr/0005-shared-transcript-codec.md)）：不依赖任何其他项目 crate。
 
 它**不**包含任何 `domainTag` 取值、`fieldTag` 取值或协议语义：
 
-- Sync 的 domain 与 tag 表在 `sync-protocol`（对应 `SYNC_PROTOCOL.md` §6.3）；
-- Node Link 的 domain 与 tag 表在 `node-link-protocol`（对应 §9.2–§9.4，tag 编号与 Sync 独立）；
-- `identity-auth` 把 `(domainTag, [(fieldTag, bytes)])` 喂给本 crate，自己负责取表与验证 P-256/HMAC 结果。
+- Sync 的 domain 与 tag 表在 `sync-protocol`（对应 `SYNC_PROTOCOL.md` §6.3），Node Link 的在 `node-link-protocol`（对应 §9.2–§9.4，tag 编号与 Sync 独立）；协议 crate 只导出 `DOMAINS` 常量，不重复实现校验或编解码；
+- `identity-auth` 依赖本 crate 与两个协议 crate，取表后调用表驱动编解码，自己只负责验证 P-256/HMAC 结果。
 
-`sync-protocol` 与 `node-link-protocol` 只在测试中依赖它（跑各自的 `fixtures/*/transcripts/` 固定向量），因此协议 crate 之间仍然互不依赖。
+`sync-protocol` 与 `node-link-protocol` 正常依赖它，宽度表与"按表校验"因此只有一份实现；协议 crate 之间仍然互不依赖。
+
+### 4.12 `identity-keystore`
+
+唯一职责：实现 `identity-auth` 定义的 keystore 端口，把长期密钥与凭据落到平台安全存储。
+
+- Windows：优先 CNG/TPM，至少 DPAPI 绑定当前用户。
+- macOS：Keychain；可用时使用不可导出或硬件保护能力。
+- Linux：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 `SECURITY_DESIGN.md` §20 的当前决定失败关闭，不得静默降级为明文文件。
+
+约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
+
+### 4.13 `acpr-wire`
+
+唯一职责：跨协议共用的 wire 值对象与字段级校验机制（[ADR-0007](./adr/0007-shared-wire-value-crate.md)）——`Uuid`、`DecimalString`、`Timestamp`、`Base64Url<N>`、`FeatureId`、`FeatureList`、`RawAcp`、`Text<N>`、`NonEmptyText<N>`、`BoundedU64<MIN,MAX>`/`UIntAtLeast<MIN>`、`Nullable<T>`（`required` 且可 null 的键存在性语义）、`RawObject`/`ExtraFields`（开放扩展点的保真载体）、`ValueError`、`deserialize_optional_non_null`、**ACPR-CJ1 规范 JSON**（`SYNC_PROTOCOL.md` §3.3：对象成员按 UTF-16 code unit 排序、禁止重复键与浮点、控制字符写作小写 `\u00xx`；`payloadDigest`/`snapshotDigest` 的前像，Rust 侧唯一实现，与 `scripts/check-contract-assets.mjs` 的参考实现互校），以及泛型 `PublicError<Code>`。
+
+它**不**包含任何协议词表或语义：归属检查（哪些语义属于谁）如下——
+
+- 错误码词表（`ErrorCode`）、命令名、grant、domain/tag 取值、会话状态机规则都不在此 crate；`PublicError<Code>` 只提供形状，各协议以自己的错误码枚举具体化；
+- 协议专属的值对象留在各自 crate（Sync 的 `cursor`/`sessionSummary`/`originBlock`，Node Link 的 `originCursor`/`sessionMeta`/`exportEntry` 等），不因"看着像"而下沉；
+- `Base64Url` 复用 `acpr-transcript` 的规范化 base64url 解码，因此依赖方向是 `acpr-wire → acpr-transcript`，仍是叶 crate 链上的单向依赖。
+
+`sync-protocol` 与 `node-link-protocol` 正常依赖它，字段级校验与开放对象保真因此只有一份实现；协议 crate 之间仍然互不依赖。
 
 ## 5. 依赖矩阵
+`✓` 表示允许直接依赖：
 
-`✓` 表示允许直接依赖；`d` 表示仅 dev-dependency：
-
-| From / To | core | acp-protocol | sync-protocol | node-link-protocol | acpr-transcript | identity-auth |
-|---|---:|---:|---:|---:|---:|---:|
-| core | — |  |  |  |  |  |
-| acp-protocol |  | — |  |  |  |  |
-| sync-protocol |  |  | — |  | d |  |
-| node-link-protocol |  |  |  | — | d |  |
-| acpr-transcript |  |  |  |  | — |  |
-| agent-host | ✓ | ✓ |  |  |  |  |
-| node-link-client | ✓ | ✓ |  | ✓ |  |  |
-| storage-sqlite | ✓ |  |  |  |  |  |
-| identity-auth | ✓ |  | ✓ | ✓ | ✓ | — |
-| server | ✓ | ✓ | ✓ | ✓ |  | ✓ |
-| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| From / To | core | acp-protocol | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| core | — |  |  |  |  |  |  |  |
+| acp-protocol |  | — |  |  |  |  |  |  |
+| sync-protocol |  |  | — |  | ✓ | ✓ |  |  |
+| node-link-protocol |  |  |  | — | ✓ | ✓ |  |  |
+| acpr-transcript |  |  |  |  | — |  |  |  |
+| acpr-wire |  |  |  |  | ✓ | — |  |  |
+| agent-host | ✓ | ✓ |  |  |  |  |  |  |
+| node-link-client | ✓ | ✓ |  | ✓ |  |  |  |  |
+| storage-sqlite | ✓ |  |  |  |  | ✓ |  |  |
+| identity-auth | ✓ |  | ✓ | ✓ | ✓ |  | — |  |
+| identity-keystore |  |  |  |  |  |  | ✓ | — |
+| server | ✓ | ✓ | ✓ | ✓ |  |  | ✓ |  |
+| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 额外规则：
 
-- 三个 protocol crate 彼此也不直接依赖；它们共享的 transcript codec 结构来自叶子 crate `acpr-transcript`，包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
+- 三个 protocol crate 彼此也不直接依赖；它们共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并调用它），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`docs/adr/0007-shared-wire-value-crate.md`），包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
+- `storage-sqlite` 依赖 `acpr-wire` **只为** §7.3/§9.9 要求的 `payload_digest = base64url(SHA-256(ACPR-CJ1(payload_json)))`：ACPR-CJ1 是跨 Sync/Node Link 的共享机制，只能有一份实现（v1 早期因为存储层手写摘要而与协议侧口径不一致）；除该函数外不得使用 `acpr-wire` 的业务类型，也不得经它访问协议语义。
 - `identity-auth` 依赖两个协议 crate 与 `acpr-transcript` 仅用于 transcript 编解码与 domain/字段 tag 定义：它不复制这些常量，也不使用协议 crate 的业务类型或业务规则。
 - `server` 对 `identity-auth` 的依赖只用于完成连接认证；业务授权仍由 core 对 `Actor + grant facts` 执行。
 - `app` 可以依赖全部具体 crate，但只做装配；任何其他 crate 不得依赖 `app`。
+- `identity-auth` **不得**依赖 `identity-keystore`：keystore 端口由 `identity-auth` 定义、由组合根注入实现；反向依赖会让纯状态机重新绑上平台 API，这正是本次拆分要消除的东西。
+- 除 `app` 外没有 crate 依赖 `identity-keystore`。需要密钥存储的模块（例如本地管理入口写入 Provider 凭据）通过 `identity-auth` 的端口表达，不直接 import 平台实现。
 
 ## 6. 组合根
 
@@ -363,7 +414,8 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 ```rust
 let store = SqliteStore::open(config.database).await?;
-let auth = IdentityAuth::new(platform_keystore, store.identities());
+let keystore = PlatformKeystore::open(&config.identity)?;
+let auth = IdentityAuth::new(keystore, store.identities());
 let local = ProcessAgentBackend::new(config.agents);
 let remote = NodeLinkBackend::new(config.imports, auth.node_identity());
 let backends = RoutedSessionBackend::new(local, remote);
@@ -433,9 +485,10 @@ Owned 事件只有 core 可以决定何时提交。Imported 事件的业务提�
 core::model       DomainError
 core::use_cases   UseCaseError / PortError
 acp-protocol      AcpCodecError
-sync-protocol     SyncCodecError
-node-link-protocol NodeLinkCodecError
-acpr-transcript   TranscriptCodecError
+sync-protocol     EnvelopeError（信封与阶段）+ ValueError（body 字段级）
+node-link-protocol 表驱动编解码错误复用 acpr-transcript::table::TableError
+acpr-transcript   TranscriptError（codec）+ table::TableError（按表校验）
+acpr-wire         ValueError（字段级校验；各协议私有变体不出此 crate）
 agent-host        AgentHostError -> PortError
 node-link-client  NodeLinkClientError -> PortError
 storage-sqlite    StorageError -> PortError
@@ -500,25 +553,29 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 |---|---|
 | core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
 | acp-protocol | 官方 fixture、未知字段往返保真、扩展 payload、版本兼容 |
-| sync-protocol | 编解码、协商、恶意输入 |
-| node-link-protocol | 节点握手、catalog、origin cursor、命令幂等、版本协商、attachment generation |
-| acpr-transcript | 长度前缀编解码往返、字段乱序/重复/缺字段拒绝、magic 与 `codecVersion` 校验；六个 Sync domain 与六个 Node Link domain 的固定向量逐字节复算 |
+| sync-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算、恶意输入；v1 信封（body 字节保真、认证阶段连接字段规则、未知 `type`/字段拒绝）；全部 18 个消息类型与 33 个事件视图的字段级边界、fixture 覆盖与类型化 body 往返；33 个视图夹具按 `viewDef` 投影到同一 event 类型；配对 HTTPS 载荷（二维码/claim/status 的常量与宽度、`canonicalOrigin` 的 origin 形状、approved 与 device/host 的对应关系）；三个漂移门禁（`type` 常量与 schema union 同源抽取、错误码与 registry 的 `(code, retryable)` 逐条相等、`views::VIEW_TYPES` 与 `event-views.schema.json` 的 `$defs` 逐条相等） |
+| node-link-protocol | 表与 registry 逐项相等、六个 domain 的固定向量逐字节复算；v1 信封与全部 29 个消息类型（连接字段规则、body 字节保真、类型化 body 往返、非法 body 分层拒绝）；配对 HTTPS 载荷；grant 词表与 `commands.json`、错误码与 registry、`MessageType` 与 schema union 三个漂移门禁 |
+| acpr-transcript | 长度前缀编解码往返、字段乱序/重复/缺字段拒绝、magic 与 `codecVersion` 校验；表驱动层的字段数量、tag 成员与定长宽度校验 |
+| acpr-wire | 值对象取值域（uuid/decimalString/timestamp/featureList/rawAcp 的正反用例）、`Nullable` 的「缺键报错 / null / 值」三态、`ExtraFields` 的未知字段值保真（含超出 u64 的整数字面量）、base64url 规范无填充口径 |
 | agent-host | fake ACP child、超时、崩溃、乱序响应 |
 | node-link-client | fake Owner、attachment generation、显式重连、origin 去重、capability 收缩、uncertain |
 | storage-sqlite | migration、owned 原子提交、imported 无正文约束、TTL、容量限制 |
 | identity-auth | 设备/节点配对过期、重放、无传递信任、grant 交集和撤销 |
+| identity-keystore | 平台 keystore 可用与不可用两条路径、无可信 keystore 时失败关闭、密钥不进入日志与错误信息 |
 | server::sync | auth、backpressure、续传、限流 |
 | server::node_link | Export 过滤、节点 auth、attachment、ACK、backpressure、撤销 |
 | server::acp_facade | ACP contract、能力协商真实性、扩展透传、外部 turn 重放 |
 | app | 组合冒烟、关闭顺序、单实例 |
 
-端到端测试使用可控的 fake ACP Agent。真实 Codex/OMP 测试作为可选兼容性套件，不作为普通 CI 的硬依赖。各模块测试使用机器矩阵中的 row/test ID 建立证据，矩阵结构由 `npm run check` 检查（ACP 矩阵与 fixture 均由 ajv 校验）。`sync-protocol` 与 `node-link-protocol` 的编解码、协商和 transcript 测试直接消费 `schemas/sync/v1`、`fixtures/sync/v1`、`schemas/node-link/v1` 与 `fixtures/node-link/v1` 中的 manifest，不另建样例。
+端到端测试使用可控的 fake ACP Agent。真实 Codex/OMP 测试作为可选兼容性套件，不作为普通 CI 的硬依赖。各模块测试使用机器矩阵中的 row/test ID 建立证据，矩阵结构由 `npm run check` 检查：矩阵本身、`fixtures/acp/v1` 与 vendored 上游固定快照（`schemas/acp/v1/upstream/schema.json`）都由 ajv 校验，快照 digest 与 commit 另行重算。`sync-protocol` 与 `node-link-protocol` 的编解码、协商和 transcript 测试直接消费 `schemas/sync/v1`、`fixtures/sync/v1`、`schemas/node-link/v1` 与 `fixtures/node-link/v1` 中的 manifest，不另建样例。
 
 命令名、scope、pack、grant 与 transport 的词表以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准，Rust 侧不得再硬编码第二份：`sync-protocol`、`node-link-protocol` 的命令判别子必须与该文件由契约测试断言一致，`identity-auth` 的授权展开直接读同一份定义（编译期常量或启动时加载后校验，二者取一，但必须由测试证明与 JSON 一致）。
 
 ## 12. 保持开放的决策
 
 - `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate；平台 keystore 的具体 crate 在选择时按 `AGENTS.md` §7 审必要性、维护状态、许可证与平台支持。
+  - 2026-09-18 决定：**拆**。新增第 12 个 crate `identity-keystore`，`identity-auth` 收敛为纯状态机，keystore 以端口注入（[ADR-0006](./adr/0006-identity-keystore-split.md)）。判据是 `AGENTS.md` §4 的「独立平台实现」：平台 keystore 各自拖原生依赖与 `cfg` 分支，且在没有桌面会话的 Linux / CI 容器里不可用，混在一起会让状态机无法在所有平台编译与单测。
+  - 仍然开放的部分：Linux 无可用 Secret Service 时是否提供降级存储（`SECURITY_DESIGN.md` §20）。它只影响 `identity-keystore`，不影响状态机；端口必须允许"非硬件保护"的实现存在，但默认不启用。
 - 是否为同步协议生成 TypeScript/Kotlin/Swift 类型。
 - 是否公开部分 crate 到 crates.io；第一阶段可全部保持 workspace-private。
 
@@ -531,12 +588,7 @@ CLI 与 Daemon 的管理通道已由 [ADR-0004](./adr/0004-local-admin-transport
 - 可交互 HTML：[acp-remote-modules.html](./diagrams/acp-remote-modules.html)
 - 图源 JSON：[acp-remote-modules.architecture.json](./diagrams/acp-remote-modules.architecture.json)
 
-图源 JSON 是权威输入，HTML 是生成物：模块集合、边界或连接发生变化时必须改图源并用 archify 重新生成，不允许手改 HTML。
-
-```text
-node bin/archify.mjs deliver architecture docs/diagrams/acp-remote-modules.architecture.json docs/diagrams/acp-remote-modules.html --quality showcase --json
-node bin/archify.mjs visual-check docs/diagrams/acp-remote-modules.html --json
-```
+图源 JSON 是权威输入，HTML 是生成物：模块集合、边界或连接发生变化时必须改图源并重新生成 HTML，不允许手改 HTML。生成使用 archify 工具（仓库不内置该 CLI，也不作为运行时依赖）：
 
 ## 14. 参考
 

@@ -1,0 +1,33 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5",
+    "update": {
+      "sessionUpdate": "agent_message_chunk",
+      "content": {
+        "type": "text",
+        "text": "示例内容",
+        "_meta": {
+          "example.dev/note": "content level"
+        }
+      },
+      "_meta": {
+        "example.dev/note": "update level",
+        "example.dev/counters": {
+          "n": 9007199254740991
+        }
+      }
+    },
+    "_meta": {
+      "example.dev/traceId": "b7c8d9ea-fb0c-4d1e-8f20-8192a3b4c5d6"
+    },
+    "futureFieldFromNewerAcp": {
+      "nested": [1, 2, { "deep": true }]
+    }
+  },
+  "id": 7,
+  "_meta": {
+    "example.dev/envelope": "request level"
+  }
+}

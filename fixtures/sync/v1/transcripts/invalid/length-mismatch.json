@@ -1,0 +1,7 @@
+{
+  "description": "tag 1 protocolVersion 声明 4 字节而 u16be 固定 2 字节；解码器必须以 length_mismatch 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "domain": "acp-remote/host-challenge/v1",
+  "malformedTranscriptBase64url": "QUNQUgEAHGFjcC1yZW1vdGUvaG9zdC1jaGFsbGVuZ2UvdjEACAABAAAABAAAAAEAAgAAABAAAQIDBAVGB4gJCgsMDQ4PAAMAAAAQEBESExQVRheYGRobHB0eHwAGAAAAF2h0dHBzOi8vcGMuZXhhbXBsZS50ZXN0AAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACgAAACAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-PwALAAAAECAhIiMkJUYnqCkqKywtLi8ADAAAAExhY3AucmF3LXBheWxvYWQudjEAY29yZS5jb21tYW5kLXN0YXR1cy52MQBjb3JlLmV2ZW50LWFjay52MQBjb3JlLnNuYXBzaG90LnYx",
+  "expectedError": "length_mismatch"
+}

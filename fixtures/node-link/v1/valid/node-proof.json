@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "node.proof",
+  "messageId": "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f9a0",
+  "body": {
+    "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    "accessNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "nodeProof": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-fw"
+  }
+}

@@ -11,9 +11,11 @@
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
 - [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md)：客户端与 Daemon 之间认证、消息、游标、重放、幂等和 wire schema 的权威来源。
 - [docs/NODE_LINK_PROTOCOL.md](docs/NODE_LINK_PROTOCOL.md)：ACP Remote 节点之间资源导出/导入、权威、认证、授权、重放和幂等边界的权威来源。
+- [docs/LOCAL_ADMIN_PROTOCOL.md](docs/LOCAL_ADMIN_PROTOCOL.md)：CLI 与 Daemon 之间本地管理通道的请求/响应编码、framing 与方法集的唯一权威来源。
 - [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)：系统威胁模型、信任边界、授权、数据保护、供应链和安全验收的权威来源。
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
 - [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)：Daemon 配置键名、类型、默认值与可否调整的唯一权威来源；协议层限额仍以 Sync、Node Link 两份协议文档为准。
+- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v1 表结构/保留/migration 的唯一权威来源。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
 同时检查现有代码、测试和工作区状态。不要假设文档中的规划已经实现，也不要覆盖用户尚未提交的修改。
@@ -86,15 +88,17 @@ acp-protocol
 sync-protocol
 node-link-protocol
 acpr-transcript
+acpr-wire
 agent-host
 node-link-client
 storage-sqlite
 identity-auth
+identity-keystore
 server
 app
 ```
 
-物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`），不通过横向依赖复用。
+物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
 
 依赖必须指向更稳定的内层：
 
@@ -108,9 +112,10 @@ core use_cases   -> core ports + core model
 必须遵守：
 
 - `core` 不依赖任何 wire protocol、Tokio runtime、Axum、SQLite、WebSocket、子进程、ACP DTO 或具体 Agent。
-- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。三个协议 crate 彼此不直接依赖，共享的 transcript codec 结构来自叶子 crate `acpr-transcript`（协议 crate 只在测试中依赖它）。
+- `acp-protocol`、`sync-protocol`、`node-link-protocol` 不依赖 `core`；wire/core mapper 属于对应 adapter。三个协议 crate 彼此不直接依赖：共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并正常依赖它，不复制宽度与校验逻辑），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`docs/adr/0007-shared-wire-value-crate.md`）；协议专属的值对象与词表留在各自 crate。
 - `server::sync`、`server::node_link`、`server::acp_facade`、`server::local_admin` 是平级入站适配器，只调用 `core::use_cases`，不能互相调用。
 - `storage-sqlite`、`agent-host`、`node-link-client` 等出站适配器之间不能互相调用。
+- `identity-auth` 是纯状态机，不得依赖任何平台 API 或 `cfg` 平台分支；平台 keystore 由 `identity-keystore` 实现 `identity-auth` 定义的端口，依赖方向只能是 `identity-keystore -> identity-auth`，且除 `app` 外没有 crate 依赖 `identity-keystore`。
 - 需要其它模块的能力时通过端口或函数签名传入（组合根装配），不要 import 隔壁模块的实现。
 - ACP DTO 只存在于 ACP 边界，Sync DTO 只存在于同步协议边界，数据库 record 只存在于 SQLite 适配器。
 - 禁止定义巨型 `AgentRuntime`；本地和远程 backend 通过 `AgentCatalog`、`SessionBackendFactory` 和会话级 `SessionEndpoint` 实现。
@@ -138,6 +143,8 @@ core use_cases   -> core ports + core model
 - 慢客户端不能阻塞 Broker 或 Agent；断开后依靠 cursor 重放。
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
 - Sync wire 变更必须同步维护 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例。
+- 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant/pack 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
+- transcript domain 与字段 tag 表由 `compatibility/transcripts/v1/transcripts.json` 机器登记；`fixtures/*/v1/transcripts/` 的固定向量必须能由该表从 `input` 重新编码得到，否则视为实现或表格错误。
 
 ### Node Link
 
@@ -235,8 +242,12 @@ cargo test --workspace --all-features
 - 节点角色、Export/Import、跨节点身份、授权、cursor 或命令语义变化：更新 `docs/NODE_LINK_PROTOCOL.md`，并同步安全、模块与协议测试资产。
 - Node Link wire/资产变更：更新 `docs/NODE_LINK_PROTOCOL.md` + `schemas/node-link/v1/` + `fixtures/node-link/v1/`，并运行 `npm run check`。
 - Sync wire/资产变更：更新 `docs/SYNC_PROTOCOL.md` + `schemas/sync/v1/` + `fixtures/sync/v1/`，并运行 `npm run check`。
+- feature ID 或 feature 词表变化：更新 `compatibility/features/v1/features.json`、`docs/SYNC_PROTOCOL.md` §5.2 与 `docs/NODE_LINK_PROTOCOL.md` §11.3 的表格、以及相应 fixture，并运行 `npm run check`。
+- core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。
-- `npm run check` 是本仓库唯一的机器校验入口（`scripts/` 下四个脚本：sync/node-link fixture 用 ajv 校验、ACP 矩阵用 ajv 校验 `schemas/acp/compatibility-matrix.schema.json`、`rawJson`/transcript 密码学固定向量重算、命令目录四处一致）；改动合同资产后必须让它全绿。CI 尚未接入，这一条目前靠人工执行。
+- CLI 与 Daemon 之间的管理方法、envelope 或 framing 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`。
+- `npm run check` 是本仓库唯一的机器校验入口（Node ≥ 20），串行运行 `scripts/` 下七个脚本：fixture 用 ajv 校验（sync / node-link / acp 三个 asset root）、错误码 registry 与四处定义一致、命令目录与 core 的 `required_grant` 镜像一致（`commands.json` ↔ 两个协议 schema ↔ SYNC §11.5 与 SECURITY §10.2 表格 ↔ `core::broker::required_grant`）、feature ID 词表三方一致（registry / 协议文档表格 / fixture）、`rawJson` 与 transcript 密码学固定向量重算、ACP 矩阵及上游快照 sha256 比对，以及 **crate 依赖方向门禁**（以 `MODULE_ARCHITECTURE.md` §5 的依赖矩阵为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖）。改动合同资产或 crate 依赖后必须让它全绿。CI 尚未接入，这一条目前靠人工执行。
+- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合），由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、合同 §9 判据 13 与本条。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。

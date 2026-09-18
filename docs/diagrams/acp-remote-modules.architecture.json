@@ -14,12 +14,12 @@
   },
   "components": [
     { "id": "remoteClients", "type": "external", "label": "远程本地客户端", "sublabel": "Zed / CLI / Desktop", "pos": [35, 310], "size": [140, 68] },
-    { "id": "accessIngress", "type": "frontend", "label": "Server Adapters", "sublabel": "sync / ACP / admin", "pos": [215, 310], "size": [140, 68] },
+    { "id": "accessIngress", "type": "frontend", "label": "Server Adapters", "sublabel": "sync/link/facade/admin", "pos": [215, 310], "size": [140, 68] },
     { "id": "accessBroker", "type": "backend", "label": "Core", "sublabel": "imported 会话路径", "pos": [395, 310], "size": [140, 68] },
     { "id": "accessStore", "type": "database", "label": "Remote Delivery Store", "sublabel": "无正文收据 / cursor", "pos": [215, 475], "size": [140, 68] },
     { "id": "nodeClient", "type": "security", "label": "Node Link Client", "sublabel": "远程 Agent backend", "pos": [395, 475], "size": [140, 68] },
     { "id": "directClients", "type": "external", "label": "直接访问客户端", "sublabel": "PWA / 手机 / 电脑", "pos": [590, 80], "size": [145, 68] },
-    { "id": "nodeServer", "type": "security", "label": "Server Adapters", "sublabel": "link / sync / ACP / admin", "pos": [590, 310], "size": [145, 68] },
+    { "id": "nodeServer", "type": "security", "label": "Server Adapters", "sublabel": "sync/link/facade/admin", "pos": [590, 310], "size": [145, 68] },
     { "id": "ownerBroker", "type": "backend", "label": "Core", "sublabel": "owned 会话权威", "pos": [775, 310], "size": [145, 68] },
     { "id": "storage", "type": "database", "label": "SQLite Event Log", "sublabel": "权威事件与游标", "pos": [775, 475], "size": [145, 68] },
     { "id": "agentHost", "type": "backend", "label": "Agent Host", "sublabel": "进程 / ACP stdio", "pos": [960, 310], "size": [140, 68] },
@@ -45,8 +45,8 @@
     { "id": "companyToOwner", "from": "companyClients", "to": "nodeServer", "label": "ACP stdio / 本地管理 IPC", "fromSide": "bottom", "toSide": "top" }
   ],
   "cards": [
-    { "dot": "cyan", "title": "节点与模块边界", "items": ["同一 ACP Remote 可同时导入和导出 Agent", "server::{sync,node_link,acp_facade,local_admin} 是四个平级入站适配器", "acpr-transcript 是无协议语义、无项目依赖的共享叶子 crate"] },
-    { "dot": "rose", "title": "安全边界", "items": ["节点配对形成长期信任，但不自动建立传递信任", "有效权限 = Owner 导出授权 ∩ Access 本地授权", "配对、撤销与 Export 管理只走平台本地 IPC"] },
+    { "dot": "cyan", "title": "节点与模块边界", "items": ["同一 ACP Remote 可同时导入和导出 Agent", "server::{sync,node_link,acp_facade,local_admin} 是四个平级入站适配器", "12 个 crate：acpr-transcript 隔离共享 codec，identity-keystore 隔离平台密钥库"] },
+    { "dot": "rose", "title": "安全边界", "items": ["节点配对形成长期信任，但不自动建立传递信任", "有效权限 = Owner 导出授权 ∩ Access 本地授权", "配对、撤销与 Export 管理只走平台本地 IPC（ADR-0004）"] },
     { "dot": "emerald", "title": "一致性", "items": ["Owner Node 是会话和事件权威", "跨节点至少一次投递，保留 originEventId 与来源游标", "imported 事件先落无正文收据再转发；正文与重放均在线回源 Owner"] }
   ]
 }

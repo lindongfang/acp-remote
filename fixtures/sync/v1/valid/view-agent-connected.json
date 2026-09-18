@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "60653b85-660e-44f4-aaf2-3f529bbb126a",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "76",
+  "body": {
+    "globalSequence": "2365",
+    "sessionSequence": "225",
+    "eventId": "b5da3cfe-6a33-4dc6-a02c-3e3764e89c64",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "agent.connected",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "agent",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "agentId": "company-agent",
+        "state": "connected"
+      }
+    }
+  }
+}

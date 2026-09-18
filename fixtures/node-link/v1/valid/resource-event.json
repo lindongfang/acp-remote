@@ -8,8 +8,13 @@
     "originEventId": "da702ba1-f49f-4e16-a677-a7744dfedba6",
     "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
     "originSequence": "2318",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "exportId": "export-main",
+      "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+    },
     "eventType": "agent.message.delta",
-    "payloadDigest": "aUtxvIAT_0Mw3KW-XGSmLVF5isCVjj6bE12tG2nou4Q",
+    "payloadDigest": "td6ZltnIg8vb-SZF_ZSHDPkxDCHmSxRs6ZH5SoV3BtU",
     "createdAt": "2026-09-18T09:12:03.412Z",
     "payload": {
       "view": {

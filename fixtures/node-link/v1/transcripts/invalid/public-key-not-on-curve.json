@@ -1,0 +1,6 @@
+{
+  "description": "65 字节 x = y = 1，不满足 P-256 曲线方程；解码器必须以 not_on_curve 拒绝（Node Link 侧公钥同样必须验证为非无穷曲线点）。",
+  "codec": "acpr-transcript-v1",
+  "malformedPublicKeyBase64url": "BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+  "expectedError": "not_on_curve"
+}

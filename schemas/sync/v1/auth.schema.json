@@ -22,8 +22,8 @@
           "additionalProperties": false,
           "required": ["minProtocolVersion", "maxProtocolVersion", "hostId", "deviceId", "clientKind", "clientNonce", "supportedFeatures", "requiredFeatures"],
           "properties": {
-            "minProtocolVersion": { "const": 1 },
-            "maxProtocolVersion": { "const": 1 },
+            "minProtocolVersion": { "type": "integer", "minimum": 1, "description": "必须不大于 maxProtocolVersion；无公共版本时服务端以 protocol.version_unsupported 拒绝并以 4406 关闭。" },
+            "maxProtocolVersion": { "type": "integer", "minimum": 1, "description": "必须不小于 minProtocolVersion；v1 服务端只支持 major 1，选择结果见 server_challenge.selectedProtocolVersion。" },
             "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
             "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
             "clientKind": { "enum": ["pwa", "android", "ios", "desktop"] },
@@ -47,7 +47,7 @@
           "additionalProperties": false,
           "required": ["selectedProtocolVersion", "hostId", "connectionId", "serverNonce", "selectedFeatures", "hostProof"],
           "properties": {
-            "selectedProtocolVersion": { "const": 1 },
+            "selectedProtocolVersion": { "type": "integer", "minimum": 1, "description": "双方支持的最高 major version；本 framing 只实现 1，未来 major 增加时该字段先于 protocolVersion 演进。" },
             "hostId": { "$ref": "common.schema.json#/$defs/uuid" },
             "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
             "serverNonce": { "$ref": "common.schema.json#/$defs/base64url32" },

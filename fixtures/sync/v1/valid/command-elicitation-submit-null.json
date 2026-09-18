@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "c1b2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "13",
+  "body": {
+    "requestId": "8d2e3f4a-5b6c-4d7e-8f90-1a2b3c4d5e6f",
+    "command": "elicitation.respond",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "payload": {
+      "interactionId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+      "action": "submit",
+      "values": null
+    }
+  }
+}

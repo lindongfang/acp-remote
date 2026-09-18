@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "fixture": "initialize-capabilities.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "tool-call-with-diff.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "meta-and-unknown-fields.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "unknown-fields-and-large-integer.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "extension-method.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "future-session-update.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/tool-call-location.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "schemaPointer": "#/$defs/ToolCallLocation",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/tool-call-location-negative-line.json",
+      "schema": "../../../schemas/acp/v1/upstream/schema.json",
+      "schemaPointer": "#/$defs/ToolCallLocation",
+      "valid": false,
+      "expectedKeyword": "format"
+    }
+  ]
+}

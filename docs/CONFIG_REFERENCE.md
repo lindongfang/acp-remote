@@ -1,14 +1,19 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.1
+> 版本：0.5
 > 日期：2026-09-18
+> 修订记录（2026-09-18）：补充 `daemon.tls.*`、`daemon.local_admin.endpoint`、`logging.*` 与 Owner 侧 `[[exports]]`（原先只有 Access 侧 `[[imports]]`）；明确限流与协议上限是固定 v1 常量而非配置键。
+> 修订记录（2026-09-18，0.3）：`[[exports]].grants` 更名为 `scopes`，与 Node Link Export 模型及本地通道 `ExportView` 同名同义（Access 侧 `[[imports]].grants` 是另一概念，不变）。
+> 修订记录（2026-09-18，0.4）：新增 `storage.audit_retention_days`（默认 365），审计清理排在容量顺序最后。
+> 修订记录（2026-09-18，0.5）：补齐 `storage.attachment_dir`——`CORE_PORTS_AND_STORAGE.md` §7.1 新增的附件目录配置键，此前只在合同里定义、未落到本表；§5.1 增加「备份与拷贝」说明（WAL 模式下不能只拷主库文件）。
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 
 本文是 Daemon 运行时配置键名、类型、默认值与可否调整的**唯一权威来源**。协议层限额不在此重复定义：
 
 - Sync 的限额与其中哪些可经 `auth.authenticated.limits` 下发，见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14。
 - Node Link 的限额与其中哪些可经 `node.ready.limits` 下调，见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §2.5。
+- 限流与其余协议上限（认证尝试速率、命令速率、配对有效期、单消息与嵌套上限等）都是**固定 v1 常量**，不是配置键；本文件不提供放宽它们的开关。
 - 安全默认值（监听地址、TLS 终止、失败关闭）的约束见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §7、§8、§9。
 
 配置来源与优先级（高者覆盖低者）：命令行参数 > 配置文件 > 内置默认值。环境变量只用于替换配置文件路径（`ACP_REMOTE_CONFIG`），不承载业务配置，避免把凭据写进进程环境。
@@ -24,6 +29,10 @@
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
 | `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1 |
 | `daemon.shutdown_grace_ms` | integer | `10000` | 关闭时等待接入层停止、Agent 退出与存储刷新的上限 |
+| `daemon.local_admin.endpoint` | string | `"auto"` | 本地管理通道 endpoint；`auto` 使用平台默认位置（Windows Named Pipe / Unix socket，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.1）。显式值只用于测试或路径冲突排查，不改变“只允许同一 OS 用户”的授权模型 |
+| `daemon.tls.mode` | enum | `"proxy"` | `proxy` = TLS 由同机可信反向代理终止（配合 `daemon.trusted_proxies` 与 `daemon.public_origin`）；`direct` = Daemon 自己终止 TLS，此时 `cert_path`/`key_path` 必需 |
+| `daemon.tls.cert_path` | path\|null | `null` | PEM 证书链；`mode = "direct"` 时必需，文件权限按 `SECURITY_DESIGN.md` §13.2 检查 |
+| `daemon.tls.key_path` | path\|null | `null` | PEM 私钥；`mode = "direct"` 时必需，不得写入日志、错误信息或崩溃报告 |
 
 ## 2. `sync`
 
@@ -73,8 +82,14 @@
 | `storage.flush_interval_ms` | `250` | 流式事件的批量落盘间隔 |
 | `storage.attachment_max_file_bytes` | `20971520` | 单个附件上限（20 MiB） |
 | `storage.attachment_max_total_bytes` | `1073741824` | 附件总量上限（1 GiB） |
+| `storage.attachment_dir` | `<data_dir>/attachments` | 内容寻址的附件目录（`CORE_PORTS_AND_STORAGE.md` §7.1）；权限与数据库目录相同，见 `SECURITY_DESIGN.md` §13.2 |
+| `storage.audit_retention_days` | `365` | 审计记录（`owned_audit`/`imported_audit`）保留期；容量清理时审计排在最后，超限优先拒绝写入而不是丢审计 |
 
 Access Node 的 `no-content-cache` 不是配置项：它由 Export 固定，Access 侧没有可关闭的开关（`NODE_LINK_PROTOCOL.md` §10、`SECURITY_DESIGN.md` §13.4）。
+
+### 5.1 备份与拷贝
+
+SQLite 在 WAL 模式下把最近的写入放在主库文件旁边的 `-wal` 与 `-shm` 文件里，因此**只拷贝 `acp-remote.sqlite3` 而不带这两个文件，可能得到陈旧甚至损坏的副本**。备份时要么同时拷贝这三个文件，要么先做一次 checkpoint（Daemon 正常关闭时会执行 `wal_checkpoint(TRUNCATE)`，见 `CORE_PORTS_AND_STORAGE.md` §7.1）。附件目录（`storage.attachment_dir`）与数据库是同一份数据的两个部分，必须一起备份。
 
 ## 6. `terminal`
 
@@ -111,7 +126,7 @@ args = ["acp"]
 | `identity.keystore` | enum | `"platform"` | `platform` 使用 DPAPI/CNG、Keychain、Secret Service；`ephemeral` 仅允许显式开发模式 |
 | `identity.fail_closed_on_missing_keystore` | boolean | `true` | 平台 keystore 不可用时正式模式拒绝启动；`false` 只能出现在开发模式配置中 |
 
-## 9. `imports`
+## 9. `imports` / `exports`
 
 Access Node 侧每个 Import 一条记录（由 `acp-remote import add` 写入，不由用户手改）：
 
@@ -127,6 +142,43 @@ grants = ["grant.observe", "grant.interact"]
 - `grant.*` 取值以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准；有效权限是 `Owner grant ∩ Access local grant ∩ runtime capability`。
 - 本地客户端能做什么由 Access 自己的设备 scope 决定，Import 记录只描述远程侧授权。
 
+### `exports`（Owner 侧）
+
+Owner Node 的 Export 由本地管理入口写入（`local.export.manage`，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5），同样不由用户手改：
+
+```toml
+[[exports]]
+export_id = "exp-work"
+display_name = "公司 Agent"
+agent_ids = ["codex"]
+default_workspace_alias = "company-agent-default"
+default_template_id = "default"
+scopes = ["grant.observe", "grant.interact", "grant.remote-work"]
+cache_policy = "no-content-cache"
+
+[[exports.workspace_aliases]]
+alias = "company-agent-default"
+display_name = "公司默认工作区"
+
+[[exports.templates]]
+template_id = "default"
+display_name = "默认"
+workspace_alias = "company-agent-default"
+
+[[exports.templates.params]]
+name = "branch"
+type = "string"
+required = false
+pattern = "^[a-zA-Z0-9._/-]{1,128}$"
+enum = []
+```
+
+- `cache_policy` 在 v1 固定为 `no-content-cache`；写其他值必须启动失败，不允许通过本地配置静默绕过 Owner 的内容策略。
+- `export_id`、`agent_ids`、`workspace_aliases`、`templates` 与 `scopes` 一起构成 `session.create` 参数（`agentId`/`exportId`/`workspaceAlias`/`templateParams`）的唯一可引用集合；未列出的取值一律拒绝（`nodelink.export.not_granted` 或 `nodelink.command.unsupported_field`）。`scopes` 与 Node Link Export 模型的同名字段同义（`NODE_LINK_PROTOCOL.md` §10）；Access 侧 `[[imports]].grants` 是另一概念（本节点自己的授权子集），不随此改名。
+- `default_workspace_alias` 必须出现在同一条目的 `workspace_aliases` 中，`default_template_id` 必须出现在 `templates` 中；首切片恰好一个 workspace alias 与一个 template。
+- `templates.params[].type` ∈ `string|boolean|integer`；`pattern` 只对 `string` 生效；`enum` 为空数组表示不限制取值。`session.create.payload.templateParams` 的键必须来自这里。
+- 原始 workspace 路径与 Provider/MCP 凭据不出现在本文件：它们由 `local.workspace.select`、`local.provider.configure` 在 Daemon 内维护（`SECURITY_DESIGN.md` §12.3）。
+
 ## 10. `dev_mode`
 
 | 键 | 类型 | 默认值 | 说明 |
@@ -134,3 +186,11 @@ grants = ["grant.observe", "grant.interact"]
 | `dev_mode.enabled` | boolean | `false` | 发布构建默认关闭；启用时启动输出与 UI 必须持续显示非安全状态 |
 | `dev_mode.allow_plaintext` | boolean | `false` | 允许明文 HTTP/WS，且只允许 loopback |
 | `dev_mode.ephemeral_identity` | boolean | `false` | 使用进程期临时身份，不复用正式设备/节点数据库 |
+
+## 11. `logging`
+
+| 键 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `logging.level` | enum | `"info"` | `trace`\|`debug`\|`info`\|`warn`\|`error` |
+| `logging.format` | enum | `"text"` | `text`\|`json`；允许字段与脱敏要求见 `SECURITY_DESIGN.md` §14.1，`json` 不改变允许字段集合 |
+| `logging.file` | path\|null | `null` | `null` 表示输出到 stderr；写入文件时权限按 `SECURITY_DESIGN.md` §13.2，且不得包含密钥、token 或完整 prompt |

@@ -1,0 +1,28 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.event",
+  "messageId": "b2c3d4e5-0617-4829-a0b1-c2d3e4f5a6b7",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "12",
+  "body": {
+    "originEventId": "c8d9eafb-0c1d-4e2f-8394-a5b6c7d8e9f0",
+    "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+    "originSequence": "2319",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "exportId": "export-main",
+      "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+    },
+    "eventType": "session.unknown.future",
+    "payloadDigest": "HseMTMKRoFVd27ViVE3L-mXElwLGjM0RkmYP1Ho9DfU",
+    "createdAt": "2026-09-18T09:12:08.100Z",
+    "payload": {
+      "acp": {
+        "mediaType": "application/json",
+        "rawJson": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionUpdate\":\"future_update_kind\",\"data\":{\"n\":9007199254740991}}}",
+        "byteLength": "121",
+        "sha256": "0iujP1DL8V-Pu4QxmRJZk3XFTy-6zaQLq86kLmL_Ya8"
+      }
+    }
+  }
+}

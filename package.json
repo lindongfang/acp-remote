@@ -4,15 +4,19 @@
   "private": true,
   "description": "ACP Remote 协议合同资产（schema / fixture / 兼容矩阵）的机器校验入口。只承载开发期校验脚本，不发布任何运行时产物；Rust 二进制与 PWA 的构建不依赖本文件。",
   "type": "module",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "check": "npm run check:schemas && npm run check:commands && npm run check:assets && npm run check:acp",
+    "check": "npm run check:schemas && npm run check:commands && npm run check:errors && npm run check:features && npm run check:assets && npm run check:acp && npm run check:boundaries",
     "check:schemas": "node scripts/check-schema-fixtures.mjs",
     "check:commands": "node scripts/check-command-catalog.mjs",
+    "check:errors": "node scripts/check-error-registry.mjs",
+    "check:features": "node scripts/check-features.mjs",
     "check:assets": "node scripts/check-contract-assets.mjs",
-    "check:acp": "node scripts/check-acp-compatibility.mjs"
+    "check:acp": "node scripts/check-acp-compatibility.mjs",
+    "check:boundaries": "node scripts/check-crate-boundaries.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

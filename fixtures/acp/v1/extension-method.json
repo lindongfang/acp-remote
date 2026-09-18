@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "method": "_extension/example",
+  "params": {
+    "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5",
+    "extensionPayload": {
+      "anyShape": ["the", "agent", "sends"]
+    },
+    "_meta": {
+      "example.dev/capability": "extension.example"
+    }
+  },
+  "id": 8
+}

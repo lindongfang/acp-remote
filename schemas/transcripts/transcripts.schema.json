@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/transcripts/transcripts.schema.json",
+  "title": "ACP Remote transcript registry v1",
+  "description": "compatibility/transcripts/v1/transcripts.json 的形状。JSON Schema 无法表达唯一性与顺序，因此 domain 唯一、同一 domain 内 tag 唯一且严格递增，以及「registry 的 tag/type 在同一协议内跨 domain 一致」由 scripts/check-contract-assets.mjs 断言。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "codec", "domains"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "description": { "type": "string" },
+    "codec": { "$ref": "#/$defs/codec" },
+    "domains": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/domain" }
+    }
+  },
+  "$defs": {
+    "codec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "magic", "codecVersion"],
+      "properties": {
+        "name": { "const": "acpr-transcript-v1" },
+        "magic": { "const": "ACPR" },
+        "codecVersion": { "const": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "protocol", "proof", "fields"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "pattern": "^acp-remote/[a-z0-9-]+/v1$"
+        },
+        "protocol": { "enum": ["sync", "node_link"] },
+        "proof": {
+          "enum": ["hmac", "signature"],
+          "description": "hmac = HMAC-SHA256(key ∈ {pairingSecret})；signature = ECDSA P-256 P1363 固定 64 bytes。"
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/field" }
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tag", "name", "type", "inputKey"],
+      "properties": {
+        "tag": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "description": "协议内全局 fieldTag 编号（Sync 见 docs/SYNC_PROTOCOL.md §6.3，Node Link 见 docs/NODE_LINK_PROTOCOL.md §9.3）。两套协议编号含义不同。"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9]*$"
+        },
+        "type": {
+          "enum": ["u16be", "u64be", "uuid16", "sec1-65", "bytes16", "bytes32", "utf8", "nul-joined-utf8"],
+          "description": "u16be/u64be = 大端整数；uuid16 = UUID 的 16 原始字节；sec1-65 = 65 字节未压缩点；bytes16/bytes32 = 固定长度原始字节；utf8 = 无 NUL UTF-8；nul-joined-utf8 = 排序后以 NUL 分隔的 UTF-8。"
+        },
+        "inputKey": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+          "description": "fixture `input` 中提供该字段值的键路径。键名以 Hex 结尾的二进制字段按十六进制解析，其余二进制字段按无填充 base64url 解析。当前 v1 的每个字段都由 `input` 提供，因此 `null`（字节需由协议常量派生的字段）会被 scripts/check-contract-assets.mjs 判为硬错误——registry 没有存放派生值的槽位，重新编码不允许凭空发明字节。"
+        }
+      }
+    }
+  }
+}

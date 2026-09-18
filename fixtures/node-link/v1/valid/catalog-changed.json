@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "catalog.changed",
+  "messageId": "4d5e6f70-8192-43a4-b5c6-d7e8f9a0b1c2",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "14",
+  "body": {
+    "revision": "44",
+    "added": [],
+    "updated": [],
+    "removed": [
+      "export-legacy"
+    ]
+  }
+}

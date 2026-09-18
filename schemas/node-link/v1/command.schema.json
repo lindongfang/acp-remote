@@ -551,9 +551,29 @@
                       "const": "submit"
                     },
                     "values": {
-                      "type": "object",
+                      "type": ["object", "null"],
                       "additionalProperties": true,
-                      "description": "开放扩展点：elicit 表单提交值，形状由该次 elicitation 的 schema 决定。"
+                      "description": "开放扩展点：elicit 表单提交值，形状由该次 elicitation 的 schema 决定；`null` 对应 ACP `accept` 的 `content: null`。"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "interactionId",
+                    "action",
+                    "values"
+                  ],
+                  "properties": {
+                    "interactionId": {
+                      "$ref": "common.schema.json#/$defs/uuid"
+                    },
+                    "action": {
+                      "const": "decline"
+                    },
+                    "values": {
+                      "type": "null"
                     }
                   }
                 },
@@ -765,12 +785,16 @@
               "additionalProperties": false,
               "required": [
                 "requestId",
+                "command",
                 "acceptedAt",
                 "result"
               ],
               "properties": {
                 "requestId": {
                   "$ref": "#/$defs/requestId"
+                },
+                "command": {
+                  "$ref": "#/$defs/commandName"
                 },
                 "acceptedAt": {
                   "$ref": "common.schema.json#/$defs/timestamp"
@@ -785,7 +809,29 @@
                     }
                   ]
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "command"
+                    ],
+                    "properties": {
+                      "command": {
+                        "const": "session.create"
+                      }
+                    }
+                  },
+                  "then": {
+                    "description": "会话创建是异步的：command.accepted 不携带结果，成功结果由 command.terminal 携带 sessionCreateResult。",
+                    "properties": {
+                      "result": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                }
+              ]
             }
           }
         }
@@ -808,11 +854,15 @@
               "additionalProperties": false,
               "required": [
                 "requestId",
+                "command",
                 "error"
               ],
               "properties": {
                 "requestId": {
                   "$ref": "#/$defs/requestId"
+                },
+                "command": {
+                  "$ref": "#/$defs/commandName"
                 },
                 "error": {
                   "$ref": "common.schema.json#/$defs/publicError"
@@ -840,11 +890,15 @@
               "additionalProperties": false,
               "required": [
                 "requestId",
+                "command",
                 "terminal"
               ],
               "properties": {
                 "requestId": {
                   "$ref": "#/$defs/requestId"
+                },
+                "command": {
+                  "$ref": "#/$defs/commandName"
                 },
                 "terminal": {
                   "type": "object",
@@ -947,7 +1001,44 @@
                     }
                   ]
                 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "required": [
+                      "command",
+                      "terminal"
+                    ],
+                    "properties": {
+                      "command": {
+                        "const": "session.create"
+                      },
+                      "terminal": {
+                        "required": [
+                          "status"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "completed"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "then": {
+                    "description": "session.create 成功时 terminal.result 必须是 sessionCreateResult。",
+                    "properties": {
+                      "terminal": {
+                        "properties": {
+                          "result": {
+                            "$ref": "common.schema.json#/$defs/sessionCreateResult"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
             }
           }
         }

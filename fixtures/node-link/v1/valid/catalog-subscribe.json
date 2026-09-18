@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "catalog.subscribe",
+  "messageId": "3c4d5e6f-7081-4293-a4b5-c6d7e8f9a0b1",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "13",
+  "body": {
+    "knownRevision": "42"
+  }
+}

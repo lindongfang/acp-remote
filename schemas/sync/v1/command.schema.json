@@ -9,6 +9,7 @@
   "$defs": {
     "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
     "commandName": {
+      "description": "唯一来源是 compatibility/commands/v1/commands.json；本枚举只含 transport 含 sync 的命令（不含只经 Node Link 接受的 session.create）。",
       "enum": [
         "session.list",
         "session.read",
@@ -20,8 +21,7 @@
         "elicitation.respond",
         "session.mode.set",
         "session.config.set",
-        "permission.resolve",
-        "session.create"
+        "permission.resolve"
       ]
     },
     "command": {
@@ -217,7 +217,17 @@
               "properties": {
                 "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
                 "action": { "const": "submit" },
-                "values": { "type": "object" }
+                "values": { "type": ["object", "null"] }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["interactionId", "action", "values"],
+              "properties": {
+                "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+                "action": { "const": "decline" },
+                "values": { "type": "null" }
               }
             },
             {

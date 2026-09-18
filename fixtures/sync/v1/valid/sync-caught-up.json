@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.caught_up",
+  "messageId": "d3e4f506-1829-4a3b-84c5-d6e7f8a9b0c1",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "46",
+  "body": {
+    "cursor": {
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2320"
+    }
+  }
+}

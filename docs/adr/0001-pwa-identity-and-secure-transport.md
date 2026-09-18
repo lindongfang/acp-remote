@@ -2,6 +2,7 @@
 
 - 状态：已接受
 - 日期：2026-09-17
+- 修订记录（2026-09-18）：配对阶段的 proof 与 SAS 为 **HMAC-SHA256**，不是双方 ECDSA 签名（以 [SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §7 与 `fixtures/sync/v1/transcripts/pairing-*.json` 的 `hmacSha256` 固定向量为准）；ECDSA P-256 只用于每次 WSS 连接的 challenge-response。下文“首次配对”第 5 步已按此订正。
 - 决策范围：第一阶段 PWA，以及后续 Android/iOS/桌面网络客户端的默认安全 Profile
 
 ## 背景
@@ -109,7 +110,7 @@ repeated(fieldTag, byteLength, rawBytes)
 2. 二维码包含 HTTPS endpoint、`hostId`、host public key 与一次性配对数据。
 3. PWA 确认 `window.isSecureContext`，生成不可导出的设备密钥。
 4. PWA 使用 `pairingSecret` 对规范 pairing transcript 计算 HMAC-SHA256 proof，Daemon 验证后才接受设备公钥。
-5. 双方对包含 Host/设备公钥及随机 nonce 的 transcript 进行签名，并使用独立 domain tag 从 HMAC-SHA256 结果派生相同的短验证码；用户在服务节点本地确认。
+5. 双方各自用 `pairingSecret` 对包含 Host/设备公钥及随机 nonce 的规范 transcript 计算 HMAC-SHA256 证明，并使用独立 domain tag 从 HMAC-SHA256 结果派生相同的短验证码；用户在服务节点本地确认。配对阶段不使用 ECDSA 签名，`hostProof`/`deviceProof` 的 ECDSA P-256 签名只用于 WSS challenge-response。
 6. Daemon 保存 device public key 与 scopes；为支持 `approved` 状态的可靠轮询，`pairingSecret` 只保留到该设备首次 WSS 认证成功或原过期时间，随后立即清除。它不得延长、复用或转成长期 bearer token。
 
 二维码若使用 URL，秘密数据放在 fragment 而不是 query；PWA 读取后立即从地址栏和历史条目中清除。完整字段、规范编码和错误码在 Sync Protocol 中定义。

@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "auth.client_proof",
+  "messageId": "c2d3e4f5-0617-4829-93a4-b5c6d7e8f9a0",
+  "body": {
+    "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "deviceProof": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-fw"
+  }
+}

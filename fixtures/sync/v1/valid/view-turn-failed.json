@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "2c78bca3-2694-4f42-abdd-dedd098c3f56",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "63",
+  "body": {
+    "globalSequence": "2352",
+    "sessionSequence": "212",
+    "eventId": "b8524ffe-0d5c-4228-aaec-ed39977ceb0e",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "turn.failed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "daemon",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "state": "failed",
+        "error": {
+          "code": "capability.unsupported_by_agent",
+          "message": "Agent 不支持该请求。",
+          "retryable": false,
+          "details": {}
+        }
+      }
+    }
+  }
+}

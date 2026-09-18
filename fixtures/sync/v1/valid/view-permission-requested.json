@@ -1,0 +1,41 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "6e3e08f6-a6ab-402d-afd8-25770c81634e",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "70",
+  "body": {
+    "globalSequence": "2359",
+    "sessionSequence": "219",
+    "eventId": "cf3ae3b4-6d45-40db-a197-d207e7ad8234",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "permission.requested",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "local_cli",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "interactionId": "1b2c3d4e-5f60-4718-9293-a4b5c6d7e8f9",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "title": "执行 npm run check",
+        "description": "允许在仓库根目录运行合同检查？",
+        "options": [
+          {
+            "optionId": "allow_once",
+            "label": "仅本次允许",
+            "kind": "allow"
+          },
+          {
+            "optionId": "reject",
+            "label": "拒绝",
+            "kind": "reject"
+          }
+        ]
+      }
+    }
+  }
+}

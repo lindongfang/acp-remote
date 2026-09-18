@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "type": "error",
+  "messageId": "3a4b5c6d-7e80-4192-a3b4-c5d6e7f8091a",
+  "body": {
+    "code": "protocol.invalid_json",
+    "message": "First message is not a valid JSON object.",
+    "retryable": false,
+    "correlationId": null,
+    "details": {}
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "pairingProtocol": "acp-remote-pairing-v1",
+  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+  "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+  "canonicalOrigin": "https://pc.example.test",
+  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+  "pairingSecret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "expiresAt": "2026-09-18T09:14:33.000Z"
+}

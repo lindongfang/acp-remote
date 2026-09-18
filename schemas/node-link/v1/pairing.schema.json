@@ -132,7 +132,7 @@
       "additionalProperties": false,
       "required": ["code", "message", "retryable", "correlationId", "details"],
       "properties": {
-        "code": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9_.-]+$" },
+        "code": { "$ref": "common.schema.json#/$defs/errorCode" },
         "message": { "type": "string", "maxLength": 1024 },
         "retryable": { "type": "boolean" },
         "correlationId": {

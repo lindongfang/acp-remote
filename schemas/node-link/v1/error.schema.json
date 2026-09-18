@@ -42,18 +42,35 @@
         }
       }
     },
-    "linkError": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/postAuthBase"
+    "preAuthBase": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "body"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
         },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "const": "link.error"
-            },
-            "body": {
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        }
+      },
+      "description": "认证完成前的信封：省略 connectionId 与 connectionSequence（NODE_LINK_PROTOCOL.md §2.2）。"
+    },
+    "linkErrorBody": {
+      "type": "object",
+      "required": [
+        "type",
+        "body"
+      ],
+      "properties": {
+        "type": {
+          "const": "link.error"
+        },
+        "body": {
               "type": "object",
               "additionalProperties": false,
               "required": [
@@ -64,12 +81,7 @@
                 "details"
               ],
               "properties": {
-                "code": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128,
-                  "pattern": "^[a-z0-9_.-]+$"
-                },
+                "code": { "$ref": "common.schema.json#/$defs/errorCode" },
                 "message": {
                   "type": "string",
                   "maxLength": 1024
@@ -95,9 +107,18 @@
               }
             }
           }
+        },
+    "linkError": {
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "#/$defs/preAuthBase" }, { "$ref": "#/$defs/linkErrorBody" }],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/postAuthBase" }, { "$ref": "#/$defs/linkErrorBody" }],
+          "unevaluatedProperties": false
         }
-      ],
-      "unevaluatedProperties": false
+      ]
     },
     "linkPing": {
       "allOf": [

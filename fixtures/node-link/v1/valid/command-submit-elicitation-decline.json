@@ -1,0 +1,24 @@
+{
+  "protocolVersion": 1,
+  "type": "command.submit",
+  "messageId": "d2c3e4f5-a6b7-4c8d-9e0f-1a2b3c4d5e6f",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "8",
+  "body": {
+    "requestId": "9e3f4a5b-6c7d-4e8f-9012-3a4b5c6d7e8f",
+    "command": "elicitation.respond",
+    "sessionRef": {
+      "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+      "exportId": "export-main",
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",
+    "attachmentGeneration": "1",
+    "expectedVersion": null,
+    "payload": {
+      "interactionId": "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e",
+      "action": "decline",
+      "values": null
+    }
+  }
+}

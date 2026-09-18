@@ -1,7 +1,8 @@
 # ACP Remote Sync Protocol
 
-> 状态：编码前协议基线（Draft）  
+> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。会话状态机、保留窗口、命令终态与授权判定尚未实现。  
 > 协议版本：1  
+> 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
@@ -97,9 +98,12 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 - JSON 文本使用 UTF-8，不允许 BOM。
 - 不允许重复对象键、无效 Unicode、`NaN`、`Infinity` 或尾随内容。
 - 所有序号和计数器在线上必须编码为无前导零的十进制字符串（`^(0|[1-9][0-9]*)$`）。v1 中属于该规则的字段包括 `globalSequence`、`sessionSequence`、`connectionSequence`、`cursor.globalSequence`、`originSequence`、`version`、`expectedVersion`、`byteLength`、`deltaIndex` 和 `chunkIndex`；新增同义字段时按同一规则处理。
+- v1 的序号上界是 `2^63−1`（实现用 64 位有符号整数承载，见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.2）：超出该值的序号是协议错误（`protocol.schema_invalid`），接收方不得截断、回绕或钳制到边界。Node Link 沿用同一上界。
 - 结构性常量保持 integer：`protocolVersion`、`minProtocolVersion`、`maxProtocolVersion`、`selectedProtocolVersion`、`schemaVersion`、`chunkCount`、`heartbeatIntervalMs` 和 `limits.*` 中的字节、条数、连接数上限。schema 里的 `maxItems`、`maxLength` 等校验常量不因该规则变成字符串。
 - 时间使用 UTC RFC 3339，精确到毫秒，例如 `2026-09-17T12:10:00.123Z`；毫秒精度是强制的，秒精度或其他精度都不合法。该规则同样适用于配对二维码与配对状态响应中的 `expiresAt`。
 - UUID 使用带连字符的小写 canonical 文本；v1 接受 UUIDv4，服务端生成的有序 ID可以使用 UUIDv7，但排序不得依赖 UUID。
+- **ACP Remote canonical JSON v1（ACPR-CJ1）** 是为结构化负载定义的确定性序列化，供 `payloadDigest` 一类内容摘要使用：UTF-8 编码、无 BOM、无前后空白；对象成员名按 UTF-16 code unit 升序排列，不允许重复键；字符串使用 JSON 最小转义（`"`、`\` 与 `< U+0020` 的控制字符，控制字符写作小写十六进制 `\u00XX`）；数字必须是整数且 `|n| ≤ 2^53−1`，`view` 与 interaction payload 内禁止浮点；顶层必须是 object 或 array。内容摘要按 `base64url(SHA-256(ACPR-CJ1(value)))` 计算，接收方不得用自己重新序列化的结果替代。  
+> 实现口径：ACPR-CJ1 在 Rust 侧只有一份实现（叶子 crate `acpr-wire::cj1`，`docs/adr/0007-shared-wire-value-crate.md`），`scripts/check-contract-assets.mjs` 里的 JS 版本是它的对照参考；两者必须逐字节一致（2026-09-18 对齐过一次：JS 原先用 `JSON.stringify` 的 `\t`/`\n` 短转义，违反本条「控制字符写作小写 `\u00XX`」，已改为手写转义器）。`payloadDigest`/`snapshotDigest` 的写入方（存储层）与校验方都调用这一份实现。
 - 二进制字段使用无填充 base64url，不得使用标准 base64 的 `+`、`/` 或 `=`。
 - 普通 JSON 不做 canonicalization，也不直接用于签名或 HMAC。
 
@@ -131,9 +135,8 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 | `connectionSequence` | decimal string | 每个方向独立，从 `1` 开始严格加一；认证前消息省略 |
 | `body` | object | 与 `type` 对应的结构化内容 |
 
-认证完成后：
-
-- `connectionId` 和 `connectionSequence` 必须存在。
+- 认证完成前（`auth.client_hello`、`auth.server_challenge`、`auth.client_proof`，以及认证阶段发生的 `error`）必须省略 `connectionId` 和 `connectionSequence`。
+- 认证完成后：`connectionId` 和 `connectionSequence` 必须存在。
 - 两个方向分别维护 sequence，不能相互共用计数器。
 - sequence 重复、回退、跳号或 connection ID 不匹配均为 `protocol.sequence_invalid`。
 - `messageId` 重复不自动重放业务结果；命令幂等只看 `requestId`。
@@ -144,7 +147,8 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 
 - v1 控制信封、认证 body、sync body 和 command payload 是 closed object；未知字段返回 `protocol.schema_invalid`。开放扩展只允许出现在本文明确标记的 `event.payload.view`、错误 `details` 和 ACP `rawJson` 中。
 - 未知 `type` 必须返回 `protocol.type_unsupported`，不得静默丢弃。
-- `body.requiredFeatures` 中任一 feature 未协商时，接收方必须返回 `protocol.feature_required`。
+- 命令名不在 v1 接受的命令集合内时返回 `command.unsupported`，不回 `protocol.schema_invalid`；服务端必须先按 `command` 字段分派，再校验 payload 形状。`command` 字段缺失或不是字符串才属于 schema 错误。
+- `body.requiredFeatures` 中任一 feature 未协商时，接收方必须返回 `protocol.feature_required`；`details.features` 列出未被协商的 feature ID（排序去重），发送方必须给出，客户端据此关闭对应能力后重连，不得忽略该错误继续使用。
 - 认证、授权、cursor、sequence 和尺寸字段不得靠“忽略未知”进行宽松解释。
 - ACP `acp` 容器的未知字段必须保留；控制信封的未知字段不承诺往返保真。
 - 服务端不得主动发送客户端未通过 feature 协商表示可处理的新控制 `type`；开放的 `eventType` 是例外，客户端按未知事件降级规则处理。
@@ -170,30 +174,23 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 
 ### 5.2 Feature ID
 
-Feature ID 使用小写 ASCII、点分层级，例如：
+Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**，由 [`compatibility/features/v1/features.json`](../compatibility/features/v1/features.json) 机器登记；`npm run check` 的 `check:features` 断言本表、registry 与 fixture 中出现的 ID 三者逐一相等。新增或删除 ID 必须先改 registry 再改本表，不得只在代码、schema 或 fixture 里添加。
 
-```text
-core.snapshot.v1
-core.command-status.v1
-session.config.v1
-resource.remote-origin.v1
-acp.raw-payload.v1
-```
+| feature | 说明 | delivery | 必需 |
+|---|---|---|---|
+| `core.snapshot.v1` | 快照订阅与 `sync.snapshot_*` 消息族 | mvp | 否 |
+| `core.command-status.v1` | 命令终态查询与 `command.result` 的终态字段 | mvp | 否 |
+| `core.event-ack.v1` | 客户端 ACK 与断线续传（`sync.ack`） | mvp | 否 |
+| `acp.raw-payload.v1` | 事件携带 ACP 原文（`rawAcp.rawJson` 保真，见 §10.3） | mvp | 否 |
+| `resource.remote-origin.v1` | imported 资源来源承载（§9.6：`ownerNodeId`/`exportId`/origin cursor/`online`） | mvp | 否 |
 
+- 本表的五个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
 - 列表去重后按 UTF-8 字节升序排列。
 - 认证 transcript 中的 feature bytes 为排序后 ID 逐项以 `0x00` 分隔的 UTF-8 字节；ID 本身不得包含 NUL。
 - 客户端必需 feature 未被选择时，认证不得进入业务阶段。
-
-v1 baseline 必须包含：
-
-```text
-core.snapshot.v1
-core.command-status.v1
-core.event-ack.v1
-acp.raw-payload.v1
-```
 
 ## 6. 密钥与二进制表示
 
@@ -768,7 +765,7 @@ sync.caught_up
 }
 ```
 
-`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。
+`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。Node Link 的 `resource.snapshot_end.snapshotDigest` 使用同一规则（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4）。
 
 客户端必须把 snapshot 写入以 `snapshotId` 隔离的暂存区；只有 chunk 连续、数量、cursor 和 digest 全部验证后，才能在一个本地事务中替换旧缓存。收到另一个 `snapshot_begin` 时必须丢弃旧的未完成暂存区。v1 不支持 snapshot chunk 断点续传；连接断开、digest 错误、顺序错误或空间不足时，客户端丢弃整个暂存 snapshot，重连后重新请求。验证失败不得损坏最后一个已完成缓存。
 
@@ -836,7 +833,7 @@ origin = { kind: "local" }
 ```
 
 - `kind` 为 `local` 时表示该会话由本节点拥有并持久化正文。
-- `kind` 为 `remote` 时表示该会话由 `ownerNodeId` 拥有、经 `exportId` 导出；`originEpoch` 是该 Owner 事件日志的 epoch；`online` 反映最近一次已知的 Owner 可达性。
+- `kind` 为 `remote` 时表示该会话由 `ownerNodeId` 拥有、经 `exportId` 导出；`originEpoch` 是该**会话**在 `ownerNodeId` 上的 origin epoch（会话首次持久化写入时生成，不是节点级 epoch）；`online` 反映最近一次已知的 Owner 可达性。
 - `origin` 是 `SessionSummary` 的必填字段，形状见第 10.3 节。
 
 事件 body 增加必填 `remoteOrigin`，非 imported 事件固定为 `null`：
@@ -992,7 +989,7 @@ device.revoked
 
 ### 10.3 v1 Event View Contract
 
-所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义。
+所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义。`view` 内的 JSON 取值域遵守 §3.3 的 ACPR-CJ1：数字必须是整数（`|n| ≤ 2^53−1`），不得出现浮点，否则 `payloadDigest` 无法跨实现复算。
 
 | Event type | `view` 最低字段 |
 |---|---|
@@ -1014,7 +1011,7 @@ device.revoked
 | `permission.requested` | `interactionId`, `turnId`, `title`, `description`, `options: InteractionOption[]` |
 | `permission.resolved` | `interactionId`, `resolution`, `resolvedByDeviceId: UUID|null` |
 | `elicitation.requested` | `interactionId`, `turnId`, `title`, `schema`, `initialValues` |
-| `elicitation.resolved` | `interactionId`, `action: "submit"|"cancel"`, `resolvedByDeviceId: UUID|null` |
+| `elicitation.resolved` | `interactionId`, `action: "submit"|"decline"|"cancel"`, `resolvedByDeviceId: UUID|null` |
 | `terminal.output` | `terminalId`, `chunkIndex: decimal string`, `stream: "stdout"|"stderr"`, `text`, `truncated: boolean` |
 | `file.changed` | `changeId`, `kind`, `displayPath`, `summary`; diff 或结构化详情可选 |
 | `agent.connected`, `agent.disconnected` | `agentId`, `state`; disconnected 可带 `error` |
@@ -1144,7 +1141,7 @@ body 字段规则：
 - `acceptedAt` 仅在 `status = "rejected"` 时为 `null`；其余状态都必须是该命令首次被持久化接受的时间。
 - `terminalEventId` 是 `UUID | null`：查询命令固定为 `null`，mutation 的 `accepted` 也固定为 `null`；重复查询一个已终结的 mutation 时必填，且等于该 request 唯一的 command terminal event 的 `eventId`。
 - `status = "rejected"` 时 `result` 必须是 `null` 且 `error` 必须是结构化 `PublicError`；其余状态 `error` 为 `null`。
-- `completed` 时 `result` 必须符合 `command` 对应的结果形状（见第 11.5 节）；`failed` 携带 `PublicError`，`uncertain` 可只给 `reason`。
+- `completed` 时 `result` 必须符合 `command` 对应的结果形状（见第 11.5 节）；`failed` 携带 `PublicError`，`uncertain` 可只给 `reason`。mutation 完成后如果没有可返回的数据（如 `session.cancel`、`session.prompt`），`result` 允许为 `null`；Node Link 对此更严（`NODE_LINK_PROTOCOL.md` §12.5 要求 `completed` 必须带非空 `result`），该差异是有意的，由两侧各自的适配层负责保证。
 
 `status`：
 
@@ -1260,13 +1257,13 @@ local.audit.export
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
 | `session.prompt` | mutation | 必须 | `{ content: PromptContentBlock[] }` | `accepted { turnId }`，随后 turn/domain event 和 command terminal event |
 | `session.cancel` | mutation | 必须 | `{ turnId }` | 取消请求生效后 `command.completed`；目标已经终态则幂等完成 |
-| `elicitation.respond` | mutation | 必须 | `{ interactionId, action, values }` | `action` 为 `submit|cancel`; 校验后产生 `elicitation.resolved` |
+| `elicitation.respond` | mutation | 必须 | `{ interactionId, action, values }` | `action` 为 `submit|decline|cancel`（对齐 ACP `accept`/`decline`/`cancel`）；`submit` 的 `values` 是 `object|null`（`null` 对应 ACP `content: null`），`decline`/`cancel` 的 `values` 必须为 `null`；校验后产生 `elicitation.resolved` |
 | `session.mode.set` | mutation | 必须 | `{ modeId }`，body `expectedVersion` 必须存在 | `session.mode.changed` 后 `command.completed` |
 | `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
 | `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
 | `session.create` | mutation | 禁止 | `{ agentId, exportId, workspaceAlias, templateParams?: object }` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；Sync v1 收到返回 `command.unsupported` |
 
-本表首列与 `compatibility/commands/v1/commands.json` 的命令集合逐条一致，也是 `schemas/sync/v1/command.schema.json` 的 `command` 枚举来源。其中 `session.create` 只经 Node Link 接受且必须满足 `grant.remote-work`，Sync v1 不暴露；其余 11 条是 Sync v1 接受的命令。任一处增删命令名都必须同步修改 `commands.json`、`schemas/sync/v1/command.schema.json`、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（12 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举只包含其中 `transport` 含 `sync` 的 11 条；`session.create` 只经 Node Link 接受且必须满足 `grant.remote-work`，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在本文件的枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 12 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
 
 `ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 
@@ -1289,7 +1286,7 @@ local.audit.export
 - 同一会话的 mutation 进入 Session Actor 串行处理。
 - 同一会话同时最多一个 active turn。
 - 并发 prompt 按服务端持久化接受顺序排队，或按配置明确返回 `session.busy`。
-- config option 与模式变更必须带 `expectedVersion`；版本不匹配返回 `state.version_conflict` 和当前版本。
+- config option 与模式变更必须带 `expectedVersion`；版本不匹配返回 `state.version_conflict` 和当前版本（`details.currentVersion` 必需，`details.expectedVersion` 回显请求携带的版本），客户端据此重读后再决定是否重试。
 - 权限或 elicitation 响应使用请求自身的 expected state/version；第一个有效响应成为权威结果，之后返回 `interaction.already_resolved`。
 
 ## 12. Error
@@ -1354,7 +1351,17 @@ resource.remote_unavailable
 internal.unavailable
 ```
 
-该列表中 `sync.cursor_invalid` 的 `details.reason` 限定为 `malformed|epoch_mismatch|beyond_head|cursor_expired`；`resource.remote_unavailable` 的 `details` 允许 `ownerNodeId`、`exportId` 和 `reason ∈ {owner_offline, export_revoked}`。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
+#### details 登记
+
+| code | 登记字段（`details`） |
+|---|---|
+| `protocol.feature_required` | `features`（必需） |
+| `sync.cursor_invalid` | `reason`（必需） |
+| `state.version_conflict` | `expectedVersion`（可选）、`currentVersion`（必需） |
+| `resource.rate_limited` | `retryAfterMs`（可选） |
+| `resource.remote_unavailable` | `ownerNodeId`（可选）、`exportId`（可选）、`reason`（必需） |
+
+未在上表列出的 code **不登记任何** `details` 字段：发送方必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`sync.cursor_invalid.reason ∈ {malformed, epoch_mismatch, beyond_head, cursor_expired}`；`resource.remote_unavailable.reason ∈ {owner_offline, export_revoked}`；`protocol.feature_required.features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被协商的那些）；`resource.rate_limited.retryAfterMs` 是建议退避毫秒数；`state.version_conflict` 的两个版本号都是十进制字符串。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§4.2），新增字段按 §16.1 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
 
 错误码可以向后兼容地增加。客户端遇到未知错误码时按 `retryable` 和 code 首段做保守处理，并展示通用错误。
 
@@ -1427,7 +1434,10 @@ v1 默认上限：
 | `requiredFeatures` 项数 | 64 |
 | 单个 feature ID | 64 ASCII bytes |
 | 单 IP pending authentication | 5 connections |
-| 单 IP 新认证尝试 | 10/minute，允许配置更严格值 |
+| 单 IP 新认证尝试 | 10/分钟 |
+| 单节点并发 WSS 连接 | 256 |
+| 单设备业务命令速率 | 120/分钟（按 `deviceId` 与命令族分别统计） |
+| 单个内嵌 diff / document | 256 KiB |
 | 单 pairing proof 失败 | 5 次后使 pairing 失效 |
 
 - WebSocket 建立后第一条消息必须是 `auth.client_hello`，且必须在 5 秒内完整到达。
@@ -1437,6 +1447,7 @@ v1 默认上限：
 
 - 只有 `maxMessageBytes`、`maxPromptBytes`、`maxReplayEventsPerBatch` 三项通过 `auth.authenticated.limits` 下发，服务端可以按部署情况下调；其余上限（本节的认证前固定上限、JSON nesting depth、单对象字段数、单数组元素数、设备名称长度、单连接待发送队列、认证超时、配对有效期）都是固定 v1 常量，不得通过 `limits` 覆盖或下调。
 - 超过单消息上限应在分配大对象前拒绝。
+- 超过本节速率时返回 `resource.rate_limited`（`retryable = true`），并在连续超限时以 `4429` 关闭连接；客户端应遵守 `details.retryAfterMs`（存在时）退避后再重试，不得立即重发。
 - attachment、大型 diff 和完整终端输出不内嵌绕过限制；未来使用单独的受授权内容接口或 binary feature。
 - 待发送队列达到高水位后先停止读取新的 replay batch；持续过慢则发送 `resource.backpressure` 并断开。
 - 断开慢客户端后由其 cursor 重放，不能丢弃 Agent 事件或阻塞其他连接。
@@ -1491,15 +1502,22 @@ fixtures/sync/v1/
 └─ manifest.json   schema、view $defs、fixture 与预期结果映射
 ```
 
-第一批资产可以运行：
+合同检查由 `npm run check` 统一执行（完整清单、判据与新增的 crate 依赖方向门禁见 `AGENTS.md` §10）；与 Sync 资产直接相关的脚本是：
 
 ```text
 node scripts/check-schema-fixtures.mjs
-node scripts/check-contract-assets.mjs
 node scripts/check-command-catalog.mjs
+node scripts/check-error-registry.mjs
+node scripts/check-contract-assets.mjs
+node scripts/check-acp-compatibility.mjs
 ```
 
-`check-schema-fixtures.mjs` 用 ajv（Draft 2020-12）逐条执行 `manifest.json`：标为 valid 的 fixture 必须通过，标为 invalid 的 fixture 必须以声明的 `expectedKeyword` 失败，带 `viewSchema`/`viewDef` 的 fixture 还必须通过对应事件视图定义。`check-contract-assets.mjs` 负责资产完整性（`$ref` 目标、`$id` 唯一性、manifest 列出的文件存在、fixture 未被 manifest 遗漏）与需要真正计算的绑定：`rawJson` 的 `byteLength`/`sha256` 必须与文本本身一致，transcript 固定向量的 SHA-256、HMAC 与 P1363 签名必须重算通过。`check-command-catalog.mjs` 断言命令名在 `compatibility/commands/v1/commands.json`、`command.schema.json`、本文 §11.5 与 `SECURITY_DESIGN.md` §10.2 四处一致。三者合起来是仓库自带的完整检查，由 `npm run check` 统一执行；Rust 实现仍必须用自己选择的 Draft 2020-12 validator 跑同一份 manifest，形成独立判定。
+- `check-schema-fixtures.mjs` 用 ajv（Draft 2020-12）逐条执行 `manifest.json`：标为 valid 的 fixture 必须通过，标为 invalid 的 fixture 必须以声明的 `expectedKeyword` 失败，带 `viewSchema`/`viewDef` 的 fixture 还必须通过对应事件视图定义。它同时强制覆盖门禁：`message.schema.json` 可达的每个 `type`、以及 `event-views.schema.json` 的每个 `$defs` 都至少被一个 fixture 覆盖（sync 与 node-link 共享同一份 view 定义），fixture 目录中也不允许存在未被 manifest 列出的文件。
+- `check-contract-assets.mjs` 负责静态引用完整性与需要真正计算的绑定：`$ref` 目标存在、`$id` 在每个 asset root 内唯一、`rawJson` 的 `byteLength`/`sha256` 与文本本身一致、事件的 `payloadDigest` 与 `payload` 的 ACPR-CJ1 sha256 一致、transcript 固定向量的 SHA-256/HMAC/P1363 重算通过。transcript 向量还必须**由 `codec`/`domain`/`input` 经 `compatibility/transcripts/v1/transcripts.json` 的字段表重新编码**并与 `expected.transcriptBase64url` 逐字节一致，因此 tag 顺序、宽度或字段集合写错会让检查失败；`transcripts/invalid/` 下的负向量则断言解码器以声明的错误拒绝畸形输入，`pairing-sas` 向量额外重算 6 位 SAS。
+- `check-command-catalog.mjs` 断言命令名在 `compatibility/commands/v1/commands.json`、`schemas/sync/v1/command.schema.json`（`transport` 含 `sync` 的子集）、`schemas/node-link/v1/command.schema.json`（`transport` 含 `node_link` 的子集）、本文 §11.5 与 `SECURITY_DESIGN.md` §10.2 之间一致。
+- `check-error-registry.mjs` 断言 `compatibility/errors/v1/errors.json` 与两个协议的 `$defs.errorCode` enum、以及本文 §12.2 与 `NODE_LINK_PROTOCOL.md` §14.1 的列表一致，并拒绝任何第二处内联定义的公开错误码。
+
+Rust 实现必须在自己的 wire DTO（`crates/sync-protocol`）上形成独立判定：用同一份 `manifest.json` 驱动——valid 夹具必须解析成功并往返一致，invalid 夹具必须在声明的层被拒绝——`type` 常量、错误码与视图登记表另有漂移门禁与 schema/registry 逐条比对。这里不要求再引入通用 Draft 2020-12 校验器：ajv 的职责是判 schema 自洽与夹具本身合法，DTO 的职责是判实现忠实于 schema；若将来需要 Rust 侧独立复算 schema 本身，可以另加一层，但它不能替代 DTO 层。
 
 最低测试集合：
 

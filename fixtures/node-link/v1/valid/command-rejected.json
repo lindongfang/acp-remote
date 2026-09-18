@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "command.rejected",
+  "messageId": "a1d2e3f4-0516-4728-b9c0-d1e2f3a4b5c6",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "11",
+  "body": {
+    "requestId": "c2d3e4f5-0617-4829-a0b1-c2d3e4f5a6b7",
+    "command": "session.create",
+    "error": {
+      "code": "nodelink.command.unsupported_field",
+      "message": "session.create 不接受 cwd。",
+      "retryable": false,
+      "details": {
+        "field": "cwd"
+      }
+    }
+  }
+}

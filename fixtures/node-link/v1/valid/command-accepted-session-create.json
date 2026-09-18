@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "command.accepted",
+  "messageId": "7a8b9c0d-1e2f-4305-a6b7-c8d9eafb0c1d",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "7",
+  "body": {
+    "requestId": "7f8e9d0c-1b2a-4c3d-9e8f-7a6b5c4d3e2f",
+    "command": "session.create",
+    "acceptedAt": "2026-09-18T09:12:03.900Z",
+    "result": null
+  }
+}

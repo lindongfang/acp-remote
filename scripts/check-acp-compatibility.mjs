@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +101,8 @@ const requiredInvariants = [
   "invariant.tool_call_stays_structured",
   "invariant.capability_truthful",
   "invariant.future_update_visible",
+  "invariant.meta_fields_byte_exact",
+  "invariant.extension_method_explicit_unsupported",
   "invariant.node_link_raw_byte_exact",
   "invariant.node_link_capability_intersection"
 ];
@@ -164,6 +167,38 @@ if (matrix) {
   }
   for (const id of requiredInvariants) {
     if (!invariantIds.has(id)) errors.push(`invariants: missing ${id}`);
+  }
+
+  // The matrix pins the upstream ACP snapshot by commit + sha256. As long as that snapshot is
+  // not vendored under schemas/acp/v1/upstream/, the digest cannot be recomputed, so say so
+  // explicitly instead of implying the pin was verified.
+  const snapshotPath = resolve(root, "schemas", "acp", "v1", "upstream", "schema.json");
+  if (existsSync(snapshotPath)) {
+    const actual = createHash("sha256").update(readFileSync(snapshotPath)).digest("hex");
+    if (actual !== matrix.protocol?.schemaSha256) {
+      errors.push(
+        `schemas/acp/v1/upstream/schema.json: sha256 ${actual} != matrix protocol.schemaSha256 ${matrix.protocol?.schemaSha256}`,
+      );
+    }
+    const sourceCommit = String(matrix.protocol?.sourceCommit ?? "");
+    if (sourceCommit === "" || !String(matrix.protocol?.schemaUrl ?? "").includes(sourceCommit)) {
+      errors.push("protocol.schemaUrl must contain protocol.sourceCommit");
+    }
+    // The vendored snapshot carries no version field of its own (top level is
+    // $schema/title/anyOf/$defs), so the pinned path segment `schema/v1/` plus
+    // protocol.wireVersion is the only machine-checkable version statement.
+    const wireVersion = matrix.protocol?.wireVersion;
+    if (wireVersion !== 1) {
+      errors.push(`protocol.wireVersion must be 1 for the pinned snapshot, got ${JSON.stringify(wireVersion)}`);
+    }
+    if (!String(matrix.protocol?.schemaUrl ?? "").includes(`/v${wireVersion}/`)) {
+      errors.push(`protocol.schemaUrl must pin the major version directory /v${wireVersion}/`);
+    }
+  } else {
+    console.warn(
+      "warning: ACP upstream snapshot is not vendored (schemas/acp/v1/upstream/schema.json); " +
+        "matrix protocol.schemaSha256 未重算校验",
+    );
   }
 }
 

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "revision": "2026-09-18",
+  "description": "ACP Remote feature ID 机器登记 v1：Sync 与 Node Link 的封闭 feature 词表。协议文档 §5.2 / §11.3 的 feature 表、fixture 里出现的 feature ID 与本文件由 scripts/check-features.mjs 断言逐一相等；新增或删除 feature 必须先改本文件。required 表示协议要求每次协商都必须选中该 feature（产品必须支持由 delivery 表达）。",
+  "protocols": {
+    "sync": {
+      "source": "docs/SYNC_PROTOCOL.md §5.2",
+      "features": [
+        {
+          "id": "core.snapshot.v1",
+          "description": "快照订阅与 sync.snapshot_* 消息族",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.command-status.v1",
+          "description": "命令终态查询与 command.result 的终态字段",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.event-ack.v1",
+          "description": "客户端 ACK 与断线续传（sync.ack）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "acp.raw-payload.v1",
+          "description": "事件携带 ACP 原文（rawAcp.rawJson 保真，见 §10.3）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "resource.remote-origin.v1",
+          "description": "imported 资源来源承载（§9.6：ownerNodeId/exportId/origin cursor/online）",
+          "delivery": "mvp",
+          "required": false
+        }
+      ]
+    },
+    "node_link": {
+      "source": "docs/NODE_LINK_PROTOCOL.md §11.3",
+      "features": [
+        {
+          "id": "node-link.core.v1",
+          "description": "握手、catalog、resource snapshot/event/ACK、错误与 limits",
+          "delivery": "mvp",
+          "required": true
+        },
+        {
+          "id": "node-link.raw-acp.v1",
+          "description": "resource.event.payload.acp 携带 ACP raw document 并保真",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.command-status.v1",
+          "description": "command.status 查询与 command.terminal 重查",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.session-create.v1",
+          "description": "command.submit{command:\"session.create\"}（Zed session/new 的映射）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.export-revoke.v1",
+          "description": "export.revoked 与撤销后立即拒命令",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "node-link.node-rotation.v1",
+          "description": "node.rotate-key.*（只登记 ID 与消息名，收到即返回 type_unsupported）",
+          "delivery": "post_mvp",
+          "required": false
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.event",
+  "messageId": "23db959a-dfe5-41e8-a8fc-929226f51ff3",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "27",
+  "body": {
+    "originEventId": "f2c31198-05ca-46c8-ad70-893a33e30454",
+    "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+    "originSequence": "2320",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "exportId": "export-main",
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "eventType": "agent.message.delta",
+    "payloadDigest": "2L9wPtiENI21oBYQrkEWXM-W3_o-8McKUFTu_2cf5lo",
+    "createdAt": "2026-09-18T09:12:09.500Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaIndex": "0",
+        "text": "处理中"
+      }
+    }
+  }
+}

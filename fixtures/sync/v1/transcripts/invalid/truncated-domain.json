@@ -1,0 +1,7 @@
+{
+  "description": "domain 被截断到声明长度之前；解码器必须以 truncated_domain 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "domain": "acp-remote/host-challenge/v1",
+  "malformedTranscriptBase64url": "QUNQUgEAHGFjcC1yZW1vdGUvaG9zdC1jaGFsbGVu",
+  "expectedError": "truncated_domain"
+}

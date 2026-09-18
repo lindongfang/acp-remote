@@ -1,0 +1,5000 @@
+//! broker：`docs/CORE_PORTS_AND_STORAGE.md` §6 的 12 条提交与发布契约。
+//!
+//! # 为什么 broker 有"驱动入口"
+//!
+//! `core` 不依赖 runtime（§2）：它既不能 spawn 任务，也不能自己读时钟（时间一律由调用方以
+//! `Timestamp` 传入）。后端事件经 [`crate::ports::EventSink`] 到达 broker，而 `EventSink::send`
+//! 是**同步**的、`SessionStore::commit` 是异步的——因此 broker 把事件按到达顺序缓冲，由持有 runtime
+//! 的组合根调用 [`Broker::pump`]（或只落盘的 [`Broker::flush`]）驱动：
+//!
+//! - `storage.flush_interval_ms`（默认 250）的合并窗口由组合根的定时器触发 `pump`；
+//! - §6.10 要求合并不延迟终态事件、不跨 turn 边界：终态事件到达时由 sink 的包装者立即触发 `pump`，
+//!   且 broker 自身在每个终态事件处**切断合批**；
+//! - 单线程嵌入与测试按顺序 `await` [`Broker::pump`] 即可，不需要 runtime。
+//!
+//! # 顺序（§6.1/§6.2，不可交换）
+//!
+//! - owned：`EventSink` → 组装 [`OwnedCommit`] → `SessionStore::commit` → `EventPublisher::publish`。
+//! - imported：组装 [`DeliveryReceipt`] → `RemoteDeliveryStore::commit_receipt` → 发布（正文只在内存）。
+//!
+//! 两条路径都只在写成功之后才发布；`commit` 返回 `Unavailable` 时的事件一律不发布（§6.9）。
+
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
+
+use crate::model::{
+    Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind, CommandPayload,
+    CommandReceipt, CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery,
+    CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind, CreateSessionRequest, Digest,
+    ElicitationAction, ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin,
+    EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind, InteractionResolution,
+    LocalCursor, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef, PendingEvent,
+    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
+    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
+    Sequence, SessionId, SessionReference, SessionState, StoredPolicy, Timestamp, TurnId,
+    TurnState, UnavailableKind, Version, ViewJson, decode_json_string as json_string,
+    object_members as json_members,
+};
+use crate::ports::{
+    AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
+    EventSink, ExportStore, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator,
+    IdempotencyRecord, InteractionResolved, ModeChange, NewSession, NewTurn, OwnedCommit,
+    PendingInteractionWrite, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch,
+    ReplayLimit, SessionBackendFactory, SessionEndpoint, SessionStore, SessionUpdate, StateChange,
+    TurnChange, TurnUpdate,
+};
+
+// ---------------------------------------------------------------------------------------------
+// §6.5 授权
+// ---------------------------------------------------------------------------------------------
+
+/// 授权拒绝（§6.5）。
+///
+/// `PortError`（§2）是闭合枚举且没有 Forbidden 变体，因此拒绝以命令级 `PublicError`
+/// （`authorization.scope_denied`）表达：`submit_command` 族把它变成 `Rejected`，非命令入口用
+/// [`Denied::into_port_error`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Denied {
+    code: &'static str,
+    message: &'static str,
+    retryable: bool,
+}
+
+impl Denied {
+    /// 授权拒绝的唯一构造点：`authorization.scope_denied`。
+    pub fn scope_denied() -> Self {
+        Self {
+            code: "authorization.scope_denied",
+            message: "该调用方没有执行此命令的 scope/grant",
+            retryable: false,
+        }
+    }
+
+    /// 命令级错误（`PublicError` 的构造是校验性的，因此这里可失败）。
+    pub fn into_error(self) -> Result<PublicError, PortError> {
+        PublicError::coded(self.code, self.message, self.retryable).map_err(PortError::from)
+    }
+
+    /// 非命令入口的表示。core 的 `PortError` 没有"禁止"变体，这里用
+    /// `InvalidRequest("authorization.scope_denied")`；适配器映射到等价的 wire 错误码。
+    pub fn into_port_error(self) -> PortError {
+        PortError::InvalidRequest(self.code)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 命令表与事件策略表
+// ---------------------------------------------------------------------------------------------
+
+/// payload 变体 → 命令名（`SYNC_PROTOCOL.md` §11.5 表首列），同时是授权所需的 scope 名。
+pub fn command_name(payload: &CommandPayload) -> &'static str {
+    match payload {
+        CommandPayload::SessionList { .. } => "session.list",
+        CommandPayload::SessionRead { .. } => "session.read",
+        CommandPayload::CommandStatus { .. } => "command.status",
+        CommandPayload::ModeList { .. } => "session.mode.list",
+        CommandPayload::ConfigList { .. } => "session.config.list",
+        CommandPayload::Prompt { .. } => "session.prompt",
+        CommandPayload::Cancel { .. } => "session.cancel",
+        CommandPayload::ElicitationRespond { .. } => "elicitation.respond",
+        CommandPayload::ModeSet { .. } => "session.mode.set",
+        CommandPayload::ConfigSet { .. } => "session.config.set",
+        CommandPayload::PermissionResolve { .. } => "permission.resolve",
+    }
+}
+
+/// payload 变体 → 命令类别。payload 与 `ClientCommand.kind` 必须一致（不一致即 `InvalidRequest`）。
+pub fn command_kind(payload: &CommandPayload) -> CommandKind {
+    payload.family()
+}
+
+/// 命令 → 覆盖它的 grant（`compatibility/commands/v1/commands.json` 在 core 里的**手工镜像**）。
+///
+/// core 读不了 JSON（不依赖 serde），而 Node actor 的 Export/Import 交集判定（§6.5）必须知道
+/// `grant.*` 覆盖哪些命令名。增删命令必须同时改 `commands.json` 与本表；集成层应对二者加漂移门禁。
+pub fn required_grant(command: &str) -> Option<&'static str> {
+    let grant = match command {
+        "session.list"
+        | "session.read"
+        | "command.status"
+        | "session.mode.list"
+        | "session.config.list" => "grant.observe",
+        "session.prompt" | "session.cancel" | "elicitation.respond" => "grant.interact",
+        "session.mode.set" | "session.config.set" => "grant.configure-session",
+        "permission.resolve" => "grant.approve",
+        "session.create" => "grant.remote-work",
+        _ => return None,
+    };
+    Some(grant)
+}
+
+/// 只放内存、**不得**进入任何提交的事件类型（`INITIAL_DESIGN.md` §10.3「心跳、typing、presence：
+/// 只放内存」）。
+///
+/// v1 登记的标准事件类型里没有这一类的成员（心跳是连接层消息，不是事件），因此本表是 daemon 新增
+/// presence/typing 类事件时的唯一登记点；`EventType` 是开放 newtype，未登记取值合法（§10.1）。
+/// 组合根用 [`persistence_policy`] 在 sink 包装层做内存转发，broker 在组装前把它们过滤掉（§6.11）。
+pub const EPHEMERAL_EVENT_TYPES: &[&str] = &["device.typing", "session.presence"];
+
+/// 事件类型的持久策略（`INITIAL_DESIGN.md` §10.1–§10.3）。未登记取值一律 `Durable`——
+/// `SYNC_PROTOCOL.md` §10.2 要求未登记事件降级处理而**不得静默丢弃**。
+pub fn persistence_policy(event_type: &EventType) -> PersistencePolicy {
+    let text = event_type.as_str();
+    if EPHEMERAL_EVENT_TYPES.contains(&text) {
+        return PersistencePolicy::Ephemeral;
+    }
+    match text {
+        "user.message.delta"
+        | "agent.message.delta"
+        | "agent.thought.delta"
+        | "tool.call.started"
+        | "tool.call.updated"
+        | "terminal.output"
+        | "session.usage.changed" => PersistencePolicy::ShortTerm,
+        _ => PersistencePolicy::Durable,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 配置、依赖与会话槽位
+// ---------------------------------------------------------------------------------------------
+
+/// `sessions.queue_policy`（`CONFIG_REFERENCE.md` §4）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuePolicy {
+    /// 按持久化接受顺序排队；等待中的 turn 数达到 `max_queued_turns` 时返回 `session.busy`。
+    Queue,
+    /// 已有 active turn 时直接返回 `session.busy`。
+    RejectBusy,
+}
+
+/// broker 的配置面。由组合根从配置读取后注入——core 不读配置文件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrokerConfig {
+    pub queue_policy: QueuePolicy,
+    pub max_queued_turns: u32,
+}
+
+impl Default for BrokerConfig {
+    fn default() -> Self {
+        Self {
+            queue_policy: QueuePolicy::Queue,
+            max_queued_turns: 16,
+        }
+    }
+}
+
+/// broker 的全部出站依赖。
+pub struct BrokerDeps {
+    pub store: Arc<dyn SessionStore>,
+    pub deliveries: Arc<dyn RemoteDeliveryStore>,
+    pub backends: Arc<dyn SessionBackendFactory>,
+    pub exports: Arc<dyn ExportStore>,
+    pub publisher: Arc<dyn EventPublisher>,
+    pub clock: Arc<dyn Clock>,
+    pub ids: Arc<dyn IdGenerator>,
+    /// 授权拒绝的审计（§3.5 的 `authorization.denied`）。`None` = 该部署不注入审计端口。
+    pub audit: Option<Arc<dyn AuditStore>>,
+}
+
+/// 不带 wire 指纹的入口使用的规范占位摘要（32 个零字节的 base64url，无填充、末字符在规范集合内）。
+const PLACEHOLDER_FINGERPRINT: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+/// 每会话串行门（§6.3：一个会话一个串行队列，不同会话并行）。
+///
+/// core 不依赖 runtime，因此这里用 std 互斥量 + `Waker` 自己实现 FIFO 异步门：等待者按到达顺序取号，
+/// 释放时把锁**指名**交给队首（`granted` 是票据而不是 waker 比较——`Waker` 之间可能等价，票据不会），
+/// 等待者被丢弃时收回它的票据（`Wait::drop`），因此取消不会让会话卡死。持有它即"该会话的串行队列"，
+/// 跨 `.await` 合法（守卫是 `Send`）。
+struct Gate {
+    inner: Mutex<GateInner>,
+}
+
+struct GateInner {
+    locked: bool,
+    next_ticket: u64,
+    waiters: VecDeque<(u64, Waker)>,
+    granted: Option<u64>,
+}
+
+struct GateGuard<'a> {
+    gate: &'a Gate,
+}
+
+/// 等待取锁的 future；`Drop` 时收回票据（调用方在等待期间取消命令时不会卡住会话）。
+struct Wait<'a> {
+    gate: &'a Gate,
+    ticket: Option<u64>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Gate {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(GateInner {
+                locked: false,
+                next_ticket: 0,
+                waiters: VecDeque::new(),
+                granted: None,
+            }),
+        }
+    }
+
+    async fn guard(&self) -> GateGuard<'_> {
+        Wait {
+            gate: self,
+            ticket: None,
+        }
+        .await;
+        GateGuard { gate: self }
+    }
+}
+
+impl Future for Wait<'_> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut inner = lock(&self.gate.inner);
+        if !inner.locked {
+            inner.locked = true;
+            inner.granted = None;
+            self.ticket = None;
+            return Poll::Ready(());
+        }
+        match self.ticket {
+            Some(ticket) if inner.granted == Some(ticket) => {
+                inner.granted = None;
+                self.ticket = None;
+                Poll::Ready(())
+            }
+            Some(_) => Poll::Pending,
+            None => {
+                inner.next_ticket += 1;
+                let ticket = inner.next_ticket;
+                inner.waiters.push_back((ticket, cx.waker().clone()));
+                self.ticket = Some(ticket);
+                Poll::Pending
+            }
+        }
+    }
+}
+
+impl Drop for Wait<'_> {
+    fn drop(&mut self) {
+        let Some(ticket) = self.ticket else {
+            return;
+        };
+        let mut inner = lock(&self.gate.inner);
+        if let Some(position) = inner
+            .waiters
+            .iter()
+            .position(|(queued, _)| *queued == ticket)
+        {
+            inner.waiters.remove(position);
+        }
+        if inner.granted == Some(ticket) {
+            // 已经指名交给它、但它被丢弃了：转交给下一位等待者，或直接解锁。
+            match inner.waiters.pop_front() {
+                Some((next, waker)) => {
+                    inner.granted = Some(next);
+                    drop(inner);
+                    waker.wake();
+                }
+                None => {
+                    inner.locked = false;
+                    inner.granted = None;
+                }
+            }
+        }
+    }
+}
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        let mut inner = lock(&self.gate.inner);
+        match inner.waiters.pop_front() {
+            Some((ticket, waker)) => {
+                inner.granted = Some(ticket);
+                drop(inner);
+                waker.wake();
+            }
+            None => {
+                inner.locked = false;
+                inner.granted = None;
+            }
+        }
+    }
+}
+
+/// 已持久接受、等待派发的 turn（§6.4）。
+///
+/// **prompt 正文只在内存**：`owned_command` 按 §11.2 只承诺保留 fingerprint/接受状态/结果引用，不要求
+/// 保存完整 prompt。进程崩溃后未派发的 turn 必须由恢复任务终结为 `command.uncertain`，不得静默重新
+/// 派发（§11.2）。
+struct QueuedTurn {
+    turn: TurnId,
+    request: RequestId,
+    prompt: PromptRequest,
+    /// 触发该 turn 的设备/本地 CLI；用于 `SYNC_PROTOCOL.md` §10.1 的 `origin.kind` 判定。
+    actor: Actor,
+}
+
+#[derive(Default)]
+struct TurnQueue {
+    running: Option<TurnId>,
+    running_request: Option<RequestId>,
+    running_actor: Option<Actor>,
+    waiting: VecDeque<QueuedTurn>,
+}
+
+/// 一个会话的运行时状态（owned 与 imported 各一份，键见 [`Broker::slot_key`]）。
+struct Slot {
+    /// §6.3 的每会话串行门：命令处理、事件落盘与派发都在它内部完成。
+    gate: Gate,
+    pending: Mutex<Vec<EndpointEvent>>,
+    endpoint: Mutex<Option<Arc<dyn SessionEndpoint>>>,
+    queue: Mutex<TurnQueue>,
+}
+
+impl Slot {
+    fn push_event(&self, event: EndpointEvent) {
+        lock(&self.pending).push(event);
+    }
+
+    fn running_turn(&self) -> Option<TurnId> {
+        lock(&self.queue).running.clone()
+    }
+
+    fn running_request(&self) -> Option<RequestId> {
+        lock(&self.queue).running_request.clone()
+    }
+
+    /// 当前 active turn 的触发者（用于事件 origin 判定）。
+    fn running_actor(&self) -> Option<Actor> {
+        lock(&self.queue).running_actor.clone()
+    }
+
+    /// 终态落盘后清空 active turn（`turn.queued` 之外的排队 turn 保留）。
+    fn finish_turn(&self) {
+        let mut queue = lock(&self.queue);
+        queue.running = None;
+        queue.running_request = None;
+        queue.running_actor = None;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Broker
+// ---------------------------------------------------------------------------------------------
+
+/// `docs/CORE_PORTS_AND_STORAGE.md` §6 的实现：提交与发布、每会话串行、幂等、交互仲裁、队列策略。
+pub struct Broker {
+    deps: BrokerDeps,
+    config: BrokerConfig,
+    slots: Mutex<HashMap<String, Arc<Slot>>>,
+}
+
+impl Broker {
+    pub fn new(deps: BrokerDeps, config: BrokerConfig) -> Self {
+        Self {
+            deps,
+            config,
+            slots: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn config(&self) -> BrokerConfig {
+        self.config
+    }
+
+    fn now(&self) -> Timestamp {
+        self.deps.clock.now()
+    }
+
+    /// 会话槽位键。用文本键而不是 `HashMap<SessionId, _>`，是为了让 owned 与 imported 的同一
+    /// `SessionId` 不共享串行队列（来自不同 Owner 的同一 id 不是同一个会话，`NODE_LINK_PROTOCOL.md` §7）。
+    fn slot_key(reference: &SessionReference) -> String {
+        match reference {
+            SessionReference::Owned(owned) => format!("owned:{}", owned.session_id.as_str()),
+            SessionReference::Remote(remote) => format!(
+                "remote:{}:{}:{}",
+                remote.owner_node_id.as_str(),
+                remote.export_id.as_str(),
+                remote.session_id.as_str()
+            ),
+        }
+    }
+
+    fn reference_of(session: &SessionId) -> SessionReference {
+        SessionReference::Owned(OwnedSessionRef {
+            session_id: session.clone(),
+        })
+    }
+
+    fn slot(&self, reference: &SessionReference) -> Arc<Slot> {
+        let key = Self::slot_key(reference);
+        let mut slots = lock(&self.slots);
+        slots
+            .entry(key)
+            .or_insert_with(|| {
+                Arc::new(Slot {
+                    gate: Gate::new(),
+                    pending: Mutex::new(Vec::new()),
+                    endpoint: Mutex::new(None),
+                    queue: Mutex::new(TurnQueue::default()),
+                })
+            })
+            .clone()
+    }
+
+    fn owned_slot(&self, session: &SessionId) -> Arc<Slot> {
+        self.slot(&Self::reference_of(session))
+    }
+
+    /// 交给 `SessionBackendFactory` 的 `EventSink`（§5.1/§6.1）。事件按到达顺序缓冲，由
+    /// [`Broker::flush`] 落盘；缓冲顺序即提交顺序。
+    pub fn sink(&self, session: &SessionId) -> EventSink {
+        let slot = self.owned_slot(session);
+        EventSink::new(move |event| slot.push_event(event))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // §6.5 授权
+    // -----------------------------------------------------------------------------------------
+
+    /// 所有用例入口的第一步：按 actor 的 scope/grant 与 Export 交集判定（§6.5）。
+    ///
+    /// - `LocalCli`：本地管理入口，访问控制由 `LOCAL_ADMIN_PROTOCOL.md` §2.2 的 OS 用户边界保证。
+    /// - `Device`：`scopes` 是展开后的独立 scope（等于命令名），必须含该命令。
+    /// - `Node`：Access 侧要求本地 `ImportRecord.grants` 覆盖该命令；Owner 侧要求某个未撤销
+    ///   `ExportRecord` 既覆盖该命令、又覆盖目标会话的 agent。两者任一成立即通过。
+    pub async fn authorize(
+        &self,
+        actor: &Actor,
+        command: &str,
+        session: Option<&SessionId>,
+        request: &RequestId,
+    ) -> Result<(), Denied> {
+        let allowed = match actor {
+            Actor::LocalCli => true,
+            Actor::Device { scopes, .. } => scopes.contains(command),
+            // 查不到 Export/Import（或存储失败）时**失败关闭**：不能证明授权即拒绝（§6.5）。
+            Actor::Node { node, .. } => self
+                .node_allowed(node, command, session)
+                .await
+                .unwrap_or(false),
+        };
+        if allowed {
+            return Ok(());
+        }
+        let denied = Denied::scope_denied();
+        self.audit_denial(actor, session, request).await;
+        Err(denied)
+    }
+
+    async fn node_allowed(
+        &self,
+        node: &NodeId,
+        command: &str,
+        session: Option<&SessionId>,
+    ) -> Result<bool, PortError> {
+        let Some(grant) = required_grant(command) else {
+            return Ok(false);
+        };
+        // Access 侧：本地 Import 的 grants 覆盖该命令。
+        for import in self.deps.exports.imports().await? {
+            if import.owner_node_id() == node && import.grants().contains(grant) {
+                return Ok(true);
+            }
+        }
+        // Owner 侧：某个未撤销 Export 覆盖该命令，且覆盖目标会话的 agent。
+        let agent = match session {
+            Some(session) => self
+                .deps
+                .store
+                .load(session)
+                .await?
+                .map(|snapshot| snapshot.session.agent().clone()),
+            None => None,
+        };
+        let Some(agent) = agent else {
+            return Ok(false);
+        };
+        for export in self.deps.exports.exports().await? {
+            if export.revoked_at().is_some() || !export.scopes().contains(grant) {
+                continue;
+            }
+            if export
+                .agent_ids()
+                .iter()
+                .any(|id| id.as_str() == agent.agent_id().as_str())
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// 审计拒绝（§3.5 的 `authorization.denied`）；审计失败不改变授权判定。
+    async fn audit_denial(&self, actor: &Actor, session: Option<&SessionId>, request: &RequestId) {
+        let Some(audit) = self.deps.audit.as_ref() else {
+            return;
+        };
+        let record = AuditRecord::try_new(
+            self.now(),
+            AuditAction::AuthorizationDenied,
+            actor.clone(),
+            None,
+            None,
+            EntityRef::Command {
+                session: session.cloned(),
+                request: request.clone(),
+            },
+            AuditOutcome::Denied,
+            None,
+        );
+        if let Ok(record) = record {
+            let _ = audit.append(record).await;
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // mutation 管道
+    // -----------------------------------------------------------------------------------------
+
+    /// 一条 mutation 的完整管道（§6.1/§6.3/§6.6/§6.9）。返回值只可能是 `Accepted` 或 `Rejected`
+    /// （§11.2：mutation 首次提交只返回这两种）。
+    pub async fn submit_mutation(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+    ) -> Result<CommandReceipt, PortError> {
+        let name = command_name(&command.payload);
+        if command.command != name || command.kind != command_kind(&command.payload) {
+            return self.reject(
+                "protocol.schema_invalid",
+                "command/kind 与 payload 变体不一致",
+                false,
+            );
+        }
+        if let Err(denied) = self
+            .authorize(actor, name, command.session.as_ref(), &command.request)
+            .await
+        {
+            return Ok(CommandReceipt::Rejected {
+                error: denied.into_error()?,
+            });
+        }
+        match &command.payload {
+            CommandPayload::Prompt { content } => self.submit_prompt(actor, command, content).await,
+            CommandPayload::Cancel { turn } => self.submit_cancel(actor, command, turn).await,
+            CommandPayload::ModeSet { mode } => self.submit_mode_set(actor, command, mode).await,
+            CommandPayload::ConfigSet { id, value } => {
+                self.submit_config_set(actor, command, id, value.clone())
+                    .await
+            }
+            CommandPayload::PermissionResolve {
+                interaction,
+                option_id,
+            } => {
+                self.submit_permission_resolve(actor, command, interaction, option_id)
+                    .await
+            }
+            CommandPayload::ElicitationRespond {
+                interaction,
+                action,
+                values,
+            } => {
+                self.submit_elicitation_respond(actor, command, interaction, *action, values)
+                    .await
+            }
+            // 查询命令不在此派发：结果由 §4 的查询入口（`list_sessions`/`read_session`/
+            // `command_status`/`config_options`）返回 core 类型，由适配器投影到 wire（core 不做 JSON
+            // 序列化）。这里只确认"已接受、无副作用"。
+            CommandPayload::SessionList { .. }
+            | CommandPayload::SessionRead { .. }
+            | CommandPayload::CommandStatus { .. }
+            | CommandPayload::ModeList { .. }
+            | CommandPayload::ConfigList { .. } => Ok(CommandReceipt::Accepted {
+                request: command.request.clone(),
+                turn: None,
+            }),
+        }
+    }
+
+    async fn submit_prompt(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        content: &[PromptContentBlock],
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "session.prompt 必须带 sessionId",
+                false,
+            );
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        let Some(snapshot) = self.deps.store.load(&session).await? else {
+            return self.reject("session.not_found", "会话不存在", false);
+        };
+
+        // §6.4：active turn 时的两种策略。
+        if Self::is_active(snapshot.session.state()) || slot.running_turn().is_some() {
+            let waiting = lock(&slot.queue).waiting.len() as u32;
+            match self.config.queue_policy {
+                QueuePolicy::RejectBusy => {
+                    return self.reject("session.busy", "该会话已有 active turn", true);
+                }
+                QueuePolicy::Queue => {
+                    if waiting >= self.config.max_queued_turns {
+                        return self.reject("session.busy", "该会话的排队 turn 已达上限", true);
+                    }
+                }
+            }
+        }
+
+        let turn = self.deps.ids.turn_id();
+        let event = pending_event(
+            "turn.queued",
+            EventKind::State,
+            view_turn(&turn, TurnState::Queued)?,
+            Some(turn.clone()),
+            Some(command.request.clone()),
+            StoredPolicy::Durable,
+            Some(actor),
+        )?;
+        // 会话状态：只有在没有 active turn 时才能从 Idle/Failed 推到 Queued；否则保持既有状态
+        // （`Running`/`WaitingPermission` 不能被排队中的 turn 覆盖）。
+        let state = if Self::is_active(snapshot.session.state()) {
+            None
+        } else {
+            Some(StateChange::Update(SessionUpdate {
+                state: Some(SessionState::Queued),
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            }))
+        };
+        let turns = vec![TurnChange::Create(NewTurn {
+            turn: turn.clone(),
+            state: TurnState::Queued,
+            causation: Some(command.request.clone()),
+            started_at: None,
+        })];
+        match self
+            .accept(actor, command, &session, state, turns, vec![event])
+            .await?
+        {
+            Accept::Done(receipt) => Ok(receipt),
+            Accept::Committed => {
+                lock(&slot.queue).waiting.push_back(QueuedTurn {
+                    turn: turn.clone(),
+                    request: command.request.clone(),
+                    prompt: PromptRequest {
+                        content: content.to_vec(),
+                    },
+                    actor: actor.clone(),
+                });
+                self.pump_locked(&slot, &session).await?;
+                Ok(CommandReceipt::Accepted {
+                    request: command.request.clone(),
+                    turn: Some(turn),
+                })
+            }
+        }
+    }
+
+    async fn submit_cancel(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        turn: &Option<TurnId>,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "session.cancel 必须带 sessionId",
+                false,
+            );
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        if self.deps.store.load(&session).await?.is_none() {
+            return self.reject("session.not_found", "会话不存在", false);
+        }
+        match self
+            .accept(actor, command, &session, None, Vec::new(), Vec::new())
+            .await?
+        {
+            Accept::Done(receipt) => return Ok(receipt),
+            Accept::Committed => {}
+        }
+        let target = turn.clone().or_else(|| slot.running_turn());
+        let endpoint = self.endpoint(&slot, &session).await?;
+        let dispatched = endpoint.cancel(target).await;
+        // 后端会经 sink 发 `turn.cancelled`；它由本调用驱动落盘（含 prompt 命令的终态，§11.2）。
+        self.flush_locked(&slot, &session).await?;
+        let at = self.now();
+        let status = if dispatched.is_ok() {
+            CommandStatus::Completed
+        } else {
+            CommandStatus::Failed
+        };
+        let error = match &dispatched {
+            Ok(()) => None,
+            Err(error) => Some(self.port_error_public(error)?),
+        };
+        self.commit_terminal(&session, command, status, error, None, &at)
+            .await?;
+        Ok(CommandReceipt::Accepted {
+            request: command.request.clone(),
+            turn: None,
+        })
+    }
+
+    async fn submit_mode_set(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        mode: &ModeId,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "session.mode.set 必须带 sessionId",
+                false,
+            );
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        let Some(snapshot) = self.deps.store.load(&session).await? else {
+            return self.reject("session.not_found", "会话不存在", false);
+        };
+        // §6.8：模型/配置切换只在 turn 边界生效。v1 选择"显式返回 state.version_conflict"而不是排队。
+        if Self::is_active(snapshot.session.state()) || slot.running_turn().is_some() {
+            return self.version_conflict(snapshot.session.version().get(), command);
+        }
+        match self
+            .accept(actor, command, &session, None, Vec::new(), Vec::new())
+            .await?
+        {
+            Accept::Done(receipt) => return Ok(receipt),
+            Accept::Committed => {}
+        }
+        let endpoint = self.endpoint(&slot, &session).await?;
+        match endpoint.set_mode(mode).await {
+            Ok(()) => {
+                // 后端的 `session.mode.changed` 先落盘（§11.5：先发状态事件、再发 command.completed）。
+                self.flush_locked(&slot, &session).await?;
+                let state = StateChange::Update(SessionUpdate {
+                    state: None,
+                    mode: ModeChange::Set(mode_ref(mode)?),
+                    closed_at: None,
+                    interaction: None,
+                });
+                self.apply_state(&session, state, command).await?;
+            }
+            Err(error) => {
+                let public = self.port_error_public(&error)?;
+                let at2 = self.now();
+                self.commit_terminal(
+                    &session,
+                    command,
+                    CommandStatus::Failed,
+                    Some(public),
+                    None,
+                    &at2,
+                )
+                .await?;
+            }
+        }
+        Ok(CommandReceipt::Accepted {
+            request: command.request.clone(),
+            turn: None,
+        })
+    }
+
+    async fn submit_config_set(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        id: &ConfigOptionId,
+        value: ConfigValue,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "session.config.set 必须带 sessionId",
+                false,
+            );
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        let Some(snapshot) = self.deps.store.load(&session).await? else {
+            return self.reject("session.not_found", "会话不存在", false);
+        };
+        if Self::is_active(snapshot.session.state()) || slot.running_turn().is_some() {
+            return self.version_conflict(snapshot.session.version().get(), command);
+        }
+        match self
+            .accept(actor, command, &session, None, Vec::new(), Vec::new())
+            .await?
+        {
+            Accept::Done(receipt) => return Ok(receipt),
+            Accept::Committed => {}
+        }
+        let endpoint = self.endpoint(&slot, &session).await?;
+        match endpoint.set_config(id, value).await {
+            Ok(()) => {
+                self.flush_locked(&slot, &session).await?;
+                let state = StateChange::Update(SessionUpdate {
+                    state: None,
+                    mode: ModeChange::Unchanged,
+                    closed_at: None,
+                    interaction: None,
+                });
+                self.apply_state(&session, state, command).await?;
+            }
+            Err(error) => {
+                let public = self.port_error_public(&error)?;
+                let at2 = self.now();
+                self.commit_terminal(
+                    &session,
+                    command,
+                    CommandStatus::Failed,
+                    Some(public),
+                    None,
+                    &at2,
+                )
+                .await?;
+            }
+        }
+        Ok(CommandReceipt::Accepted {
+            request: command.request.clone(),
+            turn: None,
+        })
+    }
+
+    async fn submit_permission_resolve(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        interaction: &InteractionId,
+        option_id: &str,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "permission.resolve 必须带 sessionId",
+                false,
+            );
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        let resolution = match self
+            .permission_resolution(&session, interaction, option_id)
+            .await?
+        {
+            Ok(resolution) => resolution,
+            Err(receipt) => return Ok(receipt),
+        };
+        match self
+            .accept(actor, command, &session, None, Vec::new(), Vec::new())
+            .await?
+        {
+            Accept::Done(receipt) => return Ok(receipt),
+            Accept::Committed => {}
+        }
+        let outcome = self
+            .resolve_locked(actor, &slot, &session, interaction, resolution)
+            .await?;
+        let at = self.now();
+        let status = match outcome {
+            Resolution::Resolved => CommandStatus::Completed,
+            Resolution::AlreadyResolved => CommandStatus::Failed,
+        };
+        let error = match outcome {
+            Resolution::Resolved => None,
+            Resolution::AlreadyResolved => Some(
+                PublicError::coded(
+                    "interaction.already_resolved",
+                    "该交互已经由另一个应答解析，既有结果未被覆盖",
+                    false,
+                )
+                .map_err(PortError::from)?,
+            ),
+        };
+        self.commit_terminal(&session, command, status, error, None, &at)
+            .await?;
+        Ok(CommandReceipt::Accepted {
+            request: command.request.clone(),
+            turn: None,
+        })
+    }
+
+    async fn submit_elicitation_respond(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        interaction: &InteractionId,
+        action: ElicitationAction,
+        values: &ElicitationValues,
+    ) -> Result<CommandReceipt, PortError> {
+        let Some(session) = command.session.clone() else {
+            return self.reject(
+                "command.unsupported",
+                "elicitation.respond 必须带 sessionId",
+                false,
+            );
+        };
+        let resolution = match action {
+            ElicitationAction::Submit => InteractionResolution::elicitation_submit(values.clone())
+                .map_err(PortError::from)?,
+            ElicitationAction::Cancel => InteractionResolution::elicitation_cancel(),
+            ElicitationAction::Decline => InteractionResolution::elicitation_decline(),
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if let Some(receipt) = self.idempotency(actor, command).await? {
+            return Ok(receipt);
+        }
+        match self
+            .accept(actor, command, &session, None, Vec::new(), Vec::new())
+            .await?
+        {
+            Accept::Done(receipt) => return Ok(receipt),
+            Accept::Committed => {}
+        }
+        let outcome = self
+            .resolve_locked(actor, &slot, &session, interaction, resolution)
+            .await?;
+        let at = self.now();
+        let (status, error) = match outcome {
+            Resolution::Resolved => (CommandStatus::Completed, None),
+            Resolution::AlreadyResolved => (
+                CommandStatus::Failed,
+                Some(
+                    PublicError::coded(
+                        "interaction.already_resolved",
+                        "该交互已经由另一个应答解析，既有结果未被覆盖",
+                        false,
+                    )
+                    .map_err(PortError::from)?,
+                ),
+            ),
+        };
+        self.commit_terminal(&session, command, status, error, None, &at)
+            .await?;
+        Ok(CommandReceipt::Accepted {
+            request: command.request.clone(),
+            turn: None,
+        })
+    }
+
+    /// §4 `PermissionCommands::resolve_interaction`（不带命令幂等键的入口）。
+    pub async fn resolve_interaction(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+        interaction: &InteractionId,
+        resolution: InteractionResolution,
+    ) -> Result<Resolution, PortError> {
+        let session = match reference {
+            SessionReference::Owned(owned) => owned.session_id.clone(),
+            SessionReference::Remote(_) => {
+                return Err(PortError::InvalidRequest(
+                    "imported 会话的交互由持有 attachment 的 facade 转成上游请求",
+                ));
+            }
+        };
+        let command = if matches!(resolution, InteractionResolution::Permission(_)) {
+            "permission.resolve"
+        } else {
+            "elicitation.respond"
+        };
+        let request = self.deps.ids.request_id();
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        self.authorize(actor, command, Some(&session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        if resolution.validate().is_err() {
+            return Err(PortError::InvalidRequest("交互解析不满足 schema"));
+        }
+        self.resolve_locked(actor, &slot, &session, interaction, resolution)
+            .await
+    }
+
+    /// 交互解析的公共实现（调用方已持有串行门）：**先**用条件更新落盘仲裁（§6.7 first-writer-wins），
+    /// **再**派发给后端，最后把后端发出的 `*.resolved` 事件落盘。
+    async fn resolve_locked(
+        &self,
+        actor: &Actor,
+        slot: &Slot,
+        session: &SessionId,
+        interaction: &InteractionId,
+        resolution: InteractionResolution,
+    ) -> Result<Resolution, PortError> {
+        let state = StateChange::Update(SessionUpdate {
+            state: None,
+            mode: ModeChange::Unchanged,
+            closed_at: None,
+            interaction: Some(InteractionResolved {
+                interaction: interaction.clone(),
+                resolution: resolution.clone(),
+                resolved_by: actor.clone(),
+            }),
+        });
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: self.now(),
+            expected_version: None,
+            state: Some(state),
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(_) => {}
+            Err(PortError::Conflict(ConflictKind::AlreadyResolved)) => {
+                return Ok(Resolution::AlreadyResolved);
+            }
+            Err(error) => return Err(error),
+        }
+        let endpoint = self.endpoint(slot, session).await?;
+        endpoint
+            .resolve_interaction(interaction, resolution)
+            .await?;
+        self.flush_locked(slot, session).await?;
+        Ok(Resolution::Resolved)
+    }
+
+    /// §4 `ConfigCommands::set_mode`（不带命令幂等键的入口）。返回新会话版本。
+    pub async fn set_mode(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+        mode: ModeId,
+    ) -> Result<Version, PortError> {
+        let request = self.deps.ids.request_id();
+        let command = ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "session.mode.set".to_string(),
+            kind: CommandKind::Mutation,
+            session: Some(self.owned_session(reference)?),
+            expected_version: None,
+            request_fingerprint: self.fingerprint_of(&request)?,
+            payload: CommandPayload::ModeSet { mode: mode.clone() },
+        };
+        let before = self.session_version(&command).await?;
+        let receipt = self.submit_mode_set(actor, &command, &mode).await?;
+        self.outcome_version(&receipt, before, &command).await
+    }
+
+    /// §4 `ConfigCommands::set_config`（不带命令幂等键的入口）。返回新会话版本。
+    pub async fn set_config(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+        id: ConfigOptionId,
+        value: ConfigValue,
+    ) -> Result<Version, PortError> {
+        let request = self.deps.ids.request_id();
+        let command = ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "session.config.set".to_string(),
+            kind: CommandKind::Mutation,
+            session: Some(self.owned_session(reference)?),
+            expected_version: None,
+            request_fingerprint: self.fingerprint_of(&request)?,
+            payload: CommandPayload::ConfigSet {
+                id: id.clone(),
+                value: value.clone(),
+            },
+        };
+        let before = self.session_version(&command).await?;
+        let receipt = self.submit_config_set(actor, &command, &id, value).await?;
+        self.outcome_version(&receipt, before, &command).await
+    }
+
+    /// `session.create`（Node Link 命令，§12.7）。返回 Owner 分配的 `SessionId`。
+    pub async fn create_session(
+        &self,
+        actor: &Actor,
+        request: CreateSessionRequest,
+    ) -> Result<SessionId, PortError> {
+        let audit_request = self.deps.ids.request_id();
+        self.authorize(actor, "session.create", None, &audit_request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let origin_epoch = self.deps.ids.origin_epoch();
+        let commit = OwnedCommit {
+            session: None,
+            at: self.now(),
+            expected_version: None,
+            state: Some(StateChange::Create(NewSession {
+                title: None,
+                agent: request.agent.clone(),
+            })),
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: Some(origin_epoch),
+        };
+        let outcome = self.commit_owned(commit).await?;
+        let Some(session) = outcome.session_id else {
+            return Err(PortError::InvalidRequest(
+                "commit 未返回新建会话的 sessionId",
+            ));
+        };
+        let slot = self.owned_slot(&session);
+        let sink = self.sink(&session);
+        let endpoint: Arc<dyn SessionEndpoint> = self
+            .deps
+            .backends
+            .create(&session, request, sink)
+            .await?
+            .into();
+        *lock(&slot.endpoint) = Some(endpoint);
+        Ok(session)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 查询与重放（§6.12）
+    // -----------------------------------------------------------------------------------------
+
+    /// 一致性读视图（§6.12）：`sync.snapshot_begin`/`snapshot_end` 与随后的增量重放游标必须出自
+    /// **同一个**视图——适配器拿到它以后自己调用 `head()`/`read_session()`/`replay()`。
+    pub async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError> {
+        self.deps.store.read_view().await
+    }
+
+    pub async fn head(&self) -> Result<GlobalCursor, PortError> {
+        self.deps.store.read_view().await?.head().await
+    }
+
+    /// 增量重放：在一个新读视图内完成（`ReplayBatch.head` 即该视图的 barrier）。
+    pub async fn replay(
+        &self,
+        after: Option<GlobalCursor>,
+        limit: ReplayLimit,
+    ) -> Result<ReplayBatch, PortError> {
+        self.deps
+            .store
+            .read_view()
+            .await?
+            .replay(after, limit)
+            .await
+    }
+
+    pub async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {
+        self.deps.store.read_view().await?.read_session(query).await
+    }
+
+    pub async fn retention_window(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<(Sequence, Sequence)>, PortError> {
+        self.deps.store.retention_window(session).await
+    }
+
+    pub async fn command_status(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+    ) -> Result<Option<CommandRecord>, PortError> {
+        self.deps.store.find_request(request, actor).await
+    }
+
+    /// imported 会话的本地重放（只含无正文索引，`NODE_LINK_PROTOCOL.md` §6）。
+    pub async fn remote_replay(
+        &self,
+        after: Option<LocalCursor>,
+        limit: ReplayLimit,
+    ) -> Result<Vec<DeliveryIndexEntry>, PortError> {
+        self.deps.deliveries.local_replay(after, limit).await
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // imported 提交与发布（§6.2）
+    // -----------------------------------------------------------------------------------------
+
+    /// 一条 imported 事件：先 `commit_receipt`（无正文索引），成功后才发布；正文只在内存里转发。
+    ///
+    /// 返回 `true` 表示本次是新行（已发布），`false` 表示同一 `origin_event_id` 的重复投递
+    /// （不新增 `local_sequence`，也不重复发布）。
+    pub async fn deliver_imported(
+        &self,
+        session: RemoteSessionRef,
+        origin: OriginEventRef,
+        origin_sequence: Sequence,
+        event_type: EventType,
+        payload_digest: Digest,
+        payload: Option<EventPayload>,
+    ) -> Result<bool, PortError> {
+        let reference = SessionReference::Remote(session.clone());
+        let slot = self.slot(&reference);
+        let _guard = slot.gate.guard().await;
+        let receipt = DeliveryReceipt {
+            session: session.clone(),
+            origin: origin.clone(),
+            origin_sequence,
+            event_type: event_type.clone(),
+            payload_digest: payload_digest.clone(),
+            at: self.now(),
+        };
+        let outcome: ReceiptOutcome = self.deps.deliveries.commit_receipt(receipt).await?;
+        if outcome.duplicate {
+            return Ok(false);
+        }
+        self.deps.publisher.publish(CommittedDelivery::Imported {
+            session,
+            origin,
+            origin_sequence,
+            local_sequence: outcome.local_sequence,
+            event_type,
+            payload_digest,
+            payload,
+        });
+        Ok(true)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 驱动入口
+    // -----------------------------------------------------------------------------------------
+
+    /// 只落盘缓冲事件（§6.10 的合并窗口由调用方决定，core 不读时钟/不设定时器）。
+    pub async fn flush(&self, session: &SessionId) -> Result<(), PortError> {
+        let slot = self.owned_slot(session);
+        let _guard = slot.gate.guard().await;
+        self.flush_locked(&slot, session).await
+    }
+
+    /// 落盘 + 派发下一个排队 turn，直到该会话无事可做（§6.3/§6.4）。
+    pub async fn pump(&self, session: &SessionId) -> Result<(), PortError> {
+        let slot = self.owned_slot(session);
+        let _guard = slot.gate.guard().await;
+        self.pump_locked(&slot, session).await
+    }
+
+    async fn pump_locked(&self, slot: &Slot, session: &SessionId) -> Result<(), PortError> {
+        loop {
+            self.flush_locked(slot, session).await?;
+            if !self.dispatch_one(slot, session).await? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// 落盘一批后端事件。按**终态事件**切批，保证 §6.10 的"不跨 turn 边界、不延迟终态事件"。
+    async fn flush_locked(&self, slot: &Slot, session: &SessionId) -> Result<(), PortError> {
+        let buffered: Vec<EndpointEvent> = {
+            let mut pending = lock(&slot.pending);
+            std::mem::take(&mut *pending)
+        };
+        if buffered.is_empty() {
+            return Ok(());
+        }
+        let mut chunk: Vec<EndpointEvent> = Vec::new();
+        for event in buffered {
+            if is_turn_terminal(&event.event_type) {
+                // §6.10：合并不得跨 turn 边界、不得延迟终态事件——终态单独成批并立即提交。
+                if !chunk.is_empty() {
+                    self.commit_chunk(slot, session, std::mem::take(&mut chunk))
+                        .await?;
+                }
+                self.commit_chunk(slot, session, vec![event]).await?;
+            } else {
+                chunk.push(event);
+            }
+        }
+        if !chunk.is_empty() {
+            self.commit_chunk(slot, session, chunk).await?;
+        }
+        Ok(())
+    }
+
+    /// 组装并提交一批（以终态结尾或纯增量）后端事件（§6.1 第 1–3 步）。
+    async fn commit_chunk(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        chunk: Vec<EndpointEvent>,
+    ) -> Result<(), PortError> {
+        let at = self.now();
+        let running = slot.running_turn();
+        let running_request = slot.running_request();
+        let running_actor = slot.running_actor();
+        let mut events: Vec<PendingEvent> = Vec::new();
+        let mut turn_change: Option<TurnChange> = None;
+        let mut session_state: Option<SessionState> = None;
+        let mut terminal: Option<(TurnState, CommandStatus)> = None;
+        let mut terminal_request: Option<RequestId> = None;
+        let mut terminal_turn: Option<TurnId> = None;
+        let mut last_view: Option<ViewJson> = None;
+        let mut interactions: Vec<PendingInteractionWrite> = Vec::new();
+        for event in chunk {
+            let turn = event.turn.clone().or_else(|| running.clone());
+            let policy = persistence_policy(&event.event_type);
+            if let Some((turn_state, command_status)) = turn_terminal(&event.event_type) {
+                if let Some(turn_id) = turn.clone() {
+                    turn_change = Some(TurnChange::Update(TurnUpdate {
+                        turn: turn_id.clone(),
+                        state: turn_state,
+                        ended_at: Some(at.clone()),
+                    }));
+                    session_state = Some(turn_session_state(turn_state));
+                    terminal = Some((turn_state, command_status));
+                    terminal_turn = Some(turn_id);
+                    terminal_request = event.causation.clone().or_else(|| running_request.clone());
+                    last_view = Some(event.payload.view.clone());
+                }
+            }
+            // §6 第 13 条：Agent 的权限/elicitation 请求必须**在同一提交里**同时落一条
+            // `kind = interaction` 事件与一条 `PendingInteractionWrite`（`options` 只存在于事件
+            // payload 里，是它的唯一权威来源）。
+            if let Some(kind) = interaction_request_kind(&event.event_type) {
+                let interaction = self.build_interaction(&event, kind, session, &at)?;
+                interactions.push(PendingInteractionWrite {
+                    interaction,
+                    turn: turn.clone(),
+                });
+            }
+            // §6.11：`Ephemeral` 由 `PendingEvent::from_persistence` 直接排除（`None` = 只做内存转发）。
+            if let Some(pending) = PendingEvent::from_persistence(
+                interaction_event_kind(event.kind, &event.event_type),
+                event.event_type.clone(),
+                policy,
+                event.payload,
+                event_origin(&event.event_type, running_actor.as_ref()),
+                turn,
+                event.causation,
+            ) {
+                events.push(pending);
+            }
+        }
+        if events.is_empty() {
+            return Ok(());
+        }
+        let had_terminal = terminal.is_some();
+        let mut command_terminal = None;
+        if let Some((_, status)) = terminal {
+            if let Some(request) = terminal_request.clone() {
+                // §11.2：同一事务内 sequence 上先写领域事件，再写 terminal event。
+                let (event_type, view, error) = match status {
+                    CommandStatus::Failed => (
+                        "command.failed",
+                        view_command_failed(&request, last_view.as_ref())?,
+                        Some(
+                            PublicError::coded(
+                                "internal.unavailable",
+                                "turn 失败，具体原因见同一 causation 的 turn.failed 事件",
+                                false,
+                            )
+                            .map_err(PortError::from)?,
+                        ),
+                    ),
+                    _ => (
+                        "command.completed",
+                        view_command_completed(
+                            &request,
+                            terminal_turn.as_ref().map(|turn| turn.as_str()),
+                        )?,
+                        None,
+                    ),
+                };
+                events.push(pending_event(
+                    event_type,
+                    EventKind::Structured,
+                    view,
+                    terminal_turn.clone(),
+                    Some(request.clone()),
+                    StoredPolicy::Durable,
+                    running_actor.as_ref(),
+                )?);
+                command_terminal = Some(CommandTerminalRecord::try_new(
+                    status,
+                    Some(at.clone()),
+                    None,
+                    None,
+                    error,
+                )?);
+            }
+        }
+        let state = session_state.map(|state| {
+            StateChange::Update(SessionUpdate {
+                state: Some(state),
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            })
+        });
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state,
+            turns: turn_change.into_iter().collect(),
+            events,
+            interactions,
+            idempotency: None,
+            command_terminal,
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                if had_terminal {
+                    slot.finish_turn();
+                }
+                self.publish(&outcome.appended);
+                Ok(())
+            }
+            Err(PortError::Unavailable(_)) => {
+                // §6.9：写失败 → 对应事件一律不发布；相关命令转为 uncertain。
+                if had_terminal {
+                    slot.finish_turn();
+                }
+                if let Some(request) = terminal_request {
+                    self.record_uncertain(
+                        session,
+                        &request,
+                        "事件落盘失败，无法确认已投递给客户端",
+                    )
+                    .await;
+                }
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// 派发一个排队 turn：Queued → Running（`turn.started`）→ 后端 `prompt`。
+    async fn dispatch_one(&self, slot: &Slot, session: &SessionId) -> Result<bool, PortError> {
+        let next = {
+            let mut queue = lock(&slot.queue);
+            if queue.running.is_some() {
+                return Ok(false);
+            }
+            match queue.waiting.pop_front() {
+                Some(next) => {
+                    queue.running = Some(next.turn.clone());
+                    queue.running_request = Some(next.request.clone());
+                    queue.running_actor = Some(next.actor.clone());
+                    next
+                }
+                None => return Ok(false),
+            }
+        };
+        let at = self.now();
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: Some(SessionState::Running),
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            })),
+            turns: vec![TurnChange::Update(TurnUpdate {
+                turn: next.turn.clone(),
+                state: TurnState::Running,
+                ended_at: None,
+            })],
+            events: vec![pending_event(
+                "turn.started",
+                EventKind::State,
+                view_turn(&next.turn, TurnState::Running)?,
+                Some(next.turn.clone()),
+                Some(next.request.clone()),
+                StoredPolicy::Durable,
+                Some(&next.actor),
+            )?],
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => self.publish(&outcome.appended),
+            Err(PortError::Unavailable(_)) => {
+                // turn 仍是 Queued：放回队首，下一次 pump 重试（§6.9 不发布任何东西）。
+                slot.finish_turn();
+                lock(&slot.queue).waiting.push_front(next);
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+        let endpoint = self.endpoint(slot, session).await?;
+        match endpoint.prompt(next.prompt.clone(), at).await {
+            Ok(_) => Ok(true),
+            Err(error) => {
+                let public = self.port_error_public(&error)?;
+                self.fail_turn(slot, session, &next, &public).await?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// 派发失败的 turn：显式终态（`turn.failed` + `command.failed`），不静默重试。
+    async fn fail_turn(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        turn: &QueuedTurn,
+        error: &PublicError,
+    ) -> Result<(), PortError> {
+        let at = self.now();
+        let view = view_turn_error(&turn.turn, error)?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: Some(SessionState::Failed),
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            })),
+            turns: vec![TurnChange::Update(TurnUpdate {
+                turn: turn.turn.clone(),
+                state: TurnState::Failed,
+                ended_at: Some(at.clone()),
+            })],
+            events: vec![
+                pending_event(
+                    "turn.failed",
+                    EventKind::State,
+                    view,
+                    Some(turn.turn.clone()),
+                    Some(turn.request.clone()),
+                    StoredPolicy::Durable,
+                    Some(&turn.actor),
+                )?,
+                pending_event(
+                    "command.failed",
+                    EventKind::Structured,
+                    view_command_failed(&turn.request, None)?,
+                    Some(turn.turn.clone()),
+                    Some(turn.request.clone()),
+                    StoredPolicy::Durable,
+                    Some(&turn.actor),
+                )?,
+            ],
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(CommandTerminalRecord::try_new(
+                CommandStatus::Failed,
+                Some(at),
+                None,
+                None,
+                Some(error.clone()),
+            )?),
+            origin_epoch: None,
+        };
+        slot.finish_turn();
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(())
+            }
+            Err(PortError::Unavailable(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn record_uncertain(&self, session: &SessionId, request: &RequestId, reason: &str) {
+        let Ok(error) = PublicError::coded("command.uncertain", reason, false) else {
+            return;
+        };
+        let Ok(view) = view_command_uncertain(request, reason) else {
+            return;
+        };
+        let Ok(record) = CommandTerminalRecord::try_new(
+            CommandStatus::Uncertain,
+            Some(self.now()),
+            None,
+            None,
+            Some(error.clone()),
+        ) else {
+            return;
+        };
+        // `command.uncertain` 由设备命令引起；这里没有 actor 在作用域里，`event_origin` 按 `Device` 记账。
+        let Ok(event) = pending_event(
+            "command.uncertain",
+            EventKind::Structured,
+            view,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            None,
+        ) else {
+            return;
+        };
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: self.now(),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(record),
+            origin_epoch: None,
+        };
+        if let Ok(outcome) = self.commit_owned(commit).await {
+            self.publish(&outcome.appended);
+        }
+    }
+
+    /// 打开（或复用）该会话的后端端点（§5.1）。
+    ///
+    /// owned 会话复用 [`Broker::sink`] 并把事件交给本会话的串行队列；imported 会话的后端由持有
+    /// Node Link attachment 的 facade 在同一组合根内直接持有（§5.2 的 imported 分流），core 不为它
+    /// 开端点。
+    pub async fn endpoint_for(
+        &self,
+        reference: &SessionReference,
+    ) -> Result<Arc<dyn SessionEndpoint>, PortError> {
+        match reference {
+            SessionReference::Owned(owned) => {
+                let session = owned.session_id.clone();
+                let slot = self.owned_slot(&session);
+                self.endpoint(&slot, &session).await
+            }
+            SessionReference::Remote(_) => Err(PortError::InvalidRequest(
+                "imported 会话的后端由持有 attachment 的 facade 持有",
+            )),
+        }
+    }
+
+    async fn endpoint(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+    ) -> Result<Arc<dyn SessionEndpoint>, PortError> {
+        if let Some(endpoint) = lock(&slot.endpoint).clone() {
+            return Ok(endpoint);
+        }
+        let sink = self.sink(session);
+        let reference = Self::reference_of(session);
+        let endpoint: Arc<dyn SessionEndpoint> =
+            self.deps.backends.open(reference, sink).await?.into();
+        *lock(&slot.endpoint) = Some(endpoint.clone());
+        Ok(endpoint)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // mutation 管道的公共步骤
+    // -----------------------------------------------------------------------------------------
+
+    /// §6.6：幂等键是协议维度的 `(actor, requestId)`。命中且五项指纹全同 → 返回首次结果、不二次派发；
+    /// 任一不同 → `command.idempotency_conflict`。
+    async fn idempotency(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+    ) -> Result<Option<CommandReceipt>, PortError> {
+        let Some(record) = self
+            .deps
+            .store
+            .find_request(&command.request, actor)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let same = record.command() == command.command
+            && record.kind() == command.kind
+            && record.session().map(|session| session.as_str())
+                == command.session.as_ref().map(|session| session.as_str())
+            && record.expected_version() == command.expected_version
+            && record.request_fingerprint() == &command.request_fingerprint;
+        if !same {
+            return self
+                .reject(
+                    "command.idempotency_conflict",
+                    "同一 requestId 已用于不同的命令或载荷",
+                    false,
+                )
+                .map(Some);
+        }
+        // 仍为 accepted 的 mutation：从该会话的非终态 turn 里恢复原 turnId（§11.5 的 accepted{turnId}）。
+        let turn = match (record.session(), record.status()) {
+            (Some(session), CommandStatus::Accepted) if record.kind() == CommandKind::Mutation => {
+                self.turn_for_request(session, &command.request).await?
+            }
+            _ => None,
+        };
+        Ok(Some(CommandReceipt::Accepted {
+            request: command.request.clone(),
+            turn,
+        }))
+    }
+
+    /// 在会话的未终态 turn 里找 `causation == request` 的那个（幂等重放用）。
+    async fn turn_for_request(
+        &self,
+        session: &SessionId,
+        request: &RequestId,
+    ) -> Result<Option<TurnId>, PortError> {
+        let query = HistoryQuery {
+            session: session.clone(),
+            include: HistoryInclude {
+                turns: true,
+                ..HistoryInclude::default()
+            },
+            after: None,
+            limit: ReplayLimit::new(64),
+        };
+        let page = self
+            .deps
+            .store
+            .read_view()
+            .await?
+            .read_session(query)
+            .await?;
+        Ok(page
+            .turns
+            .iter()
+            .find(|turn| {
+                turn.causation()
+                    .map(|causation| causation == request)
+                    .unwrap_or(false)
+            })
+            .map(|turn| turn.id().clone()))
+    }
+
+    /// 接受提交（§6.1/§6.9）：先落盘并发布，失败即显式拒绝且**不派发**。
+    async fn accept(
+        &self,
+        actor: &Actor,
+        command: &ClientCommand,
+        session: &SessionId,
+        state: Option<StateChange>,
+        turns: Vec<TurnChange>,
+        events: Vec<PendingEvent>,
+    ) -> Result<Accept, PortError> {
+        let at = self.now();
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: command.expected_version,
+            state,
+            turns,
+            events,
+            interactions: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: command.request.clone(),
+                command: command.command.clone(),
+                kind: command.kind,
+                session: Some(session.clone()),
+                expected_version: command.expected_version,
+                request_fingerprint: command.request_fingerprint.clone(),
+                accepted_at: at.clone(),
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                if let Some(replayed) = &outcome.replayed {
+                    // 竞态：另一路径已经用同一幂等键落盘（§5.2 的 `replayed`），不二次派发。
+                    let turn = match replayed.record.session() {
+                        Some(session) => self.turn_for_request(session, &command.request).await?,
+                        None => None,
+                    };
+                    return Ok(Accept::Done(CommandReceipt::Accepted {
+                        request: command.request.clone(),
+                        turn,
+                    }));
+                }
+                self.publish(&outcome.appended);
+                Ok(Accept::Committed)
+            }
+            Err(PortError::Unavailable(_)) => Ok(Accept::Done(self.reject(
+                "internal.unavailable",
+                "命令未落盘，未产生任何副作用",
+                true,
+            )?)),
+            Err(PortError::Conflict(ConflictKind::VersionMismatch)) => {
+                let current = self.session_version_of(session).await?;
+                Ok(Accept::Done(
+                    self.version_conflict_receipt(current, command)?,
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// 只改会话状态（模式/配置切换）的提交 + 终态命令事件。
+    async fn apply_state(
+        &self,
+        session: &SessionId,
+        state: StateChange,
+        command: &ClientCommand,
+    ) -> Result<CommitOutcome, PortError> {
+        let at = self.now();
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: Some(state),
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        let version = outcome.version;
+        // §6.1：先发布状态提交，再提交并发布终态（§11.2：终端事件在状态变化之后）。
+        self.publish(&outcome.appended);
+        self.commit_terminal(
+            session,
+            command,
+            CommandStatus::Completed,
+            None,
+            Some(version),
+            &at,
+        )
+        .await?;
+        Ok(outcome)
+    }
+
+    /// 终态提交（§11.2：终态只通过一个持久化的 `command.*` 事件表达）。
+    async fn commit_terminal(
+        &self,
+        session: &SessionId,
+        command: &ClientCommand,
+        status: CommandStatus,
+        error: Option<PublicError>,
+        version: Option<Version>,
+        at: &Timestamp,
+    ) -> Result<(), PortError> {
+        if !status.is_terminal() {
+            return Err(PortError::InvalidRequest("命令终态必须是终止态"));
+        }
+        let request = &command.request;
+        let result_text = version.as_ref().map(version_text);
+        let (event_type, view) = match status {
+            CommandStatus::Completed => (
+                "command.completed",
+                view_command_completed(request, result_text.as_deref())?,
+            ),
+            CommandStatus::Failed => ("command.failed", view_command_failed(request, None)?),
+            CommandStatus::Uncertain => (
+                "command.uncertain",
+                view_command_uncertain(request, "无法确认副作用")?,
+            ),
+            _ => return Err(PortError::InvalidRequest("命令终态必须是终止态")),
+        };
+        let events = vec![pending_event(
+            event_type,
+            EventKind::Structured,
+            view,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            Some(&command.actor),
+        )?];
+        let record = CommandTerminalRecord::try_new(status, Some(at.clone()), None, None, error)?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events,
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(record),
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(())
+            }
+            Err(PortError::Unavailable(_)) => {
+                self.record_uncertain(session, request, "终态落盘失败")
+                    .await;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// 权限解析：optionId 必须来自该未解决请求（§11.5），`kind` 由请求里的 `InteractionOption.kind`
+    /// 决定（core 不发明分类）。
+    async fn permission_resolution(
+        &self,
+        session: &SessionId,
+        interaction: &InteractionId,
+        option_id: &str,
+    ) -> Result<Result<InteractionResolution, CommandReceipt>, PortError> {
+        let query = HistoryQuery {
+            session: session.clone(),
+            include: HistoryInclude {
+                pending_interactions: true,
+                ..HistoryInclude::default()
+            },
+            after: None,
+            limit: ReplayLimit::new(64),
+        };
+        let page = self
+            .deps
+            .store
+            .read_view()
+            .await?
+            .read_session(query)
+            .await?;
+        let Some(pending) = page
+            .interactions
+            .iter()
+            .find(|item| item.id() == interaction)
+        else {
+            return Ok(Err(self.reject(
+                "command.not_found",
+                "交互不存在或已经终态",
+                false,
+            )?));
+        };
+        let Some(option) = pending
+            .options()
+            .iter()
+            .find(|option| option.option_id() == option_id)
+        else {
+            return Ok(Err(self.reject(
+                "capability.unsupported_by_broker",
+                "optionId 不属于该未解决请求",
+                false,
+            )?));
+        };
+        let Some(kind) = permission_kind(option.kind()) else {
+            return Ok(Err(self.reject(
+                "capability.unsupported_by_broker",
+                "该权限选项的 kind 无法映射为 AllowOnce/AllowAlways/RejectOnce/RejectAlways",
+                false,
+            )?));
+        };
+        let decision = PermissionDecision::try_new(option_id, kind).map_err(PortError::from)?;
+        Ok(Ok(InteractionResolution::permission(decision)))
+    }
+
+    fn is_active(state: SessionState) -> bool {
+        matches!(
+            state,
+            SessionState::Queued
+                | SessionState::Running
+                | SessionState::WaitingInput
+                | SessionState::WaitingPermission
+        )
+    }
+
+    fn publish(&self, events: &[CommittedEvent]) {
+        for event in events {
+            self.deps
+                .publisher
+                .publish(CommittedDelivery::Owned(event.clone()));
+        }
+    }
+
+    /// 组装一条 pending 交互行（§6 第 13 条）。
+    ///
+    /// id 优先取事件 payload 里的 `interactionId`（客户端用同一个 id 应答），缺失时用
+    /// `IdGenerator::interaction_id` 生成。`options` 不落库，因此这里固定为空——它们的唯一权威来源
+    /// 是同一提交里那条事件的 payload（§6 第 13 条末句）。
+    fn build_interaction(
+        &self,
+        event: &EndpointEvent,
+        kind: InteractionKind,
+        session: &SessionId,
+        at: &Timestamp,
+    ) -> Result<PendingInteraction, PortError> {
+        let id = match view_interaction_id(&event.payload.view) {
+            Some(id) => id,
+            None => self.deps.ids.interaction_id(),
+        };
+        PendingInteraction::try_new(id, kind, session.clone(), at.clone(), Vec::new())
+            .map_err(PortError::from)
+    }
+
+    /// 唯一的落盘漏斗：先做 §9 判据 15 的互斥校验，再交给存储层。
+    ///
+    /// 同一提交里 `interactions` 非空**且** `state.interaction` 为 `Some` → `InvalidRequest`：
+    /// 创建与解析是两条互斥路径（§6 第 13 条），同时出现意味着组装出了自相矛盾的事务。
+    async fn commit_owned(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        let resolving = commit
+            .state
+            .as_ref()
+            .map(|state| match state {
+                StateChange::Update(update) => update.interaction.is_some(),
+                StateChange::Create(_) => false,
+            })
+            .unwrap_or(false);
+        if resolving && !commit.interactions.is_empty() {
+            return Err(PortError::InvalidRequest(
+                "同一提交不得同时创建与解析交互（§6 第 13 条 / §9 判据 15）",
+            ));
+        }
+        self.deps.store.commit(commit).await
+    }
+
+    fn reject(
+        &self,
+        code: &str,
+        message: &str,
+        retryable: bool,
+    ) -> Result<CommandReceipt, PortError> {
+        let error = PublicError::coded(code, message, retryable).map_err(PortError::from)?;
+        Ok(CommandReceipt::Rejected { error })
+    }
+
+    fn version_conflict(
+        &self,
+        current: u64,
+        command: &ClientCommand,
+    ) -> Result<CommandReceipt, PortError> {
+        let error = PublicError::try_new(
+            "state.version_conflict",
+            "该会话正在执行 turn，模式/配置切换只在 turn 边界生效",
+            true,
+            view_version_conflict(current, command.expected_version.as_ref()),
+        )
+        .map_err(PortError::from)?;
+        Ok(CommandReceipt::Rejected { error })
+    }
+
+    fn version_conflict_receipt(
+        &self,
+        current: u64,
+        command: &ClientCommand,
+    ) -> Result<CommandReceipt, PortError> {
+        self.version_conflict(current, command)
+    }
+
+    /// `PortError` → 命令级 `PublicError`（适配器再映射到 wire 错误码）。
+    fn port_error_public(&self, error: &PortError) -> Result<PublicError, PortError> {
+        let (code, message, retryable) = match error {
+            PortError::NotFound(_) => ("command.not_found", "目标不存在", false),
+            PortError::Conflict(ConflictKind::VersionMismatch) => {
+                ("state.version_conflict", "版本冲突", true)
+            }
+            PortError::Conflict(ConflictKind::AlreadyResolved) => {
+                ("interaction.already_resolved", "交互已经解析", false)
+            }
+            PortError::Conflict(ConflictKind::IdempotencyConflict) => (
+                "command.idempotency_conflict",
+                "同一 requestId 已用于不同命令",
+                false,
+            ),
+            PortError::Conflict(_) => ("internal.unavailable", "状态冲突", false),
+            PortError::InvalidRequest(_) => ("protocol.schema_invalid", "请求不合法", false),
+            PortError::Corrupt(_) => ("internal.unavailable", "存储不可用", true),
+            PortError::Unavailable(UnavailableKind::RemoteUnavailable) => {
+                ("resource.remote_unavailable", "远端不可达", true)
+            }
+            PortError::Unavailable(_) => ("internal.unavailable", "存储或后端不可用", true),
+            PortError::Backend(_) => ("internal.unavailable", "后端失败", true),
+        };
+        PublicError::coded(code, message, retryable).map_err(PortError::from)
+    }
+
+    fn owned_session(&self, reference: &SessionReference) -> Result<SessionId, PortError> {
+        match reference {
+            SessionReference::Owned(owned) => Ok(owned.session_id.clone()),
+            SessionReference::Remote(_) => Err(PortError::InvalidRequest(
+                "imported 会话的 mutation 由持有 attachment 的 facade 转发给 Owner",
+            )),
+        }
+    }
+
+    async fn session_version(&self, command: &ClientCommand) -> Result<u64, PortError> {
+        match command.session.as_ref() {
+            Some(session) => self.session_version_of(session).await,
+            None => Ok(0),
+        }
+    }
+
+    async fn session_version_of(&self, session: &SessionId) -> Result<u64, PortError> {
+        Ok(self
+            .deps
+            .store
+            .load(session)
+            .await?
+            .map(|snapshot| snapshot.session.version().get())
+            .unwrap_or(0))
+    }
+
+    /// `set_mode`/`set_config` 的返回值：命令被拒绝时返回当前版本，否则返回提交后的版本。
+    async fn outcome_version(
+        &self,
+        receipt: &CommandReceipt,
+        before: u64,
+        command: &ClientCommand,
+    ) -> Result<Version, PortError> {
+        match receipt {
+            CommandReceipt::Accepted { .. } => match command.session.as_ref() {
+                Some(session) => {
+                    let after = self.session_version_of(session).await?;
+                    Ok(Version::from(after))
+                }
+                None => Ok(Version::from(before)),
+            },
+            CommandReceipt::Rejected { .. } => Ok(Version::from(before)),
+        }
+    }
+
+    /// 不带 wire 指纹的入口（[`Broker::set_mode`]/[`Broker::set_config`]）用一次性 requestId，
+    /// 因此不存在"同 requestId 二次提交"的比对场景。core 无密码学依赖（§2），这里写一个规范的
+    /// 空摘要作为占位（32 个零字节的 base64url，无填充、末字符落在规范集合内）——它不冒充 ACPR-CJ1，
+    /// wire 侧一律由适配器填 `ClientCommand.request_fingerprint`。
+    fn fingerprint_of(&self, request: &RequestId) -> Result<Digest, PortError> {
+        let _ = request;
+        Digest::new(PLACEHOLDER_FINGERPRINT).map_err(PortError::from)
+    }
+}
+
+/// 接受阶段的两种出路：已经落盘（可以派发），或者就地返回一张回执（拒绝/幂等命中）。
+enum Accept {
+    Committed,
+    Done(CommandReceipt),
+}
+
+/// `InteractionOption.kind`（ACP 的 `PermissionOptionKind`，`SECURITY_DESIGN.md`/ACP schema 的
+/// snake_case 取值）→ `PermissionDecisionKind`。未知取值不猜（调用方按 `capability.unsupported_by_broker`
+/// 拒绝），避免把用户意图翻译错。
+fn permission_kind(kind: &str) -> Option<PermissionDecisionKind> {
+    match kind {
+        "allow_once" | "allow-once" | "allowOnce" => Some(PermissionDecisionKind::AllowOnce),
+        "allow_always" | "allow-always" | "allowAlways" => {
+            Some(PermissionDecisionKind::AllowAlways)
+        }
+        "reject_once" | "reject-once" | "rejectOnce" => Some(PermissionDecisionKind::RejectOnce),
+        "reject_always" | "reject-always" | "rejectAlways" => {
+            Some(PermissionDecisionKind::RejectAlways)
+        }
+        _ => None,
+    }
+}
+
+/// 事件产生者判定（`SYNC_PROTOCOL.md` §10.1 的 `origin.kind`）——**唯一实现**：broker 组装每条事件时都用它，
+/// 不按「有没有会话」猜，也不散在提交点里。
+///
+/// - 后端 / Agent 产生（增量、工具、交互请求、计划/命令目录/用量/连接状态…）→ [`EventOrigin::Agent`]；
+/// - 由设备命令引起（`permission.resolved`、`elicitation.resolved`、`turn.*`、`command.*`、模式/配置变更）
+///   → [`EventOrigin::Device`]；`Actor::LocalCli` 引起时 → [`EventOrigin::LocalCli`]。
+///   这些类型在 core 里**只**由命令路径产生，因此 actor 缺失时按 `Device` 记账；
+/// - daemon 自身事件（没有请求 actor 的 `device.revoked`、`session.origin.online_changed`、
+///   `storage.integrity_failed`）→ [`EventOrigin::Daemon`]。
+fn event_origin(event_type: &EventType, actor: Option<&Actor>) -> EventOrigin {
+    match event_type.as_str() {
+        "device.revoked" | "session.origin.online_changed" | "storage.integrity_failed" => {
+            EventOrigin::Daemon
+        }
+        "permission.resolved"
+        | "elicitation.resolved"
+        | "turn.queued"
+        | "turn.started"
+        | "turn.completed"
+        | "turn.cancelled"
+        | "turn.failed"
+        | "command.completed"
+        | "command.failed"
+        | "command.uncertain"
+        | "session.mode.changed"
+        | "session.config.changed" => match actor {
+            Some(Actor::LocalCli) => EventOrigin::LocalCli,
+            Some(_) | None => EventOrigin::Device,
+        },
+        _ => EventOrigin::Agent,
+    }
+}
+
+fn is_turn_terminal(event_type: &EventType) -> bool {
+    turn_terminal(event_type).is_some()
+}
+
+/// 交互请求事件 → `InteractionKind`（§10.2 的 `permission.requested`/`elicitation.requested`）。
+fn interaction_request_kind(event_type: &EventType) -> Option<InteractionKind> {
+    match event_type.as_str() {
+        "permission.requested" => Some(InteractionKind::Permission),
+        "elicitation.requested" => Some(InteractionKind::Elicitation),
+        _ => None,
+    }
+}
+
+/// 交互事件必须是 `kind = interaction`（§6 第 13 条）：后端若把它标成别的类别，这里按事件类型纠正。
+fn interaction_event_kind(kind: EventKind, event_type: &EventType) -> EventKind {
+    if interaction_request_kind(event_type).is_some() {
+        EventKind::Interaction
+    } else {
+        kind
+    }
+}
+
+/// 从事件 payload 里读 `interactionId`（`agent-host` 组装的 view 携带它）；读不到时返回 `None`。
+fn view_interaction_id(view: &ViewJson) -> Option<InteractionId> {
+    let members = json_members(view.as_str()).ok()?;
+    let raw = members
+        .into_iter()
+        .find(|(name, _)| name == "interactionId")
+        .map(|(_, raw)| raw)?;
+    let text = json_string(raw)?;
+    InteractionId::new(&text).ok()
+}
+
+/// turn 终态事件 → `(turn 状态, 命令终态)`。
+fn turn_terminal(event_type: &EventType) -> Option<(TurnState, CommandStatus)> {
+    match event_type.as_str() {
+        "turn.completed" => Some((TurnState::Completed, CommandStatus::Completed)),
+        // 取消是"请求生效"而不是失败：prompt 命令以完成收尾（§11.5）。
+        "turn.cancelled" => Some((TurnState::Cancelled, CommandStatus::Completed)),
+        "turn.failed" => Some((TurnState::Failed, CommandStatus::Failed)),
+        _ => None,
+    }
+}
+
+fn turn_session_state(turn: TurnState) -> SessionState {
+    match turn {
+        TurnState::Failed => SessionState::Failed,
+        _ => SessionState::Idle,
+    }
+}
+
+fn mode_ref(mode: &ModeId) -> Result<ModeRef, PortError> {
+    // displayName 由 ACP 的 ModeState 给出，core 侧没有模式枚举端口（§5.1 无 list_modes）；
+    // 这里以 modeId 兜底，展示名由前端用 `session.mode.list` 结果覆盖（§11.5 的 ModeState）。
+    ModeRef::try_new(mode.clone(), mode.as_str()).map_err(PortError::from)
+}
+
+fn view(text: String) -> Result<ViewJson, PortError> {
+    ViewJson::new(&text).map_err(PortError::from)
+}
+
+fn view_turn(turn: &TurnId, state: TurnState) -> Result<ViewJson, PortError> {
+    view(format!(
+        r#"{{"turnId":"{}","state":"{}"}}"#,
+        turn.as_str(),
+        state.as_str()
+    ))
+}
+
+fn view_turn_error(turn: &TurnId, error: &PublicError) -> Result<ViewJson, PortError> {
+    view(format!(
+        r#"{{"turnId":"{}","state":"failed","error":{}}}"#,
+        turn.as_str(),
+        error.details().as_str()
+    ))
+}
+
+fn view_command_completed(
+    request: &RequestId,
+    result: Option<&str>,
+) -> Result<ViewJson, PortError> {
+    let result = match result {
+        Some(text) => format!(r#"{{"turnId":"{text}"}}"#),
+        None => "{}".to_string(),
+    };
+    view(format!(
+        r#"{{"requestId":"{}","result":{result}}}"#,
+        request.as_str()
+    ))
+}
+
+fn view_command_failed(
+    request: &RequestId,
+    details: Option<&ViewJson>,
+) -> Result<ViewJson, PortError> {
+    let details = details.map(ViewJson::as_str).unwrap_or("{}");
+    view(format!(
+        r#"{{"requestId":"{}","error":{{"code":"internal.unavailable","message":"turn 失败","retryable":false,"details":{details}}}}}"#,
+        request.as_str()
+    ))
+}
+
+fn view_command_uncertain(request: &RequestId, reason: &str) -> Result<ViewJson, PortError> {
+    view(format!(
+        r#"{{"requestId":"{}","reason":"{}","mayHaveReachedAgent":true}}"#,
+        request.as_str(),
+        reason
+    ))
+}
+
+fn view_version_conflict(current: u64, expected: Option<&Version>) -> ViewJson {
+    let expected = match expected {
+        Some(version) => format!("\"{}\"", version_text(version)),
+        None => "null".to_string(),
+    };
+    ViewJson::new(&format!(
+        r#"{{"expectedVersion":{expected},"currentVersion":"{current}"}}"#
+    ))
+    .unwrap_or_else(|_| ViewJson::empty_object())
+}
+
+fn version_text(version: &Version) -> String {
+    version.get().to_string()
+}
+
+#[allow(clippy::too_many_arguments)] // 事件组装的完整形状（含 §10.1 的 origin 判定）
+fn pending_event(
+    event_type: &str,
+    kind: EventKind,
+    view: ViewJson,
+    turn: Option<TurnId>,
+    causation: Option<RequestId>,
+    policy: StoredPolicy,
+    actor: Option<&Actor>,
+) -> Result<PendingEvent, PortError> {
+    let event_type = EventType::new(event_type).map_err(PortError::from)?;
+    let origin = event_origin(&event_type, actor);
+    Ok(PendingEvent {
+        kind,
+        event_type,
+        policy,
+        payload: EventPayload { view, acp: None },
+        origin,
+        turn,
+        causation,
+    })
+}
+// ---------------------------------------------------------------------------------------------
+// 测试替身（内存 fake 端口）
+// ---------------------------------------------------------------------------------------------
+
+/// 内存 fake 端口。
+///
+/// 这些替身同时是契约的可执行说明：`FakeStore::commit` 按 §5.2 与 [`OwnedCommit`] 的文档实现
+/// 「接受提交 vs 终态提交」「幂等命中回放」「交互条件更新」三条语义，broker 的行为断言都建立在它们
+/// 之上。它们**不是** `storage-sqlite` 的替代品（不做 migration、PRAGMA、保留与容量）。
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::collections::{HashMap, VecDeque};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+    use std::task::{Context, Poll, Waker};
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::model::{
+        AgentDescriptor, AgentId, AgentRef, AttachmentGeneration, AttachmentId, AuditRecord,
+        CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId, ExportRecord,
+        ImportId, ImportRecord, NodeId, NodeRecord, OriginCursor, OriginEpoch, PairingClaim,
+        PairingId, PairingRecord, PairingSettlement, PendingInteraction, ResourceOrigin,
+        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+    };
+    use crate::ports::{
+        AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DropReport,
+        IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord, PairingClaimOutcome,
+        PruneReport, RemoteCommandRef, RetentionPolicy, RevokeReason, SessionQuery, StoreHealth,
+        TrustRecordRef, TrustStore, TurnAccepted,
+    };
+
+    pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn uuid_text(n: u64) -> String {
+        format!("00000000-0000-4000-8000-{n:012}")
+    }
+
+    /// 合法的 43 字符规范 base64url 摘要（末字符低 2 位为 0）。
+    pub(crate) fn digest(seed: char) -> Digest {
+        let mut text: String = std::iter::repeat_n(seed, 42).collect();
+        text.push('A');
+        Digest::new(&text).expect("43 字符规范 base64url")
+    }
+
+    pub(crate) fn ts(seconds: u32) -> Timestamp {
+        let minutes = seconds / 60;
+        let seconds = seconds % 60;
+        Timestamp::new(&format!("2026-09-18T00:{minutes:02}:{seconds:02}.000Z"))
+            .expect("合法时间戳")
+    }
+
+    pub(crate) fn json_view(text: &str) -> ViewJson {
+        ViewJson::new(text).expect("object 视图")
+    }
+
+    pub(crate) fn endpoint_event(kind: EventKind, event_type: &str, view: &str) -> EndpointEvent {
+        EndpointEvent {
+            kind,
+            event_type: EventType::new(event_type).expect("合法事件类型"),
+            payload: EventPayload {
+                view: json_view(view),
+                acp: None,
+            },
+            turn: None,
+            causation: None,
+            at: ts(0),
+        }
+    }
+
+    pub(crate) fn turn_view(state: &str) -> String {
+        format!(r#"{{"turnId":"{}","state":"{state}"}}"#, uuid_text(0))
+    }
+
+    pub(crate) fn prompt_command(
+        actor: &Actor,
+        session: &SessionId,
+        request: &RequestId,
+        fingerprint: char,
+    ) -> ClientCommand {
+        ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "session.prompt".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(session.clone()),
+            expected_version: None,
+            request_fingerprint: digest(fingerprint),
+            payload: CommandPayload::Prompt {
+                content: vec![PromptContentBlock::new(json_view(
+                    r#"{"type":"text","text":"hi"}"#,
+                ))],
+            },
+        }
+    }
+
+    pub(crate) fn mode_command(
+        actor: &Actor,
+        session: &SessionId,
+        request: &RequestId,
+        expected_version: Version,
+    ) -> ClientCommand {
+        ClientCommand {
+            actor: actor.clone(),
+            request: request.clone(),
+            command: "session.mode.set".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(session.clone()),
+            expected_version: Some(expected_version),
+            request_fingerprint: digest('C'),
+            payload: CommandPayload::ModeSet {
+                mode: ModeId::new("code").expect("mode id"),
+            },
+        }
+    }
+
+    pub(crate) fn server_epoch_of(n: u64) -> ServerEpoch {
+        ServerEpoch::new(&uuid_text(n)).expect("server epoch")
+    }
+
+    pub(crate) fn origin_epoch_of(n: u64) -> OriginEpoch {
+        OriginEpoch::new(&uuid_text(n)).expect("origin epoch")
+    }
+
+    pub(crate) fn head_cursor(sequence: u64) -> GlobalCursor {
+        GlobalCursor {
+            server_epoch: server_epoch_of(999),
+            global_sequence: Sequence::new(sequence).expect("sequence"),
+        }
+    }
+
+    pub(crate) fn command_key(actor: &Actor, request: &RequestId) -> String {
+        format!("{}|{}", actor.id_text(), request.as_str())
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 共享世界
+    // -----------------------------------------------------------------------------------------
+
+    /// 所有 fake 端口共享的状态：让「发布时事件是否已落盘」这类顺序断言可以直接观察。
+    #[derive(Default)]
+    pub(crate) struct FakeWorld {
+        pub(crate) state: Mutex<WorldState>,
+        pub(crate) commits: AtomicUsize,
+        pub(crate) read_views: AtomicUsize,
+        pub(crate) prompts: AtomicUsize,
+        pub(crate) prompt_trace: Mutex<Vec<String>>,
+        pub(crate) published: Mutex<Vec<Published>>,
+        pub(crate) receipts: Mutex<Vec<DeliveryReceipt>>,
+        pub(crate) script: Mutex<VecDeque<Script>>,
+        pub(crate) audits: Mutex<Vec<AuditRecord>>,
+        pub(crate) batches: Mutex<Vec<BatchRecord>>,
+        pub(crate) config_calls: AtomicUsize,
+        pub(crate) exports: Mutex<Vec<ExportRecord>>,
+        pub(crate) imports: Mutex<Vec<ImportRecord>>,
+        pub(crate) imported_sessions: Mutex<Vec<ImportedSessionRecord>>,
+        pub(crate) acked: Mutex<Vec<OriginCursor>>,
+        pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
+    }
+
+    #[derive(Default)]
+    pub(crate) struct WorldState {
+        pub(crate) sessions: HashMap<String, Session>,
+        pub(crate) turns: HashMap<String, Vec<Turn>>,
+        pub(crate) events: Vec<CommittedEvent>,
+        pub(crate) commands: HashMap<String, CommandRecord>,
+        pub(crate) interactions: HashMap<String, InteractionRow>,
+        pub(crate) epochs: HashMap<String, OriginEpoch>,
+        /// 事件 id → 持久化正文（fake 的 `ReadView::event_payload` 数据源）。
+        pub(crate) event_payloads: HashMap<String, EventPayload>,
+        /// 事件 id → `origin.kind`（fake 记录 broker 写入的 origin，供 §10.1 断言）。
+        pub(crate) event_origins: HashMap<String, EventOrigin>,
+        pub(crate) head: u64,
+        pub(crate) per_session_seq: HashMap<String, u64>,
+        pub(crate) next_id: u64,
+        /// 指定第 N 次 `commit` 返回 `Unavailable`（脚本化失败）。
+        pub(crate) fail_at: Option<usize>,
+    }
+
+    pub(crate) struct InteractionRow {
+        pub(crate) pending: PendingInteraction,
+        pub(crate) resolution: Option<InteractionResolved>,
+    }
+
+    /// 一次提交里的事件类型序列（§6.10 的合批断言）。
+    #[derive(Clone)]
+    pub(crate) struct BatchRecord {
+        pub(crate) session: Option<String>,
+        pub(crate) types: Vec<String>,
+    }
+
+    /// 一次发布：`store_had_it` 断言「先提交后发布」（§6.1/§6.2）。
+    pub(crate) struct Published {
+        pub(crate) delivery: CommittedDelivery,
+        pub(crate) store_had_it: bool,
+    }
+
+    /// 后端脚本：一次 `prompt` 要发的事件序列；`yield_polls` 让出若干次以暴露交错。
+    #[derive(Clone)]
+    pub(crate) struct Script {
+        pub(crate) events: Vec<EndpointEvent>,
+        pub(crate) yield_polls: usize,
+    }
+
+    impl Script {
+        pub(crate) fn new(events: Vec<EndpointEvent>) -> Self {
+            Self {
+                events,
+                yield_polls: 0,
+            }
+        }
+
+        pub(crate) fn yielding(events: Vec<EndpointEvent>, yield_polls: usize) -> Self {
+            Self {
+                events,
+                yield_polls,
+            }
+        }
+    }
+
+    impl FakeWorld {
+        pub(crate) fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        pub(crate) fn fail_commit_at(&self, index: usize) {
+            lock(&self.state).fail_at = Some(index);
+        }
+
+        pub(crate) fn fail_next_commit(&self) {
+            let next = self.commits.load(Ordering::SeqCst) + 1;
+            lock(&self.state).fail_at = Some(next);
+        }
+
+        pub(crate) fn push_script(&self, script: Script) {
+            lock(&self.script).push_back(script);
+        }
+
+        pub(crate) fn prompt_count(&self) -> usize {
+            self.prompts.load(Ordering::SeqCst)
+        }
+
+        pub(crate) fn prompt_trace(&self) -> Vec<String> {
+            lock(&self.prompt_trace).clone()
+        }
+
+        pub(crate) fn commit_count(&self) -> usize {
+            self.commits.load(Ordering::SeqCst)
+        }
+
+        pub(crate) fn read_view_count(&self) -> usize {
+            self.read_views.load(Ordering::SeqCst)
+        }
+
+        pub(crate) fn publish_count(&self) -> usize {
+            lock(&self.published).len()
+        }
+
+        pub(crate) fn published(&self) -> Vec<CommittedDelivery> {
+            lock(&self.published)
+                .iter()
+                .map(|item| item.delivery.clone())
+                .collect()
+        }
+
+        /// 每次发布时，对应事件/收据是否已经落盘（§6.1/§6.2 的顺序断言）。
+        pub(crate) fn published_after_commit(&self) -> bool {
+            lock(&self.published).iter().all(|item| item.store_had_it)
+        }
+
+        pub(crate) fn batches(&self) -> Vec<BatchRecord> {
+            lock(&self.batches).clone()
+        }
+
+        pub(crate) fn batch_types(&self) -> Vec<Vec<String>> {
+            self.batches()
+                .into_iter()
+                .map(|batch| batch.types)
+                .collect()
+        }
+
+        pub(crate) fn event_types(&self, session: &SessionId) -> Vec<String> {
+            self.batches()
+                .into_iter()
+                .filter(|batch| batch.session.as_deref() == Some(session.as_str()))
+                .flat_map(|batch| batch.types)
+                .collect()
+        }
+
+        pub(crate) fn command(&self, request: &RequestId) -> Option<CommandRecord> {
+            lock(&self.state)
+                .commands
+                .iter()
+                .find(|(key, _)| key.ends_with(request.as_str()))
+                .map(|(_, record)| record.clone())
+        }
+
+        pub(crate) fn session(&self, session: &SessionId) -> Option<Session> {
+            lock(&self.state).sessions.get(session.as_str()).cloned()
+        }
+
+        pub(crate) fn turns(&self, session: &SessionId) -> Vec<Turn> {
+            lock(&self.state)
+                .turns
+                .get(session.as_str())
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        pub(crate) fn events(&self, session: &SessionId) -> Vec<CommittedEvent> {
+            lock(&self.state)
+                .events
+                .iter()
+                .filter(|event| {
+                    event.session.as_ref().map(|id| id.as_str()) == Some(session.as_str())
+                })
+                .cloned()
+                .collect()
+        }
+
+        pub(crate) fn receipts(&self) -> Vec<DeliveryReceipt> {
+            lock(&self.receipts).clone()
+        }
+
+        pub(crate) fn audits(&self) -> Vec<AuditRecord> {
+            lock(&self.audits).clone()
+        }
+
+        pub(crate) fn config_calls(&self) -> usize {
+            self.config_calls.load(Ordering::SeqCst)
+        }
+
+        /// 某条事件落库时的 `origin.kind`（§10.1）。
+        pub(crate) fn event_origin(&self, id: &EventId) -> Option<EventOrigin> {
+            lock(&self.state).event_origins.get(id.as_str()).copied()
+        }
+
+        pub(crate) fn seed_session(&self, session: Session) {
+            let mut state = lock(&self.state);
+            let id = session.id().clone();
+            state
+                .epochs
+                .insert(id.as_str().to_owned(), origin_epoch_of(500));
+            state.sessions.insert(id.as_str().to_owned(), session);
+        }
+
+        pub(crate) fn seed_interaction(&self, pending: PendingInteraction) {
+            lock(&self.state).interactions.insert(
+                pending.id().as_str().to_owned(),
+                InteractionRow {
+                    pending,
+                    resolution: None,
+                },
+            );
+        }
+
+        pub(crate) fn interaction_resolution(
+            &self,
+            id: &InteractionId,
+        ) -> Option<InteractionResolved> {
+            lock(&self.state)
+                .interactions
+                .get(id.as_str())
+                .and_then(|row| row.resolution.clone())
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 基础设施 fake
+    // -----------------------------------------------------------------------------------------
+
+    #[derive(Default)]
+    pub(crate) struct TestClock {
+        pub(crate) seconds: Mutex<u32>,
+    }
+
+    impl TestClock {
+        pub(crate) fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now(&self) -> Timestamp {
+            let mut seconds = lock(&self.seconds);
+            let value = *seconds;
+            *seconds = seconds.saturating_add(1);
+            ts(value)
+        }
+    }
+
+    #[derive(Default)]
+    pub(crate) struct TestIds {
+        pub(crate) next: AtomicUsize,
+    }
+
+    impl TestIds {
+        fn next_text(&self) -> String {
+            uuid_text(self.next.fetch_add(1, Ordering::SeqCst) as u64 + 100)
+        }
+    }
+
+    impl IdGenerator for TestIds {
+        fn turn_id(&self) -> TurnId {
+            TurnId::new(&self.next_text()).expect("uuid")
+        }
+
+        fn interaction_id(&self) -> InteractionId {
+            InteractionId::new(&self.next_text()).expect("uuid")
+        }
+
+        fn pairing_id(&self) -> PairingId {
+            PairingId::new(&self.next_text()).expect("uuid")
+        }
+
+        fn origin_epoch(&self) -> OriginEpoch {
+            OriginEpoch::new(&self.next_text()).expect("uuid")
+        }
+
+        fn request_id(&self) -> RequestId {
+            RequestId::new(&self.next_text()).expect("uuid")
+        }
+    }
+
+    pub(crate) struct TestPublisher {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    impl EventPublisher for TestPublisher {
+        fn publish(&self, delivery: CommittedDelivery) {
+            let store_had_it = match &delivery {
+                CommittedDelivery::Owned(event) => lock(&self.world.state)
+                    .events
+                    .iter()
+                    .any(|stored| stored.id == event.id),
+                CommittedDelivery::Imported { origin, .. } => lock(&self.world.receipts)
+                    .iter()
+                    .any(|receipt| receipt.origin.origin_event_id == origin.origin_event_id),
+            };
+            lock(&self.world.published).push(Published {
+                delivery,
+                store_had_it,
+            });
+        }
+    }
+
+    pub(crate) struct TestAudit {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl AuditStore for TestAudit {
+        async fn append(&self, record: AuditRecord) -> Result<(), PortError> {
+            lock(&self.world.audits).push(record);
+            Ok(())
+        }
+
+        async fn query(&self, _query: AuditQuery) -> Result<Vec<AuditRecord>, PortError> {
+            Ok(lock(&self.world.audits).clone())
+        }
+    }
+
+    pub(crate) struct TestCatalog;
+
+    #[async_trait]
+    impl AgentCatalog for TestCatalog {
+        async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError> {
+            Ok(Vec::new())
+        }
+
+        async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
+            Ok(CapabilitySet::empty())
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 存储 fake
+    // -----------------------------------------------------------------------------------------
+
+    pub(crate) struct FakeStore {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    impl FakeStore {
+        /// `OwnedCommit` 的 §5.2 语义：幂等 → 会话/交互 → turn → 事件 → 终态/接受行。
+        fn apply(
+            &self,
+            commit: &OwnedCommit,
+        ) -> Result<(Option<SessionId>, Vec<CommittedEvent>), PortError> {
+            let mut state = lock(&self.world.state);
+            let at = commit.at.clone();
+            let mut created: Option<SessionId> = None;
+            match commit.state.clone() {
+                Some(StateChange::Create(new)) => {
+                    state.next_id += 1;
+                    let session_id = SessionId::new(&uuid_text(state.next_id))?;
+                    let epoch = commit
+                        .origin_epoch
+                        .clone()
+                        .ok_or(PortError::InvalidRequest("Create 必须带 origin_epoch"))?;
+                    let session = Session::try_new(
+                        session_id.clone(),
+                        OwnedSessionRef::new(session_id.clone()),
+                        new.title.clone(),
+                        new.agent.clone(),
+                        SessionState::Idle,
+                        ResourceOrigin::Local,
+                        None,
+                        Version::from(1),
+                        at.clone(),
+                        at.clone(),
+                        None,
+                    )?;
+                    state.epochs.insert(session_id.as_str().to_owned(), epoch);
+                    state
+                        .sessions
+                        .insert(session_id.as_str().to_owned(), session);
+                    created = Some(session_id);
+                }
+                Some(StateChange::Update(update)) => {
+                    let session_id = commit
+                        .session
+                        .clone()
+                        .ok_or(PortError::InvalidRequest("Update 必须带 session"))?;
+                    let current = state
+                        .sessions
+                        .get(session_id.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            PortError::NotFound(EntityRef::Session(session_id.clone()))
+                        })?;
+                    if let Some(expected) = commit.expected_version {
+                        if expected.get() != current.version().get() {
+                            return Err(PortError::Conflict(ConflictKind::VersionMismatch));
+                        }
+                    }
+                    // §6.7：first-writer-wins 的条件更新。
+                    if let Some(resolved) = &update.interaction {
+                        match state.interactions.get_mut(resolved.interaction.as_str()) {
+                            None => {
+                                return Err(PortError::NotFound(EntityRef::Interaction(
+                                    resolved.interaction.clone(),
+                                )));
+                            }
+                            Some(row) if row.resolution.is_some() => {
+                                return Err(PortError::Conflict(ConflictKind::AlreadyResolved));
+                            }
+                            Some(row) => row.resolution = Some(resolved.clone()),
+                        }
+                    }
+                    let next_state = update.state.unwrap_or_else(|| current.state());
+                    let mode = match &update.mode {
+                        ModeChange::Unchanged => current.current_mode().cloned(),
+                        ModeChange::Set(mode) => Some(mode.clone()),
+                    };
+                    let closed_at = update
+                        .closed_at
+                        .clone()
+                        .or_else(|| current.closed_at().cloned());
+                    let updated = Session::try_new(
+                        current.id().clone(),
+                        current.reference().clone(),
+                        current.title().map(str::to_owned),
+                        current.agent().clone(),
+                        next_state,
+                        current.origin().clone(),
+                        mode,
+                        Version::from(current.version().get() + 1),
+                        current.created_at().clone(),
+                        at.clone(),
+                        closed_at,
+                    )?;
+                    state
+                        .sessions
+                        .insert(session_id.as_str().to_owned(), updated);
+                }
+                None => {}
+            }
+            if let Some(session_id) = commit.session.clone() {
+                let turns = state
+                    .turns
+                    .entry(session_id.as_str().to_owned())
+                    .or_default();
+                for change in &commit.turns {
+                    match change {
+                        TurnChange::Create(new) => {
+                            let queue_index = turns.len() as u32;
+                            let turn = Turn::try_new(
+                                new.turn.clone(),
+                                session_id.clone(),
+                                new.state,
+                                queue_index,
+                                new.causation.clone(),
+                                new.started_at.clone(),
+                                None,
+                            )?;
+                            turns.push(turn);
+                        }
+                        TurnChange::Update(update) => {
+                            let Some(turn) =
+                                turns.iter_mut().find(|turn| turn.id() == &update.turn)
+                            else {
+                                return Err(PortError::NotFound(EntityRef::Turn(
+                                    update.turn.clone(),
+                                )));
+                            };
+                            *turn = Turn::try_new(
+                                turn.id().clone(),
+                                session_id.clone(),
+                                update.state,
+                                turn.queue_index(),
+                                turn.causation().cloned(),
+                                turn.started_at().cloned(),
+                                update.ended_at.clone(),
+                            )?;
+                        }
+                    }
+                }
+            }
+            let mut appended = Vec::new();
+            let mut batch = Vec::new();
+            for event in &commit.events {
+                state.next_id += 1;
+                let id = EventId::new(&uuid_text(state.next_id))?;
+                state.head += 1;
+                let global = Sequence::new(state.head)?;
+                let (session_sequence, origin_epoch, origin_sequence) =
+                    match commit.session.as_ref() {
+                        Some(session) => {
+                            let counter = state
+                                .per_session_seq
+                                .entry(session.as_str().to_owned())
+                                .or_insert(0);
+                            *counter += 1;
+                            let sequence = Sequence::new(*counter)?;
+                            let epoch = state
+                                .epochs
+                                .get(session.as_str())
+                                .cloned()
+                                .unwrap_or_else(|| origin_epoch_of(501));
+                            (Some(sequence), Some(epoch), Some(sequence))
+                        }
+                        // §9 判据 17：非会话级事件三列都是 NULL。
+                        None => (None, None, None),
+                    };
+                state
+                    .event_payloads
+                    .insert(id.as_str().to_owned(), event.payload.clone());
+                state
+                    .event_origins
+                    .insert(id.as_str().to_owned(), event.origin);
+                batch.push(event.event_type.as_str().to_owned());
+                let committed = CommittedEvent {
+                    id,
+                    session: commit.session.clone(),
+                    session_sequence,
+                    global_sequence: global,
+                    origin_epoch,
+                    origin_sequence,
+                    created_at: at.clone(),
+                };
+                state.events.push(committed.clone());
+                appended.push(committed);
+            }
+            // §6 第 13 条 / §9 判据 15：每条 `PendingInteractionWrite` 落一行；配对（按 payload 的
+            // `interactionId` 找到同一提交里那条 `kind = interaction` 事件）由存储层完成，配不到即整
+            // 事务失败——事件 id 只存在于存储层，不经过 broker。
+            for write in &commit.interactions {
+                let paired = commit.events.iter().any(|event| {
+                    interaction_request_kind(&event.event_type).is_some()
+                        && view_interaction_id(&event.payload.view).as_ref()
+                            == Some(write.interaction.id())
+                });
+                if !paired {
+                    return Err(PortError::InvalidRequest(
+                        "交互写入必须与同一提交里带同一 interactionId 的事件配对（§6 第 13 条）",
+                    ));
+                }
+                if let Some(existing) = state.interactions.get(write.interaction.id().as_str()) {
+                    if existing.resolution.is_some() {
+                        return Err(PortError::Conflict(ConflictKind::AlreadyResolved));
+                    }
+                }
+                state.interactions.insert(
+                    write.interaction.id().as_str().to_owned(),
+                    InteractionRow {
+                        pending: write.interaction.clone(),
+                        resolution: None,
+                    },
+                );
+            }
+            // 终态提交：按同一批次 `command.*` 事件的 causation 定位命令行（`ports::OwnedCommit`
+            // 的文档约定），`terminal_event_id` 取该批次最后一条事件的 id。
+            if let Some(terminal) = commit.command_terminal.clone() {
+                let request = commit
+                    .events
+                    .iter()
+                    .rev()
+                    .find(|event| event.event_type.as_str().starts_with("command."))
+                    .and_then(|event| event.causation.clone())
+                    .ok_or(PortError::InvalidRequest(
+                        "终态提交缺少 command.* 事件的 causation",
+                    ))?;
+                let key = state
+                    .commands
+                    .iter()
+                    .find(|(_, record)| {
+                        record.request() == &request && record.session() == commit.session.as_ref()
+                    })
+                    .map(|(key, _)| key.clone())
+                    .ok_or_else(|| {
+                        PortError::NotFound(EntityRef::Command {
+                            session: commit.session.clone(),
+                            request: request.clone(),
+                        })
+                    })?;
+                let existing = state
+                    .commands
+                    .get(&key)
+                    .cloned()
+                    .ok_or(PortError::InvalidRequest("命令行消失"))?;
+                let terminal_event = appended.last().map(|event| event.id.clone());
+                let updated = CommandRecord::try_new(
+                    existing.session().cloned(),
+                    existing.request().clone(),
+                    existing.command(),
+                    existing.kind(),
+                    existing.actor().clone(),
+                    existing.accepted_at().cloned(),
+                    terminal.status(),
+                    terminal.terminal_at().cloned(),
+                    terminal_event,
+                    terminal
+                        .result()
+                        .cloned()
+                        .or_else(|| existing.result().cloned()),
+                    terminal
+                        .error()
+                        .cloned()
+                        .or_else(|| existing.error().cloned()),
+                    existing.expected_version(),
+                    existing.request_fingerprint().clone(),
+                )?;
+                state.commands.insert(key, updated);
+            }
+            // 接受提交：写幂等行（status = accepted）。
+            if let Some(record) = commit.idempotency.clone() {
+                let command = CommandRecord::try_new(
+                    commit.session.clone(),
+                    record.request.clone(),
+                    &record.command,
+                    record.kind,
+                    record.actor.clone(),
+                    Some(record.accepted_at.clone()),
+                    CommandStatus::Accepted,
+                    None,
+                    None,
+                    None,
+                    None,
+                    record.expected_version,
+                    record.request_fingerprint.clone(),
+                )?;
+                state
+                    .commands
+                    .insert(command_key(&record.actor, &record.request), command);
+            }
+            lock(&self.world.batches).push(BatchRecord {
+                session: commit
+                    .session
+                    .as_ref()
+                    .map(|session| session.as_str().to_owned()),
+                types: batch,
+            });
+            Ok((created, appended))
+        }
+    }
+
+    #[async_trait]
+    impl SessionStore for FakeStore {
+        async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+            let index = self.world.commits.fetch_add(1, Ordering::SeqCst) + 1;
+            {
+                let mut state = lock(&self.world.state);
+                if state.fail_at == Some(index) {
+                    state.fail_at = None;
+                    return Err(PortError::Unavailable(UnavailableKind::IoError));
+                }
+            }
+            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果。
+            if let Some(record) = commit.idempotency.as_ref() {
+                let state = lock(&self.world.state);
+                let key = command_key(&record.actor, &record.request);
+                if let Some(existing) = state.commands.get(&key).cloned() {
+                    let session_id = existing.session().cloned();
+                    let version = session_id
+                        .as_ref()
+                        .and_then(|session| state.sessions.get(session.as_str()))
+                        .map(|session| session.version())
+                        .unwrap_or_else(|| Version::from(0));
+                    let origin_epoch = session_id
+                        .as_ref()
+                        .and_then(|session| state.epochs.get(session.as_str()).cloned());
+                    return Ok(CommitOutcome {
+                        session_id,
+                        origin_epoch,
+                        version,
+                        appended: Vec::new(),
+                        replayed: Some(IdempotentReplay { record: existing }),
+                    });
+                }
+            }
+            let (created, appended) = self.apply(&commit)?;
+            let state = lock(&self.world.state);
+            let version = commit
+                .session
+                .as_ref()
+                .and_then(|session| state.sessions.get(session.as_str()))
+                .map(|session| session.version())
+                .unwrap_or_else(|| Version::from(0));
+            let origin_epoch = commit
+                .session
+                .as_ref()
+                .and_then(|session| state.epochs.get(session.as_str()).cloned())
+                .or_else(|| commit.origin_epoch.clone());
+            Ok(CommitOutcome {
+                session_id: created.or_else(|| commit.session.clone()),
+                origin_epoch,
+                version,
+                appended,
+                replayed: None,
+            })
+        }
+
+        async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
+            let state = lock(&self.world.state);
+            let Some(found) = state.sessions.get(session.as_str()).cloned() else {
+                return Ok(None);
+            };
+            let origin_epoch = state
+                .epochs
+                .get(session.as_str())
+                .cloned()
+                .unwrap_or_else(|| origin_epoch_of(500));
+            Ok(Some(SessionSnapshot {
+                session: found,
+                origin_epoch,
+                head: head_cursor(state.head),
+            }))
+        }
+
+        async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
+            let state = lock(&self.world.state);
+            let mut summaries: Vec<SessionSummary> = state
+                .sessions
+                .values()
+                .filter(|session| match &query.only {
+                    Some(only) => only.iter().any(|id| id == session.id()),
+                    None => true,
+                })
+                .filter(|session| {
+                    query.states.is_empty() || query.states.contains(&session.state())
+                })
+                .map(|session| session.summary())
+                .collect();
+            if let Some(limit) = query.limit {
+                summaries.truncate(limit as usize);
+            }
+            Ok(summaries)
+        }
+
+        async fn head(&self) -> Result<GlobalCursor, PortError> {
+            Ok(head_cursor(lock(&self.world.state).head))
+        }
+
+        async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError> {
+            self.world.read_views.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(FakeReadView {
+                world: self.world.clone(),
+            }))
+        }
+
+        async fn find_request(
+            &self,
+            request: &RequestId,
+            actor: &Actor,
+        ) -> Result<Option<CommandRecord>, PortError> {
+            Ok(lock(&self.world.state)
+                .commands
+                .get(&command_key(actor, request))
+                .cloned())
+        }
+
+        async fn retention_window(
+            &self,
+            _session: &SessionId,
+        ) -> Result<Option<(Sequence, Sequence)>, PortError> {
+            let state = lock(&self.world.state);
+            if state.head == 0 {
+                return Ok(None);
+            }
+            Ok(Some((Sequence::new(1)?, Sequence::new(state.head)?)))
+        }
+
+        async fn prune(
+            &self,
+            _policy: RetentionPolicy,
+            _at: Timestamp,
+        ) -> Result<PruneReport, PortError> {
+            Ok(PruneReport::default())
+        }
+
+        async fn health(&self) -> Result<StoreHealth, PortError> {
+            Ok(StoreHealth {
+                total_bytes: 0,
+                integrity_ok: true,
+                read_only: false,
+                user_version: 1,
+                owned_schema_version: 1,
+                imported_schema_version: 1,
+                server_epoch: server_epoch_of(999),
+            })
+        }
+    }
+
+    pub(crate) struct FakeReadView {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl ReadView for FakeReadView {
+        async fn head(&self) -> Result<GlobalCursor, PortError> {
+            Ok(head_cursor(lock(&self.world.state).head))
+        }
+
+        async fn replay(
+            &self,
+            after: Option<GlobalCursor>,
+            limit: ReplayLimit,
+        ) -> Result<ReplayBatch, PortError> {
+            let state = lock(&self.world.state);
+            let from = after
+                .as_ref()
+                .map(|cursor| cursor.global_sequence.get())
+                .unwrap_or(0);
+            let head = head_cursor(state.head);
+            let events: Vec<CommittedDelivery> = state
+                .events
+                .iter()
+                .filter(|event| event.global_sequence.get() > from)
+                .take(limit.events() as usize)
+                .map(|event| CommittedDelivery::Owned(event.clone()))
+                .collect();
+            let next = events.last().map(|delivery| match delivery {
+                CommittedDelivery::Owned(event) => head_cursor(event.global_sequence.get()),
+                CommittedDelivery::Imported { local_sequence, .. } => {
+                    head_cursor(local_sequence.get())
+                }
+            });
+            Ok(ReplayBatch {
+                events,
+                head,
+                next,
+                reset_required: None,
+            })
+        }
+
+        async fn event_payload(&self, event: &EventId) -> Result<Option<EventPayload>, PortError> {
+            Ok(lock(&self.world.state)
+                .event_payloads
+                .get(event.as_str())
+                .cloned())
+        }
+
+        async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {
+            let state = lock(&self.world.state);
+            let Some(session) = state.sessions.get(query.session.as_str()) else {
+                return Err(PortError::NotFound(EntityRef::Session(
+                    query.session.clone(),
+                )));
+            };
+            let events = if query.include.messages {
+                state
+                    .events
+                    .iter()
+                    .filter(|event| event.session.as_ref() == Some(&query.session))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let turns = if query.include.turns {
+                state
+                    .turns
+                    .get(query.session.as_str())
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let interactions = if query.include.pending_interactions {
+                state
+                    .interactions
+                    .values()
+                    .filter(|row| {
+                        row.pending.session() == &query.session && row.resolution.is_none()
+                    })
+                    .map(|row| row.pending.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Ok(HistoryPage {
+                session: session.summary(),
+                events,
+                turns,
+                interactions,
+                config: Vec::new(),
+                capabilities: None,
+                head: head_cursor(state.head),
+                next: None,
+            })
+        }
+    }
+
+    pub(crate) struct FakeDeliveries {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl RemoteDeliveryStore for FakeDeliveries {
+        async fn commit_receipt(
+            &self,
+            receipt: DeliveryReceipt,
+        ) -> Result<ReceiptOutcome, PortError> {
+            let mut receipts = lock(&self.world.receipts);
+            if let Some(index) = receipts
+                .iter()
+                .position(|stored| stored.origin.origin_event_id == receipt.origin.origin_event_id)
+            {
+                return Ok(ReceiptOutcome {
+                    local_sequence: LocalCursor::new(index as u64 + 1),
+                    duplicate: true,
+                });
+            }
+            receipts.push(receipt);
+            Ok(ReceiptOutcome {
+                local_sequence: LocalCursor::new(receipts.len() as u64),
+                duplicate: false,
+            })
+        }
+
+        async fn local_replay(
+            &self,
+            after: Option<LocalCursor>,
+            limit: ReplayLimit,
+        ) -> Result<Vec<DeliveryIndexEntry>, PortError> {
+            let from = after.map(|cursor| cursor.get()).unwrap_or(0);
+            Ok(lock(&self.world.receipts)
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| (*index as u64 + 1) > from)
+                .take(limit.events() as usize)
+                .map(|(index, receipt)| DeliveryIndexEntry {
+                    session: receipt.session.clone(),
+                    origin: receipt.origin.clone(),
+                    origin_sequence: receipt.origin_sequence,
+                    local_sequence: LocalCursor::new(index as u64 + 1),
+                    event_type: receipt.event_type.clone(),
+                    payload_digest: receipt.payload_digest.clone(),
+                    received_at: receipt.at.clone(),
+                })
+                .collect())
+        }
+
+        async fn ack(
+            &self,
+            _session: &RemoteSessionRef,
+            cursor: OriginCursor,
+            _at: Timestamp,
+        ) -> Result<AckOutcome, PortError> {
+            let mut acked = lock(&self.world.acked);
+            let known = acked.last().cloned();
+            let applied = known
+                .as_ref()
+                .map(|previous| cursor.origin_sequence > previous.origin_sequence)
+                .unwrap_or(true);
+            if applied {
+                acked.push(cursor.clone());
+            }
+            Ok(AckOutcome {
+                applied,
+                cursor: known.or(Some(cursor)),
+            })
+        }
+
+        async fn load_ack(
+            &self,
+            _session: &RemoteSessionRef,
+        ) -> Result<Option<OriginCursor>, PortError> {
+            Ok(lock(&self.world.acked).last().cloned())
+        }
+
+        async fn upsert_session(
+            &self,
+            record: ImportedSessionRecord,
+            _at: Timestamp,
+        ) -> Result<(), PortError> {
+            let mut sessions = lock(&self.world.imported_sessions);
+            sessions.retain(|stored| stored.session != record.session);
+            sessions.push(record);
+            Ok(())
+        }
+
+        async fn list_sessions(
+            &self,
+            _query: ImportedSessionQuery,
+        ) -> Result<Vec<ImportedSessionRecord>, PortError> {
+            Ok(lock(&self.world.imported_sessions).clone())
+        }
+
+        async fn find_remote_request(
+            &self,
+            _session: &RemoteSessionRef,
+            _request: &RequestId,
+        ) -> Result<Option<RemoteCommandRef>, PortError> {
+            Ok(None)
+        }
+
+        async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError> {
+            let mut receipts = lock(&self.world.receipts);
+            let before = receipts.len();
+            receipts.retain(|receipt| receipt.session.export_id.as_str() != import.as_str());
+            Ok(DropReport {
+                delivery_index_removed: (before - receipts.len()) as u64,
+                command_refs_removed: 0,
+            })
+        }
+
+        async fn prune(
+            &self,
+            _policy: RetentionPolicy,
+            _at: Timestamp,
+        ) -> Result<PruneReport, PortError> {
+            Ok(PruneReport::default())
+        }
+    }
+
+    pub(crate) struct FakeExports {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl ExportStore for FakeExports {
+        async fn upsert_export(
+            &self,
+            export: ExportRecord,
+            _at: Timestamp,
+        ) -> Result<(), PortError> {
+            lock(&self.world.exports).push(export);
+            Ok(())
+        }
+
+        async fn export(&self, id: &ExportId) -> Result<Option<ExportRecord>, PortError> {
+            Ok(lock(&self.world.exports)
+                .iter()
+                .find(|export| export.export_id() == id)
+                .cloned())
+        }
+
+        async fn exports(&self) -> Result<Vec<ExportRecord>, PortError> {
+            Ok(lock(&self.world.exports).clone())
+        }
+
+        async fn revoke_export(&self, _id: &ExportId, _at: Timestamp) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn upsert_import(
+            &self,
+            import: ImportRecord,
+            _at: Timestamp,
+        ) -> Result<(), PortError> {
+            lock(&self.world.imports).push(import);
+            Ok(())
+        }
+
+        async fn import(&self, id: &ImportId) -> Result<Option<ImportRecord>, PortError> {
+            Ok(lock(&self.world.imports)
+                .iter()
+                .find(|import| import.import_id() == id)
+                .cloned())
+        }
+
+        async fn imports(&self) -> Result<Vec<ImportRecord>, PortError> {
+            Ok(lock(&self.world.imports).clone())
+        }
+
+        async fn remove_import(&self, id: &ImportId, _at: Timestamp) -> Result<(), PortError> {
+            lock(&self.world.imports).retain(|import| import.import_id() != id);
+            Ok(())
+        }
+    }
+
+    /// 信任端口在本切片只被 `use_cases` 透传；这里给最小实现。
+    pub(crate) struct FakeTrust;
+
+    fn missing_pairing() -> PortError {
+        PortError::NotFound(EntityRef::Pairing(
+            PairingId::new(&uuid_text(1)).expect("uuid"),
+        ))
+    }
+
+    #[async_trait]
+    impl TrustStore for FakeTrust {
+        async fn upsert_device(
+            &self,
+            _record: DeviceRecord,
+            _at: Timestamp,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn device(&self, _id: &DeviceId) -> Result<Option<DeviceRecord>, PortError> {
+            Ok(None)
+        }
+
+        async fn devices(&self) -> Result<Vec<DeviceRecord>, PortError> {
+            Ok(Vec::new())
+        }
+
+        async fn revoke_device(
+            &self,
+            _id: &DeviceId,
+            _at: Timestamp,
+            _reason: RevokeReason,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn upsert_node(&self, _record: NodeRecord, _at: Timestamp) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn node(&self, _id: &NodeId) -> Result<Option<NodeRecord>, PortError> {
+            Ok(None)
+        }
+
+        async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError> {
+            Ok(Vec::new())
+        }
+
+        async fn revoke_node(
+            &self,
+            _id: &NodeId,
+            _at: Timestamp,
+            _reason: RevokeReason,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn create_pairing(&self, _pairing: PairingRecord) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn claim_pairing(
+            &self,
+            _claim: PairingClaim,
+            _at: Timestamp,
+        ) -> Result<PairingClaimOutcome, PortError> {
+            Err(missing_pairing())
+        }
+
+        async fn pairing(&self, _id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
+            Ok(None)
+        }
+
+        async fn settle_pairing(
+            &self,
+            _id: &PairingId,
+            _settlement: PairingSettlement,
+            _at: Timestamp,
+        ) -> Result<TrustRecordRef, PortError> {
+            Err(missing_pairing())
+        }
+
+        async fn expire_pairings(&self, _at: Timestamp) -> Result<u64, PortError> {
+            Ok(0)
+        }
+    }
+
+    pub(crate) struct FakeAttachments {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl AttachmentStore for FakeAttachments {
+        async fn put(
+            &self,
+            bytes: &[u8],
+            media_type: &str,
+            _at: Timestamp,
+        ) -> Result<AttachmentRef, PortError> {
+            let id =
+                AttachmentId::new(&uuid_text(700 + lock(&self.world.attachments).len() as u64))
+                    .expect("uuid");
+            let reference = AttachmentRef {
+                id,
+                sha256: digest('A'),
+                byte_length: bytes.len() as u64,
+                media_type: media_type.to_owned(),
+                relative_path: format!("attachments/{}", bytes.len()),
+            };
+            lock(&self.world.attachments).push(reference.clone());
+            Ok(reference)
+        }
+
+        async fn get(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, PortError> {
+            Ok(lock(&self.world.attachments)
+                .iter()
+                .find(|reference| &reference.id == id)
+                .map(|reference| vec![0u8; reference.byte_length as usize]))
+        }
+
+        async fn link(
+            &self,
+            _session: &SessionId,
+            _attachment: &AttachmentId,
+            _generation: AttachmentGeneration,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn prune_lru(
+            &self,
+            _budget_bytes: u64,
+            _at: Timestamp,
+        ) -> Result<PruneReport, PortError> {
+            Ok(PruneReport::default())
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 后端 fake
+    // -----------------------------------------------------------------------------------------
+
+    pub(crate) struct FakeBackend {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl SessionBackendFactory for FakeBackend {
+        async fn create(
+            &self,
+            session: &SessionId,
+            _request: CreateSessionRequest,
+            sink: EventSink,
+        ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+            // 后端现在直接拿到 core 分配的 id（§5.1），不再自己造引用。
+            Ok(Box::new(FakeEndpoint {
+                world: self.world.clone(),
+                sink,
+                reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+            }))
+        }
+
+        async fn open(
+            &self,
+            reference: SessionReference,
+            sink: EventSink,
+        ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+            Ok(Box::new(FakeEndpoint {
+                world: self.world.clone(),
+                sink,
+                reference,
+            }))
+        }
+    }
+
+    pub(crate) struct FakeEndpoint {
+        pub(crate) world: Arc<FakeWorld>,
+        pub(crate) sink: EventSink,
+        pub(crate) reference: SessionReference,
+    }
+
+    #[async_trait]
+    impl SessionEndpoint for FakeEndpoint {
+        fn reference(&self) -> SessionReference {
+            self.reference.clone()
+        }
+
+        async fn prompt(
+            &self,
+            _request: PromptRequest,
+            _at: Timestamp,
+        ) -> Result<TurnAccepted, PortError> {
+            let ordinal = self.world.prompts.fetch_add(1, Ordering::SeqCst) + 1;
+            lock(&self.world.prompt_trace).push(format!("start:{ordinal}"));
+            let script = lock(&self.world.script).pop_front();
+            match script {
+                Some(script) => {
+                    if script.yield_polls > 0 {
+                        let mut left = script.yield_polls;
+                        std::future::poll_fn(|_| {
+                            if left == 0 {
+                                Poll::Ready(())
+                            } else {
+                                left -= 1;
+                                Poll::Pending
+                            }
+                        })
+                        .await;
+                    }
+                    for event in script.events {
+                        self.sink.send(event);
+                    }
+                }
+                None => {
+                    // 没有脚本：立即正常结束该 turn（broker 会用当前派发的 turn 补齐 turn 字段）。
+                    self.sink.send(endpoint_event(
+                        EventKind::State,
+                        "turn.completed",
+                        &turn_view("completed"),
+                    ));
+                }
+            }
+            lock(&self.world.prompt_trace).push(format!("end:{ordinal}"));
+            Ok(TurnAccepted {
+                turn: TurnId::new(&uuid_text(0)).expect("uuid"),
+            })
+        }
+
+        async fn cancel(&self, _turn: Option<TurnId>) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn set_mode(&self, _mode: &ModeId) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn list_config(&self) -> Result<Vec<ConfigOption>, PortError> {
+            self.world.config_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+
+        async fn set_config(
+            &self,
+            _id: &ConfigOptionId,
+            _value: ConfigValue,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn resolve_interaction(
+            &self,
+            _interaction: &InteractionId,
+            _resolution: InteractionResolution,
+        ) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn read_history(&self, _query: HistoryQuery) -> Result<HistoryPage, PortError> {
+            let session = match &self.reference {
+                SessionReference::Owned(owned) => owned.session_id.clone(),
+                SessionReference::Remote(remote) => remote.session_id.clone(),
+            };
+            Err(PortError::NotFound(EntityRef::Session(session)))
+        }
+
+        async fn close(&self) -> Result<(), PortError> {
+            Ok(())
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 组装与执行器
+    // -----------------------------------------------------------------------------------------
+
+    /// 一套完整的 fake 世界 + broker，附带一个已 seed 的 owned 会话。
+    pub(crate) struct Harness {
+        pub(crate) world: Arc<FakeWorld>,
+        pub(crate) broker: Arc<Broker>,
+        pub(crate) session: SessionId,
+    }
+
+    impl Harness {
+        pub(crate) fn new(config: BrokerConfig) -> Self {
+            let world = FakeWorld::new();
+            let store = Arc::new(FakeStore {
+                world: world.clone(),
+            });
+            let seq = Sequence::new(1).expect("sequence");
+            let _ = seq;
+            let broker = Arc::new(Broker::new(
+                BrokerDeps {
+                    store: store.clone(),
+                    deliveries: Arc::new(FakeDeliveries {
+                        world: world.clone(),
+                    }),
+                    backends: Arc::new(FakeBackend {
+                        world: world.clone(),
+                    }),
+                    exports: Arc::new(FakeExports {
+                        world: world.clone(),
+                    }),
+                    publisher: Arc::new(TestPublisher {
+                        world: world.clone(),
+                    }),
+                    clock: TestClock::new(),
+                    ids: Arc::new(TestIds::default()),
+                    audit: Some(Arc::new(TestAudit {
+                        world: world.clone(),
+                    })),
+                },
+                config,
+            ));
+            let session = SessionId::new(&uuid_text(7)).expect("session id");
+            let agent = AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
+                .expect("agent ref");
+            let seeded = Session::try_new(
+                session.clone(),
+                OwnedSessionRef::new(session.clone()),
+                None,
+                agent,
+                SessionState::Idle,
+                ResourceOrigin::Local,
+                None,
+                Version::from(1),
+                ts(0),
+                ts(0),
+                None,
+            )
+            .expect("session");
+            world.seed_session(seeded);
+            Self {
+                world,
+                broker,
+                session,
+            }
+        }
+
+        pub(crate) fn actor(&self) -> Actor {
+            Actor::LocalCli
+        }
+
+        pub(crate) fn request(&self, n: u64) -> RequestId {
+            RequestId::new(&uuid_text(900 + n)).expect("uuid")
+        }
+
+        pub(crate) fn reference(&self) -> SessionReference {
+            SessionReference::Owned(OwnedSessionRef::new(self.session.clone()))
+        }
+
+        pub(crate) fn submit_prompt(&self, n: u64, fingerprint: char) -> CommandReceipt {
+            let actor = self.actor();
+            let command = prompt_command(&actor, &self.session, &self.request(n), fingerprint);
+            block_on(self.broker.submit_mutation(&actor, &command)).expect("submit")
+        }
+
+        /// 让后端"异步地"把当前 turn 收尾：直接向 sink 送一条终态事件，然后驱动一次 pump。
+        pub(crate) fn complete_turn(&self, event_type: &str, state: &str) {
+            self.broker.sink(&self.session).send(endpoint_event(
+                EventKind::State,
+                event_type,
+                &turn_view(state),
+            ));
+            block_on(self.broker.pump(&self.session)).expect("pump");
+        }
+    }
+
+    pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
+        run_all(vec![future]).remove(0)
+    }
+
+    /// 协作式执行器：没有 runtime 也能观察并发交错。所有 future 每轮都被 poll，`Waker` 是 noop
+    /// （broker 的等待点都可重复 poll），因此不需要真实的唤醒就能推进。
+    pub(crate) fn run_all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+        let mut context = Context::from_waker(Waker::noop());
+        let mut tasks: Vec<Option<Pin<Box<F>>>> = futures
+            .into_iter()
+            .map(|future| Some(Box::pin(future)))
+            .collect();
+        let mut outputs: Vec<Option<F::Output>> = Vec::new();
+        outputs.resize_with(tasks.len(), || None);
+        let mut remaining = tasks.len();
+        let mut rounds = 0usize;
+        while remaining > 0 {
+            rounds += 1;
+            assert!(
+                rounds < 100_000,
+                "测试执行器检测到死锁：仍有 {remaining} 个 future 未完成"
+            );
+            for index in 0..tasks.len() {
+                let polled = tasks[index]
+                    .as_mut()
+                    .map(|task| task.as_mut().poll(&mut context));
+                if let Some(Poll::Ready(value)) = polled {
+                    outputs[index] = Some(value);
+                    tasks[index] = None;
+                    remaining -= 1;
+                }
+            }
+        }
+        outputs
+            .into_iter()
+            .map(|output| output.expect("所有任务都已 poll 到完成"))
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// §6 十二条契约的行为测试
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::model::{
+        DeviceId, EventId, ExportId, InteractionKind, InteractionOption, NodeId,
+        PendingInteraction, ScopeSet,
+    };
+
+    fn device_without_scopes() -> Actor {
+        Actor::Device {
+            device: DeviceId::new(&uuid_text(40)).expect("uuid"),
+            scopes: ScopeSet::empty(),
+        }
+    }
+
+    fn rejection_code(receipt: &CommandReceipt) -> String {
+        match receipt {
+            CommandReceipt::Rejected { error } => error.code().to_owned(),
+            CommandReceipt::Accepted { .. } => panic!("期望拒绝，实际接受"),
+        }
+    }
+
+    /// §6.1：owned 事件必须先 `commit` 再 `publish`，顺序不可交换。
+    #[test]
+    fn owned_events_commit_before_publish() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+
+        let receipt = harness.submit_prompt(1, 'A');
+        assert!(matches!(
+            receipt,
+            CommandReceipt::Accepted { turn: Some(_), .. }
+        ));
+        assert!(
+            harness.world.publish_count() >= 4,
+            "排队/开始/增量/终态都应发布"
+        );
+        assert!(
+            harness.world.published_after_commit(),
+            "每条发布的事件都必须已经在库里"
+        );
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            vec![
+                "turn.queued",
+                "turn.started",
+                "agent.message.delta",
+                "turn.completed",
+                "command.completed",
+            ],
+            "§11.2：领域事件先于 terminal event"
+        );
+        let record = harness.world.command(&harness.request(1)).expect("幂等行");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        assert!(record.terminal_event().is_some(), "终态事件由存储层回填");
+    }
+
+    /// §6.2：imported 先 `commit_receipt` 再发布，且正文只在内存。
+    #[test]
+    fn imported_receipt_commits_before_publish_and_body_stays_in_memory() {
+        let harness = Harness::new(BrokerConfig::default());
+        let remote = RemoteSessionRef::new(
+            NodeId::new(&uuid_text(11)).expect("node"),
+            ExportId::new("export.one").expect("export"),
+            SessionId::new(&uuid_text(12)).expect("session"),
+        );
+        let origin = OriginEventRef::new(
+            NodeId::new(&uuid_text(11)).expect("node"),
+            origin_epoch_of(20),
+            EventId::new(&uuid_text(21)).expect("event"),
+        );
+        let event_type = EventType::new("agent.message.delta").expect("event type");
+        let payload = EventPayload {
+            view: json_view(r#"{"text":"secret"}"#),
+            acp: None,
+        };
+
+        let first = block_on(harness.broker.deliver_imported(
+            remote.clone(),
+            origin.clone(),
+            Sequence::new(1).expect("sequence"),
+            event_type.clone(),
+            digest('A'),
+            Some(payload.clone()),
+        ))
+        .expect("deliver");
+        assert!(first, "首次投递是新行");
+        assert_eq!(harness.world.publish_count(), 1);
+        assert!(
+            harness.world.published_after_commit(),
+            "commit_receipt 必须先于广播"
+        );
+
+        let again = block_on(harness.broker.deliver_imported(
+            remote.clone(),
+            origin,
+            Sequence::new(1).expect("sequence"),
+            event_type,
+            digest('A'),
+            Some(payload),
+        ))
+        .expect("deliver");
+        assert!(
+            !again,
+            "同一 origin_event_id 重发不新增 local_sequence、不重复发布"
+        );
+        assert_eq!(harness.world.publish_count(), 1);
+
+        // 落盘的是无正文索引：receipt 里没有 view，正文只出现在内存投递里。
+        let receipts = harness.world.receipts();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].payload_digest, digest('A'));
+        match &harness.world.published()[0] {
+            CommittedDelivery::Imported {
+                payload, session, ..
+            } => {
+                assert!(payload.is_some(), "正文只在内存投递");
+                assert_eq!(session, &remote);
+            }
+            CommittedDelivery::Owned(_) => panic!("imported 投递不得表达成 owned"),
+        }
+        let local =
+            block_on(harness.broker.remote_replay(None, ReplayLimit::default())).expect("replay");
+        assert_eq!(local.len(), 1);
+        assert_eq!(
+            local[0].origin.origin_event_id,
+            EventId::new(&uuid_text(21)).expect("event")
+        );
+    }
+
+    /// §6.3：同一会话的提交不交错；不同会话可并行（这里断言前者）。
+    #[test]
+    fn same_session_submissions_do_not_interleave() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::yielding(
+            vec![endpoint_event(
+                EventKind::State,
+                "turn.completed",
+                &turn_view("completed"),
+            )],
+            3,
+        ));
+        harness.world.push_script(Script::yielding(
+            vec![endpoint_event(
+                EventKind::State,
+                "turn.completed",
+                &turn_view("completed"),
+            )],
+            3,
+        ));
+        let actor = harness.actor();
+        let first = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let second = prompt_command(&actor, &harness.session, &harness.request(2), 'B');
+
+        let receipts = run_all(vec![
+            harness.broker.submit_mutation(&actor, &first),
+            harness.broker.submit_mutation(&actor, &second),
+        ]);
+        assert_eq!(receipts.len(), 2);
+        assert!(
+            receipts.iter().all(|receipt| receipt.is_ok()),
+            "两条命令都应被接受"
+        );
+        assert_eq!(
+            harness.world.prompt_trace(),
+            vec!["start:1", "end:1", "start:2", "end:2"],
+            "同一会话的 turn 必须串行，不得交错"
+        );
+    }
+
+    /// §6.4：`queue` 策略按接受顺序排队，超过 `max_queued_turns` 返回 `session.busy`。
+    #[test]
+    fn queue_policy_bounds_max_queued_turns() {
+        let harness = Harness::new(BrokerConfig {
+            queue_policy: QueuePolicy::Queue,
+            max_queued_turns: 1,
+        });
+        // 第一个 turn 永远不结束（脚本只发增量）。
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert_eq!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .state(),
+            SessionState::Running
+        );
+        assert!(matches!(
+            harness.submit_prompt(2, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 排队 turn 已持久化，状态是 Queued。
+        let queued = harness
+            .world
+            .turns(&harness.session)
+            .into_iter()
+            .filter(|turn| turn.state() == TurnState::Queued)
+            .count();
+        assert_eq!(queued, 1);
+        assert_eq!(harness.world.prompt_count(), 1, "排队的 turn 还不能派发");
+
+        let third = harness.submit_prompt(3, 'C');
+        assert_eq!(rejection_code(&third), "session.busy");
+        assert_eq!(
+            harness.world.turns(&harness.session).len(),
+            2,
+            "被拒的 turn 不落库"
+        );
+    }
+
+    /// §6.4：`reject_busy` 直接返回 `session.busy`，不留排队 turn。
+    #[test]
+    fn reject_busy_policy_rejects_second_prompt() {
+        let harness = Harness::new(BrokerConfig {
+            queue_policy: QueuePolicy::RejectBusy,
+            max_queued_turns: 16,
+        });
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let second = harness.submit_prompt(2, 'B');
+        assert_eq!(rejection_code(&second), "session.busy");
+        assert_eq!(harness.world.turns(&harness.session).len(), 1);
+    }
+
+    /// §6.3/§6.4：running turn 结束后，排队 turn 按顺序被派发。
+    #[test]
+    fn queued_turn_starts_after_running_turn_finishes() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(matches!(
+            harness.submit_prompt(2, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert_eq!(harness.world.prompt_count(), 1);
+
+        harness.complete_turn("turn.completed", "completed");
+        assert_eq!(
+            harness.world.prompt_count(),
+            2,
+            "第一个 turn 结束后第二个被派发"
+        );
+        assert_eq!(
+            harness.world.prompt_trace(),
+            vec!["start:1", "end:1", "start:2", "end:2"]
+        );
+        let types = harness.world.event_types(&harness.session);
+        assert!(types.contains(&"turn.started".to_owned()));
+        assert_eq!(
+            types
+                .iter()
+                .filter(|kind| *kind == "turn.completed")
+                .count(),
+            2,
+            "两个 turn 各自终态"
+        );
+    }
+
+    /// §6.6：重复提交返回首次结果且不二次派发。
+    #[test]
+    fn idempotent_replay_returns_first_turn_without_redispatch() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        let actor = harness.actor();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let first = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        let commits = harness.world.commit_count();
+        let prompts = harness.world.prompt_count();
+
+        let second = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        assert_eq!(harness.world.commit_count(), commits, "重放不追加提交");
+        assert_eq!(harness.world.prompt_count(), prompts, "重放不二次派发");
+        match (first, second) {
+            (
+                CommandReceipt::Accepted {
+                    turn: Some(first), ..
+                },
+                CommandReceipt::Accepted {
+                    turn: Some(second), ..
+                },
+            ) => assert_eq!(first, second, "仍为 accepted 的重放返回原 turnId"),
+            other => panic!("幂等重放应返回同一 turn：{other:?}"),
+        }
+    }
+
+    /// §6.6：指纹不同 → `command.idempotency_conflict`；不同 actor 用同一 requestId 是两条命令。
+    #[test]
+    fn idempotency_conflict_on_changed_fingerprint() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        let actor = harness.actor();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        assert!(matches!(
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit"),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let mut changed = command.clone();
+        changed.request_fingerprint = digest('B');
+        let conflict = block_on(harness.broker.submit_mutation(&actor, &changed)).expect("submit");
+        assert_eq!(rejection_code(&conflict), "command.idempotency_conflict");
+
+        // 不同 actor 用同一 requestId → 视为独立命令（幂等键是协议维度的 `(actor, requestId)`）。
+        let other = Actor::Device {
+            device: DeviceId::new(&uuid_text(41)).expect("uuid"),
+            scopes: ScopeSet::empty(),
+        };
+        let mut foreign = command.clone();
+        foreign.actor = other.clone();
+        assert_eq!(
+            rejection_code(
+                &block_on(harness.broker.submit_mutation(&other, &foreign)).expect("submit")
+            ),
+            "authorization.scope_denied"
+        );
+    }
+
+    /// §6.9：接受提交失败 → 显式拒绝、不发布、不派发。
+    #[test]
+    fn accept_commit_failure_rejects_without_publishing() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.fail_next_commit();
+        let receipt = harness.submit_prompt(1, 'A');
+        assert_eq!(rejection_code(&receipt), "internal.unavailable");
+        assert_eq!(harness.world.publish_count(), 0, "写失败不得发布任何事件");
+        assert_eq!(
+            harness.world.prompt_count(),
+            0,
+            "未落盘的命令不得派发给后端"
+        );
+        assert!(harness.world.turns(&harness.session).is_empty());
+    }
+
+    /// §6.9：终态提交失败 → 命令显式转为 `uncertain`，且该批次不发布。
+    #[test]
+    fn terminal_commit_failure_marks_command_uncertain() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        // 提交顺序：1 = 接受 turn.queued，2 = 提升 turn.started，3 = 终态批次。
+        harness.world.fail_commit_at(3);
+        let receipt = harness.submit_prompt(1, 'A');
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+
+        let record = harness.world.command(&harness.request(1)).expect("幂等行");
+        assert_eq!(
+            record.status(),
+            CommandStatus::Uncertain,
+            "必须显式落盘 uncertain"
+        );
+        assert!(record.error().is_some());
+        // 未发布的事件数 == 未落盘的批次数：turn.queued + turn.started(+command.uncertain 一条)
+        let published = harness.world.published();
+        assert!(published.iter().all(|_| true), "只发布已落盘的事件");
+        let published_types: Vec<String> = harvest_published_types(&harness);
+        assert!(
+            !published_types.contains(&"turn.completed".to_owned()),
+            "失败的批次不得发布"
+        );
+        assert!(harness.world.published_after_commit());
+    }
+
+    fn harvest_published_types(harness: &Harness) -> Vec<String> {
+        harness
+            .world
+            .published()
+            .into_iter()
+            .map(|delivery| match delivery {
+                CommittedDelivery::Owned(event) => event.id.as_str().to_owned(),
+                CommittedDelivery::Imported { event_type, .. } => event_type.as_str().to_owned(),
+            })
+            .collect()
+    }
+
+    /// §6.11：`Ephemeral` 在组装前被过滤，不进入任何提交，也不由 broker 发布。
+    #[test]
+    fn ephemeral_events_are_filtered_before_commit() {
+        assert!(!EPHEMERAL_EVENT_TYPES.is_empty(), "登记点不得为空表");
+        assert_eq!(
+            persistence_policy(&EventType::new("device.typing").expect("event type")),
+            PersistencePolicy::Ephemeral
+        );
+        assert_eq!(
+            persistence_policy(&EventType::new("session.presence").expect("event type")),
+            PersistencePolicy::Ephemeral
+        );
+        assert_eq!(
+            persistence_policy(&EventType::new("agent.message.delta").expect("event type")),
+            PersistencePolicy::ShortTerm
+        );
+        assert_eq!(
+            persistence_policy(&EventType::new("turn.completed").expect("event type")),
+            PersistencePolicy::Durable
+        );
+        assert_eq!(
+            persistence_policy(&EventType::new("unregistered.future.event").expect("event type")),
+            PersistencePolicy::Durable,
+            "未登记取值降级处理而不是丢弃"
+        );
+
+        let harness = Harness::new(BrokerConfig::default());
+        let sink = harness.broker.sink(&harness.session);
+        sink.send(endpoint_event(
+            EventKind::Delta,
+            "device.typing",
+            r#"{"typing":true}"#,
+        ));
+        sink.send(endpoint_event(
+            EventKind::Delta,
+            "session.presence",
+            r#"{"online":true}"#,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        assert_eq!(harness.world.commit_count(), 0, "Ephemeral 不进入任何提交");
+        assert_eq!(harness.world.publish_count(), 0, "broker 不发布 Ephemeral");
+        assert!(harness.world.events(&harness.session).is_empty());
+    }
+
+    /// §6.10：同一 turn 的 delta 合并为一次提交，跨终态时切批。
+    #[test]
+    fn flush_merges_deltas_without_crossing_turn_boundaries() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let batches = harness.world.batch_types();
+        assert!(
+            batches.contains(&vec!["agent.message.delta".to_owned(); 3]),
+            "同一 turn 的三条 delta 合并进一次提交：{batches:?}"
+        );
+        assert!(
+            batches.contains(&vec![
+                "turn.completed".to_owned(),
+                "command.completed".to_owned()
+            ]),
+            "终态不延迟、也不与增量跨 turn 合并：{batches:?}"
+        );
+        assert_eq!(
+            harness.world.events(&harness.session).len(),
+            7,
+            "合并不得丢事件（turn.queued + turn.started + 3 delta + turn.completed + command.completed）"
+        );
+    }
+
+    /// §6.8：非终态 turn 期间的模式切换被显式拒绝（v1 不排队）。
+    #[test]
+    fn mode_change_rejected_while_turn_running() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let actor = harness.actor();
+        let command = mode_command(
+            &actor,
+            &harness.session,
+            &harness.request(2),
+            Version::from(1),
+        );
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        match receipt {
+            CommandReceipt::Rejected { error } => {
+                assert_eq!(error.code(), "state.version_conflict");
+                assert!(
+                    error.details().as_str().contains("currentVersion"),
+                    "§11.6 要求回显当前版本：{}",
+                    error.details().as_str()
+                );
+            }
+            CommandReceipt::Accepted { .. } => panic!("run 中的模式切换必须被拒绝"),
+        }
+        assert!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .current_mode()
+                .is_none(),
+            "被拒的模式切换不得改状态"
+        );
+    }
+
+    /// §6.7：交互解析 first-writer-wins，迟到的应答不覆盖既有结果。
+    #[test]
+    fn interaction_resolution_is_first_writer_wins() {
+        let harness = Harness::new(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(300)).expect("interaction");
+        harness.world.seed_interaction(
+            PendingInteraction::try_new(
+                interaction.clone(),
+                InteractionKind::Permission,
+                harness.session.clone(),
+                ts(0),
+                vec![
+                    InteractionOption::try_new("allow-once", "Allow once", "allow_once")
+                        .expect("option"),
+                ],
+            )
+            .expect("pending"),
+        );
+        let actor = harness.actor();
+        let resolution = || {
+            InteractionResolution::permission(
+                PermissionDecision::try_new("allow-once", PermissionDecisionKind::AllowOnce)
+                    .expect("decision"),
+            )
+        };
+
+        let first = block_on(harness.broker.resolve_interaction(
+            &actor,
+            &harness.reference(),
+            &interaction,
+            resolution(),
+        ))
+        .expect("resolve");
+        assert_eq!(first, Resolution::Resolved);
+        let second = block_on(harness.broker.resolve_interaction(
+            &actor,
+            &harness.reference(),
+            &interaction,
+            resolution(),
+        ))
+        .expect("resolve");
+        assert_eq!(second, Resolution::AlreadyResolved);
+
+        let stored = harness
+            .world
+            .interaction_resolution(&interaction)
+            .expect("既有结果");
+        match stored.resolution {
+            InteractionResolution::Permission(decision) => {
+                assert_eq!(decision.option_id(), "allow-once");
+                assert_eq!(decision.kind(), PermissionDecisionKind::AllowOnce);
+            }
+            InteractionResolution::Elicitation { .. } => panic!("必须是权限决定"),
+        }
+        assert_eq!(harness.world.audits().len(), 0, "成功的解析不写审计拒绝行");
+    }
+
+    /// §6.5：授权在 core 判定，Scope 不足即拒绝，并记 `authorization.denied`。
+    #[test]
+    fn authorization_denied_for_device_without_scope() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = device_without_scopes();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        assert_eq!(rejection_code(&receipt), "authorization.scope_denied");
+        assert_eq!(harness.world.commit_count(), 0, "拒绝不落盘");
+        assert_eq!(harness.world.prompt_count(), 0);
+        let audits = harness.world.audits();
+        assert_eq!(audits.len(), 1);
+    }
+
+    /// §6 第 13 条 / §9 判据 15：Agent 的权限请求必须在**同一提交**里同时落事件与 pending 交互行；
+    /// 行与事件的配对（真实 `event_id`）由存储层按 payload 的 `interactionId` 完成，core 不携带该 id。
+    #[test]
+    fn interaction_request_lands_event_and_pending_row_in_one_commit() {
+        let harness = Harness::new(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(400)).expect("interaction");
+        let view = format!(
+            r#"{{"interactionId":"{}","turnId":"{}","title":"Approve","description":null,"options":[{{"optionId":"allow-once","label":"Allow once","kind":"allow_once"}}]}}"#,
+            interaction.as_str(),
+            uuid_text(0)
+        );
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(EventKind::Interaction, "permission.requested", &view),
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+        ]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        // (a) 交互事件与 pending 行落在同一次提交里（fake store 按 §6 第 13 条配对，配不到即整事务失败）。
+        let interaction_batch = harness
+            .world
+            .batches()
+            .into_iter()
+            .find(|batch| {
+                batch
+                    .types
+                    .iter()
+                    .any(|kind| kind == "permission.requested")
+            })
+            .expect("交互事件必须落盘");
+        assert!(
+            interaction_batch
+                .types
+                .iter()
+                .any(|kind| kind == "permission.requested"),
+            "交互事件必须是 kind = interaction 的事件：{:?}",
+            interaction_batch.types
+        );
+        assert!(
+            harness
+                .world
+                .events(&harness.session)
+                .iter()
+                .any(|event| { event.session_sequence.is_some() }),
+            "交互事件是会话级事件"
+        );
+
+        // (b) 读视图里该行的 options 恒为空（不落库），正文经 event_payload 还原。
+        let read_view = block_on(harness.broker.read_view()).expect("read view");
+        let page = block_on(read_view.read_session(HistoryQuery {
+            session: harness.session.clone(),
+            include: HistoryInclude {
+                messages: false,
+                turns: false,
+                pending_interactions: true,
+                config_options: false,
+                capabilities: false,
+            },
+            after: None,
+            limit: ReplayLimit::default(),
+        }))
+        .expect("read");
+        let pending = page
+            .interactions
+            .iter()
+            .find(|item| item.id() == &interaction)
+            .expect("pending 交互行必须落地");
+        assert!(pending.options().is_empty(), "options 不落库");
+        let interaction_event = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .map(|event| event.id)
+            .find(|id| {
+                block_on(read_view.event_payload(id))
+                    .ok()
+                    .flatten()
+                    .map(|payload| payload.view.as_str().contains(interaction.as_str()))
+                    .unwrap_or(false)
+            })
+            .expect("必须能找到携带该 interactionId 的事件");
+        let payload = block_on(read_view.event_payload(&interaction_event))
+            .expect("event_payload")
+            .expect("事件存在");
+        assert!(
+            payload.view.as_str().contains("allow-once"),
+            "options 只能从事件正文还原：{}",
+            payload.view.as_str()
+        );
+        assert!(
+            payload.view.as_str().contains(interaction.as_str()),
+            "正文里的 interactionId 必须与交互行一致"
+        );
+    }
+
+    /// §9 判据 15：同一提交里既创建又解析交互 → `InvalidRequest`。
+    #[test]
+    fn creating_and_resolving_interaction_in_one_commit_is_rejected() {
+        let harness = Harness::new(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(401)).expect("interaction");
+        let pending = PendingInteraction::try_new(
+            interaction.clone(),
+            InteractionKind::Permission,
+            harness.session.clone(),
+            ts(0),
+            Vec::new(),
+        )
+        .expect("pending");
+        let commit = OwnedCommit {
+            session: Some(harness.session.clone()),
+            at: ts(1),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: None,
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: Some(InteractionResolved {
+                    interaction: interaction.clone(),
+                    resolution: InteractionResolution::permission(
+                        PermissionDecision::try_new(
+                            "allow-once",
+                            PermissionDecisionKind::AllowOnce,
+                        )
+                        .expect("decision"),
+                    ),
+                    resolved_by: Actor::LocalCli,
+                }),
+            })),
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: vec![PendingInteractionWrite {
+                interaction: pending,
+                turn: None,
+            }],
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let error = block_on(harness.broker.commit_owned(commit)).expect_err("必须拒绝");
+        assert!(
+            matches!(error, PortError::InvalidRequest(reason) if reason.contains("同时创建与解析")),
+            "必须是 §9 判据 15 的 InvalidRequest，实际 {error:?}"
+        );
+        assert_eq!(harness.world.commit_count(), 0, "校验在落盘之前");
+    }
+
+    /// §9 判据 17：非会话级事件的三个列都是 NULL，且仍出现在 replay 流里。
+    #[test]
+    fn non_session_event_has_no_session_scoped_identifiers() {
+        let harness = Harness::new(BrokerConfig::default());
+        let commit = OwnedCommit {
+            session: None,
+            at: ts(2),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![
+                pending_event(
+                    "device.revoked",
+                    EventKind::State,
+                    json_view(r#"{"deviceId":"00000000-0000-4000-8000-000000000042"}"#),
+                    None,
+                    None,
+                    StoredPolicy::Durable,
+                    None,
+                )
+                .expect("event"),
+            ],
+            interactions: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
+        assert_eq!(outcome.appended.len(), 1);
+        let event = &outcome.appended[0];
+        assert!(event.session.is_none());
+        assert!(event.session_sequence.is_none());
+        assert!(event.origin_epoch.is_none());
+        assert!(event.origin_sequence.is_none());
+        event.validate().expect("成对不变量");
+
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let batch = block_on(view.replay(None, ReplayLimit::default())).expect("replay");
+        assert_eq!(batch.events.len(), 1, "非会话级事件也进入 replay 流");
+    }
+
+    /// §6.12/§5.2：`ReadView::event_payload` 是正文的唯一读取入口，不存在的事件返回 `None`。
+    #[test]
+    fn event_payload_returns_stored_view_and_none_for_unknown_event() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let event = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.session_sequence.is_some())
+            .expect("会话级事件");
+        let payload = block_on(view.event_payload(&event.id))
+            .expect("event_payload")
+            .expect("已落盘事件");
+        assert!(payload.view.as_str().starts_with('{'));
+        let missing = EventId::new(&uuid_text(999_999)).expect("event");
+        assert!(
+            block_on(view.event_payload(&missing))
+                .expect("ok")
+                .is_none()
+        );
+    }
+
+    /// §10.1：四类产生者各至少一条断言——Agent（后端事件）、Device（设备命令引起）、LocalCli（本地
+    /// CLI 命令引起）、Daemon（daemon 自身事件）。
+    #[test]
+    fn event_origin_follows_the_producer() {
+        // 纯映射层：同一事件类型在不同 actor 下得到不同的 origin。
+        let delta = EventType::new("agent.message.delta").expect("event type");
+        assert_eq!(event_origin(&delta, None), EventOrigin::Agent);
+        let completed = EventType::new("command.completed").expect("event type");
+        assert_eq!(event_origin(&completed, None), EventOrigin::Device);
+        assert_eq!(
+            event_origin(&completed, Some(&Actor::LocalCli)),
+            EventOrigin::LocalCli
+        );
+        let revoked = EventType::new("device.revoked").expect("event type");
+        assert_eq!(
+            event_origin(&revoked, Some(&Actor::LocalCli)),
+            EventOrigin::Daemon
+        );
+
+        // 端到端：同一条 prompt 提交里，Agent 事件与命令事件的 origin 不同。
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let device = Actor::Device {
+            device: DeviceId::new(&uuid_text(43)).expect("uuid"),
+            scopes: {
+                let mut scopes = ScopeSet::empty();
+                scopes.insert("session.prompt").expect("insert scope");
+                scopes
+            },
+        };
+        let command = prompt_command(&device, &harness.session, &harness.request(1), 'A');
+        assert!(matches!(
+            block_on(harness.broker.submit_mutation(&device, &command)).expect("submit"),
+            CommandReceipt::Accepted { .. }
+        ));
+        let origins: Vec<(EventOrigin, String)> = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .map(|event| {
+                (
+                    harness
+                        .world
+                        .event_origin(&event.id)
+                        .expect("origin recorded"),
+                    event.id.as_str().to_owned(),
+                )
+            })
+            .collect();
+        let by_origin = |origin: EventOrigin| {
+            origins
+                .iter()
+                .filter(|(stored, _)| *stored == origin)
+                .count()
+        };
+        assert_eq!(by_origin(EventOrigin::Agent), 1, "后端 delta 属于 Agent");
+        assert!(
+            by_origin(EventOrigin::Device) >= 3,
+            "turn.queued/turn.started/command.completed 由设备命令引起"
+        );
+        assert_eq!(
+            by_origin(EventOrigin::LocalCli),
+            0,
+            "该命令来自设备而不是本地 CLI"
+        );
+        assert_eq!(by_origin(EventOrigin::Daemon), 0);
+
+        // 本地 CLI 的同一路径 → LocalCli。
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let origins: Vec<EventOrigin> = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .filter_map(|event| harness.world.event_origin(&event.id))
+            .collect();
+        assert!(
+            origins
+                .iter()
+                .filter(|origin| **origin == EventOrigin::LocalCli)
+                .count()
+                >= 3,
+            "本地 CLI 引起的 turn/command 事件记 LocalCli：{origins:?}"
+        );
+    }
+
+    /// §6.12：快照与重放出自同一读视图，barrier 是该视图的 `head()`。
+    #[test]
+    fn replay_and_snapshot_share_one_read_view() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let before = harness.world.read_view_count();
+        let view = block_on(harness.broker.read_view()).expect("read view");
+        assert_eq!(harness.world.read_view_count(), before + 1);
+        let barrier = block_on(view.head()).expect("view head");
+        let batch = block_on(view.replay(None, ReplayLimit::default())).expect("replay");
+        assert_eq!(batch.head, barrier, "重放 barrier 与视图 head 一致");
+        assert_eq!(batch.reset_required, None);
+        assert_eq!(
+            batch.events.len(),
+            harness.world.events(&harness.session).len()
+        );
+        assert!(batch.next.is_some());
+
+        // 没有 cursor 的首次同步由调用方按 `initial_sync` 处理；这里断言 head 仍来自同一视图。
+        let again =
+            block_on(view.replay(batch.next.clone(), ReplayLimit::default())).expect("replay");
+        assert!(again.events.is_empty());
+        assert_eq!(again.head, barrier);
+    }
+}

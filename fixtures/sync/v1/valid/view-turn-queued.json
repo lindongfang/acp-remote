@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "ef344db7-0376-45b8-a074-0551be097b64",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "59",
+  "body": {
+    "globalSequence": "2348",
+    "sessionSequence": "208",
+    "eventId": "8c7c5c6a-48fb-49a4-af7c-e650b2c19ff0",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "turn.queued",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "daemon",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "state": "queued"
+      }
+    }
+  }
+}

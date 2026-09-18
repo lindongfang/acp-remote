@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "c9caec3a-1666-4f61-a2ba-df0042f2b405",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "65",
+  "body": {
+    "globalSequence": "2354",
+    "sessionSequence": "214",
+    "eventId": "33457622-39f8-4066-a681-67bf1c1f9ab1",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "agent.thought.delta",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "device",
+      "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49"
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaIndex": "1",
+        "text": "先读取 event-views.schema.json"
+      }
+    }
+  }
+}

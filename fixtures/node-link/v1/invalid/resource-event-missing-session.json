@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.event",
+  "messageId": "e5f60718-293a-4b4c-8d5e-6f708192a3b4",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "13",
+  "body": {
+    "originEventId": "da702ba1-f49f-4e16-a677-a7744dfedba6",
+    "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+    "originSequence": "2318",
+    "eventType": "agent.message.delta",
+    "payloadDigest": "2L9wPtiENI21oBYQrkEWXM-W3_o-8McKUFTu_2cf5lo",
+    "createdAt": "2026-09-18T09:12:03.412Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaIndex": "0",
+        "text": "处理中"
+      }
+    }
+  }
+}

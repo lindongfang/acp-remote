@@ -1,0 +1,6 @@
+{
+  "description": "丢掉 Node Link accessPublicKey（SEC1 未压缩点）最后一字节得到 64 字节；解码器必须以 bad_length 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "malformedPublicKeyBase64url": "BJcEHJX1Zwhc5BBZYECSO_aYJYZCNDSkKmUusiahkuYK5PkWY9uoXLsCd3J2PrH_9k-RSG_xDkEjW20oeL3T7w",
+  "expectedError": "bad_length"
+}

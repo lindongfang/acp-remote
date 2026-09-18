@@ -1,0 +1,24 @@
+[package]
+name = "storage-sqlite"
+description = "core 持久化后端：SQLite 表结构、migration、owned 原子提交与 imported 无正文索引"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+core = { path = "../core" }
+# `payload_digest` 的 ACPR-CJ1 只允许有一份实现（`docs/MODULE_ARCHITECTURE.md` §5 的矩阵已放开）。
+acpr-wire = { path = "../acpr-wire" }
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+sha2.workspace = true
+base64.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

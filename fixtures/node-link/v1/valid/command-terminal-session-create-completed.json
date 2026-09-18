@@ -1,0 +1,28 @@
+{
+  "protocolVersion": 1,
+  "type": "command.terminal",
+  "messageId": "8b9c0d1e-2f30-4516-b7c8-d9eafb0c1d2e",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "9",
+  "body": {
+    "requestId": "7f8e9d0c-1b2a-4c3d-9e8f-7a6b5c4d3e2f",
+    "command": "session.create",
+    "terminal": {
+      "status": "completed",
+      "terminalAt": "2026-09-18T09:12:06.250Z",
+      "terminalEventId": "b0c1d2e3-f405-4627-a8b9-c0d1e2f3a4b5",
+      "result": {
+        "remoteSessionRef": {
+          "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+          "exportId": "export-main",
+          "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+        },
+        "sessionMeta": {
+          "state": "idle",
+          "version": "1"
+        }
+      },
+      "error": null
+    }
+  }
+}

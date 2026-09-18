@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.ack",
+  "messageId": "f6071829-3a4b-4c5d-8e6f-708192a3b4c5",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "14",
+  "body": {
+    "cursor": {
+      "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+      "originSequence": "2318"
+    }
+  }
+}

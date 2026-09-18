@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "type": "control.ping",
+  "messageId": "4b5c6d7e-8091-42a3-b4c5-d6e7f8091a2b",
+  "body": {
+    "nonce": "AAECAwQFBgcICQoLDA0ODw"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "link.pong",
+  "messageId": "f8091a2b-3c4d-4e5f-8061-728394a5b6c7",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "25",
+  "body": {
+    "nonce": "AAECAwQFBgcICQoLDA0ODw"
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/features/features.schema.json",
+  "title": "ACP Remote Feature ID Registry",
+  "description": "compatibility/features/v1/features.json 的形状约束：feature ID 是封闭词表，只能在本文件登记；跨协议唯一性、与协议文档表格和 fixture 的一致性由 scripts/check-features.mjs 断言。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "revision", "description", "protocols"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "description": { "type": "string", "minLength": 1 },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sync", "node_link"],
+      "properties": {
+        "sync": { "$ref": "#/$defs/protocol" },
+        "node_link": { "$ref": "#/$defs/protocol" }
+      }
+    }
+  },
+  "$defs": {
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "features"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "唯一权威的协议文档章节；其表格必须与本列表逐条相等。",
+          "minLength": 1
+        },
+        "features": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/feature" }
+        }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "delivery", "required"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "小写 ASCII、点分层的 feature ID；必须以 major 版本后缀 .v1 结尾（docs/SYNC_PROTOCOL.md §5.2 的语法）。",
+          "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.v1$",
+          "maxLength": 64
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "delivery": {
+          "enum": ["mvp", "conditional_mvp", "post_mvp"],
+          "description": "产品交付阶段；与 compatibility/commands/v1/commands.json 的 delivery 取值域一致。"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "协议是否要求每次协商都必须选中该 feature。"
+        }
+      }
+    }
+  }
+}

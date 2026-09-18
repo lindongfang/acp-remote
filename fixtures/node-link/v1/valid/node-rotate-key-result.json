@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "type": "node.rotate-key.result",
+  "messageId": "708192a3-b4c5-46d7-88e9-f0a1b2c3d4e5",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "17",
+  "body": {
+    "requestId": "0dcbfd5b-b60b-4275-a5b3-a10c87642e5f",
+    "status": "accepted",
+    "newNodePublicKey": "BBAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk8",
+    "rotatedAt": "2026-09-18T09:35:00.000Z",
+    "reason": null
+  }
+}

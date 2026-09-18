@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "b2ba58e4-6695-4046-a1c0-05665ce2e12e",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "54",
+  "body": {
+    "globalSequence": "2343",
+    "sessionSequence": "203",
+    "eventId": "d575f6f5-aa41-4563-af63-8f12f521b658",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "session.mode.changed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "local_cli",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "currentModeId": "plan",
+        "version": "3"
+      }
+    }
+  }
+}

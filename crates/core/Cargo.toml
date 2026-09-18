@@ -1,0 +1,23 @@
+[package]
+name = "core"
+description = "领域模型、用例、端口与会话协调（不依赖 runtime、wire protocol 或数据库）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# 包名保持 `core`（与 MODULE_ARCHITECTURE §3/§5 的 crate 名一致），但**库名**必须是 `acp_core`：
+# 一个名为 `core` 的依赖会在依赖方的宏展开里遮蔽 sysroot 的 `core`，使 `thiserror::Error` 之类
+# 展开出的 `core::fmt` 解析到本 crate 而编译失败。依赖方照旧写 `core = { path = "../core" }`，
+# 代码里用 `acp_core::…`。
+[lib]
+name = "acp_core"
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

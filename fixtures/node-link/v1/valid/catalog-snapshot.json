@@ -23,6 +23,23 @@
             "displayName": "Company Agent (default)"
           }
         ],
+        "defaultWorkspaceAlias": "company-agent-default",
+        "templates": [
+          {
+            "templateId": "default",
+            "displayName": "Default",
+            "workspaceAlias": "company-agent-default",
+            "params": [
+              {
+                "name": "branch",
+                "type": "string",
+                "required": false,
+                "pattern": "^[a-zA-Z0-9._/-]{1,128}$",
+                "enum": null
+              }
+            ]
+          }
+        ],
         "scopes": [
           "grant.observe",
           "grant.interact",

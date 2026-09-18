@@ -1,0 +1,44 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "df8d9b66-2026-4054-ab3e-cfa4b1314e21",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "51",
+  "body": {
+    "globalSequence": "2340",
+    "sessionSequence": "200",
+    "eventId": "a2412670-0f93-477c-a3cd-c7c1a9b7004c",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "session.created",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "daemon",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "session": {
+          "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+          "title": "修复 schema 覆盖门禁",
+          "agent": {
+            "agentId": "company-agent",
+            "name": "Company Agent"
+          },
+          "state": "idle",
+          "origin": {
+            "kind": "local"
+          },
+          "currentMode": {
+            "modeId": "default",
+            "displayName": "Default"
+          },
+          "version": "1",
+          "createdAt": "2026-09-17T12:00:00.000Z",
+          "updatedAt": "2026-09-17T12:00:00.000Z"
+        }
+      }
+    }
+  }
+}

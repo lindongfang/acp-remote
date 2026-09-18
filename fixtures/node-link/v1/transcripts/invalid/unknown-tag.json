@@ -1,0 +1,7 @@
+{
+  "description": "使用 tag 17（Node Link 表最大为 16，且与 Sync tag 表无关）；解码器必须以 unknown_tag 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "domain": "acp-remote/node-link-challenge/v1",
+  "malformedTranscriptBase64url": "QUNQUgEAIWFjcC1yZW1vdGUvbm9kZS1saW5rLWNoYWxsZW5nZS92MQAIAAEAAAACAAEAAgAAABAAAQIDBAVGB4gJCgsMDQ4PAAMAAAAQEBESExQVRheYGRobHB0eHwAGAAAACAAAAAAAAAAqAAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACgAAACAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-PwALAAAAEEBBQkNERUZHiElKS0xNTk8AEQAAAHlub2RlLWxpbmsuY29tbWFuZC1zdGF0dXMudjEAbm9kZS1saW5rLmNvcmUudjEAbm9kZS1saW5rLmV4cG9ydC1yZXZva2UudjEAbm9kZS1saW5rLnJhdy1hY3AudjEAbm9kZS1saW5rLnNlc3Npb24tY3JlYXRlLnYx",
+  "expectedError": "unknown_tag"
+}

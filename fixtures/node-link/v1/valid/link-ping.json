@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "link.ping",
+  "messageId": "0b5c6d7e-8f90-41a2-b3c4-d5e6f7081920",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "24",
+  "body": {
+    "nonce": "AAECAwQFBgcICQoLDA0ODw"
+  }
+}

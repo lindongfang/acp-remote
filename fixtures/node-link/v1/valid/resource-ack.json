@@ -5,6 +5,11 @@
   "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
   "connectionSequence": "5",
   "body": {
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "exportId": "export-main",
+      "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+    },
     "cursor": {
       "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
       "originSequence": "2318"

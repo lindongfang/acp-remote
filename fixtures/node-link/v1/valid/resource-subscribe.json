@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.subscribe",
+  "messageId": "a3b4c5d6-e7f8-490a-9b1c-2d3e4f506172",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "20",
+  "body": {
+    "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",
+    "attachmentGeneration": "1",
+    "cursor": {
+      "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+      "originSequence": "2318"
+    }
+  }
+}

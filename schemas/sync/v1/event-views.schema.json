@@ -283,7 +283,7 @@
       "required": ["interactionId", "action", "resolvedByDeviceId"],
       "properties": {
         "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "action": { "enum": ["submit", "cancel"] },
+        "action": { "enum": ["submit", "decline", "cancel"] },
         "resolvedByDeviceId": {
           "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
         }

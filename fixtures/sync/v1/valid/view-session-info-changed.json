@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "8928fba2-94b2-452c-ae6e-f3da8815e658",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "53",
+  "body": {
+    "globalSequence": "2342",
+    "sessionSequence": "202",
+    "eventId": "4dccce00-f711-4e7d-ae0b-b7d77bd4d934",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "session.info.changed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "device",
+      "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49"
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "title": "修复 schema 覆盖门禁（已改名）",
+        "updatedAt": "2026-09-17T12:12:00.000Z"
+      }
+    }
+  }
+}

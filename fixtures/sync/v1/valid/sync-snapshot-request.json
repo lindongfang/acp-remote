@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_request",
+  "messageId": "f5061728-3a4b-4c5d-86e7-f8a9b0c1d2e3",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "48",
+  "body": {
+    "reason": "cursor_expired"
+  }
+}

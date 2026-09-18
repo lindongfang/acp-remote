@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "type": "command.terminal",
+  "messageId": "9c0d1e2f-3041-462a-b8c9-dafb0c1d2e3f",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "10",
+  "body": {
+    "requestId": "7f8e9d0c-1b2a-4c3d-9e8f-7a6b5c4d3e2f",
+    "command": "session.create",
+    "terminal": {
+      "status": "uncertain",
+      "terminalAt": "2026-09-18T09:12:07.500Z",
+      "terminalEventId": null,
+      "result": null,
+      "error": {
+        "code": "nodelink.command.uncertain",
+        "message": "崩溃窗口内无法确认会话是否已创建。",
+        "retryable": false,
+        "details": {}
+      }
+    }
+  }
+}

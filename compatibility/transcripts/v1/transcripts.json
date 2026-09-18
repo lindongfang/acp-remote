@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "description": "ACP Remote transcript registry v1：12 个 domain 的 codec 字段表（Sync 6 + Node Link 6），逐条对应 docs/SYNC_PROTOCOL.md §6.2/§6.3 与 docs/NODE_LINK_PROTOCOL.md §9.2/§9.3/§9.4。scripts/check-contract-assets.mjs 用它从 fixture 的 `input` 重新编码 transcript，因此 tag 编号、字段宽度或顺序写错都会失败。inputKey 是 fixture `input` 里的键：键名以 `Hex` 结尾的二进制字段按十六进制解析，其余二进制字段按无填充 base64url 解析；u16be/u64be 取整数，uuid16 取 UUID 文本，nul-joined-utf8 取字符串数组，utf8 取字符串。",
+  "codec": {
+    "name": "acpr-transcript-v1",
+    "magic": "ACPR",
+    "codecVersion": 1,
+    "description": "magic(4 ASCII bytes) || codecVersion(u8) || domainLength(u16be) || domain(UTF-8) || fieldCount(u16be) || merged fields ascending by fieldTag: fieldTag(u16be) || byteLength(u32be) || rawBytes。字段 tag 严格递增且唯一；字符串为无 NUL 的 UTF-8 原始字节。"
+  },
+  "domains": [
+    {
+      "domain": "acp-remote/pairing-proof/v1",
+      "protocol": "sync",
+      "proof": "hmac",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "hostId", "type": "uuid16", "inputKey": "hostId" },
+        { "tag": 3, "name": "deviceId", "type": "uuid16", "inputKey": "deviceId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 5, "name": "pairingExpiresAt", "type": "u64be", "inputKey": "pairingExpiresAtUnixSeconds" },
+        { "tag": 6, "name": "canonicalOrigin", "type": "utf8", "inputKey": "canonicalOrigin" },
+        { "tag": 8, "name": "devicePublicKey", "type": "sec1-65", "inputKey": "devicePublicKey" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 14, "name": "deviceName", "type": "utf8", "inputKey": "deviceName" },
+        { "tag": 15, "name": "clientKind", "type": "utf8", "inputKey": "clientKind" }
+      ]
+    },
+    {
+      "domain": "acp-remote/pairing-host-proof/v1",
+      "protocol": "sync",
+      "proof": "signature",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "hostId", "type": "uuid16", "inputKey": "hostId" },
+        { "tag": 3, "name": "deviceId", "type": "uuid16", "inputKey": "deviceId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 6, "name": "canonicalOrigin", "type": "utf8", "inputKey": "canonicalOrigin" },
+        { "tag": 7, "name": "hostPublicKey", "type": "sec1-65", "inputKey": "hostPublicKey" },
+        { "tag": 8, "name": "devicePublicKey", "type": "sec1-65", "inputKey": "devicePublicKey" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 13, "name": "pairingRequestId", "type": "uuid16", "inputKey": "pairingRequestId" }
+      ]
+    },
+    {
+      "domain": "acp-remote/pairing-sas/v1",
+      "protocol": "sync",
+      "proof": "hmac",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "hostId", "type": "uuid16", "inputKey": "hostId" },
+        { "tag": 3, "name": "deviceId", "type": "uuid16", "inputKey": "deviceId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 6, "name": "canonicalOrigin", "type": "utf8", "inputKey": "canonicalOrigin" },
+        { "tag": 7, "name": "hostPublicKey", "type": "sec1-65", "inputKey": "hostPublicKey" },
+        { "tag": 8, "name": "devicePublicKey", "type": "sec1-65", "inputKey": "devicePublicKey" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 13, "name": "pairingRequestId", "type": "uuid16", "inputKey": "pairingRequestId" }
+      ]
+    },
+    {
+      "domain": "acp-remote/pairing-status/v1",
+      "protocol": "sync",
+      "proof": "hmac",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "hostId", "type": "uuid16", "inputKey": "hostId" },
+        { "tag": 3, "name": "deviceId", "type": "uuid16", "inputKey": "deviceId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 13, "name": "pairingRequestId", "type": "uuid16", "inputKey": "pairingRequestId" },
+        { "tag": 16, "name": "requestNonce", "type": "bytes32", "inputKey": "requestNonceHex" }
+      ]
+    },
+    {
+      "domain": "acp-remote/host-challenge/v1",
+      "protocol": "sync",
+      "proof": "signature",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "hostId", "type": "uuid16", "inputKey": "hostId" },
+        { "tag": 3, "name": "deviceId", "type": "uuid16", "inputKey": "deviceId" },
+        { "tag": 6, "name": "canonicalOrigin", "type": "utf8", "inputKey": "canonicalOrigin" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 11, "name": "connectionId", "type": "uuid16", "inputKey": "connectionId" },
+        { "tag": 12, "name": "negotiatedFeatures", "type": "nul-joined-utf8", "inputKey": "negotiatedFeatures" }
+      ]
+    },
+    {
+      "domain": "acp-remote/device-proof/v1",
+      "protocol": "sync",
+      "proof": "signature",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "hostId", "type": "uuid16", "inputKey": "hostId" },
+        { "tag": 3, "name": "deviceId", "type": "uuid16", "inputKey": "deviceId" },
+        { "tag": 6, "name": "canonicalOrigin", "type": "utf8", "inputKey": "canonicalOrigin" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 11, "name": "connectionId", "type": "uuid16", "inputKey": "connectionId" },
+        { "tag": 12, "name": "negotiatedFeatures", "type": "nul-joined-utf8", "inputKey": "negotiatedFeatures" }
+      ]
+    },
+    {
+      "domain": "acp-remote/node-link-pairing-proof/v1",
+      "protocol": "node_link",
+      "proof": "hmac",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "ownerNodeId", "type": "uuid16", "inputKey": "ownerNodeId" },
+        { "tag": 3, "name": "accessNodeId", "type": "uuid16", "inputKey": "accessNodeId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 5, "name": "pairingExpiresAt", "type": "u64be", "inputKey": "pairingExpiresAt" },
+        { "tag": 8, "name": "accessPublicKey", "type": "sec1-65", "inputKey": "accessPublicKeyHex" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 14, "name": "nodeName", "type": "utf8", "inputKey": "nodeName" },
+        { "tag": 15, "name": "nodeKind", "type": "utf8", "inputKey": "nodeKind" }
+      ]
+    },
+    {
+      "domain": "acp-remote/node-link-pairing-owner-proof/v1",
+      "protocol": "node_link",
+      "proof": "signature",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "ownerNodeId", "type": "uuid16", "inputKey": "ownerNodeId" },
+        { "tag": 3, "name": "accessNodeId", "type": "uuid16", "inputKey": "accessNodeId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 7, "name": "ownerPublicKey", "type": "sec1-65", "inputKey": "ownerPublicKeyHex" },
+        { "tag": 8, "name": "accessPublicKey", "type": "sec1-65", "inputKey": "accessPublicKeyHex" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 13, "name": "pairingRequestId", "type": "uuid16", "inputKey": "pairingRequestId" }
+      ]
+    },
+    {
+      "domain": "acp-remote/node-link-pairing-sas/v1",
+      "protocol": "node_link",
+      "proof": "hmac",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "ownerNodeId", "type": "uuid16", "inputKey": "ownerNodeId" },
+        { "tag": 3, "name": "accessNodeId", "type": "uuid16", "inputKey": "accessNodeId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 7, "name": "ownerPublicKey", "type": "sec1-65", "inputKey": "ownerPublicKeyHex" },
+        { "tag": 8, "name": "accessPublicKey", "type": "sec1-65", "inputKey": "accessPublicKeyHex" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 13, "name": "pairingRequestId", "type": "uuid16", "inputKey": "pairingRequestId" }
+      ]
+    },
+    {
+      "domain": "acp-remote/node-link-pairing-status/v1",
+      "protocol": "node_link",
+      "proof": "hmac",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "ownerNodeId", "type": "uuid16", "inputKey": "ownerNodeId" },
+        { "tag": 3, "name": "accessNodeId", "type": "uuid16", "inputKey": "accessNodeId" },
+        { "tag": 4, "name": "pairingId", "type": "uuid16", "inputKey": "pairingId" },
+        { "tag": 13, "name": "pairingRequestId", "type": "uuid16", "inputKey": "pairingRequestId" },
+        { "tag": 16, "name": "requestNonce", "type": "bytes32", "inputKey": "requestNonceHex" }
+      ]
+    },
+    {
+      "domain": "acp-remote/node-link-challenge/v1",
+      "protocol": "node_link",
+      "proof": "signature",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "ownerNodeId", "type": "uuid16", "inputKey": "ownerNodeId" },
+        { "tag": 3, "name": "accessNodeId", "type": "uuid16", "inputKey": "accessNodeId" },
+        { "tag": 6, "name": "catalogRevision", "type": "u64be", "inputKey": "catalogRevision" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 11, "name": "connectionId", "type": "uuid16", "inputKey": "connectionId" },
+        { "tag": 12, "name": "negotiatedFeatures", "type": "nul-joined-utf8", "inputKey": "negotiatedFeatures" }
+      ]
+    },
+    {
+      "domain": "acp-remote/node-link-proof/v1",
+      "protocol": "node_link",
+      "proof": "signature",
+      "fields": [
+        { "tag": 1, "name": "protocolVersion", "type": "u16be", "inputKey": "protocolVersion" },
+        { "tag": 2, "name": "ownerNodeId", "type": "uuid16", "inputKey": "ownerNodeId" },
+        { "tag": 3, "name": "accessNodeId", "type": "uuid16", "inputKey": "accessNodeId" },
+        { "tag": 6, "name": "catalogRevision", "type": "u64be", "inputKey": "catalogRevision" },
+        { "tag": 9, "name": "clientNonce", "type": "bytes32", "inputKey": "clientNonceHex" },
+        { "tag": 10, "name": "serverNonce", "type": "bytes32", "inputKey": "serverNonceHex" },
+        { "tag": 11, "name": "connectionId", "type": "uuid16", "inputKey": "connectionId" },
+        { "tag": 12, "name": "negotiatedFeatures", "type": "nul-joined-utf8", "inputKey": "negotiatedFeatures" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "type": "command.status",
+  "messageId": "e7f8091a-2b3c-4d4e-9f50-61728394a5b6",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "24",
+  "body": {
+    "targetRequestId": "4c4dafda-dd98-442e-8d55-252b75bac72d"
+  }
+}

@@ -47,6 +47,16 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-submit-elicitation-decline.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-submit-elicitation-submit-null.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/command-terminal.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": true
@@ -85,10 +95,164 @@
       "expectedKeyword": "oneOf"
     },
     {
+      "fixture": "valid/link-error-before-auth.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-accepted-session-create.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-terminal-session-create-completed.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-terminal-session-create-uncertain.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-rejected.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-event-acp-only.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "invalid/command-unknown-field.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "unevaluatedProperties"
+    },
+    {
+      "fixture": "invalid/resource-event-missing-session.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/resource-ack-missing-session.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-terminal-missing-command.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/session-create-accepted-with-result.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/link-ping-without-connection.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
+    },
+    {
+      "fixture": "valid/node-proof.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/catalog-subscribe.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/catalog-changed.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/node-trust-revoked.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/node-rotate-key-request.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/node-rotate-key-result.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-attach.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-detach.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-subscribe.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-snapshot-begin.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-snapshot-chunk.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-snapshot-end.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-status.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/link-pong.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/link-ping.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/link-backpressure.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-event-view-agent-message-delta.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.message.delta",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-event-view-session-created.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.created",
+      "valid": true
     }
   ],
   "transcriptVectors": [
@@ -97,6 +261,13 @@
     "transcripts/pairing-sas.json",
     "transcripts/pairing-status.json",
     "transcripts/challenge.json",
-    "transcripts/node-proof.json"
+    "transcripts/node-proof.json",
+    "transcripts/invalid/bad-codec-version.json",
+    "transcripts/invalid/bad-magic.json",
+    "transcripts/invalid/duplicate-tag.json",
+    "transcripts/invalid/field-order.json",
+    "transcripts/invalid/public-key-bad-length.json",
+    "transcripts/invalid/public-key-not-on-curve.json",
+    "transcripts/invalid/unknown-tag.json"
   ]
 }

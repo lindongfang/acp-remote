@@ -6,12 +6,13 @@
   "connectionSequence": "8",
   "body": {
     "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "command": "session.prompt",
     "terminal": {
       "status": "completed",
       "terminalAt": "2026-09-18T09:12:04.000Z",
       "terminalEventId": "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
       "result": {
-        "messageId": "7daf617d-0048-41d0-8486-629570be64d6"
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
       },
       "error": null
     }

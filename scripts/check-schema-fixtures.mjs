@@ -14,6 +14,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetRoots = [
   { name: "sync", schemaRoot: join(root, "schemas", "sync", "v1"), fixtureRoot: join(root, "fixtures", "sync", "v1") },
   { name: "node-link", schemaRoot: join(root, "schemas", "node-link", "v1"), fixtureRoot: join(root, "fixtures", "node-link", "v1") },
+  {
+    name: "acp",
+    schemaRoot: join(root, "schemas", "acp", "v1", "upstream"),
+    fixtureRoot: join(root, "fixtures", "acp", "v1"),
+  },
 ];
 
 const errors = [];
@@ -23,6 +28,19 @@ let viewChecked = 0;
 
 const ajv = new Ajv2020({ allErrors: true, strict: false, unevaluated: true, validateFormats: true });
 addFormats(ajv);
+
+// The pinned ACP snapshot marks integer widths with `format: uint16|uint32|uint64|int64`.
+// Registering them keeps the check silent and, more importantly, enforces the width and
+// sign instead of silently ignoring the constraint as an unknown format.
+const integerFormats = {
+  uint16: (value) => Number.isInteger(value) && value >= 0 && value <= 65535,
+  uint32: (value) => Number.isInteger(value) && value >= 0 && value <= 4294967295,
+  uint64: (value) => Number.isInteger(value) && value >= 0,
+  int64: (value) => Number.isInteger(value),
+};
+for (const [name, validate] of Object.entries(integerFormats)) {
+  ajv.addFormat(name, { type: "number", validate });
+}
 
 function readJson(path) {
   try {
@@ -163,6 +181,28 @@ for (const [schemaPath, entry] of schemaEntries) {
 
 const viewCache = new Map();
 
+// A case may target a subschema through `schemaPointer` instead of the document root.
+// The pinned ACP snapshot is a loose union across message kinds, so a negative case that
+// must isolate one constraint (for example a uint32 field) has to name the `$defs` entry.
+const pointerCache = new Map();
+
+function checkValueAtPointer(schemaPath, pointer, value) {
+  const entry = schemaEntries.get(schemaPath);
+  if (!entry) return { ok: false, errors: [] };
+  const key = `${entry.key}${pointer}`;
+  if (!pointerCache.has(key)) {
+    try {
+      pointerCache.set(key, ajv.compile({ $ref: key }));
+    } catch (error) {
+      errors.push(`cannot compile ${relative(root, schemaPath)}${pointer}: ${error.message}`);
+      return { ok: false, errors: [] };
+    }
+  }
+  const validate = pointerCache.get(key);
+  const ok = validate(value);
+  return { ok, errors: ok ? [] : (validate.errors ?? []) };
+}
+
 function checkView(schemaPath, viewDef, value, label, fixturePath) {
   const entry = schemaEntries.get(schemaPath);
   if (!entry) {
@@ -183,6 +223,10 @@ function checkView(schemaPath, viewDef, value, label, fixturePath) {
     errors.push(`fixture view rejected: ${relative(root, fixturePath)}: ${summarize(validateView.errors)}`);
   }
 }
+
+// Event view coverage is a property of the view schema, not of one asset root: both protocols
+// share schemas/sync/v1/event-views.schema.json, and each `$defs` entry needs one real fixture.
+const viewBindings = new Map();
 
 for (const assetRoot of assetRoots) {
   const manifestPath = join(assetRoot.fixtureRoot, "manifest.json");
@@ -208,7 +252,10 @@ for (const assetRoot of assetRoots) {
     const fixture = readJson(fixturePath);
     if (!fixture) continue;
     const label = relative(root, fixturePath);
-    const { ok, errors: caseErrors } = checkValue(schemaPath, fixture);
+    const { ok, errors: caseErrors } =
+      typeof testCase.schemaPointer === "string"
+        ? checkValueAtPointer(schemaPath, testCase.schemaPointer, fixture)
+        : checkValue(schemaPath, fixture);
 
     if (testCase.valid === true) {
       validChecked += 1;
@@ -233,6 +280,35 @@ for (const assetRoot of assetRoots) {
     }
   }
 
+  // Coverage gate: a declared message type or event view with no fixture is an unverified
+  // contract surface. The document promises this coverage; without the assertion a new type
+  // could ship silently unchecked.
+  const unionPath = join(assetRoot.schemaRoot, "message.schema.json");
+  const unionEntry = schemaEntries.get(unionPath);
+  if (unionEntry) {
+    const declared = declaredTypes({ $ref: unionEntry.key }, unionEntry);
+    const covered = new Set();
+    for (const testCase of manifest.cases ?? []) {
+      const fixturePath = resolve(assetRoot.fixtureRoot, testCase.fixture);
+      if (!existsSync(fixturePath)) continue;
+      const fixture = readJson(fixturePath);
+      if (typeof fixture?.type === "string") covered.add(fixture.type);
+    }
+    for (const type of declared) {
+      if (!covered.has(type)) errors.push(`${assetRoot.name}: message type has no fixture: ${type}`);
+    }
+    for (const type of covered) {
+      if (!declared.has(type)) errors.push(`${assetRoot.name}: fixture uses unregistered type: ${type}`);
+    }
+  }
+
+  for (const testCase of manifest.cases ?? []) {
+    if (typeof testCase.viewSchema !== "string" || typeof testCase.viewDef !== "string") continue;
+    const viewSchemaPath = resolve(assetRoot.fixtureRoot, testCase.viewSchema);
+    if (!viewBindings.has(viewSchemaPath)) viewBindings.set(viewSchemaPath, new Set());
+    viewBindings.get(viewSchemaPath).add(testCase.viewDef);
+  }
+
   for (const vector of manifest.transcriptVectors ?? []) {
     listedFixtures.add(resolve(assetRoot.fixtureRoot, vector));
   }
@@ -240,6 +316,16 @@ for (const assetRoot of assetRoots) {
     if (fixturePath === manifestPath) continue;
     if (!listedFixtures.has(fixturePath)) {
       errors.push(`${assetRoot.name}: fixture not listed in manifest: ${relative(root, fixturePath)}`);
+    }
+  }
+}
+
+for (const [viewSchemaPath, bound] of viewBindings) {
+  const viewEntry = schemaEntries.get(viewSchemaPath);
+  if (!viewEntry) continue;
+  for (const def of Object.keys(viewEntry.doc.$defs ?? {})) {
+    if (!bound.has(`#/$defs/${def}`)) {
+      errors.push(`event view has no fixture: ${def} (${relative(root, viewSchemaPath)})`);
     }
   }
 }

@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.reset_required",
+  "messageId": "e4f50617-293a-4b4c-95d6-e7f8a9b0c1d2",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "47",
+  "body": {
+    "reason": "initial_sync",
+    "snapshotAvailable": true
+  }
+}

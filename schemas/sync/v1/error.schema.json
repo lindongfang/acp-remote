@@ -18,19 +18,26 @@
         "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" }
       }
     },
-    "error": {
-      "allOf": [
-        { "$ref": "#/$defs/postAuthBase" },
-        {
-          "type": "object",
-          "properties": {
-            "type": { "const": "error" },
-            "body": {
+    "preAuthBase": {
+      "type": "object",
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" }
+      },
+      "description": "认证完成前的信封：省略 connectionId 与 connectionSequence（SYNC_PROTOCOL.md §4.1）。"
+    },
+    "errorBody": {
+      "type": "object",
+      "required": ["type", "body"],
+      "properties": {
+        "type": { "const": "error" },
+        "body": {
               "type": "object",
               "additionalProperties": false,
               "required": ["code", "message", "retryable", "correlationId", "details"],
               "properties": {
-                "code": { "type": "string", "pattern": "^[a-z0-9_.-]+$", "maxLength": 128 },
+                "code": { "$ref": "common.schema.json#/$defs/errorCode" },
                 "message": { "type": "string", "maxLength": 1024 },
                 "retryable": { "type": "boolean" },
                 "correlationId": {
@@ -40,9 +47,18 @@
               }
             }
           }
+        },
+    "error": {
+      "oneOf": [
+        {
+          "allOf": [{ "$ref": "#/$defs/preAuthBase" }, { "$ref": "#/$defs/errorBody" }],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [{ "$ref": "#/$defs/postAuthBase" }, { "$ref": "#/$defs/errorBody" }],
+          "unevaluatedProperties": false
         }
-      ],
-      "unevaluatedProperties": false
+      ]
     },
     "ping": {
       "allOf": [

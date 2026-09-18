@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "6f8b6309-d247-4a20-a44c-f92f1bebae43",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "66",
+  "body": {
+    "globalSequence": "2355",
+    "sessionSequence": "215",
+    "eventId": "cd986b30-58e8-4d5d-aa99-a15859589b4e",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "agent.message.completed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "local_cli",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "content": [
+          {
+            "type": "text",
+            "text": "已补齐全部事件视图 fixture。"
+          }
+        ]
+      }
+    }
+  }
+}

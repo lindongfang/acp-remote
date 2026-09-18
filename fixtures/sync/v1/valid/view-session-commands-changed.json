@@ -1,0 +1,31 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "409f309b-a42d-4ab6-aab6-2a081a1f5ba2",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "56",
+  "body": {
+    "globalSequence": "2345",
+    "sessionSequence": "205",
+    "eventId": "701a1da8-5f89-4406-a583-148ea8dc942e",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "session.commands.changed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "agent",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "commands": [
+          {
+            "name": "fix",
+            "description": "修复当前会话中的问题"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,8 +1,9 @@
 # ACP Remote 安全设计
 
 > 状态：编码前安全基线（Draft）  
-> 版本：0.2
+> 版本：0.3
 > 日期：2026-09-18  
+> 修订记录（2026-09-18）：§13.4 的可持久化元数据白名单显式加入「不含内容的审计元数据」，消除与 §11.5「保留审计记录」的矛盾。
 > 适用范围：Owner/Access Node、Node Link、Daemon、CLI、PWA、后续原生客户端、ACP Agent 子进程及 npm 发布链路
 
 ## 1. 文档职责
@@ -383,6 +384,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - Unix 创建权限目标为目录 `0700`、敏感文件 `0600`；Windows 使用当前用户专属 ACL，不依赖只读属性。
 - 启动时检查明显宽松权限并在正式模式失败或给出不可忽略的安全错误。
 - 临时文件创建在受保护目录，使用原子创建和重命名，不能使用可预测的共享临时路径保存敏感内容。
+- 备份或拷贝数据库时必须连同主库、`-wal`、`-shm` 三个文件（或先做一次 checkpoint），否则副本可能陈旧或损坏；操作说明见 `CONFIG_REFERENCE.md` §5.1「备份与拷贝」。
 
 ### 13.3 保留、压缩和删除
 
@@ -396,7 +398,7 @@ local.audit.export         本地审计导出（不含会话正文）
 
 - 第一阶段 Export 固定为 `no-content-cache`：Access Node 和受其服务的远程客户端默认不持久化会话正文，只允许有界内存转发。
 - Access Node 可以把 imported 资源交付给它自己的 Sync 客户端（浏览器 PWA），但只允许按 `SYNC_PROTOCOL.md` 的 `resource.remote-origin.v1` 转发：不改写 ACP 语义与 `acp.rawJson`、不缓存正文、不扩张 capability、不改会话状态；快照只含元数据，正文历史一律在线回源 Owner，离线时返回 `resource.remote_unavailable` 并置 `origin.online=false`。
-- Access Node 可持久化 import、owner/origin、cursor/ACK、requestId、命令终态引用、event type/digest 和 local sequence 映射；这些元数据不得包含可还原 prompt、回复、diff、终端、附件或 ACP raw 的内容。
+- Access Node 可持久化 import、owner/origin、cursor/ACK、requestId、命令终态引用、event type/digest、local sequence 映射，以及**不含内容的审计元数据**（`SECURITY_DESIGN.md` §14.2 的动作类别、时间、actor、目标 ID 与摘要）；上述元数据一律不得包含可还原 prompt、回复、diff、终端、附件或 ACP raw 的内容。
 - 上述约束可由 ACP Remote 和项目自带客户端执行，但无法约束 Zed 或其他第三方 ACP Client 的历史、日志和崩溃转储；向第三方客户端交付正文必须被视为 Export 授权的数据披露，并在管理界面明确提示。
 - 撤销设备或 Export 后 Owner 不再提供数据，Access 删除上述索引并清空内存内容。
 - 客户端收到自己被撤销或用户执行“清除此设备”时，应删除缓存和 device key；浏览器能力不足时明确说明残留风险。
@@ -492,7 +494,7 @@ storage.integrity_failed
 ### 18.1 自动化
 
 - Sync schema 正反 fixture、重复键、尺寸、深度和恶意 JSON。
-- transcript/HMAC/P1363 Rust-WebCrypto 互操作与错误向量。
+- transcript/HMAC/P1363 Rust-WebCrypto 互操作与错误向量（Rust 侧已在 `p256` 上对 12 个固定向量与 20 个畸形输入验证通过，见 `INITIAL_DESIGN.md` §16 第 6 条；实现阶段必须把同一批向量固化成 Rust 测试，而不是依赖一次性验证）。
 - pairing 并发 claim、过期、重放、SAS、拒绝和 secret 清理。
 - Node mismatch、Origin mismatch、错误 device/node、撤销和 scope 缩减。
 - Export grant 交集、Access Node 越权、循环导出和 Node Link 重放。
@@ -541,8 +543,8 @@ manual pairing/revoke smoke test
 
 以下选择不能由普通实现补丁静默决定：
 
-- Linux Secret Service 不可用时是否提供经过审计的持久化 fallback；在决定前正式模式失败关闭。
-- npm provenance、checksum 签名和 SBOM 使用的具体 CI Provider 与格式。
+- Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback；在决定前正式模式失败关闭。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
+- npm provenance、checksum 签名和 SBOM 使用的具体 CI Provider 与格式。（2026-09-18 决定：第一阶段暂不接入 CI 自动门禁，`npm run check` 是唯一门禁且可被任意 CI 直接调用；引入 CI 时再定 Provider 与 provenance/SBOM 格式。）
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。
 

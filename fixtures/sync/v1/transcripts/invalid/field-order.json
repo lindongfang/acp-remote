@@ -1,0 +1,7 @@
+{
+  "description": "tag 10 被排到 tag 9 之前；解码器必须以 field_order 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "domain": "acp-remote/host-challenge/v1",
+  "malformedTranscriptBase64url": "QUNQUgEAHGFjcC1yZW1vdGUvaG9zdC1jaGFsbGVuZ2UvdjEACAABAAAAAgABAAIAAAAQAAECAwQFRgeICQoLDA0ODwADAAAAEBAREhMUFUYXmBkaGxwdHh8ABgAAABdodHRwczovL3BjLmV4YW1wbGUudGVzdAAKAAAAICAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_AAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACwAAABAgISIjJCVGJ6gpKissLS4vAAwAAABMYWNwLnJhdy1wYXlsb2FkLnYxAGNvcmUuY29tbWFuZC1zdGF0dXMudjEAY29yZS5ldmVudC1hY2sudjEAY29yZS5zbmFwc2hvdC52MQ",
+  "expectedError": "field_order"
+}

@@ -1,22 +1,15 @@
-# Build and Release Folders
-bin-debug/
-bin-release/
-[Oo]bj/
-[Bb]in/
-
-# Other files and folders
-.settings/
-
-# Executables
-*.swf
-*.air
-*.ipa
-*.apk
-
-# Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
-# should NOT be excluded as they contain compiler settings and other important
-# information for Eclipse / Flash Builder.
+# Rust workspace
+/target/
+**/*.rs.bk
 
 # Node 工具链（合同校验脚本的 devDependencies）
 node_modules/
 npm-debug.log*
+
+# 前端构建产物
+dist/
+
+# 本地环境与日志
+.env
+.env.*
+*.log

@@ -1,0 +1,37 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "b18e4a8d-ddbc-4327-a370-e73602ef6cb4",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "55",
+  "body": {
+    "globalSequence": "2344",
+    "sessionSequence": "204",
+    "eventId": "9c063e79-b258-42ee-a65e-0ce4faa76784",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "session.plan.changed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "daemon",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "entries": [
+          {
+            "content": "补齐 sync 事件 fixture",
+            "priority": "high",
+            "status": "in_progress"
+          },
+          {
+            "content": "补齐 node-link 消息 fixture",
+            "priority": "medium",
+            "status": "pending"
+          }
+        ]
+      }
+    }
+  }
+}

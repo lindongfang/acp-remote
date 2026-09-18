@@ -25,6 +25,6 @@
 
 - 配对、撤销、Export 管理可以在 Daemon 运行期间完成，且不需要新增长期凭据。
 - 本地通道不进入远程攻击面：它不监听 TCP，不受 Origin、Host、scope 或设备身份影响。
-- CLI 与 Daemon 之间需要一条本地的请求/响应编码与版本标识；它与 Sync、Node Link 是三条互不复用的边界，改动其一不影响另外两条。
+- CLI 与 Daemon 之间需要一条本地的请求/响应编码与版本标识；它与 Sync、Node Link 是三条互不复用的边界，改动其一不影响另外两条。该编码、framing、信封与方法集已由 [LOCAL_ADMIN_PROTOCOL.md](../LOCAL_ADMIN_PROTOCOL.md) 定义（v1），本 ADR 只保留架构决策与授权模型；endpoint 名与对端凭据校验见其 §2。
 - `local.*` 能力（`SECURITY_DESIGN.md` §10.3）的授权判定落在"连接方是启动 Daemon 的同一 OS 用户"这一事实上，不需要新增 scope。
 - 跨平台差异被限制在一个 adapter 内（Named Pipe / Unix socket），不影响 `core` 或在其他平台上复用同一组 use case。

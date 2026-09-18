@@ -1,7 +1,8 @@
 # ACP Remote Node Link 设计
 
-> 状态：Node Link v1 wire 标准已冻结；实现尚未开始  
+> 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。节点侧状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）尚未实现。  
 > 版本：1.0  
+> 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceAlias`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18  
 > 上位产品设计：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)  
@@ -69,7 +70,7 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 - framing、序号编码、未知字段和 schema 规则与 `SYNC_PROTOCOL.md` §3.3、§4 一致：序号是**无前导零十进制字符串**，结构性常量（`chunkCount`、`schemaVersion`、`heartbeatIntervalMs`、`limits.*`）保持 integer；时间戳是毫秒精度 UTC RFC 3339。
 - 两个方向分别维护 `connectionSequence`，不能共用计数器；重复、回退、跳号或 `connectionId` 不匹配都返回 `nodelink.protocol.sequence_invalid`。
 - `messageId` 重复不重放业务结果；命令幂等只看 `requestId`（§15）。
-- 为突出业务字段，本文示例可以省略未变化的信封字段；实际 wire message 仍必须符合本节完整信封。
+- 认证前（`node.hello`/`node.challenge`/`node.proof` 以及握手阶段发生的 `link.error`）必须省略 `connectionId` 和 `connectionSequence`；认证完成后两者必须存在。
 
 ### 2.3 版本协商
 
@@ -106,6 +107,12 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 | 单对象字段数 | 1,024 | 否 |
 | 单数组元素数 | 10,000 | 否 |
 | 节点名称 UTF-8 长度 | 128 bytes | 否 |
+| 单 IP 新认证尝试 | 10/分钟 | 否 |
+| 单连接命令速率 | 120/分钟 | 否 |
+| 单连接并发 snapshot | 1 | 否 |
+| pairing claim 速率 | 10/分钟/IP | 否 |
+| pairing status 速率 | 60/分钟/pairingId | 否 |
+| 配对有效期 | 5 分钟 | 否 |
 
 - `node.ready.limits` 只能把上表标为可下调的值调低，不能上调；未收到的 limits 使用本表默认值。
 - 整个握手（`node.hello` → `node.ready`）必须在 15 秒内完成，否则任一方以 `4408` 关闭。
@@ -113,6 +120,8 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 - 超过单消息上限应在分配大对象前以 `1009` 拒绝。
 - 待发送队列达到高水位后先停止读取新的 snapshot 批次；持续过慢时发送 `link.backpressure`（`post_mvp`）并断开，由 origin cursor 重放补回（§15）。
 - v1 不允许 attachment、diff、终端输出通过“再分片”绕过上限；正文一律走 `resource.event` 的既有上限或 `post_mvp` 的独立内容 feature。
+- 超过单连接命令速率时返回 `link.error`（`code = "nodelink.resource.rate_limited"`，`retryable = true`），并在连续超限时以 `4429` 关闭连接；`details.retryAfterMs` 给出建议退避毫秒数，存在时 Access 必须遵守后再重试。
+- 单个内嵌 diff/document 超过 256 KiB 时，事件内 `payload.acp` 使用 §12.4 的 `rawAcp.rawUnavailable`（`reason = "size_limit"`），查询结果返回 `nodelink.resource.snapshot_unavailable`，不得截断后伪装成完整内容。
 
 ## 3. 术语
 
@@ -198,6 +207,7 @@ Owner Node / Broker ── ACP stdio ── Company Agent
 ```text
 ownerNodeId
 exportId
+sessionId
 originEventId
 originEpoch
 originSequence
@@ -227,7 +237,7 @@ Access Node 可以生成本地 opaque handle，但持久化层必须保留完整
 
 `RemoteSessionRef` 是耐久资源身份，`attachmentId/attachmentGeneration` 是当前 Node Link 连接上的临时路由凭据。Access 每次重新连接或重新 attach 会话时必须取得新的 attachment；旧连接延迟到达的 command/event frame 必须被 Owner 拒绝（`nodelink.resource.attach_generation_stale`），不能仅凭相同 `sessionId` 投递到新连接。这一分离参考 Pi 的 durable Session 与 live presentation attachment 模型，但 Node Link 仍使用自己的认证、授权和 wire schema。
 
-`originEpoch` 由 Owner 在会话首次写入时生成，`originEventId` 在该会话内全局唯一且跨跳不变；Access 侧不得重新生成、重编号或本地改写这两个值。
+`originEpoch` 是**会话级** origin epoch：由 Owner 在会话首次持久化写入时生成，`(originEpoch, originSequence)` 因此构成该会话的 origin cursor，不能跨会话比较；`originEventId` 在该会话内全局唯一且跨跳不变。Access 侧不得重新生成、重编号或本地改写这两个值，也不得把 `originEpoch` 当作节点级 epoch。
 
 ## 8. 身份、配对与信任
 
@@ -351,11 +361,16 @@ displayName
 agent selectors
 allowed session selectors
 allowed workspace aliases/templates
+defaultWorkspaceAlias      # 必须出现在 allowed workspace aliases 内
+templates                  # WorkspaceTemplate[]：{ templateId, displayName, workspaceAlias, params[] }
+defaultTemplateId          # 必须出现在 templates 内
 scopes            # grant.* 子集
 capability ceiling
 retention and cache hints
 createdAt / revokedAt
 ```
+
+`WorkspaceTemplate.params[]` 的每一项是 `{ name, type, required, pattern, enum }`：`type ∈ string|boolean|integer`，`pattern` 只对 `string` 生效，`enum` 为空表示不限制取值。`session.create.payload.templateParams` 的键必须来自被选 template 的 `params`，取值必须满足该项的 `type` 与 `pattern`/`enum`；未知键返回 `nodelink.command.unsupported_field`，类型或约束不符返回 `nodelink.export.not_granted`。首切片恰好发布一个 workspace alias 与一个 template，两者分别由 `defaultWorkspaceAlias` 与 `defaultTemplateId` 指定。
 
 第一阶段 `cachePolicy` 固定为 `no-content-cache`；字段保留是为了以后协商更严格或经 ADR 接受的缓存模式，而不是允许 Access 自行选择正文缓存。
 
@@ -406,18 +421,29 @@ Node Link 握手交换：
 
 ### 11.3 Feature ID
 
-| feature | 说明 | delivery |
-|---|---|---|
-| `node-link.core.v1` | 握手、catalog、resource snapshot/event/ACK、错误与 limits；必需 feature | mvp |
-| `node-link.raw-acp.v1` | `resource.event.payload.acp` 携带 ACP raw document 并保真 | mvp |
-| `node-link.command-status.v1` | `command.status` 查询与 `command.terminal` 重查 | mvp |
-| `node-link.session-create.v1` | `command.submit{command:"session.create"}` | mvp |
-| `node-link.export-revoke.v1` | `export.revoked` 与撤销后立即拒命令 | mvp |
-| `node-link.node-rotation.v1` | `node.rotate-key.*` | post_mvp |
+取值集合是**封闭词表**，由 [`compatibility/features/v1/features.json`](../compatibility/features/v1/features.json) 机器登记；`npm run check` 的 `check:features` 断言本表、registry 与 fixture 中出现的 ID 三者逐一相等。新增或删除 ID 必须先改 registry 再改本表。
+
+| feature | 说明 | delivery | 必需 |
+|---|---|---|---|
+| `node-link.core.v1` | 握手、catalog、resource snapshot/event/ACK、错误与 limits | mvp | 是 |
+| `node-link.raw-acp.v1` | `resource.event.payload.acp` 携带 ACP raw document 并保真 | mvp | 否 |
+| `node-link.command-status.v1` | `command.status` 查询与 `command.terminal` 重查 | mvp | 否 |
+| `node-link.session-create.v1` | `command.submit{command:"session.create"}`（Zed `session/new` 的映射） | mvp | 否 |
+| `node-link.export-revoke.v1` | `export.revoked` 与撤销后立即拒命令 | mvp | 否 |
+| `node-link.node-rotation.v1` | `node.rotate-key.*`（只登记 ID 与消息名） | post_mvp | 否 |
 
 - feature ID 语法、排序与 transcript 编码与 `SYNC_PROTOCOL.md` §5.2 相同：`[a-z0-9.-]`、去重后按 UTF-8 字节升序、`negotiatedFeatures` 以 NUL 分隔。
-- `node-link.core.v1` 是必需 feature；Access 未声明时 Owner 返回 `nodelink.protocol.feature_required`。
+- `node-link.core.v1` 是必需 feature（`必需` 列为"是"，`required: true`）；Access 未声明时 Owner 返回 `nodelink.protocol.feature_required`，`details.features` 列出未被选择的 feature ID（排序去重），发送方必须给出。
 - 首切片必须实现前五行；`node-link.node-rotation.v1` 只登记 ID 与消息名，实现时收到 `node.rotate-key.*` 返回 `nodelink.protocol.type_unsupported`，不得静默忽略。
+
+### 11.4 事件类型与 `view` 契约（与 Sync 共享）
+
+Node Link 不另立一份 event type 表：
+
+- `resource.event.eventType` 的取值集合与每个类型的最低 `view` 字段，等于 `SYNC_PROTOCOL.md` §10.2 与 §10.3 的登记集合，减去只由 Access Node 本地产生、不跨节点传输的 `session.origin.online_changed`。
+- 机器表达复用 [`schemas/sync/v1/event-views.schema.json`](../schemas/sync/v1/event-views.schema.json)：Node Link 的事件 fixture 用该文件的 `$defs` 校验 `payload.view`。
+- 未登记的 `eventType` 按未知事件处理：保留 `payload.acp`、向本地客户端可见降级，不得静默丢弃，也不得把结构化事件降级成普通文本。
+- `view` 内允许的 JSON 取值遵守 `SYNC_PROTOCOL.md` §3.3 的 ACPR-CJ1 取值域（数字必须是整数），否则 `payloadDigest` 无法跨实现复算。
 
 ## 12. 消息族与消息体
 
@@ -440,6 +466,8 @@ Node Link 握手交换：
 - 查询命令可以同步完成；mutation 只同步确认接受，最终结果必须使用持久化 terminal event。所有可重试 mutation 携带稳定 `requestId`，幂等键至少包含 `(ownerNodeId, accessNodeId, requestId)`。
 - `post_mvp` 消息体在本节冻结形状，但 v1 首切片不实现：收到时显式返回 `nodelink.protocol.type_unsupported`（对 family 内的 post_mvp 消息）或对应的 `nodelink.*` 不支持错误，绝不静默忽略。
 - 认证前只允许 `node.hello`、`node.challenge`、`node.proof`；其余消息在认证完成前以 `4401` 关闭。
+
+- `node.rotate-key.request`/`node.rotate-key.result`（本节的 `post_mvp` 行）是 Node Link 上的轮换握手，与本地管理能力 `local.node.rotate-key`（见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md)）不是同一件事：后者是 Owner 本地用户发起的轮换意图，前者只负责把轮换后的结果同步给已配对的 Access Node。Node Identity Key 变化后所有已配对设备与节点必须重新配对（`SECURITY_DESIGN.md` §9.1）；首切片不实现这两个消息，收到时返回 `nodelink.protocol.type_unsupported`，不得静默忽略。
 
 ### 12.2 握手消息
 
@@ -478,6 +506,8 @@ export 条目字段（`catalog.snapshot.exports[]` 与 `catalog.changed.added/up
 | `displayName` | string ≤128 | 必需 | 展示名，不含凭据 |
 | `agents` | array | 必需 | 每项 `{ agentId, name, capabilitiesRef }` |
 | `workspaceAliases` | array | 必需 | 每项 `{ alias, displayName }`；`alias` 是可出现在 `session.create` 的符号名 |
+| `defaultWorkspaceAlias` | string（`^[a-z0-9][a-z0-9._-]{0,63}$`） | 必需 | 必须是 `workspaceAliases[].alias` 之一；Access 的 `session/new` 映射用它填 `session.create.workspaceAlias` |
+| `templates` | array | 必需 | 每项 `{ templateId, displayName, workspaceAlias, params[] }`；`params[]` 每项 `{ name, type, required, pattern, enum }`，`type ∈ string\|boolean\|integer`，`pattern` 与 `enum` 可为 `null` |
 | `scopes` | array | 必需 | `grant.*` 子集，取值限于 §10 表 |
 | `capabilityCeilingRef` | string（`^[A-Za-z0-9._-]{1,128}$`） | 必需 | Owner 侧能力上限的不透明引用；节点不得跨节点解释其内容 |
 | `cachePolicy` | const `"no-content-cache"` | 必需 | v1 固定值 |
@@ -500,14 +530,17 @@ resource.attach → resource.attached → resource.subscribe
 | `resource.snapshot_begin` | Owner → Access | `snapshotId`(UUID)、`cursor`、`schemaVersion`(integer const 1)、`chunkCount`(integer) | 全部必需 | 快照 barrier；`cursor` 是 snapshot 结束点 |
 | `resource.snapshot_chunk` | Owner → Access | `snapshotId`、`chunkIndex`(decimal string)、`resource`(`"session_meta"`\|`"pending_interactions"`)、`items`(array) | 全部必需 | 只承载元数据；`resource` 决定 item 形状 |
 | `resource.snapshot_end` | Owner → Access | `snapshotId`、`cursor`、`chunkCount`(integer)、`snapshotDigest`(base64url 32B) | 全部必需 | 快照完成；其后事件从 `cursor` 继续 |
-| `resource.event` | Owner → Access | `originEventId`(UUID)、`originEpoch`(UUID)、`originSequence`(decimal string)、`eventType`(string，`^[a-z0-9_.-]{1,128}$`)、`payloadDigest`(base64url 32B)、`createdAt`(timestamp)、`payload`(`{ view, acp? }`) | 除 `payload.acp` 外全部必需 | Owner 的 origin 事件原样投递 |
-| `resource.ack` | Access → Owner | `cursor`(`{ originEpoch, originSequence }`) | 必需 | 累计 ACK：该 cursor 及之前的 origin 事件在 Access 侧已进入可恢复的无正文索引 |
+| `resource.event` | Owner → Access | `originEventId`(UUID)、`originEpoch`(UUID)、`originSequence`(decimal string)、`sessionRef`(`{ ownerNodeId, exportId, sessionId }`)、`eventType`(string，`^[a-z0-9_.-]{1,128}$`)、`payloadDigest`(base64url 32B)、`createdAt`(timestamp)、`payload`(`{ view?, acp? }`，二者至少一个) | 除 `payload.acp` 外全部必需 | Owner 的 origin 事件原样投递 |
+| `resource.ack` | Access → Owner | `sessionRef`(`{ ownerNodeId, exportId, sessionId }`)、`cursor`(`{ originEpoch, originSequence }`) | 全部必需 | 该会话的累计 ACK：此 cursor 及之前的 origin 事件在 Access 侧已进入可恢复的无正文索引 |
 
 - `sessionMeta` 字段：`state`(`"idle"`\|`"queued"`\|`"running"`\|`"waiting_input"`\|`"waiting_permission"`\|`"failed"`\|`"closed"`)、`version`(decimal string)。
 - `pending_interactions` item 字段：`interactionId`(UUID)、`kind`(`"permission"`\|`"elicitation"`)、`createdAt`(timestamp)、`payloadDigest`(base64url 32B)；不含交互正文。
 - **正文绝不入快照**：`SessionSummary`、message、turn 与会话正文历史不存在于 Node Link 快照中；Access 需要正文时按 origin cursor 通过 `resource.event` 重放或经 `grant.observe` 的查询命令向 Owner 在线请求（Sync 侧见 `SYNC_PROTOCOL.md` §9.6）。
 - `resource.event` 必须携带完整 origin 三元组（`originEventId` + `originEpoch` + `originSequence`）；缺失任一字段即 `nodelink.protocol.schema_invalid`，Access 不得用本地生成的 ID 顶替，也不得把事件降级成本地事件。
-- `payload.view` 是唯一允许携带未登记字段的视图位置（开放扩展点）；无法形成 view 时保留 `payload.acp`，不得丢弃 raw 文档。
+- `payload.view` 是唯一允许携带未登记字段的视图位置（开放扩展点）；事件类型在本协议登记的 view 集合内时必须携带 `payload.view`，无法形成 view 时必须保留 `payload.acp`，不得丢弃 raw 文档（schema 只要求 `payload` 内至少出现 `view` 或 `acp` 之一，具体事件类型的最低字段见 §11.4 的共享合同）。
+- `resource.event.sessionRef` 与 `resource.ack.sessionRef` 必须指向当前连接上 attachment 所属的会话。`sessionRef` 不属于本连接、或 `cursor.originEpoch` 与该会话的 origin epoch 不一致时，接收方返回 `nodelink.protocol.sequence_invalid`，不得投递或接受。
+- `payloadDigest = base64url(SHA-256(ACPR-CJ1(payload)))`，其中 ACPR-CJ1 是 `SYNC_PROTOCOL.md` §3.3 定义的规范 JSON；`pending_interactions[].payloadDigest` 是对创建该交互的 origin 事件的 `payload` 对象应用同一规则的结果。
+- `snapshotDigest` 的计算方式与 `SYNC_PROTOCOL.md` §9.4 相同：对每个完整 `resource.snapshot_chunk` 消息的原始 UTF-8 bytes 分别求 SHA-256，按 `chunkIndex` 顺序连接后对连接结果再求一次 SHA-256；接收方不得通过重新序列化 JSON 计算该值。
 - `resource.ack` 的 `cursor` 必须单调不减；回退视为 `nodelink.protocol.sequence_invalid`。
 
 ### 12.5 Command 消息
@@ -515,16 +548,18 @@ resource.attach → resource.attached → resource.subscribe
 | 消息 | 方向 | body 字段 | 必需性 | 语义 |
 |---|---|---|---|---|
 | `command.submit` | Access → Owner | `requestId`(UUID)、`command`(命令名)、`sessionRef`(`{ ownerNodeId, exportId, sessionId }` \| null)、`attachmentId`(UUID \| null)、`attachmentGeneration`(decimal string \| null)、`expectedVersion`(decimal string \| null)、`payload`(object) | 全部必需，后四者可为 `null` | 提交命令；`payload` 形状按 `command` 取值决定（§12.7） |
-| `command.accepted` | Owner → Access | `requestId`、`acceptedAt`(timestamp)、`result`(object \| null) | 全部必需 | 同步确认接受；`acceptedAt` 永远是真实接受时间（拒绝不复用本消息），`result` 为 `null` 时表示本次回复不携带同步结果 |
-| `command.rejected` | Owner → Access | `requestId`、`error`(`{ code, message, retryable, details }`) | 全部必需 | 未接受，无副作用；本消息没有 `acceptedAt` 字段 |
-| `command.terminal` | Owner → Access | `requestId`、`terminal`(`{ status, terminalAt, terminalEventId, result, error }`) | 全部必需 | 终态；`status` ∈ `"completed"`\|`"failed"`\|`"rejected"`\|`"uncertain"`；`terminalEventId` 是 `T \| null` 字段：`command.status` 重查返回时必须非 `null`，其余情况可为 `null`；`status=completed` 时 `result` 为非空 object 且 `error=null`，其余 status 必须给出 `error` |
+| `command.accepted` | Owner → Access | `requestId`、`command`(命令名)、`acceptedAt`(timestamp)、`result`(object \| null) | 全部必需 | 同步确认接受；`acceptedAt` 永远是真实接受时间（拒绝不复用本消息），`result` 为 `null` 时表示本次回复不携带同步结果 |
+| `command.rejected` | Owner → Access | `requestId`、`command`(命令名)、`error`(`{ code, message, retryable, details }`) | 全部必需 | 未接受，无副作用；本消息没有 `acceptedAt` 字段 |
+| `command.terminal` | Owner → Access | `requestId`、`command`(命令名)、`terminal`(`{ status, terminalAt, terminalEventId, result, error }`) | 全部必需 | 终态；`status` ∈ `"completed"`\|`"failed"`\|`"rejected"`\|`"uncertain"`；`terminalEventId` 是 `T \| null` 字段：`command.status` 重查返回时必须非 `null`，其余情况可为 `null`；`status=completed` 时 `result` 为非空 object 且 `error=null`，其余 status 必须给出 `error` |
 | `command.status` | Access → Owner | `targetRequestId`(UUID) | 必需 | 重查同一 `requestId` 的终态；回复使用同一信封的 `command.terminal` 形状 |
 
 - `command.submit` 的 `command` 取值是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的 12 个命令名；`sessionRef`、`attachmentId`、`attachmentGeneration`、`expectedVersion` 在不适用时显式写 `null`，不用省略代替。
+- `command.accepted`、`command.rejected` 与 `command.terminal` 都必须携带 `command`，取该 request 提交时的命令名（`command.status` 查询的回复填被查询 mutation 的命令名）；结果形状因此可以只凭帧自洽分派，不依赖接收方本地的 requestId 表。
 - `command.status` 有两种等价形式：作为 `command.submit` 的 `command` 提交（`payload = { "targetRequestId": … }`），或使用独立的 `command.status` 消息。两者产生相同的 `command.terminal` 形状回复；独立消息不占用 mutation 的幂等键。
 - `command.accepted` 与 `command.terminal` 可以连续发送，也可以只发送 `command.terminal`：同步查询结果放在 `command.accepted.result` 或 `command.terminal.terminal.result`；`command.terminal` 始终是权威终态，客户端以 `requestId` 去重。
 - Node Link 把统一结果形状拆成三条消息，`acceptedAt` 规则与 `SYNC_PROTOCOL.md` §11.2 的 `status=rejected ⇒ acceptedAt=null` 等价：`command.accepted` 的 `acceptedAt` 永远非 `null`；`command.rejected` 表达拒绝，因此完全不携带 `acceptedAt`；`command.terminal` 也不携带 `acceptedAt`。
-- session-scoped command 必须携带当前 `attachmentId`/`attachmentGeneration`；generation 过期返回 `nodelink.resource.attach_generation_stale`，Access 必须重新 attach 后再重试。
+- `command.terminal` 的 `completed` 必须携带非空 `result`（与 Sync 的 `command.result` 允许 `result` 为 `null` 不同）：该差异是有意的，因为 Node Link 的 `session.create` 必须回传 `SessionCreateResult`（§12.7）。core 只保留 `Option<CommandResult>`，**非空由本协议的适配层（`server::node_link`）在映射期保证**并由契约测试覆盖。
+- session-scoped command 必须携带当前 `attachmentId`/`attachmentGeneration`；generation 过期返回 `nodelink.resource.attach_generation_stale`，Access 必须重新 attach 后再重试。该错误码不登记 `details`：Access 已知自己发出与当前持有的 generation，动作固定（重新 attach 后重试），归因靠发生错误的帧自带的 `attachmentId`，回显代际数值不改变任何分支。
 - 同一 `(ownerNodeId, accessNodeId, requestId)` 的重复提交必须返回首次结果；`command`、`sessionRef`、`expectedVersion` 或解码后的 `payload` 语义不同则返回 `nodelink.command.idempotency_conflict`。
 - 不能确认副作用是否发生时，Owner 必须写入 `uncertain` 终态，Access 不得自动重试产生第二次副作用。
 
@@ -549,7 +584,7 @@ resource.attach → resource.attached → resource.subscribe
 | `session.config.list` | `{}` |
 | `session.prompt` | `{ "content": [ { "type": "text", "text": "…" }, … ] }` |
 | `session.cancel` | `{ "turnId": UUID }` |
-| `elicitation.respond` | `{ "interactionId": UUID, "action": "submit"\|"cancel", "values": object\|null }` |
+| `elicitation.respond` | `{ "interactionId": UUID, "action": "submit"\|"decline"\|"cancel", "values": object\|null }`；`submit` 的 `values` 可为 `null`（= ACP `content: null`），`decline`/`cancel` 必须为 `null` |
 | `session.mode.set` | `{ "modeId": string }`，body 的 `expectedVersion` 必须存在 |
 | `session.config.set` | `{ "configId": string, "value": … }`，body 的 `expectedVersion` 必须存在 |
 | `permission.resolve` | `{ "interactionId": UUID, "optionId": string }` |
@@ -557,11 +592,26 @@ resource.attach → resource.attached → resource.subscribe
 
 `session.create` 的硬约束：
 
-- 只允许上述四个键；`payload` 出现 `cwd`、`mcpServers`、任何绝对路径、任何凭据字段（例如 `apiKey`、`token`、`env`、`credential`）时，Owner **必须**以 `command.rejected` 回复，`error.code = "nodelink.command.unsupported_field"`，且不得创建会话或部分应用参数。
-- `agentId`/`exportId`/`workspaceAlias` 必须同时存在于该 Access 可见的 Export（§12.3）与 `grant.remote-work` 的授权范围内；未导出的 Agent、未知 alias 或不属于该 Export 的组合返回 `nodelink.export.not_granted`。
+- 只允许上述四个键；`payload` 出现 `cwd`、`mcpServers`、任何绝对路径、任何凭据字段（例如 `apiKey`、`token`、`env`、`credential`）时，Owner **必须**以 `command.rejected` 回复，`error.code = "nodelink.command.unsupported_field"`，`details.field` 必须给出被拒的字段名，且不得创建会话或部分应用参数。
+- `agentId`/`exportId`/`workspaceAlias` 必须同时存在于该 Access 可见的 Export（§12.3）与 `grant.remote-work` 的授权范围内；未导出的 Agent、未知 alias 或不属于该 Export 的组合返回 `nodelink.export.not_granted`，拒绝时可给出 `details.parameter` 指明被拒的参数名。
 - `workspaceAlias` 是符号名（`^[a-z0-9][a-z0-9._-]{0,63}$`），不构成路径；绝对路径在语法上就无法通过该 pattern。
 - `templateParams` 只能携带 Export template 声明的键；Owner 必须在应用前按 template 校验，未知键按 `nodelink.command.unsupported_field` 拒绝。
 - `session.create` 的 `sessionRef`/`attachmentId`/`attachmentGeneration`/`expectedVersion` 必须为 `null`；创建成功后 Access 通过 `resource.attach` 取得 attachment，再提交其他会话范围命令。
+
+`session.create` 的结果契约：
+
+- Owner 先回 `command.accepted`，此时 `result` 必须为 `null`（创建是异步的）；会话创建完成后发 `command.terminal`。
+- `status = "completed"` 时 `terminal.result` 必须是 `SessionCreateResult`：
+
+```json
+{
+  "remoteSessionRef": { "ownerNodeId": "<UUID>", "exportId": "<exportId>", "sessionId": "<UUID>" },
+  "sessionMeta": { "state": "idle", "version": "1" }
+}
+```
+
+- `sessionId` 由 Owner 生成并写入自身事件日志；Access 不得改写、重编号或本地顶替。Access 用该 `remoteSessionRef` 发起 `resource.attach`（§12.4），成功后才提交该会话的其他命令。
+- `status = "failed"` 时 `terminal.error` 给出 `PublicError`（例如 `nodelink.export.not_granted`、`nodelink.command.unsupported_field`）；`status = "uncertain"` 表示崩溃窗口内无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
 
 ### 12.8 消息名 ↔ schema 对照
 
@@ -775,6 +825,7 @@ nodelink.export.not_granted
 nodelink.resource.attach_generation_stale
 nodelink.resource.snapshot_unavailable
 nodelink.resource.owner_unavailable
+nodelink.resource.rate_limited
 nodelink.command.unsupported
 nodelink.command.not_found
 nodelink.command.idempotency_conflict
@@ -786,6 +837,17 @@ nodelink.internal.unavailable
 - 错误码只能向后兼容地增加；客户端遇到未知错误码时按 `retryable` 与 code 首段做保守处理。
 - 可恢复的命令错误优先使用 `command.rejected`；连接级错误使用 `link.error`；握手与连接的致命错误在 `link.error` 之后必须关闭连接。
 - `nodelink.resource.owner_unavailable` 表示 Owner 侧不可达；Access 必须停止展示正文并保持 `no-content-cache`（§6）。
+
+#### details 登记
+
+| code | 登记字段（`details`） |
+|---|---|
+| `nodelink.protocol.feature_required` | `features`（必需） |
+| `nodelink.export.not_granted` | `parameter`（可选） |
+| `nodelink.resource.rate_limited` | `retryAfterMs`（可选） |
+| `nodelink.command.unsupported_field` | `field`（必需） |
+
+未在上表列出的 code **不登记任何** `details` 字段：所有 `link.error`、`command.rejected` 与配对 HTTP 错误响应的 `details` 必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被选择的那些）；`field` 是被拒的 `command.submit.payload` 字段名（例如 `cwd`、`mcpServers`，见 §2.4/§12.7）；`parameter` 是被拒的 Export 参数名（例如未导出的 `agentId`、未知 `workspaceAlias`，见 §17 第 12 条）；`retryAfterMs` 是建议退避毫秒数。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§2.4），新增字段按 §8 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。
 
 ### 14.2 WebSocket Close Code
 
@@ -812,7 +874,7 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 
 - Owner 事件必须先持久化，再发送 Node Link。
 - Node Link 至少一次投递，Access Node 按 `originEventId` 去重。
-- Access Node ACK 的是 Owner cursor（`originEpoch` + `originSequence`）；给本地客户端使用独立 local cursor。
+- Access Node 按会话 ACK Owner cursor（`sessionRef` + `originEpoch` + `originSequence`）；给本地客户端使用独立 local cursor。
 - session-scoped command 必须携带当前 `attachmentId`/`attachmentGeneration`；重连后先重新 attach，再恢复订阅。
 - 同一会话最多一个 active turn，由 Owner Node 最终强制执行。
 - 多个 Access Node 同时提交命令时，Owner 使用会话版本与串行队列裁决。
@@ -820,6 +882,7 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 - 断线恢复只自动重建安全查询和订阅；mutation 必须通过原 `requestId` 查询状态，不因新 attachment 自动重放。
 - Export 撤销后立即拒绝新命令并关闭订阅；Access 删除 import、无正文交付索引和内存内容。若未来启用离线正文缓存，不得声称 Owner 可以远程可靠擦除所有副本。
 - 慢消费者触发 backpressure 或断开后，由 origin cursor 重放补回，不得丢弃 Owner 事件或阻塞其他连接。
+- 交互请求（权限、elicitation）属于**会话**而非某条连接：Owner 的 `permission.requested` 到达 Access 后必须由持有该会话 attachment 的 facade 转成对上游客户端的请求（外部 turn 同样如此，Zed 会渲染并应答），答案按该 interaction 的 `requestId` 关联回传为 `permission.resolve`。Owner 已写入 `interaction.already_resolved` 之后到达的应答必须被拒绝，不得覆盖既有结果。
 
 ## 16. 网络与部署
 
@@ -842,7 +905,7 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 4. 远程 Zed 经 Access Node `acp_facade` 完成 initialize/session-new/prompt/update/cancel：握手用 `node.hello`/`node.challenge`/`node.proof`/`node.ready`，会话用 `resource.attach`/`resource.subscribe`/`resource.snapshot_*`/`resource.event`/`resource.ack`，命令用 `command.submit`/`command.accepted`/`command.rejected`/`command.terminal`（`command.status` 重查终态）；
 5. capability 交集（§11.1）、raw ACP 保真（`node-link.raw-acp.v1` 与 `resource.event.payload.acp`）、断线重放与命令幂等（§15）；
 6. 不支持 imported Agent 再导出；
-7. `session/new` 经稳定 `requestId` 映射为受 `grant.remote-work`、Agent selector 和 workspace template 限制的 `command.submit{command:"session.create"}`（§12.7），禁止携带 `cwd`/`mcpServers`；
+7. `session/new` 经稳定 `requestId` 映射为受 `grant.remote-work`、Agent selector 和 workspace template 限制的 `command.submit{command:"session.create"}`（§12.7），禁止携带 `cwd`/`mcpServers`；参数派生与 ACP 错误映射见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6；
 8. Access Node 默认仅持久化无正文交付索引（§6）；
 9. Owner 以 Access Node 为授权 principal，最终用户引用只用于审计（§8.3）。
 

@@ -6,7 +6,7 @@
   "connectionSequence": "4",
   "body": {
     "eventType": "agent.message.delta",
-    "payloadDigest": "aUtxvIAT_0Mw3KW-XGSmLVF5isCVjj6bE12tG2nou4Q",
+    "payloadDigest": "td6ZltnIg8vb-SZF_ZSHDPkxDCHmSxRs6ZH5SoV3BtU",
     "createdAt": "2026-09-18T09:12:03.412Z",
     "payload": {
       "view": {

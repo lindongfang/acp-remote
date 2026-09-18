@@ -1,0 +1,32 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "57803477-4af0-473b-a240-5e6153818ac6",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "79",
+  "body": {
+    "globalSequence": "2368",
+    "sessionSequence": "228",
+    "eventId": "735d1593-8635-4100-a1a3-2a1fc0042cdd",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "command.failed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "daemon",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+        "error": {
+          "code": "command.uncertain",
+          "message": "命令结果不确定。",
+          "retryable": false,
+          "details": {}
+        }
+      }
+    }
+  }
+}

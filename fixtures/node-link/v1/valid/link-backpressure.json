@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "type": "link.backpressure",
+  "messageId": "091a2b3c-4d4e-4f60-8172-8394a5b6c7d8",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "26",
+  "body": {
+    "scope": "resource",
+    "retryAfterMs": 250
+  }
+}

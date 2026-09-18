@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "type": "node.trust.revoked",
+  "messageId": "5e6f7081-92a3-44b5-86c7-d8e9f0a1b2c3",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "15",
+  "body": {
+    "revokedNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "revokedAt": "2026-09-18T09:30:00.000Z",
+    "reason": "用户在本机撤销了对该 Access 节点的信任。"
+  }
+}

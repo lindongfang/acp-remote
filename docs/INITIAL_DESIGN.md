@@ -1,7 +1,8 @@
 # ACP Remote 初始设计文档
 
 > 状态：编码前原始设计（Draft）  
-> 版本：0.2
+> 版本：0.3  
+> 修订记录（2026-09-18）：配对有效期改为固定 5 分钟；PWA 首版明确不展示会话创建入口；移除与 Sync/Node Link 已冻结取值冲突的旧叙述。  
 > 日期：2026-09-18
 > 用途：记录项目最初的产品边界、架构选择、安全模型和发布方式，作为后续设计与编码的基线。
 
@@ -413,7 +414,7 @@ hostPublicKey        P-256 public key
 
 - `pairingSecret` 使用 CSPRNG 生成。
 - 配对请求只允许成功一次。
-- 二维码 2–5 分钟过期。
+- 二维码固定 5 分钟过期（与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14 的固定 v1 常量一致，不作为配置项）。
 - 新配对使旧的未完成配对失效。
 - 客户端扫码后生成自己的长期设备密钥。
 - 服务节点本地入口显示设备名称、指纹和短验证码，并要求用户确认。
@@ -661,7 +662,7 @@ Linux x64 glibc
 
 - 增加 Sync 协议类型、HTTP/WebSocket Sync Server、事件序列、ACK、补发和命令幂等。
 - 增加设备身份、一次性配对、双向认证、基本权限和撤销。
-- 交付 Web/PWA：查看已有会话、继续对话、结构化事件、权限处理、模型列表与切换；首版可以不展示会话创建入口。
+- 交付 Web/PWA：查看已有会话、继续对话、结构化事件、权限处理、模型列表与切换；首版不展示会话创建入口。
 - PWA 静态资源由 Daemon 本地托管；不实现 Android/iOS 原生包。
 - PWA 遵守 Export 的 `no-content-cache`，会话正文默认只保留在内存。
 
@@ -694,13 +695,27 @@ Linux x64 glibc
 1. 各 ACP Agent 是否都支持会话恢复、模型列表和运行中模型切换。
 2. Codex ACP 与 OMP ACP 的事件、权限和终端能力差异。
 3. Zed 是否能正确展示由其他客户端或 Access Node 发起的、非 Zed 本端发起的 turn。
+   - 2026-09-18 **已验证（手工探针）**：用一个不接收 `session/prompt` 就主动推流的假 ACP agent 驱动 Zed，Zed 正常显示外部 turn 的流式 `agent_message_chunk`、`agent_thought_chunk`（Thinking 块）、`tool_call` 与 diff 内容块，并显示**可交互**的 `session/request_permission` UI（Allow once / Reject），由 Zed 自己提交 `{"outcome":{"outcome":"selected","optionId":"allow-once"}}`。也就是说外部 turn 的权限请求不需要 facade 代答。
+   - 仍未确认（都不阻塞，属"呈现更完整"而非"能否显示"）：`plan` 与 `usage_update` 是否渲染、外部 turn 进行中是否提供 Stop/取消按钮。
 4. Windows 上 Daemon、子进程树和休眠恢复行为。
 5. 手机后台 WebSocket 被系统挂起后的恢复体验。
 6. WebCrypto P-256 密钥持久化及其与 Rust 的签名格式互操作性。
+   - 2026-09-18 **Rust 侧已验证**。用 `p256 0.13.2`（`ecdsa 0.16.9`、`signature 2.2.0`）实现 transcript 编码、P1363 验签、HMAC-SHA256 与 SAS 派生，对 `fixtures/{sync,node-link}/v1/` 的固定向量逐项复算：12/12 重编码逐字节一致、6 个 P1363 签名验证通过、6 个 HMAC 重算一致、2 个 SAS 一致、20/20 畸形输入（transcript 结构错误与非法公钥）以声明的错误被拒。
+   - 选型：`p256` + `sha2` + `hmac` + `base64`（无填充 base64url）。四者都是纯 Rust、无原生依赖、无 `cfg` 平台分支，与"`identity-auth` 保持纯状态机"的拆分一致。
+   - 实测得到的实现约束（不写就会错）：`VerifyingKey::from_sec1_bytes` **接受 33 字节压缩点**，所以必须先断言 65 字节再解析，否则违反"SEC1 uncompressed"合同；`Signature::from_slice` 只接受 64 字节 P1363，70 字节 DER 被拒（不得在 wire 上使用 `from_der`）；合法 high-S 与 low-S 都必须被接受（实测确认）；`r`/`s` 为 0 必须被拒；带填充或非 base64url 字母表必须被拒。
+   - 仍未验证的部分：PWA 侧不可导出 `CryptoKey` 的 IndexedDB 持久化，属浏览器行为，阶段二开工前用一个静态页验证即可。
 7. 客户端与 Node endpoint 变化时的安全发现方案。
 8. SQLite 写入频率、流式事件合并和磁盘上限策略。
 9. npm optional dependency 在 npm、pnpm、yarn 不同配置下的安装行为。
 10. ACP 协议升级时的版本协商和向后兼容方式。
+
+按"什么时候必须解决"分类（2026-09-18，避免重复评估）：
+
+- **开工前必须**：#6 —— 已完成（结果见上）。它决定密码学依赖选型，选错会导致 `identity-auth` 返工。
+- **首切片验收前必须**：#3（Zed 对非本端发起的 turn 的展示；用假 ACP agent 即可预验，不依赖本仓库代码）、#1/#2（需要真实的 Codex/OMP，用于填写能力兼容报告；不阻塞编码，因为矩阵中这些能力本就是 `conditional_mvp` + `advertise_if_end_to_end`，代码只需如实协商）。
+- **实现期验证**：#4、#5、#8、#9 —— 需要可运行的程序、真机或发布流程。
+- **设计项，不是验证项**：#7 —— 首切片的 endpoint 由配置与 Import 记录给出，不需要发现机制；到阶段三"多 endpoint 自动连接"时才需要设计。
+- **已由合同层覆盖**：#10 —— ACP 矩阵固定上游 commit + sha256 并由 `npm run check` 强制校验，升级流程见 `docs/ACP_COMPATIBILITY_MATRIX.md` §5.5；未来真有新版本时执行该流程即可。
 
 ## 17. 核心设计原则
 

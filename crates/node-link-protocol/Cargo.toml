@@ -1,0 +1,22 @@
+[package]
+name = "node-link-protocol"
+description = "节点间 Node Link 的 wire 合同：transcript 表、消息 body 与信封"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+acpr-transcript = { path = "../acpr-transcript" }
+acpr-wire = { path = "../acpr-wire" }
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true

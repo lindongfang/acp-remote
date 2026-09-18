@@ -1,0 +1,7 @@
+{
+  "description": "第二个 serverNonce 复用 tag 9；解码器必须以 duplicate_tag 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "domain": "acp-remote/node-link-challenge/v1",
+  "malformedTranscriptBase64url": "QUNQUgEAIWFjcC1yZW1vdGUvbm9kZS1saW5rLWNoYWxsZW5nZS92MQAIAAEAAAACAAEAAgAAABAAAQIDBAVGB4gJCgsMDQ4PAAMAAAAQEBESExQVRheYGRobHB0eHwAGAAAACAAAAAAAAAAqAAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACQAAACAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-PwALAAAAEEBBQkNERUZHiElKS0xNTk8ADAAAAHlub2RlLWxpbmsuY29tbWFuZC1zdGF0dXMudjEAbm9kZS1saW5rLmNvcmUudjEAbm9kZS1saW5rLmV4cG9ydC1yZXZva2UudjEAbm9kZS1saW5rLnJhdy1hY3AudjEAbm9kZS1saW5rLnNlc3Npb24tY3JlYXRlLnYx",
+  "expectedError": "duplicate_tag"
+}

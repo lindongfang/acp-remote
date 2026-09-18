@@ -1,0 +1,47 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.event",
+  "messageId": "f78809cc-68ce-402d-a525-fcd65ce97b67",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "28",
+  "body": {
+    "originEventId": "e4080c2f-9e6d-4fde-ab0d-9593eeb6a6c6",
+    "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+    "originSequence": "2320",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "exportId": "export-main",
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "eventType": "session.created",
+    "payloadDigest": "SAxGF3lLibgpmK4CA3ttkHR1uIJoMCjlcAHnLxTg1Ok",
+    "createdAt": "2026-09-18T09:12:09.500Z",
+    "payload": {
+      "view": {
+        "session": {
+          "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+          "title": "修复 schema 覆盖门禁",
+          "agent": {
+            "agentId": "company-agent",
+            "name": "Company Agent"
+          },
+          "state": "idle",
+          "origin": {
+            "kind": "remote",
+            "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+            "exportId": "export-main",
+            "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+            "online": true
+          },
+          "currentMode": {
+            "modeId": "default",
+            "displayName": "Default"
+          },
+          "version": "1",
+          "createdAt": "2026-09-17T12:00:00.000Z",
+          "updatedAt": "2026-09-17T12:00:00.000Z"
+        }
+      }
+    }
+  }
+}

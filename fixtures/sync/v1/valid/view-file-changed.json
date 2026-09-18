@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "fd712951-08bc-4b43-a3b5-f9d23957d6e1",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "75",
+  "body": {
+    "globalSequence": "2364",
+    "sessionSequence": "224",
+    "eventId": "3760c40c-7dc8-42b3-ab65-304373761f82",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "file.changed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "daemon",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "changeId": "f955151e-316e-4b2f-a61d-1d4d075331c5",
+        "kind": "modified",
+        "displayPath": "fixtures/sync/v1/manifest.json",
+        "summary": "追加事件视图用例"
+      }
+    }
+  }
+}

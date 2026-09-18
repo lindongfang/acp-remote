@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "be361f21-99d8-4048-a3e7-5af0f43515d8",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "78",
+  "body": {
+    "globalSequence": "2367",
+    "sessionSequence": "227",
+    "eventId": "f86b8f98-528f-4909-ac95-47e1d5251521",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "command.completed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "local_cli",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+        "result": {
+          "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+        }
+      }
+    }
+  }
+}

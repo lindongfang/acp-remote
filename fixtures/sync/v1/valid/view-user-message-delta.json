@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "edd0854e-77ce-41e0-ab58-7193f921fb5a",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "64",
+  "body": {
+    "globalSequence": "2353",
+    "sessionSequence": "213",
+    "eventId": "7ab90550-e272-417c-af70-87d3390a0747",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "user.message.delta",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "agent",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaIndex": "0",
+        "text": "请补齐事件视图 fixture"
+      }
+    }
+  }
+}

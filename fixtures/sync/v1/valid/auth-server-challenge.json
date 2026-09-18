@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "type": "auth.server_challenge",
+  "messageId": "b1c2d3e4-f506-4718-8293-a4b5c6d7e8f9",
+  "body": {
+    "selectedProtocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    "serverNonce": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+    "selectedFeatures": [
+      "acp.raw-payload.v1",
+      "core.event-ack.v1",
+      "core.snapshot.v1"
+    ],
+    "hostProof": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-fw"
+  }
+}

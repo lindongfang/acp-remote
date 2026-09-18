@@ -1,0 +1,16 @@
+[package]
+name = "acpr-transcript"
+description = "ACP Remote 签名/HMAC 输入的长度前缀 transcript codec（叶子 crate，不含协议语义）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

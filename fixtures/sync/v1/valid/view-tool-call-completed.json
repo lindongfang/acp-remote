@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "a2398f3a-235b-4233-ae63-4d8eb263b28f",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "69",
+  "body": {
+    "globalSequence": "2358",
+    "sessionSequence": "218",
+    "eventId": "d940a048-0980-4616-a8a3-4f13f0a8c9d5",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "tool.call.completed",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "device",
+      "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49"
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "toolCallId": "toolu_01H8xk",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "title": "读取 schema",
+        "state": "completed"
+      }
+    }
+  }
+}

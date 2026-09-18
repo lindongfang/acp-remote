@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "type": "link.error",
+  "messageId": "d4e5f607-1829-4a3b-8c4d-5e6f708192a3",
+  "body": {
+    "code": "nodelink.protocol.invalid_json",
+    "message": "Frame is not a valid JSON object.",
+    "retryable": false,
+    "correlationId": null,
+    "details": {}
+  }
+}

@@ -47,6 +47,16 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-elicitation-decline.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-elicitation-submit-null.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/command-result-accepted.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
@@ -93,6 +103,26 @@
       "valid": true
     },
     {
+      "fixture": "valid/pairing-qr-payload.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-claim-response.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-status-request.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-status-response.json",
+      "schema": "../../../schemas/sync/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "invalid/sequence-is-number.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
@@ -123,10 +153,278 @@
       "expectedKeyword": "required"
     },
     {
+      "fixture": "valid/error-before-auth.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/ping-without-connection.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
+    },
+    {
       "fixture": "invalid/snapshot-chunk-index-is-number.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "type"
+    },
+    {
+      "fixture": "valid/auth-server-challenge.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/auth-client-proof.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-caught-up.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-reset-required.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-request.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-end.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/control-ping.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/control-pong.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-created.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.created",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-updated.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.updated",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-info-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.info.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-mode-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.mode.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-plan-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.plan.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-commands-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.commands.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-usage-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.usage.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-session-origin-online_changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.origin.online_changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-turn-queued.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.queued",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-turn-started.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.started",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-turn-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.completed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-turn-cancelled.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.cancelled",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-turn-failed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.failed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-user-message-delta.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/user.message.delta",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-agent-thought-delta.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.thought.delta",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-agent-message-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.message.completed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-tool-call-started.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/tool.call.started",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-tool-call-updated.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/tool.call.updated",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-tool-call-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/tool.call.completed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-permission-requested.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/permission.requested",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-permission-resolved.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/permission.resolved",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-elicitation-requested.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/elicitation.requested",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-elicitation-resolved.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/elicitation.resolved",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-terminal-output.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/terminal.output",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-file-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/file.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-agent-connected.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.connected",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-agent-disconnected.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.disconnected",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-command-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/command.completed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-command-failed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/command.failed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-command-uncertain.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/command.uncertain",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-device-revoked.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/device.revoked",
+      "valid": true
     }
   ],
   "transcriptVectors": [
@@ -135,6 +433,19 @@
     "transcripts/pairing-host-proof.json",
     "transcripts/pairing-sas.json",
     "transcripts/pairing-status.json",
-    "transcripts/device-proof.json"
+    "transcripts/device-proof.json",
+    "transcripts/invalid/bad-codec-version.json",
+    "transcripts/invalid/bad-magic.json",
+    "transcripts/invalid/duplicate-tag.json",
+    "transcripts/invalid/field-order.json",
+    "transcripts/invalid/length-mismatch.json",
+    "transcripts/invalid/public-key-bad-base64url.json",
+    "transcripts/invalid/public-key-bad-length.json",
+    "transcripts/invalid/public-key-bad-point.json",
+    "transcripts/invalid/public-key-not-on-curve.json",
+    "transcripts/invalid/trailing-bytes.json",
+    "transcripts/invalid/truncated-domain.json",
+    "transcripts/invalid/truncated-field.json",
+    "transcripts/invalid/unknown-tag.json"
   ]
 }

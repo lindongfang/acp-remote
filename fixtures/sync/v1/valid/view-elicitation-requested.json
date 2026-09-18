@@ -1,0 +1,46 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "5931d128-e460-45dd-a0e9-481d82b0270f",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "72",
+  "body": {
+    "globalSequence": "2361",
+    "sessionSequence": "221",
+    "eventId": "c57cce94-0158-4d70-a888-a938ae6b7603",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "elicitation.requested",
+    "causationRequestId": null,
+    "origin": {
+      "kind": "agent",
+      "deviceId": null
+    },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.000Z",
+    "payload": {
+      "view": {
+        "interactionId": "1b2c3d4e-5f60-4718-9293-a4b5c6d7e8f9",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "title": "选择目标分支",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "enum": [
+                "main",
+                "next"
+              ]
+            }
+          },
+          "required": [
+            "branch"
+          ]
+        },
+        "initialValues": {
+          "branch": "main"
+        }
+      }
+    }
+  }
+}

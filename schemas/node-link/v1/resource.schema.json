@@ -416,6 +416,7 @@
                 "originEventId",
                 "originEpoch",
                 "originSequence",
+                "sessionRef",
                 "eventType",
                 "payloadDigest",
                 "createdAt",
@@ -430,6 +431,9 @@
                 },
                 "originSequence": {
                   "$ref": "common.schema.json#/$defs/decimalString"
+                },
+                "sessionRef": {
+                  "$ref": "common.schema.json#/$defs/remoteSessionRef"
                 },
                 "eventType": {
                   "type": "string",
@@ -446,9 +450,19 @@
                 "payload": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "view"
+                  "anyOf": [
+                    {
+                      "required": [
+                        "view"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "acp"
+                      ]
+                    }
                   ],
+                  "description": "事件类型有登记 view 时必须携带 view；无法形成 view 时必须保留 acp 原文档。二者至少要有一个。",
                   "properties": {
                     "view": {
                       "type": "object",
@@ -482,9 +496,13 @@
               "type": "object",
               "additionalProperties": false,
               "required": [
+                "sessionRef",
                 "cursor"
               ],
               "properties": {
+                "sessionRef": {
+                  "$ref": "common.schema.json#/$defs/remoteSessionRef"
+                },
                 "cursor": {
                   "$ref": "common.schema.json#/$defs/originCursor"
                 }

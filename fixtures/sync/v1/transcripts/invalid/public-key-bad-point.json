@@ -1,0 +1,6 @@
+{
+  "description": "SEC1 前缀由 0x04 改为 0x05；解码器必须以 bad_point 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "malformedPublicKeyBase64url": "BVJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+  "expectedError": "bad_point"
+}

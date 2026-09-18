@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.snapshot_begin",
+  "messageId": "b4c5d6e7-f809-4a1b-8c2d-3e4f50617283",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "21",
+  "body": {
+    "snapshotId": "3c4d5e6f-7081-4293-a4b5-c6d7e8f9a0b1",
+    "cursor": {
+      "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+      "originSequence": "2318"
+    },
+    "schemaVersion": 1,
+    "chunkCount": 2
+  }
+}

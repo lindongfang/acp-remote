@@ -2,6 +2,8 @@
 
 > 状态：编码前契约（Draft）  
 > ACP wire 版本：1  
+> 修订记录（2026-09-18）：新增 §6 `acp_facade` 的 `session/new` 映射与错误映射；`elicitation/create` 的 capability 占位符改为 `clientCapabilities.elicitation.form`；新增 `meta_fields_byte_exact`、`extension_method_explicit_unsupported` 两个不变量，未知判别子改为 `visible_degradation`；capability 路径改为可校验的字面量；`content.resource_link` 的 gate 由 `embeddedContext` 改为 `null`（上游把它列为 baseline，不是 opt-in）；补齐 Sync/Node Link 的 `elicitation.respond` 动作集到 ACP 的 `accept`/`decline`/`cancel`（此前缺 `decline`，会让 Access 节点上的上游客户端无法表达"拒绝"）。  
+> 上游快照已 vendored 到 `schemas/acp/v1/upstream/schema.json`，`check:acp` 强制重算其 sha256 并与本文固定值比对；`fixtures/acp/v1` 由 `manifest.json` 驱动、按同一快照做 ajv 校验。
 > 上游快照：`agentclientprotocol/agent-client-protocol@c4137ab3b168d97f0ad6c542f483b6a417b2d610`  
 > 核对日期：2026-09-18  
 > 机器可读来源：[`compatibility/acp/v1/matrix.json`](../compatibility/acp/v1/matrix.json)
@@ -74,7 +76,7 @@ ACP 兼容性不能只用一个 `supported: true/false` 表示。每项能力必
 | `contentBlocks` | prompt/output content block | 输入协商、输出保真、客户端降级 |
 | `toolCallContents` | tool result content/diff/terminal | 不得文本化，生命周期保持 |
 | `capabilities` | 初始化时影响行为的 capability path | 宣告必须与端到端实际能力一致 |
-| `invariants` | fixture 驱动的不变量 | `expectation` 取 `byte_exact`/`structured_not_text`/`explicit_unsupported`/`truthful_negotiation` 之一；该组条目不带 `layers`/`delivery` |
+| `invariants` | fixture 驱动的不变量 | `expectation` 取 `byte_exact`/`structured_not_text`/`explicit_unsupported`/`truthful_negotiation`/`visible_degradation` 之一；该组条目不带 `layers`/`delivery` |
 
 ### 3.3 `layers`：目标行为
 
@@ -89,6 +91,8 @@ ACP 兼容性不能只用一个 `supported: true/false` 表示。每项能力必
 | `sync` | `command` \| `event` \| `snapshot` \| `raw_fallback` \| `explicit_unsupported` \| `not_exposed` |
 | `pwa` | `full` \| `view_only` \| `explicit_unsupported` \| `not_applicable` |
 | `facade` | `baseline` \| `advertise_if_end_to_end` \| `not_advertised` \| `not_applicable` |
+
+ACP fixture 的校验口径：`fixtures/acp/v1/manifest.json` 驱动 ajv，schema 指向 vendored 固定快照。上游快照顶层是对 request/response/notification 的宽松 `anyOf`，同一份文档可能被多个消息种类分支接受，因此**约束级**的负例用 `schemaPointer` 指向具体 `$defs`（例如 `#/$defs/ToolCallLocation` 的 `line` 是 `uint32`），而不是靠整份消息文档失败；消息级 fixture 仍按整份快照校验，用于证明它们是该快照下的合法消息。
 
 各取值的含义：
 
@@ -174,7 +178,7 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 2. 全部 11 种 `session/update` 的解码与 raw 保真测试，即使 PWA 尚不能完整呈现其中某项；
 3. text prompt 输入；Agent 输出的五种 content block 均不会静默丢失；
 4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化，agent→client 的 `terminal/*` 服务方法不在此列——它们仍是 `post_mvp`、`facade=not_advertised`；
-5. `_meta`、下划线扩展方法和未知未来 discriminator 的保真/显式不支持行为；
+5. `_meta`、下划线扩展方法和未知未来 discriminator 的保真/显式不支持行为：已知消息内出现的未知字段与任意层级的 `_meta` 必须逐字节保真（`invariant.meta_fields_byte_exact`，`expectation = byte_exact`）；未知的 `_` 前缀方法必须由 facade 显式拒绝（ACP 方法未找到的等价错误），不得转发或静默丢弃（`invariant.extension_method_explicit_unsupported`）；未出现在上游固定快照中的 `sessionUpdate` 判别子按未知事件可见降级并保留 `acp.rawJson`（`invariant.future_update_visible`，`expectation = visible_degradation`）。`visible_degradation` 的含义是：无法理解的结构化字段必须保留原文并向用户可见降级，既不得静默丢弃，也不得降格为普通文本；这与 `explicit_unsupported` 的区别在于前者仍保持内容可见，后者是明确的拒绝。
 6. capability 未宣告、已宣告但 Broker 不支持、Broker 支持但 PWA 不支持三种路径可区分；
 7. `acp-facade` 只宣告经端到端测试证明的能力。
 
@@ -182,7 +186,39 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 
 这里的 ACP `session/list` 是底层 Agent 的可选原生方法，不等同于 ACP Remote 自己列出 Daemon 会话的 Sync `session.list`。同理，`promptCapabilities.image/audio/embeddedContext` 只约束 Client 向 Agent 发送的 prompt 内容；Agent 输出中出现相同 content block 时仍必须保留并明确呈现，不能因未宣告 prompt 输入能力而丢弃。
 
-## 6. Agent 实现差异
+上游固定快照把 `ContentBlock::Text` 与 `ContentBlock::ResourceLink` 列为 baseline prompt 能力，只有 `image`、`audio`、`embeddedContext` 三个 opt-in 开关；因此矩阵里 `content.resource_link` 的 `capability` 是 `null`（它没有 gate），而 `content.resource`（`ContentBlock::Resource`）才由 `agentCapabilities.promptCapabilities.embeddedContext` 门控。`content.resource_link` 的 `delivery = post_mvp` 描述的是 ACP Remote 自己的输入路径（v1 PWA 只发文本，见 `SYNC_PROTOCOL.md` §11.5），不是声称 Agent 侧缺少该能力；无论哪个阶段，收到该 content block 都必须保留或明确拒绝，不得静默丢弃。
+
+## 6. `acp_facade` 的 `session/new` 映射与错误映射
+
+Access Node 的 `server::acp_facade` 把本地 ACP Client（Zed）的 `session/new` 映射为 Node Link 的 `command.submit{command:"session.create"}`（`NODE_LINK_PROTOCOL.md` §12.7）。参数派生规则固定如下：
+
+| ACP 输入 | 映射结果 |
+|---|---|
+| Agent 选择 | `agentId` = 该 Export 目录中唯一的 Agent selector（首切片恰好一个）；多 Agent 的 Export 不在首切片范围 |
+| Export | `exportId` = Import 记录固定的 Export（`CONFIG_REFERENCE.md` §9） |
+| 工作区 | `workspaceAlias` = catalog 中该 Export 的 `defaultWorkspaceAlias` |
+| `templateParams` | 由 Export 的 `defaultTemplateId` 对应 template 的 `params` 校验后填入；未列出的键直接拒绝，不做猜测 |
+| `session/new.cwd` | **不转发**、也不用于选择路径；只作为诊断字段。Owner 侧路径由 Owner 的本地管理入口决定（`SECURITY_DESIGN.md` §12.3） |
+| `session/new.mcpServers` | 空数组 → 正常继续；非空 → facade 返回显式 ACP 参数错误（invalid-params 等价码），不得静默丢弃 |
+| `session/new.additionalDirectories` 等未导出字段 | 同上：能力未端到端具备时必须显式拒绝 |
+
+结果映射：`command.terminal.status = "completed"` 时用 `sessionCreateResult.remoteSessionRef.sessionId` 作为 ACP 会话 ID 返回给上游；`failed`/`rejected` 时按下表映射；`uncertain` 时必须返回错误且 **不得**自动重试 `session.create`（重试需要新 `requestId` 与用户确认）。
+
+| Node Link 错误码 | ACP 侧行为 |
+|---|---|
+| `nodelink.export.not_granted`、`nodelink.export.not_found`、`nodelink.command.unsupported_field` | 参数类错误（invalid params 等价码），不重试 |
+| `nodelink.command.unsupported`、`capability.unsupported_by_agent` | 方法/能力类错误（method-not-found 等价码），不重试 |
+| `nodelink.resource.owner_unavailable`、`nodelink.internal.unavailable` | 服务端错误（server-error 等价码），可提示用户重试 |
+| `nodelink.command.uncertain` | 服务端错误 + 明确提示“会话可能已创建”，不重试 |
+
+字面量必须取自已 vendored 的上游固定快照中实际存在的 ACP 错误定义；上游若无对应项，则使用 JSON-RPC 标准码 `-32602`（invalid params）、`-32601`（method not found）、`-32603`（internal error）并在本表注明依据。映射不得用“成功但空结果”或普通文本答复替代。
+
+**外部 turn 的 agent→client 请求**（探针已验证 Zed 会渲染并应答）：
+
+- `session/request_permission`（以及已宣告的 elicitation）必须为**非本端发起**的 turn 转发：facade 收到 Owner 侧的 `permission.requested` 事件后，向发起该线程的上游客户端发出请求并保持其不完成，直到拿到答案再以 `permission.resolve` 回传。不得代答、不得按 Export grant 自动允许或拒绝、不得用超时伪造结论。
+- 上游客户端的 JSON-RPC `id` **不保证是整数**（实测 Zed 使用 UUID 字符串）。facade 保存与回填时必须保持原始类型与字面量，不得转成整数、不得重新编号。
+
+## 7. Agent 实现差异
 
 通用矩阵描述 ACP 规范与产品合同，不把 Codex 或 OMP 的当前行为写死到核心。实际兼容结果以后记录为独立 report：
 

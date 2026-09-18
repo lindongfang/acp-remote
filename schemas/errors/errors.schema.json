@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/errors/errors.schema.json",
+  "title": "ACP Remote error code registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "revision", "protocols"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "protocols": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sync", "node_link"],
+      "properties": {
+        "sync": { "$ref": "#/$defs/protocol" },
+        "node_link": { "$ref": "#/$defs/protocol" }
+      }
+    }
+  },
+  "$defs": {
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subprotocol", "errors", "closeCodes"],
+      "properties": {
+        "subprotocol": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "errors": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/errorEntry" }
+        },
+        "closeCodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/closeCodeEntry" }
+        }
+      }
+    },
+    "errorEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "retryable", "details", "delivery"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9_.-]+$" },
+        "retryable": { "type": "boolean" },
+        "details": {
+          "description": "null 表示该码没有登记 details 字段（发送方必须送 {}）；否则为约束 details 的 JSON Schema 片段。details 本身仍是开放扩展点。",
+          "oneOf": [{ "type": "null" }, { "type": "object" }]
+        },
+        "delivery": { "enum": ["mvp", "conditional_mvp", "post_mvp"] }
+      }
+    },
+    "closeCodeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "meaning"],
+      "properties": {
+        "code": { "type": "integer", "minimum": 1000, "maximum": 4999 },
+        "meaning": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    }
+  }
+}

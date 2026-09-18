@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.snapshot_chunk",
+  "messageId": "c5d6e7f8-091a-4b2c-9d3e-4f5061728394",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "22",
+  "body": {
+    "snapshotId": "3c4d5e6f-7081-4293-a4b5-c6d7e8f9a0b1",
+    "chunkIndex": "0",
+    "resource": "session_meta",
+    "items": [
+      {
+        "sessionRef": {
+          "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+          "exportId": "export-main",
+          "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+        },
+        "sessionMeta": {
+          "state": "running",
+          "version": "7"
+        }
+      }
+    ]
+  }
+}

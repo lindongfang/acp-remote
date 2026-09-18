@@ -1,0 +1,6 @@
+{
+  "description": "带填充的 base64url；解码器必须以 bad_base64url 拒绝。",
+  "codec": "acpr-transcript-v1",
+  "malformedPublicKeyBase64url": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo=",
+  "expectedError": "bad_base64url"
+}

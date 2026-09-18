@@ -5061,8 +5061,8 @@
         <text data-detail="context" x="105" y="358" class="t-muted" font-size="9" text-anchor="middle">Zed / CLI / Desktop</text>
         </g>
 
-        <g id="node-accessIngress" data-node-id="accessIngress" data-node-label="Server Adapters" tabindex="0" role="button" aria-label="聚焦Server Adapters，sync / ACP / admin, 远程访问节点（可选）" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="sync / ACP / admin" data-node-context="远程访问节点（可选）">
-          <title>Server Adapters · sync / ACP / admin · 远程访问节点（可选）</title>
+        <g id="node-accessIngress" data-node-id="accessIngress" data-node-label="Server Adapters" tabindex="0" role="button" aria-label="聚焦Server Adapters，sync/link/facade/admin, 远程访问节点（可选）" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="sync/link/facade/admin" data-node-context="远程访问节点（可选）">
+          <title>Server Adapters · sync/link/facade/admin · 远程访问节点（可选）</title>
           <rect x="215" y="310" width="140" height="68" rx="6" class="c-mask"/>
           <rect x="215" y="310" width="140" height="68" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(221 316) scale(0.6875)">
@@ -5072,7 +5072,7 @@
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="285" y="342" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Server Adapters</text>
-        <text data-detail="context" x="285" y="358" class="t-muted" font-size="9" text-anchor="middle">sync / ACP / admin</text>
+        <text data-detail="context" x="285" y="358" class="t-muted" font-size="9" text-anchor="middle">sync/link/facade/admin</text>
         </g>
 
         <g id="node-accessBroker" data-node-id="accessBroker" data-node-label="Core" tabindex="0" role="button" aria-label="聚焦Core，imported 会话路径, 远程访问节点（可选）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="imported 会话路径" data-node-context="远程访问节点（可选）">
@@ -5122,8 +5122,8 @@
         <text data-detail="context" x="662.5" y="128" class="t-muted" font-size="9" text-anchor="middle">PWA / 手机 / 电脑</text>
         </g>
 
-        <g id="node-nodeServer" data-node-id="nodeServer" data-node-label="Server Adapters" tabindex="0" role="button" aria-label="聚焦Server Adapters，link / sync / ACP / admin, 公司资源归属节点" aria-pressed="false" data-node-kind="security" data-node-sublabel="link / sync / ACP / admin" data-node-context="公司资源归属节点">
-          <title>Server Adapters · link / sync / ACP / admin · 公司资源归属节点</title>
+        <g id="node-nodeServer" data-node-id="nodeServer" data-node-label="Server Adapters" tabindex="0" role="button" aria-label="聚焦Server Adapters，sync/link/facade/admin, 公司资源归属节点" aria-pressed="false" data-node-kind="security" data-node-sublabel="sync/link/facade/admin" data-node-context="公司资源归属节点">
+          <title>Server Adapters · sync/link/facade/admin · 公司资源归属节点</title>
           <rect x="590" y="310" width="145" height="68" rx="6" class="c-mask"/>
           <rect x="590" y="310" width="145" height="68" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(596 316) scale(0.6875)">
@@ -5131,7 +5131,7 @@
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="662.5" y="342" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Server Adapters</text>
-        <text data-detail="context" x="662.5" y="358" class="t-muted" font-size="9" text-anchor="middle">link / sync / ACP / admin</text>
+        <text data-detail="context" x="662.5" y="358" class="t-muted" font-size="9" text-anchor="middle">sync/link/facade/admin</text>
         </g>
 
         <g id="node-ownerBroker" data-node-id="ownerBroker" data-node-label="Core" tabindex="0" role="button" aria-label="聚焦Core，owned 会话权威, 公司资源归属节点" aria-pressed="false" data-node-kind="backend" data-node-sublabel="owned 会话权威" data-node-context="公司资源归属节点">
@@ -5471,7 +5471,7 @@
         <ul>
           <li>&bull; 同一 ACP Remote 可同时导入和导出 Agent</li>
           <li>&bull; server::{sync,node_link,acp_facade,local_admin} 是四个平级入站适配器</li>
-          <li>&bull; acpr-transcript 是无协议语义、无项目依赖的共享叶子 crate</li>
+          <li>&bull; 12 个 crate：acpr-transcript 隔离共享 codec，identity-keystore 隔离平台密钥库</li>
         </ul>
       </div>
 
@@ -5483,7 +5483,7 @@
         <ul>
           <li>&bull; 节点配对形成长期信任，但不自动建立传递信任</li>
           <li>&bull; 有效权限 = Owner 导出授权 ∩ Access 本地授权</li>
-          <li>&bull; 配对、撤销与 Export 管理只走平台本地 IPC</li>
+          <li>&bull; 配对、撤销与 Export 管理只走平台本地 IPC（ADR-0004）</li>
         </ul>
       </div>
 

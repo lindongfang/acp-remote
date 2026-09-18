@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/acpr-transcript",
+    "crates/acpr-wire",
+    "crates/core",
+    "crates/storage-sqlite",
+    "crates/sync-protocol",
+    "crates/node-link-protocol",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://gitee.com/lindongfang-jack/acp-remote.git"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# `arbitrary_precision`：视图的开放对象要经 serde 的 flatten 缓冲，没有它时超出 u64/i64 的整数字面量
+# 会被降级成浮点——那等于静默改写对端发来的未来字段。仓库在信封层已用 30 位整数做保真判据，这里保持一致。
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+thiserror = "2"
+base64 = "0.22"
+
+# core 的端口是可 dyn 化的异步 trait（docs/CORE_PORTS_AND_STORAGE.md §2）：async-trait 只是 proc-macro，
+# 不引入 runtime，因此 core 仍然不依赖 Tokio。
+async-trait = "0.1"
+# sqlite 适配器是唯一的 runtime 与数据库依赖持有者（docs/MODULE_ARCHITECTURE.md §4.7）。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate"] }
+# ID 生成（IdGenerator 的实现侧）：newtype 的形状校验在 core，随机来源在组合根。
+uuid = { version = "1", features = ["v4"] }
+
+# 密码学原语按 docs/MODULE_ARCHITECTURE.md §3.1 固定版本；本次增量无 crate 使用，
+# identity-auth 落地时改为 workspace = true 引用，不要在别处另选实现。
+p256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+hmac = "0.12"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"

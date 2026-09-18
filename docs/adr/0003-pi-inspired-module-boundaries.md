@@ -2,6 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-09-18
+- 修订记录（2026-09-18）：crate 数由本决定的措辞「十个」变为**十二个**——[ADR-0005](./0005-shared-transcript-codec.md) 新增叶子 crate `acpr-transcript`，[ADR-0006](./0006-identity-keystore-split.md) 从 `identity-auth` 拆出平台 keystore crate `identity-keystore`；`server` 的入站 adapter 除 `sync`/`node_link`/`acp_facade` 外还包含 `local_admin` 与 `transport`（见 [ADR-0004](./0004-local-admin-transport.md)）。当前权威清单以 [MODULE_ARCHITECTURE.md](../MODULE_ARCHITECTURE.md) §3 为准。
 - 影响范围：Rust workspace、依赖方向、Agent backend、持久化事务和入站 adapter
 
 ## 背景

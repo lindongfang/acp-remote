@@ -1,0 +1,22 @@
+[package]
+name = "sync-protocol"
+description = "客户端同步线的 wire 合同：transcript domain/tag 表、v1 信封与连接生命周期家族"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+acpr-transcript = { path = "../acpr-transcript" }
+acpr-wire = { path = "../acpr-wire" }
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true
