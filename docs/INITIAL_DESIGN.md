@@ -56,8 +56,9 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 访问节点通过 Node Link 导入 Owner Node 的 Agent/会话：
 
-- 向本地 Zed 暴露 `acp-remote acp-stdio`。
-- 向本地 PWA、手机、桌面 App 或 CLI 暴露 Sync 接口。
+- 向本地 Zed/CLI 暴露 `acp-remote acp-stdio`。
+- 向本地 Sync 客户端暴露本节点 owned 资源。
+- 经 Node Link 导入的资源通过 `acp_facade` 与 Sync 转发两条路径提供（转发规则见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.6“imported 资源”）。
 - 保存 import 配置、来源引用、cursor/ACK、幂等状态、无正文交付索引和本地 principal 授权。
 - 将命令转发给 Owner Node，并保留 origin event/sequence。
 - 不能修改远程 Agent 凭据、扩大 workspace 或突破 Export grant。
@@ -69,7 +70,7 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除和管理能力按 scope 决定；Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`，当前 PWA MVP 可以不展示创建入口。
 
-### 3.3 Zed
+### 3.4 Zed
 
 Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Client：
 
@@ -78,7 +79,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 - 可以继续已有会话。
 - 是否允许 Zed 创建会话由本地 principal scope 与 Owner Export Policy 的交集决定。
 
-### 3.4 前端交付策略
+### 3.5 前端交付策略
 
 客户端的阶段、行为和平台边界以 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) 为权威来源。
 
@@ -90,10 +91,14 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 ## 4. 总体架构
 
 ```text
-远程 Zed ── local ACP ── Access Node ── Node Link ── Owner Node ── ACP stdio ── Agent
-                              ▲                    ▲
-远程 PWA/手机/CLI ── Sync ────┘                    └── 公司本地 Zed/CLI/PWA
+远程 PWA/手机/桌面/CLI ── Sync ──> Owner Node ── ACP stdio ── Agent
+
+远端/本地 Zed ─────── local ACP ──┐
+                                  ├──> Access Node ── Node Link ──> Owner Node ── ACP stdio ── Agent
+本地 PWA/手机/CLI ──── Sync ──────┘
 ```
+
+Sync 客户端可以直连资源归属的 Owner Node，也可以连接 Access Node 并看到该节点从 Owner 导入的资源；Access Node 只转发，不成为正文权威，也不改写 ACP 语义。
 
 每个 Agent/会话的 Owner Node 是该资源的唯一权威：
 
@@ -258,39 +263,22 @@ Agent event
 
 ### 7.2 事件结构
 
-```json
-{
-  "globalSequence": "2318",
-  "sessionSequence": "109",
-  "eventId": "evt-uuid",
-  "sessionId": "sess-123",
-  "type": "agent.message.delta",
-  "origin": "agent",
-  "createdAt": "2026-09-17T20:10:00Z",
-  "payload": {}
-}
-```
+事件信封、事件 body 字段、`origin` 块、`remoteOrigin` 块、`payload.view` 与 `payload.acp` 的完整形状以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §4 与 §10.1 为唯一权威来源，本文不重复定义。
 
-- `globalSequence`：一个 ACP Remote Node 本地事件日志范围内的增量同步游标。
-- `sessionSequence`：单会话严格排序。
-- `eventId`：客户端去重。
-- `origin`：记录事件来自 Agent、本地客户端或 Access Node；远程事件另保留 Owner Node 与 origin cursor。
+产品级语义：
+
+- `globalSequence`：一个 ACP Remote Node 本地事件日志范围内的增量同步游标，编码为无前导零十进制字符串。
+- `sessionSequence`：单会话严格排序，非会话级事件为 `null`。
+- `eventId`：客户端去重；imported 事件的 `eventId` 等于 Owner 的 `originEventId`，跨节点不重新编号。
+- `origin.kind`：记录事件来自 Agent、设备、Daemon 或本地 CLI；远程来源不放这里，单独放在 `remoteOrigin`。
 
 ### 7.3 订阅与补发
 
-客户端连接后发送：
-
-```json
-{
-  "type": "subscribe",
-  "scope": "machine",
-  "afterSequence": 2280
-}
-```
+订阅消息、cursor 二元组、快照与 ACK 的完整形状以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9 为唯一权威来源；客户端以持久化 cursor 订阅，而不是用裸 sequence 比较大小。
 
 Daemon：
 
-1. 从 SQLite 补发 `afterSequence` 之后的可见事件。
+1. 从 SQLite 补发 cursor 之后的可见事件。
 2. 切换到实时事件流。
 3. 接收客户端 ACK。
 4. 断线后从最后 ACK 继续。
@@ -317,75 +305,30 @@ Daemon：
 
 UI 客户端和 Access Node 使用受约束的业务命令，而不是向 Owner Node 直接发送任意 ACP JSON-RPC。
 
-示例：
-
-```json
-{
-  "type": "command",
-  "command": "session.prompt",
-  "sessionId": "sess-123",
-  "requestId": "client-generated-uuid",
-  "payload": {
-    "content": [
-      { "type": "text", "text": "继续修复测试" }
-    ]
-  }
-}
-```
+命令名、类别、`scope`、`pack`、`grant`、`transport` 与首阶段交付状态以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为唯一来源，本文不重复维护命令清单；命令信封、`requestId`、`command.result` 与 payload 字段以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11 为准。
 
 Daemon 立即返回接受、排队或拒绝状态；实际执行结果通过事件流发送。
 
-初期命令集合：
+命令名不等于权限：每条命令仍按当前连接 Actor 的 scope 和 Owner Export Policy 重新授权，逐命令的 scope/pack/grant 对照表见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2。原始 workspace 路径选择、Agent/Provider 配置、设备与 Export 管理、Node key 轮换和审计导出只能由 Owner Node 本地管理入口执行，永不远程授予，清单见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.3。
 
-```text
-session.list
-session.read
-session.prompt
-session.cancel
-session.model.list
-session.model.set
-session.mode.list
-session.mode.set
-permission.resolve
-elicitation.respond
-```
+远程 `session.create` 只能选择已发布的 Agent 与 workspace template，禁止提交 `cwd`、`mcpServers`、绝对路径或任何 Provider/MCP 凭据。
 
-以下能力不再按设备形态硬编码，只有具备对应 scope 且满足 Owner Export Policy 的 principal 才能使用：
+## 9. 模型与模式选择
 
-```text
-session.create
-session.delete（可选）
-workspace.select
-agent.configure
-provider.configure
-device.manage
-export.manage
-```
+模型与模式不引入 ACP 之外的抽象，两者都直接复用 ACP 原生机制：
 
-`provider.configure`、原始 workspace 路径选择和 Export 管理默认只允许 Owner Node 本地管理员；远程 `session.create` 只能选择已发布的 Agent 与 workspace template。
-
-## 9. 模型选择与切换
-
-Daemon 将不同 Agent 的模型能力统一抽象：
-
-```rust
-trait AgentAdapter {
-    async fn list_models(&self, session_id: &str) -> Result<Vec<Model>>;
-    async fn current_model(&self, session_id: &str) -> Result<ModelRef>;
-    async fn set_model(&self, session_id: &str, model: &ModelRef)
-        -> Result<SetModelResult>;
-    fn supports_runtime_model_switch(&self) -> bool;
-}
-```
+- 模型选择复用 ACP `SessionConfigOption`（`category` 为 `model` 或 `model_config`）与 `session/set_config_option`；Sync 命令为 `session.config.list` / `session.config.set`，事件为 `session.config.changed`。
+- 模式选择复用 ACP `session/set_mode`；Sync 命令为 `session.mode.list` / `session.mode.set`，事件为 `session.mode.changed`。
+- 配置项与模式的公开视图、命令 payload 和事件形状以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §10.3 与 §11.5 为唯一权威来源；Agent 是否暴露某项配置以 ACP `agentCapabilities` 为准。
 
 规则：
 
-- 客户端只能选择 Owner Node 已配置且当前 Agent 实际暴露、Export 允许的模型。
+- 客户端只能选择 Owner Node 已配置且当前 Agent 实际暴露、Export 允许的配置项取值与模式。
 - Provider 凭据不发送到 Access Node 或访问客户端。
-- 模型切换带 `expectedVersion`，避免并发覆盖。
+- 切换携带 `expectedVersion`，避免并发覆盖。
 - 当前 turn 运行中时，切换默认从下一 turn 生效。
 - 如果 Agent 不支持会话内切换，必须明确返回“不支持”，不能静默丢失上下文。
-- 模型变化通过事件同步给所有客户端。
+- 变更通过事件同步给所有客户端。
 
 ## 10. 数据存储
 
@@ -399,7 +342,7 @@ Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断�
 - Agent 合并后的最终回复。
 - 工具调用摘要和结果状态。
 - 权限请求与最终决策。
-- 模型、模式变化。
+- 配置项与模式变化。
 - Turn 生命周期。
 - 必要的文件修改摘要。
 - 会话与底层 Agent session ID 映射。
@@ -420,30 +363,11 @@ Owner Node 需要保存足以支持客户端和 Access Node 历史查看、断�
 - 大型 diff：压缩并限制容量。
 - 图片和附件：独立文件或内容寻址存储，配置配额。
 
-### 10.4 建议默认值
+### 10.4 保留策略默认值
 
-```yaml
-storage:
-  transcript_retention: 90d
-  sync_event_retention: 7d
-  max_total_size: 2GB
-  max_session_size: 100MB
+保留期、容量上限、终端截断与流式落盘的具体键名、类型与默认值统一在 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) 维护，本节不重复。
 
-terminal:
-  max_output_per_command: 1MB
-  keep_head_bytes: 128KB
-  keep_tail_bytes: 896KB
-
-attachments:
-  max_file_size: 20MB
-  max_total_size: 1GB
-
-streaming:
-  persist_deltas: false
-  flush_interval_ms: 250
-```
-
-这些值是初始建议，编码时应成为可配置项并通过实际使用数据调整。
+产品级约束在这里：这些值必须可配置；`persist_deltas` 只影响 turn 完成后的压缩与清理，不允许绕过“先持久化、后广播”；清理造成 cursor 超出保留窗口时必须要求客户端重建 snapshot。实际取值通过使用数据调整。
 
 ## 11. 双方认证与长期配对
 
@@ -473,15 +397,17 @@ hostPublicKey        P-256 public key
 
 ```json
 {
-  "protocol": "acp-remote-pairing-v1",
-  "hostId": "host-uuid",
-  "hostPublicKey": "base64...",
+  "pairingProtocol": "acp-remote-pairing-v1",
+  "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+  "hostPublicKey": "<base64url-65-bytes>",
   "canonicalOrigin": "https://work-pc.example.ts.net",
-  "pairingId": "pair-uuid",
-  "pairingSecret": "256-bit-random-secret",
-  "expiresAt": 1789650000
+  "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+  "pairingSecret": "<base64url-32-bytes>",
+  "expiresAt": "2026-09-17T12:15:00.000Z"
 }
 ```
+
+`expiresAt` 是毫秒精度 UTC RFC 3339 时间戳字符串；二维码字段名、类型与约束以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1 为唯一权威来源。
 
 规则：
 
@@ -526,30 +452,33 @@ hostPublicKey        P-256 public key
   "canonicalOrigin": "https://work-pc.example.ts.net",
   "keyAlgorithm": "ECDSA_P256_SHA256",
   "signatureEncoding": "P1363_BASE64URL",
-  "publicKey": "base64...",
-  "permissions": [
+  "publicKey": "<base64url-65-bytes>",
+  "scopes": [
     "session.list",
     "session.read",
+    "command.status",
+    "session.mode.list",
+    "session.config.list",
     "session.prompt",
     "session.cancel",
-    "session.model.list",
-    "session.model.set",
-    "session.mode.list",
+    "elicitation.respond",
     "session.mode.set",
-    "permission.resolve",
-    "elicitation.respond"
+    "session.config.set",
+    "permission.resolve"
   ],
   "createdAt": "...",
   "revokedAt": null
 }
 ```
 
+设备记录与 wire 只保存独立的命令 scope；`pack.*`、`preset.*` 和 `grant.*` 都是授权管理的输入形式，配对时展开为 scope 后再落库。逐命令的 scope、pack、grant 对照表以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2 为唯一权威来源，命令名集合以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准。
+
 每条消息必须检查：
 
 - 连接是否完成双向认证。
 - `deviceId` 是否匹配当前连接身份。
 - 设备是否已撤销。
-- 设备是否拥有该命令权限。
+- 设备是否拥有该命令 scope。
 - `requestId` 是否已经处理。
 - 连接消息计数器是否有效，防止重放。
 
@@ -723,7 +652,7 @@ Linux x64 glibc
 - 单 Owner、单 Access、单 Export 的 catalog、command/event、cursor、重放和端到端幂等。
 - Access Node 的 remote Agent backend 与 `acp-remote acp-stdio`。
 - 远程 Zed 经 Access Node 完成 initialize、session/new、session/prompt、session/update 和 cancel。
-- `session/new` 必须映射为受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`。
+- `session/new` 必须经 Node Link `command.submit(session.create)` 映射为受 `grant.remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`；请求禁止携带 `cwd`、`mcpServers`、绝对路径或凭据字段。
 - 第一阶段单 hop；禁止 imported Agent 再导出。
 - capability 交集、ACP raw 跨节点保真、默认 `no-content-cache` 和 Owner 离线正文不可用。
 - 第一阶段采用节点级信任，Owner 以 Access Node 为授权 principal，`localPrincipalRef` 只作审计归因。

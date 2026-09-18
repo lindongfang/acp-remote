@@ -13,6 +13,7 @@
 - [docs/NODE_LINK_PROTOCOL.md](docs/NODE_LINK_PROTOCOL.md)：ACP Remote 节点之间资源导出/导入、权威、认证、授权、重放和幂等边界的权威来源。
 - [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)：系统威胁模型、信任边界、授权、数据保护、供应链和安全验收的权威来源。
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
+- [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)：Daemon 配置键名、类型、默认值与可否调整的唯一权威来源；协议层限额仍以 Sync、Node Link 两份协议文档为准。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
 同时检查现有代码、测试和工作区状态。不要假设文档中的规划已经实现，也不要覆盖用户尚未提交的修改。
@@ -144,6 +145,7 @@ core use_cases   -> core ports + core model
 - 有效权限是 Owner Export grant、Access 本地授权和实际 capability 的交集；节点配对不产生传递信任。
 - 第一阶段 imported Agent 只能提供给本节点客户端，禁止再次通过 Node Link 导出。
 - 第一阶段 Node Link 必须把 Zed `session/new` 映射为受限远程 `session.create`；请求不得携带任意 Owner 路径或 Provider/MCP 凭据。
+- 命令名与 payload 字段名以 [`compatibility/commands/v1/commands.json`](compatibility/commands/v1/commands.json) 与 `docs/SYNC_PROTOCOL.md` §11.5 为唯一来源；Node Link 与 Sync 共用同一批命令名，不得在节点协议里另造同义命令。
 - 跨节点可重试命令保持稳定 requestId；崩溃窗口仍必须进入 `uncertain`，不能在 Access Node 擅自重试副作用。
 
 ### 前端客户端
@@ -227,8 +229,12 @@ cargo test --workspace --all-features
 - Sync wire schema、消息状态或兼容语义变化：更新 `docs/SYNC_PROTOCOL.md`、`schemas/sync/v1/` 和 `fixtures/sync/v1/`。
 - crate、模块职责或依赖方向变化：更新 `docs/MODULE_ARCHITECTURE.md`。
 - 前端阶段、客户端行为或平台边界变化：更新 `docs/FRONTEND_DESIGN.md`。
-- ACP 方法、通知、content、capability 或各层支持状态变化：更新 `docs/ACP_COMPATIBILITY_MATRIX.md`、机器矩阵和相应 fixture；运行 `node scripts/check-acp-compatibility.mjs`。
+- ACP 方法、通知、content、capability 或各层支持状态变化：更新 `docs/ACP_COMPATIBILITY_MATRIX.md`、机器矩阵和相应 fixture；运行 `npm run check`。
 - 节点角色、Export/Import、跨节点身份、授权、cursor 或命令语义变化：更新 `docs/NODE_LINK_PROTOCOL.md`，并同步安全、模块与协议测试资产。
+- Node Link wire/资产变更：更新 `docs/NODE_LINK_PROTOCOL.md` + `schemas/node-link/v1/` + `fixtures/node-link/v1/`，并运行 `npm run check`。
+- Sync wire/资产变更：更新 `docs/SYNC_PROTOCOL.md` + `schemas/sync/v1/` + `fixtures/sync/v1/`，并运行 `npm run check`。
+- 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。
+- `npm run check` 是本仓库唯一的机器校验入口（`scripts/` 下四个脚本：sync/node-link fixture 用 ajv 校验、ACP 矩阵用 ajv 校验 `schemas/acp/compatibility-matrix.schema.json`、`rawJson`/transcript 密码学固定向量重算、命令目录四处一致）；改动合同资产后必须让它全绿。CI 尚未接入，这一条目前靠人工执行。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。

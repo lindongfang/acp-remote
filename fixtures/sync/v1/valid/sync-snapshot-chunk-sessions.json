@@ -1,0 +1,42 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "0b5d7c9e-1f2a-4b3c-8d4e-5f6a7b8c9d0e",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "8",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "0",
+    "resource": "sessions",
+    "items": [
+      {
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "title": "修复测试",
+        "agent": { "agentId": "claude-code", "name": "Claude Code" },
+        "state": "idle",
+        "origin": { "kind": "local" },
+        "currentMode": { "modeId": "default", "displayName": "Default" },
+        "version": "42",
+        "createdAt": "2026-09-17T11:00:00.000Z",
+        "updatedAt": "2026-09-17T12:11:01.000Z"
+      },
+      {
+        "sessionId": "6e84de21-b576-44de-a4c2-815e3e5faa77",
+        "title": "远端会话元数据",
+        "agent": { "agentId": "zed-agent", "name": "Zed Agent" },
+        "state": "running",
+        "origin": {
+          "kind": "remote",
+          "ownerNodeId": "1f0d5c4b-3a29-4877-9615-0e1d2c3b4a59",
+          "exportId": "export-laptop-zed",
+          "originEpoch": "2a1b0c9d-8e7f-4a6b-b5c4-3d2e1f0a9b87",
+          "online": true
+        },
+        "currentMode": null,
+        "version": "7",
+        "createdAt": "2026-09-17T12:00:00.000Z",
+        "updatedAt": "2026-09-17T12:11:02.500Z"
+      }
+    ]
+  }
+}

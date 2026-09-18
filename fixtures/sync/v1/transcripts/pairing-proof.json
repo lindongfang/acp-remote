@@ -1,0 +1,23 @@
+{
+  "description": "Public interoperability vector for the pairing claim HMAC. Never use these values in production.",
+  "domain": "acp-remote/pairing-proof/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+    "canonicalOrigin": "https://work-pc.example.ts.net",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "pairingExpiresAtUnixSeconds": 1789650000,
+    "devicePublicKey": "BDURrmwahG1VT1zJxcePFuA99mOsjir_PjPSmLRzhy55c_z4AbafU7p9ijvIwIirXpjGxx8A6adGmjoF7ul9yCc",
+    "deviceName": "Test Phone",
+    "clientKind": "pwa"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAG2FjcC1yZW1vdGUvcGFpcmluZy1wcm9vZi92MQAKAAEAAAACAAEAAgAAABC9suwg-YxNh7eJ5UDVJ--HAAMAAAAQKuHAfJJCRump0k7FjBMPSQAEAAAAECvIuUQqT0anjDGyxAkj9goABQAAAAgAAAAAaqvkUAAGAAAAHmh0dHBzOi8vd29yay1wYy5leGFtcGxlLnRzLm5ldAAIAAAAQQQ1Ea5sGoRtVU9cycXHjxbgPfZjrI4q_z4z0pi0c4cueXP8-AG2n1O6fYo7yMCIq16YxscfAOmnRpo6Be7pfcgnAAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ADgAAAApUZXN0IFBob25lAA8AAAADcHdh",
+    "transcriptSha256Hex": "f88847389fa5dc296af3d68a4b973a6fe16a3356a64d0c83f0c04f6b76f78e3f",
+    "hmacKeyBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+    "hmacSha256": "_rvmNFY_tjmZ6lrdRmBDLaMQFKqykaCTW8pnaGPWvA4"
+  }
+}

@@ -6,6 +6,7 @@
   "connectionSequence": "12",
   "body": {
     "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "command": "session.prompt",
     "status": "accepted",
     "acceptedAt": "2026-09-17T12:11:00.000Z",
     "terminalEventId": null,

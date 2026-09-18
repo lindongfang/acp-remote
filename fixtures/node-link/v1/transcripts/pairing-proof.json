@@ -1,0 +1,22 @@
+{
+  "description": "Public interoperability vector. Never use this key in production.",
+  "domain": "acp-remote/node-link-pairing-proof/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    "accessNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "pairingId": "20212223-2425-4627-a829-2a2b2c2d2e2f",
+    "pairingExpiresAt": 1789650000,
+    "accessPublicKeyHex": "0497041c95f567085ce410596040923bf6982586423434a42a652eb226a192e60ae4f91663dba85cbb027772763eb1fff64f91486ff10e41235b6d2878bdd3ef08",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "nodeName": "Office Access",
+    "nodeKind": "access"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAJWFjcC1yZW1vdGUvbm9kZS1saW5rLXBhaXJpbmctcHJvb2YvdjEACQABAAAAAgABAAIAAAAQAAECAwQFRgeICQoLDA0ODwADAAAAEBAREhMUFUYXmBkaGxwdHh8ABAAAABAgISIjJCVGJ6gpKissLS4vAAUAAAAIAAAAAGqr5FAACAAAAEEElwQclfVnCFzkEFlgQJI79pglhkI0NKQqZS6yJqGS5grk-RZj26hcuwJ3cnY-sf_2T5FIb_EOQSNbbSh4vdPvCAAJAAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAA4AAAANT2ZmaWNlIEFjY2VzcwAPAAAABmFjY2Vzcw",
+    "transcriptSha256Hex": "c8044ae4b5852ea1deda01cb6487c5e3f6dd1ad6a6961092ed80cb98539ebb34",
+    "hmacKeyBase64url": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8",
+    "hmacSha256": "SSeJrzv-KTZYs8z6EBlOIuS9g2ykm2YUnVV8IzdGVtg"
+  }
+}

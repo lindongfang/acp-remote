@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "type": "export.revoked",
+  "messageId": "918293a4-b5c6-47d8-89ea-fb0c1d2e3f40",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "9",
+  "body": {
+    "exportId": "export-main",
+    "revokedAt": "2026-09-18T10:00:00.000Z"
+  }
+}

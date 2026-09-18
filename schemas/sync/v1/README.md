@@ -10,6 +10,7 @@
 - `auth.schema.json`：WSS 认证消息。
 - `sync.schema.json`：订阅、快照和 ACK。
 - `event.schema.json`：持久化事件信封。
+- `event-views.schema.json`：`event.payload.view` 的按事件类型 `$defs` 库（每个 `$defs` 只约束该事件的最低必填字段，`additionalProperties` 保持开放）。它没有顶层 `oneOf`，只由 `fixtures/sync/v1/manifest.json` 的 `viewSchema`/`viewDef` 指针引用。
 - `command.schema.json`：命令及结果。
 - `error.schema.json`：连接级错误和 heartbeat。
 
@@ -25,13 +26,13 @@ JSON Schema 只检查单条消息的结构。以下规则必须由 Rust/TypeScri
 - base64url 解码后的真实字节长度和 P-256 曲线点有效性。
 - transcript、签名、HMAC、hash 和 `rawJson.byteLength`。
 - connection sequence、event sequence、cursor、ACK 和 snapshot chunk 的跨消息顺序。
-- feature 列表合计上限、scope、Origin、撤销状态和命令授权。
+- feature 列表上限、scope、Origin、撤销状态和命令授权。
 - request 幂等、Session Actor 串行化和 command terminal event 唯一性。
 
-仓库自带的轻量检查：
+仓库自带的检查（在仓库根运行）：
 
 ```text
-node scripts/check-contract-assets.mjs
+npm run check
 ```
 
-它检查 JSON 可解析性、`$ref` 目标、manifest 文件、`rawJson` hash/长度和固定签名向量，不代替 Draft 2020-12 validator。Rust 与 TypeScript 工程建立后，双方都必须运行 manifest 中的正反 fixture。
+它依次执行 `scripts/check-schema-fixtures.mjs`（ajv Draft 2020-12 逐条校验 `fixtures/sync/v1/manifest.json` 的正反样例与事件视图）、`scripts/check-command-catalog.mjs`（命令名在 `compatibility/commands/v1/commands.json`、`command.schema.json`、`docs/SYNC_PROTOCOL.md` §11.5 与 `docs/SECURITY_DESIGN.md` §10.2 四处一致）、`scripts/check-contract-assets.mjs`（`$ref` 目标、`$id` 唯一性、manifest 文件、`rawJson` hash/长度、transcript SHA-256/HMAC/签名重算）与 `scripts/check-acp-compatibility.mjs`。Rust 实现仍必须用自己选择的 Draft 2020-12 validator 跑同一份 manifest，形成独立判定。

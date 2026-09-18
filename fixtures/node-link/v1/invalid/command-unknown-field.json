@@ -1,0 +1,28 @@
+{
+  "protocolVersion": 1,
+  "type": "command.submit",
+  "messageId": "c4b5c6d7-e8f9-4a0b-9c1d-2e3f40516273",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "7",
+  "body": {
+    "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "command": "session.prompt",
+    "sessionRef": {
+      "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+      "exportId": "export-main",
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",
+    "attachmentGeneration": "1",
+    "expectedVersion": null,
+    "payload": {
+      "content": [
+        {
+          "type": "text",
+          "text": "继续修复测试"
+        }
+      ]
+    },
+    "priority": 1
+  }
+}

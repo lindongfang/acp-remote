@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/pairing.schema.json",
+  "title": "ACP Remote Node Link v1 Pairing HTTP Payloads",
+  "oneOf": [
+    { "$ref": "#/$defs/qrPayload" },
+    { "$ref": "#/$defs/claimRequest" },
+    { "$ref": "#/$defs/claimResponse" },
+    { "$ref": "#/$defs/statusRequest" },
+    { "$ref": "#/$defs/statusResponse" },
+    { "$ref": "#/$defs/httpError" }
+  ],
+  "$defs": {
+    "endpoint": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^wss://[^/?#]+/node-link/v1$",
+      "maxLength": 2048,
+      "description": "Node Link v1 WSS 端点；HTTP origin 由该 host 加 https 得到，见 docs/NODE_LINK_PROTOCOL.md §13.1。"
+    },
+    "qrPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pairingProtocol", "ownerNodeId", "ownerPublicKey", "endpoint", "pairingId", "pairingSecret", "expiresAt"],
+      "properties": {
+        "pairingProtocol": { "const": "acp-remote-nodelink-v1" },
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "ownerPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" },
+        "endpoint": { "$ref": "#/$defs/endpoint" },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "pairingSecret": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    },
+    "claimRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingId", "ownerNodeId", "accessNodeId", "nodeName", "nodeKind", "endpoint", "accessPublicKey", "clientNonce", "proof"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "accessNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "nodeName": { "$ref": "common.schema.json#/$defs/nodeName" },
+        "nodeKind": {
+          "allOf": [
+            { "$ref": "common.schema.json#/$defs/nodeKind" },
+            { "const": "access" }
+          ],
+          "description": "Node Link 配对只允许 Access Node 发起 claim。"
+        },
+        "endpoint": { "$ref": "#/$defs/endpoint" },
+        "accessPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" },
+        "clientNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "proof": {
+          "allOf": [{ "$ref": "common.schema.json#/$defs/base64url32" }],
+          "description": "HMAC-SHA256(pairingSecret, node-link-pairing-proof/v1 transcript)，无填充 base64url。"
+        }
+      }
+    },
+    "claimResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingRequestId", "serverNonce", "ownerProof", "status", "expiresAt"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingRequestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "serverNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "ownerProof": { "$ref": "common.schema.json#/$defs/base64url64" },
+        "status": { "const": "pending_confirmation" },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    },
+    "statusRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "ownerNodeId", "accessNodeId", "pairingId", "pairingRequestId", "requestNonce", "proof"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "accessNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "pairingRequestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "requestNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+        "proof": {
+          "allOf": [{ "$ref": "common.schema.json#/$defs/base64url32" }],
+          "description": "HMAC-SHA256(pairingSecret, node-link-pairing-status/v1 transcript)，无填充 base64url。"
+        }
+      }
+    },
+    "statusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "pairingRequestId", "status", "expiresAt"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "pairingRequestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "status": { "enum": ["pending_confirmation", "approved", "rejected", "expired", "consumed"] },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "node": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accessNodeId", "name", "scopes"],
+          "properties": {
+            "accessNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "name": { "$ref": "common.schema.json#/$defs/nodeName" },
+            "scopes": { "$ref": "common.schema.json#/$defs/grantList" }
+          }
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ownerNodeId", "ownerPublicKey"],
+          "properties": {
+            "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "ownerPublicKey": { "$ref": "common.schema.json#/$defs/base64url65" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "approved" } }, "required": ["status"] },
+          "then": { "required": ["node", "owner"] },
+          "else": {
+            "not": { "anyOf": [{ "required": ["node"] }, { "required": ["owner"] }] }
+          }
+        }
+      ]
+    },
+    "httpError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "correlationId", "details"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9_.-]+$" },
+        "message": { "type": "string", "maxLength": 1024 },
+        "retryable": { "type": "boolean" },
+        "correlationId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "开放扩展点：错误补充信息，客户端不得据此做安全或授权决策。"
+        }
+      }
+    }
+  }
+}

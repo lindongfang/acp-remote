@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "fixture": "valid/node-hello.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/node-challenge.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/node-ready.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/catalog-snapshot.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-attached.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-event.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/resource-ack.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-submit-session-create.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-submit-session-prompt.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-terminal.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/export-revoked.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-claim-request.json",
+      "schema": "../../../schemas/node-link/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/pairing-status-approved.json",
+      "schema": "../../../schemas/node-link/v1/pairing.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/session-create-with-cwd.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/resource-event-missing-origin.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/stale-attachment-generation.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
+    },
+    {
+      "fixture": "invalid/command-unknown-field.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "unevaluatedProperties"
+    }
+  ],
+  "transcriptVectors": [
+    "transcripts/pairing-proof.json",
+    "transcripts/pairing-owner-proof.json",
+    "transcripts/pairing-sas.json",
+    "transcripts/pairing-status.json",
+    "transcripts/challenge.json",
+    "transcripts/node-proof.json"
+  ]
+}

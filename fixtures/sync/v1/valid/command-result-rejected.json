@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "d8b2a6e4-8f3c-4b5d-9e69-4a0c7f8b2d43",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "46",
+  "body": {
+    "requestId": "3f6c9a2b-7d4e-4a15-8c30-5b7e9f1a2d64",
+    "command": "session.config.set",
+    "status": "rejected",
+    "acceptedAt": null,
+    "terminalEventId": null,
+    "result": null,
+    "error": {
+      "code": "state.version_conflict",
+      "message": "Session version does not match expectedVersion.",
+      "retryable": true,
+      "details": { "currentVersion": "43" }
+    }
+  }
+}

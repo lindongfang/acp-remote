@@ -1,0 +1,339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/catalog.schema.json",
+  "title": "ACP Remote Node Link v1 Catalog Messages",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/catalogSubscribe"
+    },
+    {
+      "$ref": "#/$defs/catalogSnapshot"
+    },
+    {
+      "$ref": "#/$defs/catalogChanged"
+    },
+    {
+      "$ref": "#/$defs/exportRevoked"
+    },
+    {
+      "$ref": "#/$defs/nodeTrustRevoked"
+    },
+    {
+      "$ref": "#/$defs/nodeRotateKeyRequest"
+    },
+    {
+      "$ref": "#/$defs/nodeRotateKeyResult"
+    }
+  ],
+  "$defs": {
+    "postAuthBase": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "connectionId",
+        "connectionSequence",
+        "body"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionSequence": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        }
+      }
+    },
+    "catalogSubscribe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "catalog.subscribe"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "knownRevision"
+              ],
+              "properties": {
+                "knownRevision": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/decimalString"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "catalogSnapshot": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "catalog.snapshot"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "revision",
+                "exports"
+              ],
+              "properties": {
+                "revision": {
+                  "$ref": "common.schema.json#/$defs/decimalString"
+                },
+                "exports": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "$ref": "common.schema.json#/$defs/exportEntry"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "catalogChanged": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "catalog.changed"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "revision",
+                "added",
+                "updated",
+                "removed"
+              ],
+              "properties": {
+                "revision": {
+                  "$ref": "common.schema.json#/$defs/decimalString"
+                },
+                "added": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "$ref": "common.schema.json#/$defs/exportEntry"
+                  }
+                },
+                "updated": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "items": {
+                    "$ref": "common.schema.json#/$defs/exportEntry"
+                  }
+                },
+                "removed": {
+                  "type": "array",
+                  "maxItems": 500,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "common.schema.json#/$defs/exportId"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "exportRevoked": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "export.revoked"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "exportId",
+                "revokedAt"
+              ],
+              "properties": {
+                "exportId": {
+                  "$ref": "common.schema.json#/$defs/exportId"
+                },
+                "revokedAt": {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeTrustRevoked": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "node.trust.revoked"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "revokedNodeId",
+                "revokedAt",
+                "reason"
+              ],
+              "properties": {
+                "revokedNodeId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "revokedAt": {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeRotateKeyRequest": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "node.rotate-key.request"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requestId",
+                "newNodePublicKey",
+                "requestNonce"
+              ],
+              "properties": {
+                "requestId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "newNodePublicKey": {
+                  "$ref": "common.schema.json#/$defs/base64url65"
+                },
+                "requestNonce": {
+                  "$ref": "common.schema.json#/$defs/base64url32"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeRotateKeyResult": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "node.rotate-key.result"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requestId",
+                "status",
+                "newNodePublicKey",
+                "rotatedAt",
+                "reason"
+              ],
+              "properties": {
+                "requestId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "status": {
+                  "enum": [
+                    "accepted",
+                    "rejected"
+                  ]
+                },
+                "newNodePublicKey": {
+                  "$ref": "common.schema.json#/$defs/base64url65"
+                },
+                "rotatedAt": {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                },
+                "reason": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

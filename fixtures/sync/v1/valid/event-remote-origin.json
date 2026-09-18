@@ -1,0 +1,38 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "c7a1f5d3-7e2b-4a4c-8d58-3f9b6e7a1c32",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "44",
+  "body": {
+    "globalSequence": "2320",
+    "sessionSequence": "8",
+    "eventId": "aa0e5b6c-9d3f-4a1e-8f2b-5c7d9e1f2a3b",
+    "sessionId": "6e84de21-b576-44de-a4c2-815e3e5faa77",
+    "eventType": "agent.message.delta",
+    "causationRequestId": null,
+    "origin": { "kind": "agent", "deviceId": null },
+    "remoteOrigin": {
+      "ownerNodeId": "1f0d5c4b-3a29-4877-9615-0e1d2c3b4a59",
+      "exportId": "export-laptop-zed",
+      "originEpoch": "2a1b0c9d-8e7f-4a6b-b5c4-3d2e1f0a9b87",
+      "originEventId": "aa0e5b6c-9d3f-4a1e-8f2b-5c7d9e1f2a3b",
+      "originSequence": "900"
+    },
+    "createdAt": "2026-09-17T12:11:02.500Z",
+    "payload": {
+      "view": {
+        "messageId": "4b1d2c3e-5f60-4718-9293-a4b5c6d7e8f9",
+        "turnId": "7c2e3d4f-5061-4829-9394-b5c6d7e8f9a0",
+        "deltaIndex": "0",
+        "text": "远端节点产生的增量"
+      },
+      "acp": {
+        "mediaType": "application/json",
+        "rawJson": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionUpdate\":\"agent_message_chunk\"}}",
+        "byteLength": "92",
+        "sha256": "gWLOhpDhImqys9qje6Cc1o1pZPnVmyvWP4dnKz6oCi8"
+      }
+    }
+  }
+}

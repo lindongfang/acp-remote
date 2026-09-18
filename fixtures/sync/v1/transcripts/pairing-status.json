@@ -1,0 +1,21 @@
+{
+  "description": "Public interoperability vector for the pairing status HMAC. Never use these values in production.",
+  "domain": "acp-remote/pairing-status/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+    "canonicalOrigin": "https://work-pc.example.ts.net",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "pairingRequestId": "b2f3fbfa-c2c6-4f49-9e0c-643d152de18d",
+    "requestNonceHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAHGFjcC1yZW1vdGUvcGFpcmluZy1zdGF0dXMvdjEABgABAAAAAgABAAIAAAAQvbLsIPmMTYe3ieVA1SfvhwADAAAAECrhwHySQkbpqdJOxYwTD0kABAAAABAryLlEKk9Gp4wxssQJI_YKAA0AAAAQsvP7-sLGT0meDGQ9FS3hjQAQAAAAIEBBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5f",
+    "transcriptSha256Hex": "4c87dacb56fc91e1bd596b31bf5680ded9026d44d9b16586703d16587a241c6d",
+    "hmacKeyBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+    "hmacSha256": "Yq60UlgbopoCCxUs88N1S-9ut2eYGQ_LtiLAywPFiPc"
+  }
+}

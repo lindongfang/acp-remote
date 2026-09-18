@@ -1,0 +1,51 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "b6f0e4c2-6d1a-4f3b-9c47-2e8a5d6f0b21",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "43",
+  "body": {
+    "globalSequence": "2319",
+    "sessionSequence": "110",
+    "eventId": "3c7e5a91-6b2d-4c88-bd0f-8a1e2f3c4d56",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "session.config.changed",
+    "causationRequestId": "9f1a2b3c-4d5e-4f60-8123-456789abcdef",
+    "origin": { "kind": "device", "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49" },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:11:01.000Z",
+    "payload": {
+      "view": {
+        "configOptions": [
+          {
+            "id": "model",
+            "name": "Model",
+            "description": null,
+            "category": "model",
+            "type": "select",
+            "currentValue": "claude-sonnet-4",
+            "options": [
+              { "value": "claude-sonnet-4", "name": "Claude Sonnet 4", "description": null },
+              { "value": "claude-opus-4", "name": "Claude Opus 4", "description": "Deeper reasoning" }
+            ]
+          },
+          {
+            "id": "auto_compact",
+            "name": "Auto compact",
+            "description": null,
+            "category": "model_config",
+            "type": "boolean",
+            "currentValue": true
+          }
+        ],
+        "version": "42"
+      },
+      "acp": {
+        "mediaType": "application/json",
+        "rawJson": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionUpdate\":\"config_option_update\",\"configOptions\":[]}}",
+        "byteLength": "112",
+        "sha256": "cUYrUq830uao4luE7tRu31tFVzvcUEW81LEetjiN4L8"
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "2d7f9e10-3b4c-4d5e-af60-7b8c9d0e1f20",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "48",
+  "body": {
+    "globalSequence": "2321",
+    "sessionSequence": "9",
+    "eventId": "bb1f6c7d-0e4a-4b2f-9a3c-6d8e0f1a2b3c",
+    "sessionId": "6e84de21-b576-44de-a4c2-815e3e5faa77",
+    "eventType": "agent.message.delta",
+    "causationRequestId": null,
+    "origin": { "kind": "agent", "deviceId": null },
+    "createdAt": "2026-09-17T12:11:04.000Z",
+    "payload": {
+      "view": {
+        "messageId": "5c2e3d4f-6071-4829-9394-b5c6d7e8f9a0",
+        "turnId": "8d3f4e50-6172-493a-9495-c6d7e8f9a0b1",
+        "deltaIndex": "0",
+        "text": "缺少 remoteOrigin 的远端增量"
+      }
+    }
+  }
+}

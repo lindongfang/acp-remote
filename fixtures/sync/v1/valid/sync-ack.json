@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.ack",
+  "messageId": "fa4c8a6e-a5b6-4d7f-b08b-6c2e9badf465",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "45",
+  "body": {
+    "cursor": {
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2320"
+    }
+  }
+}

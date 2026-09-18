@@ -172,18 +172,19 @@ TLS 在其他机器或云服务终止时，默认 Profile 不再提供客户端�
 
 Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管理属于 Owner Node 本地管理能力。远程 `session.create` 是受限业务能力，只能引用 Owner 预发布的 workspace template。loopback 本身不是充分授权，因为普通网页也可能访问 localhost。
 
-优先顺序：
+优先顺序（已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定）：
 
-1. CLI 前台进程内调用或 stdio。
-2. 带当前 OS 用户 ACL 的 Windows Named Pipe / Unix domain socket。
-3. 只有在单独设计本地认证、Origin/CSRF 和权限模型后，才允许 loopback HTTP 管理 API。
+1. CLI 前台进程内调用或 stdio：`daemon start|stop|status`、`doctor`、`acp-stdio` 等 CLI 自有命令在此完成。
+2. 带当前 OS 用户 ACL 的 Windows Named Pipe / Unix domain socket：运行中 Daemon 的设备配对与撤销、节点配对与撤销、Export 管理、Import 管理、审计导出都走这里，两端共用 `core::use_cases` 的同一组 `DeviceManagement`、`ExportManagement`、`RemoteCatalogQueries`。
+3. 只有在单独设计本地认证、Origin/CSRF 和权限模型后，才允许 loopback HTTP 管理 API；当前不实现。
 
 约束：
 
 - `acp-facade` 通过 stdio 服务 Zed，不开放远程 TCP 管理面。
-- 本地 IPC 只允许启动 Daemon 的 OS 用户访问。
+- 本地 IPC 只允许启动 Daemon 的 OS 用户访问；授权依据是"调用方是同一 OS 用户"，不新增本地 token，也不复用设备/节点身份。
+- 本地管理请求/响应编码由该 adapter 自己拥有，不复用 Sync 或 Node Link DTO。
 - Sync/Node Link scope 不能映射到任意原始路径选择、Provider credential 读取或未显式导出的 Agent/MCP 配置。
-- 在本地 IPC 尚未实现前，高权限操作保留在启动 Daemon 的 CLI/进程内，不临时暴露无认证 HTTP endpoint。
+- IPC endpoint 建立失败（ACL/权限不符、路径被占用、socket 被替换为符号链接）时正式模式拒绝启动，不得降级为无管理通道或临时无认证 endpoint。
 
 ## 9. 身份、密钥与配对
 
@@ -192,12 +193,14 @@ Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管
 | 密钥 | 用途 | 生命周期 |
 |---|---|---|
 | TLS private key | endpoint TLS | 由 Daemon或同机 Provider 管理 |
-| Node identity key | Node proof、稳定节点身份和 Node Link 配对 | 长期；丢失后所有设备/节点重新配对 |
+| Node identity key | Sync `hostProof`（wire 字段名 `hostId`/`hostPublicKey`/`hostProof`）与 Node Link `nodeProof`、稳定节点身份和节点配对 | 长期；丢失后所有设备/节点重新配对 |
 | Device identity key | Device proof | 每安装/origin 独立；撤销或数据清理后失效 |
 | pairing secret | 首次 claim、状态查询和 SAS | 单次、短期，最迟到原 expiresAt |
 | TLS session key | 当前连接机密性/完整性 | 单连接临时，由 TLS 产生 |
 
 Node/Device identity key 不用于业务内容加密，TLS key 不作为长期身份。
+
+一个节点只有一把 Node Identity Key：它同时承担 Sync 的 host 角色（设备配对与每连接 challenge-response）与 Node Link 的节点角色（节点配对与每连接 node proof）。两种用途使用不同 domain tag、不同信任记录类型和不同 transcript 字段集合（见 `SYNC_PROTOCOL.md` §6.3 与 `NODE_LINK_PROTOCOL.md` 的 transcript 小节），密钥本身不复制、不派生第二把；“Node key 与 Device key 用途分离”只约束 Node 与 Device 之间，不要求在 Node 内部再拆分密钥。
 
 ### 9.2 Node key 存储
 
@@ -248,45 +251,57 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 
 - UI 隐藏按钮不是授权。
 - 每条命令根据当前连接 Actor、最新设备记录、session 状态和 workspace 边界重新检查。
-- scope 名称与 Sync command 一致，未知 scope 不自动产生权限。
+- scope 名称与命令名一致，词表与归类以 `compatibility/commands/v1/commands.json` 为唯一来源；未知 scope 不自动产生权限。
 - 设备只能看见其 scopes 允许的 snapshot/event；过滤后的 sequence 空洞不能泄露内容。
 - 授权失败不能把目标是否存在泄露给无权设备。
 
-### 10.2 配对授权包
+### 10.2 命令、scope、pack 与 grant
 
-授权包只用于 Owner Node 管理 UI 选择，wire 和数据库仍保存独立 scopes：
+授权词汇分四层，同一概念只用一个写法：**命令 scope**（wire 与数据库保存的最小授权单位，等于命令名）、**设备授权包 `pack.*`**（Owner 配对界面上的分组）、**配对预设 `preset.*`**（一组 pack 的默认值）、**跨节点导出授权 `grant.*`**（Owner 授予 Access Node 的能力上限）。完整清单与机器可读定义在 `compatibility/commands/v1/commands.json`；下表是该文件的权威展开。
 
-| 授权包 | Scopes | 建议默认 |
-|---|---|---|
-| `observe` | `session.list`, `session.read`, `session.model.list`, `session.mode.list` | 开启 |
-| `interact` | `session.prompt`, `session.cancel`, `elicitation.respond` | 开启 |
-| `configure-session` | `session.model.set`, `session.mode.set` | 开启 |
-| `approve` | `permission.resolve` | 开启 |
+| 命令 | 类别 | 所需 scope | 所属 pack | 对应 grant | 首阶段 |
+|---|---|---|---|---|---|
+| `session.list` | query | `session.list` | `pack.observe` | `grant.observe` | mvp |
+| `session.read` | query | `session.read` | `pack.observe` | `grant.observe` | mvp |
+| `command.status` | query | `command.status` | `pack.observe` | `grant.observe` | mvp |
+| `session.mode.list` | query | `session.mode.list` | `pack.observe` | `grant.observe` | conditional_mvp |
+| `session.config.list` | query | `session.config.list` | `pack.observe` | `grant.observe` | conditional_mvp |
+| `session.prompt` | mutation | `session.prompt` | `pack.interact` | `grant.interact` | mvp |
+| `session.cancel` | mutation | `session.cancel` | `pack.interact` | `grant.interact` | mvp |
+| `elicitation.respond` | mutation | `elicitation.respond` | `pack.interact` | `grant.interact` | conditional_mvp |
+| `session.mode.set` | mutation | `session.mode.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
+| `session.config.set` | mutation | `session.config.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
+| `permission.resolve` | mutation | `permission.resolve` | `pack.approve` | `grant.approve` | mvp |
+| `session.create` | mutation | `session.create` | 无（仅 Node Link） | `grant.remote-work` | mvp（Node Link）/ Sync 首版不暴露 |
 
-默认新配对 UI 客户端使用 `remote-control` Profile，包含上述四个授权包；用户也可以在 Owner Node 选择只包含 `observe` 的 `read-only` Profile，或逐项定制。配对确认页必须完整展示最终 scopes，不能用含糊的“完全访问”替代。
+- 查询类命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`）全部归 `pack.observe`，因此断线恢复所需的 `command.status` 不需要额外授权。
+- `session.create` 是设备/Access principal 的 scope，同时要求 Owner 侧 `grant.remote-work`；请求只能引用 Export 中发布的 Agent 与 workspace template，不能提交任意 Owner 路径或 Provider/MCP 凭据。Node Link 首个纵向切片必须实现它以支持 Zed `session/new`；Sync 首版不暴露该入口。
+- 配对预设：`preset.remote-control` = `pack.observe` + `pack.interact` + `pack.configure-session` + `pack.approve`；`preset.read-only` = `pack.observe`。配对确认页必须完整展示最终 scopes，不能用含糊的“完全访问”替代。
+- 设备记录与 wire 只保存独立 scopes，不保存 pack 或 preset 名称；`pack.*`、`preset.*`、`grant.*` 都是授权管理的输入形式，落到 wire 前必须展开。
+- `pack.approve` 单独分组是为了让风险在配对和设备管理 UI 中清晰可见，不是为了削弱远程控制；跨节点的 `grant.interact` 不包含审批，审批必须显式授予 `grant.approve`。远程客户端可以选择 Agent 当前 permission request 明确提供、且 Owner 本地策略允许的任一 option；如果 Agent 明确说明某个 option 会形成持久授权，客户端必须展示该持续范围。客户端不能伪造新 option，也不能在请求之外修改 Owner 的全局沙箱或权限策略。
 
-`approve` 单独分组是为了让风险在配对和设备管理 UI 中清晰可见，不是为了削弱远程控制。远程客户端可以选择 Agent 当前 permission request 明确提供、且 Owner 本地策略允许的任一 option；如果 Agent 明确说明某个 option 会形成持久授权，客户端必须展示该持续范围。客户端不能伪造新 option，也不能在请求之外修改 Owner 的全局沙箱或权限策略。
+### 10.3 本地管理能力（永不远程授予）
 
-### 10.3 远程授权上限
+以下能力没有 scope，只能由 Owner Node 本地管理入口（CLI、用户 ACL 保护的本地 IPC，或 §8 定义的受保护通道）执行：
 
 ```text
-workspace.select.raw-path
-agent.configure
-provider.configure
-device.manage
-export.manage
-node.rotate-key
-storage.export
+local.workspace.select     选择并绑定原始 workspace 路径
+local.agent.configure      Agent 启动 profile 与环境变量白名单
+local.provider.configure   Provider/MCP 凭据
+local.device.manage        设备与节点信任管理
+local.export.manage        Export 定义与撤销
+local.node.rotate-key      Node Identity 轮换
+local.audit.export         本地审计导出（不含会话正文）
 ```
 
-`session.create` 由 `remote-work` Profile 授予，请求只能选择 Export 中发布的 Agent 与 workspace template。Node Link 首个纵向切片必须实现它以支持 Zed `session/new`；PWA 首版可以不展示该入口。未来改变上述上限属于产品和安全边界变更，需要更新本文及 INITIAL_DESIGN，不能只增加一个 command schema。
+远程 `session.create` 是唯一与 workspace 相关的受限远程能力，且只能引用 Export 发布的 alias/template。未来改变这条边界属于产品与安全边界变更，需要更新本文及 `INITIAL_DESIGN.md`，不能只增加一个 command schema。
 
 ### 10.4 并发决策
 
 - 同一 session mutation 由 Session Actor 串行化。
 - permission/elicitation 使用 interaction ID 和版本，first valid writer wins。
 - 后续设备得到 `interaction.already_resolved`，不能覆盖第一个决策。
-- 模型/模式切换使用 `expectedVersion`。
+- config option 与 mode 切换使用 `expectedVersion`。
 - `requestId` 重试不能产生第二次接受或 Agent 派发；无法确认外部副作用时进入 `uncertain`。
 
 ## 11. PWA 与浏览器安全
@@ -378,6 +393,7 @@ storage.export
 ### 13.4 客户端与 Access Node 数据最小化
 
 - 第一阶段 Export 固定为 `no-content-cache`：Access Node 和受其服务的远程客户端默认不持久化会话正文，只允许有界内存转发。
+- Access Node 可以把 imported 资源交付给它自己的 Sync 客户端（浏览器 PWA），但只允许按 `SYNC_PROTOCOL.md` 的 `resource.remote-origin.v1` 转发：不改写 ACP 语义与 `acp.rawJson`、不缓存正文、不扩张 capability、不改会话状态；快照只含元数据，正文历史一律在线回源 Owner，离线时返回 `resource.remote_unavailable` 并置 `origin.online=false`。
 - Access Node 可持久化 import、owner/origin、cursor/ACK、requestId、命令终态引用、event type/digest 和 local sequence 映射；这些元数据不得包含可还原 prompt、回复、diff、终端、附件或 ACP raw 的内容。
 - 上述约束可由 ACP Remote 和项目自带客户端执行，但无法约束 Zed 或其他第三方 ACP Client 的历史、日志和崩溃转储；向第三方客户端交付正文必须被视为 Export 授权的数据披露，并在管理界面明确提示。
 - 撤销设备或 Export 后 Owner 不再提供数据，Access 删除上述索引并清空内存内容。
@@ -405,7 +421,7 @@ storage.export
 ```text
 pairing.created / claimed / approved / rejected / expired
 device.authenticated / auth_failed / revoked / scopes_changed
-host.identity_changed
+node.paired / node.trust_revoked / node.identity_changed
 authorization.denied
 rate_limit.triggered
 storage.integrity_failed
@@ -523,10 +539,11 @@ manual pairing/revoke smoke test
 
 以下选择不能由普通实现补丁静默决定：
 
-- Windows Named Pipe、Unix socket 或其他本地管理 IPC 的最终方案。
 - Linux Secret Service 不可用时是否提供经过审计的持久化 fallback；在决定前正式模式失败关闭。
 - npm provenance、checksum 签名和 SBOM 使用的具体 CI Provider 与格式。
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。
+
+本地管理通道已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC，不实现 loopback HTTP 管理面）。
 
 这些选择不阻塞领域模型和 Sync DTO 开发，但相关平台 adapter 或正式发布在选择落定前不能声称安全完成。

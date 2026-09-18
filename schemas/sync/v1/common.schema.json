@@ -14,7 +14,7 @@
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "pattern": "Z$"
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
     },
     "base64url": {
       "type": "string",
@@ -81,15 +81,6 @@
         "details": { "type": "object" }
       }
     },
-    "modelRef": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["modelId", "displayName"],
-      "properties": {
-        "modelId": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
-      }
-    },
     "modeRef": {
       "type": "object",
       "additionalProperties": false,
@@ -99,10 +90,105 @@
         "displayName": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     },
+    "modeState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentModeId", "availableModes", "version"],
+      "properties": {
+        "currentModeId": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 256 },
+            { "type": "null" }
+          ]
+        },
+        "availableModes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/modeRef" }
+        },
+        "version": { "$ref": "#/$defs/decimalString" }
+      }
+    },
+    "configOptionView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "description", "category", "type", "currentValue"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "description": {
+          "oneOf": [
+            { "type": "string", "maxLength": 1024 },
+            { "type": "null" }
+          ]
+        },
+        "category": {
+          "oneOf": [
+            { "type": "string", "maxLength": 128 },
+            { "type": "null" }
+          ]
+        },
+        "type": { "enum": ["select", "boolean"] },
+        "currentValue": { "type": ["string", "boolean"] },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "name", "description"],
+            "properties": {
+              "value": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "description": {
+                "oneOf": [
+                  { "type": "string", "maxLength": 1024 },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "originBlock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "local" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ownerNodeId", "exportId", "originEpoch", "online"],
+          "properties": {
+            "kind": { "const": "remote" },
+            "ownerNodeId": { "$ref": "#/$defs/uuid" },
+            "exportId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "originEpoch": { "$ref": "#/$defs/uuid" },
+            "online": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "remoteOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerNodeId", "exportId", "originEpoch", "originEventId", "originSequence"],
+      "properties": {
+        "ownerNodeId": { "$ref": "#/$defs/uuid" },
+        "exportId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "originEpoch": { "$ref": "#/$defs/uuid" },
+        "originEventId": { "$ref": "#/$defs/uuid" },
+        "originSequence": { "$ref": "#/$defs/decimalString" }
+      }
+    },
     "sessionSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessionId", "title", "agent", "state", "currentModel", "currentMode", "version", "createdAt", "updatedAt"],
+      "required": ["sessionId", "title", "agent", "state", "origin", "currentMode", "version", "createdAt", "updatedAt"],
       "properties": {
         "sessionId": { "$ref": "#/$defs/uuid" },
         "title": { "type": ["string", "null"], "maxLength": 512 },
@@ -118,15 +204,70 @@
         "state": {
           "enum": ["idle", "queued", "running", "waiting_input", "waiting_permission", "failed", "closed"]
         },
-        "currentModel": {
-          "oneOf": [{ "$ref": "#/$defs/modelRef" }, { "type": "null" }]
-        },
+        "origin": { "$ref": "#/$defs/originBlock" },
         "currentMode": {
           "oneOf": [{ "$ref": "#/$defs/modeRef" }, { "type": "null" }]
         },
         "version": { "$ref": "#/$defs/decimalString" },
         "createdAt": { "$ref": "#/$defs/timestamp" },
         "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "agentContentBlock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "text": { "type": "string", "maxLength": 262144 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "mimeType", "byteLength", "displayState"],
+          "properties": {
+            "type": { "const": "image_ref" },
+            "mimeType": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "byteLength": {
+              "oneOf": [{ "$ref": "#/$defs/decimalString" }, { "type": "null" }]
+            },
+            "displayState": { "enum": ["available", "not_fetched", "unsupported"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "uri", "name", "displayState"],
+          "properties": {
+            "type": { "const": "resource_ref" },
+            "uri": { "type": "string", "minLength": 1, "maxLength": 2048 },
+            "name": { "type": ["string", "null"], "maxLength": 512 },
+            "displayState": { "enum": ["available", "not_fetched", "unsupported"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "originalType", "reason"],
+          "properties": {
+            "type": { "const": "unsupported" },
+            "originalType": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "reason": { "const": "unsupported_by_client" }
+          }
+        }
+      ]
+    },
+    "interactionOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optionId", "label", "kind"],
+      "properties": {
+        "optionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 }
       }
     },
     "promptContentBlock": {

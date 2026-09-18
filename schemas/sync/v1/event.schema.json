@@ -14,7 +14,7 @@
     "body": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["globalSequence", "sessionSequence", "eventId", "sessionId", "eventType", "causationRequestId", "origin", "createdAt", "payload"],
+      "required": ["globalSequence", "sessionSequence", "eventId", "sessionId", "eventType", "causationRequestId", "origin", "remoteOrigin", "createdAt", "payload"],
       "properties": {
         "globalSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
         "sessionSequence": {
@@ -26,9 +26,7 @@
         },
         "eventType": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[a-z0-9_.-]+$"
+          "pattern": "^[a-z0-9_.-]{1,128}$"
         },
         "causationRequestId": {
           "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
@@ -38,11 +36,14 @@
           "additionalProperties": false,
           "required": ["kind", "deviceId"],
           "properties": {
-            "kind": { "enum": ["agent", "device", "desktop", "daemon"] },
+            "kind": { "enum": ["agent", "device", "daemon", "local_cli"] },
             "deviceId": {
               "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
             }
           }
+        },
+        "remoteOrigin": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/remoteOrigin" }, { "type": "null" }]
         },
         "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
         "payload": {
@@ -58,4 +59,3 @@
     }
   }
 }
-

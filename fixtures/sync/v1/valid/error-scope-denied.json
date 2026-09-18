@@ -6,7 +6,7 @@
   "connectionSequence": "13",
   "body": {
     "code": "authorization.scope_denied",
-    "message": "Device is not allowed to change the model.",
+    "message": "Device is not allowed to change session config.",
     "retryable": false,
     "correlationId": "6dfa044f-05f8-4a02-b4a1-a4d9d034298b",
     "details": {}

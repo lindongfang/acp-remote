@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "type": "node.hello",
+  "messageId": "018f6f89-8a23-7a10-a0d3-f92e6a31d952",
+  "body": {
+    "minProtocolVersion": 1,
+    "maxProtocolVersion": 1,
+    "accessNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "role": "access",
+    "clientNonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "supportedFeatures": [
+      "node-link.command-status.v1",
+      "node-link.core.v1",
+      "node-link.export-revoke.v1",
+      "node-link.raw-acp.v1",
+      "node-link.session-create.v1"
+    ],
+    "requiredFeatures": [
+      "node-link.core.v1"
+    ]
+  }
+}

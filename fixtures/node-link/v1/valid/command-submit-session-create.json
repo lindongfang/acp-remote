@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "type": "command.submit",
+  "messageId": "6e5f6071-8293-44a5-96b7-c8d9eafb0c1d",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "6",
+  "body": {
+    "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "command": "session.create",
+    "sessionRef": null,
+    "attachmentId": null,
+    "attachmentGeneration": null,
+    "expectedVersion": null,
+    "payload": {
+      "agentId": "company-agent",
+      "exportId": "export-main",
+      "workspaceAlias": "company-agent-default",
+      "templateParams": {
+        "branch": "main"
+      }
+    }
+  }
+}

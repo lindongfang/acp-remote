@@ -1,0 +1,986 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/command.schema.json",
+  "title": "ACP Remote Node Link v1 Command Messages",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/commandSubmit"
+    },
+    {
+      "$ref": "#/$defs/commandAccepted"
+    },
+    {
+      "$ref": "#/$defs/commandRejected"
+    },
+    {
+      "$ref": "#/$defs/commandTerminal"
+    },
+    {
+      "$ref": "#/$defs/commandStatus"
+    }
+  ],
+  "$defs": {
+    "postAuthBase": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "connectionId",
+        "connectionSequence",
+        "body"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionSequence": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        }
+      }
+    },
+    "commandName": {
+      "enum": [
+        "session.list",
+        "session.read",
+        "command.status",
+        "session.mode.list",
+        "session.config.list",
+        "session.prompt",
+        "session.cancel",
+        "elicitation.respond",
+        "session.mode.set",
+        "session.config.set",
+        "permission.resolve",
+        "session.create"
+      ],
+      "description": "唯一来源是 compatibility/commands/v1/commands.json；顺序与 transport 含 node_link 的命令集合一致。"
+    },
+    "requestId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "promptContentBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 262144
+        }
+      }
+    },
+    "configValue": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    },
+    "submitBase": {
+      "type": "object",
+      "required": [
+        "requestId",
+        "command",
+        "sessionRef",
+        "attachmentId",
+        "attachmentGeneration",
+        "expectedVersion",
+        "payload"
+      ],
+      "properties": {
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        },
+        "command": {
+          "$ref": "#/$defs/commandName"
+        },
+        "sessionRef": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachmentId": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachmentGeneration": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedVersion": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "sessionCreatePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentId",
+        "exportId",
+        "workspaceAlias"
+      ],
+      "description": "session.create 只允许这四个键。出现 cwd、mcpServers、任何绝对路径或凭据字段时必须返回 command.rejected + nodelink.command.unsupported_field，且不得创建会话或部分应用参数。",
+      "properties": {
+        "agentId": {
+          "$ref": "common.schema.json#/$defs/agentId"
+        },
+        "exportId": {
+          "$ref": "common.schema.json#/$defs/exportId"
+        },
+        "workspaceAlias": {
+          "$ref": "common.schema.json#/$defs/workspaceAlias"
+        },
+        "templateParams": {
+          "type": "object",
+          "additionalProperties": true,
+          "maxProperties": 32,
+          "description": "开放扩展点：只能携带 Export template 声明的键；Owner 在应用前按 template 校验，未知键按 nodelink.command.unsupported_field 拒绝。"
+        }
+      }
+    },
+    "commandSubmit": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "command.submit"
+            },
+            "body": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/submitSessionList"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionRead"
+                },
+                {
+                  "$ref": "#/$defs/submitCommandStatus"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionModeList"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionConfigList"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionPrompt"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionCancel"
+                },
+                {
+                  "$ref": "#/$defs/submitElicitationRespond"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionModeSet"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionConfigSet"
+                },
+                {
+                  "$ref": "#/$defs/submitPermissionResolve"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionCreate"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionList": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.list"
+            },
+            "sessionRef": {
+              "type": "null"
+            },
+            "attachmentId": {
+              "type": "null"
+            },
+            "attachmentGeneration": {
+              "type": "null"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionRead": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.read"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "include"
+              ],
+              "properties": {
+                "include": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "messages",
+                      "turns",
+                      "pending_interactions",
+                      "config_options",
+                      "capabilities"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitCommandStatus": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "command.status"
+            },
+            "sessionRef": {
+              "type": "null"
+            },
+            "attachmentId": {
+              "type": "null"
+            },
+            "attachmentGeneration": {
+              "type": "null"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "targetRequestId"
+              ],
+              "properties": {
+                "targetRequestId": {
+                  "$ref": "#/$defs/requestId"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionModeList": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.mode.list"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionConfigList": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.config.list"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionPrompt": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.prompt"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "content"
+              ],
+              "properties": {
+                "content": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "items": {
+                    "$ref": "#/$defs/promptContentBlock"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionCancel": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.cancel"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "turnId"
+              ],
+              "properties": {
+                "turnId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitElicitationRespond": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "elicitation.respond"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "interactionId",
+                    "action",
+                    "values"
+                  ],
+                  "properties": {
+                    "interactionId": {
+                      "$ref": "common.schema.json#/$defs/uuid"
+                    },
+                    "action": {
+                      "const": "submit"
+                    },
+                    "values": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "开放扩展点：elicit 表单提交值，形状由该次 elicitation 的 schema 决定。"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "interactionId",
+                    "action",
+                    "values"
+                  ],
+                  "properties": {
+                    "interactionId": {
+                      "$ref": "common.schema.json#/$defs/uuid"
+                    },
+                    "action": {
+                      "const": "cancel"
+                    },
+                    "values": {
+                      "type": "null"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionModeSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.mode.set"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "modeId"
+              ],
+              "properties": {
+                "modeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionConfigSet": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.config.set"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "configId",
+                "value"
+              ],
+              "properties": {
+                "configId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "value": {
+                  "$ref": "#/$defs/configValue"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitPermissionResolve": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "permission.resolve"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "interactionId",
+                "optionId"
+              ],
+              "properties": {
+                "interactionId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "optionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "submitSessionCreate": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.create"
+            },
+            "sessionRef": {
+              "type": "null"
+            },
+            "attachmentId": {
+              "type": "null"
+            },
+            "attachmentGeneration": {
+              "type": "null"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "$ref": "#/$defs/sessionCreatePayload"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "commandAccepted": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "command.accepted"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requestId",
+                "acceptedAt",
+                "result"
+              ],
+              "properties": {
+                "requestId": {
+                  "$ref": "#/$defs/requestId"
+                },
+                "acceptedAt": {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                },
+                "result": {
+                  "oneOf": [
+                    {
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "commandRejected": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "command.rejected"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requestId",
+                "error"
+              ],
+              "properties": {
+                "requestId": {
+                  "$ref": "#/$defs/requestId"
+                },
+                "error": {
+                  "$ref": "common.schema.json#/$defs/publicError"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "commandTerminal": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "command.terminal"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requestId",
+                "terminal"
+              ],
+              "properties": {
+                "requestId": {
+                  "$ref": "#/$defs/requestId"
+                },
+                "terminal": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "terminalAt",
+                    "terminalEventId",
+                    "result",
+                    "error"
+                  ],
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "completed",
+                        "failed",
+                        "rejected",
+                        "uncertain"
+                      ]
+                    },
+                    "terminalAt": {
+                      "$ref": "common.schema.json#/$defs/timestamp"
+                    },
+                    "terminalEventId": {
+                      "oneOf": [
+                        {
+                          "$ref": "common.schema.json#/$defs/uuid"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "result": {
+                      "oneOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "error": {
+                      "oneOf": [
+                        {
+                          "$ref": "common.schema.json#/$defs/publicError"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "status": {
+                            "const": "completed"
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "result": {
+                            "type": "object"
+                          },
+                          "error": {
+                            "type": "null"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "status": {
+                            "enum": [
+                              "failed",
+                              "rejected",
+                              "uncertain"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ]
+                      },
+                      "then": {
+                        "properties": {
+                          "error": {
+                            "$ref": "common.schema.json#/$defs/publicError"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "commandStatus": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "command.status"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "targetRequestId"
+              ],
+              "properties": {
+                "targetRequestId": {
+                  "$ref": "#/$defs/requestId"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

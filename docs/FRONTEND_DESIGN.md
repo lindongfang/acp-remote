@@ -107,7 +107,7 @@ clients/
 - 第一阶段只发送文本 prompt；图片、文件和 resource 输入必须明确显示不支持，不能静默删除后提交剩余内容。
 - 结构化工具调用、权限请求、终端、文件修改和 diff 的基础展示。
 - 取消当前 turn。
-- 模型列表、当前模型、切换中、下一 turn 生效和不支持状态。
+- 模型选择：config option（`category=model`）列表、当前值、切换中、下一 turn 生效和不支持状态。
 - WebSocket 断线重连、ACK、事件去重和命令幂等。
 - 未识别 ACP 扩展事件的明确降级展示和诊断信息入口。
 - 响应式手机布局，同时保证桌面浏览器可用于调试。
@@ -197,6 +197,7 @@ unpaired
 - 连接断开时不能把本地输入伪装成已经发送；第一阶段默认不离线排队 prompt。
 - `identity_changed` 必须阻止自动信任新主机密钥。
 - `revoked` 必须清理会话密钥和受保护缓存，并要求重新配对。
+- imported 会话的 `origin.online=false` 时连接状态仍可以是 `online`，但该会话必须标记为离线：只展示元数据，正文请求由服务端返回 `resource.remote_unavailable`，本地输入不得标记为已发送或排队；服务端发来 `session.origin.online_changed` 时立即刷新该标记。
 
 命令至少具有：
 
@@ -218,6 +219,7 @@ draft -> submitting -> accepted -> completed | failed | rejected | uncertain
 - ACP 原文按 `acp.rawJson` 作为不可信文本保存或诊断展示；不得为了渲染先解析再覆盖原值，尤其不能损坏超过 JavaScript safe integer 的未知数字。
 - `unsupported_by_client`、`unsupported_by_broker` 和 `unsupported_by_agent` 必须可区分。
 - capability negotiation 的结果进入客户端 feature gate，不能只靠版本号猜测能力。
+- 客户端呈现能力由客户端自己维护，不进入服务端快照；服务端不定义、不协商也不下发客户端呈现能力字段。
 - 未知事件不得导致整个会话渲染崩溃。
 
 ## 7. 本地数据边界
@@ -279,11 +281,11 @@ PWA MVP 至少满足：
 2. 能完成配对、认证、订阅、历史追平和实时切换。
 3. 网络断开后自动重连，并从最后 ACK cursor 补发，不重复显示事件。
 4. prompt 重试不会导致 Agent 重复执行。
-5. 能正确显示流式消息、权限请求、工具调用、终端和模型变化的最低结构化视图。
+5. 能正确显示流式消息、权限请求、工具调用、终端和配置项与模式变化（含 `category=model`）的最低结构化视图。
 6. 未知 ACP 扩展不会丢失、崩溃或被伪装成普通文本。
 7. 慢速渲染或后台标签页不会阻塞 Agent 和其他客户端。
 8. 浏览器数据清理后不会继续冒充原设备，而是要求重新配对。
-9. 远程 Owner 离线时 imported resource 不展示正文，只展示连接与资源元数据；任何离线输入都不能表示为已发送。
+9. Owner 离线时 imported 会话只显示元数据与 `origin.online=false`；正文请求返回 `resource.remote_unavailable`；输入不得标记为已发送。
 10. PWA 构建可以由 Daemon 本地托管，不需要应用级云服务器。
 
 ## 10. 测试边界
@@ -292,7 +294,7 @@ PWA MVP 至少满足：
 - 状态机：连接、认证、重放、在线、断线、撤销、身份变化。
 - 幂等：接受响应丢失、重试、重复事件和 cursor 回退。
 - 组件：结构化 ACP 事件、未知事件和能力降级。
-- 存储：同步元数据迁移、容量限制、清除和损坏恢复，并验证 imported resource 正文不会落盘。
+- 存储：同步元数据迁移、容量限制、清除和损坏恢复，并验证 imported resource 正文不会落盘；remote 事件的固定用例是 [`fixtures/sync/v1/valid/event-remote-origin.json`](../fixtures/sync/v1/valid/event-remote-origin.json)。
 - 浏览器端到端：Daemon fake/fixture、真实 WebSocket、重连和慢客户端。
 - 安全：敏感信息不进入日志、URL、普通存储或错误页面。
 

@@ -23,7 +23,6 @@
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "error" },
             "body": {
@@ -42,14 +41,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "ping": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "control.ping" },
             "body": {
@@ -60,14 +59,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "pong": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "control.pong" },
             "body": {
@@ -78,7 +77,8 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     }
   }
 }

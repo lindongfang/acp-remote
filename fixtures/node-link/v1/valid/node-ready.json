@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "node.ready",
+  "messageId": "1f0a1b2c-3d4e-4f50-9162-73748596a7b8",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "1",
+  "body": {
+    "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    "catalogRevision": "42",
+    "serverEpoch": "0f1e2d3c-4b5a-4697-8899-aabbccddeeff",
+    "limits": {
+      "maxMessageBytes": 1048576,
+      "catalogSnapshotBatchSize": 500,
+      "resourceSnapshotBatchSize": 500,
+      "maxInFlightCommands": 32,
+      "maxPendingQueueBytes": 8388608,
+      "maxPendingQueueMessages": 2000,
+      "heartbeatIntervalMs": 30000
+    }
+  }
+}

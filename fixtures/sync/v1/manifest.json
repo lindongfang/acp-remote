@@ -22,7 +22,27 @@
       "valid": true
     },
     {
+      "fixture": "valid/sync-snapshot-chunk-sessions.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-chunk-config-options.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-ack.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/command-session-prompt.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-config-set.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
     },
@@ -32,8 +52,34 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-result-rejected.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-status-record.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/event-agent-delta.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.message.delta",
+      "valid": true
+    },
+    {
+      "fixture": "valid/event-session-config-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.config.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/event-remote-origin.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.message.delta",
       "valid": true
     },
     {
@@ -69,7 +115,26 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/remote-event-without-origin.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/snapshot-chunk-index-is-number.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
     }
   ],
-  "transcriptVectors": ["transcripts/host-challenge.json"]
+  "transcriptVectors": [
+    "transcripts/host-challenge.json",
+    "transcripts/pairing-proof.json",
+    "transcripts/pairing-host-proof.json",
+    "transcripts/pairing-sas.json",
+    "transcripts/pairing-status.json",
+    "transcripts/device-proof.json"
+  ]
 }

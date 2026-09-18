@@ -108,6 +108,17 @@ crates/
 
 协议 crate 是例外：ACP、Sync 和 Node Link 分别拥有独立兼容周期与 fixture，必须从第一天物理隔离，且不得依赖 `core`。
 
+### 3.1 Workspace 基线
+
+创建 workspace 时固定以下基线，避免各 crate 各自漂移：
+
+- `edition = "2024"`（与 `rust-version = "1.85"` 一致，edition 2024 的最低工具链即 1.85），`resolver = "3"`。
+- `[workspace.package]` 统一 `version`、`edition`、`rust-version`、`license`、`repository`；第一阶段全部 crate `publish = false`（`§12` 的"是否公开部分 crate"仍未定）。
+- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等），crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。
+- `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
+- 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
+- workspace 成员就是 §3 列出的十个 crate；新增 crate 必须先改本节。
+
 ## 4. 模块职责
 
 ### 4.1 `core`
@@ -118,7 +129,7 @@ crates/
 
 ```text
 core::model       值对象、状态机、事件与不变量
-core::use_cases   Session/Model/Permission/Export/Subscription 用例
+core::use_cases   Session/Config/Permission/Export/Subscription 用例
 core::ports       backend、事务存储、身份仓库、时钟等能力接口
 core::broker      Session Actor、命令协调与事件提交
 core::testing     fake ports 和契约测试工具，仅测试 feature 导出
@@ -132,7 +143,7 @@ OwnedSessionRef / RemoteSessionRef / OriginEventRef
 Session / SessionState / TurnState / ResourceOrigin
 Command / CommandResult / CommandTerminal
 Event / EventKind / EventOrigin / PersistencePolicy
-ModelRef / AgentRef / Capability
+AgentRef / ConfigOptionId / Capability
 PermissionRequest / PermissionDecision
 Sequence / Version / AttachmentGeneration
 ```
@@ -149,7 +160,7 @@ Sequence / Version / AttachmentGeneration
 
 ```text
 SessionCommands / SessionQueries
-ModelCommands
+ConfigCommands
 PermissionCommands
 SubscriptionQueries
 DeviceManagement
@@ -162,7 +173,7 @@ RemoteCatalogQueries
 ```text
 AgentCatalog             枚举可用 Agent 与能力
 SessionBackendFactory    受约束地 create/open SessionEndpoint
-SessionEndpoint          prompt/cancel/set-mode/events，绑定单个 live session
+SessionEndpoint          prompt/cancel/set-mode/list-config/set-config/events，绑定单个 live session
 SessionStore             原子提交 owned session 状态、事件与 requestId 幂等
 RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
 TrustStore               设备、节点、Export grant 与撤销元数据
@@ -206,6 +217,8 @@ ProtocolVersion / Feature negotiation
 
 它不能直接复用 Sync DTO 冒充节点协议，也不能把 ACP stdio 透明封装成网络 tunnel。它不依赖 `core`；Node Link wire 与 core 的 mapper 位于 `node-link-client` 和 `server::node_link`。
 
+`node-link-protocol` 同时拥有机器可验证资产 [`schemas/node-link/v1/`](../schemas/node-link/v1/) 与 [`fixtures/node-link/v1/`](../fixtures/node-link/v1/)；wire 变更必须同时更新两者，Rust 实现消费同一 manifest，不能各自复制一套测试样例。
+
 ### 4.5 `agent-host`
 
 唯一职责：把一个本地 ACP 子进程实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
@@ -235,6 +248,13 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 唯一职责：实现持久化端口。
 
 包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
+
+第一阶段采用**同一数据库文件、两族表 + 每族专属 Store 类型**的隔离方式：
+
+- 表名以 `owned_*` 与 `imported_*` 前缀区分，两族不共享外键、不共享事务边界之外的写入路径；`imported_*` 族不包含任何正文列（prompt、回复、工具内容、diff、终端、附件、ACP raw）。
+- 端口层就是隔离面：`RemoteDeliveryStore` 只暴露 `imported_*` 的读写，Access 侧代码拿不到 `SessionStore`，因此"忘了过滤"在类型上不可表达。
+- migration 按族分开维护，允许单独重放或清理 `imported_*` 而不影响 owned 权威事件日志。
+- 只有当出现"必须靠操作系统级隔离（不同文件/不同权限）才能满足的威胁模型"时，才拆成两个数据库文件，并按 `AGENTS.md` §10 新增 ADR。
 
 它不解析 ACP、不广播 WebSocket、不执行会话状态转换、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
 
@@ -309,6 +329,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 额外规则：
 
 - 三个 protocol crate 彼此也不直接依赖；包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
+- `identity-auth` 依赖两个协议 crate 仅用于 transcript 编解码与 domain/字段 tag 定义：它不复制这些常量，也不使用协议 crate 的业务类型或业务规则。
 - `server` 对 `identity-auth` 的依赖只用于完成连接认证；业务授权仍由 core 对 `Actor + grant facts` 执行。
 - `app` 可以依赖全部具体 crate，但只做装配；任何其他 crate 不得依赖 `app`。
 
@@ -450,7 +471,7 @@ server::acp_facade AcpFacadeError / JSON-RPC mapping
 | core | 状态转换、值对象、每会话串行、幂等、事务提交、owned/imported 分流和 fake ports |
 | acp-protocol | 官方 fixture、未知字段往返保真、扩展 payload、版本兼容 |
 | sync-protocol | 编解码、协商、恶意输入 |
-| node-link-protocol | 节点握手、catalog、origin cursor、命令幂等、版本协商 |
+| node-link-protocol | 节点握手、catalog、origin cursor、命令幂等、版本协商、attachment generation |
 | agent-host | fake ACP child、超时、崩溃、乱序响应 |
 | node-link-client | fake Owner、attachment generation、显式重连、origin 去重、capability 收缩、uncertain |
 | storage-sqlite | migration、owned 原子提交、imported 无正文约束、TTL、容量限制 |
@@ -460,14 +481,15 @@ server::acp_facade AcpFacadeError / JSON-RPC mapping
 | server::acp_facade | ACP contract、能力协商真实性、扩展透传、外部 turn 重放 |
 | app | 组合冒烟、关闭顺序、单实例 |
 
-端到端测试使用可控的 fake ACP Agent。真实 Codex/OMP 测试作为可选兼容性套件，不作为普通 CI 的硬依赖。各模块测试使用机器矩阵中的 row/test ID 建立证据，矩阵结构先由 `node scripts/check-acp-compatibility.mjs` 检查。
+端到端测试使用可控的 fake ACP Agent。真实 Codex/OMP 测试作为可选兼容性套件，不作为普通 CI 的硬依赖。各模块测试使用机器矩阵中的 row/test ID 建立证据，矩阵结构先由 `node scripts/check-acp-compatibility.mjs` 检查。`sync-protocol` 与 `node-link-protocol` 的编解码、协商和 transcript 测试直接消费 `schemas/sync/v1`、`fixtures/sync/v1`、`schemas/node-link/v1` 与 `fixtures/node-link/v1` 中的 manifest，不另建样例。
 
 ## 12. 保持开放的决策
 
-- `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate。
-- CLI 使用 local socket、named pipe，还是受限 HTTP API 管理 Daemon。
+- `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate；平台 keystore 的具体 crate 在选择时按 `AGENTS.md` §7 审必要性、维护状态、许可证与平台支持。
 - 是否为同步协议生成 TypeScript/Kotlin/Swift 类型。
 - 是否公开部分 crate 到 crates.io；第一阶段可全部保持 workspace-private。
+
+CLI 与 Daemon 的管理通道已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定（stdio + 平台本地 IPC），不再开放。
 
 标准不是目录是否整齐，而是边界能否降低耦合、支持独立测试并控制变化传播。
 

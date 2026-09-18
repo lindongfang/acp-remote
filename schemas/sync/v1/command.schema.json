@@ -8,6 +8,22 @@
   ],
   "$defs": {
     "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
+    "commandName": {
+      "enum": [
+        "session.list",
+        "session.read",
+        "command.status",
+        "session.mode.list",
+        "session.config.list",
+        "session.prompt",
+        "session.cancel",
+        "elicitation.respond",
+        "session.mode.set",
+        "session.config.set",
+        "permission.resolve",
+        "session.create"
+      ]
+    },
     "command": {
       "type": "object",
       "additionalProperties": false,
@@ -24,8 +40,8 @@
             { "$ref": "#/$defs/sessionRead" },
             { "$ref": "#/$defs/sessionPrompt" },
             { "$ref": "#/$defs/sessionCancel" },
-            { "$ref": "#/$defs/modelList" },
-            { "$ref": "#/$defs/modelSet" },
+            { "$ref": "#/$defs/configList" },
+            { "$ref": "#/$defs/configSet" },
             { "$ref": "#/$defs/modeList" },
             { "$ref": "#/$defs/modeSet" },
             { "$ref": "#/$defs/permissionResolve" },
@@ -61,7 +77,7 @@
             "include": {
               "type": "array",
               "uniqueItems": true,
-              "items": { "enum": ["messages", "turns", "pending_interactions", "models", "capabilities"] }
+              "items": { "enum": ["messages", "turns", "pending_interactions", "config_options", "capabilities"] }
             }
           }
         }
@@ -106,31 +122,34 @@
         }
       }
     },
-    "modelList": {
+    "configList": {
       "type": "object",
       "additionalProperties": false,
       "required": ["requestId", "command", "sessionId", "payload"],
       "properties": {
         "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.model.list" },
+        "command": { "const": "session.config.list" },
         "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "payload": { "type": "object", "additionalProperties": false }
       }
     },
-    "modelSet": {
+    "configSet": {
       "type": "object",
       "additionalProperties": false,
       "required": ["requestId", "command", "sessionId", "expectedVersion", "payload"],
       "properties": {
         "requestId": { "$ref": "#/$defs/requestId" },
-        "command": { "const": "session.model.set" },
+        "command": { "const": "session.config.set" },
         "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "expectedVersion": { "$ref": "common.schema.json#/$defs/decimalString" },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["modelId"],
-          "properties": { "modelId": { "type": "string", "minLength": 1, "maxLength": 256 } }
+          "required": ["configId", "value"],
+          "properties": {
+            "configId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "value": { "type": ["string", "boolean"] }
+          }
         }
       }
     },
@@ -230,6 +249,86 @@
         }
       }
     },
+    "sessionListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessions"],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+        }
+      }
+    },
+    "sessionReadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "resources"],
+      "properties": {
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "messages": {
+              "type": "array",
+              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.messages" }
+            },
+            "turns": {
+              "type": "array",
+              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.turns" }
+            },
+            "pending_interactions": {
+              "type": "array",
+              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.pending_interactions" }
+            },
+            "config_options": {
+              "type": "array",
+              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.config_options" }
+            },
+            "capabilities": {
+              "type": "array",
+              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.capabilities" }
+            }
+          }
+        }
+      }
+    },
+    "configListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configOptions", "version"],
+      "properties": {
+        "configOptions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/configOptionView" }
+        },
+        "version": { "$ref": "common.schema.json#/$defs/decimalString" }
+      }
+    },
+    "modeListResult": { "$ref": "common.schema.json#/$defs/modeState" },
+    "commandStatusRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetRequestId", "state", "acceptedAt", "terminalAt", "terminalEventId", "result", "error"],
+      "properties": {
+        "targetRequestId": { "$ref": "#/$defs/requestId" },
+        "state": { "enum": ["accepted", "completed", "failed", "uncertain", "rejected"] },
+        "acceptedAt": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "terminalAt": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "terminalEventId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        },
+        "result": { "type": ["object", "null"] },
+        "error": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/publicError" }, { "type": "null" }]
+        }
+      }
+    },
     "commandResult": {
       "type": "object",
       "additionalProperties": false,
@@ -243,9 +342,10 @@
         "body": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requestId", "status", "acceptedAt", "result", "error"],
+          "required": ["requestId", "command", "status", "acceptedAt", "terminalEventId", "result", "error"],
           "properties": {
             "requestId": { "$ref": "#/$defs/requestId" },
+            "command": { "$ref": "#/$defs/commandName" },
             "status": { "enum": ["accepted", "completed", "failed", "rejected", "uncertain"] },
             "acceptedAt": {
               "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
@@ -257,7 +357,103 @@
             "error": {
               "oneOf": [{ "$ref": "common.schema.json#/$defs/publicError" }, { "type": "null" }]
             }
-          }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "command": { "const": "session.list" }, "status": { "const": "completed" } },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/sessionListResult" } } }
+            },
+            {
+              "if": {
+                "properties": { "command": { "const": "session.read" }, "status": { "const": "completed" } },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/sessionReadResult" } } }
+            },
+            {
+              "if": {
+                "properties": { "command": { "const": "session.config.list" }, "status": { "const": "completed" } },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/configListResult" } } }
+            },
+            {
+              "if": {
+                "properties": { "command": { "const": "session.mode.list" }, "status": { "const": "completed" } },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/modeListResult" } } }
+            },
+            {
+              "if": {
+                "properties": { "command": { "const": "command.status" }, "status": { "const": "completed" } },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/commandStatusRecord" } } }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": { "enum": ["session.list", "session.read", "command.status", "session.mode.list", "session.config.list"] },
+                  "status": { "const": "completed" }
+                },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "terminalEventId": { "type": "null" } } }
+            },
+            {
+              "if": {
+                "properties": {
+                  "command": { "enum": ["session.prompt", "session.cancel", "elicitation.respond", "session.mode.set", "session.config.set", "permission.resolve", "session.create"] },
+                  "status": { "const": "completed" }
+                },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "terminalEventId": { "$ref": "common.schema.json#/$defs/uuid" } } }
+            },
+            {
+              "if": {
+                "properties": { "status": { "const": "accepted" } },
+                "required": ["status"]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+                  "terminalEventId": { "type": "null" },
+                  "error": { "type": "null" }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": { "status": { "enum": ["failed", "uncertain"] } },
+                "required": ["status"]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+                  "terminalEventId": { "$ref": "common.schema.json#/$defs/uuid" }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": { "status": { "const": "rejected" } },
+                "required": ["status"]
+              },
+              "then": {
+                "properties": {
+                  "acceptedAt": { "type": "null" },
+                  "terminalEventId": { "type": "null" },
+                  "result": { "type": "null" },
+                  "error": { "$ref": "common.schema.json#/$defs/publicError" }
+                }
+              }
+            }
+          ]
         }
       }
     }

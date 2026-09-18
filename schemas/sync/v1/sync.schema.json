@@ -28,7 +28,6 @@
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.subscribe" },
             "body": {
@@ -42,14 +41,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "caughtUp": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.caught_up" },
             "body": {
@@ -60,14 +59,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "resetRequired": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.reset_required" },
             "body": {
@@ -81,14 +80,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "snapshotRequest": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.snapshot_request" },
             "body": {
@@ -101,14 +100,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "snapshotBegin": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.snapshot_begin" },
             "body": {
@@ -124,14 +123,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "snapshotChunk": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.snapshot_chunk" },
             "body": {
@@ -140,21 +139,89 @@
               "required": ["snapshotId", "chunkIndex", "resource", "items"],
               "properties": {
                 "snapshotId": { "$ref": "common.schema.json#/$defs/uuid" },
-                "chunkIndex": { "type": "integer", "minimum": 0 },
-                "resource": { "enum": ["sessions", "messages", "turns", "pending_interactions", "models", "capabilities"] },
+                "chunkIndex": { "$ref": "common.schema.json#/$defs/decimalString" },
+                "resource": { "$ref": "#/$defs/snapshotResource" },
                 "items": { "type": "array", "maxItems": 10000 }
-              }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "sessions" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.sessions" } }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "messages" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.messages" } }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "turns" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.turns" } }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "pending_interactions" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.pending_interactions" } }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "config_options" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.config_options" } }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "capabilities" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.capabilities" } }
+                    }
+                  }
+                }
+              ]
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "snapshotEnd": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.snapshot_end" },
             "body": {
@@ -170,14 +237,14 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
     },
     "ack": {
       "allOf": [
         { "$ref": "#/$defs/postAuthBase" },
         {
           "type": "object",
-          "unevaluatedProperties": false,
           "properties": {
             "type": { "const": "sync.ack" },
             "body": {
@@ -188,7 +255,87 @@
             }
           }
         }
-      ]
+      ],
+      "unevaluatedProperties": false
+    },
+    "snapshotResource": {
+      "enum": ["sessions", "messages", "turns", "pending_interactions", "config_options", "capabilities"]
+    },
+    "snapshotItem.sessions": { "$ref": "common.schema.json#/$defs/sessionSummary" },
+    "snapshotItem.messages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["messageId", "sessionId", "role", "content", "status", "createdAt", "turnId"],
+      "properties": {
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "role": { "enum": ["user", "agent"] },
+        "content": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/agentContentBlock" }
+        },
+        "status": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "turnId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        }
+      }
+    },
+    "snapshotItem.turns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turnId", "sessionId", "state", "createdAt", "startedAt", "completedAt", "terminalError"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "startedAt": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "completedAt": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/timestamp" }, { "type": "null" }]
+        },
+        "terminalError": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/publicError" }, { "type": "null" }]
+        }
+      }
+    },
+    "snapshotItem.pending_interactions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interactionId", "sessionId", "kind", "state", "schema", "createdAt"],
+      "properties": {
+        "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "kind": { "enum": ["permission", "elicitation"] },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "schema": { "type": "object" },
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    },
+    "snapshotItem.config_options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "configOptions", "version"],
+      "properties": {
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "configOptions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/configOptionView" }
+        },
+        "version": { "$ref": "common.schema.json#/$defs/decimalString" }
+      }
+    },
+    "snapshotItem.capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "agentCapabilities", "brokerAdditions"],
+      "properties": {
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "agentCapabilities": { "type": "object" },
+        "brokerAdditions": { "type": "object" }
+      }
     }
   }
 }

@@ -1,0 +1,373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/sync/v1/event-views.schema.json",
+  "title": "ACP Remote Sync v1 Event View Definitions",
+  "description": "Minimum required fields for event.payload.view, one $defs entry per event type registered in docs/SYNC_PROTOCOL.md section 10.2. Every view is an open object: additionalProperties is true, and adding fields requires a negotiated feature.",
+  "$defs": {
+    "session.created": {
+      "type": "object",
+      "required": ["session"],
+      "properties": {
+        "session": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+      },
+      "additionalProperties": true
+    },
+    "session.updated": {
+      "type": "object",
+      "required": ["session"],
+      "properties": {
+        "session": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+      },
+      "additionalProperties": true
+    },
+    "session.info.changed": {
+      "type": "object",
+      "required": ["title", "updatedAt"],
+      "properties": {
+        "title": { "type": ["string", "null"], "maxLength": 512 },
+        "updatedAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      },
+      "additionalProperties": true
+    },
+    "session.config.changed": {
+      "type": "object",
+      "required": ["configOptions", "version"],
+      "properties": {
+        "configOptions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/configOptionView" }
+        },
+        "version": { "$ref": "common.schema.json#/$defs/decimalString" }
+      },
+      "additionalProperties": true
+    },
+    "session.mode.changed": {
+      "type": "object",
+      "required": ["currentModeId", "version"],
+      "properties": {
+        "currentModeId": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 256 },
+            { "type": "null" }
+          ]
+        },
+        "version": { "$ref": "common.schema.json#/$defs/decimalString" }
+      },
+      "additionalProperties": true
+    },
+    "session.plan.changed": {
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["content", "priority", "status"],
+            "properties": {
+              "content": { "type": "string", "maxLength": 4096 },
+              "priority": { "enum": ["high", "medium", "low"] },
+              "status": { "enum": ["pending", "in_progress", "completed"] }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "session.commands.changed": {
+      "type": "object",
+      "required": ["commands"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "description"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "description": { "type": "string", "maxLength": 1024 }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "session.usage.changed": {
+      "type": "object",
+      "required": ["used", "size"],
+      "properties": {
+        "used": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "size": { "$ref": "common.schema.json#/$defs/decimalString" }
+      },
+      "additionalProperties": true
+    },
+    "session.origin.online_changed": {
+      "type": "object",
+      "required": ["ownerNodeId", "exportId", "originEpoch", "online"],
+      "properties": {
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "exportId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "originEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
+        "online": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "turn.queued": {
+      "type": "object",
+      "required": ["turnId", "state"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "turn.started": {
+      "type": "object",
+      "required": ["turnId", "state"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "turn.completed": {
+      "type": "object",
+      "required": ["turnId", "state"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "turn.cancelled": {
+      "type": "object",
+      "required": ["turnId", "state"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "turn.failed": {
+      "type": "object",
+      "required": ["turnId", "state", "error"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "state": { "const": "failed" },
+        "error": { "$ref": "common.schema.json#/$defs/publicError" }
+      },
+      "additionalProperties": true
+    },
+    "user.message.delta": {
+      "type": "object",
+      "required": ["messageId", "turnId", "deltaIndex", "text"],
+      "properties": {
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deltaIndex": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "text": { "type": "string", "maxLength": 262144 }
+      },
+      "additionalProperties": true
+    },
+    "agent.message.delta": {
+      "type": "object",
+      "required": ["messageId", "turnId", "deltaIndex", "text"],
+      "properties": {
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deltaIndex": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "text": { "type": "string", "maxLength": 262144 }
+      },
+      "additionalProperties": true
+    },
+    "agent.thought.delta": {
+      "type": "object",
+      "required": ["messageId", "turnId", "deltaIndex", "text"],
+      "properties": {
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deltaIndex": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "text": { "type": "string", "maxLength": 262144 }
+      },
+      "additionalProperties": true
+    },
+    "agent.message.completed": {
+      "type": "object",
+      "required": ["messageId", "turnId", "content"],
+      "properties": {
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "content": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/agentContentBlock" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "tool.call.started": {
+      "type": "object",
+      "required": ["toolCallId", "turnId", "title", "state"],
+      "properties": {
+        "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "title": { "type": "string", "maxLength": 1024 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "tool.call.updated": {
+      "type": "object",
+      "required": ["toolCallId", "turnId", "title", "state"],
+      "properties": {
+        "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "title": { "type": "string", "maxLength": 1024 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "tool.call.completed": {
+      "type": "object",
+      "required": ["toolCallId", "turnId", "title", "state"],
+      "properties": {
+        "toolCallId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "title": { "type": "string", "maxLength": 1024 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "permission.requested": {
+      "type": "object",
+      "required": ["interactionId", "turnId", "title", "description", "options"],
+      "properties": {
+        "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "title": { "type": "string", "maxLength": 1024 },
+        "description": { "type": ["string", "null"], "maxLength": 4096 },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/interactionOption" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "permission.resolved": {
+      "type": "object",
+      "required": ["interactionId", "resolution", "resolvedByDeviceId"],
+      "properties": {
+        "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "resolution": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "resolvedByDeviceId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": true
+    },
+    "elicitation.requested": {
+      "type": "object",
+      "required": ["interactionId", "turnId", "title", "schema", "initialValues"],
+      "properties": {
+        "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "title": { "type": "string", "maxLength": 1024 },
+        "schema": { "type": "object" },
+        "initialValues": { "type": ["object", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "elicitation.resolved": {
+      "type": "object",
+      "required": ["interactionId", "action", "resolvedByDeviceId"],
+      "properties": {
+        "interactionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "action": { "enum": ["submit", "cancel"] },
+        "resolvedByDeviceId": {
+          "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+        }
+      },
+      "additionalProperties": true
+    },
+    "terminal.output": {
+      "type": "object",
+      "required": ["terminalId", "chunkIndex", "stream", "text", "truncated"],
+      "properties": {
+        "terminalId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "chunkIndex": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "stream": { "enum": ["stdout", "stderr"] },
+        "text": { "type": "string", "maxLength": 1048576 },
+        "truncated": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "file.changed": {
+      "type": "object",
+      "required": ["changeId", "kind", "displayPath", "summary"],
+      "properties": {
+        "changeId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "displayPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "summary": { "type": "string", "maxLength": 2048 }
+      },
+      "additionalProperties": true
+    },
+    "agent.connected": {
+      "type": "object",
+      "required": ["agentId", "state"],
+      "properties": {
+        "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+      },
+      "additionalProperties": true
+    },
+    "agent.disconnected": {
+      "type": "object",
+      "required": ["agentId", "state"],
+      "properties": {
+        "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "error": { "$ref": "common.schema.json#/$defs/publicError" }
+      },
+      "additionalProperties": true
+    },
+    "command.completed": {
+      "type": "object",
+      "required": ["requestId", "result"],
+      "properties": {
+        "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "result": { "type": ["object", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "command.failed": {
+      "type": "object",
+      "required": ["requestId", "error"],
+      "properties": {
+        "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "error": { "$ref": "common.schema.json#/$defs/publicError" }
+      },
+      "additionalProperties": true
+    },
+    "command.uncertain": {
+      "type": "object",
+      "required": ["requestId", "reason", "mayHaveReachedAgent"],
+      "properties": {
+        "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "mayHaveReachedAgent": { "const": true }
+      },
+      "additionalProperties": true
+    },
+    "device.revoked": {
+      "type": "object",
+      "required": ["deviceId", "revokedAt"],
+      "properties": {
+        "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "revokedAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "description": "Public interoperability vector for the WSS device proof signature. Never use this key in production.",
+  "domain": "acp-remote/device-proof/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "canonicalOrigin": "https://work-pc.example.ts.net",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "serverNonceHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    "negotiatedFeatures": [
+      "acp.raw-payload.v1",
+      "core.command-status.v1",
+      "core.event-ack.v1",
+      "core.snapshot.v1"
+    ]
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAGmFjcC1yZW1vdGUvZGV2aWNlLXByb29mL3YxAAgAAQAAAAIAAQACAAAAEL2y7CD5jE2Ht4nlQNUn74cAAwAAABAq4cB8kkJG6anSTsWMEw9JAAYAAAAeaHR0cHM6Ly93b3JrLXBjLmV4YW1wbGUudHMubmV0AAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACgAAACAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-PwALAAAAEC3lTbd0rkwhiOMF3w3C5jcADAAAAExhY3AucmF3LXBheWxvYWQudjEAY29yZS5jb21tYW5kLXN0YXR1cy52MQBjb3JlLmV2ZW50LWFjay52MQBjb3JlLnNuYXBzaG90LnYx",
+    "transcriptSha256Hex": "2032808837cb95956fcf12a81cd957d4dfb404bd7bfab7c0be49e8a03003faff",
+    "publicKey": "BDURrmwahG1VT1zJxcePFuA99mOsjir_PjPSmLRzhy55c_z4AbafU7p9ijvIwIirXpjGxx8A6adGmjoF7ul9yCc",
+    "privateJwk": {
+      "kty": "EC",
+      "x": "NRGubBqEbVVPXMnFx48W4D32Y6yOKv8-M9KYtHOHLnk",
+      "y": "c_z4AbafU7p9ijvIwIirXpjGxx8A6adGmjoF7ul9yCc",
+      "crv": "P-256",
+      "d": "7nFbSXUAypboaLxcY1n4nw0LRZ6Tyo6S2YV79GlnbdU"
+    },
+    "p1363Signature": "3havuAxq74Nb46BgHB71HP5i88ysl0A31QUQ8sbzbtO9U34u0lNP5Tb0zJJWIWCPxMbuGHp1zgfbi62yg3ZVAg"
+  }
+}

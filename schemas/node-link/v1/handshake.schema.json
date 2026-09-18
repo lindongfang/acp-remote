@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/handshake.schema.json",
+  "title": "ACP Remote Node Link v1 Handshake Messages",
+  "oneOf": [
+    { "$ref": "#/$defs/nodeHello" },
+    { "$ref": "#/$defs/nodeChallenge" },
+    { "$ref": "#/$defs/nodeProof" },
+    { "$ref": "#/$defs/nodeReady" }
+  ],
+  "$defs": {
+    "nodeHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "node.hello" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minProtocolVersion", "maxProtocolVersion", "accessNodeId", "role", "clientNonce", "supportedFeatures", "requiredFeatures"],
+          "properties": {
+            "minProtocolVersion": { "const": 1 },
+            "maxProtocolVersion": { "const": 1 },
+            "accessNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "role": { "const": "access" },
+            "clientNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+            "supportedFeatures": { "$ref": "common.schema.json#/$defs/featureList" },
+            "requiredFeatures": { "$ref": "common.schema.json#/$defs/featureList" }
+          }
+        }
+      }
+    },
+    "nodeChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "node.challenge" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selectedProtocolVersion", "connectionId", "ownerNodeId", "serverNonce", "selectedFeatures", "nodeProof"],
+          "properties": {
+            "selectedProtocolVersion": { "const": 1 },
+            "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "serverNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
+            "selectedFeatures": { "$ref": "common.schema.json#/$defs/featureList" },
+            "nodeProof": { "$ref": "common.schema.json#/$defs/base64url64" }
+          }
+        }
+      }
+    },
+    "nodeProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "node.proof" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["connectionId", "accessNodeId", "nodeProof"],
+          "properties": {
+            "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "accessNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "nodeProof": { "$ref": "common.schema.json#/$defs/base64url64" }
+          }
+        }
+      }
+    },
+    "nodeReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "type", "messageId", "connectionId", "connectionSequence", "body"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "type": { "const": "node.ready" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "connectionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ownerNodeId", "catalogRevision", "limits", "serverEpoch"],
+          "properties": {
+            "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
+            "catalogRevision": { "$ref": "common.schema.json#/$defs/decimalString" },
+            "limits": { "$ref": "common.schema.json#/$defs/limits" },
+            "serverEpoch": { "$ref": "common.schema.json#/$defs/uuid" }
+          }
+        }
+      }
+    }
+  }
+}

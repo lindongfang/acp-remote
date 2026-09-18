@@ -28,7 +28,7 @@
         "canonicalOrigin": { "$ref": "#/$defs/canonicalOrigin" },
         "pairingId": { "$ref": "common.schema.json#/$defs/uuid" },
         "pairingSecret": { "$ref": "common.schema.json#/$defs/base64url32" },
-        "expiresAt": { "type": "integer", "minimum": 0 }
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
       }
     },
     "claimRequest": {

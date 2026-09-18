@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "pairingId": "20212223-2425-4627-a829-2a2b2c2d2e2f",
+  "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+  "accessNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+  "nodeName": "Office Access",
+  "nodeKind": "access",
+  "endpoint": "wss://work-pc.example.ts.net/node-link/v1",
+  "accessPublicKey": "BJcEHJX1Zwhc5BBZYECSO_aYJYZCNDSkKmUusiahkuYK5PkWY9uoXLsCd3J2PrH_9k-RSG_xDkEjW20oeL3T7wg",
+  "clientNonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "proof": "SSeJrzv-KTZYs8z6EBlOIuS9g2ykm2YUnVV8IzdGVtg"
+}

@@ -61,7 +61,7 @@ Sync Protocol 提供适合客户端消费的公共视图，但公共视图不是
 - 不宣称网络或外部 Agent 副作用“恰好一次”；崩溃窗口无法确认时必须返回 `uncertain`，不得自动重复派发。
 - 慢客户端不得阻塞 Agent、Broker 或其他客户端。
 
-当前 Sync v1 baseline 只完整定义本节点资源。Access Node 向客户端暴露 imported resource 前，必须通过后续协商 feature/schema 增加 `ownerNodeId`、`exportId`、origin cursor、在线状态和 `no-content-cache`；在该 feature 落地前不得把远程资源伪装成本地权威会话。该模式下 snapshot 和 replay 正文必须在线回源 Owner，客户端不得持久化正文。
+当前 Sync v1 baseline 通过 feature `resource.remote-origin.v1` 定义 imported resource 的承载方式：`ownerNodeId`、`exportId`、origin cursor、在线状态和 `no-content-cache` 全部由第 9.6 节规定。未协商该 feature 时不得把远程资源暴露给客户端，也不得把远程资源伪装成本地权威会话。协商后 snapshot、replay 和 `session.read` 的正文必须在线回源 Owner，客户端不得持久化正文与 `acp.rawJson`。
 
 ## 3. Transport Profile
 
@@ -96,9 +96,9 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 
 - JSON 文本使用 UTF-8，不允许 BOM。
 - 不允许重复对象键、无效 Unicode、`NaN`、`Infinity` 或尾随内容。
-- 协议整数如果可能超过 JavaScript safe integer，在线上必须编码为无前导零的十进制字符串。
-- `globalSequence`、`sessionSequence`、`connectionSequence` 和 cursor 中的 sequence 都是十进制字符串。
-- 时间使用 UTC RFC 3339，精确到毫秒，例如 `2026-09-17T12:10:00.123Z`。
+- 所有序号和计数器在线上必须编码为无前导零的十进制字符串（`^(0|[1-9][0-9]*)$`）。v1 中属于该规则的字段包括 `globalSequence`、`sessionSequence`、`connectionSequence`、`cursor.globalSequence`、`originSequence`、`version`、`expectedVersion`、`byteLength`、`deltaIndex` 和 `chunkIndex`；新增同义字段时按同一规则处理。
+- 结构性常量保持 integer：`protocolVersion`、`minProtocolVersion`、`maxProtocolVersion`、`selectedProtocolVersion`、`schemaVersion`、`chunkCount`、`heartbeatIntervalMs` 和 `limits.*` 中的字节、条数、连接数上限。schema 里的 `maxItems`、`maxLength` 等校验常量不因该规则变成字符串。
+- 时间使用 UTC RFC 3339，精确到毫秒，例如 `2026-09-17T12:10:00.123Z`；毫秒精度是强制的，秒精度或其他精度都不合法。该规则同样适用于配对二维码与配对状态响应中的 `expiresAt`。
 - UUID 使用带连字符的小写 canonical 文本；v1 接受 UUIDv4，服务端生成的有序 ID可以使用 UUIDv7，但排序不得依赖 UUID。
 - 二进制字段使用无填充 base64url，不得使用标准 base64 的 `+`、`/` 或 `=`。
 - 普通 JSON 不做 canonicalization，也不直接用于签名或 HMAC。
@@ -175,7 +175,8 @@ Feature ID 使用小写 ASCII、点分层级，例如：
 ```text
 core.snapshot.v1
 core.command-status.v1
-session.model-switch.v1
+session.config.v1
+resource.remote-origin.v1
 acp.raw-payload.v1
 ```
 
@@ -269,6 +270,17 @@ Domain：
 | 14 | `deviceName` | UTF-8，最多 128 bytes |
 | 15 | `clientKind` | UTF-8 枚举值 |
 | 16 | `requestNonce` | 32 bytes |
+
+字段 15 `clientKind` 的 v1 取值：
+
+| `clientKind` | 含义 |
+|---|---|
+| `pwa` | 浏览器 PWA（含安装到主屏幕的实例） |
+| `android` | Android 原生客户端 |
+| `ios` | iOS 原生客户端 |
+| `desktop` | 桌面原生客户端（Rust CLI、Tauri 桌面壳等） |
+
+每个取值对应独立的设备记录与 `deviceId`；不允许用同一 `clientKind` 值掩盖多个安装实例。
 
 各用途字段集合：
 
@@ -365,11 +377,11 @@ https://work-pc.example.ts.net/pair#data=<base64url-json>
   "canonicalOrigin": "https://work-pc.example.ts.net",
   "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
   "pairingSecret": "<base64url-32-bytes>",
-  "expiresAt": 1789650000
+  "expiresAt": "2026-09-17T12:15:00.000Z"
 }
 ```
 
-PWA 必须验证当前 origin、secure context、过期时间和字段长度，读取后立即用 `history.replaceState` 清除 fragment。fragment、secret 和完整 QR payload 不得进入日志或 analytics。
+`expiresAt` 是毫秒精度 UTC RFC 3339 字符串，不是 Unix 秒数；PWA 必须验证当前 origin、secure context、过期时间和字段长度，读取后立即用 `history.replaceState` 清除 fragment。fragment、secret 和完整 QR payload 不得进入日志或 analytics。
 
 所有 pairing HTTP 响应必须包含：
 
@@ -464,6 +476,8 @@ expired
 consumed
 ```
 
+状态查询无论业务状态如何都返回 HTTP 200，业务状态只由 body 的 `status` 表达；`expired` 和 `consumed` 同样是 200，`410` 只用于 claim 端点（见第 7.4 节）。客户端据此决定是进入 WSS 认证还是停止轮询。
+
 `approved` 响应只返回设备的非秘密元数据、scopes 和 Host identity；不签发 bearer token。首次正式 WSS 连接仍执行完整 challenge-response。
 
 状态查询在 `pending_confirmation`、`approved` 和 `rejected` 下可以安全重复；每次新的轮询生成新 request nonce，只有网络重试才复用原 nonce，并获得原响应。客户端观察到 `approved` 后开始 WSS 认证；观察到 `rejected`、`expired` 或 `consumed` 后停止轮询。客户端成功认证或终态过期后必须清除二维码 payload 和内存中的 secret。
@@ -472,14 +486,14 @@ consumed
 
 | HTTP 状态 | 使用场景 |
 |---:|---|
-| 200 | 状态查询成功，包括业务状态 `pending_confirmation/approved/rejected` |
+| 200 | 状态查询成功，包括业务状态 `pending_confirmation/approved/rejected/expired/consumed` |
 | 201 | claim 首次成功并创建 pairing request |
 | 400 | JSON 或字段 schema 无效 |
 | 401 | HMAC proof 无效；响应不得泄露具体校验差异 |
 | 403 | Origin/Host 不允许 |
 | 404 | pairing ID 不存在 |
 | 409 | 已被 claim、状态转换冲突或 device ID 冲突 |
-| 410 | pairing 已过期或 consumed |
+| 410 | 仅 claim 端点使用：pairing 已过期或已 consumed |
 | 413 | 请求体超过限制 |
 | 429 | 配对尝试被限流 |
 
@@ -643,7 +657,7 @@ ACK 首先属于连接；服务端可以保存设备 ACK 的最大值用于保�
 
 v1 只定义 `scope: machine`，服务端仍按当前设备 scopes 过滤。全局 sequence 对单个设备可以有不可见的空洞，不能据此推断隐藏事件。
 
-`cursor` 类型为 `Cursor | null`；首次同步发送 `null`。cursor sequence 大于当前 head、格式非法或不属于当前 Host 时返回 `sync.cursor_invalid`，不得把它钳制到 head。epoch 不匹配和已超过保留窗口分别触发 `epoch_mismatch`、`cursor_expired` reset。
+`cursor` 类型为 `Cursor | null`；首次同步发送 `null`。cursor 格式非法、epoch 不匹配、sequence 大于当前 head 或已超过保留窗口时一律返回 `sync.cursor_invalid`，`details.reason` 取值 `malformed|epoch_mismatch|beyond_head|cursor_expired`，服务端不得把 cursor 钳制到 head。需要重建 snapshot 时由服务端主动发送 `sync.reset_required`（`reason` 见第 9.4 节），客户端不得仅凭错误码推断 reset，也不得依赖已被删除的独立错误码。
 
 ### 9.3 增量重放
 
@@ -691,13 +705,13 @@ cursor epoch 正确且 sequence 仍在保留窗口内时：
 
 `reason` 枚举为 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`。`initial_sync` 通常由 `cursor: null` 直接进入，不要求先发送错误。
 
-客户端发送 `sync.snapshot_request`。服务端在一致性读视图中选择 `snapshotSequence`，依次发送：
+客户端发送 `sync.snapshot_request`。服务端在一致性读视图中选择快照 cursor，并以它作为 barrier；该 cursor 同时出现在 `sync.snapshot_begin` 和 `sync.snapshot_end` 的 `cursor` 字段里。依次发送：
 
 ```text
 sync.snapshot_begin
 sync.snapshot_chunk (1..n)
 sync.snapshot_end
-event where globalSequence > snapshotSequence
+event where globalSequence > 快照 cursor.globalSequence
 sync.caught_up
 ```
 
@@ -732,7 +746,7 @@ sync.caught_up
   "type": "sync.snapshot_chunk",
   "body": {
     "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
-    "chunkIndex": 0,
+    "chunkIndex": "0",
     "resource": "sessions",
     "items": []
   }
@@ -754,7 +768,7 @@ sync.caught_up
 }
 ```
 
-`chunkIndex` 从 `0` 开始连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。
+`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。
 
 客户端必须把 snapshot 写入以 `snapshotId` 隔离的暂存区；只有 chunk 连续、数量、cursor 和 digest 全部验证后，才能在一个本地事务中替换旧缓存。收到另一个 `snapshot_begin` 时必须丢弃旧的未完成暂存区。v1 不支持 snapshot chunk 断点续传；连接断开、digest 错误、顺序错误或空间不足时，客户端丢弃整个暂存 snapshot，重连后重新请求。验证失败不得损坏最后一个已完成缓存。
 
@@ -765,7 +779,7 @@ sessions
 messages
 turns
 pending_interactions
-models
+config_options
 capabilities
 ```
 
@@ -775,14 +789,16 @@ Snapshot item 的最低 schema：
 
 | Resource | 每个 item 的必填字段 |
 |---|---|
-| `sessions` | `sessionId`, `agent`, `state`, `version`, `createdAt`, `updatedAt`; `title`, `currentModel`, `currentMode` 可为 `null` |
+| `sessions` | `sessionId`, `agent`, `state`, `origin`, `version`, `createdAt`, `updatedAt`; `title`, `currentMode` 可为 `null` |
 | `messages` | `messageId`, `sessionId`, `role`, `content`, `status`, `createdAt`; `turnId` 可为 `null` |
 | `turns` | `turnId`, `sessionId`, `state`, `createdAt`; `startedAt`, `completedAt`, `terminalError` 可为 `null` |
 | `pending_interactions` | `interactionId`, `sessionId`, `kind`, `state`, `schema`, `createdAt` |
-| `models` | `sessionId`, `models`, `currentModelId`, `version` |
-| `capabilities` | `sessionId`, `agentCapabilities`, `brokerCapabilities`, `clientPresentation` |
+| `config_options` | `sessionId`, `configOptions`, `version` |
+| `capabilities` | `sessionId`, `agentCapabilities`, `brokerAdditions` |
 
-`agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。所有 session-scoped item 必须引用同一 snapshot 中存在或客户端已有的 session。`content`、model、interaction 和 capability 的具体值对象与第 10.3、11.5 节相同，不得为 snapshot 发明另一套语义。
+`agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。所有 session-scoped item 必须引用同一 snapshot 中存在或客户端已有的 session。`content`、config option、interaction 和 capability 的具体值对象与第 10.3、11.5 节相同，不得为 snapshot 发明另一套语义。
+
+`origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不进入 Access Node 的 snapshot；客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner。
 
 ### 9.5 ACK
 
@@ -808,6 +824,50 @@ Snapshot item 的最低 schema：
 - 服务端保留策略不能只依赖某个可能永久离线的设备 ACK；按 TTL、容量和设备活跃策略共同决定。
 - 即使某段 global sequence 全部因权限过滤而不可见，客户端也可以 ACK `sync.caught_up.cursor`；它表示已完成同步 barrier，不表示看到了被过滤事件。
 
+### 9.6 imported 资源（`resource.remote-origin.v1`）
+
+Access Node 可以向已协商 feature `resource.remote-origin.v1` 的客户端展示由 Owner Node 导出的会话。该模式下 Owner 始终是正文权威，Access 只转发并维护本地索引。
+
+会话摘要增加必填 `origin`：
+
+```text
+origin = { kind: "local" }
+       | { kind: "remote", ownerNodeId: UUID, exportId: string, originEpoch: UUID, online: boolean }
+```
+
+- `kind` 为 `local` 时表示该会话由本节点拥有并持久化正文。
+- `kind` 为 `remote` 时表示该会话由 `ownerNodeId` 拥有、经 `exportId` 导出；`originEpoch` 是该 Owner 事件日志的 epoch；`online` 反映最近一次已知的 Owner 可达性。
+- `origin` 是 `SessionSummary` 的必填字段，形状见第 10.3 节。
+
+事件 body 增加必填 `remoteOrigin`，非 imported 事件固定为 `null`：
+
+```text
+remoteOrigin = {
+  ownerNodeId: UUID,
+  exportId: string,
+  originEpoch: UUID,
+  originEventId: UUID,
+  originSequence: decimal string
+} | null
+```
+
+- imported 事件的 `eventId` 必须等于 `remoteOrigin.originEventId`；`eventId` 跨跳不变，客户端因此可以跨 Access 与 Owner 去重同一条事件。
+- imported 事件的 `globalSequence` 与 `sessionSequence` 是 Access 本地 sequence，只用于本连接的排序与 ACK；跨节点排序一律以 `(originEpoch, originSequence)` 为准。
+- `origin.kind` 仍描述产生事件的来源类型（`agent`/`device`/`daemon`/`local_cli`）；远程跳数只由 `remoteOrigin` 表达，不放进 `origin.kind`。
+- 不得为本地事件伪造 `remoteOrigin`；`originEventId` 必须来自 `remoteOrigin.ownerNodeId` 的事件日志。
+
+交付与缓存规则：
+
+- imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不得进入 Access 的 snapshot，也不得进入 Access 的正文缓存；Access 只持久化身份、索引、`eventId`/`eventType`/digest 和 local sequence 映射。
+- `sessions` chunk 与 `session.list` 必须包含 imported 会话的摘要并带 `origin.kind = "remote"`，否则客户端无法发现该会话；摘要之外的正文类资源一律不进入 snapshot。
+- 客户端一律通过 `session.read` 在线回源 Owner 获取正文、turn 历史和待处理交互。Access 不排队、不缓存正文、不改写 ACP 语义与 `acp.rawJson`、不扩张 capability、不修改会话状态。
+- 客户端对 `origin.kind = "remote"` 的会话不得持久化正文与 `acp.rawJson`，只允许缓存摘要、cursor 和事件 digest。
+- Owner 不可达时 `session.read` 返回 `resource.remote_unavailable`，同时把该会话的 `origin.online` 置为 `false` 并广播一次 `session.origin.online_changed`；恢复可达后同样以该事件把 `online` 置回 `true`。
+- Owner 离线期间客户端不得把远程会话的输入标记为已发送或已接受；本地 draft 可以保留，但必须显式标记为未提交。
+- `session.list` 只返回该设备有权查看的本地会话与 imported 摘要，两者使用同一 `SessionSummary` 形状；不得为远程会话发明第二套字段。
+
+未协商该 feature 时，Access 不得返回任何 `origin.kind = "remote"` 的会话，也不得发送带非空 `remoteOrigin` 的事件。
+
 ## 10. Event
 
 ### 10.1 结构
@@ -830,6 +890,7 @@ Snapshot item 的最低 schema：
       "kind": "agent",
       "deviceId": null
     },
+    "remoteOrigin": null,
     "createdAt": "2026-09-17T12:10:00.123Z",
     "payload": {
       "view": {},
@@ -848,7 +909,18 @@ Snapshot item 的最低 schema：
 
 - 非会话级事件的 `sessionId` 和 `sessionSequence` 为 `null`。
 - 没有客户端命令直接导致的事件，其 `causationRequestId` 为 `null`；由命令产生的所有领域事件必须携带对应 `requestId`。
-- `origin.kind` 为 `agent`、`device`、`desktop` 或 `daemon`；设备来源必须包含 `deviceId`。
+- `eventType` 匹配 `^[a-z0-9_.-]{1,128}$`，只允许小写 ASCII 字母、数字、`_`、`.` 和 `-`；未登记取值按未知事件处理，不因字符集合法而获得额外语义。
+- `origin.kind` 取值固定为 `agent`、`device`、`daemon`、`local_cli`，含义如下：
+
+  | `origin.kind` | 含义 |
+  |---|---|
+  | `agent` | 由本地或已导入 Agent 的 ACP 输出产生 |
+  | `device` | 由已授权 Sync 设备经命令产生；必须包含 `deviceId` |
+  | `daemon` | 由本节点 Broker、调度器或存储维护任务产生 |
+  | `local_cli` | 由本机 CLI/桌面客户端经本地 IPC 发起，不经过远程设备身份 |
+
+  远程节点不作为 `origin.kind` 取值：imported 事件的来源写在 `remoteOrigin` 里（见第 9.6 节），`kind` 仍描述产生该事件的来源类型。
+- `remoteOrigin` 是必填字段；本地事件为 `null`，imported 事件必须为带 `ownerNodeId`、`exportId`、`originEpoch`、`originEventId`、`originSequence` 的对象，且 `eventId` 等于 `originEventId`。
 - `createdAt` 是 Daemon 持久化时间，不使用客户端时间决定顺序。
 - `payload.view` 是公共结构化视图。
 - `payload.acp` 在事件来源或语义与 ACP 消息相关时存在，内容视为不可信。
@@ -882,15 +954,22 @@ RawAcpV1 = {
 ```text
 session.created
 session.updated
-session.model.changed
+session.info.changed
+session.config.changed
 session.mode.changed
+session.plan.changed
+session.commands.changed
+session.usage.changed
+session.origin.online_changed
 turn.queued
 turn.started
 turn.completed
 turn.failed
 turn.cancelled
+user.message.delta
 agent.message.delta
 agent.message.completed
+agent.thought.delta
 tool.call.started
 tool.call.updated
 tool.call.completed
@@ -908,6 +987,8 @@ command.uncertain
 device.revoked
 ```
 
+本节列表是 v1 登记的标准事件类型集合，与 [`schemas/sync/v1/event-views.schema.json`](../schemas/sync/v1/event-views.schema.json) 的 `$defs` 一一对应；每个类型的最低 `view` 字段见第 10.3 节。未登记的 ACP 判别子仍按第 10.3 节的映射与降级规则处理，不得静默丢弃。
+
 ### 10.3 v1 Event View Contract
 
 所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义。
@@ -915,12 +996,19 @@ device.revoked
 | Event type | `view` 最低字段 |
 |---|---|
 | `session.created`, `session.updated` | `session: SessionSummary` |
-| `session.model.changed` | `previousModelId: string|null`, `model: ModelRef`, `version: decimal string`, `effectiveFrom: "now"|"next_turn"` |
-| `session.mode.changed` | `previousModeId: string|null`, `mode: ModeRef`, `version: decimal string`, `effectiveFrom` |
+| `session.info.changed` | `title: string|null`, `updatedAt: timestamp` |
+| `session.config.changed` | `configOptions: SessionConfigOptionView[]`, `version: decimal string` |
+| `session.mode.changed` | `currentModeId: string|null`, `version: decimal string` |
+| `session.plan.changed` | `entries: { content: string, priority: "high"|"medium"|"low", status: "pending"|"in_progress"|"completed" }[]` |
+| `session.commands.changed` | `commands: { name: string, description: string }[]` |
+| `session.usage.changed` | `used: decimal string`, `size: decimal string` |
+| `session.origin.online_changed` | `ownerNodeId: UUID`, `exportId: string`, `originEpoch: UUID`, `online: boolean` |
 | `turn.queued`, `turn.started`, `turn.completed`, `turn.cancelled` | `turnId`, `state` |
 | `turn.failed` | `turnId`, `state: "failed"`, `error: PublicError` |
+| `user.message.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
 | `agent.message.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
 | `agent.message.completed` | `messageId`, `turnId`, `content: AgentContentBlock[]` |
+| `agent.thought.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
 | `tool.call.started`, `tool.call.updated`, `tool.call.completed` | `toolCallId`, `turnId`, `title`, `state`; 摘要字段可选，完整 ACP 保留在 `acp` |
 | `permission.requested` | `interactionId`, `turnId`, `title`, `description`, `options: InteractionOption[]` |
 | `permission.resolved` | `interactionId`, `resolution`, `resolvedByDeviceId: UUID|null` |
@@ -934,6 +1022,24 @@ device.revoked
 | `command.uncertain` | `requestId`, `reason`, `mayHaveReachedAgent: true` |
 | `device.revoked` | `deviceId`, `revokedAt`；只发送给仍有权查看设备状态的其他客户端 |
 
+ACP `session/update` 判别子到 Sync event type 的完整映射（判别子取值以上游 ACP v1 固定快照为准）：
+
+| ACP `sessionUpdate` | Sync event type |
+|---|---|
+| `user_message_chunk` | `user.message.delta` |
+| `agent_message_chunk` | `agent.message.delta`（`agent.message.completed` 由 turn 结束时由 Broker 生成） |
+| `agent_thought_chunk` | `agent.thought.delta` |
+| `tool_call` | `tool.call.started` |
+| `tool_call_update` | `tool.call.updated`（终态额外生成 `tool.call.completed`） |
+| `plan` | `session.plan.changed` |
+| `available_commands_update` | `session.commands.changed` |
+| `current_mode_update` | `session.mode.changed` |
+| `config_option_update` | `session.config.changed` |
+| `session_info_update` | `session.info.changed` |
+| `usage_update` | `session.usage.changed` |
+
+未出现在该表中的判别子必须按未知事件降级并保留 `acp.rawJson`，不得静默丢弃，也不得把结构化事件降级成普通文本。目标行为与节奏的逐条约束见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md)。
+
 公共值对象：
 
 ```text
@@ -942,18 +1048,30 @@ SessionSummary {
   title: string | null,
   agent: { agentId: string, name: string },
   state: "idle" | "queued" | "running" | "waiting_input" | "waiting_permission" | "failed" | "closed",
-  currentModel: ModelRef | null,
+  origin: { kind: "local" }
+        | { kind: "remote", ownerNodeId: UUID, exportId: string, originEpoch: UUID, online: boolean },
   currentMode: ModeRef | null,
   version: decimal string,
   createdAt: timestamp,
   updatedAt: timestamp
 }
 
-ModelRef { modelId: string, displayName: string }
-ModeRef  { modeId: string, displayName: string }
+ModeRef { modeId: string, displayName: string }
+ModeState { currentModeId: string | null, availableModes: ModeRef[], version: decimal string }
+SessionConfigOptionView {
+  id: string,
+  name: string,
+  description: string | null,
+  category: string | null,
+  type: "select" | "boolean",
+  currentValue: string | boolean,
+  options?: { value: string, name: string, description: string | null }[]
+}
 InteractionOption { optionId: string, label: string, kind: string }
 PublicError { code: string, message: string, retryable: boolean, details: object }
 ```
+
+`SessionConfigOptionView` 是 ACP `SessionConfigOption` 的公开投影，按原样保留 `id`、`name`、`description`、`category` 和 `type`；`category` 为 `model` 或 `model_config` 的条目就是模型选择项，`currentValue` 是当前选中的 `value`（`type: "boolean"` 时为 boolean）。模型和模式都不再有独立的 Sync 专用类型。
 
 `AgentContentBlock` v1 的公共 view 支持：
 
@@ -1007,8 +1125,10 @@ PublicError { code: string, message: string, retryable: boolean, details: object
   "type": "command.result",
   "body": {
     "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "command": "session.prompt",
     "status": "accepted",
     "acceptedAt": "2026-09-17T12:11:00.000Z",
+    "terminalEventId": null,
     "result": {
       "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
     },
@@ -1016,6 +1136,14 @@ PublicError { code: string, message: string, retryable: boolean, details: object
   }
 }
 ```
+
+body 字段规则：
+
+- `command` 必填，取值是第 11.5 节表首列的命令名，必须与原始 `command` 请求一致；查询命令的 `result` 形状由它决定。
+- `acceptedAt` 仅在 `status = "rejected"` 时为 `null`；其余状态都必须是该命令首次被持久化接受的时间。
+- `terminalEventId` 是 `UUID | null`：查询命令固定为 `null`，mutation 的 `accepted` 也固定为 `null`；重复查询一个已终结的 mutation 时必填，且等于该 request 唯一的 command terminal event 的 `eventId`。
+- `status = "rejected"` 时 `result` 必须是 `null` 且 `error` 必须是结构化 `PublicError`；其余状态 `error` 为 `null`。
+- `completed` 时 `result` 必须符合 `command` 对应的结果形状（见第 11.5 节）；`failed` 携带 `PublicError`，`uncertain` 可只给 `reason`。
 
 `status`：
 
@@ -1052,20 +1180,20 @@ schema -> authenticated device -> scope -> state/version
 
 ### 11.3 首批命令
 
-Sync v1 baseline 可以授予：
+Sync v1 baseline 可以授予（与 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的命令一致）：
 
 ```text
 session.list
 session.read
+command.status
+session.mode.list
+session.config.list
 session.prompt
 session.cancel
-session.model.list
-session.model.set
-session.mode.list
-session.mode.set
-permission.resolve
 elicitation.respond
-command.status
+session.mode.set
+session.config.set
+permission.resolve
 ```
 
 Sync v1 尚未定义，或仅允许 Node 本地管理入口：
@@ -1073,11 +1201,16 @@ Sync v1 尚未定义，或仅允许 Node 本地管理入口：
 ```text
 session.create
 session.delete
-workspace.select
-agent.configure
-provider.configure
-device.manage
+local.workspace.select
+local.agent.configure
+local.provider.configure
+local.device.manage
+local.export.manage
+local.node.rotate-key
+local.audit.export
 ```
+
+`session.create` 是 Node Link 命令，首阶段 Sync 不暴露；将来经 Sync 暴露时必须同时满足 `grant.remote-work`，且只能引用 Export 发布的 agent 与 workspace template。命令到 scope、pack、grant 的权威映射以 `compatibility/commands/v1/commands.json` 和 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 10.2 节的表为准，本节只声明 Sync 面可授予哪些命令名；第 11.5 节表首列是 Sync v1 接受的完整命令集合。
 
 未知命令返回 `command.unsupported`。底层 Agent 不支持的已知能力返回 `capability.unsupported_by_agent`，Broker 无法表达时返回 `capability.unsupported_by_broker`，不能伪装成功。
 
@@ -1109,7 +1242,9 @@ device.manage
 }
 ```
 
-`state` 为 `accepted|completed|failed|uncertain`。设备只能查询自己提交或其 scope 明确允许查看的命令；不存在或不可见统一返回 `command.not_found`，避免权限侧信道。
+`state` 为 `accepted|completed|failed|uncertain|rejected`；`rejected` 表示该 target request 已终结为未产生业务副作用的拒绝，`acceptedAt` 与 `terminalAt` 均为 `null`，`error` 携带结构化原因。设备只能查询自己提交或其 scope 明确允许查看的命令；不存在或不可见统一返回 `command.not_found`，避免权限侧信道。
+
+`command.status` 的完成结果就是 `CommandStatusRecord`：`{ targetRequestId, state, acceptedAt, terminalAt, terminalEventId, result, error }`，字段语义与第 11.2 节一致。
 
 ### 11.5 v1 Command Schema
 
@@ -1118,16 +1253,21 @@ device.manage
 | Command | 类别 | `sessionId` | Payload | 成功结果/终态 |
 |---|---|---|---|---|
 | `session.list` | query | 禁止 | `{}` | `completed { sessions: SessionSummary[] }` |
-| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,models,capabilities` | `completed`，结构与对应 snapshot resources 相同 |
+| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities` | `completed SessionReadResult`，结构与对应 snapshot resources 相同；imported 会话回源 Owner |
+| `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
+| `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
+| `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
 | `session.prompt` | mutation | 必须 | `{ content: PromptContentBlock[] }` | `accepted { turnId }`，随后 turn/domain event 和 command terminal event |
 | `session.cancel` | mutation | 必须 | `{ turnId }` | 取消请求生效后 `command.completed`；目标已经终态则幂等完成 |
-| `session.model.list` | query | 必须 | `{}` | `completed { models: ModelRef[], currentModelId, version }` |
-| `session.model.set` | mutation | 必须 | `{ modelId }`，body `expectedVersion` 必须存在 | `session.model.changed` 后 `command.completed` |
-| `session.mode.list` | query | 必须 | `{}` | `completed { modes: ModeRef[], currentModeId, version }` |
-| `session.mode.set` | mutation | 必须 | `{ modeId }`，body `expectedVersion` 必须存在 | `session.mode.changed` 后 `command.completed` |
-| `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
 | `elicitation.respond` | mutation | 必须 | `{ interactionId, action, values }` | `action` 为 `submit|cancel`; 校验后产生 `elicitation.resolved` |
-| `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
+| `session.mode.set` | mutation | 必须 | `{ modeId }`，body `expectedVersion` 必须存在 | `session.mode.changed` 后 `command.completed` |
+| `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
+| `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
+| `session.create` | mutation | 禁止 | `{ agentId, exportId, workspaceAlias, templateParams?: object }` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；Sync v1 收到返回 `command.unsupported` |
+
+本表首列与 `compatibility/commands/v1/commands.json` 的命令集合逐条一致，也是 `schemas/sync/v1/command.schema.json` 的 `command` 枚举来源。其中 `session.create` 只经 Node Link 接受且必须满足 `grant.remote-work`，Sync v1 不暴露；其余 11 条是 Sync v1 接受的命令。任一处增删命令名都必须同步修改 `commands.json`、`schemas/sync/v1/command.schema.json`、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+
+`ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 
 `PromptContentBlock` v1 baseline 只有：
 
@@ -1148,7 +1288,7 @@ device.manage
 - 同一会话的 mutation 进入 Session Actor 串行处理。
 - 同一会话同时最多一个 active turn。
 - 并发 prompt 按服务端持久化接受顺序排队，或按配置明确返回 `session.busy`。
-- 模型/模式变更必须带 `expectedVersion`；版本不匹配返回 `state.version_conflict` 和当前版本。
+- config option 与模式变更必须带 `expectedVersion`；版本不匹配返回 `state.version_conflict` 和当前版本。
 - 权限或 elicitation 响应使用请求自身的 expected state/version；第一个有效响应成为权威结果，之后返回 `interaction.already_resolved`。
 
 ## 12. Error
@@ -1160,7 +1300,7 @@ device.manage
   "type": "error",
   "body": {
     "code": "authorization.scope_denied",
-    "message": "Device is not allowed to change the model.",
+    "message": "Device is not allowed to change session config.",
     "retryable": false,
     "correlationId": "6dfa044f-05f8-4a02-b4a1-a4d9d034298b",
     "details": {}
@@ -1170,7 +1310,7 @@ device.manage
 
 - `code` 是稳定机器标识；客户端不得解析 `message` 做逻辑判断。
 - `message` 是安全、简短、可展示的描述，不得包含密钥、token、完整 prompt、敏感路径或内部堆栈。
-- `correlationId` 通常引用导致错误的 `messageId` 或 `requestId`。
+- `correlationId` 通常引用导致错误的 `messageId` 或 `requestId`；只有确实没有可关联的 message 或 request 时才允许为 `null`（例如 heartbeat 超时、服务端主动关闭或尚未收到任何业务消息）。有可关联对象却写 `null` 视为协议实现缺陷。
 - `details` 只能包含该错误 code 登记的非敏感字段。
 - 可恢复命令错误优先使用 `command.result(status=rejected)`；连接级错误使用 `error`。
 
@@ -1194,8 +1334,6 @@ authorization.scope_denied
 pairing.already_claimed
 pairing.expired
 pairing.consumed
-sync.cursor_epoch_mismatch
-sync.cursor_expired
 sync.cursor_invalid
 command.unsupported
 command.not_found
@@ -1211,8 +1349,11 @@ capability.unsupported_by_agent
 resource.rate_limited
 resource.backpressure
 resource.result_too_large
+resource.remote_unavailable
 internal.unavailable
 ```
+
+该列表中 `sync.cursor_invalid` 的 `details.reason` 限定为 `malformed|epoch_mismatch|beyond_head|cursor_expired`；`resource.remote_unavailable` 的 `details` 允许 `ownerNodeId`、`exportId` 和 `reason ∈ {owner_offline, export_revoked}`。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
 
 错误码可以向后兼容地增加。客户端遇到未知错误码时按 `retryable` 和 code 首段做保守处理，并展示通用错误。
 
@@ -1281,7 +1422,8 @@ v1 默认上限：
 | WebSocket upgrade headers | 16 KiB |
 | 第一条 `auth.client_hello` | 32 KiB |
 | pairing HTTP request body | 16 KiB |
-| supported + required feature 总数 | 64 |
+| `supportedFeatures` 项数 | 64 |
+| `requiredFeatures` 项数 | 64 |
 | 单个 feature ID | 64 ASCII bytes |
 | 单 IP pending authentication | 5 connections |
 | 单 IP 新认证尝试 | 10/minute，允许配置更严格值 |
@@ -1292,7 +1434,7 @@ v1 默认上限：
 - 超限应在读取/分配完整 body 前尽早拒绝；未认证错误不得回显请求内容或暴露设备是否存在。
 - feature ID 只允许 `[a-z0-9.-]`，不得为空、包含连续分隔 NUL 或通过 Unicode 形成视觉混淆。
 
-- 服务端可下调并通过 `auth.authenticated.limits` 公布运行时值。
+- 只有 `maxMessageBytes`、`maxPromptBytes`、`maxReplayEventsPerBatch` 三项通过 `auth.authenticated.limits` 下发，服务端可以按部署情况下调；其余上限（本节的认证前固定上限、JSON nesting depth、单对象字段数、单数组元素数、设备名称长度、单连接待发送队列、认证超时、配对有效期）都是固定 v1 常量，不得通过 `limits` 覆盖或下调。
 - 超过单消息上限应在分配大对象前拒绝。
 - attachment、大型 diff 和完整终端输出不内嵌绕过限制；未来使用单独的受授权内容接口或 binary feature。
 - 待发送队列达到高水位后先停止读取新的 replay batch；持续过慢则发送 `resource.backpressure` 并断开。
@@ -1326,7 +1468,7 @@ v1 默认上限：
 - 改变排序、ACK、cursor 或幂等语义。
 - 改变 transcript codec、算法、domain 或 field tag。
 - 引入 binary framing、压缩、附件传输或不同 Transport Profile。
-- 增加 `session.create`、imported resource origin 等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。
+- 增加 `session.create`、imported resource origin（feature `resource.remote-origin.v1`，见第 9.6 节）等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。
 
 ### 16.3 数据迁移
 
@@ -1336,7 +1478,7 @@ v1 默认上限：
 
 ## 17. 测试与 Fixture
 
-语言无关 schema 位于 [`schemas/sync/v1/`](../schemas/sync/v1/)，fixture 位于 [`fixtures/sync/v1/`](../fixtures/sync/v1/)。两者是本文的机器可验证伴随物；协议行为仍以本文为权威，发现不一致时必须一起修正。
+语言无关 schema 位于 [`schemas/sync/v1/`](../schemas/sync/v1/)，fixture 位于 [`fixtures/sync/v1/`](../fixtures/sync/v1/)。两者是本文的机器可验证伴随物；协议行为仍以本文为权威，发现不一致时必须一起修正。`event-views.schema.json` 按第 10.2 节的每个事件类型给出 `view` 的最低必填定义，`manifest.json` 用 `viewSchema`/`viewDef` 把事件 fixture 绑定到对应 `$defs`；`transcripts/` 覆盖第 6.3 节的全部 domain，并由 `manifest.transcriptVectors` 逐条登记。
 
 fixture 目录至少覆盖：
 
@@ -1344,17 +1486,19 @@ fixture 目录至少覆盖：
 fixtures/sync/v1/
 ├─ valid/          应通过 schema 的认证、同步、事件、命令、错误和配对样例
 ├─ invalid/        必须失败并声明 expectedKeyword 的反向样例
-├─ transcripts/    transcript、HMAC 和签名固定向量
-└─ manifest.json   schema、fixture 与预期结果映射
+├─ transcripts/    transcript、HMAC 和签名固定向量（第 6.3 节全部 domain）
+└─ manifest.json   schema、view $defs、fixture 与预期结果映射
 ```
 
 第一批资产可以运行：
 
 ```text
+node scripts/check-schema-fixtures.mjs
 node scripts/check-contract-assets.mjs
+node scripts/check-command-catalog.mjs
 ```
 
-该脚本只做资产完整性和密码学固定向量检查。Rust/TypeScript 实现必须各自使用支持 Draft 2020-12 的 validator 执行 `manifest.json` 中的正反 schema fixture。
+`check-schema-fixtures.mjs` 用 ajv（Draft 2020-12）逐条执行 `manifest.json`：标为 valid 的 fixture 必须通过，标为 invalid 的 fixture 必须以声明的 `expectedKeyword` 失败，带 `viewSchema`/`viewDef` 的 fixture 还必须通过对应事件视图定义。`check-contract-assets.mjs` 负责资产完整性（`$ref` 目标、`$id` 唯一性、manifest 列出的文件存在、fixture 未被 manifest 遗漏）与需要真正计算的绑定：`rawJson` 的 `byteLength`/`sha256` 必须与文本本身一致，transcript 固定向量的 SHA-256、HMAC 与 P1363 签名必须重算通过。`check-command-catalog.mjs` 断言命令名在 `compatibility/commands/v1/commands.json`、`command.schema.json`、本文 §11.5 与 `SECURITY_DESIGN.md` §10.2 四处一致。三者合起来是仓库自带的完整检查，由 `npm run check` 统一执行；Rust 实现仍必须用自己选择的 Draft 2020-12 validator 跑同一份 manifest，形成独立判定。
 
 最低测试集合：
 
@@ -1373,6 +1517,8 @@ node scripts/check-contract-assets.mjs
 13. cursor 过期、epoch 变化、snapshot 中断/替换和 digest 错误的恢复路径。
 14. 慢客户端被隔离后可从 ACK cursor 继续。
 15. Android Chrome、iOS Safari、桌面 Chrome/Edge 与 Rust 服务端互操作。
+16. 第 10.3 节列出的 11 个 ACP `session/update` 判别子逐条映射到对应 Sync event type；未映射判别子降级为未知事件并保留 `acp.rawJson`。
+17. imported 会话的正文不进入 Access snapshot 与客户端持久化缓存，`session.read` 在线回源 Owner；Owner 离线时返回 `resource.remote_unavailable`、置 `origin.online = false` 并广播一次 `session.origin.online_changed`。
 
 ## 18. 第一阶段暂缓项
 

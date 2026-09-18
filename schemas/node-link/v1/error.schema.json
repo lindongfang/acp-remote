@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/error.schema.json",
+  "title": "ACP Remote Node Link v1 Error and Control Messages",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/linkError"
+    },
+    {
+      "$ref": "#/$defs/linkPing"
+    },
+    {
+      "$ref": "#/$defs/linkPong"
+    },
+    {
+      "$ref": "#/$defs/linkBackpressure"
+    }
+  ],
+  "$defs": {
+    "postAuthBase": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "connectionId",
+        "connectionSequence",
+        "body"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionSequence": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        }
+      }
+    },
+    "linkError": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "link.error"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "code",
+                "message",
+                "retryable",
+                "correlationId",
+                "details"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[a-z0-9_.-]+$"
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 1024
+                },
+                "retryable": {
+                  "type": "boolean"
+                },
+                "correlationId": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "details": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "开放扩展点：错误补充信息，客户端不得据此做安全或授权决策。"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "linkPing": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "link.ping"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "nonce"
+              ],
+              "properties": {
+                "nonce": {
+                  "$ref": "common.schema.json#/$defs/base64url16"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "linkPong": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "link.pong"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "nonce"
+              ],
+              "properties": {
+                "nonce": {
+                  "$ref": "common.schema.json#/$defs/base64url16"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "linkBackpressure": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "link.backpressure"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scope",
+                "retryAfterMs"
+              ],
+              "properties": {
+                "scope": {
+                  "enum": [
+                    "resource",
+                    "connection"
+                  ]
+                },
+                "retryAfterMs": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

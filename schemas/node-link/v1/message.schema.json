@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/message.schema.json",
+  "title": "ACP Remote Node Link v1 WSS Message",
+  "oneOf": [
+    { "$ref": "handshake.schema.json" },
+    { "$ref": "catalog.schema.json" },
+    { "$ref": "resource.schema.json" },
+    { "$ref": "command.schema.json" },
+    { "$ref": "error.schema.json" }
+  ]
+}

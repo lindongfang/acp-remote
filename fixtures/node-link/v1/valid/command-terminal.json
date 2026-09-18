@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "command.terminal",
+  "messageId": "80718293-a4b5-46c7-b8d9-eafb0c1d2e3f",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "8",
+  "body": {
+    "requestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "terminal": {
+      "status": "completed",
+      "terminalAt": "2026-09-18T09:12:04.000Z",
+      "terminalEventId": "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
+      "result": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6"
+      },
+      "error": null
+    }
+  }
+}

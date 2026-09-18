@@ -1,0 +1,39 @@
+{
+  "protocolVersion": 1,
+  "type": "catalog.snapshot",
+  "messageId": "2a1b2c3d-4e5f-4061-8273-8495a6b7c8d9",
+  "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+  "connectionSequence": "2",
+  "body": {
+    "revision": "43",
+    "exports": [
+      {
+        "exportId": "export-main",
+        "displayName": "Main Export",
+        "agents": [
+          {
+            "agentId": "company-agent",
+            "name": "Company Agent",
+            "capabilitiesRef": "capabilities-3f2a"
+          }
+        ],
+        "workspaceAliases": [
+          {
+            "alias": "company-agent-default",
+            "displayName": "Company Agent (default)"
+          }
+        ],
+        "scopes": [
+          "grant.observe",
+          "grant.interact",
+          "grant.configure-session",
+          "grant.approve",
+          "grant.remote-work"
+        ],
+        "capabilityCeilingRef": "ceiling-91bd",
+        "cachePolicy": "no-content-cache",
+        "revoked": false
+      }
+    ]
+  }
+}

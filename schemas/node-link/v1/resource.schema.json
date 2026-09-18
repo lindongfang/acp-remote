@@ -1,0 +1,499 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/resource.schema.json",
+  "title": "ACP Remote Node Link v1 Resource Messages",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/resourceAttach"
+    },
+    {
+      "$ref": "#/$defs/resourceAttached"
+    },
+    {
+      "$ref": "#/$defs/resourceDetach"
+    },
+    {
+      "$ref": "#/$defs/resourceSubscribe"
+    },
+    {
+      "$ref": "#/$defs/resourceSnapshotBegin"
+    },
+    {
+      "$ref": "#/$defs/resourceSnapshotChunk"
+    },
+    {
+      "$ref": "#/$defs/resourceSnapshotEnd"
+    },
+    {
+      "$ref": "#/$defs/resourceEvent"
+    },
+    {
+      "$ref": "#/$defs/resourceAck"
+    }
+  ],
+  "$defs": {
+    "postAuthBase": {
+      "type": "object",
+      "required": [
+        "protocolVersion",
+        "type",
+        "messageId",
+        "connectionId",
+        "connectionSequence",
+        "body"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "messageId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionId": {
+          "$ref": "common.schema.json#/$defs/uuid"
+        },
+        "connectionSequence": {
+          "$ref": "common.schema.json#/$defs/decimalString"
+        }
+      }
+    },
+    "attachmentId": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "attachmentGeneration": {
+      "$ref": "common.schema.json#/$defs/decimalString"
+    },
+    "snapshotItem.session_meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionRef",
+        "sessionMeta"
+      ],
+      "properties": {
+        "sessionRef": {
+          "$ref": "common.schema.json#/$defs/remoteSessionRef"
+        },
+        "sessionMeta": {
+          "$ref": "common.schema.json#/$defs/sessionMeta"
+        }
+      }
+    },
+    "snapshotItem.pending_interactions": {
+      "$ref": "common.schema.json#/$defs/pendingInteraction"
+    },
+    "resourceAttach": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.attach"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "remoteSessionRef"
+              ],
+              "properties": {
+                "remoteSessionRef": {
+                  "$ref": "common.schema.json#/$defs/remoteSessionRef"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceAttached": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.attached"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attachmentId",
+                "attachmentGeneration",
+                "sessionMeta"
+              ],
+              "properties": {
+                "attachmentId": {
+                  "$ref": "#/$defs/attachmentId"
+                },
+                "attachmentGeneration": {
+                  "$ref": "#/$defs/attachmentGeneration"
+                },
+                "sessionMeta": {
+                  "$ref": "common.schema.json#/$defs/sessionMeta"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceDetach": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.detach"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attachmentId",
+                "reason"
+              ],
+              "properties": {
+                "attachmentId": {
+                  "$ref": "#/$defs/attachmentId"
+                },
+                "reason": {
+                  "enum": [
+                    "client_request",
+                    "export_revoked",
+                    "owner_unavailable"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceSubscribe": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.subscribe"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attachmentId",
+                "attachmentGeneration",
+                "cursor"
+              ],
+              "properties": {
+                "attachmentId": {
+                  "$ref": "#/$defs/attachmentId"
+                },
+                "attachmentGeneration": {
+                  "$ref": "#/$defs/attachmentGeneration"
+                },
+                "cursor": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/originCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceSnapshotBegin": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.snapshot_begin"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "snapshotId",
+                "cursor",
+                "schemaVersion",
+                "chunkCount"
+              ],
+              "properties": {
+                "snapshotId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "cursor": {
+                  "$ref": "common.schema.json#/$defs/originCursor"
+                },
+                "schemaVersion": {
+                  "const": 1
+                },
+                "chunkCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceSnapshotChunk": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.snapshot_chunk"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "snapshotId",
+                "chunkIndex",
+                "resource",
+                "items"
+              ],
+              "properties": {
+                "snapshotId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "chunkIndex": {
+                  "$ref": "common.schema.json#/$defs/decimalString"
+                },
+                "resource": {
+                  "enum": [
+                    "session_meta",
+                    "pending_interactions"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "maxItems": 500
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "resource": {
+                        "const": "session_meta"
+                      }
+                    },
+                    "required": [
+                      "resource"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": {
+                        "maxItems": 1,
+                        "items": {
+                          "$ref": "#/$defs/snapshotItem.session_meta"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "resource": {
+                        "const": "pending_interactions"
+                      }
+                    },
+                    "required": [
+                      "resource"
+                    ]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": {
+                        "items": {
+                          "$ref": "#/$defs/snapshotItem.pending_interactions"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceSnapshotEnd": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.snapshot_end"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "snapshotId",
+                "cursor",
+                "chunkCount",
+                "snapshotDigest"
+              ],
+              "properties": {
+                "snapshotId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "cursor": {
+                  "$ref": "common.schema.json#/$defs/originCursor"
+                },
+                "chunkCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100000
+                },
+                "snapshotDigest": {
+                  "$ref": "common.schema.json#/$defs/base64url32"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceEvent": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.event"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "originEventId",
+                "originEpoch",
+                "originSequence",
+                "eventType",
+                "payloadDigest",
+                "createdAt",
+                "payload"
+              ],
+              "properties": {
+                "originEventId": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "originEpoch": {
+                  "$ref": "common.schema.json#/$defs/uuid"
+                },
+                "originSequence": {
+                  "$ref": "common.schema.json#/$defs/decimalString"
+                },
+                "eventType": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[a-z0-9_.-]+$"
+                },
+                "payloadDigest": {
+                  "$ref": "common.schema.json#/$defs/base64url32"
+                },
+                "createdAt": {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "view"
+                  ],
+                  "properties": {
+                    "view": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "description": "开放扩展点：事件视图。缺少已协商 feature 允许的字段时按未知事件降级处理，不得在安全或授权决策中解释未登记字段。"
+                    },
+                    "acp": {
+                      "$ref": "common.schema.json#/$defs/rawAcp"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "resourceAck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/postAuthBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resource.ack"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cursor"
+              ],
+              "properties": {
+                "cursor": {
+                  "$ref": "common.schema.json#/$defs/originCursor"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

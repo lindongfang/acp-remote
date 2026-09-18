@@ -1,9 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
+
+// structural contract → schemas/acp/compatibility-matrix.schema.json (validated by ajv)
+// semantic contract  → the checks below, which a schema cannot express: upstream
+// coverage sets, per-row uniqueness, test-family membership and fixture existence.
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const matrixPath = resolve(root, "compatibility", "acp", "v1", "matrix.json");
+const schemaPath = resolve(root, "schemas", "acp", "compatibility-matrix.schema.json");
 const errors = [];
 
 function readJson(path, label = relative(root, path)) {
@@ -15,8 +22,38 @@ function readJson(path, label = relative(root, path)) {
   }
 }
 
-const matrix = readJson(matrixPath);
+function summarize(validateErrors) {
+  if ((validateErrors ?? []).length === 0) return "";
+  const list = [...validateErrors];
+  const depth = (error) => (error.instancePath || "").split("/").length;
+  const deepest = Math.max(...list.map(depth));
+  return list
+    .filter((error) => depth(error) === deepest)
+    .slice(0, 3)
+    .map((error) => `${error.instancePath || "/"} ${error.keyword}${error.message ? ` ${error.message}` : ""}`)
+    .join(" | ");
+}
 
+const matrix = readJson(matrixPath);
+const matrixSchema = readJson(schemaPath);
+
+if (matrix && matrixSchema) {
+  const ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: true });
+  addFormats(ajv);
+  try {
+    const validate = ajv.compile(matrixSchema);
+    if (!validate(matrix)) {
+      errors.push(`matrix.json violates its schema: ${summarize(validate.errors)}`);
+      for (const error of validate.errors ?? []) {
+        errors.push(`  schema: ${error.instancePath || "/"} ${error.keyword} ${JSON.stringify(error.params ?? {})}`);
+      }
+    }
+  } catch (error) {
+    errors.push(`cannot compile matrix schema: ${error.message}`);
+  }
+}
+
+// Names that must exist because the pinned upstream snapshot defines them.
 const expected = {
   methods: [
     "$/cancel_request", "authenticate", "elicitation/complete", "elicitation/create",
@@ -56,58 +93,44 @@ const expected = {
   ]
 };
 
-function compareSet(label, actual, wanted) {
-  const sortedActual = [...actual].sort();
-  const sortedWanted = [...wanted].sort();
-  if (JSON.stringify(sortedActual) !== JSON.stringify(sortedWanted)) {
-    const missing = sortedWanted.filter((value) => !sortedActual.includes(value));
-    const extra = sortedActual.filter((value) => !sortedWanted.includes(value));
-    if (missing.length) errors.push(`${label}: missing ${missing.join(", ")}`);
-    if (extra.length) errors.push(`${label}: unexpected ${extra.join(", ")}`);
-  }
-}
+const nodeLinkSliceMethods = ["initialize", "session/new", "session/prompt", "session/cancel", "session/update"];
 
-function checkRows(groupName, rows, key) {
-  const allowedLayers = {
-    acp: new Set(["native", "raw_preserve", "transport_control"]),
-    broker: new Set(["project_and_preserve", "local_service", "pass_through", "explicit_unsupported", "not_applicable"]),
-    sync: new Set(["command", "event", "snapshot", "raw_fallback", "explicit_unsupported", "not_exposed"]),
-    pwa: new Set(["full", "view_only", "explicit_unsupported", "not_applicable"]),
-    facade: new Set(["baseline", "advertise_if_end_to_end", "not_advertised", "not_applicable"])
-  };
-  const allowedDeliveries = new Set(["mvp", "conditional_mvp", "post_mvp", "always"]);
-  const ids = new Set();
-  const values = new Set();
-  for (const row of rows ?? []) {
-    if (!row.id || ids.has(row.id)) errors.push(`${groupName}: missing/duplicate id ${row.id}`);
-    ids.add(row.id);
-    if (!row[key] || values.has(row[key])) errors.push(`${groupName}: missing/duplicate ${key} ${row[key]}`);
-    values.add(row[key]);
-    if (!row.layers || Object.keys(row.layers).sort().join(",") !== "acp,broker,facade,pwa,sync") {
-      errors.push(`${row.id}: layers must contain exactly acp, broker, sync, pwa, facade`);
-    }
-    for (const [layer, value] of Object.entries(row.layers ?? {})) {
-      if (!allowedLayers[layer]?.has(value)) errors.push(`${row.id}: invalid ${layer} behavior ${value}`);
-    }
-    if (!allowedDeliveries.has(row.delivery)) errors.push(`${row.id}: invalid delivery ${row.delivery}`);
-    if (!Array.isArray(row.tests) || row.tests.length === 0) errors.push(`${row.id}: tests must not be empty`);
-    if (Object.values(row.layers ?? {}).includes("silent_drop")) errors.push(`${row.id}: silent_drop is forbidden`);
+const requiredInvariants = [
+  "invariant.unknown_fields_byte_exact",
+  "invariant.tool_call_stays_structured",
+  "invariant.capability_truthful",
+  "invariant.future_update_visible",
+  "invariant.node_link_raw_byte_exact",
+  "invariant.node_link_capability_intersection"
+];
+
+const groups = [
+  { name: "methods", rows: matrix?.methods, key: "wireName", wanted: expected.methods },
+  { name: "sessionUpdates", rows: matrix?.sessionUpdates, key: "wireValue", wanted: expected.sessionUpdates },
+  { name: "contentBlocks", rows: matrix?.contentBlocks, key: "wireValue", wanted: expected.contentBlocks },
+  { name: "toolCallContents", rows: matrix?.toolCallContents, key: "wireValue", wanted: expected.toolCallContents },
+  { name: "capabilities", rows: matrix?.capabilities, key: "path", wanted: expected.capabilities },
+];
+
+for (const group of groups) {
+  const keys = (group.rows ?? []).map((row) => row[group.key]);
+  const missing = group.wanted.filter((value) => !keys.includes(value));
+  const extra = keys.filter((value) => !group.wanted.includes(value));
+  if (missing.length) errors.push(`${group.name}: missing ${missing.join(", ")}`);
+  if (extra.length) errors.push(`${group.name}: unexpected ${extra.join(", ")}`);
+  const seen = new Set();
+  for (const key of keys) {
+    if (seen.has(key)) errors.push(`${group.name}: duplicate ${group.key} ${key}`);
+    seen.add(key);
   }
-  return values;
+  const ids = new Set();
+  for (const row of group.rows ?? []) {
+    if (!row.id || ids.has(row.id)) errors.push(`${group.name}: missing/duplicate id ${row.id}`);
+    ids.add(row.id);
+  }
 }
 
 if (matrix) {
-  if (matrix.protocol?.wireVersion !== 1) errors.push("protocol.wireVersion must be 1");
-  if (!/^[0-9a-f]{40}$/.test(matrix.protocol?.sourceCommit ?? "")) errors.push("protocol.sourceCommit must be pinned");
-  if (!/^[0-9a-f]{64}$/.test(matrix.protocol?.schemaSha256 ?? "")) errors.push("protocol.schemaSha256 must be pinned");
-  if (matrix.nodeLinkPolicy?.hopLimit !== 1) errors.push("nodeLinkPolicy.hopLimit must be 1 for the first release");
-  if (matrix.nodeLinkPolicy?.capabilityRule !== "end_to_end_intersection") errors.push("nodeLinkPolicy must require end-to-end capability intersection");
-  if (matrix.nodeLinkPolicy?.rawAcp !== "byte_exact_or_explicit_raw_unavailable") errors.push("nodeLinkPolicy must preserve raw ACP or fail explicitly");
-  if (matrix.nodeLinkPolicy?.contentPersistence !== "owner_only_default") errors.push("nodeLinkPolicy must keep session content on the Owner by default");
-  if (matrix.nodeLinkPolicy?.trustModel !== "access_node_principal") errors.push("nodeLinkPolicy must use the Access Node as the first-release principal");
-  if (matrix.nodeLinkPolicy?.remoteSessionCreate !== "exported_agent_and_workspace_template_only") errors.push("nodeLinkPolicy must constrain remote session creation to exported Agents and workspace templates");
-  if (matrix.nodeLinkPolicy?.routeFencing !== "attachment_generation") errors.push("nodeLinkPolicy must fence stale session routes with attachment generations");
-
   const familyIds = new Set((matrix.testFamilies ?? []).map((family) => family.id));
   const allRows = [
     ...(matrix.methods ?? []), ...(matrix.sessionUpdates ?? []), ...(matrix.contentBlocks ?? []),
@@ -122,26 +145,13 @@ if (matrix) {
     if (!familyIds.has(test)) errors.push(`nodeLinkPolicy: unknown test family ${test}`);
   }
 
-  compareSet("methods", checkRows("methods", matrix.methods, "wireName"), expected.methods);
-  compareSet("sessionUpdates", checkRows("sessionUpdates", matrix.sessionUpdates, "wireValue"), expected.sessionUpdates);
-  compareSet("contentBlocks", checkRows("contentBlocks", matrix.contentBlocks, "wireValue"), expected.contentBlocks);
-  compareSet("toolCallContents", checkRows("toolCallContents", matrix.toolCallContents, "wireValue"), expected.toolCallContents);
-  compareSet("capabilities", checkRows("capabilities", matrix.capabilities, "path"), expected.capabilities);
-
-  for (const method of matrix.methods ?? []) {
-    if (method.requirement === "optional" && !method.capability) errors.push(`${method.id}: optional method lacks capability gate`);
-    if (method.layers?.facade === "baseline" && method.requirement !== "baseline") errors.push(`${method.id}: facade baseline overclaims a non-baseline method`);
-  }
-  for (const wireName of ["initialize", "session/new", "session/prompt", "session/cancel", "session/update"]) {
+  for (const wireName of nodeLinkSliceMethods) {
     const method = (matrix.methods ?? []).find((row) => row.wireName === wireName);
-    if (!method?.tests?.includes("node_link.contract")) errors.push(`${wireName}: first Node Link vertical slice requires node_link.contract`);
+    if (!method?.tests?.includes("node_link.contract")) {
+      errors.push(`${wireName}: first Node Link vertical slice requires node_link.contract`);
+    }
   }
 
-  const requiredInvariants = new Set([
-    "invariant.unknown_fields_byte_exact", "invariant.tool_call_stays_structured",
-    "invariant.capability_truthful", "invariant.future_update_visible",
-    "invariant.node_link_raw_byte_exact", "invariant.node_link_capability_intersection"
-  ]);
   const invariantIds = new Set();
   for (const item of matrix.invariants ?? []) {
     invariantIds.add(item.id);
@@ -152,16 +162,20 @@ if (matrix) {
       readJson(fixturePath, item.fixture);
     }
   }
-  for (const id of requiredInvariants) if (!invariantIds.has(id)) errors.push(`invariants: missing ${id}`);
+  for (const id of requiredInvariants) {
+    if (!invariantIds.has(id)) errors.push(`invariants: missing ${id}`);
+  }
 }
 
-if (errors.length) {
+if (errors.length > 0) {
   for (const error of errors) console.error(error);
   process.exitCode = 1;
 } else {
+  const counted = groups.map((group) => group.rows.length);
+  const rowCount = counted.reduce((total, value) => total + value, 0) + (matrix.invariants?.length ?? 0);
   console.log(
-    `ACP compatibility matrix OK: ${matrix.methods.length} methods, ` +
-    `${matrix.sessionUpdates.length} updates, ${matrix.contentBlocks.length} content blocks, ` +
-    `${matrix.toolCallContents.length} tool content types, ${matrix.capabilities.length} capabilities`
+    `ACP compatibility matrix OK: ${counted[0]} methods, ${counted[1]} updates, ${counted[2]} content blocks, ` +
+      `${counted[3]} tool content types, ${counted[4]} capabilities, ${matrix.invariants.length} invariants, ` +
+      `${matrix.testFamilies.length} test families (${rowCount} rows, schema validated by ajv)`,
   );
 }

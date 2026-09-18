@@ -1,0 +1,30 @@
+{
+  "description": "Public interoperability vector for the pairing host proof signature. Never use this key in production.",
+  "domain": "acp-remote/pairing-host-proof/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+    "canonicalOrigin": "https://work-pc.example.ts.net",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+    "devicePublicKey": "BDURrmwahG1VT1zJxcePFuA99mOsjir_PjPSmLRzhy55c_z4AbafU7p9ijvIwIirXpjGxx8A6adGmjoF7ul9yCc",
+    "serverNonceHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "pairingRequestId": "b2f3fbfa-c2c6-4f49-9e0c-643d152de18d"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAIGFjcC1yZW1vdGUvcGFpcmluZy1ob3N0LXByb29mL3YxAAoAAQAAAAIAAQACAAAAEL2y7CD5jE2Ht4nlQNUn74cAAwAAABAq4cB8kkJG6anSTsWMEw9JAAQAAAAQK8i5RCpPRqeMMbLECSP2CgAGAAAAHmh0dHBzOi8vd29yay1wYy5leGFtcGxlLnRzLm5ldAAHAAAAQQRSbXPFHXU2jRmej_Q5r6a-SISmWwooQMGfiui2PoCQaiiG_3wkhYybRVpEGzvgBsdAF2mT4cE2W2muamJ2L-HqAAgAAABBBDURrmwahG1VT1zJxcePFuA99mOsjir_PjPSmLRzhy55c_z4AbafU7p9ijvIwIirXpjGxx8A6adGmjoF7ul9yCcACQAAACAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHwAKAAAAICAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_AA0AAAAQsvP7-sLGT0meDGQ9FS3hjQ",
+    "transcriptSha256Hex": "28dc1f2a5ec541f9a109afc06cebab41d507002e699c827c4a2b9996622e6892",
+    "publicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+    "privateJwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "Um1zxR11No0Zno_0Oa-mvkiEplsKKEDBn4rotj6AkGo",
+      "y": "KIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+      "d": "viq2e67z5g1bU-m9xHVTPc-pNneAeKyl8XC1rRjTmYc"
+    },
+    "p1363Signature": "wI_LP43cjKQBwQtj604fPiab7eanZpjBJtRDf6Whjmjng61wKBdv7JIKhMOBLD1u9osNapOqp2YxlR5QR2RGmg"
+  }
+}

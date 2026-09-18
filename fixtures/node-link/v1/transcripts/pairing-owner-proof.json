@@ -1,0 +1,33 @@
+{
+  "description": "Public interoperability vector. Never use this key in production.",
+  "domain": "acp-remote/node-link-pairing-owner-proof/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    "accessNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "pairingId": "20212223-2425-4627-a829-2a2b2c2d2e2f",
+    "ownerPublicKeyHex": "046d42ec6d099afcf8d0a23a64b8c2078fe0e440bc102cd3455594eb0d2d8e020011f909aa6d032d95fc695cb232165b91c0387029010a3cf0d4c94dd119f1046a",
+    "accessPublicKeyHex": "0497041c95f567085ce410596040923bf6982586423434a42a652eb226a192e60ae4f91663dba85cbb027772763eb1fff64f91486ff10e41235b6d2878bdd3ef08",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "serverNonceHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "pairingRequestId": "30313233-3435-4637-8839-3a3b3c3d3e3f"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAK2FjcC1yZW1vdGUvbm9kZS1saW5rLXBhaXJpbmctb3duZXItcHJvb2YvdjEACQABAAAAAgABAAIAAAAQAAECAwQFRgeICQoLDA0ODwADAAAAEBAREhMUFUYXmBkaGxwdHh8ABAAAABAgISIjJCVGJ6gpKissLS4vAAcAAABBBG1C7G0Jmvz40KI6ZLjCB4_g5EC8ECzTRVWU6w0tjgIAEfkJqm0DLZX8aVyyMhZbkcA4cCkBCjzw1MlN0RnxBGoACAAAAEEElwQclfVnCFzkEFlgQJI79pglhkI0NKQqZS6yJqGS5grk-RZj26hcuwJ3cnY-sf_2T5FIb_EOQSNbbSh4vdPvCAAJAAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAAoAAAAgICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8ADQAAABAwMTIzNDVGN4g5Ojs8PT4_",
+    "transcriptSha256Hex": "1eac98f11ced5e5d7cbe2973862b53b16813ac20d67f4b1cbc078e0beae405b3",
+    "publicKey": "BG1C7G0Jmvz40KI6ZLjCB4_g5EC8ECzTRVWU6w0tjgIAEfkJqm0DLZX8aVyyMhZbkcA4cCkBCjzw1MlN0RnxBGo",
+    "privateJwk": {
+      "crv": "P-256",
+      "d": "Pf6Y_C7q6AGuMO8o5FCypJ4nVx0LpHbvTf99EheF-rY",
+      "ext": true,
+      "key_ops": [
+        "sign"
+      ],
+      "kty": "EC",
+      "x": "bULsbQma_PjQojpkuMIHj-DkQLwQLNNFVZTrDS2OAgA",
+      "y": "EfkJqm0DLZX8aVyyMhZbkcA4cCkBCjzw1MlN0RnxBGo"
+    },
+    "p1363Signature": "4WvJon88osgfOazwWB9A7IQKkx9cyFuNeg6KMQNi0rAWkZ7F1cu_co6Zsoiy3P-RWv3HzIwP9ujl8-cG6MMymw"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "description": "Public interoperability vector. Never use this key in production.",
+  "domain": "acp-remote/node-link-pairing-status/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    "accessNodeId": "10111213-1415-4617-9819-1a1b1c1d1e1f",
+    "pairingId": "20212223-2425-4627-a829-2a2b2c2d2e2f",
+    "pairingRequestId": "30313233-3435-4637-8839-3a3b3c3d3e3f",
+    "requestNonceHex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAJmFjcC1yZW1vdGUvbm9kZS1saW5rLXBhaXJpbmctc3RhdHVzL3YxAAYAAQAAAAIAAQACAAAAEAABAgMEBUYHiAkKCwwNDg8AAwAAABAQERITFBVGF5gZGhscHR4fAAQAAAAQICEiIyQlRieoKSorLC0uLwANAAAAEDAxMjM0NUY3iDk6Ozw9Pj8AEAAAACBAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eXw",
+    "transcriptSha256Hex": "c67fd9b64288a51c29eb7fef2cccb7742b1ed61e957d6312b9423e294fff4564",
+    "hmacKeyBase64url": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8",
+    "hmacSha256": "NQCh6hZ45_KX1M5o6IE5OMrKIFFihyS4-Aktd-GGGP0"
+  }
+}

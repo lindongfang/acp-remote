@@ -12,6 +12,7 @@
     "eventType": "agent.message.delta",
     "causationRequestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
     "origin": { "kind": "agent", "deviceId": null },
+    "remoteOrigin": null,
     "createdAt": "2026-09-17T12:10:00.123Z",
     "payload": {
       "view": {

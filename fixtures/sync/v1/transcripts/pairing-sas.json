@@ -1,0 +1,23 @@
+{
+  "description": "Public interoperability vector for the pairing short authentication string. Never use these values in production.",
+  "domain": "acp-remote/pairing-sas/v1",
+  "codec": "acpr-transcript-v1",
+  "input": {
+    "protocolVersion": 1,
+    "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+    "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+    "pairingId": "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+    "canonicalOrigin": "https://work-pc.example.ts.net",
+    "clientNonceHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "hostPublicKey": "BFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eo",
+    "devicePublicKey": "BDURrmwahG1VT1zJxcePFuA99mOsjir_PjPSmLRzhy55c_z4AbafU7p9ijvIwIirXpjGxx8A6adGmjoF7ul9yCc",
+    "serverNonceHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "pairingRequestId": "b2f3fbfa-c2c6-4f49-9e0c-643d152de18d"
+  },
+  "expected": {
+    "transcriptBase64url": "QUNQUgEAGWFjcC1yZW1vdGUvcGFpcmluZy1zYXMvdjEACgABAAAAAgABAAIAAAAQvbLsIPmMTYe3ieVA1SfvhwADAAAAECrhwHySQkbpqdJOxYwTD0kABAAAABAryLlEKk9Gp4wxssQJI_YKAAYAAAAeaHR0cHM6Ly93b3JrLXBjLmV4YW1wbGUudHMubmV0AAcAAABBBFJtc8UddTaNGZ6P9Dmvpr5IhKZbCihAwZ-K6LY-gJBqKIb_fCSFjJtFWkQbO-AGx0AXaZPhwTZbaa5qYnYv4eoACAAAAEEENRGubBqEbVVPXMnFx48W4D32Y6yOKv8-M9KYtHOHLnlz_PgBtp9Tun2KO8jAiKtemMbHHwDpp0aaOgXu6X3IJwAJAAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAAoAAAAgICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8ADQAAABCy8_v6wsZPSZ4MZD0VLeGN",
+    "transcriptSha256Hex": "d23aa60bc7a4eb210f53cbd25a80b25b19e334f6fe6e0ee2c231c9c7c8ca7f80",
+    "hmacKeyBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+    "hmacSha256": "Cfq3QJ_xvIWOTBIW6w4ADM77QjxvMwUa8Od2EMjYxNU"
+  }
+}

@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/node-link/v1/common.schema.json",
+  "title": "ACP Remote Node Link v1 Common Types",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "decimalString": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "base64url16": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 22, "maxLength": 22 }
+      ]
+    },
+    "base64url32": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 43, "maxLength": 43 }
+      ]
+    },
+    "base64url64": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 86, "maxLength": 86 }
+      ]
+    },
+    "base64url65": {
+      "allOf": [
+        { "$ref": "#/$defs/base64url" },
+        { "minLength": 87, "maxLength": 87 }
+      ]
+    },
+    "featureId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9.-]+$"
+    },
+    "featureList": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/featureId" }
+    },
+    "exportId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "agentId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "workspaceAlias": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "description": "Owner 发布的 workspace 符号名；不是路径，绝对路径在语法上无法通过。"
+    },
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Owner 侧不透明引用（capability ceiling 等）。接收方不得解释其内容，只能原样回传。"
+    },
+    "nodeKind": {
+      "enum": ["owner", "access"]
+    },
+    "nodeName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "grantName": {
+      "enum": [
+        "grant.observe",
+        "grant.interact",
+        "grant.configure-session",
+        "grant.approve",
+        "grant.remote-work"
+      ],
+      "description": "跨节点导出授权，取值与 compatibility/commands/v1/commands.json 的 grants 键完全一致。"
+    },
+    "grantList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/grantName" }
+    },
+    "originCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originEpoch", "originSequence"],
+      "properties": {
+        "originEpoch": { "$ref": "#/$defs/uuid" },
+        "originSequence": { "$ref": "#/$defs/decimalString" }
+      }
+    },
+    "remoteSessionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerNodeId", "exportId", "sessionId"],
+      "properties": {
+        "ownerNodeId": { "$ref": "#/$defs/uuid" },
+        "exportId": { "$ref": "#/$defs/exportId" },
+        "sessionId": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "sessionState": {
+      "enum": ["idle", "queued", "running", "waiting_input", "waiting_permission", "failed", "closed"]
+    },
+    "sessionMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "version"],
+      "properties": {
+        "state": { "$ref": "#/$defs/sessionState" },
+        "version": { "$ref": "#/$defs/decimalString" }
+      }
+    },
+    "pendingInteraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interactionId", "kind", "createdAt", "payloadDigest"],
+      "properties": {
+        "interactionId": { "$ref": "#/$defs/uuid" },
+        "kind": { "enum": ["permission", "elicitation"] },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "payloadDigest": { "$ref": "#/$defs/base64url32" }
+      }
+    },
+    "exportAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentId", "name", "capabilitiesRef"],
+      "properties": {
+        "agentId": { "$ref": "#/$defs/agentId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "capabilitiesRef": { "$ref": "#/$defs/opaqueRef" }
+      }
+    },
+    "workspaceAliasEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "displayName"],
+      "properties": {
+        "alias": { "$ref": "#/$defs/workspaceAlias" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "exportEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exportId", "displayName", "agents", "workspaceAliases", "scopes", "capabilityCeilingRef", "cachePolicy", "revoked"],
+      "properties": {
+        "exportId": { "$ref": "#/$defs/exportId" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "agents": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/exportAgent" }
+        },
+        "workspaceAliases": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/workspaceAliasEntry" }
+        },
+        "scopes": { "$ref": "#/$defs/grantList" },
+        "capabilityCeilingRef": { "$ref": "#/$defs/opaqueRef" },
+        "cachePolicy": { "const": "no-content-cache" },
+        "revoked": { "type": "boolean" }
+      }
+    },
+    "publicError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable", "details"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9_.-]+$"
+        },
+        "message": { "type": "string", "maxLength": 1024 },
+        "retryable": { "type": "boolean" },
+        "details": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "开放扩展点：错误补充信息，客户端不得据此做安全或授权决策。"
+        }
+      }
+    },
+    "rawAcp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mediaType", "rawJson", "byteLength", "sha256"],
+          "properties": {
+            "mediaType": { "const": "application/json" },
+            "rawJson": { "type": "string" },
+            "byteLength": { "$ref": "#/$defs/decimalString" },
+            "sha256": { "$ref": "#/$defs/base64url32" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mediaType", "rawUnavailable"],
+          "properties": {
+            "mediaType": { "const": "application/json" },
+            "rawUnavailable": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reason", "byteLength", "sha256"],
+              "properties": {
+                "reason": { "enum": ["size_limit", "retention_expired", "storage_failure"] },
+                "byteLength": { "$ref": "#/$defs/decimalString" },
+                "sha256": {
+                  "oneOf": [{ "$ref": "#/$defs/base64url32" }, { "type": "null" }]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxMessageBytes", "catalogSnapshotBatchSize", "resourceSnapshotBatchSize", "maxInFlightCommands", "maxPendingQueueBytes", "maxPendingQueueMessages", "heartbeatIntervalMs"],
+      "properties": {
+        "maxMessageBytes": { "type": "integer", "minimum": 1024 },
+        "catalogSnapshotBatchSize": { "type": "integer", "minimum": 1 },
+        "resourceSnapshotBatchSize": { "type": "integer", "minimum": 1 },
+        "maxInFlightCommands": { "type": "integer", "minimum": 1 },
+        "maxPendingQueueBytes": { "type": "integer", "minimum": 1024 },
+        "maxPendingQueueMessages": { "type": "integer", "minimum": 1 },
+        "heartbeatIntervalMs": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+      }
+    },
+    "transcriptCodec": {
+      "const": "acpr-transcript-v1",
+      "description": "与 SYNC_PROTOCOL.md §6.2 同一二进制 codec：magic ACPR、codecVersion 0x01。"
+    },
+    "transcriptDomain": {
+      "enum": [
+        "acp-remote/node-link-pairing-proof/v1",
+        "acp-remote/node-link-pairing-owner-proof/v1",
+        "acp-remote/node-link-pairing-sas/v1",
+        "acp-remote/node-link-pairing-status/v1",
+        "acp-remote/node-link-challenge/v1",
+        "acp-remote/node-link-proof/v1"
+      ],
+      "description": "Node Link v1 冻结的六个 domain，见 docs/NODE_LINK_PROTOCOL.md §9.2。"
+    },
+    "transcriptFieldTag": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16,
+      "description": "Node Link 独立 tag 表（1 protocolVersion u16be, 2 ownerNodeId UUID16, 3 accessNodeId UUID16, 4 pairingId UUID16, 5 pairingExpiresAt u64be, 6 catalogRevision u64be, 7 ownerPublicKey SEC1-65, 8 accessPublicKey SEC1-65, 9 clientNonce 32, 10 serverNonce 32, 11 connectionId UUID16, 12 negotiatedFeatures NUL-joined UTF-8, 13 pairingRequestId UUID16, 14 nodeName UTF-8, 15 nodeKind UTF-8, 16 requestNonce 32），见 docs/NODE_LINK_PROTOCOL.md §9.3。"
+    }
+  }
+}
