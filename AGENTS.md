@@ -185,7 +185,7 @@ core use_cases   -> core ports + core model
 - 正常运行路径不得使用 `unwrap()`、`expect()` 或无说明的 panic。
 - 异步任务必须有所有者、取消路径和关闭顺序，不能遗留 detached task。
 - 外部进程必须处理启动失败、超时、取消、异常退出、stderr 和完整进程树清理。
-- Windows 必须验证 Job Object 或等价的子进程树清理机制。
+- Windows 必须验证 Job Object 或等价的子进程树清理机制（2026-09-18 已用一次性探针验证：普通 spawn 会留孤儿，Job Object + `KILL_ON_JOB_CLOSE` 在 `TerminateJobObject` 与关句柄两种情形下都立即清空进程树；机制细节与实测数据见 `INITIAL_DESIGN.md` §16 第 4 条）。
 - 日志使用结构化字段并进行敏感信息脱敏；不要记录完整 prompt、密钥或认证 payload。
 - 新增依赖前检查其必要性、维护状态、许可证、平台支持和安全风险。
 - 保持公开 API 最小；第一阶段默认 workspace-private。

@@ -698,6 +698,12 @@ Linux x64 glibc
    - 2026-09-18 **已验证（手工探针）**：用一个不接收 `session/prompt` 就主动推流的假 ACP agent 驱动 Zed，Zed 正常显示外部 turn 的流式 `agent_message_chunk`、`agent_thought_chunk`（Thinking 块）、`tool_call` 与 diff 内容块，并显示**可交互**的 `session/request_permission` UI（Allow once / Reject），由 Zed 自己提交 `{"outcome":{"outcome":"selected","optionId":"allow-once"}}`。也就是说外部 turn 的权限请求不需要 facade 代答。
    - 仍未确认（都不阻塞，属"呈现更完整"而非"能否显示"）：`plan` 与 `usage_update` 是否渲染、外部 turn 进行中是否提供 Stop/取消按钮。
 4. Windows 上 Daemon、子进程树和休眠恢复行为。
+   - 2026-09-18 **子进程树清理已验证（一次性探针）**。探针零依赖（直接 FFI kernel32），源码留在 `%TEMP%\acpr-job-probe`（仓库外，未提交）。它造出「父 → 孙」两层进程树、每 50ms 写心跳，三种场景的结果：
+     - **普通 spawn**：杀掉父进程后孙进程**继续写**（探针退出后 `A.log` 仍在增长，实测 2 秒 +936 字节，只能靠 `taskkill` 收尸）——这正是「daemon 崩溃留下孤儿 Agent 进程」的风险；
+     - **Job Object + `TerminateJobObject`**：孙进程立即停止，前后字节数完全一致（922 → 922）；
+     - **Job Object + `KILL_ON_JOB_CLOSE` + 关句柄**（模拟 daemon 崩溃）：同样立即停止（900 → 900）。
+   - 结论：`agent-host` **必须**用 Job Object 管理 Agent 进程树，并把 `KILL_ON_JOB_CLOSE` 设在守护进程持有的 Job 上；探针实测生效的 `ExtendedLimitInformation` 布局（144 字节）与 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000` 可直接复用到实现里。
+   - 仍未验证：daemon 自身的休眠/唤醒行为（需要可运行的 daemon，属实现期）。
 5. 手机后台 WebSocket 被系统挂起后的恢复体验。
 6. WebCrypto P-256 密钥持久化及其与 Rust 的签名格式互操作性。
    - 2026-09-18 **Rust 侧已验证**。用 `p256 0.13.2`（`ecdsa 0.16.9`、`signature 2.2.0`）实现 transcript 编码、P1363 验签、HMAC-SHA256 与 SAS 派生，对 `fixtures/{sync,node-link}/v1/` 的固定向量逐项复算：12/12 重编码逐字节一致、6 个 P1363 签名验证通过、6 个 HMAC 重算一致、2 个 SAS 一致、20/20 畸形输入（transcript 结构错误与非法公钥）以声明的错误被拒。
