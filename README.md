@@ -45,6 +45,8 @@ npm run check
 
 `npm run check` 串行执行八个检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁）；② 命令目录的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及 `core::broker::required_grant` 这份 Rust 镜像；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑧ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）。
 
+CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push 与 PR 上跑同一批检查：`npm ci && npm run check`、`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`、`cargo test --locked --workspace --all-features`。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
+
 上游 ACP 固定快照（`schemas/acp/v1/upstream/schema.json`，来源与 sha256 见 `compatibility/acp/v1/matrix.json` 的 `protocol` 块）由 `check:acp` 重算 digest 并校验 commit 与 major 版本目录；`fixtures/acp/v1` 也按同一快照做 ajv 校验。升级快照必须同时改固定值、vendored 文件与矩阵行，且先通过 `node scripts/check-acp-compatibility.mjs`。
 
 Rust 侧改动完成后还需要（见 `AGENTS.md` §8）：
