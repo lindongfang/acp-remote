@@ -1,0 +1,24 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "0853b854-1cef-4bd0-b14a-4f7f73742d46",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "62",
+  "body": {
+    "globalSequence": "2351",
+    "sessionSequence": "211",
+    "eventId": "46e401c2-b015-47e7-849b-2d0fb0b06416",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "turn.delta_compacted",
+    "causationRequestId": null,
+    "origin": { "kind": "daemon", "deviceId": null },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:12:00.500Z",
+    "payload": {
+      "view": {
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaCount": "37"
+      }
+    }
+  }
+}

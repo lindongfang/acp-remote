@@ -2,7 +2,7 @@
 
 > 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。会话状态机、保留窗口、命令终态与授权判定尚未实现。  
 > 协议版本：1  
-> 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
+> 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
@@ -964,6 +964,7 @@ turn.started
 turn.completed
 turn.failed
 turn.cancelled
+turn.delta_compacted
 user.message.delta
 agent.message.delta
 agent.message.completed
@@ -989,7 +990,7 @@ device.revoked
 
 ### 10.3 v1 Event View Contract
 
-所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义。`view` 内的 JSON 取值域遵守 §3.3 的 ACPR-CJ1：数字必须是整数（`|n| ≤ 2^53−1`），不得出现浮点，否则 `payloadDigest` 无法跨实现复算。
+所有 `view` 都是 object。下面字段是最低必填合同；可以增加已协商 feature 所允许的可选字段，但不得改变既有字段语义。 三条跨字段规则： (a) `deltaIndex` 在**每条消息内**从 `0` 开始严格加一，由生产事件的适配器分配；空洞不是协议错误，也不表示丢包（检测丢包请用 `payloadDigest`/序号），消费方按现存的 `deltaIndex` 升序拼接； (b) `agent.message.completed` **由 Broker 在 turn 结束时生成**，与该 turn 的终态事件在**同一次提交**内落盘：正文按该消息的 delta（含可选 `block`）折叠，规则见 `CORE_PORTS_AND_STORAGE.md` §6 第 14 条；`agent.thought.delta` 不产生收尾事件（登记在案的短保留期降级）； (c) delta 被 `turn.delta_compacted` 压缩后，**重放里由该 summary 事件替代**（不再出现那些 delta）；客户端察觉 delta 丢失靠会话内 `sessionSequence` 的稠密性（§9.4），终态正文一律以 `agent.message.completed` 为准（`CORE_PORTS_AND_STORAGE.md` §6 第 15 条）。`view` 内的 JSON 取值域遵守 §3.3 的 ACPR-CJ1：数字必须是整数（`|n| ≤ 2^53−1`），不得出现浮点，否则 `payloadDigest` 无法跨实现复算。
 
 | Event type | `view` 最低字段 |
 |---|---|
@@ -1003,8 +1004,9 @@ device.revoked
 | `session.origin.online_changed` | `ownerNodeId: UUID`, `exportId: string`, `originEpoch: UUID`, `online: boolean` |
 | `turn.queued`, `turn.started`, `turn.completed`, `turn.cancelled` | `turnId`, `state` |
 | `turn.failed` | `turnId`, `state: "failed"`, `error: PublicError` |
+| `turn.delta_compacted` | `turnId`, `deltaCount: decimal string`——**只承载收据，不复制正文**；终态正文见 `agent.message.completed`。**不带** delta 摘要：客户端察觉 delta 丢失靠的是 §9.4 的「会话内 `sessionSequence` 无空洞」，那比一个自算摘要更强，而 ACPR-CJ1 摘要需要密码学依赖、Broker 层不允许持有（`CORE_PORTS_AND_STORAGE.md` §2） |
 | `user.message.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
-| `agent.message.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
+| `agent.message.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text`, 可选 `block: AgentContentBlock`（**仅**在非文本内容时出现；`text` 始终是该 chunk 的文本投影，纯文本客户端只读它）。`block` 由**生产事件的适配器**投影（它持有 ACP DTO），Broker 不解析 ACP 原文 |
 | `agent.message.completed` | `messageId`, `turnId`, `content: AgentContentBlock[]` |
 | `agent.thought.delta` | `messageId`, `turnId`, `deltaIndex: decimal string`, `text` |
 | `tool.call.started`, `tool.call.updated`, `tool.call.completed` | `toolCallId`, `turnId`, `title`, `state`; 摘要字段可选，完整 ACP 保留在 `acp` |

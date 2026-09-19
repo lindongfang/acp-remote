@@ -2,7 +2,7 @@
 //!
 //! 夹具的每条 `viewDef` 都声明了该 `payload.view` 在 `schemas/sync/v1/event-views.schema.json`
 //! 里对应的 `$defs` 条目；本测试要求投影结果落在**同一个** event 类型上，而不是"能解析成某个
-//! 视图"——后者在 33 个形状相近的视图之间几乎必然假通过。
+//! 视图"——后者在 34 个形状相近的视图之间几乎必然假通过。
 //!
 //! `views::VIEW_TYPES` 与 schema `$defs` 的逐条相等由 `tests/schema_drift.rs` 断言；本文件要求的
 //! 是另一半：**每个登记的视图都有夹具覆盖**，且夹具声明的绑定与投影结果一致。
@@ -19,10 +19,10 @@ use sync_protocol::views;
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
-/// 声明了 `viewDef` 的夹具数（`event-remote-origin.json` 与两条事件夹具复用同一批 event 类型）。
-const EXPECTED_VIEW_CASES: usize = 34;
+/// 声明了 `viewDef` 的夹具数（`event-remote-origin.json` 与三条事件夹具复用同一批 event 类型）。
+const EXPECTED_VIEW_CASES: usize = 36;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
-const EXPECTED_DISTINCT_VIEWS: usize = 33;
+const EXPECTED_DISTINCT_VIEWS: usize = 34;
 
 #[test]
 fn every_view_fixture_projects_onto_its_declared_event_type() {

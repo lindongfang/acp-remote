@@ -22,7 +22,7 @@ use crate::model::{
     CommandRecord, ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId,
     DeviceRecord, ElicitationAction, ElicitationValues, EntityRef, ExportId, ExportRecord,
     GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution, LocalCursor,
-    ModeId, NodeId, NodeRecord, OwnedSessionRef, PairingClaim, PairingId, PairingRecord,
+    ModeId, ModeState, NodeId, NodeRecord, OwnedSessionRef, PairingClaim, PairingId, PairingRecord,
     PairingSettlement, PortError, RequestId, Resolution, Sequence, SessionId, SessionReference,
     SessionSummary, Timestamp, Version,
 };
@@ -32,6 +32,13 @@ use crate::ports::{
     PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
     SessionQuery, SessionStore, StoreHealth, TrustRecordRef, TrustStore,
 };
+
+/// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModeListing {
+    pub state: ModeState,
+    pub version: Version,
+}
 
 /// §4 的用例面实现。组合根持有一个 `Arc<UseCases>`。
 pub struct UseCases {
@@ -314,6 +321,36 @@ impl UseCases {
                 Err(PortError::InvalidRequest("owned 会话的重放请使用 replay()"))
             }
         }
+    }
+
+    /// §6 第 17 条：`session.mode.list`。候选**只**来自 `SessionEndpoint::modes()`，版本取会话当前版本；
+    /// 端口返回空列表时结果就是空列表（不凭 `current_mode` 编造候选）。
+    pub async fn mode_list(
+        &self,
+        actor: &Actor,
+        reference: &SessionReference,
+    ) -> Result<ModeListing, PortError> {
+        let request = self.ids.request_id();
+        let session = owned_session(reference)?;
+        self.broker
+            .authorize(actor, "session.mode.list", Some(&session), &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let endpoint = self.broker.endpoint_for(reference).await?;
+        let state = endpoint.modes().await?;
+        let version = self.broker.session_version(&session).await?;
+        Ok(ModeListing { state, version })
+    }
+
+    /// §6 第 16 条：启动恢复（`LocalCli`）。组合根在取得单实例锁、开始监听**之前**调用；返回被终结的
+    /// 命令数。**不**自动重放副作用；广播一律发生在 `commit` 之后。
+    pub async fn recover_unsettled(
+        &self,
+        actor: &Actor,
+        limit: ReplayLimit,
+    ) -> Result<usize, PortError> {
+        self.require_local(actor)?;
+        self.broker.recover_unsettled(limit).await
     }
 
     pub async fn retention_window(
@@ -717,6 +754,7 @@ mod tests {
             BrokerConfig {
                 queue_policy: QueuePolicy::Queue,
                 max_queued_turns: 16,
+                persist_deltas: false,
             },
         ));
         let session = SessionId::new(&uuid_text(7)).expect("session id");

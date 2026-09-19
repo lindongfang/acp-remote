@@ -229,6 +229,13 @@ newtype!(
     check_uuid
 );
 newtype!(
+    /// 助手消息标识；由生产 delta 的适配器在该消息**第一条 delta 提交前**用
+    /// `IdGenerator::message_id` 分配，该消息的所有 delta 与其 `agent.message.completed` 复用同一个 id
+    /// （§3.1/§6 第 14 条）。
+    MessageId,
+    check_uuid
+);
+newtype!(
     /// turn 标识，由 core 的 `IdGenerator` 在派发前分配（§3.1 的 id 分配规则）。
     TurnId,
     check_uuid
@@ -337,6 +344,26 @@ impl AgentRef {
 pub struct ModeRef {
     mode_id: ModeId,
     display_name: String,
+}
+
+/// `session.mode.list` 的端口侧形状（§3.3/§6 第 17 条）：`version` 属于会话，由用例层补，不在本类型里。
+///
+/// `available` **只能**来自 `SessionEndpoint::modes()`；core 不得凭 `current_mode` 编造候选，端口返回空
+/// 列表时结果就是空列表。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModeState {
+    pub current_mode: Option<ModeRef>,
+    pub available: Vec<ModeRef>,
+}
+
+impl ModeState {
+    /// 构造。
+    pub fn new(current_mode: Option<ModeRef>, available: Vec<ModeRef>) -> Self {
+        Self {
+            current_mode,
+            available,
+        }
+    }
 }
 
 impl ModeRef {

@@ -93,6 +93,13 @@
       "valid": true
     },
     {
+      "fixture": "valid/view-agent-message-delta-block.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/agent.message.delta",
+      "valid": true
+    },
+    {
       "fixture": "valid/error-scope-denied.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
@@ -298,6 +305,13 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
       "viewDef": "#/$defs/turn.failed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-turn-delta-compacted.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.delta_compacted",
       "valid": true
     },
     {

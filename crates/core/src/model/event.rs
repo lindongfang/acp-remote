@@ -303,6 +303,8 @@ impl PendingEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommittedEvent {
     pub id: EventId,
+    /// 事件类型：必填，历史与重放都要能在 wire 上报出它（§3.3）。
+    pub event_type: EventType,
     pub session: Option<SessionId>,
     pub session_sequence: Option<Sequence>,
     pub global_sequence: Sequence,

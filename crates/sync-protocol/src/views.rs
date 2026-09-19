@@ -1,6 +1,6 @@
 //! `event.payload.view` 的类型化视图（`schemas/sync/v1/event-views.schema.json`）。
 //!
-//! 每个 `$defs` 条目对应一个公开 struct，名字是 eventType 的驼峰化；[`VIEW_TYPES`] 登记全部 33 个
+//! 每个 `$defs` 条目对应一个公开 struct，名字是 eventType 的驼峰化；[`VIEW_TYPES`] 登记全部 34 个
 //! eventType，[`project`] 按 eventType 把 `payload.view` 投影成 [`View`]。
 //!
 //! 视图是**开放对象**（schema 的 `additionalProperties: true`）：因此
@@ -401,6 +401,14 @@ pub struct AgentMessageDelta {
     #[serde(rename = "deltaIndex")]
     pub delta_index: DecimalString,
     pub text: Text<262144>,
+    /// 非 required：键缺失即该 chunk 只有文本投影（`text` 始终是投影，纯文本客户端只读它）；
+    /// 键存在时 schema 只允许 `agentContentBlock`，不接受 `null`。
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub block: Option<AgentContentBlock>,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }
@@ -691,6 +699,21 @@ pub struct TurnCompleted {
     pub extra: ExtraFields,
 }
 
+/// `turn.delta_compacted`（`event-views.schema.json#/$defs/turn.delta_compacted`）。
+///
+/// summary 事件**只承载收据**（`turnId` + `deltaCount`），不复制正文：它替代被压缩掉的那些
+/// `kind='delta'` 事件出现在重放里，终态正文一律以 `agent.message.completed` 为准
+/// （`docs/SYNC_PROTOCOL.md` §10.3(c)、`docs/CORE_PORTS_AND_STORAGE.md` §6 第 15 条）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnDeltaCompacted {
+    #[serde(rename = "turnId")]
+    pub turn_id: Uuid,
+    #[serde(rename = "deltaCount")]
+    pub delta_count: DecimalString,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
 /// `turn.failed`（`event-views.schema.json#/$defs/turn.failed`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnFailed {
@@ -744,8 +767,8 @@ pub struct UserMessageDelta {
 /// `tests/schema_drift.rs::view_types_match_schema_defs` 逐条比较的那个顺序。
 macro_rules! view_registry {
     ($( $event_type:literal => $variant:ident($ty:ty) ),+ $(,)?) => {
-        /// 全部 33 个登记 eventType，与 `event-views.schema.json` 的 `$defs` 键集合逐条相等。
-        pub const VIEW_TYPES: [&str; 33] = [ $( $event_type ),+ ];
+        /// 全部 34 个登记 eventType，与 `event-views.schema.json` 的 `$defs` 键集合逐条相等。
+        pub const VIEW_TYPES: [&str; 34] = [ $( $event_type ),+ ];
 
         /// 投影结果：一个登记 eventType 一个变体，负载是对应的类型化视图。
         #[derive(Debug, Clone, Serialize)]
@@ -811,6 +834,7 @@ view_registry! {
     "tool.call.updated" => ToolCallUpdated(ToolCallUpdated),
     "turn.cancelled" => TurnCancelled(TurnCancelled),
     "turn.completed" => TurnCompleted(TurnCompleted),
+    "turn.delta_compacted" => TurnDeltaCompacted(TurnDeltaCompacted),
     "turn.failed" => TurnFailed(TurnFailed),
     "turn.queued" => TurnQueued(TurnQueued),
     "turn.started" => TurnStarted(TurnStarted),

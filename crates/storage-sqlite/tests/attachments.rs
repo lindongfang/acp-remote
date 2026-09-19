@@ -35,6 +35,7 @@ async fn session(store: &SqliteStore) -> acp_core::model::SessionId {
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(
@@ -217,5 +218,84 @@ async fn prune_lru_removes_the_oldest_attachments_first() {
     let report = store.prune_lru(0, at(5)).await.expect("prune");
     assert_eq!(report.removed_attachments, 2);
     assert!(!report.still_over_limit);
+    store.close().await;
+}
+
+/// §6 第 18 条：孤儿回收只删「不在表里**且** `mtime < at`」的文件；表内文件与「表外但 mtime ≥ at」的
+/// 文件必须保留；`limit` 生效，`limit = 0` 不删。
+///
+/// 测试不改文件 mtime（std 无安全 API）：用**未来**的 `at` 让孤儿成为「陈旧」，用**过去**的 `at`
+/// （2000-01-01）让刚写下的文件成为「可能正在写」。
+#[tokio::test]
+async fn sweep_orphans_only_removes_stale_untracked_files() {
+    let dir = temp_dir("attachments-orphans");
+    let store = store(&dir, 1024 * 1024).await;
+    let tracked = store
+        .put(b"tracked", "text/plain", at(1))
+        .await
+        .expect("put");
+    let attachments = dir.join("attachments");
+
+    let orphan_a = attachments.join("orphan-a");
+    let orphan_b = attachments.join("orphan-b");
+    std::fs::write(&orphan_a, b"stale").expect("orphan a");
+    std::fs::write(&orphan_b, b"stale").expect("orphan b");
+
+    // (1) `limit = 0` 不删任何文件。
+    assert_eq!(
+        store
+            .sweep_orphans(Timestamp::new("2100-01-01T00:00:00.000Z").expect("at"), 0)
+            .await
+            .expect("sweep"),
+        0
+    );
+    assert!(orphan_a.exists() && orphan_b.exists());
+
+    // (2) 未来的 `at` → 两个孤儿都陈旧、被删；表内文件与表行都不受影响。
+    assert_eq!(
+        store
+            .sweep_orphans(Timestamp::new("2100-01-01T00:00:00.000Z").expect("at"), 10)
+            .await
+            .expect("sweep"),
+        2
+    );
+    assert!(!orphan_a.exists() && !orphan_b.exists(), "orphans removed");
+    assert!(
+        attachments
+            .join(tracked.relative_path.rsplit('/').next().expect("name"))
+            .exists(),
+        "a tracked file must never be swept"
+    );
+    let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_attachment").await,
+        1,
+        "sweeping files must not touch the table"
+    );
+    pool.close().await;
+
+    // (3) 刚写下的孤儿 + 过去的 `at` → mtime >= at，必须保留（可能正在写、行还没提交）。
+    std::fs::write(&orphan_a, b"fresh").expect("fresh orphan");
+    assert_eq!(
+        store
+            .sweep_orphans(Timestamp::new("2000-01-01T00:00:00.000Z").expect("at"), 10)
+            .await
+            .expect("sweep"),
+        0
+    );
+    assert!(
+        orphan_a.exists(),
+        "a fresh orphan may be mid-write: keep it"
+    );
+
+    // (4) `limit` 生效：同一次只删 1 个。
+    assert_eq!(
+        store
+            .sweep_orphans(Timestamp::new("2100-01-01T00:00:00.000Z").expect("at"), 1)
+            .await
+            .expect("sweep"),
+        1
+    );
+    assert!(!orphan_a.exists(), "the oldest-name orphan goes first");
     store.close().await;
 }

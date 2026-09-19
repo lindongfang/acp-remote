@@ -1231,6 +1231,7 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
     let sequence = Sequence::new(1).expect("sequence");
     let event = CommittedEvent {
         id: EventId::from_str(UUID_B).expect("event id"),
+        event_type: EventType::new("agent.message.delta").expect("event type"),
         session: Some(session_id()),
         session_sequence: Some(sequence),
         global_sequence: sequence,

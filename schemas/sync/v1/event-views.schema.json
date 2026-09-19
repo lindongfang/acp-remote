@@ -160,6 +160,15 @@
       },
       "additionalProperties": true
     },
+    "turn.delta_compacted": {
+      "type": "object",
+      "required": ["turnId", "deltaCount"],
+      "properties": {
+        "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "deltaCount": { "$ref": "common.schema.json#/$defs/decimalString" }
+      },
+      "additionalProperties": true
+    },
     "user.message.delta": {
       "type": "object",
       "required": ["messageId", "turnId", "deltaIndex", "text"],
@@ -178,7 +187,8 @@
         "messageId": { "$ref": "common.schema.json#/$defs/uuid" },
         "turnId": { "$ref": "common.schema.json#/$defs/uuid" },
         "deltaIndex": { "$ref": "common.schema.json#/$defs/decimalString" },
-        "text": { "type": "string", "maxLength": 262144 }
+        "text": { "type": "string", "maxLength": 262144 },
+        "block": { "$ref": "common.schema.json#/$defs/agentContentBlock" }
       },
       "additionalProperties": true
     },

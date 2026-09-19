@@ -1,0 +1,32 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "5de3fae8-522e-4e24-8202-3d0f669d9596",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "43",
+  "body": {
+    "globalSequence": "2319",
+    "sessionSequence": "110",
+    "eventId": "7ac48050-f768-47ad-bd9f-a7b1a7307122",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "agent.message.delta",
+    "causationRequestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
+    "origin": { "kind": "agent", "deviceId": null },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:10:00.223Z",
+    "payload": {
+      "view": {
+        "messageId": "7daf617d-0048-41d0-8486-629570be64d6",
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaIndex": "1",
+        "text": "[图片]",
+        "block": {
+          "type": "image_ref",
+          "mimeType": "image/png",
+          "byteLength": "18422",
+          "displayState": "available"
+        }
+      }
+    }
+  }
+}

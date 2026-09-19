@@ -253,6 +253,13 @@
       "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
       "viewDef": "#/$defs/session.created",
       "valid": true
+    },
+    {
+      "fixture": "valid/resource-event-view-turn-delta-compacted.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/turn.delta_compacted",
+      "valid": true
     }
   ],
   "transcriptVectors": [

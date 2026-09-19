@@ -484,6 +484,7 @@ fn turn_from_row(row: &SqliteRow) -> Result<Turn, StorageError> {
 /// 摘要规则**写入**正文，读取端由后续增量补齐（见交付报告中的合同缺口）。
 fn event_from_row(row: &SqliteRow) -> Result<CommittedEvent, StorageError> {
     let event = CommittedEvent {
+        event_type: decode(&text(row, "event_type")?, "owned_event.event_type")?,
         id: decode(&text(row, "event_id")?, "owned_event.event_id")?,
         session: decode_opt(opt_text(row, "session_id")?, "owned_event.session_id")?,
         session_sequence: match opt_int(row, "session_sequence")? {
@@ -803,6 +804,30 @@ impl SqliteStore {
             ));
         }
 
+        // §6 第 15 条：压缩收据的三条前置规则（任一不满足都是整事务 `InvalidRequest`）。
+        if !commit.compacted.is_empty() {
+            if self.config.persist_deltas {
+                return Err(PortError::InvalidRequest(
+                    "delta compaction is disabled while storage.persist_deltas is true",
+                ));
+            }
+            let summary_events = commit
+                .events
+                .iter()
+                .filter(|event| event.kind == EventKind::Summary)
+                .count();
+            if summary_events != 1 {
+                return Err(PortError::InvalidRequest(
+                    "a compaction commit must carry exactly one summary event",
+                ));
+            }
+            if commit.session.is_none() {
+                return Err(PortError::InvalidRequest(
+                    "a compaction commit requires a session id",
+                ));
+            }
+        }
+
         let window = self.window();
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
 
@@ -1052,6 +1077,7 @@ impl SqliteStore {
         // ---- 事件（会话级序号与全局序号在同一事务内分配）
         let mut appended = Vec::with_capacity(commit.events.len());
         let mut terminal_event_id: Option<EventId> = None;
+        let mut summary_sequence: Option<Sequence> = None;
         if !commit.events.is_empty() {
             let mut global = next_global_sequence(&mut tx).await?;
             // `session_sequence` 与 `origin_sequence` 是**各自独立**的会话级序号（§3.4）：都从
@@ -1124,12 +1150,16 @@ impl SqliteStore {
                     .db()?;
                 let event_id = EventId::new(&event_id_text)
                     .map_err(|_| PortError::InvalidRequest("generated event id is malformed"))?;
+                if pending.kind == EventKind::Summary {
+                    summary_sequence = Some(sequence_of(global)?);
+                }
                 if terminal_request.as_ref() == pending.causation.as_ref()
                     && TERMINAL_EVENT_TYPES.contains(&pending.event_type.as_str())
                 {
                     terminal_event_id = Some(event_id.clone());
                 }
                 appended.push(CommittedEvent {
+                    event_type: pending.event_type.clone(),
                     id: event_id,
                     session: session_id.clone(),
                     session_sequence: session_seq_value.map(sequence_of).transpose()?,
@@ -1148,6 +1178,43 @@ impl SqliteStore {
                 if session_id.is_some() {
                     session_sequence += 1;
                     origin_sequence += 1;
+                }
+            }
+        }
+
+        // ---- §6 第 15 条：把被替代的 delta 行指向那条 summary 事件。
+        //
+        // 条件更新的 `WHERE` 同时校验「同一会话 / 行存在 / `kind = 'delta'` / `compacted_into IS NULL`」：
+        // 任何一条不满足都得不到行，于是整事务 `InvalidRequest`、零写入。`compacted` 为空时不碰任何行。
+        if !commit.compacted.is_empty() {
+            let target = summary_sequence.ok_or(PortError::InvalidRequest(
+                "a compaction commit must carry exactly one summary event",
+            ))?;
+            let session = commit.session.clone().ok_or(PortError::InvalidRequest(
+                "a compaction commit requires a session id",
+            ))?;
+            for cursor in &commit.compacted {
+                if cursor.server_epoch != self.server_epoch()? {
+                    return Err(PortError::InvalidRequest(
+                        "a compacted cursor belongs to another server epoch",
+                    ));
+                }
+                let affected = sqlx::query(
+                    "UPDATE owned_event SET compacted_into = ?1 WHERE global_sequence = ?2 \
+                     AND session_id = ?3 AND kind = 'delta' AND compacted_into IS NULL",
+                )
+                .bind(storable(target.get())?)
+                .bind(storable(cursor.global_sequence.get())?)
+                .bind(session.as_str())
+                .execute(&mut *tx)
+                .await
+                .db()?
+                .rows_affected();
+                if affected == 0 {
+                    return Err(PortError::InvalidRequest(
+                        "a compacted cursor must reference a delta row of this session that is \
+                         not compacted yet",
+                    ));
                 }
             }
         }
@@ -1874,6 +1941,28 @@ impl SessionStore for SqliteStore {
     }
 
     /// §5.2：该会话**仍可重放**的 `session_sequence` 下界/上界；没有可重放行时返回 `None`。
+    /// §6 第 16 条：启动恢复要重新确认的命令行——`status = 'accepted'`、尚未拿到终态事件的
+    /// **mutation** 行，按 `accepted_at` 升序（走 §7.3 的 `owned_command_status` 索引）。
+    async fn unsettled_commands(
+        &self,
+        limit: ReplayLimit,
+    ) -> Result<Vec<CommandRecord>, PortError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COMMAND_COLUMNS} FROM owned_command \
+             WHERE status = 'accepted' AND terminal_event_id IS NULL AND kind = 'mutation' \
+             ORDER BY accepted_at ASC, request_id ASC LIMIT ?1"
+        ))
+        .bind(i64::from(limit.events()))
+        .fetch_all(&self.pools.read)
+        .await
+        .db()?;
+        let mut records = Vec::with_capacity(rows.len());
+        for row in &rows {
+            records.push(command_record_from_row(row)?);
+        }
+        Ok(records)
+    }
+
     async fn retention_window(
         &self,
         session: &SessionId,
@@ -2095,8 +2184,9 @@ impl ReadView for SqlReadView {
             )?,
         };
         let rows = sqlx::query(&format!(
+            // §6 第 15 条：被压缩的 delta 由 summary 事件替代，重放里不再出现。
             "SELECT {EVENT_COLUMNS} FROM owned_event WHERE global_sequence > ?1 \
-             ORDER BY global_sequence ASC LIMIT ?2"
+             AND compacted_into IS NULL ORDER BY global_sequence ASC LIMIT ?2"
         ))
         .bind(from)
         .bind(i64::from(limit.events()) + 1)
@@ -2212,7 +2302,8 @@ impl ReadView for SqlReadView {
         let events = if query.include.messages {
             let rows = sqlx::query(&format!(
                 "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
-                 AND global_sequence > ?2 ORDER BY global_sequence ASC LIMIT ?3"
+                 AND global_sequence > ?2 AND compacted_into IS NULL \
+                 ORDER BY global_sequence ASC LIMIT ?3"
             ))
             .bind(query.session.as_str())
             .bind(from)
@@ -3183,6 +3274,65 @@ impl AttachmentStore for SqliteStore {
         .db()?;
         tx.commit().await.db()?;
         Ok(())
+    }
+
+    /// §6 第 18 条 / §7.5：孤儿回收。
+    ///
+    /// 删除 `storage.attachment_dir` 下**不在 `owned_attachment` 里**且 `mtime < at` 的文件，最多 `limit`
+    /// 个（`limit = 0` 不删）。表外但 `mtime >= at` 的文件必须保留（可能正在写、行还没提交）。
+    ///
+    /// 不读系统时钟：`at` 由调用方传入，只把它换算成 `SystemTime` 与文件 `mtime` 比较。文件删除在行事务
+    /// 之外发生，失败也不阻止启动（调用方是组合根的启动流程）。目录条目按文件名排序，行为确定。
+    async fn sweep_orphans(&self, at: Timestamp, limit: u32) -> Result<u32, PortError> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let at_millis = window::parse_millis(at.as_str()).ok_or(PortError::InvalidRequest(
+            "timestamp is outside the supported window",
+        ))?;
+        let at_system = std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_millis(
+                u64::try_from(at_millis)
+                    .map_err(|_| PortError::InvalidRequest("timestamp is before the unix epoch"))?,
+            );
+        let tracked: std::collections::HashSet<String> =
+            sqlx::query_scalar("SELECT relative_path FROM owned_attachment")
+                .fetch_all(&self.pools.read)
+                .await
+                .db()?
+                .into_iter()
+                .collect();
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&self.config.attachment_dir)
+            .map_err(|_| PortError::Unavailable(UnavailableKind::IoError))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.is_file())
+            .collect();
+        entries.sort();
+        let mut removed = 0_u32;
+        for path in entries {
+            if removed >= limit {
+                break;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let relative = format!("{}/{}", migrate::ATTACHMENTS_DIR, name);
+            if tracked.contains(&relative) {
+                continue;
+            }
+            let modified = std::fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|_| PortError::Unavailable(UnavailableKind::IoError))?;
+            if modified >= at_system {
+                continue;
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(PortError::Unavailable(UnavailableKind::IoError)),
+            }
+        }
+        Ok(removed)
     }
 
     async fn prune_lru(&self, budget_bytes: u64, at: Timestamp) -> Result<PruneReport, PortError> {

@@ -1,0 +1,26 @@
+{
+  "protocolVersion": 1,
+  "type": "resource.event",
+  "messageId": "c7dcc0a7-ecd5-406b-b942-263dfe0ff684",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "28",
+  "body": {
+    "originEventId": "0a3eca3b-cfd6-4fcf-92f7-90d6de384580",
+    "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
+    "originSequence": "2321",
+    "sessionRef": {
+      "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+      "exportId": "export-main",
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
+    },
+    "eventType": "turn.delta_compacted",
+    "payloadDigest": "ZW20mHuJklO_HyuwQDoY4zB2KjllkwuELNjqpIp8MXw",
+    "createdAt": "2026-09-18T09:12:09.600Z",
+    "payload": {
+      "view": {
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "deltaCount": "37"
+      }
+    }
+  }
+}

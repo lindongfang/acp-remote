@@ -489,6 +489,7 @@ async fn imported_tables_never_hold_owned_content() {
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(
@@ -519,6 +520,7 @@ async fn imported_tables_never_hold_owned_content() {
                 None,
             )],
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(

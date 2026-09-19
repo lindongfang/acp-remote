@@ -202,8 +202,8 @@ fn view_types_match_schema_defs() {
     let declared: Vec<&str> = defs.keys().map(String::as_str).collect();
     assert_eq!(
         declared.len(),
-        33,
-        "event-views.schema.json 的 $defs 条目数应为 33，实际：{declared:?}"
+        34,
+        "event-views.schema.json 的 $defs 条目数应为 34，实际：{declared:?}"
     );
     assert_eq!(
         VIEW_TYPES.as_slice(),

@@ -54,7 +54,7 @@ struct Body {
 
 #[test]
 fn fixture_payloads_canonicalize_to_their_payload_digest() {
-    // 覆盖清单：节点链树里目前正好这六条同时带 `payload` 与 `payloadDigest`（sync 树没有）。
+    // 覆盖清单：两个 fixture 树里目前正好这七条同时带 `payload` 与 `payloadDigest`（sync 树没有）。
     // fixture 增删时这里必须同步——否则覆盖会悄悄变少（与 `check-schema-fixtures.mjs` 的覆盖门禁同旨）。
     let expected = [
         "fixtures/node-link/v1/invalid/resource-event-missing-origin.json",
@@ -62,6 +62,7 @@ fn fixture_payloads_canonicalize_to_their_payload_digest() {
         "fixtures/node-link/v1/valid/resource-event-acp-only.json",
         "fixtures/node-link/v1/valid/resource-event-view-agent-message-delta.json",
         "fixtures/node-link/v1/valid/resource-event-view-session-created.json",
+        "fixtures/node-link/v1/valid/resource-event-view-turn-delta-compacted.json",
         "fixtures/node-link/v1/valid/resource-event.json",
     ];
     let mut covered = Vec::new();

@@ -2,6 +2,8 @@
 
 > 状态：编码前契约（v1），实现前冻结；`core`/`storage-sqlite` 的 L1 切片已开始实现（`core::model` 与 `core::ports` 已落地，见 §10）
 > 版本：0.3（v0.2 的 L1 实现期修订：补齐交互**创建**路径、正文读取入口 `ReadView::event_payload`、非会话级事件的 `origin_*` 列改为可空、`owned_attachment` 增加 id 列、`find_remote_request` 改名、Windows ACL 判定说明；并把 §5.2 里不存在的 `resolve_interaction` 方法改为 §6 第 13 条）
+> 版本：0.4（2026-09-18，L1 收尾：补齐四条会阻塞「一个真实 turn」的缺口——§6 第 14 条 `agent.message.completed` 的生成、第 15 条 delta 压缩与 `turn.delta_compacted` 收据、第 16 条启动恢复 `RecoverUnsettled`、第 17 条 `session.mode.list` 的候选来源；新增 `SessionEndpoint::modes()`、`SessionStore::unsettled_commands`、`OwnedCommit.compacted`、`MessageId`/`ModeState`，并给 §9 加判据 18–21）
+> 版本：0.5（2026-09-18：§5.4 的 `EventSink` 更正为包装结构，与 §5.1 的 `[决定]` 和 `ports.rs` 一致；新增 `scripts/check-contract-drift.mjs`，把 §7/§5 与实现的漂移变成 `npm run check` 的第八个门禁）
 > 日期：2026-09-18
 > 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.1/§4.7/§5/§6/§7/§8/§10、[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §5/§10、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3/§9/§10/§11/§14、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §6/§7/§12/§15、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13/§14/§15、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4/§5/§6、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5
 > 作用：冻结 `core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 的 v1 表结构、保留/清理与 migration。**本文件是这些内容的唯一权威来源**；`MODULE_ARCHITECTURE.md` §4.1/§4.7 只保留职责边界。
@@ -43,7 +45,7 @@ pub enum UnavailableKind { Busy, StorageFull, IoError, RemoteUnavailable, OwnerO
 
 | 类型 | 形状 / 不变量 | 出处 |
 |---|---|---|
-| `NodeId` / `DeviceId` / `SessionId` / `EventId` / `RequestId` / `TurnId` / `InteractionId` / `PairingId` / `AttachmentId` | newtype over canonical 小写 UUID 文本（`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`） | `SYNC_PROTOCOL.md` §3.2 |
+| `NodeId` / `DeviceId` / `SessionId` / `EventId` / `RequestId` / `TurnId` / `InteractionId` / `PairingId` / `AttachmentId` / `MessageId` | newtype over canonical 小写 UUID 文本（`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`） | `SYNC_PROTOCOL.md` §3.2 |
 | `ExportId` | newtype over `^[A-Za-z0-9._-]{1,128}$` 的字符串，**不是 UUID**；`ExportId` 与 `workspaceAlias` 是不同字段、不同模式 | `NODE_LINK_PROTOCOL.md` §12.3；`schemas/node-link/v1/common.schema.json#/$defs/exportId` |
 | `ImportId` | newtype over `^[A-Za-z0-9._-]{1,128}$`，Access 本地为主键 | `LOCAL_ADMIN_PROTOCOL.md` §5.5 |
 | `WorkspaceAlias` | `^[a-z0-9][a-z0-9._-]{0,63}$` | `NODE_LINK_PROTOCOL.md` §12.3 |
@@ -54,7 +56,7 @@ pub enum UnavailableKind { Busy, StorageFull, IoError, RemoteUnavailable, OwnerO
 | `SessionReference` | enum `Owned(OwnedSessionRef) ｜ Remote(RemoteSessionRef)`；`SessionBackendFactory` 与路由用它 | `MODULE_ARCHITECTURE.md` §4.1/§4.5/§4.6 |
 | `EntityRef` | enum `Session(SessionId) ｜ Turn(TurnId) ｜ Interaction(InteractionId) ｜ Command{ session: Option<SessionId>, request: RequestId } ｜ Pairing(PairingId) ｜ Device(DeviceId) ｜ Node(NodeId) ｜ Export(ExportId) ｜ Import(ImportId)` | 本合同（错误定位） |
 
-`[决定]` **id 的分配只有两处权威**：`SessionId` 与 `EventId` 由 `SessionStore::commit` 在创建/提交事务内分配（前者经 `CommitOutcome.session_id` 回传，后者写进 `owned_event.event_id`）——它们必须与落盘同一时刻产生；`TurnId`/`InteractionId`/`PairingId`/`OriginEpoch`/`RequestId` 由 **core** 在调用前用 `IdGenerator` 分配并随写入形状传入（`NewTurn.turn`、`PendingInteractionWrite.interaction.id`、`OwnedCommit.origin_epoch` 等），存储层只校验一致性、**不得**另行编号；`AttachmentId` 由 `AttachmentStore::put` 分配并返回（§7.3）。
+`[决定]` **id 的分配只有两处权威**：`SessionId` 与 `EventId` 由 `SessionStore::commit` 在创建/提交事务内分配（前者经 `CommitOutcome.session_id` 回传，后者写进 `owned_event.event_id`）——它们必须与落盘同一时刻产生；`TurnId`/`InteractionId`/`PairingId`/`OriginEpoch`/`RequestId`/**`MessageId`** 由 **core** 在调用前用 `IdGenerator` 分配并随写入形状传入（`MessageId` 由生产 delta 的适配器在该消息第一条 delta 提交前分配，见 §6 第 14 条）（`NewTurn.turn`、`PendingInteractionWrite.interaction.id`、`OwnedCommit.origin_epoch` 等），存储层只校验一致性、**不得**另行编号；`AttachmentId` 由 `AttachmentStore::put` 分配并返回（§7.3）。
 
 ### 3.2 序号、游标与时间
 
@@ -80,6 +82,7 @@ pub enum UnavailableKind { Busy, StorageFull, IoError, RemoteUnavailable, OwnerO
 | `SessionSummary` | `Session` 的可投影子集（wire 形状见协议 crate）；owned 与 imported 用同一形状 | `SYNC_PROTOCOL.md` §9.6 |
 | `SessionSnapshot` | `Session` + `origin_epoch: OriginEpoch` + `head: GlobalCursor` | 本合同（供 `commit`/`load` 返回） |
 | `SessionState` | enum `Idle｜Queued｜Running｜WaitingInput｜WaitingPermission｜Failed｜Closed` | `common.schema.json#/$defs/sessionSummary` |
+| `ModeState` | `{ current_mode: Option<ModeRef>, available: Vec<ModeRef> }`——`session.mode.list` 的端口侧形状；`version` 属于会话（用例层补），不在本类型里 | `SYNC_PROTOCOL.md` §11.5/§10.2 |
 | `TurnId`/`Turn` | `Turn { id, session: SessionId, state: TurnState, queue_index: u32, causation: Option<RequestId>, started_at/ended_at }` | `SYNC_PROTOCOL.md` §11.6 |
 | `TurnState` | enum `Queued｜Running｜WaitingInput｜WaitingPermission｜Completed｜Failed｜Cancelled` | 同上 |
 | `ModeRef` / `ModeId` | `{ modeId: String(1..=256), displayName: String(1..=256) }`；`ModeId` 是 `modeId` 的 newtype | `common.schema.json#/$defs/modeRef` |
@@ -117,7 +120,7 @@ pub enum UnavailableKind { Busy, StorageFull, IoError, RemoteUnavailable, OwnerO
 | `PersistencePolicy` | enum `Durable｜ShortTerm｜Ephemeral`；`Ephemeral` **不得**进入任何提交 | `INITIAL_DESIGN.md` §10.2 |
 | `StoredPolicy` | enum `Durable｜ShortTerm`（`OwnedCommit` 只接受它，使 `Ephemeral` 不可表达） | 本合同 |
 | `PendingEvent` | `{ kind: EventKind, event_type: EventType, policy: StoredPolicy, payload: EventPayload, origin: EventOrigin, turn: Option<TurnId>, causation: Option<RequestId> }`；`origin` 由 broker 按产生者填（agent 事件 / 设备命令 / daemon / local CLI），存储层只原样写入 `owned_event.origin_kind`——**不得**按「有没有会话」推断（否则每条会话事件都被记成 `agent`，而 `device.revoked` 被记成 `daemon`，`SYNC_PROTOCOL.md` §10.1 的 `origin.kind` 就失去意义） | 本合同（§7.3） |
-| `CommittedEvent` | `{ id: EventId, session: Option<SessionId>, session_sequence: Option<Sequence>, global_sequence: Sequence, origin_epoch: Option<OriginEpoch>, origin_sequence: Option<Sequence>, created_at: Timestamp }`；**非会话级事件两者均为 `None`**（§3.4、§7.3 的成对 CHECK、§9 判据 17） | `SYNC_PROTOCOL.md` §9/§10 |
+| `CommittedEvent` | `{ id: EventId, event_type: EventType, session: Option<SessionId>, session_sequence: Option<Sequence>, global_sequence: Sequence, origin_epoch: Option<OriginEpoch>, origin_sequence: Option<Sequence>, created_at: Timestamp }`；**非会话级事件两者均为 `None`**（§3.4、§7.3 的成对 CHECK、§9 判据 17）。`event_type` 是**必填**的：历史（`HistoryPage`）与重放（`CommittedDelivery::Owned`）都必须能在 wire 上报出事件的类型，不能靠调用方另查一次；`kind` **不**进本类型（它只是存储层的保留/压缩维度，wire 不需要） | `SYNC_PROTOCOL.md` §9/§10 |
 | `CommittedDelivery` | enum `Owned(CommittedEvent) ｜ Imported { session: RemoteSessionRef, origin: OriginEventRef, origin_sequence: Sequence, local_sequence: LocalCursor, event_type: EventType, payload_digest: Digest, payload: Option<EventPayload> }`（imported 的 `payload` 只在内存中存在） | `MODULE_ARCHITECTURE.md` §7 |
 
 `[决定]` owned 事件同时携带两种会话级序号：`session_sequence`（该会话内递增）与 `origin_sequence`（该会话的 origin cursor 分量）；对 owned 会话两者在同一事务内各自 +1，但**不得**互相替代（`NODE_LINK_PROTOCOL.md` §7 要求跨节点只认 origin cursor）。非会话级事件（`device.revoked` 等）两者均为 `None`，只分配 `global_sequence`（`SYNC_PROTOCOL.md` §10.1）。
@@ -129,7 +132,12 @@ pub enum UnavailableKind { Busy, StorageFull, IoError, RemoteUnavailable, OwnerO
 | `Actor` | enum `Device { device: DeviceId, scopes: ScopeSet } ｜ Node { node: NodeId, access_node: NodeId } ｜ LocalCli`；`ScopeSet` 为 scope 名集合 | `MODULE_ARCHITECTURE.md` §5；`SECURITY_DESIGN.md` §10.2 |
 | `DeviceRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.3（含 `deviceId`、指纹、`scopes`、状态、时间戳） | 同左 |
 | `NodeRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.4（含 `nodeId`、指纹、`grants`、`state`、`ownerEndpoint`） | 同左 |
-| `PairingRecord` / `PairingClaim` / `PairingSettlement` | `[open]`：`LOCAL_ADMIN_PROTOCOL.md` 只给了方法级 `params`/`result`，未定义记录级字段；实现时按该方法集映射，形状随首个实现冻结 | `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 |
+| `PairingRecord` | `{ id: PairingId, target: PairingTarget(Device｜Node), state: PairingState, display_name: Option<String(1..=128)>, requested_scopes: ScopeSet, requested_grants: GrantSet, secret_digest: Digest, created_at, expires_at, claimed_at: Option, approved_at: Option, terminal_at: Option }`；构造校验：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；**设备配对不得带 grants、节点配对不得带 scopes**。`secret_digest` 是 pairing secret 的 SHA-256——明文只存在于创建方内存（`SECURITY_DESIGN.md` §13.1） | 本合同（**首个实现已冻结**，见 `crates/core/src/model/identity.rs`）；方法形状见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 |
+| `PairingState` | enum `Created｜Claimed｜PendingConfirmation｜Approved｜Rejected｜Expired｜Consumed`；终态 = `Rejected｜Expired｜Consumed`；`Claimed` **不对外可见**（只在服务端事务与审计里出现） | `SYNC_PROTOCOL.md` §7.0 |
+| `PeerIdentity` | enum `Device(DeviceId)｜Node(NodeId)`；`kind()` 给出 "device"/"node" | 本合同 |
+| `PairingPeer` | `{ id: PeerIdentity, display_name: String(1..=128), public_key_fingerprint: Fingerprint, client_nonce: Nonce }` | `SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2 |
+| `PairingClaim` | `{ pairing: PairingId, peer: PairingPeer, requested_scopes: ScopeSet, requested_grants: GrantSet }`——HMAC/proof 由**调用方**验证，进入本类型时只剩已核对的事实；设备配对不对带 grants、节点配对不得带 scopes | 本合同（`TrustStore::claim_pairing` 的输入） |
+| `PairingSettlement` | enum `Approved { granted_scopes: ScopeSet, granted_grants: GrantSet }｜Rejected { reason: Option<String(≤256)> }`；`granted_*` 是**用户确认的最终集合**（不是请求值）；`reason` 是简短原因，不进审计正文 | 本合同（`TrustStore::settle_pairing` 的输入） |
 | `ExportRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 `ExportView`（`exportId`、`agentIds`、`workspaceAliases`、`defaultWorkspaceAlias`、`templates`、**`scopes`**、`cachePolicy`、`createdAt`、`revokedAt`） | 同左（字段名已按本次决定与 Node Link 对齐） |
 | `ImportRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 `ImportRecord`（`importId`、`ownerEndpoint`、`ownerNodeId`、`exportIds`、`grants`） | 同左 |
 | `AuditRecord` | `{ at: Timestamp, action: AuditAction, actor: Actor, via_node: Option<NodeId>, local_principal_ref: Option<String(≤128)>, target: EntityRef, outcome: AuditOutcome, detail_digest: Option<Digest> }`；**不含任何内容** | `SECURITY_DESIGN.md` §14.2 |
@@ -189,6 +197,9 @@ pub trait SessionEndpoint: Send + Sync {
     fn reference(&self) -> SessionReference;
     async fn prompt(&self, request: PromptRequest, at: Timestamp) -> Result<TurnAccepted, PortError>;
     async fn cancel(&self, turn: Option<TurnId>) -> Result<(), PortError>;
+    /// 模式的只读枚举（`session.mode.list` 的唯一来源，§6 第 17 条）：候选列表来自 ACP 的
+    /// `SessionModeState.availableModes`；core 不用它做授权或状态迁移，适配器不得凭当前模式编造候选。
+    async fn modes(&self) -> Result<ModeState, PortError>;
     async fn set_mode(&self, mode: &ModeId) -> Result<(), PortError>;
     async fn list_config(&self) -> Result<Vec<ConfigOption>, PortError>;
     async fn set_config(&self, id: &ConfigOptionId, value: ConfigValue) -> Result<(), PortError>;
@@ -215,6 +226,9 @@ pub struct OwnedCommit {
     /// 新建 pending 交互行（权限 / elicitation 请求）。每条都必须与**同一提交**里那条
     /// `interaction` 事件一一对应；解析既有行走 `state.interaction`，两条路径互斥（§6 第 13 条）。
     pub interactions: Vec<PendingInteractionWrite>,
+    /// 本提交里的 summary 事件**替代**的既有事件（`kind='delta'`、同一会话、尚未被压缩），
+    /// 由存储层把它们的 `compacted_into` 置为该 summary 行的 `global_sequence`（§6 第 15 条）。
+    pub compacted: Vec<GlobalCursor>,
     pub idempotency: Option<IdempotencyRecord>,   // 含指纹与 expected_version
     pub command_terminal: Option<CommandTerminalRecord>,
     pub origin_epoch: Option<OriginEpoch>,        // 新建会话时由 core 生成并传入
@@ -237,6 +251,9 @@ pub trait SessionStore: Send + Sync {
     /// 一致性读视图：`sync.snapshot_*` 必须在本方法返回的视图内完成（barrier 依据）。
     async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError>;
     async fn find_request(&self, request: &RequestId, actor: &Actor) -> Result<Option<CommandRecord>, PortError>;
+    /// 启动恢复（§6 第 16 条）：`status='accepted'` 且 `terminal_event_id IS NULL` 的 mutation 行，
+    /// 按 `accepted_at` 升序；走 §7.3 的 `owned_command_status` 索引。
+    async fn unsettled_commands(&self, limit: ReplayLimit) -> Result<Vec<CommandRecord>, PortError>;
     async fn retention_window(&self, session: &SessionId) -> Result<Option<(Sequence, Sequence)>, PortError>;
     async fn prune(&self, policy: RetentionPolicy, at: Timestamp) -> Result<PruneReport, PortError>;
     async fn health(&self) -> Result<StoreHealth, PortError>;
@@ -333,6 +350,9 @@ pub trait AttachmentStore: Send + Sync {
     async fn link(&self, session: &SessionId, attachment: &AttachmentId, generation: AttachmentGeneration) -> Result<(), PortError>;
     /// 按 LRU 清理到给定字节预算以下；返回被删除的附件。
     async fn prune_lru(&self, budget_bytes: u64, at: Timestamp) -> Result<PruneReport, PortError>;
+    /// §7.5 的孤儿回收（§6 第 18 条）：删除 `storage.attachment_dir` 下**不在 `owned_attachment` 表里**
+    /// 且 `mtime` 早于 `at` 的文件，每次最多 `limit` 个，返回实际删除数。
+    async fn sweep_orphans(&self, at: Timestamp, limit: u32) -> Result<u32, PortError>;
 }
 ```
 
@@ -344,12 +364,17 @@ pub trait AttachmentStore: Send + Sync {
 ### 5.4 发布与基础设施
 
 ```rust
-pub trait EventSink: Send + Sync { fn send(&self, event: EndpointEvent); }
+/// `Arc<dyn Fn(EndpointEvent) + Send + Sync>` 的包装类型：值语义 + `Clone`，因此
+/// `SessionBackendFactory::create`/`open` 可按值接收并交给后端持有；`send` 是它的固有方法，
+/// 调用顺序即提交顺序（§6 第 1/3 条）。**不是** trait——§5.1 的 `[决定]` 与实现一致。
+#[derive(Clone)]
+pub struct EventSink(Arc<dyn Fn(EndpointEvent) + Send + Sync>);
 pub trait EventPublisher: Send + Sync { fn publish(&self, delivery: CommittedDelivery); }
 pub trait Clock: Send + Sync { fn now(&self) -> Timestamp; }
 
 pub trait IdGenerator: Send + Sync {
     fn turn_id(&self) -> TurnId;
+    fn message_id(&self) -> MessageId;
     fn interaction_id(&self) -> InteractionId;
     fn pairing_id(&self) -> PairingId;
     fn origin_epoch(&self) -> OriginEpoch;
@@ -381,6 +406,22 @@ pub trait IdGenerator: Send + Sync {
     - 仲裁顺序（不可交换）：先条件更新落盘仲裁 → 再派发后端 → 最后 flush 后端发出的 `*.resolved` 事件。受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` → `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
     - 崩溃窗口：上面三步之间崩溃会留下「交互行已终态、`*.resolved` 事件未落盘」。重试同一条命令返回 `AlreadyResolved` 且**不**二次派发；UI 以交互行（`HistoryInclude.pending_interactions`）恢复，不依赖事件流补齐。该窗口是本轮接受的取舍（消除它需要「解析意向」行或两阶段提交，见 §10）。
     - `options` **不落库**（`owned_interaction` 无该列）：读视图里 `PendingInteraction.options` 恒为空。还原路径是事件流（`replay`/`read_session` 返回的 `CommittedEvent` 带 `id`），再用 `ReadView::event_payload(id)` 取那条 `interaction` 事件的正文并解析候选项（§5.2）；不要拿 `request_event`（它是 `global_sequence`）直接当 `event_payload` 的参数。
+14. `[决定]` **助手消息的收尾正文**（`SYNC_PROTOCOL.md` §10.2 的 `agent.message.completed`）：turn 进入终态（`completed`/`cancelled`/`failed`）时，broker 必须为**该 turn 内出现过 `agent.message.delta` 的每个 `messageId`** 生成恰好一条 `agent.message.completed`，并与该 turn 的终态事件在**同一次 `commit`** 内提交（因此它对重放与快照恒可见）。规则：
+    - `content` 由该消息的 delta **按 `deltaIndex` 升序**折叠而成：连续的文本 delta 合并为**一个** `{type:"text", text}` 块（文本按序拼接）；带 `block` 字段的 delta（非文本内容，由适配器投影，见 `SYNC_PROTOCOL.md` §10.2）按顺序插入对应块。
+    - 正文**只来自 delta 的 view**：broker 不解析 ACP 原文（core 不依赖 ACP DTO，§2），非文本内容的投影是**生产端（适配器）**的义务；`block` 缺失时该 delta 只贡献文本，**不得**由 broker 猜测类型。
+    - `deltaIndex` 有空洞不构成错误、不触发补写；顺序一律以现存的 `deltaIndex` 升序为准。
+    - `agent.thought.delta` 的流**不**产生 `completed`：思考是短保留期内容，其保真只存在于 delta 事件与它们的 `acp` 原文里（这是**显式**的短保留期降级，不违反 `SYNC_PROTOCOL.md` §10.1 的「不得静默丢弃」——它是登记在案的语义，不是丢弃）。
+    - `MessageId` 由生产端（适配器）用 `IdGenerator::message_id()` 在**该消息第一条 delta 提交前**分配，该消息的所有 delta 与其 `completed` 复用同一个 id。
+15. `[决定]` **delta 压缩**（`storage.persist_deltas = false` 时的收尾动作）：turn 终态提交之后，broker 可以对**该 turn 已终结**的 `kind='delta'` 事件做一次压缩——在下一次 `commit` 里提交一条 `kind='summary'` 的 `turn.delta_compacted` 事件，并用 `OwnedCommit.compacted` 列出被它替代的 `global_sequence`；存储层把这些行的 `compacted_into` 置为该 summary 行的 `global_sequence`。规则：
+    - **执行中不得压缩**（turn 未终态就不写 `compacted_into`）；`storage.persist_deltas = true` 时永不压缩。
+    - 压缩是**元数据替换**：summary 的 view 只承载收据（`turnId`、`deltaCount`），**不复制正文**；终态正文来自第 14 条的 `agent.message.completed`。**不带** delta 摘要：「是否丢过 delta」由 §9 判据 4 的会话内 `session_sequence` 稠密性判定，而 ACPR-CJ1 摘要需要 `acpr-wire`，core 的依赖闭包不允许它（§2、§9 判据 13）。
+    - `compacted` 里的每个 cursor 必须属于本提交的会话、对应行必须是 `kind='delta'` 且 `compacted_into IS NULL`；任一不满足 → 整事务 `InvalidRequest`（存储层校验，失败关闭）。
+    - 重放里 summary 事件**替代**被压的 delta：客户端据此知道该段历史已压缩；「是否丢过 delta」由会话内 `session_sequence` 的稠密性判定（§9 判据 4），不由 summary 承载。
+16. `[决定]` **启动恢复**（`SYNC_PROTOCOL.md` §11：「Daemon 恢复时发现外部 Agent 副作用无法确认，必须先持久化 `command.uncertain`，再向客户端广播」）：组合根在取得单实例锁、开始监听**之前**，必须以 `LocalCli` actor 调用 `RecoverUnsettled` 用例；它对 `SessionStore::unsettled_commands` 返回的每条 `accepted` 命令，在该会话的串行门内终结为 `uncertain`——写终态事件 `command.uncertain { requestId, reason, mayHaveReachedAgent: true }` 并更新幂等行（`status`/`terminal_event_id`），同时把该命令对应的未终态 turn 终结为 `failed`（`PublicError { code: "command.uncertain" }`）。**不得**自动重放副作用，也不得让 `accepted` 行静默存活。`uncertain` 行不参与 TTL 清理（§7.5）。
+    - 同一趟恢复还要补写**缺失的收尾事件**：若某个 turn 已有已提交的 `agent.message.delta` 却没有 `agent.message.completed`（进程在终态提交前崩溃），必须用 `ReadView::event_payload` 从库里按第 14 条的规则重建该事件并在**同一次恢复提交**内落盘，否则那段已经广播出去的文本永远没有终态记录。
+17. `[决定]` **`session.mode.list` 的应答**：结果形状是 `ModeState { currentModeId, availableModes: ModeRef[], version }`（`SYNC_PROTOCOL.md` §11.5/§10.2）；`availableModes` **只能**来自 `SessionEndpoint::modes()`（§5.1），`version` 取该会话当前版本。core 不得凭 `current_mode` 编造候选列表，端口返回空列表时结果就是空列表（不伪造）。
+18. `[决定]` **附件文件与行的事务边界**：行的删除与它所在的事务一起提交，**文件删除一律在提交之后**（崩溃只会留下无人引用的孤儿文件，绝不会留下悬空行）；`AttachmentStore::prune_lru` 与 `sweep_orphans` 因此都在事务之外运行。
+    - **孤儿回收**由组合根在启动时调用一次 `sweep_orphans(启动时刻, 1000)`（紧跟 §6 第 16 条的恢复之后）：只删「不在 `owned_attachment` 里**且** `mtime` 早于本次进程启动时刻」的文件——第二条规则保护正在写入、行还没提交的新附件。回收失败**不阻止启动**，记一次结构化警告，剩余孤儿留到下次启动。
 
 ## 7. `storage-sqlite` v1 表结构
 
@@ -562,6 +603,7 @@ CREATE TABLE owned_attachment_link (
 - `[决定]` `completed` 的 mutation 必须带 `terminal_event_id`；查询命令固定为 NULL；`failed`/`uncertain` 必须有终态事件（`SYNC_PROTOCOL.md` §11.2）。`result_json` 对 mutation 可空（Sync 侧允许 `result: null`，Node Link 侧要求非空对象——由用例层按协议判定，不在表级强制）。
 - `[决定]` `uncertain` 行与 mutation 幂等行**不按 TTL 清理**（见 §7.5）。
 - `[决定]` 附件：字节按 sha256 内容寻址存放（`owned_attachment`），会话归属与 generation 由 `owned_attachment_link` 记录，因此单会话清理与全局 LRU 都可实现。
+- `[决定]` `compacted_into` 指向**替代它的 summary 事件**的 `global_sequence`（与 `request_event` 同一惯例）；`compacted_into IS NOT NULL` 的行是容量清理 ③ 的第一批候选，且重放里由 summary 事件替代（§6 第 15 条）。
 - `[决定]` `owned_attachment.attachment_id` 是写入时由 `AttachmentStore::put` 分配（实现可选随机 UUID，也可选由 sha256 派生的确定性 id）、持久化并随 `AttachmentRef.id` 返回的显式列；`get` 由该列 O(1) 命中，不再按 sha256 前缀重算后扫描。sha256 仍承担内容去重；`IdGenerator` 不参与（同一个 id 只能有一个来源）。
 - `[决定]` `acp_raw_unavailable_reason` 表达「保留期/容量清理掉原文但保留 view」的合法状态（`SYNC_PROTOCOL.md` §10.1 的 `rawUnavailable.reason`）。
 - `[决定]` `payload_digest` 必须等于对 `payload_json` 施 **ACPR-CJ1**（`SYNC_PROTOCOL.md` §3.3）后的 SHA-256（§9 判据 9）。**前像不是库里那串字节**：`payload_json` 按 §9 判据 16 原样保留调用方字节（不重排键），因此摘要必须由写入方**先规范化再哈希**；唯一写入者是存储层，`payload_digest` 由存储层用共享实现 `acpr-wire` 的 ACPR-CJ1 从 `payload_json` 重算，**不接受调用方提供**（否则一个非法摘要会被落库，跨节点复算与 imported 去重都会失配）。`acpr-wire` 的实现必须与 `scripts/check-contract-assets.mjs` 的参考实现在同一批 fixture 上逐值一致。
@@ -716,17 +758,22 @@ CREATE INDEX imported_audit_at ON imported_audit(at);
 15. **交互创建**：一次 `commit` 写入 `interaction` 事件 + `PendingInteractionWrite` 后，`owned_interaction` 恰好一行且 `request_event` 等于**配对事件**的 `global_sequence`（列类型见 §7.3；§9 判据 10 的悬空引用为 0）；装配方传入的任何占位值都不得入库；同一提交里 `interactions` 与 `state.interaction` 同时出现 → `InvalidRequest`；随后 `HistoryInclude.pending_interactions` 读回的行 `options` 为空，而按事件流取到配对事件的 `id` 后 `ReadView::event_payload(id)` 能还原出非空 `options`。
 16. **正文读取**：`ReadView::event_payload` 返回的 `view` 文本与库内 `payload_json` **逐字节**相同（含未知字段与嵌套），`AcpRaw::Available.raw_json` 与写入时逐字节相同；原文被清理过的行返回 `AcpRaw::Unavailable`，且 `reason`、`byte_length`、`sha256` 三者都必须与行内列一致（**摘要不得因为原文被清理而丢失**——`acp_sha256` 与 `acp_raw_json` 只有在没有不可用原因时才同有同无）；不存在的事件 id 返回 `None`。
 17. **非会话级事件**：`session: None` 的提交落库后 `session_sequence`/`origin_epoch`/`origin_sequence` 三列都是 NULL，且该行仍出现在 `replay` 流里；`session: Some` 的事件三列都非 NULL（成对 CHECK 不得被绕过）。
+18. **消息收尾**（§6 第 14 条）：正常结束、取消、失败三种终态各一例；同一 turn 内两个 `messageId` 各自收尾；**没有** delta 的 turn 不产生 `agent.message.completed`；`content` 的文本等于该消息 delta 文本按 `deltaIndex` 的拼接；`completed` 与该 turn 的终态事件在**同一次提交**（用装饰 store 断言批次）；`agent.thought.delta` 不产生 `completed`。
+19. **压缩**（§6 第 15 条）：`persist_deltas = false` 时 turn 终态后出现恰好一条 `turn.delta_compacted`，被压行的 `compacted_into` 等于该行的 `global_sequence`，重放里不再出现那些 delta（summary 只带 `turnId`/`deltaCount`）；turn 未终态时**不**压缩；`persist_deltas = true` 时永不压缩；`compacted` 里塞入非 delta 行或跨会话 cursor → `InvalidRequest` 且零写入。
+20. **启动恢复**（§6 第 16 条）：造 `status='accepted'` 且无终态事件的 mutation 行 + 未终态 turn → 恢复后该行 `status='uncertain'`、`terminal_event_id` 非空且指向存在的 `command.uncertain` 事件，对应 turn 为 `failed`；`unsettled_commands` 之后返回空；广播发生在提交之后（`EventPublisher` 不得先于 `commit`）。
+21. **`session.mode.list`**（§6 第 17 条）：端口返回的候选列表原样出现在结果里；`currentModeId` 与会话 `current_mode` 一致；`version` 等于会话版本；端口返回空列表时结果为空（不伪造）。
+22. **附件事务边界与孤儿回收**（§6 第 18 条）：`prune_lru` 删行后崩溃（模拟：删行后不执行文件删除）→ 库内无悬空行；`sweep_orphans(启动时刻, n)` 删掉表外文件、**不删** `mtime ≥ 启动时刻` 的文件、遵守 `limit`、返回实际删除数；回收失败不阻止启动（有警告）。
 
 ## 10. 未决项
 
 - `[已裁定]` `ElicitationValues` 的形状：见 §3.3——值域为 ACP `ElicitationContentValue` 的五种线格式（`Text`/`Integer(i64)`/`Number(f64)`/`Boolean`/`TextArray`）**加**一个「未知形状原样保留」变体；边界 ≤64 KiB、深度 ≤16；`Submit` 的空映射与 `None` 可区分（分别对应 ACP `content: {}` 与 `content: null`）；`Decline`/`Cancel` 必须为 `None`。同时补齐 ACP 已有而我们 v1 原先缺失的 `decline` 动作（已同步 `SYNC_PROTOCOL.md` §11.5/§10.2 与 `NODE_LINK_PROTOCOL.md` §12.7）。
 - `[已裁定]` Sync 与 Node Link 对 `completed` 的 `result` 要求不同（Sync 允许 `null`，Node Link 要求非空对象）：**认定差异是有意的**——Sync 的 mutation 完成后可能没有可返回的数据，Node Link 必须让 `session.create` 回传 `SessionCreateResult`（§12.7）。core 保持 `Option<CommandResult>`，「非空」是 `server::node_link` 的映射期义务并带契约测试；两侧协议文档各加一句说明（`SYNC_PROTOCOL.md` §11.2、`NODE_LINK_PROTOCOL.md` §12.5）。
 - `[确认]` 序号上界 `2^63−1`（已批准）：随本次改动写入 `SYNC_PROTOCOL.md` §3.2。
-- `[open]` `PairingRecord`/`PairingClaim`/`PairingSettlement` 的记录级字段（先按 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的方法形状实现）。
-- `[open]` `session.mode.list` 的 `availableModes` 没有对应端口（§5.1 的 `SessionEndpoint` 只有 `set_mode`/`list_config`）：`session.mode.list` 的 `delivery` 是 `conditional_mvp`，实现该命令时必须给 §5.1 增加只读的模式枚举入口（`SessionEndpoint::modes()` 或由 `AgentCatalog` 提供），并在本合同修订记录里登记。
-- `[open]` `agent.message.completed` 的生成（`SYNC_PROTOCOL.md` §10.2/§10.3 要求 Broker 在 turn 结束时按 delta 聚合）本增量未实现。验收判据：正常结束的 turn 恰好一条 `agent.message.completed`，正文等于该 turn 内 delta 的拼接（含 thinking/tool 的降级规则），且 delta 被压缩清理后仍能重放终态正文。
-- `[open]` 未派发的 queued turn 的 prompt 正文只在内存：重启恢复任务必须把对应 `owned_command` 从 `accepted` 终结为 `uncertain`（不得静默停留在 accepted），扫描走 §7.3 的 `owned_command_status` 索引；`uncertain` 行不按 TTL 清理。
-- `[open]` delta 压缩算法与 `summary` 事件字段形状。
+- `[已裁定]` `PairingRecord`/`PairingState`/`PeerIdentity`/`PairingPeer`/`PairingClaim`/`PairingSettlement` 的记录级字段**已冻结**（§3.5）：首实现（`crates/core/src/model/identity.rs`）在合同标 `[open]` 期间落地了形状与构造校验，本轮把它们**采纳为合同形状**（未发布、未实现发布语义，采纳不影响任何已交付行为），`[open]` 据此关闭。
+- `[已裁定]` **`session.mode.list` 的候选来源**：新增 `SessionEndpoint::modes()`（§5.1）；用例层只补 `version`，不得编造候选（§6 第 17 条）。
+- `[已裁定]` **`agent.message.completed` 的生成**归 **broker**（与该 turn 的终态事件同一次提交），正文只从 delta 的 view 折叠；非文本内容的投影归生产端适配器（`agent.message.delta` 增加可选 `block` 字段），core 不解析 ACP 原文。思考流不产生收尾事件（登记在案的短保留期降级）。
+- `[已裁定]` **启动恢复**：组合根在开始监听前调 `RecoverUnsettled`，把 `accepted` 且无终态的 mutation 终结为 `uncertain`（对应 turn → `failed`），不重放副作用；新增 `SessionStore::unsettled_commands`（§6 第 16 条）。
+- `[已裁定]` **delta 压缩**：broker 在 turn 终态之后提交一条 `kind='summary'` 的 `turn.delta_compacted` 事件（只带收据 `turnId`/`deltaCount`，不复制正文），`OwnedCommit.compacted` 列出被替代的行，存储层写 `compacted_into`；执行中与 `persist_deltas = true` 时都不压缩（§6 第 15 条）。
 - `[已裁定]` 交互**创建**路径：`OwnedCommit.interactions`（`PendingInteractionWrite`，与同提交的 `interaction` 事件成对）；交互**解析**路径：`OwnedCommit.state.interaction`。原 §5.2 约束里「`resolve_interaction` 条件更新」引用的方法在端口集里并不存在，已改为 §6 第 13 条；`SessionEndpoint::resolve_interaction` 只面向后端。
 - `[已裁定]` `owned_event` 的 `acp_sha256` CHECK 修正为「有不可用原因时不要求与 `acp_raw_json` 同有同无」：模型允许 `AcpRaw::Unavailable { sha256: Some(_) }`（摘要算得出来、原文已被保留期/容量清掉），原 CHECK 会让这个合法状态整行写不进去（实测 SQLite 275）。修正后 `reason`/`byte_length`/`sha256` 三者都能保真。
 - `[已裁定]` `ReadView::event_payload(&EventId) -> Option<EventPayload>`：正文只有这一个读取入口（复用 core 既有 `EventPayload`/`AcpRaw`/`RawUnavailableReason`，不新增类型）；`PendingInteraction.options` 不落库，由该入口还原。
@@ -744,5 +791,5 @@ CREATE INDEX imported_audit_at ON imported_audit(at);
 - `[已裁定]` 清理顺序补 ②′（终态交互行必须先删）且 ②/③ 谓词必须排除仍被 `owned_interaction.request_event` 引用的行；容量度量补 `imported_*` 家族分量（否则 Access-only 节点度量恒 0、永不回收）；⑤ 的审计清理对 `owned_audit` 与 `imported_audit` 都生效。三条都是实测缺陷：外键会让 `prune` 整事务回滚、并让超限提交报 `Backend` 而不是 `StorageFull`。
 - `[已裁定]` `PendingEvent` 增加必填 `origin: EventOrigin`（§3.4）：原写入形状没有 origin，存储层只能按「有没有会话」猜出 `agent`/`daemon`，等于伪造 `origin.kind`。
 - `[open]` 交互解析的崩溃窗口（「行已终态、`*.resolved` 事件未落盘」）的补偿机制：当前按 §6 第 13 条接受；若将来要消除，需要「解析意向」行或两阶段提交。
-- `[open]` 附件文件删除的事务边界与崩溃残留回收任务。
+- `[已裁定]` **附件文件删除的事务边界与孤儿回收**（§6 第 18 条）：行删除与事务同提交、文件删除在提交之后；孤儿回收由组合根启动时调用一次 `AttachmentStore::sweep_orphans(启动时刻, 1000)`，只删「不在表里且 mtime 早于本次启动」的文件，失败不阻止启动。新增该端口方法（§5.3）。
 - `[open]` 未来加密离线正文缓存（必须新 feature + Owner 明示授权 + ADR；本合同不预留任何静默开关）。

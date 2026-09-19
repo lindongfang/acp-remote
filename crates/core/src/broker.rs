@@ -31,12 +31,12 @@ use crate::model::{
     CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind, CreateSessionRequest, Digest,
     ElicitationAction, ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin,
     EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind, InteractionResolution,
-    LocalCursor, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef, PendingEvent,
+    LocalCursor, MessageId, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef, PendingEvent,
     PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
     PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
     Sequence, SessionId, SessionReference, SessionState, StoredPolicy, Timestamp, TurnId,
     TurnState, UnavailableKind, Version, ViewJson, decode_json_string as json_string,
-    object_members as json_members,
+    encode_json_string as json_text, object_members as json_members,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
@@ -176,6 +176,9 @@ pub enum QueuePolicy {
 pub struct BrokerConfig {
     pub queue_policy: QueuePolicy,
     pub max_queued_turns: u32,
+    /// `storage.persist_deltas`（`docs/CORE_PORTS_AND_STORAGE.md` §7.5）：`false` 时 turn 终态后必须压缩
+    /// 该 turn 的 delta（§6 第 15 条）；`true` 时永不压缩。core 只读它，不解释其它存储配置。
+    pub persist_deltas: bool,
 }
 
 impl Default for BrokerConfig {
@@ -183,6 +186,7 @@ impl Default for BrokerConfig {
         Self {
             queue_policy: QueuePolicy::Queue,
             max_queued_turns: 16,
+            persist_deltas: false,
         }
     }
 }
@@ -360,6 +364,22 @@ struct Slot {
     pending: Mutex<Vec<EndpointEvent>>,
     endpoint: Mutex<Option<Arc<dyn SessionEndpoint>>>,
     queue: Mutex<TurnQueue>,
+    /// §6 第 14 条：每个 `(turn, messageId)` 已提交的 delta 片段，turn 终态时折叠成一条
+    /// `agent.message.completed`。
+    deltas: Mutex<HashMap<String, Vec<DeltaFragment>>>,
+    /// §6 第 15 条：该 turn 已提交的 delta 行的 global_sequence，终态后用于 `turn.delta_compacted`
+    /// 的 `compacted` 清单（server epoch 在提交压缩时从 `head()` 取，避免拿事件自己的 origin epoch 冒充）。
+    turn_deltas: Mutex<HashMap<String, Vec<Sequence>>>,
+}
+
+/// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
+#[derive(Clone)]
+struct DeltaFragment {
+    message: MessageId,
+    index: u64,
+    text: String,
+    /// 适配器投影的非文本块原文（缺失时该 delta 只贡献文本，core 不猜类型）。
+    block: Option<String>,
 }
 
 impl Slot {
@@ -448,6 +468,8 @@ impl Broker {
                     pending: Mutex::new(Vec::new()),
                     endpoint: Mutex::new(None),
                     queue: Mutex::new(TurnQueue::default()),
+                    deltas: Mutex::new(HashMap::new()),
+                    turn_deltas: Mutex::new(HashMap::new()),
                 })
             })
             .clone()
@@ -1078,6 +1100,7 @@ impl Broker {
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
@@ -1115,7 +1138,7 @@ impl Broker {
             request_fingerprint: self.fingerprint_of(&request)?,
             payload: CommandPayload::ModeSet { mode: mode.clone() },
         };
-        let before = self.session_version(&command).await?;
+        let before = self.command_session_version(&command).await?;
         let receipt = self.submit_mode_set(actor, &command, &mode).await?;
         self.outcome_version(&receipt, before, &command).await
     }
@@ -1142,7 +1165,7 @@ impl Broker {
                 value: value.clone(),
             },
         };
-        let before = self.session_version(&command).await?;
+        let before = self.command_session_version(&command).await?;
         let receipt = self.submit_config_set(actor, &command, &id, value).await?;
         self.outcome_version(&receipt, before, &command).await
     }
@@ -1169,6 +1192,7 @@ impl Broker {
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: Some(origin_epoch),
@@ -1365,9 +1389,20 @@ impl Broker {
         let mut terminal_turn: Option<TurnId> = None;
         let mut last_view: Option<ViewJson> = None;
         let mut interactions: Vec<PendingInteractionWrite> = Vec::new();
-        for event in chunk {
+        let mut delta_plan: Vec<(usize, TurnId, DeltaFragment)> = Vec::new();
+        let mut completed_events: Vec<PendingEvent> = Vec::new();
+        let mut compact_after: Option<(TurnId, usize)> = None;
+        for (event_index, event) in chunk.into_iter().enumerate() {
             let turn = event.turn.clone().or_else(|| running.clone());
             let policy = persistence_policy(&event.event_type);
+            // §6 第 14 条：登记本批里的 delta 片段（提交成功后才并入累积）。
+            if is_agent_message_delta(&event.event_type) {
+                if let (Some(turn_id), Some(fragment)) =
+                    (turn.clone(), delta_fragment(&event.payload.view))
+                {
+                    delta_plan.push((event_index, turn_id, fragment));
+                }
+            }
             if let Some((turn_state, command_status)) = turn_terminal(&event.event_type) {
                 if let Some(turn_id) = turn.clone() {
                     turn_change = Some(TurnChange::Update(TurnUpdate {
@@ -1377,9 +1412,17 @@ impl Broker {
                     }));
                     session_state = Some(turn_session_state(turn_state));
                     terminal = Some((turn_state, command_status));
-                    terminal_turn = Some(turn_id);
+                    terminal_turn = Some(turn_id.clone());
                     terminal_request = event.causation.clone().or_else(|| running_request.clone());
                     last_view = Some(event.payload.view.clone());
+                    // §6 第 14 条：该 turn 内出现过 delta 的每个 messageId 各发恰好一条 completed，
+                    // 与终态事件同批提交；没有 delta 的消息不发。
+                    completed_events = self.completed_events_for(slot, &turn_id)?;
+                    let count = lock(&slot.deltas)
+                        .get(turn_id.as_str())
+                        .map(|fragments| fragments.len())
+                        .unwrap_or(0);
+                    compact_after = Some((turn_id, count));
                 }
             }
             // §6 第 13 条：Agent 的权限/elicitation 请求必须**在同一提交里**同时落一条
@@ -1408,6 +1451,8 @@ impl Broker {
         if events.is_empty() {
             return Ok(());
         }
+        // §6 第 14 条：`agent.message.completed` 与 turn 终态事件同批提交，且排在命令终态事件之前。
+        events.extend(completed_events);
         let had_terminal = terminal.is_some();
         let mut command_terminal = None;
         if let Some((_, status)) = terminal {
@@ -1461,6 +1506,7 @@ impl Broker {
                 interaction: None,
             })
         });
+        let kinds: Vec<EventKind> = events.iter().map(|event| event.kind).collect();
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
@@ -1469,6 +1515,7 @@ impl Broker {
             turns: turn_change.into_iter().collect(),
             events,
             interactions,
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal,
             origin_epoch: None,
@@ -1478,7 +1525,35 @@ impl Broker {
                 if had_terminal {
                     slot.finish_turn();
                 }
+                // §6 第 14/15 条：只登记**已提交**的 delta（cursor 由存储层分配后回传）。
+                for (event_index, turn, fragment) in delta_plan {
+                    let Some(committed) = outcome.appended.get(event_index) else {
+                        continue;
+                    };
+                    if kinds.get(event_index) != Some(&EventKind::Delta) {
+                        continue;
+                    }
+                    lock(&slot.deltas)
+                        .entry(turn.as_str().to_owned())
+                        .or_default()
+                        .push(fragment);
+                    lock(&slot.turn_deltas)
+                        .entry(turn.as_str().to_owned())
+                        .or_default()
+                        .push(committed.global_sequence);
+                }
                 self.publish(&outcome.appended);
+                // §6 第 15 条：turn 终态提交之后紧接一次压缩提交（执行中不压缩）。
+                if let Some((turn, count)) = compact_after {
+                    let sequences = lock(&slot.turn_deltas)
+                        .remove(turn.as_str())
+                        .unwrap_or_default();
+                    lock(&slot.deltas).remove(turn.as_str());
+                    if !self.config.persist_deltas && !sequences.is_empty() {
+                        self.commit_compaction(session, &turn, count, sequences)
+                            .await?;
+                    }
+                }
                 Ok(())
             }
             Err(PortError::Unavailable(_)) => {
@@ -1543,6 +1618,7 @@ impl Broker {
                 Some(&next.actor),
             )?],
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
@@ -1614,6 +1690,7 @@ impl Broker {
                 )?,
             ],
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: Some(CommandTerminalRecord::try_new(
                 CommandStatus::Failed,
@@ -1671,6 +1748,7 @@ impl Broker {
             turns: Vec::new(),
             events: vec![event],
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: Some(record),
             origin_epoch: None,
@@ -1678,6 +1756,315 @@ impl Broker {
         if let Ok(outcome) = self.commit_owned(commit).await {
             self.publish(&outcome.appended);
         }
+    }
+
+    /// §6 第 14 条：该 turn 内出现过 delta 的每个 `messageId` 各生成恰好一条 `agent.message.completed`。
+    ///
+    /// 排序保证确定性（按首个 `deltaIndex`、再按 messageId）；没有 delta 的 turn 返回空。
+    fn completed_events_for(
+        &self,
+        slot: &Slot,
+        turn: &TurnId,
+    ) -> Result<Vec<PendingEvent>, PortError> {
+        let fragments: Vec<DeltaFragment> = lock(&slot.deltas)
+            .get(turn.as_str())
+            .cloned()
+            .unwrap_or_default();
+        if fragments.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut order: HashMap<String, (u64, MessageId)> = HashMap::new();
+        for fragment in &fragments {
+            let key = fragment.message.as_str().to_owned();
+            let entry = order
+                .entry(key)
+                .or_insert((fragment.index, fragment.message.clone()));
+            if fragment.index < entry.0 {
+                entry.0 = fragment.index;
+            }
+        }
+        let mut messages: Vec<(u64, MessageId)> = order.into_values().collect();
+        messages.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.as_str().cmp(right.1.as_str()))
+        });
+        let mut events = Vec::new();
+        for (_, message) in messages {
+            let own: Vec<DeltaFragment> = fragments
+                .iter()
+                .filter(|fragment| fragment.message == message)
+                .cloned()
+                .collect();
+            let content = fold_delta_content(&own);
+            let view = view_message_completed(&message, turn, &content)?;
+            events.push(pending_event(
+                "agent.message.completed",
+                EventKind::FinalMessage,
+                view,
+                Some(turn.clone()),
+                None,
+                StoredPolicy::Durable,
+                Some(&Actor::LocalCli),
+            )?);
+        }
+        Ok(events)
+    }
+
+    /// §6 第 15 条：turn 终态之后紧接一次压缩提交（`turn.delta_compacted` 收据 + `compacted` 清单）。
+    ///
+    /// core 侧的自检：清单非空、每个 cursor 的 `global_sequence` 非零（本会话与 `kind='delta'` 由存储层
+    /// 再校验一次并失败关闭）。
+    async fn commit_compaction(
+        &self,
+        session: &SessionId,
+        turn: &TurnId,
+        delta_count: usize,
+        sequences: Vec<Sequence>,
+    ) -> Result<(), PortError> {
+        if sequences.is_empty() || sequences.iter().any(|sequence| sequence.get() == 0) {
+            return Err(PortError::InvalidRequest(
+                "compacted 只接受本会话已提交的 delta 行 cursor（§6 第 15 条）",
+            ));
+        }
+        let server_epoch = self.deps.store.head().await?.server_epoch;
+        let compacted: Vec<GlobalCursor> = sequences
+            .into_iter()
+            .map(|global_sequence| GlobalCursor {
+                server_epoch: server_epoch.clone(),
+                global_sequence,
+            })
+            .collect();
+        let at = self.now();
+        let event = pending_event(
+            "turn.delta_compacted",
+            EventKind::Summary,
+            view_delta_compacted(turn, delta_count)?,
+            Some(turn.clone()),
+            None,
+            StoredPolicy::Durable,
+            None,
+        )?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted,
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        self.publish(&outcome.appended);
+        Ok(())
+    }
+
+    /// §6 第 16 条：启动恢复。组合根在取得单实例锁、开始监听**之前**调用它。
+    ///
+    /// 对每条仍为 `accepted` 的命令，在该会话的串行门内终结为 `uncertain`（写 `command.uncertain`
+    /// 终态事件 + 更新幂等行，并把对应未终态 turn 终结为 `failed`），并补写缺失的
+    /// `agent.message.completed`。**不**自动重放副作用；广播一律发生在 `commit` 之后。
+    pub async fn recover_unsettled(&self, limit: ReplayLimit) -> Result<usize, PortError> {
+        let commands = self.deps.store.unsettled_commands(limit).await?;
+        let mut recovered = 0usize;
+        for record in commands {
+            let session = record.session().cloned();
+            match session {
+                Some(session) => {
+                    let slot = self.owned_slot(&session);
+                    let _guard = slot.gate.guard().await;
+                    // 等门期间可能已被别的路径终结：复查后跳过。
+                    let current = self
+                        .deps
+                        .store
+                        .find_request(record.request(), record.actor())
+                        .await?;
+                    if !matches!(current, Some(found) if found.status() == CommandStatus::Accepted)
+                    {
+                        continue;
+                    }
+                    self.recover_command(Some(&session), &record).await?;
+                }
+                None => self.recover_command(None, &record).await?,
+            }
+            recovered += 1;
+        }
+        Ok(recovered)
+    }
+
+    /// 单条 `accepted` 命令的恢复提交（会话串行门由调用方持有）。
+    async fn recover_command(
+        &self,
+        session: Option<&SessionId>,
+        record: &CommandRecord,
+    ) -> Result<(), PortError> {
+        let at = self.now();
+        let request = record.request().clone();
+        let reason = "进程恢复后无法确认命令是否已到达 Agent";
+        let error =
+            PublicError::coded("command.uncertain", reason, false).map_err(PortError::from)?;
+        let mut events: Vec<PendingEvent> = Vec::new();
+        let mut turns: Vec<TurnChange> = Vec::new();
+        let mut state = None;
+        if let Some(session_id) = session {
+            let view = self.deps.store.read_view().await?;
+            let page = view
+                .read_session(HistoryQuery {
+                    session: session_id.clone(),
+                    include: HistoryInclude {
+                        messages: true,
+                        turns: true,
+                        pending_interactions: false,
+                        config_options: false,
+                        capabilities: false,
+                    },
+                    after: None,
+                    limit: ReplayLimit::new(512),
+                })
+                .await?;
+            if let Some(turn) = page
+                .turns
+                .iter()
+                .find(|turn| turn.causation() == Some(&request) && !turn.state().is_terminal())
+            {
+                events.push(pending_event(
+                    "turn.failed",
+                    EventKind::State,
+                    view_turn_error(turn.id(), &error)?,
+                    Some(turn.id().clone()),
+                    Some(request.clone()),
+                    StoredPolicy::Durable,
+                    Some(record.actor()),
+                )?);
+                turns.push(TurnChange::Update(TurnUpdate {
+                    turn: turn.id().clone(),
+                    state: TurnState::Failed,
+                    ended_at: Some(at.clone()),
+                }));
+                state = Some(StateChange::Update(SessionUpdate {
+                    state: Some(SessionState::Failed),
+                    mode: ModeChange::Unchanged,
+                    closed_at: None,
+                    interaction: None,
+                }));
+                // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
+                events.extend(self.backfill_completed(&*view, &page, turn.id()).await?);
+            }
+            events.push(pending_event(
+                "command.uncertain",
+                EventKind::Structured,
+                view_command_uncertain(&request, reason)?,
+                None,
+                Some(request.clone()),
+                StoredPolicy::Durable,
+                Some(record.actor()),
+            )?);
+        } else {
+            events.push(pending_event(
+                "command.uncertain",
+                EventKind::Structured,
+                view_command_uncertain(&request, reason)?,
+                None,
+                Some(request.clone()),
+                StoredPolicy::Durable,
+                Some(record.actor()),
+            )?);
+        }
+        let terminal = CommandTerminalRecord::try_new(
+            CommandStatus::Uncertain,
+            Some(at.clone()),
+            None,
+            None,
+            Some(error),
+        )?;
+        let commit = OwnedCommit {
+            session: session.cloned(),
+            at,
+            expected_version: None,
+            state,
+            turns,
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(terminal),
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        // §6 第 16 条：广播必须在 commit 之后。
+        self.publish(&outcome.appended);
+        Ok(())
+    }
+
+    /// §6 第 14/16 条：从库里重建该 turn 缺失的 `agent.message.completed`。
+    ///
+    /// 只认 `agent.message.delta` 的事件类型（`agent.thought.delta` 不产生 completed），正文一律取自
+    /// `ReadView::event_payload`；已有 `completed` 的 messageId 不重复补写。
+    async fn backfill_completed(
+        &self,
+        view: &dyn ReadView,
+        page: &HistoryPage,
+        turn: &TurnId,
+    ) -> Result<Vec<PendingEvent>, PortError> {
+        let mut fragments: HashMap<String, Vec<DeltaFragment>> = HashMap::new();
+        let mut completed: Vec<MessageId> = Vec::new();
+        for history in &page.events {
+            let payload = match view.event_payload(&history.id).await? {
+                Some(payload) => payload,
+                None => continue,
+            };
+            match history.event_type.as_str() {
+                "agent.message.delta" => {
+                    if let Some(fragment) = delta_fragment(&payload.view) {
+                        let belongs = json_members(payload.view.as_str())
+                            .ok()
+                            .and_then(|members| {
+                                members
+                                    .iter()
+                                    .find(|(name, _)| name == "turnId")
+                                    .map(|(_, raw)| *raw)
+                            })
+                            .and_then(json_string);
+                        if belongs.as_deref() == Some(turn.as_str()) {
+                            fragments
+                                .entry(fragment.message.as_str().to_owned())
+                                .or_default()
+                                .push(fragment);
+                        }
+                    }
+                }
+                "agent.message.completed" => {
+                    if let Some(message) = view_message_id(&payload.view) {
+                        completed.push(message);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut events = Vec::new();
+        for (_, own) in fragments {
+            let Some(message) = own.first().map(|fragment| fragment.message.clone()) else {
+                continue;
+            };
+            if completed.contains(&message) {
+                continue;
+            }
+            let content = fold_delta_content(&own);
+            events.push(pending_event(
+                "agent.message.completed",
+                EventKind::FinalMessage,
+                view_message_completed(&message, turn, &content)?,
+                Some(turn.clone()),
+                None,
+                StoredPolicy::Durable,
+                None,
+            )?);
+        }
+        Ok(events)
     }
 
     /// 打开（或复用）该会话的后端端点（§5.1）。
@@ -1816,6 +2203,7 @@ impl Broker {
             turns,
             events,
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: Some(IdempotencyRecord {
                 actor: actor.clone(),
                 request: command.request.clone(),
@@ -1876,6 +2264,7 @@ impl Broker {
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
@@ -1941,6 +2330,7 @@ impl Broker {
             turns: Vec::new(),
             events,
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: Some(record),
             origin_epoch: None,
@@ -2144,11 +2534,16 @@ impl Broker {
         }
     }
 
-    async fn session_version(&self, command: &ClientCommand) -> Result<u64, PortError> {
+    async fn command_session_version(&self, command: &ClientCommand) -> Result<u64, PortError> {
         match command.session.as_ref() {
             Some(session) => self.session_version_of(session).await,
             None => Ok(0),
         }
+    }
+
+    /// 会话当前版本（`session.mode.list` 等用例的结果里要带它）。
+    pub async fn session_version(&self, session: &SessionId) -> Result<Version, PortError> {
+        Ok(Version::from(self.session_version_of(session).await?))
     }
 
     async fn session_version_of(&self, session: &SessionId) -> Result<u64, PortError> {
@@ -2244,6 +2639,105 @@ fn event_origin(event_type: &EventType, actor: Option<&Actor>) -> EventOrigin {
         },
         _ => EventOrigin::Agent,
     }
+}
+
+/// delta 视图 → 折叠输入。只读适配器投影的字段（`messageId`/`deltaIndex`/`text`/可选 `block`），
+/// core 不解析 ACP 原文、也不猜 `block` 的类型（§6 第 14 条）。
+fn delta_fragment(view: &ViewJson) -> Option<DeltaFragment> {
+    let members = json_members(view.as_str()).ok()?;
+    let member = |name: &str| {
+        members
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, raw)| *raw)
+    };
+    let message = message_id_of(member("messageId")?)?;
+    let index = member("deltaIndex").and_then(json_index)?;
+    let text = json_string(member("text")?)?;
+    let block = member("block").map(str::to_owned);
+    Some(DeltaFragment {
+        message,
+        index,
+        text,
+        block,
+    })
+}
+
+/// 十进制字符串 → `u64`（`deltaIndex` 的线格式，`common.schema.json#/$defs/decimalString`）。
+fn json_index(raw: &str) -> Option<u64> {
+    let text = json_string(raw)?;
+    if text.is_empty() || (text.len() > 1 && text.starts_with('0')) {
+        return None;
+    }
+    text.parse::<u64>().ok()
+}
+
+fn message_id_of(raw: &str) -> Option<MessageId> {
+    MessageId::new(&json_string(raw)?).ok()
+}
+
+/// view 里的 `messageId`（`agent.message.completed` 的自检用）。
+fn view_message_id(view: &ViewJson) -> Option<MessageId> {
+    let members = json_members(view.as_str()).ok()?;
+    let raw = members
+        .iter()
+        .find(|(name, _)| name == "messageId")
+        .map(|(_, raw)| *raw)?;
+    message_id_of(raw)
+}
+
+/// 按 `deltaIndex` 升序折叠正文（§6 第 14 条）：连续文本 delta 合成**一个** `{type:"text",text}` 块，
+/// 带 `block` 的按位置插入；空洞不是错误，顺序一律以现存的 `deltaIndex` 升序为准。
+fn fold_delta_content(fragments: &[DeltaFragment]) -> Vec<String> {
+    let mut ordered = fragments.to_vec();
+    ordered.sort_by_key(|fragment| fragment.index);
+    let mut blocks: Vec<String> = Vec::new();
+    let mut text = String::new();
+    for fragment in ordered {
+        text.push_str(&fragment.text);
+        if let Some(block) = fragment.block {
+            if !text.is_empty() {
+                blocks.push(text_block(&text));
+                text.clear();
+            }
+            blocks.push(block);
+        }
+    }
+    if !text.is_empty() {
+        blocks.push(text_block(&text));
+    }
+    blocks
+}
+
+fn text_block(text: &str) -> String {
+    format!(r#"{{"type":"text","text":{}}}"#, json_text(text))
+}
+
+/// `agent.message.completed` 的 view（`SYNC_PROTOCOL.md` §10.3 的最低字段：`messageId`/`turnId`/`content`）。
+fn view_message_completed(
+    message: &MessageId,
+    turn: &TurnId,
+    content: &[String],
+) -> Result<ViewJson, PortError> {
+    view(format!(
+        r#"{{"messageId":"{}","turnId":"{}","content":[{}]}}"#,
+        message.as_str(),
+        turn.as_str(),
+        content.join(",")
+    ))
+}
+
+/// `turn.delta_compacted` 的 view：**只有** `turnId` 与 `deltaCount` 两个字段（§6 第 15 条）——
+/// 正文来自第 14 条的 `agent.message.completed`，summary 只承载收据。
+fn view_delta_compacted(turn: &TurnId, delta_count: usize) -> Result<ViewJson, PortError> {
+    view(format!(
+        r#"{{"turnId":"{}","deltaCount":{delta_count}}}"#,
+        turn.as_str()
+    ))
+}
+
+fn is_agent_message_delta(event_type: &EventType) -> bool {
+    event_type.as_str() == "agent.message.delta"
 }
 
 fn is_turn_terminal(event_type: &EventType) -> bool {
@@ -2417,9 +2911,9 @@ pub(crate) mod test_support {
     use crate::model::{
         AgentDescriptor, AgentId, AgentRef, AttachmentGeneration, AttachmentId, AuditRecord,
         CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId, ExportRecord,
-        ImportId, ImportRecord, NodeId, NodeRecord, OriginCursor, OriginEpoch, PairingClaim,
-        PairingId, PairingRecord, PairingSettlement, PendingInteraction, ResourceOrigin,
-        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+        ImportId, ImportRecord, ModeState, NodeId, NodeRecord, OriginCursor, OriginEpoch,
+        PairingClaim, PairingId, PairingRecord, PairingSettlement, PendingInteraction,
+        ResourceOrigin, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DropReport,
@@ -2551,6 +3045,9 @@ pub(crate) mod test_support {
         pub(crate) audits: Mutex<Vec<AuditRecord>>,
         pub(crate) batches: Mutex<Vec<BatchRecord>>,
         pub(crate) config_calls: AtomicUsize,
+        pub(crate) mode_calls: AtomicUsize,
+        /// `session.mode.list` 的端口侧候选（测试按需 set，默认空）。
+        pub(crate) modes: Mutex<Option<ModeState>>,
         pub(crate) exports: Mutex<Vec<ExportRecord>>,
         pub(crate) imports: Mutex<Vec<ImportRecord>>,
         pub(crate) imported_sessions: Mutex<Vec<ImportedSessionRecord>>,
@@ -2570,6 +3067,10 @@ pub(crate) mod test_support {
         pub(crate) event_payloads: HashMap<String, EventPayload>,
         /// 事件 id → `origin.kind`（fake 记录 broker 写入的 origin，供 §10.1 断言）。
         pub(crate) event_origins: HashMap<String, EventOrigin>,
+        /// `global_sequence` → 事件类别（§6 第 15 条的 delta 判定）。
+        pub(crate) event_kinds: HashMap<u64, EventKind>,
+        /// 被压缩的 delta 行 `global_sequence` → summary 行的 `global_sequence`（§6 第 15 条）。
+        pub(crate) compacted_into: HashMap<u64, u64>,
         pub(crate) head: u64,
         pub(crate) per_session_seq: HashMap<String, u64>,
         pub(crate) next_id: u64,
@@ -2817,6 +3318,10 @@ pub(crate) mod test_support {
             OriginEpoch::new(&self.next_text()).expect("uuid")
         }
 
+        fn message_id(&self) -> MessageId {
+            MessageId::new(&self.next_text()).expect("uuid")
+        }
+
         fn request_id(&self) -> RequestId {
             RequestId::new(&self.next_text()).expect("uuid")
         }
@@ -3017,6 +3522,40 @@ pub(crate) mod test_support {
                     }
                 }
             }
+            // §6 第 15 条：`compacted` 的每个 cursor 必须是本提交会话的 delta 行、未被压过，且同批必须有
+            // summary 事件；任一不满足 → 整事务 `InvalidRequest`。校验放在任何写入之前，因此是"零写入"。
+            if !commit.compacted.is_empty() {
+                if !commit
+                    .events
+                    .iter()
+                    .any(|event| event.kind == EventKind::Summary)
+                {
+                    return Err(PortError::InvalidRequest(
+                        "compacted 必须与一条 kind='summary' 的事件同批（§6 第 15 条）",
+                    ));
+                }
+                for cursor in &commit.compacted {
+                    let sequence = cursor.global_sequence.get();
+                    let Some(target) = state
+                        .events
+                        .iter()
+                        .find(|event| event.global_sequence.get() == sequence)
+                    else {
+                        return Err(PortError::InvalidRequest("compacted 指向不存在的事件"));
+                    };
+                    if target.session.as_ref() != commit.session.as_ref() {
+                        return Err(PortError::InvalidRequest("compacted 不得跨会话"));
+                    }
+                    if state.compacted_into.contains_key(&sequence) {
+                        return Err(PortError::InvalidRequest("compacted 指向的行已经被压过"));
+                    }
+                    if state.event_kinds.get(&sequence) != Some(&EventKind::Delta) {
+                        return Err(PortError::InvalidRequest(
+                            "compacted 只接受 kind='delta' 的行（§6 第 15 条）",
+                        ));
+                    }
+                }
+            }
             let mut appended = Vec::new();
             let mut batch = Vec::new();
             for event in &commit.events {
@@ -3049,9 +3588,11 @@ pub(crate) mod test_support {
                 state
                     .event_origins
                     .insert(id.as_str().to_owned(), event.origin);
+                state.event_kinds.insert(global.get(), event.kind);
                 batch.push(event.event_type.as_str().to_owned());
                 let committed = CommittedEvent {
                     id,
+                    event_type: event.event_type.clone(),
                     session: commit.session.clone(),
                     session_sequence,
                     global_sequence: global,
@@ -3088,6 +3629,16 @@ pub(crate) mod test_support {
                         resolution: None,
                     },
                 );
+            }
+            // §6 第 15 条：校验已通过，这里把被压行指向本批 summary 行的 `global_sequence`。
+            if !commit.compacted.is_empty() {
+                if let Some(summary) = appended.last().map(|event| event.global_sequence.get()) {
+                    for cursor in &commit.compacted {
+                        state
+                            .compacted_into
+                            .insert(cursor.global_sequence.get(), summary);
+                    }
+                }
             }
             // 终态提交：按同一批次 `command.*` 事件的 causation 定位命令行（`ports::OwnedCommit`
             // 的文档约定），`terminal_event_id` 取该批次最后一条事件的 id。
@@ -3288,6 +3839,24 @@ pub(crate) mod test_support {
                 .commands
                 .get(&command_key(actor, request))
                 .cloned())
+        }
+
+        /// §6 第 16 条：仍为 `accepted` 且没有终态事件的 mutation 命令。
+        async fn unsettled_commands(
+            &self,
+            limit: ReplayLimit,
+        ) -> Result<Vec<CommandRecord>, PortError> {
+            let state = lock(&self.world.state);
+            Ok(state
+                .commands
+                .values()
+                .filter(|record| {
+                    record.status() == CommandStatus::Accepted
+                        && record.kind() == CommandKind::Mutation
+                })
+                .take(limit.events() as usize)
+                .cloned()
+                .collect())
         }
 
         async fn retention_window(
@@ -3737,6 +4306,11 @@ pub(crate) mod test_support {
         ) -> Result<PruneReport, PortError> {
             Ok(PruneReport::default())
         }
+
+        /// 内存 fake 没有文件目录，因此没有孤儿可回收（§6 第 18 条由 storage 侧实现）。
+        async fn sweep_orphans(&self, _at: Timestamp, _limit: u32) -> Result<u32, PortError> {
+            Ok(0)
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -3840,6 +4414,15 @@ pub(crate) mod test_support {
         async fn list_config(&self) -> Result<Vec<ConfigOption>, PortError> {
             self.world.config_calls.fetch_add(1, Ordering::SeqCst);
             Ok(Vec::new())
+        }
+
+        /// `session.mode.list` 的候选来源（§5.1/§6 第 17 条）：由测试按需配置，默认空列表
+        /// （core 不得凭当前模式编造候选）。
+        async fn modes(&self) -> Result<ModeState, PortError> {
+            self.world.mode_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(lock(&self.world.modes)
+                .clone()
+                .unwrap_or_else(|| ModeState::new(None, Vec::new())))
         }
 
         async fn set_config(
@@ -4016,8 +4599,8 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use crate::model::{
-        DeviceId, EventId, ExportId, InteractionKind, InteractionOption, NodeId,
-        PendingInteraction, ScopeSet,
+        AgentId, AgentRef, DeviceId, EventId, ExportId, InteractionKind, InteractionOption,
+        ModeState, PendingInteraction, ResourceOrigin, ScopeSet,
     };
 
     fn device_without_scopes() -> Actor {
@@ -4195,6 +4778,7 @@ mod tests {
         let harness = Harness::new(BrokerConfig {
             queue_policy: QueuePolicy::Queue,
             max_queued_turns: 1,
+            ..BrokerConfig::default()
         });
         // 第一个 turn 永远不结束（脚本只发增量）。
         harness.world.push_script(Script::new(vec![endpoint_event(
@@ -4244,6 +4828,7 @@ mod tests {
         let harness = Harness::new(BrokerConfig {
             queue_policy: QueuePolicy::RejectBusy,
             max_queued_turns: 16,
+            ..BrokerConfig::default()
         });
         harness.world.push_script(Script::new(vec![endpoint_event(
             EventKind::Delta,
@@ -4777,6 +5362,7 @@ mod tests {
                 interaction: pending,
                 turn: None,
             }],
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
@@ -4812,6 +5398,7 @@ mod tests {
                 .expect("event"),
             ],
             interactions: Vec::new(),
+            compacted: Vec::new(),
             idempotency: None,
             command_terminal: None,
             origin_epoch: None,
@@ -4962,6 +5549,484 @@ mod tests {
                 >= 3,
             "本地 CLI 引起的 turn/command 事件记 LocalCli：{origins:?}"
         );
+    }
+
+    /// 同时装配 `Broker` 与 `UseCases`（恢复与 `mode.list` 的用例入口需要后者）。
+    fn use_cases_fixture() -> UseCaseFixture {
+        use crate::broker::test_support::FakeBackend;
+        let world = FakeWorld::new();
+        let store = Arc::new(FakeStore {
+            world: world.clone(),
+        });
+        let broker = Arc::new(Broker::new(
+            BrokerDeps {
+                store: store.clone(),
+                deliveries: Arc::new(FakeDeliveries {
+                    world: world.clone(),
+                }),
+                backends: Arc::new(FakeBackend {
+                    world: world.clone(),
+                }),
+                exports: Arc::new(FakeExports {
+                    world: world.clone(),
+                }),
+                publisher: Arc::new(TestPublisher {
+                    world: world.clone(),
+                }),
+                clock: TestClock::new(),
+                ids: Arc::new(TestIds::default()),
+                audit: Some(Arc::new(TestAudit {
+                    world: world.clone(),
+                })),
+            },
+            BrokerConfig::default(),
+        ));
+        let session = SessionId::new(&uuid_text(7)).expect("session id");
+        let agent = AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
+            .expect("agent ref");
+        world.seed_session(
+            crate::model::Session::try_new(
+                session.clone(),
+                OwnedSessionRef::new(session.clone()),
+                None,
+                agent,
+                SessionState::Idle,
+                ResourceOrigin::Local,
+                None,
+                Version::from(1),
+                ts(0),
+                ts(0),
+                None,
+            )
+            .expect("session"),
+        );
+        let use_cases = crate::use_cases::UseCases::new(crate::use_cases::UseCaseDeps {
+            broker: broker.clone(),
+            store,
+            deliveries: Arc::new(FakeDeliveries {
+                world: world.clone(),
+            }),
+            exports: Arc::new(FakeExports {
+                world: world.clone(),
+            }),
+            trust: Arc::new(FakeTrust),
+            audit: Arc::new(TestAudit {
+                world: world.clone(),
+            }),
+            attachments: Arc::new(FakeAttachments {
+                world: world.clone(),
+            }),
+            catalog: Arc::new(TestCatalog),
+            clock: TestClock::new(),
+            ids: Arc::new(TestIds::default()),
+        });
+        UseCaseFixture {
+            world,
+            broker,
+            use_cases,
+            session,
+        }
+    }
+
+    struct UseCaseFixture {
+        world: Arc<FakeWorld>,
+        broker: Arc<Broker>,
+        use_cases: crate::use_cases::UseCases,
+        session: SessionId,
+    }
+
+    impl UseCaseFixture {
+        fn reference(&self) -> SessionReference {
+            SessionReference::Owned(OwnedSessionRef::new(self.session.clone()))
+        }
+    }
+
+    /// §9 判据 18 / §6 第 14 条：三种终态各一例、多消息、无 delta 不发、同批提交、think 不发。
+    #[test]
+    fn assistant_messages_complete_with_the_turn() {
+        let harness = Harness::new(BrokerConfig::default());
+        let first = MessageId::new(&uuid_text(600)).expect("message");
+        let second = MessageId::new(&uuid_text(601)).expect("message");
+        let delta = |message: &MessageId, index: u64, text: &str| {
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"{index}","text":"{text}"}}"#,
+                    message.as_str(),
+                    uuid_text(0)
+                ),
+            )
+        };
+        let thought = endpoint_event(
+            EventKind::Delta,
+            "agent.thought.delta",
+            &format!(
+                r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"thinking"}}"#,
+                MessageId::new(&uuid_text(602)).expect("message").as_str(),
+                uuid_text(0)
+            ),
+        );
+        // 三条终态各跑一例：delta（含乱序与带 block 的项）+ thought + 终态。
+        for (event_type, state) in [
+            ("turn.completed", "completed"),
+            ("turn.cancelled", "cancelled"),
+            ("turn.failed", "failed"),
+        ] {
+            harness.world.push_script(Script::new(vec![
+                delta(&first, 1, " world"),
+                delta(&first, 0, "Hello"),
+                thought.clone(),
+                endpoint_event(EventKind::Delta, "agent.message.delta", &format!(
+                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"B","block":{{"type":"image_ref","mimeType":"image/png","byteLength":"1","displayState":"available"}}}}"#,
+                    second.as_str(),
+                    uuid_text(0)
+                )),
+                endpoint_event(EventKind::State, event_type, &turn_view(state)),
+            ]));
+        }
+        let mut seen = 0usize;
+        for n in 1..=3u64 {
+            assert!(matches!(
+                harness.submit_prompt(n, 'A'),
+                CommandReceipt::Accepted { .. }
+            ));
+            // 无 delta 的 turn 不产生 completed：第 4 次提交一个空脚本。
+            seen += 1;
+        }
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(4, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let completed: Vec<CommittedEvent> = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .filter(|event| event.event_type.as_str() == "agent.message.completed")
+            .collect();
+        assert_eq!(
+            completed.len(),
+            seen * 2,
+            "每次终态为两个 messageId 各发一条"
+        );
+        // 终态事件与 completed 同批（§6 第 14 条）。
+        let batches = harness.world.batch_types();
+        assert!(
+            batches.iter().any(|batch| {
+                batch.iter().any(|kind| kind == "agent.message.completed")
+                    && batch.iter().any(|kind| kind == "turn.completed")
+            }),
+            "completed 必须与 turn 终态事件同批提交：{batches:?}"
+        );
+        assert!(
+            !batches
+                .iter()
+                .flatten()
+                .any(|kind| *kind == "agent.thought.delta.completed"),
+            "think 流不产生 completed"
+        );
+
+        // 文本按 deltaIndex 升序拼接；带 block 的按位置插入；think 的 messageId 没有 completed。
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let first_payload = block_on(view.event_payload(&completed[0].id))
+            .expect("payload")
+            .expect("存在");
+        assert!(
+            first_payload.view.as_str().contains("Hello world"),
+            "乱序 delta 必须按 deltaIndex 折叠：{}",
+            first_payload.view.as_str()
+        );
+        let block_payload = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| {
+                event.event_type.as_str() == "agent.message.completed"
+                    && block_on(view.event_payload(&event.id))
+                        .ok()
+                        .flatten()
+                        .map(|payload| payload.view.as_str().contains(second.as_str()))
+                        .unwrap_or(false)
+            })
+            .expect("第二个 messageId 有 completed");
+        let block_payload = block_on(view.event_payload(&block_payload.id))
+            .expect("payload")
+            .expect("存在");
+        assert!(
+            block_payload.view.as_str().contains("image_ref"),
+            "带 block 的 delta 按位置插入：{}",
+            block_payload.view.as_str()
+        );
+    }
+
+    /// §9 判据 19 / §6 第 15 条：压缩的两向 + `compacted` 校验。
+    #[test]
+    fn delta_compaction_two_way() {
+        // persist_deltas = false → 终态后恰好一条 summary，被压行标记 compacted_into。
+        let harness = Harness::new(BrokerConfig {
+            persist_deltas: false,
+            ..BrokerConfig::default()
+        });
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"A"}}"#,
+                    uuid_text(610),
+                    uuid_text(0)
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let summaries: Vec<CommittedEvent> = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .filter(|event| event.event_type.as_str() == "turn.delta_compacted")
+            .collect();
+        assert_eq!(
+            summaries.len(),
+            1,
+            "persist_deltas=false 时终态后必须压缩一次"
+        );
+        assert!(
+            !crate::broker::test_support::lock(&harness.world.state)
+                .compacted_into
+                .is_empty(),
+            "被压行必须标记 compacted_into"
+        );
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let payload = block_on(view.event_payload(&summaries[0].id))
+            .expect("payload")
+            .expect("存在");
+        let text = payload.view.as_str();
+        assert!(
+            text.contains("turnId") && text.contains("deltaCount") && !text.contains("\"text\""),
+            "summary 只承载收据：{text}"
+        );
+
+        // persist_deltas = true → 永不压缩。
+        let kept = Harness::new(BrokerConfig {
+            persist_deltas: true,
+            ..BrokerConfig::default()
+        });
+        kept.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"A"}}"#,
+                    uuid_text(611),
+                    uuid_text(0)
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        assert!(matches!(
+            kept.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(
+            !kept
+                .world
+                .events(&kept.session)
+                .iter()
+                .any(|event| event.event_type.as_str() == "turn.delta_compacted"),
+            "persist_deltas=true 时永不压缩"
+        );
+
+        // 非法 `compacted`（非 delta 行 / 跨会话）→ InvalidRequest 且零写入。
+        let before = harness.world.commit_count();
+        let bad = OwnedCommit {
+            session: Some(harness.session.clone()),
+            at: ts(9),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![
+                pending_event(
+                    "turn.delta_compacted",
+                    EventKind::Summary,
+                    json_view(
+                        r#"{"turnId":"00000000-0000-4000-8000-000000000000","deltaCount":1}"#,
+                    ),
+                    None,
+                    None,
+                    StoredPolicy::Durable,
+                    None,
+                )
+                .expect("event"),
+            ],
+            interactions: Vec::new(),
+            // 指向一条非 delta 行（会话的第一条事件是 `turn.queued`）。
+            compacted: vec![GlobalCursor {
+                server_epoch: server_epoch_of(999),
+                global_sequence: Sequence::new(1).expect("sequence"),
+            }],
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let error = block_on(harness.broker.commit_owned(bad)).expect_err("必须拒绝");
+        assert!(matches!(error, PortError::InvalidRequest(_)));
+        assert_eq!(
+            harness.world.commit_count(),
+            before + 1,
+            "校验发生在写入之前（fake 只在通过后才推进计数）"
+        );
+    }
+
+    /// §9 判据 20 / §6 第 16 条：启动恢复把 `accepted` 终结为 `uncertain`，并补写缺失的 completed。
+    #[test]
+    fn recover_unsettled_terminates_and_backfills() {
+        let fixture = use_cases_fixture();
+        let session = fixture.session.clone();
+        let harness_world = fixture.world.clone();
+        let request = RequestId::new(&uuid_text(700)).expect("uuid");
+        let turn = TurnId::new(&uuid_text(701)).expect("uuid");
+        let message = MessageId::new(&uuid_text(702)).expect("message");
+        let actor = Actor::LocalCli;
+        // 造一条 accepted 的 mutation + 未终态 turn + 已提交 delta（没有 completed）。
+        let accepted =
+            OwnedCommit {
+                session: Some(session.clone()),
+                at: ts(0),
+                expected_version: None,
+                state: Some(StateChange::Update(SessionUpdate {
+                    state: Some(SessionState::Queued),
+                    mode: ModeChange::Unchanged,
+                    closed_at: None,
+                    interaction: None,
+                })),
+                turns: vec![TurnChange::Create(NewTurn {
+                    turn: turn.clone(),
+                    state: TurnState::Queued,
+                    causation: Some(request.clone()),
+                    started_at: None,
+                })],
+                events: vec![pending_event(
+                "agent.message.delta",
+                EventKind::Delta,
+                json_view(&format!(
+                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"lost tail"}}"#,
+                    message.as_str(),
+                    turn.as_str()
+                )),
+                Some(turn.clone()),
+                Some(request.clone()),
+                StoredPolicy::Durable,
+                Some(&actor),
+            )
+            .expect("event")],
+                interactions: Vec::new(),
+                compacted: Vec::new(),
+                idempotency: Some(IdempotencyRecord {
+                    actor: actor.clone(),
+                    request: request.clone(),
+                    command: "session.prompt".to_owned(),
+                    kind: CommandKind::Mutation,
+                    session: Some(session.clone()),
+                    expected_version: None,
+                    request_fingerprint: digest('A'),
+                    accepted_at: ts(0),
+                }),
+                command_terminal: None,
+                origin_epoch: None,
+            };
+        block_on(fixture.broker.commit_owned(accepted)).expect("seed accepted");
+        assert_eq!(
+            harness_world.command(&request).expect("row").status(),
+            CommandStatus::Accepted
+        );
+
+        let recovered = block_on(
+            fixture
+                .use_cases
+                .recover_unsettled(&actor, ReplayLimit::default()),
+        )
+        .expect("recover");
+        assert_eq!(recovered, 1, "一条 accepted 命令被终结");
+        let record = harness_world.command(&request).expect("row");
+        assert_eq!(record.status(), CommandStatus::Uncertain);
+        assert!(record.terminal_event().is_some(), "终态事件必须回填");
+        assert_eq!(
+            harness_world.turns(&session)[0].state(),
+            TurnState::Failed,
+            "对应 turn 必须终结为 failed"
+        );
+        assert!(
+            block_on(
+                fixture
+                    .use_cases
+                    .recover_unsettled(&actor, ReplayLimit::default())
+            )
+            .expect("recover")
+                == 0,
+            "恢复后不再有未结命令"
+        );
+        let completed = harness_world
+            .events(&session)
+            .into_iter()
+            .any(|event| event.event_type.as_str() == "agent.message.completed");
+        assert!(completed, "必须补写缺失的 completed（§6 第 16 条）");
+        assert!(
+            harness_world.published_after_commit(),
+            "广播必须发生在 commit 之后（§9 判据 20）"
+        );
+    }
+
+    /// §9 判据 21 / §6 第 17 条：候选原样来自端口；空列表不伪造；version 取自会话。
+    #[test]
+    fn mode_list_uses_adapter_modes_only() {
+        let fixture = use_cases_fixture();
+        let modes = ModeState::new(
+            Some(ModeRef::try_new(ModeId::new("code").expect("mode"), "Code").expect("mode ref")),
+            vec![
+                ModeRef::try_new(ModeId::new("code").expect("mode"), "Code").expect("mode ref"),
+                ModeRef::try_new(ModeId::new("ask").expect("mode"), "Ask").expect("mode ref"),
+            ],
+        );
+        *crate::broker::test_support::lock(&fixture.world.modes) = Some(modes.clone());
+        let listing = block_on(
+            fixture
+                .use_cases
+                .mode_list(&Actor::LocalCli, &fixture.reference()),
+        )
+        .expect("mode list");
+        assert_eq!(
+            listing.state, modes,
+            "候选必须原样来自 SessionEndpoint::modes()"
+        );
+        assert_eq!(listing.version, Version::from(1), "version 取会话当前版本");
+        assert_eq!(
+            fixture
+                .world
+                .mode_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+
+        // 端口返回空列表 → 结果为空（不凭 current_mode 编造候选）。
+        *crate::broker::test_support::lock(&fixture.world.modes) = None;
+        let empty = block_on(
+            fixture
+                .use_cases
+                .mode_list(&Actor::LocalCli, &fixture.reference()),
+        )
+        .expect("mode list");
+        assert!(empty.state.available.is_empty());
+        assert!(empty.state.current_mode.is_none());
     }
 
     /// §6.12：快照与重放出自同一读视图，barrier 是该视图的 `head()`。

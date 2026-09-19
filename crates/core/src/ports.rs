@@ -24,10 +24,10 @@ use crate::model::{
     CommittedDelivery, CommittedEvent, ConfigOption, ConfigOptionId, ConfigValue,
     CreateSessionRequest, DeviceId, DeviceRecord, Digest, EndpointEvent, EntityRef, EventId,
     EventPayload, EventType, ExportId, ExportRecord, GlobalCursor, ImportId, ImportRecord,
-    InteractionId, InteractionResolution, LocalCursor, ModeId, ModeRef, NodeId, NodeRecord,
-    OriginCursor, OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingRecord,
-    PairingSettlement, PendingEvent, PendingInteraction, PortError, PromptRequest, PublicError,
-    RemoteSessionRef, RequestId, Sequence, ServerEpoch, SessionId, SessionReference,
+    InteractionId, InteractionResolution, LocalCursor, MessageId, ModeId, ModeRef, ModeState,
+    NodeId, NodeRecord, OriginCursor, OriginEpoch, OriginEventRef, PairingClaim, PairingId,
+    PairingRecord, PairingSettlement, PendingEvent, PendingInteraction, PortError, PromptRequest,
+    PublicError, RemoteSessionRef, RequestId, Sequence, ServerEpoch, SessionId, SessionReference,
     SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
 };
 
@@ -103,6 +103,10 @@ pub trait SessionEndpoint: Send + Sync {
     async fn set_mode(&self, mode: &ModeId) -> Result<(), PortError>;
 
     async fn list_config(&self) -> Result<Vec<ConfigOption>, PortError>;
+
+    /// `SessionModeState.availableModes` 的唯一来源（§6 第 17 条）；core 不用它做授权或状态迁移，
+    /// 端口返回空列表时结果就是空列表（不得凭当前模式编造候选）。
+    async fn modes(&self) -> Result<ModeState, PortError>;
 
     async fn set_config(&self, id: &ConfigOptionId, value: ConfigValue) -> Result<(), PortError>;
 
@@ -241,6 +245,10 @@ pub struct OwnedCommit {
     /// 新建 pending 交互行（权限 / elicitation 请求）。每条都必须与同一提交里那条 `interaction` 事件
     /// 一一对应；解析既有行走 `state.interaction`，两条路径互斥（§6 第 13 条）。
     pub interactions: Vec<PendingInteractionWrite>,
+    /// delta 压缩的替代清单（§6 第 15 条）：本提交里那条 `kind='summary'` 事件所替代的 delta 行的
+    /// `global_sequence`。每个 cursor 必须属于本提交的会话、对应行必须是 `kind='delta'` 且
+    /// `compacted_into IS NULL`；任一不满足 → 整事务 `InvalidRequest`（存储层校验，失败关闭）。
+    pub compacted: Vec<GlobalCursor>,
     /// 含指纹与 `expected_version`。
     pub idempotency: Option<IdempotencyRecord>,
     /// 命令终态。**接受提交**（`idempotency` 为 `Some`）时本字段为 `None`——`CommandTerminalRecord`
@@ -296,7 +304,7 @@ pub struct HistoryQuery {
 
 /// 历史页面。`config`/`capabilities` 是**用例层**按 `include` 合并的活体数据（来自
 /// `SessionEndpoint`/`AgentCatalog`）；存储层实现必须让它们保持空值——持久层不保存活体能力。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HistoryPage {
     pub session: SessionSummary,
     pub events: Vec<CommittedEvent>,
@@ -328,6 +336,10 @@ pub trait SessionStore: Send + Sync {
         request: &RequestId,
         actor: &Actor,
     ) -> Result<Option<CommandRecord>, PortError>;
+
+    /// 启动恢复用（§6 第 16 条）：仍为 `accepted` 且没有终态事件的 mutation 命令，最多 `limit` 条。
+    async fn unsettled_commands(&self, limit: ReplayLimit)
+    -> Result<Vec<CommandRecord>, PortError>;
 
     async fn retention_window(
         &self,
@@ -694,6 +706,12 @@ pub trait AttachmentStore: Send + Sync {
 
     /// 按 LRU 清理到给定字节预算以下；返回被删除的附件。
     async fn prune_lru(&self, budget_bytes: u64, at: Timestamp) -> Result<PruneReport, PortError>;
+
+    /// §7.5 的孤儿回收（§6 第 18 条）：删除 `storage.attachment_dir` 下**不在 `owned_attachment` 表里**
+    /// 且 `mtime` 早于 `at` 的文件，每次最多 `limit` 个，返回实际删除数（`limit = 0` 不删）。
+    ///
+    /// 一律在事务之外运行（文件删除只在行事务提交之后）；失败不阻止启动。
+    async fn sweep_orphans(&self, at: Timestamp, limit: u32) -> Result<u32, PortError>;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -740,6 +758,8 @@ pub trait IdGenerator: Send + Sync {
     fn turn_id(&self) -> TurnId;
     fn interaction_id(&self) -> InteractionId;
     fn pairing_id(&self) -> PairingId;
+    /// 助手消息标识：由生产 delta 的适配器在该消息第一条 delta 提交前分配（§6 第 14 条）。
+    fn message_id(&self) -> MessageId;
     fn origin_epoch(&self) -> OriginEpoch;
     fn request_id(&self) -> RequestId;
 }

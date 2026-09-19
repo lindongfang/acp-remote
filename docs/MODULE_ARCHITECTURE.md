@@ -2,7 +2,7 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite` 已实现，见 `README.md` 的 crate 表）
 > 版本：0.3
-> 修订记录（2026-09-18）：补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1。  
+> 修订记录（2026-09-18）：§4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1。  
 > 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 > 已接受决策：[ADR-0003](./adr/0003-pi-inspired-module-boundaries.md)
@@ -188,7 +188,7 @@ RemoteCatalogQueries
 ```text
 AgentCatalog             枚举可用 Agent 与能力
 SessionBackendFactory    受约束地 create/open SessionEndpoint
-SessionEndpoint          prompt/cancel/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session
+SessionEndpoint          prompt/cancel/modes/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session（`modes` 是 `session.mode.list` 的唯一候选来源）
 SessionStore             原子提交 owned session 状态、事件与 requestId 幂等；提供 head 与一致性读视图
 RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
 TrustStore               设备、节点配对、信任与撤销元数据

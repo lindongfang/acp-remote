@@ -30,7 +30,7 @@ const FIXTURE_ROOT: &str = "fixtures/node-link/v1/";
 const MANIFEST: &str = "fixtures/node-link/v1/manifest.json";
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/pairing.schema.json";
 
-const EXPECTED_VALID_MESSAGE_CASES: usize = 37;
+const EXPECTED_VALID_MESSAGE_CASES: usize = 38;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
 const EXPECTED_BODY_REJECTED: usize = 8;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;

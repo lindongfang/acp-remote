@@ -215,6 +215,7 @@ async fn corrupt_database_fails_closed() {
                     turns: Vec::new(),
                     events: Vec::new(),
                     interactions: Vec::new(),
+                    compacted: Vec::new(),
                     idempotency: None,
                     command_terminal: None,
                     origin_epoch: None,

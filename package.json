@@ -9,14 +9,15 @@
     "node": ">=20"
   },
   "scripts": {
-    "check": "npm run check:schemas && npm run check:commands && npm run check:errors && npm run check:features && npm run check:assets && npm run check:acp && npm run check:boundaries",
+    "check": "npm run check:schemas && npm run check:commands && npm run check:errors && npm run check:features && npm run check:assets && npm run check:acp && npm run check:boundaries && npm run check:drift",
     "check:schemas": "node scripts/check-schema-fixtures.mjs",
     "check:commands": "node scripts/check-command-catalog.mjs",
     "check:errors": "node scripts/check-error-registry.mjs",
     "check:features": "node scripts/check-features.mjs",
     "check:assets": "node scripts/check-contract-assets.mjs",
     "check:acp": "node scripts/check-acp-compatibility.mjs",
-    "check:boundaries": "node scripts/check-crate-boundaries.mjs"
+    "check:boundaries": "node scripts/check-crate-boundaries.mjs",
+    "check:drift": "node scripts/check-contract-drift.mjs"
   },
   "devDependencies": {
     "ajv": "^8.20.0",
