@@ -1,0 +1,8 @@
+# OpenSpec 引擎与 agentic 扩展的安装产物按内容哈希纳入 `openspec/.agentic-install.json`，
+# 哈希基于 LF 内容计算；Windows 的 core.autocrlf=true 会把检出内容转成 CRLF，使 manifest 判为漂移
+# （实测：同一文件 LF 与 CRLF 的 sha256 不同，干净克隆后 `openspec-agentic doctor` 报 FAIL）。
+# 因此这些树固定以 LF 检出；vendor 里的 tarball 是二进制，禁止任何行尾转换。
+vendor/** -text
+openspec/** text eol=lf
+.agents/** text eol=lf
+.pi/** text eol=lf
