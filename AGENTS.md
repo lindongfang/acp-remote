@@ -192,14 +192,15 @@ core use_cases   -> core ports + core model
 
 ## 8. 实现工作流
 
-一次改动尽量形成小而完整的纵向切片：
+agentic 变更的通用工作流（proposal → specs/design → plan → tasks → apply → verification → archive）、
+角色职责、任务下放与最终验收判据由本项目安装的 OpenSpec agentic 扩展定义，本文件不重复：
 
-1. 确认要实现的用户行为及所属模块。
-2. 找出会受影响的不变量、协议和持久化边界。
-3. 先定义领域类型/端口，再实现适配器和组合代码。
-4. 添加最小必要测试，包含失败路径和重连/重试场景。
-5. 运行与改动相关的格式化、静态检查和测试。
-6. 如果行为、协议或架构发生变化，同步更新权威文档。
+- 流程、模板、角色与检查协议：`openspec/schemas/agentic/`；
+- 最终验收入口：`.agents/skills/agentic-verify/SKILL.md`；
+- 角色模型与 E2E 开关：`openspec/config.yaml` 的 `x-agentic`；
+- 项目画像（仓库结构、命令索引、约束与运行环境）：`openspec/config.yaml` 的 `context`。
+
+非 agentic 改动沿用同一协作要求：一次改动尽量形成小而完整的纵向切片。
 
 Rust workspace 建立后，完成改动通常应运行：
 
@@ -233,6 +234,8 @@ cargo test --workspace --all-features
 
 ## 10. 文档维护
 
+通用的文档维护时机与层级规则由 OpenSpec agentic schema 定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复 schema 正文。
+
 - 产品行为和产品级同步策略变化：更新 `docs/INITIAL_DESIGN.md`。
 - 威胁模型、信任边界、授权默认、数据保护或供应链要求变化：更新 `docs/SECURITY_DESIGN.md`；改变已接受密码学/传输决策时同时新增或更新 ADR。
 - Sync wire schema、消息状态或兼容语义变化：更新 `docs/SYNC_PROTOCOL.md`、`schemas/sync/v1/` 和 `fixtures/sync/v1/`。
@@ -254,11 +257,27 @@ cargo test --workspace --all-features
 
 ## 11. 完成定义
 
-只有同时满足以下条件，任务才算完成：
+agentic 变更的完成定义以 `openspec/schemas/agentic/` 与 `.agents/skills/agentic-verify/SKILL.md` 为准
+（任务复选框、`workflow check`、`e2e check`、最终验收与归档判据都在那里），本文件不重复。
 
-- 行为符合用户需求和上述不变量。
-- 依赖方向没有被破坏。
-- 成功路径、失败路径及关键边界有相应测试。
+对本仓库的任何改动，以下底线仍然适用：
+
+- 行为符合用户需求和 §3 的不变量。
+- 依赖方向（§4）没有被破坏。
+- 成功路径、失败路径及关键边界有相应测试（§9）。
 - 相关检查已执行，或明确记录未执行原因。
 - 没有泄漏敏感信息，也没有引入未经授权的云依赖。
-- 影响设计的变更已经同步到权威文档。
+- 影响设计的变更已经同步到权威文档（§10）。
+
+
+# Agentic workflow
+
+本项目的 agentic 变更使用 [.agents/skills/agentic-verify/SKILL.md](.agents/skills/agentic-verify/SKILL.md)
+作为最终验收入口。执行 `/opsx:verify`、最终验收或归档前检查时，先读取该 skill；
+其他 schema 沿用自身流程。宿主没有 skill 发现能力时，也应直接读取该文件。
+
+OpenSpec 流程中的 CLI 状态 `all_done` 只表示任务复选框完成。收到该状态后，若要报告 agentic 变更
+可归档，仍须执行上述验收；不得仅凭 CLI 的默认归档提示形成验收结论。
+保留 CLI 原始状态，另行报告证据验收的 PASS / FAIL / BLOCKED。
+
+本规则不授权合并、推送、回滚、发布或归档。普通项目审查、schema 编辑不要求执行产品变更的验收流程。

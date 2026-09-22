@@ -1,0 +1,30 @@
+{
+  "agenticVersion": "0.2.0",
+  "openspecVersion": "1.13.0",
+  "configVersion": 1,
+  "schema": "agentic",
+  "installedAt": "2026-09-22T07:38:04.949Z",
+  "updatedAt": "2026-09-22T07:38:04.949Z",
+  "files": {
+    "openspec/schemas/agentic/procedures/acceptance.md": "sha256:563bfedce293aa64228f8a515539b5f8a5a03bf57f2ab852172b5575106ff1f5",
+    "openspec/schemas/agentic/procedures/minimal-change.md": "sha256:2f6dd69e06461c7d8504d4897369370998b889abe5c4ad3ae19095e9ae214e1f",
+    "openspec/schemas/agentic/procedures/workflow-check.md": "sha256:e7969eecacfbc55f1c414cefc0dc47b013b1c553da202cb93b30af4d6a2bc4a6",
+    "openspec/schemas/agentic/README.md": "sha256:59bb65f49353257392eb0fce6d7b2ed196807144b8e545851553158ccaf9b6b0",
+    "openspec/schemas/agentic/roles/coder.md": "sha256:0ae11f20e029c563035eb30b310541bdbd915c4e01d637f75d5353b12622d197",
+    "openspec/schemas/agentic/roles/environment.md": "sha256:a83d45fa70510ef350b1c3b5cf47ff0d959eff710283e8fd9bc6065bb69fb079",
+    "openspec/schemas/agentic/roles/integrator.md": "sha256:a5de175e0516dd4c9e6ac274ccfe6033568e2f19c23941641f49a00c2b512767",
+    "openspec/schemas/agentic/roles/reviewer.md": "sha256:afcf4ff9abc8c6af22ac2be243be56102f412fccb9778ad4aad25f43decb267d",
+    "openspec/schemas/agentic/roles/tester.md": "sha256:d066caa38b8e3ecb287a84d47a0f1bae09d5f851d24b4777b57f821b7157e4a6",
+    "openspec/schemas/agentic/roles/validator.md": "sha256:21ca98a32070321f513d8dc7aa3d73e0facd04b5bf656adaf5031d38d2e4b999",
+    "openspec/schemas/agentic/schema.yaml": "sha256:bf6fb06749ac3cf58aa4d12186d0bc099ce8c844abb3353b4ab29e97c841be98",
+    "openspec/schemas/agentic/templates/design.md": "sha256:11d54fc9d5db4ceb1dd05e9042eef3c9c61d2359fa93f736ceac7890d1b63af6",
+    "openspec/schemas/agentic/templates/plan.md": "sha256:3fd13d570020c434cd92ad595afaff023e52b2b623467e003713b2c9fad9ab16",
+    "openspec/schemas/agentic/templates/proposal.md": "sha256:23ce5b115ba2631ca68fa406786b718115380baf0ded31d176c9594c1c55779d",
+    "openspec/schemas/agentic/templates/spec.md": "sha256:50f498c7e56c673bee2c2bd356b218b4dbaa3c3d99d55cf830aaa8466ae3698b",
+    "openspec/schemas/agentic/templates/tasks.md": "sha256:b1bbbb50278e271663f51d44663c1d47210a1643360c1c4c89963ace06cee244",
+    "openspec/schemas/agentic/templates/verification.md": "sha256:63ee27ec77bc7d43f447dec8ea02a38013f471bb6e0c56e802804f473bfc85d7",
+    "openspec/schemas/agentic/tests/agentic-workflow.ps1": "sha256:507766f188194a6770a81cd96dd3f0fa00265c7989cea80d6002ab53636fa181",
+    "openspec/schemas/agentic/tests/scenarios.md": "sha256:c8a269b1a57433ac7b7d7db81df0433d3cb0d2a23e56b055f5c78ce4d5ea0acc",
+    ".agents/skills/agentic-verify/SKILL.md": "sha256:49f230f59829b3e2affef51da199bea4edb9eeff080462c58ff5cd6e244ac6aa"
+  }
+}

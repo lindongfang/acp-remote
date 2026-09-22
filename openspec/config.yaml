@@ -1,0 +1,78 @@
+schema: agentic
+context: |
+  # Project Profile
+
+  以下项目画像由目标项目维护；安装模板不预设不存在的目录、命令或约束。标为“未配置”的内容不得猜测，
+  需要时先由 environment/recon 在新的任务级最小上下文中只读采集事实，再由主 Agent 确认后更新本文件。
+  已有项目 context 在 init/update 时保留，不用本模板覆盖。
+
+  ## Repository Structure
+  - 项目类型与技术栈：Rust workspace（edition 2024，rust-version 1.85）承载 core 与协议 crate；Node ≥ 20 承载跨语言合同资产的机器校验；协议 wire schema/fixture 跨 Rust 与 TypeScript 共享。
+  - 主要模块、入口与职责边界：`crates/` 现有 6 个已登记成员（`acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`）；`acp-protocol`、`agent-host`、`node-link-client`、`identity-auth`、`identity-keystore`、`server`、`app` 与前端尚未实现。职责边界唯一权威：`docs/MODULE_ARCHITECTURE.md`。
+  - 共享代码及依赖方向：`docs/MODULE_ARCHITECTURE.md` §5 依赖矩阵；由 `npm run check` 的 `check:boundaries`（`cargo metadata`）断言。
+  - 生成文件、第三方代码和禁止直接修改目录：构建产物 `target/`、`node_modules/`、`dist/` 不手工编辑；`openspec/schemas/agentic/`、`.pi/`、`.agents/skills/openspec-*` 由 OpenSpec 引擎与扩展安装/升级维护（受管文件，手改会被 `doctor`/`update` 判为漂移）。
+  - 默认主分支及本地/远端语义：`refs/heads/main`；远端 `https://gitee.com/lindongfang-jack/acp-remote.git`。
+
+  ## Standard Commands
+  - 依赖安装：`npm ci`（Node ≥ 20；`package-lock.json` 与 `Cargo.lock` 均已入库）。
+  - Local Checks / Project Verify：以仓库 `AGENTS.md` §8（cargo fmt/clippy/test 三条）与 §10（`npm run check` 八个门禁）为唯一权威，本节不复制命令清单。
+  - E2E：`x-agentic.e2e.command` 未配置。当前阶段没有可端到端运行的产品路径，Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。
+
+  ## Engineering Constraints
+  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7 与 §9；安全与供应链要求见 `docs/SECURITY_DESIGN.md`。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。
+  - 子目录 AGENTS.md 或其他必须继续读取的项目规则：暂无子目录 `AGENTS.md`；改动前必须先读仓库根 `AGENTS.md` 及其列出的权威文档。
+
+  ## Runtime Environment
+  - 必要服务、平台、驱动及版本：Node ≥ 20（合同校验脚本）、Rust toolchain（CI 固定 1.98.1）。不需要数据库、容器或外部服务；测试使用可控的 fake ACP Agent，真实 Codex/OMP 属可选兼容套件。
+  - 数据库、端口、容器、账号、缓存等共享资源及隔离规则：暂无共享运行资源；`cargo test` 与 `npm run check` 共享 `target/`，并行分片必须隔离构建目录（`CARGO_TARGET_DIR`）。
+
+  # Agentic Project Rules
+
+  文档正文使用简体中文；保留 agentic 模板中的英文结构标题、规范关键词、标识符和路径。
+  本节仅适用于 agentic 变更；其他 schema 沿用自身流程。工作流以 schema.yaml 为准，角色规则以 roles/ 为准。
+  `all_done` 后的验收与归档兜底见 operations guidance，并与 AGENTS.md 保持一致。
+  项目级 E2E 校验开关位于 `openspec/config.yaml` 的 `x-agentic.e2e`（缺省为开启），用
+  `npx --quiet --no-install openspec-agentic e2e --json` 读取；E2E 属于 apply 阶段任务：在流程内用
+  `npx --quiet --no-install openspec-agentic e2e run --change <变更>` 实际执行并写入变更目录下的执行记录，
+  执行者（tester）的任务完成条件是真实执行并返回原始证据，不以检查 PASS 为条件；只有唯一的 [e2e-owned] 门禁行
+  以 `npx --quiet --no-install openspec-agentic e2e check --change <变更>` 为 PASS 作为完成条件
+  （单变更检查要求变更已完成；仅扩展拥有的最终 E2E 行与正在执行的最终验收行（[final-verification]）可待办，
+  其余任务未勾完即 BLOCKED；无现成记录时加 `--run-if-missing` 先真实执行再判定）；
+  在测试 worktree 中执行时加 `--planning-root <权威规划根>`，命令在当前代码目录运行、记录写回权威变更目录；
+  用户只要求只读核查时用 `--no-write` 不回写任务。执行前变更目录之外若有未提交改动，`e2e run` 拒绝执行（退出码 2），
+  执行时产品已脏的记录也判失效。
+  E2E 执行用 `--stage candidate|final` 标注阶段，候选记录不满足最终门；配置了 `x-agentic.e2e.command` 时记录命令须一致，
+  且最近一次相关尝试须成功；人工记录用 `--result pass|fail|blocked` 与 `--cases` 留证，不参与自动重试计数。E2E 连续失败达到 `x-agentic.e2e.maxAttempts`（默认 3）时，`e2e run` 拒绝再开自动尝试、
+  `e2e check` 判 BLOCKED：必须停止“修复 → 重跑”循环，由用户决定提高上限或调整方案，不得清除记录绕过。
+  最终 E2E 任务行带 `[e2e-owned]` 标记，由该检查在 PASS 时自动勾选、非 PASS 时自动回退，主 Agent 不得手勾或手动回退（行级单一所有者）；
+  非 PASS 时该行保持待办，按既有规则阻断 apply 内验收；判据见 schema 的 plan/apply instruction。
+operations:
+  apply:
+    guidance:
+      - 仅对 agentic 变更：最终语义审计后按 verification 模板维护当前 agentic-assessment，运行 npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage final --json；它只读核对意图/覆盖引用、唯一门禁任务、当前目标、契约和证据摘要及 E2E，非 PASS 不勾选最终验收。all_done 后同样需要该检查；机械 PASS 不证明授权或测试真实性。旧变更缺字段时据实补齐，不编造证据。
+      - 仅对 agentic 变更：主 Agent 在其他适用任务完成后于 apply 内主动执行最终验收，无须用户另发 /opsx:verify；按 AGENTS.md 先读取 .agents/skills/agentic-verify/SKILL.md，无 skill 发现能力时直接读取。
+      - 仅对 agentic 变更：即使 CLI 返回 all_done（此时引擎只下发归档提示，不再下发 apply instruction），也须按本条核对实际目标及 verification.md 的有效证据；保留 CLI 原始状态，单独报告验收结果，仅 PASS 可报告该版本具备归档条件，不自动归档。
+      - 仅对 agentic 变更：E2E 是 apply 内的任务：执行者（tester）运行 npx --quiet --no-install openspec-agentic e2e run --change <变更> 真实执行并返回原始证据即交付，不以检查 PASS 为条件；主 Agent 完成覆盖核对/问题处理/清理后，对唯一的 [e2e-owned] 门禁行运行 npx --quiet --no-install openspec-agentic e2e check --change <变更>，PASS 才勾选该行（候选用 --stage candidate 留证且不满足最终门，最终用 --stage final；测试 worktree 用 --planning-root <权威规划根>；只读核查用 --no-write；配置了 x-agentic.e2e.command 时记录命令须一致且最近一次相关尝试须成功；单变更检查要求变更已完成，仅扩展拥有的最终 E2E 门禁行与正在执行的最终验收行可待办；没有现成记录时用 --run-if-missing 先真实执行再判定；判 PASS 时自动勾选、非 PASS 时自动回退带 [e2e-owned] 标记的该行，主 Agent 不得手勾。两种 mode 都保留该行：required 时它是最终主分支完整 E2E 的门禁检查行；not-applicable 时它只确认“不适用判据已按计划固化”，实际替代验证须另列为主 Agent 任务并先完成，否则检查判 BLOCKED）；未 PASS 时该任务保持待办，按“未完成任务阻断验收”的既有规则在 apply 内拦下。最终验收前运行同一检查作为依据（x-agentic.e2e.enabled 为 true 或缺省时 mode 必须为 required，或具备可追溯到用户的 downgrade_approval 批准记录；required 须有成功的执行记录且对当前版本有效，人工路径用 --manual --by --evidence [--result pass|fail|blocked]）。结论为 FAIL 或 BLOCKED 时不得报告可归档，先执行 E2E 并留证或回写计划。该检查只做结构比对，不证明测试真实性。
+      - 仅对 agentic 变更：E2E 连续失败达到 x-agentic.e2e.maxAttempts（默认 3）时，扩展拒绝再开自动尝试、e2e check 判 BLOCKED；此时必须停止“修复 → 重跑”循环，保持任务待办，把问题、已尝试的方案和证据交用户决策（提高上限或调整方案），不得删除、改写或伪造执行记录来绕过上限。
+  archive:
+    guidance:
+      - 仅对 agentic 变更：归档前运行 npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage archive --json，要求所有任务完成且目标、契约和证据摘要仍有效。非 PASS 回到 apply 修正；该命令不执行归档，受控归档入口须显式调用它，上游 archive 本身未被扩展拦截。
+      - 仅对 agentic 变更：按 AGENTS.md 先读取 .agents/skills/agentic-verify/SKILL.md 并执行归档前检查，无 skill 发现能力时直接读取；确认最终版本的验收为 PASS，不直接沿用旧会话的结论。
+      - 仅对 agentic 变更：归档前核对 plan.md、tasks.md 和 verification.md，确认主分支 verify、独立 review 和最终一致性验收已完成；required 须有最终完整 E2E PASS；not-applicable 须有理由、依据及全部通过的替代验证，开关开启（含缺省）时还须具备可追溯到用户的 downgrade_approval 批准记录；E2E 本身保留 NOT_APPLICABLE。
+      - 仅对 agentic 变更：未闭环的 FAIL/BLOCKED、未解决阻断问题或当前失效证据阻止归档；历史失败保留，有对应有效复核后可解除阻断。不适用检查需有理由及确认依据，不能伪装为 PASS；仅当前目标验收 PASS 才可归档。
+      - 仅对 agentic 变更：归档只核对 apply 内的 E2E 结论，不新增关卡：确认 E2E 任务已按完成条件勾选（执行记录与 e2e check 结论对当前目标版本仍有效，未跑过 E2E 的 required 变更不得归档）；版本或证据变化时回到 apply 重跑，而不是在归档阶段补做。若需要不可绕过的强制，另在 CI 或分支保护中调用该检查。
+      - 仅对 agentic 变更：规范同步与变更移动由归档操作执行（增量写入 openspec/specs/<capability>/spec.md，变更目录移入 openspec/changes/archive/）；主 Agent 在归档前完成上述核对，归档后确认主规范已更新且变更已移入 archive。
+x-agentic:
+  configVersion: 1
+  roles:
+    main: "@current"
+    coder: "@current"
+    integrator: "@current"
+    tester: "@current"
+    validator: "@current"
+    reviewer: "@current"
+    environment: "@current"
+  e2e:
+    enabled: true
+    command: ""
+    maxAttempts: 3

@@ -1,0 +1,433 @@
+name: agentic
+version: 1
+description: '`agentic` 工作流 - proposal → specs/design → plan → tasks → 并发实现与检视 → 主分支验收（E2E 由 x-agentic.e2e 项目开关决定）→ 归档'
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 变更动机、范围、能力与影响
+    template: proposal.md
+    instruction: |
+      创建 proposal，说明为什么需要本次变更（WHY）。
+      建议控制在 1-2 页，重点解释动机、范围、能力与影响；行为细节放入 specs，
+      技术方案放入 design.md，协作安排放入 plan.md。
+      按 templates/proposal.md 的字段填写，各字段要求见该模板注释。
+      Intent and Constraints 必须保留可追溯的用户原始要求、硬约束、非目标、成功判据、决策边界与
+      Agent 假设。已明确的用户选择直接引用，不重复求批准；只有新增且改变约定方向的取舍才澄清。
+      specs/design 和最终验收都要对照原始意图，不能只核对 Agent 生成文档彼此一致。
+
+      Capabilities 是 proposal 与 specs 阶段之间的契约，不只是功能摘要。
+      填写前先检查现有规范，区分新增能力与已有能力的需求变化，避免重复创建能力。
+      每个列出的能力都必须有对应的增量规范文件，名称和路径应保持一致。
+
+      至少声明一项能力；仅当规范层面的行为不变（纯重构、工具或文档变更）时，
+      才在该变更的 `.openspec.yaml` 中设置 `skip_specs: true` 以跳过规范。
+      此时删除两类能力清单的占位项，说明跳过理由并引用既有行为契约。
+      没有该标记时，校验会拒绝零增量的变更。不得为通过校验而编造需求。
+      规范描述行为，因此行为不变时，不应仅为记录实现调整而修改规范。
+
+      proposal 直接输入 specs 和 design：specs 根据能力清单与变更范围定义行为要求及验收场景，
+      design 根据动机、范围与影响制定技术方案。二者共同收敛后作为 plan.md 的输入，再生成 tasks。
+      skip_specs 时，plan.md 依据 proposal、design 及明确引用的既有行为契约生成。
+    requires: []
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: 可观察行为与可验证场景
+    template: spec.md
+    instruction: |
+      创建规范文件，定义系统应当做什么（WHAT）。规范是行为契约，不是实现计划。
+
+      适合写入规范的内容：
+      - 用户或下游系统依赖的可观察行为。
+      - 输入、输出和错误条件。
+      - 安全、隐私、可靠性和兼容性等外部约束。
+      - 能通过测试或明确的验证步骤确认的场景。
+
+      不应写入规范的内容：
+      - 内部类名或函数名。
+      - 库或框架选型。
+      - 逐步实现细节。
+      - 详细执行计划和测试脚本。
+      技术方案放入 design.md，协作与验证安排放入 plan.md，具体任务放入 tasks.md；
+      详细测试步骤、数据准备和脚本由测试 Agent 在 apply 中细化。
+
+      快速判断：如果某项实现可以替换而不改变外部可见行为，它通常不属于规范。
+
+      为 proposal 中的每项能力创建一个 `specs/<capability-path>/spec.md`。
+      `<capability-path>` 是相对于 `specs/` 的能力目录，如 `user-auth` 或 `identity/user-auth`。
+      - 新增能力：使用 proposal 声明的准确路径。
+      - 修改已有能力：沿用 `openspec/specs/<capability-path>/` 下的原有路径，
+        在本次变更的 `specs/<capability-path>/spec.md` 中写增量，不移动或重命名能力。
+      保留完整路径及现有嵌套层级；不得重命名能力，也不得为扁平布局新增领域层级。
+      新增路径段使用 kebab-case。
+      若 `.openspec.yaml` 设置了 `skip_specs: true`，则不创建规范；
+      否则 `npx --quiet --no-install openspec validate <change> --strict` 会拒绝零增量的变更，proposal 未列出能力时应先修正 proposal。
+      `skip_specs: true` 仅适用于没有规范层面行为变化的变更。
+
+      按需使用以下增量标题，保持拼写不变：
+      - `## ADDED Requirements`：新增需求。
+      - `## MODIFIED Requirements`：行为变化，必须包含更新后的完整需求。
+      - `## REMOVED Requirements`：必须包含 **Reason** 和 **Migration**。
+      - `## RENAMED Requirements`：仅修改名称，格式如下：
+        - FROM: `### Requirement: <原名称>`
+        - TO: `### Requirement: <新名称>`
+
+      ADDED/MODIFIED 中每个 `### Requirement: <名称>` 的正文必须使用 SHALL/MUST 表达规范性要求，
+      不用 should/may；至少包含一个 `#### Scenario: <名称>`，
+      以 **WHEN**/**THEN** 描述触发条件及可观察的预期结果，包含理解行为所需的前置状态。
+      场景标题必须恰好使用四个井号。
+      不要用三级标题或普通项目列表代替场景标题，否则场景可能无法被正确识别。
+      中文正文也必须保留 SHALL/MUST 等英文规范关键词，并在其两侧留空格，
+      例如“系统 SHALL 允许用户导出数据”。
+      REMOVED 使用需求标题及 Reason/Migration，RENAMED 使用 FROM/TO 映射；
+      这两类操作不要求补写 SHALL/MUST 正文或 Scenario。删除不适用的模板章节及占位内容。
+
+      新增能力：以 `## Purpose` 开头，用 1-2 句话、至少 50 个字符说明用途。
+      少于 50 个字符时，`npx --quiet --no-install openspec validate <change> --strict` 会报告内容过短；中文也应满足字符数要求。
+      归档时会将其复制到新建的主规范；省略会留下
+      `TBD ... Update Purpose after archive` 占位内容，需要手工补齐。
+      已有能力：增量规范中的 Purpose 会被忽略，因此应省略；
+      如需更新已有 Purpose（包括清理遗留 TBD 占位内容），直接编辑主规范。
+
+      读取或编辑已有主规范时，一律使用
+      `<planningHome.root>/openspec/specs/<capability-path>/spec.md`。
+      从 `npx --quiet --no-install openspec instructions ... --json` 获取 `planningHome.root`，
+      该字段已解析仓库或 store 的根目录；不得自行推断或改用仓库相对路径。
+      无论 store 来自 `--store`、项目的 `store:` 配置还是全局默认 store，
+      该字段都会指向实际存放变更的根目录；不使用 store 时则指向当前仓库。
+      不要自行判断属于哪种情况，以返回字段为准。
+
+      MODIFIED 操作步骤：
+      1. 在 `<planningHome.root>/openspec/specs/<capability-path>/spec.md` 中找到已有需求。
+      2. 复制整个需求块，从 `### Requirement:` 开始，包含其全部正文和场景。
+      3. 粘贴到 `## MODIFIED Requirements` 下，再修改为新行为。
+      4. 确认需求标题名称与原文一致（忽略空白差异）。
+
+      仅替换部分内容会在归档时丢失细节。
+      新增内容若不改变现有行为，应使用 ADDED。
+
+      各增量的字段与写法示例见 templates/spec.md。
+
+      规范应可验证：每个场景都是潜在的测试用例，条件与预期结果应具体、可观察。
+      按需求覆盖正常、异常及边界行为；不在场景中编写驱动工具、测试数据准备或自动化脚本。
+      与 design 并行编写后，在生成 plan.md 前共同收敛行为验收条件及接口、数据、环境契约。
+      plan.md 记录需求与场景到工作包、验证范围及完成条件的映射，再生成 tasks；
+      测试 Agent 据此细化用例和断言，reviewer 与最终验收据此核对实现符合性及测试覆盖。
+      归档时将本次增量同步到主规范，保留未受影响的既有要求。
+      明确必须覆盖的端到端需求/路径，其适用性、候选关键范围和最终完整范围在 plan.md 中确定；
+      不在本阶段要求详细自动化用例。后续需求/接口澄清同步相关文档、任务、测试及证据有效性。
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: 实现方案、决策与风险
+    template: design.md
+    instruction: |
+      创建 design.md，说明如何实现变更（HOW）。
+      本工作流的 plan.md 依赖 design，因此简单变更也应提供简短设计，不直接省略文件。
+      以下情况需要展开设计：
+      - 跨多个服务或模块的变更，或引入新的架构模式。
+      - 新增外部依赖，或重大数据模型调整。
+      - 涉及安全、性能或复杂迁移。
+      - 存在需要在编码前通过技术决策消除的歧义。
+
+      按 templates/design.md 的字段填写，每个字段的要求见该模板注释；涉及部署、数据迁移或
+      回滚时补充 `## Migration Plan`。会影响规范、方案或任务拆分的问题必须先与用户解决；
+      Open Questions 只记录可安全延后的未知项，不收纳尚未完成的必要决策，无则省略。
+
+      聚焦架构和实现思路，不逐行描述代码。proposal 解释为什么做以及变更范围，
+      specs 定义行为要求，design 解释如何实现以及技术决策背后的原因。
+      工作包负责人、worktree、执行批次和检查命令放入 plan.md，具体任务放入 tasks.md。
+      某节若只会复述 proposal 或已完成的 specs，应引用对应文档。
+      与 specs 并行编写后，在生成 plan.md 前共同收敛行为要求及接口、数据和环境契约；
+      plan.md 按模块边界、接口依赖和环境约束记录工作包拆分、集成与验证安排，再生成 tasks。
+      实现 Agent 据此编码；测试 Agent 据接口、数据及环境约定实现测试，预期行为仍以 specs 为准
+      （skip_specs 时使用明确引用的既有行为契约）；reviewer 和最终验收核对设计一致性及风险措施落实情况。
+    requires:
+      - proposal
+
+  - id: plan
+    generates: plan.md
+    description: 工作包、依赖、并发批次、文件归属、合并方式与验证策略
+    template: plan.md
+    instruction: |
+      创建 plan.md，将 specs 的行为要求和 design 的技术方案转为协作安排。
+      `templates/`、`roles/` 与 `procedures/` 位于 `npx --quiet --no-install openspec schema which agentic --json`
+      返回的 schema 目录下；按该路径完整读取所引用的模板、角色指令或程序，不猜测默认安装位置。
+      完整读取关联的 templates/plan.md，按字段、分阶段填写要求和引用规则生成计划。
+      specs 与 design 可以并行编写，进入本阶段前共同核对，无影响拆包或验收的冲突；必要问题先澄清。
+      skip_specs 时记录理由，依据 proposal、design 及明确引用的既有行为契约规划，不编造规范。
+      技术方案引用 design.md，具体步骤放入 tasks.md，实际执行和变更历史放入 verification.md。
+      按模板维护唯一 Coverage Index，将全部增量需求/场景（含删除/重命名）或 skip_specs 的既有契约
+      映射到任务、检查和计划证据路径；任务生成后补齐准确编号，结果不复制到索引。
+      原始意图、硬约束、范围或成功判据变化时记录依据与用户决策来源，不得仅同步文件后自行视为已获授权。
+
+      生成任务前套用以下判据，字段与分组按模板填写：
+      - 工作包：禁止依赖环；共享文件和共享设施有单一写入负责人。
+      - 调度与交接：区分契约、实际代码和资源依赖，按可用容量并行或串行；接口明确即可并行编码和
+        测试设计，集成验证前须交接全部已验收上游并核对版本包含关系；integrated 按依赖批次提前
+        组合，不等待全部工作包完成才首次集成，上游变化重评传递下游。
+      - 资源：独立 worktree 不代表运行状态隔离；实际占用、污染和重跑证据写入 verification；
+        不涉及共享运行资源时明确记录依据。
+      - 目标：候选构建、合入前及最终验收核实同一目标，不默认 HEAD 或未刷新引用有效，无法核实则 BLOCKED。
+      - 交付单元：同一变更可包含多个不同模式单元；每个单元依次完成候选验证、基线复核及防竞态
+        合入、实际结果一致性和必要回归，通过后才处理下一单元，不夹带未就绪单元；
+        基线变化重建候选并重评证据，无关实现仍可推进。
+
+      合并策略：不确定能否独立交付时选择 integrated；独立集成 Agent 的创建、隔离、串行更新和
+      授权边界见 apply instruction 的集成/合并调度规则。就绪阶段仅复核计划，变化先更新计划和相关依赖。
+
+      在 Verification Strategy 中写清各部分各自的命令、范围、通过条件和证据要求；统一检查入口需
+      确认实际包含的子检查，未安装的工具不能视为已接入。检查执行、角色隔离、证据复用条件和失败
+      判定见 apply instruction；测试 Agent 的入口、步骤、断言和报告要求见 roles/tester.md，
+      reviewer 与 validator 分别见 roles/reviewer.md 和 roles/validator.md。
+      Main E2E 的 mode 必须明确选择 required 或 not-applicable：这是执行计划中的约定，不是 OpenSpec
+      CLI 原生配置字段；选择依据是项目类型与本次变更范围，不是环境是否容易准备，缺失或非法时
+      先补齐计划。required 的覆盖范围按真实入口确定，不得用 API 调用、单元测试或原生 mock 代替
+      被测场景；适用但没有现成 E2E 时规划建设或可复现的人工步骤。not-applicable 的 reason、basis
+      和 alternative_checks 三字段必须齐备，不因纯库或 CLI 等项目标签直接判定不适用。
+
+      项目级开关决定默认档位：生成计划前运行 `npx --quiet --no-install openspec-agentic e2e --json`
+      读取 `openspec/config.yaml` 的 `x-agentic.e2e`（未配置或未安装时按 enabled 为 true 处理）。
+      enabled 为 true 时本变更的 mode 必须为 required；只有用户显式批准降级才可写 not-applicable，
+      并在 downgrade_approval 记录批准原话、时间与来源，缺少该记录的计划无效，不得据此跳过 E2E。
+      enabled 为 false 时按上述判据自行选择。command 非空时必须作为项目 E2E 入口写入
+      E2E Execution Contract 并据此执行（执行入口为 `npx --quiet --no-install openspec-agentic e2e run --change <name>`，
+      结果写入变更目录下的执行记录）；为空时按真实入口要求规划建设或可复现的人工步骤。
+
+      最终 Main E2E 采用单一聚合入口并行：required 的最终完整 E2E 每轮只执行一次
+      `npx --quiet --no-install openspec-agentic e2e run --change <name> --stage final`，
+      分片并行由 `x-agentic.e2e.command` 内部完成（同一入口按分片派发并隔离资源）；
+      在测试 worktree 中执行时通过 `--planning-root <权威规划根>` 指定存放 openspec/changes 的规划根，
+      命令仍在当前代码目录运行，记录写回权威变更目录。
+      不按分片多次调用 `e2e run`：最终阶段多条记录会让门禁只认最近一条，可能掩盖失败分片。
+      命令须汇总全部分片结果，任一分片失败或约定用例零执行即非零退出；分片清单、固定版本与
+      独立报告路径写入 E2E Execution Contract 与 E2E Execution Waves，供 verification.md 逐分片留证。
+      候选关键 E2E 用 `--stage candidate`，可按交付单元/分片分别留证，由主 Agent 汇总，不受最终门限制；
+      分片数不得超过可用隔离资源，超出时串行或按独占队列排队。
+
+      写明主分支检查、合并差异 review、E2E 和 /opsx:verify 的先后与完成条件，以及每个合入单元
+      依次完成候选验证、合入和主分支检查的顺序。合并与回滚仍遵守当前会话授权和仓库规则，
+      文档中的计划不代表自动授权。
+      主 Agent 在 apply 内执行最终验收，按 procedures/acceptance.md 核对计划与证据，不等待用户另发命令。
+    requires:
+      - specs
+      - design
+
+  - id: tasks
+    generates: tasks.md
+    description: 包含验证方式的实现、测试、交付与验收任务清单
+    template: tasks.md
+    instruction: |
+      创建任务清单，将实现工作拆分为可跟踪、可验证的步骤。
+      读取 plan.md，按工作包和依赖批次生成任务，标注工作包 ID、依赖和负责人。
+      除实现任务外，必须保留各工作包的 project verify 与独立 review、适用的集成检查、
+      每次主分支合入前候选验证、合入后 project verify/差异 review 和最终验收任务。
+      区分契约满足即可启动的实现与需要上游代码交接的集成检查；资源准备只阻塞依赖它的检查。
+      模板 Merge Unit 分组按 plan.md 的交付单元 ID 复制并重新编号，每个单元一组，
+      保留该单元的模式及全部 WP/TP 组成；不拆散对应测试产物，也不合并不同 integrated 单元。
+      每组完整执行候选验证、合入、主分支检查后再进入下一组。
+      不把所有候选验证、所有合入、所有主分支检查分别集中成三个阶段。
+      Main E2E 的 mode 为 required 时生成每个候选关键 E2E 和最终主分支完整 E2E 任务；not-applicable 时不
+      生成必须运行 E2E 的任务，改为生成“确认不适用理由、依据”的 `[e2e-owned]` 行，并把实际替代验证
+      另列为主 Agent 拥有的独立任务（替代验证未完成时 e2e check 判 BLOCKED，不会把该行误勾）。
+      required 的最终完整 E2E 是单入口任务：只生成一次 `--stage final` 执行/汇总，
+      最终阶段不得按分片拆成多次 `e2e run`（门禁只认最近一条 final 记录，会掩盖失败分片）；
+      分片并行由 `x-agentic.e2e.command` 内部完成，分片报告与 E2E ID 覆盖在主 Agent 汇总步骤核对。
+      候选关键 E2E 按交付单元/分片生成多个 `--stage candidate` 任务，由主 Agent 汇总，不以 e2e check 为完成条件。
+      项目开关开启（含缺省）时，只有 plan.md 已记录用户批准（downgrade_approval）才允许生成
+      not-applicable 路径，否则按 required 生成候选关键 E2E 与最终完整 E2E 任务。
+      E2E 属于 apply 阶段任务：候选与最终都在流程内用 `openspec-agentic e2e run --change <name>` 真实执行并写记录。
+      候选关键 E2E 用 `--stage candidate` 留证，由主 Agent 依据断言、版本与隔离证据核对后勾选其任务，
+      不以 `e2e check` 为完成条件（该检查只判定最终 E2E）。候选与最终的失败尝试共同计入
+      `x-agentic.e2e.maxAttempts`（默认 3）的连续失败上限，达到后不得继续自动重跑。
+      最终主分支完整 E2E 用 `--stage final` 执行：执行者（tester）的任务完成条件是真实执行并写记录、返回逐分片/逐 ID 原始结果与证据，
+      不以 `openspec-agentic e2e check --change <name>` 为完成条件，也不等待全局任务完成；
+      主 Agent 拥有的完整覆盖核对、问题处理与清理任务排在聚合入口之后、门禁检查之前；
+      只有唯一的 `[e2e-owned]` 门禁行以 `openspec-agentic e2e check --change <name>` 为 PASS 作为完成条件；没有现成记录时用 `--run-if-missing`
+      让检查先真实执行再判定。测试 worktree 中执行时必须显式传入 `--planning-root <权威规划根>`，记录写回权威变更目录。
+      不得把多个执行任务都设为“以 e2e check PASS 完成”，否则它们会互相阻塞。
+      最终 E2E 门禁行必须以 `[e2e-owned]` 标记：
+      该复选框由扩展拥有，检查 PASS 时自动回写、非 PASS 时自动回退为待办，主 Agent 不得手勾或手动回退（行级单一所有者，标记必须唯一）；
+      两种 mode 都保留该行：required 时它是最终主分支完整 E2E 的门禁检查行；not-applicable 时它只
+      确认“不适用判据已按计划固化”，完成条件同为 e2e check PASS，实际替代验证必须是另列的主 Agent 任务。
+      其余 E2E 任务仍由主 Agent 勾选。最终门要求记录由 `x-agentic.e2e.command` 自动执行且命令一致、
+      最近一次相关尝试成功；候选阶段记录不满足该门。
+      单变更检查要求变更已完成，仅扩展拥有的最终 E2E 行与正在执行的
+      最终验收行（[final-verification]）可待办，其余任务未勾完即 BLOCKED，
+      检查未通过时该任务保持待办，由“未完成任务阻断验收”的既有规则在 apply 内拦下，不退化为归档时的检查。
+      required 时使用模板的 Test Design and Authoring 分组，按 TP ID 复制；标注与编码并行，
+      不将列表中的前后位置当作依赖。先生成设计、编写及基础检查、独立 review 任务，apply 中
+      再根据测试 Agent 的产出细化 E2E ID，不要求开始编码前已有完整用例清单。
+      测试用例与脚本基础检查包括语法、类型、导入、配置、用例发现及辅助函数单元测试；
+      用例收集/辅助检查若触发真实产品端到端操作，也属于 E2E，须遵守候选/主分支执行协议。
+      交付单元关联实现与测试工作包，两者通过对应检查和独立 review 后汇合，不全局等待无关工作包。
+      Integration Readiness 按交付单元复制，仅引用本单元必要的前置任务及证据；
+      integrated 的批次集成、组合 Project Verify 和独立集成 review 按角色和检查 ID 单列前置任务。
+      编码前契约/所有权确认与集成前上游代码交接分开跟踪，资源准备只阻塞需要该资源的任务。
+      候选版本核实、构建、Project Verify、独立 review 分别跟踪；候选构建后同版本检查可并行。
+      主分支任务按执行批次、用例 ID、独立执行者和隔离资源拆分；不同编写分组可重排为执行分组，
+      必须覆盖全部必要用例并区分重试。人工路径明确步骤和实际执行人。
+      模板 Final E2E 按执行、汇总/清理、门禁检查三步生成；required 由 tester 执行后交主 Agent 汇总。
+      not-applicable 将执行任务改为主 Agent 的实际替代验证，汇总核对替代证据，最后由独立门禁行确认
+      不适用判据；两种 mode 都保留唯一 `[e2e-owned]`，门禁不承担执行/汇总。生成时删除未选路径。
+      不得在创建任务清单时勾选尚未实际完成的检查，也不得只列编码任务。
+      验收结果写入本次变更目录的 verification.md，按模板记录可追溯证据。
+      verification.md 是 apply 阶段产生的执行记录，不是开始编码前必须完成的 artifact。
+      主 Agent 在 apply 内执行最终验收；除该任务自身外，其他适用任务均须先完成。
+      /opsx:verify 为手动核查或复验入口，使用同样的自身任务例外；
+      报告若只因这一个正在执行的任务提示未完成，待其余检查通过后勾选并刷新最终结论。
+      其他未完成任务不得据此忽略。/opsx:archive 不放入复选框，避免归档依赖自身完成。
+      最终验收任务保留唯一的 [final-verification] 标记，使用 agentic-verify 入口；
+      /opsx:verify 在本项目也必须读取该入口，不以默认任务统计报告代替证据验收。
+      编写前检查 design.md 的 Open Questions：凡是会改变实际构建内容的问题，
+      先与用户解决，不得将未明说的假设写入任务清单。
+
+      严格遵循模板的编号分组和 `- [ ] X.Y` 复选框格式；
+      apply 通过复选框跟踪进度，不使用 `- [ ]` 的任务无法被跟踪。
+
+      编写要求：
+      - 用 `##` 编号标题组织相关任务。
+      - 每项任务 MUST 使用 `- [ ] X.Y 任务描述`，其中 X 为分组编号、Y 为组内任务编号。
+      - 每项任务应足够小，能在一次会话内完成。
+      - 每项按 templates/tasks.md 的字段填写；不同启动条件或执行者的工作分开跟踪。
+      - 按依赖顺序排列，先写必须先完成的工作。
+        分组及编号不替代显式依赖；复制或拆分任务后同步重编号及依赖引用，保留工作包和检查 ID。
+      - 每项任务 MUST 在同一复选框描述中写明完成验证方式：
+        测试、命令、可观察行为或交付产物。
+      - 局部自检随实现任务填写；交付检查、独立审查、集成/候选验证及最终验收按流程单列，
+        不受局部自检规则限制，不得合入实现任务后省略独立门禁。
+      - tasks 记录步骤与进度，范围和策略引用 plan.md；verification 按任务 ID 及检查/用例 ID 留证。
+        主 Agent 仅在完成条件满足且必要证据有效后勾选；FAIL/BLOCKED 或未执行保持待办，
+        证据失效时重开受影响任务并保留历史及复验记录，不适用项须有依据才能闭环。
+
+      最小格式示例（实际任务还须按计划补齐交付、合并及最终验收任务）：
+      ```markdown
+      ## 1. Implementation
+
+      - [ ] 1.1 [WP1] 负责人：实现 Agent A；依赖：无；实现 CSV 格式化，局部测试覆盖引号及分隔符；引用 plan.md 的 Local Checks。
+
+      ## 2. Branch Validation
+
+      - [ ] 2.1 [WP1] 负责人：实现 Agent A；依赖：1.1；执行 PV1，全部子检查通过并关联固定版本日志后完成。
+      - [ ] 2.2 [WP1] 负责人：新独立 reviewer；依赖：1.1，可与 2.1 并行；按计划 Code Review 检视固定版本，报告完整且无未解决阻断项后完成，待补测试证据交付前核对。
+      ```
+
+      构建内容参考 specs，实现方式参考 design.md，确保任务覆盖约定的行为与方案。
+      tasks 生成或契约调整后，执行 `npx --quiet --no-install openspec-agentic workflow check --change <name> --stage plan --json`。
+      它检查意图字段、需求覆盖引用及唯一门禁任务；缺失或冲突先修正，再开始受影响实现。
+      该检查只读；规则和分阶段字段见 procedures/workflow-check.md，完整样例见 procedures/minimal-change.md。
+    requires:
+      - specs
+      - design
+      - plan
+
+# 投递保证：本段 instruction 在 CLI 返回 all_done 时不再下发（引擎改为归档提示），
+# 因此凡是必须在 all_done 之后仍可见的规则不能只写在这里；其引擎侧兜底文本在目标项目的
+# openspec/config.yaml（operations.apply.guidance），宿主级路由与刹车在项目 AGENTS.md。
+# 模型解析契约的权威正文在本段，config.yaml 的 apply guidance 不重复。
+apply:
+  requires: [ proposal, specs, design, plan, tasks ]
+  tracks: tasks.md
+  instruction: |
+    读取 proposal、适用 specs、design、plan.md 和 tasks.md。老变更缺少 plan 或最终验收任务时先补齐；
+    需求或接口变化时同步更新契约、计划、任务和用例，重评受影响证据，不暂停无关工作。
+    从执行开始由主 Agent 持续维护权威 verification.md；子 Agent 仅返回结构化 handoff。
+    每次开始或恢复 apply、契约调整后，先运行 `npx --quiet --no-install openspec-agentic workflow check --change <name> --stage plan --json`；
+    缺失意图基线、覆盖索引或必要门禁任务时据实补齐，检查非 PASS 不派发受影响实现。
+
+    每次启动主流程、切换或派发角色前，运行 `npx --quiet --no-install openspec-agentic roles --json`，
+    重新读取 `openspec/config.yaml` 的 `x-agentic.roles`，不得缓存或生成宿主专用 agent 定义。
+    `@current` 继承当前实际模型（不是宿主模型名）；宿主支持继承时省略模型参数，否则传入当前实际模型；
+    其他值原样传给宿主本次调用。main 已运行时不追溯换模，新值在下次主流程启动或宿主原生切换时生效。
+    无法设置时先报告能力限制，不得声称配置生效。模型选择不改变角色职责、隔离或证据要求。
+
+    派发时完整读取对应角色指令：`roles/coder.md`、`roles/integrator.md`、`roles/tester.md`、
+    `roles/validator.md`、`roles/reviewer.md` 或 `roles/environment.md`，显式传入固定版本的契约、目标、允许范围、命令和中立证据；
+    不传无关私有对话、实现推理或自评。主 Agent 记录执行者、输入、隔离和版本，并维护 plan.md、tasks.md、
+    verification.md；不得创建汇总私有报告的子 Agent。缺少角色指令或所需隔离能力时，相关任务为 BLOCKED。
+    `roles/`、`templates/` 与 `procedures/` 位于 `npx --quiet --no-install openspec schema which agentic --json`
+    返回的 schema 目录下；`templates/verification.md` 是结构模板，不生成同名产物。
+    权威规划记录以 `npx --quiet --no-install openspec instructions ... --json` 返回的 changeDir 为准，主规范以
+    planningHome.root 定位；子 Agent worktree 中的副本不作为权威记录。
+
+    1. 按 plan 的依赖批次调度工作包。实现使用独立分支/worktree；接口明确的工作可并行，文件归属冲突或
+       未满足依赖的工作不得并行。集成前核对上游已验收提交在验证基线中；上游变化时重开受影响任务并复验。
+       无多 Agent 能力可串行并如实记录；无独立 reviewer 不得以自审替代。
+       串行实现不代表具备完整交付能力：独立 reviewer、tester（required）及 integrator 仍按角色规则要求，
+       无法创建时只推进不依赖它们的工作，相关交付保持 BLOCKED。
+       事实侦察、资源准备和清理可派发 roles/environment.md 的 recon phase 或 runtime phase，使用
+       fork_turns="none" 或等效最小新上下文；共享资源不能隔离时串行独占，并在异常后核实释放。
+       简单且仅服务一个工作包的环境操作可由 coder 承担；跨并发工作包、持续外部服务或资源冲突时优先派发 environment。
+       required E2E 的测试设计、编写和基础检查按 roles/tester.md 与编码并行；测试执行者隔离产品编码对话，
+       有明确测试文件范围。测试设计不等待产品或环境，只有依赖代码或资源的执行等待。
+
+    2. 实现期间执行 Local Checks；交付前在固定提交执行计划内 Project Verify 和独立 Code Review，可并行。
+       Verify 逐项记录命令、版本、环境、退出码和日志；子检查失败、未发现测试或全跳过不能因最终退出码为零
+       记为 PASS。未运行记 BLOCKED，实际失败记 FAIL；改动后复验受影响范围。
+       仅当代码内容、命令/配置、环境、范围及身份依赖均不变时可复用有效证据，并记录原证据和适用依据。
+       reviewer 每次使用新的隔离上下文（fork_turns="none"），完整读取 roles/reviewer.md，在固定 base/target
+       或干净 worktree 检视实际 diff 与契约。其输入含 Review ID、范围、绝对路径、验证证据和版本；只读报告，
+       不改代码或证据。未解决阻断项或报告不完整不得完成 review。探索性验证需要时按 roles/validator.md
+       以同等隔离派发；它不替代普通命令或独立 review。
+
+    3. 首次集成前派发独立 roles/integrator.md Agent，传入计划、固定源提交、证据、目标分支、资源、授权边界
+       和报告路径。它执行批次集成、候选构建及获授权的合并，不替代 reviewer、tester 或最终验收；每个目标
+       分支只允许一个集成执行者串行更新。冲突交独立 review，契约取舍交主 Agent；角色分配不新增合并、
+       回滚、推送或发布授权。每个交付单元在最新主分支构造候选，完成 Verify、必要 E2E 和差异 review 后才合入；
+       合入后立即完成主分支 Verify/review，再处理下一单元。目标变化时重建候选并复验。
+       independent 单元依次合入主分支；integrated 单元先汇总到变更集成基线并完成组合验证。两种模式都不得夹带未就绪单元。
+
+    4. 按 plan 的 Main E2E mode 执行。required 时在全部交付单元合入后，对最终主分支实际构建/部署版本运行
+       完整 E2E；仅计划明确时增加中间 E2E。执行按 roles/tester.md 固定代码、用例、产物、配置和环境版本，
+       覆盖全部 E2E ID，在真实入口验证；API/mock、启动成功、零退出码、跳过或截图不等于通过。
+       最终完整 E2E 采用单一聚合入口：每轮只调用一次 `e2e run --stage final`，分片并行在
+       `x-agentic.e2e.command` 内部完成；最终阶段不得按分片写多条记录（门禁只认最近一条，会掩盖失败分片）。
+       命令汇总全部分片，任一分片失败即非零退出；各分片独立报告，主 Agent 按版本、E2E ID 覆盖、
+       隔离和证据核对后再作整体结论。not-applicable 必须有
+       reason、basis 和通过的非空 alternative_checks，E2E 仍记 NOT_APPLICABLE。版本或环境变化使受影响证据失效，
+       按原问题 ID 关联修复、review 和复测；失败/受阻暂停后续合入与归档。
+       项目开关（`npx --quiet --no-install openspec-agentic e2e --json` 的 enabled，缺省为 true）开启时，
+       plan.md 的 mode 必须为 required；若 mode 为 not-applicable 而缺少可追溯到用户的 downgrade_approval 记录，
+       按计划无效处理：先由主 Agent 回写 mode 为 required 并补齐 E2E 任务，不得执行替代验证路径。
+       mode 为 required 时，候选与最终主分支的 E2E 必须在流程内用
+       `npx --quiet --no-install openspec-agentic e2e run --change <name>` 实际执行：候选加 `--stage candidate`，
+       最终加 `--stage final`（配置了 `x-agentic.e2e.command` 时最终门要求记录命令与该命令一致）；
+       测试 worktree 中执行时加 `--planning-root <权威规划根>`，记录统一回到权威变更目录。
+       命令输出与退出码写入变更目录下的执行记录；失败同样留证并阻断后续合入与归档，
+       无法自动化的场景改用 `--manual --by <执行人> --evidence <证据引用> [--result pass|fail|blocked] [--cases <范围>]` 记录，不得只凭自述或摘要报告通过。
+       执行者返回运行结果与原始证据即交付，不以 `e2e check` PASS 为条件；主 Agent 完成覆盖核对/问题处理/清理后，
+       再对唯一的 `[e2e-owned]` 门禁行运行 `npx --quiet --no-install openspec-agentic e2e check --change <name>`。
+       同一变更的 E2E 连续失败尝试上限为 `x-agentic.e2e.maxAttempts`（默认 3）：达到上限后扩展拒绝再开自动尝试、
+       该检查判 BLOCKED；必须停止“修复 → 重跑”循环，保持任务待办，把问题、已尝试方案和证据交用户决策
+       （提高上限或调整方案），不得删除或改写执行记录来绕过。
+       只有扩展拥有的最终 E2E 门禁行以 `npx --quiet --no-install openspec-agentic e2e check --change <name>` 为 PASS 作为完成条件
+       （候选记录不满足该门；变更须已完成，仅该行与正在执行的最终验收行可待办；无现成记录时加 `--run-if-missing` 先真实执行再判定）。
+       mode 为 required 时该行是最终主分支完整 E2E 门禁检查行；mode 为 not-applicable 时该行只确认
+       “不适用判据已按计划固化”，完成条件同为该检查 PASS，实际替代验证必须是另列的主 Agent 任务且先完成。
+       该检查判 PASS 时会自动勾选带 `[e2e-owned]` 标记的该行（行级单一所有者），主 Agent 不得手勾，也不得手动回退该行；
+       非 PASS 时该行由扩展回退（若原为已勾选）或保持待办，须重新执行或修复，不留给归档阶段处理。
+
+    5. verification.md 使用 templates/verification.md，关联任务、Check、Review、测试报告、E2E 和问题 ID，
+       并记录固定版本、命令/观察、结果、证据与复核。结果仅为 PASS / FAIL / BLOCKED / NOT_APPLICABLE；
+       保存有效证据后才勾选任务。保留失败、重试和最终验收历史；代码、用例、产物、配置或环境变化时重开
+       受影响任务，复用证据须说明差异分析和不受影响依据。
+       失败后，代码/用例/脚本修复须经独立 review、重新集成和受影响复验；纯环境恢复须留就绪证据并重跑
+       受影响检查。恢复前不得继续后续功能合入或归档。
+
+    6. 其他适用任务完成后，主 Agent 在 apply 内主动执行最终验收；/opsx:verify 仅为手动核查、恢复或复验入口。
+       按 AGENTS.md 使用 agentic-verify；宿主无 skill 发现能力时，定位并完整读取 procedures/acceptance.md。
+       它核对需求、设计、计划、任务、实现和 verification.md，不能替代真实 Verify、Review 或 E2E。
+       目标主分支版本无法核实、验收指令缺失或存在未闭环阻断项时为 BLOCKED。仅当所有适用检查通过，且
+       required E2E 为 PASS，或 not-applicable 具备理由、依据、完整通过的替代验证以及（开关开启或缺省时）
+       可追溯到用户的 downgrade_approval 批准记录时，才报告可执行 /opsx:archive；
+       验收期间仅 tasks.md 的 `[final-verification]` 自身可保持待办，其他未完成任务仍阻断验收。
+       验收前先确认最终 E2E 任务已按完成条件通过 `npx --quiet --no-install openspec-agentic e2e check --change <name>`
+       （PASS，且执行记录对当前版本有效；候选阶段任务另行核对断言与证据，不以该检查为完成条件）；它只比对开关、plan.md 判据与执行记录，不读测试证据。
+       该检查在 apply 内为验收依据，归档阶段只核对结论是否仍对当前目标版本有效，不新增关卡。
+       保留 CLI 原始状态并单独报告 PASS/FAIL/BLOCKED，不自动归档。
+       语义审计完成后按 templates/verification.md 保存当前 agentic-assessment；运行
+       `npx --quiet --no-install openspec-agentic workflow check --change <name> --stage final --json`。
+       该只读检查核对准确目标引用、契约与证据摘要、唯一任务标记及 E2E；非 PASS 不勾选最终验收。
+       机械 PASS 不能替代上述语义审计；受控集成/归档入口仍须显式调用检查，CLI 不自动拦截上游命令。
