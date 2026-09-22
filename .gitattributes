@@ -6,3 +6,11 @@ vendor/** -text
 openspec/** text eol=lf
 .agents/** text eol=lf
 .pi/** text eol=lf
+
+# vendored 上游 ACP 快照由 compatibility/acp/v1/matrix.json 的 protocol.schemaSha256 逐字节 pin，
+# 而 scripts/check-acp-compatibility.mjs 直接哈希磁盘上的字节。
+# 若让 git 做行尾转换（Windows 开发机上 core.autocrlf 常为 true），磁盘字节就不再等于仓库 blob，
+# check:acp 会在本机报「sha256 != matrix」——CI（Linux）不会，所以别靠 CI 发现。
+# 已有工作区加上属性后需要重签出一次：
+#   rm schemas/acp/v1/upstream/schema.json && git checkout -- schemas/acp/v1/upstream/schema.json
+schemas/acp/v1/upstream/schema.json text eol=lf
