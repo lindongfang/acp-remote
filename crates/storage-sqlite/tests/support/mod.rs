@@ -43,6 +43,18 @@ pub fn repo_path(relative: &str) -> PathBuf {
 pub fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("acpr-storage-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    // §7.1：正式模式对已存在的宽松数据目录失败关闭（见 `migrate`）。测试预创建的目录必须与产品
+    // 创建时一致（`0700`），否则 Linux runner 在 umask 022 下会先造出一个 `0755` 目录而被拒。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .expect("create temp dir");
+    }
+    #[cfg(not(unix))]
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
