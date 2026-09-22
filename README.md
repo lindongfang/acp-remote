@@ -36,16 +36,18 @@
 
 ## 合同检查
 
-机器校验入口只依赖 Node ≥ 20 与仓库内的 devDependencies，不参与运行时产物：
+机器校验入口只依赖 Node ≥ 22.12（`commitlint` 21 的下限）与仓库内的 devDependencies，不参与运行时产物：
 
 ```text
 npm ci
 npm run check
 ```
 
-`npm run check` 串行执行八个检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁）；② 命令目录的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及 `core::broker::required_grant` 这份 Rust 镜像；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑧ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）。
+`npm run check` 串行执行九个检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁）；② 命令目录的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及 `core::broker::required_grant` 这份 Rust 镜像；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑧ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）；⑨ agentic 流程与规范（`check:agentic` → `scripts/agentic-gate.mjs`：`openspec-agentic doctor` 断言所用流程确为扩展的 agentic —— 引擎版本等于扩展 pin、`schema: agentic`、受管文件无漂移、AGENTS.md 有验收路由；随后 `openspec validate --all --strict` 校验变更与规范，无活动变更时以 0 退出。该脚本同时设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，关闭引擎默认开启的遥测与更新检查）。
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push 与 PR 上跑同一批检查：`npm ci && npm run check`、`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`、`cargo test --locked --workspace --all-features`。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
+
+提交信息遵循 Conventional Commits（`<type>(<scope>)!?: <主题>`）：type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，本地由 husky 的 `.husky/commit-msg` 钩子在 `npm install` 时装配，CI 的独立 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次（`npm run lint:commits -- --from <base> --to <head>`，`--no-verify` 绕得过本地钩子但绕不过它）。规则说明见 `AGENTS.md` §8。
 
 上游 ACP 固定快照（`schemas/acp/v1/upstream/schema.json`，来源与 sha256 见 `compatibility/acp/v1/matrix.json` 的 `protocol` 块）由 `check:acp` 重算 digest 并校验 commit 与 major 版本目录；`fixtures/acp/v1` 也按同一快照做 ajv 校验。升级快照必须同时改固定值、vendored 文件与矩阵行，且先通过 `node scripts/check-acp-compatibility.mjs`。
 

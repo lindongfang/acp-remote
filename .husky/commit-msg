@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Conventional Commits 校验；词表见 commitlint.config.mjs，规则说明见 AGENTS.md §8。
+# 不合规的提交信息在这里被拒绝。仅在确有理由时用 `git commit --no-verify` 跳过；
+# CI（.github/workflows/ci.yml 的 commits job）会对推送范围再校验一次，绕过钩子拦不住。
+if [ ! -f "node_modules/@commitlint/cli/cli.js" ]; then
+  echo "commit-msg: 依赖未安装，提交信息校验无法执行。请先在本仓库运行 npm install（Node ≥ 22.12）。" >&2
+  exit 1
+fi
+npx --no -- commitlint --edit "$1"

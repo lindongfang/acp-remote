@@ -1,9 +1,10 @@
 # CI：把 `AGENTS.md` §8/§10 要求的所有检查变成"每次都跑"。
 #
 # 判据来源（不要在别处再写一份）：
-# - `npm run check` 串行跑 `scripts/` 下八个门禁（协议 fixture、命令目录与 core 的 grant 镜像、错误码、
-#   feature 词表、需要真正计算的资产绑定、ACP 矩阵、crate 依赖方向、合同漂移）；
-# - `AGENTS.md` §8 的三条 cargo 命令（fmt / clippy -D warnings / test）。
+# - `npm run check` 串行跑九个门禁（协议 fixture、命令目录与 core 的 grant 镜像、错误码、
+#   feature 词表、需要真正计算的资产绑定、ACP 矩阵、crate 依赖方向、合同漂移、agentic 流程与规范校验）；
+# - `AGENTS.md` §8 的三条 cargo 命令（fmt / clippy -D warnings / test）与提交信息规范
+#   （`commits` job，词表见 `commitlint.config.mjs`）。
 #
 # 供应链约束（`docs/SECURITY_DESIGN.md` §16.2「CI 使用固定 action/toolchain major 或 digest」）：
 # - 只用 GitHub 官方 action 且固定 major（`actions/checkout@v4` 等）；Rust 工具链用 runner 自带的
@@ -47,7 +48,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - uses: actions/cache@v4
@@ -63,7 +64,7 @@ jobs:
       - name: 安装合同校验脚本的依赖
         run: npm ci
 
-      - name: 合同门禁（npm run check，八个脚本）
+      - name: 合同门禁（npm run check，九个门禁）
         run: npm run check
 
       - name: 格式检查
@@ -74,3 +75,37 @@ jobs:
 
       - name: 测试
         run: cargo test --locked --workspace --all-features
+
+  commits:
+    name: 提交信息规范
+    runs-on: ubuntu-latest
+    # 提交信息只校验“本次推送或合并请求引入的那段范围”：仓库早期提交不是 Conventional Commits，
+    # 校验全历史会立刻失败。本地钩子（`.husky/commit-msg`）能被 `--no-verify` 绕过，这一步是硬门禁。
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # commitlint 用 `--from/--to` 比对本地范围，因此两个端点都必须已经取下来。
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 校验提交信息（Conventional Commits，词表见 commitlint.config.mjs）
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "没有可比对的基线提交（新分支或首次推送），跳过范围校验。"
+            exit 0
+          fi
+          if ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null; then
+            echo "基线提交 $BASE_SHA 不在本地历史中（强推或浅克隆），跳过范围校验。"
+            exit 0
+          fi
+          npm run lint:commits -- --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
