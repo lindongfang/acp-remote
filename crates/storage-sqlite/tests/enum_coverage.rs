@@ -1,4 +1,4 @@
-//! §7.3/§7.4 的每个 `IN (...)` 枚举列必须与 `core` 的枚举表**逐值一致**，且取值都要能原样落库。
+//! §7.3/§7.4 的每个枚举列（`IN (...)` 或等值 CHECK）必须与 `core` 的枚举表**逐值一致**，且取值都要能原样落库。
 //!
 //! 这些判据的取值集来自 `core` 的 `ALL` + `as_str()`，不手抄字面量：漏一个变体（例如
 //! `ElicitationAction::Decline` 曾只写在 `('submit','cancel')` 里）会让 Agent 侧的 `decline` 撞约束、
@@ -7,7 +7,7 @@
 mod support;
 
 use acp_core::model::{
-    ActorKind, AuditAction, AuditOutcome, CommandKind, CommandStatus, DeviceState,
+    ActorKind, AuditAction, AuditOutcome, CachePolicy, CommandKind, CommandStatus, DeviceState,
     ElicitationAction, ElicitationValues, EventKind, EventOrigin, InteractionId, InteractionKind,
     InteractionResolution, NodeKind, NodeState, PairingState, PairingTarget,
     PermissionDecisionKind, ProviderRefKind, RawUnavailableReason, SessionId, SessionState,
@@ -16,23 +16,42 @@ use acp_core::model::{
 use acp_core::ports::{InteractionResolved, ModeChange, SessionStore, SessionUpdate, StateChange};
 use support::*;
 
-/// 从 `sqlite_master.sql` 里取 `CHECK (<column> IN ('a','b',...))` 的取值集合。
+/// 从 `sqlite_master.sql` 里取 CHECK 约束的允许取值集合。
 ///
+/// 支持两种 DDL 形状：`<column> IN ('a','b',...)` 与等值约束 `<column> = 'a'`（`cache_policy` 的单值 CHECK）。
 /// 用词边界匹配列名：`kind IN (` 会命中 `actor_kind IN (` 的尾部（第一次就是这样误报的）。
 fn enum_values(sql: &str, column: &str) -> Vec<String> {
+    if let Some(values) = in_values(sql, column) {
+        return values;
+    }
+    vec![eq_value(sql, column)]
+}
+
+/// `<column> IN ('a','b',...)` 的取值集合；形状不匹配时返回 `None`。
+fn in_values(sql: &str, column: &str) -> Option<Vec<String>> {
     let pattern = format!(r"\b{column}\s+IN\s*\(");
     let regex = regex_lite(&pattern);
-    let (start, end_of_match) = regex
-        .find(sql)
-        .unwrap_or_else(|| panic!("no `{column} IN (...)` in:\n{sql}"));
+    let (_, end_of_match) = regex.find(sql)?;
     let rest = &sql[end_of_match..];
-    let end = rest.find(')').expect("closing paren");
-    let values = rest[..end]
-        .split(',')
-        .map(|item| item.trim().trim_matches('\'').to_owned())
-        .collect();
-    let _ = start;
-    values
+    let end = rest.find(')')?;
+    Some(
+        rest[..end]
+            .split(',')
+            .map(|item| item.trim().trim_matches('\'').to_owned())
+            .collect(),
+    )
+}
+
+/// 等值 CHECK `<column> = 'a'` 的唯一取值；两种形状都不匹配时 panic（列名写错或 DDL 形状变了）。
+fn eq_value(sql: &str, column: &str) -> String {
+    let pattern = format!(r"\b{column}\s+=");
+    let regex = regex_lite(&pattern);
+    let (_, value_start) = regex
+        .find_assignment(sql)
+        .unwrap_or_else(|| panic!("no `{column} IN (...)` or `{column} = '...'` in:\n{sql}"));
+    let rest = &sql[value_start..];
+    let end = rest.find('\'').expect("closing quote");
+    rest[..end].to_owned()
 }
 
 /// 极简正则：只支持 `\b<ident>\s+IN\s*\(` 这一种形状（避免为一个测试引入依赖）。
@@ -49,7 +68,7 @@ impl ManualPattern {
     fn parse(pattern: &str) -> Self {
         let ident = pattern
             .trim_start_matches("\\b")
-            .split("\\s+IN")
+            .split("\\s+")
             .next()
             .expect("ident")
             .to_owned();
@@ -82,10 +101,47 @@ impl ManualPattern {
         }
         None
     }
+
+    /// 返回 `(匹配起点, 开头单引号之后的位置)`，仅匹配 `<ident> = '`（DDL 的等值 CHECK）。
+    fn find_assignment(&self, haystack: &str) -> Option<(usize, usize)> {
+        let needle = &self.ident;
+        let bytes = haystack.as_bytes();
+        let mut from = 0;
+        while let Some(offset) = haystack[from..].find(needle) {
+            let start = from + offset;
+            let before_ok =
+                start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
+            let after = start + needle.len();
+            let tail = &haystack[after..];
+            let trimmed = tail.trim_start();
+            if before_ok && trimmed.starts_with('=') {
+                let quote = trimmed.find('\'')?;
+                let after_ident = after + (tail.len() - trimmed.len());
+                return Some((start, after_ident + quote + 1));
+            }
+            from = after;
+            if from >= haystack.len() {
+                break;
+            }
+        }
+        None
+    }
 }
 
 fn tokens<T: Copy>(all: &[T], as_str: impl Fn(T) -> &'static str) -> Vec<String> {
     all.iter().map(|value| as_str(*value).to_owned()).collect()
+}
+
+/// §7.3 的 `revoke_reason` CHECK 允许值（`core::ports::RevokeReason` 的落库 token）。
+///
+/// 期望值刻意锚在合同文本而不是 `storage_sqlite` 的 `revoke_token()`：两者来源相互独立，
+/// 「DDL 与映射同时拼错」才会同时被本断言与行为回归发现。core 侧没有 `ALL`/`as_str`，
+/// 也不为测试新增这类公开 API。
+fn revoke_reason_tokens() -> Vec<String> {
+    ["user_requested", "key_changed", "compromised"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
 }
 
 /// 每张表的 DDL 文本，按表名索引。
@@ -112,7 +168,7 @@ async fn ddl_enum_lists_match_the_core_enums() {
     store.close().await;
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
-    let cases: [(&str, &str, Vec<String>); 26] = [
+    let cases: [(&str, &str, Vec<String>); 30] = [
         (
             "owned_session",
             "state",
@@ -244,6 +300,23 @@ async fn ddl_enum_lists_match_the_core_enums() {
             "owned_provider_ref",
             "kind",
             tokens(ProviderRefKind::ALL, ProviderRefKind::as_str),
+        ),
+        // v2 管理表的 `revoke_reason` 是 `core::ports::RevokeReason` 的落库标记（token 属 storage-sqlite，
+        // 见 `src/admin/trust.rs` 的 `revoke_token()`）。core 侧没有 `ALL`/`as_str`，也不为测试新增公开
+        // API，因此期望值锚在 §7.3 的合同文本；行为面由 `admin_store.rs` 的 KeyChanged 回归覆盖。
+        ("owned_device", "revoke_reason", revoke_reason_tokens()),
+        ("owned_node", "revoke_reason", revoke_reason_tokens()),
+        // `cache_policy` 是等值 CHECK（单值）；期望值来自 `core::model::CachePolicy`，因此同时断言
+        // 「DDL 是单值」与「与 core 当前取值一致」——core 增加第二取值而 DDL 仍单值时本用例即失败。
+        (
+            "owned_export",
+            "cache_policy",
+            tokens(CachePolicy::ALL, CachePolicy::as_str),
+        ),
+        (
+            "imported_import",
+            "cache_policy",
+            tokens(CachePolicy::ALL, CachePolicy::as_str),
         ),
     ];
     for (table, column, expected) in cases {
