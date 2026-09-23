@@ -13,3 +13,6 @@ dist/
 .env
 .env.*
 *.log
+
+# 宿主 CLI 的本地偏好(compaction 调参等),不随仓库分发
+/.pi/settings.json

@@ -128,7 +128,7 @@ crates/
 
 - `edition = "2024"`（与 `rust-version = "1.85"` 一致，edition 2024 的最低工具链即 1.85），`resolver = "3"`。
 - `[workspace.package]` 统一 `version`、`edition`、`rust-version`、`license`、`repository`；第一阶段全部 crate `publish = false`（`§12` 的"是否公开部分 crate"仍未定）。
-- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256 0.13`（ECDSA P-256）+ `sha2 0.11` + `hmac 0.12` + `base64 0.23`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。
+- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256 0.13`（ECDSA P-256）+ `sha2 0.11` + `hmac 0.12` + `base64 0.23`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`（后两者用于 `PeerPublicKey` 的构造期点校验与指纹派生），其中 `p256` **只开 `arithmetic`**——core 不签名也不验签，`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 留在协议与身份边界；其普通依赖闭包与 allow-list 见 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 与 `scripts/check-crate-boundaries.mjs`。
 - `[决定]` 上述四个密码学原语的**版本口径只维护在上一行**：版本号以 `Cargo.toml` 的 `[workspace.dependencies]` 为准，本行所在的说明与它一致。变更版本必须在**同一改动**里更新这里并给出验证证据；变的是原语集合、算法或实现选择（而不是版本号）时按 `AGENTS.md` §10 走 ADR。
   - 2026-09-23 基线：`sha2 0.10 → 0.11`、`base64 0.22 → 0.23`（Dependabot PR #1/#2）。证据：workspace 全部测试与 clippy 在该版本上通过（CI 五个 job 全绿、本地 `npm run check:rust` 通过）；`npm run check` 的 transcript 固定向量重算与许可证/来源判定不受影响（JS 侧与版本无关，许可证集合无新增项）。
   - 诚实说明：`INITIAL_DESIGN.md` §16 第 6 条那次一次性 Rust 实测是在 `sha2 0.10`/`base64 0.22` 上做的；本次只验证了「算法语义不变且现有测试通过」，没有重跑那次探针。真正版本无关的回归判据仍是该条要求实现阶段做的事：把同一批固定向量固化成恒常运行的 Rust 测试。
@@ -206,7 +206,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
-管理持久化的后续实现合同见该文档 §11：现有 TrustStore/ExportStore/AuditStore 端口不等于 SQLite 已实现；配对确认、撤销与审计、Import 删除与交付清理必须由完整管理写集原子提交。端口扩展随实现同步 §5，业务决定仍由 core 用例拥有。
+管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。仍**未**实现的只是 Daemon/CLI 接线与 `identity-auth`/`identity-keystore`；在它们落地前不得声称这些管理能力已端到端可用。业务决定仍由 core 用例拥有。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
@@ -293,7 +293,7 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
 
-管理表、Export/Import 与审计端口的落盘仍待实现，具体表设计、事务、v1 升级和验收见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11。管理数据保持同一 SQLite 文件与 owned/imported 家族边界，不新增 crate；配置来源权威见 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md)。
+管理表、Export/Import 与审计端口的落盘已实现（三个管理 store + 用例层写集路径），具体表设计、事务、v1 → v2 升级和验收见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.2/§7.3/§7.4 与 §11。管理数据保持同一 SQLite 文件与 owned/imported 家族边界，不新增 crate；配置来源权威见 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md)。
 
 第一阶段采用**同一数据库文件、两族表 + 每族专属 Store 类型**的隔离方式：
 

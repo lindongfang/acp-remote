@@ -19,16 +19,18 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::model::{
-    Actor, AgentDescriptor, AgentRef, AttachmentGeneration, AttachmentId, AuditAction, AuditRecord,
-    CapabilitySet, CommandKind, CommandRecord, CommandStatus, CommandTerminalRecord,
-    CommittedDelivery, CommittedEvent, ConfigOption, ConfigOptionId, ConfigValue,
-    CreateSessionRequest, DeviceId, DeviceRecord, Digest, EndpointEvent, EntityRef, EventId,
-    EventPayload, EventType, ExportId, ExportRecord, GlobalCursor, ImportId, ImportRecord,
-    InteractionId, InteractionResolution, LocalCursor, MessageId, ModeId, ModeRef, ModeState,
-    NodeId, NodeRecord, OriginCursor, OriginEpoch, OriginEventRef, PairingClaim, PairingId,
-    PairingRecord, PairingSettlement, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    PublicError, RemoteSessionRef, RequestId, Sequence, ServerEpoch, SessionId, SessionReference,
-    SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
+    Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
+    AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord,
+    CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOption,
+    ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord, Digest,
+    EndpointEvent, EntityRef, EventId, EventPayload, EventType, ExportId, ExportRecord,
+    GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution, LocalCursor,
+    MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
+    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
+    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
+    ProviderRef, PublicError, RemoteSessionRef, RequestId, SecretValue, SeedState, Sequence,
+    ServerEpoch, SessionId, SessionReference, SessionSnapshot, SessionState, SessionSummary,
+    Timestamp, Turn, TurnId, TurnState, Version, WorkspaceAlias, WorkspaceRecord,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -588,72 +590,262 @@ pub enum TrustRecordRef {
     Node(NodeId),
 }
 
+/// 待写入的审计行（§11.6）：与状态变更同事务；审计写失败则整事务失败（§11.2 第 6 条）。
+///
+/// 字段与 `AuditRecord` 完全一致，只是没有 `at`（`at` 由 [`WriteContext`] 提供）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAudit {
+    pub action: AuditAction,
+    pub actor: Actor,
+    pub via_node: Option<NodeId>,
+    pub local_principal_ref: Option<String>,
+    pub target: EntityRef,
+    pub outcome: AuditOutcome,
+    pub detail_digest: Option<Digest>,
+}
+
+/// 管理写集的公共上下文（§11.6）。`at` 由调用方从 `Clock` 取（§2：存储层不读系统时间）。
+///
+/// `audit` 为空只允许用于不作为 `AuditAction` 已登记安全动作的操作（例如 `workspace.select`、
+/// `agent.configure`）；涉及安全动作的写集必须至少带一条成功或失败审计。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteContext {
+    pub at: Timestamp,
+    pub audit: Vec<PendingAudit>,
+}
+
+/// 写入一个设备记录（§11.6）：同 ID 不得换绑公钥，也不得把 `revoked` 改回 `active`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceWrite {
+    pub record: DeviceRecord,
+    pub context: WriteContext,
+}
+
+/// 写入一个节点角色行并绑定身份材料（§11.6）：同一 `nodeId` 的两种角色必须指纹一致。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeWrite {
+    pub record: NodeRecord,
+    pub public_key: PeerPublicKey,
+    pub context: WriteContext,
+}
+
+/// 撤销一个设备（§11.6）：单事务写撤销时间、状态与审计；提交后才由组合根关闭连接。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceRevocation {
+    pub device: DeviceId,
+    pub reason: RevokeReason,
+    pub context: WriteContext,
+}
+
+/// 按 NodeId 撤销一个节点（§11.6）：同一事务令两种角色一起进入 `revoked`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeRevocation {
+    pub node: NodeId,
+    pub reason: RevokeReason,
+    pub context: WriteContext,
+}
+
+/// 登记一次性配对（§11.6）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingWrite {
+    pub record: PairingRecord,
+    pub context: WriteContext,
+}
+
+/// 原子认领（§11.6）：单事务内检查「存在、未过期、仍为 `created`、本机绑定一致」，插入唯一 peer 行
+/// 并推进到 `pending_confirmation`；HMAC/proof 由调用方验证。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingClaimWrite {
+    pub claim: PairingClaim,
+    pub context: WriteContext,
+}
+
+/// 落定配对（§11.6）：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、
+/// 更新配对状态并写审计。peer 公钥从配对的对端行读回，不由调用方重复提供。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingSettlementWrite {
+    pub pairing: PairingId,
+    pub settlement: PairingSettlement,
+    pub context: WriteContext,
+}
+
+/// 过期扫描（§11.6）：只终结未确认且已过期的配对，返回终结行数。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpiryWrite {
+    pub context: WriteContext,
+}
+
+/// 写入/更新一个 Export（§11.6）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportWrite {
+    pub record: ExportRecord,
+    pub context: WriteContext,
+}
+
+/// 撤销一个 Export（§11.6）：先提交再发送 `export.revoked`，发送失败不撤销数据库决定。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportRevocation {
+    pub export: ExportId,
+    pub context: WriteContext,
+}
+
+/// 添加一个 Import（§11.6）：管理行 + 全部关联行一次提交。
+///
+/// `exports` 是本次写入的关联集合，**必须**等于 `record.export_ids()`（两处不得分歧，否则存储层返回
+/// `InvalidRequest`）；同一 `(owner_node_id, export_id)` 只能属于一个 Import，冲突返回
+/// `PortError::Conflict(DuplicateOwnership)`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportWrite {
+    pub record: ImportRecord,
+    pub exports: Vec<ExportId>,
+    pub context: WriteContext,
+}
+
+/// 完整移除一个 Import（§11.6）：同一事务删除管理行、关联行、`imported_session` 及其级联
+/// （交付索引、命令引用），**审计保留**。提交后由组合根停止连接/重连并清空内存正文。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportRemoval {
+    pub import: ImportId,
+    pub context: WriteContext,
+}
+
+/// 写入一个 Agent profile（§11.6）。`put_profile` 是唯一写入默认 profile 的入口：至多一个
+/// `default = true`，切换默认必须是一次调用的原子写集。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileWrite {
+    pub profile: AgentProfile,
+    pub context: WriteContext,
+}
+
+/// 写入一个 workspace 记录（§11.6）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkspaceWrite {
+    pub record: WorkspaceRecord,
+    pub context: WriteContext,
+}
+
+/// 写入一个 Provider 引用（§11.6）：只记字段名、keystore 引用与版本。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderRefWrite {
+    pub reference: ProviderRef,
+    pub context: WriteContext,
+}
+
+/// 种子导入（§11.6）：`profiles` 与「已初始化」标记在同一事务里提交（空列表也写标记）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeedWrite {
+    pub profiles: Vec<AgentProfile>,
+    pub context: WriteContext,
+}
+
+/// 信任存储（§5.3/§11.6）：**读**面按角色/身份材料取值，**写**面一调用一个事务一个完整写集。
 #[async_trait]
 pub trait TrustStore: Send + Sync {
-    async fn upsert_device(&self, record: DeviceRecord, at: Timestamp) -> Result<(), PortError>;
-
     async fn device(&self, id: &DeviceId) -> Result<Option<DeviceRecord>, PortError>;
 
     async fn devices(&self) -> Result<Vec<DeviceRecord>, PortError>;
 
-    async fn revoke_device(
-        &self,
-        id: &DeviceId,
-        at: Timestamp,
-        reason: RevokeReason,
-    ) -> Result<(), PortError>;
-
-    async fn upsert_node(&self, record: NodeRecord, at: Timestamp) -> Result<(), PortError>;
-
-    async fn node(&self, id: &NodeId) -> Result<Option<NodeRecord>, PortError>;
+    /// 按 `(NodeId, NodeKind)` 取值；同一对端可同时存在两种角色（禁止「取第一行」）。
+    async fn node(&self, id: &NodeId, kind: NodeKind) -> Result<Option<NodeRecord>, PortError>;
 
     async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError>;
 
-    async fn revoke_node(
-        &self,
-        id: &NodeId,
-        at: Timestamp,
-        reason: RevokeReason,
-    ) -> Result<(), PortError>;
+    /// 该对端的全部角色行。
+    async fn nodes_for(&self, id: &NodeId) -> Result<Vec<NodeRecord>, PortError>;
 
-    async fn create_pairing(&self, pairing: PairingRecord) -> Result<(), PortError>;
-
-    /// 单一事务的原子认领：存在、未过期、仍为 created、host/origin 匹配（HMAC 由调用方验证）。
-    async fn claim_pairing(
-        &self,
-        claim: PairingClaim,
-        at: Timestamp,
-    ) -> Result<PairingClaimOutcome, PortError>;
+    /// 已绑定的身份材料（验签公钥的唯一来源）。
+    async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError>;
 
     async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError>;
 
+    /// 已认领的对端行（确认事务从它读回公钥，§11.5）。
+    async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;
+
+    async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError>;
+
+    async fn put_node(&self, write: NodeWrite) -> Result<(), PortError>;
+
+    async fn revoke_device(&self, write: DeviceRevocation) -> Result<(), PortError>;
+
+    async fn revoke_node(&self, write: NodeRevocation) -> Result<(), PortError>;
+
+    async fn create_pairing(&self, write: PairingWrite) -> Result<(), PortError>;
+
+    async fn claim_pairing(
+        &self,
+        write: PairingClaimWrite,
+    ) -> Result<PairingClaimOutcome, PortError>;
+
     async fn settle_pairing(
         &self,
-        id: &PairingId,
-        settlement: PairingSettlement,
-        at: Timestamp,
+        write: PairingSettlementWrite,
     ) -> Result<TrustRecordRef, PortError>;
 
-    async fn expire_pairings(&self, at: Timestamp) -> Result<u64, PortError>;
+    async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError>;
 }
 
+/// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。
 #[async_trait]
 pub trait ExportStore: Send + Sync {
-    async fn upsert_export(&self, export: ExportRecord, at: Timestamp) -> Result<(), PortError>;
-
     async fn export(&self, id: &ExportId) -> Result<Option<ExportRecord>, PortError>;
 
     async fn exports(&self) -> Result<Vec<ExportRecord>, PortError>;
-
-    async fn revoke_export(&self, id: &ExportId, at: Timestamp) -> Result<(), PortError>;
-
-    async fn upsert_import(&self, import: ImportRecord, at: Timestamp) -> Result<(), PortError>;
 
     async fn import(&self, id: &ImportId) -> Result<Option<ImportRecord>, PortError>;
 
     async fn imports(&self) -> Result<Vec<ImportRecord>, PortError>;
 
-    async fn remove_import(&self, id: &ImportId, at: Timestamp) -> Result<(), PortError>;
+    async fn put_export(&self, write: ExportWrite) -> Result<(), PortError>;
+
+    async fn revoke_export(&self, write: ExportRevocation) -> Result<(), PortError>;
+
+    async fn add_import(&self, write: ImportWrite) -> Result<(), PortError>;
+
+    /// 完整移除（§11.6）：管理行 + 关联行 + 交付索引 + 命令引用；审计保留。
+    ///
+    /// 与 `RemoteDeliveryStore::drop_import`（连接级清空交付索引）不是同一件事，两者不得串联充当完整删除。
+    async fn remove_import(&self, write: ImportRemoval) -> Result<(), PortError>;
+}
+
+/// 本地配置存储（§11.6）：profile、workspace、Provider 引用与首次初始化标记。
+#[async_trait]
+pub trait LocalConfigStore: Send + Sync {
+    async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError>;
+
+    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError>;
+
+    async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError>;
+
+    async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError>;
+
+    async fn workspace(&self, alias: &WorkspaceAlias)
+    -> Result<Option<WorkspaceRecord>, PortError>;
+
+    async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError>;
+
+    async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError>;
+
+    async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError>;
+
+    /// 首次初始化标记：`seeded = false` 时启动流程才能导入种子。
+    async fn seed_state(&self) -> Result<SeedState, PortError>;
+
+    /// 种子导入与「已初始化」标记同一事务提交（空列表也写标记）。
+    async fn mark_seeded(&self, write: SeedWrite) -> Result<(), PortError>;
+}
+
+/// 凭据解析（§11.6）：把 profile 的凭据绑定解析成子进程环境变量。
+///
+/// 由组合根用平台 keystore 实现并注入 `agent-host`（`agent-host` 不依赖 `identity-auth`）。
+#[async_trait]
+pub trait CredentialResolver: Send + Sync {
+    /// 解析启动子进程所需的全部环境变量。只允许解析 profile 的 `env` 绑定与 `env_allowlist` 的交集；
+    /// 未绑定、未列入白名单或引用失效（keystore 不可用 / 字段不存在）→
+    /// `Unavailable(KeystoreUnavailable)`，**失败关闭**：不得静默跳过该变量后继续启动。
+    async fn resolve_env(
+        &self,
+        profile: &AgentProfile,
+    ) -> Result<Vec<(String, SecretValue)>, PortError>;
 }
 
 /// 审计查询条件；`actions` 为空 = 不按动作过滤。

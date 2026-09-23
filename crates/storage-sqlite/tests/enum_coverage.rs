@@ -7,9 +7,10 @@
 mod support;
 
 use acp_core::model::{
-    ActorKind, AuditAction, AuditOutcome, CommandKind, CommandStatus, ElicitationAction,
-    ElicitationValues, EventKind, EventOrigin, InteractionId, InteractionKind,
-    InteractionResolution, PermissionDecisionKind, RawUnavailableReason, SessionId, SessionState,
+    ActorKind, AuditAction, AuditOutcome, CommandKind, CommandStatus, DeviceState,
+    ElicitationAction, ElicitationValues, EventKind, EventOrigin, InteractionId, InteractionKind,
+    InteractionResolution, NodeKind, NodeState, PairingState, PairingTarget,
+    PermissionDecisionKind, ProviderRefKind, RawUnavailableReason, SessionId, SessionState,
     StoredPolicy, Timestamp, TurnState,
 };
 use acp_core::ports::{InteractionResolved, ModeChange, SessionStore, SessionUpdate, StateChange};
@@ -111,7 +112,7 @@ async fn ddl_enum_lists_match_the_core_enums() {
     store.close().await;
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
-    let cases: [(&str, &str, Vec<String>); 16] = [
+    let cases: [(&str, &str, Vec<String>); 26] = [
         (
             "owned_session",
             "state",
@@ -191,6 +192,58 @@ async fn ddl_enum_lists_match_the_core_enums() {
             "imported_audit",
             "action",
             tokens(AuditAction::ALL, AuditAction::as_str),
+        ),
+        (
+            "owned_audit",
+            "actor_kind",
+            tokens(ActorKind::ALL, ActorKind::as_str),
+        ),
+        (
+            "imported_audit",
+            "actor_kind",
+            tokens(ActorKind::ALL, ActorKind::as_str),
+        ),
+        // v2 管理表的枚举列（§11.7 的九张表 + 两个索引）同样必须与 core 逐值一致。`peer_kind` 的
+        // 取值集与 `PairingTarget` 同源（`device`/`node`），用它的 `ALL` 断言以免手抄字面量。
+        (
+            "owned_device",
+            "state",
+            tokens(DeviceState::ALL, DeviceState::as_str),
+        ),
+        (
+            "owned_node",
+            "kind",
+            tokens(NodeKind::ALL, NodeKind::as_str),
+        ),
+        (
+            "owned_node",
+            "state",
+            tokens(NodeState::ALL, NodeState::as_str),
+        ),
+        (
+            "owned_peer_key",
+            "peer_kind",
+            tokens(PairingTarget::ALL, PairingTarget::as_str),
+        ),
+        (
+            "owned_pairing",
+            "target_kind",
+            tokens(PairingTarget::ALL, PairingTarget::as_str),
+        ),
+        (
+            "owned_pairing",
+            "state",
+            tokens(PairingState::ALL, PairingState::as_str),
+        ),
+        (
+            "owned_pairing_peer",
+            "peer_kind",
+            tokens(PairingTarget::ALL, PairingTarget::as_str),
+        ),
+        (
+            "owned_provider_ref",
+            "kind",
+            tokens(ProviderRefKind::ALL, ProviderRefKind::as_str),
         ),
     ];
     for (table, column, expected) in cases {

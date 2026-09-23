@@ -10,8 +10,8 @@
 |---|---|
 | `acpr-transcript` | 长度前缀 transcript codec 与表驱动校验（叶子 crate，无协议语义） |
 | `acpr-wire` | 跨协议共用的 wire 值对象与字段校验机制（叶子 crate，无协议词表） |
-| `core` | `core::model` 的值对象与不变量、`core::use_cases` 用例面、`core::ports` 端口签名、`core::broker`（每会话串行、active turn、幂等、交互仲裁、先提交后发布、失败关闭）；运行时依赖只有 `async-trait` + `thiserror` |
-| `storage-sqlite` | §7 的 `owned_*`/`imported_*` 表结构与 migration、保留窗口/容量清理（含 imported 家族度量）、附件内容寻址、崩溃恢复与只读失败关闭；实现 `SessionStore`/`ReadView`/`RemoteDeliveryStore`/`AttachmentStore` |
+| `core` | `core::model` 的值对象与不变量、`core::use_cases` 用例面、`core::ports` 端口签名、`core::broker`（每会话串行、active turn、幂等、交互仲裁、先提交后发布、失败关闭）；运行时依赖只有 `async-trait`/`thiserror`/`p256`/`sha2`（后两者用于 `PeerPublicKey` 的构造期点校验与指纹派生） |
+| `storage-sqlite` | §7 的 `owned_*`/`imported_*` 表结构与 migration、保留窗口/容量清理（含 imported 家族度量）、附件内容寻址、崩溃恢复与只读失败关闭；实现 `SessionStore`/`ReadView`/`RemoteDeliveryStore`/`AttachmentStore`，以及 §7 管理表上的三个管理 store（`TrustStore`/`ExportStore`/`LocalConfigStore`：写集一事务提交、失败关闭、容量纳入） |
 | `sync-protocol` | v1 的全部 18 个消息类型（信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族 body）、33 个事件视图的类型化投影，以及配对 HTTPS 载荷（二维码 / claim / status / HTTP 错误体） |
 | `node-link-protocol` | §9.3/§9.4 的 transcript domain/tag 表、v1 的全部 29 个消息类型（信封与分派，`handshake`/`catalog`/`resource`/`command`/`error` 五个家族 body）与配对 HTTPS 载荷 |
 
@@ -21,7 +21,7 @@
 
 逐切片的实施顺序与验收节点见 [开发计划](docs/DEVELOPMENT_PLAN.md)；产品与协议语义仍以各权威合同为准。
 
-管理状态的表设计、事务与升级要求已补充在 [核心与存储合同 §11](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同待实现)，实现前目标形状（身份值对象与读取形状、管理写入 DTO 与端口签名、管理表 DDL、版本常量与 migration）收口在该节 §11.5–§11.8；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 的 `TrustStore`/`ExportStore`/`AuditStore` 与 `LocalConfigStore` 仍待实现；现有合同检查只证明当前实现基线一致，**不**证明上述目标形状已落地。
+管理状态的端口签名、写集 DTO、值对象与 DDL 已并入 [核心与存储合同 §3/§5/§7](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)（该节 §11 保留设计理由与索引），并由 `scripts/check-contract-drift.mjs` 逐条断言；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 侧的 `TrustStore`/`ExportStore`/`LocalConfigStore` **落盘实现已落地**（写集一事务提交、失败关闭与容量纳入）；仍未实现的是 Daemon/CLI 接线与 `identity-auth`/`identity-keystore`，因此在它们完成前，不能声称配对、撤销或本地配置已经端到端可用。
 
 ## 权威文档
 
