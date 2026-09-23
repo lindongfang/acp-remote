@@ -37,7 +37,7 @@ uuid = { version = "1", features = ["v4"] }
 # 密码学原语按 docs/MODULE_ARCHITECTURE.md §3.1 固定版本；本次增量无 crate 使用，
 # identity-auth 落地时改为 workspace = true 引用，不要在别处另选实现。
 p256 = { version = "0.13", features = ["ecdsa"] }
-sha2 = "0.10"
+sha2 = "0.11"
 hmac = "0.12"
 
 [workspace.lints.rust]
