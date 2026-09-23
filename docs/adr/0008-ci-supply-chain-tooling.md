@@ -100,8 +100,13 @@ action」。这条约束在实践中有两个问题：
      这是主动接受的条件。
   3. **CI 的密钥扫描无法阻止凭据落地**：push / PR 上它只检查本次范围，且必须在提交已经进入远端之后才运行；
      每日定时任务的全历史扫描发现的也只能是「已经存在」的凭据。删掉文件不等于删掉提交，处置只能是
-     轮换 + 清理历史（`SECURITY_DESIGN.md` §17）。推送前的时序由 GitHub 的 push protection 提供（已启用），
-     但它只认已知 provider 模式，本项目的自研格式密钥不在其中。能拦住「红状态进入 main」的是 main 的分支保护：
+     轮换 + 清理历史（`SECURITY_DESIGN.md` §17）。推送前的时序本该由 GitHub 的 push protection 提供（已启用），
+     但它只认已知 provider 模式，本项目的自研格式密钥不在其中；而能覆盖自研格式的
+     `secret_scanning_non_provider_patterns` **已核实为在本仓库不可用**（个人账号 public 仓库、无 GHAS；
+     界面无 Secret scanning 区域、API 不接受该字段），因此**这一类凭据在推送前没有任何服务端防线**。
+     目前只靠 CI 的 `gitleaks` 事后发现；是否加一个自研格式的本地 pre-commit 检查，在
+     `identity-auth`/`identity-keystore` 产生真实密钥、密钥格式定稿时决定（那时才写得出准确的正则）。
+     能拦住「红状态进入 main」的是 main 的分支保护：
      本 ADR 写完后已建立——ruleset `main-protection`（id 23858733）要求五个检查、禁止强推与删除，
      但**同时保留了 `RepositoryRole admin` 的 bypass**（零摩擦档），因此它现在约束的是协作者、GitHub App 与
      `GITHUB_TOKEN` 驱动的自动化，**还约束不到本人的直推**；要拦自己的直推必须移除 bypass

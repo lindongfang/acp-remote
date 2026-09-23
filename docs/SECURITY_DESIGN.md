@@ -516,8 +516,10 @@ storage.integrity_failed
   push protection（推送前拦截已知 provider 模式，已启用）＋ CI 的 `secrets` job（push/PR 扫本次范围、
   每日定时任务扫全历史，覆盖 provider 模式之外的凭据，脱敏输出；见
   [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)）。两者都不能替代运行时日志、错误与 snapshot 的扫描，
-  后者仍待实现；非 provider 模式（本项目自研格式的私钥与配对密钥）的仓库级检测尚未开启
-  （`secret_scanning_non_provider_patterns` 当前 disabled，待办见 `README.md` 的「分支保护」小节）。
+  后者仍待实现。**非 provider 模式（本项目自研格式的私钥与配对密钥）的仓库级检测已核实为不可用**
+  （个人账号 public 仓库无 GHAS：界面无 Secret scanning 区域、API 不接受 `secret_scanning_non_provider_patterns`；
+  见 `README.md` 的「分支保护」小节），因此这一类凭据在推送前没有服务端防线，目前只靠 CI 的事后扫描；
+  是否加本地 pre-commit 自研模式检查在密钥格式定稿时决定（残余风险见 ADR-0008）。
 - npm 平台选择、checksum、版本错配和禁止运行时下载。
 
 ### 18.2 平台验收

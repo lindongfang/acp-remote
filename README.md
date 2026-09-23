@@ -107,18 +107,27 @@ Dependabot 告警与安全更新。push protection 在推送前拦截已知 prov
 `security_and_analysis.secret_scanning_non_provider_patterns` / `secret_scanning_validity_checks`
 既不报错也不生效，字段原样返回 `disabled`）：
 
-- **Non-provider patterns**（通用模式密钥检测，旧文档里叫 generic patterns）：regex 类检测，覆盖私钥、
-  连接串、通用 API key 等不属于任何 provider 模式的凭据。本项目自研格式的私钥与配对密钥正在这个范围内，
-  因此这一项对本项目有实际意义。
-- **Validity checks**（可选，**价值有限，按需开**）：它把命中的凭据发给签发方校验是否仍有效，因此只对
-  「能向签发方查询」的 provider 凭据有意义（比如泄露的 GitHub/npm token）。本项目自研格式的私钥与
-  配对密钥**没有签发方可查**，这一项不覆盖它们，不要把它当成本项目密钥的防护。
+两个曾计划开启的子特性，**已核实为在本仓库不可用**（2026-09-23），不要再去翻开关：
 
-入口（**个人账号仓库**）：仓库 Settings → **Advanced Security**（左侧 Security and quality 分组的第一项）。
-组织账号下同一页在文档里叫 “Code security” / “Code security and analysis”，因此不要把其中一个名字当成通用路径；
-下不去时以界面上实际存在的分组为准。public 仓库上这些检测免费；**如果界面上根本没有对应开关，
-那就是账号/仓库类型的平台限制（例如非 provider 模式在部分场景需要 GitHub Advanced Security），
-属于能力缺口而不是配置遗漏**——此时落到 CI 的 `gitleaks` 作为替代。
+- REST API 不接受这两个字段：`PATCH /repos/{owner}/{repo}` 带
+  `security_and_analysis.secret_scanning_non_provider_patterns` / `secret_scanning_validity_checks`
+  既不报错也不生效，读回仍是 `disabled`；
+- 仓库的 `security_and_analysis.advanced_security` 为 `null`（该仓库不适用 GitHub Advanced Security）；
+- 界面侧：Settings → **Advanced Security**（个人账号仓库下是这个名称；组织账号的文档里叫
+  “Code security” / “Code security and analysis”）页面里**没有 Secret scanning 区域**——public 仓库的
+  secret scanning 与 push protection 由 GitHub 自动开启、不提供开关，而 non-provider patterns /
+  validity checks 属于 GHAS 特性。
+
+定性：这是**账号/仓库类型的平台限制**（能力缺口），不是配置遗漏，**不必为此升级付费 plan**。
+（顺带修正一个概念：`validity checks` 只是把命中的凭据发给签发方校验是否仍有效，对没有签发方的自研格式
+密钥本就没有意义；真正有用的是 non-provider patterns，而它不可用。）
+
+由此得到一条必须记住的推论：**自研格式的凭据在推送前没有任何服务端防线**。push protection 只认 provider
+模式，而本项目的 P-256 私钥与 base64url 配对密钥是自研格式；又因为仓库是 public，一旦进了历史就是公开的。
+所以这一类凭据的实际防线只有两条：CI 的 `gitleaks`（推送后扫，早于人工发现）与**可选的本地 pre-commit
+检查**（推送前，但只拦得住“忘了看”的情况，可被 `--no-verify` 绕过）。是否值得为此写一个自研模式检查，
+等 `identity-auth`/`identity-keystore` 开始产生真实密钥、且格式定稿之前决定即可——格式定稿后才有准确的
+正则可写（见 `docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3）。
 
 关于「Dependabot 安全更新」还有一个前置条件值得记下：它要求 **Dependabot 告警先开**，否则
 `PUT .../automated-security-fixes` 直接返回 422「Vulnerability alerts must be enabled」。顺序是：
