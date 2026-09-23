@@ -361,6 +361,10 @@ CLI 子命令（名字的唯一来源是 `LOCAL_ADMIN_PROTOCOL.md` §5.8 的映�
 ```text
 daemon start|stop|status
 
+workspace select
+agent configure
+provider configure
+
 device pair|list|revoke
 node pair|list|revoke
 export create|list|revoke

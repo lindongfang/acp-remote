@@ -932,7 +932,7 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 4. 远程 Zed 经 Access Node `acp_facade` 完成 initialize/session-new/prompt/update/cancel：握手用 `node.hello`/`node.challenge`/`node.proof`/`node.ready`，会话用 `resource.attach`/`resource.subscribe`/`resource.snapshot_*`/`resource.event`/`resource.ack`，命令用 `command.submit`/`command.accepted`/`command.rejected`/`command.terminal`（`command.status` 重查终态）；
 5. capability 交集（§11.1）、raw ACP 保真（`node-link.raw-acp.v1` 与 `resource.event.payload.acp`）、断线重放与命令幂等（§15）；
 6. 不支持 imported Agent 再导出；
-7. `session/new` 经稳定 `requestId` 映射为受 `grant.remote-work`、Agent selector 和 workspace template 限制的 `command.submit{command:"session.create"}`（§12.7），禁止携带 `cwd`/`mcpServers`；参数派生与 ACP 错误映射见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6；
+7. `session/new` 经稳定 `requestId` 映射为受 `grant.remote-work`、Agent selector 和 workspace template 限制的 `command.submit{command:"session.create"}`（§12.7）；禁止在 **Node Link 的 `session.create.payload`** 中携带 `cwd`/`mcpServers`，ACP `session/new.cwd` 的处理见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6；
 8. Access Node 默认仅持久化无正文交付索引（§6）；
 9. Owner 以 Access Node 为授权 principal，最终用户引用只用于审计（§8.3）。
 
@@ -951,6 +951,6 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 9. 循环导入/再次导出被拒绝。
 10. Owner 离线时会话正文不可用，prompt 不进入伪 accepted 状态。
 11. Access Node 重启后可凭无正文交付索引和 origin cursor 从 Owner 重建投递，不产生第二份会话正文数据库。
-12. Zed `session/new` 携带未导出的 Agent、未知 workspace alias 或任意绝对路径时被明确拒绝（`nodelink.export.not_granted` / `nodelink.command.unsupported_field`）。
+12. Zed `session/new` 的必填绝对 `cwd` 不作为拒绝理由，也不改变 Owner 选定的 workspace；Access facade 对未导出的 Agent/Export 明确拒绝。直接向 Node Link `session.create.payload` 注入未知 `workspaceAlias` 或 `cwd` 等原始路径字段时，Owner 分别以 `nodelink.export.not_granted` / `nodelink.command.unsupported_field` 拒绝，且不创建会话（§12.7、[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）。
 13. 旧 attachment 的延迟 frame 在重连后被拒绝（`nodelink.resource.attach_generation_stale`），不能命中新 generation 的 SessionEndpoint。
 14. 六个 transcript domain 的固定向量在 Rust 与 WebCrypto 两侧产生逐字节一致的 transcript、签名与 HMAC（§9.5）。

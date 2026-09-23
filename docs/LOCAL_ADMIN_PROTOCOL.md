@@ -505,6 +505,9 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 | `daemon start` | 不经本地通道 | CLI 进程自身 | 单实例锁失败必须给明确错误，不得强杀进程（§7） |
 | `daemon stop` / `daemon status` | 本地方法 | `daemon.stop` / `daemon.status` | 由组合根回答，不经用例层 |
 | `doctor` | 本地方法 + CLI 侧检查 | `daemon.status` + 本地检查 | 离线时在 CLI 进程内完成（ADR-0004 决策 1）；**不新增方法**（不得自造 `daemon.doctor`） |
+| `workspace select` | 本地方法 | `workspace.select` | 以 `--alias`、`--display-name`、`--root-path` 提供 §5.2 的三个参数；路径仅发送到本机 Daemon，不能放入 Export 或 Node Link 载荷 |
+| `agent configure` | 本地方法 | `agent.configure` | 以 `--file <path>` 读取与 §5.2 `params` 同形的 JSON；文件不得包含凭据值，CLI 不自行写入 profile 或启动配置 |
+| `provider configure` | 本地方法 | `provider.configure` | 以 `--provider-id`、`--kind`、`--display-name`、可重复的 `--field <name>` 指定非秘密字段；`values` 由 CLI 在交互终端逐项无回显读取，不接受凭据值作为命令行参数或普通文件输入；无交互终端时明确失败 |
 | `device pair` | 本地方法 ×3 | `device.pair.begin` → `device.pair.status`（轮询）→ `device.pair.confirm` | 多步流程见下 |
 | `device list` / `device revoke` | 本地方法 | 1:1 | |
 | `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下 |
