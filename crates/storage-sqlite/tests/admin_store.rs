@@ -1679,6 +1679,137 @@ async fn device_revocation_is_idempotent_and_survives_reopen() {
     pool.close().await;
 }
 
+/// 回归：`RevokeReason::KeyChanged` 的落库 token 必须是 `key_changed`。
+///
+/// 设备与节点都走 `TrustStore::revoke_device`/`revoke_node`（`revoke_token()` 的唯一调用路径）：
+/// 撤销请求只带 `KeyChanged`，库内的 token 只能由该映射产生。映射一旦拼错，UPDATE 会撞
+/// `revoke_reason` 的取值 CHECK，事务回滚，本用例在 `expect` 处失败。DDL 允许集合另由
+/// `enum_coverage.rs` 锚在 §7.3 合同文本上独立断言，两者来源不同，共同发现拼写错误。
+#[tokio::test]
+async fn key_changed_revocation_is_persisted_for_devices_and_nodes() {
+    let dir = temp_dir("admin-key-changed");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+
+    approve_device(&store, &device_id(), 2).await;
+    let fingerprint = peer_public_key().fingerprint();
+    for kind in [NodeKind::Access, NodeKind::Owner] {
+        store
+            .put_node(NodeWrite {
+                record: node_record(kind, fingerprint.clone(), NodeState::Paired),
+                public_key: peer_public_key(),
+                context: context(1, Vec::new()),
+            })
+            .await
+            .expect("put node role");
+    }
+
+    store
+        .revoke_device(DeviceRevocation {
+            device: device_id(),
+            reason: RevokeReason::KeyChanged,
+            context: context(
+                3,
+                vec![audit(
+                    AuditAction::DeviceRevoked,
+                    EntityRef::Device(device_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("key_changed must be an accepted device revocation reason");
+    store
+        .revoke_node(NodeRevocation {
+            node: node_id(),
+            reason: RevokeReason::KeyChanged,
+            context: context(
+                3,
+                vec![audit(
+                    AuditAction::NodeTrustRevoked,
+                    EntityRef::Node(node_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("key_changed must be an accepted node revocation reason");
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT revoke_reason FROM owned_device WHERE device_id = ?1"
+        )
+        .bind(DEVICE)
+        .fetch_one(&pool)
+        .await
+        .expect("device revoke reason"),
+        "key_changed",
+        "device revocation must round-trip the key_changed token"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT revoke_reason FROM owned_node WHERE node_id = ?1 AND kind = 'access'"
+        )
+        .bind(NODE)
+        .fetch_one(&pool)
+        .await
+        .expect("node revoke reason"),
+        "key_changed",
+        "node revocation must round-trip the key_changed token"
+    );
+    pool.close().await;
+}
+
+/// 回归：`owned_device.revoke_reason` 的取值 CHECK 由数据库真正强制执行。
+///
+/// 控制组先用合法 token 走同一形状的 UPDATE（必须成功），再写非法 token（必须被拒）：
+/// 语句同时满足 `(state='revoked') = (revoked_at IS NOT NULL)`，因此拒绝只可能来自取值 CHECK。
+/// 断言针对真实约束的拒绝，不重复实现判定逻辑。
+#[tokio::test]
+async fn an_out_of_vocabulary_revoke_reason_is_rejected_by_the_check_constraint() {
+    let dir = temp_dir("admin-revoke-reason-check");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+
+    let pool = raw_write_pool(&path).await;
+    let update = "UPDATE owned_device SET state = 'revoked', revoked_at = ?2, revoke_reason = ?3 \
+                  WHERE device_id = ?1";
+    sqlx::query(update)
+        .bind(DEVICE)
+        .bind(at(3).as_str())
+        .bind("compromised")
+        .execute(&pool)
+        .await
+        .expect("a legal token must be accepted");
+    let rejected = sqlx::query(update)
+        .bind(DEVICE)
+        .bind(at(4).as_str())
+        .bind("keychange")
+        .execute(&pool)
+        .await
+        .expect_err("an out-of-vocabulary revoke reason must be rejected by the DDL CHECK");
+    assert!(
+        rejected.to_string().to_ascii_lowercase().contains("check"),
+        "the rejection must come from the CHECK constraint, got: {rejected}"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT revoke_reason FROM owned_device WHERE device_id = ?1"
+        )
+        .bind(DEVICE)
+        .fetch_one(&pool)
+        .await
+        .expect("revoke reason"),
+        "compromised",
+        "the rejected write must leave the control-group row untouched"
+    );
+    pool.close().await;
+}
+
 /// spec：已绑定身份换钥被拒——既不换材料也不改状态。
 #[tokio::test]
 async fn revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound() {
