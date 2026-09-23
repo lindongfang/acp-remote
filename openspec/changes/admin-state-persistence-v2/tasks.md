@@ -63,7 +63,7 @@
 
 - [x] 7.1 全变更；负责人：主 Agent（not-applicable 的替代验证）；依赖：6.7、6.8；在最终主分支固定版本执行替代验证：`cargo test --locked -p core -p storage-sqlite --all-features` [PV4]、`npm run verify` [PV1]、`node scripts/check-contract-drift.mjs` [PV2]、并用 `fixtures/storage/v2/from-v1.sqlite3` 重放 v1→v2 升级并以行数/序号/`audit_id` 断言保留性；完成条件：逐项命令、版本、输出与断言写入 `reports/alt-final-verification.md`。 **执行记录**：在 `86f282b` 上执行① `cargo test -p core -p storage-sqlite --all-features`、② `npm run verify`、③ `check-contract-drift`、④ `check-crate-boundaries`、⑤ `from-v1.sqlite3` 的 v1→v2 重放（`cargo test -p storage-sqlite --test migration`），全部退出 0；原始输出 `reports/alt-7.1-run.log`、`reports/du1-main-verify.log`。
 - [x] 7.2 全变更；负责人：主 Agent；依赖：7.1；汇总替代验证的全部断言、版本与证据，核对覆盖了 not-applicable 的 `alternative_checks` 四项与资源清理（临时目录、夹具只读）；完成条件：汇总与清理结论写入 `reports/alt-final-verification.md` 的汇总段。 **执行记录**：四项 `alternative_checks` 与 ①–⑤ 一一对应、无跳过；夹具 SHA-256 执行前后不变（`empty` `c9c367e8…`、`from-v1` `c84ad51e…`、`too-new` `45793273…`），`target/alt-replay-*` 副本已删除。
-- [ ] 7.3 [e2e-owned] 全变更；负责人：扩展；依赖：7.2；运行 `npx --quiet --no-install openspec-agentic e2e check --change admin-state-persistence-v2`，仅 PASS 自动勾选；此行只确认不适用判据已按计划固化，不执行测试或汇总。
+- [x] 7.3 [e2e-owned] 全变更；负责人：扩展；依赖：7.2；运行 `npx --quiet --no-install openspec-agentic e2e check --change admin-state-persistence-v2`，仅 PASS 自动勾选；此行只确认不适用判据已按计划固化，不执行测试或汇总。
 
 ## 8. Final Verification
 
