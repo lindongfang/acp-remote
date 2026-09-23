@@ -3,7 +3,7 @@
 - [x] 1.1 全变更；负责人：environment/recon；依赖：无；在新的任务级最小上下文中核实仓库路径、目标引用（`git rev-parse refs/heads/main`）、工具版本（`rust-toolchain.toml` 与 Node ≥ 22.12）、约定命令与资源状态，返回结构化事实与原始输出；完成条件：事实清单与证据可被后续任务直接引用。
 - [x] 1.2 WP1 / WP4 / WP5；负责人：实现 Agent；依赖：1.1；确认实现所需契约与文件所有权（§11.5–§11.9 目标形状、§5.3 签名、§7.3/§7.4 DDL 文本、§7.2 版本常量），记录编码起点；完成条件：写范围与契约清单落到 `verification.md`，无文件归属冲突。
 - [x] 1.3 WP1–WP6；负责人：实现 Agent；依赖：1.1；确认唯一共享运行资源是构建目录 `target/` 与 SQLite 临时目录，确定串行执行与并行分片时 `CARGO_TARGET_DIR` 的隔离方式，并记录夹具的只读使用与临时目录释放方法；完成条件：隔离与释放方案记录在案；无共享外部资源时给出依据。
-- [ ] 1.4 WP6；负责人：实现 Agent；依赖：2.9、2.17；在 WP6 集成验证前接入已验收上游（`ports.rs` 端口签名 + `migrate.rs` v2 常量），核对下游实际基线与包含关系；完成条件：交接关系与包含关系检查记录在 `verification.md` 的 Dependency Handoffs。
+- [x] 1.4 WP6；负责人：实现 Agent；依赖：2.9、2.17；在 WP6 集成验证前接入已验收上游（`ports.rs` 端口签名 + `migrate.rs` v2 常量），核对下游实际基线与包含关系；完成条件：交接关系与包含关系检查记录在 `verification.md` 的 Dependency Handoffs。
 
 ## 2. Implementation
 
@@ -25,10 +25,10 @@
 - [x] 2.16 [WP4] 负责人：实现 Agent；依赖：2.14；迁移 v1 的 `imported_import`（去掉 `export_id` 与 `UNIQUE(owner_node_id, export_id)`）并把每个 Export 写进新的 `imported_import_export`（`added_at` 取原 `created_at`），无可信来源的 grants 不补齐（该 Import 保持不可用）；完成条件：迁移用例断言关联行数与「无默认 grants」。
 - [x] 2.17 [WP4] 负责人：实现 Agent；依赖：2.14；把 `migrate()` 改为「读版本 → 版本 < 2 时在同一事务执行 v2 升级 → 写版本 2」，已为 2 时跳过升级以保证第二次打开 `sqlite_master` 文本逐字节不变，失败整体回滚；完成条件：连续两次打开的幂等用例与中途失败回滚用例通过。
 - [x] 2.18 [WP4] 负责人：实现 Agent；依赖：2.16、2.17；生成并提交 `fixtures/storage/v2/{empty,from-v1,too-new}.sqlite3`（`from-v1` 含会话/事件/cursor/幂等/审计数据，`too-new` 的 `user_version = 3`），把 `migration.rs` 测试从 v1 三件套切到 v2 三件套；完成条件：`cargo test -p storage-sqlite --test migration` 通过且夹具可复现（生成方式写入注释或脚本）。
-- [ ] 2.19 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `TrustStore`：设备与节点双角色、配对认领/落定/过期、身份材料（`owned_peer_key`）唯一绑定与撤销覆盖两角色，全部走单事务写集并携带审计；完成条件：新用例覆盖并发认领、拒绝/过期不建信任、双角色指纹一致、已撤销身份不可复活。
-- [ ] 2.20 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `ExportStore`：Export 写集与撤销、Import 管理行 + 关联行一次提交、`remove_import` 删除管理行/关联行/交付索引/命令引用而保留审计，`(owner_node_id, export_id)` 重复归属显式冲突；完成条件：新用例覆盖重复归属、完整移除后审计仍在、连接级 `drop_import` 与完整移除不重叠。
-- [ ] 2.21 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `LocalConfigStore`：profile（至多一个默认、切换为一次原子写集）、workspace 记录、Provider 引用（只存字段名/引用/版本、版本递增）、seed 标记与种子同事务提交且重复打开不重导；完成条件：新用例覆盖默认唯一、空种子也标记、重复打开不重导、引用版本推进。
-- [ ] 2.22 [WP6] 负责人：实现 Agent；依赖：2.21；补齐 `StorageError → PortError` 映射（唯一键/条件更新 → `Conflict`、指纹不一致 → `IdentityMismatch`、归属冲突 → `DuplicateOwnership`、`SQLITE_FULL` → `Unavailable(StorageFull)`、完整性失败/宽松权限 → `Corrupt` 只读失败关闭）与 keystore 引用失效的 `Unavailable(KeystoreUnavailable)` 失败关闭路径；完成条件：新用例覆盖损坏库写路径全拒、权限宽松失败关闭、超限拒绝新写入、管理冲突映射不落入通配臂。
+- [x] 2.19 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `TrustStore`：设备与节点双角色、配对认领/落定/过期、身份材料（`owned_peer_key`）唯一绑定与撤销覆盖两角色，全部走单事务写集并携带审计；完成条件：新用例覆盖并发认领、拒绝/过期不建信任、双角色指纹一致、已撤销身份不可复活。
+- [x] 2.20 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `ExportStore`：Export 写集与撤销、Import 管理行 + 关联行一次提交、`remove_import` 删除管理行/关联行/交付索引/命令引用而保留审计，`(owner_node_id, export_id)` 重复归属显式冲突；完成条件：新用例覆盖重复归属、完整移除后审计仍在、连接级 `drop_import` 与完整移除不重叠。
+- [x] 2.21 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `LocalConfigStore`：profile（至多一个默认、切换为一次原子写集）、workspace 记录、Provider 引用（只存字段名/引用/版本、版本递增）、seed 标记与种子同事务提交且重复打开不重导；完成条件：新用例覆盖默认唯一、空种子也标记、重复打开不重导、引用版本推进。
+- [x] 2.22 [WP6] 负责人：实现 Agent；依赖：2.21；补齐 `StorageError → PortError` 映射（唯一键/条件更新 → `Conflict`、指纹不一致 → `IdentityMismatch`、归属冲突 → `DuplicateOwnership`、`SQLITE_FULL` → `Unavailable(StorageFull)`、完整性失败/宽松权限 → `Corrupt` 只读失败关闭）与 keystore 引用失效的 `Unavailable(KeystoreUnavailable)` 失败关闭路径；完成条件：新用例覆盖损坏库写路径全拒、权限宽松失败关闭、超限拒绝新写入、管理冲突映射不落入通配臂。
 
 ## 3. Branch Validation
 
@@ -40,8 +40,8 @@
 - [ ] 3.6 [WP4] 负责人：独立 reviewer；依赖：3.5，可与 3.5 并行；只读检视 DDL 组织、12-step 重建、Import 拆分迁移、幂等与回滚语义 [RV1]；完成条件：报告写入 `reports/rv1-wp4.md`，无未解决阻断项。
 - [x] 3.7 [WP5] 负责人：实现 Agent；依赖：2.2、2.14；执行 `node scripts/check-contract-drift.mjs` 与 `node scripts/check-crate-boundaries.mjs` [PV2][PV3]；完成条件：两个脚本退出码 0，漂移门禁输出语句条数与 trait/类型计数，依赖闭包与 allow-list 逐项相等，证据写入 `reports/wp5-contract-drift-before-after.md` 与 `reports/wp5-boundaries.log`。
 - [ ] 3.8 [WP5] 负责人：独立 reviewer；依赖：3.7，可与 3.7 并行；只读检视合同并入是否有重复正文、§11 是否仍有将来时、文档引用与 allow-list 名单是否一致 [RV1]；完成条件：报告写入 `reports/rv1-wp5.md`，无未解决阻断项。
-- [ ] 3.9 [WP6] 负责人：实现 Agent；依赖：2.22；执行交付前 project verify：`cargo fmt`、`cargo clippy -p storage-sqlite -D warnings`、`cargo test -p storage-sqlite --all-features`（含新增管理 store 与失败关闭用例）[PV4]；完成条件：全部通过且日志写入 `reports/wp6-admin-store-tests.log`。
-- [ ] 3.10 [WP6] 负责人：独立 reviewer；依赖：3.9，可与 3.9 并行；只读检视写集原子性（状态/引用/审计同事务）、错误映射、失败关闭与 imported 无正文 [RV1]；完成条件：报告写入 `reports/rv1-wp6.md`，无未解决阻断项。
+- [x] 3.9 [WP6] 负责人：实现 Agent；依赖：2.22；执行交付前 project verify：`cargo fmt`、`cargo clippy -p storage-sqlite -D warnings`、`cargo test -p storage-sqlite --all-features`（含新增管理 store 与失败关闭用例）[PV4]；完成条件：全部通过且日志写入 `reports/wp6-admin-store-tests.log`。
+- [x] 3.10 [WP6] 负责人：独立 reviewer；依赖：3.9，可与 3.9 并行；只读检视写集原子性（状态/引用/审计同事务）、错误映射、失败关闭与 imported 无正文 [RV1]；完成条件：报告写入 `reports/rv1-wp6.md`，无未解决阻断项。
 
 ## 5. Integration Readiness
 

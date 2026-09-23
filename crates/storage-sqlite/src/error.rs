@@ -9,7 +9,7 @@
 //! 本模块是 `storage-sqlite` 与 core 之间的**唯一**错误转换点：`?` 在本 crate 内把 `sqlx::Error`
 //! 收成 [`StorageError`]，出口处 [`StorageError::into_port_error`] 把它变成 `PortError`。
 
-use acp_core::model::{PortError, UnavailableKind};
+use acp_core::model::{ConflictKind, PortError, UnavailableKind};
 
 /// `storage-sqlite` 的内部错误。
 ///
@@ -52,6 +52,17 @@ pub enum StorageError {
 }
 
 impl StorageError {
+    /// §11.6/§9.23：管理写集里的**约束失败**必须给出语义化冲突（唯一键/条件更新 → `AlreadyExists`、
+    /// 身份材料不一致 → `IdentityMismatch`、归属冲突 → `DuplicateOwnership`），不能落进 `Backend`。
+    /// `kind` 由调用点决定——只有调用点知道自己在写什么，因此映射不放进 [`Self::into_port_error`]
+    /// （owned/imported 的既有路径语义不变，它们的约束失败仍由用例层判定）。
+    pub fn into_conflict(self, kind: ConflictKind) -> PortError {
+        match self {
+            StorageError::Sql(failure) if failure.is_constraint() => PortError::Conflict(kind),
+            other => other.into_port_error(),
+        }
+    }
+
     /// `docs/MODULE_ARCHITECTURE.md` §8：`sqlx::Error` 不得进入 core，适配器必须在边界映射。
     ///
     /// | `StorageError` | `PortError` |
@@ -135,12 +146,21 @@ const SQLITE_BUSY: i32 = 5;
 const SQLITE_LOCKED: i32 = 6;
 const SQLITE_CORRUPT: i32 = 11;
 const SQLITE_FULL: i32 = 13;
+const SQLITE_CONSTRAINT: i32 = 19;
 const SQLITE_NOTADB: i32 = 26;
 
 impl SqlFailure {
     fn primary_code(&self) -> Option<i32> {
         let parsed: i32 = self.code.as_deref()?.parse().ok()?;
         Some(parsed & 0xff)
+    }
+
+    /// 是否由约束触发（`SQLITE_CONSTRAINT` 及其扩展码：唯一键、外键、CHECK、NOT NULL）。
+    ///
+    /// 管理写集用它把「唯一键/条件更新失败」翻成具名冲突（[`StorageError::into_conflict`]）；
+    /// 通用映射（[`Self::into_port_error`]）不区分约束，保持既有路径的判定不变。
+    pub fn is_constraint(&self) -> bool {
+        self.primary_code() == Some(SQLITE_CONSTRAINT)
     }
 
     fn into_port_error(self) -> PortError {

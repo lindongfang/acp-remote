@@ -85,6 +85,11 @@ impl std::fmt::Debug for SqliteStore {
 }
 
 impl SqliteStore {
+    /// 写池（管理 store 模块共用）：§7.1 的单写连接，管理写集在它上面开 BEGIN IMMEDIATE。
+    pub(crate) fn pools(&self) -> &Pools {
+        &self.pools
+    }
+
     /// §7.1/§7.2：打开（必要时创建）数据库、设置 PRAGMA、跑 `quick_check` 与 migration。
     ///
     /// `at` 由调用方从 `Clock` 取得（§2：本 crate 不读系统时间）：它只用于首次创建库时的
@@ -142,8 +147,8 @@ impl SqliteStore {
         })
     }
 
-    /// §7.1 失败关闭门：写路径的第一道检查。
-    fn writable(&self) -> Result<(), PortError> {
+    /// §7.1 失败关闭门：写路径的第一道检查（管理写集与 owned/imported 写路径共用）。
+    pub(crate) fn writable(&self) -> Result<(), PortError> {
         if self.integrity_ok {
             Ok(())
         } else {
@@ -153,7 +158,13 @@ impl SqliteStore {
         }
     }
 
-    fn window(&self) -> RetentionPolicy {
+    /// §7.5 的容量度量语句（`open` 时从 schema 现读两家族全部 TEXT 列拼出）。
+    pub(crate) fn measure_sql(&self) -> &str {
+        &self.measure_sql
+    }
+
+    /// §7.5 的保留窗口与容量上限（管理写集与 owned/imported 写路径共用同一份策略）。
+    pub(crate) fn window(&self) -> RetentionPolicy {
         RetentionPolicy {
             transcript_retention_days: self.config.transcript_retention_days,
             sync_event_retention_days: self.config.sync_event_retention_days,
@@ -171,8 +182,8 @@ impl SqliteStore {
 
 /// `sqlx::Error` 与端口错误之间隔着 [`StorageError`] 一层，而 `?` 只做一步转换；
 /// `From<sqlx::Error> for PortError` 又是孤儿实现（两个类型都在外部 crate）。因此所有 sqlx 调用点都经
-/// `.db()` 收敛成 `StorageError`，再由 `?` 交给端口边界。
-trait Db<T> {
+/// `.db()` 收敛成 `StorageError`，再由 `?` 交给端口边界（管理 store 模块共用）。
+pub(crate) trait Db<T> {
     fn db(self) -> Result<T, StorageError>;
 }
 
@@ -182,7 +193,7 @@ impl<T> Db<T> for Result<T, sqlx::Error> {
     }
 }
 
-fn text(row: &SqliteRow, column: &'static str) -> Result<String, StorageError> {
+pub(crate) fn text(row: &SqliteRow, column: &'static str) -> Result<String, StorageError> {
     row.try_get::<String, _>(column)
         .map_err(|_| StorageError::ColumnValue {
             column,
@@ -190,7 +201,10 @@ fn text(row: &SqliteRow, column: &'static str) -> Result<String, StorageError> {
         })
 }
 
-fn opt_text(row: &SqliteRow, column: &'static str) -> Result<Option<String>, StorageError> {
+pub(crate) fn opt_text(
+    row: &SqliteRow,
+    column: &'static str,
+) -> Result<Option<String>, StorageError> {
     row.try_get::<Option<String>, _>(column)
         .map_err(|_| StorageError::ColumnValue {
             column,
@@ -198,7 +212,19 @@ fn opt_text(row: &SqliteRow, column: &'static str) -> Result<Option<String>, Sto
         })
 }
 
-fn int(row: &SqliteRow, column: &'static str) -> Result<i64, StorageError> {
+/// BLOB 列（owned_peer_key.public_key / owned_device.public_key；§11.7 的跨族列类型约定）。
+///
+/// STRICT 表按列的亲和性校验入参，因此这里读不到 BLOB 就是库被外部改写：按列值损坏处理，不把
+/// 字节以外的东西（hex 文本、错误长度的 BLOB）当成身份材料。
+pub(crate) fn blob(row: &SqliteRow, column: &'static str) -> Result<Vec<u8>, StorageError> {
+    row.try_get::<Vec<u8>, _>(column)
+        .map_err(|_| StorageError::ColumnValue {
+            column,
+            expected: "blob",
+        })
+}
+
+pub(crate) fn int(row: &SqliteRow, column: &'static str) -> Result<i64, StorageError> {
     row.try_get::<i64, _>(column)
         .map_err(|_| StorageError::ColumnValue {
             column,
@@ -219,7 +245,7 @@ fn opt_flag(row: &SqliteRow, column: &'static str) -> Result<Option<bool>, Stora
 }
 
 /// newtype / token enum 的统一解析：非法取值说明库被外部改写，按损坏处理。
-fn decode<T>(value: &str, column: &'static str) -> Result<T, StorageError>
+pub(crate) fn decode<T>(value: &str, column: &'static str) -> Result<T, StorageError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
@@ -230,7 +256,10 @@ where
     })
 }
 
-fn decode_opt<T>(value: Option<String>, column: &'static str) -> Result<Option<T>, StorageError>
+pub(crate) fn decode_opt<T>(
+    value: Option<String>,
+    column: &'static str,
+) -> Result<Option<T>, StorageError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
@@ -282,7 +311,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 }
 
 /// §7.3 的 `(actor_kind, actor_id)`：协议维度的幂等键，由 `Actor` 的既有分解给出。
-fn actor_key(actor: &Actor) -> (ActorKind, String) {
+pub(crate) fn actor_key(actor: &Actor) -> (ActorKind, String) {
     (actor.kind(), actor.id_text())
 }
 
@@ -1737,13 +1766,14 @@ const CAPACITY_RETAINED_PREDICATE: &str = "kind <> 'delta' AND expires_at IS NOT
                  WHERE i.request_event = owned_event.global_sequence)";
 
 /// §7.5 ⑥：容量检查。超限时按 ①（过期 delta）→ ②（过期正文/状态）→ ③（已压缩批次）清理；
-/// 仍超限则拒绝本次写入。
+/// 仍超限则拒绝本次写入。管理写集经 `admin::enforce_capacity_gate` 调用的就是本函数，两条路径
+/// 共用同一份顺序与判据（§11.2 第 7 条的「管理写集纳入容量」）。
 ///
 /// §7.5 的顺序里 ④（附件 LRU）排在 ③ 之后，但附件字节在文件系统上：在本事务内删行而事务可能回滚，
 /// 会造成「行还在、文件已删」的悬空行。因此容量清理在写事务内只做数据库侧（③①②），附件 LRU 由
 /// `prune` / `AttachmentStore::prune_lru` 在事务提交后执行。若附件本身就把库顶到上限之上，本次提交会
 /// 明确返回 `Unavailable(StorageFull)`，而不是静默丢弃附件或正文。
-async fn enforce_capacity(
+pub(crate) async fn enforce_capacity(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     limits: &RetentionPolicy,
     at: &Timestamp,

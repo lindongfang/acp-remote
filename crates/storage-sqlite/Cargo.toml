@@ -12,6 +12,10 @@ publish.workspace = true
 core = { path = "../core" }
 # `payload_digest` 的 ACPR-CJ1 只允许有一份实现（`docs/MODULE_ARCHITECTURE.md` §5 的矩阵已放开）。
 acpr-wire = { path = "../acpr-wire" }
+# 管理表的集合字段（`*_json`）是「有类型的 JSON 数组文本」（`CORE_PORTS_AND_STORAGE.md` §11.1）：
+# 编解码只属于本适配器（数据库 record 不进 core），因此在这里而非 core 依赖 serde。
+serde.workspace = true
+serde_json.workspace = true
 async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
