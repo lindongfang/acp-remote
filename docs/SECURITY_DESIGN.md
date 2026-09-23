@@ -462,11 +462,20 @@ storage.integrity_failed
 
 ### 16.2 构建与发布权限
 
-- CI 使用固定 action/toolchain major 或 digest、锁定 Rust/npm 依赖并保存审核记录。
+- CI 使用固定 action/toolchain 与锁定依赖，并保存审核记录：
+  - 官方 `actions/*` 固定到 major，且该 major 必须运行在受支持的 Node runtime 上；
+  - 第三方 action 只允许按完整 commit SHA 固定，并必须在 ADR 里记录其许可证、向外发送的数据与失败模式；
+  - Rust 工具链版本唯一来源是仓库的 `rust-toolchain.toml`，CI 从该文件读取，不在 workflow 里另写一份；
+  - 依赖锁文件（`Cargo.lock`、`package-lock.json`）入库，并由 `--locked` / `npm ci` 强制。
+  当前使用的工具、版本与已知残余风险见 [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)。
+- 依赖准入与许可证由机器判定：`deny.toml` 的 `[licenses] allow`、`[sources]` 与 advisory 判定在 CI 强制执行；
+  例外条目（`ignore` / `exceptions` / `[bans] deny`）必须逐条写明理由、受影响版本范围与移除条件；
+  密钥扫描的允许清单遵循同一规则，且不得用于处置真实凭据（正确处置见 §17）。
 - 发布凭据使用短期 OIDC/可信发布，避免长期 npm token 存入开发机或仓库 secret。
 - 发布 job 与普通 PR CI 分离，需要受保护 tag/branch 和人工或策略批准。
 - 不从 fork PR、未受信脚本或未验证 artifact 直接发布。
-- 生成 SBOM、依赖许可证清单和平台 checksum；安全修复可以定位受影响版本。
+- 生成 SBOM、依赖许可证清单和平台 checksum；安全修复可以定位受影响版本
+  （普通 CI 已有的许可证与 advisory 判定不替代本节：SBOM、checksum 签名与 provenance 属于发布阶段，见 §20）。
 
 ### 16.3 运行时更新
 
@@ -502,7 +511,8 @@ storage.integrity_failed
 - snapshot barrier、ACK 越界、sequence 回退和慢客户端。
 - XSS fixture：Markdown HTML、恶意链接、SVG、ANSI、diff、路径和 `rawJson`。
 - 路径穿越、symlink/junction、workspace 越界和 shell argument 注入。
-- 日志/错误/snapshot/fixture 中的 secret 扫描。
+- 日志/错误/snapshot/fixture 中的 secret 扫描（仓库内容与历史提交已由 CI 的 `secrets` job 覆盖，见
+  [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)；运行时日志、错误与 snapshot 的扫描仍待实现）。
 - npm 平台选择、checksum、版本错配和禁止运行时下载。
 
 ### 18.2 平台验收
@@ -546,7 +556,7 @@ manual pairing/revoke smoke test
 以下选择不能由普通实现补丁静默决定：
 
 - Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback，推迟到 Linux 平台开发阶段处理；当前优先交付 Windows，见 `INITIAL_DESIGN.md` §14。在决定前 Linux 正式模式仍失败关闭，不引入明文 fallback。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
-- npm provenance、checksum 签名和 SBOM 的发布工作流与格式仍待发布阶段确定。普通 CI 已接入 GitHub Actions（`.github/workflows/ci.yml`），执行合同门禁、Rust 检查及提交规范校验；已有普通 CI 不代表发布 provenance、签名或 SBOM 已实现。发布 job 继续按 §16.2 与普通 CI 分离。
+- npm provenance、checksum 签名和 SBOM 的发布工作流与格式仍待发布阶段确定。普通 CI 已接入 GitHub Actions（`.github/workflows/ci.yml`），执行合同门禁、Rust 检查、提交规范校验、依赖许可证与来源判定、依赖安全公告、密钥扫描及文档引用检查；已有普通 CI 不代表发布 provenance、签名或 SBOM 已实现。发布 job 继续按 §16.2 与普通 CI 分离。
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。
 

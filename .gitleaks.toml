@@ -1,0 +1,23 @@
+# gitleaks 配置：提交进仓库的密钥材料扫描。
+#
+# 判据来源：`AGENTS.md` §3「私钥和 token 不得写入日志、协议错误、测试快照或普通 SQLite 字段」，
+# 以及 `docs/SECURITY_DESIGN.md` §16.2 的供应链要求；执行者是 CI 的 `secrets` job
+# （`gitleaks/gitleaks-action`，按 commit 固定，见 `docs/adr/0008-ci-supply-chain-tooling.md`）。
+#
+# 这里刻意只做一件事：声明使用 gitleaks 的默认规则集。
+# `[extend] useDefault = true` 是所有规则的来源，不在这里复制一份正则——复制出来的规则会与上游
+# 默认集漂移，而且会让「为什么漏检」变得无法追溯。
+[extend]
+useDefault = true
+
+# 关于允许清单（allowlist）的政策，写在这里以免下一个人以为「加一条 allowlist」是随手动作：
+#
+# 1. 允许清单只用于**公开的固定测试向量**（例如 `fixtures/*/v1/transcripts/` 里按
+#    `compatibility/transcripts/v1/transcripts.json` 重算过的密钥材料），或明确记录了假阳性的具体路径。
+# 2. 每一条都必须写 `description`：这是什么、为什么不是真实凭据、谁核对过。
+#    拒绝整目录放行，也拒绝用正则放宽全局规则。
+# 3. 真实凭据被扫描到时的正确处置是**轮换凭据 + 清理历史 + 记录事件响应**
+#    （`SECURITY_DESIGN.md` §17），不是加允许清单。
+# 4. 目前**没有任何允许清单条目**：写这份配置时仓库还没有固定向量需要豁免（`check:assets` 重算的
+#    向量里只有公钥、nonce 与签名，没有私钥）。CI 首次全历史扫描的结果是这条判断的证据；
+#    若它命中 `fixtures/**`，先确认命中项确实是公开测试向量，再按第 1、2 条加最小范围的条目。

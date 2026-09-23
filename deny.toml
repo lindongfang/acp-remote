@@ -1,0 +1,72 @@
+# cargo-deny 配置：依赖 advisory、许可证、来源与重复版本策略的唯一机器定义。
+#
+# 判据来源：`docs/SECURITY_DESIGN.md` §16.2（供应链：固定工具链/action、锁定依赖、生成许可证清单）
+# 与 `AGENTS.md` §7（新增依赖前检查维护状态、许可证、平台支持与安全风险）。
+# CI 用 `EmbarkStudios/cargo-deny-action`（按 commit 固定，见 `docs/adr/0008-ci-supply-chain-tooling.md`）
+# 跑两个 job：`check bans licenses sources`（确定性，只随锁文件变化）与 `check advisories`（需要 advisory-db 网络）。
+#
+# 本地等价命令（需自行 `cargo install --locked cargo-deny`，CI 版本由 action 的镜像固定）：
+#   cargo deny check bans licenses sources
+#   cargo deny check advisories
+#
+# 配置形状对齐 cargo-deny 0.20.2 自带的 `deny.toml` 模板：**只保留本仓库能给出理由的键**，
+# 不整份照抄上游模板（上游的 `[bans] deny` 列表是 Embark 自己的策略，与本项目无关）。
+# 新增或修改任何键都必须在这里写明理由，否则下一个读者无法判断它是决定还是历史残留。
+
+[graph]
+# 只判定实际交付的平台的依赖图：首个交付目标是 Windows x64（`INITIAL_DESIGN.md` §14），
+# 共享代码同时在 Linux 上跑 CI。**加入新平台（macOS、arm64、移动端）时必须同时加进这里**，
+# 否则该平台独有的依赖不会过许可证与 advisory 判定，形成静默的检查空洞。
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+]
+# 与 CI 的 `--all-features` 一致，使本地 `cargo deny check` 与 CI 判定同一张依赖图。
+all-features = true
+
+[advisories]
+# 只对 workspace 自己直接依赖的 crate 报告「无人维护」，避免对整棵传递依赖树刷噪音。
+# 传递依赖的无人维护问题仍由 advisory-db 的 unsound/unmaintained 条目覆盖。
+unmaintained = "workspace"
+# 不健全（unsound）判定对全部依赖生效：unsound 直接违反内存安全，不受 crate 是否直接依赖影响。
+unsound = "all"
+# 有意为空：任何忽略项都必须在同一改动里写明「受影响版本、为什么本项目不受影响、何时移除」。
+ignore = []
+
+[bans]
+# 先以 warn 暴露重复版本，不直接阻塞：当前 13 组重复版本全部是传递依赖（`getrandom`、`hashbrown`、
+# `syn` 2/3、`windows-sys` 家族等），收紧为 `deny` 需要为每组给出 skip 理由与适用版本，
+# 而依赖图在实现期变化频繁，过早收紧会把「加一条依赖」变成「填一批 skip」。收紧路径：
+# 依赖图稳定后改为 `deny` 并为每组重复填写带 reason 的 `skip`。
+# 注意 `warn` 不改变退出码：它是可见的提示，不是门禁（门禁由 advisory、许可证与来源判定承担）。
+multiple-versions = "warn"
+wildcards = "deny"
+# 有意为空：本项目尚未对具体 crate 建立替代品策略。要加入时写成
+# `{ crate = "x", use-instead = "y" }` 并在同一改动里说明理由。
+deny = []
+
+[sources]
+# 依赖只能来自 crates.io。任何 git 依赖或未知 registry 都会绕过 crates.io 的版本与完整性保证，
+# 因此直接拒绝；确需 git 依赖时先写 ADR，再在这里加 `allow-git` 条目。
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+# 许可文本推断的置信度阈值（上游模板同值）：低于它时 cargo-deny 报「无法判定」而不是猜一个许可证。
+# 不要把阈值调低来「让检查通过」——那等于把无法判定的许可证当成已判定。
+confidence-threshold = 0.93
+# 允许的许可证集合：与本仓库当前依赖图（`cargo metadata` 的 license 字段）逐项对齐，
+# 全部是宽松许可。OR 表达式中只要有一个分支被允许即通过（例如 `MIT OR Apache-2.0 OR LGPL-2.1-or-later`
+# 依赖 MIT 通过，因此 LGPL 不需要、也不应该出现在这份清单里）。
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+# 有意为空：逐 crate 例外会绕过上表的统一策略。确需例外时必须写明原因、版本范围与移除条件。
+exceptions = []

@@ -1,15 +1,18 @@
-# CI：把 `AGENTS.md` §8/§10 要求的所有检查变成"每次都跑"。
+# CI：把 `AGENTS.md` §8/§10 要求的所有检查变成「每次都跑」。
 #
 # 判据来源（不要在别处再写一份）：
-# - `npm run check` 串行跑九个门禁（协议 fixture、命令目录与 core 的 grant 镜像、错误码、
-#   feature 词表、需要真正计算的资产绑定、ACP 矩阵、crate 依赖方向、合同漂移、agentic 流程与规范校验）；
-# - `AGENTS.md` §8 的三条 cargo 命令（fmt / clippy -D warnings / test）与提交信息规范
-#   （`commits` job，词表见 `commitlint.config.mjs`）。
+# - `npm run check`：合同门禁（协议 fixture、命令目录与 core 的 grant 镜像、错误码、feature 词表、
+#   需要真正计算的资产绑定、ACP 矩阵、文档链接与锚点、crate 依赖方向、合同漂移、agentic 流程与规范）；
+# - `npm run check:rust`：fmt / clippy `-D warnings` / test 三条（本地同一入口是 `npm run verify`）；
+# - `commits` job：提交信息规范（词表见 `commitlint.config.mjs`，说明见 `AGENTS.md` §8）。
 #
-# 供应链约束（`docs/SECURITY_DESIGN.md` §16.2「CI 使用固定 action/toolchain major 或 digest」）：
-# - 只用 GitHub 官方 action 且固定 major（`actions/checkout@v4` 等）；Rust 工具链用 runner 自带的
-#   rustup 直接安装固定版本，不引入第三方 toolchain action；
-# - 两个依赖锁定文件都已入库，因此 `npm ci` 与 `cargo --locked` 都能阻止依赖漂移；
+# 供应链策略（`docs/SECURITY_DESIGN.md` §16.2，决策与理由见 `docs/adr/0008-ci-supply-chain-tooling.md`）：
+# - 官方 `actions/*` 固定到 major，但必须是运行在受支持 Node runtime 上的 major（Node 20 已在
+#   2026-09 从 hosted runner 移除，因此不再使用 checkout@v4 / setup-node@v4 一类旧主版本）；
+# - 第三方 action 只允许按**完整 commit SHA** 固定（`cargo-deny-action`、`gitleaks-action`），
+#   并在 ADR 里记录其许可证与向外发送的数据；
+# - Rust 工具链版本唯一来源是 `rust-toolchain.toml`（下面用 sed 读取，不在这里再写一份）；
+# - 两个依赖锁定文件都已入库，因此 `npm ci` 与 `--locked` 都能阻止依赖漂移；
 # - 发布 job 不在本文件里：§16.2 要求发布与普通 CI 分离、单独走受保护 tag 与 OIDC。
 
 name: CI
@@ -17,6 +20,11 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    # 依赖安全公告由上游时间驱动：advisory 发布与我们的提交无关，只在 push/PR 上跑会让
+    # 「已经合入的依赖出了安全问题」在没人提交时永远不被告知。定时任务同时兼作上游漂移探测器
+    # （工具链、action、fixture 校验脚本的行为变化会在这里暴露），因此跑完整套检查。
+    - cron: "17 3 * * *"
 
 # 同一分支的新提交取消上一次未完成的运行。
 concurrency:
@@ -28,66 +36,125 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: "1.98.1"
 
 jobs:
   checks:
     name: 合同门禁 + Rust 检查
     runs-on: ubuntu-latest
-    # Linux runner 会真正执行 `#[cfg(unix)]` 的路径（`0700` 目录、`0600` 文件、模式位判定与
+    # Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700` 目录、`0600` 文件、模式位判定与
     # `tests/permissions.rs` 的两个用例）——这些在 Windows 开发机上永远不会跑到，是 CI 的主要收益。
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: 安装 Rust 工具链
+      - name: 安装 Rust 工具链（版本以 rust-toolchain.toml 为唯一来源）
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
-          rustup default "$RUST_TOOLCHAIN"
+          # 版本只维护在 rust-toolchain.toml 一处，这里读出来使用，避免 workflow 里再写一份导致漂移。
+          channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          if [ -z "$channel" ]; then
+            echo "rust-toolchain.toml 中找不到 channel，无法确定工具链版本。" >&2
+            exit 1
+          fi
+          # 组件在这里显式列出：不依赖 rustup 对 toolchain 文件 components 的自动安装行为。
+          # 最坏情况是重复安装，不是漏装。
+          rustup toolchain install "$channel" --profile minimal --component rustfmt --component clippy
           rustc --version
           cargo --version
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          # 工具链版本也纳入 cache key：换工具链就是换编译产物，不能命中旧缓存。
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+            cargo-${{ runner.os }}-
 
       - name: 安装合同校验脚本的依赖
         run: npm ci
 
-      - name: 合同门禁（npm run check，九个门禁）
+      - name: 合同门禁（npm run check，十个脚本）
         run: npm run check
 
-      - name: 格式检查
-        run: cargo fmt --all -- --check
+      - name: 格式、静态检查与测试（npm run check:rust，与本地 npm run verify 同一入口）
+        run: npm run check:rust
 
-      - name: 静态检查
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+  deps:
+    name: 依赖许可证与来源
+    runs-on: ubuntu-latest
+    # 与 advisories job 分开：这三项由锁文件决定，只在依赖变化时才有新结论，判定稳定；
+    # advisory 由上游时间驱动，两者的失败原因与处理方式不同，混在一个 job 里会互相干扰。
+    steps:
+      - uses: actions/checkout@v7
 
-      - name: 测试
-        run: cargo test --locked --workspace --all-features
+      - name: cargo-deny（bans / licenses / sources）
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check bans licenses sources
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: npm audit（high 及以上）
+        # `npm audit` 只读 package-lock.json，不需要 `npm ci`；指定 Node 版本是因为
+        # audit 的判定语义随 npm 版本变化，不想依赖 runner 当时的默认 npm。
+        run: npm audit --audit-level=high
+
+  advisories:
+    name: 依赖安全公告
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: cargo-deny（advisories）
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
+  secrets:
+    name: 密钥扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 全历史扫描：只在历史里的凭据才是真正的泄漏（删掉文件不等于删掉提交）。
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          # 事件范围与 PR 注释用的 token；本 job 只要只读权限（见文件头的 permissions）。
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 显式指定配置路径，不依赖 action 的自动发现规则。
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # 固定 CLI 版本：不固定时用的是 action 内部的默认值，仓库里看不到实际判定的版本。
+          GITLEAKS_VERSION: "8.30.1"
+          # 不给 PR 写评论：那需要 pull-requests: write，与「本 job 只读」相冲突。
+          # 失败本身已经通过 job 状态表达。
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          # `GITLEAKS_LICENSE` 刻意不设置：个人账号仓库不需要许可证密钥；仓库转为组织账号时，
+          # 必须在这里加 `GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}` 并配置 secret，
+          # 否则 action 会因缺少许可证而失败（见 ADR-0008 的许可证约束）。
 
   commits:
     name: 提交信息规范
     runs-on: ubuntu-latest
-    # 提交信息只校验“本次推送或合并请求引入的那段范围”：仓库早期提交不是 Conventional Commits，
+    # 提交信息只校验「本次推送或合并请求引入的那段范围」：仓库早期提交不是 Conventional Commits，
     # 校验全历史会立刻失败。本地钩子（`.husky/commit-msg`）能被 `--no-verify` 绕过，这一步是硬门禁。
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # commitlint 用 `--from/--to` 比对本地范围，因此两个端点都必须已经取下来。
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -101,7 +168,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
         run: |
           if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            echo "没有可比对的基线提交（新分支或首次推送），跳过范围校验。"
+            echo "没有可比对的基线提交（新分支、首次推送或定时任务），跳过范围校验。"
             exit 0
           fi
           if ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null; then

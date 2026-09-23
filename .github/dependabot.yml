@@ -1,0 +1,72 @@
+# Dependabot 配置：依赖更新的唯一配置点。
+#
+# 为什么需要它：`docs/SECURITY_DESIGN.md` §16.2 要求「安全修复可以定位受影响版本」，而本仓库的
+# 依赖是锁定的（`Cargo.lock`、`package-lock.json` 入库）。锁定本身不产生更新——没有这项配置时，
+# 上游发布安全修复只能靠人想起去看，等于把供应链响应依赖在记忆上。
+#
+# 与提交规范的关系：Dependabot 生成的提交信息必须能过 `commitlint.config.mjs` 的词表，
+# 所以每个 ecosystem 都显式配置 `commit-message.prefix`：
+#   - `build(deps):` → `build` 在 TYPES 里、`deps` 在 SCOPES 里；
+#   - `ci:` → `ci` 在 TYPES 里（scope 可选）。
+# 刻意**不使用** `include: scope`：它会把被更新的依赖名列表填进 scope，产生
+# `build(serde, tokio): ...` 这类不在 SCOPES 里的 scope，直接让 `commits` job 失败。
+#
+# `cooldown` 的作用是避免第一时间采用刚发布的版本：发布者账号被盗后植入恶意版本，
+# 通常在被发现与撤回前的这段窗口里传播，冷却期让这段时间过去再考虑升版。
+# 冷却期不改变「升级仍要过 CI」这件事——`checks` / `deps` / `advisories` 三个 job 照常判定。
+
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    groups:
+      # minor 与 patch 合并成一个 PR：这类升级的审阅重点相近，分开提会淹没 PR 列表。
+      # major 升级刻意不分组——它需要逐个读 changelog 与迁移说明。
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    groups:
+      # 这些包只用于合同校验脚本与提交钩子（见 package.json 的 description），
+      # 它们的升级会影响门禁本身的行为，因此仍需过全部 CI。
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    cooldown:
+      default-days: 7
+    groups:
+      # action 的 major 升级在本仓库是**受约束的变化**：`.github/workflows/ci.yml` 里的
+      # 第三方 action 按 commit SHA 固定，官方 action 固定到 major。Dependabot 只会改注释里的
+      # 版本号而不会把官方 action 换成 SHA，也不会替我们核对 ADR-0008 的许可证与数据外流约束，
+      # 因此这类 PR 必须人工读 diff 后再合。
+      github-actions:
+        patterns: ["*"]
