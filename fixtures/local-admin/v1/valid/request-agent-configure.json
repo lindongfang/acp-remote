@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "0f7c2d51-6e34-4a98-b7d2-3c5e8f1a9b64",
+  "method": "agent.configure",
+  "params": {
+    "agentId": "codex",
+    "displayName": "Codex",
+    "command": "codex-acp",
+    "args": ["--sandbox", "workspace-write"],
+    "envAllowlist": ["PATH", "HOME"],
+    "default": true
+  }
+}

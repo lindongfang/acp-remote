@@ -109,7 +109,7 @@ crates/
 ├─ node-link-client/        远程 Agent backend
 ├─ storage-sqlite/          core 持久化后端
 ├─ identity-auth/           身份、配对、签名与授权的纯状态机（不含平台 API）
-├─ identity-keystore/       平台安全存储实现（DPAPI/CNG、Keychain、Secret Service）
+├─ identity-keystore/       平台安全存储实现（DPAPI 包裹 / Keychain / Secret Service；CNG 不可导出档位待 ADR）
 ├─ server/                  sync / node-link / acp-facade / local-admin 入站模块
 └─ app/                     daemon、CLI 与组合根
 ```
@@ -270,6 +270,15 @@ Connection error lifecycle（error body 与 34 个错误码，认证前后两种
 
 wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` 与公共领域 view 同时交给 core，不能只交规范化文本。优先使用一个通用 ACP 实现；Codex、OMP 差异优先表示为 capability/profile 数据。
 
+实现前已冻结的硬约束（都不是可选优化）：
+
+- **进程树清理**：Windows 必须用 Job Object 管理 Agent 进程树，并把 `KILL_ON_JOB_CLOSE` 设在 Daemon 持有的 Job 上；探针实测生效的 `ExtendedLimitInformation` 布局（144 字节）可直接复用（[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §16 第 4 条）。该结论必须变成**常驻回归测试**（父→孙两层进程、杀父后孙必须停止、关 Job 句柄后孙必须停止），而不是停留在未提交的一次性探针。Unix 侧用进程组或等价机制达到同一效果，平台差异只存在于本 crate。
+  - `[决定]`（2026-09-23）**用安全 wrapper crate 实现，不给本 crate 放开 `unsafe`**：正式实现不得直接 FFI `kernel32`（那次探针之所以在仓库外，正是因为 workspace 固定 `unsafe_code = "forbid"`）。候选（`win32job`、`process-wrap`/`command-group` 等）必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 与 `AGENTS.md` §7 核验 MSRV、维护状态、许可证与平台支持后再选：已确认 `process-wrap` 10 的 MSRV 为 **1.87**，高于本仓库 `rust-version = 1.85`，引入它必须先单独决定是否抬 MSRV。确实找不到可接受的候选时，才走「新增 ADR + 为本 crate 覆盖 lint」路线。
+- **stdio 传输**：stdin/stdout 的 JSON-RPC 分帧、request id 映射、session id 映射与 live endpoint generation 都由本 crate 拥有；stderr 必须按大小上限有界收集进结构化日志，不得无界缓存或直接透传。
+- **失败路径**：启动失败、超时、取消、异常退出与乱序响应都必须有明确处理与测试（`AGENTS.md` §7/§9）；正常运行路径不得 `unwrap()`/`expect()`；异步任务必须有所有者、取消路径与关闭顺序。
+- **profile 来源**：Agent profile（命令、参数、环境变量白名单、凭据→环境变量绑定）来自 `LocalConfigStore`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6），不读启动配置文件；未列入白名单的环境变量不得注入子进程，凭据值只能经 `CredentialResolver` 在启动前解析（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §12.2/§13.1）。
+- **兼容性 quirk 隔离**：差异优先表达为 capability/profile 数据，不在核心堆积 Agent 名称判断（`AGENTS.md` §5）；真实 Codex/OMP 的兼容报告是发布前产物，不是普通 CI 的硬依赖（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §7）。
+
 ### 4.6 `node-link-client`
 
 唯一职责：把 Owner Node 导出的远程 Agent 实现为 `AgentCatalog + SessionBackendFactory + SessionEndpoint`。
@@ -314,6 +323,8 @@ port/          # keystore 端口定义（trait），实现见 identity-keystore
 
 `pack.*`、`preset.*`、`grant.*` 只是授权管理的输入形式：由 `authorization/` 按 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 展开成命令级 scope 后才写入设备记录或随 wire 下发（`SECURITY_DESIGN.md` §10.2）。core 只看到展开后的 scope 与 grant facts，不认识 pack/preset 名称。
 
+本 crate 的实现前合同（状态机、握手入口、授权展开、nonce/重放、keystore 端口签名）冻结在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)：本节只保留职责边界，不重复签名。
+
 ### 4.9 `server`
 
 唯一职责：承载所有入站协议 adapter，类似 Pi server 对连接、attachment 和应用服务路由的集中承载，但不把各协议合并成一个 wire format。
@@ -330,26 +341,36 @@ server::transport    listener 与连接级 backpressure；不放业务命令
 
 四个 adapter 只能调用 `core::use_cases`，不能互相调用、查询 SQLite、启动 Agent 或直接调用 `node-link-client`。每个 adapter 自己拥有 wire/core mapper；共享的只有通用连接生命周期原语，禁止抽出“万能消息 DTO”。
 
-`server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。该通道的 endpoint、访问控制、framing、管理信封、方法集与本地错误码以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为唯一权威来源。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
+`server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。该通道的 endpoint、访问控制、framing、管理信封、两类载荷的会话语义、方法集与本地错误码以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为唯一权威来源（ACP 流见其 §3.1）。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
 
 Node Link 和 Sync attachment 必须具有 connection generation 或 attachment ID。重新认证/重新订阅会生成新 generation，延迟到达的旧连接 frame 必须被拒绝，不能误投递到新会话绑定。
 
 ### 4.10 `app`
 
-唯一职责：发布 `acp-remote` 可执行程序并作为组合根。它装配 daemon、CLI、server、backend、配置、后台任务、单实例锁、健康状态和 graceful shutdown，但不得承载业务规则。
+唯一职责：发布 `acp-remote` 可执行程序并作为组合根。它装配 daemon、CLI、server、backend、配置、单实例锁、健康状态和 graceful shutdown，但不得承载业务规则。
 
-CLI 子命令：
+后台任务的唯一清单（时间与顺序判据见 `CORE_PORTS_AND_STORAGE.md` §7.5 与 `NODE_LINK_PROTOCOL.md` §15）：
+
+- 启动初清理 + 每 60 s 周期的 `prune`/`expire_pairings`/`sweep_orphans`（`CORE_PORTS_AND_STORAGE.md` §7.5）；
+- 启动时对已配对 Owner 节点的 Node Link 连接与断线指数退避重连（`NODE_LINK_PROTOCOL.md` §15）；
+- 存储批量刷盘（`storage.flush_interval_ms`）；
+- 关闭顺序：停周期任务 → 停接入层 → 停 Agent → `wal_checkpoint(TRUNCATE)`。
+
+CLI 子命令（名字的唯一来源是 `LOCAL_ADMIN_PROTOCOL.md` §5.8 的映射表；本文只列名字，不重复规则）：
 
 ```text
 daemon start|stop|status
-session create|list
+
 device pair|list|revoke
 node pair|list|revoke
 export create|list|revoke
 import add|list|remove
+
 acp-stdio
 doctor
 ```
+
+首切片**不提供** `session create`：业务命令 `session.create` 的 transport 只有 `node_link`（本地通道不承载业务命令），本地会话入口是 `acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`）；`session list` 属 `post_mvp`。理由与展开见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.8、`INITIAL_DESIGN.md` §13.3。
 
 CLI 通过 core use case 或受认证的本地管理 transport 工作，不能复制 core 业务规则。`app` 是唯一允许依赖所有具体 crate 的位置。
 
@@ -368,11 +389,13 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 唯一职责：实现 `identity-auth` 定义的 keystore 端口，把长期密钥与凭据落到平台安全存储。
 
-- Windows：优先 CNG/TPM，至少 DPAPI 绑定当前用户。
+- Windows：第一阶段用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内完成；CNG/TPM 不可导出档位是后续 ADR 的开放项（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。
 - macOS：Keychain；可用时使用不可导出或硬件保护能力。
-- Linux：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 `SECURITY_DESIGN.md` §20 的当前决定失败关闭，不得静默降级为明文文件。
+- Linux：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的当前决定失败关闭，不得静默降级为明文文件。
 
-约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
+约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有（目标签名见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7）；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
+
+`[决定]`（2026-09-23）平台差异只能以 **wrapper crate + 本 crate 内的 `cfg` 子模块**表达：workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`，各 crate 继承 `[lints] workspace = true`），因此本 crate **不得**直接 FFI DPAPI/CNG/Secret Service。DPAPI wrapper、Secret Service client 等候选必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 核验 MSRV、维护状态、许可证与平台支持；DPAPI 只能以「当前用户 scope 包裹 + 进程内 `p256` 签名」的方式使用（私钥在签名瞬间存在于内存，这是已知且已记录的取舍）。Linux 后端在没有 Secret Service 的环境（含 CI 容器）只需保证**编译通过 + 运行时明确失败**，单测走 stub 端口——这正是 [ADR-0006](./adr/0006-identity-keystore-split.md) 拆出本 crate 的目的。
 
 ### 4.13 `acpr-wire`
 
@@ -582,7 +605,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 
 - `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate；平台 keystore 的具体 crate 在选择时按 `AGENTS.md` §7 审必要性、维护状态、许可证与平台支持。
   - 2026-09-18 决定：**拆**。新增第 12 个 crate `identity-keystore`，`identity-auth` 收敛为纯状态机，keystore 以端口注入（[ADR-0006](./adr/0006-identity-keystore-split.md)）。判据是 `AGENTS.md` §4 的「独立平台实现」：平台 keystore 各自拖原生依赖与 `cfg` 分支，且在没有桌面会话的 Linux / CI 容器里不可用，混在一起会让状态机无法在所有平台编译与单测。
-  - 延后到 Linux 平台开发的部分：无可用 Secret Service 时是否提供降级存储（`SECURITY_DESIGN.md` §20）。当前优先 Windows（`INITIAL_DESIGN.md` §14）；此项只影响 `identity-keystore`，不影响状态机；端口必须允许"非硬件保护"的实现存在，但默认不启用。
+  - 2026-09-23 决定：**Windows 第一档位用 DPAPI（当前用户 scope）包裹私钥 + 进程内签名**，Linux 维持失败关闭；CNG/TPM 不可导出档位与 Linux 持久化 fallback 都需单独 ADR。平台实现一律经 wrapper crate（workspace 固定 `unsafe_code = "forbid"`），候选的 MSRV/维护状态/许可证按 `SECURITY_DESIGN.md` §20 核验（[§4.12](#412-identity-keystore)）。与 2026-09-18 那条的关系：拆分不变，本条只是把「具体实现档位」从开放项收口到可落地的第一档。
 - 是否为同步协议生成 TypeScript/Kotlin/Swift 类型。
 - 是否公开部分 crate 到 crates.io；第一阶段可全部保持 workspace-private。
 

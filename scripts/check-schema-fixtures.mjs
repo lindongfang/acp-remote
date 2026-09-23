@@ -14,6 +14,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetRoots = [
   { name: "sync", schemaRoot: join(root, "schemas", "sync", "v1"), fixtureRoot: join(root, "fixtures", "sync", "v1") },
   { name: "node-link", schemaRoot: join(root, "schemas", "node-link", "v1"), fixtureRoot: join(root, "fixtures", "node-link", "v1") },
+  // 本地管理通道（channel 0x01）的 envelope。它没有 `message.schema.json`，因此不参与
+  // 消息类型覆盖门禁；方法与错误码词表的漂移由 `check-command-catalog.mjs` 断言。
+  { name: "local-admin", schemaRoot: join(root, "schemas", "local-admin", "v1"), fixtureRoot: join(root, "fixtures", "local-admin", "v1") },
   {
     name: "acp",
     schemaRoot: join(root, "schemas", "acp", "v1", "upstream"),

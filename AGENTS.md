@@ -11,11 +11,12 @@
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
 - [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md)：客户端与 Daemon 之间认证、消息、游标、重放、幂等和 wire schema 的权威来源。
 - [docs/NODE_LINK_PROTOCOL.md](docs/NODE_LINK_PROTOCOL.md)：ACP Remote 节点之间资源导出/导入、权威、认证、授权、重放和幂等边界的权威来源。
-- [docs/LOCAL_ADMIN_PROTOCOL.md](docs/LOCAL_ADMIN_PROTOCOL.md)：CLI 与 Daemon 之间本地管理通道的请求/响应编码、framing 与方法集的唯一权威来源。
+- [docs/LOCAL_ADMIN_PROTOCOL.md](docs/LOCAL_ADMIN_PROTOCOL.md)：CLI 与 Daemon 之间本地管理通道的请求/响应编码、framing、两类载荷（管理信封与 ACP 流）的会话语义与方法集的唯一权威来源。
+- [docs/IDENTITY_AND_AUTH_CONTRACT.md](docs/IDENTITY_AND_AUTH_CONTRACT.md)：`identity-auth` 内部状态机、握手入口契约、授权展开、nonce/重放规则与 `identity-keystore` 端口的唯一权威来源（wire 仍以 Sync/Node Link 为准，持久化仍以 `CORE_PORTS_AND_STORAGE.md` §11 为准）。
 - [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)：系统威胁模型、信任边界、授权、数据保护、供应链和安全验收的权威来源。
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
 - [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)：Daemon 配置键名、类型、默认值与可否调整的唯一权威来源；协议层限额仍以 Sync、Node Link 两份协议文档为准。
-- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v1 表结构/保留/migration 的唯一权威来源。
+- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v1 表结构/保留/migration 的唯一权威来源；§11.5–§11.8 是实现前的目标形状（实现变更必须把它们并入 §5/§7 并让漂移门禁断言）。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
 另见 `README.md` 的「权威文档」表（同一批文档的一览）。
@@ -282,10 +283,12 @@ cargo test --locked --workspace --all-features
 - Node Link wire/资产变更：更新 `docs/NODE_LINK_PROTOCOL.md` + `schemas/node-link/v1/` + `fixtures/node-link/v1/`，并运行 `npm run check`。
 - Sync wire/资产变更：更新 `docs/SYNC_PROTOCOL.md` + `schemas/sync/v1/` + `fixtures/sync/v1/`，并运行 `npm run check`。
 - feature ID 或 feature 词表变化：更新 `compatibility/features/v1/features.json`、`docs/SYNC_PROTOCOL.md` §5.2 与 `docs/NODE_LINK_PROTOCOL.md` §11.3 的表格、以及相应 fixture，并运行 `npm run check`。
-- core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述。
-- 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。
-- CLI 与 Daemon 之间的管理方法、envelope 或 framing 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`。
-- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**）—— 各道门禁的完整清单与判据见 `README.md` 的「合同检查」，本文件不重复枚举，只固定三条独有硬约束：**文档引用门禁**（`scripts/check-doc-links.mjs`）的引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档；**合同漂移门禁**（`scripts/check-contract-drift.mjs`）逐条比对 `docs/CORE_PORTS_AND_STORAGE.md` §7（`storage-sqlite` v1 表结构）与 `crates/storage-sqlite/src/migrate.rs`，以及 `docs/CORE_PORTS_AND_STORAGE.md` §5（`core::ports` 出站端口）与 `crates/core/src/ports.rs`（归一化后相等；`IF NOT EXISTS`、注释与空白不算差异）；**crate 依赖方向门禁**以 `MODULE_ARCHITECTURE.md` §5（依赖矩阵）为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖。`check:agentic`（`scripts/agentic-gate.mjs`）的判据与离线语义见 §12。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的「合同检查」小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
+- core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述；管理状态（配对/信任/Export/Import/本地配置）的目标形状与实现前收口在 §11.5–§11.8，实现变更必须同时把它们并入 §5/§7。
+- 设备/节点配对状态机、握手入口、授权展开、nonce/重放规则或 keystore 端口变化：更新 `docs/IDENTITY_AND_AUTH_CONTRACT.md`；涉及 wire 时同时更新对应协议的配对/认证章节与 fixture。
+- Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
+- 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
+- CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
+- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**）—— 各道门禁的完整清单与判据见 `README.md` 的「合同检查」，本文件不重复枚举，只固定三条独有硬约束：**文档引用门禁**（`scripts/check-doc-links.mjs`）的引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档；**合同漂移门禁**（`scripts/check-contract-drift.mjs`）逐条比对 `docs/CORE_PORTS_AND_STORAGE.md` §7（`storage-sqlite` v1 表结构）与 `crates/storage-sqlite/src/migrate.rs`，以及 `docs/CORE_PORTS_AND_STORAGE.md` §5（`core::ports` 出站端口）与 `crates/core/src/ports.rs`（归一化后相等；`IF NOT EXISTS`、注释与空白不算差异）；**crate 依赖方向门禁**以 `MODULE_ARCHITECTURE.md` §5（依赖矩阵）为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖；**封闭词表门禁**（也在 `scripts/check-command-catalog.mjs` 里）除命令目录外还断言本地管理的方法集、本地错误码与 `local.*` 能力三处一致：`docs/LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`，`local.*` 能力 ↔ `compatibility/commands/v1/commands.json` 的 `localCapabilities`。`check:agentic`（`scripts/agentic-gate.mjs`）的判据与离线语义见 §12。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的「合同检查」小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
 
 CI 已接入五个 job（`.github/workflows/ci.yml`，push、PR 与每日定时都跑）：`checks`、`commits`、`deps`、`advisories`、`secrets`，各 job 的判定内容见 `README.md` 的「合同检查」；后三个需要网络或额外二进制，**没有本地等价物属于 `npm run verify`**，未在本地执行不等于通过（工具版本、许可证与向外发送的数据见 `docs/adr/0008-ci-supply-chain-tooling.md`）。依赖更新由 `.github/dependabot.yml` 提出（含冷却期；分组升级同样要过全部 job）。
 

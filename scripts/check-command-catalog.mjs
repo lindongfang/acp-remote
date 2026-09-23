@@ -8,6 +8,8 @@ const syncSchemaPath = resolve(root, "schemas", "sync", "v1", "command.schema.js
 const nodeLinkSchemaPath = resolve(root, "schemas", "node-link", "v1", "command.schema.json");
 const syncDocPath = resolve(root, "docs", "SYNC_PROTOCOL.md");
 const securityDocPath = resolve(root, "docs", "SECURITY_DESIGN.md");
+const localAdminDocPath = resolve(root, "docs", "LOCAL_ADMIN_PROTOCOL.md");
+const localAdminSchemaPath = resolve(root, "schemas", "local-admin", "v1", "envelope.schema.json");
 const coreBrokerPath = resolve(root, "crates", "core", "src", "broker.rs");
 
 const errors = [];
@@ -105,6 +107,72 @@ function parseRequiredGrant(text) {
   return mirrored;
 }
 
+// 本地管理通道的封闭词表：方法名与本地错误码。它们**不属于** commands.json（那些是 WSS 业务命令），
+// 也不属于 compatibility/errors/v1/errors.json（它只登记 WSS wire 上的错误码）。机器定义因此放在
+// `schemas/local-admin/v1/envelope.schema.json`：本文档的 `#### `method`` 小节与 §6 表格是它的说明，
+// 两者一致由本函数断言；framing 常量与信封版本号同样在这里对照。
+function sliceSection(text, startHeading, endHeading) {
+  const start = text.indexOf(startHeading);
+  if (start < 0) {
+    errors.push(`docs/LOCAL_ADMIN_PROTOCOL.md: missing section ${startHeading}`);
+    return "";
+  }
+  const rest = text.slice(start + startHeading.length);
+  const stop = rest.indexOf(endHeading);
+  return stop < 0 ? rest : rest.slice(0, stop);
+}
+
+function checkLocalAdmin(doc, catalog) {
+  const schema = readJson(localAdminSchemaPath);
+  if (!schema) return;
+
+  const methods = new Set();
+  for (const match of doc.matchAll(/^#### `([a-z][a-z0-9]*(?:\.[a-z0-9]+)*)`/gm)) methods.add(match[1]);
+  compareSets(
+    "docs/LOCAL_ADMIN_PROTOCOL.md 方法小节",
+    methods,
+    schema.$defs?.methodName?.enum ?? [],
+  );
+
+  const capabilitySection = sliceSection(doc, "### 5.1 ", "### 5.2 ");
+  const capabilities = new Set(
+    [...capabilitySection.matchAll(/`(local\.[a-z0-9.-]+)`/g)].map((match) => match[1]),
+  );
+  compareSets(
+    "compatibility/commands/v1/commands.json localCapabilities",
+    capabilities,
+    catalog.localCapabilities ?? [],
+  );
+  for (const match of capabilitySection.matchAll(/`([a-z][a-z0-9]*(?:\.[a-z0-9]+)+)`/g)) {
+    if (match[1].startsWith("local.")) continue; // `local.*` 是能力名，不是方法名
+    if (/\.(json|md|mjs|rs|toml|sh)$/.test(match[1])) continue;
+    if (!methods.has(match[1])) {
+      errors.push(`docs/LOCAL_ADMIN_PROTOCOL.md §5.1: 表内方法 ${match[1]} 没有对应小节`);
+    }
+  }
+
+  const codeSection = sliceSection(doc, "## 6. 本地错误码", "## 7. ");
+  const codes = new Set(
+    [...codeSection.matchAll(/^\|\s*`(local\.[a-z_]+)`\s*\|/gm)].map((match) => match[1]),
+  );
+  compareSets("docs/LOCAL_ADMIN_PROTOCOL.md §6", codes, schema.$defs?.errorCode?.enum ?? []);
+
+  const framing = schema.$defs?.framing?.const ?? {};
+  const equal = (label, actual, wanted) => {
+    if (actual !== wanted) errors.push(`${label}: ${actual} != ${wanted}`);
+  };
+  equal("schemas/local-admin/v1 framing.lengthPrefixBytes", framing.lengthPrefixBytes, 4);
+  equal("schemas/local-admin/v1 framing.maxPayloadBytes", framing.maxPayloadBytes, 1048576);
+  equal("schemas/local-admin/v1 framing.maxInFlightRequests", framing.maxInFlightRequests, 32);
+  equal("schemas/local-admin/v1 framing.channelLocalAdmin", framing.channelLocalAdmin, 1);
+  equal("schemas/local-admin/v1 framing.channelAcpStream", framing.channelAcpStream, 2);
+  if (!/u32be length/.test(doc)) errors.push("docs/LOCAL_ADMIN_PROTOCOL.md: 缺少 u32be length framing 描述");
+  if (!/1_048_576/.test(doc)) errors.push("docs/LOCAL_ADMIN_PROTOCOL.md: 缺少帧上限 1_048_576");
+  for (const branch of ["request", "successResponse", "errorResponse"]) {
+    equal(`schemas/local-admin/v1 ${branch}.v`, schema.$defs?.[branch]?.properties?.v?.const, 1);
+  }
+}
+
 const catalog = readJson(catalogPath);
 let commandTotal = 0;
 
@@ -196,6 +264,9 @@ if (catalog) {
       }
     }
   }
+
+  const localAdminDoc = readText(localAdminDocPath);
+  if (localAdminDoc) checkLocalAdmin(localAdminDoc, catalog);
 }
 
 if (!existsSync(syncSchemaPath)) errors.push("missing schemas/sync/v1/command.schema.json");
@@ -206,4 +277,4 @@ if (errors.length > 0) {
   process.exitCode = 1;
 } else {
   console.log(`command catalog OK: ${commandTotal} commands`);
-}
+}

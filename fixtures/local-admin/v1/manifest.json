@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "fixture": "valid/request-daemon-status.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/request-agent-configure.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/request-device-pair-confirm.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/success-response.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/error-response.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/request-missing-method.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/request-unknown-method.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/request-params-null.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/request-version-two.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "const"
+    },
+    {
+      "fixture": "invalid/response-unknown-error-code.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/response-ok-without-result.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    }
+  ]
+}

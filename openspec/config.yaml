@@ -16,7 +16,7 @@ context: |
   ## Standard Commands
   - 依赖安装：`npm ci`（Node ≥ 22.12；`package-lock.json` 与 `Cargo.lock` 均已入库）。
   - Local Checks / Project Verify：以仓库 `AGENTS.md` §8（本地入口 `npm run verify`）与 §10（合同门禁与 CI job 清单）为唯一权威，本节不复制命令清单。
-  - E2E：`x-agentic.e2e.command` 未配置。当前阶段没有可端到端运行的产品路径，Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。
+  - E2E：`x-agentic.e2e.command` 未配置。当前阶段没有可端到端运行的产品路径，Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。**该方式已于 2026-09-23 经用户确认（原话：同意 a；a = 保持命令为空、首个实现切片在 plan.md 写 downgrade_approval）**，因此首个实现切片无需再就「要不要配 E2E 命令」重新讨论；每个切片仍须各自记录当次批准，不得引用本次确认代替。
 
   ## Engineering Constraints
   - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7 与 §9；安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。

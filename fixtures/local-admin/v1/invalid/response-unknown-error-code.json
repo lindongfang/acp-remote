@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "id": "c31a8e07-42b6-4d19-8f5a-6b0e9c2d7413",
+  "ok": false,
+  "error": {
+    "code": "local.whatever",
+    "message": "unknown"
+  }
+}

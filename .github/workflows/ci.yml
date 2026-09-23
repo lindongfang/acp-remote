@@ -1,8 +1,9 @@
 # CI：把 `AGENTS.md` §8/§10 要求的所有检查变成「每次都跑」。
 #
 # 判据来源（不要在别处再写一份）：
-# - `npm run check`：合同门禁（协议 fixture、命令目录与 core 的 grant 镜像、错误码、feature 词表、
-#   需要真正计算的资产绑定、ACP 矩阵、文档链接与锚点、crate 依赖方向、合同漂移、agentic 流程与规范）；
+# - `npm run check`：合同门禁（协议 fixture、命令目录与本仓库封闭词表（含本地管理方法集与错误码）的
+#   镜像、错误码 registry、feature 词表、需要真正计算的资产绑定、ACP 矩阵、文档链接与锚点、crate 依赖方向、
+#   合同漂移、agentic 流程与规范）；
 # - `npm run check:rust`：fmt / clippy `-D warnings` / test 三条（本地同一入口是 `npm run verify`）；
 # - `commits` job：提交信息规范（词表见 `commitlint.config.mjs`，说明见 `AGENTS.md` §8）。
 #
