@@ -102,8 +102,11 @@ action」。这条约束在实践中有两个问题：
      每日定时任务的全历史扫描发现的也只能是「已经存在」的凭据。删掉文件不等于删掉提交，处置只能是
      轮换 + 清理历史（`SECURITY_DESIGN.md` §17）。推送前的时序由 GitHub 的 push protection 提供（已启用），
      但它只认已知 provider 模式，本项目的自研格式密钥不在其中。能拦住「红状态进入 main」的是 main 的分支保护：
-     写这段时它**尚未启用**（`gh api repos/lindongfang/acp-remote/branches/main/protection` 返回 404，
-     `rulesets` 为空），设置步骤见 `README.md` 的「分支保护」小节。
+     本 ADR 写完后已建立——ruleset `main-protection`（id 23858733）要求五个检查、禁止强推与删除，
+     但**同时保留了 `RepositoryRole admin` 的 bypass**（零摩擦档），因此它现在约束的是协作者、GitHub App 与
+     `GITHUB_TOKEN` 驱动的自动化，**还约束不到本人的直推**；要拦自己的直推必须移除 bypass
+     （届时流程变成「推到分支 → 等绿 → 更新 main」）。现状、必需检查的取法与严格档判据见 `README.md` 的
+     「分支保护」小节。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
   5. **本机（Windows）无法执行这些判定的等价物**：crates.io index 传输在本机网络下不稳定，
      `cargo install --locked cargo-deny@0.20.2` 未能完成，因此 `deny.toml` 的字段形状是对齐 cargo-deny 0.20.2

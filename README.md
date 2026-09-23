@@ -61,7 +61,19 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与�
 
 ## 分支保护
 
-CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义检查，「合并前必须通过」却是 GitHub 的仓库设置，不属于版本控制内容。要求 main 至少把这些检查设为必需（括号里是 workflow 里的 job id，GitHub 的设置界面按前一个名字展示）：**合同门禁 + Rust 检查**（`checks`）、**提交信息规范**（`commits`）、**依赖许可证与来源**（`deps`）、**密钥扫描**（`secrets`）；**依赖安全公告**（`advisories`）是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断（它的失败可能来自与本次改动无关的上游 advisory）。
+CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义检查，「合并前必须通过」却是 GitHub 的仓库设置，不属于版本控制内容。
+
+**必需检查的 context 必须是 check-runs 上报的名字，不是 job id**——这一点实测过：填 job id（`checks`、`deps`……）时
+`rulesets/<id>` 会原样存下，但没有任何 check 叫这个名字，规则就变成「永久等待」，非绕过 actor 的 PR 永远合不进去
+（写错时自己有 bypass 感觉不到，属于安静的地雷）。正确名字从权威接口取：
+
+```text
+gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name' | sort -u
+```
+
+本仓库的五个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
+**依赖安全公告**（最后一个是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：
+它的失败可能来自与本次改动无关的上游 advisory）。
 
 设置入口是仓库 Settings → Rules/Branches（`gh api -X PUT repos/<owner>/<repo>/branches/main/protection` 也适用，但 payload 形状取决于要开哪几条，建议先用界面）。核实当前状态与可用性：
 
@@ -75,9 +87,16 @@ gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用
 分支保护在 public 仓库上随 GitHub Free 就有，私有仓库需要 GitHub Pro/Team/Enterprise。**本仓库是 public**
 （2026-09-23 核实：`gh api repos/lindongfang/acp-remote --jq .visibility` 返回 `public`），所以这一项没有 plan 前提。
 
-**已核实的现状（2026-09-23）**：`main` **尚未启用**分支保护——`branches/main/protection` 返回 404、
-`rulesets` 是空数组，因此当下 CI 的判定是建议性的；同时内核里的新提交尚未推送，四个新 job 还从未执行过。
-待办就是上面第 1–3 步，外加三个与密钥/依赖响应配套的仓库开关（都是仓库设置，不在版本控制内；public 仓库免费）：
+**已核实的现状（2026-09-23）**：已建 ruleset **`main-protection`**（id `23858733`）：`target: branch`、
+`enforcement: active`、条件 `ref_name: ["~DEFAULT_BRANCH"]`；规则为 `required_status_checks` +
+`non_fast_forward` + `deletion`；必需检查就是上面那五个上报名（已逐个与 check-runs 对上）；
+`strict_required_status_checks_policy` 与 `do_not_enforce_on_create` 均为 `false`；
+bypass list 保留 `RepositoryRole admin / always`——也就是**零摩擦档**（你自己直推仍可用，规则拦的是
+协作者、GitHub App 与 `GITHUB_TOKEN` 驱动的自动化）。`branches/main/protection` 仍返回 404：
+本仓库用 ruleset 而不是经典分支保护，两者不需要同时开。
+
+仍待办：三个与密钥/依赖响应配套的仓库开关（命令见下）、以及等五个 job 连续几轮都绿之后再决定是否上
+严格档（加「要求 PR」并把 admin 从 bypass list 移除）。
 
 ```text
 # Dependabot 安全更新：dependabot.yml 只管「版本更新」，安全更新是独立开关（当前 disabled）
@@ -96,17 +115,26 @@ gh api -X PATCH repos/lindongfang/acp-remote \
 拦截已知 provider 模式的凭据——这个时序 CI 给不了；但本项目自研格式的密钥要靠 CI 的 `gitleaks`
 或上面的通用模式检测。两层仓库级检测与运行时扫描的分工写在 `SECURITY_DESIGN.md` §18.1。
 
-三类设置的实际作用不同（GitHub 文档口径）：
+三类设置的实际作用不同，**以 Rulesets 界面的原文为准**：
 
-- **必需检查**（Require status checks）：拦住的是**合并**到受保护分支；直推同样会因 `required status check ... is expected` 被拒，但**仓库 admin 默认绕过全部规则**，所以想真正拦住直推，必须同时不勾「允许绕过」。
-- **要求 PR**（Require a pull request）：把 main 变成只能经由 PR 落地。
-- **禁止强推 / 禁止删除**：默认随规则生效，不因 actor 而异。
+- **Require status checks to pass**：作用在 **ref 更新**上，界面原文是「Choose which status checks must pass
+  before the ref is updated. When enabled, commits must first be pushed to another ref where the checks pass.」——
+  直推一个未经过检查的新提交会被拒；正确流程是先把提交推到另一个 ref（分支 / PR 分支），让检查在那里通过，
+  再让 main 更新到那些提交。它**不只拦「合并」**：即使不开「要求 PR」，直推也会被拦（前提是下面的绕过设置）。
+  两个子选项：`Require branches to be up to date before merging` 只对 PR 生效；
+  `Do not require status checks on creation` 豁免「创建 ref/分支」这类场景。
+- **Bypass**：仓库 admin 默认绕过该 ruleset 的全部规则（bypass list 里会有 `Repository admin`；
+  经典分支保护里的对应开关是「Do not allow bypassing the above settings」的反面）。所以对单人仓库来说，
+  只要保留 admin 绕过，这条规则拦的是别人与自动化，不拦你自己；取消绕过才会真正约束你的直推。
+- **Require a pull request before merging**：把 main 变成只能经由 PR 落地。
+- **Block force pushes / Restrict deletions**：默认随规则生效，不因 actor 而异。
 
 对单人仓库的含义：只要保留 admin 绕过（默认），规则对**你自己**几乎只是提示，对未来的协作者、GitHub App 或 `GITHUB_TOKEN` 驱动的自动化才是硬门禁；而 `deps` / `advisories` / `secrets` 这三个只能在 CI 运行的判定，只有在「合并被门禁且直推被拦住」时才真正起作用。
 
 **建议的顺序**（这个顺序本身是判据，不只是便利）：
 
-1. 先 push 一次并让 CI 跑完——GitHub 的必需检查选择器只列出**最近跑过**的检查，新 job 没跑过时在设置界面里根本找不到它们；
+1. 先 push 一次并让 CI 跑完——**必需检查的候选列表来自「最近跑过的检查」**：新 job 从未执行过时，
+   `Add checks` 的下拉列表是完全空的（不是名字难找，而是根本无从选起）；
 2. 再按「必需检查 + 禁止强推/删除、保留 admin 绕过」启用：先让规则与检查名成立，零摩擦；
 3. 等 `deps` / `advisories` / `secrets` 至少各绿过一次后再决定是否上严格档（加「要求 PR」并取消 admin 绕过）。**在检查还没绿过之前就上严格档会把自己锁在门外**：必需检查在每个 PR 上都失败时，你无法合并任何东西，只能回设置里改规则或绕过。
 
