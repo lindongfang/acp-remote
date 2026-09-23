@@ -228,9 +228,9 @@ WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）�
 ## Final Assessment
 
 ```agentic-assessment
-target_commit: "afedea3a58b31df01087d28b1f28802ac8f96739"
+target_commit: "36cf906a8e709221d6e08c7657e1c9a6a62df034"
 assessment_id: "admin-state-persistence-v2-w3-merge-final"
-contract_digest: "sha256:92c48c1af83d60043705d7a14837dd00aa350c41f6d8184cc5886e40cb7d6cc9"
+contract_digest: "sha256:b78b8b513a0e74a8dc0b12b2fcd5f91374d02cbc87b5ab7cc88aae1d80c77327"
 result: PASS
 evidence:
   - path: reports/wp6-admin-store-tests.log
@@ -250,11 +250,11 @@ evidence:
   - path: ../../../reports/du1-checker.md
     sha256: "sha256:29032902bb0e75d2a0f9e159987af1bad895afa0e20d357fbdd8c9bacc0af9b2"
   - path: ../../../reports/rv1-du1.md
-    sha256: "sha256:5327b5f1795d10d9672f244aa37640605df40a2346b7fae4d5d1a4060ac67e84"
+    sha256: "sha256:363da5c2ad79886fd1d04cb1ca1e819bf1d42f34fb943fa1b0691faa5f874904"
   - path: ../../../reports/rv1-du1-r2.md
     sha256: "sha256:56b0f2de8887c6cb06848604de65e25601f6fd43e47788caa4db8daf5187c5ed"
   - path: ../../../reports/rv1-du1-merge.md
-    sha256: "sha256:b88a6c9ee334b109d454183466f11a3a77ab454bca4b9554131dc7fa7cd83c99"
+    sha256: "sha256:f3dd9f19c265072a94a174356bde57bae2af8926d4c723bbd188a6d3eba08d18"
   - path: ../../../reports/du1-integration.md
     sha256: "sha256:96a6aefebf773ea9a6adbc5949daf88d7182899c151d119abe3f1584e91899e5"
   - path: ../../../reports/clean-tree-check.log
@@ -272,9 +272,9 @@ evidence:
   - path: reports/verify-final-round1.log
     sha256: "sha256:eec21eaf1fc5fdd41a4a3c247f87989bbf78f12e1fc6ab6fca432160455c28cf"
   - path: ../../../reports/alt-7.1-run.log
-    sha256: "sha256:97e7b6716487b0a2f74b1fa65317490915bbb6078e2ce30b1488ed9f95b7d2cd"
+    sha256: "sha256:b98ca47d71c7e74e2f0e85e30f6b19d3e0956e1c15525c598aef7aa0da1b5815"
   - path: ../../../reports/du1-main-verify.log
-    sha256: "sha256:007b8812ed318f570a2c0ebf8ac691cf8d415b42a94e8930822c409377083909"
+    sha256: "sha256:f70307a024ec47ba73a4470e2dd94df5572d44bb650ca01701961b3aa58d424c"
   - path: reports/alt-final-verification.md
     sha256: "sha256:cb4e598d474899fb3a2d5167b5ead92ba193a8b7fd1c6701ab5a550156f8d810"
   - path: ../../../reports/rv1-wp1.md
