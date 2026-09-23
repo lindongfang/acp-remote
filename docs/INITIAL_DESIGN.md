@@ -722,7 +722,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 - **首切片验收前必须**：#3（Zed 对非本端发起的 turn 的展示；用假 ACP agent 即可预验，不依赖本仓库代码）、#1/#2（需要真实的 Codex/OMP，用于填写能力兼容报告；不阻塞编码，因为矩阵中这些能力本就是 `conditional_mvp` + `advertise_if_end_to_end`，代码只需如实协商）。
 - **实现期验证**：#4、#5、#8、#9 —— 需要可运行的程序、真机或发布流程。
 - **设计项，不是验证项**：#7 —— 首切片的 endpoint 由配置与 Import 记录给出，不需要发现机制；到阶段三"多 endpoint 自动连接"时才需要设计。
-- **已由合同层覆盖**：#10 —— ACP 矩阵固定上游 commit + sha256 并由 `npm run check` 强制校验，升级流程见 `docs/ACP_COMPATIBILITY_MATRIX.md` §5.5；未来真有新版本时执行该流程即可。
+- **已由合同层覆盖**：#10 —— ACP 矩阵固定上游 commit + sha256 并由 `npm run check` 强制校验，升级流程见 `docs/ACP_COMPATIBILITY_MATRIX.md` §2（权威来源与版本固定，含 5 步升级流程）；未来真有新版本时执行该流程即可。
 
 ## 17. 核心设计原则
 
