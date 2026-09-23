@@ -61,7 +61,19 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与�
 
 ## 分支保护
 
-CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义检查，「合并前必须通过」却是 GitHub 的仓库设置，不属于版本控制内容。要求 main 至少把这些检查设为必需（括号里是 workflow 里的 job id，GitHub 的设置界面按前一个名字展示）：**合同门禁 + Rust 检查**（`checks`）、**提交信息规范**（`commits`）、**依赖许可证与来源**（`deps`）、**密钥扫描**（`secrets`）；**依赖安全公告**（`advisories`）是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断（它的失败可能来自与本次改动无关的上游 advisory）。
+CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义检查，「合并前必须通过」却是 GitHub 的仓库设置，不属于版本控制内容。
+
+**必需检查的 context 必须是 check-runs 上报的名字，不是 job id**——这一点实测过：填 job id（`checks`、`deps`……）时
+`rulesets/<id>` 会原样存下，但没有任何 check 叫这个名字，规则就变成「永久等待」，非绕过 actor 的 PR 永远合不进去
+（写错时自己有 bypass 感觉不到，属于安静的地雷）。正确名字从权威接口取：
+
+```text
+gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name' | sort -u
+```
+
+本仓库的五个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
+**依赖安全公告**（最后一个是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：
+它的失败可能来自与本次改动无关的上游 advisory）。
 
 设置入口是仓库 Settings → Rules/Branches（`gh api -X PUT repos/<owner>/<repo>/branches/main/protection` 也适用，但 payload 形状取决于要开哪几条，建议先用界面）。核实当前状态与可用性：
 
@@ -75,9 +87,16 @@ gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用
 分支保护在 public 仓库上随 GitHub Free 就有，私有仓库需要 GitHub Pro/Team/Enterprise。**本仓库是 public**
 （2026-09-23 核实：`gh api repos/lindongfang/acp-remote --jq .visibility` 返回 `public`），所以这一项没有 plan 前提。
 
-**已核实的现状（2026-09-23）**：`main` **尚未启用**分支保护——`branches/main/protection` 返回 404、
-`rulesets` 是空数组，因此当下 CI 的判定是建议性的；同时内核里的新提交尚未推送，四个新 job 还从未执行过。
-待办就是上面第 1–3 步，外加三个与密钥/依赖响应配套的仓库开关（都是仓库设置，不在版本控制内；public 仓库免费）：
+**已核实的现状（2026-09-23）**：已建 ruleset **`main-protection`**（id `23858733`）：`target: branch`、
+`enforcement: active`、条件 `ref_name: ["~DEFAULT_BRANCH"]`；规则为 `required_status_checks` +
+`non_fast_forward` + `deletion`；必需检查就是上面那五个上报名（已逐个与 check-runs 对上）；
+`strict_required_status_checks_policy` 与 `do_not_enforce_on_create` 均为 `false`；
+bypass list 保留 `RepositoryRole admin / always`——也就是**零摩擦档**（你自己直推仍可用，规则拦的是
+协作者、GitHub App 与 `GITHUB_TOKEN` 驱动的自动化）。`branches/main/protection` 仍返回 404：
+本仓库用 ruleset 而不是经典分支保护，两者不需要同时开。
+
+仍待办：三个与密钥/依赖响应配套的仓库开关（命令见下）、以及等五个 job 连续几轮都绿之后再决定是否上
+严格档（加「要求 PR」并把 admin 从 bypass list 移除）。
 
 ```text
 # Dependabot 安全更新：dependabot.yml 只管「版本更新」，安全更新是独立开关（当前 disabled）
