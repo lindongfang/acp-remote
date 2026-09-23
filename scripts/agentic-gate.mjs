@@ -7,7 +7,7 @@
 // opt-out 环境变量，让门禁在任一台机器上都保持离线语义；扩展转发引擎时会继承本进程环境
 // （`@dongfanglin/openspec-agentic/src/project.mjs` 的 runEngine 只传 cwd 与 stdio）。
 //
-// 两个步骤的判据见 `AGENTS.md` §10：
+// 两个步骤的判据见 `AGENTS.md` §10、§12：
 //   1. `openspec-agentic doctor`：断言所用流程确为扩展（@dongfanglin/openspec-agentic）的 agentic
 //      —— 项目本地引擎版本等于扩展 pin 的版本、`openspec/config.yaml` 的 `schema` 为 `agentic`、
 //      `x-agentic.configVersion` 为 1、受管文件与清单无漂移、`AGENTS.md` 有验收路由；
