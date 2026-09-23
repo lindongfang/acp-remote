@@ -45,16 +45,16 @@
 
 ## 5. Integration Readiness
 
-- [ ] 5.1 （仅一次，不随单元复制）负责人：主 Agent；依赖：3.1–3.10；单独创建独立集成 Agent 并显式交接 `roles/integrator.md` 全文、计划与契约、源提交及证据、独立集成 worktree、目标分支与授权边界，记录实际 ID 与上下文方式；完成条件：交接记录在 `verification.md`；缺少独立执行能力时该任务 BLOCKED。
-- [ ] 5.2 [DU1] 负责人：主 Agent；依赖：3.1–3.10；复核该单元预定模式（integrated）与 WP 组成，核对 3.x 的检查与独立 review 证据对当前候选版本仍有效；完成条件：结论写入 `reports/du1-integration.md` 的就绪段；变化先同步计划与依赖。
+- [x] 5.1 （仅一次，不随单元复制）负责人：主 Agent；依赖：3.1–3.10；单独创建独立集成 Agent 并显式交接 `roles/integrator.md` 全文、计划与契约、源提交及证据、独立集成 worktree、目标分支与授权边界，记录实际 ID 与上下文方式；完成条件：交接记录在 `verification.md`；缺少独立执行能力时该任务 BLOCKED。 **执行记录**：2026-09-23 由主 Agent 创建独立集成子 Agent `Du1Integrator`（不继承实现对话；已完整交接 `roles/integrator.md`、plan/契约、源提交 `601c8ae` 与之上的候选、集成分支 `feat/admin-state-persistence-v2`、授权边界「无合并/推送」）；上下文方式=新建子 Agent；报告 `reports/du1-integrator.md`。
+- [x] 5.2 [DU1] 负责人：主 Agent；依赖：3.1–3.10；复核该单元预定模式（integrated）与 WP 组成，核对 3.x 的检查与独立 review 证据对当前候选版本仍有效；完成条件：结论写入 `reports/du1-integration.md` 的就绪段；变化先同步计划与依赖。 **执行记录**：就绪段写入 `reports/du1-integration.md` §1（模式 `integrated`、WP1–WP6 组成、`3.x` 证据对候选 `62ef264` 的有效性）。
 
 ## 6. Merge Unit
 
-- [ ] 6.1 [DU1] 负责人：主 Agent（机械核实可派发 environment/recon）；依赖：5.2；核实目标仓库与 `refs/heads/main` 当前提交并记录准确引用与核实命令；完成条件：目标提交与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。
-- [ ] 6.2 [DU1] 负责人：集成 Agent；依赖：6.1；基于已核实基线构造本单元候选，固定基线与候选版本，记录组成与构建结果；完成条件：候选提交与构建输出记录在案。
-- [ ] 6.3 [DU1] 负责人：独立检查执行者；依赖：6.2；在候选版本执行 `npm run verify` [PV1]；完成条件：退出码 0 且逐子项结果（`npm run check`、fmt、clippy、`cargo test`）写入 `reports/du1-pv1.log`、`reports/du1-main-verify.log`。
-- [ ] 6.4 [DU1] 负责人：独立 reviewer；依赖：6.2，可与 6.3 并行；只读检视候选新增交互与冲突解决，修复后独立复核 [RV1]；完成条件：报告写入 `reports/rv1-du1.md`，无未解决阻断项。
-- [ ] 6.5 [DU1] 负责人：主 Agent；依赖：6.2；按 not-applicable 路径核对理由、依据与替代检查安排（实际替代验证在 7.1/7.2 完成），确认没有必须运行 E2E 的任务；完成条件：结论写入 `reports/du1-integration.md` 的 E2E 段。
+- [x] 6.1 [DU1] 负责人：主 Agent（机械核实可派发 environment/recon）；依赖：5.2；核实目标仓库与 `refs/heads/main` 当前提交并记录准确引用与核实命令；完成条件：目标提交与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。 **执行记录**：`refs/heads/main` = `37a398e9dbafa368bdb15853e1c1d9b40f19b28d`（`git rev-parse`，2026-09-23 三次核对未变），记录在 `verification.md` 的 Target 与 `reports/du1-integration.md` §1。
+- [x] 6.2 [DU1] 负责人：集成 Agent；依赖：6.1；基于已核实基线构造本单元候选，固定基线与候选版本，记录组成与构建结果；完成条件：候选提交与构建输出记录在案。 **执行记录**：候选固定为 `62ef264`（父链 `601c8ae → aed9fb5`），包含关系与构建（`cargo build --locked --workspace --all-features` 退出 0）见 `reports/du1-integrator.md`。
+- [x] 6.3 [DU1] 负责人：独立检查执行者；依赖：6.2；在候选版本执行 `npm run verify` [PV1]；完成条件：退出码 0 且逐子项结果（`npm run check`、fmt、clippy、`cargo test`）写入 `reports/du1-pv1.log`、`reports/du1-main-verify.log`。 **执行记录**：独立检查执行者 `Du1Check` 在固定候选上跑 `npm run verify` 口径四条，全部退出 0（`core` 78、`migration` 7/1 ignored、`enum_coverage` 2、`admin_store` 28），证据 `reports/du1-pv1.log` + `reports/du1-checker.md`。
+- [x] 6.4 [DU1] 负责人：独立 reviewer；依赖：6.2，可与 6.3 并行；只读检视候选新增交互与冲突解决，修复后独立复核 [RV1]；完成条件：报告写入 `reports/rv1-du1.md`，无未解决阻断项。 **执行记录**：独立 reviewer `Du1Review` 检视候选（`reports/rv1-du1.md`：1 条阻断 + 5 条非阻断）→ 修复落 `601c8ae` → 复核 `Du1Recheck` 结论 `correct`（`reports/rv1-du1-r2.md`：5 条非阻断）→ 再修复落 `62ef264`。
+- [x] 6.5 [DU1] 负责人：主 Agent；依赖：6.2；按 not-applicable 路径核对理由、依据与替代检查安排（实际替代验证在 7.1/7.2 完成），确认没有必须运行 E2E 的任务；完成条件：结论写入 `reports/du1-integration.md` 的 E2E 段。 **执行记录**：E2E 段写入 `reports/du1-integration.md` §2——`mode = not-applicable`（附用户降级批准），没有必须在候选或最终阶段运行的 E2E 任务，替代检查在 `7.1` 执行。
 - [ ] 6.6 [DU1] 负责人：主 Agent（按当前授权）；依赖：6.3、6.4、6.5；确认候选证据完整后以条件更新或串行机制防竞态，在授权范围内合入并记录实际提交；完成条件：实际合入提交记录在 `verification.md`；基线变化时重开受影响候选任务。
 - [ ] 6.7 [DU1] 负责人：独立检查执行者；依赖：6.6；核对实际主分支结果与候选一致性并在 `main` 上重跑 `npm run verify` [PV1]；完成条件：主分支日志写入 `reports/du1-main-verify.log`，有效复用逐项记录原证据与适用性。
 - [ ] 6.8 [DU1] 负责人：独立 reviewer；依赖：6.6，可与 6.7 并行；独立检视合并新增差异；无新增差异时由主 Agent 记录依据与原 review ID [RV1]；完成条件：结论记录在 `reports/rv1-du1.md` 的复核段。

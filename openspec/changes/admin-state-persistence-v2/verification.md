@@ -9,6 +9,7 @@
 - **W0 基线提交**：本记录所在的那个提交（分支 `feat/admin-state-persistence-v2`；其父提交是 `28f8cb97c7297d83b9df7b15b16d0b059e2dec78`）。W0 的完成条件（合同漂移门禁绿 + 全部本地门禁绿）就在该状态上成立，W1 的三条轨道以此为固定基线。
 - 本轮证据对应的版本：**W0 基线提交**（不再是未提交工作区）；该提交包含 core 的 WP1–WP3、`storage-sqlite` 的 v2 DDL/migration、合同并入与全部 W0 证据日志。
 - **W1/W2 闭合轮交付提交**：`86ae8b4`（父提交 = 第四个提交 `5404610`）；四份独立 RV1 报告的固定被检视 revision 是 `5404610` + 工作区。
+- **DU1 候选（固定）**：`62ef2649ae6d35e65930df505b2cf41858a19d26`（父提交链 `601c8ae → aed9fb5`），集成分支/主 worktree 按 `plan.md` 的 Merge Strategy 为 `feat/admin-state-persistence-v2`；**未合入 main**（缺授权）。
 - 版本确认负责人：主 Agent（`git rev-parse`/`git status`/`git worktree list`）
 
 ### W1·WP6（管理 store）
@@ -42,6 +43,8 @@
 | PV4+PV2+PV3+PV1 / WP6 闭合轮 | `1baea5b` + 工作区（含 `RV1` 的 WP6-2/WP6-4 闭合） | 节点批准与绑定校验落地后的 core + storage；契约文本改动后重跑四类门禁 | 主 Agent | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`；`cargo test --locked -p core -p storage-sqlite --all-features`；`cargo test --locked --workspace --all-features`；`node scripts/check-contract-drift.mjs`；`node scripts/check-crate-boundaries.mjs`；`npm run check` | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 75 passed；`admin_store` **25 passed**（新增节点批准与绑定不一致拒绝两例）；`check:drift` 仍 36 条 DDL / 15 trait / 87 方法 | `reports/wp6-admin-store-tests.log`（闭合轮复跑段） |
 | PV1 / 关联文档同步（WP6 落地后，2.2 补充） | `5404610` + 工作区 | `docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md`、`docs/DEVELOPMENT_PLAN.md`、`README.md`、`docs/CONFIG_REFERENCE.md` 的「仍待实现/目标形状」陈述与实现对齐 | 主 Agent | `npm run check`；`cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`；`cargo test --locked --workspace --all-features` | rustc 1.98.1（`rust-toolchain.toml`）、Node 24.19.0 | **PASS**：四条全部退出 0；`check:docs` 367 links / 1528 refs、`check:drift` 仍 36 条 DDL / 15 trait / 87 方法（合同块未改） | `reports/verify-doc-sync.log` |
 | PV1+PV2+PV3+PV4 / W1–W2 review 闭合轮 | `5404610` + 工作区 | 四份 RV1 报告驱动的修复：core 落定审计动作按目标族、授权先于 workspace 解析、`p256` 最小 feature 与 allow-list、夹具序列与确定性、升级回滚用例、v2 枚举列覆盖；文档 §-引用与 2.2 关联同步 | 主 Agent | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`；`cargo test --locked --workspace --all-features`；`node scripts/check-contract-drift.mjs`；`node scripts/check-crate-boundaries.mjs`；`npm run check` | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 77 passed；`storage-sqlite` 各目标 ok（`migration` 7 passed / 1 ignored、`enum_coverage` 2、`admin_store` 28）；`check:drift` 仍 36 条 DDL / 15 trait / 87 方法（合同块未改） | `reports/verify-w1w2-closure.log` |
+| PV1+PV3 / DU1 候选与修复轮 | `601c8ae`→`62ef264` + 工作区 | DU1 三份独立报告（集成/PV1/review）驱动的修复：干净检出的文档门禁、`put_export`/`add_import` 前置校验、夹具 `wss://` 端点与升级读回断言、证据标签更正 | 主 Agent | `npm run verify` 口径四条 + `check:contract-drift` + `check:boundaries` + `check:docs` + `npm run check`；另在只含被跟踪文件的检出上跑 `check:docs` | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 78 passed；`storage-sqlite` 全目标 ok（`migration` 7/1 ignored、`enum_coverage` 2、`admin_store` 28）；干净检出（88 个 `.md`、无 `.omp/`）`check:docs` 退出 0 | `reports/verify-du1-fixes.log`、`reports/verify-du1-fixes-2.log`、`reports/clean-tree-check.log` |
+
 
 ## Check Plan Changes
 
@@ -92,6 +95,14 @@
 33. **（夹具与判据判别力）`from-v1` 夹具的审计序列原先并没有领先**：`owned_audit` 留 `{1,2,5}` 且 `sqlite_sequence = 5`（`max == seq`），于是 12-step 重建「按列拷贝全部行」本身就把序列置成 5、`restore_audit_sequences` 成为空操作，判据 28 的「序列不回退」失去判别力（真实场景：审计 365 天 TTL 清掉尾部行后 `seq > max`）。生成器现在写 `audit_id = 1..=7` 再删 `3/4/6/7`（`owned_audit`：`seq = 7`；`imported_audit` 同款：`1/2` 与 `seq = 3`），断言改为升级后 `seq = 7`、新插入得 `audit_id = 8`、`imported_audit` 行数 2。**同时**：夹具生成器把 `meta.server_epoch` 钉成字面量（`open` 默认写随机 UUID），三个夹具因此逐字节可复现（连续两次重生成 SHA-256 相同）。**DDL 条数修正**：交办文件写的「改前 25 条 / 改后 37 条」各多算一条，实际是 **36 条 = owned 29（18 表 + 11 索引）+ imported 7**（与漂移门禁输出一致）。
 
 34. **（新增判据）升级路径与 v2 枚举列的判据补齐**：新增 `a_failed_upgrade_rolls_back_to_v1`（预建占位表 `imported_import_v2` 使第二段升级脚本失败 → `open` 返回错误且库仍是完整 v1：无 `owned_device`/`imported_import_export`、`owned_audit` DDL 无 `provider.configured`、`imported_import` 仍含 `export_id`、`user_version = 1`；去掉注入后重开升级成功）；升级用例补「读视图给出三条事件且 `event_payload` 可还原」（读视图持有读池连接，必须在 `close()` 前 `drop`）与「升级库的 6 张 `imported_*` 表列集合与新建库逐项相等」；升级库的两张审计表 DDL 断言覆盖 `AuditAction::ALL` 每个取值；`enum_coverage.rs` 的 `cases` 由 16 扩到 **26**（v2 管理表 8 个枚举列 + 两张审计表 `actor_kind`）。**残留（不在本变更内）**：`revoke_reason`（`owned_device`/`owned_node`）与 `cache_policy`（`owned_export`/`imported_import`）的 CHECK 不是 `IN (...)` 形状，core 侧也没有对应 `ALL`/`as_str`（`RevokeReason` 是 `core::ports` 的朴素枚举、文本映射在 `admin/trust.rs`），因此这两列仍只由行为用例覆盖。
+
+35. **（DU1-R1 阻断项）干净检出下 `check:docs` 会红**：`AGENTS.md` §8 用相对链接指向 `.omp/commands/commit.md`，而 `.omp/` 在仓库里**没有任何被跟踪文件**（宿主安装目录），本机因为文件存在才一直显绿；`git archive`/CI 上 `check:docs` 退出 1，`checks` 这个必需检查会红。修法：只链接随版本控制的 `.pi/prompts/commit.md`，宿主路径写成纯文本并注明不进版本库（`AGENTS.md`）。证据：`reports/clean-tree-check.log`（只含被跟踪文件的 88 个 `.md` 树上 `check-doc-links.mjs` 退出 0）。
+
+36. **（DU1-R1 F2/F3）`export.create` 与 `import.add` 的引用前置校验**：`UseCases::put_export` 现在校验每个 `workspace_aliases[].alias` 已在本机 `owned_workspace` 登记、每个 `agent_ids[]` 在本机目录里可用；`UseCases::add_import` 校验 `owner_node_id` 是**已配对**且 `kind = owner` 的节点（§5.1/§11.2 第 4/5 条、§11.7、`LOCAL_ADMIN_PROTOCOL.md` §5.5）。错误分层：**缺席**报 `NotFound(EntityRef::Node(..))`（适配器映射 `local.not_found`），**存在但角色或状态不对**报参数类错误——alias 一侧 core 没有对应 `EntityRef` 变体，适配器需按 §5.5 映射为 `local.not_found`/`local.invalid_params`（记录在案的适配器义务）。回归用例 `export_and_import_preconditions_are_enforced`（先把 Agent 放进目录，使「别名未登记」只能被别名前置拦下；含 access 角色与 `Owner + pending` 两个反例）。
+
+37. **（DU1-R1 F4）`from-v1` 夹具端点与升级读回**：`imported_import.endpoint_ref` 由 `https://owner.invalid` 改为 `wss://owner.invalid`（`ImportRecord` 只接受 `wss://`；原值不可能来自真实 v1 库，且会让升级后的读路径直接报错），重生成夹具；升级用例补经 `ExportStore::imports()` 的读回断言（1 行、端点正确、`export_ids` 与 `imported_import_export` 一致），覆盖「Import 管理行 + 关联行在升级后经端口可用」。
+
+38. **（DU1-R2 F4）证据标签更正**：早前版本的 `reports/clean-tree-check.log` 声称来自干净 worktree，实际在**仓库工作目录**执行（报告 104 个 `.md`，而只含被跟踪文件的树是 88 个）。已重做：`git archive 62ef264 → tar -xf` 解出的树内运行该树自己的 `scripts/check-doc-links.mjs`，日志写明 revision、取树命令、`.omp/` 缺失与 `.md` 计数。
 
 ### W0 执行期的偏差与决定（2026-09-23，本轮落地）
 
@@ -162,6 +173,8 @@ review 报告全文：`reports/rv1-wp6.md`（含逐条核对结论、规格场�
 
 四份报告结论均为「无未解决阻断项」（`rv1-wp23` 的唯一阻断项已在同一轮闭合）。WP6 的两份报告（`rv1-wp6.md`/`rv1-wp6b.md`）及其 WP6-1..4、WP6B-1..3 的闭合见上表。
 
+**DU1（集成与候选轮，2026-09-23）**：`5.1`/`5.2`/`6.1`–`6.5` 完成——独立集成 Agent `Du1Integrator`（不继承实现对话）核对包含关系并构建候选（`reports/du1-integrator.md`）、独立检查执行者 `Du1Check` 在固定候选上跑 PV1 全绿（`reports/du1-pv1.log`）、独立 reviewer `Du1Review` 检视候选（`reports/rv1-du1.md`，1 条阻断 + 5 条非阻断），修复落 `601c8ae`；复核 `Du1Recheck` 结论 `correct` 并给出 5 条非阻断（`reports/rv1-du1-r2.md`），再修复落 `62ef264`。`refs/heads/main` 仍为 `37a398e`；**合入 `6.6` 与 `6.7`/`6.8`/`7.x`/`8.1` 因缺合并授权未执行**（候选与证据保留）。
+
 ## Merge History
 
 W0 在门禁全绿的状态上落了**基线提交**（分支 `feat/admin-state-persistence-v2`；父提交 `28f8cb9`），供 W1 的轨道作为固定基线。
@@ -205,28 +218,68 @@ WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）�
 ## Final Assessment
 
 ```agentic-assessment
-assessment_id: "admin-state-persistence-v2-w1w2-review-closure"
-target_commit: "5404610d35b22c9d427b88b0cea2c61d1e7a5e15"
-contract_digest: "sha256:38c5d0f9dc886e226d0868487ec03cf22d5053427e83786a3cb4154ccc8d4eab"
+assessment_id: "admin-state-persistence-v2-du1-closure"
+target_commit: "62ef2649ae6d35e65930df505b2cf41858a19d26"
+contract_digest: "sha256:5492db84c2d397eb8d00a22df02a8ecf7b0666534c26af044ede8258c9ba6043"
 result: BLOCKED
 evidence:
-  - path: reports/verify-w1w2-closure.log
-    sha256: "sha256:7328b2fa38923eaa3fd8c949b3e6a8fe0fe4d73cc7d19ec5fe786d8f9d667798"
-  - path: reports/rv1-wp1.md
+  - path: ../../../reports/du1-integrator.md
+    sha256: "sha256:2d77ab4e6b1b2578cb828e84c33626fd2673cc9b3992f5c2b809fc116eb325b1"
+  - path: ../../../reports/du1-pv1.log
+    sha256: "sha256:65895455952f9c5abbe69b2745f59ae3312c6a791639b93d5ac958889ea0c490"
+  - path: ../../../reports/du1-checker.md
+    sha256: "sha256:29032902bb0e75d2a0f9e159987af1bad895afa0e20d357fbdd8c9bacc0af9b2"
+  - path: ../../../reports/rv1-du1.md
+    sha256: "sha256:76bc63d99dc8d88c551753b3254cb0f4233e9b138feab1a88a49c658f28230f1"
+  - path: ../../../reports/rv1-du1-r2.md
+    sha256: "sha256:56b0f2de8887c6cb06848604de65e25601f6fd43e47788caa4db8daf5187c5ed"
+  - path: ../../../reports/clean-tree-check.log
+    sha256: "sha256:4fc7c99868a4dfb69a0bc125ab1d3bcb99f6ef88df3f15546ea5c8ffecca68ea"
+  - path: ../../../reports/verify-du1-fixes.log
+    sha256: "sha256:847eb9ccb867ad217f8c700b7c0493219a3ddf274dbc1a16164964860351899e"
+  - path: ../../../reports/verify-du1-fixes-2.log
+    sha256: "sha256:e48e9f824da99f3e28c02a142760ab46d5ecce011ebd5b00c90cfc819fcd74ca"
+  - path: ../../../reports/du1-integration.md
+    sha256: "sha256:96a6aefebf773ea9a6adbc5949daf88d7182899c151d119abe3f1584e91899e5"
+  - path: ../../../reports/rv1-wp1.md
     sha256: "sha256:b2f42a93b47e467f3d09cf8954f8e3d24e0fcb5e2a286bb6790d5d1efa95a39b"
-  - path: reports/rv1-wp23.md
+  - path: ../../../reports/rv1-wp23.md
     sha256: "sha256:4a01b4f54bb1bf0a8437f6624557f9ba43fcfc2395f3fbf50283db892ca79e98"
-  - path: reports/rv1-wp4.md
+  - path: ../../../reports/rv1-wp4.md
     sha256: "sha256:83f61641c088cbe5c9d25dd16eda40b19b02dff7d7859f4d3e8cdef22c4156b8"
-  - path: reports/rv1-wp5.md
+  - path: ../../../reports/rv1-wp5.md
     sha256: "sha256:7c9c0d1c4151fa1a7c239d6f4c30b19a5a9838db81860eb0042abcfa224e6fc0"
-  - path: reports/rv1-wp6.md
+  - path: ../../../reports/rv1-wp6.md
     sha256: "sha256:678c200f65937121017f9f4de8a14adaebb1a50df22503e302fae3d5546e2c4a"
-  - path: reports/rv1-wp6b.md
+  - path: ../../../reports/rv1-wp6b.md
     sha256: "sha256:428f6b5a9151cf345c231571382d1833b57b6f75c249330897c2088747fb631f"
+  - path: ../../../reports/verify-w1w2-closure.log
+    sha256: "sha256:7328b2fa38923eaa3fd8c949b3e6a8fe0fe4d73cc7d19ec5fe786d8f9d667798"
+  - path: ../../../reports/verify-5404610.log
+    sha256: "sha256:71553bbeb1bed817891833e662306fdf321f8342c68a5f2693b4a133d750ae85"
+  - path: ../../../reports/verify-doc-sync.log
+    sha256: "sha256:f283018cb4503cda3ee08890fcf0bb9f32b48474c1c0bb7a182db0e3aa7ab556"
+  - path: reports/wp6-admin-store-tests.log
+    sha256: "sha256:87b993be501a576a5d45a80dc5e9372fb3dd6b35123a06a682f0bcc895d9997f"
+  - path: reports/w0-npm-check.log
+    sha256: "sha256:90410d8c4e39b80e398c1581c598d9e71b9faeceb762eb621a509bce27c953ea"
+  - path: reports/w0-verify-rust.log
+    sha256: "sha256:2c51ea13ed78c41323425d62aa65c90df00a00df3153474e1f54f5a58c0bd402"
+  - path: reports/wp1-core-tests.log
+    sha256: "sha256:f294a5a7aa12becdd4a1ff7c32f47a8bd03cf0c4b7b5609989f515ef0438e7b9"
+  - path: reports/wp3-core-tests.log
+    sha256: "sha256:f294a5a7aa12becdd4a1ff7c32f47a8bd03cf0c4b7b5609989f515ef0438e7b9"
+  - path: reports/wp4-migration-tests.log
+    sha256: "sha256:ff8405540caefe49c44b5fc63a7d50beafa4c8d6a686af1074153b169b88d949"
+  - path: reports/wp5-boundaries.log
+    sha256: "sha256:71f677d60f7f23043139a2cb433b0b30e0670a37eef02e6b6968fb8a6f0a12b1"
+  - path: reports/wp5-contract-drift-before-after.md
+    sha256: "sha256:386a808109d07ff84894da9c366a631b9a38bc9d6a538c08ff3c12e9978b8d76"
+  - path: reports/verify-final-round1.log
+    sha256: "sha256:0969d9f46c087fa88bc21ac8d868fd8413c03c71604988c6e37a042a16e3ebe1"
 ```
 
-`target_commit` 是本轮证据产生的**起点** = W1/W2 闭合轮的父提交（`5404610`，四个 reviewer 的被检视 revision）；本记录所在的提交即闭合轮交付提交。`contract_digest` **已变**（`sha256:1191…ec61` → `sha256:38c5…4eab`）：本轮把 `p256` 收窄到 `arithmetic` 并同步了 `CORE_PORTS_AND_STORAGE.md` §9 判据 13、`AGENTS.md` §12、`MODULE_ARCHITECTURE.md` §3.1 与 `scripts/check-crate-boundaries.mjs` 的 allow-list，因此合同摘要必然改变；由 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` 在回填后重跑得到（`result: PASS`）。
+`target_commit` 是本轮证据的**被检视目标** = DU1 候选 `62ef264`（集成/检查/review/recheck 子 Agent 的固定输入）；`refs/heads/main` 仍为 `37a398e`，合入未获授权。`contract_digest` **已变**（`sha256:1191…ec61` → `sha256:38c5…4eab` → 本轮 `5492db84…6043`）：先是把 `p256` 收窄到 `arithmetic` 并同步 §9 判据 13/`AGENTS.md` §12/`MODULE_ARCHITECTURE.md` §3.1 与 allow-list，随后是 §11.6 写集语义第 4 条的落定审计措辞与合同版本 0.9；由 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` 在回填后重跑得到（`result: PASS`）。
 
 - Assessment ID / Time: `admin-state-persistence-v2-w1w2-review-closure`，2026-09-23（W1/W2 闭合轮收尾时）
 - Target / Task: 见 `Target` 的「W1·WP6 闭合轮」与 `Merge History` 末段；本轮闭合 `3.2`/`3.4`/`3.6`/`3.8`（四份独立 review）与它们驱动的全部修复，含唯一阻断项 `WP23-2`；最终验收任务 `8.1` 未开始
@@ -234,4 +287,34 @@ evidence:
 - Audit / Evidence: 四份 RV1 报告与本地门禁全绿（`reports/verify-w1w2-closure.log`：fmt/clippy/`cargo test --workspace`/`check:drift`/`check:boundaries`/`check:docs`/`npm run check` 全部退出 0）；`core` 77 用例、`storage-sqlite` 的 `migration` 7 / `enum_coverage` 2 / `admin_store` 28 全绿。仍未做：`5.1`–`6.5`（集成就绪与候选构造）、`6.6` 合入（无授权）、`7.x` 替代验证、`8.1` 最终验收
 - Result / Open Issues: **BLOCKED** —— 未完成任务：`5.1`、`5.2`、`6.1`–`6.8`、`7.1`–`7.3`、`8.1`；其中 `6.6` 起的合入与主分支验证依赖合并授权（本轮不授权）
 - 阻断项状态：**无未闭环阻断项**。本变更历史阻断项（WP6-1..4、WP6B-1..3、WP23-2）全部闭合；`rv1-wp1`/`rv1-wp4`/`rv1-wp5` 结论 `correct`，`rv1-wp23` 的 `incorrect` 仅由 `WP23-2` 引起且已在本轮闭合
+### 最终验收轮次 1（2026-09-23，执行者：主 Agent）— 结论 **BLOCKED**
+
+**验收 ID / 时间**：`admin-state-persistence-v2-final-round-1`，2026-09-23（W1/W2 + DU1 闭合轮之后）。
+
+**目标与核实**：本轮验收的是**本地**主分支 `refs/heads/main` = `37a398e9dbafa368bdb15853e1c1d9b40f19b28d`（本地 `git rev-parse`）。远端 `origin` 存在（`git@github.com:lindongfang/acp-remote.git`），本轮**未刷新** `origin/main`，按 `workflow-check.md` 的说明，远端引用只是缓存、不构成实时状态，因此验收目标是本地主分支引用。；交付候选为本分支 `62ef2649ae6d35e65930df505b2cf41858a19d26`，**尚未合入 main**（`6.6` 未执行——缺合并授权，`plan.md` 的 Merge Strategy 明确合并/推送受当前会话限制）。
+
+**各审计组结论**（按 `procedures/acceptance.md` 的分组）：
+
+| 审计组 | 结论 | 依据 |
+| --- | --- | --- |
+| Contracts and Coverage | **PASS（候选上）** | proposal 的意图/硬约束/非目标与交付方向一致；`plan.md` 的 Coverage Index 逐项有任务与证据（`verification.md` 的 Checks 表 + `openspec/changes/.../reports/*.log`）；specs/design 无后续澄清悬空。 |
+| Delivery and Versions | **BLOCKED** | 候选构造/PV1/review/recheck 全部完成（`reports/du1-integrator.md`、`du1-pv1.log`、`rv1-du1.md`、`rv1-du1-r2.md`），但合入 `6.6` 与主分支检查 `6.7`/`6.8` 未执行（缺授权），因此不存在「实际合入结果与候选一致性」证据。 |
+| Project Checks and Resources | **PASS（候选上）** | `npm run verify` 口径四条 + `check:drift` + `check:boundaries` + `check:docs` + `npm run check` 在候选上全部退出 0（`reports/verify-du1-fixes.log`、`reports/verify-du1-fixes-2.log`），并在**只含被跟踪文件的干净检出**上复跑 `check:docs`（`reports/clean-tree-check.log`，88 个 `.md`、无 `.omp/`）；构建目录按执行者隔离（`target/du1-*`），无共享资源污染记录。 |
+| Independent Reviews | **PASS（候选上）** | 六个独立子 Agent（不继承实现对话）：`RvWp1`/`RvWp23`/`RvWp4`/`RvWp5`（WP 切片）、`Du1Review`（候选）、`Du1Recheck`（修复复核，结论 `correct`）；全部 CRITICAL/MAJOR（含 `WP23-2` 阻断项与 `DU1-R1` F1 阻断项）均已闭环并留复核依据，非阻断项有处理结论。 |
+| E2E Design and Execution | **PASS（不适用判据已固化）** | mode `not-applicable` 有 reason/basis/非空 alternative_checks（`plan.md`，附用户降级批准）；`e2e check` 本轮返回 BLOCKED（原因见下），因 `[e2e-owned]` 行要求变更完成才判定；替代验证是 `7.1` 的独立任务，待在最终主分支版本上执行。 |
+| Issue Closure and Evidence Validity | **PASS（候选上）** | 历史阻断项 WP6-1..4/WP6B-1..3/WP23-2/DU1-R1-F1 全部闭合；F4（未登记切片）已回退并留 patch；W0/WP6 期间的报告在契约块未变的部分按原 ID 复用（见 Checks 与 Check Plan Changes 的说明）。 |
+
+**CLI 原始状态**（独立记录，未被证据结论改写）：
+
+- `openspec status --change admin-state-persistence-v2 --json`：5/5 artifacts complete（`planningHome` = 本仓库）。
+- `npx --quiet --no-install openspec-agentic e2e check --change admin-state-persistence-v2 --json` → 退出码 1，`result: BLOCKED`，reason: `任务未全部完成（除最终 E2E 行与最终验收行外仍有待办）；单变更检查要求变更完成后判定，未 PASS 即阻断`。
+- `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage final --json` → 退出码 1，`result: FAIL`，errors 10 条：`6.6`/`6.7`/`6.8`/`7.1`/`7.2`/`7.3` 未完成、`当前代码 HEAD 与计划目标引用不一致`、`验收结论的 target_commit 已失效`、`当前证据验收结论不是 PASS`、`目标代码状态不能验收：执行后工作区仍有未提交改动`（含宿主未跟踪项 `.omp`/`.pi/**`）。前 6 条是合并授权缺失的直接后果；后 4 条同源于「候选未合入 main + 记录尚未提交 + 验收结论按设计为 BLOCKED」。
+
+**记录侧修复（本轮）**：`agentic-assessment` 的 `evidence` 路径改为**相对 `changeDir`** 解析（`workflow-check.md` 的规定；根目录材料写 `../../../reports/...`），并把 `plan.md` 引用的 `reports/wp6-admin-store-tests.log` 放入 `changeDir/reports/`，使最终阶段不再有「证据不可读取」类错误。
+
+**证据与复用判断**：本轮 `agentic-assessment` 的 `evidence` 覆盖全部被引用报告（路径相对 `changeDir`，原始文件同时保留在仓库根 `reports/`）；W0/WP6/W1-W2 期间的报告在对应契约块与用例未变的前提下复用，凡改动过的部分（§11.6 措辞、`p256` 依赖面、夹具序列与端点）都有本轮新增或复跑的证据（Check Plan Changes 30–38）。
+
+**未解决项**：`6.6`（合入）、`6.7`/`6.8`（主分支复验与复核）、`7.1`–`7.3`（替代验证与 `[e2e-owned]` 门禁）、`8.1`（最终验收）——全部只缺**合并授权**；另有两条已登记的实现残留（`revoke_reason`/`cache_policy` 的 `IN (...)` 逐值断言，见 Check Plan Changes 第 34 条）。
+
+**结论**：**BLOCKED** —— 没有已确认的产品缺陷或未闭环阻断项；但变更未合入目标主分支、合并门禁任务未完成、`workflow check --stage final` 非 PASS，因此**不具备归档条件**，`8.1` 保持待办，不做归档、合并、推送或发布。
 - Required Follow-up: ① 四份独立 review（`3.2`/`3.4`/`3.6`/`3.8`）**已全部闭合**（`rv1-wp{1,23,4,5}.md`；唯一阻断项 WP23-2 与其余发现全部处理，见 Review Findings 的 W1/W2 闭合轮表）→ ② W3：`5.1`（集成 Agent 交接记录）/`5.2`（DU1 就绪）→ `6.1`–`6.5`（核实 `refs/heads/main`、构造候选、候选 PV1、候选 review、E2E 不适用核对）；③ `6.6` 合入与 `6.7`/`6.8`、`7.x`、`8.1` **依赖合并授权**，本轮不授权 → ④ W4 的替代验证与最终验收待授权后执行
