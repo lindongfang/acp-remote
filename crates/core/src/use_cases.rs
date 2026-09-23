@@ -719,16 +719,33 @@ impl UseCases {
         // §11.7 / §11.2 第 5 条：`owner_node_id` 指向 owned 家族的节点记录，存在性与角色由用例层在
         // 写集内校验（`import.add` 的前置条件，`LOCAL_ADMIN_PROTOCOL.md` §5.5：必须是已配对且
         // `kind = owner` 的节点）。
+        // 缺席与「存在但角色/状态不对」分开报：缺席是 `NotFound`（适配器映射 `local.not_found`），
+        // 其余是参数类错误（§5.5 的 `local.invalid_params` 一侧）。
         match self
             .trust
             .node(record.owner_node_id(), NodeKind::Owner)
             .await?
         {
             Some(node) if node.state() == NodeState::Paired => {}
-            _ => {
+            Some(_) => {
                 return Err(PortError::InvalidRequest(
                     "import owner node must be a paired owner node on this node",
                 ));
+            }
+            None => {
+                if !self
+                    .trust
+                    .nodes_for(record.owner_node_id())
+                    .await?
+                    .is_empty()
+                {
+                    return Err(PortError::InvalidRequest(
+                        "import owner node must hold the owner role on this node",
+                    ));
+                }
+                return Err(PortError::NotFound(EntityRef::Node(
+                    record.owner_node_id().clone(),
+                )));
             }
         }
         let at = self.clock.now();
@@ -1514,6 +1531,19 @@ mod tests {
             .expect("export record")
         };
 
+        // 先把该 Agent 放进目录：这一步之后「别名未登记」必须由别名前置单独拦下（否则空目录下的
+        // Agent 前置会顶掉它，测试就守不住别名校验）。
+        fixture
+            .world
+            .catalog_agents
+            .lock()
+            .expect("lock")
+            .push(AgentDescriptor {
+                agent: agent_ref.clone(),
+                available: true,
+                origin: ResourceOrigin::Local,
+            });
+
         // 别名未在本机登记 → 拒绝。
         let error = block_on(
             fixture
@@ -1523,7 +1553,8 @@ mod tests {
         .expect_err("an unregistered workspace alias must be refused");
         assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
 
-        // 登记别名但目录里没有该 Agent → 拒绝。
+        // 登记别名但目录里没有该 Agent → 拒绝（清空目录后同一份 Export 必须仍被拒）。
+        fixture.world.catalog_agents.lock().expect("lock").clear();
         let record = WorkspaceRecord::try_new(
             alias.clone(),
             "Repo",
@@ -1581,7 +1612,10 @@ mod tests {
                 .add_import(&Actor::LocalCli, import(owner.clone())),
         )
         .expect_err("an absent owner node must be refused");
-        assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+        assert!(
+            matches!(error, PortError::NotFound(_)),
+            "缺席必须报 NotFound：{error:?}"
+        );
         fixture.world.nodes.lock().expect("lock").push(node_record(
             &owner,
             NodeKind::Access,
@@ -1594,6 +1628,25 @@ mod tests {
         )
         .expect_err("an access-role node must not own an import");
         assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+        // 角色正确但还没配对上（`pending`）→ 仍必须拒绝（§5.5 要求「已配对」）。
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &owner,
+            NodeKind::Owner,
+            NodeState::Pending,
+        ));
+        let error = block_on(
+            fixture
+                .use_cases
+                .add_import(&Actor::LocalCli, import(owner.clone())),
+        )
+        .expect_err("an unpaired owner node must be refused");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+        fixture
+            .world
+            .nodes
+            .lock()
+            .expect("lock")
+            .retain(|record| record.node_id() != &owner);
         fixture.world.nodes.lock().expect("lock").push(node_record(
             &owner,
             NodeKind::Owner,
