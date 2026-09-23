@@ -13,6 +13,7 @@
 > 版本：0.7（2026-09-23：§11.5–§11.9 落地——§5.3 换为写集端口（`WriteContext`/`PendingAudit` + 全部写集 DTO + `TrustStore`/`ExportStore` 新签名 + `LocalConfigStore`/`CredentialResolver`），§3.5/§3.6/§3.7 补 `PeerPublicKey`、`ResolvedWorkspace` 与本地配置值对象，§7 升级为 v2 表结构（9 张管理表 + 2 个索引 + `imported_import` 拆分），§7.2 新增 v1 → v2 迁移规则与 v2 夹具，§9 增补判据 23–29，§11 改为索引）
 > 版本：0.9（2026-09-23：§2 的错误枚举补齐 `ConflictKind::{AlreadyExists, IdentityMismatch, DuplicateOwnership}` 与 `UnavailableKind::KeystoreUnavailable` 及到 `local.conflict`/`local.unavailable` 的映射义务；§11.6 写集语义第 4 条按目标族区分落定审计（设备 `pairing.approved` / 节点 `node.paired`）；签名、判据与 DDL 未变）
 > 版本：0.8（2026-09-23：管理 store 的落盘实现落地（`crates/storage-sqlite/src/admin/`）后，把 §5.3/§9/§11 与关联文档里「仍待实现」的陈述改为与实现一致；合同形状、判据与 DDL 未变）
+> 版本：0.10（2026-09-23：补齐管理存储的**终态与单调性守卫**——§5.2 补 imported 写路径的归属前置（`upsert_session`/`commit_receipt` 先验 `(ownerNodeId, exportId)` 归属，否则 `NotFound(Export)` 且零写入）、§5.3 补 `put_export` 撤销终态 / 身份材料读取核对同行指纹 / 活动时间只前进（显式 `CASE`）、§7.4 补迟到回调拒绝与「重导入后无法区分新旧连接」的已知边界、§9 新增判据 30。**§5/§7 的代码块、端口签名与 DDL 未变**，漂移门禁继续逐条成立；wire 协议、封闭词表与本地管理方法集未变）
 
 ## 1. 范围与非目标
 
@@ -325,6 +326,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
 约束：
 
 - `commit` / `commit_receipt` 是各自家族的**唯一**写入口；禁止可分别调用的 repository/journal/deduper（`MODULE_ARCHITECTURE.md` §4.1）。
+- `[决定]` imported 写路径的**归属前置**（§11.2 第 5 条）：`upsert_session` 与 `commit_receipt` 都必须在同一写事务内先确认 `(owner_node_id, export_id)` 仍归属某个 Import（`imported_import_export` 有行），否则返回 `NotFound(EntityRef::Export(exportId))` 且零写入——不重建 `imported_session`、不写 `imported_delivery_index`/`imported_command_ref`，也不推进 `local_sequence`。关联行缺失即「该 Import 已被完整移除或从未添加」；同一 `(ownerNodeId, exportId)` 被重新导入后无法区分新旧连接（需导入实例标识或连接代际，见 §7.4）。
 - `[决定]` `origin_epoch` 由 **core** 在创建会话时用 `IdGenerator` 生成并传入（响应审查：存储层返回它会让无创建需求的提交也必须回读）；存储层只校验“该会话已有 epoch 时必须一致”。
 - `[决定]` 幂等命中返回 `CommitOutcome::replayed`，不追加事件、不改状态。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
@@ -678,6 +680,9 @@ pub trait AttachmentStore: Send + Sync {
 
 - `[决定]` 凭据（Provider、Node key、pairing secret）**不经**任何上述端口：只存平台 keystore，表里最多存引用与指纹（`SECURITY_DESIGN.md` §13.1）。
 - `[决定]` `AuditRecord.action` 是 §3.5 的闭合枚举；审计行不得包含内容（`SECURITY_DESIGN.md` §14.2），并由 §9.13 的机器检查兜底。
+- `[决定]` `put_export` 的**撤销终态**（§11.1 的「撤销记录保留」、§11.2 第 4 条）：传入记录 `revoked_at` 非空 → `InvalidRequest`（撤销只能经 `revoke_export`，与 `put_device` 拒绝 `revoked` 记录同款）；库内该 `export_id` 已撤销而传入记录未撤销 → `Conflict(AlreadyExists)`（失败关闭，不得静默保留后返回成功）；`DO UPDATE` 的该列取「已存非空值优先」，重复写入不清除首次撤销时间。`put_export` **不是** `export.update`（`LOCAL_ADMIN_PROTOCOL.md` §5.5 只登记 `export.create`/`export.list`/`export.revoke`）。
+- `[决定]` **身份材料读取必须核对同行指纹**（§3.5、§9 判据 25/30）：`owned_peer_key`、`owned_pairing_peer` 与 `owned_device`（含设备记录的**单读与列表读**）的读取路径都用 `PeerPublicKey::fingerprint()` 比对同一行的 `fingerprint` 列，不一致 → `PortError::Corrupt` 且**不返回该材料**。DDL 只有列级长度/字符集 CHECK，跨列一致性只能在读取期判定（SQL 算不了 SHA-256）。
+- `[决定]` `owned_device.last_seen_at` 与 `owned_node.last_connected_at` **只前进**（§9 判据 30）：旧值为空时写入新值、新值为空时保留旧值、两者非空取较大者，比较按固定宽度 UTC 毫秒文本的字典序（§3.2）；MUST 用显式 `CASE`，不得用标量 `max(a, b)`（任一参数为 NULL 时返回 NULL，会把「旧值为空时的首次写入」丢成 NULL）。
 
 ### 5.4 发布与基础设施
 
@@ -1177,6 +1182,7 @@ CREATE TABLE imported_import_export (
 - `[决定]` `imported_*` 禁止出现正文语义列；机器检查用**黄金列清单**逐表比对（§9.6），而不是子串黑名单（子串黑名单会被 `snapshot_json` 之类的新列绕过）。
 - `[决定]` `imported_delivery_index`/`imported_command_ref` 对 `imported_session` 建复合外键：会话行不存在时 `commit_receipt` 返回 `PortError::NotFound`，不得静默推进 `next_local_sequence`。
 - `[决定]` `attachment_id`/`attachment_generation` 断开即清空；`owner_server_epoch` 变化时清空该 import 的交付索引（对方重建了事件库，cursor 失效）。
+- `[决定]` `upsert_session`/`commit_receipt` 都必须先确认 `(owner_node_id, export_id)` 仍在 `imported_import_export` 里（§11.2 第 5 条、§5.2 约束），否则 `NotFound(Export(exportId))` 且零写入：`remove_import` 之后失去 Import 的在途回调必须被拒绝，不能重建已删除的会话行与交付索引。**已知边界**：同一 `(owner_node_id, export_id)` 被重新导入后关联行会再次存在，仅凭这对 ID 无法区分新旧连接/新旧导入；区分需要**导入实例标识**或**连接代际**，需与 `node-link-client` 的 attachment generation 语义一并设计，v1 未实现。
 - `[决定]` `drop_import` 只删交付索引与命令引用，**不删** `imported_audit`（审计保留义务）。
 - `[决定]` v2 起 Import 与 Export 的归属由 `imported_import_export` 表达（一个 Import 可关联多个 Export）：`owner_node_id` 指向 owned 家族的节点记录，因此**只存值、不用跨族外键**（`MODULE_ARCHITECTURE.md` §4.7），存在性由用例层在写集内校验；同一 `(owner_node_id, export_id)` 只归一个 Import 由该表的 `UNIQUE` 保证，`imported_import` 自身不再假定恰好一个 Export。
 
@@ -1253,6 +1259,7 @@ CREATE TABLE imported_import_export (
 27. **本地配置与凭据边界**（§11.6、§5.3）：至多一个默认 profile 且切换默认是一次原子写集；Provider 引用只存字段名/keystore 引用/版本，换绑递增版本；种子 profile 与「已初始化」标记同事务提交、空种子也标记、重复打开不重导；`CredentialResolver::resolve_env` 只返回 `env_allowlist` ∩ `env` 绑定，引用失效 → `Unavailable(KeystoreUnavailable)` 失败关闭，日志只记变量名与数量。
 28. **v1 → v2 升级的保留与幂等**（§7.2）：升级保留 `server_epoch`、事件 `global_sequence`/`session_sequence` 与 origin cursor、`requestId` 与幂等行、命令终态与全部既有审计；`audit_id` 与其 `AUTOINCREMENT` 序列不回退，审计表的新取值在升级库上可写；`imported_import` 不再有 `export_id`，Export 关联迁入 `imported_import_export` 且 `added_at` 取原 `created_at`，无可信来源的 grants 保持 `'[]'`（该 Import 不可用）；升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变。
 29. **管理状态纳入容量与失败关闭**（§7.5、§8）：容量度量包含管理表的 TEXT 列；超限时拒绝新写入而不删除活动信任、撤销记录或未到期审计；损坏库或宽松权限下**管理写路径**与 owned 写路径一样全部被拒，只读查询仍可用。
+30. **管理记录的终态与单调性**（§11.1、§11.2 第 4/5 条、§5.2/§5.3 约束、§7.4）：① `put_export` 对已撤销的 Export 不得清除 `revoked_at`——传入未撤销记录 → `Conflict(AlreadyExists)` 且该行逐列不变，传入 `revoked_at` 非空记录 → `InvalidRequest` 且零写入（含零审计）；② 完整移除 Import 后，携带该 `(ownerNodeId, exportId)` 的 `upsert_session` 与 `commit_receipt` 都返回 `NotFound(Export)`，`imported_session`/`imported_delivery_index`/`imported_command_ref` 保持为空且不推进 `local_sequence`；③ `owned_peer_key`/`owned_pairing_peer`/`owned_device` 中任一行 `fingerprint` 与同行 `public_key` 的派生值不一致时，对应读取路径（设备记录含单读与列表读）返回 `PortError::Corrupt` 且不返回材料；④ `last_seen_at`/`last_connected_at` 在「旧值为空」「新值更早」「新值为空」三种边界下都不丢值、不倒退，且不使调用失败或丢弃同写集的其他字段。
 
 ## 10. 未决项
 
@@ -1325,7 +1332,7 @@ CREATE TABLE imported_import_export (
 2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对——`put_device`/`put_node` 一律拒绝 `revoked` 行，而 `settle_pairing` 的批准路径（对端已出示配对 secret 的 HMAC/proof 且本机用户确认）是**唯一**的恢复入口，复活保留撤销审计（§11.3 的 tombstone 语义）。落定只接受 `pending_confirmation`（已落定/已终态 → `Conflict(Consumed)`，不重复改写首次批准时间）。节点配对的批准创建 `owned_node` 的 **`access`** 行（`owner_endpoint` 为空）：只有 `node.pair.begin --mode owner` 会创建节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」，因此对端角色可推导、不需要在写集里携带；`owner` 角色行由该节点自己被信任时经 `put_node` 写入。
 3. **撤销**：单事务记录撤销时间、撤销状态与对应审计；提交后阻断新命令/订阅并关闭适用连接，再回答管理调用。提交失败返回失败，不把内存撤销当作持久成功；连接清理失败也不回滚已提交的撤销，阻断后续访问并报告失败。重启先加载撤销状态，再允许连接。
 4. **Export**：创建前验证 Agent、workspace、模板与默认引用；创建/撤销各为一个事务。撤销先提交再发送 `export.revoked`；发送失败不撤销数据库决定。授权从最新记录计算，不能仅信任旧连接缓存。
-5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。
+5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。端口级落点：`upsert_session`/`commit_receipt` 在同一写事务内的归属前置（关联行缺失 → `NotFound(Export(exportId))`、零写入，§5.2/§7.4）。**已知边界**：同一 `(ownerNodeId, exportId)` 被重新导入后该前置会再次成立，区分旧连接/旧导入的迟到回调需要导入实例标识或连接代际，`node-link-client` 落地前不实现。
 6. **审计**：涉及已登记安全动作的管理 mutation，其成功审计与状态同事务提交；审计写入失败则整事务失败。被拒绝的请求只尝试追加失败/拒绝审计，不能因审计不可写而继续执行。适配器记录固定错误类型，不记录凭据。独立 `AuditStore::append` 用于没有关联状态变更的审计，不用于伪造跨端口原子性。
 7. **凭据引用**：SQLite 与 keystore 不做分布式事务。先写新的、带版本的 keystore 条目，再提交 SQLite 引用；失败时旧引用继续有效，未引用条目作为孤儿回收。新引用提交后才能清理旧条目；重启发现引用缺失则明确不可用，不能静默生成新身份。
 

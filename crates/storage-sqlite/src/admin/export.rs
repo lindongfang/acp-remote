@@ -313,6 +313,11 @@ impl ExportStore for SqliteStore {
     }
 
     /// §11.6 第 7 条：写一个 Export（状态 + 集合 + 审计同事务）。
+    ///
+    /// 撤销是终态（§11.1「撤销记录保留」、§11.2 第 4 条）：本方法**不是** `export.update`，也 MUST NOT
+    /// 让已撤销的 Export 重新可用。因此先拒绝携带 `revoked_at` 的记录（撤销只由 `revoke_export` 负责，
+    /// 与 `put_device` 拒绝 `revoked` 记录同款），再拒绝「库内已撤销 + 传入未撤销」，并把
+    /// `DO UPDATE` 的该列写成「已存非空值优先」的 `CASE`（重复写入不清除首次撤销时间）。
     async fn put_export(&self, write: ExportWrite) -> Result<(), PortError> {
         self.writable()?;
         let record = write.record;
@@ -322,6 +327,23 @@ impl ExportStore for SqliteStore {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .db()?;
+        if record.revoked_at().is_some() {
+            // 撤销是 `revoke_export` 的职责：只有那条写集携带 `export.revoked` 审计。
+            return Err(PortError::InvalidRequest(
+                "use export.revoke to revoke an export",
+            ));
+        }
+        // 已撤销的 Export 不可被普通写入复活：该 `(export_id)` 已存在且处于终态，按 §2 的冲突语义
+        // 失败关闭，而不是静默保留 `revoked_at` 并让调用方以为写入生效。
+        let stored_revoked: Option<Option<String>> =
+            sqlx::query_scalar("SELECT revoked_at FROM owned_export WHERE export_id = ?1")
+                .bind(record.export_id().as_str())
+                .fetch_optional(&mut *tx)
+                .await
+                .db()?;
+        if stored_revoked.flatten().is_some() {
+            return Err(PortError::Conflict(ConflictKind::AlreadyExists));
+        }
         sqlx::query(
             "INSERT INTO owned_export (export_id, display_name, agent_ids_json, aliases_json, \
              default_alias, templates_json, default_template, scopes_json, cache_policy, created_at, \
@@ -330,7 +352,9 @@ impl ExportStore for SqliteStore {
              agent_ids_json = excluded.agent_ids_json, aliases_json = excluded.aliases_json, \
              default_alias = excluded.default_alias, templates_json = excluded.templates_json, \
              default_template = excluded.default_template, scopes_json = excluded.scopes_json, \
-             cache_policy = excluded.cache_policy, revoked_at = excluded.revoked_at",
+             cache_policy = excluded.cache_policy, \
+             revoked_at = CASE WHEN owned_export.revoked_at IS NOT NULL \
+             THEN owned_export.revoked_at ELSE excluded.revoked_at END",
         )
         .bind(record.export_id().as_str())
         .bind(record.display_name())

@@ -8,9 +8,12 @@
 //! | admin-state-persistence：管理写集的原子性与失败关闭 | `a_failed_audit_write_rolls_back_the_whole_write_set`、`a_constraint_failure_during_approval_leaves_no_half_authorization` |
 //! | admin-state-persistence：撤销与重启恢复 | `device_revocation_is_idempotent_and_survives_reopen`、`node_revocation_covers_both_roles_and_survives_reopen`、`expired_pairing_...` |
 //! | admin-state-persistence：Export 与 Import 的归属与完整移除 | `import_ownership_is_exclusive_...`、`full_import_removal_and_connection_drop_both_keep_audit` |
+//! | admin-state-persistence：撤销与删除后的写入不得复活资源 | `export_revocation_is_terminal_for_plain_writes`；完整移除后的迟到回调见 `imported.rs` 的 `late_callbacks_after_a_full_removal_cannot_rebuild_the_index` |
+//! | admin-state-persistence：设备与节点记录的活动时间只前进 | `timestamps_are_advanced_never_erased` |
 //! | peer-identity-material：配对携带公钥并绑定到信任材料 | `pairing_approval_persists_identity_material_across_reopen` |
 //! | peer-identity-material：双角色身份一致与撤销覆盖 | `node_roles_share_one_identity_material`、`second_node_role_with_a_foreign_fingerprint_is_rejected`、`node_revocation_...` |
 //! | peer-identity-material：身份变化不自动接受 | `revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound` |
+//! | peer-identity-material：身份材料读取必须核对同行指纹 | `corrupted_identity_material_fails_closed_on_read` |
 //! | peer-identity-material：凭据与身份材料的存放边界 | `no_secret_material_lands_in_any_column` |
 //! | local-agent-config：Profile 写入校验与唯一默认 | `default_profile_switch_is_atomic_and_unique`、`profile_bindings_must_reference_registered_provider_fields` |
 //! | local-agent-config：首次初始化种子的幂等 | `seed_marks_initialized_once_and_ignores_later_seeds` |
@@ -41,11 +44,11 @@ use acp_core::model::{
     WorkspaceRecord,
 };
 use acp_core::ports::{
-    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportStore, ExportWrite,
-    ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore, NodeRevocation, NodeWrite,
-    PairingClaimWrite, PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite,
-    ProviderRefWrite, RemoteDeliveryStore, RevokeReason, SeedWrite, SessionStore, TrustRecordRef,
-    TrustStore, WorkspaceWrite, WriteContext,
+    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
+    ExportWrite, ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore,
+    NodeRevocation, NodeWrite, PairingClaimWrite, PairingSettlementWrite, PairingWrite,
+    PendingAudit, ProfileWrite, ProviderRefWrite, RemoteDeliveryStore, RevokeReason, SeedWrite,
+    SessionStore, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
 };
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
@@ -422,6 +425,11 @@ fn export_record() -> ExportRecord {
 }
 
 fn export_record_with(id: &str) -> ExportRecord {
+    export_record_with_revocation(id, None)
+}
+
+/// 带 `revoked_at` 的 Export 记录：`put_export` MUST 拒绝携带它的写入（撤销只走 `revoke_export`）。
+fn export_record_with_revocation(id: &str, revoked_at: Option<Timestamp>) -> ExportRecord {
     ExportRecord::try_new(
         ExportId::new(id).expect("export id"),
         "team export",
@@ -450,7 +458,7 @@ fn export_record_with(id: &str) -> ExportRecord {
         GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
         CachePolicy::NoContentCache,
         at(4),
-        None,
+        revoked_at,
     )
     .expect("export record")
 }
@@ -760,6 +768,95 @@ async fn an_empty_stored_binding_is_reported_as_corrupt() {
             PortError::Corrupt(_)
         ),
         "空绑定必须报损坏，不能落进通用 InvalidRequest 文案"
+    );
+    store.close().await;
+}
+
+/// 规格：身份材料读取必须核对同行指纹（peer-identity-material）。
+///
+/// DDL 只有列级 CHECK（长度/字符集），没有把 `fingerprint` 绑到 `public_key` 的跨列约束，因此
+/// 「指纹与公钥互相矛盾」的行只能在读取期发现：`owned_peer_key`、`owned_device`（单读与列表读）
+/// 与 `owned_pairing_peer` 三条读取路径都 MUST 失败关闭，不把矛盾材料交出去。
+#[tokio::test]
+async fn corrupted_identity_material_fails_closed_on_read() {
+    let dir = temp_dir("admin-identity-corrupt-read");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    approve_device(&store, &device_id(), 2).await;
+
+    // 正向对照：材料一致时三条读取路径都照常返回（避免整组断言恒真）。
+    assert!(
+        store
+            .peer_key(&PeerIdentity::Device(device_id()))
+            .await
+            .expect("peer key")
+            .is_some()
+    );
+    assert!(store.device(&device_id()).await.expect("device").is_some());
+    assert_eq!(store.devices().await.expect("devices").len(), 1);
+    assert!(
+        store
+            .pairing_peer(&pairing_id())
+            .await
+            .expect("pairing peer")
+            .is_some()
+    );
+
+    // 外部改写：三张表的指纹列都改成合法格式（64 位小写 hex，能过列级 CHECK）但与公钥派生值不符的值。
+    let wrong = "0".repeat(64);
+    let raw = raw_write_pool(&path).await;
+    for statement in [
+        "UPDATE owned_peer_key SET fingerprint = ?1 WHERE peer_kind = 'device'",
+        "UPDATE owned_device SET fingerprint = ?1",
+        "UPDATE owned_pairing_peer SET fingerprint = ?1",
+    ] {
+        sqlx::query(statement)
+            .bind(&wrong)
+            .execute(&raw)
+            .await
+            .expect("corrupt fingerprint column");
+    }
+    raw.close().await;
+
+    assert!(
+        matches!(
+            store
+                .peer_key(&PeerIdentity::Device(device_id()))
+                .await
+                .expect_err("trust material with a foreign fingerprint"),
+            PortError::Corrupt(_)
+        ),
+        "信任材料读取必须失败关闭"
+    );
+    assert!(
+        matches!(
+            store
+                .device(&device_id())
+                .await
+                .expect_err("device row with a foreign fingerprint"),
+            PortError::Corrupt(_)
+        ),
+        "设备记录单读必须失败关闭"
+    );
+    assert!(
+        matches!(
+            store
+                .devices()
+                .await
+                .expect_err("device list with a foreign fingerprint"),
+            PortError::Corrupt(_)
+        ),
+        "设备记录列表读必须失败关闭"
+    );
+    assert!(
+        matches!(
+            store
+                .pairing_peer(&pairing_id())
+                .await
+                .expect_err("pairing peer with a foreign fingerprint"),
+            PortError::Corrupt(_)
+        ),
+        "配对对端记录读取必须失败关闭"
     );
     store.close().await;
 }
@@ -1853,8 +1950,9 @@ async fn revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound() {
     pool.close().await;
 }
 
-/// `owned_device.last_seen_at`/`owned_node.last_connected_at` 只推进、不抹掉：一次不带新值的写入
-/// 不得让「最近一次认证成功/连接时间」回到未知（列赋值被静默丢掉时该用例会失败）。
+/// `owned_device.last_seen_at`/`owned_node.last_connected_at` 只前进：旧值为空时首次写入不得被丢成 NULL、
+/// 更早的时间戳不得让已存值倒退、空值不得抹掉已存值（spec：admin-state-persistence「设备与节点记录的
+/// 活动时间只前进」）。列赋值被静默丢掉时该用例会失败。
 #[tokio::test]
 async fn timestamps_are_advanced_never_erased() {
     let dir = temp_dir("admin-timestamps");
@@ -1877,10 +1975,43 @@ async fn timestamps_are_advanced_never_erased() {
             .last_seen_at(),
         Some(&at(3))
     );
+    // 更早的时间戳：保留已存的「最近」值，但同一写集的其他字段照常更新。
+    store
+        .put_device(DeviceWrite {
+            record: DeviceRecord::try_new(
+                device_id(),
+                "phone-renamed",
+                fingerprint.clone(),
+                ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                DeviceState::Active,
+                at(2),
+                Some(at(2)),
+                None,
+            )
+            .expect("device record"),
+            context: context(4, Vec::new()),
+        })
+        .await
+        .expect("write an earlier timestamp");
+    let device = store
+        .device(&device_id())
+        .await
+        .expect("device")
+        .expect("device row");
+    assert_eq!(
+        device.last_seen_at(),
+        Some(&at(3)),
+        "更早的 last_seen_at 不得覆盖已存值"
+    );
+    assert_eq!(
+        device.display_name(),
+        "phone-renamed",
+        "同一写集的其他字段仍要更新"
+    );
     store
         .put_device(DeviceWrite {
             record: device_record_with_seen(fingerprint.clone(), None),
-            context: context(4, Vec::new()),
+            context: context(5, Vec::new()),
         })
         .await
         .expect("write without a new timestamp");
@@ -1903,11 +2034,30 @@ async fn timestamps_are_advanced_never_erased() {
         })
         .await
         .expect("advance last_connected_at");
+    // 更早的连接时间同样不得让已存值倒退。
+    store
+        .put_node(NodeWrite {
+            record: node_record_with_connected(NodeKind::Owner, fingerprint.clone(), Some(at(3))),
+            public_key: peer_public_key(),
+            context: context(5, Vec::new()),
+        })
+        .await
+        .expect("write an earlier connection time");
+    assert_eq!(
+        store
+            .node(&node_id(), NodeKind::Owner)
+            .await
+            .expect("node")
+            .expect("node row")
+            .last_connected_at(),
+        Some(&at(4)),
+        "更早的 last_connected_at 不得覆盖已存值"
+    );
     store
         .put_node(NodeWrite {
             record: node_record_with_connected(NodeKind::Owner, fingerprint, None),
             public_key: peer_public_key(),
-            context: context(5, Vec::new()),
+            context: context(6, Vec::new()),
         })
         .await
         .expect("write without a new timestamp");
@@ -2310,6 +2460,85 @@ async fn full_import_removal_and_connection_drop_both_keep_audit() {
         "完整移除保留审计"
     );
     pool.close().await;
+}
+
+/// 规格：撤销是终态（admin-state-persistence「撤销与删除后的写入不得复活资源」）。
+///
+/// `put_export` 不是 `export.update`：已撤销的 Export MUST NOT 被普通写入复活，撤销时间 MUST 只由
+/// `revoke_export` 写入且不被后续写入覆盖；携带 `revoked_at` 的记录 MUST 被直接拒绝。
+#[tokio::test]
+async fn export_revocation_is_terminal_for_plain_writes() {
+    let dir = temp_dir("admin-export-revocation-terminal");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store
+        .put_export(ExportWrite {
+            record: export_record(),
+            context: context(4, Vec::new()),
+        })
+        .await
+        .expect("put export");
+    store
+        .revoke_export(ExportRevocation {
+            export: remote_export(),
+            context: context(5, Vec::new()),
+        })
+        .await
+        .expect("revoke export");
+
+    let pool = raw_pool(&path).await;
+    let revoked = table_snapshot(&pool, "owned_export").await;
+    assert!(
+        revoked.iter().all(|row| row.contains(at(5).as_str())),
+        "撤销时间必须落库：{revoked:?}"
+    );
+
+    // 传入未撤销记录 → Conflict(AlreadyExists)，库内该行逐行不变（含首次撤销时间）。
+    assert_conflict(
+        store
+            .put_export(ExportWrite {
+                record: export_record(),
+                context: context(6, Vec::new()),
+            })
+            .await
+            .expect_err("a revoked export must not be resurrected by a plain write"),
+        ConflictKind::AlreadyExists,
+    );
+    assert_eq!(
+        table_snapshot(&pool, "owned_export").await,
+        revoked,
+        "被拒的写入不得清除撤销时间或改动其他列"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_export").await,
+        1
+    );
+    pool.close().await;
+
+    // 携带 `revoked_at` 的记录 → InvalidRequest（撤销只走 `revoke_export`），且整事务零写入。
+    assert_invalid_request(
+        store
+            .put_export(ExportWrite {
+                record: export_record_with_revocation(EXPORT, Some(at(7))),
+                context: context(7, Vec::new()),
+            })
+            .await
+            .expect_err("put_export must not be used to revoke"),
+        "use export.revoke to revoke an export",
+    );
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        table_snapshot(&pool, "owned_export").await,
+        revoked,
+        "参数类拒绝必须零写入"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_audit").await,
+        0,
+        "夹具未携带审计，拒绝路径不得写入审计"
+    );
+    pool.close().await;
+    store.close().await;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -40,8 +40,9 @@ use crate::error::StorageError;
 use crate::session_store::{Db, SqliteStore, blob, decode, decode_opt, opt_text, text};
 
 /// `owned_device` 的读列（顺序无关；集中一处便于与 §7.3 对照）。
-const DEVICE_COLUMNS: &str = "device_id, display_name, fingerprint, scopes_json, state, created_at, \
-     last_seen_at, revoked_at";
+/// `public_key` 参与读取：设备记录的指纹列必须与它派生出的指纹一致（见 `device_from_row`）。
+const DEVICE_COLUMNS: &str = "device_id, display_name, public_key, fingerprint, scopes_json, state, \
+     created_at, last_seen_at, revoked_at";
 
 /// `owned_node` 的读列。
 const NODE_COLUMNS: &str = "node_id, kind, display_name, fingerprint, grants_json, state, \
@@ -61,10 +62,20 @@ const PAIRING_PEER_COLUMNS: &str = "peer_kind, peer_id, display_name, public_key
 // ---------------------------------------------------------------------------------------------
 
 fn device_from_row(row: &SqliteRow) -> Result<DeviceRecord, StorageError> {
+    // 设备记录的指纹列必须与同行 `public_key` 的派生值一致（§3.5 的唯一指纹入口）：DDL 只有各自列上的
+    // 长度/字符集 CHECK，没有跨列约束，因此这里不比对就会把「指纹与公钥互相矛盾」的行当作有效记录
+    // 返回。`device()`/`devices()` 共用本函数，两条读取路径一起失败关闭。
+    let fingerprint =
+        decode::<Fingerprint>(&text(row, "fingerprint")?, "owned_device.fingerprint")?;
+    verify_identity_material(
+        peer_key_from_bytes(blob(row, "public_key")?, "owned_device.public_key")?,
+        &fingerprint,
+        "owned_device fingerprint does not match its public key",
+    )?;
     DeviceRecord::try_new(
         decode(&text(row, "device_id")?, "owned_device.device_id")?,
         &text(row, "display_name")?,
-        decode(&text(row, "fingerprint")?, "owned_device.fingerprint")?,
+        fingerprint,
         acp_core::model::ScopeSet::try_from_iter(decode_strings(
             &text(row, "scopes_json")?,
             "owned_device.scopes_json is not a JSON array",
@@ -154,8 +165,15 @@ fn peer_identity(row: &SqliteRow, id_column: &'static str) -> Result<PeerIdentit
 /// 恒等于配对行的 `host_binding`，读路径从配对行回填（§11.2 第 1 条；这也让「两条绑定不一致」在
 /// 库里不可能存在）。
 fn pairing_peer_from_row(row: &SqliteRow, host_binding: &str) -> Result<PairingPeer, StorageError> {
-    let public_key =
-        peer_key_from_bytes(blob(row, "public_key")?, "owned_pairing_peer.public_key")?;
+    // 与 `load_peer_key` 同口径：公钥是权威字节，指纹由它派生，但读取时必须与同行指纹列核对，
+    // 不一致即损坏（配对确认会把这笔材料转入信任材料，矛盾材料不得继续流动）。
+    let stored =
+        decode::<Fingerprint>(&text(row, "fingerprint")?, "owned_pairing_peer.fingerprint")?;
+    let public_key = verify_identity_material(
+        peer_key_from_bytes(blob(row, "public_key")?, "owned_pairing_peer.public_key")?,
+        &stored,
+        "owned_pairing_peer fingerprint does not match its public key",
+    )?;
     PairingPeer::try_new(
         peer_identity(row, "peer_id")?,
         &text(row, "display_name")?,
@@ -179,6 +197,23 @@ fn peer_key_from_bytes(
         column,
         expected: "65-byte SEC1 uncompressed P-256 public key",
     })
+}
+
+/// 同行指纹核对：`fingerprint` 列 MUST 等于由同行 `public_key` 派生出的指纹（§3.5 的唯一指纹入口，
+/// 适配器不得各自现算）。不一致说明该行材料自相矛盾（外部改写或损坏），按 §8 失败关闭：绝不把矛盾
+/// 材料当作可用的验签公钥或有效记录返回。
+///
+/// 这条判定只能在读取期做：DDL 无法把 `fingerprint` 与 `public_key` 绑成跨列 CHECK（SQL 算不了
+/// SHA-256），而 `owned_peer_key`/`owned_pairing_peer`/`owned_device` 三张表都各自只有列级 CHECK。
+fn verify_identity_material(
+    public_key: PeerPublicKey,
+    stored: &Fingerprint,
+    mismatch: &'static str,
+) -> Result<PeerPublicKey, StorageError> {
+    if public_key.fingerprint() != *stored {
+        return Err(StorageError::Corrupt(mismatch));
+    }
+    Ok(public_key)
 }
 
 async fn load_device(
@@ -222,8 +257,9 @@ where
     rows.iter().map(node_from_row).collect()
 }
 
-/// 已绑定的身份材料；`None` 表示该对端还没有绑定材料。指纹列不参与判定——权威是公钥字节本身，
-/// 指纹由 [`PeerPublicKey::fingerprint`] 从同一份字节派生（§3.5：适配器不得各自现算指纹）。
+/// 已绑定的身份材料；`None` 表示该对端还没有绑定材料。指纹列不作**权威来源**（权威是公钥字节本身，
+/// 指纹由 [`PeerPublicKey::fingerprint`] 从同一份字节派生，§3.5：适配器不得各自现算指纹），但读取时
+/// MUST 与同行 `fingerprint` 列核对：不一致就是损坏材料，失败关闭而不是把公钥交出去。
 async fn load_peer_key<'e, E>(
     executor: E,
     peer_kind: &str,
@@ -232,15 +268,23 @@ async fn load_peer_key<'e, E>(
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
-    let row =
-        sqlx::query("SELECT public_key FROM owned_peer_key WHERE peer_kind = ?1 AND peer_id = ?2")
-            .bind(peer_kind)
-            .bind(peer_id)
-            .fetch_optional(executor)
-            .await
-            .db()?;
-    row.map(|row| peer_key_from_bytes(blob(&row, "public_key")?, "owned_peer_key.public_key"))
-        .transpose()
+    let row = sqlx::query(
+        "SELECT public_key, fingerprint FROM owned_peer_key WHERE peer_kind = ?1 AND peer_id = ?2",
+    )
+    .bind(peer_kind)
+    .bind(peer_id)
+    .fetch_optional(executor)
+    .await
+    .db()?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let stored = decode::<Fingerprint>(&text(&row, "fingerprint")?, "owned_peer_key.fingerprint")?;
+    Ok(Some(verify_identity_material(
+        peer_key_from_bytes(blob(&row, "public_key")?, "owned_peer_key.public_key")?,
+        &stored,
+        "owned_peer_key fingerprint does not match its public key",
+    )?))
 }
 
 /// 该设备是否已存在、其公钥指纹与状态；`put_device` 的换绑/复活判据。
@@ -997,9 +1041,11 @@ async fn approve_node(
     Ok(())
 }
 
-/// 设备行的 upsert。`last_seen_at` 用 `COALESCE` 只推进不抹掉：`DeviceRecord` 不带该字段的新值时
-/// 不得让「最近一次认证成功时间」回到未知；`revoke_reason`/`revoked_at` 恒为 NULL（撤销只走
-/// `revoke_device`，`put_device` 拒绝 `revoked` 记录）。
+/// 设备行的 upsert。`last_seen_at` 只推进不倒退也不抹掉：新值为空时保留旧值、旧值为空时写入新值、
+/// 两者非空时取较大的那个（`Timestamp` 是固定宽度 UTC 毫秒文本，字典序即时间序，§3.2）。
+/// 不能用标量 `max(a, b)` 代替：SQLite 的标量 `max` 在任一参数为 NULL 时返回 NULL，旧值为空时会把
+/// 首次写入的新时间错成 NULL。`revoke_reason`/`revoked_at` 恒为 NULL（撤销只走 `revoke_device`，
+/// `put_device` 拒绝 `revoked` 记录）。
 async fn upsert_device(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     record: &DeviceRecord,
@@ -1012,7 +1058,10 @@ async fn upsert_device(
          ON CONFLICT(device_id) DO UPDATE SET display_name = excluded.display_name, \
          public_key = excluded.public_key, fingerprint = excluded.fingerprint, \
          scopes_json = excluded.scopes_json, state = excluded.state, \
-         last_seen_at = COALESCE(excluded.last_seen_at, last_seen_at), \
+         last_seen_at = CASE WHEN excluded.last_seen_at IS NULL THEN last_seen_at \
+         WHEN last_seen_at IS NULL THEN excluded.last_seen_at \
+         WHEN excluded.last_seen_at > last_seen_at THEN excluded.last_seen_at \
+         ELSE last_seen_at END, \
          revoked_at = excluded.revoked_at, \
          revoke_reason = excluded.revoke_reason",
     )
@@ -1030,7 +1079,8 @@ async fn upsert_device(
     .map_err(StorageError::from)
 }
 
-/// 节点角色行的 upsert。`last_connected_at` 同 `owned_device.last_seen_at`：只推进、不抹掉。
+/// 节点角色行的 upsert。`last_connected_at` 同 `owned_device.last_seen_at`：只推进、不倒退、不抹掉
+/// （三分支 `CASE`，任一侧为空时保留非空的那一侧）。
 async fn upsert_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     record: &NodeRecord,
@@ -1042,7 +1092,10 @@ async fn upsert_node(
          ON CONFLICT(node_id, kind) DO UPDATE SET display_name = excluded.display_name, \
          fingerprint = excluded.fingerprint, grants_json = excluded.grants_json, \
          state = excluded.state, owner_endpoint = excluded.owner_endpoint, \
-         last_connected_at = COALESCE(excluded.last_connected_at, last_connected_at), \
+         last_connected_at = CASE WHEN excluded.last_connected_at IS NULL THEN last_connected_at \
+         WHEN last_connected_at IS NULL THEN excluded.last_connected_at \
+         WHEN excluded.last_connected_at > last_connected_at THEN excluded.last_connected_at \
+         ELSE last_connected_at END, \
          revoked_at = excluded.revoked_at, \
          revoke_reason = excluded.revoke_reason",
     )
@@ -1087,6 +1140,8 @@ async fn bind_peer_key(
 }
 
 /// 既有 `owned_device.public_key`（`put_device` 在身份材料行缺失时的兜底来源）。
+/// 与所有身份材料读取路径同口径：同一行的 `fingerprint` 必须与公钥派生值一致，不一致即损坏，
+/// 不给写路径留下「用矛盾材料继续比对」的机会。
 async fn load_existing_device_key<'e, E>(
     executor: E,
     device_id: &str,
@@ -1094,11 +1149,18 @@ async fn load_existing_device_key<'e, E>(
 where
     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
-    let row = sqlx::query("SELECT public_key FROM owned_device WHERE device_id = ?1")
+    let row = sqlx::query("SELECT public_key, fingerprint FROM owned_device WHERE device_id = ?1")
         .bind(device_id)
         .fetch_optional(executor)
         .await
         .db()?;
-    row.map(|row| peer_key_from_bytes(blob(&row, "public_key")?, "owned_device.public_key"))
-        .transpose()
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let stored = decode::<Fingerprint>(&text(&row, "fingerprint")?, "owned_device.fingerprint")?;
+    Ok(Some(verify_identity_material(
+        peer_key_from_bytes(blob(&row, "public_key")?, "owned_device.public_key")?,
+        &stored,
+        "owned_device fingerprint does not match its public key",
+    )?))
 }

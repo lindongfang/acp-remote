@@ -1,0 +1,960 @@
+# branch diff (round2): base 1ef6640431079f9ca22b409c42071de2d9a79fa2 -> working tree
+# tracked_diff_sha256 = 945d1d509b428a8b84e8d2168d980600098a14d57086d8bd2e4c6957b21e6170
+diff --git a/crates/storage-sqlite/src/admin/export.rs b/crates/storage-sqlite/src/admin/export.rs
+index 2b0e05e..53ac55b 100644
+--- a/crates/storage-sqlite/src/admin/export.rs
++++ b/crates/storage-sqlite/src/admin/export.rs
+@@ -313,6 +313,11 @@ impl ExportStore for SqliteStore {
+     }
+ 
+     /// §11.6 第 7 条：写一个 Export（状态 + 集合 + 审计同事务）。
++    ///
++    /// 撤销是终态（§11.1「撤销记录保留」、§11.2 第 4 条）：本方法**不是** `export.update`，也 MUST NOT
++    /// 让已撤销的 Export 重新可用。因此先拒绝携带 `revoked_at` 的记录（撤销只由 `revoke_export` 负责，
++    /// 与 `put_device` 拒绝 `revoked` 记录同款），再拒绝「库内已撤销 + 传入未撤销」，并把
++    /// `DO UPDATE` 的该列写成「已存非空值优先」的 `CASE`（重复写入不清除首次撤销时间）。
+     async fn put_export(&self, write: ExportWrite) -> Result<(), PortError> {
+         self.writable()?;
+         let record = write.record;
+@@ -322,6 +327,23 @@ impl ExportStore for SqliteStore {
+             .begin_with("BEGIN IMMEDIATE")
+             .await
+             .db()?;
++        if record.revoked_at().is_some() {
++            // 撤销是 `revoke_export` 的职责：只有那条写集携带 `export.revoked` 审计。
++            return Err(PortError::InvalidRequest(
++                "use export.revoke to revoke an export",
++            ));
++        }
++        // 已撤销的 Export 不可被普通写入复活：该 `(export_id)` 已存在且处于终态，按 §2 的冲突语义
++        // 失败关闭，而不是静默保留 `revoked_at` 并让调用方以为写入生效。
++        let stored_revoked: Option<Option<String>> =
++            sqlx::query_scalar("SELECT revoked_at FROM owned_export WHERE export_id = ?1")
++                .bind(record.export_id().as_str())
++                .fetch_optional(&mut *tx)
++                .await
++                .db()?;
++        if stored_revoked.flatten().is_some() {
++            return Err(PortError::Conflict(ConflictKind::AlreadyExists));
++        }
+         sqlx::query(
+             "INSERT INTO owned_export (export_id, display_name, agent_ids_json, aliases_json, \
+              default_alias, templates_json, default_template, scopes_json, cache_policy, created_at, \
+@@ -330,7 +352,9 @@ impl ExportStore for SqliteStore {
+              agent_ids_json = excluded.agent_ids_json, aliases_json = excluded.aliases_json, \
+              default_alias = excluded.default_alias, templates_json = excluded.templates_json, \
+              default_template = excluded.default_template, scopes_json = excluded.scopes_json, \
+-             cache_policy = excluded.cache_policy, revoked_at = excluded.revoked_at",
++             cache_policy = excluded.cache_policy, \
++             revoked_at = CASE WHEN owned_export.revoked_at IS NOT NULL \
++             THEN owned_export.revoked_at ELSE excluded.revoked_at END",
+         )
+         .bind(record.export_id().as_str())
+         .bind(record.display_name())
+diff --git a/crates/storage-sqlite/src/admin/trust.rs b/crates/storage-sqlite/src/admin/trust.rs
+index b9ee424..a24a064 100644
+--- a/crates/storage-sqlite/src/admin/trust.rs
++++ b/crates/storage-sqlite/src/admin/trust.rs
+@@ -40,8 +40,9 @@ use crate::error::StorageError;
+ use crate::session_store::{Db, SqliteStore, blob, decode, decode_opt, opt_text, text};
+ 
+ /// `owned_device` 的读列（顺序无关；集中一处便于与 §7.3 对照）。
+-const DEVICE_COLUMNS: &str = "device_id, display_name, fingerprint, scopes_json, state, created_at, \
+-     last_seen_at, revoked_at";
++/// `public_key` 参与读取：设备记录的指纹列必须与它派生出的指纹一致（见 `device_from_row`）。
++const DEVICE_COLUMNS: &str = "device_id, display_name, public_key, fingerprint, scopes_json, state, \
++     created_at, last_seen_at, revoked_at";
+ 
+ /// `owned_node` 的读列。
+ const NODE_COLUMNS: &str = "node_id, kind, display_name, fingerprint, grants_json, state, \
+@@ -61,10 +62,20 @@ const PAIRING_PEER_COLUMNS: &str = "peer_kind, peer_id, display_name, public_key
+ // ---------------------------------------------------------------------------------------------
+ 
+ fn device_from_row(row: &SqliteRow) -> Result<DeviceRecord, StorageError> {
++    // 设备记录的指纹列必须与同行 `public_key` 的派生值一致（§3.5 的唯一指纹入口）：DDL 只有各自列上的
++    // 长度/字符集 CHECK，没有跨列约束，因此这里不比对就会把「指纹与公钥互相矛盾」的行当作有效记录
++    // 返回。`device()`/`devices()` 共用本函数，两条读取路径一起失败关闭。
++    let fingerprint =
++        decode::<Fingerprint>(&text(row, "fingerprint")?, "owned_device.fingerprint")?;
++    verify_identity_material(
++        peer_key_from_bytes(blob(row, "public_key")?, "owned_device.public_key")?,
++        &fingerprint,
++        "owned_device fingerprint does not match its public key",
++    )?;
+     DeviceRecord::try_new(
+         decode(&text(row, "device_id")?, "owned_device.device_id")?,
+         &text(row, "display_name")?,
+-        decode(&text(row, "fingerprint")?, "owned_device.fingerprint")?,
++        fingerprint,
+         acp_core::model::ScopeSet::try_from_iter(decode_strings(
+             &text(row, "scopes_json")?,
+             "owned_device.scopes_json is not a JSON array",
+@@ -154,8 +165,15 @@ fn peer_identity(row: &SqliteRow, id_column: &'static str) -> Result<PeerIdentit
+ /// 恒等于配对行的 `host_binding`，读路径从配对行回填（§11.2 第 1 条；这也让「两条绑定不一致」在
+ /// 库里不可能存在）。
+ fn pairing_peer_from_row(row: &SqliteRow, host_binding: &str) -> Result<PairingPeer, StorageError> {
+-    let public_key =
+-        peer_key_from_bytes(blob(row, "public_key")?, "owned_pairing_peer.public_key")?;
++    // 与 `load_peer_key` 同口径：公钥是权威字节，指纹由它派生，但读取时必须与同行指纹列核对，
++    // 不一致即损坏（配对确认会把这笔材料转入信任材料，矛盾材料不得继续流动）。
++    let stored =
++        decode::<Fingerprint>(&text(row, "fingerprint")?, "owned_pairing_peer.fingerprint")?;
++    let public_key = verify_identity_material(
++        peer_key_from_bytes(blob(row, "public_key")?, "owned_pairing_peer.public_key")?,
++        &stored,
++        "owned_pairing_peer fingerprint does not match its public key",
++    )?;
+     PairingPeer::try_new(
+         peer_identity(row, "peer_id")?,
+         &text(row, "display_name")?,
+@@ -181,6 +199,23 @@ fn peer_key_from_bytes(
+     })
+ }
+ 
++/// 同行指纹核对：`fingerprint` 列 MUST 等于由同行 `public_key` 派生出的指纹（§3.5 的唯一指纹入口，
++/// 适配器不得各自现算）。不一致说明该行材料自相矛盾（外部改写或损坏），按 §8 失败关闭：绝不把矛盾
++/// 材料当作可用的验签公钥或有效记录返回。
++///
++/// 这条判定只能在读取期做：DDL 无法把 `fingerprint` 与 `public_key` 绑成跨列 CHECK（SQL 算不了
++/// SHA-256），而 `owned_peer_key`/`owned_pairing_peer`/`owned_device` 三张表都各自只有列级 CHECK。
++fn verify_identity_material(
++    public_key: PeerPublicKey,
++    stored: &Fingerprint,
++    mismatch: &'static str,
++) -> Result<PeerPublicKey, StorageError> {
++    if public_key.fingerprint() != *stored {
++        return Err(StorageError::Corrupt(mismatch));
++    }
++    Ok(public_key)
++}
++
+ async fn load_device(
+     pool: &SqlitePool,
+     id: &acp_core::model::DeviceId,
+@@ -222,8 +257,9 @@ where
+     rows.iter().map(node_from_row).collect()
+ }
+ 
+-/// 已绑定的身份材料；`None` 表示该对端还没有绑定材料。指纹列不参与判定——权威是公钥字节本身，
+-/// 指纹由 [`PeerPublicKey::fingerprint`] 从同一份字节派生（§3.5：适配器不得各自现算指纹）。
++/// 已绑定的身份材料；`None` 表示该对端还没有绑定材料。指纹列不作**权威来源**（权威是公钥字节本身，
++/// 指纹由 [`PeerPublicKey::fingerprint`] 从同一份字节派生，§3.5：适配器不得各自现算指纹），但读取时
++/// MUST 与同行 `fingerprint` 列核对：不一致就是损坏材料，失败关闭而不是把公钥交出去。
+ async fn load_peer_key<'e, E>(
+     executor: E,
+     peer_kind: &str,
+@@ -232,15 +268,23 @@ async fn load_peer_key<'e, E>(
+ where
+     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+ {
+-    let row =
+-        sqlx::query("SELECT public_key FROM owned_peer_key WHERE peer_kind = ?1 AND peer_id = ?2")
+-            .bind(peer_kind)
+-            .bind(peer_id)
+-            .fetch_optional(executor)
+-            .await
+-            .db()?;
+-    row.map(|row| peer_key_from_bytes(blob(&row, "public_key")?, "owned_peer_key.public_key"))
+-        .transpose()
++    let row = sqlx::query(
++        "SELECT public_key, fingerprint FROM owned_peer_key WHERE peer_kind = ?1 AND peer_id = ?2",
++    )
++    .bind(peer_kind)
++    .bind(peer_id)
++    .fetch_optional(executor)
++    .await
++    .db()?;
++    let Some(row) = row else {
++        return Ok(None);
++    };
++    let stored = decode::<Fingerprint>(&text(&row, "fingerprint")?, "owned_peer_key.fingerprint")?;
++    Ok(Some(verify_identity_material(
++        peer_key_from_bytes(blob(&row, "public_key")?, "owned_peer_key.public_key")?,
++        &stored,
++        "owned_peer_key fingerprint does not match its public key",
++    )?))
+ }
+ 
+ /// 该设备是否已存在、其公钥指纹与状态；`put_device` 的换绑/复活判据。
+@@ -997,9 +1041,11 @@ async fn approve_node(
+     Ok(())
+ }
+ 
+-/// 设备行的 upsert。`last_seen_at` 用 `COALESCE` 只推进不抹掉：`DeviceRecord` 不带该字段的新值时
+-/// 不得让「最近一次认证成功时间」回到未知；`revoke_reason`/`revoked_at` 恒为 NULL（撤销只走
+-/// `revoke_device`，`put_device` 拒绝 `revoked` 记录）。
++/// 设备行的 upsert。`last_seen_at` 只推进不倒退也不抹掉：新值为空时保留旧值、旧值为空时写入新值、
++/// 两者非空时取较大的那个（`Timestamp` 是固定宽度 UTC 毫秒文本，字典序即时间序，§3.2）。
++/// 不能用标量 `max(a, b)` 代替：SQLite 的标量 `max` 在任一参数为 NULL 时返回 NULL，旧值为空时会把
++/// 首次写入的新时间错成 NULL。`revoke_reason`/`revoked_at` 恒为 NULL（撤销只走 `revoke_device`，
++/// `put_device` 拒绝 `revoked` 记录）。
+ async fn upsert_device(
+     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+     record: &DeviceRecord,
+@@ -1012,7 +1058,10 @@ async fn upsert_device(
+          ON CONFLICT(device_id) DO UPDATE SET display_name = excluded.display_name, \
+          public_key = excluded.public_key, fingerprint = excluded.fingerprint, \
+          scopes_json = excluded.scopes_json, state = excluded.state, \
+-         last_seen_at = COALESCE(excluded.last_seen_at, last_seen_at), \
++         last_seen_at = CASE WHEN excluded.last_seen_at IS NULL THEN last_seen_at \
++         WHEN last_seen_at IS NULL THEN excluded.last_seen_at \
++         WHEN excluded.last_seen_at > last_seen_at THEN excluded.last_seen_at \
++         ELSE last_seen_at END, \
+          revoked_at = excluded.revoked_at, \
+          revoke_reason = excluded.revoke_reason",
+     )
+@@ -1030,7 +1079,8 @@ async fn upsert_device(
+     .map_err(StorageError::from)
+ }
+ 
+-/// 节点角色行的 upsert。`last_connected_at` 同 `owned_device.last_seen_at`：只推进、不抹掉。
++/// 节点角色行的 upsert。`last_connected_at` 同 `owned_device.last_seen_at`：只推进、不倒退、不抹掉
++/// （三分支 `CASE`，任一侧为空时保留非空的那一侧）。
+ async fn upsert_node(
+     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+     record: &NodeRecord,
+@@ -1042,7 +1092,10 @@ async fn upsert_node(
+          ON CONFLICT(node_id, kind) DO UPDATE SET display_name = excluded.display_name, \
+          fingerprint = excluded.fingerprint, grants_json = excluded.grants_json, \
+          state = excluded.state, owner_endpoint = excluded.owner_endpoint, \
+-         last_connected_at = COALESCE(excluded.last_connected_at, last_connected_at), \
++         last_connected_at = CASE WHEN excluded.last_connected_at IS NULL THEN last_connected_at \
++         WHEN last_connected_at IS NULL THEN excluded.last_connected_at \
++         WHEN excluded.last_connected_at > last_connected_at THEN excluded.last_connected_at \
++         ELSE last_connected_at END, \
+          revoked_at = excluded.revoked_at, \
+          revoke_reason = excluded.revoke_reason",
+     )
+@@ -1087,6 +1140,8 @@ async fn bind_peer_key(
+ }
+ 
+ /// 既有 `owned_device.public_key`（`put_device` 在身份材料行缺失时的兜底来源）。
++/// 与所有身份材料读取路径同口径：同一行的 `fingerprint` 必须与公钥派生值一致，不一致即损坏，
++/// 不给写路径留下「用矛盾材料继续比对」的机会。
+ async fn load_existing_device_key<'e, E>(
+     executor: E,
+     device_id: &str,
+@@ -1094,11 +1149,18 @@ async fn load_existing_device_key<'e, E>(
+ where
+     E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+ {
+-    let row = sqlx::query("SELECT public_key FROM owned_device WHERE device_id = ?1")
++    let row = sqlx::query("SELECT public_key, fingerprint FROM owned_device WHERE device_id = ?1")
+         .bind(device_id)
+         .fetch_optional(executor)
+         .await
+         .db()?;
+-    row.map(|row| peer_key_from_bytes(blob(&row, "public_key")?, "owned_device.public_key"))
+-        .transpose()
++    let Some(row) = row else {
++        return Ok(None);
++    };
++    let stored = decode::<Fingerprint>(&text(&row, "fingerprint")?, "owned_device.fingerprint")?;
++    Ok(Some(verify_identity_material(
++        peer_key_from_bytes(blob(&row, "public_key")?, "owned_device.public_key")?,
++        &stored,
++        "owned_device fingerprint does not match its public key",
++    )?))
+ }
+diff --git a/crates/storage-sqlite/src/session_store.rs b/crates/storage-sqlite/src/session_store.rs
+index 52aa834..5943b43 100644
+--- a/crates/storage-sqlite/src/session_store.rs
++++ b/crates/storage-sqlite/src/session_store.rs
+@@ -2433,12 +2433,46 @@ impl ReadView for SqlReadView {
+ // RemoteDeliveryStore：imported 家族的唯一写入口，且**无正文**（§7.4）
+ // ---------------------------------------------------------------------------------------------
+ 
++/// §11.2 第 5 条 + §7.4：imported 写路径的归属前置——`(owner_node_id, export_id)` MUST 仍归属某个 Import。
++///
++/// `remove_import` 在同一事务删掉管理行、`imported_import_export` 关联行与对应的 `imported_session`
++/// （级联交付索引与命令引用），因此**关联行缺失就是「该 Import 已被完整移除（或从未添加）」**；此时
++/// 在途回调必须被拒绝，不能把已经删掉的会话行与交付索引重新写回来。
++///
++/// 错误定位取 `EntityRef::Export`：调用方只持有 `RemoteSessionRef`（`ownerNodeId`/`exportId`/
++/// `sessionId`），关联行已删时回推不出 `importId`（也不能拿审计行当权威），而 `Export` 变体恰好表达
++/// 「这个对端 Export 在本机不再归属任何 Import」。
++///
++/// 已知边界：同一 `(owner_node_id, export_id)` 被重新导入后，关联行会再次存在，本判定无法区分旧连接
++/// 与旧导入的迟到回调（需要导入实例标识或连接代际，v1 未实现）。
++async fn ensure_import_owns<'e, E>(executor: E, session: &RemoteSessionRef) -> Result<(), PortError>
++where
++    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
++{
++    let owned: Option<i64> = sqlx::query_scalar(
++        "SELECT 1 FROM imported_import_export WHERE owner_node_id = ?1 AND export_id = ?2",
++    )
++    .bind(session.owner_node_id.as_str())
++    .bind(session.export_id.as_str())
++    .fetch_optional(executor)
++    .await
++    .db()?;
++    if owned.is_none() {
++        return Err(PortError::NotFound(EntityRef::Export(
++            session.export_id.clone(),
++        )));
++    }
++    Ok(())
++}
++
+ #[async_trait]
+ impl RemoteDeliveryStore for SqliteStore {
+     async fn commit_receipt(&self, receipt: DeliveryReceipt) -> Result<ReceiptOutcome, PortError> {
+         self.writable()?;
+         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
+         let session = &receipt.session;
++        // §11.2 第 5 条：失去 Import 的在途回调必须被拒绝，不能重建（或继续写入）已删除的交付索引。
++        ensure_import_owns(&mut *tx, session).await?;
+         let next: Option<i64> = sqlx::query_scalar(
+             "SELECT next_local_sequence FROM imported_session \
+              WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
+@@ -2634,6 +2668,9 @@ impl RemoteDeliveryStore for SqliteStore {
+         self.writable()?;
+         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
+         let session = &record.session;
++        // §11.2 第 5 条：Import 被完整移除后，迟到回调 MUST NOT 重建 `imported_session`（会话行一旦
++        // 重建，`commit_receipt` 的复合外键就重新成立，交付索引会被跟着写回）。
++        ensure_import_owns(&mut *tx, session).await?;
+         let stored_epoch: Option<String> = sqlx::query_scalar(
+             "SELECT last_origin_epoch FROM imported_session \
+              WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
+diff --git a/crates/storage-sqlite/tests/admin_store.rs b/crates/storage-sqlite/tests/admin_store.rs
+index 31974ea..105d7da 100644
+--- a/crates/storage-sqlite/tests/admin_store.rs
++++ b/crates/storage-sqlite/tests/admin_store.rs
+@@ -8,9 +8,12 @@
+ //! | admin-state-persistence：管理写集的原子性与失败关闭 | `a_failed_audit_write_rolls_back_the_whole_write_set`、`a_constraint_failure_during_approval_leaves_no_half_authorization` |
+ //! | admin-state-persistence：撤销与重启恢复 | `device_revocation_is_idempotent_and_survives_reopen`、`node_revocation_covers_both_roles_and_survives_reopen`、`expired_pairing_...` |
+ //! | admin-state-persistence：Export 与 Import 的归属与完整移除 | `import_ownership_is_exclusive_...`、`full_import_removal_and_connection_drop_both_keep_audit` |
++//! | admin-state-persistence：撤销与删除后的写入不得复活资源 | `export_revocation_is_terminal_for_plain_writes`；完整移除后的迟到回调见 `imported.rs` 的 `late_callbacks_after_a_full_removal_cannot_rebuild_the_index` |
++//! | admin-state-persistence：设备与节点记录的活动时间只前进 | `timestamps_are_advanced_never_erased` |
+ //! | peer-identity-material：配对携带公钥并绑定到信任材料 | `pairing_approval_persists_identity_material_across_reopen` |
+ //! | peer-identity-material：双角色身份一致与撤销覆盖 | `node_roles_share_one_identity_material`、`second_node_role_with_a_foreign_fingerprint_is_rejected`、`node_revocation_...` |
+ //! | peer-identity-material：身份变化不自动接受 | `revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound` |
++//! | peer-identity-material：身份材料读取必须核对同行指纹 | `corrupted_identity_material_fails_closed_on_read` |
+ //! | peer-identity-material：凭据与身份材料的存放边界 | `no_secret_material_lands_in_any_column` |
+ //! | local-agent-config：Profile 写入校验与唯一默认 | `default_profile_switch_is_atomic_and_unique`、`profile_bindings_must_reference_registered_provider_fields` |
+ //! | local-agent-config：首次初始化种子的幂等 | `seed_marks_initialized_once_and_ignores_later_seeds` |
+@@ -41,11 +44,11 @@ use acp_core::model::{
+     WorkspaceRecord,
+ };
+ use acp_core::ports::{
+-    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportStore, ExportWrite,
+-    ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore, NodeRevocation, NodeWrite,
+-    PairingClaimWrite, PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite,
+-    ProviderRefWrite, RemoteDeliveryStore, RevokeReason, SeedWrite, SessionStore, TrustRecordRef,
+-    TrustStore, WorkspaceWrite, WriteContext,
++    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
++    ExportWrite, ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore,
++    NodeRevocation, NodeWrite, PairingClaimWrite, PairingSettlementWrite, PairingWrite,
++    PendingAudit, ProfileWrite, ProviderRefWrite, RemoteDeliveryStore, RevokeReason, SeedWrite,
++    SessionStore, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
+ };
+ use storage_sqlite::error::StorageError;
+ use storage_sqlite::migrate::StorageConfig;
+@@ -422,6 +425,11 @@ fn export_record() -> ExportRecord {
+ }
+ 
+ fn export_record_with(id: &str) -> ExportRecord {
++    export_record_with_revocation(id, None)
++}
++
++/// 带 `revoked_at` 的 Export 记录：`put_export` MUST 拒绝携带它的写入（撤销只走 `revoke_export`）。
++fn export_record_with_revocation(id: &str, revoked_at: Option<Timestamp>) -> ExportRecord {
+     ExportRecord::try_new(
+         ExportId::new(id).expect("export id"),
+         "team export",
+@@ -450,7 +458,7 @@ fn export_record_with(id: &str) -> ExportRecord {
+         GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+         CachePolicy::NoContentCache,
+         at(4),
+-        None,
++        revoked_at,
+     )
+     .expect("export record")
+ }
+@@ -764,6 +772,95 @@ async fn an_empty_stored_binding_is_reported_as_corrupt() {
+     store.close().await;
+ }
+ 
++/// 规格：身份材料读取必须核对同行指纹（peer-identity-material）。
++///
++/// DDL 只有列级 CHECK（长度/字符集），没有把 `fingerprint` 绑到 `public_key` 的跨列约束，因此
++/// 「指纹与公钥互相矛盾」的行只能在读取期发现：`owned_peer_key`、`owned_device`（单读与列表读）
++/// 与 `owned_pairing_peer` 三条读取路径都 MUST 失败关闭，不把矛盾材料交出去。
++#[tokio::test]
++async fn corrupted_identity_material_fails_closed_on_read() {
++    let dir = temp_dir("admin-identity-corrupt-read");
++    let store = open(&dir).await;
++    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
++    approve_device(&store, &device_id(), 2).await;
++
++    // 正向对照：材料一致时三条读取路径都照常返回（避免整组断言恒真）。
++    assert!(
++        store
++            .peer_key(&PeerIdentity::Device(device_id()))
++            .await
++            .expect("peer key")
++            .is_some()
++    );
++    assert!(store.device(&device_id()).await.expect("device").is_some());
++    assert_eq!(store.devices().await.expect("devices").len(), 1);
++    assert!(
++        store
++            .pairing_peer(&pairing_id())
++            .await
++            .expect("pairing peer")
++            .is_some()
++    );
++
++    // 外部改写：三张表的指纹列都改成合法格式（64 位小写 hex，能过列级 CHECK）但与公钥派生值不符的值。
++    let wrong = "0".repeat(64);
++    let raw = raw_write_pool(&path).await;
++    for statement in [
++        "UPDATE owned_peer_key SET fingerprint = ?1 WHERE peer_kind = 'device'",
++        "UPDATE owned_device SET fingerprint = ?1",
++        "UPDATE owned_pairing_peer SET fingerprint = ?1",
++    ] {
++        sqlx::query(statement)
++            .bind(&wrong)
++            .execute(&raw)
++            .await
++            .expect("corrupt fingerprint column");
++    }
++    raw.close().await;
++
++    assert!(
++        matches!(
++            store
++                .peer_key(&PeerIdentity::Device(device_id()))
++                .await
++                .expect_err("trust material with a foreign fingerprint"),
++            PortError::Corrupt(_)
++        ),
++        "信任材料读取必须失败关闭"
++    );
++    assert!(
++        matches!(
++            store
++                .device(&device_id())
++                .await
++                .expect_err("device row with a foreign fingerprint"),
++            PortError::Corrupt(_)
++        ),
++        "设备记录单读必须失败关闭"
++    );
++    assert!(
++        matches!(
++            store
++                .devices()
++                .await
++                .expect_err("device list with a foreign fingerprint"),
++            PortError::Corrupt(_)
++        ),
++        "设备记录列表读必须失败关闭"
++    );
++    assert!(
++        matches!(
++            store
++                .pairing_peer(&pairing_id())
++                .await
++                .expect_err("pairing peer with a foreign fingerprint"),
++            PortError::Corrupt(_)
++        ),
++        "配对对端记录读取必须失败关闭"
++    );
++    store.close().await;
++}
++
+ /// WP6-2 回归：节点配对的批准路径必须真的落信任行。`node.pair.begin --mode owner` 创建的节点配对
+ /// 被 `node.pair.confirm` 批准后，应写 `owned_node`（角色 `access`、`owner_endpoint` 为空）、把对端
+ /// 公钥转入身份材料、推进配对到 `approved` 并写 `node.paired` 审计；重启后仍能取到验签公钥。
+@@ -1853,8 +1950,9 @@ async fn revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound() {
+     pool.close().await;
+ }
+ 
+-/// `owned_device.last_seen_at`/`owned_node.last_connected_at` 只推进、不抹掉：一次不带新值的写入
+-/// 不得让「最近一次认证成功/连接时间」回到未知（列赋值被静默丢掉时该用例会失败）。
++/// `owned_device.last_seen_at`/`owned_node.last_connected_at` 只前进：旧值为空时首次写入不得被丢成 NULL、
++/// 更早的时间戳不得让已存值倒退、空值不得抹掉已存值（spec：admin-state-persistence「设备与节点记录的
++/// 活动时间只前进」）。列赋值被静默丢掉时该用例会失败。
+ #[tokio::test]
+ async fn timestamps_are_advanced_never_erased() {
+     let dir = temp_dir("admin-timestamps");
+@@ -1877,12 +1975,45 @@ async fn timestamps_are_advanced_never_erased() {
+             .last_seen_at(),
+         Some(&at(3))
+     );
++    // 更早的时间戳：保留已存的「最近」值，但同一写集的其他字段照常更新。
+     store
+         .put_device(DeviceWrite {
+-            record: device_record_with_seen(fingerprint.clone(), None),
++            record: DeviceRecord::try_new(
++                device_id(),
++                "phone-renamed",
++                fingerprint.clone(),
++                ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
++                DeviceState::Active,
++                at(2),
++                Some(at(2)),
++                None,
++            )
++            .expect("device record"),
+             context: context(4, Vec::new()),
+         })
+         .await
++        .expect("write an earlier timestamp");
++    let device = store
++        .device(&device_id())
++        .await
++        .expect("device")
++        .expect("device row");
++    assert_eq!(
++        device.last_seen_at(),
++        Some(&at(3)),
++        "更早的 last_seen_at 不得覆盖已存值"
++    );
++    assert_eq!(
++        device.display_name(),
++        "phone-renamed",
++        "同一写集的其他字段仍要更新"
++    );
++    store
++        .put_device(DeviceWrite {
++            record: device_record_with_seen(fingerprint.clone(), None),
++            context: context(5, Vec::new()),
++        })
++        .await
+         .expect("write without a new timestamp");
+     assert_eq!(
+         store
+@@ -1903,13 +2034,32 @@ async fn timestamps_are_advanced_never_erased() {
+         })
+         .await
+         .expect("advance last_connected_at");
++    // 更早的连接时间同样不得让已存值倒退。
+     store
+         .put_node(NodeWrite {
+-            record: node_record_with_connected(NodeKind::Owner, fingerprint, None),
++            record: node_record_with_connected(NodeKind::Owner, fingerprint.clone(), Some(at(3))),
+             public_key: peer_public_key(),
+             context: context(5, Vec::new()),
+         })
+         .await
++        .expect("write an earlier connection time");
++    assert_eq!(
++        store
++            .node(&node_id(), NodeKind::Owner)
++            .await
++            .expect("node")
++            .expect("node row")
++            .last_connected_at(),
++        Some(&at(4)),
++        "更早的 last_connected_at 不得覆盖已存值"
++    );
++    store
++        .put_node(NodeWrite {
++            record: node_record_with_connected(NodeKind::Owner, fingerprint, None),
++            public_key: peer_public_key(),
++            context: context(6, Vec::new()),
++        })
++        .await
+         .expect("write without a new timestamp");
+     assert_eq!(
+         store
+@@ -2312,6 +2462,85 @@ async fn full_import_removal_and_connection_drop_both_keep_audit() {
+     pool.close().await;
+ }
+ 
++/// 规格：撤销是终态（admin-state-persistence「撤销与删除后的写入不得复活资源」）。
++///
++/// `put_export` 不是 `export.update`：已撤销的 Export MUST NOT 被普通写入复活，撤销时间 MUST 只由
++/// `revoke_export` 写入且不被后续写入覆盖；携带 `revoked_at` 的记录 MUST 被直接拒绝。
++#[tokio::test]
++async fn export_revocation_is_terminal_for_plain_writes() {
++    let dir = temp_dir("admin-export-revocation-terminal");
++    let store = open(&dir).await;
++    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
++    store
++        .put_export(ExportWrite {
++            record: export_record(),
++            context: context(4, Vec::new()),
++        })
++        .await
++        .expect("put export");
++    store
++        .revoke_export(ExportRevocation {
++            export: remote_export(),
++            context: context(5, Vec::new()),
++        })
++        .await
++        .expect("revoke export");
++
++    let pool = raw_pool(&path).await;
++    let revoked = table_snapshot(&pool, "owned_export").await;
++    assert!(
++        revoked.iter().all(|row| row.contains(at(5).as_str())),
++        "撤销时间必须落库：{revoked:?}"
++    );
++
++    // 传入未撤销记录 → Conflict(AlreadyExists)，库内该行逐行不变（含首次撤销时间）。
++    assert_conflict(
++        store
++            .put_export(ExportWrite {
++                record: export_record(),
++                context: context(6, Vec::new()),
++            })
++            .await
++            .expect_err("a revoked export must not be resurrected by a plain write"),
++        ConflictKind::AlreadyExists,
++    );
++    assert_eq!(
++        table_snapshot(&pool, "owned_export").await,
++        revoked,
++        "被拒的写入不得清除撤销时间或改动其他列"
++    );
++    assert_eq!(
++        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_export").await,
++        1
++    );
++    pool.close().await;
++
++    // 携带 `revoked_at` 的记录 → InvalidRequest（撤销只走 `revoke_export`），且整事务零写入。
++    assert_invalid_request(
++        store
++            .put_export(ExportWrite {
++                record: export_record_with_revocation(EXPORT, Some(at(7))),
++                context: context(7, Vec::new()),
++            })
++            .await
++            .expect_err("put_export must not be used to revoke"),
++        "use export.revoke to revoke an export",
++    );
++    let pool = raw_pool(&path).await;
++    assert_eq!(
++        table_snapshot(&pool, "owned_export").await,
++        revoked,
++        "参数类拒绝必须零写入"
++    );
++    assert_eq!(
++        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_audit").await,
++        0,
++        "夹具未携带审计，拒绝路径不得写入审计"
++    );
++    pool.close().await;
++    store.close().await;
++}
++
+ // ---------------------------------------------------------------------------------------------
+ // 本地配置（§11.6 第 8/9 条，§11.8）
+ // ---------------------------------------------------------------------------------------------
+diff --git a/crates/storage-sqlite/tests/imported.rs b/crates/storage-sqlite/tests/imported.rs
+index 298f3c0..7b21ecb 100644
+--- a/crates/storage-sqlite/tests/imported.rs
++++ b/crates/storage-sqlite/tests/imported.rs
+@@ -1,14 +1,17 @@
+ //! §9.5、§9.6、§9.14：imported 家族的去重/失效/无正文（黄金列清单）与审计保留。
++//!
++//! 另含 admin-state-persistence「撤销与删除后的写入不得复活资源」的回归：
++//! `late_callbacks_after_a_full_removal_cannot_rebuild_the_index`（§11.2 第 5 条、§5.2 约束）。
+ 
+ mod support;
+ 
+ use acp_core::model::{
+-    Digest, EventId, EventType, ExportId, ImportId, LocalCursor, NodeId, OriginCursor, OriginEpoch,
+-    Sequence, SessionId, Timestamp,
++    Digest, EntityRef, EventId, EventType, ExportId, GrantSet, ImportId, ImportRecord, LocalCursor,
++    NodeId, OriginCursor, OriginEpoch, PortError, Sequence, SessionId, Timestamp,
+ };
+ use acp_core::ports::{
+-    DeliveryReceipt, ImportedSessionQuery, RemoteDeliveryStore, ReplayLimit, RetentionPolicy,
+-    StateChange,
++    DeliveryReceipt, ExportStore, ImportRemoval, ImportWrite, ImportedSessionQuery,
++    RemoteDeliveryStore, ReplayLimit, RetentionPolicy, StateChange, WriteContext,
+ };
+ use storage_sqlite::migrate::StorageConfig;
+ use storage_sqlite::session_store::SqliteStore;
+@@ -63,8 +66,38 @@ async fn store(dir: &std::path::Path) -> SqliteStore {
+         .expect("open store")
+ }
+ 
+-/// 建一次 imported 会话行（imports 与 sessions 在同一事务语义下由 `upsert_session` 落库）。
++/// 本文件的 Import 标识（`seed_import`、`drop_import`、`remove_import` 共用）。
++fn import() -> ImportId {
++    ImportId::new("import-one").expect("import id")
++}
++
++/// 先登记 Import 与其 Export 关联行：§11.2 第 5 条/§7.4 起，imported 写路径必须先在
++/// `imported_import_export` 里有归属，否则被拒——因此夹具必须先建档，这也让每条用例的起点与生产
++/// 路径一致（先 `import.add`，后有会话同步）。
++async fn seed_import(store: &SqliteStore) {
++    store
++        .add_import(ImportWrite {
++            record: ImportRecord::try_new(
++                import(),
++                "wss://owner.example/acpr",
++                node(),
++                vec![export()],
++                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
++            )
++            .expect("import record"),
++            exports: vec![export()],
++            context: WriteContext {
++                at: at(0),
++                audit: Vec::new(),
++            },
++        })
++        .await
++        .expect("add import");
++}
++
++/// 建一次 imported 会话行（归属行由 `seed_import` 先落库）。
+ async fn seed_session(store: &SqliteStore) {
++    seed_import(store).await;
+     store
+         .upsert_session(
+             acp_core::ports::ImportedSessionRecord {
+@@ -276,11 +309,13 @@ async fn duplicate_receipts_do_not_advance_the_local_sequence() {
+     store.close().await;
+ }
+ 
+-/// 会话行不存在时 `commit_receipt` 返回 `NotFound`，且不推进 `next_local_sequence`。
++/// 会话行不存在时 `commit_receipt` 返回 `NotFound(Session)`，且不推进 `next_local_sequence`。
++/// 夹具必须先 `seed_import`：归属行在、会话行不在（否则会先被归属前置拦下，就测不到这个分支）。
+ #[tokio::test]
+ async fn receipt_without_imported_session_is_rejected() {
+     let dir = temp_dir("imported-orphan");
+     let store = store(&dir).await;
++    seed_import(&store).await;
+     let error = store
+         .commit_receipt(receipt(
+             "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+@@ -290,7 +325,10 @@ async fn receipt_without_imported_session_is_rejected() {
+         ))
+         .await
+         .expect_err("orphan receipt");
+-    assert!(matches!(error, acp_core::model::PortError::NotFound(_)));
++    assert!(
++        matches!(&error, PortError::NotFound(EntityRef::Session(id)) if id == &session()),
++        "缺会话行必须报 NotFound(Session)，实际：{error:?}"
++    );
+ 
+     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
+     assert_eq!(
+@@ -317,29 +355,10 @@ async fn drop_import_keeps_audit_rows() {
+         .await
+         .expect("receipt");
+ 
+-    // import 配置行 + Export 关联行 + 命令引用 + 审计行（审计由 `AuditStore` 写入，本切片直接落行以验证保留义务）。
++    // 命令引用与审计行（审计由 `AuditStore` 写入，本切片直接落行以验证保留义务；Import 管理行与
++    // Export 关联行已由 `seed_session` 经 `add_import` 落库）。
+     let path = dir.join("acp-remote.sqlite3");
+     let pool = raw_write_pool(&path).await;
+-    sqlx::query(
+-        "INSERT INTO imported_import (import_id, owner_node_id, cache_policy, created_at, grants_json) \
+-         VALUES (?1, ?2, 'no-content-cache', ?3, '[]')",
+-    )
+-    .bind("import-one")
+-    .bind(node().as_str())
+-    .bind(at(0).as_str())
+-    .execute(&pool)
+-    .await
+-    .expect("import row");
+-    sqlx::query(
+-        "INSERT INTO imported_import_export (import_id, owner_node_id, export_id, added_at) \
+-         VALUES ('import-one', ?1, ?2, ?3)",
+-    )
+-    .bind(node().as_str())
+-    .bind(export().as_str())
+-    .bind(at(0).as_str())
+-    .execute(&pool)
+-    .await
+-    .expect("import association row");
+     sqlx::query(
+         "INSERT INTO imported_command_ref (owner_node_id, export_id, session_id, request_id, \
+          command, status, accepted_at) VALUES (?1, ?2, ?3, ?4, 'session.prompt', 'accepted', ?5)",
+@@ -366,10 +385,7 @@ async fn drop_import_keeps_audit_rows() {
+     .expect("audit row");
+     pool.close().await;
+ 
+-    let report = store
+-        .drop_import(&ImportId::new("import-one").expect("import id"))
+-        .await
+-        .expect("drop import");
++    let report = store.drop_import(&import()).await.expect("drop import");
+     assert_eq!(report.delivery_index_removed, 1);
+     assert_eq!(report.command_refs_removed, 1);
+ 
+@@ -398,6 +414,118 @@ async fn drop_import_keeps_audit_rows() {
+     store.close().await;
+ }
+ 
++/// 规格：完整移除后的迟到回调不能重建索引（admin-state-persistence）。
++///
++/// `remove_import` 在同一事务删掉管理行、关联行与 `imported_session`（级联交付索引/命令引用）；之后
++/// 到达的 `upsert_session` 与 `commit_receipt` 都必须在写任何行之前失败关闭——否则会话行会被重建，
++/// 收据的复合外键随之重新成立，已删除的交付索引就被“部分复活”了。错误定位取 `Export`：关联行
++/// 已删，调用方回推不出 `importId`。
++#[tokio::test]
++async fn late_callbacks_after_a_full_removal_cannot_rebuild_the_index() {
++    let dir = temp_dir("imported-removed-callback");
++    let store = store(&dir).await;
++    seed_session(&store).await;
++    store
++        .commit_receipt(receipt(
++            "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
++            1,
++            "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
++            1,
++        ))
++        .await
++        .expect("receipt");
++
++    store
++        .remove_import(ImportRemoval {
++            import: import(),
++            context: WriteContext {
++                at: at(2),
++                audit: Vec::new(),
++            },
++        })
++        .await
++        .expect("remove import");
++
++    let path = dir.join("acp-remote.sqlite3");
++    let pool = raw_pool(&path).await;
++    let mut before = Vec::new();
++    for table in [
++        "imported_import_export",
++        "imported_session",
++        "imported_delivery_index",
++    ] {
++        before.push(scalar_i64(&pool, &format!("SELECT COUNT(*) FROM {table}")).await);
++    }
++    assert_eq!(
++        before,
++        vec![0, 0, 0],
++        "完整移除后关联行、会话行与交付索引都为空"
++    );
++
++    // 迟到的会话同步被拒：不得重建会话行。
++    let late = store
++        .upsert_session(
++            acp_core::ports::ImportedSessionRecord {
++                session: remote(),
++                origin_epoch: Some(
++                    OriginEpoch::new("cccccccc-cccc-4ccc-8ccc-cccccccccccc").expect("epoch"),
++                ),
++                title: Some("late".to_owned()),
++                agent: None,
++                state: None,
++                version: None,
++                created_at: Some(at(0)),
++                last_origin_sequence: None,
++                acked: None,
++                attachment: None,
++                updated_at: at(3),
++            },
++            at(3),
++        )
++        .await
++        .expect_err("late upsert must be rejected");
++    assert!(
++        matches!(&late, PortError::NotFound(EntityRef::Export(id)) if id == &export()),
++        "迟到的会话同步必须报 NotFound(Export)，实际：{late:?}"
++    );
++
++    // 迟到的交付收据被拒：同一不变量的第二个入口单独断言。
++    let late_receipt = store
++        .commit_receipt(receipt(
++            "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
++            2,
++            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
++            3,
++        ))
++        .await
++        .expect_err("late receipt must be rejected");
++    assert!(
++        matches!(&late_receipt, PortError::NotFound(EntityRef::Export(id)) if id == &export()),
++        "迟到的交付收据必须报 NotFound(Export)，实际：{late_receipt:?}"
++    );
++
++    for table in [
++        "imported_import",
++        "imported_import_export",
++        "imported_session",
++        "imported_delivery_index",
++        "imported_command_ref",
++    ] {
++        assert_eq!(
++            scalar_i64(&pool, &format!("SELECT COUNT(*) FROM {table}")).await,
++            0,
++            "{table} 必须在迟到回调被拒后仍为空"
++        );
++    }
++    assert_eq!(
++        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
++        0,
++        "迟到回调不得写入任何行（含审计）"
++    );
++    pool.close().await;
++    store.close().await;
++}
++
+ /// §9.5：owner 的 origin epoch 变化后该会话的交付索引被清空，ACK 一并失效。
+ #[tokio::test]
+ async fn epoch_change_invalidates_the_delivery_index() {
+diff --git a/docs/CORE_PORTS_AND_STORAGE.md b/docs/CORE_PORTS_AND_STORAGE.md
+index 774f12b..360e3dd 100644
+--- a/docs/CORE_PORTS_AND_STORAGE.md
++++ b/docs/CORE_PORTS_AND_STORAGE.md
+@@ -13,6 +13,7 @@
+ > 版本：0.7（2026-09-23：§11.5–§11.9 落地——§5.3 换为写集端口（`WriteContext`/`PendingAudit` + 全部写集 DTO + `TrustStore`/`ExportStore` 新签名 + `LocalConfigStore`/`CredentialResolver`），§3.5/§3.6/§3.7 补 `PeerPublicKey`、`ResolvedWorkspace` 与本地配置值对象，§7 升级为 v2 表结构（9 张管理表 + 2 个索引 + `imported_import` 拆分），§7.2 新增 v1 → v2 迁移规则与 v2 夹具，§9 增补判据 23–29，§11 改为索引）
+ > 版本：0.9（2026-09-23：§2 的错误枚举补齐 `ConflictKind::{AlreadyExists, IdentityMismatch, DuplicateOwnership}` 与 `UnavailableKind::KeystoreUnavailable` 及到 `local.conflict`/`local.unavailable` 的映射义务；§11.6 写集语义第 4 条按目标族区分落定审计（设备 `pairing.approved` / 节点 `node.paired`）；签名、判据与 DDL 未变）
+ > 版本：0.8（2026-09-23：管理 store 的落盘实现落地（`crates/storage-sqlite/src/admin/`）后，把 §5.3/§9/§11 与关联文档里「仍待实现」的陈述改为与实现一致；合同形状、判据与 DDL 未变）
++> 版本：0.10（2026-09-23：补齐管理存储的**终态与单调性守卫**——§5.2 补 imported 写路径的归属前置（`upsert_session`/`commit_receipt` 先验 `(ownerNodeId, exportId)` 归属，否则 `NotFound(Export)` 且零写入）、§5.3 补 `put_export` 撤销终态 / 身份材料读取核对同行指纹 / 活动时间只前进（显式 `CASE`）、§7.4 补迟到回调拒绝与「重导入后无法区分新旧连接」的已知边界、§9 新增判据 30。**§5/§7 的代码块、端口签名与 DDL 未变**，漂移门禁继续逐条成立；wire 协议、封闭词表与本地管理方法集未变）
+ 
+ ## 1. 范围与非目标
+ 
+@@ -325,6 +326,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
+ 约束：
+ 
+ - `commit` / `commit_receipt` 是各自家族的**唯一**写入口；禁止可分别调用的 repository/journal/deduper（`MODULE_ARCHITECTURE.md` §4.1）。
++- `[决定]` imported 写路径的**归属前置**（§11.2 第 5 条）：`upsert_session` 与 `commit_receipt` 都必须在同一写事务内先确认 `(owner_node_id, export_id)` 仍归属某个 Import（`imported_import_export` 有行），否则返回 `NotFound(EntityRef::Export(exportId))` 且零写入——不重建 `imported_session`、不写 `imported_delivery_index`/`imported_command_ref`，也不推进 `local_sequence`。关联行缺失即「该 Import 已被完整移除或从未添加」；同一 `(ownerNodeId, exportId)` 被重新导入后无法区分新旧连接（需导入实例标识或连接代际，见 §7.4）。
+ - `[决定]` `origin_epoch` 由 **core** 在创建会话时用 `IdGenerator` 生成并传入（响应审查：存储层返回它会让无创建需求的提交也必须回读）；存储层只校验“该会话已有 epoch 时必须一致”。
+ - `[决定]` 幂等命中返回 `CommitOutcome::replayed`，不追加事件、不改状态。
+ - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
+@@ -678,6 +680,9 @@ pub trait AttachmentStore: Send + Sync {
+ 
+ - `[决定]` 凭据（Provider、Node key、pairing secret）**不经**任何上述端口：只存平台 keystore，表里最多存引用与指纹（`SECURITY_DESIGN.md` §13.1）。
+ - `[决定]` `AuditRecord.action` 是 §3.5 的闭合枚举；审计行不得包含内容（`SECURITY_DESIGN.md` §14.2），并由 §9.13 的机器检查兜底。
++- `[决定]` `put_export` 的**撤销终态**（§11.1 的「撤销记录保留」、§11.2 第 4 条）：传入记录 `revoked_at` 非空 → `InvalidRequest`（撤销只能经 `revoke_export`，与 `put_device` 拒绝 `revoked` 记录同款）；库内该 `export_id` 已撤销而传入记录未撤销 → `Conflict(AlreadyExists)`（失败关闭，不得静默保留后返回成功）；`DO UPDATE` 的该列取「已存非空值优先」，重复写入不清除首次撤销时间。`put_export` **不是** `export.update`（`LOCAL_ADMIN_PROTOCOL.md` §5.5 只登记 `export.create`/`export.list`/`export.revoke`）。
++- `[决定]` **身份材料读取必须核对同行指纹**（§3.5、§9 判据 25/30）：`owned_peer_key`、`owned_pairing_peer` 与 `owned_device`（含设备记录的**单读与列表读**）的读取路径都用 `PeerPublicKey::fingerprint()` 比对同一行的 `fingerprint` 列，不一致 → `PortError::Corrupt` 且**不返回该材料**。DDL 只有列级长度/字符集 CHECK，跨列一致性只能在读取期判定（SQL 算不了 SHA-256）。
++- `[决定]` `owned_device.last_seen_at` 与 `owned_node.last_connected_at` **只前进**（§9 判据 30）：旧值为空时写入新值、新值为空时保留旧值、两者非空取较大者，比较按固定宽度 UTC 毫秒文本的字典序（§3.2）；MUST 用显式 `CASE`，不得用标量 `max(a, b)`（任一参数为 NULL 时返回 NULL，会把「旧值为空时的首次写入」丢成 NULL）。
+ 
+ ### 5.4 发布与基础设施
+ 
+@@ -1177,6 +1182,7 @@ CREATE TABLE imported_import_export (
+ - `[决定]` `imported_*` 禁止出现正文语义列；机器检查用**黄金列清单**逐表比对（§9.6），而不是子串黑名单（子串黑名单会被 `snapshot_json` 之类的新列绕过）。
+ - `[决定]` `imported_delivery_index`/`imported_command_ref` 对 `imported_session` 建复合外键：会话行不存在时 `commit_receipt` 返回 `PortError::NotFound`，不得静默推进 `next_local_sequence`。
+ - `[决定]` `attachment_id`/`attachment_generation` 断开即清空；`owner_server_epoch` 变化时清空该 import 的交付索引（对方重建了事件库，cursor 失效）。
++- `[决定]` `upsert_session`/`commit_receipt` 都必须先确认 `(owner_node_id, export_id)` 仍在 `imported_import_export` 里（§11.2 第 5 条、§5.2 约束），否则 `NotFound(Export(exportId))` 且零写入：`remove_import` 之后失去 Import 的在途回调必须被拒绝，不能重建已删除的会话行与交付索引。**已知边界**：同一 `(owner_node_id, export_id)` 被重新导入后关联行会再次存在，仅凭这对 ID 无法区分新旧连接/新旧导入；区分需要**导入实例标识**或**连接代际**，需与 `node-link-client` 的 attachment generation 语义一并设计，v1 未实现。
+ - `[决定]` `drop_import` 只删交付索引与命令引用，**不删** `imported_audit`（审计保留义务）。
+ - `[决定]` v2 起 Import 与 Export 的归属由 `imported_import_export` 表达（一个 Import 可关联多个 Export）：`owner_node_id` 指向 owned 家族的节点记录，因此**只存值、不用跨族外键**（`MODULE_ARCHITECTURE.md` §4.7），存在性由用例层在写集内校验；同一 `(owner_node_id, export_id)` 只归一个 Import 由该表的 `UNIQUE` 保证，`imported_import` 自身不再假定恰好一个 Export。
+ 
+@@ -1253,6 +1259,7 @@ CREATE TABLE imported_import_export (
+ 27. **本地配置与凭据边界**（§11.6、§5.3）：至多一个默认 profile 且切换默认是一次原子写集；Provider 引用只存字段名/keystore 引用/版本，换绑递增版本；种子 profile 与「已初始化」标记同事务提交、空种子也标记、重复打开不重导；`CredentialResolver::resolve_env` 只返回 `env_allowlist` ∩ `env` 绑定，引用失效 → `Unavailable(KeystoreUnavailable)` 失败关闭，日志只记变量名与数量。
+ 28. **v1 → v2 升级的保留与幂等**（§7.2）：升级保留 `server_epoch`、事件 `global_sequence`/`session_sequence` 与 origin cursor、`requestId` 与幂等行、命令终态与全部既有审计；`audit_id` 与其 `AUTOINCREMENT` 序列不回退，审计表的新取值在升级库上可写；`imported_import` 不再有 `export_id`，Export 关联迁入 `imported_import_export` 且 `added_at` 取原 `created_at`，无可信来源的 grants 保持 `'[]'`（该 Import 不可用）；升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变。
+ 29. **管理状态纳入容量与失败关闭**（§7.5、§8）：容量度量包含管理表的 TEXT 列；超限时拒绝新写入而不删除活动信任、撤销记录或未到期审计；损坏库或宽松权限下**管理写路径**与 owned 写路径一样全部被拒，只读查询仍可用。
++30. **管理记录的终态与单调性**（§11.1、§11.2 第 4/5 条、§5.2/§5.3 约束、§7.4）：① `put_export` 对已撤销的 Export 不得清除 `revoked_at`——传入未撤销记录 → `Conflict(AlreadyExists)` 且该行逐列不变，传入 `revoked_at` 非空记录 → `InvalidRequest` 且零写入（含零审计）；② 完整移除 Import 后，携带该 `(ownerNodeId, exportId)` 的 `upsert_session` 与 `commit_receipt` 都返回 `NotFound(Export)`，`imported_session`/`imported_delivery_index`/`imported_command_ref` 保持为空且不推进 `local_sequence`；③ `owned_peer_key`/`owned_pairing_peer`/`owned_device` 中任一行 `fingerprint` 与同行 `public_key` 的派生值不一致时，对应读取路径（设备记录含单读与列表读）返回 `PortError::Corrupt` 且不返回材料；④ `last_seen_at`/`last_connected_at` 在「旧值为空」「新值更早」「新值为空」三种边界下都不丢值、不倒退，且不使调用失败或丢弃同写集的其他字段。
+ 
+ ## 10. 未决项
+ 
+@@ -1325,7 +1332,7 @@ CREATE TABLE imported_import_export (
+ 2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对——`put_device`/`put_node` 一律拒绝 `revoked` 行，而 `settle_pairing` 的批准路径（对端已出示配对 secret 的 HMAC/proof 且本机用户确认）是**唯一**的恢复入口，复活保留撤销审计（§11.3 的 tombstone 语义）。落定只接受 `pending_confirmation`（已落定/已终态 → `Conflict(Consumed)`，不重复改写首次批准时间）。节点配对的批准创建 `owned_node` 的 **`access`** 行（`owner_endpoint` 为空）：只有 `node.pair.begin --mode owner` 会创建节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」，因此对端角色可推导、不需要在写集里携带；`owner` 角色行由该节点自己被信任时经 `put_node` 写入。
+ 3. **撤销**：单事务记录撤销时间、撤销状态与对应审计；提交后阻断新命令/订阅并关闭适用连接，再回答管理调用。提交失败返回失败，不把内存撤销当作持久成功；连接清理失败也不回滚已提交的撤销，阻断后续访问并报告失败。重启先加载撤销状态，再允许连接。
+ 4. **Export**：创建前验证 Agent、workspace、模板与默认引用；创建/撤销各为一个事务。撤销先提交再发送 `export.revoked`；发送失败不撤销数据库决定。授权从最新记录计算，不能仅信任旧连接缓存。
+-5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。
++5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。端口级落点：`upsert_session`/`commit_receipt` 在同一写事务内的归属前置（关联行缺失 → `NotFound(Export(exportId))`、零写入，§5.2/§7.4）。**已知边界**：同一 `(ownerNodeId, exportId)` 被重新导入后该前置会再次成立，区分旧连接/旧导入的迟到回调需要导入实例标识或连接代际，`node-link-client` 落地前不实现。
+ 6. **审计**：涉及已登记安全动作的管理 mutation，其成功审计与状态同事务提交；审计写入失败则整事务失败。被拒绝的请求只尝试追加失败/拒绝审计，不能因审计不可写而继续执行。适配器记录固定错误类型，不记录凭据。独立 `AuditStore::append` 用于没有关联状态变更的审计，不用于伪造跨端口原子性。
+ 7. **凭据引用**：SQLite 与 keystore 不做分布式事务。先写新的、带版本的 keystore 条目，再提交 SQLite 引用；失败时旧引用继续有效，未引用条目作为孤儿回收。新引用提交后才能清理旧条目；重启发现引用缺失则明确不可用，不能静默生成新身份。
+ 

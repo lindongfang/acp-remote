@@ -2433,12 +2433,46 @@ impl ReadView for SqlReadView {
 // RemoteDeliveryStore：imported 家族的唯一写入口，且**无正文**（§7.4）
 // ---------------------------------------------------------------------------------------------
 
+/// §11.2 第 5 条 + §7.4：imported 写路径的归属前置——`(owner_node_id, export_id)` MUST 仍归属某个 Import。
+///
+/// `remove_import` 在同一事务删掉管理行、`imported_import_export` 关联行与对应的 `imported_session`
+/// （级联交付索引与命令引用），因此**关联行缺失就是「该 Import 已被完整移除（或从未添加）」**；此时
+/// 在途回调必须被拒绝，不能把已经删掉的会话行与交付索引重新写回来。
+///
+/// 错误定位取 `EntityRef::Export`：调用方只持有 `RemoteSessionRef`（`ownerNodeId`/`exportId`/
+/// `sessionId`），关联行已删时回推不出 `importId`（也不能拿审计行当权威），而 `Export` 变体恰好表达
+/// 「这个对端 Export 在本机不再归属任何 Import」。
+///
+/// 已知边界：同一 `(owner_node_id, export_id)` 被重新导入后，关联行会再次存在，本判定无法区分旧连接
+/// 与旧导入的迟到回调（需要导入实例标识或连接代际，v1 未实现）。
+async fn ensure_import_owns<'e, E>(executor: E, session: &RemoteSessionRef) -> Result<(), PortError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let owned: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM imported_import_export WHERE owner_node_id = ?1 AND export_id = ?2",
+    )
+    .bind(session.owner_node_id.as_str())
+    .bind(session.export_id.as_str())
+    .fetch_optional(executor)
+    .await
+    .db()?;
+    if owned.is_none() {
+        return Err(PortError::NotFound(EntityRef::Export(
+            session.export_id.clone(),
+        )));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl RemoteDeliveryStore for SqliteStore {
     async fn commit_receipt(&self, receipt: DeliveryReceipt) -> Result<ReceiptOutcome, PortError> {
         self.writable()?;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
         let session = &receipt.session;
+        // §11.2 第 5 条：失去 Import 的在途回调必须被拒绝，不能重建（或继续写入）已删除的交付索引。
+        ensure_import_owns(&mut *tx, session).await?;
         let next: Option<i64> = sqlx::query_scalar(
             "SELECT next_local_sequence FROM imported_session \
              WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
@@ -2634,6 +2668,9 @@ impl RemoteDeliveryStore for SqliteStore {
         self.writable()?;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
         let session = &record.session;
+        // §11.2 第 5 条：Import 被完整移除后，迟到回调 MUST NOT 重建 `imported_session`（会话行一旦
+        // 重建，`commit_receipt` 的复合外键就重新成立，交付索引会被跟着写回）。
+        ensure_import_owns(&mut *tx, session).await?;
         let stored_epoch: Option<String> = sqlx::query_scalar(
             "SELECT last_origin_epoch FROM imported_session \
              WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
