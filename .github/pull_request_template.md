@@ -28,7 +28,7 @@ PR 模板。判据来源是 AGENTS.md 的完成定义（§11）与文档维护�
 新增或修改了下列内容时，逐项确认：
 
 - [ ] 新依赖：已在 `deny.toml` 的 `allow` 里确认许可证，且 `cargo-deny` / `npm audit` 判定通过
-- [ ] 新门禁 / 新 CI job：`AGENTS.md` §10 的门禁清单与 `README.md` 的说明已同步
+- [ ] 新门禁 / 新 CI job：`AGENTS.md` §10 的门禁同步规则与 `README.md` 的说明已同步
 - [ ] 新密钥、token 或密钥材料：没有进入提交内容（`secrets` job 会再扫一次全历史）
 
 ## 风险与回滚

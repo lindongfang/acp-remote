@@ -18,6 +18,8 @@
 - [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v1 表结构/保留/migration 的唯一权威来源。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
+另见 `README.md` 的「权威文档」表（同一批文档的一览）。
+
 同时检查现有代码、测试和工作区状态。不要假设文档中的规划已经实现，也不要覆盖用户尚未提交的修改。
 
 如果实现需要改变产品边界、协议语义、安全模型或模块依赖，先明确指出影响并请求确认。普通的模块内部实现细节可以自主决定。
@@ -27,15 +29,15 @@
 ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
 - 一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；同一节点可以同时承担 Owner 和 Access 角色。
-- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 只持久化来源引用、cursor、ACK、requestId、命令终态引用和 local sequence 映射，不持久化 prompt、回复、diff、终端或 ACP raw 正文。
+- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 不复制远程会话正文，可持久化的字段清单见 §6。
 - 手机、电脑、Zed、PWA 和 CLI 是客户端形态，不是固定权限角色；能力由 principal scope、Export Policy 和端到端 capability 决定。
-- Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`，以支持 Zed 的正常 `session/new`；当前 PWA MVP 可以不展示创建入口。
+- Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`（Zed `session/new` 的映射规则见 §5 Node Link）；当前 PWA MVP 可以不展示创建入口。
 - Zed 是可选客户端，项目不得与 Zed 强绑定。
 - 对直接管理的 Agent，Owner Node Daemon 是其唯一 ACP Client，负责 Codex、Oh My Pi 等 Agent 的生命周期；Access Node 通过 Node Link 访问，不直接接管远程 Agent stdio。
 - 第一阶段不提供应用级云服务器或持久云中继；Owner Node 离线时，远程控制不可用。
 - LAN、Tailscale 或其他网络路径都是可替换的部署方式，核心不能依赖 Tailscale SDK、CLI 或身份体系。
 - 核心、Daemon 和 CLI 使用 Rust；npm 只负责分发预编译二进制，最终用户不应被要求安装 Rust 工具链。
-- Node Link 是首个产品纵向切片；前端首个交付仍只实现由 Daemon 本地托管的 Web/PWA，Android/iOS 原生客户端属于后续阶段。
+- 交付顺序：Node Link 是首个产品纵向切片，前端首个交付紧随其后，只实现由 Daemon 本地托管的 Web/PWA，Android/iOS 原生客户端属于后续阶段（前端边界见 §5）。
 
 不要在没有明确需求的情况下引入账号中心、云数据库、遥测平台、第三方消息中继或厂商锁定的网络能力。
 
@@ -83,22 +85,22 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 计划中的主要边界为：
 
 ```text
-core
-acp-protocol
-sync-protocol
-node-link-protocol
-acpr-transcript
-acpr-wire
-agent-host
-node-link-client
-storage-sqlite
-identity-auth
-identity-keystore
-server
-app
+core                # 已落地
+acp-protocol        # 待落地
+sync-protocol       # 已落地
+node-link-protocol  # 已落地
+acpr-transcript     # 已落地（叶子）
+acpr-wire           # 已落地（叶子）
+agent-host          # 待落地
+node-link-client    # 待落地
+storage-sqlite      # 已落地
+identity-auth       # 待落地
+identity-keystore   # 待落地
+server              # 待落地
+app                 # 待落地
 ```
 
-物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
+上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
 
 依赖必须指向更稳定的内层：
 
@@ -142,7 +144,7 @@ core use_cases   -> core ports + core model
 - 所有输入都有长度、数量、频率和资源限制。
 - 慢客户端不能阻塞 Broker 或 Agent；断开后依靠 cursor 重放。
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
-- Sync wire 变更必须同步维护 `schemas/sync/v1/` 与 `fixtures/sync/v1/`；Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例。
+- Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §10。
 - 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant/pack 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
 - transcript domain 与字段 tag 表由 `compatibility/transcripts/v1/transcripts.json` 机器登记；`fixtures/*/v1/transcripts/` 的固定向量必须能由该表从 `input` 重新编码得到，否则视为实现或表格错误。
 
@@ -185,7 +187,7 @@ core use_cases   -> core ports + core model
 - 正常运行路径不得使用 `unwrap()`、`expect()` 或无说明的 panic。
 - 异步任务必须有所有者、取消路径和关闭顺序，不能遗留 detached task。
 - 外部进程必须处理启动失败、超时、取消、异常退出、stderr 和完整进程树清理。
-- Windows 必须验证 Job Object 或等价的子进程树清理机制（2026-09-18 已用一次性探针验证：普通 spawn 会留孤儿，Job Object + `KILL_ON_JOB_CLOSE` 在 `TerminateJobObject` 与关句柄两种情形下都立即清空进程树；机制细节与实测数据见 `INITIAL_DESIGN.md` §16 第 4 条）。
+- Windows 必须验证 Job Object 或等价的子进程树清理机制（探针结论、`ExtendedLimitInformation` 布局与 `KILL_ON_JOB_CLOSE` 实测数据见 `INITIAL_DESIGN.md` §16 第 4 条）。
 - 日志使用结构化字段并进行敏感信息脱敏；不要记录完整 prompt、密钥或认证 payload。
 - 新增依赖前检查其必要性、维护状态、许可证、平台支持和安全风险。
 - 保持公开 API 最小；第一阶段默认 workspace-private。
@@ -196,7 +198,7 @@ agentic 变更的通用工作流（proposal → specs/design → plan → tasks 
 角色职责、任务下放与最终验收判据由本项目安装的 OpenSpec agentic 扩展定义，本文件不重复：
 
 - 流程、模板、角色与检查协议：`openspec/schemas/agentic/`；
-- 最终验收入口：`.agents/skills/agentic-verify/SKILL.md`；
+- 最终验收入口：[`.agents/skills/agentic-verify/SKILL.md`](.agents/skills/agentic-verify/SKILL.md)；
 - 角色模型与 E2E 开关：`openspec/config.yaml` 的 `x-agentic`；
 - 项目画像（仓库结构、命令索引、约束与运行环境）：`openspec/config.yaml` 的 `context`。
 
@@ -220,11 +222,11 @@ bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上�
 
 提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板（[`.pi/prompts/commit.md`](.pi/prompts/commit.md)，随仓库提交）生成并落地提交信息：它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
 
-Rust workspace 建立后，本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
+本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
 
 ```text
 npm ci          # 首次或依赖变动后
-npm run verify  # = npm run check（合同门禁，§10）+ npm run check:rust（下面三条）
+npm run verify  # = npm run check（合同门禁，§10、§12）+ npm run check:rust（下面三条）
 ```
 
 `npm run check:rust` 展开为下面三条；需要单独执行时用它们，但参数必须与脚本一致——工具链版本由
@@ -250,7 +252,7 @@ cargo test --locked --workspace --all-features
 
 ## 9. 测试要求
 
-根据改动选择对应测试：
+根据改动选择对应测试（`acp-protocol`、`agent-host`、`node-link-client`、`identity-auth`、`server::*` 尚未落地，其条目在对应 crate 创建时生效）：
 
 - `core`：状态转换、值对象、owned/imported 分流、每会话串行、事务提交和不变量。
 - `acp-protocol`：官方 fixture、未知字段往返、扩展 payload 和版本兼容。
@@ -283,24 +285,21 @@ cargo test --locked --workspace --all-features
 - core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。
 - CLI 与 Daemon 之间的管理方法、envelope 或 framing 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`。
-- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**，本段不重复计数）—— `scripts/` 下的脚本：fixture 用 ajv 校验（sync / node-link / acp 三个 asset root）、错误码 registry 与四处定义一致、命令目录与 core 的 `required_grant` 镜像一致（`commands.json` ↔ 两个协议 schema ↔ SYNC §11.5 与 SECURITY §10.2 表格 ↔ `core::broker::required_grant`）、feature ID 词表三方一致（registry / 协议文档表格 / fixture）、`rawJson` 与 transcript 密码学固定向量重算、ACP 矩阵及上游快照 sha256 比对、**文档引用门禁**（`scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 能在目标文档的标题或显式锚点里找到、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档），**crate 依赖方向门禁**（以 `MODULE_ARCHITECTURE.md` §5 的依赖矩阵为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖），以及 **合同漂移门禁**（`scripts/check-contract-drift.mjs`：§7 的 v1 表结构逐条等于 `crates/storage-sqlite/src/migrate.rs` 的 DDL 常量，§5 的 trait 方法集与端口 DTO 成员逐条等于 `crates/core/src/ports.rs`；两者归一化后比对，`IF NOT EXISTS`、注释与空白不算差异），外加 `check:agentic`（由 `scripts/agentic-gate.mjs` 驱动：先 `openspec-agentic doctor` 断言所用流程确为扩展的 agentic：项目本地引擎版本等于扩展 pin 的版本、`openspec/config.yaml` 的 `schema` 为 `agentic`、`x-agentic.configVersion` 为 1、受管文件与清单无漂移、AGENTS.md 有验收路由；再以 `openspec validate --all --strict` 校验变更与规范，无活动变更时打印 `No items found to validate.` 并以 0 退出。引擎的遥测与更新检查默认开启，而 CI 变量只在 CI 里生效，因此该脚本显式设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，让门禁在开发机与 CI 上都保持离线语义）。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的门禁小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
+- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**）—— 各道门禁的完整清单与判据见 `README.md` 的「合同检查」，本文件不重复枚举，只固定三条独有硬约束：**文档引用门禁**（`scripts/check-doc-links.mjs`）的引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档；**合同漂移门禁**（`scripts/check-contract-drift.mjs`）逐条比对 `docs/CORE_PORTS_AND_STORAGE.md` §7（`storage-sqlite` v1 表结构）与 `crates/storage-sqlite/src/migrate.rs`，以及 `docs/CORE_PORTS_AND_STORAGE.md` §5（`core::ports` 出站端口）与 `crates/core/src/ports.rs`（归一化后相等；`IF NOT EXISTS`、注释与空白不算差异）；**crate 依赖方向门禁**以 `MODULE_ARCHITECTURE.md` §5（依赖矩阵）为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖。`check:agentic`（`scripts/agentic-gate.mjs`）的判据与离线语义见 §12。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的「合同检查」小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
 
-CI 已接入五个 job（`.github/workflows/ci.yml`，push、PR 与每日定时都跑）：`checks`（`npm run check` + `npm run check:rust`，与本节 §8 的本地入口同源）、`commits`（校验本次推送/合并请求引入的提交范围是否符合 §8 的提交信息规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `npm audit`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。后三个需要网络或额外二进制，**没有本地等价物属于 `npm run verify`**，未在本地执行不等于通过；工具版本、许可证与向外发送的数据见 `docs/adr/0008-ci-supply-chain-tooling.md`。依赖更新由 `.github/dependabot.yml` 提出（含冷却期；分组升级同样要过全部 job）。
+CI 已接入五个 job（`.github/workflows/ci.yml`，push、PR 与每日定时都跑）：`checks`、`commits`、`deps`、`advisories`、`secrets`，各 job 的判定内容见 `README.md` 的「合同检查」；后三个需要网络或额外二进制，**没有本地等价物属于 `npm run verify`**，未在本地执行不等于通过（工具版本、许可证与向外发送的数据见 `docs/adr/0008-ci-supply-chain-tooling.md`）。依赖更新由 `.github/dependabot.yml` 提出（含冷却期；分组升级同样要过全部 job）。
 
-Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。提交时 `.husky/pre-commit` 会跑格式、合同门禁与静态检查，它可以被 `--no-verify` 跳过，且检查工作区而非暂存快照，因此只是把失败暴露得更早。
+Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
 
 main 的分支保护是 GitHub 仓库设置（不在版本控制内），它决定以上判定能否真的拦住合并；**必需检查的 context 取 check-runs 的上报名，不是 workflow 里的 job id**（填错会存下一个永远不会上报的名字，规则变成永久等待且自己因为 admin bypass 感觉不到），当前状态、取法与严格档判据见 `README.md` 的「分支保护」小节。Linux runner 会额外执行 `#[cfg(unix)]` 的权限路径（`0700` 目录、`0600` 文件、模式位判定），这些在 Windows 开发机上不会跑到。
-- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合），由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、合同 §9 判据 13 与本条。
-- `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
-- agentic 变更流程用的是 `@dongfanglin/openspec-agentic`（devDependencies 里从公开 npm registry 精确固定的 0.2.1）提供的 `agentic` schema，不是上游默认的 `spec-driven`；它同时 pin 了工作流引擎 `@fission-ai/openspec@1.13.0`，日常命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），别用任何全局安装的 `openspec`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
+
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。
 
 ## 11. 完成定义
 
-agentic 变更的完成定义以 `openspec/schemas/agentic/` 与 `.agents/skills/agentic-verify/SKILL.md` 为准
-（任务复选框、`workflow check`、`e2e check`、最终验收与归档判据都在那里），本文件不重复。
+agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`、最终验收与归档判据）以 `openspec/schemas/agentic/` 与 [`.agents/skills/agentic-verify/SKILL.md`](.agents/skills/agentic-verify/SKILL.md) 为准，本文件不重复；验收入口、`all_done` 语义与归档前检查的要求见文末「Agentic workflow」（该段是 agentic 扩展的受管路由，标题不可改动）。
 
 对本仓库的任何改动，以下底线仍然适用：
 
@@ -311,8 +310,17 @@ agentic 变更的完成定义以 `openspec/schemas/agentic/` 与 `.agents/skills
 - 没有泄漏敏感信息，也没有引入未经授权的云依赖。
 - 影响设计的变更已经同步到权威文档（§10）。
 
+## 12. 工具链约定
+
+本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §10。
+
+- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合），由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
+- `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
+- 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
 
 # Agentic workflow
+
+本节是 agentic 扩展写入的验收路由，标题与位置由 `check:agentic` 断言，不要改动或删除。
 
 本项目的 agentic 变更使用 [.agents/skills/agentic-verify/SKILL.md](.agents/skills/agentic-verify/SKILL.md)
 作为最终验收入口。执行 `/opsx:verify`、最终验收或归档前检查时，先读取该 skill；

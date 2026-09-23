@@ -1504,7 +1504,7 @@ fixtures/sync/v1/
 └─ manifest.json   schema、view $defs、fixture 与预期结果映射
 ```
 
-合同检查由 `npm run check` 统一执行（完整清单、判据与新增的 crate 依赖方向门禁见 `AGENTS.md` §10）；与 Sync 资产直接相关的脚本是：
+合同检查由 `npm run check` 统一执行（完整清单见 `README.md` 的「合同检查」，判据与 crate 依赖方向门禁见 `AGENTS.md` §10/§12）；与 Sync 资产直接相关的脚本是：
 
 ```text
 node scripts/check-schema-fixtures.mjs
