@@ -87,16 +87,26 @@ gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用
 分支保护在 public 仓库上随 GitHub Free 就有，私有仓库需要 GitHub Pro/Team/Enterprise。**本仓库是 public**
 （2026-09-23 核实：`gh api repos/lindongfang/acp-remote --jq .visibility` 返回 `public`），所以这一项没有 plan 前提。
 
-**已核实的现状（2026-09-23）**：已建 ruleset **`main-protection`**（id `23858733`）：`target: branch`、
-`enforcement: active`、条件 `ref_name: ["~DEFAULT_BRANCH"]`；规则为 `required_status_checks` +
-`non_fast_forward` + `deletion`；必需检查就是上面那五个上报名（已逐个与 check-runs 对上）；
-`strict_required_status_checks_policy` 与 `do_not_enforce_on_create` 均为 `false`；
-bypass list 保留 `RepositoryRole admin / always`——也就是**零摩擦档**（你自己直推仍可用，规则拦的是
-协作者、GitHub App 与 `GITHUB_TOKEN` 驱动的自动化）。`branches/main/protection` 仍返回 404：
+**已核实的现状（2026-09-23）**：ruleset **`main-protection`**（id `23858733`）——`target: branch`、
+`enforcement: active`、条件 `ref_name: ["~DEFAULT_BRANCH"]`；规则为 `deletion` + `non_fast_forward` +
+`required_status_checks`（`strict_required_status_checks_policy = true`、`do_not_enforce_on_create = false`，
+五个必需检查就是上面那五个上报名，已逐个与 check-runs 对上）+ `pull_request`
+（`required_approving_review_count = 0`；单人仓库必须是 0，否则自己的 PR 无人可批准）；
+bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 仍返回 404：
 本仓库用 ruleset 而不是经典分支保护，两者不需要同时开。
 
-仍待办：两个 secret scanning 子开关（见下）、以及等五个 job 连续几轮都绿之后再决定是否上严格档
-（加「要求 PR」并把 admin 从 bypass list 移除）。
+这一档（**PR 必需 + 保留 admin 紧急出口**）的实际含义：默认路径是 PR，因此三个只能在 CI 运行的判定
+（依赖许可证与来源、依赖安全公告、密钥扫描）是先于落地的门禁；bypass 让直推仍然可行，但那是紧急出口不是
+日常路径（直推会跳过这三个判定）。变更落地流程（分支 → PR → `gh pr checks --watch` → squash 合并）写在
+`AGENTS.md` §8。
+
+没有再上「移除 bypass」的理由：对单人仓库它不是对你的安全边界（你本来就能改 ruleset），只是减速带；
+而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。
+多人协作时再考虑。
+
+仍待办：本地密钥扫描的自研格式**规则**（机制已装好：`.husky/pre-commit` 会调 gitleaks 扫暂存内容，
+规则与 CI 共用 `.gitleaks.toml`；规则等密钥格式定稿再加），详情见下方与
+`docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
 
 已核实为**已开启的**（2026-09-23）：`secret_scanning`、`secret_scanning_push_protection`、
 Dependabot 告警与安全更新。push protection 在推送前拦截已知 provider 模式的凭据——这个时序 CI 给不了；
@@ -124,10 +134,17 @@ Dependabot 告警与安全更新。push protection 在推送前拦截已知 prov
 
 由此得到一条必须记住的推论：**自研格式的凭据在推送前没有任何服务端防线**。push protection 只认 provider
 模式，而本项目的 P-256 私钥与 base64url 配对密钥是自研格式；又因为仓库是 public，一旦进了历史就是公开的。
-所以这一类凭据的实际防线只有两条：CI 的 `gitleaks`（推送后扫，早于人工发现）与**可选的本地 pre-commit
-检查**（推送前，但只拦得住“忘了看”的情况，可被 `--no-verify` 绕过）。是否值得为此写一个自研模式检查，
-等 `identity-auth`/`identity-keystore` 开始产生真实密钥、且格式定稿之前决定即可——格式定稿后才有准确的
-正则可写（见 `docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3）。
+
+机制已经装好，采用「**一份规则、两个执行器**」：
+
+- 规则写在 [`.gitleaks.toml`](.gitleaks.toml)，CI 的 `secrets` job 与本地钩子共用同一份（不维护两套）；
+- 本地执行器是 `.husky/pre-commit` 调 `gitleaks git --pre-commit --redact --staged`（来自上游
+  `.pre-commit-hooks.yaml` 的官方写法，不是自拟参数），扫的是**暂存内容**，命中内容由 `--redact` 不打印；
+- 本机未安装 `gitleaks` 时钩子**只提示并跳过**（不让提交依赖一个仓库不随附的二进制），CI 仍会判定。
+
+**规则本身等密钥格式定稿再加**：现在只有默认规则集，而自研格式的正则只有在格式定稿后才写得准
+（过早写会既误报又漏报）。触发条件是「`identity-auth`/`identity-keystore` 开始产生真实密钥」，
+且格式定义与规则必须在**同一改动**里落地（见 `docs/adr/0008-ci-supply-chain-tooling.md` 残余风险 3）。
 
 关于「Dependabot 安全更新」还有一个前置条件值得记下：它要求 **Dependabot 告警先开**，否则
 `PUT .../automated-security-fixes` 直接返回 422「Vulnerability alerts must be enabled」。顺序是：
@@ -151,14 +168,20 @@ gh api -X PUT repos/lindongfang/acp-remote/automated-security-fixes  # 安全更
 - **Require a pull request before merging**：把 main 变成只能经由 PR 落地。
 - **Block force pushes / Restrict deletions**：默认随规则生效，不因 actor 而异。
 
-对单人仓库的含义：只要保留 admin 绕过（默认），规则对**你自己**几乎只是提示，对未来的协作者、GitHub App 或 `GITHUB_TOKEN` 驱动的自动化才是硬门禁；而 `deps` / `advisories` / `secrets` 这三个只能在 CI 运行的判定，只有在「合并被门禁且直推被拦住」时才真正起作用。
+**上线时踩到的两个坑**（改这些设置时会再遇到，所以留在这里）：
 
-**建议的顺序**（这个顺序本身是判据，不只是便利）：
+1. 必需检查的候选列表只来自**最近跑过的检查**：新 job 从未执行过时 `Add checks` 的下拉是空的，无从选起；
+2. 必需检查的 context 必须是 **check-runs 上报的名字**
+   （`gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name'`），不是 workflow 里的
+   job id：填错会原样存下一个永远不会上报的名字，规则变成**永久等待**，而自己有 bypass 所以感觉不到。
 
-1. 先 push 一次并让 CI 跑完——**必需检查的候选列表来自「最近跑过的检查」**：新 job 从未执行过时，
-   `Add checks` 的下拉列表是完全空的（不是名字难找，而是根本无从选起）；
-2. 再按「必需检查 + 禁止强推/删除、保留 admin 绕过」启用：先让规则与检查名成立，零摩擦；
-3. 等 `deps` / `advisories` / `secrets` 至少各绿过一次后再决定是否上严格档（加「要求 PR」并取消 admin 绕过）。**在检查还没绿过之前就上严格档会把自己锁在门外**：必需检查在每个 PR 上都失败时，你无法合并任何东西，只能回设置里改规则或绕过。
+这也是当初先上零摩擦档、等五个 job 都绿过再收紧的原因：在检查没绿之前就上「要求 PR」，会把「合并」与
+「改配置」一起锁死。
+
+**当前档位**：默认路径是 PR（规则要求 PR + 五个必需检查 + `strict_required_status_checks_policy` 的 up-to-date），
+并保留 `Repository admin` 作为紧急出口。**只有多人协作时才需要考虑移除 bypass**：对单人仓库它不是对你的
+安全边界（你本来就能改 ruleset），只是减速带；而它的代价是真实的——某个 workflow 改动把必需检查弄红时，
+所有 PR 都进不来，你还得先去改设置。
 
 ## 许可
 

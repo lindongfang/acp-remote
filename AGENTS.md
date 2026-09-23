@@ -202,6 +202,22 @@ agentic 变更的通用工作流（proposal → specs/design → plan → tasks 
 
 非 agentic 改动沿用同一协作要求：一次改动尽量形成小而完整的纵向切片。
 
+变更落地走 PR——`main` 的 ruleset 要求 PR 与必需检查（理由、设置与现状见 `README.md` 的「分支保护」小节）：
+
+```text
+git switch -c <type>/<topic>
+…提交…                          # 标题必须是 Conventional Commits，见下文
+git push -u origin HEAD
+gh pr create --fill              # squash 合并用 PR 标题当提交信息，因此标题同样要合规
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+```
+
+bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上仍然可行，但那是紧急出口而不是日常路径**：
+绕过后 `deps` / `advisories` / `secrets` 三个只能在 CI 运行的判定就不再是先于落地的门禁，只会变成事后通知。
+规则集开了 `strict_required_status_checks_policy`，因此 PR 需要先合入最新 main 再跑一轮才能合并——
+“PR 绿了”与“合并后 main 仍绿”是同一件事。
+
 提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板（[`.pi/prompts/commit.md`](.pi/prompts/commit.md)，随仓库提交）生成并落地提交信息：它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
 
 Rust workspace 建立后，本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
