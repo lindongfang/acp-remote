@@ -366,4 +366,6 @@ evidence:
 
 **最终阶段检查**：`npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --planning-root D:/Project/acp-remote --stage final --json` → 退出码 `0`、`result: PASS`（错误列表为空）。
 
+**交付提交上的复跑（实测，2026-09-23）**：在 `main` 的干净 worktree（detached `f453ad10`）内以 `--planning-root D:/Project/acp-remote` 重跑 `workflow check --stage final`，结果为 `FAIL`、2 条错误——`当前代码 HEAD 与计划目标引用不一致`（该 worktree 的检出提交是 `f453ad10`，而 `refs/heads/main` 在记录提交后前移）与 `目标代码状态不能验收：执行后又有改动：openspec/changes/admin-state-persistence-v2/verification.md`（跨 worktree 传入 `--planning-root` 时，变更目录的前缀过滤不匹配，属测量方式差异、不是证据失效）；同一检出上 `openspec-agentic e2e check`（同样传 `--planning-root`）仍为 **PASS**。**没有任何证据类错误**（摘要、任务、覆盖、契约摘要全部一致）。
+
 **验收后的记录提交**：勾选 `8.1` 与本块的落库提交（`afedea3` 之后的一次 docs-only 提交，仅动 `verification.md`/`tasks.md`）会让 `HEAD` 前移；由于检查器对 `assessment.target_commit` 与 `refs/heads/main` 采用严格相等比较，任何在其后重跑 `workflow check --stage final` 的场合都需要把 `target_commit` 更新为当时的 `refs/heads/main`（`evaluateRecordFreshness` 允许变更目录内的未提交记录，因此这是记录侧的机械更新，不是重新验收）。
