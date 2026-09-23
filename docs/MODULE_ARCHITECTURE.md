@@ -595,7 +595,19 @@ CLI 与 Daemon 的管理通道已由 [ADR-0004](./adr/0004-local-admin-transport
 - 可交互 HTML：[acp-remote-modules.html](./diagrams/acp-remote-modules.html)
 - 图源 JSON：[acp-remote-modules.architecture.json](./diagrams/acp-remote-modules.architecture.json)
 
-图源 JSON 是权威输入，HTML 是生成物：模块集合、边界或连接发生变化时必须改图源并重新生成 HTML，不允许手改 HTML。生成使用 archify 工具（仓库不内置该 CLI，也不作为运行时依赖）：
+图源 JSON 是权威输入，HTML 是生成物：模块集合、边界或连接发生变化时必须改图源并重新生成 HTML，不允许手改 HTML。生成使用 archify 工具（仓库不内置该 CLI，也不作为运行时依赖，只由 Archify skill 提供）；在 Archify skill 目录下执行，`<repo>` 为仓库根：
+
+```bash
+node bin/archify.mjs validate architecture <repo>/docs/diagrams/acp-remote-modules.architecture.json --quality showcase --json
+node bin/archify.mjs deliver architecture <repo>/docs/diagrams/acp-remote-modules.architecture.json <repo>/docs/diagrams/acp-remote-modules.html --quality showcase --json
+node bin/archify.mjs visual-check <repo>/docs/diagrams/acp-remote-modules.html --json
+```
+
+- `validate` 只用于候选修复：showcase 档必须报满 9 项 artifact 检查，且 0 error、0 warning。
+- `deliver` 冻结图源字节、渲染并复核后原子替换 HTML，receipt 给出图源与产物两份 SHA-256 与字节数；非零退出不得当作成功。
+- `visual-check` 只能在上一步退出码为 0 之后运行（`deliver` 失败会保留上一份已信任 HTML，此时采集到的是陈旧产物）。它把浏览器证据写成 `acp-remote-modules.visual-check.json`，其中 `artifact.sha256` 是「HTML 是否仍与图源一致」的机器判据；`visualReview` 恒为 `pending`，不构成人工视觉审阅结论。同批生成的截图与 contact sheet 是本地证据，当前未纳入版本库。
+
+命令退出码、receipt 字段与三类证据（确定性检查 / 浏览器证据 / 人工视觉审阅）的边界见该 skill 的 `references/delivery-contract.md`。
 
 ## 14. 参考
 
