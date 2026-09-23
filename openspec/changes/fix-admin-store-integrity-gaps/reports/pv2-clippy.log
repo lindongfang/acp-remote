@@ -1,8 +1,0 @@
-# pv2-clippy @ 2026-09-23T23:19:25+08:00
-# cwd: /d/Project/acp-remote
-# cmd: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-
-    Checking storage-sqlite v0.0.0 (D:\Project\acp-remote\crates\storage-sqlite)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.99s
-
-# exit: 0

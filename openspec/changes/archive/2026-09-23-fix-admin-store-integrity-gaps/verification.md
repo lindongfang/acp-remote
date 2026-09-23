@@ -116,7 +116,7 @@ reviewer 待补且已由主 Agent 补齐的项（RV2 的「待补资料」）：
 
 ```agentic-assessment
 assessment_id: "FV1-2026-09-23"
-target_commit: "6e9a8b72a84969ee290239d6b0497e8e5b53e501"
+target_commit: "4f8d4adb01d13a6409016bc428efb96d7bbaed0f"
 contract_digest: "sha256:d1527ac079329c688dc4dd299e006f42864771762d72333215ff87b7411c5b3a"
 result: PASS
 evidence:
@@ -149,9 +149,9 @@ evidence:
 ```
 
 - Assessment ID / Time: **FV1-2026-09-23**，2026-09-23T23:28+08:00（执行验收）、2026-09-23T23:35+08:00（目标引用更正），执行者：主 Agent（按 `.agents/skills/agentic-verify/SKILL.md` 与 `openspec/schemas/agentic/procedures/acceptance.md`）
-- Target / Task: 本地 `refs/heads/main` = `6e9a8b72a84969ee290239d6b0497e8e5b53e501`（`git rev-parse`；`origin/main` 仍为 `1ef6640`，未推送）；验收任务 = `tasks.md` 的 7.1（唯一 `[final-verification]`）。
-  - **目标引用的一次内容变化与再核实（记录侧）**：`6e9a8b7` 是在已验收的产品版本 `78e1db1b432289a5d67f1d7498704884d9cc7e44` 之上的一次**记录侧提交**（只改 `openspec/changes/fix-admin-store-integrity-gaps/` 下的 `tasks.md`、`verification.md` 与新增 `reports/du1.md`）；`git diff --quiet 78e1db1 6e9a8b7 -- crates docs` 退出 0，即产品与文档树逐字节未变。因此本验收的结论、PV/LC/Review 证据对 `6e9a8b7` 完整继续成立（无受影响证据、无需要重跑项），`assessment.target_commit` 相应从 `78e1db1` 更新为 `6e9a8b7`（扩展对 `assessment.target_commit` 与 `refs/heads/main` 做严格相等比较，不更新会报「验收结论的 target_commit 已失效」）。
-  - 产品修订标识：`git diff 1ef6640 6e9a8b7 -- crates docs | sha256sum` = `945d1d509b428a8b84e8d2168d980600098a14d57086d8bd2e4c6957b21e6170`（= RV1/RV2 检视的 V2；`git diff 1ef6640 78e1db1 -- crates docs` 同值）
+- Target / Task: 本地 `refs/heads/main` = `4f8d4adb01d13a6409016bc428efb96d7bbaed0f`（`git rev-parse`；`origin/main` 仍为 `1ef6640`，未推送）；验收任务 = `tasks.md` 的 7.1（唯一 `[final-verification]`）。
+  - **目标引用的两次内容变化与再核实（均为记录/规范侧）**：① `6e9a8b7` 是在已验收的产品版本 `78e1db1b432289a5d67f1d7498704884d9cc7e44` 之上的记录侧提交（只改 `openspec/changes/fix-admin-store-integrity-gaps/` 下的 `tasks.md`、`verification.md` 与新增 `reports/du1.md`）；② `4f8d4ad` 是归档准备提交（主规范同步（`openspec/specs/admin-state-persistence` 5→7 条需求、`openspec/specs/peer-identity-material` 5→6 条需求）+ 落库上述执行记录）。两次都满足 `git diff --quiet <前一提交> <本提交> -- crates docs` 退出 0，即产品与文档树逐字节未变。因此本验收的结论、PV/LC/Review 证据对 `4f8d4ad` 完整继续成立（无受影响证据、无需要重跑项），`assessment.target_commit` 相应依次从 `78e1db1` 更新为 `6e9a8b7`、再更新为 `4f8d4ad`（扩展对 `assessment.target_commit` 与 `refs/heads/main` 做严格相等比较，不更新会报「验收结论的 target_commit 已失效」）。
+  - 产品修订标识：`git diff 1ef6640 4f8d4ad -- crates docs | sha256sum` = `945d1d509b428a8b84e8d2168d980600098a14d57086d8bd2e4c6957b21e6170`（= RV1/RV2 检视的 V2）
 - CLI State（原始，未改写）: `openspec status --change fix-admin-store-integrity-gaps --json` → `schemaName: agentic`、`isComplete: true`、`isPlanningComplete: true`；`openspec instructions apply … --json` → `state: ready`、`progress 27/28`（仅 7.1 进行中）；`e2e check` → PASS（not-applicable，批准字段非空，已按 `[e2e-owned]` 自动勾选 6.3）；`openspec validate --strict` → valid
 - Audit / Evidence:
   - **Contracts and Coverage**：PASS。proposal 的四条缺陷与用户四点复核意见逐条对映实现与用例（`NotFound(Export)` 定位、`put_export` 判定顺序、设备记录单读+列表读纳入、显式 `CASE`）；残留缺口（重导入后无法区分新旧连接）在 proposal `non_goals`、design Risks、`docs` §5.2/§7.4、§11.2 四处一致登记为 v1 未实现；Coverage Index R1–R12 均映射到 tasks 2.1–2.7 与 LC1/PV3，证据为 `reports/lc1-*.log`、`reports/pv3-cargo-test.log`；能力路径 `specs/admin-state-persistence/`、`specs/peer-identity-material/` 与 `openspec/specs/` 下同名能力一致（`openspec validate --strict` valid）
