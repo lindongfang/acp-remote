@@ -1,0 +1,6 @@
+# pv1-fmt @ 2026-09-23T23:14:05+08:00
+# cwd: /d/Project/acp-remote
+# cmd: cargo fmt --all -- --check
+
+
+# exit: 0
