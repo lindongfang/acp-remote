@@ -8,6 +8,7 @@
 - 实现分支：`feat/admin-state-persistence-v2`，起点 `28f8cb97c7297d83b9df7b15b16d0b059e2dec78`（= `refs/heads/docs/pre-implementation-contracts` HEAD，main 的后代）
 - **W0 基线提交**：本记录所在的那个提交（分支 `feat/admin-state-persistence-v2`；其父提交是 `28f8cb97c7297d83b9df7b15b16d0b059e2dec78`）。W0 的完成条件（合同漂移门禁绿 + 全部本地门禁绿）就在该状态上成立，W1 的三条轨道以此为固定基线。
 - 本轮证据对应的版本：**W0 基线提交**（不再是未提交工作区）；该提交包含 core 的 WP1–WP3、`storage-sqlite` 的 v2 DDL/migration、合同并入与全部 W0 证据日志。
+- **W1/W2 闭合轮交付提交**：`86ae8b4`（父提交 = 第四个提交 `5404610`）；四份独立 RV1 报告的固定被检视 revision 是 `5404610` + 工作区。
 - 版本确认负责人：主 Agent（`git rev-parse`/`git status`/`git worktree list`）
 
 ### W1·WP6（管理 store）
@@ -169,7 +170,7 @@ W1·WP6 在独立 review（`reports/rv1-wp6.md`）的修复与全部本地门禁
 
 WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）在复验（`reports/rv1-wp6b.md`，结论 `correct`）与全部门禁全绿的状态上落**第三个提交**（父提交 = 第二个提交 `1baea5b`），内容为 core 模型的 `host_binding`、storage 的绑定写/校验与节点批准、文档措辞与记录回填。
 
-复验提出的 `WP6B-3`（撤销身份的重新配对语义）按用户决定「按协议重新配对才能恢复」落**第四个提交**（即本记录所在的提交；父提交 = 第三个提交 `f43f7a7`）：`approve_*` 允许经配对批准复活已撤销身份、普通写入仍拒绝，文档与两条回归用例同步。**未合入 main**、未推送、未开 PR。
+复验提出的 `WP6B-3`（撤销身份的重新配对语义）按用户决定「按协议重新配对才能恢复」落**第四个提交**（即本记录所在的提交；父提交 = 第三个提交 `f43f7a7`）：`approve_*` 允许经配对批准复活已撤销身份、普通写入仍拒绝，文档与两条回归用例同步。W1/W2 闭合轮落**第五个提交** `86ae8b4`（`fix(core): 闭合 W1/W2 独立 review 的阻断项、依赖面与判据缺口`；父提交 = 第四个提交 `5404610`）：四份独立 review 的阻断项与全部 P2/P3 发现闭合（Check Plan Changes 30–34）、`core` 的 `p256` 收窄到 `arithmetic` 与 allow-list/合同措辞同步、`from-v1` 夹具的序列与确定性修正、升级中途失败回滚与 v2 枚举列判据、以及 WP6 落地后的关联文档同步（tasks.md 2.2 的补充）。**未合入 main**、未推送、未开 PR。
 
 ## Test Design and Authoring
 
