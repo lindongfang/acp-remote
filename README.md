@@ -96,17 +96,26 @@ gh api -X PATCH repos/lindongfang/acp-remote \
 拦截已知 provider 模式的凭据——这个时序 CI 给不了；但本项目自研格式的密钥要靠 CI 的 `gitleaks`
 或上面的通用模式检测。两层仓库级检测与运行时扫描的分工写在 `SECURITY_DESIGN.md` §18.1。
 
-三类设置的实际作用不同（GitHub 文档口径）：
+三类设置的实际作用不同，**以 Rulesets 界面的原文为准**：
 
-- **必需检查**（Require status checks）：拦住的是**合并**到受保护分支；直推同样会因 `required status check ... is expected` 被拒，但**仓库 admin 默认绕过全部规则**，所以想真正拦住直推，必须同时不勾「允许绕过」。
-- **要求 PR**（Require a pull request）：把 main 变成只能经由 PR 落地。
-- **禁止强推 / 禁止删除**：默认随规则生效，不因 actor 而异。
+- **Require status checks to pass**：作用在 **ref 更新**上，界面原文是「Choose which status checks must pass
+  before the ref is updated. When enabled, commits must first be pushed to another ref where the checks pass.」——
+  直推一个未经过检查的新提交会被拒；正确流程是先把提交推到另一个 ref（分支 / PR 分支），让检查在那里通过，
+  再让 main 更新到那些提交。它**不只拦「合并」**：即使不开「要求 PR」，直推也会被拦（前提是下面的绕过设置）。
+  两个子选项：`Require branches to be up to date before merging` 只对 PR 生效；
+  `Do not require status checks on creation` 豁免「创建 ref/分支」这类场景。
+- **Bypass**：仓库 admin 默认绕过该 ruleset 的全部规则（bypass list 里会有 `Repository admin`；
+  经典分支保护里的对应开关是「Do not allow bypassing the above settings」的反面）。所以对单人仓库来说，
+  只要保留 admin 绕过，这条规则拦的是别人与自动化，不拦你自己；取消绕过才会真正约束你的直推。
+- **Require a pull request before merging**：把 main 变成只能经由 PR 落地。
+- **Block force pushes / Restrict deletions**：默认随规则生效，不因 actor 而异。
 
 对单人仓库的含义：只要保留 admin 绕过（默认），规则对**你自己**几乎只是提示，对未来的协作者、GitHub App 或 `GITHUB_TOKEN` 驱动的自动化才是硬门禁；而 `deps` / `advisories` / `secrets` 这三个只能在 CI 运行的判定，只有在「合并被门禁且直推被拦住」时才真正起作用。
 
 **建议的顺序**（这个顺序本身是判据，不只是便利）：
 
-1. 先 push 一次并让 CI 跑完——GitHub 的必需检查选择器只列出**最近跑过**的检查，新 job 没跑过时在设置界面里根本找不到它们；
+1. 先 push 一次并让 CI 跑完——**必需检查的候选列表来自「最近跑过的检查」**：新 job 从未执行过时，
+   `Add checks` 的下拉列表是完全空的（不是名字难找，而是根本无从选起）；
 2. 再按「必需检查 + 禁止强推/删除、保留 admin 绕过」启用：先让规则与检查名成立，零摩擦；
 3. 等 `deps` / `advisories` / `secrets` 至少各绿过一次后再决定是否上严格档（加「要求 PR」并取消 admin 绕过）。**在检查还没绿过之前就上严格档会把自己锁在门外**：必需检查在每个 PR 上都失败时，你无法合并任何东西，只能回设置里改规则或绕过。
 
