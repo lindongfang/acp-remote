@@ -45,6 +45,10 @@
 | PV1+PV2+PV3+PV4 / W1–W2 review 闭合轮 | `5404610` + 工作区 | 四份 RV1 报告驱动的修复：core 落定审计动作按目标族、授权先于 workspace 解析、`p256` 最小 feature 与 allow-list、夹具序列与确定性、升级回滚用例、v2 枚举列覆盖；文档 §-引用与 2.2 关联同步 | 主 Agent | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`；`cargo test --locked --workspace --all-features`；`node scripts/check-contract-drift.mjs`；`node scripts/check-crate-boundaries.mjs`；`npm run check` | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 77 passed；`storage-sqlite` 各目标 ok（`migration` 7 passed / 1 ignored、`enum_coverage` 2、`admin_store` 28）；`check:drift` 仍 36 条 DDL / 15 trait / 87 方法（合同块未改） | `reports/verify-w1w2-closure.log` |
 | PV1+PV3 / DU1 候选与修复轮 | `601c8ae`→`62ef264` + 工作区 | DU1 三份独立报告（集成/PV1/review）驱动的修复：干净检出的文档门禁、`put_export`/`add_import` 前置校验、夹具 `wss://` 端点与升级读回断言、证据标签更正 | 主 Agent | `npm run verify` 口径四条 + `check:contract-drift` + `check:boundaries` + `check:docs` + `npm run check`；另在只含被跟踪文件的检出上跑 `check:docs` | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 78 passed；`storage-sqlite` 全目标 ok（`migration` 7/1 ignored、`enum_coverage` 2、`admin_store` 28）；干净检出（88 个 `.md`、无 `.omp/`）`check:docs` 退出 0 | `reports/verify-du1-fixes.log`、`reports/verify-du1-fixes-2.log`、`reports/clean-tree-check.log` |
 
+| 6.6 / W3 合入 | `62ef264`→`86f282b`（`refs/heads/main`） | 以条件更新（fast-forward）合入 DU1 交付单元；`62ef264..86f282b` 对代码零差异 | 主 Agent（按用户本轮授权） | `git update-ref refs/heads/main 86f282bf… 37a398e9…`（旧值 CAS） | local | **PASS**：退出 0；`refs/heads/main` = `86f282bf545ea7839e961e09481d0784005ce420`；合并前后 `main` 是分支尖端 | `verification.md` 的 Merge History、`reports/du1-integration.md` |
+| 6.7 [PV1] / main | `86f282b`（worktree `D:/Project/acp-remote-main`，`git status` 为空） | 在合入后的 `main` 固定版本上重跑 `npm run verify`，逐子项确认无失败/无零用例/无全跳过 | 主 Agent（独立检查执行者 `Du1Check` 的候选轮证据按同一提交复用） | `npm run verify`（`CARGO_TARGET_DIR` 复用主 worktree 的 `target/`） | rustc 1.98.1、Node 24.19.0、npm 12.0.2；不联网 | **PASS**：退出 0；`npm run check` 十道门禁 + `cargo fmt --check` + `clippy -D warnings` + `cargo test --workspace --all-features` 全部通过 | `reports/du1-main-verify.log` |
+| 6.8 [RV1] / 合入差异 | `601c8ae..86f282b` | 合入新增差异（唯一带代码提交 `62ef264`：`add_import` 前置三分支与用例判别力） | 独立 reviewer 子 Agent `RvDu1Merge`（不继承实现对话） | 只读复核 + 实跑 `cargo test -p core --all-features export_and_import_preconditions_are_enforced` | rustc 1.98.1 | **correct**：无 P1/P2；`DU1-R1-F1`（干净检出 `check:docs`）未回归（`62ef264` 88 个 `.md` 与 `86f282b` 89 个 `.md` 均退出 0）；2 条 P3 记录债（合入后未回填 `target_commit`、Final Assessment 散文行与机器块矛盾）本轮闭合 | `reports/rv1-du1-merge.md` |
+| 7.1/7.2 替代验证 | `86f282b`（同上 worktree） | not-applicable 的四项 `alternative_checks`：变更 crate 行为/保留性、项目级 `npm run verify`、契约漂移、依赖边界，外加 v1→v2 重放与资源清理 | 主 Agent | `cargo test --locked -p core -p storage-sqlite --all-features`；`npm run verify`；`node scripts/check-contract-drift.mjs`；`node scripts/check-crate-boundaries.mjs`；`cargo test -p storage-sqlite --test migration -- --nocapture`（v1→v2 重放） | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 78、`migration` 7/1 ignored、`admin_store` 28、`enum_coverage` 2；三份夹具 SHA-256 前后不变、`target/alt-replay-*` 已清理 | `reports/alt-final-verification.md`、`reports/alt-7.1-run.log` |
 
 ## Check Plan Changes
 
@@ -103,6 +107,8 @@
 37. **（DU1-R1 F4）`from-v1` 夹具端点与升级读回**：`imported_import.endpoint_ref` 由 `https://owner.invalid` 改为 `wss://owner.invalid`（`ImportRecord` 只接受 `wss://`；原值不可能来自真实 v1 库，且会让升级后的读路径直接报错），重生成夹具；升级用例补经 `ExportStore::imports()` 的读回断言（1 行、端点正确、`export_ids` 与 `imported_import_export` 一致），覆盖「Import 管理行 + 关联行在升级后经端口可用」。
 
 38. **（DU1-R2 F4）证据标签更正**：早前版本的 `reports/clean-tree-check.log` 声称来自干净 worktree，实际在**仓库工作目录**执行（报告 104 个 `.md`，而只含被跟踪文件的树是 88 个）。已重做：`git archive 62ef264 → tar -xf` 解出的树内运行该树自己的 `scripts/check-doc-links.mjs`，日志写明 revision、取树命令、`.omp/` 缺失与 `.md` 计数。
+
+39. **（W3 合入与验收机制，2026-09-23）**：用户在本轮给予**合并授权**，因此 W3 按以下方式落地——① 合入用**条件更新**而非 PR 流程：`git update-ref refs/heads/main 86f282bf… 37a398e9…`（旧值 CAS，快进；`AGENTS.md` §8 的 PR + 必需检查路径是常规入口，本轮由用户显式授权的合并是 `plan.md` 的「按当前授权」分支）；未推送：本轮授权范围是**本地** `refs/heads/main`，`origin` 未刷新、未 push。② 主分支复验与最终验收在**只含被跟踪文件、且不含宿主安装目录的干净 worktree**（`D:/Project/acp-remote-main`，`git worktree add … main`）内执行，并显式传 `--planning-root D:/Project/acp-remote`——这同时满足 `workflow-check.md` 的「路径相对 changeDir」与 `acceptance.md` 的 worktree 要求，避免把宿主安装的 `.omp/`、`.pi/settings.json` 等未跟踪文件误判成「变更目录之外有未提交改动」。③ 验收期间记录（`verification.md`/`tasks.md`）保持在变更目录内**未提交**：检查器的 `evaluateRecordFreshness` 只统计变更目录**之外**的未提交改动，因此「记录先于最后一次提交」是设计允许的状态；记录在本轮末尾以一次仅供文档的提交落库。
 
 ### W0 执行期的偏差与决定（2026-09-23，本轮落地）
 
@@ -173,11 +179,15 @@ review 报告全文：`reports/rv1-wp6.md`（含逐条核对结论、规格场�
 
 四份报告结论均为「无未解决阻断项」（`rv1-wp23` 的唯一阻断项已在同一轮闭合）。WP6 的两份报告（`rv1-wp6.md`/`rv1-wp6b.md`）及其 WP6-1..4、WP6B-1..3 的闭合见上表。
 
-**DU1（集成与候选轮，2026-09-23）**：`5.1`/`5.2`/`6.1`–`6.5` 完成——独立集成 Agent `Du1Integrator`（不继承实现对话）核对包含关系并构建候选（`reports/du1-integrator.md`）、独立检查执行者 `Du1Check` 在固定候选上跑 PV1 全绿（`reports/du1-pv1.log`）、独立 reviewer `Du1Review` 检视候选（`reports/rv1-du1.md`，1 条阻断 + 5 条非阻断），修复落 `601c8ae`；复核 `Du1Recheck` 结论 `correct` 并给出 5 条非阻断（`reports/rv1-du1-r2.md`），再修复落 `62ef264`。`refs/heads/main` 仍为 `37a398e`；**合入 `6.6` 与 `6.7`/`6.8`/`7.x`/`8.1` 因缺合并授权未执行**（候选与证据保留）。
+**DU1（集成与候选轮，2026-09-23）**：`5.1`/`5.2`/`6.1`–`6.5` 完成——独立集成 Agent `Du1Integrator`（不继承实现对话）核对包含关系并构建候选（`reports/du1-integrator.md`）、独立检查执行者 `Du1Check` 在固定候选上跑 PV1 全绿（`reports/du1-pv1.log`）、独立 reviewer `Du1Review` 检视候选（`reports/rv1-du1.md`，1 条阻断 + 5 条非阻断），修复落 `601c8ae`；复核 `Du1Recheck` 结论 `correct` 并给出 5 条非阻断（`reports/rv1-du1-r2.md`），再修复落 `62ef264`。`refs/heads/main` 当时为 `37a398e`；**合入 `6.6` 与 `6.7`/`6.8`/`7.x`/`8.1` 因缺合并授权未执行**（候选与证据保留）。**（该状态已被下方 W3 段取代。）**
+
+**DU1 合入与最终轮（W3，2026-09-23，用户授权合并）**：`RvDu1Merge`（独立 reviewer 子 Agent，不继承实现对话）复核 `601c8ae..86f282b`（唯一带代码提交 `62ef264`）——结论 `correct`，无 P1/P2，`DU1-R1` 的阻断项 `F1` 未回归（干净树上 `62ef264` 的 88 个 `.md` 与合入后 `86f282b` 的 89 个 `.md` 均使 `check:docs` 退出 0，与 `aed9fb5` 的 1 problem/EXIT=1 形成正反对照）；给出 2 条 P3 记录债（① 合入后未回填实际合入提交与 `target_commit`；② `Final Assessment` 的散文行与机器块互相矛盾），两条均在本轮闭合（本条与 `Merge History`、`agentic-assessment` 的更新）。报告：`reports/rv1-du1-merge.md`。
 
 ## Merge History
 
 W0 在门禁全绿的状态上落了**基线提交**（分支 `feat/admin-state-persistence-v2`；父提交 `28f8cb9`），供 W1 的轨道作为固定基线。
+
+**W3 合入（2026-09-23，用户授权）**：DU1 交付单元以条件更新（fast-forward）合入本地 `refs/heads/main`——`37a398e9dbafa368bdb15853e1c1d9b40f19b28d` → `86f282bf545ea7839e961e09481d0784005ce420`（命令 `git update-ref refs/heads/main 86f282bf… 37a398e9…`，旧值不符即失败）。合入的提交链：`86ae8b4`（W1/W2 review 阻断项闭合）→ `aed9fb5`（W1/W2 记录）→ `601c8ae`（DU1-R1 修复）→ `62ef264`（DU1-R2 修复；**唯一带代码的合入差异**）→ `0b5fa80`、`86f282b`（DU1 记录）。`62ef264..86f282b` 对代码零差异，因此候选轮证据按同一代码内容复用，`6.7` 在 `main` 上重跑了完整 `npm run verify`，`6.8` 对 `601c8ae..86f282b` 做了独立复核（结论 `correct`）。**未推送**：本轮授权针对**本地** `refs/heads/main`；`origin/main` 未刷新，推送与 PR 不在授权范围内。
 
 W1·WP6 在独立 review（`reports/rv1-wp6.md`）的修复与全部本地门禁全绿的状态上落**第二个提交**（父提交 = W0 基线 `013f2b9`），内容为三个管理 store、`tests/admin_store.rs` 与记录回填。
 
