@@ -51,7 +51,7 @@ npm run verify  # 合同门禁 + fmt / clippy / test，与 CI 的 checks job 同
 
 `npm run check` 串行执行十项检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁）；② 命令目录的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及 `core::broker::required_grant` 这份 Rust 镜像；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ 文档引用门禁（`check:docs` → `scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 命中目标文档的标题或显式锚点、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守，无法归因的只统计不判定）；⑧ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑨ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）；⑩ agentic 流程与规范（`check:agentic` → `scripts/agentic-gate.mjs`：`openspec-agentic doctor` 断言所用流程确为扩展的 agentic —— 引擎版本等于扩展 pin、`schema: agentic`、受管文件无漂移、AGENTS.md 有验收路由；随后 `openspec validate --all --strict` 校验变更与规范，无活动变更时以 0 退出。该脚本同时设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，关闭引擎默认开启的遥测与更新检查）。
 
-CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑五个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `npm audit`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 全历史密钥扫描）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
+CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑五个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `npm audit`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
 
 `deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
 
@@ -72,7 +72,29 @@ gh api user --jq .plan
 gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用或不可用
 ```
 
-分支保护在 public 仓库上随 GitHub Free 就有；私有仓库需要 GitHub Pro/Team/Enterprise。若不可用，可选：升级 plan、把仓库改为 public（发布前通常不合适），或接受现状并在 `AGENTS.md`/`README.md` 里明确写「CI 判定为建议性」。
+分支保护在 public 仓库上随 GitHub Free 就有，私有仓库需要 GitHub Pro/Team/Enterprise。**本仓库是 public**
+（2026-09-23 核实：`gh api repos/lindongfang/acp-remote --jq .visibility` 返回 `public`），所以这一项没有 plan 前提。
+
+**已核实的现状（2026-09-23）**：`main` **尚未启用**分支保护——`branches/main/protection` 返回 404、
+`rulesets` 是空数组，因此当下 CI 的判定是建议性的；同时内核里的新提交尚未推送，四个新 job 还从未执行过。
+待办就是上面第 1–3 步，外加三个与密钥/依赖响应配套的仓库开关（都是仓库设置，不在版本控制内；public 仓库免费）：
+
+```text
+# Dependabot 安全更新：dependabot.yml 只管「版本更新」，安全更新是独立开关（当前 disabled）
+gh api -X PUT repos/lindongfang/acp-remote/automated-security-fixes
+
+# 通用（非 provider）模式密钥检测：本项目自研格式的私钥与配对密钥不在 provider 模式里（当前 disabled）
+gh api -X PATCH repos/lindongfang/acp-remote \
+  -f 'security_and_analysis[secret_scanning_non_provider_patterns][status]=enabled'
+
+# 可选：校验命中的凭据是否仍然有效，用于压低假阳性
+gh api -X PATCH repos/lindongfang/acp-remote \
+  -f 'security_and_analysis[secret_scanning_validity_checks][status]=enabled'
+```
+
+已核实为**已开启**的：`secret_scanning`、`secret_scanning_push_protection`。push protection 在推送前
+拦截已知 provider 模式的凭据——这个时序 CI 给不了；但本项目自研格式的密钥要靠 CI 的 `gitleaks`
+或上面的通用模式检测。两层仓库级检测与运行时扫描的分工写在 `SECURITY_DESIGN.md` §18.1。
 
 三类设置的实际作用不同（GitHub 文档口径）：
 
@@ -87,8 +109,6 @@ gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用
 1. 先 push 一次并让 CI 跑完——GitHub 的必需检查选择器只列出**最近跑过**的检查，新 job 没跑过时在设置界面里根本找不到它们；
 2. 再按「必需检查 + 禁止强推/删除、保留 admin 绕过」启用：先让规则与检查名成立，零摩擦；
 3. 等 `deps` / `advisories` / `secrets` 至少各绿过一次后再决定是否上严格档（加「要求 PR」并取消 admin 绕过）。**在检查还没绿过之前就上严格档会把自己锁在门外**：必需检查在每个 PR 上都失败时，你无法合并任何东西，只能回设置里改规则或绕过。
-
-**本仓库的状态待核实**：写这一节时 `gh auth status` 显示未登录，无法查询，因此在那之前 CI 的判定是建议性的；确认并设置完成后，把这一句改成实际口径。
 
 ## 许可
 

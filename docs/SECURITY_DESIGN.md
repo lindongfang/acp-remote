@@ -511,8 +511,12 @@ storage.integrity_failed
 - snapshot barrier、ACK 越界、sequence 回退和慢客户端。
 - XSS fixture：Markdown HTML、恶意链接、SVG、ANSI、diff、路径和 `rawJson`。
 - 路径穿越、symlink/junction、workspace 越界和 shell argument 注入。
-- 日志/错误/snapshot/fixture 中的 secret 扫描（仓库内容与历史提交已由 CI 的 `secrets` job 覆盖，见
-  [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)；运行时日志、错误与 snapshot 的扫描仍待实现）。
+- 日志/错误/snapshot/fixture 中的 secret 扫描：仓库侧目前是两层——GitHub 原生 secret scanning 与
+  push protection（推送前拦截已知 provider 模式，已启用）＋ CI 的 `secrets` job（push/PR 扫本次范围、
+  每日定时任务扫全历史，覆盖 provider 模式之外的凭据，脱敏输出；见
+  [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)）。两者都不能替代运行时日志、错误与 snapshot 的扫描，
+  后者仍待实现；非 provider 模式（本项目自研格式的私钥与配对密钥）的仓库级检测尚未开启
+  （`secret_scanning_non_provider_patterns` 当前 disabled，待办见 `README.md` 的「分支保护」小节）。
 - npm 平台选择、checksum、版本错配和禁止运行时下载。
 
 ### 18.2 平台验收

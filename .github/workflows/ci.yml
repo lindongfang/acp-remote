@@ -24,6 +24,9 @@ on:
     # 依赖安全公告由上游时间驱动：advisory 发布与我们的提交无关，只在 push/PR 上跑会让
     # 「已经合入的依赖出了安全问题」在没人提交时永远不被告知。定时任务同时兼作上游漂移探测器
     # （工具链、action、fixture 校验脚本的行为变化会在这里暴露），因此跑完整套检查。
+    # 对 secrets job 还有一层：gitleaks-action 只对 push / pull_request 追加 `--log-opts`，
+    # 其它事件走的是不带范围的 `gitleaks detect`，也就是**全历史**扫描——这是发现「历史里
+    # 已有凭据」的唯一入口（推送范围扫描看不到很久以前的提交）。
     - cron: "17 3 * * *"
 
 # 同一分支的新提交取消上一次未完成的运行。
@@ -124,7 +127,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # 全历史扫描：只在历史里的凭据才是真正的泄漏（删掉文件不等于删掉提交）。
+          # 需要完整历史：gitleaks-action 在 push / pull_request 上用 `--log-opts` 扫「本次范围」
+          # （`before..after` / PR 范围），而解析这些范围要求两端提交都在本地存在。
+          # 真正扫全历史的是每日 `schedule` 事件，见文件头 `on.schedule` 的注释。
           fetch-depth: 0
 
       - name: gitleaks

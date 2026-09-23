@@ -54,6 +54,17 @@ action」。这条约束在实践中有两个问题：
      并在 workflow 里注明「转为组织账号时必须补」。许可形态是这次接受的已知成本，不是意外发现。
    - `gitleaks` CLI 版本由 workflow 的 `GITLEAKS_VERSION`（8.30.1）显式固定：不固定时实际判定版本隐藏在 action 的
      dist 里，仓库中看不到，升级也就无法在 diff 里被审阅。
+   - **覆盖范围（读 v3.0.0 的 `src/index.js` 与 `src/gitleaks.js` 得出，不是推测）**：action 只在
+     `push` / `pull_request` 事件上追加 `--log-opts`，因此那两种事件只扫**本次范围**；`schedule` /
+     `workflow_dispatch` 走的是不带范围的 `gitleaks detect`，也就是**全历史**扫描。这使每日定时任务成为
+     「发现历史里已有凭据」的唯一入口，也让 `fetch-depth: 0` 有了明确用途（解析推送范围需要两端提交在本地）。
+     命令行固定带 `--redact`，命中内容在日志、job summary 与 SARIF artifact 里被脱敏——对**公开仓库**
+     （本仓库的可见性，见 `README.md`）这是必要的。
+   - **仓库级原生检测是配套手段，不是替代**：本仓库已启用 GitHub 的 `secret_scanning` 与
+     `secret_scanning_push_protection`。push protection 在**推送前**拦截已知 provider 模式的凭据，
+     提供 CI 给不了的时序；但本项目将要产生的凭据是自研格式（P-256 私钥、base64url 定长密钥材料），
+     provider 模式认不出来，而 `secret_scanning_non_provider_patterns` 当前为 disabled。
+     两者的覆盖范围与待办写在 `SECURITY_DESIGN.md` §18.1 与 `README.md`。
 4. **依赖判定分两个 job，两者都阻塞。**
    `deps` = `cargo-deny check bans licenses sources` + `npm audit --audit-level=high`：由锁文件决定，判定稳定。
    `advisories` = `cargo-deny check advisories`：由上游发布时间驱动。
@@ -69,7 +80,8 @@ action」。这条约束在实践中有两个问题：
    固定到具体版本而不是 `stable` 的理由：clippy 的 lint 集合与 rustfmt 的输出随版本变化，
    `AGENTS.md` §8 用 `-D warnings` 把 clippy 当门禁，版本不固定就会产生「本机绿、CI 红」这类只能靠人记住的假失败。
 7. **密钥扫描的允许清单政策**（`.gitleaks.toml` 内的正文是权威）：只允许公开的固定测试向量或已记录的假阳性，
-   每条必须写理由与核对人；真实凭据的正确处置是轮换 + 清理历史 + 记录事件（§17），不是加允许清单。
+   每条必须写理由与核对人；真实凭据的正确处置是轮换 + 清理历史 + 记录事件（`SECURITY_DESIGN.md` §17），
+   不是加允许清单。
    当前没有任何允许清单条目。
 8. **文档引用进入 `npm run check`**（`check:docs`）：文档是本仓库的权威（`AGENTS.md` §1），相对链接、锚点与
    「指名了文档的 `§X.Y` 引用」失效必须被机器判据抓住。归属规则刻意保守（只认同一子句内紧邻指名的文档），
@@ -86,9 +98,12 @@ action」。这条约束在实践中有两个问题：
      工具版本（0.20.2）在本 ADR 与 `deny.toml` 注释中记录，升级时人工比对。
   2. `gitleaks-action` 的许可证校验会把许可证密钥、仓库名与 owner 发送到 keygen.sh，且其许可为专有 EULA。
      这是主动接受的条件。
-  3. **CI 的密钥扫描无法阻止已经直推 main 的凭据落地**，它只能事后发现（删掉文件不等于删掉提交）。
-     真正的前置防线是 main 的分支保护（要求 PR + 必需检查）；本地钩子不引入 gitleaks 二进制
-     （本机未安装且非 hermetic），因此这条防线依赖分支保护配置本身。
+  3. **CI 的密钥扫描无法阻止凭据落地**：push / PR 上它只检查本次范围，且必须在提交已经进入远端之后才运行；
+     每日定时任务的全历史扫描发现的也只能是「已经存在」的凭据。删掉文件不等于删掉提交，处置只能是
+     轮换 + 清理历史（`SECURITY_DESIGN.md` §17）。推送前的时序由 GitHub 的 push protection 提供（已启用），
+     但它只认已知 provider 模式，本项目的自研格式密钥不在其中。能拦住「红状态进入 main」的是 main 的分支保护：
+     写这段时它**尚未启用**（`gh api repos/lindongfang/acp-remote/branches/main/protection` 返回 404，
+     `rulesets` 为空），设置步骤见 `README.md` 的「分支保护」小节。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
   5. **本机（Windows）无法执行这些判定的等价物**：crates.io index 传输在本机网络下不稳定，
      `cargo install --locked cargo-deny@0.20.2` 未能完成，因此 `deny.toml` 的字段形状是对齐 cargo-deny 0.20.2
