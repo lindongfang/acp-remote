@@ -708,7 +708,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 5. 手机后台 WebSocket 被系统挂起后的恢复体验。
 6. WebCrypto P-256 密钥持久化及其与 Rust 的签名格式互操作性。
    - 2026-09-18 **Rust 侧已验证**。用 `p256 0.13.2`（`ecdsa 0.16.9`、`signature 2.2.0`）实现 transcript 编码、P1363 验签、HMAC-SHA256 与 SAS 派生，对 `fixtures/{sync,node-link}/v1/` 的固定向量逐项复算：12/12 重编码逐字节一致、6 个 P1363 签名验证通过、6 个 HMAC 重算一致、2 个 SAS 一致、20/20 畸形输入（transcript 结构错误与非法公钥）以声明的错误被拒。
-   - 选型：`p256` + `sha2` + `hmac` + `base64`（无填充 base64url）。四者都是纯 Rust、无原生依赖、无 `cfg` 平台分支，与"`identity-auth` 保持纯状态机"的拆分一致。
+   - 选型：`p256` + `sha2` + `hmac` + `base64`（无填充 base64url）。四者都是纯 Rust、无原生依赖、无 `cfg` 平台分支，与"`identity-auth` 保持纯状态机"的拆分一致。**四个原语的当前版本口径与变更规则见 `MODULE_ARCHITECTURE.md` §3.1**（本节只留这次实测记录与实现约束，不重复维护版本号）：2026-09-23 起 `sha2`/`base64` 已由 0.10/0.22 升到 0.11/0.23，算法语义不变，但那次一次性探针没有重跑，因此本节的实测向量仍是实现阶段必须固化成常驻测试的回归要求（见本条末句）。
    - 实测得到的实现约束（不写就会错）：`VerifyingKey::from_sec1_bytes` **接受 33 字节压缩点**，所以必须先断言 65 字节再解析，否则违反"SEC1 uncompressed"合同；`Signature::from_slice` 只接受 64 字节 P1363，70 字节 DER 被拒（不得在 wire 上使用 `from_der`）；合法 high-S 与 low-S 都必须被接受（实测确认）；`r`/`s` 为 0 必须被拒；带填充或非 base64url 字母表必须被拒。
    - 仍未验证的部分：PWA 侧不可导出 `CryptoKey` 的 IndexedDB 持久化，属浏览器行为，阶段二开工前用一个静态页验证即可。
 7. 客户端与 Node endpoint 变化时的安全发现方案。

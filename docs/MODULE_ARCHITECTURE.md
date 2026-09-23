@@ -128,7 +128,10 @@ crates/
 
 - `edition = "2024"`（与 `rust-version = "1.85"` 一致，edition 2024 的最低工具链即 1.85），`resolver = "3"`。
 - `[workspace.package]` 统一 `version`、`edition`、`rust-version`、`license`、`repository`；第一阶段全部 crate `publish = false`（`§12` 的"是否公开部分 crate"仍未定）。
-- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256`（ECDSA P-256）+ `sha2` + `hmac` + `base64`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。
+- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256 0.13`（ECDSA P-256）+ `sha2 0.11` + `hmac 0.12` + `base64 0.23`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。
+- `[决定]` 上述四个密码学原语的**版本口径只维护在上一行**：版本号以 `Cargo.toml` 的 `[workspace.dependencies]` 为准，本行所在的说明与它一致。变更版本必须在**同一改动**里更新这里并给出验证证据；变的是原语集合、算法或实现选择（而不是版本号）时按 `AGENTS.md` §10 走 ADR。
+  - 2026-09-23 基线：`sha2 0.10 → 0.11`、`base64 0.22 → 0.23`（Dependabot PR #1/#2）。证据：workspace 全部测试与 clippy 在该版本上通过（CI 五个 job 全绿、本地 `npm run check:rust` 通过）；`npm run check` 的 transcript 固定向量重算与许可证/来源判定不受影响（JS 侧与版本无关，许可证集合无新增项）。
+  - 诚实说明：`INITIAL_DESIGN.md` §16 第 6 条那次一次性 Rust 实测是在 `sha2 0.10`/`base64 0.22` 上做的；本次只验证了「算法语义不变且现有测试通过」，没有重跑那次探针。真正版本无关的回归判据仍是该条要求实现阶段做的事：把同一批固定向量固化成恒常运行的 Rust 测试。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
 - workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十二个；不得为凑齐列表创建只有占位实现的空 crate。
