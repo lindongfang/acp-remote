@@ -5,7 +5,7 @@
 
 - 变更：`storage-ddl-constraint-coverage`（schema：`agentic`，`skip_specs: true`）
 - 仓库：`D:\Project\acp-remote`
-- 目标：local `refs/heads/main`；基线（规格与候选起点）`d9cd3c4b8773bbad81901fed7c61769611156e77`；**当前 main 提交（本变更的合入结果）`38de9923b3d19cdc61e3290c11a24fd93ca2dbc0`**（tree `313d1b3850cfdadf8358cdf191e6108f45107299`，父 `d9cd3c4`）；`origin/main` 仍为 `d9cd3c4`，本地 ahead 1、未推送
+- 目标：local `refs/heads/main`；基线（规格与候选起点）`d9cd3c4b8773bbad81901fed7c61769611156e77`；**本变更的落库提交（合入结果）`29d8d04af9f96c74c4a96b0c2044f3cbe9c25a57`**（PR #10 的 squash 提交，父 `d9cd3c4`；其 `crates/` 内容与 `38de9923b3d19cdc61e3290c11a24fd93ca2dbc0` 逐字节相同，见 Merge History）；验收实际执行于当时的 main `38de992`（tree `313d1b3850cfdadf8358cdf191e6108f45107299`）
 - 版本确认负责人：主 Agent（environment/recon 机械核实）
 - 核实方式：`git rev-parse --show-toplevel` / `git rev-parse refs/heads/main` / `git rev-parse HEAD` / `git status --porcelain`，2026-09-23
 - 核实结果：仓库根 `D:/Project/acp-remote`；`refs/heads/main` 与 `HEAD` 都是 `d9cd3c4`；工作区仅有一个未跟踪目录 `openspec/changes/storage-ddl-constraint-coverage/`（本变更的规划产物），无其他未提交改动
@@ -68,6 +68,7 @@
 - 实际结果（已由主 Agent 独立复核）：`refs/heads/main` = **`38de9923b3d19cdc61e3290c11a24fd93ca2dbc0`**（amend 后；旧 `f291ce8` 已不在历史），父 = `d9cd3c4`，tree = `313d1b3850cfdadf8358cdf191e6108f45107299`（amend 前后不变），`git diff d9cd3c4..HEAD -- crates/` 的 sha256 仍为 `e356ac17…68d48`，`git diff --stat -- crates/*/src/` 为空，提交含 9 个文件（2 修改 + 7 新增）。
 - 主分支回归（任务 5.7）：在 `38de992` 上重跑 PV1–PV5 与 LC1，全退出码 0（日志 `reports/mu1b-*.log`）。integrator 披露为消除 cargo 指纹缓存的影响对源文件做过**仅 mtime 的 `touch`**（内容零改动）：主 Agent 已独立复核 `HEAD^{tree}`、`git diff`、两个文件 sha256 与补丁指纹均未变。
 - 合入后差异 review（任务 5.8）：相对候选**无新增内容差异**（tree 与补丁指纹不变），按规则记主 Agent 依据并复用 RV1，不重复同范围审查。
+- 实际落库（2026-09-23，用户授权「创建 PR 提交」并随后确认合并）：上述本地 main 直接提交按仓库 `AGENTS.md` §8 的 PR 规则改由 PR #10（`main` ← `test/storage-ddl-constraint-coverage`）承载，squash 合并为 **`29d8d04af9f96c74c4a96b0c2044f3cbe9c25a57`**（`test(storage): 补齐四个 DDL 约束列的取值断言与撤销回归 (#10)`），远端与本地分支均已删除。合入后：main 的 CI（run `35875170318`）5 个 job 全 success；主分支 `npm run verify` 退出码 0（`reports/post-merge-main-verify.log`）；`git diff d9cd3c4..HEAD -- crates/` 的 sha256 仍为 `e356ac17…68d48`，因此候选、独立 review 与主分支回归证据对落库版本仍然成立；本地 `main` 已与 `origin/main` 同步、工作区干净。`38de992` 作为同内容的前置提交被 squash 取代，未留冗余历史。
 
 ## Test Design and Authoring
 
@@ -92,7 +93,7 @@
 
 ```agentic-assessment
 assessment_id: "FV1-2026-09-23"
-target_commit: "38de9923b3d19cdc61e3290c11a24fd93ca2dbc0"
+target_commit: "29d8d04af9f96c74c4a96b0c2044f3cbe9c25a57"
 contract_digest: "sha256:cde93a7eeae7facfdc7af24f81bafacf21bddaf44322ee09bd38bcf2f3756f82"
 result: PASS
 evidence:
@@ -123,3 +124,5 @@ evidence:
 - Result / Open Issues: **PASS**（对本轮目标提交与上列有效证据）。非阻断项：RV1-F1（SUGGESTION，`find_assignment` 的 `?` 提前终止）已按 roles/reviewer.md 定级接受不修改并记录理由；无未闭环的 CRITICAL/MAJOR；未推送、未创建 PR、未归档。
 - Required Follow-up: ① 归档需另行授权（`openspec archive` 不在本次授权内，且归档前需跑 `--stage archive`）；② 推送/PR 由用户决定——本地 main 已 ahead 1，若要推远端需按 `AGENTS.md` §8 的 PR 规则处理；③ `cargo-deny` 与 `gitleaks` 的首次真实执行发生在 CI（推送后），未推送故 5 个 job 均未触发。
 - Final Gate Evidence: `npx --quiet --no-install openspec-agentic workflow check --change storage-ddl-constraint-coverage --stage final --json` → `result: PASS`、`errors: []`、`targetCommit: 38de9923b3d19cdc61e3290c11a24fd93ca2dbc0`、`contractDigest: sha256:cde93a7e…6f82`、内层 `e2e.result: PASS`（`mode: not-applicable`、`approval: true`）。记录侧约定：按扩展设计，`assessment.target_commit` 与 `refs/heads/main` 严格相等，因此本记录保留为变更目录内的未提交内容（`evaluateRecordFreshness` 不把变更目录内的记录计入「未提交改动」）；任何后续使 `refs/heads/main` 前移的提交（如归档提交）都需对本字段做机械更新，而不是重新验收。
+- 记录侧机械更新（2026-09-23，**非重新验收**）：`agentic-assessment.target_commit` 由 `38de992…` 更新为落库提交 `29d8d04…`，并同步 `## Target` 与 `## Merge History` 的落库事实。依据与边界：扩展对 `assessment.target_commit` 与 `refs/heads/main` 采用严格相等比较，但**归档后的变更已不再被扩展解析**——`openspec-agentic workflow check --change <name> --stage archive`（短名 `storage-ddl-constraint-coverage` 与日期前缀名 `2026-09-23-storage-ddl-constraint-coverage` 均试过）都返回 `BLOCKED`，原因是 `openspec status` 退出码 1（扩展只解析活动变更）。因此该字段已不影响任何门禁，本次更新只为让归档记录与真实落库版本一致。
+- 未改写：`FV1-2026-09-23` 对 `38de992` 的 PASS 结论与其全部证据保持原样；`crates/` 内容在 `38de992` 与 `29d8d04` 上逐字节相同（`e356ac17…68d48`），故结论对落库版本继续成立。
