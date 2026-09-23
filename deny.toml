@@ -41,6 +41,18 @@ ignore = []
 # 注意 `warn` 不改变退出码：它是可见的提示，不是门禁（门禁由 advisory、许可证与来源判定承担）。
 multiple-versions = "warn"
 wildcards = "deny"
+# 允许 **workspace-private** 的 crate 使用不带 version 的 path 依赖：crates.io 不允许发布带 path/git
+# 依赖的包，因此这个组合不会泄露到外部；而本仓库全部 crate 都是 private（`[workspace.package]` 的
+# `publish = false`，由各 crate 的 `publish.workspace = true` 继承）。
+#
+# 这条豁免是**有条件**的，不是「关掉检查」：按 cargo-deny 0.20.2 的 cfg 文档，它只对 private crate 生效，
+# 「path/git dependencies in **public** crates will continue to produce warnings and errors」。
+# 因此某个 crate 一旦变成可发布，它的 path 依赖会被重新拦下来——这与 `AGENTS.md` §7「第一阶段默认
+# workspace-private」的约定一致。
+#
+# 本次实测：不开这条时 CI 的 `bans` 对 4 个 crate 报 `error[wildcard]`（`licenses ok, sources ok`），
+# 即它在默认情况下不区分 private/public。
+allow-wildcard-paths = true
 # 有意为空：本项目尚未对具体 crate 建立替代品策略。要加入时写成
 # `{ crate = "x", use-instead = "y" }` 并在同一改动里说明理由。
 deny = []
