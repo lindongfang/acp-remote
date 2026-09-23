@@ -1,10 +1,10 @@
 {
-  "agenticVersion": "0.2.0",
+  "agenticVersion": "0.2.1",
   "openspecVersion": "1.13.0",
   "configVersion": 1,
   "schema": "agentic",
   "installedAt": "2026-09-22T07:38:04.949Z",
-  "updatedAt": "2026-09-22T07:38:04.949Z",
+  "updatedAt": "2026-09-23T01:04:28.902Z",
   "files": {
     "openspec/schemas/agentic/procedures/acceptance.md": "sha256:9f57c7a8864822ac050c4b0292883d7b788f92e0605fddab0bc821459df43fa8",
     "openspec/schemas/agentic/procedures/minimal-change.md": "sha256:2f6dd69e06461c7d8504d4897369370998b889abe5c4ad3ae19095e9ae214e1f",
