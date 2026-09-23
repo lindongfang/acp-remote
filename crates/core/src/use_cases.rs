@@ -1752,10 +1752,14 @@ mod tests {
         let fixture = fixture();
         let alias = WorkspaceAlias::new("repo").expect("alias");
         // 已登记但目录不存在：只要解析被触发，错误就会先变成 `Unavailable(IoError)`。
+        // 用临时目录下不存在的子路径而不是固定的盘符路径：`WorkspaceRecord` 只校验绝对路径形状，
+        // 而 `Z:\\…` 只在 Windows 上是绝对路径，在 Unix 上会先被值对象拒绝。
+        let missing =
+            std::env::temp_dir().join(format!("acpr-missing-workspace-{}", uuid_text(52)));
         let record = WorkspaceRecord::try_new(
             alias.clone(),
             "Repo",
-            "Z:\\missing-workspace",
+            missing.to_str().expect("path"),
             crate::broker::test_support::ts(0),
             crate::broker::test_support::ts(0),
         )
