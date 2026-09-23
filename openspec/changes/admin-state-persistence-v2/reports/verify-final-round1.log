@@ -69,3 +69,23 @@ exit: 1
   ],
   "boundary": "仅检查结构、引用和版本；不证明用户批准、角色独立性或测试真实性。"
 }
+
+## 提交后复跑（HEAD 0b5fa8093b63181b6cd15dd1243b79acafa80bd3，2026-09-23）
+exit: 1
+{
+  "result": "FAIL",
+  "targetCommit": "37a398e9dbafa368bdb15853e1c1d9b40f19b28d",
+  "contractDigest": "sha256:5492db84c2d397eb8d00a22df02a8ecf7b0666534c26af044ede8258c9ba6043",
+  "errors": [
+    "任务 6.6 未完成",
+    "任务 6.7 未完成",
+    "任务 6.8 未完成",
+    "任务 7.1 未完成",
+    "任务 7.2 未完成",
+    "任务 7.3 未完成",
+    "当前代码 HEAD 与计划目标引用不一致；请在目标版本 worktree 检查",
+    "验收结论的 target_commit 已失效",
+    "当前证据验收结论不是 PASS",
+    "目标代码状态不能验收：执行后工作区仍有未提交改动：.omp、.pi/prompts/opsx-verify.md、.pi/settings.json…"
+  ]
+}

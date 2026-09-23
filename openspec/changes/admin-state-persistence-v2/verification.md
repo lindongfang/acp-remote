@@ -276,7 +276,7 @@ evidence:
   - path: reports/wp5-contract-drift-before-after.md
     sha256: "sha256:386a808109d07ff84894da9c366a631b9a38bc9d6a538c08ff3c12e9978b8d76"
   - path: reports/verify-final-round1.log
-    sha256: "sha256:0969d9f46c087fa88bc21ac8d868fd8413c03c71604988c6e37a042a16e3ebe1"
+    sha256: "sha256:eec21eaf1fc5fdd41a4a3c247f87989bbf78f12e1fc6ab6fca432160455c28cf"
 ```
 
 `target_commit` 是本轮证据的**被检视目标** = DU1 候选 `62ef264`（集成/检查/review/recheck 子 Agent 的固定输入）；`refs/heads/main` 仍为 `37a398e`，合入未获授权。`contract_digest` **已变**（`sha256:1191…ec61` → `sha256:38c5…4eab` → 本轮 `5492db84…6043`）：先是把 `p256` 收窄到 `arithmetic` 并同步 §9 判据 13/`AGENTS.md` §12/`MODULE_ARCHITECTURE.md` §3.1 与 allow-list，随后是 §11.6 写集语义第 4 条的落定审计措辞与合同版本 0.9；由 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` 在回填后重跑得到（`result: PASS`）。
@@ -315,6 +315,8 @@ evidence:
 **证据与复用判断**：本轮 `agentic-assessment` 的 `evidence` 覆盖全部被引用报告（路径相对 `changeDir`，原始文件同时保留在仓库根 `reports/`）；W0/WP6/W1-W2 期间的报告在对应契约块与用例未变的前提下复用，凡改动过的部分（§11.6 措辞、`p256` 依赖面、夹具序列与端点）都有本轮新增或复跑的证据（Check Plan Changes 30–38）。
 
 **未解决项**：`6.6`（合入）、`6.7`/`6.8`（主分支复验与复核）、`7.1`–`7.3`（替代验证与 `[e2e-owned]` 门禁）、`8.1`（最终验收）——全部只缺**合并授权**；另有两条已登记的实现残留（`revoke_reason`/`cache_policy` 的 `IN (...)` 逐值断言，见 Check Plan Changes 第 34 条）。
+
+**提交后复跑**（记录已提交为 `0b5fa80` 之后，`reports/verify-final-round1.log` 末段）：`workflow check --stage final` 仍为 `FAIL`、错误仍为 10 条：其中 `目标代码状态不能验收：执行后工作区仍有未提交改动` 一条仍在，但清单已从「本变更文件 + 宿主文件」变为**仅宿主安装的未跟踪项**（`.omp`、`.pi/prompts/opsx-verify.md`、`.pi/settings.json`）——本变更自身的文件已全部提交；其余 9 条（6 条未完成任务 + `HEAD 与计划目标引用不一致` + `target_commit 已失效` + `证据结论不是 PASS`）**全部同源于「候选未合入 main、合并门禁未执行」**；`git status --porcelain` 里只剩宿主安装的未跟踪项（`.omp/`、`.pi/**`），不属于本变更的交付物。
 
 **结论**：**BLOCKED** —— 没有已确认的产品缺陷或未闭环阻断项；但变更未合入目标主分支、合并门禁任务未完成、`workflow check --stage final` 非 PASS，因此**不具备归档条件**，`8.1` 保持待办，不做归档、合并、推送或发布。
 - Required Follow-up: ① 四份独立 review（`3.2`/`3.4`/`3.6`/`3.8`）**已全部闭合**（`rv1-wp{1,23,4,5}.md`；唯一阻断项 WP23-2 与其余发现全部处理，见 Review Findings 的 W1/W2 闭合轮表）→ ② W3：`5.1`（集成 Agent 交接记录）/`5.2`（DU1 就绪）→ `6.1`–`6.5`（核实 `refs/heads/main`、构造候选、候选 PV1、候选 review、E2E 不适用核对）；③ `6.6` 合入与 `6.7`/`6.8`、`7.x`、`8.1` **依赖合并授权**，本轮不授权 → ④ W4 的替代验证与最终验收待授权后执行
