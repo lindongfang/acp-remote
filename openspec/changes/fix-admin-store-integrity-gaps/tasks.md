@@ -48,4 +48,4 @@
 
 ## 7. Final Verification
 
-- [ ] 7.1 [final-verification] 负责人：主 Agent；依赖：6.3；按 `.agents/skills/agentic-verify/SKILL.md` 执行最终验收（`/opsx:verify` 同样读取该入口），核对用户意图（proposal 的 `agentic-intent` 四条缺陷与四点复核意见）、specs 的 12 个场景、design D1–D6、plan、tasks 与最终主分支证据，记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change fix-admin-store-integrity-gaps --stage final --json`；完成条件：全部通过并记录 PASS 结论；未通过或证据失效时保持待办并如实报告 FAIL/BLOCKED，不报告可归档。
+- [x] 7.1 [final-verification] 负责人：主 Agent；依赖：6.3；按 `.agents/skills/agentic-verify/SKILL.md` 执行最终验收（`/opsx:verify` 同样读取该入口），核对用户意图（proposal 的 `agentic-intent` 四条缺陷与四点复核意见）、specs 的 12 个场景、design D1–D6、plan、tasks 与最终主分支证据，记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change fix-admin-store-integrity-gaps --stage final --json`；完成条件：全部通过并记录 PASS 结论；未通过或证据失效时保持待办并如实报告 FAIL/BLOCKED，不报告可归档。
