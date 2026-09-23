@@ -1,0 +1,57 @@
+# main-lc1 @ 2026-09-23T23:26:28+08:00 / cmd: cargo test --locked -p storage-sqlite --test admin_store --test imported
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests\admin_store.rs (target\debug\deps\admin_store-f91dcdab931b40b6.exe)
+
+running 32 tests
+test import_ownership_is_exclusive_and_write_set_divergence_is_rejected ... ok
+test export_revocation_is_terminal_for_plain_writes ... ok
+test default_profile_switch_is_atomic_and_unique ... ok
+test an_out_of_vocabulary_revoke_reason_is_rejected_by_the_check_constraint ... ok
+test corrupted_identity_material_fails_closed_on_read ... ok
+test fail_closed_store_rejects_every_admin_write_path ... ok
+test a_pairing_can_be_settled_only_once ... ok
+test key_changed_revocation_is_persisted_for_devices_and_nodes ... ok
+test a_failed_audit_write_rolls_back_the_whole_write_set ... ok
+test an_empty_stored_binding_is_reported_as_corrupt ... ok
+test claim_with_a_foreign_host_binding_is_rejected ... ok
+test only_a_fresh_node_pairing_can_lift_a_node_revocation ... ok
+test expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep ... ok
+test device_revocation_is_idempotent_and_survives_reopen ... ok
+test node_roles_share_one_identity_material ... ok
+test only_a_fresh_pairing_can_lift_a_revocation ... ok
+test profile_bindings_must_reference_registered_provider_fields ... ok
+test capacity_limit_refuses_new_admin_writes_without_deleting_trust ... ok
+test rejected_settlement_creates_no_trust_and_ends_the_pairing ... ok
+test node_pairing_approval_persists_access_trust ... ok
+test full_import_removal_and_connection_drop_both_keep_audit ... ok
+test provider_reference_version_must_advance ... ok
+test node_revocation_covers_both_roles_and_survives_reopen ... ok
+test timestamps_are_advanced_never_erased ... ok
+test second_node_role_with_a_foreign_fingerprint_is_rejected ... ok
+test second_claim_of_the_same_pairing_is_rejected ... ok
+test revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound ... ok
+test seed_marks_initialized_once_and_ignores_later_seeds ... ok
+test a_constraint_failure_during_approval_leaves_no_half_authorization ... ok
+test pairing_approval_persists_identity_material_across_reopen ... ok
+test no_secret_material_lands_in_any_column ... ok
+test workspace_records_stay_local_and_keep_created_at ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests\imported.rs (target\debug\deps\imported-0aac23fd0ae498ae.exe)
+
+running 10 tests
+test receipt_without_imported_session_is_rejected ... ok
+test imported_tables_match_the_frozen_column_lists ... ok
+test duplicate_receipts_do_not_advance_the_local_sequence ... ok
+test imported_session_queries_filter_as_documented ... ok
+test late_callbacks_after_a_full_removal_cannot_rebuild_the_index ... ok
+test imported_command_refs_carry_no_message ... ok
+test epoch_change_invalidates_the_delivery_index ... ok
+test imported_tables_never_hold_owned_content ... ok
+test drop_import_keeps_audit_rows ... ok
+test prune_reclaims_the_imported_family_and_expired_audit ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+# exit: 0
