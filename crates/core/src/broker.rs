@@ -2502,24 +2502,46 @@ impl Broker {
     fn port_error_public(&self, error: &PortError) -> Result<PublicError, PortError> {
         let (code, message, retryable) = match error {
             PortError::NotFound(_) => ("command.not_found", "目标不存在", false),
-            PortError::Conflict(ConflictKind::VersionMismatch) => {
-                ("state.version_conflict", "版本冲突", true)
-            }
-            PortError::Conflict(ConflictKind::AlreadyResolved) => {
-                ("interaction.already_resolved", "交互已经解析", false)
-            }
-            PortError::Conflict(ConflictKind::IdempotencyConflict) => (
-                "command.idempotency_conflict",
-                "同一 requestId 已用于不同命令",
-                false,
-            ),
-            PortError::Conflict(_) => ("internal.unavailable", "状态冲突", false),
+            PortError::Conflict(kind) => match kind {
+                ConflictKind::VersionMismatch => ("state.version_conflict", "版本冲突", true),
+                ConflictKind::AlreadyResolved => {
+                    ("interaction.already_resolved", "交互已经解析", false)
+                }
+                ConflictKind::IdempotencyConflict => (
+                    "command.idempotency_conflict",
+                    "同一 requestId 已用于不同命令",
+                    false,
+                ),
+                // 管理写集的冲突只可能出现在本地管理路径：这里**显式**列出而不用通配臂。
+                // 新增 `ConflictKind` 取值时编译器会报错（§11.6 记录的隐性陷阱：`Conflict(_)`
+                // 通配臂会让新取值静默落入 `internal.unavailable`）；本地管理适配器负责把它们
+                // 映射为 `local.conflict`（`LOCAL_ADMIN_PROTOCOL.md` §6）。
+                ConflictKind::AlreadyClaimed
+                | ConflictKind::Expired
+                | ConflictKind::Consumed
+                | ConflictKind::AlreadyExists
+                | ConflictKind::IdentityMismatch
+                | ConflictKind::DuplicateOwnership => ("internal.unavailable", "状态冲突", false),
+            },
             PortError::InvalidRequest(_) => ("protocol.schema_invalid", "请求不合法", false),
             PortError::Corrupt(_) => ("internal.unavailable", "存储不可用", true),
-            PortError::Unavailable(UnavailableKind::RemoteUnavailable) => {
-                ("resource.remote_unavailable", "远端不可达", true)
-            }
-            PortError::Unavailable(_) => ("internal.unavailable", "存储或后端不可用", true),
+            // 同上：`UnavailableKind` 逐值列出；`KeystoreUnavailable` 由本地管理适配器映射为
+            // `local.unavailable`。
+            PortError::Unavailable(kind) => match kind {
+                UnavailableKind::RemoteUnavailable => {
+                    ("resource.remote_unavailable", "远端不可达", true)
+                }
+                UnavailableKind::KeystoreUnavailable => {
+                    ("internal.unavailable", "凭据存储不可用", true)
+                }
+                UnavailableKind::Busy
+                | UnavailableKind::StorageFull
+                | UnavailableKind::IoError
+                | UnavailableKind::OwnerOffline
+                | UnavailableKind::ExportRevoked => {
+                    ("internal.unavailable", "存储或后端不可用", true)
+                }
+            },
             PortError::Backend(_) => ("internal.unavailable", "后端失败", true),
         };
         PublicError::coded(code, message, retryable).map_err(PortError::from)
@@ -2909,17 +2931,22 @@ pub(crate) mod test_support {
 
     use super::*;
     use crate::model::{
-        AgentDescriptor, AgentId, AgentRef, AttachmentGeneration, AttachmentId, AuditRecord,
-        CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId, ExportRecord,
-        ImportId, ImportRecord, ModeState, NodeId, NodeRecord, OriginCursor, OriginEpoch,
-        PairingClaim, PairingId, PairingRecord, PairingSettlement, PendingInteraction,
-        ResourceOrigin, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+        AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
+        AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId,
+        ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
+        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingTarget,
+        PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef, ResourceOrigin, SeedState,
+        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias,
+        WorkspaceRecord,
     };
     use crate::ports::{
-        AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DropReport,
-        IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord, PairingClaimOutcome,
-        PruneReport, RemoteCommandRef, RetentionPolicy, RevokeReason, SessionQuery, StoreHealth,
-        TrustRecordRef, TrustStore, TurnAccepted,
+        AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
+        DeviceWrite, DropReport, ExpiryWrite, ExportRevocation, ExportWrite, IdempotentReplay,
+        ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
+        NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingSettlementWrite,
+        PairingWrite, ProfileWrite, ProviderRefWrite, PruneReport, RemoteCommandRef,
+        RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef, TrustStore,
+        TurnAccepted, WorkspaceWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -3050,9 +3077,23 @@ pub(crate) mod test_support {
         pub(crate) modes: Mutex<Option<ModeState>>,
         pub(crate) exports: Mutex<Vec<ExportRecord>>,
         pub(crate) imports: Mutex<Vec<ImportRecord>>,
+        pub(crate) profiles: Mutex<Vec<AgentProfile>>,
+        pub(crate) workspaces: Mutex<Vec<WorkspaceRecord>>,
+        pub(crate) provider_refs: Mutex<Vec<ProviderRef>>,
+        pub(crate) seed: Mutex<Option<SeedState>>,
+        /// 管理写集实际携带的审计动作（断言「审计随写集提交」而不是事后补写）。
+        pub(crate) write_audits: Mutex<Vec<AuditAction>>,
+        /// `drop_import` 的调用次数（断言完整移除不再串联连接级清空）。
+        pub(crate) drop_import_calls: AtomicUsize,
         pub(crate) imported_sessions: Mutex<Vec<ImportedSessionRecord>>,
         pub(crate) acked: Mutex<Vec<OriginCursor>>,
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
+        /// 配对行：`settle_pairing` 的目标族由它读出（§11.6 第 2 条）。
+        pub(crate) pairings: Mutex<Vec<PairingRecord>>,
+        /// 节点角色行（`add_import` 的 owner 前置校验从它读）。
+        pub(crate) nodes: Mutex<Vec<NodeRecord>>,
+        /// 目录里的可用 Agent（`put_export` 的前置校验从它读；默认空）。
+        pub(crate) catalog_agents: Mutex<Vec<AgentDescriptor>>,
     }
 
     #[derive(Default)]
@@ -3365,12 +3406,15 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) struct TestCatalog;
+    /// 目录测试替身：默认空，测试按需把 `FakeWorld::catalog_agents` 填成可用 Agent。
+    pub(crate) struct TestCatalog {
+        pub(crate) world: Arc<FakeWorld>,
+    }
 
     #[async_trait]
     impl AgentCatalog for TestCatalog {
         async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError> {
-            Ok(Vec::new())
+            Ok(lock(&self.world.catalog_agents).clone())
         }
 
         async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
@@ -4096,6 +4140,7 @@ pub(crate) mod test_support {
         }
 
         async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError> {
+            self.world.drop_import_calls.fetch_add(1, Ordering::SeqCst);
             let mut receipts = lock(&self.world.receipts);
             let before = receipts.len();
             receipts.retain(|receipt| receipt.session.export_id.as_str() != import.as_str());
@@ -4120,12 +4165,8 @@ pub(crate) mod test_support {
 
     #[async_trait]
     impl ExportStore for FakeExports {
-        async fn upsert_export(
-            &self,
-            export: ExportRecord,
-            _at: Timestamp,
-        ) -> Result<(), PortError> {
-            lock(&self.world.exports).push(export);
+        async fn put_export(&self, write: ExportWrite) -> Result<(), PortError> {
+            lock(&self.world.exports).push(write.record);
             Ok(())
         }
 
@@ -4140,16 +4181,14 @@ pub(crate) mod test_support {
             Ok(lock(&self.world.exports).clone())
         }
 
-        async fn revoke_export(&self, _id: &ExportId, _at: Timestamp) -> Result<(), PortError> {
+        async fn revoke_export(&self, _write: ExportRevocation) -> Result<(), PortError> {
             Ok(())
         }
 
-        async fn upsert_import(
-            &self,
-            import: ImportRecord,
-            _at: Timestamp,
-        ) -> Result<(), PortError> {
-            lock(&self.world.imports).push(import);
+        async fn add_import(&self, write: ImportWrite) -> Result<(), PortError> {
+            lock(&self.world.write_audits)
+                .extend(write.context.audit.iter().map(|audit| audit.action));
+            lock(&self.world.imports).push(write.record);
             Ok(())
         }
 
@@ -4164,14 +4203,18 @@ pub(crate) mod test_support {
             Ok(lock(&self.world.imports).clone())
         }
 
-        async fn remove_import(&self, id: &ImportId, _at: Timestamp) -> Result<(), PortError> {
-            lock(&self.world.imports).retain(|import| import.import_id() != id);
+        async fn remove_import(&self, write: ImportRemoval) -> Result<(), PortError> {
+            lock(&self.world.write_audits)
+                .extend(write.context.audit.iter().map(|audit| audit.action));
+            lock(&self.world.imports).retain(|import| import.import_id() != &write.import);
             Ok(())
         }
     }
 
-    /// 信任端口在本切片只被 `use_cases` 透传；这里给最小实现。
-    pub(crate) struct FakeTrust;
+    /// 信任端口在本切片只被 `use_cases` 透传；这里给最小实现（记录写集携带的审计动作）。
+    pub(crate) struct FakeTrust {
+        pub(crate) world: Arc<FakeWorld>,
+    }
 
     fn missing_pairing() -> PortError {
         PortError::NotFound(EntityRef::Pairing(
@@ -4181,14 +4224,6 @@ pub(crate) mod test_support {
 
     #[async_trait]
     impl TrustStore for FakeTrust {
-        async fn upsert_device(
-            &self,
-            _record: DeviceRecord,
-            _at: Timestamp,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
         async fn device(&self, _id: &DeviceId) -> Result<Option<DeviceRecord>, PortError> {
             Ok(None)
         }
@@ -4197,63 +4232,183 @@ pub(crate) mod test_support {
             Ok(Vec::new())
         }
 
-        async fn revoke_device(
-            &self,
-            _id: &DeviceId,
-            _at: Timestamp,
-            _reason: RevokeReason,
-        ) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        async fn upsert_node(&self, _record: NodeRecord, _at: Timestamp) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        async fn node(&self, _id: &NodeId) -> Result<Option<NodeRecord>, PortError> {
-            Ok(None)
+        async fn node(&self, id: &NodeId, kind: NodeKind) -> Result<Option<NodeRecord>, PortError> {
+            Ok(lock(&self.world.nodes)
+                .iter()
+                .find(|record| record.node_id() == id && record.kind() == kind)
+                .cloned())
         }
 
         async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError> {
-            Ok(Vec::new())
+            Ok(lock(&self.world.nodes).clone())
         }
 
-        async fn revoke_node(
-            &self,
-            _id: &NodeId,
-            _at: Timestamp,
-            _reason: RevokeReason,
-        ) -> Result<(), PortError> {
+        async fn nodes_for(&self, id: &NodeId) -> Result<Vec<NodeRecord>, PortError> {
+            Ok(lock(&self.world.nodes)
+                .iter()
+                .filter(|record| record.node_id() == id)
+                .cloned()
+                .collect())
+        }
+
+        async fn peer_key(&self, _peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
+            Ok(None)
+        }
+
+        async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
+            Ok(lock(&self.world.pairings)
+                .iter()
+                .find(|record| record.id() == id)
+                .cloned())
+        }
+
+        async fn pairing_peer(&self, _id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
+            Ok(None)
+        }
+
+        async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
             Ok(())
         }
 
-        async fn create_pairing(&self, _pairing: PairingRecord) -> Result<(), PortError> {
+        async fn put_node(&self, write: NodeWrite) -> Result<(), PortError> {
+            let mut nodes = lock(&self.world.nodes);
+            nodes.retain(|record| {
+                !(record.node_id() == write.record.node_id()
+                    && record.kind() == write.record.kind())
+            });
+            nodes.push(write.record);
+            Ok(())
+        }
+
+        async fn revoke_device(&self, write: DeviceRevocation) -> Result<(), PortError> {
+            lock(&self.world.write_audits)
+                .extend(write.context.audit.iter().map(|audit| audit.action));
+            Ok(())
+        }
+
+        async fn revoke_node(&self, _write: NodeRevocation) -> Result<(), PortError> {
+            Ok(())
+        }
+
+        async fn create_pairing(&self, write: PairingWrite) -> Result<(), PortError> {
+            let mut pairings = lock(&self.world.pairings);
+            pairings.retain(|record| record.id() != write.record.id());
+            pairings.push(write.record);
             Ok(())
         }
 
         async fn claim_pairing(
             &self,
-            _claim: PairingClaim,
-            _at: Timestamp,
+            _write: PairingClaimWrite,
         ) -> Result<PairingClaimOutcome, PortError> {
             Err(missing_pairing())
         }
 
-        async fn pairing(&self, _id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
-            Ok(None)
-        }
-
         async fn settle_pairing(
             &self,
-            _id: &PairingId,
-            _settlement: PairingSettlement,
-            _at: Timestamp,
+            write: PairingSettlementWrite,
         ) -> Result<TrustRecordRef, PortError> {
-            Err(missing_pairing())
+            let Some(target) = lock(&self.world.pairings)
+                .iter()
+                .find(|record| record.id() == &write.pairing)
+                .map(PairingRecord::target)
+            else {
+                return Err(missing_pairing());
+            };
+            lock(&self.world.write_audits)
+                .extend(write.context.audit.iter().map(|audit| audit.action));
+            Ok(match target {
+                PairingTarget::Device => {
+                    TrustRecordRef::Device(DeviceId::new(&uuid_text(2)).expect("device id"))
+                }
+                PairingTarget::Node => {
+                    TrustRecordRef::Node(NodeId::new(&uuid_text(3)).expect("node id"))
+                }
+            })
         }
 
-        async fn expire_pairings(&self, _at: Timestamp) -> Result<u64, PortError> {
+        async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
             Ok(0)
+        }
+    }
+
+    /// 本地配置端口的测试替身：内存列表，`put_profile` 保持「至多一个默认」的语义。
+    pub(crate) struct FakeLocalConfig {
+        pub(crate) world: Arc<FakeWorld>,
+    }
+
+    #[async_trait]
+    impl LocalConfigStore for FakeLocalConfig {
+        async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError> {
+            Ok(lock(&self.world.profiles).clone())
+        }
+
+        async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
+            Ok(lock(&self.world.profiles)
+                .iter()
+                .find(|profile| profile.id() == id)
+                .cloned())
+        }
+
+        async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError> {
+            let mut profiles = lock(&self.world.profiles);
+            if write.profile.is_default() {
+                profiles.retain(|profile| !profile.is_default());
+            }
+            profiles.retain(|profile| profile.id() != write.profile.id());
+            profiles.push(write.profile);
+            Ok(())
+        }
+
+        async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError> {
+            Ok(lock(&self.world.workspaces).clone())
+        }
+
+        async fn workspace(
+            &self,
+            alias: &WorkspaceAlias,
+        ) -> Result<Option<WorkspaceRecord>, PortError> {
+            Ok(lock(&self.world.workspaces)
+                .iter()
+                .find(|record| record.alias() == alias)
+                .cloned())
+        }
+
+        async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError> {
+            let mut records = lock(&self.world.workspaces);
+            records.retain(|record| record.alias() != write.record.alias());
+            records.push(write.record);
+            Ok(())
+        }
+
+        async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError> {
+            Ok(lock(&self.world.provider_refs).clone())
+        }
+
+        async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError> {
+            let mut refs = lock(&self.world.provider_refs);
+            refs.retain(|reference| reference.id() != write.reference.id());
+            refs.push(write.reference);
+            Ok(())
+        }
+
+        async fn seed_state(&self) -> Result<SeedState, PortError> {
+            let world = lock(&self.world.seed);
+            match &*world {
+                Some(state) => Ok(state.clone()),
+                None => Ok(SeedState::unseeded()),
+            }
+        }
+
+        async fn mark_seeded(&self, write: SeedWrite) -> Result<(), PortError> {
+            let mut profiles = lock(&self.world.profiles);
+            for profile in write.profiles {
+                profiles.retain(|existing| existing.id() != profile.id());
+                profiles.push(profile);
+            }
+            *lock(&self.world.seed) =
+                Some(SeedState::try_new(true, Some(write.context.at)).expect("seeded"));
+            Ok(())
         }
     }
 
@@ -5609,14 +5764,21 @@ mod tests {
             exports: Arc::new(FakeExports {
                 world: world.clone(),
             }),
-            trust: Arc::new(FakeTrust),
+            trust: Arc::new(FakeTrust {
+                world: world.clone(),
+            }),
             audit: Arc::new(TestAudit {
+                world: world.clone(),
+            }),
+            config: Arc::new(FakeLocalConfig {
                 world: world.clone(),
             }),
             attachments: Arc::new(FakeAttachments {
                 world: world.clone(),
             }),
-            catalog: Arc::new(TestCatalog),
+            catalog: Arc::new(TestCatalog {
+                world: world.clone(),
+            }),
             clock: TestClock::new(),
             ids: Arc::new(TestIds::default()),
         });

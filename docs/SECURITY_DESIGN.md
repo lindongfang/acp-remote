@@ -207,13 +207,21 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 
 ### 9.2 Node key 存储
 
-- Windows：优先 CNG/TPM；至少使用绑定当前用户的 DPAPI 保护。
+- Windows：优先 CNG/TPM；至少使用绑定当前用户的 DPAPI 保护。第一阶段实际交付的是下限（DPAPI 绑定当前用户），档位与理由见下方 `[决定]`。
 - macOS：Keychain；可用时使用不可导出或硬件保护能力。
 - Linux：Secret Service 或经过单独评审的系统 keystore。
 - 第一阶段不允许把 Node private key 明文存入 SQLite、普通 TOML/JSON 或 npm 包目录。
 - Linux 安全存储不可用时，正式模式必须失败关闭；显式开发模式可以使用进程期临时 key。持久化加密文件 fallback 需要单独 ADR 选择 KDF、解锁和备份策略，不能由单个补丁自行决定。
 
 第一阶段不提供 Node key 导出、云备份或跨节点迁移。Node key 丢失按新 Node 处理。
+
+`[决定]`（2026-09-23）**第一阶段的 Windows 档位已定案**：用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内由 `p256` 完成。依据：
+
+- §9.2 已把「至少 DPAPI 绑定当前用户」列为 Windows 的基线下限，因此这不是 [ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5 所说的「降级实现启用」——它不需要新 ADR；
+- workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`），而 DPAPI/CNG 都要过 FFI：选择 DPAPI 包裹可用**安全 wrapper crate** 实现，CNG 不可导出密钥则做不到（见 `MODULE_ARCHITECTURE.md` §4.12）；
+- 代价必须写清：签名瞬间私钥存在于进程内存，不具备「密钥不出 OS」的性质。CNG/TPM 不可导出档位作为开放项列在 §20。
+
+`[决定]` 同一档位适用于 Daemon 侧需要长期保护的一切凭据：第一阶段是 **Node identity key** 与 **Provider 凭据**（§13.1）。PWA 与将来原生客户端的 Device key 由客户端平台自己持有（§9.3 的 WebCrypto IndexedDB / Android Keystore / iOS Keychain），**不**经本档位。两者都只经 `identity-keystore` 的端口进出，不得绕过端口落到 SQLite 或配置文件。
 
 ### 9.3 Device key
 
@@ -224,7 +232,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 
 ### 9.4 配对和认证
 
-- 精确状态、HMAC、SAS、transcript 和 challenge-response 以 Sync Protocol 为准。
+- 精确状态、HMAC、SAS、transcript 和 challenge-response 以 Sync Protocol 为准（节点侧以 Node Link 为准）；`identity-auth` 一侧的状态机边界、握手入口、nonce/重放与授权展开见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)。
 - Device/Node pairing 只能由目标节点本地管理入口创建和确认。
 - 配对 UI 必须显示设备名称、key fingerprint、SAS、请求 scopes 和过期时间。
 - 用户确认前设备记录不能获得 active 权限。
@@ -353,8 +361,22 @@ local.audit.export         本地审计导出（不含会话正文）
 
 - 使用参数数组启动，不经 shell 拼接用户输入。
 - 只传递 Agent 启动所需环境变量；不把 ACP Remote Node/Device key 注入子进程。
+- `[决定]`（2026-09-23）**注入集合可判定**：实际注入的环境变量 = `env_allowlist` ∩ profile 的 `env` 绑定声明的 `name` 集合，加必要的进程环境（如 `PATH`）；凭据值只能来自 `CredentialResolver`（`CORE_PORTS_AND_STORAGE.md` §11.6），未绑定或未列入白名单的变量一律不注入，keystore 不可用则**失败关闭**。
 - stdout 只作为 ACP wire；stderr 作为受限、脱敏的 Agent 日志。
-- 设置启动、请求、空闲和关闭超时，以及 stdout/stderr/内存可承受上限。
+- `[决定]`（2026-09-23）**Agent 进程的上下限是固定 v1 常量，不是配置键**（与 `SYNC_PROTOCOL.md` §14 同惯例）；未列出的值不得由实现自行发明：
+
+| 项 | v1 值 | 理由 / 约束 |
+|---|---:|---|
+| Agent 启动 → `initialize` 完成 | 10 s | 与 `daemon.shutdown_grace_ms` 同量级；超时即失败并回收进程树，不得无限等待 |
+| `initialize`/`cancel` 等短请求 | 30 s | 与 Node Link 心跳同量级；**不适用于 `session/prompt`** |
+| `session/prompt`（turn） | **不设超时** | 长任务是合法的；取消只由用户或 `session.cancel` 触发，超时杀进程会破坏 ACP 语义 |
+| 关闭 grace（友好终止 → 强杀） | 5 s | 必须小于 `daemon.shutdown_grace_ms`（10 s），否则 daemon 无法在自己的 grace 内收尾 |
+| 单条 ACP 消息（stdout 解析上限） | 1 MiB | 与 `SYNC_PROTOCOL.md` §14 的 `maxMessageBytes` 同值，避免同一条消息在两跳上有两个上限 |
+| stderr 环形缓冲 | 256 KiB | 有界采集、脱敏后进结构化日志（§14.1）；超出丢弃最旧并记一条计数，不无界缓存 |
+| 空闲回收 | 复用 `sessions.idle_timeout_ms` | `0` = 不因空闲关闭；非零时只有「无 active 会话且空闲超过该值」才关闭进程 |
+| 内存 | **规则而非数值** | 无法可靠测量 RSS；改为可判定规则：必须流式处理 ACP 消息与 stderr，不得缓存完整会话正文，超限即报错并结束该 Agent |
+
+  这些常量落在 `agent-host`，并由 `agent-host` 的 fake ACP child 测试固定（`AGENTS.md` §9）；需要随部署变化的只有 `sessions.idle_timeout_ms`。
 - Windows 使用 Job Object 或等价机制清理完整子进程树。
 - Agent 崩溃、乱序或非法 JSON 形成明确事件，不能使 Daemon 接受伪造客户端身份。
 
@@ -363,7 +385,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 原始 workspace 路径只能由 Owner Node 本地管理入口选择。
 - 远程主体只能选择 Export 发布的 workspace alias/template，不能构造任意绝对路径、追加目录或修改 Agent 沙箱。
 - 文件路径展示和下载必须重新检查其属于会话授权边界；不能只依赖客户端传来的 path。
-- 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。
+- 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。可判定规则（权威实现归 core，见 `CORE_PORTS_AND_STORAGE.md` §11.9）：只接受**绝对路径**；写入与使用前都必须存在且是**目录**；`canonicalize` 后的结果才是持久权威值；拒绝相对路径与含 `..` 的输入；UNC/网络路径允许但记一次结构化警告；路径与规范化结果**不得**出现在 catalog、事件、错误 `details` 或对端可见的任何输出里。
 - Agent 的实际文件/命令权限仍由 Agent sandbox 和用户配置控制；ACP Remote 不能虚报更严格隔离。
 
 ## 13. 持久化与本地数据保护
@@ -375,6 +397,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 依赖 OS 用户账户隔离、目录 ACL 和用户启用的 BitLocker/FileVault/LUKS 等磁盘保护。
 - 文档和 CLI 应建议在存放敏感工程的电脑上启用全盘加密。
 - Provider credential、Node private key 和 pairing secret 不进入普通 SQLite 字段。
+- `[决定]`（2026-09-23）**Provider 凭据只在启动子进程时经 `CredentialResolver` 端口注入**（`CORE_PORTS_AND_STORAGE.md` §11.6）：`owned_provider_ref` 只存字段名、keystore 引用与版本，profile 的 `env` 绑定只存变量名；凭据值不落盘、不进事件、不进日志与错误消息。keystore 不可用或引用失效时**失败关闭**（不得跳过变量后继续启动）。
 - 若用户威胁模型要求防御离线磁盘读取，必须启用 OS 磁盘加密；未启用时这是明确剩余风险。
 - 将来采用 SQLCipher 或字段加密需要独立 ADR，说明 key 来源、迁移、备份、崩溃恢复和平台发布成本。
 
@@ -426,10 +449,15 @@ local.audit.export         本地审计导出（不含会话正文）
 pairing.created / claimed / approved / rejected / expired
 device.authenticated / auth_failed / revoked / scopes_changed
 node.paired / node.trust_revoked / node.identity_changed
+export.created / revoked
+import.added / removed
+provider.configured
 authorization.denied
 rate_limit.triggered
 storage.integrity_failed
 ```
+
+`[决定]`（2026-09-23）新增 `export.created`/`export.revoked`/`import.added`/`import.removed`/`provider.configured` 五类：Export/Import 的授权面与 Provider 凭据写入都是安全动作，而管理写集要求“涉及已登记安全动作的 mutation 其成功审计与状态同事务提交”（`CORE_PORTS_AND_STORAGE.md` §11.2 第 6 条）；没有取值只能靠误用 `node.trust_revoked`/`authorization.denied`，事后无法区分。本地个人配置（`agent.configure`/`workspace.select`）**不**登记，保持“只记安全动作”的取舍。落库时 `owned_audit`/`imported_audit` 的 CHECK 要同步改，而 SQLite 不能修改现有 CHECK，必须走 12-step 表重建（见该文档 §11.8）。
 
 审计日志不能成为第二份聊天记录。失败原因对本地日志可以比远程错误更详细，但仍不得包含 secret。
 
@@ -564,6 +592,9 @@ manual pairing/revoke smoke test
 以下选择不能由普通实现补丁静默决定：
 
 - Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback，推迟到 Linux 平台开发阶段处理；当前优先交付 Windows，见 `INITIAL_DESIGN.md` §14。在决定前 Linux 正式模式仍失败关闭，不引入明文 fallback。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
+  - 2026-09-23 定案：**本阶段维持失败关闭**，不提供持久化 fallback；将来若要提供，必须新开 ADR 定 KDF、解锁来源与备份策略（§9.2），并同步 `CONFIG_REFERENCE.md` §8 与本节。
+- 是否以及何时把密钥存储提升到**硬件保护的不可导出档位**（Windows CNG/TPM、Linux 除 Secret Service 以外的系统 keystore）：需要单独 ADR，因为它会改变已接受的「非硬件保护实现允许存在、默认不启用」边界（ADR-0006 决策 5）。当前档位见 §9.2（Windows 用 DPAPI 包裹 + 进程内签名）。注意 `unsafe_code = "forbid"` 下交付该档位需要自写或引入 wrappable 的 FFI 封装，成本与风险必须在 ADR 里评估。
+- `identity-keystore` 与 `agent-host` 的平台包装 crate 选型（DPAPI wrapper、Windows Job Object wrapper 等）：候选必须按 `AGENTS.md` §7 核验维护状态、许可证、平台支持与安全风险，并确认不超出 `deny.toml` 的许可证 allow 列表与 `[graph] targets`；若候选的 **MSRV 高于 `Cargo.toml` 的 `rust-version`（1.85）**，必须先单独做一个「是否抬 MSRV」的决定（工具链版本 `rust-toolchain.toml` 是另一件事，不能代替 MSRV 决策）。选型结论必须写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12。
 - npm provenance、checksum 签名和 SBOM 的发布工作流与格式仍待发布阶段确定。普通 CI 已接入 GitHub Actions（`.github/workflows/ci.yml`），执行合同门禁、Rust 检查、提交规范校验、依赖许可证与来源判定、依赖安全公告、密钥扫描及文档引用检查；已有普通 CI 不代表发布 provenance、签名或 SBOM 已实现。发布 job 继续按 §16.2 与普通 CI 分离。
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。

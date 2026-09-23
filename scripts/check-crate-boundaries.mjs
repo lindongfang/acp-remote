@@ -169,16 +169,43 @@ if (coreDependencies) {
  * 改这里与合同 §9 判据 13 —— 与「矩阵只有一处定义」同一原则。
  */
 const CORE_ALLOWED_CLOSURE = [
-  // core 的直接依赖（§2：只有这两个）
+  // core 的直接依赖（§9 判据 13：四个）——`p256`/`sha2` 是 §11.5 的 `PeerPublicKey` 构造期校验与指纹派生所需。
   "async-trait",
   "thiserror",
-  // 上面两者的 proc-macro 机制（`thiserror` 依赖 `thiserror-impl`；三者共同依赖 proc-macro2/quote/syn，
-  // 而 syn/quote/proc-macro2 又依赖 unicode-ident）。它们随上述两个 crate 出现，不是独立选择。
-  "thiserror-impl",
+  "p256",
+  "sha2",
+  // 上面四者的 proc-macro 与曲线栈传递依赖（`p256` 只开 `arithmetic`：曲线点校验需要的
+  // `sec1`/`elliptic-curve`/`primeorder`/`group`/`ff` 等；`sha2` 的 `digest`/`block-buffer`；
+  // 以及它们共用的 `generic-array`/`hybrid-array`/`subtle`/`zeroize`）。它们随上述依赖出现，
+  // 不是独立选择；新增任何一个都必须先按 AGENTS.md §7 审查。**签名与编码栈不在闭包内**：
+  // core 既不签名也不验签，因此 `ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8`/`spki`/`pem-rfc7468`/
+  // `base64ct` 都不应出现在这里——出现即说明有人把 workspace 的默认 feature 又放开了（`sec1` 自带的
+  // `base16ct` 十六进制解码仍在闭包内）。
+  "base16ct",
+  "block-buffer",
+  "cfg-if",
+  "const-oid",
+  "cpufeatures",
+  "crypto-bigint",
+  "crypto-common",
+  "der",
+  "digest",
+  "elliptic-curve",
+  "ff",
+  "generic-array",
+  "group",
+  "hybrid-array",
+  "primeorder",
   "proc-macro2",
   "quote",
+  "rand_core",
+  "sec1",
+  "subtle",
   "syn",
+  "thiserror-impl",
+  "typenum",
   "unicode-ident",
+  "zeroize",
 ];
 
 /** `cargo tree -p core --edges normal` 的可执行 crate 名集合（不含 core 自身）。 */

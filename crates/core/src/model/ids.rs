@@ -292,6 +292,17 @@ newtype!(
     check_fingerprint
 );
 
+impl Fingerprint {
+    /// 由**已确认是 64 字符小写 hex** 的文本构造，跳过重复校验。
+    ///
+    /// 只允许 SHA-256 十六进制格式化这类无法失败的内部路径调用（例如 §11.5 的单一指纹入口）；
+    /// 外部输入一律走 [`Fingerprint::new`]。
+    pub(crate) fn from_lower_hex(text: String) -> Self {
+        debug_assert!(text.len() == 64 && is_fingerprint(&text));
+        Self(text)
+    }
+}
+
 newtype!(
     /// Export 内 Agent selector（1..=128 字符，非空；schema 只约束长度）。
     AgentId,
@@ -487,6 +498,10 @@ pub enum EntityRef {
     Node(NodeId),
     Export(ExportId),
     Import(ImportId),
+    /// 本地 Provider 引用（`provider.configured` 审计的目标；§11.6）。
+    ///
+    /// `ProviderRef.id` 是 `^[A-Za-z0-9._-]{1,64}$` 的引用名（不是凭据，也不是 UUID）。
+    Provider(String),
 }
 
 impl EntityRef {
@@ -502,6 +517,7 @@ impl EntityRef {
             Self::Node(_) => "node",
             Self::Export(_) => "export",
             Self::Import(_) => "import",
+            Self::Provider(_) => "provider",
         }
     }
 
@@ -520,6 +536,7 @@ impl EntityRef {
             Self::Node(id) => id.as_str().to_owned(),
             Self::Export(id) => id.as_str().to_owned(),
             Self::Import(id) => id.as_str().to_owned(),
+            Self::Provider(id) => id.clone(),
         }
     }
 }

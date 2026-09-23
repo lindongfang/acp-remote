@@ -197,8 +197,8 @@ Access Node 的 `server::acp_facade` 把本地 ACP Client（Zed）的 `session/n
 | Agent 选择 | `agentId` = 该 Export 目录中唯一的 Agent selector（首切片恰好一个）；多 Agent 的 Export 不在首切片范围 |
 | Export | `exportId` = Import 记录固定的 Export（`CONFIG_REFERENCE.md` §9） |
 | 工作区 | `workspaceAlias` = catalog 中该 Export 的 `defaultWorkspaceAlias` |
-| `templateParams` | 由 Export 的 `defaultTemplateId` 对应 template 的 `params` 校验后填入；未列出的键直接拒绝，不做猜测 |
-| `session/new.cwd` | **不转发**、也不用于选择路径；只作为诊断字段。Owner 侧路径由 Owner 的本地管理入口决定（`SECURITY_DESIGN.md` §12.3） |
+| `templateParams` | 首切片 template **零参数**（`NODE_LINK_PROTOCOL.md` §10），因此固定为空对象或省略；facade 不得自己发明值。Export 若声明了参数，facade 返回参数类错误（invalid params 等价码），不重试 |
+| `session/new.cwd` | ACP 要求的必填绝对路径；有效的绝对 `cwd` 本身不导致拒绝。**不转发**、也不用于选择路径；只作为本地诊断字段，不写入 Node Link `session.create.payload`、对端可见输出或日志。Owner 侧路径由 Owner 的本地管理入口决定（`SECURITY_DESIGN.md` §12.3） |
 | `session/new.mcpServers` | 空数组 → 正常继续；非空 → facade 返回显式 ACP 参数错误（invalid-params 等价码），不得静默丢弃 |
 | `session/new.additionalDirectories` 等未导出字段 | 同上：能力未端到端具备时必须显式拒绝 |
 

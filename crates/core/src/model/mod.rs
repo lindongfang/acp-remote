@@ -121,6 +121,7 @@ macro_rules! token_enum {
 }
 
 mod backend;
+mod config;
 mod elicitation;
 mod error;
 mod event;
@@ -132,6 +133,7 @@ mod scalars;
 mod session;
 
 pub use backend::*;
+pub use config::*;
 pub use elicitation::*;
 pub use error::*;
 pub use event::*;

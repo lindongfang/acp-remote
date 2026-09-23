@@ -1,0 +1,598 @@
+### cargo fmt --all -- --check
+$ exit=0
+
+
+### cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+$ exit=0
+    Checking core v0.0.0 (D:\Project\acp-remote\crates\core)
+    Checking storage-sqlite v0.0.0 (D:\Project\acp-remote\crates\storage-sqlite)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.24s
+
+
+### cargo test --locked --workspace --all-features
+$ exit=0
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 18 tests
+test base64url_rejects_padding ... ok
+test decode_rejects_trailing_bytes ... ok
+test base64url_rejects_non_canonical_and_empty ... ok
+test base64url_round_trip_is_unpadded ... ok
+test decode_rejects_bad_codec_version ... ok
+test decode_rejects_duplicate_tag_before_field_order ... ok
+test decode_rejects_invalid_utf8_domain ... ok
+test decode_rejects_truncated_domain ... ok
+test empty_field_value_is_allowed ... ok
+test encode_rejects_descending_tag ... ok
+test encode_rejects_invalid_domain ... ok
+test encode_rejects_duplicate_tag_before_field_order ... ok
+test decode_rejects_bad_magic ... ok
+test base64url_rejects_standard_alphabet ... ok
+test decode_rejects_truncated_field ... ok
+test integer_field_helpers_round_trip ... ok
+test nul_joined_round_trip_and_rejections ... ok
+test round_trip_preserves_domain_and_fields ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test decode_rejects_foreign_domain ... ok
+test decode_rejects_unregistered_tag ... ok
+test decode_rejects_wire_width_mismatch ... ok
+test encode_rejects_wrong_field_count ... ok
+test round_trip_walks_the_table_in_order ... ok
+test encode_rejects_wrong_fixed_width ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 19 tests
+test cj1::tests::rejects_malformed_numbers_and_structures ... ok
+test cj1::tests::accepts_array_top_level_and_normalizes_elements ... ok
+test cj1::tests::escapes_minimally_and_keeps_non_ascii_utf8 ... ok
+test cj1::tests::caps_nesting_depth ... ok
+test cj1::tests::normalizes_integral_number_spellings_like_the_js_reference ... ok
+test cj1::tests::orders_members_by_utf16_code_unit_not_code_point ... ok
+test cj1::tests::rejects_bad_escapes_and_lone_surrogates ... ok
+test cj1::tests::rejects_bom_and_invalid_utf8 ... ok
+test cj1::tests::rejects_duplicate_member_names_at_any_depth ... ok
+test cj1::tests::rejects_floats_and_numbers_outside_the_safe_integer_range ... ok
+test cj1::tests::is_idempotent ... ok
+test cj1::tests::sorts_members_and_strips_whitespace_at_any_depth ... ok
+test cj1::tests::rejects_scalar_top_level_but_only_after_the_text_parses ... ok
+test tests::nullable_field_accepts_null ... ok
+test tests::extra_fields_preserve_big_integers ... ok
+test cj1::tests::rejects_unescaped_control_characters_in_strings ... ok
+test tests::nullable_field_accepts_value ... ok
+test tests::nullable_field_requires_key ... ok
+test tests::timestamp_accepts_canonical_instants_only ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test fixture_payloads_canonicalize_to_their_payload_digest ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 78 tests
+test broker::tests::creating_and_resolving_interaction_in_one_commit_is_rejected ... ok
+test broker::tests::authorization_denied_for_device_without_scope ... ok
+test broker::tests::accept_commit_failure_rejects_without_publishing ... ok
+test broker::tests::ephemeral_events_are_filtered_before_commit ... ok
+test broker::tests::event_origin_follows_the_producer ... ok
+test broker::tests::flush_merges_deltas_without_crossing_turn_boundaries ... ok
+test broker::tests::event_payload_returns_stored_view_and_none_for_unknown_event ... ok
+test broker::tests::delta_compaction_two_way ... ok
+test broker::tests::imported_receipt_commits_before_publish_and_body_stays_in_memory ... ok
+test broker::tests::idempotency_conflict_on_changed_fingerprint ... ok
+test broker::tests::interaction_resolution_is_first_writer_wins ... ok
+test broker::tests::interaction_request_lands_event_and_pending_row_in_one_commit ... ok
+test broker::tests::mode_list_uses_adapter_modes_only ... ok
+test broker::tests::non_session_event_has_no_session_scoped_identifiers ... ok
+test broker::tests::idempotent_replay_returns_first_turn_without_redispatch ... ok
+test broker::tests::mode_change_rejected_while_turn_running ... ok
+test broker::tests::assistant_messages_complete_with_the_turn ... ok
+test broker::tests::queue_policy_bounds_max_queued_turns ... ok
+test broker::tests::owned_events_commit_before_publish ... ok
+test broker::tests::queued_turn_starts_after_running_turn_finishes ... ok
+test model::tests::acp_raw_enforces_byte_length_and_json_shape ... ok
+test broker::tests::recover_unsettled_terminates_and_backfills ... ok
+test broker::tests::reject_busy_policy_rejects_second_prompt ... ok
+test model::tests::actor_exposes_the_storage_identity_columns ... ok
+test broker::tests::replay_and_snapshot_share_one_read_view ... ok
+test model::tests::audit_record_carries_no_content_and_closed_action_set ... ok
+test broker::tests::terminal_commit_failure_marks_command_uncertain ... ok
+test broker::tests::same_session_submissions_do_not_interleave ... ok
+test model::tests::capability_set_dedups_and_template_selection_validates_keys ... ok
+test model::tests::client_command_validates_family_session_and_version ... ok
+test model::tests::command_record_enforces_the_table_checks ... ok
+test model::tests::command_status_terminal_rules ... ok
+test model::tests::committed_event_and_delivery_keep_session_sequences_consistent ... ok
+test model::tests::config_option_requires_current_value_to_match_kind ... ok
+test model::tests::cursors_are_compound_and_ordered ... ok
+test model::tests::device_record_ties_revocation_state_to_timestamp ... ok
+test model::tests::digest_requires_canonical_unpadded_base64url_of_32_bytes ... ok
+test model::tests::elicitation_values_classify_acp_shapes_from_wire_text ... ok
+test model::tests::elicitation_values_distinguishes_null_from_empty_object ... ok
+test model::tests::entity_ref_exposes_kind_and_target_id_for_storage_columns ... ok
+test model::tests::export_record_checks_defaults_and_uniqueness ... ok
+test model::tests::import_record_requires_wss_endpoint_and_unique_exports ... ok
+test model::tests::elicitation_values_round_trip_all_six_shapes ... ok
+test model::tests::ephemeral_cannot_enter_a_commit ... ok
+test model::tests::interaction_resolution_enforces_action_versus_values ... ok
+test model::tests::local_config_values_enforce_their_invariants ... ok
+test model::tests::node_record_requires_owner_endpoint_only_for_owner_kind ... ok
+test model::tests::other_counters_are_unbounded ... ok
+test model::tests::pairing_record_state_machine_matches_timestamps ... ok
+test model::tests::peer_public_key_is_validated_at_construction_and_derives_its_fingerprint ... ok
+test model::tests::pairing_claim_and_peer_are_typed_and_consistent ... ok
+test model::tests::pending_interaction_and_options_validate_lengths ... ok
+test model::tests::permission_decision_option_id_is_bounded_like_the_wire_field ... ok
+test model::tests::port_error_and_kinds_are_wired_to_the_model_errors ... ok
+test model::tests::public_error_validates_code_charset_and_message_length ... ok
+test model::tests::scope_and_grant_sets_validate_and_dedup ... ok
+test model::tests::session_state_machine_is_terminal_aware ... ok
+test model::tests::session_constructor_checks_cross_field_invariants ... ok
+test model::tests::sequence_is_capped_at_2_pow_63_minus_1 ... ok
+test model::tests::spec_ids_follow_their_own_patterns ... ok
+test model::tests::elicitation_values_enforce_size_depth_and_unique_keys ... ok
+test model::tests::uuid_ids_accept_canonical_and_reject_everything_else ... ok
+test model::tests::turn_state_machine_sets_timestamps_and_stops_at_terminal ... ok
+test model::tests::timestamp_shape_and_ranges_are_enforced_and_ordering_is_chronological ... ok
+test model::tests::view_json_keeps_bytes_and_requires_a_well_formed_object ... ok
+test use_cases::tests::create_session_authorizes_before_resolving_the_workspace ... ok
+test use_cases::tests::create_session_rejects_unregistered_workspace_alias ... ok
+test model::tests::view_json_rejects_nesting_beyond_the_cap ... ok
+test use_cases::tests::create_session_reports_local_resolution_failure_as_unavailable ... ok
+test use_cases::tests::list_sessions_returns_core_summaries ... ok
+test use_cases::tests::command_status_is_scoped_to_the_submitting_actor ... ok
+test use_cases::tests::export_and_import_preconditions_are_enforced ... ok
+test use_cases::tests::query_command_is_authorized_without_side_effects ... ok
+test use_cases::tests::pairing_settlement_carries_the_target_family_audit ... ok
+test use_cases::tests::read_session_merges_live_config_from_the_endpoint ... ok
+test use_cases::tests::remove_import_is_one_atomic_write_set_with_audit ... ok
+test use_cases::tests::revoke_device_carries_its_audit_in_the_write_set ... ok
+test use_cases::tests::workspace_resolution_canonicalizes_and_rejects_invalid_inputs ... ok
+
+test result: ok. 78 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 6 tests
+test common::tests::pattern_strings_reject_out_of_domain_values ... ok
+test common::tests::grant_list_rejects_duplicates_and_keeps_the_commands_json_vocabulary ... ok
+test common::tests::transcript_domains_match_the_table ... ok
+test common::tests::limits_bounds_are_enforced ... ok
+test common::tests::template_param_values_and_caps_are_enforced ... ok
+test common::tests::export_entry_caps_are_enforced ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 6 tests
+test unknown_message_type_and_unknown_envelope_field_are_rejected ... ok
+test envelope_preserves_body_bytes_verbatim ... ok
+test envelope_rules_are_enforced_on_construction ... ok
+test phase_rules_match_the_connection_state_machine ... ok
+test every_message_type_is_covered_by_a_valid_fixture ... ok
+test every_manifest_case_behaves_as_declared ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 7 tests
+test endpoint_requires_a_wss_url ... ok
+test http_error_reuses_the_registered_error_codes ... ok
+test qr_payload_carries_the_owner_endpoint_and_secret ... ok
+test status_request_and_claim_response_shapes_are_enforced ... ok
+test claim_request_constants_and_widths_are_enforced ... ok
+test every_pairing_fixture_parses_as_its_declared_shape ... ok
+test status_response_node_and_owner_follow_the_status ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test unknown_message_type_is_rejected ... ok
+test grant_names_match_the_command_catalog ... ok
+test error_codes_and_retryable_match_registry ... ok
+test transcript_domains_match_the_registry ... ok
+test message_types_match_schema_union ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test domain_lookup_covers_every_registered_domain ... ok
+test tags_are_strictly_ascending ... ok
+test domains_match_registry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test positive_vectors_re_encode_byte_exactly ... ok
+test transcript_negatives_are_rejected_with_declared_error ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test migrate::window::tests::parses_and_formats_round_trip ... ok
+test migrate::window::tests::rejects_malformed_shapes ... ok
+test migrate::window::tests::shifts_across_month_and_year_boundaries ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 28 tests
+test node_roles_share_one_identity_material ... ok
+test import_ownership_is_exclusive_and_write_set_divergence_is_rejected ... ok
+test fail_closed_store_rejects_every_admin_write_path ... ok
+test device_revocation_is_idempotent_and_survives_reopen ... ok
+test default_profile_switch_is_atomic_and_unique ... ok
+test expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep ... ok
+test a_pairing_can_be_settled_only_once ... ok
+test a_failed_audit_write_rolls_back_the_whole_write_set ... ok
+test an_empty_stored_binding_is_reported_as_corrupt ... ok
+test node_revocation_covers_both_roles_and_survives_reopen ... ok
+test only_a_fresh_pairing_can_lift_a_revocation ... ok
+test node_pairing_approval_persists_access_trust ... ok
+test claim_with_a_foreign_host_binding_is_rejected ... ok
+test only_a_fresh_node_pairing_can_lift_a_node_revocation ... ok
+test profile_bindings_must_reference_registered_provider_fields ... ok
+test provider_reference_version_must_advance ... ok
+test capacity_limit_refuses_new_admin_writes_without_deleting_trust ... ok
+test full_import_removal_and_connection_drop_both_keep_audit ... ok
+test rejected_settlement_creates_no_trust_and_ends_the_pairing ... ok
+test revoked_or_rekeyed_device_cannot_be_reactivated_or_rebound ... ok
+test timestamps_are_advanced_never_erased ... ok
+test second_claim_of_the_same_pairing_is_rejected ... ok
+test second_node_role_with_a_foreign_fingerprint_is_rejected ... ok
+test seed_marks_initialized_once_and_ignores_later_seeds ... ok
+test a_constraint_failure_during_approval_leaves_no_half_authorization ... ok
+test no_secret_material_lands_in_any_column ... ok
+test pairing_approval_persists_identity_material_across_reopen ... ok
+test workspace_records_stay_local_and_keep_created_at ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+
+running 5 tests
+test oversized_attachment_is_rejected ... ok
+test sweep_orphans_only_removes_stale_untracked_files ... ok
+test attachments_are_content_addressed ... ok
+test link_records_session_ownership ... ok
+test prune_lru_removes_the_oldest_attachments_first ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 16 tests
+test crash_child ... ignored, 由 crash_recovery_leaves_an_consistent_database 拉起
+
+running 1 test
+test crash_child ... test payload_digest_is_the_cj1_digest_of_the_stored_payload ... ok
+test terminal_for_unknown_request_is_not_found ... ok
+test references_are_intact ... ok
+test session_update_keeps_state_when_absent_and_bumps_version ... ok
+test terminal_commit_completes_the_accepted_command ... ok
+test owned_audit_has_the_frozen_column_list ... ok
+test expected_version_is_part_of_the_idempotency_check ... ok
+test non_canonical_payload_is_rejected_without_writing ... ok
+test integrity_check_is_ok_after_normal_writes ... ok
+test idempotency_conflicts_are_detected ... ok
+test interaction_resolution_is_first_writer_wins ... ok
+test sequences_are_dense_and_global_sequence_covers_node_events ... ok
+test commit_writes_state_turns_events_and_terminal_in_one_transaction ... ok
+test failed_commit_rolls_back_every_row ... ok
+test crash_recovery_leaves_an_consistent_database ... ok
+
+test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+
+running 3 tests
+test compaction_points_the_deltas_at_the_summary_event ... ok
+test unsettled_commands_lists_only_accepted_mutations ... ok
+test invalid_compaction_is_rejected_without_writing ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 5 tests
+test creating_and_resolving_in_one_commit_is_rejected ... ok
+test interaction_without_a_paired_event_is_rejected ... ok
+test node_scope_events_have_null_origin_columns ... ok
+test event_payload_is_byte_exact ... ok
+test interaction_creation_links_the_request_event ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 2 tests
+test ddl_enum_lists_match_the_core_enums ... ok
+test elicitation_decline_round_trips ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 9 tests
+test receipt_without_imported_session_is_rejected ... ok
+test imported_session_queries_filter_as_documented ... ok
+test imported_command_refs_carry_no_message ... ok
+test imported_tables_match_the_frozen_column_lists ... ok
+test epoch_change_invalidates_the_delivery_index ... ok
+test drop_import_keeps_audit_rows ... ok
+test duplicate_receipts_do_not_advance_the_local_sequence ... ok
+test imported_tables_never_hold_owned_content ... ok
+test prune_reclaims_the_imported_family_and_expired_audit ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+
+running 8 tests
+test regenerate_v2_fixtures ... ignored, 夹具生成器：只在需要重建 fixtures/storage/v2 时手动运行
+test corrupt_database_fails_closed ... ok
+test fresh_directory_is_created_at_version_two ... ok
+test too_new_database_is_rejected_without_writing_rows ... ok
+test v2_fixture_is_untouched_by_two_consecutive_starts ... ok
+test a_failed_upgrade_rolls_back_to_v1 ... ok
+test second_open_of_an_upgraded_database_rewrites_nothing ... ok
+test v1_fixture_upgrades_to_v2_and_preserves_rows ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+
+running 4 tests
+test foreign_principal_views_are_relaxed ... ok
+test group_or_other_writable_views_are_relaxed ... ok
+test unix_mode_bits_map_to_the_expected_verdicts ... ok
+test enforcement_only_fails_on_observed_relaxation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test session_limit_is_enforced_per_session ... ok
+test prune_clears_expired_events_referenced_by_terminal_interactions ... ok
+test cursor_validation_reports_the_documented_reasons ... ok
+test prune_removes_expired_events_and_moves_the_window ... ok
+test capacity_measure_matches_the_store ... ok
+test commit_refuses_to_write_when_capacity_cannot_be_recovered ... ok
+test capacity_reports_storage_full_not_backend_when_events_are_referenced ... ok
+test capacity_cleanup_follows_the_documented_order ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+
+running 1 test
+test common::tests::cursor_requires_both_keys_and_rejects_unknown_and_ill_typed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test projection_rejects_view_that_violates_its_registered_shape ... ok
+test prompt_content_only_accepts_text_blocks ... ok
+test command_name_and_payload_must_agree ... ok
+test required_nullable_keys_are_enforced_on_nested_common_types ... ok
+test session_summary_origin_block_is_discriminated_by_kind ... ok
+test subscribe_cursor_key_is_required_but_may_be_null ... ok
+test snapshot_session_state_enum_is_enforced ... ok
+test snapshot_chunk_index_is_a_decimal_string_and_items_follow_the_resource ... ok
+test event_origin_and_remote_origin_follow_the_event_schema ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 7 tests
+test connection_fields_must_appear_together ... ok
+test envelope_rules_are_enforced_on_construction ... ok
+test envelope_preserves_body_bytes_verbatim ... ok
+test phase_rules_match_the_connection_state_machine ... ok
+test unknown_message_type_and_unknown_envelope_field_are_rejected ... ok
+test every_message_type_is_covered_by_a_valid_fixture ... ok
+test every_manifest_case_behaves_as_declared ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 10 tests
+test base64url_fields_require_canonical_unpadded_encoding_of_the_declared_width ... ok
+test control_ping_and_pong_bodies_round_trip ... ok
+test error_code_default_retryable_matches_documented_semantics ... ok
+test error_body_requires_correlation_id_key_and_object_details ... ok
+test feature_lists_reject_duplicates_overlong_and_bad_ids ... ok
+test heartbeat_interval_bounds_are_enforced ... ok
+test limits_minimums_are_enforced ... ok
+test protocol_version_minimums_are_enforced ... ok
+test uuid_and_decimal_string_patterns_are_enforced ... ok
+test scopes_reject_duplicates_empty_and_overlong_entries ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 6 tests
+test canonical_origin_requires_a_bare_https_authority ... ok
+test http_error_reuses_the_registered_error_codes ... ok
+test claim_response_status_is_pinned_to_pending_confirmation ... ok
+test qr_payload_constants_and_widths_are_enforced ... ok
+test status_response_device_and_host_follow_the_status ... ok
+test every_pairing_fixture_parses_as_its_declared_shape ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test unknown_message_type_is_rejected ... ok
+test error_codes_and_retryable_match_registry ... ok
+test view_types_match_schema_defs ... ok
+test message_types_match_schema_union ... ok
+test view_enums_match_schema ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+test domain_lookup_covers_every_registered_domain ... ok
+test tags_are_strictly_ascending ... ok
+test domains_match_registry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test transcript_negatives_are_rejected_with_declared_error ... ok
+test positive_vectors_re_encode_byte_exactly ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+test unregistered_event_type_is_rejected_by_projection ... ok
+test view_keeps_unknown_fields_verbatim ... ok
+test every_view_fixture_projects_onto_its_declared_event_type ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling core v0.0.0 (D:\Project\acp-remote\crates\core)
+   Compiling storage-sqlite v0.0.0 (D:\Project\acp-remote\crates\storage-sqlite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.82s
+     Running unittests src\lib.rs (target\debug\deps\acpr_transcript-fbcd6ea7d9b726f0.exe)
+     Running tests\codec.rs (target\debug\deps\codec-3d1a2152d2bf3a91.exe)
+     Running tests\table.rs (target\debug\deps\table-707d832d3b4ee8c8.exe)
+     Running unittests src\lib.rs (target\debug\deps\acpr_wire-c89e81c962bbb660.exe)
+     Running tests\cj1_fixtures.rs (target\debug\deps\cj1_fixtures-5f56c0479d85182e.exe)
+     Running unittests src\lib.rs (target\debug\deps\acp_core-2746f69ba30bea4f.exe)
+     Running unittests src\lib.rs (target\debug\deps\node_link_protocol-fa2f58049180655b.exe)
+     Running tests\envelope_fixtures.rs (target\debug\deps\envelope_fixtures-53c4d11f1f5a8f4d.exe)
+     Running tests\pairing_fixtures.rs (target\debug\deps\pairing_fixtures-3a3cd1ea90bb9c33.exe)
+     Running tests\schema_drift.rs (target\debug\deps\schema_drift-6b2bab11edcb4d30.exe)
+     Running tests\tables_match_registry.rs (target\debug\deps\tables_match_registry-603650f922209fe3.exe)
+     Running tests\transcript_vectors.rs (target\debug\deps\transcript_vectors-8de14c7b2eb7fe0c.exe)
+     Running unittests src\lib.rs (target\debug\deps\storage_sqlite-537dfa8b74bbd837.exe)
+     Running tests\admin_store.rs (target\debug\deps\admin_store-f91dcdab931b40b6.exe)
+     Running tests\attachments.rs (target\debug\deps\attachments-cd400a4d11af6a1a.exe)
+     Running tests\commit.rs (target\debug\deps\commit-b4276ef505ad3b17.exe)
+     Running tests\compaction_recovery.rs (target\debug\deps\compaction_recovery-f906270f89ed5032.exe)
+     Running tests\contract_v03.rs (target\debug\deps\contract_v03-ffc8db9c53ce44c3.exe)
+     Running tests\enum_coverage.rs (target\debug\deps\enum_coverage-43241ab94adab3a4.exe)
+     Running tests\imported.rs (target\debug\deps\imported-0aac23fd0ae498ae.exe)
+     Running tests\migration.rs (target\debug\deps\migration-d8ab05274f575760.exe)
+     Running tests\permissions.rs (target\debug\deps\permissions-e4e453e0c7bb7ef0.exe)
+     Running tests\retention.rs (target\debug\deps\retention-ea58c509c7e980c4.exe)
+     Running unittests src\lib.rs (target\debug\deps\sync_protocol-e0a67f0722dcb33b.exe)
+     Running tests\body_constraints.rs (target\debug\deps\body_constraints-18ff95c7d06fbca0.exe)
+     Running tests\envelope_fixtures.rs (target\debug\deps\envelope_fixtures-7acac3904c9631df.exe)
+     Running tests\field_constraints.rs (target\debug\deps\field_constraints-3d6cc1ac3e9e6413.exe)
+     Running tests\pairing_fixtures.rs (target\debug\deps\pairing_fixtures-337177d0afefd091.exe)
+     Running tests\schema_drift.rs (target\debug\deps\schema_drift-7913edf23f91e6a6.exe)
+     Running tests\tables_match_registry.rs (target\debug\deps\tables_match_registry-c4f80bab4d5c67a4.exe)
+     Running tests\transcript_vectors.rs (target\debug\deps\transcript_vectors-1fa19e8d4e976a72.exe)
+     Running tests\view_projections.rs (target\debug\deps\view_projections-c5ff9be6e6e0472d.exe)
+   Doc-tests acpr_transcript
+   Doc-tests acpr_wire
+   Doc-tests acp_core
+   Doc-tests node_link_protocol
+   Doc-tests storage_sqlite
+   Doc-tests sync_protocol
+
+
+### node scripts/check-contract-drift.mjs
+$ exit=0
+contract drift OK: §7 的 36 条 DDL 与 crates\storage-sqlite\src\migrate.rs 逐条一致；§5 的 15 个 trait / 87 个方法签名与 crates\core\src\ports.rs 一致
+
+
+### node scripts/check-crate-boundaries.mjs
+$ exit=0
+crate boundaries OK: 6 个 crate 的依赖方向与 §5 矩阵一致（6 个已在矩阵登记）
+
+
+### node scripts/check-doc-links.mjs
+$ exit=0
+doc links OK: 367 relative links, 2278 section refs across 105 markdown files
+note: 891 section refs 的归属文档由上下文决定（未在同一子句内指名文档），按设计未判定；设 DOC_LINKS_VERBOSE=1 可列出位置
+
+
+### npm run check
+$ exit=0
+schema fixtures OK: 117 valid, 23 invalid (ajv Draft 2020-12), 39 event views bound
+command catalog OK: 12 commands
+error registry OK: 58 codes across 2 protocols
+feature registry OK: 11 feature ids across 2 protocols
+contract assets OK: 17 schemas, 155 fixture files, 12 transcript vectors re-encoded from input, 20 negative vectors rejected as declared, 2 SAS values recomputed
+ACP compatibility matrix OK: 25 methods, 11 updates, 5 content blocks, 3 tool content types, 19 capabilities, 8 invariants, 10 test families (71 rows, schema validated by ajv)
+doc links OK: 367 relative links, 2278 section refs across 105 markdown files
+note: 891 section refs 的归属文档由上下文决定（未在同一子句内指名文档），按设计未判定；设 DOC_LINKS_VERBOSE=1 可列出位置
+crate boundaries OK: 6 个 crate 的依赖方向与 §5 矩阵一致（6 个已在矩阵登记）
+contract drift OK: §7 的 36 条 DDL 与 crates\storage-sqlite\src\migrate.rs 逐条一致；§5 的 15 个 trait / 87 个方法签名与 crates\core\src\ports.rs 一致
+PASS  toolchain: Node v24.19.0 / npm 12.0.2
+PASS  openspec: 项目本地 @fission-ai/openspec 1.13.0
+PASS  config: openspec/config.yaml，7 个角色已配置；x-agentic.e2e.enabled=true
+PASS  schema: openspec/schemas/agentic
+PASS  schema validation: openspec schema validate agentic
+PASS  verification skill: .agents/skills/agentic-verify
+PASS  AGENTS.md: agentic 验收路由
+PASS  manifest: agentic 0.2.1 / openspec 1.13.0
+Installation: PASS
+✓ change/admin-state-persistence-v2
+Totals: 1 passed, 0 failed (1 items)
+npm notice run acp-remote-contracts@0.0.0 check
+npm notice run npm run check:schemas && npm run check:commands && npm run check:errors && npm run check:features && npm run check:assets && npm run check:acp && npm run check:docs && npm run check:boundaries && npm run check:drift && npm run check:agentic
+npm notice run acp-remote-contracts@0.0.0 check:schemas
+npm notice run node scripts/check-schema-fixtures.mjs
+npm notice run acp-remote-contracts@0.0.0 check:commands
+npm notice run node scripts/check-command-catalog.mjs
+npm notice run acp-remote-contracts@0.0.0 check:errors
+npm notice run node scripts/check-error-registry.mjs
+npm notice run acp-remote-contracts@0.0.0 check:features
+npm notice run node scripts/check-features.mjs
+npm notice run acp-remote-contracts@0.0.0 check:assets
+npm notice run node scripts/check-contract-assets.mjs
+npm notice run acp-remote-contracts@0.0.0 check:acp
+npm notice run node scripts/check-acp-compatibility.mjs
+npm notice run acp-remote-contracts@0.0.0 check:docs
+npm notice run node scripts/check-doc-links.mjs
+npm notice run acp-remote-contracts@0.0.0 check:boundaries
+npm notice run node scripts/check-crate-boundaries.mjs
+npm notice run acp-remote-contracts@0.0.0 check:drift
+npm notice run node scripts/check-contract-drift.mjs
+npm notice run acp-remote-contracts@0.0.0 check:agentic
+npm notice run node scripts/agentic-gate.mjs
+- Validating...

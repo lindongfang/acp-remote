@@ -487,7 +487,7 @@ hostPublicKey        P-256 public key
 
 ACP Remote Node：
 
-- Windows：DPAPI 或 CNG/TPM。
+- Windows：DPAPI 或 CNG/TPM；第一阶段实交付档位是 DPAPI（当前用户 scope）包裹私钥 + 进程内签名，CNG/TPM 不可导出档位需单独 ADR（`SECURITY_DESIGN.md` §9.2/§20）。
 - macOS：Keychain。
 - Linux：Secret Service 或经过单独评审的系统 keystore；不可用时正式模式失败关闭。持久化加密文件 fallback 必须先通过独立 ADR，不能临时自研。
 
@@ -585,9 +585,6 @@ acp-remote daemon start
 acp-remote daemon stop
 acp-remote daemon status
 
-acp-remote session create
-acp-remote session list
-
 acp-remote device pair
 acp-remote device list
 acp-remote device revoke
@@ -599,6 +596,9 @@ acp-remote import add|list|remove
 acp-remote acp-stdio
 acp-remote doctor
 ```
+
+- **首切片不提供 `session create`**：业务命令 `session.create` 在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `node_link`（它是 Access 请求 Owner 远程建会话，受 `grant.remote-work` 约束），而本地通道不承载业务命令；本地会话的入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`）。`session list` 同属 `post_mvp`，需先解决“是否为命令引入 `local` transport”。
+- CLI 子命令到本地方法/业务命令的映射、配对的多步流程与退出码约定见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.8；本文不重复。
 
 ## 14. npm 分发
 
@@ -719,6 +719,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 按"什么时候必须解决"分类（2026-09-18，避免重复评估）：
 
 - **开工前必须**：#6 —— 已完成（结果见上）。它决定密码学依赖选型，选错会导致 `identity-auth` 返工。
+- **必须固化为常驻回归测试（不是一次性探针）**：#4 的 Windows Job Object 行为（父→孙进程、杀父后孙停止、关 Job 句柄后孙停止）与 #6 的密码学向量与畸形输入（transcript 重编码、P1363 验签、HMAC、SAS、33 字节压缩点与指纹不一致）。两者目前只有未提交的探针记录；实现变更必须把它们带进 CI 可跑的测试，否则视为未完成（约束落在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §3 与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.5）。
 - **首切片验收前必须**：#3（Zed 对非本端发起的 turn 的展示；用假 ACP agent 即可预验，不依赖本仓库代码）、#1/#2（需要真实的 Codex/OMP，用于填写能力兼容报告；不阻塞编码，因为矩阵中这些能力本就是 `conditional_mvp` + `advertise_if_end_to_end`，代码只需如实协商）。
 - **实现期验证**：#4、#5、#8、#9 —— 需要可运行的程序、真机或发布流程。
 - **设计项，不是验证项**：#7 —— 首切片的 endpoint 由配置与 Import 记录给出，不需要发现机制；到阶段三"多 endpoint 自动连接"时才需要设计。

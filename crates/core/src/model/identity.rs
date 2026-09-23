@@ -19,6 +19,7 @@ use super::ids::{
     require_bounded,
 };
 use super::scalars::{Digest, Nonce, Timestamp};
+use sha2::Digest as _;
 use std::fmt;
 use std::str::FromStr;
 
@@ -426,6 +427,10 @@ impl PairingState {
 
 /// 一次性配对记录。`secret_digest` 是 pairing secret 的 SHA-256；明文只存在于创建方内存
 /// （`SECURITY_DESIGN.md` §13.1：凭据不进数据库）。
+///
+/// `host_binding` 是**登记方**在本次配对里宣告的绑定（§7.3 的 `owned_pairing.host_binding`：设备为
+/// canonical origin，节点为本机在该配对中的 endpoint）。认领时对端必须逐字回显同一个值
+/// （§11.2 第 1 条的「本机绑定一致」）；scheme/host 的形状约束由协议边界负责，这里只约束长度。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingRecord {
     id: PairingId,
@@ -435,6 +440,7 @@ pub struct PairingRecord {
     requested_scopes: ScopeSet,
     requested_grants: GrantSet,
     secret_digest: Digest,
+    host_binding: String,
     created_at: Timestamp,
     expires_at: Timestamp,
     claimed_at: Option<Timestamp>,
@@ -443,7 +449,8 @@ pub struct PairingRecord {
 }
 
 impl PairingRecord {
-    /// 构造。`display_name` ≤128 字符；时间戳与状态必须自洽：
+    /// 构造。`display_name` ≤128 字符；`host_binding` 非空且 ≤2048 字符（与 endpoint 上限同口径）；
+    /// 时间戳与状态必须自洽：
     /// `claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ 状态是 `approved`/`consumed`；
     /// `terminal_at` 非空 ⟺ 状态是 `rejected`/`expired`/`consumed`；
     /// 设备配对不带 grants、节点配对不带 scopes。
@@ -456,6 +463,7 @@ impl PairingRecord {
         requested_scopes: ScopeSet,
         requested_grants: GrantSet,
         secret_digest: Digest,
+        host_binding: &str,
         created_at: Timestamp,
         expires_at: Timestamp,
         claimed_at: Option<Timestamp>,
@@ -465,6 +473,7 @@ impl PairingRecord {
         if let Some(display_name) = &display_name {
             require_bounded(display_name, 1, 128)?;
         }
+        require_bounded(host_binding, 1, 2048)?;
         let claimed = state != PairingState::Created;
         if claimed_at.is_some() != claimed {
             return Err(InvalidValue::Field);
@@ -493,6 +502,7 @@ impl PairingRecord {
             requested_scopes,
             requested_grants,
             secret_digest,
+            host_binding: host_binding.to_owned(),
             created_at,
             expires_at,
             claimed_at,
@@ -534,6 +544,11 @@ impl PairingRecord {
     /// pairing secret 的摘要。
     pub fn secret_digest(&self) -> &Digest {
         &self.secret_digest
+    }
+
+    /// 登记方宣告的绑定；认领时对端必须逐字回显（§11.2 第 1 条）。
+    pub fn host_binding(&self) -> &str {
+        &self.host_binding
     }
 
     /// 创建时间。
@@ -587,28 +602,127 @@ impl PeerIdentity {
     }
 }
 
+/// 65 字节 SEC1 未压缩 P-256 公钥（§11.5）。构造即校验，因此类型本身即证明。
+///
+/// 私钥、keystore handle 与 pairing secret 明文**不进** `core::model`（`SECURITY_DESIGN.md` §13.1）；
+/// 本类型是公开可传输的认证材料。
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PeerPublicKey([u8; 65]);
+
+impl PeerPublicKey {
+    /// SEC1 未压缩点长度（`0x04 || X || Y`）。
+    pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
+
+    /// 构造。顺序固定：长度 == 65 → 首字节 == `0x04` → P-256 曲线级 `from_sec1_bytes` 成功。
+    ///
+    /// 长度断言必须在解析之前：`from_sec1_bytes` 接受 33 字节压缩点，不先断言就会绕过
+    /// 「SEC1 uncompressed」合同（`INITIAL_DESIGN.md` §16 第 6 条）。
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, InvalidValue> {
+        if bytes.len() != Self::SEC1_UNCOMPRESSED_LEN || bytes.first() != Some(&0x04) {
+            return Err(InvalidValue::PublicKey);
+        }
+        // 曲线级校验：只确认这是 P-256 上的合法非压缩点。core 不做签名/验签，因此不引入
+        // `p256` 的 `ecdsa` feature（见 `crates/core/Cargo.toml` 的依赖说明）。
+        p256::elliptic_curve::PublicKey::<p256::NistP256>::from_sec1_bytes(bytes)
+            .map_err(|_| InvalidValue::PublicKey)?;
+        let mut key = [0u8; Self::SEC1_UNCOMPRESSED_LEN];
+        key.copy_from_slice(bytes);
+        Ok(Self(key))
+    }
+
+    /// 原始 65 字节（库里 `owned_peer_key.public_key` 的 BLOB 值）。
+    pub fn as_bytes(&self) -> &[u8; Self::SEC1_UNCOMPRESSED_LEN] {
+        &self.0
+    }
+
+    /// 唯一指纹入口：`SHA-256(65 字节原始公钥)` 的 64 字符小写 hex。
+    ///
+    /// 适配器不得各自现算指纹（§11.5）——否则「指纹与公钥不一致」会成为可落库的非法状态。
+    pub fn fingerprint(&self) -> Fingerprint {
+        let digest = sha2::Sha256::digest(self.0);
+        let mut text = String::with_capacity(64);
+        for byte in digest {
+            text.push_str(&format!("{byte:02x}"));
+        }
+        Fingerprint::from_lower_hex(text)
+    }
+}
+
+impl fmt::Debug for PeerPublicKey {
+    /// 公钥是公开材料，但逐字节打印噪声太大；只输出派生指纹。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerPublicKey")
+            .field("fingerprint", &self.fingerprint())
+            .finish()
+    }
+}
+
+impl TryFrom<&[u8]> for PeerPublicKey {
+    type Error = InvalidValue;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        Self::try_from_bytes(bytes)
+    }
+}
+
+/// 测试用的合法 P-256 公钥：标准基点 G 的 SEC1 未压缩编码（曲线上的确定点，无需随机源）。
+#[cfg(test)]
+pub(crate) const TEST_PUBLIC_KEY_HEX: &str = concat!(
+    "04",
+    "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+    "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+);
+
+/// 测试用的合法对端公钥（基点 G 的未压缩编码）。
+#[cfg(test)]
+pub(crate) fn test_peer_public_key() -> PeerPublicKey {
+    let bytes = hex_to_bytes(TEST_PUBLIC_KEY_HEX);
+    PeerPublicKey::try_from_bytes(&bytes).expect("基点 G 是合法的 P-256 未压缩点")
+}
+
+/// 仅供测试的十六进制解码（不做通用解析，避免引入新依赖）。
+#[cfg(test)]
+pub(crate) fn hex_to_bytes(text: &str) -> Vec<u8> {
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let hi = (pair[0] as char).to_digit(16).unwrap_or(0) as u8;
+            let lo = (pair[1] as char).to_digit(16).unwrap_or(0) as u8;
+            (hi << 4) | lo
+        })
+        .collect()
+}
+
 /// claim 声明的对端信息（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2）。
+///
+/// `host_binding` 是 claim 里回显的绑定：设备为 `canonicalOrigin`，节点为 `endpoint`
+/// （`SYNC_PROTOCOL.md` §7.2 的 claim 请求、`NODE_LINK_PROTOCOL.md` §13.2 的 claim body）。存储层用它
+/// 与登记时的 `PairingRecord::host_binding` 比对（§11.2 第 1 条）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingPeer {
     id: PeerIdentity,
     display_name: String,
-    public_key_fingerprint: Fingerprint,
+    public_key: PeerPublicKey,
+    host_binding: String,
     client_nonce: Nonce,
 }
 
 impl PairingPeer {
-    /// 构造。`display_name` ≤128 字符。
+    /// 构造。`display_name` ≤128 字符；`host_binding` 非空且 ≤2048 字符（claim 的回显值）。
     pub fn try_new(
         id: PeerIdentity,
         display_name: &str,
-        public_key_fingerprint: Fingerprint,
+        public_key: PeerPublicKey,
+        host_binding: &str,
         client_nonce: Nonce,
     ) -> Result<Self, InvalidValue> {
         require_bounded(display_name, 1, 128)?;
+        require_bounded(host_binding, 1, 2048)?;
         Ok(Self {
             id,
             display_name: display_name.to_owned(),
-            public_key_fingerprint,
+            public_key,
+            host_binding: host_binding.to_owned(),
             client_nonce,
         })
     }
@@ -623,9 +737,19 @@ impl PairingPeer {
         &self.display_name
     }
 
-    /// 对端公钥指纹。
-    pub fn public_key_fingerprint(&self) -> &Fingerprint {
-        &self.public_key_fingerprint
+    /// 对端公钥（验签材料的唯一来源，§11.5）。
+    pub fn public_key(&self) -> &PeerPublicKey {
+        &self.public_key
+    }
+
+    /// claim 回显的绑定；与登记时的值逐字相等才允许认领（§11.2 第 1 条）。
+    pub fn host_binding(&self) -> &str {
+        &self.host_binding
+    }
+
+    /// 派生指纹；只是 `public_key.fingerprint()` 的便捷入口，不是独立字段。
+    pub fn public_key_fingerprint(&self) -> Fingerprint {
+        self.public_key.fingerprint()
     }
 
     /// 对端 nonce（同一 nonce 重试必须返回原 pairing request，`SYNC_PROTOCOL.md` §7.4）。
@@ -751,6 +875,11 @@ token_enum!(
         NodePaired => "node.paired",
         NodeTrustRevoked => "node.trust_revoked",
         NodeIdentityChanged => "node.identity_changed",
+        ExportCreated => "export.created",
+        ExportRevoked => "export.revoked",
+        ImportAdded => "import.added",
+        ImportRemoved => "import.removed",
+        ProviderConfigured => "provider.configured",
         AuthorizationDenied => "authorization.denied",
         RateLimitTriggered => "rate_limit.triggered",
         StorageIntegrityFailed => "storage.integrity_failed",

@@ -1,0 +1,91 @@
+# final verification round 1 (2026-09-23, main agent)
+# cwd: D:/Project/acp-remote
+# git rev-parse refs/heads/main: 37a398e9dbafa368bdb15853e1c1d9b40f19b28d
+# git rev-parse HEAD: 62ef2649ae6d35e65930df505b2cf41858a19d26
+
+## npx --quiet --no-install openspec-agentic e2e check --change admin-state-persistence-v2 --json
+exit: 1
+{
+  "configPath": "openspec/config.yaml",
+  "enabled": true,
+  "command": "",
+  "maxAttempts": 3,
+  "result": "BLOCKED",
+  "changes": [
+    {
+      "name": "admin-state-persistence-v2",
+      "complete": false,
+      "schema": "agentic",
+      "mode": null,
+      "approval": false,
+      "result": "BLOCKED",
+      "reason": "任务未全部完成（除最终 E2E 行与最终验收行外仍有待办）；单变更检查要求变更完成后判定，未 PASS 即阻断",
+      "marked": false
+    }
+  ],
+  "errors": []
+}
+
+## npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage final --json
+exit: 1
+{
+  "result": "FAIL",
+  "stage": "final",
+  "contractDigest": "sha256:5492db84c2d397eb8d00a22df02a8ecf7b0666534c26af044ede8258c9ba6043",
+  "targetCommit": "37a398e9dbafa368bdb15853e1c1d9b40f19b28d",
+  "evidence": [
+    {
+      "path": "reports/wp6-admin-store-tests.log",
+      "sha256": "sha256:87b993be501a576a5d45a80dc5e9372fb3dd6b35123a06a682f0bcc895d9997f"
+    },
+    {
+      "path": "reports/wp5-contract-drift-before-after.md",
+      "sha256": "sha256:386a808109d07ff84894da9c366a631b9a38bc9d6a538c08ff3c12e9978b8d76"
+    },
+    {
+      "path": "reports/wp1-core-tests.log",
+      "sha256": "sha256:f294a5a7aa12becdd4a1ff7c32f47a8bd03cf0c4b7b5609989f515ef0438e7b9"
+    },
+    {
+      "path": "reports/wp3-core-tests.log",
+      "sha256": "sha256:f294a5a7aa12becdd4a1ff7c32f47a8bd03cf0c4b7b5609989f515ef0438e7b9"
+    },
+    {
+      "path": "reports/wp4-migration-tests.log",
+      "sha256": "sha256:ff8405540caefe49c44b5fc63a7d50beafa4c8d6a686af1074153b169b88d949"
+    }
+  ],
+  "errors": [
+    "任务 6.6 未完成",
+    "任务 6.7 未完成",
+    "任务 6.8 未完成",
+    "任务 7.1 未完成",
+    "任务 7.2 未完成",
+    "任务 7.3 未完成",
+    "当前代码 HEAD 与计划目标引用不一致；请在目标版本 worktree 检查",
+    "验收结论的 target_commit 已失效",
+    "当前证据验收结论不是 PASS",
+    "目标代码状态不能验收：执行后工作区仍有未提交改动：penspec/changes/admin-state-persistence-v2/tasks.md、.omp、.pi/prompts/opsx-verify.md…"
+  ],
+  "boundary": "仅检查结构、引用和版本；不证明用户批准、角色独立性或测试真实性。"
+}
+
+## 提交后复跑（HEAD 0b5fa8093b63181b6cd15dd1243b79acafa80bd3，2026-09-23）
+exit: 1
+{
+  "result": "FAIL",
+  "targetCommit": "37a398e9dbafa368bdb15853e1c1d9b40f19b28d",
+  "contractDigest": "sha256:5492db84c2d397eb8d00a22df02a8ecf7b0666534c26af044ede8258c9ba6043",
+  "errors": [
+    "任务 6.6 未完成",
+    "任务 6.7 未完成",
+    "任务 6.8 未完成",
+    "任务 7.1 未完成",
+    "任务 7.2 未完成",
+    "任务 7.3 未完成",
+    "当前代码 HEAD 与计划目标引用不一致；请在目标版本 worktree 检查",
+    "验收结论的 target_commit 已失效",
+    "当前证据验收结论不是 PASS",
+    "目标代码状态不能验收：执行后工作区仍有未提交改动：.omp、.pi/prompts/opsx-verify.md、.pi/settings.json…"
+  ]
+}

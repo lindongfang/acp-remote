@@ -9,6 +9,7 @@
 //! `RemoteDeliveryStore::commit_receipt` 一个写入口，且默认 `no-content-cache`：本 crate 不写
 //! 任何远程会话正文。
 
+pub mod admin;
 pub mod error;
 pub mod migrate;
 pub mod session_store;

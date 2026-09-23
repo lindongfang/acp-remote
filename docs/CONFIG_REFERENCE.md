@@ -1,12 +1,14 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.5
+> 版本：0.6
 > 日期：2026-09-18
 > 修订记录（2026-09-18）：补充 `daemon.tls.*`、`daemon.local_admin.endpoint`、`logging.*` 与 Owner 侧 `[[exports]]`（原先只有 Access 侧 `[[imports]]`）；明确限流与协议上限是固定 v1 常量而非配置键。
 > 修订记录（2026-09-18，0.3）：`[[exports]].grants` 更名为 `scopes`，与 Node Link Export 模型及本地通道 `ExportView` 同名同义（Access 侧 `[[imports]].grants` 是另一概念，不变）。
 > 修订记录（2026-09-18，0.4）：新增 `storage.audit_retention_days`（默认 365），审计清理排在容量顺序最后。
 > 修订记录（2026-09-18，0.5）：补齐 `storage.attachment_dir`——`CORE_PORTS_AND_STORAGE.md` §7.1 新增的附件目录配置键，此前只在合同里定义、未落到本表；§5.1 增加「备份与拷贝」说明（WAL 模式下不能只拷主库文件）。
+> 修订记录（2026-09-23，0.6）：核对「配置与管理状态的权威」与 seed 语义——与 `CORE_PORTS_AND_STORAGE.md` §5.3 的 `LocalConfigStore`/`SeedWrite` 一致（首次初始化单事务导入全部合法 profile、空列表也标记完成、初始化完成后数据库是唯一权威、重启不重导、旧配置不得复活已撤销 Export 或已删除 Import），本轮**不改语义**；凭据注入小节的引用由 §11.6 改为 §5.3，管理状态的持久化边界与升级规则改指 §7.2/§7.3/§7.4 与 §11。
+> 修订记录（2026-09-23，0.7）：管理 store 的落盘实现已落地（`crates/storage-sqlite/src/admin/`），标题与「待实现」标记随之去掉；配置键名、默认值与 seed 语义**未变**（仍以本节为唯一权威）。
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 
 本文是 Daemon 运行时配置键名、类型、默认值与可否调整的**唯一权威来源**。协议层限额不在此重复定义：
@@ -18,7 +20,7 @@
 
 启动配置来源与优先级（高者覆盖低者）：命令行参数 > 配置文件 > 内置默认值。环境变量只用于替换配置文件路径（`ACP_REMOTE_CONFIG`），不承载业务配置，避免把凭据写进进程环境。此优先级不适用于下面的 Daemon 管理状态。
 
-### 配置与管理状态的权威（2026-09-23，待实现）
+### 配置与管理状态的权威（2026-09-23）
 
 | 数据 | 唯一持久化权威 | 写入与生效时机 |
 |---|---|---|
@@ -28,7 +30,7 @@
 | 设备/节点信任、Export、Import | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
 | Provider/MCP 凭据、Node 私钥 | 平台 keystore | 普通配置与 SQLite 只保存非秘密标识/引用；凭据修改只影响后续使用该配置启动的进程 |
 
-- SQLite 的管理状态由运行中的 Daemon 单一写入；CLI 经本地 IPC 请求修改，不自行写库、不回写 TOML。持久化边界与升级规则见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11。
+- SQLite 的管理状态由运行中的 Daemon 单一写入；CLI 经本地 IPC 请求修改，不自行写库、不回写 TOML。持久化边界与升级规则见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.2/§7.3/§7.4 与 §11。
 - §7 的 `[[agents.profiles]]` 是**首次初始化种子**：在管理配置首次初始化的单次事务中导入全部合法 profile，并记录初始化完成标记；空列表也记录完成。任一项非法则整批失败。已有同 ID 管理记录与种子不一致时显式报错，不覆盖、不合并。
 - 初始化完成后，数据库是 profile 的唯一权威；重启不再导入种子。配置文件仍含 profile 时给出不含参数值的提示，后续修改应使用 `agent.configure`；不能因删空数据库中的某一条 profile 就再次导入它。
 - §9 的 TOML 片段是**管理记录的说明性表示**，不是用户配置文件支持的输入；启动配置中出现 `imports`/`exports` 必须明确拒绝并指向本地管理命令，不能忽略它们或据此创建信任。这样旧配置无法在重启时复活已撤销的 Export 或已删除的 Import。
@@ -40,7 +42,7 @@
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `daemon.data_dir` | path | 平台用户配置目录下的 `acp-remote/` | SQLite、附件、日志的根目录；权限要求见 `SECURITY_DESIGN.md` §13.2 |
-| `daemon.listen` | string | `"127.0.0.1:8765"` | 本地监听地址；默认只监听 loopback，监听 `0.0.0.0`/`[::]` 必须显式配置并在启动输出中告警 |
+| `daemon.listen` | string | `"127.0.0.1:8765"` | HTTP/WSS listener 地址；**Sync、Node Link 与两者的配对 HTTP 共用同一个 listener，按 path 路由**（`/sync/v1`、`/node-link/v1`、`/sync/v1/pairing/*`、`/node-link/v1/pairing/*`）。默认只监听 loopback；监听 `0.0.0.0`/`[::]` 必须显式配置并在启动输出中告警 |
 | `daemon.public_origin` | string\\|null | `null` | canonical public origin（`scheme://host[:port]`）；配置了远程入口就必须给出，用于 Origin/Host 校验与配对二维码 |
 | `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host |
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
@@ -51,8 +53,17 @@
 | `daemon.tls.cert_path` | path\|null | `null` | PEM 证书链；`mode = "direct"` 时必需，文件权限按 `SECURITY_DESIGN.md` §13.2 检查 |
 | `daemon.tls.key_path` | path\|null | `null` | PEM 私钥；`mode = "direct"` 时必需，不得写入日志、错误信息或崩溃报告 |
 
-## 2. `sync`
+三种部署形态下这三个键的填法（Node Link 的对端是**另一台机器**，因此它必须真的可达；`daemon.listen` 只监听 loopback 时 Node Link 只在同机测试下可用）：
 
+| 形态 | `daemon.listen` | TLS | `public_origin` | 额外要求 |
+|---|---|---|---|---|
+| 同机反代（默认 `tls.mode = "proxy"`） | `127.0.0.1:8765` | 由反代终止 | `https://<对外 host>` 必填 | 反代必须**透传 WebSocket upgrade**，且不得只转发页面路径而与 `/sync/v1`、`/node-link/v1` 脱节；反代地址列入 `daemon.trusted_proxies` |
+| Daemon 自己终止 TLS（`tls.mode = "direct"`） | 可为 `0.0.0.0:8765`（必须显式+启动告警） | `cert_path`/`key_path` 必需 | 必须与证书 host 一致 | 证书轮换不改变 Node identity（`SECURITY_DESIGN.md` §9.5） |
+| 局域网 / Tailscale / WireGuard 直连 | 非 loopback 地址（同上告警） | 仍需 `direct` + 自备证书（如 `tailscale cert`） | 同上 | 不存在「明文 wss」；`dev_mode.allow_plaintext` 只允许 loopback（§10） |
+
+- `public_origin` 是 Origin/Host 校验、PWA canonical origin 与配对 URL/endpoint 的**权威 host**；Node Link 不依赖 Origin（对端不是浏览器），但仍受 `Host`/`daemon.allowed_hosts` 与 `SECURITY_DESIGN.md` §7.1 的 TLS 边界约束。
+
+## 2. `sync`
 只列出运行时可调项，具体默认值与上限语义以 `SYNC_PROTOCOL.md` §14 为准：
 
 | 键 | 默认值 | 对应协议字段 |
@@ -126,6 +137,13 @@ args = []
 env_allowlist = ["PATH", "HOME"]     # 只传递列出的环境变量，不含任何 ACP Remote 密钥
 default = true
 
+# 凭据到环境变量的显式绑定：值从平台 keystore 读取，永不落本文件（见下方"凭据注入"）。
+# name 必须同时出现在 env_allowlist 里；provider_id 必须已由 local.provider.configure 建立。
+[[agents.profiles.env]]
+provider_id = "openai"
+field = "api_key"
+name = "OPENAI_API_KEY"
+
 [[agents.profiles]]
 agent_id = "omp"
 command = "omp"
@@ -134,13 +152,15 @@ args = ["acp"]
 
 - `agent_id` 是稳定标识，进入 `SessionSummary.agent.agentId`；启动 profile 与 capability 差异按 `MODULE_ARCHITECTURE.md` §9 只作为数据，不在核心堆积 Agent 名称判断。
 - 环境变量白名单是上限而非提示：未列出的变量不得注入子进程（`SECURITY_DESIGN.md` §12.2）。
-- workspace、Provider/MCP 凭据不在本文件：它们由本地管理入口（`local.workspace.select`、`local.provider.configure`）在 Daemon 内维护。
+- **凭据注入**：`env` 绑定只说“哪个 Provider 字段写进哪个环境变量名”，**值**由平台 keystore 持有，启动子进程时经 `CredentialResolver` 解析（`CORE_PORTS_AND_STORAGE.md` §5.3）。未绑定、未列入 `env_allowlist` 或 keystore 不可用 → 启动失败关闭，不得静默跳过；Node/Device 私钥与 pairing secret 永不注入。
+- workspace、Provider/MCP 凭据值不在本文件：它们由本地管理入口（`local.workspace.select`、`local.provider.configure`）在 Daemon 内维护。
+- Agent 进程的启动/短请求/关闭超时、单条 ACP 消息上限、stderr 缓冲上限、空闲回收规则都是**固定 v1 常量**（不是本文件的配置键）：见 `SECURITY_DESIGN.md` §12.2 的表；只有会话空闲回收复用本文档 §4 的 `sessions.idle_timeout_ms`。
 
 ## 8. `identity`
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `identity.keystore` | enum | `"platform"` | `platform` 使用 DPAPI/CNG、Keychain、Secret Service；`ephemeral` 仅允许显式开发模式 |
+| `identity.keystore` | enum | `"platform"` | `platform` 使用平台安全存储：Windows 当前档位是 DPAPI（当前用户 scope）包裹私钥、签名在进程内完成，macOS 是 Keychain，Linux 是 Secret Service；不可导出的硬件保护档位（CNG/TPM）需单独 ADR（`SECURITY_DESIGN.md` §9.2/§20）。`ephemeral` 仅允许显式开发模式 |
 | `identity.fail_closed_on_missing_keystore` | boolean | `true` | 平台 keystore 不可用时正式模式拒绝启动；`false` 只能出现在开发模式配置中 |
 
 ## 9. `imports` / `exports`
@@ -181,18 +201,20 @@ display_name = "公司默认工作区"
 template_id = "default"
 display_name = "默认"
 workspace_alias = "company-agent-default"
-
-[[exports.templates.params]]
-name = "branch"
-type = "string"
-required = false
-pattern = "^[a-zA-Z0-9._/-]{1,128}$"
-enum = []
+# 首切片 template 必须无参数（NODE_LINK_PROTOCOL.md §10）。下面这段 params 是 post_mvp 的
+# 说明性表示，不是首切片的合法输入；有参 template 需要先定「谁提供值」与「影响什么」。
+# [[exports.templates.params]]
+# name = "branch"
+# type = "string"
+# required = false
+# pattern = "^[a-zA-Z0-9._/-]{1,128}$"
+# enum = []
 ```
 
 - `cache_policy` 在 v1 固定为 `no-content-cache`；管理写入拒绝其他值，启动加载发现非法持久值则失败关闭，不允许绕过 Owner 的内容策略。
 - `export_id`、`agent_ids`、`workspace_aliases`、`templates` 与 `scopes` 一起构成 `session.create` 参数（`agentId`/`exportId`/`workspaceAlias`/`templateParams`）的唯一可引用集合；未列出的取值一律拒绝（`nodelink.export.not_granted` 或 `nodelink.command.unsupported_field`）。`scopes` 与 Node Link Export 模型的同名字段同义（`NODE_LINK_PROTOCOL.md` §10）；Access 侧 `[[imports]].grants` 是另一概念（本节点自己的授权子集），不随此改名。
-- `default_workspace_alias` 必须出现在同一条目的 `workspace_aliases` 中，`default_template_id` 必须出现在 `templates` 中；首切片恰好一个 workspace alias 与一个 template。
+- `default_workspace_alias` 必须出现在同一条目的 `workspace_aliases` 中，`default_template_id` 必须出现在 `templates` 中；首切片恰好一个 workspace alias 与一个 template，且该 template **不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）。
+- `[[exports.workspace_aliases]].alias` 就是本机 `owned_workspace.alias`（同一命名空间）：`export.create` 必须校验每个 alias 已在 `local.workspace.select` 建立，Export 只引用符号名、**不复制路径**（`SECURITY_DESIGN.md` §12.3）。
 - `templates.params[].type` ∈ `string|boolean|integer`；`pattern` 只对 `string` 生效；`enum` 为空数组表示不限制取值。`session.create.payload.templateParams` 的键必须来自这里。
 - 原始 workspace 路径与 Provider/MCP 凭据不出现在本文件：它们由 `local.workspace.select`、`local.provider.configure` 在 Daemon 内维护（`SECURITY_DESIGN.md` §12.3）。
 

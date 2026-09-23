@@ -75,7 +75,7 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 ```
 
 - PWA 从 canonical origin 加载静态资源。
-- WebSocket endpoint 为同源 `/sync/v1`。
+- WebSocket endpoint 为同源 `/sync/v1`；它与 Node Link 的 `/node-link/v1`、两者的配对 HTTP 路径**共用同一个 listener**（`CONFIG_REFERENCE.md` §1 的 `daemon.listen`），按 path 路由。
 - 客户端必须请求 WebSocket subprotocol `acp-remote.sync.v1.json`。
 - 服务端必须选择该 subprotocol，否则客户端终止连接。
 - 正式连接只允许 `wss://`；`ws://` 只允许显式开发模式和 loopback。

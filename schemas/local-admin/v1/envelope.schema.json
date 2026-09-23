@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp-remote.dev/schemas/local-admin/v1/envelope.schema.json",
+  "title": "ACP Remote Local Admin Channel v1 Envelope",
+  "description": "docs/LOCAL_ADMIN_PROTOCOL.md §3/§4/§6 的机器表达。只约束信封：framing 常量、信道号、方法名枚举、错误码枚举与请求/响应分支。各方法的 params/result 形状仍以该文档 §5 为权威，本 schema 不复制它们（params/result 是明确的开放容器）。channel 0x02 的 ACP 字节流不属于本文件：它只有分帧与上限是合同（LOCAL_ADMIN_PROTOCOL.md §3.1）。",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/successResponse" },
+    { "$ref": "#/$defs/errorResponse" }
+  ],
+  "$defs": {
+    "framing": {
+      "const": {
+        "lengthPrefixBytes": 4,
+        "maxPayloadBytes": 1048576,
+        "maxInFlightRequests": 32,
+        "channelLocalAdmin": 1,
+        "channelAcpStream": 2
+      }
+    },
+    "methodName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9]+)*$",
+      "enum": [
+        "daemon.status",
+        "daemon.stop",
+        "workspace.select",
+        "agent.configure",
+        "provider.configure",
+        "device.pair.begin",
+        "device.pair.status",
+        "device.pair.confirm",
+        "device.pair.reject",
+        "device.list",
+        "device.revoke",
+        "node.pair.begin",
+        "node.pair.status",
+        "node.pair.confirm",
+        "node.pair.reject",
+        "node.list",
+        "node.revoke",
+        "export.create",
+        "export.list",
+        "export.revoke",
+        "import.add",
+        "import.list",
+        "import.remove",
+        "audit.export"
+      ]
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "local.unsupported",
+        "local.invalid_request",
+        "local.invalid_params",
+        "local.not_found",
+        "local.conflict",
+        "local.expired",
+        "local.remote_error",
+        "local.unavailable",
+        "local.internal"
+      ]
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "method", "params"],
+      "properties": {
+        "v": { "const": 1 },
+        "id": { "$ref": "#/$defs/uuid" },
+        "method": { "$ref": "#/$defs/methodName" },
+        "params": {
+          "type": "object",
+          "description": "无参数方法必须发送 {}，不用 null（LOCAL_ADMIN_PROTOCOL.md §4）"
+        }
+      }
+    },
+    "successResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "ok", "result"],
+      "properties": {
+        "v": { "const": 1 },
+        "id": { "$ref": "#/$defs/uuid" },
+        "ok": { "const": true },
+        "result": {
+          "type": "object",
+          "description": "无返回值的方法返回 {}；凭据值永不回显（LOCAL_ADMIN_PROTOCOL.md §5.2）"
+        }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "id", "ok", "error"],
+      "properties": {
+        "v": { "const": 1 },
+        "id": { "$ref": "#/$defs/uuid" },
+        "ok": { "const": false },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "$ref": "#/$defs/errorCode" },
+            "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        }
+      }
+    }
+  }
+}

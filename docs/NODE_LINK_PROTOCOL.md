@@ -43,6 +43,8 @@ Node Link 不等于：
 
 Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身份由 §9 的 transcript 证明。TLS 终止点必须位于对应节点的可信边界内。
 
+`[决定]` 本端点与 Sync 的 `/sync/v1`、两者的配对 HTTP 路径（§13.1）**共用同一个 listener**（`CONFIG_REFERENCE.md` §1 的 `daemon.listen`），按 path 路由，不需要单独配置端口。因为对端是另一台机器，`daemon.listen` 只监听 loopback 时本端点只在同机测试下可用；对外暴露必须显式监听非 loopback 地址或经同机可信反代，具体形态见 `CONFIG_REFERENCE.md` §1 的三形态表。
+
 ### 2.2 消息信封
 
 所有 WSS 消息使用同一外层结构：
@@ -274,7 +276,7 @@ createdAt / revokedAt
 - Access Node 对其本地 Zed/PWA/CLI 负责；
 - 有效权限是 `Owner export grant ∩ Access local grant ∩ runtime capability`；
 - imported Agent 禁止再次通过 Node Link 导出；
-- 审计记录包含 `viaNodeId` 和由 Access Node 认证的 `localPrincipalRef`，但 Owner 不把后者当成自己直接认证的身份。
+- 审计记录分两侧，**不靠 wire 传递**：**Owner 侧**的命令审计行只记 `viaNodeId`（即 `AuditRecord.via_node`），`localPrincipalRef`/`local_principal_ref` 为 `null`——v1 的 `command.submit` 与握手上没有承载它的字段，Owner 也**不得**假设能知道对端本地是谁；**Access 侧**的审计行记录它自己认证的本地 principal（`local_principal_ref`），只供本节点归因。因此 Owner 不把 `localPrincipalRef` 当成自己直接认证的身份；将来若要让 Owner 得到它，必须在握手或 `command.submit` 上定义字段并走 §2.3 的兼容流程，不能把现有字段当已有能力使用。
 
 这是第一阶段明确接受的节点级信任模型。Owner 可以按 Access Node 单独授权、限流和撤销，但不能据此声称已经端到端认证实际操作人。需要 Owner 直接认证员工身份时，必须新增独立用户身份协议，不能把 `localPrincipalRef` 升格为安全凭据。
 
@@ -370,7 +372,14 @@ retention and cache hints
 createdAt / revokedAt
 ```
 
-`WorkspaceTemplate.params[]` 的每一项是 `{ name, type, required, pattern, enum }`：`type ∈ string|boolean|integer`，`pattern` 只对 `string` 生效，`enum` 为空表示不限制取值。`session.create.payload.templateParams` 的键必须来自被选 template 的 `params`，取值必须满足该项的 `type` 与 `pattern`/`enum`；未知键返回 `nodelink.command.unsupported_field`，类型或约束不符返回 `nodelink.export.not_granted`。首切片恰好发布一个 workspace alias 与一个 template，两者分别由 `defaultWorkspaceAlias` 与 `defaultTemplateId` 指定。
+`WorkspaceTemplate.params[]` 的每一项是 `{ name, type, required, pattern, enum }`：`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，每项 template 至多 32 个 param；`type ∈ string|boolean|integer`，`pattern` 只对 `string` 生效且 ≤512 字符，`enum` 为 `null` 或成员全为 string 的非空数组（v1 的 wire 如此，非 string 类型的枚举不在 v1）——空数组不合法，表示「不限制取值」用 `null`。机器权威是 [`schemas/node-link/v1/common.schema.json`](../schemas/node-link/v1/common.schema.json) 的 `workspaceTemplateParam`；`docs/LOCAL_ADMIN_PROTOCOL.md` §5.5 的本地副本必须与它同形，不得放宽或收紧。
+
+`[决定]`（2026-09-23）**首切片的 workspace template 必须零参数**（`params = []`）：
+
+- 原因：参数的**来源**与**用途**两端都未定义。来源侧：`session/new` 不携带这些键（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6 同时禁止从 `_meta` 之类未导出字段偷渡），而 template 本身只有约束、没有默认值，因此任何 `required = true` 的参数在 Access 侧都无法填入；用途侧：参数到了 Owner 之后影响什么（环境变量？workspace 准备？初始 prompt？）没有任何文档定义，`owned_workspace` 也只有一个固定路径、没有模板准备步骤。
+- 因此首切片：Owner 发布的 template `params` 必须为空数组；Access 只在**声明了参数**的 Export 上返回明确不支持（`nodelink.command.unsupported_field`），**不得**静默忽略参数。
+- 有参 template 属 `post_mvp`：启用前必须先在本节定义「值由谁提供」与「影响什么」两侧语义（可能需要新 feature 与 ADR），并按 §2.3 的兼容流程登记。
+- 参数存在时的 wire 校验规则（键集、`type`/`pattern`/`enum`）仍然有效，供 `post_mvp` 与跨版本兼容使用；`session.create.payload.templateParams` 的键必须来自被选 template 的 `params`，未知键返回 `nodelink.command.unsupported_field`，类型或约束不符返回 `nodelink.export.not_granted`。首切片恰好发布一个 workspace alias 与一个 template，两者分别由 `defaultWorkspaceAlias` 与 `defaultTemplateId` 指定。
 
 第一阶段 `cachePolicy` 固定为 `no-content-cache`；字段保留是为了以后协商更严格或经 ADR 接受的缓存模式，而不是允许 Access 自行选择正文缓存。
 
@@ -507,11 +516,18 @@ export 条目字段（`catalog.snapshot.exports[]` 与 `catalog.changed.added/up
 | `agents` | array | 必需 | 每项 `{ agentId, name, capabilitiesRef }` |
 | `workspaceAliases` | array | 必需 | 每项 `{ alias, displayName }`；`alias` 是可出现在 `session.create` 的符号名 |
 | `defaultWorkspaceAlias` | string（`^[a-z0-9][a-z0-9._-]{0,63}$`） | 必需 | 必须是 `workspaceAliases[].alias` 之一；Access 的 `session/new` 映射用它填 `session.create.workspaceAlias` |
-| `templates` | array | 必需 | 每项 `{ templateId, displayName, workspaceAlias, params[] }`；`params[]` 每项 `{ name, type, required, pattern, enum }`，`type ∈ string\|boolean\|integer`，`pattern` 与 `enum` 可为 `null` |
+| `templates` | array | 必需 | 每项 `{ templateId, displayName, workspaceAlias, params[] }`；`params[]` 每项 `{ name, type, required, pattern, enum }`，`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，`type ∈ string\|boolean\|integer`，`pattern` 可为 `null`（≤512 字符），`enum` 可为 `null` 或成员全为 string 的非空数组（`schemas/node-link/v1/common.schema.json` 的 `workspaceTemplateParam` 是机器权威）。**首切片的 template 必须 `params = []`**（§10 的 `[决定]`）：参数的来源与用途都未定义，有参 template 属 `post_mvp` |
 | `scopes` | array | 必需 | `grant.*` 子集，取值限于 §10 表 |
 | `capabilityCeilingRef` | string（`^[A-Za-z0-9._-]{1,128}$`） | 必需 | Owner 侧能力上限的不透明引用；节点不得跨节点解释其内容 |
 | `cachePolicy` | const `"no-content-cache"` | 必需 | v1 固定值 |
 | `revoked` | boolean | 必需 | 撤销标记；`true` 的 Export 不参与新 attach |
+
+`[决定]` **catalog 投影的生命周期（Access 侧）**：
+
+- catalog 是**绑定在当前 Node Link 连接上的内存数据**，不是持久化状态：连接建立时由 `catalog.subscribe`/`catalog.snapshot` 取一次，连接断开即失效；首切片不实现 `catalog.changed`（§17），因此没有增量。
+- Access **不得**把它写入 SQLite 或任何持久存储：[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13.4 的 Access 可持久化白名单是封闭的，catalog 不在其中；[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7 因此**不新增** catalog 表。
+- 依赖它的本地操作也因此只在连接期可用：`import.add` 在无常用快照时返回 `local.unavailable`（可重试），而不是 `local.not_found`（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.5）；`session/new` 的映射（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）本就需要 Owner 在线，否则返回 `resource.remote_unavailable`。
+- Owner 侧相反：它从自己的 SQLite Export 记录投影出 catalog（`RemoteCatalogQueries`），不需要额外缓存。
 
 ### 12.4 Resource 消息
 
@@ -595,7 +611,7 @@ resource.attach → resource.attached → resource.subscribe
 - 只允许上述四个键；`payload` 出现 `cwd`、`mcpServers`、任何绝对路径、任何凭据字段（例如 `apiKey`、`token`、`env`、`credential`）时，Owner **必须**以 `command.rejected` 回复，`error.code = "nodelink.command.unsupported_field"`，`details.field` 必须给出被拒的字段名，且不得创建会话或部分应用参数。
 - `agentId`/`exportId`/`workspaceAlias` 必须同时存在于该 Access 可见的 Export（§12.3）与 `grant.remote-work` 的授权范围内；未导出的 Agent、未知 alias 或不属于该 Export 的组合返回 `nodelink.export.not_granted`，拒绝时可给出 `details.parameter` 指明被拒的参数名。
 - `workspaceAlias` 是符号名（`^[a-z0-9][a-z0-9._-]{0,63}$`），不构成路径；绝对路径在语法上就无法通过该 pattern。
-- `templateParams` 只能携带 Export template 声明的键；Owner 必须在应用前按 template 校验，未知键按 `nodelink.command.unsupported_field` 拒绝。
+- `templateParams` 只能携带 Export template 声明的键；Owner 必须在应用前按 template 校验，未知键按 `nodelink.command.unsupported_field` 拒绝。**首切片 template 零参数**（§10）：`templateParams` 必须省略或为空对象；收到声明了参数的 Export 时 Access/Owner 都要明确拒绝，不得静默忽略。
 - `session.create` 的 `sessionRef`/`attachmentId`/`attachmentGeneration`/`expectedVersion` 必须为 `null`；创建成功后 Access 通过 `resource.attach` 取得 attachment，再提交其他会话范围命令。
 
 `session.create` 的结果契约：
@@ -884,6 +900,17 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 - 慢消费者触发 backpressure 或断开后，由 origin cursor 重放补回，不得丢弃 Owner 事件或阻塞其他连接。
 - 交互请求（权限、elicitation）属于**会话**而非某条连接：Owner 的 `permission.requested` 到达 Access 后必须由持有该会话 attachment 的 facade 转成对上游客户端的请求（外部 turn 同样如此，Zed 会渲染并应答），答案按该 interaction 的 `requestId` 关联回传为 `permission.resolve`。Owner 已写入 `interaction.already_resolved` 之后到达的应答必须被拒绝，不得覆盖既有结果。
 
+`[决定]`（2026-09-23）**连接建立与重连**（首切片固定行为；退避参数是固定 v1 常量，不是配置键）：
+
+- **首次连接**：Owner 侧配对 `approved` 后，Access **立即**尝试建立 Node Link 连接，不等用户下一次操作。
+- **启动连接**：组合根启动完成后，对每条 `kind = owner` 且 `state = paired` 的记录自动发起连接；`pending`/`revoked` 不连。
+- **重连退避**：断线后指数退避（初值 1 s、上限 60 s、每次翻倍），并且**不得小于**服务端给出的退避要求（`nodelink.resource.rate_limited` 的 `details.retryAfterMs`，§14.1）。
+- **心跳超时**：按 `node_link.heartbeat_interval_ms`（默认 30 s）发送心跳；超过 90 s（固定常量，§2.5）未收到对端任何消息 → 关闭连接并进入重连，**不**删除信任、**不**清理无正文索引。
+- **撤销即停**：收到 `node.trust.revoked`（§12.6）或本地 `node.revoke` 提交后→停止重连并关闭连接。
+- **每次连接都重取 catalog**：catalog 是连接期内存数据（§12.3），重连后重新 `catalog.subscribe`；先 `resource.attach` 再恢复订阅（本节首段）。
+- **不自动重放副作用**：重连只自动恢复安全查询与订阅；mutation 只能按原 `requestId` 查询终态（本节首段）。
+- **状态可见性**：Access 侧链路状态由组合根暴露在本地管理的 `daemon.status.links[]`（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.2），**不**写进 `owned_node`/`imported_import` 等持久记录（运行时状态不是授权状态）。
+
 ## 16. 网络与部署
 
 Node Link 只要求可达的可信 HTTPS/WSS endpoint，不绑定 Tailscale：
@@ -905,7 +932,7 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 4. 远程 Zed 经 Access Node `acp_facade` 完成 initialize/session-new/prompt/update/cancel：握手用 `node.hello`/`node.challenge`/`node.proof`/`node.ready`，会话用 `resource.attach`/`resource.subscribe`/`resource.snapshot_*`/`resource.event`/`resource.ack`，命令用 `command.submit`/`command.accepted`/`command.rejected`/`command.terminal`（`command.status` 重查终态）；
 5. capability 交集（§11.1）、raw ACP 保真（`node-link.raw-acp.v1` 与 `resource.event.payload.acp`）、断线重放与命令幂等（§15）；
 6. 不支持 imported Agent 再导出；
-7. `session/new` 经稳定 `requestId` 映射为受 `grant.remote-work`、Agent selector 和 workspace template 限制的 `command.submit{command:"session.create"}`（§12.7），禁止携带 `cwd`/`mcpServers`；参数派生与 ACP 错误映射见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6；
+7. `session/new` 经稳定 `requestId` 映射为受 `grant.remote-work`、Agent selector 和 workspace template 限制的 `command.submit{command:"session.create"}`（§12.7）；禁止在 **Node Link 的 `session.create.payload`** 中携带 `cwd`/`mcpServers`，ACP `session/new.cwd` 的处理见 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6；
 8. Access Node 默认仅持久化无正文交付索引（§6）；
 9. Owner 以 Access Node 为授权 principal，最终用户引用只用于审计（§8.3）。
 
@@ -924,6 +951,6 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 9. 循环导入/再次导出被拒绝。
 10. Owner 离线时会话正文不可用，prompt 不进入伪 accepted 状态。
 11. Access Node 重启后可凭无正文交付索引和 origin cursor 从 Owner 重建投递，不产生第二份会话正文数据库。
-12. Zed `session/new` 携带未导出的 Agent、未知 workspace alias 或任意绝对路径时被明确拒绝（`nodelink.export.not_granted` / `nodelink.command.unsupported_field`）。
+12. Zed `session/new` 的必填绝对 `cwd` 不作为拒绝理由，也不改变 Owner 选定的 workspace；Access facade 对未导出的 Agent/Export 明确拒绝。直接向 Node Link `session.create.payload` 注入未知 `workspaceAlias` 或 `cwd` 等原始路径字段时，Owner 分别以 `nodelink.export.not_granted` / `nodelink.command.unsupported_field` 拒绝，且不创建会话（§12.7、[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）。
 13. 旧 attachment 的延迟 frame 在重连后被拒绝（`nodelink.resource.attach_generation_stale`），不能命中新 generation 的 SessionEndpoint。
 14. 六个 transcript domain 的固定向量在 Rust 与 WebCrypto 两侧产生逐字节一致的 transcript、签名与 HMAC（§9.5）。
