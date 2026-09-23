@@ -925,6 +925,237 @@ async fn claim_with_a_foreign_host_binding_is_rejected() {
     store.close().await;
 }
 
+/// spec：撤销后只能经**协议重新配对**恢复（§11.2 第 2 条）——普通写入一律拒绝，而 `settle_pairing`
+/// 的批准路径可以复活同一身份：状态回到活动、撤销时间与原因清空，但撤销审计保留（tombstone）。
+#[tokio::test]
+async fn only_a_fresh_pairing_can_lift_a_revocation() {
+    let dir = temp_dir("admin-revival");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+    store
+        .revoke_device(DeviceRevocation {
+            device: device_id(),
+            reason: RevokeReason::Compromised,
+            context: context(
+                3,
+                vec![audit(
+                    AuditAction::DeviceRevoked,
+                    EntityRef::Device(device_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("revoke device");
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+
+    // 普通写入不能复活（§11.6 第 1 条）。
+    assert_conflict(
+        store
+            .put_device(DeviceWrite {
+                record: device_record(peer_public_key().fingerprint(), DeviceState::Active),
+                context: context(4, Vec::new()),
+            })
+            .await
+            .expect_err("a plain write must not lift a revocation"),
+        ConflictKind::IdentityMismatch,
+    );
+
+    // 协议重新配对：新登记 + 认领 + 批准。
+    let pairing = PairingId::new("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").expect("pairing id");
+    store
+        .create_pairing(PairingWrite {
+            record: PairingRecord::try_new(
+                pairing.clone(),
+                PairingTarget::Device,
+                PairingState::Created,
+                None,
+                ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                GrantSet::empty(),
+                digest(PAIRING_SECRET),
+                HOST_BINDING,
+                at(5),
+                at(10),
+                None,
+                None,
+                None,
+            )
+            .expect("pairing record"),
+            context: context(5, Vec::new()),
+        })
+        .await
+        .expect("create re-pairing");
+    store
+        .claim_pairing(PairingClaimWrite {
+            claim: {
+                let peer = PairingPeer::try_new(
+                    PeerIdentity::Device(device_id()),
+                    "phone",
+                    peer_public_key(),
+                    HOST_BINDING,
+                    nonce("re-pair-nonce"),
+                )
+                .expect("peer");
+                acp_core::model::PairingClaim::try_new(
+                    pairing.clone(),
+                    peer,
+                    ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                    GrantSet::empty(),
+                )
+                .expect("claim")
+            },
+            context: context(6, Vec::new()),
+        })
+        .await
+        .expect("claim re-pairing");
+    store
+        .settle_pairing(PairingSettlementWrite {
+            pairing,
+            settlement: approved_settlement(),
+            context: context(
+                7,
+                vec![audit(
+                    AuditAction::PairingApproved,
+                    EntityRef::Pairing(pairing_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("a fresh pairing lifts the revocation");
+
+    let revived = store
+        .device(&device_id())
+        .await
+        .expect("device")
+        .expect("device row");
+    assert_eq!(revived.state(), DeviceState::Active);
+    assert_eq!(revived.revoked_at(), None);
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT revoke_reason FROM owned_device WHERE device_id = ?1"
+        )
+        .bind(DEVICE)
+        .fetch_one(&pool)
+        .await
+        .expect("revoke reason"),
+        None,
+        "复活后撤销原因清空（DDL 的 CHECK 也要求 active 行无原因）"
+    );
+    assert_eq!(
+        audit_rows(&pool, AuditAction::DeviceRevoked).await,
+        1,
+        "撤销审计是 tombstone，不因复活消失"
+    );
+    pool.close().await;
+}
+
+/// 同一规则覆盖节点：`put_node` 拒绝已撤销行，而协议批准（对端为 `access`）可以复活该角色行。
+#[tokio::test]
+async fn only_a_fresh_node_pairing_can_lift_a_node_revocation() {
+    let dir = temp_dir("admin-node-revival");
+    let store = open(&dir).await;
+    let peer = peer_node_id();
+    let fingerprint = peer_public_key().fingerprint();
+    // 这一行属于**对端**节点（`peer`），不是本节点的 `node_id()`。
+    let access_record = |fingerprint: Fingerprint, connected: Option<Timestamp>| {
+        NodeRecord::try_new(
+            peer.clone(),
+            "office access",
+            NodeKind::Access,
+            fingerprint,
+            GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            NodeState::Paired,
+            None,
+            at(1),
+            connected,
+            None,
+        )
+        .expect("node record")
+    };
+    store
+        .put_node(NodeWrite {
+            record: access_record(fingerprint.clone(), None),
+            public_key: peer_public_key(),
+            context: context(1, Vec::new()),
+        })
+        .await
+        .expect("put access role");
+    store
+        .revoke_node(NodeRevocation {
+            node: peer.clone(),
+            reason: RevokeReason::UserRequested,
+            context: context(
+                3,
+                vec![audit(
+                    AuditAction::NodeTrustRevoked,
+                    EntityRef::Node(peer.clone()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("revoke node");
+    assert_conflict(
+        store
+            .put_node(NodeWrite {
+                record: access_record(fingerprint, None),
+                public_key: peer_public_key(),
+                context: context(4, Vec::new()),
+            })
+            .await
+            .expect_err("a plain write must not lift a node revocation"),
+        ConflictKind::IdentityMismatch,
+    );
+
+    // 协议重新配对：登记（节点目标）+ 认领 + 批准。
+    store
+        .create_pairing(PairingWrite {
+            record: node_pairing(),
+            context: context(5, Vec::new()),
+        })
+        .await
+        .expect("create re-pairing");
+    store.claim_pairing(node_claim(&peer)).await.expect("claim");
+    store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: pairing_id(),
+            settlement: PairingSettlement::approved(
+                ScopeSet::empty(),
+                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            ),
+            context: context(7, Vec::new()),
+        })
+        .await
+        .expect("a fresh node pairing lifts the revocation");
+
+    let row = store
+        .node(&peer, NodeKind::Access)
+        .await
+        .expect("node")
+        .expect("node row");
+    assert_eq!(row.state(), NodeState::Paired);
+    assert_eq!(row.revoked_at(), None);
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT revoke_reason FROM owned_node WHERE node_id = ?1 AND kind = 'access'"
+        )
+        .bind(PEER_NODE)
+        .fetch_one(&pool)
+        .await
+        .expect("revoke reason"),
+        None
+    );
+    assert_eq!(audit_rows(&pool, AuditAction::NodeTrustRevoked).await, 1);
+    pool.close().await;
+}
+
 /// 落定只能发生一次：重复批准不得改写首次 `approved_at`，批准后再拒绝必须是具名冲突（不得把
 /// `owned_pairing` 的 `(state IN ('approved','consumed')) = (approved_at IS NOT NULL)` CHECK 失败变成
 /// 未具名的 `PortError::Backend`）。

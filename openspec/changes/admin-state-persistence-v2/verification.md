@@ -76,7 +76,7 @@
 26. **绑定的比较语义定在存储层「逐字相等」**：比 `NODE_LINK_PROTOCOL.md` §13.2 的 endpoint **host** 级匹配更严（对端必须回显登记时宣告的那个值）。理由是登记值与回显值同源（QR 里的 `canonicalOrigin`/`endpoint` 被逐字带进 claim），逐字相等既能覆盖 host 级检查，也能发现「claim 指向了另一次配对/另一台机器」；host/Origin 级的协议检查仍由 `SYNC_PROTOCOL.md` §7.2 与 Node Link 的 403 路径负责，文档已写明两者分工。
 
 27. **闭合轮独立 review（`Wp6ClosureReview`）的两处修复**（结论 `correct`、无阻断项）：① `pairing_from_row` 把「库里 `host_binding` 为空」按 `Corrupt` 具名报告，不再落进通用 `InvalidRequest("value does not satisfy its domain shape")`——该状态只可能来自外部改写或本轮之前写空绑定的构建，分类必须指向库内状态（回归用例 `an_empty_stored_binding_is_reported_as_corrupt`）；② §11.1 的 `owned_pairing_peer` 行改为只描述真实列（不存绑定与角色），消除与 §3.5/实现相反的陈述。
-28. **待决（不阻断本次提交）：撤销身份的「重新配对」语义**（review `WP6B-3`）：`specs/peer-identity-material` 的场景写「只有按协议完成重新配对才能恢复」，而 §11.2 第 2 条与本轮实现的守卫（`put_device`/`put_node`/`approve_*` 对 `revoked` 行一律 `Conflict(IdentityMismatch)`）使**同一 id** 无法经重新配对恢复；`SECURITY_DESIGN.md` §「重新配对为新设备/新身份」与 §11.3 的「撤销 tombstone 不因容量删除」支持「改身份」口径。两处文本方向相反，需在最终验收前二选一：① 与实现/SECURITY_DESIGN 对齐，把 spec 场景与 §11.2 措辞改成「只能以**新身份**重新配对」；② 改为允许同一 id 经重新配对恢复，则为两条 `approve_*` 增加 revocation-aware 分支与回归用例。本轮按保守口径（① 的方向）实现并记录，等主决策后再改文本。
+28. **撤销身份的「重新配对」语义（review `WP6B-3`，用户决定：保留合同文本、改实现）**：`specs/peer-identity-material` 与 §11.2 第 2 条的措辞是「已撤销身份不能经**普通 upsert** 自动激活，只能按协议重新配对」——即协议路径**可以**恢复同一身份。原实现让 `approve_device`/`approve_node` 也拒绝 `revoked` 行，比合同更严，本轮据用户决定把实现对齐到合同：①`put_device`/`put_node`（普通写入）继续拒绝 `revoked` 行；②两条 `approve_*`（`settle_pairing` 的批准路径，对端已出示配对 secret 的 HMAC/proof 且本机用户确认）允许复活——状态回到 `active`/`paired`、`revoked_at`/`revoke_reason` 清空，而撤销审计行保留（§11.3 的 tombstone 语义）；③指纹仍必须与既有身份材料一致（同一 id 不得换绑公钥，§11.6 第 1 条）。文档同步：§11.2 第 2 条点明唯一恢复入口、§11.6 第 1/4 条补例外与清空语义。回归用例：`only_a_fresh_pairing_can_lift_a_revocation`、`only_a_fresh_node_pairing_can_lift_a_node_revocation`（两者都先断言普通写入仍被拒）。
 
 ### W0 执行期的偏差与决定（2026-09-23，本轮落地）
 
@@ -121,7 +121,7 @@ review 报告全文：`reports/rv1-wp6.md`（含逐条核对结论、规格场�
 | --- | --- | --- | --- | --- | --- | --- |
 | WP6B-1 | `1baea5b` + 工作区 | `Wp6ClosureReview` | `crates/core/src/model/identity.rs:476` | 提示：首版提交写过的库里，存量空 `host_binding` 行读取时落进通用 `InvalidRequest` 文案（分类误导排障） | **已修**：`pairing_from_row` 对空绑定返回具名 `Corrupt`；回归用例 `an_empty_stored_binding_is_reported_as_corrupt` | `reports/wp6-admin-store-tests.log`（26 passed） |
 | WP6B-2 | 同上 | 同上 | `docs/CORE_PORTS_AND_STORAGE.md:1298` | 提示：§11.1 的 `owned_pairing_peer` 行宣称表内有「角色和非秘密 endpoint 引用」，与实际列相反 | **已修**：该行改为只列真实列，并写明绑定与角色都不在该表 | `docs/CORE_PORTS_AND_STORAGE.md`（本提交） |
-| WP6B-3 | 同上 | 同上 | `crates/storage-sqlite/src/admin/trust.rs:962` | 提示（需合同侧二选一）：撤销身份的「重新配对」语义在 spec（可恢复）与 `SECURITY_DESIGN`/§11.3（改身份）之间方向相反；当前实现取保守口径 | **待决**：见 Check Plan Changes 第 28 条；在最终验收（`8.1`）前需主决策后改文本或用例 | 本文件 |
+| WP6B-3 | 同上 | 同上 | `crates/storage-sqlite/src/admin/trust.rs:962` | 提示：撤销身份的「重新配对」语义在 spec（可恢复）与 `SECURITY_DESIGN`/§11.3（改身份）之间方向相反；当时实现取保守口径（比合同更严） | **已闭合（2026-09-23，用户决定保留「按协议重新配对才能恢复」）**：`put_device`/`put_node` 仍拒绝 `revoked` 行，两条 `approve_*` 允许复活并清空撤销时间/原因、保留撤销审计；文档与用例同步（Check Plan Changes 第 28 条） | `reports/wp6-admin-store-tests.log`（28 passed） |
 
 ## Merge History
 
@@ -129,7 +129,9 @@ W0 在门禁全绿的状态上落了**基线提交**（分支 `feat/admin-state-
 
 W1·WP6 在独立 review（`reports/rv1-wp6.md`）的修复与全部本地门禁全绿的状态上落**第二个提交**（父提交 = W0 基线 `013f2b9`），内容为三个管理 store、`tests/admin_store.rs` 与记录回填。
 
-WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）在复验（`reports/rv1-wp6b.md`，结论 `correct`）与全部门禁全绿的状态上落**第三个提交**（即本记录所在的提交；父提交 = 第二个提交 `1baea5b`），内容为 core 模型的 `host_binding`、storage 的绑定写/校验与节点批准、文档措辞与本次记录回填。**未合入 main**、未推送、未开 PR。
+WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）在复验（`reports/rv1-wp6b.md`，结论 `correct`）与全部门禁全绿的状态上落**第三个提交**（父提交 = 第二个提交 `1baea5b`），内容为 core 模型的 `host_binding`、storage 的绑定写/校验与节点批准、文档措辞与记录回填。
+
+复验提出的 `WP6B-3`（撤销身份的重新配对语义）按用户决定「按协议重新配对才能恢复」落**第四个提交**（即本记录所在的提交；父提交 = 第三个提交 `f43f7a7`）：`approve_*` 允许经配对批准复活已撤销身份、普通写入仍拒绝，文档与两条回归用例同步。**未合入 main**、未推送、未开 PR。
 
 ## Test Design and Authoring
 
@@ -162,13 +164,13 @@ WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）�
 ## Final Assessment
 
 ```agentic-assessment
-assessment_id: "admin-state-persistence-v2-w1-wp6-closure"
+assessment_id: "admin-state-persistence-v2-w1-wp6-revival"
 target_commit: "1baea5bd7d4dc824443b4e52e916d97f7bec3c44"
 contract_digest: "sha256:1191945887f7001486e328786ad7b0395999317def7c1f0e51054c225951ec61"
 result: BLOCKED
 evidence:
   - path: reports/wp6-admin-store-tests.log
-    sha256: "sha256:d5051e77ec177d46267dcdbaf678a3a48cfd03075dbe47ea9174920083ace2f9"
+    sha256: "sha256:87b993be501a576a5d45a80dc5e9372fb3dd6b35123a06a682f0bcc895d9997f"
   - path: reports/rv1-wp6.md
     sha256: "sha256:678c200f65937121017f9f4de8a14adaebb1a50df22503e302fae3d5546e2c4a"
   - path: reports/rv1-wp6b.md
@@ -196,6 +198,6 @@ evidence:
 - CLI State: `openspec status` = 5/5 artifacts complete；`npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` = PASS（`contractDigest` 见上方评估块）。CLI 状态不表示实现完成
 - Audit / Evidence: W0 完成了 `storage-sqlite` 的 v2 DDL、两张审计表的 12-step 重建（含 `sqlite_sequence` 回填）、`imported_import` 拆分迁移与 v2 三件夹具（`cargo test -p storage-sqlite --all-features` 全绿），合同并入（`check:drift`/`check:boundaries`/`check:docs` 全绿）与合同/关联文档同步；`npm run check`、`cargo fmt`、`cargo clippy --workspace`、`cargo test --workspace` 全部退出 0。仍未做：WP6 的三个管理 store、独立 review（`3.2`/`3.4`/`3.6`/`3.8`/`3.10`）、候选与合入、替代验证与最终验收
 - Result / Open Issues: **BLOCKED** —— 未完成任务：`3.2`/`3.4`/`3.6`/`3.8`（W0/WP4/WP5 的独立 review 仍缺隔离上下文）、`5.x`、`6.x`、`7.x`、`8.x`；WP6 的 review（`3.10`）已执行并留证（`reports/rv1-wp6.md`）
-- 阻断项状态：WP6-1/WP6-2/WP6-3/WP6-4 均已闭合（闭合轮复验 `correct`）；唯一待决项是 **WP6B-3**（撤销身份的「重新配对」语义在 spec 与 `SECURITY_DESIGN`/§11.3 之间方向相反，见 Check Plan Changes 第 28 条）——它不阻断本提交，但需在 `8.1` 最终验收前由主决策后统一文本或用例
+- 阻断项状态：WP6-1/WP6-2/WP6-3/WP6-4 与复验提出的 WP6B-1/WP6B-2/WP6B-3 **全部闭合**（复验结论 `correct`；WP6B-3 按用户决定「按协议重新配对才能恢复」改实现，见 Check Plan Changes 第 28 条）。WP6 轨道无未闭环阻断项；剩余待办仅是后续波次（`3.2`/`3.4`/`3.6`/`3.8` 的独立 review、`5.x`/`6.x` 合入、`7.x`/`8.x` 替代验证与最终验收）
 - Required Follow-up: ① 先决定 WP6-2/WP6-4 的合同侧修复（把节点角色并入配对落定写集或 `PairingRecord`、把本机绑定并入配对写集；或改述 §11.6/§5.4/§11.1/§7.3 的对应措辞），随后按合同变更流程更新 §5.3/§7.3 + `crates/core/src/ports.rs` + 写集与用例，并重跑 PV2/PV3/PV4 与 WP6 复验
 - ② WP1–WP3 与 WP4/WP5 的独立 review（`3.2`/`3.4`/`3.6`/`3.8`：用不继承实现对话的子 Agent，方式同 `Wp6Review`）→ ③ W3（`5.x`/`6.x`）→ ④ W4（`7.x`/`8.x`）

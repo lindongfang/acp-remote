@@ -907,8 +907,13 @@ fn is_subset<'a>(
     left.into_iter().all(|item| right.contains(&item))
 }
 
-/// 配对批准（设备）：与 `put_device` 同一组守卫（同 ID 不得换绑公钥、已撤销身份不得复活），随后
-/// 写设备行并把 peer 公钥转入 `owned_peer_key`（§11.6 第 4 条）。
+/// 配对批准（设备）：写设备行并把 peer 公钥转入 `owned_peer_key`（§11.6 第 4 条）。
+///
+/// 与 `put_device` 的差别只有一处：**本路径允许复活已撤销的身份**。§11.2 第 2 条的规则是「已撤销身份
+/// 不能经**普通 upsert** 自动激活，只能按协议重新配对」——本路径就是那条协议路径（对端已出示配对
+/// secret 的 HMAC/proof 且本机用户确认），因此这里只要求指纹与既有身份材料一致（同一 `deviceId`
+/// 不得换绑公钥，§11.6 第 1 条），撤销时间与原因由 upsert 一并清空（状态回到 `active`）。撤销的
+/// 审计行不因复活消失（§11.3 的 tombstone 语义）。
 async fn approve_device(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     peer: &PairingPeer,
@@ -920,8 +925,9 @@ async fn approve_device(
         PeerIdentity::Node(_) => return Err(PortError::Conflict(ConflictKind::IdentityMismatch)),
     };
     let fingerprint = peer.public_key().fingerprint();
-    if let Some((stored, state)) = device_identity(&mut **tx, &device_id).await? {
-        if stored != fingerprint || state == DeviceState::Revoked {
+    // 指纹必须与既有行/身份材料一致；`state` 不影响本路径（撤销由协议重新配对恢复）。
+    if let Some((stored, _)) = device_identity(&mut **tx, &device_id).await? {
+        if stored != fingerprint {
             return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
         }
     }
@@ -948,8 +954,11 @@ async fn approve_device(
 /// 配对批准（节点）：对端角色恒为 `NodeKind::Access` —— 只有 `node.pair.begin --mode owner` 会创建
 /// 节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」
 /// （claim 的 `nodeKind` 也固定为 `access`），因此不需要在写集里再携带角色。`owner_endpoint` 只在
-/// `owner` 角色上存在，Access 行必须为 `None`（§3.5）。守卫与 `put_node` 一致：指纹必须与已绑定材料
-/// 及既有角色行一致，已撤销身份不得被批准激活。
+/// `owner` 角色上存在，Access 行必须为 `None`（§3.5）。
+///
+/// 与 `put_node` 的差别同上：**本路径允许复活已撤销的身份**（§11.2 第 2 条把「按协议重新配对」定为
+/// 唯一的恢复入口，本路径即该入口）；指纹必须与既绑定材料及既有角色行一致，撤销时间与原因由
+/// upsert 清空，撤销审计保留。
 async fn approve_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     peer: &PairingPeer,
@@ -967,7 +976,7 @@ async fn approve_node(
         }
     }
     for row in load_nodes_for(&mut **tx, &node_id).await? {
-        if row.node_public_key_fingerprint() != &fingerprint || row.state() == NodeState::Revoked {
+        if row.node_public_key_fingerprint() != &fingerprint {
             return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
         }
     }

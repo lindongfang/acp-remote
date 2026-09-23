@@ -1313,7 +1313,7 @@ CREATE TABLE imported_import_export (
 ### 11.2 原子提交与失败处理
 
 1. **认领**：验证 HMAC/proof 后，单事务检查配对存在、未过期、仍为 `created` 及**本机绑定一致**，插入唯一 peer 并转到 `pending_confirmation`；并发 claim 只有一个成功。`claimed` 仅为事务内过渡，不形成可重新认领的中间提交。「本机绑定一致」由 `PairingPeer.host_binding`（claim 的回显值：设备 `canonicalOrigin`、节点 `endpoint`）与 `PairingRecord.host_binding`（登记时宣告的值）**逐字相等**判定，不一致 → `Conflict(IdentityMismatch)` 且不推进任何状态；host/Origin 级的协议检查（`SYNC_PROTOCOL.md` §7.2 的 Host/Origin 匹配、`NODE_LINK_PROTOCOL.md` §13.2 的 403 路径）由协议层负责，不替代这里的相等判定。
-2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对。落定只接受 `pending_confirmation`（已落定/已终态 → `Conflict(Consumed)`，不重复改写首次批准时间）。节点配对的批准创建 `owned_node` 的 **`access`** 行（`owner_endpoint` 为空）：只有 `node.pair.begin --mode owner` 会创建节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」，因此对端角色可推导、不需要在写集里携带；`owner` 角色行由该节点自己被信任时经 `put_node` 写入。
+2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对——`put_device`/`put_node` 一律拒绝 `revoked` 行，而 `settle_pairing` 的批准路径（对端已出示配对 secret 的 HMAC/proof 且本机用户确认）是**唯一**的恢复入口，复活保留撤销审计（§11.3 的 tombstone 语义）。落定只接受 `pending_confirmation`（已落定/已终态 → `Conflict(Consumed)`，不重复改写首次批准时间）。节点配对的批准创建 `owned_node` 的 **`access`** 行（`owner_endpoint` 为空）：只有 `node.pair.begin --mode owner` 会创建节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」，因此对端角色可推导、不需要在写集里携带；`owner` 角色行由该节点自己被信任时经 `put_node` 写入。
 3. **撤销**：单事务记录撤销时间、撤销状态与对应审计；提交后阻断新命令/订阅并关闭适用连接，再回答管理调用。提交失败返回失败，不把内存撤销当作持久成功；连接清理失败也不回滚已提交的撤销，阻断后续访问并报告失败。重启先加载撤销状态，再允许连接。
 4. **Export**：创建前验证 Agent、workspace、模板与默认引用；创建/撤销各为一个事务。撤销先提交再发送 `export.revoked`；发送失败不撤销数据库决定。授权从最新记录计算，不能仅信任旧连接缓存。
 5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。
@@ -1375,10 +1375,10 @@ CREATE TABLE imported_import_export (
 
 写集语义（每条都要有对应测试，§11.4 已列验收项）：
 
-1. `put_device`：同 ID 不得换绑公钥（`fingerprint` 与已存行不一致 → `Conflict(IdentityMismatch)`），不得把 `revoked` 改回 `active`（→ `Conflict(IdentityMismatch)`）；`scopes` 变化写 `device.scopes_changed`，撤销写 `device.revoked`。
+1. `put_device`：同 ID 不得换绑公钥（`fingerprint` 与已存行不一致 → `Conflict(IdentityMismatch)`），不得把 `revoked` 改回 `active`（→ `Conflict(IdentityMismatch)`；唯一的复活路径是协议重新配对，见第 4 条）；`scopes` 变化写 `device.scopes_changed`，撤销写 `device.revoked`。
 2. `put_node`：写 `owned_node` 行与 `owned_peer_key` 的绑定；同一 NodeId 的两种角色必须指纹一致；撤销过的身份只能按协议重新配对，不能经普通 upsert 激活。
 3. `claim_pairing`：并发只有一个成功（唯一 peer 行 + 条件更新）；过期/已终态 → `Conflict(Expired/Consumed)`；本机绑定不一致 → `Conflict(IdentityMismatch)`（§11.2 第 1 条）；插入 `owned_pairing_peer` 与状态推进、`pairing.claimed` 审计同一事务。
-4. `settle_pairing`：拒绝或过期**不创建**信任；`Approved` 时创建信任行、把 peer 公钥转入 `owned_peer_key`、更新配对为 `approved`、写 `pairing.approved`；任一步失败全回滚，绝不出现「返回成功但没有持久信任」。设备配对写下设备行（`active`）；节点配对写下 `owned_node` 的 `access` 行（§11.2 第 2 条的角色推导）；两条路径都先核对「指纹与既有绑定/角色行一致、身份未被撤销」。
+4. `settle_pairing`：拒绝或过期**不创建**信任；`Approved` 时创建信任行、把 peer 公钥转入 `owned_peer_key`、更新配对为 `approved`、写 `pairing.approved`；任一步失败全回滚，绝不出现「返回成功但没有持久信任」。设备配对写下设备行（`active`）；节点配对写下 `owned_node` 的 `access` 行（§11.2 第 2 条的角色推导）；两条路径都要求指纹与既有绑定/角色行一致（同一对端不得换绑公钥，第 1 条），并**允许复活已撤销的身份**：这是 §11.2 第 2 条指定的唯一恢复入口，撤销审计不因复活消失（`revoked_at`/`revoke_reason` 随 `active`/`paired` 清空，历史留在 `device.revoked`/`node.trust_revoked` 审计行里）。
 5. `revoke_device`/`revoke_node`：单事务写撤销时间、状态与审计；**提交后**才由组合根关闭适用连接并对管理调用作答（§11.2 第 3 条）。连接清理失败不回滚已提交的撤销。
 6. `expire_pairings`：只终结「未确认且 `expires_at <= at`」的行，写 `pairing.expired`；已批准信任不受影响。
 7. `put_export`/`revoke_export`/`add_import`/`remove_import`：审计取值分别用 `export.created`/`export.revoked`/`import.added`/`import.removed`（§11.8 第 7 条），与状态同事务（§11.2 第 4/5 条）。
