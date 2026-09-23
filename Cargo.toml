@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 # 会被降级成浮点——那等于静默改写对端发来的未来字段。仓库在信封层已用 30 位整数做保真判据，这里保持一致。
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 thiserror = "2"
-base64 = "0.22"
+base64 = "0.23"
 
 # core 的端口是可 dyn 化的异步 trait（docs/CORE_PORTS_AND_STORAGE.md §2）：async-trait 只是 proc-macro，
 # 不引入 runtime，因此 core 仍然不依赖 Tokio。

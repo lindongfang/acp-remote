@@ -6,7 +6,7 @@ version = 4
 name = "acpr-transcript"
 version = "0.0.0"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "thiserror",
 ]
 
@@ -15,7 +15,7 @@ name = "acpr-wire"
 version = "0.0.0"
 dependencies = [
  "acpr-transcript",
- "base64",
+ "base64 0.23.1",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -59,6 +59,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -1172,7 +1178,7 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "crc",
  "crossbeam-queue",
@@ -1243,7 +1249,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
 dependencies = [
  "atoi",
- "base64",
+ "base64 0.22.1",
  "bitflags",
  "byteorder",
  "bytes",
@@ -1284,7 +1290,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
 dependencies = [
  "atoi",
- "base64",
+ "base64 0.22.1",
  "bitflags",
  "byteorder",
  "crc",
@@ -1350,7 +1356,7 @@ version = "0.0.0"
 dependencies = [
  "acpr-wire",
  "async-trait",
- "base64",
+ "base64 0.23.1",
  "core",
  "sha2 0.11.0",
  "sqlx",
