@@ -228,7 +228,7 @@ WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）�
 ## Final Assessment
 
 ```agentic-assessment
-target_commit: "36cf906a8e709221d6e08c7657e1c9a6a62df034"
+target_commit: "b8f79752084fd7bf91e9ef70a6e1f933cfa1cf16"
 assessment_id: "admin-state-persistence-v2-w3-merge-final"
 contract_digest: "sha256:b78b8b513a0e74a8dc0b12b2fcd5f91374d02cbc87b5ab7cc88aae1d80c77327"
 result: PASS
@@ -365,6 +365,8 @@ evidence:
 **结论**：**PASS** —— 目标为**本地** `refs/heads/main` 的 `afedea3a…`，交付单元已合入且在该版本上完成主分支复验、独立复核、替代验证与门禁；据此勾选 `8.1`。本轮**未**推送、未归档；归档前若目标版本或证据再变化，须重新验收。
 
 **最终阶段检查**：`npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --planning-root D:/Project/acp-remote --stage final --json` → 退出码 `0`、`result: PASS`（错误列表为空）。
+
+**归档前受控门禁（2026-09-23，实测）**：按扩展的 `operationGuidance` 与 `workflow-check.md`，归档前把 `target_commit` 机械更新到当时的 `refs/heads/main`（`b8f7975…`；其后只有变更目录内的记录提交，`evaluateRecordFreshness` 按设计仍判 `fresh`），随后在 `main` 该提交的干净 worktree（detached、`git status` 为空）内执行 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --planning-root D:/Project/acp-remote --stage archive --json` → 退出码 `0`、`result: PASS`、错误列表为空（内部 `e2e check` 亦 PASS）。该提交尚未落库：记录里的 `target_commit` 与 `refs/heads/main` 采用严格相等，任何在归档前提交它都会让它再次失效，因此按扩展的设计（变更目录内的未提交记录不参与 freshness 判定）保留到归档提交。
 
 **交付提交上的复跑（实测，2026-09-23）**：在 `main` 的干净 worktree（detached `f453ad10`）内以 `--planning-root D:/Project/acp-remote` 重跑 `workflow check --stage final`，结果为 `FAIL`、2 条错误——`当前代码 HEAD 与计划目标引用不一致`（该 worktree 的检出提交是 `f453ad10`，而 `refs/heads/main` 在记录提交后前移）与 `目标代码状态不能验收：执行后又有改动：openspec/changes/admin-state-persistence-v2/verification.md`（跨 worktree 传入 `--planning-root` 时，变更目录的前缀过滤不匹配，属测量方式差异、不是证据失效）；同一检出上 `openspec-agentic e2e check`（同样传 `--planning-root`）仍为 **PASS**。**没有任何证据类错误**（摘要、任务、覆盖、契约摘要全部一致）。
 
