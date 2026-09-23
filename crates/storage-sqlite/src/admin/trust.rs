@@ -4,16 +4,13 @@
 //! `BEGIN IMMEDIATE` 事务，状态、集合字段与审计一次提交。读路径（`device`/`devices`/`node`/`nodes`/
 //! `nodes_for`/`peer_key`/`pairing`/`pairing_peer`）不写任何行。
 //!
-//! 两条**记录在案的合同缺口**（实现不自行发明事实，见 `verification.md` 的 Check Plan Changes）：
+//! 配对的两条机器事实都来自**配对记录本身**，不需要在写集里额外携带：
 //!
-//! 1. `owned_pairing.host_binding` 是 NOT NULL，但冻结的写集（`PairingWrite`/`PairingClaimWrite`）没有
-//!    携带本机绑定/origin：该绑定按 §11.2 的设计由**调用方**（`identity-auth` + `server`）在构造写集
-//!    之前验证，与 HMAC/proof 同一类。这里写入空串，表示「本适配器没有收到绑定」，不声称已绑定。
-//! 2. 节点配对的**角色**（`owned_node.kind`）不在冻结的写集里（`PairingRecord.target` 只区分
-//!    `device`/`node`，`NodeKind` 由 `node.pair.begin` 的 `mode` 决定）。因此 `settle_pairing` 对
-//!    **批准节点配对**失败关闭（`InvalidRequest`，零写入）：绝不允许「配对已批准但没有持久信任」
-//!    （§11.2 第 2 条）；节点角色行与身份材料由 `put_node` 写集负责（`UseCases::put_node` 的文档同样
-//!    把「写入节点角色行与身份材料」定在那里）。
+//! 1. 本机绑定（§11.2 第 1 条）：`PairingRecord::host_binding` 在登记时写入，认领时要求对端逐字回显
+//!    （`PairingPeer::host_binding`），不一致按身份不匹配拒绝。
+//! 2. 节点对端的角色：节点配对行只由 `node.pair.begin --mode owner` 创建，而 `LOCAL_ADMIN_PROTOCOL.md`
+//!    §5.4 明确「`--mode access` 本机没有 `confirm` 调用」（claim 的 `nodeKind` 固定为 `access`），因此
+//!    批准时的对端角色恒为 `NodeKind::Access`，无需在写集里携带（见 `approve_node`）。
 //!
 //! `put_device`/`put_node` 拒绝 `revoked` 状态：撤销是 `revoke_device`/`revoke_node` 的职责，只有它们
 //! 携带 `RevokeReason`（`owned_device`/`owned_node` 的 CHECK 要求 `state = 'revoked'` 与
@@ -26,9 +23,9 @@ use sqlx::sqlite::SqliteRow;
 
 use acp_core::model::PairingSettlement;
 use acp_core::model::{
-    ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, NodeId, NodeKind, NodeRecord,
-    NodeState, PairingId, PairingPeer, PairingRecord, PairingState, PairingTarget, PeerIdentity,
-    PeerPublicKey, PortError, Timestamp,
+    ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, GrantSet, NodeId, NodeKind,
+    NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState, PairingTarget,
+    PeerIdentity, PeerPublicKey, PortError, ScopeSet, Timestamp,
 };
 use acp_core::ports::{
     DeviceRevocation, DeviceWrite, ExpiryWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
@@ -52,9 +49,10 @@ const NODE_COLUMNS: &str = "node_id, kind, display_name, fingerprint, grants_jso
 
 /// `owned_pairing` 的读列。
 const PAIRING_COLUMNS: &str = "pairing_id, target_kind, state, display_name, requested_scopes_json, \
-     requested_grants_json, secret_digest, created_at, expires_at, claimed_at, approved_at, terminal_at";
+     requested_grants_json, secret_digest, host_binding, created_at, expires_at, claimed_at, \
+     approved_at, terminal_at";
 
-/// `owned_pairing_peer` 的读列。
+/// `owned_pairing_peer` 的读列（不含绑定：该列只在 `owned_pairing` 上）。
 const PAIRING_PEER_COLUMNS: &str = "peer_kind, peer_id, display_name, public_key, fingerprint, \
      client_nonce";
 
@@ -102,6 +100,13 @@ fn node_from_row(row: &SqliteRow) -> Result<NodeRecord, StorageError> {
 }
 
 fn pairing_from_row(row: &SqliteRow) -> Result<PairingRecord, StorageError> {
+    let host_binding = text(row, "host_binding")?;
+    if host_binding.is_empty() {
+        // 空绑定不是「调用方参数错误」：该列在 v2 DDL 里是 NOT NULL，只有外部改写或本轮之前的构建
+        // 才会写下空串（`PairingRecord::try_new` 现在拒绝空值）。按损坏给出具名错误，避免把库内
+        // 状态问题误报成请求问题。
+        return Err(StorageError::Corrupt("owned_pairing.host_binding is empty"));
+    }
     PairingRecord::try_new(
         decode(&text(row, "pairing_id")?, "owned_pairing.pairing_id")?,
         decode(&text(row, "target_kind")?, "owned_pairing.target_kind")?,
@@ -116,6 +121,7 @@ fn pairing_from_row(row: &SqliteRow) -> Result<PairingRecord, StorageError> {
             "owned_pairing.requested_grants_json is not a JSON array",
         )?)?,
         decode(&text(row, "secret_digest")?, "owned_pairing.secret_digest")?,
+        &host_binding,
         decode(&text(row, "created_at")?, "owned_pairing.created_at")?,
         decode(&text(row, "expires_at")?, "owned_pairing.expires_at")?,
         decode_opt(opt_text(row, "claimed_at")?, "owned_pairing.claimed_at")?,
@@ -144,13 +150,17 @@ fn peer_identity(row: &SqliteRow, id_column: &'static str) -> Result<PeerIdentit
     }
 }
 
-fn pairing_peer_from_row(row: &SqliteRow) -> Result<PairingPeer, StorageError> {
+/// `owned_pairing_peer` **不单独存绑定**：认领时已校验对端回显与登记值逐字相等，因此对端行的绑定
+/// 恒等于配对行的 `host_binding`，读路径从配对行回填（§11.2 第 1 条；这也让「两条绑定不一致」在
+/// 库里不可能存在）。
+fn pairing_peer_from_row(row: &SqliteRow, host_binding: &str) -> Result<PairingPeer, StorageError> {
     let public_key =
         peer_key_from_bytes(blob(row, "public_key")?, "owned_pairing_peer.public_key")?;
     PairingPeer::try_new(
         peer_identity(row, "peer_id")?,
         &text(row, "display_name")?,
         public_key,
+        host_binding,
         decode(
             &text(row, "client_nonce")?,
             "owned_pairing_peer.client_nonce",
@@ -318,7 +328,18 @@ impl TrustStore for SqliteStore {
             .fetch_optional(&self.pools().read)
             .await
             .db()?;
-        Ok(row.as_ref().map(pairing_peer_from_row).transpose()?)
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        // 对端行的绑定从配对行回填（两条绑定在库内不可能不一致）。
+        let binding: Option<String> =
+            sqlx::query_scalar("SELECT host_binding FROM owned_pairing WHERE pairing_id = ?1")
+                .bind(id.as_str())
+                .fetch_optional(&self.pools().read)
+                .await
+                .db()?;
+        let binding = binding.ok_or(StorageError::Corrupt("peer row without its pairing row"))?;
+        Ok(Some(pairing_peer_from_row(&row, &binding)?))
     }
 
     /// §11.6 第 1 条：同 ID 不得换绑公钥，也不得把 `revoked` 改回 `active`。
@@ -526,8 +547,8 @@ impl TrustStore for SqliteStore {
         .bind(encode_strings(record.requested_scopes().iter().map(str::to_owned)))
         .bind(encode_strings(record.requested_grants().iter().map(str::to_owned)))
         .bind(record.secret_digest().as_str())
-        // 见文件头缺口 1：冻结的写集没有携带本机绑定，这里如实写空串。
-        .bind("")
+        // §7.3：设备写 canonical origin，节点写本机在该配对中的 endpoint；认领时必须被逐字回显。
+        .bind(record.host_binding())
         .bind(record.created_at().as_str())
         .bind(record.expires_at().as_str())
         .bind(record.claimed_at().map(Timestamp::as_str))
@@ -578,6 +599,12 @@ impl TrustStore for SqliteStore {
         }
         if record.state() != PairingState::Created {
             return Err(PortError::Conflict(ConflictKind::AlreadyClaimed));
+        }
+        // §11.2 第 1 条：认领必须核对「本机绑定一致」——对端要逐字回显登记时宣告的绑定
+        // （设备 `canonicalOrigin`、节点 `endpoint`）。不一致说明 claim 指向的不是本次登记的本机，
+        // 按身份不匹配拒绝，绝不推进状态。
+        if peer.host_binding() != record.host_binding() {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
         }
         if write.context.at.as_str() >= record.expires_at().as_str() {
             return Err(PortError::Conflict(ConflictKind::Expired));
@@ -652,6 +679,7 @@ impl TrustStore for SqliteStore {
             record.requested_scopes().clone(),
             record.requested_grants().clone(),
             record.secret_digest().clone(),
+            record.host_binding(),
             record.created_at().clone(),
             record.expires_at().clone(),
             Some(write.context.at.clone()),
@@ -714,7 +742,7 @@ impl TrustStore for SqliteStore {
             // 认领过但 peer 行缺失 = 库被外部改写。
             return Err(PortError::Corrupt("claimed pairing has no peer row"));
         };
-        let peer = pairing_peer_from_row(&peer_row)?;
+        let peer = pairing_peer_from_row(&peer_row, record.host_binding())?;
         let peer_ref = match peer.id() {
             PeerIdentity::Device(id) => TrustRecordRef::Device(id.clone()),
             PeerIdentity::Node(id) => TrustRecordRef::Node(id.clone()),
@@ -763,44 +791,10 @@ impl TrustStore for SqliteStore {
                                 "a device pairing must not carry grants",
                             ));
                         }
-                        let device_id = match peer.id() {
-                            PeerIdentity::Device(id) => id.clone(),
-                            PeerIdentity::Node(_) => {
-                                return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
-                            }
-                        };
-                        let fingerprint = peer.public_key().fingerprint();
-                        if let Some((stored, state)) = device_identity(&mut *tx, &device_id).await?
-                        {
-                            if stored != fingerprint || state == DeviceState::Revoked {
-                                return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
-                            }
-                        }
-                        let record = DeviceRecord::try_new(
-                            device_id.clone(),
-                            peer.display_name(),
-                            fingerprint,
-                            granted_scopes.clone(),
-                            DeviceState::Active,
-                            write.context.at.clone(),
-                            None,
-                            None,
-                        )?;
-                        upsert_device(&mut tx, &record, peer.public_key().as_bytes()).await?;
-                        bind_peer_key(
-                            &mut tx,
-                            "device",
-                            device_id.as_str(),
-                            peer.public_key(),
-                            &write.context.at,
-                        )
-                        .await?;
+                        approve_device(&mut tx, &peer, granted_scopes, &write.context.at).await?;
                     }
                     PairingTarget::Node => {
-                        // 见文件头缺口 2：节点配对的角色不在冻结的写集里，批准路径失败关闭。
-                        return Err(PortError::InvalidRequest(
-                            "node pairing approval needs the node role, which the write set does not carry",
-                        ));
+                        approve_node(&mut tx, &peer, granted_grants, &write.context.at).await?;
                     }
                 }
                 let approved = sqlx::query(
@@ -911,6 +905,87 @@ fn is_subset<'a>(
 ) -> bool {
     let right: Vec<&str> = right.collect();
     left.into_iter().all(|item| right.contains(&item))
+}
+
+/// 配对批准（设备）：与 `put_device` 同一组守卫（同 ID 不得换绑公钥、已撤销身份不得复活），随后
+/// 写设备行并把 peer 公钥转入 `owned_peer_key`（§11.6 第 4 条）。
+async fn approve_device(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    peer: &PairingPeer,
+    granted_scopes: &ScopeSet,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    let device_id = match peer.id() {
+        PeerIdentity::Device(id) => id.clone(),
+        PeerIdentity::Node(_) => return Err(PortError::Conflict(ConflictKind::IdentityMismatch)),
+    };
+    let fingerprint = peer.public_key().fingerprint();
+    if let Some((stored, state)) = device_identity(&mut **tx, &device_id).await? {
+        if stored != fingerprint || state == DeviceState::Revoked {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+    }
+    if let Some(key) = load_peer_key(&mut **tx, "device", device_id.as_str()).await? {
+        if key.fingerprint() != fingerprint {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+    }
+    let record = DeviceRecord::try_new(
+        device_id.clone(),
+        peer.display_name(),
+        fingerprint,
+        granted_scopes.clone(),
+        DeviceState::Active,
+        at.clone(),
+        None,
+        None,
+    )?;
+    upsert_device(tx, &record, peer.public_key().as_bytes()).await?;
+    bind_peer_key(tx, "device", device_id.as_str(), peer.public_key(), at).await?;
+    Ok(())
+}
+
+/// 配对批准（节点）：对端角色恒为 `NodeKind::Access` —— 只有 `node.pair.begin --mode owner` 会创建
+/// 节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」
+/// （claim 的 `nodeKind` 也固定为 `access`），因此不需要在写集里再携带角色。`owner_endpoint` 只在
+/// `owner` 角色上存在，Access 行必须为 `None`（§3.5）。守卫与 `put_node` 一致：指纹必须与已绑定材料
+/// 及既有角色行一致，已撤销身份不得被批准激活。
+async fn approve_node(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    peer: &PairingPeer,
+    granted_grants: &GrantSet,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    let node_id = match peer.id() {
+        PeerIdentity::Node(id) => id.clone(),
+        PeerIdentity::Device(_) => return Err(PortError::Conflict(ConflictKind::IdentityMismatch)),
+    };
+    let fingerprint = peer.public_key().fingerprint();
+    if let Some(key) = load_peer_key(&mut **tx, "node", node_id.as_str()).await? {
+        if key.fingerprint() != fingerprint {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+    }
+    for row in load_nodes_for(&mut **tx, &node_id).await? {
+        if row.node_public_key_fingerprint() != &fingerprint || row.state() == NodeState::Revoked {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+    }
+    let record = NodeRecord::try_new(
+        node_id.clone(),
+        peer.display_name(),
+        NodeKind::Access,
+        fingerprint,
+        granted_grants.clone(),
+        NodeState::Paired,
+        None,
+        at.clone(),
+        None,
+        None,
+    )?;
+    upsert_node(tx, &record).await?;
+    bind_peer_key(tx, "node", node_id.as_str(), peer.public_key(), at).await?;
+    Ok(())
 }
 
 /// 设备行的 upsert。`last_seen_at` 用 `COALESCE` 只推进不抹掉：`DeviceRecord` 不带该字段的新值时

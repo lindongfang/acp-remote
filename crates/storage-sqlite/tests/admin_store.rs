@@ -87,6 +87,19 @@ const FOREIGN_FINGERPRINT: &str =
 /// `owned_pairing` 的公开秘密**摘要**来源：明文只应存在于创建方内存，库里只允许出现它的摘要。
 const PAIRING_SECRET: &str = "pairing-secret-plaintext";
 
+/// 本机在配对里宣告的绑定（§7.3：设备为 canonical origin，节点为本机在该配对中的 endpoint）。
+const HOST_BINDING: &str = "https://host.example";
+/// 另一台机器的绑定：认领时回显它必须被拒（§11.2 第 1 条）。
+const FOREIGN_BINDING: &str = "https://other.example";
+/// 节点配对里本机（Owner）宣告的 endpoint（§7.3）。
+const NODE_ENDPOINT: &str = "wss://owner.example/acpr";
+/// 节点配对的对端 nodeId。
+const PEER_NODE: &str = "99999999-9999-4999-8999-999999999999";
+
+fn peer_node_id() -> NodeId {
+    NodeId::new(PEER_NODE).expect("node id")
+}
+
 /// 一个绝不允许出现在任何列里的凭据值（keystore 只经端口取用，持久层只记引用与字段名）。
 const CREDENTIAL_VALUE: &str = "sk-live-must-never-be-persisted";
 
@@ -194,6 +207,7 @@ fn device_pairing(expires: u32) -> PairingRecord {
         ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
         GrantSet::empty(),
         digest(PAIRING_SECRET),
+        HOST_BINDING,
         at(0),
         at(expires),
         None,
@@ -204,10 +218,15 @@ fn device_pairing(expires: u32) -> PairingRecord {
 }
 
 fn device_claim(id: &DeviceId) -> PairingClaimWrite {
+    device_claim_with(id, HOST_BINDING)
+}
+
+fn device_claim_with(id: &DeviceId, host_binding: &str) -> PairingClaimWrite {
     let peer = PairingPeer::try_new(
         PeerIdentity::Device(id.clone()),
         "phone",
         peer_public_key(),
+        host_binding,
         nonce("client-nonce"),
     )
     .expect("pairing peer");
@@ -216,6 +235,56 @@ fn device_claim(id: &DeviceId) -> PairingClaimWrite {
         peer,
         ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
         GrantSet::empty(),
+    )
+    .expect("claim");
+    PairingClaimWrite {
+        claim,
+        context: context(
+            1,
+            vec![audit(
+                AuditAction::PairingClaimed,
+                EntityRef::Pairing(pairing_id()),
+                AuditOutcome::Success,
+            )],
+        ),
+    }
+}
+
+/// 节点配对登记（`node.pair.begin --mode owner` 的形状：目标 `node`、不带 scopes、请求 grants）。
+fn node_pairing() -> PairingRecord {
+    PairingRecord::try_new(
+        pairing_id(),
+        PairingTarget::Node,
+        PairingState::Created,
+        None,
+        ScopeSet::empty(),
+        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+        digest(PAIRING_SECRET),
+        NODE_ENDPOINT,
+        at(0),
+        at(30),
+        None,
+        None,
+        None,
+    )
+    .expect("pairing record")
+}
+
+/// 节点配对的认领：对端（Access 节点）回显登记时的 endpoint。
+fn node_claim(id: &NodeId) -> PairingClaimWrite {
+    let peer = PairingPeer::try_new(
+        PeerIdentity::Node(id.clone()),
+        "office access",
+        peer_public_key(),
+        NODE_ENDPOINT,
+        nonce("node-client-nonce"),
+    )
+    .expect("pairing peer");
+    let claim = acp_core::model::PairingClaim::try_new(
+        pairing_id(),
+        peer,
+        ScopeSet::empty(),
+        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
     )
     .expect("claim");
     PairingClaimWrite {
@@ -656,6 +725,206 @@ async fn second_claim_of_the_same_pairing_is_rejected() {
     pool.close().await;
 }
 
+/// 库内出现空绑定时按**损坏**报告（不是「调用方参数错误」）：该列是 NOT NULL，空串只可能来自外部
+/// 改写或本轮之前写空绑定的构建；错误分类必须指向库内状态，才能被正确排障。
+#[tokio::test]
+async fn an_empty_stored_binding_is_reported_as_corrupt() {
+    let dir = temp_dir("admin-pairing-empty-binding");
+    let store = open(&dir).await;
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(30),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+
+    // 绕过模型直接改库（模型已拒绝空绑定，这里模拟历史/外部改写）。
+    let raw = raw_write_pool(&path).await;
+    sqlx::query("UPDATE owned_pairing SET host_binding = '' WHERE pairing_id = ?1")
+        .bind(PAIRING)
+        .execute(&raw)
+        .await
+        .expect("blank the stored binding");
+    raw.close().await;
+
+    let store = open(&dir).await;
+    assert!(
+        matches!(
+            store
+                .pairing(&pairing_id())
+                .await
+                .expect_err("an empty stored binding is a store-side defect"),
+            PortError::Corrupt(_)
+        ),
+        "空绑定必须报损坏，不能落进通用 InvalidRequest 文案"
+    );
+    store.close().await;
+}
+
+/// WP6-2 回归：节点配对的批准路径必须真的落信任行。`node.pair.begin --mode owner` 创建的节点配对
+/// 被 `node.pair.confirm` 批准后，应写 `owned_node`（角色 `access`、`owner_endpoint` 为空）、把对端
+/// 公钥转入身份材料、推进配对到 `approved` 并写 `node.paired` 审计；重启后仍能取到验签公钥。
+#[tokio::test]
+async fn node_pairing_approval_persists_access_trust() {
+    let dir = temp_dir("admin-node-pairing-approval");
+    let store = open(&dir).await;
+    let peer = peer_node_id();
+    store
+        .create_pairing(PairingWrite {
+            record: node_pairing(),
+            context: context(
+                0,
+                vec![audit(
+                    AuditAction::PairingCreated,
+                    EntityRef::Pairing(pairing_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("create node pairing");
+    store.claim_pairing(node_claim(&peer)).await.expect("claim");
+    assert_eq!(
+        store
+            .settle_pairing(PairingSettlementWrite {
+                pairing: pairing_id(),
+                settlement: PairingSettlement::approved(
+                    ScopeSet::empty(),
+                    GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+                ),
+                context: context(
+                    2,
+                    vec![audit(
+                        AuditAction::NodePaired,
+                        EntityRef::Node(peer.clone()),
+                        AuditOutcome::Success,
+                    )],
+                ),
+            })
+            .await
+            .expect("approve node pairing"),
+        TrustRecordRef::Node(peer.clone())
+    );
+    let row = store
+        .node(&peer, NodeKind::Access)
+        .await
+        .expect("node")
+        .expect("node row");
+    assert_eq!(
+        row.kind(),
+        NodeKind::Access,
+        "Owner 侧确认的对端恒为 access（§5.4）"
+    );
+    assert_eq!(row.state(), NodeState::Paired);
+    assert_eq!(row.owner_endpoint(), None);
+    assert_eq!(
+        row.grants().iter().collect::<Vec<_>>(),
+        ["grant.remote-work"]
+    );
+    assert_eq!(
+        row.node_public_key_fingerprint(),
+        &peer_public_key().fingerprint()
+    );
+    assert_eq!(
+        store
+            .pairing(&pairing_id())
+            .await
+            .expect("pairing")
+            .expect("pairing row")
+            .state(),
+        PairingState::Approved
+    );
+    assert!(
+        store
+            .peer_key(&PeerIdentity::Node(peer.clone()))
+            .await
+            .expect("peer key")
+            .is_some()
+    );
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    // 重启后验签公钥逐字节相同（§11.5：后续握手只读持久化材料）。
+    let reopened = open(&dir).await;
+    assert_eq!(
+        reopened
+            .peer_key(&PeerIdentity::Node(peer.clone()))
+            .await
+            .expect("peer key")
+            .expect("bound material")
+            .as_bytes(),
+        peer_public_key().as_bytes()
+    );
+    reopened.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(audit_rows(&pool, AuditAction::NodePaired).await, 1);
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_node").await,
+        1
+    );
+    pool.close().await;
+}
+
+/// §11.2 第 1 条回归：claim 必须逐字回显登记时宣告的本机绑定；回显别的机器一律以身份不匹配拒绝，
+/// 且不推进状态、不写对端行。
+#[tokio::test]
+async fn claim_with_a_foreign_host_binding_is_rejected() {
+    let dir = temp_dir("admin-pairing-binding");
+    let store = open(&dir).await;
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(30),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+
+    assert_conflict(
+        store
+            .claim_pairing(device_claim_with(&device_id(), FOREIGN_BINDING))
+            .await
+            .expect_err("a claim echoing another host must be refused"),
+        ConflictKind::IdentityMismatch,
+    );
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    assert_eq!(
+        store
+            .pairing(&pairing_id())
+            .await
+            .expect("pairing")
+            .expect("pairing row")
+            .state(),
+        PairingState::Created,
+        "被拒的认领不得推进状态"
+    );
+    assert!(
+        store
+            .pairing_peer(&pairing_id())
+            .await
+            .expect("peer")
+            .is_none()
+    );
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_pairing_peer").await,
+        0
+    );
+    assert_eq!(audit_rows(&pool, AuditAction::PairingClaimed).await, 0);
+    pool.close().await;
+
+    // 正确的回显仍可认领（证明拒绝来自绑定不一致，而不是写集本身非法）。
+    let store = open(&dir).await;
+    store
+        .claim_pairing(device_claim(&device_id()))
+        .await
+        .expect("matching binding");
+    store.close().await;
+}
+
 /// 落定只能发生一次：重复批准不得改写首次 `approved_at`，批准后再拒绝必须是具名冲突（不得把
 /// `owned_pairing` 的 `(state IN ('approved','consumed')) = (approved_at IS NOT NULL)` CHECK 失败变成
 /// 未具名的 `PortError::Backend`）。
@@ -816,6 +1085,7 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                 ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
                 GrantSet::empty(),
                 digest(PAIRING_SECRET),
+                HOST_BINDING,
                 at(0),
                 at(5),
                 None,
@@ -840,6 +1110,7 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                         PeerIdentity::Device(remote_device_id()),
                         "late phone",
                         peer_public_key(),
+                        HOST_BINDING,
                         nonce("late-nonce"),
                     )
                     .expect("peer");

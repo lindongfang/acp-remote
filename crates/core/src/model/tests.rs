@@ -1487,6 +1487,9 @@ fn node_record_requires_owner_endpoint_only_for_owner_kind() {
     assert_eq!(owner.grants().len(), 1);
 }
 
+/// 配对登记方宣告的绑定（设备为 canonical origin，节点为本机 endpoint）。
+const HOST_BINDING: &str = "https://host.example";
+
 #[test]
 fn pairing_record_state_machine_matches_timestamps() {
     let id = PairingId::from_str(UUID_B).expect("pairing");
@@ -1502,6 +1505,7 @@ fn pairing_record_state_machine_matches_timestamps() {
             ScopeSet::empty(),
             GrantSet::empty(),
             digest(),
+            HOST_BINDING,
             ts(T0),
             ts(T2),
             claimed_at.map(ts),
@@ -1513,6 +1517,7 @@ fn pairing_record_state_machine_matches_timestamps() {
     assert_eq!(created.state(), PairingState::Created);
     assert!(!created.state().is_terminal());
     assert!(created.claimed_at().is_none());
+    assert_eq!(created.host_binding(), HOST_BINDING);
 
     let claimed = build(PairingState::Claimed, Some(T0), None, None).expect("claimed");
     assert!(!claimed.state().is_visible(), "claimed 只用于事务与审计");
@@ -1545,13 +1550,14 @@ fn pairing_record_state_machine_matches_timestamps() {
     // 设备配对不得携带 grants。
     assert_eq!(
         PairingRecord::try_new(
-            id,
+            id.clone(),
             PairingTarget::Device,
             PairingState::Created,
             None,
             ScopeSet::empty(),
             GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
             digest(),
+            HOST_BINDING,
             ts(T0),
             ts(T2),
             None,
@@ -1559,6 +1565,25 @@ fn pairing_record_state_machine_matches_timestamps() {
             None,
         ),
         Err(InvalidValue::Field)
+    );
+    // 绑定是配对的事实之一：空值不是合法绑定（§11.2 第 1 条要求认领时逐字回显）。
+    assert_eq!(
+        PairingRecord::try_new(
+            id,
+            PairingTarget::Device,
+            PairingState::Created,
+            None,
+            ScopeSet::empty(),
+            GrantSet::empty(),
+            digest(),
+            "",
+            ts(T0),
+            ts(T2),
+            None,
+            None,
+            None,
+        ),
+        Err(InvalidValue::Empty)
     );
 }
 
@@ -1568,11 +1593,13 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
         PeerIdentity::Node(NodeId::from_str(UUID_C).expect("node")),
         "Office Access",
         test_peer_public_key(),
+        HOST_BINDING,
         nonce(),
     )
     .expect("peer");
     assert_eq!(peer.id().kind(), "node");
     assert_eq!(peer.display_name(), "Office Access");
+    assert_eq!(peer.host_binding(), HOST_BINDING);
     assert_eq!(peer.client_nonce(), &nonce());
     // 指纹不是独立字段：它只能由公钥派生（§11.5）。
     assert_eq!(
@@ -1601,10 +1628,23 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
         Err(InvalidValue::Field)
     );
 
+    // 对端绑定是 claim 的回显值（设备为 `canonicalOrigin`、节点为 `endpoint`），空值不合法。
+    assert_eq!(
+        PairingPeer::try_new(
+            PeerIdentity::Node(NodeId::from_str(UUID_C).expect("node")),
+            "Office Access",
+            test_peer_public_key(),
+            "",
+            nonce(),
+        ),
+        Err(InvalidValue::Empty)
+    );
+
     let device_peer = PairingPeer::try_new(
         PeerIdentity::Device(DeviceId::from_str(UUID_B).expect("device")),
         "Phone",
         test_peer_public_key(),
+        HOST_BINDING,
         nonce(),
     )
     .expect("peer");

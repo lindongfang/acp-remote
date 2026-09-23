@@ -14,7 +14,13 @@
 
 - 上游基线：`013f2b93a77a31cec3e1a18f589c5e984f013128`（W0 基线提交，`git rev-parse HEAD`）
 - 本轮改动（工作区 → 见 `Merge History`）：`crates/storage-sqlite/src/admin/**`（新增）、`tests/admin_store.rs`（新增）、`src/{lib.rs,error.rs,session_store.rs}`、`Cargo.toml`/`Cargo.lock`（`storage-sqlite` 新增 `serde`/`serde_json` 直接依赖，版本不变）
-- 任务：`1.4`（上游交接核对）、`2.19`–`2.22`（三个管理 store 与失败关闭）、`3.9`（交付前 project verify）
+- 任务：`1.4`（上游交接核对）、`2.19`–`2.22`（三个管理 store 与失败关闭）、`3.9`（交付前 project verify）、`3.10`（独立 review）
+
+### W1·WP6 闭合轮（WP6-2 / WP6-4）
+
+- 上游基线：`1baea5b`（WP6 首版提交）+ 工作区改动（本轮闭合，见下与 `Merge History`）
+- 改动面：`crates/core/src/model/{identity,tests}.rs`（`PairingRecord`/`PairingPeer` 增 `host_binding`）、`crates/storage-sqlite/src/admin/trust.rs`（写真实绑定、认领比对、节点批准 `approve_node`/`approve_device`、`pairing_peer` 回填）、`tests/admin_store.rs`（25 用例）、`docs/CORE_PORTS_AND_STORAGE.md`（§3.5/§11.1/§11.2/§11.6 措辞）
+- **未改动**：§5.3 与 `crates/core/src/ports.rs` 的写集签名、§7.3 的 DDL（`owned_pairing.host_binding` 列在 v2 里本就存在）、任何 wire schema 与 fixture —— 因此漂移门禁的判据面（§7 36 条 DDL、§5 15 trait/87 方法）保持不变
 
 ## Checks
 
@@ -32,6 +38,7 @@
 | PV4 / WP6 交付前（2.19–2.22） | `013f2b9` + 工作区（**独立 review 修复后**） | `storage-sqlite` 的三个管理 store（TrustStore/ExportStore/LocalConfigStore）、容量门与失败关闭映射；`core` 与 workspace 回归 | 主 Agent | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`；`cargo test --locked -p core -p storage-sqlite --all-features`；`cargo test --locked --workspace --all-features` | rustc 1.98.1（`rust-toolchain.toml`） | **PASS**：fmt 退出 0；workspace clippy 退出 0；`core` 75 passed；`storage-sqlite` 12 个测试目标全 `ok`、workspace 全部目标 `ok`，其中新增 `admin_store` **23 passed; 0 failed**（并发认领、落定只一次、拒绝/过期不建信任、双角色与角色指纹不一致、撤销重启、时间戳只推进、Import 归属与完整移除、默认唯一、非法绑定、种子幂等、版本递增、无秘密、审计与落定回滚注入、损坏库写路径全拒、容量拒绝新写入） | `reports/wp6-admin-store-tests.log` |
 | PV3 / WP6（复跑） | `013f2b9` + 工作区 | 依赖方向矩阵 + `core` 闭包 allow-list（`storage-sqlite` 新增 `serde`/`serde_json` 直接依赖后复跑） | 主 Agent | `node scripts/check-crate-boundaries.mjs` | 本地 `cargo`，不联网 | **PASS**：`crate boundaries OK`（输出并入 WP6 日志） | `reports/wp6-admin-store-tests.log` |
 | PV1 / `npm run check`（WP6） | `013f2b9` + 工作区 | 十道合同门禁全绿（`check:drift` 仍报 §7 36 条 DDL、§5 15 trait/87 方法一致） | 主 Agent | `npm run check` | Node 24.19.0、仓库内 `node_modules`，不联网 | **PASS**：退出码 0 | `reports/wp6-admin-store-tests.log` |
+| PV4+PV2+PV3+PV1 / WP6 闭合轮 | `1baea5b` + 工作区（含 `RV1` 的 WP6-2/WP6-4 闭合） | 节点批准与绑定校验落地后的 core + storage；契约文本改动后重跑四类门禁 | 主 Agent | `cargo fmt --all -- --check`；`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`；`cargo test --locked -p core -p storage-sqlite --all-features`；`cargo test --locked --workspace --all-features`；`node scripts/check-contract-drift.mjs`；`node scripts/check-crate-boundaries.mjs`；`npm run check` | rustc 1.98.1、Node 24.19.0 | **PASS**：全部退出 0；`core` 75 passed；`admin_store` **25 passed**（新增节点批准与绑定不一致拒绝两例）；`check:drift` 仍 36 条 DDL / 15 trait / 87 方法 | `reports/wp6-admin-store-tests.log`（闭合轮复跑段） |
 
 ## Check Plan Changes
 
@@ -61,6 +68,15 @@
 21. **`last_seen_at`/`last_connected_at` 只推进不抹掉**（同一 review 的附带发现，已修）：`upsert_device`/`upsert_node` 改用 `COALESCE(excluded.*, *)`，一次不带新时间戳的写入不得让「最近一次认证成功/连接时间」回到未知。回归用例：`timestamps_are_advanced_never_erased`。（同一处的教训：**SQL 字面量里不得写 `--` 注释**——`\` 续行会把后续赋值吞进注释，本处实现过程中一度踩到，已改为 Rust 注释。）
 22. **`host_binding` 缺口在记录里闭环**（review `WP6-4`）：实现写空串且 claim/settle 无绑定可校验，属**未闭环的合同缺口**（§11.1 把该列定义为「本节点的 identity/origin 或 endpoint 绑定」，§11.2 第 1 条要求认领时校验「本机绑定一致」，而冻结的 `PairingWrite`/`PairingClaimWrite` 都不携带该事实）。review 判定「必须修（合同侧）」；本轮只把它从代码注释提升为**记录在案的缺口**（本节与 `Review Findings`），修复面在合同/端口侧（把绑定并入写集，或改述 §11.1/§7.3 为「调用方校验、不持久化」），需与 `WP6-2` 一并决定。
 23. **`ExpiryWrite.context.audit` 的语义加固建议未采纳但已记录**（review 对自述缺口 6 的建议）：可对「非空且非 `pairing.expired`」的 `context.audit` 返回 `InvalidRequest`，或把「本写集忽略 `context.audit`」写进 §11.6；本轮保持现状（core 的唯一调用方传空集合），留作合同措辞的一次选择。
+
+### WP6 闭合轮的决定（2026-09-23，用户批准 A 路）
+
+24. **`PairingRecord`/`PairingPeer` 增 `host_binding: String`（闭合 WP6-4，模型层改动）**：绑定在本机登记时写入 `owned_pairing.host_binding`，认领时要求对端逐字回显。**不需要 DDL 或端口改动**——该列在 v2 DDL 里本就存在（§7.3），而 `PairingWrite`/`PairingClaimWrite` 的形状不变（绑定随 record/peer 走）。`owned_pairing_peer` **不**存该列：认领时已校验两侧逐字相等，因此对端行的绑定恒等于配对行的值，读取时从配对行回填（这让「两条绑定不一致」在库内不可能存在）。
+25. **节点批准的角色推导（闭合 WP6-2）**：节点配对行只由 `node.pair.begin --mode owner` 创建，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」（claim 的 `nodeKind` 也固定为 `access`），因此批准时的对端角色恒为 `NodeKind::Access`、`owner_endpoint` 为 `None`——角色**可推导**，无须把它并入写集，也就不必改 §5.3/`ports.rs`/DDL，更不会让 W0 的契约与夹具证据作废（§11.2 第 2 条已写入这条推导）。
+26. **绑定的比较语义定在存储层「逐字相等」**：比 `NODE_LINK_PROTOCOL.md` §13.2 的 endpoint **host** 级匹配更严（对端必须回显登记时宣告的那个值）。理由是登记值与回显值同源（QR 里的 `canonicalOrigin`/`endpoint` 被逐字带进 claim），逐字相等既能覆盖 host 级检查，也能发现「claim 指向了另一次配对/另一台机器」；host/Origin 级的协议检查仍由 `SYNC_PROTOCOL.md` §7.2 与 Node Link 的 403 路径负责，文档已写明两者分工。
+
+27. **闭合轮独立 review（`Wp6ClosureReview`）的两处修复**（结论 `correct`、无阻断项）：① `pairing_from_row` 把「库里 `host_binding` 为空」按 `Corrupt` 具名报告，不再落进通用 `InvalidRequest("value does not satisfy its domain shape")`——该状态只可能来自外部改写或本轮之前写空绑定的构建，分类必须指向库内状态（回归用例 `an_empty_stored_binding_is_reported_as_corrupt`）；② §11.1 的 `owned_pairing_peer` 行改为只描述真实列（不存绑定与角色），消除与 §3.5/实现相反的陈述。
+28. **待决（不阻断本次提交）：撤销身份的「重新配对」语义**（review `WP6B-3`）：`specs/peer-identity-material` 的场景写「只有按协议完成重新配对才能恢复」，而 §11.2 第 2 条与本轮实现的守卫（`put_device`/`put_node`/`approve_*` 对 `revoked` 行一律 `Conflict(IdentityMismatch)`）使**同一 id** 无法经重新配对恢复；`SECURITY_DESIGN.md` §「重新配对为新设备/新身份」与 §11.3 的「撤销 tombstone 不因容量删除」支持「改身份」口径。两处文本方向相反，需在最终验收前二选一：① 与实现/SECURITY_DESIGN 对齐，把 spec 场景与 §11.2 措辞改成「只能以**新身份**重新配对」；② 改为允许同一 id 经重新配对恢复，则为两条 `approve_*` 增加 revocation-aware 分支与回归用例。本轮按保守口径（① 的方向）实现并记录，等主决策后再改文本。
 
 ### W0 执行期的偏差与决定（2026-09-23，本轮落地）
 
@@ -93,17 +109,27 @@ W0 期的独立 review（任务 3.2 / 3.4）**未执行**：当时没有可用�
 | --- | --- | --- | --- | --- | --- | --- |
 | RV1-BLOCKED（W0） | `28f8cb9` + 工作区 | 无（当时缺隔离上下文） | WP1–WP3 全部改动 | 阻断：交付前独立 review 未做 | 待独立 reviewer 完成后回填 | 无 |
 | WP6-1 | `013f2b9` + 工作区 | `Wp6Review`（独立 reviewer 子 Agent，`agent://Wp6Review`） | `crates/storage-sqlite/src/admin/trust.rs:717` | 高：`settle_pairing` 缺 `pending_confirmation` 守卫——重复批准改写首次 `approved_at`；批准后拒绝撞 CHECK 且以未具名 `Backend` 失败（reviewer 已用只读 SQLite 复现） | **已修**：落定前正向状态守卫 + 两条 UPDATE 正向谓词 + `rows_affected` 失败关闭；附带修 `last_seen_at`/`last_connected_at` 的 `COALESCE`；新增用例 `a_pairing_can_be_settled_only_once`、`timestamps_are_advanced_never_erased` | `reports/wp6-admin-store-tests.log`（23 passed） |
-| WP6-2 | 同上 | 同上 | `trust.rs:784` | **阻断：节点配对批准在存储层不可达**——`node.pair.confirm`（`LOCAL_ADMIN_PROTOCOL.md` §5.4 要求确认后必须已提交信任记录）与 §11.6 第 4 条对节点不成立；根因是冻结的 `PairingSettlementWrite` 不携带节点角色（`NodeKind`），适配器无法在不发明事实的前提下创建 `owned_node` 行 | **未解决（需合同侧决定）**：WP6 的失败关闭本身正确（不留半条授权），但修复面在端口/合同侧——把节点角色并入 `PairingSettlementWrite`（或 `PairingRecord`）后由批准分支写 `owned_node` + `owned_peer_key`，或改述 §11.6/§5.4 的节点确认流程；该改动会触碰 §5.3/`ports.rs` 冻结面，需按合同变更流程（同一变更内更新 §5.3、`ports.rs`、写集与用例）后重建候选并复验本分支 | 待复验 |
+| WP6-2 | 同上 | 同上 | `trust.rs:784` | **阻断：节点配对批准在存储层不可达**（`node.pair.confirm` 无法持久化信任；根因是写集不携带节点角色） | **已闭合（2026-09-23，A 路）**：角色由 `node.pair.begin --mode owner` 推导为 `NodeKind::Access`（§5.4 明确 `--mode access` 本机没有 confirm；§11.2 第 2 条已写明），`settle_pairing` 的节点分支写 `owned_node` + `owned_peer_key` + `approved` + `node.paired` 审计；未改 §5.3/`ports.rs`/DDL。用例 `node_pairing_approval_persists_access_trust` | `reports/rv1-wp6b.md`、`reports/wp6-admin-store-tests.log`（25 passed） |
 | WP6-3 | 同上 | 同上 | `crates/storage-sqlite/tests/admin_store.rs:2083` | 中：落定回滚的故障注入落在写集的**第一个**写之前，无法区分「整事务回滚」与「尚未写入」 | **已修**：注入改为 `owned_device`（首个写）与 `owned_audit`（最后一个写）两处，并断言设备行、身份材料、配对状态（`approved_at` 为空）与审计四个面都回到调用前内容 | `reports/wp6-admin-store-tests.log` |
-| WP6-4 | 同上 | 同上 | `trust.rs:529` | 中：`owned_pairing.host_binding` 写空串、claim/settle 无绑定可校验；该偏差只写在代码注释里，记录中查不到 | **已修（记录面）**：并入本文件 Check Plan Changes 第 22 条与 `Review Findings`，标记为未闭环合同缺口；修复面在合同/端口侧（与 WP6-2 一并决定） | 本文件 |
+| WP6-4 | 同上 | 同上 | `trust.rs:529` | 中：`owned_pairing.host_binding` 写空串、claim/settle 无绑定可校验；该偏差只写在代码注释里，记录中查不到 | **已闭合（2026-09-23）**：登记时写真实绑定（设备 canonical origin、节点 endpoint），认领时要求逐字回显（不一致 → `Conflict(IdentityMismatch)`，零推进），`pairing_peer` 从配对行回填；模型与文档同步（Check Plan Changes 第 24/26 条）。用例 `claim_with_a_foreign_host_binding_is_rejected` | `reports/rv1-wp6b.md`、`reports/wp6-admin-store-tests.log`（25 passed） |
 
 review 报告全文：`reports/rv1-wp6.md`（含逐条核对结论、规格场景覆盖表、自述缺口判断与复现方法）。
+
+**闭合轮复验**（`Wp6ClosureReview`，`reports/rv1-wp6b.md`）：结论 `overall_correctness = correct`，WP6-1/2/3/4 四处**全部闭合**，无阻断项；角色推导（`Node ⇒ Access`）取得三条独立证据、未找到可达反例。其三条提示级项：
+
+| ID | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| WP6B-1 | `1baea5b` + 工作区 | `Wp6ClosureReview` | `crates/core/src/model/identity.rs:476` | 提示：首版提交写过的库里，存量空 `host_binding` 行读取时落进通用 `InvalidRequest` 文案（分类误导排障） | **已修**：`pairing_from_row` 对空绑定返回具名 `Corrupt`；回归用例 `an_empty_stored_binding_is_reported_as_corrupt` | `reports/wp6-admin-store-tests.log`（26 passed） |
+| WP6B-2 | 同上 | 同上 | `docs/CORE_PORTS_AND_STORAGE.md:1298` | 提示：§11.1 的 `owned_pairing_peer` 行宣称表内有「角色和非秘密 endpoint 引用」，与实际列相反 | **已修**：该行改为只列真实列，并写明绑定与角色都不在该表 | `docs/CORE_PORTS_AND_STORAGE.md`（本提交） |
+| WP6B-3 | 同上 | 同上 | `crates/storage-sqlite/src/admin/trust.rs:962` | 提示（需合同侧二选一）：撤销身份的「重新配对」语义在 spec（可恢复）与 `SECURITY_DESIGN`/§11.3（改身份）之间方向相反；当前实现取保守口径 | **待决**：见 Check Plan Changes 第 28 条；在最终验收（`8.1`）前需主决策后改文本或用例 | 本文件 |
 
 ## Merge History
 
 W0 在门禁全绿的状态上落了**基线提交**（分支 `feat/admin-state-persistence-v2`；父提交 `28f8cb9`），供 W1 的轨道作为固定基线。
 
-W1·WP6 在独立 review（`reports/rv1-wp6.md`）的修复与全部本地门禁全绿的状态上落**第二个提交**（即本记录所在的提交；父提交 = W0 基线 `013f2b9`），内容为三个管理 store、`tests/admin_store.rs` 与本次记录回填。**未合入 main**、未推送、未开 PR（任务 5.x/6.x 未开始；合并与推送仍受当前会话授权限制）。
+W1·WP6 在独立 review（`reports/rv1-wp6.md`）的修复与全部本地门禁全绿的状态上落**第二个提交**（父提交 = W0 基线 `013f2b9`），内容为三个管理 store、`tests/admin_store.rs` 与记录回填。
+
+WP6 闭合轮（WP6-2 节点批准 / WP6-4 本机绑定，用户批准 A 路）在复验（`reports/rv1-wp6b.md`，结论 `correct`）与全部门禁全绿的状态上落**第三个提交**（即本记录所在的提交；父提交 = 第二个提交 `1baea5b`），内容为 core 模型的 `host_binding`、storage 的绑定写/校验与节点批准、文档措辞与本次记录回填。**未合入 main**、未推送、未开 PR。
 
 ## Test Design and Authoring
 
@@ -136,15 +162,17 @@ W1·WP6 在独立 review（`reports/rv1-wp6.md`）的修复与全部本地门禁
 ## Final Assessment
 
 ```agentic-assessment
-assessment_id: "admin-state-persistence-v2-w1-wp6"
-target_commit: "013f2b93a77a31cec3e1a18f589c5e984f013128"
+assessment_id: "admin-state-persistence-v2-w1-wp6-closure"
+target_commit: "1baea5bd7d4dc824443b4e52e916d97f7bec3c44"
 contract_digest: "sha256:1191945887f7001486e328786ad7b0395999317def7c1f0e51054c225951ec61"
 result: BLOCKED
 evidence:
   - path: reports/wp6-admin-store-tests.log
-    sha256: "sha256:47298878c3ba49cf3b9e66b9a3c3789d288693efbb54514f4a8a69bc5405f420"
+    sha256: "sha256:d5051e77ec177d46267dcdbaf678a3a48cfd03075dbe47ea9174920083ace2f9"
   - path: reports/rv1-wp6.md
     sha256: "sha256:678c200f65937121017f9f4de8a14adaebb1a50df22503e302fae3d5546e2c4a"
+  - path: reports/rv1-wp6b.md
+    sha256: "sha256:428f6b5a9151cf345c231571382d1833b57b6f75c249330897c2088747fb631f"
   - path: reports/wp1-core-tests.log
     sha256: "sha256:f294a5a7aa12becdd4a1ff7c32f47a8bd03cf0c4b7b5609989f515ef0438e7b9"
   - path: reports/wp3-core-tests.log
@@ -161,13 +189,13 @@ evidence:
     sha256: "sha256:90410d8c4e39b80e398c1581c598d9e71b9faeceb762eb621a509bce27c953ea"
 ```
 
-`target_commit` 是 WP6 证据产生的**变更分支起点**（W0 基线 `013f2b9`）；本记录所在的提交即 WP6 交付提交，其父提交是 `013f2b9`。`contract_digest` 与 W0 相同（本轮未改契约资产），由 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` 在回填后重跑得到（`result: PASS`）；任何契约内容再变化都会使该值失效，必须重跑。
+`target_commit` 是闭合轮证据产生的**起点**（WP6 首版提交 `1baea5bb`）；本记录所在的提交即闭合轮交付提交，其父提交是它。`contract_digest` 与 W0 相同（本轮未改契约资产），由 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` 在回填后重跑得到（`result: PASS`）；任何契约内容再变化都会使该值失效，必须重跑。
 
 - Assessment ID / Time: `admin-state-persistence-v2-w1-wp6`，2026-09-23（W1·WP6 收尾时）
-- Target / Task: 见 `Target` 的「W1·WP6」段；本轮完成 `1.4`、`2.19`–`2.22`、`3.9`、`3.10`；最终验收任务 `8.1` 未开始
+- Target / Task: 见 `Target` 的「W1·WP6」与「W1·WP6 闭合轮」段；本轮完成 `1.4`、`2.19`–`2.22`、`3.9`、`3.10`（含闭合轮复验）；最终验收任务 `8.1` 未开始
 - CLI State: `openspec status` = 5/5 artifacts complete；`npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage plan --json` = PASS（`contractDigest` 见上方评估块）。CLI 状态不表示实现完成
 - Audit / Evidence: W0 完成了 `storage-sqlite` 的 v2 DDL、两张审计表的 12-step 重建（含 `sqlite_sequence` 回填）、`imported_import` 拆分迁移与 v2 三件夹具（`cargo test -p storage-sqlite --all-features` 全绿），合同并入（`check:drift`/`check:boundaries`/`check:docs` 全绿）与合同/关联文档同步；`npm run check`、`cargo fmt`、`cargo clippy --workspace`、`cargo test --workspace` 全部退出 0。仍未做：WP6 的三个管理 store、独立 review（`3.2`/`3.4`/`3.6`/`3.8`/`3.10`）、候选与合入、替代验证与最终验收
 - Result / Open Issues: **BLOCKED** —— 未完成任务：`3.2`/`3.4`/`3.6`/`3.8`（W0/WP4/WP5 的独立 review 仍缺隔离上下文）、`5.x`、`6.x`、`7.x`、`8.x`；WP6 的 review（`3.10`）已执行并留证（`reports/rv1-wp6.md`）
-- 未闭环阻断项（须在合入前关闭）：WP6-2 节点配对批准路径（`node.pair.confirm` 在存储层不可达；修复面是冻结的写集 DTO/模型或 §11.6/§5.4 的流程定义，属合同变更）与 WP6-4 的 `host_binding`（§11.1/§11.2 第 1 条要求持久化并校验本机绑定，冻结写集不携带该事实）；两者都不影响已实现路径的安全性（失败关闭、不留半条授权），但不满足 §11.6 第 4 条与 `LOCAL_ADMIN_PROTOCOL.md` §5.4 对节点的要求
+- 阻断项状态：WP6-1/WP6-2/WP6-3/WP6-4 均已闭合（闭合轮复验 `correct`）；唯一待决项是 **WP6B-3**（撤销身份的「重新配对」语义在 spec 与 `SECURITY_DESIGN`/§11.3 之间方向相反，见 Check Plan Changes 第 28 条）——它不阻断本提交，但需在 `8.1` 最终验收前由主决策后统一文本或用例
 - Required Follow-up: ① 先决定 WP6-2/WP6-4 的合同侧修复（把节点角色并入配对落定写集或 `PairingRecord`、把本机绑定并入配对写集；或改述 §11.6/§5.4/§11.1/§7.3 的对应措辞），随后按合同变更流程更新 §5.3/§7.3 + `crates/core/src/ports.rs` + 写集与用例，并重跑 PV2/PV3/PV4 与 WP6 复验
 - ② WP1–WP3 与 WP4/WP5 的独立 review（`3.2`/`3.4`/`3.6`/`3.8`：用不继承实现对话的子 Agent，方式同 `Wp6Review`）→ ③ W3（`5.x`/`6.x`）→ ④ W4（`7.x`/`8.x`）

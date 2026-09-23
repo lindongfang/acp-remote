@@ -427,6 +427,10 @@ impl PairingState {
 
 /// 一次性配对记录。`secret_digest` 是 pairing secret 的 SHA-256；明文只存在于创建方内存
 /// （`SECURITY_DESIGN.md` §13.1：凭据不进数据库）。
+///
+/// `host_binding` 是**登记方**在本次配对里宣告的绑定（§7.3 的 `owned_pairing.host_binding`：设备为
+/// canonical origin，节点为本机在该配对中的 endpoint）。认领时对端必须逐字回显同一个值
+/// （§11.2 第 1 条的「本机绑定一致」）；scheme/host 的形状约束由协议边界负责，这里只约束长度。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingRecord {
     id: PairingId,
@@ -436,6 +440,7 @@ pub struct PairingRecord {
     requested_scopes: ScopeSet,
     requested_grants: GrantSet,
     secret_digest: Digest,
+    host_binding: String,
     created_at: Timestamp,
     expires_at: Timestamp,
     claimed_at: Option<Timestamp>,
@@ -444,7 +449,8 @@ pub struct PairingRecord {
 }
 
 impl PairingRecord {
-    /// 构造。`display_name` ≤128 字符；时间戳与状态必须自洽：
+    /// 构造。`display_name` ≤128 字符；`host_binding` 非空且 ≤2048 字符（与 endpoint 上限同口径）；
+    /// 时间戳与状态必须自洽：
     /// `claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ 状态是 `approved`/`consumed`；
     /// `terminal_at` 非空 ⟺ 状态是 `rejected`/`expired`/`consumed`；
     /// 设备配对不带 grants、节点配对不带 scopes。
@@ -457,6 +463,7 @@ impl PairingRecord {
         requested_scopes: ScopeSet,
         requested_grants: GrantSet,
         secret_digest: Digest,
+        host_binding: &str,
         created_at: Timestamp,
         expires_at: Timestamp,
         claimed_at: Option<Timestamp>,
@@ -466,6 +473,7 @@ impl PairingRecord {
         if let Some(display_name) = &display_name {
             require_bounded(display_name, 1, 128)?;
         }
+        require_bounded(host_binding, 1, 2048)?;
         let claimed = state != PairingState::Created;
         if claimed_at.is_some() != claimed {
             return Err(InvalidValue::Field);
@@ -494,6 +502,7 @@ impl PairingRecord {
             requested_scopes,
             requested_grants,
             secret_digest,
+            host_binding: host_binding.to_owned(),
             created_at,
             expires_at,
             claimed_at,
@@ -535,6 +544,11 @@ impl PairingRecord {
     /// pairing secret 的摘要。
     pub fn secret_digest(&self) -> &Digest {
         &self.secret_digest
+    }
+
+    /// 登记方宣告的绑定；认领时对端必须逐字回显（§11.2 第 1 条）。
+    pub fn host_binding(&self) -> &str {
+        &self.host_binding
     }
 
     /// 创建时间。
@@ -677,27 +691,35 @@ pub(crate) fn hex_to_bytes(text: &str) -> Vec<u8> {
 }
 
 /// claim 声明的对端信息（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2）。
+///
+/// `host_binding` 是 claim 里回显的绑定：设备为 `canonicalOrigin`，节点为 `endpoint`
+/// （`SYNC_PROTOCOL.md` §7.2 的 claim 请求、`NODE_LINK_PROTOCOL.md` §13.2 的 claim body）。存储层用它
+/// 与登记时的 `PairingRecord::host_binding` 比对（§11.2 第 1 条）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingPeer {
     id: PeerIdentity,
     display_name: String,
     public_key: PeerPublicKey,
+    host_binding: String,
     client_nonce: Nonce,
 }
 
 impl PairingPeer {
-    /// 构造。`display_name` ≤128 字符。
+    /// 构造。`display_name` ≤128 字符；`host_binding` 非空且 ≤2048 字符（claim 的回显值）。
     pub fn try_new(
         id: PeerIdentity,
         display_name: &str,
         public_key: PeerPublicKey,
+        host_binding: &str,
         client_nonce: Nonce,
     ) -> Result<Self, InvalidValue> {
         require_bounded(display_name, 1, 128)?;
+        require_bounded(host_binding, 1, 2048)?;
         Ok(Self {
             id,
             display_name: display_name.to_owned(),
             public_key,
+            host_binding: host_binding.to_owned(),
             client_nonce,
         })
     }
@@ -715,6 +737,11 @@ impl PairingPeer {
     /// 对端公钥（验签材料的唯一来源，§11.5）。
     pub fn public_key(&self) -> &PeerPublicKey {
         &self.public_key
+    }
+
+    /// claim 回显的绑定；与登记时的值逐字相等才允许认领（§11.2 第 1 条）。
+    pub fn host_binding(&self) -> &str {
+        &self.host_binding
     }
 
     /// 派生指纹；只是 `public_key.fingerprint()` 的便捷入口，不是独立字段。

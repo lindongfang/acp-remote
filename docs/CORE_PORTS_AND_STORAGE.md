@@ -135,11 +135,11 @@ pub enum UnavailableKind { Busy, StorageFull, IoError, RemoteUnavailable, OwnerO
 | `Actor` | enum `Device { device: DeviceId, scopes: ScopeSet } ｜ Node { node: NodeId, access_node: NodeId } ｜ LocalCli`；`ScopeSet` 为 scope 名集合 | `MODULE_ARCHITECTURE.md` §5；`SECURITY_DESIGN.md` §10.2 |
 | `DeviceRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.3（含 `deviceId`、指纹、`scopes`、状态、时间戳） | 同左 |
 | `NodeRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.4（含 `nodeId`、指纹、`grants`、`state`、`ownerEndpoint`）；同一 `nodeId` 可同时存在 `access`/`owner` 两行，读取与撤销按 `(NodeId, NodeKind)` 取行，两种角色共享一条身份材料（§11.5/§5.3） | 同左 |
-| `PairingRecord` | `{ id: PairingId, target: PairingTarget(Device｜Node), state: PairingState, display_name: Option<String(1..=128)>, requested_scopes: ScopeSet, requested_grants: GrantSet, secret_digest: Digest, created_at, expires_at, claimed_at: Option, approved_at: Option, terminal_at: Option }`；构造校验：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；**设备配对不得带 grants、节点配对不得带 scopes**。`secret_digest` 是 pairing secret 的 SHA-256——明文只存在于创建方内存（`SECURITY_DESIGN.md` §13.1） | 本合同（**首个实现已冻结**，见 `crates/core/src/model/identity.rs`）；方法形状见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 |
+| `PairingRecord` | `{ id: PairingId, target: PairingTarget(Device｜Node), state: PairingState, display_name: Option<String(1..=128)>, requested_scopes: ScopeSet, requested_grants: GrantSet, secret_digest: Digest, host_binding: String(1..=2048), created_at, expires_at, claimed_at: Option, approved_at: Option, terminal_at: Option }`；构造校验：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；`host_binding` 非空（空串 → `InvalidValue::Empty`）；**设备配对不得带 grants、节点配对不得带 scopes**。`secret_digest` 是 pairing secret 的 SHA-256——明文只存在于创建方内存（`SECURITY_DESIGN.md` §13.1）。`host_binding` 是**登记方**宣告的绑定（设备为 canonical origin，节点为本机在该配对中的 endpoint），落 `owned_pairing.host_binding`，认领时必须被对端逐字回显（§11.2 第 1 条、§7.3） | 本合同（**首个实现已冻结**，见 `crates/core/src/model/identity.rs`）；方法形状见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 |
 | `PairingState` | enum `Created｜Claimed｜PendingConfirmation｜Approved｜Rejected｜Expired｜Consumed`；终态 = `Rejected｜Expired｜Consumed`；`Claimed` **不对外可见**（只在服务端事务与审计里出现） | `SYNC_PROTOCOL.md` §7.0 |
 | `PeerIdentity` | enum `Device(DeviceId)｜Node(NodeId)`；`kind()` 给出 "device"/"node" | 本合同 |
 | `PeerPublicKey` | `65 字节 SEC1 未压缩 P-256 公钥`：私有字段 + `try_from_bytes`/`FromStr`；构造顺序固定（长度 == 65 → 首字节 == `0x04` → `p256::PublicKey::from_sec1_bytes` 成功），任一步失败 → `InvalidValue`；**长度断言必须先于解析**（`from_sec1_bytes` 接受 33 字节压缩点，不先断言就会绕过「SEC1 uncompressed」合同）；`fingerprint()` 是唯一指纹入口 = `SHA-256(65 字节原始公钥)` 的 64 字符小写 hex，适配器不得各自现算；私钥、keystore handle、pairing secret 明文不进本类型 | `crates/core/src/model/identity.rs`；`IDENTITY_AND_AUTH_CONTRACT.md` §3 |
-| `PairingPeer` | `{ id: PeerIdentity, display_name: String(1..=128), public_key: PeerPublicKey, client_nonce: Nonce }`；指纹不再单独存放，由 `public_key.fingerprint()` 派生（`LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的 wire 字段 `publicKeyFingerprint` 语义不变，值变成派生结果） | `SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2 |
+| `PairingPeer` | `{ id: PeerIdentity, display_name: String(1..=128), public_key: PeerPublicKey, host_binding: String(1..=2048), client_nonce: Nonce }`；指纹不再单独存放，由 `public_key.fingerprint()` 派生（`LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的 wire 字段 `publicKeyFingerprint` 语义不变，值变成派生结果）；`host_binding` 是 claim 里回显的绑定（设备为 `canonicalOrigin`、节点为 `endpoint`），必须与登记的 `PairingRecord.host_binding` 逐字相等，`owned_pairing_peer` 不单独存该列（读取时从配对行回填） | `SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2 |
 | `PairingClaim` | `{ pairing: PairingId, peer: PairingPeer, requested_scopes: ScopeSet, requested_grants: GrantSet }`——HMAC/proof 由**调用方**验证，进入本类型时只剩已核对的事实；设备配对不对带 grants、节点配对不得带 scopes | 本合同（`TrustStore::claim_pairing` 的输入） |
 | `PairingSettlement` | enum `Approved { granted_scopes: ScopeSet, granted_grants: GrantSet }｜Rejected { reason: Option<String(≤256)> }`；`granted_*` 是**用户确认的最终集合**（不是请求值）；`reason` 是简短原因，不进审计正文 | 本合同（`TrustStore::settle_pairing` 的输入） |
 | `ExportRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 `ExportView`（`exportId`、`agentIds`、`workspaceAliases`、`defaultWorkspaceAlias`、`templates`、**`scopes`**、`cachePolicy`、`createdAt`、`revokedAt`） | 同左（字段名已按本次决定与 Node Link 对齐） |
@@ -1294,8 +1294,8 @@ CREATE TABLE imported_import_export (
 | `owned_device` | `device_id`；§3.5 `DeviceRecord` 的全部非秘密字段 | 状态与 `revoked_at` 一致；同 ID 不得被普通 upsert 换绑公钥或恢复已撤销权限 |
 | `owned_node` | `(node_id, kind)`；§3.5 `NodeRecord` 的全部非秘密字段 | 同一对端可同时承担 Owner/Access；`node_id` 的身份指纹必须一致；按 NodeId 撤销影响两种角色 |
 | `owned_peer_key` | `(peer_kind, peer_id)`；65-byte SEC1 未压缩 P-256 公钥、SHA-256 指纹 | 公钥是非秘密认证材料；配对验证后与信任一起提交，重启验签从此读取；不保存私钥或完整认证请求 |
-| `owned_pairing` | `pairing_id`；§3.5 `PairingRecord` 的状态、目标、请求权限、secret digest、时间戳 | 包含本节点身份/origin 或 endpoint 绑定；不存 secret、HMAC、QR URL 或完整认证 payload |
-| `owned_pairing_peer` | `pairing_id`，外键到配对记录；claim 后的 peer ID、名称、公钥、指纹、角色和非秘密 endpoint 引用 | 每个配对最多一个 peer；与配对目标一致；claim 之后不能换人；确认时公钥转入信任材料 |
+| `owned_pairing` | `pairing_id`；§3.5 `PairingRecord` 的状态、目标、请求权限、secret digest、`host_binding`、时间戳 | `host_binding` 是本机在该配对里宣告的绑定（设备 canonical origin、节点本机 endpoint），认领时被逐字回显（§11.2 第 1 条）；不存 secret、HMAC、QR URL 或完整认证 payload |
+| `owned_pairing_peer` | `pairing_id`（主键）；claim 后的对端身份（`peer_kind`/`peer_id`）、名称、公钥、指纹、`client_nonce`、`claimed_at` | 每个配对最多一个 peer；与配对目标一致；claim 之后不能换人；确认时公钥转入信任材料。**不存绑定与角色**：绑定只在 `owned_pairing.host_binding`（认领时已校验两侧逐字相等，读取时回填），对端角色由配对方向推导（§11.2 第 2 条） |
 | `owned_export` | `export_id`；§3.5 `ExportRecord` 的全部字段 | `cache_policy` 固定；默认 alias/template 必须属于本 Export；撤销记录保留 |
 | `owned_agent_profile` | `agent_id`；本地 `agent.configure` 的名称、命令、参数、环境白名单、default 及创建/更新时间 | 至多一个默认 profile；字段不含 Provider/MCP 凭据；参数不经 shell 拼接 |
 | `owned_workspace` | `alias`；本地 `workspace.select` 的名称、规范化路径及创建/更新时间 | 路径只在本节点可读；建立/使用时校验目录与路径边界；不进入 Node Link catalog |
@@ -1312,8 +1312,8 @@ CREATE TABLE imported_import_export (
 
 ### 11.2 原子提交与失败处理
 
-1. **认领**：验证 HMAC/proof 后，单事务检查配对存在、未过期、仍为 `created` 及本机绑定一致，插入唯一 peer 并转到 `pending_confirmation`；并发 claim 只有一个成功。`claimed` 仅为事务内过渡，不形成可重新认领的中间提交。
-2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对。
+1. **认领**：验证 HMAC/proof 后，单事务检查配对存在、未过期、仍为 `created` 及**本机绑定一致**，插入唯一 peer 并转到 `pending_confirmation`；并发 claim 只有一个成功。`claimed` 仅为事务内过渡，不形成可重新认领的中间提交。「本机绑定一致」由 `PairingPeer.host_binding`（claim 的回显值：设备 `canonicalOrigin`、节点 `endpoint`）与 `PairingRecord.host_binding`（登记时宣告的值）**逐字相等**判定，不一致 → `Conflict(IdentityMismatch)` 且不推进任何状态；host/Origin 级的协议检查（`SYNC_PROTOCOL.md` §7.2 的 Host/Origin 匹配、`NODE_LINK_PROTOCOL.md` §13.2 的 403 路径）由协议层负责，不替代这里的相等判定。
+2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对。落定只接受 `pending_confirmation`（已落定/已终态 → `Conflict(Consumed)`，不重复改写首次批准时间）。节点配对的批准创建 `owned_node` 的 **`access`** 行（`owner_endpoint` 为空）：只有 `node.pair.begin --mode owner` 会创建节点配对行，而 `LOCAL_ADMIN_PROTOCOL.md` §5.4 明确「`--mode access` 本机没有 `confirm` 调用」，因此对端角色可推导、不需要在写集里携带；`owner` 角色行由该节点自己被信任时经 `put_node` 写入。
 3. **撤销**：单事务记录撤销时间、撤销状态与对应审计；提交后阻断新命令/订阅并关闭适用连接，再回答管理调用。提交失败返回失败，不把内存撤销当作持久成功；连接清理失败也不回滚已提交的撤销，阻断后续访问并报告失败。重启先加载撤销状态，再允许连接。
 4. **Export**：创建前验证 Agent、workspace、模板与默认引用；创建/撤销各为一个事务。撤销先提交再发送 `export.revoked`；发送失败不撤销数据库决定。授权从最新记录计算，不能仅信任旧连接缓存。
 5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。
@@ -1377,8 +1377,8 @@ CREATE TABLE imported_import_export (
 
 1. `put_device`：同 ID 不得换绑公钥（`fingerprint` 与已存行不一致 → `Conflict(IdentityMismatch)`），不得把 `revoked` 改回 `active`（→ `Conflict(IdentityMismatch)`）；`scopes` 变化写 `device.scopes_changed`，撤销写 `device.revoked`。
 2. `put_node`：写 `owned_node` 行与 `owned_peer_key` 的绑定；同一 NodeId 的两种角色必须指纹一致；撤销过的身份只能按协议重新配对，不能经普通 upsert 激活。
-3. `claim_pairing`：并发只有一个成功（唯一 peer 行 + 条件更新）；过期/已终态 → `Conflict(Expired/Consumed)`；插入 `owned_pairing_peer` 与状态推进、`pairing.claimed` 审计同一事务。
-4. `settle_pairing`：拒绝或过期**不创建**信任；`Approved` 时创建信任行、把 peer 公钥转入 `owned_peer_key`、更新配对为 `approved`、写 `pairing.approved`；任一步失败全回滚，绝不出现「返回成功但没有持久信任」。
+3. `claim_pairing`：并发只有一个成功（唯一 peer 行 + 条件更新）；过期/已终态 → `Conflict(Expired/Consumed)`；本机绑定不一致 → `Conflict(IdentityMismatch)`（§11.2 第 1 条）；插入 `owned_pairing_peer` 与状态推进、`pairing.claimed` 审计同一事务。
+4. `settle_pairing`：拒绝或过期**不创建**信任；`Approved` 时创建信任行、把 peer 公钥转入 `owned_peer_key`、更新配对为 `approved`、写 `pairing.approved`；任一步失败全回滚，绝不出现「返回成功但没有持久信任」。设备配对写下设备行（`active`）；节点配对写下 `owned_node` 的 `access` 行（§11.2 第 2 条的角色推导）；两条路径都先核对「指纹与既有绑定/角色行一致、身份未被撤销」。
 5. `revoke_device`/`revoke_node`：单事务写撤销时间、状态与审计；**提交后**才由组合根关闭适用连接并对管理调用作答（§11.2 第 3 条）。连接清理失败不回滚已提交的撤销。
 6. `expire_pairings`：只终结「未确认且 `expires_at <= at`」的行，写 `pairing.expired`；已批准信任不受影响。
 7. `put_export`/`revoke_export`/`add_import`/`remove_import`：审计取值分别用 `export.created`/`export.revoked`/`import.added`/`import.removed`（§11.8 第 7 条），与状态同事务（§11.2 第 4/5 条）。
