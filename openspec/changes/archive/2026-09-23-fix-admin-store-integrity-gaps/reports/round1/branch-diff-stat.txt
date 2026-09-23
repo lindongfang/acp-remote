@@ -1,0 +1,7 @@
+ crates/storage-sqlite/src/admin/export.rs  |  26 ++-
+ crates/storage-sqlite/src/admin/trust.rs   | 112 ++++++++++---
+ crates/storage-sqlite/src/session_store.rs |  37 +++++
+ crates/storage-sqlite/tests/admin_store.rs | 249 +++++++++++++++++++++++++++--
+ crates/storage-sqlite/tests/imported.rs    | 183 +++++++++++++++++----
+ docs/CORE_PORTS_AND_STORAGE.md             |   9 +-
+ 6 files changed, 549 insertions(+), 67 deletions(-)
