@@ -107,11 +107,18 @@ Dependabot 告警与安全更新。push protection 在推送前拦截已知 prov
 `security_and_analysis.secret_scanning_non_provider_patterns` / `secret_scanning_validity_checks`
 既不报错也不生效，字段原样返回 `disabled`）：
 
-- **Non-provider patterns**（通用模式密钥检测）：本项目自研格式的私钥与配对密钥不在 provider 模式里，
-  这个开关才覆盖它们。
-- **Validity checks**（可选）：校验命中的凭据是否仍然有效，用于压低假阳性。
+- **Non-provider patterns**（通用模式密钥检测，旧文档里叫 generic patterns）：regex 类检测，覆盖私钥、
+  连接串、通用 API key 等不属于任何 provider 模式的凭据。本项目自研格式的私钥与配对密钥正在这个范围内，
+  因此这一项对本项目有实际意义。
+- **Validity checks**（可选，**价值有限，按需开**）：它把命中的凭据发给签发方校验是否仍有效，因此只对
+  「能向签发方查询」的 provider 凭据有意义（比如泄露的 GitHub/npm token）。本项目自研格式的私钥与
+  配对密钥**没有签发方可查**，这一项不覆盖它们，不要把它当成本项目密钥的防护。
 
-入口：仓库 Settings → **Code security** → Secret scanning 区域（public 仓库免费）。
+入口（**个人账号仓库**）：仓库 Settings → **Advanced Security**（左侧 Security and quality 分组的第一项）。
+组织账号下同一页在文档里叫 “Code security” / “Code security and analysis”，因此不要把其中一个名字当成通用路径；
+下不去时以界面上实际存在的分组为准。public 仓库上这些检测免费；**如果界面上根本没有对应开关，
+那就是账号/仓库类型的平台限制（例如非 provider 模式在部分场景需要 GitHub Advanced Security），
+属于能力缺口而不是配置遗漏**——此时落到 CI 的 `gitleaks` 作为替代。
 
 关于「Dependabot 安全更新」还有一个前置条件值得记下：它要求 **Dependabot 告警先开**，否则
 `PUT .../automated-security-fixes` 直接返回 422「Vulnerability alerts must be enabled」。顺序是：
