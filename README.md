@@ -95,25 +95,31 @@ bypass list 保留 `RepositoryRole admin / always`——也就是**零摩擦档*
 协作者、GitHub App 与 `GITHUB_TOKEN` 驱动的自动化）。`branches/main/protection` 仍返回 404：
 本仓库用 ruleset 而不是经典分支保护，两者不需要同时开。
 
-仍待办：三个与密钥/依赖响应配套的仓库开关（命令见下）、以及等五个 job 连续几轮都绿之后再决定是否上
-严格档（加「要求 PR」并把 admin 从 bypass list 移除）。
+仍待办：两个 secret scanning 子开关（见下）、以及等五个 job 连续几轮都绿之后再决定是否上严格档
+（加「要求 PR」并把 admin 从 bypass list 移除）。
+
+已核实为**已开启的**（2026-09-23）：`secret_scanning`、`secret_scanning_push_protection`、
+Dependabot 告警与安全更新。push protection 在推送前拦截已知 provider 模式的凭据——这个时序 CI 给不了；
+但本项目自研格式的密钥要靠 CI 的 `gitleaks` 或通用模式检测。两层仓库级检测与运行时扫描的分工写在
+`SECURITY_DESIGN.md` §18.1。
+
+两个仍有待开启的，**只能走界面，REST API 写不进去**（实测：`PATCH /repos/{owner}/{repo}` 带
+`security_and_analysis.secret_scanning_non_provider_patterns` / `secret_scanning_validity_checks`
+既不报错也不生效，字段原样返回 `disabled`）：
+
+- **Non-provider patterns**（通用模式密钥检测）：本项目自研格式的私钥与配对密钥不在 provider 模式里，
+  这个开关才覆盖它们。
+- **Validity checks**（可选）：校验命中的凭据是否仍然有效，用于压低假阳性。
+
+入口：仓库 Settings → **Code security** → Secret scanning 区域（public 仓库免费）。
+
+关于「Dependabot 安全更新」还有一个前置条件值得记下：它要求 **Dependabot 告警先开**，否则
+`PUT .../automated-security-fixes` 直接返回 422「Vulnerability alerts must be enabled」。顺序是：
 
 ```text
-# Dependabot 安全更新：dependabot.yml 只管「版本更新」，安全更新是独立开关（当前 disabled）
-gh api -X PUT repos/lindongfang/acp-remote/automated-security-fixes
-
-# 通用（非 provider）模式密钥检测：本项目自研格式的私钥与配对密钥不在 provider 模式里（当前 disabled）
-gh api -X PATCH repos/lindongfang/acp-remote \
-  -f 'security_and_analysis[secret_scanning_non_provider_patterns][status]=enabled'
-
-# 可选：校验命中的凭据是否仍然有效，用于压低假阳性
-gh api -X PATCH repos/lindongfang/acp-remote \
-  -f 'security_and_analysis[secret_scanning_validity_checks][status]=enabled'
+gh api -X PUT repos/lindongfang/acp-remote/vulnerability-alerts      # Dependabot 告警（先决条件）
+gh api -X PUT repos/lindongfang/acp-remote/automated-security-fixes  # 安全更新
 ```
-
-已核实为**已开启**的：`secret_scanning`、`secret_scanning_push_protection`。push protection 在推送前
-拦截已知 provider 模式的凭据——这个时序 CI 给不了；但本项目自研格式的密钥要靠 CI 的 `gitleaks`
-或上面的通用模式检测。两层仓库级检测与运行时扫描的分工写在 `SECURITY_DESIGN.md` §18.1。
 
 三类设置的实际作用不同，**以 Rulesets 界面的原文为准**：
 
