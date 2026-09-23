@@ -93,7 +93,7 @@ flowchart TD
   TEST --> V2["用例/脚本基础检查 ∥ 独立用例 review"]
   V1 --> UNIT[交付单元就绪，复核既定方案]
   V2 --> UNIT
-  UNIT --> LOOP["逐个合入单元（串行）<br/>取最新主分支 → 构建一个候选 → 候选测试 ∥ 差异 review<br/>required 时关键 E2E → 复核基线并防竞态合入<br/>实际结果一致性 + 必要回归"]
+  UNIT --> LOOP["逐个合入单元（串行）<br/>取最新本地主分支 → 构建一个候选 → 候选测试 ∥ 差异 review<br/>required 时关键 E2E → 复核基线并防竞态本地合入<br/>实际结果一致性 + 必要回归"]
   LOOP --> MODE{"plan.md 的 Main E2E mode"}
   MODE -->|required| E2E["最终主分支完整 E2E<br/>单入口命令内部并行分片"]
   MODE -->|not-applicable| ALT["核对 reason / basis<br/>完成替代验证"]
@@ -112,7 +112,9 @@ not-applicable 时完成计划中的替代验证，`verification.md` 在整个�
 
 `plan.md` 定义工作包、资源、交付单元和检查策略，`tasks.md` 跟踪进度，`verification.md` 连续记录实际证据。
 契约明确后，coder 与 tester 可并行；每个交付单元在最新主分支上构造候选，完成适用 Verify、独立 review 和
-关键 E2E 后才合入，再完成主分支检查。最终主分支 E2E 与最终验收的具体判据以 schema、roles 和 acceptance 为准。
+关键 E2E 后合入本地主分支，再完成主分支检查。执行 apply 已授权此本地合入，无须逐单元人工批准；
+远端推送单独要求明确授权，默认不执行；明确要求远端交付时也先完成本地合入及检查。
+最终主分支 E2E 与最终验收的具体判据以 schema、roles 和 acceptance 为准。
 
 工作包、交付单元与运行资源的规则正文在 `schema.yaml` 的 plan instruction，字段与填写方式在
 `templates/plan.md`，角色职责在 `roles/`；本 README 不重复这些运行期规则。
@@ -302,7 +304,7 @@ CLI 检测文档是否存在并统计任务复选框，不会自动启动 Agent�
 
 工作流不预设各角色使用的具体模型：模型由 `openspec/config.yaml` 的 `x-agentic.roles` 配置（见 [Role Models](#role-models)），
 未配置时使用宿主默认，模型差异不改变角色职责与独立性要求；
-角色分配、验收与归档也不新增合并、回滚、推送或发布授权。
+角色分配、验收与归档不新增远端推送、回滚或发布授权；apply 包含检查通过后的本地主分支合入。
 
 ### Portability
 
