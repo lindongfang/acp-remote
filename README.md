@@ -40,28 +40,55 @@
 
 ## 合同检查
 
-机器校验入口只依赖 Node ≥ 22.12（`commitlint` 21 的下限）与仓库内的 devDependencies，不参与运行时产物：
+合同门禁只依赖 Node ≥ 22.12（`commitlint` 21 的下限）与仓库内的 devDependencies，不参与运行时产物；
+Rust 侧的编译器版本以 [`rust-toolchain.toml`](rust-toolchain.toml) 为唯一来源（本地 rustup 与 CI 读同一个文件，
+因此不会有「本机绿、CI 红」的 clippy / rustfmt 版本假失败）：
 
 ```text
-npm ci
-npm run check
+npm ci          # 首次或依赖变动后
+npm run verify  # 合同门禁 + fmt / clippy / test，与 CI 的 checks job 同源
 ```
 
-`npm run check` 串行执行九个检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁）；② 命令目录的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及 `core::broker::required_grant` 这份 Rust 镜像；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑧ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）；⑨ agentic 流程与规范（`check:agentic` → `scripts/agentic-gate.mjs`：`openspec-agentic doctor` 断言所用流程确为扩展的 agentic —— 引擎版本等于扩展 pin、`schema: agentic`、受管文件无漂移、AGENTS.md 有验收路由；随后 `openspec validate --all --strict` 校验变更与规范，无活动变更时以 0 退出。该脚本同时设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，关闭引擎默认开启的遥测与更新检查）。
+`npm run check` 串行执行十项检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁）；② 命令目录的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格，以及 `core::broker::required_grant` 这份 Rust 镜像；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ 文档引用门禁（`check:docs` → `scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 命中目标文档的标题或显式锚点、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守，无法归因的只统计不判定）；⑧ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑨ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）；⑩ agentic 流程与规范（`check:agentic` → `scripts/agentic-gate.mjs`：`openspec-agentic doctor` 断言所用流程确为扩展的 agentic —— 引擎版本等于扩展 pin、`schema: agentic`、受管文件无漂移、AGENTS.md 有验收路由；随后 `openspec validate --all --strict` 校验变更与规范，无活动变更时以 0 退出。该脚本同时设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，关闭引擎默认开启的遥测与更新检查）。
 
-CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push 与 PR 上跑同一批检查：`npm ci && npm run check`、`cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`、`cargo test --locked --workspace --all-features`。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
+CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑五个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `npm audit`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 全历史密钥扫描）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
+
+`deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
 
 提交信息遵循 Conventional Commits（`<type>(<scope>)!?: <主题>`）：type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，本地由 husky 的 `.husky/commit-msg` 钩子在 `npm install` 时装配，CI 的独立 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次（`npm run lint:commits -- --from <base> --to <head>`，`--no-verify` 绕得过本地钩子但绕不过它）。规则说明见 `AGENTS.md` §8。
 
 上游 ACP 固定快照（`schemas/acp/v1/upstream/schema.json`，来源与 sha256 见 `compatibility/acp/v1/matrix.json` 的 `protocol` 块）由 `check:acp` 重算 digest 并校验 commit 与 major 版本目录；`fixtures/acp/v1` 也按同一快照做 ajv 校验。升级快照必须同时改固定值、vendored 文件与矩阵行，且先通过 `node scripts/check-acp-compatibility.mjs`。
 
-Rust 侧改动完成后还需要（见 `AGENTS.md` §8）：
+## 分支保护
+
+CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义检查，「合并前必须通过」却是 GitHub 的仓库设置，不属于版本控制内容。要求 main 至少把这些检查设为必需（括号里是 workflow 里的 job id，GitHub 的设置界面按前一个名字展示）：**合同门禁 + Rust 检查**（`checks`）、**提交信息规范**（`commits`）、**依赖许可证与来源**（`deps`）、**密钥扫描**（`secrets`）；**依赖安全公告**（`advisories`）是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断（它的失败可能来自与本次改动无关的上游 advisory）。
+
+设置入口是仓库 Settings → Rules/Branches（`gh api -X PUT repos/<owner>/<repo>/branches/main/protection` 也适用，但 payload 形状取决于要开哪几条，建议先用界面）。核实当前状态与可用性：
 
 ```text
-cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+gh auth status
+gh api repos/lindongfang/acp-remote --jq .private     # 私有仓库的分支保护需要付费 plan
+gh api user --jq .plan
+gh api repos/lindongfang/acp-remote/branches/main/protection   # 404 = 未启用或不可用
 ```
+
+分支保护在 public 仓库上随 GitHub Free 就有；私有仓库需要 GitHub Pro/Team/Enterprise。若不可用，可选：升级 plan、把仓库改为 public（发布前通常不合适），或接受现状并在 `AGENTS.md`/`README.md` 里明确写「CI 判定为建议性」。
+
+三类设置的实际作用不同（GitHub 文档口径）：
+
+- **必需检查**（Require status checks）：拦住的是**合并**到受保护分支；直推同样会因 `required status check ... is expected` 被拒，但**仓库 admin 默认绕过全部规则**，所以想真正拦住直推，必须同时不勾「允许绕过」。
+- **要求 PR**（Require a pull request）：把 main 变成只能经由 PR 落地。
+- **禁止强推 / 禁止删除**：默认随规则生效，不因 actor 而异。
+
+对单人仓库的含义：只要保留 admin 绕过（默认），规则对**你自己**几乎只是提示，对未来的协作者、GitHub App 或 `GITHUB_TOKEN` 驱动的自动化才是硬门禁；而 `deps` / `advisories` / `secrets` 这三个只能在 CI 运行的判定，只有在「合并被门禁且直推被拦住」时才真正起作用。
+
+**建议的顺序**（这个顺序本身是判据，不只是便利）：
+
+1. 先 push 一次并让 CI 跑完——GitHub 的必需检查选择器只列出**最近跑过**的检查，新 job 没跑过时在设置界面里根本找不到它们；
+2. 再按「必需检查 + 禁止强推/删除、保留 admin 绕过」启用：先让规则与检查名成立，零摩擦；
+3. 等 `deps` / `advisories` / `secrets` 至少各绿过一次后再决定是否上严格档（加「要求 PR」并取消 admin 绕过）。**在检查还没绿过之前就上严格档会把自己锁在门外**：必需检查在每个 PR 上都失败时，你无法合并任何东西，只能回设置里改规则或绕过。
+
+**本仓库的状态待核实**：写这一节时 `gh auth status` 显示未登录，无法查询，因此在那之前 CI 的判定是建议性的；确认并设置完成后，把这一句改成实际口径。
 
 ## 许可
 

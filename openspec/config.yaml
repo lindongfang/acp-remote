@@ -15,15 +15,15 @@ context: |
 
   ## Standard Commands
   - 依赖安装：`npm ci`（Node ≥ 22.12；`package-lock.json` 与 `Cargo.lock` 均已入库）。
-  - Local Checks / Project Verify：以仓库 `AGENTS.md` §8（cargo fmt/clippy/test 三条）与 §10（`npm run check` 九个门禁）为唯一权威，本节不复制命令清单。
+  - Local Checks / Project Verify：以仓库 `AGENTS.md` §8（本地入口 `npm run verify`）与 §10（合同门禁与 CI job 清单）为唯一权威，本节不复制命令清单。
   - E2E：`x-agentic.e2e.command` 未配置。当前阶段没有可端到端运行的产品路径，Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。
 
   ## Engineering Constraints
-  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7 与 §9；安全与供应链要求见 `docs/SECURITY_DESIGN.md`。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。
+  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7 与 §9；安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。
   - 子目录 AGENTS.md 或其他必须继续读取的项目规则：暂无子目录 `AGENTS.md`；改动前必须先读仓库根 `AGENTS.md` 及其列出的权威文档。
 
   ## Runtime Environment
-  - 必要服务、平台、驱动及版本：Node ≥ 22.12（合同校验脚本）、Rust toolchain（CI 固定 1.98.1）。不需要外部数据库服务、容器或外部服务；测试使用可控的 fake ACP Agent，真实 Codex/OMP 属可选兼容套件。
+  - 必要服务、平台、驱动及版本：Node ≥ 22.12（合同校验脚本）；Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源（当前 1.98.1，本地 rustup 与 CI 读同一文件，不要在别处再写一份）。不需要外部数据库服务、容器或外部服务；测试使用可控的 fake ACP Agent，真实 Codex/OMP 属可选兼容套件。本机（Windows）到 crates.io index 的传输不稳定，`cargo install --locked cargo-deny` 未能完成，因此 `deny.toml` / `.gitleaks.toml` 的首次真实执行发生在 CI（见 ADR-0008 的残余风险第 5 条）。
   - 当前节点交付目标：Windows x64 优先，Linux 后续开发；平台顺序与验收边界见 `docs/INITIAL_DESIGN.md` §14 和 `docs/SECURITY_DESIGN.md` §18.2。现有 GitHub Actions 在 Linux 上检查共享代码，尚无 Windows 产品 E2E。
   - 数据库、端口、容器、账号、缓存等共享资源及隔离规则：暂无共享运行资源；`cargo test` 与 `npm run check` 共享 `target/`，并行分片必须隔离构建目录（`CARGO_TARGET_DIR`）。
 

@@ -204,13 +204,29 @@ agentic 变更的通用工作流（proposal → specs/design → plan → tasks 
 
 提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板（[`.pi/prompts/commit.md`](.pi/prompts/commit.md)，随仓库提交）生成并落地提交信息：它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
 
-Rust workspace 建立后，完成改动通常应运行：
+Rust workspace 建立后，本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
 
 ```text
-cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+npm ci          # 首次或依赖变动后
+npm run verify  # = npm run check（合同门禁，§10）+ npm run check:rust（下面三条）
 ```
+
+`npm run check:rust` 展开为下面三条；需要单独执行时用它们，但参数必须与脚本一致——工具链版本由
+`rust-toolchain.toml` 固定，本地与 CI 因此判定同一个编译器：
+
+```text
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+```
+
+有两类判定**只在 CI 运行**，因为它们需要网络或额外二进制：`cargo-deny`（依赖许可证、来源与 advisory，配置见
+`deny.toml`）与 `gitleaks`（密钥扫描，配置见 `.gitleaks.toml`）。它们不在 `npm run verify` 里，因此
+「本地绿」不等于这两类判定通过；工具版本与已知残余风险见 `docs/adr/0008-ci-supply-chain-tooling.md`。
+
+提交时 `.husky/pre-commit` 会自动跑 `cargo fmt --check` + `npm run check` + `cargo clippy`（涉及 Rust 时）。
+它可以用 `git commit --no-verify` 跳过，且检查的是工作区内容而不是暂存快照，因此它是「更早发现失败」，
+不是门禁本身的实现。
 
 如果某个命令因平台、缺少外部 Agent 或环境限制无法执行，必须在交付说明中准确写明，不能声称已经通过。
 
@@ -251,7 +267,13 @@ cargo test --workspace --all-features
 - core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。
 - CLI 与 Daemon 之间的管理方法、envelope 或 framing 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`。
-- `npm run check` 是本仓库唯一的机器校验入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行九个门禁 —— `scripts/` 下八个脚本：fixture 用 ajv 校验（sync / node-link / acp 三个 asset root）、错误码 registry 与四处定义一致、命令目录与 core 的 `required_grant` 镜像一致（`commands.json` ↔ 两个协议 schema ↔ SYNC §11.5 与 SECURITY §10.2 表格 ↔ `core::broker::required_grant`）、feature ID 词表三方一致（registry / 协议文档表格 / fixture）、`rawJson` 与 transcript 密码学固定向量重算、ACP 矩阵及上游快照 sha256 比对，**crate 依赖方向门禁**（以 `MODULE_ARCHITECTURE.md` §5 的依赖矩阵为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖），以及 **合同漂移门禁**（`scripts/check-contract-drift.mjs`：§7 的 v1 表结构逐条等于 `crates/storage-sqlite/src/migrate.rs` 的 DDL 常量，§5 的 trait 方法集与端口 DTO 成员逐条等于 `crates/core/src/ports.rs`；两者归一化后比对，`IF NOT EXISTS`、注释与空白不算差异），外加 `check:agentic`（由 `scripts/agentic-gate.mjs` 驱动：先 `openspec-agentic doctor` 断言所用流程确为扩展的 agentic：项目本地引擎版本等于扩展 pin 的版本、`openspec/config.yaml` 的 `schema` 为 `agentic`、`x-agentic.configVersion` 为 1、受管文件与清单无漂移、AGENTS.md 有验收路由；再以 `openspec validate --all --strict` 校验变更与规范，无活动变更时打印 `No items found to validate.` 并以 0 退出。引擎的遥测与更新检查默认开启，而 CI 变量只在 CI 里生效，因此该脚本显式设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，让门禁在开发机与 CI 上都保持离线语义）。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。CI 已接入：`.github/workflows/ci.yml` 在 push 与 PR 上跑同一批检查（`npm run check` 的九个门禁 + 本节 §8 的三条 cargo 命令），另有一个独立的 `commits` job 校验本次推送/合并请求引入的提交范围是否符合 §8 的提交信息规范，因此「全绿」由 CI 强制；本地等价命令见 §8。Linux runner 会额外执行 `#[cfg(unix)]` 的权限路径（`0700` 目录、`0600` 文件、模式位判定），这些在 Windows 开发机上不会跑到。
+- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**，本段不重复计数）—— `scripts/` 下的脚本：fixture 用 ajv 校验（sync / node-link / acp 三个 asset root）、错误码 registry 与四处定义一致、命令目录与 core 的 `required_grant` 镜像一致（`commands.json` ↔ 两个协议 schema ↔ SYNC §11.5 与 SECURITY §10.2 表格 ↔ `core::broker::required_grant`）、feature ID 词表三方一致（registry / 协议文档表格 / fixture）、`rawJson` 与 transcript 密码学固定向量重算、ACP 矩阵及上游快照 sha256 比对、**文档引用门禁**（`scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 能在目标文档的标题或显式锚点里找到、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档），**crate 依赖方向门禁**（以 `MODULE_ARCHITECTURE.md` §5 的依赖矩阵为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖），以及 **合同漂移门禁**（`scripts/check-contract-drift.mjs`：§7 的 v1 表结构逐条等于 `crates/storage-sqlite/src/migrate.rs` 的 DDL 常量，§5 的 trait 方法集与端口 DTO 成员逐条等于 `crates/core/src/ports.rs`；两者归一化后比对，`IF NOT EXISTS`、注释与空白不算差异），外加 `check:agentic`（由 `scripts/agentic-gate.mjs` 驱动：先 `openspec-agentic doctor` 断言所用流程确为扩展的 agentic：项目本地引擎版本等于扩展 pin 的版本、`openspec/config.yaml` 的 `schema` 为 `agentic`、`x-agentic.configVersion` 为 1、受管文件与清单无漂移、AGENTS.md 有验收路由；再以 `openspec validate --all --strict` 校验变更与规范，无活动变更时打印 `No items found to validate.` 并以 0 退出。引擎的遥测与更新检查默认开启，而 CI 变量只在 CI 里生效，因此该脚本显式设置 `OPENSPEC_TELEMETRY=0`、`OPENSPEC_NO_UPDATE_CHECK=1`、`DO_NOT_TRACK=1`，让门禁在开发机与 CI 上都保持离线语义）。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的门禁小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
+
+CI 已接入五个 job（`.github/workflows/ci.yml`，push、PR 与每日定时都跑）：`checks`（`npm run check` + `npm run check:rust`，与本节 §8 的本地入口同源）、`commits`（校验本次推送/合并请求引入的提交范围是否符合 §8 的提交信息规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `npm audit`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 全历史密钥扫描）。后三个需要网络或额外二进制，**没有本地等价物属于 `npm run verify`**，未在本地执行不等于通过；工具版本、许可证与向外发送的数据见 `docs/adr/0008-ci-supply-chain-tooling.md`。依赖更新由 `.github/dependabot.yml` 提出（含冷却期；分组升级同样要过全部 job）。
+
+Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。提交时 `.husky/pre-commit` 会跑格式、合同门禁与静态检查，它可以被 `--no-verify` 跳过，且检查工作区而非暂存快照，因此只是把失败暴露得更早。
+
+main 的分支保护是 GitHub 仓库设置（不在版本控制内），它决定以上判定能否真的拦住合并；需要设为必需检查的 job、影响与设置命令见 `README.md` 的「分支保护」小节。Linux runner 会额外执行 `#[cfg(unix)]` 的权限路径（`0700` 目录、`0600` 文件、模式位判定），这些在 Windows 开发机上不会跑到。
 - `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合），由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、合同 §9 判据 13 与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - agentic 变更流程用的是 `@dongfanglin/openspec-agentic`（devDependencies 里从公开 npm registry 精确固定的 0.2.1）提供的 `agentic` schema，不是上游默认的 `spec-driven`；它同时 pin 了工作流引擎 `@fission-ai/openspec@1.13.0`，日常命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），别用任何全局安装的 `openspec`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
