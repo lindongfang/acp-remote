@@ -19,6 +19,8 @@
 
 当前优先交付 Windows x64 的 Daemon/CLI 与 Node Link 闭环，Linux 延后开发；完整平台顺序见 [初始设计 §14](docs/INITIAL_DESIGN.md#14-npm-分发)。共享代码的 Linux CI 保留，不代表 Linux 产品已可运行。
 
+逐切片的实施顺序与验收节点见 [开发计划](docs/DEVELOPMENT_PLAN.md)；产品与协议语义仍以各权威合同为准。
+
 管理状态的表设计、事务与升级要求已补充在 [核心与存储合同 §11](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同待实现)，实现前目标形状（身份值对象与读取形状、管理写入 DTO 与端口签名、管理表 DDL、版本常量与 migration）收口在该节 §11.5–§11.8；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 的 `TrustStore`/`ExportStore`/`AuditStore` 与 `LocalConfigStore` 仍待实现；现有合同检查只证明当前实现基线一致，**不**证明上述目标形状已落地。
 
 ## 权威文档
