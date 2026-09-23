@@ -13,3 +13,8 @@ dist/
 .env
 .env.*
 *.log
+# 变更/归档记录里的**原始证据日志**（`openspec/changes/**/reports/**/*.log`）同样不入库：
+# 它们只是工作区内的过程证据，归档记录（`verification.md` 的 Checks 表）已给出命令、环境与结果摘要，
+# 复盘时在对应目标提交上重跑同样命令即可复现；不要把这类日志 `git add -f` 强行入库。
+# 本行与上面的 `*.log` 重叠，显式写出是为了固定这条策略、避免后续被误当作「遗漏的证据」补提。
+openspec/changes/**/reports/**/*.log

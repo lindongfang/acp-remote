@@ -25,7 +25,9 @@
 | PV4 / workpackages、candidate / WP3 | V2（重跑） | 合同门禁（含 `check:contract-drift`、`check:doc-links`、`check:agentic`） | 主 Agent | `npm run check` | Node v24.19.0；`npm ci` 已完成 | PASS（exit 0；`contract drift OK: §7 的 36 条 DDL 与 migrate.rs 逐条一致；§5 的 15 个 trait / 87 个方法签名与 ports.rs 一致`；`doc links OK`；`openspec validate` 6 passed） | `reports/pv4-check.log` |
 | PV5 / workpackages、candidate / DU1 | V2（重跑） | 统一入口 | 主 Agent | `npm run verify` | 同上 + 固定工具链 | PASS（exit 0；`check` 全部子门禁 + `check:rust`（fmt/clippy/test）全绿；无 `FAILED`/`error[`） | `reports/pv5-verify.log` |
 
-`cargo-deny` 与 `gitleaks` 只在 CI 运行，本地没有等价物：本轮记为「未在本地执行」，不得声称通过。
+`cargo-deny` 与 `gitleaks` 只在 CI 运行，本地没有等价物：本轮记为「未在本地执行」；PR #12 的五个 job（`密钥扫描`/`提交信息规范`/`依赖许可证与来源`/`依赖安全公告`/`合同门禁 + Rust 检查`）已全部 pass。
+
+**证据日志的存放策略（本表及其他处引用的 `reports/*.log`）**：这些原始日志是**工作区内的过程证据，不入版本库**（`.gitignore` 的 `*.log`，并在该文件的注释里显式写明该策略）。归档记录提供的是命令、环境、退出码与结果摘要（见本表），复盘时在目标提交 `e732ff4` 上重跑同样命令即可复现；`agentic-assessment.evidence` 中 `.log` 的 sha256 仅用于同一工作区内的交叉核对。归档移动时 `git add -A` 不会收进被忽略的文件（当时因 Windows 句柄锁无法用 `git mv`，只能 `cp` + 删除 + `git add -A`），因此它们在本归档目录里也是未跟踪状态。
 
 ## Check Plan Changes
 
@@ -116,7 +118,7 @@ reviewer 待补且已由主 Agent 补齐的项（RV2 的「待补资料」）：
 
 ```agentic-assessment
 assessment_id: "FV1-2026-09-23"
-target_commit: "ac925d218e1177d58590c6e137ac4f99efd4cb47"
+target_commit: "e732ff4e6e7b8af2b9faebad3cd9946614e5ccbf"
 contract_digest: "sha256:d1527ac079329c688dc4dd299e006f42864771762d72333215ff87b7411c5b3a"
 result: PASS
 evidence:
@@ -148,10 +150,10 @@ evidence:
     sha256: "sha256:da7cbcdba0ae4c7cda0e9bc0c36e6645e85bf389ae02c20f84326f06337576bd"
 ```
 
-- Assessment ID / Time: **FV1-2026-09-23**，2026-09-23T23:28+08:00（执行验收）、2026-09-23T23:35+08:00（目标引用更正），执行者：主 Agent（按 `.agents/skills/agentic-verify/SKILL.md` 与 `openspec/schemas/agentic/procedures/acceptance.md`）
-- Target / Task: 本地 `refs/heads/main` = `4f8d4adb01d13a6409016bc428efb96d7bbaed0f`（`git rev-parse`；`origin/main` 仍为 `1ef6640`，未推送）；验收任务 = `tasks.md` 的 7.1（唯一 `[final-verification]`）。
-  - **目标引用的两次内容变化与再核实（均为记录/规范侧）**：① `6e9a8b7` 是在已验收的产品版本 `78e1db1b432289a5d67f1d7498704884d9cc7e44` 之上的记录侧提交（只改 `openspec/changes/fix-admin-store-integrity-gaps/` 下的 `tasks.md`、`verification.md` 与新增 `reports/du1.md`）；② `4f8d4ad` 是归档准备提交（主规范同步（`openspec/specs/admin-state-persistence` 5→7 条需求、`openspec/specs/peer-identity-material` 5→6 条需求）+ 落库上述执行记录）。两次都满足 `git diff --quiet <前一提交> <本提交> -- crates docs` 退出 0，即产品与文档树逐字节未变。因此本验收的结论、PV/LC/Review 证据对 `4f8d4ad` 完整继续成立（无受影响证据、无需要重跑项），`assessment.target_commit` 相应依次从 `78e1db1` 更新为 `6e9a8b7`、再更新为 `4f8d4ad`（扩展对 `assessment.target_commit` 与 `refs/heads/main` 做严格相等比较，不更新会报「验收结论的 target_commit 已失效」）。
-  - 产品修订标识：`git diff 1ef6640 4f8d4ad -- crates docs | sha256sum` = `945d1d509b428a8b84e8d2168d980600098a14d57086d8bd2e4c6957b21e6170`（= RV1/RV2 检视的 V2）
+- Assessment ID / Time: **FV1-2026-09-23**，2026-09-23T23:28+08:00（执行验收）、2026-09-23T23:35+08:00 与 2026-09-23T23:5x（目标引用更正），执行者：主 Agent（按 `.agents/skills/agentic-verify/SKILL.md` 与 `openspec/schemas/agentic/procedures/acceptance.md`）
+- Target / Task: 本地 `refs/heads/main` = `4f8d4adb01d13a6409016bc428efb96d7bbaed0f`（验收时）；**落库提交（squash）= `e732ff4e6e7b8af2b9faebad3cd9946614e5ccbf`（PR #12）**；验收任务 = `tasks.md` 的 7.1（唯一 `[final-verification]`）。
+  - **目标引用的三次内容变化与再核实（均为记录/规范侧）**：① `6e9a8b7` 是在已验收的产品版本 `78e1db1b432289a5d67f1d7498704884d9cc7e44` 之上的记录侧提交（只改 `openspec/changes/fix-admin-store-integrity-gaps/` 下的 `tasks.md`、`verification.md` 与新增 `reports/du1.md`）；② `4f8d4ad` 是归档准备提交（主规范同步（`openspec/specs/admin-state-persistence` 5→7 条需求、`openspec/specs/peer-identity-material` 5→6 条需求）+ 落库上述执行记录）；③ `ac925d21` 是归档移动（变更目录移入 `archive/`；`e732ff4` 为它在远端 main 上的 squash 落库结果）。三次都满足 `git diff --quiet <前一提交> <本提交> -- crates docs` 退出 0，即产品与文档树逐字节未变。因此本验收的结论、PV/LC/Review 证据对 `e732ff4` 完整继续成立（无受影响证据、无需要重跑项），`assessment.target_commit` 相应依次从 `78e1db1` 更新为 `6e9a8b7`、`4f8d4ad`、最终为落库提交 `e732ff4`（扩展对 `assessment.target_commit` 与 `refs/heads/main` 做严格相等比较，不更新会报「验收结论的 target_commit 已失效」）。
+  - 产品修订标识：`git diff 1ef6640 e732ff4 -- crates docs | sha256sum` = `945d1d509b428a8b84e8d2168d980600098a14d57086d8bd2e4c6957b21e6170`（= RV1/RV2 检视的 V2）
 - CLI State（原始，未改写）: `openspec status --change fix-admin-store-integrity-gaps --json` → `schemaName: agentic`、`isComplete: true`、`isPlanningComplete: true`；`openspec instructions apply … --json` → `state: ready`、`progress 27/28`（仅 7.1 进行中）；`e2e check` → PASS（not-applicable，批准字段非空，已按 `[e2e-owned]` 自动勾选 6.3）；`openspec validate --strict` → valid
 - Audit / Evidence:
   - **Contracts and Coverage**：PASS。proposal 的四条缺陷与用户四点复核意见逐条对映实现与用例（`NotFound(Export)` 定位、`put_export` 判定顺序、设备记录单读+列表读纳入、显式 `CASE`）；残留缺口（重导入后无法区分新旧连接）在 proposal `non_goals`、design Risks、`docs` §5.2/§7.4、§11.2 四处一致登记为 v1 未实现；Coverage Index R1–R12 均映射到 tasks 2.1–2.7 与 LC1/PV3，证据为 `reports/lc1-*.log`、`reports/pv3-cargo-test.log`；能力路径 `specs/admin-state-persistence/`、`specs/peer-identity-material/` 与 `openspec/specs/` 下同名能力一致（`openspec validate --strict` valid）
@@ -160,8 +162,8 @@ evidence:
   - **Independent Reviews**：PASS。RV1（`reports/rv1-fix.md`）与 RV2（`reports/rv2-fix-recheck.md`）均为独立子 Agent（`context=fresh`，`6a839420…`、`109d71d8…`）、指定 base/target、无 CRITICAL/MAJOR；RV1-F1/F2 已由 RV2 复核闭合，RV2-F1 由主 Agent 在同一轮订正并留痕；reviewer 列出的待补项（Review Findings/版本记录/夹具变更留痕）已由主 Agent 补齐
   - **E2E Design and Execution**：PASS（E2E = NOT_APPLICABLE）。`mode: not-applicable` 的 reason/basis/alternative_checks 齐备，`downgrade_approval` 可追溯到用户本会话原话；替代验证（LC1 + PV1–PV5）作为独立的主 Agent 任务 6.1/6.2 已先完成并在最终主分支树上留证；`e2e check` PASS 并自动勾选 6.3
   - **Issue Closure and Evidence Validity**：PASS。ISS-1（RV1-F1 测试覆盖缺口）→ V2 修复 + RV2 复核 + 候选/主分支重跑；ISS-2（模块头措辞）→ 四处订正，产品修订未变；ISS-3（集成期 `index.lock` 插曲）→ 已解决且未改写历史；ISS-4（`*.log` 入库）→ 按主 Agent 决定 (a) 强制入库，集成 Agent 已记录一处理由更正；无未闭环 FAIL/BLOCKED
-- Result / Open Issues: **PASS**（本目标版本与有效证据成立）。非阻断未决项：① `cargo-deny`/`gitleaks` 与 CI 的 `commits`/`deps`/`advisories`/`secrets` 四个 job 因未推送尚未运行，本地无等价物；② 本地 `main` 领先 `origin/main` 3 个提交且临时分支 `fix/admin-store-integrity-gaps` 保留；③ 强制入库的 20 个 `*.log` 对 `.gitignore` 的 `*.log` 规则免疫（决定 (a) 的已知副作用）
-- Required Follow-up: 推送/开 PR 需用户另行授权（本变更授权仅限本地合入）。本结论对 `ac925d21`（归档提交；产品树 = `4f8d4ad` = `6e9a8b7` = `78e1db1`，`git diff 1ef6640 ac925d21 -- crates docs | sha256sum` 仍为 `945d1d50…`）与上列证据成立；若目标版本或证据再变化需重新验收。
-- **记录侧机械更新（2026-09-23，非重新验收）**：`agentic-assessment.target_commit` 由 `4f8d4ad…` 更新为归档提交 `ac925d21…`，并把上述「已暂存未提交」段落标记为已随归档提交入库。依据与边界：扩展对 `assessment.target_commit` 与 `refs/heads/main` 采用严格相等比较，但**归档后的变更已不再被扩展解析**——`workflow check --change fix-admin-store-integrity-gaps --stage archive` 与 `--change 2026-09-23-fix-admin-store-integrity-gaps` 均返回 `BLOCKED`（`openspec status` 退出码 1），`e2e check` 返回 `BLOCKED`（「已归档变更不参与检查」）；因此该字段已不影响任何门禁，本次更新只为让归档记录与真实落库版本一致。`FV1-2026-09-23` 对 `4f8d4ad` 的 PASS 结论与全部证据保持原样；`crates/` 与 `docs/` 内容在各提交间逐字节相同，故结论对归档提交继续成立。
+- Result / Open Issues: **PASS**（本目标版本与有效证据成立）。非阻断未决项：① `cargo-deny`/`gitleaks` 等 CI job 已在 PR #12 上通过（本地无等价物，不因此免除 CI 判定）；② 交付提交已合入远端 main（PR #12 → `e732ff4`），临时分支已删除；③ `reports/*.log` 不入版本库（`.gitignore` 的 `*.log`，策略已在该文件注释与本节写明），归档记录以命令与结果摘要为准
+- Required Follow-up: 本结论对落库提交 `e732ff4`（产品树 = `ac925d21` = `4f8d4ad` = `6e9a8b7` = `78e1db1`，`git diff 1ef6640 e732ff4 -- crates docs | sha256sum` 仍为 `945d1d50…`）与上列证据成立；若目标版本或证据再变化需重新验收。
+- **记录侧机械更新（2026-09-23，非重新验收）**：`agentic-assessment.target_commit` 的更新链为 `4f8d4ad…` → `ac925d21…`（归档提交）→ **`e732ff4…`（落库提交，PR #12 的 squash）**；同时把「已暂存未提交」段落标记为已随归档提交入库，并把「`*.log` 对 `.gitignore` 免疫」的旧表述改为事实状态（日志不入库）。依据与边界：扩展对 `assessment.target_commit` 与 `refs/heads/main` 采用严格相等比较，但**归档后的变更已不再被扩展解析**——`workflow check --change fix-admin-store-integrity-gaps --stage archive` 与 `--change 2026-09-23-fix-admin-store-integrity-gaps` 均返回 `BLOCKED`（`openspec status` 退出码 1），`e2e check` 返回 `BLOCKED`（「已归档变更不参与检查」）；因此该字段已不影响任何门禁，本次更新只为让归档记录与真实落库版本一致。`FV1-2026-09-23` 对 `4f8d4ad` 的 PASS 结论与全部证据保持原样；`crates/` 与 `docs/` 内容在各提交间逐字节相同，故结论对落库提交继续成立。squash 会丢弃中间提交，因此 `ac925d21` 在远端 main 上不可解析——本字段指向落库提交而非中间归档提交。
 - 机械检查（原始结论）: `npx --quiet --no-install openspec-agentic workflow check --change fix-admin-store-integrity-gaps --stage final --json` → `result: PASS`（`targetCommit: 6e9a8b72a84969ee290239d6b0497e8e5b53e501`、`contractDigest: sha256:d1527ac0…`、`errors: []`、内嵌 `e2e.result: PASS`）；`npx --quiet --no-install openspec-agentic e2e check --change fix-admin-store-integrity-gaps` → `PASS`（not-applicable，已按 `[e2e-owned]` 自动勾选 6.3）。该检查只做结构比对，不证明测试真实性。
 - 记录提交状态与一处扩展缺陷（非阻断，已记录后果与绕行）：本節与 `tasks.md` 的最终记录处于**已暂存未提交**状态（`git status --porcelain` = `M  openspec/changes/…/verification.md`）。原因不是流程选择，而是扩展缺陷：`openspec-agentic` 的 `evaluateRecordFreshness`（`src/e2e-run.mjs:251-271`，经 `src/workflow-check.mjs:106` 调用）先用 `git status --porcelain` 输出整体 `.trim()`，再用 `line.slice(3)` 取路径；未暂存的修改首列为空格（` M path`）经 trim 后变成 `M path`，slice(3) 得到 `penspec/…`，于是本应被豁免的「变更目录内未提交改动」被判为目录外并报 `目标代码状态不能验收：执行后工作区仍有未提交改动：penspec/changes/…/verification.md`（已用 `evaluateRecordFreshness` 直接调用复现）。暂存后首列变为 `M `（非空格），路径解析正确且被正确识别为变更目录内→豁免，检查恢复 `PASS`。`git diff --quiet HEAD -- crates docs` 退出 0，产品与文档树未受任何影响。**未修改任何受管扩展文件**（`openspec/schemas/agentic/**`、`.pi/**`、扩展包）；建议上游修复该解析（例如按 2 字符状态位切分而不先 trim）。后续归档时如需入库这些记录，可提交后按上一变更的做法用一次记录侧提交更新 `target_commit` 并注明「非重新验收」（参见 `1ef6640` 先例）。
