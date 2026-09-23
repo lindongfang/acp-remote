@@ -613,7 +613,7 @@ impl PeerPublicKey {
     /// SEC1 未压缩点长度（`0x04 || X || Y`）。
     pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
 
-    /// 构造。顺序固定：长度 == 65 → 首字节 == `0x04` → `p256::PublicKey::from_sec1_bytes` 成功。
+    /// 构造。顺序固定：长度 == 65 → 首字节 == `0x04` → P-256 曲线级 `from_sec1_bytes` 成功。
     ///
     /// 长度断言必须在解析之前：`from_sec1_bytes` 接受 33 字节压缩点，不先断言就会绕过
     /// 「SEC1 uncompressed」合同（`INITIAL_DESIGN.md` §16 第 6 条）。
@@ -621,7 +621,10 @@ impl PeerPublicKey {
         if bytes.len() != Self::SEC1_UNCOMPRESSED_LEN || bytes.first() != Some(&0x04) {
             return Err(InvalidValue::PublicKey);
         }
-        p256::PublicKey::from_sec1_bytes(bytes).map_err(|_| InvalidValue::PublicKey)?;
+        // 曲线级校验：只确认这是 P-256 上的合法非压缩点。core 不做签名/验签，因此不引入
+        // `p256` 的 `ecdsa` feature（见 `crates/core/Cargo.toml` 的依赖说明）。
+        p256::elliptic_curve::PublicKey::<p256::NistP256>::from_sec1_bytes(bytes)
+            .map_err(|_| InvalidValue::PublicKey)?;
         let mut key = [0u8; Self::SEC1_UNCOMPRESSED_LEN];
         key.copy_from_slice(bytes);
         Ok(Self(key))

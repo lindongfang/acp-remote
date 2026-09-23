@@ -189,6 +189,12 @@ fn entity_ref_exposes_kind_and_target_id_for_storage_columns() {
         EntityRef::Export(ExportId::new("exp").expect("export id")).to_string(),
         "export:exp"
     );
+
+    // §3.1：`Provider(String)` 的 token 必须能作审计/仓储的 `target_kind` 与 `target_id` 落库。
+    let provider = EntityRef::Provider("openai".to_owned());
+    assert_eq!(provider.kind(), "provider");
+    assert_eq!(provider.target_id(), "openai");
+    assert_eq!(provider.to_string(), "provider:openai");
 }
 
 // ---------------------------------------------------------------- §3.2 序号/时间/摘要
@@ -2225,6 +2231,90 @@ fn local_config_values_enforce_their_invariants() {
         )
         .is_err()
     );
+
+    // §3.7：同一条 profile 内不得重复绑定同一个 `(provider_id, field)`。
+    assert!(
+        AgentProfile::try_new(
+            AgentId::new("codex").expect("agent id"),
+            "Codex CLI",
+            "codex",
+            Vec::new(),
+            vec!["OPENAI_API_KEY".to_owned()],
+            vec![binding.clone(), binding.clone()],
+            false,
+            ts(T0),
+            ts(T1),
+        )
+        .is_err()
+    );
+    // §3.7：`command` 有长度上界且不得含 NUL；每个 `arg` 同样不得含 NUL。
+    let profile_with = |command: &str, args: Vec<String>| {
+        AgentProfile::try_new(
+            AgentId::new("codex").expect("agent id"),
+            "Codex CLI",
+            command,
+            args,
+            Vec::new(),
+            Vec::new(),
+            false,
+            ts(T0),
+            ts(T1),
+        )
+    };
+    assert!(
+        profile_with(&"c".repeat(1025), Vec::new()).is_err(),
+        "command 超过上界必须被拒"
+    );
+    assert!(
+        profile_with("co\0dex", Vec::new()).is_err(),
+        "command 含 NUL 必须被拒"
+    );
+    assert!(
+        profile_with("codex", vec!["--profile\0x".to_owned()]).is_err(),
+        "arg 含 NUL 必须被拒"
+    );
+    // §3.7：`configured_fields` 必须各自是合法字段名且不重复。
+    assert!(
+        ProviderRef::try_new(
+            "openai",
+            ProviderRefKind::Provider,
+            "OpenAI",
+            vec!["api_key".to_owned(), "api_key".to_owned()],
+            "keystore://provider/openai/1",
+            1,
+            ts(T1),
+        )
+        .is_err(),
+        "重复的 configured_fields 必须被拒"
+    );
+    assert!(
+        ProviderRef::try_new(
+            "openai",
+            ProviderRefKind::Provider,
+            "OpenAI",
+            vec!["api key".to_owned()],
+            "keystore://provider/openai/1",
+            1,
+            ts(T1),
+        )
+        .is_err(),
+        "非法字段名必须被拒"
+    );
+    assert!(
+        ProviderRef::try_new(
+            &"p".repeat(65),
+            ProviderRefKind::Provider,
+            "OpenAI",
+            vec!["api_key".to_owned()],
+            "keystore://provider/openai/1",
+            1,
+            ts(T1),
+        )
+        .is_err(),
+        "超长 Provider id 必须被拒"
+    );
+    // §3.7：环境变量名有独立模式（`is_env_name`），超长即被拒。
+    assert!(ProviderEnvBinding::try_new("openai", "api_key", &"A".repeat(200)).is_err());
 }
 
 #[test]

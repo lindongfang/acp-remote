@@ -20,6 +20,9 @@ async-trait.workspace = true
 thiserror.workspace = true
 # 对端公钥值对象（§11.5）在构造期做 SEC1 点校验并用 SHA-256 派生指纹：P-256 的曲线运算必须有经过
 # 审查的实现，因此 core 直接依赖 workspace 已 pin 的 `p256`/`sha2`，不自行实现曲线校验。
+# **按需最小 feature**：core 只做曲线级点校验，不签名也不验签（那属身份边界），因此不继承 workspace 的
+# `ecdsa`——否则 `ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 等签名与编码栈会进入 core 的冻结依赖闭包
+# （`AGENTS.md` §12、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13、`docs/MODULE_ARCHITECTURE.md` §3.1）。
 # 新增该依赖必须同步 §9 判据 13、`scripts/check-crate-boundaries.mjs` 的 allow-list 与 AGENTS.md §12。
 p256.workspace = true
 sha2.workspace = true

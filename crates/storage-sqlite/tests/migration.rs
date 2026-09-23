@@ -5,7 +5,7 @@
 
 mod support;
 
-use acp_core::model::Timestamp;
+use acp_core::model::{AuditAction, EventId, Sequence, Timestamp};
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
@@ -233,8 +233,17 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
             "SELECT seq FROM sqlite_sequence WHERE name = 'owned_audit'"
         )
         .await,
-        5,
+        7,
         "the fixture keeps an audit sequence that is ahead of max(audit_id)"
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT seq FROM sqlite_sequence WHERE name = 'imported_audit'"
+        )
+        .await,
+        3,
+        "the imported side is ahead of its max(audit_id) too"
     );
     pool.close().await;
 
@@ -243,6 +252,30 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
         .expect("a v1 database must upgrade to v2");
     assert_eq!(store.metadata().owned_schema_version, 2);
     assert_eq!(store.metadata().imported_schema_version, 2);
+
+    // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
+    // `event_payload` 还原——不是「行还在但读不出来」。
+    // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
+    // `event_payload` 还原——不是「行还在但读不出来」。读视图持有读池连接，必须在 `close()` 之前释放，
+    // 否则 `close()` 会一直等这条连接归还。
+    // `Box<dyn ReadView>` 上的方法不需要 trait 在作用域内；`read_view` 本身来自 `SessionStore`。
+    use acp_core::ports::SessionStore as _;
+    let view = store.read_view().await.expect("read view after upgrade");
+    let head = view.head().await.expect("head");
+    assert_eq!(
+        head.global_sequence,
+        Sequence::new(3).expect("sequence"),
+        "升级不得让事件序号漂移"
+    );
+    for fixture_event in [FIXTURE_EVENT_ONE, FIXTURE_EVENT_TWO, FIXTURE_EVENT_THREE] {
+        let id = EventId::new(fixture_event).expect("event id");
+        let payload = view.event_payload(&id).await.expect("event payload");
+        assert!(
+            payload.is_some(),
+            "升级后事件正文必须仍可读：{fixture_event}"
+        );
+    }
+    drop(view);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -334,8 +367,17 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
             "SELECT seq FROM sqlite_sequence WHERE name = 'owned_audit'"
         )
         .await,
-        5,
+        7,
         "the rebuilt table must not rewind the AUTOINCREMENT sequence"
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT seq FROM sqlite_sequence WHERE name = 'imported_audit'"
+        )
+        .await,
+        3,
+        "the rebuilt imported table must not rewind the sequence either"
     );
     let audit_ddl: String = sqlx::query_scalar(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'owned_audit'",
@@ -357,7 +399,7 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
     .expect("a v2-only audit action must be writable after the upgrade");
     assert_eq!(
         scalar_i64(&pool, "SELECT MAX(audit_id) FROM owned_audit").await,
-        6,
+        8,
         "the new row must continue the preserved sequence"
     );
 
@@ -405,9 +447,144 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
     );
     assert_eq!(
         scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
-        1
+        2
+    );
+
+    // spec 的「黄金列清单逐项相等」：升级库的 `imported_*` 列必须与**新建库**逐项相等——
+    // 否则重建脚本的列名/列集合可以悄悄与 DDL 常量分叉。
+    let fresh_dir = temp_dir("migrate-fresh-columns");
+    let fresh_store = SqliteStore::open(StorageConfig::new(&fresh_dir), &at())
+        .await
+        .expect("fresh v2 store");
+    fresh_store.close().await;
+    let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
+    for table in [
+        "imported_import",
+        "imported_import_export",
+        "imported_session",
+        "imported_delivery_index",
+        "imported_command_ref",
+        "imported_audit",
+    ] {
+        assert_eq!(
+            column_names(&pool, table).await,
+            column_names(&fresh_pool, table).await,
+            "升级库的 {table} 列必须与新建库逐项相等"
+        );
+    }
+    fresh_pool.close().await;
+
+    // 升级库的两张审计表 DDL 必须列出**全部** `AuditAction` 取值：12-step 重建少写一个取值就会红
+    // （新建库一侧由 `enum_coverage.rs` 的逐值断言覆盖）。
+    for table in ["owned_audit", "imported_audit"] {
+        let ddl = texts(
+            &pool,
+            &format!("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '{table}'"),
+        )
+        .await;
+        let ddl = ddl.first().cloned().unwrap_or_default();
+        for action in AuditAction::ALL {
+            assert!(
+                ddl.contains(action.as_str()),
+                "{table} 的 CHECK 缺少 {}：{ddl}",
+                action.as_str()
+            );
+        }
+    }
+    pool.close().await;
+}
+
+/// §7.2 与 spec 的「升级中途失败整体回滚」：v1 → v2 的 DDL、12-step 重建与 Import 拆分都在**同一
+/// 事务**内，因此第二段脚本失败时第一段的建表与重建也必须回滚——库要么是完整的 v1，要么是完整的
+/// v2，不存在「管理表已建、审计 CHECK 未换」的半升级状态；去掉故障后重新打开必须能升级成功。
+#[tokio::test]
+async fn a_failed_upgrade_rolls_back_to_v1() {
+    let dir = temp_dir("migrate-failed-upgrade");
+    let path = copy_fixture("from-v1.sqlite3", &dir);
+
+    // 注入：占住**第二段**升级脚本要建的表名（`imported_import_v2`），使失败发生在第一段之后。
+    let pool = raw_write_pool(&path).await;
+    sqlx::query("CREATE TABLE imported_import_v2 (placeholder TEXT)")
+        .execute(&pool)
+        .await
+        .expect("inject conflicting table");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+
+    let failed = SqliteStore::open(still_writable(&dir), &at()).await;
+    assert!(failed.is_err(), "注入的 DDL 冲突必须让升级失败");
+    drop(failed);
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        1,
+        "失败后不得写版本"
+    );
+    assert_eq!(
+        meta_rows(&pool)
+            .await
+            .iter()
+            .find(|(key, _)| key == "owned_schema_version")
+            .map(|(_, value)| value.as_str()),
+        Some("1"),
+        "失败后两族版本保持 v1"
+    );
+    let tables = texts(
+        &pool,
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+    )
+    .await;
+    assert!(
+        !tables.iter().any(|name| name == "owned_device"),
+        "DDL 常量建的 v2 管理表必须随事务回滚：{tables:?}"
+    );
+    assert!(!tables.iter().any(|name| name == "imported_import_export"));
+    let audit_ddl_after_failure = texts(
+        &pool,
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'owned_audit'",
+    )
+    .await;
+    assert!(
+        audit_ddl_after_failure
+            .first()
+            .is_some_and(|sql| !sql.contains("provider.configured")),
+        "审计表的 12-step 重建必须随事务回滚"
+    );
+    let import_ddl = texts(
+        &pool,
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'imported_import'",
+    )
+    .await;
+    assert!(
+        import_ddl
+            .first()
+            .is_some_and(|sql| sql.contains("export_id")),
+        "Import 管理行必须仍是 v1 形状"
     );
     pool.close().await;
+
+    // 去掉注入后重新打开必须升级成功（半升级状态不存在）。
+    let pool = raw_write_pool(&path).await;
+    sqlx::query("DROP TABLE imported_import_v2")
+        .execute(&pool)
+        .await
+        .expect("drop injection");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+
+    let store = SqliteStore::open(still_writable(&dir), &at())
+        .await
+        .expect("retry must upgrade");
+    assert_eq!(store.metadata().owned_schema_version, 2);
+    assert_eq!(store.metadata().imported_schema_version, 2);
+    store.close().await;
 }
 
 /// §9.1/§9.28：升级后的库第二次打开必须**跳过**升级步骤，因此一切逐字节不变。
@@ -537,6 +714,8 @@ const FIXTURE_IMPORT_REQUEST: &str = "88888888-8888-4888-8888-888888888888";
 const FIXTURE_LAST_ORIGIN_SEQUENCE: i64 = 7;
 const FIXTURE_ACKED_ORIGIN_SEQUENCE: i64 = 5;
 const FIXTURE_LOCAL_SEQUENCE: i64 = 1;
+/// 夹具里被钉死的 `meta.server_epoch`（`open` 默认写随机 UUID，会让夹具不可逐字节复现）。
+const FIXTURE_SERVER_EPOCH: &str = "00000000-0000-4000-8000-0000000000ff";
 
 /// 生成 `fixtures/storage/v2/` 的三件夹具。默认忽略；重建方式：
 ///
@@ -550,7 +729,8 @@ const FIXTURE_LOCAL_SEQUENCE: i64 = 1;
 ///   二进制已知版本，且库内容与打开前逐字节相同）；
 /// - `from-v1.sqlite3`：**v1 历史夹具** `fixtures/storage/v1/empty.sqlite3` 的副本 + 一组带
 ///   会话/事件/cursor/幂等/审计数据的 v1 行，保持 `user_version = 1`；`owned_audit` 故意留下
-///   `audit_id = 1,2,5` 的空洞（`sqlite_sequence.seq = 5`），升级用例据此断言序列不回退。
+///   `audit_id = 1,2,5` 的空洞（写入 1..=7 后删掉 3/4/6/7，因此 `sqlite_sequence.seq = 7` 真正领先于
+///   `max(audit_id) = 5`；`imported_audit` 同款：1/2 与 `seq = 3`），升级用例据此断言序列不回退。
 #[tokio::test]
 #[ignore = "夹具生成器：只在需要重建 fixtures/storage/v2 时手动运行"]
 async fn regenerate_v2_fixtures() {
@@ -564,6 +744,19 @@ async fn regenerate_v2_fixtures() {
         .expect("create v2 fixture database");
     store.close().await;
     let database = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    // `open` 会写一个随机 `server_epoch`；夹具必须逐字节可复现（否则每次重建都产生无意义的二进制
+    // 差异），因此把它钉成一个字面量——`created_at`/`last_prune_at` 来自注入的 `at()`，本来就是确定的。
+    let pool = raw_write_pool(&database).await;
+    sqlx::query("UPDATE meta SET value = ?1 WHERE key = 'server_epoch'")
+        .bind(FIXTURE_SERVER_EPOCH)
+        .execute(&pool)
+        .await
+        .expect("pin server_epoch");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
     std::fs::copy(&database, fixtures.join("empty.sqlite3")).expect("write empty.sqlite3");
 
     // ② 过新库：v2 形状 + `user_version = 3`。
@@ -664,13 +857,17 @@ async fn regenerate_v2_fixtures() {
     .await
     .expect("owned_command");
 
-    // 审计：先写 5 行再删掉 3/4，留下 1/2/5 —— 序列（5）因此领先于 max(audit_id)。
+    // 审计：先写 7 行再删掉 3/4/6/7，留下 1/2/5 —— 序列（7）因此**领先于** max(audit_id) = 5。
+    // 这是判据 28「`AUTOINCREMENT` 序列不回退」唯一的判别力来源：12-step 重建若只按现存行取
+    // `max(audit_id)` 就会把序列压回 5，只有序列仍领先才证明 `restore_audit_sequences` 真的生效。
     for (audit_id, action) in [
         (1_i64, "device.authenticated"),
         (2, "node.paired"),
         (3, "authorization.denied"),
         (4, "rate_limit.triggered"),
         (5, "device.scopes_changed"),
+        (6, "device.revoked"),
+        (7, "device.auth_failed"),
     ] {
         sqlx::query(
             "INSERT INTO owned_audit (audit_id, at, action, actor_kind, actor_id, target_kind, \
@@ -684,7 +881,7 @@ async fn regenerate_v2_fixtures() {
         .await
         .expect("owned_audit");
     }
-    sqlx::query("DELETE FROM owned_audit WHERE audit_id IN (3, 4)")
+    sqlx::query("DELETE FROM owned_audit WHERE audit_id IN (3, 4, 6, 7)")
         .execute(&pool)
         .await
         .expect("prune audit rows");
@@ -752,18 +949,31 @@ async fn regenerate_v2_fixtures() {
     .await
     .expect("imported_command_ref");
 
-    sqlx::query(
-        "INSERT INTO imported_audit (at, action, actor_kind, actor_id, owner_node_id, export_id, \
-         session_id, target_kind, target_id, outcome) \
-         VALUES (?1, 'node.trust_revoked', 'node', ?2, ?2, ?3, ?4, 'node', ?2, 'success')",
-    )
-    .bind(at().as_str())
-    .bind(FIXTURE_NODE)
-    .bind(FIXTURE_EXPORT)
-    .bind(FIXTURE_SESSION)
-    .execute(&pool)
-    .await
-    .expect("imported_audit");
+    // imported 侧同理：写 1..=3 再删掉 3，留下 1/2 而序列为 3（同样领先于 max(audit_id)）。
+    for (audit_id, action) in [
+        (1_i64, "node.trust_revoked"),
+        (2, "authorization.denied"),
+        (3, "rate_limit.triggered"),
+    ] {
+        sqlx::query(
+            "INSERT INTO imported_audit (audit_id, at, action, actor_kind, actor_id, owner_node_id, \
+             export_id, session_id, target_kind, target_id, outcome) \
+             VALUES (?1, ?2, ?3, 'node', ?4, ?4, ?5, ?6, 'node', ?4, 'success')",
+        )
+        .bind(audit_id)
+        .bind(at().as_str())
+        .bind(action)
+        .bind(FIXTURE_NODE)
+        .bind(FIXTURE_EXPORT)
+        .bind(FIXTURE_SESSION)
+        .execute(&pool)
+        .await
+        .expect("imported_audit");
+    }
+    sqlx::query("DELETE FROM imported_audit WHERE audit_id = 3")
+        .execute(&pool)
+        .await
+        .expect("prune imported audit rows");
 
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&pool)

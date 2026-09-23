@@ -2934,9 +2934,10 @@ pub(crate) mod test_support {
         AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
         AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId,
         ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
-        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PeerIdentity,
-        PeerPublicKey, PendingInteraction, ProviderRef, ResourceOrigin, SeedState, ServerEpoch,
-        Session, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias, WorkspaceRecord,
+        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingTarget,
+        PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef, ResourceOrigin, SeedState,
+        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias,
+        WorkspaceRecord,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -3087,6 +3088,8 @@ pub(crate) mod test_support {
         pub(crate) imported_sessions: Mutex<Vec<ImportedSessionRecord>>,
         pub(crate) acked: Mutex<Vec<OriginCursor>>,
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
+        /// 配对行：`settle_pairing` 的目标族由它读出（§11.6 第 2 条）。
+        pub(crate) pairings: Mutex<Vec<PairingRecord>>,
     }
 
     #[derive(Default)]
@@ -4242,8 +4245,11 @@ pub(crate) mod test_support {
             Ok(None)
         }
 
-        async fn pairing(&self, _id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
-            Ok(None)
+        async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
+            Ok(lock(&self.world.pairings)
+                .iter()
+                .find(|record| record.id() == id)
+                .cloned())
         }
 
         async fn pairing_peer(&self, _id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
@@ -4268,7 +4274,10 @@ pub(crate) mod test_support {
             Ok(())
         }
 
-        async fn create_pairing(&self, _write: PairingWrite) -> Result<(), PortError> {
+        async fn create_pairing(&self, write: PairingWrite) -> Result<(), PortError> {
+            let mut pairings = lock(&self.world.pairings);
+            pairings.retain(|record| record.id() != write.record.id());
+            pairings.push(write.record);
             Ok(())
         }
 
@@ -4281,9 +4290,25 @@ pub(crate) mod test_support {
 
         async fn settle_pairing(
             &self,
-            _write: PairingSettlementWrite,
+            write: PairingSettlementWrite,
         ) -> Result<TrustRecordRef, PortError> {
-            Err(missing_pairing())
+            let Some(target) = lock(&self.world.pairings)
+                .iter()
+                .find(|record| record.id() == &write.pairing)
+                .map(PairingRecord::target)
+            else {
+                return Err(missing_pairing());
+            };
+            lock(&self.world.write_audits)
+                .extend(write.context.audit.iter().map(|audit| audit.action));
+            Ok(match target {
+                PairingTarget::Device => {
+                    TrustRecordRef::Device(DeviceId::new(&uuid_text(2)).expect("device id"))
+                }
+                PairingTarget::Node => {
+                    TrustRecordRef::Node(NodeId::new(&uuid_text(3)).expect("node id"))
+                }
+            })
         }
 
         async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {

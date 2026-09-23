@@ -48,7 +48,7 @@
 
 ### D3 `PeerPublicKey` 的构造与派生
 
-- `PeerPublicKey([u8; 65])`：私有字段 + `try_from_bytes`/`FromStr`；顺序固定为长度 65 → 首字节 `0x04` → `p256::PublicKey::from_sec1_bytes`，任一步失败返回 `InvalidValue`（新增取值，`as_str` 给出稳定消息）。
+- `PeerPublicKey([u8; 65])`：私有字段 + `try_from_bytes`（`TryFrom<&[u8]>` 委托它，没有 `FromStr`——core 不引入 base64/hex 解析）；顺序固定为长度 65 → 首字节 `0x04` → `p256::elliptic_curve::PublicKey::<p256::NistP256>::from_sec1_bytes`（曲线级校验，不启用 `p256` 的 `ecdsa` feature），任一步失败返回 `InvalidValue`（新增取值，`as_str` 给出稳定消息）。
 - `fingerprint()` 是唯一入口：`sha2::Sha256::digest` 后格式化为 64 字符小写 hex，返回既有 `Fingerprint`。
 - `PairingPeer` 用 `public_key: PeerPublicKey` 取代 `public_key_fingerprint: Fingerprint`；`LOCAL_ADMIN_PROTOCOL.md` 的 wire 字段语义不变（值是派生结果）。
 - 负例固化为常驻测试：33 字节压缩点被拒、长度/前缀非法被拒、非法曲线点被拒、指纹与公钥一致（不能出现只传指纹的构造路径）。

@@ -317,7 +317,7 @@ agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`
 
 本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §10。
 
-- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`（`hmac`/`base64` 属协议与身份边界，不在 core）。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
+- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`，其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验）——`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 与 `base64` 属协议与身份边界，**不得**进入 core 的闭包。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
 

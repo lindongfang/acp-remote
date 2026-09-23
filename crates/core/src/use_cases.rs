@@ -23,10 +23,10 @@ use crate::model::{
     DeviceId, DeviceRecord, ElicitationAction, ElicitationValues, EntityRef, ExportId,
     ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
     LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, OwnedSessionRef, PairingClaim,
-    PairingId, PairingRecord, PairingSettlement, PeerIdentity, PeerPublicKey, PortError,
-    ProviderRef, RequestId, Resolution, ResolvedWorkspace, SeedState, Sequence, SessionId,
-    SessionReference, SessionSummary, Timestamp, UnavailableKind, Version, WorkspaceAlias,
-    WorkspaceRecord,
+    PairingId, PairingRecord, PairingSettlement, PairingTarget, PeerIdentity, PeerPublicKey,
+    PortError, ProviderRef, RequestId, Resolution, ResolvedWorkspace, SeedState, Sequence,
+    SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind, Version,
+    WorkspaceAlias, WorkspaceRecord,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
@@ -137,6 +137,14 @@ impl UseCases {
         mut request: CreateSessionRequest,
         workspace_alias: Option<WorkspaceAlias>,
     ) -> Result<SessionId, PortError> {
+        // 授权先于任何本机读取与文件系统访问（与其余用例入口同款；broker 内部还会再授权一次，
+        // 对本地 actor 恒成功、不重复写审计）。否则未授权调用方能借解析结果的差异探测「别名是否
+        // 已登记、目录当前是否存在」——那是一个本机状态预言机。
+        let request_id = self.ids.request_id();
+        self.broker
+            .authorize(actor, "session.create", None, &request_id)
+            .await
+            .map_err(Denied::into_port_error)?;
         if let Some(alias) = workspace_alias {
             let record = self
                 .config
@@ -577,6 +585,9 @@ impl UseCases {
     }
 
     /// `device.pair.confirm` / `node.pair.confirm`：落定并创建信任记录；批准与拒绝各自的审计与状态同事务。
+    ///
+    /// 「信任建立」的审计动作按目标族区分（`SECURITY_DESIGN.md` §14.2 的最小集合）：设备是
+    /// `pairing.approved`，节点是 `node.paired`——与 `device.revoked`/`node.trust_revoked` 同款对称。
     pub async fn settle_pairing(
         &self,
         actor: &Actor,
@@ -585,11 +596,17 @@ impl UseCases {
     ) -> Result<TrustRecordRef, PortError> {
         self.require_local(actor)?;
         settlement.validate().map_err(PortError::from)?;
+        // 目标族从配对行读出：存储层只落库写集携带的审计，不自行决定动作（§11.6 第 2 条）。
+        let record = self
+            .trust
+            .pairing(id)
+            .await?
+            .ok_or_else(|| PortError::NotFound(EntityRef::Pairing(id.clone())))?;
         let at = self.clock.now();
-        let action = if settlement.is_approved() {
-            AuditAction::PairingApproved
-        } else {
-            AuditAction::PairingRejected
+        let action = match (settlement.is_approved(), record.target()) {
+            (false, _) => AuditAction::PairingRejected,
+            (true, PairingTarget::Device) => AuditAction::PairingApproved,
+            (true, PairingTarget::Node) => AuditAction::NodePaired,
         };
         let audits = vec![self.pending_audit(actor, action, EntityRef::Pairing(id.clone()))];
         self.trust
@@ -735,7 +752,7 @@ impl UseCases {
         self.config.profile(id).await
     }
 
-    /// `agent.configure`：写入 profile；切换默认是同一写集（至多一个默认，§11.7 的部分唯一索引）。
+    /// `agent.configure`：写入 profile；切换默认是同一写集（至多一个默认，§7.3 的部分唯一索引）。
     ///
     /// `agent.configure` 不是已登记的安全动作（其凭据经 `provider.configure` 登记），因此审计留空。
     pub async fn put_profile(&self, actor: &Actor, profile: AgentProfile) -> Result<(), PortError> {
@@ -801,7 +818,7 @@ impl UseCases {
         self.require_local(actor)?;
         let at = self.clock.now();
         // `EntityRef` 没有 Provider 变体时无法表达审计目标；本变更新增 `EntityRef::Provider`
-        // （§3.1/§11.6），target 指向 Provider 引用 id，摘要仍由 `detail_digest` 承载。
+        // （§3.1），target 指向 Provider 引用 id，摘要仍由 `detail_digest` 承载。
         let target = EntityRef::Provider(reference.id().to_owned());
         let audits = vec![self.pending_audit(actor, AuditAction::ProviderConfigured, target)];
         self.config
@@ -1032,7 +1049,9 @@ mod tests {
         prompt_command, uuid_text,
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
-    use crate::model::{AgentId, AgentRef, CommandKind, CommandPayload, ResourceOrigin, ScopeSet};
+    use crate::model::{
+        AgentId, AgentRef, CommandKind, CommandPayload, PairingState, ResourceOrigin, ScopeSet,
+    };
     use crate::ports::HistoryInclude;
 
     struct Fixture {
@@ -1394,5 +1413,113 @@ mod tests {
             *fixture.world.write_audits.lock().expect("lock"),
             vec![AuditAction::DeviceRevoked]
         );
+    }
+
+    /// §11.6 第 2 条 + `SECURITY_DESIGN.md` §14.2：落定的审计动作按目标族区分——节点配对的**批准**
+    /// 写 `node.paired`（此前该动作在实现里没有任何写入方），设备配对的批准写 `pairing.approved`，
+    /// 拒绝两族都写 `pairing.rejected`。
+    #[test]
+    fn pairing_settlement_carries_the_target_family_audit() {
+        let fixture = fixture();
+        let grants = crate::model::GrantSet::try_from_iter(["grant.observe"]).expect("grants");
+        let node = PairingId::new(&uuid_text(41)).expect("pairing");
+        let device = PairingId::new(&uuid_text(42)).expect("pairing");
+        let rejected = PairingId::new(&uuid_text(43)).expect("pairing");
+        for (id, target, requested) in [
+            (&node, PairingTarget::Node, grants.clone()),
+            (
+                &device,
+                PairingTarget::Device,
+                crate::model::GrantSet::empty(),
+            ),
+            (
+                &rejected,
+                PairingTarget::Device,
+                crate::model::GrantSet::empty(),
+            ),
+        ] {
+            fixture.world.pairings.lock().expect("lock").push(
+                PairingRecord::try_new(
+                    id.clone(),
+                    target,
+                    PairingState::PendingConfirmation,
+                    None,
+                    ScopeSet::empty(),
+                    requested,
+                    digest('p'),
+                    "https://node.example",
+                    crate::broker::test_support::ts(0),
+                    crate::broker::test_support::ts(5),
+                    Some(crate::broker::test_support::ts(0)),
+                    None,
+                    None,
+                )
+                .expect("pairing record"),
+            );
+        }
+
+        block_on(fixture.use_cases.settle_pairing(
+            &Actor::LocalCli,
+            &node,
+            PairingSettlement::approved(ScopeSet::empty(), grants.clone()),
+        ))
+        .expect("approve node pairing");
+        block_on(fixture.use_cases.settle_pairing(
+            &Actor::LocalCli,
+            &device,
+            PairingSettlement::approved(ScopeSet::empty(), crate::model::GrantSet::empty()),
+        ))
+        .expect("approve device pairing");
+        block_on(fixture.use_cases.settle_pairing(
+            &Actor::LocalCli,
+            &rejected,
+            PairingSettlement::rejected(Some("user said no")).expect("rejection"),
+        ))
+        .expect("reject pairing");
+
+        assert_eq!(
+            *fixture.world.write_audits.lock().expect("lock"),
+            vec![
+                AuditAction::NodePaired,
+                AuditAction::PairingApproved,
+                AuditAction::PairingRejected
+            ],
+            "节点批准写 node.paired，设备批准写 pairing.approved"
+        );
+    }
+
+    /// §5.1：授权先于 workspace 解析。未授权的 `session.create` 必须得到授权类错误，而不是
+    /// 「别名已登记但目录缺失」的 `Unavailable(IoError)`——否则本机登记状态与文件系统成为预言机。
+    #[test]
+    fn create_session_authorizes_before_resolving_the_workspace() {
+        let fixture = fixture();
+        let alias = WorkspaceAlias::new("repo").expect("alias");
+        // 已登记但目录不存在：只要解析被触发，错误就会先变成 `Unavailable(IoError)`。
+        let record = WorkspaceRecord::try_new(
+            alias.clone(),
+            "Repo",
+            "Z:\\missing-workspace",
+            crate::broker::test_support::ts(0),
+            crate::broker::test_support::ts(0),
+        )
+        .expect("workspace record");
+        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(51)).expect("device"),
+            scopes: ScopeSet::empty(),
+        };
+        let error = block_on(fixture.use_cases.create_session(
+            &actor,
+            create_request(),
+            Some(alias.clone()),
+        ))
+        .expect_err("an unauthorized actor must be denied");
+        match error {
+            PortError::InvalidRequest(code) => {
+                assert!(code.starts_with("authorization."), "得到 {code}");
+            }
+            other => panic!("期望授权类错误，得到 {other:?}"),
+        }
     }
 }

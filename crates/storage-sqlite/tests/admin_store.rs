@@ -2468,6 +2468,23 @@ async fn provider_reference_version_must_advance() {
     assert_eq!(refs[0].keystore_ref(), "keychain:acpr/openai-v2");
     assert_eq!(refs[0].configured_fields(), ["api_key".to_owned()]);
 
+    // `EntityRef::Provider` 必须原样落到审计列：`target_kind = 'provider'`、`target_id` = 引用 id。
+    // 这条映射没有表级 CHECK 兜底（`owned_audit.target_kind` 是自由文本），写错不会被库拒绝。
+    store
+        .put_provider_ref(ProviderRefWrite {
+            reference: reference("keychain:acpr/openai-v3", 3, 4),
+            context: context(
+                4,
+                vec![audit(
+                    AuditAction::ProviderConfigured,
+                    EntityRef::Provider("openai".to_owned()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("a reference with its audit");
+
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
     store.close().await;
     let pool = raw_pool(&path).await;
@@ -2495,6 +2512,25 @@ async fn provider_reference_version_must_advance() {
             "version",
             "updated_at",
         ]
+    );
+    // Provider 审计的目标列：`Provider(String)` 的 kind/target_id 必须逐字落库。
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT target_kind FROM owned_audit WHERE action = 'provider.configured'"
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("provider audit target_kind"),
+        ["provider"]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT target_id FROM owned_audit WHERE action = 'provider.configured'"
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("provider audit target_id"),
+        ["openai"]
     );
     pool.close().await;
 }

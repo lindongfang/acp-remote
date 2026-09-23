@@ -99,7 +99,7 @@ impl AgentProfile {
     /// 构造。校验：显示名 1..=128；命令 1..=1024 且不含 NUL；参数逐个 ≤4096 且不含 NUL；
     /// 白名单项为合法非保留环境变量名且不重复；每个绑定的 `name` 必须在白名单内，
     /// `(provider_id, field)` 不重复。
-    #[allow(clippy::too_many_arguments)] // 与 §11.7 的 `owned_agent_profile` 列一一对应
+    #[allow(clippy::too_many_arguments)] // 与 §7.3 的 `owned_agent_profile` 列一一对应
     pub fn try_new(
         id: AgentId,
         display_name: &str,
@@ -285,7 +285,7 @@ pub struct ProviderRef {
 impl ProviderRef {
     /// 构造。`id` 匹配 `^[A-Za-z0-9._-]{1,64}$`；显示名 1..=128；字段名逐个 1..=128 且不重复；
     /// `keystore_ref` 1..=256；`version ≥ 1`。
-    #[allow(clippy::too_many_arguments)] // 与 §11.7 的 `owned_provider_ref` 列一一对应
+    #[allow(clippy::too_many_arguments)] // 与 §7.3 的 `owned_provider_ref` 列一一对应
     pub fn try_new(
         id: &str,
         kind: ProviderRefKind,
