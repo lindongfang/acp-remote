@@ -104,14 +104,17 @@ action」。这条约束在实践中有两个问题：
      但它只认已知 provider 模式，本项目的自研格式密钥不在其中；而能覆盖自研格式的
      `secret_scanning_non_provider_patterns` **已核实为在本仓库不可用**（个人账号 public 仓库、无 GHAS；
      界面无 Secret scanning 区域、API 不接受该字段），因此**这一类凭据在推送前没有任何服务端防线**。
-     目前只靠 CI 的 `gitleaks` 事后发现；是否加一个自研格式的本地 pre-commit 检查，在
-     `identity-auth`/`identity-keystore` 产生真实密钥、密钥格式定稿时决定（那时才写得出准确的正则）。
+     机制采用「一份规则、两个执行器」：规则写在 `.gitleaks.toml`，CI 的 `secrets` job 与本地
+     `.husky/pre-commit`（`gitleaks git --pre-commit --redact --staged`，扫暂存内容）共用同一份；
+     本机未装 `gitleaks` 时钩子只提示并跳过（不让本地门禁依赖仓库不随附的二进制），因此这条防线的强度
+     取决于是否装了它。**规则本身等密钥格式定稿再加**：只有默认规则集时写不出准确的自研格式正则，
+     而是在 `identity-auth`/`identity-keystore` 开始产生真实密钥时与格式定义在同一改动里落地。
      能拦住「红状态进入 main」的是 main 的分支保护：
-     本 ADR 写完后已建立——ruleset `main-protection`（id 23858733）要求五个检查、禁止强推与删除，
-     但**同时保留了 `RepositoryRole admin` 的 bypass**（零摩擦档），因此它现在约束的是协作者、GitHub App 与
-     `GITHUB_TOKEN` 驱动的自动化，**还约束不到本人的直推**；要拦自己的直推必须移除 bypass
-     （届时流程变成「推到分支 → 等绿 → 更新 main」）。现状、必需检查的取法与严格档判据见 `README.md` 的
-     「分支保护」小节。
+     本 ADR 写完后先建于 2026-09-23（ruleset `main-protection`，id 23858733），随后同日升到 PR 必需档——
+     `deletion` + `non_fast_forward` + `required_status_checks`（`strict = true`，五个上报名）+
+     `pull_request`（`required_approving_review_count = 0`），并**保留 `RepositoryRole admin` 的 bypass**
+     作为紧急出口。因此默认路径变成 PR（三个只能在 CI 跑的判定因此成为先于落地的门禁），
+     但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `AGENTS.md` §8。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
   5. **本机（Windows）无法执行这些判定的等价物**：crates.io index 传输在本机网络下不稳定，
      `cargo install --locked cargo-deny@0.20.2` 未能完成，因此 `deny.toml` 的字段形状是对齐 cargo-deny 0.20.2

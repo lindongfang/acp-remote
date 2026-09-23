@@ -2,6 +2,9 @@
 PR 模板。判据来源是 AGENTS.md 的完成定义（§11）与文档维护映射（§10），不在这里另立一套要求。
 模板的价值在于让「这次改动影响了哪些权威文档与门禁」在 PR 上可见，而不是重复 AGENTS.md 的正文。
 不适用的小节删掉即可，但不要留空勾选。
+
+⚠️ PR 标题必须是 Conventional Commits 格式（`<type>(<scope>): <主题>`）：合并会 squash，因此 PR 标题
+就是 main 上的提交信息，`commits` job 会校验它。落地流程见 AGENTS.md §8。
 -->
 
 ## 变更内容

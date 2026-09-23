@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 // 提交前的快速门禁。
 //
 // 为什么需要它：CI（`.github/workflows/ci.yml`）是完整判据，但反馈周期以分钟计，而 agent 与人都
-// 倾向于「先提交，等 CI 告诉我」。本脚本把 CI 里最快的三类判定前移到提交时：
-//   1. `cargo fmt --check`（改动 Rust 时）；
-//   2. `cargo clippy -D warnings`（改动 Rust 时，与 CI 参数一致）；
-//   3. `npm run check`（全部合同门禁，离线、~4 秒，见 `AGENTS.md` §10）。
+// 倾向于「先提交，等 CI 告诉我」。本脚本把 CI 里最快的几类判定前移到提交时：
+//   1. 本地密钥扫描（`gitleaks git --pre-commit --redact --staged`，扫暂存内容；本机没装 gitleaks 时只提示并跳过）；
+//   2. `cargo fmt --check`（改动 Rust 时）；
+//   3. `npm run check`（全部合同门禁，离线、~4 秒，见 `AGENTS.md` §10）；
+//   4. `cargo clippy -D warnings`（改动 Rust 时，与 CI 参数一致）。
+// 顺序是有意的：密钥一旦推出去，在公开仓库上就是公开的（不可逆），所以它排在最前、最便宜。
 // 刻意**不跑** `cargo test`：它是分钟级判定，属于 `npm run verify` 与 CI，不属于提交前。
 //
 // 两条必须说清的边界：
@@ -66,6 +68,19 @@ const rustTouched = staged.some(
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
+// 本地密钥扫描：用**与 CI 同一份规则**（`.gitleaks.toml` 会被自动发现），扫的是**暂存内容**
+// （`--staged`），因此部分暂存藏不住东西；`--redact` 保证命中内容不打印到终端。
+// 命令取自 gitleaks 上游仓库的 `.pre-commit-hooks.yaml`（v8.30.1 的官方写法），不是自拟参数。
+//
+// 二进制缺失时**不失败、只提示**：本仓库的其它门禁都是 hermetic 的（只依赖 Node 与仓库内文件），
+// 不让提交权限依赖一个仓库不随附的 Go 二进制；缺口始终可见，且 CI 的 `secrets` job 仍会判定。
+const SECRETS_STEP = ["gitleaks", ["git", "--pre-commit", "--redact", "--staged"]];
+function gitleaksAvailable() {
+  const probe = spawnSync("gitleaks", ["version"], { cwd: root, encoding: "utf8" });
+  return !probe.error && probe.status === 0;
+}
+const localSecretsScan = gitleaksAvailable();
+
 // Windows 上 `.cmd` 不能直接 spawn（Node 对 .cmd/.bat 的保护会抛 EINVAL），必须经 shell；
 // 因此那里传整条命令行字符串而不是 (command, args)（传 args + shell 会触发 DEP0190）。
 // 参数全部来自本文件的常量，不含空格与元字符，拼接不引入注入面。
@@ -76,7 +91,9 @@ function run(command, args) {
   return spawnSync(command, args, { cwd: root, stdio: "inherit" });
 }
 
+// 顺序：先最便宜且最不可逆的（密钥一旦推出去就是公开的），再合同门禁，最后编译级判定。
 const steps = [];
+if (localSecretsScan) steps.push(SECRETS_STEP);
 if (rustTouched) {
   steps.push(["cargo", ["fmt", "--all", "--", "--check"]]);
 }
@@ -109,4 +126,6 @@ for (const [index, [command, args]] of steps.entries()) {
   }
 }
 
-console.log(`pre-commit: 通过（${steps.length} 步）。`);
+console.log(
+  `pre-commit: 通过（${steps.length} 步${localSecretsScan ? "" : "；本地密钥扫描已跳过：本机未安装 gitleaks，CI 的 secrets job 仍会判定"}）。`,
+);

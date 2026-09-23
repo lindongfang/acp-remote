@@ -518,8 +518,9 @@ storage.integrity_failed
   [ADR-0008](./adr/0008-ci-supply-chain-tooling.md)）。两者都不能替代运行时日志、错误与 snapshot 的扫描，
   后者仍待实现。**非 provider 模式（本项目自研格式的私钥与配对密钥）的仓库级检测已核实为不可用**
   （个人账号 public 仓库无 GHAS：界面无 Secret scanning 区域、API 不接受 `secret_scanning_non_provider_patterns`；
-  见 `README.md` 的「分支保护」小节），因此这一类凭据在推送前没有服务端防线，目前只靠 CI 的事后扫描；
-  是否加本地 pre-commit 自研模式检查在密钥格式定稿时决定（残余风险见 ADR-0008）。
+  见 `README.md` 的「分支保护」小节），因此这一类凭据在推送前没有服务端防线：机制是「一份规则、两个执行器」——
+  规则写在 `.gitleaks.toml`（CI 的 `secrets` job 与本地 pre-commit 共用），本地执行器扫**暂存内容**；
+  自研格式的规则等密钥格式定稿时与格式定义同改（残余风险与实现细节见 ADR-0008）。
 - npm 平台选择、checksum、版本错配和禁止运行时下载。
 
 ### 18.2 平台验收
