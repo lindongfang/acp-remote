@@ -13,3 +13,8 @@ openspec/** text eol=lf
 # 已有工作区加上属性后需要重签出一次：
 #   rm schemas/acp/v1/upstream/schema.json && git checkout -- schemas/acp/v1/upstream/schema.json
 schemas/acp/v1/upstream/schema.json text eol=lf
+
+# 本地钩子由 sh 执行（husky）。带 CRLF 的 shebang 与脚本在部分 sh 下会直接失败，而钩子正是本地门禁的
+# 入口——它的行尾不应该决定它能不能跑。这里的 blob 本身按 LF 写入（见 .editorconfig），
+# 因此本规则只是阻止检出时的转换，不改变任何已提交内容。
+.husky/** text eol=lf

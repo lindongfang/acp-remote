@@ -1,0 +1,34 @@
+# 编辑器侧的行尾、编码与缩进约定。
+#
+# 为什么需要它（`.gitattributes` 只管 git 一侧，管不到编辑器怎么写盘）：
+# 本仓库有两类内容按「磁盘字节」判定，Windows 上用 CRLF 保存就会本机误报——
+#   1. agentic 受管文件按 LF 内容哈希纳入 `openspec/.agentic-install.json`；
+#   2. vendored 上游 ACP 快照由 `compatibility/acp/v1/matrix.json` 逐字节 pin sha256。
+# 本机的 `core.autocrlf=true` 会把检出内容转成 CRLF，所以这里把工作区统一到 LF，与仓库 blob 一致。
+# 这份文件只影响编辑器行为，不是门禁判据；判据仍在 `.gitattributes` 与对应脚本。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown 用行尾两个空格表示硬换行，文档里确实在用（例如各协议的修订记录），不能自动删除。
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{rs,toml}]
+indent_style = space
+indent_size = 4
+
+[*.{json,jsonc,mjs,cjs,js,ts,tsx,yml,yaml,css,html}]
+indent_style = space
+indent_size = 2
+
+[*.ps1]
+indent_style = space
+indent_size = 4
+
+[{Makefile,makefile}]
+indent_style = tab

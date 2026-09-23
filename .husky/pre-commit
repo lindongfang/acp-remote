@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# 提交前快速门禁：格式、合同门禁、静态检查。分组与边界说明见 scripts/pre-commit.mjs 的文件头注释。
+# 本地钩子可以被 `git commit --no-verify` 跳过；CI 的 checks / commits / deps / advisories / secrets
+# 五个 job 不会被跳过，所以这里只是让失败更早暴露，不是门禁的唯一实现。
+node scripts/pre-commit.mjs

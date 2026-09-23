@@ -1,0 +1,13 @@
+# 开发与 CI 使用的 Rust 工具链唯一来源。
+#
+# 为什么固定到具体版本而不是 `stable`：clippy 会在版本升级时新增或改变 lint，rustfmt 的默认格式也会
+# 随版本来回变。本仓库用 `-D warnings` 把 clippy 当门禁（`AGENTS.md` §8），版本不固定就会出现
+# 「本机全绿、CI 红」或反过来的假失败，且这种漂移只能靠人记住「本地升级了工具链」来解释。
+# 因此本地 rustup 与 CI 都读本文件：CI 用 sed 从这里取 channel，不在 workflow 里再写一份版本。
+#
+# 与 `Cargo.toml` 的 `rust-version`（当前 1.85，edition 2024 的下限）不是同一件事：
+# 那个是 MSRV——「能编译的最低版本」；本文件是开发与 CI 实际使用的版本。两者语义不同，不要合并。
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
