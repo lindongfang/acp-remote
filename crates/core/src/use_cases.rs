@@ -22,10 +22,10 @@ use crate::model::{
     CommandReceipt, CommandRecord, ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest,
     DeviceId, DeviceRecord, ElicitationAction, ElicitationValues, EntityRef, ExportId,
     ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
-    LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, OwnedSessionRef, PairingClaim,
-    PairingId, PairingRecord, PairingSettlement, PairingTarget, PeerIdentity, PeerPublicKey,
-    PortError, ProviderRef, RequestId, Resolution, ResolvedWorkspace, SeedState, Sequence,
-    SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind, Version,
+    LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState, OwnedSessionRef,
+    PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingTarget, PeerIdentity,
+    PeerPublicKey, PortError, ProviderRef, RequestId, Resolution, ResolvedWorkspace, SeedState,
+    Sequence, SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind, Version,
     WorkspaceAlias, WorkspaceRecord,
 };
 use crate::ports::{
@@ -649,6 +649,25 @@ impl UseCases {
     /// `export.create`/`export.update`：Export 与 `export.created` 审计同一事务。
     pub async fn put_export(&self, actor: &Actor, export: ExportRecord) -> Result<(), PortError> {
         self.require_local(actor)?;
+        // §11.2 第 4 条 / §5.1：创建前验证 Export 引用的 workspace 与 Agent 都存在于本机
+        // （`LOCAL_ADMIN_PROTOCOL.md` §5.5 把它定为 `local.not_found` 类失败，由适配器映射）。
+        for entry in export.workspace_aliases() {
+            if self.config.workspace(entry.alias()).await?.is_none() {
+                return Err(PortError::InvalidRequest(
+                    "export references a workspace alias that is not registered on this node",
+                ));
+            }
+        }
+        let known_agents = self.catalog.agents().await?;
+        if export.agent_ids().iter().any(|agent| {
+            !known_agents
+                .iter()
+                .any(|descriptor| descriptor.agent.agent_id() == agent)
+        }) {
+            return Err(PortError::InvalidRequest(
+                "export references an agent that is not available on this node",
+            ));
+        }
         let at = self.clock.now();
         let target = EntityRef::Export(export.export_id().clone());
         let audits = vec![self.pending_audit(actor, AuditAction::ExportCreated, target)];
@@ -696,6 +715,21 @@ impl UseCases {
         self.require_local(actor)?;
         if record.export_ids().is_empty() {
             return Err(PortError::InvalidRequest("import 必须关联至少一个 export"));
+        }
+        // §11.7 / §11.2 第 5 条：`owner_node_id` 指向 owned 家族的节点记录，存在性与角色由用例层在
+        // 写集内校验（`import.add` 的前置条件，`LOCAL_ADMIN_PROTOCOL.md` §5.5：必须是已配对且
+        // `kind = owner` 的节点）。
+        match self
+            .trust
+            .node(record.owner_node_id(), NodeKind::Owner)
+            .await?
+        {
+            Some(node) if node.state() == NodeState::Paired => {}
+            _ => {
+                return Err(PortError::InvalidRequest(
+                    "import owner node must be a paired owner node on this node",
+                ));
+            }
         }
         let at = self.clock.now();
         let exports = record.export_ids().to_vec();
@@ -1132,7 +1166,9 @@ mod tests {
             attachments: Arc::new(FakeAttachments {
                 world: world.clone(),
             }),
-            catalog: Arc::new(TestCatalog),
+            catalog: Arc::new(TestCatalog {
+                world: world.clone(),
+            }),
             clock: TestClock::new(),
             ids: Arc::new(TestIds::default()),
         });
@@ -1380,6 +1416,12 @@ mod tests {
             crate::model::GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
         )
         .expect("import record");
+        // §11.2 第 5 条 / §11.7：owner 节点必须已配对且是 owner 角色，先种一行。
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            record.owner_node_id(),
+            NodeKind::Owner,
+            NodeState::Paired,
+        ));
         block_on(fixture.use_cases.add_import(&Actor::LocalCli, record)).expect("add import");
 
         block_on(fixture.use_cases.remove_import(&Actor::LocalCli, &import)).expect("remove");
@@ -1401,6 +1443,168 @@ mod tests {
             vec![AuditAction::ImportAdded, AuditAction::ImportRemoved],
             "两条写集各自携带自己的审计"
         );
+    }
+
+    /// 测试用的节点角色行（`NodeRecord` 的构造不变式：`revoked_at` 与状态成对、owner 必须有 endpoint）。
+    fn node_record(id: &NodeId, kind: NodeKind, state: NodeState) -> NodeRecord {
+        NodeRecord::try_new(
+            id.clone(),
+            "peer node",
+            kind,
+            crate::model::Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
+            crate::model::GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            state,
+            match kind {
+                NodeKind::Owner => Some("wss://owner.example/acpr".to_owned()),
+                NodeKind::Access => None,
+            },
+            crate::broker::test_support::ts(0),
+            None,
+            if state == NodeState::Revoked {
+                Some(crate::broker::test_support::ts(1))
+            } else {
+                None
+            },
+        )
+        .expect("node record")
+    }
+
+    /// §11.2 第 4/5 条 + §11.7：`export.create` 与 `import.add` 引用的本机事实必须在用例层校验
+    /// （`LOCAL_ADMIN_PROTOCOL.md` §5.5 把它定为 `local.not_found` / 参数类失败）。
+    #[test]
+    fn export_and_import_preconditions_are_enforced() {
+        let fixture = fixture();
+        let alias = WorkspaceAlias::new("project").expect("alias");
+        let agent_ref = AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex")
+            .expect("agent ref");
+        let export = |alias: &WorkspaceAlias| {
+            ExportRecord::try_new(
+                ExportId::new("exp-pre").expect("export id"),
+                "team export",
+                vec![agent_ref.agent_id().clone()],
+                vec![
+                    crate::model::WorkspaceAliasEntry::try_new(alias.clone(), "Project")
+                        .expect("alias entry"),
+                ],
+                alias.clone(),
+                vec![
+                    crate::model::ExportTemplate::try_new(
+                        crate::model::TemplateId::new("coding").expect("template id"),
+                        "Coding",
+                        alias.clone(),
+                        vec![
+                            crate::model::TemplateParam::try_new(
+                                crate::model::ParamName::new("model").expect("param name"),
+                                crate::model::TemplateParamType::String,
+                                true,
+                                None,
+                                None,
+                            )
+                            .expect("param"),
+                        ],
+                    )
+                    .expect("template"),
+                ],
+                crate::model::TemplateId::new("coding").expect("template id"),
+                crate::model::GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+                crate::model::CachePolicy::NoContentCache,
+                crate::broker::test_support::ts(0),
+                None,
+            )
+            .expect("export record")
+        };
+
+        // 别名未在本机登记 → 拒绝。
+        let error = block_on(
+            fixture
+                .use_cases
+                .put_export(&Actor::LocalCli, export(&alias)),
+        )
+        .expect_err("an unregistered workspace alias must be refused");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+
+        // 登记别名但目录里没有该 Agent → 拒绝。
+        let record = WorkspaceRecord::try_new(
+            alias.clone(),
+            "Repo",
+            if cfg!(windows) {
+                "C:\\\\Project\\\\acp-remote"
+            } else {
+                "/srv/acp-remote"
+            },
+            crate::broker::test_support::ts(0),
+            crate::broker::test_support::ts(0),
+        )
+        .expect("workspace record");
+        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        let error = block_on(
+            fixture
+                .use_cases
+                .put_export(&Actor::LocalCli, export(&alias)),
+        )
+        .expect_err("an unknown agent must be refused");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+
+        // 别名已登记且 Agent 在目录里 → 通过。
+        fixture
+            .world
+            .catalog_agents
+            .lock()
+            .expect("lock")
+            .push(AgentDescriptor {
+                agent: agent_ref.clone(),
+                available: true,
+                origin: ResourceOrigin::Local,
+            });
+        block_on(
+            fixture
+                .use_cases
+                .put_export(&Actor::LocalCli, export(&alias)),
+        )
+        .expect("a fully resolvable export must be accepted");
+
+        // `import.add`：owner 节点必须已配对且角色是 owner。
+        let owner = NodeId::new(&uuid_text(21)).expect("node");
+        let import = |owner: NodeId| {
+            ImportRecord::try_new(
+                ImportId::new("remote-pre").expect("import id"),
+                "wss://owner.example/acp",
+                owner,
+                vec![ExportId::new("exp-pre").expect("export")],
+                crate::model::GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+            )
+            .expect("import record")
+        };
+        let error = block_on(
+            fixture
+                .use_cases
+                .add_import(&Actor::LocalCli, import(owner.clone())),
+        )
+        .expect_err("an absent owner node must be refused");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &owner,
+            NodeKind::Access,
+            NodeState::Paired,
+        ));
+        let error = block_on(
+            fixture
+                .use_cases
+                .add_import(&Actor::LocalCli, import(owner.clone())),
+        )
+        .expect_err("an access-role node must not own an import");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error:?}");
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &owner,
+            NodeKind::Owner,
+            NodeState::Paired,
+        ));
+        block_on(
+            fixture
+                .use_cases
+                .add_import(&Actor::LocalCli, import(owner.clone())),
+        )
+        .expect("a paired owner node must be accepted");
     }
 
     /// §11.6：撤销设备时审计与状态同一写集（不再是「先写状态再补审计」）。

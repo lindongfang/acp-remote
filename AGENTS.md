@@ -221,7 +221,7 @@ bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上�
 规则集开了 `strict_required_status_checks_policy`，因此 PR 需要先合入最新 main 再跑一轮才能合并——
 “PR 绿了”与“合并后 main 仍绿”是同一件事。
 
-提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板生成并落地提交信息：Oh My Pi 读 [`.omp/commands/commit.md`](.omp/commands/commit.md)，Pi CLI 读 [`.pi/prompts/commit.md`](.pi/prompts/commit.md)，两份随仓库提交且正文必须保持一致（改一处必须改另一处）；它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
+提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板生成并落地提交信息：仓库随版本控制提供 [`.pi/prompts/commit.md`](.pi/prompts/commit.md)（Pi CLI 读它）；Oh My Pi 读宿主安装目录里的同名模板（本机路径 `.omp/commands/commit.md`，**不进版本库**，因此这里不写链接），两者正文必须保持一致（改 `.pi/prompts/commit.md` 时必须同步宿主模板，反之亦然）；它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
 
 本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
 

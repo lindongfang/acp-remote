@@ -33,13 +33,13 @@
 ## 3. Branch Validation
 
 - [x] 3.1 [WP1] 负责人：实现 Agent；依赖：2.7；执行交付前 project verify：`cargo fmt --all -- --check`、`cargo clippy --locked -p core --all-targets --all-features -- -D warnings`、`cargo test --locked -p core --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp1-core-tests.log`，无失败、无零用例、无全跳过。
-- [ ] 3.2 [WP1] 负责人：独立 reviewer（新隔离上下文，完整读取 `roles/reviewer.md`）；依赖：3.1，可与 3.1 并行；只读检视 WP1 的固定版本 diff（值对象不变量、core 依赖边界、`SecretValue` 边界），修复后由新 reviewer 复核 [RV1]；完成条件：报告写入 `reports/rv1-wp1.md`，无未解决阻断项。
+- [x] 3.2 [WP1] 负责人：独立 reviewer（新隔离上下文，完整读取 `roles/reviewer.md`）；依赖：3.1，可与 3.1 并行；只读检视 WP1 的固定版本 diff（值对象不变量、core 依赖边界、`SecretValue` 边界），修复后由新 reviewer 复核 [RV1]；完成条件：报告写入 `reports/rv1-wp1.md`，无未解决阻断项。**执行记录**：2026-09-23 由隔离 reviewer 子 Agent `RvWp1` 完成（不继承实现对话），结论 `correct`；2×P2 + 3×P3 发现全部处理（Check Plan Changes 32、§-引用与用例补齐），证据 `reports/rv1-wp1.md`、`reports/verify-w1w2-closure.log`。
 - [x] 3.3 [WP2 / WP3] 负责人：实现 Agent；依赖：2.13；执行交付前 project verify：`cargo fmt`、`cargo clippy -p core -D warnings`、`cargo test -p core --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp3-core-tests.log`。
-- [ ] 3.4 [WP2 / WP3] 负责人：独立 reviewer；依赖：3.3，可与 3.3 并行；只读检视端口纯度、事务边界、`remove_import` 单次写集、`port_error_public` 显式分支与 workspace 解析不泄漏 [RV1]；完成条件：报告写入 `reports/rv1-wp23.md`，无未解决阻断项。
+- [x] 3.4 [WP2 / WP3] 负责人：独立 reviewer；依赖：3.3，可与 3.3 并行；只读检视端口纯度、事务边界、`remove_import` 单次写集、`port_error_public` 显式分支与 workspace 解析不泄漏 [RV1]；完成条件：报告写入 `reports/rv1-wp23.md`，无未解决阻断项。**执行记录**：2026-09-23 由隔离 reviewer 子 Agent `RvWp23` 完成，结论 `incorrect`（唯一阻断项 `WP23-2`：`node.paired` 无写入方）；该阻断项与 P2/P3 发现已在本轮全部闭合（Check Plan Changes 30/31），证据 `reports/rv1-wp23.md`、`reports/verify-w1w2-closure.log`。
 - [x] 3.5 [WP4] 负责人：实现 Agent；依赖：2.18；执行交付前 project verify：`cargo fmt`、`cargo clippy -p storage-sqlite -D warnings`、`cargo test -p storage-sqlite --all-features`（含 migration/retention/enum_coverage）[PV4]；完成条件：全部通过且日志写入 `reports/wp4-migration-tests.log`。
-- [ ] 3.6 [WP4] 负责人：独立 reviewer；依赖：3.5，可与 3.5 并行；只读检视 DDL 组织、12-step 重建、Import 拆分迁移、幂等与回滚语义 [RV1]；完成条件：报告写入 `reports/rv1-wp4.md`，无未解决阻断项。
+- [x] 3.6 [WP4] 负责人：独立 reviewer；依赖：3.5，可与 3.5 并行；只读检视 DDL 组织、12-step 重建、Import 拆分迁移、幂等与回滚语义 [RV1]；完成条件：报告写入 `reports/rv1-wp4.md`，无未解决阻断项。**执行记录**：2026-09-23 由隔离 reviewer 子 Agent `RvWp4` 完成，结论 `correct`；2×P2（夹具审计序列无判别力、缺升级中途失败用例）+ 3×P3 全部处理（Check Plan Changes 33/34），证据 `reports/rv1-wp4.md`。
 - [x] 3.7 [WP5] 负责人：实现 Agent；依赖：2.2、2.14；执行 `node scripts/check-contract-drift.mjs` 与 `node scripts/check-crate-boundaries.mjs` [PV2][PV3]；完成条件：两个脚本退出码 0，漂移门禁输出语句条数与 trait/类型计数，依赖闭包与 allow-list 逐项相等，证据写入 `reports/wp5-contract-drift-before-after.md` 与 `reports/wp5-boundaries.log`。
-- [ ] 3.8 [WP5] 负责人：独立 reviewer；依赖：3.7，可与 3.7 并行；只读检视合同并入是否有重复正文、§11 是否仍有将来时、文档引用与 allow-list 名单是否一致 [RV1]；完成条件：报告写入 `reports/rv1-wp5.md`，无未解决阻断项。
+- [x] 3.8 [WP5] 负责人：独立 reviewer；依赖：3.7，可与 3.7 并行；只读检视合同并入是否有重复正文、§11 是否仍有将来时、文档引用与 allow-list 名单是否一致 [RV1]；完成条件：报告写入 `reports/rv1-wp5.md`，无未解决阻断项。**执行记录**：2026-09-23 由隔离 reviewer 子 Agent `RvWp5` 完成，结论 `correct`；5 条非阻断发现（§2 枚举、§5.1 错引、§7.4 漏引、`FromStr`、脚本注释）全部处理，证据 `reports/rv1-wp5.md`。
 - [x] 3.9 [WP6] 负责人：实现 Agent；依赖：2.22；执行交付前 project verify：`cargo fmt`、`cargo clippy -p storage-sqlite -D warnings`、`cargo test -p storage-sqlite --all-features`（含新增管理 store 与失败关闭用例）[PV4]；完成条件：全部通过且日志写入 `reports/wp6-admin-store-tests.log`。
 - [x] 3.10 [WP6] 负责人：独立 reviewer；依赖：3.9，可与 3.9 并行；只读检视写集原子性（状态/引用/审计同事务）、错误映射、失败关闭与 imported 无正文 [RV1]；完成条件：报告写入 `reports/rv1-wp6.md`，无未解决阻断项。
 

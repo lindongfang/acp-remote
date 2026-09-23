@@ -3090,6 +3090,10 @@ pub(crate) mod test_support {
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
         /// 配对行：`settle_pairing` 的目标族由它读出（§11.6 第 2 条）。
         pub(crate) pairings: Mutex<Vec<PairingRecord>>,
+        /// 节点角色行（`add_import` 的 owner 前置校验从它读）。
+        pub(crate) nodes: Mutex<Vec<NodeRecord>>,
+        /// 目录里的可用 Agent（`put_export` 的前置校验从它读；默认空）。
+        pub(crate) catalog_agents: Mutex<Vec<AgentDescriptor>>,
     }
 
     #[derive(Default)]
@@ -3402,12 +3406,15 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) struct TestCatalog;
+    /// 目录测试替身：默认空，测试按需把 `FakeWorld::catalog_agents` 填成可用 Agent。
+    pub(crate) struct TestCatalog {
+        pub(crate) world: Arc<FakeWorld>,
+    }
 
     #[async_trait]
     impl AgentCatalog for TestCatalog {
         async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError> {
-            Ok(Vec::new())
+            Ok(lock(&self.world.catalog_agents).clone())
         }
 
         async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
@@ -4225,20 +4232,23 @@ pub(crate) mod test_support {
             Ok(Vec::new())
         }
 
-        async fn node(
-            &self,
-            _id: &NodeId,
-            _kind: NodeKind,
-        ) -> Result<Option<NodeRecord>, PortError> {
-            Ok(None)
+        async fn node(&self, id: &NodeId, kind: NodeKind) -> Result<Option<NodeRecord>, PortError> {
+            Ok(lock(&self.world.nodes)
+                .iter()
+                .find(|record| record.node_id() == id && record.kind() == kind)
+                .cloned())
         }
 
         async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError> {
-            Ok(Vec::new())
+            Ok(lock(&self.world.nodes).clone())
         }
 
-        async fn nodes_for(&self, _id: &NodeId) -> Result<Vec<NodeRecord>, PortError> {
-            Ok(Vec::new())
+        async fn nodes_for(&self, id: &NodeId) -> Result<Vec<NodeRecord>, PortError> {
+            Ok(lock(&self.world.nodes)
+                .iter()
+                .filter(|record| record.node_id() == id)
+                .cloned()
+                .collect())
         }
 
         async fn peer_key(&self, _peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
@@ -4260,7 +4270,13 @@ pub(crate) mod test_support {
             Ok(())
         }
 
-        async fn put_node(&self, _write: NodeWrite) -> Result<(), PortError> {
+        async fn put_node(&self, write: NodeWrite) -> Result<(), PortError> {
+            let mut nodes = lock(&self.world.nodes);
+            nodes.retain(|record| {
+                !(record.node_id() == write.record.node_id()
+                    && record.kind() == write.record.kind())
+            });
+            nodes.push(write.record);
             Ok(())
         }
 
@@ -5760,7 +5776,9 @@ mod tests {
             attachments: Arc::new(FakeAttachments {
                 world: world.clone(),
             }),
-            catalog: Arc::new(TestCatalog),
+            catalog: Arc::new(TestCatalog {
+                world: world.clone(),
+            }),
             clock: TestClock::new(),
             ids: Arc::new(TestIds::default()),
         });

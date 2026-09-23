@@ -5,7 +5,7 @@
 
 mod support;
 
-use acp_core::model::{AuditAction, EventId, Sequence, Timestamp};
+use acp_core::model::{AuditAction, EventId, ExportId, Sequence, Timestamp};
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
@@ -276,6 +276,18 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
         );
     }
     drop(view);
+
+    // 升级后的管理读路径也要可用（spec「升级后重放与幂等仍一致」的另一半）：`imported_import` 已
+    // 拆分，Export 关联迁进 `imported_import_export`——经端口读回必须仍是同一对 owner/export。
+    use acp_core::ports::ExportStore as _;
+    let imports = store.imports().await.expect("imports after upgrade");
+    assert_eq!(imports.len(), 1);
+    assert_eq!(imports[0].owner_endpoint(), "wss://owner.invalid");
+    assert_eq!(
+        imports[0].export_ids(),
+        [ExportId::new(FIXTURE_EXPORT).expect("export id")].as_slice(),
+        "Export 关联必须经 imported_import_export 原样读回"
+    );
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -890,7 +902,7 @@ async fn regenerate_v2_fixtures() {
     sqlx::query(
         "INSERT INTO imported_import (import_id, owner_node_id, export_id, display_name, endpoint_ref, \
          cache_policy, owner_server_epoch, created_at) \
-         VALUES (?1, ?2, ?3, 'Fixture Export', 'https://owner.invalid', 'no-content-cache', ?4, ?5)",
+         VALUES (?1, ?2, ?3, 'Fixture Export', 'wss://owner.invalid', 'no-content-cache', ?4, ?5)",
     )
     .bind(FIXTURE_IMPORT)
     .bind(FIXTURE_NODE)
