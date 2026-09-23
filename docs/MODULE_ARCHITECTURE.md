@@ -203,6 +203,8 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
+管理持久化的后续实现合同见该文档 §11：现有 TrustStore/ExportStore/AuditStore 端口不等于 SQLite 已实现；配对确认、撤销与审计、Import 删除与交付清理必须由完整管理写集原子提交。端口扩展随实现同步 §5，业务决定仍由 core 用例拥有。
+
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
 `read-history` 服务于 Sync 的 `session.read`：owned session 由 `storage-sqlite` 从本地事件日志回答，imported session 必须由 `node-link-client` 在线向 Owner 取，Access 不得把它写进本地正文缓存；Owner 不可达时返回可区分的错误，由 `server::sync` 映射成 `resource.remote_unavailable`。远程可达性变化通过 `EventPublisher` 以 `session.origin.online_changed` 暴露给客户端，不在 core 里维护独立的在线状态缓存。
@@ -278,6 +280,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 唯一职责：实现持久化端口。
 
 包含 schema、migration、`SessionStore`、`RemoteDeliveryStore`、TrustStore 持久部分、事务、容量清理、快照和 TTL。Owned content tables 与 imported delivery-index tables 必须物理或类型隔离，防止 Access 路径误写正文。
+
+管理表、Export/Import 与审计端口的落盘仍待实现，具体表设计、事务、v1 升级和验收见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11。管理数据保持同一 SQLite 文件与 owned/imported 家族边界，不新增 crate；配置来源权威见 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md)。
 
 第一阶段采用**同一数据库文件、两族表 + 每族专属 Store 类型**的隔离方式：
 
@@ -575,7 +579,7 @@ server::local_admin LocalAdminError / 本地通道编码与权限错误
 
 - `identity-auth` 是否拆成纯状态机与平台 keystore 两个 crate；平台 keystore 的具体 crate 在选择时按 `AGENTS.md` §7 审必要性、维护状态、许可证与平台支持。
   - 2026-09-18 决定：**拆**。新增第 12 个 crate `identity-keystore`，`identity-auth` 收敛为纯状态机，keystore 以端口注入（[ADR-0006](./adr/0006-identity-keystore-split.md)）。判据是 `AGENTS.md` §4 的「独立平台实现」：平台 keystore 各自拖原生依赖与 `cfg` 分支，且在没有桌面会话的 Linux / CI 容器里不可用，混在一起会让状态机无法在所有平台编译与单测。
-  - 仍然开放的部分：Linux 无可用 Secret Service 时是否提供降级存储（`SECURITY_DESIGN.md` §20）。它只影响 `identity-keystore`，不影响状态机；端口必须允许"非硬件保护"的实现存在，但默认不启用。
+  - 延后到 Linux 平台开发的部分：无可用 Secret Service 时是否提供降级存储（`SECURITY_DESIGN.md` §20）。当前优先 Windows（`INITIAL_DESIGN.md` §14）；此项只影响 `identity-keystore`，不影响状态机；端口必须允许"非硬件保护"的实现存在，但默认不启用。
 - 是否为同步协议生成 TypeScript/Kotlin/Swift 类型。
 - 是否公开部分 crate 到 crates.io；第一阶段可全部保持 workspace-private。
 

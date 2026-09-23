@@ -175,7 +175,7 @@ Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管
 
 优先顺序（已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定）：
 
-1. CLI 前台进程内调用或 stdio：`daemon start|stop|status`、`doctor` 等 CLI 自有命令在此完成。
+1. CLI 前台进程内调用或 stdio：`daemon start`、离线 `doctor`，以及确认 Daemon 未运行后的 status/stop 回答在此完成；运行中的 status/stop 经下一项本地 IPC 交给组合根（具体生命周期见 `LOCAL_ADMIN_PROTOCOL.md` §7）。
 2. 带当前 OS 用户 ACL 的 Windows Named Pipe / Unix domain socket：运行中 Daemon 的设备配对与撤销、节点配对与撤销、Export 管理、Import 管理、审计导出都走这里，两端共用 `core::use_cases` 的同一组 `DeviceManagement`、`ExportManagement`、`RemoteCatalogQueries`。
 3. 只有在单独设计本地认证、Origin/CSRF 和权限模型后，才允许 loopback HTTP 管理 API；当前不实现。
 
@@ -507,6 +507,8 @@ storage.integrity_failed
 
 ### 18.2 平台验收
 
+按 `INITIAL_DESIGN.md` §14 的交付范围分批执行：当前 Windows 节点必须完成密钥保护、Named Pipe 对端身份/ACL、数据目录权限、Job Object 与休眠恢复验收；Linux/macOS 节点验收在其后续交付前完成。已有 Linux 单元测试不能替代 Windows 平台证据。下列浏览器检查属于 PWA 阶段，不要求节点运行在同一种 OS。
+
 - Windows/macOS/Linux Node key 存储与数据目录权限。
 - Windows Job Object 和 Unix 进程组清理。
 - Android Chrome、iOS Safari、桌面 Chrome/Edge 的 WebCrypto、IndexedDB、Origin 和 Service Worker。
@@ -543,8 +545,8 @@ manual pairing/revoke smoke test
 
 以下选择不能由普通实现补丁静默决定：
 
-- Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback；在决定前正式模式失败关闭。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
-- npm provenance、checksum 签名和 SBOM 使用的具体 CI Provider 与格式。（2026-09-18 决定：第一阶段暂不接入 CI 自动门禁，`npm run check` 是唯一门禁且可被任意 CI 直接调用；引入 CI 时再定 Provider 与 provenance/SBOM 格式。）
+- Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback，推迟到 Linux 平台开发阶段处理；当前优先交付 Windows，见 `INITIAL_DESIGN.md` §14。在决定前 Linux 正式模式仍失败关闭，不引入明文 fallback。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
+- npm provenance、checksum 签名和 SBOM 的发布工作流与格式仍待发布阶段确定。普通 CI 已接入 GitHub Actions（`.github/workflows/ci.yml`），执行合同门禁、Rust 检查及提交规范校验；已有普通 CI 不代表发布 provenance、签名或 SBOM 已实现。发布 job 继续按 §16.2 与普通 CI 分离。
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。
 

@@ -8,6 +8,7 @@
 > 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.1/§4.7/§5/§6/§7/§8/§10、[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §5/§10、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3/§9/§10/§11/§14、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §6/§7/§12/§15、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13/§14/§15、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4/§5/§6、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5
 > 作用：冻结 `core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 的 v1 表结构、保留/清理与 migration。**本文件是这些内容的唯一权威来源**；`MODULE_ARCHITECTURE.md` §4.1/§4.7 只保留职责边界。
 > 标记约定：`[决定]` = 本合同新定且不改变既有协议语义；`[待确认]` = 触及协议或产品语义，需用户确认；`[open]` = 明确留到实现阶段。
+> 修订（2026-09-23）：§11 收口管理状态的持久化设计；该节为后续实现合同，尚未加入当前 v1 DDL 或端口实现。§5/§7 继续描述现有机器校验基线，不能把合同检查通过解释为 §11 已实现。
 
 ## 1. 范围与非目标
 
@@ -304,6 +305,8 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
 
 ### 5.3 信任、Export、审计与附件
+
+实现状态：当前 SQLite 已实现附件端口；`TrustStore`、`ExportStore`、`AuditStore` 仍只有核心端口及测试替身，管理状态的落盘、事务与迁移按 §11 实现。下面列出的现有方法签名不代表已经具备完整的管理事务入口。
 
 ```rust
 #[async_trait]
@@ -793,3 +796,61 @@ CREATE INDEX imported_audit_at ON imported_audit(at);
 - `[open]` 交互解析的崩溃窗口（「行已终态、`*.resolved` 事件未落盘」）的补偿机制：当前按 §6 第 13 条接受；若将来要消除，需要「解析意向」行或两阶段提交。
 - `[已裁定]` **附件文件删除的事务边界与孤儿回收**（§6 第 18 条）：行删除与事务同提交、文件删除在提交之后；孤儿回收由组合根启动时调用一次 `AttachmentStore::sweep_orphans(启动时刻, 1000)`，只删「不在表里且 mtime 早于本次启动」的文件，失败不阻止启动。新增该端口方法（§5.3）。
 - `[open]` 未来加密离线正文缓存（必须新 feature + Owner 明示授权 + ADR；本合同不预留任何静默开关）。
+
+## 11. 管理状态持久化合同（待实现）
+
+本节于 2026-09-23 收口，供节点配对与本地管理切片实现使用。当前 §7 的 v1 数据库、§5 的端口与现有调用方尚未实现本节；实现时必须在同一变更中更新端口、用例、DDL、migration 与测试，不得只新增表就声明配对或撤销已完成。配置与管理状态的来源优先级以 `CONFIG_REFERENCE.md` 的“配置与管理状态的权威”为准。
+
+### 11.1 数据归属与表设计
+
+管理数据与会话数据共用 §7.1 的数据库、串行写事务和文件权限；不新增独立数据库或通用配置服务。以下是计划中的逻辑表与约束，精确可执行 DDL 在实现时纳入 §7 和合同漂移门禁。
+
+| 表 / 记录 | 主键与内容 | 约束 |
+|---|---|---|
+| `owned_device` | `device_id`；§3.5 `DeviceRecord` 的全部非秘密字段 | 状态与 `revoked_at` 一致；同 ID 不得被普通 upsert 换绑公钥或恢复已撤销权限 |
+| `owned_node` | `(node_id, kind)`；§3.5 `NodeRecord` 的全部非秘密字段 | 同一对端可同时承担 Owner/Access；`node_id` 的身份指纹必须一致；按 NodeId 撤销影响两种角色 |
+| `owned_peer_key` | `(peer_kind, peer_id)`；65-byte SEC1 未压缩 P-256 公钥、SHA-256 指纹 | 公钥是非秘密认证材料；配对验证后与信任一起提交，重启验签从此读取；不保存私钥或完整认证请求 |
+| `owned_pairing` | `pairing_id`；§3.5 `PairingRecord` 的状态、目标、请求权限、secret digest、时间戳 | 包含本节点身份/origin 或 endpoint 绑定；不存 secret、HMAC、QR URL 或完整认证 payload |
+| `owned_pairing_peer` | `pairing_id`，外键到配对记录；claim 后的 peer ID、名称、公钥、指纹、角色和非秘密 endpoint 引用 | 每个配对最多一个 peer；与配对目标一致；claim 之后不能换人；确认时公钥转入信任材料 |
+| `owned_export` | `export_id`；§3.5 `ExportRecord` 的全部字段 | `cache_policy` 固定；默认 alias/template 必须属于本 Export；撤销记录保留 |
+| `owned_agent_profile` | `agent_id`；本地 `agent.configure` 的名称、命令、参数、环境白名单、default 及创建/更新时间 | 至多一个默认 profile；字段不含 Provider/MCP 凭据；参数不经 shell 拼接 |
+| `owned_workspace` | `alias`；本地 `workspace.select` 的名称、规范化路径及创建/更新时间 | 路径只在本节点可读；建立/使用时校验目录与路径边界；不进入 Node Link catalog |
+| `owned_provider_ref` | `(provider_id, kind)`；名称、已配置字段名、keystore 引用及版本 | 不含凭据值；引用失效时失败关闭，不回落到配置文件 |
+| `imported_import`（升级） | `import_id`；`ImportRecord` 的 endpoint、owner ID、grant 集合、时间戳 | 管理记录自身不再假定恰好一个 Export；不存在内容列 |
+| `imported_import_export`（新增） | `(import_id, export_id)`；外键到 Import，关联 Owner | 同一 `(owner_node_id, export_id)` 只归一个 Import，避免两套权限与删除权威；一个 Import 可关联多个 Export |
+| `owned_audit` / `imported_audit` | 复用 §7 已有审计表与 §3.5 `AuditRecord` | 不另建聊天式审计正文；跨表查询稳定排序，过滤时间与类别 |
+
+集合字段在 SQLite adapter 内编码为有类型的 JSON 数组（scopes、grants、Agent selector、alias/template/params、args、envAllowlist），读写都按领域构造器及现有协议约束校验；不把管理 DTO 或任意 JSON 对象直接塞进 core。身份、状态、时间、唯一键与外键使用显式列，不能只靠 JSON blob 保证仲裁。Export 的 workspace 引用在本机解析，不将原始路径复制到 Export。
+
+当前 `NodeRecord` 读取端口只接收 NodeId：实现双角色持久化时需同步补齐角色选择或返回角色集合，禁止隐式取第一行。当前配对 DTO 只携带指纹，不能据此宣称已经保存了验签材料；实现时须在配对写集与信任读取端口中补入公钥值对象（固定 65 字节，身份边界验证 P-256 点与指纹）。WSS 握手不能假定对端会重新发送公钥，也不能由指纹反推公钥。公钥绑定由信任事务唯一写入，Node 双角色共享一条身份材料；改变绑定必须遵循身份变化/重新配对规则。
+
+### 11.2 原子提交与失败处理
+
+1. **认领**：验证 HMAC/proof 后，单事务检查配对存在、未过期、仍为 `created` 及本机绑定一致，插入唯一 peer 并转到 `pending_confirmation`；并发 claim 只有一个成功。`claimed` 仅为事务内过渡，不形成可重新认领的中间提交。
+2. **确认**：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、更新配对为 approved、写入对应审计。失败时全回滚，绝不能返回成功却没有持久信任。拒绝或过期不创建信任；已撤销身份不能经普通 upsert 自动激活，只能按协议重新配对。
+3. **撤销**：单事务记录撤销时间、撤销状态与对应审计；提交后阻断新命令/订阅并关闭适用连接，再回答管理调用。提交失败返回失败，不把内存撤销当作持久成功；连接清理失败也不回滚已提交的撤销，阻断后续访问并报告失败。重启先加载撤销状态，再允许连接。
+4. **Export**：创建前验证 Agent、workspace、模板与默认引用；创建/撤销各为一个事务。撤销先提交再发送 `export.revoked`；发送失败不撤销数据库决定。授权从最新记录计算，不能仅信任旧连接缓存。
+5. **Import**：`import.add` 的管理行与全部 Export 关联行一次提交，重复 ID 或重复 Owner/Export 归属显式冲突；`import.remove` 同事务删除管理行、关联行及对应 `imported_session`/delivery/command 引用，审计保留。提交后停止连接/重连、清空内存正文；失去 Import 的在途回调必须被拒绝，不能重建已删除的索引。
+6. **审计**：涉及已登记安全动作的管理 mutation，其成功审计与状态同事务提交；审计写入失败则整事务失败。被拒绝的请求只尝试追加失败/拒绝审计，不能因审计不可写而继续执行。适配器记录固定错误类型，不记录凭据。独立 `AuditStore::append` 用于没有关联状态变更的审计，不用于伪造跨端口原子性。
+7. **凭据引用**：SQLite 与 keystore 不做分布式事务。先写新的、带版本的 keystore 条目，再提交 SQLite 引用；失败时旧引用继续有效，未引用条目作为孤儿回收。新引用提交后才能清理旧条目；重启发现引用缺失则明确不可用，不能静默生成新身份。
+
+实现入口由 core 用例组织授权和状态决定，storage-sqlite 在单个端口调用内提交完整管理写集；连接关闭等外部效果在提交后通过端口/组合根装配执行。需要扩展 §5 的管理写入 DTO/端口以携带审计上下文和完整写集；禁止用“两次 await 共用一个连接池”宣称同一事务。特别是当前 `UseCases::remove_import` 的先 `drop_import` 再 `remove_import`、以及 mutation 后独立追加审计的路径，必须随本节实现一起替换。
+
+### 11.3 重启、保留与升级
+
+- pairing secret 仍只存在内存；Daemon 重启不能凭 secret digest 恢复它。启动时终结未确认且无法继续验密的配对，客户端重新发起配对；已批准的信任记录保留，不要求正常重连重新配对。原有效期不能延长；临时 nonce、SAS、HMAC 和 QR URL 不落入普通数据库。
+- pairing 终态记录至少保留到原 `expires_at`，随后可清理；安全审计按既有 365 天策略保留。活动信任、授权与配置不按聊天 TTL 清理；撤销 tombstone 不因容量压力被删除，防止旧身份恢复。
+- 管理表纳入现有总容量度量；空间不足时拒绝新写入，不能删活动信任或未到期审计腾空间。Import 关联表与交付表继续执行无正文黄金列清单检查。
+- 计划用文件格式 v2 承载管理表及 Import 归属升级：owned/imported 家族版本各推进到 2；保留 `server_epoch`、会话 origin、事件序号、requestId 与已有审计。旧二进制因版本过新拒绝打开，不能降级写入。
+- v1 的单 Export Import 行迁为一个管理行加一条关联行；没有可信来源的 grants 不得凭空补齐或默认放权，该 Import 保持不可用，待本地重新授权。管理表初始为空；profile 种子与初始化标记一起提交，不从聊天或审计内容推断信任。
+- migration 在取得单实例锁后、监听前完成，单事务失败全回滚；可重复打开，不能每次启动重导配置。实现时同步更新 §7、DDL 常量、版本常量、容量度量、fixture 与漂移门禁，现有 too-new 测试必须使用高于新版本的值。
+
+### 11.4 实现验收清单
+
+- v1 → v2 升级保留事件、cursor、幂等与审计；升级中途失败回滚，重复打开不改业务记录，过新数据库拒绝打开。
+- 两个并发 claim 只有一个成功；确认与过期竞争、拒绝、身份不匹配均不产生多余信任；任一步写入失败不留下半条授权。
+- 重启后撤销仍有效、未确认配对不再可用、已配对节点正常重新认证；Node 同时承担两种角色时身份一致且撤销覆盖两者。
+- profile 首次导入/空种子/冲突/后续忽略种子，管理修改重启后保留；旧配置不能复活撤销记录。
+- 一个 Import 对应多个 Export 的增删原子性、重复关联拒绝、删除后在途收据被拒，审计不随删除消失。
+- 注入审计写失败、磁盘满、keystore 写失败、引用提交失败、连接清理失败，验证上述提交边界与可恢复结果。
+- 检查所有管理/交付表、日志与错误不含 secret、QR payload 或 imported 正文；本机 workspace 路径不出现在远程 catalog。

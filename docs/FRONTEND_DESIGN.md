@@ -238,7 +238,8 @@ PWA 首个版本只持久化连接和恢复所需的最小数据：
 - imported resource 遵守 `no-content-cache`，不得把会话摘要、prompt、回复、工具内容、diff、终端、附件或 ACP raw 写入 IndexedDB、Cache Storage 或其他持久浏览器存储。
 - 对当前节点本地拥有的资源，只有节点本地策略显式允许时才缓存精简历史；缓存不是权威数据，重连后以 Daemon 快照和事件日志校正。
 - 敏感字段不得因方便调试而进入普通浏览器存储。
-- 必须设置大小上限、版本和迁移策略：v1 的固定值为本节点自有资源摘要缓存上限 **8 MiB**、TTL **30 天**、超出时按 LRU 淘汰；imported 资源只允许缓存摘要、cursor 与事件 digest，不占用正文配额。这些是固定常量，不是可由用户放宽的配置项。
+- 必须设置大小上限、版本和迁移策略：v1 的固定值为本节点自有资源摘要缓存上限 **8 MiB**、TTL **30 天**、超出时按 LRU 淘汰。这些是固定常量，不是可由用户放宽的配置项。
+- imported 资源只允许持久化恢复所需的无正文元数据：owner/export/session 标识、origin/global/session cursor、ACK、稳定 `requestId`、命令终态引用、事件类型与 SHA-256 digest、local sequence 映射。这里的 digest 是密码学摘要，不是会话摘要、标题、消息预览或内容摘录；这些内容只能保留在内存。元数据也必须有容量与清理边界，不得以“不占正文配额”为由无限增长。
 - 清除缓存与撤销设备是不同操作；清除设备密钥后必须重新配对。
 - `expo-sqlite` 的 Web 支持在采用前必须单独验证；第一阶段可以使用受封装的 IndexedDB adapter，不能让存储实现泄漏到 feature 层。
 

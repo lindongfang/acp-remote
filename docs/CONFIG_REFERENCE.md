@@ -16,7 +16,24 @@
 - 限流与其余协议上限（认证尝试速率、命令速率、配对有效期、单消息与嵌套上限等）都是**固定 v1 常量**，不是配置键；本文件不提供放宽它们的开关。
 - 安全默认值（监听地址、TLS 终止、失败关闭）的约束见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §7、§8、§9。
 
-配置来源与优先级（高者覆盖低者）：命令行参数 > 配置文件 > 内置默认值。环境变量只用于替换配置文件路径（`ACP_REMOTE_CONFIG`），不承载业务配置，避免把凭据写进进程环境。
+启动配置来源与优先级（高者覆盖低者）：命令行参数 > 配置文件 > 内置默认值。环境变量只用于替换配置文件路径（`ACP_REMOTE_CONFIG`），不承载业务配置，避免把凭据写进进程环境。此优先级不适用于下面的 Daemon 管理状态。
+
+### 配置与管理状态的权威（2026-09-23，待实现）
+
+| 数据 | 唯一持久化权威 | 写入与生效时机 |
+|---|---|---|
+| daemon / sync / node_link / sessions / storage / terminal / identity / dev_mode / logging 启动参数 | 用户配置文件，经 CLI 参数覆盖 | 启动时读取并校验；v1 不提供文件监听或通用热重载，修改后重启生效 |
+| Agent profile | SQLite 管理记录 | `agent.configure` 提交后供后续 Agent 进程使用；已有进程不变 |
+| workspace alias → 本机路径 | SQLite 管理记录 | `workspace.select` 提交后供新建会话使用；已有会话不迁移目录 |
+| 设备/节点信任、Export、Import | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
+| Provider/MCP 凭据、Node 私钥 | 平台 keystore | 普通配置与 SQLite 只保存非秘密标识/引用；凭据修改只影响后续使用该配置启动的进程 |
+
+- SQLite 的管理状态由运行中的 Daemon 单一写入；CLI 经本地 IPC 请求修改，不自行写库、不回写 TOML。持久化边界与升级规则见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11。
+- §7 的 `[[agents.profiles]]` 是**首次初始化种子**：在管理配置首次初始化的单次事务中导入全部合法 profile，并记录初始化完成标记；空列表也记录完成。任一项非法则整批失败。已有同 ID 管理记录与种子不一致时显式报错，不覆盖、不合并。
+- 初始化完成后，数据库是 profile 的唯一权威；重启不再导入种子。配置文件仍含 profile 时给出不含参数值的提示，后续修改应使用 `agent.configure`；不能因删空数据库中的某一条 profile 就再次导入它。
+- §9 的 TOML 片段是**管理记录的说明性表示**，不是用户配置文件支持的输入；启动配置中出现 `imports`/`exports` 必须明确拒绝并指向本地管理命令，不能忽略它们或据此创建信任。这样旧配置无法在重启时复活已撤销的 Export 或已删除的 Import。
+- workspace 路径、信任与授权集合不接受启动参数覆盖；keystore 不可用或 SQLite 写入失败时管理方法返回明确失败，不能仅在内存修改后报告成功。
+- 重启加载已提交的管理记录，重建 Agent catalog、Export 与 Import 路由；撤销状态始终优先。恢复完成前不开放业务接入。
 
 ## 1. `daemon`
 
@@ -128,7 +145,7 @@ args = ["acp"]
 
 ## 9. `imports` / `exports`
 
-Access Node 侧每个 Import 一条记录（由 `acp-remote import add` 写入，不由用户手改）：
+Access Node 侧每个 Import 一条记录（由 `acp-remote import add` 请求 Daemon 写入 SQLite，不由用户手改）。下例仅为管理记录的 TOML 表示，不是启动配置输入：
 
 ```toml
 [[imports]]
@@ -144,7 +161,7 @@ grants = ["grant.observe", "grant.interact"]
 
 ### `exports`（Owner 侧）
 
-Owner Node 的 Export 由本地管理入口写入（`local.export.manage`，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5），同样不由用户手改：
+Owner Node 的 Export 由本地管理入口写入 SQLite（`local.export.manage`，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5），同样不由用户手改。下例仅为管理记录的 TOML 表示：
 
 ```toml
 [[exports]]
@@ -173,7 +190,7 @@ pattern = "^[a-zA-Z0-9._/-]{1,128}$"
 enum = []
 ```
 
-- `cache_policy` 在 v1 固定为 `no-content-cache`；写其他值必须启动失败，不允许通过本地配置静默绕过 Owner 的内容策略。
+- `cache_policy` 在 v1 固定为 `no-content-cache`；管理写入拒绝其他值，启动加载发现非法持久值则失败关闭，不允许绕过 Owner 的内容策略。
 - `export_id`、`agent_ids`、`workspace_aliases`、`templates` 与 `scopes` 一起构成 `session.create` 参数（`agentId`/`exportId`/`workspaceAlias`/`templateParams`）的唯一可引用集合；未列出的取值一律拒绝（`nodelink.export.not_granted` 或 `nodelink.command.unsupported_field`）。`scopes` 与 Node Link Export 模型的同名字段同义（`NODE_LINK_PROTOCOL.md` §10）；Access 侧 `[[imports]].grants` 是另一概念（本节点自己的授权子集），不随此改名。
 - `default_workspace_alias` 必须出现在同一条目的 `workspace_aliases` 中，`default_template_id` 必须出现在 `templates` 中；首切片恰好一个 workspace alias 与一个 template。
 - `templates.params[].type` ∈ `string|boolean|integer`；`pattern` 只对 `string` 生效；`enum` 为空数组表示不限制取值。`session.create.payload.templateParams` 的键必须来自这里。

@@ -137,6 +137,8 @@ u32be length | payload(length bytes)
 
 ### 5.2 Daemon 生命周期与本地配置
 
+管理配置的持久化权威、首次 profile 导入、重启恢复与生效时机以 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) 的“配置与管理状态的权威”为准；本节只定义请求与响应。下列方法仍是待实现合同，不表示已存在 Daemon 或本地 IPC。
+
 #### `daemon.status`
 
 - `params`：`{}`
@@ -471,6 +473,7 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 - **Daemon 未运行**：CLI 先读单实例锁判定。没有有效锁时，`daemon status`/`daemon stop` 由 CLI 在进程内回答；其余方法以非零退出码与明确 stderr 报错。CLI **不得**因此打开数据库或启动第二套核心（ADR-0004 决策 5、`SECURITY_DESIGN.md` §8）。
 - **`daemon start`** 不经过本通道，由 CLI 前台进程内完成（ADR-0004 决策 1）。
+- **Daemon 运行中**：`daemon status` 与 `daemon stop` 经本地 IPC，由组合根提供状态或启动正常关闭；有有效锁但 IPC 不可达时明确报错，不视为“未运行”，不自动强杀、不直接读库。
 - **连接中断**：CLI 必须报错退出，不得降级为直接读写 SQLite。重试由用户显式发起，且：
   - `*.list`、`*.status` 幂等，可安全重复；
   - `device.pair.begin`、`node.pair.begin` 每次调用创建新配对，旧配对自然过期，不构成第二次接受；

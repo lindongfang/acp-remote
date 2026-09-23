@@ -17,6 +17,10 @@
 
 尚未开始：前端工程，以及 `server`、`agent-host`、`node-link-client`、`identity-auth`、`identity-keystore`、`acp-protocol`、`app`（每落地一个才加入 workspace `members`）。
 
+当前优先交付 Windows x64 的 Daemon/CLI 与 Node Link 闭环，Linux 延后开发；完整平台顺序见 [初始设计 §14](docs/INITIAL_DESIGN.md#14-npm-分发)。共享代码的 Linux CI 保留，不代表 Linux 产品已可运行。
+
+管理状态的表设计、事务与升级要求已补充在 [核心与存储合同 §11](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同待实现)，SQLite 的 `TrustStore`/`ExportStore`/`AuditStore` 实现仍待完成；现有合同检查只证明当前实现基线一致。
+
 ## 权威文档
 
 修改代码或设计前先读 `AGENTS.md`，它列出各文档的职责边界与维护规则。主要入口：

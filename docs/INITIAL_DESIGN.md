@@ -626,15 +626,15 @@ acp-remote
 - 原样转发 stdin/stdout/stderr、参数、信号和退出码。
 - 平台包缺失时给出明确错误，不静默在线下载未知二进制。
 
-首批平台：
+当前优先交付平台（2026-09-23 用户决定）：
 
 ```text
 Windows x64
-macOS ARM64
-Linux x64 glibc
 ```
 
-后续再增加其他架构和 musl。
+Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link 闭环的验收目标。Linux 延后开发，Secret Service 与无桌面环境 fallback 不作为 Windows 开工前置条件；后续支持 Linux 前仍须完成其平台安全设计与验收。macOS ARM64 保留为后续平台计划，不要求与 Windows 同批交付；其他架构和 musl 同样后续增加。上面的包名列表是长期目标，不代表全部已有产物。
+
+共享 core、协议及存储层继续保持平台无关；已有 Unix 代码和 Linux CI 作为可移植性回归保留，通过这些检查不等于已经支持 Linux Daemon 产品。平台优先级不改变 PWA 可作为其他设备浏览器客户端的产品定位。
 
 发布流程：
 
@@ -648,6 +648,7 @@ Linux x64 glibc
 
 ### 阶段一：Node Link 最小纵向切片
 
+- Owner 与 Access 优先在 Windows 上交付和验收；其他节点平台按 §14 后续推进。
 - Rust Workspace、ACP/Node Link 协议类型、最小 Broker 和 fake ACP Agent。
 - Node Identity、节点配对、Export/Import 和撤销。
 - 单 Owner、单 Access、单 Export 的 catalog、command/event、cursor、重放和端到端幂等。
@@ -684,7 +685,7 @@ Linux x64 glibc
 
 ### 阶段五：发布
 
-- Windows/macOS/Linux CI。
+- Windows 产品构建、平台安全与进程生命周期验收；保留现有 Linux 共享代码 CI。macOS/Linux 产品发布门禁随对应平台开发补齐。
 - npm 平台包和 launcher。
 - 数据库迁移策略。
 - 升级、回滚和 Daemon 单实例处理。
