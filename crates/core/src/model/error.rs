@@ -25,17 +25,26 @@ pub enum ConflictKind {
     Consumed,
     /// `command.idempotency_conflict`：同一 `(actor, requestId)` 携带了不同的命令语义。
     IdempotencyConflict,
+    /// 管理写入的目标已存在（§11.6 的 `AlreadyExists`；由本地管理适配器映射为 `local.conflict`）。
+    AlreadyExists,
+    /// 对端身份材料与已绑定值不一致：不得换绑公钥、不得把已撤销身份改回活动（§11.6）。
+    IdentityMismatch,
+    /// 同一 `(owner_node_id, export_id)` 已归属另一个 Import（§11.6）。
+    DuplicateOwnership,
 }
 
 impl ConflictKind {
     /// 全部取值，顺序即声明顺序（供存储层与测试穷举，不参与 wire 编码）。
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::VersionMismatch,
         Self::AlreadyResolved,
         Self::AlreadyClaimed,
         Self::Expired,
         Self::Consumed,
         Self::IdempotencyConflict,
+        Self::AlreadyExists,
+        Self::IdentityMismatch,
+        Self::DuplicateOwnership,
     ];
 
     /// 稳定的下划线标记，用于日志与持久层分支，不是 wire 错误码。
@@ -47,6 +56,9 @@ impl ConflictKind {
             Self::Expired => "expired",
             Self::Consumed => "consumed",
             Self::IdempotencyConflict => "idempotency_conflict",
+            Self::AlreadyExists => "already_exists",
+            Self::IdentityMismatch => "identity_mismatch",
+            Self::DuplicateOwnership => "duplicate_ownership",
         }
     }
 }
@@ -72,17 +84,21 @@ pub enum UnavailableKind {
     OwnerOffline,
     /// Export 已撤销。
     ExportRevoked,
+    /// 平台 keystore 不可用或引用失效（§11.6 的 `CredentialResolver` 失败关闭；由本地管理适配器
+    /// 映射为 `local.unavailable`）。
+    KeystoreUnavailable,
 }
 
 impl UnavailableKind {
     /// 全部取值，顺序即声明顺序。
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Busy,
         Self::StorageFull,
         Self::IoError,
         Self::RemoteUnavailable,
         Self::OwnerOffline,
         Self::ExportRevoked,
+        Self::KeystoreUnavailable,
     ];
 
     /// 稳定的下划线标记（同上，不是 wire 错误码）。
@@ -94,6 +110,7 @@ impl UnavailableKind {
             Self::RemoteUnavailable => "remote_unavailable",
             Self::OwnerOffline => "owner_offline",
             Self::ExportRevoked => "export_revoked",
+            Self::KeystoreUnavailable => "keystore_unavailable",
         }
     }
 }
@@ -173,6 +190,8 @@ pub enum InvalidValue {
     Timestamp,
     /// 不是 64 字符小写十六进制指纹。
     Fingerprint,
+    /// 不是 65 字节 SEC1 未压缩 P-256 公钥（长度、`0x04` 前缀或曲线点校验失败）。
+    PublicKey,
     /// 不是非空 `wss://` 端点。
     Endpoint,
     /// 不是良构 JSON object（`ViewJson`）。
@@ -216,6 +235,7 @@ impl InvalidValue {
             Self::Nonce => "nonce must be 32 bytes of canonical unpadded base64url",
             Self::Timestamp => "timestamp must be YYYY-MM-DDTHH:MM:SS.mmmZ with in-range fields",
             Self::Fingerprint => "fingerprint must be 64 lowercase hex characters",
+            Self::PublicKey => "public key must be a 65-byte SEC1 uncompressed point on P-256",
             Self::Endpoint => "endpoint must be a non-empty wss:// URL",
             Self::Json => "value must be a well-formed JSON object",
             Self::JsonDocument => "value must be a well-formed JSON document",

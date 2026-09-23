@@ -41,14 +41,14 @@
 `[决定]` 本文引入的类型名归属（避免与 `core::model` 已有类型重复）：
 
 - 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。
-- 实现变更要新增到 `core::model`：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.5）与写集相关 DTO（§11.6）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
+- 已在 `core::model` 落地：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）与写集相关 DTO（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
 - 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`HandshakeCompletion`、`IdentityFact`、`Authenticated`、`CredentialStatus`、`PairingTarget`、`PairingDecision`、`PairingDraft`、`ClaimVerification`、`SettlementRequest`、`RequestedCapabilities`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`ChallengeId`、`P1363Signature`（64 字节 P1363）。
 - 只存在于 `identity-keystore` 边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`（§7）。
 
 ## 3. 密钥与身份材料
 
 - `[决定]` **用途分离**：Node Identity Key 与 Device Identity Key 使用不同的 key purpose、不同的信任记录类型与不同签名 domain tag，即使算法相同也不得互换（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8.1、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.6）。一个节点只有一把 Node Identity Key，同时用于 Sync 的 `hostProof` 与 Node Link 的 `nodeProof`（domain tag 与 transcript 字段集合不同，密钥不复制、不派生第二把）。
-- `[决定]` 公钥值对象与指纹规则沿用 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.5：65 字节 SEC1 未压缩点、构造即校验、指纹 = `SHA-256(65 字节)` 的 64 字符小写 hex、指纹只能由 `PeerPublicKey::fingerprint()` 派生。**配对 DTO 必须携带公钥本身**，不能只带指纹：设备与节点配对的 claim 载荷本来就传 `devicePublicKey`/`accessPublicKey`（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.2、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §13.2），core 的 `PairingPeer` 必须把它收下并落库，因为后续 WSS 握手不能假设对端重发公钥（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.1/§11.5）。
+- `[决定]` 公钥值对象与指纹规则沿用 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5：65 字节 SEC1 未压缩点、构造即校验、指纹 = `SHA-256(65 字节)` 的 64 字符小写 hex、指纹只能由 `PeerPublicKey::fingerprint()` 派生。**完整点校验与指纹派生在 `core::model` 的构造期完成**（`PeerPublicKey::try_from_bytes`/`FromStr` 任一步失败即 `InvalidValue`），身份边界只做 wire 形状校验与验签，不再自己解析曲线点或现算指纹。**配对 DTO 必须携带公钥本身**，不能只带指纹：设备与节点配对的 claim 载荷本来就传 `devicePublicKey`/`accessPublicKey`（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.2、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §13.2），core 的 `PairingPeer` 必须把它收下并落库，因为后续 WSS 握手不能假设对端重发公钥（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5 与 §11.1）。
 - `[决定]` 密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖；版本口径见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §3.1）。实现约束（一次性探针的实测结论，[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §16 第 6 条）：
   - 验签前**先断言 65 字节**，再交给 `from_sec1_bytes`——它接受 33 字节压缩点；
   - wire 上只接受 64 字节 P1363（`r || s`），禁止 DER（`from_der` 不得出现在实现里）；

@@ -1,6 +1,6 @@
 //! `storage-sqlite` 集成测试的公共辅助：定位仓库根、临时目录、时间戳与原始 SQL 连接。
 //!
-//! 路径一律通过 `CARGO_MANIFEST_DIR` 向上寻找 `fixtures/storage/v1`，**不依赖进程 cwd**。
+//! 路径一律通过 `CARGO_MANIFEST_DIR` 向上寻找 `fixtures/storage/v2`，**不依赖进程 cwd**。
 
 #![allow(dead_code)]
 
@@ -22,11 +22,12 @@ pub fn digest_text(seed: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(seed.as_bytes()))
 }
 
-/// 仓库根：含 `fixtures/storage/v1` 的那一级目录。
+/// 仓库根：含 `fixtures/storage` 的那一级目录（锚在夹具族的父目录上，不绑定具体版本目录——
+/// 夹具生成器需要在 `fixtures/storage/v2` 还不存在时就能定位仓库根）。
 pub fn repo_root() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     loop {
-        if dir.join("fixtures/storage/v1").is_dir() {
+        if dir.join("fixtures/storage").is_dir() {
             return dir;
         }
         if !dir.pop() {
@@ -59,10 +60,16 @@ pub fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// 把夹具库复制到临时数据目录，并**落在 `SqliteStore` 实际打开的路径上**
+/// 把 v2 夹具库复制到临时数据目录，并**落在 `SqliteStore` 实际打开的路径上**
 /// （`<data_dir>/acp-remote.sqlite3`）：否则 store 会新建一个空库，夹具根本没被打开。
 pub fn copy_fixture(name: &str, into: &Path) -> PathBuf {
-    let source = repo_path(&format!("fixtures/storage/v1/{name}"));
+    copy_fixture_from("v2", name, into)
+}
+
+/// 复制指定版本目录下的夹具。夹具生成器用它读 **v1 历史资产**（`fixtures/storage/v1/empty.sqlite3`）
+/// 作为 `fixtures/storage/v2/from-v1.sqlite3` 的基底：升级前的库必须真的长着 v1 的样子。
+pub fn copy_fixture_from(version: &str, name: &str, into: &Path) -> PathBuf {
+    let source = repo_path(&format!("fixtures/storage/{version}/{name}"));
     let target = into.join(storage_sqlite::migrate::DATABASE_FILE);
     std::fs::copy(&source, &target).unwrap_or_else(|error| panic!("copy {source:?}: {error}"));
     target
@@ -176,7 +183,7 @@ pub async fn column_names(pool: &SqlitePool, table: &str) -> Vec<String> {
         .collect()
 }
 
-/// 与 `session_store::measure_total` **同口径**的度量：12 张表的所有 TEXT 列 `length()` 之和
+/// 与 `session_store::measure_total` **同口径**的度量：两族全部表的所有 TEXT 列 `length()` 之和
 /// + `owned_attachment.byte_length` 之和（列清单从 `pragma_table_info` 取，不手抄）。
 ///
 /// 容量测试的预算一律由它派生（`measured + 半条事件`），不拍数字——度量口径一变，测试自动跟上。

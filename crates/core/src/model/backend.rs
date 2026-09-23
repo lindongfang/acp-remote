@@ -5,11 +5,10 @@
 
 use std::collections::BTreeSet;
 
+use super::config::ResolvedWorkspace;
 use super::error::InvalidValue;
 use super::event::{EventKind, EventPayload, EventType};
-use super::ids::{
-    AgentRef, RequestId, TemplateId, TurnId, WorkspaceAlias, is_template_id, require_bounded,
-};
+use super::ids::{AgentRef, RequestId, TemplateId, TurnId, is_template_id, require_bounded};
 use super::json::ViewJson;
 use super::scalars::Timestamp;
 use super::session::{ConfigValue, ResourceOrigin};
@@ -148,13 +147,17 @@ impl TemplateSelection {
 
 /// 创建会话请求（§3.6）。
 ///
+/// `workspace` 是**已解析**的 workspace（§11.9：alias → 规范化绝对路径的解析归 core，后端只收路径，
+/// 不自行查询存储或拼接路径）。`WorkspaceAlias` 仍出现在 [`TemplateSelection`] 与 `ExportRecord` 里，
+/// 那里它是 Export 的声明而不是本机路径。
+///
 /// 注意：§5.1 的注释提到「`CreateSessionRequest.session` 由 core 分配后传入」，但 §3.6 冻结的字段表里没有
 /// `session` 字段；按 §3.6 实现，`SessionId` 由 `SessionStore::commit` 在创建事务内分配并经
 /// `CommitOutcome.session_id` 返回（§3.1）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateSessionRequest {
     pub agent: AgentRef,
-    pub workspace_alias: Option<WorkspaceAlias>,
+    pub workspace: Option<ResolvedWorkspace>,
     pub template: Option<TemplateSelection>,
     pub origin: ResourceOrigin,
 }
@@ -163,13 +166,13 @@ impl CreateSessionRequest {
     /// 构造。
     pub fn new(
         agent: AgentRef,
-        workspace_alias: Option<WorkspaceAlias>,
+        workspace: Option<ResolvedWorkspace>,
         template: Option<TemplateSelection>,
         origin: ResourceOrigin,
     ) -> Self {
         Self {
             agent,
-            workspace_alias,
+            workspace,
             template,
             origin,
         }

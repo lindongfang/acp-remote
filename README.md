@@ -21,7 +21,7 @@
 
 逐切片的实施顺序与验收节点见 [开发计划](docs/DEVELOPMENT_PLAN.md)；产品与协议语义仍以各权威合同为准。
 
-管理状态的表设计、事务与升级要求已补充在 [核心与存储合同 §11](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同待实现)，实现前目标形状（身份值对象与读取形状、管理写入 DTO 与端口签名、管理表 DDL、版本常量与 migration）收口在该节 §11.5–§11.8；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 的 `TrustStore`/`ExportStore`/`AuditStore` 与 `LocalConfigStore` 仍待实现；现有合同检查只证明当前实现基线一致，**不**证明上述目标形状已落地。
+管理状态的端口签名、写集 DTO、值对象与 DDL 已并入 [核心与存储合同 §3/§5/§7](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)（该节 §11 保留设计理由与索引），并由 `scripts/check-contract-drift.mjs` 逐条断言；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 侧的 `TrustStore`/`ExportStore`/`LocalConfigStore` **落盘实现**仍待完成；现有合同检查只证明端口与表结构与实现基线一致，**不**证明管理状态已经可持久化。
 
 ## 权威文档
 

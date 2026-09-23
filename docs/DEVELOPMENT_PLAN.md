@@ -13,7 +13,7 @@
 
 Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol` 和 `node-link-protocol`。其中 core 的会话用例和 broker、SQLite 的 owned/imported 会话存储，以及 Sync/Node Link v1 wire 类型已有实现。尚未落地的是管理状态持久化、`acp-protocol`、`agent-host`、`identity-auth`、`identity-keystore`、`server`、`node-link-client`、`app` 和前端工程。详细范围以 [README 的仓库当前状态](../README.md#仓库当前状态)为准。
 
-计划中的每一项都是待交付能力，不因为合同门禁通过就视为已经实现。特别是[核心与存储合同 §11.5–§11.8](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同待实现)目前仍是管理状态的目标形状。
+计划中的每一项都是待交付能力，不因为合同门禁通过就视为已经实现。特别是[核心与存储合同 §11](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的形状（值对象、写集端口、管理表 DDL 与 v1 → v2 迁移）已并入该合同 §3/§5/§7，但 `storage-sqlite` 的管理 store 落盘实现仍未完成。
 
 ## 3. 实施切片
 
@@ -21,7 +21,7 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 ### 1. 管理状态与配置持久化
 
-将[核心与存储合同 §11](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同待实现)的目标形状落入 core 端口和 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。把新增端口及 DDL 分别并入该合同 §5/§7，使合同漂移门禁能检查实际实现。
+将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现是本切片的剩余工作。
 
 验收：旧数据库升级、事务原子性、重启恢复、撤销及损坏记录失败关闭均有测试；imported 表和端口仍不能写入远程会话正文。
 

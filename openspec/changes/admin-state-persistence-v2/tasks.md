@@ -1,0 +1,70 @@
+## 1. Dependency and Resource Setup
+
+- [x] 1.1 全变更；负责人：environment/recon；依赖：无；在新的任务级最小上下文中核实仓库路径、目标引用（`git rev-parse refs/heads/main`）、工具版本（`rust-toolchain.toml` 与 Node ≥ 22.12）、约定命令与资源状态，返回结构化事实与原始输出；完成条件：事实清单与证据可被后续任务直接引用。
+- [x] 1.2 WP1 / WP4 / WP5；负责人：实现 Agent；依赖：1.1；确认实现所需契约与文件所有权（§11.5–§11.9 目标形状、§5.3 签名、§7.3/§7.4 DDL 文本、§7.2 版本常量），记录编码起点；完成条件：写范围与契约清单落到 `verification.md`，无文件归属冲突。
+- [x] 1.3 WP1–WP6；负责人：实现 Agent；依赖：1.1；确认唯一共享运行资源是构建目录 `target/` 与 SQLite 临时目录，确定串行执行与并行分片时 `CARGO_TARGET_DIR` 的隔离方式，并记录夹具的只读使用与临时目录释放方法；完成条件：隔离与释放方案记录在案；无共享外部资源时给出依据。
+- [ ] 1.4 WP6；负责人：实现 Agent；依赖：2.9、2.17；在 WP6 集成验证前接入已验收上游（`ports.rs` 端口签名 + `migrate.rs` v2 常量），核对下游实际基线与包含关系；完成条件：交接关系与包含关系检查记录在 `verification.md` 的 Dependency Handoffs。
+
+## 2. Implementation
+
+- [x] 2.1 [WP5] 负责人：实现 Agent；依赖：1.2；把 §11.5/§11.6 的形状并入 §5.3、§11.7 的 DDL 并入 §7.3/§7.4、§11.5 的值对象并入 §3.5/§3.6、§11.8 版本表并入 §7.2、§11.9 规则并入 §3.6/§5.1、§9 续号判据，并把 §11 改写为「已实现」索引（不留重复正文）；完成条件：合同文本定稿，§7 仍为 2 个 ```sql 块，`node scripts/check-contract-drift.mjs` 的差异只剩实现侧缺失项（输出留证 `reports/wp5-contract-drift-before-after.md`）。
+- [x] 2.2 [WP5] 负责人：实现 Agent；依赖：1.2；同步 `docs/IDENTITY_AND_AUTH_CONTRACT.md` §2/§3、`docs/MODULE_ARCHITECTURE.md` §3.1/§4.1/§4.7/§5、`docs/CONFIG_REFERENCE.md` 的配置与管理状态权威、`AGENTS.md` §12，并更新 `scripts/check-crate-boundaries.mjs` 的 `CORE_ALLOWED_CLOSURE`（按 `cargo tree -p core --edges normal` 实际输出逐项登记）与 §9 判据 13 的名单描述；完成条件：文档无将来时表述、allow-list 与实测闭包一致（`reports/wp5-boundaries.log`）。
+- [x] 2.3 [WP1] 负责人：实现 Agent；依赖：2.2；在 `crates/core/Cargo.toml` 增加 `p256.workspace = true` 与 `sha2.workspace = true`（按需最小 feature），不改 `[workspace.dependencies]` 的版本 pin；完成条件：`cargo build -p core` 通过且 `cargo tree -p core --edges normal` 只出现已登记成员。
+- [x] 2.4 [WP1] 负责人：实现 Agent；依赖：2.3；实现 `PeerPublicKey`（长度 65 → 首字节 `0x04` → `p256::PublicKey::from_sec1_bytes`，`fingerprint()` 为 `SHA-256` 的 64 字符小写 hex）、`InvalidValue` 新取值、`PairingPeer.public_key` 替换 `public_key_fingerprint`；完成条件：局部单测覆盖合法点、33 字节压缩点、非法长度/前缀/点与指纹一致性，全部通过。
+- [x] 2.5 [WP1] 负责人：实现 Agent；依赖：2.4；为 `ConflictKind` 增加 `AlreadyExists`/`IdentityMismatch`/`DuplicateOwnership`、`UnavailableKind` 增加 `KeystoreUnavailable`、`AuditAction` 增加 `ExportCreated`/`ExportRevoked`/`ImportAdded`/`ImportRemoved`/`ProviderConfigured`，同步 `ALL`/`as_str` 与 `model/tests.rs` 的长度断言；完成条件：`cargo test -p core` 的枚举穷举用例通过。
+- [x] 2.6 [WP1] 负责人：实现 Agent；依赖：2.4；实现 `AgentProfile`/`ProviderEnvBinding`/`WorkspaceRecord`/`ProviderRef`/`ProviderRefKind`/`SeedState`/`SecretValue`/`ResolvedWorkspace` 及其构造校验（名称/命令长度、`name ∈ env_allowlist`、保留名、绑定字段必填、路径形状）；完成条件：局部单测覆盖合法与非法构造，`SecretValue` 不实现 `Debug`/`Serialize`。
+- [x] 2.7 [WP1] 负责人：实现 Agent；依赖：2.6；把 `CreateSessionRequest.workspace_alias` 改为 `workspace: Option<ResolvedWorkspace>`，同步 core 内调用点与既有测试；完成条件：`cargo test -p core` 通过且无遗留的 alias 字段引用。
+- [x] 2.8 [WP2] 负责人：实现 Agent；依赖：2.5、2.6；在 `ports.rs` 增加 `WriteContext`/`PendingAudit` 与全部写集 DTO（`DeviceWrite`/`NodeWrite`/`DeviceRevocation`/`NodeRevocation`/`PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`/`ExpiryWrite`/`ExportWrite`/`ExportRevocation`/`ImportWrite`/`ImportRemoval`/`ProfileWrite`/`WorkspaceWrite`/`ProviderRefWrite`/`SeedWrite`）；完成条件：成员集合与 §5.3 的 ```rust 块逐项相等（`node scripts/check-contract-drift.mjs` 只剩实现侧未完成项）。
+- [x] 2.9 [WP2] 负责人：实现 Agent；依赖：2.8；把 `TrustStore` 换成目标签名（`node(&NodeId, NodeKind)`、`nodes_for`、`peer_key`、`pairing_peer` 与写集写入口）、把 `ExportStore` 换成 `put_export`/`revoke_export`/`add_import`/`remove_import`；完成条件：`cargo check -p core` 通过、签名与 §5.3 一致。
+- [x] 2.10 [WP2] 负责人：实现 Agent；依赖：2.8；新增 `LocalConfigStore`（profile/workspace/provider_ref/seed 读写）与 `CredentialResolver`（`resolve_env` 只返回白名单 ∩ 绑定的变量、失败关闭），并在文档注释中写明不落盘/不进日志的边界；完成条件：§5.3 中两个新 trait 与 `ports.rs` 逐项相等。
+- [x] 2.11 [WP2] 负责人：实现 Agent；依赖：2.9、2.10；更新 `broker.rs` 的测试替身（`FakeTrust`/`FakeExports`/`TestAudit` 与新 `FakeLocalConfig`）以适配新签名，不改变既有测试语义；完成条件：`cargo test -p core` 编译并通过既有用例。
+- [x] 2.12 [WP3] 负责人：实现 Agent；依赖：2.11；把 `UseCases` 的设备/节点/配对/Export/Import 入口改为「一次端口调用 = 一个写集（含审计）」，`remove_import` 撤回为一次 `ImportRemoval`，`broker::port_error_public` 为新增 `ConflictKind`/`UnavailableKind` 取值补显式分支；完成条件：局部测试覆盖「审计写失败 → 状态不落库」与「remove_import 只调用一次写集」。
+- [x] 2.13 [WP3] 负责人：实现 Agent；依赖：2.12；在 `create_session` 内完成 alias → 规范化绝对路径解析（绝对路径 + 存在 + 目录 + `canonicalize`，拒绝相对路径与 `..`），把 `ResolvedWorkspace` 交给 `SessionBackendFactory::create`，路径解析失败返回 `Unavailable(IoError)` 而 Export 未声明返回参数类错误；完成条件：局部测试覆盖成功、未登记别名、已声明但目录缺失三类，且事件/错误不含路径明文。
+- [x] 2.14 [WP4] 负责人：实现 Agent；依赖：2.1；把 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION` 推进到 2，把 §11.7 的管理表与索引追加进 `OWNED_SCHEMA_V1`/`IMPORTED_SCHEMA_V1`（`public_key` 用 BLOB 绑定、`*_json` 空集合写 `[]`）；完成条件：`node scripts/check-contract-drift.mjs` 对 DDL 逐条一致。
+- [x] 2.15 [WP4] 负责人：实现 Agent；依赖：2.5、2.14；用 12-step 表重建给 `owned_audit`/`imported_audit` 的 `action` CHECK 补上五个新取值，保留全部审计行与 `audit_id`（AUTOINCREMENT 序列不回退）并重建索引；完成条件：`enum_coverage.rs` 断言 DDL 字面量与 `AuditAction::ALL` 逐条相等。
+- [x] 2.16 [WP4] 负责人：实现 Agent；依赖：2.14；迁移 v1 的 `imported_import`（去掉 `export_id` 与 `UNIQUE(owner_node_id, export_id)`）并把每个 Export 写进新的 `imported_import_export`（`added_at` 取原 `created_at`），无可信来源的 grants 不补齐（该 Import 保持不可用）；完成条件：迁移用例断言关联行数与「无默认 grants」。
+- [x] 2.17 [WP4] 负责人：实现 Agent；依赖：2.14；把 `migrate()` 改为「读版本 → 版本 < 2 时在同一事务执行 v2 升级 → 写版本 2」，已为 2 时跳过升级以保证第二次打开 `sqlite_master` 文本逐字节不变，失败整体回滚；完成条件：连续两次打开的幂等用例与中途失败回滚用例通过。
+- [x] 2.18 [WP4] 负责人：实现 Agent；依赖：2.16、2.17；生成并提交 `fixtures/storage/v2/{empty,from-v1,too-new}.sqlite3`（`from-v1` 含会话/事件/cursor/幂等/审计数据，`too-new` 的 `user_version = 3`），把 `migration.rs` 测试从 v1 三件套切到 v2 三件套；完成条件：`cargo test -p storage-sqlite --test migration` 通过且夹具可复现（生成方式写入注释或脚本）。
+- [ ] 2.19 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `TrustStore`：设备与节点双角色、配对认领/落定/过期、身份材料（`owned_peer_key`）唯一绑定与撤销覆盖两角色，全部走单事务写集并携带审计；完成条件：新用例覆盖并发认领、拒绝/过期不建信任、双角色指纹一致、已撤销身份不可复活。
+- [ ] 2.20 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `ExportStore`：Export 写集与撤销、Import 管理行 + 关联行一次提交、`remove_import` 删除管理行/关联行/交付索引/命令引用而保留审计，`(owner_node_id, export_id)` 重复归属显式冲突；完成条件：新用例覆盖重复归属、完整移除后审计仍在、连接级 `drop_import` 与完整移除不重叠。
+- [ ] 2.21 [WP6] 负责人：实现 Agent；依赖：1.4、2.11、2.17；实现 `LocalConfigStore`：profile（至多一个默认、切换为一次原子写集）、workspace 记录、Provider 引用（只存字段名/引用/版本、版本递增）、seed 标记与种子同事务提交且重复打开不重导；完成条件：新用例覆盖默认唯一、空种子也标记、重复打开不重导、引用版本推进。
+- [ ] 2.22 [WP6] 负责人：实现 Agent；依赖：2.21；补齐 `StorageError → PortError` 映射（唯一键/条件更新 → `Conflict`、指纹不一致 → `IdentityMismatch`、归属冲突 → `DuplicateOwnership`、`SQLITE_FULL` → `Unavailable(StorageFull)`、完整性失败/宽松权限 → `Corrupt` 只读失败关闭）与 keystore 引用失效的 `Unavailable(KeystoreUnavailable)` 失败关闭路径；完成条件：新用例覆盖损坏库写路径全拒、权限宽松失败关闭、超限拒绝新写入、管理冲突映射不落入通配臂。
+
+## 3. Branch Validation
+
+- [x] 3.1 [WP1] 负责人：实现 Agent；依赖：2.7；执行交付前 project verify：`cargo fmt --all -- --check`、`cargo clippy --locked -p core --all-targets --all-features -- -D warnings`、`cargo test --locked -p core --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp1-core-tests.log`，无失败、无零用例、无全跳过。
+- [ ] 3.2 [WP1] 负责人：独立 reviewer（新隔离上下文，完整读取 `roles/reviewer.md`）；依赖：3.1，可与 3.1 并行；只读检视 WP1 的固定版本 diff（值对象不变量、core 依赖边界、`SecretValue` 边界），修复后由新 reviewer 复核 [RV1]；完成条件：报告写入 `reports/rv1-wp1.md`，无未解决阻断项。
+- [x] 3.3 [WP2 / WP3] 负责人：实现 Agent；依赖：2.13；执行交付前 project verify：`cargo fmt`、`cargo clippy -p core -D warnings`、`cargo test -p core --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp3-core-tests.log`。
+- [ ] 3.4 [WP2 / WP3] 负责人：独立 reviewer；依赖：3.3，可与 3.3 并行；只读检视端口纯度、事务边界、`remove_import` 单次写集、`port_error_public` 显式分支与 workspace 解析不泄漏 [RV1]；完成条件：报告写入 `reports/rv1-wp23.md`，无未解决阻断项。
+- [x] 3.5 [WP4] 负责人：实现 Agent；依赖：2.18；执行交付前 project verify：`cargo fmt`、`cargo clippy -p storage-sqlite -D warnings`、`cargo test -p storage-sqlite --all-features`（含 migration/retention/enum_coverage）[PV4]；完成条件：全部通过且日志写入 `reports/wp4-migration-tests.log`。
+- [ ] 3.6 [WP4] 负责人：独立 reviewer；依赖：3.5，可与 3.5 并行；只读检视 DDL 组织、12-step 重建、Import 拆分迁移、幂等与回滚语义 [RV1]；完成条件：报告写入 `reports/rv1-wp4.md`，无未解决阻断项。
+- [x] 3.7 [WP5] 负责人：实现 Agent；依赖：2.2、2.14；执行 `node scripts/check-contract-drift.mjs` 与 `node scripts/check-crate-boundaries.mjs` [PV2][PV3]；完成条件：两个脚本退出码 0，漂移门禁输出语句条数与 trait/类型计数，依赖闭包与 allow-list 逐项相等，证据写入 `reports/wp5-contract-drift-before-after.md` 与 `reports/wp5-boundaries.log`。
+- [ ] 3.8 [WP5] 负责人：独立 reviewer；依赖：3.7，可与 3.7 并行；只读检视合同并入是否有重复正文、§11 是否仍有将来时、文档引用与 allow-list 名单是否一致 [RV1]；完成条件：报告写入 `reports/rv1-wp5.md`，无未解决阻断项。
+- [ ] 3.9 [WP6] 负责人：实现 Agent；依赖：2.22；执行交付前 project verify：`cargo fmt`、`cargo clippy -p storage-sqlite -D warnings`、`cargo test -p storage-sqlite --all-features`（含新增管理 store 与失败关闭用例）[PV4]；完成条件：全部通过且日志写入 `reports/wp6-admin-store-tests.log`。
+- [ ] 3.10 [WP6] 负责人：独立 reviewer；依赖：3.9，可与 3.9 并行；只读检视写集原子性（状态/引用/审计同事务）、错误映射、失败关闭与 imported 无正文 [RV1]；完成条件：报告写入 `reports/rv1-wp6.md`，无未解决阻断项。
+
+## 5. Integration Readiness
+
+- [ ] 5.1 （仅一次，不随单元复制）负责人：主 Agent；依赖：3.1–3.10；单独创建独立集成 Agent 并显式交接 `roles/integrator.md` 全文、计划与契约、源提交及证据、独立集成 worktree、目标分支与授权边界，记录实际 ID 与上下文方式；完成条件：交接记录在 `verification.md`；缺少独立执行能力时该任务 BLOCKED。
+- [ ] 5.2 [DU1] 负责人：主 Agent；依赖：3.1–3.10；复核该单元预定模式（integrated）与 WP 组成，核对 3.x 的检查与独立 review 证据对当前候选版本仍有效；完成条件：结论写入 `reports/du1-integration.md` 的就绪段；变化先同步计划与依赖。
+
+## 6. Merge Unit
+
+- [ ] 6.1 [DU1] 负责人：主 Agent（机械核实可派发 environment/recon）；依赖：5.2；核实目标仓库与 `refs/heads/main` 当前提交并记录准确引用与核实命令；完成条件：目标提交与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。
+- [ ] 6.2 [DU1] 负责人：集成 Agent；依赖：6.1；基于已核实基线构造本单元候选，固定基线与候选版本，记录组成与构建结果；完成条件：候选提交与构建输出记录在案。
+- [ ] 6.3 [DU1] 负责人：独立检查执行者；依赖：6.2；在候选版本执行 `npm run verify` [PV1]；完成条件：退出码 0 且逐子项结果（`npm run check`、fmt、clippy、`cargo test`）写入 `reports/du1-pv1.log`、`reports/du1-main-verify.log`。
+- [ ] 6.4 [DU1] 负责人：独立 reviewer；依赖：6.2，可与 6.3 并行；只读检视候选新增交互与冲突解决，修复后独立复核 [RV1]；完成条件：报告写入 `reports/rv1-du1.md`，无未解决阻断项。
+- [ ] 6.5 [DU1] 负责人：主 Agent；依赖：6.2；按 not-applicable 路径核对理由、依据与替代检查安排（实际替代验证在 7.1/7.2 完成），确认没有必须运行 E2E 的任务；完成条件：结论写入 `reports/du1-integration.md` 的 E2E 段。
+- [ ] 6.6 [DU1] 负责人：主 Agent（按当前授权）；依赖：6.3、6.4、6.5；确认候选证据完整后以条件更新或串行机制防竞态，在授权范围内合入并记录实际提交；完成条件：实际合入提交记录在 `verification.md`；基线变化时重开受影响候选任务。
+- [ ] 6.7 [DU1] 负责人：独立检查执行者；依赖：6.6；核对实际主分支结果与候选一致性并在 `main` 上重跑 `npm run verify` [PV1]；完成条件：主分支日志写入 `reports/du1-main-verify.log`，有效复用逐项记录原证据与适用性。
+- [ ] 6.8 [DU1] 负责人：独立 reviewer；依赖：6.6，可与 6.7 并行；独立检视合并新增差异；无新增差异时由主 Agent 记录依据与原 review ID [RV1]；完成条件：结论记录在 `reports/rv1-du1.md` 的复核段。
+
+## 7. Final E2E
+
+- [ ] 7.1 全变更；负责人：主 Agent（not-applicable 的替代验证）；依赖：6.7、6.8；在最终主分支固定版本执行替代验证：`cargo test --locked -p core -p storage-sqlite --all-features` [PV4]、`npm run verify` [PV1]、`node scripts/check-contract-drift.mjs` [PV2]、并用 `fixtures/storage/v2/from-v1.sqlite3` 重放 v1→v2 升级并以行数/序号/`audit_id` 断言保留性；完成条件：逐项命令、版本、输出与断言写入 `reports/alt-final-verification.md`。
+- [ ] 7.2 全变更；负责人：主 Agent；依赖：7.1；汇总替代验证的全部断言、版本与证据，核对覆盖了 not-applicable 的 `alternative_checks` 四项与资源清理（临时目录、夹具只读）；完成条件：汇总与清理结论写入 `reports/alt-final-verification.md` 的汇总段。
+- [ ] 7.3 [e2e-owned] 全变更；负责人：扩展；依赖：7.2；运行 `npx --quiet --no-install openspec-agentic e2e check --change admin-state-persistence-v2`，仅 PASS 自动勾选；此行只确认不适用判据已按计划固化，不执行测试或汇总。
+
+## 8. Final Verification
+
+- [ ] 8.1 [final-verification] 负责人：主 Agent；依赖：7.3；按 `.agents/skills/agentic-verify/SKILL.md`（无 skill 发现能力时读 `openspec/schemas/agentic/procedures/acceptance.md`）执行最终验收，核对用户意图、需求、设计、计划、任务与最终主分支证据；在 `verification.md` 记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change admin-state-persistence-v2 --stage final --json`；完成条件：验收结论为 PASS 且该检查 PASS；其余任务未完成或存在未闭环 FAIL/BLOCKED 时不得完成。

@@ -16,7 +16,7 @@
 - [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)：系统威胁模型、信任边界、授权、数据保护、供应链和安全验收的权威来源。
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
 - [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)：Daemon 配置键名、类型、默认值与可否调整的唯一权威来源；协议层限额仍以 Sync、Node Link 两份协议文档为准。
-- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v1 表结构/保留/migration 的唯一权威来源；§11.5–§11.8 是实现前的目标形状（实现变更必须把它们并入 §5/§7 并让漂移门禁断言）。
+- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v2 表结构/保留/migration 的唯一权威来源；管理状态（配对/信任/Export/Import/本地配置）的形状已并入 §3.5–§3.7/§5/§7 并由合同漂移门禁逐条断言，§11 只保留设计理由与索引。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
 另见 `README.md` 的「权威文档」表（同一批文档的一览）。
@@ -221,7 +221,7 @@ bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上�
 规则集开了 `strict_required_status_checks_policy`，因此 PR 需要先合入最新 main 再跑一轮才能合并——
 “PR 绿了”与“合并后 main 仍绿”是同一件事。
 
-提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板（[`.pi/prompts/commit.md`](.pi/prompts/commit.md)，随仓库提交）生成并落地提交信息：它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
+提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板生成并落地提交信息：Oh My Pi 读 [`.omp/commands/commit.md`](.omp/commands/commit.md)，Pi CLI 读 [`.pi/prompts/commit.md`](.pi/prompts/commit.md)，两份随仓库提交且正文必须保持一致（改一处必须改另一处）；它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
 
 本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
 
@@ -283,7 +283,7 @@ cargo test --locked --workspace --all-features
 - Node Link wire/资产变更：更新 `docs/NODE_LINK_PROTOCOL.md` + `schemas/node-link/v1/` + `fixtures/node-link/v1/`，并运行 `npm run check`。
 - Sync wire/资产变更：更新 `docs/SYNC_PROTOCOL.md` + `schemas/sync/v1/` + `fixtures/sync/v1/`，并运行 `npm run check`。
 - feature ID 或 feature 词表变化：更新 `compatibility/features/v1/features.json`、`docs/SYNC_PROTOCOL.md` §5.2 与 `docs/NODE_LINK_PROTOCOL.md` §11.3 的表格、以及相应 fixture，并运行 `npm run check`。
-- core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述；管理状态（配对/信任/Export/Import/本地配置）的目标形状与实现前收口在 §11.5–§11.8，实现变更必须同时把它们并入 §5/§7。
+- core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述；管理状态（配对/信任/Export/Import/本地配置）的形状已并入该文档 §3.5–§3.7/§5/§7，端口或 DDL 变化必须同时更新 §5/§7 并让合同漂移门禁通过（§11 只保留设计理由与索引）。
 - 设备/节点配对状态机、握手入口、授权展开、nonce/重放规则或 keystore 端口变化：更新 `docs/IDENTITY_AND_AUTH_CONTRACT.md`；涉及 wire 时同时更新对应协议的配对/认证章节与 fixture。
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
@@ -317,7 +317,7 @@ agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`
 
 本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §10。
 
-- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合），由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
+- `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`（`hmac`/`base64` 属协议与身份边界，不在 core）。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
 
@@ -326,7 +326,7 @@ agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`
 本节是 agentic 扩展写入的验收路由，标题与位置由 `check:agentic` 断言，不要改动或删除。
 
 本项目的 agentic 变更使用 [.agents/skills/agentic-verify/SKILL.md](.agents/skills/agentic-verify/SKILL.md)
-作为最终验收入口。执行 `/opsx:verify`、最终验收或归档前检查时，先读取该 skill；
+作为最终验收入口。执行 `/opsx-verify`、最终验收或归档前检查时，先读取该 skill；
 其他 schema 沿用自身流程。宿主没有 skill 发现能力时，也应直接读取该文件。
 
 OpenSpec 流程中的 CLI 状态 `all_done` 只表示任务复选框完成。收到该状态后，若要报告 agentic 变更

@@ -17,20 +17,26 @@ use std::sync::Arc;
 
 use crate::broker::{Broker, Denied, command_name};
 use crate::model::{
-    Actor, AgentDescriptor, AgentRef, AttachmentGeneration, AttachmentId, AuditAction,
-    AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind, CommandReceipt,
-    CommandRecord, ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId,
-    DeviceRecord, ElicitationAction, ElicitationValues, EntityRef, ExportId, ExportRecord,
-    GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution, LocalCursor,
-    ModeId, ModeState, NodeId, NodeRecord, OwnedSessionRef, PairingClaim, PairingId, PairingRecord,
-    PairingSettlement, PortError, RequestId, Resolution, Sequence, SessionId, SessionReference,
-    SessionSummary, Timestamp, Version,
+    Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
+    AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind,
+    CommandReceipt, CommandRecord, ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest,
+    DeviceId, DeviceRecord, ElicitationAction, ElicitationValues, EntityRef, ExportId,
+    ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
+    LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, OwnedSessionRef, PairingClaim,
+    PairingId, PairingRecord, PairingSettlement, PeerIdentity, PeerPublicKey, PortError,
+    ProviderRef, RequestId, Resolution, ResolvedWorkspace, SeedState, Sequence, SessionId,
+    SessionReference, SessionSummary, Timestamp, UnavailableKind, Version, WorkspaceAlias,
+    WorkspaceRecord,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
-    DeliveryIndexEntry, ExportStore, HistoryPage, HistoryQuery, IdGenerator, PairingClaimOutcome,
+    DeliveryIndexEntry, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
+    ExportWrite, HistoryPage, HistoryQuery, IdGenerator, ImportRemoval, ImportWrite,
+    LocalConfigStore, NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite,
+    PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
     PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
-    SessionQuery, SessionStore, StoreHealth, TrustRecordRef, TrustStore,
+    SeedWrite, SessionQuery, SessionStore, StoreHealth, TrustRecordRef, TrustStore, WorkspaceWrite,
+    WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -48,6 +54,7 @@ pub struct UseCases {
     exports: Arc<dyn ExportStore>,
     trust: Arc<dyn TrustStore>,
     audit: Arc<dyn AuditStore>,
+    config: Arc<dyn LocalConfigStore>,
     attachments: Arc<dyn AttachmentStore>,
     catalog: Arc<dyn AgentCatalog>,
     clock: Arc<dyn Clock>,
@@ -62,6 +69,7 @@ pub struct UseCaseDeps {
     pub exports: Arc<dyn ExportStore>,
     pub trust: Arc<dyn TrustStore>,
     pub audit: Arc<dyn AuditStore>,
+    pub config: Arc<dyn LocalConfigStore>,
     pub attachments: Arc<dyn AttachmentStore>,
     pub catalog: Arc<dyn AgentCatalog>,
     pub clock: Arc<dyn Clock>,
@@ -77,6 +85,7 @@ impl UseCases {
             exports: deps.exports,
             trust: deps.trust,
             audit: deps.audit,
+            config: deps.config,
             attachments: deps.attachments,
             catalog: deps.catalog,
             clock: deps.clock,
@@ -113,12 +122,31 @@ impl UseCases {
         self.broker.submit_mutation(actor, &command).await
     }
 
-    /// `session.create`（Node Link，§12.7）：创建 owned 会话并打开其后端端点。
+    /// `session.create`（Node Link，§12.7）：先把 workspace 别名解析成本机规范化绝对路径，
+    /// 再创建 owned 会话并打开其后端端点（§11.9）。
+    ///
+    /// `workspace_alias` 是该请求在 Export 中声明的别名——「是否在该 Export 的别名集合内」由
+    /// `server::node_link` 校验（`nodelink.export.not_granted`，参数类）；本层只负责本机解析：
+    /// 已声明但本机解析失败 MUST 返回 [`UnavailableKind::IoError`]，**不得**降级为参数错误。
+    ///
+    /// UNC/网络路径允许使用；core 不持日志设施，因此「网络路径」的结构化警告由接入层在解析成功
+    /// 后记录，本层不因它改变授权模型（`design.md` D6）。
     pub async fn create_session(
         &self,
         actor: &Actor,
-        request: CreateSessionRequest,
+        mut request: CreateSessionRequest,
+        workspace_alias: Option<WorkspaceAlias>,
     ) -> Result<SessionId, PortError> {
+        if let Some(alias) = workspace_alias {
+            let record = self
+                .config
+                .workspace(&alias)
+                .await?
+                .ok_or(PortError::InvalidRequest(
+                    "workspace alias is not registered on this node",
+                ))?;
+            request.workspace = Some(resolve_workspace(&alias, record.canonical_path())?);
+        }
         self.broker.create_session(actor, request).await
     }
 
@@ -384,26 +412,42 @@ impl UseCases {
         self.trust.device(id).await
     }
 
-    pub async fn upsert_device(
-        &self,
-        actor: &Actor,
-        record: DeviceRecord,
-    ) -> Result<(), PortError> {
+    /// 写入设备记录（`device.add` 与身份层共用）：状态与审计同一事务（§11.2 第 6 条）。
+    ///
+    /// 只有「已存行的 scopes 发生变化」才写 `device.scopes_changed`：没有登记「设备新建」类安全动作，
+    /// 由配对确认路径负责写 `pairing.approved`。
+    pub async fn put_device(&self, actor: &Actor, record: DeviceRecord) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        self.trust.upsert_device(record, at).await
+        let existing = self.trust.device(record.device_id()).await?;
+        let audits = match &existing {
+            Some(old) if old.scopes() != record.scopes() => vec![self.pending_audit(
+                actor,
+                AuditAction::DeviceScopesChanged,
+                k_device(record.device_id()),
+            )],
+            _ => Vec::new(),
+        };
+        self.trust
+            .put_device(DeviceWrite {
+                record,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
-    /// `device.revoke`（`LOCAL_ADMIN_PROTOCOL.md` §5.3）：撤销 + 按 §3.5 记审计。
+    /// `device.revoke`（`LOCAL_ADMIN_PROTOCOL.md` §5.3）：撤销与审计同一事务；提交后才由组合根关连接。
     pub async fn revoke_device(&self, actor: &Actor, id: &DeviceId) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
+        let audits = vec![self.pending_audit(actor, AuditAction::DeviceRevoked, k_device(id))];
         self.trust
-            .revoke_device(id, at.clone(), RevokeReason::UserRequested)
-            .await?;
-        self.audit_action(actor, AuditAction::DeviceRevoked, k_device(id), &at)
-            .await;
-        Ok(())
+            .revoke_device(DeviceRevocation {
+                device: id.clone(),
+                reason: RevokeReason::UserRequested,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
     pub async fn nodes(&self, actor: &Actor) -> Result<Vec<NodeRecord>, PortError> {
@@ -411,42 +455,88 @@ impl UseCases {
         self.trust.nodes().await
     }
 
-    pub async fn node(&self, actor: &Actor, id: &NodeId) -> Result<Option<NodeRecord>, PortError> {
+    /// 按 `(NodeId, NodeKind)` 取行；禁止「找不到就取第一行」（§11.5）。
+    pub async fn node(
+        &self,
+        actor: &Actor,
+        id: &NodeId,
+        kind: NodeKind,
+    ) -> Result<Option<NodeRecord>, PortError> {
         self.require_local(actor)?;
-        self.trust.node(id).await
+        self.trust.node(id, kind).await
     }
 
-    pub async fn upsert_node(&self, actor: &Actor, record: NodeRecord) -> Result<(), PortError> {
+    /// 该对端的全部角色行。
+    pub async fn nodes_for(
+        &self,
+        actor: &Actor,
+        id: &NodeId,
+    ) -> Result<Vec<NodeRecord>, PortError> {
         self.require_local(actor)?;
-        let at = self.clock.now();
-        self.trust.upsert_node(record, at).await
+        self.trust.nodes_for(id).await
     }
 
-    /// `node.revoke`（`LOCAL_ADMIN_PROTOCOL.md` §5.4）。
-    pub async fn revoke_node(&self, actor: &Actor, id: &NodeId) -> Result<(), PortError> {
+    /// 已绑定的身份材料（验签公钥的唯一来源）。
+    pub async fn peer_key(
+        &self,
+        actor: &Actor,
+        peer: &PeerIdentity,
+    ) -> Result<Option<PeerPublicKey>, PortError> {
+        self.require_local(actor)?;
+        self.trust.peer_key(peer).await
+    }
+
+    /// 写入节点角色行与身份材料；配对确认路径负责写 `node.paired`（§11.6 第 2 条）。
+    pub async fn put_node(
+        &self,
+        actor: &Actor,
+        record: NodeRecord,
+        public_key: PeerPublicKey,
+    ) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
         self.trust
-            .revoke_node(id, at.clone(), RevokeReason::UserRequested)
-            .await?;
-        self.audit_action(actor, AuditAction::NodeTrustRevoked, k_node(id), &at)
-            .await;
-        Ok(())
+            .put_node(NodeWrite {
+                record,
+                public_key,
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
+            })
+            .await
     }
 
-    /// `device.pair.begin` / `node.pair.begin`：登记一次性配对。
+    /// `node.revoke`（`LOCAL_ADMIN_PROTOCOL.md` §5.4）：按 NodeId 撤销，覆盖两种角色。
+    pub async fn revoke_node(&self, actor: &Actor, id: &NodeId) -> Result<(), PortError> {
+        self.require_local(actor)?;
+        let at = self.clock.now();
+        let audits = vec![self.pending_audit(actor, AuditAction::NodeTrustRevoked, k_node(id))];
+        self.trust
+            .revoke_node(NodeRevocation {
+                node: id.clone(),
+                reason: RevokeReason::UserRequested,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
+    }
+
+    /// `device.pair.begin` / `node.pair.begin`：登记一次性配对（状态 + 审计同一事务）。
     pub async fn create_pairing(
         &self,
         actor: &Actor,
         pairing: PairingRecord,
     ) -> Result<(), PortError> {
         self.require_local(actor)?;
-        let target = k_pairing(&pairing);
-        self.trust.create_pairing(pairing).await?;
         let at = self.clock.now();
-        self.audit_action(actor, AuditAction::PairingCreated, target, &at)
-            .await;
-        Ok(())
+        let audits =
+            vec![self.pending_audit(actor, AuditAction::PairingCreated, k_pairing(&pairing))];
+        self.trust
+            .create_pairing(PairingWrite {
+                record: pairing,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
     /// 原子认领（HMAC 由调用方验证，`SYNC_PROTOCOL.md` §7.2）。
@@ -457,15 +547,14 @@ impl UseCases {
     ) -> Result<PairingClaimOutcome, PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        let outcome = self.trust.claim_pairing(claim, at.clone()).await?;
-        self.audit_action(
-            actor,
-            AuditAction::PairingClaimed,
-            k_pairing(&outcome.pairing),
-            &at,
-        )
-        .await;
-        Ok(outcome)
+        let target = EntityRef::Pairing(claim.pairing().clone());
+        let audits = vec![self.pending_audit(actor, AuditAction::PairingClaimed, target)];
+        self.trust
+            .claim_pairing(PairingClaimWrite {
+                claim,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
     pub async fn pairing(
@@ -477,7 +566,17 @@ impl UseCases {
         self.trust.pairing(id).await
     }
 
-    /// `device.pair.confirm` / `node.pair.confirm`：落定并创建信任记录。
+    /// 已认领的对端行（读回公钥是确认事务的前置输入，§11.5）。
+    pub async fn pairing_peer(
+        &self,
+        actor: &Actor,
+        id: &PairingId,
+    ) -> Result<Option<crate::model::PairingPeer>, PortError> {
+        self.require_local(actor)?;
+        self.trust.pairing_peer(id).await
+    }
+
+    /// `device.pair.confirm` / `node.pair.confirm`：落定并创建信任记录；批准与拒绝各自的审计与状态同事务。
     pub async fn settle_pairing(
         &self,
         actor: &Actor,
@@ -485,24 +584,35 @@ impl UseCases {
         settlement: PairingSettlement,
     ) -> Result<TrustRecordRef, PortError> {
         self.require_local(actor)?;
+        settlement.validate().map_err(PortError::from)?;
         let at = self.clock.now();
-        let settled = self
-            .trust
-            .settle_pairing(id, settlement, at.clone())
-            .await?;
-        let target = match &settled {
-            TrustRecordRef::Device(device) => k_device(device),
-            TrustRecordRef::Node(node) => k_node(node),
+        let action = if settlement.is_approved() {
+            AuditAction::PairingApproved
+        } else {
+            AuditAction::PairingRejected
         };
-        self.audit_action(actor, AuditAction::PairingApproved, target, &at)
-            .await;
-        Ok(settled)
+        let audits = vec![self.pending_audit(actor, action, EntityRef::Pairing(id.clone()))];
+        self.trust
+            .settle_pairing(PairingSettlementWrite {
+                pairing: id.clone(),
+                settlement,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
+    /// 过期扫描：`pairing.expired` 由存储层为每条被终结的配对写入（actor 取 `context.audit` 首条）。
     pub async fn expire_pairings(&self, actor: &Actor) -> Result<u64, PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        self.trust.expire_pairings(at).await
+        self.trust
+            .expire_pairings(ExpiryWrite {
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
+            })
+            .await
     }
 
     pub async fn exports(&self, actor: &Actor) -> Result<Vec<ExportRecord>, PortError> {
@@ -519,21 +629,35 @@ impl UseCases {
         self.exports.export(id).await
     }
 
-    pub async fn upsert_export(
-        &self,
-        actor: &Actor,
-        export: ExportRecord,
-    ) -> Result<(), PortError> {
+    /// `export.create`/`export.update`：Export 与 `export.created` 审计同一事务。
+    pub async fn put_export(&self, actor: &Actor, export: ExportRecord) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        self.exports.upsert_export(export, at).await
+        let target = EntityRef::Export(export.export_id().clone());
+        let audits = vec![self.pending_audit(actor, AuditAction::ExportCreated, target)];
+        self.exports
+            .put_export(ExportWrite {
+                record: export,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
-    /// `export.revoke`（`LOCAL_ADMIN_PROTOCOL.md` §5.5）：立即拒绝该 Export 的新命令与订阅。
+    /// `export.revoke`（`LOCAL_ADMIN_PROTOCOL.md` §5.5）：先提交再发送 `export.revoked`（发送属组合根）。
     pub async fn revoke_export(&self, actor: &Actor, id: &ExportId) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        self.exports.revoke_export(id, at).await
+        let audits = vec![self.pending_audit(
+            actor,
+            AuditAction::ExportRevoked,
+            EntityRef::Export(id.clone()),
+        )];
+        self.exports
+            .revoke_export(ExportRevocation {
+                export: id.clone(),
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
     pub async fn imports(&self, actor: &Actor) -> Result<Vec<ImportRecord>, PortError> {
@@ -550,23 +674,173 @@ impl UseCases {
         self.exports.import(id).await
     }
 
-    pub async fn upsert_import(
-        &self,
-        actor: &Actor,
-        import: ImportRecord,
-    ) -> Result<(), PortError> {
+    /// `import.add`：管理行与全部关联行一次提交（§11.2 第 5 条）。
+    pub async fn add_import(&self, actor: &Actor, record: ImportRecord) -> Result<(), PortError> {
         self.require_local(actor)?;
+        if record.export_ids().is_empty() {
+            return Err(PortError::InvalidRequest("import 必须关联至少一个 export"));
+        }
         let at = self.clock.now();
-        self.exports.upsert_import(import, at).await
+        let exports = record.export_ids().to_vec();
+        let audits = vec![self.pending_audit(
+            actor,
+            AuditAction::ImportAdded,
+            EntityRef::Import(record.import_id().clone()),
+        )];
+        self.exports
+            .add_import(ImportWrite {
+                record,
+                exports,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
-    /// `import.remove`：删本地 Import 引用；交付索引与命令引用由
-    /// [`crate::ports::RemoteDeliveryStore::drop_import`] 清掉，审计行保留。
+    /// `import.remove`：一次调用完成完整移除（管理行 + 关联行 + 交付索引 + 命令引用），审计保留。
+    ///
+    /// 撤回 v0.6 以前「先 `drop_import` 再 `remove_import`」的两次调用：那要么暴露中间态，
+    /// 要么留下 `imported_session` 残留（§11.6）。
     pub async fn remove_import(&self, actor: &Actor, id: &ImportId) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        self.deliveries.drop_import(id).await?;
-        self.exports.remove_import(id, at).await
+        let audits = vec![self.pending_audit(
+            actor,
+            AuditAction::ImportRemoved,
+            EntityRef::Import(id.clone()),
+        )];
+        self.exports
+            .remove_import(ImportRemoval {
+                import: id.clone(),
+                context: WriteContext { at, audit: audits },
+            })
+            .await
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 本地配置（§11.6 的 LocalConfigStore）
+    // ---------------------------------------------------------------------------------------
+
+    /// `agent.list`：本地 Agent profile。
+    pub async fn profiles(&self, actor: &Actor) -> Result<Vec<AgentProfile>, PortError> {
+        self.require_local(actor)?;
+        self.config.profiles().await
+    }
+
+    pub async fn profile(
+        &self,
+        actor: &Actor,
+        id: &AgentId,
+    ) -> Result<Option<AgentProfile>, PortError> {
+        self.require_local(actor)?;
+        self.config.profile(id).await
+    }
+
+    /// `agent.configure`：写入 profile；切换默认是同一写集（至多一个默认，§11.7 的部分唯一索引）。
+    ///
+    /// `agent.configure` 不是已登记的安全动作（其凭据经 `provider.configure` 登记），因此审计留空。
+    pub async fn put_profile(&self, actor: &Actor, profile: AgentProfile) -> Result<(), PortError> {
+        self.require_local(actor)?;
+        let at = self.clock.now();
+        self.config
+            .put_profile(ProfileWrite {
+                profile,
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
+            })
+            .await
+    }
+
+    /// `workspace.list`：本机 workspace 记录（路径不进 Node Link catalog）。
+    pub async fn workspaces(&self, actor: &Actor) -> Result<Vec<WorkspaceRecord>, PortError> {
+        self.require_local(actor)?;
+        self.config.workspaces().await
+    }
+
+    pub async fn workspace(
+        &self,
+        actor: &Actor,
+        alias: &WorkspaceAlias,
+    ) -> Result<Option<WorkspaceRecord>, PortError> {
+        self.require_local(actor)?;
+        self.config.workspace(alias).await
+    }
+
+    /// `workspace.select`：不是已登记的安全动作，因此审计留空（§11.6）。
+    pub async fn put_workspace(
+        &self,
+        actor: &Actor,
+        record: WorkspaceRecord,
+    ) -> Result<(), PortError> {
+        self.require_local(actor)?;
+        let at = self.clock.now();
+        self.config
+            .put_workspace(WorkspaceWrite {
+                record,
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
+            })
+            .await
+    }
+
+    /// `provider.list`：只有字段名、引用与版本，没有凭据值。
+    pub async fn provider_refs(&self, actor: &Actor) -> Result<Vec<ProviderRef>, PortError> {
+        self.require_local(actor)?;
+        self.config.provider_refs().await
+    }
+
+    /// `provider.configure`：已登记的安全动作，写集必须带 `provider.configured` 审计（§11.6）。
+    pub async fn put_provider_ref(
+        &self,
+        actor: &Actor,
+        reference: ProviderRef,
+    ) -> Result<(), PortError> {
+        self.require_local(actor)?;
+        let at = self.clock.now();
+        // `EntityRef` 没有 Provider 变体时无法表达审计目标；本变更新增 `EntityRef::Provider`
+        // （§3.1/§11.6），target 指向 Provider 引用 id，摘要仍由 `detail_digest` 承载。
+        let target = EntityRef::Provider(reference.id().to_owned());
+        let audits = vec![self.pending_audit(actor, AuditAction::ProviderConfigured, target)];
+        self.config
+            .put_provider_ref(ProviderRefWrite {
+                reference,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
+    }
+
+    /// 首次初始化状态（`CONFIG_REFERENCE.md` 的「配置与管理状态的权威」）。
+    pub async fn seed_state(&self, actor: &Actor) -> Result<SeedState, PortError> {
+        self.require_local(actor)?;
+        self.config.seed_state().await
+    }
+
+    /// 种子导入与「已初始化」标记同一事务提交（空种子也写标记）。
+    pub async fn mark_seeded(
+        &self,
+        actor: &Actor,
+        profiles: Vec<AgentProfile>,
+    ) -> Result<(), PortError> {
+        self.require_local(actor)?;
+        let at = self.clock.now();
+        self.config
+            .mark_seeded(SeedWrite {
+                profiles,
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
+            })
+            .await
+    }
+
+    /// 交付索引存储：`import.remove` 的完整移除走 [`ExportStore::remove_import`]，而连接级清空
+    /// （[`RemoteDeliveryStore::drop_import`]）仍由接入层直接调用——两者不是同一件事（§11.6）。
+    pub fn deliveries(&self) -> &Arc<dyn RemoteDeliveryStore> {
+        &self.deliveries
     }
 
     pub async fn audit(
@@ -657,6 +931,27 @@ impl UseCases {
         }
     }
 
+    /// 写集用的待写审计行：成功结果、首个 `at` 由 [`WriteContext`] 提供。
+    fn pending_audit(&self, actor: &Actor, action: AuditAction, target: EntityRef) -> PendingAudit {
+        let via_node = match actor {
+            Actor::Node { node, .. } => Some(node.clone()),
+            _ => None,
+        };
+        PendingAudit {
+            action,
+            actor: actor.clone(),
+            via_node,
+            local_principal_ref: None,
+            target,
+            outcome: AuditOutcome::Success,
+            detail_digest: None,
+        }
+    }
+
+    /// 独立追加一条审计（没有关联状态变更的场合，§11.2 第 6 条）。
+    ///
+    /// 管理写集不再用它：审计随 `WriteContext` 与状态同事务提交（§11.6）。
+    #[allow(dead_code)] // 保留给尚无关联状态变更的审计入口，后续 server 适配器使用
     async fn audit_action(
         &self,
         actor: &Actor,
@@ -664,19 +959,16 @@ impl UseCases {
         target: EntityRef,
         at: &Timestamp,
     ) {
-        let via_node = match actor {
-            Actor::Node { node, .. } => Some(node.clone()),
-            _ => None,
-        };
+        let pending = self.pending_audit(actor, action, target);
         let record = AuditRecord::try_new(
             at.clone(),
-            action,
-            actor.clone(),
-            via_node,
-            None,
-            target,
-            AuditOutcome::Success,
-            None,
+            pending.action,
+            pending.actor,
+            pending.via_node,
+            pending.local_principal_ref,
+            pending.target,
+            pending.outcome,
+            pending.detail_digest,
         );
         if let Ok(record) = record {
             let _ = self.audit.append(record).await;
@@ -705,15 +997,39 @@ fn k_pairing(pairing: &PairingRecord) -> EntityRef {
     EntityRef::Pairing(pairing.id().clone())
 }
 
+/// alias → 规范化本机绝对路径（§11.9）。
+///
+/// 只接受绝对路径、存在且为目录的输入，并以 `canonicalize` 的结果（解析 symlink/junction/大小写/
+/// `.`与`..`）作为权威值；相对路径与含 `..` 组件的输入一律拒绝。任一失败都属于「本机配置问题」，
+/// 统一返回 [`UnavailableKind::IoError`]。
+fn resolve_workspace(alias: &WorkspaceAlias, path: &str) -> Result<ResolvedWorkspace, PortError> {
+    let io = || PortError::Unavailable(UnavailableKind::IoError);
+    let candidate = std::path::Path::new(path);
+    if !candidate.is_absolute()
+        || candidate
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(io());
+    }
+    let metadata = std::fs::metadata(candidate).map_err(|_| io())?;
+    if !metadata.is_dir() {
+        return Err(io());
+    }
+    let canonical = std::fs::canonicalize(candidate).map_err(|_| io())?;
+    let text = canonical.to_str().ok_or_else(io)?;
+    ResolvedWorkspace::try_new(alias.clone(), text.to_owned()).map_err(PortError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use super::*;
     use crate::broker::test_support::{
-        FakeAttachments, FakeDeliveries, FakeExports, FakeStore, FakeTrust, FakeWorld, TestAudit,
-        TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest, prompt_command,
-        uuid_text,
+        FakeAttachments, FakeDeliveries, FakeExports, FakeLocalConfig, FakeStore, FakeTrust,
+        FakeWorld, TestAudit, TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest,
+        prompt_command, uuid_text,
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{AgentId, AgentRef, CommandKind, CommandPayload, ResourceOrigin, ScopeSet};
@@ -785,8 +1101,13 @@ mod tests {
             exports: Arc::new(FakeExports {
                 world: world.clone(),
             }),
-            trust: Arc::new(FakeTrust),
+            trust: Arc::new(FakeTrust {
+                world: world.clone(),
+            }),
             audit: Arc::new(TestAudit {
+                world: world.clone(),
+            }),
+            config: Arc::new(FakeLocalConfig {
                 world: world.clone(),
             }),
             attachments: Arc::new(FakeAttachments {
@@ -932,5 +1253,146 @@ mod tests {
         };
         let hidden = block_on(fixture.use_cases.command_status(&other, request)).expect_err("拒绝");
         assert!(matches!(hidden, PortError::InvalidRequest(_)));
+    }
+
+    /// §11.9：别名 → 规范化绝对路径；相对路径、含 `..` 的输入、不存在路径与非目录一律 `IoError`。
+    #[test]
+    fn workspace_resolution_canonicalizes_and_rejects_invalid_inputs() {
+        let alias = WorkspaceAlias::new("repo").expect("alias");
+        let root = std::env::temp_dir().join(format!("acpr-ws-{}", uuid_text(11)));
+        std::fs::create_dir_all(&root).expect("create dir");
+        let resolved = resolve_workspace(&alias, root.to_str().expect("path")).expect("resolve");
+        assert_eq!(resolved.alias(), &alias);
+        assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());
+
+        let file = root.join("notes.txt");
+        std::fs::write(&file, b"x").expect("write file");
+        assert!(matches!(
+            resolve_workspace(&alias, file.to_str().expect("path")),
+            Err(PortError::Unavailable(UnavailableKind::IoError))
+        ));
+        assert!(matches!(
+            resolve_workspace(&alias, "relative/path"),
+            Err(PortError::Unavailable(UnavailableKind::IoError))
+        ));
+        let separator = std::path::MAIN_SEPARATOR;
+        let mut dotted = root.to_str().expect("path").to_owned();
+        dotted.push(separator);
+        dotted.push_str("..");
+        dotted.push(separator);
+        dotted.push('x');
+        assert!(matches!(
+            resolve_workspace(&alias, &dotted),
+            Err(PortError::Unavailable(UnavailableKind::IoError))
+        ));
+        let missing = root.join("gone");
+        assert!(matches!(
+            resolve_workspace(&alias, missing.to_str().expect("path")),
+            Err(PortError::Unavailable(UnavailableKind::IoError))
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn create_request() -> CreateSessionRequest {
+        CreateSessionRequest::new(
+            crate::model::AgentRef::try_new(
+                crate::model::AgentId::new("codex").expect("agent id"),
+                "Codex CLI",
+            )
+            .expect("agent ref"),
+            None,
+            None,
+            ResourceOrigin::Local,
+        )
+    }
+
+    /// §11.9：未登记的别名是参数类错误，且不得触达后端。
+    #[test]
+    fn create_session_rejects_unregistered_workspace_alias() {
+        let fixture = fixture();
+        let error = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_request(),
+            Some(WorkspaceAlias::new("ghost").expect("alias")),
+        ))
+        .expect_err("unregistered alias must be rejected");
+        assert!(matches!(error, PortError::InvalidRequest(_)));
+    }
+
+    /// §11.9：已登记但本机解析失败是 `Unavailable(IoError)`，**不得**降级为参数错误。
+    #[test]
+    fn create_session_reports_local_resolution_failure_as_unavailable() {
+        let fixture = fixture();
+        let alias = WorkspaceAlias::new("ghost").expect("alias");
+        let missing = std::env::temp_dir().join(format!("acpr-missing-{}", uuid_text(12)));
+        let record = WorkspaceRecord::try_new(
+            alias.clone(),
+            "Ghost",
+            missing.to_str().expect("path"),
+            crate::broker::test_support::ts(0),
+            crate::broker::test_support::ts(0),
+        )
+        .expect("workspace record");
+        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+
+        let error = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_request(),
+            Some(alias),
+        ))
+        .expect_err("a missing workspace directory must fail");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+    }
+
+    /// §11.6：`import.remove` 只走一次写集（管理行 + 关联行 + 交付索引 + 命令引用），
+    /// 不再串联 `drop_import`；审计随写集提交。
+    #[test]
+    fn remove_import_is_one_atomic_write_set_with_audit() {
+        let fixture = fixture();
+        let import = ImportId::new("remote-a").expect("import id");
+        let record = ImportRecord::try_new(
+            import.clone(),
+            "wss://owner.example/acp",
+            NodeId::new(&uuid_text(21)).expect("node"),
+            vec![ExportId::new("exp-a").expect("export")],
+            crate::model::GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+        )
+        .expect("import record");
+        block_on(fixture.use_cases.add_import(&Actor::LocalCli, record)).expect("add import");
+
+        block_on(fixture.use_cases.remove_import(&Actor::LocalCli, &import)).expect("remove");
+
+        assert_eq!(
+            fixture
+                .world
+                .drop_import_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "完整移除不得串联连接级 drop_import"
+        );
+        assert!(
+            fixture.world.imports.lock().expect("lock").is_empty(),
+            "管理行必须被删除"
+        );
+        assert_eq!(
+            *fixture.world.write_audits.lock().expect("lock"),
+            vec![AuditAction::ImportAdded, AuditAction::ImportRemoved],
+            "两条写集各自携带自己的审计"
+        );
+    }
+
+    /// §11.6：撤销设备时审计与状态同一写集（不再是「先写状态再补审计」）。
+    #[test]
+    fn revoke_device_carries_its_audit_in_the_write_set() {
+        let fixture = fixture();
+        let device = DeviceId::new(&uuid_text(31)).expect("device");
+        block_on(fixture.use_cases.revoke_device(&Actor::LocalCli, &device)).expect("revoke");
+        assert_eq!(
+            *fixture.world.write_audits.lock().expect("lock"),
+            vec![AuditAction::DeviceRevoked]
+        );
     }
 }

@@ -1,0 +1,55 @@
+# W0 · npm run check（十道合同门禁）
+
+工作目录：D:/Project/acp-remote
+Node：v24.19.0
+命令：`npm run check`（= check:schemas && check:commands && check:errors && check:features && check:assets && check:acp && check:docs && check:boundaries && check:drift && check:agentic）
+
+退出码：0
+
+```text
+schema fixtures OK: 117 valid, 23 invalid (ajv Draft 2020-12), 39 event views bound
+command catalog OK: 12 commands
+error registry OK: 58 codes across 2 protocols
+feature registry OK: 11 feature ids across 2 protocols
+contract assets OK: 17 schemas, 155 fixture files, 12 transcript vectors re-encoded from input, 20 negative vectors rejected as declared, 2 SAS values recomputed
+ACP compatibility matrix OK: 25 methods, 11 updates, 5 content blocks, 3 tool content types, 19 capabilities, 8 invariants, 10 test families (71 rows, schema validated by ajv)
+doc links OK: 366 relative links, 1326 section refs across 95 markdown files
+note: 366 section refs 的归属文档由上下文决定（未在同一子句内指名文档），按设计未判定；设 DOC_LINKS_VERBOSE=1 可列出位置
+crate boundaries OK: 6 个 crate 的依赖方向与 §5 矩阵一致（6 个已在矩阵登记）
+contract drift OK: §7 的 36 条 DDL 与 crates\storage-sqlite\src\migrate.rs 逐条一致；§5 的 15 个 trait / 87 个方法签名与 crates\core\src\ports.rs 一致
+PASS  toolchain: Node v24.19.0 / npm 12.0.2
+PASS  openspec: 项目本地 @fission-ai/openspec 1.13.0
+PASS  config: openspec/config.yaml，7 个角色已配置；x-agentic.e2e.enabled=true
+PASS  schema: openspec/schemas/agentic
+PASS  schema validation: openspec schema validate agentic
+PASS  verification skill: .agents/skills/agentic-verify
+PASS  AGENTS.md: agentic 验收路由
+PASS  manifest: agentic 0.2.1 / openspec 1.13.0
+Installation: PASS
+✓ change/admin-state-persistence-v2
+Totals: 1 passed, 0 failed (1 items)
+npm notice run acp-remote-contracts@0.0.0 check
+npm notice run npm run check:schemas && npm run check:commands && npm run check:errors && npm run check:features && npm run check:assets && npm run check:acp && npm run check:docs && npm run check:boundaries && npm run check:drift && npm run check:agentic
+npm notice run acp-remote-contracts@0.0.0 check:schemas
+npm notice run node scripts/check-schema-fixtures.mjs
+npm notice run acp-remote-contracts@0.0.0 check:commands
+npm notice run node scripts/check-command-catalog.mjs
+npm notice run acp-remote-contracts@0.0.0 check:errors
+npm notice run node scripts/check-error-registry.mjs
+npm notice run acp-remote-contracts@0.0.0 check:features
+npm notice run node scripts/check-features.mjs
+npm notice run acp-remote-contracts@0.0.0 check:assets
+npm notice run node scripts/check-contract-assets.mjs
+npm notice run acp-remote-contracts@0.0.0 check:acp
+npm notice run node scripts/check-acp-compatibility.mjs
+npm notice run acp-remote-contracts@0.0.0 check:docs
+npm notice run node scripts/check-doc-links.mjs
+npm notice run acp-remote-contracts@0.0.0 check:boundaries
+npm notice run node scripts/check-crate-boundaries.mjs
+npm notice run acp-remote-contracts@0.0.0 check:drift
+npm notice run node scripts/check-contract-drift.mjs
+npm notice run acp-remote-contracts@0.0.0 check:agentic
+npm notice run node scripts/agentic-gate.mjs
+- Validating...
+
+```

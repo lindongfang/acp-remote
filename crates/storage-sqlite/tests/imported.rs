@@ -96,20 +96,24 @@ async fn imported_tables_match_the_frozen_column_lists() {
     store.close().await;
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
-    let expected: [(&str, &[&str]); 5] = [
+    let expected: [(&str, &[&str]); 6] = [
         (
             "imported_import",
             &[
                 "import_id",
                 "owner_node_id",
-                "export_id",
                 "display_name",
                 "endpoint_ref",
                 "cache_policy",
                 "owner_server_epoch",
                 "created_at",
                 "removed_at",
+                "grants_json",
             ],
+        ),
+        (
+            "imported_import_export",
+            &["import_id", "owner_node_id", "export_id", "added_at"],
         ),
         (
             "imported_session",
@@ -313,20 +317,29 @@ async fn drop_import_keeps_audit_rows() {
         .await
         .expect("receipt");
 
-    // import 配置行 + 命令引用 + 审计行（审计由 `AuditStore` 写入，本切片直接落行以验证保留义务）。
+    // import 配置行 + Export 关联行 + 命令引用 + 审计行（审计由 `AuditStore` 写入，本切片直接落行以验证保留义务）。
     let path = dir.join("acp-remote.sqlite3");
     let pool = raw_write_pool(&path).await;
     sqlx::query(
-        "INSERT INTO imported_import (import_id, owner_node_id, export_id, cache_policy, created_at) \
-         VALUES (?1, ?2, ?3, 'no-content-cache', ?4)",
+        "INSERT INTO imported_import (import_id, owner_node_id, cache_policy, created_at, grants_json) \
+         VALUES (?1, ?2, 'no-content-cache', ?3, '[]')",
     )
     .bind("import-one")
+    .bind(node().as_str())
+    .bind(at(0).as_str())
+    .execute(&pool)
+    .await
+    .expect("import row");
+    sqlx::query(
+        "INSERT INTO imported_import_export (import_id, owner_node_id, export_id, added_at) \
+         VALUES ('import-one', ?1, ?2, ?3)",
+    )
     .bind(node().as_str())
     .bind(export().as_str())
     .bind(at(0).as_str())
     .execute(&pool)
     .await
-    .expect("import row");
+    .expect("import association row");
     sqlx::query(
         "INSERT INTO imported_command_ref (owner_node_id, export_id, session_id, request_id, \
          command, status, accepted_at) VALUES (?1, ?2, ?3, ?4, 'session.prompt', 'accepted', ?5)",
@@ -552,6 +565,7 @@ async fn imported_tables_never_hold_owned_content() {
     );
     for table in [
         "imported_import",
+        "imported_import_export",
         "imported_session",
         "imported_delivery_index",
         "imported_command_ref",

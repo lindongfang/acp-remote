@@ -14,12 +14,12 @@ use sqlx::{Executor, Sqlite};
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本。
-pub const FILE_FORMAT_VERSION: i64 = 1;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v2：新增管理表与 `imported_import` 拆分）。
+pub const FILE_FORMAT_VERSION: i64 = 2;
 /// §7.2：`meta.owned_schema_version` 的已知版本。
-pub const OWNED_SCHEMA_VERSION: i64 = 1;
+pub const OWNED_SCHEMA_VERSION: i64 = 2;
 /// §7.2：`meta.imported_schema_version` 的已知版本。
-pub const IMPORTED_SCHEMA_VERSION: i64 = 1;
+pub const IMPORTED_SCHEMA_VERSION: i64 = 2;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS owned_audit (
                  'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
                  'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
                  'node.paired','node.trust_revoked','node.identity_changed',
+                 'export.created','export.revoked','import.added','import.removed','provider.configured',
                  'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
   actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
   actor_id     TEXT NOT NULL,
@@ -192,24 +193,158 @@ CREATE TABLE IF NOT EXISTS owned_attachment_link (
   sha256       TEXT NOT NULL REFERENCES owned_attachment(sha256),
   PRIMARY KEY (session_id, attachment_id)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_device (
+  device_id     TEXT PRIMARY KEY,
+  display_name  TEXT NOT NULL,
+  public_key    BLOB NOT NULL,                 -- 65 字节 SEC1 未压缩 P-256
+  fingerprint   TEXT NOT NULL,                 -- 64 字符小写 hex = SHA-256(public_key)
+  scopes_json   TEXT NOT NULL,                 -- 展开后的 scope（= 命令名）数组，空集合写 '[]'
+  state         TEXT NOT NULL CHECK (state IN ('pending','active','revoked')),
+  created_at    TEXT NOT NULL,
+  last_seen_at  TEXT,
+  revoked_at    TEXT,
+  revoke_reason TEXT CHECK (revoke_reason IN ('user_requested','key_changed','compromised')),
+  CHECK (length(public_key) = 65),
+  CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+  CHECK ((state = 'revoked') = (revoked_at IS NOT NULL)),
+  CHECK ((state = 'revoked') = (revoke_reason IS NOT NULL))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_node (
+  node_id        TEXT NOT NULL,
+  kind           TEXT NOT NULL CHECK (kind IN ('access','owner')),
+  display_name   TEXT NOT NULL,
+  fingerprint    TEXT NOT NULL,
+  grants_json    TEXT NOT NULL,                -- LOCAL_ADMIN_PROTOCOL.md §5.4 的 grants[]
+  state          TEXT NOT NULL CHECK (state IN ('pending','paired','revoked')),
+  owner_endpoint TEXT,                         -- 仅 kind = 'owner' 非空
+  created_at     TEXT NOT NULL,
+  last_connected_at TEXT,
+  revoked_at     TEXT,
+  revoke_reason  TEXT CHECK (revoke_reason IN ('user_requested','key_changed','compromised')),
+  PRIMARY KEY (node_id, kind),
+  CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+  CHECK ((kind = 'owner') = (owner_endpoint IS NOT NULL)),
+  CHECK ((state = 'revoked') = (revoked_at IS NOT NULL)),
+  CHECK ((state = 'revoked') = (revoke_reason IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_node_role ON owned_node(kind, state);
+
+-- Node 双角色共享一条身份材料：主键不含 kind。
+CREATE TABLE IF NOT EXISTS owned_peer_key (
+  peer_kind   TEXT NOT NULL CHECK (peer_kind IN ('device','node')),
+  peer_id     TEXT NOT NULL,
+  public_key  BLOB NOT NULL,
+  fingerprint TEXT NOT NULL,
+  bound_at    TEXT NOT NULL,
+  PRIMARY KEY (peer_kind, peer_id),
+  CHECK (length(public_key) = 65),
+  CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*')
+) STRICT;
+
+-- 只存 pairing secret 的摘要与绑定；明文、HMAC、QR URL、完整认证 payload 都不落库。
+CREATE TABLE IF NOT EXISTS owned_pairing (
+  pairing_id          TEXT PRIMARY KEY,
+  target_kind         TEXT NOT NULL CHECK (target_kind IN ('device','node')),
+  state               TEXT NOT NULL CHECK (state IN ('created','claimed','pending_confirmation','approved','rejected','expired','consumed')),
+  display_name        TEXT,
+  requested_scopes_json TEXT NOT NULL,
+  requested_grants_json TEXT NOT NULL,
+  secret_digest       TEXT NOT NULL,
+  host_binding        TEXT NOT NULL,           -- 设备：canonical origin；节点：owner endpoint
+  created_at          TEXT NOT NULL,
+  expires_at          TEXT NOT NULL,
+  claimed_at          TEXT,
+  approved_at         TEXT,
+  terminal_at         TEXT,
+  CHECK ((state = 'created') = (claimed_at IS NULL)),
+  CHECK ((state IN ('approved','consumed')) = (approved_at IS NOT NULL)),
+  CHECK ((state IN ('rejected','expired','consumed')) = (terminal_at IS NOT NULL)),
+  -- 设备配对不对带 grants、节点配对不得带 scopes（§3.5）；空集合固定写 '[]'
+  CHECK (target_kind <> 'device' OR requested_grants_json = '[]'),
+  CHECK (target_kind <> 'node'   OR requested_scopes_json = '[]')
+) STRICT;
+
+-- 每个配对最多一个 peer；claim 之后不能换人（配对行条件更新与唯一主键共同保证）。
+CREATE TABLE IF NOT EXISTS owned_pairing_peer (
+  pairing_id   TEXT PRIMARY KEY REFERENCES owned_pairing(pairing_id) ON DELETE CASCADE,
+  peer_kind    TEXT NOT NULL CHECK (peer_kind IN ('device','node')),
+  peer_id      TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  public_key   BLOB NOT NULL,
+  fingerprint  TEXT NOT NULL,
+  client_nonce TEXT NOT NULL,
+  claimed_at   TEXT NOT NULL,
+  CHECK (length(public_key) = 65),
+  CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*')
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_export (
+  export_id        TEXT PRIMARY KEY,
+  display_name     TEXT NOT NULL,
+  agent_ids_json   TEXT NOT NULL,              -- Export 内 Agent selector；首切片恰好 1 项
+  aliases_json     TEXT NOT NULL,              -- [{alias,displayName}]
+  default_alias    TEXT NOT NULL,
+  templates_json   TEXT NOT NULL,              -- ExportTemplate[]
+  default_template TEXT NOT NULL,
+  scopes_json      TEXT NOT NULL,              -- grant.* 子集
+  cache_policy     TEXT NOT NULL CHECK (cache_policy = 'no-content-cache'),
+  created_at       TEXT NOT NULL,
+  revoked_at       TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS owned_agent_profile (
+  agent_id           TEXT PRIMARY KEY,
+  display_name       TEXT NOT NULL,
+  command            TEXT NOT NULL,
+  args_json          TEXT NOT NULL,
+  env_allowlist_json TEXT NOT NULL,
+  provider_env_json  TEXT NOT NULL,             -- ProviderEnvBinding[]，空数组写 '[]'
+  is_default         INTEGER NOT NULL CHECK (is_default IN (0,1)),
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+) STRICT;
+-- 至多一个默认 profile。
+CREATE UNIQUE INDEX IF NOT EXISTS owned_agent_profile_default ON owned_agent_profile(is_default) WHERE is_default = 1;
+
+-- 路径只在本节点可读；不进入 Node Link catalog（§11.1）。
+CREATE TABLE IF NOT EXISTS owned_workspace (
+  alias          TEXT PRIMARY KEY,
+  display_name   TEXT NOT NULL,
+  canonical_path TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+) STRICT;
+
+-- 不含凭据值：只有字段名、keystore 引用与版本。
+CREATE TABLE IF NOT EXISTS owned_provider_ref (
+  provider_id            TEXT NOT NULL,
+  kind                   TEXT NOT NULL CHECK (kind IN ('provider','mcp')),
+  display_name           TEXT NOT NULL,
+  configured_fields_json TEXT NOT NULL,
+  keystore_ref           TEXT NOT NULL,
+  version                INTEGER NOT NULL,
+  updated_at             TEXT NOT NULL,
+  PRIMARY KEY (provider_id, kind)
+) STRICT;
 "#;
 
 /// §7.4 的 `imported_*` 无正文表（`no-content-cache`）。
 ///
-/// 列集合是合同冻结的**黄金列清单**：`tests/no_content_columns.rs` 用 `PRAGMA table_info` 与之逐项
-/// 比对，新增列即失败（§9.6）。
+/// 列集合是合同冻结的**黄金列清单**：`tests/imported.rs` 用 `PRAGMA table_info` 与之逐项比对
+/// （`owned_audit`/`imported_audit` 的列清单在 `tests/commit.rs`），新增列即失败（§9.6/§9.14）。
 pub const IMPORTED_SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS imported_import (
   import_id     TEXT PRIMARY KEY,
   owner_node_id TEXT NOT NULL,
-  export_id     TEXT NOT NULL,
   display_name  TEXT,
   endpoint_ref  TEXT,
   cache_policy  TEXT NOT NULL CHECK (cache_policy = 'no-content-cache'),
   owner_server_epoch TEXT,
   created_at    TEXT NOT NULL,
   removed_at    TEXT,
-  UNIQUE (owner_node_id, export_id)
+  grants_json   TEXT NOT NULL                -- grant.* 子集；无可信来源时写 '[]'（该 Import 保持不可用）
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imported_session (
@@ -271,6 +406,7 @@ CREATE TABLE IF NOT EXISTS imported_audit (
                  'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
                  'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
                  'node.paired','node.trust_revoked','node.identity_changed',
+                 'export.created','export.revoked','import.added','import.removed','provider.configured',
                  'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
   actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
   actor_id     TEXT NOT NULL,
@@ -282,6 +418,124 @@ CREATE TABLE IF NOT EXISTS imported_audit (
   detail_digest TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
+
+-- v1 的 imported_import.export_id 与 UNIQUE (owner_node_id, export_id) 移除，改为关联表：
+-- 一个 Import 可关联多个 Export，但同一 (owner_node_id, export_id) 只归一个 Import。
+CREATE TABLE IF NOT EXISTS imported_import_export (
+  import_id     TEXT NOT NULL REFERENCES imported_import(import_id) ON DELETE CASCADE,
+  owner_node_id TEXT NOT NULL,
+  export_id     TEXT NOT NULL,
+  added_at      TEXT NOT NULL,
+  PRIMARY KEY (import_id, export_id),
+  UNIQUE (owner_node_id, export_id)
+) STRICT;
+"#;
+
+/// §7.2 的 v1 → v2 升级：`owned_audit` 的 12-step 表重建（§11.8 第 7 条）。
+///
+/// SQLite 不能修改既有 CHECK，只能新建表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 →
+/// `RENAME` → 重建索引。下表的列与 CHECK 必须与 `OWNED_SCHEMA_V1` 的 `owned_audit` 逐字一致：
+/// `tests/enum_coverage.rs` 按**新建库**的 DDL 断言 `AuditAction::ALL` 逐值相等，升级库由
+/// `tests/migration.rs` 的升级用例既查 DDL 文本又按行为插入新取值。
+///
+/// `sqlite_sequence` 由 `migrate()` 在重建前后单独回填（`DROP TABLE` 会带走那一行，只按现存行的
+/// `max(audit_id)` 回填会让已清理过尾部行的库序列回退）。
+const V2_UPGRADE_OWNED: &str = r#"
+CREATE TABLE owned_audit_v2 (
+  audit_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  action       TEXT NOT NULL CHECK (action IN (
+                 'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
+                 'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
+                 'node.paired','node.trust_revoked','node.identity_changed',
+                 'export.created','export.revoked','import.added','import.removed','provider.configured',
+                 'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id     TEXT NOT NULL,
+  via_node_id  TEXT,
+  local_principal_ref TEXT,
+  target_kind  TEXT NOT NULL, target_id TEXT NOT NULL,
+  outcome      TEXT NOT NULL CHECK (outcome IN ('success','denied','failed')),
+  detail_digest TEXT
+) STRICT;
+
+INSERT INTO owned_audit_v2 (audit_id, at, action, actor_kind, actor_id, via_node_id, local_principal_ref,
+                            target_kind, target_id, outcome, detail_digest)
+  SELECT audit_id, at, action, actor_kind, actor_id, via_node_id, local_principal_ref,
+         target_kind, target_id, outcome, detail_digest FROM owned_audit;
+
+DROP TABLE owned_audit;
+ALTER TABLE owned_audit_v2 RENAME TO owned_audit;
+CREATE INDEX IF NOT EXISTS owned_audit_at ON owned_audit(at);
+CREATE INDEX IF NOT EXISTS owned_audit_action ON owned_audit(action, at);
+"#;
+
+/// §7.2 的 v1 → v2 升级：`imported_audit` 的 12-step 重建 + `imported_import` 的拆分迁移。
+///
+/// 顺序不可交换，原因有二：
+/// - `imported_audit` 的重建与 `owned_audit` 同法（列与 CHECK 与 `IMPORTED_SCHEMA_V1` 逐字一致）；
+/// - `imported_import` 被 `imported_import_export` 的外键引用，而 `foreign_keys = ON` 时 `DROP TABLE`
+///   会先做隐式 DELETE 并按 `ON DELETE CASCADE` 删掉子行。因此先把原行里的 Export 关联搬进一张
+///   **没有外键**的过渡表，再重建父表，最后才写进真正的关联表。
+///
+/// `grants_json` 一律写 `'[]'`：v1 没有可信的 grants 来源，**不得**凭空补齐或默认放权，这类 Import
+/// 保持不可用，等本地重新授权（§11.8 第 3 条）。`added_at` 取原行的 `created_at`。
+const V2_UPGRADE_IMPORTED: &str = r#"
+CREATE TABLE imported_audit_v2 (
+  audit_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  action       TEXT NOT NULL CHECK (action IN (
+                 'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
+                 'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
+                 'node.paired','node.trust_revoked','node.identity_changed',
+                 'export.created','export.revoked','import.added','import.removed','provider.configured',
+                 'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_id     TEXT NOT NULL,
+  owner_node_id TEXT, export_id TEXT, session_id TEXT,
+  request_id   TEXT,
+  local_principal_ref TEXT,
+  target_kind  TEXT NOT NULL, target_id TEXT NOT NULL,
+  outcome      TEXT NOT NULL CHECK (outcome IN ('success','denied','failed')),
+  detail_digest TEXT
+) STRICT;
+
+INSERT INTO imported_audit_v2 (audit_id, at, action, actor_kind, actor_id, owner_node_id, export_id,
+                               session_id, request_id, local_principal_ref, target_kind, target_id,
+                               outcome, detail_digest)
+  SELECT audit_id, at, action, actor_kind, actor_id, owner_node_id, export_id, session_id, request_id,
+         local_principal_ref, target_kind, target_id, outcome, detail_digest FROM imported_audit;
+
+DROP TABLE imported_audit;
+ALTER TABLE imported_audit_v2 RENAME TO imported_audit;
+CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
+
+CREATE TABLE imported_import_export_pending AS
+  SELECT import_id, owner_node_id, export_id, created_at AS added_at FROM imported_import;
+
+CREATE TABLE imported_import_v2 (
+  import_id     TEXT PRIMARY KEY,
+  owner_node_id TEXT NOT NULL,
+  display_name  TEXT,
+  endpoint_ref  TEXT,
+  cache_policy  TEXT NOT NULL CHECK (cache_policy = 'no-content-cache'),
+  owner_server_epoch TEXT,
+  created_at    TEXT NOT NULL,
+  removed_at    TEXT,
+  grants_json   TEXT NOT NULL
+) STRICT;
+
+INSERT INTO imported_import_v2 (import_id, owner_node_id, display_name, endpoint_ref, cache_policy,
+                                owner_server_epoch, created_at, removed_at, grants_json)
+  SELECT import_id, owner_node_id, display_name, endpoint_ref, cache_policy,
+         owner_server_epoch, created_at, removed_at, '[]' FROM imported_import;
+
+DROP TABLE imported_import;
+ALTER TABLE imported_import_v2 RENAME TO imported_import;
+
+INSERT INTO imported_import_export (import_id, owner_node_id, export_id, added_at)
+  SELECT import_id, owner_node_id, export_id, added_at FROM imported_import_export_pending;
+DROP TABLE imported_import_export_pending;
 "#;
 
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
@@ -583,19 +837,25 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 
 /// §7.2：执行 migration。单事务、幂等、失败整体回滚、版本过新拒绝启动。
 ///
-/// 单事务的边界是 `BEGIN IMMEDIATE`：写池只有 1 个连接，但 `IMMEDIATE` 让「读版本 → 建表 → 写版本」
-/// 在拿锁后整体执行，避免与外部进程的写事务在升级锁时冲突。
+/// 单事务的边界是 `BEGIN IMMEDIATE`：写池只有 1 个连接，但 `IMMEDIATE` 让「读版本 → 建表 → 升级 →
+/// 写版本」在拿锁后整体执行，避免与外部进程的写事务在升级锁时冲突。
+///
+/// 升级判据 =「升级前已有 schema」+ `user_version < FILE_FORMAT_VERSION`：版本号与表结构在同一个
+/// 事务里落盘，所以这两个条件一起出现就等价于「库是 v1 形状」。新建库由两个 DDL 常量直接建成 v2
+/// （`user_version` 此时是 0，不能只按版本判断）；已经是 v2 的库**跳过**全部升级步骤，因此第二次
+/// 打开不产生任何 DDL、行级或版本写入（§9.1 的逐字节幂等）。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
     let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
 
     let file_version = read_user_version(&mut *tx).await?;
     if file_version > FILE_FORMAT_VERSION {
-        // 拒绝启动，且事务内没有任何写入（§7.2、§9.1）。
+        // 拒绝启动，且事务内没有任何写入（§7.2、§9.1）：这一条必须早于任何 DDL。
         return Err(StorageError::FileFormatTooNew {
             found: file_version,
             supported: FILE_FORMAT_VERSION,
         });
     }
+    let new_database = !table_exists(&mut *tx, "owned_session").await?;
 
     sqlx::raw_sql(OWNED_SCHEMA_V1).execute(&mut *tx).await?;
     sqlx::raw_sql(IMPORTED_SCHEMA_V1).execute(&mut *tx).await?;
@@ -616,6 +876,16 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
             found: owned_version.max(imported_version),
             supported: OWNED_SCHEMA_VERSION.min(IMPORTED_SCHEMA_VERSION),
         });
+    }
+
+    if !new_database && file_version < FILE_FORMAT_VERSION {
+        // v1 → v2（§7.2 的四步）：两张审计表的 CHECK 扩宽与 `imported_import` 的拆分必须在同一个
+        // 事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态（§11.8 第 7 条）。
+        let sequences = audit_sequences(&mut *tx).await?;
+        sqlx::raw_sql(V2_UPGRADE_OWNED).execute(&mut *tx).await?;
+        sqlx::raw_sql(V2_UPGRADE_IMPORTED).execute(&mut *tx).await?;
+        restore_audit_sequences(&mut tx, &sequences).await?;
+        mark_v2_schema_versions(&mut tx).await?;
     }
 
     write_meta_if_absent(&mut tx, META_SERVER_EPOCH, &new_server_epoch()).await?;
@@ -663,6 +933,90 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
 /// §3.2：`ServerEpoch` 首次创建时生成，随后保持不变。用 UUID v4（随机源，不读系统时间）。
 fn new_server_epoch() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// §7.2：库内是否已经有 schema（用 `owned_session` 判定，它在 v1 与 v2 都存在）。
+///
+/// 版本号与表结构在同一个事务里落盘，所以「升级前已有 schema」是区分「升级」与「新建」的准确判据：
+/// 新建文件上 `PRAGMA user_version` 是 `0`，而 `0 < FILE_FORMAT_VERSION` 会让它走进升级分支，去重建
+/// 刚刚由 DDL 常量建好的表。
+async fn table_exists<'e, E>(executor: E, name: &str) -> Result<bool, StorageError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1")
+            .bind(name)
+            .fetch_one(executor)
+            .await?;
+    Ok(count > 0)
+}
+
+/// §7.2：两张审计表的 `sqlite_sequence` 现值（`(表名, seq)`）。
+///
+/// 重建会把那一行随 `DROP TABLE` 一起删掉；只按现存行的 `max(audit_id)` 回填会让「尾部行已被保留期
+/// 清理」的库序列回退——审计有 365 天 TTL，这个场景是常态。两张审计表在 v1/v2 都是
+/// `AUTOINCREMENT`，因此 `sqlite_sequence` 一定存在。
+async fn audit_sequences<'e, E>(executor: E) -> Result<Vec<(String, i64)>, StorageError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT name, seq FROM sqlite_sequence WHERE name IN ('owned_audit','imported_audit')",
+    )
+    .fetch_all(executor)
+    .await?;
+    Ok(rows)
+}
+
+/// §7.2：把重建前的序列值回填进 `sqlite_sequence`（只增不减）。
+///
+/// `sqlite_sequence` 上没有唯一索引，因此不能用 `ON CONFLICT`：先按值更新既有的更小行，再在缺行
+/// （重建后表为空）时插入。
+async fn restore_audit_sequences(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    sequences: &[(String, i64)],
+) -> Result<(), StorageError> {
+    for (name, seq) in sequences {
+        // 先取 `?1` 的绑定值：两条语句共用同一次绑定顺序（`UPDATE` 里 `name = ?1 AND seq < ?2`）。
+        sqlx::query("UPDATE sqlite_sequence SET seq = ?2 WHERE name = ?1 AND seq < ?2")
+            .bind(name)
+            .bind(*seq)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO sqlite_sequence (name, seq) SELECT ?1, ?2 \
+             WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?1)",
+        )
+        .bind(name)
+        .bind(*seq)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// §7.2：v2 升级的最后一步：把两族版本键写成当前常量。
+///
+/// `write_meta_if_absent` 只在键缺失时写入，升级路径必须显式覆盖既有值（新建库走不到这里，它的版本
+/// 键由 `write_meta_if_absent` 按当前常量写入）。
+async fn mark_v2_schema_versions(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+) -> Result<(), StorageError> {
+    for (key, value) in [
+        (META_OWNED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION),
+        (META_IMPORTED_SCHEMA_VERSION, IMPORTED_SCHEMA_VERSION),
+    ] {
+        sqlx::query(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(value.to_string())
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn read_user_version<'e, E>(executor: E) -> Result<i64, StorageError>

@@ -2757,7 +2757,7 @@ impl RemoteDeliveryStore for SqliteStore {
         if let Some(imports) = &query.imports {
             sql.push_str(&format!(
                 " WHERE (owner_node_id, export_id) IN (SELECT owner_node_id, export_id \
-                 FROM imported_import WHERE import_id IN ({}))",
+                 FROM imported_import_export WHERE import_id IN ({}))",
                 placeholders(imports.len())
             ));
             binds.extend(imports.iter().map(|id| id.as_str().to_owned()));
@@ -2804,43 +2804,51 @@ impl RemoteDeliveryStore for SqliteStore {
     async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError> {
         self.writable()?;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        let owner = sqlx::query(
-            "SELECT owner_node_id, export_id FROM imported_import WHERE import_id = ?1",
+        // v2 起 Import 与 Export 的归属在 `imported_import_export`（一个 Import 可关联多个 Export），
+        // 管理行自身不再携带 `export_id`。
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM imported_import WHERE import_id = ?1")
+                .bind(import.as_str())
+                .fetch_optional(&mut *tx)
+                .await
+                .db()?;
+        if exists.is_none() {
+            return Err(PortError::NotFound(EntityRef::Import(import.clone())));
+        }
+        let pairs: Vec<(String, String)> = sqlx::query_as(
+            "SELECT owner_node_id, export_id FROM imported_import_export WHERE import_id = ?1",
         )
         .bind(import.as_str())
-        .fetch_optional(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .db()?;
-        let Some(owner) = owner else {
-            return Err(PortError::NotFound(EntityRef::Import(import.clone())));
-        };
-        let owner_node_id = text(&owner, "owner_node_id")?;
-        let export_id = text(&owner, "export_id")?;
         // §5.2：只删交付索引与命令引用；`imported_audit` 保留（`SECURITY_DESIGN.md` §11.5）。
-        let delivery_index_removed = sqlx::query(
-            "DELETE FROM imported_delivery_index WHERE owner_node_id = ?1 AND export_id = ?2",
-        )
-        .bind(&owner_node_id)
-        .bind(&export_id)
-        .execute(&mut *tx)
-        .await
-        .db()?
-        .rows_affected();
-        let command_refs_removed = sqlx::query(
-            "DELETE FROM imported_command_ref WHERE owner_node_id = ?1 AND export_id = ?2",
-        )
-        .bind(&owner_node_id)
-        .bind(&export_id)
-        .execute(&mut *tx)
-        .await
-        .db()?
-        .rows_affected();
-        sqlx::query("UPDATE imported_import SET removed_at = ?1 WHERE import_id = ?2")
-            .bind(owner_node_id)
-            .bind(import.as_str())
+        //
+        // 这里**不**写 `imported_import.removed_at`：§11.6 把「用户移除 Import」的完整删除划给
+        // `ImportRemoval` 写集，连接级清空只拥有这两张表的删除权威；而且本 crate 不读系统时间，
+        // 没有可以写进该列的值（旧实现把 `owner_node_id` 绑进这一列）。
+        let mut delivery_index_removed = 0;
+        let mut command_refs_removed = 0;
+        for (owner_node_id, export_id) in pairs {
+            delivery_index_removed += sqlx::query(
+                "DELETE FROM imported_delivery_index WHERE owner_node_id = ?1 AND export_id = ?2",
+            )
+            .bind(&owner_node_id)
+            .bind(&export_id)
             .execute(&mut *tx)
             .await
-            .db()?;
+            .db()?
+            .rows_affected();
+            command_refs_removed += sqlx::query(
+                "DELETE FROM imported_command_ref WHERE owner_node_id = ?1 AND export_id = ?2",
+            )
+            .bind(&owner_node_id)
+            .bind(&export_id)
+            .execute(&mut *tx)
+            .await
+            .db()?
+            .rows_affected();
+        }
         tx.commit().await.db()?;
         Ok(DropReport {
             delivery_index_removed,
@@ -2920,7 +2928,7 @@ impl SqliteStore {
         let owner = text(row, "owner_node_id")?;
         let export = text(row, "export_id")?;
         let matched: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM imported_import WHERE owner_node_id = ?1 AND export_id = ?2 \
+            "SELECT 1 FROM imported_import_export WHERE owner_node_id = ?1 AND export_id = ?2 \
              AND import_id IN (SELECT value FROM json_each(?3))",
         )
         .bind(&owner)

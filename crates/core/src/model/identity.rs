@@ -19,6 +19,7 @@ use super::ids::{
     require_bounded,
 };
 use super::scalars::{Digest, Nonce, Timestamp};
+use sha2::Digest as _;
 use std::fmt;
 use std::str::FromStr;
 
@@ -587,12 +588,100 @@ impl PeerIdentity {
     }
 }
 
+/// 65 字节 SEC1 未压缩 P-256 公钥（§11.5）。构造即校验，因此类型本身即证明。
+///
+/// 私钥、keystore handle 与 pairing secret 明文**不进** `core::model`（`SECURITY_DESIGN.md` §13.1）；
+/// 本类型是公开可传输的认证材料。
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PeerPublicKey([u8; 65]);
+
+impl PeerPublicKey {
+    /// SEC1 未压缩点长度（`0x04 || X || Y`）。
+    pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
+
+    /// 构造。顺序固定：长度 == 65 → 首字节 == `0x04` → `p256::PublicKey::from_sec1_bytes` 成功。
+    ///
+    /// 长度断言必须在解析之前：`from_sec1_bytes` 接受 33 字节压缩点，不先断言就会绕过
+    /// 「SEC1 uncompressed」合同（`INITIAL_DESIGN.md` §16 第 6 条）。
+    pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, InvalidValue> {
+        if bytes.len() != Self::SEC1_UNCOMPRESSED_LEN || bytes.first() != Some(&0x04) {
+            return Err(InvalidValue::PublicKey);
+        }
+        p256::PublicKey::from_sec1_bytes(bytes).map_err(|_| InvalidValue::PublicKey)?;
+        let mut key = [0u8; Self::SEC1_UNCOMPRESSED_LEN];
+        key.copy_from_slice(bytes);
+        Ok(Self(key))
+    }
+
+    /// 原始 65 字节（库里 `owned_peer_key.public_key` 的 BLOB 值）。
+    pub fn as_bytes(&self) -> &[u8; Self::SEC1_UNCOMPRESSED_LEN] {
+        &self.0
+    }
+
+    /// 唯一指纹入口：`SHA-256(65 字节原始公钥)` 的 64 字符小写 hex。
+    ///
+    /// 适配器不得各自现算指纹（§11.5）——否则「指纹与公钥不一致」会成为可落库的非法状态。
+    pub fn fingerprint(&self) -> Fingerprint {
+        let digest = sha2::Sha256::digest(self.0);
+        let mut text = String::with_capacity(64);
+        for byte in digest {
+            text.push_str(&format!("{byte:02x}"));
+        }
+        Fingerprint::from_lower_hex(text)
+    }
+}
+
+impl fmt::Debug for PeerPublicKey {
+    /// 公钥是公开材料，但逐字节打印噪声太大；只输出派生指纹。
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerPublicKey")
+            .field("fingerprint", &self.fingerprint())
+            .finish()
+    }
+}
+
+impl TryFrom<&[u8]> for PeerPublicKey {
+    type Error = InvalidValue;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        Self::try_from_bytes(bytes)
+    }
+}
+
+/// 测试用的合法 P-256 公钥：标准基点 G 的 SEC1 未压缩编码（曲线上的确定点，无需随机源）。
+#[cfg(test)]
+pub(crate) const TEST_PUBLIC_KEY_HEX: &str = concat!(
+    "04",
+    "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296",
+    "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+);
+
+/// 测试用的合法对端公钥（基点 G 的未压缩编码）。
+#[cfg(test)]
+pub(crate) fn test_peer_public_key() -> PeerPublicKey {
+    let bytes = hex_to_bytes(TEST_PUBLIC_KEY_HEX);
+    PeerPublicKey::try_from_bytes(&bytes).expect("基点 G 是合法的 P-256 未压缩点")
+}
+
+/// 仅供测试的十六进制解码（不做通用解析，避免引入新依赖）。
+#[cfg(test)]
+pub(crate) fn hex_to_bytes(text: &str) -> Vec<u8> {
+    text.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let hi = (pair[0] as char).to_digit(16).unwrap_or(0) as u8;
+            let lo = (pair[1] as char).to_digit(16).unwrap_or(0) as u8;
+            (hi << 4) | lo
+        })
+        .collect()
+}
+
 /// claim 声明的对端信息（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingPeer {
     id: PeerIdentity,
     display_name: String,
-    public_key_fingerprint: Fingerprint,
+    public_key: PeerPublicKey,
     client_nonce: Nonce,
 }
 
@@ -601,14 +690,14 @@ impl PairingPeer {
     pub fn try_new(
         id: PeerIdentity,
         display_name: &str,
-        public_key_fingerprint: Fingerprint,
+        public_key: PeerPublicKey,
         client_nonce: Nonce,
     ) -> Result<Self, InvalidValue> {
         require_bounded(display_name, 1, 128)?;
         Ok(Self {
             id,
             display_name: display_name.to_owned(),
-            public_key_fingerprint,
+            public_key,
             client_nonce,
         })
     }
@@ -623,9 +712,14 @@ impl PairingPeer {
         &self.display_name
     }
 
-    /// 对端公钥指纹。
-    pub fn public_key_fingerprint(&self) -> &Fingerprint {
-        &self.public_key_fingerprint
+    /// 对端公钥（验签材料的唯一来源，§11.5）。
+    pub fn public_key(&self) -> &PeerPublicKey {
+        &self.public_key
+    }
+
+    /// 派生指纹；只是 `public_key.fingerprint()` 的便捷入口，不是独立字段。
+    pub fn public_key_fingerprint(&self) -> Fingerprint {
+        self.public_key.fingerprint()
     }
 
     /// 对端 nonce（同一 nonce 重试必须返回原 pairing request，`SYNC_PROTOCOL.md` §7.4）。
@@ -751,6 +845,11 @@ token_enum!(
         NodePaired => "node.paired",
         NodeTrustRevoked => "node.trust_revoked",
         NodeIdentityChanged => "node.identity_changed",
+        ExportCreated => "export.created",
+        ExportRevoked => "export.revoked",
+        ImportAdded => "import.added",
+        ImportRemoved => "import.removed",
+        ProviderConfigured => "provider.configured",
         AuthorizationDenied => "authorization.denied",
         RateLimitTriggered => "rate_limit.triggered",
         StorageIntegrityFailed => "storage.integrity_failed",

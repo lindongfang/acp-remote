@@ -3,6 +3,7 @@
 //!
 //! 这里的断言只依赖公开 API（含 crate 内部可见的模块路径），不依赖进程 cwd，也不读写数据库。
 
+use std::path::Path;
 use std::str::FromStr;
 
 use super::*;
@@ -1566,13 +1567,18 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
     let peer = PairingPeer::try_new(
         PeerIdentity::Node(NodeId::from_str(UUID_C).expect("node")),
         "Office Access",
-        fingerprint(),
+        test_peer_public_key(),
         nonce(),
     )
     .expect("peer");
     assert_eq!(peer.id().kind(), "node");
     assert_eq!(peer.display_name(), "Office Access");
     assert_eq!(peer.client_nonce(), &nonce());
+    // 指纹不是独立字段：它只能由公钥派生（§11.5）。
+    assert_eq!(
+        peer.public_key_fingerprint(),
+        peer.public_key().fingerprint()
+    );
 
     let pairing = PairingId::from_str(UUID_B).expect("pairing");
     let claim = PairingClaim::try_new(
@@ -1598,7 +1604,7 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
     let device_peer = PairingPeer::try_new(
         PeerIdentity::Device(DeviceId::from_str(UUID_B).expect("device")),
         "Phone",
-        fingerprint(),
+        test_peer_public_key(),
         nonce(),
     )
     .expect("peer");
@@ -1628,7 +1634,7 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
 
 #[test]
 fn audit_record_carries_no_content_and_closed_action_set() {
-    assert_eq!(AuditAction::ALL.len(), 15);
+    assert_eq!(AuditAction::ALL.len(), 20);
     assert_eq!(AuditAction::PairingCreated.as_str(), "pairing.created");
     assert_eq!(
         AuditAction::from_str("storage.integrity_failed").expect("action"),
@@ -1967,8 +1973,8 @@ fn port_error_and_kinds_are_wired_to_the_model_errors() {
         PortError::Unavailable(UnavailableKind::StorageFull).to_string(),
         "unavailable: storage_full"
     );
-    assert_eq!(ConflictKind::ALL.len(), 6);
-    assert_eq!(UnavailableKind::ALL.len(), 6);
+    assert_eq!(ConflictKind::ALL.len(), 9);
+    assert_eq!(UnavailableKind::ALL.len(), 7);
     assert_eq!(ConflictKind::AlreadyResolved.as_str(), "already_resolved");
     assert_eq!(
         UnavailableKind::RemoteUnavailable.as_str(),
@@ -1980,6 +1986,204 @@ fn port_error_and_kinds_are_wired_to_the_model_errors() {
     assert_eq!(
         InvalidValue::TooLong { max: 3 }.to_string(),
         "value exceeds 3 characters"
+    );
+}
+
+#[test]
+fn peer_public_key_is_validated_at_construction_and_derives_its_fingerprint() {
+    let bytes = hex_to_bytes(TEST_PUBLIC_KEY_HEX);
+    let key = PeerPublicKey::try_from_bytes(&bytes).expect("valid P-256 point");
+    assert_eq!(key.as_bytes(), &bytes.as_slice());
+
+    // 指纹 = SHA-256(65 字节原始公钥) 的 64 字符小写 hex，可由独立实现复算。
+    let expected = {
+        use sha2::Digest as _;
+        sha2::Sha256::digest(bytes.as_slice())
+            .iter()
+            .fold(String::new(), |mut text, byte| {
+                text.push_str(&format!("{byte:02x}"));
+                text
+            })
+    };
+    assert_eq!(
+        Fingerprint::from_str(&expected).expect("hex"),
+        key.fingerprint()
+    );
+    assert_eq!(key.fingerprint().as_str(), expected);
+
+    // 33 字节压缩点必须被拒：`from_sec1_bytes` 本身接受它，长度断言挡在前面（§11.5）。
+    let y_is_even = bytes[64] & 1 == 0;
+    let mut compressed = vec![if y_is_even { 0x02 } else { 0x03 }];
+    compressed.extend_from_slice(&bytes[1..33]);
+    assert_eq!(compressed.len(), 33);
+    assert_eq!(
+        PeerPublicKey::try_from_bytes(&compressed),
+        Err(InvalidValue::PublicKey)
+    );
+
+    // 长度、前缀与曲线点三类非法输入。
+    assert_eq!(
+        PeerPublicKey::try_from_bytes(&bytes[..64]),
+        Err(InvalidValue::PublicKey)
+    );
+    let mut wrong_prefix = bytes.clone();
+    wrong_prefix[0] = 0x05;
+    assert_eq!(
+        PeerPublicKey::try_from_bytes(&wrong_prefix),
+        Err(InvalidValue::PublicKey)
+    );
+    let mut off_curve = bytes.clone();
+    off_curve[64] ^= 0x01;
+    assert_eq!(
+        PeerPublicKey::try_from_bytes(&off_curve),
+        Err(InvalidValue::PublicKey)
+    );
+}
+
+#[test]
+fn local_config_values_enforce_their_invariants() {
+    let binding =
+        ProviderEnvBinding::try_new("openai", "api_key", "OPENAI_API_KEY").expect("binding");
+    assert_eq!(binding.name(), "OPENAI_API_KEY");
+    // 保留前缀与非法变量名都不可构造。
+    assert!(ProviderEnvBinding::try_new("openai", "api_key", "ACP_REMOTE_TOKEN").is_err());
+    assert!(ProviderEnvBinding::try_new("openai", "api_key", "1BAD").is_err());
+    // Provider 标识有独立模式（^[A-Za-z0-9._-]{1,64}$）。
+    assert!(ProviderEnvBinding::try_new(&"a".repeat(65), "api_key", "KEY").is_err());
+
+    let profile = AgentProfile::try_new(
+        AgentId::new("codex").expect("agent id"),
+        "Codex CLI",
+        "codex",
+        vec!["--profile".to_owned(), "work".to_owned()],
+        vec!["OPENAI_API_KEY".to_owned()],
+        vec![binding.clone()],
+        true,
+        ts(T0),
+        ts(T1),
+    )
+    .expect("profile");
+    assert!(profile.is_default());
+    assert_eq!(profile.env()[0].name(), "OPENAI_API_KEY");
+
+    // 绑定必须落在白名单内。
+    assert!(
+        AgentProfile::try_new(
+            AgentId::new("codex").expect("agent id"),
+            "Codex CLI",
+            "codex",
+            Vec::new(),
+            Vec::new(),
+            vec![binding.clone()],
+            false,
+            ts(T0),
+            ts(T1),
+        )
+        .is_err()
+    );
+    // 白名单本身不得含保留名或重复项。
+    assert!(
+        AgentProfile::try_new(
+            AgentId::new("codex").expect("agent id"),
+            "Codex CLI",
+            "codex",
+            Vec::new(),
+            vec!["ACP_REMOTE_TOKEN".to_owned()],
+            Vec::new(),
+            false,
+            ts(T0),
+            ts(T1),
+        )
+        .is_err()
+    );
+    assert!(
+        AgentProfile::try_new(
+            AgentId::new("codex").expect("agent id"),
+            "Codex CLI",
+            "codex",
+            Vec::new(),
+            vec!["KEY".to_owned(), "KEY".to_owned()],
+            Vec::new(),
+            false,
+            ts(T0),
+            ts(T1),
+        )
+        .is_err()
+    );
+
+    let workspace = WorkspaceRecord::try_new(
+        WorkspaceAlias::new("acp-remote").expect("alias"),
+        "Repo",
+        if cfg!(windows) {
+            "C:\\Project\\acp-remote"
+        } else {
+            "/srv/acp-remote"
+        },
+        ts(T0),
+        ts(T1),
+    )
+    .expect("workspace");
+    assert!(Path::new(workspace.canonical_path()).is_absolute());
+    assert!(
+        WorkspaceRecord::try_new(
+            WorkspaceAlias::new("acp-remote").expect("alias"),
+            "Repo",
+            "relative/path",
+            ts(T0),
+            ts(T1),
+        )
+        .is_err()
+    );
+
+    let reference = ProviderRef::try_new(
+        "openai",
+        ProviderRefKind::Provider,
+        "OpenAI",
+        vec!["api_key".to_owned()],
+        "keystore://provider/openai/1",
+        1,
+        ts(T1),
+    )
+    .expect("provider ref");
+    assert_eq!(reference.version(), 1);
+    assert_eq!(reference.kind().as_str(), "provider");
+    assert!(
+        ProviderRef::try_new(
+            "openai",
+            ProviderRefKind::Provider,
+            "OpenAI",
+            vec!["api_key".to_owned()],
+            "keystore://provider/openai/1",
+            0,
+            ts(T1),
+        )
+        .is_err()
+    );
+
+    assert!(SeedState::unseeded().seeded_at().is_none());
+    assert!(SeedState::try_new(false, Some(ts(T0))).is_err());
+    assert!(
+        SeedState::try_new(true, Some(ts(T0)))
+            .expect("seeded")
+            .is_seeded()
+    );
+
+    let secret = SecretValue::new("s3cret".to_owned());
+    assert_eq!(secret.len(), 6);
+    assert_eq!(secret.expose_secret(), "s3cret");
+
+    let resolved = ResolvedWorkspace::try_new(
+        WorkspaceAlias::new("acp-remote").expect("alias"),
+        workspace.canonical_path().to_owned(),
+    )
+    .expect("resolved");
+    assert_eq!(resolved.alias(), workspace.alias());
+    assert!(
+        ResolvedWorkspace::try_new(
+            WorkspaceAlias::new("acp-remote").expect("alias"),
+            "relative/path".to_owned(),
+        )
+        .is_err()
     );
 }
 
