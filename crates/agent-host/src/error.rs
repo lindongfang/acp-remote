@@ -80,6 +80,13 @@ pub enum HostError {
     #[error("环境变量名不合法")]
     InvalidEnvName,
 
+    /// 凭据解析返回了不在 profile 白名单里的变量名（白名单是上限）。
+    #[error("凭据变量不在白名单内")]
+    EnvNotAllowed {
+        /// 变量名（不是值）。
+        name: String,
+    },
+
     /// 凭据解析失败。
     #[error("凭据解析失败")]
     CredentialUnavailable,
@@ -126,6 +133,9 @@ impl HostError {
                 PortError::InvalidRequest("agent protocol error")
             }
             Self::InvalidEnvName => PortError::InvalidRequest("invalid environment variable name"),
+            Self::EnvNotAllowed { .. } => {
+                PortError::InvalidRequest("credential variable is not allow-listed")
+            }
             Self::InvalidResolution | Self::InvalidPrompt => {
                 PortError::InvalidRequest("invalid agent-host request")
             }

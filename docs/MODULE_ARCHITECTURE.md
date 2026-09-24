@@ -1,8 +1,8 @@
 # ACP Remote 模块架构
 
-> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite` 已实现，见 `README.md` 的 crate 表）
+> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host` 已实现，见 `README.md` 的 crate 表）
 > 版本：0.3
-> 修订记录（2026-09-18）：§4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1。  
+> 修订记录（2026-09-24）：§4.2/§4.5 记录 `acp-protocol` 与 `agent-host` 的落地 surface、每个 Agent 一个 Job 的粒度、`win32job`/`nix` 选型与「关闭句柄即结束树」的实际路径；§3.1 的依赖登记与 §5 矩阵补 `agent-host` 列。  §4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1。  
 > 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 > 已接受决策：[ADR-0003](./adr/0003-pi-inspired-module-boundaries.md)
@@ -135,7 +135,7 @@ crates/
 - `[决定]`（2026-09-24）`agent-host` 的平台与日志依赖固定为 `tracing 0.1`（结构化日志）、`win32job 2`（Windows Job Object；safe API，MIT OR Apache-2.0）与 `nix 0.30`（Unix 进程组结束；`default-features = false`，只开 `signal`/`process`，MIT OR Apache-2.0），三者只登记在 `[workspace.dependencies]`，crate 内写 `workspace = true`。选 `win32job` 而不是 `process-wrap` 的理由是 MSRV：`process-wrap` 10 需要 1.87，高于本仓库 `rust-version = 1.85`（§4.5）；Unix 侧选 `nix` 而不是 `libc` 的理由是 workspace 固定 `unsafe_code = "forbid"`，直接调 `killpg` 必须写 `unsafe` 块（`forbid` 不可用 `#[allow]` 绕过）。版本口径同样只维护在 `[workspace.dependencies]`，本行与它保持一致。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
-- workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十二个；不得为凑齐列表创建只有占位实现的空 crate。
+- workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十三个（ADR-0007 引入 `acpr-wire` 后由十二改为十三）；不得为凑齐列表创建只有占位实现的空 crate。
 
 ## 4. 模块职责
 
@@ -523,12 +523,12 @@ Owned 事件只有 core 可以决定何时提交。Imported 事件的业务提�
 ```text
 core::model       DomainError
 core::use_cases   UseCaseError / PortError
-acp-protocol      AcpCodecError
+acp-protocol      AcpError
 sync-protocol     EnvelopeError（信封与阶段）+ ValueError（body 字段级）
 node-link-protocol 表驱动编解码错误复用 acpr-transcript::table::TableError
 acpr-transcript   TranscriptError（codec）+ table::TableError（按表校验）
 acpr-wire         ValueError（字段级校验；各协议私有变体不出此 crate）
-agent-host        AgentHostError -> PortError
+agent-host        HostError -> PortError
 node-link-client  NodeLinkClientError -> PortError
 storage-sqlite    StorageError -> PortError
 server::sync      TransportError / HTTP mapping

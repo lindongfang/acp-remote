@@ -19,6 +19,12 @@ struct Args {
     heartbeat_file: Option<String>,
     dump_env: Option<String>,
     capabilities: Value,
+    /// `session/new` 不返回 `modes`（用于「未宣告」路径）。
+    no_modes: bool,
+    /// `session/new` 不返回 `configOptions`（用于「未宣告」路径）。
+    no_config_options: bool,
+    /// 收到任何配置写入请求就退出：用来证明「拒绝时真的没有发消息」。
+    exit_on_config_write: bool,
 }
 
 impl Args {
@@ -29,11 +35,18 @@ impl Args {
             heartbeat_file: None,
             dump_env: None,
             capabilities: json!({}),
+            no_modes: false,
+            no_config_options: false,
+            exit_on_config_write: false,
         };
         let mut index = 1;
         while index < argv.len() {
             let key = argv[index].as_str();
-            let value = argv.get(index + 1).cloned();
+            // 值是可选的：下一个 token 若以 `--` 开头，说明当前是个开关（否则开关会吞掉后面的开关）。
+            let has_value = argv
+                .get(index + 1)
+                .is_some_and(|next| !next.starts_with("--"));
+            let value = has_value.then(|| argv[index + 1].clone());
             match (key, value) {
                 ("--scenario", Some(value)) => args.scenario = value,
                 ("--heartbeat-file", Some(value)) => args.heartbeat_file = Some(value),
@@ -41,9 +54,12 @@ impl Args {
                 ("--capabilities", Some(value)) => {
                     args.capabilities = serde_json::from_str(&value).unwrap_or_else(|_| json!({}));
                 }
+                ("--no-modes", _) => args.no_modes = true,
+                ("--no-config-options", _) => args.no_config_options = true,
+                ("--exit-on-config-write", _) => args.exit_on_config_write = true,
                 _ => {}
             }
-            index += 2;
+            index += if has_value { 2 } else { 1 };
         }
         args
     }
@@ -153,19 +169,24 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
         (Some("session/new"), Some(id)) => {
             state.session_seq += 1;
             let session_id = format!("acp-session-{}", state.session_seq);
-            respond(
-                out,
-                &id,
-                json!({
-                    "sessionId": session_id,
-                    "modes": {
+            let mut result = serde_json::Map::new();
+            result.insert("sessionId".to_owned(), json!(session_id));
+            if !args.no_modes {
+                result.insert(
+                    "modes".to_owned(),
+                    json!({
                         "currentModeId": "default",
                         "availableModes": [
                             { "id": "default", "name": "Default" },
                             { "id": "plan", "name": "Plan" },
                         ],
-                    },
-                    "configOptions": [
+                    }),
+                );
+            }
+            if !args.no_config_options {
+                result.insert(
+                    "configOptions".to_owned(),
+                    json!([
                         {
                             "id": "verbose",
                             "name": "Verbose",
@@ -184,11 +205,16 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                                 { "value": "large", "name": "Large", "description": "更大" },
                             ],
                         },
-                    ],
-                }),
-            );
+                    ]),
+                );
+            }
+            respond(out, &id, Value::Object(result));
         }
         (Some("session/set_mode"), Some(id)) => {
+            if args.exit_on_config_write {
+                // 收到不该被发送的请求：立即退出，让「未宣告也发消息」变成可观察的失败。
+                std::process::exit(7);
+            }
             respond(out, &id, json!({}));
             let session = message
                 .get("params")
@@ -204,7 +230,12 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                 }),
             );
         }
-        (Some("session/set_config_option"), Some(id)) => respond(out, &id, json!({})),
+        (Some("session/set_config_option"), Some(id)) => {
+            if args.exit_on_config_write {
+                std::process::exit(7);
+            }
+            respond(out, &id, json!({}));
+        }
         (Some("session/prompt"), Some(id)) => {
             state.prompt_seq += 1;
             let session = message
@@ -507,6 +538,34 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
                 &json!({ "jsonrpc": "2.0", "id": 987654321u64, "result": { "ghost": true } }),
             );
             respond(out, &id, json!({ "stopReason": "end_turn" }));
+        }
+        "unknown-content-block" => {
+            // 未登记的 content block：必须可见降级并保留结构化 payload（不得降成 null）。
+            notify(
+                out,
+                "session/update",
+                json!({
+                    "sessionId": session,
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "message-future",
+                        "content": { "type": "future_content_block", "data": { "nested": [1, 2, 3] } },
+                    },
+                }),
+            );
+            respond(out, &id, json!({ "stopReason": "end_turn" }));
+        }
+        "huge-line" => {
+            // 一条超过上限且**不换行**的输出：读侧必须在超限时结束该 Agent（而不是继续挂着）。
+            let filler = "x".repeat(1024 * 1024 + 4096);
+            let _ = write!(
+                out,
+                "{{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{{\"sessionId\":\"{session}\",\"filler\":\"{filler}\"}}"
+            );
+            let _ = out.flush();
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
         }
         "illegal-json" => {
             emit_chunk(out, session, "内容");

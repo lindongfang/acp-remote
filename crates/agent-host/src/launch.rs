@@ -53,6 +53,15 @@ pub async fn resolve_launch(
     let mut env: Vec<(String, String)> = Vec::with_capacity(resolved.len() + NECESSARY_ENV.len());
     for (name, value) in resolved {
         validate_env_name(&name)?;
+        // 白名单是**上限**而不是提示：端口已经保证交集，这里再核一次（纵深防御）。
+        // 端口实现出错时宁可失败关闭，也不把未列入白名单的变量注入子进程。
+        if !profile
+            .env_allowlist()
+            .iter()
+            .any(|allowed| allowed == &name)
+        {
+            return Err(HostError::EnvNotAllowed { name });
+        }
         if env.iter().any(|(existing, _)| existing == &name) {
             // 端口契约不允许重复；真出现时宁可失败也不猜哪个生效。
             return Err(HostError::SpawnFailed {

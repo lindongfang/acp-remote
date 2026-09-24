@@ -347,6 +347,94 @@ async fn tree_forced_termination_stops_the_whole_process_tree() {
     let _ = std::fs::remove_file(&temp);
 }
 
+/// 单条 stdout 超过上限时：必须以明确错误收敛未完成请求、结束该 Agent，并让 `is_running()` 立即为假。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversize_frame_ends_the_agent_and_fails_pending_requests() {
+    let (supervisor, _collector) = started(scenario("huge-line")).await;
+    supervisor
+        .request("initialize", &initialize_params(), Duration::from_secs(10))
+        .await
+        .expect("initialize");
+    let pending = supervisor
+        .begin_request(
+            "session/prompt",
+            &json!({ "sessionId": "acp-session-1", "prompt": [] }),
+        )
+        .expect("begin");
+    let error = tokio::time::timeout(Duration::from_secs(10), pending)
+        .await
+        .expect("超限必须立刻收敛未完成请求")
+        .expect("channel")
+        .expect_err("超限后请求必须是错误");
+    assert!(
+        matches!(
+            error,
+            agent_host::HostError::Protocol(acp_protocol::AcpError::Oversize { .. })
+        ),
+        "必须是明确的超限错误，而不是静默悬挂：{error:?}"
+    );
+    assert!(
+        !supervisor.is_running(),
+        "超限后坏进程不得继续被当成「仍在运行」"
+    );
+    supervisor.shutdown().await;
+}
+
+/// 强制终止路径：父进程仍活着时结束整棵树，父与孙都必须停止。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tree_terminate_while_parent_alive_stops_parent_and_grandchild() {
+    let temp = std::env::temp_dir().join("acpr-agent-host-heartbeat-terminate.txt");
+    let _ = std::fs::remove_file(&temp);
+    let spec = scenario_with(
+        "spawn-grandchild",
+        &["--heartbeat-file", &temp.to_string_lossy()],
+    );
+    let (supervisor, _collector) = started(spec).await;
+    supervisor
+        .request("initialize", &initialize_params(), Duration::from_secs(10))
+        .await
+        .expect("initialize");
+    supervisor
+        .request("session/new", &initialize_params(), Duration::from_secs(10))
+        .await
+        .map(|_| ())
+        .unwrap_or(());
+    let _ = supervisor.begin_request(
+        "session/prompt",
+        &json!({ "sessionId": "acp-session-1", "prompt": [] }),
+    );
+    let mut size = 0usize;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        size = std::fs::metadata(&temp)
+            .map(|meta| meta.len() as usize)
+            .unwrap_or(0);
+        if size > 0 {
+            break;
+        }
+    }
+    assert!(size > 0, "孙进程必须先开始写心跳");
+    assert!(supervisor.is_running(), "父进程仍在运行");
+
+    // 强制终止（不等 grace、也不走友好关闭）：父与孙必须一并停止。
+    supervisor.terminate_tree();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while supervisor.is_running() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(supervisor.has_exited(), "强制终止后父进程必须退出");
+    let after = std::fs::metadata(&temp)
+        .map(|meta| meta.len() as usize)
+        .unwrap_or(0);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let later = std::fs::metadata(&temp)
+        .map(|meta| meta.len() as usize)
+        .unwrap_or(0);
+    assert_eq!(after, later, "强制终止后孙进程必须停止写心跳");
+    supervisor.shutdown().await;
+    let _ = std::fs::remove_file(&temp);
+}
+
 /// `EndpointEvent` 的收集器在监督层用例里也必须被真的消费（防止「从未使用」告警与死积压）。
 #[allow(dead_code)]
 fn assert_event_shape(event: &EndpointEvent) {

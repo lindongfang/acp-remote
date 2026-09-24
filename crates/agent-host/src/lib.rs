@@ -8,8 +8,9 @@
 //! 2. **会话映射**（[`session::AcpSession`]）：把 ACP 通知与请求映射成 core 的
 //!    [`acp_core::model::EndpointEvent`]，把 turn/交互的终态收敛成**唯一**事件，并保持原始 request id 的类型与
 //!    字面量。
-//! 3. **目录与能力**（[`host::AgentHost`]）：`AgentCatalog` 的查询**不启动进程**，能力经真实
-//!    `initialize` 协商后按进程代缓存，未宣告的能力显式不支持。
+//! 3. **目录与能力**（[`host::AgentHost`]）：`AgentCatalog::agents` 只做只读探测（**不启动进程**），
+//!    而 `AgentCatalog::agent_capabilities` 按设计需要真实 `initialize` 协商，因此会启动（或复用）进程，
+//!    协商结果按进程代缓存；未宣告的能力显式不支持。
 //!
 //! 边界纪律：
 //!

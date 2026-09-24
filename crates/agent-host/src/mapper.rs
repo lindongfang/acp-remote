@@ -274,11 +274,14 @@ fn delta_event(
     });
     if !content.is_text() {
         // 非文本块必须带上结构化 `block`（core 折叠收尾消息时用它，纯文本客户端只读 `text`）。
+        // 未登记类型走 `ContentBlock::Unknown`：它标记了 `skip_serializing`（重新编码没有意义），
+        // 因此这里直接用 Agent 给的原始 payload——那才是「可见降级」而不是把它降成 null。
+        let block = match content {
+            ContentBlock::Unknown { payload, .. } => payload.clone(),
+            other => serde_json::to_value(other).unwrap_or(Value::Null),
+        };
         if let Some(object) = view.as_object_mut() {
-            object.insert(
-                "block".to_owned(),
-                serde_json::to_value(content).unwrap_or(Value::Null),
-            );
+            object.insert("block".to_owned(), block);
         }
     }
     view_event(EventKind::Delta, event_type, view, acp, at)

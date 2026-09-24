@@ -84,7 +84,7 @@ impl StderrRing {
 /// 一个 Agent 进程的监督者。
 pub struct Supervisor {
     program: String,
-    tree: ProcessTree,
+    tree: Arc<ProcessTree>,
     outbound: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     pending: Arc<Mutex<Pending>>,
     next_id: AtomicU64,
@@ -130,17 +130,33 @@ impl Supervisor {
             detail: error.to_string(),
         })?;
         // spawn 之后、写 stdin 之前立刻挂进进程树。
-        tree.attach(&child)?;
+        if let Err(error) = tree.attach(&child) {
+            // 已经 spawn 出来了：任何后续失败都必须结束它，不能把孤儿留给系统。
+            tree.terminate();
+            let _ = child.start_kill();
+            return Err(error);
+        }
 
-        let stdin = child.stdin.take().ok_or_else(|| HostError::SpawnFailed {
-            detail: "stdin 未建立管道".to_owned(),
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| HostError::SpawnFailed {
-            detail: "stdout 未建立管道".to_owned(),
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| HostError::SpawnFailed {
-            detail: "stderr 未建立管道".to_owned(),
-        })?;
+        let pipes = (|| -> Result<(_, _, _), HostError> {
+            let stdin = child.stdin.take().ok_or_else(|| HostError::SpawnFailed {
+                detail: "stdin 未建立管道".to_owned(),
+            })?;
+            let stdout = child.stdout.take().ok_or_else(|| HostError::SpawnFailed {
+                detail: "stdout 未建立管道".to_owned(),
+            })?;
+            let stderr = child.stderr.take().ok_or_else(|| HostError::SpawnFailed {
+                detail: "stderr 未建立管道".to_owned(),
+            })?;
+            Ok((stdin, stdout, stderr))
+        })();
+        let (stdin, stdout, stderr) = match pipes {
+            Ok(pipes) => pipes,
+            Err(error) => {
+                tree.terminate();
+                let _ = child.start_kill();
+                return Err(error);
+            }
+        };
 
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
@@ -148,9 +164,10 @@ impl Supervisor {
         let exit = Arc::new(ExitState::new());
         let stderr_ring = Arc::new(Mutex::new(StderrRing::default()));
 
+        let tree = Arc::new(tree);
         let supervisor = Arc::new(Self {
             program: spec.program.clone(),
-            tree,
+            tree: Arc::clone(&tree),
             outbound: Mutex::new(Some(outbound_tx)),
             pending: Arc::clone(&pending),
             next_id: AtomicU64::new(1),
@@ -163,7 +180,13 @@ impl Supervisor {
 
         let tasks = vec![
             tokio::spawn(write_loop(outbound_rx, stdin)),
-            tokio::spawn(read_loop(stdout, Arc::clone(&pending), incoming_tx)),
+            tokio::spawn(read_loop(
+                stdout,
+                Arc::clone(&pending),
+                incoming_tx,
+                Arc::clone(&exit),
+                Arc::clone(&tree),
+            )),
             tokio::spawn(stderr_loop(stderr, stderr_ring)),
             tokio::spawn(wait_loop(child, Arc::clone(&exit), pending)),
         ];
@@ -303,13 +326,26 @@ impl Supervisor {
         }
     }
 
+    /// 立即结束整棵进程树（不等 grace）。
+    ///
+    /// 用于必须马上停止 Agent 的失败路径（stdout 超限、显式终止）与回归测试；正常关闭路径用
+    /// [`Supervisor::shutdown`] 的 grace 顺序。
+    pub fn terminate_tree(&self) {
+        self.tree.terminate();
+    }
+
     /// 等待进程退出（不主动杀死它）。
     async fn wait_exit(&self) {
         loop {
+            // 先登记 waiter 再判 done：`notify_waiters` 只唤醒已注册的 waiter，
+            // 反过来的顺序会丢掉唤醒，让关闭路径白等整个 grace。
+            let notified = self.exit.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.exit.done.load(Ordering::SeqCst) {
                 return;
             }
-            self.exit.notify.notified().await;
+            notified.await;
         }
     }
 
@@ -411,6 +447,8 @@ async fn read_loop(
     mut stdout: tokio::process::ChildStdout,
     pending: Arc<Mutex<Pending>>,
     incoming: mpsc::UnboundedSender<Envelope>,
+    exit: Arc<ExitState>,
+    tree: Arc<crate::platform::ProcessTree>,
 ) {
     let mut buffer: Vec<u8> = Vec::new();
     let mut scratch = vec![0u8; 8192];
@@ -421,16 +459,21 @@ async fn read_loop(
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
-            if !handle_line(&line, &pending, &incoming) {
+            if !handle_line(&line, &pending, &incoming, &exit, &tree) {
                 break;
             }
             continue;
         }
         if buffer.len() > limits::MAX_MESSAGE_BYTES {
-            tracing::warn!(
-                limit = limits::MAX_MESSAGE_BYTES,
-                actual = buffer.len(),
-                "ACP stdout 单条消息超限，结束该 Agent"
+            // 超限不是「忽略这一条」：按 `SECURITY_DESIGN.md` §12.2 必须结束该 Agent，
+            // 否则未完成请求会永久悬挂、坏进程还会被当成「仍在运行」继续复用。
+            abort_agent(
+                "stdout 单条消息超限",
+                limits::MAX_MESSAGE_BYTES,
+                buffer.len(),
+                &pending,
+                &exit,
+                &tree,
             );
             break;
         }
@@ -439,7 +482,7 @@ async fn read_loop(
                 // EOF：最后一段没有换行时按一帧处理，避免静默丢弃。
                 if !buffer.is_empty() {
                     let line = std::mem::take(&mut buffer);
-                    let _ = handle_line(&line, &pending, &incoming);
+                    let _ = handle_line(&line, &pending, &incoming, &exit, &tree);
                 }
                 break;
             }
@@ -449,22 +492,53 @@ async fn read_loop(
     }
 }
 
+/// 结束该 Agent 并收敛全部未完成请求（超限、协议破坏等必须显式停止而非跳过）。
+fn abort_agent(
+    reason: &str,
+    limit: usize,
+    actual: usize,
+    pending: &Arc<Mutex<Pending>>,
+    exit: &Arc<ExitState>,
+    tree: &crate::platform::ProcessTree,
+) {
+    tracing::error!(reason, limit, actual, "ACP stdout 违反上限，结束该 Agent");
+    let drained: Vec<(u64, oneshot::Sender<Result<Value, HostError>>)> = pending
+        .lock()
+        .map(|mut map| map.drain().collect())
+        .unwrap_or_default();
+    for (_, sender) in drained {
+        let _ = sender.send(Err(HostError::Protocol(acp_protocol::AcpError::Oversize {
+            limit,
+            actual,
+        })));
+    }
+    // 先标记退出（`is_running()` 立即为假，坏 runtime 不会被继续复用），再结束整棵树。
+    exit.mark(format!("ACP 消息超限（{actual} > {limit} 字节）"));
+    tree.terminate();
+}
+
 /// 处理一帧；返回 `false` 表示进站通道已关闭（上层不再关心）。
 fn handle_line(
     line: &[u8],
     pending: &Arc<Mutex<Pending>>,
     incoming: &mpsc::UnboundedSender<Envelope>,
+    exit: &Arc<ExitState>,
+    tree: &crate::platform::ProcessTree,
 ) -> bool {
     if line.is_empty() {
         return true;
     }
     if line.len() > limits::MAX_MESSAGE_BYTES {
-        tracing::warn!(
-            limit = limits::MAX_MESSAGE_BYTES,
-            actual = line.len(),
-            "ACP stdout 单条消息超限，忽略该条"
+        // 与「尚未收完就超限」同一条判据：结束该 Agent，而不是静默跳过这一条。
+        abort_agent(
+            "stdout 单条消息超限",
+            limits::MAX_MESSAGE_BYTES,
+            line.len(),
+            pending,
+            exit,
+            tree,
         );
-        return true;
+        return false;
     }
     let Ok(text) = std::str::from_utf8(line) else {
         tracing::warn!("ACP stdout 出现非 UTF-8 消息，忽略该条");
@@ -518,16 +592,40 @@ fn settle(envelope: &Envelope) -> Result<Value, HostError> {
 /// stderr 采集：有界环形缓冲 + 丢弃计数（内容绝不进入 ACP 通道）。
 async fn stderr_loop(mut stderr: tokio::process::ChildStderr, ring: Arc<Mutex<StderrRing>>) {
     let mut scratch = vec![0u8; 8192];
+    let mut received: u64 = 0;
+    let mut announced: u64 = 0;
+    let mut last_log = std::time::Instant::now();
     loop {
         match stderr.read(&mut scratch).await {
             Ok(0) | Err(_) => break,
             Ok(read) => {
-                if let Ok(mut ring) = ring.lock() {
+                received += read as u64;
+                let dropped = if let Ok(mut ring) = ring.lock() {
                     ring.push(&scratch[..read]);
+                    ring.dropped
+                } else {
+                    0
+                };
+                // 结构化日志只记计数与字节数：stderr 可能夹带密钥或 prompt 片段，
+                // 因此内容**永不**进日志（`SECURITY_DESIGN.md` §13.3、`MODULE_ARCHITECTURE.md` §4.5）。
+                // 限频：最多每秒一条丢弃计数日志（超限丢弃最旧数据本来就是持续行为）。
+                if dropped > announced && last_log.elapsed() >= std::time::Duration::from_secs(1) {
+                    announced = dropped;
+                    last_log = std::time::Instant::now();
+                    tracing::warn!(
+                        dropped_bytes = dropped,
+                        retained_bytes = limits::STDERR_RING_BYTES,
+                        "agent stderr 超出环形缓冲上限，已丢弃最旧字节"
+                    );
                 }
             }
         }
     }
+    tracing::info!(
+        received_bytes = received,
+        dropped_bytes = announced,
+        "agent stderr 采集结束"
+    );
 }
 
 /// 退出监视：进程退出时收敛未完成请求并唤醒关闭路径。

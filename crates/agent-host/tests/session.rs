@@ -11,6 +11,7 @@ use acp_core::model::{
     RemoteSessionRef, ResourceOrigin, SessionId, SessionReference,
 };
 use acp_core::ports::{AgentCatalog, SessionBackendFactory, SessionEndpoint};
+use agent_host::runtime_running;
 use agent_host::{AgentHost, HostConfig};
 use serde_json::Value;
 use support::{
@@ -19,6 +20,9 @@ use support::{
 };
 
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
+const CRASH_SESSION: &str = "66666666-6666-4666-8666-666666666666";
+const GATE_SESSION: &str = "77777777-7777-4777-8777-777777777777";
+const BLOCK_SESSION: &str = "88888888-8888-4888-8888-888888888888";
 const OTHER_SESSION: &str = "22222222-2222-4222-8222-222222222222";
 
 fn host(profiles: Vec<AgentProfile>, credentials: FakeCredentials) -> Arc<AgentHost> {
@@ -54,7 +58,12 @@ async fn create(
 ) -> Box<dyn SessionEndpoint> {
     host.create(
         &session_id(session),
-        CreateSessionRequest::new(agent_ref(), None, None, ResourceOrigin::Local),
+        CreateSessionRequest::new(
+            agent_ref(),
+            Some(support::workspace()),
+            None,
+            ResourceOrigin::Local,
+        ),
         collector.sink(),
     )
     .await
@@ -542,7 +551,12 @@ async fn session_mapping_covers_create_open_and_unknown_references() {
     let duplicate = outcome_error(
         host.create(
             &session_id(SESSION),
-            CreateSessionRequest::new(agent_ref(), None, None, ResourceOrigin::Local),
+            CreateSessionRequest::new(
+                agent_ref(),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
             collector.sink(),
         )
         .await,
@@ -586,6 +600,133 @@ async fn session_mapping_covers_create_open_and_unknown_references() {
     assert!(matches!(imported, PortError::InvalidRequest(_)));
 
     let _ = OriginEpoch::new("55555555-5555-4555-8555-555555555555");
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// 进程在 turn 中途崩溃：必须产生**恰好一次** `turn.failed`，且后续写入被拒绝。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_failed_is_reported_once_when_the_agent_crashes_mid_turn() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "crash-on-prompt"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let endpoint = create(&host, CRASH_SESSION, &collector).await;
+    endpoint
+        .prompt(prompt("会崩"), support::timestamp())
+        .await
+        .expect("prompt");
+    assert!(
+        collector
+            .wait_for_type("turn.failed", Duration::from_secs(10))
+            .await,
+        "崩溃必须变成明确的 turn.failed：{:?}",
+        collector.event_types()
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(collector.count("turn.failed"), 1, "终态只能有一次");
+    assert_eq!(collector.count("turn.completed"), 0);
+    let view = collector.first_view("turn.failed").expect("view");
+    let view: Value = serde_json::from_str(&view).expect("view");
+    assert!(
+        view.get("error").is_some(),
+        "turn.failed 必须带结构化错误：{view}"
+    );
+    // 进程已死：后续写入必须被拒绝，而不是悬挂。
+    let refused = endpoint.prompt(prompt("再来"), support::timestamp()).await;
+    assert!(refused.is_err(), "崩溃后不得接受新的 turn");
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// Agent 未宣告模式/配置项时：显式拒绝，并且**一个字节都不发**（fake child 收到就退出）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undeclared_capability_is_refused_without_sending_anything() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &[
+                "--scenario",
+                "normal",
+                "--no-modes",
+                "--no-config-options",
+                "--exit-on-config-write",
+            ],
+        )],
+        FakeCredentials::ok(),
+    );
+    let endpoint = create(&host, GATE_SESSION, &collector).await;
+    let agent = AgentId::new("agent-1").expect("id");
+    // 未宣告模式：返回空结果（不编造候选），且 set_mode 显式拒绝。
+    let modes = endpoint.modes().await.expect("modes");
+    assert!(modes.available.is_empty(), "未宣告时不得编造候选模式");
+    assert!(modes.current_mode.is_none());
+    let mode_error = endpoint
+        .set_mode(&acp_core::model::ModeId::new("plan").expect("mode"))
+        .await;
+    assert!(mode_error.is_err(), "未宣告模式时必须显式拒绝");
+    // 未宣告配置项：列表为空，写入被拒绝。
+    let config = endpoint.list_config().await.expect("config");
+    assert!(config.is_empty(), "未宣告配置项时列表必须为空");
+    let option = acp_core::model::ConfigOptionId::new("verbose").expect("id");
+    let config_error = endpoint.set_config(&option, support::boolean(true)).await;
+    assert!(config_error.is_err(), "未宣告配置项时必须显式拒绝");
+    // 两次拒绝都没有发出任何请求：fake child 若收到就会 exit(7)。
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        runtime_running(&host, &agent),
+        "拒绝路径不得向 Agent 发送消息（否则 fake child 会退出）"
+    );
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// 未登记的 content block：必须可见降级（结构化 payload 进 `block`），不是 null、也不是丢失。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unknown_content_block_stays_structured() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "unknown-content-block"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let endpoint = create(&host, BLOCK_SESSION, &collector).await;
+    endpoint
+        .prompt(prompt("未来块"), support::timestamp())
+        .await
+        .expect("prompt");
+    assert!(
+        collector
+            .wait_for_type("agent.message.delta", Duration::from_secs(10))
+            .await,
+        "必须收到 delta 事件"
+    );
+    let view = collector.first_view("agent.message.delta").expect("delta");
+    let view: Value = serde_json::from_str(&view).expect("view");
+    let block = view.get("block").expect("非文本块必须带 block 字段");
+    assert!(!block.is_null(), "block 不得被降成 null：{view}");
+    assert_eq!(
+        block.get("type").and_then(Value::as_str),
+        Some("future_content_block")
+    );
+    assert_eq!(
+        block
+            .get("data")
+            .and_then(|data| data.get("nested"))
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(3)
+    );
     drop(endpoint);
     host.shutdown_all().await;
 }

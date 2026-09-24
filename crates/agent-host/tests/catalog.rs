@@ -116,7 +116,12 @@ async fn availability_is_per_entry_and_credentials_fail_closed() {
     let error = broken
         .create(
             &SessionId::new(SESSION).expect("session"),
-            CreateSessionRequest::new(agent_ref("agent-broken"), None, None, ResourceOrigin::Local),
+            CreateSessionRequest::new(
+                agent_ref("agent-broken"),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
             Collector::new().sink(),
         )
         .await;
@@ -142,7 +147,12 @@ async fn child_environment_is_exactly_the_launch_spec() {
     let _endpoint = host
         .create(
             &SessionId::new(SESSION).expect("session"),
-            CreateSessionRequest::new(agent_ref("agent-1"), None, None, ResourceOrigin::Local),
+            CreateSessionRequest::new(
+                agent_ref("agent-1"),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
             collector.sink(),
         )
         .await
@@ -205,7 +215,12 @@ async fn profile_selection_ignores_startup_configuration_files() {
     let _endpoint = host
         .create(
             &SessionId::new(SESSION).expect("session"),
-            CreateSessionRequest::new(agent_ref("agent-1"), None, None, ResourceOrigin::Local),
+            CreateSessionRequest::new(
+                agent_ref("agent-1"),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
             collector.sink(),
         )
         .await
@@ -233,7 +248,12 @@ async fn idle_reclaim_needs_timeout_and_never_fires_for_zero() {
     let _endpoint = host
         .create(
             &session,
-            CreateSessionRequest::new(agent_ref("agent-1"), None, None, ResourceOrigin::Local),
+            CreateSessionRequest::new(
+                agent_ref("agent-1"),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
             collector.sink(),
         )
         .await
@@ -260,4 +280,30 @@ async fn idle_reclaim_needs_timeout_and_never_fires_for_zero() {
     assert_eq!(runtime_generation(&host, &agent), Some(2));
     host.shutdown_all().await;
     let _ = std::fs::remove_file(&dump);
+}
+
+/// 白名单是注入上限：端口即使返回了白名单外的变量，也必须在 spawn 之前失败关闭。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn credential_variable_outside_the_allowlist_is_refused_before_spawn() {
+    let (profile, dump) = dumping_profile("agent-1", "leak");
+    let host = host(vec![profile], FakeCredentials::leaking());
+    let outcome = host
+        .create(
+            &SessionId::new(SESSION).expect("session"),
+            CreateSessionRequest::new(
+                agent_ref("agent-1"),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
+            Collector::new().sink(),
+        )
+        .await;
+    assert!(outcome.is_err(), "白名单外的凭据变量必须被拒绝");
+    assert!(
+        !dump.exists(),
+        "拒绝必须发生在 spawn 之前（子进程不得启动）"
+    );
+    let _ = std::fs::remove_file(&dump);
+    host.shutdown_all().await;
 }

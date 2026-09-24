@@ -374,13 +374,25 @@ impl AcpSession {
             return;
         }
         let at = self.clock.now();
-        let event = mapper::permission_event(
+        let event = match mapper::permission_event(
             &interaction_id,
             &request.tool_call,
             &request.options,
             raw,
             at,
-        );
+        ) {
+            Ok(event) => event,
+            Err(error) => {
+                // 交付不出去就绝不登记：登记了却没人知道 interactionId 会让 Agent 永久等待。
+                tracing::warn!(error = %error, "权限请求无法映射为事件");
+                let _ = self.supervisor.send_error_response(
+                    &id,
+                    message::CODE_INTERNAL_ERROR,
+                    "权限请求无法映射为事件",
+                );
+                return;
+            }
+        };
         {
             let mut inner = lock(&self.inner);
             inner.interactions.insert(
@@ -391,9 +403,7 @@ impl AcpSession {
                 },
             );
         }
-        if let Ok(event) = event {
-            self.emit(event);
-        }
+        self.emit(event);
     }
 
     fn handle_elicitation(&self, envelope: &Envelope) {
@@ -416,7 +426,18 @@ impl AcpSession {
         let interaction_id = self.ids.interaction_id();
         let raw = mapper::acp_raw(envelope.document()).ok();
         let at = self.clock.now();
-        let event = mapper::elicitation_event(&interaction_id, &request, raw, at);
+        let event = match mapper::elicitation_event(&interaction_id, &request, raw, at) {
+            Ok(event) => event,
+            Err(error) => {
+                tracing::warn!(error = %error, "elicitation 请求无法映射为事件");
+                let _ = self.supervisor.send_error_response(
+                    &id,
+                    message::CODE_INTERNAL_ERROR,
+                    "elicitation 请求无法映射为事件",
+                );
+                return;
+            }
+        };
         {
             let mut inner = lock(&self.inner);
             inner.interactions.insert(
@@ -427,9 +448,7 @@ impl AcpSession {
                 },
             );
         }
-        if let Ok(event) = event {
-            self.emit(event);
-        }
+        self.emit(event);
     }
 
     /// 取消当前 turn（通知，不需要响应）。
@@ -790,10 +809,18 @@ impl SessionEndpoint for Endpoint {
             }
             .to_port_error());
         }
+        // `session/set_config_option` 的 `value` 是一个 anyOf：布尔必须写成
+        // `{type:"boolean",value:bool}`，其余只能是 `{value:"<id>"}`。裸值两种形状都不匹配。
         let raw = match value {
-            ConfigValue::Boolean(flag) => json!(flag),
-            ConfigValue::Text(text) => json!(text.as_str()),
-            ConfigValue::Select(selected) => json!(selected.as_str()),
+            ConfigValue::Boolean(flag) => message::config_value_boolean(flag),
+            ConfigValue::Select(selected) => message::config_value_id(selected.as_str()),
+            // 线上没有文本取值的形状（只有 boolean 与 value-id），因此显式拒绝而不是发一个非法请求。
+            ConfigValue::Text(_) => {
+                return Err(HostError::CapabilityNotDeclared {
+                    capability: "configOptions.text".to_owned(),
+                }
+                .to_port_error());
+            }
         };
         let params = json!({
             "sessionId": self.session.acp_session_id,

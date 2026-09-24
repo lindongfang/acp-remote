@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use acp_core::model::Digest;
 use acp_core::model::{
-    AgentId, AgentProfile, ConfigValue, ProviderEnvBinding, ProviderRef, SecretValue, Timestamp,
-    WorkspaceRecord,
+    AgentId, AgentProfile, ConfigValue, ProviderEnvBinding, ProviderRef, ResolvedWorkspace,
+    SecretValue, Timestamp, WorkspaceAlias, WorkspaceRecord,
 };
 use acp_core::ports::{
     Clock, CredentialResolver, EventSink, IdGenerator, LocalConfigStore, ProfileWrite,
@@ -339,19 +339,36 @@ impl LocalConfigStore for FakeConfig {
 #[derive(Debug, Default)]
 pub struct FakeCredentials {
     fail: bool,
+    /// 故意返回一个不在白名单里的变量（用于验证「白名单是上限」的纵深防御）。
+    leak: bool,
 }
 
 impl FakeCredentials {
     /// 正常解析。
     #[must_use]
     pub fn ok() -> Self {
-        Self { fail: false }
+        Self {
+            fail: false,
+            leak: false,
+        }
     }
 
     /// 一律失败（模拟 keystore 不可用或引用失效）。
     #[must_use]
     pub fn failing() -> Self {
-        Self { fail: true }
+        Self {
+            fail: true,
+            leak: false,
+        }
+    }
+
+    /// 返回一个白名单外的变量（模拟端口实现出错）。
+    #[must_use]
+    pub fn leaking() -> Self {
+        Self {
+            fail: false,
+            leak: true,
+        }
     }
 }
 
@@ -365,6 +382,12 @@ impl CredentialResolver for FakeCredentials {
             return Err(acp_core::model::PortError::Unavailable(
                 acp_core::model::UnavailableKind::KeystoreUnavailable,
             ));
+        }
+        if self.leak {
+            return Ok(vec![(
+                "NOT_ALLOW_LISTED".to_owned(),
+                SecretValue::new("fake-secret-value".to_owned()),
+            )]);
         }
         // 白名单是上限：绑定不在白名单里就不注入（与真实端口契约一致）。
         Ok(profile
@@ -384,6 +407,16 @@ impl CredentialResolver for FakeCredentials {
             })
             .collect())
     }
+}
+
+/// 一个存在的 workspace（ 需要已解析的 cwd）。
+#[must_use]
+pub fn workspace() -> ResolvedWorkspace {
+    ResolvedWorkspace::try_new(
+        WorkspaceAlias::new("demo").expect("alias"),
+        std::env::temp_dir().to_string_lossy().into_owned(),
+    )
+    .expect("workspace")
 }
 
 /// 计算一段文本的 `Digest`（与实现同口径：SHA-256 → 无填充 base64url）。

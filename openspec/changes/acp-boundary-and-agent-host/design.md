@@ -101,7 +101,7 @@
   - 赋值时机：Job 先创建并设置 `KILL_ON_JOB_CLOSE`，再 spawn（`tokio::process::Command`，Windows 上 `Child::raw_handle()` 取句柄），spawn 成功后**在写入任何 stdin 之前**立即 assign。探针同样是「先 spawn 后 assign」，残余窗口见风险 2。
   - 被否的备选：`process-wrap` 10（MSRV 1.87 > 仓库 1.85，需用户决定是否抬 MSRV）；`command-group`（MSRV 1.68 但已弃用，且不提供 Job Object）；直接 FFI `kernel32`（被 workspace `unsafe_code = "forbid"` 禁止）。
   - 退路：实现第一步核验 `win32job` 的传递依赖 MSRV、许可证与维护状态；若不合格或传导抬高 MSRV → **回到用户决策**（抬 MSRV，或新增 ADR + 为该 crate 覆盖 lint），不擅自放开 `unsafe`。
-- **Unix**：spawn 前 `CommandExt::process_group(0)` 使子进程成为新进程组组长；结束用 `libc::killpg(pid, SIGKILL)`，随后 `wait` 回收。CI 在 Linux 上执行这条路径。
+- **Unix**：spawn 前 `CommandExt::process_group(0)` 使子进程成为新进程组组长；结束用 `nix::sys::signal::killpg(pid, SIGKILL)`，随后 `wait` 回收。CI 在 Linux 上执行这条路径。
 
 ### D7 固定 v1 常量与有界处理
 

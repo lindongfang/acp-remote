@@ -23,7 +23,7 @@ use acp_core::ports::{
 use acp_protocol::Envelope;
 use acp_protocol::capability::AgentCapabilities;
 use acp_protocol::message::{self, InitializeRequest, InitializeResponse};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::config::HostConfig;
@@ -44,6 +44,8 @@ struct AgentRuntime {
     by_acp: std::sync::Mutex<HashMap<String, Arc<AcpSession>>>,
     /// core 会话标识 → ACP 会话标识（重复 create 与 open 的判据）。
     by_core: std::sync::Mutex<HashMap<String, String>>,
+    /// 进程级最近活动时间（没有活动会话时的空闲回收判据）。
+    last_activity: std::sync::Mutex<std::time::Instant>,
 }
 
 impl AgentRuntime {
@@ -54,6 +56,7 @@ impl AgentRuntime {
             capabilities: std::sync::Mutex::new(None),
             by_acp: std::sync::Mutex::new(HashMap::new()),
             by_core: std::sync::Mutex::new(HashMap::new()),
+            last_activity: std::sync::Mutex::new(std::time::Instant::now()),
         }
     }
 
@@ -61,6 +64,15 @@ impl AgentRuntime {
     #[must_use]
     fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// 进程级空闲判据（协商与目录活动也刷新它）。
+    fn idle_for(&self, timeout: Duration) -> bool {
+        lock(&self.last_activity).elapsed() >= timeout
+    }
+
+    fn touch(&self) {
+        *lock(&self.last_activity) = std::time::Instant::now();
     }
 
     fn session_for_acp(&self, acp_session_id: &str) -> Option<Arc<AcpSession>> {
@@ -75,12 +87,14 @@ impl AgentRuntime {
         }
         lock(&self.by_core).insert(core_id, acp.clone());
         lock(&self.by_acp).insert(acp, Arc::clone(session));
+        self.touch();
         Ok(())
     }
 
     fn remove_session(&self, session: &AcpSession) {
         lock(&self.by_core).remove(session.session_id().as_str());
         lock(&self.by_acp).remove(session.acp_session_id());
+        self.touch();
     }
 
     fn sessions(&self) -> Vec<Arc<AcpSession>> {
@@ -183,6 +197,7 @@ impl AgentHost {
             }
         }
 
+        runtime.touch();
         spawn_router(Arc::clone(&runtime), incoming);
         runtimes.insert(agent.clone(), Arc::clone(&runtime));
         Ok(runtime)
@@ -240,14 +255,16 @@ impl AgentHost {
             self.runtimes.lock().await.values().cloned().collect();
         for runtime in runtimes {
             let sessions = runtime.sessions();
-            if sessions.is_empty() {
-                continue;
-            }
-            // 只在**全部**会话都空闲时关闭进程：任一会话有进行中的 turn 就不动它。
-            if sessions
-                .iter()
-                .all(|session| session.is_idle_for(idle_timeout))
-            {
+            // 没有活动会话的 runtime（例如只协商过能力的进程）按进程级空闲时间回收；
+            // 有会话时要求**全部**会话都空闲（任一会话有进行中的 turn 就不动它）。
+            let idle = if sessions.is_empty() {
+                runtime.idle_for(idle_timeout)
+            } else {
+                sessions
+                    .iter()
+                    .all(|session| session.is_idle_for(idle_timeout))
+            };
+            if idle {
                 for session in &sessions {
                     session.close_session();
                 }
@@ -373,28 +390,10 @@ impl SessionBackendFactory for AgentHost {
             .map_err(|error| error.to_port_error())?;
         let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
 
-        let mut params = serde_json::Map::new();
-        // 只使用 core 已解析的规范化路径；本 crate 不读 workspace 存储、不拼路径。
-        if let Some(workspace) = &request.workspace {
-            params.insert(
-                "cwd".to_owned(),
-                Value::String(workspace.canonical_path().to_owned()),
-            );
-        }
-        if request.template.is_some() {
-            // template 展开属于 Export/Node Link 语义，本层没有可如实表达的位置：显式拒绝。
-            return Err(HostError::CapabilityNotDeclared {
-                capability: "session.template".to_owned(),
-            }
-            .to_port_error());
-        }
+        let params = session_new_params(&request)?;
         let value = runtime
             .supervisor
-            .request(
-                "session/new",
-                &Value::Object(params),
-                limits::SHORT_REQUEST_TIMEOUT,
-            )
+            .request("session/new", &params, limits::SHORT_REQUEST_TIMEOUT)
             .await
             .map_err(|error| error.to_port_error())?;
         let response: acp_protocol::message::NewSessionResponse = serde_json::from_value(value)
@@ -454,6 +453,33 @@ impl SessionBackendFactory for AgentHost {
     }
 }
 
+/// `session/new` 的参数。
+///
+/// 两个约束都来自 pinned schema（`schemas/acp/v1/upstream/schema.json` 的 `NewSessionRequest`）：
+/// `cwd` 与 `mcpServers` 都是**必填**。因此：
+///
+/// - `cwd` 只能来自 core 已解析的 workspace 路径（本 crate 不读存储、不拼路径、也不拿 Daemon 的当前目录
+///   冒充用户选定的 workspace）；core 未解析时显式拒绝，而不是发一个缺必填字段的请求；
+/// - `mcpServers` 本阶段固定为空数组（没有 MCP 配置来源），空数组合法。
+fn session_new_params(request: &CreateSessionRequest) -> Result<Value, PortError> {
+    if request.template.is_some() {
+        // template 展开属于 Export/Node Link 语义，本层没有可如实表达的位置：显式拒绝。
+        return Err(HostError::CapabilityNotDeclared {
+            capability: "session.template".to_owned(),
+        }
+        .to_port_error());
+    }
+    let Some(workspace) = &request.workspace else {
+        return Err(PortError::InvalidRequest(
+            "session/new 需要已解析的 workspace（ACP 要求 cwd）",
+        ));
+    };
+    Ok(json!({
+        "cwd": workspace.canonical_path(),
+        "mcpServers": [],
+    }))
+}
+
 /// 从 profile 造 `AgentRef`。
 fn agent_ref(profile: &AgentProfile) -> Result<AgentRef, PortError> {
     AgentRef::try_new(profile.id().clone(), profile.display_name())
@@ -482,11 +508,7 @@ fn command_resolves(command: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;
     };
-    let candidates = if cfg!(windows) {
-        vec![command.to_owned(), format!("{command}.exe")]
-    } else {
-        vec![command.to_owned()]
-    };
+    let candidates = crate::platform::command_candidates(command);
     std::env::split_paths(&paths).any(|dir| candidates.iter().any(|name| dir.join(name).is_file()))
 }
 

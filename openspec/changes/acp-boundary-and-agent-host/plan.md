@@ -519,7 +519,7 @@ rows:
 | W0 契约与依赖冻结（串行，单执行者） | 1.1 → WP1（2.1–2.4） | 已完成的仓库工作区 | 1 | `Cargo.toml` 与文档在 W0 只有一个写入者；本波完成条件 = PV2/PV3 绿（新 crate 尚未加入 members，因此矩阵新增列不影响判定）+ 一个基线提交 |
 | W1 `acp-protocol` | WP2（2.5–2.11） | W0 的基线提交 | 1 | 本 crate 是 `agent-host` 的接口提供方，先落地并冻结 public API；本波同时把 `crates/acp-protocol` 写入 `members` |
 | W2 `agent-host` 监督层 | WP3（2.12–2.19） | WP2 的 public API 冻结 | 1 | 本波把 `crates/agent-host` 写入 `members`；`Cargo.toml` 的两次成员写入按波次串行（W1 → W2），不并发 |
-| W3 并行实现 | WP4（2.20–2.24）∥ WP5（2.25–2.27） | WP3 的 `LaunchSpec` 与 supervisor 接口冻结 | 2 | 两条轨道文件不重叠：`session.rs`/`mapper.rs`/`interaction.rs` ／ `catalog.rs`/`config.rs`/`credentials.rs`；各自 test 文件独立 |
+| W3 并行实现 | WP4（2.20–2.24）∥ WP5（2.25–2.27） | WP3 的 `LaunchSpec` 与 supervisor 接口冻结 | 2 | 两条轨道文件不重叠：`session.rs`/`mapper.rs`/`session.rs` ／ `host.rs`/`config.rs`/`launch.rs`；各自 test 文件独立 |
 | W4 交付前验证 | 3.1–3.10 | W1–W3 对应轨道完成 | 2 | PV 与独立 review 并行；review 必须由不继承实现对话的 reviewer 完成 |
 | W5 集成与合入 | 5.1–5.2 → 6.1–6.8 | 全部 3.x 完成 | 1 | `integrated` 单一交付单元；每个目标分支只允许一个集成执行者串行更新 |
 | W6 最终验证 | 7.1–7.3 → 8.1 | 6.7、6.8 | 1 | not-applicable 的替代验证 + `[e2e-owned]` 门禁 + 最终验收 |

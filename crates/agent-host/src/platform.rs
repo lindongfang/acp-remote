@@ -13,6 +13,18 @@
 
 use crate::error::HostError;
 
+/// 在 `PATH` 里查找命令时要尝试的文件名（Windows 需要补 `.exe`）。
+///
+/// 放在本模块是为了让平台分支只出现在这里（`docs/MODULE_ARCHITECTURE.md` §4.5）。
+#[must_use]
+pub fn command_candidates(command: &str) -> Vec<String> {
+    if cfg!(windows) {
+        vec![command.to_owned(), format!("{command}.exe")]
+    } else {
+        vec![command.to_owned()]
+    }
+}
+
 /// 一个 Agent 的进程树句柄。粒度是**每个 Agent 一个**：结束某个 Agent 不影响其它 Agent
 /// （单个全局 Job 无法只结束一棵树，那正是 `docs/MODULE_ARCHITECTURE.md` §4.5 的收口点）。
 #[derive(Debug)]
@@ -120,8 +132,8 @@ mod inner {
 
     impl Inner {
         pub fn prepare(command: &mut tokio::process::Command) -> Result<Self, HostError> {
-            use std::os::unix::process::CommandExt;
             // 子进程成为自己进程组的组长：结束该组即可覆盖整棵树。
+            // 注意：tokio 的 Command 在 unix 上自带 `process_group`，无需引入 std 的 CommandExt。
             command.process_group(0);
             Ok(Self {
                 pgid: Mutex::new(None),
