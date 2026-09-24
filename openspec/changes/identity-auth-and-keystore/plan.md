@@ -686,7 +686,7 @@ rows:
       requirement: "### Requirement: 条目与引用之间没有分布式事务但可恢复"
     tasks: ["2.14"]
     checks: [PV4]
-    evidence: [reports/wp3-identity-keystore.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/rv4-pv4.log, reports/rv4-mutation.log]
   - id: R87
     source:
       path: specs/platform-keystore/spec.md
