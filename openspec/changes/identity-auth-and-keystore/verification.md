@@ -40,6 +40,11 @@
 | PV1–PV5 + mutation（**RV7/RV8 修复轮的最终证据**）/ 3.1–3.8 | **`c1fd65d`（代码注释与文档，工作区干净；其后只有「只改 `openspec/changes/identity-auth-and-keystore/*.md`」的记录提交，代码未变——由编排者声明，只读 reviewer 无法用 git 自证）** | 清理 RV7 登记的 3 条 P2 残留（`state.rs`/`pairing.rs` 的旧口径注释、`plan.md` 自检命令的行内残片、证据行的记录提交哈希表述）后重跑全部证据项 | 主 Agent（coder） | `npm run verify`；`node scripts/check-crate-boundaries.mjs`；`cargo test --locked -p identity-auth --all-features`；`cargo test --locked -p identity-keystore --all-features`；`cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture`；`cargo clippy --locked -p identity-auth -p identity-keystore --target x86_64-unknown-linux-gnu --all-targets --all-features -- -D warnings`；mutation 检查（**14** 个退化，见 `reports/rv8-mutation.log`） | Rust 1.98.1 / cargo 1.98.1 / Node v24.19.0；已安装 `x86_64-unknown-linux-gnu` 目标（只能编译/lint，本机无法链接 Linux 二进制） | PASS（identity-auth **79** 用例、identity-keystore **36** 用例；`npm run verify` exit 0；10 crate 边界 OK；Linux 目标 clippy 无告警；mutation 汇总 `CAUGHT=14 / NOT-CAUGHT=0 / INVALID=0 / SKIP=0`，末尾工作区 0 个改动文件） | `reports/rv8-pv1.log`、`reports/rv8-pv2.log`、`reports/rv8-pv3.log`、`reports/rv8-pv4.log`、`reports/rv8-pv5.log`、`reports/rv8-linux-clippy.log`、`reports/rv8-mutation.log`、`reports/rv8-selfcheck-rg.log`（全部落在本变更目录，头部含 revision `c1fd65d` 与完整命令） |
 | 自检（RV1 后补，RV3/RV4/RV6 三次修正计数）/ WP2 / 3.3 | `c1fd65d` | 计划自检项（`plan.md` 收窄后的口径）：「**可失败路径**零 `unwrap`/`expect`，命中处逐条登记理由」 | 主 Agent（coder） | `grep -rn "unwrap()\|expect(\|panic!\|unreachable!\|from_der" crates/identity-auth/src crates/identity-keystore/src` | 同上 | **共 17 处命中（日志末行给出总数），逐处归类——全部不在可失败的外部输入路径上**：① `identity-auth/src/types.rs:256`——`Digest` 构造的不可变式（base64url 文本必然规范）；② `identity-keystore/src/entropy.rs:37-38`——`#[cfg(test)] mod tests` 内的固定断言；③ `ephemeral.rs:54`——新建实例的锁不可能中毒；④ `store.rs` 的测试模块内 **13** 处：`unix_modes`（`#[cfg(all(test, unix))]`，482–549 行）**7** 处（`499/515/523/525/529/530/539`）+ `atomic_tests`（`#[cfg(test)]`，550 行起）**6** 处（`567/570/571/573/581/587`）；`mode_tests` 自身 **0** 处（它只做常量断言——RV5 纠正了此处先前把 13 处归给 `mode_tests` 的错误归属）。原始计划措辞「非测试代码零命中」与事实不符，已按事实收窄（`plan.md` 已同步） | `reports/rv8-selfcheck-rg.log`（含命令、revision 与命中总数 17；`rv5-*`/`rv7-*` 为历史同值证据） |
 
+| DU1 6.1 基线复核（集成轮）/ 6.1 | `refs/heads/main` = `30f0d78`；候选 `ed98f6d` | 合入前的目标基线固定与可 FF 判定（主 Agent 机械核实 + 集成执行者复核两次一致） | 集成执行者（独立子 Agent `d8a7306a`） | `git rev-parse refs/heads/main`；`git rev-list --left-right --count refs/heads/main...HEAD`；`git merge-base --is-ancestor`；`git worktree list`；`git status --porcelain --untracked-files=all` | Rust 1.98.1 / cargo 1.98.1 / Node v24.19.0 / npm 12.0.2 | PASS（main = `30f0d78`（= 计划起点，主线未前进）；`0 21`；FF 可行；单 worktree；工作区空） | `reports/du1-baseline.log`（头部含 revision `ed98f6d`、baseline `30f0d78`、`EXIT=0`） |
+| DU1 6.2 候选构成固定 / 6.2 | 候选 `ed98f6d`（`feat/identity-auth-and-keystore` tip） | DU1 组成（WP1–WP4 + RV1–RV9 修复/记录，共 **21** 提交、线性无 merge）、成员与依赖登记、无未登记改动、候选可构建 | 集成执行者 | `git log/rev-list/diff --name-status 30f0d78..HEAD`；`cargo metadata --locked`；`cargo build --locked --workspace --all-features` | 同上 | PASS（21 提交；10 个 workspace 成员含两个新 crate；`Cargo.lock` 登记 `getrandom`/`windows-dpapi`/`hmac 0.13`；构建 `EXIT=0`（0.43s，缓存命中）；未登记改动 0） | `reports/du1-composition.log`、`reports/du1-candidate-build.log` |
+| DU1 6.3 候选 Project Verify / 6.3 | 候选 `ed98f6d` | [PV1]–[PV5] 在**候选提交上全部重跑**（不复用 `rv8-*` 结论；数值与之一致仅作交叉印证） | 集成执行者（单写入者） | `npm run verify`；`node scripts/check-crate-boundaries.mjs`；`cargo test --locked -p identity-auth --all-features`；`cargo test --locked -p identity-keystore --all-features`；`cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture` | 同上；DPAPI 独占（执行前后 `cargo.exe` 实例为 0） | PASS（PV1 `EXIT=0`：workspace **513 passed / 0 failed / 2 ignored**、`check` 十道门禁 9 items、`doc links 369/3826`、`crate boundaries 10`、drift OK、agentic PASS；PV2 exit 0；PV3 **79**；PV4 **36**；PV5 **5**；五份日志 NUL 数均为 **0**） | `reports/du1-pv1.log`..`du1-pv5.log`（各含完整命令头 + revision + baseline + `EXIT=0`）、`reports/du1-integration.md`（§4 逐项表） |
+| DU1 5.1 集成 Agent 创建与交接（主 Agent）/ 5.1 | 候选 `ed98f6d` | 独立集成执行者（**不由主 Agent 兼任**）与其交接清单完整；上下文方式为新建、未继承实现对话 | 主 Agent（调度，不执行集成） | 交接材料：`roles/integrator.md` 全文 + DU1/模式/顺序 + 仓库与集成分支 + `refs/heads/main` 引用 + 源/基点/候选提交 + 已验收上游证据清单 + 变更目录与适用规则 + [PV1]–[PV5] 命令与日志路径 + E2E 范围 + reviewer 交接方式 + 写范围限制 + **授权边界** + 报告路径 | — | PASS（实际 Agent ID **`d8a7306a-bd96-4901-bf95-1f4a205d3303`**（agent `worker`、`fresh` 上下文、cwd = 主 worktree）；主 Agent 未兼任集成执行者） | `reports/du1-integration.md`（§0 固定字段 + §1 交接与工作区） |
+| DU1 5.2 就绪复核（主 Agent）/ 5.2 | 候选 `ed98f6d` + 第 3 组全部复核完成 | DU1 模式（`integrated`）与组成（WP1–WP4）、[PV1]–[PV5] 与 RV1–RV9 证据有效性、无未解决阻断项与未登记漂移 | 主 Agent | 逐条核对 `plan.md` 的 DU1 行与 `## Checks`/`## Review Findings` 全表；核对证据文件存在性与 revision 绑定 | — | PASS（模式与组成一致；候选轮 [PV1]–[PV5] 全绿；RV7/RV8/RV9 = PASS 且无残留；无未登记漂移——唯一登记在案的环境事故见 `## Merge History`） | 本表 DU1 各行 + `## Review Findings` 的 RV7–RV9 行 |
 ## Check Plan Changes
 
 - **RV1 修复轮新增的检查（2026-09-24）**：
@@ -72,6 +77,8 @@
   （`acpr-keystore-<tag>-<pid>-<n>`），按计划串行轮次执行；每个用例通过 `TempRoot` 自建并在结束时删除，
   证据：`reports/pv5-windows-dpapi.log`（5 个用例全绿；执行后无残留目录）
 
+- **DU1 候选轮的资源口径（2026-09-24）**：集成执行者**未另开 worktree**、未设 `CARGO_TARGET_DIR`、未起后台进程，按 `plan.md` 的 DU1 行使用**主 worktree** 与共享 `target/`（全程串行、单写入者，执行前后 `cargo.exe` 实例为 0）；[PV5] 独占条件成立（无第二个 DPAPI 使用者）。
+- **登记未清理的历史残留**：`%TEMP%` 下有 6 个 `acpr-keystore-atomic-*` 目录（mtime 22:10–22:43，早于本轮验证，系更早测试/变异轮残留）。集成执行者按「只清理自身资源」口径**未删除**并如实登记；本轮 PV4/PV5 执行前后临时目录快照一致（本 run 零残留）。**不声称这些残留已被清理**。
 ## Review Findings
 
 | ID | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck Evidence |
@@ -96,7 +103,24 @@
 
 ## Merge History
 
-尚未开始集成（等待第 3 组交付前验证完成）。
+
+
+### 合并路径授权与对 `AGENTS.md` §8 的偏离（用户决定，2026-09-24）
+
+- **用户决定**：本变更**仅本地合入 main**（用户 2026-09-24 的答复原文：`2` → 追问确认「仅本地合入 main」）。授权范围：仅把 DU1 以 **fast-forward** 方式合入本地 `refs/heads/main`，**不 push**、不更新远端跟踪引用、不回滚、不发布。
+- **对 `AGENTS.md` §8 的偏离**：§8 要求「变更落地走 PR + 必需检查（`strict_required_status_checks_policy`）」。本变更为**本地优先**的既有约定：`plan.md` 的 DU1 行（「本地合入 main、**不 push**」）与 `roles/integrator.md` 的「agentic apply 已授权本地合入」是由用户在计划阶段确认的路径，因此以**本地 FF 合入**替代 PR 流程，并在此显式记录偏离与依据。
+- **该偏离的实际代价（不声称已消除）**：`deps` / `advisories` / `secrets` 三个 job **只能在 CI 运行**，本地无等价物；本变更新增的 `getrandom` 与 `windows-dpapi` 的许可证/来源/advisory 判定，以及 `.gitleaks.toml` 新规则的实际命中能力，**在本地合入路径下未被执行**。用户已知悉并选择本地合入；最终验收（8.1）中按「未执行项」如实登记，不声称通过。
+- **未获授权项**：push、远端写入、回滚、发布、tag —— 任何一项都需要另行明确授权。
+
+### DU1 集成记录（候选阶段，2026-09-24）
+
+- **集成执行者**：独立子 Agent `d8a7306a-bd96-4901-bf95-1f4a205d3303`（agent `worker`、`fresh` 上下文、未继承实现对话、cwd = 主 worktree）；主 Agent 不兼任集成执行者。
+- **基线**：`refs/heads/main` = `30f0d78`（与计划起点一致，主线未前进；两次复核一致：检查前后各一次）。**候选**：`ed98f6d`（21 提交，线性无 merge，可 FF）。
+- **候选轮检查**：[PV1]–[PV5] 全部在候选提交上重跑并全绿（详见 `## Checks` 的 DU1 6.1–6.3 行与 `reports/du1-integration.md`）。**冲突解决差异：无**（线性候选，无 merge、无冲突）。
+- **环境事故（如实登记，已闭环）**：本轮编排层**重复派发**了两个 DU1 集成 worker（`41861676` 与 `d8a7306a`），两者同时以截断+追加重定向同一批 `reports/du1-*.log`，导致 `du1-pv1.log` 一度为 **96573 字节含 14117 个 NUL**（不可用）。处置：主 Agent 终止重复 run 并裁决「单写者」，`d8a7306a` 删除并重建全部 8 份日志，逐份自检 `NUL = 0` / `EXIT=0` / 头部 revision `ed98f6d`。**受损证据已作废，当前证据全部为单写者产出**。若未终止，[PV5] 的 DPAPI 独占要求也会被违反。定性：编排层环境事故，非产品缺陷。
+- **残余（登记不掩盖）**：`%TEMP%` 下存在 6 个 `acpr-keystore-atomic-*` 历史残留目录（mtime 22:10–22:43，早于本轮验证；系更早轮次测试/变异轮残留），集成执行者按「只清理自身资源」口径未删除并如实登记；本轮 PV4/PV5 执行前后临时目录快照一致（本 run 零残留）。
+
+**当前状态**：候选 PASS；**尚未合入 main**。合入（6.6）与主分支回归（6.7）待 6.4 独立 review 与 6.5 E2E 核对完成后由主 Agent 授权执行。
 
 ## Test Design and Authoring
 

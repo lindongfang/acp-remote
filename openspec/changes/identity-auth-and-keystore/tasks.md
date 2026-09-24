@@ -42,14 +42,14 @@
 
 ## 5. Integration Readiness
 
-- [ ] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
-- [ ] 5.2 DU1；前置：3.1–3.8；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP4），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
+- [x] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
+- [x] 5.2 DU1；前置：3.1–3.8；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP4），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
 
 ## 6. Merge Unit
 
-- [ ] 6.1 DU1；前置：5.2；主 Agent（机械核实可派发 environment/recon）。按计划核实目标仓库与主分支当前提交：`git -C D:\Project\acp-remote rev-parse refs/heads/main`、`git status --porcelain`、`git worktree list`，记录准确引用与核实证据。完成条件：基线提交被明确记录到 `verification.md`；无法确认目标时保持 BLOCKED，不凭 `HEAD` 或上次记录的引用继续。
-- [ ] 6.2 DU1；前置：6.1；集成执行者。基于已核实基线构造 DU1 候选：确认变更分支包含 WP1–WP4 的全部提交、成员与依赖登记完整、`reports/` 与 `verification.md` 已登记；固定基线与候选版本并记录组成与构建结果（`cargo build --locked --workspace --all-features`）。完成条件：候选版本可固定（提交哈希）且组成可复述；基线变化时从 6.1 重开。
-- [ ] 6.3 DU1；前置：6.2；检查执行者。按计划 Check ID 完成候选 Project Verify：[PV1]、[PV2]、[PV3]、[PV4]，并按平台条件执行 [PV5]（Linux CI 不覆盖该路径，需本地 Windows 执行）。完成条件：逐项记录版本、范围、退出码、日志路径，且无零用例/全跳过；有效复用旧证据时逐项写明适用性。
+- [x] 6.1 DU1；前置：5.2；主 Agent（机械核实可派发 environment/recon）。按计划核实目标仓库与主分支当前提交：`git -C D:\Project\acp-remote rev-parse refs/heads/main`、`git status --porcelain`、`git worktree list`，记录准确引用与核实证据。完成条件：基线提交被明确记录到 `verification.md`；无法确认目标时保持 BLOCKED，不凭 `HEAD` 或上次记录的引用继续。
+- [x] 6.2 DU1；前置：6.1；集成执行者。基于已核实基线构造 DU1 候选：确认变更分支包含 WP1–WP4 的全部提交、成员与依赖登记完整、`reports/` 与 `verification.md` 已登记；固定基线与候选版本并记录组成与构建结果（`cargo build --locked --workspace --all-features`）。完成条件：候选版本可固定（提交哈希）且组成可复述；基线变化时从 6.1 重开。
+- [x] 6.3 DU1；前置：6.2；检查执行者。按计划 Check ID 完成候选 Project Verify：[PV1]、[PV2]、[PV3]、[PV4]，并按平台条件执行 [PV5]（Linux CI 不覆盖该路径，需本地 Windows 执行）。完成条件：逐项记录版本、范围、退出码、日志路径，且无零用例/全跳过；有效复用旧证据时逐项写明适用性。
 - [ ] 6.4 DU1；前置：6.2；独立 reviewer。只读检视固定候选的新增交互与冲突解决（合同定型 ↔ 实现、`Cargo.toml` 成员与依赖、`.gitleaks.toml` 规则、文档口径），必要时复核 [PV2] 的差异结论；待返回的检查证据在证据交付前补齐核对。完成条件：`openspec/changes/identity-auth-and-keystore/reports/rv1-du1.md` 记录隔离设置、版本与结论；阻断项修复后由新的隔离子 Agent 复核。
 - [ ] 6.5 DU1（`not-applicable` 路径）；前置：6.2；主 Agent。核对 Main E2E 的 `not-applicable` 理由与依据仍成立（仓库无可端到端运行的产品入口、`x-agentic.e2e.command` 为空、用户降级批准记录有效并已写入 `plan.md`），并确认候选阶段的替代检查覆盖（[PV3]/[PV4]/[PV5] 的候选轮次已完成、证据可读）。完成条件：四项（reason/basis/alternative_checks/downgrade_approval）与 `plan.md` 一致且未被实现期改动削弱；不在候选阶段重复第 7 组的最终替代验证。
 - [ ] 6.6 DU1；前置：6.3、6.4、6.5；集成执行者。确认候选证据完整后按计划核对基线，以条件更新或串行合并机制防止竞态，把 DU1 合入本地主分支并记录实际提交；**不 push**（远端操作另需明确授权）。完成条件：主分支实际提交与候选一致性可核对；基线在候选中途变化时重开受影响的 6.1–6.5。
