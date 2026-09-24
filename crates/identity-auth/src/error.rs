@@ -95,7 +95,7 @@ pub enum HandshakeError {
     UnknownChallenge,
     #[error("对端 nonce 与该挑战记录不一致")]
     NonceMismatch,
-    #[error("对端没有持久化信任材料（未知或不可用）")]
+    #[error("对端没有可用的持久化信任材料，或信任快照不属于本次提交的主体")]
     UntrustedPeer,
     #[error("对端信任状态与请求的连接类型不一致")]
     TrustKind,

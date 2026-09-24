@@ -124,6 +124,49 @@ fn header_rejects_illegal_labels_and_versions() {
         )
         .is_err()
     );
+    // Windows 保留字符与首尾空白/点：一并拒绝，避免在 File::create 处才报 Io（把「标签非法」误报成「后端不可用」）。
+    for label in [
+        "bad:label",
+        "bad*label",
+        "bad?label",
+        "bad|label",
+        "bad\"label",
+        "bad<label",
+        " leading",
+        "trailing ",
+        ".hidden",
+        "trailing.",
+    ] {
+        assert!(
+            EntryHeader::new(
+                EntryPurpose::NodeIdentity,
+                label,
+                FORMAT_VERSION,
+                [0u8; SALT_LEN]
+            )
+            .is_err(),
+            "标签 {label:?} 必须被拒绝"
+        );
+    }
+
+    // 读取路径（decode）同样校验标签形状：构造一个字节形态合法但标签非法的条目，必须被拒绝。
+    let mut bytes = EntryHeader::new(
+        EntryPurpose::NodeIdentity,
+        "primary",
+        FORMAT_VERSION,
+        [0u8; SALT_LEN],
+    )
+    .expect("合法头部")
+    .encode();
+    // 把标签段的第一个字节改成路径分隔符（长度不变，仍是「能解码的形状」）。
+    let label_offset = 4 + 2 + 1 + 2;
+    assert_eq!(bytes[label_offset], b'p');
+    bytes[label_offset] = b'/';
+    assert_eq!(
+        EntryHeader::decode(&bytes).unwrap_err(),
+        identity_keystore::StoreError::HeaderInvalid,
+        "decode 必须校验标签形状"
+    );
     assert!(EntryHeader::new(EntryPurpose::NodeIdentity, "primary", 9, [0u8; SALT_LEN]).is_err());
     // 边界：恰好 128 字节是允许的。
     assert!(

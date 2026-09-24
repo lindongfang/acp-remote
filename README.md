@@ -111,8 +111,10 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。
 多人协作时再考虑。
 
-仍待办：本地密钥扫描的自研格式**规则**（机制已装好：`.husky/pre-commit` 会调 gitleaks 扫暂存内容，
-规则与 CI 共用 `.gitleaks.toml`；规则等密钥格式定稿再加），详情见下方与
+本地密钥扫描机制已装好：`.husky/pre-commit` 会调 gitleaks 扫暂存内容，规则与 CI 共用
+`.gitleaks.toml`。自研 keystore 条目**明文**形态的规则（`acpr-keystore-plaintext-entry`）已随
+`identity-auth-and-keystore` 落地；它的**首次真实执行仍在 CI 的 `secrets` job**（本机无 gitleaks），
+且只覆盖「被 base64/base64url 编码后的明文条目」这一形态——原始二进制与 DPAPI 密文无法模式识别。详情见下方与
 `docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
 
 已核实为**已开启的**（2026-09-23）：`secret_scanning`、`secret_scanning_push_protection`、
@@ -149,9 +151,10 @@ Dependabot 告警与安全更新。push protection 在推送前拦截已知 prov
   `.pre-commit-hooks.yaml` 的官方写法，不是自拟参数），扫的是**暂存内容**，命中内容由 `--redact` 不打印；
 - 本机未安装 `gitleaks` 时钩子**只提示并跳过**（不让提交依赖一个仓库不随附的二进制），CI 仍会判定。
 
-**规则本身等密钥格式定稿再加**：现在只有默认规则集，而自研格式的正则只有在格式定稿后才写得准
-（过早写会既误报又漏报）。触发条件是「`identity-auth`/`identity-keystore` 开始产生真实密钥」，
-且格式定义与规则必须在**同一改动**里落地（见 `docs/adr/0008-ci-supply-chain-tooling.md` 残余风险 3）。
+**自研格式规则已落地**（触发条件「`identity-auth`/`identity-keystore` 开始产生真实密钥」已发生）：
+`.gitleaks.toml` 里的 `acpr-keystore-plaintext-entry` 只匹配**编码后**的明文条目形态，`keywords` 用编码前缀
+`QUNQS`（不能写字面 `ACPK`——编码后的文本里不存在它，规则会永不评估）。诚实边界：原始二进制条目与
+DPAPI 包裹的密文仍不可模式识别；规则首次真实执行在 CI 的 `secrets` job。
 
 关于「Dependabot 安全更新」还有一个前置条件值得记下：它要求 **Dependabot 告警先开**，否则
 `PUT .../automated-security-fixes` 直接返回 422「Vulnerability alerts must be enabled」。顺序是：

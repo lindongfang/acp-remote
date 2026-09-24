@@ -637,11 +637,16 @@ fn rejection_survives_until_original_expiry() {
         PairingState::Expired,
         "到期后不再表现为有效状态"
     );
-    // 拒绝态已是终态，因此不在「待终结」集合里（该集合只收未终结的配对）。
+    // 拒绝态已是终态，因此不在「待终结」集合里（该集合只收未终结的配对）；
+    // 但 secret 的硬上界仍然适用——过期扫描必须清掉它。
     assert!(
         authority
             .due_pairings(std::slice::from_ref(&rejected), &ts(AFTER_WINDOW))
             .is_empty()
+    );
+    assert!(
+        !authority.has_secret(&pairing(PAIRING)),
+        "拒绝记录到达 expires_at 必须清除 secret"
     );
 }
 
@@ -688,12 +693,14 @@ fn first_authentication_consumes_the_approved_pairing_once() {
 }
 
 #[test]
-fn approved_pairing_still_accepts_status_proofs_before_first_auth() {
-    // 批准后、首次认证前，secret 仍必须可用（pairing-status 的 HMAC 证明依赖它）。
+fn approved_pairing_keeps_its_material_until_first_auth() {
+    // 批准后、首次认证前，secret 仍必须保留（合同 §4.3 只要求「首次认证成功时提前清除」，
+    // 而 `pairing-status` 的 HMAC 证明在批准后仍可能被使用）。可断言的真实性质有两条：
+    // ① 内存材料仍在；② 该配对被识别为「已批准但尚未消费」——即首次认证会给出消费目标。
     let created = create_device_pairing();
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
-    authority
+    let settlement = authority
         .settle(
             &pending,
             &PairingDecision::Approve {
@@ -703,15 +710,75 @@ fn approved_pairing_still_accepts_status_proofs_before_first_auth() {
             &ts(CREATED),
         )
         .expect("批准必须成功");
+    assert!(settlement.is_approved());
     assert!(
         authority.has_secret(&pairing(PAIRING)),
         "批准不得提前清除：状态查询的 HMAC 证明仍需要它"
     );
+    let completion = authority.complete_auth(
+        identity_auth::IdentityFact::Device {
+            device: device(DEVICE),
+            scopes: scopes(&["session.list"]),
+        },
+        Some(&pairing(PAIRING)),
+        &ts(CREATED),
+    );
+    assert_eq!(
+        completion.consume_pairing,
+        Some(pairing(PAIRING)),
+        "批准后的配对在首次认证时仍应被识别为消费目标"
+    );
+}
+
+#[test]
+fn unapproved_pairings_are_never_reported_as_consumption_targets() {
+    // 合同 §5.1：`consume_pairing` 只在**已批准**配对的首次认证时非空。
+    // 仅「内存里还有 secret」不足以判定：仍在保留期内的 created/pending/rejected 也持有 secret。
+    let created = create_device_pairing();
+    let authority = &created.authority;
+    let fact = || identity_auth::IdentityFact::Device {
+        device: device(DEVICE),
+        scopes: scopes(&["session.list"]),
+    };
+
+    // ① created（已认领但未批准）
+    assert!(authority.has_secret(&pairing(PAIRING)));
+    let completion = authority.complete_auth(fact(), Some(&pairing(PAIRING)), &ts(CREATED));
+    assert_eq!(
+        completion.consume_pairing, None,
+        "未批准的配对不得被当作消费目标"
+    );
+    assert!(
+        authority.has_secret(&pairing(PAIRING)),
+        "误传未批准配对也不得清除它的 secret"
+    );
+
+    // ② rejected：批准被拒绝同样不是消费目标，且 secret 保留到原过期时间。
+    let rejected = authority
+        .settle(
+            &pending_record(&created.draft.record),
+            &PairingDecision::Reject {
+                reason: Some("user denied".to_owned()),
+            },
+            &ts(CREATED),
+        )
+        .expect("拒绝必须成功");
+    assert!(!rejected.is_approved());
+    let completion = authority.complete_auth(fact(), Some(&pairing(PAIRING)), &ts(CREATED));
+    assert_eq!(completion.consume_pairing, None, "被拒绝的配对不得被消费");
+    assert!(authority.has_secret(&pairing(PAIRING)));
+
+    // ③ 未知配对标识：不得清除任何东西、也不得给出消费目标。
+    let unknown = pairing("7f3d1c2b-8a4e-4d9c-b1f0-5a6e7d8c9b0a");
+    let completion = authority.complete_auth(fact(), Some(&unknown), &ts(CREATED));
+    assert_eq!(completion.consume_pairing, None);
+    assert!(authority.has_secret(&pairing(PAIRING)));
 }
 
 #[test]
 fn approved_secret_is_cleared_at_expiry_even_if_never_authenticated() {
     // 未经首次认证的已批准配对：到达 expires_at 也必须清除（secret 的硬上界）。
+    // 传入的必须是**批准后**的记录（终态 `approved`）——否则本用例保护不了它命名的性质。
     let created = create_device_pairing();
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
@@ -725,8 +792,131 @@ fn approved_secret_is_cleared_at_expiry_even_if_never_authenticated() {
             &ts(CREATED),
         )
         .expect("批准必须成功");
-    authority.due_pairings(std::slice::from_ref(&pending), &ts(AFTER_WINDOW));
-    assert!(!authority.has_secret(&pairing(PAIRING)));
+    let approved = approved_record(&pending);
+    // `Approved` 不是终态（core 的终态为 rejected/expired/consumed），因此它会被返回、
+    // 需要调用方决定落库终态（`approved_at` 是否保留属存储侧语义，见合同 §4.1 的开放项）。
+    assert_eq!(
+        authority.due_pairings(std::slice::from_ref(&approved), &ts(AFTER_WINDOW)),
+        vec![pairing(PAIRING)],
+        "已批准但已过期的配对需要调用方推进终态"
+    );
+    assert!(
+        !authority.has_secret(&pairing(PAIRING)),
+        "已批准记录到达 expires_at 必须清除 secret"
+    );
+}
+
+#[test]
+fn rejected_secret_is_cleared_at_expiry_too() {
+    // 已拒绝是终态，因此没有「推进状态」的返回值——但它同样受 secret 硬上界约束：
+    // 到达 expires_at 必须清除（否则被拒绝配对的 secret 会驻留到进程退出）。
+    let created = create_device_pairing();
+    let authority = &created.authority;
+    let rejected = authority
+        .settle(
+            &pending_record(&created.draft.record),
+            &PairingDecision::Reject {
+                reason: Some("user denied".to_owned()),
+            },
+            &ts(CREATED),
+        )
+        .expect("拒绝必须成功");
+    assert!(!rejected.is_approved());
+    assert!(authority.has_secret(&pairing(PAIRING)));
+    let record = acp_core::model::PairingRecord::try_new(
+        created.draft.record.id().clone(),
+        created.draft.record.target(),
+        PairingState::Rejected,
+        created.draft.record.display_name().map(str::to_owned),
+        created.draft.record.requested_scopes().clone(),
+        created.draft.record.requested_grants().clone(),
+        created.draft.record.secret_digest().clone(),
+        created.draft.record.host_binding(),
+        created.draft.record.created_at().clone(),
+        created.draft.record.expires_at().clone(),
+        Some(ts(CREATED)),
+        None,
+        Some(ts(CREATED)),
+    )
+    .expect("测试记录必须合法");
+    assert!(
+        authority
+            .due_pairings(std::slice::from_ref(&record), &ts(AFTER_WINDOW))
+            .is_empty()
+    );
+    assert!(
+        !authority.has_secret(&pairing(PAIRING)),
+        "被拒绝的配对到达 expires_at 也必须清除 secret"
+    );
+}
+
+#[test]
+fn expiry_scan_touches_every_expired_record_regardless_of_terminal_state() {
+    // 一次过期扫描同时覆盖：未终结的 created（需要落库终态）与已终结的 rejected（只需释放 secret）。
+    let created = create_device_pairing();
+    let authority = &created.authority;
+    authority
+        .settle(
+            &pending_record(&created.draft.record),
+            &PairingDecision::Reject { reason: None },
+            &ts(CREATED),
+        )
+        .expect("拒绝必须成功");
+    let rejected = acp_core::model::PairingRecord::try_new(
+        created.draft.record.id().clone(),
+        created.draft.record.target(),
+        PairingState::Rejected,
+        None,
+        created.draft.record.requested_scopes().clone(),
+        created.draft.record.requested_grants().clone(),
+        created.draft.record.secret_digest().clone(),
+        created.draft.record.host_binding(),
+        created.draft.record.created_at().clone(),
+        created.draft.record.expires_at().clone(),
+        Some(ts(CREATED)),
+        None,
+        Some(ts(CREATED)),
+    )
+    .expect("测试记录必须合法");
+    // 一个与真实配对无关的未终结记录（另一个配对标识）：只验「返回集只含未终结者」。
+    let other = acp_core::model::PairingRecord::try_new(
+        pairing("2b8e4d6f-1a3c-4e5b-8d7f-9c0a1b2d3e4f"),
+        created.draft.record.target(),
+        PairingState::Created,
+        None,
+        created.draft.record.requested_scopes().clone(),
+        created.draft.record.requested_grants().clone(),
+        created.draft.record.secret_digest().clone(),
+        created.draft.record.host_binding(),
+        created.draft.record.created_at().clone(),
+        created.draft.record.expires_at().clone(),
+        None,
+        None,
+        None,
+    )
+    .expect("测试记录必须合法");
+    let due = authority.due_pairings(&[rejected.clone(), other.clone()], &ts(AFTER_WINDOW));
+    assert_eq!(due, vec![other.id().clone()], "返回集只含未终结记录");
+    assert!(
+        !authority.has_secret(&pairing(PAIRING)),
+        "终态记录的 secret 也要清理"
+    );
+    // 未到期时什么都不做（包括不清除 secret 语义之外的副作用）。
+    let created_before_expiry = create_device_pairing();
+    assert!(
+        created_before_expiry
+            .authority
+            .due_pairings(
+                std::slice::from_ref(&created_before_expiry.draft.record),
+                &ts(CREATED)
+            )
+            .is_empty()
+    );
+    assert!(
+        created_before_expiry
+            .authority
+            .has_secret(&pairing(PAIRING))
+    );
 }
 
 #[test]

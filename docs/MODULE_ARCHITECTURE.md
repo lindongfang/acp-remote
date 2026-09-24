@@ -2,7 +2,7 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore` 已实现，见 `README.md` 的 crate 表）
 > 版本：0.3
-> 修订记录（2026-09-24，identity-auth-and-keystore）：§3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
+> 修订记录（2026-09-24，identity-auth-and-keystore）：§3 状态行与 §3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价、并标注 macOS/Linux 后端未实现；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
 > 修订记录（2026-09-24，core-turn-view-fields）：§4.1 补「适配器产 ACP 派生投影、broker 补 `SYNC_PROTOCOL.md` §10.3 身份与会话版本」的职责分工；§4.7 写明 `owned_session.version` 由存储层在事务内实现、core 只按同一规则推导并在提交后比对（不一致 → `PortError::Corrupt` 失败关闭）。
 > 修订记录（2026-09-24）：§4.2/§4.5 记录 `acp-protocol` 与 `agent-host` 的落地 surface、每个 Agent 一个 Job 的粒度、`win32job`/`nix` 选型与「关闭句柄即结束树」的实际路径；§3.1 的依赖登记与 §5 矩阵补 `agent-host` 列。  §4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1；§3.1 的 `nix 0.30.1` 许可证订正为 `MIT`（原写 `MIT OR Apache-2.0`，与本地 registry 元数据不符）；§5 披露尚未成为矩阵列的 crate。  
 > 日期：2026-09-18
@@ -405,9 +405,13 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 唯一职责：实现 `identity-auth` 定义的 keystore 端口，把长期密钥与凭据落到平台安全存储。
 
-- Windows：第一阶段用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内完成；CNG/TPM 不可导出档位是后续 ADR 的开放项（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。
-- macOS：Keychain；可用时使用不可导出或硬件保护能力。
-- Linux：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的当前决定失败关闭，不得静默降级为明文文件。
+> `[现状]`（2026-09-24）下表只有 **Windows/DPAPI** 一列已落地；macOS 与 Linux 的后端**尚未实现**
+> （`crates/identity-keystore/src/platform/` 目前只有 `mod.rs`/`windows.rs`/`unsupported.rs`），非 Windows
+> 平台统一走失败关闭桩。以下三行是**设计意图**，不是现状陈述。
+
+- Windows：第一阶段用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内完成；CNG/TPM 不可导出档位是后续 ADR 的开放项（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。**已落地**。
+- macOS（未实现，规划中）：Keychain；可用时使用不可导出或硬件保护能力。
+- Linux（未实现，规划中）：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的当前决定失败关闭，不得静默降级为明文文件。
 
 约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有（目标签名见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7）；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
 
@@ -417,7 +421,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 - **语义一致**：只提供 `encrypt_data`/`decrypt_data` + `Scope::{User, Machine}`，本 crate 固定 `Scope::User` 并**只**用它做「包裹秘密字节 + 进程内 `p256` 签名」，公开入口不接受 scope 参数，因此组合根无法顺手改用机器 scope；
 - **许可证**：`MIT OR Apache-2.0`，与传递依赖 `anyhow 1`/`log 0.4`/`winapi 0.3.9` 全部落在 `deny.toml` 的 allow 列表内（advisory 判定只在 CI 的 `advisories` job，本地无等价物）；
-- **MSRV/edition**：edition 2021、未声明 `rust-version`（实测在仓库固定工具链上编译通过；传递依赖声明的最低 MSRV 是 `log 0.4.34` 的 1.71，低于 1.85）；
+- **MSRV/edition**：edition 2021、未声明 `rust-version`（实测在仓库固定工具链上编译通过；传递依赖声明的 MSRV **最高者是 `log 0.4.34` 的 1.71**，低于本仓库 MSRV 1.85）；
 - **维护状态**：wrapper 本身是新 crate（单作者），传递依赖 `winapi 0.3` 上游已停止维护——这是**已知代价**，记在下面。
 
 已知代价与缓解：
@@ -426,7 +430,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 2. wrapper 不暴露 `CRYPTPROTECT_UI_FORBIDDEN`，本实现因此**总是**传入由条目头（用途 + 标签 + 版本 + 盐）派生的附加熵，把「无熵 + 缺主密钥时可能弹交互提示」收敛为有熵的静默路径；
 3. 附加熵同时把条目绑死到「用途 + 标签 + 版本 + 盐」，因此复制/剪接条目解不开（[PV5] 用真实 DPAPI 断言）。
 
-核验证据：`openspec/changes/identity-auth-and-keystore/reports/wp3-dpapi-verification.log`（`cargo tree`/`cargo metadata` 输出）与 `reports/pv5-windows-dpapi.log`（5 个真实 DPAPI 用例）；两者随变更归档，结论已同步到 §3.1。
+核验证据：`openspec/changes/identity-auth-and-keystore/reports/wp3-dpapi-verification.log`（`cargo tree`/`cargo metadata` 输出）与 `openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log`（5 个真实 DPAPI 用例）；两条都写完整路径（避免与仓库根的历史遗留同名文件混淆）。注意：这类日志受 `.gitignore` 忽略、**不进版本库**，因此不随变更归档——归档后可复核的是本文件的记录、`reports/*.md` 报告与仓库改动本身。结论已同步到 §3.1。
 
 ### 4.13 `acpr-wire`
 

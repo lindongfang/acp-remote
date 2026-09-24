@@ -65,7 +65,7 @@
 
 ### D3 配对状态机与内存态所有权
 
-- 一个 `IdentityAuthority` 持有注入的 `keystore`/`entropy`/`clock` 与一份**进程内状态**：配对 secret 明文、挑战缓存（`challengeId` → `{serverNonce, expiresAt, peer, binding}`）、每配对失败计数、已终结但尚未提交的记录。持久事实（配对记录、对端行、信任记录）由调用方以快照入参提供与本变更的写集返回值落库，状态机**不**直接访问存储。
+- 一个 `Authority` 持有注入的 `keystore`/`entropy`/`clock` 与一份**进程内状态**：配对 secret 明文、挑战缓存（`challengeId` → `{serverNonce, expiresAt, peer, binding}`）、每配对失败计数、已终结但尚未提交的记录。持久事实（配对记录、对端行、信任记录）由调用方以快照入参提供与本变更的写集返回值落库，状态机**不**直接访问存储。
 - 状态机入口（同步，除挑战签发需要经端口签名外均为纯计算）：
   - 创建：`begin_pairing(pairing_id, spec, requested, display_name, created_at, expires_at)` → `PairingDraft`（含 `PairingRecord` 草稿 + 只在内存的 secret + 派生 SAS 需要的本机 nonce/请求标识）；`expires_at` 由调用方按「不超过 5 分钟」规则算出后传入（状态机只复核上界）。
   - 认领：`verify_claim(pairing: &PairingRecord, existing: Option<&ClaimedPairing>, fields: &ClaimFields)` → 结构 → 状态/过期 → 绑定校验（设备：canonical origin + Host；节点：端点 host）→ 集合校验 → HMAC 校验（用内存 secret）→ `ClaimOutcome`（`Claimed` 带 65 字节公钥，`to_claim()` 给出 core 的 `PairingClaim`）；相同载荷重发得到 `Repeat`（幂等，不产生第二次写入）；失败按配对累计计数，第 5 次给出 `ClaimRejection::TooManyFailures`（调用方据此提交一次拒绝落定）并把该配对在内存标记为不可用。
@@ -73,7 +73,8 @@
   - 过期与重启：`due_pairings(pairings, at)` 与 `unrecoverable_after_restart(pairings)` 返回需要由调用方终结的配对标识。
 
 **实现期的口径收窄（与上面原表述的差异，已回写合同 §4.1）**：四个入口**返回领域值**（`PairingDraft`/`ClaimOutcome`/`PairingSettlement`/`PairingId`），**不**直接返回 §11.6 的写集 DTO。理由：写集是存储层形状（含审计意图与事务字段），而原子性本就由 `TrustStore` 的单事务语义承担；状态机只负责「算出该发生什么」。代价：切片 4–7 的 adapter 多一步组装（`ClaimedPairing::to_claim()` 已在 `identity-auth` 提供），好处是 `identity-auth` 不认识 `core::ports` 的写集类型。
-  - SAS：`pairing_sas(transcript_inputs, secret)` → 6 位十进制字符串（HMAC-SHA256 前 4 字节 u32be `% 1_000_000`，左补零）。
+  - SAS：`pairing_sas(&self, pairing: &PairingRecord, peer: &ClaimedPairing)`（内部调用公开的
+    `derive_sas(transcript, &PairingSecret)`，使「只有一处实现」可被固定向量直接测试） → 6 位十进制字符串（HMAC-SHA256 前 4 字节 u32be `% 1_000_000`，左补零）。
 - 并发与原子性由**调用方提交**保证：状态机只产生写集，`TrustStore` 的单事务语义（`claim_pairing`/`settle_pairing`/`expire_pairings`）是唯一提交点，因此 §4.2 的 5 条规则不需要在内存里再实现一遍锁语义。内存态与已提交状态的关系固定为「内存态只允许比已提交状态更严格」（例如内存里把配对标记为失效，但绝不出现「内存里批准、库里没有信任」）。
 - 锁粒度：内存态用 `std::sync::Mutex`（不引入 runtime）。**不跨 `await` 持锁**：需要签名的路径（挑战签发）先取状态做计算，再在锁外调用 `keystore.sign`，最后短锁写入挑战缓存；`verify_claim`/`verify_proof` 全程同步（HMAC/验签都是 CPU 计算），不需要异步。
 
@@ -106,7 +107,7 @@ complete_auth(fact, pairing: Option<&PairingId>, at: &Timestamp) -> Completion  
 ### D6 `identity-keystore` 的结构与存储
 
 - 模块：`lib.rs`（`PlatformKeystore::open(root) -> Result<..>`、`EphemeralKeystore::new(entropy)`、`OsEntropy`）、`error.rs`（`KeystoreError` → 端口类型）、`entry.rs`（条目编码/解码）、`platform/`（`cfg(windows)` 的 DPAPI 模块与 `cfg(not(windows))` 的失败关闭模块）。
-- 条目：`<root>/<purpose>/<label>.<version>`，内容 = 自研二进制头（magic `ACPRKS`、格式版本、`purpose`、`label`、序号/版本、32 字节私钥标量）+ DPAPI 包裹。包裹使用 `Scope::User` 并带**域分离的附加熵**（`purpose` + `label` + 格式版本 + 本节点用途字符串），因此同一台机器上不同用途/标签的包裹不可互换。写入用「同目录临时文件 + 原子重命名」，目录创建时按平台设置权限（Unix `0700`/`0600`；Windows 依赖 `%LOCALAPPDATA%` 的用户 ACL 与 DPAPI 本身，启动期宽松权限检查属切片 4 的 daemon 启动检查，本变更只保证不写共享临时路径）。
+- 条目：`<root>/<purpose>/<label>.<version>`，内容 = 自研二进制头（magic `ACPK`、格式版本 u16be、`purpose` u8、`label` 长度 + 标签、32 字节盐；私钥标量在被包裹的那一段里，头部不含私钥）+ DPAPI 包裹。包裹使用 `Scope::User` 并带**域分离的附加熵**（`purpose` + `label` + 格式版本 + 本节点用途字符串），因此同一台机器上不同用途/标签的包裹不可互换。写入用「同目录临时文件 + 原子重命名」，目录创建时按平台设置权限（Unix `0700`/`0600`；Windows 依赖 `%LOCALAPPDATA%` 的用户 ACL 与 DPAPI 本身，启动期宽松权限检查属切片 4 的 daemon 启动检查，本变更只保证不写共享临时路径）。
 - Provider 凭据（`SecretPurpose`）走同一封装路径，但只经 `get_secret`/`put_secret`/`delete_secret` 进出，`SecretBytes` 不实现 `Debug`/`Serialize`/`Display`，也不进入 `KeyHandle`。
 - `identity-keystore` 不实现「引用与条目的分布式事务」，只保证：写入是新版本条目、旧的未被引用条目可被 `delete` 回收；引用缺失/解包失败一律 `KeystoreUnavailable`（不静默重建）。
 - 合同收口（写入 `IDENTITY_AND_AUTH_CONTRACT.md` §7）：`KeyPurpose` 只保留 `NodeIdentity`——`DeviceIdentity` 在第一阶段没有调用方（PWA/原生客户端的设备密钥由客户端平台自持），按合同 §7 的说明在本次实现变更里**删除**，不保留无人使用的分支。

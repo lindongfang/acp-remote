@@ -19,9 +19,11 @@ use identity_auth::{
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
 /// 进程内条目。
-#[derive(Clone)]
+///
+/// 秘密统一放在 [`SecretBytes`] 里：它是「析构即清零」的容器，因此进程内条目不再留一份
+/// 未清零的明文 `Vec<u8>`（副本同样以 `SecretBytes` 形式返回给调用方）。
 struct Entry {
-    secret: Vec<u8>,
+    secret: SecretBytes,
 }
 
 /// 进程内 keystore。
@@ -44,7 +46,8 @@ impl EphemeralKeystore {
         }
     }
 
-    /// 用固定标量预置一个节点身份条目（测试可重跑；**不**用于生产）。
+    /// 用固定标量预置一个节点身份条目（**仅供测试与本地开发**：生产路径必须走平台后端，
+    /// 或显式选择本类型并自行承担「内存明文」这一取舍；调用方只能来自组合根/测试）。
     pub fn with_seed(seed: [u8; 32]) -> Self {
         let keystore = Self::new(std::sync::Arc::new(crate::OsEntropy::new()));
         keystore.entries().expect("新建实例的锁不可能中毒").insert(
@@ -53,7 +56,7 @@ impl EphemeralKeystore {
                 crate::entry::EntryPurpose::NodeIdentity.directory()
             ),
             Entry {
-                secret: seed.to_vec(),
+                secret: SecretBytes::new(&seed),
             },
         );
         keystore
@@ -72,10 +75,11 @@ impl EphemeralKeystore {
         Err(KeystoreError::Unavailable)
     }
 
-    fn get(&self, handle: &KeyHandle) -> Result<Vec<u8>, KeystoreError> {
+    /// 取一份秘密副本（清零容器）；条目里那份保留到条目被删除/进程退出。
+    fn get(&self, handle: &KeyHandle) -> Result<SecretBytes, KeystoreError> {
         self.entries()?
             .get(handle.as_str())
-            .map(|entry| entry.secret.clone())
+            .map(|entry| SecretBytes::new(entry.secret.as_bytes()))
             .ok_or(KeystoreError::EntryMissing)
     }
 }
@@ -89,7 +93,7 @@ impl IdentityKeystore for EphemeralKeystore {
         self.entries()?.insert(
             handle.as_str().to_owned(),
             Entry {
-                secret: scalar.to_vec(),
+                secret: SecretBytes::new(&scalar),
             },
         );
         Ok(handle)
@@ -97,8 +101,8 @@ impl IdentityKeystore for EphemeralKeystore {
 
     async fn public_key(&self, handle: &KeyHandle) -> Result<PeerPublicKey, KeystoreError> {
         let secret = self.get(handle)?;
-        let secret_key =
-            p256::SecretKey::from_slice(&secret).map_err(|_| KeystoreError::EntryCorrupt)?;
+        let secret_key = p256::SecretKey::from_slice(secret.as_bytes())
+            .map_err(|_| KeystoreError::EntryCorrupt)?;
         let point = secret_key.public_key().to_encoded_point(false);
         PeerPublicKey::try_from_bytes(point.as_bytes()).map_err(|_| KeystoreError::EntryCorrupt)
     }
@@ -111,8 +115,8 @@ impl IdentityKeystore for EphemeralKeystore {
         use p256::ecdsa::signature::Signer as _;
 
         let secret = self.get(handle)?;
-        let secret_key =
-            p256::SecretKey::from_slice(&secret).map_err(|_| KeystoreError::EntryCorrupt)?;
+        let secret_key = p256::SecretKey::from_slice(secret.as_bytes())
+            .map_err(|_| KeystoreError::EntryCorrupt)?;
         let signature: p256::ecdsa::Signature =
             p256::ecdsa::SigningKey::from(secret_key).sign(transcript);
         P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
@@ -135,7 +139,7 @@ impl IdentityKeystore for EphemeralKeystore {
         let handle = KeyHandle::new(&format!("{}/{key}", purpose.as_str()))
             .map_err(|_| KeystoreError::EntryInvalid)?;
         match self.get(&handle) {
-            Ok(secret) => Ok(Some(SecretBytes::new(&secret))),
+            Ok(secret) => Ok(Some(secret)),
             Err(KeystoreError::EntryMissing) => Ok(None),
             Err(error) => Err(error),
         }
@@ -152,7 +156,7 @@ impl IdentityKeystore for EphemeralKeystore {
         self.entries()?.insert(
             handle.as_str().to_owned(),
             Entry {
-                secret: value.as_bytes().to_vec(),
+                secret: SecretBytes::new(value.as_bytes()),
             },
         );
         Ok(())

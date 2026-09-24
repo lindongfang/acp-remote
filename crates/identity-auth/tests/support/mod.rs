@@ -211,7 +211,7 @@ impl Clock for FakeClock {
 /// 定序熵源：每次调用返回递增的字节序列，因此可重跑且不需要系统随机源。
 #[derive(Debug, Default)]
 pub struct SequenceEntropy {
-    counter: Mutex<u8>,
+    calls: Mutex<u64>,
     fail: Mutex<bool>,
 }
 
@@ -232,10 +232,22 @@ impl EntropySource for SequenceEntropy {
         if *self.fail.lock().expect("熵源锁") {
             return Err(EntropyError::Unavailable);
         }
-        let mut counter = self.counter.lock().expect("熵源锁");
+        // 测试用确定性熵源：以「第几次调用」为种子做可复现的字节流展开。
+        //
+        // 为什么不是简单递增字节计数器：单字节轨道的周期是 256，而一次 `hello` 恰好消耗
+        // 48 字节（nonce 32 + 挑战标识 16），48 与 256 的 gcd 为 16 → 只有 16 个互异的挑战标识，
+        // 会让「缓存上限」这类用例恒真（参见 RV2-WP2 的 F2）。按调用序号播种可保证不同调用互异。
+        // 这里不主张密码学强度：它只用于确定性测试。
+        let mut calls = self.calls.lock().expect("熵源锁");
+        let seed = *calls;
+        *calls = seed.wrapping_add(1);
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
         for byte in out.iter_mut() {
-            *counter = counter.wrapping_add(1);
-            *byte = *counter;
+            state = state
+                .rotate_left(7)
+                .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                .wrapping_add(0x94D0_49BB_1331_11EB);
+            *byte = (state >> 33) as u8;
         }
         Ok(())
     }

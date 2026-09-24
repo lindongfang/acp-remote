@@ -624,19 +624,33 @@ fn node_link_challenge_requires_catalog_revision() {
 
 #[test]
 fn challenge_cache_is_bounded() {
-    // R30 的资源边界：反复 hello 但不提交 proof 的连接不得让内存单调增长。
+    // R30 的资源边界（`AGENTS.md` §5：数量与资源限制）：反复 hello 但不提交 proof 的连接
+    // 不得让内存单调增长。三条断言都必须在实现退化时失败：
+    //   ① 缓存能被填满（否则说明条目没真正累积）；
+    //   ② 填满后再签发不增长（淘汰分支真的执行）；
+    //   ③ 时钟越过挑战 TTL 后签发一条会把过期条目清扫掉（清扫分支真的执行）。
     let state = setup();
-    for _ in 0..(identity_auth::MAX_CHALLENGES + 64) {
-        let issue = block_on(state.authority.hello(
-            &request(),
-            &PeerTrust::unknown(PeerIdentity::Device(device(DEVICE))),
-        ))
-        .expect("签发必须成功");
-        assert!(!issue.server_nonce.as_str().is_empty());
+    let unknown = || PeerTrust::unknown(PeerIdentity::Device(device(DEVICE)));
+    for _ in 0..identity_auth::MAX_CHALLENGES {
+        block_on(state.authority.hello(&request(), &unknown())).expect("签发必须成功");
     }
-    assert!(
-        state.authority.challenge_cache_len() <= identity_auth::MAX_CHALLENGES,
-        "挑战缓存必须有硬上限"
+    assert_eq!(
+        state.authority.challenge_cache_len(),
+        identity_auth::MAX_CHALLENGES,
+        "缓存应被填满（前提：每次 hello 的挑战标识互异）"
+    );
+    block_on(state.authority.hello(&request(), &unknown())).expect("签发必须成功");
+    assert_eq!(
+        state.authority.challenge_cache_len(),
+        identity_auth::MAX_CHALLENGES,
+        "满缓存再签发必须淘汰最旧条目而不是继续增长"
+    );
+    state.clock.set(AFTER_TTL);
+    block_on(state.authority.hello(&request(), &unknown())).expect("签发必须成功");
+    assert_eq!(
+        state.authority.challenge_cache_len(),
+        1,
+        "时钟越过 TTL 后，过期挑战必须被清扫"
     );
 }
 

@@ -23,6 +23,11 @@ pub fn wrap_secret(plaintext: &[u8], entropy: &[u8; 32]) -> Result<Vec<u8>, Stor
 }
 
 /// 解开秘密值。失败（被篡改、跨用户、跨机器、熵不符）一律表现为「损坏」，不尝试修复或覆盖。
+///
+/// 返回的 `Vec<u8>` 由调用方（[`crate::store::FileKeystore::read_secret`]）在复制进
+/// [`identity_auth::SecretBytes`] 后立即清零。**残余（如实登记）**：`windows_dpapi::decrypt_data`
+/// 内部还有一份自己的明文缓冲，第三方实现不提供清零钩子，本 crate 无法触及——换自写 wrapper
+/// 才能消除（需要新 ADR，见本模块头部）。
 pub fn unwrap_secret(wrapped: &[u8], entropy: &[u8; 32]) -> Result<Vec<u8>, StoreError> {
     let plaintext = windows_dpapi::decrypt_data(wrapped, windows_dpapi::Scope::User, Some(entropy))
         .map_err(|_| StoreError::Corrupt)?;

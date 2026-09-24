@@ -193,34 +193,108 @@ fn orphan_removal_keeps_existing_identity_usable() {
     });
 }
 
+/// 最小「引用持有者」替身：模拟跨 crate 的引用层（`core::ports` 的引用提交）。
+///
+/// 它存在的意义：让「引用提交失败」这一半真正**可执行**——keystore 侧的决策（谁可以被回收）
+/// 由提交结果驱动，而不是由一个恒真的开关跳过。
+struct ReferenceHolder {
+    /// 引用指向的条目句柄（提交成功后才切换）。
+    current: std::sync::Mutex<Option<String>>,
+    committed: std::sync::Mutex<Option<String>>,
+}
+
+impl ReferenceHolder {
+    fn new() -> Self {
+        Self {
+            current: std::sync::Mutex::new(None),
+            committed: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// 提交新引用；`fail` 为真时返回错误且**不改变**当前引用（模拟存储层事务失败）。
+    fn commit(&self, handle: &KeyHandle, fail: bool) -> Result<(), ()> {
+        if fail {
+            return Err(());
+        }
+        *self.committed.lock().expect("替身锁") = Some(handle.as_str().to_owned());
+        Ok(())
+    }
+
+    fn commit_now(&self, handle: &KeyHandle) {
+        *self.current.lock().expect("替身锁") = Some(handle.as_str().to_owned());
+    }
+
+    fn current(&self) -> Option<String> {
+        self.current.lock().expect("替身锁").clone()
+    }
+}
+
 #[test]
 fn failed_reference_commit_keeps_the_old_entry_resolvable() {
     let root = TempRoot::new("reference");
     let entropy = FixedEntropy::new();
     let store = keystore(&root, &entropy);
+    let references = ReferenceHolder::new();
     block_on(async {
         let Ok(old) = store.generate(KeyPurpose::NodeIdentity, "primary").await else {
             return;
         };
+        references.commit_now(&old);
         let Ok(fresh) = store
             .generate(KeyPurpose::NodeIdentity, "primary-next")
             .await
         else {
             return;
         };
-        // 模拟「引用提交失败」（引用在存储层，这里用开关表达）：此时**不能**回收旧条目。
-        let reference_commit_failed = true;
-        if !reference_commit_failed {
-            store.delete(&old).await.expect("提交成功后才会回收旧条目");
-        }
-        assert!(store.public_key(&old).await.is_ok(), "旧引用必须仍可用");
-        assert!(store.public_key(&fresh).await.is_ok(), "新条目必须可读");
+
+        // 阶段 ①：引用层提交**失败** → 旧引用仍是可解析的身份，新条目不得被当成有效身份，
+        // 且此时**不**回收旧条目（回收只允许发生在引用切换成功之后）。
+        let commit = references.commit(&fresh, true);
+        assert!(commit.is_err(), "替身必须模拟提交失败");
+        assert_eq!(
+            references.current().as_deref(),
+            Some(old.as_str()),
+            "提交失败时引用不得切换"
+        );
         let transcript = challenge().transcript().expect("装配必须成功");
-        let signature = store
-            .sign(&old, &transcript)
-            .await
-            .expect("旧条目必须可签名");
-        assert_eq!(signature.as_bytes().len(), 64);
+        assert!(store.public_key(&old).await.is_ok(), "旧引用必须仍可解析");
+        assert_eq!(
+            store
+                .sign(&old, &transcript)
+                .await
+                .expect("旧条目可签")
+                .as_bytes()
+                .len(),
+            64
+        );
+        assert!(
+            store.public_key(&fresh).await.is_ok(),
+            "新条目本身可读（它是孤儿，不是有效身份）"
+        );
+        assert_ne!(old.as_str(), fresh.as_str(), "新旧条目必须是不同引用");
+
+        // 阶段 ②：引用层提交**成功** → 引用切换，此后才可以回收旧条目。
+        references
+            .commit(&fresh, false)
+            .expect("提交成功后必须切换");
+        references.commit_now(&fresh);
+        assert_eq!(references.current().as_deref(), Some(fresh.as_str()));
+        if references.current().as_deref() == Some(fresh.as_str()) {
+            store.delete(&old).await.expect("引用切换成功后回收旧条目");
+        }
+        assert!(store.public_key(&fresh).await.is_ok(), "新引用必须可用");
+        assert!(
+            matches!(
+                store.public_key(&old).await,
+                Err(KeystoreError::EntryMissing)
+            ),
+            "旧条目被回收后必须报「条目缺失」（而不是仍可读）"
+        );
+        assert_eq!(
+            store.list(EntryPurpose::NodeIdentity).unwrap(),
+            vec!["primary-next".to_owned()],
+            "回收后只剩被引用的条目"
+        );
     });
 }
 

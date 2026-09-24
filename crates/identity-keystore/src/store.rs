@@ -5,6 +5,11 @@
 //!
 //! 原子写：同目录临时文件 → `fsync` → `rename`。写失败的临时文件会被删除，不会留下半成品条目
 //! （对照合同 §7 的「条目损坏时失败而不覆盖」）。
+//!
+//! **持久性口径（如实登记，不夸大）**：`write_atomic` 只对文件本身做 `sync_all`，**不**对父目录
+//! fsync。因此「原子替换」保证的是「要么旧内容、要么新内容，不会半截」，**不**保证掉电后新条目
+//! 一定可见（可能仍看到旧条目）。keystore 语义没有崩溃持久性要求；需要时应在此处补父目录 fsync
+//! （unix）或 write-through 替换（Windows）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,6 +64,27 @@ impl Availability {
     }
 }
 
+/// 私有目录的模式位（unix）。抽成常量是为了让**任何平台**都能断言它的取值：
+/// unix 上的真实 `chmod` 行为只能在 Linux runner 上执行，常量写错却能在本机被立刻发现。
+#[cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "Windows 构建走 DPAPI 包裹，模式位常量只由 Unix 路径与测试使用"
+    )
+)]
+pub(crate) const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+
+/// 条目文件的模式位（unix）。理由同上。
+#[cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "Windows 构建走 DPAPI 包裹，模式位常量只由 Unix 路径与测试使用"
+    )
+)]
+pub(crate) const PRIVATE_FILE_MODE: u32 = 0o600;
+
 /// 平台安全存储的目录实现。
 pub struct FileKeystore {
     root: PathBuf,
@@ -108,7 +134,13 @@ impl FileKeystore {
     }
 
     /// 列出某用途下已存在的标签（用于孤儿回收与诊断；不返回秘密材料）。
+    ///
+    /// 与 7 个端口入口同样先过可用性闸门：不可用平台上返回 [`StoreError::PlatformUnavailable`]，
+    /// 而不是「空仓库」——否则调用方会把「后端不可用」误读成「没有条目」。
     pub fn list(&self, purpose: EntryPurpose) -> Result<Vec<String>, StoreError> {
+        self.availability
+            .require()
+            .map_err(|_| StoreError::PlatformUnavailable)?;
         let directory = self.root.join(purpose.directory());
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
@@ -186,11 +218,18 @@ impl FileKeystore {
     fn read_secret(&self, purpose: EntryPurpose, label: &str) -> Result<SecretBytes, StoreError> {
         let (header, wrapped) = self.read_entry(purpose, label)?;
         let entropy = header.additional_entropy();
-        let secret = unwrap_secret(&wrapped, &entropy)?;
+        let mut secret = unwrap_secret(&wrapped, &entropy)?;
         if !purpose.accepts_len(secret.len()) {
+            secret.fill(0);
             return Err(StoreError::Corrupt);
         }
-        Ok(SecretBytes::new(&secret))
+        let copy = SecretBytes::new(&secret);
+        // 平台解包返回的中间 `Vec<u8>` 必须清零后再释放，否则签名/读公钥的每次调用都会在堆上
+        // 留下未清零的私钥副本（`SecretBytes` 的析构清零只覆盖它自己那份）。平台 wrapper 内部
+        // 仍有一份自己的缓冲区（第三方实现，见 platform/mod.rs 的残余说明）。
+        secret.fill(0);
+        drop(secret);
+        Ok(copy)
     }
 
     /// 删除条目；不存在时返回明确错误（不静默成功）。
@@ -331,16 +370,21 @@ fn parse_handle(handle: &KeyHandle) -> Result<(EntryPurpose, String), KeystoreEr
 
 /// 创建目录（Unix 上限制为 `0700`）。
 fn create_private_directory(directory: &Path) -> Result<(), StoreError> {
-    if directory.exists() {
-        return Ok(());
+    if !directory.exists() {
+        fs::create_dir_all(directory).map_err(|error| StoreError::Io(error.kind().to_string()))?;
     }
-    fs::create_dir_all(directory).map_err(|error| StoreError::Io(error.kind().to_string()))?;
     #[cfg(unix)]
     {
+        // 即使目录已经存在也收紧权限：否则「目录先被别的工具建成 0755」会永久削弱条目保护。
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
-            .map_err(|error| StoreError::Io(error.kind().to_string()))?;
+        fs::set_permissions(
+            directory,
+            fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
+        )
+        .map_err(|error| StoreError::Io(error.kind().to_string()))?;
     }
+    // Windows 没有对应的模式位；DPAPI 的保护由条目包裹承担。
+    let _ = directory;
     Ok(())
 }
 
@@ -371,7 +415,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            file.set_permissions(fs::Permissions::from_mode(0o600))
+            file.set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
                 .map_err(|error| StoreError::Io(error.kind().to_string()))?;
         }
         file.write_all(bytes)
@@ -396,5 +440,125 @@ impl Drop for TempFileGuard {
         if self.armed {
             let _ = fs::remove_file(&self.path);
         }
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    //! 与平台无关的模式位断言：常量一旦被改成宽松值（例如 `0o644`），任何平台的测试都会失败。
+    //! unix 上的**真实** `chmod` 行为另有 `unix_modes` 模块（只在 Unix 构建里执行）。
+
+    use super::{PRIVATE_DIRECTORY_MODE, PRIVATE_FILE_MODE};
+
+    #[test]
+    fn private_modes_are_restrictive() {
+        assert_eq!(PRIVATE_DIRECTORY_MODE, 0o700, "私有目录模式必须是 0700");
+        assert_eq!(PRIVATE_FILE_MODE, 0o600, "条目文件模式必须是 0600");
+        assert_eq!(
+            PRIVATE_DIRECTORY_MODE & 0o077,
+            0,
+            "目录不得给组/其他用户任何权限"
+        );
+        assert_eq!(
+            PRIVATE_FILE_MODE & 0o077,
+            0,
+            "文件不得给组/其他用户任何权限"
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_modes {
+    //! Unix 权限位的**真实**断言（随 lib 单测二进制在 Linux CI 上执行，不需要平台后端）。
+    //!
+    //! 为什么放在这里而不是 `tests/`：```tests/permissions.rs``` 这类集成测试在非 Windows 上会因为
+    //! 「平台后端不可用 → 入口失败关闭」而**必然早退**，从而变成「0 断言但仍算通过」。本模块直接调用
+    //! 私有的目录/原子写辅助函数，因此模式位逻辑在任何 Unix 构建里都真被执行。
+    //!
+    //! 残余限制（如实登记）：在非 Windows 构建里，`write_entry` 之前的 `wrap_secret` 一定会失败，
+    //! 因此 0700/0600 这两行在真实「写条目」路径上尚未被完整路径覆盖——它由本模块按辅助函数粒度覆盖。
+
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn mode_of(path: &Path) -> u32 {
+        fs::metadata(path)
+            .expect("路径必须存在")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[test]
+    fn private_directory_and_entry_file_modes_are_restrictive() {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "acpr-keystore-modes-{}-{sequence}",
+            std::process::id()
+        ));
+        let directory = root.join("node-identity");
+
+        create_private_directory(&directory).expect("创建私有目录必须成功");
+        assert_eq!(
+            mode_of(&directory),
+            PRIVATE_DIRECTORY_MODE,
+            "私有目录必须是 0700"
+        );
+
+        let path = directory.join(format!("primary.{FORMAT_VERSION}"));
+        write_atomic(&path, b"wrapped-bytes").expect("原子写必须成功");
+        assert_eq!(mode_of(&path), PRIVATE_FILE_MODE, "条目文件必须是 0600");
+        assert_eq!(fs::read(&path).expect("可读回"), b"wrapped-bytes");
+
+        // 已存在的宽松目录会被收紧（而不是「已存在就放过」）。
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+            .expect("构造宽松目录必须成功");
+        create_private_directory(&directory).expect("重复调用必须成功");
+        assert_eq!(
+            mode_of(&directory),
+            PRIVATE_DIRECTORY_MODE,
+            "已存在的目录也必须被收紧到 0700"
+        );
+
+        // 成功的原子写不留临时文件。
+        let leftovers: Vec<String> = fs::read_dir(&directory)
+            .expect("目录可读")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "不得残留临时文件：{leftovers:?}");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn write_atomic_replaces_content_without_leaving_temporaries_on_failure() {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "acpr-keystore-atomic-{}-{sequence}",
+            std::process::id()
+        ));
+        let directory = root.join("provider-credential");
+        create_private_directory(&directory).expect("创建目录必须成功");
+        let path = directory.join(format!("token.{FORMAT_VERSION}"));
+
+        write_atomic(&path, b"first").expect("首次写必须成功");
+        write_atomic(&path, b"second").expect("替换必须成功");
+        assert_eq!(
+            fs::read(&path).expect("可读回"),
+            b"second",
+            "必须整体替换而不是追加"
+        );
+
+        // 失败路径：目标目录不存在 → 返回错误且不留任何临时文件。
+        let missing = root.join("no-such-dir").join("entry");
+        assert!(write_atomic(&missing, b"x").is_err(), "父目录缺失必须失败");
+        assert!(!root.join("no-such-dir").exists(), "失败不得创建目标目录");
+
+        fs::remove_dir_all(&root).ok();
     }
 }

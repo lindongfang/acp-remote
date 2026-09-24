@@ -44,6 +44,12 @@ pub(crate) struct PairingMaterial {
     pub secret: PairingSecret,
     pub server_nonce: Nonce,
     pub pairing_request_id: PairingRequestId,
+    /// 是否已被批准（「内存态只允许比已提交状态更严格」，见 design D3）。
+    ///
+    /// 为什么需要它：`complete` 只拿到配对标识，若用「内存里还有 secret」代理
+    /// 「已批准且未被消费」，那么仍在保留期内的 `created`/`pending_confirmation`/`rejected`
+    /// 记录也会被当成消费目标（合同 §5.1 要求 `consume_pairing` 只在已批准配对的首次认证时非空）。
+    pub approved: bool,
 }
 
 /// 进程内状态。
@@ -69,6 +75,29 @@ impl State {
     /// 取配对内存材料（SAS 派生需要本机 nonce 与请求标识）。
     pub fn material(&self, pairing: &PairingId) -> Option<&PairingMaterial> {
         self.secrets.get(pairing.as_str())
+    }
+
+    /// 标记该配对已批准（`settle(Approve)` 时置位，不改变 secret 的保留期）。
+    pub fn mark_approved(&mut self, pairing: &PairingId) -> bool {
+        match self.secrets.get_mut(pairing.as_str()) {
+            Some(material) => {
+                material.approved = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 取出「已批准且仍持有 secret」的配对（首次认证成功消费一次）：返回 `true` 时才清除。
+    pub fn take_approved_secret(&mut self, pairing: &PairingId) -> bool {
+        let approved = self
+            .secrets
+            .get(pairing.as_str())
+            .is_some_and(|material| material.approved);
+        if approved {
+            self.secrets.remove(pairing.as_str());
+        }
+        approved
     }
 
     /// 清除配对 secret（批准后首次认证成功、拒绝、过期与重启终结都走这里）。

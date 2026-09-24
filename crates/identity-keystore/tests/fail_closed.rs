@@ -23,6 +23,9 @@ fn platform_availability_is_reported_honestly() {
 
 #[test]
 fn default_availability_follows_the_platform() {
+    // 这是**装配连线**断言：期望值由同一个 `cfg!(windows)` 推出，因此它只能证明
+    // `new()` → `detected()` 的连线，不证明「平台判定本身正确」——后者由
+    // `platform_availability_is_reported_honestly` 覆盖。
     // `new` 的可用性来自编译期平台；要跑另一条路径必须用 `with_availability` 显式写出来。
     let root = TempRoot::new("availability");
     let entropy = FixedEntropy::new();
@@ -166,7 +169,13 @@ fn available_backend_is_not_unconditionally_unavailable() {
 
 #[test]
 fn errors_never_carry_secret_material() {
-    // 错误是封闭分类：既不包含秘密值，也不包含路径以外的上下文。
+    // 错误是**封闭分类**：断言落在具体分类上（而不是「文本里没有某个子串」——`KeystoreError` 是无载荷
+    // 枚举，那种断言结构上不可能失败，会给读者高于实际的保证）。
+    //
+    // 真正有判别力的三层防线：
+    //   ① 分类封闭 + 无载荷：见本用例与 `identity_auth::KeystoreError` 的定义；
+    //   ② `StoreError::Io` 只保存 `ErrorKind` 文本，不保存路径或消息（本用例断言）；
+    //   ③ 条目文件里不含明文标量：`node_identity_entry_contains_no_plaintext_key` 与 `dpapi.rs`。
     let plaintext = b"super-secret-provider-token";
     let root = TempRoot::new("errors");
     let entropy = FixedEntropy::new();
@@ -177,10 +186,34 @@ fn errors_never_carry_secret_material() {
             .sign(&handle, plaintext)
             .await
             .expect_err("条目缺失必须失败");
-        let text = format!("{error}");
-        assert!(!text.contains("super-secret-provider-token"));
-        assert!(!text.is_empty());
+        if identity_keystore::platform_supported() {
+            assert_eq!(
+                error,
+                KeystoreError::EntryMissing,
+                "可用平台上的缺失必须是具名分类"
+            );
+        } else {
+            assert_eq!(
+                error,
+                KeystoreError::Unavailable,
+                "不可用平台必须先失败关闭"
+            );
+        }
     });
+    // ③ 结构性断言：`KeystoreError` 是**无载荷**封闭枚举——下面这个穷尽匹配若加入带载荷变体会编译失败，
+    //    因此「错误文本里可能出现秘密材料」这条路在类型层就不存在。
+    fn label(error: &KeystoreError) -> &'static str {
+        match error {
+            KeystoreError::Unavailable => "unavailable",
+            KeystoreError::EntryMissing => "entry_missing",
+            KeystoreError::EntryCorrupt => "entry_corrupt",
+            KeystoreError::EntryInvalid => "entry_invalid",
+            KeystoreError::PurposeMismatch => "purpose_mismatch",
+            KeystoreError::SecretMissing => "secret_missing",
+        }
+    }
+    assert_eq!(label(&KeystoreError::EntryMissing), "entry_missing");
+    assert!(!label(&KeystoreError::EntryMissing).contains("super-secret-provider-token"));
 }
 
 #[test]

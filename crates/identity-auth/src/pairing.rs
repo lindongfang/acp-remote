@@ -71,6 +71,8 @@ impl Authority {
                 secret,
                 server_nonce: server_nonce.clone(),
                 pairing_request_id: pairing_request_id.clone(),
+                // 新建的配对本就未批准；批准由 `settle(Approve)` 置位。
+                approved: false,
             },
         );
         Ok(PairingDraft {
@@ -263,7 +265,10 @@ impl Authority {
     /// **不在落定时清除 secret**（合同 §4.3）：批准后的配对仍要被 `pairing-status` 之类的
     /// HMAC 证明使用，直到「首次认证成功」才提前清除（见 [`Authority::complete`]）；
     /// 被拒绝的配对也可以为可靠轮询保留到原过期时间——两条路径的上界都是 `expires_at`，
-    /// 由 [`Authority::due_pairings`] 在过期时统一清除。
+    /// 由 [`Authority::due_pairings`] 在过期时统一清除（**包含已终结的 `rejected` 记录**）。
+    ///
+    /// 批准时会把内存材料标记为「已批准」，使 [`Authority::complete`] 只能把**已批准**的
+    /// 配对作为消费目标。
     pub fn settle(
         &self,
         pairing: &PairingRecord,
@@ -295,6 +300,7 @@ impl Authority {
                 if !granted.within(&requested) {
                     return Err(PairingError::CapabilitiesExceedRequested);
                 }
+                self.state().mark_approved(pairing.id());
                 Ok(PairingSettlement::approved(
                     granted_scopes.clone(),
                     granted_grants.clone(),
@@ -312,19 +318,25 @@ impl Authority {
         }
     }
 
-    /// 到期但未终结的配对（调用方据此请求存储做 `expire_pairings`；本层同时清除内存 secret）。
+    /// 过期扫描。**任何**到达 `expires_at` 的记录都在这里被清除内存 secret——这是 secret 的硬上界，
+    /// 与记录是否已终结无关（`rejected`/`expired` 记录也在此清除，否则它们会一直驻留到进程退出）。
+    ///
+    /// 返回值只包含**未终结**的配对：它们需要调用方按 `core::ports` 的写集（§11.6）提交终态写集
+    /// （`expire_pairings`）。已批准但已过期的记录也在此列：它的落库终态（`approved_at` 是否保留）
+    /// 属存储侧语义，本层只保证 secret 不再可用。
     pub fn due_pairings(&self, pairings: &[PairingRecord], at: &Timestamp) -> Vec<PairingId> {
-        let now = at.clone();
-        pairings
-            .iter()
-            .filter(|record| {
-                !record.state().is_terminal() && at_or_after(&now, record.expires_at())
-            })
-            .map(|record| {
-                self.state().clear_secret(record.id());
-                record.id().clone()
-            })
-            .collect()
+        let mut due = Vec::new();
+        for record in pairings {
+            if !at_or_after(at, record.expires_at()) {
+                continue;
+            }
+            // 清除先于状态判断：终态记录同样必须释放 secret。
+            self.state().clear_secret(record.id());
+            if !record.state().is_terminal() {
+                due.push(record.id().clone());
+            }
+        }
+        due
     }
 
     /// 进程重启后已无法继续验密的配对（`created`/`pending_confirmation`）：**全部**必须终结。
@@ -395,8 +407,9 @@ impl Authority {
 impl Authority {
     /// 认证收尾（合同 §5.1 的第 3 个入口，也是唯一的副作用入口）。
     ///
-    /// 状态机内只做一件事：清除已批准配对的内存 secret（合同 §4.3 的「首次认证成功时提前清除」）；
-    /// 返回的 [`Completion`] 告诉调用方需要落库的消费目标、与之一致的时间与本次事实。
+    /// 状态机内只做一件事：清除**已批准**配对的内存 secret（合同 §4.3 的「首次认证成功时提前清除」；
+    /// 「已批准」由 `settle(Approve)` 在内存材料上标记，因此未批准或已拒绝的配对不会被误当成
+    /// 消费目标）；返回的 [`Completion`] 告诉调用方需要落库的消费目标、与之一致的时间与本次事实。
     pub fn complete(
         &self,
         fact: IdentityFact,
@@ -404,8 +417,9 @@ impl Authority {
         at: &Timestamp,
     ) -> Completion {
         let consume_pairing = pairing.filter(|pairing| {
-            // 只有仍持有 secret 的配对才需要被推进为 consumed（已经清除说明本次不是首次认证）。
-            self.state().clear_secret(pairing)
+            // 只有「已批准且仍持有 secret」的配对才需要被推进为 consumed：已经清除说明本次不是首次
+            // 认证；尚未批准说明调用方传错了目标（可能是同对端的旧配对）。
+            self.state().take_approved_secret(pairing)
         });
         Completion {
             fact,

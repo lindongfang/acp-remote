@@ -75,41 +75,15 @@
 | 创建者 | 本节点（二维码） | 两种方向都有：本节点创建（`mode = owner`）或对端创建、本节点 claim（`mode = access`） |
 | 确认后写入 | `owned_device` + `owned_peer_key` | `owned_node`（角色取 claim 的 `nodeKind`，即 `core::model` 的 `NodeKind`：`access`/`owner`）+ `owned_peer_key` |
 
-`[决定]` 目标形状的入口（实现时新增到 `identity-auth`，不在 `core::ports`）：
+> `[已废弃]` 0.2 版曾在这里列出一份「目标形状」草案（`PairingTarget` 带载荷、`ClaimVerification`、
+> `SettlementRequest`）。它已被下面的「已实现形状」取代并**删除**：`PairingTarget` 是 `core::model` 的
+> 纯 token 枚举（不带载荷，§2），`ClaimVerification`/`SettlementRequest` 从未存在。历史可从
+> git 记录取，本节不再保留两份互斥的规范块。
 
 ```rust
-pub enum PairingTarget {
-    Device { canonical_origin: CanonicalOrigin },
-    Node { endpoint: NodeEndpoint, kind: NodeKind },
-}
-
 pub enum PairingDecision {
     Approve { granted_scopes: ScopeSet, granted_grants: GrantSet },
     Reject { reason: Option<String> },
-}
-
-/// 创建：只生成过程状态与内存 secret，落库走 TrustStore::create_pairing（§11.6）。
-pub struct PairingDraft {
-    pub target: PairingTarget,
-    pub display_name: Option<String>,
-    pub requested: RequestedCapabilities,
-    pub expires_at: Timestamp,
-    pub secret: PairingSecret,          // 只在内存；只有 digest 进写集
-}
-
-/// 认领校验：HMAC/proof 与绑定校验的**唯一入口**。输入是已解码的 claim 字段、调用方从
-/// `TrustStore` 读到的当次 `PairingRecord` 与内存中的 pairing secret；输出可直接送入
-/// §11.6 的 `PairingClaimWrite`（含 65 字节公钥）。
-pub struct ClaimVerification {
-    pub pairing: PairingId,
-    pub peer: PairingPeer,                 // 已含 public_key
-    pub requested: RequestedCapabilities,
-}
-
-/// 落定：由本地管理入口调用；先做状态/过期/peer 固定校验，再产出 PairingSettlement。
-pub struct SettlementRequest {
-    pub pairing: PairingId,
-    pub decision: PairingDecision,
 }
 
 /// 配对上请求的集合：设备侧只允许 `scopes`，节点侧只允许 `grants`（与 §3.5 的不变式一致）。
@@ -145,8 +119,11 @@ impl Authority {
         fields: &ClaimFields,           // 已解码的 claim 字段（含 65 字节公钥）
     ) -> Result<ClaimOutcome, PairingError>;
 
-    // 落定：批准要求 pending_confirmation 且未过期，且最终集合不超出请求值；
-    // 拒绝可从 created/pending_confirmation 进入。两条路径都清除内存 secret。
+    // 落定：批准要求 pending_confirmation 且未过期，且最终集合不超出请求值；批准时把内存材料
+    // 标记为「已批准」（只有它才可能成为 complete_auth 的消费目标）。
+    // 拒绝可从 created/pending_confirmation 进入。
+    // **两条路径都不在落定时清除 secret**：批准后的配对还要支持状态查询的 HMAC 证明，直到
+    // 「首次认证成功」才提前清除；拒绝的配对可为可靠轮询保留到原过期时间。上界一律是 expires_at。
     pub fn settle(
         &self,
         pairing: &PairingRecord,
@@ -154,7 +131,10 @@ impl Authority {
         at: &Timestamp,
     ) -> Result<PairingSettlement, PairingError>;
 
-    // 过期扫描与启动恢复：返回需要由调用方终结（ExpiryWrite）的配对；
+    // 过期扫描与启动恢复：**任何**到达 expires_at 的记录都在这里清除内存 secret（这是 secret 的
+    // 硬上界，与记录是否已终结无关——rejected/expired 也在此清除）；返回值只含未终结、需要调用方
+    // 按 §11.6 提交终态写集的配对。Approved 不是终态，因此「已批准但已过期」也在返回集里，
+    // 其落库终态（approved_at 是否保留）由存储侧语义决定——这是留给切片 4/5 的开放项。
     // 重启时未确认且无法继续验密的配对**全部**终结（secret 只在内存）。
     pub fn due_pairings(&self, pairings: &[PairingRecord], at: &Timestamp) -> Vec<PairingId>;
     pub fn unrecoverable_after_restart(&self, pairings: &[PairingRecord]) -> Vec<PairingId>;
@@ -308,6 +288,12 @@ pub struct PeerTrust {
   `credential` 决定关闭连接并映射到 `auth.device_revoked`/`auth.device_unknown`（Node Link 为对应码）；只有签名/绑定/挑战本身不成立才是
   `HandshakeFailure`（对端可见分类统一为 `AuthenticationFailed`，审计动作按连接类型给出，§14.2）。
 
+- `[决定]`（2026-09-24 实现）`verify_proof` 额外核对「快照主体 == 提交主体」（`trust.peer != submission.peer`
+  → `HandshakeError::UntrustedPeer`）：它拦住「adapter 传错快照、用别的对端的公钥验签」这类接线错误。
+  失败分类仍统一为对端可见的 `AuthenticationFailed`。
+- `[决定]`（2026-09-24 实现）诊断/测试入口属于公开 API 的一部分：`Authority::challenge_cache_len()`、
+  `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。除 `pairing_status` 外都**不**返回
+  秘密材料，只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
 - `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。
 - `[决定]` 三个入口都不读系统时间、不碰 SQLite：持久化事实由返回值带着交给调用方，由写集端口落库（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）。
@@ -334,6 +320,13 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 - `[决定]` `Revoked`/`Unknown` 必须映射为 `auth.device_revoked`/`auth.device_unknown`（节点侧为 Node Link 的对应码），不得降级为 `authorization.scope_denied`——两类的可重试性与客户端行为不同。
 
 ### 5.2 nonce、重放与时钟
+
+`[决定]`（2026-09-24 实现）**挑战缓存有硬上限**：`MAX_CHALLENGES = 1024`，签发时先用注入时钟清扫
+已过期条目，满时淘汰**最早过期**的一条再插入（`state.rs` 的 `put_challenge`）。依据是我们自己的
+资源限制要求（`AGENTS.md` §5 的数量/资源上限）：只会被 `verify_proof` 消费的挑战，在「完成 hello 但不发
+proof」的连接上会永不消费，因此内存上界必须与真实并发连接数解耦。被淘汰/被清扫的客户端拿到统一的
+证明失败分类并重新握手——不泄露存在性，也不改变一次性消费语义。
+
 
 `[决定]`：
 

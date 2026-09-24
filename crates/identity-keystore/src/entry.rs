@@ -44,10 +44,19 @@ const ENTROPY_DOMAIN: &[u8] = b"acp-remote/keystore-entry/v1";
 /// **只此一份**：[\`EntryHeader::new\`]（写入路径）与 [\`EntryHeader::decode\`]（读取路径）共用它，
 /// 因为标签会被拼进文件路径——两侧不对称就会给「decode 后自己拼路径」的调用方留下目录穿越。
 pub fn is_valid_label(label: &str) -> bool {
+    const WINDOWS_RESERVED: [char; 9] = ['<', '>', ':', '"', '|', '?', '*', '/', '\\'];
     !label.is_empty()
         && label.len() <= MAX_LABEL_LEN
         && !label.contains(['/', '\\', '\0'])
         && !label.chars().any(char::is_control)
+        // Windows 保留字符一并拒绝：否则这些标签会在 \`File::create\` 处报 \`Io\`（端口层映射为
+        // \`Unavailable\`），把「标签非法」误报成「后端不可用」。\`/\` 与 \`\\\\\` 已在上面拒过一次。
+        && !label.contains(WINDOWS_RESERVED)
+        // 标签按**文件系统语义**唯一：本 crate 不做大小写归一，因此在大小写不敏感的文件系统
+        // （Windows/macOS）上 \`Primary\` 与 \`primary\` 指向同一条目。调用方必须自行保证标签
+        // 在同一用途下大小写不冲突（见 store.rs 的 \`entry_path\` 说明）。
+        && !label.starts_with([' ', '.'])
+        && !label.ends_with([' ', '.'])
 }
 
 /// 条目用途 token。
