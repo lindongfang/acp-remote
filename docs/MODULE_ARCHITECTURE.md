@@ -1,7 +1,8 @@
 # ACP Remote 模块架构
 
-> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host` 已实现，见 `README.md` 的 crate 表）
+> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore` 已实现，见 `README.md` 的 crate 表）
 > 版本：0.3
+> 修订记录（2026-09-24，identity-auth-and-keystore）：§3 状态行与 §3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价、并标注 macOS/Linux 后端未实现；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
 > 修订记录（2026-09-24，core-turn-view-fields）：§4.1 补「适配器产 ACP 派生投影、broker 补 `SYNC_PROTOCOL.md` §10.3 身份与会话版本」的职责分工；§4.7 写明 `owned_session.version` 由存储层在事务内实现、core 只按同一规则推导并在提交后比对（不一致 → `PortError::Corrupt` 失败关闭）。
 > 修订记录（2026-09-24）：§4.2/§4.5 记录 `acp-protocol` 与 `agent-host` 的落地 surface、每个 Agent 一个 Job 的粒度、`win32job`/`nix` 选型与「关闭句柄即结束树」的实际路径；§3.1 的依赖登记与 §5 矩阵补 `agent-host` 列。  §4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1；§3.1 的 `nix 0.30.1` 许可证订正为 `MIT`（原写 `MIT OR Apache-2.0`，与本地 registry 元数据不符）；§5 披露尚未成为矩阵列的 crate。  
 > 日期：2026-09-18
@@ -129,11 +130,13 @@ crates/
 
 - `edition = "2024"`（与 `rust-version = "1.85"` 一致，edition 2024 的最低工具链即 1.85），`resolver = "3"`。
 - `[workspace.package]` 统一 `version`、`edition`、`rust-version`、`license`、`repository`；第一阶段全部 crate `publish = false`（`§12` 的"是否公开部分 crate"仍未定）。
-- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256 0.13`（ECDSA P-256）+ `sha2 0.11` + `hmac 0.12` + `base64 0.23`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`（后两者用于 `PeerPublicKey` 的构造期点校验与指纹派生），其中 `p256` **只开 `arithmetic`**——core 不签名也不验签，`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 留在协议与身份边界；其普通依赖闭包与 allow-list 见 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 与 `scripts/check-crate-boundaries.mjs`。
+- `[workspace.dependencies]` 统一第三方版本（tokio、axum、serde、serde_json、sqlx 或 rusqlite、tracing、thiserror 等）；crate 内只写 `workspace = true`；新增依赖按 `AGENTS.md` §7 先审必要性、维护状态、许可证与平台支持。密码学原语固定为 `p256 0.13`（ECDSA P-256）+ `sha2 0.11` + `hmac 0.13` + `base64 0.23`（无填充 base64url）：四者都是纯 Rust、无原生依赖，且已对 `fixtures/*/v1/transcripts/` 的固定向量验证通过（结论与实现约束见 `INITIAL_DESIGN.md` §16 第 6 条）。`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`（后两者用于 `PeerPublicKey` 的构造期点校验与指纹派生），其中 `p256` **只开 `arithmetic`**——core 不签名也不验签，`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 留在协议与身份边界；其普通依赖闭包与 allow-list 见 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 与 `scripts/check-crate-boundaries.mjs`。
 - `[决定]` 上述四个密码学原语的**版本口径只维护在上一行**：版本号以 `Cargo.toml` 的 `[workspace.dependencies]` 为准，本行所在的说明与它一致。变更版本必须在**同一改动**里更新这里并给出验证证据；变的是原语集合、算法或实现选择（而不是版本号）时按 `AGENTS.md` §10 走 ADR。
+  - 2026-09-24（`identity-auth-and-keystore`）：`hmac 0.12 → 0.13`。理由：`sha2 0.11` 走 `digest 0.11`，而 `hmac 0.12` 要求 `digest 0.10`，同图并存两个 digest 主版本且 `hmac::Hmac<Sha256>` 无法接受 `sha2 0.11` 的类型；`hmac 0.13.0` 的 `rust-version = 1.85` 与本仓库 MSRV 一致（`MIT OR Apache-2.0`，已在 `deny.toml` allow 列表）。消费方：`identity-auth` 的 SAS/配对证明 HMAC 与 `identity-keystore` 的附加熵派生。证据：`reports/du1-pv1.log`（`npm run verify` exit 0，含 workspace 全部测试与 clippy）与 `reports/wp2-workspace-tests.log`；固定向量重算（HMAC 与 SAS 期望值）在 `identity-auth` 的 `tests/transcripts.rs` 中恒常执行。
   - 2026-09-23 基线：`sha2 0.10 → 0.11`、`base64 0.22 → 0.23`（Dependabot PR #1/#2）。证据：workspace 全部测试与 clippy 在该版本上通过（CI 五个 job 全绿、本地 `npm run check:rust` 通过）；`npm run check` 的 transcript 固定向量重算与许可证/来源判定不受影响（JS 侧与版本无关，许可证集合无新增项）。
   - 诚实说明：`INITIAL_DESIGN.md` §16 第 6 条那次一次性 Rust 实测是在 `sha2 0.10`/`base64 0.22` 上做的；本次只验证了「算法语义不变且现有测试通过」，没有重跑那次探针。真正版本无关的回归判据仍是该条要求实现阶段做的事：把同一批固定向量固化成恒常运行的 Rust 测试。
 - `[决定]`（2026-09-24）`agent-host` 的平台与日志依赖固定为 `tracing 0.1`（结构化日志，MIT）、`win32job 2`（Windows Job Object；safe API，MIT OR Apache-2.0）与 `nix 0.30`（Unix 进程组结束；`default-features = false`，只开 `signal`/`process`，MIT），三者只登记在 `[workspace.dependencies]`，crate 内写 `workspace = true`。选 `win32job` 而不是 `process-wrap` 的理由是 MSRV：`process-wrap` 10 需要 1.87，高于本仓库 `rust-version = 1.85`（§4.5）；Unix 侧选 `nix` 而不是 `libc` 的理由是 workspace 固定 `unsafe_code = "forbid"`，直接调 `killpg` 必须写 `unsafe` 块（`forbid` 不可用 `#[allow]` 绕过）。版本口径同样只维护在 `[workspace.dependencies]`，本行与它保持一致。
+- `[决定]`（2026-09-24）身份边界的依赖口径：`identity-auth`（纯状态机）只依赖 `core`、`sync-protocol`、`node-link-protocol`、`acpr-transcript`（后三者**仅**用于 transcript 编解码与 domain/field tag 表）与 `async-trait`/`thiserror`/`p256`（只增量开启 `ecdsa`，用于**验签**，不签名、不用 `from_der`）/`sha2`/`hmac`；不得依赖 `acpr-wire`、runtime、serde、数据库或 `identity-keystore`，也不得出现平台 `cfg`。`identity-keystore`（已落地）只依赖 `identity-auth`、`async-trait`、`p256`（`ecdsa`，进程内签名）、`sha2`（附加熵派生）、`thiserror`、`getrandom`（OS 随机数；实际取值 `0.4.3`，MIT OR Apache-2.0，MSRV ≤ 1.85）以及 `cfg(windows)` 下的 DPAPI wrapper（`windows-dpapi 0.2.0`，选型结论见 §4.12）。为让端口实现方无需依赖 `core`，`identity-auth` 如实转出端口签名与公开 API 用到的 `core::model` 值对象。`identity-auth` 不另设 `uuid` 依赖：core 的 ID 已是规范 UUID 文本，转 16 字节只需去连字符 + 十六进制解码。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
 - workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十三个（ADR-0007 引入 `acpr-wire` 后由十二改为十三）；不得为凑齐列表创建只有占位实现的空 crate。
@@ -209,7 +212,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
-管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。仍**未**实现的只是 Daemon/CLI 接线与 `identity-auth`/`identity-keystore`；在它们落地前不得声称这些管理能力已端到端可用。业务决定仍由 core 用例拥有。
+管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。仍未实现的是 Daemon/CLI 接线与 `server`/`app` 的入站适配器（`identity-auth`/`identity-keystore` 两个身份 crate **已落地**，见 §4.8/§4.12）；在接线完成前不得声称这些管理能力已端到端可用。业务决定仍由 core 用例拥有。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
@@ -328,11 +331,11 @@ authorization/
 port/          # keystore 端口定义（trait），实现见 identity-keystore
 ```
 
-它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销，以及**通过端口**访问平台安全存储（[ADR-0006](./adr/0006-identity-keystore-split.md)）。所有密钥读写都经过组合根注入的端口：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
+它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销，以及**通过端口**访问平台安全存储（[ADR-0006](./adr/0006-identity-keystore-split.md)）。所有密钥读写与**随机性**都由组合根注入的端口提供：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不直接读系统随机数，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
 
 `pack.*`、`preset.*`、`grant.*` 只是授权管理的输入形式：由 `authorization/` 按 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 展开成命令级 scope 后才写入设备记录或随 wire 下发（`SECURITY_DESIGN.md` §10.2）。core 只看到展开后的 scope 与 grant facts，不认识 pack/preset 名称。
 
-本 crate 的实现前合同（状态机、握手入口、授权展开、nonce/重放、keystore 端口签名）冻结在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)：本节只保留职责边界，不重复签名。
+本 crate 的实现前合同（状态机、握手入口、授权展开、nonce/重放、keystore 与熵源端口签名）已随 `identity-auth-and-keystore` 变更定型在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)：本节只保留职责边界，不重复签名。
 
 ### 4.9 `server`
 
@@ -402,13 +405,32 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 唯一职责：实现 `identity-auth` 定义的 keystore 端口，把长期密钥与凭据落到平台安全存储。
 
-- Windows：第一阶段用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内完成；CNG/TPM 不可导出档位是后续 ADR 的开放项（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。
-- macOS：Keychain；可用时使用不可导出或硬件保护能力。
-- Linux：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的当前决定失败关闭，不得静默降级为明文文件。
+> `[现状]`（2026-09-24）下表只有 **Windows/DPAPI** 一列已落地；macOS 与 Linux 的后端**尚未实现**
+> （`crates/identity-keystore/src/platform/` 目前只有 `mod.rs`/`windows.rs`/`unsupported.rs`），非 Windows
+> 平台统一走失败关闭桩。以下三行是**设计意图**，不是现状陈述。
+
+- Windows：第一阶段用 **DPAPI（当前用户 scope）包裹私钥字节**，签名在进程内完成；CNG/TPM 不可导出档位是后续 ADR 的开放项（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。**已落地**。
+- macOS（未实现，规划中）：Keychain；可用时使用不可导出或硬件保护能力。
+- Linux（未实现，规划中）：Secret Service（D-Bus）。没有可用的 Secret Service 时，按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的当前决定失败关闭，不得静默降级为明文文件。
 
 约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有（目标签名见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7）；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
 
 `[决定]`（2026-09-23）平台差异只能以 **wrapper crate + 本 crate 内的 `cfg` 子模块**表达：workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`，各 crate 继承 `[lints] workspace = true`），因此本 crate **不得**直接 FFI DPAPI/CNG/Secret Service。DPAPI wrapper、Secret Service client 等候选必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 核验 MSRV、维护状态、许可证与平台支持；DPAPI 只能以「当前用户 scope 包裹 + 进程内 `p256` 签名」的方式使用（私钥在签名瞬间存在于内存，这是已知且已记录的取舍）。Linux 后端在没有 Secret Service 的环境（含 CI 容器）只需保证**编译通过 + 运行时明确失败**，单测走 stub 端口——这正是 [ADR-0006](./adr/0006-identity-keystore-split.md) 拆出本 crate 的目的。
+
+`[决定]`（2026-09-24）DPAPI wrapper 采用 **`windows-dpapi 0.2.0`**（`cfg(windows)` 专属依赖）。核验结论（`SECURITY_DESIGN.md` §20 的四个判据）：
+
+- **语义一致**：只提供 `encrypt_data`/`decrypt_data` + `Scope::{User, Machine}`，本 crate 固定 `Scope::User` 并**只**用它做「包裹秘密字节 + 进程内 `p256` 签名」，公开入口不接受 scope 参数，因此组合根无法顺手改用机器 scope；
+- **许可证**：`MIT OR Apache-2.0`，与传递依赖 `anyhow 1`/`log 0.4`/`winapi 0.3.9` 全部落在 `deny.toml` 的 allow 列表内（advisory 判定只在 CI 的 `advisories` job，本地无等价物）；
+- **MSRV/edition**：edition 2021、未声明 `rust-version`（实测在仓库固定工具链上编译通过；传递依赖声明的 MSRV **最高者是 `log 0.4.34` 的 1.71**，低于本仓库 MSRV 1.85）；
+- **维护状态**：wrapper 本身是新 crate（单作者），传递依赖 `winapi 0.3` 上游已停止维护——这是**已知代价**，记在下面。
+
+已知代价与缓解：
+
+1. `winapi 0.3` 已停止维护，但它只出现在 wrapper 内部（本仓库 `unsafe_code = "forbid"`，不写 FFI），替换路径是自写 wrapper crate 或换用 `windows-sys` 系 wrapper——两者都需要新 ADR（[ADR-0006](./adr/0006-identity-keystore-split.md) 的边界不变）；
+2. wrapper 不暴露 `CRYPTPROTECT_UI_FORBIDDEN`，本实现因此**总是**传入由条目头（用途 + 标签 + 版本 + 盐）派生的附加熵，把「无熵 + 缺主密钥时可能弹交互提示」收敛为有熵的静默路径；
+3. 附加熵同时把条目绑死到「用途 + 标签 + 版本 + 盐」，因此复制/剪接条目解不开（[PV5] 用真实 DPAPI 断言）。
+
+核验证据：`openspec/changes/archive/2026-09-24-identity-auth-and-keystore/reports/wp3-dpapi-verification.log`（`cargo tree`/`cargo metadata` 输出）与 `openspec/changes/archive/2026-09-24-identity-auth-and-keystore/reports/pv5-windows-dpapi.log`（5 个真实 DPAPI 用例）；两条都写完整路径（避免与仓库根的历史遗留同名文件混淆）。注意：这类日志受 `.gitignore` 忽略、**不进版本库**：归档时随变更目录一起移动（路径已如上更新），因此本机工作区可在归档路径下复核，但任何全新克隆都没有它们——克隆后能复核的是本文件的记录、`reports/*.md` 报告与仓库改动本身。结论已同步到 §3.1。
 
 ### 4.13 `acpr-wire`
 

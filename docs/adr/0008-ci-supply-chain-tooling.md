@@ -107,8 +107,11 @@ action」。这条约束在实践中有两个问题：
      机制采用「一份规则、两个执行器」：规则写在 `.gitleaks.toml`，CI 的 `secrets` job 与本地
      `.husky/pre-commit`（`gitleaks git --pre-commit --redact --staged`，扫暂存内容）共用同一份；
      本机未装 `gitleaks` 时钩子只提示并跳过（不让本地门禁依赖仓库不随附的二进制），因此这条防线的强度
-     取决于是否装了它。**规则本身等密钥格式定稿再加**：只有默认规则集时写不出准确的自研格式正则，
-     而是在 `identity-auth`/`identity-keystore` 开始产生真实密钥时与格式定义在同一改动里落地。
+     取决于是否装了它。自研格式规则已随 `identity-auth-and-keystore` 落地：`.gitleaks.toml` 的
+     `acpr-keystore-plaintext-entry` 匹配**编码后**的明文条目（`keywords` 取编码前缀 `QUNQS`，
+     因为字面 `ACPK` 在编码后的文本里不存在，会让规则永不评估）。边界如实声明：原始二进制条目与
+     DPAPI 包裹的密文不可用模式识别，因此这条规则不是「条目不会泄漏」的保证，只是最后一层减速带；
+     它的首次真实执行在 CI 的 `secrets` job（本机无 gitleaks）。
      能拦住「红状态进入 main」的是 main 的分支保护：
      本 ADR 写完后先建于 2026-09-23（ruleset `main-protection`，id 23858733），随后同日升到 PR 必需档——
      `deletion` + `non_fast_forward` + `required_status_checks`（`strict = true`，五个上报名）+

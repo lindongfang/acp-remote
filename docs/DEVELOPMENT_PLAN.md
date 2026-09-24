@@ -1,7 +1,7 @@
 # ACP Remote 开发计划
 
 > 状态：实施路线图；记录建议的交付顺序与验收节点，不新增产品、协议或安全合同。
-> 基线：2026-09-23。实际能力以代码和测试为准；各项待实现内容以其权威文档为准。
+> 基线：2026-09-23（2026-09-24 随 `identity-auth-and-keystore` 补充切片 3 的落地状态）。实际能力以代码和测试为准；各项待实现内容以其权威文档为准。
 
 ## 1. 目标与边界
 
@@ -11,7 +11,7 @@
 
 ## 2. 当前基线
 
-Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`，以及切片 2 在 `acp-boundary-and-agent-host` 变更中落地的 `acp-protocol` 与 `agent-host`。其中 core 的会话用例和 broker、SQLite 的 owned/imported 会话存储、Sync/Node Link v1 wire 类型，以及 `acp-protocol` 的 ACP v1 wire 与 `agent-host` 的本机 Agent backend 已有实现。管理状态持久化的 core 端口与 SQLite 存储两层已落地（Daemon/CLI 接线仍未落地）。尚未落地的是 `identity-auth`、`identity-keystore`、`server`、`node-link-client`、`app` 和前端工程。详细范围以 [README 的仓库当前状态](../README.md#仓库当前状态)为准；切片 2 的验收与合入状态以该变更的记录为准，不以本文的列举为完成声明。
+Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`，以及切片 2 在 `acp-boundary-and-agent-host` 变更中落地的 `acp-protocol` 与 `agent-host`。其中 core 的会话用例和 broker、SQLite 的 owned/imported 会话存储、Sync/Node Link v1 wire 类型，以及 `acp-protocol` 的 ACP v1 wire 与 `agent-host` 的本机 Agent backend 已有实现。管理状态持久化的 core 端口与 SQLite 存储两层已落地（Daemon/CLI 接线仍未落地）。切片 3 在 `identity-auth-and-keystore` 变更中落地了 `identity-auth`（纯状态机：配对、逐连接 challenge-response、授权展开、12 个 transcript domain）与 `identity-keystore`（Windows DPAPI 包裹 + 非 Windows 失败关闭）。尚未落地的是 `server`、`node-link-client`、`app` 和前端工程。详细范围以 [README 的仓库当前状态](../README.md#仓库当前状态)为准；切片 2 的验收与合入状态以该变更的记录为准，不以本文的列举为完成声明。
 
 计划中的每一项都是待交付能力，不因为合同门禁通过就视为已经实现。特别是[核心与存储合同 §11](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的形状（值对象、写集端口、管理表 DDL 与 v1 → v2 迁移）已并入该合同 §3/§5/§7，`storage-sqlite` 的管理 store 落盘实现也已落地；本切片剩余的是 Daemon/CLI 的接线与端到端验收。
 

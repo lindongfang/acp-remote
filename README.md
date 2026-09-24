@@ -15,15 +15,17 @@
 | `sync-protocol` | v1 的全部 18 个消息类型（信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族 body）、33 个事件视图的类型化投影，以及配对 HTTPS 载荷（二维码 / claim / status / HTTP 错误体） |
 | `node-link-protocol` | §9.3/§9.4 的 transcript domain/tag 表、v1 的全部 29 个消息类型（信封与分派，`handshake`/`catalog`/`resource`/`command`/`error` 五个家族 body）与配对 HTTPS 载荷 |
 | `acp-protocol` | JSON-RPC 信封分类与方向/required 校验、ACP v1 wire DTO（`initialize`/`session/new`/`session/prompt`/`session/update` 的 11 种判别子/`session/request_permission`/elicitation 与 content block）、`RawDocument` 原文承载与逐字节回写、capability wire 形状、固定 v1 消息上限（1 MiB），以及由 `fixtures/acp/v1/manifest.json` 与 `compatibility/acp/v1/matrix.json` 驱动的契约测试 |
+| `identity-auth` | 身份、配对、签名与授权的**纯状态机**：设备/节点一次性配对（创建/认领/落定/过期/重启终结/SAS）、逐连接 challenge-response（挑战一次性、注入时钟 15 秒窗口、验签公钥只来自持久化信任、P1363 only）、授权词表展开（`pack.*`/`preset.*`/`grant.*` → 命令级 scope，`local.*` 永不远程授予）与 12 个 transcript domain 的装配/验签/HMAC/SAS；不访问存储、不读系统时间、无平台 `cfg`，密钥与随机性经端口注入 |
+| `identity-keystore` | 平台安全存储适配器：自研条目格式（`ACPK` 头 + 每条目盐 + 平台包裹的秘密值）、原子写、进程内 `p256` 签名（64 字节 P1363）与 Provider 凭据读写删。Windows 走 DPAPI（当前用户 scope，附加熵绑定条目）；非 Windows 一律失败关闭（不建目录、不写文件、不退回进程内实现） |
 | `agent-host` | 本机 ACP 子进程作为 `AgentCatalog`/`SessionBackendFactory`/`SessionEndpoint`：启动与监督、stdio 分帧、request id 与 ACP session id 映射、capability 协商与调用门控、权限/elicitation 转发、超时与取消、stderr 有界采集、Windows Job Object（Unix 进程组）进程树清理、profile 与凭据注入边界、wire→core mapper |
 
-尚未开始：前端工程，以及 `server`、`node-link-client`、`identity-auth`、`identity-keystore`、`app`（每落地一个才加入 workspace `members`）。
+尚未开始：前端工程，以及 `server`、`node-link-client`、`app`（每落地一个才加入 workspace `members`）。
 
 当前优先交付 Windows x64 的 Daemon/CLI 与 Node Link 闭环，Linux 延后开发；完整平台顺序见 [初始设计 §14](docs/INITIAL_DESIGN.md#14-npm-分发)。共享代码的 Linux CI 保留，不代表 Linux 产品已可运行。
 
 逐切片的实施顺序与验收节点见 [开发计划](docs/DEVELOPMENT_PLAN.md)；产品与协议语义仍以各权威合同为准。
 
-管理状态的端口签名、写集 DTO、值对象与 DDL 已并入 [核心与存储合同 §3/§5/§7](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)（该节 §11 保留设计理由与索引），并由 `scripts/check-contract-drift.mjs` 逐条断言；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 侧的 `TrustStore`/`ExportStore`/`LocalConfigStore` **落盘实现已落地**（写集一事务提交、失败关闭与容量纳入）；仍未实现的是 Daemon/CLI 接线与 `identity-auth`/`identity-keystore`，因此在它们完成前，不能声称配对、撤销或本地配置已经端到端可用。
+管理状态的端口签名、写集 DTO、值对象与 DDL 已并入 [核心与存储合同 §3/§5/§7](docs/CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)（该节 §11 保留设计理由与索引），并由 `scripts/check-contract-drift.mjs` 逐条断言；`identity-auth` 的内部状态机、握手入口、授权展开与 keystore 端口冻结在 [身份与认证合同](docs/IDENTITY_AND_AUTH_CONTRACT.md)；本地通道的 ACP 流会话语义与管理载荷的机器表达见 [本地管理通道](docs/LOCAL_ADMIN_PROTOCOL.md) §3.1 与 [`schemas/local-admin/v1/`](schemas/local-admin/v1/)。SQLite 侧的 `TrustStore`/`ExportStore`/`LocalConfigStore` **落盘实现已落地**（写集一事务提交、失败关闭与容量纳入）；`identity-auth`/`identity-keystore` 两个身份 crate **已落地**（契约、状态机、平台 keystore 与固定向量回归测试）；仍未实现的是 Daemon/CLI 接线与 `server::*` 入站适配器，因此在它们完成前，不能声称配对、撤销或本地配置已经端到端可用。
 
 ## 权威文档
 
@@ -109,8 +111,10 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。
 多人协作时再考虑。
 
-仍待办：本地密钥扫描的自研格式**规则**（机制已装好：`.husky/pre-commit` 会调 gitleaks 扫暂存内容，
-规则与 CI 共用 `.gitleaks.toml`；规则等密钥格式定稿再加），详情见下方与
+本地密钥扫描机制已装好：`.husky/pre-commit` 会调 gitleaks 扫暂存内容，规则与 CI 共用
+`.gitleaks.toml`。自研 keystore 条目**明文**形态的规则（`acpr-keystore-plaintext-entry`）已随
+`identity-auth-and-keystore` 落地；它的**首次真实执行仍在 CI 的 `secrets` job**（本机无 gitleaks），
+且只覆盖「被 base64/base64url 编码后的明文条目」这一形态——原始二进制与 DPAPI 密文无法模式识别。详情见下方与
 `docs/adr/0008-ci-supply-chain-tooling.md` 的残余风险 3。
 
 已核实为**已开启的**（2026-09-23）：`secret_scanning`、`secret_scanning_push_protection`、
@@ -147,9 +151,10 @@ Dependabot 告警与安全更新。push protection 在推送前拦截已知 prov
   `.pre-commit-hooks.yaml` 的官方写法，不是自拟参数），扫的是**暂存内容**，命中内容由 `--redact` 不打印；
 - 本机未安装 `gitleaks` 时钩子**只提示并跳过**（不让提交依赖一个仓库不随附的二进制），CI 仍会判定。
 
-**规则本身等密钥格式定稿再加**：现在只有默认规则集，而自研格式的正则只有在格式定稿后才写得准
-（过早写会既误报又漏报）。触发条件是「`identity-auth`/`identity-keystore` 开始产生真实密钥」，
-且格式定义与规则必须在**同一改动**里落地（见 `docs/adr/0008-ci-supply-chain-tooling.md` 残余风险 3）。
+**自研格式规则已落地**（触发条件「`identity-auth`/`identity-keystore` 开始产生真实密钥」已发生）：
+`.gitleaks.toml` 里的 `acpr-keystore-plaintext-entry` 只匹配**编码后**的明文条目形态，`keywords` 用编码前缀
+`QUNQS`（不能写字面 `ACPK`——编码后的文本里不存在它，规则会永不评估）。诚实边界：原始二进制条目与
+DPAPI 包裹的密文仍不可模式识别；规则首次真实执行在 CI 的 `secrets` job。
 
 关于「Dependabot 安全更新」还有一个前置条件值得记下：它要求 **Dependabot 告警先开**，否则
 `PUT .../automated-security-fixes` 直接返回 422「Vulnerability alerts must be enabled」。顺序是：
