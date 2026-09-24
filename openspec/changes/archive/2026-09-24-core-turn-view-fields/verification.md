@@ -158,7 +158,7 @@ RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒�
 
 ```agentic-assessment
 assessment_id: "A1-core-turn-view-fields-2026-09-24"
-target_commit: "PENDING"
+target_commit: "adc43c1d8e174f0fe7ef1ad24f448c7d7746037a"
 contract_digest: "sha256:95f6cc643e0f9928afbef37be794c5046c4d8480da16feba31f05d960f9179a8"
 result: PASS
 evidence:
