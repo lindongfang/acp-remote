@@ -44,7 +44,7 @@
 | `sha2` | `AcpRaw` 的 sha256 | workspace 已有该依赖 |
 | `tracing` | 结构化、脱敏日志 | 新增到 `[workspace.dependencies]`（§3.1 已把 `tracing` 列入计划） |
 | `win32job`（`cfg(windows)`） | Job Object（`KILL_ON_JOB_CLOSE`、`TerminateJobObject`） | 2.x，MIT OR Apache-2.0，安全 API |
-| `libc`（`cfg(unix)`） | `killpg` 结束进程组 | MIT OR Apache-2.0 |
+| `nix 0.30`（`cfg(unix)`；safe wrapper，代替 `libc`） | `killpg` 结束进程组 | MIT OR Apache-2.0 |
 
 - 备选（日志）：自定义 log sink 端口。否掉的理由：core 没有、也不应该有日志端口（`core` 不依赖 runtime 与 tracing），而 §3.1 已经把 `tracing` 列为 workspace 计划依赖；订阅器初始化属于组合根（切片 4）。
 - `Cargo.toml` 的 `[workspace.dependencies]` 中「sqlite 适配器是唯一的 runtime 与数据库依赖持有者」注释在本变更后不再准确（`agent-host` 也持有 runtime 类型），该注释随本变更一并修正为「runtime 由组合根启动，`storage-sqlite` 与 `agent-host` 持有 runtime 依赖类型」。
@@ -141,7 +141,7 @@
 ### D11 门禁与文档同步面
 
 - `docs/MODULE_ARCHITECTURE.md`：§3/§3.1（成员与依赖口径）、§4.2/§4.5（职责、Job 粒度收口、已选定的 wrapper 与常量归属）、§5（新增 `agent-host` 列，`app` 行允许依赖 `agent-host`；`agent-host` 行的两格已存在）。
-- `Cargo.toml`：`members` 增加两个 crate；`[workspace.dependencies]` 增加 `tracing`/`win32job`/`libc` 并修正 runtime 依赖注释。
+- `Cargo.toml`：`members` 增加两个 crate；`[workspace.dependencies]` 增加 `tracing`/`win32job`/`nix` 并修正 runtime 依赖注释。
 - `scripts/check-crate-boundaries.mjs` 以 §5 文档为唯一判据，矩阵改动生效后无需改脚本；`core` 的 allow-list 不受影响（本变更不动 `core`）。
 - `README.md`「仓库当前状态」表、`docs/DEVELOPMENT_PLAN.md` §2、`AGENTS.md` §4 的模块状态表：把 `acp-protocol`、`agent-host` 从「待落地」移入已落地行。
 - `fixtures/acp/v1/manifest.json` 与矩阵**只在确实需要新用例时**才动；能只用既有夹具满足要求就不动（更小的漂移面）。
@@ -156,7 +156,7 @@
 6. [1 MiB 单条上限可能拒绝合法的大消息] → 与 Sync `maxMessageBytes` 同值，超限是明确错误而非静默截断；真实 Agent 需要更大值时属于安全常量与矩阵变更（用户决策）。
 7. [fake child 作为 crate 内 bin 会随 `cargo build --workspace` 构建] → `publish = false`，切片 8 打包时排除；本变更记录该已知残留。
 8. [Windows 进程树断言不在 Linux CI 覆盖] → 验证计划中单列「本地 Windows 留证」，并在最终验收中如实记录 CI 未覆盖的部分。
-9. [新增 `tracing`/`win32job`/`libc` 依赖] → 三者均为 MIT/Apache-2.0；`cargo-deny` 的 `deps`/`advisories` 与 `gitleaks` 本地无等价物，只在 CI 判定，不得声称本地已通过。
+9. [新增 `tracing`/`win32job`/`nix` 依赖] → 三者均为 MIT/Apache-2.0；`cargo-deny` 的 `deps`/`advisories` 与 `gitleaks` 本地无等价物，只在 CI 判定，不得声称本地已通过。
 10. [11 种 `session/update` 的领域投影可能与 core/Sync 既有 event 约定不完全对齐] → 本变更只保证结构化、不文本化、带 `AcpRaw`，并把字段级 schema 一致性留给 Sync 切片；若发现 core 现有 `EventType`/view 约定有缺口，在本变更内**不改 core**，按 `local-agent-host` 规范以「最小结构化 view + 逐字节原文」表达并记录。
 11. [每会话一个 supervisor/endpoint 与空闲回收交互复杂] → 用单所有者（supervisor）串行化状态变更，空闲判定与关闭同在 supervisor 内，避免多任务竞争同一会话映射。
 

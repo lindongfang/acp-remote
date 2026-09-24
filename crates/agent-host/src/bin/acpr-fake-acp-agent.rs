@@ -539,6 +539,17 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
             );
             respond(out, &id, json!({ "stopReason": "end_turn" }));
         }
+        "stderr-flood" => {
+            // 写超过环形缓冲上限的 stderr：内容必须被有界采集、丢弃计数必须增长，
+            // 而 stdout 通道必须仍然可用（stderr 不得进入 ACP 通道）。
+            let line = "S".repeat(4096);
+            for _ in 0..192 {
+                let _ = writeln!(std::io::stderr(), "{line}");
+            }
+            let _ = std::io::stderr().flush();
+            emit_chunk(out, session, "stderr 洪水之后仍然可用");
+            respond(out, &id, json!({ "stopReason": "end_turn" }));
+        }
         "unknown-content-block" => {
             // 未登记的 content block：必须可见降级并保留结构化 payload（不得降成 null）。
             notify(

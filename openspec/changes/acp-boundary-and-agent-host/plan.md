@@ -10,8 +10,8 @@
 本变更**改变**以下已冻结内容（原/新值、原因与影响分析随实现写入 `verification.md` 的 Check Plan Changes）：
 
 - `docs/MODULE_ARCHITECTURE.md` §4.5：原文只说「把 `KILL_ON_JOB_CLOSE` 设在 Daemon 持有的 Job 上」，本变更收口为「**每个 Agent 一个由 Daemon 侧 supervisor 持有的 Job**」并写明理由（单 Job 无法只结束一棵树）；`KILL_ON_JOB_CLOSE`、Daemon 持有句柄、父→孙清理三条约束不变。
-- `docs/MODULE_ARCHITECTURE.md` §3/§3.1/§4.2/§5：`acp-protocol`、`agent-host` 从「待落地」改为已落地（本轮）；§5 矩阵新增 `agent-host` 列并写明 `app → agent-host` 允许；§3.1 增加 `tracing`/`win32job`/`libc` 的版本口径。
-- `Cargo.toml`：`[workspace] members` 增加两个 crate；`[workspace.dependencies]` 增加 `tracing`/`win32job`/`libc`；修正「sqlite 适配器是唯一的 runtime 与数据库依赖持有者」注释。
+- `docs/MODULE_ARCHITECTURE.md` §3/§3.1/§4.2/§5：`acp-protocol`、`agent-host` 从「待落地」改为已落地（本轮）；§5 矩阵新增 `agent-host` 列并写明 `app → agent-host` 允许；§3.1 增加 `tracing`/`win32job`/`nix` 的版本口径。
+- `Cargo.toml`：`[workspace] members` 增加两个 crate；`[workspace.dependencies]` 增加 `tracing`/`win32job`/`nix`（原计划写 `libc`，实施时因 `unsafe_code = "forbid"` 改为 safe wrapper `nix`，见 `verification.md` Check Plan Change 1）；修正「sqlite 适配器是唯一的 runtime 与数据库依赖持有者」注释。
 - `core` 的 `TurnAccepted.turn` 语义在实现中被记录为「当前不被 core 消费、由适配器返回占位值」——**不改变** `core` 端口签名（若未来要真正收口，属于 core 端口变更，需用户决策）。
 
 不改变的契约：ACP wire 与矩阵条目（`compatibility/acp/v1/matrix.json`、`schemas/acp/**`）、`fixtures/**` 的既有内容、`core` 端口签名与值对象、`storage-sqlite` 表结构、Sync/Node Link 与本地管理通道的 wire。
@@ -504,7 +504,7 @@ rows:
 
 | ID | Goal / Scenarios | Dependencies | Owner | Reviewer | Branch / Worktree | Write Scope | Inputs / Outputs | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| WP1 | 契约与依赖边界冻结：把 `acp-protocol`/`agent-host` 落入 §3/§3.1/§4.2/§4.5/§5，登记 `tracing`/`win32job`/`libc`，同步三处状态表；覆盖 R18/R20 的资产登记前提 | 无（W0 起点） | 实现 Agent（coder） | 非文档作者（RV1） | `feat/acp-boundary-and-agent-host` / 主 worktree | `docs/MODULE_ARCHITECTURE.md`、`Cargo.toml`、`README.md`、`docs/DEVELOPMENT_PLAN.md`、`AGENTS.md` | 输入：`design.md` D1/D6/D11；输出：可被 `check:boundaries`、`check:docs`、`check:acp` 读取的文档与依赖口径 | 3.1（PV2/PV3）；3.2 review |
+| WP1 | 契约与依赖边界冻结：把 `acp-protocol`/`agent-host` 落入 §3/§3.1/§4.2/§4.5/§5，登记 `tracing`/`win32job`/`nix`，同步三处状态表；覆盖 R18/R20 的资产登记前提 | 无（W0 起点） | 实现 Agent（coder） | 非文档作者（RV1） | `feat/acp-boundary-and-agent-host` / 主 worktree | `docs/MODULE_ARCHITECTURE.md`、`Cargo.toml`、`README.md`、`docs/DEVELOPMENT_PLAN.md`、`AGENTS.md` | 输入：`design.md` D1/D6/D11；输出：可被 `check:boundaries`、`check:docs`、`check:acp` 读取的文档与依赖口径 | 3.1（PV2/PV3）；3.2 review |
 | WP2 | `acp-protocol`：信封分类、方向与 required 校验、`RawDocument` 原文承载、11 种已知判别子 + 未知判别子可见降级、`_` 方法显式不支持、结构化内容不文本化、1 MiB 上限，以及 fixture/矩阵驱动的契约测试；覆盖 R1–R20 | WP1 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `crates/acp-protocol/**`（含 `Cargo.toml` 与 `[workspace] members` 中的本 crate 条目） | 输入：`design.md` D2/D3/D7、`fixtures/acp/v1/manifest.json`、`compatibility/acp/v1/matrix.json`；输出：可被 `agent-host` 依赖的 wire 层与其契约测试 | 3.3（PV4）；3.4 review |
 | WP3 | `agent-host` 进程监督与平台进程树：crate 骨架与 `limits`、fake ACP child 基座、spawn（接收 `LaunchSpec`）、stdio 分帧、request id 注册表、短请求/启动超时与 turn 不设超时、stderr 环形缓冲、`ProcessTree`（Windows Job / Unix 进程组）、关闭顺序与无 detached task；覆盖 R43–R53、R59、R62 | WP1、WP2 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `crates/agent-host/{Cargo.toml,src/lib.rs,src/error.rs,src/limits.rs,src/supervisor.rs,src/platform/**,src/bin/acpr-fake-acp-agent.rs}`、`[workspace] members` 中的本 crate 条目 | 输入：`design.md` D4/D6/D7/D10、`SECURITY_DESIGN.md` §12.2、`INITIAL_DESIGN.md` §16 第 4 条；输出：进程生命周期、进程树清理与常驻回归测试 | 3.5（PV4/PV5）；3.6 review |
 | WP4 | `agent-host` 会话语义与 core 对接：`SessionBackendFactory`/`SessionEndpoint`、SessionId↔ACP sessionId 映射与 generation、`mapper`（结构化 view + `AcpRaw`）、`interaction`（权限/elicitation 转发与回传）、turn 同步接受/终态唯一/取消、能力门控与 modes/config 读写；覆盖 R24–R42 | WP3 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `crates/agent-host/src/{session.rs,mapper.rs,interaction.rs}`、`crates/agent-host/tests/session_*.rs` | 输入：`design.md` D5、`core::ports` 的 `SessionEndpoint` 形状、`SYNC_PROTOCOL.md` §10.3 的 raw 约定；输出：可被 `core::use_cases` 直接使用的本地 backend | 3.7（PV4）；3.8 review |

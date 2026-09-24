@@ -147,7 +147,7 @@
 
 ### Requirement: stderr 有界采集与脱敏
 
-系统 SHALL 把 Agent 的 stderr 采集进上限为 256 KiB 的环形缓冲并输出为结构化日志；超出上限 MUST 丢弃最旧内容并记录丢弃计数，MUST NOT 无界缓存，MUST NOT 把 stderr 内容当作 ACP wire 解析。
+系统 SHALL 把 Agent 的 stderr 采集进上限为 256 KiB 的环形缓冲并把丢弃字节数与采集总字节数记入结构化日志（stderr 内容本身不得进入日志，只按上限保留供诊断回取）；超出上限 MUST 丢弃最旧内容并记录丢弃计数，MUST NOT 无界缓存，MUST NOT 把 stderr 内容当作 ACP wire 解析。
 
 #### Scenario: 超限丢弃最旧并计数
 

@@ -195,6 +195,44 @@ async fn turn_has_no_timeout() {
     supervisor.shutdown().await;
 }
 
+/// stderr 超限：必须丢弃最旧、计数增长、快照有界，且 stdout 通道不受影响。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stderr_flood_is_bounded_and_counted() {
+    let (supervisor, _collector) = started(scenario("stderr-flood")).await;
+    supervisor
+        .request("initialize", &initialize_params(), Duration::from_secs(10))
+        .await
+        .expect("initialize");
+    supervisor
+        .request(
+            "session/new",
+            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("session/new");
+    let value = supervisor
+        .request(
+            "session/prompt",
+            &json!({ "sessionId": "acp-session-1", "prompt": [] }),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("stderr 洪水不得影响 stdout 通道");
+    assert_eq!(
+        value.get("stopReason").and_then(|v| v.as_str()),
+        Some("end_turn")
+    );
+    let (text, dropped) = supervisor.stderr_snapshot();
+    assert!(dropped > 0, "超过上限必须丢最旧并计数（否则就是无界缓存）");
+    assert!(
+        text.len() <= agent_host::limits::STDERR_RING_BYTES,
+        "快照必须有界"
+    );
+    assert!(!text.is_empty(), "仍应保留尾部内容供诊断（按上限截断）");
+    supervisor.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stderr_is_bounded_and_never_enters_the_protocol_channel() {
     // 普通场景：stdout 干净、stderr 为空，环形缓冲不得产生丢弃。

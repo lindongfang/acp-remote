@@ -372,7 +372,7 @@ local.audit.export         本地审计导出（不含会话正文）
 | `session/prompt`（turn） | **不设超时** | 长任务是合法的；取消只由用户或 `session.cancel` 触发，超时杀进程会破坏 ACP 语义 |
 | 关闭 grace（友好终止 → 强杀） | 5 s | 必须小于 `daemon.shutdown_grace_ms`（10 s），否则 daemon 无法在自己的 grace 内收尾 |
 | 单条 ACP 消息（stdout 解析上限） | 1 MiB | 与 `SYNC_PROTOCOL.md` §14 的 `maxMessageBytes` 同值，避免同一条消息在两跳上有两个上限 |
-| stderr 环形缓冲 | 256 KiB | 有界采集、脱敏后进结构化日志（§14.1）；超出丢弃最旧并记一条计数，不无界缓存 |
+| stderr 环形缓冲 | 256 KiB | 有界采集、有界采集；采样/脱敏后**只记计数**进结构化日志（内容不进日志，可按上限回取）（§14.1）；超出丢弃最旧并记一条计数，不无界缓存 |
 | 空闲回收 | 复用 `sessions.idle_timeout_ms` | `0` = 不因空闲关闭；非零时只有「无 active 会话且空闲超过该值」才关闭进程 |
 | 内存 | **规则而非数值** | 无法可靠测量 RSS；改为可判定规则：必须流式处理 ACP 消息与 stderr，不得缓存完整会话正文，超限即报错并结束该 Agent |
 
