@@ -2,6 +2,7 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host` 已实现，见 `README.md` 的 crate 表）
 > 版本：0.3
+> 修订记录（2026-09-24，core-turn-view-fields）：§4.1 补「适配器产 ACP 派生投影、broker 补 `SYNC_PROTOCOL.md` §10.3 身份与会话版本」的职责分工；§4.7 写明 `owned_session.version` 由存储层在事务内实现、core 只按同一规则推导并在提交后比对（不一致 → `PortError::Corrupt` 失败关闭）。
 > 修订记录（2026-09-24）：§4.2/§4.5 记录 `acp-protocol` 与 `agent-host` 的落地 surface、每个 Agent 一个 Job 的粒度、`win32job`/`nix` 选型与「关闭句柄即结束树」的实际路径；§3.1 的依赖登记与 §5 矩阵补 `agent-host` 列。  §4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1；§3.1 的 `nix 0.30.1` 许可证订正为 `MIT`（原写 `MIT OR Apache-2.0`，与本地 registry 元数据不符）；§5 披露尚未成为矩阵列的 crate。  
 > 日期：2026-09-18
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
@@ -174,6 +175,7 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 - ID 使用 newtype；状态转换由领域方法验证，adapter 不能直接修改状态字段。
 - Owned 与 imported session 必须在类型或 `ResourceOrigin` 上可区分，禁止依靠 nullable `ownerNodeId` 猜测持久化规则。
 - `core::broker` 实现每会话串行、active turn、授权调用点、幂等、permission first-writer-wins、模型切换时机和先提交后发布。
+- 事件 view 的职责分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：适配器负责 ACP 派生投影（`block`/`title`/`options`/`deltaIndex` 等，它持有 ACP DTO），`core::broker` 在提交前补 `SYNC_PROTOCOL.md` §10.3 要求的身份与会话版本字段（`turnId`、`version`）并在存储返回后比对版本；两侧不得互相替代，也不得在 broker 的公共领域视图里重建 ACP 语义。
 
 入站 use case 按能力拆分：
 
@@ -308,6 +310,8 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 - 只有当出现"必须靠操作系统级隔离（不同文件/不同权限）才能满足的威胁模型"时，才拆成两个数据库文件，并按 `AGENTS.md` §10 新增 ADR。
 
 它不解析 ACP、不广播 WebSocket、不执行会话状态转换、不保存明文私钥。数据库 record 与领域对象通过 mapper 转换。
+
+`owned_session.version` 的递增规则（含 `StateChange` 的提交 +1，否则不变）由本 crate 在提交事务内实现，是唯一权威；core 只按同一规则推导 view 的 `version` 并在提交后与之比对（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条），双方不一致时 core 失败关闭（`PortError::Corrupt`）而不能静默采用任一方。
 
 v1 的表结构（`owned_*` / `imported_*`）、PRAGMA、migration、保留与容量策略、崩溃恢复与失败关闭已冻结在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7–§8。
 

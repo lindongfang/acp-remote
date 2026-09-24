@@ -358,6 +358,80 @@ fn view_json_keeps_bytes_and_requires_a_well_formed_object() {
     assert_eq!(view(&deep).depth(), 20);
 }
 
+// ---------------------------------------------------------------- 顶层成员的读取与前置插入（§10.3 收口）
+
+#[test]
+fn top_level_member_distinguishes_absent_text_and_non_text() {
+    let text = r#"{"a":"x","escaped":"\u0061","number":12,"nested":{"a":1}}"#;
+    assert!(matches!(
+        top_level_member(text, "missing"),
+        Ok(MemberValue::Absent)
+    ));
+    assert!(matches!(
+        top_level_member(text, "number"),
+        Ok(MemberValue::NonText)
+    ));
+    assert!(matches!(
+        top_level_member(text, "nested"),
+        Ok(MemberValue::NonText)
+    ));
+    match top_level_member(text, "a").expect("member") {
+        MemberValue::Text(value) => assert_eq!(value, "x"),
+        other => panic!("a must be text: {other:?}"),
+    }
+    // 转义按解码后的取值比较（同值不同字节也算一致）。
+    match top_level_member(text, "escaped").expect("member") {
+        MemberValue::Text(value) => assert_eq!(value, "a"),
+        other => panic!("escaped must be text: {other:?}"),
+    }
+}
+
+#[test]
+fn inserting_a_top_level_member_changes_nothing_else() {
+    let text = r#"{"b":[1,{"c":"d"}],"e":"\u00e9"}"#;
+    let inserted = insert_string_member_front(text, "turnId", "\"abc\"").expect("insert");
+    assert_eq!(
+        inserted,
+        r#"{"turnId":"abc","b":[1,{"c":"d"}],"e":"\u00e9"}"#
+    );
+    assert_eq!(
+        view(&inserted).as_str(),
+        inserted,
+        "结果必须仍是合法 object"
+    );
+    // 前导空白与被插入对象里的空白都原样保留。
+    let spaced = insert_string_member_front("  {  \"a\" : 1 }", "k", "\"v\"").expect("insert");
+    assert_eq!(spaced, "  {\"k\":\"v\",  \"a\" : 1 }");
+    // 空对象。
+    assert_eq!(
+        insert_string_member_front("{}", "k", "\"v\"").expect("insert"),
+        r#"{"k":"v"}"#
+    );
+    // 字符串成员是标量，不增加嵌套深度（深度上限不受影响）。
+    let deep = format!("{}1{}", r#"{"a":"#.repeat(128), "}".repeat(128));
+    let deep_inserted = insert_string_member_front(&deep, "k", "\"v\"").expect("insert");
+    assert_eq!(view(&deep_inserted).depth(), 128);
+}
+
+#[test]
+fn inserting_rejects_existing_keys_non_string_values_and_non_objects() {
+    assert_eq!(
+        insert_string_member_front(r#"{"k":"v"}"#, "k", "\"v\""),
+        Err(InvalidValue::Field),
+        "已有同名成员时不得写出第二个键"
+    );
+    assert_eq!(
+        insert_string_member_front("{}", "k", "12"),
+        Err(InvalidValue::Json),
+        "值必须是 JSON 字符串字面量"
+    );
+    assert_eq!(
+        insert_string_member_front("[]", "k", "\"v\""),
+        Err(InvalidValue::Json),
+        "非 object 文本必须被拒绝"
+    );
+}
+
 #[test]
 fn view_json_rejects_nesting_beyond_the_cap() {
     let too_deep = format!("{}1{}", r#"{"a":"#.repeat(129), "}".repeat(129));

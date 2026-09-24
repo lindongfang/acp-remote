@@ -61,6 +61,10 @@ impl Default for ReplayLimit {
 // ---------------------------------------------------------------------------------------------
 
 /// 后端接受 `prompt` 后的同步结果。
+///
+/// `turn` 是**适配器侧**对本次提交的标识／占位值，仅用于适配器自身的审计与日志：turn 归属一律由 core
+/// 在提交前用自己的 `TurnId`（`IdGenerator::turn_id`）定稿（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条、
+/// §9 判据 31），本字段**不得**参与归属决策、不得产生第二个 turn 行，也不得影响事件顺序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnAccepted {
     pub turn: TurnId,

@@ -1009,6 +1009,9 @@ impl SqliteStore {
                 {
                     return Err(PortError::Conflict(ConflictKind::VersionMismatch));
                 }
+                // 调用方未提供 epoch 时用库内值（与无状态变更的分支、以及 §5.2 的
+                // 「存储层只校验已有 epoch 时必须一致」一致）：否则同批的会话级事件会因缺 epoch 被拒。
+                origin_epoch.get_or_insert(stored_epoch);
                 // `SessionUpdate.state` 是 `Option`：`None` = 不改状态（例如只解析一个交互）。
                 // `closed_at` 为 `Some` 时会话进入 `Closed`；两者必须一致（`Session::try_new` 的不变量）。
                 let effective_state = match (update.state, &update.closed_at) {

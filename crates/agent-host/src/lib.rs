@@ -20,8 +20,10 @@
 //! - **平台分支**的 `cfg` 只出现在 [`platform`]（`rg "cfg\(" crates/agent-host/src` 的判据）；
 //!   `launch.rs` 另有 1 处 `#[cfg(test)]`（测试模块，不是平台分支），`bin/` 零命中。
 //!
-//! 已知缺口（登记在变更的 `verification.md`，交下一切片收口）：适配器产出的 `view` 不含
-//! `turnId`/`version`（`SessionEndpoint::prompt` 的签名不携带 core 的 `TurnId`，会话版本也由 core 掌握）。
+//! 与 core 的分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：本 crate 只产出 ACP 派生投影
+//! （`block`/`title`/`options`/`deltaIndex` 等），**不**填 `turnId`/`version`——两者由 core 在提交前注入
+//! （`SessionEndpoint::prompt` 的签名不携带 core 的 `TurnId`，会话版本也由 core 掌握）；`tests/view_contract.rs`
+//! 用真实适配器输出断言这一分工与 §10.3 的其余最低字段。
 
 pub mod config;
 pub mod error;
