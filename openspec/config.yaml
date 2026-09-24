@@ -8,7 +8,7 @@ context: |
 
   ## Repository Structure
   - 项目类型与技术栈：Rust workspace（edition 2024，rust-version 1.85）承载 core 与协议 crate；Node ≥ 22.12 承载跨语言合同资产的机器校验；协议 wire schema/fixture 跨 Rust 与 TypeScript 共享。
-  - 主要模块、入口与职责边界：`crates/` 现有 6 个已登记成员（`acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`）；`acp-protocol`、`agent-host`、`node-link-client`、`identity-auth`、`identity-keystore`、`server`、`app` 与前端尚未实现。职责边界唯一权威：`docs/MODULE_ARCHITECTURE.md`。
+  - 主要模块、入口与职责边界：`crates/` 现有 8 个已登记成员（`acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`、`acp-protocol`、`agent-host`）；`node-link-client`、`identity-auth`、`identity-keystore`、`server`、`app` 与前端尚未实现。职责边界唯一权威：`docs/MODULE_ARCHITECTURE.md`。
   - 共享代码及依赖方向：`docs/MODULE_ARCHITECTURE.md` §5 依赖矩阵；由 `npm run check` 的 `check:boundaries`（`cargo metadata`）断言。
   - 生成文件、第三方代码和禁止直接修改目录：构建产物 `target/`、`node_modules/`、`dist/` 不手工编辑；`openspec/schemas/agentic/`、`.pi/`、`.agents/skills/openspec-*` 由 OpenSpec 引擎与扩展安装/升级维护（受管文件，手改会被 `doctor`/`update` 判为漂移）。
   - 默认主分支及本地/远端语义：`refs/heads/main`；origin 为 `git@github.com:lindongfang/acp-remote.git`。

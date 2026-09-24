@@ -136,7 +136,7 @@ ACP Remote Daemon
 
 - 启动 `codex-acp`、`omp acp` 等程序。
 - stdout 只按 ACP JSON-RPC 解析。
-- stderr 作为 Agent 日志单独采集。
+- stderr 只做有界采集与结构化计数（内容不进日志，可按上限回取）。
 - Agent 异常退出时发布 `agent.disconnected`。
 - Daemon 退出时清理完整子进程树。
 - Windows 上应使用 Job Object 或等价机制避免孤儿进程。

@@ -2,6 +2,9 @@
   "compaction": {
     "enabled": true,
     "reserveTokens": 16384,
-    "keepRecentTokens": 20000
+    "keepRecentTokens": 20000,
+    "modelOverrides": {
+      "deepseek/deepseek-flash": { "reserveTokens": 600000 }
+    }
   }
 }

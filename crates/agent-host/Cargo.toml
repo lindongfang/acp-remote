@@ -1,0 +1,36 @@
+[package]
+name = "agent-host"
+description = "把本机 ACP 子进程实现为 core 的 AgentCatalog + SessionBackendFactory + SessionEndpoint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+core = { path = "../core" }
+acp-protocol = { path = "../acp-protocol" }
+# tokio 提供进程/IO 类型、同步原语与 spawn 所需的 macros/rt（`tokio::spawn` 在自己的 runtime 句柄内运行）；
+# **runtime 本身由组合根启动与持有**（docs/MODULE_ARCHITECTURE.md §4.5/§4.7）。
+tokio = { workspace = true, features = ["process", "io-util", "macros", "rt"] }
+# 端口是可 dyn 化的异步 trait（docs/CORE_PORTS_AND_STORAGE.md §2），与 core 使用同一个 proc-macro。
+async-trait.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# 结构化日志：只写协议元数据，订阅器由组合根初始化。
+tracing.workspace = true
+# `AcpRaw` 的 sha256（core 的 `Digest` 是规范无填充 base64url）。
+sha2.workspace = true
+base64.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Windows Job Object（safe API）：每个 Agent 一个 Job + KILL_ON_JOB_CLOSE（§4.5）。
+win32job.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Unix 进程组结束（killpg）：safe wrapper，避免在 `unsafe_code = "forbid"` 下写 FFI。
+nix.workspace = true
+
+[lints]
+workspace = true
