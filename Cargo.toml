@@ -8,6 +8,7 @@ members = [
     "crates/sync-protocol",
     "crates/node-link-protocol",
     "crates/acp-protocol",
+    "crates/agent-host",
 ]
 
 [workspace.package]

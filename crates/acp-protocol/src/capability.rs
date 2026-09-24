@@ -143,6 +143,58 @@ pub struct ElicitationCapabilities {
     pub extra: Map<String, Value>,
 }
 
+/// 能力路径的声明方（`compatibility/acp/v1/matrix.json` 的 `advertisedBy`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityAdvertiser {
+    /// 由我们（客户端侧）宣告。
+    Client,
+    /// 由 Agent 宣告。
+    Agent,
+}
+
+/// 矩阵里的一条能力路径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityPath {
+    /// 路径（`capabilities[].path`），也是 core `Capability` 的 `kind`。
+    pub path: &'static str,
+    /// 谁宣告它。
+    pub advertised_by: CapabilityAdvertiser,
+}
+
+/// 矩阵里登记的全部能力路径。
+///
+/// 与 `compatibility/acp/v1/matrix.json` 的 `capabilities[]` **逐条对应**，由 `tests/matrix_tables.rs`
+/// 断言（既不能少登记，也不能多登记）。core 侧的 `Capability` 只允许用这张表里的路径作为 `kind`，
+/// 因此「能力名」仍只有一处机器定义。
+#[rustfmt::skip]
+pub const CAPABILITY_PATHS: &[CapabilityPath] = &[
+    CapabilityPath { path: "clientCapabilities.fs.readTextFile", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "clientCapabilities.fs.writeTextFile", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "clientCapabilities.terminal", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "clientCapabilities.session.configOptions.boolean", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "clientCapabilities.auth.terminal", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "clientCapabilities.elicitation.form", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "clientCapabilities.elicitation.url", advertised_by: CapabilityAdvertiser::Client },
+    CapabilityPath { path: "agentCapabilities.loadSession", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.promptCapabilities.image", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.promptCapabilities.audio", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.promptCapabilities.embeddedContext", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.mcpCapabilities.http", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.mcpCapabilities.sse", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.sessionCapabilities.list", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.sessionCapabilities.delete", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.sessionCapabilities.additionalDirectories", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.sessionCapabilities.resume", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.sessionCapabilities.close", advertised_by: CapabilityAdvertiser::Agent },
+    CapabilityPath { path: "agentCapabilities.auth.logout", advertised_by: CapabilityAdvertiser::Agent },
+];
+
+/// 在能力路径表里查一条路径。
+#[must_use]
+pub fn capability_path(path: &str) -> Option<&'static CapabilityPath> {
+    CAPABILITY_PATHS.iter().find(|row| row.path == path)
+}
+
 /// Agent 能力声明。
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AgentCapabilities {
@@ -246,6 +298,101 @@ impl AgentCapabilities {
         self.session_capabilities
             .as_ref()
             .is_some_and(|caps| caps.delete.is_some())
+    }
+
+    /// 是否宣告支持 HTTP MCP transport。
+    #[must_use]
+    pub fn supports_mcp_http(&self) -> bool {
+        self.mcp_capabilities
+            .as_ref()
+            .is_some_and(|caps| caps.http == Some(true))
+    }
+
+    /// 是否宣告支持 SSE MCP transport。
+    #[must_use]
+    pub fn supports_mcp_sse(&self) -> bool {
+        self.mcp_capabilities
+            .as_ref()
+            .is_some_and(|caps| caps.sse == Some(true))
+    }
+
+    /// 是否宣告支持 `additionalDirectories`。
+    #[must_use]
+    pub fn supports_additional_directories(&self) -> bool {
+        self.session_capabilities
+            .as_ref()
+            .is_some_and(|caps| caps.additional_directories.is_some())
+    }
+
+    /// 是否宣告支持 `auth/logout`。
+    #[must_use]
+    pub fn supports_logout(&self) -> bool {
+        self.auth.as_ref().is_some_and(|caps| caps.logout.is_some())
+    }
+
+    /// 已宣告能力的路径集合（取值来自 [`CAPABILITY_PATHS`] 的 agent 行；未宣告的不出现）。
+    ///
+    /// 这是「能力协商如实反映」的落点：只把 Agent **真的**宣告了的路径放进来，缺省值、空对象与我们自己的
+    /// 默认值都不算宣告。
+    #[must_use]
+    pub fn declared_capability_paths(&self) -> Vec<&'static str> {
+        let mut paths = Vec::new();
+        let mut record = |declared: bool, path: &str| {
+            if !declared {
+                return;
+            }
+            if let Some(row) = capability_path(path) {
+                if row.advertised_by == CapabilityAdvertiser::Agent {
+                    paths.push(row.path);
+                }
+            }
+        };
+        record(
+            self.supports_load_session(),
+            "agentCapabilities.loadSession",
+        );
+        record(
+            self.supports_prompt_image(),
+            "agentCapabilities.promptCapabilities.image",
+        );
+        record(
+            self.supports_prompt_audio(),
+            "agentCapabilities.promptCapabilities.audio",
+        );
+        record(
+            self.supports_embedded_context(),
+            "agentCapabilities.promptCapabilities.embeddedContext",
+        );
+        record(
+            self.supports_mcp_http(),
+            "agentCapabilities.mcpCapabilities.http",
+        );
+        record(
+            self.supports_mcp_sse(),
+            "agentCapabilities.mcpCapabilities.sse",
+        );
+        record(
+            self.supports_session_list(),
+            "agentCapabilities.sessionCapabilities.list",
+        );
+        record(
+            self.supports_session_delete(),
+            "agentCapabilities.sessionCapabilities.delete",
+        );
+        record(
+            self.supports_additional_directories(),
+            "agentCapabilities.sessionCapabilities.additionalDirectories",
+        );
+        record(
+            self.supports_session_resume(),
+            "agentCapabilities.sessionCapabilities.resume",
+        );
+        record(
+            self.supports_session_close(),
+            "agentCapabilities.sessionCapabilities.close",
+        );
+        record(self.supports_logout(), "agentCapabilities.auth.logout");
+        paths
     }
 }
 

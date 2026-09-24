@@ -203,6 +203,22 @@ impl Envelope {
     pub fn is_error_response(&self) -> bool {
         matches!(self.document.member("error"), Ok(Some(_)))
     }
+
+    /// 响应里的 JSON-RPC 错误（`code` + `message`）。
+    ///
+    /// 没有 `error` 成员时返回 `None`；`code` 缺失时按 JSON-RPC 的保留语义记 `0`。`message` 是对端给的
+    /// 文本，只用于错误分类与日志，不进入我们自己的 wire 字段。
+    #[must_use]
+    pub fn error_info(&self) -> Option<(i64, String)> {
+        let error = self.document.member("error").ok().flatten()?;
+        let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        Some((code, message))
+    }
 }
 
 /// 把 JSON-RPC 错误对象压成一行**不含正文**的描述（只保留 `code`）。

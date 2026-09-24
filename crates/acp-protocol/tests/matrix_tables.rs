@@ -6,6 +6,9 @@
 
 mod support;
 
+use std::collections::BTreeSet;
+
+use acp_protocol::capability;
 use acp_protocol::methods::{
     self, Delivery, METHODS, MethodDirection, MethodKind, MethodStatus, SESSION_UPDATE_WIRE_VALUES,
 };
@@ -173,4 +176,71 @@ fn invariant_fixtures_exist() {
             "不变量必须声明 expectation"
         );
     }
+}
+
+/// 能力路径表必须与矩阵的 `capabilities[]` **逐条**对应（既不能少登记，也不能多登记）。
+#[test]
+fn capability_paths_match_the_matrix() {
+    let matrix = support::matrix();
+    let rows = matrix["capabilities"]
+        .as_array()
+        .expect("capabilities 必须是数组");
+    let declared: BTreeSet<(String, &str)> = capability::CAPABILITY_PATHS
+        .iter()
+        .map(|row| {
+            let side = match row.advertised_by {
+                capability::CapabilityAdvertiser::Client => "client",
+                capability::CapabilityAdvertiser::Agent => "agent",
+            };
+            (row.path.to_owned(), side)
+        })
+        .collect();
+    let from_matrix: BTreeSet<(String, &str)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["path"].as_str().expect("path").to_owned(),
+                row["advertisedBy"].as_str().expect("advertisedBy"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        declared, from_matrix,
+        "CAPABILITY_PATHS 必须与 compatibility/acp/v1/matrix.json 的 capabilities[] 完全一致"
+    );
+    // 表里不能有重复路径。
+    assert_eq!(
+        declared.len(),
+        capability::CAPABILITY_PATHS.len(),
+        "能力路径不得重复登记"
+    );
+}
+
+/// 未宣告能力的 Agent 必须得到空集合；宣告了的必须逐条出现（不虚报、不遗漏）。
+#[test]
+fn declared_capability_paths_follow_the_declaration() {
+    let none = agent_host_capabilities_helper(&serde_json::json!({}));
+    assert!(none.is_empty());
+    let some = agent_host_capabilities_helper(&serde_json::json!({
+        "loadSession": true,
+        "mcpCapabilities": { "http": true },
+        "sessionCapabilities": { "resume": {} },
+    }));
+    assert_eq!(
+        some,
+        vec![
+            "agentCapabilities.loadSession",
+            "agentCapabilities.mcpCapabilities.http",
+            "agentCapabilities.sessionCapabilities.resume",
+        ]
+    );
+    // `false` 与缺省都不算宣告。
+    let falsy = agent_host_capabilities_helper(&serde_json::json!({ "loadSession": false }));
+    assert!(falsy.is_empty());
+}
+
+fn agent_host_capabilities_helper(json: &serde_json::Value) -> Vec<&'static str> {
+    let capabilities: capability::AgentCapabilities =
+        serde_json::from_value(json.clone()).expect("能力声明");
+    capabilities.declared_capability_paths()
 }
