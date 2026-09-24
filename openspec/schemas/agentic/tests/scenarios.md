@@ -51,7 +51,10 @@ CLI 脚本只覆盖仓库内规划路径；外部 store 和不同宿主的行为
 | BEH-062 | apply | Dedicated integration agent | 首次批次集成就绪，主 Agent 持有实现讨论 | 单独创建集成 Agent，显式传入 roles/integrator.md 全文及固定输入，使用独立集成 worktree，记录实际 ID；允许继承必要对话，主 Agent 只调度与汇总 |
 | BEH-063 | apply | Integration role unavailable | 交付已就绪，宿主无法创建独立集成 Agent | 相关集成/合并任务 BLOCKED，不由主 Agent 或实现者兼任，无关实现继续 |
 | BEH-064 | apply | Integration conflict | 集成候选有冲突，需解决后验证 | 集成 Agent 在约定范围解决并返回差异，由主 Agent 调度独立 reviewer；涉及契约取舍时先协调，不能自审后合入 |
-| BEH-065 | apply | Integration authorization absent | 独立集成 Agent 已创建，候选检查通过，但未授权合并 | 保留候选及证据并报告 BLOCKED，不把角色分配视为合并、推送或发布授权 |
+| BEH-065 | apply | Local integration under apply | 独立集成 Agent 已创建，候选检查通过，用户未逐次批准合并 | apply 已授权本地主分支合入；复核基线后本地合入并记录提交，不因缺少逐次批准报告 BLOCKED，不执行 push |
+| BEH-116 | apply | Remote push authorization absent | 本地合入及必要回归已通过，但没有明确远端推送授权 | 保留本地提交和证据，远端操作报告 BLOCKED；不得把本地合入、角色分配或验收当成 push 授权 |
+| BEH-118 | apply | Remote delivery requested | 用户明确要求远端交付且已授权推送，候选检查通过 | 先合入本地主分支并完成必要回归，再按指定远端与分支推送；记录本地及远端结果 |
+| BEH-117 | planning | Default local target | 用户要求按 agentic apply 交付，未指定远端目标 | plan.md 使用本地 refs/heads/* 为合入目标；远端跟踪引用只作读取，不作为写入目标 |
 | BEH-066 | apply | Implementation handoff | WP1 契约明确，需启动实现，但详细 E2E 用例尚未完成 | 显式传入 roles/coder.md 全文及工作包输入，记录执行者/基线/范围，允许继承编码上下文，不等待完整 E2E 用例 |
 | BEH-067 | planning | Optional validation disabled | 计划仅包含普通 Project Verify、review 及 E2E | 不额外创建独立验证 Agent，按各检查原有角色分配执行 |
 | BEH-068 | apply | Isolated validation handoff | 计划启用探索性验证，主 Agent 持有编码对话 | 新建隔离编码对话的验证 Agent，显式传入 roles/validator.md 和固定目标/中立证据，记录实际 ID；不能复用产品实现者 |

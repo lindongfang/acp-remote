@@ -92,7 +92,7 @@ rows:
 ## Target Repository and Main Branch
 
 - Code Repository: <!-- 代码仓库绝对路径 -->
-- Target Kind / Ref: <!-- local 或 remote；本地填写 refs/heads/*，远端填写 remote、远端仓库及准确分支引用 -->
+- Target Kind / Ref: <!-- 合入目标默认 local，填写 refs/heads/*；用户明确要求远端交付时另列 remote、远端仓库及准确分支引用，仍先完成本地合入及检查 -->
 - Version Confirmation Owner: <!-- 核实目标当前提交的负责人；机械核实可交 environment/recon，目标选择仍由 main 确认 -->
 - Confirmation Method / Evidence: <!-- 核实命令及目录、远端刷新或查询方式、实际提交与核实结果的记录位置 -->
 
@@ -111,7 +111,7 @@ rows:
 
 - Integration Branch / Worktree: <!-- 每个单元使用的独立集成分支或 worktree 绝对路径 -->
 - Source Revision / Handoff: <!-- 固定源提交，以及已验收上游提交及其检查和 review 证据 -->
-- Authorization / Report Path: <!-- 当前合并授权边界，以及集成报告的输出路径 -->
+- Operation Boundary / Report Path: <!-- apply 覆盖本地合入；记录远端操作的明确授权依据（如适用）、其他限制及集成报告路径 -->
 
 <!-- 每个交付单元依次完成候选验证、合入、主分支检查，再开始下一个；不沿用旧基线结论。
      主分支检查失败/受阻时停止后续功能合入，允许按相同验证路径交付修复。 -->
