@@ -407,10 +407,13 @@ impl Authority {
 impl Authority {
     /// 认证收尾（合同 §5.1 的第 3 个入口，也是唯一的副作用入口）。
     ///
+    /// **公开名是 [`Authority::complete_auth`](crate::handshake) 的同一实现**：本方法是它的实现体，
+    /// 保持 `pub(crate)` 以免出现两个对外名字（合同只登记 `complete_auth`）。
+    ///
     /// 状态机内只做一件事：清除**已批准**配对的内存 secret（合同 §4.3 的「首次认证成功时提前清除」；
     /// 「已批准」由 `settle(Approve)` 在内存材料上标记，因此未批准或已拒绝的配对不会被误当成
     /// 消费目标）；返回的 [`Completion`] 告诉调用方需要落库的消费目标、与之一致的时间与本次事实。
-    pub fn complete(
+    pub(crate) fn complete(
         &self,
         fact: IdentityFact,
         pairing: Option<&PairingId>,

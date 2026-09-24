@@ -66,10 +66,10 @@
 ### D3 配对状态机与内存态所有权
 
 - 一个 `Authority` 持有注入的 `keystore`/`entropy`/`clock` 与一份**进程内状态**：配对 secret 明文、挑战缓存（`challengeId` → `{serverNonce, expiresAt, peer, binding}`）、每配对失败计数、已终结但尚未提交的记录。持久事实（配对记录、对端行、信任记录）由调用方以快照入参提供与本变更的写集返回值落库，状态机**不**直接访问存储。
-- 状态机入口（同步，除挑战签发需要经端口签名外均为纯计算）：
+- 状态机入口（除**挑战签发**与 **SAS 派生**需要 `await` 经端口读本节点公钥/签名外均为纯同步计算；`pairing_sas` 因此是 `pub async fn`）：
   - 创建：`begin_pairing(pairing_id, spec, requested, display_name, created_at, expires_at)` → `PairingDraft`（含 `PairingRecord` 草稿 + 只在内存的 secret + 派生 SAS 需要的本机 nonce/请求标识）；`expires_at` 由调用方按「不超过 5 分钟」规则算出后传入（状态机只复核上界）。
   - 认领：`verify_claim(pairing: &PairingRecord, existing: Option<&ClaimedPairing>, fields: &ClaimFields)` → 结构 → 状态/过期 → 绑定校验（设备：canonical origin + Host；节点：端点 host）→ 集合校验 → HMAC 校验（用内存 secret）→ `ClaimOutcome`（`Claimed` 带 65 字节公钥，`to_claim()` 给出 core 的 `PairingClaim`）；相同载荷重发得到 `Repeat`（幂等，不产生第二次写入）；失败按配对累计计数，第 5 次给出 `ClaimRejection::TooManyFailures`（调用方据此提交一次拒绝落定）并把该配对在内存标记为不可用。
-  - 落定：`settle(pairing: &PairingRecord, decision: &PairingDecision, at: &Timestamp)` → `PairingSettlement`（批准时已校验「最终集合不超出请求值」）；拒绝/过期不产生信任，两条路径都清除内存 secret。
+  - 落定：`settle(pairing: &PairingRecord, decision: &PairingDecision, at: &Timestamp)` → `PairingSettlement`（批准时已校验「最终集合不超出请求值」）；拒绝/过期不产生信任。**`settle` 不清除内存 secret**：批准后的配对还要支持状态查询的 HMAC 证明，清除发生在「首次认证成功」（`complete_auth` 返回 `consume_pairing`）或到达 `expires_at`（`due_pairings` 统一清除，含 `rejected` 等终态记录）。
   - 过期与重启：`due_pairings(pairings, at)` 与 `unrecoverable_after_restart(pairings)` 返回需要由调用方终结的配对标识。
 
 **实现期的口径收窄（与上面原表述的差异，已回写合同 §4.1）**：四个入口**返回领域值**（`PairingDraft`/`ClaimOutcome`/`PairingSettlement`/`PairingId`），**不**直接返回 §11.6 的写集 DTO。理由：写集是存储层形状（含审计意图与事务字段），而原子性本就由 `TrustStore` 的单事务语义承担；状态机只负责「算出该发生什么」。代价：切片 4–7 的 adapter 多一步组装（`ClaimedPairing::to_claim()` 已在 `identity-auth` 提供），好处是 `identity-auth` 不认识 `core::ports` 的写集类型。
@@ -106,16 +106,16 @@ complete_auth(fact, pairing: Option<&PairingId>, at: &Timestamp) -> Completion  
 
 ### D6 `identity-keystore` 的结构与存储
 
-- 模块：`lib.rs`（`PlatformKeystore::open(root) -> Result<..>`、`EphemeralKeystore::new(entropy)`、`OsEntropy`）、`error.rs`（`KeystoreError` → 端口类型）、`entry.rs`（条目编码/解码）、`platform/`（`cfg(windows)` 的 DPAPI 模块与 `cfg(not(windows))` 的失败关闭模块）。
+- 模块：`lib.rs`（`FileKeystore::new(root, entropy)`/`with_availability(..)`、`EphemeralKeystore::new(entropy)`、`OsEntropy`）、`error.rs`（`KeystoreError` → 端口类型）、`entry.rs`（条目编码/解码）、`platform/`（`cfg(windows)` 的 DPAPI 模块与 `cfg(not(windows))` 的失败关闭模块）。
 - 条目：`<root>/<purpose>/<label>.<version>`，内容 = 自研二进制头（magic `ACPK`、格式版本 u16be、`purpose` u8、`label` 长度 + 标签、32 字节盐；私钥标量在被包裹的那一段里，头部不含私钥）+ DPAPI 包裹。包裹使用 `Scope::User` 并带**域分离的附加熵**（`purpose` + `label` + 格式版本 + 本节点用途字符串），因此同一台机器上不同用途/标签的包裹不可互换。写入用「同目录临时文件 + 原子重命名」，目录创建时按平台设置权限（Unix `0700`/`0600`；Windows 依赖 `%LOCALAPPDATA%` 的用户 ACL 与 DPAPI 本身，启动期宽松权限检查属切片 4 的 daemon 启动检查，本变更只保证不写共享临时路径）。
 - Provider 凭据（`SecretPurpose`）走同一封装路径，但只经 `get_secret`/`put_secret`/`delete_secret` 进出，`SecretBytes` 不实现 `Debug`/`Serialize`/`Display`，也不进入 `KeyHandle`。
-- `identity-keystore` 不实现「引用与条目的分布式事务」，只保证：写入是新版本条目、旧的未被引用条目可被 `delete` 回收；引用缺失/解包失败一律 `KeystoreUnavailable`（不静默重建）。
+- `identity-keystore` 不实现「引用与条目的分布式事务」，只保证：写入是新版本条目、旧的未被引用条目可被 `delete` 回收；**引用缺失 → `EntryMissing`**、**解包失败/条目损坏 → `EntryCorrupt`**、**平台不可用 → `Unavailable`**（三者都是显式失败，都不静默重建）。
 - 合同收口（写入 `IDENTITY_AND_AUTH_CONTRACT.md` §7）：`KeyPurpose` 只保留 `NodeIdentity`——`DeviceIdentity` 在第一阶段没有调用方（PWA/原生客户端的设备密钥由客户端平台自持），按合同 §7 的说明在本次实现变更里**删除**，不保留无人使用的分支。
 - 熵：`OsEntropy` 实现 `identity-auth` 的熵源端口（`getrandom`）；`EphemeralKeystore`/`PlatformKeystore` 都只依赖该端口，测试用计数器式 fake 熵源，因此密钥生成在单测里可重复。
 
 ### D7 平台差异与 DPAPI wrapper 选型
 
-- `identity-auth` 不出现任何平台 `cfg`；`identity-keystore` 的平台差异只在 `platform/` 下，`#[cfg(windows)]` 用 DPAPI、`#[cfg(not(windows))]` 返回 `KeystoreUnavailable`（编译通过、运行期明确失败）。CI 在 Linux 上编译并断言失败关闭；DPAPI 往返与签名一致性测试只在本地 Windows x64 执行并留证（与 `agent-host` 的 Windows 进程树证据同一种处理）。
+- `identity-auth` 不出现任何平台 `cfg`；`identity-keystore` 的平台差异只在 `platform/` 下，`#[cfg(windows)]` 用 DPAPI、`#[cfg(not(windows))]` 返回 `KeystoreError::Unavailable`（编译通过、运行期明确失败）。CI 在 Linux 上编译并断言失败关闭；DPAPI 往返与签名一致性测试只在本地 Windows x64 执行并留证（与 `agent-host` 的 Windows 进程树证据同一种处理）。
 - DPAPI 只能经 wrapper crate（`unsafe_code = \"forbid\"` 且 §4.12 明确「本 crate 不得直接 FFI」）。首选候选 `windows-dpapi 0.2.0`：安全函数 `encrypt_data`/`decrypt_data` + `Scope::User`，许可证 MIT OR Apache-2.0，`edition 2021`。**已知代价**：它依赖已停止维护的 `winapi 0.3`（+ `anyhow`、`log`），作者单人、未声明 `rust-version`、反向依赖极少。
 - 实现第一步必须按 `SECURITY_DESIGN.md` §20 实证：`cargo metadata`/`cargo tree` 的传递依赖、许可证集合（`deny.toml` allow 列表）、`rust-version`/edition 与 1.85 的兼容性、`Scope::User` 的语义与我们需要的「包裹 + 进程内签名」一致。任一项不合格 → **回到用户决策**（换 wrapper、自写 wrapper crate 并新增 ADR，或抬 MSRV），不擅自放开 `unsafe`、不静默选择另一个未核验的 crate。选型结论与版本口径写回 `MODULE_ARCHITECTURE.md` §4.12/§3.1。
 - 被否的备选：直接用 `windows` crate（`CryptProtectData` 是 `unsafe fn`，与 workspace `unsafe_code = \"forbid\"` 冲突）；`keyring`（面向 Credential Manager/Keychain 的更高层抽象，不适合「DPAPI 包裹任意私钥字节」）；`dpapi-core`/`dpapi-offline`（面向离线/取证解密，不提供当前用户 master key 的加密路径）。

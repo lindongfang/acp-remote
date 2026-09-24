@@ -1,3 +1,4 @@
+<!-- 落盘说明：主 Agent 原样保留 reviewer 的正文与结论；仅当某处 `§` 引用会触发文档引用门禁的歧义归属时，补全被引文档名（不改变语义）。 -->
 <!-- 由独立 reviewer 子 Agent 产出（RV2 轮，target revision fe52694），主 Agent 原样落盘。 -->
 ## 结论：**FAIL（有阻断项）**
 

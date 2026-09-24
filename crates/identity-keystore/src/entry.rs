@@ -41,22 +41,34 @@ const ENTROPY_DOMAIN: &[u8] = b"acp-remote/keystore-entry/v1";
 
 /// 标签形状是否合法：非空、≤ 128 字节、不含路径分隔符与控制字符。
 ///
-/// **只此一份**：[\`EntryHeader::new\`]（写入路径）与 [\`EntryHeader::decode\`]（读取路径）共用它，
+/// **只此一份**：[`EntryHeader::new`]（写入路径）与 [`EntryHeader::decode`]（读取路径）共用它，
 /// 因为标签会被拼进文件路径——两侧不对称就会给「decode 后自己拼路径」的调用方留下目录穿越。
 pub fn is_valid_label(label: &str) -> bool {
     const WINDOWS_RESERVED: [char; 9] = ['<', '>', ':', '"', '|', '?', '*', '/', '\\'];
+    // Windows 也保留一批**设备名**：`CON`/`PRN`/`AUX`/`NUL`/`COM1..9`/`LPT1..9`
+    // （大小写不敏感，带扩展名也一样）。放行它们会在 `rename`/`create` 处报 `Io`，被端口层映射为
+    // 「后端不可用」——与上面拒绝保留字符的目的一样，这里一并拒掉。
+    const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
     !label.is_empty()
         && label.len() <= MAX_LABEL_LEN
         && !label.contains(['/', '\\', '\0'])
         && !label.chars().any(char::is_control)
-        // Windows 保留字符一并拒绝：否则这些标签会在 \`File::create\` 处报 \`Io\`（端口层映射为
-        // \`Unavailable\`），把「标签非法」误报成「后端不可用」。\`/\` 与 \`\\\\\` 已在上面拒过一次。
+        // Windows 保留字符一并拒绝：否则这些标签会在 `File::create` 处报 `Io`（端口层映射为
+        // `Unavailable`），把「标签非法」误报成「后端不可用」。`/` 与 `\\` 已在上面拒过一次。
         && !label.contains(WINDOWS_RESERVED)
         // 标签按**文件系统语义**唯一：本 crate 不做大小写归一，因此在大小写不敏感的文件系统
-        // （Windows/macOS）上 \`Primary\` 与 \`primary\` 指向同一条目。调用方必须自行保证标签
-        // 在同一用途下大小写不冲突（见 store.rs 的 \`entry_path\` 说明）。
+        // （Windows/macOS）上 `Primary` 与 `primary` 指向同一条目——后写者会覆盖前者的文件，
+        // 旧引用随后报 `IdentityMismatch`（旧密钥不可恢复）。调用方必须保证同一用途下标签
+        // 大小写不冲突；同一口径也写在 `store.rs` 的 `entry_path` 文档里。
         && !label.starts_with([' ', '.'])
         && !label.ends_with([' ', '.'])
+        && !label
+            .split('.')
+            .next()
+            .is_some_and(|stem| WINDOWS_DEVICE_NAMES.iter().any(|name| stem.eq_ignore_ascii_case(name)))
 }
 
 /// 条目用途 token。

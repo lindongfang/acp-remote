@@ -139,7 +139,8 @@ impl Authority {
 
     /// 进程重启语义：丢弃全部内存 secret 与挑战缓存（返回 `(secrets, challenges)` 清理数）。
     ///
-    /// 组合根在启动时调用一次；随后应按 [`crate::pairing::AuthorityPairingExt::unrecoverable_after_restart`]
+    /// 组合根在启动时调用一次；随后应按
+    /// [`Authority::unrecoverable_after_restart`](crate::pairing::Authority::unrecoverable_after_restart)
     /// 终结存储里已无法继续验密的配对。
     pub fn reset_memory(&self) -> (usize, usize) {
         let mut state = self.state();

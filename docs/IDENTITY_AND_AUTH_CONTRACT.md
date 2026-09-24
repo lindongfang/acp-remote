@@ -294,6 +294,16 @@ pub struct PeerTrust {
 - `[决定]`（2026-09-24 实现）诊断/测试入口属于公开 API 的一部分：`Authority::challenge_cache_len()`、
   `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。除 `pairing_status` 外都**不**返回
   秘密材料，只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
+- `[决定]`（2026-09-24 实现）另两个公开入口也在此登记：`Authority::reset_memory()`（启动语义：丢弃全部
+  内存 secret 与挑战缓存并返回清理计数，随后由调用方按 §4.3 终结已无法继续验密的配对；它**不**触碰持久材料）与
+  `Authority::node_public_key()`（async；经 keystore 端口读本节点公钥，供宿主证明与 SAS 派生）。
+  认证收尾对外只有**一个**名字 `complete_auth`（其实现体是 crate 私有的 `complete`），避免同一行为出现两个公开名。
+- `[决定]`（2026-09-24 实现）`verify_proof` 额外核对「快照主体 == 提交主体」（`trust.peer != submission.peer`
+  → `HandshakeError::UntrustedPeer`）：它拦住「adapter 传错快照、用别的对端的公钥验签」这类接线错误。
+  失败分类仍统一为对端可见的 `AuthenticationFailed`。
+- `[决定]`（2026-09-24 实现）诊断/测试入口属于公开 API 的一部分：`Authority::challenge_cache_len()`、
+  `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。除 `pairing_status` 外都**不**返回
+  秘密材料，只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
 - `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。
 - `[决定]` 三个入口都不读系统时间、不碰 SQLite：持久化事实由返回值带着交给调用方，由写集端口落库（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）。
@@ -320,6 +330,13 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 - `[决定]` `Revoked`/`Unknown` 必须映射为 `auth.device_revoked`/`auth.device_unknown`（节点侧为 Node Link 的对应码），不得降级为 `authorization.scope_denied`——两类的可重试性与客户端行为不同。
 
 ### 5.2 nonce、重放与时钟
+
+`[决定]`（2026-09-24 实现）**挑战缓存有硬上限**：`MAX_CHALLENGES = 1024`，签发时先用注入时钟清扫
+已过期条目，满时淘汰**最早过期**的一条再插入（`state.rs` 的 `put_challenge`）。依据是我们自己的
+资源限制要求（`AGENTS.md` §5 的数量/资源上限）：只会被 `verify_proof` 消费的挑战，在「完成 hello 但不发
+proof」的连接上会永不消费，因此内存上界必须与真实并发连接数解耦。被淘汰/被清扫的客户端拿到统一的
+证明失败分类并重新握手——不泄露存在性，也不改变一次性消费语义。
+
 
 `[决定]`（2026-09-24 实现）**挑战缓存有硬上限**：`MAX_CHALLENGES = 1024`，签发时先用注入时钟清扫
 已过期条目，满时淘汰**最早过期**的一条再插入（`state.rs` 的 `put_challenge`）。依据是我们自己的

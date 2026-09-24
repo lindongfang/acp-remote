@@ -11,7 +11,7 @@ use identity_auth::{
 };
 use identity_keystore::entry::EntryPurpose;
 use identity_keystore::store::Availability;
-use identity_keystore::{FileKeystore, platform_supported};
+use identity_keystore::{FileKeystore, StoreError, platform_supported};
 
 use support::{FixedEntropy, TempRoot, block_on, contains_plaintext};
 
@@ -146,6 +146,66 @@ fn unavailable_backend_fails_closed_on_every_entry_point() {
 }
 
 #[test]
+fn list_is_gated_by_availability_too() {
+    // `list()` 也触碰文件系统：不可用平台上必须报「不可用」，而不是「空仓库」——
+    // 否则调用方会把「后端不可用」误读成「没有任何条目」。
+    let root = TempRoot::new("list-gate");
+    let unavailable = FileKeystore::with_availability(
+        root.root().join("keystore"),
+        FixedEntropy::new(),
+        Availability::Unavailable,
+    );
+    assert_eq!(
+        unavailable.list(EntryPurpose::NodeIdentity),
+        Err(StoreError::PlatformUnavailable),
+        "不可用平台上的 list 必须显式失败"
+    );
+    assert!(root.files().is_empty(), "list 不得写任何文件");
+
+    let available = FileKeystore::with_availability(
+        root.root().join("keystore"),
+        FixedEntropy::new(),
+        Availability::Platform,
+    );
+    assert_eq!(
+        available.list(EntryPurpose::NodeIdentity),
+        Ok(Vec::new()),
+        "可用平台上的空目录是「空仓库」而不是错误"
+    );
+}
+
+#[test]
+fn illegal_references_are_rejected_before_touching_the_filesystem() {
+    // 引用里的标签必须与写入/读取路径共用同一份形状校验（`is_valid_label`）：否则含 Windows
+    // 保留字符/保留设备名/首尾空白的引用会落到 fs 层，被报成「后端不可用」或「条目缺失」。
+    let root = TempRoot::new("illegal-refs");
+    let store = FileKeystore::with_availability(
+        root.root().join("keystore"),
+        FixedEntropy::new(),
+        Availability::Platform,
+    );
+    block_on(async {
+        for label in [
+            "CON",
+            "nul",
+            "bad:label",
+            "bad?label",
+            " leading",
+            "trailing ",
+            ".hidden",
+        ] {
+            let handle = KeyHandle::new(&format!("node-identity/{label}")).expect("引用本身合法");
+            assert_eq!(
+                store.public_key(&handle).await,
+                Err(KeystoreError::EntryInvalid),
+                "标签 {label:?} 必须在触碰文件系统之前被判为非法引用"
+            );
+        }
+    });
+    assert!(root.files().is_empty(), "非法引用不得产生任何文件");
+}
+
+#[test]
 fn available_backend_is_not_unconditionally_unavailable() {
     // 反向断言：可用性闸门不是「永远返回不可用」。
     let root = TempRoot::new("forced-available");
@@ -213,7 +273,9 @@ fn errors_never_carry_secret_material() {
         }
     }
     assert_eq!(label(&KeystoreError::EntryMissing), "entry_missing");
-    assert!(!label(&KeystoreError::EntryMissing).contains("super-secret-provider-token"));
+    // 注意：这里**不**写「`label(...).contains(secret)` 为假」——`label` 对固定变体返回字面量，
+    // 那种断言结构上不可能失败，会给出高于实际的保证。真正有判别力的是上面那条具体分类断言、
+    // 下面的穷尽匹配（加带载荷变体会编译失败）以及「条目文件里不含明文」的两条用例。
 }
 
 #[test]

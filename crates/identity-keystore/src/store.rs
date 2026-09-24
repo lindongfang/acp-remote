@@ -22,9 +22,7 @@ use identity_auth::{
 };
 use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
-use crate::entry::{
-    EntryHeader, EntryPurpose, FORMAT_VERSION, MAX_LABEL_LEN, PRIVATE_KEY_LEN, SALT_LEN,
-};
+use crate::entry::{EntryHeader, EntryPurpose, FORMAT_VERSION, PRIVATE_KEY_LEN, SALT_LEN};
 use crate::error::StoreError;
 use crate::platform::{unwrap_secret, wrap_secret};
 
@@ -124,6 +122,11 @@ impl FileKeystore {
     }
 
     /// 条目路径：`<root>/<purpose>/<label>.<version>`。
+    ///
+    /// **大小写语义**：本 crate 不做大小写归一，标签按**文件系统语义**唯一——在大小写不敏感的文件系统
+    /// （Windows/macOS）上 `Primary` 与 `primary` 是同一条目，后写者会覆盖前者（旧引用随后报
+    /// `IdentityMismatch`）。调用方必须保证同一用途下的标签大小写不冲突（`entry.rs` 的
+    /// `is_valid_label` 有同一说明）。
     ///
     /// **调用方必须先校验标签**：[`EntryHeader::new`] 与 [`EntryHeader::decode`] 都拒绝分隔符与控制字符，
     /// 本方法只做拼接（不返回 `Result`）——把未校验的文本传进来就会得到目录穿越。
@@ -243,15 +246,23 @@ impl FileKeystore {
     }
 
     /// 生成一个新的节点身份私钥标量（拒绝零值与非曲线标量）。
-    fn generate_scalar(&self) -> Result<[u8; PRIVATE_KEY_LEN], StoreError> {
+    ///
+    /// 返回 [`SecretBytes`]（析构清零）而不是裸 `[u8; 32]`：栈上不留未清零的私钥副本
+    /// （**已知残余**：本函数内部的 `candidate` 是栈数组，出错轮次无法被 `SecretBytes` 覆盖，
+    /// 退出前显式清零；`p256::SecretKey` 自身在 `zeroize` feature 下会清零）。
+    fn generate_scalar(&self) -> Result<SecretBytes, StoreError> {
         for _ in 0..MAX_SCALAR_ATTEMPTS {
             let mut candidate = [0u8; PRIVATE_KEY_LEN];
-            self.entropy
-                .fill(&mut candidate)
-                .map_err(|_| StoreError::PlatformUnavailable)?;
+            self.entropy.fill(&mut candidate).map_err(|_| {
+                candidate.fill(0);
+                StoreError::PlatformUnavailable
+            })?;
             if p256::SecretKey::from_slice(&candidate).is_ok() {
-                return Ok(candidate);
+                let scalar = SecretBytes::new(&candidate);
+                candidate.fill(0);
+                return Ok(scalar);
             }
+            candidate.fill(0);
         }
         Err(StoreError::PlatformUnavailable)
     }
@@ -263,7 +274,7 @@ impl IdentityKeystore for FileKeystore {
         self.availability.require()?;
         let entry_purpose = EntryPurpose::from_key_purpose(purpose);
         let scalar = self.generate_scalar()?;
-        self.write_entry(entry_purpose, label, &scalar)?;
+        self.write_entry(entry_purpose, label, scalar.as_bytes())?;
         handle_of(entry_purpose, label)
     }
 
@@ -349,7 +360,12 @@ fn handle_of(purpose: EntryPurpose, label: &str) -> Result<KeyHandle, KeystoreEr
         .map_err(|_| KeystoreError::EntryInvalid)
 }
 
-/// 解析端口引用；用途不匹配返回 `PurposeMismatch`。
+/// 解析端口引用；用途不匹配返回 `PurposeMismatch`，标签形状非法返回 `EntryInvalid`。
+///
+/// 标签校验与写入/读取路径**共用** [`EntryPurpose` 同级的 `is_valid_label`]（`entry.rs`）：
+/// 若这里只做「非空 + 长度 + 分隔符」，含 Windows 保留字符或首尾空白的引用会落到 fs 层报
+/// `Io`/`NotFound`，被端口层映射成 `Unavailable`/`EntryMissing`——把「引用非法」误报成
+/// 「后端不可用」或「条目缺失」。
 fn parse_handle(handle: &KeyHandle) -> Result<(EntryPurpose, String), KeystoreError> {
     let text = handle.as_str();
     let (purpose_text, label) = text.split_once('/').ok_or(KeystoreError::EntryInvalid)?;
@@ -358,11 +374,7 @@ fn parse_handle(handle: &KeyHandle) -> Result<(EntryPurpose, String), KeystoreEr
         "provider-credential" => EntryPurpose::ProviderCredential,
         _ => return Err(KeystoreError::PurposeMismatch),
     };
-    if label.is_empty()
-        || label.len() > MAX_LABEL_LEN
-        || label.contains(['/', '\\', '\0'])
-        || label.chars().any(char::is_control)
-    {
+    if !crate::entry::is_valid_label(label) {
         return Err(KeystoreError::EntryInvalid);
     }
     Ok((purpose, label.to_owned()))
@@ -533,6 +545,15 @@ mod unix_modes {
 
         fs::remove_dir_all(&root).ok();
     }
+}
+
+#[cfg(test)]
+mod atomic_tests {
+    //! `write_atomic` 的替换语义与**失败清理**（任何平台的 lib 单测二进制都会执行——
+    //! 这条清理路径与模式位无关，因此不能放在 `unix_modes` 里）。
+
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn write_atomic_replaces_content_without_leaving_temporaries_on_failure() {
@@ -554,7 +575,27 @@ mod unix_modes {
             "必须整体替换而不是追加"
         );
 
-        // 失败路径：目标目录不存在 → 返回错误且不留任何临时文件。
+        // 失败路径 ①：临时名指向一个**已存在的目录** → `File::create` 失败，守卫必须清掉它
+        // （这条路径才会真的产生「清理」这个动作；父目录不存在时按构造连临时文件都不会出现）。
+        let blocked = directory.join(format!(".blocked.{FORMAT_VERSION}"));
+        fs::create_dir(&blocked).expect("构造同名目录必须成功");
+        assert!(
+            write_atomic(&blocked, b"x").is_err(),
+            "目标为目录时必须失败"
+        );
+        let leftovers: Vec<String> = fs::read_dir(&directory)
+            .expect("目录可读")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "失败路径不得残留临时文件：{leftovers:?}"
+        );
+        assert!(blocked.is_dir(), "守卫不得删除失败写入的目标目录本身");
+
+        // 失败路径 ②：父目录不存在 → 返回错误，且不得顺手创建父目录。
         let missing = root.join("no-such-dir").join("entry");
         assert!(write_atomic(&missing, b"x").is_err(), "父目录缺失必须失败");
         assert!(!root.join("no-such-dir").exists(), "失败不得创建目标目录");

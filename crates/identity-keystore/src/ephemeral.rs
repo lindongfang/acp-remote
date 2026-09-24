@@ -50,6 +50,7 @@ impl EphemeralKeystore {
     /// 或显式选择本类型并自行承担「内存明文」这一取舍；调用方只能来自组合根/测试）。
     pub fn with_seed(seed: [u8; 32]) -> Self {
         let keystore = Self::new(std::sync::Arc::new(crate::OsEntropy::new()));
+        let mut seed = seed;
         keystore.entries().expect("新建实例的锁不可能中毒").insert(
             format!(
                 "{}/primary",
@@ -59,18 +60,24 @@ impl EphemeralKeystore {
                 secret: SecretBytes::new(&seed),
             },
         );
+        // 形参是栈上数组：复制进 `SecretBytes` 后立刻清零，避免在调用者栈帧里留下副本。
+        seed.fill(0);
         keystore
     }
 
-    fn generate_scalar(&self) -> Result<[u8; 32], KeystoreError> {
+    fn generate_scalar(&self) -> Result<SecretBytes, KeystoreError> {
         for _ in 0..8 {
             let mut candidate = [0u8; 32];
-            self.entropy
-                .fill(&mut candidate)
-                .map_err(|_| KeystoreError::Unavailable)?;
+            self.entropy.fill(&mut candidate).map_err(|_| {
+                candidate.fill(0);
+                KeystoreError::Unavailable
+            })?;
             if p256::SecretKey::from_slice(&candidate).is_ok() {
-                return Ok(candidate);
+                let scalar = SecretBytes::new(&candidate);
+                candidate.fill(0);
+                return Ok(scalar);
             }
+            candidate.fill(0);
         }
         Err(KeystoreError::Unavailable)
     }
@@ -90,12 +97,8 @@ impl IdentityKeystore for EphemeralKeystore {
         let scalar = self.generate_scalar()?;
         let handle = KeyHandle::new(&format!("{}/{label}", purpose.as_str()))
             .map_err(|_| KeystoreError::EntryInvalid)?;
-        self.entries()?.insert(
-            handle.as_str().to_owned(),
-            Entry {
-                secret: SecretBytes::new(&scalar),
-            },
-        );
+        self.entries()?
+            .insert(handle.as_str().to_owned(), Entry { secret: scalar });
         Ok(handle)
     }
 
