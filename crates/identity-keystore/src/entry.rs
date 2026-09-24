@@ -39,7 +39,8 @@ pub const PRIVATE_KEY_LEN: usize = 32;
 /// 附加熵的域分离标签（长度前缀 transcript 的一部分）。
 const ENTROPY_DOMAIN: &[u8] = b"acp-remote/keystore-entry/v1";
 
-/// 标签形状是否合法：非空、≤ 128 字节、不含路径分隔符与控制字符。
+/// 标签形状是否合法：非空、≤ 128 字节、不含路径分隔符与控制字符，且不含 Windows 保留字符、
+/// 不以空白或点开头/结尾、不是 Windows 保留设备名（`CON`/`NUL`/`COM1`…）。
 ///
 /// **只此一份**：[`EntryHeader::new`]（写入路径）与 [`EntryHeader::decode`]（读取路径）共用它，
 /// 因为标签会被拼进文件路径——两侧不对称就会给「decode 后自己拼路径」的调用方留下目录穿越。

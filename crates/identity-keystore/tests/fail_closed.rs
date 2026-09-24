@@ -272,6 +272,8 @@ fn errors_never_carry_secret_material() {
             KeystoreError::SecretMissing => "secret_missing",
         }
     }
+    // 下面这行只为**锚定**上面的穷尽匹配（让它在没有其它调用点时也被编译），本身没有判别力：
+    // `label` 对固定变体返回字面量，无法失败。不要把它当作行为断言。
     assert_eq!(label(&KeystoreError::EntryMissing), "entry_missing");
     // 注意：这里**不**写「`label(...).contains(secret)` 为假」——`label` 对固定变体返回字面量，
     // 那种断言结构上不可能失败，会给出高于实际的保证。真正有判别力的是上面那条具体分类断言、

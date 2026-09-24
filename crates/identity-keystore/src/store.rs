@@ -229,7 +229,7 @@ impl FileKeystore {
         let copy = SecretBytes::new(&secret);
         // 平台解包返回的中间 `Vec<u8>` 必须清零后再释放，否则签名/读公钥的每次调用都会在堆上
         // 留下未清零的私钥副本（`SecretBytes` 的析构清零只覆盖它自己那份）。平台 wrapper 内部
-        // 仍有一份自己的缓冲区（第三方实现，见 platform/mod.rs 的残余说明）。
+        // 仍有一份自己的缓冲区（第三方实现，登记在 platform/windows.rs 的 `unwrap_secret` 文档里）。
         secret.fill(0);
         drop(secret);
         Ok(copy)

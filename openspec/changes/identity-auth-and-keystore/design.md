@@ -111,7 +111,7 @@ complete_auth(fact, pairing: Option<&PairingId>, at: &Timestamp) -> Completion  
 - Provider 凭据（`SecretPurpose`）走同一封装路径，但只经 `get_secret`/`put_secret`/`delete_secret` 进出，`SecretBytes` 不实现 `Debug`/`Serialize`/`Display`，也不进入 `KeyHandle`。
 - `identity-keystore` 不实现「引用与条目的分布式事务」，只保证：写入是新版本条目、旧的未被引用条目可被 `delete` 回收；**引用缺失 → `EntryMissing`**、**解包失败/条目损坏 → `EntryCorrupt`**、**平台不可用 → `Unavailable`**（三者都是显式失败，都不静默重建）。
 - 合同收口（写入 `IDENTITY_AND_AUTH_CONTRACT.md` §7）：`KeyPurpose` 只保留 `NodeIdentity`——`DeviceIdentity` 在第一阶段没有调用方（PWA/原生客户端的设备密钥由客户端平台自持），按合同 §7 的说明在本次实现变更里**删除**，不保留无人使用的分支。
-- 熵：`OsEntropy` 实现 `identity-auth` 的熵源端口（`getrandom`）；`EphemeralKeystore`/`PlatformKeystore` 都只依赖该端口，测试用计数器式 fake 熵源，因此密钥生成在单测里可重复。
+- 熵：`OsEntropy` 实现 `identity-auth` 的熵源端口（`getrandom`）；`FileKeystore`（落盘档位）与 `EphemeralKeystore`（进程内档位）都只依赖该端口，测试用计数器式 fake 熵源，因此密钥生成在单测里可重复。
 
 ### D7 平台差异与 DPAPI wrapper 选型
 
