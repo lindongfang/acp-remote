@@ -254,6 +254,7 @@
 ## Final Assessment
 
 - Assessment ID / Time: `round-2-final` / 2026-09-24（本会话）/ 执行者：主 Agent
+  - 版本推进与复验：本记录落盘提交为 `467f6ec9167467f712d066757c8243a4f0b8a3fa`（只含 `verification.md` 与 `tasks.md` 的勾选，无代码/证据改动）。按 acceptance 的「版本变化需重新评估」要求，该提交后已把 `target_commit` 刷新为 `467f6ec…` 并在该提交的干净 detached worktree 中重跑 `workflow check --stage final --planning-root <本仓库>` → **PASS**；因此 `target_commit` 指向的即包含本记录的那次提交，刷新后的指针按设计保留在规划根工作区（未提交：提交它会再次移动目标，自引用不可满足）。
 - Target / Task: 本地主分支 `refs/heads/main` = `b36088f8f64927413c25bce655ac69f9728affbd`（`git rev-parse` 核实；`workflow check --stage final` 的 `targetCommit` 与之一致，且 `HEAD == refs/heads/main`）；被验收的代码实现为 `e4a4492`（此后仅文档/证据提交，RV-DU1 已核实零代码差异）；最终验收任务 ID = `8.1`（`[final-verification]`）。E2E mode = `not-applicable`，批准记录可追溯（`plan.md` 的 `downgrade_approval` = 用户原话「1. 同意 2. 同意」，2026-09-24）。
 - CLI State: `npx --quiet --no-install openspec status --change acp-boundary-and-agent-host`（2026-09-24，任务勾选前查询）= 三个规划 artifact 全部 `[x]`（`All planning artifacts complete!`）；`openspec-agentic e2e check --json` = **PASS**（`enabled: true`、`mode: not-applicable`、`approval: true`、`marked: true`，并按 `[e2e-owned]` 自动勾选 7.3）。CLI 状态仅如实引用原始输出，不用本验收结论改写其含义。
 - Audit / Evidence: 六个审计组逐组核对通过——**Contracts and Coverage**（plan 的 Coverage Index 逐项有任务/检查/证据；`checks` 门禁断言 §5 矩阵 8 个已登记 crate 与 `Cargo.toml` 一致；4 条 Check Plan Change 均登记理由、受影响任务与风险覆盖）；**Delivery and Versions**（审计组引用的 Merge History/交接/Spec 版本证据见本文件对应节：5.1 交接记录（独立集成 Agent，fresh 上下文，交接 `roles/integrator.md` 全文，无合并授权）、6.2 候选构建 exit 0、6.6 本地 fast-forward 合入并登记顺序偏差、6.7 同 SHA 复跑）；**Project Checks and Resources**（`reports/du1-pv1.log` = `npm run verify` exit 0，十道门禁逐道 exit 0 + fmt + clippy + 378 passed/2 ignored；`reports/du1-main-verify.log` 为同 SHA 复跑；Runtime Resources 节记录资源与隔离；并如实记录 2 条既有 `#[ignore]` 属其它 crate 且带理由）；**Independent Reviews**（RV1 4 个 WP 全 FAIL → 修复；RV2 代码 PASS/文档 FAIL → 修复；RV3 无 BLOCKER、WP5 2 MAJOR → 修复；RV4 两轮无阻断 + 新批次 → 修复；RV5 无阻断 + 6 条文档事实残留 → 已修复；RV-DU1 6.4/6.8 PASS，F1/F2 已修复、F3/F4/F5/F6 有处置结论；所有 CRITICAL/MAJOR 均有复核闭环）；**E2E Design and Execution**（`not-applicable` + 四项替代检查在固定版本 `1035395` 逐项通过，见 `reports/alt-final-verification.md`）；**Issue Closure and Evidence Validity**（`Failures and Retests` 的 WP2-BUILD-1/WP2-TEST-1/FRAMING-1/ROUTE-1/ENVCTL-1/RV1-1/RV3-1/RV3-2 均已解决或有复核结论；未解决项均为非阻断并逐条给出处置与绑定条件）。有效证据记录 ID 与摘要见上面的 `agentic-assessment`（13 条，已按当前文件内容逐一核对 sha256）；失效/复用判断：候选与主分支同 SHA 使 PV1 证据可复用，文档提交不改代码故 RV 结论仍适用，RV3/RV4/RV5/RV-DU1 的 review ID 与适用版本均按原报告引用。
@@ -262,7 +263,7 @@
 
 ```agentic-assessment
 assessment_id: "round-2-final"
-target_commit: "b36088f8f64927413c25bce655ac69f9728affbd"
+target_commit: "467f6ec9167467f712d066757c8243a4f0b8a3fa"
 contract_digest: "sha256:e23ad72ebfa95151a2f572d269a3f6f81251f04783ff8df5b3d5e68a94d73e4a"
 result: PASS
 evidence:
