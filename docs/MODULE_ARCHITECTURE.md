@@ -134,6 +134,7 @@ crates/
   - 2026-09-23 基线：`sha2 0.10 → 0.11`、`base64 0.22 → 0.23`（Dependabot PR #1/#2）。证据：workspace 全部测试与 clippy 在该版本上通过（CI 五个 job 全绿、本地 `npm run check:rust` 通过）；`npm run check` 的 transcript 固定向量重算与许可证/来源判定不受影响（JS 侧与版本无关，许可证集合无新增项）。
   - 诚实说明：`INITIAL_DESIGN.md` §16 第 6 条那次一次性 Rust 实测是在 `sha2 0.10`/`base64 0.22` 上做的；本次只验证了「算法语义不变且现有测试通过」，没有重跑那次探针。真正版本无关的回归判据仍是该条要求实现阶段做的事：把同一批固定向量固化成恒常运行的 Rust 测试。
 - `[决定]`（2026-09-24）`agent-host` 的平台与日志依赖固定为 `tracing 0.1`（结构化日志，MIT）、`win32job 2`（Windows Job Object；safe API，MIT OR Apache-2.0）与 `nix 0.30`（Unix 进程组结束；`default-features = false`，只开 `signal`/`process`，MIT），三者只登记在 `[workspace.dependencies]`，crate 内写 `workspace = true`。选 `win32job` 而不是 `process-wrap` 的理由是 MSRV：`process-wrap` 10 需要 1.87，高于本仓库 `rust-version = 1.85`（§4.5）；Unix 侧选 `nix` 而不是 `libc` 的理由是 workspace 固定 `unsafe_code = "forbid"`，直接调 `killpg` 必须写 `unsafe` 块（`forbid` 不可用 `#[allow]` 绕过）。版本口径同样只维护在 `[workspace.dependencies]`，本行与它保持一致。
+- `[决定]`（2026-09-24）身份边界的依赖口径：`identity-auth`（纯状态机）只依赖 `core`、`sync-protocol`、`node-link-protocol`、`acpr-transcript`（后三者**仅**用于 transcript 编解码与 domain/field tag 表）与 `async-trait`/`thiserror`/`p256`（只增量开启 `ecdsa`，用于**验签**，不签名、不用 `from_der`）/`sha2`/`hmac`；不得依赖 `acpr-wire`、runtime、serde、数据库或 `identity-keystore`，也不得出现平台 `cfg`。`identity-keystore` 只依赖 `identity-auth`、`p256`（`ecdsa`，进程内签名）、`thiserror`、`getrandom`（OS 随机数；lock 中已有 `0.4.3`，MIT OR Apache-2.0，实现时复核 MSRV ≤ 1.85）以及 `cfg(windows)` 下的 DPAPI wrapper（包名与版本口径：见 §4.12 的选型结论）。`identity-auth` 不另设 `uuid` 依赖：core 的 ID 已是规范 UUID 文本，转 16 字节只需去连字符 + 十六进制解码。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
 - workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十三个（ADR-0007 引入 `acpr-wire` 后由十二改为十三）；不得为凑齐列表创建只有占位实现的空 crate。
@@ -328,11 +329,11 @@ authorization/
 port/          # keystore 端口定义（trait），实现见 identity-keystore
 ```
 
-它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销，以及**通过端口**访问平台安全存储（[ADR-0006](./adr/0006-identity-keystore-split.md)）。所有密钥读写都经过组合根注入的端口：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
+它负责 Node/设备 P-256 长期身份、PWA canonical origin 绑定、一次性配对、长度前缀 transcript、P1363 challenge-response、scope、撤销，以及**通过端口**访问平台安全存储（[ADR-0006](./adr/0006-identity-keystore-split.md)）。所有密钥读写与**随机性**都由组合根注入的端口提供：本 crate 不直接调用 DPAPI/Keychain/Secret Service，也不直接读系统随机数，也不为平台差异写 `cfg` 分支。密码学原语固定为 `p256` + `sha2` + `hmac`（纯 Rust、无原生依赖）；65 字节公钥前置校验、禁用 DER、接受 high-S 等实测约束见 `INITIAL_DESIGN.md` §16 第 6 条。Export Policy 的业务交集由 core 执行；本 crate 只把验证后的 `Actor`、credential status 和 grant facts 交给 core。Node Identity 与 Device Identity 必须使用不同 key purpose、record type 和签名 domain。
 
 `pack.*`、`preset.*`、`grant.*` 只是授权管理的输入形式：由 `authorization/` 按 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 展开成命令级 scope 后才写入设备记录或随 wire 下发（`SECURITY_DESIGN.md` §10.2）。core 只看到展开后的 scope 与 grant facts，不认识 pack/preset 名称。
 
-本 crate 的实现前合同（状态机、握手入口、授权展开、nonce/重放、keystore 端口签名）冻结在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)：本节只保留职责边界，不重复签名。
+本 crate 的实现前合同（状态机、握手入口、授权展开、nonce/重放、keystore 与熵源端口签名）已随 `identity-auth-and-keystore` 变更定型在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)：本节只保留职责边界，不重复签名。
 
 ### 4.9 `server`
 
@@ -409,6 +410,8 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 约束：不实现业务逻辑、不解析协议、不做授权判定；端口与错误类型由 `identity-auth` 拥有（目标签名见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7）；任何密钥字节不得进入日志、协议错误或 `Debug` 输出。除 `app` 外没有其他 crate 依赖它（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
 
 `[决定]`（2026-09-23）平台差异只能以 **wrapper crate + 本 crate 内的 `cfg` 子模块**表达：workspace 固定 `unsafe_code = "forbid"`（`Cargo.toml`，各 crate 继承 `[lints] workspace = true`），因此本 crate **不得**直接 FFI DPAPI/CNG/Secret Service。DPAPI wrapper、Secret Service client 等候选必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 核验 MSRV、维护状态、许可证与平台支持；DPAPI 只能以「当前用户 scope 包裹 + 进程内 `p256` 签名」的方式使用（私钥在签名瞬间存在于内存，这是已知且已记录的取舍）。Linux 后端在没有 Secret Service 的环境（含 CI 容器）只需保证**编译通过 + 运行时明确失败**，单测走 stub 端口——这正是 [ADR-0006](./adr/0006-identity-keystore-split.md) 拆出本 crate 的目的。
+
+`[待核验]`（2026-09-24）DPAPI wrapper 的首选候选是 `windows-dpapi 0.2.0`（安全 API + `Scope::User`，MIT OR Apache-2.0；已知代价：依赖已停止维护的 `winapi 0.3`、单作者、未声明 `rust-version`）。该候选正在 `identity-auth-and-keystore` 变更中按 §20 实证（传递依赖、许可证集合、MSRV 与语义一致性），结论（包名 + 版本口径 + 理由 + 已知代价）由该变更写回本节与 §3.1。核验不通过时不在实现里就地换依赖，而是按 §20 交用户决策（换 wrapper / 自写 wrapper crate + 新增 ADR / 抬 MSRV）。
 
 ### 4.13 `acpr-wire`
 

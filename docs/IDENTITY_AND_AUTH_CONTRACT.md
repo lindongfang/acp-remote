@@ -1,6 +1,7 @@
 # ACP Remote 身份与认证合同（`identity-auth`）
 
 > 状态：编码前合同（v1 目标形状）。`identity-auth` 与 `identity-keystore` 两个 crate 均未落地；本文冻结实现前必须定型的内部边界，**不代表已实现**。
+> 版本：0.2（2026-09-24：随 `identity-auth-and-keystore` 实现定型。在 0.1 的首次冻结之上：§2 补充类型归属（`PeerTrust` 当次持久事实快照、`EntropySource`/`EntropyError` 熵源端口），§4.1/§5.1 把入口定型为「结构化字段 + 调用方读到的当次持久事实快照」（状态机自身不访问存储），§7 冻结 keystore 端口最终形状并**删除** `KeyPurpose::DeviceIdentity`）
 > 版本：0.1（2026-09-23：首次冻结。补上 `docs/CORE_PORTS_AND_STORAGE.md` §1 明确排除的「`identity-auth` 内部状态机」与 `docs/MODULE_ARCHITECTURE.md` §4.8 只给职责、未给签名的那一段）
 > 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §2/§4.8/§4.12/§5、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9/§10/§13/§14、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7/§8、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8/§9/§13、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5/§11、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2/§5.3/§5.4、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8、[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md)
 > 作用：冻结 `identity-auth` 的状态机边界、握手入口契约（输入、输出与交给 core 的 fact）、授权展开、nonce/重放/时钟规则、撤销传播与 `identity-keystore` 端口 trait。**wire 编码不在本文**：设备与节点配对的 HTTP 载荷、二维码、transcript domain 与字段集合仍以 Sync / Node Link 协议为准；持久化面以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11 为准。
@@ -29,6 +30,7 @@
 |---|---|---|
 | 长期密钥生成、签名、平台存储 | `identity-keystore`（经 §7 端口） | `identity-auth` 只持不透明 handle |
 | challenge/nonce 生成与一次性校验、proof 验签 | `identity-auth` | §5 |
+| 挑战 nonce、pairing secret 与密钥材料的随机性 | 注入的熵源端口（§7） | §4.3/§5.2/§7；状态机不读系统随机数，也不自研 PRNG |
 | pairing secret 的内存持有、SAS 计算、配对状态机 | `identity-auth` | §4；secret 不落库、不进 keystore |
 | `pack.*`/`preset.*`/`grant.*` → 命令级 scope 展开 | `identity-auth`（`authorization/`） | §6.1；输入形式只在这里出现 |
 | 命令级授权判定与 Export 交集 | `core`（`broker`） | [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §6.5 |
@@ -42,7 +44,7 @@
 
 - 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。
 - 已在 `core::model` 落地：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）与写集相关 DTO（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
-- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`HandshakeCompletion`、`IdentityFact`、`Authenticated`、`CredentialStatus`、`PairingTarget`、`PairingDecision`、`PairingDraft`、`ClaimVerification`、`SettlementRequest`、`RequestedCapabilities`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`ChallengeId`、`P1363Signature`（64 字节 P1363）。
+- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`HandshakeCompletion`、`IdentityFact`、`Authenticated`、`CredentialStatus`、`PairingTarget`、`PairingDecision`、`PairingDraft`、`ClaimVerification`、`SettlementRequest`、`RequestedCapabilities`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
 - 只存在于 `identity-keystore` 边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`（§7）。
 
 ## 3. 密钥与身份材料
@@ -93,8 +95,9 @@ pub struct PairingDraft {
     pub secret: PairingSecret,          // 只在内存；只有 digest 进写集
 }
 
-/// 认领校验：HMAC/proof 与绑定校验的**唯一入口**。输入是已解码的 claim 字段，
-/// 输出可直接送入 §11.6 的 `PairingClaimWrite`（含 65 字节公钥）。
+/// 认领校验：HMAC/proof 与绑定校验的**唯一入口**。输入是已解码的 claim 字段、调用方从
+/// `TrustStore` 读到的当次 `PairingRecord` 与内存中的 pairing secret；输出可直接送入
+/// §11.6 的 `PairingClaimWrite`（含 65 字节公钥）。
 pub struct ClaimVerification {
     pub pairing: PairingId,
     pub peer: PairingPeer,                 // 已含 public_key
@@ -112,6 +115,39 @@ pub struct RequestedCapabilities {
     pub scopes: ScopeSet,
     pub grants: GrantSet,
 }
+```
+
+`[决定]`（2026-09-24 定型）配对入口的最终形状——每个入口只做纯计算与内存态变更，持久化事实由调用方提交（§4.2 的单事务写集），状态机不访问存储：
+
+```rust
+// 创建：产出待落库的 PairingRecord 草稿 + 只在内存的 secret 与其 digest。
+fn begin_pairing(
+    target: PairingTarget,
+    requested: RequestedCapabilities,
+    display_name: Option<String>,
+    expires_at: Timestamp,          // 调用方按「不超过 5 分钟」算出；状态机只复核上界
+) -> Result<(PairingDraft, PairingWrite), PairingError>;
+
+// 认领：结构 → 绑定 → HMAC 的唯一入口；失败按配对累计计数，第 5 次产出拒绝写集。
+fn verify_claim(
+    pairing: &PairingRecord,        // 调用方读到的当次快照
+    fields: ClaimFields,            // 已解码的 claim 字段（含 65 字节公钥）
+) -> Result<(PairingClaim, PairingClaimWrite), PairingError>;
+
+// 落定：批准/拒绝；批准时给出最终集合校验结论与信任写集。
+fn settle(
+    pairing: &PairingRecord,
+    peer: Option<&PairingPeer>,
+    decision: PairingDecision,
+    at: Timestamp,
+) -> Result<PairingSettlementWrite, PairingError>;
+
+// 过期扫描与启动恢复：返回需要终结的配对写集；重启时未确认且无法继续验密的配对一律终结。
+fn expire(pairings: &[PairingRecord], at: Timestamp) -> Vec<ExpiryWrite>;
+fn recover_after_restart(pairings: &[PairingRecord]) -> Vec<PairingSettlementWrite>;
+
+// SAS：由双方各自计算（§4.4）。
+fn pairing_sas(transcript: SasTranscript, secret: &PairingSecret) -> Sas;
 ```
 
 - 构造校验沿用 `PairingRecord` 的既有不变式（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；设备配对不对带 grants、节点配对不得带 scopes。
@@ -191,10 +227,21 @@ pub struct HandshakeCompletion {
     pub fact: IdentityFact,
     pub at: Timestamp,
 }
+
+/// 调用方从持久化信任读到的**当次**快照：验签公钥的唯一来源（§5.1）。
+/// 状态机不访问存储，因此三个入口都接收该快照。
+pub struct PeerTrust {
+    pub peer: PeerIdentity,
+    /// `None` = 未知对端：hello 仍必须照常签发挑战，不得用错误区分存在性。
+    pub public_key: Option<PeerPublicKey>,
+    pub credential: CredentialStatus,   // active / scope_reduced / revoked / unknown
+    pub scopes: ScopeSet,               // 设备侧
+    pub grants: GrantSet,               // 节点侧
+}
 ```
 
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
-- `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。
+- `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。
 - `[决定]` 三个入口都不读系统时间、不碰 SQLite：持久化事实由返回值带着交给调用方，由写集端口落库（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）。
 
 ```rust
@@ -259,16 +306,16 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 - Node identity 变化（指纹/公钥不一致）进入 `identity_changed`，**不得**自动接受；只有按协议重新配对才能恢复（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.4）。
 - 第一阶段不存在传递信任：Owner 信任 Access Node 不代表信任其下游设备或其他节点。
 
-## 7. `identity-keystore` 端口（目标形状）
+## 7. `identity-keystore` 端口（已定型）
 
-`[待实现]` 端口 trait 由 `identity-auth` 定义、由 `identity-keystore` 实现（[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md) 决策 1/3）。目标形状：
+`[已定型]` 端口 trait 由 `identity-auth` 定义、由 `identity-keystore` 实现（[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md) 决策 1/3）。平台 `cfg` 只允许出现在 `identity-keystore`，`identity-auth` 在所有平台编译与单测。形状：
 
 ```rust
-pub enum KeyPurpose { NodeIdentity, DeviceIdentity }
+pub enum KeyPurpose { NodeIdentity }
 pub enum SecretPurpose { ProviderCredential }
 ```
 
-`[决定]` `KeyPurpose::DeviceIdentity` 是为将来可能在 Daemon 侧产生的设备身份预留的档位，**第一阶段没有调用方**：PWA 与原生客户端的设备密钥由客户端平台自己持有（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.3 的 WebCrypto IndexedDB / Android Keystore / iOS Keychain），不经 Rust 的 `identity-keystore`。实现时若确认用不到，应在实现变更里删掉该取值，而不是留一条无人使用的分支。
+`[决定]`（2026-09-24 定型）**删除 `DeviceIdentity`**：第一阶段没有调用方——PWA 与原生客户端的设备密钥由客户端平台自己持有（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.3 的 WebCrypto IndexedDB / Android Keystore / iOS Keychain），不经 Rust 的 `identity-keystore`；按上一条要求，不保留一条无人使用的分支。将来若 Daemon 侧确实产生设备身份，再按新用例重新登记该取值并同步本节。
 
 ```rust
 /// 不透明引用：不是密钥材料。可以存进 SQLite 的引用列，但不得进日志（SECURITY_DESIGN.md §14.1）。
@@ -288,6 +335,22 @@ pub trait IdentityKeystore: Send + Sync {
     async fn get_secret(&self, purpose: SecretPurpose, key: &str) -> Result<Option<SecretBytes>, KeystoreError>;
     async fn put_secret(&self, purpose: SecretPurpose, key: &str, value: &SecretBytes) -> Result<(), KeystoreError>;
     async fn delete_secret(&self, purpose: SecretPurpose, key: &str) -> Result<(), KeystoreError>;
+}
+```
+
+`[决定]`（2026-09-24 定型）**熵源端口**与 keystore 端口并列，同属 `identity-auth` 定义、组合根注入的边界。它是挑战 nonce、pairing secret 与待生成密钥材料的唯一随机性来源；端口是同步的，失败即失败关闭：
+
+```rust
+/// 熵源端口：不得自研 PRNG，也不得在状态机内直接读系统随机数。
+pub trait EntropySource: Send + Sync {
+    /// 填充随机字节；失败时返回错误，调用方必须失败关闭（不得退回弱随机源）。
+    fn fill(&self, out: &mut [u8]) -> Result<(), EntropyError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EntropyError {
+    #[error("系统熵源不可用")]
+    Unavailable,
 }
 ```
 
