@@ -125,6 +125,13 @@ RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒�
 - alternative_checks（在 Checks 表逐项留证，最终阶段在 `reports/alt-final-verification.md` 汇总）：PV4 `npm run verify`；PV2 `cargo test -p core`；PV5 `cargo test -p storage-sqlite`；PV3 `cargo test -p core -p agent-host`。
 - E2E 记 **NOT_APPLICABLE**；`[e2e-owned]` 门禁行在替代验证完成后由 `e2e check` 自动勾选（tasks 7.3）。
 
+## Final E2E（替代验证）
+
+- 判定：`not-applicable`（理由、依据与用户批准原话见 `plan.md` 的 `## Main E2E`；`openspec-agentic e2e --json` = `enabled=true, command=""`）。
+- 替代验证（tasks 7.1/7.2）在**最终主分支修订 `c58c0a0`** 上执行 5 条命令，全部 exit 0：`cargo test --locked -p core --all-features`（94 passed）、`cargo test --locked -p storage-sqlite --all-features`（12 个测试目标全 ok，含 `session_version_rule` 3 passed；2 ignored 为既有）、`cargo test --locked -p core -p agent-host --all-features`（agent-host 合计 53 passed，含 `view_contract` 1）、`npm run verify`（十道门禁 + fmt + clippy + 全工作区 398 passed / 0 failed / 2 ignored）、`npm run check`（十道门禁单跑）。
+- 证据：`reports/alt-final-verification.log`（逐条命令原文、退出码、计数）与汇总 `reports/alt-final-verification.md`（四项 `alternative_checks` 覆盖核对、资源清理、资产哈希不变）。
+- 资源核对：无临时 SQLite 残留、无遗留 `acpr-fake-acp-agent`/cargo/rustc 进程、未新增 `CARGO_TARGET_DIR`；`git status --porcelain` 前后均为空 ⇒ `fixtures/**`、`compatibility/acp/v1/matrix.json`、`schemas/**`、`Cargo.lock` 与 HEAD 逐字节一致。
+
 ## Failures and Retests
 
 | Issue ID / Task | Source / Check or E2E ID / Attempt / Version | Owner | Fix / Recovery | Review / Readiness Evidence | Retest Evidence | Current Status / Basis |
