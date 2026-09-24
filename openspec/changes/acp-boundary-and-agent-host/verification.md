@@ -124,6 +124,10 @@
 2. **未处理项的处置**：同意按下述方式处理。
 4. **先本地合并**：同意先在本地把本分支合并到 `main`（不推送），PR/CI 门禁另行安排。
 
+### 本地合并记录（2026-09-24）
+
+按第 4 项裁定执行：`feat/acp-boundary-and-agent-host` → **fast-forward** 合入本地 `main`（`094009b` → `6f1515a`，7 个提交），未推送、未开 PR，`origin/main` 仍在 `094009b`。合并后 `npm run check` exit 0。完整证据（合并前后位置、合入提交清单、未随合并完成的事项）见 `reports/du1-integration.md`。
+
 本轮按第 2 项完成的调整（证据见 `reports/wp3-agent-host-supervision.log` 与 `reports/wp4-agent-host-session.log`）：
 
 | 项 | 调整 |
