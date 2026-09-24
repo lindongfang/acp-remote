@@ -111,6 +111,11 @@
 | `RV2`-F2（MAJOR，合同漂移） | 同步三处文字：`docs/MODULE_ARCHITECTURE.md` §4.5、`docs/SECURITY_DESIGN.md` §12.2 的 stderr 行、变更规范 `specs/local-agent-host/spec.md` → 「有界采集 + 只记结构化计数（丢弃字节数/采集总字节数），内容不进日志、可按上限回取」 | `npm run check`（doc links / ACP 资产门禁全绿） |
 | `RV2` 其余 MINOR | `design.md`/`tasks.md`/`plan.md` 的 `libc` 全部改为 `nix` 并标注原因；plan 的模块名改为实际文件；`AGENTS.md` 的「尚未落地」列表去掉两个新 crate；本文件测试计数改为实测值；新增 PV3 候选版本行；`nix 0.30.1` 的 `MIT OR Apache-2.0` 与 Unix 分支「只做编译核验」记入 §4.5 | `npm run check`、`reports/du1-main-verify.log` |
 
+### 检视报告归档
+
+- RV1 第一轮与 RV2 复核轮的报告已写入：`reports/rv1-wp1.md`（WP1 文档/矩阵）、`reports/rv1-wp2.md`（acp-protocol）、`reports/rv1-wp3.md`（进程监督/平台）、`reports/rv1-wp4.md`（会话/目录/启动）。
+- 这些文件在版本控制内；`reports/*.log` 是原始命令输出，按仓库策略不入库（`.gitignore`）。
+
 ### 仍未处理（下一轮必须解决或由用户裁定）
 
 - `RV-WP3-F4`（Unix `killpg` 的 pid 复用窗口）：当前实现按记录下来的 pgid 结束进程组，子进程已被回收时可能误伤复用同一 pid 的进程组。修法是保存 `pidfd` 或在 `exit.done` 时跳过 `killpg`——两者都改变平台实现细节，留待下一轮（当前记为**已接受风险**，仅影响 Unix 且需要极端时序）。
