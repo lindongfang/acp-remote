@@ -143,9 +143,49 @@ RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒�
 
 ## Final Assessment
 
-- Assessment ID / Time：待最终阶段（apply 结束前）
-- Target / Task：`refs/heads/main` 的最终提交（待记录）/ tasks 8.1（`[final-verification]`）
-- CLI State：本文件写入时 `openspec status --change core-turn-view-fields` 为 `all_done` 之前的 `ready`（待复述原始输出）
-- Audit / Evidence：待记录（Checks、Review Findings、Merge History、Main E2E 的引用）
-- Result / Open Issues：未验收（RV1、DU1 候选/合入、替代验证、`e2e check`、`workflow check --stage final` 均待执行）
-- Required Follow-up：RV1 复核 → DU1 候选 PV4 与 review → 本地合入与主分支复跑 → 替代验证四项 → `e2e check` → 最终验收
+- Assessment ID / Time：`A1-core-turn-view-fields-2026-09-24`（执行者：主 Agent，按 `.agents/skills/agentic-verify/SKILL.md` + `openspec/schemas/agentic/procedures/acceptance.md`）
+- Target / Task：本地 `refs/heads/main`（`HEAD == refs/heads/main`，工作区无被跟踪文件改动，实测提交见下方 `agentic-assessment` 块的 `target_commit`）/ 最终验收任务 = tasks 8.1（唯一的 `[final-verification]` 标记行）
+- CLI State：`openspec status --change core-turn-view-fields --json` → `schemaName: agentic`、`isComplete: true`（CLI 完成状态只记录并引用，不改写其含义）；`npx --quiet --no-install openspec-agentic e2e check --change core-turn-view-fields` → `PASS core-turn-view-fields: not-applicable，批准字段非空（用户来源须独立核实）；已按 [e2e-owned] 勾选最终 E2E 任务` + `E2E check: PASS`（该行状态由扩展写回，非主 Agent 手勾）。
+- Audit / Evidence（逐审计组结论）：
+  - **Contracts and Coverage：PASS**。`proposal.md` 的 Intent and Constraints（含两条用户原话与 `decision_bounds`）、非目标与成功判据与实际交付一致：改动只落在 `crates/core`（注入/失败关闭/version 推导）、`crates/storage-sqlite`（1 行 epoch 回填 + 用例）、`crates/agent-host`（契约用例 + 注释）、`docs/**` 与变更记录；无新依赖、无 DDL/端口/wire/schema 变化（区间内 `Cargo.lock` 无变化）。`plan.md` 的 Coverage Index 22 行（7 Requirement + 15 Scenario）逐项有任务、Check ID 与原始证据；范围/语义澄清已按 **Check Plan Changes 1–5** 记录并同步 spec、plan、tasks 与复核结论。
+  - **Delivery and Versions：PASS**。交付单元 DU1（`integrated`，WP1–WP4）；基线 `1cd0416`（= 合入前 `refs/heads/main` = `origin/main`）→ 候选 `6856a6e` → `git merge --ff-only` 合入本地 `main` → 主分支复核。候选与主分支的 PV4 由两个不同的隔离上下文执行（`reports/du1-pv1.log`、`reports/du1-main-verify.log`，均 pin `6856a6e`，计数一致）；合并差异由第三个隔离 reviewer 检视（`reports/rv1-du1.md`）。无竞态：三段执行时间与 `refs/heads/main` 取值逐段核对一致（`reports/du1-integration.md` §3/§4）。
+  - **Project Checks and Resources：PASS**。PV1/PV2/PV3/PV4/PV5 均以原始命令、目录、退出码 0 与日志留证（`reports/wp1-contract-docs.log`、`wp2-core-injection.log`、`wp3-storage-version.log`、`wp4-agent-host-contract.log`、`du1-pv1.log`、`du1-main-verify.log`、`alt-final-verification.log`）；统一入口 `npm run verify` 覆盖十道合同门禁 + fmt + clippy(`-D warnings`) + 全工作区 398 passed / 0 failed / **2 ignored 为既有 `#[ignore]`**；未约定跳过的强范围（无 `--workspace` 之外的削弱，未新增 ignore）。资源：无临时 SQLite 残留、无遗留 fake ACP/cargo/rustc 进程、未新增 `CARGO_TARGET_DIR`，`fixtures/**`、`compatibility/acp/v1/matrix.json`、`schemas/**`、`Cargo.lock` 执行前后与 HEAD 一致。`cargo-deny`/`gitleaks`/`commits` 仅 CI 可判，本文件与交付说明均**未**声称本地通过。
+  - **Independent Reviews：PASS**。RV1（两个隔离 `oracle` 上下文：`reports/rv1-wp1.md` 检视 WP1+WP2 于 `f582376`、`reports/rv1-wp3.md` 检视 WP3+WP4）、RV1-REC（`reports/rv1-wp2-recheck.md`，复核 `f582376..27c9155`，含 7 条变异自检）、RV-DU1（`reports/rv1-du1.md`，检视 `1cd0416..6856a6e`）：**0 BLOCKER / 0 MAJOR**，故无待闭环的 CRITICAL/MAJOR；共 11 条 MINOR + 14 条 SUGGESTION 已逐条处置（`## Review Findings` 表）并留下依据；每组均记录 base/target、上下文隔离、报告路径与结论。
+  - **E2E Design and Execution：NOT_APPLICABLE（合规）**。`plan.md` 记 `not-applicable`，含 `reason`/`basis`/4 条非空 `alternative_checks` 与可追溯到用户原话的 `downgrade_approval`（「同意本变更 Main E2E 记 not-applicable」）；`openspec-agentic e2e --json` 显示 `enabled=true, command=""`（无产品级 E2E 命令），`e2e check` 判 PASS。替代验证按验收要求**另列**为 tasks 7.1/7.2（主 Agent 任务，未并入 `[e2e-owned]` 行），在最终主分支修订 `c58c0a0` 上执行 5 条命令全部 exit 0（`reports/alt-final-verification.log` / `.md`）；`[e2e-owned]` 的 7.3 由扩展在 `e2e check` 判 PASS 后自动勾选。无 mode 变更或不因失败而降级的历史。
+  - **Issue Closure and Evidence Validity：PASS**。`## Failures and Retests` 的 F1–F4 与两级 review 的每条发现均关联原问题 ID、责任人、修复版本与复测证据；反向探针（变异自检）由独立上下文执行并记录了变红/还原过程。证据适用性：`du1-pv1.log`/`du1-main-verify.log` pin `6856a6e`，替代验证 pin `c58c0a0`；其后 `b14e1b2`（替代验证记录）、`57553a1`（`e2e check` 勾选 7.3）与本轮验收提交仅动 `openspec/**` 记录与任务框，属无行为面变化的记录类差异，按既有「验后影响判断」口径复用并在此明示，不重复复制测试。
+- Result / Open Issues：**PASS**（本轮目标提交见下方块）。阻断项：无（0 CRITICAL / 0 MAJOR、无失败/受阻 PV、无未完成任务——仅验收任务 8.1 在勾选前保持待办）。非阻断未解决项（已在权威文档登记，留待后续切片）：`docs/CORE_PORTS_AND_STORAGE.md` §10 的两条 `[open]`（mode/config `version` 语义、`command.completed.result.turnId` 承载版本）、`reports/rv1-wp1.md`/`rv1-wp3.md`/`rv1-wp2-recheck.md`/`rv1-du1.md` 的 SUGGESTION 级记录（`RV1-WP1-F6..F9`、`RV1-WP2-F3/F6`、`RV1-REC-S2/S4`、`RV-DU1-S1/S2` 已在本轮处置或登记）。
+- Required Follow-up：无待复验项；归档按 `.agents/skills/agentic-verify/SKILL.md` 与归档流程另行执行（本验收不授权推送、回滚、发布或归档）。PASS 仅对本轮目标提交及上述有效证据成立；若目标提交或证据再变化，须重新验收。
+
+```agentic-assessment
+assessment_id: "A1-core-turn-view-fields-2026-09-24"
+target_commit: "PENDING"
+contract_digest: "sha256:95f6cc643e0f9928afbef37be794c5046c4d8480da16feba31f05d960f9179a8"
+result: PASS
+evidence:
+  - path: reports/wp1-contract-docs.log
+    sha256: "sha256:350351535a28d8f3125232e174d01eedb8682312311c9ea3f84ac4e0acdd7ac0"
+  - path: reports/wp2-core-injection.log
+    sha256: "sha256:5631fde87d854b60cd030b548f6639cff8fd4d0aad19216592dbdf9d68ff670d"
+  - path: reports/wp3-storage-version.log
+    sha256: "sha256:594f8b3501628bcd9f29f2e5e793763a21857f6a9caa76b2a605e077ca4aff1c"
+  - path: reports/wp4-agent-host-contract.log
+    sha256: "sha256:e65d48e036fb54f992b40029fcde96864ef2aee3e1aad7544af77da6c750736a"
+  - path: reports/du1-pv1.log
+    sha256: "sha256:34c890c28efcd3aa645c528590158de681793e7255d8cc91ca2ae3d932632827"
+  - path: reports/du1-main-verify.log
+    sha256: "sha256:445453c16d68ff8bd54751ec65ab446389e7e497ddd44ce98781c1afaceb7d9f"
+  - path: reports/du1-integration.md
+    sha256: "sha256:f616cd19f3f730a391321c86be2baed02cac957a60265cccdf5fc547908f7878"
+  - path: reports/alt-final-verification.log
+    sha256: "sha256:f14ad13efde0434db000998e6bdbf3617bef907a21e6ff55706545a9f9e9c3d7"
+  - path: reports/alt-final-verification.md
+    sha256: "sha256:7c161db159fc758a19e95e0cf9c0fa53d09acd7db232e71fc9dc9d48e94a3641"
+  - path: reports/rv1-wp1.md
+    sha256: "sha256:cdaffa40e464d4d52ee835d90441701f0c8a203cc9f9cc378838ae5a93f7f9f1"
+  - path: reports/rv1-wp3.md
+    sha256: "sha256:3bc027b555fd76ce0cc5e2032716c718f684f1ca77d007d455cdc913fc491746"
+  - path: reports/rv1-wp2-recheck.md
+    sha256: "sha256:7347f3a5beb522151457526340608590b2fe36046b93c21aaa66e776f6fe2993"
+  - path: reports/rv1-du1.md
+    sha256: "sha256:12dc8da1f436f0ef65911ddb624379886a20086ced186f6013ead3e1c61d2bbb"
+```

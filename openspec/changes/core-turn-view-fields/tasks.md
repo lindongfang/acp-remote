@@ -53,4 +53,4 @@
 
 ## 8. Final Verification
 
-- [ ] 8.1 [final-verification] 负责人：主 Agent；依赖：7.3；按 `.agents/skills/agentic-verify/SKILL.md`（无 skill 发现能力时读 `openspec/schemas/agentic/procedures/acceptance.md`）执行最终验收，核对用户意图、需求、设计、计划、任务与最终主分支证据；在 `verification.md` 记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change core-turn-view-fields --stage final --json`；完成条件：验收结论为 PASS 且该检查 PASS；其余任务未完成或存在未闭环 FAIL/BLOCKED 时不得完成。
+- [x] 8.1 [final-verification] 负责人：主 Agent；依赖：7.3；按 `.agents/skills/agentic-verify/SKILL.md`（无 skill 发现能力时读 `openspec/schemas/agentic/procedures/acceptance.md`）执行最终验收，核对用户意图、需求、设计、计划、任务与最终主分支证据；在 `verification.md` 记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change core-turn-view-fields --stage final --json`；完成条件：验收结论为 PASS 且该检查 PASS；其余任务未完成或存在未闭环 FAIL/BLOCKED 时不得完成。
