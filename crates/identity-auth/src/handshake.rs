@@ -131,17 +131,20 @@ impl Authority {
         };
 
         let mut state = self.state();
-        state.put_challenge(crate::state::ChallengeRecord {
-            kind: request.kind,
-            peer: request.peer.clone(),
-            client_nonce: request.client_nonce.clone(),
-            server_nonce: server_nonce.clone(),
-            connection_id: challenge_id.clone(),
-            negotiated_features: request.negotiated_features.clone(),
-            catalog_revision: request.catalog_revision,
-            binding: request.binding.clone(),
-            expires_at: expires_at.clone(),
-        });
+        state.put_challenge(
+            crate::state::ChallengeRecord {
+                kind: request.kind,
+                peer: request.peer.clone(),
+                client_nonce: request.client_nonce.clone(),
+                server_nonce: server_nonce.clone(),
+                connection_id: challenge_id.clone(),
+                negotiated_features: request.negotiated_features.clone(),
+                catalog_revision: request.catalog_revision,
+                binding: request.binding.clone(),
+                expires_at: expires_at.clone(),
+            },
+            &now,
+        );
         drop(state);
 
         Ok(ChallengeIssue {
@@ -185,6 +188,10 @@ impl Authority {
         }
         if at_or_after(&self.now(), &record.expires_at) {
             return Err(HandshakeError::UnknownChallenge);
+        }
+        // 快照必须属于同一次提交的对端：防止 adapter 传错快照（用别的对端的公钥验签）。
+        if trust.peer != submission.peer {
+            return Err(HandshakeError::UntrustedPeer);
         }
         self.check_binding(submission.kind, &record.binding, trust)?;
 

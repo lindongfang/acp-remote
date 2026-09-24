@@ -407,8 +407,17 @@ fn approve_requires_pending_and_within_requested() {
         vec!["session.list"]
     );
     assert!(
+        authority.has_secret(&pairing(PAIRING)),
+        "批准不提前清除 secret（合同 §4.3）：批准后的状态查询仍要用它做 HMAC 证明；\
+         真正清除发生在首次认证成功或到达 expires_at"
+    );
+    authority.due_pairings(
+        std::slice::from_ref(&created.draft.record),
+        &ts(AFTER_WINDOW),
+    );
+    assert!(
         !authority.has_secret(&pairing(PAIRING)),
-        "批准后 secret 立即清除"
+        "到达 expires_at 必须清除"
     );
     assert_eq!(claimed.display_name, "Test Phone");
 }
@@ -451,9 +460,18 @@ fn reject_produces_no_trust() {
         panic!("必须返回拒绝结果");
     };
     assert_eq!(reason.as_deref(), Some("user denied"));
+    // 拒绝后可保留到原过期时间（合同 §4.3）以支持可靠轮询；过期时由 due_pairings 清除。
+    assert!(
+        authority.has_secret(&pairing(PAIRING)),
+        "拒绝后保留到原过期时间"
+    );
+    authority.due_pairings(
+        std::slice::from_ref(&created.draft.record),
+        &ts(AFTER_WINDOW),
+    );
     assert!(
         !authority.has_secret(&pairing(PAIRING)),
-        "拒绝后 secret 清除"
+        "到达 expires_at 必须清除"
     );
 }
 
@@ -625,6 +643,90 @@ fn rejection_survives_until_original_expiry() {
             .due_pairings(std::slice::from_ref(&rejected), &ts(AFTER_WINDOW))
             .is_empty()
     );
+}
+
+#[test]
+fn first_authentication_consumes_the_approved_pairing_once() {
+    // R54 的正向路径：批准后 secret 仍在内存 → 首次认证收尾必须给出消费目标；
+    // 第二次调用不再消费（避免重复推进状态）。
+    let created = create_device_pairing();
+    let authority = &created.authority;
+    let pending = pending_record(&created.draft.record);
+    authority
+        .settle(
+            &pending,
+            &PairingDecision::Approve {
+                granted_scopes: scopes(&["session.list"]),
+                granted_grants: grants(&[]),
+            },
+            &ts(CREATED),
+        )
+        .expect("批准必须成功");
+    assert!(authority.has_secret(&pairing(PAIRING)));
+
+    let fact = identity_auth::IdentityFact::Device {
+        device: device(DEVICE),
+        scopes: scopes(&["session.list"]),
+    };
+    let first = authority.complete_auth(fact.clone(), Some(&pairing(PAIRING)), &ts(CREATED));
+    assert_eq!(
+        first.consume_pairing,
+        Some(pairing(PAIRING)),
+        "首次认证成功必须给出需要推进为 consumed 的配对"
+    );
+    assert_eq!(first.fact, fact);
+    assert!(
+        !authority.has_secret(&pairing(PAIRING)),
+        "首次认证成功后清除 secret"
+    );
+
+    let second = authority.complete_auth(fact, Some(&pairing(PAIRING)), &ts(CREATED));
+    assert_eq!(
+        second.consume_pairing, None,
+        "同一配对不得被重复消费（已清除即不再推进）"
+    );
+}
+
+#[test]
+fn approved_pairing_still_accepts_status_proofs_before_first_auth() {
+    // 批准后、首次认证前，secret 仍必须可用（pairing-status 的 HMAC 证明依赖它）。
+    let created = create_device_pairing();
+    let authority = &created.authority;
+    let pending = pending_record(&created.draft.record);
+    authority
+        .settle(
+            &pending,
+            &PairingDecision::Approve {
+                granted_scopes: scopes(&["session.list"]),
+                granted_grants: grants(&[]),
+            },
+            &ts(CREATED),
+        )
+        .expect("批准必须成功");
+    assert!(
+        authority.has_secret(&pairing(PAIRING)),
+        "批准不得提前清除：状态查询的 HMAC 证明仍需要它"
+    );
+}
+
+#[test]
+fn approved_secret_is_cleared_at_expiry_even_if_never_authenticated() {
+    // 未经首次认证的已批准配对：到达 expires_at 也必须清除（secret 的硬上界）。
+    let created = create_device_pairing();
+    let authority = &created.authority;
+    let pending = pending_record(&created.draft.record);
+    authority
+        .settle(
+            &pending,
+            &PairingDecision::Approve {
+                granted_scopes: scopes(&["session.list"]),
+                granted_grants: grants(&[]),
+            },
+            &ts(CREATED),
+        )
+        .expect("批准必须成功");
+    authority.due_pairings(std::slice::from_ref(&pending), &ts(AFTER_WINDOW));
+    assert!(!authority.has_secret(&pairing(PAIRING)));
 }
 
 #[test]

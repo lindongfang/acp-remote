@@ -31,6 +31,11 @@ pub struct EphemeralKeystore {
 }
 
 impl EphemeralKeystore {
+    /// 取条目表；锁中毒映射为端口错误而不是 panic（`AGENTS.md` §7：正常路径不用 `unwrap`/`expect`）。
+    fn entries(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, Entry>>, KeystoreError> {
+        self.entries.lock().map_err(|_| KeystoreError::Unavailable)
+    }
+
     /// 用给定熵源构造（生成节点标量时用它取随机数）。
     pub fn new(entropy: std::sync::Arc<dyn EntropySource>) -> Self {
         Self {
@@ -42,7 +47,7 @@ impl EphemeralKeystore {
     /// 用固定标量预置一个节点身份条目（测试可重跑；**不**用于生产）。
     pub fn with_seed(seed: [u8; 32]) -> Self {
         let keystore = Self::new(std::sync::Arc::new(crate::OsEntropy::new()));
-        keystore.entries.lock().expect("进程内条目锁").insert(
+        keystore.entries().expect("新建实例的锁不可能中毒").insert(
             format!(
                 "{}/primary",
                 crate::entry::EntryPurpose::NodeIdentity.directory()
@@ -68,9 +73,7 @@ impl EphemeralKeystore {
     }
 
     fn get(&self, handle: &KeyHandle) -> Result<Vec<u8>, KeystoreError> {
-        self.entries
-            .lock()
-            .expect("进程内条目锁")
+        self.entries()?
             .get(handle.as_str())
             .map(|entry| entry.secret.clone())
             .ok_or(KeystoreError::EntryMissing)
@@ -83,7 +86,7 @@ impl IdentityKeystore for EphemeralKeystore {
         let scalar = self.generate_scalar()?;
         let handle = KeyHandle::new(&format!("{}/{label}", purpose.as_str()))
             .map_err(|_| KeystoreError::EntryInvalid)?;
-        self.entries.lock().expect("进程内条目锁").insert(
+        self.entries()?.insert(
             handle.as_str().to_owned(),
             Entry {
                 secret: scalar.to_vec(),
@@ -117,11 +120,7 @@ impl IdentityKeystore for EphemeralKeystore {
     }
 
     async fn delete(&self, handle: &KeyHandle) -> Result<(), KeystoreError> {
-        let removed = self
-            .entries
-            .lock()
-            .expect("进程内条目锁")
-            .remove(handle.as_str());
+        let removed = self.entries()?.remove(handle.as_str());
         match removed {
             Some(_) => Ok(()),
             None => Err(KeystoreError::EntryMissing),
@@ -150,7 +149,7 @@ impl IdentityKeystore for EphemeralKeystore {
     ) -> Result<(), KeystoreError> {
         let handle = KeyHandle::new(&format!("{}/{key}", purpose.as_str()))
             .map_err(|_| KeystoreError::EntryInvalid)?;
-        self.entries.lock().expect("进程内条目锁").insert(
+        self.entries()?.insert(
             handle.as_str().to_owned(),
             Entry {
                 secret: value.as_bytes().to_vec(),

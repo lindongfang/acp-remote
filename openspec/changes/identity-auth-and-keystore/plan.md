@@ -738,7 +738,7 @@ rows:
 | Wave | Work Packages | 依赖满足条件 | 并发上限 | 说明 |
 | --- | --- | --- | --- | --- |
 | W0 契约与依赖冻结（串行，单执行者） | 1.1 → WP1（2.1–2.3） | 已完成的仓库工作区 | 1 | 文档与 `[workspace.dependencies]` 在 W0 只有一个写入者；本波完成条件 = [PV1]/[PV2] 绿（新 crate 尚未加入 `members`，因此矩阵新增行不受影响）+ 一个基线提交 |
-| W1 `identity-auth` | WP2（2.4–2.9） | W0 的基线提交 | 1 | 本波把 `crates/identity-auth` 写入 `members`；公共形状（端口、写集入参、错误分类）在本波内冻结，供 WP3 与切片 4–7 使用 |
+| W1 `identity-auth` | WP2（2.4–2.9） | W0 的基线提交 | 1 | 本波把 `crates/identity-auth` 写入 `members`；公共形状（端口、入口的领域值返回与快照入参、错误分类）在本波内冻结，供 WP3 与切片 4–7 使用（写集由调用方按 §11.6 组装，见 design「实现期的口径收窄」） |
 | W2 `identity-keystore` | WP3（2.10–2.15） | WP2 的端口与秘密类型冻结 | 1 | 本波把 `crates/identity-keystore` 写入 `members`；`Cargo.toml` 的两次成员写入按 W1 → W2 串行，不并发 |
 | W3 文档收口 | WP4（2.16–2.17） | WP2、WP3 完成 | 1 | 已落地标记与选型结论只在实现确实完成后写入 |
 | W4 交付前验证 | 3.1–3.8 | W0–W3 完成 | 1 | [PV1]–[PV5] 与 RV1；review 必须由不继承实现对话的 reviewer 完成 |

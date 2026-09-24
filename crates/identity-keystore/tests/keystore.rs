@@ -2,6 +2,10 @@
 //!
 //! 平台相关分支用 [`identity_keystore::platform_supported`] 显式分流：Windows 上跑完整往返，
 //! 其它平台上同一批入口必须返回「不可用」且**零写入**（Linux CI 覆盖该路径）。
+//!
+//! 另有一类用例与平台**无关**：条目查找语义（缺失条目不重建、重复删除报缺失、句柄形状校验）。
+//! 这些用例用 [`Availability::Platform`] 显式声明「后端可用」——它们检的是仓库逻辑而不是平台，
+//! 因此在任何平台上都能真实执行（Linux CI 上同样如此，不会变成静默跳过）。
 
 mod support;
 
@@ -12,6 +16,7 @@ use identity_auth::{
     KeystoreError, NodeId, Nonce, SecretBytes, SecretPurpose, SyncHostChallenge,
 };
 use identity_keystore::entry::EntryPurpose;
+use identity_keystore::store::Availability;
 use identity_keystore::{FileKeystore, OsEntropy};
 
 use support::{FixedEntropy, TempRoot, block_on};
@@ -22,6 +27,15 @@ const CONNECTION: &str = "20212223-2425-4627-a829-2a2b2c2d2e2f";
 
 fn keystore(root: &TempRoot, entropy: &Arc<FixedEntropy>) -> FileKeystore {
     FileKeystore::new(root.root().join("keystore"), entropy.clone())
+}
+
+/// 「后端可用」的条目仓库：用于条目查找语义的用例（与平台无关，任何平台都真实执行）。
+fn available_store(root: &TempRoot, entropy: &Arc<FixedEntropy>) -> FileKeystore {
+    FileKeystore::with_availability(
+        root.root().join("keystore"),
+        entropy.clone(),
+        Availability::Platform,
+    )
 }
 
 /// 一段用登记表装配的 transcript（验证「端口签名与协议期一致」）。
@@ -97,6 +111,11 @@ fn delete_makes_the_entry_unavailable() {
 
 #[test]
 fn tampered_entry_is_reported_and_never_overwritten() {
+    if !identity_keystore::platform_supported() {
+        // 不可用平台没有条目可观察：等价行为（所有入口 `Unavailable` + 零写入）在
+        // `tests/fail_closed.rs::unavailable_backend_fails_closed_on_every_entry_point` 中覆盖。
+        return;
+    }
     let root = TempRoot::new("tamper");
     let entropy = FixedEntropy::new();
     let store = keystore(&root, &entropy);
@@ -130,7 +149,8 @@ fn tampered_entry_is_reported_and_never_overwritten() {
 fn missing_referenced_entry_is_reported_without_recreation() {
     let root = TempRoot::new("missing");
     let entropy = FixedEntropy::new();
-    let store = keystore(&root, &entropy);
+    // 白盒声明「后端可用」：本用例检的是条目查找语义，不是平台能力。
+    let store = available_store(&root, &entropy);
     let handle = KeyHandle::new("node-identity/primary").expect("合法引用");
     block_on(async {
         // 引用存在但条目不存在：必须报缺失，绝不静默生成新身份。
@@ -148,6 +168,11 @@ fn missing_referenced_entry_is_reported_without_recreation() {
 
 #[test]
 fn orphan_removal_keeps_existing_identity_usable() {
+    if !identity_keystore::platform_supported() {
+        // 不可用平台没有条目可观察：等价行为（所有入口 `Unavailable` + 零写入）在
+        // `tests/fail_closed.rs::unavailable_backend_fails_closed_on_every_entry_point` 中覆盖。
+        return;
+    }
     let root = TempRoot::new("orphan");
     let entropy = FixedEntropy::new();
     let store = keystore(&root, &entropy);
@@ -201,6 +226,11 @@ fn failed_reference_commit_keeps_the_old_entry_resolvable() {
 
 #[test]
 fn provider_secret_round_trips_and_is_absent_until_written() {
+    if !identity_keystore::platform_supported() {
+        // 不可用平台没有条目可观察：等价行为（所有入口 `Unavailable` + 零写入）在
+        // `tests/fail_closed.rs::unavailable_backend_fails_closed_on_every_entry_point` 中覆盖。
+        return;
+    }
     let root = TempRoot::new("secret");
     let entropy = FixedEntropy::new();
     let store = keystore(&root, &entropy);
@@ -247,7 +277,8 @@ fn provider_secret_round_trips_and_is_absent_until_written() {
 fn purpose_mismatch_and_illegal_handles_are_rejected() {
     let root = TempRoot::new("handles");
     let entropy = FixedEntropy::new();
-    let store = keystore(&root, &entropy);
+    // 白盒声明「后端可用」：句柄形状与用途错配的判定不应依赖平台后端是否存在。
+    let store = available_store(&root, &entropy);
     block_on(async {
         assert_eq!(
             store
@@ -306,29 +337,66 @@ fn salts_are_per_entry_and_plaintext_is_absent() {
             .expect("第二个条目必须存在");
         let second_salt = other_bytes[9 + "secondary".len()..9 + "secondary".len() + 32].to_vec();
         assert_ne!(first_salt, second_salt, "盐必须每条目独立");
+
+        // R74：「不同条目是不同密钥」——公钥必须不同，签名必须不能互相验证通过。
+        let second_public_key = store.public_key(&other).await.expect("第二个公钥必须可读");
+        assert_ne!(
+            public_key.as_bytes(),
+            second_public_key.as_bytes(),
+            "两条目不得派生同一把密钥"
+        );
+        let input = challenge();
+        let transcript = input.transcript().expect("装配必须成功");
+        let first_signature = store.sign(&handle, &transcript).await.expect("必须可签名");
+        assert!(
+            input.verify(&public_key, &first_signature).is_ok(),
+            "自己的签名必须用自己的公钥验证通过"
+        );
+        assert!(
+            input.verify(&second_public_key, &first_signature).is_err(),
+            "条目 A 的签名不得被条目 B 的公钥验证通过"
+        );
     });
 }
 
 #[test]
 fn os_entropy_keystore_has_no_in_process_fallback() {
-    // 默认档位不是进程内实现：`FileKeystore` 在平台不可用时失败，而不会退回内存条目。
-    let root = TempRoot::new("no-fallback");
-    let store = FileKeystore::new(root.root().join("keystore"), Arc::new(OsEntropy::new()));
+    let handle = KeyHandle::new("node-identity/primary").expect("合法引用");
+
+    // (1) 后端不可用：所有入口返回「不可用」，零写入，也没有内存兜底。
+    let blocked_root = TempRoot::new("no-fallback-blocked");
+    let blocked = FileKeystore::with_availability(
+        blocked_root.root().join("keystore"),
+        Arc::new(OsEntropy::new()),
+        Availability::Unavailable,
+    );
     block_on(async {
-        match store.generate(KeyPurpose::NodeIdentity, "primary").await {
-            Ok(_) => assert!(identity_keystore::platform_supported()),
-            Err(error) => {
-                assert_eq!(error, KeystoreError::Unavailable);
-                assert!(!identity_keystore::platform_supported());
-                // 没有任何内存兜底：再次读取仍是缺失，而不是刚生成的条目。
-                let handle = KeyHandle::new("node-identity/primary").expect("合法引用");
-                assert_eq!(
-                    store.public_key(&handle).await,
-                    Err(KeystoreError::EntryMissing)
-                );
-            }
-        }
+        assert_eq!(
+            blocked.generate(KeyPurpose::NodeIdentity, "primary").await,
+            Err(KeystoreError::Unavailable)
+        );
+        assert_eq!(
+            blocked.public_key(&handle).await,
+            Err(KeystoreError::Unavailable)
+        );
     });
+    assert!(blocked_root.files().is_empty(), "不可用后端不得写任何文件");
+
+    // (2) 后端可用但没有条目：「缺失」——不是「刚生成的内存条目」，也不是「不可用」。
+    let root = TempRoot::new("no-fallback-missing");
+    let store = FileKeystore::with_availability(
+        root.root().join("keystore"),
+        Arc::new(OsEntropy::new()),
+        Availability::Platform,
+    );
+    block_on(async {
+        assert_eq!(
+            store.public_key(&handle).await,
+            Err(KeystoreError::EntryMissing),
+            "读路径不得生成身份、也不得退回进程内条目"
+        );
+    });
+    assert!(root.files().is_empty(), "读路径不得写任何文件");
 }
 
 #[test]
@@ -345,6 +413,11 @@ fn entropy_failure_fails_closed_without_writing() {
 
 #[test]
 fn signature_is_p1363_and_verifies_with_the_entry_public_key() {
+    if !identity_keystore::platform_supported() {
+        // 不可用平台没有条目可观察：等价行为（所有入口 `Unavailable` + 零写入）在
+        // `tests/fail_closed.rs::unavailable_backend_fails_closed_on_every_entry_point` 中覆盖。
+        return;
+    }
     let root = TempRoot::new("signature");
     let entropy = FixedEntropy::new();
     let store = keystore(&root, &entropy);

@@ -260,7 +260,10 @@ impl Authority {
 
     /// 落定：批准或拒绝。批准要求状态为 `pending_confirmation`、未过期，且最终集合不超出请求值。
     ///
-    /// 无论批准还是拒绝，都在本层清除内存 secret（合同 §4.3：拒绝与批准都不再需要它）。
+    /// **不在落定时清除 secret**（合同 §4.3）：批准后的配对仍要被 `pairing-status` 之类的
+    /// HMAC 证明使用，直到「首次认证成功」才提前清除（见 [`Authority::complete`]）；
+    /// 被拒绝的配对也可以为可靠轮询保留到原过期时间——两条路径的上界都是 `expires_at`，
+    /// 由 [`Authority::due_pairings`] 在过期时统一清除。
     pub fn settle(
         &self,
         pairing: &PairingRecord,
@@ -292,7 +295,6 @@ impl Authority {
                 if !granted.within(&requested) {
                     return Err(PairingError::CapabilitiesExceedRequested);
                 }
-                self.state().clear_secret(pairing.id());
                 Ok(PairingSettlement::approved(
                     granted_scopes.clone(),
                     granted_grants.clone(),
@@ -305,7 +307,6 @@ impl Authority {
                 ) {
                     return Err(PairingError::WrongState);
                 }
-                self.state().clear_secret(pairing.id());
                 PairingSettlement::rejected(reason.as_deref()).map_err(PairingError::from)
             }
         }

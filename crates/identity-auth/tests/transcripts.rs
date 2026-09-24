@@ -365,19 +365,25 @@ fn assert_vector(document: &Value) {
         .expect("HMAC key 必须是规范 base64url");
         let secret = PairingSecret::try_from_bytes(&key).expect("HMAC key 必须是 32 字节");
         let proof = PairingProof::try_from_base64url(hmac).expect("HMAC 必须规范");
-        if let Some(verified) = vector.verify_hmac(&secret, &proof) {
-            assert!(verified, "{domain}: 固定向量的 HMAC 必须验证通过");
-        }
-        // 不同的 secret 必须不通过（避免「只比较长度」这类退化实现）。
-        let other = PairingSecret::try_from_bytes(&[0u8; 32]).expect("32 字节");
-        if vector.verify_hmac(&secret, &proof).is_some() {
+        let sas = expected.get("sas").and_then(Value::as_str);
+        // 向量分两类，两个分支都必须是**精确**断言（不允许静默跳过）：
+        // - 证明/状态域：入口是 `verify_hmac`，必须精确得 `Some(true/false)`——域分派错位返回 `None` 会失败；
+        // - SAS 域：入口是 `derive_sas`（由 HMAC 输出派生 6 位数字），下面逐字比对。
+        if sas.is_none() {
+            assert_eq!(
+                vector.verify_hmac(&secret, &proof),
+                Some(true),
+                "{domain}: 固定向量的 HMAC 必须验证通过（不得因域分派错位而返回 None）"
+            );
+            // 不同的 secret 必须不通过（避免「只比较长度」这类退化实现）。
+            let other = PairingSecret::try_from_bytes(&[0u8; 32]).expect("32 字节");
             assert_eq!(
                 vector.verify_hmac(&other, &proof),
                 Some(false),
                 "{domain}: 换一把 secret 必须校验失败"
             );
         }
-        if let Some(sas) = expected.get("sas").and_then(Value::as_str) {
+        if let Some(sas) = sas {
             let derived =
                 identity_auth::derive_sas(&transcript, &secret).expect("SAS 派生必须成功");
             assert_eq!(derived.as_str(), sas, "{domain}: SAS 必须等于固定向量");

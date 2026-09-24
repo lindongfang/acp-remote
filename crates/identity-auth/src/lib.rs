@@ -41,6 +41,7 @@ pub use port::{
     EntropyError, EntropySource, IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError,
     SecretBytes, SecretPurpose,
 };
+pub use state::MAX_CHALLENGES;
 pub use transcript::{
     FeatureList, NodeLinkChallenge, NodeLinkPairingOwnerProof, NodeLinkPairingProof,
     NodeLinkPairingSas, NodeLinkPairingStatus, NodeLinkProof, SyncDeviceProof, SyncHostChallenge,

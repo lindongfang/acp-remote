@@ -13,9 +13,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use acp_core::model::{Nonce, PairingId, PeerIdentity, Timestamp};
 
 use crate::transcript::FeatureList;
+use crate::types::at_or_after;
 use crate::types::{
     ChallengeId, ConnectionBinding, ConnectionKind, PairingRequestId, PairingSecret,
 };
+
+/// 挑战缓存的硬上限（远超真实并发连接数；超出时淘汰最早过期的条目）。
+pub const MAX_CHALLENGES: usize = 1024;
 
 /// 一次挑战的内存记录（一次性消费）。
 #[derive(Debug, Clone)]
@@ -107,10 +111,32 @@ impl State {
         self.invalidated.contains(pairing.as_str())
     }
 
-    /// 登记挑战。
-    pub fn put_challenge(&mut self, challenge: ChallengeRecord) {
+    /// 登记挑战：先清扫已过期条目，再在上限内加入（最坏情况淘汰**最早过期**的那条）。
+    ///
+    /// 为什么要清：`AGENTS.md` §5 要求「所有输入都有长度、数量、频率和资源限制」。挑战只会被
+    /// `take_challenge` 消费，而「完成 hello 但不发 proof」的连接会留下永不消费的条目；
+    /// 因此这里用注入时钟做清扫 + 硬上限，使内存占用与真实连接数解耦。
+    /// 淘汰是安全的：被淘汰的客户端只需重新握手（未知挑战本来就是统一的证明失败）。
+    pub fn put_challenge(&mut self, challenge: ChallengeRecord, now: &Timestamp) {
+        self.challenges
+            .retain(|_, record| !at_or_after(now, &record.expires_at));
+        if self.challenges.len() >= MAX_CHALLENGES {
+            if let Some(oldest) = self
+                .challenges
+                .iter()
+                .min_by(|left, right| left.1.expires_at.as_str().cmp(right.1.expires_at.as_str()))
+                .map(|(key, _)| key.clone())
+            {
+                self.challenges.remove(&oldest);
+            }
+        }
         self.challenges
             .insert(challenge.connection_id.as_str().to_owned(), challenge);
+    }
+
+    /// 当前缓存的挑战数（测试用）。
+    pub fn challenge_count(&self) -> usize {
+        self.challenges.len()
     }
 
     /// 取出并**消费**挑战（一次性；缺失即未知或已消费）。

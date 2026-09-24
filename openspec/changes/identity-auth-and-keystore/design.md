@@ -67,10 +67,12 @@
 
 - 一个 `IdentityAuthority` 持有注入的 `keystore`/`entropy`/`clock` 与一份**进程内状态**：配对 secret 明文、挑战缓存（`challengeId` → `{serverNonce, expiresAt, peer, binding}`）、每配对失败计数、已终结但尚未提交的记录。持久事实（配对记录、对端行、信任记录）由调用方以快照入参提供与本变更的写集返回值落库，状态机**不**直接访问存储。
 - 状态机入口（同步，除挑战签发需要经端口签名外均为纯计算）：
-  - 创建：`begin_pairing(target, requested, display_name, expires_at)` → `PairingWrite` 需要的 `PairingRecord` 草稿 + 只在内存的 secret + 其 digest；`expires_at` 由调用方按「不超过 5 分钟」规则算出后传入（状态机只复核上界）。
-  - 认领：`verify_claim(pairing: &PairingRecord, claim_fields)` → 结构校验 → 绑定校验（设备：canonical origin + Host；节点：端点 host）→ HMAC 校验（用内存 secret）→ `PairingClaim`（含 65 字节公钥）与待提交的 `PairingClaimWrite`；失败按配对累计计数，第 5 次失败产生 `PairingSettlement::rejected` 的写集并把该配对在内存标记为不可用。
-  - 落定：`settle(pairing: &PairingRecord, peer: Option<&PairingPeer>, decision, at)` → `PairingSettlementWrite`（批准时同时给出该写入携带的最终集合校验结论）；拒绝/过期不产生信任。
-  - 过期与重启：`expire(at, pairings)` 返回需要终结的配对写集；`recover_after_restart(pairings)` 返回「未确认且无法继续验密」的终结写集并清空内存 secret（启动时由组合根调用）。
+  - 创建：`begin_pairing(pairing_id, spec, requested, display_name, created_at, expires_at)` → `PairingDraft`（含 `PairingRecord` 草稿 + 只在内存的 secret + 派生 SAS 需要的本机 nonce/请求标识）；`expires_at` 由调用方按「不超过 5 分钟」规则算出后传入（状态机只复核上界）。
+  - 认领：`verify_claim(pairing: &PairingRecord, existing: Option<&ClaimedPairing>, fields: &ClaimFields)` → 结构 → 状态/过期 → 绑定校验（设备：canonical origin + Host；节点：端点 host）→ 集合校验 → HMAC 校验（用内存 secret）→ `ClaimOutcome`（`Claimed` 带 65 字节公钥，`to_claim()` 给出 core 的 `PairingClaim`）；相同载荷重发得到 `Repeat`（幂等，不产生第二次写入）；失败按配对累计计数，第 5 次给出 `ClaimRejection::TooManyFailures`（调用方据此提交一次拒绝落定）并把该配对在内存标记为不可用。
+  - 落定：`settle(pairing: &PairingRecord, decision: &PairingDecision, at: &Timestamp)` → `PairingSettlement`（批准时已校验「最终集合不超出请求值」）；拒绝/过期不产生信任，两条路径都清除内存 secret。
+  - 过期与重启：`due_pairings(pairings, at)` 与 `unrecoverable_after_restart(pairings)` 返回需要由调用方终结的配对标识。
+
+**实现期的口径收窄（与上面原表述的差异，已回写合同 §4.1）**：四个入口**返回领域值**（`PairingDraft`/`ClaimOutcome`/`PairingSettlement`/`PairingId`），**不**直接返回 §11.6 的写集 DTO。理由：写集是存储层形状（含审计意图与事务字段），而原子性本就由 `TrustStore` 的单事务语义承担；状态机只负责「算出该发生什么」。代价：切片 4–7 的 adapter 多一步组装（`ClaimedPairing::to_claim()` 已在 `identity-auth` 提供），好处是 `identity-auth` 不认识 `core::ports` 的写集类型。
   - SAS：`pairing_sas(transcript_inputs, secret)` → 6 位十进制字符串（HMAC-SHA256 前 4 字节 u32be `% 1_000_000`，左补零）。
 - 并发与原子性由**调用方提交**保证：状态机只产生写集，`TrustStore` 的单事务语义（`claim_pairing`/`settle_pairing`/`expire_pairings`）是唯一提交点，因此 §4.2 的 5 条规则不需要在内存里再实现一遍锁语义。内存态与已提交状态的关系固定为「内存态只允许比已提交状态更严格」（例如内存里把配对标记为失效，但绝不出现「内存里批准、库里没有信任」）。
 - 锁粒度：内存态用 `std::sync::Mutex`（不引入 runtime）。**不跨 `await` 持锁**：需要签名的路径（挑战签发）先取状态做计算，再在锁外调用 `keystore.sign`，最后短锁写入挑战缓存；`verify_claim`/`verify_proof` 全程同步（HMAC/验签都是 CPU 计算），不需要异步。
@@ -79,13 +81,16 @@
 
 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1 冻结的三个入口保留，并按实现需要补一个**持久事实快照**入参；本设计把这一定型写入合同 §5.1（同一变更内）：
 
-```
-hello(kind, peer, binding, supported_features, trust: &PeerTrust, at) -> ChallengeIssue | Failure
-verify_proof(submission, trust: &PeerTrust, at) -> Authenticated | Failure
-complete(fact, at) -> Vec<PendingAudit> + 待提交的落定写集（配对转 consumed、last_seen）
+```text
+hello(request: &ChallengeRequest, trust: &PeerTrust) -> Result<ChallengeIssue, HandshakeError>
+verify_proof(submission: &ProofSubmission, trust: &PeerTrust) -> Result<Authenticated, HandshakeFailure>
+complete_auth(fact, pairing: Option<&PairingId>, at: &Timestamp) -> Completion   // consume_pairing 交调用方组装写集
 ```
 
-- `PeerTrust` 是调用方从 `TrustStore` 读到的**当次**快照：对端标识、公钥、记录状态（`active`/`pending`/`revoked`）、当前 scope/grant。`verify_proof` 只使用这份快照里的公钥验签（合同 §5.1 硬约束），并据记录状态派生 `CredentialStatus`（`Active`/`ScopeReduced`/`Revoked`/`Unknown`）。这样「验签公钥只来自持久化信任」与「授权从最新持久记录计算」都不需要状态机做 IO，且两件事都有直接测试。
+- `hello` 是唯一带 `await` 的入口（签宿主证明）：**先签名、成功后才登记挑战**，失败不留半成品。
+- `Completion` 只带「需要推进为 consumed 的配对」与同一时间戳；审计与 `last_seen` 写集由调用方按 §11.6 组装（与上面配对入口同一口径）。
+
+- `PeerTrust` 是调用方从 `TrustStore` 读到的**当次**快照：对端标识、公钥、凭据状态、持久化绑定（`host_binding`：设备为 canonical origin、节点为 endpoint）与节点角色（`node_kind`），以及当前 scope/grant。`verify_proof` 只使用这份快照里的公钥验签（合同 §5.1 硬约束），并据记录状态派生 `CredentialStatus`（`Active`/`ScopeReduced`/`Revoked`/`Unknown`）。这样「验签公钥只来自持久化信任」与「授权从最新持久记录计算」都不需要状态机做 IO，且两件事都有直接测试。
 - 被否的备选：让 `identity-auth` 直接依赖 `core::ports::TrustStore` 做读。否掉的理由：会把纯状态机耦合到异步存储端口，使「同一输入必得同一结果」的测试必须携带存储替身，且违反 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1「三个入口都不碰 SQLite」的原始意图；读面快照入参同样满足「不得取握手消息里自带的公钥」。
 - 检查顺序固定并逐条测试：① 字段长度/类型（含 base64url 无填充、P1363 恰 64 字节）→ ② 挑战存在且未被消费且未过期（注入 `Clock`，TTL 15 秒）→ ③ 绑定一致 → ④ 从快照取公钥并验签。①–④ 任一步失败都返回**同一个**证明失败分类（不区分原因），并追加 `device.auth_failed` 审计意图；只有审计写集与失败分类交给调用方。
 - 一次性消费在 ③ 之后、④ 之前落定：验签成功即消费；验签失败也消费（防重放穷举），两者的区别只在审计结果。重放同一 proof 因此必然失败。

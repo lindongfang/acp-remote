@@ -623,6 +623,46 @@ fn node_link_challenge_requires_catalog_revision() {
 }
 
 #[test]
+fn challenge_cache_is_bounded() {
+    // R30 的资源边界：反复 hello 但不提交 proof 的连接不得让内存单调增长。
+    let state = setup();
+    for _ in 0..(identity_auth::MAX_CHALLENGES + 64) {
+        let issue = block_on(state.authority.hello(
+            &request(),
+            &PeerTrust::unknown(PeerIdentity::Device(device(DEVICE))),
+        ))
+        .expect("签发必须成功");
+        assert!(!issue.server_nonce.as_str().is_empty());
+    }
+    assert!(
+        state.authority.challenge_cache_len() <= identity_auth::MAX_CHALLENGES,
+        "挑战缓存必须有硬上限"
+    );
+}
+
+#[test]
+fn trust_snapshot_must_belong_to_the_same_peer() {
+    // 快照主体与提交主体错配（adapter 传错快照）必须拒绝，而不是用别的对端的公钥验签。
+    let state = setup();
+    let issue = block_on(
+        state
+            .authority
+            .hello(&request(), &trust(&state.peer, CredentialStatus::Active)),
+    )
+    .expect("签发必须成功");
+    let mut mismatched = trust(&state.peer, CredentialStatus::Active);
+    mismatched.peer = PeerIdentity::Device(device("9c8f6b1d-7a35-4f0b-9b6a-2f6d5c4e3b1a"));
+    let failure = state
+        .authority
+        .verify_proof(
+            &submission(&issue, |transcript| state.peer.sign(transcript)),
+            &mismatched,
+        )
+        .expect_err("快照主体错配必须拒绝");
+    assert_eq!(failure.reason, HandshakeError::UntrustedPeer);
+}
+
+#[test]
 fn connection_kind_must_match_peer_kind() {
     // 连接类型与对端身份类别必须一致（不得用设备标识走节点连接）。
     let state = setup();

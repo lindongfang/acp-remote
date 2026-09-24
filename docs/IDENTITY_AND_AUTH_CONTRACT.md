@@ -1,6 +1,7 @@
 # ACP Remote 身份与认证合同（`identity-auth`）
 
-> 状态：编码前合同（v1 目标形状）。`identity-auth` 与 `identity-keystore` 两个 crate 均未落地；本文冻结实现前必须定型的内部边界，**不代表已实现**。
+> 状态：已定型并已落地（v1）。`identity-auth` 与 `identity-keystore` 两个 crate 均已实现（见 `README.md` 的 crate 表与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.8/§4.12）；本文的入口签名、类型归属与端口形状与实现逐条对应。本合同**没有**合同漂移门禁（`scripts/check-contract-drift.mjs` 只覆盖 `CORE_PORTS_AND_STORAGE.md` §5/§7），因此靠「文档与实现同一变更内改动 + 独立 reviewer 核对 + 常驻测试」维持一致。
+> 版本：0.3（2026-09-24：随 `identity-auth-and-keystore` 的独立 review 把定型块**对齐实现**。0.2 的「目标形状」里 §4.1 写的是入口直接返回 `PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`，实现改为「入口返回领域值、调用方组装写集」（理由与代价见 §4.1 的定型说明）；同时补 `PeerTrust.host_binding`/`node_kind` 与三个握手入口签名、把 §2 清单里不存在的类型名（`HandshakeCompletion`/`ClaimVerification`/`SettlementRequest`）换成实现名，并把 `PairingTarget` 归回「已有并直接复用」）
 > 版本：0.2（2026-09-24：随 `identity-auth-and-keystore` 实现定型。在 0.1 的首次冻结之上：§2 补充类型归属（`PeerTrust` 当次持久事实快照、`EntropySource`/`EntropyError` 熵源端口），§4.1/§5.1 把入口定型为「结构化字段 + 调用方读到的当次持久事实快照」（状态机自身不访问存储），§7 冻结 keystore 端口最终形状并**删除** `KeyPurpose::DeviceIdentity`）
 > 版本：0.1（2026-09-23：首次冻结。补上 `docs/CORE_PORTS_AND_STORAGE.md` §1 明确排除的「`identity-auth` 内部状态机」与 `docs/MODULE_ARCHITECTURE.md` §4.8 只给职责、未给签名的那一段）
 > 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §2/§4.8/§4.12/§5、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9/§10/§13/§14、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7/§8、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8/§9/§13、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5/§11、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2/§5.3/§5.4、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8、[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md)
@@ -42,9 +43,10 @@
 
 `[决定]` 本文引入的类型名归属（避免与 `core::model` 已有类型重复）：
 
-- 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。
+- 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingTarget`（纯 token 枚举，不带载荷）、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`、`AuditAction`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。`identity-auth` 把其中出现在端口与公开 API 里的类型**如实转出**（`pub use acp_core::model::{…}`），使端口实现方（`identity-keystore`）无需依赖 `core`（§5 依赖矩阵不允许该边）。
 - 已在 `core::model` 落地：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）与写集相关 DTO（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
-- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`HandshakeCompletion`、`IdentityFact`、`Authenticated`、`CredentialStatus`、`PairingTarget`、`PairingDecision`、`PairingDraft`、`ClaimVerification`、`SettlementRequest`、`RequestedCapabilities`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
+- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`Completion`（收尾入口的返回值：事实 + 时间 + 需要推进为 `consumed` 的配对）、`IdentityFact`、`Authenticated`、`CredentialStatus`、`HandshakeFailure`/`HandshakeFailureClass`、`PairingSpec`（配对目标 + 本机绑定：设备为 canonical origin、节点为 endpoint 与角色）、`PairingDecision`、`PairingDraft`、`PairingRequestId`、`ClaimFields`、`ClaimKindFields`、`ClaimOutcome`、`ClaimRejection`/`ClaimFailureClass`、`ClaimedPairing`、`RequestedCapabilities`、`PairingStatusView`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`Sas`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
+- 只存在于 `identity-auth` 的**授权词表镜像**：`authorization::{PACKS, PRESETS, GRANTS, LOCAL_CAPABILITIES}`；唯一机器来源仍是 `compatibility/commands/v1/commands.json`（§6.1），镜像由常驻测试逐项断言。
 - 只存在于 `identity-keystore` 边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`（§7）。
 
 ## 3. 密钥与身份材料
@@ -117,38 +119,78 @@ pub struct RequestedCapabilities {
 }
 ```
 
-`[决定]`（2026-09-24 定型）配对入口的最终形状——每个入口只做纯计算与内存态变更，持久化事实由调用方提交（§4.2 的单事务写集），状态机不访问存储：
+`[决定]`（2026-09-24 定型）配对入口的**已实现**形状——每个入口只做纯计算与内存态变更，持久化事实由调用方组装写集（§4.2 的单事务写集）后提交，状态机不访问存储：
 
 ```rust
-// 创建：产出待落库的 PairingRecord 草稿 + 只在内存的 secret 与其 digest。
-fn begin_pairing(
-    target: PairingTarget,
-    requested: RequestedCapabilities,
-    display_name: Option<String>,
-    expires_at: Timestamp,          // 调用方按「不超过 5 分钟」算出；状态机只复核上界
-) -> Result<(PairingDraft, PairingWrite), PairingError>;
+impl Authority {
+    // 创建：产出待落库的 PairingRecord 草稿 + 只在内存的 secret + 派生 SAS 需要的本机 nonce/请求标识。
+    // expires_at 由调用方按「不超过 5 分钟」算出后传入；状态机只复核上界（收窄可以、延长不行）。
+    pub fn begin_pairing(
+        &self,
+        pairing_id: &PairingId,          // 由调用方的 IdGenerator 分配（状态机不分配持久标识）
+        spec: &PairingSpec,              // 目标 + 本机绑定（设备＝canonical origin，节点＝endpoint+kind）
+        requested: &RequestedCapabilities,
+        display_name: Option<&str>,
+        created_at: &Timestamp,
+        expires_at: &Timestamp,
+    ) -> Result<PairingDraft, PairingError>;
 
-// 认领：结构 → 绑定 → HMAC 的唯一入口；失败按配对累计计数，第 5 次产出拒绝写集。
-fn verify_claim(
-    pairing: &PairingRecord,        // 调用方读到的当次快照
-    fields: ClaimFields,            // 已解码的 claim 字段（含 65 字节公钥）
-) -> Result<(PairingClaim, PairingClaimWrite), PairingError>;
+    // 认领：结构 → 状态/过期 → 绑定 → 集合 → HMAC 的唯一入口。
+    // existing 是调用方从存储读到的「该配对已固定的对端」（没有则 None）：相同载荷重发返回
+    // ClaimOutcome::Repeat（幂等，不产生第二次写入）；不同载荷返回 NotClaimable。
+    pub fn verify_claim(
+        &self,
+        pairing: &PairingRecord,         // 调用方读到的当次快照（含登记绑定与请求集合）
+        existing: Option<&ClaimedPairing>,
+        fields: &ClaimFields,           // 已解码的 claim 字段（含 65 字节公钥）
+    ) -> Result<ClaimOutcome, PairingError>;
 
-// 落定：批准/拒绝；批准时给出最终集合校验结论与信任写集。
-fn settle(
-    pairing: &PairingRecord,
-    peer: Option<&PairingPeer>,
-    decision: PairingDecision,
-    at: Timestamp,
-) -> Result<PairingSettlementWrite, PairingError>;
+    // 落定：批准要求 pending_confirmation 且未过期，且最终集合不超出请求值；
+    // 拒绝可从 created/pending_confirmation 进入。两条路径都清除内存 secret。
+    pub fn settle(
+        &self,
+        pairing: &PairingRecord,
+        decision: &PairingDecision,
+        at: &Timestamp,
+    ) -> Result<PairingSettlement, PairingError>;
 
-// 过期扫描与启动恢复：返回需要终结的配对写集；重启时未确认且无法继续验密的配对一律终结。
-fn expire(pairings: &[PairingRecord], at: Timestamp) -> Vec<ExpiryWrite>;
-fn recover_after_restart(pairings: &[PairingRecord]) -> Vec<PairingSettlementWrite>;
+    // 过期扫描与启动恢复：返回需要由调用方终结（ExpiryWrite）的配对；
+    // 重启时未确认且无法继续验密的配对**全部**终结（secret 只在内存）。
+    pub fn due_pairings(&self, pairings: &[PairingRecord], at: &Timestamp) -> Vec<PairingId>;
+    pub fn unrecoverable_after_restart(&self, pairings: &[PairingRecord]) -> Vec<PairingId>;
 
-// SAS：由双方各自计算（§4.4）。
-fn pairing_sas(transcript: SasTranscript, secret: &PairingSecret) -> Sas;
+    // 状态视图：created 阶段只暴露状态与过期时间（其余字段为 None）。
+    pub fn pairing_status(
+        &self,
+        pairing: &PairingRecord,
+        peer: Option<&ClaimedPairing>,
+        sas: Option<Sas>,
+    ) -> PairingStatusView;
+
+    // SAS：本机展示用（双方各自计算；绝不把本机结果当作对端结果下发）。
+    pub async fn pairing_sas(
+        &self,
+        pairing: &PairingRecord,
+        peer: &ClaimedPairing,
+    ) -> Result<Sas, PairingError>;
+}
+
+// 写集组装（调用方一侧）：认领成功后用 ClaimedPairing::to_claim() 得到 core 的 PairingClaim，
+// 再放进 §11.6 的 PairingClaimWrite / PairingSettlementWrite 单事务提交。
+impl ClaimedPairing {
+    pub fn to_claim(&self) -> Result<PairingClaim, PairingError>;
+}
 ```
+
+`[决定]`（2026-09-24 定型说明）为什么入口返回**领域值**而不是直接返回写集：
+
+- `core::ports` 的写集 DTO（§11.6）是**存储层**形状（含审计意图、事务字段）。若状态机直接产出它们，
+  `identity-auth` 的公开 API 就会把「事务字段顺序」这类存储细节固定下来，而 §4.2 要求的原子性本就由
+  `TrustStore` 的单事务语义承担；状态机的职责是「算出该发生什么」并且「内存态只允许比已提交状态更严格」。
+- 因此写集由调用方在**同一事务**里按 §11.6 组装：入口返回的领域值（`PairingDraft`/`ClaimOutcome`/
+  `PairingSettlement`/`PairingId` 列表）是组装输入，`design.md` D3 与本节保持同一口径。
+- 代价（已记录）：切片 4–7 的 adapter 需要多写一行组装代码；好处是 `identity-auth` 不需要认识
+  `core::ports` 的写集类型，纯状态机边界更窄。
 
 - 构造校验沿用 `PairingRecord` 的既有不变式（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；设备配对不对带 grants、节点配对不得带 scopes。
 - `claimed` 只存在于服务端事务与审计，**不对外可见**（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.0）。
@@ -201,7 +243,9 @@ pub struct ChallengeRequest {
     pub kind: ConnectionKind,
     pub peer: PeerIdentity,          // 未知 id 也必须生成挑战，不得用错误区分设备是否存在
     pub binding: ConnectionBinding,
-    pub supported_features: Vec<String>,
+    pub client_nonce: Nonce,        // 对端在 hello 里提交的 nonce（进入证明 transcript，必须原样记住）
+    pub negotiated_features: FeatureList,  // 协商结果的**实际**集合（由 adapter 决定，拥有 feature 词表）
+    pub catalog_revision: Option<u64>,     // Node Link 必填；Sync 必须为 None
 }
 
 pub struct ChallengeIssue {
@@ -222,11 +266,26 @@ pub struct ProofSubmission {
     pub signature: P1363Signature,
 }
 
-/// 3. 收尾：认证成功后的**唯一**副作用入口（pairing 转 consumed、last_seen、审计）。
-pub struct HandshakeCompletion {
+/// 3. 收尾：认证成功后的**唯一**副作用入口（配对转 consumed、last_seen、审计）。
+/// 它**不**直接写库：返回需要推进为 consumed 的配对，由调用方在
+/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集里同一事务提交。
+pub struct Completion {
     pub fact: IdentityFact,
-    pub at: Timestamp,
+    pub at: Timestamp,                          // 同一次写入的审计与 last_seen 用同一时间
+    pub consume_pairing: Option<PairingId>,     // 已批准配对的首次认证时非空
 }
+
+/// 三个入口（已实现形状）：
+///
+/// ```text
+/// Authority::hello(&self, request: &ChallengeRequest, trust: &PeerTrust) -> Result<ChallengeIssue, HandshakeError>
+/// Authority::verify_proof(&self, submission: &ProofSubmission, trust: &PeerTrust) -> Result<Authenticated, HandshakeFailure>
+/// Authority::complete_auth(&self, fact: IdentityFact, pairing: Option<&PairingId>, at: &Timestamp) -> Completion
+/// ```
+///
+/// `hello` 是唯一带 `await` 的入口（它要签宿主证明）；它先签名、成功后才把挑战放进内存缓存
+/// （失败不留半成品）。`verify_proof` **消费**挑战（未知/已消费/已过期一律同一类失败），
+/// 并在验签前重新核对绑定。
 
 /// 调用方从持久化信任读到的**当次**快照：验签公钥的唯一来源（§5.1）。
 /// 状态机不访问存储，因此三个入口都接收该快照。
@@ -235,10 +294,19 @@ pub struct PeerTrust {
     /// `None` = 未知对端：hello 仍必须照常签发挑战，不得用错误区分存在性。
     pub public_key: Option<PeerPublicKey>,
     pub credential: CredentialStatus,   // active / scope_reduced / revoked / unknown
+    /// 持久化信任里的绑定：设备为 canonical origin、节点为 endpoint。
+    /// 用来逐字核对连接声明的 origin/endpoint（`Host` 与它的自洽性同时被检查）。
+    pub host_binding: Option<String>,
+    /// 该对端在本机的节点角色（设备侧为 `None`）。
+    pub node_kind: Option<NodeKind>,
     pub scopes: ScopeSet,               // 设备侧
     pub grants: GrantSet,               // 节点侧
 }
 ```
+
+- `[决定]` 凭据状态与失败分类的分工：`CredentialStatus::{Revoked, Unknown}` **不是**握手失败——签名有效就返回 `Authenticated`，由 server 按
+  `credential` 决定关闭连接并映射到 `auth.device_revoked`/`auth.device_unknown`（Node Link 为对应码）；只有签名/绑定/挑战本身不成立才是
+  `HandshakeFailure`（对端可见分类统一为 `AuthenticationFailed`，审计动作按连接类型给出，§14.2）。
 
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
 - `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。

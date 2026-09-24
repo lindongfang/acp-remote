@@ -673,15 +673,6 @@ impl PeerTrust {
             grants: GrantSet::empty(),
         }
     }
-
-    /// 是否可用于验签（有公钥且记录不是撤销/未知状态）。
-    pub fn is_usable(&self) -> bool {
-        self.public_key.is_some()
-            && matches!(
-                self.credential,
-                CredentialStatus::Active | CredentialStatus::ScopeReduced
-            )
-    }
 }
 
 /// 交给 core 的已验证事实。core 只消费它，不重新验证签名，也不据此跳过授权判定。

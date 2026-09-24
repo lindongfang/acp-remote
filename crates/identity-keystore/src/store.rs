@@ -26,19 +26,70 @@ use crate::platform::{unwrap_secret, wrap_secret};
 /// 生成私钥标量时的最大重试次数（熵源给出零值/超范围的标量时必须换一个，而不是接受它）。
 const MAX_SCALAR_ATTEMPTS: usize = 8;
 
+/// 后端可用性：由平台决定，**测试与审计脚本可以显式覆盖**。
+///
+/// 为什么把它做成显式值而不是到处写 `cfg!`：非 Windows 的失败关闭路径是本 crate 最重要的行为，
+/// 但它恰好是「本机跑不到」的那条路径。把可用性变成构造参数后，**同一个用例可以在任何平台执行
+/// 两条路径**（[`FileKeystore::with_availability`]），Linux 上真实的 `platform_supported() == false`
+/// 与 Windows 上强制 `Unavailable` 走同一批断言。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Availability {
+    /// 平台提供可用后端（Windows）：读写真正落到 DPAPI + 文件系统。
+    Platform,
+    /// 平台没有后端（非 Windows）：**所有**入口一律返回 `KeystoreError::Unavailable`，不触碰文件系统。
+    Unavailable,
+}
+
+impl Availability {
+    /// 不可用时在入口直接失败（读取/删除都不能「看起来像条目缺失」）。
+    fn require(self) -> Result<(), KeystoreError> {
+        match self {
+            Self::Platform => Ok(()),
+            Self::Unavailable => Err(KeystoreError::Unavailable),
+        }
+    }
+
+    /// 由编译期平台决定。
+    const fn detected() -> Self {
+        if cfg!(windows) {
+            Self::Platform
+        } else {
+            Self::Unavailable
+        }
+    }
+}
+
 /// 平台安全存储的目录实现。
 pub struct FileKeystore {
     root: PathBuf,
     entropy: Arc<dyn EntropySource>,
+    availability: Availability,
 }
 
 impl FileKeystore {
     /// 构造。`root` 由组合根决定；本方法**不**创建任何目录（避免「不可用平台也留下目录」）。
     pub fn new(root: impl Into<PathBuf>, entropy: Arc<dyn EntropySource>) -> Self {
+        Self::with_availability(root, entropy, Availability::detected())
+    }
+
+    /// 显式指定可用性构造：**仅供测试与审计脚本**，生产装配用 [`FileKeystore::new`]。
+    ///
+    /// 用途是让「平台不可用 → 失败关闭且零写入」这条本机跑不到的路径可以在任何平台上被真实执行。
+    pub fn with_availability(
+        root: impl Into<PathBuf>,
+        entropy: Arc<dyn EntropySource>,
+        availability: Availability,
+    ) -> Self {
         Self {
             root: root.into(),
             entropy,
+            availability,
         }
+    }
+
+    /// 当前可用性（测试用来断言 `new` 取自平台检测）。
+    pub fn availability(&self) -> Availability {
+        self.availability
     }
 
     /// 根目录。
@@ -47,6 +98,9 @@ impl FileKeystore {
     }
 
     /// 条目路径：`<root>/<purpose>/<label>.<version>`。
+    ///
+    /// **调用方必须先校验标签**：[`EntryHeader::new`] 与 [`EntryHeader::decode`] 都拒绝分隔符与控制字符，
+    /// 本方法只做拼接（不返回 `Result`）——把未校验的文本传进来就会得到目录穿越。
     pub fn entry_path(&self, purpose: EntryPurpose, label: &str) -> PathBuf {
         self.root
             .join(purpose.directory())
@@ -126,14 +180,17 @@ impl FileKeystore {
     }
 
     /// 解开条目并返回明文秘密值。
-    fn read_secret(&self, purpose: EntryPurpose, label: &str) -> Result<Vec<u8>, StoreError> {
+    ///
+    /// 返回 [`SecretBytes`]（析构清零）：签名与读公钥路径上的明文副本同样被清零，
+    /// 而不是在堆上留下未清零的 `Vec<u8>`。
+    fn read_secret(&self, purpose: EntryPurpose, label: &str) -> Result<SecretBytes, StoreError> {
         let (header, wrapped) = self.read_entry(purpose, label)?;
         let entropy = header.additional_entropy();
         let secret = unwrap_secret(&wrapped, &entropy)?;
         if !purpose.accepts_len(secret.len()) {
             return Err(StoreError::Corrupt);
         }
-        Ok(secret)
+        Ok(SecretBytes::new(&secret))
     }
 
     /// 删除条目；不存在时返回明确错误（不静默成功）。
@@ -164,6 +221,7 @@ impl FileKeystore {
 #[async_trait]
 impl IdentityKeystore for FileKeystore {
     async fn generate(&self, purpose: KeyPurpose, label: &str) -> Result<KeyHandle, KeystoreError> {
+        self.availability.require()?;
         let entry_purpose = EntryPurpose::from_key_purpose(purpose);
         let scalar = self.generate_scalar()?;
         self.write_entry(entry_purpose, label, &scalar)?;
@@ -171,10 +229,11 @@ impl IdentityKeystore for FileKeystore {
     }
 
     async fn public_key(&self, handle: &KeyHandle) -> Result<PeerPublicKey, KeystoreError> {
+        self.availability.require()?;
         let (purpose, label) = parse_handle(handle)?;
         let secret = self.read_secret(purpose, &label)?;
-        let secret_key =
-            p256::SecretKey::from_slice(&secret).map_err(|_| KeystoreError::EntryCorrupt)?;
+        let secret_key = p256::SecretKey::from_slice(secret.as_bytes())
+            .map_err(|_| KeystoreError::EntryCorrupt)?;
         let point = secret_key.public_key().to_encoded_point(false);
         PeerPublicKey::try_from_bytes(point.as_bytes()).map_err(|_| KeystoreError::EntryCorrupt)
     }
@@ -186,13 +245,14 @@ impl IdentityKeystore for FileKeystore {
     ) -> Result<P1363Signature, KeystoreError> {
         use p256::ecdsa::signature::Signer as _;
 
+        self.availability.require()?;
         let (purpose, label) = parse_handle(handle)?;
         if purpose != EntryPurpose::NodeIdentity {
             return Err(KeystoreError::PurposeMismatch);
         }
         let secret = self.read_secret(purpose, &label)?;
-        let secret_key =
-            p256::SecretKey::from_slice(&secret).map_err(|_| KeystoreError::EntryCorrupt)?;
+        let secret_key = p256::SecretKey::from_slice(secret.as_bytes())
+            .map_err(|_| KeystoreError::EntryCorrupt)?;
         let signing_key = p256::ecdsa::SigningKey::from(secret_key);
         let signature: p256::ecdsa::Signature = signing_key.sign(transcript);
         P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
@@ -200,6 +260,8 @@ impl IdentityKeystore for FileKeystore {
     }
 
     async fn delete(&self, handle: &KeyHandle) -> Result<(), KeystoreError> {
+        // 可用性先于句柄形状：平台不可用时连「条目是否存在」都不该被探测。
+        self.availability.require()?;
         let (purpose, label) = parse_handle(handle)?;
         self.remove_entry(purpose, &label)?;
         Ok(())
@@ -210,9 +272,10 @@ impl IdentityKeystore for FileKeystore {
         purpose: SecretPurpose,
         key: &str,
     ) -> Result<Option<SecretBytes>, KeystoreError> {
+        self.availability.require()?;
         let entry_purpose = EntryPurpose::from_secret_purpose(purpose);
         match self.read_secret(entry_purpose, key) {
-            Ok(secret) => Ok(Some(SecretBytes::new(&secret))),
+            Ok(secret) => Ok(Some(secret)),
             Err(StoreError::Missing) => Ok(None),
             Err(error) => Err(error.into_port()),
         }
@@ -224,12 +287,14 @@ impl IdentityKeystore for FileKeystore {
         key: &str,
         value: &SecretBytes,
     ) -> Result<(), KeystoreError> {
+        self.availability.require()?;
         let entry_purpose = EntryPurpose::from_secret_purpose(purpose);
         self.write_entry(entry_purpose, key, value.as_bytes())?;
         Ok(())
     }
 
     async fn delete_secret(&self, purpose: SecretPurpose, key: &str) -> Result<(), KeystoreError> {
+        self.availability.require()?;
         let entry_purpose = EntryPurpose::from_secret_purpose(purpose);
         match self.remove_entry(entry_purpose, key) {
             Ok(()) => Ok(()),
@@ -279,14 +344,25 @@ fn create_private_directory(directory: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// 原子写：临时文件 → （Unix `0600`）→ `rename`；失败时清理临时文件。
+/// 原子写：临时文件 → （Unix `0600`）→ `rename`；**任何**失败都不留临时文件。
+///
+/// 临时名带进程 id + 进程内单调计数器：同一条目的两次并发写不会复用同一个临时路径，
+/// 因此不会出现「一个 writer rename 到另一个 writer 的半截文件」。
+/// 整个写入过程由 [`TempFileGuard`] 包住：只有成功 rename 后才解除守卫，其余任何返回路径都会删掉临时文件。
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     let parent = path.parent().ok_or(StoreError::HeaderInvalid)?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or(StoreError::HeaderInvalid)?;
-    let temporary = parent.join(format!(".{name}.tmp-{}", std::process::id()));
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = parent.join(format!(".{name}.tmp-{}-{sequence}", std::process::id()));
+    let mut guard = TempFileGuard {
+        path: temporary.clone(),
+        armed: true,
+    };
 
     {
         use std::io::Write as _;
@@ -304,8 +380,21 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
             .map_err(|error| StoreError::Io(error.kind().to_string()))?;
     }
 
-    fs::rename(&temporary, path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        StoreError::Io(error.kind().to_string())
-    })
+    fs::rename(&temporary, path).map_err(|error| StoreError::Io(error.kind().to_string()))?;
+    guard.armed = false;
+    Ok(())
+}
+
+/// 临时文件守卫：析构时若仍处于「已武装」状态就删除临时文件（失败路径不留残留）。
+struct TempFileGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }

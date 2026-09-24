@@ -147,6 +147,11 @@ impl Authority {
         let challenges = state.clear_challenges();
         (secrets, challenges)
     }
+
+    /// 当前缓存的挑战数（上限见 [`crate::MAX_CHALLENGES`]；用于资源边界的回归测试）。
+    pub fn challenge_cache_len(&self) -> usize {
+        self.state().challenge_count()
+    }
 }
 
 impl std::fmt::Debug for Authority {

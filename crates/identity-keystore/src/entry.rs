@@ -39,6 +39,17 @@ pub const PRIVATE_KEY_LEN: usize = 32;
 /// 附加熵的域分离标签（长度前缀 transcript 的一部分）。
 const ENTROPY_DOMAIN: &[u8] = b"acp-remote/keystore-entry/v1";
 
+/// 标签形状是否合法：非空、≤ 128 字节、不含路径分隔符与控制字符。
+///
+/// **只此一份**：[\`EntryHeader::new\`]（写入路径）与 [\`EntryHeader::decode\`]（读取路径）共用它，
+/// 因为标签会被拼进文件路径——两侧不对称就会给「decode 后自己拼路径」的调用方留下目录穿越。
+pub fn is_valid_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= MAX_LABEL_LEN
+        && !label.contains(['/', '\\', '\0'])
+        && !label.chars().any(char::is_control)
+}
+
 /// 条目用途 token。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EntryPurpose {
@@ -119,11 +130,7 @@ impl EntryHeader {
         version: u16,
         salt: [u8; SALT_LEN],
     ) -> Result<Self, StoreError> {
-        if label.is_empty()
-            || label.len() > MAX_LABEL_LEN
-            || label.contains(['/', '\\', '\0'])
-            || label.chars().any(char::is_control)
-        {
+        if !is_valid_label(label) {
             return Err(StoreError::Path(label.to_owned()));
         }
         if version != FORMAT_VERSION {
@@ -171,6 +178,9 @@ impl EntryHeader {
         let label = std::str::from_utf8(&bytes[9..label_end])
             .map_err(|_| StoreError::HeaderInvalid)?
             .to_owned();
+        if !is_valid_label(&label) {
+            return Err(StoreError::HeaderInvalid);
+        }
         let mut salt = [0u8; SALT_LEN];
         salt.copy_from_slice(&bytes[label_end..salt_end]);
         let wrapped = &bytes[salt_end..];
