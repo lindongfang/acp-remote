@@ -750,7 +750,7 @@ pub trait IdGenerator: Send + Sync {
 19. `[决定]` **提交前的 view 收口（`SYNC_PROTOCOL.md` §10.3 的身份与会话版本）**：owned 提交在 `commit_owned` 漏斗内、调用 `SessionStore::commit` **之前**完成两件事，因此落盘 view、重放 view 与广播所依据的 payload 同源：
     - **turn 归属**：事件类型属于 §10.3 要求 `turnId` 的集合（`turn.*`、`user.message.delta`、`agent.message.delta`、`agent.message.completed`、`agent.thought.delta`、`tool.call.started`/`updated`/`completed`、`permission.requested`、`elicitation.requested`）且该事件已被归属到某个 turn 时，view 顶层必须有 `turnId`，取值等于 core 已定稿的权威 turn；**不得**向其它事件类型添加未协商字段，无归属的事件不得出现该字段。适配器已给出同名字段时：取值一致 → 保留原字节；取值不同或值不是字符串 → 显式 `InvalidRequest`、不写任何行、不发布任何帧。归属只在批组装时定稿一次，注入是它的唯一消费者（不重新推导）。
     - **会话版本**：事件类型属于 §10.3 要求 `version` 的集合（`session.mode.changed`、`session.config.changed`）时，view 顶层必须有十进制字符串 `version`，取值等于该次提交后的会话版本。推导规则与存储层一致：含 `StateChange` 的提交为当前版本 + 1，否则不变；提交后必须与 `CommitOutcome.version` 比对，不一致 → `PortError::Corrupt`、不发布该批、不得报告成功（比对发生在存储返回之后，已落盘的行不由 core 撤销）。幂等命中（`replayed`）时不比对：返回的是首次提交的结果，第二次提交的 view 不得被重写。imported 路径**不**注入这两个字段（`turnId`/`version` 由拥有该会话的节点注入，`payloadDigest` 覆盖 Owner 给出的视图字节），只保留其取值。
-    - **两个已登记的边界**：① 失败关闭（`turnId` 冲突或版本漂移）发生在 `flush` 组装之后，该批适配器事件**不再重投**（调用方按 §6 第 9 条的失败语义决定是否把 turn 判为失败），不得重试时假装该批从未到达；② 无状态变更的提交里存储层**不**校验 `expected_version`（§5.2 只对 `Update` 校验），因此 core 的推导/比对就是该组合的失败关闭点，且可能发生在落盘之后。
+    - **两个已登记的边界**：① 失败关闭（`turnId` 冲突或版本漂移）发生在 `flush` 组装之后，该批适配器事件**不再重投**（调用方按本条 ① 的失败语义——与 §6 第 9 条同口径——决定是否把 turn 判为失败），不得重试时假装该批从未到达；② 无状态变更的提交里存储层**不**校验 `expected_version`（§5.2 只对 `Update` 校验），因此 core 的推导/比对就是该组合的失败关闭点，且可能发生在落盘之后。
     - **无归属的降级**：turn 终结后晚到的、类型属于 §10.3 `turnId` 集合的事件（适配器异步尾巴）没有权威 turn，**不**注入（`owned_event.turn_id` 与 view 同时为 NULL），宁可缺字段也不伪造；该降级必须有用例固定，并留给 Sync 切片裁定是否拒绝。
 
 ## 7. `storage-sqlite` v2 表结构

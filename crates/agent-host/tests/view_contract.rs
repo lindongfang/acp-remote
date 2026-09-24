@@ -57,11 +57,16 @@ const CORE_ONLY: &[&str] = &[
     "agent.message.completed",
 ];
 
-/// §10.3 要求字段、但**本用例的四个场景不会产出**的类型（逐条原因见下），因此它们必须与下面集合相等断言里的
+/// §10.3 要求字段、但**本用例的四个场景不会产出**的类型（逐条原因见下方注释），因此它们必须与下面集合相等断言里的
 /// 「已检查集合」互补。
 /// 它们必须与本用例实际检查过的类型合起来恰好等于两张表（下面的集合相等断言），因此任何类型从
 /// 「已检查」里滑进这里（或凭空消失）都会让用例变红。
-const NOT_EXERCISED: &[&str] = &["user.message.delta", "turn.cancelled"];
+const NOT_EXERCISED: &[&str] = &[
+    // fake ACP 只回 agent chunk，不产生用户消息，因此没有场景产出该类型。
+    "user.message.delta",
+    // 本用例不驱动 `cancel`，因此没有场景产出该类型。
+    "turn.cancelled",
+];
 
 fn host(scenario: &str) -> std::sync::Arc<AgentHost> {
     std::sync::Arc::new(AgentHost::new(
