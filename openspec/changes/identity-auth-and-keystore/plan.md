@@ -18,7 +18,7 @@
 
 ## Coverage Index
 
-> **evidence 口径**：下面 R1–R90 各行的 `evidence` 指向**首次交付该能力时**的日志（WP 轮，revision `5c9d2c4`/`627bb8e`）。能力本身在后继轮次未改变，最终收口轮的等价证据（同一命令、同一 crate 版本，revision `3a247a5`）见 `verification.md` 的 RV5/RV6 Check 行的 `rv5-pv*`/`rv5-mutation`/`rv5-selfcheck-rg`，因此这里不逐行改写（R86 一行已额外补指修复轮日志）。
+> **evidence 口径**：下面 R1–R90 各行的 `evidence` 指向**首次交付该能力时**的日志（WP 轮，revision `5c9d2c4`/`627bb8e`）。能力本身在后继轮次未改变，后续各收口轮的等价证据（同一命令、同一 crate 版本）见 `verification.md` 的 Check 行：RV5/RV6 轮 revision `3a247a5`、RV6/RV7 轮 `69dd81f`、RV7/RV8 轮 `c1fd65d`（最新一轮的证据为 `rv8-*` 日志；此后只有只改 `openspec/changes/identity-auth-and-keystore/*.md` 的记录提交，代码等价性由编排者声明），因此这里不逐行改写（R86 一行已额外补指修复轮日志）。
 
 
 ```agentic-coverage
