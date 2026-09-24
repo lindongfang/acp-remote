@@ -531,7 +531,7 @@ rows:
 - 每个轨道一个独立 coder 执行者与其自己的 worktree（`git worktree add`）；构建目录用 `CARGO_TARGET_DIR` 隔离，**不允许两个执行者共用同一个 `target/`**。
 - 每个 WP 的交付前独立 review（RV1）必须由**不继承实现对话**的执行者完成；缺少隔离上下文时相关任务记 BLOCKED，不得以自审替代。
 - 只有主 Agent 可写 `plan.md`/`tasks.md`/`verification.md`；子 Agent 返回结构化 handoff（固定提交、命令、日志路径、差异范围）。
-- 文件单一写入者（跨轨道也不得并发写）：`Cargo.toml`（按波次 W0 → W1 → W2 串行写）、`docs/*` 与状态表（WP1）、`crates/acp-protocol/**`（WP2）、`crates/agent-host/src/{lib,error,limits,supervisor}.rs` 与 `platform/**`、`bin/**`（WP3）、`src/{session,mapper,interaction}.rs`（WP4）、`src/{catalog,config,credentials}.rs`（WP5）、`reports/*` 按检查 ID 一文件一写者。
+- 文件单一写入者（跨轨道也不得并发写）：`Cargo.toml`（按波次 W0 → W1 → W2 串行写）、`docs/*` 与状态表（WP1）、`crates/acp-protocol/**`（WP2）、`crates/agent-host/src/{lib,error,limits,process,platform}.rs`、`src/host.rs` 的运行时/路由部分、`src/bin/acpr-fake-acp-agent.rs` 与 `tests/supervision.rs`（WP3）、`src/{session,mapper}.rs`、`src/host.rs` 的 `SessionBackendFactory` 部分与 `tests/session.rs`（WP4）、`src/{config,launch}.rs`、`src/host.rs` 的 `AgentCatalog` 部分与 `tests/{catalog.rs,support/mod.rs}`（WP5；`src/host.rs` 为三轨共享文件，按波次串行写）、`reports/*` 按检查 ID 一文件一写者。
 - `Cargo.lock` 在 W0 因新增 workspace 依赖变更一次；W1/W2 因新成员再各变更一次（只增成员，不做 `cargo update`/版本升级）；W3 之后不得再解析依赖。
 - 无并行能力时按 roles 串行执行并如实记录；串行不改变上面每条轨道的完成条件与证据要求。
 

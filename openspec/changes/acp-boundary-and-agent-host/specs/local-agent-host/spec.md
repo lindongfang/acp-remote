@@ -6,7 +6,7 @@
 
 ### Requirement: Agent 目录暴露与可用性判定
 
-系统 SHALL 从本机配置的 Agent profile 派生 Agent 目录条目，并在该 profile 的启动前提（命令可解析、凭据引用可用）不满足时把对应条目标记为不可用并给出原因；目录查询 MUST NOT 启动任何 Agent 进程。
+系统 SHALL 从本机配置的 Agent profile 派生 Agent 目录条目，并在该 profile 的启动前提（命令可解析、凭据引用可用）不满足时把对应条目标记为不可用；`AgentDescriptor` 本身不含原因字段，原因通过随后 `create`/`agent_capabilities` 的错误类别可观察（例如凭据不可用时返回 `Unavailable(KeystoreUnavailable)`）；目录查询 MUST NOT 启动任何 Agent 进程。
 
 #### Scenario: 未启动进程也能列出 Agent
 
@@ -16,7 +16,7 @@
 #### Scenario: 凭据引用失效只影响该条目
 
 - **WHEN** 某个 profile 的凭据引用在 keystore 中缺失
-- **THEN** 该条目为不可用并给出明确原因，其余 profile 的条目仍按自身状态返回
+- **THEN** 该条目为不可用（`available = false`），随后对它的 `create`/`agent_capabilities` 以明确的凭据不可用错误类别失败，其余 profile 的条目仍按自身状态返回
 
 ### Requirement: 会话创建与 ACP 会话标识映射
 

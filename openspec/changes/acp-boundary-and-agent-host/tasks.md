@@ -38,7 +38,7 @@
 ## 3. Branch Validation
 
 - [x] 3.1 [WP1] 负责人：实现 Agent；依赖：2.4；执行 `node scripts/check-crate-boundaries.mjs` [PV2] 与 `node scripts/check-acp-compatibility.mjs` + `node scripts/check-schema-fixtures.mjs` [PV3]；完成条件：退出码 0，日志写入 `reports/wp1-boundaries.log` 与 `reports/wp1-acp-assets.log`，并记录矩阵列数、trait/类型计数与夹具哈希。
-- [ ] 3.2 [WP1] 负责人：独立 reviewer（新隔离上下文，完整读取 `roles/reviewer.md`）；依赖：3.1，可与 3.1 并行；只读检视 WP1 的固定版本 diff（§5 矩阵与 §4.5 收口措辞是否有歧义、依赖登记与实际口径是否一致、状态表是否夸大为已实现的能力），修复后由新 reviewer 复核 [RV1]；完成条件：报告写入 `reports/rv1-wp1.md`，无未解决阻断项。
+- [x] 3.2 [WP1] 负责人：独立 reviewer（新隔离上下文，完整读取 `roles/reviewer.md`）；依赖：3.1，可与 3.1 并行；只读检视 WP1 的固定版本 diff（§5 矩阵与 §4.5 收口措辞是否有歧义、依赖登记与实际口径是否一致、状态表是否夸大为已实现的能力），修复后由新 reviewer 复核 [RV1]；完成条件：报告写入 `reports/rv1-wp1.md`，无未解决阻断项。
 - [x] 3.3 [WP2] 负责人：实现 Agent；依赖：2.11；执行交付前 project verify：`cargo fmt --all -- --check`、`cargo clippy --locked -p acp-protocol --all-targets --all-features -- -D warnings`、`cargo test --locked -p acp-protocol --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp2-acp-protocol-tests.log`，无失败、无零用例、无全跳过。
 - [x] 3.4 [WP2] 负责人：独立 reviewer；依赖：3.3，可与 3.3 并行；只读检视 raw 保真机制（是否存在经 `Value` 往返后声称保真）、未知判别子与 `_` 方法语义、上限与结构化内容不被文本化、矩阵 row id 引用是否真实对应 [RV1]；完成条件：报告写入 `reports/rv1-wp2.md`，无未解决阻断项。
 - [x] 3.5 [WP3] 负责人：实现 Agent；依赖：2.19；执行 `cargo fmt`、`cargo clippy --locked -p agent-host --all-targets --all-features -- -D warnings`、`cargo test --locked -p agent-host --all-features` [PV4]，并在**本机 Windows x64** 上单独执行 `cargo test --locked -p agent-host --all-features tree_ -- --nocapture` [PV5]；完成条件：PV4 全绿写入 `reports/wp3-agent-host-supervision.log`；PV5 的两条进程树断言通过并写入 `reports/pv5-windows-tree.log`（Linux 只覆盖 unix 分支，如实记录）。
@@ -46,7 +46,7 @@
 - [x] 3.7 [WP4] 负责人：实现 Agent；依赖：2.24；执行交付前 project verify：`cargo fmt`、`cargo clippy -p agent-host -D warnings`、`cargo test --locked -p agent-host --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp4-agent-host-session.log`。
 - [x] 3.8 [WP4] 负责人：独立 reviewer；依赖：3.7，可与 3.7 并行；只读检视 `EndpointEvent` 组装与 `AcpRaw`（sha256、不含换行、结构化不文本化）、交互 request id 保真、turn 终态唯一与取消、能力门控是否真的未发消息 [RV1]；完成条件：报告写入 `reports/rv1-wp4.md`，无未解决阻断项。
 - [x] 3.9 [WP5] 负责人：实现 Agent；依赖：2.27；执行交付前 project verify：`cargo fmt`、`cargo clippy -p agent-host -D warnings`、`cargo test --locked -p agent-host --all-features` [PV4]；完成条件：全部通过且日志写入 `reports/wp5-agent-host-config.log`。
-- [ ] 3.10 [WP5] 负责人：独立 reviewer；依赖：3.9，可与 3.9 并行；只读检视凭据注入交集与失败关闭、不注入节点/设备密钥、profile 来源、空闲回收与关闭顺序交互 [RV1]；完成条件：报告写入 `reports/rv1-wp5.md`，无未解决阻断项。
+- [x] 3.10 [WP5] 负责人：独立 reviewer；依赖：3.9，可与 3.9 并行；只读检视凭据注入交集与失败关闭、不注入节点/设备密钥、profile 来源、空闲回收与关闭顺序交互 [RV1]；完成条件：报告写入 `reports/rv1-wp5.md`，无未解决阻断项。
 
 ## 5. Integration Readiness
 

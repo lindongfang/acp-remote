@@ -51,9 +51,11 @@
 | PV3（候选版本）/ W5 后 | 工作区 = WP2–WP5 + RV1/RV2 修复轮 | 同一批 ACP 资产门禁在候选版本上重跑（`check:acp`、`check:schemas`），确认本变更没有悄悄放宽矩阵或夹具口径 | 主 Agent（集成） | `npm run check` 内的 `check:acp`/`check:schemas` | Windows x64、Node 24.19.0 | PASS（exit 0）：`ACP compatibility matrix OK: 25 methods, 11 updates, 5 content blocks, 3 tool content types, 19 capabilities, 8 invariants, 10 test families (71 rows, schema validated by ajv)`；`17 schemas, 155 fixture files, 12 transcript vectors re-encoded from input, 20 negative vectors rejected as declared` | `openspec/changes/acp-boundary-and-agent-host/reports/du1-main-verify.log` |
 ## Check Plan Changes
 
-1. **Unix 进程组结束的依赖：`libc` → `nix`**（原：`design.md` D6 写「`libc` 是本变更唯一新增的 unix 依赖」；新：`nix` 0.30，`default-features = false`，features `signal`/`process`）。理由：workspace 固定 `unsafe_code = "forbid"`，而 `libc::killpg` 是 `unsafe` 外部函数，直接调用必须写 `unsafe` 块（`forbid` 无法用 `#[allow]` 绕过）；`nix` 提供安全封装，且其 MSRV 低于仓库 `rust-version = 1.85`。风险覆盖：Unix 进程组结束的语义不变（仍是 `killpg(SIGKILL)`），许可证仍为 MIT。受影响任务：2.17（`platform/unix`）、3.5/3.6（PV4/PV5 与 review）。
+1. **Unix 进程组结束的依赖：`libc` → `nix`**（原：`design.md` D6 写「`libc` 是本变更唯一新增的 unix 依赖」；新：`nix` 0.30，`default-features = false`，features `signal`/`process`）。理由：workspace 固定 `unsafe_code = "forbid"`，而 `libc::killpg` 是 `unsafe` 外部函数，直接调用必须写 `unsafe` 块（`forbid` 无法用 `#[allow]` 绕过）；`nix` 提供安全封装，且其 MSRV 低于仓库 `rust-version = 1.85`。风险覆盖：Unix 进程组结束的语义不变（仍是 `killpg(SIGKILL)`），许可证仍为 MIT。受影响任务：2.17（`platform.rs` 的 `#[cfg(unix)]` 分支）、3.5/3.6（PV4/PV5 与 review）。
 2. **stderr 采集的结构化日志口径**（原：`MODULE_ARCHITECTURE.md` §4.5 与 `SECURITY_DESIGN.md` §12.2 写「有界采集并**输出为结构化日志**」；新：只输出**结构化计数**——丢弃字节数（限频 warn）与采集总字节数（EOF 时 info），stderr 内容本身永不进日志）。理由：stderr 可能夹带凭据或 prompt 片段，`SECURITY_DESIGN.md` 的日志脱敏要求优先于「把内容打出来」的便利；内容仍可按上限取回（`Supervisor::stderr_snapshot`），供组合根或诊断路径按需处理。风险覆盖：仍有界、仍可观测丢弃（不再静默）、仍不进入 ACP 通道。受影响任务：2.16、3.6。
 3. **适配器产出的 view 不含 `turnId`/`version`**（原：`docs/SYNC_PROTOCOL.md` §10.3 把 `turnId`/`version` 列为 `turn.*`、`session.mode.changed`、`session.config.changed` 等 view 的最低必填字段；新：`agent-host` 的 mapper 不产出这两个字段）。理由：`SessionEndpoint::prompt(request, at)` 的签名不携带 core 的 `TurnId`，会话 `version` 也由 core 掌握；适配器无法得知它们。core 侧真正消费的字段（`interactionId`、`messageId`/`deltaIndex`/`text`/`block`）已全部提供（`crates/core/src/broker.rs` 的 `view_interaction_id`/`delta_fragment`），因此本地路径功能不受影响；缺口只影响 Sync 切片的 view 字段级校验。风险覆盖：已登记为 `design.md` 的 Risk #10；收口方式（由 core 注入两个字段，或改端口签名）属于 **core 端口/契约变更**，需用户决策，不在本变更内做。受影响任务：2.21（mapper）、3.7/3.8（WP4 的 PV4 与 review），以及下游 Sync 切片。
+
+4. **delta spec 的两处场景措辞修正**（原：1）空闲回收场景写「目录条目转为不可用」；2）profile 来源场景写「配置文件中的条目不被读取为 profile 来源」；新：1）改为「回收不改变目录可用性（仍只由命令解析 + 凭据解析决定），既有会话映射不再被复用、后续 `open` 必须显式失败」；2）改为「profile 只来自注入的配置端口（本 crate 不读任何配置文件），且目录查询确实经由该端口取 profile」）。理由：原措辞 1 与同一规范的可用性 Requirement（启动前提不满足才标记不可用）及 core `AgentDescriptor` 的形状（无非运行态字段）自相矛盾——回收是资源管理而非可用性撤回；原措辞 2 在本层无可证伪接缝。修正后两条子句均有实现、注释与用例（`catalog.rs` 的回收/`open` 失败/可用性不变/按需新代、端口调用计数），并由 RV4 复核者独立确认「修正正确、与实现一致、不掩盖缺陷」。风险覆盖：回收后的会话重连行为从「静默复活死端点」变为「显式失败」——这是收紧而非放宽；受影响任务：2.25–2.27、3.9/3.10（WP5 的 PV4 与 review）。
 
 ## Dependency Handoffs
 
@@ -149,6 +151,15 @@
 | RV2-F5（无会话 runtime 回收无用例） | 新增 `idle_reclaim_also_applies_to_processes_without_sessions`（协商后无会话 → 零值不回收、超时即回收） |
 | 其余未处理项 | 保持登记：`RV-WP3-F4`（Unix pid 复用窗口，接受风险）、`RV-WP2-F3/F6`（矩阵 row id 措辞/出站 id 规范化，已记录偏离与接受）、`RV-WP1-F4`（§5 矩阵缺列，下一切片）、文件所有权表措辞与 RV1-F7 的写范围重叠（随 §4.5 措辞一同处理） |
 
+### RV5 复核轮与 3.2/3.10 关闭（2026-09-24）
+
+- 执行方式：**新的**独立只读上下文 + `bash`（`oracle` agent，run `3cbb9840…`），复核修复提交 `e4a4492`（基线 `d0fa731`），范围同时覆盖 WP1 与 WP5 的条目；报告归档于 `reports/rv1-wp5.md` 的「RV5 复核轮」段（`reports/rv1-wp1.md` 留指针）。
+- 复核者**没有接受实现者的自述**：亲手做了 4 条变异自检（改坏 → 用例变红 → `git checkout --` 还原 → 再跑变绿），并对「stderr 有界脱敏」「`§13.3`」「`TerminateJobObject`」「幻影 `platform/windows`/`platform/unix`」「`cfg` 判据」「许可证」做了六组全仓 grep（含 `git show e4a4492:<path>` 复核）。实跑：`cargo fmt`（0）、`cargo clippy`（0）、`cargo test -p agent-host`（52 passed，与日志一致）、`npm run check`（0，十道门禁）；并独立用 `cargo metadata` 核验 `tracing 0.1.44 = MIT`、`nix 0.30.1 = MIT`、`win32job 2.0.3 = MIT OR Apache-2.0`。
+- 结论：**无 CRITICAL/MAJOR，无未解决阻断项**；`3.2` 与 `3.10` 的完成条件（报告写入 `reports/rv1-*.md`、无未解决阻断项）由此满足并勾选。
+- 该轮另列 6 条 MINOR/SUGGESTION（全部为静态文档事实，不涉及行为/协议/安全/用例有效性）：`plan.md` 第二份所有权清单的幻影文件名、`verification.md:54` 的 `platform/unix` 幻影路径、`design.md` 两处绝对 `cfg` 判据、spec 的「并给出原因」无落点、登记叙述部分不实、`SECURITY_DESIGN.md` 括注串味。这 6 条已在 RV5 之后由主 Agent 修复（`plan.md` 实名化、`platform.rs` 的 `#[cfg(unix)]` 措辞、`design.md` 改为「平台分支 `cfg` 只落这里」、spec 把「原因」落到 `create`/`agent_capabilities` 的错误类别、登记叙述与两份清单对齐、括注改为「只记总字节数与丢弃字节数」），`npm run check` 复核 exit 0。
+- **如实记录**：这 6 条修复是在 RV5 之后做的**文档级**改动，**未再经过一轮独立检视**（RV5 的结论针对 `e4a4492`）；它们没有任何行为/协议/安全含义，且均由 `npm run check` 与静态 grep 可复核，主 Agent 以其自证并对最终验收负责。
+- RV5 同时确认：`Q4-4`（跨 await 持锁）、`Q4-3` 残余、`Q3-2`（`UnknownProfile` 无用例）、`RV4-WP5-F2`（期望集只查 ⊇）仍为可接受的登记项（不构成阻断），但要求在**接线 `app` 之前**收口；该绑定已写入「仍未处理」。
+
 ### RV4 复核轮（3.2 / 3.10 的复核轮，2026-09-24）
 
 - 执行方式：两个**新隔离只读上下文 + `bash`**（`oracle` agent，run `5a389f60…`、`326c2b80…`），分则复核 WP1（文档/矩阵）与 WP5（配置/凭据/目录/回收），对象 `d0fa731`（基线 `4c24fbd`）。本轮刻意改用能自行跑命令的只读 agent，以补上 RV3「无 bash/git」造成的能力缺口：`git diff`、`cargo fmt/clippy/test`、`npm run check` 与门禁由复核者亲自执行。
@@ -176,7 +187,7 @@
 - `RV-WP2-F6`（出站 `id_value` 的字符串转义规范化）：只影响**我们构造**的响应 id（数字 id 路径不受影响），本 crate 的保真承诺只覆盖**收到**的文档；记为已接受。
 - `RV-WP2-F3`（矩阵 row id 引用）：测试改为直接断言矩阵的声明式字段（`wireName`/`wireValue`/`path`/`status`/`delivery`），并以 `invariant_fixtures_exist` 覆盖不变量的夹具存在性；不再声称逐条引用 row id（与 2.11 的原文措辞有偏差，属已记录的偏离）。
 - `RV-WP1-F4`（§5 矩阵缺 `storage-sqlite`/`node-link-client` 列）：既有缺口，属 App/Node Link 切片范围内，本变更不改。
-- `RV-WP1-F7` / `RV-WP4`（`agent-host` 文件所有权表与 WP 写范围）：已把 `session.rs`/`host.rs`/`launch.rs` 的命名写进本文件与 plan，但 `host.rs` 同时含 WP3（运行时/路由）与 WP4/WP5（端口实现）内容——**写范围重叠**已实际发生（W0 段落说明由一把异步锁串行化），下一轮应更新该表的措辞。
+- `RV-WP1-F7` / `RV-WP4`（`agent-host` 文件所有权表与 WP 写范围）：本文件与 `plan.md` 的两份所有权清单（WP 表、单一写入者条）均已实名化，`host.rs` 同时含 WP3（运行时/路由）与 WP4/WP5（端口实现）内容——**写范围重叠**已实际发生（W0 段落说明由一把异步锁串行化），下一轮应更新该表的措辞。
 - **RV3-Q4-4**（`ensure_runtime` 跨 `await` 持 `runtimes` 锁：`resolve_launch`/`Supervisor::start`/`initialize`/崩溃恢复都在锁内）：属**活性/吞吐**缺陷（一个 agent 启动慢会串行阻塞其它 agent 的启动与回收），功能正确性未破。修法（per-agent 初始化锁或 `OnceCell`）留待接线 `app` 前与 `RV3-Q4-3` 的残余交错一起收口；本变更内先把「死 runtime 被复用」与「关闭中启动新进程」两类显式失败收敛掉。
 - **RV3-Q3-2**（`UnknownProfile` 分支无用例）：与目录/启动路径同批收口。
 - **RV3-Q4-6 残余**：`runtime_running` 在锁被占用时返回 `false`，与「未运行」不可区分；已要求回收用例补进程外可观察断言（心跳文件停止）。

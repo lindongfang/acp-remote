@@ -74,7 +74,7 @@
 | `session` | `SessionBackendFactory` + `SessionEndpoint`；core `SessionId` ↔ ACP `sessionId` 映射；live endpoint generation |
 | `mapper` | ACP DTO → `EndpointEvent`/`EventPayload`（`ViewJson` + `AcpRaw`），保留结构化语义 |
 | `interaction` | Agent→client 的权限/elicitation 请求 ↔ core `InteractionId`，等待 `resolve_interaction` |
-| `platform` | `cfg(windows)` / `cfg(unix)` 的 `ProcessTree` 实现；**只有这里出现 `cfg`** |
+| `platform` | `cfg(windows)` / `cfg(unix)` 的 `ProcessTree` 实现；**平台分支 `cfg` 只在这里出现**（`launch.rs` 另有 1 处 `#[cfg(test)]`，`bin/` 无命中；见任务 2.17 的完成条件） |
 | `limits` | 固定 v1 常量（D7） |
 
 所有权与关闭顺序（`AGENTS.md` §7「异步任务必须有所有者、取消路径与关闭顺序」）：
@@ -95,7 +95,7 @@
 
 ### D6 平台差异与进程树
 
-- 内部 trait `ProcessTree` 抽象「结束整棵树」：`platform::windows` 用 Job Object，`platform::unix` 用进程组。crate 其余部分不出现 `cfg`。
+- 内部 trait `ProcessTree` 抽象「结束整棵树」：`platform.rs` 内 `#[cfg(windows)]` 的分支用 Job Object、`#[cfg(unix)]` 的分支用进程组（概念上即 `platform::windows` / `platform::unix`，实现为同一文件内的 cfg 模块）。**平台分支 `cfg` 只落在这个文件**：crate 其余部分不出现平台分支 `cfg`（`launch.rs` 只有 1 处 `#[cfg(test)]`）。
 - **Windows**：`win32job` 2.x（`Job::create` → `limit_kill_on_job_close()` → `set_extended_limit_info()`；结束手段是关闭/丢弃该 Job 的句柄（wrapper 未封装 `TerminateJobObject`，直接 FFI 被 `unsafe_code = "forbid"` 禁止））。**每个 Agent 一个 Job**，句柄由 Daemon 侧的 supervisor 持有。
   - 为什么不是单一全局 Job：单 Job 下无法只结束某一棵 Agent 树（结束整个 Job 会波及全部 Agent），而本 crate 必须支持按 Agent 结束（空闲回收、单个 Agent 崩溃/超时）。`KILL_ON_JOB_CLOSE` 的关键性质（Daemon 崩溃或句柄关闭即停止整棵树）在每 Agent 一个 Job 下同样成立，因为句柄全由 Daemon 进程持有。该解释随本变更写入 `MODULE_ARCHITECTURE.md` §4.5；`KILL_ON_JOB_CLOSE`、Daemon 持有、父→孙清理三条约束不变。
   - 赋值时机：Job 先创建并设置 `KILL_ON_JOB_CLOSE`，再 spawn（`tokio::process::Command`，Windows 上 `Child::raw_handle()` 取句柄），spawn 成功后**在写入任何 stdin 之前**立即 assign。探针同样是「先 spawn 后 assign」，残余窗口见风险 2。

@@ -294,3 +294,181 @@ npm run check          # 合同门禁（WP5 未触碰合同资产，预期无漂
 - 我实跑的四条必跑命令全部退出 0，`cargo test -p agent-host --all-features` 为 **45 passed / 0 failed**，并在 9 次重复运行（catalog ×5 + 整包 ×4）中无一次抖动；额外 `npm run check` 亦退出 0。
 - 本轮新增 10 项发现（F1–F10），其中 MINOR 4 项（F1 顺序无用例、F3 `set_mode` 无法独立钉住、F9 标志检查在锁外、F10 已关闭会话阻塞回收，F10 先于本修复存在）、SUGGESTION 6 项；**没有任何一项构成阻断**。
 - **该 WP 是否存在未解决阻断项：否。** 但「无阻断」不等于「可归档」：`Q4-3` 残余 / `Q4-4` 必须在接线 `app` 前收口，F1/F3/F7/F9 建议与之一并处理，且本轮结论不能替代 Project Verify（工作区 371 条、Linux 目标、E2E）。
+---
+
+## RV5 复核轮（独立 reviewer，新隔离只读上下文 + bash，2026-09-24）
+
+复核对象：`e4a4492`（基线 `d0fa731`）。本轮由复核者**亲手**做反向探针（不接受实现者自述），并做六组全仓 grep 核实「同类实例是否扫干净」。WP1 侧的对应条目亦在本轮范围内（结论见本文件，WP1 报告只留指针）。
+
+# RV5 独立复核报告 · `e4a4492`（基线 `d0fa731`）
+
+**task_id**: `RV5-recheck`（3.2 / 3.10 的复核轮） · **role**: 独立 reviewer（新隔离只读上下文 + bash） · **phase**: 修复后复核（recheck）
+**reviewer role 依据**: `openspec/schemas/agentic/roles/reviewer.md` 全文
+**repository**: `D:/Project/acp-remote`（Windows x64，rustc 1.98.1，Node 24.19.0）
+**base_revision**: `d0fa73162a029cabe64715939db807b89aca383c` · **target_revision**: `e4a4492`（`git diff --stat d0fa731..e4a4492` = 16 文件 / +816 −59）
+**agent_context**: 全新子 Agent，未参与本批实现；只读文件工具 + bash（仅用于 `git` 只读、`grep`、`cargo`/`npm` 门禁）。**未做任何 git 写操作**；三处反向自检的改坏均以 `git checkout -- <file>` 还原。
+
+---
+
+## 0. 版本稳定性声明（先于结论）
+
+- 复核对象固定为提交 `e4a4492`。`crates/**`、`docs/**`、`openspec/**`、`AGENTS.md`、`README.md` 在复核期间相对 HEAD **无我的改动**（`git diff --stat -- crates/` 为空）。
+- **但工作区在我复核期间被另一个写入者改动**：开始时 `git status --porcelain` 只有 ` M .pi/settings.json`；复核进行中新增 ` M openspec/changes/acp-boundary-and-agent-host/reports/du1-integration.md` 与 ` M .../verification.md`（内容为主 Agent 的任务 5.1/5.2/6.5 记录，mtime `11:35:54`/`11:36:02`）。这不是我的改动。因此「结束时 `git status --porcelain` 与开始时一致」这一条**无法字面满足**，原因是并发写入，不是复核者越界。
+- 为消除漂移影响，所有涉及 `verification.md` 的判据我都改为在 **`git show e4a4492:<path>`** 上复算（见 §2、§5）。
+
+---
+
+## 1. 反向自检（实测 4 条，超出要求的 3 条）
+
+方法：改坏源码一个语义点 → 跑对应用例 → 必须变红 → `git checkout -- <file>` → 再跑必须变绿。每条都给出我实测的用例名与输出摘要。
+
+| # | 改坏方式 | 文件 | 用例（实跑名） | 变红输出摘要 | 还原后 |
+|---|---|---|---|---|---|
+| 1 | 删掉 `Endpoint::set_mode` 的 `self.session.touch()`（`session.rs:770`） | `crates/agent-host/src/session.rs` | `catalog::idle_clock_is_refreshed_by_set_mode_without_declared_modes` | `FAILED`，exit 101：`panicked at catalog.rs:629: 刚调用过 set_mode 的会话不得在超时前被回收; left: None, right: Some(1)` | `1 passed; 0 failed`，exit 0 |
+| 2 | 把期望集合校验块（`launch.rs:100–118`）整体移到 `NECESSARY_ENV` 注入（`120–127`）**之后** | `crates/agent-host/src/launch.rs` | `catalog::dropped_credential_bound_to_a_necessary_env_name_fails_before_spawn` | `FAILED`，exit 101：`panicked at catalog.rs:1076: 漏给绑定到 PATH 的凭据必须失败关闭（宿主机 PATH 不得冒充凭据）` | `1 passed; 0 failed`，exit 0 |
+| 3 | 把 stderr 内容**接进协议处理**：`stderr_loop` 增加 `pending/incoming/exit/tree` 参数，用与 `read_loop` 同构的**持久缓冲 + LF 分帧**调 `handle_line` | `crates/agent-host/src/process.rs` | `session::stderr_protocol_messages_never_reach_the_endpoint` | `FAILED`，exit 101：`panicked at session.rs:804: stderr 内容不得进入事件视图：{"deltaIndex":"0","messageId":"…0002","text":"ACPR-STDERR-PROTOCOL-NOISE-MARKER"}` | `1 passed; 0 failed`，exit 0 |
+| 4 | 删掉 `AgentRuntime::is_idle` 的 `filter(|session| !session.is_closed())` → `.filter(|_session| true)` | `crates/agent-host/src/host.rs` | `catalog::closed_session_does_not_block_idle_reclaim` | `FAILED`，exit 101：`panicked at catalog.rs:764: 已关闭的会话不得阻塞空闲回收（否则进程泄漏）; left: Some(1), right: None` | `1 passed; 0 failed`，exit 0 |
+
+**关于第 3 条的额外发现（可证伪性边界）**：先用「按 `read` 分块切分、不做跨块持久缓冲」的粗糙 tee 试了一次，用例**仍绿**——因为 stderr 的读写边界会把一条 JSON 拆成 `{` + 其余两段（我用 `eprintln!` 探针实测到 3 段：`{`、`"jsonrpc":…}`、`{"id":987654321,…}`），两段都解析失败而被忽略。改用与 `read_loop` **同构的持久缓冲分帧**后立即变红。结论：该用例**能**证伪「stderr 以正确分帧被接进协议处理」这一现实失误形态，但**不能**证伪「stderr 以错误分帧被接进协议处理」——后者本身也不构成「stderr 报文进入端点视图」，因此不算覆盖缺口，仅作记录。
+
+---
+
+## 2. 逐条核实本批修复是否真实落地（`git diff d0fa731..e4a4492` 逐文件）
+
+| 期望修复 | 结论 | 证据（target 位置 / 用例名 / 实跑） |
+|---|---|---|
+| 期望集合校验顺序用例 | **PASS** | `crates/agent-host/src/launch.rs:100–118` 的期望集合块位于 `116–123`（现 `120–127`）的 `NECESSARY_ENV` 注入**之前**，注释显式声明 load-bearing；新增用例 `catalog.rs:1058 dropped_credential_bound_to_a_necessary_env_name_fails_before_spawn`（`profile_with_env_vars(..., &["PATH"])` + `FakeCredentials::dropping("PATH")`，断言 `Unavailable` + `!dump.exists()`）。**我以变异测试独立确认该顺序被钉住**（§1 第 2 条） |
+| `set_mode` 单点 `touch` 钉住 | **PASS** | 新增 `catalog.rs:602 idle_clock_is_refreshed_by_set_mode_without_declared_modes`，用 `--no-modes` 造出「未宣告模式 → 不发任何消息」的早退路径，使窗口内只有 `set_mode` 一个刷新点；并把 `modes()` 挪到窗口之前。**变异实测红**（§1 第 1 条） |
+| `set_config` 单点 `touch` 钉住 | **PASS** | 新增 `catalog.rs:658 idle_clock_is_refreshed_by_set_config`（fake child 对 `session/set_config_option` 只回空 result、不发通知）；`session.rs:813` 的 `touch()` 是真刷新点 |
+| `cancel_turn` 单点 `touch` 钉住 | **PASS** | 新增 `catalog.rs:703 idle_clock_is_refreshed_by_cancel_turn`（无 turn 时 `cancel` 幂等空操作、不发消息）。注：`Endpoint::cancel`（`session.rs:762`）经 `AcpSession::cancel_turn`（`session.rs:458–462`，`touch()` 在 `462`）——本用例钉的是该路径 |
+| `shutting_down` 锁内复查 | **PASS（防线，未钉住）** | `host.rs:208`（取锁前）与 `host.rs:215`（取锁后）两处 `SeqCst` 复查；`shutdown_all` 先置位（`host.rs:~342`）再取锁。**诚实说明**：该复查只覆盖纳秒级窗口，无任何用例能钉住它（删掉 `215` 全套用例仍绿）——属纯纵深防御，不是可证伪断言 |
+| 已关闭会话不阻塞回收 | **PASS** | `host.rs:86–97` 改为 `filter(|session| !session.is_closed())`，全部关闭后退回进程级时钟；`session.rs:156–159` 的注释写明不变量；新增 `catalog.rs:745 closed_session_does_not_block_idle_reclaim`（含心跳进程外证据）。**变异实测红/绿**（§1 第 4 条） |
+| `LaunchSpec::Debug` 不打印 `args` | **PASS** | `launch.rs:33–49` 改为 `program` + `arg_count` + `arg_lengths` + `env_names` + `env_count`；单元用例改名 `debug_never_prints_credential_values_or_argument_bodies`，注入 `sk-secret-argument-do-not-log` 并断言不出现在 `{spec:?}`，且断言 `arg_count`/`arg_lengths` 可见。实跑：lib 单元 `3 passed` |
+| stale runtime 重建用例 | **PASS** | `catalog.rs:786 exited_runtime_is_rebuilt_as_a_new_generation`：`crash-on-prompt` 造出「已退出但仍在目录」窗口 → 删 `--dump-env` 快照 → 再次 `agent_capabilities` → 断言 `generation==Some(2)` + **`dump.exists()`**（进程外证据）→ 旧端点必须 `Err(InvalidRequest)`（证明确实先 `close_session`）+ 旧映射不可 `open` |
+| 关闭后进程外证据（`--dump-env`） | **PASS** | `catalog.rs:965 idle_sweep_task_converges_on_shutdown_all` 新增两处：窗口内 `assert!(dump.exists())` + 删快照 + 关闭后 `assert!(!dump.exists())`。这补上了 RV4-WP5-F7 |
+| `stderr-protocol-noise` 场景 | **PASS** | `src/bin/acpr-fake-acp-agent.rs:21` 的 `STDERR_NOISE_MARKER`、`:615–646` 的 `stderr-protocol-noise` 分支（stderr 上写**语法合法**的 `session/update` 通知 + 带 id 响应，stdout 仍正常应答）；bin 头注释与 `tasks.md` 2.13 的场景清单同步 |
+| 「stderr 上的合法 ACP 报文永不进入端点视图」用例 | **PASS** | `tests/session.rs:776 stderr_protocol_messages_never_reach_the_endpoint`：① 请求成功 + `turn.completed`；② 逐事件断言 marker 不在 `payload.view` 也不在 `AcpRaw` 原文；③ 后续 `modes()` 可用 + `runtime_running`。**变异实测红**（§1 第 3 条）——这正是 RV4-WP1-F2（此前「未修复且未登记」的静默缺口）的闭合 |
+
+**小结**：本批 11 项声称的修复**全部真实落地**，且其中 5 项（期望集合顺序、`set_mode`/`set_config`/`cancel_turn` 单点、已关闭会话、stderr 报文不入端点）经我亲手变异验证为**可证伪断言**，不是靠实现者自评。
+
+---
+
+## 3. 实跑命令与计数（我亲自执行，退出码实测）
+
+| 命令 | 退出码 | 输出摘要 |
+|---|---|---|
+| `cargo fmt --all -- --check` | **0** | 无输出 |
+| `cargo clippy --locked -p agent-host --all-targets --all-features -- -D warnings` | **0** | 首跑缓存命中 `Finished … in 0.10s`；`cargo clean -p agent-host`（Removed 2556 files, 949.9MiB）后复跑打印 `Checking agent-host v0.0.0 (D:\Project\acp-remote\crates\agent-host)` → `Finished`，零告警 |
+| `cargo test --locked -p agent-host --all-features` | **0** | 逐目标：lib 单元 **3**、`bin/acpr-fake-acp-agent` 0、`tests/catalog.rs` **21**、`tests/session.rs` **13**、`tests/supervision.rs` **15**、doc-tests 0 = **52 passed / 0 failed / 0 ignored**。逐行 `test result:` 六条全 `ok`，无 `FAILED`/`failures:`；重复跑两次计数一致 |
+| `npm run check` | **0** | **十道门禁全绿**：`check:schemas`（117 valid, 23 invalid, 39 event views）· `check:commands`（12 commands）· `check:errors`（58 codes）· `check:features`（11 feature ids）· `check:assets`（17 schemas, 155 fixture files, 12 transcript vectors, 20 negative vectors, 2 SAS）· `check:acp`（25 methods, 11 updates, 5 content blocks, 3 tool content types, 19 capabilities, 8 invariants, 10 test families / 71 rows）· `check:docs`（367 relative links, 2811 section refs, 143 files）· `check:boundaries`（8 个 crate 与 §5 矩阵一致）· `check:drift`（§7 36 条 DDL + §5 15 trait/87 方法签名一致）· `check:agentic`（PASS×8 + `Totals: 6 passed, 0 failed`） |
+
+**与 `verification.md` 声称的对账**：`e4a4492` 的 PV4/W2 行写「52 个测试全通过（supervision 15、session 13、catalog 21、单元 3；含 RV3/RV4 两批修复新增的 17 个）」（`git show e4a4492:…/verification.md:46`）——**与我的实测逐项一致**；本批新增用例数也对得上（catalog 15→21 = +6、session 12→13 = +1，加上 `d0fa731` 的 +10 = 17）。
+
+**未执行（不得当作已验证）**：`cargo test --locked --workspace --all-features`（`verification.md` 的 378 条未由本轮复算）；`cargo check --target x86_64-unknown-linux-gnu`；任何 E2E。`cargo-deny`/`gitleaks` 本地无等价物。
+
+---
+
+## 4. 同类实例是否扫干净（全仓 grep，范围 `docs/**`、`AGENTS.md`、`README.md`、`openspec/changes/acp-boundary-and-agent-host/**`、`crates/**`）
+
+### 4.1 「stderr 有界脱敏」→ **已扫干净**
+- 权威口径四处同值：`SECURITY_DESIGN.md:376`（改为「内容原样进入…（不做内容脱敏），**内容不进日志**」）、`SECURITY_DESIGN.md:366`、`MODULE_ARCHITECTURE.md:282`、`INITIAL_DESIGN.md:139`（改为「只做有界采集与结构化计数（内容不进日志）」）、`README.md:18`。
+- `grep "有界脱敏"` 全仓**唯一命中**在 `reports/rv1-wp1.md:167`，即 RV4 自己对该缺陷的引文记录 → **合理保留**。
+- `grep "脱敏"` 其余命中（`adr/0008:61` gitleaks `--redact`、`CONFIG_REFERENCE.md:234` 日志格式、`SECURITY_DESIGN.md:55/121/437/546`、`AGENTS.md:192`、`design.md:45/128` D9）均与 stderr 采集无关 → **合理保留**。
+- 观察（非本次判据）：`SECURITY_DESIGN.md:366` 的括注「（变量名与数量级）」是从 env 口径串来的残留短语，读起来与 stderr 不搭；不构成错误，列为 SUGGESTION。
+
+### 4.2 「`§13.3`」→ **已扫干净（就本变更的取舍指针而言）**
+- 在 `e4a4492` 上：`cat` 级逐文件核对，`verification.md:86` 现为 `§14.1`（RV4-F4 闭合）；`verification.md` 内仅剩 `:166`（RV3 历史记录「§13.3 → §14.1」，正反两处都点名 → **合理保留**）。
+- 其余 §13.3 命中都是**别的小节本身**或别的文档的 §13.3：`INITIAL_DESIGN.md:581`（§13.3 CLI）、`LOCAL_ADMIN_PROTOCOL.md:367`（NODE_LINK §13.3 状态确认）、`MODULE_ARCHITECTURE.md:382`（INITIAL_DESIGN §13.3）、`NODE_LINK_PROTOCOL.md:762`（自身 §13.3）、`SECURITY_DESIGN.md:413`（§13.3 保留/压缩/删除，即被误引的那节）、`crates/node-link-protocol/src/pairing.rs:9`（NODE_LINK §8.2/§13.3）→ **全部合理保留**。
+
+### 4.3 「`TerminateJobObject` 作为实际结束手段」→ **已扫干净**
+- 实现侧的表述统一为「结束手段是关闭/丢弃 Job 句柄（`KILL_ON_JOB_CLOSE`），wrapper 未封装 `TerminateJobObject`」：`MODULE_ARCHITECTURE.md:281`、`design.md:46`、`design.md:99`、`tasks.md:26`、`crates/agent-host/src/platform.rs:7` → **全部合规**。
+- 剩余命中 `INITIAL_DESIGN.md:704`：那是 2026-09-18 **一次性探针**（仓库外、直接 FFI）的三种场景记录之一，紧跟其后的结论明确写「必须用 Job Object + 把 `KILL_ON_JOB_CLOSE` 设在守护进程持有的 Job 上」→ **合理保留（历史探针记录，非实现手段声明）**。
+
+### 4.4 「`platform/windows` / `platform/unix` 幻影路径」→ **未扫干净（残留）**
+| 命中 | 判断 |
+|---|---|
+| `openspec/changes/acp-boundary-and-agent-host/plan.md:534` | **残留未修**。该「文件单一写入者」条仍写 `crates/agent-host/src/{lib,error,limits,supervisor}.rs` 与 `platform/**`（WP3）、`src/{session,mapper,interaction}.rs`（WP4）、`src/{catalog,config,credentials}.rs`（WP5）。实际文件是 `process.rs`/`platform.rs`/`session.rs`/`mapper.rs`/`config.rs`/`launch.rs`；`supervisor.rs`/`interaction.rs`/`credentials.rs` 不存在，`catalog.rs` 只是测试文件。**这是 plan.md 内第二份所有权清单**——同一批修复只实名化了 WP 表（`:509–511`）与写范围说明（`:513`），把 `:534` 整个漏掉 |
+| `openspec/changes/acp-boundary-and-agent-host/verification.md:54` | **残留未修（低）**。Check Plan Change 1 的「受影响任务：2.17（`platform/unix`）」仍在用幻影模块路径；应为 `platform.rs` 的 unix 分支 |
+| `openspec/changes/acp-boundary-and-agent-host/design.md:98` | **边界情况**。`platform::windows`/`platform::unix` 是设计层对内部抽象的概念命名（实现是 `platform.rs` 内 `#[cfg] mod inner`），不是文件路径；但同一句「crate 其余部分不出现 `cfg`」是后文 4.5 的同类绝对判据（见下） |
+| `reports/rv1-wp1.md:*` | **合理保留**（RV4 报告对缺陷的引文） |
+
+### 4.5 「`cfg` 只落 `platform`/`bin`」→ **未完全扫干净（残留）**
+- **已修**：`tasks.md:45`（3.6 检视判据，现写「**平台分支** `cfg` 是否只落在 `platform.rs`」）、`plan.md:601`（关注点⑦）、`tasks.md:26`（2.17 完成条件）、`crates/agent-host/src/lib.rs:21`（显式说明 `launch.rs` 1 处 `#[cfg(test)]`、`bin/` 零命中）→ 这一组是 RV4-F5 点名的实例，**确已闭合**。
+- **残留未修**：`openspec/changes/acp-boundary-and-agent-host/design.md:77`「`platform` | …；**只有这里出现 `cfg`**」与 `:98`「crate 其余部分不出现 `cfg`」。两处都是**绝对判据**，与实测冲突（`launch.rs:98` 有 `#[cfg(test)]`；`bin/` 零命中；平台分支确在 `platform.rs`）。与 RV3/RV4 反复判 FAIL 的正是同一类措辞。design.md 属本变更目录、在 grep 范围内 → 判为**残留未修（低，MINOR/说明性）**。
+- 其余 `cfg` 命中（`design.md:15/137`、`plan.md:595`、`proposal.md:74`、`verification.md:36`、`docs/MODULE_ARCHITECTURE.md:123/327/407/618`、`AGENTS.md:121`、`IDENTITY_AND_AUTH_CONTRACT.md:24`）都是 `#[cfg(unix)]` 平台路径或 `identity-*` 的独立约束 → **合理保留**。
+
+### 4.6 「`tracing`/`nix` 许可证」→ **已扫干净（且我做了第三方来源核验）**
+- 我**不听文档**，直接从本地 registry 的 `cargo metadata --locked` 读 `license` 字段：`tracing 0.1.44 = "MIT"`、`nix 0.30.1 = "MIT"`、`win32job 2.0.3 = "MIT OR Apache-2.0"`。
+- 文档对账：`design.md:159`（已从「`tracing`…MIT/Apache-2.0」改为「`tracing 0.1` 与 `nix 0.30.1` 为 `MIT`、`win32job 2.0.3` 为 `MIT OR Apache-2.0`」）✓；`MODULE_ARCHITECTURE.md:135`（tracing MIT / win32job MIT OR Apache-2.0 / nix MIT）✓；`MODULE_ARCHITECTURE.md:281`（win32job MIT OR Apache-2.0、nix 只提供 MIT）✓；`design.md:46/47` ✓。**无残留错误陈述**。
+- 唯一剩者为 `reports/rv1-wp1.md:162` 的 RV4-F1 记录 → **合理保留**。
+
+---
+
+## 5. 对「登记为未处理」条目的可接受性判断（我的独立判断，不默认接受登记里的理由）
+
+| 条目 | 登记里的理由 | 我的判断 | 我的理由 |
+|---|---|---|---|
+| **RV4-WP5-F2** 期望集合只查 ⊇ | 「非安全越界（仍在白名单内），fake 造不出反例」 | **可接受** | 逐字读 `launch.rs:76–94`：白名单是硬上界（越界即 `EnvNotAllowed`），端口返回「白名单内但未绑定」的额外名会被注入，**但仍在白名单内**，即未越过声明边界（`spec.md:165–169`「白名单是注入上限」）。真正的安全判据（不得注入白名单外/保留前缀）有 `EnvNotAllowed` 与 `validate_env_name` 两道独立断言。属「与端口「恰为交集」措辞的偏差」，非越界。**不改判** |
+| **RV4-WP5-F8** spec「并给出原因」无落点 | 「`AgentDescriptor` 无 `reason`；`create`/`agent_capabilities` 的 `Unavailable(KeystoreUnavailable)` 是可观察原因」 | **可接受，但必须与端口形状对齐后收口（不宜长期挂）** | 我独立核对：`crates/core/src/model/backend.rs:18–22` 的 `AgentDescriptor{agent,available,origin}` **确无** `reason`，且该形状是 `docs/CORE_PORTS_AND_STORAGE.md` §3.6 的既有冻结契约，本变更明示不改 core。⇒ `spec.md:9` 与 `:18–19` 的「并给出原因」在本层**字面不可实现**。它不阻断，因为：① 目录的 `available` 是真实观测且有用例；② 原因以错误类别在 `agent_capabilities`/`create` 边界可观察。但这是**本变更自己的 delta spec 里的悬空子句**，登记只写「措辞待与端口形状对齐」而无落点。我判：非阻断，但应在最终验收前改写该子句或以「原因 = 错误类别」写实，不能只登记 |
+| **RV3-Q4-3** 残余交错 | 「现实不可达（core broker 缓存端点），留待接线 `app` 前收口」 | **部分不再成立 → 剩余部分可接受** | 我独立核验两点：① 本批**已闭合**其中一支——`host.rs:215` 的锁内复查把「标志检查在锁外」的纳秒窗口关掉了；② RV4 的「现实不可达」论据我独立复核为真：`crates/core/src/broker.rs:2091` 的 `endpoint()` **先** `lock(&slot.endpoint).clone()`，只在空槽才调 `backends.open(...)`。⇒ 顺行调用下不会反复触发 `open`。剩下的是 `create`/`open` 在 `ensure_runtime` 之后不复查运行状态、以及 `shutdown_agent` 先 `remove` 后 shutdown 的短暂双树。**二者都只产出显式失败或「正在被结束的旧树」**，且 `open` 另有 `is_running` 短路。**可接受**，但我要求登记文字把「已含 `host.rs:215` 锁内复查」写进去，否则下一轮会把已闭合的一半当成未闭合 |
+| **RV3-Q4-4** 跨 `await` 持锁 | 「只损活性/吞吐，被 10s/5s 双重界定」 | **可接受（但把它当「接线前必修」看待）** | `ensure_runtime` 的 `runtimes` guard 覆盖 `resolve_launch`（含 keystore IO）+ `Supervisor::start` + `initialize`（上限 `STARTUP_TIMEOUT`=10s）。**全局单锁**意味着一个慢 Agent 的启动会阻塞 `sweep_idle`、`shutdown_agent`、`shutdown_all` 与其它 Agent 的 `create`。10s 恰等于 `daemon.shutdown_grace_ms`，`shutdown_all` 有可能被拖到边界。功能正确性无破坏（我已看到测试用 `wait_for_generation`/重复采样适配，这是**必要适配而非掩盖**）。判非阻断，但登记若把它降级为「吞吐优化」则我不接受——它是**关闭时延与 daemon grace 的耦合风险**，接线 `app` 前必修 |
+| **RV3-Q3-2** `UnknownProfile` 无用例 | 「4 行、可测而未测」 | **可接受但偏低优先，且不构成阻断** | 我核查：spec 内**没有任何场景**要求「未登记 profile」的行为（`grep 未登记/UnknownProfile` 在 `specs/local-agent-host/spec.md` 零命中），因此这不是 spec 覆盖缺口；分支在 `launch.rs:67` → `error.rs:116` 映射为 `InvalidRequest`，与 core 的「未登记 → InvalidRequest」同族。**非阻断**。但代价确实只有 4 行，我不接受把它拖过最终验收 |
+| **`runtime_running` 的 `try_lock` 局限** | 「已写进代码注释 + 关键结论已迁到心跳文件」 | **可接受，且本批处置合格** | `host.rs:590–606` 的 `try_read_runtimes` 有界重试并**如实声明**「`None` 与『没有该条目』不可区分；进程外证据请用心跳文件」——把不确定写进代码而不是继续假装它是证据，这是正确做法。本批还把 `idle_sweep_task_converges_on_shutdown_all` 的「关闭后不得再起进程」落到 `--dump-env` 快照（RV4-WP5-F7 闭合）。剩余仅「其它用例仍用该诊断函数」，非阻断 |
+
+---
+
+## 6. 未解决阻断项清单
+
+**CRITICAL / MAJOR：无。**
+
+未解决的非阻断项（全部 MINOR 级，且都不影响产品行为/协议/安全/用例有效性）：
+
+1. **`plan.md:534`** 幻影文件清单（`supervisor.rs`/`interaction.rs`/`catalog.rs`/`credentials.rs`/`platform/**`）——同一批实名化漏掉的第二处实例。
+2. **`verification.md:54`** 幻影模块路径 `platform/unix`。
+3. **`design.md:77` / `:98`** 绝对 `cfg` 判据（「只有这里出现 `cfg`」/「crate 其余部分不出现 `cfg`」），与 `launch.rs:98` 的 `#[cfg(test)]` 冲突——与 RV4-F5 同类、未被点名因而未被扫。
+4. **`spec.md:9` / `:18–19`** 「并给出原因」在本层无落点（RV4-WP5-F8 已登记；我判应写实而非长期挂）。
+5. `verification.md:179` 的登记叙述「已把 … 命名写进本文件与 plan」——`本文件` 已为真（我以 `git show e4a4492:` 复核），`plan` 只对 WP 表为真、对 `:534` 不成立 → **叙述仍部分不实**（程度轻于 RV4-F3 当时的程度）。
+6. `SECURITY_DESIGN.md:366` 括注「（变量名与数量级）」串味（SUGGESTION）。
+
+**可证伪依据**：①②③⑤ 都是**可 grep、可逐字核对的静态事实**（`grep -n "platform/unix\|supervisor\.rs\|cfg"` + `git show e4a4492:<path>`），不依赖任何执行；④ 由 `crates/core/src/model/backend.rs:18–22` 的字段清单反证。三处命令均 exit 0（grep 命中即输出、无命中的返回 1，不构成门禁失败——这些项**没有任何门禁会抓**：`check:docs` 只统计小节引用不断言语义，`check:contract-drift`/`check:boundaries` 不读 plan/design 措辞）。
+
+---
+
+## 7. 与本轮结论相关的检查证据状态
+
+| 检查 | 我核对到的证据 | 差异 / 待返回 |
+|---|---|---|
+| 3.5 / PV4（WP3） | `verification.md:46` 声称 52 个测试、10 道门禁 | **与我的实测逐项一致**（§3）；**无差异** |
+| 3.7 / PV4（WP4） | 声称 session 13 | **一致**（我实跑 13） |
+| 3.9 / PV4（WP5） | 声称 catalog 21 | **一致**（我实跑 21） |
+| 3.5 / PV5（进程树） | `reports/pv5-windows-tree.log`，`2 passed, 0 failed, 13 filtered out` | 未由我复跑（不在本轮任务）；`13 filtered out` 与 supervision 15 自洽 |
+| DU1-PV1 | 声称 `npm run verify` 378 条 workspace 测试 | **未由本轮复算**；我实跑的是 `npm run check`（10 门禁，exit 0）与 `-p agent-host`（52）。**不影响本轮代码判断**，应在 6.x/最终验收前由主 Agent 补齐 |
+| 反向探针 | `RV3-2` 行自述「反向自检」 | 我**没有接受其自述**，改为亲手做 4 条（§1）；3 条点名项全部复现为红/绿 |
+
+---
+
+## 8. Report（固定字段）
+
+| 字段 | 值 |
+| --- | --- |
+| task_id | `RV5-recheck`（3.2 / 3.10 的复核轮） |
+| role / phase | 独立 reviewer（新隔离只读上下文 + bash）/ 修复后复核（recheck） |
+| agent_context | 全新子 Agent，未参与实现与本批修复；只读工具 + bash（git 只读、grep、cargo/npm 门禁） |
+| target_revision | `e4a4492`（基线 `d0fa731`） |
+| scope | 本批 16 文件 diff 的全部：`agent-host` 的 `launch.rs`/`host.rs`/`session.rs`/`bin/acpr-fake-acp-agent.rs`、`tests/{catalog,session}.rs`、`docs/MODULE_ARCHITECTURE.md`/`docs/SECURITY_DESIGN.md`、变更目录的 `design/plan/proposal/tasks/verification/specs` |
+| checks | §3 四条命令（全 exit 0）；§4 六组全仓 grep；§1 四条变异自检 |
+| issues | 6 项非阻断（§6），**无 CRITICAL/MAJOR** |
+| result | **无未解决阻断项**（就本批修复的声称而言）；但「同类实例扫干净」**不成立**（§4.4/4.5） |
+| evidence_paths | 本报告；我实跑的终端摘要（§1/§3）；`crates/core/src/broker.rs:2091`、`crates/core/src/model/backend.rs:18–22`、`launch.rs:100–127`、`host.rs:86–97/208/215`、`session.rs:458–462/770/813`、`catalog.rs:602/658/703/745/786/965/1058`、`session.rs(session endpoint)776` |
+| resource_cleanup | 无遗留：`git diff -- crates/` 为空、无 untracked 文件；临时脚本写在 `%TEMP%`；三处改坏已 `git checkout --` 还原 |
+
+### 最终结论
+
+**该变更在本批修复范围（`e4a4492`）内是否存在未解决阻断项：否。**
+
+- 本批 11 项声称的修复**逐条真实落地**，其中 5 项经我亲手变异验证为可证伪（含 RV4 曾判「未修复且未登记」的 stderr 报文不入端点这一静默缺口）。
+- 实跑四条命令全 exit 0：`fmt` 0、`clippy` 0（含冷编译复跑）、`agent-host` 测试 **52 passed / 0 failed**（catalog 21 / session 13 / supervision 15 / 单元 3）、`npm run check` **十道门禁**全绿。计数与 `verification.md` 声称**逐项一致**。
+- **但「同类实例扫干净」不成立**：§4.4 的 `plan.md:534` 与 §4.5 的 `design.md:77/98` 是**只改点名实例**留下的同类残留；§4.6 的许可证事实我已用第三方 registry 独立核验为已扫干净。
+- 「无阻断」**不等于「可归档」**：§6 的第 1/4/5 项与 §5 的 `Q4-4`、`Q4-3` 残余应在接线 `app` / 最终验收前收口；本报告不代替 Project Verify（378 条 workspace、Linux 目标、E2E），也不代替主 Agent 更新任务状态。
+
+**残留风险**：① 工作区在本轮非由我改动（`verification.md`、`du1-integration.md`），任何以当前工作区而非固定提交引用的 `verification.md` 行号都可能漂移；② 未复算 workspace 级测试与 Linux 目标编译；③ `p pv5-windows-tree.log` 未复跑。
