@@ -203,11 +203,11 @@
 | 5.1 交接 | `worker` 子 Agent（fresh 独立上下文，未参与实现/检视）；交接 `openspec/schemas/agentic/roles/integrator.md` **全文** + 交付单元/模式/固定版本/目标分支/**无合并授权**；独立 worktree `D:/Project/acpr-du1-worktree` | 本变更 `reports/du1-integration.md`「独立集成 Agent 交接记录（任务 5.1）」 |
 | 5.2 就绪 | mode = `integrated`；WP 组成 WP1–WP5 + RV1–RV4 修复批次；候选 `e4a4492`；各 WP 的 PV 与独立检视证据的有效性逐项核对 | 同文件「就绪复核（任务 5.2）」 |
 | 6.1 基线核实 | `git rev-parse refs/heads/main` = `4c24fbd665738b7bbb34311d525896caa0215e89`（合入前）；`refs/remotes/origin/main` = `094009b31f32c42928c01f2943eb7cf6e15c6154` | 本文件「目标基线与引用核实（任务 6.1）」 |
-| 6.2 候选构建 | 基线 `094009b` → 候选 `e4a4492`；在仓库外 worktree 内 `cargo build --locked --workspace --all-features` = **exit 0**（`Finished dev profile in 15.28s`、155 条 `Compiling`、0 warning/0 error）；`check-crate-boundaries` exit 0；无集成冲突（fast-forward 链） | 集成 Agent 交接返回（结论已归档到本文件与本变更 `reports/du1-integration.md`） |
+| 6.2 候选构建 | 基线 `094009b` → 候选 `e4a4492`（区间 10 个提交、0 合并提交、58 文件 +13371/−49）；在仓库外 worktree 内 `cargo build --locked --workspace --all-features` = **exit 0**（`Finished dev profile in 15.28s`、155 条 `Compiling`、0 warning/0 error）；`check-crate-boundaries` exit 0；无集成冲突（fast-forward 链） | 集成 Agent 交接返回（结论已归档到本文件与本变更 `reports/du1-integration.md`） |
 | 6.3 PV1（候选） | `npm run verify` = **exit 0**（十道门禁逐道 exit 0 + fmt + clippy + 378 passed/2 ignored） | `reports/du1-pv1.log`（937 行，含逐子项汇总表） |
 | 6.4 候选独立检视 | 待 `du1-review` 返回（`acp-protocol`↔`agent-host` 接口一致性、`LaunchSpec` 边界、`Cargo.toml`/§5 矩阵/文档三者一致、有无「为让测试通过」的痕迹） | `reports/rv1-du1.md` |
 | 6.5 E2E 判定 | `not-applicable` 路径与四项替代检查安排复核通过；无任务依赖必须运行的 E2E | 本变更 `reports/du1-integration.md`「E2E 判定复核（任务 6.5）」 |
-| 6.6 合入（**顺序偏差，已登记**） | 用户裁定「先本地合并」后由主 Agent 在**本地**执行 fast-forward：`094009b` → `e4a4492`（7 个提交）；此后 `e4a4492` → `1035395` → `f7bcf5f` 为文档/证据提交。**未推送、未开 PR**，`origin/main` 仍为 `094009b`。偏差：6.6 发生在 6.3/6.4/6.5 **之前**（用户旨意），因此候选与主分支是同一提交，6.3/6.7 的证据落在完全相同的树上 | 本文件「目标基线与引用核实（任务 6.1）」与「本地合并记录」 |
+| 6.6 合入（**顺序偏差，已登记**） | 用户裁定「先本地合并」后由主 Agent 在**本地**执行 fast-forward：`094009b` → `6f1515a`（7 个提交：W0 文档冻结、`acp-protocol`、`agent-host`、RV1/RV2 修复与归档、RV2 补齐），随后继续在 `main` 上叠加 `4c24fbd`（本地合并与裁定记录）、`d0fa731`（RV3 修复）、`e4a4492`（RV4 修复）——即 `094009b..e4a4492` 共 **10 个提交**、0 个合并提交（线性）；此后为文档/证据提交（`1035395`→`582133e`→…）。**未推送、未开 PR**，`origin/main` 仍为 `094009b`。偏差：6.6 发生在 6.3/6.4/6.5 **之前**（用户旨意），因此候选与主分支是同一提交，6.3/6.7 的证据落在完全相同的树上 | 本文件「目标基线与引用核实（任务 6.1）」与「本地合并记录」 |
 | 6.7 主分支复跑 | 同 SHA 适用性成立（候选 == 主分支 == `e4a4492`）；`npm run check` 复跑 **exit 0**，workspace **378 passed / 2 ignored**（provenance 已标注） | `reports/du1-main-verify.log` |
 | 6.8 合并新增差异 | 待 `du1-review` 返回（预期「无新增差异」，依据 = 候选与主分支同 SHA 的 fast-forward 合入） | `reports/rv1-du1.md` 的 6.8 段 |
 
