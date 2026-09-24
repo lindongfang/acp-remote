@@ -7,6 +7,7 @@ members = [
     "crates/storage-sqlite",
     "crates/sync-protocol",
     "crates/identity-auth",
+    "crates/identity-keystore",
     "crates/node-link-protocol",
     "crates/acp-protocol",
     "crates/agent-host",

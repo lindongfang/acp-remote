@@ -23,6 +23,15 @@ mod state;
 pub mod transcript;
 pub mod types;
 
+// 端口与公开 API 里出现的 `core::model` 值对象：这里如实转出，使端口**实现方**（`identity-keystore`）
+// 只依赖本 crate 就能写出 `IdentityKeystore`，而不需要为了签名类型反向依赖 `core`
+// （`docs/MODULE_ARCHITECTURE.md` §5 的依赖矩阵不允许 `identity-keystore -> core`）。
+pub use acp_core::model::{
+    AuditAction, DeviceId, Digest, Fingerprint, GrantSet, InvalidValue, NodeId, NodeKind, Nonce,
+    PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement, PairingState,
+    PairingTarget, PeerIdentity, PeerPublicKey, ScopeSet, Timestamp,
+};
+
 pub use authority::Authority;
 pub use error::{
     AuthorizationError, HandshakeError, IdentityError, PairingError, ProofError, TranscriptError,

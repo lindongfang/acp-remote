@@ -1,0 +1,35 @@
+[package]
+name = "identity-keystore"
+description = "身份密钥与秘密值的平台安全存储适配器（Windows DPAPI；其它平台失败关闭）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# 依赖方向以 docs/MODULE_ARCHITECTURE.md §5 为唯一判据（`scripts/check-crate-boundaries.mjs` 断言）：
+# 本 crate 只依赖 `identity-auth`（端口与值对象）；它**不**依赖 core、协议 crate 或任何出站适配器，
+# 也不被除组合根（`app`）之外的 crate 依赖。平台差异只出现在本 crate 的 `platform` 模块里。
+[dependencies]
+identity-auth = { path = "../identity-auth" }
+async-trait.workspace = true
+thiserror.workspace = true
+# 私钥在进程内解开后只用于签名：`p256` 的 `ecdsa` feature 提供 RFC 6979 确定性签名输出 64 字节 P1363。
+# 不开 `pkcs8`：条目格式是自研头 + 32 字节标量，不做 DER/PEM 编解码。
+p256 = { workspace = true, features = ["ecdsa"] }
+sha2.workspace = true
+# 系统熵源（`EntropySource` 的平台实现）。不许自研 PRNG（`docs/SECURITY_DESIGN.md` §13）。
+getrandom.workspace = true
+
+# DPAPI wrapper（`docs/SECURITY_DESIGN.md` §20 的候选）：只在 Windows 构建中参与编译；
+# 语义是「包裹字节 + 进程内解开」，`Scope::User` 表示当前用户。选型实证见
+# `docs/MODULE_ARCHITECTURE.md` §4.12 与 `reports/` 内的 [PV5] 留证。
+[target.'cfg(windows)'.dependencies]
+windows-dpapi.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
