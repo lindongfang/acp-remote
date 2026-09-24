@@ -151,6 +151,14 @@
 | RV2-F5（无会话 runtime 回收无用例） | 新增 `idle_reclaim_also_applies_to_processes_without_sessions`（协商后无会话 → 零值不回收、超时即回收） |
 | 其余未处理项 | 保持登记：`RV-WP3-F4`（Unix pid 复用窗口，接受风险）、`RV-WP2-F3/F6`（矩阵 row id 措辞/出站 id 规范化，已记录偏离与接受）、`RV-WP1-F4`（§5 矩阵缺列，下一切片）、文件所有权表措辞与 RV1-F7 的写范围重叠（随 §4.5 措辞一同处理） |
 
+### RV-DU1 候选与合并检视（任务 6.4 / 6.8，2026-09-24）
+
+- 执行方式：**新的**独立只读上下文 + `bash`（`oracle` agent，run `9e0ae308…`；Review ID `RV-DU1-round1`），检视候选 `e4a4492`（基线 `094009b`，区间 58 文件 +13371/−49）；报告归档于 `reports/rv1-du1.md`。
+- **首次派发的同类上下文（run `84759cd6…`）在一条阻塞的 `bash` 调用上卡死（>240 s、steer 无法送达），已由主 Agent 中断并按失败登记**；替换上下文在任务里加了「禁止分页器、命令 60 s 未返回即放弃、不得跑 cargo/npm 重型命令」的硬约束后正常完成。这是本变更内唯一一次执行级失败，不涉及产品代码。
+- 复核者实跑（均只读）：`git --no-pager rev-parse/merge-base/log/diff`（含 `--is-ancestor`）、`node scripts/check-crate-boundaries.mjs`（exit 0）、`node scripts/check-doc-links.mjs`（exit 0）、`Cargo.lock` 依赖对集合差分（212 → 232，`comm -23` 为空 ⇒ 纯增量）、`grep` 审计（`#[ignore]`、`cfg(`、`tracing::`、`let _ =`）。**明确未执行** `cargo` 任何构建/测试与 `npm run check`（按调度约束），相关结论只以带出处的既有日志作引用。
+- 结论：**6.4 PASS / 6.8 PASS**。6.4 的五个问题（`acp-protocol`↔`agent-host` 接口一致性、`LaunchSpec` 边界、`Cargo.toml`/§5 矩阵/变更声明三处口径、是否有「只为让测试通过」的痕迹、既有 crate 公开契约）逐条通过，无 CRITICAL/MAJOR；`crates/core/**`、`crates/storage-sqlite/**`、`crates/acpr-*`、两个既有协议 crate **零文件改动**，`Cargo.lock` 纯增量。6.8 判定：合并是 fast-forward（`--is-ancestor` exit 0、`--merges` 为空、全部单父），候选之后**无任何代码差异**（仅 `docs/` 与变更目录的文档/证据提交），故 RV1–RV5 对 `e4a4492` 的判定可直接复用，无需为合并差异另开检视轮。
+- 该轮列出 4 条 MINOR（F1 权威文档「与它的 `bin/`」与「`bin/` 零命中」自相矛盾、F2 `tasks.md` 2.12 的依赖面与 `Cargo.toml` 漂移、F3 agent→client 方法分派是第二份字面量清单且无相等断言、F4 三处终态事件在构造失败时静默丢弃）+ 1 条 SUGGESTION（F5 两处 `unwrap_or`/`.ok()` 降级）+ 1 条已登记缺口（F6 `TurnAccepted.turn` 占位 id）。
+- 处置：**F1/F2 已在本轮修复**（权威文档措辞改为「平台分支只存在于 `platform.rs`，`bin/` 不含平台分支」；`tasks.md` 2.12 依赖面写实为 `tokio(process/io-util/macros/rt)` + `async-trait`/`serde_json`/`thiserror`/`tracing`/`sha2`/`base64` + `win32job`/`nix`，并同步 `Cargo.toml` 的 tokio 注释）。**F3/F4/F5 不构成阻断**（复核者判定：F3 当前集合实核一致且 registry 由 `tests/matrix_tables.rs` 逐行比对；F4 可达性≈0；F5 为自产 JSON 的自配对路径），按复核者建议登记为「接线 `app` 之前的收口项」，见「仍未处理」。
 ### RV5 复核轮与 3.2/3.10 关闭（2026-09-24）
 
 - 执行方式：**新的**独立只读上下文 + `bash`（`oracle` agent，run `3cbb9840…`），复核修复提交 `e4a4492`（基线 `d0fa731`），范围同时覆盖 WP1 与 WP5 的条目；报告归档于 `reports/rv1-wp5.md` 的「RV5 复核轮」段（`reports/rv1-wp1.md` 留指针）。
@@ -195,6 +203,10 @@
 - **RV4-WP5-F2**（期望集合只验证「⊇」）：端口返回「白名单内但未绑定」的额外名会被放行（白名单本是上限而非等式）。复核者自评**非安全越界**（仍在白名单内）且当前 fake 造不出反例，登记不改。
 - **RV4-WP5-F8**（spec `spec.md:9/18-19` 的「并给出原因」在本层无落点）：`AgentDescriptor` 无 `reason` 字段，本层可观察的「原因」只有 `create`/`agent_capabilities` 的错误类别（已有用例断言 `Unavailable(KeystoreUnavailable)`）。复核者判定不构成 FAIL，登记为「措辞待与端口形状对齐」。
 - **RV4-WP5-F5 残余**：`ACPR_` 保留前缀已补写进 `docs/SECURITY_DESIGN.md` §12.2；若后续引入新的保留前缀，必须同步该处与 `core::model` 的 `is_reserved_env_name`。
+- **RV-DU1-F3**（agent→client 方法分派是 `session.rs` 里的第二份字面量清单，未走 `acp_protocol::methods::status_of`/`direction_of`）：当前实核一致（registry 中 `AgentToClient ∧ implemented` 恰好是 `session/update`、`session/request_permission`、`elicitation/create` 三条），且 registry 本身由 `tests/matrix_tables.rs` 逐行比对，故不阻断；复核者建议补一条「agent-host 处理集合 == `Implemented ∩ AgentToClient`」的相等断言，登记为下一轮（属防漂移加固，非缺陷）。
+- **RV-DU1-F4**（三处终态事件构造失败时静默丢弃：`session.rs` 的 turn 终态、进程退出终态、`session.mode.changed`）：可达性≈0（`mapper::turn_event` 的 `EventType` 是固定字面量、view 极小），但「终态恰好一次」是硬不变量，next round 应在 `Err` 分支补 `tracing::warn`（不改成 panic）。
+- **RV-DU1-F5**（`session.rs` 的用户作答解码 `.ok()` 与 `mapper.rs` 的 `to_value(...).unwrap_or(Value::Null)` 会把失败降级成合法值）：自产 JSON 不会自我拒绝，实践不可达；下一轮改为显式错误或至少 `warn`。
+- **RV-DU1-F6**（`TurnAccepted.turn` 是适配器本地占位 id）：core 侧 `broker.rs` 为 `Ok(_) => Ok(true)`，不读取该值，故不构成接口破坏；已作为 Check Plan Change 3 登记并获用户裁定走 core 侧收口。
 
 ## Merge History
 

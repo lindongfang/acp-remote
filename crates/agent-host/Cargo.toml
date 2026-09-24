@@ -11,7 +11,8 @@ publish.workspace = true
 [dependencies]
 core = { path = "../core" }
 acp-protocol = { path = "../acp-protocol" }
-# tokio 只提供进程/IO 类型与同步原语；**runtime 由组合根启动**（docs/MODULE_ARCHITECTURE.md §4.5/§4.7）。
+# tokio 提供进程/IO 类型、同步原语与 spawn 所需的 macros/rt（`tokio::spawn` 在自己的 runtime 句柄内运行）；
+# **runtime 本身由组合根启动与持有**（docs/MODULE_ARCHITECTURE.md §4.5/§4.7）。
 tokio = { workspace = true, features = ["process", "io-util", "macros", "rt"] }
 # 端口是可 dyn 化的异步 trait（docs/CORE_PORTS_AND_STORAGE.md §2），与 core 使用同一个 proc-macro。
 async-trait.workspace = true
