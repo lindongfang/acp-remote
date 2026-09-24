@@ -3,7 +3,7 @@
 - [x] 1.1 全变更；负责人：environment/recon；依赖：无；在新的任务级最小上下文中核实仓库路径、目标引用（`git rev-parse refs/heads/main`）、工具链（`rust-toolchain.toml` 与 Node ≥ 22.12）、`npm run verify` 的实际子检查清单、`openspec-agentic e2e --json` 的 `enabled`/`command` 实测值，以及本机是否存在可用的 Windows x64 环境（PV5 前提）；完成条件：事实清单与原始输出可被后续任务直接引用，写入 `verification.md`。
 - [x] 1.2 [WP1] 负责人：实现 Agent；依赖：1.1；确认实现所需契约与文件所有权（§5 矩阵新增列、§4.5 收口措辞、`Cargo.toml` 的 members 与依赖登记、两个 crate 的目录归属），记录编码起点与 `Cargo.toml` 的分波次串行写入顺序（W0 WP1 → W1 WP2 → W2 WP3）；完成条件：写范围与契约清单落到 `verification.md`，无文件归属冲突。
 - [x] 1.3 [WP1–WP5] 负责人：实现 Agent；依赖：1.1；确认唯一共享运行资源是构建目录 `target/`、临时心跳目录与子进程，确定并行分片时 `CARGO_TARGET_DIR` 的隔离方式、心跳目录的清理方法，以及 PV5 必须在本机 Windows 执行（Linux CI 不可复现）的事实；完成条件：隔离与释放方案记录在案，并写明 PV5 的平台限制。
-- [ ] 1.4 [WP4 / WP5] 负责人：实现 Agent；依赖：2.14、2.19；在 WP4/WP5 开始前接入已验收上游（WP3 的 `LaunchSpec`、supervisor 句柄与 `ProcessTree` 接口），核对下游实际基线与包含关系；完成条件：交接关系与包含关系检查记录在 `verification.md` 的 Dependency Handoffs。
+- [x] 1.4 [WP4 / WP5] 负责人：实现 Agent；依赖：2.14、2.19；在 WP4/WP5 开始前接入已验收上游（WP3 的 `LaunchSpec`、supervisor 句柄与 `ProcessTree` 接口），核对下游实际基线与包含关系；完成条件：交接关系与包含关系检查记录在 `verification.md` 的 Dependency Handoffs。
 
 ## 2. Implementation
 

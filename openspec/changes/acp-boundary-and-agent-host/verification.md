@@ -62,6 +62,7 @@
 | Downstream | Upstream | Accepted Revision / Evidence | Start Revision | Transfer / Inclusion Check | Invalidation |
 | --- | --- | --- | --- | --- | --- |
 | WP3 | WP5（同变更内） | `LaunchSpec { program: String, args: Vec<String>, env: Vec<(String, String)> }`（`agent-host::launch`）——WP3 只消费它，不读 profile、不解析凭据；`Supervisor::start(spec)` 之后立即 `env_clear` 再逐项注入 | `4b0145e` | `crates/agent-host/tests/supervision.rs` 的 `spawned_child_receives_exactly_the_injected_environment` 与 `tests/catalog.rs` 的 `child_environment_is_exactly_the_launch_spec` 断言「子进程看到的变量集合 == 注入集合」 | `LaunchSpec` 字段变化 → WP3/WP5 复验 |
+| WP4 / WP5 | WP3 | WP3 冻结的接口：`LaunchSpec { program, args, env }`（`agent-host::launch` 产出、`Supervisor::start` 消费）、`Supervisor` 的请求/通知/响应方法与 `stderr_snapshot`、内部 `ProcessTree`（`platform.rs` 内按 `#[cfg]` 分模块，`prepare` 每次启动各一份） | `4b0145e` | 任务 1.4 的包含关系检查：下游（WP4 的 `AcpSession`/`Endpoint`、WP5 的 `resolve_launch`）只经这些接口接入上游，未复用 supervisor 内部状态；`tests/supervision.rs` 与 `tests/catalog.rs`/`tests/session.rs` 分别以「子进程看到的变量集合 == 注入集合」「stderr 有界与结构化计数」「按 Agent 结束整棵树」断言该边界 | `LaunchSpec`/`Supervisor`/`ProcessTree` 的签名或语义变化 → WP4/WP5 复验 |
 | WP3 | WP2 | WP2 冻结的 public API（`RawDocument`/`Envelope`/`AcpError`/`methods`/`content`/`update`/`message`/`capability`）+ 任务 3.3/3.4 的 PV4 证据（35 测试全通过） | `4b0145e`（W0 基线） | `cargo build -p acp-protocol` 通过；`agent-host` 只用 `acp-protocol` 的公开项 | `acp-protocol` 的 public API 变化 → WP3/WP4/WP5 复验 |
 
 ## Runtime Resources
