@@ -49,7 +49,7 @@
 
 - [x] 7.1 全变更；负责人：主 Agent（not-applicable 的替代验证）；依赖：6.7、6.8；在最终主分支固定版本执行替代验证四项：`cargo test --locked -p core --all-features` [PV2]、`cargo test --locked -p storage-sqlite --all-features` [PV5]、`cargo test --locked -p core -p agent-host --all-features` [PV3]、`npm run verify` [PV4]，并额外跑 `npm run check` [PV1] 复核合同门禁；完成条件：逐项命令、版本、输出与断言写入 `reports/alt-final-verification.md`。
 - [x] 7.2 全变更；负责人：主 Agent；依赖：7.1；汇总替代验证的全部断言、版本与证据，核对覆盖了 not-applicable 的 `alternative_checks` 四项与资源清理（临时 SQLite 文件、子进程、`CARGO_TARGET_DIR`），并核对 `fixtures/**`、`compatibility/acp/v1/matrix.json`、`schemas/**` 的哈希在执行前后不变；完成条件：汇总与清理结论写入 `reports/alt-final-verification.md` 的汇总段。
-- [ ] 7.3 [e2e-owned] 全变更；负责人：扩展；依赖：7.2；运行 `npx --quiet --no-install openspec-agentic e2e check --change core-turn-view-fields`，仅 PASS 自动勾选；此行只确认不适用判据已按计划固化，不执行测试或汇总。
+- [x] 7.3 [e2e-owned] 全变更；负责人：扩展；依赖：7.2；运行 `npx --quiet --no-install openspec-agentic e2e check --change core-turn-view-fields`，仅 PASS 自动勾选；此行只确认不适用判据已按计划固化，不执行测试或汇总。
 
 ## 8. Final Verification
 
