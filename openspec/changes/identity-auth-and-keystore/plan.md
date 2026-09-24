@@ -18,6 +18,9 @@
 
 ## Coverage Index
 
+> **evidence 口径**：下面 R1–R90 各行的 `evidence` 指向**首次交付该能力时**的日志（WP 轮，revision `5c9d2c4`/`627bb8e`）。能力本身在后继轮次未改变，最终收口轮的等价证据（同一命令、同一 crate 版本，revision `3a247a5`）见 `verification.md` 的 RV5/RV6 Check 行的 `rv5-pv*`/`rv5-mutation`/`rv5-selfcheck-rg`，因此这里不逐行改写（R86 一行已额外补指修复轮日志）。
+
+
 ```agentic-coverage
 version: 1
 target_ref: refs/heads/main
@@ -686,7 +689,7 @@ rows:
       requirement: "### Requirement: 条目与引用之间没有分布式事务但可恢复"
     tasks: ["2.14"]
     checks: [PV4]
-    evidence: [reports/wp3-identity-keystore.log, reports/rv4-pv4.log, reports/rv4-mutation.log]
+    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/rv5-pv4.log, openspec/changes/identity-auth-and-keystore/reports/rv5-mutation.log]
   - id: R87
     source:
       path: specs/platform-keystore/spec.md
@@ -809,7 +812,7 @@ rows:
 | PV3 | 各 WP 交付前、最终（WP2） | `cargo test --locked -p identity-auth --all-features` @ 仓库根 | 本地 Rust 工具链；只读 fixtures 与 `compatibility/` 资产 | 12 个 transcript 向量逐字节重算、SAS 期望值一致、畸形输入被拒、配对/握手/展开的失败路径与边界场景全部通过，且新增用例确实被执行（无 0 用例 / 无全跳过） | `reports/wp2-identity-auth-pairing.log`、`reports/wp2-identity-auth-handshake.log`、`reports/wp2-identity-auth-expansion.log`、`reports/wp2-identity-auth-ports.log` |
 | PV4 | 各 WP 交付前、最终（WP3） | `cargo test --locked -p identity-keystore --all-features` @ 仓库根 | 本地 Rust 工具链；临时 keystore 目录（用例自建自删） | 条目格式与原子写、失败关闭（缺条目/损坏/非 Windows）、条目与引用恢复语义、秘密不进 `Debug` 的断言全部通过；Windows 平台用例可在此命令中被跳过，但跳过数必须如实记录 | `reports/wp3-identity-keystore.log` |
 | PV5 | 候选、主分支（WP3 的 DPAPI 用例） | Windows 本机：`cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture` @ `D:\Project\acp-remote` | **只在 Windows x64 执行**；Linux CI 只跑 `#[cfg(not(windows))]` 失败关闭分支 | DPAPI（当前用户 scope）包裹/解包往返成功、读出的 65 字节公钥与签名一致（签名可被该公钥验证）、被篡改条目解包失败且不覆盖，且输出原始日志 | `reports/pv5-windows-dpapi.log` |
-| RV1 | 各 WP 交付前、主分支复核 | 独立 reviewer 按 `roles/reviewer.md` 在隔离上下文检视固定版本 diff 与契约 | 只读；不修改代码与证据 | 报告完整、无未解决阻断项；覆盖 specs 场景与 design 决策 | `openspec/changes/identity-auth-and-keystore/reports/rv1-wp1.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-wp2.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-wp3.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-wp4.md`、`reports/rv1-du1.md` |
+| RV1 | 各 WP 交付前、主分支复核 | 独立 reviewer 按 `roles/reviewer.md` 在隔离上下文检视固定版本 diff 与契约 | 只读；不修改代码与证据 | 报告完整、无未解决阻断项；覆盖 specs 场景与 design 决策 | `openspec/changes/identity-auth-and-keystore/reports/rv1-wp1.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-wp2.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-wp3.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-wp4.md`、`openspec/changes/identity-auth-and-keystore/reports/rv1-du1.md` |
 
 ### Code Review
 
