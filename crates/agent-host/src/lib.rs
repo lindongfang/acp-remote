@@ -17,7 +17,8 @@
 //! - 不读启动配置文件（profile 只来自 `LocalConfigStore`），不持有 Node/Device 密钥；
 //! - 子进程环境先清空，再注入「凭据端口给出的绑定 + 必要进程环境」；
 //! - 「能力不支持」与「协议/字段损坏」是两类错误，必须可区分；
-//! - `cfg` 只出现在 [`platform`] 与 `bin/`（`rg "cfg\(" crates/agent-host/src` 的判据）。
+//! - **平台分支**的 `cfg` 只出现在 [`platform`]（`rg "cfg\(" crates/agent-host/src` 的判据）；
+//!   `launch.rs` 另有 1 处 `#[cfg(test)]`（测试模块，不是平台分支），`bin/` 零命中。
 //!
 //! 已知缺口（登记在变更的 `verification.md`，交下一切片收口）：适配器产出的 `view` 不含
 //! `turnId`/`version`（`SessionEndpoint::prompt` 的签名不携带 core 的 `TurnId`，会话版本也由 core 掌握）。

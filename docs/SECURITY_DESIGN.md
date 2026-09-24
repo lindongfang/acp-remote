@@ -362,7 +362,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 使用参数数组启动，不经 shell 拼接用户输入。
 - 只传递 Agent 启动所需环境变量；不把 ACP Remote Node/Device key 注入子进程。
 - `[决定]`（2026-09-23）**注入集合可判定**：实际注入的环境变量 = `env_allowlist` ∩ profile 的 `env` 绑定声明的 `name` 集合，加必要的进程环境（如 `PATH`）；凭据值只能来自 `CredentialResolver`（`CORE_PORTS_AND_STORAGE.md` §11.6），未绑定或未列入白名单的变量一律不注入，keystore 不可用则**失败关闭**。
-- stdout 只作为 ACP wire；stderr 作为受限、脱敏的 Agent 日志。
+- stdout 只作为 ACP wire；stderr 只做**有界采集 + 结构化计数**（变量名与数量级）：内容进入固定上限的环形缓冲，**不进日志**，需要时按上限回取（§14.1）。
 - `[决定]`（2026-09-23）**Agent 进程的上下限是固定 v1 常量，不是配置键**（与 `SYNC_PROTOCOL.md` §14 同惯例）；未列出的值不得由实现自行发明：
 
 | 项 | v1 值 | 理由 / 约束 |

@@ -5,11 +5,15 @@
 //! - **每个 Agent 一个进程与一个 Job/进程组**：结束某个 Agent 不影响其它 Agent。监督者由本结构持有。
 //! - 每个监督者拥有自己的任务集（读 stdout、读 stderr、退出监视、写出、turn 等待、进站路由），
 //!   关闭时统一 join；本模块不创建 detached task。
-//! - 目录查询（[`AgentCatalog::agents`]）**不启动任何进程**，也不读出凭据值。
+//! - 目录查询（[`AgentCatalog::agents`]）**不做 spawn、不消费凭据值**：它只探测「凭据能否解析」，
+//!   而探测本身会从 keystore 取值（端口没有 `is_resolvable()` 之类的只读接口）。
+//! - 空闲回收**破坏运行时与映射**：命中的运行时在同一临界区被移出目录、其会话映射被清空，
+//!   `open()` 随后必须显式失败（不得把已结束的进程当作活跃端点）；可用性语义不随运行状态变化。
 //! - 能力协商按**进程代**缓存：进程换了，缓存即失效。
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use acp_core::model::{
@@ -66,9 +70,34 @@ impl AgentRuntime {
         self.generation
     }
 
-    /// 进程级空闲判据（协商与目录活动也刷新它）。
+    /// 进程级空闲判据（没有活动会话时的回收依据）。
+    ///
+    /// 刷新点：进程启动、会话建立与关闭，以及会话上的出站/入站活动（`AcpSession::touch`）。
+    /// **复用已运行 runtime 的目录/能力查询不刷新它**（`agent_capabilities` 只读能力缓存，不产生新的
+    /// 进程内工作），因此只做目录查询不会给进程延寿。
     fn idle_for(&self, timeout: Duration) -> bool {
         lock(&self.last_activity).elapsed() >= timeout
+    }
+
+    /// 该运行时是否可以按空闲超时回收。
+    ///
+    /// 没有活动会话（例如只协商过能力的进程）看进程级时钟；有会话时要求**全部**会话都空闲
+    /// （任一会话有进行中的 turn 就不回收）。
+    fn is_idle(&self, timeout: Duration) -> bool {
+        let sessions = self.sessions();
+        if sessions.is_empty() {
+            return self.idle_for(timeout);
+        }
+        sessions.iter().all(|session| session.is_idle_for(timeout))
+    }
+
+    /// 让出全部会话映射。
+    ///
+    /// 回收与关闭路径必须先调它：映射一旦随 runtime 一起离开目录就不再可达，`open()` 因此不会再
+    /// 拿一个已关闭的 supervisor 去重建端点（Q4-1）。
+    fn clear_sessions(&self) {
+        lock(&self.by_core).clear();
+        lock(&self.by_acp).clear();
     }
 
     fn touch(&self) {
@@ -123,6 +152,8 @@ pub struct AgentHost {
     clock: Arc<dyn Clock>,
     runtimes: Mutex<HashMap<AgentId, Arc<AgentRuntime>>>,
     generations: std::sync::Mutex<HashMap<AgentId, u64>>,
+    /// 关闭标志：`shutdown_all()` 先置位，此后 `ensure_runtime` 一律拒绝启动新进程。
+    shutting_down: AtomicBool,
 }
 
 impl std::fmt::Debug for AgentHost {
@@ -151,6 +182,7 @@ impl AgentHost {
             clock,
             runtimes: Mutex::new(HashMap::new()),
             generations: std::sync::Mutex::new(HashMap::new()),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
@@ -164,14 +196,24 @@ impl AgentHost {
     ///
     /// 一把异步锁串行化「启动 + initialize」：并发调用不会造出两个进程、两个 Job 或两条协商。
     async fn ensure_runtime(&self, agent: &AgentId) -> Result<Arc<AgentRuntime>, HostError> {
+        // 关闭中不得再启动新进程（`shutdown_all` 已置位）：显式失败，不静默超时、不偷偷拉起来。
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(HostError::NotRunning);
+        }
         let mut runtimes = self.runtimes.lock().await;
-        if let Some(runtime) = runtimes.get(agent) {
+        let stale = runtimes.get(agent).cloned();
+        if let Some(runtime) = stale {
             if runtime.supervisor.is_running() {
-                return Ok(Arc::clone(runtime));
+                return Ok(runtime);
             }
-            // 进程已退出：先按关闭顺序回收整棵树与任务，再重启（新一代）。
-            runtime.supervisor.shutdown().await;
+            // 进程已退出：不跨代复用这个 runtime（也不留残留映射）——先作废它的会话端点与映射，
+            // 再按关闭顺序回收整棵树与任务，最后按「不存在」重启（新一代）。
             runtimes.remove(agent);
+            for session in runtime.sessions() {
+                session.close_session();
+            }
+            runtime.clear_sessions();
+            runtime.supervisor.shutdown().await;
         }
 
         let (_profile, spec) =
@@ -247,45 +289,57 @@ impl AgentHost {
     ///
     /// `idle_timeout` 为零表示**不因空闲关闭**（`sessions.idle_timeout_ms = 0`），此时直接返回；
     /// 只在「没有进行中的 turn 且空闲足够久」时才结束进程。
+    ///
+    /// 判定与「移出目录」在**同一个临界区**里完成：不能留下「死 supervisor 还挂在目录里、映射仍可被
+    /// `open` 复用」的窗口（Q4-1）。实际的关闭流程（最长 5 s grace）在锁外执行，不阻塞其它入口。
     pub async fn sweep_idle(&self, idle_timeout: Duration) {
         if idle_timeout.is_zero() {
             return;
         }
-        let runtimes: Vec<Arc<AgentRuntime>> =
-            self.runtimes.lock().await.values().cloned().collect();
-        for runtime in runtimes {
-            let sessions = runtime.sessions();
-            // 没有活动会话的 runtime（例如只协商过能力的进程）按进程级空闲时间回收；
-            // 有会话时要求**全部**会话都空闲（任一会话有进行中的 turn 就不动它）。
-            let idle = if sessions.is_empty() {
-                runtime.idle_for(idle_timeout)
-            } else {
-                sessions
-                    .iter()
-                    .all(|session| session.is_idle_for(idle_timeout))
-            };
-            if idle {
-                for session in &sessions {
-                    session.close_session();
+        let reclaimed: Vec<Arc<AgentRuntime>> = {
+            let mut runtimes = self.runtimes.lock().await;
+            let idle: Vec<AgentId> = runtimes
+                .iter()
+                .filter(|(_, runtime)| runtime.is_idle(idle_timeout))
+                .map(|(agent, _)| agent.clone())
+                .collect();
+            let mut reclaimed = Vec::with_capacity(idle.len());
+            for agent in idle {
+                if let Some(runtime) = runtimes.remove(&agent) {
+                    // 先让端点作废（`close_session` 只改内存状态、不等待），再清空映射：
+                    // 回收后的既有会话不得再被 `open` 复用。
+                    for session in runtime.sessions() {
+                        session.close_session();
+                    }
+                    runtime.clear_sessions();
+                    reclaimed.push(runtime);
                 }
-                runtime.supervisor.shutdown().await;
             }
+            reclaimed
+        };
+        for runtime in reclaimed {
+            runtime.supervisor.shutdown().await;
         }
     }
 
     /// 显式关闭某个 Agent 的进程树（会话级语义由 core 决定）。
     pub async fn shutdown_agent(&self, agent: &AgentId) {
+        // 先从目录移除：之后 `ensure_runtime` 看到的是「不存在」，不会复用正在关闭的 supervisor。
         let runtime = self.runtimes.lock().await.remove(agent);
         if let Some(runtime) = runtime {
             for session in runtime.sessions() {
                 session.close_session();
             }
+            runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
         }
     }
 
     /// 全部 Agent 的关闭（Daemon 停止时使用）。
+    ///
+    /// 先置关闭标志（此后 `ensure_runtime` 拒绝启动任何新进程），再清目录并逐个按关闭顺序回收。
     pub async fn shutdown_all(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
         let runtimes: Vec<Arc<AgentRuntime>> = {
             let mut runtimes = self.runtimes.lock().await;
             let values = runtimes.values().cloned().collect();
@@ -296,6 +350,7 @@ impl AgentHost {
             for session in runtime.sessions() {
                 session.close_session();
             }
+            runtime.clear_sessions();
             runtime.supervisor.shutdown().await;
         }
     }
@@ -357,7 +412,8 @@ impl AgentCatalog for AgentHost {
         let profiles = self.config.profiles().await?;
         let mut descriptors = Vec::with_capacity(profiles.len());
         for profile in profiles {
-            // 可用性只做只读探测：命令能解析 + 凭据引用可用。**不启动进程**。
+            // 可用性只做只读探测：命令能解析 + 凭据能解析。**不做 spawn、不消费凭据值**
+            // （解析本身会从 keystore 取值）。可用性**不**随运行状态变化：回收或进程崩溃后仍由这两项决定。
             let available = command_resolves(profile.command())
                 && self.credentials.resolve_env(&profile).await.is_ok();
             descriptors.push(AgentDescriptor::new(
@@ -437,6 +493,11 @@ impl SessionBackendFactory for AgentHost {
                 .get(owned.session_id.as_str())
                 .cloned();
             let Some(acp_id) = existing else { continue };
+            // 已经结束（进程退出或已被回收）的运行时不得复活映射：显式失败，绝不把死 supervisor
+            // 重新标记成活跃端点（`spec.md` 的空闲回收场景）。
+            if !runtime.supervisor.is_running() {
+                return Err(HostError::SessionClosed.to_port_error());
+            }
             let Some(previous) = runtime.session_for_acp(&acp_id) else {
                 continue;
             };
@@ -526,27 +587,41 @@ pub fn spawn_idle_sweep(
     })
 }
 
+/// 有界重试地读 `runtimes` 目录（`try_lock` 与并发入口竞争时不会立刻拿到锁）。
+///
+/// 局限（如实说明）：`runtimes` 是异步锁，同步函数只能用 `try_lock`；重试仍拿不到锁时返回 `None`，
+/// 与「目录里没有这个条目」不可区分。因此这两个读函数是**诊断**手段，不是「进程真的结束了」的证据：
+/// 进程外证据请用 fake child 的心跳文件（`tests/catalog.rs` 的回收用例断言回收后心跳不再增长）。
+fn try_read_runtimes<T>(
+    host: &AgentHost,
+    read: impl Fn(&HashMap<AgentId, Arc<AgentRuntime>>) -> Option<T>,
+) -> Option<T> {
+    for _ in 0..8 {
+        if let Ok(runtimes) = host.runtimes.try_lock() {
+            return read(&runtimes);
+        }
+        std::thread::yield_now();
+    }
+    None
+}
+
 /// 某个 Agent 的进程是否在运行（诊断用；不改变状态）。
 #[must_use]
 pub fn runtime_running(host: &AgentHost, agent: &AgentId) -> bool {
-    host.runtimes
-        .try_lock()
-        .ok()
-        .and_then(|runtimes| {
-            runtimes
-                .get(agent)
-                .map(|runtime| runtime.supervisor.is_running())
-        })
-        .unwrap_or(false)
+    try_read_runtimes(host, |runtimes| {
+        runtimes
+            .get(agent)
+            .map(|runtime| runtime.supervisor.is_running())
+    })
+    .unwrap_or(false)
 }
 
 /// 当前进程代（诊断用）。
 #[must_use]
 pub fn runtime_generation(host: &AgentHost, agent: &AgentId) -> Option<u64> {
-    host.runtimes
-        .try_lock()
-        .ok()
-        .and_then(|runtimes| runtimes.get(agent).map(|runtime| runtime.generation()))
+    try_read_runtimes(host, |runtimes| {
+        runtimes.get(agent).map(|runtime| runtime.generation())
+    })
 }
 
 fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {

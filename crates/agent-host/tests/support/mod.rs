@@ -5,6 +5,7 @@
 //! 未被本 crate 消费的端口方法一律 `todo!()`：真被调用时测试会立刻炸掉，而不是给出看似合理的空结果。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use acp_core::model::Digest;
@@ -248,13 +249,27 @@ pub fn profile(agent: &str, command: &str) -> AgentProfile {
 /// 同上，但使用给定的 fake child 参数（场景、`--dump-env`、`--capabilities` 等）。
 #[must_use]
 pub fn profile_with(agent: &str, command: &str, args: &[&str]) -> AgentProfile {
+    profile_with_env_vars(agent, command, args, &["FAKE_TOKEN"])
+}
+
+/// 同上，但白名单与凭据绑定集合由 `vars` 给定（每个变量一条绑定）。
+#[must_use]
+pub fn profile_with_env_vars(
+    agent: &str,
+    command: &str,
+    args: &[&str],
+    vars: &[&str],
+) -> AgentProfile {
     AgentProfile::try_new(
         AgentId::new(agent).expect("agent id"),
         &format!("Agent {agent}"),
         command,
         args.iter().map(|arg| (*arg).to_owned()).collect(),
-        vec!["FAKE_TOKEN".to_owned()],
-        vec![ProviderEnvBinding::try_new("fake", "token", "FAKE_TOKEN").expect("binding")],
+        vars.iter().map(|name| (*name).to_owned()).collect(),
+        vars.iter()
+            // `(provider_id, field)` 不得重复：用变量名当字段名，这样多变量 profile 也合法。
+            .map(|name| ProviderEnvBinding::try_new("fake", name, name).expect("binding"))
+            .collect(),
         false,
         timestamp(),
         timestamp(),
@@ -266,19 +281,31 @@ pub fn profile_with(agent: &str, command: &str, args: &[&str]) -> AgentProfile {
 #[derive(Debug, Default)]
 pub struct FakeConfig {
     profiles: Vec<AgentProfile>,
+    /// `profiles()` 被调用的次数：用来证明目录查询**确实**经由注入端口取 profile。
+    profiles_calls: AtomicUsize,
 }
 
 impl FakeConfig {
     /// 用给定 profile 构造。
     #[must_use]
     pub fn new(profiles: Vec<AgentProfile>) -> Self {
-        Self { profiles }
+        Self {
+            profiles,
+            profiles_calls: AtomicUsize::new(0),
+        }
+    }
+
+    /// `profiles()` 至今被调用的次数。
+    #[must_use]
+    pub fn profiles_calls(&self) -> usize {
+        self.profiles_calls.load(Ordering::SeqCst)
     }
 }
 
 #[async_trait::async_trait]
 impl LocalConfigStore for FakeConfig {
     async fn profiles(&self) -> Result<Vec<AgentProfile>, acp_core::model::PortError> {
+        self.profiles_calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.profiles.clone())
     }
 
@@ -341,6 +368,8 @@ pub struct FakeCredentials {
     fail: bool,
     /// 故意返回一个不在白名单里的变量（用于验证「白名单是上限」的纵深防御）。
     leak: bool,
+    /// 故意**不**返回这个已绑定且在白名单内的变量（用于验证「期望集合必须完整」的纵深防御）。
+    drop_name: Option<String>,
 }
 
 impl FakeCredentials {
@@ -350,6 +379,7 @@ impl FakeCredentials {
         Self {
             fail: false,
             leak: false,
+            drop_name: None,
         }
     }
 
@@ -359,6 +389,7 @@ impl FakeCredentials {
         Self {
             fail: true,
             leak: false,
+            drop_name: None,
         }
     }
 
@@ -368,6 +399,17 @@ impl FakeCredentials {
         Self {
             fail: false,
             leak: true,
+            drop_name: None,
+        }
+    }
+
+    /// 故意漏掉一个「已绑定且在白名单内」的变量（模拟端口违反「不得静默跳过变量」的契约）。
+    #[must_use]
+    pub fn dropping(name: &str) -> Self {
+        Self {
+            fail: false,
+            leak: false,
+            drop_name: Some(name.to_owned()),
         }
     }
 }
@@ -399,6 +441,7 @@ impl CredentialResolver for FakeCredentials {
                     .iter()
                     .any(|name| name == binding.name())
             })
+            .filter(|binding| self.drop_name.as_deref() != Some(binding.name()))
             .map(|binding| {
                 (
                     binding.name().to_owned(),

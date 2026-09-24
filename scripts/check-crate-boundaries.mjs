@@ -46,8 +46,10 @@ function readDependencyMatrix(document) {
       .slice(1, -1)
       .map((cell) => cell.trim());
     const from = cells[0];
-    // 每一行都要收：只有 8 个 crate 同时是「列」（可被依赖的对象），但 storage-sqlite /
-    // agent-host / server / app 等只作为行存在，跳过它们会让这些 crate 的依赖边无人检查。
+    // 每一行都要收：§5 矩阵当前有 9 个「列」（可被依赖的对象：core、acp-protocol、agent-host、
+    // 两个协议 crate、acpr-transcript、acpr-wire、identity-auth、identity-keystore）；
+    // `node-link-client` / `storage-sqlite` / `server` / `app` 仍只作为「行」存在，跳过它们会让
+    // 这些 crate 的依赖边无人检查（`MODULE_ARCHITECTURE.md` §5 表下同样披露了这一点）。
     const row = new Map();
     columns.forEach((to, columnIndex) => {
       if (cells[columnIndex + 1] === "✓") row.set(to, true);

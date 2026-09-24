@@ -109,7 +109,7 @@
 | --- | --- | --- |
 | `RV2`-F1（MAJOR，stderr 场景缺用例） | fake child 新增 `stderr-flood` 场景（192×4 KiB）；新增 `stderr_flood_is_bounded_and_counted`：断言 `dropped > 0`、快照 ≤ 256 KiB、仍保留尾部，且 stdout 通道不受影响（prompt 正常完成） | `reports/wp3-agent-host-supervision.log` |
 | `RV2`-F2（MAJOR，合同漂移） | 同步三处文字：`docs/MODULE_ARCHITECTURE.md` §4.5、`docs/SECURITY_DESIGN.md` §12.2 的 stderr 行、变更规范 `specs/local-agent-host/spec.md` → 「有界采集 + 只记结构化计数（丢弃字节数/采集总字节数），内容不进日志、可按上限回取」 | `npm run check`（doc links / ACP 资产门禁全绿） |
-| `RV2` 其余 MINOR | `design.md`/`tasks.md`/`plan.md` 的 `libc` 全部改为 `nix` 并标注原因；plan 的模块名改为实际文件；`AGENTS.md` 的「尚未落地」列表去掉两个新 crate；本文件测试计数改为实测值；新增 PV3 候选版本行；`nix 0.30.1` 的 `MIT OR Apache-2.0` 与 Unix 分支「只做编译核验」记入 §4.5 | `npm run check`、`reports/du1-main-verify.log` |
+| `RV2` 其余 MINOR | `design.md`/`tasks.md`/`plan.md` 的 `libc` 全部改为 `nix` 并标注原因；plan 的模块名改为实际文件；`AGENTS.md` 的「尚未落地」列表去掉两个新 crate；本文件测试计数改为实测值；新增 PV3 候选版本行；`nix 0.30.1` 的 `MIT`（已核实本地 registry 元数据；原写 `MIT OR Apache-2.0` 属事实错误）与 Unix 分支「只做编译核验」记入 §4.5 | `npm run check`、`reports/du1-main-verify.log` |
 
 ### 检视报告归档
 
@@ -124,6 +124,18 @@
 2. **未处理项的处置**：同意按下述方式处理。
 4. **先本地合并**：同意先在本地把本分支合并到 `main`（不推送），PR/CI 门禁另行安排。
 
+### 目标基线与引用核实（任务 6.1，2026-09-24）
+
+| 项 | 值 |
+| --- | --- |
+| 目标仓库 | `origin` = `git@github.com:lindongfang/acp-remote.git`（`git remote -v`） |
+| 目标分支 | `refs/heads/main`（本地 `main`），远端 `refs/remotes/origin/HEAD` → `refs/remotes/origin/main` |
+| 核实命令与输出 | `git rev-parse refs/heads/main` → `4c24fbd665738b7bbb34311d525896caa0215e89`；`git rev-parse refs/remotes/origin/main` → `094009b31f32c42928c01f2943eb7cf6e15c6154` |
+| 本单元基线 / 候选 | 基线 `094009b`（= 合入前 `main`，也是 `origin/main`）；候选 `4c24fbd`（= 合入后 `main`） |
+| 工作区 | 主 Agent 工作区 `D:/Project/acp-remote`（`git worktree list` 已核对）；集成 Agent 另用隔离开关 worktree |
+
+结论：目标与引用可确认，非 BLOCKED。**已知偏差（如实记录）**：6.6 的合入在 6.3/6.4/6.5 之前就按用户旨意（「先本地合并」）完成，因此候选提交与主分支提交是同一个提交（`4c24fbd`）而非先后两个版本；6.3 与 6.7 的检查因此落在完全相同的树上（同 SHA、同工作区内容），证据可显式复用，但会分别记录两轮执行。
+
 ### 本地合并记录（2026-09-24）
 
 按第 4 项裁定执行：`feat/acp-boundary-and-agent-host` → **fast-forward** 合入本地 `main`（`094009b` → `6f1515a`，7 个提交），未推送、未开 PR，`origin/main` 仍在 `094009b`。合并后 `npm run check` exit 0。完整证据（合并前后位置、合入提交清单、未随合并完成的事项）见 `reports/du1-integration.md`。
@@ -137,6 +149,18 @@
 | RV2-F5（无会话 runtime 回收无用例） | 新增 `idle_reclaim_also_applies_to_processes_without_sessions`（协商后无会话 → 零值不回收、超时即回收） |
 | 其余未处理项 | 保持登记：`RV-WP3-F4`（Unix pid 复用窗口，接受风险）、`RV-WP2-F3/F6`（矩阵 row id 措辞/出站 id 规范化，已记录偏离与接受）、`RV-WP1-F4`（§5 矩阵缺列，下一切片）、文件所有权表措辞与 RV1-F7 的写范围重叠（随 §4.5 措辞一同处理） |
 
+### RV3 检视轮（任务 3.2 / 3.10，2026-09-24）
+
+- 执行方式：两个**新隔离只读 reviewer 上下文**（`reviewer` agent，run `4ff355c8…`、`c37e8abe…`），分别复核 WP1（文档/依赖矩阵）与 WP5（配置/凭据/目录/回收），检视对象 `4c24fbd`；报告归档于 `reports/rv1-wp1.md`（RV3 段）与 `reports/rv1-wp5.md`。
+- **能力边界（必须与结论一起读）**：该上下文只有只读文件工具、**没有 bash/git**，两份报告均为静态阅读 + 契约比对，**未执行任何命令**；依赖矩阵门禁与 PV 由主 Agent 代跑（见 `Checks` 表）。因无 `git`，两份报告都未核对 `094009b..4c24fbd` 的提交区间 diff，只检阅磁盘当前内容（当时工作树无未提交的 crate 改动，故等价于候选提交内容）。
+- 结论：**无 BLOCKER**。
+  - WP1：6 个 MINOR —— `nix` 许可证事实错误（实为 `MIT`，文档写 `MIT OR Apache-2.0`，且与本文件另一处自相矛盾）、stderr 残留措辞 3 处、stderr 场景无可失败断言、`process.rs` 注释小节指针错（§13.3 → §14.1）、`AGENTS.md` §9「尚未落地」名单未同步、§5 缺列只在变更目录登记（权威文档与门禁注释均未披露）、文件所有权/cfg 判据措辞与实际文件不符。
+  - WP5：2 个 MAJOR —— ①`sweep_idle` 只 `close_session`+`shutdown`，不从 map 移除 runtime 也不清映射，`open()` 会把已关闭的 supervisor 重新标记为活跃并返回端点（与 delta spec「既有会话映射不再被复用」直接冲突；当前工作树内因 broker 缓存端点而不可达，接线 `app` 后即可达）；②spec 的「目录条目转为不可用」既未实现、也无用例、也未登记为未处理。另有 MINOR/P2：缺「白名单 ∩ 绑定」期望集合比对（漏注入不可见）、`ACPR_` 无静态拒绝、`LaunchSpec` 公开 `Debug` 会带明文凭据、目录查询注释不实、空闲时钟不含 `set_mode`/`set_config`/`cancel`/`resolve` 等活动、`runtime_running` 的 `try_lock` 假通过与只证明 `closing` 置位、`profile_selection_ignores_startup_configuration_files` 不可证伪且属 RV1 被静默丢下的发现、`open`/`shutdown_agent`/`spawn_idle_sweep`/`UnknownProfile` 无覆盖、回收/关闭与启动不互斥（3 种交错）、`ensure_runtime` 跨 await 持锁。
+- 处置：全部 MAJOR 与可落地 MINOR 作为修复批次下发实现 Agent（独立上下文，见「Failures and Retests」的 `RV3-1`），随后由**新的**独立 reviewer 复核（3.2/3.10 的复核轮）。
+- **规范措辞修正**（本变更 delta spec `specs/local-agent-host/spec.md`，属检视者给出的「二选一」中的说明路径）：
+  1. 空闲回收场景：删除「目录条目转为不可用」，改为「可用性只由命令解析 + 凭据解析决定，回收不改变可用性；既有会话映射不再被复用，后续 `open` 必须显式失败」。理由：回收是资源管理，不应让 Agent 从目录消失；原措辞与 `AgentDescriptor.available` 的既有语义（可解析性）冲突。
+  2. profile 来源场景：明确 profile 只来自注入配置端口、本 crate 不读任何配置文件，使该场景可证伪（配套断言配置端口确实被调用）。
+
 ### 仍未处理（下一轮必须解决或由用户裁定）
 
 - `RV-WP3-F4`（Unix `killpg` 的 pid 复用窗口）：当前实现按记录下来的 pgid 结束进程组，子进程已被回收时可能误伤复用同一 pid 的进程组。修法是保存 `pidfd` 或在 `exit.done` 时跳过 `killpg`——两者都改变平台实现细节，留待下一轮（当前记为**已接受风险**，仅影响 Unix 且需要极端时序）。
@@ -144,6 +168,10 @@
 - `RV-WP2-F3`（矩阵 row id 引用）：测试改为直接断言矩阵的声明式字段（`wireName`/`wireValue`/`path`/`status`/`delivery`），并以 `invariant_fixtures_exist` 覆盖不变量的夹具存在性；不再声称逐条引用 row id（与 2.11 的原文措辞有偏差，属已记录的偏离）。
 - `RV-WP1-F4`（§5 矩阵缺 `storage-sqlite`/`node-link-client` 列）：既有缺口，属 App/Node Link 切片范围内，本变更不改。
 - `RV-WP1-F7` / `RV-WP4`（`agent-host` 文件所有权表与 WP 写范围）：已把 `session.rs`/`host.rs`/`launch.rs` 的命名写进本文件与 plan，但 `host.rs` 同时含 WP3（运行时/路由）与 WP4/WP5（端口实现）内容——**写范围重叠**已实际发生（W0 段落说明由一把异步锁串行化），下一轮应更新该表的措辞。
+- **RV3-Q4-4**（`ensure_runtime` 跨 `await` 持 `runtimes` 锁：`resolve_launch`/`Supervisor::start`/`initialize`/崩溃恢复都在锁内）：属**活性/吞吐**缺陷（一个 agent 启动慢会串行阻塞其它 agent 的启动与回收），功能正确性未破。修法（per-agent 初始化锁或 `OnceCell`）留待接线 `app` 前与 `RV3-Q4-3` 的残余交错一起收口；本变更内先把「死 runtime 被复用」与「关闭中启动新进程」两类显式失败收敛掉。
+- **RV3-Q3-2**（`UnknownProfile` 分支无用例）：与目录/启动路径同批收口。
+- **RV3-Q4-6 残余**：`runtime_running` 在锁被占用时返回 `false`，与「未运行」不可区分；已要求回收用例补进程外可观察断言（心跳文件停止）。
+- **RV3-Q5**（`profile_selection_ignores_startup_configuration_files` 的覆盖归属）：已按可证伪方向调整（断言配置端口确实被调用）；若复核认为仍无真实接缝，则应把该场景移交 `app` 切片用组合根的真实接缝验证，并在本变更登记。
 - **未执行**：RV1 的**复核轮**（recheck）。本轮修复后没有再次派发隔离 reviewer，因此「修复有效」目前只有实现者证据，不构成独立结论；3.2/3.4/3.6/3.8 仍未最终关闭。
 
 ## Merge History

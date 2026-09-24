@@ -455,6 +455,8 @@ impl AcpSession {
     pub fn cancel_turn(&self, turn: Option<TurnId>) -> Result<(), HostError> {
         let _ = turn;
         {
+            // 用户/客户端活动：空闲时钟必须覆盖出站活动，否则「只改模式/只取消」的会话会被回收。
+            self.touch();
             let mut inner = lock(&self.inner);
             if inner.closed {
                 return Err(HostError::SessionClosed);
@@ -477,6 +479,8 @@ impl AcpSession {
         interaction: &InteractionId,
         resolution: InteractionResolution,
     ) -> Result<(), HostError> {
+        // 交互应答也是活动：未解析的交互是 Agent 在等人类，这一时刻显然不是「空闲」。
+        self.touch();
         let pending = lock(&self.inner)
             .interactions
             .remove(interaction.as_str())
@@ -759,6 +763,8 @@ impl SessionEndpoint for Endpoint {
     }
 
     async fn set_mode(&self, mode: &ModeId) -> Result<(), PortError> {
+        // 出站活动：刷新空闲时钟（只改模式、不 prompt 的会话不得在超时前被回收）。
+        self.session.touch();
         if self.session.mode_state().available.is_empty() {
             // Agent 没有给过任何可用模式：显式拒绝，**不发消息**（不虚报支持）。
             return Err(HostError::CapabilityNotDeclared {
@@ -786,10 +792,12 @@ impl SessionEndpoint for Endpoint {
     }
 
     async fn list_config(&self) -> Result<Vec<ConfigOption>, PortError> {
+        self.session.touch();
         Ok(self.session.config_options())
     }
 
     async fn modes(&self) -> Result<ModeState, PortError> {
+        self.session.touch();
         Ok(self.session.mode_state())
     }
 
@@ -798,6 +806,8 @@ impl SessionEndpoint for Endpoint {
         id: &acp_core::model::ConfigOptionId,
         value: ConfigValue,
     ) -> Result<(), PortError> {
+        // 出站活动：同 `set_mode`，写入配置也算活动。
+        self.session.touch();
         let known = self
             .session
             .config_options()

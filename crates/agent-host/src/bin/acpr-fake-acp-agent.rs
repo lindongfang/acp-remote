@@ -7,6 +7,10 @@
 //! `elicitation`、`slow-initialize`、`no-response`、`illegal-json`、`unknown-id`、`out-of-order`、
 //! `crash-on-prompt`、`spawn-grandchild`、`heartbeat-child`，另有 `--dump-env <path>` 便于断言
 //! 注入给子进程的环境变量集合。
+//!
+//! `--heartbeat-file <path>` 让子进程在存活期间每 50 ms 追加一个字节（`heartbeat-child` 直接用它，
+//! 其余场景另外开一个线程写同一个文件）：进程是否真的结束因此可以在**进程外**观察，而不依赖进程内的
+//! `is_running()` 状态位。
 
 use std::io::{BufRead, Write};
 use std::process::ExitCode;
@@ -94,6 +98,12 @@ fn main() -> ExitCode {
     if args.scenario == "heartbeat-child" {
         return heartbeat_child(&args);
     }
+    // `--heartbeat-file`：任何场景都持续写心跳，让「进程真的结束了」在进程外可观察。
+    if let Some(path) = args.heartbeat_file.clone() {
+        std::thread::spawn(move || {
+            let _ = heartbeat_loop(&path);
+        });
+    }
     if let Some(path) = &args.dump_env {
         let mut lines: Vec<String> = std::env::vars().map(|(k, v)| format!("{k}={v}")).collect();
         lines.sort();
@@ -124,17 +134,23 @@ fn heartbeat_child(args: &Args) -> ExitCode {
     let Some(path) = args.heartbeat_file.clone() else {
         return ExitCode::from(2);
     };
+    match heartbeat_loop(&path) {
+        // 循环只在进程结束时终止，因此正常路径不可达；保留分支以免误报成功。
+        Ok(()) => ExitCode::SUCCESS,
+        Err(()) => ExitCode::from(3),
+    }
+}
+
+/// 持续向 `path` 追加一个字节（每 50 ms），直到进程结束或文件不可写。
+fn heartbeat_loop(path: &str) -> Result<(), ()> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|_| ())?;
     loop {
-        let mut file = match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(_) => return ExitCode::from(3),
-        };
         if file.write_all(b".").is_err() {
-            return ExitCode::from(4);
+            return Err(());
         }
         let _ = file.flush();
         std::thread::sleep(std::time::Duration::from_millis(50));

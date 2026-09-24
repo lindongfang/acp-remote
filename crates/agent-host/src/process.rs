@@ -607,7 +607,8 @@ async fn stderr_loop(mut stderr: tokio::process::ChildStderr, ring: Arc<Mutex<St
                     0
                 };
                 // 结构化日志只记计数与字节数：stderr 可能夹带密钥或 prompt 片段，
-                // 因此内容**永不**进日志（`SECURITY_DESIGN.md` §13.3、`MODULE_ARCHITECTURE.md` §4.5）。
+                // 因此内容**永不**进日志（`SECURITY_DESIGN.md` §14.1「默认日志允许字段」、
+                // `MODULE_ARCHITECTURE.md` §4.5）。
                 // 限频：最多每秒一条丢弃计数日志（超限丢弃最旧数据本来就是持续行为）。
                 if dropped > announced && last_log.elapsed() >= std::time::Duration::from_secs(1) {
                     announced = dropped;
