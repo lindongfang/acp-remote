@@ -1,0 +1,32 @@
+[package]
+name = "identity-auth"
+description = "身份、配对、签名与授权的纯状态机（不依赖平台 API，不写 cfg 平台分支）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# 依赖方向以 docs/MODULE_ARCHITECTURE.md §5 为唯一判据（`scripts/check-crate-boundaries.mjs` 断言）：
+# 本 crate 只允许 core、两个协议 crate 与 acpr-transcript（后三者**仅**用于 transcript 编解码与
+# domain/field tag 表，不使用其业务类型）；不得依赖 `acpr-wire`、runtime、serde、数据库、
+# WebSocket 或 `identity-keystore`（端口由本 crate 定义、由组合根注入实现）。
+[dependencies]
+core = { path = "../core" }
+sync-protocol = { path = "../sync-protocol" }
+node-link-protocol = { path = "../node-link-protocol" }
+acpr-transcript = { path = "../acpr-transcript" }
+async-trait.workspace = true
+thiserror.workspace = true
+# 只增量开启 `ecdsa`（**只验签**：本 crate 不持私钥、不签名）；不开 `pkcs8`——不做密钥编码，
+# 也不允许 DER 形态的签名进入实现（`docs/IDENTITY_AND_AUTH_CONTRACT.md` §3）。
+p256 = { workspace = true, features = ["ecdsa"] }
+sha2.workspace = true
+hmac.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

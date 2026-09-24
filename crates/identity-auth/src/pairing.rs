@@ -1,0 +1,436 @@
+//! 配对状态机（合同 §4）：创建、认领校验、落定、过期与重启终结、SAS 与状态视图。
+//!
+//! 入口只做纯计算与内存态变更：持久化事实由调用方以快照入参提供、以领域值返回，由调用方组装
+//! `core::ports` 的写集（`PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`/`ExpiryWrite`）
+//! 并单事务提交。这样「状态机不访问存储」与「写集一事务提交」同时成立，且每个失败路径都能直接单测。
+
+use acp_core::model::{
+    PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement, PairingState,
+    PairingTarget, PeerIdentity, Timestamp,
+};
+
+use crate::authority::Authority;
+use crate::error::PairingError;
+use crate::state::PairingMaterial;
+use crate::transcript::{
+    NodeLinkPairingProof, NodeLinkPairingSas, SyncPairingProof, SyncPairingSas,
+};
+use crate::types::{
+    CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
+    Completion, IdentityFact, PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PairingDecision,
+    PairingDraft, PairingRequestId, PairingSpec, PairingStatusView, RequestedCapabilities, Sas,
+    at_or_after, is_unconfirmed,
+};
+
+impl Authority {
+    /// 创建一个配对：登记请求集合、绑定、有效期与内存 secret；返回待落库的记录草稿。
+    ///
+    /// `expires_at` 由调用方按「不超过 5 分钟」算出后传入，本方法只复核上界（收窄可以、延长不行）。
+    pub fn begin_pairing(
+        &self,
+        pairing_id: &PairingId,
+        spec: &PairingSpec,
+        requested: &RequestedCapabilities,
+        display_name: Option<&str>,
+        created_at: &Timestamp,
+        expires_at: &Timestamp,
+    ) -> Result<PairingDraft, PairingError> {
+        let target = spec.target();
+        if !requested.matches_target(target) {
+            return Err(PairingError::CapabilityKindMismatch);
+        }
+        let created = crate::transcript::unix_seconds(created_at)?;
+        let expires = crate::transcript::unix_seconds(expires_at)?;
+        if expires <= created || expires - created > PAIRING_MAX_SECONDS {
+            return Err(PairingError::InvalidWindow);
+        }
+        let secret = crate::types::PairingSecret::generate(self.entropy())
+            .map_err(|_| PairingError::EntropyUnavailable)?;
+        let server_nonce = crate::handshake::random_nonce_for(self.entropy())
+            .map_err(|_| PairingError::EntropyUnavailable)?;
+        let pairing_request_id = PairingRequestId::generate(self.entropy())
+            .map_err(|_| PairingError::EntropyUnavailable)?;
+        let record = PairingRecord::try_new(
+            pairing_id.clone(),
+            target,
+            PairingState::Created,
+            display_name.map(str::to_owned),
+            requested.scopes.clone(),
+            requested.grants.clone(),
+            secret.digest(),
+            spec.host_binding(),
+            created_at.clone(),
+            expires_at.clone(),
+            None,
+            None,
+            None,
+        )?;
+        self.state().put_secret(
+            pairing_id,
+            PairingMaterial {
+                secret,
+                server_nonce: server_nonce.clone(),
+                pairing_request_id: pairing_request_id.clone(),
+            },
+        );
+        Ok(PairingDraft {
+            record,
+            secret,
+            server_nonce,
+            pairing_request_id,
+        })
+    }
+
+    /// SAS 派生（合同 §4.4）：本机在批准界面上展示的 6 位短验证码。
+    ///
+    /// 只在「已认领且尚未落定」的窗口内有意义（secret 还在内存、请求方身份已固定）；
+    /// 过期、已落定或 secret 已被清除时返回错误，**不**以占位值代替。本机结果只用于本地展示，
+    /// 绝不当作对端结果下发（合同 §4.4）。
+    pub async fn pairing_sas(
+        &self,
+        pairing: &PairingRecord,
+        peer: &ClaimedPairing,
+    ) -> Result<Sas, PairingError> {
+        if pairing.state() != PairingState::PendingConfirmation {
+            return Err(PairingError::WrongState);
+        }
+        if at_or_after(&self.now(), pairing.expires_at()) {
+            return Err(PairingError::Expired);
+        }
+        let material = self
+            .state()
+            .material(pairing.id())
+            .cloned()
+            .ok_or(PairingError::SecretUnavailable)?;
+        let host_public_key = self
+            .node_public_key()
+            .await
+            .map_err(|_| PairingError::SecretUnavailable)?;
+        let secret = material.secret;
+        let transcript = match (pairing.target(), &peer.peer) {
+            (PairingTarget::Device, PeerIdentity::Device(device)) => {
+                let canonical_origin = CanonicalOrigin::parse(&peer.host_binding)?;
+                SyncPairingSas {
+                    host_id: self.local_node().clone(),
+                    device_id: device.clone(),
+                    pairing_id: pairing.id().clone(),
+                    canonical_origin,
+                    host_public_key,
+                    device_public_key: peer.public_key.clone(),
+                    client_nonce: peer.client_nonce.clone(),
+                    server_nonce: material.server_nonce,
+                    pairing_request_id: material.pairing_request_id,
+                }
+                .transcript()?
+            }
+            (PairingTarget::Node, PeerIdentity::Node(node)) => NodeLinkPairingSas {
+                owner_node_id: self.local_node().clone(),
+                access_node_id: node.clone(),
+                pairing_id: pairing.id().clone(),
+                owner_public_key: host_public_key,
+                access_public_key: peer.public_key.clone(),
+                client_nonce: peer.client_nonce.clone(),
+                server_nonce: material.server_nonce,
+                pairing_request_id: material.pairing_request_id,
+            }
+            .transcript()?,
+            _ => return Err(PairingError::ClaimMismatch),
+        };
+        crate::transcript::derive_sas(&transcript, &secret).map_err(PairingError::from)
+    }
+
+    /// 认领校验：结构 → 状态/过期 → 绑定 → 集合 → HMAC 的唯一入口。
+    ///
+    /// `existing` 是调用方从存储里读到的「该配对已固定的对端」（没有则为 `None`）：相同载荷重发
+    /// 返回 [`ClaimOutcome::Repeat`]（幂等，不产生第二次写入），不同载荷返回拒绝。
+    pub fn verify_claim(
+        &self,
+        pairing: &PairingRecord,
+        existing: Option<&ClaimedPairing>,
+        fields: &ClaimFields,
+    ) -> Result<ClaimOutcome, PairingError> {
+        // 结构：标识与目标族必须一致（不一致属结构性错误，先于任何状态判定）。
+        if pairing.id() != &fields.pairing || !fields.kind.matches_target(pairing.target()) {
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::Malformed));
+        }
+        // 幂等：已固定对端的重复认领。
+        if let Some(existing) = existing {
+            return Ok(if existing.matches(fields) {
+                ClaimOutcome::Repeat(Box::new(existing.clone()))
+            } else {
+                ClaimOutcome::Rejected(ClaimRejection::NotClaimable)
+            });
+        }
+        if pairing.state() != PairingState::Created {
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::NotClaimable));
+        }
+        if self.state().is_invalidated(&fields.pairing) {
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::NotClaimable));
+        }
+        if at_or_after(&self.now(), pairing.expires_at()) {
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::Expired));
+        }
+        // §11.2 第 1 条：对端必须逐字回显登记绑定。
+        if fields.host_binding != pairing.host_binding() {
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::BindingMismatch));
+        }
+        let registered = RequestedCapabilities {
+            scopes: pairing.requested_scopes().clone(),
+            grants: pairing.requested_grants().clone(),
+        };
+        if !fields.requested.within(&registered) {
+            return Ok(ClaimOutcome::Rejected(
+                ClaimRejection::CapabilitiesExceedRegistered,
+            ));
+        }
+        // 证明：内存 secret（重启后必然缺失 → 该配对已不可认领）。
+        let Some(secret) = self.state().secret(&fields.pairing) else {
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::NotClaimable));
+        };
+        if self.verify_claim_proof(pairing, fields, &secret).is_err() {
+            let failures = self.state().record_failure(&fields.pairing);
+            if failures >= PAIRING_MAX_FAILURES {
+                self.state().invalidate(&fields.pairing);
+                return Ok(ClaimOutcome::Rejected(ClaimRejection::TooManyFailures));
+            }
+            return Ok(ClaimOutcome::Rejected(ClaimRejection::ProofInvalid));
+        }
+        Ok(ClaimOutcome::Claimed(Box::new(ClaimedPairing {
+            pairing: fields.pairing.clone(),
+            peer: fields.peer.clone(),
+            display_name: fields.display_name.clone(),
+            public_key: fields.public_key.clone(),
+            host_binding: fields.host_binding.clone(),
+            client_nonce: fields.client_nonce.clone(),
+            requested: fields.requested.clone(),
+        })))
+    }
+
+    /// 按目标族选择 transcript domain 并校验认领证明。
+    fn verify_claim_proof(
+        &self,
+        pairing: &PairingRecord,
+        fields: &ClaimFields,
+        secret: &crate::types::PairingSecret,
+    ) -> Result<(), PairingError> {
+        match pairing.target() {
+            PairingTarget::Device => {
+                let PeerIdentity::Device(device) = &fields.peer else {
+                    return Err(PairingError::ClaimMismatch);
+                };
+                let crate::types::ClaimKindFields::Device { client_kind } = fields.kind else {
+                    return Err(PairingError::ClaimMismatch);
+                };
+                let canonical_origin = CanonicalOrigin::parse(&fields.host_binding)?;
+                let input = SyncPairingProof {
+                    host_id: self.local_node().clone(),
+                    device_id: device.clone(),
+                    pairing_id: fields.pairing.clone(),
+                    pairing_expires_at: pairing.expires_at().clone(),
+                    canonical_origin,
+                    device_public_key: fields.public_key.clone(),
+                    client_nonce: fields.client_nonce.clone(),
+                    device_name: fields.display_name.clone(),
+                    client_kind,
+                };
+                input.verify(secret, &fields.proof)?;
+            }
+            PairingTarget::Node => {
+                let PeerIdentity::Node(node) = &fields.peer else {
+                    return Err(PairingError::ClaimMismatch);
+                };
+                let ClaimKindFields::Node { node_kind } = fields.kind else {
+                    return Err(PairingError::ClaimMismatch);
+                };
+                let input = NodeLinkPairingProof {
+                    owner_node_id: self.local_node().clone(),
+                    access_node_id: node.clone(),
+                    pairing_id: fields.pairing.clone(),
+                    pairing_expires_at: pairing.expires_at().clone(),
+                    access_public_key: fields.public_key.clone(),
+                    client_nonce: fields.client_nonce.clone(),
+                    node_name: fields.display_name.clone(),
+                    node_kind,
+                };
+                input.verify(secret, &fields.proof)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 落定：批准或拒绝。批准要求状态为 `pending_confirmation`、未过期，且最终集合不超出请求值。
+    ///
+    /// 无论批准还是拒绝，都在本层清除内存 secret（合同 §4.3：拒绝与批准都不再需要它）。
+    pub fn settle(
+        &self,
+        pairing: &PairingRecord,
+        decision: &PairingDecision,
+        at: &Timestamp,
+    ) -> Result<PairingSettlement, PairingError> {
+        match decision {
+            PairingDecision::Approve {
+                granted_scopes,
+                granted_grants,
+            } => {
+                if pairing.state() != PairingState::PendingConfirmation {
+                    return Err(PairingError::WrongState);
+                }
+                if at_or_after(at, pairing.expires_at()) {
+                    return Err(PairingError::Expired);
+                }
+                let granted = RequestedCapabilities {
+                    scopes: granted_scopes.clone(),
+                    grants: granted_grants.clone(),
+                };
+                if !granted.matches_target(pairing.target()) {
+                    return Err(PairingError::CapabilityKindMismatch);
+                }
+                let requested = RequestedCapabilities {
+                    scopes: pairing.requested_scopes().clone(),
+                    grants: pairing.requested_grants().clone(),
+                };
+                if !granted.within(&requested) {
+                    return Err(PairingError::CapabilitiesExceedRequested);
+                }
+                self.state().clear_secret(pairing.id());
+                Ok(PairingSettlement::approved(
+                    granted_scopes.clone(),
+                    granted_grants.clone(),
+                ))
+            }
+            PairingDecision::Reject { reason } => {
+                if !matches!(
+                    pairing.state(),
+                    PairingState::Created | PairingState::PendingConfirmation
+                ) {
+                    return Err(PairingError::WrongState);
+                }
+                self.state().clear_secret(pairing.id());
+                PairingSettlement::rejected(reason.as_deref()).map_err(PairingError::from)
+            }
+        }
+    }
+
+    /// 到期但未终结的配对（调用方据此请求存储做 `expire_pairings`；本层同时清除内存 secret）。
+    pub fn due_pairings(&self, pairings: &[PairingRecord], at: &Timestamp) -> Vec<PairingId> {
+        let now = at.clone();
+        pairings
+            .iter()
+            .filter(|record| {
+                !record.state().is_terminal() && at_or_after(&now, record.expires_at())
+            })
+            .map(|record| {
+                self.state().clear_secret(record.id());
+                record.id().clone()
+            })
+            .collect()
+    }
+
+    /// 进程重启后已无法继续验密的配对（`created`/`pending_confirmation`）：**全部**必须终结。
+    ///
+    /// 依据合同 §4.3：secret 只在内存，重启不能凭 digest 恢复；已批准的信任记录不受影响
+    /// （它们不在未确认集合里）。
+    pub fn unrecoverable_after_restart(&self, pairings: &[PairingRecord]) -> Vec<PairingId> {
+        pairings
+            .iter()
+            .filter(|record| is_unconfirmed(record.state()))
+            .map(|record| {
+                self.state().clear_secret(record.id());
+                record.id().clone()
+            })
+            .collect()
+    }
+
+    /// 状态视图：`created` 阶段只暴露状态与过期时间；已认领后按调用方传入的 SAS 展示。
+    ///
+    /// 非批准态一旦过期，状态字段按 `Expired` 返回（`rejected`/`created` 不再表现为「有效状态」）。
+    pub fn pairing_status(
+        &self,
+        pairing: &PairingRecord,
+        peer: Option<&ClaimedPairing>,
+        sas: Option<crate::types::Sas>,
+    ) -> PairingStatusView {
+        let expired = !matches!(
+            pairing.state(),
+            PairingState::Approved | PairingState::Consumed
+        ) && at_or_after(&self.now(), pairing.expires_at());
+        let state = if expired {
+            PairingState::Expired
+        } else {
+            pairing.state()
+        };
+        let claimed = !matches!(state, PairingState::Created | PairingState::Expired);
+        PairingStatusView {
+            state,
+            display_name: claimed
+                .then(|| peer.map(|peer| peer.display_name.clone()))
+                .flatten(),
+            public_key_fingerprint: claimed
+                .then(|| peer.map(|peer| peer.public_key.fingerprint()))
+                .flatten(),
+            sas: if claimed { sas } else { None },
+            requested: claimed.then(|| RequestedCapabilities {
+                scopes: pairing.requested_scopes().clone(),
+                grants: pairing.requested_grants().clone(),
+            }),
+            peer: claimed
+                .then(|| peer.map(|peer| peer.peer.clone()))
+                .flatten(),
+            expires_at: pairing.expires_at().clone(),
+        }
+    }
+
+    /// 单个配对的累计 proof 失败次数。
+    pub fn failure_count(&self, pairing: &PairingId) -> u32 {
+        self.state().failures(pairing)
+    }
+
+    /// 内存中是否仍持有该配对的 secret（测试与诊断用；不暴露内容）。
+    pub fn has_secret(&self, pairing: &PairingId) -> bool {
+        self.state().secret(pairing).is_some()
+    }
+}
+
+impl Authority {
+    /// 认证收尾（合同 §5.1 的第 3 个入口，也是唯一的副作用入口）。
+    ///
+    /// 状态机内只做一件事：清除已批准配对的内存 secret（合同 §4.3 的「首次认证成功时提前清除」）；
+    /// 返回的 [`Completion`] 告诉调用方需要落库的消费目标、与之一致的时间与本次事实。
+    pub fn complete(
+        &self,
+        fact: IdentityFact,
+        pairing: Option<&PairingId>,
+        at: &Timestamp,
+    ) -> Completion {
+        let consume_pairing = pairing.filter(|pairing| {
+            // 只有仍持有 secret 的配对才需要被推进为 consumed（已经清除说明本次不是首次认证）。
+            self.state().clear_secret(pairing)
+        });
+        Completion {
+            fact,
+            at: at.clone(),
+            consume_pairing: consume_pairing.cloned(),
+        }
+    }
+}
+
+/// `PairingClaim` 与 `ClaimedPairing` 之间的桥接：调用方把 [`ClaimOutcome`] 变成存储层写集。
+impl ClaimedPairing {
+    /// 构造 core 的 [`PairingClaim`]（可直接放进 `PairingClaimWrite`）。
+    pub fn to_claim(&self) -> Result<PairingClaim, PairingError> {
+        let peer = PairingPeer::try_new(
+            self.peer.clone(),
+            &self.display_name,
+            self.public_key.clone(),
+            &self.host_binding,
+            self.client_nonce.clone(),
+        )?;
+        PairingClaim::try_new(
+            self.pairing.clone(),
+            peer,
+            self.requested.scopes.clone(),
+            self.requested.grants.clone(),
+        )
+        .map_err(PairingError::from)
+    }
+}
