@@ -66,5 +66,5 @@
 ## 与归档记录的关系
 
 - 本目录内的既有记录 **保持改写前的哈希原样**：`verification.md` 的 `agentic-assessment.target_commit`、`plan.md` 的修复轮哈希列表、`reports/*.md` 报告与原始 `reports/*.log` 的头部 revision 都不改写——这样 `agentic-assessment.evidence` 中各 `.md` 报告的 sha256 摘要继续有效，原始日志也仍然是未加工的过程证据。需要解析时使用上面的映射表。
-- 旧链条未被丢弃：`refs/heads/backup/before-msg-rewrite` 指向改写前的 tip `9f2096487f1df03bc968edfac2359b86553f7c5a`，`refs/original/refs/heads/main` 保留另一份引用。确认无需回溯后可删除这两个引用。
+- 旧链条未被丢弃：`refs/heads/backup/before-msg-rewrite` 指向改写前的 tip（见上）；另外 `refs/heads/feat/identity-auth-and-keystore` 仍指向旧链中的 `4d988cd`（旧 tip 的祖先）。`refs/original/*` 在本轮第二遍 `filter-branch -f` 后被清理，实测已不存在——旧链的可达性只依赖上述两个 ref，未跟踪的旧对象会随时间被 gc 回收。
 - 本次只改提交元数据（message），**不是重新验收**：被测内容（tree）逐字节未变，归档结论与证据对新哈希同样成立。
