@@ -18,7 +18,7 @@
 
 ## Coverage Index
 
-> **evidence 口径**：下面 R1–R90 各行的 `evidence` 指向**首次交付该能力时**的日志（WP 轮，revision `5c9d2c4`/`627bb8e`）。能力本身在后继轮次未改变，后续各收口轮的等价证据（同一命令、同一 crate 版本）见 `verification.md` 的 Check 行：RV5/RV6 轮 revision `3a247a5`、RV6/RV7 轮 `69dd81f`、RV7/RV8 轮 `c1fd65d`（最新一轮的证据为 `rv8-*` 日志；此后只有只改 `openspec/changes/identity-auth-and-keystore/*.md` 的记录提交，代码等价性由编排者声明），因此这里不逐行改写（R86 一行已额外补指修复轮日志）。
+> **evidence 口径**：下面 R1–R90 各行的 `evidence` 使用**变更目录相对路径**（`reports/…`，由 `openspec-agentic workflow check` 按本变更目录解析；仓库根的 `reports/` 另有别的变更的同名文件，因此**不要在 Coverage Index 里写仓库相对完整路径**）。这些路径指向**首次交付该能力时**的日志（WP 轮，revision `5c9d2c4`/`627bb8e`）。能力本身在后继轮次未改变，后续各收口轮的等价证据（同一命令、同一 crate 版本）见 `verification.md` 的 Check 行：RV5/RV6 轮 revision `3a247a5`、RV6/RV7 轮 `69dd81f`、RV7/RV8 轮 `c1fd65d`（最新一轮的证据为 `rv8-*` 日志；此后只有只改 `openspec/changes/identity-auth-and-keystore/*.md` 的记录提交，代码等价性由编排者声明），因此这里不逐行改写（R86 一行已额外补指修复轮日志）；本文档**正文**提到同一批文件时仍写仓库相对完整路径（如 `openspec/changes/identity-auth-and-keystore/reports/…`），以免与仓库根 `reports/` 的同名文件混淆——两种写法的解析基准不同，是有意区分。
 
 
 ```agentic-coverage
@@ -31,7 +31,7 @@ rows:
       heading: "### Requirement: 配对创建的请求集合与有效期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R2
     source:
       path: specs/identity-pairing/spec.md
@@ -39,7 +39,7 @@ rows:
       requirement: "### Requirement: 配对创建的请求集合与有效期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R3
     source:
       path: specs/identity-pairing/spec.md
@@ -47,7 +47,7 @@ rows:
       requirement: "### Requirement: 配对创建的请求集合与有效期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R4
     source:
       path: specs/identity-pairing/spec.md
@@ -55,7 +55,7 @@ rows:
       requirement: "### Requirement: 配对创建的请求集合与有效期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R5
     source:
       path: specs/identity-pairing/spec.md
@@ -63,14 +63,14 @@ rows:
       requirement: "### Requirement: 配对创建的请求集合与有效期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R6
     source:
       path: specs/identity-pairing/spec.md
       heading: "### Requirement: 认领校验与唯一对端绑定"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R7
     source:
       path: specs/identity-pairing/spec.md
@@ -78,7 +78,7 @@ rows:
       requirement: "### Requirement: 认领校验与唯一对端绑定"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R8
     source:
       path: specs/identity-pairing/spec.md
@@ -86,7 +86,7 @@ rows:
       requirement: "### Requirement: 认领校验与唯一对端绑定"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R9
     source:
       path: specs/identity-pairing/spec.md
@@ -94,7 +94,7 @@ rows:
       requirement: "### Requirement: 认领校验与唯一对端绑定"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R10
     source:
       path: specs/identity-pairing/spec.md
@@ -102,7 +102,7 @@ rows:
       requirement: "### Requirement: 认领校验与唯一对端绑定"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R11
     source:
       path: specs/identity-pairing/spec.md
@@ -110,14 +110,14 @@ rows:
       requirement: "### Requirement: 认领校验与唯一对端绑定"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R12
     source:
       path: specs/identity-pairing/spec.md
       heading: "### Requirement: 落定与信任创建的唯一性"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R13
     source:
       path: specs/identity-pairing/spec.md
@@ -125,7 +125,7 @@ rows:
       requirement: "### Requirement: 落定与信任创建的唯一性"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R14
     source:
       path: specs/identity-pairing/spec.md
@@ -133,7 +133,7 @@ rows:
       requirement: "### Requirement: 落定与信任创建的唯一性"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R15
     source:
       path: specs/identity-pairing/spec.md
@@ -141,7 +141,7 @@ rows:
       requirement: "### Requirement: 落定与信任创建的唯一性"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R16
     source:
       path: specs/identity-pairing/spec.md
@@ -149,14 +149,14 @@ rows:
       requirement: "### Requirement: 落定与信任创建的唯一性"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R17
     source:
       path: specs/identity-pairing/spec.md
       heading: "### Requirement: SAS 派生双方独立"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R18
     source:
       path: specs/identity-pairing/spec.md
@@ -164,7 +164,7 @@ rows:
       requirement: "### Requirement: SAS 派生双方独立"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R19
     source:
       path: specs/identity-pairing/spec.md
@@ -172,14 +172,14 @@ rows:
       requirement: "### Requirement: SAS 派生双方独立"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R20
     source:
       path: specs/identity-pairing/spec.md
       heading: "### Requirement: pairing secret 生命周期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R21
     source:
       path: specs/identity-pairing/spec.md
@@ -187,7 +187,7 @@ rows:
       requirement: "### Requirement: pairing secret 生命周期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R22
     source:
       path: specs/identity-pairing/spec.md
@@ -195,7 +195,7 @@ rows:
       requirement: "### Requirement: pairing secret 生命周期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R23
     source:
       path: specs/identity-pairing/spec.md
@@ -203,14 +203,14 @@ rows:
       requirement: "### Requirement: pairing secret 生命周期"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R24
     source:
       path: specs/identity-pairing/spec.md
       heading: "### Requirement: 失败计数与失效"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R25
     source:
       path: specs/identity-pairing/spec.md
@@ -218,7 +218,7 @@ rows:
       requirement: "### Requirement: 失败计数与失效"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R26
     source:
       path: specs/identity-pairing/spec.md
@@ -226,14 +226,14 @@ rows:
       requirement: "### Requirement: 失败计数与失效"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R27
     source:
       path: specs/identity-pairing/spec.md
       heading: "### Requirement: 身份变化与撤销的唯一恢复路径"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R28
     source:
       path: specs/identity-pairing/spec.md
@@ -241,7 +241,7 @@ rows:
       requirement: "### Requirement: 身份变化与撤销的唯一恢复路径"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R29
     source:
       path: specs/identity-pairing/spec.md
@@ -249,14 +249,14 @@ rows:
       requirement: "### Requirement: 身份变化与撤销的唯一恢复路径"
     tasks: ["2.4", "2.5"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-pairing.log]
+    evidence: [reports/wp2-identity-auth-pairing.log]
   - id: R30
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: 每条新连接完整执行挑战签发"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R31
     source:
       path: specs/identity-handshake/spec.md
@@ -264,7 +264,7 @@ rows:
       requirement: "### Requirement: 每条新连接完整执行挑战签发"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R32
     source:
       path: specs/identity-handshake/spec.md
@@ -272,7 +272,7 @@ rows:
       requirement: "### Requirement: 每条新连接完整执行挑战签发"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R33
     source:
       path: specs/identity-handshake/spec.md
@@ -280,14 +280,14 @@ rows:
       requirement: "### Requirement: 每条新连接完整执行挑战签发"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R34
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: 证明校验的可信公钥来源与检查顺序"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R35
     source:
       path: specs/identity-handshake/spec.md
@@ -295,7 +295,7 @@ rows:
       requirement: "### Requirement: 证明校验的可信公钥来源与检查顺序"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R36
     source:
       path: specs/identity-handshake/spec.md
@@ -303,7 +303,7 @@ rows:
       requirement: "### Requirement: 证明校验的可信公钥来源与检查顺序"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R37
     source:
       path: specs/identity-handshake/spec.md
@@ -311,7 +311,7 @@ rows:
       requirement: "### Requirement: 证明校验的可信公钥来源与检查顺序"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R38
     source:
       path: specs/identity-handshake/spec.md
@@ -319,7 +319,7 @@ rows:
       requirement: "### Requirement: 证明校验的可信公钥来源与检查顺序"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R39
     source:
       path: specs/identity-handshake/spec.md
@@ -327,14 +327,14 @@ rows:
       requirement: "### Requirement: 证明校验的可信公钥来源与检查顺序"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R40
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: 一次性挑战与重放拒绝"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R41
     source:
       path: specs/identity-handshake/spec.md
@@ -342,7 +342,7 @@ rows:
       requirement: "### Requirement: 一次性挑战与重放拒绝"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R42
     source:
       path: specs/identity-handshake/spec.md
@@ -350,14 +350,14 @@ rows:
       requirement: "### Requirement: 一次性挑战与重放拒绝"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R43
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: 时间判定使用注入时钟"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R44
     source:
       path: specs/identity-handshake/spec.md
@@ -365,7 +365,7 @@ rows:
       requirement: "### Requirement: 时间判定使用注入时钟"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R45
     source:
       path: specs/identity-handshake/spec.md
@@ -373,14 +373,14 @@ rows:
       requirement: "### Requirement: 时间判定使用注入时钟"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R46
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: 认证输出只包含事实与凭据状态"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R47
     source:
       path: specs/identity-handshake/spec.md
@@ -388,7 +388,7 @@ rows:
       requirement: "### Requirement: 认证输出只包含事实与凭据状态"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R48
     source:
       path: specs/identity-handshake/spec.md
@@ -396,7 +396,7 @@ rows:
       requirement: "### Requirement: 认证输出只包含事实与凭据状态"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R49
     source:
       path: specs/identity-handshake/spec.md
@@ -404,14 +404,14 @@ rows:
       requirement: "### Requirement: 认证输出只包含事实与凭据状态"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R50
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: transcript 与仓库固定向量保持一致"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R51
     source:
       path: specs/identity-handshake/spec.md
@@ -419,7 +419,7 @@ rows:
       requirement: "### Requirement: transcript 与仓库固定向量保持一致"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R52
     source:
       path: specs/identity-handshake/spec.md
@@ -427,14 +427,14 @@ rows:
       requirement: "### Requirement: transcript 与仓库固定向量保持一致"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R53
     source:
       path: specs/identity-handshake/spec.md
       heading: "### Requirement: 收尾副作用是认证的唯一写入点"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R54
     source:
       path: specs/identity-handshake/spec.md
@@ -442,7 +442,7 @@ rows:
       requirement: "### Requirement: 收尾副作用是认证的唯一写入点"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R55
     source:
       path: specs/identity-handshake/spec.md
@@ -450,14 +450,14 @@ rows:
       requirement: "### Requirement: 收尾副作用是认证的唯一写入点"
     tasks: ["2.4", "2.6"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-handshake.log]
+    evidence: [reports/wp2-identity-auth-handshake.log]
   - id: R56
     source:
       path: specs/scope-expansion/spec.md
       heading: "### Requirement: 授权词汇展开为命令级 scope"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R57
     source:
       path: specs/scope-expansion/spec.md
@@ -465,7 +465,7 @@ rows:
       requirement: "### Requirement: 授权词汇展开为命令级 scope"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R58
     source:
       path: specs/scope-expansion/spec.md
@@ -473,7 +473,7 @@ rows:
       requirement: "### Requirement: 授权词汇展开为命令级 scope"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R59
     source:
       path: specs/scope-expansion/spec.md
@@ -481,14 +481,14 @@ rows:
       requirement: "### Requirement: 授权词汇展开为命令级 scope"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R60
     source:
       path: specs/scope-expansion/spec.md
       heading: "### Requirement: 未知名称显式拒绝"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R61
     source:
       path: specs/scope-expansion/spec.md
@@ -496,7 +496,7 @@ rows:
       requirement: "### Requirement: 未知名称显式拒绝"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R62
     source:
       path: specs/scope-expansion/spec.md
@@ -504,14 +504,14 @@ rows:
       requirement: "### Requirement: 未知名称显式拒绝"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R63
     source:
       path: specs/scope-expansion/spec.md
       heading: "### Requirement: 本地管理能力永不远程授予"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R64
     source:
       path: specs/scope-expansion/spec.md
@@ -519,7 +519,7 @@ rows:
       requirement: "### Requirement: 本地管理能力永不远程授予"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R65
     source:
       path: specs/scope-expansion/spec.md
@@ -527,14 +527,14 @@ rows:
       requirement: "### Requirement: 本地管理能力永不远程授予"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R66
     source:
       path: specs/scope-expansion/spec.md
       heading: "### Requirement: 展开表的唯一机器来源与漂移可见"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R67
     source:
       path: specs/scope-expansion/spec.md
@@ -542,7 +542,7 @@ rows:
       requirement: "### Requirement: 展开表的唯一机器来源与漂移可见"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R68
     source:
       path: specs/scope-expansion/spec.md
@@ -550,14 +550,14 @@ rows:
       requirement: "### Requirement: 展开表的唯一机器来源与漂移可见"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R69
     source:
       path: specs/scope-expansion/spec.md
       heading: "### Requirement: 展开只影响授权输入，不产生授权结论"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R70
     source:
       path: specs/scope-expansion/spec.md
@@ -565,7 +565,7 @@ rows:
       requirement: "### Requirement: 展开只影响授权输入，不产生授权结论"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R71
     source:
       path: specs/scope-expansion/spec.md
@@ -573,14 +573,14 @@ rows:
       requirement: "### Requirement: 展开只影响授权输入，不产生授权结论"
     tasks: ["2.7"]
     checks: [PV3]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-expansion.log]
+    evidence: [reports/wp2-identity-auth-expansion.log]
   - id: R72
     source:
       path: specs/platform-keystore/spec.md
       heading: "### Requirement: 长期密钥的生成、读公钥与签名是同源操作"
     tasks: ["2.1", "2.10", "2.12"]
     checks: [PV4, PV5]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R73
     source:
       path: specs/platform-keystore/spec.md
@@ -588,7 +588,7 @@ rows:
       requirement: "### Requirement: 长期密钥的生成、读公钥与签名是同源操作"
     tasks: ["2.1", "2.10", "2.12"]
     checks: [PV4, PV5]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R74
     source:
       path: specs/platform-keystore/spec.md
@@ -596,7 +596,7 @@ rows:
       requirement: "### Requirement: 长期密钥的生成、读公钥与签名是同源操作"
     tasks: ["2.1", "2.10", "2.12"]
     checks: [PV4, PV5]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R75
     source:
       path: specs/platform-keystore/spec.md
@@ -604,7 +604,7 @@ rows:
       requirement: "### Requirement: 长期密钥的生成、读公钥与签名是同源操作"
     tasks: ["2.1", "2.10", "2.12"]
     checks: [PV4, PV5]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R76
     source:
       path: specs/platform-keystore/spec.md
@@ -612,14 +612,14 @@ rows:
       requirement: "### Requirement: 长期密钥的生成、读公钥与签名是同源操作"
     tasks: ["2.1", "2.10", "2.12"]
     checks: [PV4, PV5]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R77
     source:
       path: specs/platform-keystore/spec.md
       heading: "### Requirement: 平台不可用时失败关闭"
     tasks: ["2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R78
     source:
       path: specs/platform-keystore/spec.md
@@ -627,7 +627,7 @@ rows:
       requirement: "### Requirement: 平台不可用时失败关闭"
     tasks: ["2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R79
     source:
       path: specs/platform-keystore/spec.md
@@ -635,7 +635,7 @@ rows:
       requirement: "### Requirement: 平台不可用时失败关闭"
     tasks: ["2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R80
     source:
       path: specs/platform-keystore/spec.md
@@ -643,14 +643,14 @@ rows:
       requirement: "### Requirement: 平台不可用时失败关闭"
     tasks: ["2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/pv5-windows-dpapi.log]
   - id: R81
     source:
       path: specs/platform-keystore/spec.md
       heading: "### Requirement: 密钥与凭据不进入可观察的非安全位置"
     tasks: ["2.8", "2.12", "2.13"]
     checks: [PV3, PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-ports.log, openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp2-identity-auth-ports.log, reports/wp3-identity-keystore.log]
   - id: R82
     source:
       path: specs/platform-keystore/spec.md
@@ -658,7 +658,7 @@ rows:
       requirement: "### Requirement: 密钥与凭据不进入可观察的非安全位置"
     tasks: ["2.8", "2.12", "2.13"]
     checks: [PV3, PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-ports.log, openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp2-identity-auth-ports.log, reports/wp3-identity-keystore.log]
   - id: R83
     source:
       path: specs/platform-keystore/spec.md
@@ -666,7 +666,7 @@ rows:
       requirement: "### Requirement: 密钥与凭据不进入可观察的非安全位置"
     tasks: ["2.8", "2.12", "2.13"]
     checks: [PV3, PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-ports.log, openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp2-identity-auth-ports.log, reports/wp3-identity-keystore.log]
   - id: R84
     source:
       path: specs/platform-keystore/spec.md
@@ -674,14 +674,14 @@ rows:
       requirement: "### Requirement: 密钥与凭据不进入可观察的非安全位置"
     tasks: ["2.8", "2.12", "2.13"]
     checks: [PV3, PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp2-identity-auth-ports.log, openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp2-identity-auth-ports.log, reports/wp3-identity-keystore.log]
   - id: R85
     source:
       path: specs/platform-keystore/spec.md
       heading: "### Requirement: 条目与引用之间没有分布式事务但可恢复"
     tasks: ["2.14"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp3-identity-keystore.log]
   - id: R86
     source:
       path: specs/platform-keystore/spec.md
@@ -689,7 +689,7 @@ rows:
       requirement: "### Requirement: 条目与引用之间没有分布式事务但可恢复"
     tasks: ["2.14"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log, openspec/changes/identity-auth-and-keystore/reports/rv5-pv4.log, openspec/changes/identity-auth-and-keystore/reports/rv5-mutation.log]
+    evidence: [reports/wp3-identity-keystore.log, reports/rv5-pv4.log, reports/rv5-mutation.log]
   - id: R87
     source:
       path: specs/platform-keystore/spec.md
@@ -697,14 +697,14 @@ rows:
       requirement: "### Requirement: 条目与引用之间没有分布式事务但可恢复"
     tasks: ["2.14"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp3-identity-keystore.log]
   - id: R88
     source:
       path: specs/platform-keystore/spec.md
       heading: "### Requirement: 非硬件保护实现默认不启用"
     tasks: ["2.1", "2.10", "2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp3-identity-keystore.log]
   - id: R89
     source:
       path: specs/platform-keystore/spec.md
@@ -712,7 +712,7 @@ rows:
       requirement: "### Requirement: 非硬件保护实现默认不启用"
     tasks: ["2.1", "2.10", "2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp3-identity-keystore.log]
   - id: R90
     source:
       path: specs/platform-keystore/spec.md
@@ -720,7 +720,7 @@ rows:
       requirement: "### Requirement: 非硬件保护实现默认不启用"
     tasks: ["2.1", "2.10", "2.13"]
     checks: [PV4]
-    evidence: [openspec/changes/identity-auth-and-keystore/reports/wp3-identity-keystore.log]
+    evidence: [reports/wp3-identity-keystore.log]
 ```
 
 ## Work Packages

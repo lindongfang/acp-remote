@@ -53,6 +53,7 @@
 | DU1 6.8 合入后新增差异复核 / 6.8 | `refs/heads/main` = `4d988cd` | 检视合并到主分支后相对候选是否引入冲突解决或额外改动 | 主 Agent（按 6.8 的「无新增差异」分支） | `git diff --stat 4d988cd refs/heads/main`（空）；`git rev-parse refs/heads/main^{tree}` == `git rev-parse 4d988cd^{tree}` | — | PASS（**无任何新增差异**——FF 合入使 main 与候选 tree 逐字节相同，因此不派新 reviewer，按 6.8 的完成条件由主 Agent 记录依据并引用 6.4 的 review ID：`reports/rv1-du1.md` 与后续定向确认 `reports/rv2-du1.md`） | `reports/du1-integration.md` §13.3、6.4 的两份报告 |
 | 7.1 替代验证（Main E2E = `not-applicable`）/ 7.1 | 最终主分支 `refs/heads/main` = **`656189f`**（合入 `4d988cd` 之后的记录提交，工作区干净） | 在**最终主分支固定版本**上执行 `plan.md` 的 `alternative_checks` 五项；这是替代验证的**真实执行**，不以任何其它检查的 PASS 作为完成条件 | 主 Agent（计划允许派发独立执行者采集原始输出；本轮由主 Agent 执行并逐项留证） | `npm run verify`；`node scripts/check-crate-boundaries.mjs`；`cargo test --locked -p identity-auth --all-features`；`cargo test --locked -p identity-keystore --all-features`；`cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture`；`npm run check` | Rust 1.98.1 / cargo 1.98.1 / Node v24.19.0 / npm 12.0.2；DPAPI 串行独占 | PASS（六份日志（`reports/final-pv1`..`pv5`、`reports/final-check.log`）全部在最终主分支固定版本上执行，**每份 NUL = 0、末行 `EXIT=0`**：`npm run verify` exit 0（含 `check` 十道门禁 + fmt + clippy + 全 workspace 测试）；`crate boundaries OK: 10 个 crate`；identity-auth **79** 用例；identity-keystore **36** 用例；DPAPI **5** 用例（`--nocapture` 原始输出）；`npm run check` 独立一轮 9 items（`doc links OK: 370/4005`）。**跳过数**：各 crate 的 doc-tests 二进制 `running 0 tests` 属仓库既有形态（与 `du1-pv1/3/4.log` 一致），无「全部跳过」；DPAPI 过滤器外二进制为 `0 passed … N filtered out` 属过滤器语义） | `reports/final-pv1.log`、`reports/final-pv2.log`、`reports/final-pv3.log`、`reports/final-pv4.log`、`reports/final-pv5.log`、`reports/final-check.log` |
 | 7.2 覆盖索引逐行关联 / 7.2 | 最终主分支 `656189f` | 按 `plan.md` 的 Coverage Index **逐行**核对：R 编号完整性、`source.path`/heading` 是否真实存在、`checks` 是否为合法 Check ID、`evidence` 路径是否可解析 | 主 Agent（机械核对，脚本 `target/check-coverage.mjs`） | 解析 90 行 → 逐行断言（脚本只读） | — | PASS（R1–R90 **90 行、无重复、无缺失**；`source.path` 全部存在且 `heading`/`requirement`` 在所有 4 份 spec 中都能**逐字命中**（0 未命中）；`checks` 全部为 `PV1`–`PV5`；**发现并修复一处口径问题**：6 个 evidence 文件名原先写成裸 `reports/…`（在仓库根不可解析，且仓库根存在另一变更的同名文件），已全部改写为完整路径 `openspec/changes/identity-auth-and-keystore/reports/…`（92 行受影响），改后复核「evidence 不存在：无」） | `target/check-coverage.mjs` 的输出（记录于本表）；`plan.md` 的 Coverage Index |
+| 7.3 `[e2e-owned]` 门禁（`not-applicable`）/ 7.3 | 最终主分支 `refs/heads/main` = `4fb930a`（7.1/7.2 完成后） | 确认不适用判据已按计划固化、降级批准可追溯，并让扩展按 `[e2e-owned]` 标记回写该行状态 | 扩展（`openspec-agentic` 单行所有者） | `npx --quiet --no-install openspec-agentic e2e check --change identity-auth-and-keystore --json` | — | **PASS**（`result: PASS`、`mode: not-applicable`、`approval: true`、`reason: 不适用判据成立且批准字段非空`、`marked: true`——7.3 行由该检查**自动勾选**，主 Agent 未手勾（行级单一所有者））。**注**：在 7.1/7.2 完成前同一命令返回 `BLOCKED`（「任务未全部完成…单变更检查要求变更完成后判定」），属预期——`not-applicable` 下实际替代验证任务必须先完成 | `CLI 原始输出（本表转述）；`tasks.md` 的 7.3 行 |
 ## Check Plan Changes
 
 - **RV1 修复轮新增的检查（2026-09-24）**：
@@ -196,20 +197,69 @@
 
 ## Final Assessment
 
-尚未进入最终验收。
+### 第 1 轮最终验收（2026-09-24，主 Agent）
 
 ```agentic-assessment
-assessment_id: "pending"
-target_commit: "pending"
-contract_digest: "pending"
-result: BLOCKED
-evidence: []
+assessment_id: "identity-auth-and-keystore-acceptance-1"
+target_commit: "4fb930a5b3a10fabc206ce03d3c8e10914f8915f"
+contract_digest: "sha256:6ace85504add2ea1742a9fae24d5775d78c60ede111c0dd9e0dd0bb0ad75afec"
+result: PASS
+evidence:
+  - path: reports/wp2-identity-auth-pairing.log
+    sha256: "sha256:cdff4590713100417f3f705c21b23f49448dc036d396ae9ec47b35496b04010c"
+  - path: reports/wp2-identity-auth-handshake.log
+    sha256: "sha256:b2562ebcae10c04e7830ec92d61915f06e140f3ed4a0d6aaaa6b98d11d207aa8"
+  - path: reports/wp2-identity-auth-expansion.log
+    sha256: "sha256:547a65da43f33c002989f86f3b2ffc47c67e7b9fe8fc35b21d14bdd2b97da894"
+  - path: reports/wp3-identity-keystore.log
+    sha256: "sha256:ef21cb231508d16c2225db168e74f503f1f58406c5ea4fa2baec7ab86f3cb0dc"
+  - path: reports/pv5-windows-dpapi.log
+    sha256: "sha256:43bd1f2119559c8814172050d1b7b583df7003a4fb2dd72fabf37442f6205a1c"
+  - path: reports/wp2-identity-auth-ports.log
+    sha256: "sha256:5f057f4e7982fae46f757b353f248363257c2c115a502917772af431fb079e13"
+  - path: reports/rv5-pv4.log
+    sha256: "sha256:6f5f11462a16a478614d5dd5723357feda3519896da7e23cede6a6a25d26afdf"
+  - path: reports/rv5-mutation.log
+    sha256: "sha256:5d7499c8455fdb5af18d4395913f57717e75650b06e152f363eff09e71940c27"
+  - path: reports/du1-main-verify.log
+    sha256: "sha256:984f390e994eb1f4d25a932a0c4de434a47663e35a552b1903f8f3d0ac6c2e39"
+  - path: reports/du1-pv1.log
+    sha256: "sha256:efecba6528bcfd132fba0c530e722327752f4cf094ddf44ef8cb338f1163492d"
+  - path: reports/du1-pv3.log
+    sha256: "sha256:8ac8855c846d206a6f93c7a575c64f559891cd5c8029012c888f60c1b498bd82"
+  - path: reports/du1-pv4.log
+    sha256: "sha256:c4a0ba03a39ab8ee31394dad2e9fb6d19fb238887156df7f85028ce48695b8de"
+  - path: reports/du1-pv5.log
+    sha256: "sha256:ffbb1d4bce774bb4c700c91ac417ebde7b64f8db164d37caef7faf32f1dfcf2a"
+  - path: reports/du1-integration.md
+    sha256: "sha256:82ec75aeb21c8691b2e1a25f1037a3d7c4c30eb0d39fad715abfae94f8a57afc"
+  - path: reports/final-pv1.log
+    sha256: "sha256:a2da081d14814b35d58b05364994c5b5418ee953ae7787a3b3c36367d71b1fab"
+  - path: reports/final-pv3.log
+    sha256: "sha256:4323839f822656df67b6d974b96072ab68ed5502ebf1c9aeb1f1e05dd312a11a"
+  - path: reports/final-pv4.log
+    sha256: "sha256:980ba05eaedea653cf0d08edfa81646db5653d5eda9035ddde9d713a549a0b65"
+  - path: reports/final-pv5.log
+    sha256: "sha256:2b7dc30c8d1461a00a234431b977d2ff4dd1f68880a1a354d3b3919eebdf27eb"
+  - path: reports/final-check.log
+    sha256: "sha256:edd0811b048604ae7f8cd879cf3cd1a2a638908612db27dc073d89a60a0d4999"
+  - path: reports/rv1-du1.md
+    sha256: "sha256:7434b4b2d947a22ce0364ceb076fe6353a5e5a9bb476e3f22fd8d6619b42ff4f"
+  - path: reports/rv2-du1.md
+    sha256: "sha256:7f7514c37294464d0084fb5de22e62ba73d58c7012b02db143ae8f81bc926ec3"
+  - path: reports/rv9-final.md
+    sha256: "sha256:1a24c556fa3f3b38b4519021674dfeb057827137ef9b800dc302c85ee7fc7255"
 ```
 
-- Assessment ID / Time: 待最终验收轮次填写
-- Target / Task: 待最终验收轮次填写
-- CLI State: 待最终验收轮次填写
-- Audit / Evidence: 待最终验收轮次填写
-- Result / Open Issues: 待最终验收轮次填写
-- Required Follow-up: 待最终验收轮次填写
-
+- **Assessment ID / Time**：`identity-auth-and-keystore-acceptance-1`；2026-09-24（本地）；执行者 = 主 Agent（本会话）。
+- **Target / Task**：本地主分支 `refs/heads/main` = **`4fb930a5b3a10fabc206ce03d3c8e10914f8915f`**（本轮验收开始时的 main tip）。**代码提交** = `4d988cd`（DU1 候选，经本地 FF 合入 main）；`4d988cd..4fb930a` 之间的提交**只改** `openspec/changes/identity-auth-and-keystore/` 内的记录与报告（`git diff --name-only 4d988cd..HEAD | grep -v "^openspec/changes/identity-auth-and-keystore/"` = **0**），因此 `crates/`、`Cargo.*`、`docs/`、`.gitleaks.toml` 的内容在候选验证与最终验收之间**未变**——这是本轮全部测试证据仍适用最终版本的依据。目标核实证据：`git rev-parse refs/heads/main`、`git rev-parse refs/heads/main^{tree}` == `git rev-parse 4d988cd^{tree}`（`125da85`）。最终验收任务 ID = `tasks.md` 的 `8.1 [final-verification]`。
+- **CLI State**：`openspec status --change identity-auth-and-keystore --json`（2026-09-24，验收开始时）→ `schemaName: agentic`、`isPlanningComplete: true`、`isComplete: true`（原始输出保留在会话记录中；此处按原样转述，不改写其含义）。任务计数：`tasks.md` 实读 **42 已勾选 / 1 待办**，唯一待办为本轮正在执行的 `8.1 [final-verification]`。`[e2e-owned]` 行（7.3）由 `openspec-agentic e2e check` 在判 PASS 时**自动勾选**（`marked: true`），主 Agent 未手勾。
+- **Audit / Evidence**（按 `procedures/acceptance.md` 的六个审计组；证据 ID 见上列 `evidence` 块的 `sha256`，原始报告一律按引用留存，不复制其私有对话）：
+  - **Contracts and Coverage**：交付方向与 `proposal.md` 的 Intent/非目标一致——只落地两个库 crate（`identity-auth` 纯状态机、`identity-keystore` 平台 keystore 适配器）+ 合同/文档/依赖登记，**未**触碰切片 4–7 的 `server`/`app`/前端（`git diff --name-only 30f0d78..4d988cd | grep -E "^(compatibility/|schemas/|fixtures/)" | wc -l` = 0）。计划/任务/检查映射见 `## Checks` 的 7.2 行：R1–R90 **90 行、无缺失、源 spec 文件与 heading 逐字命中、checks 全为合法 `PV1`–`PV5`、evidence 路径全部可解析**（本轮修复了 6 个裸 `reports/…` 写法 → 完整路径）。
+  - **Delivery and Versions**：DU1（`integrated`、单一单元）——候选 `4d988cd` 在候选轮与主分支回归均全绿；合入前基线复核 `refs/heads/main` = `30f0d78`（与计划起点一致）并**两次复核一致**；本地 **FF 合入**（`30f0d78 → 4d988cd`，tree 相同、无冲突解决差异）；集成执行者为**独立**子 Agent（Agent ID `d8a7306a-bd96-4901-bf95-1f4a205d3303`，revive 延续其集成上下文 run `7caf9941`；主 Agent 未兼任），使用主 worktree（`plan.md` 的 DU1 行指定）；远端操作 **0 次**。
+  - **Project Checks and Resources**：[PV1]–[PV5] 逐项有完整命令、退出码、日志与用例数（见 `## Checks` 的 6.3/6.7/7.1 行）；统一入口 `npm run verify` 覆盖 `npm run check`（十道门禁）+ `fmt` + `clippy -D warnings` + 全 workspace 测试；**无「未运行/全跳过/失败被吞」**（各 crate 的 doc-tests 二进制 `0 tests` 属仓库既有形态，且与 `du1-`/`final-` 两轮一致）。资源：`target/` 串行、无并发写者；DPAPI 用例**独占串行**（执行前后 `cargo.exe` 实例为 0）；临时 keystore 目录由用例自建自删（本 run 零残留）。**登记未清理的历史残留**：`%TEMP%` 下 6 个 `acpr-keystore-atomic-*`（22:10–22:43，早于本轮）——不声称已清理。
+  - **Independent Reviews**：RV1–RV9（7 个 WP/文档 lane + 定向确认轮）与 6.4/6.4-后续共 15 份报告，均在变更目录 `reports/`；每份记录实际子 Agent ID、上下文隔离、base/target 与范围；**所有 P0/P1 均已闭环并留有可失败性证据**（最终轮 RV7/RV8/RV9 与 6.4/6.4-后续连续 PASS，无未解决阻断项）。6.8 因 FF 合入无新增差异，按完成条件引用 6.4 的 review ID（`rv1-du1.md` + `rv2-du1.md`）而非重复同范围人工 review。
+  - **E2E Design and Execution**：mode = `not-applicable`（`x-agentic.e2e.enabled=true` 但 `command=""`）；四字段齐备且可追溯——reason（仓库无可端到端产品入口：`server`/`app`/CLI/前端未实现）、basis（`openspec-agentic e2e check` 实测 `enabled=true`/`command=""`；本变更对 `compatibility/`/`schemas/`/`fixtures/` 改动为 0 处，不影响适用性判断）、**非空 alternative_checks**（5 项，逐项在 7.1 真实执行）、`downgrade_approval`（用户 2026-09-24 原话「1和2都同意」，来源为本会话第 1 问的批准；不沿用 2026-09-23 的首次确认）。**7.3 门禁**：`openspec-agentic e2e check --change identity-auth-and-keystore --json` → `result: PASS`、`mode: not-applicable`、`approval: true`、`marked: true`。E2E 本身记 **NOT_APPLICABLE**。
+  - **Issue Closure and Evidence Validity**：RV1–RV9 的 FAIL 均有原问题 ID、修复提交与复测证据（`## Failures and Retests`）；本轮**没有**把不相关的 PASS 用作关闭依据。最终版本适用性：候选轮与最终轮的测试证据分别绑定 `4d988cd` 与 `656189f`（`final-*`），两者代码/文档内容相同（见 Target 一行的差异核对）；6.7 的主分支回归在**合入后**的 main 上重新执行（`du1-main-verify.log`），不属复用。**非阻断项处理结论**：`%TEMP%` 历史残留未清理（如实登记）；CI 专属判定（`cargo-deny`/ `gitleaks`）**本地未执行、不声称通过**；Linux **运行时**行为（`unix_modes` 的 0700/0600、非 Windows 失败关闭）本地不可执行，只有编译/lint + 注入缝证据，实际判定依赖 CI 的 Linux runner。
+- **Result / Open Issues**：**PASS**（本轮范围 = 目标 `4fb930a` 与上列有效证据）。无未解决 FAIL；无阻断项。残余（已登记、不阻断、不声称已消除）：① Linux 运行时与 CI 专属判定只能由 CI 证明；② `windows-dpapi` wrapper 内部明文缓冲无法清零；③ `write_atomic` 不 fsync 父目录；④ `%TEMP%` 下 6 个更早轮次的临时目录残留未清理；⑤ 本地合入路径下 `deps`/`advisories`/`secrets` 三个 CI job 未执行（见 `## Merge History` 的 §8 偏离记录）。
+- **Required Follow-up**：① 归档前执行 `openspec-agentic workflow check --change identity-auth-and-keystore --stage archive --json`（要求全部任务完成）；② 本变更为**仅本地合入**，若后续要推送远端，须另行取得明确授权并让 CI 的 `deps`/`advisories`/`secrets` 三个 job 先绿；③ 目标版本或证据在本轮之后若再变化，须重新验收（本条结论仅对 `4fb930a` 及其「代码 = `4d988cd`」的映射成立）。
