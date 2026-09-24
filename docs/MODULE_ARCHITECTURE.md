@@ -430,7 +430,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 2. wrapper 不暴露 `CRYPTPROTECT_UI_FORBIDDEN`，本实现因此**总是**传入由条目头（用途 + 标签 + 版本 + 盐）派生的附加熵，把「无熵 + 缺主密钥时可能弹交互提示」收敛为有熵的静默路径；
 3. 附加熵同时把条目绑死到「用途 + 标签 + 版本 + 盐」，因此复制/剪接条目解不开（[PV5] 用真实 DPAPI 断言）。
 
-核验证据：`openspec/changes/identity-auth-and-keystore/reports/wp3-dpapi-verification.log`（`cargo tree`/`cargo metadata` 输出）与 `openspec/changes/identity-auth-and-keystore/reports/pv5-windows-dpapi.log`（5 个真实 DPAPI 用例）；两条都写完整路径（避免与仓库根的历史遗留同名文件混淆）。注意：这类日志受 `.gitignore` 忽略、**不进版本库**，因此不随变更归档——归档后可复核的是本文件的记录、`reports/*.md` 报告与仓库改动本身。结论已同步到 §3.1。
+核验证据：`openspec/changes/archive/2026-09-24-identity-auth-and-keystore/reports/wp3-dpapi-verification.log`（`cargo tree`/`cargo metadata` 输出）与 `openspec/changes/archive/2026-09-24-identity-auth-and-keystore/reports/pv5-windows-dpapi.log`（5 个真实 DPAPI 用例）；两条都写完整路径（避免与仓库根的历史遗留同名文件混淆）。注意：这类日志受 `.gitignore` 忽略、**不进版本库**：归档时随变更目录一起移动（路径已如上更新），因此本机工作区可在归档路径下复核，但任何全新克隆都没有它们——克隆后能复核的是本文件的记录、`reports/*.md` 报告与仓库改动本身。结论已同步到 §3.1。
 
 ### 4.13 `acpr-wire`
 
