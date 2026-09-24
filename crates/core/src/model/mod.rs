@@ -142,7 +142,10 @@ pub use identity::*;
 pub use ids::*;
 pub use json::{JsonValueText, ViewJson};
 /// 供 crate 内其他模块（broker 组装交互事件时读 payload 的 `interactionId`）使用的最小 JSON 读取面。
-pub(crate) use json::{decode_json_string, encode_json_string, object_members};
+pub(crate) use json::{
+    MemberValue, decode_json_string, encode_json_string, insert_string_member_front,
+    object_members, top_level_member,
+};
 pub use scalars::*;
 pub use session::*;
 

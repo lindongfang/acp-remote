@@ -31,12 +31,13 @@ use crate::model::{
     CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind, CreateSessionRequest, Digest,
     ElicitationAction, ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin,
     EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind, InteractionResolution,
-    LocalCursor, MessageId, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef, PendingEvent,
-    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
-    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
-    Sequence, SessionId, SessionReference, SessionState, StoredPolicy, Timestamp, TurnId,
-    TurnState, UnavailableKind, Version, ViewJson, decode_json_string as json_string,
-    encode_json_string as json_text, object_members as json_members,
+    LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef,
+    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
+    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef,
+    RequestId, Resolution, Sequence, SessionId, SessionReference, SessionState, StoredPolicy,
+    Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
+    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
+    object_members as json_members, top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
@@ -156,6 +157,41 @@ pub fn persistence_policy(event_type: &EventType) -> PersistencePolicy {
         | "session.usage.changed" => PersistencePolicy::ShortTerm,
         _ => PersistencePolicy::Durable,
     }
+}
+
+/// `docs/SYNC_PROTOCOL.md` §10.3 要求 view 带顶层 `turnId` 的事件类型（与 §10.3 的表格一致；
+/// `turn.*` 含 `turn.delta_compacted`）。§10.3 变化时必须同步本表、`specs/core-event-view-identity/`
+/// 的清单与相应用例。
+const TURN_ID_VIEW_EVENT_TYPES: &[&str] = &[
+    "turn.queued",
+    "turn.started",
+    "turn.completed",
+    "turn.cancelled",
+    "turn.failed",
+    "turn.delta_compacted",
+    "user.message.delta",
+    "agent.message.delta",
+    "agent.message.completed",
+    "agent.thought.delta",
+    "tool.call.started",
+    "tool.call.updated",
+    "tool.call.completed",
+    "permission.requested",
+    "elicitation.requested",
+];
+
+/// §10.3 要求 view 带顶层 `version`（会话版本，十进制字符串）的事件类型。
+const SESSION_VERSION_VIEW_EVENT_TYPES: &[&str] =
+    &["session.mode.changed", "session.config.changed"];
+
+/// 该事件类型的 view 是否要求 `turnId`（§10.3）。
+fn view_requires_turn_id(event_type: &str) -> bool {
+    TURN_ID_VIEW_EVENT_TYPES.contains(&event_type)
+}
+
+/// 该事件类型的 view 是否要求 `version`（§10.3）。
+fn view_requires_session_version(event_type: &str) -> bool {
+    SESSION_VERSION_VIEW_EVENT_TYPES.contains(&event_type)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2444,7 +2480,7 @@ impl Broker {
             .map_err(PortError::from)
     }
 
-    /// 唯一的落盘漏斗：先做 §9 判据 15 的互斥校验，再交给存储层。
+    /// 唯一的落盘漏斗：先做 §9 判据 15 的互斥校验与 §10.3 的 view 收口，再交给存储层。
     ///
     /// 同一提交里 `interactions` 非空**且** `state.interaction` 为 `Some` → `InvalidRequest`：
     /// 创建与解析是两条互斥路径（§6 第 13 条），同时出现意味着组装出了自相矛盾的事务。
@@ -2462,7 +2498,91 @@ impl Broker {
                 "同一提交不得同时创建与解析交互（§6 第 13 条 / §9 判据 15）",
             ));
         }
-        self.deps.store.commit(commit).await
+        let (commit, predicted) = self.finalize_owned_views(commit).await?;
+        let outcome = self.deps.store.commit(commit).await?;
+        // §10.3 的 `version` 规则漂移检测：推导值必须等于存储层返回值。幂等命中时本批内容未被采用
+        // （返回的是首次提交的结果），因此不参与比对。
+        if let (Some(predicted), None) = (predicted, &outcome.replayed) {
+            if outcome.version != predicted {
+                return Err(PortError::Corrupt(
+                    "存储层返回的会话版本与 core 推导不一致（§10.3 的 version 规则漂移）",
+                ));
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// 提交前的 view 收口（§10.3）：注入 `turnId` 与会话 `version`，并返回推导出的会话版本。
+    ///
+    /// turn 归属在批组装时已经定稿（[`PendingEvent.turn`]），这里只按该值注入与校验，**不**重新推导；
+    /// 返回的 `None` 表示本批不含要求 `version` 的 view，无需比对。
+    async fn finalize_owned_views(
+        &self,
+        mut commit: OwnedCommit,
+    ) -> Result<(OwnedCommit, Option<Version>), PortError> {
+        for event in &mut commit.events {
+            if !view_requires_turn_id(event.event_type.as_str()) {
+                continue;
+            }
+            let Some(turn) = event.turn.clone() else {
+                continue;
+            };
+            event.payload.view = ensure_view_string_field(
+                &event.payload.view,
+                "turnId",
+                turn.as_str(),
+                "view 的 turnId 与 core 的权威 turn 不一致（§10.3）",
+            )?;
+        }
+        let needs_version = commit
+            .events
+            .iter()
+            .any(|event| view_requires_session_version(event.event_type.as_str()));
+        if !needs_version {
+            return Ok((commit, None));
+        }
+        let predicted = self.predict_session_version(&commit).await?;
+        let text = predicted.to_string();
+        for event in &mut commit.events {
+            if view_requires_session_version(event.event_type.as_str()) {
+                event.payload.view = ensure_view_string_field(
+                    &event.payload.view,
+                    "version",
+                    &text,
+                    "view 的 version 与会话当前版本不一致（§10.3）",
+                )?;
+            }
+        }
+        Ok((commit, Some(predicted)))
+    }
+
+    /// 提交前的会话版本推导：`state` 变更递增一，否则不变（§5.2 的存储层规则）。
+    ///
+    /// 只在含要求 `version` 的 view 时调用（view 是提交输入，权威版本在提交后才产生），因此
+    /// `expected_version` 缺失时回读当前版本，并由提交后的比对兜底。
+    async fn predict_session_version(&self, commit: &OwnedCommit) -> Result<Version, PortError> {
+        let current = match (&commit.state, &commit.expected_version) {
+            (Some(StateChange::Create(_)), _) => 0,
+            (_, Some(expected)) => expected.get(),
+            (_, None) => {
+                let Some(session) = commit.session.as_ref() else {
+                    return Err(PortError::InvalidRequest(
+                        "要求会话版本的事件必须属于某个会话（§10.3）",
+                    ));
+                };
+                match self.deps.store.load(session).await? {
+                    Some(snapshot) => snapshot.session.version().get(),
+                    None => return Err(PortError::NotFound(EntityRef::Session(session.clone()))),
+                }
+            }
+        };
+        let next = if commit.state.is_some() {
+            current.checked_add(1)
+        } else {
+            Some(current)
+        };
+        next.map(Version::new)
+            .ok_or(PortError::Corrupt("会话版本已溢出"))
     }
 
     fn reject(
@@ -2887,6 +3007,28 @@ fn version_text(version: &Version) -> String {
     version.get().to_string()
 }
 
+/// 确保 view 的顶层字符串成员 `key` 等于 `value`（§10.3 的身份/版本字段）。
+///
+/// 缺失 → 在顶层最前面插入（其余字节原样保留）；已存在且取值一致 → 原样返回（字节不变，不重写）；
+/// 已存在但取值不同或不是字符串 → `conflict` 指定的显式错误。core 不覆盖适配器给出的取值，也不写出
+/// 第二个同名字段。
+fn ensure_view_string_field(
+    view: &ViewJson,
+    key: &'static str,
+    value: &str,
+    conflict: &'static str,
+) -> Result<ViewJson, PortError> {
+    match top_level_member(view.as_str(), key).map_err(PortError::from)? {
+        MemberValue::Text(existing) if existing == value => Ok(view.clone()),
+        MemberValue::Text(_) | MemberValue::NonText => Err(PortError::InvalidRequest(conflict)),
+        MemberValue::Absent => {
+            let injected = insert_string_member_front(view.as_str(), key, &json_text(value))
+                .map_err(PortError::from)?;
+            ViewJson::new(&injected).map_err(PortError::from)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // 事件组装的完整形状（含 §10.1 的 origin 判定）
 fn pending_event(
     event_type: &str,
@@ -2990,7 +3132,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn turn_view(state: &str) -> String {
-        format!(r#"{{"turnId":"{}","state":"{state}"}}"#, uuid_text(0))
+        format!(r#"{{"state":"{state}"}}"#)
     }
 
     pub(crate) fn prompt_command(
@@ -3075,6 +3217,8 @@ pub(crate) mod test_support {
         pub(crate) mode_calls: AtomicUsize,
         /// `session.mode.list` 的端口侧候选（测试按需 set，默认空）。
         pub(crate) modes: Mutex<Option<ModeState>>,
+        /// 适配器 `prompt` 返回的接受结果里的 turn 标识（测试可改写，默认全零占位值）。
+        pub(crate) accepted_turn: Mutex<Option<TurnId>>,
         pub(crate) exports: Mutex<Vec<ExportRecord>>,
         pub(crate) imports: Mutex<Vec<ImportRecord>>,
         pub(crate) profiles: Mutex<Vec<AgentProfile>>,
@@ -3108,6 +3252,8 @@ pub(crate) mod test_support {
         pub(crate) event_payloads: HashMap<String, EventPayload>,
         /// 事件 id → `origin.kind`（fake 记录 broker 写入的 origin，供 §10.1 断言）。
         pub(crate) event_origins: HashMap<String, EventOrigin>,
+        /// 事件 id → 落盘的 turn 归属（供 §10.3 「view 与 turn_id 一致」断言）。
+        pub(crate) event_turns: HashMap<String, Option<TurnId>>,
         /// `global_sequence` → 事件类别（§6 第 15 条的 delta 判定）。
         pub(crate) event_kinds: HashMap<u64, EventKind>,
         /// 被压缩的 delta 行 `global_sequence` → summary 行的 `global_sequence`（§6 第 15 条）。
@@ -3117,6 +3263,8 @@ pub(crate) mod test_support {
         pub(crate) next_id: u64,
         /// 指定第 N 次 `commit` 返回 `Unavailable`（脚本化失败）。
         pub(crate) fail_at: Option<usize>,
+        /// 指定第 N 次 `commit` 返回的会话版本比实际值大 1（模拟存储层版本规则漂移）。
+        pub(crate) version_drift_at: Option<usize>,
     }
 
     pub(crate) struct InteractionRow {
@@ -3167,6 +3315,11 @@ pub(crate) mod test_support {
 
         pub(crate) fn fail_commit_at(&self, index: usize) {
             lock(&self.state).fail_at = Some(index);
+        }
+
+        /// 让第 `index` 次 `commit` 返回一个与 core 推导不一致的会话版本（§10.3 漂移检测用例）。
+        pub(crate) fn drift_version_at(&self, index: usize) {
+            lock(&self.state).version_drift_at = Some(index);
         }
 
         pub(crate) fn fail_next_commit(&self) {
@@ -3275,6 +3428,15 @@ pub(crate) mod test_support {
         /// 某条事件落库时的 `origin.kind`（§10.1）。
         pub(crate) fn event_origin(&self, id: &EventId) -> Option<EventOrigin> {
             lock(&self.state).event_origins.get(id.as_str()).copied()
+        }
+
+        /// 某条事件落库时的 turn 归属（§10.3：view 的 `turnId` 必须与它一致）。
+        pub(crate) fn event_turn(&self, id: &EventId) -> Option<TurnId> {
+            lock(&self.state)
+                .event_turns
+                .get(id.as_str())
+                .cloned()
+                .flatten()
         }
 
         pub(crate) fn seed_session(&self, session: Session) {
@@ -3632,6 +3794,9 @@ pub(crate) mod test_support {
                 state
                     .event_origins
                     .insert(id.as_str().to_owned(), event.origin);
+                state
+                    .event_turns
+                    .insert(id.as_str().to_owned(), event.turn.clone());
                 state.event_kinds.insert(global.get(), event.kind);
                 batch.push(event.event_type.as_str().to_owned());
                 let committed = CommittedEvent {
@@ -3774,13 +3939,19 @@ pub(crate) mod test_support {
     impl SessionStore for FakeStore {
         async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
             let index = self.world.commits.fetch_add(1, Ordering::SeqCst) + 1;
-            {
+            let version_drifts = {
                 let mut state = lock(&self.world.state);
                 if state.fail_at == Some(index) {
                     state.fail_at = None;
                     return Err(PortError::Unavailable(UnavailableKind::IoError));
                 }
-            }
+                if state.version_drift_at == Some(index) {
+                    state.version_drift_at = None;
+                    true
+                } else {
+                    false
+                }
+            };
             // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果。
             if let Some(record) = commit.idempotency.as_ref() {
                 let state = lock(&self.world.state);
@@ -3806,12 +3977,16 @@ pub(crate) mod test_support {
             }
             let (created, appended) = self.apply(&commit)?;
             let state = lock(&self.world.state);
-            let version = commit
+            let mut version = commit
                 .session
                 .as_ref()
                 .and_then(|session| state.sessions.get(session.as_str()))
                 .map(|session| session.version())
                 .unwrap_or_else(|| Version::from(0));
+            // 脚本化的版本漂移：只改**返回值**，不改已写下的会话行（模拟「存储层规则与 core 推导不同」）。
+            if version_drifts {
+                version = Version::new(version.get() + 1);
+            }
             let origin_epoch = commit
                 .session
                 .as_ref()
@@ -4554,7 +4729,9 @@ pub(crate) mod test_support {
             }
             lock(&self.world.prompt_trace).push(format!("end:{ordinal}"));
             Ok(TurnAccepted {
-                turn: TurnId::new(&uuid_text(0)).expect("uuid"),
+                turn: lock(&self.world.accepted_turn)
+                    .clone()
+                    .unwrap_or_else(|| TurnId::new(&uuid_text(0)).expect("uuid")),
             })
         }
 
@@ -4754,7 +4931,7 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use crate::model::{
-        AgentId, AgentRef, DeviceId, EventId, ExportId, InteractionKind, InteractionOption,
+        AcpRaw, AgentId, AgentRef, DeviceId, EventId, ExportId, InteractionKind, InteractionOption,
         ModeState, PendingInteraction, ResourceOrigin, ScopeSet,
     };
 
@@ -5384,9 +5561,8 @@ mod tests {
         let harness = Harness::new(BrokerConfig::default());
         let interaction = InteractionId::new(&uuid_text(400)).expect("interaction");
         let view = format!(
-            r#"{{"interactionId":"{}","turnId":"{}","title":"Approve","description":null,"options":[{{"optionId":"allow-once","label":"Allow once","kind":"allow_once"}}]}}"#,
-            interaction.as_str(),
-            uuid_text(0)
+            r#"{{"interactionId":"{}","title":"Approve","description":null,"options":[{{"optionId":"allow-once","label":"Allow once","kind":"allow_once"}}]}}"#,
+            interaction.as_str()
         );
         harness.world.push_script(Script::new(vec![
             endpoint_event(EventKind::Interaction, "permission.requested", &view),
@@ -5814,9 +5990,8 @@ mod tests {
                 EventKind::Delta,
                 "agent.message.delta",
                 &format!(
-                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"{index}","text":"{text}"}}"#,
-                    message.as_str(),
-                    uuid_text(0)
+                    r#"{{"messageId":"{}","deltaIndex":"{index}","text":"{text}"}}"#,
+                    message.as_str()
                 ),
             )
         };
@@ -5824,9 +5999,8 @@ mod tests {
             EventKind::Delta,
             "agent.thought.delta",
             &format!(
-                r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"thinking"}}"#,
-                MessageId::new(&uuid_text(602)).expect("message").as_str(),
-                uuid_text(0)
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"thinking"}}"#,
+                MessageId::new(&uuid_text(602)).expect("message").as_str()
             ),
         );
         // 三条终态各跑一例：delta（含乱序与带 block 的项）+ thought + 终态。
@@ -5840,9 +6014,8 @@ mod tests {
                 delta(&first, 0, "Hello"),
                 thought.clone(),
                 endpoint_event(EventKind::Delta, "agent.message.delta", &format!(
-                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"B","block":{{"type":"image_ref","mimeType":"image/png","byteLength":"1","displayState":"available"}}}}"#,
-                    second.as_str(),
-                    uuid_text(0)
+                    r#"{{"messageId":"{}","deltaIndex":"0","text":"B","block":{{"type":"image_ref","mimeType":"image/png","byteLength":"1","displayState":"available"}}}}"#,
+                    second.as_str()
                 )),
                 endpoint_event(EventKind::State, event_type, &turn_view(state)),
             ]));
@@ -5940,9 +6113,8 @@ mod tests {
                 EventKind::Delta,
                 "agent.message.delta",
                 &format!(
-                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"A"}}"#,
-                    uuid_text(610),
-                    uuid_text(0)
+                    r#"{{"messageId":"{}","deltaIndex":"0","text":"A"}}"#,
+                    uuid_text(610)
                 ),
             ),
             endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
@@ -5988,9 +6160,8 @@ mod tests {
                 EventKind::Delta,
                 "agent.message.delta",
                 &format!(
-                    r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"A"}}"#,
-                    uuid_text(611),
-                    uuid_text(0)
+                    r#"{{"messageId":"{}","deltaIndex":"0","text":"A"}}"#,
+                    uuid_text(611)
                 ),
             ),
             endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
@@ -6223,5 +6394,595 @@ mod tests {
             block_on(view.replay(batch.next.clone(), ReplayLimit::default())).expect("replay");
         assert!(again.events.is_empty());
         assert_eq!(again.head, barrier);
+    }
+    // -----------------------------------------------------------------------------------------
+    // §10.3 的 core 侧收口：turn 归属与会话版本（specs/core-event-view-identity）
+    // -----------------------------------------------------------------------------------------
+
+    /// 一条事件的持久化 view 文本。
+    fn stored_view(harness: &Harness, event: &CommittedEvent) -> String {
+        let view = block_on(harness.broker.read_view()).expect("view");
+        block_on(view.event_payload(&event.id))
+            .expect("payload")
+            .expect("存在")
+            .view
+            .as_str()
+            .to_owned()
+    }
+
+    /// R1/R2/R5/R17：owned 路径下 core 注入 turnId，且只前置一个成员、其余字节不变。
+    #[test]
+    fn owned_views_get_the_authoritative_turn_id() {
+        let harness = Harness::new(BrokerConfig::default());
+        let message = MessageId::new(&uuid_text(610)).expect("message");
+        let raw = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"agent_message_chunk","futureField":[1,2]}}"#;
+        let acp = AcpRaw::available("application/json", raw, digest('Z')).expect("acp");
+        // 适配器投影：不含 turnId，含未知顶层字段与嵌套结构，并带 ACP 原文。
+        let event = EndpointEvent {
+            kind: EventKind::Delta,
+            event_type: EventType::new("agent.message.delta").expect("type"),
+            payload: EventPayload {
+                view: json_view(&format!(
+                    r#"{{"messageId":"{}","deltaIndex":"0","text":"hi","unknownField":{{"nested":[1,2]}}}}"#,
+                    message.as_str()
+                )),
+                acp: Some(acp.clone()),
+            },
+            turn: None,
+            causation: None,
+            at: ts(0),
+        };
+        harness.world.push_script(Script::new(vec![
+            event,
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let turn = harness.world.turns(&harness.session)[0].id().clone();
+        let stored = harness.world.events(&harness.session);
+        let delta = stored
+            .iter()
+            .find(|event| event.event_type.as_str() == "agent.message.delta")
+            .expect("delta");
+        assert_eq!(
+            stored_view(&harness, delta),
+            format!(
+                r#"{{"turnId":"{}","messageId":"{}","deltaIndex":"0","text":"hi","unknownField":{{"nested":[1,2]}}}}"#,
+                turn.as_str(),
+                message.as_str()
+            ),
+            "注入必须只前置一个成员，未知字段与既有字节不变"
+        );
+        // 落盘 turn_id 与 view 的 turnId 一致（三者同源：落盘 / view / turn 行）。
+        assert_eq!(
+            harness.world.event_turn(&delta.id).as_ref(),
+            Some(&turn),
+            "落盘 turn_id 必须等于 view 的 turnId"
+        );
+        // §10.3 覆盖到同批的其它要求类型（含 core 自建视图）。
+        let completed = stored
+            .iter()
+            .find(|event| event.event_type.as_str() == "turn.completed")
+            .expect("turn.completed");
+        assert_eq!(
+            harness.world.event_turn(&completed.id).as_ref(),
+            Some(&turn)
+        );
+        assert!(stored_view(&harness, completed).contains(turn.as_str()));
+        // ACP 三要素逐字节不变（R5）。
+        let payload = block_on(
+            block_on(harness.broker.read_view())
+                .expect("view")
+                .event_payload(&delta.id),
+        )
+        .expect("payload")
+        .expect("存在");
+        assert_eq!(payload.acp.as_ref(), Some(&acp), "注入不得改动 ACP 原文");
+    }
+
+    /// R3：没有 turn 归属的事件不注入、不伪造字段；未列入 §10.3 的类型也不加未协商字段。
+    #[test]
+    fn views_without_turn_attribution_get_no_turn_id() {
+        let harness = Harness::new(BrokerConfig::default());
+        let session_level =
+            r#"{"title":"hello","updatedAt":"2026-09-18T00:00:00.000Z","x":{"y":1}}"#;
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Structured,
+            "session.info.changed",
+            session_level,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        let stored = harness.world.events(&harness.session);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(
+            stored_view(&harness, &stored[0]),
+            session_level,
+            "无 turn 归属的事件必须逐字节不变"
+        );
+        assert_eq!(harness.world.event_turn(&stored[0].id), None);
+
+        // 居所属列但事件类型不在 §10.3 的 turnId 集合内：同样不注入（不添加未协商字段）。
+        harness
+            .broker
+            .sink(&harness.session)
+            .send(endpoint_event(
+                EventKind::Delta,
+                "terminal.output",
+                r#"{"terminalId":"t1","chunkIndex":"0","stream":"stdout","text":"x","truncated":false}"#,
+            ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        let stored = harness.world.events(&harness.session);
+        let output = stored
+            .iter()
+            .find(|event| event.event_type.as_str() == "terminal.output")
+            .expect("terminal.output");
+        assert_eq!(
+            stored_view(&harness, output),
+            r#"{"terminalId":"t1","chunkIndex":"0","stream":"stdout","text":"x","truncated":false}"#
+        );
+    }
+
+    /// R2/R7：turnId 取值冲突时显式失败，且该批零落盘、零发布。
+    #[test]
+    fn a_conflicting_turn_id_fails_closed_without_side_effects() {
+        let harness = Harness::new(BrokerConfig::default());
+        let view = format!(
+            r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"0","text":"hi"}}"#,
+            uuid_text(611),
+            uuid_text(0)
+        );
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &view,
+        )]));
+        let actor = harness.actor();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let error =
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect_err("冲突必须失败");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error}");
+        let types: Vec<String> = harness
+            .world
+            .events(&harness.session)
+            .iter()
+            .map(|event| event.event_type.as_str().to_owned())
+            .collect();
+        assert_eq!(
+            types,
+            vec!["turn.queued".to_owned(), "turn.started".to_owned()],
+            "冲突批不得落盘任何事件"
+        );
+        assert_eq!(harness.world.publish_count(), 2, "冲突批不得发布任何帧");
+        assert_eq!(
+            harness.world.turns(&harness.session)[0].state(),
+            TurnState::Running,
+            "冲突不得静默终结该 turn"
+        );
+    }
+
+    /// R6：turnId 取值一致时保留原字段字节（不重写、不生成第二个同名键）。
+    #[test]
+    fn a_matching_turn_id_is_kept_byte_for_byte() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 第一段不带终态事件：turn 保持运行中，从而可以拿到 core 分配的权威 turn id。
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"a"}}"#,
+                uuid_text(612)
+            ),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let turn = harness.world.turns(&harness.session)[0].id().clone();
+        let view = format!(
+            r#"{{"messageId":"{}","turnId":"{}","deltaIndex":"1","text":"b"}}"#,
+            uuid_text(613),
+            turn.as_str()
+        );
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &view,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        let views: Vec<String> = harness
+            .world
+            .events(&harness.session)
+            .iter()
+            .filter(|event| event.event_type.as_str() == "agent.message.delta")
+            .map(|event| stored_view(&harness, event))
+            .collect();
+        assert_eq!(views.len(), 2);
+        assert!(
+            views.contains(&view),
+            "取值一致的既有字段必须字节不变：{views:?}"
+        );
+    }
+
+    /// R3/R10：纯事件提交注入当前版本，不递增（expected_version 缺失时回读当前版本）。
+    #[test]
+    fn mode_changed_views_carry_the_current_session_version() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "session.mode.changed",
+            r#"{"currentModeId":"code","unknown":true}"#,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        let stored = harness.world.events(&harness.session);
+        assert_eq!(
+            stored_view(&harness, &stored[0]),
+            r#"{"version":"1","currentModeId":"code","unknown":true}"#
+        );
+        assert_eq!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .version()
+                .get(),
+            1,
+            "纯事件提交不递增会话版本"
+        );
+    }
+
+    /// R9/R13：状态变更提交注入递增后的版本，并与存储返回的版本一致。
+    #[test]
+    fn a_state_change_commit_injects_the_bumped_version() {
+        let harness = Harness::new(BrokerConfig::default());
+        let event = pending_event(
+            "session.config.changed",
+            EventKind::State,
+            json_view(r#"{"configOptions":[]}"#),
+            None,
+            None,
+            StoredPolicy::Durable,
+            None,
+        )
+        .expect("event");
+        let commit = OwnedCommit {
+            session: Some(harness.session.clone()),
+            at: ts(1),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: None,
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            })),
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
+        assert_eq!(outcome.version.get(), 2, "状态变更提交递增一");
+        let stored = harness.world.events(&harness.session);
+        assert_eq!(
+            stored_view(&harness, &stored[0]),
+            r#"{"version":"2","configOptions":[]}"#
+        );
+    }
+
+    /// R14：存储层版本规则漂移时显式失败且不发布（比对发生在存储返回之后）。
+    #[test]
+    fn a_version_rule_drift_fails_closed() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.drift_version_at(1);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "session.mode.changed",
+            r#"{"currentModeId":"code"}"#,
+        ));
+        let error = block_on(harness.broker.flush(&harness.session)).expect_err("漂移必须失败");
+        assert!(matches!(error, PortError::Corrupt(_)), "{error}");
+        assert_eq!(harness.world.publish_count(), 0, "漂移批不得发布任何帧");
+    }
+
+    /// R19：幂等重放不得二次注入，字节与首次持久化一致。
+    #[test]
+    fn replayed_commits_do_not_reinject_view_fields() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "session.mode.changed",
+            r#"{"currentModeId":"code"}"#,
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 该脚本不带终态事件：turn 保持运行，会话版本在断言期间稳定。
+        let before = harness.world.events(&harness.session).len();
+        let mode = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "session.mode.changed")
+            .expect("mode.changed");
+        let current = harness
+            .world
+            .session(&harness.session)
+            .expect("session")
+            .version();
+        let first = stored_view(&harness, &mode);
+        assert_eq!(
+            first,
+            format!(
+                r#"{{"version":"{}","currentModeId":"code"}}"#,
+                current.get()
+            ),
+            "纯事件提交注入的版本必须等于当前会话版本"
+        );
+        assert_eq!(first.matches("\"version\"").count(), 1);
+
+        // 同一 (actor, requestId) 的重复提交：命中幂等，不新增事件、不重写既有字节。
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert_eq!(
+            harness.world.events(&harness.session).len(),
+            before,
+            "重放不得新增事件行"
+        );
+        assert_eq!(stored_view(&harness, &mode), first, "重放字节必须一致");
+
+        // 直接走漏斗的竞态回放分支：存储层返回 replayed 时不做版本比对、不注入新行。
+        let actor = harness.actor();
+        let replayed = OwnedCommit {
+            session: Some(harness.session.clone()),
+            at: ts(2),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![
+                pending_event(
+                    "session.mode.changed",
+                    EventKind::State,
+                    json_view(r#"{"currentModeId":"other"}"#),
+                    None,
+                    None,
+                    StoredPolicy::Durable,
+                    None,
+                )
+                .expect("event"),
+            ],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: harness.request(1),
+                command: "session.prompt".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(harness.session.clone()),
+                expected_version: None,
+                request_fingerprint: digest('A'),
+                accepted_at: ts(2),
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = block_on(harness.broker.commit_owned(replayed)).expect("replay");
+        assert!(outcome.replayed.is_some(), "必须命中幂等回放");
+        assert_eq!(
+            harness.world.events(&harness.session).len(),
+            before,
+            "回放分支不得写入任何事件行"
+        );
+        assert_eq!(stored_view(&harness, &mode), first);
+    }
+
+    /// R20/R21/R22：适配器返回的 turn 标识不具权威性（占位值也不产生第二行）。
+    #[test]
+    fn the_turn_from_the_endpoint_is_never_trusted() {
+        for placeholder in [uuid_text(0), uuid_text(999)] {
+            let harness = Harness::new(BrokerConfig::default());
+            *test_support::lock(&harness.world.accepted_turn) =
+                Some(TurnId::new(&placeholder).expect("turn id"));
+            assert!(matches!(
+                harness.submit_prompt(1, 'A'),
+                CommandReceipt::Accepted { .. }
+            ));
+            let turns = harness.world.turns(&harness.session);
+            assert_eq!(
+                turns.len(),
+                1,
+                "适配器返回值不得产生第二个 turn 行：{placeholder}"
+            );
+            let turn = turns[0].id().clone();
+            assert_ne!(
+                turn.as_str(),
+                placeholder,
+                "core 必须使用自己分配的 turn id"
+            );
+            let stored = harness.world.events(&harness.session);
+            for event in &stored {
+                if let Some(found) = harness.world.event_turn(&event.id) {
+                    assert_eq!(found, turn, "事件归属必须是 core 的权威值");
+                }
+            }
+            let queued = stored
+                .iter()
+                .find(|event| event.event_type.as_str() == "turn.queued")
+                .expect("turn.queued");
+            assert_eq!(
+                stored_view(&harness, queued),
+                format!(r#"{{"turnId":"{}","state":"queued"}}"#, turn.as_str())
+            );
+        }
+    }
+    /// R4/R11：imported 路径保留 Owner 给出的 view 字节（不注入、不重写、不伪造）。
+    #[test]
+    fn imported_deliveries_keep_the_owner_view_bytes() {
+        let harness = Harness::new(BrokerConfig::default());
+        let remote = RemoteSessionRef::new(
+            NodeId::new(&uuid_text(11)).expect("node"),
+            ExportId::new("export.one").expect("export"),
+            SessionId::new(&uuid_text(12)).expect("session"),
+        );
+        let event_type = EventType::new("agent.message.delta").expect("event type");
+        // Owner 已注入 turnId / version：本端必须逐字节转发（payloadDigest 覆盖这些字节）。
+        let owner_view = r#"{"turnId":"11111111-2222-3333-4444-555555555555","messageId":"m1","deltaIndex":"0","text":"hi","version":"7"}"#;
+        for (index, view) in [(1_u64, owner_view), (2, r#"{"text":"no identity"}"#)].iter() {
+            let origin = OriginEventRef::new(
+                NodeId::new(&uuid_text(11)).expect("node"),
+                origin_epoch_of(20),
+                EventId::new(&uuid_text(30 + index)).expect("event"),
+            );
+            let delivered = block_on(harness.broker.deliver_imported(
+                remote.clone(),
+                origin,
+                Sequence::new(*index).expect("sequence"),
+                event_type.clone(),
+                digest('B'),
+                Some(EventPayload {
+                    view: json_view(view),
+                    acp: None,
+                }),
+            ))
+            .expect("deliver");
+            assert!(delivered, "首次投递是新行");
+        }
+        let published = harness.world.published();
+        let views: Vec<&str> = published
+            .iter()
+            .filter_map(|delivery| match delivery {
+                CommittedDelivery::Imported { payload, .. } => {
+                    payload.as_ref().map(|payload| payload.view.as_str())
+                }
+                CommittedDelivery::Owned(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            views,
+            vec![owner_view, r#"{"text":"no identity"}"#],
+            "imported 正文必须原样转发：不注入、不重写、不补齐"
+        );
+        // 无正文索引只保存调用方给出的摘要（重写 view 会让摘要与正文不再一致）。
+        let receipts = harness.world.receipts();
+        assert_eq!(receipts.len(), 2);
+        assert!(
+            receipts
+                .iter()
+                .all(|receipt| receipt.payload_digest == digest('B'))
+        );
+    }
+    /// D4 的降级：turn 终结后晚到的 §10.3 类型事件没有权威归属 → 不注入、不伪造（登记边界）。
+    #[test]
+    fn a_late_delta_after_turn_end_is_persisted_without_attribution() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 脚本只结束 turn，不发 delta。
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // turn 已终结后再到达的 delta（适配器异步尾巴）。
+        let view = format!(
+            r#"{{"messageId":"{}","deltaIndex":"0","text":"late"}}"#,
+            uuid_text(614)
+        );
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &view,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        let late = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "agent.message.delta")
+            .expect("晚到的 delta 必须落盘");
+        assert_eq!(
+            harness.world.event_turn(&late.id),
+            None,
+            "无权威归属时不得伪造 turn"
+        );
+        assert_eq!(
+            stored_view(&harness, &late),
+            view,
+            "无归属时 view 逐字节不变（不注入）"
+        );
+    }
+
+    /// R2：`turnId` 已存在但不是字符串 → 同样显式失败（不覆盖、不静默跳过）。
+    #[test]
+    fn a_non_string_turn_id_fails_closed() {
+        let harness = Harness::new(BrokerConfig::default());
+        let view = format!(
+            r#"{{"messageId":"{}","turnId":12,"deltaIndex":"0","text":"hi"}}"#,
+            uuid_text(615)
+        );
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &view,
+        )]));
+        let actor = harness.actor();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let error = block_on(harness.broker.submit_mutation(&actor, &command))
+            .expect_err("非字符串 turnId 必须失败");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error}");
+        assert!(
+            !harness
+                .world
+                .events(&harness.session)
+                .iter()
+                .any(|event| event.event_type.as_str() == "agent.message.delta"),
+            "该批不得落盘"
+        );
+        assert_eq!(harness.world.publish_count(), 2, "该批不得发布");
+    }
+
+    /// `expected_version` 已给出的纯事件提交：推导值即它，且与存储返回值一致（§6 第 19 条的快捷分支）。
+    #[test]
+    fn an_event_only_commit_with_expected_version_keeps_the_current_version() {
+        let harness = Harness::new(BrokerConfig::default());
+        let commit = OwnedCommit {
+            session: Some(harness.session.clone()),
+            at: ts(1),
+            expected_version: Some(Version::new(1)),
+            state: None,
+            turns: Vec::new(),
+            events: vec![
+                pending_event(
+                    "session.mode.changed",
+                    EventKind::State,
+                    json_view(r#"{"currentModeId":"code"}"#),
+                    None,
+                    None,
+                    StoredPolicy::Durable,
+                    None,
+                )
+                .expect("event"),
+            ],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
+        assert_eq!(outcome.version, Version::new(1), "无状态变更不递增");
+        let stored = harness.world.events(&harness.session);
+        assert_eq!(
+            stored_view(&harness, &stored[0]),
+            r#"{"version":"1","currentModeId":"code"}"#
+        );
     }
 }

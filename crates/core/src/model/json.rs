@@ -230,6 +230,64 @@ pub(crate) fn object_members(text: &str) -> Result<Vec<(String, &str)>, InvalidV
     Ok(members)
 }
 
+/// 顶层 object 单个成员的取值（注入前的一致性判定）。
+///
+/// 非字符串取值不保留原文：冲突路径的错误信息刻意不带取值，避免把适配器数据带进协议错误。
+#[derive(Debug)]
+pub(crate) enum MemberValue {
+    /// 键不存在。
+    Absent,
+    /// 键存在且值是 JSON 字符串（解码后的取值）。
+    Text(String),
+    /// 键存在但值不是 JSON 字符串。
+    NonText,
+}
+
+/// 读取顶层 object 的一个成员。
+///
+/// 与 [`object_members`] 同一口径：输入必须已经过 [`validate_document`]。
+pub(crate) fn top_level_member(text: &str, key: &str) -> Result<MemberValue, InvalidValue> {
+    let members = object_members(text)?;
+    Ok(match members.iter().find(|(name, _)| name == key) {
+        None => MemberValue::Absent,
+        Some((_, raw)) => match decode_json_string(raw) {
+            Some(value) => MemberValue::Text(value),
+            None => MemberValue::NonText,
+        },
+    })
+}
+
+/// 在顶层 object 的**最前面**插入一个成员；`value_json` 必须是 JSON 字符串字面量（含两侧引号）。
+///
+/// 只做前置插入：既有成员的字节与顺序原样保留（不规范化、不重排键、不丢未知字段）。目标键已存在时
+/// 返回 [`InvalidValue::Field`]（调用方必须先用 [`top_level_member`] 判定冲突，避免写出重复键）；插入
+/// 结果仍需交 [`ViewJson::new`] 重新校验（深度可能 +1，仍受 `MAX_JSON_DEPTH` 约束）。
+pub(crate) fn insert_string_member_front(
+    text: &str,
+    key: &str,
+    value_json: &str,
+) -> Result<String, InvalidValue> {
+    let members = object_members(text)?;
+    if members.iter().any(|(name, _)| name == key) {
+        return Err(InvalidValue::Field);
+    }
+    if decode_json_string(value_json).is_none() {
+        return Err(InvalidValue::Json);
+    }
+    let open = text.find('{').ok_or(InvalidValue::Json)?;
+    let (head, rest) = text.split_at(open + 1);
+    let mut out = String::with_capacity(text.len() + key.len() + value_json.len() + 6);
+    out.push_str(head);
+    out.push_str(&encode_json_string(key));
+    out.push(':');
+    out.push_str(value_json);
+    if !members.is_empty() {
+        out.push(',');
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 /// 若 `raw` 是「全部元素都是 JSON 字符串」的数组，返回解码后的元素（空数组返回空 `Vec`）；否则 `None`。
 pub(crate) fn string_array_items(raw: &str) -> Option<Vec<String>> {
     let mut scanner = Scanner {
