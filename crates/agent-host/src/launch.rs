@@ -27,15 +27,19 @@ pub struct LaunchSpec {
     pub env: Vec<(String, String)>,
 }
 
-/// `Debug` 只输出变量名与数量：`env` 的值是明文凭据，一旦被打印就进了日志、错误或测试快照，
-/// 而 `docs/SECURITY_DESIGN.md` §14.1 的「默认日志允许字段」只允许变量名与数量级
-/// （与 `docs/CORE_PORTS_AND_STORAGE.md` §11.6 的日志口径一致）。
+/// `Debug` 只输出变量名与数量、参数的数量与长度：`env` 的值是明文凭据、`args` 里也可能带凭据，
+/// 一旦被打印就进了日志、错误或测试快照，而 `docs/SECURITY_DESIGN.md` §14.1 的「默认日志允许字段」
+/// 只允许变量名与数量级、且明确「不记录完整参数中的 secret」（与 `docs/CORE_PORTS_AND_STORAGE.md`
+/// §11.6 的日志口径一致）。
 impl std::fmt::Debug for LaunchSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let names: Vec<&str> = self.env.iter().map(|(name, _)| name.as_str()).collect();
+        // 参数只留「数量 + 每个参数的长度」：长度足以定位「参数形状不对」，又不泄漏正文。
+        let arg_lengths: Vec<usize> = self.args.iter().map(String::len).collect();
         f.debug_struct("LaunchSpec")
             .field("program", &self.program)
-            .field("args", &self.args)
+            .field("arg_count", &self.args.len())
+            .field("arg_lengths", &arg_lengths)
             .field("env_names", &names)
             .field("env_count", &names.len())
             .finish()
@@ -194,10 +198,14 @@ mod tests {
     }
 
     #[test]
-    fn debug_never_prints_credential_values() {
+    fn debug_never_prints_credential_values_or_argument_bodies() {
         let spec = LaunchSpec {
             program: "fake-agent".to_owned(),
-            args: vec!["--scenario".to_owned(), "normal".to_owned()],
+            args: vec![
+                "--scenario".to_owned(),
+                "--token".to_owned(),
+                "sk-secret-argument-do-not-log".to_owned(),
+            ],
             env: vec![
                 (
                     "FAKE_TOKEN".to_owned(),
@@ -211,7 +219,13 @@ mod tests {
             !text.contains("secret-value-do-not-log"),
             "Debug 不得输出凭据值：{text}"
         );
+        assert!(
+            !text.contains("sk-secret-argument-do-not-log"),
+            "Debug 不得输出参数正文（参数里可能带凭据）：{text}"
+        );
         assert!(text.contains("FAKE_TOKEN"), "变量名仍应可见：{text}");
         assert!(text.contains("env_count"), "数量仍应可见：{text}");
+        assert!(text.contains("arg_count"), "参数数量仍应可见：{text}");
+        assert!(text.contains("arg_lengths"), "参数长度仍应可见：{text}");
     }
 }

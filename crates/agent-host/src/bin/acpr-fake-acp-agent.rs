@@ -5,8 +5,9 @@
 //!
 //! 场景清单见 `README`/`tasks.md` 2.13：`normal`、`chunked-updates`、`permission-request`、
 //! `elicitation`、`slow-initialize`、`no-response`、`illegal-json`、`unknown-id`、`out-of-order`、
-//! `crash-on-prompt`、`spawn-grandchild`、`heartbeat-child`，另有 `--dump-env <path>` 便于断言
-//! 注入给子进程的环境变量集合。
+//! `crash-on-prompt`、`spawn-grandchild`、`heartbeat-child`、`stderr-flood`、
+//! `stderr-protocol-noise`（在 **stderr** 上写语法完全合法的 ACP 报文，stdout 仍正常应答），
+//! 另有 `--dump-env <path>` 便于断言注入给子进程的环境变量集合。
 //!
 //! `--heartbeat-file <path>` 让子进程在存活期间每 50 ms 追加一个字节（`heartbeat-child` 直接用它，
 //! 其余场景另外开一个线程写同一个文件）：进程是否真的结束因此可以在**进程外**观察，而不依赖进程内的
@@ -16,6 +17,9 @@ use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
+
+/// `stderr-protocol-noise` 场景写进 stderr 的唯一 marker（测试用它断言「stderr 不得进入事件流」）。
+const STDERR_NOISE_MARKER: &str = "ACPR-STDERR-PROTOCOL-NOISE-MARKER";
 
 /// 一次运行的参数。
 struct Args {
@@ -606,6 +610,39 @@ fn start_prompt(state: &mut State, out: &mut impl Write, args: &Args, id: Value,
             }
             let _ = std::io::stderr().flush();
             emit_chunk(out, session, "stderr 洪水之后仍然可用");
+            respond(out, &id, json!({ "stopReason": "end_turn" }));
+        }
+        "stderr-protocol-noise" => {
+            // stderr 上写**语法完全合法**的 ACP 报文（带唯一 marker 的通知 + 一个带 id 的响应）：
+            // 它们不得被当作协议输入，也不得进入事件或端点；stdout 仍正常应答。
+            let mut err = std::io::stderr();
+            let _ = writeln!(
+                err,
+                "{}",
+                json!({
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "messageId": "stderr-noise",
+                            "content": { "type": "text", "text": STDERR_NOISE_MARKER },
+                        },
+                    },
+                })
+            );
+            let _ = writeln!(
+                err,
+                "{}",
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 987654321u64,
+                    "result": { "stopReason": "end_turn" },
+                })
+            );
+            let _ = err.flush();
+            emit_chunk(out, session, "stderr 噪声之后仍然可用");
             respond(out, &id, json!({ "stopReason": "end_turn" }));
         }
         "unknown-content-block" => {

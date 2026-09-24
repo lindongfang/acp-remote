@@ -145,7 +145,7 @@
 - **WHEN** 系统要求强制结束一个仍有孙进程在运行的 Agent（短请求超时、异常退出处理或显式关闭）
 - **THEN** 孙进程与父进程一同停止，不留下孤儿进程继续占用资源
 
-### Requirement: stderr 有界采集与脱敏
+### Requirement: stderr 有界采集与结构化计数
 
 系统 SHALL 把 Agent 的 stderr 采集进上限为 256 KiB 的环形缓冲并把丢弃字节数与采集总字节数记入结构化日志（stderr 内容本身不得进入日志，只按上限保留供诊断回取）；超出上限 MUST 丢弃最旧内容并记录丢弃计数，MUST NOT 无界缓存，MUST NOT 把 stderr 内容当作 ACP wire 解析。
 

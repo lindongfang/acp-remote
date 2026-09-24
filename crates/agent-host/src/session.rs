@@ -152,6 +152,9 @@ impl AcpSession {
     }
 
     /// 空闲回收判据：**没有进行中的 turn** 且空闲时间超过 `timeout`。
+    ///
+    /// 已关闭的会话恒为假：调用方必须先把它们排除在判定之外（`AgentRuntime::is_idle` 只统计仍打开的
+    /// 会话），否则 `Endpoint::close()` 这类只置关闭位、不摘映射的路径会让 runtime 永不空闲。
     #[must_use]
     pub fn is_idle_for(&self, timeout: Duration) -> bool {
         let inner = lock(&self.inner);

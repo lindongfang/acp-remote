@@ -408,7 +408,7 @@ rows:
   - id: R51
     source:
       path: specs/local-agent-host/spec.md
-      heading: "### Requirement: stderr 有界采集与脱敏"
+      heading: "### Requirement: stderr 有界采集与结构化计数"
     tasks: ["2.16", "3.5"]
     checks: [PV4]
     evidence: [reports/wp3-agent-host-supervision.log]
@@ -416,7 +416,7 @@ rows:
     source:
       path: specs/local-agent-host/spec.md
       heading: "#### Scenario: 超限丢弃最旧并计数"
-      requirement: "### Requirement: stderr 有界采集与脱敏"
+      requirement: "### Requirement: stderr 有界采集与结构化计数"
     tasks: ["2.16", "3.5"]
     checks: [PV4]
     evidence: [reports/wp3-agent-host-supervision.log]
@@ -424,7 +424,7 @@ rows:
     source:
       path: specs/local-agent-host/spec.md
       heading: "#### Scenario: stderr 不进入协议通道"
-      requirement: "### Requirement: stderr 有界采集与脱敏"
+      requirement: "### Requirement: stderr 有界采集与结构化计数"
     tasks: ["2.16", "3.5"]
     checks: [PV4]
     evidence: [reports/wp3-agent-host-supervision.log]
@@ -597,7 +597,7 @@ rows:
 
 ### Code Review
 
-- 范围：WP1（§5 矩阵与 §4.5 收口措辞、`Cargo.toml` 依赖登记）、WP2（raw 保真机制、未知判别子与 `_` 方法、上限与结构化内容）、WP3（子进程所有权与关闭顺序、stdio 分帧与 request id、进程树清理、stderr 有界脱敏）、WP4（`EndpointEvent` 组装、`AcpRaw` 的 sha256 与换行约定、交互 id 保真、turn 终态唯一）、WP5（凭据注入交集与失败关闭、不注入节点密钥、不读启动配置文件）。
+- 范围：WP1（§5 矩阵与 §4.5 收口措辞、`Cargo.toml` 依赖登记）、WP2（raw 保真机制、未知判别子与 `_` 方法、上限与结构化内容）、WP3（子进程所有权与关闭顺序、stdio 分帧与 request id、进程树清理、stderr 有界采集与结构化计数）、WP4（`EndpointEvent` 组装、`AcpRaw` 的 sha256 与换行约定、交互 id 保真、turn 终态唯一）、WP5（凭据注入交集与失败关闭、不注入节点密钥、不读启动配置文件）。
 - 关注点：① 是否存在「经 `Value` 往返后声称字节保真」；② 是否有任何未列出常量（`SECURITY_DESIGN.md` §12.2 之外的超时/上限）；③ 是否遗留 detached task；④ 进程树在失败路径（`unwrap` 之外的错误分支）也会被清理；⑤ 日志/错误/测试快照中不出现凭据值、prompt 正文或规范化路径；⑥ `agent-host` 未读启动配置文件；⑦ **平台分支** `cfg` 只出现在 `platform.rs`（当前 `launch.rs` 只有 1 处 `#[cfg(test)]`，`bin/` 零命中）。
 - 阻断标准：任一规格场景缺覆盖、任一 `check:boundaries`/`check:acp` 差异、任何凭据或路径泄漏、任何「看似成功但没有清理进程树」的路径、任何把结构化事件文本化的实现。
 - 复核安排：修复后由同一 reviewer 对新固定版本复核，并保留原报告与复核结论。

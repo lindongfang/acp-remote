@@ -765,3 +765,69 @@ async fn declared_capabilities_accept_mode_and_config_writes() {
     drop(endpoint);
     host.shutdown_all().await;
 }
+
+/// `stderr-protocol-noise` 场景写进 stderr 的 marker，与 `src/bin/acpr-fake-acp-agent.rs` 的
+/// `STDERR_NOISE_MARKER` 保持一致（bin 不能被集成测试导入，因此只能各写一份）。
+const STDERR_NOISE_MARKER: &str = "ACPR-STDERR-PROTOCOL-NOISE-MARKER";
+
+/// stderr 上的**语法完全合法**的 ACP 报文（通知 + 带 id 的响应）不得被当作协议输入：
+/// 它们既不能变成事件，也不能破坏进程；stdout 上的正常应答必须照常完成 turn。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stderr_protocol_messages_never_reach_the_endpoint() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "stderr-protocol-noise"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let endpoint = create(&host, OTHER_SESSION, &collector).await;
+    // ① 请求本身成功（stderr 噪声不得拦住 stdout 上的正常路径）。
+    endpoint
+        .prompt(prompt("噪声"), support::timestamp())
+        .await
+        .expect("prompt 必须成功");
+    assert!(
+        collector
+            .wait_for_type("turn.completed", Duration::from_secs(10))
+            .await,
+        "turn 必须完成：{:?}",
+        collector.event_types()
+    );
+
+    // ② stderr 上的报文不得在任何事件（公共视图或 ACP 原文）里出现。
+    let events = collector.snapshot();
+    for event in &events {
+        let view = event.payload.view.as_str();
+        assert!(
+            !view.contains(STDERR_NOISE_MARKER),
+            "stderr 内容不得进入事件视图：{view}"
+        );
+        if let Some((_, raw, _, _)) = event
+            .payload
+            .acp
+            .as_ref()
+            .and_then(acp_core::model::AcpRaw::as_available)
+        {
+            assert!(
+                !raw.contains(STDERR_NOISE_MARKER),
+                "stderr 内容不得进入 ACP 原文：{raw}"
+            );
+        }
+    }
+
+    // ③ 进程保持健康：后续请求仍然可用。
+    let modes = endpoint.modes().await.expect("后续请求仍必须可用");
+    assert!(
+        !modes.available.is_empty(),
+        "模式声明不得被 stderr 噪声破坏"
+    );
+    assert!(
+        runtime_running(&host, &AgentId::new("agent-1").expect("id")),
+        "stderr 上的报文不得让进程退出"
+    );
+    drop(endpoint);
+    host.shutdown_all().await;
+}

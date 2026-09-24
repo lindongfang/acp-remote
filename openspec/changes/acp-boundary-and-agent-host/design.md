@@ -43,7 +43,7 @@
 | `thiserror` | crate 内错误类型 | |
 | `sha2` | `AcpRaw` 的 sha256 | workspace 已有该依赖 |
 | `tracing` | 结构化、脱敏日志 | 新增到 `[workspace.dependencies]`（§3.1 已把 `tracing` 列入计划） |
-| `win32job`（`cfg(windows)`） | Job Object（`KILL_ON_JOB_CLOSE`、`TerminateJobObject`） | 2.x，MIT OR Apache-2.0，安全 API |
+| `win32job`（`cfg(windows)`） | Job Object（`KILL_ON_JOB_CLOSE`；结束手段是关闭句柄，该 wrapper 未封装 `TerminateJobObject`） | 2.x，MIT OR Apache-2.0，安全 API |
 | `nix 0.30`（`cfg(unix)`；safe wrapper，代替 `libc`） | `killpg` 结束进程组 | MIT |
 
 - 备选（日志）：自定义 log sink 端口。否掉的理由：core 没有、也不应该有日志端口（`core` 不依赖 runtime 与 tracing），而 §3.1 已经把 `tracing` 列为 workspace 计划依赖；订阅器初始化属于组合根（切片 4）。
@@ -96,8 +96,8 @@
 ### D6 平台差异与进程树
 
 - 内部 trait `ProcessTree` 抽象「结束整棵树」：`platform::windows` 用 Job Object，`platform::unix` 用进程组。crate 其余部分不出现 `cfg`。
-- **Windows**：`win32job` 2.x（`Job::create` → `limit_kill_on_job_close()` → `set_extended_limit_info()`；结束用 `TerminateJobObject` 或关闭/丢弃句柄）。**每个 Agent 一个 Job**，句柄由 Daemon 侧的 supervisor 持有。
-  - 为什么不是单一全局 Job：单 Job 下无法只结束某一棵 Agent 树（`TerminateJobObject` 会波及全部 Agent），而本 crate 必须支持按 Agent 结束（空闲回收、单个 Agent 崩溃/超时）。`KILL_ON_JOB_CLOSE` 的关键性质（Daemon 崩溃或句柄关闭即停止整棵树）在每 Agent 一个 Job 下同样成立，因为句柄全由 Daemon 进程持有。该解释随本变更写入 `MODULE_ARCHITECTURE.md` §4.5；`KILL_ON_JOB_CLOSE`、Daemon 持有、父→孙清理三条约束不变。
+- **Windows**：`win32job` 2.x（`Job::create` → `limit_kill_on_job_close()` → `set_extended_limit_info()`；结束手段是关闭/丢弃该 Job 的句柄（wrapper 未封装 `TerminateJobObject`，直接 FFI 被 `unsafe_code = "forbid"` 禁止））。**每个 Agent 一个 Job**，句柄由 Daemon 侧的 supervisor 持有。
+  - 为什么不是单一全局 Job：单 Job 下无法只结束某一棵 Agent 树（结束整个 Job 会波及全部 Agent），而本 crate 必须支持按 Agent 结束（空闲回收、单个 Agent 崩溃/超时）。`KILL_ON_JOB_CLOSE` 的关键性质（Daemon 崩溃或句柄关闭即停止整棵树）在每 Agent 一个 Job 下同样成立，因为句柄全由 Daemon 进程持有。该解释随本变更写入 `MODULE_ARCHITECTURE.md` §4.5；`KILL_ON_JOB_CLOSE`、Daemon 持有、父→孙清理三条约束不变。
   - 赋值时机：Job 先创建并设置 `KILL_ON_JOB_CLOSE`，再 spawn（`tokio::process::Command`，Windows 上 `Child::raw_handle()` 取句柄），spawn 成功后**在写入任何 stdin 之前**立即 assign。探针同样是「先 spawn 后 assign」，残余窗口见风险 2。
   - 被否的备选：`process-wrap` 10（MSRV 1.87 > 仓库 1.85，需用户决定是否抬 MSRV）；`command-group`（MSRV 1.68 但已弃用，且不提供 Job Object）；直接 FFI `kernel32`（被 workspace `unsafe_code = "forbid"` 禁止）。
   - 退路：实现第一步核验 `win32job` 的传递依赖 MSRV、许可证与维护状态；若不合格或传导抬高 MSRV → **回到用户决策**（抬 MSRV，或新增 ADR + 为该 crate 覆盖 lint），不擅自放开 `unsafe`。
@@ -156,7 +156,7 @@
 6. [1 MiB 单条上限可能拒绝合法的大消息] → 与 Sync `maxMessageBytes` 同值，超限是明确错误而非静默截断；真实 Agent 需要更大值时属于安全常量与矩阵变更（用户决策）。
 7. [fake child 作为 crate 内 bin 会随 `cargo build --workspace` 构建] → `publish = false`，切片 8 打包时排除；本变更记录该已知残留。
 8. [Windows 进程树断言不在 Linux CI 覆盖] → 验证计划中单列「本地 Windows 留证」，并在最终验收中如实记录 CI 未覆盖的部分。
-9. [新增 `tracing`/`win32job`/`nix` 依赖] → `tracing` 与 `win32job` 为 MIT/Apache-2.0、`nix 0.30.1` 为 `MIT`（`license` 字段与 LICENSE 正文均已核实），`deny.toml` 的 allow 含 `MIT`；`cargo-deny` 的 `deps`/`advisories` 与 `gitleaks` 本地无等价物，只在 CI 判定，不得声称本地已通过。
+9. [新增 `tracing`/`win32job`/`nix` 依赖] → `tracing 0.1` 与 `nix 0.30.1` 为 `MIT`、`win32job 2.0.3` 为 `MIT OR Apache-2.0`（各自的 `license` 字段与 LICENSE 正文均已核实），`deny.toml` 的 allow 含 `MIT`；`cargo-deny` 的 `deps`/`advisories` 与 `gitleaks` 本地无等价物，只在 CI 判定，不得声称本地已通过。
 10. [11 种 `session/update` 的领域投影可能与 core/Sync 既有 event 约定不完全对齐] → 本变更只保证结构化、不文本化、带 `AcpRaw`，并把字段级 schema 一致性留给 Sync 切片；若发现 core 现有 `EventType`/view 约定有缺口，在本变更内**不改 core**，按 `local-agent-host` 规范以「最小结构化 view + 逐字节原文」表达并记录。
 11. [每会话一个 supervisor/endpoint 与空闲回收交互复杂] → 用单所有者（supervisor）串行化状态变更，空闲判定与关闭同在 supervisor 内，避免多任务竞争同一会话映射。
 

@@ -81,14 +81,22 @@ impl AgentRuntime {
 
     /// 该运行时是否可以按空闲超时回收。
     ///
-    /// 没有活动会话（例如只协商过能力的进程）看进程级时钟；有会话时要求**全部**会话都空闲
+    /// 没有活动会话（例如只协商过能力的进程）看进程级时钟；有会话时要求**全部**仍打开的会话都空闲
     /// （任一会话有进行中的 turn 就不回收）。
+    ///
+    /// **已关闭的会话不参与判定**：`Endpoint::close()` 只置关闭位、不摘映射，而 `AcpSession::is_idle_for`
+    /// 对已关闭会话恒为假；若把它算进来，只要 `by_acp` 里留着一个已关闭会话，这个 runtime 就永远不会
+    /// 被空闲回收（进程泄漏）。会话全部关闭后同样退回进程级时钟。
     fn is_idle(&self, timeout: Duration) -> bool {
-        let sessions = self.sessions();
-        if sessions.is_empty() {
+        let live: Vec<Arc<AcpSession>> = self
+            .sessions()
+            .into_iter()
+            .filter(|session| !session.is_closed())
+            .collect();
+        if live.is_empty() {
             return self.idle_for(timeout);
         }
-        sessions.iter().all(|session| session.is_idle_for(timeout))
+        live.iter().all(|session| session.is_idle_for(timeout))
     }
 
     /// 让出全部会话映射。
@@ -201,6 +209,12 @@ impl AgentHost {
             return Err(HostError::NotRunning);
         }
         let mut runtimes = self.runtimes.lock().await;
+        // 取到锁之后**再查一次**：`shutdown_all` 先置位再取锁，因此在「读标志」与「拿到锁」之间被插入的
+        // 调用会在这里被拦下——否则它会在 `shutdown_all` 清表之后往目录里塞一个新进程，"此后一律拒绝"
+        // 就只对「取锁之前就读到标志」的调用成立。
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(HostError::NotRunning);
+        }
         let stale = runtimes.get(agent).cloned();
         if let Some(runtime) = stale {
             if runtime.supervisor.is_running() {

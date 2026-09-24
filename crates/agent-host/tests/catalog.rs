@@ -83,24 +83,31 @@ fn dumping_heartbeat_profile(
     agent: &str,
     tag: &str,
 ) -> (AgentProfile, std::path::PathBuf, std::path::PathBuf) {
+    dumping_heartbeat_profile_with(agent, tag, &[])
+}
+
+/// 同上，但可在 `normal` 场景之上追加 fake child 的额外参数（`--no-modes` 等）。
+fn dumping_heartbeat_profile_with(
+    agent: &str,
+    tag: &str,
+    extra: &[&str],
+) -> (AgentProfile, std::path::PathBuf, std::path::PathBuf) {
     let dump = env_path(tag);
     let _ = std::fs::remove_file(&dump);
     let heartbeat = heartbeat_path(tag);
     let _ = std::fs::remove_file(&heartbeat);
     let dump_text = dump.to_string_lossy().into_owned();
     let heartbeat_text = heartbeat.to_string_lossy().into_owned();
-    let profile = profile_with(
-        agent,
-        FAKE_AGENT,
-        &[
-            "--scenario",
-            "normal",
-            "--dump-env",
-            &dump_text,
-            "--heartbeat-file",
-            &heartbeat_text,
-        ],
-    );
+    let mut args = vec![
+        "--scenario",
+        "normal",
+        "--dump-env",
+        &dump_text,
+        "--heartbeat-file",
+        &heartbeat_text,
+    ];
+    args.extend_from_slice(extra);
+    let profile = profile_with(agent, FAKE_AGENT, &args);
     (profile, dump, heartbeat)
 }
 
@@ -531,6 +538,10 @@ async fn reclaim_invalidates_runtime_and_session_mappings() {
 }
 
 /// 空闲时钟必须覆盖**出站活动**：只改模式、不 prompt 的会话不得在超时前被回收。
+///
+/// 钉法的分工：fake child 在 `session/set_mode` 之后会紧跟一条 `current_mode_update` 通知，而通知入站
+/// 也会刷新同一时钟 ⇒ 本用例无法单独证明 `set_mode` 的 `touch()`。真正钉住那次刷新的是
+/// `idle_clock_is_refreshed_by_set_mode_without_declared_modes`（未宣告模式的早退路径上唯一刷新点）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_clock_covers_outbound_session_activity() {
     let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "activity");
@@ -546,14 +557,17 @@ async fn idle_clock_covers_outbound_session_activity() {
     .expect("create");
     assert!(wait_for_heartbeat(&heartbeat, Duration::from_secs(10)).await > 0);
 
-    // 先让会话空闲超过下面的超时，再用 `set_mode` 刷新活动时钟。
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // `modes()` 自己也会刷新空闲时钟，因此必须在窗口**之前**调用；窗口内只留 `set_mode`。
     let modes = endpoint.modes().await.expect("modes");
     assert!(!modes.available.is_empty(), "fake child 默认宣告可用模式");
-    endpoint
-        .set_mode(modes.available[0].mode_id())
-        .await
-        .expect("set_mode");
+    let plan = acp_core::model::ModeId::new("plan").expect("mode id");
+    assert!(
+        modes.available.iter().any(|mode| mode.mode_id() == &plan),
+        "固定 mode id 必须来自 Agent 给出的候选"
+    );
+    // 先让会话空闲超过下面的超时，再用 `set_mode` 刷新活动时钟。
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    endpoint.set_mode(&plan).await.expect("set_mode");
 
     host.sweep_idle(Duration::from_millis(200)).await;
     assert_eq!(
@@ -580,6 +594,260 @@ async fn idle_clock_covers_outbound_session_activity() {
     host.shutdown_all().await;
     let _ = std::fs::remove_file(&dump);
     let _ = std::fs::remove_file(&heartbeat);
+}
+
+/// 单点刷新断言：窗口内只有 `set_mode` 一个刷新点（`--no-modes` 让 Agent 不宣告模式，早退路径
+/// 不发任何消息 ⇒ 没有入站通知再刷新时钟）。删掉 `Endpoint::set_mode` 的 `touch()` 会让本用例变红。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_clock_is_refreshed_by_set_mode_without_declared_modes() {
+    let (profile, dump, heartbeat) =
+        dumping_heartbeat_profile_with("agent-1", "activity-set-mode", &["--no-modes"]);
+    let host = host(vec![profile], FakeCredentials::ok());
+    let agent = AgentId::new("agent-1").expect("id");
+    let endpoint = create(
+        &host,
+        "agent-1",
+        &SessionId::new(SESSION).expect("session"),
+        &Collector::new(),
+    )
+    .await
+    .expect("create");
+    assert!(wait_for_heartbeat(&heartbeat, Duration::from_secs(10)).await > 0);
+    assert!(
+        endpoint.modes().await.expect("modes").available.is_empty(),
+        "`--no-modes` 必须造出「未宣告」路径"
+    );
+
+    // 先让会话空闲超过下面的超时，再用 `set_mode`（这一次是唯一的刷新点）刷新。
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let refused = endpoint
+        .set_mode(&acp_core::model::ModeId::new("plan").expect("mode"))
+        .await;
+    assert!(refused.is_err(), "未宣告模式必须显式拒绝（且不发消息）");
+
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        Some(1),
+        "刚调用过 set_mode 的会话不得在超时前被回收"
+    );
+
+    // 活动时钟没有被弄坏：之后真的空闲超过超时时仍必须回收，且进程真的结束。
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        None,
+        "空闲超时后仍要回收"
+    );
+    let after_reclaim = heartbeat_len(&heartbeat);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        heartbeat_len(&heartbeat),
+        after_reclaim,
+        "回收后进程必须真的结束（心跳不得继续增长）"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
+    let _ = std::fs::remove_file(&heartbeat);
+}
+
+/// 单点刷新断言：fake child 收到 `session/set_config_option` 只回空 result、不发通知，
+/// 因此窗口内只有 `set_config` 一个刷新点。删掉它的 `touch()` 会让本用例变红。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_clock_is_refreshed_by_set_config() {
+    let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "activity-set-config");
+    let host = host(vec![profile], FakeCredentials::ok());
+    let agent = AgentId::new("agent-1").expect("id");
+    let endpoint = create(
+        &host,
+        "agent-1",
+        &SessionId::new(SESSION).expect("session"),
+        &Collector::new(),
+    )
+    .await
+    .expect("create");
+    assert!(wait_for_heartbeat(&heartbeat, Duration::from_secs(10)).await > 0);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    endpoint
+        .set_config(
+            &acp_core::model::ConfigOptionId::new("verbose").expect("option"),
+            support::boolean(true),
+        )
+        .await
+        .expect("set_config");
+
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        Some(1),
+        "刚写过配置的会话不得在超时前被回收"
+    );
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        None,
+        "空闲超时后仍要回收"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
+    let _ = std::fs::remove_file(&heartbeat);
+}
+
+/// 单点刷新断言：没有进行中的 turn 时 `cancel` 是幂等空操作、不发任何消息，
+/// 因此窗口内只有 `cancel_turn` 一个刷新点。删掉它的 `touch()` 会让本用例变红。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_clock_is_refreshed_by_cancel_turn() {
+    let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "activity-cancel");
+    let host = host(vec![profile], FakeCredentials::ok());
+    let agent = AgentId::new("agent-1").expect("id");
+    let endpoint = create(
+        &host,
+        "agent-1",
+        &SessionId::new(SESSION).expect("session"),
+        &Collector::new(),
+    )
+    .await
+    .expect("create");
+    assert!(wait_for_heartbeat(&heartbeat, Duration::from_secs(10)).await > 0);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    endpoint
+        .cancel(None)
+        .await
+        .expect("无 turn 时取消是幂等空操作");
+
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        Some(1),
+        "刚取消过的会话不得在超时前被回收"
+    );
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        None,
+        "空闲超时后仍要回收"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
+    let _ = std::fs::remove_file(&heartbeat);
+}
+
+/// 已关闭的会话不得阻塞空闲回收：`Endpoint::close()` 只置关闭位、不摘映射，
+/// 若把已关闭会话算作「不空闲」，只要 `by_acp` 里留着它就永远回收不掉这个 runtime（进程泄漏）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn closed_session_does_not_block_idle_reclaim() {
+    let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "closed");
+    let host = host(vec![profile], FakeCredentials::ok());
+    let agent = AgentId::new("agent-1").expect("id");
+    let endpoint = create(
+        &host,
+        "agent-1",
+        &SessionId::new(SESSION).expect("session"),
+        &Collector::new(),
+    )
+    .await
+    .expect("create");
+    assert!(wait_for_heartbeat(&heartbeat, Duration::from_secs(10)).await > 0);
+    assert_eq!(runtime_generation(&host, &agent), Some(1));
+
+    // 直接调 `Endpoint::close()`（不依赖 core 是否调用它）：会话映射仍留在 `by_acp` 里。
+    endpoint.close().await.expect("close");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    host.sweep_idle(Duration::from_millis(200)).await;
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        None,
+        "已关闭的会话不得阻塞空闲回收（否则进程泄漏）"
+    );
+
+    // 进程外证据：回收后进程真的结束。
+    let after_reclaim = heartbeat_len(&heartbeat);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        heartbeat_len(&heartbeat),
+        after_reclaim,
+        "回收后进程必须真的结束（心跳不得继续增长）"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
+    let _ = std::fs::remove_file(&heartbeat);
+}
+
+/// 进程已退出但运行时仍留在目录里的窗口：再次访问必须作废旧运行时、清掉映射并**重建**为新的
+/// 进程代；崩溃前的旧端点与旧映射都不得跨代复用。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exited_runtime_is_rebuilt_as_a_new_generation() {
+    let dump = env_path("stale-runtime");
+    let _ = std::fs::remove_file(&dump);
+    let dump_text = dump.to_string_lossy().into_owned();
+    let profile = profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "crash-on-prompt", "--dump-env", &dump_text],
+    );
+    let host = host(vec![profile], FakeCredentials::ok());
+    let agent = AgentId::new("agent-1").expect("id");
+    let session = SessionId::new(SESSION).expect("session");
+    let first = create(&host, "agent-1", &session, &Collector::new())
+        .await
+        .expect("create");
+    assert_eq!(runtime_generation(&host, &agent), Some(1));
+
+    // 让子进程崩溃：运行时与映射都还在目录里，只有 supervisor 已经不在运行。
+    let _ = first.prompt(prompt("会崩"), support::timestamp()).await;
+    assert!(
+        wait_until_not_running(&host, &agent, Duration::from_secs(10)).await,
+        "子进程必须先退出"
+    );
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        Some(1),
+        "窗口：目录里仍是已退出的运行时"
+    );
+    // 删掉第一代写的环境快照：新一代真的启动时它会重新出现（进程外证据）。
+    let _ = std::fs::remove_file(&dump);
+
+    // 再次访问同一条目：作废 + 清映射 + 关闭旧树，然后按新一代启动。
+    let _ = host
+        .agent_capabilities(&agent_ref("agent-1"))
+        .await
+        .expect("capabilities");
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        Some(2),
+        "已退出的运行时必须被重建为新的进程代"
+    );
+    assert!(
+        dump.exists(),
+        "新一代必须真的启动了子进程（环境快照重新出现）"
+    );
+
+    // 旧端点与旧映射都不得跨代复用：作废路径必须先 `close_session`，旧端点才会以「会话已关闭」
+    // （`PortError::InvalidRequest`）而不是「进程已退出」（`Unavailable`）失败。
+    let reused = match first.prompt(prompt("旧端点"), support::timestamp()).await {
+        Ok(_) => panic!("崩溃前的旧端点必须显式失败"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(reused, PortError::InvalidRequest(_)),
+        "作废旧运行时必须先关掉旧端点（否则它只会报进程已退出）：{reused:?}"
+    );
+    let reused = host
+        .open(owned_ref(&session), Collector::new().sink())
+        .await;
+    assert!(
+        matches!(reused, Err(PortError::InvalidRequest(_))),
+        "作废旧运行时必须同时清掉会话映射"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
 }
 
 /// 未知 core 会话号：`open` 必须显式失败，且不得因此拉起进程。
@@ -708,6 +976,9 @@ async fn idle_sweep_task_converges_on_shutdown_all() {
         wait_for_generation(&host, &agent, Some(1), Duration::from_secs(5)).await,
         Some(1)
     );
+    assert!(dump.exists(), "第一代进程必须写过环境快照");
+    // 删掉快照：只有**真的**又拉起了进程（无论由周期任务还是面板调用）它才会重新出现。
+    let _ = std::fs::remove_file(&dump);
 
     host.shutdown_all().await;
     // 至少让周期任务再走一圈（间隔见 `limits::IDLE_SWEEP_INTERVAL`）：不得把已关闭的 agent 拉起来。
@@ -736,6 +1007,11 @@ async fn idle_sweep_task_converges_on_shutdown_all() {
     assert!(
         matches!(refused, Err(PortError::Unavailable(_))),
         "关闭中必须显式拒绝启动，而不是静默超时或悄悄拉起进程"
+    );
+    // 进程外证据：关闭后任何路径都不得再拉起进程（否则子进程会重写被删掉的环境快照）。
+    assert!(
+        !dump.exists(),
+        "关闭后不得再启动进程（`--dump-env` 快照不得重新出现）"
     );
 
     handle.abort();
@@ -767,6 +1043,39 @@ async fn dropped_allowlisted_credential_variable_fails_before_spawn() {
     assert!(
         matches!(outcome, Err(PortError::Unavailable(_))),
         "漏给白名单内的绑定变量必须失败关闭"
+    );
+    assert!(
+        !dump.exists(),
+        "拒绝必须发生在 spawn 之前（子进程不得启动）"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
+}
+
+/// 期望集合校验必须在 `NECESSARY_ENV` 注入**之前**：绑定名恰好是 `PATH` 的凭据被漏给时，
+/// 宿主机上的 `PATH` 不得冒充它把校验糊过去（否则会带着半个环境启动）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_credential_bound_to_a_necessary_env_name_fails_before_spawn() {
+    let dump = env_path("dropped-path");
+    let _ = std::fs::remove_file(&dump);
+    let dump_text = dump.to_string_lossy().into_owned();
+    let profile = profile_with_env_vars(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "normal", "--dump-env", &dump_text],
+        &["PATH"],
+    );
+    let host = host(vec![profile], FakeCredentials::dropping("PATH"));
+    let outcome = create(
+        &host,
+        "agent-1",
+        &SessionId::new(SESSION).expect("session"),
+        &Collector::new(),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(PortError::Unavailable(_))),
+        "漏给绑定到 `PATH` 的凭据必须失败关闭（宿主机 `PATH` 不得冒充凭据）"
     );
     assert!(
         !dump.exists(),

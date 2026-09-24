@@ -362,6 +362,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 使用参数数组启动，不经 shell 拼接用户输入。
 - 只传递 Agent 启动所需环境变量；不把 ACP Remote Node/Device key 注入子进程。
 - `[决定]`（2026-09-23）**注入集合可判定**：实际注入的环境变量 = `env_allowlist` ∩ profile 的 `env` 绑定声明的 `name` 集合，加必要的进程环境（如 `PATH`）；凭据值只能来自 `CredentialResolver`（`CORE_PORTS_AND_STORAGE.md` §11.6），未绑定或未列入白名单的变量一律不注入，keystore 不可用则**失败关闭**。
+- `[决定]`（2026-09-24）**保留前缀在启动前静态拒绝**：`agent-host` 在 spawn 之前拒绝注入名为 `ACPR_*`（本 crate 的保留前缀约定）与 `ACP_REMOTE_*`（与 `core::model` 的 `is_reserved_env_name` 对齐）的变量——不把「不得注入节点/设备密钥」全部押在运行时的 `env_clear()` 上，从而也拦住旁路 core 校验的自定义配置/凭据来源。
 - stdout 只作为 ACP wire；stderr 只做**有界采集 + 结构化计数**（变量名与数量级）：内容进入固定上限的环形缓冲，**不进日志**，需要时按上限回取（§14.1）。
 - `[决定]`（2026-09-23）**Agent 进程的上下限是固定 v1 常量，不是配置键**（与 `SYNC_PROTOCOL.md` §14 同惯例）；未列出的值不得由实现自行发明：
 
@@ -372,7 +373,7 @@ local.audit.export         本地审计导出（不含会话正文）
 | `session/prompt`（turn） | **不设超时** | 长任务是合法的；取消只由用户或 `session.cancel` 触发，超时杀进程会破坏 ACP 语义 |
 | 关闭 grace（友好终止 → 强杀） | 5 s | 必须小于 `daemon.shutdown_grace_ms`（10 s），否则 daemon 无法在自己的 grace 内收尾 |
 | 单条 ACP 消息（stdout 解析上限） | 1 MiB | 与 `SYNC_PROTOCOL.md` §14 的 `maxMessageBytes` 同值，避免同一条消息在两跳上有两个上限 |
-| stderr 环形缓冲 | 256 KiB | 有界采集、有界采集；采样/脱敏后**只记计数**进结构化日志（内容不进日志，可按上限回取）（§14.1）；超出丢弃最旧并记一条计数，不无界缓存 |
+| stderr 环形缓冲 | 256 KiB | 有界采集：内容原样进入固定上限的环形缓冲（不做内容脱敏），**内容不进日志**，只记丢弃字节数与采集总字节数（§14.1）；需要时按上限回取；超出丢弃最旧并记一条计数，不无界缓存 |
 | 空闲回收 | 复用 `sessions.idle_timeout_ms` | `0` = 不因空闲关闭；非零时只有「无 active 会话且空闲超过该值」才关闭进程 |
 | 内存 | **规则而非数值** | 无法可靠测量 RSS；改为可判定规则：必须流式处理 ACP 消息与 stderr，不得缓存完整会话正文，超限即报错并结束该 Agent |
 
