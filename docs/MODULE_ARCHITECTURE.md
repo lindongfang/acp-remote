@@ -132,6 +132,7 @@ crates/
 - `[决定]` 上述四个密码学原语的**版本口径只维护在上一行**：版本号以 `Cargo.toml` 的 `[workspace.dependencies]` 为准，本行所在的说明与它一致。变更版本必须在**同一改动**里更新这里并给出验证证据；变的是原语集合、算法或实现选择（而不是版本号）时按 `AGENTS.md` §10 走 ADR。
   - 2026-09-23 基线：`sha2 0.10 → 0.11`、`base64 0.22 → 0.23`（Dependabot PR #1/#2）。证据：workspace 全部测试与 clippy 在该版本上通过（CI 五个 job 全绿、本地 `npm run check:rust` 通过）；`npm run check` 的 transcript 固定向量重算与许可证/来源判定不受影响（JS 侧与版本无关，许可证集合无新增项）。
   - 诚实说明：`INITIAL_DESIGN.md` §16 第 6 条那次一次性 Rust 实测是在 `sha2 0.10`/`base64 0.22` 上做的；本次只验证了「算法语义不变且现有测试通过」，没有重跑那次探针。真正版本无关的回归判据仍是该条要求实现阶段做的事：把同一批固定向量固化成恒常运行的 Rust 测试。
+- `[决定]`（2026-09-24）`agent-host` 的平台与日志依赖固定为 `tracing 0.1`（结构化日志）、`win32job 2`（Windows Job Object；safe API，MIT OR Apache-2.0）与 `libc 0.2`（Unix 进程组结束，MIT OR Apache-2.0），三者只登记在 `[workspace.dependencies]`，crate 内写 `workspace = true`。选 `win32job` 而不是 `process-wrap` 的理由是 MSRV：`process-wrap` 10 需要 1.87，高于本仓库 `rust-version = 1.85`（§4.5）。版本口径同样只维护在 `[workspace.dependencies]`，本行与它保持一致。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
 - workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十二个；不得为凑齐列表创建只有占位实现的空 crate。
@@ -220,6 +221,8 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 包含 JSON-RPC envelope、ACP wire DTO、codec、raw document、capability wire schema、limits 和协议 fixture。协议类型必须保留未知字段与 Agent 扩展 payload。ACP 覆盖集合与跨层验收合同以 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) 和 `compatibility/acp/v1/matrix.json` 为准。
 
+已落地的 surface（2026-09-24）：JSON-RPC 信封分类与方向/required 校验、ACP v1 wire DTO（`initialize`/`session/new`/`session/prompt`/`session/update`/`session/request_permission`/elicitation 与 content block）、`RawDocument` 原文承载与逐字节回写、capability wire 形状、固定 v1 消息上限（1 MiB），以及由 `fixtures/acp/v1/manifest.json` 与 `compatibility/acp/v1/matrix.json` 驱动的契约测试。矩阵中 `delivery = post_mvp` 的方法仍只是「可解码与显式不支持」，没有实现。
+
 它不依赖 `core`，不包含领域 mapper，不启动子进程、不管理会话、不访问数据库。ACP wire 到公共领域视图的 mapper 位于 `agent-host` 或 `server::acp_facade`，因为映射方向取决于 adapter 角色。
 
 ### 4.3 `sync-protocol`
@@ -272,8 +275,10 @@ wire/core mapper 也位于本 crate，但必须把 `acp-protocol::RawDocument` �
 
 实现前已冻结的硬约束（都不是可选优化）：
 
-- **进程树清理**：Windows 必须用 Job Object 管理 Agent 进程树，并把 `KILL_ON_JOB_CLOSE` 设在 Daemon 持有的 Job 上；探针实测生效的 `ExtendedLimitInformation` 布局（144 字节）可直接复用（[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §16 第 4 条）。该结论必须变成**常驻回归测试**（父→孙两层进程、杀父后孙必须停止、关 Job 句柄后孙必须停止），而不是停留在未提交的一次性探针。Unix 侧用进程组或等价机制达到同一效果，平台差异只存在于本 crate。
-  - `[决定]`（2026-09-23）**用安全 wrapper crate 实现，不给本 crate 放开 `unsafe`**：正式实现不得直接 FFI `kernel32`（那次探针之所以在仓库外，正是因为 workspace 固定 `unsafe_code = "forbid"`）。候选（`win32job`、`process-wrap`/`command-group` 等）必须按 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 与 `AGENTS.md` §7 核验 MSRV、维护状态、许可证与平台支持后再选：已确认 `process-wrap` 10 的 MSRV 为 **1.87**，高于本仓库 `rust-version = 1.85`，引入它必须先单独决定是否抬 MSRV。确实找不到可接受的候选时，才走「新增 ADR + 为本 crate 覆盖 lint」路线。
+- **进程树清理**：Windows 必须用 Job Object 管理 Agent 进程树，并把 `KILL_ON_JOB_CLOSE` 设在 Daemon 侧持有的 Job 上。
+  - `[决定]`（2026-09-24）**每个 Agent 一个 Job，句柄由 Daemon 侧的 supervisor 持有**：单个全局 Job 无法只结束某一棵 Agent 树（`TerminateJobObject` 会波及全部 Agent），而本 crate 必须支持按 Agent 结束（空闲回收、单个 Agent 崩溃或超时）。`KILL_ON_JOB_CLOSE` 的关键性质（Daemon 崩溃或句柄关闭即停止整棵树）在每 Agent 一个 Job 下同样成立，因为句柄全部由 Daemon 进程持有；「Daemon 持有」指进程所有关系，不限定 Job 的个数。
+  - 探针实测生效的 `ExtendedLimitInformation` 布局（144 字节）可直接复用（[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §16 第 4 条）。该结论必须变成**常驻回归测试**（父→孙两层进程、强制结束 Agent 后孙必须停止、关 Job 句柄后孙必须停止），而不是停留在未提交的一次性探针。Unix 侧用进程组或等价机制达到同一效果，平台差异只存在于本 crate。
+  - `[决定]`（2026-09-23 定原则，2026-09-24 收口选型）**用安全 wrapper crate 实现，不给本 crate 放开 `unsafe`**：正式实现不得直接 FFI `kernel32`（那次探针之所以在仓库外，正是因为 workspace 固定 `unsafe_code = "forbid"`）。**已选定 `win32job` 2.x**：safe API（`Job::create`、`limit_kill_on_job_close`、`set_extended_limit_info`、`assign_process`），许可证 MIT OR Apache-2.0，符合 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20 的许可证口径。被否的候选：`process-wrap` 10（MSRV **1.87** 高于本仓库 `rust-version = 1.85`，引入它必须先单独决定是否抬 MSRV）、`command-group`（已弃用且不提供 Job Object）。实现仍须核验 `win32job` 传递依赖的实际 MSRV 与维护状态；不合格或传导抬高 MSRV 时回去由用户决策（抬 MSRV，或新增 ADR + 为本 crate 覆盖 lint），不得擅自放开 `unsafe`。
 - **stdio 传输**：stdin/stdout 的 JSON-RPC 分帧、request id 映射、session id 映射与 live endpoint generation 都由本 crate 拥有；stderr 必须按大小上限有界收集进结构化日志，不得无界缓存或直接透传。
 - **失败路径**：启动失败、超时、取消、异常退出与乱序响应都必须有明确处理与测试（`AGENTS.md` §7/§9）；正常运行路径不得 `unwrap()`/`expect()`；异步任务必须有所有者、取消路径与关闭顺序。
 - **profile 来源**：Agent profile（命令、参数、环境变量白名单、凭据→环境变量绑定）来自 `LocalConfigStore`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6），不读启动配置文件；未列入白名单的环境变量不得注入子进程，凭据值只能经 `CredentialResolver` 在启动前解析（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §12.2/§13.1）。
@@ -416,21 +421,21 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 ## 5. 依赖矩阵
 `✓` 表示允许直接依赖：
 
-| From / To | core | acp-protocol | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| core | — |  |  |  |  |  |  |  |
-| acp-protocol |  | — |  |  |  |  |  |  |
-| sync-protocol |  |  | — |  | ✓ | ✓ |  |  |
-| node-link-protocol |  |  |  | — | ✓ | ✓ |  |  |
-| acpr-transcript |  |  |  |  | — |  |  |  |
-| acpr-wire |  |  |  |  | ✓ | — |  |  |
-| agent-host | ✓ | ✓ |  |  |  |  |  |  |
-| node-link-client | ✓ | ✓ |  | ✓ |  |  |  |  |
-| storage-sqlite | ✓ |  |  |  |  | ✓ |  |  |
-| identity-auth | ✓ |  | ✓ | ✓ | ✓ |  | — |  |
-| identity-keystore |  |  |  |  |  |  | ✓ | — |
-| server | ✓ | ✓ | ✓ | ✓ |  |  | ✓ |  |
-| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| From / To | core | acp-protocol | agent-host | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| core | — |  |  |  |  |  |  |  |  |
+| acp-protocol |  | — |  |  |  |  |  |  |  |
+| agent-host | ✓ | ✓ | — |  |  |  |  |  |  |
+| sync-protocol |  |  |  | — |  | ✓ | ✓ |  |  |
+| node-link-protocol |  |  |  |  | — | ✓ | ✓ |  |  |
+| acpr-transcript |  |  |  |  |  | — |  |  |  |
+| acpr-wire |  |  |  |  |  | ✓ | — |  |  |
+| node-link-client | ✓ | ✓ |  |  | ✓ |  |  |  |  |
+| storage-sqlite | ✓ |  |  |  |  |  | ✓ |  |  |
+| identity-auth | ✓ |  |  | ✓ | ✓ | ✓ |  | — |  |
+| identity-keystore |  |  |  |  |  |  |  | ✓ | — |
+| server | ✓ | ✓ |  | ✓ | ✓ |  |  | ✓ |  |
+| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 额外规则：
 

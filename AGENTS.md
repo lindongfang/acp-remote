@@ -87,12 +87,12 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
 ```text
 core                # 已落地
-acp-protocol        # 待落地
+acp-protocol        # 已落地
 sync-protocol       # 已落地
 node-link-protocol  # 已落地
 acpr-transcript     # 已落地（叶子）
 acpr-wire           # 已落地（叶子）
-agent-host          # 待落地
+agent-host          # 已落地
 node-link-client    # 待落地
 storage-sqlite      # 已落地
 identity-auth       # 待落地

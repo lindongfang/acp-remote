@@ -14,8 +14,10 @@
 | `storage-sqlite` | §7 的 `owned_*`/`imported_*` 表结构与 migration、保留窗口/容量清理（含 imported 家族度量）、附件内容寻址、崩溃恢复与只读失败关闭；实现 `SessionStore`/`ReadView`/`RemoteDeliveryStore`/`AttachmentStore`，以及 §7 管理表上的三个管理 store（`TrustStore`/`ExportStore`/`LocalConfigStore`：写集一事务提交、失败关闭、容量纳入） |
 | `sync-protocol` | v1 的全部 18 个消息类型（信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族 body）、33 个事件视图的类型化投影，以及配对 HTTPS 载荷（二维码 / claim / status / HTTP 错误体） |
 | `node-link-protocol` | §9.3/§9.4 的 transcript domain/tag 表、v1 的全部 29 个消息类型（信封与分派，`handshake`/`catalog`/`resource`/`command`/`error` 五个家族 body）与配对 HTTPS 载荷 |
+| `acp-protocol` | JSON-RPC 信封分类与方向/required 校验、ACP v1 wire DTO（`initialize`/`session/new`/`session/prompt`/`session/update` 的 11 种判别子/`session/request_permission`/elicitation 与 content block）、`RawDocument` 原文承载与逐字节回写、capability wire 形状、固定 v1 消息上限（1 MiB），以及由 `fixtures/acp/v1/manifest.json` 与 `compatibility/acp/v1/matrix.json` 驱动的契约测试 |
+| `agent-host` | 本机 ACP 子进程作为 `AgentCatalog`/`SessionBackendFactory`/`SessionEndpoint`：启动与监督、stdio 分帧、request id 与 ACP session id 映射、capability 协商与调用门控、权限/elicitation 转发、超时与取消、stderr 有界采集、Windows Job Object（Unix 进程组）进程树清理、profile 与凭据注入边界、wire→core mapper |
 
-尚未开始：前端工程，以及 `server`、`agent-host`、`node-link-client`、`identity-auth`、`identity-keystore`、`acp-protocol`、`app`（每落地一个才加入 workspace `members`）。
+尚未开始：前端工程，以及 `server`、`node-link-client`、`identity-auth`、`identity-keystore`、`app`（每落地一个才加入 workspace `members`）。
 
 当前优先交付 Windows x64 的 Daemon/CLI 与 Node Link 闭环，Linux 延后开发；完整平台顺序见 [初始设计 §14](docs/INITIAL_DESIGN.md#14-npm-分发)。共享代码的 Linux CI 保留，不代表 Linux 产品已可运行。
 
