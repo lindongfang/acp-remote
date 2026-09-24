@@ -114,3 +114,93 @@
 5. **CI 专属判定未在本地执行**：`cargo-deny`（`deps`/`advisories`）与 `gitleaks`（`secrets`）本地无等价物，本变更新增的 `getrandom` 与 DPAPI wrapper 的许可证/来源/advisory 判定**只在 CI 完成**，本地 `npm run verify` 不是该判定的证据（见 `plan.md`「未执行项」）。
 
 **本阶段结论：候选 PASS（PV1–PV5 全绿、证据单写者重建并自检通过）；未合入；不等于最终验收 PASS。**
+
+---
+
+# 第二轮：新候选 `4d988cd` 重跑（6.2/6.3）与合入阶段（6.6/6.7）
+
+> 上文 §0–§9 描述的是**上一轮候选 `ed98f6d`**（含其双写者事故与重建）。本轮候选变更为 `4d988cd`，按计划**不得沿用**上一轮 `du1-pv*.log` 结论：上一轮日志已由主 Agent 删除，本轮由本 run 作为唯一写入者**全部重跑重建**。就候选 `4d988cd` 而言，**本文件的下述内容取代上文 §2–§6 的对应该轮结论**（§7 事故记录与 §8 资源记录仍然有效）。
+
+## 10. 候选变更缘起（主 Agent 已完成的 6.4/6.5）
+
+- **6.4 独立 review = PASS**：`reports/rv1-du1.md`（在 revision `27938ca` 时点检视候选 `ed98f6d`），登记 **5 条 P2、0 条 P0、0 条 P1**。
+- **修复提交 `4f9c418`**（`fix(identity-auth): 去掉正常路径的 expect 并订正状态口径与合同重复块`）闭环 5 条 P2：合同 §2 类型归属（`KeyPurpose`/`SecretPurpose`/`KeyHandle`/`SecretBytes` 改为「由 `identity-auth` 定义、`identity-keystore` 实现」，并新增 `FeatureList`/`ClientKind`/`PairingProof` 同名指认）、`§5.1` 补登记 `Authority::new`、`§5.2` 删除重复的「挑战缓存有硬上限」、`MODULE_ARCHITECTURE.md §4.1` 与 `CORE_PORTS_AND_STORAGE.md`（文档头 + §11）三处状态句、`types.rs` 的 `PairingSecret::digest()` 改为 `Result<Digest, InvalidValue>` 并在 `pairing.rs` 用 `?` 传播（**本轮唯一代码改动**）、`port.rs` 悬空 doc 注释。
+- **定向复核 = PASS**：`reports/rv2-du1.md` —— 5 条 P2 全部闭环；`digest()` 改动行为等价、无新增失败语义；`identity-auth/src` 的 `unwrap/expect` 命中由 17 → **16**（且 16 处全在 `identity-keystore` 测试模块与一处既有登记项）。
+- `4d988cd` 订正 `openspec/config.yaml` 项目画像（8 → 10 个 workspace 成员，两个身份 crate 记为已落地）并归档上述两份 review 报告。
+
+## 11. 6.1/6.2 重跑（新候选固定）
+
+- 复核结果（`du1-baseline.log`，2346 B / 0 NUL / `EXIT=0`）：`refs/heads/main` = `30f0d78b803b94346ebd8972078febceec8af8d3`（**仍未前进**）；`HEAD` = `4d988cde3686376683685d91f5f7cf6f345a39c1`（分支 `feat/identity-auth-and-keystore`）；`git rev-list --left-right --count refs/heads/main...HEAD` = `0  24`；`git merge-base --is-ancestor refs/heads/main HEAD` 成立（可 fast-forward）；`git status --porcelain` 空；`git worktree list` 仅主 worktree；执行前 `tasklist //FI "IMAGENAME eq cargo.exe"` 无匹配进程。
+- 构成核对（`du1-composition.log`，11999 B / 0 NUL / `EXIT=0`）：**24** 个提交（`30f0d78..4d988cd`，`git log --merges` = 0，线性）；workspace 成员 **10** 个、含 `identity-auth` 与 `identity-keystore`；`Cargo.lock` 登记两个新成员与 `getrandom`/`windows-dpapi`/`hmac`；`git diff --name-status 30f0d78..4d988cd` 只含预期文件、`git status --porcelain --untracked-files=all` 为空；`reports/` 内 `rv1-du1.md`、`rv2-du1.md`、`du1-selfcheck-rg.log`（主 Agent 自检证据，**本 run 未改动**）与 `du1-integration.md` 均在位并被 `verification.md` 引用。
+- 候选构建（`du1-candidate-build.log`，344 B / 0 NUL / `EXIT=0`）：`cargo build --locked --workspace --all-features` → `Finished dev profile … in 0.38s`，**EXIT=0**。
+
+## 12. 6.3 重跑（新候选 `4d988cd`，全部本轮新跑）
+
+| Check | 完整命令 | 退出码 | 日志（字节 / NUL / 末行） | 用例数 | 判定 |
+| --- | --- | --- | --- | --- | --- |
+| [PV1] | `npm run verify` | **0** | `du1-pv1.log`：48902 B / 0 NUL / `EXIT=0` | workspace **513 passed / 0 failed / 2 ignored**（68 个测试二进制全 `ok`）；`Totals: 9 passed, 0 failed (9 items)`；`doc links OK: 370 relative links, 3987 section refs across 189 markdown files`；`crate boundaries OK: 10 个 crate…` | **PASS** |
+| [PV2] | `node scripts/check-crate-boundaries.mjs` | **0** | `du1-pv2.log`：387 B / 0 NUL / `EXIT=0` | 脚本判定：10 个 crate 与 §5 一致 | **PASS** |
+| [PV3] | `cargo test --locked -p identity-auth --all-features` | **0** | `du1-pv3.log`：6141 B / 0 NUL / `EXIT=0` | **79 passed / 0 failed**（authorization 15 + handshake 20 + pairing 26 + parity 2 + ports 9 + transcripts 5 + doc-tests 2） | **PASS** |
+| [PV4] | `cargo test --locked -p identity-keystore --all-features` | **0** | `du1-pv4.log`：3638 B / 0 NUL / `EXIT=0` | **36 passed / 0 failed**（lib 3 + dpapi 5 + entry_format 6 + fail_closed 10 + keystore 12） | **PASS** |
+| [PV5] | `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture` | **0** | `du1-pv5.log`：1880 B / 0 NUL / `EXIT=0` | **5 passed / 0 failed**；执行前/后 `%TEMP%` 临时 keystore 目录数不变（6 个 22:10–22:43 的历史残留，非本 run 产生） | **PASS** |
+
+- 8 份日志（`du1-baseline/composition/candidate-build/pv1..pv5.log`）逐个自检：`size > 0`、**NUL = 0**、末行 `EXIT=0`、头部 `### revision：4d988cd（工作区干净）`，且头部含完整命令、`refs/heads/main` 基线与时间戳。
+- 执行顺序串行（baseline → composition → build → PV1 → PV2 → PV3 → PV4 → PV5），[PV5] 期间无第二个 `cargo`/测试进程（DPAPI 独占满足）。
+- **适用性判断**：本轮**全部新跑**；与上一轮（`ed98f6d`）及 `rv8-*`（`c1fd65d`）的数值一致（513/79/36/5）仅作交叉印证，**不**作为替代证据。
+- **候选阶段结论：PASS**（候选 PASS ≠ 已合入 ≠ 最终验收 PASS —— 合入结果见 §13）。
+
+## 13. 合入阶段（6.6 merge，本地 FF）
+
+### 13.1 合入前防竞态核对
+
+- `git rev-parse refs/heads/main` = `30f0d78b803b94346ebd8972078febceec8af8d3` → **与计划基线一致（未前进），判据满足，继续合入**（若已前进则按计划停止并重建候选）。
+- `git status --porcelain --untracked-files=all` = 空；`git worktree list` = 仅 `D:/Project/acp-remote [feat/identity-auth-and-keystore]`（`main` 未被其它 worktree 占用）。
+- 合入时点：2026-09-24 23:34（本地）。
+
+### 13.2 执行的命令与实际结果
+
+```text
+git switch main              # Switched to branch 'main'（此前 main 未被任何 worktree 占用）
+git merge --ff-only 4d988cd  # Fast-forward（无 merge 提交、无冲突、无手工介入）
+```
+
+- 合入前 `refs/heads/main` = `30f0d78b803b94346ebd8972078febceec8af8d3`
+- 合入后 `refs/heads/main` = **`4d988cde3686376683685d91f5f7cf6f345a39c1`**
+- `git log --oneline -1` = `4d988cd docs(openspec): 归档 DU1 候选复核报告并订正项目画像成员数`
+- 未使用 `--no-ff`、未手工 merge、未 rebase、未 amend、未回滚。
+
+### 13.3 tree 一致性核对
+
+- `git rev-parse refs/heads/main^{tree}` = `125da8538e740487db3715bd3dfff658ebe99d18`
+- `git rev-parse 4d988cd^{tree}` = `125da8538e740487db3715bd3dfff658ebe99d18`（**相同**）
+- `git diff --stat 4d988cd refs/heads/main` = **空**（合入后 main 的内容与候选逐字节一致）
+- `feat/identity-auth-and-keystore` 分支引用保持指向 `4d988cd` **未变**（`git branch -v` 两行均 `4d988cd`）。
+
+### 13.4 未执行远端操作声明
+
+- **未** `git push`、**未**更新远端跟踪引用（`refs/remotes/origin/main` 仍停在 `30f0d78`，`main` 显示 `[ahead 24]`）、**未**建 tag、**未**发布、**未**回滚、**未**改动 `main` 的历史。
+- 授权依据：用户决定「仅本地合入 main」；远端写入不在授权内。
+
+## 14. 6.7 主分支回归（合入后 `main` 实际提交 `4d988cd`）
+
+单一日志 `reports/du1-main-verify.log`（61546 B / **0 NUL** / 末行 `ALLDONE=1`），头部列出五条命令与 revision `4d988cde3686376683685d91f5f7cf6f345a39c1`。
+
+| Check | 命令（在合入后 main 上执行） | 退出码 | 结果 | 与候选轮的关系（适用性） |
+| --- | --- | --- | --- | --- |
+| [PV1] | `npm run verify` | **0** | 513 passed / 0 failed / 2 ignored；`Totals: 9 passed, 0 failed (9 items)`；`doc links OK: 370 relative links, 3987 section refs across 189 files`；边界 10 crate | **本轮新跑**；与候选轮逐项一致（合入为 FF，内容相同 → 预期一致，实测印证） |
+| [PV2] | `node scripts/check-crate-boundaries.mjs` | **0** | `crate boundaries OK: 10 个 crate…` | **本轮新跑**；与候选轮一致 |
+| [PV3] | `cargo test --locked -p identity-auth --all-features` | **0** | **79 passed / 0 failed**（与候选轮同分布） | **本轮新跑**（合入后重跑，不沿用候选轮结论） |
+| [PV4] | `cargo test --locked -p identity-keystore --all-features` | **0** | **36 passed / 0 failed** | **本轮新跑** |
+| [PV5] | `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture` | **0** | **5 passed / 0 failed**（DPAPI 串行独占） | **本轮新跑**；执行前后 `%TEMP%` 临时 keystore 目录数不变（6 个历史残留，非本 run 产生） |
+
+- 主分支回归**全部 PASS**：`du1-main-verify.log` 内 5 处 `EXIT=0`，无 `FAILED`/`panicked`。
+- 与候选轮结论的关系：合入为 **fast-forward**，`main^{tree}` 与候选 tree 相同，因此预期结果应逐项一致；本节仍为**在合入后 `main` 上实际执行**的结果，不属复用。
+
+## 15. 第二轮资源与状态
+
+- 工作区：`git status --porcelain --untracked-files=all` = 空（`reports/**/*.log` 按 `.gitignore` 不入库）；暂存区为空；**无未登记改动**。
+- 分支/worktree：当前 HEAD 检出分支 = `main`（按 6.6 指令 `git switch main` 后未再切回）；`git worktree list` = 仅主 worktree `D:/Project/acp-remote`；`git branch -v`：`feat/identity-auth-and-keystore 4d988cd`（未变）与 `main 4d988cd [ahead 24]`。
+- 资源：未另开 worktree、未设 `CARGO_TARGET_DIR`、无后台进程；DPAPI 用例自建自删，本 run **零残留**；`reports/du1-selfcheck-rg.log`（主 Agent 证据）未被本 run 触碰。
+- CI 专属判定（`cargo-deny` 的 `deps`/`advisories`、`gitleaks` 的 `secrets`）本地无等价物，仍未在本地执行，结论只能来自 CI。
+
+**第二轮结论：候选重跑 PASS → 本地 FF 合入 `refs/heads/main` 成功（`30f0d78` → `4d988cd`）→ 主分支回归 PASS；未执行任何远端操作；本轮不等于最终验收 PASS（6.8 归档与最终验收由主 Agent 依据其全局证据判定）。**
