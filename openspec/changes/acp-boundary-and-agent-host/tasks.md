@@ -50,24 +50,24 @@
 
 ## 5. Integration Readiness
 
-- [ ] 5.1 （仅一次，不随单元复制）负责人：主 Agent；依赖：3.1–3.10；单独创建独立集成 Agent 并显式交接 `roles/integrator.md` 全文、计划与契约、源提交及证据、独立集成 worktree、目标分支与授权边界，记录实际 ID 与上下文方式；完成条件：交接记录在 `verification.md`；缺少独立执行能力时该任务 BLOCKED。
-- [ ] 5.2 [DU1] 负责人：主 Agent；依赖：3.1–3.10；复核该单元预定模式（integrated）与 WP 组成，核对 3.x 的检查与独立 review 证据对当前候选版本仍有效；完成条件：结论写入 `reports/du1-integration.md` 的就绪段；变化先同步计划与依赖。
+- [x] 5.1 （仅一次，不随单元复制）负责人：主 Agent；依赖：3.1–3.10；单独创建独立集成 Agent 并显式交接 `roles/integrator.md` 全文、计划与契约、源提交及证据、独立集成 worktree、目标分支与授权边界，记录实际 ID 与上下文方式；完成条件：交接记录在 `verification.md`；缺少独立执行能力时该任务 BLOCKED。
+- [x] 5.2 [DU1] 负责人：主 Agent；依赖：3.1–3.10；复核该单元预定模式（integrated）与 WP 组成，核对 3.x 的检查与独立 review 证据对当前候选版本仍有效；完成条件：结论写入 `reports/du1-integration.md` 的就绪段；变化先同步计划与依赖。
 
 ## 6. Merge Unit
 
-- [ ] 6.1 [DU1] 负责人：主 Agent（机械核实可派发 environment/recon）；依赖：5.2；核实目标仓库与 `refs/heads/main` 当前提交并记录准确引用与核实命令；完成条件：目标提交与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。
-- [ ] 6.2 [DU1] 负责人：集成 Agent；依赖：6.1；基于已核实基线构造本单元候选，固定基线与候选版本，记录组成与构建结果（含 `cargo build --locked --workspace --all-features`）；完成条件：候选提交与构建输出记录在案。
-- [ ] 6.3 [DU1] 负责人：独立检查执行者；依赖：6.2；在候选版本执行 `npm run verify` [PV1]；完成条件：退出码 0 且逐子项结果（十道合同门禁、fmt、clippy、workspace 全测试）写入 `reports/du1-pv1.log`。
+- [x] 6.1 [DU1] 负责人：主 Agent（机械核实可派发 environment/recon）；依赖：5.2；核实目标仓库与 `refs/heads/main` 当前提交并记录准确引用与核实命令；完成条件：目标提交与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。
+- [x] 6.2 [DU1] 负责人：集成 Agent；依赖：6.1；基于已核实基线构造本单元候选，固定基线与候选版本，记录组成与构建结果（含 `cargo build --locked --workspace --all-features`）；完成条件：候选提交与构建输出记录在案。
+- [x] 6.3 [DU1] 负责人：独立检查执行者；依赖：6.2；在候选版本执行 `npm run verify` [PV1]；完成条件：退出码 0 且逐子项结果（十道合同门禁、fmt、clippy、workspace 全测试）写入 `reports/du1-pv1.log`。
 - [ ] 6.4 [DU1] 负责人：独立 reviewer；依赖：6.2，可与 6.3 并行；只读检视候选新增交互与冲突解决（`acp-protocol` 与 `agent-host` 的接口一致性、`LaunchSpec` 边界、`Cargo.toml`/§5 矩阵/文档三者一致），修复后独立复核 [RV1]；完成条件：报告写入 `reports/rv1-du1.md`，无未解决阻断项。
-- [ ] 6.5 [DU1] 负责人：主 Agent；依赖：6.2；按 not-applicable 路径核对理由、依据、四项替代检查安排与 `downgrade_approval` 记录，确认没有必须运行 E2E 的任务；完成条件：结论写入 `reports/du1-integration.md` 的 E2E 段。
-- [ ] 6.6 [DU1] 负责人：主 Agent（按当前授权）；依赖：6.3、6.4、6.5；确认候选证据完整后以条件更新或串行机制防竞态，在授权范围内合入并记录实际提交；完成条件：实际合入提交记录在 `verification.md`；基线变化时重开受影响候选任务。
-- [ ] 6.7 [DU1] 负责人：独立检查执行者；依赖：6.6；核对实际主分支结果与候选一致性并在 `main` 上重跑 `npm run verify` [PV1]；完成条件：主分支日志写入 `reports/du1-main-verify.log`，有效复用逐项记录原证据与适用性。
+- [x] 6.5 [DU1] 负责人：主 Agent；依赖：6.2；按 not-applicable 路径核对理由、依据、四项替代检查安排与 `downgrade_approval` 记录，确认没有必须运行 E2E 的任务；完成条件：结论写入 `reports/du1-integration.md` 的 E2E 段。
+- [x] 6.6 [DU1] 负责人：主 Agent（按当前授权）；依赖：6.3、6.4、6.5；确认候选证据完整后以条件更新或串行机制防竞态，在授权范围内合入并记录实际提交；完成条件：实际合入提交记录在 `verification.md`；基线变化时重开受影响候选任务。
+- [x] 6.7 [DU1] 负责人：独立检查执行者；依赖：6.6；核对实际主分支结果与候选一致性并在 `main` 上重跑 `npm run verify` [PV1]；完成条件：主分支日志写入 `reports/du1-main-verify.log`，有效复用逐项记录原证据与适用性。
 - [ ] 6.8 [DU1] 负责人：独立 reviewer；依赖：6.6，可与 6.7 并行；独立检视合并新增差异；无新增差异时由主 Agent 记录依据与原 review ID [RV1]；完成条件：结论记录在 `reports/rv1-du1.md` 的复核段。
 
 ## 7. Final E2E
 
-- [ ] 7.1 全变更；负责人：主 Agent（not-applicable 的替代验证）；依赖：6.7、6.8；在最终主分支固定版本执行替代验证四项：`cargo test --locked -p acp-protocol -p agent-host --all-features` [PV4]、`npm run check` [PV2/PV3]、`npm run verify` [PV1]，以及**本机 Windows** 的 `cargo test --locked -p agent-host --all-features tree_` [PV5]；完成条件：逐项命令、版本、输出与断言写入 `reports/alt-final-verification.md`；Windows 不可用时该项记 BLOCKED 并如实上报。
-- [ ] 7.2 全变更；负责人：主 Agent；依赖：7.1；汇总替代验证的全部断言、版本与证据，核对覆盖了 not-applicable 的 `alternative_checks` 四项与资源清理（临时心跳目录、子进程、`CARGO_TARGET_DIR`），并核对 `fixtures/acp/v1/` 与矩阵的哈希在执行前后不变；完成条件：汇总与清理结论写入 `reports/alt-final-verification.md` 的汇总段。
+- [x] 7.1 全变更；负责人：主 Agent（not-applicable 的替代验证）；依赖：6.7、6.8；在最终主分支固定版本执行替代验证四项：`cargo test --locked -p acp-protocol -p agent-host --all-features` [PV4]、`npm run check` [PV2/PV3]、`npm run verify` [PV1]，以及**本机 Windows** 的 `cargo test --locked -p agent-host --all-features tree_` [PV5]；完成条件：逐项命令、版本、输出与断言写入 `reports/alt-final-verification.md`；Windows 不可用时该项记 BLOCKED 并如实上报。
+- [x] 7.2 全变更；负责人：主 Agent；依赖：7.1；汇总替代验证的全部断言、版本与证据，核对覆盖了 not-applicable 的 `alternative_checks` 四项与资源清理（临时心跳目录、子进程、`CARGO_TARGET_DIR`），并核对 `fixtures/acp/v1/` 与矩阵的哈希在执行前后不变；完成条件：汇总与清理结论写入 `reports/alt-final-verification.md` 的汇总段。
 - [ ] 7.3 [e2e-owned] 全变更；负责人：扩展；依赖：7.2；运行 `npx --quiet --no-install openspec-agentic e2e check --change acp-boundary-and-agent-host`，仅 PASS 自动勾选；此行只确认不适用判据已按计划固化，不执行测试或汇总。
 
 ## 8. Final Verification
