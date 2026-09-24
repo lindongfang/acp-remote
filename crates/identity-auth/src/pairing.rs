@@ -71,7 +71,8 @@ impl Authority {
                 secret,
                 server_nonce: server_nonce.clone(),
                 pairing_request_id: pairing_request_id.clone(),
-                // 新建的配对本就未批准；批准由 `settle(Approve)` 置位。
+                // 新建的配对本就未批准；批准由 `Authority::mark_pairing_approved` 在持久化提交
+                // 成功之后置位（见 `settle` 的说明），`settle` 本身不置位。
                 approved: false,
             },
         );

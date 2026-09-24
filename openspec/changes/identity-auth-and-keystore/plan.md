@@ -801,7 +801,7 @@ rows:
 - 实现期：`cargo fmt --all -- --check`、`cargo clippy --locked -p identity-auth -p identity-keystore --all-targets --all-features -- -D warnings`、`cargo test --locked -p identity-auth --all-features`、`cargo test --locked -p identity-keystore --all-features`。
 - 合同侧：`node scripts/check-crate-boundaries.mjs`、`node scripts/check-doc-links.mjs`（改文档后必跑）、`node scripts/check-command-catalog.mjs`（确认 `commands.json` 与相关表格未被改动）。
 - 平台侧：Windows 本机执行 `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture` 并保存原始日志。
-- 审查重点自检：`grep -rn "unwrap()\|expect(\|panic!\|unreachable!\|from_der" crates/identity-auth/src crates/identity-keystore/src`" crates/identity-auth/src crates/identity-keystore/src`（**可失败路径**零命中；已确认为不变的构造与测试内部断言不计入，命中处必须在 `verification.md` 逐条登记理由）、`rg -n "cfg\\(windows\\)|cfg\\(unix\\)|cfg\\(target_os" crates/identity-auth/src`（零命中）、`rg -n "\\.await" crates/identity-auth/src` 对照持锁位置（不得跨 `await` 持锁）。
+- 审查重点自检：`grep -rn "unwrap()\|expect(\|panic!\|unreachable!\|from_der" crates/identity-auth/src crates/identity-keystore/src`（**可失败路径**零命中；已确认为不变的构造与测试内部断言不计入，命中处必须在 `verification.md` 逐条登记理由）、`rg -n "cfg\\(windows\\)|cfg\\(unix\\)|cfg\\(target_os" crates/identity-auth/src`（零命中）、`rg -n "\\.await" crates/identity-auth/src` 对照持锁位置（不得跨 `await` 持锁）。
 
 ### Project Verify
 

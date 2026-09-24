@@ -77,7 +77,8 @@ impl State {
         self.secrets.get(pairing.as_str())
     }
 
-    /// 标记该配对已批准（`settle(Approve)` 时置位，不改变 secret 的保留期）。
+    /// 标记该配对已批准。**唯一调用方**是 `Authority::mark_pairing_approved`：由它在持久化事务
+    /// 提交成功之后调用（design D3：内存态绝不超前于已提交状态），不改变 secret 的保留期。
     pub fn mark_approved(&mut self, pairing: &PairingId) -> bool {
         match self.secrets.get_mut(pairing.as_str()) {
             Some(material) => {
