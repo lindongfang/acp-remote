@@ -318,12 +318,51 @@ fn corrupted_header_is_reported_as_corrupt() {
             return;
         };
         let path = store.entry_path(EntryPurpose::NodeIdentity, "primary");
-        let mut bytes = std::fs::read(&path).expect("条目必须存在");
-        bytes[6] = 9; // 未知用途 token
-        std::fs::write(&path, &bytes).expect("写入篡改内容");
+        let pristine = std::fs::read(&path).expect("条目必须存在");
+
+        // 逐个破坏头部的**每个**结构字段：magic、格式版本、用途 token、标签长度、标签形状、
+        // 截断。全部必须被拒绝为 `EntryCorrupt`（端口对「头部非法」与「内容损坏」统一表现）。
+        // 逐个覆盖的理由：只测一处会出现「某个字段的校验被删掉也照样绿」的盲区
+        // （RV5 的 mutation 检查正是在这一点上第一次得到 NOT-CAUGHT）。
+        let mut cases: Vec<(&str, Vec<u8>)> = Vec::new();
+        let mut mutated = pristine.clone();
+        mutated[0] ^= 0xff; // magic 首字节
+        cases.push(("magic 被破坏", mutated));
+        let mut mutated = pristine.clone();
+        mutated[5] = mutated[5].wrapping_add(1); // 格式版本 +1
+        cases.push(("格式版本未知", mutated));
+        let mut mutated = pristine.clone();
+        mutated[6] = 9; // 未知用途 token
+        cases.push(("用途 token 未知", mutated));
+        let mut mutated = pristine.clone();
+        mutated[7] = 0xff; // 标签长度超上界
+        mutated[8] = 0xff;
+        cases.push(("标签长度越界", mutated));
+        let mut mutated = pristine.clone();
+        mutated[9] = b'C'; // 标签形状非法（`CON` 首字节）
+        mutated[10] = b'O';
+        mutated[11] = b'N';
+        cases.push(("标签为保留设备名", mutated));
+        cases.push(("被截断", pristine[..pristine.len() - 1].to_vec()));
+
+        for (note, bytes) in cases {
+            std::fs::write(&path, &bytes).expect("写入篡改内容");
+            assert_eq!(
+                store.public_key(&handle).await,
+                Err(KeystoreError::EntryCorrupt),
+                "{note}：必须被拒绝为 EntryCorrupt"
+            );
+        }
+
+        // 校验过头部之后的内容篡改同样必须被拒绝（对照组：证明上面的失败来自头部字段本身）。
+        let mut mutated = pristine.clone();
+        let last = mutated.len() - 1;
+        mutated[last] ^= 0xff;
+        std::fs::write(&path, &mutated).expect("写入篡改内容");
         assert_eq!(
             store.public_key(&handle).await,
-            Err(KeystoreError::EntryCorrupt)
+            Err(KeystoreError::EntryCorrupt),
+            "被包裹的秘密值被破坏：必须拒绝"
         );
     });
 }
