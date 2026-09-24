@@ -730,3 +730,38 @@ async fn unknown_content_block_stays_structured() {
     drop(endpoint);
     host.shutdown_all().await;
 }
+
+/// 已宣告能力时：模式与配置写入必须按 pinned schema 的形状发出（fake child 形状不合规即退出）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn declared_capabilities_accept_mode_and_config_writes() {
+    let collector = Collector::new();
+    let host = host(vec![profile("agent-1", FAKE_AGENT)], FakeCredentials::ok());
+    let endpoint = create(&host, OTHER_SESSION, &collector).await;
+    let agent = AgentId::new("agent-1").expect("id");
+    // 成功路径：`{ sessionId, modeId }`。
+    endpoint
+        .set_mode(&acp_core::model::ModeId::new("plan").expect("mode"))
+        .await
+        .expect("set_mode 必须按 schema 形状发出并被接受");
+    let modes = endpoint.modes().await.expect("modes");
+    assert_eq!(
+        modes
+            .current_mode
+            .as_ref()
+            .map(|mode| mode.mode_id().as_str()),
+        Some("plan"),
+        "模式状态来自 Agent 的声明与本次写入"
+    );
+    // 成功路径：布尔取值必须写成 `{ type: boolean, value: bool }`。
+    let option = acp_core::model::ConfigOptionId::new("verbose").expect("id");
+    endpoint
+        .set_config(&option, support::boolean(true))
+        .await
+        .expect("set_config 必须按 anyOf 形状发出并被接受");
+    assert!(
+        runtime_running(&host, &agent),
+        "形状合规时进程不得退出（fake child 在形状不合规时会 exit(8)）"
+    );
+    drop(endpoint);
+    host.shutdown_all().await;
+}

@@ -30,6 +30,14 @@ async fn started(spec: LaunchSpec) -> (std::sync::Arc<Supervisor>, Collector) {
     (supervisor, collector)
 }
 
+/// `session/new` 的参数：pinned schema 的 `cwd` 与 `mcpServers` 都是必填（fake child 会校验形状）。
+fn session_new_params() -> serde_json::Value {
+    json!({
+        "cwd": std::env::temp_dir().to_string_lossy(),
+        "mcpServers": [],
+    })
+}
+
 fn initialize_params() -> serde_json::Value {
     json!({
         "protocolVersion": 1,
@@ -78,7 +86,7 @@ async fn out_of_order_responses_still_match_their_requests() {
     supervisor
         .request(
             "session/new",
-            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            &session_new_params(),
             Duration::from_secs(10),
         )
         .await
@@ -120,7 +128,7 @@ async fn unknown_response_id_is_a_protocol_error_without_breaking_others() {
     supervisor
         .request(
             "session/new",
-            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            &session_new_params(),
             Duration::from_secs(10),
         )
         .await
@@ -176,7 +184,7 @@ async fn turn_has_no_timeout() {
     supervisor
         .request(
             "session/new",
-            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            &session_new_params(),
             Duration::from_secs(10),
         )
         .await
@@ -206,7 +214,7 @@ async fn stderr_flood_is_bounded_and_counted() {
     supervisor
         .request(
             "session/new",
-            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            &session_new_params(),
             Duration::from_secs(10),
         )
         .await
@@ -280,7 +288,7 @@ async fn shutdown_after_abnormal_exit_is_clean() {
     supervisor
         .request(
             "session/new",
-            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            &session_new_params(),
             Duration::from_secs(10),
         )
         .await
@@ -347,7 +355,7 @@ async fn tree_forced_termination_stops_the_whole_process_tree() {
     supervisor
         .request(
             "session/new",
-            &json!({ "cwd": std::env::temp_dir().to_string_lossy() }),
+            &session_new_params(),
             Duration::from_secs(10),
         )
         .await
@@ -433,7 +441,11 @@ async fn tree_terminate_while_parent_alive_stops_parent_and_grandchild() {
         .await
         .expect("initialize");
     supervisor
-        .request("session/new", &initialize_params(), Duration::from_secs(10))
+        .request(
+            "session/new",
+            &session_new_params(),
+            Duration::from_secs(10),
+        )
         .await
         .map(|_| ())
         .unwrap_or(());

@@ -621,9 +621,11 @@ async fn stderr_loop(mut stderr: tokio::process::ChildStderr, ring: Arc<Mutex<St
             }
         }
     }
+    // 结束日志读**最终**计数：限频只影响 warn 的播报节奏，不应让汇总少报。
+    let dropped_bytes = ring.lock().map(|ring| ring.dropped).unwrap_or(announced);
     tracing::info!(
         received_bytes = received,
-        dropped_bytes = announced,
+        dropped_bytes,
         "agent stderr 采集结束"
     );
 }

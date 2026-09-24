@@ -307,3 +307,30 @@ async fn credential_variable_outside_the_allowlist_is_refused_before_spawn() {
     let _ = std::fs::remove_file(&dump);
     host.shutdown_all().await;
 }
+
+/// 只协商过能力、没有会话的进程同样要按空闲超时回收（会话不是回收的必要条件）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_reclaim_also_applies_to_processes_without_sessions() {
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "normal"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let agent = AgentId::new("agent-1").expect("id");
+    let _ = host
+        .agent_capabilities(&agent_ref("agent-1"))
+        .await
+        .expect("capabilities");
+    assert!(runtime_running(&host, &agent), "协商会启动进程");
+    host.sweep_idle(Duration::ZERO).await;
+    assert!(runtime_running(&host, &agent), "零值不回收");
+    host.sweep_idle(Duration::from_nanos(1)).await;
+    assert!(
+        !runtime_running(&host, &agent),
+        "无活动会话的进程也必须按空闲超时回收"
+    );
+    host.shutdown_all().await;
+}

@@ -167,6 +167,20 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
             );
         }
         (Some("session/new"), Some(id)) => {
+            // 形状校验：`NewSessionRequest` 的 `cwd` 与 `mcpServers` 都是必填。形状不合规即退出，
+            // 让「发出缺必填字段的请求」变成测试里可观察的失败。
+            let params = message.get("params");
+            let shaped = params
+                .and_then(|params| params.get("cwd"))
+                .and_then(Value::as_str)
+                .is_some()
+                && params
+                    .and_then(|params| params.get("mcpServers"))
+                    .and_then(Value::as_array)
+                    .is_some();
+            if !shaped {
+                std::process::exit(8);
+            }
             state.session_seq += 1;
             let session_id = format!("acp-session-{}", state.session_seq);
             let mut result = serde_json::Map::new();
@@ -211,6 +225,20 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
             respond(out, &id, Value::Object(result));
         }
         (Some("session/set_mode"), Some(id)) => {
+            // 形状校验：`{ sessionId, modeId }`（pinned schema 的两个必填字段）。
+            let shaped = message
+                .get("params")
+                .and_then(|params| params.get("sessionId"))
+                .and_then(Value::as_str)
+                .is_some()
+                && message
+                    .get("params")
+                    .and_then(|params| params.get("modeId"))
+                    .and_then(Value::as_str)
+                    .is_some();
+            if !shaped {
+                std::process::exit(8);
+            }
             if args.exit_on_config_write {
                 // 收到不该被发送的请求：立即退出，让「未宣告也发消息」变成可观察的失败。
                 std::process::exit(7);
@@ -231,6 +259,20 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
             );
         }
         (Some("session/set_config_option"), Some(id)) => {
+            // 形状校验：`value` 的 anyOf —— 布尔必须带 `type: boolean`，其余只能是 `value-id`。
+            let value = message.get("params").and_then(|params| params.get("value"));
+            let shaped = match value {
+                Some(Value::Object(object)) => {
+                    let boolean_ok = object.get("type").and_then(Value::as_str) == Some("boolean")
+                        && object.get("value").and_then(Value::as_bool).is_some();
+                    let id_ok = object.get("value").and_then(Value::as_str).is_some();
+                    boolean_ok || id_ok
+                }
+                _ => false,
+            };
+            if !shaped {
+                std::process::exit(8);
+            }
             if args.exit_on_config_write {
                 std::process::exit(7);
             }
