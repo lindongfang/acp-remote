@@ -95,8 +95,8 @@ acpr-wire           # 已落地（叶子）
 agent-host          # 已落地
 node-link-client    # 待落地
 storage-sqlite      # 已落地
-identity-auth       # 待落地
-identity-keystore   # 待落地
+identity-auth       # 已落地
+identity-keystore   # 已落地
 server              # 待落地
 app                 # 待落地
 ```
@@ -253,7 +253,7 @@ cargo test --locked --workspace --all-features
 
 ## 9. 测试要求
 
-根据改动选择对应测试（`node-link-client`、`identity-auth`、`server::*` 尚未落地，其条目在对应 crate 创建时生效）：
+根据改动选择对应测试（`node-link-client`、macOS/Linux 的 keystore 后端与 `server::*` 尚未落地，其条目在对应 crate 创建时生效）：
 
 - `core`：状态转换、值对象、owned/imported 分流、每会话串行、事务提交和不变量。
 - `acp-protocol`：官方 fixture、未知字段往返、扩展 payload 和版本兼容。

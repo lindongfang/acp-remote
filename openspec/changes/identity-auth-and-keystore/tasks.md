@@ -22,8 +22,8 @@
 - [x] 2.13 WP3；前置：2.10；实现 Agent（coder）。实现非 Windows 失败关闭（`platform/` 的 `cfg(not(windows))` 模块返回明确的不可用分类、零持久化写入），并补齐跨平台断言：缺条目/损坏条目 → 不可用且不生成新身份、平台不可用不降级为进程内实现、任何路径都不把密钥或凭据写进 `Debug`/日志/错误/测试快照。完成条件：[PV4] 的失败关闭与不泄漏用例通过（CI Linux 覆盖），Windows 上同一批用例同样执行。
 - [x] 2.14 WP3；前置：2.12；实现 Agent（coder）。补齐条目与引用恢复语义的测试（`design.md` D6）：引用指向的条目缺失、条目被篡改、未被引用的孤儿被回收后现有身份仍可用，以及「引用提交失败时旧引用仍解析到可用条目」的可观察结论（在 fake 引用侧模拟）。完成条件：[PV4] 的相关场景通过；用例自建临时目录并在结束时删除，不留下无法解包的条目影响后续轮次。
 - [x] 2.15 WP3；前置：2.12–2.14；实现 Agent（coder）。在 `.gitleaks.toml` 增加自研 keystore 条目**明文**形态的规则，并在注释中记录「DPAPI 包裹后的字节不可用模式识别、该限制不假装覆盖密文」；随后跑 WP3 的交付前局部验证：`cargo fmt --all -- --check`、`cargo clippy --locked -p identity-keystore --all-targets --all-features -- -D warnings`、`cargo test --locked -p identity-keystore --all-features`（[PV4]）与 Windows 本机的 [PV5]。完成条件：[PV4]/[PV5] 全绿且无零用例/全跳过；`gitleaks` 本地无等价物，该规则的首次真实执行在 CI，如实记录不作通过声明。
-- [ ] 2.16 WP4；前置：2.9、2.15；实现 Agent（coder）。把「已落地」标记与 DPAPI wrapper 选型结论写回：`docs/MODULE_ARCHITECTURE.md` §3/§3.1（`getrandom` 与 wrapper 的版本口径、两个 crate 已落地）/§4.12（选型结论与已知代价），并更新 `README.md`「仓库当前状态」、`docs/DEVELOPMENT_PLAN.md` §2、`AGENTS.md` §4 的模块状态表。完成条件：文档陈述与实际 `cargo metadata`/`cargo tree` 一致；不改动 `docs/DEVELOPMENT_PLAN.md` 的切片顺序与验收表述，也不把 `server`/`app` 写成已落地。
-- [ ] 2.17 WP4；前置：2.16；实现 Agent（coder）。在成员已加入的状态下跑全量统一入口 `npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]）。完成条件：两个检查在固定版本上全绿、日志写入 `reports/du1-pv1.log`；若出现既有门禁因本变更变红（如 §5 矩阵断言、文档引用），就地修复后再跑，不以「稍后修」结项。
+- [x] 2.16 WP4；前置：2.9、2.15；实现 Agent（coder）。把「已落地」标记与 DPAPI wrapper 选型结论写回：`docs/MODULE_ARCHITECTURE.md` §3/§3.1（`getrandom` 与 wrapper 的版本口径、两个 crate 已落地）/§4.12（选型结论与已知代价），并更新 `README.md`「仓库当前状态」、`docs/DEVELOPMENT_PLAN.md` §2、`AGENTS.md` §4 的模块状态表。完成条件：文档陈述与实际 `cargo metadata`/`cargo tree` 一致；不改动 `docs/DEVELOPMENT_PLAN.md` 的切片顺序与验收表述，也不把 `server`/`app` 写成已落地。
+- [x] 2.17 WP4；前置：2.16；实现 Agent（coder）。在成员已加入的状态下跑全量统一入口 `npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]）。完成条件：两个检查在固定版本上全绿、日志写入 `reports/du1-pv1.log`；若出现既有门禁因本变更变红（如 §5 矩阵断言、文档引用），就地修复后再跑，不以「稍后修」结项。
 
 ## 3. Branch Validation
 

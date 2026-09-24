@@ -27,6 +27,7 @@
 | 2.11 / WP3 | 同上 | wrapper 传递依赖、许可证集合、MSRV/edition 与语义一致性实证 | 主 Agent（coder） | `cargo tree -p identity-keystore --target x86_64-pc-windows-msvc`；`cargo metadata --filter-platform x86_64-pc-windows-msvc` | 同上 | 合格（许可证全部落在 `deny.toml` allow 列表；MSRV ≤ 1.85；已知代价见「Dependency Handoffs」） | `reports/wp3-dpapi-verification.log` |
 | PV2/PV1（回归）/ WP3 / 任务 2.15 | 同上 | 新成员加入后合同门禁与依赖方向仍绿 | 主 Agent（coder） | `npm run check`；`node scripts/check-crate-boundaries.mjs` | 同上 | PASS（check exit 0，9 items passed；boundaries exit 0） | `reports/wp3-npm-check.log`、`reports/wp3-boundaries.log` |
 | 2.15 / WP3 | 同上 | `.gitleaks.toml` 增加自研条目明文形态规则，并如实记录「包裹后字节不可识别」的限制 | 主 Agent（coder） | 人工检视规则与注释；`gitleaks` 本地无等价物 | 同上 | 规则已加；**真实执行留 CI**（不声称本地通过） | `.gitleaks.toml` 注释与「Known limitations」 |
+| PV1/PV2 / WP4 / 任务 2.16、2.17 | 实现分支（成员已加入） | 状态表/版本口径与 `cargo metadata`、`cargo tree` 实际一致；全量统一入口在固定版本上绿 | 主 Agent（coder） | `npm run verify`（= `npm run check` + `cargo fmt/clippy/test` 三条）；`node scripts/check-crate-boundaries.mjs` | Rust 1.98.1 / cargo 1.98.1 / Node v24.19.0 | PASS（verify exit 0：67 个测试二进制全 ok，无 failed；boundaries exit 0：10 个 crate） | `reports/du1-pv1.log`、`reports/wp4-boundaries.log` |
 
 ## Check Plan Changes
 
