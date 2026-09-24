@@ -57,6 +57,11 @@ const CORE_ONLY: &[&str] = &[
     "agent.message.completed",
 ];
 
+/// §10.3 要求字段、但**本用例的三个场景不会产出**的类型（fake ACP 不发用户 chunk，也不驱动 cancel）。
+/// 它们必须与本用例实际检查过的类型合起来恰好等于两张表（下面的集合相等断言），因此任何类型从
+/// 「已检查」里滑进这里（或凭空消失）都会让用例变红。
+const NOT_EXERCISED: &[&str] = &["user.message.delta", "turn.cancelled"];
+
 fn host(scenario: &str) -> std::sync::Arc<AgentHost> {
     std::sync::Arc::new(AgentHost::new(
         std::sync::Arc::new(support::FakeConfig::new(vec![profile_with(
@@ -95,6 +100,7 @@ async fn adapter_views_leave_turn_and_version_identity_to_core() {
         ("chunked-updates", "turn.completed"),
         ("permission-request", "permission.requested"),
         ("elicitation", "elicitation.requested"),
+        ("crash-on-prompt", "turn.failed"),
     ]
     .into_iter()
     .enumerate()
@@ -172,22 +178,20 @@ async fn adapter_views_leave_turn_and_version_identity_to_core() {
         checked.push(event_type);
     }
 
-    // 让断言可证伪：这些类型必须真的被适配器产出并检查过。
-    for expected in [
-        "agent.message.delta",
-        "agent.thought.delta",
-        "tool.call.started",
-        "permission.requested",
-        "elicitation.requested",
-        "session.mode.changed",
-        "session.config.changed",
-        "turn.completed",
-    ] {
-        assert!(
-            checked.contains(&expected),
-            "本用例必须真实检查到 {expected}（否则断言等于没测）：{types:?}"
-        );
-    }
+    // 让断言可证伪：本用例检查过的类型必须与「两张表 − 显式豁免」集合相等。
+    let mut expected: Vec<String> = TURN_SCOPED
+        .iter()
+        .chain(VERSION_SCOPED.iter())
+        .map(|(event_type, _)| (*event_type).to_owned())
+        .filter(|event_type| !NOT_EXERCISED.contains(&event_type.as_str()))
+        .collect();
+    expected.sort();
+    let mut checked_sorted: Vec<String> = checked.iter().map(|kind| (*kind).to_owned()).collect();
+    checked_sorted.sort();
+    assert_eq!(
+        checked_sorted, expected,
+        "每个 §10.3 类型要么被真实检查到、要么列入 NOT_EXERCISED；产物类型清单：{types:?}"
+    );
     // 只由 core 生成的类型不得出现在适配器输出里（避免双生产者导致字段来源不清）。
     for core_only in CORE_ONLY {
         assert!(

@@ -16,10 +16,10 @@
 
 | Check ID / Stage / Work Package | Revision / Base | Scope | Executor | Command / Steps | Environment | Result / Exit Code | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| PV1 / WP1 交付前 | `f582376`（基线 `1cd0416`） | 十道合同门禁（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic）；核对 `check:boundaries` 仍为 8 crate、core 依赖闭包未变、`check:drift` 仍与 `migrate.rs`/`ports.rs` 一致 | 主 Agent（coder 角色） | `npm run check`（cwd `D:/Project/acp-remote`） | Windows x64；Node v24.19.0 / npm 12.0.2；rustc 1.98.1（`rust-toolchain.toml`）；无网络需求 | PASS / exit 0（8/8 spec 校验通过，drift 36 DDL + 15 trait/87 sigs） | `openspec/changes/core-turn-view-fields/reports/wp1-contract-docs.log` |
-| PV2 / WP2 交付前 | `f582376` | `cargo fmt --check`、`cargo clippy -p core -D warnings`、`node scripts/check-crate-boundaries.mjs`、`cargo test -p core`（注入/冲突/版本/漂移/重放/保真/TurnAccepted 共 12 条新用例 + 既有 78 条） | 主 Agent（coder 角色） | 见 log 头部逐条命令 | 同上；无 `CARGO_TARGET_DIR` 覆盖 | PASS / 全部 exit 0；`cargo test -p core` = **91 passed / 0 failed / 0 ignored** | `reports/wp2-core-injection.log` |
-| PV5 / WP3 交付前 | `f582376` | 真实 SQLite（临时文件）上的版本规则：纯事件提交不递增、状态变更恰好 +1、过期 `expected_version` 被拒；含 `Update` 分支回填 `epoch` 的回归 | 主 Agent（coder 角色） | `cargo test --locked -p storage-sqlite --all-features` | 同上；落盘目录为系统临时目录 `acpr-storage-*`，用例自清 | PASS / exit 0（新增 `session_version_rule` 3 passed；既有套件 91 passed / 2 ignored——`crash_child`、`regenerate_v2_fixtures` 为既有 `#[ignore]`） | `reports/wp3-storage-version.log` |
-| PV3 / WP4 交付前 | `f582376` | 跨 crate 契约：真实适配器（fake ACP 子进程三场景）产出的 view 不含 `turnId`/`version`、其余 §10.3 最低字段齐备、`EndpointEvent.turn` 为 `None`、core 独占类型不被适配器产出 | 主 Agent（coder 角色） | `cargo test --locked -p core -p agent-host --all-features` | 同上；agent-host 用例会 spawn fake ACP 子进程与临时文件，用例自清 | PASS / exit 0（core 91 passed；agent-host 53 passed，含新增 `view_contract` 1 passed） | `reports/wp4-agent-host-contract.log` |
+| PV1 / WP1 交付前 | `f582376`（基线 `1cd0416`） | 十道合同门禁（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic）；核对 `check:boundaries` 仍为 8 crate、core 依赖闭包未变、`check:drift` 仍与 `migrate.rs`/`ports.rs` 一致 | 主 Agent（coder 角色） | `npm run check`（cwd `D:/Project/acp-remote`）；RV1 修复批后复跑 | Windows x64；Node v24.19.0 / npm 12.0.2；rustc 1.98.1（`rust-toolchain.toml`）；无网络需求 | PASS / exit 0（8/8 spec 校验通过，drift 36 DDL + 15 trait/87 sigs） | `openspec/changes/core-turn-view-fields/reports/wp1-contract-docs.log` |
+| PV2 / WP2 交付前 | `f582376` + RV1 修复批 | `cargo fmt --check`、`cargo clippy -p core -D warnings`、`node scripts/check-crate-boundaries.mjs`、`cargo test -p core`（注入/冲突/版本/漂移/重放/保真/`TurnAccepted`/无归属降级/非字符串冲突 共 16 条新用例 + 既有 78 条） | 主 Agent（coder 角色） | 见 log 头部逐条命令 | 同上；无 `CARGO_TARGET_DIR` 覆盖 | PASS / 全部 exit 0；`cargo test -p core` = **94 passed / 0 failed / 0 ignored** | `reports/wp2-core-injection.log` |
+| PV5 / WP3 交付前 | `f582376` + RV1 修复批 | 真实 SQLite（临时文件）上的版本规则：纯事件提交不递增、状态变更恰好 +1、过期 `expected_version` 被拒；含 `Update` 分支回填 `epoch` 的回归 | 主 Agent（coder 角色） | `cargo test --locked -p storage-sqlite --all-features` | 同上；落盘目录为系统临时目录 `acpr-storage-*`，用例自清 | PASS / exit 0（13 个测试目标全部 `ok`；新增 `session_version_rule` 3 passed；含既有 2 条 `#[ignore]`——`crash_child`、`regenerate_v2_fixtures`） | `reports/wp3-storage-version.log` |
+| PV3 / WP4 交付前 | `f582376` + RV1 修复批 | 跨 crate 契约：真实适配器（fake ACP 子进程四场景，含 `crash-on-prompt` 的 `turn.failed`）产出的 view 不含 `turnId`/`version`、其余 §10.3 最低字段齐备、`EndpointEvent.turn` 为 `None`；「已检查类型集合 = §10.3 两张表 − 显式豁免」的集合相等断言；core 独占类型不被适配器产出 | 主 Agent（coder 角色） | `cargo test --locked -p core -p agent-host --all-features` | 同上；agent-host 用例会 spawn fake ACP 子进程，用例与 `shutdown_all` 自清 | PASS / exit 0（core 94 passed；agent-host 53 passed，含新增 `view_contract` 1 passed） | `reports/wp4-agent-host-contract.log` |
 | PV4 / DU1 候选与主分支 | 待候选（见 Merge History） | 统一入口：`npm run check` + fmt + clippy（workspace all-targets）+ 全工作区测试 | 待独立检查执行者 | `npm run verify` | 同上 | 待记录 | 待 `reports/du1-pv1.log`、`reports/du1-main-verify.log` |
 
 交付前自检复核（tasks 3.2/3.3/3.4 的完成条件，由实现者执行并留证）：
@@ -36,6 +36,7 @@
 2. **R4：版本推导/比对的范围限定 + 漂移检测的时机写明**（原：「系统 SHALL 在提交前按…推导预期会话版本，并在提交后与存储层返回的版本比对」全覆盖；新：限定为「含 §10.3 要求 `version` 的 view 的提交」，并写明「比对发生在存储返回之后，本端不撤销已落盘的行」；R4 的第二个 scenario 由「该批事件不进入可重放状态」改为「不得把该批报告为成功」）。原因：① 对**每次**提交都推导需要额外读一次会话版本（事件批没有 `expected_version`），而实测 `expected_version` 为 `Some` 且无状态变更时存储层**不**校验版本，按它断言会产生误报，故只在该字段真正被写入的提交上推导/比对；② 存储层提交是原子的、没有回滚接口，失败关闭只能保证「不发布、不报成功」。风险覆盖：fake 存储的脚本化漂移用例（`a_version_rule_drift_fails_closed`）与真实存储的规则用例（PV5）共同覆盖；受影响任务：2.5、2.7。
 3. **R7：把「适配器不返回 turn 标识」改为「返回占位值时归属仍由 core 决定」**（scenario 标题与 THEN 同步）。原因：`TurnAccepted.turn` 的类型是必填 `TurnId`（`crates/core/src/ports.rs`），「不返回」在当前端口形状下不可表达；新增用例用两种占位值（全零与任意 UUID）覆盖「不产生第二个 turn 行、id 与 view 的 `turnId` 都取 core 权威值」。受影响任务：2.5、2.6。
 4. **WP3 实测发现的存储层缺陷与修复**（WP3 写范围由「仅 `tests/**`」扩为「+ `src/session_store.rs` 一处 1 行修复」）：`SessionStore::commit` 在 `StateChange::Update` 分支未像无状态分支那样回填 `origin_epoch`，导致「状态变更 + 会话级事件」同批提交被拒（`InvalidRequest("a session-scoped event requires an origin epoch")`）。这与 §5.2 的 `OwnedCommit.origin_epoch` 文档（「新建会话时由 core 生成并传入；存储层只校验已有 epoch 时必须一致」）矛盾，而且是 broker 的常规路径（终态事件与状态变更同批；`Broker::commit_owned` 只在建会话时传 `epoch`）。修复：`Update` 分支在校验通过后 `origin_epoch.get_or_insert(stored_epoch)`，与无状态分支一致；未改 DDL/`migrate.rs`、未改端口签名。证据见 Failures F1；受影响任务：2.9（文字已同步）。
+5. **PV3 的通过判据按「适配器半 + core 半」的实测口径写明**（RV1-WP3/WP4 复核提出）：原判据写「适配器产出的 view **经 core 提交后**满足 §10.3」，但本次没有任何用例在 `agent-host` 侧驱动 core 提交（`agent-host` 无 fake store，把真实 `SqliteStore` 作为 dev 依赖会破坏 §5 的适配器隔离）。实际证据是两半：`view_contract` 断言适配器视图不含 `turnId`/`version` 且其余最低字段齐备，`crates/core` 的用例断言注入后 view 满足 §10.3 且 ACP 三要素不变。`plan.md` 的 PV3 段与 Main E2E 的 `alternative_checks` 已改写为这一口径；风险无变化（两部分都已执行）。受影响任务：2.10、PV3；**登记的非阻断项**：将来补一条「真实 `Broker` + 真实 `SqliteStore`」的组合用例（需先解决 fake store 的归属问题，建议放在 Sync/Daemon 切片）。
 
 ## Dependency Handoffs
 
@@ -54,11 +55,22 @@
 
 ## Review Findings
 
-RV1（独立 review，WP1–WP4 交付前）：待执行——由新的隔离上下文（bash 可用的只读 reviewer）执行，报告路径 `reports/rv1-wp1.md`（覆盖 WP1+WP2）与 `reports/rv1-wp3.md`（覆盖 WP3+WP4，含 `origin_epoch` 修复）；复核轮 `reports/rv1-wp2-recheck.md`。
+RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒度拆成两个**隔离上下文**（`subagent` workflow `a268e610…` 启动失败为执行层错误、随后以阻塞式 workflow 重派成功；两子 Agent 均为 `oracle`、`context=fresh`，模型继承主会话）——上下文 A 覆盖 WP1+WP2（报告 `reports/rv1-wp1.md`，原文由主 Agent 逐字落盘）、上下文 B 覆盖 WP3+WP4（报告 `reports/rv1-wp3.md`）。两者结论均为**无未解决阻断项**（无 BLOCKER/MAJOR），共 5 条 MINOR + 9 条 SUGGESTION；两者都亲手做了变异自检（A 4 条、B 6 条）与全仓同类实例 `rg` 扫描。
 
 | ID | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 待记录 | `f582376` | 待记录（隔离上下文） | 待记录 | 待记录 | 待记录 | 待记录 |
+| RV1-WP1-F1 | `f582376` | RV1-A（`oracle`，隔离上下文） | `crates/core/src/broker.rs` 注入条件 + `tasks.md`「实测：无」 | MINOR：turn 终结后晚到的 §10.3 类型事件无归属 → 不注入（降级），但记录写成「无该类路径」 | 已修：`tasks.md` 2.3 改写为如实登记该降级；新增用例 `a_late_delta_after_turn_end_is_persisted_without_attribution`；`docs/CORE_PORTS_AND_STORAGE.md` §6 第 19 条新增「无归属的降级」条目 | RV1-REC（`reports/rv1-wp2-recheck.md`）：确认文字与用例一致 |
+| RV1-WP1-F2 | `f582376` | RV1-A | `crates/core/src/broker.rs:865`/`2288`（`submit_mode_set` → `apply_state`） | MINOR：真实 mode/config 流程里 `session.mode.changed` 与状态变更是两次提交 → 注入的是**变更前**版本（spec 字面满足，但 Sync 切片的乐观并发陷阱） | 不在本变更内改行为（会改提交批形状）；已在 `docs/CORE_PORTS_AND_STORAGE.md` §6 第 19 条与 `verification.md` 登记，留给 Sync 切片裁定（建议：合并为同一提交，或明确事件承载变更前版本） | 已登记（非阻断）；RV1-REC 复核登记位置 |
+| RV1-WP1-F3 | `f582376` | RV1-A | `crates/core/src/broker.rs:2960-2971`（`view_command_completed`） | MINOR（**变更外既有缺陷**）：`command.completed.result.turnId` 实际承载会话版本（`apply_state` 传入 `Some(version)`） | 本变更不修（未触碰该函数；越界）；已登记为独立事项，建议 Sync/CLI 切片把 `result` 改为 `{"version":…}` 或 `null` | 已登记（非阻断） |
+| RV1-WP1-F4 | `f582376` | RV1-A | `docs/CORE_PORTS_AND_STORAGE.md` 修订版本号 | MINOR：新增行用了已存在的版本号 0.7 | 已修：改为 `版本：0.11` | RV1-REC 复核 |
+| RV1-WP1-F5 | `f582376` | RV1-A | `plan.md` PV2 判据 | MINOR：仍写「imported 补齐（R4/R11）」，与 Check Plan Change 1 相反 | 已修：改为「imported 保留 Owner 给出的取值（R4/R11；不注入、不重写、不补齐）」 | RV1-REC 复核 |
+| RV1-WP3-B1 | `f582376` | RV1-B（`oracle`，隔离上下文） | `plan.md` PV3 判据 | MINOR：判据要求「经 core 提交后满足 §10.3」，但无该组合用例，且未登记为 Check Plan Change | 已修：改写 PV3 判据与 Main E2E 的 `alternative_checks`；补第 5 条 Check Plan Change；组合用例登记为后续项 | RV1-REC 复核 |
+| RV1-WP3-B2 | `f582376` | RV1-B | `crates/agent-host/tests/view_contract.rs` 守卫清单 | MINOR：`user.message.delta`/`turn.cancelled`/`turn.failed` 声明覆盖但从不执行，产物消失可静默通过（已用变异证实） | 已修：加 `crash-on-prompt` 场景覆盖 `turn.failed`；守卫改为「已检查集合 == §10.3 两张表 − `NOT_EXERCISED`」的集合相等断言；`NOT_EXERCISED` 显式列出两个 fake 不产出的类型并写明原因 | RV1-REC 复核（含反向变异） |
+| RV1-WP1-S1..S4、RV1-WP3-S1..S5 | `f582376` | RV1-A / RV1-B | 见两份报告 | SUGGESTION：NonText 集成用例、`expected_version` 快捷分支用例、§10.3 表多处手抄无门禁、失败批不重投未文档化、WP3 用例未覆盖「broker 组装」面、测试死代码、PV5 计数措辞、`permission.description` 为空 | 已处理：S1/S2 已补用例（`a_non_string_turn_id_fails_closed`、`an_event_only_commit_with_expected_version_keeps_the_current_version`）；S3/S5 登记为非阻断项；S4 已写入 §6 第 19 条；死代码与措辞已修；`permission.description` 属既有 fake 数据，不改（§10.3 只要求 string） | RV1-REC 复核 |
+
+**reviewer 待补检查**：RV1-A 未执行 `npm run check`（PV1）、`-p storage-sqlite`（PV5）、`-p agent-host`（PV3）与全工作区测试（PV4），已在报告中声明；这些由主 Agent 在 PR1–PV4 留证，不影响本轮的代码正确性判断。RV1-B 未重跑 `-p core`（属 WP2 范围）。均已在报告中如实标注，主 Agent 按 Checks 表核对。
+
+**验后影响判断**：修复批只动用例、文档与 `plan.md`/`tasks.md`，未动 `crates/**` 的任何生产代码（`docs`/`openspec` + `crates/*/tests/**`），因此 PV1/PV2/PV3/PV5 已按修复批复跑（上表 Revision 列注明）且结论未变；无需重跑生产代码级门禁以外的内容。
 
 ## Merge History
 

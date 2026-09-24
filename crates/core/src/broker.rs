@@ -6877,4 +6877,112 @@ mod tests {
                 .all(|receipt| receipt.payload_digest == digest('B'))
         );
     }
+    /// D4 的降级：turn 终结后晚到的 §10.3 类型事件没有权威归属 → 不注入、不伪造（登记边界）。
+    #[test]
+    fn a_late_delta_after_turn_end_is_persisted_without_attribution() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 脚本只结束 turn，不发 delta。
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // turn 已终结后再到达的 delta（适配器异步尾巴）。
+        let view = format!(
+            r#"{{"messageId":"{}","deltaIndex":"0","text":"late"}}"#,
+            uuid_text(614)
+        );
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &view,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        let late = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "agent.message.delta")
+            .expect("晚到的 delta 必须落盘");
+        assert_eq!(
+            harness.world.event_turn(&late.id),
+            None,
+            "无权威归属时不得伪造 turn"
+        );
+        assert_eq!(
+            stored_view(&harness, &late),
+            view,
+            "无归属时 view 逐字节不变（不注入）"
+        );
+    }
+
+    /// R2：`turnId` 已存在但不是字符串 → 同样显式失败（不覆盖、不静默跳过）。
+    #[test]
+    fn a_non_string_turn_id_fails_closed() {
+        let harness = Harness::new(BrokerConfig::default());
+        let view = format!(
+            r#"{{"messageId":"{}","turnId":12,"deltaIndex":"0","text":"hi"}}"#,
+            uuid_text(615)
+        );
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &view,
+        )]));
+        let actor = harness.actor();
+        let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
+        let error = block_on(harness.broker.submit_mutation(&actor, &command))
+            .expect_err("非字符串 turnId 必须失败");
+        assert!(matches!(error, PortError::InvalidRequest(_)), "{error}");
+        assert!(
+            !harness
+                .world
+                .events(&harness.session)
+                .iter()
+                .any(|event| event.event_type.as_str() == "agent.message.delta"),
+            "该批不得落盘"
+        );
+        assert_eq!(harness.world.publish_count(), 2, "该批不得发布");
+    }
+
+    /// `expected_version` 已给出的纯事件提交：推导值即它，且与存储返回值一致（§6 第 19 条的快捷分支）。
+    #[test]
+    fn an_event_only_commit_with_expected_version_keeps_the_current_version() {
+        let harness = Harness::new(BrokerConfig::default());
+        let commit = OwnedCommit {
+            session: Some(harness.session.clone()),
+            at: ts(1),
+            expected_version: Some(Version::new(1)),
+            state: None,
+            turns: Vec::new(),
+            events: vec![
+                pending_event(
+                    "session.mode.changed",
+                    EventKind::State,
+                    json_view(r#"{"currentModeId":"code"}"#),
+                    None,
+                    None,
+                    StoredPolicy::Durable,
+                    None,
+                )
+                .expect("event"),
+            ],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = block_on(harness.broker.commit_owned(commit)).expect("commit");
+        assert_eq!(outcome.version, Version::new(1), "无状态变更不递增");
+        let stored = harness.world.events(&harness.session);
+        assert_eq!(
+            stored_view(&harness, &stored[0]),
+            r#"{"version":"1","currentModeId":"code"}"#
+        );
+    }
 }

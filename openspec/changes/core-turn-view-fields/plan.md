@@ -9,7 +9,7 @@
 
 无合同资产变更（不新增/不修改 `schemas/**`、`fixtures/**`、`compatibility/**`；`docs/SYNC_PROTOCOL.md` §10.3 保持权威）。本变更只在 `docs/CORE_PORTS_AND_STORAGE.md` §5.1/§6/§9 与 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 记录既有行为的**已明确化**（注入时机、版本规则、`TurnAccepted.turn` 语义），不改变端口签名或 DDL。
 
-实现期登记了 4 条 Check Plan Change（原因、原/新值与受影响任务见 `verification.md` 的 Check Plan Changes 段）：① imported 路径改为「保留 Owner 取值」而非「补齐」（端口无 turn 来源，且 `payloadDigest` 覆盖 Owner 字节，重写会破坏摘要）；② 版本推导/比对限定在含要求 `version` 的 view 的提交上，并写明漂移在存储返回后检测（不撤销已落盘行）——两条同时改了 `specs/core-event-view-identity/spec.md` 的文字与 scenario 标题，覆盖索引已同步；③ R7 的「适配器不返回 turn 标识」不可表达（`TurnAccepted.turn: TurnId` 必填）→ 改为占位值语义；④ WP3 实测发现 `storage-sqlite` 的状态变更分支未回填 `origin_epoch`（状态+事件同批时被拒），按 §5.2 的「存储层只校验已有 epoch 时必须一致」修 1 行并加回归用例。
+实现期登记了 5 条 Check Plan Change（第 5 条经 RV1 复核补登：PV3 判据按「适配器半 + core 半」的实测口径写明）（原因、原/新值与受影响任务见 `verification.md` 的 Check Plan Changes 段）：① imported 路径改为「保留 Owner 取值」而非「补齐」（端口无 turn 来源，且 `payloadDigest` 覆盖 Owner 字节，重写会破坏摘要）；② 版本推导/比对限定在含要求 `version` 的 view 的提交上，并写明漂移在存储返回后检测（不撤销已落盘行）——两条同时改了 `specs/core-event-view-identity/spec.md` 的文字与 scenario 标题，覆盖索引已同步；③ R7 的「适配器不返回 turn 标识」不可表达（`TurnAccepted.turn: TurnId` 必填）→ 改为占位值语义；④ WP3 实测发现 `storage-sqlite` 的状态变更分支未回填 `origin_epoch`（状态+事件同批时被拒），按 §5.2 的「存储层只校验已有 epoch 时必须一致」修 1 行并加回归用例。
 
 ## Coverage Index
 
@@ -247,8 +247,8 @@ rows:
 | Check ID | Stages / Work Packages | Command / Working Directory | Configuration / Environment | Scope / Pass Criteria | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | PV1 | WP1（交付前）、DU1（候选与主分支）、最终替代验证 | `npm run check`（`D:/Project/acp-remote`；统一入口含十道合同门禁：schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic） | Node ≥ 22.12；不需要网络；`cargo metadata` 供 `check:boundaries`；`check:drift` 比对 §7 DDL 与 §5 端口签名 | 十道门禁逐道 exit 0；`check:boundaries` 必须仍报「8 个 crate」且 core 依赖闭包等于冻结 allow-list（本变更不得改 allow-list）；`check:drift` 必须仍与 `crates/storage-sqlite/src/migrate.rs`、`crates/core/src/ports.rs` 一致（本变更不得改端口签名或 DDL） | `reports/wp1-contract-docs.log` |
-| PV2 | WP2（交付前）、DU1（候选与主分支）、最终替代验证 | `cargo test --locked -p core --all-features`（`D:/Project/acp-remote`） | rustc 以 `rust-toolchain.toml` 为准；无网络（`--locked`）；内存 fake 存储 + broker harness | exit 0 且无失败/零用例/整体跳过；必须覆盖：注入补齐（R2）、无归属不伪造（R3）、imported 补齐（R4/R11）、冲突一致与失败（R6/R7）、版本一致与漂移失败（R9/R10/R13/R14）、保真与未知字段（R16/R17）、重放字节一致（R19）、`TurnAccepted.turn` 不采信（R21/R22） | `reports/wp2-core-injection.log` |
-| PV3 | WP4（交付前）、DU1、最终替代验证 | `cargo test --locked -p core -p agent-host --all-features` | 同上；跨 crate（`agent-host` 依赖 `core`） | exit 0；必须覆盖：适配器产出的 view 经 core 提交后满足 §10.3 的 `turnId`/`version`，且 ACP 三要素不变（R16） | `reports/wp4-agent-host-contract.log` |
+| PV2 | WP2（交付前）、DU1（候选与主分支）、最终替代验证 | `cargo test --locked -p core --all-features`（`D:/Project/acp-remote`） | rustc 以 `rust-toolchain.toml` 为准；无网络（`--locked`）；内存 fake 存储 + broker harness | exit 0 且无失败/零用例/整体跳过；必须覆盖：注入补齐（R2）、无归属不伪造（R3）、imported 保留 Owner 给出的取值（R4/R11；不注入、不重写、不补齐）、冲突一致与失败（R6/R7）、版本一致与漂移失败（R9/R10/R13/R14）、保真与未知字段（R16/R17）、重放字节一致（R19）、`TurnAccepted.turn` 不采信（R21/R22） | `reports/wp2-core-injection.log` |
+| PV3 | WP4（交付前）、DU1、最终替代验证 | `cargo test --locked -p core -p agent-host --all-features` | 同上；跨 crate（`agent-host` 依赖 `core`） | exit 0；必须覆盖（两半合起来才是 R16 的完整证据，见 Check Plan Change 5）：① 适配器产出的 view 不含 `turnId`/`version`，且其余 §10.3 最低字段齐备、ACP 三要素在适配器侧一致（`crates/agent-host/tests/view_contract.rs`）；② core 注入后 view 满足 §10.3、ACP 三要素逐字节不变（PV2 的 core 用例） | `reports/wp4-agent-host-contract.log` |
 | PV4 | DU1（候选、主分支）、最终替代验证 | `npm run verify`（= `npm run check` + `cargo fmt --all -- --check` + `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` + `cargo test --locked --workspace --all-features`） | 本机 Windows x64、rustc 1.98.1、Node 24.19.0 | 整条入口 exit 0；全工作区测试无失败（既有 2 条 `#[ignore]` 带理由属其它 crate，不得新增） | `reports/du1-pv1.log`、`reports/du1-main-verify.log` |
 | PV5 | WP3（交付前）、DU1、最终替代验证 | `cargo test --locked -p storage-sqlite --all-features` | 真实 SQLite（临时文件）；`--locked` | exit 0；必须覆盖：真实 store 下 `version = version + 1` 与 core 注入值一致、无状态提交不递增、core 的漂移断言在真实实现上不误报（R8/R9/R12/R13） | `reports/wp3-storage-version.log` |
 
@@ -270,7 +270,7 @@ alternative_checks:
   - "`npm run verify`（`[PV4]`）：十道合同门禁 + fmt + clippy + 全工作区测试，覆盖依赖集/端口签名/DDL/矩阵未漂移与无回归；证据 `reports/du1-main-verify.log`"
   - "`cargo test --locked -p core --all-features`（`[PV2]`）：注入、冲突、版本一致与漂移失败、重放、保真与未知字段的全部行为用例；证据 `reports/wp2-core-injection.log`"
   - "`cargo test --locked -p storage-sqlite --all-features`（`[PV5]`）：真实存储层上的版本规则与注入一致性；证据 `reports/wp3-storage-version.log`"
-  - "`cargo test --locked -p core -p agent-host --all-features`（`[PV3]`）：适配器产出的 view 经 core 提交后满足 §10.3；证据 `reports/wp4-agent-host-contract.log`"
+  - "`cargo test --locked -p core -p agent-host --all-features`（`[PV3]`）：适配器产出不含 `turnId`/`version` 且其余 §10.3 最低字段齐备（结合 `[PV2]` 的 core 注入用例）；证据 `reports/wp4-agent-host-contract.log`"
 downgrade_approval: "用户 2026-09-24 本会话批准原话：「同意本变更 Main E2E 记 not-applicable」（来源：本变更启动前的范围确认提问第 1 项；同一条回复第 2 项为「同意」（同意把 RV-DU1-F6 纳入本变更））"
 ```
 

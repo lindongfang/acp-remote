@@ -9,8 +9,8 @@ mod support;
 
 use acp_core::model::{
     AgentId, AgentRef, EventKind, EventOrigin, EventPayload, EventType, ModeId, ModeRef,
-    OriginEpoch, PendingEvent, Sequence, SessionId, SessionState, StoredPolicy, Timestamp, TurnId,
-    TurnState, Version, ViewJson,
+    OriginEpoch, PendingEvent, SessionId, SessionState, StoredPolicy, Timestamp, TurnId, TurnState,
+    Version, ViewJson,
 };
 use acp_core::ports::{
     ModeChange, NewSession, NewTurn, OwnedCommit, SessionStore, SessionUpdate, StateChange,
@@ -268,5 +268,4 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
         .await
         .expect("matching expected version");
     assert_eq!(outcome.version, Version::new(2));
-    let _ = Sequence::new(1).expect("sequence");
 }
