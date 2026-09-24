@@ -66,5 +66,5 @@
 ## 与归档记录的关系
 
 - 本目录内的既有记录 **保持改写前的哈希原样**：`verification.md` 的 `agentic-assessment.target_commit`、`plan.md` 的修复轮哈希列表、`reports/*.md` 报告与原始 `reports/*.log` 的头部 revision 都不改写——这样 `agentic-assessment.evidence` 中各 `.md` 报告的 sha256 摘要继续有效，原始日志也仍然是未加工的过程证据。需要解析时使用上面的映射表。
-- 旧链条未被丢弃：`refs/heads/backup/before-msg-rewrite` 指向改写前的 tip（见上）；另外 `refs/heads/feat/identity-auth-and-keystore` 仍指向旧链中的 `4d988cd`（旧 tip 的祖先）。`refs/original/*` 在本轮第二遍 `filter-branch -f` 后被清理，实测已不存在——旧链的可达性只依赖上述两个 ref，未跟踪的旧对象会随时间被 gc 回收。
+- **旧链的处置（2026-09-24，用户授权）**：改写完成后先建了备份分支 `backup/before-msg-rewrite`（旧 tip `9f20964`）用于核对，核对通过后已**按用户要求删除**；`refs/heads/feat/identity-auth-and-keystore` 已从旧链的 `4d988cd` **重指到新链对应提交** `bb42dd3`（两者 tree 相同：`125da8538e740487db3715bd3dfff658ebe99d18`，仅 scope 不同）。`refs/original/*` 在第二遍 `filter-branch -f` 后已被 git 清理。因此**已无任何 ref 指向改写前的链条**：旧对象暂时仍可按哈希从 reflog/对象库取出（已无 ref、未过期），一旦 gc 回收即不可恢复——长期解析请以本文件的映射表为准。
 - 本次只改提交元数据（message），**不是重新验收**：被测内容（tree）逐字节未变，归档结论与证据对新哈希同样成立。
