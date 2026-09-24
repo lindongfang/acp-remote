@@ -4,7 +4,6 @@
 > 版本：0.3（v0.2 的 L1 实现期修订：补齐交互**创建**路径、正文读取入口 `ReadView::event_payload`、非会话级事件的 `origin_*` 列改为可空、`owned_attachment` 增加 id 列、`find_remote_request` 改名、Windows ACL 判定说明；并把 §5.2 里不存在的 `resolve_interaction` 方法改为 §6 第 13 条）
 > 版本：0.4（2026-09-18，L1 收尾：补齐四条会阻塞「一个真实 turn」的缺口——§6 第 14 条 `agent.message.completed` 的生成、第 15 条 delta 压缩与 `turn.delta_compacted` 收据、第 16 条启动恢复 `RecoverUnsettled`、第 17 条 `session.mode.list` 的候选来源；新增 `SessionEndpoint::modes()`、`SessionStore::unsettled_commands`、`OwnedCommit.compacted`、`MessageId`/`ModeState`，并给 §9 加判据 18–21）
 > 版本：0.5（2026-09-18：§5.4 的 `EventSink` 更正为包装结构，与 §5.1 的 `[决定]` 和 `ports.rs` 一致；新增 `scripts/check-contract-drift.mjs`，把 §7/§5 与实现的漂移变成 `npm run check` 的第八个门禁）
-> 版本：0.11（2026-09-24：§10.3 的 view 收口落地——§5.1 写明 `TurnAccepted.turn` 是适配器侧占位/审计值（turn 归属由 core 定稿），§6 新增第 19 条（提交前注入 `turnId` 与会话 `version`、冲突与漂移失败关闭、imported 路径保留 Owner 取值），§9 新增判据 31；端口签名与 DDL 均未变）
 > 日期：2026-09-18
 > 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.1/§4.7/§5/§6/§7/§8/§10、[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §5/§10、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3/§9/§10/§11/§14、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §6/§7/§12/§15、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13/§14/§15、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4/§5/§6、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5
 > 作用：冻结 `core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 的 v2 表结构、保留/清理与 migration。**本文件是这些内容的唯一权威来源**；`MODULE_ARCHITECTURE.md` §4.1/§4.7 只保留职责边界。
@@ -15,6 +14,7 @@
 > 版本：0.9（2026-09-23：§2 的错误枚举补齐 `ConflictKind::{AlreadyExists, IdentityMismatch, DuplicateOwnership}` 与 `UnavailableKind::KeystoreUnavailable` 及到 `local.conflict`/`local.unavailable` 的映射义务；§11.6 写集语义第 4 条按目标族区分落定审计（设备 `pairing.approved` / 节点 `node.paired`）；签名、判据与 DDL 未变）
 > 版本：0.8（2026-09-23：管理 store 的落盘实现落地（`crates/storage-sqlite/src/admin/`）后，把 §5.3/§9/§11 与关联文档里「仍待实现」的陈述改为与实现一致；合同形状、判据与 DDL 未变）
 > 版本：0.10（2026-09-23：补齐管理存储的**终态与单调性守卫**——§5.2 补 imported 写路径的归属前置（`upsert_session`/`commit_receipt` 先验 `(ownerNodeId, exportId)` 归属，否则 `NotFound(Export)` 且零写入）、§5.3 补 `put_export` 撤销终态 / 身份材料读取核对同行指纹 / 活动时间只前进（显式 `CASE`）、§7.4 补迟到回调拒绝与「重导入后无法区分新旧连接」的已知边界、§9 新增判据 30。**§5/§7 的代码块、端口签名与 DDL 未变**，漂移门禁继续逐条成立；wire 协议、封闭词表与本地管理方法集未变）
+> 版本：0.11（2026-09-24：§10.3 的 view 收口落地——§5.1 写明 `TurnAccepted.turn` 是适配器侧占位/审计值（turn 归属由 core 定稿），§6 新增第 19 条（提交前注入 `turnId` 与会话 `version`、冲突与漂移失败关闭、imported 路径保留 Owner 取值），§9 新增判据 31；端口签名与 DDL 均未变）
 
 ## 1. 范围与非目标
 
@@ -750,7 +750,7 @@ pub trait IdGenerator: Send + Sync {
 19. `[决定]` **提交前的 view 收口（`SYNC_PROTOCOL.md` §10.3 的身份与会话版本）**：owned 提交在 `commit_owned` 漏斗内、调用 `SessionStore::commit` **之前**完成两件事，因此落盘 view、重放 view 与广播所依据的 payload 同源：
     - **turn 归属**：事件类型属于 §10.3 要求 `turnId` 的集合（`turn.*`、`user.message.delta`、`agent.message.delta`、`agent.message.completed`、`agent.thought.delta`、`tool.call.started`/`updated`/`completed`、`permission.requested`、`elicitation.requested`）且该事件已被归属到某个 turn 时，view 顶层必须有 `turnId`，取值等于 core 已定稿的权威 turn；**不得**向其它事件类型添加未协商字段，无归属的事件不得出现该字段。适配器已给出同名字段时：取值一致 → 保留原字节；取值不同或值不是字符串 → 显式 `InvalidRequest`、不写任何行、不发布任何帧。归属只在批组装时定稿一次，注入是它的唯一消费者（不重新推导）。
     - **会话版本**：事件类型属于 §10.3 要求 `version` 的集合（`session.mode.changed`、`session.config.changed`）时，view 顶层必须有十进制字符串 `version`，取值等于该次提交后的会话版本。推导规则与存储层一致：含 `StateChange` 的提交为当前版本 + 1，否则不变；提交后必须与 `CommitOutcome.version` 比对，不一致 → `PortError::Corrupt`、不发布该批、不得报告成功（比对发生在存储返回之后，已落盘的行不由 core 撤销）。幂等命中（`replayed`）时不比对：返回的是首次提交的结果，第二次提交的 view 不得被重写。imported 路径**不**注入这两个字段（`turnId`/`version` 由拥有该会话的节点注入，`payloadDigest` 覆盖 Owner 给出的视图字节），只保留其取值。
-    - **两个已登记的边界**：① 失败关闭（`turnId` 冲突或版本漂移）发生在 `flush` 组装之后，该批适配器事件**不再重投**（调用方按 §6.9 的失败语义决定是否把 turn 判为失败），不得重试时假装该批从未到达；② 无状态变更的提交里存储层**不**校验 `expected_version`（§5.2 只对 `Update` 校验），因此 core 的推导/比对就是该组合的失败关闭点，且可能发生在落盘之后。
+    - **两个已登记的边界**：① 失败关闭（`turnId` 冲突或版本漂移）发生在 `flush` 组装之后，该批适配器事件**不再重投**（调用方按 §6 第 9 条的失败语义决定是否把 turn 判为失败），不得重试时假装该批从未到达；② 无状态变更的提交里存储层**不**校验 `expected_version`（§5.2 只对 `Update` 校验），因此 core 的推导/比对就是该组合的失败关闭点，且可能发生在落盘之后。
     - **无归属的降级**：turn 终结后晚到的、类型属于 §10.3 `turnId` 集合的事件（适配器异步尾巴）没有权威 turn，**不**注入（`owned_event.turn_id` 与 view 同时为 NULL），宁可缺字段也不伪造；该降级必须有用例固定，并留给 Sync 切片裁定是否拒绝。
 
 ## 7. `storage-sqlite` v2 表结构
@@ -1288,6 +1288,8 @@ CREATE TABLE imported_import_export (
 - `[已裁定]` `owned_attachment` 增加 `attachment_id` 唯一列（`AttachmentStore::get` 由「重算 id 后扫描」改为 O(1) 命中）；`owned_attachment_link.attachment_id` 同样引用它。
 - `[已裁定]` `RemoteDeliveryStore::find_request` 改名 `find_remote_request`（与 `SessionStore::find_request` 同名会迫使每个调用点写 UFCS）。
 - `[已裁定]` Windows 的 ACL 判定返回 `Unverifiable` 且不失败关闭（平台限制，见 §7.1）；Unix 仍失败关闭。
+- `[open]` **`session.mode.changed`/`session.config.changed` 的 `version` 语义**（2026-09-24 登记，来源：变更 `core-turn-view-fields` 的 RV1-WP1-F2）：§10.3 只要求「十进制字符串的会话版本」，而 §6 第 19 条的推导口径是「该次提交后的会话版本」。真实模式/配置切换流程中，`session.*.changed` 事件（来自适配器）与状态变更是**两次提交**（§6 第 8 条的 turn 边界语义），因此注入的是**变更前**版本，变更后的版本只出现在后续 `command.completed` 的 result 里。本变更不改变批形状（不合并两次提交）；在 Sync 切片前必须裁定：要么把两者合并为同一提交（使事件承载变更后版本），要么在 §10.3/Sync 文档里明确「mode/config 事件承载变更前版本」并让客户端不以它为乐观并发基准。**未裁定前 Sync 切片不得假设事件里的 `version` 等于会话最终版本。**
+- `[open]` **`command.completed.result.turnId` 承载的是会话版本而非 turn 标识**（2026-09-24 登记，来源同上，RV1-WP1-F3）：`view_command_completed` 把 `apply_state` 传入的 `Some(version)` 渲染成 `result.turnId`（十进制字符串），而 `SYNC_PROTOCOL.md` §11.5 的 `result.turnId` 示例是 UUID。本变更未触碰该函数（属变更外既有缺陷）；应在 Sync/CLI 切片把它改为 `result.version`（或 `null`）并同步协议文档与 fixture。
 - `[已裁定]` `owned_interaction.elicitation_action` 的 CHECK 补 `'decline'`（原值是 `submit|cancel` 两值，会让 ACP 早就有的 `decline` 在解析事务里撞约束、交互永远停在 `pending`）；同时要求 DDL 里每个 `IN (...)` 枚举字面量与 core 枚举的 wire 值逐条一致，并有一条「每个枚举值都能写入并读回」的测试。
 - `[已裁定]` id 分配收敛为两处权威（§3.1）：`SessionId`/`EventId` 归存储层事务内分配，`TurnId`/`InteractionId`/`PairingId`/`OriginEpoch`/`RequestId` 归 core 的 `IdGenerator`，`AttachmentId` 归 `AttachmentStore::put`。`IdGenerator` 因此删掉 `session_id()`/`attachment_id()`——原 §3.1 与 §5.4 的写法互相矛盾，实现者只能二选一。
 - `[已裁定]` `SessionBackendFactory::create` 增加 `session: &SessionId` 参数：§5.1 原先承诺「core 把分配好的会话传给 `create`」，而 §3.6 的 `CreateSessionRequest` 字段表里没有 `session`，后端因此拿不到 id、无法构造 `SessionEndpoint::reference()`。

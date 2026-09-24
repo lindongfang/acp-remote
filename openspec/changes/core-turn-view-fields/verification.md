@@ -16,7 +16,7 @@
 
 | Check ID / Stage / Work Package | Revision / Base | Scope | Executor | Command / Steps | Environment | Result / Exit Code | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| PV1 / WP1 交付前 | `f582376`（基线 `1cd0416`） | 十道合同门禁（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic）；核对 `check:boundaries` 仍为 8 crate、core 依赖闭包未变、`check:drift` 仍与 `migrate.rs`/`ports.rs` 一致 | 主 Agent（coder 角色） | `npm run check`（cwd `D:/Project/acp-remote`）；RV1 修复批后复跑 | Windows x64；Node v24.19.0 / npm 12.0.2；rustc 1.98.1（`rust-toolchain.toml`）；无网络需求 | PASS / exit 0（8/8 spec 校验通过，drift 36 DDL + 15 trait/87 sigs） | `openspec/changes/core-turn-view-fields/reports/wp1-contract-docs.log` |
+| PV1 / WP1 交付前（`reports/wp1-contract-docs.log` 的 doc-links 计数 2956 refs/153 md 是**修复批提交前**的快照：当时两份 review 报告尚未落盘；最终树复跑见本行证据日志：367 links / 3017 refs / 155 md，exit 0） | `f582376`（基线 `1cd0416`） | 十道合同门禁（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic）；核对 `check:boundaries` 仍为 8 crate、core 依赖闭包未变、`check:drift` 仍与 `migrate.rs`/`ports.rs` 一致 | 主 Agent（coder 角色） | `npm run check`（cwd `D:/Project/acp-remote`）；RV1 修复批后复跑 | Windows x64；Node v24.19.0 / npm 12.0.2；rustc 1.98.1（`rust-toolchain.toml`）；无网络需求 | PASS / exit 0（8/8 spec 校验通过，drift 36 DDL + 15 trait/87 sigs） | `openspec/changes/core-turn-view-fields/reports/wp1-contract-docs.log` |
 | PV2 / WP2 交付前 | `f582376` + RV1 修复批 | `cargo fmt --check`、`cargo clippy -p core -D warnings`、`node scripts/check-crate-boundaries.mjs`、`cargo test -p core`（注入/冲突/版本/漂移/重放/保真/`TurnAccepted`/无归属降级/非字符串冲突 共 16 条新用例 + 既有 78 条） | 主 Agent（coder 角色） | 见 log 头部逐条命令 | 同上；无 `CARGO_TARGET_DIR` 覆盖 | PASS / 全部 exit 0；`cargo test -p core` = **94 passed / 0 failed / 0 ignored** | `reports/wp2-core-injection.log` |
 | PV5 / WP3 交付前 | `f582376` + RV1 修复批 | 真实 SQLite（临时文件）上的版本规则：纯事件提交不递增、状态变更恰好 +1、过期 `expected_version` 被拒；含 `Update` 分支回填 `epoch` 的回归 | 主 Agent（coder 角色） | `cargo test --locked -p storage-sqlite --all-features` | 同上；落盘目录为系统临时目录 `acpr-storage-*`，用例自清 | PASS / exit 0（13 个测试目标全部 `ok`；新增 `session_version_rule` 3 passed；含既有 2 条 `#[ignore]`——`crash_child`、`regenerate_v2_fixtures`） | `reports/wp3-storage-version.log` |
 | PV3 / WP4 交付前 | `f582376` + RV1 修复批 | 跨 crate 契约：真实适配器（fake ACP 子进程四场景，含 `crash-on-prompt` 的 `turn.failed`）产出的 view 不含 `turnId`/`version`、其余 §10.3 最低字段齐备、`EndpointEvent.turn` 为 `None`；「已检查类型集合 = §10.3 两张表 − 显式豁免」的集合相等断言；core 独占类型不被适配器产出 | 主 Agent（coder 角色） | `cargo test --locked -p core -p agent-host --all-features` | 同上；agent-host 用例会 spawn fake ACP 子进程，用例与 `shutdown_all` 自清 | PASS / exit 0（core 94 passed；agent-host 53 passed，含新增 `view_contract` 1 passed） | `reports/wp4-agent-host-contract.log` |
@@ -55,7 +55,7 @@
 
 ## Review Findings
 
-RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒度拆成两个**隔离上下文**（`subagent` workflow `a268e610…` 启动失败为执行层错误、随后以阻塞式 workflow 重派成功；两子 Agent 均为 `oracle`、`context=fresh`，模型继承主会话）——上下文 A 覆盖 WP1+WP2（报告 `reports/rv1-wp1.md`，原文由主 Agent 逐字落盘）、上下文 B 覆盖 WP3+WP4（报告 `reports/rv1-wp3.md`）。两者结论均为**无未解决阻断项**（无 BLOCKER/MAJOR），共 5 条 MINOR + 9 条 SUGGESTION；两者都亲手做了变异自检（A 4 条、B 6 条）与全仓同类实例 `rg` 扫描。
+RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒度拆成两个**隔离上下文**（`subagent` workflow `a268e610…` 启动失败为执行层错误、随后以阻塞式 workflow 重派成功；两子 Agent 均为 `oracle`、`context=fresh`，模型继承主会话）——上下文 A 覆盖 WP1+WP2（报告 `reports/rv1-wp1.md`，原文由主 Agent 逐字落盘）、上下文 B 覆盖 WP3+WP4（报告 `reports/rv1-wp3.md`）。两者结论均为**无未解决阻断项**（无 BLOCKER/MAJOR），共 **7 条 MINOR + 8 条 SUGGESTION**（A：5+4；B：2+4；计数由 RV1-REC 逐份校正）；两者都亲手做了变异自检（A 4 条、B 6 条）与全仓同类实例 `rg` 扫描。
 
 | ID | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -66,11 +66,26 @@ RV1（独立 review，WP1–WP4 交付前）：已执行。按 plan 的 WP 粒�
 | RV1-WP1-F5 | `f582376` | RV1-A | `plan.md` PV2 判据 | MINOR：仍写「imported 补齐（R4/R11）」，与 Check Plan Change 1 相反 | 已修：改为「imported 保留 Owner 给出的取值（R4/R11；不注入、不重写、不补齐）」 | RV1-REC 复核 |
 | RV1-WP3-B1 | `f582376` | RV1-B（`oracle`，隔离上下文） | `plan.md` PV3 判据 | MINOR：判据要求「经 core 提交后满足 §10.3」，但无该组合用例，且未登记为 Check Plan Change | 已修：改写 PV3 判据与 Main E2E 的 `alternative_checks`；补第 5 条 Check Plan Change；组合用例登记为后续项 | RV1-REC 复核 |
 | RV1-WP3-B2 | `f582376` | RV1-B | `crates/agent-host/tests/view_contract.rs` 守卫清单 | MINOR：`user.message.delta`/`turn.cancelled`/`turn.failed` 声明覆盖但从不执行，产物消失可静默通过（已用变异证实） | 已修：加 `crash-on-prompt` 场景覆盖 `turn.failed`；守卫改为「已检查集合 == §10.3 两张表 − `NOT_EXERCISED`」的集合相等断言；`NOT_EXERCISED` 显式列出两个 fake 不产出的类型并写明原因 | RV1-REC 复核（含反向变异） |
-| RV1-WP1-S1..S4、RV1-WP3-S1..S5 | `f582376` | RV1-A / RV1-B | 见两份报告 | SUGGESTION：NonText 集成用例、`expected_version` 快捷分支用例、§10.3 表多处手抄无门禁、失败批不重投未文档化、WP3 用例未覆盖「broker 组装」面、测试死代码、PV5 计数措辞、`permission.description` 为空 | 已处理：S1/S2 已补用例（`a_non_string_turn_id_fails_closed`、`an_event_only_commit_with_expected_version_keeps_the_current_version`）；S3/S5 登记为非阻断项；S4 已写入 §6 第 19 条；死代码与措辞已修；`permission.description` 属既有 fake 数据，不改（§10.3 只要求 string） | RV1-REC 复核 |
+| RV1-WP1-S1..S4、RV1-WP3-S1..S4 | `f582376` | RV1-A / RV1-B | 见两份报告 | SUGGESTION：NonText 集成用例、`expected_version` 快捷分支用例、§10.3 表多处手抄无门禁、失败批不重投未文档化、WP3 用例未覆盖「broker 组装」面、测试死代码、PV5 计数措辞、`permission.description` 为空 | 已处理：S1/S2 已补用例（`a_non_string_turn_id_fails_closed`、`an_event_only_commit_with_expected_version_keeps_the_current_version`）；S3/S5 登记为非阻断项；S4 已写入 §6 第 19 条；死代码与措辞已修；`permission.description` 属既有 fake 数据，不改（§10.3 只要求 string） | RV1-REC 复核 |
 
 **reviewer 待补检查**：RV1-A 未执行 `npm run check`（PV1）、`-p storage-sqlite`（PV5）、`-p agent-host`（PV3）与全工作区测试（PV4），已在报告中声明；这些由主 Agent 在 PR1–PV4 留证，不影响本轮的代码正确性判断。RV1-B 未重跑 `-p core`（属 WP2 范围）。均已在报告中如实标注，主 Agent 按 Checks 表核对。
 
-**验后影响判断**：修复批只动用例、文档与 `plan.md`/`tasks.md`，未动 `crates/**` 的任何生产代码（`docs`/`openspec` + `crates/*/tests/**`），因此 PV1/PV2/PV3/PV5 已按修复批复跑（上表 Revision 列注明）且结论未变；无需重跑生产代码级门禁以外的内容。
+**复核轮 RV1-REC（tasks 3.9）**：新的隔离上下文（`oracle`、`context=fresh`）复核修复批 `f582376..27c9155`，执行 7 条变异（M1–M6，含「无归属事件强制注入 turnId」「fake 不再产 `tool.call.updated`」两个关键反向探针，全部真跑变红再还原）并独立复跑了 core 94 / `view_contract` 1 / `session_version_rule` 3 / storage clippy / `check-doc-links`。结论：**RV1 的实质发现全部闭合、生产行为零改动**，但提出 7 条「记录/登记不准」的 MINOR + 4 条 SUGGESTION（报告 `reports/rv1-wp2-recheck.md`）。
+
+| ID | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| RV1-REC-M1 | `27c9155` | RV1-REC（`oracle`，隔离上下文） | `docs/CORE_PORTS_AND_STORAGE.md` §6 第 19 条 | MINOR：修复批新引入的悬空引用 `§6.9`（本文档 §6 是编号列表，无子节；门禁按设计不拦无归属引用） | 已修为「§6 第 9 条」 | 本批后复跑 `npm run check` exit 0 |
+| RV1-REC-M2 | `27c9155` | RV1-REC | `verification.md` F2 行 | MINOR：声称 F2 已写入 CORE 文档 §6 第 19 条，实际权威文档里没有该语义 | 已修：在 `docs/CORE_PORTS_AND_STORAGE.md` §10 未决项新增 `[open]` mode/config `version` 语义条目（含来源与未裁定前的约束） | 同上 |
+| RV1-REC-M3 | `27c9155` | RV1-REC | `verification.md` F3 行 | MINOR：F3 只写「已登记为独立事项」而无落点 | 已修：`§10` 未决项新增 `[open]` `command.completed.result.turnId` 条目（含建议改法与待同步资产）；本文件 Final Assessment 的 Follow-up 同步引用 | 同上 |
+| RV1-REC-M4 | `27c9155` | RV1-REC | `verification.md` Review Findings 汇总句 | MINOR：计数与两份报告不符（写 5+9，实为 7+8；且 WP3 无 S5） | 已修：改为 7 条 MINOR + 8 条 SUGGESTION，ID 段修为 `RV1-WP1-S1..S4`、`RV1-WP3-S1..S4` | 同上 |
+| RV1-REC-M5 | `27c9155` | RV1-REC | `tasks.md` 3.5–3.9 | MINOR：任务完成条件里的报告路径（`rv1-wp2.md`/`rv1-wp4.md`/追加到 `rv1-wp*.md`）与实际产物不符 | 已修：3.5–3.8 改为实际文件名并写明「两个 WP 合并给同一上下文」，3.9 的产物写为 `reports/rv1-wp2-recheck.md` | 同上 |
+| RV1-REC-M6 | `27c9155` | RV1-REC | `verification.md` 「验后影响判断」 | MINOR：改动路径枚举漏了 `crates/core/src/broker.rs`（虽全在 `#[cfg(test)] mod tests`） | 已修：枚举改为「`crates/*/tests/**` + `broker.rs` 的测试模块 + `docs`/`openspec`」并标明生产行为零改动 | 同上 |
+| RV1-REC-M7 | `27c9155` | RV1-REC | `reports/rv1-wp1.md`/`rv1-wp3.md` | MINOR：5 处行号落到邻接行（结论均可按函数名复现） | 保留报告原文，已在 `reports/rv1-wp2-recheck.md` 的发现里附行号更正；本文件的「行号可复现性」段引用该更正 | 同上 |
+| RV1-REC-S1..S4 | `27c9155` | RV1-REC | 见复核报告 | SUGGESTION：`view_contract` 注释仍写「三个场景」（已加第四场景）、豁免理由逐条写、`0.11` 放到版本块末尾、PV1 日志的 doc-links 计数是修复批提交前快照 | 已处理：注释改为「四个场景」+ 两条原因逐条注释；`0.11` 移到版本块末行；PV1 行加注「最终树复跑见本行日志（367 links / 3017 refs / 155 md，exit 0）」；本批后已复跑 PV1/PV2/PV3 | 本批后复跑 `reports/wp1-contract-docs.log`、`wp2-core-injection.log`、`wp4-agent-host-contract.log` |
+
+**验后影响判断**：修复批改的是 `crates/*/tests/**`、`crates/core/src/broker.rs` 的 `#[cfg(test)] mod tests`（+108 行全在测试模块内）、`docs/**` 与 `openspec/**`；**生产行为零改动**，因此 PV1/PV2/PV3/PV5 已按修复批复跑（上表 Revision 列注明）且结论未变。RV1-REC 用 7 条变异逐条证伪后确认：`view_command_completed`/`apply_state` 逐行未动、工作区 `git diff` 为空。
+
+**行号可复现性**：两份 reviewer 报告保留原文逐字落盘；RV1-REC 抽查约 40 处 `file:line`，其中 5 处行号落到邻接行（`rv1-wp1.md` 的 `broker.rs:2569`→实为 `:2566`、`:2887-2889`/`:2935-2943`/`:2976-2984`→实为 `:2881`/`:2890`/`:2919`，`rv1-wp3.md` 的死代码行 `:270`→实为 `:271`）；结论均可按函数名复现，更正表见 `reports/rv1-wp2-recheck.md`。
 
 ## Merge History
 
