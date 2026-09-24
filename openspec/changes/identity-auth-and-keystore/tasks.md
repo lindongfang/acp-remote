@@ -27,13 +27,13 @@
 
 ## 3. Branch Validation
 
-- [ ] 3.1 WP1；前置：2.3；实现 Agent（coder）。按计划 Check ID 完成 WP1 的交付前 project verify：在 WP1 的固定版本上执行 `npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]），逐项记录完整命令、工具链版本、退出码与日志路径。完成条件：两项通过；资源（临时目录/worktree）已核实释放。
+- [x] 3.1 WP1；前置：2.3；实现 Agent（coder）。按计划 Check ID 完成 WP1 的交付前 project verify：在 WP1 的固定版本上执行 `npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]），逐项记录完整命令、工具链版本、退出码与日志路径。完成条件：两项通过；资源（临时目录/worktree）已核实释放。
 - [ ] 3.2 WP1；前置：2.3；独立 reviewer。新建**不继承实现对话**的只读 reviewer 子 Agent，按 `roles/reviewer.md` 检视 WP1 的固定版本 diff 与契约（合同定型措辞是否与 `design.md` D4/D6 一致、依赖口径与 `[workspace.dependencies]`、`check:doc-links` 的引用归属）。完成条件：`reports/rv1-wp1.md` 记录 Agent ID、版本、隔离方式与结论；有阻断项时修复后由新的隔离子 Agent 复核。
-- [ ] 3.3 WP2；前置：2.9；实现 Agent（coder）。完成 WP2 的交付前 project verify：`cargo test --locked -p identity-auth --all-features`（[PV3]）、`node scripts/check-crate-boundaries.mjs`（[PV2]）、`npm run verify`（[PV1]），并核对 [PV3] 的用例确实被执行（无 0 用例、无全跳过）。完成条件：三项通过并逐 ID 记录日志路径；资源已释放。
+- [x] 3.3 WP2；前置：2.9；实现 Agent（coder）。完成 WP2 的交付前 project verify：`cargo test --locked -p identity-auth --all-features`（[PV3]）、`node scripts/check-crate-boundaries.mjs`（[PV2]）、`npm run verify`（[PV1]），并核对 [PV3] 的用例确实被执行（无 0 用例、无全跳过）。完成条件：三项通过并逐 ID 记录日志路径；资源已释放。
 - [ ] 3.4 WP2；前置：2.9；独立 reviewer。新建隔离子 Agent 检视 WP2：transcript 装配是否只从协议表取域与 tag、验签公钥是否只来自快照、是否存在 `from_der`、一次性消费与重放顺序、展开表与 `commands.json` 的逐项一致、持锁是否跨 `await`、`cfg` 是否零命中。完成条件：`reports/rv1-wp2.md` 记录隔离方式、版本与结论；阻断项修复后由新的隔离子 Agent 复核。
-- [ ] 3.5 WP3；前置：2.15；实现 Agent（coder）。完成 WP3 的交付前 project verify：`cargo test --locked -p identity-keystore --all-features`（[PV4]）、Windows 本机 `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture`（[PV5]）、`npm run verify`（[PV1]），并记录 Windows 上被跳过的用例数与原因。完成条件：三项通过（[PV5] 无法在本地 Windows 执行时如实记 BLOCKED）并留证；DPAPI 用例的临时目录已清理。
+- [x] 3.5 WP3；前置：2.15；实现 Agent（coder）。完成 WP3 的交付前 project verify：`cargo test --locked -p identity-keystore --all-features`（[PV4]）、Windows 本机 `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture`（[PV5]）、`npm run verify`（[PV1]），并记录 Windows 上被跳过的用例数与原因。完成条件：三项通过（[PV5] 无法在本地 Windows 执行时如实记 BLOCKED）并留证；DPAPI 用例的临时目录已清理。
 - [ ] 3.6 WP3；前置：2.15；独立 reviewer。新建隔离子 Agent 检视 WP3：条目格式与原子写、失败关闭路径、密钥/凭据是否可能进入 `Debug`/日志/错误/测试快照、DPAPI 使用是否仅为「包裹 + 进程内签名」、选型实证是否留证、`.gitleaks.toml` 限制注释是否诚实。完成条件：`reports/rv1-wp3.md` 记录隔离方式、版本与结论；阻断项修复后复核。
-- [ ] 3.7 WP4；前置：2.17；实现 Agent（coder）。完成 WP4 的交付前 project verify：`npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]，成员已加入后逐条核对 §5 两行）。完成条件：两项在固定版本上通过，日志写入 `reports/du1-pv1.log`。
+- [x] 3.7 WP4；前置：2.17；实现 Agent（coder）。完成 WP4 的交付前 project verify：`npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]，成员已加入后逐条核对 §5 两行）。完成条件：两项在固定版本上通过，日志写入 `reports/du1-pv1.log`。
 - [ ] 3.8 WP4；前置：2.17；独立 reviewer。新建隔离子 Agent 检视 WP4 的文档改动：状态表与版本口径是否与 `cargo metadata`/`cargo tree` 实际一致、是否误改切片顺序或验收表述、是否把未落地 crate 写成已落地。完成条件：`reports/rv1-wp4.md` 记录隔离方式、版本与结论；阻断项修复后复核。
 
 ## 4. Test Design and Authoring
