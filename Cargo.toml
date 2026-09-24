@@ -7,6 +7,7 @@ members = [
     "crates/storage-sqlite",
     "crates/sync-protocol",
     "crates/node-link-protocol",
+    "crates/acp-protocol",
 ]
 
 [workspace.package]
@@ -41,7 +42,8 @@ tracing = "0.1"
 # Windows Job Object（safe API）：每个 Agent 一个 Job + `KILL_ON_JOB_CLOSE`，见 §4.5。
 win32job = "2"
 # Unix 进程组结束（`killpg`）；Windows 构建中不参与编译。
-libc = "0.2"
+# 用 safe wrapper（`nix`）而不直接用 `libc`：workspace 固定 `unsafe_code = "forbid"`，直接 FFI 必须写 `unsafe`。
+nix = { version = "0.30", default-features = false, features = ["signal", "process"] }
 
 # 密码学原语按 docs/MODULE_ARCHITECTURE.md §3.1 固定版本；本次增量无 crate 使用，
 # identity-auth 落地时改为 workspace = true 引用，不要在别处另选实现。

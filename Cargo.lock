@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "acp-protocol"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "acpr-transcript"
 version = "0.0.0"
 dependencies = [
