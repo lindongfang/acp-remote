@@ -1,0 +1,67 @@
+## 1. Dependency and Resource Setup
+
+- [x] 1.1 全变更；可选 environment/recon 执行者。在**新的任务级最小上下文**中核实：仓库绝对路径与目标引用（`git rev-parse refs/heads/main`、`git status --porcelain`、`git worktree list`）、工具链版本（`rust-toolchain.toml` 与 `cargo --version`）、Node 版本、`npm ci` 状态、既有十道合同门禁与 `cargo test --locked --workspace --all-features` 的基线结果、以及 `crates/` 与 `openspec/specs/` 的实际现状。完成条件：返回结构化事实（命令、退出码、关键输出）并写入 `verification.md` 的运行时基线；若基线本身为红，如实记录并把影响告知主 Agent，不开始实现。
+- [x] 1.2 WP1；实现 Agent（coder）。确认实现所需契约基线（`docs/IDENTITY_AND_AUTH_CONTRACT.md` 现行版、`docs/MODULE_ARCHITECTURE.md` §3.1/§4.8/§4.12/§5、`docs/SECURITY_DESIGN.md` §9.2/§13.1/§14.1/§20、`design.md` D1/D7/D9）与文件所有权（WP1–WP4 的写范围与单一写入者，见计划「Work Packages」与「Execution Waves」）。完成条件：记录编码起点与写入范围（计划 2.1 的输入清单 + `git rev-parse HEAD`）；契约明确后即可开始编码，不等待其它轨道。
+- [x] 1.3 WP1–WP3；实现 Agent（coder）。为本变更实际需要的运行资源确定隔离方式：每个执行者独立的 `CARGO_TARGET_DIR`、keystore 用例自建且在结束时删除的临时目录、[PV5] 的 Windows DPAPI 用例串行轮次（计划「Runtime Resources」）。完成条件：记录资源名、隔离/独占方法与释放步骤；确认本变更不涉及数据库服务、容器、端口、外部账号或网络资源，并把该依据写入 `verification.md`。
+- [ ] 1.4 WP3；实现 Agent（coder）。在 [PV4]/[PV5] 集成验证前接入 WP2 已验收的 `identity-auth` 公开形状（端口 trait、`KeyHandle`/`SecretBytes`/`P1363Signature`/`KeystoreError`/熵源端口），核对 WP3 的实际基线提交与包含关系，并引用 `verification.md` 中的交接证据（计划「Dependency Handoffs」的 WP3 行）。完成条件：`cargo build -p identity-keystore` 仅使用 `identity-auth` 的公开项；上游形状变化时按失效列重开 WP3/WP4 的相应证据。
+
+## 2. Implementation
+
+- [x] 2.1 WP1；前置：1.2；实现 Agent（coder）。把 `docs/IDENTITY_AND_AUTH_CONTRACT.md` 的**目标形状定型为已实现形状**：§2 补 `PeerTrust` 快照入参的归属与熵源端口；§4.1 定型创建/认领/落定的最终签名（含「调用方提交写集」）；§5.1 定型三个握手入口 + 当次持久事实快照；§7 定型 keystore 端口最终 trait 并删除 `KeyPurpose::DeviceIdentity`（`design.md` D1/D3/D4/D6/D7）；同时更新 `docs/MODULE_ARCHITECTURE.md` §3/§3.1/§4.8/§4.12（职责与依赖口径，**不写**选型结论）/§5 的记载。完成条件：文档与 `design.md` D1–D7 一致，引用关系可被 `check:doc-links` 接受；`docs/CONFIG_REFERENCE.md` 未被改动（本变更不新增键、不改默认值）。
+- [x] 2.2 WP1；前置：2.1；实现 Agent（coder）。在 `Cargo.toml` 的 `[workspace.dependencies]` 登记 `getrandom` 与（`cfg(windows)` 的）DPAPI wrapper，并修正密码学原语的「本次增量无 crate 使用」注释为「`identity-auth`/`identity-keystore` 已消费」；**不**新增 `[workspace] members`（成员由 2.9/2.15 按波次加入）。完成条件：`cargo metadata --no-deps` 可解析；依赖登记与 `deny.toml` 的 allow 列表、`[graph] targets`（Windows x64 + Linux gnu）不冲突；不抬高 `rust-version`。
+- [x] 2.3 WP1；前置：1.3、2.2；实现 Agent（coder）。在成员未加入的状态下跑局部验证：`npm run check`（重点 `check:doc-links`、`check:command-catalog`、`check:contract-drift`）与 `node scripts/check-crate-boundaries.mjs`。完成条件：[PV1]/[PV2] 的 W0 轮次通过（此阶段 PV2 只核对既有成员与 `core` 闭包），日志写入 `reports/wp1-boundaries.log` 与 `reports/du1-pv1.log`（W0 轮次可覆盖写入，最终轮次在 6.3/6.7/7.1 重跑）。
+- [x] 2.4 WP2；前置：2.1；实现 Agent（coder）。建立 `crates/identity-auth` 骨架并把该 crate 写入 `[workspace] members`；实现 transcript 装配（`design.md` D2）：按 `sync_protocol::domains::DOMAINS` / `node_link_protocol::domains::DOMAINS` 查找域并按字段顺序装配字节（UUID→16 字节、`u64be`、`u16be`、65 字节公钥、32 字节 nonce、NUL 连接特性、UTF-8 文本），HMAC 与 P1363 验签按表的 `Proof` 选择（验签前先断言长度，代码中不出现 `from_der`）。完成条件：[PV3] 中「12 个固定向量逐字节重算 + 签名域固定签名验证 + `invalid/` 负例被拒」全部通过，日志写入 `reports/wp2-identity-auth-pairing.log` 与 `reports/wp2-identity-auth-handshake.log`。
+- [x] 2.5 WP2；前置：2.4；实现 Agent（coder）。实现配对状态机（`design.md` D3）：创建（目标/请求集合/有效期上界/内存 secret + digest）、认领校验（结构 → 绑定 → HMAC；幂等与冲突；失败计数与第 5 次失效写集）、落定（批准/拒绝；设备只带 scope、节点只带 grant）、SAS 派生、过期与重启终结。完成条件：[PV3] 覆盖 [R1]–[R29] 的全部配对场景（含并发认领、重复认领、过期、重启不可恢复、已撤销不可复活、公钥变化），日志写入 `reports/wp2-identity-auth-pairing.log`。
+- [x] 2.6 WP2；前置：2.4；实现 Agent（coder）。实现握手入口（`design.md` D4）：`hello` 签发挑战（未知对端也签发，含宿主证明）、`verify_proof`（检查顺序结构 → 挑战一次性与 15 秒 TTL → 绑定 → 用快照公钥验签）、`complete` 收尾写集，以及事实与凭据状态（`Active`/`ScopeReduced`/`Revoked`/`Unknown`）的输出。完成条件：[PV3] 覆盖 [R30]–[R52] 的全部握手场景（含重放、未知挑战、注入时钟过期、自选公钥不通过、high-S/low-S、零值分量、非规范 base64url），日志写入 `reports/wp2-identity-auth-handshake.log`。
+- [x] 2.7 WP2；前置：2.1；实现 Agent（coder）。实现授权展开表与展开函数（`design.md` D5）：`pack.*`/`preset.*`/`grant.*` → `ScopeSet`/`GrantSet`；未知名称显式失败且不部分展开；`local.*` 7 项进入拒绝集合；新增读取 `compatibility/commands/v1/commands.json` 的漂移测试（dev-dependency `serde_json`）。完成条件：[PV3] 覆盖 [R53]–[R68] 的全部展开场景（表与资产逐项相等、preset 递归与去重、包名不泄漏、本地能力被拒），日志写入 `reports/wp2-identity-auth-expansion.log`。
+- [x] 2.8 WP2；前置：2.4；实现 Agent（coder）。定义端口与秘密类型（`design.md` D1/D3/D6/D8）：`IdentityKeystore`（`generate`/`public_key`/`sign`/`delete` 与 secret 读写删）、熵源端口、`KeyHandle`/`SecretBytes`（不实现 `Debug`/`Serialize`/`Display`）、`P1363Signature`、`KeystoreError`；建立 fake keystore / fake 熵源 / fake `Clock` 测试基座与「持锁不跨 `await`」的约束实现。完成条件：[PV3] 中端口与秘密类型的断言通过（含 `Debug` 输出不含秘密材料的跨 crate 断言），日志写入 `reports/wp2-identity-auth-ports.log`。
+- [x] 2.9 WP2；前置：2.4–2.8；实现 Agent（coder）。跑 WP2 的交付前局部验证：`cargo fmt --all -- --check`、`cargo clippy --locked -p identity-auth --all-targets --all-features -- -D warnings`、`cargo test --locked -p identity-auth --all-features`（[PV3]），并自检 `rg -n "cfg\\(windows\\)|cfg\\(unix\\)|cfg\\(target_os" crates/identity-auth/src`（零命中）、`rg -n "\.await" crates/identity-auth/src` 对照持锁位置。完成条件：[PV3] 全绿且无零用例/全跳过；端口与公共形状冻结，可供 WP3 与切片 4–7 使用。
+- [ ] 2.10 WP3；前置：1.4、2.9；实现 Agent（coder）。建立 `crates/identity-keystore` 骨架并把该 crate 写入 `[workspace] members`；实现条目格式与原子写（`design.md` D6：私有目录、`<purpose>/<label>.<version>`、自研头 + 32 字节私钥标量 + 域分离附加熵、临时文件 + 原子重命名、Unix `0700`/`0600`）、`EphemeralKeystore`（显式构造、默认不启用）与 `OsEntropy`（`getrandom`）。完成条件：[PV4] 中条目往返、删除后不可用、孤儿回收、默认档位非进程内实现等场景通过，日志写入 `reports/wp3-identity-keystore.log`。
+- [ ] 2.11 WP3；前置：2.2；实现 Agent（coder）。按 `docs/SECURITY_DESIGN.md` §20 对 DPAPI wrapper 候选做实证并把结论作为结构化 handoff 返回：`cargo tree` 传递依赖、许可证集合与 `deny.toml` allow 列表、`rust-version`/edition 与 1.85 的兼容性、以及「包裹私钥字节 + 进程内签名 + 当前用户 scope」的语义一致性。完成条件：实证留证（命令与输出）；结论为合格时把「wrapper 名称 + 版本 + 理由 + 已知代价」写入 handoff 供 2.16 采用；**不合格时立即停止该路径并记 BLOCKED**，把证据交用户决策（换 wrapper / 自写 wrapper crate + 新增 ADR / 抬 MSRV），不得自行放开 `unsafe` 或抬 MSRV。
+- [ ] 2.12 WP3；前置：2.11；实现 Agent（coder）。实现 Windows DPAPI 后端（`platform/` 的 `cfg(windows)` 模块）：`Scope::User` 解包/包裹、读公钥并输出 65 字节 SEC1、用 `p256` 在进程内签出 64 字节 P1363、条目损坏时失败而不覆盖、错误在端口边界映射为 `KeystoreError`（不外泄 `anyhow` 类型）。完成条件：[PV4] 的跨平台用例与 [PV5] 的 Windows 用例（往返、公钥/签名一致、被篡改条目不覆盖）通过，日志写入 `reports/wp3-identity-keystore.log` 与 `reports/pv5-windows-dpapi.log`。
+- [ ] 2.13 WP3；前置：2.10；实现 Agent（coder）。实现非 Windows 失败关闭（`platform/` 的 `cfg(not(windows))` 模块返回明确的不可用分类、零持久化写入），并补齐跨平台断言：缺条目/损坏条目 → 不可用且不生成新身份、平台不可用不降级为进程内实现、任何路径都不把密钥或凭据写进 `Debug`/日志/错误/测试快照。完成条件：[PV4] 的失败关闭与不泄漏用例通过（CI Linux 覆盖），Windows 上同一批用例同样执行。
+- [ ] 2.14 WP3；前置：2.12；实现 Agent（coder）。补齐条目与引用恢复语义的测试（`design.md` D6）：引用指向的条目缺失、条目被篡改、未被引用的孤儿被回收后现有身份仍可用，以及「引用提交失败时旧引用仍解析到可用条目」的可观察结论（在 fake 引用侧模拟）。完成条件：[PV4] 的相关场景通过；用例自建临时目录并在结束时删除，不留下无法解包的条目影响后续轮次。
+- [ ] 2.15 WP3；前置：2.12–2.14；实现 Agent（coder）。在 `.gitleaks.toml` 增加自研 keystore 条目**明文**形态的规则，并在注释中记录「DPAPI 包裹后的字节不可用模式识别、该限制不假装覆盖密文」；随后跑 WP3 的交付前局部验证：`cargo fmt --all -- --check`、`cargo clippy --locked -p identity-keystore --all-targets --all-features -- -D warnings`、`cargo test --locked -p identity-keystore --all-features`（[PV4]）与 Windows 本机的 [PV5]。完成条件：[PV4]/[PV5] 全绿且无零用例/全跳过；`gitleaks` 本地无等价物，该规则的首次真实执行在 CI，如实记录不作通过声明。
+- [ ] 2.16 WP4；前置：2.9、2.15；实现 Agent（coder）。把「已落地」标记与 DPAPI wrapper 选型结论写回：`docs/MODULE_ARCHITECTURE.md` §3/§3.1（`getrandom` 与 wrapper 的版本口径、两个 crate 已落地）/§4.12（选型结论与已知代价），并更新 `README.md`「仓库当前状态」、`docs/DEVELOPMENT_PLAN.md` §2、`AGENTS.md` §4 的模块状态表。完成条件：文档陈述与实际 `cargo metadata`/`cargo tree` 一致；不改动 `docs/DEVELOPMENT_PLAN.md` 的切片顺序与验收表述，也不把 `server`/`app` 写成已落地。
+- [ ] 2.17 WP4；前置：2.16；实现 Agent（coder）。在成员已加入的状态下跑全量统一入口 `npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]）。完成条件：两个检查在固定版本上全绿、日志写入 `reports/du1-pv1.log`；若出现既有门禁因本变更变红（如 §5 矩阵断言、文档引用），就地修复后再跑，不以「稍后修」结项。
+
+## 3. Branch Validation
+
+- [ ] 3.1 WP1；前置：2.3；实现 Agent（coder）。按计划 Check ID 完成 WP1 的交付前 project verify：在 WP1 的固定版本上执行 `npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]），逐项记录完整命令、工具链版本、退出码与日志路径。完成条件：两项通过；资源（临时目录/worktree）已核实释放。
+- [ ] 3.2 WP1；前置：2.3；独立 reviewer。新建**不继承实现对话**的只读 reviewer 子 Agent，按 `roles/reviewer.md` 检视 WP1 的固定版本 diff 与契约（合同定型措辞是否与 `design.md` D4/D6 一致、依赖口径与 `[workspace.dependencies]`、`check:doc-links` 的引用归属）。完成条件：`reports/rv1-wp1.md` 记录 Agent ID、版本、隔离方式与结论；有阻断项时修复后由新的隔离子 Agent 复核。
+- [ ] 3.3 WP2；前置：2.9；实现 Agent（coder）。完成 WP2 的交付前 project verify：`cargo test --locked -p identity-auth --all-features`（[PV3]）、`node scripts/check-crate-boundaries.mjs`（[PV2]）、`npm run verify`（[PV1]），并核对 [PV3] 的用例确实被执行（无 0 用例、无全跳过）。完成条件：三项通过并逐 ID 记录日志路径；资源已释放。
+- [ ] 3.4 WP2；前置：2.9；独立 reviewer。新建隔离子 Agent 检视 WP2：transcript 装配是否只从协议表取域与 tag、验签公钥是否只来自快照、是否存在 `from_der`、一次性消费与重放顺序、展开表与 `commands.json` 的逐项一致、持锁是否跨 `await`、`cfg` 是否零命中。完成条件：`reports/rv1-wp2.md` 记录隔离方式、版本与结论；阻断项修复后由新的隔离子 Agent 复核。
+- [ ] 3.5 WP3；前置：2.15；实现 Agent（coder）。完成 WP3 的交付前 project verify：`cargo test --locked -p identity-keystore --all-features`（[PV4]）、Windows 本机 `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture`（[PV5]）、`npm run verify`（[PV1]），并记录 Windows 上被跳过的用例数与原因。完成条件：三项通过（[PV5] 无法在本地 Windows 执行时如实记 BLOCKED）并留证；DPAPI 用例的临时目录已清理。
+- [ ] 3.6 WP3；前置：2.15；独立 reviewer。新建隔离子 Agent 检视 WP3：条目格式与原子写、失败关闭路径、密钥/凭据是否可能进入 `Debug`/日志/错误/测试快照、DPAPI 使用是否仅为「包裹 + 进程内签名」、选型实证是否留证、`.gitleaks.toml` 限制注释是否诚实。完成条件：`reports/rv1-wp3.md` 记录隔离方式、版本与结论；阻断项修复后复核。
+- [ ] 3.7 WP4；前置：2.17；实现 Agent（coder）。完成 WP4 的交付前 project verify：`npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]，成员已加入后逐条核对 §5 两行）。完成条件：两项在固定版本上通过，日志写入 `reports/du1-pv1.log`。
+- [ ] 3.8 WP4；前置：2.17；独立 reviewer。新建隔离子 Agent 检视 WP4 的文档改动：状态表与版本口径是否与 `cargo metadata`/`cargo tree` 实际一致、是否误改切片顺序或验收表述、是否把未落地 crate 写成已落地。完成条件：`reports/rv1-wp4.md` 记录隔离方式、版本与结论；阻断项修复后复核。
+
+## 4. Test Design and Authoring
+
+不适用（Main E2E mode = `not-applicable`，无 TP 与 E2E 用例设计）；本组按模板要求删除。各工作包自带的行为测试与 fixtures 驱动测试已在第 2、3 组覆盖，最终替代验证在第 7 组。
+
+## 5. Integration Readiness
+
+- [ ] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
+- [ ] 5.2 DU1；前置：3.1–3.8；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP4），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
+
+## 6. Merge Unit
+
+- [ ] 6.1 DU1；前置：5.2；主 Agent（机械核实可派发 environment/recon）。按计划核实目标仓库与主分支当前提交：`git -C D:\Project\acp-remote rev-parse refs/heads/main`、`git status --porcelain`、`git worktree list`，记录准确引用与核实证据。完成条件：基线提交被明确记录到 `verification.md`；无法确认目标时保持 BLOCKED，不凭 `HEAD` 或上次记录的引用继续。
+- [ ] 6.2 DU1；前置：6.1；集成执行者。基于已核实基线构造 DU1 候选：确认变更分支包含 WP1–WP4 的全部提交、成员与依赖登记完整、`reports/` 与 `verification.md` 已登记；固定基线与候选版本并记录组成与构建结果（`cargo build --locked --workspace --all-features`）。完成条件：候选版本可固定（提交哈希）且组成可复述；基线变化时从 6.1 重开。
+- [ ] 6.3 DU1；前置：6.2；检查执行者。按计划 Check ID 完成候选 Project Verify：[PV1]、[PV2]、[PV3]、[PV4]，并按平台条件执行 [PV5]（Linux CI 不覆盖该路径，需本地 Windows 执行）。完成条件：逐项记录版本、范围、退出码、日志路径，且无零用例/全跳过；有效复用旧证据时逐项写明适用性。
+- [ ] 6.4 DU1；前置：6.2；独立 reviewer。只读检视固定候选的新增交互与冲突解决（合同定型 ↔ 实现、`Cargo.toml` 成员与依赖、`.gitleaks.toml` 规则、文档口径），必要时复核 [PV2] 的差异结论；待返回的检查证据在证据交付前补齐核对。完成条件：`reports/rv1-du1.md` 记录隔离设置、版本与结论；阻断项修复后由新的隔离子 Agent 复核。
+- [ ] 6.5 DU1（`not-applicable` 路径）；前置：6.2；主 Agent。核对 Main E2E 的 `not-applicable` 理由与依据仍成立（仓库无可端到端运行的产品入口、`x-agentic.e2e.command` 为空、用户降级批准记录有效并已写入 `plan.md`），并确认候选阶段的替代检查覆盖（[PV3]/[PV4]/[PV5] 的候选轮次已完成、证据可读）。完成条件：四项（reason/basis/alternative_checks/downgrade_approval）与 `plan.md` 一致且未被实现期改动削弱；不在候选阶段重复第 7 组的最终替代验证。
+- [ ] 6.6 DU1；前置：6.3、6.4、6.5；集成执行者。确认候选证据完整后按计划核对基线，以条件更新或串行合并机制防止竞态，把 DU1 合入本地主分支并记录实际提交；**不 push**（远端操作另需明确授权）。完成条件：主分支实际提交与候选一致性可核对；基线在候选中途变化时重开受影响的 6.1–6.5。
+- [ ] 6.7 DU1；前置：6.6；检查执行者。核对实际主分支结果与候选一致，并完成计划内必需的主分支回归：[PV1]、[PV2]（以及按平台条件可行的 [PV3]/[PV4]）。完成条件：日志写入 `reports/du1-main-verify.log`；逐项记录复用的旧证据与适用性判断；通过前不处理任何后续合入单元。
+- [ ] 6.8 DU1；前置：6.6；独立 reviewer。检视合并到主分支后新增的差异（相对候选是否引入冲突解决或额外改动）。完成条件：无新增差异时由主 Agent 记录依据并引用 6.4 的 review ID；有新增差异时由隔离子 Agent 复核并留证；通过前不处理后续合入单元。
+
+## 7. Final E2E
+
+- [ ] 7.1 全变更（`not-applicable` 的替代验证）；前置：6.7；主 Agent（可派发独立执行者采集原始输出）。在最终主分支的固定版本上执行 `plan.md` 的 `alternative_checks`：`cargo test --locked -p identity-auth --all-features`（[PV3]）、`cargo test --locked -p identity-keystore --all-features`（[PV4]）、Windows 本机 `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture`（[PV5]）、`npm run check` 与 `npm run verify`（[PV1]/[PV2]）。完成条件：返回逐项原始结果（命令、版本、退出码、日志路径、跳过数与原因）；这是替代验证的**真实执行**，不以任何检查的 PASS 作为本任务的完成条件。
+- [ ] 7.2 全变更；前置：7.1；主 Agent。汇总全部必要覆盖行的断言、版本与隔离证据，处理执行中出现的问题（失败按原 WP 重新派发并重跑受影响检查），核实运行资源（临时 keystore 目录、worktree、`CARGO_TARGET_DIR`）已清理，并把 Main E2E 结论记为 `NOT_APPLICABLE`（附理由、依据与全部通过的替代验证）。完成条件：`verification.md` 中替代验证与覆盖索引逐行关联、无未闭环 FAIL/BLOCKED、无残留资源。
+- [ ] 7.3 [e2e-owned] 全变更；前置：7.2；扩展（openspec-agentic）。运行 `npx --quiet --no-install openspec-agentic e2e check --change identity-auth-and-keystore`，确认「不适用判据已按计划固化」（降级批准可追溯、替代检查清单齐备）。完成条件：由该检查在 PASS 时自动勾选本行、非 PASS 时自动回退；主 Agent 不得手勾或手动回退。本行只检查门禁，不执行测试、不汇总结果。
+
+## 8. Final Verification
+
+- [ ] 8.1 [final-verification] 全变更；前置：7.3；主 Agent。读取并执行 `.agents/skills/agentic-verify/SKILL.md`（`/opsx:verify` 同样走该入口），核对用户意图（proposal 的 `agentic-intent` 与两条批准）、4 个能力的全部需求与场景、`design.md` 的 D1–D9、本计划的覆盖索引与任务、以及最终主分支上的实际证据；从持续维护的 `verification.md` 写入当前 `agentic-assessment`，再运行 `npx --quiet --no-install openspec-agentic workflow check --change identity-auth-and-keystore --stage final --json`。完成条件：全部检查通过后才勾选本行；结论为 FAIL/BLOCKED 时先定位到责任工作包或规范并修复/同步后再验收；验收期间仅本行自身可待办，其余任务必须已完成。本行不授权合并、推送、回滚、发布或归档。
