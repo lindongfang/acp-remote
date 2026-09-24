@@ -119,8 +119,10 @@ impl Authority {
         fields: &ClaimFields,           // 已解码的 claim 字段（含 65 字节公钥）
     ) -> Result<ClaimOutcome, PairingError>;
 
-    // 落定：批准要求 pending_confirmation 且未过期，且最终集合不超出请求值；批准时把内存材料
-    // 标记为「已批准」（只有它才可能成为 complete_auth 的消费目标）。
+    // 落定：批准要求 pending_confirmation 且未过期，且最终集合不超出请求值。`settle` **不**在内存里
+    // 置位「已批准」：置位由调用方在 §11.6 的批准写集**提交成功后**调用 `mark_pairing_approved`
+    // 完成（design D3：内存态绝不超前于已提交状态）；只有「已批准且仍持有 secret」的配对才可能
+    // 成为 complete_auth 的消费目标。
     // 拒绝可从 created/pending_confirmation 进入。
     // **两条路径都不在落定时清除 secret**：批准后的配对还要支持状态查询的 HMAC 证明，直到
     // 「首次认证成功」才提前清除；拒绝的配对可为可靠轮询保留到原过期时间。上界一律是 expires_at。
@@ -311,12 +313,6 @@ pub struct PeerTrust {
   认证收尾对外只有**一个**名字 `complete_auth`（其实现体是 crate 私有的 `complete`）。
   「三个握手入口中唯一带 `await` 的是 `hello`」——另有上列的 `async` 辅助入口（`node_public_key`/四个
   `sign_*`），因此该表述限指三个握手入口。
-- `[决定]`（2026-09-24 实现）`verify_proof` 额外核对「快照主体 == 提交主体」（`trust.peer != submission.peer`
-  → `HandshakeError::UntrustedPeer`）：它拦住「adapter 传错快照、用别的对端的公钥验签」这类接线错误。
-  失败分类仍统一为对端可见的 `AuthenticationFailed`。
-- `[决定]`（2026-09-24 实现）诊断/测试入口属于公开 API 的一部分：`Authority::challenge_cache_len()`、
-  `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。除 `pairing_status` 外都**不**返回
-  秘密材料，只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
 - `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。
 - `[决定]` 三个入口都不读系统时间、不碰 SQLite：持久化事实由返回值带着交给调用方，由写集端口落库（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）。

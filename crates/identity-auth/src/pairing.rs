@@ -267,8 +267,9 @@ impl Authority {
     /// 被拒绝的配对也可以为可靠轮询保留到原过期时间——两条路径的上界都是 `expires_at`，
     /// 由 [`Authority::due_pairings`] 在过期时统一清除（**包含已终结的 `rejected` 记录**）。
     ///
-    /// 批准时会把内存材料标记为「已批准」，使 [`Authority::complete`] 只能把**已批准**的
-    /// 配对作为消费目标。
+    /// **不**在落定时置位「已批准」：[`Authority::mark_pairing_approved`] 由调用方在持久化提交
+    /// **成功之后**调用（design D3：内存态绝不超前于已提交状态），使 [`Authority::complete`]
+    /// 只能把**已批准**的配对作为消费目标。
     pub fn settle(
         &self,
         pairing: &PairingRecord,

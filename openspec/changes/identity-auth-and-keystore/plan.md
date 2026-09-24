@@ -790,7 +790,7 @@ rows:
 
 - Integration Branch / Worktree: `feat/identity-auth-and-keystore`（主 worktree；如需并行分片则用 `CARGO_TARGET_DIR` 隔离构建目录）
 - Source Revision / Handoff: 变更分支起点 = 计划确认时的 `refs/heads/main` 提交（在 6.1 记录固定值）
-- Operation Boundary / Report Path: apply 覆盖本地合入；推送远端、回滚与发布另需明确授权；集成报告写入 `reports/du1-integration.md`
+- Operation Boundary / Report Path: apply 覆盖本地合入；推送远端、回滚与发布另需明确授权；集成报告写入 `openspec/changes/identity-auth-and-keystore/reports/du1-integration.md`
 
 采用 integrated 的理由：`Cargo.toml` 的 `members`、`MODULE_ARCHITECTURE.md` §5 的记载与两个 crate 的实现/测试由 `check:boundaries` 相互绑定；`identity-keystore` 的编译依赖 `identity-auth` 的公开端口，`.gitleaks.toml` 的规则依赖 WP3 定型的条目格式。任何一方单独先合入都会让 `main` 上的 `npm run check` 或 `cargo build --workspace` 变红，因此必须作为一个交付单元一次性合入。
 
@@ -801,7 +801,7 @@ rows:
 - 实现期：`cargo fmt --all -- --check`、`cargo clippy --locked -p identity-auth -p identity-keystore --all-targets --all-features -- -D warnings`、`cargo test --locked -p identity-auth --all-features`、`cargo test --locked -p identity-keystore --all-features`。
 - 合同侧：`node scripts/check-crate-boundaries.mjs`、`node scripts/check-doc-links.mjs`（改文档后必跑）、`node scripts/check-command-catalog.mjs`（确认 `commands.json` 与相关表格未被改动）。
 - 平台侧：Windows 本机执行 `cargo test --locked -p identity-keystore --all-features dpapi -- --nocapture` 并保存原始日志。
-- 审查重点自检：`rg -n "from_der|unwrap\\(|expect\\(" crates/identity-auth/src crates/identity-keystore/src`（**可失败路径**零命中；已确认为不变的构造与测试内部断言不计入，命中处必须在 `verification.md` 逐条登记理由）、`rg -n "cfg\\(windows\\)|cfg\\(unix\\)|cfg\\(target_os" crates/identity-auth/src`（零命中）、`rg -n "\\.await" crates/identity-auth/src` 对照持锁位置（不得跨 `await` 持锁）。
+- 审查重点自检：`grep -rn "unwrap()\|expect(\|panic!\|unreachable!\|from_der" crates/identity-auth/src crates/identity-keystore/src`" crates/identity-auth/src crates/identity-keystore/src`（**可失败路径**零命中；已确认为不变的构造与测试内部断言不计入，命中处必须在 `verification.md` 逐条登记理由）、`rg -n "cfg\\(windows\\)|cfg\\(unix\\)|cfg\\(target_os" crates/identity-auth/src`（零命中）、`rg -n "\\.await" crates/identity-auth/src` 对照持锁位置（不得跨 `await` 持锁）。
 
 ### Project Verify
 
