@@ -253,12 +253,45 @@
 
 ## Final Assessment
 
+- Assessment ID / Time: `round-2-final` / 2026-09-24（本会话）/ 执行者：主 Agent
+- Target / Task: 本地主分支 `refs/heads/main` = `b36088f8f64927413c25bce655ac69f9728affbd`（`git rev-parse` 核实；`workflow check --stage final` 的 `targetCommit` 与之一致，且 `HEAD == refs/heads/main`）；被验收的代码实现为 `e4a4492`（此后仅文档/证据提交，RV-DU1 已核实零代码差异）；最终验收任务 ID = `8.1`（`[final-verification]`）。E2E mode = `not-applicable`，批准记录可追溯（`plan.md` 的 `downgrade_approval` = 用户原话「1. 同意 2. 同意」，2026-09-24）。
+- CLI State: `npx --quiet --no-install openspec status --change acp-boundary-and-agent-host`（2026-09-24，任务勾选前查询）= 三个规划 artifact 全部 `[x]`（`All planning artifacts complete!`）；`openspec-agentic e2e check --json` = **PASS**（`enabled: true`、`mode: not-applicable`、`approval: true`、`marked: true`，并按 `[e2e-owned]` 自动勾选 7.3）。CLI 状态仅如实引用原始输出，不用本验收结论改写其含义。
+- Audit / Evidence: 六个审计组逐组核对通过——**Contracts and Coverage**（plan 的 Coverage Index 逐项有任务/检查/证据；`checks` 门禁断言 §5 矩阵 8 个已登记 crate 与 `Cargo.toml` 一致；4 条 Check Plan Change 均登记理由、受影响任务与风险覆盖）；**Delivery and Versions**（审计组引用的 Merge History/交接/Spec 版本证据见本文件对应节：5.1 交接记录（独立集成 Agent，fresh 上下文，交接 `roles/integrator.md` 全文，无合并授权）、6.2 候选构建 exit 0、6.6 本地 fast-forward 合入并登记顺序偏差、6.7 同 SHA 复跑）；**Project Checks and Resources**（`reports/du1-pv1.log` = `npm run verify` exit 0，十道门禁逐道 exit 0 + fmt + clippy + 378 passed/2 ignored；`reports/du1-main-verify.log` 为同 SHA 复跑；Runtime Resources 节记录资源与隔离；并如实记录 2 条既有 `#[ignore]` 属其它 crate 且带理由）；**Independent Reviews**（RV1 4 个 WP 全 FAIL → 修复；RV2 代码 PASS/文档 FAIL → 修复；RV3 无 BLOCKER、WP5 2 MAJOR → 修复；RV4 两轮无阻断 + 新批次 → 修复；RV5 无阻断 + 6 条文档事实残留 → 已修复；RV-DU1 6.4/6.8 PASS，F1/F2 已修复、F3/F4/F5/F6 有处置结论；所有 CRITICAL/MAJOR 均有复核闭环）；**E2E Design and Execution**（`not-applicable` + 四项替代检查在固定版本 `1035395` 逐项通过，见 `reports/alt-final-verification.md`）；**Issue Closure and Evidence Validity**（`Failures and Retests` 的 WP2-BUILD-1/WP2-TEST-1/FRAMING-1/ROUTE-1/ENVCTL-1/RV1-1/RV3-1/RV3-2 均已解决或有复核结论；未解决项均为非阻断并逐条给出处置与绑定条件）。有效证据记录 ID 与摘要见上面的 `agentic-assessment`（13 条，已按当前文件内容逐一核对 sha256）；失效/复用判断：候选与主分支同 SHA 使 PV1 证据可复用，文档提交不改代码故 RV 结论仍适用，RV3/RV4/RV5/RV-DU1 的 review ID 与适用版本均按原报告引用。
+- Result / Open Issues: **PASS**（本轮目标 `b36088f8…` 及上述有效证据）。未解决的非阻断项（全部登记于「仍未处理」，且均绑定「接线 `app` 之前收口」）：`RV-WP3-F4`（Unix pid 复用窗口，接受风险）、`RV-WP2-F6`/`RV-WP2-F3`、`RV-WP1-F4`（§5 缺列）、`RV3-Q4-3` 残余交错、`RV3-Q4-4`（跨 await 持锁，活性）、`RV3-Q3-2`、`RV3-Q4-6` 残余、`RV-DU1-F3/F4/F5/F6`、以及 `Check Plan Change 3` 的 core 侧 `turnId`/`version` 收口（已获用户裁定，留待下一变更）。**未在本机执行**：Linux 上 `#[cfg(unix)]` 的运行行为（仅编译核验）、`cargo-deny` 与 `gitleaks`（仅 CI）、真实 Codex/OMP 兼容套件。
+- Required Follow-up: ①无（本轮目标与有效证据下验收 PASS）；②归档前用 `--stage archive` 复跑（须全部任务完成）；③任何新的提交（含把本验收记录提交）都会移动 `refs/heads/main`，使 `target_commit` 失效，需按 acceptance 的「版本变化重新评估」刷新结论后再归档；④下一变更：core 侧注入 `turnId`/`version`，并连同上述「接线 `app` 之前」项一起收口。
+
 ```agentic-assessment
-assessment_id: "round-1"
-target_commit: ""
-contract_digest: ""
-result: BLOCKED
-evidence: []
+assessment_id: "round-2-final"
+target_commit: "b36088f8f64927413c25bce655ac69f9728affbd"
+contract_digest: "sha256:e23ad72ebfa95151a2f572d269a3f6f81251f04783ff8df5b3d5e68a94d73e4a"
+result: PASS
+evidence:
+  - path: reports/wp2-acp-protocol-tests.log
+    sha256: "sha256:32c39b5d5c7d785e15d3fea6705ac8a02d27e4caccf90e17ce2d9c03ce5d0bac"
+  - path: reports/wp1-acp-assets.log
+    sha256: "sha256:be43b9b10852da4957427b09322aec931368ce1707d85724eef8031b90672b74"
+  - path: reports/wp5-agent-host-config.log
+    sha256: "sha256:deffa94c376e7d445bc36b8b61f3faa714febe7257c052de4ba608352321bb20"
+  - path: reports/wp4-agent-host-session.log
+    sha256: "sha256:4fe460b8d0ce833d86fcd6a7e5e227b77c502722a6894d7d233665b69cb7858d"
+  - path: reports/wp3-agent-host-supervision.log
+    sha256: "sha256:734758a0f778a2cd5232d3a62f1feb183d1a32f1e814587a7150d5f381a43da5"
+  - path: reports/pv5-windows-tree.log
+    sha256: "sha256:edc257f62be7a6696c3d4381ca1dd7979da3d471ca54a892ee5f8ac7a3c7a79e"
+  - path: reports/du1-pv1.log
+    sha256: "sha256:0ceb0c04cf0fec4cca4f7906191cbf634b962f0172b6f9260796a622bdadd04e"
+  - path: reports/du1-main-verify.log
+    sha256: "sha256:b09fa3a4411576d224fa39ca4c5123148f36c3c8572823d3328d3d7abf9b6b2f"
+  - path: reports/alt-final-verification.md
+    sha256: "sha256:1c42c772f7da7be57250b298d989cb365a6c9ab5b6b8d390d9ce89a42881ac12"
+  - path: reports/rv1-du1.md
+    sha256: "sha256:2389d67ebe100844ad29c933ab150d596d20ae33d94c22b8e00bcbde2a4ad46b"
+  - path: reports/rv1-wp5.md
+    sha256: "sha256:a578e13b8f69cd303e0deb00e32a1c016e1a6feed3cca9ad8264b0bb4fa248a5"
+  - path: reports/rv1-wp1.md
+    sha256: "sha256:e046024b17b1f26e8b5949929f0bc5db84cf9b756d370395c324a57ca5a7264b"
+  - path: reports/du1-integration.md
+    sha256: "sha256:3e5b6d01dc9f675a868076de063a6d5a2726b7bb7c2f0a00feb6e8d56bf73fd5"
 ```
 
 - Assessment ID / Time: round-1；本轮推进到 WP5 实现与 PV4/PV5/集成检查完成，未进入最终验收
