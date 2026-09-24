@@ -46,8 +46,9 @@
 - 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingTarget`（纯 token 枚举，不带载荷）、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`、`AuditAction`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。`identity-auth` 把其中出现在端口与公开 API 里的类型**如实转出**（`pub use acp_core::model::{…}`），使端口实现方（`identity-keystore`）无需依赖 `core`（§5 依赖矩阵不允许该边）。
 - 已在 `core::model` 落地：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）与写集相关 DTO（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
 - 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`Completion`（收尾入口的返回值：事实 + 时间 + 需要推进为 `consumed` 的配对）、`IdentityFact`、`Authenticated`、`CredentialStatus`、`HandshakeFailure`/`HandshakeFailureClass`、`PairingSpec`（配对目标 + 本机绑定：设备为 canonical origin、节点为 endpoint 与角色）、`PairingDecision`、`PairingDraft`、`PairingRequestId`、`ClaimFields`、`ClaimKindFields`、`ClaimOutcome`、`ClaimRejection`/`ClaimFailureClass`、`ClaimedPairing`、`RequestedCapabilities`、`PairingStatusView`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`Sas`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
+- 只存在于 `identity-auth`、且与其它 crate 有**同名类型**的（务必按下表指认，不要串用）：`FeatureList`（本 crate 自己实现的连接特性列表；与 `acpr-wire::FeatureList` **不是同一个类型**，依赖矩阵也禁止 `identity-auth` 依赖 `acpr-wire`——§5.1 签名块里的 `FeatureList` 指的就是本 crate 的这一个）、`ClientKind`（与 `sync_protocol::auth::ClientKind` 同名不同物）、`PairingProof`（配对期 HMAC 证明的载荷形状）。
 - 只存在于 `identity-auth` 的**授权词表镜像**：`authorization::{PACKS, PRESETS, GRANTS, LOCAL_CAPABILITIES}`；唯一机器来源仍是 `compatibility/commands/v1/commands.json`（§6.1），镜像由常驻测试逐项断言。
-- 只存在于 `identity-keystore` 边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`（§7）。
+- **由 `identity-auth` 定义、由 `identity-keystore` 实现**的 keystore 端口边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`、`P1363Signature`、`EntropySource`/`EntropyError`（§7）。定义方是 `identity-auth`——端口 trait 与这些类型都在 `crates/identity-auth/src/port.rs`；`identity-keystore` 只 `use` 端口，不自己定义同名类型（§5 依赖矩阵不允许它依赖 `core`）。
 
 ## 3. 密钥与身份材料
 
@@ -309,7 +310,8 @@ pub struct PeerTrust {
   `sign_sync_host_challenge`/`sign_node_link_pairing_owner_proof`/`sign_node_link_challenge`，async；
   各签发一次域分离证明）、`mark_pairing_approved(&PairingId) -> bool`（**调用方在 §11.6 提交成功后**置位
   「该配对已批准」，见 §4.1 与 design D3：内存态绝不超前于已提交状态）、`challenge_cache_len()`、
-  `failure_count`、`has_secret`（测试/诊断，不含秘密材料）与常量 `MAX_CHALLENGES`。
+  `failure_count`、`has_secret`（测试/诊断，不含秘密材料）、常量 `MAX_CHALLENGES`，以及构造子
+  `new(clock, entropy, local_node, keystore)`（组合根装配用，§2「调用方负责装配」）。
   认证收尾对外只有**一个**名字 `complete_auth`（其实现体是 crate 私有的 `complete`）。
   「三个握手入口中唯一带 `await` 的是 `hello`」——另有上列的 `async` 辅助入口（`node_public_key`/四个
   `sign_*`），因此该表述限指三个握手入口。
@@ -339,13 +341,6 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 - `[决定]` `Revoked`/`Unknown` 必须映射为 `auth.device_revoked`/`auth.device_unknown`（节点侧为 Node Link 的对应码），不得降级为 `authorization.scope_denied`——两类的可重试性与客户端行为不同。
 
 ### 5.2 nonce、重放与时钟
-
-`[决定]`（2026-09-24 实现）**挑战缓存有硬上限**：`MAX_CHALLENGES = 1024`，签发时先用注入时钟清扫
-已过期条目，满时淘汰**最早过期**的一条再插入（`state.rs` 的 `put_challenge`）。依据是我们自己的
-资源限制要求（`AGENTS.md` §5 的数量/资源上限）：只会被 `verify_proof` 消费的挑战，在「完成 hello 但不发
-proof」的连接上会永不消费，因此内存上界必须与真实并发连接数解耦。被淘汰/被清扫的客户端拿到统一的
-证明失败分类并重新握手——不泄露存在性，也不改变一次性消费语义。
-
 
 `[决定]`（2026-09-24 实现）**挑战缓存有硬上限**：`MAX_CHALLENGES = 1024`，签发时先用注入时钟清扫
 已过期条目，满时淘汰**最早过期**的一条再插入（`state.rs` 的 `put_challenge`）。依据是我们自己的

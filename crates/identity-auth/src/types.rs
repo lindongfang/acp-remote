@@ -8,6 +8,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use acp_core::model::InvalidValue;
 use acp_core::model::{
     AuditAction, DeviceId, Digest, Fingerprint, GrantSet, NodeId, NodeKind, Nonce, PairingId,
     PairingRecord, PairingState, PairingTarget, PeerIdentity, PeerPublicKey, ScopeSet, Timestamp,
@@ -249,11 +250,14 @@ impl PairingSecret {
     }
 
     /// 摘要：`SHA-256(secret)` 的规范无填充 base64url 文本（唯一落库形态）。
-    pub fn digest(&self) -> Digest {
+    ///
+    /// 返回 `Result` 而不是在内部断言：`AGENTS.md` §7 要求**正常运行路径**不使用
+    /// `unwrap`/`expect`，即使这里的不变式（32 字节 SHA-256 的 base64url 文本必然是规范
+    /// `Digest` 形状）客观成立。理论上不可达的分支交回调用方按错误处理，不靠 panic 表达。
+    pub fn digest(&self) -> Result<Digest, InvalidValue> {
         use sha2::Digest as _;
         let digest = sha2::Sha256::digest(self.0);
         Digest::new(&acpr_transcript::encode_base64url(&digest))
-            .expect("SHA-256 的 base64url 文本必然是规范 Digest 形状")
     }
 
     /// 比较（常量时间）。用于「摘要与内存 secret 是否一致」这类判定。

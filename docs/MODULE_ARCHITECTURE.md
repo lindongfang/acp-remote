@@ -212,7 +212,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
-管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。仍**未**实现的只是 Daemon/CLI 接线与 `identity-auth`/`identity-keystore`；在它们落地前不得声称这些管理能力已端到端可用。业务决定仍由 core 用例拥有。
+管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。仍未实现的是 Daemon/CLI 接线与 `server`/`app` 的入站适配器（`identity-auth`/`identity-keystore` 两个身份 crate **已落地**，见 §4.8/§4.12）；在接线完成前不得声称这些管理能力已端到端可用。业务决定仍由 core 用例拥有。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 

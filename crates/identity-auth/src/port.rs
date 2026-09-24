@@ -50,9 +50,8 @@ impl SecretPurpose {
 
 /// 不透明引用：**不是**密钥材料，可以落进 SQLite 的引用列，但不得进日志（`SECURITY_DESIGN.md` §14.1）。
 ///
-/// `Debug` 只表明类型、不打印内容（`AGENTS.md` §7「日志不得记录密钥」）：
-///
-///
+/// `Debug` 只表明类型、不打印内容（`AGENTS.md` §7「日志不得记录密钥」）：引用文本本身是
+/// 可落库的定位符，但把它写进日志会把「哪把密钥存在」暴露给日志读者，因此一律不打印。
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KeyHandle(String);
 

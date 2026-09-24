@@ -57,7 +57,7 @@ impl Authority {
             display_name.map(str::to_owned),
             requested.scopes.clone(),
             requested.grants.clone(),
-            secret.digest(),
+            secret.digest()?,
             spec.host_binding(),
             created_at.clone(),
             expires_at.clone(),

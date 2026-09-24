@@ -69,15 +69,19 @@ fn pairing_secret_debug_is_redacted_and_digest_differs() {
     // R71 / pairing secret 也不进日志：`Debug` 标记为 redacted，摘要不是 secret 本身。
     let secret = PairingSecret::try_from_bytes(&[7u8; 32]).expect("32 字节");
     assert_eq!(format!("{secret:?}"), "PairingSecret(<redacted>)");
-    let digest = secret.digest();
+    let digest = secret.digest().expect("摘要必须可构造");
     assert_ne!(
         digest.as_str(),
         acpr_transcript::encode_base64url(secret.as_bytes()),
         "落库的必须是摘要而不是 secret 本身"
     );
-    assert_eq!(digest, secret.digest(), "同一 secret 的摘要稳定");
+    assert_eq!(
+        digest,
+        secret.digest().expect("摘要必须可构造"),
+        "同一 secret 的摘要稳定"
+    );
     let other = PairingSecret::try_from_bytes(&[8u8; 32]).expect("32 字节");
-    assert_ne!(digest, other.digest());
+    assert_ne!(digest, other.digest().expect("摘要必须可构造"));
     assert!(secret.matches(&secret));
     assert!(!secret.matches(&other));
 }
