@@ -412,7 +412,7 @@ fn approve_requires_pending_and_within_requested() {
          真正清除发生在首次认证成功或到达 expires_at"
     );
     authority.due_pairings(
-        std::slice::from_ref(&created.draft.record),
+        std::slice::from_ref(&approved_record(&pending_record(&created.draft.record))),
         &ts(AFTER_WINDOW),
     );
     assert!(
@@ -466,7 +466,7 @@ fn reject_produces_no_trust() {
         "拒绝后保留到原过期时间"
     );
     authority.due_pairings(
-        std::slice::from_ref(&created.draft.record),
+        std::slice::from_ref(&rejected_record(&created.draft.record)),
         &ts(AFTER_WINDOW),
     );
     assert!(
@@ -587,6 +587,26 @@ fn approved_pairing_is_not_terminated_after_restart() {
     );
 }
 
+/// 落定后的 `rejected` 记录（终态）：用于「终态记录也受 secret 硬上界约束」的用例。
+fn rejected_record(record: &acp_core::model::PairingRecord) -> acp_core::model::PairingRecord {
+    acp_core::model::PairingRecord::try_new(
+        record.id().clone(),
+        record.target(),
+        PairingState::Rejected,
+        record.display_name().map(str::to_owned),
+        record.requested_scopes().clone(),
+        record.requested_grants().clone(),
+        record.secret_digest().clone(),
+        record.host_binding(),
+        record.created_at().clone(),
+        record.expires_at().clone(),
+        Some(ts(CREATED)),
+        None,
+        Some(ts(CREATED)),
+    )
+    .expect("测试记录必须合法")
+}
+
 fn approved_record(record: &acp_core::model::PairingRecord) -> acp_core::model::PairingRecord {
     acp_core::model::PairingRecord::try_new(
         record.id().clone(),
@@ -652,8 +672,7 @@ fn rejection_survives_until_original_expiry() {
 
 #[test]
 fn first_authentication_consumes_the_approved_pairing_once() {
-    // R54 的正向路径：批准后 secret 仍在内存 → 首次认证收尾必须给出消费目标；
-    // 第二次调用不再消费（避免重复推进状态）。
+    // R54 的正向路径：批准提交成功后，首次认证收尾必须给出消费目标；第二次不再消费。
     let created = create_device_pairing();
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
@@ -667,6 +686,25 @@ fn first_authentication_consumes_the_approved_pairing_once() {
             &ts(CREATED),
         )
         .expect("批准必须成功");
+    // 置位发生在**提交成功之后**（design D3）：在置位之前，本用例必须先证明「内存不超前」。
+    assert_eq!(
+        authority
+            .complete_auth(
+                identity_auth::IdentityFact::Device {
+                    device: device(DEVICE),
+                    scopes: scopes(&["session.list"]),
+                },
+                Some(&pairing(PAIRING)),
+                &ts(CREATED)
+            )
+            .consume_pairing,
+        None,
+        "批准写集尚未提交（未确认）时，内存不得超前：不得给出消费目标"
+    );
+    assert!(
+        authority.mark_pairing_approved(&pairing(PAIRING)),
+        "确认提交成功（模拟 §11.6 事务成功）"
+    );
     assert!(authority.has_secret(&pairing(PAIRING)));
 
     let fact = identity_auth::IdentityFact::Device {
@@ -694,6 +732,7 @@ fn first_authentication_consumes_the_approved_pairing_once() {
 
 #[test]
 fn approved_pairing_keeps_its_material_until_first_auth() {
+    // （提交确认由用例内显式调用 `mark_pairing_approved` 表达，见下。）
     // 批准后、首次认证前，secret 仍必须保留（合同 §4.3 只要求「首次认证成功时提前清除」，
     // 而 `pairing-status` 的 HMAC 证明在批准后仍可能被使用）。可断言的真实性质有两条：
     // ① 内存材料仍在；② 该配对被识别为「已批准但尚未消费」——即首次认证会给出消费目标。
@@ -711,6 +750,10 @@ fn approved_pairing_keeps_its_material_until_first_auth() {
         )
         .expect("批准必须成功");
     assert!(settlement.is_approved());
+    assert!(
+        authority.mark_pairing_approved(&pairing(PAIRING)),
+        "提交成功后确认「已批准」"
+    );
     assert!(
         authority.has_secret(&pairing(PAIRING)),
         "批准不得提前清除：状态查询的 HMAC 证明仍需要它"

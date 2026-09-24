@@ -300,7 +300,8 @@ impl Authority {
                 if !granted.within(&requested) {
                     return Err(PairingError::CapabilitiesExceedRequested);
                 }
-                self.state().mark_approved(pairing.id());
+                // **不**在这里置位「已批准」（design D3：内存态绝不超前于已提交状态）：置位由
+                // [`Authority::mark_pairing_approved`] 在调用方**提交成功之后**完成。
                 Ok(PairingSettlement::approved(
                     granted_scopes.clone(),
                     granted_grants.clone(),
@@ -393,6 +394,16 @@ impl Authority {
         }
     }
 
+    /// 确认「该配对的批准已**持久化提交成功**」（design D3：内存态只允许比已提交状态更严格，
+    /// 因此置位发生在提交之后，而不是 `settle` 内）。
+    ///
+    /// 返回 `false` 表示内存里已经没有该配对的材料（例如已过期被清理、或进程重启过）——
+    /// 调用方应把这个信号当作「本次批准的内存效果已不可用」处理（例如在日志/审计里记录），
+    /// 而不是当作成功。合同 §4.1 与 [`Authority::complete_auth`] 的语义依赖它被正确调用。
+    pub fn mark_pairing_approved(&self, pairing: &PairingId) -> bool {
+        self.state().mark_approved(pairing)
+    }
+
     /// 单个配对的累计 proof 失败次数。
     pub fn failure_count(&self, pairing: &PairingId) -> u32 {
         self.state().failures(pairing)
@@ -411,8 +422,9 @@ impl Authority {
     /// 保持 `pub(crate)` 以免出现两个对外名字（合同只登记 `complete_auth`）。
     ///
     /// 状态机内只做一件事：清除**已批准**配对的内存 secret（合同 §4.3 的「首次认证成功时提前清除」；
-    /// 「已批准」由 `settle(Approve)` 在内存材料上标记，因此未批准或已拒绝的配对不会被误当成
-    /// 消费目标）；返回的 [`Completion`] 告诉调用方需要落库的消费目标、与之一致的时间与本次事实。
+    /// 「已批准」只能由 [`Authority::mark_pairing_approved`] 在**持久化提交成功之后**置位，
+    /// 因此未批准、已拒绝或「提交失败」的配对都不会被误当成消费目标）；返回的 [`Completion`]
+    /// 告诉调用方需要落库的消费目标、与之一致的时间与本次事实。
     pub(crate) fn complete(
         &self,
         fact: IdentityFact,

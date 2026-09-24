@@ -135,6 +135,12 @@ impl Authority {
     // 硬上界，与记录是否已终结无关——rejected/expired 也在此清除）；返回值只含未终结、需要调用方
     // 按 §11.6 提交终态写集的配对。Approved 不是终态，因此「已批准但已过期」也在返回集里，
     // 其落库终态（approved_at 是否保留）由存储侧语义决定——这是留给切片 4/5 的开放项。
+    //
+    // 装配要求（否则「硬上界」不成立）：调用方必须把**存储里当前仍存在的、expires_at <= now 的
+    // 全部配对记录**（含 rejected/expired/consumed 等终态）传进来，且这次扫描必须**先于**任何
+    // 配对行的保留期/容量清理。若某条终态行在扫描前就被删除，它的内存 secret 只能等进程退出才释放
+    // （无安全可利用性：verify_claim 要求 created、pairing_sas 要求 pending_confirmation、
+    // complete_auth 要求已确认批准，但上界会因此被推迟）。
     // 重启时未确认且无法继续验密的配对**全部**终结（secret 只在内存）。
     pub fn due_pairings(&self, pairings: &[PairingRecord], at: &Timestamp) -> Vec<PairingId>;
     pub fn unrecoverable_after_restart(&self, pairings: &[PairingRecord]) -> Vec<PairingId>;
@@ -294,10 +300,17 @@ pub struct PeerTrust {
 - `[决定]`（2026-09-24 实现）诊断/测试入口属于公开 API 的一部分：`Authority::challenge_cache_len()`、
   `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。除 `pairing_status` 外都**不**返回
   秘密材料，只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
-- `[决定]`（2026-09-24 实现）另两个公开入口也在此登记：`Authority::reset_memory()`（启动语义：丢弃全部
-  内存 secret 与挑战缓存并返回清理计数，随后由调用方按 §4.3 终结已无法继续验密的配对；它**不**触碰持久材料）与
-  `Authority::node_public_key()`（async；经 keystore 端口读本节点公钥，供宿主证明与 SAS 派生）。
-  认证收尾对外只有**一个**名字 `complete_auth`（其实现体是 crate 私有的 `complete`），避免同一行为出现两个公开名。
+- `[决定]`（2026-09-24 实现）`Authority` 的**全部**公开入口都在此登记（避免公开面静默膨胀）：
+  `reset_memory()`（启动语义：丢弃全部内存 secret 与挑战缓存并返回清理计数，随后由调用方按 §4.3 终结
+  已无法继续验密的配对；**不**触碰持久材料）、`node_public_key()`（async；经 keystore 端口读本节点公钥）、
+  `now()`/`local_node()`（只读快照）、四个 `sign_*`（`sign_sync_pairing_host_proof`/
+  `sign_sync_host_challenge`/`sign_node_link_pairing_owner_proof`/`sign_node_link_challenge`，async；
+  各签发一次域分离证明）、`mark_pairing_approved(&PairingId) -> bool`（**调用方在 §11.6 提交成功后**置位
+  「该配对已批准」，见 §4.1 与 design D3：内存态绝不超前于已提交状态）、`challenge_cache_len()`、
+  `failure_count`、`has_secret`（测试/诊断，不含秘密材料）与常量 `MAX_CHALLENGES`。
+  认证收尾对外只有**一个**名字 `complete_auth`（其实现体是 crate 私有的 `complete`）。
+  「三个握手入口中唯一带 `await` 的是 `hello`」——另有上列的 `async` 辅助入口（`node_public_key`/四个
+  `sign_*`），因此该表述限指三个握手入口。
 - `[决定]`（2026-09-24 实现）`verify_proof` 额外核对「快照主体 == 提交主体」（`trust.peer != submission.peer`
   → `HandshakeError::UntrustedPeer`）：它拦住「adapter 传错快照、用别的对端的公钥验签」这类接线错误。
   失败分类仍统一为对端可见的 `AuthenticationFailed`。

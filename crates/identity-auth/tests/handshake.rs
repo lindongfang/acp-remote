@@ -655,6 +655,60 @@ fn challenge_cache_is_bounded() {
 }
 
 #[test]
+fn cache_evicts_the_earliest_expiring_challenge() {
+    // 合同 §5.2 登记的淘汰语义（RV3-WP2-F3 的用例缺口）：满时淘汰**最早过期**的一条。
+    //
+    // 关键构造：让「最早过期」那一组**只有一条**（先签发第一条，再把时钟推进 1 秒后签发其余），
+    // 否则同组的并列条目使「淘汰哪一条」不确定，断言也证明不了策略。
+    // 时钟总推进控制在挑战 TTL（15 秒）内，否则第一条会因**过期清扫**而不是**淘汰**消失。
+    let state = setup();
+    let unknown = || PeerTrust::unknown(PeerIdentity::Device(device(DEVICE)));
+
+    let earliest = block_on(state.authority.hello(&request(), &unknown())).expect("签发必须成功");
+    state.clock.set("2026-01-01T00:00:01.000Z");
+    for index in 0..(identity_auth::MAX_CHALLENGES - 1) {
+        if index > 0 && index % 512 == 0 {
+            let seconds = 1 + index / 512;
+            state
+                .clock
+                .set(&format!("2026-01-01T00:00:{seconds:02}.000Z"));
+        }
+        block_on(state.authority.hello(&request(), &unknown())).expect("签发必须成功");
+    }
+    assert_eq!(
+        state.authority.challenge_cache_len(),
+        identity_auth::MAX_CHALLENGES,
+        "缓存应被填满"
+    );
+
+    // 第 1025 次签发：都在 TTL 内（清扫不命中）→ 必须走淘汰分支，且只能淘汰唯一的最早过期者。
+    let newest = block_on(state.authority.hello(&request(), &unknown())).expect("签发必须成功");
+    assert_eq!(
+        state.authority.challenge_cache_len(),
+        identity_auth::MAX_CHALLENGES,
+        "淘汰后尺寸不变"
+    );
+
+    let failure = state
+        .authority
+        .verify_proof(
+            &submission(&earliest, |transcript| state.peer.sign(transcript)),
+            &trust(&state.peer, CredentialStatus::Active),
+        )
+        .expect_err("最早过期的那条必须已被淘汰");
+    assert_eq!(failure.reason, HandshakeError::UnknownChallenge);
+
+    // 最新一条仍在缓存里可用——否则说明淘汰策略错成了「淘汰最新」。
+    state
+        .authority
+        .verify_proof(
+            &submission(&newest, |transcript| state.peer.sign(transcript)),
+            &trust(&state.peer, CredentialStatus::Active),
+        )
+        .expect("最新签发的挑战必须仍然可用");
+}
+
+#[test]
 fn trust_snapshot_must_belong_to_the_same_peer() {
     // 快照主体与提交主体错配（adapter 传错快照）必须拒绝，而不是用别的对端的公钥验签。
     let state = setup();
