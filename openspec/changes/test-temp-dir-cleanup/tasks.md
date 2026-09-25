@@ -22,8 +22,8 @@
 
 ## 5. Integration Readiness
 
-- [ ] 5.1 仅一次，不随单元复制；主 Agent。创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划、候选版本与证据、`refs/heads/main` 及合入条件。完成条件：记录集成 Agent 实际 ID 及上下文方式；主 Agent 不兼任。
-- [ ] 5.2 DU1；主 Agent。复核 DU1 预定模式（independent）与组成（WP1，无 TP），核对 [PV1]/[PV2]/[RV1] 的有效证据。完成条件：证据清单核对一致；任何变化先同步计划再合入。
+- [x] 5.1 仅一次，不随单元复制；主 Agent。创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划、候选版本与证据、`refs/heads/main` 及合入条件。完成条件：记录集成 Agent 实际 ID 及上下文方式；主 Agent 不兼任。
+- [x] 5.2 DU1；主 Agent。复核 DU1 预定模式（independent）与组成（WP1，无 TP），核对 [PV1]/[PV2]/[RV1] 的有效证据。完成条件：证据清单核对一致；任何变化先同步计划再合入。
 
 ## 6. Merge Unit
 
