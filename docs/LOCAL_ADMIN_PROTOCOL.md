@@ -1,6 +1,7 @@
 # ACP Remote 本地管理通道
 
 > 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）实现中——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 版本：1.3（2026-09-25：方法名允许段内连字符；`node.rotate-key.begin` 进入 v1 方法词表，修正 §5.7 与机器词表的不一致）  
 > 版本：1.2（2026-09-25：新增 §3.1 实现状态注记——`server::acp_facade` 落地前，Daemon 对 `0x02` 连接在 framing 校验后即连即关；`daemon-cli-and-local-admin` 变更的 design.md 决策 5）  
 > 版本：1.1（2026-09-23：新增 §3.1 `0x02` ACP 流的会话生命周期；管理载荷的 envelope 与错误码改为机器表达，目录见 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)）  
 > 日期：2026-09-18  
@@ -145,7 +146,7 @@ u32be length | payload(length bytes)
 |---|---|---|
 | `v` | integer | 通道版本；v1 只接受 `1` |
 | `id` | UUID | 请求标识；同一连接上未完成请求的 `id` 必须唯一 |
-| `method` | string | 小写点分 ASCII，匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+)*$` |
+| `method` | string | 小写点分 ASCII，匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`（段内允许连字符，段首/段尾不得为连字符） |
 | `params` | object | 无参数方法必须发送 `{}`，不用 `null` |
 | `ok` | boolean | 响应判别字段 |
 | `result` | object | `ok = true` 时存在；无返回值的方法返回 `{}` |
@@ -497,7 +498,9 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 - 只包含 `SECURITY_DESIGN.md` §14.2 的元数据字段，**不得**包含 prompt、回复、diff、终端、ACP `rawJson`、附件内容、凭据、pairing secret 或 QR payload（§14.1）；审计导出不能成为第二份聊天记录。
 - 时间区间与类别过滤在 Daemon 内完成；输出按记录时间升序，`jsonl` 每行一个对象，`csv` 首行为列名。
 
-### 5.7 明确推迟：`node.rotate-key.begin`
+### 5.7 明确推迟（`local.node.rotate-key`）
+
+#### `node.rotate-key.begin`
 
 - `node.rotate-key.begin` 属于 `post_mvp`：本轮**只登记方法名**，`params`/`result` 与 `NODE_LINK_PROTOCOL.md` §12.3 的 `node.rotate-key.request`／`node.rotate-key.result` 同批定义，不提前发明字段。
 - 它表达“本地用户请求本节点轮换 Node Identity Key”，对应 `local.node.rotate-key`；轮换后所有已配对设备与节点必须重新配对，不能靠普通 endpoint 更新掩盖密钥变化（`SECURITY_DESIGN.md` §9.1、§9.5）。

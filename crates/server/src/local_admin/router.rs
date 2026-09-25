@@ -74,7 +74,13 @@ impl LocalAdminRouter {
             Method::ImportList => self.import_list(params).await,
             Method::ImportRemove => self.import_remove(params).await,
             Method::AuditExport => self.audit_export(params).await,
-            // §5.3/§5.4 的设备与节点配对族、§5.7 的 `node.rotate-key.begin` 尚未实现（WP3b2）：
+            // §5.7：本方法只登记名字，`params`/`result` 与 `NODE_LINK_PROTOCOL.md` §12.3 的
+            // `node.rotate-key.request`/`node.rotate-key.result` 同批定义；字段定义落地前调用恒回
+            // `local.unsupported`，不自行填充参数形状。
+            Method::NodeRotateKeyBegin => {
+                Err(AdminError::unsupported_method(Method::NodeRotateKeyBegin))
+            }
+            // §5.3/§5.4 的设备与节点配对族尚未实现（WP3b2）：
             // 集内未实现的方法回 `local.unsupported`（§6），连接保持可用。
             unimplemented => Err(AdminError::unsupported_method(unimplemented)),
         }
@@ -1337,6 +1343,8 @@ mod tests {
             Method::NodePairBegin,
             Method::NodeList,
             Method::NodeRevoke,
+            // §5.7：字段定义落地前 `node.rotate-key.begin` 也走这一条。
+            Method::NodeRotateKeyBegin,
         ] {
             let (code, message) = error_of(&router.handle(request(method, json!({}))).await);
             assert_eq!(code, LocalErrorCode::Unsupported, "{method:?}");

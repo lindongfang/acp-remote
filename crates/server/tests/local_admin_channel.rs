@@ -295,10 +295,14 @@ async fn rejected_requests_keep_the_connection_usable() {
             r#"{"v":1,"id":"ID","method":"Daemon.status","params":{}}"#,
             "local.invalid_request",
         ),
-        // 连字符名不匹配 §4 的方法名语法（命名非法 → invalid_request），因此 §5.7 的
-        // `node.rotate-key.begin` 在本实现下也走这一条而不是 local.unsupported（见交付报告）。
+        // 连字符方法名现在是 §4 语法下的合法名字：集内的 `node.rotate-key.begin`（§5.7 未实现）
+        // 回 `local.unsupported`；段首连字符仍属「命名非法」→ `local.invalid_request`。
         (
             r#"{"v":1,"id":"ID","method":"node.rotate-key.begin","params":{}}"#,
+            "local.unsupported",
+        ),
+        (
+            r#"{"v":1,"id":"ID","method":"node.-rotate-key.begin","params":{}}"#,
             "local.invalid_request",
         ),
     ];

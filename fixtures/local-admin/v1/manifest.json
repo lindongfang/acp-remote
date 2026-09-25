@@ -17,6 +17,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/request-node-rotate-key-begin.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/success-response.json",
       "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
       "valid": true
@@ -37,6 +42,12 @@
       "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
       "valid": false,
       "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/request-method-name-leading-hyphen.json",
+      "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
+      "valid": false,
+      "expectedKeyword": "pattern"
     },
     {
       "fixture": "invalid/request-params-null.json",

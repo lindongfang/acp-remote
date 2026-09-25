@@ -6,7 +6,7 @@
 
 ### Requirement: 管理信封校验
 
-管理请求 SHALL 为 closed object `{ "v": 1, "id": "<uuid>", "method": "<name>", "params": {…} }`；`v != 1` 时 MUST 关闭连接而不返回错误帧。信封非法（`id` 缺失/非 UUID/同连接重复、`method` 缺失或不匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+)*$`、`params` 不是 object）时返回 `local.invalid_request`；未知 `method` 返回 `local.unsupported`；`params` 缺字段、类型不符或含未知字段返回 `local.invalid_params`。每个请求 MUST 恰好产生一个响应并回带相同 `id`；响应 `error` 只含 `code` 与 `message`，`message` MUST 为简短英文描述且不含 secret、凭据值、堆栈或完整敏感路径；客户端 MUST 忽略未知 `result` 字段。
+管理请求 SHALL 为 closed object `{ "v": 1, "id": "<uuid>", "method": "<name>", "params": {…} }`；`v != 1` 时 MUST 关闭连接而不返回错误帧。信封非法（`id` 缺失/非 UUID/同连接重复、`method` 缺失或不匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`、`params` 不是 object）时返回 `local.invalid_request`；未知 `method` 返回 `local.unsupported`；`params` 缺字段、类型不符或含未知字段返回 `local.invalid_params`。每个请求 MUST 恰好产生一个响应并回带相同 `id`；响应 `error` 只含 `code` 与 `message`，`message` MUST 为简短英文描述且不含 secret、凭据值、堆栈或完整敏感路径；客户端 MUST 忽略未知 `result` 字段。
 
 #### Scenario: 合法请求获得唯一响应
 

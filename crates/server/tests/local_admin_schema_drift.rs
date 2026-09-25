@@ -31,6 +31,8 @@ enum Expectation {
     ConnectionCloses,
     /// 回 `local.invalid_request`（信封非法，包括方法名命名非法）。
     InvalidRequest,
+    /// 回 `local.unsupported`（方法名语法合法但不在 v1 方法集里，§4 规则 3）。
+    UnsupportedMethod,
     /// 响应解码失败（响应信封非法）。
     ResponseRejected,
 }
@@ -71,6 +73,15 @@ const FIXTURES: &[Fixture] = &[
         expectation: Expectation::RequestDecodes,
     },
     Fixture {
+        path: "valid/request-node-rotate-key-begin.json",
+        content: include_str!(
+            "../../../fixtures/local-admin/v1/valid/request-node-rotate-key-begin.json"
+        ),
+        valid: true,
+        keyword: None,
+        expectation: Expectation::RequestDecodes,
+    },
+    Fixture {
         path: "valid/success-response.json",
         content: include_str!("../../../fixtures/local-admin/v1/valid/success-response.json"),
         valid: true,
@@ -100,10 +111,19 @@ const FIXTURES: &[Fixture] = &[
         ),
         valid: false,
         keyword: Some("enum"),
-        // schema 用 `enum`（以及 `pattern`）拒绝它。运行期答案由 §4 的表格决定：`device.rotate-key.begin`
-        // 含连字符，**不匹配** §4 的方法名正则 → 「命名非法」→ `local.invalid_request`。
-        // （语法合法但不在集内的名字回 `local.unsupported`，由 `local_admin::envelope` 的单元测试与
-        // `local_admin_channel.rs` 的 `daemon.doctor` 用例覆盖；文档 §5.7 与 §4 表格的措辞不一致已登记在报告里。）
+        // schema 用 `enum` 拒绝它（方法集是封闭词表）。运行期答案由 §4 规则 3 决定：`device.rotate-key.begin`
+        // 语法合法（§4 的方法名正则允许段内连字符）但不在集内 → `local.unsupported`；集内未实现的
+        // `node.rotate-key.begin` 走同一条路径，由 §5.7 规定。
+        expectation: Expectation::UnsupportedMethod,
+    },
+    Fixture {
+        path: "invalid/request-method-name-leading-hyphen.json",
+        content: include_str!(
+            "../../../fixtures/local-admin/v1/invalid/request-method-name-leading-hyphen.json"
+        ),
+        valid: false,
+        keyword: Some("pattern"),
+        // 连字符只允许出现在段的内部：段首连字符不匹配 §4 的方法名正则 → 「命名非法」→ `local.invalid_request`。
         expectation: Expectation::InvalidRequest,
     },
     Fixture {
@@ -194,8 +214,8 @@ fn method_set_matches_the_schema_enum() {
     assert_eq!(declared, rust, "方法集必须与 schema 的 enum 逐项相等");
     assert_eq!(
         schema["$defs"]["methodName"]["pattern"].as_str(),
-        Some("^[a-z][a-z0-9]*(\\.[a-z0-9]+)*$"),
-        "方法名语法必须与文档 §4 的表格一致"
+        Some("^[a-z][a-z0-9]*(\\.[a-z0-9]+(-[a-z0-9]+)*)*$"),
+        "方法名语法必须与文档 §4 的表格一致（段内允许连字符，段首/段尾不得为连字符）"
     );
     for name in &declared {
         assert_eq!(
@@ -338,6 +358,7 @@ fn fixtures_behave_as_declared() {
                     "valid/request-daemon-status.json" => "daemon.status",
                     "valid/request-agent-configure.json" => "agent.configure",
                     "valid/request-device-pair-confirm.json" => "device.pair.confirm",
+                    "valid/request-node-rotate-key-begin.json" => "node.rotate-key.begin",
                     other => panic!("未登记的请求 fixture：{other}"),
                 };
                 assert_eq!(
@@ -359,6 +380,8 @@ fn fixtures_behave_as_declared() {
                         "default",
                     ],
                     "valid/request-device-pair-confirm.json" => &["pairingId", "scopes"],
+                    // §5.7 的方法只登记了名字，无参数（`{}`）。
+                    "valid/request-node-rotate-key-begin.json" => &[],
                     other => panic!("未登记的请求 fixture：{other}"),
                 };
                 let mut actual: Vec<&str> = request.params().keys().map(String::as_str).collect();
@@ -395,6 +418,25 @@ fn fixtures_behave_as_declared() {
                             AdminOutcome::Failure { error }
                                 if error.code() == LocalErrorCode::InvalidRequest
                         ));
+                    }
+                    server::local_admin::RequestDecodeOutcome::CloseConnection => {
+                        panic!("{} 应回错误帧而不是关闭连接", fixture.path)
+                    }
+                }
+            }
+            Expectation::UnsupportedMethod => {
+                let error = decode_request(payload).expect_err("必须被拒绝");
+                match error.into_outcome() {
+                    server::local_admin::RequestDecodeOutcome::Respond(response) => {
+                        assert!(
+                            matches!(
+                                response.outcome(),
+                                AdminOutcome::Failure { error }
+                                    if error.code() == LocalErrorCode::Unsupported
+                            ),
+                            "{} 应回 local.unsupported（§4 规则 3）",
+                            fixture.path
+                        );
                     }
                     server::local_admin::RequestDecodeOutcome::CloseConnection => {
                         panic!("{} 应回错误帧而不是关闭连接", fixture.path)

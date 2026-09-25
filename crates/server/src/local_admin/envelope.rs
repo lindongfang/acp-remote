@@ -595,29 +595,56 @@ mod tests {
 
     #[test]
     fn syntactically_valid_names_outside_the_set_are_unsupported() {
-        let payload = bytes_of(
-            r#"{"v":1,"id":"5b1f0c2e-8a4d-4b6f-9c31-0d2a7e5f4b10","method":"daemon.doctor","params":{}}"#,
-        );
-        match decode_request(&payload) {
-            Err(RequestDecodeError::UnsupportedMethod { method, .. }) => {
-                assert_eq!(method, "daemon.doctor");
+        // §4 规则 3：语法合法但不在 v1 方法集里 → `local.unsupported`（新 CLI 连上旧 Daemon 的兼容路径）。
+        for name in ["daemon.doctor", "device.rotate-key.begin"] {
+            let payload = format!(
+                r#"{{"v":1,"id":"5b1f0c2e-8a4d-4b6f-9c31-0d2a7e5f4b10","method":"{name}","params":{{}}}}"#
+            );
+            match decode_request(&bytes_of(&payload)) {
+                Err(RequestDecodeError::UnsupportedMethod { method, .. }) => {
+                    assert_eq!(method, name);
+                }
+                other => panic!(
+                    "{name} 语法合法但不在 v1 方法集里应回 local.unsupported，实际 {other:?}"
+                ),
             }
-            other => panic!("语法合法但不在 v1 方法集里应回 local.unsupported，实际 {other:?}"),
         }
+    }
 
-        // §4 的方法名语法不允许连字符，因此连字符名属「命名非法」→ `local.invalid_request`。
-        // 这与文档 §5.7 把 `node.rotate-key.begin` 写成「返回 local.unsupported」存在措辞不一致
-        // （该名字不匹配 §4 表格里的正则），已在交付报告中登记给文档所有者。
+    #[test]
+    fn hyphenated_names_inside_the_set_decode() {
+        // §5.7 的 `node.rotate-key.begin` 是集内方法（§4 的方法名语法允许段内连字符）：
+        // 信封层把它解成枚举值，未实现的事实由路由层回 `local.unsupported`。
         let payload = bytes_of(
             r#"{"v":1,"id":"5b1f0c2e-8a4d-4b6f-9c31-0d2a7e5f4b10","method":"node.rotate-key.begin","params":{}}"#,
         );
-        assert!(matches!(
-            decode_request(&payload),
-            Err(RequestDecodeError::InvalidRequest {
-                reason: InvalidRequestReason::MethodNameInvalid,
-                ..
-            })
-        ));
+        let request = decode_request(&payload).expect("集内方法名可解码");
+        assert_eq!(request.method(), Method::NodeRotateKeyBegin);
+        assert!(request.params().is_empty());
+    }
+
+    #[test]
+    fn hyphen_at_a_segment_boundary_is_a_naming_error() {
+        // 连字符只允许出现在段的内部；段首/段尾的连字符仍属「命名非法」→ `local.invalid_request`（§4 规则 4）。
+        for name in [
+            "node.-rotate-key.begin",
+            "node.rotate-key-.begin",
+            "node.rotate--key.begin",
+        ] {
+            let payload = format!(
+                r#"{{"v":1,"id":"5b1f0c2e-8a4d-4b6f-9c31-0d2a7e5f4b10","method":"{name}","params":{{}}}}"#
+            );
+            assert!(
+                matches!(
+                    decode_request(&bytes_of(&payload)),
+                    Err(RequestDecodeError::InvalidRequest {
+                        reason: InvalidRequestReason::MethodNameInvalid,
+                        ..
+                    })
+                ),
+                "{name} 应被当成命名非法"
+            );
+        }
     }
 
     #[test]

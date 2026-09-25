@@ -2,10 +2,9 @@
 //!
 //! 方法名有两层校验：
 //!
-//! 1. **语法**：匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+)*$`（§4 的表格）。不匹配属信封非法 → `local.invalid_request`。
-//! 2. **在集内**：必须是本枚举的 24 个方法之一。语法合法但不在集内 → `local.unsupported`
-//!    （§4 规则 3：「未知 method → local.unsupported；这使新增方法成为向后兼容变更」；§5.7 的
-//!    `node.rotate-key.begin` 就是这样返回 `local.unsupported`，而不是被当成信封非法）。
+//! 1. **语法**：匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`（§4 的表格）。不匹配属信封非法 → `local.invalid_request`。
+//! 2. **在集内**：必须是本枚举的 25 个方法之一。语法合法但不在集内 → `local.unsupported`
+//!    （§4 规则 3：「未知 method → local.unsupported；这使新增方法成为向后兼容变更」）。
 //!
 //! 枚举与 schema 的 `methodName.enum` 由常驻漂移测试断言逐项相等，本文件不复制第二份词表。
 
@@ -58,13 +57,17 @@ pub enum Method {
     ImportList,
     /// `import.remove`（`local.export.manage`）
     ImportRemove,
+    /// `node.rotate-key.begin`（`local.node.rotate-key`，`post_mvp`；§5.7：字段定义落地前调用回
+    /// `local.unsupported`，不得自行填充 `params`/`result`）
+    NodeRotateKeyBegin,
     /// `audit.export`（`local.audit.export`）
     AuditExport,
 }
 
 impl Method {
-    /// 全部 24 个方法，顺序与 §5.1 的能力对应表一致。
-    pub const ALL: [Self; 24] = [
+    /// 全部 25 个方法，顺序与 §5.1 的能力对应表一致（`node.rotate-key.begin` 是 §5.1 第 6 行
+    /// `local.node.rotate-key` 的方法，因此排在 `import.remove` 与 `audit.export` 之间）。
+    pub const ALL: [Self; 25] = [
         Self::DaemonStatus,
         Self::DaemonStop,
         Self::WorkspaceSelect,
@@ -88,6 +91,7 @@ impl Method {
         Self::ImportAdd,
         Self::ImportList,
         Self::ImportRemove,
+        Self::NodeRotateKeyBegin,
         Self::AuditExport,
     ];
 
@@ -117,6 +121,7 @@ impl Method {
             Self::ImportAdd => "import.add",
             Self::ImportList => "import.list",
             Self::ImportRemove => "import.remove",
+            Self::NodeRotateKeyBegin => "node.rotate-key.begin",
             Self::AuditExport => "audit.export",
         }
     }
@@ -127,9 +132,10 @@ impl Method {
     }
 }
 
-/// 方法名语法（§4 的表格）：`^[a-z][a-z0-9]*(\.[a-z0-9]+)*$`。
+/// 方法名语法（§4 的表格）：`^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`。
 ///
-/// 首字符必须是 `a-z`（起首不能是数字），后续段由 `[a-z0-9]+` 组成，不允许多余或空的点。
+/// 首字符必须是 `a-z`（起首不能是数字）；首段只允许 `[a-z0-9]`，后续段允许**段内**连字符
+/// （`[a-z0-9]+(-[a-z0-9]+)*`），即连字符不得出现在段的开头或结尾，也不得连续出现；不允许多余或空的点。
 pub fn is_method_name(text: &str) -> bool {
     let mut segments = text.split('.');
     let Some(first) = segments.next() else {
@@ -145,9 +151,12 @@ pub fn is_method_name(text: &str) -> bool {
     }
     segments.all(|segment| {
         !segment.is_empty()
-            && segment
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            && segment.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            })
     })
 }
 
@@ -157,18 +166,31 @@ mod tests {
 
     #[test]
     fn all_methods_round_trip_through_their_wire_name() {
-        assert_eq!(Method::ALL.len(), 24);
+        assert_eq!(Method::ALL.len(), 25);
         for method in Method::ALL {
             assert_eq!(Method::from_name(method.as_str()), Some(method));
             assert!(is_method_name(method.as_str()), "{}", method.as_str());
         }
+        assert_eq!(
+            Method::from_name("node.rotate-key.begin"),
+            Some(Method::NodeRotateKeyBegin)
+        );
         assert_eq!(Method::from_name("device.rotate-key.begin"), None);
         assert_eq!(Method::from_name(""), None);
     }
 
     #[test]
     fn method_name_syntax_rejects_other_shapes() {
-        for valid in ["daemon.status", "a", "a.b.c", "workspace.select9", "x0.y1z"] {
+        for valid in [
+            "daemon.status",
+            "a",
+            "a.b.c",
+            "workspace.select9",
+            "x0.y1z",
+            "node.rotate-key.begin",
+            "a.b-c",
+            "x.y-z.w-0",
+        ] {
             assert!(is_method_name(valid), "{valid} 应合法");
         }
         for invalid in [
@@ -181,8 +203,15 @@ mod tests {
             "9daemon.status",
             "daemon-status",
             "daemon status",
-            "daemon.sta-tus",
             "daemon_status",
+            // 连字符只允许出现在段的内部（§4 的方法名正则）。
+            "node.-rotate-key.begin",
+            "node.rotate-key-.begin",
+            "node.rotate--key.begin",
+            "node.rotate-key..begin",
+            "node.rotate-key.",
+            "node.rotate-key-",
+            "-node.rotate-key.begin",
         ] {
             assert!(!is_method_name(invalid), "{invalid} 应非法");
         }

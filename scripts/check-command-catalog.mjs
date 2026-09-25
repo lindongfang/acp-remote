@@ -127,7 +127,8 @@ function checkLocalAdmin(doc, catalog) {
   if (!schema) return;
 
   const methods = new Set();
-  for (const match of doc.matchAll(/^#### `([a-z][a-z0-9]*(?:\.[a-z0-9]+)*)`/gm)) methods.add(match[1]);
+  // 方法名允许段内连字符（文档 §4 的方法名正则），因此小节标题的抽取同样要能捕获连字符名字。
+  for (const match of doc.matchAll(/^#### `([a-z][a-z0-9]*(?:\.[a-z0-9]+(-[a-z0-9]+)*)*)`/gm)) methods.add(match[1]);
   compareSets(
     "docs/LOCAL_ADMIN_PROTOCOL.md 方法小节",
     methods,
@@ -143,7 +144,7 @@ function checkLocalAdmin(doc, catalog) {
     capabilities,
     catalog.localCapabilities ?? [],
   );
-  for (const match of capabilitySection.matchAll(/`([a-z][a-z0-9]*(?:\.[a-z0-9]+)+)`/g)) {
+  for (const match of capabilitySection.matchAll(/`([a-z][a-z0-9]*(?:\.[a-z0-9]+(-[a-z0-9]+)*)+)`/g)) {
     if (match[1].startsWith("local.")) continue; // `local.*` 是能力名，不是方法名
     if (/\.(json|md|mjs|rs|toml|sh)$/.test(match[1])) continue;
     if (!methods.has(match[1])) {
