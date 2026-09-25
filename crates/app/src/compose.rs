@@ -161,6 +161,9 @@ pub struct Composition {
     identity: NodeIdentity,
     authority: Arc<Authority>,
     host: Arc<AgentHost>,
+    /// broker 句柄：`UseCases` 内部也持有同一实例，但合并窗口的定时任务需要直接调 `Broker::pump`
+    /// （core 不读时钟、不设定时器，见 `crates/core/src/broker.rs` 模块头）。
+    broker: Arc<Broker>,
     use_cases: Arc<UseCases>,
 }
 
@@ -215,25 +218,26 @@ impl Composition {
         ));
         let backends: Arc<dyn SessionBackendFactory> = host.clone();
         let catalog: Arc<dyn AgentCatalog> = host.clone();
+        let broker = Arc::new(Broker::new(
+            BrokerDeps {
+                store: Arc::clone(&session_store),
+                deliveries: Arc::clone(&deliveries),
+                backends,
+                exports: Arc::clone(&export_store),
+                publisher: Arc::new(LoggingPublisher),
+                clock: Arc::clone(&clock),
+                ids: Arc::clone(&ids),
+                audit: Some(Arc::clone(&audit_store)),
+            },
+            BrokerConfig {
+                persist_deltas: config.storage.persist_deltas,
+                // `sessions.queue_policy`/`sessions.max_queued_turns` 属未接线段落：取 v1 默认
+                // （`queue` / 16，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致）。
+                ..BrokerConfig::default()
+            },
+        ));
         let use_cases = Arc::new(UseCases::new(UseCaseDeps {
-            broker: Arc::new(Broker::new(
-                BrokerDeps {
-                    store: Arc::clone(&session_store),
-                    deliveries: Arc::clone(&deliveries),
-                    backends,
-                    exports: Arc::clone(&export_store),
-                    publisher: Arc::new(LoggingPublisher),
-                    clock: Arc::clone(&clock),
-                    ids: Arc::clone(&ids),
-                    audit: Some(Arc::clone(&audit_store)),
-                },
-                BrokerConfig {
-                    persist_deltas: config.storage.persist_deltas,
-                    // `sessions.queue_policy`/`sessions.max_queued_turns` 属未接线段落：取 v1 默认
-                    // （`queue` / 16，与 `SYNC_PROTOCOL.md` §11.6 的二选一一致）。
-                    ..BrokerConfig::default()
-                },
-            )),
+            broker: Arc::clone(&broker),
             store: session_store,
             deliveries,
             exports: export_store,
@@ -256,6 +260,7 @@ impl Composition {
             identity,
             authority,
             host,
+            broker,
             use_cases,
         })
     }
@@ -293,6 +298,11 @@ impl Composition {
     /// 用例面。
     pub fn use_cases(&self) -> &Arc<UseCases> {
         &self.use_cases
+    }
+
+    /// broker（`UseCases` 内部的同一实例）：合并窗口的定时任务直接调 `Broker::pump`。
+    pub fn broker(&self) -> &Arc<Broker> {
+        &self.broker
     }
 
     /// 平台安全存储端口（注入 `LocalAdminDeps`）。
@@ -393,6 +403,7 @@ impl Composition {
             store,
             use_cases,
             host,
+            broker,
             authority,
             keystore,
             clock,
@@ -401,8 +412,9 @@ impl Composition {
             config,
             ..
         } = self;
-        // 显式释放：`UseCases`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
+        // 显式释放：`UseCases`/`Broker`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
         drop(use_cases);
+        drop(broker);
         drop(host);
         drop(authority);
         drop(keystore);

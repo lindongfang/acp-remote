@@ -474,7 +474,7 @@ fn the_periodic_task_runs_at_least_once_and_is_cancelled_at_shutdown() {
         "维护任务必须在关闭序列被取消：{:?}",
         daemon.log()
     );
-    assert!(names.contains(&"storage_flush"), "{:?}", daemon.log());
+    assert!(names.contains(&"merge_window"), "{:?}", daemon.log());
     assert!(names.contains(&"signal_watcher"), "{:?}", daemon.log());
     assert!(
         daemon.log_index("daemon.task_stopped").expect("取消")

@@ -22,6 +22,9 @@ use storage_sqlite::migrate::StorageConfig as SqliteStorageConfig;
 /// `daemon.data_dir` 未配置时的目录名（平台用户配置目录下的 `acp-remote/`）。
 const APP_DIRECTORY: &str = "acp-remote";
 
+/// `storage.flush_interval_ms` 的默认值（`CONFIG_REFERENCE.md` §5）。
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 250;
+
 /// 默认配置文件在平台用户配置目录下的相对路径。
 const DEFAULT_CONFIG_FILE: &str = "config.toml";
 
@@ -163,6 +166,10 @@ pub struct Config {
     pub public_origin: Option<String>,
     /// `daemon.shutdown_grace_ms`。
     pub shutdown_grace_ms: u64,
+    /// `storage.flush_interval_ms`：broker 的 delta 合并窗口（`CORE_PORTS_AND_STORAGE.md` §6 第 10 条），
+    /// 由组合根的定时器按下述间隔触发 `pump`。它不是存储刷盘开关（`storage-sqlite` 不参与，见
+    /// `crates/storage-sqlite/src/migrate.rs` 的 `StorageConfig` 注记）。
+    pub flush_interval_ms: u64,
     /// 存储参数（`storage.*` 的已接线部分）。
     pub storage: SqliteStorageConfig,
     /// 首次种子导入的 profile。
@@ -262,6 +269,15 @@ impl Config {
 
         let storage_section = raw.storage.unwrap_or_default();
         let storage = storage_section.to_storage_config(&data_dir)?;
+        let flush_interval_ms = storage_section
+            .flush_interval_ms
+            .unwrap_or(DEFAULT_FLUSH_INTERVAL_MS);
+        // 0 会让合并窗口退化成热循环（每个调度点都枚举会话），不是合法取值；上界由运维自己定，不加。
+        if flush_interval_ms == 0 {
+            return Err(ConfigError::Invalid {
+                detail: "`storage.flush_interval_ms` 必须是正整数（毫秒）".to_owned(),
+            });
+        }
 
         let mut unwired = Vec::new();
         if daemon.listen.is_some() {
@@ -321,10 +337,6 @@ impl Config {
         {
             unwired.push(key.to_owned());
         }
-        if storage_section.flush_interval_ms.is_some() {
-            unwired.push("storage.flush_interval_ms".to_owned());
-        }
-
         let seeds = match raw.agents {
             Some(agents) => agents.into_seed_profiles()?,
             None => Vec::new(),
@@ -379,6 +391,7 @@ impl Config {
             data_dir,
             public_origin,
             shutdown_grace_ms,
+            flush_interval_ms,
             storage,
             seeds,
             keystore,
@@ -863,6 +876,7 @@ mod tests {
     fn defaults_match_the_reference_table() {
         let config = parse("").expect("空配置必须可解析");
         assert_eq!(config.shutdown_grace_ms, 10_000);
+        assert_eq!(config.flush_interval_ms, 250);
         assert_eq!(config.storage.transcript_retention_days, 90);
         assert_eq!(config.storage.sync_event_retention_days, 7);
         assert_eq!(config.storage.audit_retention_days, 365);
@@ -911,6 +925,7 @@ audit_retention_days = 30
 max_total_size_bytes = 1048576
 max_session_size_bytes = 65536
 persist_deltas = true
+flush_interval_ms = 500
 attachment_max_file_bytes = 1024
 attachment_max_total_bytes = 2048
 attachment_dir = "{root}/attachments"
@@ -947,6 +962,7 @@ name = "OPENAI_API_KEY"
             Some("https://work-pc.example.ts.net")
         );
         assert_eq!(config.shutdown_grace_ms, 1500);
+        assert_eq!(config.flush_interval_ms, 500);
         assert_eq!(config.storage.transcript_retention_days, 7);
         assert!(config.storage.persist_deltas);
         assert_eq!(
@@ -1001,9 +1017,6 @@ idle_timeout_ms = 1000
 [terminal]
 keep_head_bytes = 1024
 
-[storage]
-flush_interval_ms = 250
-
 [dev_mode]
 allow_plaintext = true
 "#,
@@ -1021,7 +1034,6 @@ allow_plaintext = true
             "node_link.heartbeat_interval_ms",
             "sessions.idle_timeout_ms",
             "terminal.keep_head_bytes",
-            "storage.flush_interval_ms",
             "dev_mode.allow_plaintext",
         ] {
             assert!(
@@ -1058,6 +1070,7 @@ allow_plaintext = true
             "[daemon]\ninstance_lock = \"mutex\"\n",
             "[daemon.local_admin]\nendpoint = \"\\\\\\\\.\\\\pipe\\\\acpr\"\n",
             "[storage]\nattachment_dir = \"relative\"\n",
+            "[storage]\nflush_interval_ms = 0\n",
             "[identity]\nkeystore = \"dpapi\"\n",
             "[logging]\nlevel = \"verbose\"\n",
             "[logging]\nformat = \"xml\"\n",

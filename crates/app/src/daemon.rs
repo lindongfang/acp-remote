@@ -21,8 +21,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use acp_core::model::{Actor, NodeId, PeerPublicKey, PortError, Timestamp};
-use acp_core::ports::AttachmentStore as _;
+use acp_core::broker::Broker;
+use acp_core::model::{
+    Actor, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
+};
+use acp_core::ports::{AttachmentStore as _, SessionQuery};
+use acp_core::use_cases::UseCases;
 use server::local_admin::{
     AdminError, AdminRequest, AdminResponse, DaemonAgent, DaemonControl, DaemonCounts,
     DaemonStatus, LocalAdminDeps, LocalAdminHandler, LocalAdminRouter, LocalErrorCode,
@@ -45,12 +49,6 @@ const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// 每轮孤儿回收处理的文件数上限（§7.5 的 `limit`；不是配置键）。
 const ORPHAN_SWEEP_LIMIT: u32 = 256;
-
-/// `storage.flush_interval_ms` 的默认值（`CONFIG_REFERENCE.md` §5）。
-///
-/// 配置里的该键属「已知但未接线」（本切片没有内存写缓冲），这里用同一默认值作为任务间隔，保证
-/// 「按配置间隔」在配置未给出时仍有确定行为。
-const FLUSH_INTERVAL_MS: u64 = 250;
 
 /// 关闭序列里排空在途连接的最小窗口（毫秒）。
 ///
@@ -593,18 +591,84 @@ async fn maintenance_tick(
     );
 }
 
-/// 按 `storage.flush_interval_ms` 的存储批量落盘任务。
+/// 合并窗口的驱动面（§6 第 10 条）。
 ///
-/// **本切片的实际工作量为零，这是有意的、已登记的口径**：所有写路径（`SessionStore::commit` 与管理写集）
-/// 都是「一次调用 = 一个事务」，进程内不存在需要周期性刷写的缓冲；`SqliteStore` 也没有暴露
-/// `wal_checkpoint` 入口（只有 `close()` 会做 `wal_checkpoint(TRUNCATE)`，关闭序列已经调用）。本任务保留
-/// 的是「按配置间隔刷盘」的**所有者与取消路径**，切片 6 接入流式 delta 写路径时才产生真实工作
-/// （`storage-sqlite` 若新增 checkpoint 入口，也接到这里）。
-fn spawn_storage_flush(tasks: &mut OwnedTasks, interval: Duration, shutdown: Arc<ShutdownSignal>) {
+/// 拆成「枚举会话」与「驱动单个会话」两步是为了给定时任务留下可注入的接缝：本切片的本地通道方法集不含
+/// `session.create`（`LOCAL_ADMIN_PROTOCOL.md` §5.8），集成测试造不出 owned 会话，因此「按配置间隔真的
+/// 被调用了」只能靠用例注入 spy 断言（见 `daemon::tests` 的合并窗口用例）。
+#[async_trait::async_trait]
+trait MergeWindow: Send + Sync {
+    /// 本轮需要驱动的会话。
+    async fn sessions(&self) -> Result<Vec<SessionId>, PortError>;
+    /// 驱动单个会话（落盘缓冲事件 + 派发下一个排队 turn）。
+    async fn pump(&self, session: &SessionId) -> Result<(), PortError>;
+}
+
+/// 本轮枚举的状态集合（§6 第 10 条的合并窗口只对「有内存缓冲的会话」有意义）。
+///
+/// 会话状态转换与触发它的事件批次**在同一事务**提交（§6 第 1/2 条），因此持久状态为 `idle`/`failed`/
+/// `closed` 蕴含该会话没有待提交的缓冲；反过来，正在跑或排队的会话必然是 `queued`/`running`/`waiting_*`。
+/// 只取这四种状态而不取全表，是因为 `SessionQuery` 没有 offset/cursor（`core::ports` §4 的查询形状），
+/// 无法分页续取——状态过滤是这里唯一能把返回集限制在少数活动会话的手段（过滤在 SQL 侧完成）。
+const MERGE_WINDOW_STATES: [SessionState; 4] = [
+    SessionState::Queued,
+    SessionState::Running,
+    SessionState::WaitingInput,
+    SessionState::WaitingPermission,
+];
+
+/// 生产实现：`UseCases::list_sessions` 枚举 + `Broker::pump` 驱动。
+struct BrokerMergeWindow {
+    core: Arc<UseCases>,
+    broker: Arc<Broker>,
+}
+
+impl BrokerMergeWindow {
+    fn new(core: Arc<UseCases>, broker: Arc<Broker>) -> Self {
+        Self { core, broker }
+    }
+}
+
+#[async_trait::async_trait]
+impl MergeWindow for BrokerMergeWindow {
+    async fn sessions(&self) -> Result<Vec<SessionId>, PortError> {
+        let query = SessionQuery {
+            only: None,
+            states: MERGE_WINDOW_STATES.to_vec(),
+            limit: None,
+        };
+        let summaries = self.core.list_sessions(&Actor::LocalCli, query).await?;
+        Ok(summaries
+            .iter()
+            .map(|summary| summary.session_id().clone())
+            .collect())
+    }
+
+    async fn pump(&self, session: &SessionId) -> Result<(), PortError> {
+        self.broker.pump(session).await
+    }
+}
+
+/// 按 `storage.flush_interval_ms` 驱动 broker 的合并窗口（`CORE_PORTS_AND_STORAGE.md` §6 第 10 条）。
+///
+/// core 不读时钟、不设定时器（`crates/core/src/broker.rs` 模块头）：后端事件经同步的 `EventSink` 进
+/// broker 的缓冲，**必须**由持有 runtime 的组合根周期调 `pump` 才落盘并广播。本任务就是那个定时器：
+/// 每个周期枚举一次活动会话，逐个 `pump`（落盘缓冲 + 派发下一个排队 turn）。
+///
+/// 不吞错：单会话失败记结构化警告（含 `session_id` 与错误类别）后继续本轮其余会话，也不结束任务——
+/// 缓冲仍在内存里，下个周期会重试；枚举失败同样只记警告。取消路径与其它周期任务相同（协作式 `Notify`），
+/// 而关闭序列在停 Agent 与刷盘之前先调 `OwnedTasks::cancel_all`（§7.1 第 4 条）。
+fn spawn_merge_window<M: MergeWindow + 'static>(
+    tasks: &mut OwnedTasks,
+    interval: Duration,
+    window: Arc<M>,
+    shutdown: Arc<ShutdownSignal>,
+) {
     let cancel = Arc::new(Notify::new());
     let task_cancel = Arc::clone(&cancel);
+    let interval_ms = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX);
     let mut ticks = 0u64;
-    tasks.spawn("storage_flush", cancel, async move {
+    tasks.spawn("merge_window", cancel, async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -616,11 +680,49 @@ fn spawn_storage_flush(tasks: &mut OwnedTasks, interval: Duration, shutdown: Arc
                 break;
             }
             ticks += 1;
-            tracing::trace!(
-                event = "daemon.storage_flush_tick",
-                ticks,
-                "本切片没有需刷写的内存缓冲（写集逐事务提交）"
-            );
+            let sessions = match window.sessions().await {
+                Ok(sessions) => sessions,
+                Err(error) => {
+                    tracing::warn!(
+                        event = "daemon.merge_window_scan_failed",
+                        ticks,
+                        error = crate::compose::port_error_token(&error),
+                        "枚举活动会话失败：本轮不驱动任何会话"
+                    );
+                    continue;
+                }
+            };
+            let mut pumped = 0u64;
+            for session in &sessions {
+                match window.pump(session).await {
+                    Ok(()) => pumped += 1,
+                    Err(error) => tracing::warn!(
+                        event = "daemon.merge_window_failed",
+                        ticks,
+                        session_id = session.as_str(),
+                        error = crate::compose::port_error_token(&error),
+                        "驱动会话的合并窗口失败：本轮跳过该会话，下轮重试"
+                    ),
+                }
+            }
+            // 每个 tick 都记会导致 250ms 一级的稳定噪声，因此空转轮走 debug；有会话或失败时才 info。
+            if sessions.is_empty() {
+                tracing::debug!(
+                    event = "daemon.merge_window",
+                    ticks,
+                    interval_ms,
+                    "本轮无活动会话"
+                );
+            } else {
+                tracing::info!(
+                    event = "daemon.merge_window",
+                    ticks,
+                    interval_ms,
+                    sessions = sessions.len(),
+                    pumped,
+                    "已按配置间隔驱动 broker 的合并窗口"
+                );
+            }
         }
     });
 }
@@ -659,7 +761,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             "未配置 `daemon.public_origin`：配对方法在任何副作用之前以 local.unavailable 失败关闭"
         );
     }
-    let flush_interval = Duration::from_millis(FLUSH_INTERVAL_MS);
+    let flush_interval = Duration::from_millis(config.flush_interval_ms);
 
     let composition = Composition::assemble(config)
         .await
@@ -765,7 +867,17 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
 
     let mut tasks = OwnedTasks::new();
     spawn_maintenance(&mut tasks, &composition, Arc::clone(&shutdown));
-    spawn_storage_flush(&mut tasks, flush_interval, Arc::clone(&shutdown));
+    // 合并窗口：按 `storage.flush_interval_ms` 驱动 broker（`Broker` 与 `UseCases` 内是同一实例）。
+    let merge_window = Arc::new(BrokerMergeWindow::new(
+        Arc::clone(composition.use_cases()),
+        Arc::clone(composition.broker()),
+    ));
+    spawn_merge_window(
+        &mut tasks,
+        flush_interval,
+        merge_window,
+        Arc::clone(&shutdown),
+    );
     spawn_signal_watcher(&mut tasks, Arc::clone(&shutdown));
 
     tracing::info!(
@@ -1014,6 +1126,7 @@ fn cleanup_endpoint(endpoint_locator: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU32;
 
     /// 关闭信号：幂等、宽限值只记第一次、等待者会被唤醒。
     #[tokio::test]
@@ -1121,6 +1234,161 @@ mod tests {
             after_cancel,
             "取消后不得再有 tick"
         );
+    }
+
+    /// 合并窗口的 spy：记录「枚举」与「pump」的实际调用次数。
+    ///
+    /// 本切片的本地通道方法集不含 `session.create`（`LOCAL_ADMIN_PROTOCOL.md` §5.8），进程级用例造不出
+    /// owned 会话，因此「定时器真的按配置间隔驱动了 broker」只能靠可注入的 spy 断言。
+    struct MergeWindowSpy {
+        sessions: Vec<SessionId>,
+        failing: Option<SessionId>,
+        scans: AtomicU32,
+        pumps: AtomicU32,
+        failures: AtomicU32,
+    }
+
+    impl MergeWindowSpy {
+        fn new(sessions: Vec<SessionId>, failing: Option<SessionId>) -> Self {
+            Self {
+                sessions,
+                failing,
+                scans: AtomicU32::new(0),
+                pumps: AtomicU32::new(0),
+                failures: AtomicU32::new(0),
+            }
+        }
+
+        fn scans(&self) -> u32 {
+            self.scans.load(Ordering::SeqCst)
+        }
+
+        fn pumps(&self) -> u32 {
+            self.pumps.load(Ordering::SeqCst)
+        }
+
+        fn failures(&self) -> u32 {
+            self.failures.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MergeWindow for MergeWindowSpy {
+        async fn sessions(&self) -> Result<Vec<SessionId>, PortError> {
+            self.scans.fetch_add(1, Ordering::SeqCst);
+            Ok(self.sessions.clone())
+        }
+
+        async fn pump(&self, session: &SessionId) -> Result<(), PortError> {
+            self.pumps.fetch_add(1, Ordering::SeqCst);
+            if self.failing.as_ref() == Some(session) {
+                self.failures.fetch_add(1, Ordering::SeqCst);
+                return Err(PortError::Unavailable(
+                    acp_core::model::UnavailableKind::StorageFull,
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn session(label: &str) -> SessionId {
+        SessionId::new(&format!("11111111-1111-4111-8111-{label:0>12}"))
+            .expect("canonical UUID 文本")
+    }
+
+    /// 合并窗口任务真的按间隔运转：每个 tick 枚举一次、对每个会话各 `pump` 一次；取消后不再调用。
+    ///
+    /// 这里用 20ms 的短间隔代替配置值的 250ms（配置的解析与默认值由 `crate::config` 的用例断言），
+    /// 覆盖的是同一段循环：间隔 → 枚举 → 逐会话 `pump`。
+    #[tokio::test]
+    async fn the_merge_window_pumps_every_active_session_each_interval_until_cancelled() {
+        let spy = Arc::new(MergeWindowSpy::new(vec![session("1"), session("2")], None));
+        let shutdown = Arc::new(ShutdownSignal::new());
+        let mut tasks = OwnedTasks::new();
+        let started = std::time::Instant::now();
+        spawn_merge_window(
+            &mut tasks,
+            Duration::from_millis(20),
+            Arc::clone(&spy),
+            Arc::clone(&shutdown),
+        );
+
+        // 等到真的跑过至少两轮（证明它在运转，而不是恰好卡在第一次 tick 之前）。
+        let deadline = started + Duration::from_secs(10);
+        while spy.scans() < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "合并窗口没有按间隔运行"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let scans = spy.scans();
+        assert_eq!(
+            spy.pumps(),
+            scans * 2,
+            "每个 tick 必须对每个活动会话各 pump 一次"
+        );
+        assert_eq!(spy.failures(), 0);
+        // 按间隔而不是自旋：20ms 的间隔在 10s 内不可能产生几百轮（这里只给一个宽松上界，
+        // 用于捕获「间隔被忽略、循环退化成热循环」这类真实错误）。
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        assert!(
+            u64::from(scans) <= elapsed_ms / 20 + 2,
+            "{scans} 轮 / {elapsed_ms}ms 与 20ms 的间隔不符（疑似热循环）"
+        );
+
+        tasks
+            .cancel_all(std::time::Instant::now() + Duration::from_secs(2))
+            .await;
+        let frozen = (spy.scans(), spy.pumps());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            (spy.scans(), spy.pumps()),
+            frozen,
+            "取消后不得再枚举或 pump"
+        );
+    }
+
+    /// 单会话失败不吞不中止：错误被记录（spy 计数即失败次数）、本轮其余会话照常 `pump`、任务继续跑。
+    #[tokio::test]
+    async fn a_failing_session_does_not_stop_the_rest_of_the_round_or_the_task() {
+        let spy = Arc::new(MergeWindowSpy::new(
+            vec![session("1"), session("2")],
+            Some(session("1")),
+        ));
+        let shutdown = Arc::new(ShutdownSignal::new());
+        let mut tasks = OwnedTasks::new();
+        spawn_merge_window(
+            &mut tasks,
+            Duration::from_millis(20),
+            Arc::clone(&spy),
+            Arc::clone(&shutdown),
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while spy.failures() < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "失败的会话没有让任务停下"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            spy.pumps(),
+            spy.scans() * 2,
+            "失败会话之外的会话仍必须收到 pump"
+        );
+        assert_eq!(
+            spy.failures(),
+            spy.scans(),
+            "每轮恰好有一个会话失败（不重复、不吞）"
+        );
+
+        // 关闭请求也要求任务自行退出（``select!`` 的第二个等待点）。
+        shutdown.request(None);
+        tasks
+            .cancel_all(std::time::Instant::now() + Duration::from_secs(2))
+            .await;
     }
 
     /// `command` 可解析判定（`daemon.status.agents[].available`）覆盖绝对路径与 `PATH` 查找。

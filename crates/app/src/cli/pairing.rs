@@ -84,6 +84,14 @@ impl PairTarget {
         }
     }
 
+    /// `reject` 方法名（§5.3/§5.4）。
+    fn reject(self) -> Method {
+        match self {
+            Self::Device => Method::DevicePairReject,
+            Self::Node => Method::NodePairReject,
+        }
+    }
+
     /// `status` 结果里的指纹字段名（两个方向的名字不同，§5.3/§5.4）。
     fn fingerprint_key(self) -> &'static str {
         match self {
@@ -338,6 +346,16 @@ pub(crate) fn confirm_params(target: PairTarget, pairing_id: &str, claim: &Claim
     params
 }
 
+/// `*.pair.reject` 的 `params`（§5.3/§5.4 两个方向同形）：`reason = null` = 用户主动拒绝，不附理由。
+///
+/// 消息里**不**回显 SAS/指纹/名称，也不写日志（配对 secret 的展示面只有终端）。
+pub(crate) fn reject_params(pairing_id: &str) -> JsonObject {
+    let mut params = JsonObject::new();
+    params.insert("pairingId".to_owned(), Value::from(pairing_id));
+    params.insert("reason".to_owned(), Value::Null);
+    params
+}
+
 /// 非交互的逐字校验（§5.8）。
 ///
 /// **逐字**相等：不 trim、不折叠大小写、不允许前缀匹配。SAS/指纹是防中间人的最后一道人工核对，任何宽容
@@ -369,22 +387,88 @@ pub(crate) fn run(
     let claimed = runtime.block_on(await_claim(&endpoint, target, args))?;
     // 认领后**先**展示，再允许确认（§5.8 的第 2 步）。
     println!("{}", claimed.claim.display(target));
-    match &supplied {
-        Some(supplied) => verify_supplied(&claimed.claim, supplied)?,
+    let answer = match &supplied {
+        // 非交互：`--sas`/`--fingerprint` 逐字一致才继续；不一致即失败（不调 confirm、不调 reject、不改状态）。
+        Some(supplied) => {
+            verify_supplied(&claimed.claim, supplied)?;
+            Answer::Confirmed
+        }
         None => ask_confirmation(target, &claimed.claim)?,
-    }
-    let response = runtime
-        .block_on(call_once(
-            &endpoint,
-            target.confirm(),
-            confirm_params(target, &claimed.pairing_id, &claimed.claim),
-        ))
-        .map_err(client_failure)?;
-    let result = success(&outcome_of(&response))?;
+    };
+    let result = runtime.block_on(settle_claim(
+        &mut OneshotCalls(endpoint.as_str()),
+        target,
+        &claimed.pairing_id,
+        &claimed.claim,
+        answer,
+    ))?;
     print_result(&result);
     let id = text_field(&result, target.id_key())?;
     println!("已配对：{}={id}", target.id_key());
     Ok(())
+}
+
+/// 配对方法的调用接缝。
+///
+/// 生产实现是 [`OneshotCalls`]（每条方法一条一次性连接）；把「调用哪个方法、带什么 `params`」抽成
+/// 可注入的 trait，是为了让「拒绝路径调了 `reject` 且没调 `confirm`」成为**断言**而不是只能靠人工看
+/// 终端（交互路径要求 stdin 是 TTY，进程级用例无法覆盖）。
+#[async_trait::async_trait]
+trait PairCalls {
+    /// 调用一个配对方法并返回 `result`（失败的码原样带出）。
+    async fn call(&mut self, method: Method, params: JsonObject) -> Result<JsonObject, Failure>;
+}
+
+/// `PairCalls` 的生产实现：一条一次性连接（与 `confirm` 原有的 `call_once` 行为完全一致）。
+struct OneshotCalls<'a>(&'a str);
+
+#[async_trait::async_trait]
+impl PairCalls for OneshotCalls<'_> {
+    async fn call(&mut self, method: Method, params: JsonObject) -> Result<JsonObject, Failure> {
+        let response = call_once(self.0, method, params)
+            .await
+            .map_err(client_failure)?;
+        success(&outcome_of(&response))
+    }
+}
+
+/// 交互式确认的两种回答。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    /// 明确的 `y`/`Y`。
+    Confirmed,
+    /// 其余一切（`n`、空行、EOF）。
+    Rejected,
+}
+
+/// 认领之后的落定：确认 → 调 `confirm`；交互式拒绝 → **先终结配对会话**（`*.pair.reject`）再失败退出。
+///
+/// 拒绝时必须调 `reject`：否则已认领的配对会悬置到 5 分钟到期，而对端还在等着一个永远不会来的决定。
+/// `reject` 自身失败时按方法返回的码报错退出（不改判成功、不吞错）；无论哪条路径都**不**在拒绝时调
+/// `confirm`。
+async fn settle_claim<M: PairCalls + Send>(
+    calls: &mut M,
+    target: PairTarget,
+    pairing_id: &str,
+    claim: &Claim,
+    answer: Answer,
+) -> Result<JsonObject, Failure> {
+    if answer == Answer::Rejected {
+        calls
+            .call(target.reject(), reject_params(pairing_id))
+            .await?;
+        return Err(Failure::local(
+            LocalErrorCode::Conflict,
+            format!(
+                "用户未确认{}配对：已调用 `{}` 终结该配对会话（未调用 confirm，未建立信任）",
+                target.label(),
+                target.reject().as_str()
+            ),
+        ));
+    }
+    calls
+        .call(target.confirm(), confirm_params(target, pairing_id, claim))
+        .await
 }
 
 /// 认领结果：`pairingId`（`confirm` 的必需参数）+ 展示/确认用的领域值。
@@ -456,11 +540,11 @@ async fn await_claim(
     }
 }
 
-/// 交互式确认：只有明确的 `y`/`Y` 才算确认；其余（含 EOF）都不修改任何状态。
+/// 交互式确认：只有明确的 `y`/`Y` 才算确认；其余（含 EOF）都算拒绝。
 ///
-/// 本切片**不**在拒绝时调用 `*.pair.reject`：CLI 不替用户做未请求的状态变更，未确认的配对自然到期
-/// （有效期 5 分钟，且未确认前不可能成为信任记录）。
-fn ask_confirmation(target: PairTarget, claim: &Claim) -> Result<(), Failure> {
+/// 拒绝是**用户意图**（不是「什么都没发生」）：调用方必须据 [`Answer::Rejected`] 调 `*.pair.reject` 终结
+/// 已认领的配对会话，而不是把它留给 5 分钟到期。
+fn ask_confirmation(target: PairTarget, claim: &Claim) -> Result<Answer, Failure> {
     println!(
         "确认授予以上 {label}（{} 项）？[y/N]: ",
         claim.requested.len(),
@@ -474,14 +558,21 @@ fn ask_confirmation(target: PairTarget, claim: &Claim) -> Result<(), Failure> {
     }
     let mut line = String::new();
     let read = std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line);
-    let answer = line.trim();
-    if read.is_ok() && (answer == "y" || answer == "Y") {
-        Ok(())
-    } else {
-        Err(Failure::local(
-            LocalErrorCode::Conflict,
-            "用户未确认配对：未调用 confirm，未修改任何状态",
-        ))
+    if read.is_err() {
+        // 读失败（不是 EOF）：用户意图未知，因此既不确认也**不**替用户拒绝。
+        return Err(Failure::local(
+            LocalErrorCode::Internal,
+            "无法从 stdin 读取确认回答",
+        ));
+    }
+    Ok(answer_for(&line))
+}
+
+/// 回答词 → [`Answer`]：只有 `y`/`Y`（去首尾空白后）算确认，其余一切（`n`、空行、EOF）都是拒绝。
+fn answer_for(line: &str) -> Answer {
+    match line.trim() {
+        "y" | "Y" => Answer::Confirmed,
+        _ => Answer::Rejected,
     }
 }
 
@@ -546,6 +637,7 @@ fn text_array_field(result: &JsonObject, key: &str) -> Result<Vec<String>, Failu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{fail, failure_line};
 
     fn claim() -> Claim {
         Claim {
@@ -554,6 +646,137 @@ mod tests {
             sas: "481502".to_owned(),
             requested: vec!["session.list".to_owned(), "session.read".to_owned()],
             expires_at: "2026-09-23T14:31:00.000Z".to_owned(),
+        }
+    }
+
+    /// 配对方法调用的 spy：记录方法与 `params`，用于断言「哪条路径调了哪些方法」。
+    #[derive(Default)]
+    struct CallSpy {
+        calls: Vec<(Method, JsonObject)>,
+        /// 注入的方法侧失败（`Some` 时每条调用都以它失败）。
+        failure: Option<(String, String)>,
+    }
+
+    impl CallSpy {
+        fn methods(&self) -> Vec<Method> {
+            self.calls.iter().map(|(method, _)| *method).collect()
+        }
+
+        fn params(&self, index: usize) -> Value {
+            Value::Object(self.calls[index].1.clone())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PairCalls for CallSpy {
+        async fn call(
+            &mut self,
+            method: Method,
+            params: JsonObject,
+        ) -> Result<JsonObject, Failure> {
+            self.calls.push((method, params));
+            match &self.failure {
+                Some((code, message)) => Err(Failure::reported(code.clone(), message.clone())),
+                None => Ok(JsonObject::new()),
+            }
+        }
+    }
+
+    /// 交互式拒绝：调用对应的 `*.pair.reject`（`reason: null`）且**不**调用 `confirm`；退出码非零。
+    ///
+    /// 交互路径要求 stdin 是 TTY，进程级用例无法覆盖，因此断言落在可注入的 [`PairCalls`] 接缝上。
+    #[tokio::test]
+    async fn an_interactive_rejection_calls_reject_and_never_confirm() {
+        for (target, expected) in [
+            (PairTarget::Device, Method::DevicePairReject),
+            (PairTarget::Node, Method::NodePairReject),
+        ] {
+            let mut spy = CallSpy::default();
+            let error = settle_claim(&mut spy, target, "P", &claim(), Answer::Rejected)
+                .await
+                .expect_err("用户拒绝必须以失败退出（不得改判成功）");
+            assert_eq!(
+                spy.methods(),
+                vec![expected],
+                "拒绝路径必须终结配对会话且不调 confirm"
+            );
+            assert_eq!(
+                spy.params(0),
+                serde_json::json!({ "pairingId": "P", "reason": null })
+            );
+            assert_eq!(error.code(), LocalErrorCode::Conflict.as_str());
+            assert!(
+                error.message().contains(expected.as_str()),
+                "消息必须说明调了哪个 reject：{}",
+                error.message()
+            );
+            // 退出码与 stderr 结构化行由统一出口决定：`cli::fail` 与 `cli::failure_line` 是同一构造。
+            assert_ne!(fail(&error), std::process::ExitCode::SUCCESS);
+            let line: Value = serde_json::from_str(&failure_line(error.code(), error.message()))
+                .expect("stderr 行必须是合法 JSON");
+            assert_eq!(line["code"], Value::from(error.code()));
+        }
+    }
+
+    /// `reject` 失败：按方法返回的码报错退出（非零），不吞错、不改判成功、不转而调 `confirm`。
+    #[tokio::test]
+    async fn a_failed_reject_exits_with_the_reported_code() {
+        let mut spy = CallSpy {
+            failure: Some((
+                LocalErrorCode::InvalidParams.as_str().to_owned(),
+                "pairing is not claimable".to_owned(),
+            )),
+            ..CallSpy::default()
+        };
+        let error = settle_claim(
+            &mut spy,
+            PairTarget::Device,
+            "P",
+            &claim(),
+            Answer::Rejected,
+        )
+        .await
+        .expect_err("reject 失败即失败退出");
+        assert_eq!(spy.methods(), vec![Method::DevicePairReject]);
+        assert_eq!(
+            error.code(),
+            LocalErrorCode::InvalidParams.as_str(),
+            "必须原样带出方法返回的码"
+        );
+        assert_ne!(fail(&error), std::process::ExitCode::SUCCESS);
+        let line: Value = serde_json::from_str(&failure_line(error.code(), error.message()))
+            .expect("stderr 行必须是合法 JSON");
+        assert_eq!(line["code"], Value::from("local.invalid_params"));
+    }
+
+    /// 确认路径：只调 `confirm`（且提交的是展示过的请求集合），不调 `reject`。
+    #[tokio::test]
+    async fn a_confirmation_calls_only_confirm() {
+        for (target, expected, key) in [
+            (PairTarget::Device, Method::DevicePairConfirm, "scopes"),
+            (PairTarget::Node, Method::NodePairConfirm, "grants"),
+        ] {
+            let mut spy = CallSpy::default();
+            settle_claim(&mut spy, target, "P", &claim(), Answer::Confirmed)
+                .await
+                .expect("确认必须调 confirm");
+            assert_eq!(spy.methods(), vec![expected]);
+            assert_eq!(
+                spy.params(0)[key],
+                serde_json::json!(["session.list", "session.read"])
+            );
+        }
+    }
+
+    /// 回答词：只有 `y`/`Y`（去首尾空白后）算确认，其余一切（含空行与 EOF）都是拒绝（因此会走 reject 路径）。
+    #[test]
+    fn only_an_explicit_yes_is_a_confirmation() {
+        assert_eq!(answer_for("y\n"), Answer::Confirmed);
+        assert_eq!(answer_for("Y\n"), Answer::Confirmed);
+        // 首尾空白按既有行为容忍（用户按回车前的空格不该被当成拒绝）。
+        assert_eq!(answer_for(" y \n"), Answer::Confirmed);
+        for rejected in ["n\n", "no\n", "\n", "", "yes\n"] {
+            assert_eq!(answer_for(rejected), Answer::Rejected, "{rejected:?}");
         }
     }
 
