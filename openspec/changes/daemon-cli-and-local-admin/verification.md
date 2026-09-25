@@ -55,6 +55,8 @@
 | 2.25-B | coder / implement / work-package | a4cb119 | DELIVERY / NOT_APPLICABLE | reports/wp425-handoff.md | PASS / NEW | `accept()` 非 cancel-safe 写入源码文档 + 断言用例（取消后 `pending.is_none()`、客户端 `Ok(0)`、endpoint 仍可用） |
 | 2.25-C | coder / implement / work-package | 7089426 | DELIVERY / NOT_APPLICABLE | reports/wp425-handoff.md | PASS / NEW | 交互式拒绝 → `*.pair.reject`（`{pairingId, reason:null}`）+ 非零退出 `local.conflict`；reject 失败原样上抛方法码；断言「拒绝只调 reject、确认只调 confirm」 |
 | 2.25 | coder / implement / work-package | 7819b1f | CHECK / PV1、PV2、PV3、PV4（2.25 轮） | reports/wp425-handoff.md（日志 reports/wp425.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy(workspace) EXIT=0；`-p server` EXIT=0（89 lib）；`-p app` EXIT=0（49+1+11+9，0 ignored）；`npm run check` EXIT=0 |
+| 2.26 | coder / implement / work-package | 1ea291a（82d376d；报告 1ea291a） | DELIVERY / NOT_APPLICABLE | reports/wp426-handoff.md | PASS / NEW | 定位：`remaining:1` = CLI 自己的停止连接；根因是 **mio `NamedPipe::Drop` 不 `CloseHandle`**，句柄被挂起 overlapped 读持有，而 CLI 的 current_thread runtime 缓存在 `Context` 里、等锁期间只 `sleep` 从不被驱动 ⇒ 句柄活到进程退出。修正：`Context::release_runtime()` 在 `drop(client)` 后、等锁前释放（关闭顺序与 `crates/server/**` 一行未改）。实测 3099 ms → **102 ms**，`daemon.drain_timeout` 消失 |
+| 2.26 | coder / implement / work-package | 82d376d | CHECK / PV1、PV4（2.26 轮，含 RED/GREEN） | reports/wp426.log（`EXIT(...)` 行）、reports/du1-pv1.log | PASS / NEW | 新增回归断言 `stop_does_not_wait_for_the_full_grace_without_other_clients`（`--grace-ms 3000`，断言无 `drain_timeout`、`elapsed < 2000ms`、锁可再取）：RED（临时禁用修正）= 3023 ms / EXIT 101 → GREEN = 0.29 s / EXIT 0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -105,6 +107,7 @@
   - **③ `flush_interval_ms` 只校验下界（`>=1`）→ 接受**：`CONFIG_REFERENCE.md` §5 未给上界，合同无要求；`0` 失败关闭已实现。
   - **④ 交互式提示 stdin 读失败 → `local.internal` → 接受**：终端故障属内部错误而非「用户拒绝」，语义正确；拒绝路径仍走 reject + 非零退出。
 - 2026-09-25（主 Agent，加速决策）：**W3/W4 波次合并**——任务 2.26（写 `crates/app/**`）与 WP5（写 `docs/**`、`README.md`、`AGENTS.md`、`reports/**`）**并行派发**，偏离规划「每波 1 个写者」的串行安排。理由：两者写范围**不相交**；规划真正要守的不变量是「文件单一写入者」，而非「全局单写者」。风险与缓解：并发 `git add` + 裸 `git commit` 会互相卷入暂存内容（PRO-1/PRO-2 的成因），故两个 Agent 均被指令**只用 `git commit --only <显式路径>`**、禁止 `git add` 后裸提交；WP5 被明确禁止触碰任何 `crates/**`。另注：两者共享 `target/` 目录，存在 cargo 构建锁竞争（会变慢但不会失败），WP5 被要求先做文档提交、最后才跑分钟级 [PV1]/[PV2]。
+- 2026-09-25（2.26 定位结论，主 Agent 复核登记）：根因**不在**关闭序列也不在 `drain_connections`，而在 CLI 侧的 runtime 生命周期（`mio` 的 Windows Named Pipe 句柄释放依赖 I/O driver 处理完 completion）。**不变量教训（供后续切片参考）**：CLI 的同步等锁路径不得持有已 drop 掉连接的 runtime；`Context::release_runtime()` 现由 `daemon_stop` 在 `drop(client)` 之后立即调用。此项已由回归断言钉住（宽限 3000 ms 时必须明显早于宽限完成）。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
