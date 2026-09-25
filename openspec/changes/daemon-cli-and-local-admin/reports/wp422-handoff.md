@@ -6,9 +6,9 @@
 - stage: work-package
 - agent_context: 独立子 Agent（worker / coder 角色）；主 worktree 的分支 `feat/daemon-cli-and-local-admin`；只继承任务单 2.22 的文本与只读上下文（合同 `docs/CORE_PORTS_AND_STORAGE.md` §5/§7/§11.6、既有 `crates/storage-sqlite/src/admin/{export,trust,local_config}.rs` 与 `tests/`），不继承规划阶段对话；同一时刻只有本写入者编辑本任务的文件
 - base_revision: **`9376e96`**（开工前 `git log --oneline -3` 的首行，与任务单一致）
-- target_revision: **`bb96a10`**（`bb96a10c5784a4a49e6dd78adb4732176b7435e4`，`feat(storage): 实现 AuditStore（append/query over owned_audit）`）；本报告以紧随其后的 `docs(storage)` 提交入库，报告本身不属交付物
+- target_revision: **`fe093b3`**（`test(storage): 补审计查询的混合条件与 limit 组合用例`，本任务交付的**第二个**提交）；实现主体是它的前一个提交 **`bb96a10`**（`bb96a10c5784a4a49e6dd78adb4732176b7435e4`，`feat(storage): 实现 AuditStore（append/query over owned_audit）`）。两个提交合起来构成本任务的全部交付内容；报告以 `docs(storage)` 提交入库，报告本身不属交付物
 - scope: `crates/storage-sqlite/src/admin/audit.rs`（新增）、`crates/storage-sqlite/src/admin/mod.rs`（+1 行模块声明）、`crates/storage-sqlite/tests/admin_audit.rs`（新增测试文件）、`openspec/changes/daemon-cli-and-local-admin/reports/`（本报告 + 两个 `.log`）
-- result: `PASS`（任务单列出的三项 cargo 检查 + `node scripts/check-crate-boundaries.mjs` + `npm run check` 全部执行且全绿；`git status --porcelain` 提交后为空；**不代表**独立 review、集成或合并已完成）
+- result: `PASS`（任务单列出的三项 cargo 检查 + `node scripts/check-crate-boundaries.mjs` + `npm run check` 全部执行且全绿，含一次预期失败的 RED 探针；每次提交后 `git status --porcelain` 均为空；**不代表**独立 review、集成或合并已完成）
 
 ## 问题（已核实，未改合同）
 
@@ -36,7 +36,7 @@
 
 用既有测试基座（`mod support;` 的 `temp_dir`/`raw_pool`/`measured_storage_bytes`）与既有风格（真实 SQLite 文件 + `#[tokio::test]`）。
 
-| 用例（`bb96a10` 行号） | 覆盖 |
+| 用例（行号取 `bb96a10`；最后一个用例由 `fe093b3` 追加） | 覆盖 |
 | --- | --- |
 | `round_trip_preserves_every_column`（143） | `append` → `query` 往返：整条记录相等 **且** `at`/`action`/`actor`/`via_node`/`local_principal_ref`/`target`/`outcome`/`detail_digest` 逐项断言 |
 | `every_target_kind_round_trips`（182） | `EntityRef` 全部 11 种形状（含 `Command{session: None}`）的 `(target_kind, target_id)` 编解码 |
@@ -51,8 +51,9 @@
 | `default_query_returns_every_row`（575） | `AuditQuery::default()` 返回全部（跨动作/actor/时间） |
 | `append_refuses_a_new_row_when_over_capacity`（614） | 容量：上限=现值时 `append` → `Unavailable(StorageFull)` 且库内仍只有原 1 行 |
 | `appended_rows_are_swept_by_audit_retention`（651） | 保留：`prune` 扫掉过期审计行（`removed_audit == 1`），未到期行仍可查 |
+| `combined_filters_and_limit_compose_as_a_conjunction`（486，`fe093b3`） | 全部过滤条件（`since`+`until`+`actions`+`actor`+`target`）与 `limit` 同时在场：动态 SQL 的 `?N` 编号与绑定顺序一一对应；五条无关行各偏离一个条件均被排除；带非空 `WHERE` 绑定时 `LIMIT` 占位符仍正确（见 CT9 的 RED 探针） |
 
-未删除或弱化任何既有断言；既有 13 个测试文件（共 110 项）在改动后全部通过。
+未删除或弱化任何既有断言；`admin_audit` 之外的既有 97 项用例在改动后全部通过（块 (8c) 的 13 条 `test result: ok`）。
 
 ## 检查记录（命令 / 退出码 / 日志）
 
@@ -60,14 +61,17 @@
 | --- | --- | --- | --- |
 | CT1 | `cargo fmt --all -- --check` | 0 | `reports/wp4-storage-audit.log` 块 (1) 与复跑块 (1f) |
 | CT2 | `cargo clippy --locked -p storage-sqlite --all-targets --all-features -- -D warnings` | 0 | 同上，块 (2)/(2f) |
-| CT3 | `cargo test --locked -p storage-sqlite --all-features` | 0 | 同上，块 (3)/(3b)/(3f)（新增 13 项 + 既有 110 项全过） |
+| CT3 | `cargo test --locked -p storage-sqlite --all-features` | 0 | 同上，块 (3)/(3b)/(3f)/(8a)/(8c)（新增 14 项 + 既有 97 项全过） |
 | CT4 | `node scripts/check-crate-boundaries.mjs` | 0 | 同上，块 (4)：`11 个 crate 的依赖方向与 §5 矩阵一致` |
-| CT5 | `npm run check`（10 道门禁，含 `check:drift`） | 0 | `reports/du1-pv1.log` 第三轮，含显式 `EXIT(npm run check)=0`：`contract drift OK: §7 的 36 条 DDL … §5 的 15 个 trait / 87 个方法签名` |
+| CT5 | `npm run check`（10 道门禁，含 `check:drift`） | 0 | `reports/du1-pv1.log` 第三、四轮，均含显式 `EXIT(npm run check)=0`：`contract drift OK: §7 的 36 条 DDL … §5 的 15 个 trait / 87 个方法签名` |
 | CT6 | 自检：`rg -n "unsafe" crates/storage-sqlite/src` | 2 命中（**均为 `migrate.rs:780-781` 注释里对该 lint 的说明文字**，本次未改动），新增/改动文件 **0 命中**（块 \((5)/(6b)\) 以退出码 1 证明） | 同上，块 (5)/(6b) |
 | CT7 | 自检：`rg -n "unwrap\(|expect\(|panic!" crates/storage-sqlite/src` | 仅 `migrate.rs:1187`（既有 `#[cfg(test)] mod tests`），新增/改动文件 0 命中 | 同上，块 (6)/(6b) |
-| CT8 | `git status --porcelain`（提交后） | 空 | 同上，块 (7f) |
+| CT8 | `git status --porcelain`（每次提交后） | 空 | 同上，块 (7f)；`fe093b3` 提交后同为实测空 |
+| CT9 | RED 探针：`LIMIT ?{binds.len() + 1}` 临时改成 `LIMIT ?1` 后跑 `cargo test --test admin_audit combined_filters` | **101（预期失败）**：`Backend(SqlFailure { code: Some("20"), message: "datatype mismatch" })`；还原后同一用例与全套复跑全绿，`git diff --stat -- audit.rs` 为空 | 同上，块 (8b)/(8c) |
 
-关键计数：`cargo test -p storage-sqlite --all-features` = **123 项通过**（新增 `admin_audit` 13 + 既有 110），0 failed，2 ignored（既有 `#[ignore]` 夹具生成器）。
+关键计数（最终版本 `fe093b3`）：`cargo test -p storage-sqlite --all-features` = **111 项通过**（新增 `admin_audit` **14** 项 + 既有 **97** 项），0 failed，2 ignored（既有 `#[ignore]` 夹具生成器）。任务单的三项 cargo 检查均针对 `-p storage-sqlite` 执行。
+
+> 证据口径说明：本报告的 `EXIT(...)` 只在未加管道的命令行上就是命令自身的退出码；凡把输出送进 `grep`/`tail` 的行，其紧随的 `EXIT(...)` 取的是管道尾命令的退出码，判定依据是输出里的 `test result: ok … 0 failed` / 无 `error`（该口径已写进 `wp4-storage-audit.log` 末尾的「证据口径说明」块，块 (8b) 的 RED 退出码已按测试二进制的失败码 101 更正）。
 
 > 说明（对任务单自检口径的一处偏差）：任务单写「`rg -n "unsafe" crates/storage-sqlite/src` 零命中」，实测**全树**有 2 条命中，但都是 `migrate.rs` 的文档注释在描述 `unsafe_code = "forbid"` 这条 lint 本身，不是代码。本任务新增/改动的两个源文件 0 命中（附块 (6b) 的退出码 1 证据）。**未**为凑「零命中」去改无关文件的注释。
 
@@ -86,29 +90,37 @@
 4. **`limit = Some(0)` 返回空**：合同只说「返回行数上限」，`0` 按上限解释（与 `AttachmentStore::sweep_orphans` 的 `limit = 0 不删` 同款「0 是边界而不是不限」口径）。若期望 `0 = 不限`，需合同明确。
 5. **新增了一个测试文件**：`tasks.md` 2.22 的「写范围」只列了 `src/admin/audit.rs` 与 `src/admin/mod.rs`，但任务单要求「测试（必测，非跳过）」并指定用「既有 crate 的测试基座」。本 crate 的行为测试基座（`temp_dir`/`raw_pool`/`measured_storage_bytes`）在 `tests/support/`，只能由集成测试使用，因此新增 `tests/admin_audit.rs`（仅测试文件，未改动任何既有文件）。若需要严格按「写范围」两文件收敛，请裁定迁移方式。
 6. **同刻多行的 tiebreak 未被独立断言**：`ORDER BY at ASC, audit_id ASC` 的 `audit_id` 部分只由实现保证，现有用例的时间戳互不相同。要覆盖它需两次 `append` 传同一 `at`（可做到）；合同只要求「按 `at` 升序」，同刻顺序对调用方不可观察，因此本次未加该用例。
+7. **两个提交而非一个**（任务单写的是一个 `feat(storage)` 提交）：`feat(storage)` 主体 `bb96a10` 已落地且全绿后，在落报告前的复核中补上了一个**混合条件 + `limit` 同时在场**的用例（它约束动态 SQL 的 `?N` 编号与绑定顺序，CT9 的 RED 探针证明它非永真），以 `test(storage)` 的 `fe093b3` 追加而非改写已存在的历史。若需要单提交收口，需在主 Agent 授权的本地重写范围内处理——本 Agent 不自行 rebase/force-push。
 
 ## 提交与交付对应
 
 | 提交 | 类型 | 内容 |
 | --- | --- | --- |
-| `bb96a10` | `feat(storage)` | `crates/storage-sqlite/src/admin/audit.rs`（+265）、`admin/mod.rs`（+1）、`tests/admin_audit.rs`（+679）；3 files changed, 945 insertions(+), 0 deletions |
-| `docs(storage)`（紧随其后） | `docs` | 本报告（不属交付物） |
+| `bb96a10` | `feat(storage)` | `crates/storage-sqlite/src/admin/audit.rs`（+265）、`admin/mod.rs`（+1）、`tests/admin_audit.rs`（+679）；3 files changed, 945 insertions(+) |
+| `855c8d7` | `docs(storage)` | 本报告初版（不属交付物） |
+| `fe093b3` | `test(storage)` | `tests/admin_audit.rs` 追加 `combined_filters_and_limit_compose_as_a_conjunction`（+81/-1） |
+| `docs(storage)`（本报告的本次更新） | `docs` | 测试表、计数、检查表（CT9）、提交表与未执行项复述（不属交付物） |
 
 提交用显式路径 `git add`（未 `git add -A`/`.`），未使用 `--no-verify`，未强推，未改写任何既有提交；提交后 `git status --porcelain` 为空（两个 `.log` 被 `.gitignore:27` 忽略，按仓库策略**不**强行入库）。
 
 ## 复核（交付提交后）
 
 ```text
-$ git log --oneline -3
+$ git log --oneline -5
+fe093b3 test(storage): 补审计查询的混合条件与 limit 组合用例
+f648ecd docs(server): 收敛 RV1-WP3 的 F4/F5 措辞并登记 3.6 结论
+855c8d7 docs(storage): 登记 WP4 任务 2.22 的 coder 交接报告
 bb96a10 feat(storage): 实现 AuditStore（append/query over owned_audit）
 9376e96 docs(server): 登记 2.23 交付
-9c71393 docs(server): 标注 2.23 交接报告复核快照的时间点
 $ git show --stat --oneline bb96a10
  crates/storage-sqlite/src/admin/audit.rs       | 265 ++++++++++++
  crates/storage-sqlite/src/admin/mod.rs         |   1 +
  crates/storage-sqlite/tests/admin_audit.rs     | 679 +++++++++++++++++++++++++++++
  3 files changed, 945 insertions(+)
-$ git status --porcelain    # 空
+$ git show --stat --oneline fe093b3
+ crates/storage-sqlite/tests/admin_audit.rs | 82 +++++++++++++++++++++++++++++-
+ 1 file changed, 81 insertions(+), 1 deletion(-)
+$ git status --porcelain -- crates/storage-sqlite    # 空（本任务的文件已全部提交）
 ```
 
 ## handoff_index（逐检查 ID 一行）
@@ -117,15 +129,16 @@ $ git status --porcelain    # 空
 | --- | --- |
 | CT1 | `cargo fmt --all -- --check` → 退出码 0；`reports/wp4-storage-audit.log` 块 (1)/(1f) |
 | CT2 | `cargo clippy -p storage-sqlite --all-targets --all-features -D warnings` → 退出码 0；同日志块 (2)/(2f) |
-| CT3 | `cargo test -p storage-sqlite --all-features` → 退出码 0，123 项通过 0 失败；同日志块 (3)/(3b)/(3f) |
+| CT3 | `cargo test -p storage-sqlite --all-features` → 退出码 0，111 项通过 0 失败（admin_audit 14）；同日志块 (3)/(3b)/(3f)/(8a)/(8c) |
 | CT4 | `node scripts/check-crate-boundaries.mjs` → 退出码 0（11 个 crate 与 §5 矩阵一致）；同日志块 (4) |
-| CT5 | `npm run check` → 退出码 0（含 `check:drift`：§7 36 条 DDL、§5 15 个 trait/87 个方法签名）；`reports/du1-pv1.log` 第三轮 `EXIT(npm run check)=0` |
+| CT5 | `npm run check` → 退出码 0（含 `check:drift`：§7 36 条 DDL、§5 15 个 trait/87 个方法签名）；`reports/du1-pv1.log` 第三、四轮均 `EXIT(npm run check)=0` |
 | CT6 | `rg -n "unsafe" crates/storage-sqlite/src` → 全树 2 命中（均为 migrate.rs 注释），改动文件 0 命中；同日志块 (5)/(6b) |
 | CT7 | `rg -n "unwrap\(|expect\(|panic!" crates/storage-sqlite/src` → 仅 migrate.rs 既有测试 1 命中，改动文件 0 命中；同日志块 (6)/(6b) |
 | CT8 | `git status --porcelain` → 空；同日志块 (7f) |
+| CT9 | RED 探针（LIMIT 占位符改常量）→ 预期失败 101（`datatype mismatch`），还原后全绿；同日志块 (8b)/(8c) |
 
 ## evidence_paths
 
-- `openspec/changes/daemon-cli-and-local-admin/reports/wp4-storage-audit.log`（CT1–CT4、CT6–CT8：块 (1)–(7f)，含每个命令的显式 `EXIT(...)` 行）
-- `openspec/changes/daemon-cli-and-local-admin/reports/du1-pv1.log`（CT5：第三轮 `npm run check`，含显式 `EXIT(npm run check)=0`）
-- `crates/storage-sqlite/tests/admin_audit.rs`（13 个用例：合同行为的可执行证据）
+- `openspec/changes/daemon-cli-and-local-admin/reports/wp4-storage-audit.log`（CT1–CT4、CT6–CT9：块 (1)–(8c)，含每个命令的显式 `EXIT(...)` 行与末尾的「证据口径说明」）
+- `openspec/changes/daemon-cli-and-local-admin/reports/du1-pv1.log`（CT5：第三、四轮 `npm run check`，均含显式 `EXIT(npm run check)=0`）
+- `crates/storage-sqlite/tests/admin_audit.rs`（14 个用例：合同行为的可执行证据）
