@@ -176,6 +176,49 @@ fn record_path_for(lock_path: &Path) -> PathBuf {
     lock_path.with_file_name(RECORD_FILE_NAME)
 }
 
+/// CLI 的「Daemon 是否在运行」判定（`docs/LOCAL_ADMIN_PROTOCOL.md` §7：「CLI 先读单实例锁判定」）。
+///
+/// 判定只看**能否加锁**，不把「记录文件存在」当运行判据（陈旧记录必须被判为未运行）。
+#[derive(Debug)]
+pub enum LockState {
+    /// 没有持有者：Daemon 未运行（锁文件不存在，或存在但可加锁）。
+    Free,
+    /// 锁被持有：有 Daemon 在运行（运行记录可能尚未发布，见 [`read_record`]）。
+    Held,
+    /// 无法判定（锁文件不可打开或加锁调用失败）。
+    Unusable {
+        /// 底层错误。
+        source: std::io::Error,
+    },
+}
+
+/// 探测锁状态（**不创建任何文件**，不改变任何状态）。
+///
+/// - 锁文件不存在 → [`LockState::Free`]：Daemon 一定在 `DaemonLock::acquire`（启动序列第 5 步）之前失败或
+///   从未启动，且**不会**在记录之前出现，因此「文件不存在」与「未运行」等价；
+/// - 可加锁 → `Free` 并立即释放（advisory 锁，持有窗口只覆盖这次探测）；
+/// - 加锁返回 `WouldBlock` → [`LockState::Held`]。
+///
+/// 与 [`DaemonLock::acquire`] 的差别：本函数**不用** `create(true)`，因此 `acp-remote daemon status` 在干净的
+/// 机器上不会凭空造出数据目录里的文件。
+pub fn probe(path: &Path) -> LockState {
+    let file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => file,
+        // 锁文件缺失 = 没有进程走过启动序列的取锁一步。
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return LockState::Free,
+        Err(source) => return LockState::Unusable { source },
+    };
+    match fs4::FileExt::try_lock(&file) {
+        Ok(()) => {
+            // 立即释放：本函数只回答「是否被持有」，不代替 Daemon 取锁。
+            let _ = fs4::FileExt::unlock(&file);
+            LockState::Free
+        }
+        Err(fs4::TryLockError::WouldBlock) => LockState::Held,
+        Err(fs4::TryLockError::Error(source)) => LockState::Unusable { source },
+    }
+}
+
 /// 读回运行记录（不改变锁状态）。
 ///
 /// 返回 `Ok(None)` 表示记录不存在或为空（没有进程发布过记录，或上一次运行已正常清理）。**读到记录不等于
@@ -282,6 +325,22 @@ mod tests {
         again.remove_record();
         assert_eq!(read_record(again.record_path()).expect("已删除"), None);
         drop(again);
+    }
+
+    #[test]
+    fn probing_reports_free_held_and_never_creates_the_lock_file() {
+        let dir = TempDir::new("probe");
+        let path = lock_path(&dir.path);
+        // 目录里什么都没有：未运行，且探测不得创建锁文件（`daemon status` 无副作用）。
+        assert!(matches!(probe(&path), LockState::Free));
+        assert!(!path.exists(), "探测不得创建锁文件");
+
+        let held = DaemonLock::acquire(&path).expect("持有者");
+        assert!(matches!(probe(&path), LockState::Held));
+        drop(held);
+
+        // 释放后回到可加锁状态。
+        assert!(matches!(probe(&path), LockState::Free));
     }
 
     #[test]

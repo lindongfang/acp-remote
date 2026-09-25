@@ -13,7 +13,9 @@
 //!   `LocalAdminDeps` 与四个注入口）；
 //! - [`client`]：本地管理通道的客户端（WP4b 的 CLI 子命令与集成测试共用同一份客户端）；
 //! - [`daemon`]：启动序列、接受循环、周期任务与关闭序列；
-//! - [`cli`]：本切片的 `daemon start`（其余子命令属 WP4b，`tasks.md` 2.15–2.17）。
+//! - [`cli`]：`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表的全部子命令（`daemon start|stop|status`、
+//!   本地配置/配对/Export/Import、`doctor`）与唯一的错误出口；
+//! - [`stdio`]：`acp-stdio` 的 stdin/stdout ↔ channel `0x02` 字节泵（不进管理信封）。
 //!
 //! 唯一权威：`docs/CONFIG_REFERENCE.md`（配置键与默认值）、`docs/LOCAL_ADMIN_PROTOCOL.md`（通道与方法）、
 //! `docs/SECURITY_DESIGN.md` §12.1（启动/关闭顺序）。本 crate 只装配，不承载业务规则；`app` 可以依赖
@@ -28,6 +30,7 @@ pub mod daemon;
 pub mod identity;
 pub mod lock;
 pub mod logging;
+pub mod stdio;
 
 pub use client::{ClientOutcome, LocalAdminClient, outcome_of};
 pub use config::{Config, Loaded};

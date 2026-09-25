@@ -92,6 +92,10 @@ toml = "1.1"
 # 单实例锁的 OS advisory 文件锁：unix 走 `flock`、Windows 走 `LockFileEx`，公开 API 只有独占锁 +
 # `try_lock`/`TryLockError`（safe API，unsafe 收敛在 crate 内部）。落选候选 `fd-lock` 的理由见 docs/MODULE_ARCHITECTURE.md §3.1。
 fs4 = "1.1"
+# `provider configure` 的凭据值**无回显**读取（`cli-commands` 规格的场景「凭据无回显录入」）：默认配置就
+# 从终端设备（unix `/dev/tty`、Windows `CONIN$`）读且关回显，因此管道/stdin 无法注入凭据值。
+# 选型结论（版本、许可证、MSRV、传递依赖）见 WP4b 报告与 docs/MODULE_ARCHITECTURE.md §3.1。
+rpassword = "7.5"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

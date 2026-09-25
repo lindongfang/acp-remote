@@ -525,8 +525,147 @@ pub fn failure_code(stderr: &str) -> String {
 pub fn request_id(text: &str) -> RequestId {
     RequestId::parse(text).expect("请求 id 是规范 uuid")
 }
-
 /// 解码一份请求信封（断言 CLI 形状时使用）。
 pub fn decode(bytes: &[u8]) -> server::local_admin::AdminRequest {
     decode_request(bytes).expect("信封合法")
+}
+
+/// 一次 CLI 子进程调用的结果。
+///
+pub struct CliRun {
+    /// 退出状态；超时被强制结束时为 `None`。
+    pub status: Option<ExitStatus>,
+    /// stdout 全文。
+    pub stdout: String,
+    /// stderr 全文。
+    pub stderr: String,
+    /// 是否超时被强杀（用例据此失败，而不是挂到宿主超时）。
+    pub timed_out: bool,
+}
+
+impl CliRun {
+    /// 退出码（超时即失败）。
+    pub fn exit_code(&self) -> i32 {
+        assert!(!self.timed_out, "CLI 子进程超时（未在期限内退出）");
+        self.status.expect("已结束").code().expect("有退出码")
+    }
+
+    /// 断言成功的退出码（`0`）。
+    pub fn assert_success(&self) {
+        assert_eq!(
+            self.exit_code(),
+            0,
+            "stdout={} stderr={}",
+            self.stdout,
+            self.stderr
+        );
+        assert!(
+            self.stderr.trim().is_empty(),
+            "成功时 stderr 必须为空：{}",
+            self.stderr
+        );
+    }
+
+    /// 断言失败的退出码（非零）与 stderr 那一行 JSON 的 `code`。
+    pub fn assert_failure(&self, code: &str) -> String {
+        assert!(!self.timed_out, "CLI 子进程超时（未在期限内退出）");
+        assert_ne!(self.exit_code(), 0, "必须非零退出：stdout={}", self.stdout);
+        let actual = failure_code(&self.stderr);
+        assert_eq!(
+            actual, code,
+            "stdout={} stderr={}",
+            self.stdout, self.stderr
+        );
+        actual
+    }
+}
+
+/// stdin 的给法。
+pub enum Stdin {
+    /// 空设备（`/dev/null` 等价）。
+    Null,
+    /// 管道：写入这些字节后关闭（含 NUL 的二进制也按原样写）。
+    Bytes(Vec<u8>),
+}
+
+/// CLI 子进程的等待上限（挂住时强杀，用例以「超时」失败而不是拖住整个测试）。
+const CLI_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 运行一条 CLI 子命令（不启动 Daemon）。
+///
+/// `config` 非空时追加 `--config <path>`；`stdin` 按 [`Stdin`] 给出（默认空设备，保证非交互）。
+pub fn run_cli(label: &str, config: Option<&Path>, args: &[&str], stdin: Stdin) -> CliRun {
+    let root = std::env::temp_dir().join(format!(
+        "acpr-wp4b-cli-{label}-{}-{}",
+        std::process::id(),
+        next_cli_counter()
+    ));
+    std::fs::create_dir_all(&root).expect("CLI 输出目录");
+    let stdout_path = root.join("stdout.txt");
+    let stderr_path = root.join("stderr.txt");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_acp-remote"));
+    command.args(args);
+    if let Some(config) = config {
+        command.arg("--config").arg(config);
+    }
+    command
+        .env_remove("ACP_REMOTE_CONFIG")
+        .stdin(match &stdin {
+            Stdin::Null => Stdio::null(),
+            Stdin::Bytes(_) => Stdio::piped(),
+        })
+        .stdout(Stdio::from(
+            std::fs::File::create(&stdout_path).expect("stdout 文件"),
+        ))
+        .stderr(Stdio::from(
+            std::fs::File::create(&stderr_path).expect("stderr 文件"),
+        ));
+    let mut child = command.spawn().expect("运行 acp-remote");
+    if let Stdin::Bytes(bytes) = &stdin {
+        use std::io::Write as _;
+        let mut pipe = child.stdin.take().expect("stdin 管道");
+        pipe.write_all(bytes).expect("写 stdin");
+        // 关闭 stdin：字节泵与配对仪式都必须能在对端关闭时退出（不留半开的管道）。
+        drop(pipe);
+    }
+    let deadline = Instant::now() + CLI_TIMEOUT;
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            timed_out = true;
+            break None;
+        }
+        std::thread::sleep(POLL);
+    };
+    let read = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
+    let run = CliRun {
+        status,
+        stdout: read(&stdout_path),
+        stderr: read(&stderr_path),
+        timed_out,
+    };
+    let _ = std::fs::remove_dir_all(&root);
+    run
+}
+
+/// CLI 用例的临时输出目录计数（同一进程内多个子进程调用互不覆盖）。
+fn next_cli_counter() -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 目录里的文件名（排序；供「CLI 未创建任何文件」这类断言）。
+pub fn dir_entries(path: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(path)
+        .expect("目录可读")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }

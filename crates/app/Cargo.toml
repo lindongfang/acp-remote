@@ -34,14 +34,18 @@ agent-host = { path = "../agent-host" }
 server = { path = "../server" }
 # `rt-multi-thread`/`macros`/`sync`/`time`/`net`/`io-util`/`signal` 由 workspace 基线开启：runtime 由本
 # crate 创建并持有（`docs/MODULE_ARCHITECTURE.md` §4.5/§4.7：适配器不自建 runtime），`signal` 驱动关闭序列。
-tokio.workspace = true
+# `io-std` 是 `acp-stdio` 字节泵自己的消费面（`tokio::io::stdin/stdout`），因此只在本 manifest 增量开启，
+# 不替其他 crate 多开（`AGENTS.md` §12：feature 是加法的，基线只登记跨 crate 共用的部分）。
+tokio = { workspace = true, features = ["io-std"] }
 # 单实例锁：OS advisory 文件锁。**必须全限定调用** `fs4::FileExt::try_lock`——固定工具链的
 # `std::fs::File::try_lock`（1.89 稳定）同名且方法解析优先级更高，用错等于把 MSRV 抬到 1.89
 # （`MODULE_ARCHITECTURE.md` §3.1 的调用点约束，WP4 任务单明写）。
 fs4.workspace = true
-# CLI 解析（本切片只有 `daemon start`）与 `docs/CONFIG_REFERENCE.md` 的配置文件解析（只读，不回写）。
+# CLI 解析与 `docs/CONFIG_REFERENCE.md` 的配置文件解析（只读，不回写）。
 clap.workspace = true
 toml.workspace = true
+# `provider configure` 的无回显凭据读取（只做「关回显读一行」；凭据值不经命令行参数/文件/stdout）。
+rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
