@@ -82,14 +82,15 @@ post-merge 检查实际结果相对候选的新增差异。无新增差异可有
 
 ## Report
 
-报告先按 `task_id / role / phase / agent_context / target_revision / scope / changes / checks / issues /
-result / evidence_paths / resource_cleanup` 的固定字段组织，再补充以下 Review Context、Findings 和
-Assessment；只引用中立证据，不复制实现对话或其他角色私有上下文。
+按共用 `roles/handoff.md` 组织报告和 `handoff_index`，补充以下 Review Context、Findings 和 Assessment。
 
 ### Review Context
 
 记录 Review ID、Review Type、Review Stage、Work Package、Repository、Base Revision、Target Revision、读取的规则与需求、
 实际检查范围、使用的验证证据及限制。调度者另行关联实际子 Agent ID 和隔离设置。
+每个 Review ID 和阶段单独一行，记录 Base/Target 提交、
+本轮报告路径及核对的 Check/E2E ID；逐证据注明目标差异和适用依据。尚待返回的检查
+标为待补并注明其门禁，不把静态检视结论扩展到未执行测试。
 
 ### Findings
 

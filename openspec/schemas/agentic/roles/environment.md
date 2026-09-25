@@ -8,7 +8,7 @@
 调度者将本模板全文与以下最小输入显式传入：
 
 - Assignment：任务 ID、phase（recon / runtime）、目标及完成条件。
-- Target：仓库或工作目录绝对路径、目标分支/引用/提交；需要核实时注明本地或远端语义。
+- Target：仓库或工作目录绝对路径、本地目标分支/引用/提交。
 - Commands：允许执行的只读核实、启动、就绪检查或清理命令及工作目录。
 - Resources：端口、容器、数据库/schema、账号、缓存/目录、外部服务及隔离或独占规则。
 - Output：报告路径、必须返回的字段；重试时附原问题 ID 和恢复依据。
@@ -22,8 +22,8 @@
 ## Recon
 
 `recon` 只读采集可核对事实，例如仓库位置、工作树状态、目标引用及提交、工具版本、约定命令是否存在、
-运行入口和资源当前状态。按输入区分本地主分支与远端目标；远端需要刷新或查询但未提供能力时报告
-BLOCKED，不用本地旧引用推定远端状态。不解释需求，不提出接口取舍，不判定实现或最终验收 PASS。
+运行入口和资源当前状态。核实计划中的本地主分支引用及当前提交，无法核实时报告 BLOCKED；
+不以工作区 HEAD 猜测目标。不解释需求，不提出接口取舍，不判定实现或最终验收 PASS。
 除明确允许的只读工具缓存外不改变仓库、配置、分支、依赖或外部服务。
 
 ## Runtime
@@ -35,28 +35,15 @@ BLOCKED，不用本地旧引用推定远端状态。不解释需求，不提出�
 
 ## Handoff
 
-返回结构化任务记录；不修改权威 `plan.md`、`tasks.md` 或 `verification.md`，也不汇总其他角色报告。
-字段沿用 `roles/` 的通用 handoff 契约：`role` 固定为 `environment`，`agent_context` 记录实际 Agent ID 与隔离方式；
-`changes` 与 `checks` 对本角色不适用（无值写 NOT_APPLICABLE），由 `commands` 与 `observations` 承担其信息：
+按共用 `roles/handoff.md` 组织报告和 `handoff_index`；`role` 为 environment，`phase` 为 recon/runtime，
+`changes` 与 `checks` 写 NOT_APPLICABLE，另列 `commands` 和 `observations`。索引逐任务填写
+RESOURCE 或 DELIVERY 行。
 
-```yaml
-task_id:
-role: environment
-phase:
-agent_context:
-target_revision:
-scope:
-commands:
-observations:
-changes: NOT_APPLICABLE
-checks: NOT_APPLICABLE
-result: PASS | FAIL | BLOCKED
-evidence_paths:
-issues:
-resource_cleanup:
-```
+`handoff_index` 逐任务指向本次报告；`recon` 写核实的目标提交，`runtime` 写资源服务的目标版本。
+无 Check/E2E/Review ID 时保持 NOT_APPLICABLE；复用就绪证据须说明资源、配置和环境未变的依据，
+变化时列出失效范围，不把资源就绪当作产品检查通过。
 
 `recon` 的 PASS 仅表示所列事实已成功采集并有证据；发现目标事实与输入不符为 FAIL，无法核实为
 BLOCKED。`runtime` 的 PASS 仅表示约定资源及就绪/清理条件满足；实际环境操作失败为 FAIL，缺能力、
-权限或隔离资源为 BLOCKED。角色分配不新增远端推送、回滚、发布、归档或破坏性清理授权；
+权限或隔离资源为 BLOCKED。角色分配不新增推送、回滚、发布、归档或破坏性清理授权；
 本地主分支合入由 agentic apply 授权，并受候选检查门槛约束。

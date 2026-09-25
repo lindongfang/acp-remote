@@ -216,6 +216,11 @@ gh pr checks --watch
 gh pr merge --squash --delete-branch
 ```
 
+agentic 变更在候选合入前还须按 `openspec/schemas/agentic/procedures/workflow-check.md` 执行
+`openspec-agentic workflow check --change <变更> --stage premerge --json`；它核对候选版本、
+Project Verify、独立 review 与适用的候选 E2E/替代检查证据。角色报告的交接索引以
+`openspec/schemas/agentic/roles/handoff.md` 为准。该检查不代替本节的 PR 与必需 CI 检查。
+
 bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上仍然可行，但那是紧急出口而不是日常路径**：
 绕过后 `deps` / `advisories` / `secrets` 三个只能在 CI 运行的判定就不再是先于落地的门禁，只会变成事后通知。
 规则集开了 `strict_required_status_checks_policy`，因此 PR 需要先合入最新 main 再跑一轮才能合并——

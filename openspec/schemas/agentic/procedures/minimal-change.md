@@ -2,7 +2,7 @@
 
 本例展示六种交付件及最后交接，不是已执行的证据。命令、绝对路径、版本和执行者均须在真实项目核实。
 示例项目是已有 npm run verify / npm run e2e 的 Node CLI；用户要求增加 CSV，保留默认 JSON，禁止上传数据。
-示例会话另明确允许本地 main 合入，不含推送/发布。不得将本例当作实际授权或复制示例 PASS。
+示例按 agentic 流程在门禁通过后合入本地 main。不含推送/发布；不得复制示例 PASS 作为实际证据。
 
 ## proposal.md
 
@@ -104,7 +104,7 @@ Code Repository：实际仓库绝对路径；local refs/heads/main。
 main 用 git rev-parse 核实准确提交并在 verification 留证，不以任意工作区 HEAD 代替。
 ## Merge Strategy
 MU1 integrated，包含 WP1/TP1；独立 integrator 使用集成 worktree。
-按真实会话核对本地合入授权，报告 reports/MU1.md；不推送/发布。
+按计划核对本地合入条件，报告 reports/MU1.md；不推送/发布。
 ## Verification Strategy
 ### Local Checks
 针对改动运行序列化单测。
@@ -158,7 +158,7 @@ x-agentic.e2e.command = npm run e2e；每轮 final 一个聚合入口，任一�
 - [ ] 6.3 [MU1] [PV1] integrator；依赖：6.2；候选 verify 通过或留有效复用依据。
 - [ ] 6.4 [MU1] [CR1] 新 reviewer；依赖：6.2；审查候选新增交互，阻断项闭环。
 - [ ] 6.5 [MU1] [E1] tester；依赖：6.2；运行 e2e run --stage candidate，返回断言、版本及资源证据。
-- [ ] 6.6 [MU1] integrator；依赖：6.3、6.4、6.5；main 核对证据后确认授权/基线，条件合入并记录实际结果。
+- [ ] 6.6 [MU1] integrator；依赖：6.3、6.4、6.5；main 核对证据后复核基线，条件合入本地 main 并记录实际结果。
 - [ ] 6.7 [MU1] [PV1] integrator；依赖：6.6；主分支必要回归通过，核对候选一致性。
 - [ ] 6.8 [MU1] [CR1] 新 reviewer；依赖：6.6；主分支新增差异审查，无差异时 main 留复用依据。
 ## 7. Final E2E
