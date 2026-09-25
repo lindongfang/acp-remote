@@ -8,7 +8,7 @@
 - base_revision: **`9376e96`**（开工前 `git log --oneline -3` 的首行，与任务单一致）
 - target_revision: **`fe093b3`**（`test(storage): 补审计查询的混合条件与 limit 组合用例`，本任务交付的**第二个**提交）；实现主体是它的前一个提交 **`bb96a10`**（`bb96a10c5784a4a49e6dd78adb4732176b7435e4`，`feat(storage): 实现 AuditStore（append/query over owned_audit）`）。两个提交合起来构成本任务的全部交付内容；报告以 `docs(storage)` 提交入库，报告本身不属交付物
 - scope: `crates/storage-sqlite/src/admin/audit.rs`（新增）、`crates/storage-sqlite/src/admin/mod.rs`（+1 行模块声明）、`crates/storage-sqlite/tests/admin_audit.rs`（新增测试文件）、`openspec/changes/daemon-cli-and-local-admin/reports/`（本报告 + 两个 `.log`）
-- result: `PASS`（任务单列出的三项 cargo 检查 + `node scripts/check-crate-boundaries.mjs` + `npm run check` 全部执行且全绿，含一次预期失败的 RED 探针；每次提交后 `git status --porcelain` 均为空；**不代表**独立 review、集成或合并已完成）
+- result: `PASS`（任务单列出的三项 cargo 检查 + `node scripts/check-crate-boundaries.mjs` + `npm run check` 全部执行且全绿，含一次预期失败的 RED 探针；每次提交后**本任务路径下**的 `git status --porcelain` 为空；**不代表**独立 review、集成或合并已完成）
 
 ## 问题（已核实，未改合同）
 
@@ -101,7 +101,7 @@
 | `fe093b3` | `test(storage)` | `tests/admin_audit.rs` 追加 `combined_filters_and_limit_compose_as_a_conjunction`（+81/-1） |
 | `docs(storage)`（本报告的本次更新） | `docs` | 测试表、计数、检查表（CT9）、提交表与未执行项复述（不属交付物） |
 
-提交用显式路径 `git add`（未 `git add -A`/`.`），未使用 `--no-verify`，未强推，未改写任何既有提交；提交后 `git status --porcelain` 为空（两个 `.log` 被 `.gitignore:27` 忽略，按仓库策略**不**强行入库）。
+提交用显式路径 `git add`（只 add 本任务的三个文件与本报告，未 `git add -A`/`.`），未使用 `--no-verify`，未强推，未改写任何既有提交。两个 `.log` 被 `.gitignore:27` 忽略，按仓库策略**不**强行入库；`git status --porcelain` 在**本任务路径**下为空（同一 worktree 里主 Agent 的并发改动——当时看到的 `crates/server/tests/local_endpoint_windows.rs` 与未跟踪的 `reports/rv1-wp3.md`——不属本任务，本 Agent 未触碰、未 add）。
 
 ## 复核（交付提交后）
 
