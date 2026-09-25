@@ -28,6 +28,11 @@
 | 3.2 | reviewer / work-package review / work-package | b56b829ae2119db77a1907271a5ce799962ac10a | REVIEW / RV1 | reports/rv1-wp1.md | PASS / NEW | 隔离子 Agent（kimi-coding/k3）；无 CRITICAL/MAJOR；F1–F4 处理见 Review Findings |
 | 2.4–2.6 | coder / implement / work-package | 6361f5d2a34d9f6306f62b41c852749e7d86bc4d（+报告 d9c7c6e） | DELIVERY / NOT_APPLICABLE | reports/wp2-handoff.md | PASS / NEW | WP2 交付；RV1（3.4）待调度 |
 | 2.4–2.6 | coder / implement / work-package | 6361f5d2a34d9f6306f62b41c852749e7d86bc4d | CHECK / PV5（WP2 部分） | reports/wp2-handoff.md（日志 reports/pv5-windows-ipc.log） | PASS / NEW | 11 passed / 0 failed；跨用户拒绝以 SDDL 文本静态证据替代（本机单账号，已如实记录） |
+| 2.7–2.9 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba（+报告 3390e9cc5688d667a9b2c4e4a1d9230873ca3297） | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md | PASS / NEW | WP3a 交付；RV1（3.6）待 WP3b 后调度 |
+| 2.7–2.9 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | CHECK / PV3（WP3a 部分） | reports/wp3a-handoff.md（日志 reports/wp3-server-transport.log、reports/wp3-server-envelope.log、reports/wp3-verify.log） | PASS / NEW | 53 passed / 0 failed / 0 ignored；fmt/clippy（含 Linux 目标）零告警 |
+| 2.8 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | CHECK / PV5（WP3a 部分） | reports/wp3a-handoff.md（日志 reports/pv5-windows-ipc.log） | PASS / NEW | 真实 Named Pipe 4 用例通过（sid_hash 已记录）；跨用户拒绝本机不可构造，如实登记 |
+| 2.7–2.9 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | CHECK / PV2（WP3a 轮） | reports/wp3a-handoff.md（日志 reports/wp3-server-boundaries.log） | PASS / NEW | 11 个 crate 全登记；server 唯一工作区内依赖边 = windows-local-ipc |
+| MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
 ## Checks
 
@@ -40,6 +45,8 @@
 
 - 2026-09-25（WP1 交付后）：**§5 `storage-sqlite` 列的归属调整**。原值：WP1 收敛 §5 缺列注记、WP5 收口状态。新值：WP1 已新增 `server`/`app`/`windows-local-ipc` 三列并在 §5 注记写明后果；`storage-sqlite` 列必须在 `crates/app` 加入 `members` 的同一提交补齐（否则 `check:boundaries` 对 `app → storage-sqlite` 硬失败），因此 **WP4 的写范围扩至包含 `docs/MODULE_ARCHITECTURE.md` §5 矩阵一处**（仅新增 `storage-sqlite` 列与 `app` 行对应格，不动其他内容），WP5 仍负责状态收口。理由：门禁只校验实际 path 依赖边，列与成员加入必须原子。风险覆盖：该调整不改变需求与设计语义；影响任务 2.14（写范围）。依据：WP1 handoff（`reports/wp1-handoff.md`）开放问题第 1 项与 §5 注记。
 - 2026-09-25（WP1 交付后）：**WP2 附带 `.gitignore` 维护**。依据：WP1 handoff 开放问题第 2 项——vendor crate 独立构建会在 `vendor/windows-local-ipc/` 下产生 `Cargo.lock` 与 `target/`，根 `.gitignore` 不覆盖；WP2 写范围因此包含根 `.gitignore`（仅新增 vendor 条目）。
+- 2026-09-25（用户裁决选项 a，WP3a 报告契约问题①）：**`node.rotate-key.begin` 进入 v1 方法词表**。原值：§4 方法名正则与 `envelope.schema.json#/$defs/methodName`（enum 24 项、pattern 不允许连字符）与 §5.7/§5.4 的连字符名字矛盾，该调用实际被判 `local.invalid_request`。新值：pattern 放宽为段内允许连字符（`^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`），enum 增至 25 项（含 `node.rotate-key.begin`），实现按 §5.7 返回 `local.unsupported`；同步 `docs/LOCAL_ADMIN_PROTOCOL.md` §4 表格、§8 版本注记、`fixtures/local-admin/v1/`（新增一条 valid 与一条 invalid）与 `scripts/check-command-catalog.mjs` 的方法标题正则（原正则同样排除连字符，不改则集合比对必然失败，已核实）。`commands.json` 的 `localCapabilities` 不变（`local.node.rotate-key` 已登记）。新增任务 **2.21**（契约与 Rust 枚举同批原子交付，避免分支上 drift 测试变红）；`npm run check` 必须全绿。依据：用户在 2026-09-25 本会话对选项 a 的答复（原话「a」）。
+- 2026-09-25（WP3a 交付后，主 Agent 接受）：**三处实现细节登记为已接受**，不改契约：② 信封 `id` 缺失/非法时以 nil UUID 哨兵回 `local.invalid_request`（§4 规则 2「响应必带相同 id」与规则 4「非法信封回错误」在 id 不可用时无法同时满足；哨兵是最小偏差且已写入代码注释）；③ `local.unsupported` 的 `error.message` 回显方法名（仅方法名、≤512、不含 params 与路径）；④ Unix 对端凭据校验收窄到 Linux/Android（其它 Unix 目标每次连接失败关闭，避免 macOS 编译失败；与 §2.2 写明的 `SO_PEERCRED` 口径一致）。三者在 WP5 文档收口时如需写回合同，再单独提出。
 - 2026-09-25（RV1-WP1 后）：**WP5 写范围增加两处 MINOR 修复**——`scripts/check-crate-boundaries.mjs` 的过期注释（RV1-WP1-F2）与 `docs/MODULE_ARCHITECTURE.md` §5 注记补「`windows-local-ipc` 依赖面靠人工 review 约束」（RV1-WP1-F3）。两者均非行为变化；影响任务 2.19（写范围）。
 - 2026-09-25（WP1 交付后）：**WP4 调用点约束传递**——固定工具链 1.98.1 下 `std::fs::File::try_lock`（1.89 稳定）与 `fs4::FileExt` 同名且优先级更高，WP4 必须全限定调用 `fs4::FileExt::try_lock`，否则等于把 MSRV 抬到 1.89（依据：WP1 handoff 开放问题第 3 项，已写入 `MODULE_ARCHITECTURE.md` §3.1）。
 
@@ -85,7 +92,9 @@
 
 ## Failures and Retests
 
-无。
+| Issue ID / Task | Source / Check or E2E ID / Attempt / Version | Owner | Fix / Recovery | Review / Readiness Evidence | Retest Evidence | Current Status / Basis |
+| --- | --- | --- | --- | --- | --- | --- |
+| RV1-WP2-RUN1 | 任务 3.4，reviewer 子 Agent 运行 `ecc2d081-dfcb-41eb-b845-800aceb7512d`（目标 6361f5d）；运行在回报前中止，只输出了开场句，未产生报告 | 主 Agent | 原因判定为子 Agent 运行时中断（非产品/证据问题：目标提交与输入未变）；已用 deepseek/deepseek-flash 重新派发 RV1-WP2 | 旧运行无报告产出，未作为结论 | 待重派结果 | 未解决（等待重派；不影响 WP3a 进行） |
 
 ## Final Assessment
 

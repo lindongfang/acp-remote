@@ -11,6 +11,7 @@
 
 - `docs/MODULE_ARCHITECTURE.md` §3/§3.1/§4.9/§4.10：`server`/`app` 从「待落地」改为已落地（本轮范围：`server` 仅 `transport` 本地通道部分与 `local_admin`，`acp_facade` 仍待切片 6）；§5 依赖矩阵收敛既有「缺列」注记（`server`/`app` 开始成为列）。
 - `docs/LOCAL_ADMIN_PROTOCOL.md` §3.1：补一条**实现状态注记**（facade 缺席期 `0x02` 连接即连即关，design D5），不改任何语义。
+- `docs/LOCAL_ADMIN_PROTOCOL.md` §4/§8 + `schemas/local-admin/v1/envelope.schema.json` + `fixtures/local-admin/v1/` + `scripts/check-command-catalog.mjs`：**方法名允许段内连字符**，`node.rotate-key.begin` 进入 v1 方法词表（enum 24 → 25）——修正 §4 正则/机器词表与 §5.4/§5.7 登记名之间的矛盾（2026-09-25 用户裁决选项 a）。门禁脚本的方法标题正则同步放宽（原正则排除连字符，是矛盾得以隐藏的原因）。`compatibility/commands/v1/commands.json` 的 `localCapabilities` 不变。
 - `Cargo.toml`：`[workspace] members` 增加 `crates/server`、`crates/app`（按波次串行）；`[workspace.dependencies]` 增量开启/新增 `tokio` 的 `net`/`io-util`/`signal` feature、`nix` 的 `socket`/`user` feature，新增 `clap`、`toml`、文件锁 crate（候选 `fs4`/`fd-lock`，§20 核验后定）；`workspace.exclude` 登记 `vendor/windows-local-ipc`（自研 FFI wrapper，不继承 workspace lint，不发布）。
 - `deny.toml`：登记 path 来源依赖 `windows-local-ipc`（其许可证判定仍在 CI）。
 - `commitlint.config.mjs`：**不需要**改动——`server`/`app` scope 已在词表内。
@@ -392,7 +393,7 @@ rows:
       path: specs/local-admin-methods/spec.md
       heading: "#### Scenario: access 模式明确不支持"
       requirement: "### Requirement: 节点配对与信任方法"
-    tasks: ["2.11"]
+    tasks: ["2.11", "2.21"]
     checks: [PV3]
     evidence: [reports/wp3-server-methods.log]
   - id: R49
@@ -587,7 +588,7 @@ rows:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | WP1 | 契约与依赖口径冻结：把 `MODULE_ARCHITECTURE.md` §3/§3.1/§4.9/§4.10/§5 的本轮范围写到位（`server` 仅本地通道与 `local_admin`、矩阵缺列收敛），`LOCAL_ADMIN_PROTOCOL.md` §3.1 补实现状态注记，`[workspace.dependencies]` 与 `workspace.exclude`、`deny.toml` 的 path 来源登记 | 无（W0 起点） | 实现 Agent（coder） | 非文档作者（RV1） | `feat/daemon-cli-and-local-admin` / 主 worktree | `docs/MODULE_ARCHITECTURE.md`、`docs/LOCAL_ADMIN_PROTOCOL.md`（仅 §3.1 注记）、`Cargo.toml`、`deny.toml` | 输入：`design.md` D1/D3/D5/D9、`LOCAL_ADMIN_PROTOCOL.md` 现行版；输出：可被 `check:boundaries`/`check:doc-links` 读取的口径 | [PV1]、[PV2]（W0 阶段成员未加入，PV2 只核对既有成员） |
 | WP2 | `vendor/windows-local-ipc` 自研 wrapper：safe API「以 SDDL 创建 Named Pipe」「查询对端 SID」两个函数（`cfg(windows)`），非 Windows 编译通过且运行期明确失败；unsafe 收敛在模块级并附不变量注释 | WP1 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `vendor/windows-local-ipc/**` | 输入：`design.md` D3、`LOCAL_ADMIN_PROTOCOL.md` §2.1/§2.2；输出：可被 `server` 以 path 依赖消费的 crate | [PV5]（Windows 本机）+ 非 Windows 编译断言 |
-| WP3 | `server` crate：`transport::local`（endpoint、ACL、对端凭据、framing、channel 绑定、未完成请求上限、facade 缺席期 `0x02` 即连即关）与 `local_admin`（信封编解码 + schema/fixture 漂移测试、方法路由：本地配置族/配对/Export/Import/audit、`DaemonControl` 注入）；覆盖 `local-admin-channel` 与 `local-admin-methods` 全部需求与场景 | WP1、WP2 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `crates/server/**`（含 `Cargo.toml`）、`[workspace] members` 本 crate 条目、`Cargo.lock` | 输入：`design.md` D1/D5/D6、`LOCAL_ADMIN_PROTOCOL.md` 全文、`schemas/local-admin/v1/`、`fixtures/local-admin/v1/`、`core::use_cases` 与端口、`identity-auth` 状态机与 keystore 端口；输出：可被 `app` 装配的入站适配器 | [PV3]（+ [PV1]/[PV2]） |
+| WP3 | `server` crate：`transport::local`（endpoint、ACL、对端凭据、framing、channel 绑定、未完成请求上限、facade 缺席期 `0x02` 即连即关）与 `local_admin`（信封编解码 + schema/fixture 漂移测试、方法路由：本地配置族/配对/Export/Import/audit、`DaemonControl` 注入）；覆盖 `local-admin-channel` 与 `local-admin-methods` 全部需求与场景。**增量（2026-09-25）**：`node.rotate-key.begin` 词表补齐（schema enum+pattern、docs §4/§8、fixtures、门禁正则）与 Rust `Method` 变体/分支同批原子交付（任务 2.21） | WP1、WP2 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `crates/server/**`（含 `Cargo.toml`）、`[workspace] members` 本 crate 条目、`Cargo.lock`；增量部分额外含 `schemas/local-admin/v1/envelope.schema.json`、`fixtures/local-admin/v1/**`、`docs/LOCAL_ADMIN_PROTOCOL.md` §4/§8、`scripts/check-command-catalog.mjs` | 输入：`design.md` D1/D5/D6、`LOCAL_ADMIN_PROTOCOL.md` 全文、`schemas/local-admin/v1/`、`fixtures/local-admin/v1/`、`core::use_cases` 与端口、`identity-auth` 状态机与 keystore 端口；输出：可被 `app` 装配的入站适配器 | [PV3]（+ [PV1]/[PV2]） |
 | WP4 | `app` crate：组合根（配置加载与种子导入、单实例锁与 `instanceId`、启动/关闭序列、周期任务装配）、`daemon status|stop` 接线、CLI 全部子命令（映射/退出码/stderr JSON/配对仪式/凭据交互/`--file`）、`doctor`、`acp-stdio` 字节泵；真实子进程集成测试；覆盖 `daemon-lifecycle` 与 `cli-commands` 全部需求与场景 | WP1、WP3 | 实现 Agent（coder） | 非实现者（RV1） | 同上 | `crates/app/**`（含 `Cargo.toml`）、`[workspace] members` 本 crate 条目、`Cargo.lock` | 输入：`design.md` D2/D4/D6/D7/D8、WP3 的服务端形状、`CONFIG_REFERENCE.md`；输出：`acp-remote` 可执行程序 | [PV4]（+ [PV1]/[PV2]） |
 | WP5 | 文档与状态收口：`MODULE_ARCHITECTURE.md` §5 缺列注记收敛与已落地标记、`README.md`「仓库当前状态」、`docs/DEVELOPMENT_PLAN.md` §2、`AGENTS.md` §4；全量统一入口 | WP3、WP4 | 实现 Agent（coder） | 非文档作者（RV1） | 同上 | `docs/MODULE_ARCHITECTURE.md`（§5 注记与状态）、`README.md`、`docs/DEVELOPMENT_PLAN.md`、`AGENTS.md` | 输入：WP3/WP4 的测试证据；输出：与代码一致的仓库状态 | [PV1]、[PV2]（成员已加入后逐条核对 §5） |
 
