@@ -133,13 +133,13 @@ E2E 结论：NOT_APPLICABLE。替代检查在 Checks 节逐项留证（PV1 候�
 ## Final Assessment
 
 ```agentic-assessment
-assessment_id: "FA1"
-target_commit: "8692a416de7080f4aa8d12f15c4c5087642f93ae"
+assessment_id: "FA2"
+target_commit: "f7b8c45884a46cb02fdf78b46945ba8e1d7517a9"
 contract_digest: "sha256:774993c32c29598e0630f7d25760d755407276687aaa38a9801a703ed9f533bc"
 result: PASS
 evidence:
   - path: reports/PV1-main.log
-    sha256: "sha256:258a75e47f7600d81658f353c000d287d906eed6713a4f6f88ad0985fca90176"
+    sha256: "sha256:7388677c30362ada9c9738816c9ffe6175709a976eef17275c0891ff22d6bf54"
   - path: reports/PV1.log
     sha256: "sha256:f8389dda3e6672f0c1aade96869f5ad5b319f5665b32b61cc76b955a92538289"
   - path: reports/review-rv2.md
@@ -148,7 +148,9 @@ evidence:
     sha256: "sha256:434bea0a1e9d60c189b2934add0d8b30adb3d1ee73cf93fe6e2583d83bf807cc"
 ```
 
-- Assessment ID / Time: FA1，2026-09-25，主 Agent（kimi-coding/k3）在 apply 内执行（任务 7.1，唯一 [final-verification] 行）。
+- Assessment ID / Time: FA2（当前轮次），2026-09-25，主 Agent（kimi-coding/k3）。历史：FA1（target 8692a41）结论 PASS；归档前目标因 PR #23（证据回写，delta 仅本变更目录的 verification.md/tasks.md）移动至 f7b8c45，按 acceptance.md「目标再变化需重新验收」重评：代码与契约内容零变化，PV1 在 f7b8c45 重跑 PASS（exit 0），FA1 审计七组结论全部沿用，仅目标与主分支证据版本刷新。FA2 的 Target / Task / CLI State / Audit / Result 与 FA1 相同，目标引用替换为 f7b8c45884a46cb02fdf78b46945ba8e1d7517a9（验收前 `git rev-parse refs/heads/main` 核实，与 HEAD 一致）。
+
+FA1 原始记录（保留历史）：
 - Target / Task: refs/heads/main @ 8692a416de7080f4aa8d12f15c4c5087642f93ae（验收前再次 `git rev-parse refs/heads/main` 核实，与 HEAD 一致，验收期间未移动；目标曾由 70e2c21 移动至此，仅因 PR #22 的 config.yaml 独立提交，受影响证据已重评并重跑，见 Target 节目标移动记录）；核实证据：本节与 Merge History 的 PR #21 记录。
 - CLI State: 验收前 `openspec status` = 21/22 任务完成（仅 7.1 待办，符合「验收期间仅该行可待办」）；`e2e check` PASS 并已自动勾选 6.3。CLI 状态独立记录，不改写 all_done 含义。
 - Audit / Evidence（按 acceptance.md 七组）：
