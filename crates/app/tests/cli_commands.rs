@@ -10,7 +10,7 @@ use std::path::Path;
 
 use app::lock::{LockRecord, LockState, lock_path, probe, read_record, record_path};
 use serde_json::{Value, json};
-use support::{CliRun, Daemon, Stdin, dir_entries, run_cli};
+use support::{CliRun, Daemon, Stdin, create_owner_only_dir, dir_entries, run_cli};
 
 /// 一份与 `agent.configure`/`export.create` 同形的 JSON 文件（写入用例自己的临时目录）。
 fn write_file(root: &Path, name: &str, content: &str) -> std::path::PathBuf {
@@ -57,6 +57,9 @@ fn assert_no_secrets(run: &CliRun, forbidden: &[&str]) {
 fn daemon_status_answers_offline_without_opening_the_database() {
     let daemon = Daemon::configure("cli-status-offline", "");
     let data_dir = daemon.data_dir();
+    // `create_dir_all` 会顺带以默认权限创建 `data_dir`；在 Linux/macOS 上这会触发存储的
+    // `strict_permissions` 失败关闭，因此先按 `0700` 建好数据目录再造伪造文件。
+    create_owner_only_dir(data_dir);
     std::fs::create_dir_all(data_dir.join("acp-remote.sqlite3")).expect("伪造不可打开的数据库文件");
     let before = dir_entries(data_dir);
     assert_eq!(before, vec!["acp-remote.sqlite3".to_owned()]);
@@ -128,7 +131,7 @@ fn daemon_status_reports_the_running_instance() {
 fn daemon_status_fails_when_the_lock_is_held_but_the_channel_is_unreachable() {
     let daemon = Daemon::configure("cli-status-held", "");
     let data_dir = daemon.data_dir();
-    std::fs::create_dir_all(data_dir).expect("数据目录");
+    create_owner_only_dir(data_dir);
     // 本进程持有锁 + 发布一个指向不存在 endpoint 的记录：与「Daemon 在运行但连不上」等价。
     let mut held = app::DaemonLock::acquire(&lock_path(data_dir)).expect("取锁");
     held.publish(&LockRecord {
@@ -531,7 +534,7 @@ fn file_inputs_map_validation_errors_like_the_method_side() {
 fn doctor_completes_offline_and_combines_status_when_running() {
     let daemon = Daemon::configure("cli-doctor", "");
     // 数据目录连都不存在：离线结论仍然要给出，且不得创建任何东西。
-    std::fs::create_dir_all(daemon.data_dir()).expect("数据目录");
+    create_owner_only_dir(daemon.data_dir());
     let before = dir_entries(daemon.data_dir());
     let run = run_cli(
         "doctor-offline",
@@ -569,7 +572,7 @@ fn doctor_completes_offline_and_combines_status_when_running() {
 #[test]
 fn acp_stdio_fails_clearly_offline_without_polluting_stdout() {
     let daemon = Daemon::configure("cli-stdio-offline", "");
-    std::fs::create_dir_all(daemon.data_dir()).expect("数据目录");
+    create_owner_only_dir(daemon.data_dir());
     let run = run_cli(
         "pairing-offline-stdio",
         Some(daemon.config_path()),

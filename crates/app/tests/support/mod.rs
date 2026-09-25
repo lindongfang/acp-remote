@@ -25,6 +25,25 @@ use app::lock::{LockRecord, read_record};
 use serde_json::Value;
 use server::local_admin::{AdminResponse, JsonObject, Method, RequestId, decode_request};
 
+/// 与 `storage-sqlite`/`server` 的目录创建同口径：Unix 上按 `0700` 建立，否则
+/// `strict_permissions`/endpoint 的运行目录权限检查会在 Linux/macOS 上对既有目录失败关闭
+/// （Windows 的权限判定是 `Unverifiable`，本地不触发）。
+#[cfg(unix)]
+pub fn create_owner_only_dir(path: &Path) {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .expect("仅所有者可访问的目录");
+}
+
+/// Windows 等价物：ACL 由平台默认继承为当前用户专属（见 `storage-sqlite` 的权限口径）。
+#[cfg(not(unix))]
+pub fn create_owner_only_dir(path: &Path) {
+    std::fs::create_dir_all(path).expect("仅所有者可访问的目录");
+}
+
 /// 等待就绪/退出的上限。启动含 SQLite 迁移与 keystore 准备，慢机器上留足余量。
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// 停止后等待进程退出的上限。
@@ -49,7 +68,7 @@ impl TempRoot {
         let path =
             std::env::temp_dir().join(format!("acpr-wp4a-{label}-{}-{unique}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("临时目录");
+        create_owner_only_dir(&path);
         Self { path, owner: true }
     }
 
@@ -133,7 +152,7 @@ impl Daemon {
         #[cfg(unix)]
         let runtime_dir = root.path().join("runtime");
         #[cfg(unix)]
-        std::fs::create_dir_all(&runtime_dir).expect("运行时目录");
+        create_owner_only_dir(&runtime_dir);
         // 第二轮运行不得覆盖第一轮的配置与日志（顺序不同、内容不同，便于分别断言）。
         let suffix = if label.is_empty() {
             String::new()

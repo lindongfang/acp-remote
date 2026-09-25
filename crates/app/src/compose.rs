@@ -778,6 +778,23 @@ mod tests {
         path: std::path::PathBuf,
     }
 
+    /// 与 `storage-sqlite` 的目录创建同口径：Unix 上按 `0700` 建立，否则 `strict_permissions`
+    /// 会在 Linux/macOS 上对既有目录失败关闭（Windows 的权限判定是 `Unverifiable`，本地不触发）。
+    #[cfg(unix)]
+    fn create_owner_only_dir(path: &std::path::Path) {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+            .expect("临时目录");
+    }
+
+    #[cfg(not(unix))]
+    fn create_owner_only_dir(path: &std::path::Path) {
+        std::fs::create_dir_all(path).expect("临时目录");
+    }
+
     impl TempDir {
         fn new(label: &str) -> Self {
             let path = std::env::temp_dir().join(format!(
@@ -786,7 +803,7 @@ mod tests {
                 std::thread::current().id()
             ));
             let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).expect("临时目录");
+            create_owner_only_dir(&path);
             Self { path }
         }
     }
