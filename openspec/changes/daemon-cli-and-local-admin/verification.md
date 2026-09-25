@@ -32,6 +32,7 @@
 | 2.7–2.9 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | CHECK / PV3（WP3a 部分） | reports/wp3a-handoff.md（日志 reports/wp3-server-transport.log、reports/wp3-server-envelope.log、reports/wp3-verify.log） | PASS / NEW | 53 passed / 0 failed / 0 ignored；fmt/clippy（含 Linux 目标）零告警 |
 | 2.8 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | CHECK / PV5（WP3a 部分） | reports/wp3a-handoff.md（日志 reports/pv5-windows-ipc.log） | PASS / NEW | 真实 Named Pipe 4 用例通过（sid_hash 已记录）；跨用户拒绝本机不可构造，如实登记 |
 | 2.7–2.9 | coder / implement / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | CHECK / PV2（WP3a 轮） | reports/wp3a-handoff.md（日志 reports/wp3-server-boundaries.log） | PASS / NEW | 11 个 crate 全登记；server 唯一工作区内依赖边 = windows-local-ipc |
+| 3.4 | reviewer / work-package review / work-package | 6361f5d2a34d9f6306f62b41c852749e7d86bc4d | REVIEW / RV1 | reports/rv1-wp2.md | PASS / NEW | 隔离子 Agent（deepseek/deepseek-flash）；无 P0/P1；3 条 P2 处理见 Review Findings；重派前的失败运行见 Failures and Retests |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
 ## Checks
@@ -71,6 +72,10 @@
 | RV1-WP1-F2 | b56b829 | 同上 | scripts/check-crate-boundaries.mjs 内嵌注释 | MINOR：注释仍写「9 列」与现状漂移；门禁行为不受影响 | 并入 WP5 写范围同步该注释（Check Plan Changes 已登记） | WP5 交付时由 RV1-WP5 复核 |
 | RV1-WP1-F3 | b56b829 | 同上 | docs/MODULE_ARCHITECTURE.md §5 | MINOR：`windows-local-ipc` 作为发起方的依赖边不受门禁强制 | 接受缺口并在 WP5 于 §5 注记补「该 crate 依赖面靠人工 review 约束」一句（Check Plan Changes 已登记） | WP5 交付时由 RV1-WP5 复核 |
 | RV1-WP1-F4 | b56b829 | 同上 | docs/LOCAL_ADMIN_PROTOCOL.md 头部 | SUGGESTION：状态/版本行略超字面写范围 | 主 Agent 确认：头部状态行视为 §3.1 注记的载体，不返工 | 不适用 |
+| RV1-WP2-F1 | 6361f5d | RV1-WP2（隔离子 Agent） | vendor/windows-local-ipc/Cargo.toml:32 | MINOR：注释称 `fs4`/`clap` 引入 windows-sys 0.61.2，实际由 `mio`/`tokio` 引入 | 并入任务 2.21 顺手修复（一行注释） | 2.21 交付时由 RV1-WP3 复核 |
+| RV1-WP2-F2 | 6361f5d | 同上 | vendor/windows-local-ipc/Cargo.toml:16 | MINOR：`license = "MIT OR Apache-2.0"`，但仓库仅含 Apache-2.0 正文 | 并入任务 2.21：改为 `license = "Apache-2.0"` | 2.21 交付时由 RV1-WP3 复核 |
+| RV1-WP2-F3 | 6361f5d | 同上 | reports/du1-pv1.log、reports/pv5-windows-ipc.log、wp2-handoff.md | MINOR：两个 [PV1] WP2 轮未记退出码；fmt 无运行记录 | 主 Agent 已补录：`du1-pv1.log` 追加 `EXIT(npm run check)=0` 轮次；`pv5-windows-ipc.log` 追加 `EXIT(cargo fmt -- --check)=0`（均真实执行） | 追加日志已核实 |
+| RV1-WP2-R1（残余风险） | 6361f5d | RV1-WP2 | crates/server/src/transport/local/platform/windows.rs（后续实例） | 风险（非缺陷）：后续实例 DACL 是否继承首实例未证实 | 已登记入 Dependency Handoffs；[PV5] 在 WP3b/WP4 用 `GetSecurityInfo`/跨账号用例钉死 | 待 [PV5] |
 
 ## Merge History
 
