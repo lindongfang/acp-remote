@@ -18,7 +18,7 @@
 ## 3. Branch Validation
 
 - [x] 3.1 DU1；前置：2.4；主 Agent。交付前验证：[PV1] `npm run verify`（EXIT=0，日志 `reports/final-verify.log`）+ [PV2] 临时目录计数验收（完整测试运行前后 `acpr-*` 条目数差为 0，原始命令与输出写入 `reports/temp-count-final.log`）。完成条件：两项全绿；核实无本次新增资源残留；若 PV2 有残余，按名称前缀归因到用例并回到 WP1 修复后重跑。
-- [ ] 3.2 DU1；前置：2.4，可与 3.1 并行；独立 reviewer（fresh、只读子 Agent）。[RV1] 检视 WP1 全部 diff，关注点与阻断标准见 `plan.md` Code Review（盘点无漏点、守卫满足 design D1–D4、未触碰产品代码/契约资产、未弱化断言）。完成条件：报告 `reports/rv1-wp1.md`；发现修复后由新子 Agent 复核。
+- [x] 3.2 DU1；前置：2.4，可与 3.1 并行；独立 reviewer（fresh、只读子 Agent）。[RV1] 检视 WP1 全部 diff，关注点与阻断标准见 `plan.md` Code Review（盘点无漏点、守卫满足 design D1–D4、未触碰产品代码/契约资产、未弱化断言）。完成条件：报告 `reports/rv1-wp1.md`；发现修复后由新子 Agent 复核。
 
 ## 5. Integration Readiness
 

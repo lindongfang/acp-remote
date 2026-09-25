@@ -75,6 +75,12 @@
 
 - 目标版本：`6c5e53b`；报告：`reports/rv1-wp1.md`；结论：**PASS**（无 CRITICAL/MAJOR）。
 - 发现：RV1-F1（MINOR：identity-keystore 守卫工厂缺 `#[must_use]`）、RV1-F2（MINOR：inventory.md 行号笔误 1138→1146）→ 已在 `6f37979` 修复，RV2 复核。RV1-F3/F4（SUGGESTION：Drop 静默失败的可见性、机器防线候选）属 design 已登记的取舍，不修复。
+
+### RV2（recheck，reviewer a2dd5963，fresh 只读）
+
+- 目标版本：`6f37979`；报告：`reports/rv2-recheck.md`；结论：**PASS**（RV1-F1/F2 均「已解决」，无新问题阻断）。
+- RV2 的三条 P2 报告级发现已当场处理：RV2-F1（inventory.md 的 `store.rs:498`→`:500`，修复副作用的行号漂移）与 RV2-F3（wp1-handoff.md 的 D1 表补上 `#[must_use]`）已修正；RV2-F2（RV1/RV2 报告只在子 Agent 产物目录、未进仓库）已通过转存闭合。
+- 「无夹带」残余闭合：主 Agent 执行 `git show --stat 6f37979` = 仅 `store.rs` +2 与 `inventory.md` +1/−1，与修复范围完全一致。
 - 局限性闭合：RV1 reviewer 沙箱无法读已提交范围的字面 diff；主 Agent 已独立核验
   `git diff --stat 1359a13..6c5e53b` = 14 文件 +414/−73、全部落在测试边界内（hunk 级 `cfg(test)` 核验），
   补上该残余风险。

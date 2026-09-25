@@ -106,7 +106,7 @@ WP1 的三件事都做完了：**盘点**（28 处 `temp_dir()` 命中逐行分�
 | --- | --- | --- | --- |
 | storage-sqlite | `TempDir`（由 `temp_dir()` 返回） | `tests/support/mod.rs` | `Deref<Target = Path>` + `AsRef<Path>` + `AsRef<OsStr>` + `#[must_use]` |
 | core | `TempDir`（测试模块私有） | `src/use_cases.rs` 的 `mod tests` | `Deref<Target = Path>` + `AsRef<Path>` + `#[must_use] fn temp_dir(name)` |
-| identity-keystore | `temp_dirs::TempDir`（`#[cfg(test)]` 模块） | `src/store.rs` | `Deref<Target = Path>` + `AsRef<Path>` |
+| identity-keystore | `temp_dirs::TempDir`（`#[cfg(test)]` 模块） | `src/store.rs` | `Deref<Target = Path>` + `AsRef<Path>` + `#[must_use]`（RV1-F1 修复补上） |
 | server | `test_support::TempDir` / `test_support::TempFile` | `src/local_admin/test_support.rs`（文件级 `#![cfg(test)]`） | 同上；`TempFile` 不创建文件 |
 | app | `TempDir`（测试模块私有） | `src/cli/input.rs` 的 `mod tests` | `Deref<Target = Path>` + `AsRef<Path>` + `#[must_use] fn temp_dir()` |
 | agent-host | `TempFile` | `tests/support/mod.rs` | `Deref<Target = Path>` + `AsRef<Path>` + `#[must_use]` |
