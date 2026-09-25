@@ -1322,28 +1322,31 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let scans = spy.scans();
-        assert_eq!(
-            spy.pumps(),
-            scans * 2,
-            "每个 tick 必须对每个活动会话各 pump 一次"
-        );
-        assert_eq!(spy.failures(), 0);
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         // 按间隔而不是自旋：20ms 的间隔在 10s 内不可能产生几百轮（这里只给一个宽松上界，
         // 用于捕获「间隔被忽略、循环退化成热循环」这类真实错误）。
-        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let scans = spy.scans();
         assert!(
             u64::from(scans) <= elapsed_ms / 20 + 2,
             "{scans} 轮 / {elapsed_ms}ms 与 20ms 的间隔不符（疑似热循环）"
         );
 
+        // 先取消任务、再对**冻结后的同一快照**断言：三个计数必须是同一次读取的结果。若在两次独立
+        // load 之间跨过一次 tick 边界（20ms 周期），会读到「枚举已完成、只 pump 了一部分会话」
+        // 的中间态（低概率假失败）。
         tasks
             .cancel_all(std::time::Instant::now() + Duration::from_secs(2))
             .await;
-        let frozen = (spy.scans(), spy.pumps());
+        let frozen = (spy.scans(), spy.pumps(), spy.failures());
+        assert_eq!(
+            frozen.1,
+            frozen.0 * 2,
+            "每个 tick 必须对每个活动会话各 pump 一次"
+        );
+        assert_eq!(frozen.2, 0);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(
-            (spy.scans(), spy.pumps()),
+            (spy.scans(), spy.pumps(), spy.failures()),
             frozen,
             "取消后不得再枚举或 pump"
         );
@@ -1373,22 +1376,15 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert_eq!(
-            spy.pumps(),
-            spy.scans() * 2,
-            "失败会话之外的会话仍必须收到 pump"
-        );
-        assert_eq!(
-            spy.failures(),
-            spy.scans(),
-            "每轮恰好有一个会话失败（不重复、不吞）"
-        );
-
-        // 关闭请求也要求任务自行退出（``select!`` 的第二个等待点）。
+        // 关闭请求也要求任务自行退出（``select!`` 的第二个等待点）；先停任务，再对冻结后的**同一
+        // 快照**断言，避免两次独立 load 之间跨过 tick 边界（低概率假失败）。
         shutdown.request(None);
         tasks
             .cancel_all(std::time::Instant::now() + Duration::from_secs(2))
             .await;
+        let frozen = (spy.scans(), spy.pumps(), spy.failures());
+        assert_eq!(frozen.1, frozen.0 * 2, "失败会话之外的会话仍必须收到 pump");
+        assert_eq!(frozen.2, frozen.0, "每轮恰好有一个会话失败（不重复、不吞）");
     }
 
     /// `command` 可解析判定（`daemon.status.agents[].available`）覆盖绝对路径与 `PATH` 查找。
