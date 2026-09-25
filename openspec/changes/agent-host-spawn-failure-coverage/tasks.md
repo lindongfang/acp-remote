@@ -24,13 +24,13 @@
 
 ## 4. Integration Readiness
 
-- [ ] 4.1 [全变更]（仅一次，不随单元复制）负责人：主 Agent；依赖：3.1、3.2；单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、计划/契约、源提交及验证与 review 证据、目标分支与交付边界（远端 main 交付走 AGENTS.md §8 的 PR 路径，本地合入步骤不替代 PR）；完成条件：记录实际 Agent ID、上下文方式与交接清单；缺少独立执行能力时该任务 BLOCKED。
-- [ ] 4.2 [DU1] 负责人：主 Agent；依赖：4.1；复核 DU1 的 integrated 模式与 WP1/WP2 组成，核对 [PV1] 与 3.2 review 的有效证据；完成条件：确认组合 verify/review 结果可用，变化时先同步计划与依赖。
+- [x] 4.1 [全变更]（仅一次，不随单元复制）负责人：主 Agent；依赖：3.1、3.2；单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、计划/契约、源提交及验证与 review 证据、目标分支与交付边界（远端 main 交付走 AGENTS.md §8 的 PR 路径，本地合入步骤不替代 PR）；完成条件：记录实际 Agent ID、上下文方式与交接清单；缺少独立执行能力时该任务 BLOCKED。
+- [x] 4.2 [DU1] 负责人：主 Agent；依赖：4.1；复核 DU1 的 integrated 模式与 WP1/WP2 组成，核对 [PV1] 与 3.2 review 的有效证据；完成条件：确认组合 verify/review 结果可用，变化时先同步计划与依赖。
 
 ## 5. Merge Unit
 
-- [ ] 5.1 [DU1] 负责人：主 Agent（机械核实可交 environment/recon）；依赖：4.2；核实目标仓库与 `refs/heads/main` 当前提交（`git -C D:\Project\acp-remote rev-parse refs/heads/main`）并记录准确引用与核实证据；完成条件：记录提交 SHA、核实时间与命令输出；无法确认时保持 BLOCKED。
-- [ ] 5.2 [DU1] 负责人：集成 Agent；依赖：5.1；基于已核实基线构造候选分支 `test/agent-host-spawn-failure-coverage`（或 `test/...` 等合规 type/scope 分支），固定基线与候选版本，记录组成与构建结果；完成条件：候选可构建且版本可追溯。
+- [x] 5.1 [DU1] 负责人：主 Agent（机械核实可交 environment/recon）；依赖：4.2；核实目标仓库与 `refs/heads/main` 当前提交（`git -C D:\Project\acp-remote rev-parse refs/heads/main`）并记录准确引用与核实证据；完成条件：记录提交 SHA、核实时间与命令输出；无法确认时保持 BLOCKED。
+- [x] 5.2 [DU1] 负责人：集成 Agent；依赖：5.1；基于已核实基线构造候选分支 `test/agent-host-spawn-failure-coverage`（或 `test/...` 等合规 type/scope 分支），固定基线与候选版本，记录组成与构建结果；完成条件：候选可构建且版本可追溯。
 - [ ] 5.3 [DU1] 负责人：检查执行者；依赖：5.2；在候选版本上执行 [PV1]，将版本、范围、结果及有效复用依据关联到 verification.md；完成条件：候选 [PV1] 全绿并留证。
 - [ ] 5.4 [DU1] 负责人：独立 reviewer；依赖：5.2，可与 5.3 并行；只读检视固定候选的 diff 与契约一致性（本变更只允许测试与规范增量文件），修复后独立复核；完成条件：无未解决阻断项，记录隔离设置、版本与报告。
 - [ ] 5.5 [DU1；mode = not-applicable] 负责人：主 Agent；依赖：5.2；核对 Main E2E 不适用的 reason/basis 与 downgrade_approval（2026-09-25 本会话用户原话）仍在 plan.md 中有效，并确认替代验证（[PV1] 含 agent-host 全量测试）已执行且证据有效；完成条件：替代检查全部通过，verification.md 记 NOT_APPLICABLE 及依据。

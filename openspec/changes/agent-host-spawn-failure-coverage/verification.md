@@ -25,6 +25,10 @@
 | 2.2 | coder / implement / work-package | ac74102897f8d7d9b0830b3de3c7e958512b5de2 | CHECK / WP-verify | reports/coder-wp2.md（日志 reports/WP-verify-agent-host-all.log） | PASS / NEW | 同 2.1 行（同一 HEAD 采集） |
 | 3.1 | main / verify / work-package | ac74102897f8d7d9b0830b3de3c7e958512b5de2 | CHECK / PV1 | reports/PV1.log | PASS / NEW | npm run verify exit 0；合同门禁全绿 + clippy 零警告 + workspace 全量测试 0 失败，含两个新测试 |
 | 3.2 | reviewer / review / work-package | ac74102897f8d7d9b0830b3de3c7e958512b5de2 | REVIEW / RV1 | reports/review-rv1.md | PASS / NEW | 独立隔离子 Agent（无写工具，报告由主 Agent 按其返回全文落盘）；无 CRITICAL/MAJOR；RV1-F1（MINOR）已由主 Agent 同步修复，RV1-F2（SUGGESTION）不采纳入本变更 |
+| 4.1 | main / integrate / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | DELIVERY / NOT_APPLICABLE | reports/integrator-candidate.md | PASS / NEW | 独立集成 Agent（worker，deepseek/deepseek-flash，ID cfb8a880；与实现/review 无上下文继承）；交接 integrator.md 全文、计划/契约、基线 f53dad5、证据清单、PR 交付边界 |
+| 4.2 | main / integrate / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | DELIVERY / NOT_APPLICABLE | verification.md（本节） | PASS / NEW | 复核 DU1=integrated 组成 WP1+WP2：PV1（3.1）与 RV1（3.2）证据有效，无变化需同步 |
+| 5.1 | main / merge-prep / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | RESOURCE / NOT_APPLICABLE | reports/integrator-candidate.md | PASS / NEW | 目标核实：apply 启动核实 f53dad5，集成 Agent 提交前复核 refs/heads/main 仍为 f53dad55e72111bb7e026a0d13f5180f82c61358（未移动） |
+| 5.2 | integrator / integrate / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | DELIVERY / NOT_APPLICABLE | reports/integrator-candidate.md | PASS / NEW | 候选=e9ddb00（基线 f53dad5 + ea8762f WP1 + ac74102 WP2 + e9ddb00 变更登记）；`cargo check --locked -p agent-host --all-features` exit 0；diff 仅限两个代码文件与变更目录，config.yaml 未被 stage |
 
 ## Checks
 
@@ -53,7 +57,12 @@
 
 ## Merge History
 
-（待 DU1 候选/合入阶段填写）
+DU1（integrated，唯一交付单元）：
+
+- 集成执行者：独立集成 Agent（worker，ID cfb8a880-c645-4b67-9677-b7ef753fb0f5，deepseek/deepseek-flash，不复用实现/检视上下文）；集成范围=在实现分支上登记变更目录并核对候选可构建性；报告 reports/integrator-candidate.md。
+- 基线复核与防竞态：单执行者串行；提交前复核 refs/heads/main == f53dad55e72111bb7e026a0d13f5180f82c61358。
+- 候选固定提交：e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41。
+- agentic-premerge 证据块与 PR 合入记录：候选检查（5.3/5.4/5.5）完成后回填。
 
 ## Test Design and Authoring
 
