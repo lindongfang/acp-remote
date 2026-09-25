@@ -50,7 +50,12 @@
 
 ### Project Verify 记录
 
-（[PV1]/[PV2] 执行时登记：命令、版本、退出码、日志路径。）
+| Check | 执行者/版本 | 命令 | 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| PV2 | 主 Agent / `fe7b0e9`（工作树=`6c5e53b`） | 计数 → `cargo test --locked --workspace --all-features` → 计数 | **PASS**：BEFORE=0、AFTER=0、差值 0；EXIT=0；82 个测试目标 / 718 passed / 0 failed | `reports/temp-count-final.log` |
+| PV1 | 主 Agent / `fe7b0e9`（工作树=`6c5e53b`） | `npm run verify`（fmt + 十道合同门禁 + clippy + 全量测试） | **PASS**：EXIT=0，0 个 FAILED | `reports/final-verify.log` |
+
+证据时效说明：RV1 的 MINOR 修复（`6f37979`，仅 `#[must_use]` 属性 + 报告行号）晚于 PV1/PV2；受影响范围（identity-keystore）已在修复后重跑 `cargo test -p identity-keystore`（10+12 passed）+ `clippy -p identity-keystore` + `cargo fmt --check` 全绿，全量 PV1/PV2 在候选轮（6.3）会按最终候选重跑，故此处不整轮重跑。
 
 ## Check Plan Changes
 
@@ -66,7 +71,13 @@
 
 ## Review Findings
 
-（RV1 报告登记处。）
+### RV1（branch / work-package，reviewer a2dd5963 前一轮 281b1a00，fresh 只读）
+
+- 目标版本：`6c5e53b`；报告：`reports/rv1-wp1.md`；结论：**PASS**（无 CRITICAL/MAJOR）。
+- 发现：RV1-F1（MINOR：identity-keystore 守卫工厂缺 `#[must_use]`）、RV1-F2（MINOR：inventory.md 行号笔误 1138→1146）→ 已在 `6f37979` 修复，RV2 复核。RV1-F3/F4（SUGGESTION：Drop 静默失败的可见性、机器防线候选）属 design 已登记的取舍，不修复。
+- 局限性闭合：RV1 reviewer 沙箱无法读已提交范围的字面 diff；主 Agent 已独立核验
+  `git diff --stat 1359a13..6c5e53b` = 14 文件 +414/−73、全部落在测试边界内（hunk 级 `cfg(test)` 核验），
+  补上该残余风险。
 
 ## Merge History
 
