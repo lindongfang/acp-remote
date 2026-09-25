@@ -305,6 +305,8 @@ main 的分支保护是 GitHub 仓库设置（不在版本控制内），它决�
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。
 
+`check:agentic` 还通过 `scripts/sync-agentic-host-entrypoints.mjs --check` 核对 Pi、Oh My Pi 与通用 Agent 的中文 agentic 路由；运行 OpenSpec 引擎的 `update` 刷新通用英文入口后，用 `npm run sync:agentic-hosts` 恢复项目路由，再运行 `npm run check:agentic`。
+
 ## 11. 完成定义
 
 agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`、最终验收与归档判据）以 `openspec/schemas/agentic/` 与 [`.agents/skills/agentic-verify/SKILL.md`](.agents/skills/agentic-verify/SKILL.md) 为准，本文件不重复；验收入口、`all_done` 语义与归档前检查的要求见文末「Agentic workflow」（该段是 agentic 扩展的受管路由，标题不可改动）。

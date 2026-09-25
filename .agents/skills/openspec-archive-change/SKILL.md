@@ -12,6 +12,8 @@ metadata:
 
 Archive a completed change in the experimental workflow.
 
+**本项目的 agentic 入口：** `openspec status` 返回 `schemaName: agentic` 时，先完整读取 `.agents/skills/agentic-verify/SKILL.md` 并执行归档前检查；对选定规划根运行 `npx --quiet --no-install openspec-agentic workflow check --change <name> --stage archive --json`。结构检查和当前版本的语义验收均为 PASS 后才能归档，下方通用确认步骤不能豁免这两道检查。
+
 **Store selection:** If the user names a store (a store is a standalone OpenSpec repo registered on this machine) or the work lives in one, run `openspec store list --json` to discover registered store ids, then pass `--store <id>` on the commands that read or write specs and changes (`new change`, `status`, `instructions`, `list`, `show`, `validate`, `archive`, `doctor`, `context`, `schemas`, `view`). Once selected, treat `--store <id>` as sticky for the rest of the workflow. Every unscoped example of those commands below is shorthand: before running it, append the flag. For example, run `openspec status --change "<name>" --json --store "<id>"`, not the unscoped form shown below. Other commands do not take the flag. Hints printed by commands already carry the flag; keep it on follow-ups. Without a store, commands act on the nearest local `openspec/` root.
 
 `<capability-path>` is the spec directory relative to `specs/` (for example, `user-auth` or `identity/user-auth`). Preserve the full path from each delta spec when resolving its main spec.

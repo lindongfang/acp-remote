@@ -66,6 +66,8 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与�
 
 上游 ACP 固定快照（`schemas/acp/v1/upstream/schema.json`，来源与 sha256 见 `compatibility/acp/v1/matrix.json` 的 `protocol` 块）由 `check:acp` 重算 digest 并校验 commit 与 major 版本目录；`fixtures/acp/v1` 也按同一快照做 ajv 校验。升级快照必须同时改固定值、vendored 文件与矩阵行，且先通过 `node scripts/check-acp-compatibility.mjs`。
 
+`check:agentic` 还会核对 `.pi`、`.omp` 和 `.agents` 的中文 agentic 宿主路由；引擎 `openspec update` 刷新英文通用入口后，运行 `npm run sync:agentic-hosts` 恢复项目路由。
+
 ## 分支保护
 
 CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 定义检查，「合并前必须通过」却是 GitHub 的仓库设置，不属于版本控制内容。

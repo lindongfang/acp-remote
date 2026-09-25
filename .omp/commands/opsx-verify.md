@@ -4,6 +4,8 @@ description: "Verify implementation matches change artifacts before archiving"
 
 Verify that an implementation matches the change artifacts (specs, tasks, design).
 
+**本项目的 agentic 入口：** `openspec status` 返回 `schemaName: agentic` 时，先完整读取并执行 `.agents/skills/agentic-verify/SKILL.md` 及其引用的验收程序。CLI 状态与证据验收的 PASS / FAIL / BLOCKED 分别报告；下方通用评分不能作为该变更可归档的结论。
+
 **Store selection:** If the user names a store (a store is a standalone OpenSpec repo registered on this machine) or the work lives in one, run `openspec store list --json` to discover registered store ids, then pass `--store <id>` on the commands that read or write specs and changes (`new change`, `status`, `instructions`, `list`, `show`, `validate`, `archive`, `doctor`, `context`, `schemas`, `view`). Once selected, treat `--store <id>` as sticky for the rest of the workflow. Every unscoped example of those commands below is shorthand: before running it, append the flag. For example, run `openspec status --change "<name>" --json --store "<id>"`, not the unscoped form shown below. Other commands do not take the flag. Hints printed by commands already carry the flag; keep it on follow-ups. Without a store, commands act on the nearest local `openspec/` root.
 
 **Input**: Optionally specify a change name after `/opsx-verify` (e.g., `/opsx-verify add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
