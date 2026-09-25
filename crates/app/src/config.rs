@@ -455,8 +455,8 @@ fn default_app_directory() -> Result<PathBuf, ConfigError> {
 /// unknown field `data_diry`, expected one of …
 /// ```
 ///
-/// 取**错误正文**（首个不缩进且不是定位行的行）：定位行只有行列号，没有判据；源码片段会回显用户配置
-/// 文本，不进日志。
+/// 取**错误正文**（首个不缩进、不是定位行也不是源码片段行的那一行）：定位行只有行列号，没有判据；
+/// 源码片段（`2 | data_diry = "/tmp/x"`）与它的 `|` 边框会逐字回显用户写的配置文本，不进日志。
 fn toml_error_detail(text: &str) -> String {
     let body = text
         .lines()
@@ -465,6 +465,7 @@ fn toml_error_detail(text: &str) -> String {
             !line.is_empty()
                 && !line.starts_with(char::is_whitespace)
                 && !line.starts_with("TOML parse error")
+                && !is_toml_locator_line(line)
         })
         .or_else(|| text.lines().next())
         .unwrap_or_default()
@@ -474,6 +475,18 @@ fn toml_error_detail(text: &str) -> String {
         detail.push('…');
     }
     detail
+}
+
+/// toml 诊断里的定位/源码片段行：`  |`、`2 | data_diry = "/tmp/x"`、`  | ^^^^^^^^`。
+///
+/// 它们不属于错误正文：`2 | …` 这样的行逐字包含用户写的配置文本（`ConfigError::Invalid` 只承载
+/// 不含配置值的简短说明）。
+fn is_toml_locator_line(line: &str) -> bool {
+    let Some((head, _)) = line.split_once('|') else {
+        return false;
+    };
+    let head = head.trim();
+    head.is_empty() || head.chars().all(|c| c.is_ascii_digit())
 }
 
 /// 进日志的错误正文长度上限（单行，不含源码片段）。
@@ -1060,6 +1073,35 @@ allow_plaintext = true
             parse("[[imports]]\nimport_id = \"i\"\n"),
             Err(ConfigError::ManagedSectionInStartupConfig { section: "imports" })
         ));
+    }
+
+    /// `toml_error_detail` 的诊断要能直接进日志与 CLI 的 stdout「一行简述」：单行、不吐配置源码
+    /// 片段（源码会回显用户写入的值）、不超过实现声明的长度上限。
+    ///
+    /// 反例能力：把该函数改回「原样多行诊断」（定位行 + `|` 源码片段 + 正文）时，前两条断言必然
+    /// 失败——诊断会含 `\n`、也会包含源码片段里的 `endpoing = `；长度上限由 [`ERROR_DETAIL_MAX_CHARS`] 固定。
+    #[test]
+    fn toml_parse_error_detail_is_single_line_without_the_source_snippet() {
+        let text = "[daemon.local_admin]\nendpoing = \"wp427-marker\"\n";
+        let detail = match parse(text) {
+            Err(ConfigError::Invalid { detail }) => detail,
+            Err(other) => panic!("TOML schema 错误必须是 ConfigError::Invalid：{other}"),
+            Ok(_) => panic!("未知键必须被拒绝"),
+        };
+        assert!(!detail.contains('\n'), "诊断必须是单行：{detail:?}");
+        assert!(
+            !detail.contains("endpoing = ") && !detail.contains("wp427-marker"),
+            "诊断不得回显配置源码片段：{detail}"
+        );
+        assert!(
+            detail.contains("endpoing"),
+            "诊断必须点明出错的键（否则等于吞掉判据）：{detail}"
+        );
+        assert!(
+            detail.chars().count() <= ERROR_DETAIL_MAX_CHARS,
+            "诊断长度 {} 超过上限 {ERROR_DETAIL_MAX_CHARS}：{detail}",
+            detail.chars().count()
+        );
     }
 
     #[test]
