@@ -36,8 +36,9 @@
 ### 3. Windows 访问控制的 FFI 边界（核验先行，不满足即回到用户决策）
 
 - endpoint 创建与 `0x01/0x02` 字节流本身可用 tokio `net` 的 safe API。
-- 但 §2.2 的两层访问控制在 Windows 上都需要 Win32 FFI：创建 pipe 时带仅含本用户 SID 的 SDDL（`CreateNamedPipeW` + security attributes，tokio 的 `ServerOptions` 不暴露），以及连接后 `GetNamedPipeClientProcessId` + `OpenProcessToken` + `GetTokenInformation(TokenUser)` 的 SID 比对。workspace 固定 `unsafe_code = "forbid"`，因此与 ADR-0006/`windows-dpapi` 同一模式：**FFI 只能存在于外部 wrapper crate**。
-- 预研结论：crates.io 上没有成熟的独立安全封装（命中的 `app_if_ipc` 等是应用私有 crate，许可证/维护性存疑）。**已定案（2026-09-25 用户选择方案 a）**：新增一个极小的自研 wrapper crate `windows-local-ipc`，只暴露「以 SDDL 创建 pipe」「查询对端 SID」两个安全函数。它以**仓库内 path 依赖**形式存在（不发布 crates.io），目录置于 workspace `members` 之外并在 `Cargo.toml` 的 `workspace.exclude` 登记，因此不继承 workspace 的 `unsafe_code = "forbid"`；其内部 unsafe 以模块级最小范围收敛并加 `#![allow(unsafe_code)]` 限定，公开 API 全部为 safe。`deny.toml` 对 path 来源的登记在同一变更同步。
+- 但 §2.2 的两层访问控制在 Windows 上都需要 Win32 FFI：创建 pipe 时带仅含本用户 SID 的 SDDL，以及连接后 `GetNamedPipeClientProcessId` + `OpenProcessToken` + `GetTokenInformation(TokenUser)` 的 SID 比对。workspace 固定 `unsafe_code = "forbid"`，因此与 ADR-0006/`windows-dpapi` 同一模式：**FFI 只能存在于外部 wrapper crate**。
+- 预研结论：crates.io 上没有成熟的独立安全封装（命中的 `app_if_ipc` 等是应用私有 crate，许可证/维护性存疑）。**已定案（2026-09-25 用户选择方案 a）**：新增一个极小的自研 wrapper crate `windows-local-ipc`，只暴露安全函数（落地形状：`create_pipe_server`（SDDL 创建并包装为 tokio `NamedPipeServer`）、`current_user_sid`、`client_user_sid` 三个 `cfg(windows)` 函数）。它以**仓库内 path 依赖**形式存在（不发布 crates.io），目录置于 workspace `members` 之外并在 `Cargo.toml` 的 `workspace.exclude` 登记，因此不继承 workspace 的 `unsafe_code = "forbid"`；其内部 unsafe 以模块级最小范围收敛并逐处附不变量注释，公开 API 全部为 safe。`deny.toml` 对 path 来源的登记在同一变更同步。
+- 实现期口径修正（2026-09-25，WP2）：① 非 Windows 形态从「编译通过 + 运行期明确失败」收窄为「**编译为空 crate**」（无任何导出，`server` 侧 cfg-gate 调用点）——运行期失败路径不存在可调用的入口，比运行期失败更严格；② 锁定版 tokio 1.53.1 的 `ServerOptions` 已有安全属性相关能力，本 crate 仍按已定案方向使用显式 `CreateNamedPipeW`（SDDL 语义自控），该前提描述不影响定案结论。
 - Unix 侧无此问题：`nix`（已在 workspace）增开 `socket`/`user` feature 即可覆盖 `SO_PEERCRED`；`0700/0600` 权限用 std 的 `PermissionsExt`。
 
 ### 4. 单实例锁与 instanceId
@@ -81,4 +82,4 @@ v1 CLI 只打印 `pairingUrl` 文本（URL 已含完整配对 payload，安全�
 
 ## Open Questions
 
-无。Windows IPC wrapper 已按用户 2026-09-25 的确认定案（Decisions 第 3 条）。
+无。Windows IPC wrapper 已按用户 2026-09-25 的确认定案（Decisions 第 3 条）；WP2 的两处口径修正（非 Windows 空 crate、tokio 前提描述）已就地写回第 3 条。
