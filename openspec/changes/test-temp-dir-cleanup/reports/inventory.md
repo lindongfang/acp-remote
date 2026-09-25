@@ -51,7 +51,7 @@
 
 | 当前命中 | 类别 |
 | --- | --- |
-| `agent-host/tests/support/mod.rs:39`（`TempFile::new` 内部）、`core/src/use_cases.rs:1138`、`identity-keystore/src/store.rs:498`、`server/src/local_admin/test_support.rs:1614`、`server/src/local_admin/test_support.rs:1660`、`app/src/cli/input.rs:180` | **守卫构造函数的内部实现**（都在 `#[must_use]` 的创建函数里，返回值必须绑定到局部变量） |
+| `agent-host/tests/support/mod.rs:39`（`TempFile::new` 内部）、`core/src/use_cases.rs:1146`、`identity-keystore/src/store.rs:498`、`server/src/local_admin/test_support.rs:1614`、`server/src/local_admin/test_support.rs:1660`、`app/src/cli/input.rs:180` | **守卫构造函数的内部实现**（都在 `#[must_use]` 的创建函数里，返回值必须绑定到局部变量） |
 | `storage-sqlite/tests/support/mod.rs:93`、`app/tests/support/mod.rs:69`、`identity-keystore/tests/support/mod.rs:22`、`app/src/compose.rs:800`、`app/src/lock.rs:251`、`server/src/local_admin/test_support.rs:1851`、`server/tests/local_endpoint_unix.rs:31` | **已有守卫的构造函数**（`TempDir::new` / `TempRoot::new` / `TestWorld::temporary_directory`） |
 | `agent-host/tests/supervision.rs:36`、`agent-host/tests/support/mod.rs:507`、`core/src/use_cases.rs:1442`、`core/src/use_cases.rs:1801`、`server/src/local_admin/test_support.rs:1868`、`server/src/transport/local/platform/windows.rs:193`、`server/tests/local_endpoint_windows.rs:26`、`storage-sqlite/tests/admin_store.rs:468`、`app/src/config.rs:922`、`app/src/cli/input.rs:179`（函数定义行）、`app/src/cli/input.rs:276`（调用点） | **无泄漏（只拼路径/字符串）** 或**守卫调用点**（`let dir = temp_dir();`） |
 

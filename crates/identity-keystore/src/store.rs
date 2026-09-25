@@ -494,6 +494,8 @@ mod temp_dirs {
 
     impl TempDir {
         /// 在系统临时目录下新建唯一子目录（`name` 必须已含 pid/序列号等唯一化成分）。
+        /// `#[must_use]`：语句级裸调用会在语句结束即删除目录（design D1）。
+        #[must_use]
         pub(super) fn new(name: &str) -> Self {
             let path = std::env::temp_dir().join(name);
             let _ = std::fs::remove_dir_all(&path);
