@@ -43,7 +43,9 @@
 | 2.23 | coder / implement / work-package | 313d2a2 | CHECK / PV3（2.23 轮） | reports/wp323-handoff.md（日志 reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | 114 passed；fmt/clippy 零告警；`npm run check` EXIT=0 |
 | 3.6 | reviewer / work-package review / work-package | 313d2a2 | REVIEW / RV1 | reports/rv1-wp3.md | PASS / NEW | 隔离子 Agent（deepseek/deepseek-flash）；C1–C10 静态核对；无 CRITICAL/MAJOR；F1/F2/F3/F6 交 2.24，F4/F5 已由主 Agent 收敛措辞 |
 | 3.5 | main（代行 coder 的 Project Verify）/ project-verify / work-package | 313d2a2 | CHECK / PV1、PV2、PV3、PV5（WP3 最终轮） | reports/wp3-final-verify.log、reports/pv5-windows-ipc.log | PASS / NEW | `npm run verify` EXIT=0（75 个测试块全 ok）；合同门禁全绿；Windows IPC 用例 EXIT=0 |
-| MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | BLOCKED / PENDING | `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
+| 2.22 | coder / implement / work-package | fe093b3（含 bb96a10；报告 64823a1） | DELIVERY / NOT_APPLICABLE | reports/wp422-handoff.md | PASS / NEW | `AuditStore`（append/query over `owned_audit`）；复用 `insert_audit_rows` 编码、不改 DDL；111 passed（+14） |
+| 2.22 | coder / implement / work-package | bb96a10 | CHECK / PV1、PV2（2.22 轮） | reports/wp422-handoff.md（日志 reports/wp4-storage-audit.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy 零告警；`check:drift` 36 条 DDL 不变；`npm run check` 两轮 EXIT=0 |
+| MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
 ## Checks
@@ -69,6 +71,8 @@
 - 2026-09-25（WP3b2 交付后，主 Agent 裁定）：**五条开放项处置**。(1) `*.revoke` 重试语义与 §7 冲突——**实现侧修正**（已核实 `export.rs:401`/`trust.rs:519`/`trust.rs:552` 均为 `COALESCE(revoked_at, ?)`；新增任务 2.23：三个 revoke 入口先读、不存在或已撤销 → `local.not_found`）。(2) 待澄清项作废：`PairingRecord` 本身持久化 `requested_scopes`/`requested_grants`（`core/src/model/identity.rs:440-441`），因此 status 返回的就是登记的请求集合，**不是偏离**。(3) `consumed → "approved"`、设备 `pending_confirmation → "claimed"` 的字面量映射——在 §5.3/§5.4 的封闭词表内取值，接受。(4) `preset.*` 在 `device.pair.begin` 被拒——与 §5.3「取值限于 `pack.*` 与命令名集合」的字面表述一致，接受（展开由 CLI 承担）。(5) `window::add_millis` 与 `storage-sqlite` 的日期算术重复——core 未暴露时间工具，接受并登记为已知重复（不新增跨 crate 依赖）。
 
 - 2026-09-25（RV1-WP3 后，主 Agent）：**F4/F5 契约措辞收敛**（不改语义）——`docs/LOCAL_ADMIN_PROTOCOL.md` §7 的「审计与日志」条改为「拒绝连接 + §14.2 类别覆盖的安全动作 + 撤销记审计；方法失败只记结构化日志」（§14.2 封闭词表无「方法失败」，不得复用 `authorization.denied`）；`specs/local-admin-methods/spec.md` 场景 WHEN 列表同步。`specs/local-admin-channel/spec.md` 的 attachment MUST 句加「facade 落地后」范围限定并指向 §3.1 实现状态注记。影响：无行为变化，仅合同/规范措辞与实现口径对齐。新增任务 2.24（F1/F2/F3/F6 实现侧修复）。
+
+- 2026-09-25（2.22 交付后，主 Agent 裁定）：三项开放项处置。①`query` 不跨 `imported_audit`——**接受**：`imported_audit` 带 `owner_node_id`/`export_id`/`session_id`/`request_id` 四列，而 `AuditRecord`（合同 §3 值对象）无法承载这些归属列，跨表投影会静默丢归属；本切片无 imported 会话，`owned_audit` 是唯一相关表。②`append` 受容量门约束、满载时独立拒绝审计——**接受**：与 §7.5⑥「宁可拒绝写也不静默丢证据」一致，拒绝路径落结构化日志。③新增 `crates/storage-sqlite/tests/admin_audit.rs`（测试文件）超出任务单列举的两个 src 路径——**接受**：仅测试资产，不影响依赖面与合同。
 
 ## Dependency Handoffs
 
