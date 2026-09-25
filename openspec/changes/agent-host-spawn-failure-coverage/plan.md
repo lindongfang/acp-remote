@@ -150,8 +150,8 @@ mode: not-applicable
 reason: "本变更只向 crates/agent-host 增补测试与一个规范场景，不改动任何产品代码；server、app、daemon、CLI 与前端尚未实现，仓库中不存在可端到端运行的产品入口（无监听器、无 CLI 子命令、无前端），因此无法在真实入口执行端到端场景。"
 basis: "openspec/config.yaml 的 context 已记录「当前阶段没有可端到端运行的产品路径，Main E2E 按变更记 not-applicable，需用户逐变更批准」，且 x-agentic.e2e.command 为空；本变更范围为库 crate 的测试与规范场景。"
 alternative_checks:
-  - "cargo test --locked -p agent-host --all-features：含新增 spawn 失败集成测试与 to_port_error 映射单测，覆盖 S1 与 R1「可区分原因」。"
-  - "npm run verify：统一合同门禁 + fmt/clippy/workspace 全量测试，确认 S2–S5 既有场景回归不破、规范增量通过校验。"
+  - cargo test --locked -p agent-host --all-features（含新增 spawn 失败集成测试与 to_port_error 映射单测；覆盖 S1 与 R1 可区分原因）
+  - npm run verify（统一合同门禁与 fmt/clippy/workspace 全量测试；确认 S2–S5 既有场景回归不破且规范增量通过校验）
 downgrade_approval: "2026-09-25，本会话，用户原话：「同意 agent-host-spawn-failure-coverage 的 Main E2E 记 not-applicable，替代验证为 agent-host 的 cargo 测试 + npm run verify。」"
 ```
 

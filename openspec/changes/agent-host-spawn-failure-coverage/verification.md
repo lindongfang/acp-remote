@@ -43,6 +43,8 @@
 ## Check Plan Changes
 
 - 2026-09-25：变体计数漂移修正。coder 报告 `HostError` 实际有 19 个变体（tasks.md 2.2 与 design.md 决策 2 原写「16 个」）。已将两处同步为「全部变体（当前 19 个，以代码为准）」。影响：无——实现按「全部变体」覆盖了 19 个（严格包含原 16 个），specs 场景与成功判据（「覆盖全部变体」）不含数字，不受影响。任务/需求映射不变。
+- 2026-09-25（RV1-F1/RV2-F1 闭环）：plan.md 两处与 design.md Context 一处的「16 个变体」残留已同步为 19；纯文书修正。
+- 2026-09-25（premerge 门禁适配）：plan.md `alternative_checks` 两条目的标点重写（去除条目内的 `，`/`，`/`、`，改用全角括号分句）。原因：premerge 检查器按逗号类字符切分计划条目，原写法被切成 5 个碎片导致「逐项唯一对应」失败。语义不变，契约摘要更新为 sha256:6ef73d0d…92f4905e，premerge 在该摘要上 PASS。
 
 ## Dependency Handoffs
 
@@ -69,8 +71,37 @@ DU1（integrated，唯一交付单元）：
 
 - 集成执行者：独立集成 Agent（worker，ID cfb8a880-c645-4b67-9677-b7ef753fb0f5，deepseek/deepseek-flash，不复用实现/检视上下文）；集成范围=在实现分支上登记变更目录并核对候选可构建性；报告 reports/integrator-candidate.md。
 - 基线复核与防竞态：单执行者串行；提交前复核 refs/heads/main == f53dad55e72111bb7e026a0d13f5180f82c61358。
-- 候选固定提交：e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41。
-- agentic-premerge 证据块与 PR 合入记录：候选检查（5.3/5.4/5.5）完成后回填。
+- 候选固定提交：e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41；证据回填后候选 HEAD = 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2（99dc7e4 相对 e9ddb00 仅追加变更目录文档/证据，代码逐字节未变）。
+
+```agentic-premerge
+version: 1
+delivery_unit: DU1
+target_ref: refs/heads/main
+target_commit: f53dad55e72111bb7e026a0d13f5180f82c61358
+candidate_commit: 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2
+contract_digest: sha256:6ef73d0df7f11b605cf1388ddbbf341f42d2f76fbffeab05b16e601392f4905e
+verify:
+  result: PASS
+  candidate_commit: 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2
+  evidence: {path: reports/PV1.log, sha256: "sha256:f8389dda3e6672f0c1aade96869f5ad5b319f5665b32b61cc76b955a92538289"}
+review:
+  result: PASS
+  candidate_commit: 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2
+  reviewer: reviewer-RV2（独立隔离子 Agent ba9cdcef-334d-4323-8a5e-24e001999309，kimi-coding/k3）
+  author: coder-WP1/WP2（worker 339e9c0c-ba4b-4636-ba3a-28237435b07a，deepseek/deepseek-flash）
+  evidence: {path: reports/review-rv2.md, sha256: "sha256:8bab151c21cb293e3b0c0b50a9e8743a7803ca9bbd7cbc8cea8154fb64905353"}
+alternative_checks:
+  - name: "cargo test --locked -p agent-host --all-features（含新增 spawn 失败集成测试与 to_port_error 映射单测；覆盖 S1 与 R1 可区分原因）"
+    result: PASS
+    candidate_commit: 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2
+    evidence: {path: reports/alternative-agent-host-tests.log, sha256: "sha256:434bea0a1e9d60c189b2934add0d8b30adb3d1ee73cf93fe6e2583d83bf807cc"}
+  - name: "npm run verify（统一合同门禁与 fmt/clippy/workspace 全量测试；确认 S2–S5 既有场景回归不破且规范增量通过校验）"
+    result: PASS
+    candidate_commit: 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2
+    evidence: {path: reports/PV1.log, sha256: "sha256:f8389dda3e6672f0c1aade96869f5ad5b319f5665b32b61cc76b955a92538289"}
+```
+
+- PR 合入记录：premerge 于 HEAD=99dc7e4 执行 PASS（目标 f53dad5 未移动；contractDigest sha256:6ef73d0d…92f4905e；证据摘要见上块）。随后将本证据块与 plan.md 门禁适配修正一并提交（该提交仅追加本文档与 plan.md 文书修正，代码与契约输入不变）。PR 编号、必需检查状态与合并后 main 提交在 5.6 完成后回填。
 
 ## Test Design and Authoring
 
