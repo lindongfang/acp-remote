@@ -62,6 +62,20 @@ deny = []
 # 因此直接拒绝；确需 git 依赖时先写 ADR，再在这里加 `allow-git` 条目。
 unknown-registry = "deny"
 unknown-git = "deny"
+#
+# path 来源依赖的登记（本仓库目前只有一例：`vendor/windows-local-ipc`，切片 4 的自研 Win32 FFI wrapper，
+# 见 `docs/MODULE_ARCHITECTURE.md` §3.1 与 `daemon-cli-and-local-admin` 变更的 design.md 决策 3）：上面两个判定只覆盖 registry 与 git 来源，
+# path 依赖（`source = null`）不在它们的判定范围内，也没有可写的 `allow` 条目，因此**不为它新增或放宽任何键**。
+# 它改由下面三条约束承担，任一条不成立都会在 CI 的 `deps` job 暴露：
+#   1. 位置与成员身份：登记在根 `Cargo.toml` 的 `workspace.exclude`，因而不是 workspace 成员、不继承 workspace lint
+#      （它必须写 `unsafe`）、不发布；`check:boundaries` 仍要求 `server` 行在 §5 矩阵里有 `windows-local-ipc` 列。
+#   2. 许可证：该 crate 在自己的 manifest 里显式声明许可证（不能继承 `[workspace.package]`），取值必须落在本文件
+#      `[licenses] allow` 内；判定仍走 [licenses] 一节，不新增 `exceptions` 条目。
+#   3. wildcard：path 依赖不带 `version`，会在 `[bans] wildcards = "deny"` 下报 `error[wildcard]`；豁免来自
+#      `[bans] allow-wildcard-paths = true`，而该豁免只对 private 的**依赖方**（这里是 `server`，workspace 内全部
+#      crate 都是 `publish = false`）生效。
+# 诚实说明：`cargo-deny` 只在 CI 运行（`AGENTS.md` §8/§10），本节这些结论无法在本地复核；本地能复核的是上一条的
+# `workspace.exclude` 与 §5 矩阵口径。
 
 [licenses]
 # 许可文本推断的置信度阈值（上游模板同值）：低于它时 cargo-deny 报「无法判定」而不是猜一个许可证。
