@@ -59,6 +59,7 @@
 - 2026-09-25（2.21 交付后）：**WP5 写范围再增一处文档 bug**——`schemas/local-admin/v1/README.md:13` 引用了不存在的 `scripts/check-local-admin-contract.mjs`（本地管理词表实际由 `scripts/check-command-catalog.mjs` 断言）；属既有问题，2.21 未改，归 WP5 顺手修正。
 - 2026-09-25（WP1 交付后）：**WP4 调用点约束传递**——固定工具链 1.98.1 下 `std::fs::File::try_lock`（1.89 稳定）与 `fs4::FileExt` 同名且优先级更高，WP4 必须全限定调用 `fs4::FileExt::try_lock`，否则等于把 MSRV 抬到 1.89（依据：WP1 handoff 开放问题第 3 项，已写入 `MODULE_ARCHITECTURE.md` §3.1）。
 
+- 2026-09-25（WP3b2 裁决，主 Agent）：**配对 URL 的 origin 来源与 QR payload 组装方式**。D1： 由 WP4 组合根注入 （server 不读配置、不经  取值）； 时 / 在任何副作用前失败关闭并回 （§6 无「配置缺失」专用码，语义最贴近；成因需在 message 与注释中说明）。D2： 新增  +  生产依赖（§5 矩阵允许），用两边的  组装 ，不手写 wire 键名，并补往返测试；若协议 crate 有既有 URL helper 优先使用，否则用 base64 URL_SAFE_NO_PAD（server 不引入 acpr-wire）。影响：WP4 的  构造签名 + server 的两条依赖边 + 。依据：WP3b2 实现者的 D1/D2 提问与本会话裁定。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
