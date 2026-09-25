@@ -452,6 +452,22 @@ impl Context {
             .ok_or_else(|| Failure::local(LocalErrorCode::Internal, "无法创建异步 runtime"))
     }
 
+    /// 释放缓存的 runtime（连同其中所有连接）。
+    ///
+    /// **`daemon stop` 必须在等待单实例锁之前调用**：Tokio 在 Windows 上不会在 `drop(连接)` 时同步释放
+    /// Named Pipe 句柄——句柄由挂起的 overlapped 读持有（mio 的 `NamedPipe::drop` 只取消挂起操作、
+    /// 不关闭句柄），只有 runtime 的 I/O driver 处理完那个 completion 才真正 `CloseHandle`，而
+    /// current-thread runtime 只在 `block_on` 期间驱动 driver。等锁循环全程 `std::thread::sleep`，
+    /// 因此句柄会一直开到进程退出；在那之前 Daemon 的 `drain_connections` 看不到对端 EOF，只能等满
+    /// `daemon.shutdown_grace_ms`（实测：`drain_timeout{remaining:1}` 与 `elapsed_ms ≈ grace_ms`）。
+    fn release_runtime(&mut self) {
+        // 显式命名被释放的值：该 `Runtime` 的析构会停机 I/O driver，让挂起的 completion 落定，
+        // 连接句柄随之关闭。
+        if let Some(runtime) = self.runtime.take() {
+            drop(runtime);
+        }
+    }
+
     /// Daemon 运行中则返回本地通道定位串；没有有效锁时 `Ok(None)`（§7）。
     ///
     /// 「有锁但记录缺失/损坏」不视为「未运行」：这是 R11 的 `local.unavailable` 路径（不自动强杀、不直接读库）。
@@ -689,6 +705,9 @@ fn daemon_stop(context: &mut Context, args: &DaemonStop) -> Result<(), Failure> 
         drop(client);
         Ok(())
     })?;
+    // 连接句柄只有在它的 runtime 被销毁时才真正释放（见 `Context::release_runtime`）：不释放的话，
+    // 整个 `wait_for_lock_release` 期间对端都看不到 EOF，Daemon 的排空窗口只能等满宽限。
+    context.release_runtime();
     wait_for_lock_release(context.data_dir())?;
     println!("daemon 已停止（单实例锁已释放）");
     Ok(())

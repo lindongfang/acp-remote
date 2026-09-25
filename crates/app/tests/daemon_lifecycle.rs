@@ -7,10 +7,12 @@
 
 mod support;
 
+use std::time::{Duration, Instant};
+
 use app::{ClientOutcome, DaemonLock, outcome_of};
 use serde_json::{Value, json};
 use server::local_admin::Method;
-use support::{Daemon, failure_code, params, params_of, run_start_once};
+use support::{Daemon, Stdin, failure_code, params, params_of, run_cli, run_start_once};
 
 /// 一个指向真实可执行文件的 Agent profile：`daemon.status.agents[].available` 因此为 `true`
 /// （`design.md` 决策 6：「profile 存在且 command 可解析」）。
@@ -301,6 +303,55 @@ fn status_counts_follow_persisted_records() {
     assert_eq!(status["counts"]["nodes"], json!(0));
 
     assert!(daemon.stop().success());
+}
+
+/// R13 的补充（task 2.26）：**没有其他客户端在途**时，`daemon stop` 不必等满宽限。
+///
+/// 钉住的是本机实测到的真实缺口：CLI 发出 `daemon.stop` 后就 `drop(client)` 并进入等锁循环，但
+/// Windows 上 Named Pipe 句柄由挂起的 overlapped 读持有，句柄只在**驱动它的 Tokio runtime** 被驱动或销毁时
+/// 才真正 `CloseHandle`；等锁循环全程 `std::thread::sleep`，从不驱动那个被缓存的 current_thread runtime，
+/// 于是句柄一直开到 CLI 进程退出——在那之前 Daemon 的 `drain_connections` 看不到对端 EOF，只能等满
+/// `shutdown_grace_ms`（实测 `drain_timeout{remaining:1}` 与 `elapsed_ms ≈ grace_ms`）。
+///
+/// 阈值取宽限的 2/3：本机实测停止耗时 < 200 ms，而「等满宽限」是 3000 ms，两者相差一个数量级，
+/// 1 s 的低限同时保证断言在慢机器上不抖动。
+#[test]
+fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
+    const GRACE_MS: u128 = 3000;
+    let mut daemon = Daemon::configure("stop-drain", "");
+    daemon.start();
+    let lock_path = daemon.data_dir().join(app::lock::LOCK_FILE_NAME);
+    let grace_arg = GRACE_MS.to_string();
+
+    let started = Instant::now();
+    let run = run_cli(
+        "daemon-stop-drain",
+        Some(daemon.config_path()),
+        &["daemon", "stop", "--grace-ms", grace_arg.as_str()],
+        Stdin::Null,
+    );
+    let elapsed = started.elapsed();
+    run.assert_success();
+    assert!(run.stdout.contains("已停止"), "{}", run.stdout);
+
+    // 锁已释放：CLI 返回时关闭序列已经完成（R13）。
+    let lock = DaemonLock::acquire(&lock_path).expect("退出后锁必须可再取");
+    drop(lock);
+    let status = daemon.wait_exit();
+    assert!(status.success(), "关闭序列完成后必须正常退出：{status}");
+
+    // 排空窗口**没有**走到超时分支：Daemon 在宽限内看到 CLI 那条连接结束。
+    assert!(
+        daemon.log_events("daemon.drain_timeout").is_empty(),
+        "无其他客户端在途时不得出现排空超时：日志={}",
+        daemon.log()
+    );
+    assert!(
+        elapsed < Duration::from_millis(u64::try_from(GRACE_MS * 2 / 3).expect("阈值")),
+        "无其他客户端在途时 `daemon stop` 必须明显早于宽限完成：elapsed_ms={} grace_ms={GRACE_MS} 日志={}",
+        elapsed.as_millis(),
+        daemon.log()
+    );
 }
 
 /// R12/R13/R14：`daemon.stop` 先回答 `accepted`，随后按顺序关闭；关闭期间的在途连接得到
