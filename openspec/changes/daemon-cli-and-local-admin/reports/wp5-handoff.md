@@ -13,9 +13,10 @@ target_revision:
   branch: feat/daemon-cli-and-local-admin
   base: f45231e（本轮起点，与任务书一致；`git log --oneline -3` 已核实）
   docs_commit: 94067e1        # docs(app): 回写切片 4 的已落地状态与 nodeId 派生式（6 files, +27/-16）
+  followup_docs_commit: c429492   # docs(app): 收敛 §4.1 里过期的「Daemon/CLI 接线仍未实现」（1 file, +1/-1；在 [PV1]/[PV2] 之后）
   handoff_commit: 本文件所在提交（`git log --oneline -1 -- openspec/changes/daemon-cli-and-local-admin/reports/wp5-handoff.md`）
-  verified_head: 0a046370f778ef9585b09f856fc4a578e264d421   # [PV1]/[PV2] 对应的 HEAD（验证后由主 Agent 控制的分支再无 crates/** 提交）
-  verified_rust_content_equals: 82d376d   # 最后一次改动 crates/** 的提交（其后两个提交只改 reports/** 与 verification.md）
+  verified_head: 0a046370f778ef9585b09f856fc4a578e264d421   # [PV1]/[PV2] 对应的 HEAD
+  verified_rust_content_equals: 82d376d   # 最后一次改动 crates/** 的提交；PV1/PV2 之后仍只有 docs-only 提交（94067e1→c429492 之间全是 docs/reports）
 scope:
   - docs/MODULE_ARCHITECTURE.md（§3 状态行 + 修订记录、§3 `[现状]`、§3.1 成员数、§4.9/§4.10 `[现状]`、§5 表下注记）
   - docs/DEVELOPMENT_PLAN.md（文件头基线段 + §2）
@@ -48,8 +49,9 @@ scope:
 | `AGENTS.md` | §4 模块状态表：`server`/`app` 由「待落地」改为「已落地（仅切片 4 范围：…）」；表后一句补指向 `MODULE_ARCHITECTURE.md` §3 `[现状]` | §4 是模块状态的登记处，与 README、MODULE_ARCHITECTURE 三处必须同口径；§4 其他内容（依赖规则、边界纪律）未动 |
 | `docs/IDENTITY_AND_AUTH_CONTRACT.md` | 新增「版本：0.4」记录；§7 端口小节末尾新增第 **7** 条 `[决定]`（`nodeId` 派生式、为什么没有独立持久记录、代价、不改变 wire）——见下节 | 该文档的既有体例就是「`[决定]`/`[已定型]` 条目 + 版本记录」；没有新造顶层小节，章节编号未变 |
 | `docs/CONFIG_REFERENCE.md` | 仅 `daemon.instance_lock` 一行补「当前切片只接线 `file`；显式 `ipc` 会被解析但以 `daemon.config_unwired`（debug 级）注明未生效」 | 这是唯一一个「文档写了两个取值、而其中一个在本切片会落到另一个实现」的键（`crates/app/src/config.rs:297-307`、`crates/app/src/daemon.rs:745-750` 佐证）。其余「已知但未接线」的键（`daemon.listen`/`allowed_hosts`/`trusted_proxies`/`tls.*`/`sync.*`/`node_link.*`/`sessions.*`/`terminal.*`）属于尚未存在的 adapter，已在模块/协议文档里按切片登记，不在本 WP 补逐键注记（见 §5 残余项 4） |
+| `docs/MODULE_ARCHITECTURE.md` §4.1（后续提交 `c429492`） | 管理状态那段里「仍未实现的是 Daemon/CLI 接线与 `server`/`app` 的入站适配器」改为「本地入站适配器已随切片 4 落地、管理能力可经本地通道端到端使用（唯一例外 `import.add` 恒返回 `local.unavailable`）」，未实现侧只留 `server::sync`/`node_link`/`acp_facade` 与 `node-link-client` | 与 [PV1]/[PV2] 同类的过期状态陈述，且就在本次已改的同一文件里（发现于改完全文后的全文复核）；写范围之内、改动一行 |
 
-提交：`94067e1 docs(app): 回写切片 4 的已落地状态与 nodeId 派生式`（`git show --stat` 确认 **6 files changed, 27 insertions(+), 16 deletions(-)**，无一条他人文件）。
+提交：`94067e1 docs(app): 回写切片 4 的已落地状态与 nodeId 派生式`（`git show --stat` 确认 **6 files changed, 27 insertions(+), 16 deletions(-)**，无一条他人文件），以及后续一行修正 `c429492`（1 file, +1/-1）。
 
 ## 3. `nodeId` 派生式的写入位置
 
@@ -79,6 +81,7 @@ scope:
 | 命令 | `npm run verify`（[PV1]）、`node scripts/check-crate-boundaries.mjs`（[PV2]） |
 | 退出码 | `EXIT(npm run verify)=0`、`EXIT(node scripts/check-crate-boundaries.mjs)=0` |
 | 验证对应的 HEAD | **`0a046370f778ef9585b09f856fc4a578e264d421`**（`feat/daemon-cli-and-local-admin`，`git status --short` 为空） |
+| 与最终 HEAD 的关系 | 最终 HEAD 是 `c429492`，比验证时的 `0a04637` 多出**两个 docs-only 提交**（`89987c8` 交接报告、`c429492` §4.1 一行）；`crates/**` 自 `82d376d` 起未再改动，因此 [PV1]/[PV2] 的 Rust 结论对最终 HEAD 仍成立。若后续真有 `crates/**` 提交落地，[3.7]/[3.9] 必须重跑并重新登记 SHA |
 | 覆盖的 Rust 内容 | 等于 `82d376d`（最后一次改 `crates/**` 的提交；其后的 `1ea291a`/`0a04637` 只改 `reports/**` 与 `verification.md`） |
 | 工具链 | `rust-toolchain.toml` 的 `1.98.1`；Node v24.19.0 / npm 12.0.2 |
 | 测试计数 | 82 个 test target（含 doc-tests）**全部 `ok`**；passed 合计 **730**、failed **0**、ignored **2** |
@@ -97,7 +100,8 @@ scope:
 3. `docs/LOCAL_ADMIN_PROTOCOL.md` §3.1 的实现状态注记**已核对、无需改动**：它写的「`server::acp_facade` 尚未落地；Daemon 对 `0x02` 在 framing 校验后立即关闭并记结构化警告」与实现一致（`crates/server/src/transport/local/connection.rs:12-13,164-171` 与 `CloseReason::FacadeUnavailable`），且该注记没有对 `app` 的落地状态作任何陈述，因此不存在需要改正的过期措辞。方法表/词表/错误码未动。
 4. `docs/CONFIG_REFERENCE.md` 的处理范围：只改了 `daemon.instance_lock`。其余「已知但未接线」的键（`daemon.listen`、`allowed_hosts`、`trusted_proxies`、`tls.*`、`sync.*`、`node_link.*`、`sessions.*`、`terminal.*`、`dev_mode.allow_plaintext`）在本切片同样只在启动时被 `daemon.config_unwired` 注明，但它们对应的是**尚不存在的 adapter**（`server::sync`/`server::node_link`/`server::acp_facade`），已在模块与协议文档里按切片登记。给每个键单独写「本切片未接线」会凭空造一套文档约定，故未做；若主 Agent 认为需要在配置文档里建立这个约定，请给出统一措辞后再补。
 5. **[3.7]/[3.9] 需按新 HEAD 重跑**：本轮的 [PV1]/[PV2] 对应 `0a04637`。其后若再有 `crates/**` 提交落地，该结论只对 `82d376d` 的 Rust 内容有效，必须重跑并重新登记 SHA。
-6. **未做**：未跑 `cargo-deny`/`gitleaks`（只在 CI 运行，本地无等价物）；未跑独立 reviewer（3.10）、未更新 `tasks.md`/`verification.md`（不在写范围内）；未推送、未开 PR、未合并。
+6. **本次全文复核发现的另外三处同类过期陈述，均在写范围之外**：`docs/CORE_PORTS_AND_STORAGE.md` 第 11 行与第 1312 行仍写「**仍未实现的是 Daemon/CLI 接线与 `server`/`app` 的入站适配器**」；`AGENTS.md` §9 的括注仍写「`node-link-client`、macOS/Linux 的 keystore 后端与 `server::*` 尚未落地」。两处都与切片 4 的事实不符，但写范围分别限定为「不含 `CORE_PORTS_AND_STORAGE.md`」与「`AGENTS.md` 仅 §4 模块状态表」，故未改，请主 Agent 指派后续小改动收敛（三处所属文件的 scope 分别是 `docs`/`docs`/`repo`）。
+7. **未做**：未跑 `cargo-deny`/`gitleaks`（只在 CI 运行，本地无等价物）；未跑独立 reviewer（3.10）、未更新 `tasks.md`/`verification.md`（不在写范围内）；未推送、未开 PR、未合并。
 
 ## 6. 给 reviewer（3.10）的核对入口
 
