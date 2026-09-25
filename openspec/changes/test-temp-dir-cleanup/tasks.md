@@ -40,8 +40,8 @@
 
 - [x] 7.1 DU1；主 Agent。not-applicable 替代验证清单核对：PV1/PV2 证据路径可读，`reports/temp-count-final.log` 的计数差为 0 可复现。完成条件：核对结论写入 `verification.md`。
 - [x] 7.2 DU1；主 Agent。资源清理核实：无本次新增 `acpr-*` 残留、无遗留测试进程与多余 worktree。完成条件：清理结果写入 `verification.md`。
-- [ ] 7.3 [e2e-owned] 全变更；前置：7.2；扩展（openspec-agentic）。运行 `npx --quiet --no-install openspec-agentic e2e check --change test-temp-dir-cleanup`，确认「不适用判据已按计划固化」（降级批准可追溯、替代检查清单齐备）。完成条件：由该检查在 PASS 时自动勾选本行、非 PASS 时自动回退；主 Agent 不得手勾或手动回退。本行只检查门禁，不执行测试、不汇总结果。
+- [x] 7.3 [e2e-owned] 全变更；前置：7.2；扩展（openspec-agentic）。运行 `npx --quiet --no-install openspec-agentic e2e check --change test-temp-dir-cleanup`，确认「不适用判据已按计划固化」（降级批准可追溯、替代检查清单齐备）。完成条件：由该检查在 PASS 时自动勾选本行、非 PASS 时自动回退；主 Agent 不得手勾或手动回退。本行只检查门禁，不执行测试、不汇总结果。
 
 ## 8. Final Verification
 
-- [ ] 8.1 [final-verification] 全变更；前置：7.3；主 Agent。使用 `.agents/skills/agentic-verify/SKILL.md` 执行最终验收，核对用户意图（本会话「测试临时目录清理」授权与降级批准原话）、需求覆盖、设计一致性、计划与任务完成度、最终主分支证据；记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change test-temp-dir-cleanup --stage final --json`，全部通过才完成。
+- [x] 8.1 [final-verification] 全变更；前置：7.3；主 Agent。使用 `.agents/skills/agentic-verify/SKILL.md` 执行最终验收，核对用户意图（本会话「测试临时目录清理」授权与降级批准原话）、需求覆盖、设计一致性、计划与任务完成度、最终主分支证据；记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change test-temp-dir-cleanup --stage final --json`，全部通过才完成。
