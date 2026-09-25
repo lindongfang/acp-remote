@@ -502,6 +502,10 @@ fn abort_agent(
     tree: &crate::platform::ProcessTree,
 ) {
     tracing::error!(reason, limit, actual, "ACP stdout 违反上限，结束该 Agent");
+    // 顺序即契约（`local-agent-host` 增量规范「超限结束的失败关闭顺序」）：先标记退出
+    // （`is_running()` 立即为假，坏 runtime 不会被继续复用），再唤醒等待中的请求，最后结束整棵树。
+    // 反过来则被错误唤醒的调用方会在「错误已可见、Agent 仍显示在运行」的窗口里观察到不一致。
+    exit.mark(format!("ACP 消息超限（{actual} > {limit} 字节）"));
     let drained: Vec<(u64, oneshot::Sender<Result<Value, HostError>>)> = pending
         .lock()
         .map(|mut map| map.drain().collect())
@@ -512,8 +516,6 @@ fn abort_agent(
             actual,
         })));
     }
-    // 先标记退出（`is_running()` 立即为假，坏 runtime 不会被继续复用），再结束整棵树。
-    exit.mark(format!("ACP 消息超限（{actual} > {limit} 字节）"));
     tree.terminate();
 }
 
