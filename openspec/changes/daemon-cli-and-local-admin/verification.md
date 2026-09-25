@@ -75,6 +75,9 @@
 | 6.2 | integrator / candidate / merge-unit | 90c816a（第 1 轮候选；集成运行 6d132632） | CHECK / 候选构造 + PV1–PV5 | reports/candidate-verify.log（**追加型、含第 1 轮**：第 1 轮段 3033 行，`sha256=5215a54c…` 系追加前工件；文件含第 2 轮追加段后该 sha256 不再适用，最终候选的单一工件见 `reports/candidate-verify-final.log`） | PASS / NEW | 候选 = 分支 `feat/daemon-cli-and-local-admin` 的 `90c816a`；`cargo build --locked --workspace` 与 vendor build EXIT=0；[PV1] EXIT=0（82 targets / 718 passed / 0 failed / 2 ignored）、[PV2] EXIT=0（12 crate）、[PV3] EXIT=0（7 targets / 117 passed）、[PV4] EXIT=0（6 targets / 72 passed）、[PV5] EXIT=0（vendor 11 passed）；候选 vs 基线 105 文件（A=86/M=19）。**最终候选的验证工件为 `reports/candidate-verify-final.log`**（自洽单文件；其 sha256 由 `agentic-premerge` 块的 `verify.evidence` 固定，见 6.3 行） |
 | 6.3 | main（代行检查执行者）/ candidate verify / merge-unit | 4595799（最终候选；后随仅含记录的 X） | CHECK / PV1、PV2、PV3、PV4、PV5（候选轮） | reports/candidate-verify-final.log（sha256 由 `agentic-premerge` 块 pin） | PASS / NEW | 自证式工件：真 `git rev-parse HEAD` 回显 = 候选提交、`git status --porcelain` 空输出、五项检查各带显式 `EXIT(...)=0`；PV1 = 82 targets / 718 passed / 0 failed / 2 ignored；PV2 = 12 crate；PV3 = 117 passed / 7 targets；PV4 = 72 passed / 6 targets；PV5 = vendor 11 passed |
 | 6.4 | reviewer / candidate recheck / merge-unit | 4595799（最终候选） | REVIEW / RV2、RV3、RV4、RV5（候选检视累计轮） | reports/rv2-wp4.md、reports/rv2-wp5.md、reports/rv3-candidate.md、reports/rv4-candidate.md、reports/rv5-candidate.md | PASS with notes / NEW | RV1-WP4 PASS（4 项 P2）→ 2.27 修复 → RV2-WP4/WP2-WP5 PASS；RV3 判 FAIL（F1 阻断 = 候选轮 2a 红未登记）→ PRO-4 登记 + 重跑绿 → RV4 PASS（6 项 P2）→ 处置 → RV5 PASS（4 项 P2，已在本轮收尾修完）。每轮均为结构只读、fresh 上下文、独立子 Agent；`reviewer != author` |
+| 6.6 | integrator（独立集成子 Agent，Phase B 运行 b2c39155）/ merge / merge-unit | **main = 3249140**（fast-forward） | DELIVERY / NOT_APPLICABLE | reports/integrator-phaseB.md、reports/integrator-phaseB.log | PASS / NEW | `refs/heads/main` 在合入前后两次核对均为 `ab62773…`（条件更新防竞态）；`git merge --ff-only` 使 `ab62773..3249140` 快进（111 文件、+31432/−58），**主分支 HEAD 与已验收候选逐字节相同**（候选与 main 的树哈希同为 `a739fafe5f8bf46654e9e6a8bf0feb657fffa814`，`git diff <candidate> main` 为空）；**未 push**（origin/main 仍为 `ab62773…`） |
+| 6.7 | integrator（Phase B）/ main-branch regression / merge-unit | **main = 3249140** | CHECK / PV1、PV2（主分支轮；PV3–PV5 复用候选轮） | reports/du1-main-verify.log（= reports/main-verify-phaseB.log，byte-identical；sha256 `ad7e5ba7…`） | PASS / NEW | [PV1] `npm run verify` EXIT=0（103 s；10 道合同门禁全绿；cargo 82 targets / 718 passed / 0 failed / 2 ignored；PRO-4 的 flaky **未触发**、无需重跑）；[PV2] EXIT=0（12 crate）。[PV3]/[PV4]/[PV5] 记为 **REUSED**（相同提交与树、相同命令、同一 Windows 主机） |
+| 6.8 | main / post-merge review / merge-unit | **main = 3249140** | REVIEW / 复用 RV5（无需新 reviewer） | 本行自身 + reports/integrator-phaseB.md | PASS / NEW | 合入为 fast-forward，**相对候选零新增差异**（树哈希相等、`git diff` 为空）⇒ 按 tasks.md 6.8 的完成条件，由主 Agent 记录依据并引用 6.4 的 review ID（RV5-WP5，`reports/rv5-candidate.md`，PASS）；未引入任何冲突解决或额外改动 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -145,6 +148,7 @@
   - **RV4 全部发现已在 K1 或收尾步骤中处理**（见上表；F1/F2/F3 的处理证据为 K1 上重生成的验证工件与 flaky 重跑日志）。
   - **PRO-5（主 Agent 过程失误，已自纠）**：为提前暴露 `premerge` 门的其他不满足项，曾在 RV4 复核**期间**把一份占位草稿块写入 `verification.md`（含占位提交号与全零 sha256）。RV4 在两次读取中得到互不相容视图并如实登记（其 F6）。处置：发现后**立即回退**（`git checkout`，恢复 `cc19ddc` 内容），reviewer 以 `watchdog_diff` 兜底（HEAD 未动、被跟踪文件无改动）仍完成复核；草稿中的任何占位值均未进入提交。教训：**广播式冻结期内不得为预演写入共享工作树**；预演应在临时副本或独立 worktree 中进行。
 - 2026-09-25（RV5 前，主 Agent）：**两处 `plan.md` 改动已登记**（依据 `plan.md` 第 10 行要求与 2.27 对 tasks.md 留证路径修正的先例）：① RV1 行的证据列由 `…rv1-wp5.md`、`rv1-du1.md` 改为按轮次累积的实际报告清单（原 `rv1-du1.md` 仅存在于已归档变更）；② `### Main E2E` 的 `alternative_checks` 由块序列改为**单行 flow 序列**（四条文本逐字不变、顺序不变、不增删检查项）。改形原因：`@dongfanglin/openspec-agentic` 的 `parseMainE2EFields` 会把块序列拼成一行、`plannedAlternativeChecks` 对非 `[` 开头的字段行按 `/[,，、]/` 切分，条目内部的顿号与逗号会把 4 条切成十余个碎片，使 `premerge` 门无法与 receipt 逐项对应；改为 flow 序列后 `YAML.parse` 返回恰好 4 条。影响：仅门禁输入形态与证据路径可读性，不改变任何检查项或判据语义。
+- 2026-09-25（Phase B 合入后，主 Agent）：**合并后记录提交**（main 上）——恢复并提交 `agentic-premerge` 块（合入前因自指约束未提交）、登记 6.6/6.7/6.8 三行与 `reports/integrator-phaseB.md`（集成 Agent 报告）。该提交不改动 `crates/**`、`docs/**` 或任何判据字段；[PV3]/[PV4]/[PV5] 在主分支回归中记为 **REUSED**（同一提交与树、同一命令、同一 Windows 主机），[PV1]/[PV2] 在主分支 HEAD 上重跑并留证 `reports/du1-main-verify.log`。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
@@ -197,7 +201,7 @@
 
 ## Merge History
 
-（合入前记录唯一 agentic-premerge 块。）
+合入前记录唯一 `agentic-premerge` 块（下表）。**2026-09-25 本地合入已完成**：DU1 以 fast-forward 方式合入 `refs/heads/main`（`ab62773..3249140`），主分支 HEAD 与候选逐字节相同（树哈希 `a739fafe…`）；本文件中的 `agentic-premerge` 块（其 `candidate_commit` = `3249140`）在合入时**未提交**（门的自指约束要求块声明的 `candidate_commit` 等于跑门时的 HEAD），现作为**合并后记录**随本提交落入主分支；随后新增的记录提交（本文件、tasks.md、`reports/integrator-phaseB.md`）只包含证据与登记，不改变任何被验证的产品代码。**未执行任何远端操作**（未 push、未打标签、未改分支保护；`origin/main` 仍为 `ab62773…`）。块内的提交号、契约摘要与全部 sha256 均为现算真值；证据文件在哈希固定后不再追加。
 
 ## Test Design and Authoring
 
@@ -227,3 +231,39 @@
 ## Final Assessment
 
 （最终验收时填写。）
+
+```agentic-premerge
+version: 1
+delivery_unit: DU1
+target_ref: refs/heads/main
+target_commit: ab62773d8768f3c6a8424f6aefa862a738482eb8
+candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+contract_digest: sha256:81ce6699272eed8b998b27e39f9063690e03034f813461a34647ce0e2e87dae8
+verify:
+  result: PASS
+  candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+  evidence: {path: reports/candidate-verify-final.log, sha256: "sha256:0d7c273eec0a04ca5ed2f683e2525bf6693bce05a713e4122446850ac975af19"}
+review:
+  result: PASS
+  candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+  reviewer: RV5-WP5（结构只读 reviewer 子 Agent，运行 16d217e1）
+  author: daemon-cli-and-local-admin 实现子 Agent（WP1–WP5）+ 主 Agent（记录与集成）
+  evidence: {path: reports/rv5-candidate.md, sha256: "sha256:908ef5aa692c363fa89f4d45390169440af901d0d75b07a224aa8e19e7483fa6"}
+alternative_checks:
+  - name: "cargo test --locked -p server --all-features [PV3]：framing 关闭规则、channel 绑定与 attachment 生命周期、未完成请求上限、信封校验与 local.* 错误码、方法路由到 core 用例（fake 端口）、schema/fixture 漂移、审计导出内容边界。"
+    result: PASS
+    candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+    evidence: {path: reports/alt-pv3-server.log, sha256: "sha256:202e2c3f0702a7c65adab05c7125d8ba597150155dfe5c7b77529ba20d9d3b74"}
+  - name: "cargo test --locked -p app --all-features [PV4]：真实子进程集成测试——daemon start/stop/status、重复 start 拒绝、种子导入与重启不覆盖、CLI 全子命令映射与退出码/stderr JSON 契约、配对仪式（含非交互 --sas/--fingerprint 逐字校验）、provider 凭据交互、acp-stdio 在 Daemon 缺席时明确退出。"
+    result: PASS
+    candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+    evidence: {path: reports/alt-pv4-app.log, sha256: "sha256:fe03acfbe88f3d6198d5d96371f9ce40c99f1c7d21c2d51d8138f71b27c11fef"}
+  - name: "Windows 本机 [PV5]：Named Pipe SDDL 创建与对端 SID 校验（同用户接受/跨用户拒绝）、vendor/windows-local-ipc 自身测试。"
+    result: PASS
+    candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+    evidence: {path: reports/alt-pv5-windows.log, sha256: "sha256:d464a09021c7b0431d07a56c18cadb6656345ac34816aa4bd5384dbb046f2bfb"}
+  - name: "npm run check / npm run verify [PV1]/[PV2]：合同门禁与全 workspace 测试，确认新增成员、vendor crate 与依赖不破坏既有 crate。"
+    result: PASS
+    candidate_commit: 324914033b4958df1feb117cbae9fee6e452e92c
+    evidence: {path: reports/alt-pv1-pv2-verify.log, sha256: "sha256:a49f9cf8d0dbdfe1a8413efa3bfbd11f81a28f81179cb87aa90d538c157c0915"}
+```
