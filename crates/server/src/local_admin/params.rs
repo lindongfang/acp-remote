@@ -1422,8 +1422,18 @@ mod tests {
 
     #[test]
     fn audit_export_parses_filters_and_rejects_bad_shapes() {
+        // `outputPath` 的绝对路径判定是平台语义（`Path::is_absolute`）：测试值按平台给出。
+        #[cfg(windows)]
+        fn abs_output(ext: &str) -> String {
+            format!("D:\\audit\\export.{ext}")
+        }
+        #[cfg(not(windows))]
+        fn abs_output(ext: &str) -> String {
+            format!("/tmp/acpr-audit-export.{ext}")
+        }
+
         let parsed = audit_export(&params(json!({
-            "outputPath": "D:\\audit\\export.jsonl",
+            "outputPath": abs_output("jsonl"),
             "format": "jsonl",
             "since": TS,
             "until": null,
@@ -1440,7 +1450,7 @@ mod tests {
         );
 
         let empty_categories = audit_export(&params(json!({
-            "outputPath": "D:\\audit\\export.csv",
+            "outputPath": abs_output("csv"),
             "format": "csv",
             "since": null,
             "until": null,
