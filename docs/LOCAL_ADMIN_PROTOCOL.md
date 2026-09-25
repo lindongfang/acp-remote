@@ -1,6 +1,6 @@
 # ACP Remote 本地管理通道
 
-> 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）实现中——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）的**本地通道部分已落地**（`server::transport::local` + `server::local_admin` + `app`），`server::acp_facade` 待切片 6——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
 > 版本：1.3（2026-09-25：方法名允许段内连字符；`node.rotate-key.begin` 进入 v1 方法词表，修正 §5.7 与机器词表的不一致）  
 > 版本：1.2（2026-09-25：新增 §3.1 实现状态注记——`server::acp_facade` 落地前，Daemon 对 `0x02` 连接在 framing 校验后即连即关；`daemon-cli-and-local-admin` 变更的 design.md 决策 5）  
 > 版本：1.1（2026-09-23：新增 §3.1 `0x02` ACP 流的会话生命周期；管理载荷的 envelope 与错误码改为机器表达，目录见 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)）  

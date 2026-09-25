@@ -21,7 +21,7 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 ### 1. 管理状态与配置持久化
 
-将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现已落地；本切片切片 4 已完成 Daemon/CLI 接线与本地管理通道（`server` 的本地适配器与 `app`），剩余的是 `server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client`。
+将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现已落地；切片 4 已完成 Daemon/CLI 接线与本地管理通道（`server` 的本地适配器与 `app`），本切片剩余的是**端到端验收**（`server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client` 属后续切片）。
 
 验收：旧数据库升级、事务原子性、重启恢复、撤销及损坏记录失败关闭均有测试；imported 表和端口仍不能写入远程会话正文。
 
@@ -74,4 +74,4 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 - 本地运行 `npm run verify`；PR 以仓库规定的 CI 检查验收。真实 Codex/OMP 属兼容性套件，不替代普通 CI 中的 fake ACP Agent 测试。
 - 某切片的必要端到端路径出现后，应以真实可运行路径验收；此前的替代验证和 agentic E2E 判定按该变更的计划与仓库流程记录，不把合同检查通过等同于产品闭环。
 
-**建议的第一项实施变更**：管理状态与配置持久化。它是身份、CLI、Agent profile 和 Node Link 的共同前置依赖；合同形状已并入 §3/§5/§7，core 端口与 SQLite 落盘两层已实现，剩余工作是 Daemon/CLI 接线与端到端验收。
+**建议的第一项实施变更**：管理状态与配置持久化。它是身份、CLI、Agent profile 和 Node Link 的共同前置依赖；合同形状已并入 §3/§5/§7，core 端口与 SQLite 落盘两层已实现，Daemon/CLI 接线也已随切片 4 落地，剩余工作是端到端验收。

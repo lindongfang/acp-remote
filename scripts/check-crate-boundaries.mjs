@@ -46,10 +46,10 @@ function readDependencyMatrix(document) {
       .slice(1, -1)
       .map((cell) => cell.trim());
     const from = cells[0];
-    // 每一行都要收：§5 矩阵当前有 9 个「列」（可被依赖的对象：core、acp-protocol、agent-host、
-    // 两个协议 crate、acpr-transcript、acpr-wire、identity-auth、identity-keystore）；
-    // `node-link-client` / `storage-sqlite` / `server` / `app` 仍只作为「行」存在，跳过它们会让
-    // 这些 crate 的依赖边无人检查（`MODULE_ARCHITECTURE.md` §5 表下同样披露了这一点）。
+    // 每一行都要收：§5 矩阵当前有 13 个「列」（可被依赖的对象：12 个 workspace 成员 +
+    // `vendor/windows-local-ipc`）；`node-link-client` 仍只作为（列外的）「行」存在，跳过它会
+    // 让它没有依赖方可查（`MODULE_ARCHITECTURE.md` §5 表下同样披露了这一点）。
+    // 行缺席只上报、不硬失败（下面的 `if (!row) continue`），因此行与列的增减必须人工维护。
     const row = new Map();
     columns.forEach((to, columnIndex) => {
       if (cells[columnIndex + 1] === "✓") row.set(to, true);

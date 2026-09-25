@@ -144,6 +144,7 @@ crates/
   - `tokio` 基线 feature 增量开启 `net`/`io-util`/`signal`：`server::transport::local` 用 `net` 的 Named Pipe / Unix socket safe API 与 `io-util` 的连接读写，`app` 用 `signal` 驱动关闭序列。基线只登记跨 crate 共用的 feature；`agent-host` 仍在自己 manifest 里增量要 `process`/`io-util`/`macros`/`rt`（它自己的消费面）——feature 是加法的，两处并存不产生歧义。
   - `nix` 增量开启 `socket`/`user`：Unix 侧用 `SO_PEERCRED` 取对端 uid 与当前进程 `getuid` 比对（§2.2）；不需要 `net`——`sockopt::PeerCredentials` 与 `getsockopt` 都不在 `net` 门后（已核 `nix 0.30.1` 的 feature 表与 `sys::socket` 的门控）。两者只影响 Unix 构建，Windows 构建里 `nix` 不参与编译（§4.5）。
   - 新增 `clap 4.6`（`derive`，CLI 子命令解析）与 `toml 1.1`（`app` 读 `CONFIG_REFERENCE.md` 的配置文件）。本切片只读配置、不回写，因此不引入 `toml_edit`。两者均 `MIT OR Apache-2.0`、显式声明 `rust-version = 1.85`（等于本仓库 MSRV，不抬高）。
+  - 新增 `rpassword 7.5`（实际 `7.5.4`）：`provider configure` 的凭据逐项**无回显**读取（`specs/cli-commands` 的场景「凭据无回显录入」）。**Apache-2.0 单许可**——实测不是 `MIT OR Apache-2.0` 双许可，仍落在 `deny.toml` 的 allow 列表内；显式声明 `rust-version = 1.85`（等于本仓库 MSRV，不抬高）。传递依赖 `rtoolbox 0.0.x`（实际 `0.0.6`）自述不保证向后兼容，属**已登记的残余风险**（许可证与 advisory 由 CI 的 `deps`/`advisories` job 判定，本地无等价物）。只被 `app` 使用，**不进入 `core` 闭包**（`CORE_PORTS_AND_STORAGE.md` §9 判据 13 的 allow-list 不受影响）。
   - 单实例锁（`Cargo.toml` 的 `fs4`、`daemon-cli-and-local-admin` 变更的 design.md 决策 4）用 OS advisory 文件锁：选 `fs4 1.1`，按 `docs/SECURITY_DESIGN.md` §20 的四个判据核验——**语义**：unix `flock(LOCK_EX)`、Windows `LockFileEx(LOCKFILE_EXCLUSIVE_LOCK)`，公开 API 只有独占锁与 `try_lock`/`TryLockError`（safe API，unsafe 收敛在 crate 内部）；**许可证** `MIT OR Apache-2.0`（在 `deny.toml` allow 列表内）；**MSRV** 显式声明 `1.75.0`（≤ 1.85）；**维护状态** 1.1.0 发布于 2026-04-28，Windows 侧要求 `windows-sys ^0.61`（与本仓库 lock 里已有的 `0.61.2` 同族，不新增版本族）。落选候选 `fd-lock 4.0.4` 的三条硬伤：未声明 `rust-version`（MSRV 不可核）、最近发版 2025-03-10、API 是读写双分支（`RwLock::read` 走 `LOCK_SH`，与「单实例锁必须互斥」的语义不匹配，且 Windows 侧只锁 1 字节）。
   - 调用点约束：固定工具链的 `std::fs::File` 自带 `lock`/`try_lock`（1.89 稳定），与 `fs4::FileExt` 同名且方法解析优先级更高；本仓库 MSRV 是 1.85，因此必须写全限定调用（`fs4::FileExt::try_lock(&file)`）或显式 `use fs4::FileExt;` 并避免落入 std 的同名方法——用了 std 的版本就等于把 MSRV 抬到 1.89（需单独决定）。
   - `vendor/windows-local-ipc`（`daemon-cli-and-local-admin` 变更的 design.md 决策 3）以**仓库内 path 依赖**登记：写在根 `Cargo.toml` 的 `workspace.exclude`，因而不是 workspace 成员、不继承 `unsafe_code = "forbid"`（它必须写 `unsafe`）、不发布；`server` 是它唯一的依赖方，§5 矩阵因此把它登记为「列」。`deny.toml` 的 `[sources]` 注记说明 path 来源为什么不经 registry/git 判定，以及它的许可证与 wildcard 判定由哪几条承担。
@@ -379,8 +380,8 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 
 - 启动初清理 + 每 60 s 周期的 `prune`/`expire_pairings`/`sweep_orphans`（`CORE_PORTS_AND_STORAGE.md` §7.5）；
 - 启动时对已配对 Owner 节点的 Node Link 连接与断线指数退避重连（`NODE_LINK_PROTOCOL.md` §15）；
-- 存储批量刷盘（`storage.flush_interval_ms`）；
-- 关闭顺序：停周期任务 → 停接入层 → 停 Agent → `wal_checkpoint(TRUNCATE)`。
+- broker 的 delta 合并窗口（`storage.flush_interval_ms`；由组合根定时器枚举非终态会话并逐个驱动 `Broker::pump`，`CORE_PORTS_AND_STORAGE.md` §6 第 10 条）；
+- 关闭顺序：停接入层（排空在途连接至宽限上限）→ 取消周期任务与信号监听 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 清理 endpoint/释放锁（与 `CORE_PORTS_AND_STORAGE.md` §7.1 第 4 条、`SECURITY_DESIGN.md` §12.1 一致）。
 
 CLI 子命令（名字的唯一来源是 `LOCAL_ADMIN_PROTOCOL.md` §5.8 的映射表；本文只列名字，不重复规则）：
 
@@ -478,7 +479,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 | app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  |
 | windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  |  | — |
 
-注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。切片 4 落地后的实际关系：§3 中除 `node-link-client` 之外的十二个 crate 都已是 workspace 成员，也都在本矩阵里成列——`storage-sqlite` 的列此前缺失，已随 `crates/app` 进入 `members` 的同一改动补上（`storage-sqlite` 此前只作为行，缺列会让「成员的依赖不在列里」硬失败，因此这两件事必须同批落地）。`node-link-client` 只作为「行」出现：它待切片 6 落地、不是 workspace 成员，当前没有任何依赖方，因而不需要列。`windows-local-ipc` 只作为「列」出现、没有行：它是 `vendor/` 下的 path 依赖、**永远不是** workspace 成员（§3.1），因为 `server` 依赖它而必须成列。门禁的覆盖范围如实说明：`scripts/check-crate-boundaries.mjs` 会因「某成员的依赖不在列的集合里」硬失败，但对**行缺席是静默的**（矩阵里查不到该行时它只做列成员判定），因此行与列的增减都必须人工维护，不能指望门禁替你发现漏登记的行。
+注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。切片 4 落地后的实际关系：§3 中除 `node-link-client` 之外的十二个 crate 都已是 workspace 成员，也都在本矩阵里成列——`storage-sqlite` 的列此前缺失，已随 `crates/app` 进入 `members` 的同一改动补上（`storage-sqlite` 此前只作为行，缺列会让「成员的依赖不在列里」硬失败，因此这两件事必须同批落地）。`node-link-client` 只作为「行」出现：它待切片 6 落地、不是 workspace 成员，当前没有任何依赖方，因而不需要列。`windows-local-ipc` 是矩阵的**列**（因为 `server` 依赖它），在矩阵里**也有一行**（该行除自身格外全空白——没有任何依赖方）；它是 `vendor/` 下的 path 依赖、**永远不是** workspace 成员（§3.1），其依赖面不进门禁判定，因此那一行只是占位、不需要维护。门禁的覆盖范围如实说明：`scripts/check-crate-boundaries.mjs` 会因「某成员的依赖不在列的集合里」硬失败，但对**行缺席是静默的**（矩阵里查不到该行时它只做列成员判定），因此行与列的增减都必须人工维护，不能指望门禁替你发现漏登记的行。
 
 额外规则：
 

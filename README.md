@@ -19,7 +19,7 @@
 | `identity-keystore` | 平台安全存储适配器：自研条目格式（`ACPK` 头 + 每条目盐 + 平台包裹的秘密值）、原子写、进程内 `p256` 签名（64 字节 P1363）与 Provider 凭据读写删。Windows 走 DPAPI（当前用户 scope，附加熵绑定条目）；非 Windows 一律失败关闭（不建目录、不写文件、不退回进程内实现） |
 | `agent-host` | 本机 ACP 子进程作为 `AgentCatalog`/`SessionBackendFactory`/`SessionEndpoint`：启动与监督、stdio 分帧、request id 与 ACP session id 映射、capability 协商与调用门控、权限/elicitation 转发、超时与取消、stderr 有界采集、Windows Job Object（Unix 进程组）进程树清理、profile 与凭据注入边界、wire→core mapper |
 | `server` | 入站 adapter 的宿主（`docs/MODULE_ARCHITECTURE.md` §4.9），本切片只落地两条路径：`server::transport::local`（平台本地 IPC 的 endpoint 与访问控制——Windows Named Pipe 的 SDDL、Unix 的 `0700` 目录 + `0600` socket、连接后对端凭据校验，以及帧编解码、首帧 channel 绑定、未完成请求上限、`0x02` 在 facade 缺席期的失败方式）与 `server::local_admin`（管理信封与 `local.*` 错误码的值对象/编解码、方法分发表与方法路由） |
-| `app` | 组合根与 `acp-remote` 可执行程序（`docs/MODULE_ARCHITECTURE.md` §4.10）：daemon 的启动/关闭序列（停周期任务 → 停接入层 → 停 Agent → `wal_checkpoint(TRUNCATE)`）与单实例锁（`instanceId` + 锁记录）、配置加载与未接线段落的显式上报、周期任务装配、本节点身份与由节点公钥派生的 `nodeId`、本地管理通道客户端，以及 `LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表的全部 CLI 子命令与 `doctor`/`acp-stdio`（`daemon start` 是前台进程；`acp-stdio` 只是 stdin/stdout ↔ channel `0x02` 的字节泵） |
+| `app` | 组合根与 `acp-remote` 可执行程序（`docs/MODULE_ARCHITECTURE.md` §4.10）：daemon 的启动/关闭序列（停接入层 → 取消周期任务 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 释放锁；详见 `SECURITY_DESIGN.md` §12.1）与单实例锁（`instanceId` + 锁记录）、配置加载与未接线段落的显式上报、周期任务装配、本节点身份与由节点公钥派生的 `nodeId`、本地管理通道客户端，以及 `LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表的全部 CLI 子命令与 `doctor`/`acp-stdio`（`daemon start` 是前台进程；`acp-stdio` 只是 stdin/stdout ↔ channel `0x02` 的字节泵） |
 
 尚未开始：前端工程，以及 `node-link-client`（切片 6）与 `server::sync`/`server::node_link`/`server::acp_facade`（每落地一个才加入 workspace `members`）。
 
