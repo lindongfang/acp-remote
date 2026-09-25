@@ -1,6 +1,7 @@
 # ACP Remote 本地管理通道
 
-> 状态：编码前契约  
+> 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）实现中——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 版本：1.2（2026-09-25：新增 §3.1 实现状态注记——`server::acp_facade` 落地前，Daemon 对 `0x02` 连接在 framing 校验后即连即关；`daemon-cli-and-local-admin` 变更的 design.md 决策 5）  
 > 版本：1.1（2026-09-23：新增 §3.1 `0x02` ACP 流的会话生命周期；管理载荷的 envelope 与错误码改为机器表达，目录见 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)）  
 > 日期：2026-09-18  
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
@@ -125,6 +126,12 @@ u32be length | payload(length bytes)
 - 本地通道不解析 ACP 内容（§3）；facade 不直接调用 `node-link-client`，远程会话经 core 的用例面与后端端口访问（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9）。
 - Node Link / Sync 错误码到 ACP 错误的映射表在 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6，本地不新增第二张表。
 - 本节的机器表达范围：管理载荷（channel `0x01`）的 envelope 与错误码在 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)；`0x02` 的字节流本身**不建 schema**（它对本地管理不透明，只有分帧与上限是合同）。
+
+**实现状态**
+
+> `[现状]`（2026-09-25，切片 4 `daemon-cli-and-local-admin`）`server::acp_facade` 尚未落地。在该实现缺席期间，Daemon 对 `0x02` 连接的处理是：完成 §3 的 framing 校验（首帧 channel、帧上限、空帧规则、channel 不混用）后**立即关闭连接并记一条结构化警告**（facade 未装配），不返回错误帧、不转发任何字节，也不让该连接占用可用的 `FacadeAttachmentId`；`acp-remote acp-stdio` 侦测到连接被立即关闭时以明确错误（Daemon 未提供 ACP 流）非零退出。
+>
+> 这是 `daemon-cli-and-local-admin` 变更的 design.md 决策 5 在 facade 缺席期的行为，**不改变本节任何语义**：`0x02` 的会话语义、attachment 生命周期、并发上限与重连幂等仍是落地目标；切片 6 接入 facade 时只替换分发目标，framing 与 attachment 生命周期代码不动。
 
 ## 4. 管理信封
 
