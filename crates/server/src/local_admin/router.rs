@@ -6,6 +6,8 @@
 //! - 业务方法只调用 `core::use_cases`，且恒以 `Actor::LocalCli` 调用（`require_local` 已就位）：
 //!   server 侧不做第二套授权判定，也不直接查询 SQLite；
 //! - `daemon.status`/`daemon.stop` 由组合根经注入的 [`DaemonControl`] 回答（server 不依赖 `app`）；
+//! - `device.pair.*`/`node.pair.*` 的编排：领域值由注入的 `identity_auth::Authority`（经
+//!   [`PairingSessions`]）产生，写集由 `core::use_cases` 单事务提交；内存态（已批准）只在提交成功后置位；
 //! - `provider.configure` 的凭据值只经 `identity_auth::IdentityKeystore` 端口写入，值只以
 //!   [`SecretBytes`] 形态流转（不进日志、不进错误、不进 `result`）；
 //! - `audit.export` 直接用注入的 `Arc<dyn AuditStore>`（§5.1：不经业务用例）；
@@ -15,10 +17,16 @@
 
 use std::sync::Arc;
 
-use acp_core::model::{Actor, AgentProfile, ProviderRef, WorkspaceRecord};
-use acp_core::ports::{AuditQuery, AuditStore, Clock};
+use acp_core::model::{
+    Actor, AgentProfile, Fingerprint, GrantSet, NodeKind, PairingId, PairingPeer, PairingRecord,
+    PairingState, PairingTarget, PeerIdentity, ProviderRef, ScopeSet, Timestamp, WorkspaceRecord,
+};
+use acp_core::ports::{AuditQuery, AuditStore, Clock, TrustRecordRef};
 use acp_core::use_cases::UseCases;
-use identity_auth::{IdentityKeystore, KeystoreError, SecretBytes, SecretPurpose};
+use identity_auth::{
+    IdentityKeystore, KeystoreError, PairingDecision, PairingError, PairingSpec,
+    RequestedCapabilities, Sas, SecretBytes, SecretPurpose,
+};
 use serde_json::Value;
 
 use crate::local_admin::audit;
@@ -27,14 +35,15 @@ use crate::local_admin::envelope::{AdminRequest, AdminResponse, JsonObject};
 use crate::local_admin::error::{AdminError, LocalErrorCode};
 use crate::local_admin::handler::LocalAdminHandler;
 use crate::local_admin::method::Method;
+use crate::local_admin::pairing::{self, PairingSessions};
 use crate::local_admin::params::{self, ProviderConfigure};
-use crate::local_admin::view::{self, object, text, timestamp};
+use crate::local_admin::view::{self, object, string_array, text, timestamp};
 
 /// [`LocalAdminRouter`] 的组合根注入口。
 pub struct LocalAdminDeps {
     /// Daemon 生命周期与运行期状态（由 `app::daemon` 实现）。
     pub daemon: Arc<dyn DaemonControl>,
-    /// 业务用例面（本地配置族、Export/Import 族）。
+    /// 业务用例面（本地配置族、Export/Import 族、信任族）。
     pub core: Arc<UseCases>,
     /// Provider 凭据的平台安全存储端口（由组合根注入 `identity-keystore` 的实现）。
     pub keystore: Arc<dyn IdentityKeystore>,
@@ -42,6 +51,9 @@ pub struct LocalAdminDeps {
     pub audit: Arc<dyn AuditStore>,
     /// 时间来源（core 不读系统时间：写集的时间戳由适配器经本端口取得后传入）。
     pub clock: Arc<dyn Clock>,
+    /// 配对方法的注入口：共享的 `identity-auth` 状态机、本机 canonical origin（由组合根从配置注入）
+    /// 与撤销后的连接关闭钩子（§5.3/§5.4）。
+    pub pairing: Arc<PairingSessions>,
 }
 
 /// v1 管理方法的路由实现（替换 WP3a 的 `UnroutedAdminHandler`）。
@@ -74,15 +86,24 @@ impl LocalAdminRouter {
             Method::ImportList => self.import_list(params).await,
             Method::ImportRemove => self.import_remove(params).await,
             Method::AuditExport => self.audit_export(params).await,
+            Method::DevicePairBegin => self.device_pair_begin(params).await,
+            Method::DevicePairStatus => self.device_pair_status(params).await,
+            Method::DevicePairConfirm => self.device_pair_confirm(params).await,
+            Method::DevicePairReject => self.device_pair_reject(params).await,
+            Method::DeviceList => self.device_list(params).await,
+            Method::DeviceRevoke => self.device_revoke(params).await,
+            Method::NodePairBegin => self.node_pair_begin(params).await,
+            Method::NodePairStatus => self.node_pair_status(params).await,
+            Method::NodePairConfirm => self.node_pair_confirm(params).await,
+            Method::NodePairReject => self.node_pair_reject(params).await,
+            Method::NodeList => self.node_list(params).await,
+            Method::NodeRevoke => self.node_revoke(params).await,
             // §5.7：本方法只登记名字，`params`/`result` 与 `NODE_LINK_PROTOCOL.md` §12.3 的
             // `node.rotate-key.request`/`node.rotate-key.result` 同批定义；字段定义落地前调用恒回
             // `local.unsupported`，不自行填充参数形状。
             Method::NodeRotateKeyBegin => {
                 Err(AdminError::unsupported_method(Method::NodeRotateKeyBegin))
             }
-            // §5.3/§5.4 的设备与节点配对族尚未实现（WP3b2）：
-            // 集内未实现的方法回 `local.unsupported`（§6），连接保持可用。
-            unimplemented => Err(AdminError::unsupported_method(unimplemented)),
         }
     }
 
@@ -435,6 +456,588 @@ impl LocalAdminRouter {
     }
 
     // -----------------------------------------------------------------------------------------
+    // 设备配对与信任（§5.3）
+    // -----------------------------------------------------------------------------------------
+
+    /// `device.pair.begin`（§5.3）：登记一次性配对并返回二维码 URL。
+    ///
+    /// 顺序刻意如此：先取全部「会失败但无副作用」的输入（origin、节点公钥、窗口），再写内存 secret，
+    /// 最后提交持久配对行。`daemon.public_origin` 未配置时在任何写入之前回 `local.unavailable`
+    /// （缺配置不是配对参数错误，也不得回落到 localhost）。
+    async fn device_pair_begin(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "device.pair.begin";
+        let begin = params::device_pair_begin(params)?;
+        let origin = self.deps.pairing.canonical_origin(OPERATION)?;
+        let host_public_key = self.deps.pairing.node_public_key(OPERATION).await?;
+        let now = self.deps.clock.now();
+        let expires_at = pairing::pairing_expires_at(&now, begin.expires_in_ms)?;
+        let pairing_id = new_pairing_id()?;
+        let draft = self
+            .deps
+            .pairing
+            .authority()
+            .begin_pairing(
+                &pairing_id,
+                &PairingSpec::Device {
+                    canonical_origin: origin,
+                },
+                &RequestedCapabilities {
+                    scopes: begin.scopes.clone(),
+                    grants: GrantSet::empty(),
+                },
+                // §5.3 的 `device.pair.begin` 不携带展示名：对端名称由 claim 声明。
+                None,
+                &now,
+                &expires_at,
+            )
+            .map_err(|error| params::map_pairing_error(OPERATION, error))?;
+        let pairing_url = self.deps.pairing.device_pairing_url(
+            OPERATION,
+            &pairing_id,
+            &draft.secret,
+            &expires_at,
+            &host_public_key,
+        )?;
+        // 提交失败时内存里会留下一个没有持久行的 secret：它无法被认领（认领判定依赖库里的配对行），
+        // 并由过期扫描清除（`Authority::due_pairings`）。
+        self.deps
+            .core
+            .create_pairing(&Actor::LocalCli, draft.record)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        Ok(object(vec![
+            ("pairingId", text(pairing_id.as_str())),
+            ("pairingUrl", text(pairing_url)),
+            ("expiresAt", timestamp(&expires_at)),
+            ("scopes", string_array(begin.scopes.iter())),
+        ]))
+    }
+
+    /// `device.pair.status`（§5.3）：claim 前只有 `state`/`expiresAt`，claim 后才是名称/指纹/SAS/请求 scopes。
+    async fn device_pair_status(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "device.pair.status";
+        let pairing_id = params::pairing_id(params)?;
+        let view = self
+            .pairing_view(OPERATION, &pairing_id, PairingTarget::Device)
+            .await?;
+        Ok(object(vec![
+            (
+                "state",
+                text(pairing::device_pairing_state_token(view.state)),
+            ),
+            ("displayName", optional_text(view.display_name.as_deref())),
+            (
+                "publicKeyFingerprint",
+                optional_text(
+                    view.public_key_fingerprint
+                        .as_ref()
+                        .map(Fingerprint::as_str),
+                ),
+            ),
+            ("sas", optional_text(view.sas.as_ref().map(Sas::as_str))),
+            (
+                "requestedScopes",
+                text_array_or_null(
+                    view.requested
+                        .as_ref()
+                        .map(|requested| requested.scopes.iter()),
+                ),
+            ),
+            (
+                "deviceId",
+                match view.peer.as_ref() {
+                    Some(PeerIdentity::Device(device)) => text(device.as_str()),
+                    _ => Value::Null,
+                },
+            ),
+            ("expiresAt", timestamp(&view.expires_at)),
+        ]))
+    }
+
+    /// `device.pair.confirm`（§5.3）：以用户确认的最终 scopes 创建 active 设备记录。
+    async fn device_pair_confirm(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "device.pair.confirm";
+        let confirm = params::device_pair_confirm(params)?;
+        let record = self
+            .require_pairing(OPERATION, &confirm.pairing_id, PairingTarget::Device)
+            .await?;
+        let now = self.deps.clock.now();
+        params::require_pending_confirmation(OPERATION, &record, &now)?;
+        // 确认集合必须完整展示后提交（§5.3），且不得超出请求值（超出是参数越界）。
+        params::require_confirm_subset(
+            OPERATION,
+            "scopes",
+            confirm.scopes.iter(),
+            record.requested_scopes().iter(),
+        )?;
+        let decision = PairingDecision::Approve {
+            granted_scopes: confirm.scopes.clone(),
+            granted_grants: GrantSet::empty(),
+        };
+        let settlement = self
+            .deps
+            .pairing
+            .authority()
+            .settle(&record, &decision, &now)
+            .map_err(|error| params::map_pairing_error(OPERATION, error))?;
+        let reference = self
+            .deps
+            .core
+            .settle_pairing(&Actor::LocalCli, &confirm.pairing_id, settlement)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        let TrustRecordRef::Device(device_id) = reference else {
+            return Err(AdminError::new(
+                LocalErrorCode::Internal,
+                format!("{OPERATION}: settled pairing did not create a device record"),
+            ));
+        };
+        // design D3：内存态（已批准）只在持久提交**成功之后**置位。返回 `false` 表示内存里已经没有
+        // 该配对的 secret（例如刚被过期扫描清掉）：信任记录已持久化，方法照常成功，但记一条警告。
+        if !self
+            .deps
+            .pairing
+            .authority()
+            .mark_pairing_approved(&confirm.pairing_id)
+        {
+            tracing::warn!(
+                method = OPERATION,
+                "pairing secret was gone before the approval was recorded"
+            );
+        }
+        let confirmed_at = self.approved_at(OPERATION, &confirm.pairing_id).await?;
+        Ok(object(vec![
+            ("deviceId", text(device_id.as_str())),
+            ("scopes", string_array(confirm.scopes.iter())),
+            ("confirmedAt", timestamp(&confirmed_at)),
+        ]))
+    }
+
+    /// `device.pair.reject`（§5.3）：终结配对，不创建任何信任。
+    async fn device_pair_reject(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        self.pairing_reject_for(params, PairingTarget::Device, "device.pair.reject")
+            .await
+    }
+
+    /// `device.list`（§5.3）：含 `pending` 与 `revoked` 的全部记录。
+    async fn device_list(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        params::reject_unknown_fields(params, &[])?;
+        let devices = self
+            .deps
+            .core
+            .devices(&Actor::LocalCli)
+            .await
+            .map_err(|error| params::map_port_error("device.list", error))?;
+        Ok(object(vec![(
+            "devices",
+            Value::Array(
+                devices
+                    .iter()
+                    .map(|record| Value::Object(view::device(record)))
+                    .collect(),
+            ),
+        )]))
+    }
+
+    /// `device.revoke`（§5.3）：提交后立即关闭该设备的 active connection 才返回。
+    async fn device_revoke(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "device.revoke";
+        let device_id = params::device_revoke(params)?;
+        let actor = Actor::LocalCli;
+        self.deps
+            .core
+            .revoke_device(&actor, &device_id)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        // 关闭发生在持久提交之后：即使关闭失败（由组合根记日志）也不撤销已提交的撤销。
+        self.deps.pairing.close_device(&device_id).await;
+        let record = self
+            .deps
+            .core
+            .device(&actor, &device_id)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        let revoked_at = record
+            .as_ref()
+            .and_then(|record| record.revoked_at())
+            .cloned()
+            .ok_or_else(|| not_readable(OPERATION, "device"))?;
+        Ok(object(vec![
+            ("deviceId", text(device_id.as_str())),
+            ("revokedAt", timestamp(&revoked_at)),
+        ]))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 节点配对与信任（§5.4）
+    // -----------------------------------------------------------------------------------------
+
+    /// `node.pair.begin`（§5.4）：只有 `mode = "owner"` 落地；`mode = "access"` 固定不支持。
+    async fn node_pair_begin(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "node.pair.begin";
+        let params::NodePairBegin::Owner {
+            display_name,
+            grants,
+        } = params::node_pair_begin(params)?
+        else {
+            // §5.4：`mode = "access"` 需要对 Owner 执行 HTTPS claim，本切片未落地。这里不构造任何
+            // HTTP 调用、不写任何状态，也不另行填充参数形状（与 §5.7 的 `node.rotate-key.begin` 同款）。
+            return Err(AdminError::new(
+                LocalErrorCode::Unsupported,
+                format!(
+                    "{OPERATION}: mode `access` is not implemented yet (no outbound claim is issued)"
+                ),
+            ));
+        };
+        let endpoint = self.deps.pairing.node_endpoint(OPERATION)?;
+        let owner_public_key = self.deps.pairing.node_public_key(OPERATION).await?;
+        let now = self.deps.clock.now();
+        // §5.4 的 `node.pair.begin` 没有 `expiresInMs`：窗口固定 5 分钟（§5.3 同款上限）。
+        let expires_at = pairing::pairing_expires_at(&now, None)?;
+        let pairing_id = new_pairing_id()?;
+        let draft = self
+            .deps
+            .pairing
+            .authority()
+            .begin_pairing(
+                &pairing_id,
+                &PairingSpec::Node {
+                    endpoint,
+                    // 本节点在该配对中的角色是 Owner（§5.4：对端是待确认的 Access Node）。
+                    kind: NodeKind::Owner,
+                },
+                &RequestedCapabilities {
+                    scopes: ScopeSet::empty(),
+                    grants,
+                },
+                Some(&display_name),
+                &now,
+                &expires_at,
+            )
+            .map_err(|error| params::map_pairing_error(OPERATION, error))?;
+        let pairing_url = self.deps.pairing.node_pairing_url(
+            OPERATION,
+            &pairing_id,
+            &draft.secret,
+            &expires_at,
+            &owner_public_key,
+        )?;
+        self.deps
+            .core
+            .create_pairing(&Actor::LocalCli, draft.record)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        Ok(object(vec![
+            ("pairingId", text(pairing_id.as_str())),
+            ("pairingUrl", text(pairing_url)),
+            (
+                "state",
+                text(pairing::node_pairing_state_token(PairingState::Created)),
+            ),
+            ("expiresAt", timestamp(&expires_at)),
+            // claim 之前不知道对端身份，也没有 SAS（双方各自计算）。
+            ("sas", Value::Null),
+            ("peerNodeId", Value::Null),
+            ("peerPublicKeyFingerprint", Value::Null),
+        ]))
+    }
+
+    /// `node.pair.status`（§5.4）：本切片没有向 Owner 的远程刷新，`lastRefreshError` 恒为 `null`。
+    async fn node_pair_status(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "node.pair.status";
+        let pairing_id = params::pairing_id(params)?;
+        let view = self
+            .pairing_view(OPERATION, &pairing_id, PairingTarget::Node)
+            .await?;
+        Ok(object(vec![
+            ("state", text(pairing::node_pairing_state_token(view.state))),
+            (
+                "peerNodeId",
+                match view.peer.as_ref() {
+                    Some(PeerIdentity::Node(node)) => text(node.as_str()),
+                    _ => Value::Null,
+                },
+            ),
+            (
+                "peerPublicKeyFingerprint",
+                optional_text(
+                    view.public_key_fingerprint
+                        .as_ref()
+                        .map(Fingerprint::as_str),
+                ),
+            ),
+            ("sas", optional_text(view.sas.as_ref().map(Sas::as_str))),
+            (
+                "requestedGrants",
+                text_array_or_null(
+                    view.requested
+                        .as_ref()
+                        .map(|requested| requested.grants.iter()),
+                ),
+            ),
+            ("expiresAt", timestamp(&view.expires_at)),
+            ("lastRefreshError", Value::Null),
+        ]))
+    }
+
+    /// `node.pair.confirm`（§5.4）：分配初始 `grant.*` 并创建信任记录。
+    async fn node_pair_confirm(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "node.pair.confirm";
+        let confirm = params::node_pair_confirm(params)?;
+        let record = self
+            .require_pairing(OPERATION, &confirm.pairing_id, PairingTarget::Node)
+            .await?;
+        let now = self.deps.clock.now();
+        params::require_pending_confirmation(OPERATION, &record, &now)?;
+        params::require_confirm_subset(
+            OPERATION,
+            "grants",
+            confirm.grants.iter(),
+            record.requested_grants().iter(),
+        )?;
+        let decision = PairingDecision::Approve {
+            granted_scopes: ScopeSet::empty(),
+            granted_grants: confirm.grants.clone(),
+        };
+        let settlement = self
+            .deps
+            .pairing
+            .authority()
+            .settle(&record, &decision, &now)
+            .map_err(|error| params::map_pairing_error(OPERATION, error))?;
+        let reference = self
+            .deps
+            .core
+            .settle_pairing(&Actor::LocalCli, &confirm.pairing_id, settlement)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        let TrustRecordRef::Node(node_id) = reference else {
+            return Err(AdminError::new(
+                LocalErrorCode::Internal,
+                format!("{OPERATION}: settled pairing did not create a node record"),
+            ));
+        };
+        if !self
+            .deps
+            .pairing
+            .authority()
+            .mark_pairing_approved(&confirm.pairing_id)
+        {
+            tracing::warn!(
+                method = OPERATION,
+                "pairing secret was gone before the approval was recorded"
+            );
+        }
+        let confirmed_at = self.approved_at(OPERATION, &confirm.pairing_id).await?;
+        Ok(object(vec![
+            ("nodeId", text(node_id.as_str())),
+            ("grants", string_array(confirm.grants.iter())),
+            ("confirmedAt", timestamp(&confirmed_at)),
+        ]))
+    }
+
+    /// `node.pair.reject`（§5.4）：终结配对，不创建任何信任。
+    async fn node_pair_reject(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        self.pairing_reject_for(params, PairingTarget::Node, "node.pair.reject")
+            .await
+    }
+
+    /// `node.list`（§5.4）。
+    async fn node_list(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        params::reject_unknown_fields(params, &[])?;
+        let nodes = self
+            .deps
+            .core
+            .nodes(&Actor::LocalCli)
+            .await
+            .map_err(|error| params::map_port_error("node.list", error))?;
+        Ok(object(vec![(
+            "nodes",
+            Value::Array(
+                nodes
+                    .iter()
+                    .map(|record| Value::Object(view::node(record)))
+                    .collect(),
+            ),
+        )]))
+    }
+
+    /// `node.revoke`（§5.4）：提交后关闭 active connection 并停止本地重连才返回。
+    async fn node_revoke(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "node.revoke";
+        let node_id = params::node_revoke(params)?;
+        let actor = Actor::LocalCli;
+        self.deps
+            .core
+            .revoke_node(&actor, &node_id)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        self.deps.pairing.close_node(&node_id).await;
+        // 同一事务里两种角色行都进入 `revoked`（§11.6）：读回时必须全部带撤销时间。
+        let rows = self
+            .deps
+            .core
+            .nodes_for(&actor, &node_id)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
+        let mut revoked_at: Option<Timestamp> = None;
+        for record in &rows {
+            let at = record
+                .revoked_at()
+                .cloned()
+                .ok_or_else(|| not_readable(OPERATION, "node"))?;
+            if revoked_at.is_none() {
+                revoked_at = Some(at);
+            }
+        }
+        let revoked_at = revoked_at.ok_or_else(|| not_readable(OPERATION, "node"))?;
+        Ok(object(vec![
+            ("nodeId", text(node_id.as_str())),
+            ("revokedAt", timestamp(&revoked_at)),
+        ]))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 配对方法的公共编排（§5.3/§5.4）
+    // -----------------------------------------------------------------------------------------
+
+    /// `device.pair.reject` / `node.pair.reject` 的实现体（只有目标族与错误消息前缀不同）。
+    async fn pairing_reject_for(
+        &self,
+        params: &JsonObject,
+        target: PairingTarget,
+        operation: &str,
+    ) -> Result<JsonObject, AdminError> {
+        let reject = params::pairing_reject(params)?;
+        let record = self
+            .require_pairing(operation, &reject.pairing_id, target)
+            .await?;
+        let now = self.deps.clock.now();
+        params::require_pending_confirmation(operation, &record, &now)?;
+        let decision = PairingDecision::Reject {
+            reason: reject.reason,
+        };
+        let settlement = self
+            .deps
+            .pairing
+            .authority()
+            .settle(&record, &decision, &now)
+            .map_err(|error| params::map_pairing_error(operation, error))?;
+        // 拒绝路径不创建信任；返回值是对端引用，不在 `result` 里回显（§5.3/§5.4 的 `result` 是 `{}`）。
+        self.deps
+            .core
+            .settle_pairing(&Actor::LocalCli, &reject.pairing_id, settlement)
+            .await
+            .map_err(|error| params::map_port_error(operation, error))?;
+        Ok(object(vec![]))
+    }
+
+    /// 读取配对记录并校验目标族（`device.*` 只服务设备配对，`node.*` 只服务节点配对）。
+    ///
+    /// 未知 id 与「族不匹配」都回 `local.not_found`：对方法而言两者都是「本方法的目标域里没有它」。
+    async fn require_pairing(
+        &self,
+        operation: &str,
+        pairing_id: &PairingId,
+        target: PairingTarget,
+    ) -> Result<PairingRecord, AdminError> {
+        self.deps
+            .core
+            .pairing(&Actor::LocalCli, pairing_id)
+            .await
+            .map_err(|error| params::map_port_error(operation, error))?
+            .filter(|record| record.target() == target)
+            .ok_or_else(|| {
+                AdminError::new(
+                    LocalErrorCode::NotFound,
+                    format!("{operation}: no such pairing"),
+                )
+            })
+    }
+
+    /// 状态视图：记录 + 已认领的对端事实 + 主机侧 SAS，交给状态机投影成 §5.3/§5.4 的可见字段。
+    async fn pairing_view(
+        &self,
+        operation: &str,
+        pairing_id: &PairingId,
+        target: PairingTarget,
+    ) -> Result<identity_auth::PairingStatusView, AdminError> {
+        let record = self.require_pairing(operation, pairing_id, target).await?;
+        let peer = if record.claimed_at().is_some() {
+            Some(
+                self.deps
+                    .core
+                    .pairing_peer(&Actor::LocalCli, pairing_id)
+                    .await
+                    .map_err(|error| params::map_port_error(operation, error))?
+                    .ok_or_else(|| {
+                        AdminError::new(
+                            LocalErrorCode::Internal,
+                            format!("{operation}: claimed pairing has no peer row"),
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        let sas = self.host_sas(operation, &record, peer.as_ref()).await?;
+        let claimed = peer
+            .as_ref()
+            .map(|peer| pairing::claimed_pairing(&record, peer));
+        Ok(self
+            .deps
+            .pairing
+            .authority()
+            .pairing_status(&record, claimed.as_ref(), sas))
+    }
+
+    /// 主机侧 SAS：只在 `pending_confirmation` 且内存仍持有 secret 时派生。
+    ///
+    /// secret 已清除（重启后被清理、或已过期）时按 `null` 呈现并记一条结构化日志：状态本身仍然可查
+    /// （CLI 需要看到终态），但**绝不**伪造 SAS；其它失败是实现缺陷，直接回 `local.internal`。
+    async fn host_sas(
+        &self,
+        operation: &str,
+        record: &PairingRecord,
+        peer: Option<&PairingPeer>,
+    ) -> Result<Option<Sas>, AdminError> {
+        if record.state() != PairingState::PendingConfirmation {
+            return Ok(None);
+        }
+        let Some(peer) = peer else {
+            return Ok(None);
+        };
+        match self.deps.pairing.host_sas(record, peer).await {
+            Ok(sas) => Ok(Some(sas)),
+            Err(PairingError::SecretUnavailable) => {
+                tracing::warn!(
+                    method = operation,
+                    "pairing secret is no longer held in memory"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(params::map_pairing_error(operation, error)),
+        }
+    }
+
+    /// 读回持久化的 `approved_at`（`confirmedAt` 用持久值，不用本层时钟猜）。
+    async fn approved_at(
+        &self,
+        operation: &str,
+        pairing_id: &PairingId,
+    ) -> Result<Timestamp, AdminError> {
+        let record = self
+            .deps
+            .core
+            .pairing(&Actor::LocalCli, pairing_id)
+            .await
+            .map_err(|error| params::map_port_error(operation, error))?;
+        record
+            .and_then(|record| record.approved_at().cloned())
+            .ok_or_else(|| not_readable(operation, "approved pairing"))
+    }
+
+    // -----------------------------------------------------------------------------------------
     // 审计导出（§5.6）
     // -----------------------------------------------------------------------------------------
 
@@ -483,6 +1086,44 @@ impl LocalAdminHandler for LocalAdminRouter {
     }
 }
 
+/// 新的配对标识（§5.3/§5.4 的 `pairingId`）。
+///
+/// 由本层分配：配对行由调用方组装（`UseCases::create_pairing` 只负责提交），`IdGenerator::pairing_id`
+/// 目前没有任何生产调用方；本地通道与后续的 Sync/Node Link 配对入口都从 `uuid` v4 取随机标识
+/// （与 `transport::local` 的 `InstanceId`/`FacadeAttachmentId` 同一来源）。
+fn new_pairing_id() -> Result<PairingId, AdminError> {
+    PairingId::new(&uuid::Uuid::new_v4().to_string()).map_err(|_| {
+        AdminError::new(
+            LocalErrorCode::Internal,
+            "pairing id generation produced a malformed uuid",
+        )
+    })
+}
+
+/// `T | null` 字符串（§1.1：可空字段用 `null` 而不是缺字段）。
+fn optional_text(value: Option<&str>) -> Value {
+    match value {
+        Some(text) => Value::String(text.to_owned()),
+        None => Value::Null,
+    }
+}
+
+/// `string[] | null`。
+fn text_array_or_null<'a>(items: Option<impl IntoIterator<Item = &'a str>>) -> Value {
+    match items {
+        Some(items) => Value::Array(items.into_iter().map(text).collect()),
+        None => Value::Null,
+    }
+}
+
+/// 撤销/确认后的读回失败：持久化状态与方法的返回值形状不一致，属内部错误。
+fn not_readable(operation: &str, what: &str) -> AdminError {
+    AdminError::new(
+        LocalErrorCode::Internal,
+        format!("{operation}: the committed {what} cannot be read back"),
+    )
+}
+
 /// Provider 凭据的 keystore 条目引用（§5.2 的 `keystore_ref`）：
 /// `<providerDigest>@v<version>`，其中 `providerDigest` 是 `providerId` 的 SHA-256 前 16 个 hex 字符。
 ///
@@ -528,6 +1169,7 @@ fn map_keystore_error(error: KeystoreError) -> AdminError {
 #[cfg(test)]
 mod tests {
     use acp_core::model::PortError;
+    use base64::Engine as _;
     use serde_json::json;
 
     use super::*;
@@ -1336,20 +1978,36 @@ mod tests {
     async fn unimplemented_methods_answer_local_unsupported() {
         let world = TestWorld::new();
         let router = world.router();
+        // §5.7：`node.rotate-key.begin` 是方法集里唯一尚未实现的方法（字段定义与
+        // `NODE_LINK_PROTOCOL.md` §12.3 同批落地前，调用恒回 `local.unsupported`）。
+        let (code, message) = error_of(
+            &router
+                .handle(request(Method::NodeRotateKeyBegin, json!({})))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Unsupported);
+        assert!(message.contains("node.rotate-key.begin"), "{message}");
+
+        // 设备与节点配对族（2.11）已实现：它们不再回 `local.unsupported`，而是按参数/目标回答。
         for method in [
             Method::DevicePairBegin,
-            Method::DeviceList,
-            Method::DeviceRevoke,
-            Method::NodePairBegin,
-            Method::NodeList,
-            Method::NodeRevoke,
-            // §5.7：字段定义落地前 `node.rotate-key.begin` 也走这一条。
-            Method::NodeRotateKeyBegin,
+            Method::DevicePairStatus,
+            Method::DevicePairConfirm,
+            Method::DevicePairReject,
+            Method::NodePairStatus,
+            Method::NodePairConfirm,
+            Method::NodePairReject,
         ] {
-            let (code, message) = error_of(&router.handle(request(method, json!({}))).await);
-            assert_eq!(code, LocalErrorCode::Unsupported, "{method:?}");
-            assert!(message.contains(method.as_str()), "{message}");
+            let (code, _) = error_of(&router.handle(request(method, json!({}))).await);
+            assert_eq!(code, LocalErrorCode::InvalidParams, "{method:?}");
         }
+        // `mode` 缺失时不能假定为 `access`（那是「不支持」），缺字段仍是参数错误。
+        let (code, _) = error_of(
+            &router
+                .handle(request(Method::NodePairBegin, json!({})))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
     }
 
     #[tokio::test]
@@ -1402,5 +2060,957 @@ mod tests {
             provider_keystore_ref("openai.primary", 2)
         );
         assert_eq!(sha256_hex_prefix("").len(), 16);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // 设备/节点配对与信任（§5.3/§5.4、[R42]–[R48]）
+    // -----------------------------------------------------------------------------------------
+
+    use acp_core::model::{DeviceId, DeviceState, NodeId, NodeState, PairingPeer, PeerIdentity};
+
+    use crate::local_admin::pairing::PAIRING_WINDOW_MS;
+    use crate::local_admin::test_support::{TEST_PUBLIC_ORIGIN, test_nonce, test_public_key};
+
+    const DEVICE_ID: &str = "2ae1c07c-0000-4000-8000-0000000000a1";
+    const NODE_ID: &str = "2ae1c07c-0000-4000-8000-0000000000b1";
+    const OWNER_ENDPOINT: &str = "wss://work-pc.example.test/node-link/v1";
+
+    /// 一个设备的 claim 载荷（绑定必须逐字回显登记值）。
+    fn device_peer(display_name: &str) -> PairingPeer {
+        PairingPeer::try_new(
+            PeerIdentity::Device(DeviceId::new(DEVICE_ID).expect("device id")),
+            display_name,
+            test_public_key(),
+            TEST_PUBLIC_ORIGIN,
+            test_nonce(),
+        )
+        .expect("claim 载荷合法")
+    }
+
+    /// 一个 Access Node 的 claim 载荷（节点配对的绑定是 endpoint）。
+    fn node_peer(display_name: &str) -> PairingPeer {
+        PairingPeer::try_new(
+            PeerIdentity::Node(NodeId::new(NODE_ID).expect("node id")),
+            display_name,
+            test_public_key(),
+            OWNER_ENDPOINT,
+            test_nonce(),
+        )
+        .expect("claim 载荷合法")
+    }
+
+    /// 解出二维码 URL 里的无填充 base64url JSON。
+    fn qr_json(url: &str, prefix: &str) -> Vec<u8> {
+        let data = url.strip_prefix(prefix).expect("URL 形状与协议一致");
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(data)
+            .expect("fragment 无填充 base64url")
+    }
+
+    /// 某个 secret 的持久摘要（`PairingRecord::secret_digest` 的口径）。
+    fn secret_digest(secret: &[u8; 32]) -> String {
+        use sha2::Digest as _;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(secret))
+    }
+
+    #[tokio::test]
+    async fn device_pairing_full_flow_reaches_an_active_device() {
+        let world = TestWorld::new();
+        let router = world.router();
+
+        // begin：二维码 URL 里的 payload 能被 sync-protocol 反序列化，且携带的 secret 就是持久摘要的来源。
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairBegin,
+                    json!({
+                        "requestedPacks": ["pack.observe", "pack.approve"],
+                        "requestedScopes": ["command.status"],
+                        "expiresInMs": null,
+                    }),
+                ))
+                .await,
+        );
+        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        assert_eq!(pairing_id.len(), 36);
+        assert_eq!(begin["expiresAt"], json!("2026-09-18T09:17:03.412Z"));
+        assert_eq!(
+            begin["scopes"],
+            json!([
+                "command.status",
+                "permission.resolve",
+                "session.config.list",
+                "session.list",
+                "session.mode.list",
+                "session.read",
+            ]),
+            "pack.* 必须展开成独立命令 scope"
+        );
+        let url = begin["pairingUrl"].as_str().expect("pairingUrl").to_owned();
+        let payload: sync_protocol::pairing::QrPayload =
+            serde_json::from_slice(&qr_json(&url, "https://work-pc.example.test/pair#data="))
+                .expect("sync 侧可反序列化");
+        assert_eq!(payload.pairing_id.as_str(), pairing_id);
+        assert_eq!(payload.expires_at.as_str(), "2026-09-18T09:17:03.412Z");
+        assert_eq!(payload.canonical_origin.as_str(), TEST_PUBLIC_ORIGIN);
+        assert_eq!(
+            payload.host_public_key.as_bytes(),
+            test_public_key().as_bytes()
+        );
+        let registered = world.trust.pairing(&pairing_id).expect("配对已持久化");
+        assert_eq!(
+            registered.secret_digest().as_str(),
+            secret_digest(payload.pairing_secret.as_bytes()),
+            "URL 里的 secret 必须与落库摘要一致"
+        );
+        assert_eq!(registered.state(), PairingState::Created);
+        assert_eq!(registered.target(), PairingTarget::Device);
+
+        // claim 之前：只暴露 state 与 expiresAt（5.3）。
+        let status = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairStatus,
+                    json!({"pairingId": pairing_id}),
+                ))
+                .await,
+        );
+        assert_eq!(status["state"], json!("pending"));
+        assert_eq!(status["expiresAt"], json!("2026-09-18T09:17:03.412Z"));
+        for field in [
+            "displayName",
+            "publicKeyFingerprint",
+            "sas",
+            "requestedScopes",
+            "deviceId",
+        ] {
+            assert_eq!(status[field], json!(null), "claim 前 `{field}` 必须为 null");
+        }
+        assert_eq!(status.len(), 7, "§5.3 的七个字段逐项存在");
+
+        // 模拟设备端 claim（HTTPS 路径属后续切片；这里只提交存储层同款事实）。
+        world
+            .claim(
+                &PairingId::new(&pairing_id).expect("pairing id"),
+                device_peer("Zhang's Phone"),
+            )
+            .await
+            .expect("claim 提交成功");
+
+        let status = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairStatus,
+                    json!({"pairingId": pairing_id}),
+                ))
+                .await,
+        );
+        assert_eq!(status["state"], json!("claimed"));
+        assert_eq!(status["displayName"], json!("Zhang's Phone"));
+        assert_eq!(
+            status["publicKeyFingerprint"],
+            json!(test_public_key().fingerprint().as_str())
+        );
+        let sas = status["sas"].as_str().expect("SAS 必须是字符串");
+        assert_eq!(sas.len(), 6, "SAS 是 6 位十进制：{sas}");
+        assert!(sas.bytes().all(|byte| byte.is_ascii_digit()), "{sas}");
+        assert_eq!(status["deviceId"], json!(DEVICE_ID));
+        assert_eq!(status["requestedScopes"], begin["scopes"]);
+
+        // confirm：以用户确认的最终集合（请求集合的子集）创建 active 设备。
+        let confirmed = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": pairing_id, "scopes": ["session.read"]}),
+                ))
+                .await,
+        );
+        assert_eq!(confirmed["deviceId"], json!(DEVICE_ID));
+        assert_eq!(confirmed["scopes"], json!(["session.read"]));
+        assert_eq!(confirmed["confirmedAt"], json!(world.clock_text()));
+        let device = world.trust.device(DEVICE_ID).expect("设备记录已创建");
+        assert_eq!(device.state(), DeviceState::Active);
+        assert_eq!(
+            device.scopes().iter().collect::<Vec<_>>(),
+            vec!["session.read"]
+        );
+
+        // 已在内存里标记为已批准（secret 仍在；消费发生在首次 WSS 认证时）。
+        assert!(
+            world
+                .authority
+                .has_secret(&PairingId::new(&pairing_id).expect("pairing id")),
+            "批准后的配对仍必须保留到首次认证"
+        );
+
+        // device.list 包含刚创建的记录。
+        let listed = result_of(&router.handle(request(Method::DeviceList, json!({}))).await);
+        assert_eq!(listed["devices"].as_array().expect("数组").len(), 1);
+        assert_eq!(listed["devices"][0]["deviceId"], json!(DEVICE_ID));
+        assert_eq!(listed["devices"][0]["state"], json!("active"));
+        assert_eq!(listed["devices"][0]["scopes"], json!(["session.read"]));
+        assert_eq!(listed["devices"][0]["createdAt"], json!(world.clock_text()));
+        assert_eq!(listed["devices"][0]["lastSeenAt"], json!(null));
+        assert_eq!(listed["devices"][0]["revokedAt"], json!(null));
+
+        // 重复确认：状态已是 `approved`，与 5.3 的词表不符 → local.conflict。
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": pairing_id, "scopes": []}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Conflict);
+        assert!(
+            !message.contains("data="),
+            "错误消息不得回显 URL：{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_and_rejected_pairings_never_create_trust() {
+        let world = TestWorld::new();
+        let router = world.router();
+
+        // 过期（时钟判定）：status 呈现 `expired`，confirm 回 `local.expired`，不创建信任。
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairBegin,
+                    json!({
+                        "requestedPacks": [],
+                        "requestedScopes": ["session.read"],
+                        "expiresInMs": 1000,
+                    }),
+                ))
+                .await,
+        );
+        let expired_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        assert_eq!(begin["expiresAt"], json!("2026-09-18T09:12:04.412Z"));
+        world.clock.set("2026-09-18T09:12:05.500Z");
+        let status = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairStatus,
+                    json!({"pairingId": expired_id}),
+                ))
+                .await,
+        );
+        assert_eq!(status["state"], json!("expired"));
+        assert_eq!(status["sas"], json!(null));
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": expired_id, "scopes": []}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Expired);
+        assert_eq!(world.trust.device_count(), 0, "过期不创建信任");
+
+        // 拒绝：`{}`，之后 confirm 回 `local.expired`，仍然没有信任记录。
+        world.clock.set("2026-09-18T09:12:03.412Z");
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairBegin,
+                    json!({
+                        "requestedPacks": [],
+                        "requestedScopes": ["session.read"],
+                        "expiresInMs": null,
+                    }),
+                ))
+                .await,
+        );
+        let rejected_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        world.clock.set("2026-09-18T09:12:03.412Z");
+        // 尚未认领时 confirm：状态不允许，但既非过期也非拒绝 → local.conflict。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": rejected_id, "scopes": []}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Conflict);
+
+        world
+            .claim(
+                &PairingId::new(&rejected_id).expect("pairing id"),
+                device_peer("Zhang's Phone"),
+            )
+            .await
+            .expect("claim 提交成功");
+        let rejected = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairReject,
+                    json!({"pairingId": rejected_id, "reason": "user said no"}),
+                ))
+                .await,
+        );
+        assert_eq!(rejected, JsonObject::new(), "reject 的 result 是 {{}}");
+        assert_eq!(
+            world.trust.pairing(&rejected_id).expect("配对").state(),
+            PairingState::Rejected
+        );
+        for (method, params) in [
+            (
+                Method::DevicePairConfirm,
+                json!({"pairingId": rejected_id, "scopes": []}),
+            ),
+            (
+                Method::DevicePairReject,
+                json!({"pairingId": rejected_id, "reason": null}),
+            ),
+        ] {
+            let (code, message) = error_of(&router.handle(request(method, params)).await);
+            assert_eq!(code, LocalErrorCode::Expired, "{method:?}");
+            assert!(message.contains("expired or was rejected"), "{message}");
+        }
+        assert_eq!(world.trust.device_count(), 0, "拒绝不创建信任");
+        let listed = result_of(&router.handle(request(Method::DeviceList, json!({}))).await);
+        assert_eq!(listed["devices"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn confirm_rejects_sets_beyond_the_requested_ones() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairBegin,
+                    json!({
+                        "requestedPacks": [],
+                        "requestedScopes": ["session.read"],
+                        "expiresInMs": null,
+                    }),
+                ))
+                .await,
+        );
+        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        world
+            .claim(
+                &PairingId::new(&pairing_id).expect("pairing id"),
+                device_peer("Zhang's Phone"),
+            )
+            .await
+            .expect("claim 提交成功");
+
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": pairing_id, "scopes": ["session.read", "session.prompt"]}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+        assert!(message.contains("must not exceed"), "{message}");
+        assert_eq!(world.trust.device_count(), 0, "越界不得创建信任");
+        assert_eq!(
+            world.trust.pairing(&pairing_id).expect("配对").state(),
+            PairingState::PendingConfirmation,
+            "越界不得推进状态"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_closes_the_connection_after_the_commit_and_list_reflects_it() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let pairing_id = activate_device(&world, &router).await;
+        assert!(world.closer.closed_devices().is_empty());
+
+        let revoked = result_of(
+            &router
+                .handle(request(
+                    Method::DeviceRevoke,
+                    json!({"deviceId": DEVICE_ID}),
+                ))
+                .await,
+        );
+        assert_eq!(revoked["deviceId"], json!(DEVICE_ID));
+        assert_eq!(revoked["revokedAt"], json!(world.clock_text()));
+        assert_eq!(
+            world.closer.closed_devices(),
+            vec![DEVICE_ID.to_owned()],
+            "提交后必须关闭该设备的 active connection"
+        );
+        let listed = result_of(&router.handle(request(Method::DeviceList, json!({}))).await);
+        assert_eq!(listed["devices"][0]["state"], json!("revoked"));
+        assert_eq!(listed["devices"][0]["revokedAt"], json!(world.clock_text()));
+        // 未知设备：local.not_found，且不触发关闭。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DeviceRevoke,
+                    json!({"deviceId": "2ae1c07c-0000-4000-8000-0000000000ff"}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert_eq!(world.closer.closed_devices().len(), 1);
+        assert_eq!(
+            world.trust.pairing(&pairing_id).expect("配对").state(),
+            PairingState::Approved
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_settlement_keeps_the_memory_state_strict() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let pairing_id = begin_and_claim_device(&world, &router, &["session.read"]).await;
+        let pairing = PairingId::new(&pairing_id).expect("pairing id");
+
+        world.trust.fail_next_settle(PortError::Unavailable(
+            acp_core::model::UnavailableKind::IoError,
+        ));
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": pairing_id, "scopes": ["session.read"]}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Unavailable);
+        assert_eq!(world.trust.device_count(), 0, "写集失败不得创建信任");
+        assert_eq!(
+            world.trust.pairing(&pairing_id).expect("配对").state(),
+            PairingState::PendingConfirmation,
+            "写集失败不得推进配对状态"
+        );
+        // 内存 secret 必须保留（消费只发生在已批准后的首次认证）。
+        assert!(world.authority.has_secret(&pairing));
+
+        // 重试仍然成立：说明内存态没有跨过持久状态（`Authority` 不提供「已批准」读口，因此这里用
+        // 「重试成功 + 库中无提前信任」作为可核对的证据）。
+        let confirmed = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": pairing_id, "scopes": ["session.read"]}),
+                ))
+                .await,
+        );
+        assert_eq!(confirmed["deviceId"], json!(DEVICE_ID));
+        assert_eq!(world.trust.device_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn node_owner_pairing_flow_pairs_a_node_with_initial_grants() {
+        let world = TestWorld::new();
+        let router = world.router();
+
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairBegin,
+                    json!({
+                        "mode": "owner",
+                        "pairingUrl": null,
+                        "displayName": "Owner Node",
+                        "requestedGrants": ["grant.observe", "grant.remote-work"],
+                    }),
+                ))
+                .await,
+        );
+        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        assert_eq!(begin["state"], json!("pending"));
+        assert_eq!(begin["expiresAt"], json!("2026-09-18T09:17:03.412Z"));
+        assert_eq!(begin["sas"], json!(null));
+        assert_eq!(begin["peerNodeId"], json!(null));
+        assert_eq!(begin["peerPublicKeyFingerprint"], json!(null));
+        let url = begin["pairingUrl"].as_str().expect("pairingUrl").to_owned();
+        let payload: node_link_protocol::pairing::QrPayload = serde_json::from_slice(&qr_json(
+            &url,
+            "https://work-pc.example.test/node-link/pair#data=",
+        ))
+        .expect("Node Link 侧可反序列化");
+        assert_eq!(payload.endpoint.as_str(), OWNER_ENDPOINT);
+        assert_eq!(payload.pairing_id.as_str(), pairing_id);
+        assert_eq!(
+            payload.owner_public_key.as_bytes(),
+            test_public_key().as_bytes()
+        );
+        let registered = world.trust.pairing(&pairing_id).expect("配对已持久化");
+        assert_eq!(registered.target(), PairingTarget::Node);
+        assert_eq!(
+            registered.secret_digest().as_str(),
+            secret_digest(payload.pairing_secret.as_bytes())
+        );
+        assert_eq!(registered.host_binding(), OWNER_ENDPOINT);
+        assert_eq!(registered.display_name(), Some("Owner Node"));
+
+        // claim 之前：除 state 与 expiresAt 外全为 null，`lastRefreshError` 恒 null（无远程刷新）。
+        let status = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairStatus,
+                    json!({"pairingId": pairing_id}),
+                ))
+                .await,
+        );
+        assert_eq!(status["state"], json!("pending"));
+        assert_eq!(status["lastRefreshError"], json!(null));
+        for field in [
+            "peerNodeId",
+            "peerPublicKeyFingerprint",
+            "sas",
+            "requestedGrants",
+        ] {
+            assert_eq!(status[field], json!(null), "claim 前 `{field}` 必须为 null");
+        }
+
+        world
+            .claim(
+                &PairingId::new(&pairing_id).expect("pairing id"),
+                node_peer("Access Node"),
+            )
+            .await
+            .expect("claim 提交成功");
+        let status = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairStatus,
+                    json!({"pairingId": pairing_id}),
+                ))
+                .await,
+        );
+        assert_eq!(status["state"], json!("pending_confirmation"));
+        assert_eq!(status["peerNodeId"], json!(NODE_ID));
+        assert_eq!(
+            status["peerPublicKeyFingerprint"],
+            json!(test_public_key().fingerprint().as_str())
+        );
+        assert_eq!(status["sas"].as_str().expect("SAS").len(), 6);
+        assert_eq!(
+            status["requestedGrants"],
+            json!(["grant.observe", "grant.remote-work"])
+        );
+        assert_eq!(status["lastRefreshError"], json!(null));
+
+        let confirmed = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe"]}),
+                ))
+                .await,
+        );
+        assert_eq!(confirmed["nodeId"], json!(NODE_ID));
+        assert_eq!(confirmed["grants"], json!(["grant.observe"]));
+        assert_eq!(confirmed["confirmedAt"], json!(world.clock_text()));
+
+        let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
+        assert_eq!(listed["nodes"].as_array().expect("数组").len(), 1);
+        assert_eq!(listed["nodes"][0]["nodeId"], json!(NODE_ID));
+        assert_eq!(listed["nodes"][0]["kind"], json!("access"));
+        assert_eq!(listed["nodes"][0]["state"], json!("paired"));
+        assert_eq!(listed["nodes"][0]["grants"], json!(["grant.observe"]));
+        assert_eq!(listed["nodes"][0]["ownerEndpoint"], json!(null));
+        assert_eq!(listed["nodes"][0]["lastConnectedAt"], json!(null));
+        assert_eq!(listed["nodes"][0]["displayName"], json!("Access Node"));
+        let node = world.trust.nodes_of(NODE_ID);
+        assert_eq!(node.len(), 1);
+        assert_eq!(node[0].state(), NodeState::Paired);
+
+        let revoked = result_of(
+            &router
+                .handle(request(Method::NodeRevoke, json!({"nodeId": NODE_ID})))
+                .await,
+        );
+        assert_eq!(revoked["nodeId"], json!(NODE_ID));
+        assert_eq!(revoked["revokedAt"], json!(world.clock_text()));
+        assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
+        let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
+        assert_eq!(listed["nodes"][0]["state"], json!("revoked"));
+        assert_eq!(listed["nodes"][0]["revokedAt"], json!(world.clock_text()));
+    }
+
+    #[tokio::test]
+    async fn node_access_mode_is_unsupported_and_creates_nothing() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairBegin,
+                    json!({
+                        "mode": "access",
+                        "pairingUrl": "https://owner.example/node-link/pair#data=abc",
+                        "displayName": "Access Node",
+                        "requestedGrants": ["grant.observe"],
+                    }),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Unsupported);
+        assert!(message.contains("access"), "{message}");
+        assert_eq!(world.trust.pairing_count(), 0, "不得创建配对行");
+        assert_eq!(world.trust.node_count(), 0);
+        assert!(
+            !message.contains("data="),
+            "错误消息不得回显 pairingUrl：{message}"
+        );
+        // 未知 mode 仍然是参数错误（只有明确写 `access` 才是「不支持」）。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairBegin,
+                    json!({
+                        "mode": "peer",
+                        "pairingUrl": null,
+                        "displayName": "X",
+                        "requestedGrants": [],
+                    }),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+    }
+
+    #[tokio::test]
+    async fn pairing_methods_fail_closed_without_a_public_origin() {
+        let world = TestWorld::with_public_origin(None);
+        let router = world.router();
+        for (method, params) in [
+            (
+                Method::DevicePairBegin,
+                json!({
+                    "requestedPacks": [],
+                    "requestedScopes": ["session.read"],
+                    "expiresInMs": null,
+                }),
+            ),
+            (
+                Method::NodePairBegin,
+                json!({
+                    "mode": "owner",
+                    "pairingUrl": null,
+                    "displayName": "Owner Node",
+                    "requestedGrants": ["grant.observe"],
+                }),
+            ),
+        ] {
+            let (code, message) = error_of(&router.handle(request(method, params)).await);
+            assert_eq!(code, LocalErrorCode::Unavailable, "{method:?}");
+            assert!(message.contains("daemon.public_origin"), "{message}");
+        }
+        assert_eq!(world.trust.pairing_count(), 0, "失败关闭不得留下任何写入");
+        assert_eq!(world.trust.device_count(), 0);
+        assert_eq!(world.trust.node_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn unknown_and_family_mismatched_pairings_answer_not_found() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let unknown = "2ae1c07c-0000-4000-8000-0000000000ee";
+        for (method, params) in [
+            (Method::DevicePairStatus, json!({"pairingId": unknown})),
+            (
+                Method::DevicePairConfirm,
+                json!({"pairingId": unknown, "scopes": []}),
+            ),
+            (
+                Method::DevicePairReject,
+                json!({"pairingId": unknown, "reason": null}),
+            ),
+            (Method::NodePairStatus, json!({"pairingId": unknown})),
+        ] {
+            let (code, _) = error_of(&router.handle(request(method, params)).await);
+            assert_eq!(code, LocalErrorCode::NotFound, "{method:?}");
+        }
+
+        // 目标族不匹配：device.* 不服务节点配对，反之同理。
+        let device_id = begin_and_claim_device(&world, &router, &["session.read"]).await;
+        let node_id = begin_and_claim_node(&world, &router).await;
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairStatus,
+                    json!({"pairingId": device_id}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairStatus,
+                    json!({"pairingId": node_id}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+    }
+
+    #[tokio::test]
+    async fn pairing_begin_validates_names_windows_and_shapes() {
+        let world = TestWorld::new();
+        let router = world.router();
+        for rejected in [
+            json!({"requestedPacks": ["pack.nope"], "requestedScopes": [], "expiresInMs": null}),
+            json!({"requestedPacks": [], "requestedScopes": ["nope"], "expiresInMs": null}),
+            json!({"requestedPacks": [], "requestedScopes": ["local.audit.export"], "expiresInMs": null}),
+            json!({"requestedPacks": [], "requestedScopes": [], "expiresInMs": 0}),
+            json!({"requestedPacks": [], "requestedScopes": [], "expiresInMs": PAIRING_WINDOW_MS + 1}),
+            json!({"requestedPacks": [], "requestedScopes": [], "expiresInMs": -1}),
+            json!({"requestedPacks": [], "requestedScopes": [], "expiresInMs": 1.5}),
+            json!({"requestedPacks": "pack.observe", "requestedScopes": [], "expiresInMs": null}),
+            json!({"requestedPacks": [], "requestedScopes": [], "expiresInMs": null, "grants": []}),
+            json!({"requestedPacks": [], "requestedScopes": []}),
+        ] {
+            let (code, _) = error_of(
+                &router
+                    .handle(request(Method::DevicePairBegin, rejected.clone()))
+                    .await,
+            );
+            assert_eq!(code, LocalErrorCode::InvalidParams, "{rejected}");
+        }
+        assert_eq!(world.trust.pairing_count(), 0, "校验失败不得写配对行");
+
+        for rejected in [
+            json!({
+                "mode": "owner", "pairingUrl": "https://x/pair#data=a",
+                "displayName": "N", "requestedGrants": [],
+            }),
+            json!({
+                "mode": "owner", "pairingUrl": null,
+                "displayName": "N", "requestedGrants": ["grant.nope"],
+            }),
+            json!({
+                "mode": "owner", "pairingUrl": null,
+                "displayName": "N", "requestedGrants": ["session.read"],
+            }),
+            json!({
+                "mode": "owner", "pairingUrl": null,
+                "displayName": "", "requestedGrants": [],
+            }),
+            json!({
+                "mode": "owner", "pairingUrl": null,
+                "displayName": "N", "requestedGrants": [], "scopes": [],
+            }),
+        ] {
+            let (code, _) = error_of(
+                &router
+                    .handle(request(Method::NodePairBegin, rejected.clone()))
+                    .await,
+            );
+            assert_eq!(code, LocalErrorCode::InvalidParams, "{rejected}");
+        }
+        assert_eq!(world.trust.pairing_count(), 0);
+
+        // reject 的 reason 上界（≤ 256 字符）：超长属参数非法，且不改变状态。
+        let pairing_id = begin_and_claim_device(&world, &router, &["session.read"]).await;
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DevicePairReject,
+                    json!({"pairingId": pairing_id, "reason": "x".repeat(257)}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+        assert_eq!(
+            world.trust.pairing(&pairing_id).expect("配对").state(),
+            PairingState::PendingConfirmation
+        );
+    }
+
+    #[tokio::test]
+    async fn node_confirm_and_reject_error_paths_answer_the_documented_codes() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let pairing_id = begin_and_claim_node(&world, &router).await;
+
+        // 确认集合超出请求值 → 参数非法，不创建信任。
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe", "grant.remote-work"]}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+        assert!(message.contains("must not exceed"), "{message}");
+        assert_eq!(world.trust.node_count(), 0);
+
+        // 未认领的节点配对不能确认（状态不允许）。
+        let pending = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairBegin,
+                    json!({
+                        "mode": "owner",
+                        "pairingUrl": null,
+                        "displayName": "Owner Node",
+                        "requestedGrants": ["grant.observe"],
+                    }),
+                ))
+                .await,
+        );
+        let unclaimed = pending["pairingId"].as_str().expect("pairingId").to_owned();
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": unclaimed, "grants": []}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::Conflict);
+
+        // 拒绝成功 → `{}`；再次拒绝与之后确认都回 `local.expired`。
+        let rejected = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairReject,
+                    json!({"pairingId": pairing_id, "reason": null}),
+                ))
+                .await,
+        );
+        assert_eq!(rejected, JsonObject::new());
+        for (method, params) in [
+            (
+                Method::NodePairReject,
+                json!({"pairingId": pairing_id, "reason": null}),
+            ),
+            (
+                Method::NodePairConfirm,
+                json!({"pairingId": pairing_id, "grants": []}),
+            ),
+        ] {
+            let (code, _) = error_of(&router.handle(request(method, params)).await);
+            assert_eq!(code, LocalErrorCode::Expired, "{method:?}");
+        }
+        assert_eq!(world.trust.node_count(), 0, "拒绝不创建信任");
+        let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
+        assert_eq!(listed["nodes"], json!([]));
+
+        // 未知节点撤销 → `local.not_found`，且不触发关闭。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::NodeRevoke,
+                    json!({"nodeId": "2ae1c07c-0000-4000-8000-0000000000ff"}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert!(world.closer.closed_nodes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_methods_reject_unknown_parameters() {
+        let world = TestWorld::new();
+        let router = world.router();
+        for method in [Method::DeviceList, Method::NodeList] {
+            let (code, message) =
+                error_of(&router.handle(request(method, json!({"unknown": 1}))).await);
+            assert_eq!(code, LocalErrorCode::InvalidParams, "{method:?}");
+            assert!(message.contains("unknown"), "{message}");
+        }
+        // `device.revoke`/`node.revoke` 的 id 形状也走同一条参数校验（`device.revoke` 的未知设备
+        // 已在撤销用例里覆盖）。
+        let (code, _) = error_of(
+            &router
+                .handle(request(Method::NodeRevoke, json!({"nodeId": "not-a-uuid"})))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+        let (code, _) = error_of(
+            &router
+                .handle(request(Method::DeviceRevoke, json!({"deviceId": null})))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+    }
+
+    /// 走完 begin → claim，得到一个等待本地确认的设备配对（返回 `pairingId`）。
+    async fn begin_and_claim_device(
+        world: &TestWorld,
+        router: &LocalAdminRouter,
+        scopes: &[&str],
+    ) -> String {
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairBegin,
+                    json!({
+                        "requestedPacks": [],
+                        "requestedScopes": scopes,
+                        "expiresInMs": null,
+                    }),
+                ))
+                .await,
+        );
+        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        world
+            .claim(
+                &PairingId::new(&pairing_id).expect("pairing id"),
+                device_peer("Zhang's Phone"),
+            )
+            .await
+            .expect("claim 提交成功");
+        assert_eq!(
+            world.trust.pairing(&pairing_id).expect("配对").state(),
+            PairingState::PendingConfirmation
+        );
+        pairing_id
+    }
+
+    /// 走完 begin → claim → confirm，得到一个 active 设备（返回 `pairingId`）。
+    async fn activate_device(world: &TestWorld, router: &LocalAdminRouter) -> String {
+        let pairing_id = begin_and_claim_device(world, router, &["session.read"]).await;
+        result_of(
+            &router
+                .handle(request(
+                    Method::DevicePairConfirm,
+                    json!({"pairingId": pairing_id, "scopes": ["session.read"]}),
+                ))
+                .await,
+        );
+        assert_eq!(
+            world.trust.device(DEVICE_ID).expect("设备").state(),
+            DeviceState::Active
+        );
+        pairing_id
+    }
+
+    /// 走完 begin → claim，得到一个等待本地确认的节点配对。
+    async fn begin_and_claim_node(world: &TestWorld, router: &LocalAdminRouter) -> String {
+        let begin = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairBegin,
+                    json!({
+                        "mode": "owner",
+                        "pairingUrl": null,
+                        "displayName": "Owner Node",
+                        "requestedGrants": ["grant.observe"],
+                    }),
+                ))
+                .await,
+        );
+        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+        world
+            .claim(
+                &PairingId::new(&pairing_id).expect("pairing id"),
+                node_peer("Access Node"),
+            )
+            .await
+            .expect("claim 提交成功");
+        pairing_id
     }
 }

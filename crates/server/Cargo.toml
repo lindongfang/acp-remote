@@ -20,6 +20,11 @@ core = { path = "../core" }
 # `provider.configure` 的凭据值只经 `identity-auth` 定义的 keystore 端口写入（端口实现由组合根注入），
 # 本 crate 不依赖 `identity-keystore`（`MODULE_ARCHITECTURE.md` §5 的「除 app 外没有 crate 依赖它」）。
 identity-auth = { path = "../identity-auth" }
+# `device.pair.begin`/`node.pair.begin` 的 `pairingUrl` 内嵌二维码 payload，其形状由两个协议 crate 拥有
+# （`SYNC_PROTOCOL.md` §7.1、`NODE_LINK_PROTOCOL.md` §13.1）：本 crate 用它们的 `QrPayload` 类型序列化，
+# 不复制字段名、不手写键。依赖方向见 `MODULE_ARCHITECTURE.md` §5 的 server 行（对两者均为 ✓）。
+sync-protocol = { path = "../sync-protocol" }
+node-link-protocol = { path = "../node-link-protocol" }
 # `daemon.status` 的 `nodePublicKey` 是无填充 base64url 的 65 字节 SEC1 公钥（§1.1 的二进制编码规则），
 # 编码发生在 wire 边界（本 crate），因此 core 的 `PeerPublicKey` 不引入 serde/base64。
 base64.workspace = true

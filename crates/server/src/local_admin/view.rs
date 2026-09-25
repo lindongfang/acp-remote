@@ -1,12 +1,12 @@
-//! core 值对象 → 管理 `result` 的投影（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.2/§5.5）。
+//! core 值对象 → 管理 `result` 的投影（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.2–§5.5）。
 //!
 //! 只做形状投影：字段名一律 `camelCase`（§1.1），时间戳是 §1.1 的 RFC 3339 毫秒文本，数组保序。
 //! 这里**不**做校验（校验在 [`crate::local_admin::params`]）、不读时钟、不接触存储；导出给
-//! `result` 的字段集合与 §5.2/§5.5 的表格逐项对应，未知字段不会被凭空造出来。
+//! `result` 的字段集合与 §5.2–§5.5 的表格逐项对应，未知字段不会被凭空造出来。
 
 use acp_core::model::{
-    AgentProfile, ExportRecord, ImportRecord, TemplateParam, TemplateParamValue, Timestamp,
-    WorkspaceRecord,
+    AgentProfile, DeviceRecord, ExportRecord, ImportRecord, NodeRecord, TemplateParam,
+    TemplateParamValue, Timestamp, WorkspaceRecord,
 };
 use serde_json::Value;
 
@@ -162,6 +162,59 @@ pub(crate) fn import(record: &ImportRecord) -> JsonObject {
         ),
         ("grants", string_array(record.grants().iter())),
     ])
+}
+
+/// `device.list` 的 `DeviceRecord`（§5.3）：含 `pending` 与 `revoked` 记录。
+pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
+    object(vec![
+        ("deviceId", text(record.device_id().as_str())),
+        ("displayName", text(record.display_name())),
+        (
+            "publicKeyFingerprint",
+            text(record.public_key_fingerprint().as_str()),
+        ),
+        ("scopes", string_array(record.scopes().iter())),
+        ("state", text(record.state().as_str())),
+        ("createdAt", timestamp(record.created_at())),
+        ("lastSeenAt", optional_timestamp(record.last_seen_at())),
+        ("revokedAt", optional_timestamp(record.revoked_at())),
+    ])
+}
+
+/// `node.list` 的 `NodeRecord`（§5.4）：`ownerEndpoint` 只在 `kind = "owner"` 时非 `null`。
+pub(crate) fn node(record: &NodeRecord) -> JsonObject {
+    object(vec![
+        ("nodeId", text(record.node_id().as_str())),
+        ("displayName", text(record.display_name())),
+        ("kind", text(record.kind().as_str())),
+        (
+            "nodePublicKeyFingerprint",
+            text(record.node_public_key_fingerprint().as_str()),
+        ),
+        ("grants", string_array(record.grants().iter())),
+        ("state", text(record.state().as_str())),
+        (
+            "ownerEndpoint",
+            match record.owner_endpoint() {
+                Some(endpoint) => text(endpoint),
+                None => Value::Null,
+            },
+        ),
+        ("createdAt", timestamp(record.created_at())),
+        (
+            "lastConnectedAt",
+            optional_timestamp(record.last_connected_at()),
+        ),
+        ("revokedAt", optional_timestamp(record.revoked_at())),
+    ])
+}
+
+/// 可空时间戳（§1.1：`T | null` 字段用 `null` 而不是缺字段）。
+pub(crate) fn optional_timestamp(value: Option<&Timestamp>) -> Value {
+    match value {
+        Some(at) => timestamp(at),
+        None => Value::Null,
+    }
 }
 
 fn template_param(param: &TemplateParam) -> JsonObject {

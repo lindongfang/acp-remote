@@ -1,5 +1,5 @@
 //! 方法参数校验与 `PortError` → `local.*` 映射
-//! （`docs/LOCAL_ADMIN_PROTOCOL.md` §1.1、§5.2、§5.5、§5.6、§6）。
+//! （`docs/LOCAL_ADMIN_PROTOCOL.md` §1.1、§5.2–§5.6、§6）。
 //!
 //! 本模块是路由的**唯一**参数形状知识所在：`params` 与嵌套对象都是 closed object（§1.1），
 //! 缺字段、类型不符或出现未知字段一律 `local.invalid_params`（§4 规则 4）。校验函数是纯函数：
@@ -17,10 +17,11 @@
 use std::path::{Component, Path, PathBuf};
 
 use acp_core::model::{
-    AgentId, AuditAction, CachePolicy, ConflictKind, ExportId, ExportRecord, ExportTemplate,
-    GrantSet, ImportId, PortError, ProviderRefKind, TemplateId, Timestamp, WorkspaceAlias,
-    WorkspaceAliasEntry,
+    AgentId, AuditAction, CachePolicy, ConflictKind, DeviceId, ExportId, ExportRecord,
+    ExportTemplate, GrantSet, ImportId, NodeId, PairingId, PairingRecord, PairingState, PortError,
+    ProviderRefKind, ScopeSet, TemplateId, Timestamp, WorkspaceAlias, WorkspaceAliasEntry,
 };
+use identity_auth::{PairingError, authorization};
 use serde_json::Value;
 
 use crate::local_admin::daemon::MAX_STOP_GRACE_MS;
@@ -29,6 +30,11 @@ use crate::local_admin::error::{AdminError, LocalErrorCode};
 
 /// `displayName` 的长度上界（§5.2/§5.5 的 `≤128`）。
 const MAX_DISPLAY_NAME_CHARS: usize = 128;
+
+/// `device.pair.reject`/`node.pair.reject` 的 `reason` 长度上界：与 `core::model` 的
+/// `PairingSettlement::rejected` 是同一边界（§5.3/§5.4 只登记 `reason: string | null`，长度由核心
+/// 值对象决定）。本层提前判，使超长回 `local.invalid_params` 而不是端口错误。
+const MAX_REJECT_REASON_CHARS: usize = 256;
 
 /// `local.invalid_params`（§6）。
 pub fn invalid_params(message: impl AsRef<str>) -> AdminError {
@@ -592,6 +598,265 @@ pub fn audit_export(params: &JsonObject) -> Result<AuditExport, AdminError> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// device.pair.* / device.list / device.revoke / node.pair.* / node.list / node.revoke（§5.3/§5.4）
+// ---------------------------------------------------------------------------------------------
+
+/// `device.pair.begin` 的已校验参数（§5.3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevicePairBegin {
+    /// 展开后的独立 scope 集合（`pack.*` 已按 `SECURITY_DESIGN.md` §10.2 展开；不含包名）。
+    pub scopes: ScopeSet,
+    /// 请求的有效期（毫秒）；`None` = 用满 5 分钟窗口，只能收窄。
+    pub expires_in_ms: Option<u64>,
+}
+
+/// `device.pair.begin`（§5.3）：`requestedPacks`/`requestedScopes` 可为空，`expiresInMs` 可空。
+///
+/// 取值域**只**允许 `pack.*` 与命令名（§5.3 的原文）；`preset.*` 不在本方法的输入域内——CLI 若要提供
+/// 预设，应先在本机把它展开成 packs，而不是把它当作 pack 名传进来（展开只经
+/// `identity_auth::authorization` 这一份词表）。
+pub fn device_pair_begin(params: &JsonObject) -> Result<DevicePairBegin, AdminError> {
+    reject_unknown_fields(
+        params,
+        &["requestedPacks", "requestedScopes", "expiresInMs"],
+    )?;
+    let packs = strings(params, "requestedPacks")?;
+    let requested = strings(params, "requestedScopes")?;
+    let scopes = authorization::expand_device_request(&packs, &requested).map_err(|_| {
+        invalid_params(
+            "device.pair.begin: `requestedPacks`/`requestedScopes` must name known packs or command scopes",
+        )
+    })?;
+    Ok(DevicePairBegin {
+        scopes,
+        expires_in_ms: pairing_window(params)?,
+    })
+}
+
+/// `node.pair.begin` 的已校验参数（§5.4）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodePairBegin {
+    /// `mode = "owner"`：本节点创建一次性配对并返回二维码 URL。
+    Owner {
+        /// 本节点向对端宣告的展示名（`nodeName`）。
+        display_name: String,
+        /// 本机允许授予的 `grant.*` 上限（`node.pair.confirm` 的最终集合必须落在它之内）。
+        grants: GrantSet,
+    },
+    /// `mode = "access"`：本切片不支持（路由层回 `local.unsupported`，不发任何出站请求）。
+    Access,
+}
+
+/// `node.pair.begin`（§5.4）：`mode` 决定分支；`owner` 分支要求 `pairingUrl` 为 `null`。
+///
+/// `mode = "access"` 时**不继续解析**其余字段：本切片不实现该模式，把「不支持」报成「参数非法」
+/// 会误导调用方（§5.4 的 `mode = "access"` 分支与 `node.rotate-key.begin` 同类）。
+///
+/// `requestedGrants` 在两个模式下都是**本机登记的授权上限**：`owner` 模式下对端尚未认领，本机必须先
+/// 登记一个上限，`node.pair.confirm` 的最终 grants 才能通过「不得超出请求集合」的校验（§5.4 的确认
+/// 场景要求确认后记录带初始 `grant.*`）。
+pub fn node_pair_begin(params: &JsonObject) -> Result<NodePairBegin, AdminError> {
+    reject_unknown_fields(
+        params,
+        &["mode", "pairingUrl", "displayName", "requestedGrants"],
+    )?;
+    let mode = string(params, "mode")?;
+    match mode.as_str() {
+        "access" => Ok(NodePairBegin::Access),
+        "owner" => {
+            if optional_string(params, "pairingUrl")?.is_some() {
+                return Err(invalid_params(
+                    "node.pair.begin: `pairingUrl` must be null when `mode` is `owner`",
+                ));
+            }
+            let display_name = display_name(params, "displayName")?;
+            let requested = GrantSet::try_from_iter(strings(params, "requestedGrants")?)
+                .map_err(|error| from_invalid("parameter `requestedGrants`", error))?;
+            let expanded = authorization::expand_node_request(
+                &requested.iter().map(str::to_owned).collect::<Vec<_>>(),
+            )
+            .map_err(|_| {
+                invalid_params("node.pair.begin: `requestedGrants` must name known grants")
+            })?;
+            Ok(NodePairBegin::Owner {
+                display_name,
+                grants: expanded.grants,
+            })
+        }
+        _ => Err(invalid_params(
+            "parameter `mode` must be `owner` or `access`",
+        )),
+    }
+}
+
+/// `device.pair.confirm` 的已校验参数（§5.3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevicePairConfirm {
+    /// 配对目标。
+    pub pairing_id: PairingId,
+    /// 用户确认的最终 scope 集合（不是请求值；必须完整展示后确认）。
+    pub scopes: ScopeSet,
+}
+
+/// `device.pair.confirm`（§5.3）：`{ pairingId, scopes }`；设备配对不带 grants（未知字段即拒绝）。
+pub fn device_pair_confirm(params: &JsonObject) -> Result<DevicePairConfirm, AdminError> {
+    reject_unknown_fields(params, &["pairingId", "scopes"])?;
+    let pairing_id = pairing_id_field(params)?;
+    let scopes = ScopeSet::try_from_iter(strings(params, "scopes")?)
+        .map_err(|error| from_invalid("parameter `scopes`", error))?;
+    Ok(DevicePairConfirm { pairing_id, scopes })
+}
+
+/// `node.pair.confirm` 的已校验参数（§5.4）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePairConfirm {
+    /// 配对目标。
+    pub pairing_id: PairingId,
+    /// 用户确认的最终 `grant.*` 集合（不是请求值）。
+    pub grants: GrantSet,
+}
+
+/// `node.pair.confirm`（§5.4）：`{ pairingId, grants }`；节点配对不带 scopes（未知字段即拒绝）。
+pub fn node_pair_confirm(params: &JsonObject) -> Result<NodePairConfirm, AdminError> {
+    reject_unknown_fields(params, &["pairingId", "grants"])?;
+    let pairing_id = pairing_id_field(params)?;
+    let grants = GrantSet::try_from_iter(strings(params, "grants")?)
+        .map_err(|error| from_invalid("parameter `grants`", error))?;
+    Ok(NodePairConfirm { pairing_id, grants })
+}
+
+/// `device.pair.reject` / `node.pair.reject` 的已校验参数（§5.3/§5.4）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingReject {
+    /// 配对目标。
+    pub pairing_id: PairingId,
+    /// 可选简短原因（≤150 字符；不进审计正文）。
+    pub reason: Option<String>,
+}
+
+/// `device.pair.reject` / `node.pair.reject`（§5.3/§5.4）：`{ pairingId, reason }`。
+pub fn pairing_reject(params: &JsonObject) -> Result<PairingReject, AdminError> {
+    reject_unknown_fields(params, &["pairingId", "reason"])?;
+    let pairing_id = pairing_id_field(params)?;
+    let reason = optional_string(params, "reason")?;
+    if let Some(reason) = &reason {
+        if reason.chars().count() > MAX_REJECT_REASON_CHARS {
+            return Err(invalid_params(format!(
+                "parameter `reason` must be at most {MAX_REJECT_REASON_CHARS} characters"
+            )));
+        }
+    }
+    Ok(PairingReject { pairing_id, reason })
+}
+
+/// `device.pair.status` / `device.pair.reject` / `node.pair.status` / `node.pair.reject` 的 `pairingId`。
+pub fn pairing_id(params: &JsonObject) -> Result<PairingId, AdminError> {
+    reject_unknown_fields(params, &["pairingId"])?;
+    pairing_id_field(params)
+}
+
+/// `device.revoke`（§5.3）：`{ deviceId }`。
+pub fn device_revoke(params: &JsonObject) -> Result<DeviceId, AdminError> {
+    reject_unknown_fields(params, &["deviceId"])?;
+    let text = string(params, "deviceId")?;
+    DeviceId::new(&text).map_err(|error| from_invalid("parameter `deviceId`", error))
+}
+
+/// `node.revoke`（§5.4）：`{ nodeId }`。
+pub fn node_revoke(params: &JsonObject) -> Result<NodeId, AdminError> {
+    reject_unknown_fields(params, &["nodeId"])?;
+    let text = string(params, "nodeId")?;
+    NodeId::new(&text).map_err(|error| from_invalid("parameter `nodeId`", error))
+}
+
+/// 已确认/已拒绝的判定（§5.3/§5.4、spec 「过期与拒绝不创建信任」）：
+///
+/// - 记录已过期（含时钟判定的过期）或已被拒绝 → `local.expired`（§6：`local.expired` 专服务这一对
+///   语义，"`pairingId` 已过期或已被拒绝"）；
+/// - 仍未认领，或已批准/已消费 → `local.conflict`（状态不允许该操作）；
+/// - 否则放行（`pending_confirmation` 且未过期）。
+///
+/// 这里**不**替代状态机与存储的判定：放行后仍由 `Authority::settle` 与写集做同一组检查，本层只负责把
+/// 「终态」映射成协议文档规定的错误码（存储对 `rejected` 回的是 `ConflictKind::Consumed`，直接透传会
+/// 变成 `local.conflict`，与 spec 要求的 `local.expired` 不符）。
+pub fn require_pending_confirmation(
+    operation: &str,
+    record: &PairingRecord,
+    now: &Timestamp,
+) -> Result<(), AdminError> {
+    // 时钟判定的过期与记录状态无关：从未认领的 `created` 配对超过 `expiresAt` 后同样是「已过期」（存储
+    // 的过期扫描滞后于调用，路由不能等它才给出正确错误码）。
+    let expired_by_clock = now.as_str() >= record.expires_at().as_str();
+    match record.state() {
+        PairingState::Rejected | PairingState::Expired => Err(expired(operation)),
+        PairingState::Created | PairingState::PendingConfirmation if expired_by_clock => {
+            Err(expired(operation))
+        }
+        PairingState::PendingConfirmation => Ok(()),
+        _ => Err(AdminError::new(
+            LocalErrorCode::Conflict,
+            format!(
+                "{operation}: pairing state `{}` does not allow this operation",
+                record.state().as_str()
+            ),
+        )),
+    }
+}
+
+/// `local.expired`（§6：`pairingId` 已过期或已被拒绝）。
+fn expired(operation: &str) -> AdminError {
+    AdminError::new(
+        LocalErrorCode::Expired,
+        format!("{operation}: pairing has expired or was rejected"),
+    )
+}
+
+/// 用户确认的最终集合不得超出请求集合（§5.3/§5.4）：越界是**参数非法**（不是状态冲突），
+/// 与 `local.invalid_params` 的「越界」定义一致（§6）。
+pub fn require_confirm_subset<'a>(
+    operation: &str,
+    field: &str,
+    granted: impl Iterator<Item = &'a str>,
+    requested: impl Iterator<Item = &'a str>,
+) -> Result<(), AdminError> {
+    let requested: Vec<&str> = requested.collect();
+    if granted.into_iter().all(|name| requested.contains(&name)) {
+        Ok(())
+    } else {
+        Err(invalid_params(format!(
+            "{operation}: `{field}` must not exceed the requested set"
+        )))
+    }
+}
+
+/// `expiresInMs`（§5.3）：`null` = 用满 5 分钟；非空时 `1..=PAIRING_WINDOW_MS`（只能收窄）。
+fn pairing_window(params: &JsonObject) -> Result<Option<u64>, AdminError> {
+    match value(params, "expiresInMs")? {
+        Value::Null => Ok(None),
+        Value::Number(number) => {
+            let window = number.as_u64().filter(|window| {
+                *window > 0 && *window <= crate::local_admin::pairing::PAIRING_WINDOW_MS
+            });
+            window.map(Some).ok_or_else(|| {
+                invalid_params(format!(
+                    "parameter `expiresInMs` must be an integer in 1..={}",
+                    crate::local_admin::pairing::PAIRING_WINDOW_MS
+                ))
+            })
+        }
+        _ => Err(invalid_params(
+            "parameter `expiresInMs` must be an integer or null",
+        )),
+    }
+}
+
+/// `pairingId`：canonical 小写 UUID（core 的 [`PairingId`] 是唯一校验入口）。
+fn pairing_id_field(params: &JsonObject) -> Result<PairingId, AdminError> {
+    let text = string(params, "pairingId")?;
+    PairingId::new(&text).map_err(|error| from_invalid("parameter `pairingId`", error))
+}
+
+// ---------------------------------------------------------------------------------------------
 // PortError → local.*（§6）
 // ---------------------------------------------------------------------------------------------
 
@@ -630,6 +895,52 @@ pub fn map_port_error(operation: &str, error: PortError) -> AdminError {
         PortError::Corrupt(_) | PortError::Backend(_) => AdminError::new(
             LocalErrorCode::Internal,
             format!("{operation}: unexpected internal error"),
+        ),
+    }
+}
+
+/// `identity_auth::PairingError` → `local.*`（§5.3/§5.4、§6）。
+///
+/// 映射口径（与 [`map_port_error`] 同源）：
+///
+/// - `Expired` → `local.expired`；
+/// - `WrongState`/`NotClaimable` → `local.conflict`（状态不允许该操作）；
+/// - 集合越界/窗口非法/目标族不匹配 → `local.invalid_params`（参数越界）；
+/// - `SecretUnavailable`/`EntropyUnavailable` → `local.unavailable`（重启或熵源不可用时重试语义）；
+/// - 其余（transcript/证明/绑定/标识不一致）→ `local.internal`，且**不转述**内层文本：
+///   `error.message` 必须是简短英文描述，内层的诊断是中文且可能回显对端输入（§4 规则 6）。
+pub fn map_pairing_error(operation: &str, error: PairingError) -> AdminError {
+    match error {
+        PairingError::Expired => AdminError::new(
+            LocalErrorCode::Expired,
+            format!("{operation}: pairing has expired or was rejected"),
+        ),
+        PairingError::WrongState | PairingError::NotClaimable => AdminError::new(
+            LocalErrorCode::Conflict,
+            format!("{operation}: pairing state does not allow this operation"),
+        ),
+        PairingError::CapabilityKindMismatch
+        | PairingError::InvalidWindow
+        | PairingError::TargetMismatch
+        | PairingError::CapabilitiesExceedRegistered
+        | PairingError::CapabilitiesExceedRequested
+        | PairingError::Invalid(_) => invalid_params(format!(
+            "{operation}: pairing parameters or sets are out of the allowed range"
+        )),
+        PairingError::SecretUnavailable => AdminError::new(
+            LocalErrorCode::Unavailable,
+            format!("{operation}: pairing secret is no longer held in memory"),
+        ),
+        PairingError::EntropyUnavailable => AdminError::new(
+            LocalErrorCode::Unavailable,
+            format!("{operation}: system entropy is not available"),
+        ),
+        PairingError::ClaimMismatch
+        | PairingError::BindingMismatch
+        | PairingError::Proof(_)
+        | PairingError::Transcript(_) => AdminError::new(
+            LocalErrorCode::Internal,
+            format!("{operation}: pairing state machine rejected the stored facts"),
         ),
     }
 }

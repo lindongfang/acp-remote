@@ -20,15 +20,26 @@ use acp_core::model::*;
 use acp_core::ports::*;
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use identity_auth::{
-    IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError, SecretBytes, SecretPurpose,
+    Authority, EntropyError, EntropySource, IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError,
+    PairingClaim, PairingPeer, SecretBytes, SecretPurpose,
 };
 
 use crate::local_admin::daemon::{DaemonAgent, DaemonControl, DaemonCounts, DaemonStatus};
 use crate::local_admin::error::AdminError;
+use crate::local_admin::pairing::{ConnectionCloser, PairingSessions};
 use crate::local_admin::router::{LocalAdminDeps, LocalAdminRouter};
 
-/// 未实现方法的统一替身标记。
+/// 未实现的统一替身标记。
 const NOT_TOUCHED: &str = "本轮路由测试未触及";
+
+/// `UseCases` 与 `Broker` 共用的两个未触及端口（每个 `UseCases` 一份 `Arc`）。
+fn store_arc() -> Arc<dyn SessionStore> {
+    Arc::new(NotTouched)
+}
+
+fn deliveries_arc() -> Arc<dyn RemoteDeliveryStore> {
+    Arc::new(NotTouched)
+}
 
 /// 测试用的固定时间戳（§1.1 形状）。
 pub(crate) const NOW: &str = "2026-09-18T09:12:03.412Z";
@@ -51,6 +62,13 @@ pub(crate) fn test_public_key() -> PeerPublicKey {
         })
         .collect();
     PeerPublicKey::try_from_bytes(&bytes).expect("基点 G 是合法的 P-256 未压缩点")
+}
+
+/// 测试用的合法 nonce：32 字节全零的无填充 base64url（43 字符，末字符低 2 位为 0）。
+pub(crate) fn test_nonce() -> Nonce {
+    use base64::Engine as _;
+    let text = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 32]);
+    Nonce::new(&text).expect("规范的无填充 base64url nonce")
 }
 
 fn timestamp(text: &str) -> Timestamp {
@@ -587,7 +605,9 @@ impl IdentityKeystore for FakeKeystore {
     }
 
     async fn public_key(&self, _handle: &KeyHandle) -> Result<PeerPublicKey, KeystoreError> {
-        unreachable!("{NOT_TOUCHED}")
+        // 本机身份公钥：与 `DaemonStatus::node_public_key` 同一条可判定素材（配对 URL 的
+        // `hostPublicKey`/`ownerPublicKey` 因此可断言）。
+        Ok(test_public_key())
     }
 
     async fn sign(
@@ -1049,8 +1069,515 @@ impl IdGenerator for FakeIds {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 信任（设备/节点/配对）：
+// ---------------------------------------------------------------------------------------------
+
+/// 内存信任仓储：只实现本轮路由与配对测试触及的方法。
+///
+/// 写路径刻意**照抄存储层的可观察语义**（`storage-sqlite/src/admin/trust.rs`）：状态守卫、终态冲突、
+/// 子集校验、批准时创建信任行、撤销时保留既有时间（COALESCE）——否则测试会验证一个不存在的存储行为。
+/// 未触及的方法一律 `unreachable!`。
+#[derive(Clone, Default)]
+pub(crate) struct FakeTrust {
+    devices: Arc<Mutex<BTreeMap<String, DeviceRecord>>>,
+    nodes: Arc<Mutex<BTreeMap<(String, String), NodeRecord>>>, // key = (nodeId, NodeKind token)
+    keys: Arc<Mutex<BTreeMap<(String, String), PeerPublicKey>>>,
+    pairings: Arc<Mutex<BTreeMap<String, PairingRecord>>>,
+    peers: Arc<Mutex<BTreeMap<String, PairingPeer>>>,
+    audits: Arc<Mutex<Vec<AuditRecord>>>,
+    settle_failure: Arc<Mutex<Option<PortError>>>,
+}
+
+impl FakeTrust {
+    pub(crate) fn device(&self, device: &str) -> Option<DeviceRecord> {
+        self.devices.lock().expect("信任锁").get(device).cloned()
+    }
+
+    pub(crate) fn device_count(&self) -> usize {
+        self.devices.lock().expect("信任锁").len()
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.lock().expect("信任锁").len()
+    }
+
+    /// 某个 `nodeId` 的全部角色行（测试断言用）。
+    pub(crate) fn nodes_of(&self, node: &str) -> Vec<NodeRecord> {
+        self.nodes
+            .lock()
+            .expect("信任锁")
+            .iter()
+            .filter(|((id, _), _)| id == node)
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+
+    pub(crate) fn pairing(&self, pairing_id: &str) -> Option<PairingRecord> {
+        self.pairings
+            .lock()
+            .expect("信任锁")
+            .get(pairing_id)
+            .cloned()
+    }
+
+    pub(crate) fn pairing_count(&self) -> usize {
+        self.pairings.lock().expect("信任锁").len()
+    }
+
+    /// 让下一次落定失败（用于覆盖「写集提交失败 → 不得产生内存已批准、库无信任」）。
+    pub(crate) fn fail_next_settle(&self, error: PortError) {
+        *self.settle_failure.lock().expect("信任锁") = Some(error);
+    }
+
+    /// 直接预置一条设备记录（`device.list` 的边界用例）。
+    pub(crate) fn seed_device(&self, record: DeviceRecord) {
+        self.devices
+            .lock()
+            .expect("信任锁")
+            .insert(record.device_id().as_str().to_owned(), record);
+    }
+}
+
+#[async_trait::async_trait]
+impl TrustStore for FakeTrust {
+    async fn device(&self, id: &DeviceId) -> Result<Option<DeviceRecord>, PortError> {
+        Ok(self.device(id.as_str()))
+    }
+
+    async fn devices(&self) -> Result<Vec<DeviceRecord>, PortError> {
+        Ok(self
+            .devices
+            .lock()
+            .expect("信任锁")
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    async fn node(&self, id: &NodeId, kind: NodeKind) -> Result<Option<NodeRecord>, PortError> {
+        Ok(self
+            .nodes
+            .lock()
+            .expect("信任锁")
+            .get(&(id.as_str().to_owned(), kind.as_str().to_owned()))
+            .cloned())
+    }
+
+    async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError> {
+        Ok(self
+            .nodes
+            .lock()
+            .expect("信任锁")
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    async fn nodes_for(&self, id: &NodeId) -> Result<Vec<NodeRecord>, PortError> {
+        Ok(self
+            .nodes
+            .lock()
+            .expect("信任锁")
+            .iter()
+            .filter(|((node, _), _)| node == id.as_str())
+            .map(|(_, record)| record.clone())
+            .collect())
+    }
+
+    async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
+        Ok(self
+            .keys
+            .lock()
+            .expect("信任锁")
+            .get(&(peer.kind().to_owned(), peer.id_text().to_owned()))
+            .cloned())
+    }
+
+    async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
+        Ok(self.pairing(id.as_str()))
+    }
+
+    async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
+        Ok(self.peers.lock().expect("信任锁").get(id.as_str()).cloned())
+    }
+
+    async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn put_node(&self, _write: NodeWrite) -> Result<(), PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn revoke_device(&self, write: DeviceRevocation) -> Result<(), PortError> {
+        let mut devices = self.devices.lock().expect("信任锁");
+        let Some(record) = devices.get(write.device.as_str()).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Device(write.device)));
+        };
+        // 存储层用 `COALESCE(revoked_at, ?)`：重复撤销保留首次时间。
+        let revoked_at = record
+            .revoked_at()
+            .cloned()
+            .unwrap_or_else(|| write.context.at.clone());
+        let revoked = DeviceRecord::try_new(
+            record.device_id().clone(),
+            record.display_name(),
+            record.public_key_fingerprint().clone(),
+            record.scopes().clone(),
+            DeviceState::Revoked,
+            record.created_at().clone(),
+            record.last_seen_at().cloned(),
+            Some(revoked_at),
+        )
+        .expect("撤销后的设备记录合法");
+        self.append_audits(&write.context.at, write.context.audit);
+        devices.insert(write.device.as_str().to_owned(), revoked);
+        Ok(())
+    }
+
+    async fn revoke_node(&self, write: NodeRevocation) -> Result<(), PortError> {
+        let mut nodes = self.nodes.lock().expect("信任锁");
+        if !nodes.keys().any(|(node, _)| node == write.node.as_str()) {
+            return Err(PortError::NotFound(EntityRef::Node(write.node)));
+        }
+        for ((node, _), record) in nodes.iter_mut() {
+            if node != write.node.as_str() {
+                continue;
+            }
+            let revoked_at = record
+                .revoked_at()
+                .cloned()
+                .unwrap_or_else(|| write.context.at.clone());
+            *record = NodeRecord::try_new(
+                record.node_id().clone(),
+                record.display_name(),
+                record.kind(),
+                record.node_public_key_fingerprint().clone(),
+                record.grants().clone(),
+                NodeState::Revoked,
+                record.owner_endpoint().map(str::to_owned),
+                record.created_at().clone(),
+                record.last_connected_at().cloned(),
+                Some(revoked_at),
+            )
+            .expect("撤销后的节点记录合法");
+        }
+        self.append_audits(&write.context.at, write.context.audit);
+        Ok(())
+    }
+
+    async fn create_pairing(&self, write: PairingWrite) -> Result<(), PortError> {
+        if write.record.state() != PairingState::Created {
+            return Err(PortError::InvalidRequest(
+                "a pairing must be registered in the created state",
+            ));
+        }
+        let mut pairings = self.pairings.lock().expect("信任锁");
+        if pairings.contains_key(write.record.id().as_str()) {
+            return Err(PortError::Conflict(ConflictKind::AlreadyExists));
+        }
+        self.append_audits(&write.context.at, write.context.audit);
+        pairings.insert(write.record.id().as_str().to_owned(), write.record);
+        Ok(())
+    }
+
+    /// 与存储层同款：原子检查「未过期、仍为 `created`、绑定一致、集合不超出登记值」，写 peer 行并推进到
+    /// `pending_confirmation`。HMAC/证明校验属 HTTPS claim 路径（本切片未落地），不在本替身内。
+    async fn claim_pairing(
+        &self,
+        write: PairingClaimWrite,
+    ) -> Result<PairingClaimOutcome, PortError> {
+        let pairing_id = write.claim.pairing().clone();
+        let mut pairings = self.pairings.lock().expect("信任锁");
+        let Some(record) = pairings.get(pairing_id.as_str()).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Pairing(pairing_id)));
+        };
+        if self
+            .peers
+            .lock()
+            .expect("信任锁")
+            .contains_key(pairing_id.as_str())
+        {
+            return Err(PortError::Conflict(ConflictKind::AlreadyClaimed));
+        }
+        if record.state() != PairingState::Created {
+            return Err(PortError::Conflict(ConflictKind::AlreadyClaimed));
+        }
+        if write.context.at.as_str() >= record.expires_at().as_str() {
+            return Err(PortError::Conflict(ConflictKind::Expired));
+        }
+        if write.claim.peer().host_binding() != record.host_binding() {
+            return Err(PortError::InvalidRequest("pairing host binding mismatch"));
+        }
+        let claimed = PairingRecord::try_new(
+            record.id().clone(),
+            record.target(),
+            PairingState::PendingConfirmation,
+            Some(write.claim.peer().display_name().to_owned()),
+            record.requested_scopes().clone(),
+            record.requested_grants().clone(),
+            record.secret_digest().clone(),
+            record.host_binding(),
+            record.created_at().clone(),
+            record.expires_at().clone(),
+            Some(write.context.at.clone()),
+            None,
+            None,
+        )
+        .expect("认领后的配对记录合法");
+        self.append_audits(&write.context.at, write.context.audit);
+        self.peers
+            .lock()
+            .expect("信任锁")
+            .insert(pairing_id.as_str().to_owned(), write.claim.peer().clone());
+        pairings.insert(pairing_id.as_str().to_owned(), claimed.clone());
+        Ok(PairingClaimOutcome { pairing: claimed })
+    }
+
+    async fn settle_pairing(
+        &self,
+        write: PairingSettlementWrite,
+    ) -> Result<TrustRecordRef, PortError> {
+        if let Some(error) = self.settle_failure.lock().expect("信任锁").take() {
+            return Err(error);
+        }
+        let mut pairings = self.pairings.lock().expect("信任锁");
+        let Some(record) = pairings.get(write.pairing.as_str()).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Pairing(write.pairing)));
+        };
+        if record.state().is_terminal() {
+            return Err(terminal_conflict(record.state()));
+        }
+        if record.claimed_at().is_none() {
+            return Err(PortError::InvalidRequest("pairing has not been claimed"));
+        }
+        if record.state() != PairingState::PendingConfirmation {
+            return Err(PortError::Conflict(ConflictKind::Consumed));
+        }
+        let Some(peer) = self
+            .peers
+            .lock()
+            .expect("信任锁")
+            .get(write.pairing.as_str())
+            .cloned()
+        else {
+            return Err(PortError::Corrupt("claimed pairing has no peer row"));
+        };
+        let reference = match peer.id() {
+            PeerIdentity::Device(id) => TrustRecordRef::Device(id.clone()),
+            PeerIdentity::Node(id) => TrustRecordRef::Node(id.clone()),
+        };
+        let terminal = match &write.settlement {
+            PairingSettlement::Rejected { .. } => PairingState::Rejected,
+            PairingSettlement::Approved {
+                granted_scopes,
+                granted_grants,
+            } => {
+                if write.context.at.as_str() >= record.expires_at().as_str() {
+                    return Err(PortError::Conflict(ConflictKind::Expired));
+                }
+                if !is_subset(granted_scopes.iter(), record.requested_scopes().iter())
+                    || !is_subset(granted_grants.iter(), record.requested_grants().iter())
+                {
+                    return Err(PortError::InvalidRequest(
+                        "granted sets must not exceed the requested sets",
+                    ));
+                }
+                match record.target() {
+                    PairingTarget::Device => {
+                        if !granted_grants.is_empty() {
+                            return Err(PortError::InvalidRequest(
+                                "a device pairing must not carry grants",
+                            ));
+                        }
+                        self.approve_device(&peer, granted_scopes, &write.context.at);
+                    }
+                    PairingTarget::Node => {
+                        if !granted_scopes.is_empty() {
+                            return Err(PortError::InvalidRequest(
+                                "a node pairing must not carry scopes",
+                            ));
+                        }
+                        self.approve_node(&peer, granted_grants, &write.context.at);
+                    }
+                }
+                PairingState::Approved
+            }
+        };
+        self.append_audits(&write.context.at, write.context.audit);
+        let settled = PairingRecord::try_new(
+            record.id().clone(),
+            record.target(),
+            terminal,
+            record.display_name().map(str::to_owned),
+            record.requested_scopes().clone(),
+            record.requested_grants().clone(),
+            record.secret_digest().clone(),
+            record.host_binding(),
+            record.created_at().clone(),
+            record.expires_at().clone(),
+            record.claimed_at().cloned(),
+            (terminal == PairingState::Approved).then(|| write.context.at.clone()),
+            terminal.is_terminal().then(|| write.context.at.clone()),
+        )
+        .expect("落定后的配对记录合法");
+        pairings.insert(write.pairing.as_str().to_owned(), settled);
+        Ok(reference)
+    }
+
+    async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+}
+
+impl FakeTrust {
+    fn append_audits(&self, at: &Timestamp, audit: Vec<PendingAudit>) {
+        let mut audits = self.audits.lock().expect("信任锁");
+        for pending in audit {
+            audits.push(
+                AuditRecord::try_new(
+                    at.clone(),
+                    pending.action,
+                    pending.actor,
+                    pending.via_node,
+                    pending.local_principal_ref,
+                    pending.target,
+                    pending.outcome,
+                    pending.detail_digest,
+                )
+                .expect("审计行合法"),
+            );
+        }
+    }
+
+    /// 批准（设备）：与存储层的 `approve_device` 同形状。
+    fn approve_device(&self, peer: &PairingPeer, granted_scopes: &ScopeSet, at: &Timestamp) {
+        let PeerIdentity::Device(device_id) = peer.id() else {
+            unreachable!("目标族已由写集保证")
+        };
+        let record = DeviceRecord::try_new(
+            device_id.clone(),
+            peer.display_name(),
+            peer.public_key_fingerprint(),
+            granted_scopes.clone(),
+            DeviceState::Active,
+            at.clone(),
+            None,
+            None,
+        )
+        .expect("设备记录合法");
+        self.seed_device(record);
+    }
+
+    /// 批准（节点）：对端角色恒为 `Access`，`ownerEndpoint` 为 `None`。
+    fn approve_node(&self, peer: &PairingPeer, granted_grants: &GrantSet, at: &Timestamp) {
+        let PeerIdentity::Node(node_id) = peer.id() else {
+            unreachable!("目标族已由写集保证")
+        };
+        let record = NodeRecord::try_new(
+            node_id.clone(),
+            peer.display_name(),
+            NodeKind::Access,
+            peer.public_key_fingerprint(),
+            granted_grants.clone(),
+            NodeState::Paired,
+            None,
+            at.clone(),
+            None,
+            None,
+        )
+        .expect("节点记录合法");
+        self.nodes.lock().expect("信任锁").insert(
+            (
+                node_id.as_str().to_owned(),
+                NodeKind::Access.as_str().to_owned(),
+            ),
+            record,
+        );
+    }
+}
+
+/// `left ⊆ right`（存储层的同款判定：集合已去重）。
+fn is_subset<'a>(
+    left: impl Iterator<Item = &'a str>,
+    right: impl Iterator<Item = &'a str>,
+) -> bool {
+    let right: Vec<&str> = right.collect();
+    left.into_iter().all(|item| right.contains(&item))
+}
+
+/// 终态配对上的操作（存储层的 `terminal_conflict`）：`expired` → `Expired`，其余终态 → `Consumed`。
+fn terminal_conflict(state: PairingState) -> PortError {
+    if state == PairingState::Expired {
+        PortError::Conflict(ConflictKind::Expired)
+    } else {
+        PortError::Conflict(ConflictKind::Consumed)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 熵源与连接关闭（配对方法的注入口）
+// ---------------------------------------------------------------------------------------------
+
+/// 确定性熵源（只为可判定，不作密码学用途）。
+#[derive(Clone, Default)]
+pub(crate) struct FakeEntropy {
+    state: Arc<Mutex<u64>>,
+}
+
+impl EntropySource for FakeEntropy {
+    fn fill(&self, out: &mut [u8]) -> Result<(), EntropyError> {
+        let mut state = self.state.lock().expect("熵源锁");
+        for byte in out.iter_mut() {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            *byte = (*state >> 33) as u8;
+        }
+        Ok(())
+    }
+}
+
+/// 记录撤销后关闭了哪些设备/节点（断言「提交后才关闭」的观察点）。
+#[derive(Clone, Default)]
+pub(crate) struct RecordingCloser {
+    devices: Arc<Mutex<Vec<String>>>,
+    nodes: Arc<Mutex<Vec<String>>>,
+}
+
+impl RecordingCloser {
+    pub(crate) fn closed_devices(&self) -> Vec<String> {
+        self.devices.lock().expect("关闭锁").clone()
+    }
+
+    pub(crate) fn closed_nodes(&self) -> Vec<String> {
+        self.nodes.lock().expect("关闭锁").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ConnectionCloser for RecordingCloser {
+    async fn close_device(&self, device: &DeviceId) {
+        self.devices
+            .lock()
+            .expect("关闭锁")
+            .push(device.as_str().to_owned());
+    }
+
+    async fn close_node(&self, node: &NodeId) {
+        self.nodes
+            .lock()
+            .expect("关闭锁")
+            .push(node.as_str().to_owned());
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // 测试世界
 // ---------------------------------------------------------------------------------------------
+
+/// 测试世界默认的本机 canonical origin（`daemon.public_origin`；组合根注入到 `PairingSessions`）。
+pub(crate) const TEST_PUBLIC_ORIGIN: &str = "https://work-pc.example.test";
 
 /// 一套 fake 世界 + 由它装配出的路由，附带测试要观察的句柄。
 pub(crate) struct TestWorld {
@@ -1060,29 +1587,74 @@ pub(crate) struct TestWorld {
     pub(crate) audit: FakeAudit,
     pub(crate) keystore: FakeKeystore,
     pub(crate) daemon: FakeDaemon,
+    pub(crate) trust: FakeTrust,
+    pub(crate) authority: Arc<Authority>,
+    pub(crate) closer: Arc<RecordingCloser>,
+    pub(crate) core: Arc<UseCases>,
+    public_origin: Option<String>,
     temporary: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl TestWorld {
     pub(crate) fn new() -> Self {
+        Self::with_public_origin(Some(TEST_PUBLIC_ORIGIN))
+    }
+
+    /// 显式控制 `daemon.public_origin`（`None` 覆盖「未配置 → 配对方法失败关闭」的分支）。
+    pub(crate) fn with_public_origin(origin: Option<&str>) -> Self {
         let clock = FakeClock::new();
+        let keystore = FakeKeystore::default();
+        let trust = FakeTrust::default();
+        let exports = FakeExports::default().with_clock(clock.clone());
+        let audit = FakeAudit::default();
+        let config = FakeConfig::default();
+        let authority = Arc::new(Authority::new(
+            NodeId::new("bdb2ec20-f98c-4d87-b789-e540d527ef87").expect("本机 node id"),
+            KeyHandle::new("node-identity").expect("key handle"),
+            Arc::new(keystore.clone()),
+            Arc::new(FakeEntropy::default()),
+            Arc::new(clock.clone()),
+        ));
+        let core = Arc::new(Self::assemble_use_cases(
+            &clock,
+            &store_arc(),
+            &deliveries_arc(),
+            &exports,
+            &audit,
+            &config,
+            &trust,
+        ));
         Self {
-            exports: FakeExports::default().with_clock(clock.clone()),
-            config: FakeConfig::default(),
-            audit: FakeAudit::default(),
-            keystore: FakeKeystore::default(),
-            daemon: FakeDaemon::default(),
             clock,
+            config,
+            exports,
+            audit,
+            keystore,
+            daemon: FakeDaemon::default(),
+            trust,
+            authority,
+            closer: Arc::new(RecordingCloser::default()),
+            core,
+            public_origin: origin.map(str::to_owned),
             temporary: Arc::default(),
         }
     }
 
-    pub(crate) fn router(&self) -> LocalAdminRouter {
-        let clock: Arc<dyn Clock> = Arc::new(self.clock.clone());
-        let store: Arc<dyn SessionStore> = Arc::new(NotTouched);
-        let deliveries: Arc<dyn RemoteDeliveryStore> = Arc::new(NotTouched);
-        let exports: Arc<dyn ExportStore> = Arc::new(self.exports.clone());
-        let audit: Arc<dyn AuditStore> = Arc::new(self.audit.clone());
+    /// 端口 → `UseCases` 的装配（`router()` 与测试共用同一份实例：测试可以像 HTTPS claim 路径
+    /// 那样直接调 `UseCases::claim_pairing` 模拟认领）。
+    #[allow(clippy::too_many_arguments)] // 与 `UseCaseDeps` 的字段一一对应
+    fn assemble_use_cases(
+        clock: &FakeClock,
+        store: &Arc<dyn SessionStore>,
+        deliveries: &Arc<dyn RemoteDeliveryStore>,
+        exports: &FakeExports,
+        audit: &FakeAudit,
+        config: &FakeConfig,
+        trust: &FakeTrust,
+    ) -> UseCases {
+        let clock: Arc<dyn Clock> = Arc::new(clock.clone());
+        let exports: Arc<dyn ExportStore> = Arc::new(exports.clone());
+        let audit: Arc<dyn AuditStore> = Arc::new(audit.clone());
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: store.clone(),
@@ -1096,29 +1668,57 @@ impl TestWorld {
             },
             BrokerConfig::default(),
         ));
-        let core = Arc::new(UseCases::new(UseCaseDeps {
+        UseCases::new(UseCaseDeps {
             broker,
-            store,
-            deliveries,
+            store: store.clone(),
+            deliveries: deliveries.clone(),
             exports,
-            trust: Arc::new(NotTouched),
+            trust: Arc::new(trust.clone()),
             audit,
-            config: Arc::new(self.config.clone()),
+            config: Arc::new(config.clone()),
             attachments: Arc::new(NotTouched),
             catalog: Arc::new(FakeCatalog::with_agents(vec![
                 AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex")
                     .expect("agent ref"),
             ])),
-            clock: clock.clone(),
+            clock,
             ids: Arc::new(FakeIds),
-        }));
+        })
+    }
+
+    pub(crate) fn router(&self) -> LocalAdminRouter {
         LocalAdminRouter::new(LocalAdminDeps {
             daemon: Arc::new(self.daemon.clone()),
-            core,
+            core: self.core.clone(),
             keystore: Arc::new(self.keystore.clone()),
             audit: Arc::new(self.audit.clone()),
-            clock,
+            clock: Arc::new(self.clock.clone()),
+            pairing: Arc::new(PairingSessions::new(
+                self.authority.clone(),
+                self.public_origin.clone(),
+                self.closer.clone(),
+            )),
         })
+    }
+
+    /// 模拟 Owner 侧的 claim（HTTPS claim 路径属后续切片）：只提交与存储层相同的事实
+    /// （peer 行 + 状态推进到 `pending_confirmation`），HMAC/绑定校验不在本替身的职责里。
+    ///
+    /// 请求集合传空集：存储层保留的是登记值（`owned_pairing.requested_*`），claim 的请求集合只用于
+    /// `verify_claim` 的「不得超出登记值」判定，不落库（`storage-sqlite` 同款）。
+    pub(crate) async fn claim(
+        &self,
+        pairing_id: &PairingId,
+        peer: PairingPeer,
+    ) -> Result<PairingClaimOutcome, PortError> {
+        let claim = PairingClaim::try_new(
+            pairing_id.clone(),
+            peer,
+            ScopeSet::empty(),
+            GrantSet::empty(),
+        )
+        .expect("测试用的 claim 载荷与目标族一致");
+        self.core.claim_pairing(&Actor::LocalCli, claim).await
     }
 
     /// 时钟当前文本（测试断言 `createdAt`/`revokedAt` 用）。
