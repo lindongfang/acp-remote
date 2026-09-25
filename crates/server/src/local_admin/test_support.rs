@@ -1136,6 +1136,17 @@ impl FakeTrust {
             .expect("信任锁")
             .insert(record.device_id().as_str().to_owned(), record);
     }
+
+    /// 直接预置一条节点记录（`node.list` 的 `pending` 边界用例）。
+    pub(crate) fn seed_node(&self, record: NodeRecord) {
+        self.nodes.lock().expect("信任锁").insert(
+            (
+                record.node_id().as_str().to_owned(),
+                record.kind().as_str().to_owned(),
+            ),
+            record,
+        );
+    }
 }
 
 #[async_trait::async_trait]

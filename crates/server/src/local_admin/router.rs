@@ -2066,7 +2066,10 @@ mod tests {
     // 设备/节点配对与信任（§5.3/§5.4、[R42]–[R48]）
     // -----------------------------------------------------------------------------------------
 
-    use acp_core::model::{DeviceId, DeviceState, NodeId, NodeState, PairingPeer, PeerIdentity};
+    use acp_core::model::{
+        DeviceId, DeviceRecord, DeviceState, NodeId, NodeRecord, NodeState, PairingPeer,
+        PeerIdentity,
+    };
 
     use crate::local_admin::pairing::PAIRING_WINDOW_MS;
     use crate::local_admin::test_support::{TEST_PUBLIC_ORIGIN, test_nonce, test_public_key};
@@ -2909,6 +2912,86 @@ mod tests {
         );
         assert_eq!(code, LocalErrorCode::NotFound);
         assert!(world.closer.closed_nodes().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_methods_include_pending_and_revoked_records() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let pending_device = DeviceRecord::try_new(
+            DeviceId::new("2ae1c07c-0000-4000-8000-0000000000c1").expect("device id"),
+            "Pending Phone",
+            test_public_key().fingerprint(),
+            ScopeSet::empty(),
+            DeviceState::Pending,
+            Timestamp::new("2026-09-18T09:00:00.000Z").expect("timestamp"),
+            None,
+            None,
+        )
+        .expect("pending 设备记录合法");
+        world.trust.seed_device(pending_device);
+        let pending_node = NodeRecord::try_new(
+            NodeId::new("2ae1c07c-0000-4000-8000-0000000000c2").expect("node id"),
+            "Pending Node",
+            NodeKind::Access,
+            test_public_key().fingerprint(),
+            GrantSet::empty(),
+            NodeState::Pending,
+            None,
+            Timestamp::new("2026-09-18T09:00:00.000Z").expect("timestamp"),
+            None,
+            None,
+        )
+        .expect("pending 节点记录合法");
+        world.trust.seed_node(pending_node);
+
+        // 再走一遍完整流程（active → revoked），使两个族各有 pending 与 revoked 两条。
+        let device_pairing = activate_device(&world, &router).await;
+        result_of(
+            &router
+                .handle(request(
+                    Method::DeviceRevoke,
+                    json!({"deviceId": DEVICE_ID}),
+                ))
+                .await,
+        );
+        assert_eq!(
+            world.trust.pairing(&device_pairing).expect("配对").state(),
+            PairingState::Approved
+        );
+        let node_pairing = begin_and_claim_node(&world, &router).await;
+        result_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": node_pairing, "grants": ["grant.observe"]}),
+                ))
+                .await,
+        );
+        result_of(
+            &router
+                .handle(request(Method::NodeRevoke, json!({"nodeId": NODE_ID})))
+                .await,
+        );
+
+        let listed = result_of(&router.handle(request(Method::DeviceList, json!({}))).await);
+        let states: Vec<&str> = listed["devices"]
+            .as_array()
+            .expect("数组")
+            .iter()
+            .map(|record| record["state"].as_str().expect("state"))
+            .collect();
+        assert_eq!(states, vec!["revoked", "pending"], "含 pending 与 revoked");
+        let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
+        let states: Vec<&str> = listed["nodes"]
+            .as_array()
+            .expect("数组")
+            .iter()
+            .map(|record| record["state"].as_str().expect("state"))
+            .collect();
+        assert_eq!(states, vec!["revoked", "pending"]);
+        assert_eq!(world.trust.device_count(), 2);
+        assert_eq!(world.trust.node_count(), 2);
     }
 
     #[tokio::test]
