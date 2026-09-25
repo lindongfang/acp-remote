@@ -27,14 +27,14 @@
 
 ## 6. Merge Unit
 
-- [ ] 6.1 DU1；前置：5.2；主 Agent。核实目标仓库及主分支当前提交（`git rev-parse refs/heads/main` + `git status --porcelain`）。完成条件：准确引用与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。
-- [ ] 6.2 DU1；前置：6.1；集成 Agent。基于已核实基线构造候选（分支 `feat/test-temp-dir-cleanup`），固定基线与候选提交。完成条件：候选提交、基线提交与构建结果写入 `verification.md`。
-- [ ] 6.3 DU1；前置：6.2；主 Agent。候选轮 [PV1] + [PV2] 全绿。完成条件：版本、范围、退出码与日志路径关联到 `verification.md`。
-- [ ] 6.4 DU1；前置：6.2，可与 6.3 并行；独立 reviewer。只读检视固定候选（范围同 [RV1]）。完成条件：报告写入 `verification.md`；修复后由新子 Agent 复核。
-- [ ] 6.5 DU1；前置：6.3、6.4；主 Agent。Main E2E 为 not-applicable：核对降级理由、依据与 `downgrade_approval` 记录完整，并核对替代检查 [PV1]/[PV2] 的结果证据齐备。完成条件：核对结论写入 `verification.md`。
-- [ ] 6.6 DU1；前置：6.3、6.4、6.5 且 premerge 门 PASS；集成 Agent。本地合入 `refs/heads/main`（优先 `--ff-only`），不推送远端。完成条件：合入提交与树哈希记录到 `reports/integrator.md` 与 `verification.md`。
-- [ ] 6.7 DU1；前置：6.6；集成 Agent。主分支回归 [PV1]。完成条件：EXIT=0，日志 `reports/main-verify.log`。
-- [ ] 6.8 DU1；前置：6.7；主 Agent。合入差异审查：相对已验收候选无新增差异则引用 [RV1] 既有审查，否则补审。完成条件：结论与依据写入 `verification.md`。
+- [x] 6.1 DU1；前置：5.2；主 Agent。核实目标仓库及主分支当前提交（`git rev-parse refs/heads/main` + `git status --porcelain`）。完成条件：准确引用与核实证据写入 `verification.md`；无法确认时保持 BLOCKED。
+- [x] 6.2 DU1；前置：6.1；集成 Agent。基于已核实基线构造候选（分支 `feat/test-temp-dir-cleanup`），固定基线与候选提交。完成条件：候选提交、基线提交与构建结果写入 `verification.md`。
+- [x] 6.3 DU1；前置：6.2；主 Agent。候选轮 [PV1] + [PV2] 全绿。完成条件：版本、范围、退出码与日志路径关联到 `verification.md`。
+- [x] 6.4 DU1；前置：6.2，可与 6.3 并行；独立 reviewer。只读检视固定候选（范围同 [RV1]）。完成条件：报告写入 `verification.md`；修复后由新子 Agent 复核。
+- [x] 6.5 DU1；前置：6.3、6.4；主 Agent。Main E2E 为 not-applicable：核对降级理由、依据与 `downgrade_approval` 记录完整，并核对替代检查 [PV1]/[PV2] 的结果证据齐备。完成条件：核对结论写入 `verification.md`。
+- [x] 6.6 DU1；前置：6.3、6.4、6.5 且 premerge 门 PASS；集成 Agent。本地合入 `refs/heads/main`（优先 `--ff-only`），不推送远端。完成条件：合入提交与树哈希记录到 `reports/integrator.md` 与 `verification.md`。
+- [x] 6.7 DU1；前置：6.6；集成 Agent。主分支回归 [PV1]。完成条件：EXIT=0，日志 `reports/main-verify.log`。
+- [x] 6.8 DU1；前置：6.7；主 Agent。合入差异审查：相对已验收候选无新增差异则引用 [RV1] 既有审查，否则补审。完成条件：结论与依据写入 `verification.md`。
 
 ## 7. Final E2E
 
