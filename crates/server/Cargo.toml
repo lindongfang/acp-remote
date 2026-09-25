@@ -1,0 +1,54 @@
+[package]
+name = "server"
+description = "入站协议 adapter 的宿主；本切片只落地本地管理通道（transport::local 与 local_admin）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# 依赖方向以 docs/MODULE_ARCHITECTURE.md §5 为唯一判据（scripts/check-crate-boundaries.mjs 断言）：
+# `server` 被允许依赖 core / acp-protocol / sync-protocol / node-link-protocol / identity-auth /
+# windows-local-ipc。本切片（WP3a: transport::local + local_admin 的信封层）只需要 tokio 的类型与 safe API、
+# serde/serde_json 的信封编解码、tracing、sha2（§2.1 的用户标识哈希）与 uuid（两个随机标识 newtype）；
+# 方法路由与 core 用例接线属 WP3b/WP4，**不提前引入** core/acp-protocol/identity-auth 等依赖。
+[dependencies]
+# `rt`：`tokio::task::JoinSet` 与 `spawn`（管理连接上并存多条未完成请求，§4 规则 2 的 32 条上限需要它）；
+# `net`/`io-util`/`macros` 由 workspace 基线开启（Named Pipe / Unix socket 与连接读写）。
+tokio = { workspace = true, features = ["rt"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# 结构化日志：只写协议元数据与连接级原因，不写凭据、prompt 或完整敏感路径。
+tracing.workspace = true
+# §2.1 的 `<userSidHashHex>` = 用户标识字符串 UTF-8 字节的 SHA-256 小写 hex 前 16 字符。
+sha2.workspace = true
+# `InstanceId`（§2.1）与 `FacadeAttachmentId`（§3.1）的 16 字符小写 hex 随机来源（`v4` 已在 workspace 开启）。
+uuid.workspace = true
+# `LocalAdminHandler` 是可 dyn 化的异步 trait（与 core 的端口用同一个 proc-macro，不引入 runtime）。
+async-trait.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# WP2 冻结的 safe API（SDDL 创建首个 pipe 实例、当前用户 SID、已连接对端的 SID）；非 Windows 上该 crate
+# 编译为空 crate，因此调用点必须 cfg 门控（本 crate 的平台代码只在 platform/windows.rs 里出现）。
+windows-local-ipc = { path = "../../vendor/windows-local-ipc" }
+
+[target.'cfg(unix)'.dependencies]
+# `SO_PEERCRED` 取对端 uid（§2.2）：safe wrapper，workspace 固定 unsafe_code = "forbid"。
+nix.workspace = true
+
+# 集成测试目标自己也用到这批依赖（同一个 proc-macro、JSON、sha2、runtime），在测试目标上显式声明，
+# 不依赖「普通依赖是否对测试目标可见」这一隐式前提。
+[dev-dependencies]
+async-trait.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# Windows 用例直接核对 pipe 名里的 SID 哈希规则（§2.1），需要与实现同一个 SID 来源。
+windows-local-ipc = { path = "../../vendor/windows-local-ipc" }
+
+[lints]
+workspace = true
