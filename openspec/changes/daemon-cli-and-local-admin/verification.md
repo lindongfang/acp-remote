@@ -41,6 +41,8 @@
 | 2.11, 2.13 | coder / implement / work-package | eef75f4 | CHECK / PV3（WP3b2 部分） | reports/wp3b2-handoff.md（日志 reports/wp3-server-pairing.log、reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | 112 passed（新增 19）；fmt/clippy（Win+Linux 目标）零告警；npm run verify 627 passed |
 | 2.23 | coder / implement / work-package | 313d2a2（含 0968c7a；报告 reports/wp323-handoff.md） | DELIVERY / NOT_APPLICABLE | reports/wp323-handoff.md | PASS / NEW | 三个 revoke 入口的前置读取 + `local.not_found`；fake 保真修正使断言非退化；RED 证据已留 |
 | 2.23 | coder / implement / work-package | 313d2a2 | CHECK / PV3（2.23 轮） | reports/wp323-handoff.md（日志 reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | 114 passed；fmt/clippy 零告警；`npm run check` EXIT=0 |
+| 3.6 | reviewer / work-package review / work-package | 313d2a2 | REVIEW / RV1 | reports/rv1-wp3.md | PASS / NEW | 隔离子 Agent（deepseek/deepseek-flash）；C1–C10 静态核对；无 CRITICAL/MAJOR；F1/F2/F3/F6 交 2.24，F4/F5 已由主 Agent 收敛措辞 |
+| 3.5 | main（代行 coder 的 Project Verify）/ project-verify / work-package | 313d2a2 | CHECK / PV1、PV2、PV3、PV5（WP3 最终轮） | reports/wp3-final-verify.log、reports/pv5-windows-ipc.log | PASS / NEW | `npm run verify` EXIT=0（75 个测试块全 ok）；合同门禁全绿；Windows IPC 用例 EXIT=0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | BLOCKED / PENDING | `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -66,6 +68,8 @@
 - 2026-09-25（WP3b2 裁决，主 Agent）：**配对 URL 的 origin 来源与 QR payload 组装方式**。D1：`public_origin: Option<String>` 由 WP4 组合根注入 `PairingSessions::new`（server 不读配置、不经 `DaemonControl` 取值）；`None` 时 `device.pair.begin`/`node.pair.begin(owner)` 在**任何副作用之前**失败关闭并回 `local.unavailable`（§6 无「配置缺失」专用码，语义最贴近；成因需在 message 与注释中说明）。D2：`crates/server` 新增 `sync-protocol` + `node-link-protocol` 生产依赖（§5 矩阵允许），用两边的 `QrPayload` 组装 `#data=`，不手写 wire 键名，并补往返测试；若协议 crate 有既有 URL helper 优先使用，否则用 base64 `URL_SAFE_NO_PAD`（server 不引入 `acpr-wire`）。影响：WP4 的 `PairingSessions` 构造签名 + server 的两条依赖边 + `Cargo.lock`。依据：WP3b2 实现者的 D1/D2 提问与本会话裁定。
 - 2026-09-25（WP3b2 交付后，主 Agent 裁定）：**五条开放项处置**。(1) `*.revoke` 重试语义与 §7 冲突——**实现侧修正**（已核实 `export.rs:401`/`trust.rs:519`/`trust.rs:552` 均为 `COALESCE(revoked_at, ?)`；新增任务 2.23：三个 revoke 入口先读、不存在或已撤销 → `local.not_found`）。(2) 待澄清项作废：`PairingRecord` 本身持久化 `requested_scopes`/`requested_grants`（`core/src/model/identity.rs:440-441`），因此 status 返回的就是登记的请求集合，**不是偏离**。(3) `consumed → "approved"`、设备 `pending_confirmation → "claimed"` 的字面量映射——在 §5.3/§5.4 的封闭词表内取值，接受。(4) `preset.*` 在 `device.pair.begin` 被拒——与 §5.3「取值限于 `pack.*` 与命令名集合」的字面表述一致，接受（展开由 CLI 承担）。(5) `window::add_millis` 与 `storage-sqlite` 的日期算术重复——core 未暴露时间工具，接受并登记为已知重复（不新增跨 crate 依赖）。
 
+- 2026-09-25（RV1-WP3 后，主 Agent）：**F4/F5 契约措辞收敛**（不改语义）——`docs/LOCAL_ADMIN_PROTOCOL.md` §7 的「审计与日志」条改为「拒绝连接 + §14.2 类别覆盖的安全动作 + 撤销记审计；方法失败只记结构化日志」（§14.2 封闭词表无「方法失败」，不得复用 `authorization.denied`）；`specs/local-admin-methods/spec.md` 场景 WHEN 列表同步。`specs/local-admin-channel/spec.md` 的 attachment MUST 句加「facade 落地后」范围限定并指向 §3.1 实现状态注记。影响：无行为变化，仅合同/规范措辞与实现口径对齐。新增任务 2.24（F1/F2/F3/F6 实现侧修复）。
+
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
@@ -90,6 +94,12 @@
 | RV1-WP2-F1 | 6361f5d | RV1-WP2（隔离子 Agent） | vendor/windows-local-ipc/Cargo.toml:32 | MINOR：注释称 `fs4`/`clap` 引入 windows-sys 0.61.2，实际由 `mio`/`tokio` 引入 | 并入任务 2.21 顺手修复（一行注释） | 2.21 交付时由 RV1-WP3 复核 |
 | RV1-WP2-F2 | 6361f5d | 同上 | vendor/windows-local-ipc/Cargo.toml:16 | MINOR：`license = "MIT OR Apache-2.0"`，但仓库仅含 Apache-2.0 正文 | 并入任务 2.21：改为 `license = "Apache-2.0"` | 2.21 交付时由 RV1-WP3 复核 |
 | RV1-WP2-F3 | 6361f5d | 同上 | reports/du1-pv1.log、reports/pv5-windows-ipc.log、wp2-handoff.md | MINOR：两个 [PV1] WP2 轮未记退出码；fmt 无运行记录 | 主 Agent 已补录：`du1-pv1.log` 追加 `EXIT(npm run check)=0` 轮次；`pv5-windows-ipc.log` 追加 `EXIT(cargo fmt -- --check)=0`（均真实执行） | 追加日志已核实 |
+| RV1-WP3-F1 | 313d2a2 | RV1-WP3（隔离子 Agent） | crates/server/src/local_admin/router.rs:461-470 | MINOR：`import.remove` 缺「未知合法 id」常驻断言 | 并入任务 2.24 | 2.24 交付后由 RV2 复核 |
+| RV1-WP3-F2 | 313d2a2 | 同上 | crates/server/src/local_admin/test_support.rs:493-505 | MINOR：`FakeExports::put_export` 比真实存储更严（未撤销的既有 id 在存储里是覆盖 `Ok`）⇒ `export.create` 查重断言无但例能力 | 并入任务 2.24（改 fake 同形 + RED 验证） | 同上 |
+| RV1-WP3-F3 | 313d2a2 | 同上 | crates/server/src/transport/local/platform/windows.rs:67-80 | MINOR：`connect()`/补建失败时 `pending` 保持 None ⇒ endpoint 之后永久不可用（与代码自述不变量冲突） | 并入任务 2.24（失败时重建 pending 或先补建再 connect） | 同上 |
+| RV1-WP3-F4 | 313d2a2 | 同上 | docs/LOCAL_ADMIN_PROTOCOL.md:594 + spec 场景 WHEN | MINOR（契约措辞）：§7 要求「方法失败」入审计，但 §14.2 封闭类别无此类别 | **主 Agent 已收敛**：§7 改为「方法失败只记结构化日志」并说明不得复用其他类别；spec 同步 | 已改由 workflow check --stage plan 复验（PASS） |
+| RV1-WP3-F5 | 313d2a2 | 同上 | specs/local-admin-channel/spec.md（MUST 句） | MINOR（契约措辞）：`0x02` 立即分配 `FacadeAttachmentId` 在本切片无可行路径 | **主 Agent 已收敛**：MUST 句加「facade 落地后」限定并指向 §3.1 注记 | 同上 |
+| RV1-WP3-F6 | 313d2a2 | 同上 | params.rs:317-326、envelope.rs:255-262 | SUGGESTION：`ProviderConfigure` 的 Debug 可打印明文凭据；两处不可达分支 | 并入任务 2.24（手写 Debug + 清理/兜底不可达分支） | 同上 |
 | RV1-WP2-R1（残余风险） | 6361f5d | RV1-WP2 | crates/server/src/transport/local/platform/windows.rs（后续实例） | 风险（非缺陷）：后续实例 DACL 是否继承首实例未证实 | 已登记入 Dependency Handoffs；[PV5] 在 WP3b/WP4 用 `GetSecurityInfo`/跨账号用例钉死 | 待 [PV5] |
 
 ## Merge History

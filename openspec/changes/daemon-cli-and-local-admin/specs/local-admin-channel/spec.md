@@ -53,7 +53,7 @@ endpoint SHALL 只允许启动 Daemon 的同一 OS 用户连接（Windows 使用
 
 ### Requirement: channel 用途绑定
 
-第一条 frame 的 channel SHALL 决定连接用途：管理连接可在一次会话内承载多个请求/响应，`0x02` ACP 连接是长期双向流；同一连接上出现与首帧不同的 channel 时 MUST 关闭连接。`0x02` 连接建立即分配新的 `FacadeAttachmentId`，连接结束即作废；该标识 MUST NOT 与 Node Link 的 `attachmentId` 共用字段或跨层传递。本切片 `0x02` 只到连接级处理：facade 语义缺席时 MUST 以 design 定案的方式明确失败（不静默吞字节、不伪造 ACP 响应）。
+第一条 frame 的 channel SHALL 决定连接用途：管理连接可在一次会话内承载多个请求/响应，`0x02` ACP 连接是长期双向流；同一连接上出现与首帧不同的 channel 时 MUST 关闭连接。`0x02` 连接建立即分配新的 `FacadeAttachmentId`，连接结束即作废（**facade 落地后**；本切片 facade 缺席期不分配，见 `docs/LOCAL_ADMIN_PROTOCOL.md` §3.1 实现状态注记）；该标识 MUST NOT 与 Node Link 的 `attachmentId` 共用字段或跨层传递。本切片 `0x02` 只到连接级处理：facade 语义缺席时 MUST 以 design 定案的方式明确失败（不静默吞字节、不伪造 ACP 响应）。
 
 #### Scenario: channel 混用被拒绝
 
