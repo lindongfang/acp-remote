@@ -17,6 +17,7 @@
 //! 审计元数据（带 `owner_node_id`/`export_id`），本地管理动作不写它——两者混在一张表里会让「这条审计
 //! 是不是本机产生的」不可判定。
 
+pub(crate) mod audit;
 pub(crate) mod export;
 pub(crate) mod local_config;
 pub(crate) mod trust;
