@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use app::{ClientOutcome, DaemonLock, outcome_of};
 use serde_json::{Value, json};
 use server::local_admin::Method;
+#[cfg(unix)]
+use support::run_start_once_with_env;
 use support::{Daemon, Stdin, failure_code, params, params_of, run_cli, run_start_once};
 
 /// 一个指向真实可执行文件的 Agent profile：`daemon.status.agents[].available` 因此为 `true`
@@ -170,7 +172,10 @@ fn an_unusable_endpoint_refuses_start_without_degrading() {
     std::fs::create_dir_all(&elsewhere).expect("目录");
     std::os::unix::fs::symlink(&elsewhere, xdg.join("acp-remote")).expect("符号链接");
 
-    let (status, _stdout, stderr) = run_start_once(daemon.config_path());
+    // `run_start_once` 不会继承 `Daemon::spawn` 的 `XDG_RUNTIME_DIR`：必须显式传入，
+    // 否则 daemon 回落 `<data_dir>/run`，根本碰不到这个符号链接（在 CI 上挂死的根因）。
+    let (status, _stdout, stderr) =
+        run_start_once_with_env(daemon.config_path(), &[("XDG_RUNTIME_DIR", xdg.as_path())]);
     assert!(!status.success(), "endpoint 不可用必须拒绝启动：{stderr}");
     assert_eq!(failure_code(&stderr), "local.unavailable");
     // 失败关闭而不是降级：不留下运行记录，也没有「无管理通道仍在跑」的进程。

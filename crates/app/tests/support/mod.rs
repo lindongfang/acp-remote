@@ -512,6 +512,15 @@ pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 /// 启动一个「第二次 `daemon start`」进程并返回其退出状态与 stderr。
 pub fn run_start_once(config: &Path) -> (ExitStatus, String, String) {
+    run_start_once_with_env(config, &[])
+}
+
+/// 一次性启动（带环境覆盖）：`daemon start` 的失败路径必须在期限内退出，
+/// 不允许驻留——没有超时的 `output()` 会让「意外启动成功」挂死整个测试进程（CI 实踩）。
+pub fn run_start_once_with_env(
+    config: &Path,
+    envs: &[(&str, &Path)],
+) -> (ExitStatus, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_acp-remote"));
     command
         .arg("daemon")
@@ -521,7 +530,20 @@ pub fn run_start_once(config: &Path) -> (ExitStatus, String, String) {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = command.output().expect("运行 acp-remote");
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("运行 acp-remote");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.try_wait().expect("轮询子进程").is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("一次性启动用例的 daemon 在 30s 内没有退出（意外驻留？）");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let output = child.wait_with_output().expect("收集输出");
     (
         output.status,
         String::from_utf8_lossy(&output.stdout).into_owned(),
