@@ -6,7 +6,7 @@
 - stage: work-package
 - agent_context: 独立子 Agent（worker / coder 角色）；主 worktree 的分支 `feat/daemon-cli-and-local-admin`；只继承任务单 2.23 的文本与合同 `docs/LOCAL_ADMIN_PROTOCOL.md` §7（**未**改动它），不继承规划阶段对话；同一时刻只有本写入者编辑这两个源文件
 - base_revision: **`d6b0182`**（`d6b0182d93e330e3405dfa0c16ce0a31c8c48b3c`，开工前 `git log --oneline -3` 与任务单一致）
-- target_revision: **`0968c7aa4b5503bd39919fdafc7284974f577a2c`**（`0968c7a`，本任务的 `fix(server): 修正 *.revoke 的重试语义以符合 §7`；本报告随后以独立的 `docs(server)` 提交入库）
+- target_revision: **`0968c7aa4b5503bd39919fdafc7284974f577a2c`**（`0968c7a`，本任务的 `fix(server): 修正 *.revoke 的重试语义以符合 §7`）。本报告与两个 `.log` 不属交付物：报告随后以独立的 `docs(server)` 提交入库（SHA 用 `git log --oneline -1 -- openspec/changes/daemon-cli-and-local-admin/reports/wp323-handoff.md` 取），`.log` 不入库（`.gitignore:27`）
 - scope: `crates/server/src/local_admin/router.rs`、`crates/server/src/local_admin/test_support.rs`（fake 保真修正）、`openspec/changes/daemon-cli-and-local-admin/reports/`（本报告 + 两个 `.log`，后者被 `.gitignore:27` 忽略，不入库）。**未改** `crates/storage-sqlite/**`、`docs/**`、`openspec/changes/**` 下除 `reports/` 外的任何文件（含 `plan.md`/`tasks.md`/`verification.md`/`specs/**`）、其它 crate、`compatibility/**`、`schemas/**`
 - result: `PASS`（任务单列出的三项 cargo 检查与 `npm run check` 全部执行且全绿；**不代表**独立 review、集成或合并已完成）
 
@@ -98,14 +98,16 @@
 ## 复核（交付提交后）
 
 ```text
-$ git log --oneline -2
+$ git log --oneline -3                     # 交付提交 d6b0182 → 0968c7a
 0968c7a fix(server): 修正 *.revoke 的重试语义以符合 §7
+d6b0182 docs(server): 登记 WP3b2 交付、五项裁定与新增任务 2.23
 $ git show --stat --oneline 0968c7a
  crates/server/src/local_admin/router.rs       | 184 +++++++++++++++++++++++++-
  crates/server/src/local_admin/test_support.rs |  12 +-
  2 files changed, 188 insertions(+), 8 deletions(-)
-$ git diff --stat HEAD -- crates            # 空输出：交付内容确实在 HEAD 里
-$ git status --porcelain                     # 提交后为空（两个 `.log` 被 .gitignore:27 忽略）
+$ git diff --stat HEAD -- crates            # 空输出：交付内容确实在 0968c7a 里
+$ git status --porcelain                    # 交付提交后：仅 `?? …reports/wp323-handoff.md`（本报告尚未提交）
+$ git status --porcelain                    # 本报告提交后：空（两个 `.log` 被 .gitignore:27 忽略）
 ```
 
 `0968c7a` 经 `.husky/pre-commit`（`cargo fmt --check` + `npm run check` + workspace 级 `cargo clippy -- -D warnings`，输出 `pre-commit: 通过（3 步…）`）与 `commitlint` 通过；**未使用** `--no-verify`。
