@@ -45,6 +45,8 @@
 | 3.5 | main（代行 coder 的 Project Verify）/ project-verify / work-package | 313d2a2 | CHECK / PV1、PV2、PV3、PV5（WP3 最终轮） | reports/wp3-final-verify.log、reports/pv5-windows-ipc.log | PASS / NEW | `npm run verify` EXIT=0（75 个测试块全 ok）；合同门禁全绿；Windows IPC 用例 EXIT=0 |
 | 2.22 | coder / implement / work-package | fe093b3（含 bb96a10；报告 64823a1） | DELIVERY / NOT_APPLICABLE | reports/wp422-handoff.md | PASS / NEW | `AuditStore`（append/query over `owned_audit`）；复用 `insert_audit_rows` 编码、不改 DDL；111 passed（+14） |
 | 2.22 | coder / implement / work-package | bb96a10 | CHECK / PV1、PV2（2.22 轮） | reports/wp422-handoff.md（日志 reports/wp4-storage-audit.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy 零告警；`check:drift` 36 条 DDL 不变；`npm run check` 两轮 EXIT=0 |
+| 2.24 | coder / implement / work-package | cb983c2（报告 reports/wp324-handoff.md） | DELIVERY / NOT_APPLICABLE | reports/wp324-handoff.md | PASS / NEW | F1/F2/F3/F6 全修复；F2 留 RED（无 guard 时 `export.create` 静默覆盖并返回成功，exit=101）；F3 用可注入 `settle_accept` 缝实测 |
+| 2.24 | coder / implement / work-package | cb983c2 | CHECK / PV1、PV3（2.24 轮） | reports/wp324-handoff.md（日志 reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`cargo test -p server` EXIT=0（lib 88 ok）；`npm run check` EXIT=0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -98,12 +100,12 @@
 | RV1-WP2-F1 | 6361f5d | RV1-WP2（隔离子 Agent） | vendor/windows-local-ipc/Cargo.toml:32 | MINOR：注释称 `fs4`/`clap` 引入 windows-sys 0.61.2，实际由 `mio`/`tokio` 引入 | 并入任务 2.21 顺手修复（一行注释） | 2.21 交付时由 RV1-WP3 复核 |
 | RV1-WP2-F2 | 6361f5d | 同上 | vendor/windows-local-ipc/Cargo.toml:16 | MINOR：`license = "MIT OR Apache-2.0"`，但仓库仅含 Apache-2.0 正文 | 并入任务 2.21：改为 `license = "Apache-2.0"` | 2.21 交付时由 RV1-WP3 复核 |
 | RV1-WP2-F3 | 6361f5d | 同上 | reports/du1-pv1.log、reports/pv5-windows-ipc.log、wp2-handoff.md | MINOR：两个 [PV1] WP2 轮未记退出码；fmt 无运行记录 | 主 Agent 已补录：`du1-pv1.log` 追加 `EXIT(npm run check)=0` 轮次；`pv5-windows-ipc.log` 追加 `EXIT(cargo fmt -- --check)=0`（均真实执行） | 追加日志已核实 |
-| RV1-WP3-F1 | 313d2a2 | RV1-WP3（隔离子 Agent） | crates/server/src/local_admin/router.rs:461-470 | MINOR：`import.remove` 缺「未知合法 id」常驻断言 | 并入任务 2.24 | 2.24 交付后由 RV2 复核 |
-| RV1-WP3-F2 | 313d2a2 | 同上 | crates/server/src/local_admin/test_support.rs:493-505 | MINOR：`FakeExports::put_export` 比真实存储更严（未撤销的既有 id 在存储里是覆盖 `Ok`）⇒ `export.create` 查重断言无但例能力 | 并入任务 2.24（改 fake 同形 + RED 验证） | 同上 |
-| RV1-WP3-F3 | 313d2a2 | 同上 | crates/server/src/transport/local/platform/windows.rs:67-80 | MINOR：`connect()`/补建失败时 `pending` 保持 None ⇒ endpoint 之后永久不可用（与代码自述不变量冲突） | 并入任务 2.24（失败时重建 pending 或先补建再 connect） | 同上 |
+| RV1-WP3-F1 | 313d2a2 | RV1-WP3（隔离子 Agent） | crates/server/src/local_admin/router.rs:461-470 | MINOR：`import.remove` 缺「未知合法 id」常驻断言 | 已由 2.24 修复（`cb983c2`） | 待最终验收 RV2 复核 |
+| RV1-WP3-F2 | 313d2a2 | 同上 | crates/server/src/local_admin/test_support.rs:493-505 | MINOR：`FakeExports::put_export` 比真实存储更严（未撤销的既有 id 在存储里是覆盖 `Ok`）⇒ `export.create` 查重断言无但例能力 | 已由 2.24 修复（fake 同形 + RED 证据 `exit=101`） | 待 RV2 复核 |
+| RV1-WP3-F3 | 313d2a2 | 同上 | crates/server/src/transport/local/platform/windows.rs:67-80 | MINOR：`connect()`/补建失败时 `pending` 保持 None ⇒ endpoint 之后永久不可用（与代码自述不变量冲突） | 已由 2.24 修复（`settle_accept` 先补建再判定 + 注入式单测） | 待 RV2 复核 |
 | RV1-WP3-F4 | 313d2a2 | 同上 | docs/LOCAL_ADMIN_PROTOCOL.md:594 + spec 场景 WHEN | MINOR（契约措辞）：§7 要求「方法失败」入审计，但 §14.2 封闭类别无此类别 | **主 Agent 已收敛**：§7 改为「方法失败只记结构化日志」并说明不得复用其他类别；spec 同步 | 已改由 workflow check --stage plan 复验（PASS） |
 | RV1-WP3-F5 | 313d2a2 | 同上 | specs/local-admin-channel/spec.md（MUST 句） | MINOR（契约措辞）：`0x02` 立即分配 `FacadeAttachmentId` 在本切片无可行路径 | **主 Agent 已收敛**：MUST 句加「facade 落地后」限定并指向 §3.1 注记 | 同上 |
-| RV1-WP3-F6 | 313d2a2 | 同上 | params.rs:317-326、envelope.rs:255-262 | SUGGESTION：`ProviderConfigure` 的 Debug 可打印明文凭据；两处不可达分支 | 并入任务 2.24（手写 Debug + 清理/兜底不可达分支） | 同上 |
+| RV1-WP3-F6 | 313d2a2 | 同上 | params.rs:317-326、envelope.rs:255-262 | SUGGESTION：`ProviderConfigure` 的 Debug 可打印明文凭据；两处不可达分支 | 已由 2.24 修复（手写 `Debug` 只打字段名 + 清理不可达分支） | 待 RV2 复核 |
 | RV1-WP2-R1（残余风险） | 6361f5d | RV1-WP2 | crates/server/src/transport/local/platform/windows.rs（后续实例） | 风险（非缺陷）：后续实例 DACL 是否继承首实例未证实 | 已登记入 Dependency Handoffs；[PV5] 在 WP3b/WP4 用 `GetSecurityInfo`/跨账号用例钉死 | 待 [PV5] |
 
 ## Merge History
