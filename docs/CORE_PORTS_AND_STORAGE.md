@@ -1217,7 +1217,7 @@ CREATE TABLE imported_import_export (
 1. 组合根在取得单实例锁、migration 完成**之后**、开始监听**之前**先执行一次初清理：`SessionStore::prune` + `RemoteDeliveryStore::prune`，加上 `TrustStore::expire_pairings`（§11.6）与 `AttachmentStore::sweep_orphans(启动时刻, 1000)`（§6 第 18 条）。
 2. 启动之后按**固定 60 s**周期重复同一批调用（固定 v1 常量，不给配置键：这是保证保留策略真的生效，不是可调业务参数）。
 3. 周期任务与写入共用同一个写连接（§7.1 的单写连接），必须**分批并让出**：单次 `prune` 到上限即返回，不得抦住写事务阻塞会话提交；一轮超时或出错只记结构化日志，不中断 daemon。
-4. 关闭顺序中先停周期任务，再停接入层与 Agent，最后做一次 `wal_checkpoint(TRUNCATE)`（§7.1）。
+4. 关闭顺序（以 `SECURITY_DESIGN.md` §12.1 为准）：**停接入层**（不再接受新连接，并排空在途连接至宽限上限）→ **取消周期任务与信号监听**（必须先于停止 Agent）→ 停 Agent 进程 → 最后做一次 `wal_checkpoint(TRUNCATE)` 并清理 endpoint/释放单实例锁。周期任务的取消位置是为了让它们在存储关闭前停止写入，不是「先于接入层」。
 5. `MODULE_ARCHITECTURE.md` §4.10 的后台任务清单必须与本节一致（prune / expire_pairings / sweep_orphans / 心跳与重连）。
 
 `[决定]` **②/③ 的谓词必须排除仍被引用的事件行**：`owned_interaction.request_event` 是 `INTEGER REFERENCES owned_event(global_sequence)` 且 `foreign_keys = ON`，所以 ② 必须带 `AND NOT EXISTS (SELECT 1 FROM owned_interaction i WHERE i.request_event = owned_event.global_sequence)`，并且 ②′ 必须排在 ② 之前。否则超限时 `enforce_capacity` 里的 ② 会撞外键、把 `FOREIGN KEY constraint failed` 当成 `PortError::Backend` 抛给上层（而不是 §7.5⑥ 的 `StorageFull`），`prune` 的整个事务也会回滚、连 ① 的 delta 清理都做不成。
