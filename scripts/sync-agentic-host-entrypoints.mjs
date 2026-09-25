@@ -24,7 +24,9 @@ const routes = [
     anchor: "Verify that an implementation matches the change artifacts (specs, tasks, design).",
     instruction: "**本项目的 agentic 入口：** `openspec status` 返回 `schemaName: agentic` 时，先完整读取并执行 `.agents/skills/agentic-verify/SKILL.md` 及其引用的验收程序。CLI 状态与证据验收的 PASS / FAIL / BLOCKED 分别报告；下方通用评分不能作为该变更可归档的结论。",
     files: [
+      ".agents/skills/openspec-verify-change/SKILL.md",
       ".pi/prompts/opsx-verify.md",
+      ".pi/skills/openspec-verify-change/SKILL.md",
       ".omp/commands/opsx-verify.md",
       ".omp/skills/openspec-verify-change/SKILL.md",
     ],
