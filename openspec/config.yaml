@@ -69,13 +69,13 @@ operations:
 x-agentic:
   configVersion: 1
   roles:
-    main: "@current"
-    coder: "@current"
-    integrator: "@current"
-    tester: "@current"
-    validator: "@current"
-    reviewer: "@current"
-    environment: "@current"
+    main: "kimi-coding/k3"
+    coder: "deepseek/deepseek-flash"
+    integrator: "deepseek/deepseek-flash"
+    tester: "deepseek/deepseek-flash"
+    validator: "deepseek/deepseek-flash"
+    reviewer: "kimi-coding/k3"
+    environment: "deepseek/deepseek-flash"
   e2e:
     enabled: true
     command: ""
