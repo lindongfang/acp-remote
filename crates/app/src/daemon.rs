@@ -475,18 +475,15 @@ async fn termination_signal() -> &'static str {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut terminate) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => "ctrl_c",
-                    _ = terminate.recv() => "sigterm",
-                }
+        if let Ok(mut terminate) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => "ctrl_c",
+                _ = terminate.recv() => "sigterm",
             }
-            Err(error) => {
-                tracing::warn!(event = "daemon.signal_unavailable", error = %error);
-                let _ = tokio::signal::ctrl_c().await;
-                "ctrl_c"
-            }
+        } else {
+            tracing::warn!(event = "daemon.signal_unavailable");
+            let _ = tokio::signal::ctrl_c().await;
+            "ctrl_c"
         }
     }
     #[cfg(not(unix))]
@@ -1107,14 +1104,11 @@ fn cleanup_endpoint(endpoint_locator: &str) {
     #[cfg(unix)]
     {
         let path = Path::new(endpoint_locator);
-        match std::fs::symlink_metadata(path) {
-            Ok(metadata) => {
-                use std::os::unix::fs::FileTypeExt as _;
-                if metadata.file_type().is_socket() && std::fs::remove_file(path).is_ok() {
-                    tracing::debug!(event = "daemon.endpoint_removed");
-                }
+        if let Ok(metadata) = std::fs::symlink_metadata(path) {
+            use std::os::unix::fs::FileTypeExt as _;
+            if metadata.file_type().is_socket() && std::fs::remove_file(path).is_ok() {
+                tracing::debug!(event = "daemon.endpoint_removed");
             }
-            Err(_) => {}
         }
     }
     #[cfg(not(unix))]
