@@ -6,7 +6,7 @@
 
 ### Requirement: Daemon 前台启动与单实例锁
 
-Daemon SHALL 由 `daemon start` 以 CLI 前台进程方式启动，启动时获取单实例锁并生成 16 字符小写十六进制的 `instanceId`（64 bit CSPRNG），写入锁文件供 CLI 读取；同一运行期内 `instanceId` MUST 不变，重启后重新生成。锁获取失败时 MUST 以明确错误退出，不得强杀已有进程或启动第二个实例。endpoint 创建失败（权限不符、路径被占用、socket 被替换为符号链接、目录权限不符、旧 socket 仍存活）时正式模式 MUST 拒绝启动，不得降级为无管理通道运行。
+Daemon SHALL 由 `daemon start` 以 CLI 前台进程方式启动，启动时获取单实例锁（`<dataDir>/daemon.lock`）并生成 16 字符小写十六进制的 `instanceId`（64 bit CSPRNG），与 pid、endpoint、`publicOrigin` 一起写入实例记录 `<dataDir>/daemon.instance.json` 供 CLI 读取（互斥锁文件本身在 Windows 上不可读——字节范围锁会让读取返回 `ERROR_LOCK_VIOLATION`，故记录单独成文件；记录在取锁成功后原子写入、正常关闭时删除，「记录存在而锁可获取」判定为陈旧记录即未运行）；同一运行期内 `instanceId` MUST 不变，重启后重新生成。锁获取失败时 MUST 以明确错误退出，不得强杀已有进程或启动第二个实例。endpoint 创建失败（权限不符、路径被占用、socket 被替换为符号链接、目录权限不符、旧 socket 仍存活）时正式模式 MUST 拒绝启动，不得降级为无管理通道运行。
 
 #### Scenario: 正常启动
 

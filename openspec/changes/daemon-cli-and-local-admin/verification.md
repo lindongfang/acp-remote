@@ -47,6 +47,8 @@
 | 2.22 | coder / implement / work-package | bb96a10 | CHECK / PV1、PV2（2.22 轮） | reports/wp422-handoff.md（日志 reports/wp4-storage-audit.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy 零告警；`check:drift` 36 条 DDL 不变；`npm run check` 两轮 EXIT=0 |
 | 2.24 | coder / implement / work-package | cb983c2（报告 reports/wp324-handoff.md） | DELIVERY / NOT_APPLICABLE | reports/wp324-handoff.md | PASS / NEW | F1/F2/F3/F6 全修复；F2 留 RED（无 guard 时 `export.create` 静默覆盖并返回成功，exit=101）；F3 用可注入 `settle_accept` 缝实测 |
 | 2.24 | coder / implement / work-package | cb983c2 | CHECK / PV1、PV3（2.24 轮） | reports/wp324-handoff.md（日志 reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`cargo test -p server` EXIT=0（lib 88 ok）；`npm run check` EXIT=0 |
+| 2.14 | coder / implement / work-package | c4e4c3a（e9b8e1d + c628e87；报告 c4e4c3a） | DELIVERY / NOT_APPLICABLE | reports/wp4a-handoff.md | PASS with notes / NEW | 新建 `crates/app`（18 文件 +6389/−16）；37 passed（27 unit + 1 audit.export e2e + 9 生命周期）；workspace 682 passed；⚠️ `storage.flush_interval_ms` 被实现成 no-op（见裁定③→任务 2.25） |
+| 2.14 | coder / implement / work-package | c4e4c3a | CHECK / PV1、PV2、PV4（WP4a 轮） | reports/wp4a-handoff.md（日志 reports/wp4-app-daemon.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`-p app` EXIT=0；`check-crate-boundaries` EXIT=0（12 crate、§5 新列成真）；`npm run check` 三次 EXIT=0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -75,6 +77,13 @@
 - 2026-09-25（RV1-WP3 后，主 Agent）：**F4/F5 契约措辞收敛**（不改语义）——`docs/LOCAL_ADMIN_PROTOCOL.md` §7 的「审计与日志」条改为「拒绝连接 + §14.2 类别覆盖的安全动作 + 撤销记审计；方法失败只记结构化日志」（§14.2 封闭词表无「方法失败」，不得复用 `authorization.denied`）；`specs/local-admin-methods/spec.md` 场景 WHEN 列表同步。`specs/local-admin-channel/spec.md` 的 attachment MUST 句加「facade 落地后」范围限定并指向 §3.1 实现状态注记。影响：无行为变化，仅合同/规范措辞与实现口径对齐。新增任务 2.24（F1/F2/F3/F6 实现侧修复）。
 
 - 2026-09-25（2.22 交付后，主 Agent 裁定）：三项开放项处置。①`query` 不跨 `imported_audit`——**接受**：`imported_audit` 带 `owner_node_id`/`export_id`/`session_id`/`request_id` 四列，而 `AuditRecord`（合同 §3 值对象）无法承载这些归属列，跨表投影会静默丢归属；本切片无 imported 会话，`owned_audit` 是唯一相关表。②`append` 受容量门约束、满载时独立拒绝审计——**接受**：与 §7.5⑥「宁可拒绝写也不静默丢证据」一致，拒绝路径落结构化日志。③新增 `crates/storage-sqlite/tests/admin_audit.rs`（测试文件）超出任务单列举的两个 src 路径——**接受**：仅测试资产，不影响依赖面与合同。
+
+- 2026-09-25（WP4a 交付后，主 Agent 裁定 5 项上游决策）：
+  - **① `nodeId` 派生 → 接受**：无「本节点身份」的权威存储位置（`core::ports` 只有 `NodeRecord` 描述**对端**节点），故 `nodeId = SHA-256("acp-remote/node-id/v1" ‖ SEC1 公钥) 前 16 字节（UUID v8）`成立；密钥轮换改变 `nodeId` 与 `node.rotate-key` 后必须重配对的既定语义一致（`IDENTITY_AND_AUTH_CONTRACT.md` §6.3「撤销与身份变化」：身份材料变化不得自动接受，必须重新配对）。派生式与「不得凭空发明身份」的约束相容。**WP5（2.19）须把该派生式与域分离串写进权威文档**（`IDENTITY_AND_AUTH_CONTRACT.md` §7 或 `MODULE_ARCHITECTURE.md` §4.10），不得只留在代码里。
+  - **② 锁文件/实例记录拆分 → 接受并修正契约措辞**：Windows 字节范围锁会让读取同文件的进程收到 `ERROR_LOCK_VIOLATION`，单文件方案下 CLI 读不回记录。已改 `design.md` §4 与 `specs/daemon-lifecycle/spec.md` 首条：`daemon.lock` 只承载互斥，`daemon.instance.json` 承载可读记录（instanceId/pid/endpoint/publicOrigin），并写明「取锁成功后原子写入、正常关闭删除、有记录而锁可获取 = 陈旧记录 = 未运行」不变量。**非弱化**：CLI 仍不打开数据库，互斥仍由 OS 文件锁保证。
+  - **③ `storage.flush_interval_ms` 实现为 no-op → 不接受，转任务 2.25**：该键是 broker 的 delta 合并窗口（`CORE_PORTS_AND_STORAGE.md` §6 第 10 条），`broker.rs:10`/`:1358` 明确「合并窗口由组合根的定时器触发 `pump`」，`UseCases::list_sessions` 使枚举可行 ⇒ 属真实契约缺口（缓冲 delta 永不落盘/广播）。同时接受 `RevocationCloser.closed_connections = 0`（连接代际属 facade 期）与 `AuditSink` 记录形状（与 §14.2 十列一致）。
+  - **④ `LocalEndpoint::accept()` 非 cancel-safe → 接受 app 侧规避 + 转任务 2.25 的 B 项**：`app` 已用「专用 accept 任务 + 容量 1 channel」规避；须在 server 侧加文档注释钉死该约束，避免后续调用方误用 `select!`。
+  - **⑤ `MODULE_ARCHITECTURE.md` §5 说明段仍称 `storage-sqlite`「只作为行出现」→ 转 WP5（2.19）**：本轮仅获准改矩阵列本身，说明段与其余 §5 文本保持不动。
 
 ## Dependency Handoffs
 

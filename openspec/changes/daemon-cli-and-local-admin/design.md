@@ -43,7 +43,7 @@
 
 ### 4. 单实例锁与 instanceId
 
-锁文件位于 `daemon.data_dir`（`<dataDir>/daemon.lock`）：内容是 `instanceId`（16 字符小写 hex，`getrandom` 生成）与 pid；互斥靠 OS  advisory 文件锁（候选 `fs4` 或 `fd-lock`，同 §20 核验；两者都是纯 safe API）。锁获取失败 → 明确错误退出，绝不强杀。CLI 判定「Daemon 是否运行」只读锁文件内容 + 尝试加锁，不打开数据库。Unix 旧 socket 文件在持锁后确认无活跃 listener 才允许删除重建，否则拒绝启动（§7 endpoint 失败关闭清单）。
+**两个文件**（WP4a 实测后的修正，见 `verification.md` 的 WP4a 裁定）：`<dataDir>/daemon.lock` 只承载互斥（OS advisory 文件锁，`fs4::FileExt::try_lock`，纯 safe API；必须全限定调用，`std::fs::File::try_lock` 同名且会抬高 MSRV）；`<dataDir>/daemon.instance.json` 承载**可读记录**（`instanceId` 16 字符小写 hex（`getrandom` 64 bit）、pid、endpoint 路径与 `publicOrigin`）。拆成两个文件是平台强制：Windows 上字节范围锁会让**读取**同一文件的进程收到 `ERROR_LOCK_VIOLATION`（WP4a 实测），单文件方案下 CLI 无法读回记录。不变量：记录文件在**取锁成功之后**以「临时文件 + 原子改名」写入，正常关闭时删除；「有记录、锁可获取」= 陈旧记录，判定为未运行。锁获取失败 → 明确错误退出，绝不强杀、不启动第二个实例。CLI 判定「Daemon 是否运行」只读实例记录 + 尝试加锁，不打开数据库。Unix 旧 socket 文件在持锁后确认无活跃 listener 才允许删除重建，否则拒绝启动（§7 endpoint 失败关闭清单）。
 
 ### 5. `0x02` 在 facade 缺席期的失败方式
 
