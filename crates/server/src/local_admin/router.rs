@@ -1177,7 +1177,7 @@ fn not_readable(operation: &str, what: &str) -> AdminError {
 fn not_revocable(operation: &str, what: &str, id: &str) -> AdminError {
     AdminError::new(
         LocalErrorCode::NotFound,
-        format!("{operation}: no revocable {what} `{id}`"),
+        format!("{operation}: {what} `{id}` does not exist or is already revoked"),
     )
 }
 
