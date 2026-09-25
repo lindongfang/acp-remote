@@ -51,6 +51,10 @@
 | 2.14 | coder / implement / work-package | c4e4c3a | CHECK / PV1、PV2、PV4（WP4a 轮） | reports/wp4a-handoff.md（日志 reports/wp4-app-daemon.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`-p app` EXIT=0；`check-crate-boundaries` EXIT=0（12 crate、§5 新列成真）；`npm run check` 三次 EXIT=0 |
 | 2.15–2.17 | coder / implement / work-package | 0886c18（c8e44eb；报告 0886c18） | DELIVERY / NOT_APPLICABLE | reports/wp4b-handoff.md | PASS with notes / NEW | CLI 全子命令（§5.8 逐行映射 + 反向拒绝 `daemon doctor`/`session create`/`node rotate-key`/`audit export`）、`doctor`、`acp-stdio` 字节泵；12 文件 +3614/−76 |
 | 2.15–2.17 | coder / implement / work-package | c8e44eb | CHECK / PV1、PV2、PV4（WP4b 轮） | reports/wp4b-handoff.md（日志 reports/wp4b-cli.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`cargo test -p app` EXIT=0（64 passed = 43 unit + 1 + 11 cli_commands + 9 lifecycle）；`check-crate-boundaries`/`npm run check` EXIT=0 |
+| 2.25-A | coder / implement / work-package | 7089426 | DELIVERY / NOT_APPLICABLE | reports/wp425-handoff.md | PASS with notes / NEW | 合并窗口定时器真正接线（`MergeWindow` 注入 + `broker` 句柄 + `merge_window` 周期任务）；证据 = spy 断言（`pumps == scans × 2`、取消后冻结）+ 真实二进制 probe（`interval_ms:100`/默认 250、每 tick 一条非终态会话 SELECT、`task_stopped{merge_window}` 先于 `storage_closed`）；⚠️ 本切片无 `session.create`，端到端无可观察效果（已说明） |
+| 2.25-B | coder / implement / work-package | a4cb119 | DELIVERY / NOT_APPLICABLE | reports/wp425-handoff.md | PASS / NEW | `accept()` 非 cancel-safe 写入源码文档 + 断言用例（取消后 `pending.is_none()`、客户端 `Ok(0)`、endpoint 仍可用） |
+| 2.25-C | coder / implement / work-package | 7089426 | DELIVERY / NOT_APPLICABLE | reports/wp425-handoff.md | PASS / NEW | 交互式拒绝 → `*.pair.reject`（`{pairingId, reason:null}`）+ 非零退出 `local.conflict`；reject 失败原样上抛方法码；断言「拒绝只调 reject、确认只调 confirm」 |
+| 2.25 | coder / implement / work-package | 7819b1f | CHECK / PV1、PV2、PV3、PV4（2.25 轮） | reports/wp425-handoff.md（日志 reports/wp425.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy(workspace) EXIT=0；`-p server` EXIT=0（89 lib）；`-p app` EXIT=0（49+1+11+9，0 ignored）；`npm run check` EXIT=0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -95,6 +99,11 @@
   - **⑤ 非交互拒绝不调 `*.pair.reject` → 就地判断接受，但交互式拒绝改为调用（转 2.25 C）**：`device.pair.reject`/`node.pair.reject` 确在 25 项词表内（§5.3），交互式 `n` 下不调用会让会话悬置到 5 分钟到期；已在任务 2.25 增补 C 项。
   - **⑥ 额外 `--pack`/`--expires-in-ms`/`--grace-ms` → 接受**：均为 §5.2/§5.3 方法参数的直映射（kebab-case ↔ camelCase），不新增语义。
 - 2026-09-25（WP4b 的 §20 核验修订主 Agent 登记）：`design.md` §7 关于 `rpassword` 的许可证说法**已改正为 Apache-2.0 单许可**（实测 7.5.4 非双许可），并登记 `rtoolbox` 的 0.0.x 残余风险；本地无法判定的 `cargo-deny`/`gitleaks` 仍只在 CI 判定。
+- 2026-09-25（2.25 交付后，主 Agent 处置 4 项）：
+  - **① 关闭顺序措辞冲突 → 主 Agent 已改文档**：实现顺序（停接入 → 排空 → 取消周期任务与信号监听 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 清理并释放锁）与 `SECURITY_DESIGN.md` §12.1 逐字一致；`CORE_PORTS_AND_STORAGE.md` §7.1 第 4 条原措辞「先停周期任务，再停接入层与 Agent」是唯一孤例且会误导后续实现，已改写为「以 §12.1 为准」的显式序列并说明周期任务取消位置的理由（让它们在存储关闭前停止写入，不是先于接入层）。§7.1 只此一处副本（全仓 grep 确认）。
+  - **② `daemon stop` 等满宽限 → 转任务 2.26 诊断**：`drain_connections` 逻辑正确、CLI 已 `drop(client)`，故「哪条连接未结束」未定；不猜测定性，交由 2.26 用受控探针定位并加回归断言（当前行为下须 RED）。
+  - **③ `flush_interval_ms` 只校验下界（`>=1`）→ 接受**：`CONFIG_REFERENCE.md` §5 未给上界，合同无要求；`0` 失败关闭已实现。
+  - **④ 交互式提示 stdin 读失败 → `local.internal` → 接受**：终端故障属内部错误而非「用户拒绝」，语义正确；拒绝路径仍走 reject + 非零退出。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
