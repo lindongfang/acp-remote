@@ -132,6 +132,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | PRO-1（主 Agent 流程异常） | commit `fee6073`（登记 RV1-WP2 记录时误用 `git add -A`，把仍在运行的 WP3b1 部分工作树一并提交） | 主 Agent | 未做历史改写（子 Agent 同 worktree 并发工作，改写有风险）；已 steer 通知 WP3b1、要求其交付提交用显式路径；后续主 Agent 提交一律用显式路径 | 无（不影响代码内容与门禁：`npm run check`/fmt/clippy 均绿） | WP3b1 交付后核对其 handoff 的提交组成与最终 `git status` | 已登记；待 WP3b1 交付时核实完成组成 |
 | PRO-2（主 Agent 流程异常，同一根因） | commit `1cd7a3b`（我提交 spec/证据时，并发暂存的 2.21 十二个文件被一并带入；提交信息未提及契约补齐） | 主 Agent | 不做历史改写；自本次起主 Agent 一律用 `git commit --only <paths>`；已在 WP3b2 任务单里明确要求实现者只 add 自身路径 | 无（内容完整：正则三处一致、drift 25 项、fixtures 118/24；门禁与测试全绿） | WP3b2/3.6 复核时会核对 1cd7a3b 的完整组成 | 已登记；`1cd7a3b` 为 2.21 的权威交付提交（内容层面） |
+| PRO-3（宿主超时，非产品质量问题） | WP4a 运行 `21e7ff77` 在 1800000ms 后被宿主判定超时中止；中止时未提交也未写交接报告 | 主 Agent | 工作树完好（`crates/app/**` 约 6000 行 + `Cargo.toml`/`Cargo.lock`/`MODULE_ARCHITECTURE.md`），日志显示 `npm run check` 已 EXIT=0；已用 `resume` 复活为运行 `227fce16`，并要求其只做「检查收尾 → 显式路径提交 → 写 wp4a-handoff.md」的限定步骤（集成测试只跑一次、挂住即报告用例名，不弱化断言） | 中止前产物未经验证，不充当证据 | 待 `227fce16` 返回后核对 target SHA 与检查退出码 | 已登记；当前状态 PENDING |
 | RV1-WP2-RUN1 | 任务 3.4，reviewer 子 Agent 运行 `ecc2d081-dfcb-41eb-b845-800aceb7512d`（目标 6361f5d）；运行在回报前中止，只输出了开场句，未产生报告 | 主 Agent | 原因判定为子 Agent 运行时中断（非产品/证据问题：目标提交与输入未变）；已用 deepseek/deepseek-flash 重新派发 RV1-WP2 | 旧运行无报告产出，未作为结论 | 待重派结果 | 未解决（等待重派；不影响 WP3a 进行） |
 
 ## Final Assessment
