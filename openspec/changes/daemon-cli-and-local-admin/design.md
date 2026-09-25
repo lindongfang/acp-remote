@@ -61,6 +61,7 @@
 
 - 单二进制 `acp-remote`，`clap`（新依赖，§20 核验：成熟度/许可证无悬念，仅登记）做子命令解析；`--file` 的 JSON 用 `serde_json`（已在 workspace，`arbitrary_precision` 保持一致）。
 - 退出码与 stderr JSON 行契约由 `app::cli` 的一个统一错误出口保证，避免各子命令自行打印。
+- `provider configure` 的凭据值必须**逐项无回显**读取（`specs/cli-commands` 的场景「凭据无回显录入」），实现用 `rpassword`（新依赖，§20 核验登记）：许可证 MIT/Apache-2.0 双许可、维护活跃、MSRV 与仓库固定工具链兼容、不进入 `core` 闭包；它只负责「关回显读取一行」这一件事，凭据值仍以 `SecretBytes` 形态经 `identity-auth` 端口写入 keystore，不落日志/错误/`Debug`。本地不接受「有回显读取」或「凭据走命令行参数」的降级；无交互终端时明确失败（`local.invalid_request` 级的 CLI 用法错误）。
 - 非交互探测用 std 的 `IsTerminal`；配对轮询间隔与 5 分钟到期处理由 CLI 负责，Daemon 侧状态不变。
 - CLI 与 Daemon 的集成测试以真实子进程 + 临时 data dir 驱动（不 mock 通道），Unix 权限位断言用 `#[cfg(unix)]`，Windows 专属路径在 Windows 开发机执行、Linux CI 只覆盖共享与 Unix 路径。
 
