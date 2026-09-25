@@ -47,9 +47,9 @@
 `--planning-root <权威规划根>`；命令仍在当前代码目录运行，记录统一写回权威变更目录。
 不要用当前目录推断变更位置，也不接受把记录写进测试副本。
 项目级 E2E 入口用
-`npx --quiet --no-install openspec-agentic e2e run --change <变更> --stage candidate|final [--command <本阶段命令>] [--planning-root <权威规划根>]`
+`npx --quiet --no-install openspec-agentic e2e run --change <变更> --stage candidate|final [--cases <本分片 E2E ID 列表>] [--command <本阶段命令>] [--planning-root <权威规划根>]`
 执行：命令在流程内真实运行，输出透传，执行结果、提交与阶段写入权威变更目录下的机器记录；失败同样留证，不得只报告成功摘要。
-候选阶段用 `--stage candidate`，由主 Agent 依据逐项断言、版本与隔离证据核对后勾选其任务，不以 `e2e check` 为完成条件。
+候选阶段用 `--stage candidate --cases <本分片 E2E ID 列表> --command <计划 Waves 中的本分片命令>`；人工分片在 Waves 的 Command 写 `manual`，并用 `--manual` 留证。主 Agent 依据逐项断言、版本与隔离证据核对后勾选其任务；合入前门要求 Waves 的 ID 与 Ownership and Cases 候选清单完全一致，并逐 ID 核对最近一次结果和分片命令，不以最终 `e2e check` 为候选任务完成条件。
 最终主分支阶段用 `--stage final`：每轮只调用一次聚合入口（分片并行在 `x-agentic.e2e.command` 内部完成）。
 执行者返回本次运行结果与原始证据即可交付该执行任务，不以 `e2e check` PASS 为交付条件，也不等待全局任务全部完成。
 主 Agent 汇总分片报告、完成覆盖核对/问题处理/清理后，再对唯一的 `[e2e-owned]` 门禁行运行
@@ -82,11 +82,13 @@
 
 ## Handoff
 
-报告先按 `task_id / role / phase / agent_context / target_revision / scope / changes / checks / issues /
-result / evidence_paths / resource_cleanup` 的固定字段组织，再补充下述测试阶段内容；不附产品编码对话、
-实现者推理/自评或其他测试分片的私有上下文。
+按共用 `roles/handoff.md` 组织报告和 `handoff_index`，补充下述测试阶段内容。
 
 所有报告包含报告 ID、TP ID、Phase、范围、输入版本、产物/证据路径及待澄清或失败问题，按阶段补充：
+每个 E2E/Check ID 和阶段单独一行，
+注明固定代码/用例提交、产物版本、分片报告及机器记录路径。
+设计阶段只列已有的检查及待审 Review ID，执行阶段逐用例列断言证据、尝试和结果；
+注明代码、用例、产物、配置、环境和依赖版本差异对证据的影响。
 
 | 阶段 | 交付内容 | 下游使用 |
 | --- | --- | --- |

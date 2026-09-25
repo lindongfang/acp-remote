@@ -44,12 +44,11 @@
 
 ## Handoff
 
-报告先按 `task_id / role / phase / agent_context / target_revision / scope / changes / checks / issues /
-result / evidence_paths / resource_cleanup` 的固定字段组织，再补充下述角色细节；无值字段明确写空或
-NOT_APPLICABLE，不混入其他角色报告或主会话转储。
+按共用 `roles/handoff.md` 组织报告和 `handoff_index`，补充以下实现交付内容。
 
 返回 WP ID、实际执行者/上下文方式、输入版本、base/target 提交、改动文件与需求映射、
 依赖包含关系、检查 ID/结果/命令/日志、资源释放、未执行项、待澄清问题和修复对应关系。
+每个 Check ID 单独一行并附日志路径，注明代码、命令、配置、环境和依赖差异的适用依据。
+独立 Review/E2E 尚未返回时标明待补，不能把自身检查当作其结论。
 需要调整检查范围时返回原/新值、理由、风险覆盖和受影响项，由主 Agent 更新计划并交独立审查。
-已确认检查失败为 FAIL，缺少必要输入或未执行必要检查为 BLOCKED；本工作包检查全部满足
-才报告该阶段 PASS。检查 PASS 不表示独立 review、E2E、合并或最终验收已经完成。
+本工作包检查全部满足才报告该阶段 PASS；不代表独立 review、E2E 或合并已完成。

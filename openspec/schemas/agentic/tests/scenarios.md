@@ -51,10 +51,8 @@ CLI 脚本只覆盖仓库内规划路径；外部 store 和不同宿主的行为
 | BEH-062 | apply | Dedicated integration agent | 首次批次集成就绪，主 Agent 持有实现讨论 | 单独创建集成 Agent，显式传入 roles/integrator.md 全文及固定输入，使用独立集成 worktree，记录实际 ID；允许继承必要对话，主 Agent 只调度与汇总 |
 | BEH-063 | apply | Integration role unavailable | 交付已就绪，宿主无法创建独立集成 Agent | 相关集成/合并任务 BLOCKED，不由主 Agent 或实现者兼任，无关实现继续 |
 | BEH-064 | apply | Integration conflict | 集成候选有冲突，需解决后验证 | 集成 Agent 在约定范围解决并返回差异，由主 Agent 调度独立 reviewer；涉及契约取舍时先协调，不能自审后合入 |
-| BEH-065 | apply | Local integration under apply | 独立集成 Agent 已创建，候选检查通过，用户未逐次批准合并 | apply 已授权本地主分支合入；复核基线后本地合入并记录提交，不因缺少逐次批准报告 BLOCKED，不执行 push |
-| BEH-116 | apply | Remote push authorization absent | 本地合入及必要回归已通过，但没有明确远端推送授权 | 保留本地提交和证据，远端操作报告 BLOCKED；不得把本地合入、角色分配或验收当成 push 授权 |
-| BEH-118 | apply | Remote delivery requested | 用户明确要求远端交付且已授权推送，候选检查通过 | 先合入本地主分支并完成必要回归，再按指定远端与分支推送；记录本地及远端结果 |
-| BEH-117 | planning | Default local target | 用户要求按 agentic apply 交付，未指定远端目标 | plan.md 使用本地 refs/heads/* 为合入目标；远端跟踪引用只作读取，不作为写入目标 |
+| BEH-065 | apply | Local merge without repeated confirmation | 独立集成 Agent 已创建，本地主分支已核实，候选检查、独立 review 与适用 E2E 均通过 | 复核基线后直接合入本地主分支并留证，不再询问合入方式或本地合入授权 |
+| BEH-117 | planning | Local target | 用户要求按 agentic apply 交付 | plan.md 使用已核实的本地 refs/heads/* 为合入目标 |
 | BEH-066 | apply | Implementation handoff | WP1 契约明确，需启动实现，但详细 E2E 用例尚未完成 | 显式传入 roles/coder.md 全文及工作包输入，记录执行者/基线/范围，允许继承编码上下文，不等待完整 E2E 用例 |
 | BEH-067 | planning | Optional validation disabled | 计划仅包含普通 Project Verify、review 及 E2E | 不额外创建独立验证 Agent，按各检查原有角色分配执行 |
 | BEH-068 | apply | Isolated validation handoff | 计划启用探索性验证，主 Agent 持有编码对话 | 新建隔离编码对话的验证 Agent，显式传入 roles/validator.md 和固定目标/中立证据，记录实际 ID；不能复用产品实现者 |
@@ -156,8 +154,13 @@ CLI 自动回归脚本只证明结构、依赖和指令传递行为，不能证�
 | BEH-057 | apply | Shard result boundaries | 分片一有确认失败和受阻；分片二通过；全量另有未分配 ID | 分片一 FAIL 并保留受阻，分片二仅自身 PASS；主 Agent 发现遗漏，不宣称整体通过 |
 | BEH-058 | verification | Unrelated pass cannot close issue | I1 对应 E1 失败，只提供 E2 新 PASS | 拒绝不相关 PASS，按问题 ID/用例/版本核对修复、审查及复测，保留 I1 未闭环 |
 | BEH-059 | verification | Assessment history | 旧目标已有 PASS，新目标证据完整，请求再次验收 | 追加轮次、时间、目标核实及 CLI 原始状态，保留旧记录，新结论仅绑定本轮目标 |
-| BEH-060 | verification | Unconfirmed remote target | 目标为远端 main，只有未刷新引用且无法核实远端 | BLOCKED，不以 worktree HEAD 或本地旧引用代替远端目标 |
+| BEH-060 | verification | Unconfirmed local target | 计划中本地主分支引用不明确，或无法核实当前提交 | BLOCKED，不以 worktree HEAD 猜测目标分支 |
 | BEH-061 | verification | Legacy evidence mapping | 旧证据缺新 ID 字段，但来源、版本和关系可准确核实 | 建立无歧义映射后核对，不仅因旧格式失败；无法确定关联则列缺失项，不编造来源 |
+| BEH-116 | verification | Missing handoff index | 新 coder/tester 报告声称任务 PASS，却缺 `handoff_index` 行；tasks.md 中对应任务已勾选 | 主 Agent 不接收该 PASS；从原始报告无法建立索引时判 BLOCKED，已授权写入则重开对应任务，并在 verification.md 标明缺行与待补角色报告 |
+| BEH-117 | verification | Same-record cross-role conflict | coder 与 integrator 均声称引用同一次 PV1 执行记录，但对该记录的原始报告路径、目标提交或结果给出矛盾值 | 按任务、阶段、目标版本及原始报告定位同一次记录，拒收矛盾的 PASS，列出冲突报告和受影响任务；已授权写入时重开受影响任务，不静默选择较新的成功摘要 |
+| BEH-118 | verification | Unreadable indexed report | 索引列出完整任务/版本/ID 和 PASS，但 report_path 不存在或无法读取 | 判相关证据 BLOCKED，列出不可读路径；已授权写入时重开受影响任务，待报告可读且原始结果核实后再验收 |
+| BEH-119 | verification | Invalid evidence marked pass | 候选或主分支行标 `evidence_status: INVALID`，因目标版本/配置变化失效，却仍写 `result: PASS` 且任务已勾选 | 以已确认失效为准拒收 PASS，保留旧证据和失效依据，已授权写入时重开受影响任务并要求对应角色在新固定版本复验；不得用另一阶段 PASS 覆盖 |
+| BEH-120 | verification | Repeated Check ID across stages | PV1 在 WP 提交与后续候选提交各执行一次，分别有固定版本、原始报告及结果；另有主分支阶段记录 | 按任务、阶段、目标版本和原始报告分别审计并保留各次结论；仅 ID 相同不判冲突，也不用较晚 PASS 覆盖较早 FAIL 或省略必要复验 |
 
 ## CLI Regression Baseline
 

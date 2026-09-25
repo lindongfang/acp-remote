@@ -290,7 +290,7 @@ mode: required
         Assert-That ($LASTEXITCODE -ne 0) 'required 变更在未执行 E2E 时通过了检查'
         $beforeVerdict = ($beforeRun -join "`n") | ConvertFrom-Json
         Assert-That ($beforeVerdict.changes[0].reason -match '执行记录') '未指出缺少执行记录'
-        $runOutput = & node (Join-Path $projectRoot 'bin/openspec-agentic.mjs') e2e run --change regression
+        $runOutput = & node (Join-Path $projectRoot 'bin/openspec-agentic.mjs') e2e run --change regression --stage final
         Assert-That ($LASTEXITCODE -eq 0) "E2E run 未成功：$($runOutput -join ' ')"
         Assert-That (($runOutput -join ' ') -match 'E2E run: PASS') 'E2E run 未报告 PASS'
         $records = Get-ChildItem -LiteralPath (Join-Path $fixtureRoot 'openspec/changes/regression/e2e') -Filter 'run-*.json'
@@ -311,6 +311,25 @@ mode: required
         Assert-That ($ownedTasks -match '\[ \] 8\.1 \[final-verification\]') '最终验收行不应被回写，应保持待办'
         $ownedAgain = Invoke-OpenSpecAgenticJson @('e2e', 'check', '--change', 'regression', '--json')
         Assert-That ($ownedAgain.result -eq 'PASS' -and $ownedAgain.changes[0].marked -eq $false) '重复检查不应再次回写'
+        Complete-Scenario
+        Start-Scenario 'CLI-15'
+        # 结构回归只验证共用契约被投递且验收入口明确消费；拒收/重开判断由 BEH-116..119 验证。
+        Assert-That ($readyInstruction.Contains('roles/handoff.md') -and $readyInstruction.Contains('handoff_index')) 'Apply lost the shared handoff contract'
+        $handoff = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'roles/handoff.md') -Raw -Encoding UTF8
+        foreach ($field in @('task_id', 'role', 'phase', 'stage', 'target_revision', 'evidence_type', 'evidence_id', 'report_path', 'result', 'evidence_status', 'applicability_basis', 'source_evidence')) {
+            Assert-That ($handoff.Contains($field)) "Shared handoff contract lost field: $field"
+        }
+        foreach ($state in @('NEW', 'REUSED', 'INVALID', 'PENDING')) {
+            Assert-That ($handoff.Contains($state)) "Shared handoff contract lost evidence state: $state"
+        }
+        foreach ($role in @('coder', 'tester', 'reviewer', 'integrator', 'validator', 'environment')) {
+            $instructions = Get-Content -LiteralPath (Join-Path $resolvedSchema.path "roles/$role.md") -Raw -Encoding UTF8
+            Assert-That ($instructions.Contains('roles/handoff.md') -and $instructions.Contains('handoff_index')) "Role lost shared index instruction: $role"
+        }
+        $acceptance = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'procedures/acceptance.md') -Raw -Encoding UTF8
+        $verificationTemplate = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'templates/verification.md') -Raw -Encoding UTF8
+        Assert-That ($acceptance.Contains('Handoff Traceability') -and $acceptance.Contains('重开受影响的任务')) 'Acceptance lost handoff audit or task reopening'
+        Assert-That ($verificationTemplate.Contains('## Handoff Index')) 'Verification template lost the indexed evidence section'
         Complete-Scenario
         Write-Output "PASS: $passed CLI regression scenarios. Agent evidence decisions require separate behavioral validation."
     }
