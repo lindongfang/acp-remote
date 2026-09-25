@@ -39,6 +39,8 @@
 | 2.21 | coder / implement / work-package | dfb1c9972aad35e3bbb880e1e9ecfbe01a696257 | CHECK / PV1、PV2（2.21 轮） | reports/wp321-handoff.md（日志 reports/wp321-contract.log、reports/wp3-server-methods.log） | PASS / NEW | `npm run check` exit 0（显式 EXIT 行）；`cargo test -p server` 93 项
 | 2.11, 2.13 | coder / implement / work-package | eef75f4（+测试 9b30ab4；报告 dbebd0c） | DELIVERY / NOT_APPLICABLE | reports/wp3b2-handoff.md | PASS / NEW | WP3b2 交付；RV1（3.6）待 2.23 后调度 |
 | 2.11, 2.13 | coder / implement / work-package | eef75f4 | CHECK / PV3（WP3b2 部分） | reports/wp3b2-handoff.md（日志 reports/wp3-server-pairing.log、reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | 112 passed（新增 19）；fmt/clippy（Win+Linux 目标）零告警；npm run verify 627 passed |
+| 2.23 | coder / implement / work-package | 313d2a2（含 0968c7a；报告 reports/wp323-handoff.md） | DELIVERY / NOT_APPLICABLE | reports/wp323-handoff.md | PASS / NEW | 三个 revoke 入口的前置读取 + `local.not_found`；fake 保真修正使断言非退化；RED 证据已留 |
+| 2.23 | coder / implement / work-package | 313d2a2 | CHECK / PV3（2.23 轮） | reports/wp323-handoff.md（日志 reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | 114 passed；fmt/clippy 零告警；`npm run check` EXIT=0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | BLOCKED / PENDING | `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
