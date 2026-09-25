@@ -21,7 +21,7 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 ### 1. 管理状态与配置持久化
 
-将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现已落地；本切片剩余的是 Daemon/CLI 接线与端到端验收。
+将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现已落地；本切片切片 4 已完成 Daemon/CLI 接线与本地管理通道（`server` 的本地适配器与 `app`），剩余的是 `server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client`。
 
 验收：旧数据库升级、事务原子性、重启恢复、撤销及损坏记录失败关闭均有测试；imported 表和端口仍不能写入远程会话正文。
 
