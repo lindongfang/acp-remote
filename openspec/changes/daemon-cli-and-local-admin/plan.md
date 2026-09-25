@@ -690,11 +690,7 @@ rows:
 mode: not-applicable
 reason: "本变更是首个产生可执行二进制的切片，但产品级端到端路径仍不存在：`server::node_link`、`node-link-client`、`server::acp_facade`（ACP 语义）与 `server::sync`/前端均未实现，`import.add` 无 catalog 快照、`node.pair.begin mode = access` 返回 local.unsupported、channel 0x02 在 facade 缺席期即连即关；没有第二个节点、没有真实 Agent 会话、没有可驱动的产品闭环。可运行的最大闭环（CLI ↔ Daemon 本机管理）已由 PV4 的真实子进程集成测试覆盖，不构成跨节点/跨客户端的产品 E2E 场景。"
 basis: "`openspec/config.yaml` 的 context 规则（当前阶段没有可端到端运行的产品路径时按变更记 not-applicable 并逐变更批准）与 `x-agentic.e2e.command` 为空的事实；切片 2/3 的同款处理已归档（`2026-09-24-acp-boundary-and-agent-host`、`2026-09-24-identity-auth-and-keystore`）。本变更不改 wire 协议与封闭词表，不影响 E2E 适用性判断。"
-alternative_checks:
-  - "cargo test --locked -p server --all-features [PV3]：framing 关闭规则、channel 绑定与 attachment 生命周期、未完成请求上限、信封校验与 local.* 错误码、方法路由到 core 用例（fake 端口）、schema/fixture 漂移、审计导出内容边界。"
-  - "cargo test --locked -p app --all-features [PV4]：真实子进程集成测试——daemon start/stop/status、重复 start 拒绝、种子导入与重启不覆盖、CLI 全子命令映射与退出码/stderr JSON 契约、配对仪式（含非交互 --sas/--fingerprint 逐字校验）、provider 凭据交互、acp-stdio 在 Daemon 缺席时明确退出。"
-  - "Windows 本机 [PV5]：Named Pipe SDDL 创建与对端 SID 校验（同用户接受/跨用户拒绝）、vendor/windows-local-ipc 自身测试。"
-  - "npm run check / npm run verify [PV1]/[PV2]：合同门禁与全 workspace 测试，确认新增成员、vendor crate 与依赖不破坏既有 crate。"
+alternative_checks: ["cargo test --locked -p server --all-features [PV3]：framing 关闭规则、channel 绑定与 attachment 生命周期、未完成请求上限、信封校验与 local.* 错误码、方法路由到 core 用例（fake 端口）、schema/fixture 漂移、审计导出内容边界。", "cargo test --locked -p app --all-features [PV4]：真实子进程集成测试——daemon start/stop/status、重复 start 拒绝、种子导入与重启不覆盖、CLI 全子命令映射与退出码/stderr JSON 契约、配对仪式（含非交互 --sas/--fingerprint 逐字校验）、provider 凭据交互、acp-stdio 在 Daemon 缺席时明确退出。", "Windows 本机 [PV5]：Named Pipe SDDL 创建与对端 SID 校验（同用户接受/跨用户拒绝）、vendor/windows-local-ipc 自身测试。", "npm run check / npm run verify [PV1]/[PV2]：合同门禁与全 workspace 测试，确认新增成员、vendor crate 与依赖不破坏既有 crate。"]
 downgrade_approval: "2026-09-25，本会话，用户原话：「1. 同意降级」。对应本会话提问第 1 项（本变更 Main E2E 记 not-applicable 及上述替代验证清单：本变更相关 cargo 测试含 CLI↔Daemon 真实子进程集成测试 + npm run check / npm run verify），来源为用户对该提问的批准；本记录不沿用 2026-09-23 的首次确认，也不沿用 2026-09-24 两次实现切片的批准。"
 ```
 
