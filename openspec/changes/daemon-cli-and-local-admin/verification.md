@@ -35,6 +35,8 @@
 | 3.4 | reviewer / work-package review / work-package | 6361f5d2a34d9f6306f62b41c852749e7d86bc4d | REVIEW / RV1 | reports/rv1-wp2.md | PASS / NEW | 隔离子 Agent（deepseek/deepseek-flash）；无 P0/P1；3 条 P2 处理见 Review Findings；重派前的失败运行见 Failures and Retests |
 | 2.10, 2.12 | coder / implement / work-package | f1a3cd4（+报告 4ec6bf3；另 fee6073 含中间版本） | DELIVERY / NOT_APPLICABLE | reports/wp3b1-handoff.md | PASS / NEW | WP3b1 交付；RV1 待 2.11/2.21 后并入 3.6 |
 | 2.10, 2.12 | coder / implement / work-package | f1a3cd4 | CHECK / PV3（WP3b1 部分） | reports/wp3b1-handoff.md（日志 reports/wp3-server-methods.log） | PASS / NEW | 91 passed / 0 failed / 0 ignored；fmt/clippy（Win + Linux 目标）零告警；npm run verify 697 passed |
+| 2.21 | coder / implement / work-package | 1cd7a3b（主 Agent 并发提交，含 2.21 全部 12 个文件；后接 dfb1c99 vendor 修复与 8dd24e4 报告） | DELIVERY / NOT_APPLICABLE | reports/wp321-handoff.md | PASS / NEW | 正则三处一致；drift 25 项；fixtures 118 valid/24 invalid；F1/F2 已修（dfb1c99） |
+| 2.21 | coder / implement / work-package | dfb1c9972aad35e3bbb880e1e9ecfbe01a696257 | CHECK / PV1、PV2（2.21 轮） | reports/wp321-handoff.md（日志 reports/wp321-contract.log、reports/wp3-server-methods.log） | PASS / NEW | `npm run check` exit 0（显式 EXIT 行）；`cargo test -p server` 93 项
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | BLOCKED / PENDING | `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -54,6 +56,7 @@
 - 2026-09-25（WP3b1 交付后，主 Agent 核实）：**新增任务 2.22：`storage-sqlite` 实现 `AuditStore`**。原因：`core::UseCases` 的 `UseCaseDeps.audit: Arc<dyn AuditStore>` 是必需字段，`audit.export`（任务 2.12，本变更范围内）靠 `AuditStore::query` 读 `owned_audit`，但工作区里只有 core 测试内的 `TestAudit`，生产实现缺失（已核实：`crates/storage-sqlite/src/admin/` 只有 export/local_config/trust 三个 impl；`owned_audit` 表与 `insert_audit_rows` 已存在）。写范围：`crates/storage-sqlite/src/admin/audit.rs`、`crates/storage-sqlite/src/admin/mod.rs`；归属 WP4 波次（在 2.14 之前），检查 PV1/PV2 + 该 crate 测试。影响：任务 2.22（新增）；需求未变。
 - 2026-09-25（WP3b1 待澄清项裁定，主 Agent）：② `agent.configure` 保留既有 `ProviderEnvBinding`——**接受**（合同 §5.2 的 `params` 不含绑定字段，保留既有绑定是正确行为）；③ keystore 条目命名约定（`keystore_ref = sha256(providerId)[..16]@v<version>`、标签 `<ref>.<field>`）需写回权威文档 `IDENTITY_AND_AUTH_CONTRACT.md` §7 与 `CORE_PORTS_AND_STORAGE.md` §11.6——**并入 WP5 文档收口**；④ 错误消息回显标识符类输入（参数名/方法名/类别名）——与 WP3a 同口径，接受；⑤ 三处收窄（`values` 非空、嵌套 closed、alias 用 node-link 同类正则）——接受（经核实 node-link 的 `workspaceAlias` 与文档 §5.2 正则**完全相同**，无行为差异）；⑥ §7「方法失败」无 §14.2 对应类别——本轮结构化日志 + 保留接线点，接受并登记；①AuditStore 缺口见上条新增任务。
 - 2026-09-25（RV1-WP1 后）：**WP5 写范围增加两处 MINOR 修复**——`scripts/check-crate-boundaries.mjs` 的过期注释（RV1-WP1-F2）与 `docs/MODULE_ARCHITECTURE.md` §5 注记补「`windows-local-ipc` 依赖面靠人工 review 约束」（RV1-WP1-F3）。两者均非行为变化；影响任务 2.19（写范围）。
+- 2026-09-25（2.21 交付后）：**WP5 写范围再增一处文档 bug**——`schemas/local-admin/v1/README.md:13` 引用了不存在的 `scripts/check-local-admin-contract.mjs`（本地管理词表实际由 `scripts/check-command-catalog.mjs` 断言）；属既有问题，2.21 未改，归 WP5 顺手修正。
 - 2026-09-25（WP1 交付后）：**WP4 调用点约束传递**——固定工具链 1.98.1 下 `std::fs::File::try_lock`（1.89 稳定）与 `fs4::FileExt` 同名且优先级更高，WP4 必须全限定调用 `fs4::FileExt::try_lock`，否则等于把 MSRV 抬到 1.89（依据：WP1 handoff 开放问题第 3 项，已写入 `MODULE_ARCHITECTURE.md` §3.1）。
 
 ## Dependency Handoffs
@@ -105,6 +108,7 @@
 | Issue ID / Task | Source / Check or E2E ID / Attempt / Version | Owner | Fix / Recovery | Review / Readiness Evidence | Retest Evidence | Current Status / Basis |
 | --- | --- | --- | --- | --- | --- | --- |
 | PRO-1（主 Agent 流程异常） | commit `fee6073`（登记 RV1-WP2 记录时误用 `git add -A`，把仍在运行的 WP3b1 部分工作树一并提交） | 主 Agent | 未做历史改写（子 Agent 同 worktree 并发工作，改写有风险）；已 steer 通知 WP3b1、要求其交付提交用显式路径；后续主 Agent 提交一律用显式路径 | 无（不影响代码内容与门禁：`npm run check`/fmt/clippy 均绿） | WP3b1 交付后核对其 handoff 的提交组成与最终 `git status` | 已登记；待 WP3b1 交付时核实完成组成 |
+| PRO-2（主 Agent 流程异常，同一根因） | commit `1cd7a3b`（我提交 spec/证据时，并发暂存的 2.21 十二个文件被一并带入；提交信息未提及契约补齐） | 主 Agent | 不做历史改写；自本次起主 Agent 一律用 `git commit --only <paths>`；已在 WP3b2 任务单里明确要求实现者只 add 自身路径 | 无（内容完整：正则三处一致、drift 25 项、fixtures 118/24；门禁与测试全绿） | WP3b2/3.6 复核时会核对 1cd7a3b 的完整组成 | 已登记；`1cd7a3b` 为 2.21 的权威交付提交（内容层面） |
 | RV1-WP2-RUN1 | 任务 3.4，reviewer 子 Agent 运行 `ecc2d081-dfcb-41eb-b845-800aceb7512d`（目标 6361f5d）；运行在回报前中止，只输出了开场句，未产生报告 | 主 Agent | 原因判定为子 Agent 运行时中断（非产品/证据问题：目标提交与输入未变）；已用 deepseek/deepseek-flash 重新派发 RV1-WP2 | 旧运行无报告产出，未作为结论 | 待重派结果 | 未解决（等待重派；不影响 WP3a 进行） |
 
 ## Final Assessment
