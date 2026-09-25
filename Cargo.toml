@@ -11,7 +11,17 @@ members = [
     "crates/node-link-protocol",
     "crates/acp-protocol",
     "crates/agent-host",
+    "crates/server",
+    "crates/app",
 ]
+# `windows-local-ipc` 是切片 4 自研的最小 Win32 FFI wrapper（docs/MODULE_ARCHITECTURE.md §3.1、`daemon-cli-and-local-admin` 变更的 design.md 决策 3）：
+# 它以**仓库内 path 依赖**被 `server` 消费，但不能继承 workspace 的 `unsafe_code = "forbid"`（它必须写 `unsafe`），
+# 也不发布 crates.io。`exclude` 是这条边界的实现手段：workspace 的 path 依赖默认会自动成为成员，写进 `exclude`
+# 才让它留在成员之外（实测于独立探针 workspace，证据见 reports/wp1-dependency-probe.log：排除后
+# `cargo metadata --no-deps` 仍把该目录列为依赖、members 里不含它，`cargo build` 正常工作，
+# 且无需在 vendor crate 里再写 `[workspace]`）。
+# 后果：它不是 workspace 成员，因此也不参与 §5 依赖矩阵的「行」比对，但必须成为矩阵的「列」（见 §5 表下注记）。
+exclude = ["vendor/windows-local-ipc"]
 
 [workspace.package]
 version = "0.0.0"
@@ -34,7 +44,11 @@ base64 = "0.23"
 async-trait = "0.1"
 # runtime 与数据库依赖：`storage-sqlite`（sqlx 与 runtime）与 `agent-host`（tokio 的进程/IO 类型）持有；
 # **runtime 本身由组合根启动**，两个适配器都不自己建 runtime（docs/MODULE_ARCHITECTURE.md §4.5/§4.7）。
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# `net`/`io-util`/`signal` 是切片 4 新增的基线 feature：`server::transport::local` 用 `net` 的 Named Pipe /
+# Unix socket safe API 与 `io-util` 的连接读写，`app` 用 `signal` 驱动关闭序列。feature 是加法的，
+# `agent-host` 仍在自己 manifest 里增量要 `process`/`io-util`/`macros`/`rt`（它自己的消费面），
+# 这里只登记跨 crate 共用的部分，不替下游多开。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate"] }
 # ID 生成（IdGenerator 的实现侧）：newtype 的形状校验在 core，随机来源在组合根。
 uuid = { version = "1", features = ["v4"] }
@@ -46,7 +60,9 @@ tracing = "0.1"
 win32job = "2"
 # Unix 进程组结束（`killpg`）；Windows 构建中不参与编译。
 # 用 safe wrapper（`nix`）而不直接用 `libc`：workspace 固定 `unsafe_code = "forbid"`，直接 FFI 必须写 `unsafe`。
-nix = { version = "0.30", default-features = false, features = ["signal", "process"] }
+# `socket`/`user` 是切片 4 新增的基线 feature：`server::transport::local` 用 `SO_PEERCRED` 比对对端 uid
+# （`sockopt::PeerCredentials` 与 `getsockopt` 都不在 `net` 门后，因此不必开 `net`）与当前进程的 `getuid`。
+nix = { version = "0.30", default-features = false, features = ["signal", "process", "socket", "user"] }
 
 # 密码学原语按 docs/MODULE_ARCHITECTURE.md §3.1 固定版本；已由 `identity-auth`（验签）与 `identity-keystore`
 # （进程内签名）消费，不要在别处另选实现。
@@ -65,6 +81,21 @@ hmac = "0.13"
 # 其选型结论按 SECURITY_DESIGN.md §20 实证后写回 MODULE_ARCHITECTURE.md §4.12。
 getrandom = "0.4"
 windows-dpapi = "0.2"
+
+# `server` / `app`（切片 4：本地管理通道与 CLI）的直接依赖，版本口径只维护在这里。
+# 三者都按 docs/SECURITY_DESIGN.md §20 核验过语义、许可证、MSRV 与维护状态；结论与依据见
+# docs/MODULE_ARCHITECTURE.md §3.1（`daemon-cli-and-local-admin` 的 WP1 报告里附原始证据）。
+# CLI 子命令解析；`derive` 是 clap 的可选 feature（clap_derive）。
+clap = { version = "4.6", features = ["derive"] }
+# `app` 读 CONFIG_REFERENCE.md 的配置文件（只读，不回写，因此不引入 toml_edit）。
+toml = "1.1"
+# 单实例锁的 OS advisory 文件锁：unix 走 `flock`、Windows 走 `LockFileEx`，公开 API 只有独占锁 +
+# `try_lock`/`TryLockError`（safe API，unsafe 收敛在 crate 内部）。落选候选 `fd-lock` 的理由见 docs/MODULE_ARCHITECTURE.md §3.1。
+fs4 = "1.1"
+# `provider configure` 的凭据值**无回显**读取（`cli-commands` 规格的场景「凭据无回显录入」）：默认配置就
+# 从终端设备（unix `/dev/tty`、Windows `CONIN$`）读且关回显，因此管道/stdin 无法注入凭据值。
+# 选型结论（版本、许可证、MSRV、传递依赖）见 WP4b 报告与 docs/MODULE_ARCHITECTURE.md §3.1。
+rpassword = "7.5"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

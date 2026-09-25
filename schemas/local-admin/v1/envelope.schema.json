@@ -20,7 +20,8 @@
     },
     "methodName": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9]+)*$",
+      "description": "LOCAL_ADMIN_PROTOCOL.md §4 的方法名语法与 §5 的方法集。段内允许连字符，段首/段尾不得为连字符；枚举顺序与 §5.1 的能力对应表一致。",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9]+(-[a-z0-9]+)*)*$",
       "enum": [
         "daemon.status",
         "daemon.stop",
@@ -45,6 +46,7 @@
         "import.add",
         "import.list",
         "import.remove",
+        "node.rotate-key.begin",
         "audit.export"
       ]
     },

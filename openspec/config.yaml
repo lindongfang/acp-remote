@@ -69,12 +69,12 @@ operations:
 x-agentic:
   configVersion: 1
   roles:
-    main: "kimi-coding/k3"
+    main: "deepseek/deepseek-flash"
     coder: "deepseek/deepseek-flash"
     integrator: "deepseek/deepseek-flash"
     tester: "deepseek/deepseek-flash"
     validator: "deepseek/deepseek-flash"
-    reviewer: "kimi-coding/k3"
+    reviewer: "deepseek/deepseek-flash"
     environment: "deepseek/deepseek-flash"
   e2e:
     enabled: true

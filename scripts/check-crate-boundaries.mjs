@@ -9,7 +9,7 @@
 //
 // 规则：
 // - 表头列出的 crate 是「允许被依赖的对象」，行是「发起方」；`✓` 允许、`—` 是自身、空白禁止。
-// - 工作区里尚未落地的 crate 不参与矩阵比对（成员随增量增长，见 §3.1），但其依赖必须都是矩阵认识的 crate。
+// - 工作区里尚未加入 `members` 的 crate 不参与矩阵比对（成员随增量增长，见 §3.1），但其依赖必须都是矩阵认识的 crate。已加入 `members` 的每个 crate 都必须能在 §5 矩阵里找到对应行与列（切片 4 起 `storage-sqlite`/`server`/`app` 三者都既有行也有列）。
 // - 第三方依赖不在此门禁范围（只判项目内 crate 之间的方向）；core 的 runtime/DB/HTTP/子进程/wire
 //   依赖是硬约束（§4.1），单独列出。
 
@@ -46,10 +46,10 @@ function readDependencyMatrix(document) {
       .slice(1, -1)
       .map((cell) => cell.trim());
     const from = cells[0];
-    // 每一行都要收：§5 矩阵当前有 9 个「列」（可被依赖的对象：core、acp-protocol、agent-host、
-    // 两个协议 crate、acpr-transcript、acpr-wire、identity-auth、identity-keystore）；
-    // `node-link-client` / `storage-sqlite` / `server` / `app` 仍只作为「行」存在，跳过它们会让
-    // 这些 crate 的依赖边无人检查（`MODULE_ARCHITECTURE.md` §5 表下同样披露了这一点）。
+    // 每一行都要收：§5 矩阵当前有 13 个「列」（可被依赖的对象：12 个 workspace 成员 +
+    // `vendor/windows-local-ipc`）；`node-link-client` 仍只作为（列外的）「行」存在，跳过它会
+    // 让它没有依赖方可查（`MODULE_ARCHITECTURE.md` §5 表下同样披露了这一点）。
+    // 行缺席只上报、不硬失败（下面的 `if (!row) continue`），因此行与列的增减必须人工维护。
     const row = new Map();
     columns.forEach((to, columnIndex) => {
       if (cells[columnIndex + 1] === "✓") row.set(to, true);

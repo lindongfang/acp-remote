@@ -2,8 +2,8 @@
 
 本目录是 [`schemas/local-admin/v1/`](../../../schemas/local-admin/v1/) 的正反固定向量，由 [`manifest.json`](./manifest.json) 驱动。
 
-- `valid/`：请求、成功响应与失败响应三种信封各自至少一条；另含带完整 `params` 的方法请求。
-- `invalid/`：每条在 manifest 里声明 `expectedKeyword`，用于固定「信封类错误必须被哪条约束拒绝」。版本号非 1、未知方法、`params: null`、未知本地错误码、`ok: true` 缺 `result` 都在覆盖范围内。
+- `valid/`：请求、成功响应与失败响应三种信封各自至少一条；另含带完整 `params` 的方法请求，以及连字符方法名 `node.rotate-key.begin`（§5.7 登记、字段未定义时回 `local.unsupported`）的无参数请求。
+- `invalid/`：每条在 manifest 里声明 `expectedKeyword`，用于固定「信封类错误必须被哪条约束拒绝」。版本号非 1、未知方法、方法名段首连字符、`params: null`、未知本地错误码、`ok: true` 缺 `result` 都在覆盖范围内。
 
 边界：
 

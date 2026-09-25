@@ -2,6 +2,13 @@
 /target/
 **/*.rs.bk
 
+# `vendor/windows-local-ipc` 不是 workspace 成员（根 `Cargo.toml` 的 `workspace.exclude`），
+# 因此它可以（也需要）在自己的目录里独立 `cargo build/test`——那会在目录下生成 `target/` 与 `Cargo.lock`，
+# 上面的 `/target/` 只匹配仓库根。两者都不入库：作为 path 依赖被 `server` 消费时，构建产物进根 `target/`、
+# 版本解析由根 `Cargo.lock` 覆盖；独立的 `Cargo.lock` 只是本机独立构建的副产物。
+/vendor/windows-local-ipc/target/
+/vendor/windows-local-ipc/Cargo.lock
+
 # Node 工具链（合同校验脚本的 devDependencies）
 node_modules/
 npm-debug.log*

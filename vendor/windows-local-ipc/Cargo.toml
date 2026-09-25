@@ -1,0 +1,48 @@
+# `windows-local-ipc`：切片 4 自研的最小 Win32 FFI wrapper（`docs/MODULE_ARCHITECTURE.md` §3.1、
+# `daemon-cli-and-local-admin` 变更的 design.md 决策 3）。
+#
+# 为什么单独成 crate 且在 workspace 之外：workspace 固定 `unsafe_code = "forbid"`，而本地管理通道的
+# 两层访问控制在 Windows 上必须经 Win32（`docs/LOCAL_ADMIN_PROTOCOL.md` §2.2）。它以仓库内 **path 依赖**
+# 被 `server` 消费，登记在根 `Cargo.toml` 的 `workspace.exclude`，因此不是 workspace 成员、不继承
+# workspace lint（由 `src/lib.rs` 的 `#![allow(unsafe_code)]` 在本 crate 内显式放开）、不发布。
+#
+# 因此这里**不能**写 `version.workspace = true` / `license.workspace = true` 之类：`[workspace.package]`
+# 只对成员生效，本 crate 的元数据必须自持一份。
+[package]
+name = "windows-local-ipc"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+# path 依赖不发布到 crates.io；显式 `publish = false` 让这一点在 manifest 里可读。
+publish = false
+description = "供 ACP Remote 本地管理通道使用的最小 Windows Named Pipe 访问控制 wrapper（SDDL 创建与对端 SID 查询）"
+
+# 与 workspace 同一套 clippy 门禁（`[workspace.lints.clippy] all = "deny"`）。
+# workspace 的 `[workspace.lints.rust] unsafe_code = "forbid"` 不适用本 crate：它必须写 FFI 调用，
+# 由 crate 级的 `#![allow(unsafe_code)]` 放开，并逐处附不变量注释。
+[lints.clippy]
+all = "deny"
+
+# 平台依赖只在 Windows 构建里参与编译：非 Windows 平台上本 crate 编译为空 crate，没有任何依赖。
+[target.'cfg(windows)'.dependencies]
+# `net` 提供 `tokio::net::windows::named_pipe`（`NamedPipeServer` 及其 `from_raw_handle`）：
+# 句柄注册进 IOCP 由 tokio 负责，本 crate 不做事件循环接线。
+tokio = { version = "1", features = ["net"] }
+# 版本与 workspace lock 中已有的 `windows-sys 0.61.2` 同族（`mio` 与 `tokio` 已引入该版本族；
+# `fs4`/`clap` 尚未进入 `Cargo.lock`）。
+# feature 只开本 crate 实际用到的模块，逐项对应源码里的 FFI 调用。
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",             # HANDLE / INVALID_HANDLE_VALUE / CloseHandle / LocalFree / FALSE
+    "Win32_Security",               # SECURITY_ATTRIBUTES / TOKEN_USER / TokenUser / TOKEN_QUERY / GetTokenInformation
+    "Win32_Security_Authorization", # ConvertStringSecurityDescriptorToSecurityDescriptorW / ConvertSidToStringSidW
+    "Win32_Storage_FileSystem",     # PIPE_ACCESS_DUPLEX / FILE_FLAG_FIRST_PIPE_INSTANCE / FILE_FLAG_OVERLAPPED
+    "Win32_System_Pipes",           # CreateNamedPipeW / GetNamedPipeClientProcessId / PIPE_* 常量
+    "Win32_System_Threading",       # GetCurrentProcess / OpenProcess / OpenProcessToken / PROCESS_QUERY_LIMITED_INFORMATION
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+# 用例需要 runtime（`NamedPipeServer`/`ClientOptions` 都要求已开 I/O 的 runtime）、`#[tokio::test]`
+# 与 `io-util` 的读写扩展。dev-dependencies 不进入依赖方的闭包（path 依赖的 dev-deps 只在自身测试时构建），
+# 因此 `server` 消费本 crate 时仍然只额外开启 `net`。
+tokio = { version = "1", features = ["net", "rt", "macros", "io-util"] }

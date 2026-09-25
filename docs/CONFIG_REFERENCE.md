@@ -46,9 +46,9 @@
 | `daemon.public_origin` | string\\|null | `null` | canonical public origin（`scheme://host[:port]`）；配置了远程入口就必须给出，用于 Origin/Host 校验与配对二维码 |
 | `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host |
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
-| `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1 |
+| `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1。**当前切片只接线 `file`**（`fs4` 的 OS advisory 文件锁；两种取值的互斥语义相同），显式写 `ipc` 会被解析但在启动时以 `daemon.config_unwired`（debug 级）注明「已解析但不生效」，不静默换实现 |
 | `daemon.shutdown_grace_ms` | integer | `10000` | 关闭时等待接入层停止、Agent 退出与存储刷新的上限 |
-| `daemon.local_admin.endpoint` | string | `"auto"` | 本地管理通道 endpoint；`auto` 使用平台默认位置（Windows Named Pipe / Unix socket，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.1）。显式值只用于测试或路径冲突排查，不改变“只允许同一 OS 用户”的授权模型 |
+| `daemon.local_admin.endpoint` | string | `"auto"` | 本地管理通道 endpoint；`auto` 使用平台默认位置（Windows Named Pipe / Unix socket，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.1）。显式值只用于测试或路径冲突排查，不改变“只允许同一 OS 用户”的授权模型。**当前切片只接受 `auto`**：显式值在配置解析阶段即以 `ConfigError` 失败关闭（`crates/app/src/config.rs`），待 `server::transport::local` 提供显式路径入口后再放开 |
 | `daemon.tls.mode` | enum | `"proxy"` | `proxy` = TLS 由同机可信反向代理终止（配合 `daemon.trusted_proxies` 与 `daemon.public_origin`）；`direct` = Daemon 自己终止 TLS，此时 `cert_path`/`key_path` 必需 |
 | `daemon.tls.cert_path` | path\|null | `null` | PEM 证书链；`mode = "direct"` 时必需，文件权限按 `SECURITY_DESIGN.md` §13.2 检查 |
 | `daemon.tls.key_path` | path\|null | `null` | PEM 私钥；`mode = "direct"` 时必需，不得写入日志、错误信息或崩溃报告 |
@@ -107,7 +107,7 @@
 | `storage.max_total_size_bytes` | `2147483648` | 整库容量上限（2 GiB） |
 | `storage.max_session_size_bytes` | `104857600` | 单会话内容上限（100 MiB） |
 | `storage.persist_deltas` | `false` | 只影响 turn 完成后是否压缩/清理短期 delta，不允许绕过“先持久化、后广播” |
-| `storage.flush_interval_ms` | `250` | 流式事件的批量落盘间隔 |
+| `storage.flush_interval_ms` | `250` | 同一会话短窗口内 delta 合并为一次 `commit` 的窗口（broker 的合并窗口，由组合根定时器枚举非终态会话并逐个驱动 `Broker::pump`；`CORE_PORTS_AND_STORAGE.md` §6 第 10 条；**不是**存储刷盘间隔） |
 | `storage.attachment_max_file_bytes` | `20971520` | 单个附件上限（20 MiB） |
 | `storage.attachment_max_total_bytes` | `1073741824` | 附件总量上限（1 GiB） |
 | `storage.attachment_dir` | `<data_dir>/attachments` | 内容寻址的附件目录（`CORE_PORTS_AND_STORAGE.md` §7.1）；权限与数据库目录相同，见 `SECURITY_DESIGN.md` §13.2 |

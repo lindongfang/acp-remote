@@ -1,6 +1,8 @@
 # ACP Remote 本地管理通道
 
-> 状态：编码前契约  
+> 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）的**本地通道部分已落地**（`server::transport::local` + `server::local_admin` + `app`），`server::acp_facade` 待切片 6——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 版本：1.3（2026-09-25：方法名允许段内连字符；`node.rotate-key.begin` 进入 v1 方法词表，修正 §5.7 与机器词表的不一致）  
+> 版本：1.2（2026-09-25：新增 §3.1 实现状态注记——`server::acp_facade` 落地前，Daemon 对 `0x02` 连接在 framing 校验后即连即关；`daemon-cli-and-local-admin` 变更的 design.md 决策 5）  
 > 版本：1.1（2026-09-23：新增 §3.1 `0x02` ACP 流的会话生命周期；管理载荷的 envelope 与错误码改为机器表达，目录见 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)）  
 > 日期：2026-09-18  
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
@@ -126,6 +128,12 @@ u32be length | payload(length bytes)
 - Node Link / Sync 错误码到 ACP 错误的映射表在 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6，本地不新增第二张表。
 - 本节的机器表达范围：管理载荷（channel `0x01`）的 envelope 与错误码在 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)；`0x02` 的字节流本身**不建 schema**（它对本地管理不透明，只有分帧与上限是合同）。
 
+**实现状态**
+
+> `[现状]`（2026-09-25，切片 4 `daemon-cli-and-local-admin`）`server::acp_facade` 尚未落地。在该实现缺席期间，Daemon 对 `0x02` 连接的处理是：完成 §3 的 framing 校验（首帧 channel、帧上限、空帧规则、channel 不混用）后**立即关闭连接并记一条结构化警告**（facade 未装配），不返回错误帧、不转发任何字节，也不让该连接占用可用的 `FacadeAttachmentId`；`acp-remote acp-stdio` 侦测到连接被立即关闭时以明确错误（Daemon 未提供 ACP 流）非零退出。
+>
+> 这是 `daemon-cli-and-local-admin` 变更的 design.md 决策 5 在 facade 缺席期的行为，**不改变本节任何语义**：`0x02` 的会话语义、attachment 生命周期、并发上限与重连幂等仍是落地目标；切片 6 接入 facade 时只替换分发目标，framing 与 attachment 生命周期代码不动。
+
 ## 4. 管理信封
 
 ```text
@@ -138,7 +146,7 @@ u32be length | payload(length bytes)
 |---|---|---|
 | `v` | integer | 通道版本；v1 只接受 `1` |
 | `id` | UUID | 请求标识；同一连接上未完成请求的 `id` 必须唯一 |
-| `method` | string | 小写点分 ASCII，匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+)*$` |
+| `method` | string | 小写点分 ASCII，匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`（段内允许连字符，段首/段尾不得为连字符） |
 | `params` | object | 无参数方法必须发送 `{}`，不用 `null` |
 | `ok` | boolean | 响应判别字段 |
 | `result` | object | `ok = true` 时存在；无返回值的方法返回 `{}` |
@@ -490,7 +498,9 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 - 只包含 `SECURITY_DESIGN.md` §14.2 的元数据字段，**不得**包含 prompt、回复、diff、终端、ACP `rawJson`、附件内容、凭据、pairing secret 或 QR payload（§14.1）；审计导出不能成为第二份聊天记录。
 - 时间区间与类别过滤在 Daemon 内完成；输出按记录时间升序，`jsonl` 每行一个对象，`csv` 首行为列名。
 
-### 5.7 明确推迟：`node.rotate-key.begin`
+### 5.7 明确推迟（`local.node.rotate-key`）
+
+#### `node.rotate-key.begin`
 
 - `node.rotate-key.begin` 属于 `post_mvp`：本轮**只登记方法名**，`params`/`result` 与 `NODE_LINK_PROTOCOL.md` §12.3 的 `node.rotate-key.request`／`node.rotate-key.result` 同批定义，不提前发明字段。
 - 它表达“本地用户请求本节点轮换 Node Identity Key”，对应 `local.node.rotate-key`；轮换后所有已配对设备与节点必须重新配对，不能靠普通 endpoint 更新掩盖密钥变化（`SECURITY_DESIGN.md` §9.1、§9.5）。
@@ -581,7 +591,7 @@ $ acp-remote device pair --request session.read --sas 481502 --fingerprint ab12�
   - CLI 不得自动重试任何 mutation 方法。
 - **endpoint 创建失败**（权限不符、路径被占用、socket 被替换为符号链接、目录权限不符、旧 socket 仍存活）→ 正式模式拒绝启动，不得降级为“无管理通道”或临时暴露无认证 endpoint（ADR-0004 决策 8、`SECURITY_DESIGN.md` §8）。
 - **撤销与关闭顺序**：`device.revoke`、`node.revoke`、`export.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
-- **审计与日志**：拒绝连接、方法失败与撤销记 `SECURITY_DESIGN.md` §14.2 的审计事件；日志遵守 §14.1 的允许字段。
+- **审计与日志**：拒绝连接、`SECURITY_DESIGN.md` §14.2 类别覆盖的安全动作（配对批准/拒绝、撤销、凭据配置等）记对应审计事件；**方法失败只记结构化日志**——§14.2 的封闭类别里没有「方法失败」，不得复用 `authorization.denied` 把参数错误与 scope 拒绝混为一谈。日志遵守 §14.1 的允许字段。
 
 ## 8. 版本与演进
 
