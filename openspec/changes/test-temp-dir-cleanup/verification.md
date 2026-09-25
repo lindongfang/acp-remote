@@ -198,7 +198,7 @@ alternative_checks:
 
 ```agentic-assessment
 assessment_id: "FV1-2026-09-26"
-target_commit: 7351093294eed35cc0593c438664ebefa146f7f0
+target_commit: 6b908f1623119be7567b8430d4ce6f3a029ff101
 contract_digest: sha256:0b8a80ab97f5e149d7f65e80c9ff1fbd801c1b4464d5106b398d0571619020c3
 result: PASS
 evidence:
