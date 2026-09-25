@@ -217,9 +217,12 @@ gh pr merge --squash --delete-branch
 ```
 
 agentic 变更在候选合入前还须按 `openspec/schemas/agentic/procedures/workflow-check.md` 执行
-`openspec-agentic workflow check --change <变更> --stage premerge --json`；它核对候选版本、
-Project Verify、独立 review 与适用的候选 E2E/替代检查证据。角色报告的交接索引以
-`openspec/schemas/agentic/roles/handoff.md` 为准。该检查不代替本节的 PR 与必需 CI 检查。
+`npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage premerge --planning-root <权威规划根> --json`；
+它核对候选版本、Project Verify、独立 review 与适用的候选 E2E/替代检查证据。角色报告的交接索引以
+`openspec/schemas/agentic/roles/handoff.md` 为准。该门由主 Agent 在本地候选 worktree 执行，**不接入 CI**：
+扩展随 0.2.4 提供的 `openspec/schemas/agentic/ci/github-premerge.yml` 是可选模板（要求 PR 正文恰好一行
+`Agentic-Change: <变更名>`，并把 `agentic-premerge` 设为受保护分支的必需状态）；本仓库以单人协作为主、
+已有五个必需检查，暂不采纳该模板。该检查不代替本节的 PR 与必需 CI 检查。
 
 bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上仍然可行，但那是紧急出口而不是日常路径**：
 绕过后 `deps` / `advisories` / `secrets` 三个只能在 CI 运行的判定就不再是先于落地的门禁，只会变成事后通知。
@@ -293,7 +296,7 @@ cargo test --locked --workspace --all-features
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
 - CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
-- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**）—— 各道门禁的完整清单与判据见 `README.md` 的「合同检查」，本文件不重复枚举，只固定三条独有硬约束：**文档引用门禁**（`scripts/check-doc-links.mjs`）的引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档；**合同漂移门禁**（`scripts/check-contract-drift.mjs`）逐条比对 `docs/CORE_PORTS_AND_STORAGE.md` §7（`storage-sqlite` v1 表结构）与 `crates/storage-sqlite/src/migrate.rs`，以及 `docs/CORE_PORTS_AND_STORAGE.md` §5（`core::ports` 出站端口）与 `crates/core/src/ports.rs`（归一化后相等；`IF NOT EXISTS`、注释与空白不算差异）；**crate 依赖方向门禁**以 `MODULE_ARCHITECTURE.md` §5（依赖矩阵）为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖；**封闭词表门禁**（也在 `scripts/check-command-catalog.mjs` 里）除命令目录外还断言本地管理的方法集、本地错误码与 `local.*` 能力三处一致：`docs/LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`，`local.*` 能力 ↔ `compatibility/commands/v1/commands.json` 的 `localCapabilities`。`check:agentic`（`scripts/agentic-gate.mjs`）的判据与离线语义见 §12。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的「合同检查」小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
+- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**）—— 各道门禁的完整清单与判据见 `README.md` 的「合同检查」，本文件不重复枚举，只固定四条独有硬约束：**文档引用门禁**（`scripts/check-doc-links.mjs`）的引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档；**合同漂移门禁**（`scripts/check-contract-drift.mjs`）逐条比对 `docs/CORE_PORTS_AND_STORAGE.md` §7（`storage-sqlite` v1 表结构）与 `crates/storage-sqlite/src/migrate.rs`，以及 `docs/CORE_PORTS_AND_STORAGE.md` §5（`core::ports` 出站端口）与 `crates/core/src/ports.rs`（归一化后相等；`IF NOT EXISTS`、注释与空白不算差异）；**crate 依赖方向门禁**以 `MODULE_ARCHITECTURE.md` §5（依赖矩阵）为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖；**封闭词表门禁**（也在 `scripts/check-command-catalog.mjs` 里）除命令目录外还断言本地管理的方法集、本地错误码与 `local.*` 能力三处一致：`docs/LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`，`local.*` 能力 ↔ `compatibility/commands/v1/commands.json` 的 `localCapabilities`。`check:agentic`（`scripts/agentic-gate.mjs`）的判据与离线语义见 §12。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的「合同检查」小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
 
 CI 已接入五个 job（`.github/workflows/ci.yml`，push、PR 与每日定时都跑）：`checks`、`commits`、`deps`、`advisories`、`secrets`，各 job 的判定内容见 `README.md` 的「合同检查」；后三个需要网络或额外二进制，**没有本地等价物属于 `npm run verify`**，未在本地执行不等于通过（工具版本、许可证与向外发送的数据见 `docs/adr/0008-ci-supply-chain-tooling.md`）。依赖更新由 `.github/dependabot.yml` 提出（含冷却期；分组升级同样要过全部 job）。
 
