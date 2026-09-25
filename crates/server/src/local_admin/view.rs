@@ -74,7 +74,13 @@ pub(crate) fn export(record: &ExportRecord) -> JsonObject {
         ("displayName", text(record.display_name())),
         (
             "agentIds",
-            Value::Array(record.agent_ids().iter().map(|id| text(id.as_str())).collect()),
+            Value::Array(
+                record
+                    .agent_ids()
+                    .iter()
+                    .map(|id| text(id.as_str()))
+                    .collect(),
+            ),
         ),
         (
             "workspaceAliases",
@@ -121,7 +127,10 @@ pub(crate) fn export(record: &ExportRecord) -> JsonObject {
                     .collect(),
             ),
         ),
-        ("defaultTemplateId", text(record.default_template_id().as_str())),
+        (
+            "defaultTemplateId",
+            text(record.default_template_id().as_str()),
+        ),
         ("scopes", string_array(record.scopes().iter())),
         ("cachePolicy", text(record.cache_policy().as_str())),
         ("createdAt", timestamp(record.created_at())),

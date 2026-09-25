@@ -40,7 +40,10 @@ pub fn invalid_params(message: impl AsRef<str>) -> AdminError {
 // ---------------------------------------------------------------------------------------------
 
 /// 拒绝本文档未登记的 `params` 字段（§1.1：`params` 是 closed object）。
-fn reject_unknown(params: &JsonObject, allowed: &[&str]) -> Result<(), AdminError> {
+pub(crate) fn reject_unknown_fields(
+    params: &JsonObject,
+    allowed: &[&str],
+) -> Result<(), AdminError> {
     match params.keys().find(|key| !allowed.contains(&key.as_str())) {
         Some(key) => Err(invalid_params(format!("unknown parameter `{key}`"))),
         None => Ok(()),
@@ -75,14 +78,18 @@ fn optional_string(params: &JsonObject, key: &str) -> Result<Option<String>, Adm
 fn object<'a>(params: &'a JsonObject, key: &str) -> Result<&'a JsonObject, AdminError> {
     match value(params, key)? {
         Value::Object(map) => Ok(map),
-        _ => Err(invalid_params(format!("parameter `{key}` must be an object"))),
+        _ => Err(invalid_params(format!(
+            "parameter `{key}` must be an object"
+        ))),
     }
 }
 
 fn array<'a>(params: &'a JsonObject, key: &str) -> Result<&'a Vec<Value>, AdminError> {
     match value(params, key)? {
         Value::Array(items) => Ok(items),
-        _ => Err(invalid_params(format!("parameter `{key}` must be an array"))),
+        _ => Err(invalid_params(format!(
+            "parameter `{key}` must be an array"
+        ))),
     }
 }
 
@@ -150,9 +157,11 @@ fn require_spec_name(text: &str, max: usize, what: &str) -> Result<(), AdminErro
 /// §1.1 的时间戳文本（UTC、毫秒、`Z`）。
 fn timestamp(params: &JsonObject, key: &str) -> Result<Option<Timestamp>, AdminError> {
     match optional_string(params, key)? {
-        Some(text) => Timestamp::new(&text)
-            .map(Some)
-            .map_err(|_| invalid_params(format!("parameter `{key}` must be a UTC RFC 3339 timestamp"))),
+        Some(text) => Timestamp::new(&text).map(Some).map_err(|_| {
+            invalid_params(format!(
+                "parameter `{key}` must be a UTC RFC 3339 timestamp"
+            ))
+        }),
         None => Ok(None),
     }
 }
@@ -168,12 +177,12 @@ fn from_invalid(what: &str, error: acp_core::model::InvalidValue) -> AdminError 
 
 /// `daemon.status`：无参数（§1.1：无参数方法必须发送 `{}`）。
 pub fn daemon_status(params: &JsonObject) -> Result<(), AdminError> {
-    reject_unknown(params, &[])
+    reject_unknown_fields(params, &[])
 }
 
 /// `daemon.stop` 的 `graceMs`：`null` = 使用配置值，非空时 `0..=60000`（§5.2）。
 pub fn daemon_stop(params: &JsonObject) -> Result<Option<u64>, AdminError> {
-    reject_unknown(params, &["graceMs"])?;
+    reject_unknown_fields(params, &["graceMs"])?;
     match value(params, "graceMs")? {
         Value::Null => Ok(None),
         Value::Number(number) => {
@@ -210,7 +219,7 @@ pub struct WorkspaceSelect {
 
 /// `workspace.select`（§5.2）：`alias`/`displayName`/`rootPath`。
 pub fn workspace_select(params: &JsonObject) -> Result<WorkspaceSelect, AdminError> {
-    reject_unknown(params, &["alias", "displayName", "rootPath"])?;
+    reject_unknown_fields(params, &["alias", "displayName", "rootPath"])?;
     let alias_text = string(params, "alias")?;
     let alias = WorkspaceAlias::new(&alias_text)
         .map_err(|error| from_invalid("parameter `alias`", error))?;
@@ -238,9 +247,7 @@ fn canonical_workspace_path(text: &str) -> Result<String, AdminError> {
         .components()
         .any(|component| matches!(component, Component::ParentDir))
     {
-        return Err(invalid_params(
-            "parameter `rootPath` must not contain `..`",
-        ));
+        return Err(invalid_params("parameter `rootPath` must not contain `..`"));
     }
     let metadata = std::fs::metadata(path)
         .map_err(|_| invalid_params("parameter `rootPath` must be an existing directory"))?;
@@ -275,7 +282,7 @@ pub struct AgentConfigure {
 
 /// `agent.configure`（§5.2）：六个字段都是必需字段。
 pub fn agent_configure(params: &JsonObject) -> Result<AgentConfigure, AdminError> {
-    reject_unknown(
+    reject_unknown_fields(
         params,
         &[
             "agentId",
@@ -287,15 +294,15 @@ pub fn agent_configure(params: &JsonObject) -> Result<AgentConfigure, AdminError
         ],
     )?;
     let agent_id_text = string(params, "agentId")?;
-    let agent_id = AgentId::new(&agent_id_text)
-        .map_err(|error| from_invalid("parameter `agentId`", error))?;
+    let agent_id =
+        AgentId::new(&agent_id_text).map_err(|error| from_invalid("parameter `agentId`", error))?;
     Ok(AgentConfigure {
         agent_id,
         display_name: display_name(params, "displayName")?,
         command: string(params, "command")?,
         args: strings(params, "args")?,
         env_allowlist: strings(params, "envAllowlist")?,
-        default: boolean(params, "default"),
+        default: boolean(params, "default")?,
     })
 }
 
@@ -317,7 +324,7 @@ pub struct ProviderConfigure {
 /// 值非空的理由是可判定性：keystore 的 Provider 凭据条目要求长度 ≥1，空值只会在端口层报错；
 /// 这里提前判定为参数非法，避免把「参数写错」报成「keystore 不可用」。
 pub fn provider_configure(params: &JsonObject) -> Result<ProviderConfigure, AdminError> {
-    reject_unknown(params, &["providerId", "kind", "displayName", "values"])?;
+    reject_unknown_fields(params, &["providerId", "kind", "displayName", "values"])?;
     let provider_id = spec_name(params, "providerId", 64)?;
     let kind_text = string(params, "kind")?;
     let kind = kind_text
@@ -360,8 +367,11 @@ pub fn provider_configure(params: &JsonObject) -> Result<ProviderConfigure, Admi
 /// 首切片约束在此判定：`agentIds`/`workspaceAliases`/`templates` 恰好 1 项、`templates[].params`
 /// 必须为空、`cachePolicy` 固定 `no-content-cache`；`default*` 一致性由 `ExportRecord` 的不变式
 /// 兜底（core 只有一份定义）。
-pub fn export_create(params: &JsonObject, created_at: Timestamp) -> Result<ExportRecord, AdminError> {
-    reject_unknown(
+pub fn export_create(
+    params: &JsonObject,
+    created_at: Timestamp,
+) -> Result<ExportRecord, AdminError> {
+    reject_unknown_fields(
         params,
         &[
             "exportId",
@@ -403,22 +413,19 @@ pub fn export_create(params: &JsonObject, created_at: Timestamp) -> Result<Expor
         let entry = entry.as_object().ok_or_else(|| {
             invalid_params(format!("`workspaceAliases[{index}]` must be an object"))
         })?;
-        reject_unknown(entry, &["alias", "displayName"])?;
+        reject_unknown_fields(entry, &["alias", "displayName"])?;
         let alias_text = string(entry, "alias")?;
-        let alias = WorkspaceAlias::new(&alias_text).map_err(|error| {
-            from_invalid(&format!("`workspaceAliases[{index}].alias`"), error)
-        })?;
-        workspace_aliases.push(WorkspaceAliasEntry::try_new(
-            alias,
-            &display_name(entry, "displayName")?,
-        )
-        .map_err(|error| from_invalid("`workspaceAliases`", error))?);
+        let alias = WorkspaceAlias::new(&alias_text)
+            .map_err(|error| from_invalid(&format!("`workspaceAliases[{index}].alias`"), error))?;
+        workspace_aliases.push(
+            WorkspaceAliasEntry::try_new(alias, &display_name(entry, "displayName")?)
+                .map_err(|error| from_invalid("`workspaceAliases`", error))?,
+        );
     }
 
     let default_alias_text = string(params, "defaultWorkspaceAlias")?;
-    let default_workspace_alias = WorkspaceAlias::new(&default_alias_text).map_err(|error| {
-        from_invalid("parameter `defaultWorkspaceAlias`", error)
-    })?;
+    let default_workspace_alias = WorkspaceAlias::new(&default_alias_text)
+        .map_err(|error| from_invalid("parameter `defaultWorkspaceAlias`", error))?;
 
     let templates_raw = array(params, "templates")?;
     if templates_raw.len() != 1 {
@@ -431,11 +438,13 @@ pub fn export_create(params: &JsonObject, created_at: Timestamp) -> Result<Expor
         let entry = entry
             .as_object()
             .ok_or_else(|| invalid_params(format!("`templates[{index}]` must be an object")))?;
-        reject_unknown(entry, &["templateId", "displayName", "workspaceAlias", "params"])?;
+        reject_unknown_fields(
+            entry,
+            &["templateId", "displayName", "workspaceAlias", "params"],
+        )?;
         let template_id_text = string(entry, "templateId")?;
-        let template_id = TemplateId::new(&template_id_text).map_err(|error| {
-            from_invalid(&format!("`templates[{index}].templateId`"), error)
-        })?;
+        let template_id = TemplateId::new(&template_id_text)
+            .map_err(|error| from_invalid(&format!("`templates[{index}].templateId`"), error))?;
         let workspace_alias_text = string(entry, "workspaceAlias")?;
         let workspace_alias = WorkspaceAlias::new(&workspace_alias_text).map_err(|error| {
             from_invalid(&format!("`templates[{index}].workspaceAlias`"), error)
@@ -489,14 +498,14 @@ pub fn export_create(params: &JsonObject, created_at: Timestamp) -> Result<Expor
 
 /// `export.revoke`（§5.5）：`{ exportId }`。
 pub fn export_revoke(params: &JsonObject) -> Result<ExportId, AdminError> {
-    reject_unknown(params, &["exportId"])?;
+    reject_unknown_fields(params, &["exportId"])?;
     let text = string(params, "exportId")?;
     ExportId::new(&text).map_err(|error| from_invalid("parameter `exportId`", error))
 }
 
 /// `import.remove`（§5.5）：`{ importId }`。
 pub fn import_remove(params: &JsonObject) -> Result<ImportId, AdminError> {
-    reject_unknown(params, &["importId"])?;
+    reject_unknown_fields(params, &["importId"])?;
     let text = string(params, "importId")?;
     ImportId::new(&text).map_err(|error| from_invalid("parameter `importId`", error))
 }
@@ -515,11 +524,12 @@ pub enum AuditFormat {
 }
 
 impl AuditFormat {
-    /// wire 文本。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Jsonl => "jsonl",
-            Self::Csv => "csv",
+    /// 解析 wire 文本（§5.6：`jsonl` | `csv`）。
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "jsonl" => Some(Self::Jsonl),
+            "csv" => Some(Self::Csv),
+            _ => None,
         }
     }
 }
@@ -541,7 +551,7 @@ pub struct AuditExport {
 
 /// `audit.export`（§5.6）：`outputPath` 必须绝对；`categories` 必须显式给出（可为空数组）。
 pub fn audit_export(params: &JsonObject) -> Result<AuditExport, AdminError> {
-    reject_unknown(
+    reject_unknown_fields(
         params,
         &["outputPath", "format", "since", "until", "categories"],
     )?;
@@ -554,15 +564,8 @@ pub fn audit_export(params: &JsonObject) -> Result<AuditExport, AdminError> {
     }
 
     let format_text = string(params, "format")?;
-    let format = match format_text.as_str() {
-        "jsonl" => AuditFormat::Jsonl,
-        "csv" => AuditFormat::Csv,
-        _ => {
-            return Err(invalid_params(
-                "parameter `format` must be `jsonl` or `csv`",
-            ));
-        }
-    };
+    let format = AuditFormat::parse(&format_text)
+        .ok_or_else(|| invalid_params("parameter `format` must be `jsonl` or `csv`"))?;
 
     let since = timestamp(params, "since")?;
     let until = timestamp(params, "until")?;
@@ -617,13 +620,13 @@ pub fn map_port_error(operation: &str, error: PortError) -> AdminError {
             LocalErrorCode::Conflict,
             format!("{operation}: {kind} conflicts with the current state"),
         ),
-        PortError::Unavailable(kind) => AdminError::new(
-            LocalErrorCode::Unavailable,
-            format!("{operation}: {kind}"),
-        ),
-        PortError::InvalidRequest(reason) => {
-            AdminError::new(LocalErrorCode::InvalidParams, format!("{operation}: {reason}"))
+        PortError::Unavailable(kind) => {
+            AdminError::new(LocalErrorCode::Unavailable, format!("{operation}: {kind}"))
         }
+        PortError::InvalidRequest(reason) => AdminError::new(
+            LocalErrorCode::InvalidParams,
+            format!("{operation}: {reason}"),
+        ),
         PortError::Corrupt(_) | PortError::Backend(_) => AdminError::new(
             LocalErrorCode::Internal,
             format!("{operation}: unexpected internal error"),
@@ -677,7 +680,10 @@ mod tests {
 
     #[test]
     fn daemon_stop_checks_the_grace_bounds() {
-        assert_eq!(daemon_stop(&params(json!({"graceMs": null}))).unwrap(), None);
+        assert_eq!(
+            daemon_stop(&params(json!({"graceMs": null}))).unwrap(),
+            None
+        );
         assert_eq!(
             daemon_stop(&params(json!({"graceMs": 0}))).unwrap(),
             Some(0)
@@ -762,7 +768,7 @@ mod tests {
     fn workspace_select_checks_alias_and_display_name_shapes() {
         let directory = temp_directory();
         let root = directory.to_str().expect("utf-8").to_owned();
-        for alias in ["Project", "", "9alias", "alias/with/slash", "-alias"] {
+        for alias in ["Project", "", "alias/with/slash", "-alias"] {
             assert_eq!(
                 code_of(
                     workspace_select(&params(json!({
@@ -794,6 +800,13 @@ mod tests {
         assert!(
             workspace_select(&params(json!({
                 "alias": "a", "displayName": "A", "rootPath": root,
+            })))
+            .is_ok()
+        );
+        // `^[a-z0-9][a-z0-9._-]{0,63}$` 允许首字符是数字（权威：node-link 的 workspaceAlias）。
+        assert!(
+            workspace_select(&params(json!({
+                "alias": "9alias", "displayName": "A", "rootPath": root,
             })))
             .is_ok()
         );
@@ -892,8 +905,7 @@ mod tests {
         ] {
             assert_eq!(
                 code_of(
-                    provider_configure(&params(rejected.clone()))
-                        .expect_err(&rejected.to_string())
+                    provider_configure(&params(rejected.clone())).expect_err(&rejected.to_string())
                 ),
                 LocalErrorCode::InvalidParams,
                 "{rejected}"
@@ -936,8 +948,8 @@ mod tests {
 
     #[test]
     fn export_create_accepts_the_documented_shape() {
-        let record = export_create(&params(valid_export_params()), created_at())
-            .expect("合法参数必须通过");
+        let record =
+            export_create(&params(valid_export_params()), created_at()).expect("合法参数必须通过");
         assert_eq!(record.export_id().as_str(), "export-1");
         assert_eq!(record.agent_ids().len(), 1);
         assert_eq!(record.workspace_aliases().len(), 1);
@@ -995,7 +1007,10 @@ mod tests {
             ("cachePolicy 固定值", bad_cache_policy),
             ("defaultWorkspaceAlias 一致性", unknown_alias),
             ("defaultTemplateId 一致性", unknown_template),
-            ("template 的 alias 必须在 aliases 内", template_alias_mismatch),
+            (
+                "template 的 alias 必须在 aliases 内",
+                template_alias_mismatch,
+            ),
             ("scopes 必须是 grant.*", bad_scope),
             ("未知字段", unknown_field),
             ("缺字段", missing_field),
@@ -1032,7 +1047,11 @@ mod tests {
                 "{rejected}"
             );
         }
-        for rejected in [json!({}), json!({"importId": "bad id"}), json!({"importId": null})] {
+        for rejected in [
+            json!({}),
+            json!({"importId": "bad id"}),
+            json!({"importId": null}),
+        ] {
             assert_eq!(
                 code_of(import_remove(&params(rejected.clone())).expect_err("必须被拒")),
                 LocalErrorCode::InvalidParams,
@@ -1081,16 +1100,14 @@ mod tests {
             json!({ "outputPath": "D:\\a.jsonl", "format": "jsonl", "since": null, "until": null, "categories": [], "extra": 1 }),
         ] {
             assert_eq!(
-                code_of(
-                    audit_export(&params(rejected.clone()))
-                        .expect_err(&rejected.to_string())
-                ),
+                code_of(audit_export(&params(rejected.clone())).expect_err(&rejected.to_string())),
                 LocalErrorCode::InvalidParams,
                 "{rejected}"
             );
         }
-        assert_eq!(AuditFormat::Jsonl.as_str(), "jsonl");
-        assert_eq!(AuditFormat::Csv.as_str(), "csv");
+        assert_eq!(AuditFormat::parse("jsonl"), Some(AuditFormat::Jsonl));
+        assert_eq!(AuditFormat::parse("csv"), Some(AuditFormat::Csv));
+        assert_eq!(AuditFormat::parse("yaml"), None);
     }
 
     // ---------------------------------------------------------------- PortError 映射
@@ -1145,6 +1162,26 @@ mod tests {
             assert!(mapped.message().len() <= 512, "{label}");
         }
 
+        for kind in ConflictKind::ALL {
+            let expected = if kind == ConflictKind::Expired {
+                LocalErrorCode::Expired
+            } else {
+                LocalErrorCode::Conflict
+            };
+            assert_eq!(
+                map_port_error("export.list", PortError::Conflict(kind)).code(),
+                expected,
+                "{kind}"
+            );
+        }
+        for kind in acp_core::model::UnavailableKind::ALL {
+            assert_eq!(
+                map_port_error("export.list", PortError::Unavailable(kind)).code(),
+                LocalErrorCode::Unavailable,
+                "{kind}"
+            );
+        }
+
         // 适配器文本（SQL 与完整路径）不得被转述到消息里。
         let leaky = map_port_error(
             "export.list",
@@ -1154,6 +1191,10 @@ mod tests {
         );
         assert!(!leaky.message().contains("SQL"), "{}", leaky.message());
         assert!(!leaky.message().contains("SELECT"), "{}", leaky.message());
-        assert!(!leaky.message().contains("db.sqlite"), "{}", leaky.message());
+        assert!(
+            !leaky.message().contains("db.sqlite"),
+            "{}",
+            leaky.message()
+        );
     }
 }

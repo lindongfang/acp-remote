@@ -133,8 +133,10 @@ impl DaemonStatus {
             ("nodeId", text(self.node_id.as_str())),
             (
                 "nodePublicKey",
-                text(base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(self.node_public_key.as_bytes())),
+                text(
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .encode(self.node_public_key.as_bytes()),
+                ),
             ),
             ("startedAt", timestamp(&self.started_at)),
             ("uptimeMs", Value::from(self.uptime_ms)),
@@ -257,9 +259,7 @@ mod tests {
                 node_id: NodeId::new("2ae1c07c-0000-4000-8000-000000000002").expect("node id"),
                 state: DaemonLinkState::Offline,
                 last_connected_at: None,
-                next_retry_at: Some(
-                    Timestamp::new("2026-09-18T09:13:03.412Z").expect("timestamp"),
-                ),
+                next_retry_at: Some(Timestamp::new("2026-09-18T09:13:03.412Z").expect("timestamp")),
             }],
         }
     }
@@ -269,7 +269,10 @@ mod tests {
         let json = status().to_json();
         assert_eq!(json["version"], Value::from("1.2.3"));
         assert_eq!(json["instanceId"], Value::from("0123456789abcdef"));
-        assert_eq!(json["nodeId"], Value::from("2ae1c07c-0000-4000-8000-000000000001"));
+        assert_eq!(
+            json["nodeId"],
+            Value::from("2ae1c07c-0000-4000-8000-000000000001")
+        );
         assert_eq!(json["startedAt"], Value::from("2026-09-18T09:12:03.412Z"));
         assert_eq!(json["uptimeMs"], Value::from(4321u64));
         assert_eq!(json["listen"], Value::Array(vec![]));
@@ -284,7 +287,7 @@ mod tests {
             json["links"][0]["nextRetryAt"],
             Value::from("2026-09-18T09:13:03.412Z")
         );
-        assert_eq!(json.len(), 13, "字段集合与 §5.2 逐项一致");
+        assert_eq!(json.len(), 12, "字段集合与 §5.2 逐项一致");
     }
 
     #[test]

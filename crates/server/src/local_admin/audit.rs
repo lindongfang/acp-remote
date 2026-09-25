@@ -153,7 +153,7 @@ fn jsonl_bytes(records: &[&AuditRecord]) -> Result<Vec<u8>, AdminError> {
 
 fn csv_bytes(records: &[&AuditRecord]) -> Vec<u8> {
     let mut buffer = String::new();
-    buffer.push_str(&COLUMNS.join(","));
+    buffer.push_str(&csv_header());
     buffer.push('\n');
     for record in records {
         let json = record_json(record);
@@ -165,6 +165,15 @@ fn csv_bytes(records: &[&AuditRecord]) -> Vec<u8> {
         buffer.push('\n');
     }
     buffer.into_bytes()
+}
+
+/// `csv` 的首行：列名（与 [`COLUMNS`] 同序，按 RFC 4180 最小实现一律加引号）。
+fn csv_header() -> String {
+    COLUMNS
+        .iter()
+        .map(|column| format!("\"{column}\""))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// RFC 4180 的最小实现：每个字段一律加引号，内部引号成对。
@@ -225,7 +234,9 @@ mod tests {
             record(
                 "2026-09-18T08:00:00.000Z",
                 AuditAction::DeviceRevoked,
-                EntityRef::Device(DeviceId::new("2ae1c07c-0000-4000-8000-000000000001").expect("id")),
+                EntityRef::Device(
+                    DeviceId::new("2ae1c07c-0000-4000-8000-000000000001").expect("id"),
+                ),
             ),
         ]
     }
@@ -233,7 +244,8 @@ mod tests {
     #[test]
     fn jsonl_is_ascending_one_object_per_line() {
         let path = temp_path("export.jsonl");
-        let (count, digest) = write_export_file(&path, AuditFormat::Jsonl, &records()).expect("写出");
+        let (count, digest) =
+            write_export_file(&path, AuditFormat::Jsonl, &records()).expect("写出");
         assert_eq!(count, 2);
         let text = fs::read_to_string(&path).expect("可读回");
         fs::remove_file(&path).ok();
@@ -294,7 +306,7 @@ mod tests {
         fs::remove_file(&path).ok();
 
         let mut lines = text.lines();
-        assert_eq!(lines.next().expect("表头"), COLUMNS.join(","));
+        assert_eq!(lines.next().expect("表头"), csv_header());
         let denied = lines.next().expect("第一行");
         assert!(denied.contains("\"authorization.denied\""));
         assert!(denied.contains("\"node\""));
@@ -306,7 +318,9 @@ mod tests {
         assert!(lines.next().is_some(), "两行数据");
         assert!(lines.next().is_none());
         // actorId 承载 Node Link 的复合幂等键（`{node}/{access_node}`）。
-        assert!(denied.contains("\"2ae1c07c-0000-4000-8000-000000000002/2ae1c07c-0000-4000-8000-000000000003\""));
+        assert!(denied.contains(
+            "\"2ae1c07c-0000-4000-8000-000000000002/2ae1c07c-0000-4000-8000-000000000003\""
+        ));
     }
 
     #[test]
@@ -336,7 +350,7 @@ mod tests {
         write_export_file(&csv, AuditFormat::Csv, &[]).expect("写出");
         assert_eq!(
             fs::read_to_string(&csv).expect("可读回"),
-            format!("{}\n", COLUMNS.join(","))
+            format!("{}\n", csv_header())
         );
         fs::remove_file(&csv).ok();
     }
