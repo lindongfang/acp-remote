@@ -138,6 +138,10 @@
   - **候选轮 2a 红 → 重试绿（登记为既有抖动，不属本变更回归）**：在最终候选上首次跑 [PV1] 得到 `EXIT=101`，失败用例为 `crates/agent-host/tests/supervision.rs:422` 的 `oversize_frame_ends_the_agent_and_fails_pending_requests`（断言 `!supervisor.is_running()` 紧随请求失败后立即读取进程状态，属测试侧时序竞态）。判据：① 本变更**未改动** `crates/agent-host`（`git diff main..HEAD -- crates/agent-host` 为空）；② 该用例在隔离重跑 **5/5 通过**（各 0.15–0.17 s）；③ 它在冻结轮、`wp5-verify.log`、集成 Agent 候选第 1 轮（三次全量运行）中均通过。结论：**既有 flaky（Windows 全量并行负载下暴露）**，按 AGENTS.md §8「不要顺手重构无关代码」**不在本变更内修**，登记为残余风险并建议后续单独变更加「有界等待」修正；重跑结果 `EXIT=0`、82 targets / 718 passed / 0 failed / 2 ignored（`reports/candidate-verify.log` 候选轮 2b 段）。
   - **候选验证工件改为自洽单文件**：因追加型日志使「同一路径两个工件」不可区分（RV3-WP5-F3），最终候选的 [PV1]–[PV5] 统一落在 `reports/candidate-verify-final.log`（含 `git rev-parse HEAD`、`git status --porcelain` 与逐项显式退出码），premerge 证据块引用该文件的 sha256。
   - **RV3-WP5-F2/F4 已修正**：121 行「零命中」改为限定范围表述；6.1/6.2 行的 `Target Revision` 列改填提交（运行 ID 留在文本）。
+- 2026-09-25（RV4 与 K1，主 Agent）：
+  - **RV4 = PASS with notes**（报告 `reports/rv4-candidate.md`，6 条 P2）。其 §8 明确：若后续提交**只**新增报告落盘、任务勾选与 `agentic-premerge` 块，且不触碰代码/判据、块内只用真值、工件冻结后再哈希，则 PASS 结论继续适用 —— 本轮收尾按此前提执行。
+  - **RV4 全部发现已在 K1 或收尾步骤中处理**（见上表；F1/F2/F3 的处理证据为 K1 上重生成的验证工件与 flaky 重跑日志）。
+  - **PRO-5（主 Agent 过程失误，已自纠）**：为提前暴露 `premerge` 门的其他不满足项，曾在 RV4 复核**期间**把一份占位草稿块写入 `verification.md`（含占位提交号与全零 sha256）。RV4 在两次读取中得到互不相容视图并如实登记（其 F6）。处置：发现后**立即回退**（`git checkout`，恢复 `cc19ddc` 内容），reviewer 以 `watchdog_diff` 兜底（HEAD 未动、被跟踪文件无改动）仍完成复核；草稿中的任何占位值均未进入提交。教训：**广播式冻结期内不得为预演写入共享工作树**；预演应在临时副本或独立 worktree 中进行。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
@@ -179,6 +183,13 @@
 | RV1-WP5-F4 | f39dda9 | RV1-WP5 | docs/CONFIG_REFERENCE.md:51、:110 | P2：`daemon.local_admin.endpoint` 的「显式值用于排查」在当前切片不可用（实现直接失败关闭）但未标注；`storage.flush_interval_ms` 被描述为刷盘间隔而非合并窗口 | 已由 2.27 修复 | RV2-WP5 复核 |
 | RV1-WP5-F5 | f39dda9 | RV1-WP5 | docs/DEVELOPMENT_PLAN.md（切片 1 段落与「剩余工作」句） | P2：出现「本切片切片 4」重复措辞，且与 §2 的剩余项口径不一致；文中仍有旧句 | 已由 2.27 修复 | RV2-WP5 复核 |
 | RV1-WP5-F6 | f39dda9 | RV1-WP5 | docs/LOCAL_ADMIN_PROTOCOL.md:3 | P2：状态行仍写「实现中」，而本地通道已落地 | 已由 2.27 修复（主 Agent 决定纳入写范围） | RV2-WP5 复核 |
+
+| RV4-WP5-F1 | cc19ddc | RV4-WP5 | verification.md:139 ↔ reports/candidate-verify-final.log 头部 | P2：登记文本称工件「含 `git rev-parse HEAD`、`git status --porcelain`」，实际头部为手写注释、PV2–PV5 段为节选 | **已处理**：在 K1 上重生成工件（真命令回显 + PV2–PV5 全量输出），冻结后再算 sha256 写入 premerge 块 | 已处理 |
+| RV4-WP5-F2 | cc19ddc | RV4-WP5 | verification.md:138/209（PRO-4 的「隔离重跑 5/5」） | P2：「5/5 通过（各 0.15–0.17s）」无独立日志工件，属自述证据 | **已处理**：重跑 5 次并落盘 `reports/agent-host-flaky-rerun.log`，PRO-4 改引该工件 | 已处理 |
+| RV4-WP5-F3 | cc19ddc | RV4-WP5 | verification.md:75（「见 6.3 行」悬空） | P2：Handoff Index 无 6.3 行，最终候选的 [PV1]–[PV5] 无归属行 | **已处理**：补 6.3/6.4 行（`Target Revision` = 候选提交、证据 = 最终验证工件 + sha256） | 已处理（随合并后记录一并落盘） |
+| RV4-WP5-F4 | cc19ddc | RV4-WP5 | 报告路径 `reports/rv4-candidate.log` 命中 `.gitignore:22/27` | P2：若用 `.log`，合并提交里将没有 RV4 检视工件，premerge 块会引用仅本机存在的文件 | **已处理**：改为被跟踪的 `reports/rv4-candidate.md`（与 rv1/rv2/rv3 同例），块内 `review.evidence.path` 指向它 | 已处理（K1 已提交该文件） |
+| RV4-WP5-F5 | cc19ddc | RV4-WP5 | tasks.md:64、plan.md:678（`reports/rv1-du1.md`） | P2：6.4 完成条件与 RV1 证据列指向不存在的路径（该名仅存在于已归档变更） | **已处理**：两处改为按轮次累积的实际报告清单，并保留一句说明原名的来源 | 已处理（K1） |
+| RV4-WP5-F6 | 工作树观测 | RV4-WP5 | verification.md（复核期间的两次互不相容视图） | P2（**不在目标修订内**）：复核期间工作树被写入，reviewer 读到含伪造 `candidate_commit` 与全零 sha256 的 premerge 草稿块；若原样入库则升级 P0 | **如实登记**：那是主 Agent 的 `premerge` 门预演草稿（为提前暴露其他不满足项），在发现 RV4 正在读同一工作树后**立即 `git checkout` 回退**；已登记为 PRO-5，并承诺最终块只用真值（提交号与全部 sha256 现算） | 已处理（PRO-5） |
 | RV1-WP2-R1（残余风险） | 6361f5d | RV1-WP2 | crates/server/src/transport/local/platform/windows.rs（后续实例） | 风险（非缺陷）：后续实例 DACL 是否继承首实例未证实 | 已登记入 Dependency Handoffs；[PV5] 在 WP3b/WP4 用 `GetSecurityInfo`/跨账号用例钉死 | 待 [PV5] |
 
 ## Merge History
@@ -207,6 +218,7 @@
 | PRO-2（主 Agent 流程异常，同一根因） | commit `1cd7a3b`（我提交 spec/证据时，并发暂存的 2.21 十二个文件被一并带入；提交信息未提及契约补齐） | 主 Agent | 不做历史改写；自本次起主 Agent 一律用 `git commit --only <paths>`；已在 WP3b2 任务单里明确要求实现者只 add 自身路径 | 无（内容完整：正则三处一致、drift 25 项、fixtures 118/24；门禁与测试全绿） | WP3b2/3.6 复核时会核对 1cd7a3b 的完整组成 | 已登记；`1cd7a3b` 为 2.21 的权威交付提交（内容层面） |
 | PRO-3（宿主超时，非产品质量问题） | WP4a 运行 `21e7ff77` 在 1800000ms 后被宿主判定超时中止；中止时未提交也未写交接报告 | 主 Agent | 工作树完好（`crates/app/**` 约 6000 行 + `Cargo.toml`/`Cargo.lock`/`MODULE_ARCHITECTURE.md`），日志显示 `npm run check` 已 EXIT=0；已用 `resume` 复活为运行 `227fce16`，并要求其只做「检查收尾 → 显式路径提交 → 写 wp4a-handoff.md」的限定步骤（集成测试只跑一次、挂住即报告用例名，不弱化断言） | 中止前产物未经验证，不充当证据 | 待 `227fce16` 返回后核对 target SHA 与检查退出码 | 已登记；当前状态 PENDING |
 | PRO-4（候选轮 2a 红；既有 flaky，非本变更回归） | 最终候选 `c050c83` 首跑 [PV1] `EXIT=101`：`agent-host` `supervision.rs:422` `oversize_frame_ends_the_agent_and_fails_pending_requests` panic（断言 `!is_running()` 紧随错误收敛读取进程状态） | 主 Agent（检查执行者） | 同一提交重跑 [PV1] → `EXIT=0`（82 targets / 718 passed / 0 failed / 2 ignored）；该用例隔离重跑 5/5 通过；证据 `reports/candidate-verify.log` 候选轮 2b 段 | 本变更为 docs + `crates/app` 一行注释的 delta，`git diff main..HEAD -- crates/agent-host` 为空 ⇒ 非本变更引入 | 留待后续变更以「有界等待」修测试侧竞态；本变更内按 §8 不顺手改无关代码 | 已登记；状态 CLOSED（重试绿 + 归因为既有 flaky） |
+| PRO-5（主 Agent 过程失误：复核期间写入共享工作树） | 在 RV4 复核进行中，把含占位值的 `agentic-premerge` 草稿块写入 `verification.md` 以预演门禁；reviewer 因此读到互不相容的两个视图（其 F6） | 主 Agent | 发现后立即 `git checkout` 回退至 `cc19ddc` 内容；reviewer 以 `watchdog_diff` 确认 HEAD 未动、被跟踪文件无改动，复核仍完成（PASS） | 占位值从未进入任何提交；最终块只用真值 | 预演改到临时副本；冻结期内的共享工作树写入列入禁止清单 | 已登记；状态 CLOSED |
 | RV1-WP2-RUN1 | 任务 3.4，reviewer 子 Agent 运行 `ecc2d081-dfcb-41eb-b845-800aceb7512d`（目标 6361f5d）；运行在回报前中止，只输出了开场句，未产生报告 | 主 Agent | 原因判定为子 Agent 运行时中断（非产品/证据问题：目标提交与输入未变）；已用 deepseek/deepseek-flash 重新派发 RV1-WP2 | 旧运行无报告产出，未作为结论 | 待重派结果 | 未解决（等待重派；不影响 WP3a 进行） |
 
 ## Final Assessment
