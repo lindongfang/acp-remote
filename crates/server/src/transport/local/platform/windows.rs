@@ -67,6 +67,17 @@ impl LocalEndpoint {
     ///
     /// 返回 `Err(EndpointError::PeerRejected)` 表示本次连接已被拒绝（不发送任何 frame，审计事件已记录）——
     /// 调用方继续接受下一条连接即可，这不是致命错误；其他错误表示 endpoint 本身不可用。
+    ///
+    /// # 本 future **不是 cancel-safe**
+    ///
+    /// `accept` 的第一步是 `take_pending()`：它把当前待连接的 pipe 实例从 `self` **移出**。因此一旦这个
+    /// future 在 `connect()` 完成之前被丢掉（`select!` 另一个分支胜出、`timeout` 到期、任务被 abort），
+    /// 那个实例会连同**已经连上它但尚未被处理**的客户端一起被关闭：客户端侧 `open()` 已经成功，
+    /// 却会立刻看到 EOF，而服务端收不到任何待处理连接（WP4a 实测可复现）。
+    ///
+    /// 调用方 MUST 在**专用任务**里串行调用本方法，并把结果投递给其余逻辑（`crates/app/src/daemon.rs`
+    /// 的接受循环就是如此：自有的接受任务 + 容量 1 的 channel + 循环只 `recv`）；不得把 `accept()` 直接
+    /// 放进 `select!`/`timeout` 里。取消安全需要幂等接缝（把实例放回 `pending`），本模块暂不提供。
     pub async fn accept(&mut self) -> Result<LocalStream, EndpointError> {
         let server = self.take_pending()?;
         let connected = server.connect().await;
@@ -173,6 +184,8 @@ fn create_first_instance(pipe_name: &str) -> Result<LocalStream, EndpointError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
     use crate::transport::local::LoggingAuditHook;
 
     fn config() -> LocalEndpointConfig {
@@ -218,5 +231,66 @@ mod tests {
             endpoint.accept().await.is_ok(),
             "connect 失败之后 endpoint 必须仍能接受连接"
         );
+    }
+
+    /// `accept` 不是 cancel-safe（模块内的硬约束，调用方必须自己保证）：被取消的 `accept` 会把
+    /// `take_pending` 移出的实例一起丢掉，**已经连上它的客户端**那个连接也就随之消失。
+    ///
+    /// 断言尽量定在机制层：手动把 future 轮询一次（此时还没客户端，`connect()` 挂起）→ 客户端连上这个
+    /// 已从 `pending` 移出的实例（`open()` 成功）→ 丢掉 future（等价于 `select!`/`timeout` 取消）→
+    /// 客户端读到的不是服务端回复，而是连接结束（EOF 或错误）。把 `accept` 改回「先 `connect()` 再
+    /// `take_pending()`」或引入幂等接缝（把实例放回 `pending`）都会让本用例失败。
+    #[tokio::test]
+    async fn a_cancelled_accept_drops_the_pending_instance_and_kills_the_connected_client() {
+        use tokio::io::AsyncReadExt as _;
+
+        let mut endpoint = LocalEndpoint::bind(config(), Arc::new(LoggingAuditHook))
+            .await
+            .expect("本机创建 Named Pipe endpoint 应成功");
+        let pipe_name = endpoint.describe();
+        assert!(endpoint.pending.is_some(), "bind 之后应有一个待连接实例");
+
+        // 轮询一次：`take_pending` 已把实例移出 `self`，`connect()` 停在等待客户端。
+        let mut accept = Box::pin(endpoint.accept());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            std::future::Future::poll(accept.as_mut(), &mut context).is_pending(),
+            "没有客户端时 accept 必须挂起"
+        );
+
+        let mut client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .expect("客户端连上的是已被移出的那个实例");
+        // 让本进程的 reactor 处理「客户端已连接」的完成包（`accept` 此后不再被轮询，就像被取消了一样）。
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // 取消：`select!` 的另一分支胜出 / `timeout` 到期时发生的就是这件事。
+        drop(accept);
+        assert!(
+            endpoint.pending.is_none(),
+            "取消之后实例没有被放回：它已被丢掉（正是非 cancel-safe 的成因）"
+        );
+
+        let mut buf = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+            .await
+            .expect("取消之后客户端必须立刻看到连接结束，而不是无限等待");
+        assert!(
+            matches!(read, Ok(0) | Err(_)),
+            "孤儿客户端必须读到 EOF/错误（实际 {read:?}）"
+        );
+
+        // endpoint 本身仍可用（模块头注释的不变量）：下一次 accept 现建实例并正常接收。
+        let connect = tokio::spawn(async move {
+            tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)
+        });
+        let accepted = tokio::time::timeout(Duration::from_secs(5), endpoint.accept())
+            .await
+            .expect("accept 不应挂死");
+        assert!(
+            accepted.is_ok(),
+            "取消之后 endpoint 必须仍能接受连接（{accepted:?}）"
+        );
+        let _ = connect.await.expect("等待连接任务");
     }
 }
