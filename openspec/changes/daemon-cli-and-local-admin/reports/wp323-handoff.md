@@ -97,7 +97,7 @@
 ## 复核（交付提交后）
 
 ```text
-$ git log --oneline -5
+$ git log --oneline -5   # 快照取自 313d2a2 提交后、本报告后续 docs 提交之前
 313d2a2 fix(server): 澄清 *.revoke 的 local.not_found 文案覆盖已撤销
 fb3bb05 docs(server): 修正 2.23 交接报告的复核证据片段
 23f48fc docs(server): 登记 WP3 任务 2.23 的 coder 交接报告
