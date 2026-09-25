@@ -112,14 +112,27 @@
 
 ## Merge History
 
+**最终落地状态（2026-09-24）**：本地 FF 合入 → OpenSpec 归档 + 4 份主规范同步 → 提交信息 scope 规范化（message-only）→ push 分支并开 PR #16 → 5 个必需检查全绿 → `gh pr merge 16 --squash --delete-branch` → `origin/main` = `2862548`（tree 与推送前一致）；下述小节按时间顺序保留每一步的原始记录，末尾的「远端落地与 CI 首次判定」是唯一反映**当前**结论的一节。
+
 
 
 ### 合并路径授权与对 `AGENTS.md` §8 的偏离（用户决定，2026-09-24）
 
 - **用户决定**：本变更**仅本地合入 main**（用户 2026-09-24 的答复原文：`2` → 追问确认「仅本地合入 main」）。授权范围：仅把 DU1 以 **fast-forward** 方式合入本地 `refs/heads/main`，**不 push**、不更新远端跟踪引用、不回滚、不发布。
 - **对 `AGENTS.md` §8 的偏离**：§8 要求「变更落地走 PR + 必需检查（`strict_required_status_checks_policy`）」。本变更为**本地优先**的既有约定：`plan.md` 的 DU1 行（「本地合入 main、**不 push**」）与 `roles/integrator.md` 的「agentic apply 已授权本地合入」是由用户在计划阶段确认的路径，因此以**本地 FF 合入**替代 PR 流程，并在此显式记录偏离与依据。
-- **该偏离的实际代价（不声称已消除）**：`deps` / `advisories` / `secrets` 三个 job **只能在 CI 运行**，本地无等价物；本变更新增的 `getrandom` 与 `windows-dpapi` 的许可证/来源/advisory 判定，以及 `.gitleaks.toml` 新规则的实际命中能力，**在本地合入路径下未被执行**。用户已知悉并选择本地合入；最终验收（8.1）中按「未执行项」如实登记，不声称通过。
-- **未获授权项**：push、远端写入、回滚、发布、tag —— 任何一项都需要另行明确授权。
+- **该偏离的实际代价（不声称已消除）**：`deps` / `advisories` / `secrets` 三个 job **只能在 CI 运行**，本地无等价物；本变更新增的 `getrandom` 与 `windows-dpapi` 的许可证/来源/advisory 判定，以及 `.gitleaks.toml` 新规则的实际命中能力，**在本地合入路径下未被执行**。用户已知悉并选择本地合入；最终验收（8.1）中按「未执行项」如实登记，不声称通过。**后续补充（2026-09-24）**：用户在该轮之后另行授权推送与开 PR，三个 job 已在 PR #16 的 CI 中**首次真实执行并全部通过**，本条的代价因此**已消除**；证据见下节「远端落地与 CI 首次判定」。
+- **未获授权项（当时）**：push、远端写入、回滚、发布、tag —— 任何一项在当时都需要另行明确授权。**后续进展（2026-09-24）**：用户明确授权「现在开pr，推送到远程」并选择合并方式 `A`（squash + 删分支），push 与远端写入因此已获授权并已完成；回滚、发布、tag **仍未授权**。
+
+### 远端落地与 CI 首次判定（2026-09-24，PR #16，非重新验收）
+
+- **授权**：用户 2026-09-24 明确授权「现在开pr，推送到远程」，并在合并方式追问中选 `A`（`--squash --delete-branch`）。
+- **推送**：`git push -u origin feat/identity-auth-and-keystore`（tip `6acbe7a8693b9b98c324b9143613be97c4ea5a9f`，33 提交）→ **PR #16**（https://github.com/lindongfang/acp-remote/pull/16，base `main`）。
+- **必需检查（规则集 `main-protection`，`strict: true`）——两次运行、10/10 `conclusion: success`**：
+  - push 事件 run `36025256177`（head `6acbe7a`，16:08:28Z–16:11:25Z）：密钥扫描 `9s`、提交信息规范 `13s`、依赖安全公告 `34s`、依赖许可证与来源 `1m0s`、合同门禁 + Rust 检查 `2m54s`；
+  - pull_request 事件 run `36025355680`（head `6acbe7a`，16:09:19Z–16:12:26Z）：密钥扫描 `9s`、提交信息规范 `10s`、依赖安全公告 `35s`、依赖许可证与来源 `40s`、合同门禁 + Rust 检查 `3m3s`。
+- **本条关闭的空白**：① `deps`（`cargo-deny` 许可性与来源，含本变更新增的 `getrandom`、`windows-dpapi` 及其传递依赖）、`advisories`（安全公告）、`secrets`（`gitleaks`，含本变更新增的 keystore 条目规则）**首次真实执行并全部通过**；② `checks` job 在 **Linux runner** 上执行了本地（Windows）跑不到的运行时路径（`unix_modes` 的 `0700`/`0600`、非 Windows 失败关闭）；③ `commits` job 校验的提交范围 = 33 条推送提交，确认上一节的 scope 规范化有效。
+- **合并与结果**：`gh pr merge 16 --squash --delete-branch`（2026-09-24T16:17:58Z）→ `origin/main` = `286254846dc5a7f632c63eeb54fde5cdff538fe5`，squash 提交标题即 PR 标题（`feat(identity): 落地 identity-auth 与 identity-keystore（实施切片 3）`），其 tree `478fed34a2e576ae28fd0c22c600bc523e600fa6` **与推送前 tip tree 逐字节相同**（内容零变化）；远端与本地特性分支均已按 `A` 删除；本地 `main` 已 `git reset --hard origin/main` 对齐。squash 后本地不再保留 33 提交链，但 `refs/pull/16/head` = `6acbe7a` 仍可 `git fetch` 取回（实测 `git ls-remote origin 'refs/pull/16/*'` 命中）。
+- **边界（不夸大）**：本次回写属于**记录更新，不是重新验收**——被测内容未变（tree 相同），8.1 的 PASS 结论与全部证据继续有效；文中更早的「Linux 运行时未在本机执行」「`deps`/`advisories`/`secrets` 本地无等价物」等表述在其所属轮次为事实，**当前**判定以本小节为准。仍未完全闭合的判定：`secrets` job 的**全历史**扫描只在它运行时生效——每次 CI 都会重扫一遍（本回写提交的那一次同样 5/5 通过），但**此后新增的提交**仍由各自的那一次 CI 覆盖。
 
 ### DU1 集成记录（候选阶段，2026-09-24）
 
@@ -260,11 +273,11 @@ evidence:
   - **Project Checks and Resources**：[PV1]–[PV5] 逐项有完整命令、退出码、日志与用例数（见 `## Checks` 的 6.3/6.7/7.1 行）；统一入口 `npm run verify` 覆盖 `npm run check`（十道门禁）+ `fmt` + `clippy -D warnings` + 全 workspace 测试；**无「未运行/全跳过/失败被吞」**（各 crate 的 doc-tests 二进制 `0 tests` 属仓库既有形态，且与 `du1-`/`final-` 两轮一致）。资源：`target/` 串行、无并发写者；DPAPI 用例**独占串行**（执行前后 `cargo.exe` 实例为 0）；临时 keystore 目录由用例自建自删（本 run 零残留）。**登记未清理的历史残留**：`%TEMP%` 下 6 个 `acpr-keystore-atomic-*`（22:10–22:43，早于本轮）——不声称已清理。
   - **Independent Reviews**：RV1–RV9（7 个 WP/文档 lane + 定向确认轮）与 6.4/6.4-后续共 15 份报告，均在变更目录 `reports/`；每份记录实际子 Agent ID、上下文隔离、base/target 与范围；**所有 P0/P1 均已闭环并留有可失败性证据**（最终轮 RV7/RV8/RV9 与 6.4/6.4-后续连续 PASS，无未解决阻断项）。6.8 因 FF 合入无新增差异，按完成条件引用 6.4 的 review ID（`rv1-du1.md` + `rv2-du1.md`）而非重复同范围人工 review。
   - **E2E Design and Execution**：mode = `not-applicable`（`x-agentic.e2e.enabled=true` 但 `command=""`）；四字段齐备且可追溯——reason（仓库无可端到端产品入口：`server`/`app`/CLI/前端未实现）、basis（`openspec-agentic e2e check` 实测 `enabled=true`/`command=""`；本变更对 `compatibility/`/`schemas/`/`fixtures/` 改动为 0 处，不影响适用性判断）、**非空 alternative_checks**（5 项，逐项在 7.1 真实执行）、`downgrade_approval`（用户 2026-09-24 原话「1和2都同意」，来源为本会话第 1 问的批准；不沿用 2026-09-23 的首次确认）。**7.3 门禁**：`openspec-agentic e2e check --change identity-auth-and-keystore --json` → `result: PASS`、`mode: not-applicable`、`approval: true`、`marked: true`。E2E 本身记 **NOT_APPLICABLE**。
-  - **Issue Closure and Evidence Validity**：RV1–RV9 的 FAIL 均有原问题 ID、修复提交与复测证据（`## Failures and Retests`）；本轮**没有**把不相关的 PASS 用作关闭依据。最终版本适用性：候选轮与最终轮的测试证据分别绑定 `4d988cd` 与 `656189f`（`final-*`），两者代码/文档内容相同（见 Target 一行的差异核对）；6.7 的主分支回归在**合入后**的 main 上重新执行（`du1-main-verify.log`），不属复用。**非阻断项处理结论**：`%TEMP%` 历史残留未清理（如实登记）；CI 专属判定（`cargo-deny`/ `gitleaks`）**本地未执行、不声称通过**；Linux **运行时**行为（`unix_modes` 的 0700/0600、非 Windows 失败关闭）本地不可执行，只有编译/lint + 注入缝证据，实际判定依赖 CI 的 Linux runner。
-- **Result / Open Issues**：**PASS**（本轮范围 = 目标 `4fb930a` 与上列有效证据）。无未解决 FAIL；无阻断项。残余（已登记、不阻断、不声称已消除）：① Linux 运行时与 CI 专属判定只能由 CI 证明；② `windows-dpapi` wrapper 内部明文缓冲无法清零；③ `write_atomic` 不 fsync 父目录；④ `%TEMP%` 下 6 个更早轮次的临时目录残留未清理；⑤ 本地合入路径下 `deps`/`advisories`/`secrets` 三个 CI job 未执行（见 `## Merge History` 的 §8 偏离记录）。
+  - **Issue Closure and Evidence Validity**：RV1–RV9 的 FAIL 均有原问题 ID、修复提交与复测证据（`## Failures and Retests`）；本轮**没有**把不相关的 PASS 用作关闭依据。最终版本适用性：候选轮与最终轮的测试证据分别绑定 `4d988cd` 与 `656189f`（`final-*`），两者代码/文档内容相同（见 Target 一行的差异核对）；6.7 的主分支回归在**合入后**的 main 上重新执行（`du1-main-verify.log`），不属复用。**非阻断项处理结论**：`%TEMP%` 历史残留未清理（如实登记）；CI 专属判定（`cargo-deny`/ `gitleaks`）**本地未执行、不声称通过**；Linux **运行时**行为（`unix_modes` 的 0700/0600、非 Windows 失败关闭）本地不可执行，只有编译/lint + 注入缝证据，实际判定依赖 CI 的 Linux runner。**后续（2026-09-24，PR #16，非重新验收）**：这两类判定已由 PR #16 的 CI 在 Linux runner 上首次真实执行并全部通过（见 `## Merge History` 的「远端落地与 CI 首次判定」）；上面「本地未执行」仍指**本地环境**，不再表示未被判定。
+- **Result / Open Issues**：**PASS**（本轮范围 = 目标 `4fb930a` 与上列有效证据）。无未解决 FAIL；无阻断项。残余（已登记、不阻断、不声称已消除）：① Linux 运行时与 CI 专属判定只能由 CI 证明（**2026-09-24 已由 PR #16 的 CI 首次执行并全部通过**，见 `## Merge History`）；② `windows-dpapi` wrapper 内部明文缓冲无法清零；③ `write_atomic` 不 fsync 父目录；④ `%TEMP%` 下 6 个更早轮次的临时目录残留未清理；⑤ 本地合入路径下 `deps`/`advisories`/`secrets` 三个 CI job 未执行（见 `## Merge History` 的 §8 偏离记录）——**该路径已被后续授权取代**：用户随后授权推送与开 PR，三个 job 在 PR #16 的 CI 中全绿（同上）。
 - **验收记录自身的提交（映射说明）**：`target_commit` 与 `refs/heads/main` 的 tip 严格绑定。**归档前机械更新（非重新验收，2026-09-24）**：由门禁通过时点的 `a537c92…` 更新为归档前 tip `3dc37ac8022903fa3ddf4a798b6d831294df6e1e…`，因为扩展对两值采用严格相等比较、而承载记录的提交必然前移 tip；`a537c92..3dc37ac` 之间的提交只改 `openspec/changes/identity-auth-and-keystore/` 内的记录文件，被测代码内容不变（`git diff --name-only 4d988cd..3dc37ac` 全部落在本变更目录内），因此本节的 PASS 结论与全部证据继续有效，**不构成重新验收**。
   - 目标版本映射：本轮被测**代码** = `4d988cd`（`crates/`、`Cargo.*`、`docs/`、`.gitleaks.toml`），经本地 FF 合入 `main`。
   - 门禁原始结果：`workflow check --stage final --json` → `PASS`（`errors: []`，`contractDigest: sha256:6ace85504add2ea1742a9fae24d5775d78c60ede111c0dd9e0dd0bb0ad75afec`）；`--stage archive --json` → `PASS`（归档前机械更新后的 tip 上复核）；`e2e check --json` → `PASS`、`mode: not-applicable`、`approval: true`；`openspec status --change identity-auth-and-keystore --json` → `isComplete: true`。
   - 扩展实现边界（如实登记）：该严格相等只在「HEAD == 字段值」时成立，因此记录提交之后重跑门禁须先做同样的机械字段更新（**非重新验收**）；归档后的变更不再被扩展解析（`workflow check --change <已归档名>` 返回 BLOCKED），字段仅供记录追溯。
 - **提交信息规范化（归档后，非重新验收）**：本变更合入 `main` 的 30 条提交在归档后做了一次 **message-only** 改写（17 条 scope 规范化：`openspec` → `repo`、`identity-auth`/`identity-keystore` → `identity`），新旧哈希映射与等价性证据见 [reports/commit-message-rewrite.md](reports/commit-message-rewrite.md)。本节、`plan.md`、`reports/*.md` 与原始 `*.log` 内记录的哈希**保持改写前原样**，请用该表解析；旧链备份分支与特性分支的重指结果（`feat/identity-auth-and-keystore` → `bb42dd3`，旧备份已删除）同样记录在该文件里。
-- **Required Follow-up**：① 归档前执行 `openspec-agentic workflow check --change identity-auth-and-keystore --stage archive --json`（要求全部任务完成）；② 本变更为**仅本地合入**，若后续要推送远端，须另行取得明确授权并让 CI 的 `deps`/`advisories`/`secrets` 三个 job 先绿；③ 目标版本或证据在本轮之后若再变化，须重新验收（本条结论仅对 `4fb930a` 及其「代码 = `4d988cd`」的映射成立）。
+- **Required Follow-up**：① 归档前执行 `openspec-agentic workflow check --change identity-auth-and-keystore --stage archive --json`（要求全部任务完成）；② **已完成（2026-09-24）**：用户授权推送与开 PR，PR #16 的 5 个必需检查全绿后以 squash 合入 `origin/main`（`2862548`，tree 与推送前一致）；回滚、发布、tag 仍未授权；③ 目标版本或证据在本轮之后若再变化，须重新验收（本条结论仅对 `4fb930a` 及其「代码 = `4d988cd`」的映射成立）。
