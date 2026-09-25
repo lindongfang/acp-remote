@@ -12,8 +12,12 @@
 
 | Task | Executor / Reviewer | Model | Base / Target Version | Report | Lines | Status |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2.1 | worker 3124ebbd（coder，implement） | deepseek/deepseek-flash | base `1359a13` → 交付 `6c5e53b` | `reports/inventory.md` | 2.1 行 | PASS |
+| 2.2 | worker 3124ebbd（同上） | 同上 | 同上 | `reports/wp1-local-checks.log` | 2.2 行 | PASS |
+| 2.3 | worker 3124ebbd（同上） | 同上 | 同上 | `reports/inventory.md` | 2.3 行 | PASS |
+| 2.4 | worker 3124ebbd（同上） | 同上 | 同上 | `reports/wp1-handoff.md` | 2.4 行 | PASS |
 
-（任务交接时逐行登记。）
+验收备注（主 Agent）：① 报告三份均可读且与 handoff_index 逐行一致；② diff 14 文件 +414/−73 与报告一致；③ 写入范围已机械核验（全部落在 `crates/*/tests/**` 或 `#[cfg(test)]` 模块内）；④ 暂存区为空、coder 未提交；⑤ coder 主动发现的 3 处 grep 外残留点（session_version 未关池、compose 共享句柄用例、admin_store 并行偶发）均已修复并在报告登记。
 
 ## Checks
 

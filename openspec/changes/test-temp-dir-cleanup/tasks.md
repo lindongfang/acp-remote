@@ -10,10 +10,10 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 WP1；前置：1.1–1.4；实现 Agent（coder）。全量盘点：以 `grep -rn 'temp_dir()' crates/ --include='*.rs'` 的实际输出建核对表（当前约 25 个创建点），逐点标记「已有守卫 / 无泄漏（仅拼路径未创建）/ 待修复」，必须覆盖 `core`（`acpr-ws-*`）、`agent-host`（`acpr-agent-host-*.txt`）、`server`（`audit.rs`/`params.rs`）、`identity-keystore`（`acpr-keystore-modes-*`/`acpr-keystore-atomic-*`）、`app`（`acpr-wp4b-input-*` 等）。完成条件：核对表写入 `reports/inventory.md` 且与 grep 输出逐行一致，无未分类点。
-- [ ] 2.2 WP1；前置：2.1；实现 Agent（coder）。修复 `crates/storage-sqlite/tests/support/mod.rs` 的 `temp_dir()`：改为返回 `Drop` 守卫（`Deref<Target = Path>` + `#[must_use]`，design D1/D3），按 D2 准则审计全部调用点（约 100 处），inline 临时值写法一律改为先绑定再使用。完成条件：`cargo test -p storage-sqlite` 全绿；核对表中 storage-sqlite 的全部创建点状态为「已守卫」。
-- [ ] 2.3 WP1；前置：2.1；实现 Agent（coder）。按盘点结论修复其余泄漏点（identity-keystore 单测、app `cli/input.rs` 测试、agent-host 的 txt 文件等），同一守卫准则；判定「无泄漏」的点必须在 `reports/inventory.md` 写明依据。完成条件：各受影响 crate 的 `cargo test -p <crate>` 全绿；核对表全部条目闭合。
-- [ ] 2.4 WP1；前置：2.2、2.3；实现 Agent（coder）。WP1 收尾：`cargo fmt --all -- --check` 与 `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` 全绿。完成条件：交接报告写入 `reports/wp1-handoff.md`（含改动文件清单与盘点核对表引用）。
+- [x] 2.1 WP1；前置：1.1–1.4；实现 Agent（coder）。全量盘点：以 `grep -rn 'temp_dir()' crates/ --include='*.rs'` 的实际输出建核对表（当前约 25 个创建点），逐点标记「已有守卫 / 无泄漏（仅拼路径未创建）/ 待修复」，必须覆盖 `core`（`acpr-ws-*`）、`agent-host`（`acpr-agent-host-*.txt`）、`server`（`audit.rs`/`params.rs`）、`identity-keystore`（`acpr-keystore-modes-*`/`acpr-keystore-atomic-*`）、`app`（`acpr-wp4b-input-*` 等）。完成条件：核对表写入 `reports/inventory.md` 且与 grep 输出逐行一致，无未分类点。
+- [x] 2.2 WP1；前置：2.1；实现 Agent（coder）。修复 `crates/storage-sqlite/tests/support/mod.rs` 的 `temp_dir()`：改为返回 `Drop` 守卫（`Deref<Target = Path>` + `#[must_use]`，design D1/D3），按 D2 准则审计全部调用点（约 100 处），inline 临时值写法一律改为先绑定再使用。完成条件：`cargo test -p storage-sqlite` 全绿；核对表中 storage-sqlite 的全部创建点状态为「已守卫」。
+- [x] 2.3 WP1；前置：2.1；实现 Agent（coder）。按盘点结论修复其余泄漏点（identity-keystore 单测、app `cli/input.rs` 测试、agent-host 的 txt 文件等），同一守卫准则；判定「无泄漏」的点必须在 `reports/inventory.md` 写明依据。完成条件：各受影响 crate 的 `cargo test -p <crate>` 全绿；核对表全部条目闭合。
+- [x] 2.4 WP1；前置：2.2、2.3；实现 Agent（coder）。WP1 收尾：`cargo fmt --all -- --check` 与 `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` 全绿。完成条件：交接报告写入 `reports/wp1-handoff.md`（含改动文件清单与盘点核对表引用）。
 
 ## 3. Branch Validation
 
