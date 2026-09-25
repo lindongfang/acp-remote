@@ -102,7 +102,7 @@ rows:
       requirement: "### Requirement: `daemon.status` 由组合根回答"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R11
     source:
       path: specs/daemon-lifecycle/spec.md
@@ -110,7 +110,7 @@ rows:
       requirement: "### Requirement: `daemon.status` 由组合根回答"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R12
     source:
       path: specs/daemon-lifecycle/spec.md
@@ -479,7 +479,7 @@ rows:
       heading: "### Requirement: CLI 子命令映射与薄客户端约束"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R60
     source:
       path: specs/cli-commands/spec.md
@@ -487,7 +487,7 @@ rows:
       requirement: "### Requirement: CLI 子命令映射与薄客户端约束"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R61
     source:
       path: specs/cli-commands/spec.md
@@ -495,14 +495,14 @@ rows:
       requirement: "### Requirement: CLI 子命令映射与薄客户端约束"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R62
     source:
       path: specs/cli-commands/spec.md
       heading: "### Requirement: 退出码与错误输出契约"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R63
     source:
       path: specs/cli-commands/spec.md
@@ -510,14 +510,14 @@ rows:
       requirement: "### Requirement: 退出码与错误输出契约"
     tasks: ["2.15"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R64
     source:
       path: specs/cli-commands/spec.md
       heading: "### Requirement: 配对安全确认仪式"
     tasks: ["2.16"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R65
     source:
       path: specs/cli-commands/spec.md
@@ -525,7 +525,7 @@ rows:
       requirement: "### Requirement: 配对安全确认仪式"
     tasks: ["2.16"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R66
     source:
       path: specs/cli-commands/spec.md
@@ -533,14 +533,14 @@ rows:
       requirement: "### Requirement: 配对安全确认仪式"
     tasks: ["2.16"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R67
     source:
       path: specs/cli-commands/spec.md
       heading: "### Requirement: 结构化输入与凭据交互"
     tasks: ["2.16"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R68
     source:
       path: specs/cli-commands/spec.md
@@ -548,7 +548,7 @@ rows:
       requirement: "### Requirement: 结构化输入与凭据交互"
     tasks: ["2.16"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R69
     source:
       path: specs/cli-commands/spec.md
@@ -556,14 +556,14 @@ rows:
       requirement: "### Requirement: 结构化输入与凭据交互"
     tasks: ["2.16"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R70
     source:
       path: specs/cli-commands/spec.md
       heading: "### Requirement: `doctor` 与 `acp-stdio`"
     tasks: ["2.17"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R71
     source:
       path: specs/cli-commands/spec.md
@@ -571,7 +571,7 @@ rows:
       requirement: "### Requirement: `doctor` 与 `acp-stdio`"
     tasks: ["2.17"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
   - id: R72
     source:
       path: specs/cli-commands/spec.md
@@ -579,7 +579,7 @@ rows:
       requirement: "### Requirement: `doctor` 与 `acp-stdio`"
     tasks: ["2.17"]
     checks: [PV4]
-    evidence: [reports/wp4-app-cli.log]
+    evidence: [reports/wp4b-cli.log]
 ```
 
 ## Work Packages
@@ -673,7 +673,7 @@ rows:
 | PV1 | 候选、主分支、最终（WP1–WP5） | `npm run verify`（= `npm run check` + `cargo fmt --all -- --check` + `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` + `cargo test --locked --workspace --all-features`）@ `D:\Project\acp-remote` | Node ≥ 22.12、`rust-toolchain.toml` 固定的工具链；不联网 | 退出码 0 且逐子项无失败、无零测试、无全跳过；`npm run check` 的合同门禁全绿 | `openspec/changes/daemon-cli-and-local-admin/reports/du1-pv1.log`、`openspec/changes/daemon-cli-and-local-admin/reports/du1-main-verify.log` |
 | PV2 | 候选、主分支（WP1、WP5） | `node scripts/check-crate-boundaries.mjs` @ 仓库根 | 需要本地 `cargo`（`cargo metadata`/`cargo tree`），不联网 | §5 矩阵逐条成立：`server` 行只依赖矩阵允许的对象、`app` 可依赖全部、`core` 闭包与 allow-list 逐项相等；`vendor/windows-local-ipc` 不是 workspace 成员 | `reports/wp1-boundaries.log`、`openspec/changes/daemon-cli-and-local-admin/reports/du1-pv1.log` |
 | PV3 | 各 WP 交付前、最终（WP3） | `cargo test --locked -p server --all-features` @ 仓库根 | 本地 Rust 工具链；临时数据目录（用例自建自删） | framing/channel 绑定/上限/信封校验/方法路由/错误码/schema 与 fixture 漂移/审计导出边界全部通过，且新增用例确实被执行（无 0 用例 / 无全跳过） | `openspec/changes/daemon-cli-and-local-admin/reports/wp3-server-transport.log`、`openspec/changes/daemon-cli-and-local-admin/reports/wp3-server-envelope.log`、`openspec/changes/daemon-cli-and-local-admin/reports/wp3-server-methods.log` |
-| PV4 | 各 WP 交付前、最终（WP4） | `cargo test --locked -p app --all-features` @ 仓库根 | 本地 Rust 工具链；临时 Daemon 数据目录 | 生命周期/锁/种子导入/CLI 映射/退出码契约/配对仪式/凭据交互/`acp-stdio` 明确退出全部通过（真实子进程集成测试），无 0 用例 / 无全跳过 | `openspec/changes/daemon-cli-and-local-admin/reports/wp4-app-daemon.log`、`openspec/changes/daemon-cli-and-local-admin/reports/wp4-app-cli.log` |
+| PV4 | 各 WP 交付前、最终（WP4） | `cargo test --locked -p app --all-features` @ 仓库根 | 本地 Rust 工具链；临时 Daemon 数据目录 | 生命周期/锁/种子导入/CLI 映射/退出码契约/配对仪式/凭据交互/`acp-stdio` 明确退出全部通过（真实子进程集成测试），无 0 用例 / 无全跳过 | `openspec/changes/daemon-cli-and-local-admin/reports/wp4-app-daemon.log`、`openspec/changes/daemon-cli-and-local-admin/reports/wp4b-cli.log`、`openspec/changes/daemon-cli-and-local-admin/reports/wp425.log`、`openspec/changes/daemon-cli-and-local-admin/reports/wp426.log` |
 | PV5 | 候选、主分支（WP2 与 WP3/WP4 的 Windows 用例） | Windows 本机：`cargo test --locked -p server --all-features windows -- --nocapture`、`cargo test --locked -p app --all-features windows -- --nocapture` 及 `vendor/windows-local-ipc` 的自身测试 @ `D:\Project\acp-remote` | **只在 Windows x64 执行**；Linux CI 只覆盖 `#[cfg(unix)]` 与共享路径 | SDDL 创建、同用户接受/跨用户拒绝的对端凭据校验、`acp-stdio` 在 Daemon 缺席时明确退出，输出原始日志 | `openspec/changes/daemon-cli-and-local-admin/reports/pv5-windows-ipc.log` |
 | RV1 | 各 WP 交付前、主分支复核 | 独立 reviewer 按 `roles/reviewer.md` 在隔离上下文检视固定版本 diff 与契约 | 只读；不修改代码与证据 | 报告完整、无未解决阻断项；覆盖 specs 场景与 design 决策 | `openspec/changes/daemon-cli-and-local-admin/reports/rv1-wp1.md` … `rv1-wp5.md`、`rv1-du1.md` |
 
