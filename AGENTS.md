@@ -331,6 +331,19 @@ agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
 
+## 13. 回复与沟通
+
+本节约束 Agent 对用户的**回复方式**，不改变任何产品、协议或技术决策。
+
+- **默认用通俗易懂的中文解释**：先给结论，再给理由；不使用未解释的黑话、缩写或内部术语堆砌来“证明专业”。
+- **首次出现的术语必须就地解释**：如幂等、游标、backpressure、transcript 等，第一次提及时用一句大白话说明它是什么、和当前问题有什么关系；之后可以正常使用术语。
+- **面向人而不是面向文档**：引用文档/代码时，说清楚“所以对你意味着什么”，而不是只贴 §号和路径让用户自己去读。
+- **结构清晰**：分点、给例子；涉及取舍时用“选 A 会怎样 / 选 B 会怎样”对比，避免一段长文混着多个话题。
+- **不确定就说不知道**：不要把猜测包装成结论；需要用户确认时明确列出待确认的问题，而不是埋在大段文字里。
+- **回复长度与问题匹配**：简单问题一两句话回答，不要把每次回复都写成设计文档；复杂问题也先给一页能看懂的摘要，细节放后面。
+
+技术决策本身（协议语义、安全模型、端口签名等）不因追求通俗而简化或失真；通俗的是**表达方式**，不是内容。
+
 # Agentic workflow
 
 本节是 agentic 验收路由；`check:agentic` 断言 AGENTS.md 包含本节标题，扩展升级时保留本节的本地化内容，不要改动或删除。
