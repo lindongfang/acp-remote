@@ -166,6 +166,8 @@
 ## Runtime Resources
 
 - 本变更不涉及数据库服务、容器、端口、外部账号或网络资源（依据：仅本机 IPC 与临时目录；见 plan.md「Runtime Resources」说明行）。
+- **收尾清理核对（2026-09-25）**：worktree 仅 1 个（`D:/Project/acp-remote`，`git worktree list`）；`CARGO_TARGET_DIR` 未覆盖（共用仓库 `target/`，本变更默认串行执行）；**本会话测试产生的 `/tmp/acpr-*` 临时数据目录已清理（2372 → 0）**。
+- **既有残余（非本变更引入，仅登记）**：`/tmp` 下仍有约 **14555** 个 `acpr-*` 目录，自 2026-09-18 起由 `storage-sqlite` 测试遗留（最早为 `/tmp/acpr-spike`），早于本变更基线；按 `AGENTS.md` §8「不顺手改无关代码」不在本变更内处理，建议以独立的测试卫生变更补「用例结束清理临时目录」。
 - 已登记隔离方案：集成用例临时 Daemon 数据目录（用例自建自删）；并行执行者各自 `CARGO_TARGET_DIR`（本变更默认串行，暂无并行占用）；[PV5] Windows IPC 用例串行轮次。
 
 ## Review Findings
@@ -215,13 +217,24 @@
 
 ## Candidate E2E
 
-不适用（mode = not-applicable）。
+E2E 本身 **NOT_APPLICABLE**（mode = not-applicable，见 `plan.md` 的 Main E2E）。候选阶段的替代验证与门禁记录：
+
+| 阶段 | 固定版本 | 内容 | 证据 |
+| --- | --- | --- | --- |
+| 候选轮（集成 Agent 第 1 轮） | `90c816a` | [PV1]–[PV5] 全绿（82 targets / 718 passed / 0 failed / 2 ignored） | `reports/candidate-verify.log`（追加型，含第 1 轮；集成 Agent 报告 `reports/integrator-phaseA.md`） |
+| 候选最终轮 | `3249140` | [PV1]–[PV5] 全绿、自证式回显（真 `git rev-parse HEAD` / `git status --porcelain`） | `reports/candidate-verify-final.log` |
+| 候选独立检视 | `3249140` | RV1-WP4 PASS → 2.27 修复 → RV2-WP4/WP2-WP5 PASS → RV3 FAIL（阻断项：候选轮红未登记）→ PRO-4 登记 + 重跑绿 → RV4 PASS → RV5 PASS | `reports/rv1-wp4.md`、`rv2-wp4.md`、`rv2-wp5.md`、`rv3-candidate.md`、`rv4-candidate.md`、`rv5-candidate.md` |
+| 候选门禁 | `3249140` | `workflow check --stage premerge` = PASS（errors 空） | 本文件的 `agentic-premerge` 块（见 Merge History） |
 
 ## Main E2E
 
-- 项目开关：`npx --quiet --no-install openspec-agentic e2e --json` 实测 `enabled=true`、`command=""`、`maxAttempts=3`。
-- mode = `not-applicable`；reason/basis/alternative_checks/downgrade_approval 见 `plan.md` 的 Main E2E 块（2026-09-25 本会话用户原话「1. 同意降级」）。
-- 替代检查在上方 Checks 表逐项留证（执行后填入）。
+**结论：`NOT_APPLICABLE`（E2E 本身不执行）。**
+
+- 项目开关：`npx --quiet --no-install openspec-agentic e2e --json` 实测 `enabled=true`、`command=""`、`maxAttempts=3`（开关为 true 而聚合命令为空，是本变更记 `not-applicable` 的事实依据之一）。
+- mode = `not-applicable`；`reason`/`basis`/`alternative_checks`/`downgrade_approval` 见 `plan.md` 的 Main E2E 块。降级批准可追溯：**2026-09-25 本会话用户原话「1. 同意降级」**（对应提问第 1 项：本变更 Main E2E 记 not-applicable 及替代验证清单）。
+- **替代验证 4 项在最终主分支固定版本上真实执行**（任务 7.1，主 Agent 采集原始输出）：证据 `reports/alt-run-7.1.log`（sha256 `305fa6c502a803a32eeca15ebaa0173ce160aa42b54d700c3d78386cc8fce6ec`），逐项命令/版本/退出码/跳过数见该日志；配套的主分支回归证据 `reports/du1-main-verify.log`（集成 Agent 记录）。
+- `[e2e-owned]` 行（任务 7.3）由 `npx --quiet --no-install openspec-agentic e2e check --change daemon-cli-and-local-admin` 判定 PASS 后**自动勾选**（主 Agent 未手勾也不手退）：输出为「not-applicable，批准字段非空（用户来源须独立核实）；已按 [e2e-owned] 勾选最终 E2E 任务」。
+- 按模板要求：`not-applicable` 且无 E2E 用例，故本节不保留 E2E ID/Attempt 表（`Test Design and Authoring` 同样不适用）。
 
 ## Failures and Retests
 
@@ -236,7 +249,12 @@
 
 ## Final Assessment
 
-（最终验收时填写。）
+- Assessment ID / Time: **FV1 · 2026-09-25**（本变更唯一验收轮次；执行者 = 主 Agent，按 `.agents/skills/agentic-verify/SKILL.md` 与 `openspec/schemas/agentic/procedures/acceptance.md` 执行）
+- Target / Task: `refs/heads/main`；目标核实证据 = 主分支 HEAD 与 `refs/heads/main` 一致、工作树除本轮验证据块与最终任务勾选外无未提交改动；最终验收任务 ID = **8.1**（唯一 `[final-verification]` 标记）
+- CLI State: 验收前 CLI 状态为 53/54（仅 8.1 待办，属允许待办项）；`e2e check` 已 PASS 并自动勾选 7.3；CLI 状态与证据结论分别记录，不以本结论改写 CLI 原始状态
+- Audit / Evidence: 审计组逐组结论见下（Contract/Coverage、Handoff Traceability、Delivery and Versions、Project Checks and Resources、Independent Reviews、E2E Design and Execution、Issue Closure and Evidence Validity）；有效证据 = 候选与主分支验证日志、RV1–RV5 检视报告、集成 Agent 两轮报告、替代验证日志与 `agentic-premerge` 块；失效与复用判断见 `Failures and Retests` 与 `Check Plan Changes`
+- Result / Open Issues: **PASS**（无已确认 FAIL；PASS 仅对本轮目标版本与有效证据成立）。**开放项均为非阻断且有处理结论**：① `agent-host` 既有 flaky 用例（PRO-4，已登记并留 5/5 复跑工件，建议后续变更加「有界等待」）；② `/tmp` 历史遗留临时目录（非本变更引入）；③ CI-only 判定（`cargo-deny`/advisories/`gitleaks`/Linux `#[cfg(unix)]` 路径）本地无等价物，须由 CI 判定，**本地未声称通过**
+- Required Follow-up: 归档前执行 `workflow check --stage archive`；远端操作（push/PR/发布）**未授权且未执行**
 
 ```agentic-premerge
 version: 1

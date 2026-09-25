@@ -71,7 +71,7 @@
 
 - [x] 7.1 全变更（`not-applicable` 的替代验证）；前置：6.7；主 Agent（可派发独立执行者采集原始输出）。在最终主分支的固定版本上执行 `plan.md` 的 `alternative_checks`：`cargo test --locked -p server --all-features`（[PV3]）、`cargo test --locked -p app --all-features`（[PV4]）、Windows 本机 `cfg(windows)` 用例与 `vendor/windows-local-ipc` 自身测试（[PV5]）、`npm run check` 与 `npm run verify`（[PV1]/[PV2]）。完成条件：返回逐项原始结果（命令、版本、退出码、日志路径、跳过数与原因）；这是替代验证的**真实执行**，不以任何检查的 PASS 作为本任务的完成条件。
 - [x] 7.2 全变更；前置：7.1；主 Agent。汇总全部必要覆盖行的断言、版本与隔离证据，处理执行中出现的问题（失败按原 WP 重新派发并重跑受影响检查），核实运行资源（临时数据目录、worktree、`CARGO_TARGET_DIR`）已清理，并把 Main E2E 结论记为 `NOT_APPLICABLE`（附理由、依据与全部通过的替代验证）。完成条件：`verification.md` 中替代验证与覆盖索引逐行关联、无未闭环 FAIL/BLOCKED、无残留资源。
-- [ ] 7.3 [e2e-owned] 全变更；前置：7.2；扩展（openspec-agentic）。运行 `npx --quiet --no-install openspec-agentic e2e check --change daemon-cli-and-local-admin`，确认「不适用判据已按计划固化」（降级批准可追溯、替代检查清单齐备）。完成条件：由该检查在 PASS 时自动勾选本行、非 PASS 时自动回退；主 Agent 不得手勾或手动回退。本行只检查门禁，不执行测试、不汇总结果。
+- [x] 7.3 [e2e-owned] 全变更；前置：7.2；扩展（openspec-agentic）。运行 `npx --quiet --no-install openspec-agentic e2e check --change daemon-cli-and-local-admin`，确认「不适用判据已按计划固化」（降级批准可追溯、替代检查清单齐备）。完成条件：由该检查在 PASS 时自动勾选本行、非 PASS 时自动回退；主 Agent 不得手勾或手动回退。本行只检查门禁，不执行测试、不汇总结果。
 
 ## 8. Final Verification
 
