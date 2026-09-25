@@ -313,7 +313,7 @@ pub fn agent_configure(params: &JsonObject) -> Result<AgentConfigure, AdminError
 }
 
 /// `provider.configure` 的已校验参数（§5.2）：`values` **只承载凭据值**，保持客户端给出的顺序。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderConfigure {
     /// Provider 标识。
     pub provider_id: String,
@@ -323,6 +323,28 @@ pub struct ProviderConfigure {
     pub display_name: String,
     /// 字段名 → 凭据文本（至少 1 项）。
     pub values: Vec<(String, String)>,
+}
+
+/// 手写 `Debug`：`values` 持有**明文凭据**，derive 出来的实现会让任何一句
+/// `tracing::debug!(?configure)` 把它写进日志（`SECURITY_DESIGN.md` §14.2 与 core 对秘密的既有口径都
+/// 不允许）。这里只输出字段名与计数，值一律不打印。
+impl std::fmt::Debug for ProviderConfigure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderConfigure")
+            .field("provider_id", &self.provider_id)
+            .field("kind", &self.kind)
+            .field("display_name", &self.display_name)
+            .field(
+                "credential_fields",
+                &self
+                    .values
+                    .iter()
+                    .map(|(field, _)| field.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 /// `provider.configure`（§5.2）：`values` 至少 1 项，字段名 `^[A-Za-z0-9._-]{1,64}$`，值非空字符串。
@@ -1229,6 +1251,31 @@ mod tests {
             .expect("mcp 也是合法 kind")
             .kind,
             ProviderRefKind::Mcp
+        );
+    }
+
+    /// 手写 `Debug` 只输出字段名与计数：`values` 是明文凭据，任何 `tracing::debug!(?configure)` 都不允许
+    /// 把它写进日志（`SECURITY_DESIGN.md` §14.2）。
+    #[test]
+    fn provider_configure_debug_prints_credential_field_names_but_never_values() {
+        let configure = provider_configure(&params(json!({
+            "providerId": "openai.primary",
+            "kind": "provider",
+            "displayName": "OpenAI",
+            "values": { "api_key": "s3cret", "org": "acme" },
+        })))
+        .expect("合法参数必须通过");
+        let printed = format!("{configure:?}");
+        assert!(printed.contains("api_key"), "{printed}");
+        assert!(printed.contains("org"), "{printed}");
+        assert!(printed.contains("openai.primary"), "{printed}");
+        assert!(
+            !printed.contains("s3cret"),
+            "凭据值不得出现在 Debug 输出里：{printed}"
+        );
+        assert!(
+            !printed.contains("acme"),
+            "凭据值不得出现在 Debug 输出里：{printed}"
         );
     }
 

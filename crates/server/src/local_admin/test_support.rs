@@ -490,16 +490,23 @@ impl ExportStore for FakeExports {
             .collect())
     }
 
+    /// 与存储同形（`storage-sqlite/src/admin/export.rs`）：**只有已撤销**的既有 `export_id` 是
+    /// `Conflict`，未撤销的既有行走 `ON CONFLICT DO UPDATE` 覆盖并返回 `Ok`。
+    ///
+    /// 这一点是测试强度的前提：§5.5「`exportId` 已存在 → `local.conflict`」在真实存储下完全由
+    /// `Router::export_create` 的查重 guard 保障，若 fake 在这里更严，那条 guard 被删掉也不会让任何
+    /// 用例变红（`router.rs` 的 `export_create_requires_registered_aliases_and_a_free_id`）。
     async fn put_export(&self, write: ExportWrite) -> Result<(), PortError> {
         if let Some(error) = self.failure.lock().expect("export 锁").take() {
             return Err(error);
         }
-        if self
+        let already_revoked = self
             .exports
             .lock()
             .expect("export 锁")
-            .contains_key(write.record.export_id().as_str())
-        {
+            .get(write.record.export_id().as_str())
+            .is_some_and(|stored| stored.revoked_at().is_some());
+        if already_revoked {
             return Err(PortError::Conflict(ConflictKind::AlreadyExists));
         }
         self.seed_export(write.record);

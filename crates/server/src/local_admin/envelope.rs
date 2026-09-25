@@ -252,14 +252,14 @@ impl InvalidRequestReason {
             Self::PayloadNotJson => "request frame is not valid JSON",
             Self::NotAnObject => "request envelope is not a JSON object",
             Self::UnknownField => "request envelope contains an unknown field",
-            Self::MissingField {
-                field: FIELD_ID, ..
-            } => "request field id is missing or not a string",
+            // `MissingField` 的唯一可达值是 `method`：`id` 缺失或类型不符走 `IdNotCanonicalUuid`、
+            // `params` 非 object 走 `ParamsNotObject`（见 `decode_request`）。兜底分支只为
+            // 保守地保留「字段缺失或类型不符」这一语义，不再细分字段名。
             Self::MissingField {
                 field: FIELD_METHOD,
                 ..
             } => "request field method is missing or not a string",
-            Self::MissingField { .. } => "request field params is missing",
+            Self::MissingField { .. } => "request field is missing or is not a string",
             Self::IdNotCanonicalUuid => "request field id is not a canonical lowercase UUID",
             Self::MethodNameInvalid => "request field method is not a valid method name",
             Self::ParamsNotObject => "request field params is not an object",

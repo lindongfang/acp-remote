@@ -1904,6 +1904,19 @@ mod tests {
                 .await,
         );
         assert_eq!(code, LocalErrorCode::NotFound);
+
+        // 从未存在过的**合法形状** id 是另一条输入路径（存储里从来没有该行），同样必须收敛为
+        // `local.not_found`（§7），而不是 `local.internal` 或静默成功。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::ImportRemove,
+                    json!({"importId": "import-missing"}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+
         let (code, _) = error_of(
             &router
                 .handle(request(Method::ImportRemove, json!({"importId": "bad id"})))
