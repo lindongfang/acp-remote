@@ -149,3 +149,175 @@ impl From<HostError> for PortError {
         error.to_port_error()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 端口错误的**形状**：只保留调用方据以决策的类别与 kind，丢掉诊断消息文本。
+    ///
+    /// 消息文案是诊断细节（`design.md` 决策 3），钉死它会让改文案变成破坏测试；类别与
+    /// `ConflictKind`/`UnavailableKind` 才是调用方（`server::*`）据以分支的端口合同。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Shape {
+        NotFound,
+        Conflict(ConflictKind),
+        InvalidRequest,
+        Unavailable(UnavailableKind),
+        Corrupt,
+        Backend,
+    }
+
+    fn shape(error: &PortError) -> Shape {
+        match error {
+            PortError::NotFound(_) => Shape::NotFound,
+            PortError::Conflict(kind) => Shape::Conflict(*kind),
+            PortError::InvalidRequest(_) => Shape::InvalidRequest,
+            PortError::Unavailable(kind) => Shape::Unavailable(*kind),
+            PortError::Corrupt(_) => Shape::Corrupt,
+            PortError::Backend(_) => Shape::Backend,
+        }
+    }
+
+    /// 逐变体钉死映射表。
+    ///
+    /// `HostError` 目前有 19 个变体（`tasks.md`/`design.md` 里写的「16 个」是更早版本的计数）；
+    /// **新增变体时必须在这里补一行**——映射是 core 端口合同的一部分，合法调整应显式发生，
+    /// 而不是被静默改坏。
+    #[test]
+    fn to_port_error_is_pinned_per_variant() {
+        let cases: [(&str, HostError, Shape); 19] = [
+            (
+                "UnknownProfile",
+                HostError::UnknownProfile,
+                Shape::InvalidRequest,
+            ),
+            (
+                "NotRunning",
+                HostError::NotRunning,
+                Shape::Unavailable(UnavailableKind::IoError),
+            ),
+            (
+                "SpawnFailed",
+                HostError::SpawnFailed {
+                    detail: "找不到可执行文件".to_owned(),
+                },
+                Shape::Unavailable(UnavailableKind::IoError),
+            ),
+            (
+                "Timeout",
+                HostError::Timeout {
+                    method: "initialize".to_owned(),
+                },
+                Shape::Unavailable(UnavailableKind::Busy),
+            ),
+            (
+                "AgentExited",
+                HostError::AgentExited {
+                    status: "exit code 3".to_owned(),
+                },
+                Shape::Unavailable(UnavailableKind::IoError),
+            ),
+            (
+                "Protocol",
+                HostError::Protocol(acp_protocol::AcpError::Json {
+                    detail: "测试用协议错误".to_owned(),
+                }),
+                Shape::InvalidRequest,
+            ),
+            (
+                "AgentRejected",
+                HostError::AgentRejected {
+                    code: -32601,
+                    message: "method not found".to_owned(),
+                },
+                Shape::InvalidRequest,
+            ),
+            (
+                "CapabilityNotDeclared",
+                HostError::CapabilityNotDeclared {
+                    capability: "session.template".to_owned(),
+                },
+                Shape::InvalidRequest,
+            ),
+            (
+                "DuplicateSession",
+                HostError::DuplicateSession {
+                    session: "SESSION".to_owned(),
+                },
+                Shape::Conflict(ConflictKind::AlreadyExists),
+            ),
+            (
+                "UnknownSession",
+                HostError::UnknownSession,
+                Shape::InvalidRequest,
+            ),
+            (
+                "SessionClosed",
+                HostError::SessionClosed,
+                Shape::InvalidRequest,
+            ),
+            (
+                "UnknownInteraction",
+                HostError::UnknownInteraction,
+                Shape::Conflict(ConflictKind::AlreadyResolved),
+            ),
+            (
+                "InvalidEnvName",
+                HostError::InvalidEnvName,
+                Shape::InvalidRequest,
+            ),
+            (
+                "EnvNotAllowed",
+                HostError::EnvNotAllowed {
+                    name: "ACPR_NODE_KEY".to_owned(),
+                },
+                Shape::InvalidRequest,
+            ),
+            (
+                "CredentialUnavailable",
+                HostError::CredentialUnavailable,
+                Shape::Unavailable(UnavailableKind::KeystoreUnavailable),
+            ),
+            (
+                "IdUnavailable",
+                HostError::IdUnavailable,
+                Shape::Unavailable(UnavailableKind::IoError),
+            ),
+            (
+                "InvalidResolution",
+                HostError::InvalidResolution,
+                Shape::InvalidRequest,
+            ),
+            (
+                "InvalidPrompt",
+                HostError::InvalidPrompt,
+                Shape::InvalidRequest,
+            ),
+            (
+                "ShutdownPending",
+                HostError::ShutdownPending,
+                Shape::InvalidRequest,
+            ),
+        ];
+
+        // 变体标签不得重复（重复行会把「逐变体覆盖」悄悄变成少测一行）。
+        let labels: std::collections::BTreeSet<&str> =
+            cases.iter().map(|(label, _, _)| *label).collect();
+        assert_eq!(labels.len(), cases.len(), "变体标签不得重复");
+
+        for (label, error, expected) in cases {
+            assert_eq!(
+                shape(&error.to_port_error()),
+                expected,
+                "变体 {label} 的端口错误映射与固定承诺不符"
+            );
+            // `From<HostError> for PortError` 必须与 `to_port_error()` 同源，不得各写一套映射。
+            assert_eq!(
+                shape(&PortError::from(error)),
+                expected,
+                "变体 {label} 的 `From` 映射必须与 `to_port_error()` 一致"
+            );
+        }
+    }
+}

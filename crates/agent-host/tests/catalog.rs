@@ -10,7 +10,7 @@ use std::time::Duration;
 use acp_core::model::CreateSessionRequest;
 use acp_core::model::{
     AgentId, AgentProfile, AgentRef, OwnedSessionRef, PortError, ResourceOrigin, SessionId,
-    SessionReference,
+    SessionReference, UnavailableKind,
 };
 use acp_core::ports::{AgentCatalog, LocalConfigStore, SessionBackendFactory, SessionEndpoint};
 use agent_host::{
@@ -276,6 +276,77 @@ async fn availability_is_per_entry_and_credentials_fail_closed() {
     );
     let _ = std::fs::remove_file(&dump);
     broken.shutdown_all().await;
+}
+
+/// spawn 本身失败（profile 指向的程序不存在）：必须是**明确的不可用类**错误，且不留任何副作用。
+///
+/// 与 `availability_is_per_entry_and_credentials_fail_closed` 的分工：那条路径测的是目录预检把条目
+/// 标成不可用；这里**绕过预检**直接调 `create()`，钉的是真正的 spawn 失败收敛与规格场景
+/// 「进程无法启动时返回明确不可用」的三个可观察结果。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
+    let host = host(
+        vec![profile_with(
+            "agent-missing",
+            "acpr-does-not-exist-anywhere",
+            &["--scenario", "normal"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let agent = AgentId::new("agent-missing").expect("id");
+    let session = SessionId::new(SESSION).expect("session");
+    let collector = Collector::new();
+
+    // ① 明确且可区分的不可用原因：既不是 `InvalidRequest`（请求非法），也不是
+    //    `KeystoreUnavailable`（凭据不可用）或 `Busy`（繁忙/超时），而是 IO 类不可用。
+    let failure = match create(&host, "agent-missing", &session, &collector).await {
+        Ok(_) => panic!("程序不存在时 spawn 必须失败，而不是给出可用端点"),
+        Err(error) => error,
+    };
+    let kind = match failure {
+        PortError::Unavailable(kind) => kind,
+        other => panic!("spawn 失败必须是不可用类错误，实际是 {other:?}"),
+    };
+    assert_eq!(
+        kind,
+        UnavailableKind::IoError,
+        "spawn 失败的不可用原因必须精确到 IO"
+    );
+
+    // ② 无进程副作用：没有半启动的 runtime 留在目录里，也没有留下任何会话映射。
+    assert!(
+        wait_until_not_running(&host, &agent, Duration::from_secs(5)).await,
+        "spawn 失败不得留下运行中的 runtime"
+    );
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        None,
+        "spawn 失败不得把半启动的 runtime 登记进目录"
+    );
+    let reopened = host
+        .open(owned_ref(&session), Collector::new().sink())
+        .await;
+    assert!(
+        matches!(reopened, Err(PortError::InvalidRequest(_))),
+        "spawn 失败不得留下会话映射（`open` 必须报未知会话）"
+    );
+
+    // ③ 重试不被毒化：第二次 `create` 仍是干净的 `Unavailable(IoError)`，而不是 `Conflict` 之类的二次错误。
+    let retried = match create(&host, "agent-missing", &session, &collector).await {
+        Ok(_) => panic!("第二次 create 同样必须失败"),
+        Err(error) => error,
+    };
+    let retried_kind = match retried {
+        PortError::Unavailable(kind) => kind,
+        other => panic!("重试必须给出同样的不可用类错误，实际是 {other:?}"),
+    };
+    assert_eq!(
+        retried_kind,
+        UnavailableKind::IoError,
+        "上一次 spawn 失败不得毒化后续重试"
+    );
+
+    host.shutdown_all().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
