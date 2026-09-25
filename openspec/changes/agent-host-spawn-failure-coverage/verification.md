@@ -29,12 +29,16 @@
 | 4.2 | main / integrate / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | DELIVERY / NOT_APPLICABLE | verification.md（本节） | PASS / NEW | 复核 DU1=integrated 组成 WP1+WP2：PV1（3.1）与 RV1（3.2）证据有效，无变化需同步 |
 | 5.1 | main / merge-prep / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | RESOURCE / NOT_APPLICABLE | reports/integrator-candidate.md | PASS / NEW | 目标核实：apply 启动核实 f53dad5，集成 Agent 提交前复核 refs/heads/main 仍为 f53dad55e72111bb7e026a0d13f5180f82c61358（未移动） |
 | 5.2 | integrator / integrate / candidate | e9ddb00c71b6fbc8835358fa3d6e4f6792bbfe41 | DELIVERY / NOT_APPLICABLE | reports/integrator-candidate.md | PASS / NEW | 候选=e9ddb00（基线 f53dad5 + ea8762f WP1 + ac74102 WP2 + e9ddb00 变更登记）；`cargo check --locked -p agent-host --all-features` exit 0；diff 仅限两个代码文件与变更目录，config.yaml 未被 stage |
+| 5.3 | main / verify / candidate | 7dc25ea75563f2edee11b7943ae091fc2c38dec2 | CHECK / PV1 | reports/PV1.log | PASS / NEW | 候选 PV1 exit 0（合同门禁 + fmt/clippy + workspace 全量，68 目标 ok，含两个新测试）；相对 ac74102 仅多两个 docs 提交 |
+| 5.5 | main / merge-prep / candidate | 7dc25ea75563f2edee11b7943ae091fc2c38dec2 | E2E / NOT_APPLICABLE | verification.md（Main E2E 节） | PASS / NEW | 核对 plan.md Main E2E：mode=not-applicable，reason/basis/alternative_checks 齐备，downgrade_approval=2026-09-25 本会话用户原话；替代验证（候选 PV1 含 agent-host 全量测试）已执行且 PASS；`openspec-agentic e2e --json` 实读 enabled=true/command=""/maxAttempts=3 |
+| 5.4 | reviewer / review / candidate | 7dc25ea75563f2edee11b7943ae091fc2c38dec2 | REVIEW / RV2 | reports/review-rv2.md | PASS / NEW | 独立隔离子 Agent（新上下文，未参与 RV1/实现）；无 CRITICAL/MAJOR；RV2-F1（MINOR）已由主 Agent 修复，RV2-F2（SUGGESTION）记录在案 |
 
 ## Checks
 
 | Check ID / Stage / Work Package | Revision / Base | Scope | Executor | Command / Steps | Environment | Result / Exit Code | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| PV1 / branch / WP1+WP2 | ac74102897f8d7d9b0830b3de3c7e958512b5de2（base f53dad5） | npm run check 全部合同门禁 + fmt/clippy/workspace 全量测试（含 spawn_failure_is_explicit_unavailable_without_side_effects 与 error::tests::to_port_error_is_pinned_per_variant） | 主 Agent（kimi-coding/k3） | `npm run verify`（D:\Project\acp-remote，分支 test/agent-host-spawn-failure-coverage） | Windows，Node v24.19.0，rust 1.98.1（rust-toolchain.toml） | PASS / exit 0 | reports/PV1.log |
+| PV1 / branch / WP1+WP2 | ac74102897f8d7d9b0830b3de3c7e958512b5de2（base f53dad5） | npm run check 全部合同门禁 + fmt/clippy/workspace 全量测试（含 spawn_failure_is_explicit_unavailable_without_side_effects 与 error::tests::to_port_error_is_pinned_per_variant） | 主 Agent（kimi-coding/k3） | `npm run verify`（D:\Project\acp-remote，分支 test/agent-host-spawn-failure-coverage） | Windows，Node v24.19.0，rust 1.98.1（rust-toolchain.toml） | PASS / exit 0 | reports/PV1.log（候选执行已覆盖同路径，本行历史以 coder WP-verify 日志与 RV1 抽查为准） |
+| PV1 / candidate / DU1 | 7dc25ea75563f2edee11b7943ae091fc2c38dec2（base f53dad5） | 同上（全量） | 主 Agent | `npm run verify`（候选工作区，HEAD=7dc25ea） | 同上 | PASS / exit 0；68 个测试目标 ok，两个新测试均 ok | reports/PV1.log |
 
 ## Check Plan Changes
 
@@ -54,6 +58,10 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | RV1-F1 | ac74102 | reviewer（kimi-coding/k3，独立隔离子 Agent） | plan.md WP2 行与 Code Review 关注点 | MINOR / 不阻断：plan.md 两处漏同步变体计数（「16」→ 应为全部变体当前 19 个） | 主 Agent 已于 2026-09-25 同步 plan.md 两处为「全部变体（当前 19 个，以代码为准）」；纯文档同步，不动代码/测试 | 主 Agent 修复，属调度者文书职责，无需独立复核（非代码/测试变更） |
 | RV1-F2 | ac74102 | 同上 | crates/agent-host/src/error.rs:154 | SUGGESTION / 不阻断：变体覆盖缺编译期穷尽性护栏 | 不采纳入本变更：现有固定数组 + 标签不重复断言已钉死当前映射，穷尽性护栏属可选增强，超出本变更范围（AGENTS.md §8 不顺手扩范围）；留作后续可选改进 | 不适用 |
+| RV2-F1 | 7dc25ea | reviewer（kimi-coding/k3，独立隔离子 Agent，未参与 RV1） | design.md Context 节 | MINOR / 不阻断：变体计数漂移第三处残留（「16 个变体」） | 主 Agent 已于 2026-09-25 同步为「（19 个变体）」；纯文书同步 | 主 Agent 修复，无需独立复核（非代码/测试变更） |
+| RV2-F2 | 7dc25ea | 同上 | reports/integrator-candidate.md | SUGGESTION / 不阻断：报告两处 stat ±1 算术不一致（转录误差） | 不修改原始报告（证据保持原样）；本表记录差异，范围结论不受影响 | 不适用 |
+
+轮次记录：RV2（merge，任务 5.4，base f53dad5 / target 7dc25ea，reviewer=kimi-coding/k3 独立子 Agent）= PASS，报告 reports/review-rv2.md。
 
 ## Merge History
 

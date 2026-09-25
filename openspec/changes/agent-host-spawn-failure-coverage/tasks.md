@@ -31,9 +31,9 @@
 
 - [x] 5.1 [DU1] 负责人：主 Agent（机械核实可交 environment/recon）；依赖：4.2；核实目标仓库与 `refs/heads/main` 当前提交（`git -C D:\Project\acp-remote rev-parse refs/heads/main`）并记录准确引用与核实证据；完成条件：记录提交 SHA、核实时间与命令输出；无法确认时保持 BLOCKED。
 - [x] 5.2 [DU1] 负责人：集成 Agent；依赖：5.1；基于已核实基线构造候选分支 `test/agent-host-spawn-failure-coverage`（或 `test/...` 等合规 type/scope 分支），固定基线与候选版本，记录组成与构建结果；完成条件：候选可构建且版本可追溯。
-- [ ] 5.3 [DU1] 负责人：检查执行者；依赖：5.2；在候选版本上执行 [PV1]，将版本、范围、结果及有效复用依据关联到 verification.md；完成条件：候选 [PV1] 全绿并留证。
-- [ ] 5.4 [DU1] 负责人：独立 reviewer；依赖：5.2，可与 5.3 并行；只读检视固定候选的 diff 与契约一致性（本变更只允许测试与规范增量文件），修复后独立复核；完成条件：无未解决阻断项，记录隔离设置、版本与报告。
-- [ ] 5.5 [DU1；mode = not-applicable] 负责人：主 Agent；依赖：5.2；核对 Main E2E 不适用的 reason/basis 与 downgrade_approval（2026-09-25 本会话用户原话）仍在 plan.md 中有效，并确认替代验证（[PV1] 含 agent-host 全量测试）已执行且证据有效；完成条件：替代检查全部通过，verification.md 记 NOT_APPLICABLE 及依据。
+- [x] 5.3 [DU1] 负责人：检查执行者；依赖：5.2；在候选版本上执行 [PV1]，将版本、范围、结果及有效复用依据关联到 verification.md；完成条件：候选 [PV1] 全绿并留证。
+- [x] 5.4 [DU1] 负责人：独立 reviewer；依赖：5.2，可与 5.3 并行；只读检视固定候选的 diff 与契约一致性（本变更只允许测试与规范增量文件），修复后独立复核；完成条件：无未解决阻断项，记录隔离设置、版本与报告。
+- [x] 5.5 [DU1；mode = not-applicable] 负责人：主 Agent；依赖：5.2；核对 Main E2E 不适用的 reason/basis 与 downgrade_approval（2026-09-25 本会话用户原话）仍在 plan.md 中有效，并确认替代验证（[PV1] 含 agent-host 全量测试）已执行且证据有效；完成条件：替代检查全部通过，verification.md 记 NOT_APPLICABLE 及依据。
 - [ ] 5.6 [DU1] 负责人：主 Agent；依赖：5.3、5.4、5.5；候选合入前在固定候选提交上运行 `npx --quiet --no-install openspec-agentic workflow check --change agent-host-spawn-failure-coverage --stage premerge --planning-root D:\Project\acp-remote --json`，PASS 后按 AGENTS.md §8 走 PR：推送候选分支、`gh pr create --fill`（Conventional Commits 标题）、`gh pr checks --watch` 五个必需检查全绿（PR 需先合入最新 main）、`gh pr merge --squash --delete-branch`；完成条件：记录 PR 编号、各检查状态与合并后的 main 提交 SHA；premerge 非 PASS 不合入。
 - [ ] 5.7 [DU1] 负责人：检查执行者；依赖：5.6；核对实际主分支结果与候选一致性，在合并后的 `main` 上完成 [PV1] 回归；有效复用逐项记录原证据与适用性；完成条件：主分支 [PV1] 全绿，日志落 `reports/PV1.log`（主分支份）。
 - [ ] 5.8 [DU1] 负责人：独立 reviewer；依赖：5.6，可与 5.7 并行；独立检视合并新增差异；无新增差异时由主 Agent 记录依据及 3.2/5.4 的原 review ID，不强制同范围重复审查；完成条件：无未解决阻断项并留证。

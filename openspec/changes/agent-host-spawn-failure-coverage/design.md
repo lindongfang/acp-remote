@@ -8,7 +8,7 @@
 
 - `crates/agent-host/src/launch.rs:68` 把 spawn 失败收敛为 `HostError::SpawnFailed`，`error.rs:126` 将其映射为 `PortError::Unavailable(UnavailableKind::IoError)`；`host.rs` 的 `ensure_runtime` 失败不会登记 runtime。
 - 已有测试只覆盖「相邻」路径：catalog 可用性探针把缺失二进制的条目标为 `available: false`（`catalog.rs:223`）、凭据解析失败在 spawn 前失败关闭、启动超时（`supervision.rs:167`）。**没有任何测试直接对缺失二进制的 profile 调用 `create()`**——即 spawn 失败本身及其端口映射、副作用边界均无回归保护。
-- `HostError::to_port_error()`（16 个变体）整体无单元测试；映射表是 core 端口合同（`docs/CORE_PORTS_AND_STORAGE.md` §2/§8）在 adapter 侧的收敛点，静默改坏不会被现有测试发现。
+- `HostError::to_port_error()`（19 个变体）整体无单元测试；映射表是 core 端口合同（`docs/CORE_PORTS_AND_STORAGE.md` §2/§8）在 adapter 侧的收敛点，静默改坏不会被现有测试发现。
 
 本变更只补测试与规范场景，不动产品代码。
 
