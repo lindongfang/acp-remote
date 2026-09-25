@@ -511,9 +511,13 @@ impl ExportStore for FakeExports {
         let Some(record) = exports.get(write.export.as_str()).cloned() else {
             return Err(PortError::NotFound(EntityRef::Export(write.export.clone())));
         };
-        if record.is_revoked() {
-            return Err(PortError::NotFound(EntityRef::Export(write.export)));
-        }
+        // 存储层用 `UPDATE ... SET revoked_at = COALESCE(revoked_at, ?2)`：重复撤销是幂等的，
+        // 保留首次时间而**不**报 `NotFound`（`storage-sqlite/src/admin/export.rs`）。§7 的
+        // 「`*.revoke` 重试得到 `local.not_found`」由 `server` 侧在调用本方法之前判定。
+        let revoked_at = record
+            .revoked_at()
+            .cloned()
+            .unwrap_or_else(|| self.clock.now());
         let revoked = ExportRecord::try_new(
             record.export_id().clone(),
             record.display_name(),
@@ -525,7 +529,7 @@ impl ExportStore for FakeExports {
             record.scopes().clone(),
             record.cache_policy(),
             record.created_at().clone(),
-            Some(self.clock.now()),
+            Some(revoked_at),
         )
         .expect("撤销后的 Export 记录");
         exports.insert(write.export.as_str().to_owned(), revoked);

@@ -385,21 +385,35 @@ impl LocalAdminRouter {
         )]))
     }
 
+    /// `export.revoke`（§5.5）：先判定「存在且未撤销」，再提交撤销并读回持久时间。
+    ///
+    /// 读-写之间的竞态无害：并发重复撤销最坏落到存储的幂等撤销，结果仍是同一条已撤销记录。
     async fn export_revoke(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        const OPERATION: &str = "export.revoke";
         let actor = Actor::LocalCli;
         let export_id = params::export_revoke(params)?;
+        let revocable = self
+            .deps
+            .core
+            .export(&actor, &export_id)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?
+            .is_some_and(|record| !record.is_revoked());
+        if !revocable {
+            return Err(not_revocable(OPERATION, "export", export_id.as_str()));
+        }
         self.deps
             .core
             .revoke_export(&actor, &export_id)
             .await
-            .map_err(|error| params::map_port_error("export.revoke", error))?;
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
         // §5.5：必须在持久状态提交后才返回。撤销时间取读回的持久值，不由本层时钟猜。
         let record = self
             .deps
             .core
             .export(&actor, &export_id)
             .await
-            .map_err(|error| params::map_port_error("export.revoke", error))?;
+            .map_err(|error| params::map_port_error(OPERATION, error))?;
         let revoked_at = record
             .as_ref()
             .and_then(|record| record.revoked_at())
@@ -640,10 +654,24 @@ impl LocalAdminRouter {
     }
 
     /// `device.revoke`（§5.3）：提交后立即关闭该设备的 active connection 才返回。
+    ///
+    /// 先判定「存在且未撤销」（§7：重试得到 `local.not_found`；存储的幂等撤销会在调用后才体现）；
+    /// 读-写之间的竞态无害：并发重复撤销最坏落到存储的幂等撤销。
     async fn device_revoke(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "device.revoke";
         let device_id = params::device_revoke(params)?;
         let actor = Actor::LocalCli;
+        // `revoked_at` 与 `state = revoked` 由 `DeviceRecord::try_new` 绑定为等价（`core::model`）。
+        let revocable = self
+            .deps
+            .core
+            .device(&actor, &device_id)
+            .await
+            .map_err(|error| params::map_port_error(OPERATION, error))?
+            .is_some_and(|record| record.revoked_at().is_none());
+        if !revocable {
+            return Err(not_revocable(OPERATION, "device", device_id.as_str()));
+        }
         self.deps
             .core
             .revoke_device(&actor, &device_id)
@@ -863,10 +891,27 @@ impl LocalAdminRouter {
     }
 
     /// `node.revoke`（§5.4）：提交后关闭 active connection 并停止本地重连才返回。
+    ///
+    /// 先判定「存在且未撤销」（§7：重试得到 `local.not_found`；存储的幂等撤销会在调用后才体现）；
+    /// 读-写之间的竞态无害：并发重复撤销最坏落到存储的幂等撤销。
     async fn node_revoke(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.revoke";
         let node_id = params::node_revoke(params)?;
         let actor = Actor::LocalCli;
+        // §11.6：同一事务令两种角色行一起进入 `revoked`，因此「可撤销」= 行存在且没有任何一行
+        // 已带撤销时间（`revoked_at` 与 `state = revoked` 由 `NodeRecord::try_new` 绑定为等价）。
+        let revocable = {
+            let rows = self
+                .deps
+                .core
+                .nodes_for(&actor, &node_id)
+                .await
+                .map_err(|error| params::map_port_error(OPERATION, error))?;
+            !rows.is_empty() && rows.iter().all(|record| record.revoked_at().is_none())
+        };
+        if !revocable {
+            return Err(not_revocable(OPERATION, "node", node_id.as_str()));
+        }
         self.deps
             .core
             .revoke_node(&actor, &node_id)
@@ -1121,6 +1166,18 @@ fn not_readable(operation: &str, what: &str) -> AdminError {
     AdminError::new(
         LocalErrorCode::Internal,
         format!("{operation}: the committed {what} cannot be read back"),
+    )
+}
+
+/// `*.revoke` 的目标在**调用撤销用例之前**被判为「本方法的目标域里没有它」（§7）。
+///
+/// 两种情形共用本错误：① 记录不存在；② 记录已是撤销终态——§7 规定 `*.revoke` 的重试得到
+/// `local.not_found`，而存储层的撤销是幂等的（`COALESCE(revoked_at, ?)`），不先判就会把重试
+/// 当成一次成功的新撤销返回。
+fn not_revocable(operation: &str, what: &str, id: &str) -> AdminError {
+    AdminError::new(
+        LocalErrorCode::NotFound,
+        format!("{operation}: no revocable {what} `{id}`"),
     )
 }
 
@@ -1754,8 +1811,8 @@ mod tests {
         assert_eq!(revoked["exportId"], json!("export-1"));
         assert_eq!(revoked["revokedAt"], json!(world.clock_text()));
 
-        // 重试同一个撤销 → local.not_found（§7）。
-        let (code, _) = error_of(
+        // 重试同一个撤销 → local.not_found（§7）：存储层撤销是幂等的，判定在调用用例之前。
+        let (code, message) = error_of(
             &router
                 .handle(request(
                     Method::ExportRevoke,
@@ -1764,6 +1821,7 @@ mod tests {
                 .await,
         );
         assert_eq!(code, LocalErrorCode::NotFound);
+        assert!(message.contains("export-1"), "{message}");
 
         let (code, _) = error_of(
             &router
@@ -2464,6 +2522,124 @@ mod tests {
             world.trust.pairing(&pairing_id).expect("配对").state(),
             PairingState::Approved
         );
+    }
+
+    /// §7：`*.revoke` 的重试得到 `local.not_found`。存储层的撤销是幂等的，因此该判定必须在调用
+    /// 撤销用例之前做出；否则重试会以「成功」返回（本用例在把 `FakeExports` 改成与存储同款幂等
+    /// 后先红后绿，`FakeTrust` 的撤销本就照抄了存储语义）。
+    #[tokio::test]
+    async fn device_revoke_retry_and_unknown_id_report_not_found() {
+        let world = TestWorld::new();
+        let router = world.router();
+        activate_device(&world, &router).await;
+
+        // ① 首次撤销成功：返回持久化的撤销时间。
+        let first_at = world.clock_text();
+        let revoked = result_of(
+            &router
+                .handle(request(
+                    Method::DeviceRevoke,
+                    json!({"deviceId": DEVICE_ID}),
+                ))
+                .await,
+        );
+        assert_eq!(revoked["deviceId"], json!(DEVICE_ID));
+        assert_eq!(revoked["revokedAt"], json!(first_at));
+        assert_eq!(world.closer.closed_devices(), vec![DEVICE_ID.to_owned()]);
+
+        // ② 重试同一撤销 → `local.not_found`，且不再触发一次关闭。
+        world.clock.set("2026-09-18T11:00:00.000Z");
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::DeviceRevoke,
+                    json!({"deviceId": DEVICE_ID}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert!(message.contains(DEVICE_ID), "{message}");
+        assert_eq!(
+            world.closer.closed_devices(),
+            vec![DEVICE_ID.to_owned()],
+            "重试不得再走一次撤销与关闭"
+        );
+        assert_eq!(
+            world.trust.device(DEVICE_ID).expect("设备").revoked_at(),
+            Some(&Timestamp::new(&first_at).expect("timestamp")),
+            "重试不得改写首次撤销时间"
+        );
+
+        // ③ 未知 id → `local.not_found`，同样不触发关闭。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::DeviceRevoke,
+                    json!({"deviceId": "2ae1c07c-0000-4000-8000-0000000000f1"}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert_eq!(world.closer.closed_devices().len(), 1);
+    }
+
+    /// §7：`node.revoke` 与 `device.revoke` 同款的重试语义（两种角色行同一事务进入 `revoked`）。
+    #[tokio::test]
+    async fn node_revoke_retry_and_unknown_id_report_not_found() {
+        let world = TestWorld::new();
+        let router = world.router();
+        let pairing_id = begin_and_claim_node(&world, &router).await;
+        result_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe"]}),
+                ))
+                .await,
+        );
+
+        // ① 首次撤销成功：返回持久化的撤销时间。
+        let first_at = world.clock_text();
+        let revoked = result_of(
+            &router
+                .handle(request(Method::NodeRevoke, json!({"nodeId": NODE_ID})))
+                .await,
+        );
+        assert_eq!(revoked["nodeId"], json!(NODE_ID));
+        assert_eq!(revoked["revokedAt"], json!(first_at));
+        assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
+
+        // ② 重试同一撤销 → `local.not_found`，且不再触发一次关闭。
+        world.clock.set("2026-09-18T11:00:00.000Z");
+        let (code, message) = error_of(
+            &router
+                .handle(request(Method::NodeRevoke, json!({"nodeId": NODE_ID})))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert!(message.contains(NODE_ID), "{message}");
+        assert_eq!(
+            world.closer.closed_nodes(),
+            vec![NODE_ID.to_owned()],
+            "重试不得再走一次撤销与关闭"
+        );
+        assert_eq!(
+            world.trust.nodes_of(NODE_ID)[0].revoked_at(),
+            Some(&Timestamp::new(&first_at).expect("timestamp")),
+            "重试不得改写首次撤销时间"
+        );
+
+        // ③ 未知 id → `local.not_found`，同样不触发关闭。
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::NodeRevoke,
+                    json!({"nodeId": "2ae1c07c-0000-4000-8000-0000000000f2"}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert_eq!(world.closer.closed_nodes().len(), 1);
     }
 
     #[tokio::test]
