@@ -12,7 +12,7 @@
 //! | `actions` 多值过滤（空 = 不过滤） | `actions_filter_accepts_multiple_values` |
 //! | `actor`/`target` 过滤按存储列等值匹配 | `actor_and_target_filters_match_the_stored_columns` |
 //! | `limit`；`None` = 不限 | `limit_caps_rows_and_none_means_unbounded` |
-//! | 按 `at` 升序返回（与插入顺序无关） | `rows_come_back_in_ascending_time_order` |
+//! | 全部过滤条件与 `limit` 同时在场（占位符与绑定顺序） | `combined_filters_and_limit_compose_as_a_conjunction` |//! | 按 `at` 升序返回（与插入顺序无关） | `rows_come_back_in_ascending_time_order` |
 //! | `AuditQuery::default()` 返回全部 | `default_query_returns_every_row` |
 //! | 容量：新增行超限时拒绝写入（§7.5 ⑥） | `append_refuses_a_new_row_when_over_capacity` |
 //! | 保留：追加的行受 §7.5 ⑤ 的审计 TTL 约束 | `appended_rows_are_swept_by_audit_retention` |
@@ -41,6 +41,7 @@ const T0: &str = "2026-09-18T00:00:00.000Z";
 const T1: &str = "2026-09-18T00:01:00.000Z";
 const T2: &str = "2026-09-18T00:02:00.000Z";
 const T3: &str = "2026-09-18T00:03:00.000Z";
+const T4: &str = "2026-09-18T00:04:00.000Z";
 /// 早于 `T0` 一年以上：用于让审计 TTL 窗口把它扫掉。
 const OLD: &str = "2024-01-01T00:00:00.000Z";
 
@@ -478,6 +479,85 @@ async fn actor_and_target_filters_match_the_stored_columns() {
         .await
         .expect("query");
     assert!(wrong_access_node.is_empty());
+    store.close().await;
+}
+
+#[tokio::test]
+async fn combined_filters_and_limit_compose_as_a_conjunction() {
+    let (store, _dir) = open("audit-combined-filters").await;
+    let export = EntityRef::Export(ExportId::new(EXPORT).expect("export id"));
+    let other_export = EntityRef::Export(ExportId::new("export-two").expect("export id"));
+    let node_actor = Actor::Node {
+        node: node_id(),
+        access_node: access_node_id(),
+    };
+    // 六行里只有前两行同时满足全部条件（时间区间、动作、actor、target）；其余每行各偏离一项：
+    // 第 3 行偏离 target（且时间为窗口外）、第 4 行偏离动作、第 5 行偏离 actor、第 6 行偏离时间。
+    for (at_text, action, actor, target) in [
+        (
+            T1,
+            AuditAction::ExportCreated,
+            Actor::LocalCli,
+            export.clone(),
+        ),
+        (
+            T2,
+            AuditAction::ExportRevoked,
+            Actor::LocalCli,
+            export.clone(),
+        ),
+        (
+            T4,
+            AuditAction::ExportRevoked,
+            Actor::LocalCli,
+            other_export.clone(),
+        ),
+        (
+            T2,
+            AuditAction::DeviceRevoked,
+            Actor::LocalCli,
+            export.clone(),
+        ),
+        (T2, AuditAction::ExportRevoked, node_actor, export.clone()),
+        (
+            T4,
+            AuditAction::ExportRevoked,
+            Actor::LocalCli,
+            export.clone(),
+        ),
+    ] {
+        store
+            .append(record(at_text, action, actor, target))
+            .await
+            .expect("append audit");
+    }
+
+    let combined = |target: EntityRef, limit: Option<u32>| {
+        store.query(AuditQuery {
+            since: Some(at(T1)),
+            until: Some(at(T3)),
+            actions: vec![AuditAction::ExportCreated, AuditAction::ExportRevoked],
+            actor: Some(Actor::LocalCli),
+            target: Some(target),
+            limit,
+        })
+    };
+
+    // 全部过滤条件同时在场：占位符 `?1..=?n` 的编号与绑定顺序必须一一对应。
+    let matched = combined(export.clone(), None).await.expect("query");
+    assert_eq!(
+        matched.iter().map(AuditRecord::action).collect::<Vec<_>>(),
+        vec![AuditAction::ExportCreated, AuditAction::ExportRevoked]
+    );
+
+    // limit 的占位符排在全部文本条件之后：这里用非空 WHERE 一起绑定。
+    let limited = combined(export, Some(1)).await.expect("query");
+    assert_eq!(limited.len(), 1);
+    assert_eq!(limited[0].at(), &at(T1));
+
+    // target 不匹配时，其余条件再宽松也返回空（合取）。
+    let unmatched = combined(other_export, None).await.expect("query");
+    assert!(unmatched.is_empty());
     store.close().await;
 }
 
