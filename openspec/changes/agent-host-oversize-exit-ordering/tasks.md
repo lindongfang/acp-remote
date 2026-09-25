@@ -10,8 +10,8 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 WP1；前置：1.1–1.4；实现 Agent（coder）。按 design D1 把 `crates/agent-host/src/process.rs` 的 `abort_agent` 调整为「`exit.mark(...)` → drain pending 并投递 Oversize 错误 → `tree.terminate()`」，并同步函数注释为实际顺序；按 D2 核实两条不变量并在交接报告引用代码行（`ExitState::mark` 的幂等/覆写语义、`wait_loop` 空 drain 与 status 覆写、`abort_agent` 内 `terminate` 无条件执行、无「依赖 is_running() 为真才清理」的反向逻辑）。完成条件：新顺序与注释一致；`wait_loop` 与其它 `exit.mark` 调用点零改动；交接报告含 D2 核实记录。
-- [ ] 2.2 WP1；前置：2.1；实现 Agent（coder）。局部验证：`cargo test -p agent-host`（重点 `oversize_frame` 用例）+ `cargo fmt --all -- --check` + `cargo clippy --locked -p agent-host --all-targets --all-features -- -D warnings`。完成条件：三项全绿，命令与退出码写入 `reports/wp1-local-checks.log`；交接报告写入 `reports/wp1-handoff.md`。
+- [x] 2.1 WP1；前置：1.1–1.4；实现 Agent（coder）。按 design D1 把 `crates/agent-host/src/process.rs` 的 `abort_agent` 调整为「`exit.mark(...)` → drain pending 并投递 Oversize 错误 → `tree.terminate()`」，并同步函数注释为实际顺序；按 D2 核实两条不变量并在交接报告引用代码行（`ExitState::mark` 的幂等/覆写语义、`wait_loop` 空 drain 与 status 覆写、`abort_agent` 内 `terminate` 无条件执行、无「依赖 is_running() 为真才清理」的反向逻辑）。完成条件：新顺序与注释一致；`wait_loop` 与其它 `exit.mark` 调用点零改动；交接报告含 D2 核实记录。
+- [x] 2.2 WP1；前置：2.1；实现 Agent（coder）。局部验证：`cargo test -p agent-host`（重点 `oversize_frame` 用例）+ `cargo fmt --all -- --check` + `cargo clippy --locked -p agent-host --all-targets --all-features -- -D warnings`。完成条件：三项全绿，命令与退出码写入 `reports/wp1-local-checks.log`；交接报告写入 `reports/wp1-handoff.md`。
 
 ## 3. Branch Validation
 

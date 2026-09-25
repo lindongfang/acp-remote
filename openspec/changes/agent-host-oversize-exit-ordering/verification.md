@@ -12,6 +12,8 @@
 
 | Task | Stage | Executor / Reviewer | Base / Target Version | Evidence Type / ID | Report | Result | Evidence Status | Applicability |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2.1 | work-package | worker 53d46466（coder，fresh，deepseek-flash） | base `998cb0f` → `af64e85` | CHECK / NOT_APPLICABLE | `reports/wp1-handoff.md` | PASS | NEW | 新顺序 = 标记→投递→terminate；diff 与报告逐字吻合（单文件 +4/−2）；D2 四条不变量逐行核实 |
+| 2.2 | work-package | 同上 | 同上 | CHECK / NOT_APPLICABLE | `reports/wp1-local-checks.log` | PASS | NEW | `cargo test -p agent-host` EXIT=0（oversize_frame 通过且未修改）+ fmt + clippy 全绿 |
 
 （任务交接时逐行登记。）
 
