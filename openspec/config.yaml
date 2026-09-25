@@ -31,6 +31,8 @@ context: |
 
   文档正文使用简体中文；保留 agentic 模板中的英文结构标题、规范关键词、标识符和路径。
   本节仅适用于 agentic 变更；其他 schema 沿用自身流程。工作流以 schema.yaml 为准，角色规则以 roles/ 为准。
+  交付到本仓库远端 main 时遵循 AGENTS.md §8 的 PR 与必需检查；schema 中的本地合入步骤不能替代 PR。
+  候选合入前按 schema 的 premerge 阶段检查；角色交接索引格式以 roles/handoff.md 为准，主 Agent 将其映射到 verification.md。
   `all_done` 后的验收与归档兜底见 operations guidance，并与 AGENTS.md 保持一致。
   项目级 E2E 校验开关位于 `openspec/config.yaml` 的 `x-agentic.e2e`（缺省为开启），用
   `npx --quiet --no-install openspec-agentic e2e --json` 读取；E2E 属于 apply 阶段任务：在流程内用
@@ -50,6 +52,7 @@ context: |
 operations:
   apply:
     guidance:
+      - 仅对 agentic 变更：每个候选合入前，在固定候选提交上运行 npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage premerge --planning-root <权威规划根> --json，并核对候选 Verify、独立 review、适用的候选 E2E 或替代检查及其原始报告；非 PASS 不合入。远端 main 的交付继续走 AGENTS.md §8 的 PR 路径，不能以本地合入替代。
       - 仅对 agentic 变更：最终语义审计后按 verification 模板维护当前 agentic-assessment，运行 npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage final --json；它只读核对意图/覆盖引用、唯一门禁任务、当前目标、契约和证据摘要及 E2E，非 PASS 不勾选最终验收。all_done 后同样需要该检查；机械 PASS 不证明授权或测试真实性。旧变更缺字段时据实补齐，不编造证据。
       - 仅对 agentic 变更：主 Agent 在其他适用任务完成后于 apply 内主动执行最终验收，无须用户另发 /opsx:verify；按 AGENTS.md 先读取 .agents/skills/agentic-verify/SKILL.md，无 skill 发现能力时直接读取。
       - 仅对 agentic 变更：即使 CLI 返回 all_done（此时引擎只下发归档提示，不再下发 apply instruction），也须按本条核对实际目标及 verification.md 的有效证据；保留 CLI 原始状态，单独报告验收结果，仅 PASS 可报告该版本具备归档条件，不自动归档。

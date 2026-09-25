@@ -1,0 +1,34 @@
+# Copy to .github/workflows/agentic-premerge.yml in the consuming repository.
+# Require the "agentic-premerge" status in branch protection for the target branch.
+# PR body must contain exactly one line: Agentic-Change: <change-name>
+name: agentic-premerge
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+jobs:
+  agentic-premerge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Check candidate before merge
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_BRANCH: ${{ github.base_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          change=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^Agentic-Change:[[:space:]]*([A-Za-z0-9][A-Za-z0-9._-]*)[[:space:]]*$/\1/p')
+          if [[ -z "$change" || "$change" == *$'\n'* ]]; then
+            echo 'PR body needs exactly one Agentic-Change: <change-name> line' >&2
+            exit 2
+          fi
+          git fetch origin "refs/heads/$BASE_BRANCH:refs/heads/$BASE_BRANCH"
+          npx --no-install openspec-agentic workflow check --change "$change" --stage premerge --json

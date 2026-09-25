@@ -1,7 +1,4 @@
-<!-- 本文件定义变更动机、范围、能力与影响；行为细节放入 specs，技术方案放入 design.md，
-     协作安排放入 plan.md。specs 根据能力清单和范围定义行为要求及验收场景；
-     design 根据动机、范围和影响制定方案。二者共同收敛后作为 plan.md 的输入，再生成 tasks.md。
-     skip_specs 时，plan.md 依据 proposal、design 及明确引用的既有行为契约生成。 -->
+<!-- 记录动机、范围、能力与影响；行为写 specs，方案写 design，协作写 plan。 -->
 
 ## Why
 

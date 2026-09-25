@@ -10,8 +10,8 @@ verification.md，以及 proposal、适用 specs 和 design。verification.md �
 skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
 
 从计划和证据确定代码仓库绝对路径、目标主分支及准确提交，读取实际 Git 状态和版本。
-不要将当前工作区 HEAD 默认当作目标主分支，或将本地旧引用当作已确认的远端最新版本。
-明确本轮验收的是本地主分支还是远端主分支；无法确认约定目标时报告 BLOCKED。
+不要将当前工作区 HEAD 默认当作目标主分支；核实计划中本地主分支的准确引用与当前提交。
+无法确认约定目标时报告 BLOCKED。
 使用固定版本读取实现；存在影响验收的未提交代码时不能用 HEAD 的测试结论覆盖这些改动。
 只有规划/证据文档提交不同于代码提交时，检查实际差异并说明对应关系。
 
@@ -20,6 +20,9 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
 按以下主题逐组核对；通过任务 ID、Check ID、Review ID、测试报告 ID、E2E ID 和问题 ID
 追踪到固定版本的原始报告及具体证据。同一材料可引用，不要求重复复制。
 旧证据缺少新字段时可用准确来源、版本和位置建立无歧义映射；无法确定关联则列出缺失项，不编造 ID 或结果。
+读取 `roles/handoff.md` 的共用索引契约。对本次各角色报告，主 Agent 须在 verification.md 的
+Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从原始材料建立同等无歧义映射时适用上述兼容规则。
+索引缺失或尚未汇入时，不以报告摘要或已勾选任务替代。
 
 审计组按下表核对本次变更 verification.md 的节；同一节可被多组引用，节名以 `templates/verification.md` 为准；
 旧变更缺少某节时，按内容定位并记录映射依据，不跳过该组检查。
@@ -27,6 +30,7 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
 | 审计组 | 核对 verification.md 的节 |
 | --- | --- |
 | Contracts and Coverage | Target、Checks、Check Plan Changes |
+| Handoff Traceability | Handoff Index、Checks、Review Findings、Candidate E2E、Main E2E、Merge History |
 | Delivery and Versions | Merge History、Dependency Handoffs、Candidate E2E、Main E2E |
 | Project Checks and Resources | Checks、Check Plan Changes、Runtime Resources |
 | Independent Reviews | Review Findings |
@@ -39,12 +43,27 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
 | 角色 | handoff 主要字段 | 汇入 verification.md 的节 |
 | --- | --- | --- |
 | main | 全部权威记录与最终判断 | Final Assessment、Check Plan Changes |
-| coder | changes / checks / evidence_paths | Checks、Dependency Handoffs、Failures and Retests |
-| tester | phase=design-author/execute/retest、checks / evidence_paths | Test Design and Authoring、Candidate E2E、Main E2E、Failures and Retests |
-| reviewer | target_revision / issues / result（Review Context、Findings、Assessment） | Review Findings、Failures and Retests |
-| validator | observations / evidence_paths（Additional Independent Validation） | Checks、Failures and Retests |
-| integrator | target_revision / changes / checks（源/base/candidate/main、防竞态） | Merge History、Dependency Handoffs |
-| environment | role / phase / commands / observations / resource_cleanup（changes、checks 为 NOT_APPLICABLE） | Runtime Resources、Target |
+| coder | handoff_index、changes / checks / evidence_paths | Handoff Index、Checks、Dependency Handoffs、Failures and Retests |
+| tester | handoff_index、phase=design-author/execute/retest、checks / evidence_paths | Handoff Index、Test Design and Authoring、Candidate E2E、Main E2E、Failures and Retests |
+| reviewer | handoff_index、target_revision / issues / result（Review Context、Findings、Assessment） | Handoff Index、Review Findings、Failures and Retests |
+| validator | handoff_index、observations / evidence_paths（Additional Independent Validation） | Handoff Index、Checks、Failures and Retests |
+| integrator | handoff_index、target_revision / changes / checks（源/base/candidate/main、防竞态） | Handoff Index、Merge History、Dependency Handoffs |
+| environment | handoff_index、role / phase / commands / observations / resource_cleanup | Handoff Index、Runtime Resources、Target |
+
+### Handoff Traceability
+
+- 逐任务对照 tasks.md 与每份角色报告索引，核对 `task_id`、role/phase/stage、固定目标提交、
+  `evidence_type`/`evidence_id`、`report_path`、result、`evidence_status`、`applicability_basis`；
+  多个 ID 和候选/已合入阶段须分别成行。verification.md 应引用每份报告路径并保留这些行的映射，
+  不用一个分片或阶段的 PASS 代替另一项。
+- 读取每条 NEW/REUSED 的原始报告与必要日志，核对路径可读、任务/ID/版本/结论一致；REUSED
+  还须核对 `source_evidence` 的原 ID、路径、版本及差异依据。同一 Check/E2E/Review ID 在不同任务、
+  阶段或目标版本可各有执行记录；按任务 ID、阶段、目标版本和原始报告分别核对，不仅因 ID 相同
+  就要求版本或结果相同。只有不同角色声称引用同一次证据记录时，才要求来源、版本和结果一致；
+  真正冲突或无歧义映射缺失时拒收相关 PASS，列出冲突行和受影响任务。
+- INVALID/PENDING 或报告不可读、索引缺行、版本/ID 不一致时，已确认失效或矛盾的证据不能
+  支持 PASS；缺材料或尚待执行的证据记 BLOCKED。已授权写入时重开受影响的任务，保留原行和
+  问题历史，安排相应角色复验；只读验收列出需要重开的任务而不回写。
 
 ### Contracts and Coverage
 
@@ -73,7 +92,7 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
   的通过证据和更新候选记录。
 - 核对独立集成 Agent 的实际 ID、上下文方式、独立分支/worktree、交接输入及原始报告，
   确认主 Agent 未兼任且未复用实现者、测试 Agent 或 reviewer；允许继承必要对话和延续集成上下文。
-  检查批次集成、候选、合入及主分支检查的实际执行者、授权和串行更新记录。
+  检查批次集成、候选、合入及主分支检查的实际执行者、本地合入条件和串行更新记录。
   未建立独立执行角色或缺必要证明时保持 BLOCKED；已确认角色违规为 FAIL，不能仅凭合并结果放行。
 
 ### Project Checks and Resources
@@ -107,7 +126,7 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
   该变更的 mode 与降级批准结论（PASS / FAIL / BLOCKED），以及 required 的执行记录是否成功且对当前版本有效。
   单变更检查要求变更已完成：仅扩展拥有的最终 E2E 行与正在执行的最终验收行（[final-verification]）可待办，
   其余任务未勾完即 BLOCKED（查全部模式才把进行中的变更记为 IN_PROGRESS 不参与判定）；
-  两种 mode 都保留该 `[e2e-owned]` 行：required 时它是最终主分支完整 E2E 的执行/汇总行，not-applicable 时是
+  两种 mode 都保留该 `[e2e-owned]` 行：required 时它是最终主分支完整 E2E 的门禁检查行，not-applicable 时是
   不适用判据确认行；判 PASS 时该检查都按标记自动勾选该行、非 PASS 时自动回退（行级单一所有者，主 Agent 不手勾也不手动回退）；
   只在已授权“执行验收并更新进度”时运行该回写模式；用户仅要求只读核查时加 `--no-write`，不回写、只报告需要修正的任务；
   同时确认该行已按完成条件勾选（未 PASS 应保持待办），框的状态应与检查结论一致；
@@ -157,10 +176,8 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
 未完成任务时为 BLOCKED；全部适用检查通过、证据对应目标版本且无阻断项时才为 PASS。
 同时存在失败和受阻时，两类问题都列出，总结论为 FAIL。
 
-在已授权执行最终验收的会话中，由主 Agent 将结果、目标提交、当前验收任务 ID、
-有效证据引用、失效/复用判断及未解决项写入 verification.md 的 Final Assessment。
-每轮新增唯一验收 ID、时间及执行者，记录各审计组结论、准确目标与核实证据、CLI 原始状态及查询时间、
-有效证据记录 ID、未解决问题 ID 和复验/任务修正要求。标识当前轮次，不覆盖历史。
+在已授权执行最终验收的会话中，由主 Agent 按 verification 模板的 Final Assessment 字段记录
+本轮唯一验收 ID、目标、审计结论、证据及问题；标识当前轮次，不覆盖历史。
 CLI 状态独立记录并引用原始输出，不以证据结论改写 CLI 状态；更新任务后重新查询时注明查询时点。
 PASS 后才勾选最终验收任务；FAIL/BLOCKED 时保持或恢复该任务待办，并恢复已失效检查的任务待办。
 保留历史记录。若用户仅要求只读核查，则只用 `e2e check --no-write` 等只读命令，只报告结论和需要修正的任务，不写文件。
@@ -170,6 +187,6 @@ PASS 后才勾选最终验收任务；FAIL/BLOCKED 时保持或恢复该任务�
 `npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage final --json`；
 非 PASS 不完成验收。归档前用 --stage archive，所有任务必须已完成。测试 worktree 传
 `--planning-root <权威规划根>`。命令始终只读；只读核查时不补写缺失块，报告需修正的字段。
-检查协议及远端引用边界见 procedures/workflow-check.md；原始历史不能因刷新摘要而删除。
+检查协议及本地目标引用边界见 procedures/workflow-check.md；原始历史不能因刷新摘要而删除。
 输出应分别说明 CLI 任务状态和本次验收结论。仅 PASS 可报告“该版本可归档”，
 归档前目标版本或证据再变化时需重新验收。此步骤不自动合并、回滚或归档。

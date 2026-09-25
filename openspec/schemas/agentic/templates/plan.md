@@ -1,21 +1,16 @@
-<!-- 将 specs 的行为要求和 design 的技术方案转为协作计划，主 Agent 统一维护。
-     规则正文见 schema.yaml 的 plan instruction 与 apply instruction，角色执行细节见 roles/。
-     本模板只规定填什么、ID 从哪来、何时填，不重复规则；tasks 保存执行步骤和进度，
-     verification 保存实际提交、运行结果及失败/复验历史；计划更新时同步 tasks，不复制执行日志。 -->
+<!-- 主 Agent 维护协作计划；规则见 schema.yaml，角色细节见 roles/。
+     本文件写安排，tasks 写步骤，verification 写执行历史。 -->
 
 <!-- 分阶段填写，后期信息不作为开始编码的前置条件：
      生成 tasks 前：契约、WP/TP、依赖、职责、写入范围、交付单元、目标分支、验证策略、
        E2E 适用性与候选/最终覆盖范围、资源需求。
      对应交付前：纳入测试 Agent 产出的用例、需求映射及独立审查安排，并完成约定基础检查与审查。
-     正式验证前：补齐本轮固定版本、就绪资源、执行分片及报告路径；实际使用情况和结果写入 verification。
-     工作包职责以 Work Packages 为准，检查定义以 Check ID、用例以 E2E ID、资源以 Runtime Resources
-     中的唯一名称为准；其他表引用这些 ID，不重复复制定义。 -->
+     正式验证前：补齐本轮固定版本、就绪资源、执行分片及报告路径。
+     工作包、检查、用例和资源分别引用 Work Packages、Check ID、E2E ID、Runtime Resources 的唯一标识。 -->
 
 ## Scope and Contracts
 
-<!-- specs/design 可并行编写；主 Agent 在本阶段组织共同收敛，记录文档版本和核对结论：
-     specs 的行为/验收条件与 design 的接口、数据、环境约定无影响拆包或验收的冲突。
-     skip_specs 时记录理由及所依据的既有契约。 -->
+<!-- 记录 specs/design 的版本及共同收敛结论；skip_specs 时记录既有契约依据。 -->
 
 - Specs Revision: <!-- 本次增量规范的提交或内容摘要；skip_specs 时改写所依据既有契约的路径与版本 -->
 - Design Revision: <!-- design.md 的提交或内容摘要 -->
@@ -37,9 +32,8 @@
      tasks 为字符串编号；checks 在这些任务的描述中以 [Check ID] 声明。
      evidence 是计划的原始报告路径，规划阶段可以尚不存在，最终检查必须可读。
      实际结果只写 verification，本索引不复制结果。基础设施/审查任务可被多个覆盖行引用。
-     target_ref 与 Target Repository and Main Branch 一致；远端引用仍需按计划刷新并独立核实。
-     tasks 生成后运行 workflow check --stage plan，修正缺口后才开始 apply。
-     进入最终 E2E 前固定索引；改变任何契约内容会使旧 E2E 契约摘要失效，勾选复选框不会。 -->
+     target_ref 与 Target Repository and Main Branch 一致，填写已核实的本地 refs/heads/* 引用。
+     tasks 生成后补齐编号；进入最终 E2E 前固定索引。 -->
 ```agentic-coverage
 version: 1
 target_ref: refs/heads/main
@@ -63,13 +57,11 @@ rows:
 
 | ID | Goal / Scenarios | Dependencies | Owner | Reviewer | Branch / Worktree | Write Scope | Inputs / Outputs | Verification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| WP1 | <!-- 目标与场景引用 --> | <!-- 前置工作包或无 --> | <!-- 实现者 --> | <!-- 非对应代码作者 --> | <!-- 分支与目录 --> | <!-- 文件归属 --> | <!-- 契约和交付物 --> | <!-- 完成检查 --> |
+| WP1 | <!-- 场景引用 --> | <!-- 前置或无 --> | <!-- 实现者 --> | <!-- 独立审查者 --> | <!-- 路径 --> | <!-- 文件范围 --> | <!-- 契约/产物 --> | <!-- Check ID --> |
 
 ## Execution Waves
 
-<!-- 每批工作包、依赖满足条件和并发上限；共享接口先确定，共享文件指定单一负责人。
-     区分契约、代码和执行资源依赖：接口明确即可并行实现，相关集成验证等待上游交接；
-     TP 的场景设计不依赖产品实现完成或运行环境就绪。不支持并发时记录串行策略。 -->
+<!-- 记录批次、契约/代码/资源各自的依赖满足条件、并发上限和共享文件负责人；无法并行时记录串行策略。 -->
 
 ## Dependency Handoffs
 
@@ -92,9 +84,9 @@ rows:
 ## Target Repository and Main Branch
 
 - Code Repository: <!-- 代码仓库绝对路径 -->
-- Target Kind / Ref: <!-- 合入目标默认 local，填写 refs/heads/*；用户明确要求远端交付时另列 remote、远端仓库及准确分支引用，仍先完成本地合入及检查 -->
+- Target Ref: <!-- 已核实的本地主分支 refs/heads/*；不得以当前 HEAD 猜测 -->
 - Version Confirmation Owner: <!-- 核实目标当前提交的负责人；机械核实可交 environment/recon，目标选择仍由 main 确认 -->
-- Confirmation Method / Evidence: <!-- 核实命令及目录、远端刷新或查询方式、实际提交与核实结果的记录位置 -->
+- Confirmation Method / Evidence: <!-- 核实命令及目录、目标分支的实际提交与核实结果的记录位置 -->
 
 ## Merge Strategy
 
@@ -111,10 +103,9 @@ rows:
 
 - Integration Branch / Worktree: <!-- 每个单元使用的独立集成分支或 worktree 绝对路径 -->
 - Source Revision / Handoff: <!-- 固定源提交，以及已验收上游提交及其检查和 review 证据 -->
-- Operation Boundary / Report Path: <!-- apply 覆盖本地合入；记录远端操作的明确授权依据（如适用）、其他限制及集成报告路径 -->
+- Local Merge Conditions / Report Path: <!-- 候选门禁、仓库规则、基线复核和集成报告路径；满足后直接本地合入，无须重复询问 -->
 
-<!-- 每个交付单元依次完成候选验证、合入、主分支检查，再开始下一个；不沿用旧基线结论。
-     主分支检查失败/受阻时停止后续功能合入，允许按相同验证路径交付修复。 -->
+<!-- 记录每个单元候选验证、合入和主分支检查的顺序；失败恢复规则见 apply instruction。 -->
 
 ## Verification Strategy
 
@@ -151,21 +142,19 @@ alternative_checks: [] # not-applicable 时必填：覆盖风险的替代检查�
 downgrade_approval: "" # x-agentic.e2e.enabled 为 true 或缺省且写 not-applicable 时必填：用户批准降级的原话、时间与来源
 ```
 
-<!-- required：写明必须覆盖的需求/路径、候选关键范围和最终完整范围（最终完整范围为单入口聚合命令）。
-     not-applicable：补齐四个字段，明确替代检查的范围、命令和证据，执行结果记为 NOT_APPLICABLE。
-     项目开关开启（含缺省）时 mode 必须为 required；只有用户显式批准降级才可写 not-applicable，
-     并在 downgrade_approval 留下可追溯的批准记录。适用性判断、环境缺失与降级判据见
-     schema.yaml 的 plan instruction 与 procedures/acceptance.md，本计划不重复。 -->
+<!-- required 填候选关键范围与最终完整覆盖；not-applicable 填适用字段和替代检查范围、命令、证据。
+     模式与降级判据见 schema.yaml 的 plan instruction。 -->
 
 #### E2E Ownership and Cases
 
 <!-- required 时填写 TP 范围、角色、资源和设计任务；下表在 apply 中由主 Agent 汇总测试 Agent 的设计后补齐，
-     不作为开始编码的前置条件。not-applicable 删除本节。用例与断言规则见 roles/tester.md。 -->
+     不作为开始编码的前置条件。候选行第三列是该交付单元的权威 E2E ID 清单（逗号分隔，只写 ID）；
+     合入前须与 E2E Execution Waves 当前单元的 ID 完全一致。not-applicable 删除本节。用例与断言规则见 roles/tester.md。 -->
 
-| Stage / Delivery Unit | Required Requirements / Paths | E2E IDs / Commands |
+| Stage / Delivery Unit | Required Requirements / Paths | E2E IDs |
 | --- | --- | --- |
 | candidate / <!-- 单元 --> | <!-- 合入前关键覆盖；计划阶段确定 --> | <!-- apply 中由测试设计补齐 --> |
-| final-main / all | <!-- 规定的完整覆盖，不以候选子集替代 --> | <!-- 完整 ID/执行命令 --> |
+| final-main / all | <!-- 规定的完整覆盖，不以候选子集替代 --> | <!-- 完整 ID --> |
 
 | E2E ID | Requirement / Scenario | Author / Work Package | Reviewer | Executor | Entry / Preconditions | Steps / Assertions | Case / Evidence Paths |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -181,24 +170,19 @@ downgrade_approval: "" # x-agentic.e2e.enabled 为 true 或缺省且写 not-appl
 
 #### E2E Execution Waves
 
-<!-- apply 中根据用例设计补齐，正式执行前确定完整分配；编写与执行分组可以不同。
-     记录本轮固定版本、允许的分片资源命名空间差异及各分片独立报告路径。
-     required 的最终完整 E2E 是单入口：分片在 x-agentic.e2e.command 内部并行，只写一条 stage=final 记录；
-     候选阶段可按交付单元/分片分别留证，由主 Agent 汇总。 -->
+<!-- apply 中按用例设计补齐，正式执行前确定完整 ID 分配、固定版本、资源命名空间和各分片报告路径。
+     候选记录用 --cases 标注 ID、--command 标注分片命令；人工路径在 Command 写 manual。
+     最终分片由单一项目命令内部聚合，只留一条 stage=final 记录。 -->
 
-| Stage / Unit / Wave / Shard | E2E IDs | Executor | Prerequisites | Fixed Versions | Isolated Resources / Exclusive Queue | Report Path |
-| --- | --- | --- | --- | --- | --- | --- |
-| <!-- 批次/分片 --> | <!-- 完整分配，无遗漏 --> | <!-- 独立测试 Agent 或指定人工 --> | <!-- 前置用例/资源 --> | <!-- 代码/用例/运行产物 --> | <!-- 实例、数据、会话等 --> | <!-- 分片独立路径 --> |
+| Stage / Unit / Wave / Shard | E2E IDs | Command | Executor | Prerequisites | Fixed Versions | Isolated Resources / Exclusive Queue | Report Path |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| <!-- 批次/分片 --> | <!-- 完整分配，无遗漏 --> | <!-- 本分片实际命令或 manual --> | <!-- 独立测试 Agent 或指定人工 --> | <!-- 前置用例/资源 --> | <!-- 代码/用例/运行产物 --> | <!-- 实例、数据、会话等 --> | <!-- 分片独立路径 --> |
 
 ## Failure and Recovery
 
-<!-- 失败后的修复负责人、传递下游失效、复测范围、主分支回滚条件与方法。
-     写明共享运行资源异常释放及受污染检查的重跑方式。
-     失败回路、暂停与恢复规则见 schema.yaml 的 apply instruction。
-     E2E 连续失败达到 x-agentic.e2e.maxAttempts（默认 3）时必须停止自动重跑并交用户决策，
-     记录本轮已尝试方案与证据；不得通过删除记录或提高上限自行续圈。 -->
+<!-- 填修复负责人、下游失效与复测范围、资源异常释放、回滚条件及方法；
+     失败暂停和 E2E 重试上限见 schema.yaml 的 apply instruction。 -->
 
 ## Completion Criteria
 
-<!-- 明确 verification.md 的证据要求、最终主分支版本、阻断问题清零条件和 agentic-verify 入口。
-     verification.md 从执行开始持续积累；存在计划不代表已获得合并、回滚或发布授权。 -->
+<!-- 填最终主分支版本、verification.md 证据要求、阻断清零条件和 agentic-verify 入口。 -->

@@ -39,13 +39,13 @@
 
 ## Report
 
-报告先按 `task_id / role / phase / agent_context / target_revision / scope / changes / checks / issues /
-result / evidence_paths / resource_cleanup` 的固定字段组织，再补充下述验证细节；只报告本次独立验证，
-不汇总其他角色报告或复制其私有对话。
+按共用 `roles/handoff.md` 组织报告和 `handoff_index`，补充本次独立验证细节。
 
 返回任务/检查 ID、实际 Agent ID 和隔离方式、输入及目标版本、实际范围、方法/命令、
 资源、逐项观察和证据路径、覆盖缺口、发现及严重性/影响、未执行项和清理结果。
-已确认行为错误或未满足必要要求为 FAIL；缺资料/隔离/执行或必要证据为 BLOCKED；
-完成全部约定验证且满足通过条件才为 PASS。并存时保留两类问题且总结论为 FAIL。
+每个验证 Check ID 或适用 E2E ID 单独一行，
+记录固定目标提交、独立报告路径及结论，注明代码、测试、产物、配置、环境和
+依赖差异的适用依据；探索结果不得冒充计划内 E2E 或独立 Review。
+完成全部约定验证且满足通过条件才为 PASS。
 主 Agent 将报告汇入权威 verification.md。启用后本项缺少必要证据或隔离时，依赖它的
 交付和最终验收保持受阻；不能用普通命令执行报告替代本项独立验证。
