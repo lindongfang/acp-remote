@@ -75,4 +75,4 @@
 
 ## 8. Final Verification
 
-- [ ] 8.1 [final-verification] 全变更；前置：7.3；主 Agent。使用 `.agents/skills/agentic-verify/SKILL.md` 执行最终验收，核对用户意图（`DEVELOPMENT_PLAN.md` 切片 4 原文与本会话授权）、需求覆盖、设计一致性、计划与任务完成度、最终主分支证据；记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change daemon-cli-and-local-admin --stage final --json`，全部通过才完成。
+- [x] 8.1 [final-verification] 全变更；前置：7.3；主 Agent。使用 `.agents/skills/agentic-verify/SKILL.md` 执行最终验收，核对用户意图（`DEVELOPMENT_PLAN.md` 切片 4 原文与本会话授权）、需求覆盖、设计一致性、计划与任务完成度、最终主分支证据；记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change daemon-cli-and-local-admin --stage final --json`，全部通过才完成。

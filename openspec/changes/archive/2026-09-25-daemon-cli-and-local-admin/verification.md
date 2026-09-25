@@ -249,6 +249,90 @@ E2E 本身 **NOT_APPLICABLE**（mode = not-applicable，见 `plan.md` 的 Main E
 
 ## Final Assessment
 
+```agentic-assessment
+assessment_id: "FV1-2026-09-25"
+target_commit: "14d61aac38fd09d3a652f57c6c719ecba42344b8"
+contract_digest: "sha256:81ce6699272eed8b998b27e39f9063690e03034f813461a34647ce0e2e87dae8"
+result: PASS
+evidence:
+  - path: reports/wp4-app-daemon.log
+    sha256: "sha256:405a2871dc3a68b7ff4547c1ecc3db7996b47d0d67859a709b72cd3ee3a1c6a9"
+  - path: reports/pv5-windows-ipc.log
+    sha256: "sha256:c6ed4b63c2b86bb3ea4b9867943a99819fe46f2fa3892b0b7aeaadb0a70e604f"
+  - path: reports/wp3-server-methods.log
+    sha256: "sha256:9b42d068c38b79475a8248d66722d3da2ed981970009198d82ee4b3b909e96eb"
+  - path: reports/wp4b-cli.log
+    sha256: "sha256:49776ce5ac966339b997c233b53ed7af7db3edb944c6ce0cfb9a992f97c7ceb8"
+  - path: reports/wp3-server-transport.log
+    sha256: "sha256:c0511b118045f45bf05f630b6ce27db5e06d05cf564b3735e653c17ea9524e85"
+  - path: reports/wp3-server-envelope.log
+    sha256: "sha256:fa175a029f520ad618144cf37e5d90f946bb6c9c850de4694de2a37a2cf7b993"
+  - path: reports/candidate-verify.log
+    sha256: "sha256:c937c74cec0bb91b1bed5734e3c4be42ff8a9c2a46bb218b00a57da905225c4e"
+  - path: reports/candidate-verify-final.log
+    sha256: "sha256:0d7c273eec0a04ca5ed2f683e2525bf6693bce05a713e4122446850ac975af19"
+  - path: reports/alt-run-7.1.log
+    sha256: "sha256:305fa6c502a803a32eeca15ebaa0173ce160aa42b54d700c3d78386cc8fce6ec"
+  - path: reports/du1-main-verify.log
+    sha256: "sha256:ad7e5ba75b29da99d3507d41dd486429aa5e9dbb5fbbb38d1ada055ad492b171"
+  - path: reports/agent-host-flaky-rerun.log
+    sha256: "sha256:0814f9944bfc790b878d24d67f1243e65b0093753070e8e81e0113ee218be620"
+  - path: reports/integrator-phaseA.md
+    sha256: "sha256:09b5bb908dd6bfff15e04d931cd4d0e413e6f367008e4a0e3084e41b4fddde2d"
+  - path: reports/integrator-phaseB.md
+    sha256: "sha256:33000faa275507bb50202a1f76ce1d461f3045f9adb7900abff7074184655f38"
+  - path: reports/wp1-handoff.md
+    sha256: "sha256:4a093711d6f6e4f23d9bd3c701b5b3745b36cdfc3096c4a1eb44e00a0d71cd97"
+  - path: reports/wp2-handoff.md
+    sha256: "sha256:74e7c3916cb2af89f88f1d25a281134e76497962fec30a3542a87b8ac51ca2e5"
+  - path: reports/wp3a-handoff.md
+    sha256: "sha256:3a90ca3ece5a2208e89e0662e08c0979083de67dde9fe87c1510026f39846455"
+  - path: reports/wp3b1-handoff.md
+    sha256: "sha256:f3fa9a5aefbc7a50b057cc32cd9173bd8b002a8d3a0426dc19b90d12978f0e1c"
+  - path: reports/wp3b2-handoff.md
+    sha256: "sha256:ad20b48454aab769f70f7a97ed290bb12fa2ce30eeef7ed8492e563deaa267b1"
+  - path: reports/wp321-handoff.md
+    sha256: "sha256:3bb10afd1ae434c432f2e296d7f028867a001b0c942c2250001e1ba76143d8b3"
+  - path: reports/wp323-handoff.md
+    sha256: "sha256:33d088b820c3e0fb296e7469af696509cdbc9b3bab0555270a986ccff1a526a3"
+  - path: reports/wp324-handoff.md
+    sha256: "sha256:ee45ca75f2bbbf325693b761a8f0dccd7c767b7c0e51b605c5cf8a09cfeae294"
+  - path: reports/wp422-handoff.md
+    sha256: "sha256:2b4c6078b6962c1512317ce3dbcfec66f158c6d401df6d350172449bc5b6a437"
+  - path: reports/wp4a-handoff.md
+    sha256: "sha256:aab6c088454f3c5425bbf93c7e6d8aef851dd39f1bafc4b553946bc27a0c8db9"
+  - path: reports/wp4b-handoff.md
+    sha256: "sha256:6607ec6d14b76e3a29e037e0d4ccf8c4e8baad573ebe14325feadd161b787b04"
+  - path: reports/wp425-handoff.md
+    sha256: "sha256:ced3a7bfd641a7e15fa4b6321d1966a764093c79d688c160da8eb25ce8cdb416"
+  - path: reports/wp426-handoff.md
+    sha256: "sha256:41f0ceafcf0c53fea2853a689ec28a7b665bd424e33fdb33efa1c854ad674ebc"
+  - path: reports/wp427-handoff.md
+    sha256: "sha256:f696839697dcfd213d041bb2d6b4fb4eff535acb1de968b436ff93ad932e47ab"
+  - path: reports/wp5-handoff.md
+    sha256: "sha256:670a8daa3bf6867157c41b0deda6da1387303b1ec562bcf1123795a4037a10cb"
+  - path: reports/rv1-wp1.md
+    sha256: "sha256:3f3ee9ada574ad940510b42fe9b851af7c69b13b092e03d78692d28416baa4de"
+  - path: reports/rv1-wp2.md
+    sha256: "sha256:95da75f3faa719dca3e80d4afa434020f359f89668892a952bd44d20f20ad9d3"
+  - path: reports/rv1-wp3.md
+    sha256: "sha256:49a18cacdd75eb521bf7ac4e41ecf5a0a22207246ea2808fff711a47e04f71b5"
+  - path: reports/rv1-wp4.md
+    sha256: "sha256:e341d8b565b14f88cbd8950329f01f109ba9083c8fda9f78f1d115f813e9e82f"
+  - path: reports/rv1-wp5.md
+    sha256: "sha256:d09f8e72b003df32f120e11fc93094e91435f217ebd8daf05371ed212441d6c9"
+  - path: reports/rv2-wp4.md
+    sha256: "sha256:97aff8078f27abd4b8d1bcfc22791b3d6bdf83411fb5842e13bd319defe65004"
+  - path: reports/rv2-wp5.md
+    sha256: "sha256:69949c4c2721e1129b1dd5d19fab4e8a2ff6058a542d8d699615ba4282bb752f"
+  - path: reports/rv3-candidate.md
+    sha256: "sha256:7923274ccd9632df43f84049e080c3d4835b4fae575397f0e8dd9693c0dbb09d"
+  - path: reports/rv4-candidate.md
+    sha256: "sha256:32e3b465d5cacf1f6bab33bf385ef7c0c72699497fcd81e686e4d6a32321f541"
+  - path: reports/rv5-candidate.md
+    sha256: "sha256:908ef5aa692c363fa89f4d45390169440af901d0d75b07a224aa8e19e7483fa6"
+```
+
 - Assessment ID / Time: **FV1 · 2026-09-25**（本变更唯一验收轮次；执行者 = 主 Agent，按 `.agents/skills/agentic-verify/SKILL.md` 与 `openspec/schemas/agentic/procedures/acceptance.md` 执行）
 - Target / Task: `refs/heads/main`；目标核实证据 = 主分支 HEAD 与 `refs/heads/main` 一致、工作树除本轮验证据块与最终任务勾选外无未提交改动；最终验收任务 ID = **8.1**（唯一 `[final-verification]` 标记）
 - CLI State: 验收前 CLI 状态为 53/54（仅 8.1 待办，属允许待办项）；`e2e check` 已 PASS 并自动勾选 7.3；CLI 状态与证据结论分别记录，不以本结论改写 CLI 原始状态
