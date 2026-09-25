@@ -484,6 +484,57 @@ fn the_periodic_task_runs_at_least_once_and_is_cancelled_at_shutdown() {
     assert_eq!(daemon.log_events("daemon.maintenance").len(), ticks.len());
 }
 
+/// R15/R16（周期本身）：Daemon 运行**超过一个清理周期**后，第二轮清理以 `reason = "periodic"` 出现，
+/// 且周期不是自旋（启动后 5s 内不得有第二轮）。本用例是唯一会等满一个 60s 周期的用例，
+/// 因此单独成一个测试函数（总时长约 70s）。
+#[test]
+fn the_periodic_task_runs_again_after_one_full_cycle() {
+    let mut daemon = Daemon::configure("maintenance-period", &seed_profile("codex", true));
+    daemon.start();
+    assert_eq!(
+        daemon.log_events("daemon.maintenance").len(),
+        1,
+        "启动初清理恰好一轮：{}",
+        daemon.log()
+    );
+
+    // 周期不是自旋：5s 内不得出现第二轮。
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    assert_eq!(
+        daemon.log_events("daemon.maintenance").len(),
+        1,
+        "清理周期不得短于 5s（实测 {} 轮）",
+        daemon.log_events("daemon.maintenance").len()
+    );
+
+    // 等待第二个周期（上限 75s）：`MAINTENANCE_INTERVAL = 60s`，留足调度余量。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(75);
+    loop {
+        let ticks = daemon.log_events("daemon.maintenance");
+        if ticks.len() >= 2 {
+            assert_eq!(ticks[1]["reason"], json!("periodic"));
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "60s 周期内必须再执行一次清理（已观测 {} 轮）：{}",
+            ticks.len(),
+            daemon.log()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    // R16 的「周期任务先于 Agent 停止被取消」：取消事件的顺序在关闭序列日志里可判定。
+    assert!(daemon.stop().success());
+    assert!(
+        daemon.log_index("daemon.task_stopped").expect("取消")
+            < daemon.log_index("daemon.agents_stopped").expect("停 Agent")
+    );
+    assert!(
+        daemon.log_index("daemon.task_stopped").expect("取消")
+            < daemon.log_index("daemon.storage_closed").expect("刷盘")
+    );
+}
+
 /// 交叉检查：`daemon.status` 的 `result` 是开放容器，但 CLI 只依赖这几个字段（§5.2）。
 #[test]
 fn the_status_result_keeps_the_documented_field_set() {
