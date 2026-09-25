@@ -45,7 +45,7 @@
 - [x] 3.8 WP4；前置：2.18；独立 reviewer。新建隔离子 Agent 检视 WP4：CLI 零业务规则与零 SQLite 直连、退出码/stderr 契约、SAS/指纹逐字校验、关闭顺序与任务取消、秘密不进入 shell 可见位置/日志/文件。完成条件：`openspec/changes/daemon-cli-and-local-admin/reports/rv1-wp4.md` 记录隔离方式、版本与结论；阻断项修复后复核。
 - [x] 2.27 处置 RV1-WP4/WP1-WP5 发现（RV2 前修正）；前置：3.8、3.10；实现 Agent（coder）。按 `reports/rv1-wp4.md` 与 `reports/rv1-wp5.md` 的最小修复逐条改动：WP5-F1（`README.md` 与 `MODULE_ARCHITECTURE.md` §4.10 的关闭顺序事实错误）、WP5-F2（§5 表下注记称 `windows-local-ipc`「没有行」而矩阵有该行）、WP5-F3（门禁脚本行内注释仍写 9 列/只作为行）、WP5-F4（`daemon.local_admin.endpoint` 本切片只接受 `auto` 未标注；`storage.flush_interval_ms` 描述应为合并窗口而非刷盘间隔）、WP5-F5（`DEVELOPMENT_PLAN.md` 重复「本切片切片 4」与残留旧句）、WP5-F6（`LOCAL_ADMIN_PROTOCOL.md` 状态行「实现中」）、WP4-F2（§4.10 后台任务清单的刷盘措辞与关闭顺序）、WP4-F3（§3.1 依赖登记补 `rpassword` 的 §20 结论；清理 `crates/app/Cargo.toml` 陈旧注释）、WP4-F4（`plan.md` 17 处不存在的 `reports/wp4-app-cli.log` → `reports/wp4b-cli.log`，PV4 证据列补 wp425/wp426）、WP4-F1（合并窗口 spy 相等断言改为快照一致读）、WP4-K（`toml_error_detail` 补单行性/无源码片段/长度上限断言并确认反例能力）。写范围：`docs/**`、`README.md`、`scripts/check-crate-boundaries.mjs`（注释）、`crates/app/**`、`plan.md`（仅证据路径）。完成条件：`npm run check` 全绿、`cargo test -p app` 全绿、`git grep wp4-app-cli.log` 零命中、`grep -rn 停周期任务` 零命中；日志 `reports/wp427.log`；报告 `reports/wp427-handoff.md`。
 - [x] 3.9 WP5；前置：2.20；实现 Agent（coder）。完成 WP5 交付前 project verify：`npm run verify`（[PV1]）与 `node scripts/check-crate-boundaries.mjs`（[PV2]，成员已加入后逐条核对 §5 的 `server`/`app` 行与列）。完成条件：两项在固定版本上通过。
-- [ ] 3.10 WP5；前置：2.20；独立 reviewer。新建隔离子 Agent 检视 WP5 的文档改动：状态表与 `cargo metadata` 实际一致、未误写未落地 crate 为已落地、未误改切片顺序与验收表述。完成条件：`openspec/changes/daemon-cli-and-local-admin/reports/rv1-wp5.md` 记录隔离方式、版本与结论；阻断项修复后复核。
+- [x] 3.10 WP5；前置：2.20；独立 reviewer。新建隔离子 Agent 检视 WP5 的文档改动：状态表与 `cargo metadata` 实际一致、未误写未落地 crate 为已落地、未误改切片顺序与验收表述。完成条件：`openspec/changes/daemon-cli-and-local-admin/reports/rv1-wp5.md` 记录隔离方式、版本与结论；阻断项修复后复核。
 
 ## 4. Test Design and Authoring
 
@@ -53,13 +53,13 @@
 
 ## 5. Integration Readiness
 
-- [ ] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
-- [ ] 5.2 DU1；前置：3.1–3.10；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP5），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
+- [x] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
+- [x] 5.2 DU1；前置：3.1–3.10；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP5），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
 
 ## 6. Merge Unit
 
-- [ ] 6.1 DU1；前置：5.2；主 Agent（机械核实可派发 environment/recon）。按计划核实目标仓库与主分支当前提交：`git -C D:\Project\acp-remote rev-parse refs/heads/main`、`git status --porcelain`、`git worktree list`，记录准确引用与核实证据。完成条件：基线提交被明确记录到 `verification.md`；无法确认目标时保持 BLOCKED，不凭 `HEAD` 或上次记录的引用继续。
-- [ ] 6.2 DU1；前置：6.1；集成执行者。基于已核实基线构造 DU1 候选：确认变更分支包含 WP1–WP5 的全部提交、成员与依赖登记完整、`reports/` 与 `verification.md` 已登记；固定基线与候选版本并记录组成与构建结果（`cargo build --locked --workspace --all-features` + `vendor/windows-local-ipc` 构建）。完成条件：候选版本可固定（提交哈希）且组成可复述；基线变化时从 6.1 重开。
+- [x] 6.1 DU1；前置：5.2；主 Agent（机械核实可派发 environment/recon）。按计划核实目标仓库与主分支当前提交：`git -C D:\Project\acp-remote rev-parse refs/heads/main`、`git status --porcelain`、`git worktree list`，记录准确引用与核实证据。完成条件：基线提交被明确记录到 `verification.md`；无法确认目标时保持 BLOCKED，不凭 `HEAD` 或上次记录的引用继续。
+- [x] 6.2 DU1；前置：6.1；集成执行者。基于已核实基线构造 DU1 候选：确认变更分支包含 WP1–WP5 的全部提交、成员与依赖登记完整、`reports/` 与 `verification.md` 已登记；固定基线与候选版本并记录组成与构建结果（`cargo build --locked --workspace --all-features` + `vendor/windows-local-ipc` 构建）。完成条件：候选版本可固定（提交哈希）且组成可复述；基线变化时从 6.1 重开。
 - [ ] 6.3 DU1；前置：6.2；检查执行者。按计划 Check ID 完成候选 Project Verify：[PV1]、[PV2]、[PV3]、[PV4]，并按平台条件执行 [PV5]（Linux CI 不覆盖该路径，需本地 Windows 执行）。完成条件：逐项记录版本、范围、退出码、日志路径，且无零用例/全跳过；有效复用旧证据时逐项写明适用性。
 - [ ] 6.4 DU1；前置：6.2；独立 reviewer。只读检视固定候选的新增交互与冲突解决（文档口径 ↔ 实现、`Cargo.toml` 成员与依赖、`deny.toml` path 登记、CLI↔server 形状一致性），必要时复核 [PV2] 的差异结论；待返回的检查证据在证据交付前补齐核对。完成条件：`openspec/changes/daemon-cli-and-local-admin/reports/rv1-du1.md` 记录隔离设置、版本与结论；阻断项修复后由新的隔离子 Agent 复核。
 - [ ] 6.5 DU1（`not-applicable` 路径）；前置：6.2；主 Agent。核对 Main E2E 的 `not-applicable` 理由与依据仍成立（无跨节点/跨客户端产品闭环、`x-agentic.e2e.command` 为空、2026-09-25 用户降级批准记录有效并已写入 `plan.md`），并确认候选阶段的替代检查覆盖（[PV3]/[PV4]/[PV5] 的候选轮次已完成、证据可读）。完成条件：四项（reason/basis/alternative_checks/downgrade_approval）与 `plan.md` 一致且未被实现期改动削弱；不在候选阶段重复第 7 组的最终替代验证。

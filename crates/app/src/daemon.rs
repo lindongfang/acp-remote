@@ -657,7 +657,7 @@ impl MergeWindow for BrokerMergeWindow {
 ///
 /// 不吞错：单会话失败记结构化警告（含 `session_id` 与错误类别）后继续本轮其余会话，也不结束任务——
 /// 缓冲仍在内存里，下个周期会重试；枚举失败同样只记警告。取消路径与其它周期任务相同（协作式 `Notify`），
-/// 而关闭序列在停 Agent 与刷盘之前先调 `OwnedTasks::cancel_all`（§7.1 第 4 条）。
+/// 而关闭序列在停 Agent 与刷盘之前先调 `OwnedTasks::cancel_all`（`CORE_PORTS_AND_STORAGE.md` §7.5 第 4 条）。
 fn spawn_merge_window<M: MergeWindow + 'static>(
     tasks: &mut OwnedTasks,
     interval: Duration,
