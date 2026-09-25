@@ -37,6 +37,8 @@
 | 2.10, 2.12 | coder / implement / work-package | f1a3cd4 | CHECK / PV3（WP3b1 部分） | reports/wp3b1-handoff.md（日志 reports/wp3-server-methods.log） | PASS / NEW | 91 passed / 0 failed / 0 ignored；fmt/clippy（Win + Linux 目标）零告警；npm run verify 697 passed |
 | 2.21 | coder / implement / work-package | 1cd7a3b（主 Agent 并发提交，含 2.21 全部 12 个文件；后接 dfb1c99 vendor 修复与 8dd24e4 报告） | DELIVERY / NOT_APPLICABLE | reports/wp321-handoff.md | PASS / NEW | 正则三处一致；drift 25 项；fixtures 118 valid/24 invalid；F1/F2 已修（dfb1c99） |
 | 2.21 | coder / implement / work-package | dfb1c9972aad35e3bbb880e1e9ecfbe01a696257 | CHECK / PV1、PV2（2.21 轮） | reports/wp321-handoff.md（日志 reports/wp321-contract.log、reports/wp3-server-methods.log） | PASS / NEW | `npm run check` exit 0（显式 EXIT 行）；`cargo test -p server` 93 项
+| 2.11, 2.13 | coder / implement / work-package | eef75f4（+测试 9b30ab4；报告 dbebd0c） | DELIVERY / NOT_APPLICABLE | reports/wp3b2-handoff.md | PASS / NEW | WP3b2 交付；RV1（3.6）待 2.23 后调度 |
+| 2.11, 2.13 | coder / implement / work-package | eef75f4 | CHECK / PV3（WP3b2 部分） | reports/wp3b2-handoff.md（日志 reports/wp3-server-pairing.log、reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | 112 passed（新增 19）；fmt/clippy（Win+Linux 目标）零告警；npm run verify 627 passed |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | BLOCKED / PENDING | `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -60,6 +62,8 @@
 - 2026-09-25（WP1 交付后）：**WP4 调用点约束传递**——固定工具链 1.98.1 下 `std::fs::File::try_lock`（1.89 稳定）与 `fs4::FileExt` 同名且优先级更高，WP4 必须全限定调用 `fs4::FileExt::try_lock`，否则等于把 MSRV 抬到 1.89（依据：WP1 handoff 开放问题第 3 项，已写入 `MODULE_ARCHITECTURE.md` §3.1）。
 
 - 2026-09-25（WP3b2 裁决，主 Agent）：**配对 URL 的 origin 来源与 QR payload 组装方式**。D1：`public_origin: Option<String>` 由 WP4 组合根注入 `PairingSessions::new`（server 不读配置、不经 `DaemonControl` 取值）；`None` 时 `device.pair.begin`/`node.pair.begin(owner)` 在**任何副作用之前**失败关闭并回 `local.unavailable`（§6 无「配置缺失」专用码，语义最贴近；成因需在 message 与注释中说明）。D2：`crates/server` 新增 `sync-protocol` + `node-link-protocol` 生产依赖（§5 矩阵允许），用两边的 `QrPayload` 组装 `#data=`，不手写 wire 键名，并补往返测试；若协议 crate 有既有 URL helper 优先使用，否则用 base64 `URL_SAFE_NO_PAD`（server 不引入 `acpr-wire`）。影响：WP4 的 `PairingSessions` 构造签名 + server 的两条依赖边 + `Cargo.lock`。依据：WP3b2 实现者的 D1/D2 提问与本会话裁定。
+- 2026-09-25（WP3b2 交付后，主 Agent 裁定）：**五条开放项处置**。(1) `*.revoke` 重试语义与 §7 冲突——**实现侧修正**（已核实 `export.rs:401`/`trust.rs:519`/`trust.rs:552` 均为 `COALESCE(revoked_at, ?)`；新增任务 2.23：三个 revoke 入口先读、不存在或已撤销 → `local.not_found`）。(2) 待澄清项作废：`PairingRecord` 本身持久化 `requested_scopes`/`requested_grants`（`core/src/model/identity.rs:440-441`），因此 status 返回的就是登记的请求集合，**不是偏离**。(3) `consumed → "approved"`、设备 `pending_confirmation → "claimed"` 的字面量映射——在 §5.3/§5.4 的封闭词表内取值，接受。(4) `preset.*` 在 `device.pair.begin` 被拒——与 §5.3「取值限于 `pack.*` 与命令名集合」的字面表述一致，接受（展开由 CLI 承担）。(5) `window::add_millis` 与 `storage-sqlite` 的日期算术重复——core 未暴露时间工具，接受并登记为已知重复（不新增跨 crate 依赖）。
+
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
