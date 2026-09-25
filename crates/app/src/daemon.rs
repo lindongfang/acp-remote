@@ -132,6 +132,11 @@ impl DaemonError {
 /// 关闭信号：`daemon.stop`/Ctrl+C/SIGTERM 都会置位，`daemon.stop` 可以同时给本次关闭一个宽限值。
 ///
 /// 触发者（本地通道 / OS 信号）也记录在信号里：关闭日志必须能回答「因为什么开始关闭」。
+///
+/// 「接受」日志（`daemon.stop_accepted`/`daemon.stop_repeated`）由调用方在 `request` **之前**
+/// 输出：置位之后主任务会立刻进入关闭序列并写 `daemon.shutdown_begin`，置位后再记日志会让
+/// 两条日志的先后成为调度竞赛（Linux CI 实踩）。先取「是否首次」再记日志，最后置位；
+/// 两个连接并发 stop 的窗口只会让「accepted/repeated」的日志归属互换，不影哴关闭语义。
 #[derive(Debug)]
 pub struct ShutdownSignal {
     requested: AtomicBool,
@@ -279,7 +284,8 @@ impl DaemonControl for AppDaemonControl {
     }
 
     async fn stop(&self, grace_ms: Option<u64>) -> Result<(), AdminError> {
-        let first = self.shutdown.request(grace_ms);
+        // 先记日志再置位（原因见 `ShutdownSignal` 文档）：保证 `stop_accepted` 先于 `shutdown_begin`。
+        let first = !self.shutdown.is_requested();
         if first {
             tracing::info!(
                 event = "daemon.stop_accepted",
@@ -289,6 +295,7 @@ impl DaemonControl for AppDaemonControl {
         } else {
             tracing::debug!(event = "daemon.stop_repeated", "重复的关闭请求");
         }
+        self.shutdown.request(grace_ms);
         // §5.2：`accepted` 恒为 `true`，失败必须走 `error`；本实现没有可失败的步骤。
         Ok(())
     }
