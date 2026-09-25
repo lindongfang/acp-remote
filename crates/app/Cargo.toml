@@ -1,0 +1,65 @@
+[package]
+name = "app"
+description = "组合根与入口：Daemon 生命周期、配置加载与 `acp-remote` 可执行程序"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# 本切片只落地 `daemon start`（前台进程）；其余 CLI 子命令与 `acp-stdio` 属 WP4b（tasks.md 2.15–2.17）。
+[[bin]]
+name = "acp-remote"
+path = "src/main.rs"
+
+# 依赖方向以 docs/MODULE_ARCHITECTURE.md §5 为唯一判据（scripts/check-crate-boundaries.mjs 断言）：
+# `app` 行的每个格都是 ✓——组合根装配全部具体实现，但自身只做装配（`MODULE_ARCHITECTURE.md` §5
+# 「`app` 可以依赖全部具体 crate，但只做装配；任何其他 crate 不得依赖 `app`」）。
+[dependencies]
+# 用例面与端口（`UseCaseDeps` 的每个字段都由本 crate 注入具体实现）。
+core = { path = "../core" }
+# SQLite 持久化后端：本 crate 是唯一允许构造它的地方（CLI 侧不直连数据库，见 `app::client`）。
+storage-sqlite = { path = "../storage-sqlite" }
+# 身份状态机与 keystore 端口（`Authority`、`IdentityKeystore`、`SecretPurpose`）。
+identity-auth = { path = "../identity-auth" }
+# 平台安全存储的具体实现（`FileKeystore` + `OsEntropy`）与显式开发模式下的 `EphemeralKeystore`。
+# `MODULE_ARCHITECTURE.md` §5 的注记：除 `app` 外没有 crate 依赖 `identity-keystore`。
+identity-keystore = { path = "../identity-keystore" }
+# 本机 Agent 的 `AgentCatalog` 与 `SessionBackendFactory` 实现（§4.5）：组合根不另造目录实现，
+# 也不在 `app` 里复制「命令可解析」这类适配器逻辑。本切片不接 `spawn_idle_sweep`
+# （`sessions.idle_timeout_ms` 属「已知但未接线」，见 `app::config`）。
+agent-host = { path = "../agent-host" }
+# 入站适配器：本地管理通道（`transport::local`）与管理信封/方法路由（`local_admin`）。
+server = { path = "../server" }
+# `rt-multi-thread`/`macros`/`sync`/`time`/`net`/`io-util`/`signal` 由 workspace 基线开启：runtime 由本
+# crate 创建并持有（`docs/MODULE_ARCHITECTURE.md` §4.5/§4.7：适配器不自建 runtime），`signal` 驱动关闭序列。
+tokio.workspace = true
+# 单实例锁：OS advisory 文件锁。**必须全限定调用** `fs4::FileExt::try_lock`——固定工具链的
+# `std::fs::File::try_lock`（1.89 稳定）同名且方法解析优先级更高，用错等于把 MSRV 抬到 1.89
+# （`MODULE_ARCHITECTURE.md` §3.1 的调用点约束，WP4 任务单明写）。
+fs4.workspace = true
+# CLI 解析（本切片只有 `daemon start`）与 `docs/CONFIG_REFERENCE.md` 的配置文件解析（只读，不回写）。
+clap.workspace = true
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# 结构化日志：本 crate 只产出事件，并在组合根初始化订阅器（`logging.*`）。
+tracing.workspace = true
+# 本节点标识由节点身份公钥**确定性派生**（`app::identity`），以及审计/凭据标签的摘要。
+sha2.workspace = true
+# `IdGenerator` 与锁文件/请求关联 id 的随机来源（v4 = 系统 CSPRNG）。
+uuid.workspace = true
+# `DaemonControl`/`ConnectionCloser`/`AuditHook`/`CredentialResolver` 都是可 dyn 化的异步 trait。
+async-trait.workspace = true
+
+# 集成测试自己也用到这批依赖（JSON、摘要、runtime），在测试目标上显式声明，不依赖
+# 「普通依赖是否对测试目标可见」这一隐式前提。
+[dev-dependencies]
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

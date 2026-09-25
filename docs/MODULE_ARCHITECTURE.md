@@ -460,22 +460,22 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 ## 5. 依赖矩阵
 `✓` 表示允许直接依赖：
 
-| From / To | core | acp-protocol | agent-host | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore | server | app | windows-local-ipc |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| core | — |  |  |  |  |  |  |  |  |  |  |  |
-| acp-protocol |  | — |  |  |  |  |  |  |  |  |  |  |
-| agent-host | ✓ | ✓ | — |  |  |  |  |  |  |  |  |  |
-| sync-protocol |  |  |  | — |  | ✓ | ✓ |  |  |  |  |  |
-| node-link-protocol |  |  |  |  | — | ✓ | ✓ |  |  |  |  |  |
-| acpr-transcript |  |  |  |  |  | — |  |  |  |  |  |  |
-| acpr-wire |  |  |  |  |  | ✓ | — |  |  |  |  |  |
-| node-link-client | ✓ | ✓ |  |  | ✓ |  |  |  |  |  |  |  |
-| storage-sqlite | ✓ |  |  |  |  |  | ✓ |  |  |  |  |  |
-| identity-auth | ✓ |  |  | ✓ | ✓ | ✓ |  | — |  |  |  |  |
-| identity-keystore |  |  |  |  |  |  |  | ✓ | — |  |  |  |
-| server | ✓ | ✓ |  | ✓ | ✓ |  |  | ✓ |  | — |  | ✓ |
-| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  |
-| windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  | — |
+| From / To | core | acp-protocol | agent-host | storage-sqlite | sync-protocol | node-link-protocol | acpr-transcript | acpr-wire | identity-auth | identity-keystore | server | app | windows-local-ipc |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| core | — |  |  |  |  |  |  |  |  |  |  |  |  |
+| acp-protocol |  | — |  |  |  |  |  |  |  |  |  |  |  |
+| agent-host | ✓ | ✓ | — |  |  |  |  |  |  |  |  |  |  |
+| sync-protocol |  |  |  |  | — |  | ✓ | ✓ |  |  |  |  |  |
+| node-link-protocol |  |  |  |  |  | — | ✓ | ✓ |  |  |  |  |  |
+| acpr-transcript |  |  |  |  |  |  | — |  |  |  |  |  |  |
+| acpr-wire |  |  |  |  |  |  | ✓ | — |  |  |  |  |  |
+| node-link-client | ✓ | ✓ |  |  |  | ✓ |  |  |  |  |  |  |  |
+| storage-sqlite | ✓ |  |  | — |  |  |  | ✓ |  |  |  |  |  |
+| identity-auth | ✓ |  |  |  | ✓ | ✓ | ✓ |  | — |  |  |  |  |
+| identity-keystore |  |  |  |  |  |  |  |  | ✓ | — |  |  |  |
+| server | ✓ | ✓ |  |  | ✓ | ✓ |  |  | ✓ |  | — |  | ✓ |
+| app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  |
+| windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  |  | — |
 
 注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。`server`、`app` 与 `windows-local-ipc` 已随切片 4 成为列：前两者开始作为 workspace 成员落地（§3 `[现状]`），后者是 `vendor/` 下的 path 依赖、**永远不是** workspace 成员，但因为 `server` 依赖它而必须成列；`storage-sqlite` 与 `node-link-client` 仍只作为「行」出现，其中 `node-link-client` 待切片 6。**`storage-sqlite` 的缺列有明确后果**：`app` 一旦写入 `members` 并把 `storage-sqlite` 作为 path 依赖，`scripts/check-crate-boundaries.mjs` 会因「依赖不在 §5 的矩阵列里」硬失败，因此该列必须与 `crates/app` 加入 `members` 在同一改动里补齐（`daemon-cli-and-local-admin` 的 WP4/WP5 交接项）。缺列不会静默存在：任何成员开始依赖未成列的 crate 都会让门禁硬失败。
 
