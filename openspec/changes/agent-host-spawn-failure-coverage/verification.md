@@ -8,6 +8,7 @@
 - 核实方式：`git -C D:\Project\acp-remote rev-parse refs/heads/main`
 - apply 启动核实（2026-09-25，任务 5.1 前置/1.1 记录来源）：`f53dad55e72111bb7e026a0d13f5180f82c61358`；当前工作分支 main，工作区另有用户未提交改动 `openspec/config.yaml`（角色模型配置，非本变更范围，全程不提交、不覆盖）
 - 实现分支：`test/agent-host-spawn-failure-coverage`（基于上述 main 提交创建）
+- 目标移动记录（2026-09-25，最终验收期间）：`70e2c21`（PR #21 本变更合入）→ `8692a416de7080f4aa8d12f15c4c5087642f93ae`（PR #22，用户授权的独立提交：`openspec/config.yaml` 角色模型固定，与本变更代码零交集）。受影响证据已重评：PV1 在 8692a41 重跑 PASS（reports/PV1-main.log 刷新）；`git diff 70e2c21..8692a41` 仅含 config.yaml，agent-host 代码与测试证据的适用性不变。最终验收目标 = 8692a41。
 
 ## Handoff Index
 
@@ -32,13 +33,21 @@
 | 5.3 | main / verify / candidate | 7dc25ea75563f2edee11b7943ae091fc2c38dec2 | CHECK / PV1 | reports/PV1.log | PASS / NEW | 候选 PV1 exit 0（合同门禁 + fmt/clippy + workspace 全量，68 目标 ok，含两个新测试）；相对 ac74102 仅多两个 docs 提交 |
 | 5.5 | main / merge-prep / candidate | 7dc25ea75563f2edee11b7943ae091fc2c38dec2 | E2E / NOT_APPLICABLE | verification.md（Main E2E 节） | PASS / NEW | 核对 plan.md Main E2E：mode=not-applicable，reason/basis/alternative_checks 齐备，downgrade_approval=2026-09-25 本会话用户原话；替代验证（候选 PV1 含 agent-host 全量测试）已执行且 PASS；`openspec-agentic e2e --json` 实读 enabled=true/command=""/maxAttempts=3 |
 | 5.4 | reviewer / review / candidate | 7dc25ea75563f2edee11b7943ae091fc2c38dec2 | REVIEW / RV2 | reports/review-rv2.md | PASS / NEW | 独立隔离子 Agent（新上下文，未参与 RV1/实现）；无 CRITICAL/MAJOR；RV2-F1（MINOR）已由主 Agent 修复，RV2-F2（SUGGESTION）记录在案 |
+| 5.6 | main / merge / main | 8692a416de7080f4aa8d12f15c4c5087642f93ae | DELIVERY / NOT_APPLICABLE | verification.md（Merge History） | PASS / NEW | premerge PASS（99dc7e4）→ PR #21 五必需检查全 pass → squash 合入；diff 9a8cd2e..70e2c21 为空，无竞态（strict_required_status_checks_policy 下 PR 已含最新 main）；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
+| 5.7 | main / verify / main | 8692a416de7080f4aa8d12f15c4c5087642f93ae | CHECK / PV1 | reports/PV1-main.log | PASS / NEW | 主分支回归 exit 0；与候选一致性由空 diff 佐证；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
+| 5.8 | main / review / main | 8692a416de7080f4aa8d12f15c4c5087642f93ae | REVIEW / RV2 | reports/review-rv2.md | PASS / REUSED | 合入无新增差异（空 diff），不强制同范围重复审查；依据：RV2（5.4）+ 空 diff 记录；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
+| 6.1 | main / e2e-alternative / final-main | 8692a416de7080f4aa8d12f15c4c5087642f93ae | CHECK / PV1 | reports/PV1-main.log | PASS / NEW | 替代验证在最终主分支执行：npm run verify exit 0（含 cargo test workspace 全量、agent-host 目标含两个新测试）；与计划 alternative_checks 两条逐项对应：npm run verify=本行；cargo test --locked -p agent-host --all-features 为 PV1 子检查（reports/PV1-main.log 内 agent-host 各测试目标全 ok），另见候选独立运行 reports/alternative-agent-host-tests.log；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
+| 6.2 | main / e2e-alternative / final-main | 8692a416de7080f4aa8d12f15c4c5087642f93ae | E2E / NOT_APPLICABLE | verification.md（本节） | PASS / NEW | 汇总：Coverage Index 6 行（R1、S1–S5）全部由 PV1 系列覆盖且 PASS；downgrade_approval 记录有效；无共享资源需清理（临时文件由测试自清，target/ 复用）；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
+| 6.3 | extension / e2e-gate / final-main | 8692a416de7080f4aa8d12f15c4c5087642f93ae | E2E / NOT_APPLICABLE | e2e check JSON 输出（2026-09-25，本文件 Main E2E 节引述） | PASS / NEW | `openspec-agentic e2e check` 判 PASS：mode=not-applicable、approval=true，由扩展自动勾选 [e2e-owned] 行（主 Agent 未手勾）；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
 
 ## Checks
 
 | Check ID / Stage / Work Package | Revision / Base | Scope | Executor | Command / Steps | Environment | Result / Exit Code | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | PV1 / branch / WP1+WP2 | ac74102897f8d7d9b0830b3de3c7e958512b5de2（base f53dad5） | npm run check 全部合同门禁 + fmt/clippy/workspace 全量测试（含 spawn_failure_is_explicit_unavailable_without_side_effects 与 error::tests::to_port_error_is_pinned_per_variant） | 主 Agent（kimi-coding/k3） | `npm run verify`（D:\Project\acp-remote，分支 test/agent-host-spawn-failure-coverage） | Windows，Node v24.19.0，rust 1.98.1（rust-toolchain.toml） | PASS / exit 0 | reports/PV1.log（候选执行已覆盖同路径，本行历史以 coder WP-verify 日志与 RV1 抽查为准） |
-| PV1 / candidate / DU1 | 7dc25ea75563f2edee11b7943ae091fc2c38dec2（base f53dad5） | 同上（全量） | 主 Agent | `npm run verify`（候选工作区，HEAD=7dc25ea） | 同上 | PASS / exit 0；68 个测试目标 ok，两个新测试均 ok | reports/PV1.log |
+| PV1 / candidate / DU1 | 7dc25ea75563f2edee11b7943ae091fc2c38dec2（base f53dad5） | 同上（全量） | 主 Agent | `npm run verify`（候选工作区，HEAD=7dc25ea） | 同上 | PASS / exit 0；68 个测试目标 ok，两个新测试均 ok | reports/PV1.log（后被 99dc7e4 重跑覆盖） |
+| PV1 / candidate / DU1 | 99dc7e43216bc8a031a1db911cd5a37cefaa4cb2 | 同上（全量） | 主 Agent | `npm run verify`（HEAD=99dc7e4） | 同上 | PASS / exit 0 | reports/PV1.log（premerge 块内 sha256:f8389dda…538289） |
+| PV1 / main / DU1 | 8692a416de7080f4aa8d12f15c4c5087642f93ae | 同上（全量，主分支回归） | 主 Agent | `npm run verify`（main） | 同上 | PASS / exit 0 | reports/PV1-main.log；目标移动重评见 Target 节（70e2c21→8692a41，delta 仅 config.yaml；PV1 已于 8692a41 重跑 PASS，证据适用性不变） |
 
 ## Check Plan Changes
 
@@ -101,7 +110,7 @@ alternative_checks:
     evidence: {path: reports/PV1.log, sha256: "sha256:f8389dda3e6672f0c1aade96869f5ad5b319f5665b32b61cc76b955a92538289"}
 ```
 
-- PR 合入记录：premerge 于 HEAD=99dc7e4 执行 PASS（目标 f53dad5 未移动；contractDigest sha256:6ef73d0d…92f4905e；证据摘要见上块）。随后将本证据块与 plan.md 门禁适配修正一并提交（该提交仅追加本文档与 plan.md 文书修正，代码与契约输入不变）。PR 编号、必需检查状态与合并后 main 提交在 5.6 完成后回填。
+- PR 合入记录：premerge 于 HEAD=99dc7e4 执行 PASS（目标 f53dad5 未移动；contractDigest sha256:6ef73d0d…92f4905e；证据摘要见上块）。随后证据块与 plan.md 门禁适配修正提交为 9a8cd2e（仅文档）。PR #21（https://github.com/lindongfang/acp-remote/pull/21）：五个必需检查（合同门禁 + Rust 检查 / 提交信息规范 / 依赖许可证与来源 / 依赖安全公告 / 密钥扫描）全部 pass；2026-09-25 squash 合并并删除分支，合并后 main = 70e2c215cfffc2b200414aff10958ff2fd83b3aa。一致性核对：`git diff 9a8cd2e 70e2c21 --stat` 为空（实际合入内容与候选逐字节一致）。
 
 ## Test Design and Authoring
 
@@ -123,4 +132,32 @@ E2E 结论：NOT_APPLICABLE。替代检查在 Checks 节逐项留证（PV1 候�
 
 ## Final Assessment
 
-（待最终验收填写）
+```agentic-assessment
+assessment_id: "FA1"
+target_commit: "8692a416de7080f4aa8d12f15c4c5087642f93ae"
+contract_digest: "sha256:774993c32c29598e0630f7d25760d755407276687aaa38a9801a703ed9f533bc"
+result: PASS
+evidence:
+  - path: reports/PV1-main.log
+    sha256: "sha256:258a75e47f7600d81658f353c000d287d906eed6713a4f6f88ad0985fca90176"
+  - path: reports/PV1.log
+    sha256: "sha256:f8389dda3e6672f0c1aade96869f5ad5b319f5665b32b61cc76b955a92538289"
+  - path: reports/review-rv2.md
+    sha256: "sha256:8bab151c21cb293e3b0c0b50a9e8743a7803ca9bbd7cbc8cea8154fb64905353"
+  - path: reports/alternative-agent-host-tests.log
+    sha256: "sha256:434bea0a1e9d60c189b2934add0d8b30adb3d1ee73cf93fe6e2583d83bf807cc"
+```
+
+- Assessment ID / Time: FA1，2026-09-25，主 Agent（kimi-coding/k3）在 apply 内执行（任务 7.1，唯一 [final-verification] 行）。
+- Target / Task: refs/heads/main @ 8692a416de7080f4aa8d12f15c4c5087642f93ae（验收前再次 `git rev-parse refs/heads/main` 核实，与 HEAD 一致，验收期间未移动；目标曾由 70e2c21 移动至此，仅因 PR #22 的 config.yaml 独立提交，受影响证据已重评并重跑，见 Target 节目标移动记录）；核实证据：本节与 Merge History 的 PR #21 记录。
+- CLI State: 验收前 `openspec status` = 21/22 任务完成（仅 7.1 待办，符合「验收期间仅该行可待办」）；`e2e check` PASS 并已自动勾选 6.3。CLI 状态独立记录，不改写 all_done 含义。
+- Audit / Evidence（按 acceptance.md 七组）：
+  - Contracts and Coverage：proposal 的 agentic-intent（用户 2026-09-25 原话「是的，补上刚才的缺口」与降级批准原话）与实际交付一致；交付物仅为两组测试 + S1 场景 + 证据文档，non-goals（不改映射/launch 实现、不动 wire/权威文档）全部成立（RV1/RV2 双双确认无产品代码夹带）。Coverage Index 6 行（R1、S1–S5）→ 任务 2.1/2.2/3.1 → PV1 系列 → 原始日志，逐行可追溯。Check Plan Changes 三条（变体计数 ×2、alternative_checks 标点适配）均有原/新值与理由。
+  - Handoff Traceability：Handoff Index 覆盖任务 1.1–6.3 全部行；coder-wp1/wp2、review-rv1、integrator-candidate、review-rv2 五份角色报告路径可读、索引行字段完整（task_id/role/phase/stage/target_revision/evidence/result/status/basis）；无 INVALID/PENDING 行；REUSED 行（5.8）有明确空 diff 依据。无跨角色证据冲突。
+  - Delivery and Versions：DU1 integrated；候选 99dc7e4 基于最新 main（f53dad5，集成前复核未移动）；premerge PASS（证据块含报告 sha256）；PR #21 五必需检查全 pass；squash 合入后 `git diff 9a8cd2e 70e2c21 --stat` 为空（合入结果与候选一致）；主分支 PV1 回归 PASS。独立集成 Agent（worker cfb8a880）与 coder（339e9c0c）、reviewer 均不同身份，主 Agent 未兼任。
+  - Project Checks and Resources：PV1（npm run verify）在分支/候选/候选更新/主分支四个固定版本各执行一次，命令/目录/环境/退出码/日志齐全；统一入口子检查（合同门禁 13 项、fmt、clippy -D warnings、workspace 全量测试）逐项翻日志确认无被吞失败；约定测试均实际执行（两个新测试在日志中指名 ok）。无共享运行资源。
+  - Independent Reviews：RV1（branch，ac74102）、RV2（candidate，7dc25ea）均为新建隔离上下文 reviewer（kimi-coding/k3），非实现作者；无 CRITICAL/MAJOR；RV1-F1/RV2-F1（MINOR，文档计数漂移三处）已全部修复并复核（RV2 复核了 RV1-F1 的修复；RV2-F1 为主 Agent 文书修复，grep 确认无残留——仅余 tasks.md 3.2 描述行一处同类残留，已在验收中同步修正并反映于当前契约摘要 774993c3）；RV1-F2/RV2-F2（SUGGESTION）有不采纳结论与理由。reviewer 的环境限制（无 git 直读，交叉佐证）已在报告中如实声明，由 CI（Linux）五检查与主 Agent 本地全量验证补强强。
+  - E2E Design and Execution：mode=not-applicable，reason/basis/alternative_checks 齐备；downgrade_approval 可追溯（2026-09-25 本会话用户原话）；替代验证为另列主 Agent 任务（3.1/5.3/6.1）且全部 PASS；[e2e-owned] 行由 `e2e check` PASS 自动勾选（主 Agent 未手勾）；E2E 本身记 NOT_APPLICABLE。
+  - Issue Closure and Evidence Validity：无执行失败/受阻记录；四个 review finding 均有闭环结论；最终版本 8692a41 的证据（PV1-main.log 重跑）为 NEW，候选证据与最终版本的一致性由空 diff 佐证。
+- Result / Open Issues: **PASS**。无未解决问题；非阻断项（RV1-F2/RV2-F2）已记录处理结论。后续事项（不阻断）：verification.md 与 tasks.md 的最终状态按仓库先例经证据回写 PR 落库 main。
+- Required Follow-up: 无复验任务。PASS 仅对本轮目标 8692a41 及所列有效证据成立；目标或证据再变化时需重新验收。归档前须运行 `workflow check --stage archive`。
