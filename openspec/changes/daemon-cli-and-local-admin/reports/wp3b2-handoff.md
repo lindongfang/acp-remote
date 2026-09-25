@@ -6,7 +6,7 @@
 - stage: work-package
 - agent_context: 独立子 Agent（worker / coder 角色），主 worktree 的分支 `feat/daemon-cli-and-local-admin`；只继承任务单给出的契约输入（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4/§6、`docs/SECURITY_DESIGN.md` §9.4/§9.5/§10.2/§14、两份协议文档的配对章节、`tasks.md` 2.11/2.13、`core::use_cases`/`core::ports`/`core::model`、`identity-auth` 的配对状态机与授权展开、WP3b1 交接的冻结形状）与主 Agent 对 D1/D2 的裁决，不继承规划阶段对话；本变更各波次串行（同一时刻只有一个写入者）
 - base_revision: **`a3a0b47`**（开工时的 HEAD；开工核对时 HEAD 为 `8dd24e4`，其间主 Agent 追加了 `87db7b5`/`305a7e8`/`a3a0b47` 三条规划/证据提交，均未触及 `crates/server/src`）
-- target_revision: **`eef75f4`**（本 WP 的代码提交）；交接报告单独一条 `docs(server)` 提交
+- target_revision: **`eef75f4`**（本 WP 的主体代码提交）；`9b30ab4` 是补充轮（新增 `list` 的 `pending` 记录用例，仅动 `router.rs`/`test_support.rs` 的测试代码）；交接报告单独一条 `docs(server)` 提交
 - scope（写入范围）：`crates/server/**`（含 `Cargo.toml`）、`Cargo.lock`、`openspec/changes/daemon-cli-and-local-admin/reports/`。**未改**任何其它 crate、`docs/`、`schemas/`、`fixtures/`、`vendor/` 与规划文件（`plan.md`/`tasks.md`/`verification.md`/`design.md`/`proposal.md`/`specs/`）
 - result: `PASS`（本工作包的检查与交付条件全部满足；**不代表**独立 review（RV1）、WP4 的端到端（PV4）或合并已完成）
 
@@ -15,6 +15,7 @@
 | 提交 | 类型 | 内容 | 覆盖任务 |
 | --- | --- | --- | --- |
 | `eef75f4` | `feat(server)` | 8 个文件、+3452/−53：新增 `local_admin/pairing.rs`（816 行），扩展 `params.rs`/`router.rs`/`view.rs`/`test_support.rs`/`mod.rs`/`Cargo.toml`/`Cargo.lock` | 2.11、2.13 |
+| `9b30ab4` | `test(server)` | 2 个文件、+95/−1：`list_methods_include_pending_and_revoked_records` + `FakeTrust::seed_node`（只动测试代码与测试替身） | 2.11 |
 | 本报告提交 | `docs(server)` | `reports/wp3b2-handoff.md`（本文件） | 2.11/2.13 的交接 |
 
 代码提交经 `.husky/pre-commit`（`cargo fmt --check` + `npm run check` + `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`，三步全过）与 `commitlint` 通过；**未使用** `--no-verify`、未强推、未改已有提交。代码提交后 `git status --porcelain` 为空（报告提交后同样应为空）。
@@ -124,26 +125,28 @@ WP4 的三条装配约束：
 
 | Check ID | 命令 / 目录 | 配置与环境 | 结果 | 日志 |
 | --- | --- | --- | --- | --- |
-| [PV3] | `cargo test --locked -p server --all-features` @ 仓库根 | Windows x64；cargo/rustc 1.98.1；`--locked` | 退出码 0；**111 个用例**通过、0 失败、0 ignored（lib 83 + channel 14 + schema drift 6 + naming 4 + unix 0 + windows 4）；新增 18 个用例（`pairing.rs` 6 + `router.rs` 12） | `reports/wp3-server-methods.log` 最终轮 (3)(3b)、`reports/wp3-server-pairing.log` (P1)–(P4) |
+| [PV3] | `cargo test --locked -p server --all-features` @ 仓库根 | Windows x64；cargo/rustc 1.98.1；`--locked` | 退出码 0；**112 个用例**通过、0 失败、0 ignored（lib 84 + channel 14 + schema drift 6 + naming 4 + unix 0 + windows 4）；新增 19 个用例（`pairing.rs` 6 + `router.rs` 13） | `reports/wp3-server-methods.log` 补充轮 (3)(3b)、`reports/wp3-server-pairing.log` 补充轮 (P1)–(P4) |
 | [PV3] | `cargo clippy --locked -p server --all-targets --all-features -- -D warnings` | Windows x64 | 退出码 0，无警告 | `reports/wp3-server-methods.log` 最终轮 (2) |
 | [PV3]（跨目标编译） | `cargo clippy --locked -p server --all-targets --all-features --target x86_64-unknown-linux-gnu -- -D warnings` | 已安装 Linux std；**只编译不执行** | 退出码 0 | `reports/wp3-server-methods.log` 最终轮 (4) |
 | [PV3] | `cargo fmt --all -- --check` | 默认 rustfmt | 退出码 0 | `reports/wp3-server-methods.log` 最终轮 (1) |
 | [PV2] | `node scripts/check-crate-boundaries.mjs` @ 仓库根 | Node v24.19.0；`cargo metadata --no-deps` | 退出码 0：`crate boundaries OK: 11 个 crate …`；`cargo tree -p server` 的工作区内依赖新增 `sync-protocol`、`node-link-protocol`（§5 矩阵 server 行 ✓） | `reports/wp3-server-methods.log` 最终轮 (5)(5b) |
-| [PV1] | `npm run verify`（= `npm run check` 的 10 道门禁 + fmt + workspace clippy + workspace test）@ 仓库根 | Node v24.19.0 / npm 12.0.2；离线 | 退出码 0；workspace **626 个用例**通过、0 失败、2 ignored（既有 `#[ignore]`，非本轮新增）；10 道合同门禁全绿 | `reports/wp3-server-methods.log` 最终轮 (10)；`reports/du1-pv1.log`（`EXIT(npm run check)=0`） |
+| [PV1] | `npm run verify`（= `npm run check` 的 10 道门禁 + fmt + workspace clippy + workspace test）@ 仓库根 | Node v24.19.0 / npm 12.0.2；离线 | 退出码 0；workspace **627 个用例**通过、0 失败、2 ignored（既有 `#[ignore]`，非本轮新增）；10 道合同门禁全绿 | `reports/wp3-server-methods.log` 补充轮 (10)；`reports/du1-pv1.log`（两轮均记 `EXIT(npm run check)=0`） |
 | PC1 | `npm run check`（单独一轮） | 同上 | 退出码 0 | `reports/wp3-server-methods.log` 最终轮 (6)、`reports/du1-pv1.log` |
-| LC1 | `rg -n "unsafe" crates/server/src` | ripgrep | 退出码 1（**零命中**） | 最终轮 (7) |
-| LC2 | `rg -n "reqwest|hyper|ureq|TcpStream" crates/server/src`；`rg -n "http" crates/server/src \| rg -v "https?://"` | ripgrep | 两条都退出码 1（**零命中**）：无 HTTP 客户端、无裸 socket API、无裸 `http` 标识符；`http` 只出现在 URL 字面量与文档注释里 → 证明配对方法不发出站请求 | 最终轮 (7b) |
-| LC3 | 自检「正常路径无 `unwrap()`/`expect()`/`panic!`」 | 脚本逐文件取首个 `#[cfg(test)]` 行号 | 285 处命中全部落在测试代码内（各文件 `#[cfg(test)] mod tests`，`test_support.rs` 由文件首行 `#![cfg(test)]` 自我声明）；`violations: []` | 最终轮 (8) |
-| LC4 | 提交钩子（`.husky/pre-commit` 三步）与 `commitlint` | 本机 | 三步全过、commitlint 通过；未使用 `--no-verify` | 提交输出（`eef75f4`） |
+| LC1 | `rg -n "unsafe" crates/server/src` | ripgrep | 退出码 1（**零命中**） | 补充轮 (7) |
+| LC2 | `rg -n "reqwest|hyper|ureq|TcpStream" crates/server/src`；`rg -n "http" crates/server/src \| rg -v "https?://"` | ripgrep | 两条都退出码 1（**零命中**）：无 HTTP 客户端、无裸 socket API、无裸 `http` 标识符；`http` 只出现在 URL 字面量与文档注释里 → 证明配对方法不发出站请求 | 补充轮 (7b) |
+| LC3 | 自检「正常路径无 `unwrap()`/`expect()`/`panic!`」 | 脚本逐文件取首个 `#[cfg(test)]` 行号 | 285 处命中全部落在测试代码内（各文件 `#[cfg(test)] mod tests`，`test_support.rs` 由文件首行 `#![cfg(test)]` 自我声明）；`violations: []` | 补充轮 (8) |
+| LC4 | 提交钩子（`.husky/pre-commit` 三步）与 `commitlint` | 本机 | 三步全过、commitlint 通过；未使用 `--no-verify` | 提交输出（`eef75f4`、`9b30ab4`） |
 
-### 新增测试清单（18 个，全部无 `#[ignore]`、无跳过）
+### 新增测试清单（19 个，全部无 `#[ignore]`、无跳过）
 
 | 分组 | 用例 |
 | --- | --- |
 | `pairing.rs`（6） | `device_url_round_trips_through_the_sync_qr_payload`、`node_url_round_trips_through_the_node_link_qr_payload`、`a_missing_or_malformed_origin_fails_closed`、`the_pairing_window_is_capped_at_five_minutes`、`state_tokens_stay_inside_the_documented_vocabularies`、`millis_shift_handles_every_component_rollover` |
-| `router.rs`（12） | `device_pairing_full_flow_reaches_an_active_device`、`expired_and_rejected_pairings_never_create_trust`、`confirm_rejects_sets_beyond_the_requested_ones`、`revoke_closes_the_connection_after_the_commit_and_list_reflects_it`、`a_failed_settlement_keeps_the_memory_state_strict`、`node_owner_pairing_flow_pairs_a_node_with_initial_grants`、`node_access_mode_is_unsupported_and_creates_nothing`、`pairing_methods_fail_closed_without_a_public_origin`、`unknown_and_family_mismatched_pairings_answer_not_found`、`pairing_begin_validates_names_windows_and_shapes`、`node_confirm_and_reject_error_paths_answer_the_documented_codes`、`list_methods_reject_unknown_parameters` |
+| `router.rs`（13） | `device_pairing_full_flow_reaches_an_active_device`、`expired_and_rejected_pairings_never_create_trust`、`confirm_rejects_sets_beyond_the_requested_ones`、`revoke_closes_the_connection_after_the_commit_and_list_reflects_it`、`a_failed_settlement_keeps_the_memory_state_strict`、`node_owner_pairing_flow_pairs_a_node_with_initial_grants`、`node_access_mode_is_unsupported_and_creates_nothing`、`pairing_methods_fail_closed_without_a_public_origin`、`unknown_and_family_mismatched_pairings_answer_not_found`、`pairing_begin_validates_names_windows_and_shapes`、`node_confirm_and_reject_error_paths_answer_the_documented_codes`、`list_methods_include_pending_and_revoked_records`、`list_methods_reject_unknown_parameters` |
 
-逐方法「成功路径 + 错误路径」对应关系见 `reports/wp3-server-pairing.log` 的 (P5) 节；spec
+逐方法「成功路径 + 错误路径」对应关系见 `reports/wp3-server-pairing.log` 的 (P5) 节；下表每一节均在
+`wp3-server-methods.log` 的「最终轮」与「补充轮」各执行一次（两者退出码一致；补充轮是新增 `list` 的 `pending`
+用例之后的重跑，因此日志中引用到两轮中的任意一节都是最终代码状态的证据）。spec
 [R42]–[R48] 的映射：
 
 - [R42]（设备配对与信任方法）→ `device_pairing_full_flow_reaches_an_active_device` + `pairing_begin_validates_names_windows_and_shapes`；
@@ -219,7 +222,7 @@ handoff_index:
     report_path: openspec/changes/daemon-cli-and-local-admin/reports/wp3b2-handoff.md
     result: PASS
     evidence_status: NEW
-    applicability_basis: "WP3b2 轮：cargo fmt --all -- --check（退出码 0）、cargo clippy --locked -p server --all-targets --all-features -- -D warnings（退出码 0）、cargo test --locked -p server --all-features（退出码 0；111 个用例通过、0 失败、0 ignored；新增 18 个）在 Windows x64 本机执行；[R42]–[R48] 的配对族行为由 local_admin::pairing 与 local_admin::router::tests 的 18 个用例逐条覆盖（成功 + 错误路径），映射见 reports/wp3-server-pairing.log 的 (P5)。跨目标 clippy（--target x86_64-unknown-linux-gnu）退出码 0。日志 reports/wp3-server-methods.log 最终轮的 (1)(2)(3)(3b)(4) 节。"
+    applicability_basis: "WP3b2 轮：cargo fmt --all -- --check（退出码 0）、cargo clippy --locked -p server --all-targets --all-features -- -D warnings（退出码 0）、cargo test --locked -p server --all-features（退出码 0；112 个用例通过、0 失败、0 ignored；新增 19 个）在 Windows x64 本机执行；[R42]–[R48] 的配对族行为由 local_admin::pairing 与 local_admin::router::tests 的 19 个用例逐条覆盖（成功 + 错误路径），映射见 reports/wp3-server-pairing.log 的 (P5)。跨目标 clippy（--target x86_64-unknown-linux-gnu）退出码 0。日志 reports/wp3-server-methods.log 补充轮的 (1)(2)(3)(3b)(4) 节。"
     source_evidence: NOT_APPLICABLE
   - task_id: "2.11"
     role: coder
@@ -243,7 +246,7 @@ handoff_index:
     report_path: openspec/changes/daemon-cli-and-local-admin/reports/wp3b2-handoff.md
     result: PASS
     evidence_status: NEW
-    applicability_basis: "WP3b2 轮：npm run check（10 道合同门禁全绿，退出码 0；reports/du1-pv1.log 记 EXIT(npm run check)=0）与 npm run verify（workspace 626 通过 / 0 失败 / 2 既有 ignored，退出码 0）在仓库根执行；代码提交经 .husky/pre-commit 三步与 commitlint 通过。日志 reports/wp3-server-methods.log 最终轮的 (6)(10) 节。"
+    applicability_basis: "WP3b2 轮：npm run check（10 道合同门禁全绿，退出码 0；reports/du1-pv1.log 两轮都记 EXIT(npm run check)=0）与 npm run verify（workspace 627 通过 / 0 失败 / 2 既有 ignored，退出码 0）在仓库根执行；代码提交经 .husky/pre-commit 三步与 commitlint 通过。日志 reports/wp3-server-methods.log 补充轮的 (6)(10) 节。"
     source_evidence: NOT_APPLICABLE
   - task_id: "2.13"
     role: coder
@@ -255,7 +258,7 @@ handoff_index:
     report_path: openspec/changes/daemon-cli-and-local-admin/reports/wp3b2-handoff.md
     result: PASS
     evidence_status: NEW
-    applicability_basis: "附加本地检查（2.13 的自检项）：rg -n \"unsafe\" crates/server/src 零命中（退出码 1）；rg -n \"reqwest|hyper|ureq|TcpStream\" 与 rg -n \"http\"（排除 https?:// 字面量）都零命中，证明配对方法不发任何出站请求；「正常路径无 unwrap/expect/panic」自检 285 处命中全部落在测试代码内（violations: []）。日志 reports/wp3-server-methods.log 最终轮的 (7)(7b)(8) 节。"
+    applicability_basis: "附加本地检查（2.13 的自检项）：rg -n \"unsafe\" crates/server/src 零命中（退出码 1）；rg -n \"reqwest|hyper|ureq|TcpStream\" 与 rg -n \"http\"（排除 https?:// 字面量）都零命中，证明配对方法不发任何出站请求；「正常路径无 unwrap/expect/panic」自检 285 处命中全部落在测试代码内（violations: []）。日志 reports/wp3-server-methods.log 补充轮的 (7)(7b)(8) 节。"
     source_evidence: NOT_APPLICABLE
   - task_id: "2.11"
     role: coder
@@ -267,7 +270,7 @@ handoff_index:
     report_path: openspec/changes/daemon-cli-and-local-admin/reports/wp3b2-handoff.md
     result: PASS
     evidence_status: NEW
-    applicability_basis: "WP3b2 交付物：eef75f4（8 个文件、+3452/−53：新增 crates/server/src/local_admin/pairing.rs，扩展 params/router/view/test_support/mod.rs 与 Cargo.toml/Cargo.lock）。对 WP4 冻结的形状见本报告「WP4 要实现的形状」：ConnectionCloser/NoConnections/PairingSessions::new 与 LocalAdminDeps 的 pairing 字段。"
+    applicability_basis: "WP3b2 交付物：eef75f4（8 个文件、+3452/−53：新增 crates/server/src/local_admin/pairing.rs，扩展 params/router/view/test_support/mod.rs 与 Cargo.toml/Cargo.lock）+ 9b30ab4（+95/−1：list 的 pending 用例与 FakeTrust::seed_node）。对 WP4 冻结的形状见本报告「WP4 要实现的形状」：ConnectionCloser/NoConnections/PairingSessions::new 与 LocalAdminDeps 的 pairing 字段。"
     source_evidence: NOT_APPLICABLE
   - task_id: "2.13"
     role: coder
