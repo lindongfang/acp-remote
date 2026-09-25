@@ -104,6 +104,7 @@
   - **② `daemon stop` 等满宽限 → 转任务 2.26 诊断**：`drain_connections` 逻辑正确、CLI 已 `drop(client)`，故「哪条连接未结束」未定；不猜测定性，交由 2.26 用受控探针定位并加回归断言（当前行为下须 RED）。
   - **③ `flush_interval_ms` 只校验下界（`>=1`）→ 接受**：`CONFIG_REFERENCE.md` §5 未给上界，合同无要求；`0` 失败关闭已实现。
   - **④ 交互式提示 stdin 读失败 → `local.internal` → 接受**：终端故障属内部错误而非「用户拒绝」，语义正确；拒绝路径仍走 reject + 非零退出。
+- 2026-09-25（主 Agent，加速决策）：**W3/W4 波次合并**——任务 2.26（写 `crates/app/**`）与 WP5（写 `docs/**`、`README.md`、`AGENTS.md`、`reports/**`）**并行派发**，偏离规划「每波 1 个写者」的串行安排。理由：两者写范围**不相交**；规划真正要守的不变量是「文件单一写入者」，而非「全局单写者」。风险与缓解：并发 `git add` + 裸 `git commit` 会互相卷入暂存内容（PRO-1/PRO-2 的成因），故两个 Agent 均被指令**只用 `git commit --only <显式路径>`**、禁止 `git add` 后裸提交；WP5 被明确禁止触碰任何 `crates/**`。另注：两者共享 `target/` 目录，存在 cargo 构建锁竞争（会变慢但不会失败），WP5 被要求先做文档提交、最后才跑分钟级 [PV1]/[PV2]。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
