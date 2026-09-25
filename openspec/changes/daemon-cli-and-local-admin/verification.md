@@ -65,6 +65,8 @@
 | 3.9 | main（代行 coder 的 Project Verify）/ project-verify / work-package | **f39dda9**（冻结版） | CHECK / PV1、PV2（WP5 冻结轮） | 同 [3.7] 的 reports/wp4wp5-final-verify.log、reports/wp5-verify.log | PASS / NEW | 同上一条；WP5 为纯文档变更，冻结轮与前一轮（0a04637）结论一致 |
 | 3.8 | reviewer / work-package review / work-package | f39dda9 | REVIEW / RV1（RV1-WP4） | reports/rv1-wp4.md | **PASS with notes** / NEW | 结构只读 reviewer（fresh、deepseek-flash）；12 项优先核对 + 12 条断言有效性抽样；无 CRITICAL/MAJOR、无阻塞；4 条发现（F1 spy 非快照读=SUGGESTION、F2 §4.10 关闭顺序与刷盘措辞=MINOR、F3 `rpassword` 未登记 §3.1=SUGGESTION、F6? F4 plan 证据路径不存在=SUGGESTION）→ 全部转任务 2.27 |
 | 3.10 | reviewer / work-package review / work-package | f39dda9 | REVIEW / RV1（RV1-WP5） | reports/rv1-wp5.md | **FAIL** / NEW | F1/F2 两条 BLOCK 级事实错误（README/§4.10 关闭顺序；§5 注记称 `windows-local-ipc` 无行而矩阵有行）+ F3–F6 四条 P2 → 全部转任务 2.27；**修后须以新 Review ID 复核（RV2-WP5）**，故 3.10 暂不勾选 |
+| 2.27 | coder / implement / work-package | b4f7f81（e7c01ec + 69874d9 + 35f8f2b + fd0ad86；报告 b4f7f81） | DELIVERY / NOT_APPLICABLE | reports/wp427-handoff.md | PASS / NEW | RV1-WP4 的 F1–F4 + 抽样#12 与 RV1-WP5 的 F1–F6 全部按最小修复落地；两项自检零命中（`停周期任务`、写范围内 `wp4-app-cli.log`） |
+| 2.27 | coder / implement / work-package | b4f7f81 | CHECK / PV1、PV4（2.27 轮，含 K 的 RED/GREEN） | reports/wp427.log（gitignored，可复跑） | PASS / NEW | `npm run check` EXIT=0（379 链接 / 4742 §引用 / 12 crate / 36 DDL+15 trait-87 方法 / agentic 13 PASS）；fmt EXIT=0；clippy EXIT=0；`cargo test -p app` EXIT=0（72 passed / 0 ignored，lib 50 含新增 2 条）；K 的 RED（多行诊断）FAILED/EXIT 101 → GREEN EXIT 0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -118,6 +120,9 @@
 - 2026-09-25（2.26 定位结论，主 Agent 复核登记）：根因**不在**关闭序列也不在 `drain_connections`，而在 CLI 侧的 runtime 生命周期（`mio` 的 Windows Named Pipe 句柄释放依赖 I/O driver 处理完 completion）。**不变量教训（供后续切片参考）**：CLI 的同步等锁路径不得持有已 drop 掉连接的 runtime；`Context::release_runtime()` 现由 `daemon_stop` 在 `drop(client)` 之后立即调用。此项已由回归断言钉住（宽限 3000 ms 时必须明显早于宽限完成）。
 - 2026-09-25（3.7/3.9 冻结轮，主 Agent）：实现侧冻结版本 = **f39dda9**（此后不再有代码写者）。冻结轮统一验证完整输出落 `reports/wp4wp5-final-verify.log`（**不再用 `tail` 截断**：第一次尝试只落了 25 行、计数不可核，已重跑并保留全文，此为 PRO-4 类操作教训，已就地纠正）。计数：82 targets、730 passed、0 failed、2 ignored（`crash_child`、`regenerate_v2_fixtures` 自述性忽略）。[PV5] 在当前版本重跑并追加 `reports/pv5-windows-ipc.log`（`EXIT(cargo test windows-local-ipc)=0`）。
 - 2026-09-25（RV1-WP4/WP1-WP5 后，主 Agent）：两轮独立 review 的结论与处置见上表 Review Findings。**RV1-WP5 判 FAIL**（两条 BLOCK 级事实错误：文档关闭顺序、§5 注记与自身矩阵矛盾），故新增任务 2.27 承载全部最小修复（含 RV1-WP4 的 4 条非阻塞发现与 1 条断言强度缺口），修后以**新 Review ID（RV2-WP4/RV2-WP5）**复核；3.10 在复核通过前不勾选。`plan.md` 的证据路径修正属判据工件的可追溯性修复（不改变需求/任务语义），登记于此以免被视为未登记的漂移。
+- 2026-09-25（2.27 交付后，主 Agent 裁定）：
+  - **接受 2.27 的连带实现修正**：K 项断言在现有实现下必 RED，原因是 `toml_error_detail` 的谓词实际命中 **toml 的源码定位行**（如 `2 | endpoing = "wp427-marker"`），使 CLI 的「一行简述」可能带出配置文件内容——这与该函数 doc comment 及 `ConfigError::Invalid` 既有口径（「不含配置值的简短说明」）冲突。修法为排除 `  |` / `N | <源码>` / `  | ^^^^` 三类行，未改长度上限、错误码映射与任何 wire/合同，无用例固定过旧文本 ⇒ **不是弱化断言过关**，属正向修正；已接受并留 RED/GREEN 证据。
+  - **tasks.md 的 2.15–2.17 留证路径就地修正**：三处任务定义中的 `reports/wp4-app-cli.log`（不存在）改为实际使用的 `reports/wp4b-cli.log`；`reports/rv1-wp4.md` 中的同名引用**保持原样**（已落盘的检视报告是事实记录，不得回改）；2.27 自述中的引用保留（描述缺陷本身）。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
@@ -148,17 +153,17 @@
 | RV1-WP3-F4 | 313d2a2 | 同上 | docs/LOCAL_ADMIN_PROTOCOL.md:594 + spec 场景 WHEN | MINOR（契约措辞）：§7 要求「方法失败」入审计，但 §14.2 封闭类别无此类别 | **主 Agent 已收敛**：§7 改为「方法失败只记结构化日志」并说明不得复用其他类别；spec 同步 | 已改由 workflow check --stage plan 复验（PASS） |
 | RV1-WP3-F5 | 313d2a2 | 同上 | specs/local-admin-channel/spec.md（MUST 句） | MINOR（契约措辞）：`0x02` 立即分配 `FacadeAttachmentId` 在本切片无可行路径 | **主 Agent 已收敛**：MUST 句加「facade 落地后」限定并指向 §3.1 注记 | 同上 |
 | RV1-WP3-F6 | 313d2a2 | 同上 | params.rs:317-326、envelope.rs:255-262 | SUGGESTION：`ProviderConfigure` 的 Debug 可打印明文凭据；两处不可达分支 | 已由 2.24 修复（手写 `Debug` 只打字段名 + 清理不可达分支） | 待 RV2 复核 |
-| RV1-WP4-F1 | f39dda9 | RV1-WP4 | crates/app/src/daemon.rs:1325-1334、1376-1383 | SUGGESTION：合并窗口 spy 的相等断言非快照一致读（tick 边界约 1e-5 概率假失败），机制覆盖本身有效 | 并入 2.27（J 项） | RV2 复核 |
-| RV1-WP4-F2 | f39dda9 | RV1-WP4 | docs/MODULE_ARCHITECTURE.md §4.10 后台任务清单末两条 | MINOR：关闭顺序写成「停周期任务 → 停接入层」（与 §12.1/§7.1 与实现相反）；「存储批量刷盘」应为 broker 合并窗口 | 并入 2.27（G 项） | RV2 复核 |
-| RV1-WP4-F3 | f39dda9 | RV1-WP4 | docs/MODULE_ARCHITECTURE.md §3.1 依赖登记；crates/app/Cargo.toml:1 | SUGGESTION：新依赖 `rpassword` 未登记进 §3.1；`crates/app/Cargo.toml` 头注释仍说 CLI 子命令属 WP4b | 并入 2.27（H 项） | RV2 复核 |
-| RV1-WP4-F4 | f39dda9 | RV1-WP4 | plan.md（17 处） | SUGGESTION：PV4 与 R10–R72 的证据指向不存在的 `reports/wp4-app-cli.log`（实际为 `reports/wp4b-cli.log`） | 并入 2.27（I 项） | RV2 复核 |
-| RV1-WP4-抽样#12 | f39dda9 | RV1-WP4 | crates/app/src/config.rs:460-477 与其测试 | 断言强度不足：`toml_error_detail` 无「单行/无源码片段/长度上限」任何断言，实现退化时用例照过 | 并入 2.27（K 项，要求确认反例能力） | RV2 复核 |
-| RV1-WP5-F1 | f39dda9 | RV1-WP5 | README.md:22、docs/MODULE_ARCHITECTURE.md:383 | **P1 BLOCK**：关闭顺序陈述与权威合同（§12.1/§7.1 第 4 条）及实现相反，且同变更刚改正过该口径 | 并入 2.27（F1 项） | RV2-WP5 必须复核 |
-| RV1-WP5-F2 | f39dda9 | RV1-WP5 | docs/MODULE_ARCHITECTURE.md:481 | **P1 BLOCK**：§5 表下注记声称 `windows-local-ipc`「没有行」，而矩阵最后一行就是它 | 并入 2.27（F2 项） | RV2-WP5 必须复核 |
-| RV1-WP5-F3 | f39dda9 | RV1-WP5 | scripts/check-crate-boundaries.mjs:49-52 | P2：行内注释仍写「9 个列」与「storage-sqlite/server/app 仍只作为行」，与文件头注释及实际 13 列矛盾（RV1-WP1-F2 的范围内项未完成） | 并入 2.27（F3 项） | RV2-WP5 复核 |
-| RV1-WP5-F4 | f39dda9 | RV1-WP5 | docs/CONFIG_REFERENCE.md:51、:110 | P2：`daemon.local_admin.endpoint` 的「显式值用于排查」在当前切片不可用（实现直接失败关闭）但未标注；`storage.flush_interval_ms` 被描述为刷盘间隔而非合并窗口 | 并入 2.27（F4 项） | RV2-WP5 复核 |
-| RV1-WP5-F5 | f39dda9 | RV1-WP5 | docs/DEVELOPMENT_PLAN.md（切片 1 段落与「剩余工作」句） | P2：出现「本切片切片 4」重复措辞，且与 §2 的剩余项口径不一致；文中仍有旧句 | 并入 2.27（F5 项） | RV2-WP5 复核 |
-| RV1-WP5-F6 | f39dda9 | RV1-WP5 | docs/LOCAL_ADMIN_PROTOCOL.md:3 | P2：状态行仍写「实现中」，而本地通道已落地 | 并入 2.27（F6 项；该项原判为 WP5 写范围外，由主 Agent 决定纳入） | RV2-WP5 复核 |
+| RV1-WP4-F1 | f39dda9 | RV1-WP4 | crates/app/src/daemon.rs:1325-1334、1376-1383 | SUGGESTION：合并窗口 spy 的相等断言非快照一致读（tick 边界约 1e-5 概率假失败），机制覆盖本身有效 | 已由 2.27 修复（快照一致读） | RV2 复核 |
+| RV1-WP4-F2 | f39dda9 | RV1-WP4 | docs/MODULE_ARCHITECTURE.md §4.10 后台任务清单末两条 | MINOR：关闭顺序写成「停周期任务 → 停接入层」（与 §12.1/§7.1 与实现相反）；「存储批量刷盘」应为 broker 合并窗口 | 已由 2.27 修复 | RV2 复核 |
+| RV1-WP4-F3 | f39dda9 | RV1-WP4 | docs/MODULE_ARCHITECTURE.md §3.1 依赖登记；crates/app/Cargo.toml:1 | SUGGESTION：新依赖 `rpassword` 未登记进 §3.1；`crates/app/Cargo.toml` 头注释仍说 CLI 子命令属 WP4b | 已由 2.27 修复（§3.1 补 `rpassword` 登记） | RV2 复核 |
+| RV1-WP4-F4 | f39dda9 | RV1-WP4 | plan.md（17 处） | SUGGESTION：PV4 与 R10–R72 的证据指向不存在的 `reports/wp4-app-cli.log`（实际为 `reports/wp4b-cli.log`） | 已由 2.27 修复（17 处路径） | RV2 复核 |
+| RV1-WP4-抽样#12 | f39dda9 | RV1-WP4 | crates/app/src/config.rs:460-477 与其测试 | 断言强度不足：`toml_error_detail` 无「单行/无源码片段/长度上限」任何断言，实现退化时用例照过 | 已由 2.27 修复（断言 + 连带修掉源码片段泄漏，见下条裁定） | RV2 复核 |
+| RV1-WP5-F1 | f39dda9 | RV1-WP5 | README.md:22、docs/MODULE_ARCHITECTURE.md:383 | **P1 BLOCK**：关闭顺序陈述与权威合同（§12.1/§7.1 第 4 条）及实现相反，且同变更刚改正过该口径 | 已由 2.27 修复 | RV2-WP5 必须复核 |
+| RV1-WP5-F2 | f39dda9 | RV1-WP5 | docs/MODULE_ARCHITECTURE.md:481 | **P1 BLOCK**：§5 表下注记声称 `windows-local-ipc`「没有行」，而矩阵最后一行就是它 | 已由 2.27 修复 | RV2-WP5 必须复核 |
+| RV1-WP5-F3 | f39dda9 | RV1-WP5 | scripts/check-crate-boundaries.mjs:49-52 | P2：行内注释仍写「9 个列」与「storage-sqlite/server/app 仍只作为行」，与文件头注释及实际 13 列矛盾（RV1-WP1-F2 的范围内项未完成） | 已由 2.27 修复 | RV2-WP5 复核 |
+| RV1-WP5-F4 | f39dda9 | RV1-WP5 | docs/CONFIG_REFERENCE.md:51、:110 | P2：`daemon.local_admin.endpoint` 的「显式值用于排查」在当前切片不可用（实现直接失败关闭）但未标注；`storage.flush_interval_ms` 被描述为刷盘间隔而非合并窗口 | 已由 2.27 修复 | RV2-WP5 复核 |
+| RV1-WP5-F5 | f39dda9 | RV1-WP5 | docs/DEVELOPMENT_PLAN.md（切片 1 段落与「剩余工作」句） | P2：出现「本切片切片 4」重复措辞，且与 §2 的剩余项口径不一致；文中仍有旧句 | 已由 2.27 修复 | RV2-WP5 复核 |
+| RV1-WP5-F6 | f39dda9 | RV1-WP5 | docs/LOCAL_ADMIN_PROTOCOL.md:3 | P2：状态行仍写「实现中」，而本地通道已落地 | 已由 2.27 修复（主 Agent 决定纳入写范围） | RV2-WP5 复核 |
 | RV1-WP2-R1（残余风险） | 6361f5d | RV1-WP2 | crates/server/src/transport/local/platform/windows.rs（后续实例） | 风险（非缺陷）：后续实例 DACL 是否继承首实例未证实 | 已登记入 Dependency Handoffs；[PV5] 在 WP3b/WP4 用 `GetSecurityInfo`/跨账号用例钉死 | 待 [PV5] |
 
 ## Merge History
