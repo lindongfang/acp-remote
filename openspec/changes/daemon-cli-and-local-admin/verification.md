@@ -49,6 +49,8 @@
 | 2.24 | coder / implement / work-package | cb983c2 | CHECK / PV1、PV3（2.24 轮） | reports/wp324-handoff.md（日志 reports/wp3-server-methods.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`cargo test -p server` EXIT=0（lib 88 ok）；`npm run check` EXIT=0 |
 | 2.14 | coder / implement / work-package | c4e4c3a（e9b8e1d + c628e87；报告 c4e4c3a） | DELIVERY / NOT_APPLICABLE | reports/wp4a-handoff.md | PASS with notes / NEW | 新建 `crates/app`（18 文件 +6389/−16）；37 passed（27 unit + 1 audit.export e2e + 9 生命周期）；workspace 682 passed；⚠️ `storage.flush_interval_ms` 被实现成 no-op（见裁定③→任务 2.25） |
 | 2.14 | coder / implement / work-package | c4e4c3a | CHECK / PV1、PV2、PV4（WP4a 轮） | reports/wp4a-handoff.md（日志 reports/wp4-app-daemon.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`-p app` EXIT=0；`check-crate-boundaries` EXIT=0（12 crate、§5 新列成真）；`npm run check` 三次 EXIT=0 |
+| 2.15–2.17 | coder / implement / work-package | 0886c18（c8e44eb；报告 0886c18） | DELIVERY / NOT_APPLICABLE | reports/wp4b-handoff.md | PASS with notes / NEW | CLI 全子命令（§5.8 逐行映射 + 反向拒绝 `daemon doctor`/`session create`/`node rotate-key`/`audit export`）、`doctor`、`acp-stdio` 字节泵；12 文件 +3614/−76 |
+| 2.15–2.17 | coder / implement / work-package | c8e44eb | CHECK / PV1、PV2、PV4（WP4b 轮） | reports/wp4b-handoff.md（日志 reports/wp4b-cli.log、reports/du1-pv1.log） | PASS / NEW | fmt/clippy EXIT=0；`cargo test -p app` EXIT=0（64 passed = 43 unit + 1 + 11 cli_commands + 9 lifecycle）；`check-crate-boundaries`/`npm run check` EXIT=0 |
 | MD2（AuditStore 缺口） | main / plan-review / work-package | f1a3cd4 | DELIVERY / NOT_APPLICABLE | 《本行自身》 | **PASS / NEW** | 已由任务 2.22 关闭（`bb96a10`/`fe093b3`；`crates/storage-sqlite/src/admin/audit.rs`）。原始缺口描述： `storage-sqlite` 缺 `AuditStore` 生产实现（已核实）；新增任务 2.22 处理，完成后关行 |
 | MD1（WP3a 移交的契约不一致） | main / design-review / work-package | c12957ee3c4ffdcab9db8533d23b42e4673107ba | DELIVERY / NOT_APPLICABLE | reports/wp3a-handoff.md（契约问题①②③④节） | BLOCKED / PENDING | ① `node.rotate-key.begin` 与 §4 正则/schema 词表不一致：**用户已裁决选项 a**（新增任务 2.21 原子交付契约补齐 + Rust 变体），本行待 2.21 完成后关；②nil UUID 哨兵、③message 回显方法名、④Unix 凭据仅 Linux/Android——已接受并登记（见 Check Plan Changes） |
 
@@ -85,6 +87,14 @@
   - **④ `LocalEndpoint::accept()` 非 cancel-safe → 接受 app 侧规避 + 转任务 2.25 的 B 项**：`app` 已用「专用 accept 任务 + 容量 1 channel」规避；须在 server 侧加文档注释钉死该约束，避免后续调用方误用 `select!`。
   - **⑤ `MODULE_ARCHITECTURE.md` §5 说明段仍称 `storage-sqlite`「只作为行出现」→ 转 WP5（2.19）**：本轮仅获准改矩阵列本身，说明段与其余 §5 文本保持不动。
 
+- 2026-09-25（WP4b 交付后，主 Agent 裁定 6 项就地判断）：
+  - **① Daemon 未运行时 `daemon status`/`daemon stop` 退 0 → 接受**：spec 的「Daemon 未运行时管理命令明确失败」场景**逐字排除**了 `daemon start|stop|status`/`doctor`；`daemon status` 是查询、离线回答「未运行」是成功完成查询，退 0 与 spec 一致。
+  - **② 用法错误退 2、方法/传输错误退 1 → 接受**：spec 只要求「失败非零」，clap 惯例退 2 与 `--help/--version` 退 0 保留 stdout 均合规。
+  - **③ SAS/指纹不匹配 → `local.invalid_params` → 接受**：错误码表无更贴切的码（§6 无 `local.mismatch`），且 spec 对此只要求「非零退出、不调 confirm、不改状态」。
+  - **④ `acp-stdio` 绝不在 stdout 写字 → 接受（且为合同要求）**：stdout 即 ACP 字节流，日志与错误一律走 stderr。
+  - **⑤ 非交互拒绝不调 `*.pair.reject` → 就地判断接受，但交互式拒绝改为调用（转 2.25 C）**：`device.pair.reject`/`node.pair.reject` 确在 25 项词表内（§5.3），交互式 `n` 下不调用会让会话悬置到 5 分钟到期；已在任务 2.25 增补 C 项。
+  - **⑥ 额外 `--pack`/`--expires-in-ms`/`--grace-ms` → 接受**：均为 §5.2/§5.3 方法参数的直映射（kebab-case ↔ camelCase），不新增语义。
+- 2026-09-25（WP4b 的 §20 核验修订主 Agent 登记）：`design.md` §7 关于 `rpassword` 的许可证说法**已改正为 Apache-2.0 单许可**（实测 7.5.4 非双许可），并登记 `rtoolbox` 的 0.0.x 残余风险；本地无法判定的 `cargo-deny`/`gitleaks` 仍只在 CI 判定。
 ## Dependency Handoffs
 
 | Downstream | Upstream | Accepted Revision / Evidence | Transfer / Inclusion Check | Invalidation |
