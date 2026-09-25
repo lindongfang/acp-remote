@@ -1105,6 +1105,50 @@ mod tests {
     };
     use crate::ports::HistoryInclude;
 
+    /// 用例自建临时目录的守卫：析构时尽力删除（正常结束与 panic 展开两条路径都生效）。
+    ///
+    /// 选 `Deref<Target = Path>` 而不是把路径交回调用方：`&dir`、`dir.join(..)`、`dir.to_str()` 照常
+    /// 工作，调用点无需改名；`AsRef<Path>` 让 `std::fs::remove_dir_all(&dir)` 这类泛型入参也直接收。
+    struct TempDir(std::path::PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<std::path::Path> for TempDir {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            // 尽力而为，且**不 panic**（展开中 panic 会 abort）：目录可能已被用例自己删掉（`NotFound`
+            // 立即返回），Windows 上也可能因句柄释放/扫描瞬时占用而失败——此时重试若干次（与 `app` 测试
+            // 的 `TempRoot` 同一口径）。
+            for _ in 0..10 {
+                match std::fs::remove_dir_all(&self.0) {
+                    Ok(()) => return,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                }
+            }
+        }
+    }
+
+    /// 在系统临时目录下新建一个测试目录（`name` 必须已含 uuid/pid 等唯一化成分）。
+    #[must_use]
+    fn temp_dir(name: &str) -> TempDir {
+        let path = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create dir");
+        TempDir(path)
+    }
+
     struct Fixture {
         use_cases: UseCases,
         world: Arc<FakeWorld>,
@@ -1331,8 +1375,7 @@ mod tests {
     #[test]
     fn workspace_resolution_canonicalizes_and_rejects_invalid_inputs() {
         let alias = WorkspaceAlias::new("repo").expect("alias");
-        let root = std::env::temp_dir().join(format!("acpr-ws-{}", uuid_text(11)));
-        std::fs::create_dir_all(&root).expect("create dir");
+        let root = temp_dir(&format!("acpr-ws-{}", uuid_text(11)));
         let resolved = resolve_workspace(&alias, root.to_str().expect("path")).expect("resolve");
         assert_eq!(resolved.alias(), &alias);
         assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());

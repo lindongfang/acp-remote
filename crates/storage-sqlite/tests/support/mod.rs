@@ -40,8 +40,56 @@ pub fn repo_path(relative: &str) -> PathBuf {
     repo_root().join(relative)
 }
 
-/// 每个测试独立的临时数据目录。
-pub fn temp_dir(name: &str) -> PathBuf {
+/// 每个测试独立的临时数据目录：**析构时自清理**（正常结束与 panic 展开两条路径都生效）。
+///
+/// 守卫只持有路径并在 `Drop` 里尽力删除（`remove_dir_all` 失败即忽略，绝不 panic：展开中 panic 会
+/// abort）。用例自带的显式清理（若有）仍然可以保留，`Drop` 只是兜底。
+///
+/// - `Deref<Target = Path>`：`&dir`、`dir.join(..)`、`dir.display()` 照常工作，调用点无需改写；
+/// - `AsRef<Path>`/`AsRef<OsStr>`：让 `std::fs::set_permissions(&dir, ..)` 与
+///   `StorageConfig::new(&dir)`（`impl Into<PathBuf>`）这类泛型入参也能直接收 `&dir`。
+pub struct TempDir {
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for TempDir {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.path.as_os_str()
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        // 尽力而为，且**不 panic**（展开中 panic 会 abort）：目录可能已被用例自己删掉（`NotFound`
+        // 立即返回），Windows 上也可能因句柄释放/扫描瞬时占用而失败——此时重试若干次（与 `app` 测试
+        // 的 `TempRoot` 同一口径）。
+        for _ in 0..10 {
+            match std::fs::remove_dir_all(&self.path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+    }
+}
+
+/// 每个测试独立的临时数据目录（`Drop` 时自清理，见 [`TempDir`]）。
+#[must_use]
+pub fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!("acpr-storage-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     // §7.1：正式模式对已存在的宽松数据目录失败关闭（见 `migrate`）。测试预创建的目录必须与产品
@@ -57,7 +105,7 @@ pub fn temp_dir(name: &str) -> PathBuf {
     }
     #[cfg(not(unix))]
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    dir
+    TempDir { path: dir }
 }
 
 /// 把 v2 夹具库复制到临时数据目录，并**落在 `SqliteStore` 实际打开的路径上**

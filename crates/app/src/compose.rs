@@ -1032,11 +1032,19 @@ mod tests {
         let composition = Composition::assemble(dev_config(&dir.path, ""))
             .await
             .expect("装配");
+        // 先留一份句柄：`close()` 会消费 `composition`，结尾还要靠它显式关池。
+        let store = Arc::clone(&composition.store);
         let extra = composition.attachments();
         let error = composition.close().await.expect_err("仍有句柄时必须上报");
         assert!(matches!(error, ComposeError::StoreStillShared));
         assert!(error.message().contains("shared"), "{}", error.message());
         drop(extra);
+        // 句柄全部释放后再关池并**等待**完成，临时目录守卫才删得掉：Windows 上未释放的文件句柄
+        // 会让 `remove_dir_all` 失败（design D3：持有打开资源的用例必须先显式释放资源）。
+        Arc::try_unwrap(store)
+            .expect("除本用例外的句柄都已释放")
+            .close()
+            .await;
     }
 
     /// 首次种子导入只提交一次；已初始化后不再导入（R5–R7 的组合根部分）。

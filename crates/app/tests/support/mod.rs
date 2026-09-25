@@ -635,13 +635,11 @@ const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 /// 运行一条 CLI 子命令（不启动 Daemon）。
 ///
 /// `config` 非空时追加 `--config <path>`；`stdin` 按 [`Stdin`] 给出（默认空设备，保证非交互）。
+///
+/// 输出目录用 [`TempRoot`] 托管：**不**在函数尾部手动删（否则下一行的 `Drop` 会重试删除已删目录），
+/// 因此断言失败或提前返回时也不会留下 `acpr-*` 目录。
 pub fn run_cli(label: &str, config: Option<&Path>, args: &[&str], stdin: Stdin) -> CliRun {
-    let root = std::env::temp_dir().join(format!(
-        "acpr-wp4b-cli-{label}-{}-{}",
-        std::process::id(),
-        next_cli_counter()
-    ));
-    std::fs::create_dir_all(&root).expect("CLI 输出目录");
+    let root = TempRoot::new(&format!("cli-{label}"));
     let stdout_path = root.join("stdout.txt");
     let stderr_path = root.join("stderr.txt");
     let mut command = Command::new(env!("CARGO_BIN_EXE_acp-remote"));
@@ -684,20 +682,12 @@ pub fn run_cli(label: &str, config: Option<&Path>, args: &[&str], stdin: Stdin) 
         std::thread::sleep(POLL);
     };
     let read = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
-    let run = CliRun {
+    CliRun {
         status,
         stdout: read(&stdout_path),
         stderr: read(&stderr_path),
         timed_out,
-    };
-    let _ = std::fs::remove_dir_all(&root);
-    run
-}
-
-/// CLI 用例的临时输出目录计数（同一进程内多个子进程调用互不覆盖）。
-fn next_cli_counter() -> u64 {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// 目录里的文件名（排序；供「CLI 未创建任何文件」这类断言）。

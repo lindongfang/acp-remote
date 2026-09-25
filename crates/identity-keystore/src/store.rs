@@ -479,6 +479,59 @@ mod mode_tests {
     }
 }
 
+/// 单测用的临时目录守卫（`Drop` 时删除，正常结束与 panic 展开两条路径都生效）。
+#[cfg(test)]
+mod temp_dirs {
+    use std::path::{Path, PathBuf};
+
+    /// 用例自建的临时目录：析构时尽力删除。
+    ///
+    /// `Deref<Target = Path>` 让 `root.join(..)`、`&root`（`&Path` 形参）照常工作；`AsRef<Path>` 让
+    /// `fs::remove_dir_all(&root)` 这类泛型入参也直接收。
+    pub(super) struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        /// 在系统临时目录下新建唯一子目录（`name` 必须已含 pid/序列号等唯一化成分）。
+        pub(super) fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(name);
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("临时目录必须可创建");
+            Self { path }
+        }
+    }
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            // 尽力而为，且**不 panic**（展开中 panic 会 abort）：目录可能已被用例自己删掉（`NotFound`
+            // 立即返回），Windows 上也可能因句柄释放/扫描瞬时占用而失败——此时重试若干次（与 `app`
+            // 测试的 `TempRoot` 同一口径）。
+            for _ in 0..10 {
+                match std::fs::remove_dir_all(&self.path) {
+                    Ok(()) => return,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                }
+            }
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod unix_modes {
     //! Unix 权限位的**真实**断言（随 lib 单测二进制在 Linux CI 上执行，不需要平台后端）。
@@ -494,6 +547,8 @@ mod unix_modes {
     use std::os::unix::fs::PermissionsExt as _;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use super::temp_dirs::TempDir;
+
     fn mode_of(path: &Path) -> u32 {
         fs::metadata(path)
             .expect("路径必须存在")
@@ -506,7 +561,7 @@ mod unix_modes {
     fn private_directory_and_entry_file_modes_are_restrictive() {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
+        let root = TempDir::new(&format!(
             "acpr-keystore-modes-{}-{sequence}",
             std::process::id()
         ));
@@ -555,11 +610,13 @@ mod atomic_tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use super::temp_dirs::TempDir;
+
     #[test]
     fn write_atomic_replaces_content_without_leaving_temporaries_on_failure() {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
+        let root = TempDir::new(&format!(
             "acpr-keystore-atomic-{}-{sequence}",
             std::process::id()
         ));

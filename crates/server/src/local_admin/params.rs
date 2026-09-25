@@ -975,6 +975,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::local_admin::test_support::TempDir;
 
     const TS: &str = "2026-09-18T09:12:03.412Z";
 
@@ -985,15 +986,13 @@ mod tests {
         }
     }
 
-    fn temp_directory() -> PathBuf {
+    fn temp_directory() -> TempDir {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        TempDir::new(&format!(
             "acpr-wp3b1-params-{}-{sequence}",
             std::process::id()
-        ));
-        fs::create_dir_all(&path).expect("临时目录可建");
-        path
+        ))
     }
 
     fn code_of(error: AdminError) -> LocalErrorCode {
