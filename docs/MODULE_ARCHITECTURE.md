@@ -1,7 +1,8 @@
 # ACP Remote 模块架构
 
-> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore` 已实现，见 `README.md` 的 crate 表）
+> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 与 `app` 只覆盖切片 4 的本地通道与组合根范围，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.3
+> 修订记录（2026-09-25，daemon-cli-and-local-admin 切片 4）：§3 状态行与 §4.9/§4.10 把 `server`（本地通道 + `local_admin`）与 `app`（daemon/CLI/组合根）标为已落地、范围仍限本切片；§3.1 记下当前成员数（十二个）；§5 表下注记收敛——`storage-sqlite` 已是矩阵列、`node-link-client` 仍是列外行，并如实说明门禁对「行缺席」是静默的。
 > 修订记录（2026-09-24，identity-auth-and-keystore）：§3 状态行与 §3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价、并标注 macOS/Linux 后端未实现；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
 > 修订记录（2026-09-24，core-turn-view-fields）：§4.1 补「适配器产 ACP 派生投影、broker 补 `SYNC_PROTOCOL.md` §10.3 身份与会话版本」的职责分工；§4.7 写明 `owned_session.version` 由存储层在事务内实现、core 只按同一规则推导并在提交后比对（不一致 → `PortError::Corrupt` 失败关闭）。
 > 修订记录（2026-09-24）：§4.2/§4.5 记录 `acp-protocol` 与 `agent-host` 的落地 surface、每个 Agent 一个 Job 的粒度、`win32job`/`nix` 选型与「关闭句柄即结束树」的实际路径；§3.1 的依赖登记与 §5 矩阵补 `agent-host` 列。  §4.1 的端口摘要补 `modes`（`session.mode.list` 的候选来源，见 `CORE_PORTS_AND_STORAGE.md` §5.1/§6 第 17 条）；补全本地管理通道的权威文档指向；`fixtures/acp/v1` 的校验口径改为与实现一致（快照 vendored 前只做存在性与解析检查）；§5 依赖矩阵放开 `storage-sqlite → acpr-wire`（`payload_digest` 的 ACPR-CJ1 只能有一份实现），§4.13 补 ACPR-CJ1；§3.1 的 `nix 0.30.1` 许可证订正为 `MIT`（原写 `MIT OR Apache-2.0`，与本地 registry 元数据不符）；§5 披露尚未成为矩阵列的 crate。  
@@ -124,7 +125,7 @@ crates/
 
 平台安全存储是第二处例外：`identity-keystore` 独立成 crate 是为了隔离平台依赖（原生 keystore API 与 `cfg` 分支），让 `identity-auth` 的状态机在所有平台都能编译与单测（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
 
-> `[现状]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4 落地中）上表中 `server` 与 `app` 已开始落地，但**只覆盖本切片范围**：`server` 本切片只有 `transport` 的本地通道部分（平台 IPC listener、对端凭据校验、framing）与 `local_admin`（管理信封与方法路由），`sync`/`node_link`/`acp_facade` 仍待后续切片；`app` 的 daemon、CLI 与组合根在本切片落地。其余行保持既有状态（`node-link-client` 仍待切片 6）。另外新增一个不影响上表结构的 crate 目录：`vendor/windows-local-ipc`（切片 4 自研的 Win32 FFI wrapper，path 依赖、不在 workspace `members` 里，见 §3.1）。成员仍按「真正落地时才写入 `members`」推进，因此 §5 的列比本节的行少是已知的、被门禁拦住的缺口，详见 §5 表下注记。
+> `[现状]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4 已落地）上表中 `server` 与 `app` 已落地，但**只覆盖本切片范围**：`server` 只有 `transport` 的本地通道部分（平台 IPC listener、对端凭据校验、framing）与 `local_admin`（管理信封与方法路由），`sync`/`node_link`/`acp_facade` 仍待后续切片；`app` 的 daemon、CLI 与组合根已落地。其余行保持既有状态（`node-link-client` 仍待切片 6）。另外新增一个不影响上表结构的 crate 目录：`vendor/windows-local-ipc`（切片 4 自研的 Win32 FFI wrapper，path 依赖、不在 workspace `members` 里，见 §3.1）。成员仍按「真正落地时才写入 `members`」推进：当前 `members` 就是本节除 `node-link-client` 之外的十二个，§5 的列是这十二个再加 `vendor/windows-local-ipc`，`node-link-client` 只作为「行」出现（待切片 6 落地、当前没有依赖方），详见 §5 表下注记。
 
 ### 3.1 Workspace 基线
 
@@ -148,7 +149,7 @@ crates/
   - `vendor/windows-local-ipc`（`daemon-cli-and-local-admin` 变更的 design.md 决策 3）以**仓库内 path 依赖**登记：写在根 `Cargo.toml` 的 `workspace.exclude`，因而不是 workspace 成员、不继承 `unsafe_code = "forbid"`（它必须写 `unsafe`）、不发布；`server` 是它唯一的依赖方，§5 矩阵因此把它登记为「列」。`deny.toml` 的 `[sources]` 注记说明 path 来源为什么不经 registry/git 判定，以及它的许可证与 wildcard 判定由哪几条承担。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
-- workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十三个（ADR-0007 引入 `acpr-wire` 后由十二改为十三）；不得为凑齐列表创建只有占位实现的空 crate。
+- workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十三个（ADR-0007 引入 `acpr-wire` 后由十二改为十三）；不得为凑齐列表创建只有占位实现的空 crate。切片 4 落地后是十二个：§3 除 `node-link-client` 之外的十二个都在 `members` 里。`vendor/windows-local-ipc` 不是成员（`workspace.exclude`，上一段的依赖口径）。
 
 ## 4. 模块职责
 
@@ -348,7 +349,7 @@ port/          # keystore 端口定义（trait），实现见 identity-keystore
 
 ### 4.9 `server`
 
-> `[现状]`（2026-09-25，切片 4 落地中）本 crate 已开始落地，但只有两条路径：`server::transport::local`（endpoint、对端凭据校验、framing、channel 绑定与未完成请求上限）与 `server::local_admin`（管理信封与方法路由）；`sync`/`node_link`/`acp_facade` 尚无实现。`acp_facade` 缺席期间 Daemon 对 `0x02` 连接的处理（完成 framing 校验后立即关闭并记结构化警告）记在 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §3.1 的实现状态注记里；本节的职责划分与下述约束不变。
+> `[现状]`（2026-09-25，切片 4 已落地）本 crate 已落地，但只有两条路径：`server::transport::local`（endpoint、对端凭据校验、framing、channel 绑定与未完成请求上限）与 `server::local_admin`（管理信封与方法路由）；`sync`/`node_link`/`acp_facade` 尚无实现。`acp_facade` 缺席期间 Daemon 对 `0x02` 连接的处理（完成 framing 校验后立即关闭并记结构化警告）记在 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §3.1 的实现状态注记里；本节的职责划分与下述约束不变。
 
 唯一职责：承载所有入站协议 adapter，类似 Pi server 对连接、attachment 和应用服务路由的集中承载，但不把各协议合并成一个 wire format。
 
@@ -370,7 +371,7 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 
 ### 4.10 `app`
 
-> `[现状]`（2026-09-25，切片 4 落地中）`app` 在本切片落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
+> `[现状]`（2026-09-25，切片 4 已落地）`app` 已落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
 
 唯一职责：发布 `acp-remote` 可执行程序并作为组合根。它装配 daemon、CLI、server、backend、配置、单实例锁、健康状态和 graceful shutdown，但不得承载业务规则。
 
@@ -477,7 +478,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 | app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  |
 | windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  |  | — |
 
-注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。`server`、`app` 与 `windows-local-ipc` 已随切片 4 成为列：前两者开始作为 workspace 成员落地（§3 `[现状]`），后者是 `vendor/` 下的 path 依赖、**永远不是** workspace 成员，但因为 `server` 依赖它而必须成列；`storage-sqlite` 与 `node-link-client` 仍只作为「行」出现，其中 `node-link-client` 待切片 6。**`storage-sqlite` 的缺列有明确后果**：`app` 一旦写入 `members` 并把 `storage-sqlite` 作为 path 依赖，`scripts/check-crate-boundaries.mjs` 会因「依赖不在 §5 的矩阵列里」硬失败，因此该列必须与 `crates/app` 加入 `members` 在同一改动里补齐（`daemon-cli-and-local-admin` 的 WP4/WP5 交接项）。缺列不会静默存在：任何成员开始依赖未成列的 crate 都会让门禁硬失败。
+注：本矩阵的「列」是**可被依赖的对象**，「行」是发起方。切片 4 落地后的实际关系：§3 中除 `node-link-client` 之外的十二个 crate 都已是 workspace 成员，也都在本矩阵里成列——`storage-sqlite` 的列此前缺失，已随 `crates/app` 进入 `members` 的同一改动补上（`storage-sqlite` 此前只作为行，缺列会让「成员的依赖不在列里」硬失败，因此这两件事必须同批落地）。`node-link-client` 只作为「行」出现：它待切片 6 落地、不是 workspace 成员，当前没有任何依赖方，因而不需要列。`windows-local-ipc` 只作为「列」出现、没有行：它是 `vendor/` 下的 path 依赖、**永远不是** workspace 成员（§3.1），因为 `server` 依赖它而必须成列。门禁的覆盖范围如实说明：`scripts/check-crate-boundaries.mjs` 会因「某成员的依赖不在列的集合里」硬失败，但对**行缺席是静默的**（矩阵里查不到该行时它只做列成员判定），因此行与列的增减都必须人工维护，不能指望门禁替你发现漏登记的行。
 
 额外规则：
 

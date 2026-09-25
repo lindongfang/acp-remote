@@ -1,6 +1,7 @@
 # ACP Remote 身份与认证合同（`identity-auth`）
 
 > 状态：已定型并已落地（v1）。`identity-auth` 与 `identity-keystore` 两个 crate 均已实现（见 `README.md` 的 crate 表与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.8/§4.12）；本文的入口签名、类型归属与端口形状与实现逐条对应。本合同**没有**合同漂移门禁（`scripts/check-contract-drift.mjs` 只覆盖 `CORE_PORTS_AND_STORAGE.md` §5/§7），因此靠「文档与实现同一变更内改动 + 独立 reviewer 核对 + 常驻测试」维持一致。
+> 版本：0.4（2026-09-25：随 `daemon-cli-and-local-admin` 切片 4 在 §7 第 7 条写入本节点 `nodeId` 的派生式与「不存在独立本地 `nodeId` 持久记录」的裁定，并登记「密钥轮换即换 `nodeId`」的代价与 §6.3 的对应关系）
 > 版本：0.3（2026-09-24：随 `identity-auth-and-keystore` 的独立 review 把定型块**对齐实现**。0.2 的「目标形状」里 §4.1 写的是入口直接返回 `PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`，实现改为「入口返回领域值、调用方组装写集」（理由与代价见 §4.1 的定型说明）；同时补 `PeerTrust.host_binding`/`node_kind` 与三个握手入口签名、把 §2 清单里不存在的类型名（`HandshakeCompletion`/`ClaimVerification`/`SettlementRequest`）换成实现名，并把 `PairingTarget` 归回「已有并直接复用」）
 > 版本：0.2（2026-09-24：随 `identity-auth-and-keystore` 实现定型。在 0.1 的首次冻结之上：§2 补充类型归属（`PeerTrust` 当次持久事实快照、`EntropySource`/`EntropyError` 熵源端口），§4.1/§5.1 把入口定型为「结构化字段 + 调用方读到的当次持久事实快照」（状态机自身不访问存储），§7 冻结 keystore 端口最终形状并**删除** `KeyPurpose::DeviceIdentity`）
 > 版本：0.1（2026-09-23：首次冻结。补上 `docs/CORE_PORTS_AND_STORAGE.md` §1 明确排除的「`identity-auth` 内部状态机」与 `docs/MODULE_ARCHITECTURE.md` §4.8 只给职责、未给签名的那一段）
@@ -444,6 +445,13 @@ pub enum EntropyError {
 4. 端口必须允许「非硬件保护」的实现存在（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。这里的「默认不启用」指的是 §9.2 基线下限**之外**的降级后端（例如 Linux 的持久化加密文件）；**Windows 的 DPAPI 包裹是 §9.2 明列的基线下限，属于 `identity.keystore = "platform"` 这一档，默认生效**，不需要新 ADR。正式模式下 keystore 不可用时失败关闭，由 `identity.fail_closed_on_missing_keystore` 决定启动失败（[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §8）。
 5. 实现不得为平台差异在 `identity-auth` 里写 `cfg` 分支；平台分支只存在于 `identity-keystore`。
 6. `[决定]`（2026-09-23）**Windows 第一档位已定案**：DPAPI（当前用户 scope）包裹私钥字节 + 进程内 `p256` 签名；**Linux 保持失败关闭**，持久化 fallback 与 CNG/TPM 不可导出档位都需单独 ADR（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.2/§20）。实现约束：本 crate 与 `identity-keystore` 都不得直接 FFI（workspace 固定 `unsafe_code = "forbid"`），DPAPI/Secret Service 都必须经 wrapper crate；候选的 MSRV、维护状态与许可证先按 §20 核验，DPAPI 只能以「包裹 + 进程内签名」的方式使用（私钥在签名瞬间存在于内存）。
+7. `[决定]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4）**本节点 `nodeId` 由节点身份公钥确定性派生，端口上没有、也不需要一条独立的本地 `nodeId` 持久记录**：
+
+   `nodeId = SHA-256("acp-remote/node-id/v1" 的 UTF-8 字节 ‖ 节点身份公钥的 65 字节 SEC1 未压缩编码)` 的前 16 字节，按 RFC 4122 形状置位后（version nibble = 8，即自定义派生；variant = `10xx`）呈现为带连字符的小写 canonical UUID，并由 `core::model::NodeId` 做最终形状校验。派生输入是**本机解析的域分离前缀**（不出现在任何 Sync/Node Link 载荷或 keystore 条目里）加上端口 `public_key` 返回的那一份公钥，两者直接拼接、无长度前缀（本机派生式，不是 wire 编码）。
+
+   - **为什么没有独立记录**：本节点身份的可用素材只有 keystore 里的密钥（`KeyPurpose::NodeIdentity`）与它派生的公钥——[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) 的表结构里没有「本机节点身份」的列（其中的 `NodeRecord` 描述的是**对端**节点），[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) 也没有对应配置键，keystore 条目只保存密钥。派生而不是另建一份持久身份，是为了让 `daemon.status` 的 `nodeId` 与 `nodePublicKey` **必然同源**：不存在第二处可被替换、可与公钥不一致的身份记录。实现位置是组合根（`app::identity`），不在本 §7 的端口签名上。
+   - **代价（如实登记）**：**轮换节点密钥即改变 `nodeId`**。这与 §6.3「身份材料变化不得自动接受，必须重新配对」一致——`nodeId` 随身份材料一起变，而不是留在一个与密钥脱钩的稳定别名上。轮换本身（`node.rotate-key.*`）不在首切片（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.7），它落地时必须连同「`nodeId` 是否随轮换变化」一起裁定。
+   - **不改变 wire**：Sync/Node Link 载荷里的 `nodeId` 仍是各自协议定义的字符串字段，本文只固定本机如何得到它；本节不授权任何协议侧的派生规则。
 
 ## 8. 失败关闭与不可协商的约束
 

@@ -97,11 +97,11 @@ node-link-client    # 待落地
 storage-sqlite      # 已落地
 identity-auth       # 已落地
 identity-keystore   # 已落地
-server              # 待落地
-app                 # 待落地
+server              # 已落地（仅切片 4 范围：本地通道 + local_admin）
+app                 # 已落地（仅切片 4 范围：daemon / CLI / 组合根）
 ```
 
-上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
+上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，切片 4 的落地范围见 [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md) §3 `[现状]`）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
 
 依赖必须指向更稳定的内层：
 

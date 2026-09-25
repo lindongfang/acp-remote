@@ -46,7 +46,7 @@
 | `daemon.public_origin` | string\\|null | `null` | canonical public origin（`scheme://host[:port]`）；配置了远程入口就必须给出，用于 Origin/Host 校验与配对二维码 |
 | `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host |
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
-| `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1 |
+| `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1。**当前切片只接线 `file`**（`fs4` 的 OS advisory 文件锁；两种取值的互斥语义相同），显式写 `ipc` 会被解析但在启动时以 `daemon.config_unwired`（debug 级）注明「已解析但不生效」，不静默换实现 |
 | `daemon.shutdown_grace_ms` | integer | `10000` | 关闭时等待接入层停止、Agent 退出与存储刷新的上限 |
 | `daemon.local_admin.endpoint` | string | `"auto"` | 本地管理通道 endpoint；`auto` 使用平台默认位置（Windows Named Pipe / Unix socket，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.1）。显式值只用于测试或路径冲突排查，不改变“只允许同一 OS 用户”的授权模型 |
 | `daemon.tls.mode` | enum | `"proxy"` | `proxy` = TLS 由同机可信反向代理终止（配合 `daemon.trusted_proxies` 与 `daemon.public_origin`）；`direct` = Daemon 自己终止 TLS，此时 `cert_path`/`key_path` 必需 |
