@@ -341,7 +341,7 @@ impl CommandRoute {
             );
             return RouteOutcome::Claimed;
         };
-        self.send_accepted(handle, target, command, accepted_at);
+        self.send_accepted(handle, target, command, accepted_at, None);
         RouteOutcome::Claimed
     }
 
@@ -428,7 +428,10 @@ impl CommandRoute {
             Ok(receipt) => receipt,
             Err(error) => return self.port_fault(handle, message, &error),
         };
-        match receipt {
+        // 首次结果 = 该 requestId 的持久化记录：已终结即回终态（R67 的「返回首次的 accepted/terminal
+        // 结果」），否则回 accepted 并挂一条终态观察。`command.accepted.result` 取 core 收据里的 turn
+        // （同键重试走 broker 的幂等路径，同样带上它，两次回复因此同形）。
+        let receipt_turn = match receipt {
             CommandReceipt::Rejected { error } => {
                 return self.send_rejected(
                     handle,
@@ -438,10 +441,8 @@ impl CommandRoute {
                     RawObject::empty(),
                 );
             }
-            CommandReceipt::Accepted { .. } => {}
-        }
-        // 首次结果 = 该 requestId 的持久化记录：已终结即回终态（R67 的「返回首次的 accepted/terminal
-        // 结果」），否则回 accepted 并挂一条终态观察。
+            CommandReceipt::Accepted { turn, .. } => turn,
+        };
         let record = match self.core.command_status(&actor, request.clone()).await {
             Ok(record) => record,
             Err(error) => return self.port_fault(handle, message, &error),
@@ -474,6 +475,7 @@ impl CommandRoute {
                 .accepted_at()
                 .cloned()
                 .unwrap_or_else(|| self.clock()),
+            receipt_turn.as_ref(),
         );
         self.watch(handle, &request);
         RouteOutcome::Claimed
@@ -673,6 +675,7 @@ impl CommandRoute {
                         &submit.request_id,
                         CommandName::SessionCreate,
                         &accepted_at,
+                        None,
                     );
                     self.watch(handle, &request);
                 }
@@ -690,6 +693,7 @@ impl CommandRoute {
             &submit.request_id,
             CommandName::SessionCreate,
             &self.clock(),
+            None,
         );
         let Ok(agent_id) = AgentId::new(payload.agent_id.as_str()) else {
             return self.reject_schema(handle, message, "the agentId is out of range");
@@ -1216,12 +1220,19 @@ impl CommandRoute {
         let _ = handle.send(MessageType::LinkError, &body);
     }
 
+    /// `command.accepted`：`result` 取 core 收据里唯一有意义的字段（turn，§12.5 的 `object | null`）。
+    ///
+    /// `session.create` 的 accepted 必须为 `null`（schema 的 `if/then`：结果由 `command.terminal` 给出）；
+    /// 没有 turn 的 mutation（取消/模式/配置/交互解析）也回 `null`，不编造字段。`command.status` 重查
+    /// 未终结 mutation 时同样回 `null`——turn 归属不在持久命令行里（它在 `owned_turn.causation`），
+    /// 重查的单点读入口只有命令行本身；首次提交与同键重试都带 `turnId`。
     fn send_accepted(
         &self,
         handle: &ConnectionHandle,
         request: &Uuid,
         command: CommandName,
         accepted_at: &CoreTimestamp,
+        turn: Option<&TurnId>,
     ) {
         let Some(accepted_at) = wire_timestamp(accepted_at) else {
             warn!(
@@ -1231,11 +1242,21 @@ impl CommandRoute {
             );
             return;
         };
+        let result = match (command, turn) {
+            (CommandName::SessionCreate, _) => Nullable::null(),
+            (_, Some(turn)) => match uuid_of(turn.as_str()) {
+                Some(turn) => Nullable::from_option(Some(CommandResultPayload::Object(
+                    details_object(&serde_json::json!({ "turnId": turn.as_str() })),
+                ))),
+                None => Nullable::null(),
+            },
+            (_, None) => Nullable::null(),
+        };
         let body = CommandAccepted {
             request_id: request.clone(),
             command,
             accepted_at,
-            result: Nullable::null(),
+            result,
         };
         if handle.send(MessageType::CommandAccepted, &body).is_err() {
             debug!(
@@ -1409,6 +1430,9 @@ impl CommandRoute {
 
     /// 轮询所有待观察命令的持久化记录，把已经终结的那些推成 `command.terminal`。
     async fn poll_pending(&self) {
+        // 先回收离开注册表的连接：整条状态（限流窗口 + 观察表）随连接消失，**不**依赖它是否还有
+        // pending——没有 in-flight 命令的连接否则会永远留下一条空状态（RV1-WP6-F2）。
+        self.forget_gone_connections();
         let mut done: Vec<(String, CoreRequestId)> = Vec::new();
         for (connection_id, node, pending) in self.pending_snapshot() {
             let Some(handle) = self.handle_of(&connection_id) else {
@@ -1496,6 +1520,19 @@ impl CommandRoute {
 
     fn forget_connection(&self, connection_id: &str) {
         lock(&self.states).remove(connection_id);
+    }
+
+    /// 回收「不在存活连接集合里」的全部连接状态（限流窗口与观察表一起消失）。
+    ///
+    /// 判据是**注册表**的存活集合，而不是「还有没有 pending」：一条只被限流窗口引用的状态同样是垃圾。
+    fn forget_gone_connections(&self) {
+        let live: Vec<String> = self
+            .registry
+            .handles()
+            .iter()
+            .map(|handle| handle.connection_id().as_str().to_owned())
+            .collect();
+        lock(&self.states).retain(|connection_id, _| live.contains(connection_id));
     }
 
     /// 登记一条终态观察。
@@ -1899,8 +1936,36 @@ fn node_revocation_reason() -> Text<512> {
 }
 
 /// core 的错误码 → wire 的封闭错误码（词表之外的细分只进结构化日志，不冒充 wire 码）。
+///
+/// 已知**永久**失败（RV1-WP6-F8）必须映射成语义最近的登记码，**不能**落到 `internal.unavailable`：
+/// 那个码在 registry 里是 `retryable = true`，会把「重试也不会变」的失败标成可重试，Access 于是按
+/// `retryable` 自动重试一条永远不会成功的命令。本表的两支都是永久失败：
+/// - `capability.unsupported_by_{client,broker,agent}`：能力协商失败，端到端不可用（Node Link 没有
+///   自己的 capability 错误码，`nodelink.command.unsupported` 是登记过的最接近语义）；
+/// - `state.version_conflict`：未修改的重提交必然再次冲突（Access 必须先重新 attach/重读版本），
+///   同样不作为可重试信号。
+///
+/// 仍然落在 `internal.unavailable` 的只有：真正未知的 core 码（保守：宁可按可重试处理，也不谎报
+/// 「永久」）与 registry 里本来就登记为可重试的码（如 `session.busy`）。
 fn wire_error(core_code: &str) -> Option<(ErrorCode, &'static str)> {
     Some(match core_code {
+        // 能力类永久失败（见函数文档）。
+        "capability.unsupported_by_client"
+        | "capability.unsupported_by_broker"
+        | "capability.unsupported_by_agent" => (
+            ErrorCode::CommandUnsupported,
+            "the command is not supported by this owner",
+        ),
+        // 状态版本冲突：未修改的重提交是永久失败（见函数文档）。
+        "state.version_conflict" => (
+            ErrorCode::CommandUnsupported,
+            "the command conflicts with the owner's current session state",
+        ),
+        // core 自己的「无法确认副作用」码（启动恢复写进终态记录的那一个）。
+        "command.uncertain" => (
+            ErrorCode::CommandUncertain,
+            "the owner cannot confirm the outcome of this command",
+        ),
         "authorization.scope_denied" | "export.not_granted" | "nodelink.export.not_granted" => (
             ErrorCode::ExportNotGranted,
             "the command is not granted to this node",

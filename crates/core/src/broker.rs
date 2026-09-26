@@ -854,7 +854,7 @@ impl Broker {
         }
         let target = turn.clone().or_else(|| slot.running_turn());
         let endpoint = self.endpoint(&slot, &session).await?;
-        let dispatched = endpoint.cancel(target).await;
+        let dispatched = endpoint.cancel(target.clone()).await;
         // 后端会经 sink 发 `turn.cancelled`；它由本调用驱动落盘（含 prompt 命令的终态，§11.2）。
         self.flush_locked(&slot, &session).await?;
         let at = self.now();
@@ -867,7 +867,12 @@ impl Broker {
             Ok(()) => None,
             Err(error) => Some(self.port_error_public(error)?),
         };
-        self.commit_terminal(&session, command, status, error, None, &at)
+        // 取消成功的收据带被取消的 turn（已知时）；失败时只有错误，不编造 turn。
+        let result = match (&dispatched, target.as_ref()) {
+            (Ok(()), Some(turn)) => Some(turn_result(turn)?),
+            _ => None,
+        };
+        self.commit_terminal(&session, command, status, error, result, None, &at)
             .await?;
         Ok(CommandReceipt::Accepted {
             request: command.request.clone(),
@@ -928,6 +933,7 @@ impl Broker {
                     command,
                     CommandStatus::Failed,
                     Some(public),
+                    None,
                     None,
                     &at2,
                 )
@@ -993,6 +999,7 @@ impl Broker {
                     CommandStatus::Failed,
                     Some(public),
                     None,
+                    None,
                     &at2,
                 )
                 .await?;
@@ -1056,7 +1063,7 @@ impl Broker {
                 .map_err(PortError::from)?,
             ),
         };
-        self.commit_terminal(&session, command, status, error, None, &at)
+        self.commit_terminal(&session, command, status, error, None, None, &at)
             .await?;
         Ok(CommandReceipt::Accepted {
             request: command.request.clone(),
@@ -1115,7 +1122,7 @@ impl Broker {
                 ),
             ),
         };
-        self.commit_terminal(&session, command, status, error, None, &at)
+        self.commit_terminal(&session, command, status, error, None, None, &at)
             .await?;
         Ok(CommandReceipt::Accepted {
             request: command.request.clone(),
@@ -1676,11 +1683,18 @@ impl Broker {
                     StoredPolicy::Durable,
                     running_actor.as_ref(),
                 )?);
+                // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
+                // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是 RV1-WP6-F3 的修复
+                // 点：在此之前所有 `completed` 记录的 `result` 都是 NULL，适配层只能回空 object。
+                let result = match (status, terminal_turn.as_ref()) {
+                    (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
+                    _ => None,
+                };
                 command_terminal = Some(CommandTerminalRecord::try_new(
                     status,
                     Some(at.clone()),
                     None,
-                    None,
+                    result,
                     error,
                 )?);
             }
@@ -2465,6 +2479,7 @@ impl Broker {
             command,
             CommandStatus::Completed,
             None,
+            Some(version_result(&version)?),
             Some(version),
             &at,
         )
@@ -2473,12 +2488,17 @@ impl Broker {
     }
 
     /// 终态提交（§11.2：终态只通过一个持久化的 `command.*` 事件表达）。
+    ///
+    /// `result` 是该命令终态的收据结果（RV1-WP6-F3）：有 turn 的命令带 `{"turnId":…}`、模式/配置切换
+    /// 带 `{"version":…}`，其余为 `None`（适配层按 §12.5 回空 object，不编造字段）。
+    #[allow(clippy::too_many_arguments)] // 终态的四个分量（status/error/result/version）+ 会话/命令/时间
     async fn commit_terminal(
         &self,
         session: &SessionId,
         command: &ClientCommand,
         status: CommandStatus,
         error: Option<PublicError>,
+        result: Option<CommandResult>,
         version: Option<Version>,
         at: &Timestamp,
     ) -> Result<(), PortError> {
@@ -2508,7 +2528,7 @@ impl Broker {
             StoredPolicy::Durable,
             Some(&command.actor),
         )?];
-        let record = CommandTerminalRecord::try_new(status, Some(at.clone()), None, None, error)?;
+        let record = CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
@@ -3156,6 +3176,21 @@ fn view_version_conflict(current: u64, expected: Option<&Version>) -> ViewJson {
 
 fn version_text(version: &Version) -> String {
     version.get().to_string()
+}
+
+/// 终态结果：`{"turnId":"…"}`（turn 作用域命令的收据字段，RV1-WP6-F3）。
+///
+/// Node Link 的 `command.terminal.terminal.result` 是开放 object，带 turnId 使 Access 能把命令与 turn
+/// 对上；缺它时适配层只能回空 object（§12.5 的「非空」= 非 null，但空 object 丢失了这条信息）。
+fn turn_result(turn: &TurnId) -> Result<CommandResult, PortError> {
+    CommandResult::from_json_text(&format!(r#"{{"turnId":"{}"}}"#, turn.as_str()))
+        .map_err(PortError::from)
+}
+
+/// 终态结果：`{"version":"…"}`（模式/配置切换的收据字段，RV1-WP6-F3）。
+fn version_result(version: &Version) -> Result<CommandResult, PortError> {
+    CommandResult::from_json_text(&format!(r#"{{"version":"{}"}}"#, version.get()))
+        .map_err(PortError::from)
 }
 
 /// 确保 view 的顶层字符串成员 `key` 等于 `value`（§10.3 的身份/版本字段）。
@@ -5642,6 +5677,57 @@ mod tests {
                 &block_on(harness.broker.submit_mutation(&other, &foreign)).expect("submit")
             ),
             "authorization.scope_denied"
+        );
+    }
+
+    /// §11.2/RV1-WP6-F3：终态记录带上收据里有意义的分量——prompt 的 `completed` 带 `{"turnId":…}`，
+    /// 模式切换的 `completed` 带 `{"version":…}`。在此之前终态记录的 `result` 恒为 NULL，适配层只能回
+    /// 空 object（`NODE_LINK_PROTOCOL.md` §12.5 允许，但丢掉了这两条可用的关联信息）。
+    #[test]
+    fn terminal_result_carries_the_receipt_fields() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        let receipt = harness.submit_prompt(1, 'A');
+        let turn = match receipt {
+            CommandReceipt::Accepted { turn, .. } => turn.expect("prompt 的收据带 turn"),
+            other => panic!("期望 accepted，得到 {other:?}"),
+        };
+        let record = harness
+            .world
+            .command(&harness.request(1))
+            .expect("命令行已落盘");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        assert_eq!(
+            record.result().map(CommandResult::as_str),
+            Some(format!(r#"{{"turnId":"{}"}}"#, turn.as_str()).as_str()),
+            "completed 的 result 必须带该命令的 turnId"
+        );
+
+        // 模式切换：结果带新的会话版本（`apply_state` 的收据分量）。
+        let actor = harness.actor();
+        let version = block_on(harness.broker.session_version(&harness.session)).expect("版本");
+        let command = crate::broker::test_support::mode_command(
+            &actor,
+            &harness.session,
+            &harness.request(2),
+            version,
+        );
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+        let record = harness
+            .world
+            .command(&harness.request(2))
+            .expect("模式切换的命令行");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        let after = block_on(harness.broker.session_version(&harness.session)).expect("版本");
+        assert_eq!(
+            record.result().map(CommandResult::as_str),
+            Some(format!(r#"{{"version":"{}"}}"#, after.get()).as_str()),
+            "completed 的 result 必须带切换后的版本"
         );
     }
 

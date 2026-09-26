@@ -1112,6 +1112,53 @@ fn terminal_mapping_keeps_the_command_name_and_the_terminal_contract() {
     }
     assert!(body.terminal.error.is_null());
 
+    // RV1-WP6-F3：core 记录里 `result` 为 NULL 时仍回空 object（schema 只要求 object，§12.5 的
+    // 「非空」= 非 null）——不编造字段。
+    let null_result = record(RecordSpec {
+        request: REQUEST,
+        status: CoreStatus::Completed,
+        command: "session.prompt",
+        kind: CommandKind::Mutation,
+        result: None,
+        error: None,
+        terminal_event: true,
+        fingerprint: digest_of("a"),
+    });
+    let body = terminal_body(&null_result, &at).expect("可映射");
+    match body.terminal.result.as_ref() {
+        Some(CommandResultPayload::Object(object)) => {
+            assert_eq!(object.get(), "{}", "core 没给结果时补空 object")
+        }
+        other => panic!("completed 必须带 object result：{other:?}"),
+    }
+
+    // `session.create` 的 `completed` 结果必须是 `SessionCreateResult`（§12.7）：持久记录里存的
+    // 就是该形状的原文，回读时还原成具名变体（F1 的终态因此可重放、可重查）。
+    let created = record(RecordSpec {
+        request: REQUEST,
+        status: CoreStatus::Completed,
+        command: "session.create",
+        kind: CommandKind::Mutation,
+        // `sessionMeta` 是 `{ state, version }`（`common.schema.json#/$defs/sessionMeta`）。
+        result: Some(
+            r#"{"remoteSessionRef":{"ownerNodeId":"bdb2ec20-f98c-4d87-b789-e540d527ef87","exportId":"11111111-1111-4111-8111-111111111111","sessionId":"8ae1c07c-9242-46e9-a9d2-4ec58c130f50"},"sessionMeta":{"state":"idle","version":"1"}}"#,
+        ),
+        error: None,
+        terminal_event: true,
+        fingerprint: digest_of("a"),
+    });
+    let body = terminal_body(&created, &at).expect("可映射");
+    assert_eq!(body.command, CommandName::SessionCreate);
+    match body.terminal.result.as_ref() {
+        Some(CommandResultPayload::SessionCreate(result)) => {
+            assert_eq!(
+                result.remote_session_ref.session_id.as_str(),
+                "8ae1c07c-9242-46e9-a9d2-4ec58c130f50"
+            )
+        }
+        other => panic!("session.create 的 completed 必须是 SessionCreateResult：{other:?}"),
+    }
+
     // 未终结的记录不能映射成终态。
     let accepted = record(RecordSpec {
         request: REQUEST_2,
@@ -1173,6 +1220,43 @@ fn the_error_registry_maps_core_codes_without_inventing_new_ones() {
         "retryable 取 registry 登记的语义"
     );
     assert!(!error_info("authorization.scope_denied").retryable);
+
+    // [R66]/RV1-WP6-F8 正例：已知**永久**失败必须映射到非 retryable 的语义最近登记码，不能冒充
+    // `internal.unavailable`（那在 registry 里是 retryable = true，会把永久失败标成可重试）。
+    for (core_code, expected) in [
+        (
+            "capability.unsupported_by_broker",
+            ErrorCode::CommandUnsupported,
+        ),
+        (
+            "capability.unsupported_by_agent",
+            ErrorCode::CommandUnsupported,
+        ),
+        (
+            "capability.unsupported_by_client",
+            ErrorCode::CommandUnsupported,
+        ),
+        ("state.version_conflict", ErrorCode::CommandUnsupported),
+        ("command.uncertain", ErrorCode::CommandUncertain),
+    ] {
+        let info = error_info(core_code);
+        assert_eq!(info.code, expected, "{core_code}");
+        assert!(
+            !info.retryable,
+            "永久失败不得标成可重试：{core_code} → {}",
+            info.code.as_str()
+        );
+    }
+    // 反例：真正未知的码与 registry 里登记为可重试的码保持保守映射（不谎报「永久」）。
+    for core_code in [
+        "session.busy",
+        "internal.unavailable",
+        "some.unknown.core_code",
+    ] {
+        let info = error_info(core_code);
+        assert_eq!(info.code, ErrorCode::InternalUnavailable, "{core_code}");
+        assert!(info.retryable, "未知码保持可重试：{core_code}");
+    }
     assert_eq!(
         field_details("cwd").get(),
         r#"{"field":"cwd"}"#,
@@ -2247,6 +2331,84 @@ async fn session_list_only_returns_sessions_of_visible_exports() {
     assert_eq!(sessions[0]["version"], "3");
     // 查询命令同步完成，没有持久化记录因此没有终态事件。
     assert!(body["terminal"]["terminalEventId"].is_null());
+}
+
+/// RV1-WP6-F2：连接离开注册表后，它的命令状态（限流窗口 + 观察表）随之回收——判据是注册表的
+/// 存活集合，不依赖「它是否还有 in-flight 命令」，否则只被限流窗口引用的空状态会永远留下。
+#[tokio::test]
+async fn connection_state_is_reaped_once_the_connection_leaves_the_registry() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    // 一条未知 requestId 的 `command.status`：只留下限流窗口，不产生任何观察项。
+    submit(
+        &mut fixture,
+        &route,
+        submit_body(
+            REQUEST_2,
+            "command.status",
+            json!({ "targetRequestId": REQUEST }),
+        ),
+    )
+    .await;
+    assert_eq!(lock(&route.states).len(), 1, "限流窗口随首条命令进入状态表");
+
+    // 连接结束（离开注册表）→ 下一次轮询回收整条状态。
+    fixture.world.registry.unregister(CONNECTION);
+    assert!(route.registry.handles().is_empty(), "连接已离开注册表");
+    route.poll_pending().await;
+    assert!(
+        lock(&route.states).is_empty(),
+        "离开注册表的连接不得留下空状态（RV1-WP6-F2）"
+    );
+}
+
+/// RV1-WP6-F3：`command.accepted.result` 透传 core 收据里的 turn——`session.create` 必须为 `null`
+/// （schema 的 `if/then`），带 turn 的命令回 `{"turnId": …}`。
+#[tokio::test]
+async fn command_accepted_result_carries_the_receipt_turn() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let request = Uuid::parse(REQUEST).expect("uuid");
+    let at = ts("2026-09-18T09:12:03.412Z");
+    let turn = TurnId::new("9ae1c07c-9242-46e9-a9d2-4ec58c130f51").expect("turn id");
+
+    route.send_accepted(
+        &fixture.handle,
+        &request,
+        CommandName::SessionPrompt,
+        &at,
+        Some(&turn),
+    );
+    route.send_accepted(
+        &fixture.handle,
+        &request,
+        CommandName::SessionCancel,
+        &at,
+        None,
+    );
+    route.send_accepted(
+        &fixture.handle,
+        &request,
+        CommandName::SessionCreate,
+        &at,
+        Some(&turn),
+    );
+    let frames = fixture.drain();
+    let accepted = of_type(&frames, "command.accepted");
+    assert_eq!(accepted.len(), 3);
+    assert_eq!(
+        accepted[0]["body"]["result"],
+        json!({ "turnId": turn.as_str() }),
+        "带 turn 的命令把收据里的 turn 透传进 accepted.result"
+    );
+    assert!(
+        accepted[1]["body"]["result"].is_null(),
+        "没有 turn 的命令不编造字段"
+    );
+    assert!(
+        accepted[2]["body"]["result"].is_null(),
+        "session.create 的 accepted 必须为 null（schema 的 if/then）"
+    );
 }
 
 /// 本切片没有 v1 结果投影的查询必须**显式**回不支持，不返回被裁剪的结果。
