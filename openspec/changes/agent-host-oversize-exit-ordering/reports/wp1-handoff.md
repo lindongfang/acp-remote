@@ -93,7 +93,7 @@
 - `wait_loop`（637–653 行）：`child.wait()` 返回后（638–641 行）先 drain `pending`（642–645 行）并投递
   `AgentExited`（646–650 行），最后 652 行 `exit.mark(status)`。超限路径上 `abort_agent` 已经 drain 过
   `pending`，因此 `wait_loop` 的 drain 拿到空表（无二次投递）；它随后的 `exit.mark(status)` 会把 status
-  覆写为真实退出状态，而该覆写是 56 行无条件覆写的既有行为——**在当前（改动前）顺序下同样发生**，
+  覆写为真实退出状态，而该覆写是 55 行无条件覆写的既有行为——**在当前（改动前）顺序下同样发生**，
   不是本变更引入的新交互。`done` 在此时已为真，重复 `store(true)` 与 `notify_waiters()` 无副作用。
 
 **D2-2 不存在「依赖 `is_running()` 为真才继续清理」的反向逻辑（PASS）**
