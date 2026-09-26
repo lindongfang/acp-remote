@@ -1873,6 +1873,13 @@ mod tests {
             vec!["export-1".to_owned()],
             "提交成功后必须通知（推送/关闭失败只记日志，不回滚撤销）"
         );
+        // [R76]/RV1-WP6-F10：通知**当时**回读存储，该行已经是撤销态——「提交后才通知」是持久事实，
+        // 不只是调用顺序看起来对。
+        assert_eq!(
+            world.closer.exports_revoked_when_notified(),
+            vec![true],
+            "通知必须发生在撤销提交之后"
+        );
 
         let (code, _) = error_of(
             &router
@@ -2670,6 +2677,12 @@ mod tests {
         assert_eq!(revoked["nodeId"], json!(NODE_ID));
         assert_eq!(revoked["revokedAt"], json!(first_at));
         assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
+        // RV1-WP6-F10：关闭通知**当时**回读存储，两种角色行都已经带撤销时间。
+        assert_eq!(
+            world.closer.nodes_revoked_when_notified(),
+            vec![true],
+            "关闭必须发生在撤销提交之后"
+        );
 
         // ② 重试同一撤销 → `local.not_found`，且不再触发一次关闭。
         world.clock.set("2026-09-18T11:00:00.000Z");

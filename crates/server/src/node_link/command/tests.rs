@@ -2057,7 +2057,6 @@ async fn the_watcher_pushes_the_terminal_once_the_record_is_terminal() {
     let mut fixture = Fixture::new().await;
     let route = fixture.route();
     let request = CoreRequestId::new(REQUEST).expect("request id");
-    let node = NodeId::new(ACCESS_NODE).expect("node id");
 
     // 先挂一条观察项：此刻还没有任何帧。
     fixture.world.store.seed_command(record(RecordSpec {
@@ -2092,7 +2091,6 @@ async fn the_watcher_pushes_the_terminal_once_the_record_is_terminal() {
     assert_eq!(terminal.len(), 1);
     assert_eq!(terminal[0]["body"]["terminal"]["status"], "completed");
     assert!(route.pending_of(&fixture.handle).is_empty());
-    let _ = node;
 }
 
 /// [R66]/[R45] 后半：单连接 in-flight 上限（已接受未终结的 mutation 数）生效并给出退避提示。
@@ -2331,6 +2329,51 @@ async fn session_list_only_returns_sessions_of_visible_exports() {
     assert_eq!(sessions[0]["version"], "3");
     // 查询命令同步完成，没有持久化记录因此没有终态事件。
     assert!(body["terminal"]["terminalEventId"].is_null());
+}
+
+/// RV1-WP6-F12：关闭序列触发终态观察循环立刻结束——它由组合根 spawn，必须随 `Shutdown` 退出，
+/// 不遗留 detached task（`AGENTS.md` §7）。
+#[tokio::test]
+async fn the_terminal_watcher_stops_on_shutdown() {
+    let fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (handle, shutdown) = Shutdown::channel();
+    let watcher = tokio::spawn({
+        let route = Arc::clone(&route);
+        async move { route.dispatch(shutdown).await }
+    });
+    // 让循环至少跑一轮（进入 select），再触发关闭。
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!watcher.is_finished(), "关闭前观察循环仍在运行");
+    handle.trigger();
+    tokio::time::timeout(Duration::from_secs(5), watcher)
+        .await
+        .expect("关闭信号必须让观察循环结束")
+        .expect("观察任务正常结束");
+}
+
+/// RV1-WP6-F12：超过观察预算的观察项被放弃（只记日志、不发帧），对端仍可凭 `command.status` 重查。
+#[tokio::test]
+async fn the_watcher_abandons_an_observation_that_outlives_its_budget() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let request = CoreRequestId::new(REQUEST).expect("request id");
+    // 直接挂一条超龄观察项：`since` 早于观察预算。
+    {
+        let mut states = lock(&route.states);
+        let mut state = CommandRoute::new_state();
+        state.pending.push(PendingCommand {
+            request: request.clone(),
+            since: Instant::now() - (WATCH_MAX_AGE + Duration::from_secs(1)),
+        });
+        states.insert(CONNECTION.to_owned(), state);
+    }
+    route.poll_pending().await;
+    assert!(
+        route.pending_of(&fixture.handle).is_empty(),
+        "超龄观察项必须从在途表里放弃"
+    );
+    assert!(fixture.drain().is_empty(), "放弃时不得发任何帧");
 }
 
 /// RV1-WP6-F2：连接离开注册表后，它的命令状态（限流窗口 + 观察表）随之回收——判据是注册表的

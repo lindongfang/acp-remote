@@ -2,6 +2,7 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。节点侧状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）尚未实现。  
 > 版本：1.0  
+> 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布）：`node.challenge` 增加必需字段 `catalogRevision`(decimal string)——§9.3/§9.4 的两个连接 transcript domain 都含 tag 6 `catalogRevision`，而此前的握手消息不带该字段，Access 无法在首次连接上验证 `nodeProof` 或构造自己的 proof（design.md D13 的用户裁决 A）；§8.2 明确首阶段 Export 可见性只取「未撤销且 `export.scopes ∩` 信任记录 `grants ≠ ∅`」，`exportIds` 维度推后（用户裁决 (b)，与 `node-link-owner` 的 R51/R52 一致）。  
 > 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceAlias`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18  
@@ -630,6 +631,8 @@ resource.attach → resource.attached → resource.subscribe
 
 - `sessionId` 由 Owner 生成并写入自身事件日志；Access 不得改写、重编号或本地顶替。Access 用该 `remoteSessionRef` 发起 `resource.attach`（§12.4），成功后才提交该会话的其他命令。
 - `status = "failed"` 时 `terminal.error` 给出 `PublicError`（例如 `nodelink.export.not_granted`、`nodelink.command.unsupported_field`）；`status = "uncertain"` 表示崩溃窗口内无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
+
+`node-link-owner` 切片的结果投影范围（已登记的实现期收窄，2026-09-26）：本切片的 Owner 只为 `session.list` 与 `session.create` 投影 wire 结果，**`session.read`/`session.mode.list`/`session.config.list` 一律回 `nodelink.command.unsupported`**（`command.rejected`）。原因是它们的 `sessionReadResult`/`modeListResult`/`configListResult` 需要把会话正文、活体元数据与交互投影成 Sync 登记的视图，其中 `session.read` 的 `messages` 还要对事件正文做聚合——那条路径属 Access facade 的正文切片。Owner **不得**为避免该错误而返回被裁剪的结果或把结构化事件退化成文本（§15 的保真要求优先）；Access 在本切片遇到该错误码就应显式报「该命令在本版本不可用」，不要当成重试可恢复的失败。
 
 ### 12.8 消息名 ↔ schema 对照
 

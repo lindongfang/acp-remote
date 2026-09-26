@@ -1834,14 +1834,33 @@ impl EntropySource for FakeEntropy {
 }
 
 /// 记录撤销后关闭了哪些设备/节点、通知了哪些 Export（断言「提交后才关闭/推送」的观察点）。
+///
+/// RV1-WP6-F10：`close_node`/`export_revoked` 在通知**当时**经持久读入口回读该行的撤销状态
+/// （`TrustStore::nodes_for` / `ExportStore::export`），并把「回读时是否已经撤销」随通知一起记下。
+/// 这样「提交后才通知」不再只能从调用顺序间接推断（一条日志看不出先后），而是一个可断言的持久事实：
+/// 用例断言每一次通知的回读值都是 `true`。
 #[derive(Clone, Default)]
 pub(crate) struct RecordingCloser {
     devices: Arc<Mutex<Vec<String>>>,
     nodes: Arc<Mutex<Vec<String>>>,
     exports: Arc<Mutex<Vec<String>>>,
+    /// 持久读入口（`TestWorld` 装配；未装配时回读记 `false`，断言会失败而不是静默通过）。
+    trust: Option<FakeTrust>,
+    export_store: Option<FakeExports>,
+    node_revoked_when_notified: Arc<Mutex<Vec<bool>>>,
+    export_revoked_when_notified: Arc<Mutex<Vec<bool>>>,
 }
 
 impl RecordingCloser {
+    /// 带持久读入口的观察点。
+    pub(crate) fn with_stores(trust: FakeTrust, exports: FakeExports) -> Self {
+        Self {
+            trust: Some(trust),
+            export_store: Some(exports),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn closed_devices(&self) -> Vec<String> {
         self.devices.lock().expect("关闭锁").clone()
     }
@@ -1853,6 +1872,22 @@ impl RecordingCloser {
     /// 收到 `export.revoked` 通知的 Export（按调用顺序）。
     pub(crate) fn revoked_exports(&self) -> Vec<String> {
         self.exports.lock().expect("关闭锁").clone()
+    }
+
+    /// 每次 `close_node` 通知**当时**回读的持久状态：`true` = 该节点的行已经全部带撤销时间。
+    pub(crate) fn nodes_revoked_when_notified(&self) -> Vec<bool> {
+        self.node_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .clone()
+    }
+
+    /// 每次 `export_revoked` 通知**当时**回读的持久状态：`true` = 该 Export 已经带撤销时间。
+    pub(crate) fn exports_revoked_when_notified(&self) -> Vec<bool> {
+        self.export_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .clone()
     }
 }
 
@@ -1866,6 +1901,18 @@ impl ConnectionCloser for RecordingCloser {
     }
 
     async fn close_node(&self, node: &NodeId) {
+        let revoked = match &self.trust {
+            Some(trust) => match acp_core::ports::TrustStore::nodes_for(trust, node).await {
+                // §11.6：同一事务令两种角色的行一起进入 `revoked`，因此「已撤销」= 行存在且都带撤销时间。
+                Ok(rows) => !rows.is_empty() && rows.iter().all(|row| row.revoked_at().is_some()),
+                Err(_) => false,
+            },
+            None => false,
+        };
+        self.node_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .push(revoked);
         self.nodes
             .lock()
             .expect("关闭锁")
@@ -1873,6 +1920,17 @@ impl ConnectionCloser for RecordingCloser {
     }
 
     async fn export_revoked(&self, export: &ExportId) {
+        let revoked = match &self.export_store {
+            Some(store) => match acp_core::ports::ExportStore::export(store, export).await {
+                Ok(Some(record)) => record.revoked_at().is_some(),
+                _ => false,
+            },
+            None => false,
+        };
+        self.export_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .push(revoked);
         self.exports
             .lock()
             .expect("关闭锁")
@@ -2039,13 +2097,13 @@ impl TestWorld {
         Self {
             clock,
             config,
-            exports,
+            exports: exports.clone(),
             audit,
             keystore,
             daemon: FakeDaemon::default(),
-            trust,
+            trust: trust.clone(),
             authority,
-            closer: Arc::new(RecordingCloser::default()),
+            closer: Arc::new(RecordingCloser::with_stores(trust, exports)),
             core,
             public_origin: origin.map(str::to_owned),
             temporary: Arc::default(),
