@@ -160,6 +160,20 @@ impl ConnectionHandle {
     /// 通过（且真的入队）才提交。因此被高水位拒绝的投递不消耗序号——否则本方向此后每一帧都带缺口，
     /// 合规对端必须一直报 `sequence_invalid`，而协议没有重同步规则。
     pub fn send<T: Serialize>(&self, message_type: MessageType, body: &T) -> Result<(), SendFault> {
+        self.send_with_frame(message_type, body).map(|_| ())
+    }
+
+    /// 发送一条认证后消息，并返回本次入队的**帧文本**。
+    ///
+    /// 与 [`ConnectionHandle::send`] 逐条同路径（同一临界区、同一序号与容量判定），只是把实际入队的
+    /// 那份文本交回调用方：Node Link 的快照 digest 必须对「将要发出的完整 chunk 帧字节」求摘要
+    /// （`SYNC_PROTOCOL.md` §9.4、`NODE_LINK_PROTOCOL.md` §12.4：接收方按收到的原始 UTF-8 字节复算，
+    /// 不得重新序列化 JSON），而重新编码一次会得到不同的 messageId/序号。
+    pub fn send_with_frame<T: Serialize>(
+        &self,
+        message_type: MessageType,
+        body: &T,
+    ) -> Result<String, SendFault> {
         let mut state = lock(&self.outbound_state);
         // ① 用候选序号装配信封：装配失败不触碰账本（也不消耗序号）。
         let candidate = state.sequence + 1;
@@ -172,12 +186,15 @@ impl ConnectionHandle {
             return Err(SendFault::HighWater);
         }
         // ③ 入队成功才提交序号与占用；`try_send` 不阻塞，持锁是安全的。
-        match self.outbound.try_send(Outbound { text, bytes }) {
+        match self.outbound.try_send(Outbound {
+            text: text.clone(),
+            bytes,
+        }) {
             Ok(()) => {
                 state.sequence = candidate;
                 state.pending_messages += 1;
                 state.pending_bytes += bytes;
-                Ok(())
+                Ok(text)
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 // 预算是上界，而 `pending_messages` 覆盖了管道里的全部消息，因此这条分支实际不可达；
