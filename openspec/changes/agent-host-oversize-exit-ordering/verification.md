@@ -44,7 +44,10 @@
 
 ### Project Verify 记录
 
-（[PV1]/[PV2] 执行时登记：命令、版本、退出码、日志路径。）
+| Check | 执行者/版本 | 命令 | 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| PV1 | 主 Agent / `af64e85` | `npm run verify` | **PASS**：EXIT=0，0 FAILED | `reports/final-verify.log` |
+| PV2 | 主 Agent / `af64e85` | `cargo test --locked --workspace --all-features` 连跑 3 次（串行窗口） | **PASS**：3 轮均 EXIT=0，`oversize_frame` 每轮 ok，0 FAILED | `reports/stress-runs.log` |
 
 ## Check Plan Changes
 
@@ -60,7 +63,13 @@
 
 ## Review Findings
 
-（RV1 报告登记处。）
+### RV1（branch / work-package，reviewer 8fa55311，fresh 只读）
+
+- 目标版本：`af64e85`；报告：`reports/rv1-wp1.md`；结论：**PASS**（0 CRITICAL/MAJOR）。
+- 确认：新顺序「标记→投递→terminate」与注释一致；D2 核实记录逐条独立复核为真；`wait_loop`/测试/签名零改动；spec 增量与实现语义一致（`mark` 先于第一个 `send`，无缝隙）。
+- 2 条 MINOR（均为 `wp1-handoff.md` 行号/摘要精度）已由主 Agent 订正：56→55（已改）；`@@` 头系重建，已加注「权威 diff 以 `git diff 998cb0f..af64e85` 为准」并已机械核对（单文件 +4/−2）。
+- 1 条 SUGGESTION（并发关闭介入时错误种类的理论窗口）：非新问题（旧顺序下同类二选一已存在）、不可复现、spec 未承诺错误种类——不修复，登记为后续归因参考。
+- reviewer 无 shell/git 权的残余已由主 Agent 闭合：`git diff --name-status 998cb0f..af64e85` = 单代码文件 + 报告文件。
 
 ## Merge History
 

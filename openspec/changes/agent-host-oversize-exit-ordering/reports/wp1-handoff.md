@@ -48,7 +48,7 @@
 唯一改动文件 `crates/agent-host/src/process.rs`，唯一改动函数 `abort_agent`（函数体行 496–520）：
 
 ```diff
-@@ -502,6 +502,10 @@ fn abort_agent(
+@@ -502,6 +502,10 @@（RV1-MINOR-2 订正：本 hunk 头为报告撰写时重建；权威 diff 以 git diff 998cb0f..af64e85 为准，主 Agent 已机械核对单文件 +4/−2） fn abort_agent(
      tracing::error!(reason, limit, actual, "ACP stdout 违反上限，结束该 Agent");
 +    // 顺序即契约（`local-agent-host` 增量规范「超限结束的失败关闭顺序」）：先标记退出
 +    // （`is_running()` 立即为假，坏 runtime 不会被继续复用），再唤醒等待中的请求，最后结束整棵树。
@@ -85,7 +85,7 @@
 
 **D2-1 `ExitState::mark` 幂等/覆写语义不因提前调用产生问题（PASS）**
 
-- `fn mark` 在 53–59 行：`status` 为 `Mutex<Option<String>>` 无条件覆写（last-wins，56 行
+- `fn mark` 在 53–59 行：`status` 为 `Mutex<Option<String>>` 无条件覆写（last-wins，55 行
   `*slot = Some(status)`）；`done` 用 `store(true, SeqCst)` 置位（57 行），全 crate 只有这一处写 `done`
   （`grep done.store|done.load|done.swap` 结果：写仅 57 行，读在 203/209/345 行），因此 `done` 置位**不可逆**、
   不存在被复位成 `false` 的路径；57 行随后 58 行 `notify_waiters()` 唤醒关闭路径。

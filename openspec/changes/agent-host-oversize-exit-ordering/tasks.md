@@ -15,8 +15,8 @@
 
 ## 3. Branch Validation
 
-- [ ] 3.1 DU1；前置：2.2；主 Agent。交付前验证：[PV1] `npm run verify`（EXIT=0，日志 `reports/final-verify.log`）+ [PV2] `cargo test --locked --workspace --all-features` 连跑 3 次（串行窗口，日志 `reports/stress-runs.log`）。完成条件：3 次均 EXIT=0 且 `oversize_frame` 用例每轮全绿；任一轮红即 FAIL 并按 plan.md 的 Failure and Recovery 归因处理，不得以重跑掩盖。
-- [ ] 3.2 DU1；前置：2.2，可与 3.1 并行；独立 reviewer（fresh、只读子 Agent）。[RV1] 检视 WP1 全部 diff + 相关上下文，关注点与阻断标准见 `plan.md` Code Review。完成条件：报告 `reports/rv1-wp1.md`；发现修复后由新子 Agent 复核。
+- [x] 3.1 DU1；前置：2.2；主 Agent。交付前验证：[PV1] `npm run verify`（EXIT=0，日志 `reports/final-verify.log`）+ [PV2] `cargo test --locked --workspace --all-features` 连跑 3 次（串行窗口，日志 `reports/stress-runs.log`）。完成条件：3 次均 EXIT=0 且 `oversize_frame` 用例每轮全绿；任一轮红即 FAIL 并按 plan.md 的 Failure and Recovery 归因处理，不得以重跑掩盖。
+- [x] 3.2 DU1；前置：2.2，可与 3.1 并行；独立 reviewer（fresh、只读子 Agent）。[RV1] 检视 WP1 全部 diff + 相关上下文，关注点与阻断标准见 `plan.md` Code Review。完成条件：报告 `reports/rv1-wp1.md`；发现修复后由新子 Agent 复核。
 
 ## 5. Integration Readiness
 
