@@ -2,6 +2,8 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。节点侧状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）尚未实现。  
 > 版本：1.0  
+> 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
+> 修订记录（2026-09-26，v1 内合同修订，未实现未发布）：`node.challenge` 增加必需字段 `catalogRevision`(decimal string)——§9.3/§9.4 的两个连接 transcript domain 都含 tag 6 `catalogRevision`，而此前的握手消息不带该字段，Access 无法在首次连接上验证 `nodeProof` 或构造自己的 proof（design.md D13 的用户裁决 A）；§8.2 明确首阶段 Export 可见性只取「未撤销且 `export.scopes ∩` 信任记录 `grants ≠ ∅`」，`exportIds` 维度推后（用户裁决 (b)，与 `node-link-owner` 的 R51/R52 一致）。  
 > 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceAlias`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18  
 > 上位产品设计：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
@@ -264,9 +266,10 @@ accessNodeId
 accessPublicKey
 nodeName / nodeKind
 scopes          # grant.* 子集
-exportIds       # 该 Access 可见的 Export
 createdAt / revokedAt
 ```
+
+首阶段**不使用**独立的 `exportIds` 维度（v1 的信任记录不落这一列）：Export 可见性只由「该 Export 未撤销」与「`export.scopes ∩` 该节点信任记录的 `grants ≠ ∅`」两个条件决定，`catalog.snapshot` 与 `resource.attach` 共用同一份判定，不得各自实现一套。空交集（包括 Export 的 `scopes` 为空）即不可见，因此「按节点枚举 Export」这类更细的授权粒度被显式推迟：将来要落地 `exportIds`，必须同时定义它在配对时的填报、撤销语义与迁移，并按 §2.3 的兼容流程处理，不能把现有字段当成已有能力。
 
 ### 8.3 无传递信任
 
@@ -487,7 +490,7 @@ node.hello → node.challenge → node.proof → node.ready
 | 消息 | 方向 | 信封 | body 字段 | 必需性 | 语义 |
 |---|---|---|---|---|---|
 | `node.hello` | Access → Owner | 认证前 | `minProtocolVersion`(integer)、`maxProtocolVersion`(integer)、`accessNodeId`(UUID)、`role`(const `"access"`)、`clientNonce`(base64url 32B)、`supportedFeatures`(feature 列表)、`requiredFeatures`(feature 列表) | 全部必需 | Access 声明版本区间、身份与 feature；`role` 固定 `"access"` 以阻止角色混用 |
-| `node.challenge` | Owner → Access | 认证前 | `selectedProtocolVersion`(integer)、`connectionId`(UUID)、`ownerNodeId`(UUID)、`serverNonce`(base64url 32B)、`selectedFeatures`(feature 列表)、`nodeProof`(base64url 64B) | 全部必需 | Owner 选择版本与 feature 子集，签发连接 ID 与 server nonce；`nodeProof` 是 §9.4 连接节点挑战 domain 的 P1363 签名 |
+| `node.challenge` | Owner → Access | 认证前 | `selectedProtocolVersion`(integer)、`connectionId`(UUID)、`ownerNodeId`(UUID)、`serverNonce`(base64url 32B)、`selectedFeatures`(feature 列表)、`catalogRevision`(decimal string)、`nodeProof`(base64url 64B) | 全部必需 | Owner 选择版本与 feature 子集，签发连接 ID 与 server nonce；`nodeProof` 是 §9.4 连接节点挑战 domain 的 P1363 签名；`catalogRevision` 是 Owner 当前目录修订号（与 `node.ready.catalogRevision` 同源），Access 用它验证 `nodeProof` 并构造自己的 `node.proof`——两个连接 domain 的 tag 6 都取自本字段（2026-09-26 修订补入） |
 | `node.proof` | Access → Owner | 认证前 | `connectionId`(UUID)、`accessNodeId`(UUID)、`nodeProof`(base64url 64B) | 全部必需 | Access 对 §9.4 连接节点证明 domain 签名，完成双向认证 |
 | `node.ready` | Owner → Access | 认证后 | `ownerNodeId`(UUID)、`catalogRevision`(decimal string)、`limits`(object，§2.5)、`serverEpoch`(UUID) | 全部必需 | 认证完成；`serverEpoch` 是本次 Owner 事件保留窗口的 epoch，与 Sync 的 `serverEpoch` 同义 |
 
@@ -628,6 +631,9 @@ resource.attach → resource.attached → resource.subscribe
 
 - `sessionId` 由 Owner 生成并写入自身事件日志；Access 不得改写、重编号或本地顶替。Access 用该 `remoteSessionRef` 发起 `resource.attach`（§12.4），成功后才提交该会话的其他命令。
 - `status = "failed"` 时 `terminal.error` 给出 `PublicError`（例如 `nodelink.export.not_granted`、`nodelink.command.unsupported_field`）；`status = "uncertain"` 表示崩溃窗口内无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
+- 注记（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F1）：幂等行落盘前失败（如 Owner 存储写失败）的 `session.create` **不是持久首次结果**——Owner 在那一轮仍会发一帧本地 `command.terminal`，但同 `requestId` 的 `command.status` 重查回 `nodelink.command.not_found`，重试也可以创建出另一个会话、得到与首次尝试不同的结果。因此 `failed` 只对同一 `requestId` 可复现的确定类失败（授权拒绝、本机 workspace 解析失败）成立；Access 不得把落盘失败类的 `failed` 当成可稳定重放的终止事实（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条）。
+
+`node-link-owner` 切片的结果投影范围（已登记的实现期收窄，2026-09-26）：本切片的 Owner 只为 `session.list` 与 `session.create` 投影 wire 结果，**`session.read`/`session.mode.list`/`session.config.list` 一律回 `nodelink.command.unsupported`**（`command.rejected`）。原因是它们的 `sessionReadResult`/`modeListResult`/`configListResult` 需要把会话正文、活体元数据与交互投影成 Sync 登记的视图，其中 `session.read` 的 `messages` 还要对事件正文做聚合——那条路径属 Access facade 的正文切片。Owner **不得**为避免该错误而返回被裁剪的结果或把结构化事件退化成文本（§15 的保真要求优先）；Access 在本切片遇到该错误码就应显式报「该命令在本版本不可用」，不要当成重试可恢复的失败。
 
 ### 12.8 消息名 ↔ schema 对照
 
@@ -794,6 +800,7 @@ consumed
 ```
 
 - **状态查询一律返回 `200`**，包括 `expired` 与 `consumed`；业务状态只由 body 的 `status` 表达。
+- 本机已不持有配对 secret 时（到期，或 `approved` 配对首次 WSS 认证成功后按上方末条清除），终态配对（`rejected`/`expired`/`consumed`）的状态查询仍按 `200` 报告其业务状态（终态判定不依赖对端输入），非终态配对返回 `401`。
 - `approved` 响应只返回该节点的非秘密元数据、`grant.*` 与 Owner identity；不签发 bearer token。首次正式 WSS 连接仍执行完整 challenge-response。
 - 状态查询在 `pending_confirmation`、`approved` 和 `rejected` 下可以安全重复；每次轮询生成新 `requestNonce`，只有网络重试才复用原 nonce 并获得原响应。
 - 观察到 `approved` 后开始 WSS 认证；观察到 `rejected`、`expired` 或 `consumed` 后停止轮询。

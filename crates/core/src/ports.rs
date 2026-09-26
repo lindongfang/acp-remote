@@ -308,6 +308,37 @@ pub struct HistoryQuery {
     pub limit: ReplayLimit,
 }
 
+/// owned 事件 + 其持久化正文（Node Link 的 origin 重放与事件扇出共用；定位与正文严格同源，
+/// 都来自同一次读视图）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnedEventRecord {
+    pub event: CommittedEvent,
+    pub payload: EventPayload,
+}
+
+/// 未决交互 + 创建它的 origin 事件 id（Node Link 快照的 `pending_interactions` item 需要那个事件的
+/// payload 才能算出 wire 的 `payloadDigest`；交互行本身不落库正文）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingInteractionOrigin {
+    pub interaction: PendingInteraction,
+    pub origin_event: EventId,
+}
+
+/// 一个会话的 Node Link 读视图（[`ReadView::node_link_slice`] 的返回值）：快照需要的元数据与
+/// `after` 之后的事件切片，在**同一次只读事务**内取得（快照 barrier 与正文同源）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkSlice {
+    /// 会话摘要：快照的 `sessionMeta` 只取它的 `state`/`version`。
+    pub summary: SessionSummary,
+    /// 该会话当前的 origin cursor（`origin_epoch` 与该会话已提交的最大 `origin_sequence`）。
+    /// 会话尚无事件时序列为 0（origin cursor 的空值，不是「不存在」）。
+    pub head: OriginCursor,
+    /// 未决交互（快照的 `pending_interactions`）。
+    pub pending_interactions: Vec<PendingInteractionOrigin>,
+    /// `after` 之后的事件，按 `origin_sequence` 升序。
+    pub events: Vec<OwnedEventRecord>,
+}
+
 /// 历史页面。`config`/`capabilities` 是**用例层**按 `include` 合并的活体数据（来自
 /// `SessionEndpoint`/`AgentCatalog`）；存储层实现必须让它们保持空值——持久层不保存活体能力。
 #[derive(Debug, Clone, PartialEq)]
@@ -377,6 +408,29 @@ pub trait ReadView: Send + Sync {
     /// 可用时 `raw_json` 必须字节保真，不可用时按行里的 `acp_raw_unavailable_reason` 还原为
     /// `AcpRaw::Unavailable`。事件不存在返回 `None`。
     async fn event_payload(&self, event: &EventId) -> Result<Option<EventPayload>, PortError>;
+
+    /// Node Link 的会话读视图（`docs/NODE_LINK_PROTOCOL.md` §12.4，`design.md` D6）：快照元数据
+    /// （会话摘要、origin head、未决交互）与 `after` 之后的会话事件**含持久化正文**，在同一次只读
+    /// 事务内取得。
+    ///
+    /// `after` 的 `origin_epoch` 与该会话当前 epoch 是否一致由**调用方**判定（本方法只按
+    /// `origin_sequence > after` 取行，不替调用方解释 epoch 不符）；会话不存在返回 `NotFound(Session)`。
+    async fn node_link_slice(
+        &self,
+        session: &SessionId,
+        after: Option<OriginCursor>,
+        limit: ReplayLimit,
+    ) -> Result<NodeLinkSlice, PortError>;
+
+    /// 指定会话内某条 owned 事件的正文；事件 id 与会话必须同时匹配，否则返回 `None`。
+    ///
+    /// 还原规则与 [`ReadView::event_payload`] 逐条相同，额外把读取面收窄到「该会话的事件」：
+    /// Node Link 的事件扇出只按会话归属取正文，不提供按任意 event id 的通用读取。
+    async fn session_event_payload(
+        &self,
+        session: &SessionId,
+        event: &EventId,
+    ) -> Result<Option<EventPayload>, PortError>;
 }
 
 /// imported 家族的唯一写入口载荷：**无正文**（§7.4）。
@@ -679,6 +733,35 @@ pub struct ExpiryWrite {
     pub context: WriteContext,
 }
 
+/// 消费一个已批准的配对（§11.6 第 8 条）。
+///
+/// `actor` 是本次认证的主体：只接受与该配对**已批准对端**一致的 `Actor::Node`/`Actor::Device`（存储层
+/// 在同一事务内与 `owned_pairing_peer` 比对）；`context.audit` 必须携带与 `actor` 同主的审计行
+/// （`node.authenticated`/`device.authenticated`，`SECURITY_DESIGN.md` §14.2）。
+///
+/// 写集在同一个事务里还推进「本次认证的对端节点行」的 `last_connected_at`（§11.6 第 9 条）：
+/// `actor` 为 `Actor::Node` 时该行是 `(actor.node, NodeKind::Access)`——节点配对行只由
+/// `node.pair.begin --mode owner` 创建，批准时写下的角色恒为 `access`（§11.6 第 3 条），因此这一行
+/// 由写集本身唯一确定；`Actor::Device` 的配对没有节点行，不做这一步。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingConsumption {
+    pub pairing: PairingId,
+    pub actor: Actor,
+    pub context: WriteContext,
+}
+
+/// 认证成功的收尾写集（§11.6 第 9 条）：把 `(node, kind)` 角色行的 `last_connected_at` 推进到
+/// `context.at`，并把 `context.audit`（该对端的 `node.authenticated` 成功行）在**同一事务**提交。
+///
+/// 它服务「认证成功但没有待消费配对」的重复认证；首次认证（已批准配对 → `consumed`）的同一职责由
+/// [`PairingConsumption`] 在消费写集里承担。Node Link 的连接对端在本机的角色恒为 `NodeKind::Access`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeConnectedWrite {
+    pub node: NodeId,
+    pub kind: NodeKind,
+    pub context: WriteContext,
+}
+
 /// 写入/更新一个 Export（§11.6）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportWrite {
@@ -765,6 +848,13 @@ pub trait TrustStore: Send + Sync {
     /// 已认领的对端行（确认事务从它读回公钥，§11.5）。
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;
 
+    /// 该对端**最近一次**配对（`design.md` D3：Node Link 握手准入手里的绑定与待消费配对来源）。
+    ///
+    /// 配对行本身是「登记方宣告的 `host_binding`」的唯一权威（`PairingRecord`，§11.2 第 1 条），
+    /// 而节点信任行不带该列；同一对端先后可能有多条配对行，因此这里按 `created_at`、`pairing_id`
+    /// 降序取一条，结果确定（同一次读取的输入决定同一次读取的输出）。没有任何配对行时返回 `None`。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError>;
+
     async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError>;
 
     async fn put_node(&self, write: NodeWrite) -> Result<(), PortError>;
@@ -786,6 +876,16 @@ pub trait TrustStore: Send + Sync {
     ) -> Result<TrustRecordRef, PortError>;
 
     async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError>;
+
+    /// 消费一个已批准的配对（§11.6 第 8 条）：单事务把状态推进到 `consumed` 并写 `terminal_at`、追加
+    /// `context.audit`；已是 `consumed` 且 `actor` 与对端一致时幂等成功（不覆盖首次 `terminal_at`，也
+    /// 不重复写审计）。写集还推进对端节点行的 `last_connected_at`（见 [`PairingConsumption`]）。
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError>;
+
+    /// 认证成功的收尾写集（§11.6 第 9 条）：单事务把 `(node, kind)` 行的 `last_connected_at` 推进到
+    /// `context.at`（只前进不倒退、不抹掉已存值）并追加 `context.audit`；该行不存在 →
+    /// `NotFound(EntityRef::Node)`。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError>;
 }
 
 /// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。
@@ -869,6 +969,13 @@ pub trait AuditStore: Send + Sync {
     async fn append(&self, record: AuditRecord) -> Result<(), PortError>;
 
     async fn query(&self, query: AuditQuery) -> Result<Vec<AuditRecord>, PortError>;
+
+    /// 管理写集的变更水位（`docs/NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）：只增不减的
+    /// 审计自增序号。
+    ///
+    /// 取值必须是该库**曾经写入过的最大审计序号**，不得随清理回退——Export/信任写集各自追加一行审计，
+    /// 因此它正是「Export 与信任写集的变更点」，且在重启与保留期清理之后仍然单调。
+    async fn watermark(&self) -> Result<u64, PortError>;
 }
 
 /// 内容寻址附件的引用。`id` 由存储层分配（`AttachmentStore::put` 不接受 id 参数）。

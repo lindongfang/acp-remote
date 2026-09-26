@@ -1,7 +1,7 @@
 # ACP Remote 开发计划
 
 > 状态：实施路线图；记录建议的交付顺序与验收节点，不新增产品、协议或安全合同。
-> 基线：2026-09-23（2026-09-24 随 `identity-auth-and-keystore` 补充切片 3 的落地状态，2026-09-25 随 `daemon-cli-and-local-admin` 补充切片 4 的落地状态）。实际能力以代码和测试为准；各项待实现内容以其权威文档为准。
+> 基线：2026-09-23（2026-09-24 随 `identity-auth-and-keystore` 补充切片 3 的落地状态，2026-09-25 随 `daemon-cli-and-local-admin` 补充切片 4 的落地状态，2026-09-26 随 `node-link-owner` 补充切片 5 的落地状态）。实际能力以代码和测试为准；各项待实现内容以其权威文档为准。
 
 ## 1. 目标与边界
 
@@ -11,7 +11,7 @@
 
 ## 2. 当前基线
 
-Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`，以及切片 2 在 `acp-boundary-and-agent-host` 变更中落地的 `acp-protocol` 与 `agent-host`。其中 core 的会话用例和 broker、SQLite 的 owned/imported 会话存储、Sync/Node Link v1 wire 类型，以及 `acp-protocol` 的 ACP v1 wire 与 `agent-host` 的本机 Agent backend 已有实现。管理状态持久化的 core 端口与 SQLite 存储两层已落地。切片 3 在 `identity-auth-and-keystore` 变更中落地了 `identity-auth`（纯状态机：配对、逐连接 challenge-response、授权展开、12 个 transcript domain）与 `identity-keystore`（Windows DPAPI 包裹 + 非 Windows 失败关闭）。切片 4 在 `daemon-cli-and-local-admin` 变更中落地了 `app`（组合根、Daemon 生命周期与单实例锁、全部 CLI 子命令）与 `server` 的本地通道（`server::transport::local` + `server::local_admin`）；`server::sync`、`server::node_link`、`server::acp_facade` 与 `node-link-client` 仍待后续切片，前端工程尚未开始。详细范围以 [README 的仓库当前状态](../README.md#仓库当前状态)为准；切片 2 的验收与合入状态以该变更的记录为准，不以本文的列举为完成声明。
+Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`，以及切片 2 在 `acp-boundary-and-agent-host` 变更中落地的 `acp-protocol` 与 `agent-host`。其中 core 的会话用例和 broker、SQLite 的 owned/imported 会话存储、Sync/Node Link v1 wire 类型，以及 `acp-protocol` 的 ACP v1 wire 与 `agent-host` 的本机 Agent backend 已有实现。管理状态持久化的 core 端口与 SQLite 存储两层已落地。切片 3 在 `identity-auth-and-keystore` 变更中落地了 `identity-auth`（纯状态机：配对、逐连接 challenge-response、授权展开、12 个 transcript domain）与 `identity-keystore`（Windows DPAPI 包裹 + 非 Windows 失败关闭）。切片 4 在 `daemon-cli-and-local-admin` 变更中落地了 `app`（组合根、Daemon 生命周期与单实例锁、全部 CLI 子命令）与 `server` 的本地通道（`server::transport::local` + `server::local_admin`）。切片 5 在 `node-link-owner` 变更中落地了 `server::transport::net`（默认 loopback 的共享 HTTP/WSS listener、TLS `proxy`/`direct`、`Host` 边界，以及 `/sync/v1`、`/node-link/v1`、两类 `/pairing/*` 的 path 路由）与 `server::node_link`（Owner 侧配对 HTTP、节点握手、Export catalog、resource、command 与撤销传播），并由 `app` 组合根接线；该切片的四条验收（只有已授权 Access 能访问导出的资源、先持久化再发布、相同 `requestId` 不重复派发、撤销后旧连接不能再取资源或发命令）已由受控路径的端到端用例覆盖，原始输出在该变更的 `reports/wp7-integration.log` 与 `reports/pv5-windows-nodelink.log`。`server::sync`、`server::acp_facade` 与 `node-link-client` 仍待后续切片，前端工程尚未开始。详细范围以 [README 的仓库当前状态](../README.md#仓库当前状态)为准；切片 2 的验收与合入状态以该变更的记录为准，不以本文的列举为完成声明。
 
 计划中的每一项都是待交付能力，不因为合同门禁通过就视为已经实现。特别是[核心与存储合同 §11](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的形状（值对象、写集端口、管理表 DDL 与 v1 → v2 迁移）已并入该合同 §3/§5/§7，`storage-sqlite` 的管理 store 落盘实现与切片 4 的 Daemon/CLI 接线也已落地；本切片剩余的是端到端验收。
 
@@ -21,7 +21,7 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 ### 1. 管理状态与配置持久化
 
-将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现已落地；切片 4 已完成 Daemon/CLI 接线与本地管理通道（`server` 的本地适配器与 `app`），本切片剩余的是**端到端验收**（`server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client` 属后续切片）。
+将[核心与存储合同](CORE_PORTS_AND_STORAGE.md#11-管理状态持久化合同形状已并入-357)的管理状态形状落入 core 端口与 `storage-sqlite`：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。端口签名、写集 DTO 与 DDL 已并入该合同 §5/§7，`storage-sqlite` 侧的 store 落盘实现已落地；切片 4 已完成 Daemon/CLI 接线与本地管理通道（`server` 的本地适配器与 `app`），本切片剩余的是**端到端验收**（切片 5 已落地其中的 Owner 侧 Node Link；`server::sync`/`server::acp_facade` 与 `node-link-client` 属后续切片）。
 
 验收：旧数据库升级、事务原子性、重启恢复、撤销及损坏记录失败关闭均有测试；imported 表和端口仍不能写入远程会话正文。
 

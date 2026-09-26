@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "node.challenge",
+  "messageId": "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
+  "body": {
+    "selectedProtocolVersion": 1,
+    "connectionId": "40414243-4445-4647-8849-4a4b4c4d4e4f",
+    "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    "serverNonce": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+    "selectedFeatures": [
+      "node-link.command-status.v1",
+      "node-link.core.v1",
+      "node-link.export-revoke.v1",
+      "node-link.raw-acp.v1",
+      "node-link.session-create.v1"
+    ],
+    "nodeProof": "zYaaF6eKvSWQ2ozqvVQaVYVYPO4ytlDmpfBNr2Rrvuyvnf88zysPF2Wz8tGuBZwBbqxou4DMav7wkl9ew5POgg"
+  }
+}

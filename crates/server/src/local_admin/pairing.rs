@@ -20,7 +20,8 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    DeviceId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey, Timestamp,
+    DeviceId, ExportId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey,
+    Timestamp,
 };
 use base64::Engine as _;
 use identity_auth::{
@@ -34,11 +35,13 @@ use crate::local_admin::error::{AdminError, LocalErrorCode};
 /// （`SYNC_PROTOCOL.md` §7、§14；`LOCAL_ADMIN_PROTOCOL.md` §5.3）。`expiresInMs` 只能收窄。
 pub const PAIRING_WINDOW_MS: u64 = 300_000;
 
-/// 撤销提交后关闭该设备/节点的 active connection（`§5.3`/`§5.4`、`SECURITY_DESIGN.md` §9.5）。
+/// 撤销提交后关闭该设备/节点的 active connection 与通知 Export 撤销（`§5.3`/`§5.4`、
+/// `SECURITY_DESIGN.md` §9.5、`design.md` D7）。
 ///
-/// 组合根是连接表的唯一持有者，因此 server 只表达「这个身份已被撤销」这一事实，由实现决定关闭哪些
-/// 连接、以及如何停止本地重连。两个方法都返回 `()`：撤销已经在 core 的事务里提交，关闭失败只能记日志，
-/// 不能让方法失败或回滚（与 §11.6 第 5 条「先提交再通知，发送失败不撤销数据库决定」同款口径）。
+/// 组合根是连接表的唯一持有者，因此 server 只表达「这个身份/资源已被撤销」这一事实，由实现决定关闭哪些
+/// 连接、推送哪条撤销消息、以及如何停止本地重连。三个方法都返回 `()`：撤销已经在 core 的事务里提交，
+/// 关闭/推送失败只能记日志，不能让方法失败或回滚（与 §11.6 第 5 条「先提交再通知，发送失败不撤销
+/// 数据库决定」同款口径）。
 #[async_trait::async_trait]
 pub trait ConnectionCloser: Send + Sync {
     /// 关闭该设备的全部 active connection（没有连接时是 no-op）。
@@ -46,6 +49,10 @@ pub trait ConnectionCloser: Send + Sync {
 
     /// 关闭该节点的全部 active connection，并停止本地对该节点的重连（没有连接时是 no-op）。
     async fn close_node(&self, node: &NodeId);
+
+    /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`NODE_LINK_PROTOCOL.md` §12.6 的
+    /// `export.revoked`；没有连接时是 no-op）。推送失败不回滚已提交的撤销；授权面不依赖该推送。
+    async fn export_revoked(&self, export: &ExportId);
 }
 
 /// 没有连接表时的 no-op 实现（本切片的网络 listener 与 Node Link 重连都尚未落地）。
@@ -56,6 +63,8 @@ impl ConnectionCloser for NoConnections {
     async fn close_device(&self, _device: &DeviceId) {}
 
     async fn close_node(&self, _node: &NodeId) {}
+
+    async fn export_revoked(&self, _export: &ExportId) {}
 }
 
 /// 配对方法与 `identity-auth` 状态机之间的注入口。
@@ -211,6 +220,11 @@ impl PairingSessions {
     /// `node.revoke` 提交后关闭该节点的 active connection（并停止本地重连）。
     pub async fn close_node(&self, node: &NodeId) {
         self.closer.close_node(node).await;
+    }
+
+    /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`export.revoked`）。
+    pub async fn export_revoked(&self, export: &ExportId) {
+        self.closer.export_revoked(export).await;
     }
 }
 

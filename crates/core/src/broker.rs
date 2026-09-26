@@ -27,17 +27,17 @@ use std::task::{Context, Poll, Waker};
 
 use crate::model::{
     Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind, CommandPayload,
-    CommandReceipt, CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery,
-    CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind, CreateSessionRequest, Digest,
-    ElicitationAction, ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin,
-    EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind, InteractionResolution,
-    LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef,
-    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
-    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef,
-    RequestId, Resolution, Sequence, SessionId, SessionReference, SessionState, StoredPolicy,
-    Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
-    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
-    object_members as json_members, top_level_member,
+    CommandReceipt, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
+    CommittedDelivery, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
+    CreateSessionRequest, Digest, ElicitationAction, ElicitationValues, EndpointEvent, EntityRef,
+    EventKind, EventOrigin, EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind,
+    InteractionResolution, LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, NodeKind,
+    NodeState, OriginEventRef, OwnedSessionRef, PendingEvent, PendingInteraction,
+    PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock,
+    PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution, Sequence, SessionId,
+    SessionReference, SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
+    Version, ViewJson, decode_json_string as json_string, encode_json_string as json_text,
+    insert_string_member_front, object_members as json_members, top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
@@ -45,7 +45,7 @@ use crate::ports::{
     IdempotencyRecord, InteractionResolved, ModeChange, NewSession, NewTurn, OwnedCommit,
     PendingInteractionWrite, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch,
     ReplayLimit, SessionBackendFactory, SessionEndpoint, SessionStore, SessionUpdate, StateChange,
-    TurnChange, TurnUpdate,
+    TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -233,6 +233,9 @@ pub struct BrokerDeps {
     pub deliveries: Arc<dyn RemoteDeliveryStore>,
     pub backends: Arc<dyn SessionBackendFactory>,
     pub exports: Arc<dyn ExportStore>,
+    /// 节点信任记录：`Actor::Node` 的 Owner 侧授权需要「该 Access 信任行已配对且 grants 含所需 grant」
+    /// （§6.5），因此授权判定不能只靠 Export 记录。
+    pub trust: Arc<dyn TrustStore>,
     pub publisher: Arc<dyn EventPublisher>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGenerator>,
@@ -242,6 +245,14 @@ pub struct BrokerDeps {
 
 /// 不带 wire 指纹的入口使用的规范占位摘要（32 个零字节的 base64url，无填充、末字符在规范集合内）。
 const PLACEHOLDER_FINGERPRINT: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+/// §6 第 9 条（RV2-WP7-F1）的兜底：被放弃 turn 的【占位】最多消耗多少个**驱动轮次**。
+///
+/// core 不读时钟、不设定时器，因此这里按轮次而不是墙钟计时：每个驱动轮次 = 一次派发尝试，组合根按
+/// `storage.flush_interval_ms`（默认 250 ms）周期驱动活动会话，`1200` 轮 ≈ 5 分钟。轮次用尽仍未观测到
+/// 终态说明端点的 turn 边界已不可信，此时优先让会话继续可用（释放占位，迟到事件的归属回到「在跑的
+/// turn」规则）。
+const ABANDONED_TURN_HOLD_ROUNDS: u32 = 1200;
 
 /// 每会话串行门（§6.3：一个会话一个串行队列，不同会话并行）。
 ///
@@ -391,6 +402,25 @@ struct TurnQueue {
     running_request: Option<RequestId>,
     running_actor: Option<Actor>,
     waiting: VecDeque<QueuedTurn>,
+    /// §6 第 9 条（RV2-WP7-F1）：被放弃、但还没有被端点观测到终态的 turn——它继续占住
+    /// `running` 槽位（见 [`HeldTurn`]）。
+    held: Option<HeldTurn>,
+}
+
+/// 被放弃的 turn 的【占位】：`abandon_failed_turn` 之后不让出 `running` 槽位，直到它的终态被端点观测到。
+///
+/// 为什么必须占住：适配器（`agent-host`）发出的 `EndpointEvent` **不带** turn 标识，归属只能由 core 按
+/// 「有在跑 turn 时归给它」推断（§10.3）。若放弃后立刻派发下一个排队 turn，下一个 turn 就成了「在跑的
+/// turn」，被放弃 turn 的迟到事件（含终态）会被记到它头上——客户端看到下一个命令 `completed`，而它的
+/// 正文被按上一个 turn 的收尾折叠（RV2-WP7-F1）。占住期间迟到事件一律按被放弃的 turn 归属并丢弃。
+///
+/// 释放路径：①该 turn 的终态事件到达（视为端点已观测到该 turn 结束）；②兜底：占位轮次用尽
+/// （[`ABANDONED_TURN_HOLD_ROUNDS`]，避免端点永不收敛时会话永久卡住）。释放之后无归属事件的归属
+/// 回到「在跑的 turn」规则，因此兜底是最后手段而不是常规路径。
+struct HeldTurn {
+    turn: TurnId,
+    /// 已经消耗的驱动轮次（每轮 = 一次派发尝试，见 [`Slot::hold_blocks_dispatch`]）。
+    rounds: u32,
 }
 
 /// 一个会话的运行时状态（owned 与 imported 各一份，键见 [`Broker::slot_key`]）。
@@ -406,6 +436,11 @@ struct Slot {
     /// §6 第 15 条：该 turn 已提交的 delta 行的 global_sequence，终态后用于 `turn.delta_compacted`
     /// 的 `compacted` 清单（server epoch 在提交压缩时从 `head()` 取，避免拿事件自己的 origin epoch 冒充）。
     turn_deltas: Mutex<HashMap<String, Vec<Sequence>>>,
+    /// §6 第 9 条：因落盘失败被放弃的 turn（见 [`Broker::abandon_failed_turn`]），按放弃顺序排列。
+    /// 它们的后续事件（含终态）不再提交：正文已经缺块，不得再在库里留下 `completed`；
+    /// 最后一个也是「需要 `turnId` 但适配器未带标识的迟到事件」的兜底归属者（适配层不带 turn，
+    /// 归属由 [`crate::broker`] 按 §10.3 的集合完成）。
+    abandoned: Mutex<Vec<TurnId>>,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -442,6 +477,54 @@ impl Slot {
         queue.running = None;
         queue.running_request = None;
         queue.running_actor = None;
+    }
+
+    /// 该会话是否还有等待派发的 turn（放弃提交用它决定会话状态，见 [`Broker::abandon_failed_turn`]）。
+    fn has_waiting_turn(&self) -> bool {
+        !lock(&self.queue).waiting.is_empty()
+    }
+
+    /// §6 第 9 条（RV2-WP7-F1）：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
+    fn hold_abandoned_turn(&self, turn: &TurnId) {
+        let mut queue = lock(&self.queue);
+        queue.held = Some(HeldTurn {
+            turn: turn.clone(),
+            rounds: 0,
+        });
+    }
+
+    /// 释放【占位】：只有占位者本人能释放（更早被放弃的 turn 的迟到终态不得提前放行会话）。
+    fn release_held_turn(&self, turn: &TurnId) {
+        let mut queue = lock(&self.queue);
+        if queue.held.as_ref().map(|held| &held.turn) != Some(turn) {
+            return;
+        }
+        queue.held = None;
+        if queue.running.as_ref() == Some(turn) {
+            queue.running = None;
+            queue.running_request = None;
+            queue.running_actor = None;
+        }
+    }
+
+    /// 派发前的占位检查。返回 `true` = 仍在占位、本轮不得派发；`false` = 没有占位（可派发）。
+    ///
+    /// 兜底在这里推进（core 不读时钟、不设定时器，因此按驱动轮次而不是墙钟计时，见
+    /// [`ABANDONED_TURN_HOLD_ROUNDS`]）。
+    fn hold_blocks_dispatch(&self) -> bool {
+        let expired = {
+            let mut queue = lock(&self.queue);
+            let Some(held) = queue.held.as_mut() else {
+                return false;
+            };
+            held.rounds = held.rounds.saturating_add(1);
+            if held.rounds < ABANDONED_TURN_HOLD_ROUNDS {
+                return true;
+            }
+            held.turn.clone()
+        };
+        self.release_held_turn(&expired);
+        false
     }
 }
 
@@ -506,6 +589,7 @@ impl Broker {
                     queue: Mutex::new(TurnQueue::default()),
                     deltas: Mutex::new(HashMap::new()),
                     turn_deltas: Mutex::new(HashMap::new()),
+                    abandoned: Mutex::new(Vec::new()),
                 })
             })
             .clone()
@@ -532,6 +616,8 @@ impl Broker {
     /// - `Device`：`scopes` 是展开后的独立 scope（等于命令名），必须含该命令。
     /// - `Node`：Access 侧要求本地 `ImportRecord.grants` 覆盖该命令；Owner 侧要求某个未撤销
     ///   `ExportRecord` 既覆盖该命令、又覆盖目标会话的 agent。两者任一成立即通过。
+    /// - `PairingClaimant`：**任何命令都不授权**（design D12：认领方只存在于配对通道，且那里不经
+    ///   broker 授权）；命中即失败关闭并记一条 `authorization.denied`。
     pub async fn authorize(
         &self,
         actor: &Actor,
@@ -547,6 +633,8 @@ impl Broker {
                 .node_allowed(node, command, session)
                 .await
                 .unwrap_or(false),
+            // 配对认领方没有 scope/grant 面：不给任何命令授权（见方法文档）。
+            Actor::PairingClaimant { .. } => false,
         };
         if allowed {
             return Ok(());
@@ -556,6 +644,19 @@ impl Broker {
         Err(denied)
     }
 
+    /// `Actor::Node` 的判定：Access 侧与 Owner 侧各有一条路径，任一成立即通过。
+    ///
+    /// Access 侧（本节点是 `node` 的**客户端**）：本地 `ImportRecord.grants` 覆盖该命令。
+    ///
+    /// Owner 侧（本节点是导出方）：有效权限是「Export grant ∩ 该 Access 信任记录 grant」的交集——
+    /// 信任记录必须是已配对的 `access` 行且其 `grants` 含该命令所需的 grant；同时某个未撤销
+    /// `ExportRecord` 必须覆盖该命令（`scopes` 含该 grant）并与该节点的信任记录 grants 有交集
+    /// （`export.scopes ∩ node.grants ≠ ∅`，与 Node Link 的可见性口径同源）；此外**会话命令**还必须
+    /// 落在覆盖目标会话 agent 的 Export 上。
+    ///
+    /// 无会话命令（`session.list`/`command.status`/`session.create`）没有目标会话可比对 agent，
+    /// 因此 Owner 侧按「该节点是否与某个覆盖该命令的 Export 有关联」判定；`session.list` 的结果过滤
+    /// 与 `session.create` 的参数校验仍由 `server::node_link` 按其单点可见性策略完成，本层只判授权。
     async fn node_allowed(
         &self,
         node: &NodeId,
@@ -571,7 +672,22 @@ impl Broker {
                 return Ok(true);
             }
         }
-        // Owner 侧：某个未撤销 Export 覆盖该命令，且覆盖目标会话的 agent。
+        // 节点信任记录：Owner 侧的有效权限是「Export grant ∩ 该 Access 信任记录 grant」的交集，
+        // 因此信任行缺失/未配对或 grants 不含该命令所需的 grant 时直接失败关闭（不因为某个 Export
+        // 恰好覆盖就放行）。
+        let trust = self
+            .deps
+            .trust
+            .node(node, NodeKind::Access)
+            .await?
+            .filter(|row| row.state() == NodeState::Paired);
+        let Some(trust) = trust else {
+            return Ok(false);
+        };
+        if !trust.grants().contains(grant) {
+            return Ok(false);
+        }
+        // Owner 侧：某个未撤销 Export 覆盖该命令；会话命令还必须覆盖目标会话的 agent。
         let agent = match session {
             Some(session) => self
                 .deps
@@ -581,19 +697,33 @@ impl Broker {
                 .map(|snapshot| snapshot.session.agent().clone()),
             None => None,
         };
-        let Some(agent) = agent else {
+        if session.is_some() && agent.is_none() {
             return Ok(false);
-        };
+        }
         for export in self.deps.exports.exports().await? {
             if export.revoked_at().is_some() || !export.scopes().contains(grant) {
                 continue;
             }
             if export
-                .agent_ids()
+                .scopes()
                 .iter()
-                .any(|id| id.as_str() == agent.agent_id().as_str())
+                .all(|scope| !trust.grants().contains(scope))
             {
-                return Ok(true);
+                // 与该节点信任记录不相交的 Export 不是它的授权来源（Node Link 的可见性口径）。
+                continue;
+            }
+            match &agent {
+                Some(agent) => {
+                    if export
+                        .agent_ids()
+                        .iter()
+                        .any(|id| id.as_str() == agent.agent_id().as_str())
+                    {
+                        return Ok(true);
+                    }
+                }
+                // 无会话命令：与该节点有关联且覆盖该命令的 Export 存在即通过。
+                None => return Ok(true),
             }
         }
         Ok(false)
@@ -805,7 +935,7 @@ impl Broker {
         }
         let target = turn.clone().or_else(|| slot.running_turn());
         let endpoint = self.endpoint(&slot, &session).await?;
-        let dispatched = endpoint.cancel(target).await;
+        let dispatched = endpoint.cancel(target.clone()).await;
         // 后端会经 sink 发 `turn.cancelled`；它由本调用驱动落盘（含 prompt 命令的终态，§11.2）。
         self.flush_locked(&slot, &session).await?;
         let at = self.now();
@@ -818,7 +948,12 @@ impl Broker {
             Ok(()) => None,
             Err(error) => Some(self.port_error_public(error)?),
         };
-        self.commit_terminal(&session, command, status, error, None, &at)
+        // 取消成功的收据带被取消的 turn（已知时）；失败时只有错误，不编造 turn。
+        let result = match (&dispatched, target.as_ref()) {
+            (Ok(()), Some(turn)) => Some(turn_result(turn)?),
+            _ => None,
+        };
+        self.commit_terminal(&session, command, status, error, result, None, &at)
             .await?;
         Ok(CommandReceipt::Accepted {
             request: command.request.clone(),
@@ -879,6 +1014,7 @@ impl Broker {
                     command,
                     CommandStatus::Failed,
                     Some(public),
+                    None,
                     None,
                     &at2,
                 )
@@ -944,6 +1080,7 @@ impl Broker {
                     CommandStatus::Failed,
                     Some(public),
                     None,
+                    None,
                     &at2,
                 )
                 .await?;
@@ -1007,7 +1144,7 @@ impl Broker {
                 .map_err(PortError::from)?,
             ),
         };
-        self.commit_terminal(&session, command, status, error, None, &at)
+        self.commit_terminal(&session, command, status, error, None, None, &at)
             .await?;
         Ok(CommandReceipt::Accepted {
             request: command.request.clone(),
@@ -1066,7 +1203,7 @@ impl Broker {
                 ),
             ),
         };
-        self.commit_terminal(&session, command, status, error, None, &at)
+        self.commit_terminal(&session, command, status, error, None, None, &at)
             .await?;
         Ok(CommandReceipt::Accepted {
             request: command.request.clone(),
@@ -1207,29 +1344,51 @@ impl Broker {
     }
 
     /// `session.create`（Node Link 命令，§12.7）。返回 Owner 分配的 `SessionId`。
+    ///
+    /// 幂等键是协议维度的 `(actor, requestId)`（§6 第 6 条），`requestId` 与 `request_fingerprint`
+    /// 由适配层给出（Node Link 的 `requestId` 与 ACPR-CJ1 后的 payload 摘要）。**创建会话与幂等行在
+    /// 同一次提交**：崩溃窗口里留下的是 `accepted` 行 + 已存在的会话，启动恢复按 §6 第 16 条把它终结为
+    /// `uncertain`（不重复创建）。
+    ///
+    /// 同键重试（含重启后）由存储层按幂等行重放：本次**不**创建第二个会话、也**不**开第二个后端端点，
+    /// 返回首次结果的 `SessionId`；键相同而 `command`/`kind`/指纹/`expected_version` 任一不同 →
+    /// `Conflict(IdempotencyConflict)`（§6 第 6 条）。
     pub async fn create_session(
         &self,
         actor: &Actor,
-        request: CreateSessionRequest,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        create: CreateSessionRequest,
     ) -> Result<SessionId, PortError> {
-        let audit_request = self.deps.ids.request_id();
-        self.authorize(actor, "session.create", None, &audit_request)
+        self.authorize(actor, "session.create", None, request)
             .await
             .map_err(Denied::into_port_error)?;
+        let at = self.now();
         let origin_epoch = self.deps.ids.origin_epoch();
         let commit = OwnedCommit {
             session: None,
-            at: self.now(),
+            at: at.clone(),
             expected_version: None,
             state: Some(StateChange::Create(NewSession {
                 title: None,
-                agent: request.agent.clone(),
+                agent: create.agent.clone(),
             })),
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
             compacted: Vec::new(),
-            idempotency: None,
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: request.clone(),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                // 目标会话在本次提交的事务内才分配，装配方预知不了：存储层把新会话 id 写进这一行
+                // （§6 第 20 条），使终态提交与启动恢复都能按 `(session, requestId)` 定位它。
+                session: None,
+                expected_version: None,
+                request_fingerprint: request_fingerprint.clone(),
+                accepted_at: at,
+            }),
             command_terminal: None,
             origin_epoch: Some(origin_epoch),
         };
@@ -1239,16 +1398,104 @@ impl Broker {
                 "commit 未返回新建会话的 sessionId",
             ));
         };
+        if outcome.replayed.is_some() {
+            // 同键重试（或并发重复）：首次结果已存在，副作用只发生一次。
+            return Ok(session);
+        }
         let slot = self.owned_slot(&session);
         let sink = self.sink(&session);
         let endpoint: Arc<dyn SessionEndpoint> = self
             .deps
             .backends
-            .create(&session, request, sink)
+            .create(&session, create, sink)
             .await?
             .into();
         *lock(&slot.endpoint) = Some(endpoint);
         Ok(session)
+    }
+
+    /// `session.create` 的终态提交（§6 第 20 条、§12.7）。返回本次是否真的写入了终态。
+    ///
+    /// `status` 必须是终态：`completed` 必须带 `result` 且不带 `error`，其余必须带 `error`（形状由
+    /// [`CommandTerminalRecord::try_new`] 校验）。**幂等 no-op** 的两种情况：该 `(actor, requestId)`
+    /// 没有持久记录（创建在幂等行落盘前就失败），或记录已经终结（首次结果不覆盖）。
+    ///
+    /// 只终结 `command == "session.create"` 的持久记录：该 `(actor, requestId)` 记着别的命令时是
+    /// 适配层误用（wire 不可达），显式 `InvalidRequest`，不把那条命令的幂等行改写成创建的终态。
+    ///
+    /// 落盘失败（`Unavailable`）不报成功：行仍是 `accepted`，由启动恢复按 §6 第 16 条终结为 `uncertain`。
+    pub async fn settle_session_create(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        if !status.is_terminal() {
+            return Err(PortError::InvalidRequest("命令终态必须是终止态"));
+        }
+        let Some(record) = self.deps.store.find_request(request, actor).await? else {
+            return Ok(false);
+        };
+        if record.command() != "session.create" {
+            return Err(PortError::InvalidRequest(
+                "settle_session_create 只能终结 session.create 的持久记录（§6 第 20 条）",
+            ));
+        }
+        if record.status().is_terminal() {
+            return Ok(false);
+        }
+        let Some(session) = record.session().cloned() else {
+            return Err(PortError::Corrupt(
+                "session.create 的持久记录缺少目标会话（§6 第 20 条）",
+            ));
+        };
+        let at = self.now();
+        let terminal =
+            CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
+        let (event_type, view) = match status {
+            CommandStatus::Completed => {
+                ("command.completed", view_command_completed(request, None)?)
+            }
+            CommandStatus::Failed => ("command.failed", view_command_failed(request, None)?),
+            _ => (
+                "command.uncertain",
+                view_command_uncertain(request, "无法确认会话是否已创建")?,
+            ),
+        };
+        let event = pending_event(
+            event_type,
+            EventKind::Structured,
+            view,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            Some(actor),
+        )?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(terminal),
+            origin_epoch: None,
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(true)
+            }
+            Err(PortError::Unavailable(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1363,6 +1610,8 @@ impl Broker {
     }
 
     /// 落盘 + 派发下一个排队 turn，直到该会话无事可做（§6.3/§6.4）。
+    ///
+    /// 被放弃 turn 的【占位】未释放时只落盘、不派发下一个排队 turn（§6 第 9 条，见 [`HeldTurn`]）。
     pub async fn pump(&self, session: &SessionId) -> Result<(), PortError> {
         let slot = self.owned_slot(session);
         let _guard = slot.gate.guard().await;
@@ -1428,8 +1677,35 @@ impl Broker {
         let mut delta_plan: Vec<(usize, TurnId, DeltaFragment)> = Vec::new();
         let mut completed_events: Vec<PendingEvent> = Vec::new();
         let mut compact_after: Option<(TurnId, usize)> = None;
+        // 失败批次是否携带了**在跑的** turn 的事件：只有它才需要在写失败时放弃该 turn（§6 第 9 条）。
+        let mut running_in_chunk = false;
         for (event_index, event) in chunk.into_iter().enumerate() {
-            let turn = event.turn.clone().or_else(|| running.clone());
+            let turn = event.turn.clone().or_else(|| {
+                if running.is_some() {
+                    return running.clone();
+                }
+                // §6 第 9 条 + §10.3 的归属规则：需要 `turnId` 的事件在没有在跑 turn 时，只可能属于
+                // 最后被放弃的那个 turn（适配器不带 turn 标识），兜底归属它。
+                if view_requires_turn_id(event.event_type.as_str()) {
+                    return lock(&slot.abandoned).last().cloned();
+                }
+                None
+            });
+            // §6 第 9 条：被放弃的 turn（曾发生落盘失败）不再接受任何事件，包括它的终态事件——
+            // 否则库里会留下「报完成但正文缺失」的记录。
+            if let Some(turn_id) = turn.as_ref() {
+                if lock(&slot.abandoned).contains(turn_id) {
+                    // §6 第 9 条（RV2-WP7-F1）：该 turn 的终态到达即「端点已观测到它结束」，占位随之
+                    // 释放（事件本身仍被丢弃）。
+                    if is_turn_terminal(&event.event_type) {
+                        slot.release_held_turn(turn_id);
+                    }
+                    continue;
+                }
+            }
+            if turn.is_some() && turn == running {
+                running_in_chunk = true;
+            }
             let policy = persistence_policy(&event.event_type);
             // §6 第 14 条：登记本批里的 delta 片段（提交成功后才并入累积）。
             if is_agent_message_delta(&event.event_type) {
@@ -1525,11 +1801,18 @@ impl Broker {
                     StoredPolicy::Durable,
                     running_actor.as_ref(),
                 )?);
+                // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
+                // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是 RV1-WP6-F3 的修复
+                // 点：在此之前所有 `completed` 记录的 `result` 都是 NULL，适配层只能回空 object。
+                let result = match (status, terminal_turn.as_ref()) {
+                    (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
+                    _ => None,
+                };
                 command_terminal = Some(CommandTerminalRecord::try_new(
                     status,
                     Some(at.clone()),
                     None,
-                    None,
+                    result,
                     error,
                 )?);
             }
@@ -1604,6 +1887,19 @@ impl Broker {
                         "事件落盘失败，无法确认已投递给客户端",
                     )
                     .await;
+                    return Ok(());
+                }
+                // §6.9：非终态批次的失败不能只丢弃——该 turn 的正文已经缺了一块，若让同一 turn 的
+                // 终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录（RV1-WP7-F3）。
+                if running_in_chunk {
+                    self.abandon_failed_turn(
+                        slot,
+                        session,
+                        running.as_ref(),
+                        running_request.as_ref(),
+                        running_actor.as_ref(),
+                    )
+                    .await?;
                 }
                 Ok(())
             }
@@ -1613,6 +1909,11 @@ impl Broker {
 
     /// 派发一个排队 turn：Queued → Running（`turn.started`）→ 后端 `prompt`。
     async fn dispatch_one(&self, slot: &Slot, session: &SessionId) -> Result<bool, PortError> {
+        // §6 第 9 条（RV2-WP7-F1）：被放弃 turn 的【占位】未释放前不得提升下一个排队 turn，
+        // 否则它的迟到事件会被记到下一个 turn 上（见 [`HeldTurn`]）。兜底轮次也在这里推进。
+        if slot.hold_blocks_dispatch() {
+            return Ok(false);
+        }
         let next = {
             let mut queue = lock(&slot.queue);
             if queue.running.is_some() {
@@ -1743,6 +2044,114 @@ impl Broker {
                 self.publish(&outcome.appended);
                 Ok(())
             }
+            Err(PortError::Unavailable(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// §6 第 9 条（RV1-WP7-F3）：非终态批次落盘失败后放弃在跑的 turn。
+    ///
+    /// 为什么必须终结而不能只丢批次：该 turn 的正文已经缺了一块，若它在后续批次里照常走到终态，库里
+    /// 就会留下「报完成但正文缺失」的记录。因此这里把 turn 终结为 `failed`、把命令置为 `uncertain`
+    /// （与 §6 第 16 条的恢复同一口径：无法确认已经落盘的部分与 Agent 的副作用），并把该 turn 登记为
+    /// 「已放弃」——它后续到达的事件与终态不再提交。
+    ///
+    /// 可观测信号是这次提交里的两条持久事件（`turn.failed` + `command.uncertain`）：core 不含日志依赖
+    /// （`AGENTS.md` §7），而错误上抛会把「已经终结的 turn」报成调用方（往往是另一个命令）的失败，
+    /// 与终态批失败时的既有口径不一致，因此这里不传播 `Unavailable`。
+    ///
+    /// 已落盘的 delta 仍按 §6 第 14 条收尾成 `agent.message.completed`（缺的段落不伪造）；不压缩它们
+    /// （§6 第 15 条是可选动作），错误路径上不再多发一次提交。
+    ///
+    /// **不让出会话槽**（RV2-WP7-F1）：放弃的 turn 继续占住 `running`（[`HeldTurn`]），直到它的终态被
+    /// 端点观测到；此前 `dispatch_one` 不得提升下一个排队 turn。这也会把它迟到的 permission/
+    /// elicitation 请求一并丢弃（不落交互行、不广播）——已经被终结为 `uncertain` 的 turn 不再接受
+    /// 交互，收敛该 turn 是端点的职责（`AGENTS.md` §3：一个状态只能有一个权威写入者）。
+    async fn abandon_failed_turn(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        turn: Option<&TurnId>,
+        request: Option<&RequestId>,
+        actor: Option<&Actor>,
+    ) -> Result<(), PortError> {
+        let Some(turn) = turn else {
+            return Ok(());
+        };
+        lock(&slot.abandoned).push(turn.clone());
+        let completed = self.completed_events_for(slot, turn)?;
+        lock(&slot.deltas).remove(turn.as_str());
+        lock(&slot.turn_deltas).remove(turn.as_str());
+        slot.hold_abandoned_turn(turn);
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let at = self.now();
+        let reason = "事件落盘失败，无法确认已投递给客户端";
+        let error =
+            PublicError::coded("command.uncertain", reason, false).map_err(PortError::from)?;
+        let mut events = vec![pending_event(
+            "turn.failed",
+            EventKind::State,
+            view_turn_error(turn, &error)?,
+            Some(turn.clone()),
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            actor,
+        )?];
+        events.extend(completed);
+        events.push(pending_event(
+            "command.uncertain",
+            EventKind::Structured,
+            view_command_uncertain(request, reason)?,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            actor,
+        )?);
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                // 会话状态按「还有没有排队 turn」投影：放弃自己的 turn 不等于该会话没有工作。
+                // 仍排队的 turn 必须继续被驱动（组合根的合并窗口只枚举 `queued`/`running`/
+                // `waiting_*` 的会话），因此这种情况下不能写成 `Failed`——否则该会话再也不会被驱动，
+                // RV2-WP7-F1 的兜底轮次永远推不动（§6 第 9 条）。
+                state: Some(if slot.has_waiting_turn() {
+                    SessionState::Queued
+                } else {
+                    SessionState::Failed
+                }),
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            })),
+            turns: vec![TurnChange::Update(TurnUpdate {
+                turn: turn.clone(),
+                state: TurnState::Failed,
+                ended_at: Some(at.clone()),
+            })],
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(CommandTerminalRecord::try_new(
+                CommandStatus::Uncertain,
+                Some(at),
+                None,
+                None,
+                Some(error),
+            )?),
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(())
+            }
+            // 存储仍然不可用：该 turn 在内存里已放弃（`abandoned` + 占位），不再有
+            // 「completed 但正文缺失」的记录会产生；不发布任何东西（§6.9）。
             Err(PortError::Unavailable(_)) => Ok(()),
             Err(error) => Err(error),
         }
@@ -2314,6 +2723,7 @@ impl Broker {
             command,
             CommandStatus::Completed,
             None,
+            Some(version_result(&version)?),
             Some(version),
             &at,
         )
@@ -2322,12 +2732,17 @@ impl Broker {
     }
 
     /// 终态提交（§11.2：终态只通过一个持久化的 `command.*` 事件表达）。
+    ///
+    /// `result` 是该命令终态的收据结果（RV1-WP6-F3）：有 turn 的命令带 `{"turnId":…}`、模式/配置切换
+    /// 带 `{"version":…}`，其余为 `None`（适配层按 §12.5 回空 object，不编造字段）。
+    #[allow(clippy::too_many_arguments)] // 终态的四个分量（status/error/result/version）+ 会话/命令/时间
     async fn commit_terminal(
         &self,
         session: &SessionId,
         command: &ClientCommand,
         status: CommandStatus,
         error: Option<PublicError>,
+        result: Option<CommandResult>,
         version: Option<Version>,
         at: &Timestamp,
     ) -> Result<(), PortError> {
@@ -2357,7 +2772,7 @@ impl Broker {
             StoredPolicy::Durable,
             Some(&command.actor),
         )?];
-        let record = CommandTerminalRecord::try_new(status, Some(at.clone()), None, None, error)?;
+        let record = CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
         let commit = OwnedCommit {
             session: Some(session.clone()),
             at: at.clone(),
@@ -3007,6 +3422,21 @@ fn version_text(version: &Version) -> String {
     version.get().to_string()
 }
 
+/// 终态结果：`{"turnId":"…"}`（turn 作用域命令的收据字段，RV1-WP6-F3）。
+///
+/// Node Link 的 `command.terminal.terminal.result` 是开放 object，带 turnId 使 Access 能把命令与 turn
+/// 对上；缺它时适配层只能回空 object（§12.5 的「非空」= 非 null，但空 object 丢失了这条信息）。
+fn turn_result(turn: &TurnId) -> Result<CommandResult, PortError> {
+    CommandResult::from_json_text(&format!(r#"{{"turnId":"{}"}}"#, turn.as_str()))
+        .map_err(PortError::from)
+}
+
+/// 终态结果：`{"version":"…"}`（模式/配置切换的收据字段，RV1-WP6-F3）。
+fn version_result(version: &Version) -> Result<CommandResult, PortError> {
+    CommandResult::from_json_text(&format!(r#"{{"version":"{}"}}"#, version.get()))
+        .map_err(PortError::from)
+}
+
 /// 确保 view 的顶层字符串成员 `key` 等于 `value`（§10.3 的身份/版本字段）。
 ///
 /// 缺失 → 在顶层最前面插入（其余字节原样保留）；已存在且取值一致 → 原样返回（字节不变，不重写）；
@@ -3076,19 +3506,20 @@ pub(crate) mod test_support {
         AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
         AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId,
         ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
-        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingTarget,
-        PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef, ResourceOrigin, SeedState,
-        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias,
-        WorkspaceRecord,
+        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
+        PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
+        ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+        WorkspaceAlias, WorkspaceRecord,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
         DeviceWrite, DropReport, ExpiryWrite, ExportRevocation, ExportWrite, IdempotentReplay,
         ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
-        NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingSettlementWrite,
-        PairingWrite, ProfileWrite, ProviderRefWrite, PruneReport, RemoteCommandRef,
-        RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef, TrustStore,
-        TurnAccepted, WorkspaceWrite,
+        NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite, OwnedEventRecord,
+        PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+        PairingWrite, PendingInteractionOrigin, ProfileWrite, ProviderRefWrite, PruneReport,
+        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef,
+        TrustStore, TurnAccepted, WorkspaceWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -3234,6 +3665,10 @@ pub(crate) mod test_support {
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
         /// 配对行：`settle_pairing` 的目标族由它读出（§11.6 第 2 条）。
         pub(crate) pairings: Mutex<Vec<PairingRecord>>,
+        /// 已认领的配对对端行（`consume_pairing` 的身份判定从它读；测试按需 seed，默认空）。
+        pub(crate) peers: Mutex<Vec<(PairingId, PairingPeer)>>,
+        /// 已绑定的身份材料（`peer_key` 从它读；测试按需 seed，默认空）。
+        pub(crate) keys: Mutex<Vec<(PeerIdentity, PeerPublicKey)>>,
         /// 节点角色行（`add_import` 的 owner 前置校验从它读）。
         pub(crate) nodes: Mutex<Vec<NodeRecord>>,
         /// 目录里的可用 Agent（`put_export` 的前置校验从它读；默认空）。
@@ -3270,6 +3705,9 @@ pub(crate) mod test_support {
     pub(crate) struct InteractionRow {
         pub(crate) pending: PendingInteraction,
         pub(crate) resolution: Option<InteractionResolved>,
+        /// 创建该交互的 origin 事件 id（`node_link_slice` 的 `pending_interactions` 需要它；
+        /// 真实存储用 `owned_interaction.request_event` 回查）。
+        pub(crate) origin_event: EventId,
     }
 
     /// 一次提交里的事件类型序列（§6.10 的合批断言）。
@@ -3449,11 +3887,13 @@ pub(crate) mod test_support {
         }
 
         pub(crate) fn seed_interaction(&self, pending: PendingInteraction) {
+            let origin_event = EventId::new(&uuid_text(0)).expect("事件 id");
             lock(&self.state).interactions.insert(
                 pending.id().as_str().to_owned(),
                 InteractionRow {
                     pending,
                     resolution: None,
+                    origin_event,
                 },
             );
         }
@@ -3565,6 +4005,12 @@ pub(crate) mod test_support {
 
         async fn query(&self, _query: AuditQuery) -> Result<Vec<AuditRecord>, PortError> {
             Ok(lock(&self.world.audits).clone())
+        }
+
+        /// 测试替身的「曾经写入过的最大审计序号」＝已追加的行数：用例据此断言
+        /// `catalogRevision` 取自审计水位（真实实现在 `storage-sqlite`，用 `sqlite_sequence`）。
+        async fn watermark(&self) -> Result<u64, PortError> {
+            Ok(lock(&self.world.audits).len() as u64)
         }
     }
 
@@ -3816,26 +4262,39 @@ pub(crate) mod test_support {
             // `interactionId` 找到同一提交里那条 `kind = interaction` 事件）由存储层完成，配不到即整
             // 事务失败——事件 id 只存在于存储层，不经过 broker。
             for write in &commit.interactions {
-                let paired = commit.events.iter().any(|event| {
+                let paired = commit.events.iter().find(|event| {
                     interaction_request_kind(&event.event_type).is_some()
                         && view_interaction_id(&event.payload.view).as_ref()
                             == Some(write.interaction.id())
                 });
-                if !paired {
+                let Some(paired) = paired else {
                     return Err(PortError::InvalidRequest(
                         "交互写入必须与同一提交里带同一 interactionId 的事件配对（§6 第 13 条）",
                     ));
-                }
+                };
                 if let Some(existing) = state.interactions.get(write.interaction.id().as_str()) {
                     if existing.resolution.is_some() {
                         return Err(PortError::Conflict(ConflictKind::AlreadyResolved));
                     }
                 }
+                // 创建它的那条事件就是同一提交里配对成功的那条（`node_link_slice` 的
+                // `pending_interactions[].origin_event` 要从它取 payload）。`commit.events` 与
+                // `appended` 同序，因此下标直接对应。
+                let position = commit
+                    .events
+                    .iter()
+                    .position(|event| std::ptr::eq(event, paired))
+                    .ok_or(PortError::Corrupt("交互事件未在本次提交中落盘"))?;
+                let origin_event = appended
+                    .get(position)
+                    .map(|event| event.id.clone())
+                    .ok_or(PortError::Corrupt("交互事件未在本次提交中落盘"))?;
                 state.interactions.insert(
                     write.interaction.id().as_str().to_owned(),
                     InteractionRow {
                         pending: write.interaction.clone(),
                         resolution: None,
+                        origin_event,
                     },
                 );
             }
@@ -3903,10 +4362,11 @@ pub(crate) mod test_support {
                 )?;
                 state.commands.insert(key, updated);
             }
-            // 接受提交：写幂等行（status = accepted）。
+            // 接受提交：写幂等行（status = accepted）。§6 第 20 条：装配方不知道目标会话的命令
+            // （`session.create`）用本次事务刚创建的会话回填——终态块与启动恢复靠它定位该行。
             if let Some(record) = commit.idempotency.clone() {
                 let command = CommandRecord::try_new(
-                    commit.session.clone(),
+                    commit.session.clone().or_else(|| created.clone()),
                     record.request.clone(),
                     &record.command,
                     record.kind,
@@ -3952,11 +4412,24 @@ pub(crate) mod test_support {
                     false
                 }
             };
-            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果。
+            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果；五项指纹任一不同 → 冲突。
             if let Some(record) = commit.idempotency.as_ref() {
                 let state = lock(&self.world.state);
                 let key = command_key(&record.actor, &record.request);
                 if let Some(existing) = state.commands.get(&key).cloned() {
+                    // §6 第 20 条：`record.session = None` 表示「装配期不知道目标会话」（`session.create`
+                    // 的 id 由存储层分配），不参与比对；其余四项恒比。
+                    let same = existing.command() == record.command
+                        && existing.kind() == record.kind
+                        && record
+                            .session
+                            .as_ref()
+                            .is_none_or(|session| existing.session() == Some(session))
+                        && existing.expected_version() == record.expected_version
+                        && existing.request_fingerprint() == &record.request_fingerprint;
+                    if !same {
+                        return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+                    }
                     let session_id = existing.session().cloned();
                     let version = session_id
                         .as_ref()
@@ -4157,6 +4630,89 @@ pub(crate) mod test_support {
                 .event_payloads
                 .get(event.as_str())
                 .cloned())
+        }
+
+        async fn node_link_slice(
+            &self,
+            session: &SessionId,
+            after: Option<OriginCursor>,
+            limit: ReplayLimit,
+        ) -> Result<NodeLinkSlice, PortError> {
+            let state = lock(&self.world.state);
+            let Some(stored) = state.sessions.get(session.as_str()) else {
+                return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+            };
+            let Some(epoch) = state.epochs.get(session.as_str()).cloned() else {
+                return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+            };
+            let from = after
+                .as_ref()
+                .map_or(0, |cursor| cursor.origin_sequence.get());
+            let mut events = Vec::new();
+            for event in &state.events {
+                if event.session.as_ref() != Some(session) {
+                    continue;
+                }
+                let Some(origin) = event.origin_sequence else {
+                    continue;
+                };
+                if origin.get() <= from {
+                    continue;
+                }
+                if events.len() as u32 >= limit.events() {
+                    break;
+                }
+                let Some(payload) = state.event_payloads.get(event.id.as_str()).cloned() else {
+                    continue;
+                };
+                events.push(OwnedEventRecord {
+                    event: event.clone(),
+                    payload,
+                });
+            }
+            let head_sequence = state
+                .events
+                .iter()
+                .filter(|event| event.session.as_ref() == Some(session))
+                .filter_map(|event| event.origin_sequence)
+                .map(Sequence::get)
+                .max()
+                .unwrap_or(0);
+            let pending_interactions = state
+                .interactions
+                .values()
+                .filter(|row| row.pending.session() == session && row.resolution.is_none())
+                .map(|row| PendingInteractionOrigin {
+                    interaction: row.pending.clone(),
+                    origin_event: row.origin_event.clone(),
+                })
+                .collect();
+            Ok(NodeLinkSlice {
+                summary: stored.summary(),
+                head: OriginCursor {
+                    origin_epoch: epoch,
+                    origin_sequence: Sequence::new(head_sequence)
+                        .map_err(|_| PortError::Corrupt("origin sequence out of range"))?,
+                },
+                pending_interactions,
+                events,
+            })
+        }
+
+        async fn session_event_payload(
+            &self,
+            session: &SessionId,
+            event: &EventId,
+        ) -> Result<Option<EventPayload>, PortError> {
+            let state = lock(&self.world.state);
+            let belongs = state
+                .events
+                .iter()
+                .any(|row| row.id == *event && row.session.as_ref() == Some(session));
+            if !belongs {
+                return Ok(None);
+            }
+            Ok(state.event_payloads.get(event.as_str()).cloned())
         }
 
         async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {
@@ -4426,8 +4982,11 @@ pub(crate) mod test_support {
                 .collect())
         }
 
-        async fn peer_key(&self, _peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
-            Ok(None)
+        async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
+            Ok(lock(&self.world.keys)
+                .iter()
+                .find(|(identity, _)| identity == peer)
+                .map(|(_, key)| key.clone()))
         }
 
         async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
@@ -4437,8 +4996,32 @@ pub(crate) mod test_support {
                 .cloned())
         }
 
-        async fn pairing_peer(&self, _id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
-            Ok(None)
+        async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
+            Ok(lock(&self.world.peers)
+                .iter()
+                .find(|(pairing, _)| pairing == id)
+                .map(|(_, peer)| peer.clone()))
+        }
+
+        /// 该对端最近一次配对：替身按 `world.peers` 的登记顺序取最后一条匹配（真实实现按
+        /// `created_at`/`pairing_id` 降序，两者都只要「最近一次」这一个语义）。
+        async fn pairing_for(
+            &self,
+            peer: &PeerIdentity,
+        ) -> Result<Option<PairingRecord>, PortError> {
+            let peers = lock(&self.world.peers);
+            let pairings = lock(&self.world.pairings);
+            let matched: Vec<PairingRecord> = peers
+                .iter()
+                .filter(|(_, row)| row.id() == peer)
+                .filter_map(|(pairing, _)| {
+                    pairings
+                        .iter()
+                        .find(|record| record.id() == pairing)
+                        .cloned()
+                })
+                .collect();
+            Ok(matched.into_iter().last())
         }
 
         async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
@@ -4504,6 +5087,55 @@ pub(crate) mod test_support {
 
         async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
             Ok(0)
+        }
+
+        /// 消费已批准的配对：本替身只实现「状态推进到 `consumed` + 审计入账」与状态拒绝；权威的
+        /// 对端身份判定在用例层（`UseCases::consume_pairing` 先于本调用完成，否则根本到不了这里）。
+        /// 幂等命中**不**追加审计（与真实实现的写集语义一致：不改状态就不产生新的留痕）。
+        async fn consume_pairing(
+            &self,
+            write: PairingConsumption,
+        ) -> Result<PairingRecord, PortError> {
+            let mut pairings = lock(&self.world.pairings);
+            let Some(index) = pairings
+                .iter()
+                .position(|record| record.id() == &write.pairing)
+            else {
+                return Err(missing_pairing());
+            };
+            let record = pairings[index].clone();
+            match record.state() {
+                PairingState::Consumed => Ok(record),
+                PairingState::Approved => {
+                    let consumed = PairingRecord::try_new(
+                        record.id().clone(),
+                        record.target(),
+                        PairingState::Consumed,
+                        record.display_name().map(str::to_owned),
+                        record.requested_scopes().clone(),
+                        record.requested_grants().clone(),
+                        record.secret_digest().clone(),
+                        record.host_binding(),
+                        record.created_at().clone(),
+                        record.expires_at().clone(),
+                        record.claimed_at().cloned(),
+                        record.approved_at().cloned(),
+                        Some(write.context.at.clone()),
+                    )?;
+                    pairings[index] = consumed.clone();
+                    lock(&self.world.write_audits)
+                        .extend(write.context.audit.iter().map(|audit| audit.action));
+                    Ok(consumed)
+                }
+                PairingState::Expired => Err(PortError::Conflict(ConflictKind::Expired)),
+                _ => Err(PortError::Conflict(ConflictKind::Consumed)),
+            }
+        }
+
+        /// Node Link 的认证收尾不在本替身的范围内（`use_cases` 的用例只走配对消费与审计）：
+        /// 显式失败关闭而不是静默成功，避免「替身比真实存储更宽容」。
+        async fn record_node_connected(&self, _write: NodeConnectedWrite) -> Result<(), PortError> {
+            unreachable!("本替身不实现 Node Link 认证收尾")
         }
     }
 
@@ -4815,6 +5447,9 @@ pub(crate) mod test_support {
                         world: world.clone(),
                     }),
                     exports: Arc::new(FakeExports {
+                        world: world.clone(),
+                    }),
+                    trust: Arc::new(FakeTrust {
                         world: world.clone(),
                     }),
                     publisher: Arc::new(TestPublisher {
@@ -5253,6 +5888,43 @@ mod tests {
         }
     }
 
+    /// §6 第 20 条：`settle_session_create` 只终结 `session.create` 的持久记录。同一 `(actor, requestId)`
+    /// 记着别的命令时（适配层误用，wire 不可达）必须 `InvalidRequest`，不得把那条命令改写成创建的终态。
+    #[test]
+    fn settle_session_create_rejects_other_commands() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let request = harness.request(1);
+        let before = harness.world.command(&request).expect("幂等行");
+        assert_eq!(before.command(), "session.prompt");
+
+        let result =
+            CommandResult::from_json_text(r#"{"sessionId":"first"}"#).expect("result object");
+        let error = block_on(harness.broker.settle_session_create(
+            &harness.actor(),
+            &request,
+            CommandStatus::Completed,
+            Some(result),
+            None,
+        ))
+        .expect_err("非 session.create 的记录不得被终结");
+        assert!(
+            matches!(error, PortError::InvalidRequest(_)),
+            "得到 {error:?}"
+        );
+        let after = harness.world.command(&request).expect("幂等行");
+        assert_eq!(after.command(), "session.prompt");
+        assert_eq!(after.status(), before.status(), "既有命令的终态不得被改写");
+    }
+
     /// §6.6：指纹不同 → `command.idempotency_conflict`；不同 actor 用同一 requestId 是两条命令。
     #[test]
     fn idempotency_conflict_on_changed_fingerprint() {
@@ -5286,6 +5958,57 @@ mod tests {
                 &block_on(harness.broker.submit_mutation(&other, &foreign)).expect("submit")
             ),
             "authorization.scope_denied"
+        );
+    }
+
+    /// §11.2/RV1-WP6-F3：终态记录带上收据里有意义的分量——prompt 的 `completed` 带 `{"turnId":…}`，
+    /// 模式切换的 `completed` 带 `{"version":…}`。在此之前终态记录的 `result` 恒为 NULL，适配层只能回
+    /// 空 object（`NODE_LINK_PROTOCOL.md` §12.5 允许，但丢掉了这两条可用的关联信息）。
+    #[test]
+    fn terminal_result_carries_the_receipt_fields() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        )]));
+        let receipt = harness.submit_prompt(1, 'A');
+        let turn = match receipt {
+            CommandReceipt::Accepted { turn, .. } => turn.expect("prompt 的收据带 turn"),
+            other => panic!("期望 accepted，得到 {other:?}"),
+        };
+        let record = harness
+            .world
+            .command(&harness.request(1))
+            .expect("命令行已落盘");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        assert_eq!(
+            record.result().map(CommandResult::as_str),
+            Some(format!(r#"{{"turnId":"{}"}}"#, turn.as_str()).as_str()),
+            "completed 的 result 必须带该命令的 turnId"
+        );
+
+        // 模式切换：结果带新的会话版本（`apply_state` 的收据分量）。
+        let actor = harness.actor();
+        let version = block_on(harness.broker.session_version(&harness.session)).expect("版本");
+        let command = crate::broker::test_support::mode_command(
+            &actor,
+            &harness.session,
+            &harness.request(2),
+            version,
+        );
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+        let record = harness
+            .world
+            .command(&harness.request(2))
+            .expect("模式切换的命令行");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        let after = block_on(harness.broker.session_version(&harness.session)).expect("版本");
+        assert_eq!(
+            record.result().map(CommandResult::as_str),
+            Some(format!(r#"{{"version":"{}"}}"#, after.get()).as_str()),
+            "completed 的 result 必须带切换后的版本"
         );
     }
 
@@ -5335,6 +6058,394 @@ mod tests {
             "失败的批次不得发布"
         );
         assert!(harness.world.published_after_commit());
+    }
+
+    /// §6 第 9 条（RV1-WP7-F3）：**非终态**批次的写失败不得只丢弃——该 turn 的正文已经缺了一块，
+    /// 若让同一 turn 的终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录。
+    #[test]
+    fn a_failed_non_terminal_batch_terminates_the_turn_instead_of_silently_dropping_it() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                    uuid_text(610)
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        // 提交顺序：1 = 接受 turn.queued，2 = 提升 turn.started，3 = 非终态增量批次（本用例注入失败）。
+        harness.world.fail_commit_at(3);
+        let receipt = harness.submit_prompt(1, 'A');
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+
+        let record = harness.world.command(&harness.request(1)).expect("幂等行");
+        assert_eq!(
+            record.status(),
+            CommandStatus::Uncertain,
+            "正文缺块的 turn 不得报完成"
+        );
+        assert!(record.error().is_some());
+        let types = harness.world.event_types(&harness.session);
+        assert!(
+            !types.contains(&"turn.completed".to_owned()),
+            "被放弃 turn 的终态批不得落盘：{types:?}"
+        );
+        assert!(!types.contains(&"command.completed".to_owned()));
+        assert!(types.contains(&"turn.failed".to_owned()), "{types:?}");
+        assert!(types.contains(&"command.uncertain".to_owned()), "{types:?}");
+        let turns = harness.world.turns(&harness.session);
+        assert_eq!(turns.len(), 1, "{turns:?}");
+        assert_eq!(turns[0].state(), TurnState::Failed, "{turns:?}");
+        let published_types = harvest_published_types(&harness);
+        assert!(!published_types.contains(&"turn.completed".to_owned()));
+        assert!(harness.world.published_after_commit());
+    }
+
+    /// §6 第 9/14 条（RV1-WP7-F3）：被放弃的 turn 仍要为**已落盘**的 delta 收尾（`completed`），
+    /// 缺的那一块不伪造，迟到的事件与终态一律不再提交。
+    #[test]
+    fn an_abandoned_turn_still_finalises_the_deltas_it_persisted() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 空脚本：turn 被接受并派发，但后端在注入失败前只发两批增量。
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let message = MessageId::new(&uuid_text(611)).expect("message");
+        let delta = |index: u64, text: &str| {
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","deltaIndex":"{index}","text":"{text}"}}"#,
+                    message.as_str()
+                ),
+            )
+        };
+        // 第一批增量正常落盘（提交 3），第二批注入失败（提交 4）。
+        harness
+            .broker
+            .sink(&harness.session)
+            .send(delta(0, "Hello"));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        harness.world.fail_commit_at(4);
+        harness
+            .broker
+            .sink(&harness.session)
+            .send(delta(1, " lost"));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        // 迟到的终态批不得再落盘。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            vec![
+                "turn.queued",
+                "turn.started",
+                "agent.message.delta",
+                "turn.failed",
+                "agent.message.completed",
+                "command.uncertain",
+            ],
+            "只保留已落盘的增量、收尾与失败终态"
+        );
+        assert_eq!(
+            harness
+                .world
+                .command(&harness.request(1))
+                .expect("幂等行")
+                .status(),
+            CommandStatus::Uncertain
+        );
+        // 收尾正文只含已落盘的那一段（缺块不伪造）。
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let completed = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "agent.message.completed")
+            .expect("已落盘 delta 的收尾");
+        let payload = block_on(view.event_payload(&completed.id))
+            .expect("payload")
+            .expect("存在");
+        assert!(
+            payload.view.as_str().contains("Hello") && !payload.view.as_str().contains("lost"),
+            "只收尾已落盘的段落：{}",
+            payload.view.as_str()
+        );
+    }
+
+    /// §6 第 9 条（RV2-WP7-F1）：被放弃 turn 的迟到终态不得记到下一个 turn 上。
+    ///
+    /// 适配器发出的 `EndpointEvent` 不带 turn 标识（`agent-host` 的 mapper 固定 `turn: None`），归属只能
+    /// 按「有在跑 turn 时归给它」推断（§10.3）。因此放弃之后**不得**立刻提升下一个排队 turn：否则 T1 的
+    /// 迟到 `turn.completed` 会把 T2 报成完成，并把 T2 已落盘的正文按 T1 的终态折叠。
+    #[test]
+    fn a_late_terminal_of_an_abandoned_turn_does_not_complete_the_next_turn() {
+        let harness = Harness::new(BrokerConfig::default());
+        // T1：空脚本（派发后不发任何事件）；T2：只发一条增量，自己不收尾。
+        harness.world.push_script(Script::new(Vec::new()));
+        let second = MessageId::new(&uuid_text(612)).expect("message");
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"second"}}"#,
+                second.as_str()
+            ),
+        )]));
+        let first = MessageId::new(&uuid_text(610)).expect("message");
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(matches!(
+            harness.submit_prompt(2, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 提交顺序：1 = T1 接受、2 = T1 派发、3 = T2 接受、4 = T1 的增量批次（本用例注入失败）。
+        harness.world.fail_commit_at(4);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"first"}}"#,
+                first.as_str()
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        // ① 被放弃 turn 的终态还没被观测到：T2 不得被派发，且会话必须仍是可被驱动的状态。
+        assert_eq!(harness.world.prompt_count(), 1, "不得提前派发 T2");
+        let queued = harness
+            .world
+            .turns(&harness.session)
+            .into_iter()
+            .filter(|turn| turn.state() == TurnState::Queued)
+            .count();
+        assert_eq!(queued, 1, "T2 必须还在排队");
+        assert_eq!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .state(),
+            SessionState::Queued,
+            "放弃后仍排队的会话必须是合并窗口能枚举到的状态（否则兑底永远推不动）"
+        );
+
+        // ② 无归属的迟到终态：按被放弃的 T1 归属并丢弃，同时释放占位。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        // ③ T2 不得被记成完成；它自己的事件也不得被丢弃。
+        assert_eq!(
+            harness
+                .world
+                .command(&harness.request(2))
+                .expect("幂等行")
+                .status(),
+            CommandStatus::Accepted,
+            "T1 的迟到终态不得把 T2 的命令报成完成"
+        );
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            vec![
+                "turn.queued",
+                "turn.started",
+                "turn.queued",
+                "turn.failed",
+                "command.uncertain",
+                "turn.started",
+                "agent.message.delta",
+            ],
+            "迟到终态被丢弃；观测到它之后 T2 才被派发（其增量必须落盘）"
+        );
+        let turns = harness.world.turns(&harness.session);
+        assert_eq!(
+            turns.iter().map(|turn| turn.state()).collect::<Vec<_>>(),
+            vec![TurnState::Failed, TurnState::Running],
+            "T2 只能是 Running，不得是 Completed：{turns:?}"
+        );
+        assert!(harness.world.published_after_commit());
+    }
+
+    /// §6 第 9 条（RV2-WP7-F1）的兑底：端点始终没有观测到终态时，占位必须在有界轮次后释放，
+    /// 否则排队的 turn 永远不被派发、会话永久卡住。
+    #[test]
+    fn an_unobserved_abandoned_turn_hold_is_released_after_the_bounded_rounds() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(Vec::new()));
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(matches!(
+            harness.submit_prompt(2, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+        harness.world.fail_commit_at(4);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                uuid_text(613)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        assert_eq!(harness.world.prompt_count(), 1);
+
+        // 合同登记值：§6 第 9 条写的是 `1200` 轮，这里把常量钉死在用例里（合同与实现不得各自漂移）。
+        assert_eq!(ABANDONED_TURN_HOLD_ROUNDS, 1200, "§6 第 9 条登记值");
+
+        // 占位按驱动轮次计时：放弃提交所在的那次 `pump` 已消耗第一轮，此后每次 `pump` 消耗一轮。
+        let mut rounds = 1;
+        while rounds + 1 < ABANDONED_TURN_HOLD_ROUNDS {
+            block_on(harness.broker.pump(&harness.session)).expect("pump");
+            rounds += 1;
+        }
+        assert_eq!(harness.world.prompt_count(), 1, "轮次未用尽前不得派发 T2");
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        assert_eq!(
+            harness.world.prompt_count(),
+            2,
+            "兑底必须释放占位，否则会话永久卡住"
+        );
+    }
+
+    /// §6 第 4/8/9 条（RV3-WP7-F2）：占位期该会话按「仍有 active turn」处理，因此模式切换被显式拒绝
+    /// （v1 不排队），而不是因为该 turn 已经终结就被放行。
+    #[test]
+    fn mode_change_rejected_while_an_abandoned_turn_holds_the_session_slot() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 提交顺序：1 = 接受、2 = 派发、3 = 增量批次（本用例注入失败），4 = 放弃提交。
+        harness.world.fail_commit_at(3);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                uuid_text(616)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        // 端点还没给出被放弃 turn 的终态 → 占位仍在，不能用「版本不匹配」冒充这个拒绝，
+        // 因此 expected_version 取当前版本。
+        let current = harness
+            .world
+            .session(&harness.session)
+            .expect("session")
+            .version();
+        let actor = harness.actor();
+        let command = mode_command(&actor, &harness.session, &harness.request(2), current);
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        match receipt {
+            CommandReceipt::Rejected { error } => {
+                assert_eq!(error.code(), "state.version_conflict");
+            }
+            CommandReceipt::Accepted { .. } => {
+                panic!("占位期会话仍有 active turn，模式切换必须被拒绝")
+            }
+        }
+        assert!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .current_mode()
+                .is_none(),
+            "被拒的模式切换不得改状态"
+        );
+    }
+
+    /// §6 第 9/19 条（RV2-WP7-F3）：被放弃 turn 的迟到事件走第 9 条的「归属到被放弃的 turn 并被丢弃」，
+    /// **不是**第 19 条的「无归属降级」（带着 NULL 的 `turn_id` 照常落库）。
+    #[test]
+    fn a_late_event_of_an_abandoned_turn_is_dropped_instead_of_degraded_without_a_turn() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 提交顺序：1 = 接受、2 = 派发、3 = 增量批次（本用例注入失败），4 = 放弃提交。
+        harness.world.fail_commit_at(3);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                uuid_text(614)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        // 迟到终态被丢弃并释放占位：此后这个会话没有在跑的 turn。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        let before = harness.world.event_types(&harness.session);
+
+        // 没有在跑 turn，但归属者（被放弃的 turn）存在：迟到增量按 §6 第 9 条丢弃，不落库。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"tail"}}"#,
+                uuid_text(615)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            before,
+            "被放弃 turn 的迟到增量不得落库"
+        );
+
+        // 阳性对照：会话级事件不属于第 19 条的 `turnId` 集合，它照常提交（turn 归属为 NULL）——
+        // 证明上一条是「归属到被放弃的 turn」，而不是「迟到的都丢」。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "session.origin.online_changed",
+            r#"{"online":true}"#,
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        let mut expected = before;
+        expected.push("session.origin.online_changed".to_owned());
+        assert_eq!(harness.world.event_types(&harness.session), expected);
+        let event = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "session.origin.online_changed")
+            .expect("会话级事件必须落库");
+        assert!(
+            harness.world.event_turn(&event.id).is_none(),
+            "无归属的降级：turn 归属为 NULL"
+        );
     }
 
     fn harvest_published_types(harness: &Harness) -> Vec<String> {
@@ -5899,6 +7010,9 @@ mod tests {
                     world: world.clone(),
                 }),
                 exports: Arc::new(FakeExports {
+                    world: world.clone(),
+                }),
+                trust: Arc::new(FakeTrust {
                     world: world.clone(),
                 }),
                 publisher: Arc::new(TestPublisher {
