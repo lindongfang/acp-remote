@@ -169,8 +169,59 @@ alternative_checks:
 
 ## Failures and Retests
 
-（无。执行中的失败、重试与恢复记录在此。）
+| Issue ID / Task | Source / Check or E2E ID / Attempt / Version | Owner | Fix / Recovery | Review / Readiness Evidence | Retest Evidence | Current Status / Basis |
+| --- | --- | --- | --- | --- | --- | --- |
+| RV1-MINOR-1/2 | RV1（`reports/rv1-wp1.md`，目标 `af64e85`；报告行号与 hunk 头精度） | 主 Agent（代订正） | 未提交即订正（含于 `dee3e22`）；第二处 56→55 残留后由 RV2 发现，订正含于 `2824f1e` | RV2（`reports/rv2-candidate.md` 复核遗留项） | RV2 确认 hunk 加注已闭合、并指出第二处残留（随即订正） | 已解决 |
+| RV2-F1 | RV2（`wp1-handoff.md:96` 的第二处 56→55） | 主 Agent | `2824f1e` 入库 | RV2-F3 同报告建议的版本标注已一并修正 | — | 已解决 |
+| RV2-F2 | RV2（候选未含集成簿记） | 主 Agent | 按既定「合并后簿记」流程处理并记录依据（premerge 门读文件系统；报告随 `2824f1e` 落 main） | — | — | 已解决（流程性登记） |
+| RV2-F3 | RV2（PV 记录版本标注） | 主 Agent | Project Verify 表改为「`af64e85`（执行时树 `e544ac9`）」 | — | — | 已解决 |
+| 三文件切换竞态 | 集成 Agent 阶段 B（`git switch main` 将被第三个脏文件阻塞） | 集成 Agent + 主 Agent | `contact_supervisor` 请示后按「三文件对称备份→checkout→合入→写回」（备份 sha256 与工作树一致） | 集成 Agent 报告阶段 B 步骤 1–6 | `cmp` 逐字节一致，无内容丢失 | 已解决 |
+| 集成 tip 前移（两次） | 阶段 A（主 Agent 簿记提交使 tip 前移） | 集成 Agent | 按「基线变化重建候选」以末次 tip `25acb00` 重新固定并重跑构建 | 阶段 A 报告 | 候选轮 PV1/PV2 在 `25acb00` 上完成 | 已解决 |
 
 ## Final Assessment
 
-（8.1 最终验收时按 `templates/verification.md` 写入 `agentic-assessment` 块。）
+```agentic-assessment
+assessment_id: "FV1-2026-09-26"
+target_commit: ba898888dfe0405ddbebab94290e43168bf4d1a8
+contract_digest: sha256:9b057653b38b79841d7fe3621ea29265a4aedba99c87449cc129f2e83ab4a8ee
+result: PASS
+evidence:
+  - path: reports/stress-runs.log
+    sha256: "sha256:447574013e7a9bf149c76ad05c4fc85db1fdbfb8d73d0cab4603b77419ce7cda"
+  - path: reports/final-verify.log
+    sha256: "sha256:9f6df527021954d0e5f7c7faa7389ad0ae9bd57b02997e42156968aca4e1705d"
+  - path: reports/rv1-wp1.md
+    sha256: "sha256:d17204193b9bfce6449f5b30659f795ebbc595dbb0928dd5e71281749047908b"
+  - path: reports/rv2-candidate.md
+    sha256: "sha256:ce87ffde381ff422166b87cddff2a12190aec192a62f4d3a8699b06a02caaf2b"
+  - path: reports/integrator.md
+    sha256: "sha256:9de58704112197a4aae07df4476255962d65121f64c04743986acc6bc2d106fe"
+  - path: reports/wp1-handoff.md
+    sha256: "sha256:8f83ad756ec69bd681b0cf5be731baa9cc74190dc4e3a5f5c645af23c7831d74"
+  - path: reports/wp1-local-checks.log
+    sha256: "sha256:4bf662bb6244bec79ed74571c2dffa8bd7821d0ae0dbd5ab3ada20d9fb6f40f9"
+  - path: reports/candidate-pv1-verify.log
+    sha256: "sha256:3ba297718d74d43799c977aeca4fb925adb9114d47ef45f44f0dac4700db3a5e"
+  - path: reports/main-verify.log
+    sha256: "sha256:b42ed5837d009386f2b8dad08d117b70e99fc864be88cf545e4750e36ad58f2d"
+```
+
+- Assessment ID / Time: FV1-2026-09-26，主 Agent 执行（任务 8.1，[final-verification]）。
+- Target / Task：`refs/heads/main` = `ba898888dfe0405ddbebab94290e43168bf4d1a8`（验收前
+  `git rev-parse refs/heads/main` 核实；验收块按自指约束不随该提交）。DU1 合入提交 = `25acb00`，
+  后随两个簿记提交（`2824f1e`、`ba89888`）只动本变更目录。
+- CLI State：`openspec status` 于验收前查询 = 除 8.1 外全部完成（13/14）；`e2e check` PASS 并已自动勾选
+  [e2e-owned] 7.3（2026-09-26）。CLI 状态原样保留，不改写 all_done 含义。
+- Audit / Evidence：七组审计均通过——① Contracts and Coverage：增量规范 1 条 Requirement + 2 场景，
+  覆盖索引 R1/R2/R3 的证据均可读且 sha256 见块内（R1→PV1/PV2、R2→PV2、R3→RV1）。② Handoff Traceability：
+  Handoff Index 逐行覆盖 2.x/3.2/6.x，报告路径全部可读。③ Delivery and Versions：候选 `25acb00`、
+  premerge 门 PASS、ff-only 合入、树哈希一致、main 回归 PV1 EXIT=0。④ Project Checks and Resources：
+  PV1/PV2（三连跑）命令、退出码、环境、日志齐备；PV2 连跑窗口不并行其它 cargo test 已遵守。
+  ⑤ Independent Reviews：RV1/RV2 均为 fresh 只读独立子 Agent，发现全部闭环（见 Failures and Retests）。
+  ⑥ E2E：not-applicable，三字段齐备，降级批准可追溯（2026-09-26 用户原话「同意降级」），替代检查
+  PV1/PV2 候选轮 PASS。⑦ Issue Closure：全部问题 ID 已闭环，无未解决阻断项。
+- Result / Open Issues：**PASS**。非阻断项处理结论：RV2-F3 已修正；RV1 的 SUGGESTION（并发关闭介入时
+  错误种类的理论窗口）经核实为非新问题（旧顺序下同类二选一已存在）、spec 未承诺错误种类——不修复，
+  登记为后续归因参考。无遗留问题。
+- Required Follow-up：归档前执行 `workflow check --stage archive`；远端操作（push/PR/发布）未授权且未执行。
+  仓库外三份备份已在 7.2 删除。
