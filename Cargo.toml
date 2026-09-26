@@ -120,7 +120,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 rustls-pki-types = { version = "1", features = ["std"] }
 # 测试用自签证书的生成（仅 dev-dependency，供 `crates/server/tests` 的 TLS `direct` 用例现算 ECDSA P-256
 # 自签证书与私钥）：因此仓库里不提交任何私钥材料，`.gitleaks.toml` 不需要为此新增允许清单条目。
-# 实际启用的依赖链只有 `pem`/`ring`/`rustls-pki-types`/`time`/`yasna`（`zeroize`/`x509-parser`/`aws-lc-rs` 为可选、未启用）；除 `base64 0.22`（`pem` 与 axum 的 `ws` 共用，与既有 0.23 并存，`[bans] multiple-versions = "warn"` 只提示）外不引入新 crate。MSRV 与版本选择依据见 §3.1 的 `[决定]`。
+# 实际启用的依赖链只有 `pem`/`ring`/`rustls-pki-types`/`time`/`yasna`（`zeroize`/`x509-parser`/`aws-lc-rs` 为可选、未启用）；启用链新增的解析节点是
+# `pem`/`ring`/`yasna`/`time`（及 `time-core`/`time-macros`/`deranged`/`powerfmt`/`num-conv`）与 `rustls-pki-types`；`base64 0.22.1` 不是本批
+# 新增，而是 base 锁既有版本，这里由 `pem` 与 axum 的 `ws` 复用、与既有 0.23 并存（`[bans] multiple-versions = "warn"` 只提示）。MSRV 与版本选择依据见 §3.1 的 `[决定]`。
 rcgen = "0.14"
 
 [workspace.lints.rust]

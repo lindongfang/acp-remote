@@ -2,6 +2,7 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 与 `app` 只覆盖切片 4 的本地通道与组合根范围，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.3
+> 修订记录（2026-09-26，node-link-owner 变更 WP1）：§3.1 新增依赖口径 `[决定]`（Node Link 的 HTTP/WS/TLS 栈与 dev 用自签证书生成、落选候选与解析证据）；§4.9 加注 `node_link` 已进入实现、**尚未落地**；§5 矩阵的 `server` 行把 `acpr-wire` 格改为 ✓，并在表下注记限定该依赖只用于 ACPR-CJ1 digest 前像。
 > 修订记录（2026-09-25，daemon-cli-and-local-admin 切片 4）：§3 状态行与 §4.9/§4.10 把 `server`（本地通道 + `local_admin`）与 `app`（daemon/CLI/组合根）标为已落地、范围仍限本切片；§3.1 记下当前成员数（十二个）；§5 表下注记收敛——`storage-sqlite` 已是矩阵列、`node-link-client` 仍是列外行，并如实说明门禁对「行缺席」是静默的。
 > 修订记录（2026-09-24，identity-auth-and-keystore）：§3 状态行与 §3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价、并标注 macOS/Linux 后端未实现；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
 > 修订记录（2026-09-24，core-turn-view-fields）：§4.1 补「适配器产 ACP 派生投影、broker 补 `SYNC_PROTOCOL.md` §10.3 身份与会话版本」的职责分工；§4.7 写明 `owned_session.version` 由存储层在事务内实现、core 只按同一规则推导并在提交后比对（不一致 → `PortError::Corrupt` 失败关闭）。
