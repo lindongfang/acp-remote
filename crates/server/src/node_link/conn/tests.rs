@@ -17,6 +17,7 @@
 //! | [R38] 认证前发送业务消息 | `a_business_message_before_hello_is_closed_with_4401` |
 //! | [R39] 必需 feature 未满足 | `a_missing_required_feature_is_reported_with_details_and_closed` |
 //! | [R40] 节点双向认证与凭据状态 | `handshake_completes_and_enters_the_business_phase`（双向证明与审计） |
+//! | [R37]/[R40] 的验收项（任务 2.29） | `the_challenge_catalog_revision_is_the_proof_transcript_source` |
 //! | [R41] proof 无效被拒绝 | `an_invalid_proof_is_closed_with_4401_and_audited` |
 //! | [R42] 已撤销节点连接被拒绝 | `a_revoked_node_is_closed_with_4410` |
 //! | [R43] 未知节点不泄露存在性之外的能力 | `an_unknown_node_gets_a_challenge_and_fails_as_node_unknown` |
@@ -34,8 +35,10 @@
 //!
 //! 两处**刻意的测试手法**（都在用例里就地说明）：
 //!
-//! - `node-link-proof/v1` 的 `catalogRevision`：wire 的 `node.challenge` 不带该字段（§12.2），因此用例
-//!   像「上次 `node.ready` 缓存过 revision 的 Access」一样带外取 `head` 的值（见 handoff 的合同缺口）；
+//! - `node-link-proof/v1` 的 `catalogRevision`：用例只从 `node.challenge` 的 body 取该字段（Access 该走的路），
+//!   不再带外取值——2026-09-26 的 v1 内合同修订把字段补进了握手消息（`NODE_LINK_PROTOCOL.md` §12.2 的修订记录，
+//!   design D13）；`the_challenge_catalog_revision_is_the_proof_transcript_source` 进一步锁定
+//!   「取错值必然验签失败」，证明该字段真的进了验签输入；
 //! - 90 秒静默与 30 秒慢消费者宽限：用 [`NodeLinkConn::with_test_windows`] 调短窗口（常量取值由
 //!   `protocol_constants_are_not_configurable` 与静默边界断言锁定，机制由真实连接覆盖）。
 
@@ -755,11 +758,35 @@ fn declared_features() -> Vec<&'static str> {
     features
 }
 
+/// 从 `node.challenge` 的 body 取 `catalogRevision`（decimal string）并转成 transcript 用的 `u64`。
+///
+/// 这就是 Access 该走的路：2026-09-26 的修订把该字段放进握手消息，两个连接 transcript domain 的 tag 6
+/// 都取它（§9.4）。
+fn challenge_catalog_revision(challenge: &Value) -> u64 {
+    challenge["body"]["catalogRevision"]
+        .as_str()
+        .unwrap_or_else(|| panic!("node.challenge 必须带 catalogRevision：{challenge}"))
+        .parse()
+        .expect("catalogRevision 是无前导零的十进制串")
+}
+
 /// 发送 `node.proof`：`mutate` 可破坏签名以覆盖 [R41]。
 ///
-/// `catalog_revision` 带外给出：`node.challenge` 不带该字段，用例像「缓存过 revision 的 Access」一样取本机
-/// 水位（见文件头与 handoff 的合同缺口说明）。
-async fn send_proof(
+/// 两个输入都只从 `node.challenge` 取：`connectionId`/`serverNonce`/`selectedFeatures` 与
+/// [`challenge_catalog_revision`]（Access 侧拿不到别的来源）。
+async fn send_proof(client: &mut Client, access_node: &str, challenge: &Value, corrupt: bool) {
+    send_proof_with_revision(
+        client,
+        access_node,
+        challenge,
+        challenge_catalog_revision(challenge),
+        corrupt,
+    )
+    .await;
+}
+
+/// 发送 `node.proof`，并显式给出进 transcript 的 `catalogRevision`（供「取错值必然失败」的用例）。
+async fn send_proof_with_revision(
     client: &mut Client,
     access_node: &str,
     challenge: &Value,
@@ -807,12 +834,7 @@ async fn send_proof(
 }
 
 /// 完成一次成功握手（hello → challenge → proof → ready），返回 `node.ready` 消息。
-async fn authenticated(
-    client: &mut Client,
-    access_node: &str,
-    catalog_revision: u64,
-    corrupt_proof: bool,
-) -> Value {
+async fn authenticated(client: &mut Client, access_node: &str, corrupt_proof: bool) -> Value {
     send_hello(
         client,
         access_node,
@@ -827,14 +849,7 @@ async fn authenticated(
             .expect("connectionId")
             .to_owned(),
     );
-    send_proof(
-        client,
-        access_node,
-        &challenge,
-        catalog_revision,
-        corrupt_proof,
-    )
-    .await;
+    send_proof(client, access_node, &challenge, corrupt_proof).await;
     client.expect_type("node.ready").await
 }
 
@@ -873,8 +888,14 @@ async fn handshake_completes_and_enters_the_business_phase() {
     assert_no_connection_fields(&challenge);
 
     // R40「双向」的 Owner 侧一半：挑战证明可用本节点公钥在 `node-link-challenge/v1` 域验证。
+    // `catalogRevision` 也从 wire 取（它进了两个连接 domain 的 tag 6，见文件头说明）。
     let body = challenge["body"].clone();
     let selected = feature_ids(&body);
+    let catalog_revision = challenge_catalog_revision(&challenge);
+    assert_eq!(
+        catalog_revision, HEAD_SEQUENCE,
+        "挑战的修订号必须与本机水位同源"
+    );
     let mut expected_selected: Vec<String> = SUPPORTED_FEATURES
         .iter()
         .map(|id| (*id).to_owned())
@@ -893,7 +914,7 @@ async fn handshake_completes_and_enters_the_business_phase() {
     NodeLinkChallenge {
         owner_node_id: node(OWNER_NODE),
         access_node_id: node(ACCESS_NODE),
-        catalog_revision: HEAD_SEQUENCE,
+        catalog_revision,
         client_nonce: identity_auth::Nonce::new(&nonce_text(0x31)).expect("规范 nonce"),
         server_nonce: identity_auth::Nonce::new(body["serverNonce"].as_str().expect("serverNonce"))
             .expect("规范 nonce"),
@@ -913,7 +934,7 @@ async fn handshake_completes_and_enters_the_business_phase() {
         .expect("connectionId")
         .to_owned();
     client.connection_id = Some(connection_id.clone());
-    send_proof(&mut client, ACCESS_NODE, &challenge, HEAD_SEQUENCE, false).await;
+    send_proof(&mut client, ACCESS_NODE, &challenge, false).await;
 
     // R37：`node.ready` 携带 catalogRevision/limits/serverEpoch，且信封序号从 1 开始。
     let ready = client.expect_type("node.ready").await;
@@ -1005,6 +1026,48 @@ fn feature_ids(body: &Value) -> Vec<String> {
         .iter()
         .map(|feature| feature.as_str().expect("feature id").to_owned())
         .collect()
+}
+
+// ---------------------------------------------------------------------------------------------
+// 2.29 的验收用例：`node.challenge.catalogRevision` 是 proof transcript 的 tag 6 来源
+// ---------------------------------------------------------------------------------------------
+
+/// [R37]/[R40]（任务 2.29 的验收项，design D13）：Access 只能从 `node.challenge` 拿到 `catalogRevision`，
+/// 用它构造的 `node-link-proof/v1` transcript 必须通过验签；改用别的值必然 `proof_invalid`。
+///
+/// 反例是这条用例的关键：它证明该字段真的进了验签输入（Owner 用签发挑战时记录的同一个值验证），
+/// 而不是被忽略的装饰字段；正例则走完整路径（挑战 → proof → `node.ready`）并核对 `node.ready` 与
+/// 挑战同源。
+#[tokio::test]
+async fn the_challenge_catalog_revision_is_the_proof_transcript_source() {
+    let harness = Harness::new().await;
+    let _ = harness.approved_pairing().await;
+
+    // 反例：拿挑战里的修订号 +1 签名 → proof_invalid + 4401（配对不被消费，留给下面的正例）。
+    let mut wrong = Client::connect(harness.addr).await;
+    send_hello(
+        &mut wrong,
+        ACCESS_NODE,
+        &declared_features(),
+        &[REQUIRED_FEATURE],
+    )
+    .await;
+    let challenge = wrong.expect_type("node.challenge").await;
+    let revision = challenge_catalog_revision(&challenge);
+    send_proof_with_revision(&mut wrong, ACCESS_NODE, &challenge, revision + 1, false).await;
+    wrong.expect_error("nodelink.auth.proof_invalid").await;
+    assert_eq!(wrong.expect_close().await, 4401, "取错修订号以 4401 关闭");
+
+    // 正例：同一个修订号（从 wire 读的那个）签出来的 proof 必须被接受。
+    let mut client = Client::connect(harness.addr).await;
+    let ready = authenticated(&mut client, ACCESS_NODE, false).await;
+    assert_eq!(
+        ready["body"]["catalogRevision"],
+        json!(revision.to_string()),
+        "node.ready 与 node.challenge 的修订号必须同源"
+    );
+    let _ = client.ping_round_trip(0x6a).await;
+    harness.stop().await;
 }
 
 /// 在预算内轮询一个条件（异步状态收敛的断言，失败时给出固定消息）。
@@ -1163,7 +1226,7 @@ async fn an_invalid_proof_is_closed_with_4401_and_audited() {
     )
     .await;
     let challenge = client.expect_type("node.challenge").await;
-    send_proof(&mut client, ACCESS_NODE, &challenge, HEAD_SEQUENCE, true).await;
+    send_proof(&mut client, ACCESS_NODE, &challenge, true).await;
     let error = client.expect_error("nodelink.auth.proof_invalid").await;
     assert_eq!(error["retryable"], json!(false));
     assert_eq!(client.expect_close().await, 4401, "证明无效以 4401 关闭");
@@ -1220,7 +1283,7 @@ async fn a_proof_for_another_challenge_is_rejected_with_the_same_code() {
     // 用另一个 serverNonce 装配 proof（等价于把挑战 A 的证明重放到挑战 B）。
     let mut tampered = challenge.clone();
     tampered["body"]["serverNonce"] = json!(nonce_text(0x77));
-    send_proof(&mut client, ACCESS_NODE, &tampered, HEAD_SEQUENCE, false).await;
+    send_proof(&mut client, ACCESS_NODE, &tampered, false).await;
     let error = client.expect_error("nodelink.auth.proof_invalid").await;
     assert_eq!(error["code"], json!("nodelink.auth.proof_invalid"));
     assert_eq!(client.expect_close().await, 4401);
@@ -1250,7 +1313,7 @@ async fn a_revoked_node_is_closed_with_4410() {
     .await;
     let challenge = client.expect_type("node.challenge").await;
     // 签名仍然有效：验签材料作为墓碑保留（撤销不删公钥，§11.6 第 5 条）。
-    send_proof(&mut client, ACCESS_NODE, &challenge, HEAD_SEQUENCE, false).await;
+    send_proof(&mut client, ACCESS_NODE, &challenge, false).await;
     let error = client.expect_error("nodelink.auth.node_revoked").await;
     assert_eq!(error["retryable"], json!(false));
     assert_eq!(client.expect_close().await, 4410, "已撤销节点以 4410 关闭");
@@ -1280,7 +1343,7 @@ async fn an_unknown_node_gets_a_challenge_and_fails_as_node_unknown() {
         !feature_ids(&challenge["body"]).is_empty(),
         "未知节点不因此降低 feature 协商结果"
     );
-    send_proof(&mut client, UNKNOWN_NODE, &challenge, HEAD_SEQUENCE, false).await;
+    send_proof(&mut client, UNKNOWN_NODE, &challenge, false).await;
     let error = client.expect_error("nodelink.auth.node_unknown").await;
     assert_eq!(error["retryable"], json!(false));
     assert_eq!(client.expect_close().await, 4401);
@@ -1320,7 +1383,7 @@ async fn node_ready_echoes_the_negotiated_limits_and_never_raises_them() {
     .await;
     let _ = harness.approved_pairing().await;
     let mut client = Client::connect(harness.addr).await;
-    let ready = authenticated(&mut client, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let ready = authenticated(&mut client, ACCESS_NODE, false).await;
 
     assert_eq!(
         ready["body"]["limits"],
@@ -1390,7 +1453,7 @@ async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     let harness = Harness::new().await;
     let _ = harness.approved_pairing().await;
     let mut client = Client::connect(harness.addr).await;
-    let _ = authenticated(&mut client, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
 
     client.step("① 序号跳号");
     // ① 序号跳号（期望 1，给 2）→ sequence_invalid。
@@ -1516,7 +1579,7 @@ async fn a_binary_frame_is_closed_with_4400() {
     let harness = Harness::new().await;
     let _ = harness.approved_pairing().await;
     let mut client = Client::connect(harness.addr).await;
-    let _ = authenticated(&mut client, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
     client.send_binary(b"\x01\x02\x03").await;
     let error = client.expect_error("nodelink.protocol.invalid_json").await;
     assert_eq!(error["retryable"], json!(false));
@@ -1557,7 +1620,7 @@ async fn heartbeat_round_trip_keeps_the_connection_alive() {
     .await;
     let _ = harness.approved_pairing().await;
     let mut client = Client::connect(harness.addr).await;
-    let _ = authenticated(&mut client, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
 
     // Owner 必须主动发心跳（认证后出站序号从 1 开始的 link.ping）。
     let ping = client.expect_type("link.ping").await;
@@ -1635,7 +1698,7 @@ async fn silence_beyond_the_window_is_closed_with_4408() {
     };
     let pairing = harness.approved_pairing().await;
     let mut client = Client::connect_with_timeout(addr, IO_TIMEOUT).await;
-    let _ = authenticated(&mut client, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
     let started = Instant::now();
     assert_eq!(
         client.expect_close().await,
@@ -1713,11 +1776,11 @@ async fn a_saturated_connection_is_disconnected_without_affecting_its_peer() {
 
     // ① 快速连接：正常往来，作为「其他连接」的对照组。
     let mut healthy = Client::connect(addr).await;
-    let _ = authenticated(&mut healthy, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let _ = authenticated(&mut healthy, ACCESS_NODE, false).await;
 
     // ② 慢连接：完成握手后停止读（socket 缓冲被填满 → 会话写阻塞 → 队列达高水位）。
     let mut slow = Client::connect(addr).await;
-    let _ = authenticated(&mut slow, ACCESS_NODE, HEAD_SEQUENCE, false).await;
+    let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
 
     let slow_id = harness
         .conn
@@ -1865,21 +1928,25 @@ fn fixtures_are_consumed_by_the_handshake_and_error_layers() {
                 }
                 // body 必须能用类型化 DTO 解码，且往返 JSON 与原文等价（未知字段在 closed object 上必失败）。
                 let body = envelope.body().get();
-                let round_trip: Value = match message_type {
-                    "node.hello" => typed_body::<node_link_protocol::handshake::NodeHello>(body),
-                    "node.challenge" => {
-                        typed_body::<node_link_protocol::handshake::NodeChallenge>(body)
-                    }
-                    "node.proof" => typed_body::<node_link_protocol::handshake::NodeProof>(body),
-                    "node.ready" => typed_body::<node_link_protocol::handshake::NodeReady>(body),
-                    "link.ping" => typed_body::<node_link_protocol::error::Ping>(body),
-                    "link.pong" => typed_body::<node_link_protocol::error::Pong>(body),
-                    "link.error" => typed_body::<node_link_protocol::error::Body>(body),
-                    other => panic!("{fixture} 的类型 {other} 不在 WP4 的 body 族里"),
-                };
+                let round_trip = decode_known_body(message_type, body)
+                    .unwrap_or_else(|error| panic!("{fixture}：类型化 body 被拒：{error}"));
                 assert_eq!(round_trip, message["body"], "{fixture} 往返必须保真");
             }
-            (FixtureKind::Handshake | FixtureKind::Link, false) => {
+            (FixtureKind::Handshake, false) => {
+                // 握手 body 由本层类型化解码：信封合法、缺字段在 body 级被拒（不是信封级）。
+                let envelope = match judged {
+                    crate::node_link::conn::wire::Inbound::Message(envelope) => envelope,
+                    other => panic!(
+                        "{fixture} 的信封必须合法（缺字段是 body 级问题）：{}",
+                        describe(&other)
+                    ),
+                };
+                assert!(
+                    decode_known_body(message_type, envelope.body().get()).is_err(),
+                    "{fixture} 的 body 必须被类型化解码拒绝"
+                );
+            }
+            (FixtureKind::Link, false) => {
                 assert!(
                     matches!(
                         judged,
@@ -1953,12 +2020,28 @@ fn fixture_kind(message_type: &str) -> FixtureKind {
 }
 
 /// 把 body 解码成类型化 DTO 并重新编码成 JSON（未知字段在 `deny_unknown_fields` 上必然失败）。
-fn typed_body<T>(body: &str) -> Value
+fn decode_typed_body<T>(body: &str) -> Result<Value, serde_json::Error>
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
-    let decoded: T = serde_json::from_str(body).expect("body 必须能解码成类型化 DTO");
-    serde_json::to_value(&decoded).expect("DTO 必须能编码回 JSON")
+    let decoded: T = serde_json::from_str(body)?;
+    serde_json::to_value(&decoded)
+}
+
+/// 本层解码的 handshake/`link.*` body 的类型化往返（`Err` = 该 body 在本层的 DTO 上不合法）。
+///
+/// `match` 穷尽 WP4 的 body 族：新增家族成员时这里会编译失败，不会静默落到 `panic` 分支之外的缺口。
+fn decode_known_body(message_type: &str, body: &str) -> Result<Value, serde_json::Error> {
+    match message_type {
+        "node.hello" => decode_typed_body::<node_link_protocol::handshake::NodeHello>(body),
+        "node.challenge" => decode_typed_body::<node_link_protocol::handshake::NodeChallenge>(body),
+        "node.proof" => decode_typed_body::<node_link_protocol::handshake::NodeProof>(body),
+        "node.ready" => decode_typed_body::<node_link_protocol::handshake::NodeReady>(body),
+        "link.ping" => decode_typed_body::<node_link_protocol::error::Ping>(body),
+        "link.pong" => decode_typed_body::<node_link_protocol::error::Pong>(body),
+        "link.error" => decode_typed_body::<node_link_protocol::error::Body>(body),
+        other => panic!("{other} 的类型不在 WP4 的 body 族里"),
+    }
 }
 
 /// 判定结果的可读描述（用例失败时给出原因）。

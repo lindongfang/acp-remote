@@ -2,6 +2,7 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。节点侧状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）尚未实现。  
 > 版本：1.0  
+> 修订记录（2026-09-26，v1 内合同修订，未实现未发布）：`node.challenge` 增加必需字段 `catalogRevision`(decimal string)——§9.3/§9.4 的两个连接 transcript domain 都含 tag 6 `catalogRevision`，而此前的握手消息不带该字段，Access 无法在首次连接上验证 `nodeProof` 或构造自己的 proof（design.md D13 的用户裁决 A）。  
 > 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceAlias`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18  
 > 上位产品设计：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
@@ -487,7 +488,7 @@ node.hello → node.challenge → node.proof → node.ready
 | 消息 | 方向 | 信封 | body 字段 | 必需性 | 语义 |
 |---|---|---|---|---|---|
 | `node.hello` | Access → Owner | 认证前 | `minProtocolVersion`(integer)、`maxProtocolVersion`(integer)、`accessNodeId`(UUID)、`role`(const `"access"`)、`clientNonce`(base64url 32B)、`supportedFeatures`(feature 列表)、`requiredFeatures`(feature 列表) | 全部必需 | Access 声明版本区间、身份与 feature；`role` 固定 `"access"` 以阻止角色混用 |
-| `node.challenge` | Owner → Access | 认证前 | `selectedProtocolVersion`(integer)、`connectionId`(UUID)、`ownerNodeId`(UUID)、`serverNonce`(base64url 32B)、`selectedFeatures`(feature 列表)、`nodeProof`(base64url 64B) | 全部必需 | Owner 选择版本与 feature 子集，签发连接 ID 与 server nonce；`nodeProof` 是 §9.4 连接节点挑战 domain 的 P1363 签名 |
+| `node.challenge` | Owner → Access | 认证前 | `selectedProtocolVersion`(integer)、`connectionId`(UUID)、`ownerNodeId`(UUID)、`serverNonce`(base64url 32B)、`selectedFeatures`(feature 列表)、`catalogRevision`(decimal string)、`nodeProof`(base64url 64B) | 全部必需 | Owner 选择版本与 feature 子集，签发连接 ID 与 server nonce；`nodeProof` 是 §9.4 连接节点挑战 domain 的 P1363 签名；`catalogRevision` 是 Owner 当前目录修订号（与 `node.ready.catalogRevision` 同源），Access 用它验证 `nodeProof` 并构造自己的 `node.proof`——两个连接 domain 的 tag 6 都取自本字段（2026-09-26 修订补入） |
 | `node.proof` | Access → Owner | 认证前 | `connectionId`(UUID)、`accessNodeId`(UUID)、`nodeProof`(base64url 64B) | 全部必需 | Access 对 §9.4 连接节点证明 domain 签名，完成双向认证 |
 | `node.ready` | Owner → Access | 认证后 | `ownerNodeId`(UUID)、`catalogRevision`(decimal string)、`limits`(object，§2.5)、`serverEpoch`(UUID) | 全部必需 | 认证完成；`serverEpoch` 是本次 Owner 事件保留窗口的 epoch，与 Sync 的 `serverEpoch` 同义 |
 

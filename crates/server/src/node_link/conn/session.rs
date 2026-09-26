@@ -19,9 +19,12 @@
 //! （WP2 冻结形状只提供 `WsHandler`），因此本层把闸门放在**会话的第一步**：任何帧（包括
 //! `node.hello`）都不再被处理，连接以 4429 关闭。效果等价——未认证的连接无法产生任何业务副作用。
 //!
-//! **catalogRevision 的口径**：`node.ready.catalogRevision` 取本机全局水位 `store.head()` 的
-//! `globalSequence`（跨重启单调的十进制串）。catalog 投影本体在 WP5，届时 `catalog.snapshot.revision`
-//! 必须与本值同源；这是本轮登记在案的临时口径（见 WP4 handoff），不是最终语义。
+//! **catalogRevision 的口径**：`node.challenge.catalogRevision` 与 `node.ready.catalogRevision` 同源，
+//! 都取本机全局水位 `store.head()` 的 `globalSequence`（跨重启单调的十进制串）。握手两侧必须同源：
+//! 该值进入 `node-link-challenge/v1`/`node-link-proof/v1` 的 tag 6，Access 用 `node.challenge` 给的值
+//! 签 proof，Owner 用签发挑战时的同一个值验签。catalog 投影本体在 WP5，届时
+//! `catalog.snapshot.revision` 必须与本值同源；这是本轮登记在案的临时口径（见 WP4 handoff），
+//! 不是最终语义。
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -524,7 +527,8 @@ impl Session {
                 return Flow::Finished;
             }
         };
-        let Some(body) = challenge_body(&issue, &self.conn.authority, &selected) else {
+        let Some(body) = challenge_body(&issue, &self.conn.authority, &selected, catalog_revision)
+        else {
             return self.internal_fault(envelope).await;
         };
         if self
@@ -1245,10 +1249,14 @@ fn negotiation_error(fault: &NegotiationFault) -> (ErrorCode, &'static str) {
 }
 
 /// `node.challenge` 的 body（§12.2）。
+///
+/// `catalog_revision` 由调用方传本机水位：同一个值进了 `ChallengeRequest`（签进挑战 transcript），
+/// 也必须进 wire body，否则 Access 验不了 `nodeProof` 也签不了自己的 proof（2026-09-26 修订）。
 fn challenge_body(
     issue: &ChallengeIssue,
     authority: &Authority,
     selected: &[String],
+    catalog_revision: u64,
 ) -> Option<NodeChallenge> {
     Some(NodeChallenge {
         selected_protocol_version: node_link_protocol::common::ProtocolVersionV1::new(
@@ -1259,12 +1267,13 @@ fn challenge_body(
         owner_node_id: Uuid::parse(authority.local_node().as_str()).ok()?,
         server_nonce: Base64Url::<32>::parse(issue.server_nonce.as_str()).ok()?,
         selected_features: handshake::wire_features(selected)?,
+        catalog_revision: DecimalString::parse(&catalog_revision.to_string()).ok()?,
         node_proof: Base64Url::<64>::parse(&issue.host_proof.to_base64url()).ok()?,
     })
 }
 
 /// `node.ready` 的 body（§12.2）：`catalogRevision` 取本机全局水位（见模块文档的登记口径），
-/// `serverEpoch` 与 Sync 同义，`limits` 是协商结果。
+/// 与 `node.challenge.catalogRevision` 同源；`serverEpoch` 与 Sync 同义，`limits` 是协商结果。
 fn ready_body(
     authority: &Authority,
     view: &NodeLinkHandshakeView,
