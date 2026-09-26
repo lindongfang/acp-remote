@@ -22,7 +22,7 @@
 //! | [R42] 已撤销节点连接被拒绝 | `a_revoked_node_is_closed_with_4410` |
 //! | [R43] 未知节点不泄露存在性之外的能力 | `an_unknown_node_gets_a_challenge_and_fails_as_node_unknown` |
 //! | [R44]/[R45] limits 只下调 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them` |
-//! | [R46] 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable` |
+//! | [R46] 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable`、`json_structure_limits_are_enforced_on_the_wire` |
 //! | [R47] 信封与 connectionSequence 校验 | `envelope_and_sequence_violations_are_rejected_without_closing`、`a_binary_frame_is_closed_with_4400` |
 //! | [R48] 序号回退被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
 //! | [R49] post_mvp 消息显式拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing`（`catalog.changed`/`link.backpressure`） |
@@ -56,6 +56,7 @@ use base64::Engine as _;
 use identity_auth::{ChallengeId, FeatureList, NodeLinkChallenge, NodeLinkProof, P1363Signature};
 use node_link_protocol::common::Uuid;
 use node_link_protocol::envelope::MessageType;
+use node_link_protocol::structure::{MAX_ARRAY_ELEMENTS, MAX_NESTING_DEPTH, MAX_OBJECT_FIELDS};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -258,7 +259,7 @@ impl Harness {
         );
     }
 
-    /// 持久化信任的当次快照（用例断言 / 带外取 revision 用）。
+    /// 持久化信任的当次快照（用例断言用）。
     async fn view(&self, node_id: &str) -> NodeLinkHandshakeView {
         self.world
             .core
@@ -1438,6 +1439,112 @@ fn protocol_constants_are_not_configurable() {
             && limits.heartbeat_interval() <= Duration::from_millis(DEFAULT_HEARTBEAT_INTERVAL_MS),
         "任何配置都只能下调，不可能把任何限额抬到 §2.5 默认值以上"
     );
+
+    // §2.5 的三个 JSON 结构上限同样不可下调、也不进 `node.ready.limits`：取值只来自协议 crate 的常量，
+    // `NodeLinkConfig` 里根本没有对应键（上面的结构体字面量就是编译期证据）。
+    assert_eq!(node_link_protocol::structure::MAX_NESTING_DEPTH, 64);
+    assert_eq!(node_link_protocol::structure::MAX_OBJECT_FIELDS, 1_024);
+    assert_eq!(node_link_protocol::structure::MAX_ARRAY_ELEMENTS, 10_000);
+}
+
+/// [R46]：§2.5 的三个固定 JSON 结构上限在真实连接的 wire 解码边界生效。
+///
+/// 判定在协议层（`node_link_protocol::structure`，§2.4 的「长度限制必须在 wire DTO 边界验证」），
+/// 适配器只负责把越界映射到既有的 decode 错误路径（`nodelink.protocol.schema_invalid`，消息级拒绝、
+/// 连接保持可用）。用例用**认证前**的 `link.error` 帧：它的 `details` 是 §2.4 的开放扩展点，可以承载边界
+/// 大小的结构，同时证明结构判定先于阶段/type 判定。
+#[tokio::test]
+async fn json_structure_limits_are_enforced_on_the_wire() {
+    let harness = Harness::new().await;
+    let mut client = Client::connect(harness.addr).await;
+
+    // 反例：三条上限各越界一格 —— 每条都是消息级拒绝（不回 4400/4401，不关连接）。
+    let over_limit = [
+        (
+            "① JSON 嵌套深度 65",
+            nested_details(MAX_NESTING_DEPTH - DEPTH_OUTSIDE_DETAILS + 1),
+        ),
+        ("② 单对象字段数 1025", object_details(MAX_OBJECT_FIELDS + 1)),
+        (
+            "③ 单数组元素数 10001",
+            array_details(MAX_ARRAY_ELEMENTS + 1),
+        ),
+    ];
+    for (label, details) in &over_limit {
+        client.step(label);
+        client.send_text(&structure_frame(details.clone())).await;
+        client
+            .expect_error("nodelink.protocol.schema_invalid")
+            .await;
+    }
+
+    // 正例：三条上限的边界值必须被接受。对端对它们不给任何回应，因此下面的握手是断言：
+    // 若其中任何一条被拒（`link.error`），`expect_type("node.challenge")` 读到的第一条消息就会是它。
+    client.step("④ 边界正例：64 / 1024 / 10000");
+    for details in [
+        nested_details(MAX_NESTING_DEPTH - DEPTH_OUTSIDE_DETAILS),
+        object_details(MAX_OBJECT_FIELDS),
+        array_details(MAX_ARRAY_ELEMENTS),
+    ] {
+        client.send_text(&structure_frame(details)).await;
+    }
+    send_hello(
+        &mut client,
+        ACCESS_NODE,
+        &declared_features(),
+        &[REQUIRED_FEATURE],
+    )
+    .await;
+    let challenge = client.expect_type("node.challenge").await;
+    assert!(
+        !challenge["body"]["catalogRevision"].is_null(),
+        "边界正例之后握手必须照常完成：{challenge}"
+    );
+    harness.stop().await;
+}
+
+/// `details` 之外的固定嵌套层数（信封 → `body` → `details`）；与协议层测试（`tests/structure_limits.rs`）同口径。
+const DEPTH_OUTSIDE_DETAILS: usize = 3;
+
+/// 一条认证前的 `link.error` 帧，`details` 由调用方给出（§2.4 的开放扩展点）。
+fn structure_frame(details: Value) -> String {
+    json!({
+        "protocolVersion": 1,
+        "type": "link.error",
+        "messageId": uuid_text(),
+        "body": {
+            "code": "nodelink.protocol.invalid_json",
+            "message": "x",
+            "retryable": false,
+            "correlationId": null,
+            "details": details,
+        },
+    })
+    .to_string()
+}
+
+/// `{"deep": [[…]]}`：`levels` 层嵌套数组，最内层是含括号与转义引号的字符串
+/// （整帧深度 = [`DEPTH_OUTSIDE_DETAILS`] + `levels`）。
+fn nested_details(levels: usize) -> Value {
+    let mut value = Value::String("[{\"]".to_owned());
+    for _ in 0..levels {
+        value = Value::Array(vec![value]);
+    }
+    json!({ "deep": value })
+}
+
+/// `{"v": {"f0":0,…}}`：内层对象恰好 `count` 个成员。
+fn object_details(count: usize) -> Value {
+    let members: serde_json::Map<String, Value> = (0..count)
+        .map(|index| (format!("f{index}"), json!(index)))
+        .collect();
+    json!({ "v": Value::Object(members) })
+}
+
+/// `{"items": [0,1,…]}`：恰好 `count` 个元素的数组。
+fn array_details(count: usize) -> Value {
+    let items: Vec<Value> = (0..count).map(|index| json!(index)).collect();
+    json!({ "items": items })
 }
 
 // ---------------------------------------------------------------------------------------------

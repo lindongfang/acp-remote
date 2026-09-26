@@ -232,6 +232,12 @@ pub enum EnvelopeError {
     ConnectionFieldsRequired { message_type: MessageType },
     #[error("body 不是合法 JSON：{0}")]
     BodyNotJson(String),
+    /// 整帧文本超过 §2.5 的固定 JSON 结构上限（嵌套深度 64 / 单对象字段数 1,024 / 单数组元素数 10,000）。
+    ///
+    /// 适配器必须把它映射为 `nodelink.protocol.schema_invalid`（§2.4/§2.5）：与「信封形状不符」同类，
+    /// 是消息级拒绝，不关闭连接。
+    #[error("JSON 结构超过 §2.5 的固定上限：{0}")]
+    Structure(crate::structure::StructureError),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -274,7 +280,19 @@ impl PartialEq for Envelope {
 
 impl Envelope {
     /// 校验信封形状，并把 body 保持为原始字节。
+    ///
+    /// 判定顺序（同一条路径上的两类拒绝，优先级固定）：
+    ///
+    /// 1. §2.5 的三个固定 JSON 结构上限（[`crate::structure::check`]）——扫描只读字节、不分配，
+    ///    也不能依赖 `serde_json` 自己的递归上限（默认 128，与合同不同值）；越界即
+    ///    [`EnvelopeError::Structure`]；
+    /// 2. JSON 语法与信封形状——畸形文本、未知信封字段、连接字段与 `type` 不符都归
+    ///    [`EnvelopeError::Malformed`] 一族，由适配器按 §2.4 再区分 `invalid_json` 与 `schema_invalid`。
+    ///
+    /// 因此「既畸形又超限」的帧会先报结构超限：两者的处置相同（消息不生效、连接可用），而结构判定不需要
+    /// 解析就能完成，把上限放在解析之前可避免为了拒绝一条超限帧先分配整棵通用 JSON 树。
     pub fn decode(text: &str) -> Result<Self, EnvelopeError> {
+        crate::structure::check(text).map_err(EnvelopeError::Structure)?;
         let wire: Wire = serde_json::from_str(text)
             .map_err(|error| EnvelopeError::Malformed(error.to_string()))?;
         Self::assemble(wire)

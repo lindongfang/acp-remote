@@ -4,7 +4,12 @@
 //! 判定口径逐条对应协议：
 //!
 //! - 帧级：binary 帧按 §2.1 回 `link.error`（`invalid_json`）并以 4400 关闭；
+//! - JSON 结构：整帧超过 §2.5 的三个固定上限（嵌套深度 64 / 单对象字段数 1,024 / 单数组元素数 10,000）
+//!   → `nodelink.protocol.schema_invalid`（消息不生效、连接保持可用）；判定在 wire DTO 边界
+//!   （`node_link_protocol::structure`，§2.4）而不是传输层：它是同一帧内的结构，与单条 message 的
+//!   1 MiB 上限（由接入层以 1009 拒绝）不是同一件事；
 //! - JSON 语法：文本不是合法 JSON → `nodelink.protocol.invalid_json`（消息不生效，连接保持可用）；
+//!   判定在结构上限之后（见 `Envelope::decode` 的顺序说明：两者都处置为「消息不生效」）；
 //! - 信封/schema：未知信封字段、连接字段与阶段不匹配、必需字段缺失 → `nodelink.protocol.schema_invalid`；
 //!   消息 body 不是 JSON 同样是 `invalid_json`；body 的字段校验由各消息的类型化解码（`deny_unknown_fields`）
 //!   承担，失败一律 `schema_invalid`；
@@ -53,23 +58,28 @@ pub(crate) enum Inbound {
 /// `expected_sequence`：本方向下一个应到的序号（认证后从 `1` 开始）；返回 `Some(next)` 表示序号已推进。
 /// `allow_pre_auth_types`：握手阶段只允许 `node.hello`/`node.proof`（`node.challenge` 是 Owner→Access，
 /// 反向收到即拒绝）；认证后为 `false`（由 post_mvp 与路由分别处理）。
+///
+/// `Envelope::decode` 是唯一的帧解码入口（结构上限、语法、信封形状都在它里面），因此本条路径对
+/// 所有入站帧一致生效；区分 `invalid_json` 与 `schema_invalid` 所需的「文本是不是 JSON」只在信封解码
+/// 已经失败时再解析一次——合法帧不为此多付一次通用 JSON 解析。
 pub(crate) fn judge(
     text: &str,
     phase: Phase,
     expected_sequence: Option<u64>,
     connection_id: Option<&Uuid>,
 ) -> (Inbound, Option<u64>) {
-    if serde_json::from_str::<serde_json::value::Value>(text).is_err() {
-        return (
-            Inbound::Rejected {
-                code: ErrorCode::ProtocolInvalidJson,
-                message: "the frame is not valid JSON",
-            },
-            None,
-        );
-    }
     let envelope = match Envelope::decode(text) {
         Ok(envelope) => envelope,
+        // §2.5 的三个固定 JSON 结构上限：与信封形状失败同类，消息级拒绝（不属于改 type 的语义错误）。
+        Err(EnvelopeError::Structure(_)) => {
+            return (
+                Inbound::Rejected {
+                    code: ErrorCode::ProtocolSchemaInvalid,
+                    message: STRUCTURE_MESSAGE,
+                },
+                None,
+            );
+        }
         Err(EnvelopeError::UnsupportedVersion { .. }) => {
             return (
                 fatal(
@@ -90,20 +100,6 @@ pub(crate) fn judge(
                 None,
             );
         }
-        Err(
-            EnvelopeError::Malformed(_)
-            | EnvelopeError::ConnectionFieldsMismatch
-            | EnvelopeError::ConnectionFieldsRequired { .. }
-            | EnvelopeError::ConnectionFieldsForbidden { .. },
-        ) => {
-            return (
-                Inbound::Rejected {
-                    code: ErrorCode::ProtocolSchemaInvalid,
-                    message: SCHEMA_MESSAGE,
-                },
-                None,
-            );
-        }
         Err(EnvelopeError::BodyNotJson(_)) => {
             return (
                 Inbound::Rejected {
@@ -112,6 +108,25 @@ pub(crate) fn judge(
                 },
                 None,
             );
+        }
+        Err(
+            EnvelopeError::Malformed(_)
+            | EnvelopeError::ConnectionFieldsMismatch
+            | EnvelopeError::ConnectionFieldsRequired { .. }
+            | EnvelopeError::ConnectionFieldsForbidden { .. },
+        ) => {
+            // 语法与信封形状共用 `Malformed` 一族，需要重新解析一次才能分开：文本根本不是 JSON 时
+            // §2.4 要求 `invalid_json`，否则是信封/schema 形状错误。
+            let (code, message) = if serde_json::from_str::<serde_json::value::Value>(text).is_err()
+            {
+                (
+                    ErrorCode::ProtocolInvalidJson,
+                    "the frame is not valid JSON",
+                )
+            } else {
+                (ErrorCode::ProtocolSchemaInvalid, SCHEMA_MESSAGE)
+            };
+            return (Inbound::Rejected { code, message }, None);
         }
     };
 
@@ -278,6 +293,7 @@ pub(crate) fn rate_limit_details(retry_after: std::time::Duration) -> RawObject 
 }
 
 pub(crate) const SCHEMA_MESSAGE: &str = "the message does not match the v1 schema";
+pub(crate) const STRUCTURE_MESSAGE: &str = "the frame exceeds the fixed JSON structure limits";
 pub(crate) const SEQUENCE_MESSAGE: &str = "the connection sequence is not the next expected value";
 pub(crate) const TYPE_MESSAGE: &str = "the message type is not supported";
 pub(crate) const VERSION_MESSAGE: &str = "the protocol version is not supported";
