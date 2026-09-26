@@ -11,7 +11,7 @@ use acp_core::model::EndpointEvent;
 use agent_host::launch::LaunchSpec;
 use agent_host::process::Supervisor;
 use serde_json::json;
-use support::{Collector, launch_spec, scenario, scenario_with};
+use support::{Collector, TempFile, launch_spec, scenario, scenario_with};
 
 /// 起一个监督者并完成 `initialize`（多数用例的公共前置）。
 async fn started(spec: LaunchSpec) -> (std::sync::Arc<Supervisor>, Collector) {
@@ -312,7 +312,7 @@ async fn shutdown_after_abnormal_exit_is_clean() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_child_receives_exactly_the_injected_environment() {
-    let temp = std::env::temp_dir().join("acpr-agent-host-env.txt");
+    let temp = TempFile::new("acpr-agent-host-env.txt");
     let _ = std::fs::remove_file(&temp);
     let mut spec = scenario("normal");
     spec.args.push("--dump-env".to_owned());
@@ -341,7 +341,7 @@ async fn spawned_child_receives_exactly_the_injected_environment() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tree_forced_termination_stops_the_whole_process_tree() {
-    let temp = std::env::temp_dir().join("acpr-agent-host-heartbeat.txt");
+    let temp = TempFile::new("acpr-agent-host-heartbeat.txt");
     let _ = std::fs::remove_file(&temp);
     let spec = scenario_with(
         "spawn-grandchild",
@@ -429,7 +429,7 @@ async fn oversize_frame_ends_the_agent_and_fails_pending_requests() {
 /// 强制终止路径：父进程仍活着时结束整棵树，父与孙都必须停止。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tree_terminate_while_parent_alive_stops_parent_and_grandchild() {
-    let temp = std::env::temp_dir().join("acpr-agent-host-heartbeat-terminate.txt");
+    let temp = TempFile::new("acpr-agent-host-heartbeat-terminate.txt");
     let _ = std::fs::remove_file(&temp);
     let spec = scenario_with(
         "spawn-grandchild",

@@ -22,6 +22,53 @@ use agent_host::LaunchSpec;
 /// fake ACP child 的可执行文件（由 cargo 在测试构建时提供）。
 pub const FAKE_AGENT: &str = env!("CARGO_BIN_EXE_acpr-fake-acp-agent");
 
+/// 用例自建临时**文件**的守卫：`Drop` 时 `remove_file`（正常结束与 panic 展开两条路径都生效）。
+///
+/// 文件由用例或 fake ACP child 进程写出，守卫只持有路径（**不**创建文件）。`Deref<Target = Path>`
+/// 让 `path.exists()`、`path.to_string_lossy()`、`&path`（`&Path` 形参）照常工作；`AsRef<Path>` 让
+/// `std::fs::remove_file(&path)` / `remove_file(path)` 这类泛型入参也直接收。
+pub struct TempFile {
+    path: std::path::PathBuf,
+}
+
+impl TempFile {
+    /// 在系统临时目录下取一个唯一文件路径（**不**创建文件；`name` 必须已含 pid/sequence 等成分）。
+    #[must_use]
+    pub fn new(name: &str) -> Self {
+        Self {
+            path: std::env::temp_dir().join(name),
+        }
+    }
+}
+
+impl std::ops::Deref for TempFile {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for TempFile {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        // 尽力而为，且**不 panic**（展开中 panic 会 abort）：文件可能已被用例自己删掉（`NotFound`
+        // 立即返回），Windows 上子进程刚写完/刚退出时也可能瞬时占用——此时重试若干次。
+        for _ in 0..10 {
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+    }
+}
+
 /// 造一个指向 fake child 的 `LaunchSpec`（环境只留必要的进程项）。
 #[must_use]
 pub fn launch_spec(args: &[&str]) -> LaunchSpec {

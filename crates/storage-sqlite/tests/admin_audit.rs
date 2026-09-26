@@ -21,8 +21,6 @@
 
 mod support;
 
-use std::path::PathBuf;
-
 use acp_core::model::{
     Actor, AuditAction, AuditOutcome, AuditRecord, DeviceId, Digest, EntityRef, ExportId, ImportId,
     InteractionId, NodeId, PairingId, PortError, RequestId, ScopeSet, SessionId, Timestamp, TurnId,
@@ -31,7 +29,7 @@ use acp_core::model::{
 use acp_core::ports::{AuditQuery, AuditStore, RetentionPolicy, SessionStore};
 use storage_sqlite::migrate::{DATABASE_FILE, StorageConfig};
 use storage_sqlite::session_store::SqliteStore;
-use support::{digest_text, measured_storage_bytes, raw_pool, temp_dir};
+use support::{TempDir, digest_text, measured_storage_bytes, raw_pool, temp_dir};
 
 // ---------------------------------------------------------------------------------------------
 // 固定输入
@@ -109,12 +107,15 @@ fn cli_record(at_text: &str, action: AuditAction, target: EntityRef) -> AuditRec
 }
 
 /// 每个用例一个独立临时数据目录（`support::temp_dir` 已按 §7.1 建出 `0700` 目录）。
-async fn open(name: &str) -> (SqliteStore, PathBuf) {
+///
+/// 返回顺序是「守卫在前、store 在后」：调用点按 `let (_dir, store) = ...` 绑定后局部变量逆序析构，
+/// store（连接池）先释放句柄，守卫随后才删目录——否则 Windows 上会因文件仍被占用而删不掉。
+async fn open(name: &str) -> (TempDir, SqliteStore) {
     let dir = temp_dir(name);
     let store = SqliteStore::open(StorageConfig::new(&dir), &at(T0))
         .await
         .expect("open store");
-    (store, dir)
+    (dir, store)
 }
 
 fn policy() -> RetentionPolicy {
@@ -142,7 +143,7 @@ async fn all(store: &SqliteStore) -> Vec<AuditRecord> {
 
 #[tokio::test]
 async fn round_trip_preserves_every_column() {
-    let (store, _dir) = open("audit-round-trip").await;
+    let (_dir, store) = open("audit-round-trip").await;
     let written = AuditRecord::try_new(
         timestamp(T2),
         AuditAction::NodeIdentityChanged,
@@ -181,7 +182,7 @@ async fn round_trip_preserves_every_column() {
 
 #[tokio::test]
 async fn every_target_kind_round_trips() {
-    let (store, _dir) = open("audit-target-kinds").await;
+    let (_dir, store) = open("audit-target-kinds").await;
     let targets = vec![
         EntityRef::Session(session_id()),
         EntityRef::Turn(TurnId::new(TURN).expect("turn id")),
@@ -221,7 +222,7 @@ async fn every_target_kind_round_trips() {
 
 #[tokio::test]
 async fn device_actor_keeps_its_id_but_not_scopes() {
-    let (store, _dir) = open("audit-device-actor").await;
+    let (_dir, store) = open("audit-device-actor").await;
     let scopes = ScopeSet::try_from_iter(["session.list", "session.read"]).expect("scopes");
     let written = record(
         T0,
@@ -265,7 +266,7 @@ async fn device_actor_keeps_its_id_but_not_scopes() {
 
 #[tokio::test]
 async fn time_window_includes_both_endpoints() {
-    let (store, _dir) = open("audit-time-window").await;
+    let (_dir, store) = open("audit-time-window").await;
     for (text, action) in [
         (T1, AuditAction::PairingCreated),
         (T2, AuditAction::PairingClaimed),
@@ -317,7 +318,7 @@ async fn time_window_includes_both_endpoints() {
 
 #[tokio::test]
 async fn reversed_time_window_returns_no_rows() {
-    let (store, _dir) = open("audit-reversed-window").await;
+    let (_dir, store) = open("audit-reversed-window").await;
     store
         .append(cli_record(
             T2,
@@ -342,7 +343,7 @@ async fn reversed_time_window_returns_no_rows() {
 
 #[tokio::test]
 async fn unmatched_filters_return_empty_results() {
-    let (store, _dir) = open("audit-unmatched").await;
+    let (_dir, store) = open("audit-unmatched").await;
     store
         .append(cli_record(
             T0,
@@ -384,7 +385,7 @@ async fn unmatched_filters_return_empty_results() {
 
 #[tokio::test]
 async fn actions_filter_accepts_multiple_values() {
-    let (store, _dir) = open("audit-actions").await;
+    let (_dir, store) = open("audit-actions").await;
     for action in [
         AuditAction::PairingCreated,
         AuditAction::DeviceRevoked,
@@ -422,7 +423,7 @@ async fn actions_filter_accepts_multiple_values() {
 
 #[tokio::test]
 async fn actor_and_target_filters_match_the_stored_columns() {
-    let (store, _dir) = open("audit-actor-target").await;
+    let (_dir, store) = open("audit-actor-target").await;
     let local_target = EntityRef::Session(session_id());
     let remote_target = EntityRef::Node(node_id());
     store
@@ -484,7 +485,7 @@ async fn actor_and_target_filters_match_the_stored_columns() {
 
 #[tokio::test]
 async fn combined_filters_and_limit_compose_as_a_conjunction() {
-    let (store, _dir) = open("audit-combined-filters").await;
+    let (_dir, store) = open("audit-combined-filters").await;
     let export = EntityRef::Export(ExportId::new(EXPORT).expect("export id"));
     let other_export = EntityRef::Export(ExportId::new("export-two").expect("export id"));
     let node_actor = Actor::Node {
@@ -567,7 +568,7 @@ async fn combined_filters_and_limit_compose_as_a_conjunction() {
 
 #[tokio::test]
 async fn rows_come_back_in_ascending_time_order() {
-    let (store, _dir) = open("audit-order").await;
+    let (_dir, store) = open("audit-order").await;
     // 故意按时间倒序插入：顺序只能来自 `ORDER BY at`，不能来自 `audit_id`（插入顺序）。
     for (text, action) in [
         (T3, AuditAction::PairingApproved),
@@ -602,7 +603,7 @@ async fn rows_come_back_in_ascending_time_order() {
 
 #[tokio::test]
 async fn limit_caps_rows_and_none_means_unbounded() {
-    let (store, _dir) = open("audit-limit").await;
+    let (_dir, store) = open("audit-limit").await;
     for (text, action) in [
         (T1, AuditAction::PairingCreated),
         (T2, AuditAction::PairingClaimed),
@@ -653,7 +654,7 @@ async fn limit_caps_rows_and_none_means_unbounded() {
 
 #[tokio::test]
 async fn default_query_returns_every_row() {
-    let (store, _dir) = open("audit-default-query").await;
+    let (_dir, store) = open("audit-default-query").await;
     // 跨动作、跨 actor、跨时间：默认查询不施加任何过滤（`actions` 为空 = 不按动作过滤）。
     store
         .append(cli_record(
@@ -692,7 +693,7 @@ async fn default_query_returns_every_row() {
 
 #[tokio::test]
 async fn append_refuses_a_new_row_when_over_capacity() {
-    let (store, dir) = open("audit-capacity").await;
+    let (dir, store) = open("audit-capacity").await;
     store
         .append(cli_record(
             T0,
@@ -729,7 +730,7 @@ async fn append_refuses_a_new_row_when_over_capacity() {
 
 #[tokio::test]
 async fn appended_rows_are_swept_by_audit_retention() {
-    let (store, _dir) = open("audit-retention").await;
+    let (_dir, store) = open("audit-retention").await;
     store
         .append(cli_record(
             OLD,

@@ -50,23 +50,23 @@ fn owned_ref(session: &SessionId) -> SessionReference {
     SessionReference::Owned(OwnedSessionRef::new(session.clone()))
 }
 
-/// 一个唯一的临时文件路径（避免并行测试互相干扰）。
-fn temp_path(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("acpr-agent-host-{tag}-{}.txt", std::process::id()))
+/// 一个唯一的临时文件路径（避免并行测试互相干扰）；随用例结束自动删除。
+fn temp_path(tag: &str) -> support::TempFile {
+    support::TempFile::new(&format!("acpr-agent-host-{tag}-{}.txt", std::process::id()))
 }
 
 /// 一个会被子进程写出的环境快照路径。
-fn env_path(tag: &str) -> std::path::PathBuf {
+fn env_path(tag: &str) -> support::TempFile {
     temp_path(&format!("env-{tag}"))
 }
 
 /// 心跳文件路径（子进程存活期间持续追加字节）。
-fn heartbeat_path(tag: &str) -> std::path::PathBuf {
+fn heartbeat_path(tag: &str) -> support::TempFile {
     temp_path(&format!("heartbeat-{tag}"))
 }
 
 /// 带 `--dump-env` 的 profile：子进程一启动就会把自己的环境写出来。
-fn dumping_profile(agent: &str, tag: &str) -> (AgentProfile, std::path::PathBuf) {
+fn dumping_profile(agent: &str, tag: &str) -> (AgentProfile, support::TempFile) {
     let path = env_path(tag);
     let _ = std::fs::remove_file(&path);
     let text = path.to_string_lossy().into_owned();
@@ -82,7 +82,7 @@ fn dumping_profile(agent: &str, tag: &str) -> (AgentProfile, std::path::PathBuf)
 fn dumping_heartbeat_profile(
     agent: &str,
     tag: &str,
-) -> (AgentProfile, std::path::PathBuf, std::path::PathBuf) {
+) -> (AgentProfile, support::TempFile, support::TempFile) {
     dumping_heartbeat_profile_with(agent, tag, &[])
 }
 
@@ -91,7 +91,7 @@ fn dumping_heartbeat_profile_with(
     agent: &str,
     tag: &str,
     extra: &[&str],
-) -> (AgentProfile, std::path::PathBuf, std::path::PathBuf) {
+) -> (AgentProfile, support::TempFile, support::TempFile) {
     let dump = env_path(tag);
     let _ = std::fs::remove_file(&dump);
     let heartbeat = heartbeat_path(tag);
@@ -222,7 +222,9 @@ async fn catalog_query_never_spawns_a_process() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn availability_is_per_entry_and_credentials_fail_closed() {
     let good = {
-        let (profile, _) = dumping_profile("agent-good", "good");
+        // 守卫（第二个返回值）绑定到本用例的作用域：即使 `agents()` 真的启动了子进程写出了该文件，
+        // 也会在用例结束时被删掉（design D2：守卫的生命周期要覆盖整个测试体）。
+        let (profile, _env_guard) = dumping_profile("agent-good", "good");
         profile
     };
     let missing = profile_with(
@@ -246,10 +248,8 @@ async fn availability_is_per_entry_and_credentials_fail_closed() {
     assert!(availability.contains(&("agent-missing".to_owned(), false)));
 
     // 凭据引用失效：只让**该条目**不可用，且启动必须失败关闭（进程不启动）。
-    let broken = host(
-        vec![dumping_profile("agent-broken", "broken").0],
-        FakeCredentials::failing(),
-    );
+    let (broken_profile, broken_env) = dumping_profile("agent-broken", "broken");
+    let broken = host(vec![broken_profile], FakeCredentials::failing());
     let descriptors = broken.agents().await.expect("agents");
     assert!(!descriptors[0].available, "凭据不可用时条目必须不可用");
     let error = broken
@@ -269,12 +269,11 @@ async fn availability_is_per_entry_and_credentials_fail_closed() {
         Err(error) => error,
     };
     assert!(matches!(error, PortError::Unavailable(_)));
-    let dump = env_path("broken");
     assert!(
-        !dump.exists(),
+        !broken_env.exists(),
         "凭据解析失败必须在 spawn 之前失败关闭（进程不得启动）"
     );
-    let _ = std::fs::remove_file(&dump);
+    let _ = std::fs::remove_file(&broken_env);
     broken.shutdown_all().await;
 }
 
@@ -403,7 +402,7 @@ async fn child_environment_is_exactly_the_launch_spec() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_selection_ignores_startup_configuration_files() {
     // 启动配置文件（同名条目）必须**不被使用**：profile 只来自 `LocalConfigStore`。
-    let config_path = std::env::temp_dir().join(format!(
+    let config_path = support::TempFile::new(&format!(
         "acpr-agent-host-config-{}.json",
         std::process::id()
     ));

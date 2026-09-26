@@ -196,6 +196,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::local_admin::test_support::TempFile;
 
     fn timestamp(text: &str) -> Timestamp {
         Timestamp::new(text).expect("timestamp")
@@ -215,10 +216,10 @@ mod tests {
         .expect("audit record")
     }
 
-    fn temp_path(name: &str) -> std::path::PathBuf {
+    fn temp_path(name: &str) -> TempFile {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
+        TempFile::new(&format!(
             "acpr-wp3b1-audit-{}-{sequence}-{name}",
             std::process::id()
         ))

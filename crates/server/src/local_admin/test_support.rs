@@ -12,7 +12,7 @@
 #![cfg(test)]
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
@@ -1591,6 +1591,101 @@ impl ConnectionCloser for RecordingCloser {
             .lock()
             .expect("关闭锁")
             .push(node.as_str().to_owned());
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 用例自建的临时路径
+// ---------------------------------------------------------------------------------------------
+
+/// 用例自建临时目录的守卫：`Drop` 时删除（正常结束与 panic 展开两条路径都生效）。
+///
+/// `Deref<Target = Path>` 让 `directory.join(..)`、`directory.to_str()`、`&directory`（`&Path` 形参）
+/// 照常工作；`AsRef<Path>` 让 `fs::remove_dir_all(&directory)` 这类泛型入参也直接收。`pub(crate)` 只在
+/// `#[cfg(test)]` 下存在（`mod.rs` 的声明）。
+pub(crate) struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    /// 在系统临时目录下新建唯一子目录（`name` 必须已含 pid/序列号等唯一化成分）。
+    #[must_use]
+    pub(crate) fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("临时目录可建");
+        Self { path }
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        // 尽力而为，且**不 panic**（展开中 panic 会 abort）：目录可能已被用例自己删掉（`NotFound`
+        // 立即返回），Windows 上也可能因句柄释放/扫描瞬时占用而失败——此时重试若干次（与 `app` 测试的
+        // `TempRoot` 同一口径）。
+        for _ in 0..10 {
+            match std::fs::remove_dir_all(&self.path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+    }
+}
+
+/// 用例自建临时**文件**的守卫（`Drop` 时 `remove_file`；文件由用例或被测代码创建）。
+pub(crate) struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    /// 在系统临时目录下取一个唯一文件路径（**不**创建文件；`name` 必须已含唯一化成分）。
+    #[must_use]
+    pub(crate) fn new(name: &str) -> Self {
+        Self {
+            path: std::env::temp_dir().join(name),
+        }
+    }
+}
+
+impl std::ops::Deref for TempFile {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TempFile {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        // 同 `TempDir`：尽力而为、不 panic，Windows 上的瞬时占用重试若干次。
+        for _ in 0..10 {
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
     }
 }
 

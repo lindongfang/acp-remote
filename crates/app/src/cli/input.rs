@@ -139,6 +139,54 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// 用例自建临时目录的守卫：`Drop` 时删除（正常结束与 panic 展开两条路径都生效）。
+    ///
+    /// `Deref<Target = Path>` 让 `dir.join(..)`、`dir.display()`、`&dir`（`&Path` 形参）照常工作；
+    /// `AsRef<Path>` 让 `std::fs::remove_dir_all(&dir)` 这类泛型入参也直接收。
+    struct TempDir(std::path::PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<std::path::Path> for TempDir {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            // 尽力而为，且**不 panic**（展开中 panic 会 abort）：目录可能已被用例自己删掉（`NotFound`
+            // 立即返回），Windows 上也可能因句柄释放/扫描瞬时占用而失败——此时重试若干次（与 `app`
+            // 测试的 `TempRoot` 同一口径）。
+            for _ in 0..10 {
+                match std::fs::remove_dir_all(&self.0) {
+                    Ok(()) => return,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                }
+            }
+        }
+    }
+
+    /// 在系统临时目录下新建一个用例专属目录（`acpr-wp4b-input-{pid}-{线程号}`）。
+    #[must_use]
+    fn temp_dir() -> TempDir {
+        let path = std::env::temp_dir().join(format!(
+            "acpr-wp4b-input-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("临时目录");
+        TempDir(path)
+    }
+
     /// 收集「本该出现在终端上的输出」的汇（测试断言值没有被回显到这里）。
     #[derive(Clone, Default)]
     struct SharedSink(Arc<Mutex<Vec<u8>>>);
@@ -225,8 +273,7 @@ mod tests {
 
     #[test]
     fn a_non_object_file_and_an_unregistered_field_are_rejected_with_invalid_params() {
-        let dir = std::env::temp_dir().join(format!("acpr-wp4b-input-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("临时目录");
+        let dir = temp_dir();
         let array = dir.join("array.json");
         std::fs::write(&array, b"[1, 2]").expect("写入");
         let error = read_params_file(&array, &[]).expect_err("顶层不是对象必须失败");

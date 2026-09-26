@@ -148,6 +148,8 @@ async fn event_only_commits_keep_the_session_version() {
             .version(),
         Version::new(1)
     );
+    // 先显式关闭连接池再让临时目录守卫出作用域：Windows 上句柄未释放时目录删不掉。
+    store.close().await;
 }
 
 /// 含状态变更的提交恰好 +1（两次连续状态变更各 +1，纯事件提交夹在中间不递增）。
@@ -199,6 +201,8 @@ async fn state_change_commits_bump_the_session_version_by_one() {
         .await
         .expect("second state change");
     assert_eq!(second.version, Version::new(3), "状态变更提交再次 +1");
+    // 先显式关闭连接池再让临时目录守卫出作用域：Windows 上句柄未释放时目录删不掉。
+    store.close().await;
 }
 
 /// 状态变更提交上的 `expected_version` 必须等于当前版本：core 的推导在真实存储上是可校验的。
@@ -268,4 +272,6 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
         .await
         .expect("matching expected version");
     assert_eq!(outcome.version, Version::new(2));
+    // 先显式关闭连接池再让临时目录守卫出作用域：Windows 上句柄未释放时目录删不掉。
+    store.close().await;
 }
