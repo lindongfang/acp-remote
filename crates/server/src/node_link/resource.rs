@@ -228,9 +228,11 @@ impl ResourceRoute {
     /// 订阅了该会话的连接（顺序按 `connectionId` 稳定）。
     ///
     /// 连接结束时 `conn` 会从注册表移除句柄，但不会通知路由；这里以「注册表里还在」为活跃判据，因此
-    /// 已结束连接的状态表条目不会被再次投递。同时**顺带回收**这些条目（[`ResourceRoute::forget_if_closed`]
-    /// 只在投递失败且句柄已摘除时清理，正常结束的连接永远走不到那条路）：不回收的话状态表会按
-    /// 历史连接数单调增长，每次扇出的扫描成本随之线性上升。回收只发生在扇出时（没有事件要投递的
+    /// 已结束连接的状态表条目不会被再次投递。同时**顺带回收**句柄已不在注册表里的条目
+    /// （[`ResourceRoute::forget_if_closed`] 只在投递失败且句柄已摘除时清理，正常结束的连接永远走不到
+    /// 那条路）：回收判据在订阅判定**之前**，因此「attach 后从未 subscribe」与「re-attach 清掉订阅」
+    /// 这两类连接也一并回收（它们不再持有任何本会话订阅，只看订阅的话永远扫不到）；不回收的话状态表
+    /// 会按历史连接数单调增长，每次扇出的扫描成本随之线性上升。回收只发生在扇出时（没有事件要投递的
     /// 连接不产生任何成本），因此它是惰性的、不需要额外的生命周期回调。
     fn subscribers(&self, session: &SessionId) -> Vec<(String, Arc<ConnectionHandle>, Attachment)> {
         let handles = self.registry.handles();
@@ -238,6 +240,14 @@ impl ResourceRoute {
         let mut targets = Vec::new();
         let mut ended = Vec::new();
         for (key, state) in states.iter() {
+            let Some(handle) = handles
+                .iter()
+                .find(|handle| handle.connection_id().as_str() == key)
+            else {
+                // 连接已结束（见本方法的说明）：登记回收，不在遍历中改动表。
+                ended.push(key.clone());
+                continue;
+            };
             let Some(subscription) = state.subscriptions.get(session.as_str()) else {
                 continue;
             };
@@ -249,14 +259,6 @@ impl ResourceRoute {
             {
                 continue;
             }
-            let Some(handle) = handles
-                .iter()
-                .find(|handle| handle.connection_id().as_str() == key)
-            else {
-                // 连接已结束（见本方法的说明）：登记回收，不在遍历中改动表。
-                ended.push(key.clone());
-                continue;
-            };
             targets.push((key.clone(), Arc::clone(handle), attachment.clone()));
         }
         for key in ended {
@@ -756,10 +758,11 @@ impl ResourceRoute {
         if !self.owner_matches(&request.session_ref) {
             return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
         }
-        let Some(attachment) = self.attachment_for(handle, &export, &session) else {
+        //    存在性：本连接当前必须真的持有该会话的 attachment（没有 attachment 与 epoch 不符同码，
+        //    一律不记账）。
+        if self.attachment_for(handle, &export, &session).is_none() {
             return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
-        };
-        let _ = attachment;
+        }
         // ② epoch 必须与该会话当前 origin epoch 一致。
         let head = match self
             .core

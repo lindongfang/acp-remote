@@ -1176,3 +1176,78 @@ async fn a_finished_connection_state_entry_is_reclaimed_by_the_next_fan_out() {
         "已结束的连接不再收到事件"
     );
 }
+
+/// [RV2-WP5-F1]：「attach 后从未 subscribe 即断开」的连接也要被回收——它的状态表条目、没有本会话
+/// 订阅，回收判据必须放在订阅判定**之前**才能扫到它。
+#[tokio::test]
+async fn a_finished_connection_that_never_subscribed_is_reclaimed() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let _ = fixture.attach(&route).await;
+    assert_eq!(
+        lock(&route.states).len(),
+        1,
+        "attach 已经建出了一条状态条目"
+    );
+    assert!(
+        lock(&route.states)
+            .values()
+            .all(|state| state.subscriptions.is_empty()),
+        "本用例的前提：该连接没有任何订阅"
+    );
+
+    // 连接结束（只有句柄从注册表摘除，不通知路由）：条目仍然无人回收除非扇出时按「注册表里还在」扫。
+    fixture.registry.unregister(CONNECTION);
+    route
+        .fan_out(&stored_event(1, "agent.message", r#"{"kind":"agent.message"}"#).event)
+        .await;
+    assert!(
+        lock(&route.states).is_empty(),
+        "未订阅的已结束连接也必须被回收"
+    );
+    assert!(
+        fixture.outbound.try_recv().is_err(),
+        "已结束的连接不再收到事件"
+    );
+}
+
+/// [RV2-WP5-F1]：「re-attach 清掉订阅后断开」的连接也要被回收——`resource.attach` 会清掉该会话的旧
+/// 订阅（§12.4，Access 必须重新 subscribe），因此这类条目同样不再持有本会话订阅。
+#[tokio::test]
+async fn a_finished_connection_whose_reattach_cleared_its_subscription_is_reclaimed() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let attached = fixture.attach(&route).await;
+    let subscribe = fixture.envelope(
+        MessageType::ResourceSubscribe,
+        json!({
+            "attachmentId": attached["attachmentId"],
+            "attachmentGeneration": attached["attachmentGeneration"],
+            "cursor": null,
+        }),
+    );
+    route.route(&fixture.handle, &subscribe).await;
+    let _ = fixture.drain();
+
+    // 重新 attach：旧 attachment 被覆盖、该会话的旧订阅被清掉（§12.4）。
+    let _ = fixture.attach(&route).await;
+    assert!(
+        lock(&route.states)
+            .values()
+            .all(|state| state.subscriptions.is_empty()),
+        "re-attach 必须清掉该会话的旧订阅"
+    );
+
+    fixture.registry.unregister(CONNECTION);
+    route
+        .fan_out(&stored_event(1, "agent.message", r#"{"kind":"agent.message"}"#).event)
+        .await;
+    assert!(
+        lock(&route.states).is_empty(),
+        "订阅已被 re-attach 清掉的已结束连接也必须被回收"
+    );
+    assert!(
+        fixture.outbound.try_recv().is_err(),
+        "已结束的连接不再收到事件"
+    );
+}
