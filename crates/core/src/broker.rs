@@ -3089,10 +3089,10 @@ pub(crate) mod test_support {
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
         DeviceWrite, DropReport, ExpiryWrite, ExportRevocation, ExportWrite, IdempotentReplay,
         ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
-        NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
-        PairingSettlementWrite, PairingWrite, ProfileWrite, ProviderRefWrite, PruneReport,
-        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef,
-        TrustStore, TurnAccepted, WorkspaceWrite,
+        NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite,
+        PairingConsumption, PairingSettlementWrite, PairingWrite, ProfileWrite, ProviderRefWrite,
+        PruneReport, RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth,
+        TrustRecordRef, TrustStore, TurnAccepted, WorkspaceWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -4582,6 +4582,12 @@ pub(crate) mod test_support {
                 PairingState::Expired => Err(PortError::Conflict(ConflictKind::Expired)),
                 _ => Err(PortError::Conflict(ConflictKind::Consumed)),
             }
+        }
+
+        /// Node Link 的认证收尾不在本替身的范围内（`use_cases` 的用例只走配对消费与审计）：
+        /// 显式失败关闭而不是静默成功，避免「替身比真实存储更宽容」。
+        async fn record_node_connected(&self, _write: NodeConnectedWrite) -> Result<(), PortError> {
+            unreachable!("本替身不实现 Node Link 认证收尾")
         }
     }
 

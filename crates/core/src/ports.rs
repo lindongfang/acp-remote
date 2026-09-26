@@ -684,10 +684,27 @@ pub struct ExpiryWrite {
 /// `actor` 是本次认证的主体：只接受与该配对**已批准对端**一致的 `Actor::Node`/`Actor::Device`（存储层
 /// 在同一事务内与 `owned_pairing_peer` 比对）；`context.audit` 必须携带与 `actor` 同主的审计行
 /// （`node.authenticated`/`device.authenticated`，`SECURITY_DESIGN.md` §14.2）。
+///
+/// 写集在同一个事务里还推进「本次认证的对端节点行」的 `last_connected_at`（§11.6 第 9 条）：
+/// `actor` 为 `Actor::Node` 时该行是 `(actor.node, NodeKind::Access)`——节点配对行只由
+/// `node.pair.begin --mode owner` 创建，批准时写下的角色恒为 `access`（§11.6 第 3 条），因此这一行
+/// 由写集本身唯一确定；`Actor::Device` 的配对没有节点行，不做这一步。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PairingConsumption {
     pub pairing: PairingId,
     pub actor: Actor,
+    pub context: WriteContext,
+}
+
+/// 认证成功的收尾写集（§11.6 第 9 条）：把 `(node, kind)` 角色行的 `last_connected_at` 推进到
+/// `context.at`，并把 `context.audit`（该对端的 `node.authenticated` 成功行）在**同一事务**提交。
+///
+/// 它服务「认证成功但没有待消费配对」的重复认证；首次认证（已批准配对 → `consumed`）的同一职责由
+/// [`PairingConsumption`] 在消费写集里承担。Node Link 的连接对端在本机的角色恒为 `NodeKind::Access`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeConnectedWrite {
+    pub node: NodeId,
+    pub kind: NodeKind,
     pub context: WriteContext,
 }
 
@@ -808,8 +825,13 @@ pub trait TrustStore: Send + Sync {
 
     /// 消费一个已批准的配对（§11.6 第 8 条）：单事务把状态推进到 `consumed` 并写 `terminal_at`、追加
     /// `context.audit`；已是 `consumed` 且 `actor` 与对端一致时幂等成功（不覆盖首次 `terminal_at`，也
-    /// 不重复写审计）。
+    /// 不重复写审计）。写集还推进对端节点行的 `last_connected_at`（见 [`PairingConsumption`]）。
     async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError>;
+
+    /// 认证成功的收尾写集（§11.6 第 9 条）：单事务把 `(node, kind)` 行的 `last_connected_at` 推进到
+    /// `context.at`（只前进不倒退、不抹掉已存值）并追加 `context.audit`；该行不存在 →
+    /// `NotFound(EntityRef::Node)`。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError>;
 }
 
 /// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。

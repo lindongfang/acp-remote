@@ -34,11 +34,11 @@ use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
     DeliveryIndexEntry, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
     ExportWrite, HistoryPage, HistoryQuery, IdGenerator, ImportRemoval, ImportWrite,
-    LocalConfigStore, NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite,
-    PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite,
-    ProviderRefWrite, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy,
-    RevokeReason, SeedWrite, SessionQuery, SessionStore, StoreHealth, TrustRecordRef, TrustStore,
-    WorkspaceWrite, WriteContext,
+    LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
+    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
+    ProfileWrite, ProviderRefWrite, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
+    RetentionPolicy, RevokeReason, SeedWrite, SessionQuery, SessionStore, StoreHealth,
+    TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -619,8 +619,9 @@ impl UseCases {
     ///
     /// 授权：只接受与该配对**已批准对端一致**的 `Actor::Node`/`Actor::Device`；claimant、本机入口与
     /// 对端错配一律 `authorization.scope_denied`/`Conflict(IdentityMismatch)`。状态推进、`terminal_at`
-    /// 与审计（节点 `node.authenticated`、设备 `device.authenticated`）在一个写集里提交；已是
-    /// `consumed` 且对端一致时幂等成功。存储层在同一事务内重做对端比对与状态守卫（并发权威）。
+    /// 与审计（节点 `node.authenticated`、设备 `device.authenticated`）在一个写集里提交；节点对端的
+    /// 那一次还会在同一事务推进该对端节点行的 `last_connected_at`（§11.6 第 9 条）；已是 `consumed`
+    /// 且对端一致时幂等成功。存储层在同一事务内重做对端比对与状态守卫（并发权威）。
     pub async fn consume_pairing(
         &self,
         actor: &Actor,
@@ -697,8 +698,10 @@ impl UseCases {
     /// （握手的细分失败原因只在结构化日志里，不进审计行）。
     ///
     /// 首次认证成功（已批准配对 → `consumed`）的 `node.authenticated` 由
-    /// [`UseCases::consume_pairing`] 的写集提交，适配器**不要**再补一条；本入口服务「重复认证成功」与
-    /// 「认证失败」这两类没有写集的留痕。
+    /// [`UseCases::consume_pairing`] 的写集提交；重复认证成功（没有待消费配对）的留痕与
+    /// `last_connected_at` 的推进由 [`UseCases::record_node_connected`] 的写集提交——这两处适配器都
+    /// **不要**再补一条。本入口服务「认证失败」这类没有状态推进的留痕（以及调用方确实只需要一条独立
+    /// 审计行的场合）。
     pub async fn record_node_link_auth(
         &self,
         access_node: &NodeId,
@@ -727,6 +730,35 @@ impl UseCases {
         )
         .map_err(PortError::from)?;
         self.audit.append(record).await
+    }
+
+    /// 重复认证成功的收尾写集（§11.6 第 9 条；`IDENTITY_AND_AUTH_CONTRACT.md` §5.1 的收尾副作用）。
+    ///
+    /// 认证成功但没有待消费配对时，`last_connected_at` 与 `node.authenticated` 必须与首次认证一样在
+    /// **同一事务**提交：该列是「最近一次认证成功时间」，只在首次认证写会让它对重复连接说谎。归因与
+    /// [`UseCases::record_node_link_auth`] 的 `node.authenticated` 逐字一致（`actor`/`via_node` 都是该
+    /// 对端、`target = Node(对端)`、`localPrincipalRef` 为 `None`）。
+    ///
+    /// 角色恒取 `NodeKind::Access`：Node Link 的入站对端只可能是配对批准写下的 `access` 行
+    /// （`LOCAL_ADMIN_PROTOCOL.md` §5.4 的 `--mode access` 没有 `confirm` 调用）。
+    pub async fn record_node_connected(&self, access_node: &NodeId) -> Result<(), PortError> {
+        let at = self.clock.now();
+        let actor = Actor::Node {
+            node: access_node.clone(),
+            access_node: access_node.clone(),
+        };
+        let audits = vec![self.pending_audit(
+            &actor,
+            AuditAction::NodeAuthenticated,
+            EntityRef::Node(access_node.clone()),
+        )];
+        self.trust
+            .record_node_connected(NodeConnectedWrite {
+                node: access_node.clone(),
+                kind: NodeKind::Access,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
     }
 
     /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。

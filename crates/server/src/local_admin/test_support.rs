@@ -1151,6 +1151,10 @@ impl TrustStore for NotTouched {
     ) -> Result<PairingRecord, PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
+
+    async fn record_node_connected(&self, _write: NodeConnectedWrite) -> Result<(), PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
 }
 
 /// 确定性 id 生成器：单调递增的规范 uuid 文本（与 core 内部测试的 `TestIds` 同款）。
@@ -1589,8 +1593,8 @@ impl TrustStore for FakeTrust {
     }
 
     /// 与存储层同款（§11.6 第 8 条）：主体与审计归因一致 → 读配对行/对端行 → 对端同类同 id → 只有
-    /// `approved` 能推进到 `consumed`（`terminal_at` 取本次 `at`，审计同写集），已是 `consumed` 且对端
-    /// 一致时幂等成功（不覆盖首次时间、不重复写审计）。
+    /// `approved` 能推进到 `consumed`（`terminal_at` 取本次 `at`，审计同写集，并推进对端节点行的
+    /// `last_connected_at`），已是 `consumed` 且对端一致时幂等成功（不覆盖首次时间、不重复写审计）。
     async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError> {
         if write
             .context
@@ -1641,8 +1645,19 @@ impl TrustStore for FakeTrust {
         )
         .expect("消费后的配对记录合法");
         self.append_audits(&write.context.at, write.context.audit);
+        if let Actor::Node { node, .. } = &write.actor {
+            self.advance_node_connected_at(node, NodeKind::Access, &write.context.at)?;
+        }
         pairings.insert(write.pairing.as_str().to_owned(), consumed.clone());
         Ok(consumed)
+    }
+
+    /// 与存储层同款（§11.6 第 9 条）：推进 `last_connected_at`（只前进不倒退）与 `context.audit`
+    /// 同一写集；行不存在 → `NotFound(Node)`。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError> {
+        self.advance_node_connected_at(&write.node, write.kind, &write.context.at)?;
+        self.append_audits(&write.context.at, write.context.audit);
+        Ok(())
     }
 }
 
@@ -1656,6 +1671,44 @@ fn peer_matches_actor(actor: &Actor, peer: &PeerIdentity) -> bool {
 }
 
 impl FakeTrust {
+    /// 认证收尾推进节点行的 `last_connected_at`（§11.6 第 9 条）：与存储层同款——只前进不倒退、
+    /// 不抹掉已存值（比较按固定宽度 UTC 毫秒文本的字典序）；行不存在 → `NotFound(Node)`。
+    ///
+    /// 替身只改这一个字段（不像 `upsert_node` 那样重写整行），撤销时间与原因保持原样。
+    fn advance_node_connected_at(
+        &self,
+        node: &NodeId,
+        kind: NodeKind,
+        at: &Timestamp,
+    ) -> Result<(), PortError> {
+        let mut nodes = self.nodes.lock().expect("信任锁");
+        let key = (node.as_str().to_owned(), kind.as_str().to_owned());
+        let Some(record) = nodes.get(&key).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Node(node.clone())));
+        };
+        if record
+            .last_connected_at()
+            .is_some_and(|stored| stored.as_str() >= at.as_str())
+        {
+            return Ok(());
+        }
+        let advanced = NodeRecord::try_new(
+            record.node_id().clone(),
+            record.display_name(),
+            record.kind(),
+            record.node_public_key_fingerprint().clone(),
+            record.grants().clone(),
+            record.state(),
+            record.owner_endpoint().map(str::to_owned),
+            record.created_at().clone(),
+            Some(at.clone()),
+            record.revoked_at().cloned(),
+        )
+        .expect("推进时间后的节点记录合法");
+        nodes.insert(key, advanced);
+        Ok(())
+    }
+
     fn append_audits(&self, at: &Timestamp, audit: Vec<PendingAudit>) {
         let mut audits = self.audits.lock().expect("信任锁");
         for pending in audit {

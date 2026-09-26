@@ -1,6 +1,6 @@
 //! `TrustStore` 的 SQLite 实现（设备、节点双角色、配对、身份材料）。
 //!
-//! 写集语义逐条对应 `docs/CORE_PORTS_AND_STORAGE.md` §11.6 的第 1–8 条；每条写路径都是一个
+//! 写集语义逐条对应 `docs/CORE_PORTS_AND_STORAGE.md` §11.6 的第 1–9 条；每条写路径都是一个
 //! `BEGIN IMMEDIATE` 事务，状态、集合字段与审计一次提交。读路径（`device`/`devices`/`node`/`nodes`/
 //! `nodes_for`/`peer_key`/`pairing`/`pairing_peer`/`pairing_for`）不写任何行。
 //!
@@ -10,7 +10,8 @@
 //!    （`PairingPeer::host_binding`），不一致按身份不匹配拒绝。
 //! 2. 节点对端的角色：节点配对行只由 `node.pair.begin --mode owner` 创建，而 `LOCAL_ADMIN_PROTOCOL.md`
 //!    §5.4 明确「`--mode access` 本机没有 `confirm` 调用」（claim 的 `nodeKind` 固定为 `access`），因此
-//!    批准时的对端角色恒为 `NodeKind::Access`，无需在写集里携带（见 `approve_node`）。
+//!    批准时的对端角色恒为 `NodeKind::Access`，无需在写集里携带（见 `approve_node`）；认证收尾推进
+//!    `last_connected_at`（§11.6 第 9 条，见 `advance_node_connected_at`）用的是同一个推导。
 //!
 //! `put_device`/`put_node` 拒绝 `revoked` 状态：撤销是 `revoke_device`/`revoke_node` 的职责，只有它们
 //! 携带 `RevokeReason`（`owned_device`/`owned_node` 的 CHECK 要求 `state = 'revoked'` 与
@@ -28,9 +29,9 @@ use acp_core::model::{
     PairingTarget, PeerIdentity, PeerPublicKey, PortError, ScopeSet, Timestamp,
 };
 use acp_core::ports::{
-    DeviceRevocation, DeviceWrite, ExpiryWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
-    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, RevokeReason,
-    TrustRecordRef, TrustStore,
+    DeviceRevocation, DeviceWrite, ExpiryWrite, NodeConnectedWrite, NodeRevocation, NodeWrite,
+    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, RevokeReason, TrustRecordRef, TrustStore,
 };
 
 use crate::admin::{
@@ -946,6 +947,10 @@ impl TrustStore for SqliteStore {
     /// 其余状态一律具名拒绝：`expired` → `Expired`、`rejected` → `Consumed`（与 `terminal_conflict`
     /// 同口径）、`created`/`claimed`/`pending_confirmation` 尚未批准 → `InvalidRequest`。
     ///
+    /// 状态推进的那条路径还推进对端节点行的 `last_connected_at`（§11.6 第 9 条）：`actor` 为
+    /// `Actor::Node` 时打的就是配对批准写下的 `access` 行，与 `consumed`、`terminal_at`、审计同一事务。
+    /// 幂等分支（已是 `consumed`）不重复推进：那是同一次消费的重复提交，首条提交已经写过认证时间。
+    ///
     /// 不设有容量门（与 `revoke_*`/`expire_pairings` 同类）：认证收尾是安全动作，不得因容量压力被
     /// 卡住；它只把配对行推进一个状态、不新增管理行。
     async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError> {
@@ -1033,6 +1038,10 @@ impl TrustStore for SqliteStore {
             return Err(terminal_conflict(current.state()));
         }
         insert_audit_rows(&mut tx, &write.context.at, &write.context.audit).await?;
+        if let Actor::Node { node, .. } = &write.actor {
+            // 节点对端：配对批准写下的角色行恒为 `access`（模块头的第 2 条机器事实）。
+            advance_node_connected_at(&mut tx, node, NodeKind::Access, &write.context.at).await?;
+        }
         let consumed_record = PairingRecord::try_new(
             record.id().clone(),
             record.target(),
@@ -1051,11 +1060,68 @@ impl TrustStore for SqliteStore {
         tx.commit().await.db()?;
         Ok(consumed_record)
     }
+
+    /// §11.6 第 9 条：认证成功的收尾写集（重复认证：没有待消费配对）。
+    ///
+    /// 两件事一个事务：把 `(node, kind)` 行的 `last_connected_at` 推进到 `context.at`（只前进不倒退、
+    /// 已存值不得被抹掉），并追加 `context.audit`（该对端的 `node.authenticated` 成功行）。行不存在 →
+    /// `NotFound(EntityRef::Node)`：这条入口是认证收尾，「没有行」意味着调用方拿着一个信任面不存在的
+    /// 对端，静默成功会让管理视图与信任面不一致。
+    ///
+    /// 不设有容量门（同 `consume_pairing` 的取舍）：它只更新一个时间列、不新增管理行。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError> {
+        self.writable()?;
+        let mut tx = self
+            .pools()
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .db()?;
+        advance_node_connected_at(&mut tx, &write.node, write.kind, &write.context.at).await?;
+        insert_audit_rows(&mut tx, &write.context.at, &write.context.audit).await?;
+        tx.commit().await.db()?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
 // 写集内部
 // ---------------------------------------------------------------------------------------------
+
+/// 认证收尾推进某节点角色行的 `last_connected_at`（§11.6 第 9 条）。
+///
+/// 只前进不倒退：该列的语义是「最近一次认证成功时间」，「只前进」的比较口径与 `upsert_node` 的三分支
+/// `CASE` 相同（固定宽度 UTC 毫秒文本，字典序即时间序，§3.2）——放在这里用显式比较表达，避免为
+/// 一个时间列重写整行（`upsert_node` 会一并写回 `revoked_at`/`revoke_reason`，而本路径不得触碰它们）。
+/// 行不存在 → `NotFound(EntityRef::Node)`（调用方已通过信任面的 proof 校验，行缺失就是内部不一致）。
+async fn advance_node_connected_at(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    node: &NodeId,
+    kind: NodeKind,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    let row =
+        sqlx::query("SELECT last_connected_at FROM owned_node WHERE node_id = ?1 AND kind = ?2")
+            .bind(node.as_str())
+            .bind(kind.as_str())
+            .fetch_optional(&mut **tx)
+            .await
+            .db()?;
+    let Some(row) = row else {
+        return Err(PortError::NotFound(EntityRef::Node(node.clone())));
+    };
+    if opt_text(&row, "last_connected_at")?.is_some_and(|stored| stored.as_str() >= at.as_str()) {
+        return Ok(());
+    }
+    sqlx::query("UPDATE owned_node SET last_connected_at = ?3 WHERE node_id = ?1 AND kind = ?2")
+        .bind(node.as_str())
+        .bind(kind.as_str())
+        .bind(at.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    Ok(())
+}
 
 fn fingerprint_text(fingerprint: &Fingerprint) -> String {
     fingerprint.as_str().to_owned()
