@@ -478,7 +478,26 @@ impl Fixture {
     }
 
     fn route(&self) -> ResourceRoute {
-        ResourceRoute::new(Arc::clone(&self.world.core), Arc::clone(&self.registry))
+        ResourceRoute::new(
+            Arc::clone(&self.world.core),
+            Arc::clone(&self.registry),
+            // 本机（Owner）node id：与握手 `node.ready.ownerNodeId` 同源。
+            self.owner_node().clone(),
+        )
+    }
+
+    /// 本机（Owner）node id：`remoteSessionRef.ownerNodeId` 必须等于它。
+    fn owner_node(&self) -> &NodeId {
+        self.world.authority.local_node()
+    }
+
+    /// wire 上的 `remoteSessionRef`（`ownerNodeId` 取本机 id，因此该 ref 指向本机的会话）。
+    fn remote_session_ref(&self) -> Value {
+        json!({
+            "ownerNodeId": self.owner_node().as_str(),
+            "exportId": EXPORT,
+            "sessionId": SESSION,
+        })
     }
 
     /// 认证后消息的信封（连接字段按 §2.2 必需）。
@@ -517,7 +536,7 @@ impl Fixture {
     async fn attach(&mut self, route: &ResourceRoute) -> Value {
         let envelope = self.envelope(
             MessageType::ResourceAttach,
-            json!({ "remoteSessionRef": remote_session_ref() }),
+            json!({ "remoteSessionRef": self.remote_session_ref() }),
         );
         assert_eq!(
             route.route(&self.handle, &envelope).await,
@@ -564,14 +583,6 @@ fn of_type<'a>(frames: &'a [Frame], expected: &str) -> Vec<&'a Frame> {
 
 fn error_code(frame: &Value) -> &str {
     frame["body"]["code"].as_str().expect("错误码")
-}
-
-fn remote_session_ref() -> Value {
-    json!({
-        "ownerNodeId": ACCESS_NODE,
-        "exportId": EXPORT,
-        "sessionId": SESSION,
-    })
 }
 
 /// [R53]/[R54]/[R55]：attach 签发新代际，重新 attach 覆盖旧代际，旧 frame 被按「代际过期」拒绝。
@@ -660,7 +671,7 @@ async fn an_export_disjoint_from_the_node_grants_is_not_granted() {
     let route = fixture.route();
     let envelope = fixture.envelope(
         MessageType::ResourceAttach,
-        json!({ "remoteSessionRef": remote_session_ref() }),
+        json!({ "remoteSessionRef": fixture.remote_session_ref() }),
     );
     assert_eq!(
         route.route(&fixture.handle, &envelope).await,
@@ -694,6 +705,44 @@ async fn an_unknown_session_is_reported_as_export_not_found() {
     let frames = fixture.drain();
     assert_eq!(frames.len(), 1);
     assert_eq!(error_code(&frames[0]), "nodelink.export.not_found");
+}
+
+/// [R52]（F4）：`remoteSessionRef.ownerNodeId` 指向另一个 Owner 时，本机**不签发** attachment：
+/// 复合身份的 owner 分量由对端自报，本机不能把外来的 owner 当成自己的资源（与「会话不在这台 Owner
+/// 上」同码，不泄露差别）。
+#[tokio::test]
+async fn an_attachment_is_refused_for_a_foreign_owner_node() {
+    let mut fixture = Fixture::new().await;
+    assert_ne!(
+        ACCESS_NODE,
+        fixture.owner_node().as_str(),
+        "用例前提：对端 id 与本机 id 不同"
+    );
+    let route = fixture.route();
+    let envelope = fixture.envelope(
+        MessageType::ResourceAttach,
+        json!({
+            "remoteSessionRef": {
+                "ownerNodeId": ACCESS_NODE,
+                "exportId": EXPORT,
+                "sessionId": SESSION,
+            }
+        }),
+    );
+    assert_eq!(
+        route.route(&fixture.handle, &envelope).await,
+        RouteOutcome::Claimed
+    );
+    let frames = fixture.drain();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["type"], "link.error");
+    assert_eq!(error_code(&frames[0]), "nodelink.export.not_found");
+    assert!(
+        lock(&route.states)
+            .values()
+            .all(|state| state.attachments.is_empty()),
+        "本机不得为外来的 owner 分量签发 attachment"
+    );
 }
 
 /// [R56]/[R57]/[R58]：`cursor = null` 的快照只有元数据，且 `snapshotDigest` 能由收到的帧复算。
@@ -900,7 +949,7 @@ async fn ack_progress_is_monotonic_and_bound_to_the_attachment() {
         fixture.envelope(
             MessageType::ResourceAck,
             json!({
-                "sessionRef": remote_session_ref(),
+                "sessionRef": fixture.remote_session_ref(),
                 "cursor": { "originEpoch": epoch, "originSequence": sequence },
             }),
         )
@@ -945,7 +994,7 @@ async fn ack_progress_is_monotonic_and_bound_to_the_attachment() {
     let foreign = other.envelope(
         MessageType::ResourceAck,
         json!({
-            "sessionRef": remote_session_ref(),
+            "sessionRef": other.remote_session_ref(),
             "cursor": { "originEpoch": ORIGIN_EPOCH, "originSequence": "1" },
         }),
     );
@@ -957,6 +1006,60 @@ async fn ack_progress_is_monotonic_and_bound_to_the_attachment() {
     let frames = other.drain();
     assert_eq!(frames.len(), 1);
     assert_eq!(error_code(&frames[0]), "nodelink.protocol.sequence_invalid");
+}
+
+/// [R64]（F4）：`resource.ack.sessionRef.ownerNodeId` 不等于本机时，该 ref 就不等于本连接 attachment
+/// 的 sessionRef（§12.4「`sessionRef` 不属于本连接」）→ `sequence_invalid`，并且**不推进水位**。
+#[tokio::test]
+async fn an_ack_from_a_foreign_owner_node_is_rejected_without_advancing_the_watermark() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let attached = fixture.attach(&route).await;
+    let subscribe = fixture.envelope(
+        MessageType::ResourceSubscribe,
+        json!({
+            "attachmentId": attached["attachmentId"],
+            "attachmentGeneration": attached["attachmentGeneration"],
+            "cursor": null,
+        }),
+    );
+    route.route(&fixture.handle, &subscribe).await;
+    let _ = fixture.drain();
+
+    let foreign = fixture.envelope(
+        MessageType::ResourceAck,
+        json!({
+            "sessionRef": {
+                "ownerNodeId": ACCESS_NODE,
+                "exportId": EXPORT,
+                "sessionId": SESSION,
+            },
+            "cursor": { "originEpoch": ORIGIN_EPOCH, "originSequence": "1" },
+        }),
+    );
+    assert_eq!(
+        route.route(&fixture.handle, &foreign).await,
+        RouteOutcome::Claimed
+    );
+    let frames = fixture.drain();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["type"], "link.error");
+    assert_eq!(error_code(&frames[0]), "nodelink.protocol.sequence_invalid");
+
+    // 水位没被推进：同一个 cursor 用本机的 `sessionRef` 仍然接受（回退判定会拒绝已被接受的 cursor，
+    // 所以「没有回帧」证明上一条 ACK 确实没有记账）。
+    let accepted = fixture.envelope(
+        MessageType::ResourceAck,
+        json!({
+            "sessionRef": fixture.remote_session_ref(),
+            "cursor": { "originEpoch": ORIGIN_EPOCH, "originSequence": "1" },
+        }),
+    );
+    assert_eq!(
+        route.route(&fixture.handle, &accepted).await,
+        RouteOutcome::Claimed
+    );
+    assert!(fixture.drain().is_empty(), "本机的 sessionRef 仍然推进水位");
 }
 
 /// [R65]：扇出入口经有界 channel + 异步分发，把已持久化事件投给订阅了该会话的连接。
@@ -989,7 +1092,11 @@ async fn persisted_events_reach_the_subscribed_connection() {
     assert_eq!(frame["body"]["originEventId"], EVENT);
     assert_eq!(frame["body"]["originSequence"], "1");
     assert_eq!(frame["body"]["eventType"], "agent.message");
-    assert_eq!(frame["body"]["sessionRef"]["ownerNodeId"], ACCESS_NODE);
+    assert_eq!(
+        frame["body"]["sessionRef"]["ownerNodeId"],
+        fixture.owner_node().as_str(),
+        "sessionRef 回显的 owner 分量是本机（Owner）的 node id"
+    );
     // 接收方复算摘要：payloadDigest 必须是 ACPR-CJ1(payload) 的 SHA-256。
     let payload = &frame["body"]["payload"];
     let canonical = acpr_wire::cj1::canonicalize(&payload.to_string()).expect("规范化");
@@ -1030,4 +1137,42 @@ async fn events_are_not_delivered_without_a_live_subscription() {
     );
     shutdown_handle.trigger();
     let _ = tokio::time::timeout(IO_TIMEOUT, dispatch).await;
+}
+
+/// [R65]（F3）：连接正常结束后，它的状态表条目在下一次扇出时被回收——`conn` 结束时只把句柄从注册表
+/// 摘除、不通知路由，因此回收必须发生在以「注册表里还在」为活跃判据的那条路径上。
+#[tokio::test]
+async fn a_finished_connection_state_entry_is_reclaimed_by_the_next_fan_out() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let attached = fixture.attach(&route).await;
+    let subscribe = fixture.envelope(
+        MessageType::ResourceSubscribe,
+        json!({
+            "attachmentId": attached["attachmentId"],
+            "attachmentGeneration": attached["attachmentGeneration"],
+            "cursor": null,
+        }),
+    );
+    route.route(&fixture.handle, &subscribe).await;
+    let _ = fixture.drain();
+
+    // 连接还活着：扇出既投递事件，也保留它的状态（否则后续事件投不出去）。
+    route
+        .fan_out(&stored_event(1, "agent.message", r#"{"kind":"agent.message"}"#).event)
+        .await;
+    let frame = fixture.next_frame().await;
+    assert_eq!(frame["type"], "resource.event");
+    assert_eq!(lock(&route.states).len(), 1, "活跃连接的状态必须保留");
+
+    // 连接正常结束（`conn::session` 的收尾）：句柄从注册表移除。
+    fixture.registry.unregister(CONNECTION);
+    route
+        .fan_out(&stored_event(1, "agent.message", r#"{"kind":"agent.message"}"#).event)
+        .await;
+    assert!(lock(&route.states).is_empty(), "已结束连接的条目必须被回收");
+    assert!(
+        fixture.outbound.try_recv().is_err(),
+        "已结束的连接不再收到事件"
+    );
 }

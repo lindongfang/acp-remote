@@ -408,8 +408,16 @@ fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_admin::test_support::test_public_key;
+    use crate::local_admin::test_support::{FakeIds, TestWorld, test_public_key};
+    use crate::node_link::conn::registry::Outbound;
+    use crate::node_link::conn::{NodeLinkConfig, SessionLimits};
     use acp_core::model::NodeState;
+    use node_link_protocol::common::{DecimalString, Uuid};
+    use node_link_protocol::envelope::ConnectionFields;
+    use serde_json::{Value, json};
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     fn timestamp(text: &str) -> acp_core::model::Timestamp {
         acp_core::model::Timestamp::new(text).expect("固定时间戳")
@@ -524,6 +532,199 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 路由层用例：真实 `ConnectionHandle` 的出站队列 + 端口替身世界（与 `resource/tests.rs` 同一模式）
+    // ---------------------------------------------------------------------------------------------
+
+    /// 测试扮演的 Access Node（与本模块 `node()` 构造的信任行同源）。
+    const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
+    const CONNECTION: &str = "5ae1c07c-9242-46e9-a9d2-4ec58c130f4c";
+    const MESSAGE_ID: &str = "6ae1c07c-9242-46e9-a9d2-4ec58c130f4d";
+    const E1: &str = "11111111-1111-4111-8111-111111111111";
+    const E2: &str = "22222222-2222-4222-8222-222222222222";
+    const E3: &str = "33333333-3333-4333-8333-333333333333";
+
+    /// 一条已配对的 Access 连接（`grant.observe`）+ 可配的协商批次大小 + 真实路由。
+    struct Fixture {
+        world: TestWorld,
+        handle: Arc<ConnectionHandle>,
+        outbound: mpsc::Receiver<Outbound>,
+    }
+
+    impl Fixture {
+        /// 默认可见集为空（用例自己 `seed_export`）。
+        fn new(catalog_snapshot_batch_size: u64) -> Self {
+            let world = TestWorld::new();
+            world
+                .trust
+                .seed_node(node(&["grant.observe"], NodeState::Paired));
+            let (handle, outbound) = ConnectionHandle::new(
+                Uuid::parse(CONNECTION).expect("connection id"),
+                acp_core::model::NodeId::new(ACCESS_NODE).expect("node id"),
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                SessionLimits::negotiate(&NodeLinkConfig {
+                    catalog_snapshot_batch_size,
+                    ..NodeLinkConfig::default()
+                }),
+                Arc::new(FakeIds::default()),
+            );
+            Self {
+                world,
+                handle,
+                outbound,
+            }
+        }
+
+        fn route(&self) -> CatalogRoute {
+            CatalogRoute::new(Arc::clone(&self.world.core))
+        }
+
+        /// 认证后 `catalog.subscribe` 的信封（连接字段按 §2.2 必需）。
+        fn envelope(&self, body: Value) -> Envelope {
+            Envelope::new(
+                MessageType::CatalogSubscribe,
+                Uuid::parse(MESSAGE_ID).expect("message id"),
+                Some(ConnectionFields {
+                    connection_id: Uuid::parse(CONNECTION).expect("connection id"),
+                    connection_sequence: DecimalString::parse("1").expect("sequence"),
+                }),
+                serde_json::value::RawValue::from_string(body.to_string()).expect("body"),
+            )
+            .expect("信封")
+        }
+
+        /// 发一条 `catalog.subscribe` 并排空出站队列（只看本轮新增的那几帧）。
+        async fn subscribe(&mut self, route: &CatalogRoute) -> Vec<Value> {
+            let envelope = self.envelope(json!({ "knownRevision": null }));
+            assert_eq!(
+                route.route(&self.handle, &envelope).await,
+                RouteOutcome::Claimed
+            );
+            let mut frames = Vec::new();
+            while let Ok(outbound) = self.outbound.try_recv() {
+                frames.push(serde_json::from_str::<Value>(&outbound.text).expect("帧是合法 JSON"));
+            }
+            frames
+        }
+    }
+
+    /// 一帧 `catalog.snapshot` 里按顺序的 `exportId`。
+    fn export_ids(frame: &Value) -> Vec<&str> {
+        frame["body"]["exports"]
+            .as_array()
+            .expect("exports 是数组")
+            .iter()
+            .map(|entry| entry["exportId"].as_str().expect("exportId"))
+            .collect()
+    }
+
+    /// [R51]/[R52]（F1）：路由级投影只含与该节点 grants 相交的 Export，且条目字段齐全。
+    #[tokio::test]
+    async fn the_catalog_snapshot_carries_every_field_of_the_visible_export_only() {
+        let mut fixture = Fixture::new(500);
+        fixture
+            .world
+            .exports
+            .seed_export(export(E1, &["grant.observe", "grant.interact"], false));
+        // E2 的 scopes 与该节点 grants（`grant.observe`）不相交 → 同一个节点看不到它。
+        fixture
+            .world
+            .exports
+            .seed_export(export(E2, &["grant.remote-work"], false));
+        fixture.world.audit.set_watermark(7);
+        let route = fixture.route();
+
+        let frames = fixture.subscribe(&route).await;
+        assert_eq!(frames.len(), 1, "可见集只有一条 → 只回一帧");
+        assert_eq!(frames[0]["type"], "catalog.snapshot");
+        assert_eq!(
+            frames[0]["body"]["revision"], "7",
+            "catalogRevision 是审计写集水位（`AuditStore::watermark`）"
+        );
+        let entries = frames[0]["body"]["exports"].as_array().expect("exports");
+        assert_eq!(entries.len(), 1, "不相交的 Export 不进快照");
+        let entry = &entries[0];
+        assert_eq!(entry["exportId"], E1);
+        assert_eq!(entry["displayName"], "Project Export");
+        assert_eq!(entry["agents"][0]["agentId"], "codex");
+        assert_eq!(
+            entry["agents"][0]["name"], "Codex",
+            "名字来自本机 Agent 目录"
+        );
+        assert_eq!(entry["agents"][0]["capabilitiesRef"], "codex");
+        assert_eq!(entry["workspaceAliases"][0]["alias"], "project");
+        assert_eq!(entry["workspaceAliases"][0]["displayName"], "Project");
+        assert_eq!(entry["defaultWorkspaceAlias"], "project");
+        assert_eq!(entry["templates"][0]["templateId"], "template-1");
+        assert_eq!(entry["templates"][0]["displayName"], "Template");
+        assert_eq!(entry["templates"][0]["workspaceAlias"], "project");
+        assert_eq!(
+            entry["templates"][0]["params"],
+            json!([]),
+            "首切片 template 零参数（§12.3）"
+        );
+        // `GrantSet` 按字典序迭代，因此顺序是稳定的模型事实。
+        assert_eq!(entry["scopes"], json!(["grant.interact", "grant.observe"]));
+        assert_eq!(entry["capabilityCeilingRef"], E1);
+        assert_eq!(entry["cachePolicy"], "no-content-cache");
+        assert_eq!(entry["revoked"], false);
+    }
+
+    /// [R51]/[R53]（F1）：协商批次=2、可见 3 条 → 恰好两帧，批次内与批次间都按 `exportId` 升序稳定。
+    #[tokio::test]
+    async fn the_catalog_snapshot_is_batched_by_the_negotiated_size_in_a_stable_order() {
+        let mut fixture = Fixture::new(2);
+        // 种子顺序刻意与 `exportId` 顺序不同：投影顺序不能取决于记录的插入顺序。
+        fixture
+            .world
+            .exports
+            .seed_export(export(E3, &["grant.observe"], false));
+        fixture
+            .world
+            .exports
+            .seed_export(export(E1, &["grant.observe"], false));
+        fixture
+            .world
+            .exports
+            .seed_export(export(E2, &["grant.observe"], false));
+        let route = fixture.route();
+
+        let first = fixture.subscribe(&route).await;
+        assert_eq!(first.len(), 2, "3 条可见 Export 按批次 2 切成两帧");
+        assert!(
+            first
+                .iter()
+                .all(|frame| frame["type"] == "catalog.snapshot")
+        );
+        assert_eq!(
+            first.iter().map(export_ids).collect::<Vec<_>>(),
+            vec![vec![E1, E2], vec![E3]]
+        );
+        // 两次订阅给出逐帧一致的顺序（接收方按帧序拼接，顺序因此是协议事实）。
+        let second = fixture.subscribe(&route).await;
+        assert_eq!(
+            second.iter().map(export_ids).collect::<Vec<_>>(),
+            first.iter().map(export_ids).collect::<Vec<_>>()
+        );
+    }
+
+    /// [R51]（F1）：空可见集仍回**一帧**空快照——对端需要知道「当前视图为空」，而不是等一个永不到来
+    /// 的批次。
+    #[tokio::test]
+    async fn an_empty_visible_set_yields_exactly_one_empty_snapshot() {
+        let mut fixture = Fixture::new(500);
+        fixture
+            .world
+            .exports
+            .seed_export(export(E1, &["grant.remote-work"], false));
+        let route = fixture.route();
+
+        let frames = fixture.subscribe(&route).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["type"], "catalog.snapshot");
+        assert_eq!(frames[0]["body"]["exports"], json!([]));
     }
 
     /// 批次内顺序稳定：按 `exportId` 升序，与记录顺序无关。
