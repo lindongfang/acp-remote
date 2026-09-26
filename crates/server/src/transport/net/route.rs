@@ -368,6 +368,11 @@ async fn upgrade_websocket(
 ///
 /// 比较是**精确**的：RFC 6455 的 subprotocol 是大小写敏感 token，且 `axum` 的 `protocols()` 也按精确值
 /// 回填响应头，因此这里必须用同一口径，否则会出现「校验通过但响应没回填」的不一致。
+///
+/// 同名头出现多次（同一 token 拆成两个 `Sec-WebSocket-Protocol`）与一个头里的逗号列表一视同仁：
+/// `axum::extract::ws::WebSocketUpgrade` 同样用 `get_all(...)` 收集全部头值并按逗号切分后 trim，
+/// 再用 `contains` 匹配，所以「任一头值里以 token 形式出现」时两边都成立（101 会回填该 token），
+/// 两个头都不含该 token 时两边都拒绝。用例 `repeated_subprotocol_headers_...` 锁定了这条口径。
 fn offers_subprotocol(headers: &HeaderMap, required: &str) -> bool {
     headers
         .get_all(header::SEC_WEBSOCKET_PROTOCOL)
@@ -448,6 +453,28 @@ mod tests {
         ));
         assert!(!offers_subprotocol(
             &headers(&[("sec-websocket-protocol", "other")]),
+            required
+        ));
+        // 同一 token 拆成两个头：`HeaderMap` 保留多值，逐个头值按逗号切分判定。
+        assert!(offers_subprotocol(
+            &headers(&[
+                ("sec-websocket-protocol", required),
+                ("sec-websocket-protocol", "other")
+            ]),
+            required
+        ));
+        assert!(offers_subprotocol(
+            &headers(&[
+                ("sec-websocket-protocol", "other"),
+                ("sec-websocket-protocol", required)
+            ]),
+            required
+        ));
+        assert!(!offers_subprotocol(
+            &headers(&[
+                ("sec-websocket-protocol", "other"),
+                ("sec-websocket-protocol", "acp-remote.nodelink.v2.json")
+            ]),
             required
         ));
         assert!(!offers_subprotocol(

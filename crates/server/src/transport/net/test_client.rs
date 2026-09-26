@@ -284,15 +284,26 @@ pub fn ws_request(
     subprotocols: Option<&str>,
     extensions: Option<&str>,
 ) -> String {
+    let mut headers = Vec::new();
+    if let Some(subprotocols) = subprotocols {
+        headers.push(("Sec-WebSocket-Protocol", subprotocols));
+    }
+    if let Some(extensions) = extensions {
+        headers.push(("Sec-WebSocket-Extensions", extensions));
+    }
+    ws_request_with_headers(path, host, &headers)
+}
+
+/// 构造一个 WebSocket 升级请求，并按 `headers` 顺序（可重复同名）追加原始请求头。
+///
+/// 重复同名头用于构造「同一 token 拆成两个头」这类边界形态（用例里的 `http`/`hyper` 侧不会自动合并）。
+pub fn ws_request_with_headers(path: &str, host: &str, headers: &[(&str, &str)]) -> String {
     let mut request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
     );
-    if let Some(subprotocols) = subprotocols {
-        request.push_str(&format!("Sec-WebSocket-Protocol: {subprotocols}\r\n"));
-    }
-    if let Some(extensions) = extensions {
-        request.push_str(&format!("Sec-WebSocket-Extensions: {extensions}\r\n"));
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
     }
     request.push_str("\r\n");
     request

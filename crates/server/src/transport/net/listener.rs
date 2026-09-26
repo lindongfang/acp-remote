@@ -9,6 +9,7 @@
 //! 异步任务的所有权：HTTP 侧由 `axum::serve` 持有（它对在途请求做宽限排空），WebSocket 侧由本模块的
 //! supervisor 任务持有——`axum` 的升级回调是 `tokio::spawn` 出来的，若不接管就会变成无人持有的任务。
 //! 会话 future 通过有界 channel 交给 supervisor 放进 `JoinSet`，关闭时停止接收、等宽限、再强制取消。
+//! `direct` 模式的 TLS 握手是第三类任务：由接入选层自身的 `JoinSet` 持有（见 [`NetAcceptor`]）。
 
 use std::fmt;
 use std::io;
@@ -27,6 +28,7 @@ use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
@@ -47,7 +49,18 @@ use crate::transport::net::ws::WsHandler;
 /// WS 会话交接队列的容量：升级回调按此对「会话过多」施加背压，超出即等待 supervisor 取走。
 const SESSION_QUEUE_CAPACITY: usize = 64;
 
-/// TLS 握手的接入层超时：只连接不握手的对端不得无限占用 accept 循环。
+/// `direct` 模式的 TLS 握手池容量（接入层实现细节，不是协议限额）。
+///
+/// accept 只做 TCP accept，握手在池里的后台任务中完成，因此**预先认证**的对端无法用「只连接不握手」
+/// 的连接把新连接的接入推迟一个握手超时——只有同时占满 [`TLS_HANDSHAKE_POOL_SIZE`] 个槽位（每个槽位
+/// 最多占用 [`TLS_HANDSHAKE_TIMEOUT`]）才会对新连接施加背压。上限固定且较小：本 Daemon 是个人节点，
+/// 并发的**尚未认证**握手没有理由超过这个量级。
+const TLS_HANDSHAKE_POOL_SIZE: usize = 64;
+
+/// 握手结果交接队列的容量（等于池容量：每个槽位至多产生一个待投递结果）。
+const HANDSHAKE_READY_CAPACITY: usize = TLS_HANDSHAKE_POOL_SIZE;
+
+/// TLS 握手的接入层超时：池里的单次握手不得无限占用槽位。
 ///
 /// 这是接入层实现细节（不是协议限额，协议限额见 `NODE_LINK_PROTOCOL.md` §2.5），因此不出现在配置键里。
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -329,9 +342,14 @@ impl NetListener {
         });
         let router = std::mem::take(&mut self.routes).into_router(Arc::clone(&state));
         let app = router.into_make_service_with_connect_info::<SocketAddr>();
+        let (ready_tx, ready_rx) = mpsc::channel(HANDSHAKE_READY_CAPACITY);
         let acceptor = NetAcceptor {
             tcp: self.tcp,
             tls: self.tls.map(TlsAcceptor::from),
+            handshakes: JoinSet::new(),
+            permits: Arc::new(Semaphore::new(TLS_HANDSHAKE_POOL_SIZE)),
+            ready_tx,
+            ready_rx,
         };
         let serve_signal = shutdown.clone();
         let outer_signal = shutdown.clone();
@@ -459,11 +477,73 @@ impl AsyncWrite for NetStream {
     }
 }
 
-/// `axum::serve` 的监听器：明文模式下直接交出 TCP 流，`direct` 模式下在 accept 循环内完成 TLS 握手
-/// （握手超时/失败只放弃本次连接，不终止 listener）。
+/// `axum::serve` 的监听器：明文模式下直接交出 TCP 流；`direct` 模式下 accept **只做 TCP accept**，
+/// TLS 握手交给有界并发池（[`TLS_HANDSHAKE_POOL_SIZE`] 个槽位、`JoinSet` 持有任务、结果经有界队列交回
+/// `accept`），因此慢握手或只连接不握手的对端不会把新连接的接入压在 accept 关键路径上（它们只占槽位）。
+///
+/// 所有权与取消：握手任务由 [`NetAcceptor::handshakes`] 持有，`accept` 顺带收割已结束的任务；
+/// `axum::serve` 结束时（宽限排空完成或强制 abort）`NetAcceptor` 被丢弃，`JoinSet` 随之中止全部在途
+/// 握手——不遗留 detached task。尚未握完的连接也没进过 `axum` 的连接表，因此不影响 HTTP 侧的排空。
 struct NetAcceptor {
     tcp: TcpListener,
     tls: Option<TlsAcceptor>,
+    /// 在途握手任务的持有者；丢弃即中止。
+    handshakes: JoinSet<()>,
+    /// 握手池槽位（至少为 1；`direct` 模式下才被使用）。
+    permits: Arc<Semaphore>,
+    /// 握手结果队列的发送端。[`NetAcceptor`] 自己也持有一份：池空闲时若发送端全无，`ready_rx.recv()`
+    /// 会立即返回 `None`，`select` 就会空转。
+    ready_tx: mpsc::Sender<(NetStream, SocketAddr)>,
+    /// 已完成握手的连接（由 `accept` 交给 `axum::serve`）。
+    ready_rx: mpsc::Receiver<(NetStream, SocketAddr)>,
+}
+
+impl NetAcceptor {
+    /// 处置一条刚 accept 的 TCP 连接。
+    ///
+    /// 返回 `Some` 表示无需握手即可交出（`proxy` 模式的明文连接）；返回 `None` 表示已交给握手池
+    /// （结果稍后从 `ready_rx` 取）或已被放弃。
+    async fn start_connection(
+        &mut self,
+        stream: TcpStream,
+        addr: SocketAddr,
+    ) -> Option<(NetStream, SocketAddr)> {
+        let Some(acceptor) = self.tls.clone() else {
+            return Some((NetStream::Plaintext(Box::new(stream)), addr));
+        };
+        // 槽位用完时对新连接施加背压：等一个槽位，而不是回到「在 accept 里握手」的老路。槽位在握手
+        // 结束时立即归还（早于结果投递），因此等待上限由握手超时给出，不会因结果队列满而死锁。
+        let permit = match Arc::clone(&self.permits).acquire_owned().await {
+            Ok(permit) => permit,
+            // 信号量只在本模块内部持有且从不关闭：失败关闭的兜底（不启动没有槽位的握手）。
+            Err(_) => return None,
+        };
+        let ready = self.ready_tx.clone();
+        self.handshakes.spawn(async move {
+            let handshake =
+                tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await;
+            // 先归还槽位再投递结果：投递可能因队列满而等待，槽位不该被投递阻塞。
+            drop(permit);
+            match handshake {
+                Ok(Ok(stream)) => {
+                    // 接收端已丢弃（接入层已停）：结果无处投递，直接放弃这条连接。
+                    let _ = ready.send((NetStream::Tls(Box::new(stream)), addr)).await;
+                }
+                Ok(Err(error)) => tracing::debug!(
+                    event = "net.tls_handshake_failed",
+                    peer = %addr,
+                    error = %error,
+                    "TLS 握手失败：放弃本次连接"
+                ),
+                Err(_) => tracing::debug!(
+                    event = "net.tls_handshake_timeout",
+                    peer = %addr,
+                    "TLS 握手超时：放弃本次连接"
+                ),
+            }
+        });
+        None
+    }
 }
 
 impl Listener for NetAcceptor {
@@ -472,28 +552,23 @@ impl Listener for NetAcceptor {
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
-            match self.tcp.accept().await {
-                Ok((stream, addr)) => {
-                    let Some(acceptor) = self.tls.clone() else {
-                        return (NetStream::Plaintext(Box::new(stream)), addr);
-                    };
-                    match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await
-                    {
-                        Ok(Ok(stream)) => return (NetStream::Tls(Box::new(stream)), addr),
-                        Ok(Err(error)) => tracing::debug!(
-                            event = "net.tls_handshake_failed",
-                            peer = %addr,
-                            error = %error,
-                            "TLS 握手失败：放弃本次连接"
-                        ),
-                        Err(_) => tracing::debug!(
-                            event = "net.tls_handshake_timeout",
-                            peer = %addr,
-                            "TLS 握手超时：放弃本次连接"
-                        ),
+            tokio::select! {
+                // 已完成的握手（与 accept 的先后无关，握手结果先到就先服务）。
+                ready = self.ready_rx.recv() => {
+                    if let Some(connection) = ready {
+                        return connection;
                     }
                 }
-                Err(error) => handle_accept_error(&error).await,
+                accepted = self.tcp.accept() => match accepted {
+                    Ok((stream, addr)) => {
+                        if let Some(connection) = self.start_connection(stream, addr).await {
+                            return connection;
+                        }
+                    }
+                    Err(error) => handle_accept_error(&error).await,
+                },
+                // 及时收割已结束的握手任务，避免 `JoinSet` 无界增长。
+                Some(_) = self.handshakes.join_next(), if !self.handshakes.is_empty() => {}
             }
         }
     }

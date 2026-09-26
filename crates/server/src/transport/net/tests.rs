@@ -10,10 +10,10 @@
 //! | [R4] 非 loopback 监听告警 | `non_loopback_listen_warns_without_failing` |
 //! | [R5]/[R7] 按 path 路由、Sync 明确不可用 | `unregistered_paths_return_404` |
 //! | [R6] Node Link 端点正常升级 | `ws_upgrade_with_the_required_subprotocol_succeeds` |
-//! | [R8] 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected` |
-//! | [R9]/[R10] Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
+//! | [R8] 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
+//! | [R9]/[R10] Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
 //! | [R11] 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
-//! | [R12]/[R13] TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext` |
+//! | [R12]/[R13] TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（RV1-WP2-F3 回归） |
 //! | [R14] direct 模式证书缺失即拒绝启动 | `direct_mode_missing_certificate_fails_closed`、`direct_mode_invalid_pem_fails_closed`、`direct_mode_relaxed_permissions_fail_closed`（Unix）、`direct_mode_permissions_are_unverifiable_on_this_platform`（Windows，`[PV5]`） |
 //! | [R15] 非 loopback 明文边界 | `plaintext_proxy_non_loopback_warns`、`plaintext_dev_flag_rejects_non_loopback`（`listener` 模块） |
 //! | [R16]/[R17] 请求体上限 | `pairing_body_over_the_limit_is_rejected_with_413` |
@@ -37,6 +37,7 @@ use super::test_client::http_request;
 use super::test_client::set_owner_only;
 use super::test_client::start_server;
 use super::test_client::ws_request;
+use super::test_client::ws_request_with_headers;
 use super::*;
 
 /// 协议冻结的 WSS path 与 subprotocol（`NODE_LINK_PROTOCOL.md` §2.1）；本模块只作为参数接收它们。
@@ -100,6 +101,18 @@ impl WsHandler for EchoWsHandler {
 /// 一直读直到连接结束的 WS 处理器；被取消时由 [`SessionGuard`] 记录。
 struct IdleWsHandler {
     finished: Arc<AtomicUsize>,
+}
+
+/// 只记录「被调用过几次」的 WS 处理器；`handle` 返回即会话结束。
+struct CountingWsHandler {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl WsHandler for CountingWsHandler {
+    async fn handle(self: Arc<Self>, _connection: WsConnection, _peer: PeerInfo) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 struct SessionGuard(Arc<AtomicUsize>);
@@ -408,6 +421,75 @@ async fn ws_upgrade_with_compression_is_rejected() {
 }
 
 #[tokio::test]
+async fn repeated_subprotocol_headers_follow_the_token_rule() {
+    // [R8]（N3）：同一 token 拆成两个 `Sec-WebSocket-Protocol` 头时锁定本层行为。
+    //
+    // 本层与 `axum::extract::ws::WebSocketUpgrade` 用同一口径（都是 `get_all(...)` → 按逗号切分 →
+    // trim → 精确匹配），因此结论是**接受**而不是拒绝：任意一个（或两个）头值里以 token 形式出现约定
+    // subprotocol 即可升级，且 101 仍然回填该 token。若哪天上游变成「只读第一个头值」，第二个头携带
+    // token 的情形就不会回填，本用例会失败——那时必须改成「本层也拒绝双头」的失败关闭口径，而不是
+    // 让「校验通过但响应没回填」的不一致静默存在。
+    let server = start_server(loopback_config(), |listener| {
+        listener
+            .register_ws(
+                WS_PATH,
+                WS_SUBPROTOCOL,
+                Arc::new(IdleWsHandler {
+                    finished: Arc::new(AtomicUsize::new(0)),
+                }),
+            )
+            .expect("注册 WS");
+    })
+    .await;
+    let host = host_of(server.addr);
+    let two_headers = |first: &str, second: &str| {
+        ws_request_with_headers(
+            WS_PATH,
+            &host,
+            &[
+                ("Sec-WebSocket-Protocol", first),
+                ("Sec-WebSocket-Protocol", second),
+            ],
+        )
+    };
+    for (first, second) in [
+        (WS_SUBPROTOCOL, "other"),
+        ("other", WS_SUBPROTOCOL),
+        ("other, other2", WS_SUBPROTOCOL),
+    ] {
+        let mut connection = connect(server.addr).await.expect("连接");
+        connection
+            .write_all(two_headers(first, second).as_bytes())
+            .await
+            .expect("写升级请求");
+        let response = connection.read_response().await.expect("读升级响应");
+        assert_eq!(response.status, 101, "{first:?} + {second:?} 必须升级成功");
+        assert_eq!(
+            response.header("sec-websocket-protocol"),
+            Some(WS_SUBPROTOCOL),
+            "{first:?} + {second:?} 的 101 必须回填约定的 subprotocol"
+        );
+    }
+    // 两个头都不含约定 token（即使其中一个头里带逗号列表）一律 400。
+    for (first, second) in [
+        ("other", "acp-remote.nodelink.v2.json"),
+        ("other, other2", "acp-remote.nodelink.v2.json"),
+    ] {
+        let mut connection = connect(server.addr).await.expect("连接");
+        connection
+            .write_all(two_headers(first, second).as_bytes())
+            .await
+            .expect("写升级请求");
+        assert_eq!(
+            connection.read_response().await.expect("读响应").status,
+            400,
+            "{first:?} + {second:?} 必须被拒绝"
+        );
+    }
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
 async fn plain_get_on_the_ws_path_is_rejected() {
     // [R8]：非升级请求对 WS path 返回明确 4xx（axum 的升级提取器给出 400/405/426）。
     let server = start_server(loopback_config(), |listener| {
@@ -488,6 +570,52 @@ async fn wrong_host_is_rejected_before_routing() {
     assert_eq!(
         connection.read_response().await.expect("读响应").status,
         200
+    );
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn wrong_host_is_rejected_on_the_ws_upgrade_path() {
+    // [R9]/[R10]（N2）：Host 边界同样覆盖 `/node-link/v1` 的升级路径——先 400，且 WS 处理器零调用。
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = start_server(
+        NetConfig {
+            public_origin: Some("https://owner.example.com".to_owned()),
+            ..loopback_config()
+        },
+        |listener| {
+            listener
+                .register_ws(
+                    WS_PATH,
+                    WS_SUBPROTOCOL,
+                    Arc::new(CountingWsHandler {
+                        calls: Arc::clone(&calls),
+                    }),
+                )
+                .expect("注册 WS");
+        },
+    )
+    .await;
+    let mut connection = connect(server.addr).await.expect("连接");
+    connection
+        .write_all(ws_request(WS_PATH, "evil.example.com", Some(WS_SUBPROTOCOL), None).as_bytes())
+        .await
+        .expect("写升级请求");
+    assert_eq!(
+        connection.read_response().await.expect("读响应").status,
+        400,
+        "升级路径上的错误 Host 必须 400"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "WS 处理器不得被调用");
+    // 与 `public_origin` 一致的 Host 才能升级成功，因此上一条确实是 Host 判定而非升级路径本身失败。
+    let mut connection = connect(server.addr).await.expect("连接");
+    connection
+        .write_all(ws_request(WS_PATH, "owner.example.com", Some(WS_SUBPROTOCOL), None).as_bytes())
+        .await
+        .expect("写升级请求");
+    assert_eq!(
+        connection.read_response().await.expect("读响应").status,
+        101
     );
     server.stop().await.expect("关闭序列成功");
 }
@@ -899,6 +1027,66 @@ async fn direct_mode_terminates_tls_and_rejects_plaintext() {
     assert!(
         plain.read_response().await.is_err(),
         "明文连接不得建立可用会话"
+    );
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn idle_tcp_connections_do_not_block_new_connections() {
+    // [R12]（RV1-WP2-F3 回归）：`direct` 模式的 TLS 握手不占用 accept 关键路径——若干只建立 TCP、
+    // 不发 ClientHello 的连接（无需任何凭据）不得把新连接的接入推迟一个握手超时（10 s）。
+    let certificate = TestCertificate::generate();
+    let server = start_server(
+        NetConfig {
+            tls: TlsMode::Direct {
+                cert_path: certificate.cert_path.clone(),
+                key_path: certificate.key_path.clone(),
+            },
+            ..loopback_config()
+        },
+        |listener| {
+            listener
+                .register_post(
+                    CLAIM_PATH,
+                    Arc::new(RecordingHttpHandler {
+                        calls: Arc::new(AtomicUsize::new(0)),
+                        last_client_ip: Arc::new(std::sync::Mutex::new(None)),
+                        status: StatusCode::OK,
+                    }),
+                )
+                .expect("注册 claim");
+        },
+    )
+    .await;
+    // 4 条只连接不握手的连接：内联握手的实现会把 accept 循环先后卡在它们各一个握手超时上。
+    let _idle: Vec<_> = {
+        let mut idle = Vec::new();
+        for _ in 0..4 {
+            idle.push(connect(server.addr).await.expect("TCP 连接"));
+        }
+        idle
+    };
+    // 新连接必须在远小于握手超时的时限内完成 TLS 握手并发出一条 HTTP 请求。
+    let mut connection = tokio::time::timeout(
+        Duration::from_secs(5),
+        connect_tls(server.addr, client_tls_config(certificate.der.clone())),
+    )
+    .await
+    .expect("只连接不握手的对端不得阻塞新连接的接入")
+    .expect("TLS 连接");
+    connection
+        .write_all(&http_request(
+            "POST",
+            CLAIM_PATH,
+            &host_of(server.addr),
+            &[],
+            b"{}",
+        ))
+        .await
+        .expect("写请求");
+    assert_eq!(
+        connection.read_response().await.expect("读响应").status,
+        200
     );
     server.stop().await.expect("关闭序列成功");
 }

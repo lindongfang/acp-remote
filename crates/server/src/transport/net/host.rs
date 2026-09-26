@@ -16,6 +16,9 @@
 //!
 //! 端口一律忽略：比较的是 host 名（HTTP 语义里端口不参与主机归属判定，反向代理形态下对外端口与
 //! Daemon 实际端口本来就不一致）。Host 解析失败、缺失或同一请求出现多个 `Host` 都算不接受。
+//!
+//! `daemon.public_origin` 一旦配置就必须能解析成 origin：即使走了分支 1（白名单非空、该值不参与判定），
+//! 非法取值也是配置错误，因此 [`HostPolicy::new`] 无条件校验一次并失败关闭。
 
 use axum::http::HeaderMap;
 use axum::http::header;
@@ -41,7 +44,16 @@ enum AcceptedHosts {
 
 impl HostPolicy {
     /// 由 `daemon.public_origin` 与 `daemon.allowed_hosts` 构造；非法取值即失败关闭。
+    ///
+    /// `public_origin` 无条件校验（见模块文档）：白名单非空只改变「谁来判定 Host」，不豁免该值的合法性。
     pub fn new(public_origin: Option<&str>, allowed_hosts: &[String]) -> Result<Self, NetError> {
+        let origin = public_origin
+            .map(|origin| {
+                origin_host(origin).ok_or_else(|| NetError::InvalidPublicOrigin {
+                    value: origin.to_owned(),
+                })
+            })
+            .transpose()?;
         if !allowed_hosts.is_empty() {
             let mut normalized = Vec::with_capacity(allowed_hosts.len());
             for entry in allowed_hosts {
@@ -54,15 +66,10 @@ impl HostPolicy {
                 accepted: AcceptedHosts::Allowlist(normalized),
             });
         }
-        match public_origin {
-            Some(origin) => {
-                let host = origin_host(origin).ok_or_else(|| NetError::InvalidPublicOrigin {
-                    value: origin.to_owned(),
-                })?;
-                Ok(Self {
-                    accepted: AcceptedHosts::PublicOrigin(host),
-                })
-            }
+        match origin {
+            Some(host) => Ok(Self {
+                accepted: AcceptedHosts::PublicOrigin(host),
+            }),
             None => Ok(Self {
                 accepted: AcceptedHosts::LoopbackOnly,
             }),
@@ -238,6 +245,35 @@ mod tests {
         assert!(HostPolicy::new(Some("https://user@owner.example.com"), &[]).is_err());
         assert!(HostPolicy::new(None, &["bad host".to_owned()]).is_err());
         assert!(HostPolicy::new(None, &["".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn invalid_public_origin_fails_closed_even_with_a_non_empty_allowlist() {
+        // 白名单非空时 `public_origin` 不参与 Host 判定，但它的**合法性**仍必须成立：否则配置错误
+        // 会被静默接受，直到下游某个时刻才暴露（`NetError::InvalidPublicOrigin` 在该组合下可达）。
+        let error = HostPolicy::new(Some("not-an-origin"), &["proxy.internal".to_owned()])
+            .expect_err("白名单非空不豁免 public_origin 的校验");
+        assert!(matches!(error, NetError::InvalidPublicOrigin { .. }));
+        assert!(error.to_string().contains("not-an-origin"));
+        // 其余非法形态同样在三个分支之前就被拒绝。
+        for origin in [
+            "https://",
+            "ftp://owner.example.com",
+            "https://user@x.example.com",
+        ] {
+            assert!(
+                HostPolicy::new(Some(origin), &["proxy.internal".to_owned()]).is_err(),
+                "{origin} 必须失败关闭"
+            );
+        }
+        // 合法组合仍按白名单判定（`public_origin` 不参与）。
+        let policy = HostPolicy::new(
+            Some("https://owner.example.com"),
+            &["proxy.internal".to_owned()],
+        )
+        .expect("合法组合");
+        assert!(policy.accepts(Some("proxy.internal")));
+        assert!(!policy.accepts(Some("owner.example.com")));
     }
 
     #[test]
