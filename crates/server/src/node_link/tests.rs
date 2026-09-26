@@ -20,7 +20,7 @@
 //! | [R26]/[R27] 五状态一律 200 | `status_reports_the_five_business_states_with_200` |
 //! | [R28] status proof 无效 401 | `status_with_an_invalid_proof_is_unauthorized` |
 //! | [R29] 重试复用 nonce 返回原响应 | `status_retry_with_the_same_nonce_returns_the_original_response` |
-//! | [R30]/[R31] 安全响应头与凭据边界 | `every_pairing_response_carries_the_four_security_headers`、`pairing_responses_never_carry_the_pairing_secret`、`status_responses_carry_the_security_headers_and_no_secret` |
+//! | [R30]/[R31] 安全响应头与凭据边界 | `every_pairing_response_carries_the_four_security_headers`、`pairing_responses_never_carry_the_pairing_secret`、`status_responses_carry_the_security_headers_and_no_secret`、`access_layer_rejections_on_the_pairing_paths_carry_the_security_headers`（413/Host-400，RV1-WP3C 裁决项①） |
 //! | [R32] secret 按期清除 | `status_reports_the_five_business_states_with_200`（expired/consumed 两条路径断言 secret 已清除） |
 //! | [R33]/[R35] status 限流 | `status_rate_limit_returns_429_after_sixty_queries_per_pairing`、`pairing::tests::pairing_id_window_*` |
 //! | [R34] claim 超限 429 | `claim_rate_limit_returns_429_after_ten_attempts_per_ip` |
@@ -102,11 +102,13 @@ impl Harness {
         })
         .await
         .expect("绑定 loopback listener");
+        // 与 WP7 的接线同口径：配对注册必须声明四个安全头（否则接入层预拒绝的 413/Host 400 不带）。
+        let default_headers = pairing.default_response_headers();
         listener
-            .register_post(CLAIM_PATH, pairing.claim_handler())
+            .register_post(CLAIM_PATH, pairing.claim_handler(), default_headers)
             .expect("注册 claim 端点");
         listener
-            .register_post(STATUS_PATH, pairing.status_handler())
+            .register_post(STATUS_PATH, pairing.status_handler(), default_headers)
             .expect("注册 status 端点");
         let addr = listener.local_addrs()[0];
         let (shutdown, signal) = Shutdown::channel();
@@ -185,6 +187,17 @@ impl Harness {
         send(self.addr, path, body, content_type).await
     }
 
+    /// 发送一个 POST 请求到已注册的 path，并用指定的 `Host`（Host 边界用例）。
+    async fn post_with_host(
+        &self,
+        path: &str,
+        host: &str,
+        body: &[u8],
+        content_type: Option<&str>,
+    ) -> Response {
+        send_with_host(self.addr, path, host, body, content_type).await
+    }
+
     /// 该配对的持久化记录（状态断言用）。
     fn record(&self, pairing: &Pairing) -> acp_core::model::PairingRecord {
         self.world
@@ -247,15 +260,23 @@ impl Response {
 /// 写失败被容忍（`413` 这类响应会在服务端提前关闭连接时让写入报 `EPIPE`）：此时仍然必须能读到响应，
 /// 否则用例会因「没有响应」而明确失败。
 async fn send(addr: SocketAddr, path: &str, body: &[u8], content_type: Option<&str>) -> Response {
+    send_with_host(addr, path, &host_of(addr), body, content_type).await
+}
+
+/// 同上，但可指定 `Host`（Host 边界用例）。
+async fn send_with_host(
+    addr: SocketAddr,
+    path: &str,
+    host: &str,
+    body: &[u8],
+    content_type: Option<&str>,
+) -> Response {
     let mut stream = tokio::time::timeout(IO_TIMEOUT, TcpStream::connect(addr))
         .await
         .expect("连接超时")
         .expect("连接 loopback");
-    let mut request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
-        host_of(addr)
-    )
-    .into_bytes();
+    let mut request =
+        format!("POST {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n").into_bytes();
     if let Some(content_type) = content_type {
         request.extend_from_slice(format!("Content-Type: {content_type}\r\n").as_bytes());
     }
@@ -956,6 +977,26 @@ async fn every_pairing_response_carries_the_four_security_headers() {
     ];
     for response in &responses {
         response.assert_security_headers();
+    }
+    harness.stop().await;
+}
+
+/// [R30]/[R31]（RV1-WP3C 的安全头覆盖）：§13.1 的「所有配对 HTTP 响应」也包括接入层在调用处理器前
+/// 产生的拒绝——413（请求体超限）与 400（Host 不匹配）——它们靠注册时声明的每路径默认响应头满足。
+#[tokio::test]
+async fn access_layer_rejections_on_the_pairing_paths_carry_the_security_headers() {
+    let harness = Harness::with_origin().await;
+    // ① 请求体超限：413 由接入层产生（处理器不被调用）。
+    let oversized = harness.claim(&vec![b'a'; 80 * 1024]).await;
+    assert_eq!(oversized.status, 413, "超过请求体上限的 claim 在接入层被拒");
+    oversized.assert_security_headers();
+    // ② Host 不在允许集合内：400 发生在路由之前（本接入层在未注册 path 上也先给 400）。
+    for path in [CLAIM_PATH, STATUS_PATH] {
+        let rejected = harness
+            .post_with_host(path, "evil.example.com", b"{}", Some("application/json"))
+            .await;
+        assert_eq!(rejected.status, 400, "{path} 上的错误 Host 必须 400");
+        rejected.assert_security_headers();
     }
     harness.stop().await;
 }

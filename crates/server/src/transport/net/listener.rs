@@ -332,13 +332,21 @@ impl NetListener {
         self.routes.insert_ws(path, required_subprotocol, handler)
     }
 
-    /// 注册一个只接受 `POST` 的 HTTP 端点（配对 claim/status）。
+    /// 注册一个只接受 `POST` 的 HTTP 端点（配对 claim/status），并声明该 path 的默认响应头。
+    ///
+    /// `default_headers` 是**该 path 上所有响应**都要带的一组头：处理器产生的响应、接入层在调用处理器前
+    /// 产生的响应（请求体超限的 413、方法不匹配的 405），以及 Host 边界在该 path 上的 400。响应已带同名头
+    /// 时保留响应自己的值（默认头是补齐语义，不会变成重复头）；空切片 = 不声明（其他 path 的既有行为）。
+    ///
+    /// 默认头的**来源与语义由调用方决定**（本模块不解释它们）：配对端点为此声明 `NODE_LINK_PROTOCOL.md`
+    /// §13.1 的四个安全头，因为接入层预拒绝也属于「配对 HTTP 响应」。
     pub fn register_post(
         &mut self,
         path: &str,
         handler: Arc<dyn crate::transport::net::route::HttpHandler>,
+        default_headers: &[(&str, &str)],
     ) -> Result<(), RouteError> {
-        self.routes.insert_post(path, handler)
+        self.routes.insert_post(path, handler, default_headers)
     }
 
     /// 服务接入面直到收到关闭信号，并按 [`NetConfig::drain_grace`] 排空在途连接。
@@ -347,6 +355,9 @@ impl NetListener {
     pub async fn serve(mut self, shutdown: Shutdown) -> Result<(), NetError> {
         let (sessions_tx, sessions_rx) = mpsc::channel::<SessionJob>(SESSION_QUEUE_CAPACITY);
         let mut supervisor = tokio::spawn(supervise_sessions(sessions_rx));
+        // 路由表在组装 router 前先取出 POST path 的默认响应头：Host 边界中间件（在路由之前）也要按 path 补齐。
+        let routes = std::mem::take(&mut self.routes);
+        let post_default_headers = routes.post_default_headers();
         let state = Arc::new(NetState {
             host_policy: self.host_policy,
             proxy_policy: self.proxy_policy,
@@ -355,8 +366,9 @@ impl NetListener {
             tls_terminated: self.tls.is_some(),
             shutdown: shutdown.clone(),
             sessions: sessions_tx.clone(),
+            post_default_headers,
         });
-        let router = std::mem::take(&mut self.routes).into_router(Arc::clone(&state));
+        let router = routes.into_router(Arc::clone(&state));
         let app = router.into_make_service_with_connect_info::<SocketAddr>();
         let (ready_tx, ready_rx) = mpsc::channel(HANDSHAKE_READY_CAPACITY);
         let acceptor = NetAcceptor {

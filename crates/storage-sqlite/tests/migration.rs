@@ -2,9 +2,9 @@
 //!
 //! 夹具 `fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**：`empty.sqlite3` 是 v2 形状的
 //! 空库（v2 → v3 升级用例的输入），`from-v1.sqlite3` 是 v1 库（v1 → v2 → v3 连续升级的输入），
-//! `too-new.sqlite3`（`user_version = 3`）在 v3 之后不再「过新」，过新用例改为把它的临时副本顶到
-//! `FILE_FORMAT_VERSION + 1`。`fixtures/storage/v1/` 的两个文件是更早的历史资产，只被下面的
-//! `from-v1.sqlite3` 生成器当作基底读取。
+//! `too-new.sqlite3`（`user_version = 3`）在 v3 之后不再「过新」，过新用例改为用 `empty.sqlite3` 的临时
+//! 副本判定（把该副本的 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`）。`fixtures/storage/v1/` 的两个
+//! 文件是更早的历史资产，只被下面的 `from-v1.sqlite3` 生成器当作基底读取。
 
 mod support;
 

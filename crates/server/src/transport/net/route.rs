@@ -10,6 +10,10 @@
 //!   非升级请求由 `axum` 的升级提取器按 400/405/426 拒绝；单条消息上限在升级响应上固定。
 //! - **请求体上限**：配对端点的请求体超过 [`crate::transport::net::NetConfig::max_body_bytes`] 时返回
 //!   413（`NODE_LINK_PROTOCOL.md` §13.4），处理器不会被调用。
+//! - **每路径默认响应头**：`register_post` 可为一条 path 声明一组默认响应头，该 path 上的**所有**响应都会
+//!   补齐它们——处理器产生的响应、接入层在调用处理器前产生的 413/405，以及 Host 边界在这个 path 上的 400。
+//!   响应已带同名头时保留响应自己的值（默认头是补齐语义，不会变成重复头）：配对端点因此能声明
+//!   「无论成功或失败都带四个安全头」（`NODE_LINK_PROTOCOL.md` §13.1）。
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -25,9 +29,12 @@ use axum::extract::Request;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::http::HeaderMap;
+use axum::http::HeaderName;
+use axum::http::HeaderValue;
 use axum::http::StatusCode;
 use axum::http::header;
 use axum::middleware::Next;
+use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
 use axum::response::IntoResponse as _;
 use axum::response::Response;
@@ -47,6 +54,9 @@ use crate::transport::net::ws::WsHandler;
 /// 一条已升级会话在接入层的持有形式（由 supervisor 任务放进 `JoinSet`）。
 pub(crate) type SessionJob = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
+/// 一条 POST path 的默认响应头（名字与值都已按 `http` 的规则解析）。
+pub(crate) type PathDefaultHeaders = Vec<(HeaderName, HeaderValue)>;
+
 /// 路由与请求处理共享的状态。
 pub(crate) struct NetState {
     pub(crate) host_policy: HostPolicy,
@@ -56,6 +66,20 @@ pub(crate) struct NetState {
     pub(crate) tls_terminated: bool,
     pub(crate) shutdown: Shutdown,
     pub(crate) sessions: mpsc::Sender<SessionJob>,
+    /// 已注册 POST path 的默认响应头（Host 边界在路由之前拒绝时按 path 补齐）。
+    pub(crate) post_default_headers: BTreeMap<String, PathDefaultHeaders>,
+}
+
+/// 把一条 POST path 的默认头补齐到响应上。
+///
+/// 语义是**默认**：响应已经带了同名头时保留响应自己的值（处理器可以覆盖默认值），缺失才补上——
+/// 因此处理器自带的头不会变成重复头。
+pub(crate) fn apply_default_headers(headers: &mut HeaderMap, defaults: &PathDefaultHeaders) {
+    for (name, value) in defaults {
+        if !headers.contains_key(name) {
+            headers.insert(name.clone(), value.clone());
+        }
+    }
 }
 
 /// 配对 HTTP 端点的处理器：由 `server::node_link` 实现并注入。
@@ -86,6 +110,14 @@ pub enum RouteError {
         /// 重复的 path。
         path: String,
     },
+    /// `register_post` 声明的默认响应头不是合法的 header 名或值。
+    #[error("默认响应头非法：`{name}: {value}`")]
+    InvalidDefaultHeader {
+        /// 被拒绝的头名。
+        name: String,
+        /// 被拒绝的头值。
+        value: String,
+    },
 }
 
 /// 一个 WebSocket 端点的注册项。
@@ -97,6 +129,7 @@ struct WsRoute {
 /// 一个 HTTP POST 端点的注册项。
 struct PostRoute {
     handler: Arc<dyn HttpHandler>,
+    default_headers: PathDefaultHeaders,
 }
 
 /// path → 处理器的注册表。
@@ -131,20 +164,36 @@ impl RouteTable {
         Ok(())
     }
 
-    /// 注册一个只接受 `POST` 的 HTTP 端点。
+    /// 注册一个只接受 `POST` 的 HTTP 端点，并声明该 path 的默认响应头。
     pub(crate) fn insert_post(
         &mut self,
         path: &str,
         handler: Arc<dyn HttpHandler>,
+        default_headers: &[(&str, &str)],
     ) -> Result<(), RouteError> {
         validate_path(path)?;
+        let default_headers = parse_default_headers(default_headers)?;
         if self.ws.contains_key(path) || self.post.contains_key(path) {
             return Err(RouteError::DuplicatePath {
                 path: path.to_owned(),
             });
         }
-        self.post.insert(path.to_owned(), PostRoute { handler });
+        self.post.insert(
+            path.to_owned(),
+            PostRoute {
+                handler,
+                default_headers,
+            },
+        );
         Ok(())
+    }
+
+    /// 已注册 POST path 的默认响应头（由 [`NetState`] 持有，供 Host 边界按 path 补齐）。
+    pub(crate) fn post_default_headers(&self) -> BTreeMap<String, PathDefaultHeaders> {
+        self.post
+            .iter()
+            .map(|(path, route)| (path.clone(), route.default_headers.clone()))
+            .collect()
     }
 
     /// 组装 `axum` 路由：注册 path 按种类分派，其余 path 一律 404；边界中间件覆盖含 fallback 的全部请求。
@@ -170,14 +219,26 @@ impl RouteTable {
         for (path, route) in self.post {
             let state = Arc::clone(&state);
             let handler = route.handler;
-            router = router.route(
-                &path,
-                post(move |request: Request| {
-                    let state = Arc::clone(&state);
-                    let handler = Arc::clone(&handler);
-                    async move { serve_post(state, handler, request).await }
-                }),
-            );
+            let mut method_router = post(move |request: Request| {
+                let state = Arc::clone(&state);
+                let handler = Arc::clone(&handler);
+                async move { serve_post(state, handler, request).await }
+            });
+            if !route.default_headers.is_empty() {
+                // 本 path 上**所有**响应都要补齐默认头，包括接入层在调用处理器前产生的响应
+                // （请求体超限的 413、`axum` 的方法不匹配 405），因此层加在方法路由的最外层。
+                let defaults = Arc::new(route.default_headers);
+                method_router =
+                    method_router.layer(from_fn(move |request: Request, next: Next| {
+                        let defaults = Arc::clone(&defaults);
+                        async move {
+                            let mut response = next.run(request).await;
+                            apply_default_headers(response.headers_mut(), &defaults);
+                            response
+                        }
+                    }));
+            }
+            router = router.route(&path, method_router);
         }
         // 路由表为空时也要经过边界中间件（未注册 path 的 404 因此与已注册 path 同一条路径）。
         router
@@ -203,6 +264,21 @@ fn validate_path(path: &str) -> Result<(), RouteError> {
         });
     }
     Ok(())
+}
+
+/// 解析注册时声明的默认响应头：名字/值不合法即拒绝注册，而不是留到响应期才失败。
+fn parse_default_headers(pairs: &[(&str, &str)]) -> Result<PathDefaultHeaders, RouteError> {
+    let mut parsed = Vec::with_capacity(pairs.len());
+    for (name, value) in pairs {
+        let invalid = || RouteError::InvalidDefaultHeader {
+            name: (*name).to_owned(),
+            value: (*value).to_owned(),
+        };
+        let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| invalid())?;
+        let value = HeaderValue::from_str(value).map_err(|_| invalid())?;
+        parsed.push((name, value));
+    }
+    Ok(parsed)
 }
 
 /// subprotocol 必须是 RFC 7230 token（`acp-remote.nodelink.v1.json` 是其中一例）。
@@ -255,7 +331,12 @@ async fn boundary(
             path = %request.uri().path(),
             "Host 不在允许集合内：拒绝请求"
         );
-        return host_rejected();
+        let mut response = host_rejected();
+        // 该拒绝发生在路由之前，因此按 path 补齐已注册端点的默认头（未注册 path 没有默认头）。
+        if let Some(defaults) = state.post_default_headers.get(request.uri().path()) {
+            apply_default_headers(response.headers_mut(), defaults);
+        }
+        return response;
     }
     let resolved = state.proxy_policy.resolve(peer_addr, request.headers());
     request.extensions_mut().insert(PeerInfo {

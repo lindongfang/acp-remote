@@ -17,6 +17,7 @@
 //! | [R14] direct 模式证书缺失即拒绝启动 | `direct_mode_missing_certificate_fails_closed`、`direct_mode_invalid_pem_fails_closed`、`direct_mode_relaxed_permissions_fail_closed`（Unix）、`direct_mode_permissions_are_unverifiable_on_this_platform`（Windows，`[PV5]`） |
 //! | [R15] 非 loopback 明文边界 | `plaintext_proxy_non_loopback_warns`、`plaintext_dev_flag_rejects_non_loopback`（`listener` 模块） |
 //! | [R16]/[R17] 请求体上限 | `pairing_body_over_the_limit_is_rejected_with_413` |
+//! | 每路径默认响应头（`register_post` 的第三个参数） | `path_default_headers_cover_access_layer_rejections_and_keep_route_isolation`、`path_default_headers_do_not_override_or_duplicate_handler_headers`、`invalid_path_default_headers_are_rejected_at_registration` |
 //! | [R18] 超大 WebSocket 消息被拒绝 | `oversize_ws_message_closes_with_1009` |
 //! | 关闭排空（D11） | `shutdown_drains_and_releases_the_listener`、`binary_frames_are_passed_to_the_handler` |
 
@@ -27,9 +28,13 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::body::Bytes;
+use axum::http::HeaderName;
+use axum::http::HeaderValue;
 use axum::http::StatusCode;
 
+use super::test_client::RunningServer;
 use super::test_client::TestCertificate;
+use super::test_client::TestResponse;
 use super::test_client::client_tls_config;
 use super::test_client::connect;
 use super::test_client::connect_tls;
@@ -177,6 +182,7 @@ async fn local_addrs_reports_the_real_bound_address() {
                     last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                     status: StatusCode::OK,
                 }),
+                &[],
             )
             .expect("注册成功");
     })
@@ -275,6 +281,7 @@ async fn unregistered_paths_return_404() {
                     last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                     status: StatusCode::OK,
                 }),
+                &[],
             )
             .expect("注册 claim");
         listener
@@ -285,6 +292,7 @@ async fn unregistered_paths_return_404() {
                     last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                     status: StatusCode::OK,
                 }),
+                &[],
             )
             .expect("注册 status");
     })
@@ -537,6 +545,7 @@ async fn wrong_host_is_rejected_before_routing() {
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::OK,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },
@@ -638,6 +647,7 @@ async fn allowed_hosts_whitelist_is_used_when_configured() {
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::OK,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },
@@ -675,6 +685,7 @@ async fn default_configuration_accepts_loopback_host_only() {
                     last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                     status: StatusCode::OK,
                 }),
+                &[],
             )
             .expect("注册 claim");
     })
@@ -714,6 +725,7 @@ async fn forwarded_headers_are_ignored_from_untrusted_peers() {
                     last_client_ip: Arc::clone(&last_client_ip),
                     status: StatusCode::OK,
                 }),
+                &[],
             )
             .expect("注册 claim");
     })
@@ -756,6 +768,7 @@ async fn forwarded_headers_are_honored_from_trusted_proxies() {
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::OK,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },
@@ -796,6 +809,7 @@ async fn pairing_body_over_the_limit_is_rejected_with_413() {
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::CREATED,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },
@@ -836,6 +850,156 @@ async fn pairing_body_over_the_limit_is_rejected_with_413() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     server.stop().await.expect("关闭序列成功");
+}
+
+/// 发一条请求并读回响应（默认头用例的缩写）。
+async fn request(
+    server: &RunningServer,
+    method: &str,
+    path: &str,
+    host: &str,
+    body: &[u8],
+) -> TestResponse {
+    let mut connection = connect(server.addr).await.expect("连接");
+    connection
+        .write_all(&http_request(method, path, host, &[], body))
+        .await
+        .expect("写请求");
+    connection.read_response().await.expect("读响应")
+}
+
+#[tokio::test]
+async fn path_default_headers_cover_access_layer_rejections_and_keep_route_isolation() {
+    // `register_post` 的每路径默认头：该 path 上的**所有**响应（含接入层在调用处理器前产生的 413/400）
+    // 都补齐它们；未声明的 path 与未注册 path 的既有行为不变。
+    const PAIRING_HEADERS: [(&str, &str); 2] = [
+        ("cache-control", "no-store"),
+        ("x-content-type-options", "nosniff"),
+    ];
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = || {
+        Arc::new(RecordingHttpHandler {
+            calls: Arc::clone(&calls),
+            last_client_ip: Arc::new(std::sync::Mutex::new(None)),
+            status: StatusCode::OK,
+        })
+    };
+    let server = start_server(
+        NetConfig {
+            public_origin: Some("https://owner.example.com".to_owned()),
+            max_body_bytes: 1024,
+            ..loopback_config()
+        },
+        |listener| {
+            listener
+                .register_post(CLAIM_PATH, handler(), &PAIRING_HEADERS)
+                .expect("注册 claim");
+            listener
+                .register_post(STATUS_PATH, handler(), &[])
+                .expect("注册 status");
+        },
+    )
+    .await;
+    let host = "owner.example.com";
+    // ① 请求体超限：413 由接入层产生。
+    let oversized = request(&server, "POST", CLAIM_PATH, host, &[b'a'; 4096]).await;
+    assert_eq!(oversized.status, 413);
+    assert_eq!(oversized.header("cache-control"), Some("no-store"));
+    assert_eq!(oversized.header("x-content-type-options"), Some("nosniff"));
+    // ② Host 边界在路由之前拒绝：400 也带默认头。
+    let bad_host = request(&server, "POST", CLAIM_PATH, "evil.example.com", b"{}").await;
+    assert_eq!(bad_host.status, 400);
+    assert_eq!(bad_host.header("cache-control"), Some("no-store"));
+    assert_eq!(bad_host.header("x-content-type-options"), Some("nosniff"));
+    // ③ 处理器产生的响应同样补齐。
+    let handled = request(&server, "POST", CLAIM_PATH, host, b"{}").await;
+    assert_eq!(handled.status, 200);
+    assert_eq!(handled.header("cache-control"), Some("no-store"));
+    assert_eq!(handled.header("x-content-type-options"), Some("nosniff"));
+    // ③' 方法不匹配（GET）：405 也由接入层产生（`axum` 的方法路由），同样补齐默认头。
+    let wrong_method = request(&server, "GET", CLAIM_PATH, host, b"").await;
+    assert_eq!(wrong_method.status, 405);
+    assert_eq!(wrong_method.header("cache-control"), Some("no-store"));
+    // ④ 未声明默认头的 path（空切片）与未注册 path 都不受影响。
+    for (path, expected) in [(STATUS_PATH, 200), ("/unknown", 404)] {
+        let response = request(&server, "POST", path, host, b"{}").await;
+        assert_eq!(response.status, expected, "{path}");
+        assert_eq!(response.header("cache-control"), None, "{path}");
+    }
+    let wrong_method_other = request(&server, "GET", STATUS_PATH, host, b"").await;
+    assert_eq!(wrong_method_other.status, 405);
+    assert_eq!(wrong_method_other.header("cache-control"), None);
+    // ⑤ 413 与 Host 400 都没有调用处理器。
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn path_default_headers_do_not_override_or_duplicate_handler_headers() {
+    // 默认头是**补齐**语义：处理器已经设置同名头时保留处理器自己的值，也不产生重复头。
+    struct HandlerWithHeader;
+
+    #[async_trait::async_trait]
+    impl HttpHandler for HandlerWithHeader {
+        async fn handle(&self, _request: HttpRequest) -> HttpResponse {
+            HttpResponse::new(StatusCode::OK).with_header(
+                HeaderName::from_static("cache-control"),
+                HeaderValue::from_static("private"),
+            )
+        }
+    }
+
+    let server = start_server(loopback_config(), |listener| {
+        listener
+            .register_post(
+                CLAIM_PATH,
+                Arc::new(HandlerWithHeader),
+                &[("cache-control", "no-store"), ("pragma", "no-cache")],
+            )
+            .expect("注册 claim");
+    })
+    .await;
+    let response = request(&server, "POST", CLAIM_PATH, &host_of(server.addr), b"{}").await;
+    assert_eq!(response.status, 200);
+    let values = response
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("cache-control"))
+        .map(|(_, value)| value.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec!["private"], "处理器自己的值保留，且不重复");
+    assert_eq!(response.header("pragma"), Some("no-cache"));
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn invalid_path_default_headers_are_rejected_at_registration() {
+    // 头名/值非法即拒绝注册，而不是留到响应期才失败；被拒的声明不留下半注册的路由。
+    let mut listener = NetListener::bind(loopback_config())
+        .await
+        .expect("绑定 loopback listener");
+    let handler = || {
+        Arc::new(RecordingHttpHandler {
+            calls: Arc::new(AtomicUsize::new(0)),
+            last_client_ip: Arc::new(std::sync::Mutex::new(None)),
+            status: StatusCode::OK,
+        })
+    };
+    for invalid in [
+        &[("bad name", "value")][..],
+        &[("cache-control", "bad\nvalue")][..],
+    ] {
+        let error = listener
+            .register_post(CLAIM_PATH, handler(), invalid)
+            .expect_err("非法默认头必须拒绝注册");
+        assert!(
+            matches!(error, RouteError::InvalidDefaultHeader { .. }),
+            "{error}"
+        );
+    }
+    listener
+        .register_post(CLAIM_PATH, handler(), &[("cache-control", "no-store")])
+        .expect("被拒的声明不得占用该 path");
 }
 
 #[tokio::test]
@@ -992,6 +1156,7 @@ async fn direct_mode_terminates_tls_and_rejects_plaintext() {
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::OK,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },
@@ -1053,6 +1218,7 @@ async fn idle_tcp_connections_do_not_block_new_connections() {
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::OK,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },
@@ -1120,6 +1286,7 @@ async fn saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_conne
                         last_client_ip: Arc::new(std::sync::Mutex::new(None)),
                         status: StatusCode::OK,
                     }),
+                    &[],
                 )
                 .expect("注册 claim");
         },

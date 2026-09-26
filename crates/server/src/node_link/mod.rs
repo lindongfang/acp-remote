@@ -17,7 +17,9 @@
 //!   不查 SQLite、不调用 `node-link-client`，也不调用 `server::local_admin` 等平级 adapter；
 //! - 不读系统时间：时间一律来自状态机注入的 `Clock`（`Authority::now`）；
 //! - 不读配置文件：组合根把判定所需的配置快照注入构造器（[`PairingHttpConfig`]）；
-//! - 不注册路由、不绑定 listener：接线属组合根（WP7）。
+//! - 不注册路由、不绑定 listener：接线属组合根（WP7）；但注册时**必须**把
+//!   [`pairing::PairingHttp::default_response_headers`] 传给 `NetListener::register_post`，否则接入层在调用
+//!   处理器前产生的 413/Host 400 不带 §13.1 要求的四个安全头。
 //!
 //! 唯一权威：`docs/NODE_LINK_PROTOCOL.md` §13（配对 HTTP）与 §2.5（固定限流），行为范围以
 //! `openspec/changes/node-link-owner/specs/node-link-pairing-http/spec.md` 的 R19–R35 为准。

@@ -71,6 +71,20 @@ const LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// 401 的统一消息（§13.2：响应不得泄露具体校验差异，所以证明/绑定/失败计数类拒绝共用同一文本）。
 const PROOF_INVALID_MESSAGE: &str = "pairing proof is not valid";
 
+/// 四个安全响应头（§13.1）：所有配对 HTTP 响应（成功与失败）都必须携带。
+///
+/// 同一份常量被两条路径消费：处理器内的 [`secure`]（处理器自己带）与 [`NetListener::register_post`] 的
+/// **每路径默认响应头**（接入层在调用处理器前产生的 413/Host 400 也带）——后者经
+/// [`PairingHttp::default_response_headers`] 传入。两边同源，因此不会漂移也不会变成重复头。
+///
+/// [`NetListener::register_post`]: crate::transport::net::NetListener::register_post
+const SECURITY_HEADERS: [(&str, &str); 4] = [
+    ("cache-control", "no-store"),
+    ("pragma", "no-cache"),
+    ("referrer-policy", "no-referrer"),
+    ("x-content-type-options", "nosniff"),
+];
+
 /// 组合根注入的配对端点配置快照（本模块不读配置文件，`design.md` D2）。
 #[derive(Debug, Clone, Default)]
 pub struct PairingHttpConfig {
@@ -120,6 +134,15 @@ impl PairingHttp {
         Arc::new(StatusEndpoint {
             pairing: self.clone(),
         })
+    }
+
+    /// 两个配对 path 的每路径默认响应头（§13.1：**所有**配对 HTTP 响应都带这四个头）。
+    ///
+    /// 组合根注册 [`Self::claim_handler`]/[`Self::status_handler`] 时**必须**把它作为 `default_headers`
+    /// 传给 `NetListener::register_post`：处理器只覆盖得到自己的响应，接入层在调用处理器前产生的
+    /// 413（请求体超限）与 400（Host 不匹配）只有经这个声明才会带上四个头。
+    pub fn default_response_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &SECURITY_HEADERS
     }
 
     /// `POST /node-link/v1/pairing/claim`（§13.2）：原子检查「存在 → 未过期 → 仍可认领 → endpoint
@@ -910,24 +933,18 @@ fn error_response(
 }
 
 /// 四个安全响应头（§13.1）：所有配对响应（成功与失败）都必须携带。
+///
+/// 与 [`PairingHttp::default_response_headers`] 同源（[`SECURITY_HEADERS`]）：接入层按「响应未带同名头
+/// 才补齐」的语义附加，因此处理器返回的响应不会出现重复头。
 fn secure(response: HttpResponse) -> HttpResponse {
+    let mut response = response;
+    for (name, value) in SECURITY_HEADERS {
+        response = response.with_header(
+            HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        );
+    }
     response
-        .with_header(
-            HeaderName::from_static("cache-control"),
-            HeaderValue::from_static("no-store"),
-        )
-        .with_header(
-            HeaderName::from_static("pragma"),
-            HeaderValue::from_static("no-cache"),
-        )
-        .with_header(
-            HeaderName::from_static("referrer-policy"),
-            HeaderValue::from_static("no-referrer"),
-        )
-        .with_header(
-            HeaderName::from_static("x-content-type-options"),
-            HeaderValue::from_static("nosniff"),
-        )
 }
 
 #[cfg(test)]
