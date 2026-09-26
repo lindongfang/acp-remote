@@ -22,6 +22,7 @@
 //! | storage-schema-v2-migration：损坏与权限不符时的失败关闭 | `fail_closed_store_rejects_every_admin_write_path` |
 //! | storage-schema-v2-migration：管理表纳入保留与容量 | `capacity_limit_refuses_new_admin_writes_without_deleting_trust` |
 //! | storage-schema-v2-migration：imported 家族保持无正文 | `full_import_removal_and_connection_drop_both_keep_audit` |
+//! | node-link-owner：认证收尾写集的 `last_seen` 落在存储层 | `record_node_connected_advances_the_access_row_once_forward`、`consume_pairing_advances_the_node_row_of_a_node_peer`、`record_node_connected_refuses_missing_rows_and_wrong_roles`、`a_failed_audit_write_leaves_last_connected_at_untouched`（这一行来自 `node-link-owner` 的 spec「节点双向认证与凭据状态」，不属 admin-state-persistence-v2 的场景表） |
 //!
 //! 断言只针对**可观察结果**：端口返回值、库内行（`table_snapshot` 的逐行文本）与黄金列清单。
 //! 两条故障注入用 SQLite 触发器实现（审计表/设备表上 `RAISE(ABORT)`）：它们是「事务中途失败」在
@@ -46,9 +47,10 @@ use acp_core::model::{
 use acp_core::ports::{
     DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
     ExportWrite, ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore,
-    NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
-    PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite, RemoteDeliveryStore, RevokeReason,
-    SeedWrite, SessionStore, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
+    NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption,
+    PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
+    RemoteDeliveryStore, RevokeReason, SeedWrite, SessionStore, TrustRecordRef, TrustStore,
+    WorkspaceWrite, WriteContext,
 };
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
@@ -218,6 +220,37 @@ fn device_actor() -> Actor {
     Actor::Device {
         device: device_id(),
         scopes: ScopeSet::empty(),
+    }
+}
+
+/// 认证收尾用的节点主体：Node Link 的对端（§5.3 的归因形状——`actor` 与 `via_node` 都是该对端）。
+fn node_actor(peer: &NodeId) -> Actor {
+    Actor::Node {
+        node: peer.clone(),
+        access_node: peer.clone(),
+    }
+}
+
+/// `node.authenticated` 的成功审计行（§5.3/§11.6 第 9 条：`target = Node(对端)`、
+/// `localPrincipalRef` 为空、`detailDigest` 为空）。
+fn node_authenticated(peer: &NodeId) -> PendingAudit {
+    PendingAudit {
+        action: AuditAction::NodeAuthenticated,
+        actor: node_actor(peer),
+        via_node: Some(peer.clone()),
+        local_principal_ref: None,
+        target: EntityRef::Node(peer.clone()),
+        outcome: AuditOutcome::Success,
+        detail_digest: None,
+    }
+}
+
+/// 一次认证收尾的写集（§11.6 第 9 条）：认证时间 + 一条认证成功审计。
+fn node_connected(peer: &NodeId, kind: NodeKind, minute: u32) -> NodeConnectedWrite {
+    NodeConnectedWrite {
+        node: peer.clone(),
+        kind,
+        context: context(minute, vec![node_authenticated(peer)]),
     }
 }
 
@@ -558,6 +591,58 @@ async fn approve_device(store: &SqliteStore, id: &DeviceId, minute: u32) -> Trus
         .expect("settle pairing")
 }
 
+/// 节点配对批准（§11.6 第 4 条）：写下对端的 `access` 信任行并绑定身份材料。认证时间**不**在这一步写
+/// ——`last_connected_at` 是认证收尾的职责（§11.6 第 8/9 条）。
+async fn approve_node(store: &SqliteStore, peer: &NodeId, minute: u32) -> TrustRecordRef {
+    store
+        .create_pairing(PairingWrite {
+            record: node_pairing(),
+            context: context(
+                0,
+                vec![audit(
+                    AuditAction::PairingCreated,
+                    EntityRef::Pairing(pairing_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("create node pairing");
+    store
+        .claim_pairing(node_claim(peer))
+        .await
+        .expect("claim node pairing");
+    store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: pairing_id(),
+            settlement: PairingSettlement::approved(
+                ScopeSet::empty(),
+                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            ),
+            context: context(
+                minute,
+                vec![audit(
+                    AuditAction::NodePaired,
+                    EntityRef::Node(peer.clone()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("approve node pairing")
+}
+
+/// `(node, access)` 行的认证时间（读面断言用；行必须存在）。
+async fn last_connected(store: &SqliteStore, node: &NodeId) -> Option<Timestamp> {
+    store
+        .node(node, NodeKind::Access)
+        .await
+        .expect("node")
+        .expect("node row")
+        .last_connected_at()
+        .cloned()
+}
+
 /// `owned_audit` 里某动作的行数（审计与状态同事务的独立证据）。
 async fn audit_rows(pool: &SqlitePool, action: AuditAction) -> i64 {
     sqlx::query_scalar("SELECT COUNT(*) FROM owned_audit WHERE action = ?1")
@@ -565,6 +650,20 @@ async fn audit_rows(pool: &SqlitePool, action: AuditAction) -> i64 {
         .fetch_one(pool)
         .await
         .expect("audit count")
+}
+
+/// `owned_audit` 里某动作的逐行文本（按写入顺序），用来核对审计归因的**每一列**（§5.3）。
+async fn audit_lines(pool: &SqlitePool, action: AuditAction) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT at || '|' || action || '|' || actor_kind || '|' || actor_id || '|' || \
+         COALESCE(via_node_id, '∅') || '|' || COALESCE(local_principal_ref, '∅') || '|' || \
+         target_kind || '|' || target_id || '|' || outcome || '|' || \
+         COALESCE(detail_digest, '∅') FROM owned_audit WHERE action = ?1 ORDER BY audit_id",
+    )
+    .bind(action.as_str())
+    .fetch_all(pool)
+    .await
+    .expect("audit lines")
 }
 
 /// 逐表、逐 TEXT 列扫一个字符串（`instr`，不做模式匹配）；返回命中的 `表.列`。
@@ -1689,6 +1788,346 @@ async fn a_failed_audit_write_leaves_the_pairing_approved() {
         .expect("the same write set succeeds without the trigger");
     assert_eq!(consumed.state(), PairingState::Consumed);
     store.close().await;
+}
+
+/// §11.6 第 9 条 / spec `node-link-owner`「节点双向认证与凭据状态」的收尾副作用：重复认证的写集把
+/// `(node, access)` 行的 `last_connected_at` 从 NULL 推进到本次时间、`node.authenticated` 与它同事务
+/// 落库且归因逐列一致；只前进不倒退（时间是否推进都不免除留痕）；时间列以外一个字段都不动；重启后保持。
+#[tokio::test]
+async fn record_node_connected_advances_the_access_row_once_forward() {
+    let dir = temp_dir("admin-node-connected");
+    let store = open(&dir).await;
+    let peer = peer_node_id();
+    approve_node(&store, &peer, 2).await;
+    let approved = store
+        .node(&peer, NodeKind::Access)
+        .await
+        .expect("node")
+        .expect("node row");
+    assert_eq!(
+        approved.last_connected_at(),
+        None,
+        "配对批准不写认证时间，那是认证收尾的职责（§11.6 第 4/9 条）"
+    );
+
+    // 首次写入：NULL → 本次时间。
+    store
+        .record_node_connected(node_connected(&peer, NodeKind::Access, 3))
+        .await
+        .expect("record the first authentication");
+    let first = store
+        .node(&peer, NodeKind::Access)
+        .await
+        .expect("node")
+        .expect("node row");
+    assert_eq!(
+        first.last_connected_at(),
+        Some(&at(3)),
+        "旧值为空时首次写入不得被丢成 NULL"
+    );
+    let expected = NodeRecord::try_new(
+        peer.clone(),
+        approved.display_name(),
+        approved.kind(),
+        approved.node_public_key_fingerprint().clone(),
+        approved.grants().clone(),
+        approved.state(),
+        approved.owner_endpoint().map(str::to_owned),
+        approved.created_at().clone(),
+        Some(at(3)),
+        None,
+    )
+    .expect("expected node record");
+    assert_eq!(
+        first, expected,
+        "本写集只推进 last_connected_at，其余字段逐字段不变"
+    );
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        audit_lines(&pool, AuditAction::NodeAuthenticated).await,
+        vec![format!(
+            "{}|node.authenticated|node|{peer}/{peer}|{peer}|∅|node|{peer}|success|∅",
+            at(3)
+        )],
+        "认证成功的审计行必须与时间同事务、归因逐列一致（§5.3）"
+    );
+    pool.close().await;
+
+    // 重启后保持，并验证「只前进」的两个方向。
+    let store = open(&dir).await;
+    store
+        .record_node_connected(node_connected(&peer, NodeKind::Access, 2))
+        .await
+        .expect("record an authentication with an earlier timestamp");
+    assert_eq!(
+        last_connected(&store, &peer).await,
+        Some(at(3)),
+        "更早的认证时间不得让已存值倒退"
+    );
+    store
+        .record_node_connected(node_connected(&peer, NodeKind::Access, 4))
+        .await
+        .expect("record a later authentication");
+    assert_eq!(
+        last_connected(&store, &peer).await,
+        Some(at(4)),
+        "更晚的认证时间必须推进已存值"
+    );
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        audit_rows(&pool, AuditAction::NodeAuthenticated).await,
+        3,
+        "每一次认证各留一行：时间列是否推进不改变留痕义务"
+    );
+    pool.close().await;
+}
+
+/// §11.6 第 8 条：首次认证（已批准配对 → `consumed`）在**同一写集**里推进对端 `access` 行的
+/// `last_connected_at`——节点配对的 `Actor::Node` 打的就是配对批准写下的 `(node, access)` 行；同一次
+/// 消费的重复提交不得改写它；`Actor::Device` 的配对没有节点行。
+#[tokio::test]
+async fn consume_pairing_advances_the_node_row_of_a_node_peer() {
+    let dir = temp_dir("admin-pairing-consume-node");
+    let store = open(&dir).await;
+    let peer = peer_node_id();
+    approve_node(&store, &peer, 2).await;
+    let consumed = store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: node_actor(&peer),
+            context: context(3, vec![node_authenticated(&peer)]),
+        })
+        .await
+        .expect("consume an approved node pairing");
+    assert_eq!(consumed.state(), PairingState::Consumed);
+    assert_eq!(
+        last_connected(&store, &peer).await,
+        Some(at(3)),
+        "首次认证在配对消费的写集里推进认证时间"
+    );
+    store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: node_actor(&peer),
+            context: context(5, vec![node_authenticated(&peer)]),
+        })
+        .await
+        .expect("a repeated consumption is idempotent");
+    assert_eq!(
+        last_connected(&store, &peer).await,
+        Some(at(3)),
+        "同一次消费的重复提交不得改写认证时间"
+    );
+    store.close().await;
+
+    // 设备配对：`Actor::Device` 没有节点行（§11.6 第 8 条），因此消费前后 `owned_node` 始终为空。
+    let dir = temp_dir("admin-pairing-consume-device-rows");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        table_snapshot(&pool, "owned_node").await,
+        Vec::<String>::new()
+    );
+    pool.close().await;
+    let store = open(&dir).await;
+    store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: device_actor(),
+            context: context(
+                3,
+                vec![audit_for(
+                    device_actor(),
+                    AuditAction::DeviceAuthenticated,
+                    EntityRef::Pairing(pairing_id()),
+                )],
+            ),
+        })
+        .await
+        .expect("consume an approved device pairing");
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        table_snapshot(&pool, "owned_node").await,
+        Vec::<String>::new(),
+        "设备配对不产生节点行"
+    );
+    pool.close().await;
+}
+
+/// §11.6 第 9 条的失败关闭：`(node, kind)` 行不存在（未知对端，或该对端没有这个角色的行）→
+/// `NotFound(EntityRef::Node)`，零审计、不推进任何认证时间。Node Link 只传 `access`，这里的 `owner`
+/// 行用来钉死「角色是谓词的一部分」：命中角色的那一侧同一调用成功。
+#[tokio::test]
+async fn record_node_connected_refuses_missing_rows_and_wrong_roles() {
+    let dir = temp_dir("admin-node-connected-missing");
+    let store = open(&dir).await;
+    let peer = peer_node_id();
+    approve_node(&store, &peer, 2).await;
+    let unknown = NodeId::new("abcdefab-2222-4222-8222-abcdefabcdef").expect("node id");
+    assert!(
+        matches!(
+            store
+                .record_node_connected(node_connected(&unknown, NodeKind::Access, 3))
+                .await
+                .expect_err("an unknown node must be refused"),
+            PortError::NotFound(EntityRef::Node(id)) if id == unknown
+        ),
+        "信任面不存在的对端必须具名失败关闭"
+    );
+    // 已知对端、角色不符：该对端只有配对批准写下的 `access` 行。
+    assert!(
+        matches!(
+            store
+                .record_node_connected(node_connected(&peer, NodeKind::Owner, 3))
+                .await
+                .expect_err("a node without an owner row must be refused"),
+            PortError::NotFound(EntityRef::Node(id)) if id == peer
+        ),
+        "角色不符的记录必须具名失败关闭"
+    );
+    // 另一个对端只有 `owner` 行（`put_node`）：反方向的角色不符同样失败，命中角色则成功。
+    store
+        .put_node(NodeWrite {
+            record: node_record_with_connected(
+                NodeKind::Owner,
+                peer_public_key().fingerprint(),
+                None,
+            ),
+            public_key: peer_public_key(),
+            context: context(3, Vec::new()),
+        })
+        .await
+        .expect("write an owner row");
+    assert!(
+        matches!(
+            store
+                .record_node_connected(node_connected(&node_id(), NodeKind::Access, 4))
+                .await
+                .expect_err("an owner row must not answer for the access role"),
+            PortError::NotFound(EntityRef::Node(id)) if id == node_id()
+        ),
+        "角色不符的记录必须具名失败关闭"
+    );
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        audit_rows(&pool, AuditAction::NodeAuthenticated).await,
+        0,
+        "被拒路径不得留下审计行"
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT COUNT(*) FROM owned_node WHERE last_connected_at IS NOT NULL"
+        )
+        .await,
+        0,
+        "被拒路径不得推进任何认证时间"
+    );
+    pool.close().await;
+
+    let store = open(&dir).await;
+    store
+        .record_node_connected(node_connected(&node_id(), NodeKind::Owner, 4))
+        .await
+        .expect("the owner row is addressable");
+    assert_eq!(
+        store
+            .node(&node_id(), NodeKind::Owner)
+            .await
+            .expect("node")
+            .expect("node row")
+            .last_connected_at(),
+        Some(&at(4)),
+        "被拒是因为角色行不存在，不是因为入口本身不可用"
+    );
+    store.close().await;
+}
+
+/// §11.2 第 6 条 / §9 判据 23：审计写失败时整个认证收尾写集回滚——未被认证过的行仍为 NULL、已有值
+/// 不得被推进、也没有半条审计；触发器移除后同一写集成功。
+#[tokio::test]
+async fn a_failed_audit_write_leaves_last_connected_at_untouched() {
+    let dir = temp_dir("admin-node-connected-rollback");
+    let store = open(&dir).await;
+    let peer = peer_node_id();
+    approve_node(&store, &peer, 2).await;
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    let raw = raw_write_pool(&path).await;
+    sqlx::query(
+        "CREATE TRIGGER block_audit BEFORE INSERT ON owned_audit BEGIN \
+         SELECT RAISE(ABORT, 'audit blocked'); END",
+    )
+    .execute(&raw)
+    .await
+    .expect("install trigger");
+
+    let error = store
+        .record_node_connected(node_connected(&peer, NodeKind::Access, 3))
+        .await
+        .expect_err("an unwritable audit row must fail the write set");
+    assert!(
+        matches!(error, PortError::Backend(_)),
+        "约束/触发器失败必须给出具名错误，got {error}"
+    );
+    assert_eq!(
+        last_connected(&store, &peer).await,
+        None,
+        "首次写入失败不得留下半状态"
+    );
+
+    sqlx::query("DROP TRIGGER block_audit")
+        .execute(&raw)
+        .await
+        .expect("drop trigger");
+    store
+        .record_node_connected(node_connected(&peer, NodeKind::Access, 3))
+        .await
+        .expect("the same write set succeeds without the trigger");
+    assert_eq!(last_connected(&store, &peer).await, Some(at(3)));
+
+    sqlx::query(
+        "CREATE TRIGGER block_audit BEFORE INSERT ON owned_audit BEGIN \
+         SELECT RAISE(ABORT, 'audit blocked'); END",
+    )
+    .execute(&raw)
+    .await
+    .expect("reinstall trigger");
+    let error = store
+        .record_node_connected(node_connected(&peer, NodeKind::Access, 5))
+        .await
+        .expect_err("an unwritable audit row must fail the later write set");
+    assert!(
+        matches!(error, PortError::Backend(_)),
+        "约束/触发器失败必须给出具名错误，got {error}"
+    );
+    assert_eq!(
+        last_connected(&store, &peer).await,
+        Some(at(3)),
+        "推进失败必须整事务回滚"
+    );
+    raw.close().await;
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        audit_rows(&pool, AuditAction::NodeAuthenticated).await,
+        1,
+        "只有成功的那一次留下审计行"
+    );
+    pool.close().await;
 }
 
 /// spec：拒绝或过期不创建信任；配对进入终态且此后不能被再次认领。
