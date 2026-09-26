@@ -275,7 +275,9 @@ impl OwnerNode {
     /// 注入/取消故障：`commit` 命中该 marker 的事件批次时返回 `StorageFull`。
     ///
     /// 这是 R61（「broker 提交失败时连接上不出现对应 `resource.event`」）的注入点，也是本测试唯一一处
-    /// 影响生产行为的替身：失败只发生在带该 marker 的那一批提交上，其余提交（turn 记账、终态）照常。
+    /// 影响生产行为的替身：失败只发生在带该 marker 的那一批提交上。该批属于**在跑的** turn，因此按
+    /// `CORE_PORTS_AND_STORAGE.md` §6 第 9 条这个 turn 随后被放弃——同一个 turn 的终态批与它后续的事件
+    /// 都不再提交（命令以 `uncertain` 收尾），其余 turn 的事件照常提交。
     pub fn fail_commits_with(&self, marker: Option<&str>) {
         let mut current = self.fault_marker.lock().expect("故障开关");
         *current = marker.map(str::to_owned);
