@@ -8,6 +8,7 @@
 - 变更：`node-link-owner`（changeDir：`D:\Project\acp-remote\openspec\changes\node-link-owner`，权威规划根同）。
 - 代码仓库：`D:\Project\acp-remote`。
 - 目标主分支：`refs/heads/main` = `94a64e1f15d26f54a6601985fd13b1440fec8170`（2026-09-26 recon 核实，远端 origin 同 SHA；报告 `reports/env1-recon.md`）。
+- 目标主分支当前引用（FA-2026-09-27-02 验收轮）：`refs/heads/main` = `19959156049a942569c86b5df7ca16a9e6d544a7`（PR #28 squash 合入；远端 `origin/main` 同 SHA）。
 - 执行基线/提交：实现 worktree `D:\Project\acp-remote-wt\node-link-owner`（分支 `agentic/node-link-owner`，起点 94a64e1f）；权威规划根 `D:\Project\acp-remote`。其余各记录在对应行注明固定提交。
 
 ## Handoff Index
@@ -327,6 +328,9 @@ alternative_checks:
 - DU1 合入（6.6，执行者 8fd1ca8f）：前置障碍处理（DEVELOPMENT_PLAN.md 行尾噪声恢复 + 未跟踪规划目录移至备份）→ `git merge --ff-only 654c0c19` → main = `654c0c19`（与候选同一提交对象）；防竞态核实（refs 未移动、is-ancestor 成立）。主分支检查（6.7 前半，均为 NEW）：PV1/PV2/PV5 全绿（973 passed / 394 passed，flake 用例本轮 PASS 未复现）。记录见 `reports/du1-integrate.md` §10。
 - 合入后规划记录回写（主 Agent）：备份目录的最新 `verification.md`/`tasks.md` 覆盖回 main 并提交 `392efb791015b6a86a99ec9fd2ead45fe8c2881a`（纯 openspec/ 工件）；`du1-integrate.md` 保留跟踪版本（较新，含 round 3 + §10）；15 个被 gitignore 的 .log 原始证据已从备份恢复到主检出工作区（不入库为既定惯例）。
 - 6.8（主分支差异检视）：合入为 ff 到候选，无新增差异——由主 Agent 记录依据（原 review = RV2-DU1，候选树与源逐字节一致已经其核实），不重复同范围审查。
+- 远端交付（PR 路径，`AGENTS.md` §8）：PR #28 `feat(node-link): 交付 Owner 侧 Node Link（切片 5）`（head `feat/node-link-owner`）① 首次 CI 报 `RUSTSEC-2026-0009`（`time 0.3.45`，经 dev 依赖 `rcgen`）与密钥扫描误报，修复提交 `d3eecc2`/`0aad198` 推入；② 其后 `合同门禁 + Rust 检查` 在同一个头提交 `0aad198` 上两次运行一绿一红（`cli_commands::daemon_stop_waits_for_the_lock_and_the_process_exit`），定位到 `app` 关闭序列的两处既有缺口，修复提交 `e216ba0`（含三条单测 + 一条端到端用例，旧行为下均已确认红）推入；③ 头提交 `e216ba0` 上全部必需检查（`合同门禁 + Rust 检查`、`提交信息规范`、`依赖安全公告`、`依赖许可证与来源`、`密钥扫描`，push 与 pull_request 两个 run）PASS，2026-09-27 以 squash 方式合入 `refs/heads/main` = `19959156049a942569c86b5df7ca16a9e6d544a7`（合入前基线 `94a64e1f`，PR 头树与本轮 main 树逐字节一致，`git diff --stat e216ba0 origin/main` 为空）。
+- 合入后主分支回归（FA-2026-09-27-02）：[PV1] `npm run verify`（977 passed / 0 failed / 2 ignored）、[PV2] `check-crate-boundaries`、[PV3]/[PV4]/[PV5] `cargo test --locked -p server -p app --all-features`（398 passed / 0 failed，含受控路径全链路与 listener、`cli_commands`、`daemon_lifecycle`、Windows 权限目标）全绿；证据追加在 `reports/du1-pv1.log` 的 `## FA-7.` 与 `reports/pv5-windows-nodelink.log` 的 `## FA-PV5-6.` 分节。
+- 交付期修复本身的红/绿证据：`reports/app-shutdown-cleanup-fix.log`。
 
 ## Test Design and Authoring
 
@@ -358,11 +362,21 @@ alternative_checks:
 ## Final Assessment
 
 ```agentic-assessment
-assessment_id: "FA-2026-09-26-01"
-target_commit: "f8d94d251af6d60cc722fd3c365813db9036a1df"
+assessment_id: "FA-2026-09-27-02"
+target_commit: "19959156049a942569c86b5df7ca16a9e6d544a7"
 contract_digest: "sha256:2e3b3a0bdc82d5d1ffaeb125d35c9550e2e437296c777f298a2efd4aabb82c2e"
 result: PASS
 evidence:
+  - path: reports/du1-pv1.log
+    sha256: "sha256:af184eb998da789bd02a43272e812637dc5863f9f25c875401ca437c37bb2c62"
+  - path: reports/pv5-windows-nodelink.log
+    sha256: "sha256:0f6acf7b6d6d57fd845b7d6233ce40e78aec265865eda78c44ff68ee2ebfa640"
+  - path: reports/app-shutdown-cleanup-fix.log
+    sha256: "sha256:17089ebce0a83d2164c358a75ae6e009a7a03d98de01bad3c40444713dbd5c43"
+  - path: reports/final-alternative-checks.md
+    sha256: "sha256:45504c3047e503328b1c74f1e4151e5254780fb4305e161d9895489f77a13881"
+  - path: reports/du1-integrate.md
+    sha256: "sha256:0bc73eeb7c9ca916b628a7f758f950d1fb80a3252eaba0d274b67bcd03ca2cf2"
   - path: reports/wp2-transport-net.log
     sha256: "sha256:94a2e89f772194bda70d97892163a5bd27d7fe3f430233b1472207d19f72188c"
   - path: reports/wp3-contract.log
@@ -377,16 +391,9 @@ evidence:
     sha256: "sha256:0bcb55ccf458d3bdf3212f4a8680fb0813ee02d73adb5872451542a467e50851"
   - path: reports/wp7-app-wiring.log
     sha256: "sha256:ef9c8cc23389b75ce5e561d827f6defb8ac0525b53e0b4c0390525673b422bf5"
-  - path: reports/pv5-windows-nodelink.log
-    sha256: "sha256:e0e57e72d34d9395ea28be1f53ad30f0d99eaf2c6d06c1a8e7fb7848b533abce"
-  - path: reports/final-alternative-checks.md
-    sha256: "sha256:45504c3047e503328b1c74f1e4151e5254780fb4305e161d9895489f77a13881"
-  - path: reports/du1-integrate.md
-    sha256: "sha256:0bc73eeb7c9ca916b628a7f758f950d1fb80a3252eaba0d274b67bcd03ca2cf2"
 ```
 
 ### 验收审计（FA-2026-09-26-01，主 Agent，2026-09-26）
-
 - **Target / CLI**：代码仓库 `D:\Project\acp-remote`；目标主分支 `refs/heads/main` = `b4e375be9c71f5a4a048c768142ef304bfed5a78`（已核实，本地；`origin/main` 仍为 `94a64e1f`，未推送）。验收时唯一未提交改动为本次规划工件（tasks.md/verification.md，无代码），已随之提交。CLI 原始状态：`openspec status` 在本次验收前为 5/5 产物、任务 60/64（7.1–7.3、8.1 待办）。
 - **Contracts and Coverage**：proposal 的意图基线（切片 5 原文 + 三项裁决）与交付方向一致；Coverage Index R1–R88 共 88 行逐项有任务/检查/证据映射，8 个唯一 evidence 文件均存在；Check Plan Changes 记录了全部范围/合同调整（HostPolicy 裁决、D12/D13/D14、写范围扩展、勘误）。
 - **Handoff Traceability**：Handoff Index 引用了全部角色报告路径（env1、wp1–wp8 及各自 fix handoff、rv1-wp1…rv1-wp8、rv2-wp2fix/wp4/wp5/wp6/wp7/du1、rv3-wp7、各 verify、du1-integrate、final-alternative-checks）；NEW/REUSED 的基础分别记录，INVALID/PENDING 行均注明失效依据与重跑结果。
@@ -397,3 +404,18 @@ evidence:
 - **Issue Closure and Evidence Validity**：Review Findings 的每一项均有处置与复核依据；Failures and Retests 的 EX1–EX8 均已闭环或登记为观察（EX8 flake 在主分支与最终轮均未复现）；无未闭环 FAIL/BLOCKED。
 - **未执行项（如实记录）**：CI 专属的 `deps`/`advisories`/`secrets` 三个 job（本地无等价物，本变更新增 axum/rustls 系依赖的许可证与 advisory 判定只在 CI）；Unix 专有权限用例（由 Linux CI 覆盖）；真实 Codex/OMP 兼容套件；远端推送/PR 需用户另行确认。
 - **结论**：全部适用检查通过、证据对应目标版本 `b4e375b`（代码提交 `654c0c19` + 规划回写），无阻断项——**PASS**，该版本具备归档条件（归档不自动执行）。
+
+### 验收审计（FA-2026-09-27-02，主 Agent，2026-09-27）
+
+本轮验收的唯一目的：上一轮结论（FA-2026-09-26-01，对应 `b4e375b`）之后交付又前移了三次提交，需要确认**当前主分支版本**是否仍满足全部适用判据。上一轮结论按历史保留，不被改写。
+
+- **Target / 版本来源**：验收时 `refs/heads/main` = `19959156049a942569c86b5df7ca16a9e6d544a7`（PR #28 以 squash 合入，合入前基线 `94a64e1f`）；`git diff --stat e216ba0 origin/main` 为空，即合入后的主分支树与已通过全部必需检查的 PR 头提交逐字节一致。工作区 `git status --porcelain` 为空。
+- **相对上一轮结论的变化（三次提交，均有交付期裁决记录在 Check Plan Changes）**：`d3eecc2`（`Cargo.lock` 的 `time` 0.3.45 → 0.3.47 修 `RUSTSEC-2026-0009`，该链只经 dev 依赖 `rcgen`；`test_client.rs` 去掉写死的 RFC 6455 示例密钥字面量；`MODULE_ARCHITECTURE.md` §3.1 登记 MSRV 口径）、`0aad198`（`.gitleaks.toml` 的最小范围豁免）、`e216ba0`（`app` 关闭序列：`cancel_all` 超时分支改为 abort + 回收、收尾收进 `ShutdownCleanup` 守卫使运行记录删除与锁释放无条件执行；含三条单测与一条端到端用例）。
+- **Contracts and Coverage**：proposal 的意图基线（切片 5 原文 + 三项裁决）与交付方向不变；契约摘要仍为 `sha256:2e3b3a0b…82c2e`（与上一轮、与 PR 中 `premerge` 块一致），说明 proposal/design/plan/tasks/增量规范/覆盖索引未发生内容变化，本轮变化只在实现、证据日志与 Check Plan Changes。
+- **Project Checks and Resources**：在 `1995915` 上重跑 [PV1] `npm run verify`（`cargo test --locked --workspace --all-features` 977 passed / 0 failed / 2 ignored；含 fmt、`npm run check` 全部子门禁、workspace clippy `-D warnings`）、[PV2] `check-crate-boundaries`、[PV3]/[PV4]/[PV5] `cargo test --locked -p server -p app --all-features`（398 passed / 0 failed，含受控路径全链路 `node_link_e2e`、`node_link_listener`、`cli_commands`、`daemon_lifecycle`、Windows 权限目标）。证据分节：`reports/du1-pv1.log` 的 `## FA-7.`、`reports/pv5-windows-nodelink.log` 的 `## FA-PV5-6.`；修复自身的红/绿原始输出在 `reports/app-shutdown-cleanup-fix.log`。运行时资源仍为临时目录 + loopback 随机端口，已随用例结束清理。
+- **受本轮变化影响而重新验证的项**：`app` 关闭序列（PV4/PV5 覆盖 `daemon_lifecycle`、`cli_commands` 与受控路径全链路）、依赖口径与许可证/advisory（改由 PR #28 的 CI `deps`/`advisories` 判定，见下）、密钥扫描（同）。其余 WP 的实现与测试面本轮未变动，其原证据按上一轮口径继续有效（版本差异已由上述重跑覆盖）。
+- **Independent Reviews**：本轮无新增代码交互（合入为 squash、树与已审的 PR 头一致，且新增内容为 CI 修复与关闭序列收尾，已由三条单测 + 一条端到端用例固定行为），因此不重复同范围审查；上一轮的 15 轮独立检视结论继续适用（含 3 轮 FAIL 的闭环）。
+- **E2E Design and Execution**：mode 仍为 `not-applicable`（reason/basis/非空 `alternative_checks` 与 `downgrade_approval` 未变），替代验证本轮已在 `1995915` 上重跑；`e2e check` = PASS（`[e2e-owned]` 行由该检查维护）。
+- **Issue Closure and Evidence Validity**：上一轮的 EX1–EX8 结论不受影响；本轮新增的唯一问题（CI 上 `daemon_stop_waits_for_the_lock_and_the_process_exit` 随机失败）已定位根因、修复并由回归用例固定，CI 在头提交 `e216ba0` 上两个 run 全绿。无未闭环 FAIL/BLOCKED。
+- **未执行项（如实记录）**：Unix 专有权限用例仍由 Linux CI 覆盖；真实 Codex/OMP 兼容套件仍不在本轮范围。`deps`/`advisories`/`secrets` 三项本轮不再是「未执行」——PR #28 的 CI 在头提交上实际执行并全部 PASS（`依赖安全公告`、`依赖许可证与来源`、`密钥扫描`）。
+- **结论**：全部适用检查通过、证据对应当前目标版本 `1995915`，无阻断项——**PASS**，该版本具备归档条件（归档不自动执行）。
