@@ -275,7 +275,7 @@
 | EX4 / 2.13–2.16 | worker cc8a957a 运行 30 分钟超时终止（WP5 工作量超单次窗口；此前已有一次 steer 送达 G1 裁决） | 主 Agent | 盘点确认部分改动（G2/G5 seam，1086 行增量）可编译后原运行 resume（12b1deaf），指令改为分批提交（seam 一批、catalog/attach/event 各批） | 不适用 | resume 完成：交付 2dce835 + db46308 + 1264821 + 6b1f0b9，门禁绿 | 已解决 |
 | EX5 / 2.17–2.20 | worker f0c2daea 运行 30 分钟超时终止（WP6 体量；此前已送达 Q1/Q2/Q3 与授权修正裁决） | 主 Agent | 盘点确认部分改动可编译后原运行 resume（1248254e），指令分批提交；compose.rs 的撤销缝连带改动列入 RV1-WP6 检视 | 不适用 | resume 完成：交付 3638ebd + bbf042e + 4cbdf8a + 8bc2ff3，门禁绿 | 已解决 |
 | EX6 / 2.21–2.22 | worker 8c8eca4e 运行 30 分钟超时终止（WP7 体量） | 主 Agent | 盘点确认部分改动（app 接线 + 集成测试文件）可编译后原运行 resume（668dbd32），指令分批提交（接线一批、集成测试一批） | 不适用 | resume 完成：交付 07b956c + a3109c8，门禁绿；恢复轮修复了一个测试客户端自身的空转 bug（非产品问题） | 已解决 |
-| EX7 / 6.2–6.3 | 集成候选首轮 PV1 FAIL：rv1-wp8.md 第 36 行「§7.2」缺文档名被 check:docs 误判归属（该报告在 f02d2565 提交进仓库后才被门禁扫到，0161a778 的绿证据早于它） | 主 Agent | 源分支勘误（4c5a3f00，补「SECURITY_DESIGN」文档名 + 勘误注记），主仓库 check-doc-links 复绿；集成方重建候选 | 不适用 | 待候选重跑 | 处理中 |
+| EX7 / 6.2–6.3 | 集成候选首轮 PV1 FAIL：rv1-wp8.md 第 36 行「§7.2」缺文档名被 check:docs 误判归属（该报告在 f02d2565 提交进仓库后才被门禁扫到，0161a778 的绿证据早于它） | 主 Agent | 源分支勘误（4c5a3f00，补「SECURITY_DESIGN」文档名 + 勘误注记），主仓库 check-doc-links 复绿；集成方重建候选 | 不适用 | 重建候选（654c0c19）PV1 含 check:docs 全绿；主分支轮次亦绿 | 已解决 |
 | EX8 / 6.3 | 候选首轮 PV5 的 `the_status_result_keeps_the_documented_field_set` 间歇失败（约 1/6，负载相关；隔离跑与整轮均 PASS；5c869160→f02d256 间无 app/server 代码改动） | 主 Agent | 裁决：登记为 flake、以 PASS 轮次为准；若候选/主分支轮次再出现同类失败则升级为缺陷立案 | 不适用 | 候选重跑与主分支轮次观察 | 已登记（观察中） |
 
 ## Merge History
@@ -337,9 +337,44 @@ alternative_checks:
 
 - 项目开关：`x-agentic.e2e.enabled = true`、`command = ""`、`maxAttempts = 3`（`openspec/config.yaml`）。
 - mode：`not-applicable`；reason / basis / alternative_checks / downgrade_approval 见 plan.md「Main E2E」节（降级批准：2026-09-26 本会话用户原话「1B 2A 3批准」第 3 项）。
-- E2E：NOT_APPLICABLE；替代验证为 plan.md `alternative_checks` 四项，逐项在 Checks 表留证。
+- E2E：NOT_APPLICABLE；替代验证为 plan.md `alternative_checks` 四项，在最终主分支版本 `392efb79` 上由任务 7.1 逐项留证（`reports/final-alternative-checks.md`、`reports/du1-pv1.log`、`reports/pv5-windows-nodelink.log`）。
+
+### 7.2 替代验证证据汇总（主 Agent，2026-09-26）
+
+- **not-applicable 三要素有效**：plan.md 的 `mode`/`reason`/`basis`/`alternative_checks`/`downgrade_approval` 均在（批准原话可追溯至本会话用户回应）。
+- **Coverage Index 覆盖**：R1–R88 共 88 行（含初版 R1–R83 与追加 R84–R88），其引用的 8 个唯一 evidence 文件均存在于 `reports/`（逐行路径可读）。
+- **无未闭环 FAIL/BLOCKED**：RV1-WP4/RV1-WP6/RV2-WP7 的 FAIL 与 RV1-WP3C-F3 的 INVALID 均为已修复并复核 PASS 的历史记录；失败表 EX7 已置「已解决」，EX8（flake）为观察中且主分支轮次未复现。
+- **四道检查在最终版本上全绿**：PV1（15 子项全 0；workspace 973 passed）、PV2、PV3（309）、PV4（85）、PV5（394 + 约定形式 e2e 2/2）。
+- **未执行项如实记录**：CI 专属的 `deps`/`advisories`/`secrets` 三个 job（无本地等价物）、Unix 专有权限用例（由 Linux CI 覆盖）、真实 Codex/OMP 兼容套件；远端推送与 PR 需用户另行确认。
+
+## 7.2 结论
+
+替代验证全部 PASS，无未闭环阻断项：满足本变更（not-applicable）归档前的替代验证要求。
 
 
 ## Final Assessment
 
-（待最终验收时填写唯一 agentic-assessment 块与轮次记录。）
+```agentic-assessment
+assessment_id: "FA-2026-09-26-01"
+target_commit: "b4e375be9c71f5a4a048c768142ef304bfed5a78"
+contract_digest: "sha256:2e3b3a0bdc82d5d1ffaeb125d35c9550e2e437296c777f298a2efd4aabb82c2e"
+result: PASS
+evidence:
+  - path: reports/final-alternative-checks.md
+    sha256: "sha256:45504c3047e503328b1c74f1e4151e5254780fb4305e161d9895489f77a13881"
+  - path: reports/du1-integrate.md
+    sha256: "sha256:0bc73eeb7c9ca916b628a7f758f950d1fb80a3252eaba0d274b67bcd03ca2cf2"
+```
+
+### 验收审计（FA-2026-09-26-01，主 Agent，2026-09-26）
+
+- **Target / CLI**：代码仓库 `D:\Project\acp-remote`；目标主分支 `refs/heads/main` = `b4e375be9c71f5a4a048c768142ef304bfed5a78`（已核实，本地；`origin/main` 仍为 `94a64e1f`，未推送）。验收时唯一未提交改动为本次规划工件（tasks.md/verification.md，无代码），已随之提交。CLI 原始状态：`openspec status` 在本次验收前为 5/5 产物、任务 60/64（7.1–7.3、8.1 待办）。
+- **Contracts and Coverage**：proposal 的意图基线（切片 5 原文 + 三项裁决）与交付方向一致；Coverage Index R1–R88 共 88 行逐项有任务/检查/证据映射，8 个唯一 evidence 文件均存在；Check Plan Changes 记录了全部范围/合同调整（HostPolicy 裁决、D12/D13/D14、写范围扩展、勘误）。
+- **Handoff Traceability**：Handoff Index 引用了全部角色报告路径（env1、wp1–wp8 及各自 fix handoff、rv1-wp1…rv1-wp8、rv2-wp2fix/wp4/wp5/wp6/wp7/du1、rv3-wp7、各 verify、du1-integrate、final-alternative-checks）；NEW/REUSED 的基础分别记录，INVALID/PENDING 行均注明失效依据与重跑结果。
+- **Delivery and Versions**：DU1（integrated）候选三轮（attempt 1 因工件 doc-links 失败被取代；attempt 2/3 无冲突、候选树与源逐字节一致）；premerge 门禁 PASS；ff-only 合入后 main = 候选对象 `654c0c19`，主分支检查 PV1/PV2/PV5 均 NEW 且绿；合入前后规划工件回写提交 `392efb79`/`b4e375b`；独立集成 Agent 为 worker 子 Agent（未由主 Agent 兼任）。
+- **Project Checks and Resources**：PV1（15 子项逐条 0）、PV2、PV3、PV4、PV5（含约定形式）在最终版本 `392efb79` 上全绿；日志路径可读；运行时资源（worktree 自带 target、loopback 随机端口、临时数据目录）已隔离并在各轮清理。
+- **Independent Reviews**：共 15 轮独立检视（RV1-WP1…WP8、RV1-WP3C、RV2-WP2FIX/WP4/WP5/WP6/WP7/DU1、RV3-WP7）；其中 3 轮判 FAIL（RV1-WP4/RV1-WP6/RV2-WP7），均有一条 P1 且均已修复并由新的独立 reviewer 复核 PASS（rv2-wp4/rv2-wp6/rv3-wp7）；无未解决 CRITICAL/MAJOR。
+- **E2E Design and Execution**：mode = `not-applicable`，reason/basis/非空 alternative_checks 齐备，downgrade_approval 可追溯（2026-09-26 本会话用户原话「1B 2A 3批准」第 3 项）；替代验证四项在最终版本上由 7.1 逐项留证；`e2e check` = PASS（已自动勾选 `[e2e-owned]` 行）。
+- **Issue Closure and Evidence Validity**：Review Findings 的每一项均有处置与复核依据；Failures and Retests 的 EX1–EX8 均已闭环或登记为观察（EX8 flake 在主分支与最终轮均未复现）；无未闭环 FAIL/BLOCKED。
+- **未执行项（如实记录）**：CI 专属的 `deps`/`advisories`/`secrets` 三个 job（本地无等价物，本变更新增 axum/rustls 系依赖的许可证与 advisory 判定只在 CI）；Unix 专有权限用例（由 Linux CI 覆盖）；真实 Codex/OMP 兼容套件；远端推送/PR 需用户另行确认。
+- **结论**：全部适用检查通过、证据对应目标版本 `b4e375b`（代码提交 `654c0c19` + 规划回写），无阻断项——**PASS**，该版本具备归档条件（归档不自动执行）。

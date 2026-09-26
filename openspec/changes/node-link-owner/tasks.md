@@ -82,8 +82,8 @@
 ## 7. Final E2E
 
 - [x] 7.1 全变更；主 Agent；前置：主分支检查（6.7、6.8）。执行最终替代验证（`not-applicable` 路径）：在最终主分支版本上重跑 [PV1]（`npm run verify`）、[PV3]/[PV4] 与 [PV5] 受控路径全链路集成测试，逐项记录命令、版本、退出码与日志路径（`reports/du1-pv1.log`、`reports/pv5-windows-nodelink.log`、`reports/wp7-integration.log`），并核实临时资源已清理。
-- [ ] 7.2 全变更；主 Agent；前置：7.1。汇总替代验证证据：核对 `not-applicable` 的理由/依据/`downgrade_approval` 三要素仍有效、Coverage Index 的 R1–R83 全部有有效证据、无未解决 FAIL/BLOCKED；全部必要检查通过后完成。
-- [ ] 7.3 [e2e-owned] 全变更；扩展；前置：7.2。运行 `npx --quiet --no-install openspec-agentic e2e check --change node-link-owner`，仅 PASS 自动勾选；此行只检查门禁（不适用判据已按计划固化且替代验证已完成），不执行测试或汇总。
+- [x] 7.2 全变更；主 Agent；前置：7.1。汇总替代验证证据：核对 `not-applicable` 的理由/依据/`downgrade_approval` 三要素仍有效、Coverage Index 的 R1–R83 全部有有效证据、无未解决 FAIL/BLOCKED；全部必要检查通过后完成。
+- [x] 7.3 [e2e-owned] 全变更；扩展；前置：7.2。运行 `npx --quiet --no-install openspec-agentic e2e check --change node-link-owner`，仅 PASS 自动勾选；此行只检查门禁（不适用判据已按计划固化且替代验证已完成），不执行测试或汇总。
 
 ## 8. Final Verification
 
