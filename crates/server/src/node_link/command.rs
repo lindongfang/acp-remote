@@ -15,13 +15,17 @@
 //! 3. **幂等**：mutation 的幂等键由 core 的 `(actor, requestId)` 承载（Node Link 的 actor 是
 //!    `Actor::Node { node: access_node, .. }`，即 §12.5 的 `(ownerNodeId, accessNodeId, requestId)`，
 //!    其中 ownerNodeId 是本进程恒定的本机 id），冲突由 core 报 `command.idempotency_conflict`；
-//!    `session.create` 不经 `submit_command`（core 的 `create_session` 不写 `owned_command`），因此它的
-//!    幂等记录在本模块的进程内表里（同键同语义回首次结果、不同语义回
-//!    `nodelink.command.idempotency_conflict`）；
+//!    `session.create` 走 core 的 `create_session`/`settle_session_create`（§6 第 20 条），幂等行与
+//!    终态都持久在 `owned_command` 里——本模块**不再**有进程内幂等表，因此重启后同一 requestId 既不重复
+//!    创建、也不丢首次结果。本层在提交前多一道语义比对（§12.5）：已落盘的记录命令名或
+//!    ACPR-CJ1 指纹不同即回 `nodelink.command.idempotency_conflict`，**不**回首次结果。
 //! 4. **派发**：查询命令同步完成（结果直接放进 `command.terminal`），mutation 同步接受；`session.create`
-//!    先回 `accepted(result = null)` 再在同一个 handler 内完成创建并发 `terminal(SessionCreateResult)`；
-//! 5. **终态映射**：`completed` 必带非空 `result`（core 的 `CommandResult` 可空，**非空由本层保证**）、
-//!    其余 status 必带 `error`、`terminalEventId` 取该记录的终态事件、`uncertain` 原样透传。
+//!    先回 `accepted(result = null)`，创建后把适配层投影的结果写进终态并**以持久记录为唯一权威**回
+//!    `command.terminal`（`terminalEventId` 因此非 null）；创建在幂等行落盘前就失败时（授权、本机
+//!    workspace 解析、写盘）没有记录可回读，本地合成同形 `failed` 终态。
+//! 5. **终态映射**：`completed` 必带非空 `result`（core 的 `CommandResult` 可空，**非空由本层保证**；
+//!    `session.create` 的持久结果就是 `SessionCreateResult` 原文，回读时还原成具名变体）、其余 status
+//!    必带 `error`、`terminalEventId` 取该记录的终态事件、`uncertain` 原样透传。
 //!
 //! **终态推送**（§12.5）：每条被接受的 mutation 在本模块的待观察表里挂一条 `(connectionId, requestId)`，
 //! 由组合根 spawn 的 [`CommandRoute::dispatch`] 有界轮询 core 的 `command_status` 并推 `command.terminal`。
@@ -104,9 +108,6 @@ pub const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// 单条终态观察的最长寿命：超过即放弃（只记日志），对端仍可凭 `command.status` 重查。
 pub const WATCH_MAX_AGE: Duration = Duration::from_secs(600);
 
-/// 进程内 `session.create` 幂等表的条目上限（超出按插入顺序淘汰最旧的一条）。
-pub const MAX_TRACKED_SESSION_CREATES: usize = 1024;
-
 /// in-flight 上限拒绝时的建议退避（`details.retryAfterMs` 是 `nodelink.resource.rate_limited`
 /// 的登记字段）。
 const IN_FLIGHT_RETRY_AFTER: Duration = Duration::from_millis(1_000);
@@ -132,20 +133,12 @@ struct PendingCommand {
     since: Instant,
 }
 
-/// `session.create` 的首次结果（重放时原样回；`uncertain` 必须与原次同形）。
+/// `session.create` 的首次结果（终态回读与「没有持久记录」时的本地合成都用它）。
 #[derive(Debug, Clone)]
 enum CreateOutcome {
     Completed(SessionCreateResult),
     Failed(PublicError),
     Uncertain(PublicError),
-}
-
-/// `session.create` 的进程内幂等记录。
-#[derive(Debug, Clone)]
-struct SessionCreateEntry {
-    /// 解码后 payload 的字节文本（同键不同语义 → `idempotency_conflict`）。
-    fingerprint: String,
-    outcome: CreateOutcome,
 }
 
 /// session-scoped 命令引用的会话定位（grant 判定与 attachment 复核共用）。
@@ -173,7 +166,6 @@ pub struct CommandRoute {
     /// 本机（Owner）node id：`remoteSessionRef.ownerNodeId` 的来源。
     node_id: NodeId,
     states: Mutex<BTreeMap<String, ConnectionState>>,
-    session_creates: Mutex<BTreeMap<(String, String), SessionCreateEntry>>,
     /// 新登记一条终态观察时的唤醒信号（分发循环因此不必等满一个 tick）。
     wake: tokio::sync::Notify,
 }
@@ -183,7 +175,6 @@ impl std::fmt::Debug for CommandRoute {
         formatter
             .debug_struct("CommandRoute")
             .field("connections", &lock(&self.states).len())
-            .field("session_creates", &lock(&self.session_creates).len())
             .finish_non_exhaustive()
     }
 }
@@ -204,7 +195,6 @@ impl CommandRoute {
             resource,
             authority,
             states: Mutex::new(BTreeMap::new()),
-            session_creates: Mutex::new(BTreeMap::new()),
             wake: tokio::sync::Notify::new(),
         }
     }
@@ -646,22 +636,50 @@ impl CommandRoute {
                 "templateParams",
             );
         }
-        // ③ 幂等：`create_session` 不写 `owned_command`，因此幂等记录在本模块的进程内表里。
-        let fingerprint = serde_json::to_string(payload).unwrap_or_default();
-        match self.session_create_replay(handle.node_id(), &submit.request_id, &fingerprint) {
-            SessionCreateReplay::Conflict => {
-                return self.reject_code(
-                    handle,
-                    CommandName::SessionCreate,
-                    &submit.request_id,
-                    "nodelink.command.idempotency_conflict",
-                );
-            }
-            SessionCreateReplay::Replay(entry) => {
-                self.replay_session_create(handle, &submit.request_id, &entry);
+        // ③ 幂等：幂等键 `(ownerNodeId, accessNodeId, requestId)` 的**持久事实**在 core 的
+        //    `owned_command` 里（§6 第 20 条）。已经有记录就不再创建第二个会话：语义相同则已终结的回
+        //    首次结果、未终结的（创建进行中、或崩溃窗口）回同形 `accepted` 并挂终态观察；语义不同回
+        //    `nodelink.command.idempotency_conflict`（§12.5：不同语义不得得到首次结果）。
+        let Some(fingerprint) = fingerprint_of(&submit.payload) else {
+            return self.reject_schema(handle, message, "the payload cannot be fingerprinted");
+        };
+        let actor = node_actor(handle.node_id());
+        let Some(request) = core_request(&submit.request_id) else {
+            return self.reject_schema(handle, message, "the requestId is not a uuid");
+        };
+        match self.core.command_status(&actor, request.clone()).await {
+            Ok(Some(record)) => {
+                // 指纹是 ACPR-CJ1 之后的解码 payload 摘要（由本层计算，core 不依赖 `acpr-wire`）。
+                let same = record.command() == CommandName::SessionCreate.as_str()
+                    && record.kind() == CommandKind::Mutation
+                    && record.request_fingerprint() == &fingerprint;
+                if !same {
+                    return self.reject_code(
+                        handle,
+                        CommandName::SessionCreate,
+                        &submit.request_id,
+                        "nodelink.command.idempotency_conflict",
+                    );
+                }
+                if record.status().is_terminal() {
+                    self.send_terminal(handle, &record);
+                } else {
+                    let accepted_at = record
+                        .accepted_at()
+                        .cloned()
+                        .unwrap_or_else(|| self.clock());
+                    self.send_accepted(
+                        handle,
+                        &submit.request_id,
+                        CommandName::SessionCreate,
+                        &accepted_at,
+                    );
+                    self.watch(handle, &request);
+                }
                 return RouteOutcome::Claimed;
             }
-            SessionCreateReplay::Fresh => {}
+            Ok(None) => {}
+            Err(error) => return self.port_fault(handle, message, &error),
         }
         if !self.admit_in_flight(handle).await {
             return RouteOutcome::Claimed;
@@ -688,14 +706,17 @@ impl CommandRoute {
         else {
             return self.reject_schema(handle, message, "the default template cannot be selected");
         };
-        let request = CreateSessionRequest {
+        let create = CreateSessionRequest {
             agent,
             workspace: None,
             template: Some(template),
             origin: ResourceOrigin::Local,
         };
-        let actor = node_actor(handle.node_id());
-        let outcome = match self.core.create_session(&actor, request, Some(alias)).await {
+        let outcome = match self
+            .core
+            .create_session(&actor, request.clone(), fingerprint, create, Some(alias))
+            .await
+        {
             Ok(session) => match self
                 .session_create_result(handle.node_id(), &export_id, &session)
                 .await
@@ -714,6 +735,15 @@ impl CommandRoute {
                     CreateOutcome::Uncertain(error_info("nodelink.command.uncertain"))
                 }
             },
+            Err(PortError::Conflict(acp_core::model::ConflictKind::IdempotencyConflict)) => {
+                // 同键不同语义（§12.5）：回 `command.rejected` 且零副作用。
+                return self.reject_code(
+                    handle,
+                    CommandName::SessionCreate,
+                    &submit.request_id,
+                    "nodelink.command.idempotency_conflict",
+                );
+            }
             Err(error) => {
                 // 创建失败：`create_session` 的提交与后端创建在同一调用内，失败即没有可用会话，
                 // 因此是 `failed`（`uncertain` 保留给「无法确认是否已创建」的窗口）。
@@ -727,14 +757,79 @@ impl CommandRoute {
                 CreateOutcome::Failed(error_info(&port_error_code(&error)))
             }
         };
-        self.record_session_create(
-            handle.node_id(),
-            &submit.request_id,
-            fingerprint,
-            outcome.clone(),
-        );
-        if let Some(body) = create_terminal(&submit.request_id, &outcome, &self.clock()) {
-            let _ = handle.send(MessageType::CommandTerminal, &body);
+        // 终态落盘（§6 第 20 条）：把幂等行推进到终态。投影失败时写 `uncertain`（会话已创建，
+        // 不能报 `failed`）；创建立即失败时写 `failed`（没有可用会话）。`failed`/`uncertain` 的错误
+        // 取本层映射后的 wire 错误（code/message/retryable/details 一并落盘，回读因此逐字一致）。
+        let settled = match &outcome {
+            CreateOutcome::Completed(result) => match serde_json::to_string(result)
+                .ok()
+                .and_then(|text| acp_core::model::CommandResult::from_json_text(&text).ok())
+            {
+                Some(result) => self
+                    .core
+                    .settle_session_create(
+                        &actor,
+                        &request,
+                        CoreStatus::Completed,
+                        Some(result),
+                        None,
+                    )
+                    .await
+                    .map(|_| true),
+                None => {
+                    warn!(
+                        event = "node_link.session_create_result_unencodable",
+                        request_id = submit.request_id.as_str(),
+                        "the created session result cannot be persisted"
+                    );
+                    Ok(false)
+                }
+            },
+            CreateOutcome::Failed(error) => self
+                .core
+                .settle_session_create(
+                    &actor,
+                    &request,
+                    CoreStatus::Failed,
+                    None,
+                    core_error(error),
+                )
+                .await
+                .map(|_| true),
+            CreateOutcome::Uncertain(error) => self
+                .core
+                .settle_session_create(
+                    &actor,
+                    &request,
+                    CoreStatus::Uncertain,
+                    None,
+                    core_error(error),
+                )
+                .await
+                .map(|_| true),
+        };
+        if let Err(error) = settled {
+            warn!(
+                event = "node_link.session_create_terminal_failed",
+                access_node_id = handle.node_id().as_str(),
+                request_id = submit.request_id.as_str(),
+                error = ?error,
+                "the session.create terminal could not be persisted"
+            );
+        }
+        // 回包以**持久记录**为唯一权威：创建与终态同源（`terminalEventId` 可非空），重试与
+        // `command.status` 重查因此与首次同形。
+        match self.core.command_status(&actor, request.clone()).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_terminal(handle, &record)
+            }
+            _ => {
+                // 没有持久记录：创建在幂等行落盘前就失败（授权、本机 workspace 解析、写盘失败）。
+                // 这类失败是确定的（同一请求重试得到同一结果），本地回 `failed` 终态。
+                if let Some(body) = create_terminal(&submit.request_id, &outcome, &self.clock()) {
+                    let _ = handle.send(MessageType::CommandTerminal, &body);
+                }
+            }
         }
         RouteOutcome::Claimed
     }
@@ -807,64 +902,6 @@ impl CommandRoute {
             },
             session_meta,
         })
-    }
-
-    fn session_create_replay(
-        &self,
-        node: &NodeId,
-        request: &Uuid,
-        fingerprint: &str,
-    ) -> SessionCreateReplay {
-        let key = (node.as_str().to_owned(), request.as_str().to_owned());
-        let entry = lock(&self.session_creates).get(&key).cloned();
-        match entry {
-            None => SessionCreateReplay::Fresh,
-            Some(entry) if entry.fingerprint == fingerprint => SessionCreateReplay::Replay(entry),
-            Some(_) => SessionCreateReplay::Conflict,
-        }
-    }
-
-    fn record_session_create(
-        &self,
-        node: &NodeId,
-        request: &Uuid,
-        fingerprint: String,
-        outcome: CreateOutcome,
-    ) {
-        let key = (node.as_str().to_owned(), request.as_str().to_owned());
-        let mut entries = lock(&self.session_creates);
-        if entries.len() >= MAX_TRACKED_SESSION_CREATES && !entries.contains_key(&key) {
-            // 有界表：淘汰键序最前的一条（键是 `(node, requestId)` 文本，顺序稳定）。
-            if let Some(oldest) = entries.keys().next().cloned() {
-                entries.remove(&oldest);
-            }
-        }
-        entries.insert(
-            key,
-            SessionCreateEntry {
-                fingerprint,
-                outcome,
-            },
-        );
-    }
-
-    /// 重放首次结果：与首次提交同形（`completed` 带结果、`failed`/`uncertain` 带原错误）。
-    fn replay_session_create(
-        &self,
-        handle: &ConnectionHandle,
-        request: &Uuid,
-        entry: &SessionCreateEntry,
-    ) {
-        match create_terminal(request, &entry.outcome, &self.clock()) {
-            Some(body) => {
-                let _ = handle.send(MessageType::CommandTerminal, &body);
-            }
-            None => warn!(
-                event = "node_link.session_create_replay_failed",
-                request_id = request.as_str(),
-                "the first session.create result cannot be replayed on the wire"
-            ),
-        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1624,13 +1661,6 @@ impl CommandRoute {
     }
 }
 
-/// `session.create` 的幂等判定结果。
-enum SessionCreateReplay {
-    Fresh,
-    Replay(SessionCreateEntry),
-    Conflict,
-}
-
 #[async_trait::async_trait]
 impl MessageRoute for CommandRoute {
     async fn route(&self, session: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
@@ -1737,16 +1767,11 @@ fn terminal_body(record: &CommandRecord, at: &CoreTimestamp) -> Option<CommandTe
         Some(value) => wire_timestamp(value)?,
         None => wire_timestamp(at)?,
     };
-    // `completed` 必带非空 `result`：core 的 `CommandResult` 可空时补一个空 object（schema 只要求
-    // object）。这里不编造字段、也不伪造正文。
+    // `completed` 必带非空 `result`：`session.create` 的持久结果就是 `SessionCreateResult` 的原文
+    // （§12.7 强制该形状），还原成具名变体；其余命令的开放对象按 `RawObject` 字节保真承载，
+    // core 记录里 `result` 为 NULL 时补一个空 object（schema 只要求 object，不编造字段）。
     let result = match status {
-        TerminalStatus::Completed => {
-            let object = match record.result() {
-                Some(result) => RawObject::parse(result.as_str()).ok()?,
-                None => RawObject::empty(),
-            };
-            Nullable::from_option(Some(CommandResultPayload::Object(object)))
-        }
+        TerminalStatus::Completed => completed_result(command, record),
         _ => Nullable::null(),
     };
     let error = match status {
@@ -1780,7 +1805,56 @@ fn terminal_body(record: &CommandRecord, at: &CoreTimestamp) -> Option<CommandTe
     })
 }
 
+/// `completed` 终态的结果对象。
+///
+/// `session.create` 必须回 `SessionCreateResult`（schema 的 `if/then`）：持久记录里存的正是该形状的
+/// 原文，这里还原成具名变体；形态不符（不是本切片写的行）→ 退回开放对象并记一条警告（不伪造 `{}`）。
+fn completed_result(
+    command: CommandName,
+    record: &CommandRecord,
+) -> Nullable<CommandResultPayload> {
+    let Some(object) = parsed_result(record) else {
+        return Nullable::null();
+    };
+    if command == CommandName::SessionCreate {
+        match serde_json::from_str::<SessionCreateResult>(object.get()) {
+            Ok(created) => {
+                return Nullable::from_option(Some(CommandResultPayload::SessionCreate(created)));
+            }
+            Err(_) => warn!(
+                event = "node_link.session_create_result_unreadable",
+                request_id = record.request().as_str(),
+                "the persisted session.create result is not a SessionCreateResult"
+            ),
+        }
+    }
+    Nullable::from_option(Some(CommandResultPayload::Object(object)))
+}
+
+/// core 记录里的 `result` 文本（为 NULL 时补空 object；文本不是 object 时返回 `None`）。
+fn parsed_result(record: &CommandRecord) -> Option<RawObject> {
+    match record.result() {
+        Some(result) => RawObject::parse(result.as_str()).ok(),
+        None => Some(RawObject::empty()),
+    }
+}
+
+/// wire 的 `PublicError` → core 的 `PublicError`（终态落盘用；`code`/`message`/`retryable`/`details`
+/// 原样承载，回读时逐字一致）。
+fn core_error(error: &PublicError) -> Option<acp_core::model::PublicError> {
+    let details = acp_core::model::ViewJson::new(error.details.get()).ok()?;
+    acp_core::model::PublicError::try_new(
+        error.code.as_str(),
+        error.message.as_str(),
+        error.retryable,
+        details,
+    )
+    .ok()
+}
+
 /// `session.create` 的终态（`completed` 带 `SessionCreateResult`，其余带原错误）。
+///
+/// 只在**没有**持久记录时使用（创建在幂等行落盘前就失败）：有记录的场景一律以记录为唯一权威。
 fn create_terminal(
     request: &Uuid,
     outcome: &CreateOutcome,

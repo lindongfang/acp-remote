@@ -27,17 +27,17 @@ use std::task::{Context, Poll, Waker};
 
 use crate::model::{
     Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind, CommandPayload,
-    CommandReceipt, CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery,
-    CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind, CreateSessionRequest, Digest,
-    ElicitationAction, ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin,
-    EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind, InteractionResolution,
-    LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, NodeKind, NodeState,
-    OriginEventRef, OwnedSessionRef, PendingEvent, PendingInteraction, PermissionDecision,
-    PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
-    PublicError, RemoteSessionRef, RequestId, Resolution, Sequence, SessionId, SessionReference,
-    SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
-    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
-    object_members as json_members, top_level_member,
+    CommandReceipt, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
+    CommittedDelivery, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
+    CreateSessionRequest, Digest, ElicitationAction, ElicitationValues, EndpointEvent, EntityRef,
+    EventKind, EventOrigin, EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind,
+    InteractionResolution, LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, NodeKind,
+    NodeState, OriginEventRef, OwnedSessionRef, PendingEvent, PendingInteraction,
+    PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock,
+    PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution, Sequence, SessionId,
+    SessionReference, SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
+    Version, ViewJson, decode_json_string as json_string, encode_json_string as json_text,
+    insert_string_member_front, object_members as json_members, top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
@@ -1256,29 +1256,51 @@ impl Broker {
     }
 
     /// `session.create`（Node Link 命令，§12.7）。返回 Owner 分配的 `SessionId`。
+    ///
+    /// 幂等键是协议维度的 `(actor, requestId)`（§6 第 6 条），`requestId` 与 `request_fingerprint`
+    /// 由适配层给出（Node Link 的 `requestId` 与 ACPR-CJ1 后的 payload 摘要）。**创建会话与幂等行在
+    /// 同一次提交**：崩溃窗口里留下的是 `accepted` 行 + 已存在的会话，启动恢复按 §6 第 16 条把它终结为
+    /// `uncertain`（不重复创建）。
+    ///
+    /// 同键重试（含重启后）由存储层按幂等行重放：本次**不**创建第二个会话、也**不**开第二个后端端点，
+    /// 返回首次结果的 `SessionId`；键相同而 `command`/`kind`/指纹/`expected_version` 任一不同 →
+    /// `Conflict(IdempotencyConflict)`（§6 第 6 条）。
     pub async fn create_session(
         &self,
         actor: &Actor,
-        request: CreateSessionRequest,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        create: CreateSessionRequest,
     ) -> Result<SessionId, PortError> {
-        let audit_request = self.deps.ids.request_id();
-        self.authorize(actor, "session.create", None, &audit_request)
+        self.authorize(actor, "session.create", None, request)
             .await
             .map_err(Denied::into_port_error)?;
+        let at = self.now();
         let origin_epoch = self.deps.ids.origin_epoch();
         let commit = OwnedCommit {
             session: None,
-            at: self.now(),
+            at: at.clone(),
             expected_version: None,
             state: Some(StateChange::Create(NewSession {
                 title: None,
-                agent: request.agent.clone(),
+                agent: create.agent.clone(),
             })),
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
             compacted: Vec::new(),
-            idempotency: None,
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: request.clone(),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                // 目标会话在本次提交的事务内才分配，装配方预知不了：存储层把新会话 id 写进这一行
+                // （§6 第 20 条），使终态提交与启动恢复都能按 `(session, requestId)` 定位它。
+                session: None,
+                expected_version: None,
+                request_fingerprint: request_fingerprint.clone(),
+                accepted_at: at,
+            }),
             command_terminal: None,
             origin_epoch: Some(origin_epoch),
         };
@@ -1288,16 +1310,96 @@ impl Broker {
                 "commit 未返回新建会话的 sessionId",
             ));
         };
+        if outcome.replayed.is_some() {
+            // 同键重试（或并发重复）：首次结果已存在，副作用只发生一次。
+            return Ok(session);
+        }
         let slot = self.owned_slot(&session);
         let sink = self.sink(&session);
         let endpoint: Arc<dyn SessionEndpoint> = self
             .deps
             .backends
-            .create(&session, request, sink)
+            .create(&session, create, sink)
             .await?
             .into();
         *lock(&slot.endpoint) = Some(endpoint);
         Ok(session)
+    }
+
+    /// `session.create` 的终态提交（§6 第 20 条、§12.7）。返回本次是否真的写入了终态。
+    ///
+    /// `status` 必须是终态：`completed` 必须带 `result` 且不带 `error`，其余必须带 `error`（形状由
+    /// [`CommandTerminalRecord::try_new`] 校验）。**幂等 no-op** 的两种情况：该 `(actor, requestId)`
+    /// 没有持久记录（创建在幂等行落盘前就失败），或记录已经终结（首次结果不覆盖）。
+    ///
+    /// 落盘失败（`Unavailable`）不报成功：行仍是 `accepted`，由启动恢复按 §6 第 16 条终结为 `uncertain`。
+    pub async fn settle_session_create(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        if !status.is_terminal() {
+            return Err(PortError::InvalidRequest("命令终态必须是终止态"));
+        }
+        let Some(record) = self.deps.store.find_request(request, actor).await? else {
+            return Ok(false);
+        };
+        if record.status().is_terminal() {
+            return Ok(false);
+        }
+        let Some(session) = record.session().cloned() else {
+            return Err(PortError::Corrupt(
+                "session.create 的持久记录缺少目标会话（§6 第 20 条）",
+            ));
+        };
+        let at = self.now();
+        let terminal =
+            CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
+        let (event_type, view) = match status {
+            CommandStatus::Completed => {
+                ("command.completed", view_command_completed(request, None)?)
+            }
+            CommandStatus::Failed => ("command.failed", view_command_failed(request, None)?),
+            _ => (
+                "command.uncertain",
+                view_command_uncertain(request, "无法确认会话是否已创建")?,
+            ),
+        };
+        let event = pending_event(
+            event_type,
+            EventKind::Structured,
+            view,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            Some(actor),
+        )?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(terminal),
+            origin_epoch: None,
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(true)
+            }
+            Err(PortError::Unavailable(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -3981,10 +4083,11 @@ pub(crate) mod test_support {
                 )?;
                 state.commands.insert(key, updated);
             }
-            // 接受提交：写幂等行（status = accepted）。
+            // 接受提交：写幂等行（status = accepted）。§6 第 20 条：装配方不知道目标会话的命令
+            // （`session.create`）用本次事务刚创建的会话回填——终态块与启动恢复靠它定位该行。
             if let Some(record) = commit.idempotency.clone() {
                 let command = CommandRecord::try_new(
-                    commit.session.clone(),
+                    commit.session.clone().or_else(|| created.clone()),
                     record.request.clone(),
                     &record.command,
                     record.kind,
@@ -4030,11 +4133,24 @@ pub(crate) mod test_support {
                     false
                 }
             };
-            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果。
+            // §5.2：幂等命中 → 不追加事件、不改状态，返回首次结果；五项指纹任一不同 → 冲突。
             if let Some(record) = commit.idempotency.as_ref() {
                 let state = lock(&self.world.state);
                 let key = command_key(&record.actor, &record.request);
                 if let Some(existing) = state.commands.get(&key).cloned() {
+                    // §6 第 20 条：`record.session = None` 表示「装配期不知道目标会话」（`session.create`
+                    // 的 id 由存储层分配），不参与比对；其余四项恒比。
+                    let same = existing.command() == record.command
+                        && existing.kind() == record.kind
+                        && record
+                            .session
+                            .as_ref()
+                            .is_none_or(|session| existing.session() == Some(session))
+                        && existing.expected_version() == record.expected_version
+                        && existing.request_fingerprint() == &record.request_fingerprint;
+                    if !same {
+                        return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+                    }
                     let session_id = existing.session().cloned();
                     let version = session_id
                         .as_ref()

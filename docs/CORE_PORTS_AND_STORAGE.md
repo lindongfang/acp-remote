@@ -17,6 +17,8 @@
 > 版本：0.11（2026-09-24：§10.3 的 view 收口落地——§5.1 写明 `TurnAccepted.turn` 是适配器侧占位/审计值（turn 归属由 core 定稿），§6 新增第 19 条（提交前注入 `turnId` 与会话 `version`、冲突与漂移失败关闭、imported 路径保留 Owner 取值），§9 新增判据 31；端口签名与 DDL 均未变）
 > 版本：0.12（2026-09-26，`node-link-owner` 变更 WP5：为 Node Link 的资源读面补三条窄 seam——`ReadView::node_link_slice`（会话摘要 + origin head + 未决交互含创建事件 id + `after` 之后的事件含正文，同一次只读事务）、`ReadView::session_event_payload`（按会话归属取正文）、`AuditStore::watermark`（管理写集水位 = `catalogRevision` 的唯一来源）；`NodeLinkHandshakeView` 增 `catalog_revision` 字段（`catalogRevision` 不再取 `store.head()`）。§4 补两条 `[决定]`（`catalogRevision` 口径含已登记的精度边界、三条资源读 seam 的绑定规则），§5.2/§5.3 的 trait 签名同步；DDL 未变，漂移门禁继续逐条成立）
 
+> 版本：0.13（2026-09-26，`node-link-owner` 变更 WP6 修复轮次（RV1-WP6-F1）：`session.create` 的幂等与终态落进 `owned_command`——§4 补一条用例入口（`create_session` / `settle_session_create`）、§5.1 的 `[决定]` 同步签名与指纹义务、§6 新增第 20 条（创建提交回填 `session_id`、终态提交、崩溃窗口走第 16 条恢复、重试与冲突）。**§5/§7 的代码块与 DDL 未变**（未新增端口方法与表列），漂移门禁继续逐条成立）
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -192,6 +194,7 @@ pub enum UnavailableKind {
 | 用例族 | 入口 | 调用方 |
 |---|---|---|
 | `SessionCommands` | `submit_command(actor, ClientCommand) -> CommandReceipt` | `server::sync`、`server::node_link`、`server::acp_facade` |
+| `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceAlias>) -> SessionId`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条） |
 | `SessionQueries` | `list_sessions(actor, SessionQuery) -> Vec<SessionSummary>`、`read_session(actor, ReadQuery) -> HistoryPage` | 同上 |
 | `ConfigCommands` | `set_mode(actor, SessionReference, ModeId) -> Version`、`set_config(actor, SessionReference, ConfigOptionId, ConfigValue) -> Version` | 同上 |
 | `PermissionCommands` | `resolve_interaction(actor, SessionReference, InteractionId, InteractionResolution) -> Resolution` | 同上 |
@@ -261,7 +264,7 @@ pub trait SessionEndpoint: Send + Sync {
 - `[决定]` 后端事件通道：`create`/`open` 接收 `EventSink`（`[决定]` 定义为 `Arc<dyn Fn(EndpointEvent) + Send + Sync>` 的包装类型，由 core 提供有界队列的发送端）；`EventSink` 的调用顺序即提交顺序，broker 按该顺序组装 `OwnedCommit`（§6 第 1/3 条）。**不**在 `SessionEndpoint` 上暴露 `next_event`，以免后端自己持有排序权。
 - `[决定]` **`TurnAccepted.turn` 是适配器侧占位/审计值，不是 turn 归属的权威来源**：turn 归属一律由 core 在提交前用自己的 `TurnId`（`IdGenerator::turn_id`）定稿并写入 `owned_event.turn_id` 与事件 view 的 `turnId`（§6 第 19 条）；适配器返回的值**不得**参与归属决策、不得产生第二个 turn 行，也不得影响事件顺序（§9 判据 31）。
 - `[决定]` `read_history` 的分流：owned 由 `storage-sqlite` 从事件日志回答；imported 由 `node-link-client` 在线回源 Owner，Owner 不可达返回 `PortError::Unavailable(RemoteUnavailable)`。
-- `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, request, workspace_alias)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。
+- `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, requestId, requestFingerprint, request, workspace_alias)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。`requestId` 与 `requestFingerprint` 由适配层传入（Node Link 的幂等键是 `(ownerNodeId, accessNodeId, requestId)`，指纹是 ACPR-CJ1 之后的解码 payload 摘要）：core **不得**自造 requestId 或指纹，否则同一次重试会得到第二个幂等键（§6 第 20 条）。终态由 `UseCases::settle_session_create(actor, requestId, status, result, error)` 提交（没有持久记录或记录已终结时是幂等 no-op），`completed` 的 `result` 由适配层投影（Node Link 的 `SessionCreateResult` 原文）。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。
 
 ### 5.2 持久化端口
 
@@ -820,6 +823,11 @@ pub trait IdGenerator: Send + Sync {
     - **会话版本**：事件类型属于 §10.3 要求 `version` 的集合（`session.mode.changed`、`session.config.changed`）时，view 顶层必须有十进制字符串 `version`，取值等于该次提交后的会话版本。推导规则与存储层一致：含 `StateChange` 的提交为当前版本 + 1，否则不变；提交后必须与 `CommitOutcome.version` 比对，不一致 → `PortError::Corrupt`、不发布该批、不得报告成功（比对发生在存储返回之后，已落盘的行不由 core 撤销）。幂等命中（`replayed`）时不比对：返回的是首次提交的结果，第二次提交的 view 不得被重写。imported 路径**不**注入这两个字段（`turnId`/`version` 由拥有该会话的节点注入，`payloadDigest` 覆盖 Owner 给出的视图字节），只保留其取值。
     - **两个已登记的边界**：① 失败关闭（`turnId` 冲突或版本漂移）发生在 `flush` 组装之后，该批适配器事件**不再重投**（调用方按本条 ① 的失败语义——与 §6 第 9 条同口径——决定是否把 turn 判为失败），不得重试时假装该批从未到达；② 无状态变更的提交里存储层**不**校验 `expected_version`（§5.2 只对 `Update` 校验），因此 core 的推导/比对就是该组合的失败关闭点，且可能发生在落盘之后。
     - **无归属的降级**：turn 终结后晚到的、类型属于 §10.3 `turnId` 集合的事件（适配器异步尾巴）没有权威 turn，**不**注入（`owned_event.turn_id` 与 view 同时为 NULL），宁可缺字段也不伪造；该降级必须有用例固定，并留给 Sync 切片裁定是否拒绝。
+20. `[决定]` **`session.create` 的幂等与终态落盘**（`node-link-owner` 的 WP6 修复轮次 RV1-WP6-F1）：创建走**两次提交**，幂等键是第 6 条的 `(actor, requestId)`（Owner 侧 `actor` 是该 `access` 对端，`kind = mutation`，`expected_version = None`，`command = "session.create"`）：
+    - **创建提交**：`StateChange::Create` 与幂等行在**同一事务**里落盘。幂等行的 `session = None`（装配期尚无目标会话），`session_id` 由存储层在事务内分配后**回填该列**——终态提交与第 16 条的启动恢复都按 `(session_id, request_id)` 定位该行，回填前那两处都定位不到它。`request_fingerprint` 取 ACPR-CJ1 之后的解码 payload 摘要，由适配层计算并作为参数传入（core 不依赖 `acpr-wire`）。
+    - **幂等比对里的 `session` 分量**：`IdempotencyRecord.session = None` 的语义是「装配期无目标会话」（目前只有 `session.create`），存储层**不**用行里存储层的创建结果与它比对；`command`/`kind`/`expected_version`/`request_fingerprint` 四项仍然恒比（第 6 条）。命中且四项相同 → 返回行里记的首次 `sessionId`（`CommitOutcome.replayed`，不创建第二个会话、不开第二个后端端点）；任一不同 → `PortError::Conflict(IdempotencyConflict)`。
+    - **终态提交**：一条 `command.completed`/`command.failed`/`command.uncertain` 事件（`causation = requestId`）+ `CommandTerminalRecord`。`completed` 的 `result` 是适配层投影的结果原文（Node Link 的 `SessionCreateResult`）、`completed` 必须有 `terminal_event_id`（§7.3 的 CHECK）；`failed`/`uncertain` 携带结构化错误。没有持久记录（创建在幂等行落盘前就失败）或记录已终结时，终态提交是**幂等 no-op**，不覆盖首次结果。
+    - **崩溃窗口**：两次提交之间崩溃留下 `accepted` 行 + 已创建的会话；第 16 条的启动恢复把它终结为 `uncertain`（`command.uncertain` 事件 + `terminal_event_id`），**不**重放副作用、也不猜测创建是否成功。该行不是无会话命令：`owned_command.session_id` 已回填，恢复走「有会话」分支。
 
 ## 7. `storage-sqlite` v3 表结构
 

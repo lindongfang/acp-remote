@@ -853,9 +853,15 @@ fn verify_idempotent(
 ) -> Result<(), PortError> {
     let stored_session = opt_text(row, "session_id").map_err(PortError::from)?;
     let stored_expected = opt_int(row, "expected_version").map_err(PortError::from)?;
+    // `idem.session = None` 表示「该命令没有装配期可知的目标会话」（目前只有 `session.create`：它的
+    // `session_id` 由存储层在创建事务内分配，见 §6 第 20 条），此时不参与比对——否则同键重试会被误判为冲突。
+    let session_matches = match idem.session.as_ref() {
+        Some(session) => stored_session.as_deref() == Some(session.as_str()),
+        None => true,
+    };
     let same = text(row, "command").map_err(PortError::from)? == idem.command
         && text(row, "kind").map_err(PortError::from)? == idem.kind.as_str()
-        && stored_session.as_deref() == idem.session.as_ref().map(SessionId::as_str)
+        && session_matches
         && stored_expected.map(|value| value.to_string())
             == idem.expected_version.map(|value| value.to_string())
         && text(row, "request_fingerprint").map_err(PortError::from)?
@@ -923,10 +929,12 @@ impl SqliteStore {
                     },
                     None => (Version::new(0), None),
                 };
-                // 命中路径不写任何行，显式结束事务。
+                // 命中路径不写任何行，显式结束事务。§6 第 20 条：`idem.session` 为 `None` 时以行里记的
+                // 目标会话作答（`session.create` 的重试因此能拿回首次创建的那个 sessionId）。
+                let session_id = idem.session.clone().or_else(|| record.session().cloned());
                 drop(tx);
                 return Ok(CommitOutcome {
-                    session_id: idem.session.clone(),
+                    session_id,
                     origin_epoch,
                     version,
                     appended: Vec::new(),
@@ -1351,7 +1359,17 @@ impl SqliteStore {
 
         // ---- 命令（幂等行 + 终态；§7.3 的 CHECK 形状由 `CommandRecord::try_new` 先行校验）
         if let Some(idem) = commit.idempotency.as_ref() {
-            write_command(&mut tx, idem, commit.command_terminal.as_ref()).await?;
+            // §6 第 20 条：会话级命令的幂等行落**目标会话**；`session.create` 的目标会话是本次事务刚分配的
+            // 那一个（装配方预知不了 id），因此这里用 `session_id` 回填它的 `None`——否则终态块与启动恢复
+            // 都无法按 `(session, requestId)` 定位该行。
+            let idem = match (idem.session.as_ref(), session_id.as_ref()) {
+                (None, Some(created)) => acp_core::ports::IdempotencyRecord {
+                    session: Some(created.clone()),
+                    ..idem.clone()
+                },
+                _ => idem.clone(),
+            };
+            write_command(&mut tx, &idem, commit.command_terminal.as_ref()).await?;
         }
         if let Some(request) = &terminal_request {
             let session = session_id.as_ref().ok_or(PortError::InvalidRequest(

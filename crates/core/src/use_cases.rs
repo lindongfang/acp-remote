@@ -21,15 +21,16 @@ use crate::broker::{Broker, Denied, command_name};
 use crate::model::{
     Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
     AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind,
-    CommandReceipt, CommandRecord, ConfigOption, ConfigOptionId, ConfigValue, ConflictKind,
-    CreateSessionRequest, DeviceId, DeviceRecord, ElicitationAction, ElicitationValues, EntityRef,
-    EventId, EventPayload, EventType, ExportId, ExportRecord, GlobalCursor, ImportId, ImportRecord,
-    InteractionId, InteractionResolution, LocalCursor, ModeId, ModeState, NodeId, NodeKind,
-    NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef, PairingClaim, PairingId,
-    PairingRecord, PairingSettlement, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
-    PendingInteraction, PortError, ProviderRef, RequestId, Resolution, ResolvedWorkspace,
-    SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind,
-    Version, WorkspaceAlias, WorkspaceRecord,
+    CommandReceipt, CommandRecord, CommandResult, CommandStatus, ConfigOption, ConfigOptionId,
+    ConfigValue, ConflictKind, CreateSessionRequest, DeviceId, DeviceRecord, Digest,
+    ElicitationAction, ElicitationValues, EntityRef, EventId, EventPayload, EventType, ExportId,
+    ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
+    LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor,
+    OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement,
+    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
+    ProviderRef, PublicError, RequestId, Resolution, ResolvedWorkspace, SeedState, Sequence,
+    SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind, Version,
+    WorkspaceAlias, WorkspaceRecord,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
@@ -226,7 +227,12 @@ impl UseCases {
     }
 
     /// `session.create`（Node Link，§12.7）：先把 workspace 别名解析成本机规范化绝对路径，
-    /// 再创建 owned 会话并打开其后端端点（§11.9）。
+    /// 再以客户端 `requestId` 为幂等键创建 owned 会话并打开其后端端点（§11.9）。
+    ///
+    /// `request_id`/`request_fingerprint` 由适配层给出：Node Link 的幂等键是
+    /// `(ownerNodeId, accessNodeId, requestId)`，其中前两项就是本进程的 `Actor::Node` 对端；
+    /// 指纹是 ACPR-CJ1 之后的解码 payload 摘要（§6 第 6 条）。core 不自造 requestId——否则同一
+    /// 次重试会得到第二个幂等键，重启后就会重复创建。
     ///
     /// `workspace_alias` 是该请求在 Export 中声明的别名——「是否在该 Export 的别名集合内」由
     /// `server::node_link` 校验（`nodelink.export.not_granted`，参数类）；本层只负责本机解析：
@@ -237,13 +243,14 @@ impl UseCases {
     pub async fn create_session(
         &self,
         actor: &Actor,
+        request_id: RequestId,
+        request_fingerprint: Digest,
         mut request: CreateSessionRequest,
         workspace_alias: Option<WorkspaceAlias>,
     ) -> Result<SessionId, PortError> {
         // 授权先于任何本机读取与文件系统访问（与其余用例入口同款；broker 内部还会再授权一次，
         // 对本地 actor 恒成功、不重复写审计）。否则未授权调用方能借解析结果的差异探测「别名是否
         // 已登记、目录当前是否存在」——那是一个本机状态预言机。
-        let request_id = self.ids.request_id();
         self.broker
             .authorize(actor, "session.create", None, &request_id)
             .await
@@ -258,7 +265,26 @@ impl UseCases {
                 ))?;
             request.workspace = Some(resolve_workspace(&alias, record.canonical_path())?);
         }
-        self.broker.create_session(actor, request).await
+        self.broker
+            .create_session(actor, &request_id, &request_fingerprint, request)
+            .await
+    }
+
+    /// `session.create` 的终态（§12.7）：把已持久化的 `accepted` 行推进到终态。结果由适配层投影
+    /// （`completed` 携带 `SessionCreateResult` 的原文），失败/不确定携带适配层构造的结构化错误。
+    ///
+    /// 没有持久记录（创建在幂等行落盘前失败）或记录已终结时是**幂等 no-op**（返回 `false`）。
+    pub async fn settle_session_create(
+        &self,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.broker
+            .settle_session_create(actor, request_id, status, result, error)
+            .await
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1602,7 +1628,7 @@ mod tests {
     use crate::broker::test_support::{
         FakeAttachments, FakeDeliveries, FakeExports, FakeLocalConfig, FakeStore, FakeTrust,
         FakeWorld, TestAudit, TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest,
-        prompt_command, uuid_text,
+        lock, prompt_command, uuid_text,
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
@@ -1930,12 +1956,200 @@ mod tests {
         )
     }
 
+    /// `session.create` 的幂等键（§6 第 6 条）：requestId 由调用方给出，指纹是 ACPR-CJ1 摘要。
+    fn create_session_request_id() -> crate::model::RequestId {
+        crate::model::RequestId::new(&uuid_text(70)).expect("request id")
+    }
+
+    /// 已创建会话的条数（断言「不重复创建」用）。
+    fn session_count(fixture: &Fixture) -> usize {
+        lock(&fixture.world.state).sessions.len()
+    }
+
+    /// [R66]/§6 第 6 条与第 20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在
+    /// `owned_command` 里；同键重试回首次结果且不重复创建，同键不同语义是 `idempotency_conflict`。
+    #[test]
+    fn session_create_replay_does_not_create_a_second_session() {
+        let fixture = fixture();
+        let actor = Actor::LocalCli;
+        let request = create_session_request_id();
+        let fingerprint = digest('A');
+        let before = session_count(&fixture);
+
+        let created = block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            fingerprint.clone(),
+            create_request(),
+            None,
+        ))
+        .expect("create");
+        assert_eq!(session_count(&fixture), before + 1, "首次提交创建一个会话");
+
+        // 同键同语义：重放首次结果，不创建第二个会话、不开第二个后端端点。
+        let replayed = block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            fingerprint.clone(),
+            create_request(),
+            None,
+        ))
+        .expect("replay");
+        assert_eq!(replayed, created, "重试回首次创建的 sessionId");
+        assert_eq!(session_count(&fixture), before + 1, "重试不得重复创建");
+
+        // 同键不同语义：`command.idempotency_conflict`，同样零副作用。
+        let conflict = block_on(fixture.use_cases.create_session(
+            &actor,
+            request,
+            digest('B'),
+            create_request(),
+            None,
+        ))
+        .expect_err("同键不同指纹必须冲突");
+        assert!(
+            matches!(
+                conflict,
+                PortError::Conflict(ConflictKind::IdempotencyConflict)
+            ),
+            "得到 {conflict:?}"
+        );
+        assert_eq!(session_count(&fixture), before + 1);
+    }
+
+    /// §6 第 16/20 条：创建的崩溃窗口（幂等行已落盘、终态从未提交）由启动恢复终结为 `uncertain`，
+    /// 不自动重放副作用，且之后同键重试仍回首次创建的会话。
+    #[test]
+    fn session_create_crash_window_is_recovered_as_uncertain() {
+        let fixture = fixture();
+        let actor = Actor::LocalCli;
+        let request = create_session_request_id();
+        let fingerprint = digest('A');
+        let created = block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            fingerprint.clone(),
+            create_request(),
+            None,
+        ))
+        .expect("create");
+        // 崩溃：`settle_session_create` 从未被调用，行仍是 accepted（这正是重启时的现场）。
+        let accepted = block_on(fixture.use_cases.command_status(&actor, request.clone()))
+            .expect("status")
+            .expect("记录已落盘");
+        assert_eq!(accepted.status(), CommandStatus::Accepted);
+        assert_eq!(accepted.session(), Some(&created));
+
+        let recovered = block_on(
+            fixture
+                .use_cases
+                .recover_unsettled(&Actor::LocalCli, ReplayLimit::new(16)),
+        )
+        .expect("recover");
+        assert_eq!(recovered, 1, "崩溃窗口里的创建命令必须被终结");
+        let record = block_on(fixture.use_cases.command_status(&actor, request.clone()))
+            .expect("status")
+            .expect("记录");
+        assert_eq!(record.status(), CommandStatus::Uncertain);
+        assert!(
+            record.terminal_event().is_some(),
+            "恢复必须写持久终态事件（terminalEventId 的来源）"
+        );
+        assert_eq!(
+            record.error().map(|error| error.code()),
+            Some("command.uncertain")
+        );
+
+        // 重试：回首次创建的会话，不重建第二个。
+        let replayed = block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            fingerprint,
+            create_request(),
+            None,
+        ))
+        .expect("replay");
+        assert_eq!(replayed, created);
+        assert_eq!(
+            session_count(&fixture),
+            2,
+            "夹具预置一个会话 + 本次创建的一个"
+        );
+        // 终态不被重试覆盖。
+        let after = block_on(fixture.use_cases.command_status(&actor, request))
+            .expect("status")
+            .expect("记录");
+        assert_eq!(after.status(), CommandStatus::Uncertain);
+    }
+
+    /// §6 第 20 条：终态提交把结果写进持久记录（`terminalEventId` 非空），且**不覆盖**已终结的记录。
+    #[test]
+    fn settle_session_create_persists_the_terminal_result() {
+        let fixture = fixture();
+        let actor = Actor::LocalCli;
+        let request = create_session_request_id();
+        block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            digest('A'),
+            create_request(),
+            None,
+        ))
+        .expect("create");
+
+        let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"first"}"#)
+            .expect("result object");
+        let written = block_on(fixture.use_cases.settle_session_create(
+            &actor,
+            &request,
+            CommandStatus::Completed,
+            Some(result),
+            None,
+        ))
+        .expect("settle");
+        assert!(written, "第一次终结必须真的写入");
+        let record = block_on(fixture.use_cases.command_status(&actor, request.clone()))
+            .expect("status")
+            .expect("记录");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        assert!(
+            record.terminal_event().is_some(),
+            "completed 必须有终态事件"
+        );
+        assert_eq!(
+            record.result().map(CommandResult::as_str),
+            Some(r#"{"sessionId":"first"}"#)
+        );
+
+        // 已终结的记录不被第二次 settle 覆盖（首次结果优先）。
+        let overwrite = crate::model::CommandResult::from_json_text(r#"{"sessionId":"second"}"#)
+            .expect("result object");
+        let rewritten = block_on(fixture.use_cases.settle_session_create(
+            &actor,
+            &request,
+            CommandStatus::Completed,
+            Some(overwrite),
+            None,
+        ))
+        .expect("settle");
+        assert!(!rewritten, "已终结的记录不覆盖");
+        let after = block_on(fixture.use_cases.command_status(&actor, request))
+            .expect("status")
+            .expect("记录");
+        assert_eq!(
+            after.result().map(CommandResult::as_str),
+            Some(r#"{"sessionId":"first"}"#)
+        );
+    }
+
     /// §11.9：未登记的别名是参数类错误，且不得触达后端。
     #[test]
     fn create_session_rejects_unregistered_workspace_alias() {
         let fixture = fixture();
         let error = block_on(fixture.use_cases.create_session(
             &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
             create_request(),
             Some(WorkspaceAlias::new("ghost").expect("alias")),
         ))
@@ -1961,6 +2175,8 @@ mod tests {
 
         let error = block_on(fixture.use_cases.create_session(
             &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
             create_request(),
             Some(alias),
         ))
@@ -2341,6 +2557,8 @@ mod tests {
         };
         let error = block_on(fixture.use_cases.create_session(
             &actor,
+            create_session_request_id(),
+            digest('A'),
             create_request(),
             Some(alias.clone()),
         ))

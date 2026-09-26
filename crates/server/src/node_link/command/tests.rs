@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    CachePolicy, CommandResult, Digest, EventId, EventPayload, ExportTemplate, GlobalCursor,
-    GrantSet, NodeKind, NodeRecord, OriginCursor as CoreOriginCursor, OriginEpoch, OwnedSessionRef,
-    PromptRequest, Sequence, ServerEpoch, Session, SessionReference, SessionState, SessionSummary,
-    TemplateId, WorkspaceAlias, WorkspaceAliasEntry as CoreAliasEntry,
+    CachePolicy, CommandResult, ConflictKind, Digest, EventId, EventPayload, ExportTemplate,
+    GlobalCursor, GrantSet, NodeKind, NodeRecord, OriginCursor as CoreOriginCursor, OriginEpoch,
+    OwnedSessionRef, PromptRequest, Sequence, ServerEpoch, Session, SessionReference, SessionState,
+    SessionSummary, TemplateId, WorkspaceAlias, WorkspaceAliasEntry as CoreAliasEntry,
 };
 use acp_core::ports::{
     AgentCatalog, AuditQuery, CommitOutcome, EventSink, HistoryPage, HistoryQuery, NodeLinkSlice,
@@ -116,6 +116,9 @@ fn session_of(summary: &SessionSummary) -> Session {
 
 /// 端口替身：命令记录表 + 会话表。`find_request` 只按 requestId 文本查（真实存储还含 actor 维度，
 /// 本轮用例每条 request 只属于一个 actor）。
+///
+/// `commit` 按 §6 第 20 条模拟真实存储的 `session.create` 语义：创建提交 = 新会话 + 幂等行（`session_id`
+/// 回填新建会话）、终态提交 = 把既有行推进到终态、同键重放 = 回首次结果、同键不同指纹 = 冲突。
 #[derive(Clone, Default)]
 struct CommandStore {
     commands: Arc<Mutex<BTreeMap<String, CommandRecord>>>,
@@ -143,9 +146,83 @@ impl SessionStore for CommandStore {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
         self.commit_calls.fetch_add(1, Ordering::SeqCst);
         lock(&self.commits).push(commit.clone());
+        // 幂等命中（§6 第 6 条与第 20 条）：五项比对，`session = None` 不参与（`session.create` 的
+        // 目标会话由存储层分配并回填）。
+        if let Some(idem) = commit.idempotency.as_ref() {
+            if let Some(existing) = lock(&self.commands).get(idem.request.as_str()).cloned() {
+                let same = existing.command() == idem.command
+                    && existing.kind() == idem.kind
+                    && idem
+                        .session
+                        .as_ref()
+                        .is_none_or(|session| existing.session() == Some(session))
+                    && existing.expected_version() == idem.expected_version
+                    && existing.request_fingerprint() == &idem.request_fingerprint;
+                if !same {
+                    return Err(PortError::Conflict(ConflictKind::IdempotencyConflict));
+                }
+                return Ok(CommitOutcome {
+                    session_id: existing.session().cloned(),
+                    origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
+                    version: Version::new(1),
+                    appended: Vec::new(),
+                    replayed: Some(acp_core::ports::IdempotentReplay { record: existing }),
+                });
+            }
+        }
         let Some(StateChange::Create(new)) = &commit.state else {
-            // mutation 的落盘属 [PV5] 的受控路径全链路测试；本轮用例里到达这里就说明发生了第二次派发。
-            unreachable!("WP6 路由用例只提交 session.create")
+            // 终态提交：按同一批 `command.*` 事件的 causation 定位行，推进到终态。
+            let request = commit
+                .events
+                .iter()
+                .rev()
+                .find(|event| event.event_type.as_str().starts_with("command."))
+                .and_then(|event| event.causation.clone())
+                .ok_or(PortError::InvalidRequest("终态提交缺少 command.* 事件"))?;
+            let terminal = commit
+                .command_terminal
+                .clone()
+                .ok_or(PortError::InvalidRequest("终态提交缺少 command_terminal"))?;
+            let existing =
+                lock(&self.commands)
+                    .get(request.as_str())
+                    .cloned()
+                    .ok_or(PortError::NotFound(EntityRef::Command {
+                        session: commit.session.clone(),
+                        request: request.clone(),
+                    }))?;
+            if existing.status().is_terminal() {
+                return Ok(CommitOutcome {
+                    session_id: existing.session().cloned(),
+                    origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
+                    version: Version::new(1),
+                    appended: Vec::new(),
+                    replayed: Some(acp_core::ports::IdempotentReplay { record: existing }),
+                });
+            }
+            let updated = CommandRecord::try_new(
+                existing.session().cloned(),
+                existing.request().clone(),
+                existing.command(),
+                existing.kind(),
+                existing.actor().clone(),
+                existing.accepted_at().cloned(),
+                terminal.status(),
+                terminal.terminal_at().cloned(),
+                Some(EventId::new(EVENT).expect("终态事件 id")),
+                terminal.result().cloned(),
+                terminal.error().cloned(),
+                existing.expected_version(),
+                existing.request_fingerprint().clone(),
+            )?;
+            self.seed_command(updated);
+            return Ok(CommitOutcome {
+                session_id: commit.session.clone(),
+                origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
+                version: Version::new(1),
+                appended: Vec::new(),
+                replayed: None,
+            });
         };
         // 会话身份永远由 Owner（存储层）在提交事务内分配。
         let session = SessionId::new("8ae1c07c-9242-46e9-a9d2-4ec58c130f50").expect("session id");
@@ -163,6 +240,27 @@ impl SessionStore for CommandStore {
             )
             .expect("新建会话摘要"),
         );
+        // 幂等行：`session` 由创建方的 `None` 回填为本次分配的会话 id（§6 第 20 条）。
+        if let Some(idem) = commit.idempotency.as_ref() {
+            self.seed_command(
+                CommandRecord::try_new(
+                    Some(session.clone()),
+                    idem.request.clone(),
+                    &idem.command,
+                    idem.kind,
+                    idem.actor.clone(),
+                    Some(idem.accepted_at.clone()),
+                    CoreStatus::Accepted,
+                    None,
+                    None,
+                    None,
+                    None,
+                    idem.expected_version,
+                    idem.request_fingerprint.clone(),
+                )
+                .expect("幂等行"),
+            );
+        }
         Ok(CommitOutcome {
             session_id: Some(session),
             origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
@@ -218,7 +316,15 @@ impl SessionStore for CommandStore {
         &self,
         _limit: ReplayLimit,
     ) -> Result<Vec<CommandRecord>, PortError> {
-        unreachable!("WP6 路由用例不查未决命令")
+        Ok(lock(&self.commands)
+            .values()
+            .filter(|record| {
+                record.status() == CoreStatus::Accepted
+                    && record.kind() == CommandKind::Mutation
+                    && record.terminal_event().is_none()
+            })
+            .cloned()
+            .collect())
     }
 
     async fn retention_window(
@@ -255,8 +361,24 @@ impl acp_core::ports::ReadView for CommandStore {
         unreachable!("WP6 路由用例不读 Sync 重放面")
     }
 
-    async fn read_session(&self, _query: HistoryQuery) -> Result<HistoryPage, PortError> {
-        unreachable!("WP6 路由用例不读历史面")
+    async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {
+        // 启动恢复要读该会话的未终态 turn（`session.create` 没有 turn，因此这里只回空页面）。
+        let summaries = lock(&self.sessions).clone();
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.session_id() == &query.session)
+            .cloned()
+            .ok_or_else(|| PortError::NotFound(EntityRef::Session(query.session.clone())))?;
+        Ok(HistoryPage {
+            session: summary,
+            events: Vec::new(),
+            turns: Vec::new(),
+            interactions: Vec::new(),
+            config: Vec::new(),
+            capabilities: None,
+            head: global_cursor(),
+            next: None,
+        })
     }
 
     async fn event_payload(&self, _event: &EventId) -> Result<Option<EventPayload>, PortError> {
@@ -429,6 +551,8 @@ struct World {
     core: Arc<UseCases>,
     registry: Arc<ConnectionRegistry>,
     resource: Arc<ResourceRoute>,
+    clock: FakeClock,
+    config: FakeConfig,
 }
 
 impl Fixture {
@@ -571,6 +695,8 @@ impl Fixture {
                 core,
                 registry,
                 resource,
+                clock,
+                config: config_store,
             },
             handle,
             outbound,
@@ -582,6 +708,51 @@ impl Fixture {
             Arc::clone(&self.world.core),
             Arc::clone(&self.world.registry),
             Arc::clone(&self.world.resource),
+            Arc::clone(&self.world.authority),
+        ))
+    }
+
+    /// 重启视角：用**同一份**端口状态重建 core 与路由。进程内的东西（观察表、内存缓存、后端端点）
+    /// 全部丢弃，只有持久事实延续——这是「重启后同一 requestId 不重复创建」的观察点。
+    fn restarted_route(&self) -> Arc<CommandRoute> {
+        let owned = Arc::clone(&self.world.store);
+        let store: Arc<dyn SessionStore> = owned.clone();
+        let broker = Arc::new(Broker::new(
+            BrokerDeps {
+                store: Arc::clone(&store),
+                deliveries: Arc::new(NotTouched),
+                backends: Arc::new(FakeBackends),
+                exports: Arc::new(self.world.exports.clone()),
+                trust: Arc::new(self.world.trust.clone()),
+                publisher: Arc::new(NotTouched),
+                clock: Arc::new(self.world.clock.clone()),
+                ids: Arc::new(FakeIds::default()),
+                audit: Some(Arc::new(self.world.audit.clone())),
+            },
+            BrokerConfig::default(),
+        ));
+        let core = Arc::new(UseCases::new(UseCaseDeps {
+            broker,
+            store: Arc::clone(&store),
+            deliveries: Arc::new(NotTouched),
+            exports: Arc::new(self.world.exports.clone()),
+            trust: Arc::new(self.world.trust.clone()),
+            audit: Arc::new(self.world.audit.clone()),
+            config: Arc::new(self.world.config.clone()),
+            attachments: Arc::new(NotTouched),
+            catalog: Arc::new(TestCatalog),
+            clock: Arc::new(self.world.clock.clone()),
+            ids: Arc::new(FakeIds::default()),
+        }));
+        let resource = Arc::new(ResourceRoute::new(
+            Arc::clone(&core),
+            Arc::clone(&self.world.registry),
+            self.world.authority.local_node().clone(),
+        ));
+        Arc::new(CommandRoute::new(
+            core,
+            Arc::clone(&self.world.registry),
+            resource,
             Arc::clone(&self.world.authority),
         ))
     }
@@ -1360,10 +1531,35 @@ async fn session_create_returns_accepted_then_the_composite_result() {
         generated, SESSION,
         "sessionId 由 Owner 在提交事务内分配（不是请求带来的）"
     );
-    assert_eq!(fixture.world.store.commit_calls(), 1, "只提交一次");
+    assert_eq!(
+        body["terminal"]["terminalEventId"], EVENT,
+        "终态以持久记录为唯一权威：terminalEventId 非 null"
+    );
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        2,
+        "创建一次（幂等行 + 新会话），终态一次（终态事件 + 命令行终结）"
+    );
+    // 持久事实：`command.status` 重查回同一终态（`terminalEventId` 非 null）。
+    let status = submit(
+        &mut fixture,
+        &route,
+        submit_body(
+            REQUEST_2,
+            "command.status",
+            json!({ "targetRequestId": REQUEST }),
+        ),
+    )
+    .await;
+    let reread = of_type(&status, "command.terminal");
+    assert_eq!(reread.len(), 1);
+    assert_eq!(reread[0]["body"]["command"], "session.create");
+    assert_eq!(reread[0]["body"]["terminal"]["terminalEventId"], EVENT);
+    assert_eq!(reread[0]["body"]["terminal"]["result"], result.clone());
 }
 
-/// [R66]：`session.create` 的幂等按 `(accessNodeId, requestId)`——同键同语义回首次结果。
+/// [R66]/§6 第 20 条：`session.create` 的幂等键 `(accessNodeId, requestId)` 是**持久事实**——同键
+/// 同语义回首次结果（含重启后），同键不同语义 `nodelink.command.idempotency_conflict`，都不重复创建。
 #[tokio::test]
 async fn a_repeated_session_create_request_replays_the_first_result() {
     let mut fixture = Fixture::new().await;
@@ -1381,19 +1577,36 @@ async fn a_repeated_session_create_request_replays_the_first_result() {
     let first = submit(&mut fixture, &route, body.clone()).await;
     let first_terminal = of_type(&first, "command.terminal");
     assert_eq!(first_terminal.len(), 1);
-    assert_eq!(fixture.world.store.commit_calls(), 1);
+    let commits_after_create = fixture.world.store.commit_calls();
+    assert_eq!(commits_after_create, 2);
 
-    // 相同 requestId 与相同 payload：回第一次的终态，不再创建第二个会话。
-    let second = submit(&mut fixture, &route, body).await;
+    // 同一路由（进程内状态仍在）：回第一次的终态，不再创建第二个会话。
+    let second = submit(&mut fixture, &route, body.clone()).await;
     let replayed = of_type(&second, "command.terminal");
     assert_eq!(replayed.len(), 1, "重复提交必须回首次结果");
     assert_eq!(replayed[0]["body"], first_terminal[0]["body"]);
-    assert_eq!(fixture.world.store.commit_calls(), 1, "副作用只发生一次");
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        commits_after_create,
+        "幂等命中不得再落盘"
+    );
+
+    // 重启：core 与路由重建（观察表、内存缓存全丢），持久事实延续——仍回首次结果且零新提交。
+    let restarted = fixture.restarted_route();
+    let again = submit(&mut fixture, &restarted, body).await;
+    let replayed = of_type(&again, "command.terminal");
+    assert_eq!(replayed.len(), 1, "重启后重复提交必须回首次结果");
+    assert_eq!(replayed[0]["body"], first_terminal[0]["body"]);
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        commits_after_create,
+        "重启后重试不得重复创建"
+    );
 
     // 同键不同语义：`idempotency_conflict`（两个 payload 都合法，只是语义不同）。
     let conflict = submit(
         &mut fixture,
-        &route,
+        &restarted,
         submit_body(
             REQUEST,
             "session.create",
@@ -1411,7 +1624,101 @@ async fn a_repeated_session_create_request_replays_the_first_result() {
         error_code(rejected[0]),
         "nodelink.command.idempotency_conflict"
     );
-    assert_eq!(fixture.world.store.commit_calls(), 1);
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        commits_after_create,
+        "冲突不得产生副作用"
+    );
+}
+
+/// [R70]/§6 第 20 条：创建的崩溃窗口（幂等行已落盘、终态从未提交）由启动恢复终结为 `uncertain`，
+/// 重查与重试都回该持久终态，且不重复创建。
+#[tokio::test]
+async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
+    let mut fixture = Fixture::new().await;
+    let body = submit_body(
+        REQUEST,
+        "session.create",
+        json!({
+            "agentId": "codex",
+            "exportId": EXPORT,
+            "workspaceAlias": "project",
+        }),
+    );
+    // 直接提交**创建**提交（不经过适配层的终态落盘），模拟崩溃后的现场。
+    let request = core_request(&Uuid::parse(REQUEST).expect("uuid")).expect("request id");
+    let actor = node_actor(&NodeId::new(ACCESS_NODE).expect("node id"));
+    let fingerprint = fingerprint_of(&wire_submit(&body).payload).expect("指纹");
+    let session = fixture
+        .world
+        .core
+        .create_session(
+            &actor,
+            request.clone(),
+            fingerprint,
+            CreateSessionRequest {
+                agent: agent_ref(),
+                workspace: None,
+                template: None,
+                origin: ResourceOrigin::Local,
+            },
+            None,
+        )
+        .await
+        .expect("创建会话");
+
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        1,
+        "崩溃前只落了创建提交（终态从未提交）"
+    );
+    // 重启：组合根先跑 §6 第 16 条的启动恢复，再开始服务。
+    fixture
+        .world
+        .core
+        .recover_unsettled(&Actor::LocalCli, ReplayLimit::new(16))
+        .await
+        .expect("启动恢复");
+    let restarted = fixture.restarted_route();
+
+    // `command.status` 重查：持久终态是 `uncertain`，带 `terminalEventId` 与结构化错误。
+    let status = submit(
+        &mut fixture,
+        &restarted,
+        submit_body(
+            REQUEST_2,
+            "command.status",
+            json!({ "targetRequestId": REQUEST }),
+        ),
+    )
+    .await;
+    let terminal = of_type(&status, "command.terminal");
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0]["body"]["command"], "session.create");
+    assert_eq!(terminal[0]["body"]["terminal"]["status"], "uncertain");
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["terminalEventId"], EVENT,
+        "恢复必须写持久终态事件"
+    );
+
+    // 同键重试：回同一 `uncertain` 终态（不猜成功/失败），且不重复创建。
+    let commits_after_recovery = fixture.world.store.commit_calls();
+    assert_eq!(commits_after_recovery, 2, "恢复本身写一次终态提交");
+    let resubmitted = submit(&mut fixture, &restarted, body).await;
+    let replayed = of_type(&resubmitted, "command.terminal");
+    assert_eq!(replayed.len(), 1, "重试回持久终态而不是新建");
+    assert_eq!(replayed[0]["body"], terminal[0]["body"]);
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        commits_after_recovery,
+        "重试不得重复创建第二个会话"
+    );
+    assert_eq!(
+        lock(&fixture.world.store.sessions).len(),
+        2,
+        "夹具预置一个会话 + 崩溃前创建的一个"
+    );
+    assert_ne!(session.as_str(), "");
 }
 
 /// [R67]：相同 `(requestId, command, payload)` 的重复 mutation 回首次结果且不二次派发。
