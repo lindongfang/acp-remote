@@ -409,6 +409,11 @@ struct Slot {
     /// §6 第 15 条：该 turn 已提交的 delta 行的 global_sequence，终态后用于 `turn.delta_compacted`
     /// 的 `compacted` 清单（server epoch 在提交压缩时从 `head()` 取，避免拿事件自己的 origin epoch 冒充）。
     turn_deltas: Mutex<HashMap<String, Vec<Sequence>>>,
+    /// §6 第 9 条：因落盘失败被放弃的 turn（见 [`Broker::abandon_failed_turn`]），按放弃顺序排列。
+    /// 它们的后续事件（含终态）不再提交：正文已经缺块，不得再在库里留下 `completed`；
+    /// 最后一个也是「需要 `turnId` 但适配器未带标识的迟到事件」的兜底归属者（适配层不带 turn，
+    /// 归属由 [`crate::broker`] 按 §10.3 的集合完成）。
+    abandoned: Mutex<Vec<TurnId>>,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -509,6 +514,7 @@ impl Broker {
                     queue: Mutex::new(TurnQueue::default()),
                     deltas: Mutex::new(HashMap::new()),
                     turn_deltas: Mutex::new(HashMap::new()),
+                    abandoned: Mutex::new(Vec::new()),
                 })
             })
             .clone()
@@ -1594,8 +1600,30 @@ impl Broker {
         let mut delta_plan: Vec<(usize, TurnId, DeltaFragment)> = Vec::new();
         let mut completed_events: Vec<PendingEvent> = Vec::new();
         let mut compact_after: Option<(TurnId, usize)> = None;
+        // 失败批次是否携带了**在跑的** turn 的事件：只有它才需要在写失败时放弃该 turn（§6 第 9 条）。
+        let mut running_in_chunk = false;
         for (event_index, event) in chunk.into_iter().enumerate() {
-            let turn = event.turn.clone().or_else(|| running.clone());
+            let turn = event.turn.clone().or_else(|| {
+                if running.is_some() {
+                    return running.clone();
+                }
+                // §6 第 9 条 + §10.3 的归属规则：需要 `turnId` 的事件在没有在跑 turn 时，只可能属于
+                // 最后被放弃的那个 turn（适配器不带 turn 标识），兜底归属它。
+                if view_requires_turn_id(event.event_type.as_str()) {
+                    return lock(&slot.abandoned).last().cloned();
+                }
+                None
+            });
+            // §6 第 9 条：被放弃的 turn（曾发生落盘失败）不再接受任何事件，包括它的终态事件——
+            // 否则库里会留下「报完成但正文缺失」的记录。
+            if let Some(turn_id) = turn.as_ref() {
+                if lock(&slot.abandoned).contains(turn_id) {
+                    continue;
+                }
+            }
+            if turn.is_some() && turn == running {
+                running_in_chunk = true;
+            }
             let policy = persistence_policy(&event.event_type);
             // §6 第 14 条：登记本批里的 delta 片段（提交成功后才并入累积）。
             if is_agent_message_delta(&event.event_type) {
@@ -1777,6 +1805,19 @@ impl Broker {
                         "事件落盘失败，无法确认已投递给客户端",
                     )
                     .await;
+                    return Ok(());
+                }
+                // §6.9：非终态批次的失败不能只丢弃——该 turn 的正文已经缺了一块，若让同一 turn 的
+                // 终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录（RV1-WP7-F3）。
+                if running_in_chunk {
+                    self.abandon_failed_turn(
+                        slot,
+                        session,
+                        running.as_ref(),
+                        running_request.as_ref(),
+                        running_actor.as_ref(),
+                    )
+                    .await?;
                 }
                 Ok(())
             }
@@ -1916,6 +1957,101 @@ impl Broker {
                 self.publish(&outcome.appended);
                 Ok(())
             }
+            Err(PortError::Unavailable(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// §6 第 9 条（RV1-WP7-F3）：非终态批次落盘失败后放弃在跑的 turn。
+    ///
+    /// 为什么必须终结而不能只丢批次：该 turn 的正文已经缺了一块，若它在后续批次里照常走到终态，库里
+    /// 就会留下「报完成但正文缺失」的记录。因此这里把 turn 终结为 `failed`、把命令置为 `uncertain`
+    /// （与 §6 第 16 条的恢复同一口径：无法确认已经落盘的部分与 Agent 的副作用），并把该 turn 登记为
+    /// 「已放弃」——它后续到达的事件与终态不再提交。
+    ///
+    /// 可观测信号是这次提交里的两条持久事件（`turn.failed` + `command.uncertain`）：core 不含日志依赖
+    /// （`AGENTS.md` §7），而错误上抛会把「已经终结的 turn」报成调用方（往往是另一个命令）的失败，
+    /// 与终态批失败时的既有口径不一致，因此这里不传播 `Unavailable`。
+    ///
+    /// 已落盘的 delta 仍按 §6 第 14 条收尾成 `agent.message.completed`（缺的段落不伪造）；不压缩它们
+    /// （§6 第 15 条是可选动作），错误路径上不再多发一次提交。
+    async fn abandon_failed_turn(
+        &self,
+        slot: &Slot,
+        session: &SessionId,
+        turn: Option<&TurnId>,
+        request: Option<&RequestId>,
+        actor: Option<&Actor>,
+    ) -> Result<(), PortError> {
+        let Some(turn) = turn else {
+            return Ok(());
+        };
+        lock(&slot.abandoned).push(turn.clone());
+        let completed = self.completed_events_for(slot, turn)?;
+        lock(&slot.deltas).remove(turn.as_str());
+        lock(&slot.turn_deltas).remove(turn.as_str());
+        slot.finish_turn();
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let at = self.now();
+        let reason = "事件落盘失败，无法确认已投递给客户端";
+        let error =
+            PublicError::coded("command.uncertain", reason, false).map_err(PortError::from)?;
+        let mut events = vec![pending_event(
+            "turn.failed",
+            EventKind::State,
+            view_turn_error(turn, &error)?,
+            Some(turn.clone()),
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            actor,
+        )?];
+        events.extend(completed);
+        events.push(pending_event(
+            "command.uncertain",
+            EventKind::Structured,
+            view_command_uncertain(request, reason)?,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            actor,
+        )?);
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: Some(SessionState::Failed),
+                mode: ModeChange::Unchanged,
+                closed_at: None,
+                interaction: None,
+            })),
+            turns: vec![TurnChange::Update(TurnUpdate {
+                turn: turn.clone(),
+                state: TurnState::Failed,
+                ended_at: Some(at.clone()),
+            })],
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(CommandTerminalRecord::try_new(
+                CommandStatus::Uncertain,
+                Some(at),
+                None,
+                None,
+                Some(error),
+            )?),
+            origin_epoch: None,
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(())
+            }
+            // 存储仍然不可用：该 turn 在内存里已放弃（`abandoned` + `finish_turn`），不再有
+            // 「completed 但正文缺失」的记录会产生；不发布任何东西（§6.9）。
             Err(PortError::Unavailable(_)) => Ok(()),
             Err(error) => Err(error),
         }
@@ -5822,6 +5958,130 @@ mod tests {
             "失败的批次不得发布"
         );
         assert!(harness.world.published_after_commit());
+    }
+
+    /// §6 第 9 条（RV1-WP7-F3）：**非终态**批次的写失败不得只丢弃——该 turn 的正文已经缺了一块，
+    /// 若让同一 turn 的终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录。
+    #[test]
+    fn a_failed_non_terminal_batch_terminates_the_turn_instead_of_silently_dropping_it() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                    uuid_text(610)
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        // 提交顺序：1 = 接受 turn.queued，2 = 提升 turn.started，3 = 非终态增量批次（本用例注入失败）。
+        harness.world.fail_commit_at(3);
+        let receipt = harness.submit_prompt(1, 'A');
+        assert!(matches!(receipt, CommandReceipt::Accepted { .. }));
+
+        let record = harness.world.command(&harness.request(1)).expect("幂等行");
+        assert_eq!(
+            record.status(),
+            CommandStatus::Uncertain,
+            "正文缺块的 turn 不得报完成"
+        );
+        assert!(record.error().is_some());
+        let types = harness.world.event_types(&harness.session);
+        assert!(
+            !types.contains(&"turn.completed".to_owned()),
+            "被放弃 turn 的终态批不得落盘：{types:?}"
+        );
+        assert!(!types.contains(&"command.completed".to_owned()));
+        assert!(types.contains(&"turn.failed".to_owned()), "{types:?}");
+        assert!(types.contains(&"command.uncertain".to_owned()), "{types:?}");
+        let turns = harness.world.turns(&harness.session);
+        assert_eq!(turns.len(), 1, "{turns:?}");
+        assert_eq!(turns[0].state(), TurnState::Failed, "{turns:?}");
+        let published_types = harvest_published_types(&harness);
+        assert!(!published_types.contains(&"turn.completed".to_owned()));
+        assert!(harness.world.published_after_commit());
+    }
+
+    /// §6 第 9/14 条（RV1-WP7-F3）：被放弃的 turn 仍要为**已落盘**的 delta 收尾（`completed`），
+    /// 缺的那一块不伪造，迟到的事件与终态一律不再提交。
+    #[test]
+    fn an_abandoned_turn_still_finalises_the_deltas_it_persisted() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 空脚本：turn 被接受并派发，但后端在注入失败前只发两批增量。
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let message = MessageId::new(&uuid_text(611)).expect("message");
+        let delta = |index: u64, text: &str| {
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &format!(
+                    r#"{{"messageId":"{}","deltaIndex":"{index}","text":"{text}"}}"#,
+                    message.as_str()
+                ),
+            )
+        };
+        // 第一批增量正常落盘（提交 3），第二批注入失败（提交 4）。
+        harness
+            .broker
+            .sink(&harness.session)
+            .send(delta(0, "Hello"));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        harness.world.fail_commit_at(4);
+        harness
+            .broker
+            .sink(&harness.session)
+            .send(delta(1, " lost"));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        // 迟到的终态批不得再落盘。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            vec![
+                "turn.queued",
+                "turn.started",
+                "agent.message.delta",
+                "turn.failed",
+                "agent.message.completed",
+                "command.uncertain",
+            ],
+            "只保留已落盘的增量、收尾与失败终态"
+        );
+        assert_eq!(
+            harness
+                .world
+                .command(&harness.request(1))
+                .expect("幂等行")
+                .status(),
+            CommandStatus::Uncertain
+        );
+        // 收尾正文只含已落盘的那一段（缺块不伪造）。
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let completed = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "agent.message.completed")
+            .expect("已落盘 delta 的收尾");
+        let payload = block_on(view.event_payload(&completed.id))
+            .expect("payload")
+            .expect("存在");
+        assert!(
+            payload.view.as_str().contains("Hello") && !payload.view.as_str().contains("lost"),
+            "只收尾已落盘的段落：{}",
+            payload.view.as_str()
+        );
     }
 
     fn harvest_published_types(harness: &Harness) -> Vec<String> {

@@ -793,6 +793,9 @@ pub trait IdGenerator: Send + Sync {
 7. `[决定]` 权限仲裁：`resolve_interaction` 的 first-writer-wins；`interaction.already_resolved` 之后到达的应答必须被拒绝且不覆盖既有结果。
 8. `[决定]` 模型/配置切换只在 turn 边界生效；非终态 turn 期间的 `set_mode`/`set_config` 排队到边界或返回 `state.version_conflict`。
 9. `[决定]` 磁盘写失败：`commit` 返回 `PortError::Unavailable` → 命令显式失败或 `uncertain`；**不得**发布对应事件（`SECURITY_DESIGN.md` §15）。
+    - **非终态批次失败不得只丢弃**（`node-link-owner` 的 WP7 修复轮次 RV1-WP7-F3）：失败批次携带在跑 turn 的事件时，broker 必须用一次提交把该 turn 终结为 `failed`、把命令置为 `uncertain`，并把该 turn **已落盘** delta 的 `agent.message.completed`（第 14 条）与它们同批提交——缺的那一块不伪造。
+    - 被终结的 turn 进入「已放弃」集合：它后续到达的事件（含终态）不再提交，因此库里不会出现「报完成但正文缺失」的记录；适配器不带 turn 标识时，无在跑 turn 的迟到事件按最后被放弃的 turn 归属（归属集合见第 19 条的 `turnId` 集合），而不是被记到下一个 turn 上。
+    - 该路径不压缩已落盘的 delta（第 15 条是可选动作），也不向调用方冒泡错误（与带终态的批次失败时的既有口径一致）：可观测信号就是上面两条持久事件（core 不含日志依赖，`AGENTS.md` §7）；失败批次没有在跑 turn 可归属时（例如会话级事件）仍然只有「不发布」这一个效果，没有命令可终结。
 10. `[决定]` `storage.flush_interval_ms = 250` 允许把同一会话短窗口内的 delta 合并为一次 `commit`；合并不得改变顺序、不得跨 turn 边界、不得延迟终态事件。
 11. `[决定]` `OwnedCommit.events` 只接受 `StoredPolicy`；`Ephemeral` 由 broker 在组装前过滤（内存转发），`commit` 收到 `Ephemeral` 视为 `InvalidRequest`（类型上已不可表达）。
 12. `[决定]` 快照与重放必须来自 `SessionStore::read_view()` 返回的同一读视图，`sync.snapshot_begin`/`sync.snapshot_end` 与之后的事件游标都以该视图的 `head()` 为 barrier（`SYNC_PROTOCOL.md` §9.3/§9.4）。

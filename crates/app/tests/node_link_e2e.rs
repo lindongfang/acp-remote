@@ -513,9 +513,10 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
 
         // ⑨ R61：broker 提交失败时连接上不出现对应的 `resource.event`（故障注入）。
         //
-        // 注入点只让「带 marker 的那一批」失败（＝ agent.message.delta 那批），§6.9 规定失败批次一律不发布；
-        // turn 终态属于**另一批**（§6.10 按终态切批），因此它照常落盘与广播——这正好把「失败的那一批
-        // 没有泄漏到连接上」与「终态不受拖累」两件事一起钉住。
+        // 注入点只让「带 marker 的那一批」失败（＝ agent.message.delta 那批），§6.9 规定失败批次一律不发布。
+        // 该批属于**在跑的** turn，因此 §6 第 9 条（RV1-WP7-F3）之后：同一个 turn 的终态批也不得照常
+        // 落盘——broker 把该 turn 终结为 `turn.failed`、把命令置为 `uncertain`（正文缺块的 turn 不报完成），
+        // 迟到的事件与终态被丢弃（而不是被记到下一个 turn 上）。
         let fault_marker = "marker-fault-9c11";
         let fault_request = support::nodelink::uuid_text();
         client.step("faulted prompt");
@@ -557,18 +558,24 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
                 .any(|message| message["body"]["eventType"] == json!("agent.message.delta")),
             "失败的 delta 批次不得有任何一条到达：{after_fault:?}"
         );
-        let completed = after_fault
+        let failed_turn = after_fault
             .iter()
-            .find(|message| message["body"]["eventType"] == json!("turn.completed"))
+            .find(|message| message["body"]["eventType"] == json!("turn.failed"))
             .cloned()
-            .unwrap_or_else(|| panic!("终态批次与 delta 批次相互独立：{after_fault:?}"));
+            .unwrap_or_else(|| panic!("正文缺块的 turn 必须显式失败：{after_fault:?}"));
         assert_eq!(
-            completed["body"]["sessionRef"]["sessionId"],
+            failed_turn["body"]["sessionRef"]["sessionId"],
             json!(session_id)
         );
-        // 登记的已知残余（不修）：delta 批次写失败时同一个 turn 的终态仍会落盘，因此客户端会看到
-        // 「turn 完成但没有正文」，且该 requestId 的终态是 completed 而非 uncertain（§6.9 的 uncertain
-        // 只覆盖带终态的那一批）。RV1-WP5 残余①的相邻面 + RV2-WP6 残余⑤。
+        // 同一个 turn 不得再出现 `turn.completed`（本连接上还有前面正常轮次的事件，因此按 turnId 比对）。
+        let abandoned_turn = failed_turn["body"]["payload"]["view"]["turnId"].clone();
+        assert!(
+            !after_fault.iter().any(|message| {
+                message["body"]["payload"]["view"]["turnId"] == abandoned_turn
+                    && message["body"]["eventType"] == json!("turn.completed")
+            }),
+            "正文缺块的 turn 不得以 completed 收尾：{after_fault:?}"
+        );
         // 终态可能已经被上面那 500 ms 收走（观察循环 250 ms 一跳），两条路径都接受。
         let terminal = match after_fault
             .iter()
@@ -580,8 +587,13 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         assert_eq!(terminal["body"]["requestId"], json!(fault_request));
         assert_eq!(
             terminal["body"]["terminal"]["status"],
-            json!("completed"),
-            "终态批次独立落盘（上面注释里的已知残余）：{terminal}"
+            json!("uncertain"),
+            "正文缺块的命令不能报 completed：{terminal}"
+        );
+        assert_eq!(
+            terminal["body"]["terminal"]["error"]["code"],
+            json!("nodelink.command.uncertain"),
+            "{terminal}"
         );
 
         // ⑩ export.revoke：受影响连接收到 export.revoked，之后的命令被拒。
