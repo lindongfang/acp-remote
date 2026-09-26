@@ -99,7 +99,14 @@
 
 ## Candidate E2E
 
-NOT_APPLICABLE：模式、理由、依据与降级批准见 `plan.md` 的 Main E2E 节；替代检查为 PV1/PV2。
+NOT_APPLICABLE：模式、理由、依据与降级批准见 `plan.md` 的 Main E2E 节；替代检查为 PV1/PV2（候选轮已 PASS，见 6.3）。
+
+### 7.1/7.2 替代验证与资源核实（2026-09-26，主 Agent，main = `25acb00`）
+
+- 替代检查证据可读性：`reports/candidate-pv1-verify.log`、`reports/stress-runs.log`、`reports/main-verify.log`
+  均可读；候选轮 PV1 PASS、PV2 三连跑全绿（复用依据 = blob 一致）；main 回归 PV1 PASS 且跑前跑后 `acpr-*` 均为 0。
+- 资源清理：系统临时目录 `acpr-*` = 0；`git worktree list` = 1；无遗留 cargo/rustc/acp-remote 进程；
+  仓库外三份备份已随本节记录提交后删除。
 
 ## Main E2E
 

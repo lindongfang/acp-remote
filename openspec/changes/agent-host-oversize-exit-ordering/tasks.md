@@ -36,8 +36,8 @@
 
 ## 7. Final E2E
 
-- [ ] 7.1 DU1；主 Agent。not-applicable 替代验证清单核对：PV1/PV2 证据路径可读，`reports/stress-runs.log` 的三连跑记录完整可复现。完成条件：核对结论写入 `verification.md`。
-- [ ] 7.2 DU1；主 Agent。资源清理核实：无本次新增 `acpr-*` 残留、无遗留测试进程与多余 worktree。完成条件：清理结果写入 `verification.md`。
+- [x] 7.1 DU1；主 Agent。not-applicable 替代验证清单核对：PV1/PV2 证据路径可读，`reports/stress-runs.log` 的三连跑记录完整可复现。完成条件：核对结论写入 `verification.md`。
+- [x] 7.2 DU1；主 Agent。资源清理核实：无本次新增 `acpr-*` 残留、无遗留测试进程与多余 worktree。完成条件：清理结果写入 `verification.md`。
 - [ ] 7.3 [e2e-owned] 全变更；前置：7.2；扩展（openspec-agentic）。运行 `npx --quiet --no-install openspec-agentic e2e check --change agent-host-oversize-exit-ordering`，确认「不适用判据已按计划固化」（降级批准可追溯、替代检查清单齐备）。完成条件：由该检查在 PASS 时自动勾选本行、非 PASS 时自动回退；主 Agent 不得手勾或手动回退。本行只检查门禁，不执行测试、不汇总结果。
 
 ## 8. Final Verification
