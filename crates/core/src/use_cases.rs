@@ -63,6 +63,24 @@ pub struct PairingChannelView {
     pub node: Option<NodeRecord>,
 }
 
+/// Node Link 握手准入的只读视图（`design.md` D3；`IDENTITY_AND_AUTH_CONTRACT.md` §5.1 的 `PeerTrust` 与
+/// `ChallengeRequest` 所需的持久事实）。
+///
+/// 四个字段都是握手本次调用需要且只需要的持久事实：该对端的 `access` 信任行（凭据状态与 grant）、
+/// 已绑定的验签公钥、最近一次配对（登记方宣告的 `host_binding` 与是否待消费）、本机全局水位
+/// （`serverEpoch` 与 `catalogRevision` 的来源）。不含任何秘密材料：pairing secret 只在状态机内存。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkHandshakeView {
+    /// 该对端的 `access` 角色行；未配对/未批准时为 `None`（未知节点照常签发挑战）。
+    pub node: Option<NodeRecord>,
+    /// 已绑定的身份材料（验签公钥的唯一来源）；未知节点为 `None`。
+    pub public_key: Option<PeerPublicKey>,
+    /// 该对端最近一次配对；`None` = 该对端从未配对。
+    pub pairing: Option<PairingRecord>,
+    /// 本机全局水位（`store.head()`）：`serverEpoch` 与 catalogue revision 的来源。
+    pub head: GlobalCursor,
+}
+
 /// §4 的用例面实现。组合根持有一个 `Arc<UseCases>`。
 pub struct UseCases {
     broker: Arc<Broker>,
@@ -642,6 +660,75 @@ impl UseCases {
             .await
     }
 
+    /// Node Link 握手准入的**未认证**只读入口（`design.md` D3；合同扩展见 §10 的 2026-09-26 裁定条目）。
+    ///
+    /// 这是用例面唯一没有 `actor` 的入口：握手完成前不存在已验证主体——`node.hello` 里的
+    /// `accessNodeId` 只是**待验证的自报身份**（`NODE_LINK_PROTOCOL.md` §12.2 的第 1 步）。授权面因此
+    /// 收窄到「单个自报 node id」：
+    ///
+    /// - 只读该 id 自己的 `access` 信任行、身份材料、最近一次配对与本机水位，不返回任何别的节点、设备、
+    ///   Export 的事实，也不返回秘密材料；
+    /// - 未知 id 返回**空视图**（`node`/`public_key`/`pairing` 都是 `None`）而不是错误：调用方照常签发
+    ///   挑战，对端可见的失败映射发生在 proof 阶段（§12.2「不得用错误区分节点是否存在」）；
+    /// - 零写入、不产生审计；撤销由调用方按 `node.state()` 自行判定（§5.1：`Revoked`/`Unknown` 不是
+    ///   握手失败，而是凭据状态）。
+    pub async fn node_link_handshake_view(
+        &self,
+        access_node: &NodeId,
+    ) -> Result<NodeLinkHandshakeView, PortError> {
+        let peer = PeerIdentity::Node(access_node.clone());
+        let node = self.trust.node(access_node, NodeKind::Access).await?;
+        let public_key = self.trust.peer_key(&peer).await?;
+        let pairing = self.trust.pairing_for(&peer).await?;
+        let head = self.store.head().await?;
+        Ok(NodeLinkHandshakeView {
+            node,
+            public_key,
+            pairing,
+            head,
+        })
+    }
+
+    /// Node Link 握手的审计留痕（`SECURITY_DESIGN.md` §14.2 的 `node.authenticated`/`node.auth_failed`）。
+    ///
+    /// 只接受这两个动作（其余一律 `authorization.scope_denied`）：握手是安全动作、成败都要留痕，但这个
+    /// 入口不是通用审计写面。归因一律按 Node Link 对端——`actor` 与 `via_node` 都是该对端 id，
+    /// `target = Node(对端)`，`localPrincipalRef` 为 `None`（节点级信任模型，§8.3），`detailDigest` 为空
+    /// （握手的细分失败原因只在结构化日志里，不进审计行）。
+    ///
+    /// 首次认证成功（已批准配对 → `consumed`）的 `node.authenticated` 由
+    /// [`UseCases::consume_pairing`] 的写集提交，适配器**不要**再补一条；本入口服务「重复认证成功」与
+    /// 「认证失败」这两类没有写集的留痕。
+    pub async fn record_node_link_auth(
+        &self,
+        access_node: &NodeId,
+        action: AuditAction,
+        outcome: AuditOutcome,
+    ) -> Result<(), PortError> {
+        if !matches!(
+            action,
+            AuditAction::NodeAuthenticated | AuditAction::NodeAuthFailed
+        ) {
+            return Err(PortError::InvalidRequest("authorization.scope_denied"));
+        }
+        let at = self.clock.now();
+        let record = AuditRecord::try_new(
+            at,
+            action,
+            Actor::Node {
+                node: access_node.clone(),
+                access_node: access_node.clone(),
+            },
+            Some(access_node.clone()),
+            None,
+            EntityRef::Node(access_node.clone()),
+            outcome,
+            None,
+        )
+        .map_err(PortError::from)?;
+        self.audit.append(record).await
+    }
+
     /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
     ///
     /// 与 [`UseCases::claim_pairing`]/[`UseCases::pairing`] 同一套访问规则：本机入口，或绑定该配对的
@@ -1014,6 +1101,13 @@ impl UseCases {
     /// （[`RemoteDeliveryStore::drop_import`]）仍由接入层直接调用——两者不是同一件事（§11.6）。
     pub fn deliveries(&self) -> &Arc<dyn RemoteDeliveryStore> {
         &self.deliveries
+    }
+
+    /// id 分配器：入站适配器需要为**非命令**的标识取值（例如 Node Link 每条消息的 `messageId`、
+    /// `session.create` 会话 id 之外的说明性标识）时经它分配，保持「id 分配收敛到两处权威」（§3.1）。
+    /// 它不参与授权，也不暴露任何持久事实。
+    pub fn ids(&self) -> &Arc<dyn IdGenerator> {
+        &self.ids
     }
 
     pub async fn audit(
@@ -2028,6 +2122,137 @@ mod tests {
             .lock()
             .expect("lock")
             .push((pairing.clone(), peer));
+    }
+
+    /// design D3 / 任务 2.28：Node Link 握手准入的只读视图绑定到单个自报 `accessNodeId`——已知节点带回信任行、
+    /// 身份材料、最近一次配对与本机水位；未知节点得到空视图（不是错误）；全过程零写入。
+    #[test]
+    fn node_link_handshake_view_is_bound_to_one_reported_node_id() {
+        let fixture = fixture();
+        let node_id = NodeId::new(&uuid_text(101)).expect("node");
+        let pairing = PairingId::new(&uuid_text(102)).expect("pairing");
+        seed_pairing(
+            &fixture.world,
+            &pairing,
+            PairingTarget::Node,
+            PairingState::Approved,
+            peer(PeerIdentity::Node(node_id.clone())),
+        );
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node_id,
+            NodeKind::Access,
+            NodeState::Paired,
+        ));
+        let key = crate::model::test_peer_public_key();
+        fixture
+            .world
+            .keys
+            .lock()
+            .expect("lock")
+            .push((PeerIdentity::Node(node_id.clone()), key.clone()));
+
+        let view =
+            block_on(fixture.use_cases.node_link_handshake_view(&node_id)).expect("handshake view");
+        let node = view
+            .node
+            .as_ref()
+            .expect("已配对的 access 节点必须带回信任行");
+        assert_eq!(node.kind(), NodeKind::Access);
+        assert_eq!(node.state(), NodeState::Paired);
+        assert_eq!(view.public_key, Some(key), "验签公钥只能来自持久化信任");
+        assert_eq!(
+            view.pairing.as_ref().map(PairingRecord::id),
+            Some(&pairing),
+            "待消费配对与登记方宣告的 host_binding 都来自最近一次配对行"
+        );
+        assert_eq!(
+            view.head,
+            crate::broker::test_support::head_cursor(0),
+            "本机水位来自 store.head()"
+        );
+
+        // 未知节点：空视图，不是错误（调用方照常签发挑战，失败映射在 proof 阶段）。
+        let unknown = NodeId::new(&uuid_text(103)).expect("node");
+        let empty = block_on(fixture.use_cases.node_link_handshake_view(&unknown))
+            .expect("未知节点不能报错");
+        assert!(empty.node.is_none() && empty.public_key.is_none() && empty.pairing.is_none());
+
+        // 只有 owner 角色行、没有 access 行时同样按未知处理（禁止「找不到就取第一行」）。
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node_id,
+            NodeKind::Owner,
+            NodeState::Paired,
+        ));
+        let owner_only =
+            block_on(fixture.use_cases.node_link_handshake_view(&node_id)).expect("view");
+        assert_eq!(
+            owner_only.node.as_ref().map(NodeRecord::kind),
+            Some(NodeKind::Access),
+            "同一 nodeId 的 owner 行不得被当成 access 行"
+        );
+
+        assert!(
+            fixture.world.write_audits.lock().expect("lock").is_empty()
+                && fixture.world.audits.lock().expect("lock").is_empty(),
+            "握手准入读取零写入、无审计"
+        );
+    }
+
+    /// 任务 2.28：握手审计入口只追加 `node.authenticated`/`node.auth_failed`，归因与目标都是该对端；
+    /// 其它动作一律 `authorization.scope_denied` 且不写任何行。
+    #[test]
+    fn node_link_auth_audit_is_narrow() {
+        let fixture = fixture();
+        let node = NodeId::new(&uuid_text(111)).expect("node");
+        for (action, outcome) in [
+            (AuditAction::NodeAuthenticated, AuditOutcome::Success),
+            (AuditAction::NodeAuthFailed, AuditOutcome::Failed),
+        ] {
+            block_on(
+                fixture
+                    .use_cases
+                    .record_node_link_auth(&node, action, outcome),
+            )
+            .expect("握手两个动作必须可写");
+        }
+        let written = fixture.world.audits.lock().expect("lock").clone();
+        assert_eq!(
+            written.iter().map(AuditRecord::action).collect::<Vec<_>>(),
+            vec![AuditAction::NodeAuthenticated, AuditAction::NodeAuthFailed]
+        );
+        let record = &written[1];
+        assert_eq!(
+            record.actor(),
+            &Actor::Node {
+                node: node.clone(),
+                access_node: node.clone()
+            },
+            "归因按本次连接声明的对端"
+        );
+        assert_eq!(record.via_node(), Some(&node));
+        assert_eq!(
+            *record.target(),
+            crate::model::EntityRef::Node(node.clone())
+        );
+        assert_eq!(record.outcome(), AuditOutcome::Failed);
+        assert_eq!(
+            record.local_principal_ref(),
+            None,
+            "节点级信任模型下为 None"
+        );
+
+        let before = written.len();
+        let error = block_on(fixture.use_cases.record_node_link_auth(
+            &node,
+            AuditAction::NodeTrustRevoked,
+            AuditOutcome::Denied,
+        ))
+        .expect_err("其它动作不得经本入口写入");
+        assert!(matches!(
+            &error,
+            PortError::InvalidRequest(code) if *code == "authorization.scope_denied"
+        ));
+        assert_eq!(fixture.world.audits.lock().expect("lock").len(), before);
     }
 
     /// design D12：claim/status 在 `LocalCli` 之外只接受**绑定该配对**的 `Actor::PairingClaimant`；

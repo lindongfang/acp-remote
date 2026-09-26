@@ -199,10 +199,18 @@ pub enum UnavailableKind {
 | `ExportManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 的 `export.*`/`import.*` 写方法 | 同上 |
 | `RemoteCatalogQueries` | 见 §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
 | `PairingChannel` | `claim_pairing(actor, PairingClaim) -> PairingClaimOutcome`、`pairing(actor, PairingId) -> Option<PairingRecord>`、`pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`、`consume_pairing(actor, PairingId) -> PairingRecord` | `server::node_link`（及未来 `server::sync`）；前两项另由 `server::local_admin` 以 `Actor::LocalCli` 调用 |
+| `NodeLinkHandshake` | `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`、`record_node_link_auth(accessNodeId, AuditAction, AuditOutcome) -> ()` | `server::node_link`（及未来 `server::sync` 的同形入口） |
 
 `[决定]` 配对通道的 actor 规则（design D12）：`claim_pairing`/`pairing`/`pairing_channel_view` 在 `Actor::LocalCli` 之外**只**接受 `Actor::PairingClaimant`，且 `actor.pairing` 必须等于本次调用的目标配对，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绝形状，不区分「不是本机入口」与「绑定了别的配对」）；`consume_pairing` **只**接受与该配对已批准对端一致的 `Actor::Node`/`Actor::Device`，把 `approved` 推进到 `consumed`（`terminal_at` + 审计同一写集），已是 `consumed` 且对端一致时幂等成功（不覆盖首次 `terminal_at`，也不重复写审计）。
 
 `[决定]`（2026-09-26，seam 补全）`pairing_channel_view` 是配对 HTTP 端点的**唯一**只读入口：它一次带回记录、已认领的对端行与已批准后的对端节点行（`grant.*` 的唯一来源，`PairingRecord` 不带 `granted_*`），不含任何写入，也不返回秘密材料（pairing secret 只在状态机内存）。认领路径允许在 proof 校验**之前**读取（端点必须先拿到记录才能校验 HMAC），但状态推进仍只能经 `claim_pairing` 的写集、且只在 proof 通过后提交；拒绝仍收集在同一类 `authorization.scope_denied`。入口绑定式读取（claimant 只能读自己那个配对的三类行）是硬约束：不允许放开为通用只读。
+
+`[决定]`（2026-09-26，WSS 握手 seam 补全；同一方向的第二次补全）`NodeLinkHandshake` 是 WSS 握手准入的两条窄入口，服务 `design.md` D3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1：
+
+- `node_link_handshake_view(access_node)`：用例面**唯一**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor }`：四项都是握手本次调用需要且只需要的持久事实，`head` 同时是 `serverEpoch` 与 catalogue revision 的来源。
+- `record_node_link_auth(access_node, action, outcome)`：只接受 `node.authenticated`/`node.auth_failed`（其余 → `authorization.scope_denied`），归因 `actor`/`via_node` 都是该对端 id、`target = Node(对端)`、`localPrincipalRef` 为 `None`（§8.3 节点级信任）。首次认证成功（已批准配对 → `consumed`）的那条 `node.authenticated` 由 `consume_pairing` 的写集提交，适配器不得再补一条。
+
+两条入口都不放宽既有 `LocalCli` 路径的行为，也不新增任何对端可见的能力。
 
 ## 5. `core::ports` 出站端口
 
@@ -549,6 +557,13 @@ pub trait TrustStore: Send + Sync {
 
     /// 已认领的对端行（确认事务从它读回公钥，§11.5）。
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;
+
+    /// 该对端**最近一次**配对（`design.md` D3：Node Link 握手准入手里的绑定与待消费配对来源）。
+    ///
+    /// 配对行本身是「登记方宣告的 `host_binding`」的唯一权威（`PairingRecord`，§11.2 第 1 条），
+    /// 而节点信任行不带该列；同一对端先后可能有多条配对行，因此这里按 `created_at`、`pairing_id`
+    /// 降序取一条，结果确定（同一次读取的输入决定同一次读取的输出）。没有任何配对行时返回 `None`。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError>;
 
     async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError>;
 
@@ -1328,6 +1343,7 @@ CREATE TABLE imported_import_export (
 - `[已裁定]`（2026-09-23）首切片 workspace template 必须零参数（`NODE_LINK_PROTOCOL.md` §10）；有参 template 属 `post_mvp`，启用前必须定义值的来源与用途。
 - `[已裁定]`（2026-09-26）配对通道的 actor 与用例面扩展（design D12，用户裁定方案 A）：`core::model` 新增 `Actor::PairingClaimant { pairing: PairingId }`（`ActorKind::PairingClaimant` = `'pairing_claimant'`）与两个节点审计动作；`claim_pairing`/`pairing` 另接受绑定该配对的认领方，新增 `consume_pairing(actor, PairingId)` 与 `TrustStore::consume_pairing`（`PairingConsumption`）；存储走 **v2 → v3** 迁移（两张审计表的 `actor_kind`/`action` CHECK 扩宽，12-step 表重建），`owned_command` 不动——`pairing_claimant` 永不可提交命令。涉及 §3.5/§4/§5.3/§7.2/§7.3/§7.4 与 `SECURITY_DESIGN.md` §14.2、`IDENTITY_AND_AUTH_CONTRACT.md` §5.1，漂移门禁随动。
 - `[已裁定]`（2026-09-26）D12 的 seam 补全（用户裁定 A 的实现细化，不改变方向）：§4 新增只读入口 `pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`（记录 + 已认领对端行 + 已批准后的对端 `access` 节点行，绑定式读取、零写入）；`identity-auth` 新增 `Authority::verify_node_link_pairing_status`（用本机内存里的 pairing secret 校验 `node-link-pairing-status/v1` 的 HMAC）与 `Authority::pairing_request_material`（返回 claim 响应与 Owner 证明需要的**非秘密** `serverNonce`/`pairingRequestId`，与 secret 同生同灭）；claim 路径的读取顺序与拒绝口径写在 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1。
+- `[已裁定]`（2026-09-26）WSS 握手 seam 补全（`node-link-owner` 的 WP4/任务 2.28，主 Agent 裁定方案 A，与 D12 同方向）：§4 新增 `NodeLinkHandshake` 两项——只读入口 `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`（用例面唯一无 `actor` 的入口：按单个自报 node id 返回该节点的 `access` 信任行、已绑定验签公钥、最近一次配对与本机水位 `store.head()`；未知 id 返回空视图而不是错误，零写入、零审计）与窄写入口 `record_node_link_auth(accessNodeId, action, outcome)`（只接受 `node.authenticated`/`node.auth_failed`，其余 → `authorization.scope_denied`）；§5.3 新增 `TrustStore::pairing_for(peer) -> Option<PairingRecord>`（该对端最近一次配对：登记方宣告的 `host_binding` 与「待消费配对」的唯一来源——节点信任行不带绑定列）。既有 `LocalCli` 路径的行为不变，不新增对端可见能力；`identity-auth` 的 `HandshakeFailure::audit()` 对 NodeLink 从 `None` 改为 `Some(node.auth_failed)`（原注释所称的「词表缺口」已由上述两个动作补上）。
 - `[已裁定]`（2026-09-23）`identity-keystore` 的 Windows 第一档位与 Linux 失败关闭：Windows 用 DPAPI（当前用户）包裹私钥 + 进程内签名，Linux 维持失败关闭；持久化 fallback、CNG/TPM 不可导出档位均需单独 ADR，wrapper 选型与 MSRV 约束见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20。实现前合同见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7/§9。
 - `[open]` 未来加密离线正文缓存（必须新 feature + Owner 明示授权 + ADR；本合同不预留任何静默开关）。
 

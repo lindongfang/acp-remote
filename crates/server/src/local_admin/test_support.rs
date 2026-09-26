@@ -802,7 +802,6 @@ impl AgentCatalog for FakeCatalog {
 
 /// 未被本轮路由触及的端口实现：所有方法都 `unreachable!`，用作 `UseCases`/`Broker` 的占位依赖。
 pub(crate) struct NotTouched;
-
 #[async_trait::async_trait]
 impl SessionStore for NotTouched {
     async fn commit(&self, _commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
@@ -926,6 +925,87 @@ impl RemoteDeliveryStore for NotTouched {
     }
 }
 
+/// 「只有水位是真的」存储替身：`head()` 返回构造时给定的固定水位，其余方法仍不触及。
+///
+/// Node Link 握手视图（`UseCases::node_link_handshake_view`）是本仓库唯一会读 `head()` 的无副作用入口，
+/// 用例需要它给 `node.ready.catalogRevision`/`serverEpoch` 一个**可判定**的值（不是常量、不依赖时钟）。
+/// 除 `head()` 外的方法保持 `unreachable!`，以免替身比真实存储更宽容。
+#[derive(Clone)]
+pub(crate) struct FixedStore {
+    head: GlobalCursor,
+}
+
+impl FixedStore {
+    pub(crate) fn new(server_epoch: &str, global_sequence: u64) -> Self {
+        Self {
+            head: GlobalCursor::new(
+                ServerEpoch::new(server_epoch).expect("固定 epoch 合法"),
+                Sequence::new(global_sequence).expect("固定水位合法"),
+            ),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for FixedStore {
+    async fn commit(&self, _commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn load(&self, _session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn list(&self, _query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn head(&self) -> Result<GlobalCursor, PortError> {
+        Ok(self.head.clone())
+    }
+
+    async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn find_request(
+        &self,
+        _request: &RequestId,
+        _actor: &Actor,
+    ) -> Result<Option<CommandRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn unsettled_commands(
+        &self,
+        _limit: ReplayLimit,
+    ) -> Result<Vec<CommandRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn retention_window(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<(Sequence, Sequence)>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn prune(
+        &self,
+        _policy: RetentionPolicy,
+        _at: Timestamp,
+    ) -> Result<PruneReport, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn health(&self) -> Result<StoreHealth, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+}
+
+/// `FixedStore` 的水位 epoch（与 `TEST_PUBLIC_ORIGIN` 同一套固定素材）。
+pub(crate) const TEST_SERVER_EPOCH: &str = "018f6f89-8a23-7a10-a0d3-f92e6a31d952";
+
 #[async_trait::async_trait]
 impl SessionBackendFactory for NotTouched {
     async fn create(
@@ -1023,6 +1103,10 @@ impl TrustStore for NotTouched {
         unreachable!("{NOT_TOUCHED}")
     }
 
+    async fn pairing_for(&self, _peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
     async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
@@ -1069,31 +1153,45 @@ impl TrustStore for NotTouched {
     }
 }
 
-pub(crate) struct FakeIds;
+/// 确定性 id 生成器：单调递增的规范 uuid 文本（与 core 内部测试的 `TestIds` 同款）。
+///
+/// 它是端口替身里唯一**必须能用**的生成器：Node Link 的每条出站消息都要一个 `messageId`
+/// （`UseCases::ids()`），而 id 对调用方是不透明值，用例只要求「唯一且形状规范」。
+#[derive(Default)]
+pub(crate) struct FakeIds {
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl FakeIds {
+    fn next_text(&self) -> String {
+        let value = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        format!("00000000-0000-4000-8000-{value:012x}")
+    }
+}
 
 impl IdGenerator for FakeIds {
     fn turn_id(&self) -> TurnId {
-        unreachable!("{NOT_TOUCHED}")
+        TurnId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn interaction_id(&self) -> InteractionId {
-        unreachable!("{NOT_TOUCHED}")
+        InteractionId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn pairing_id(&self) -> PairingId {
-        unreachable!("{NOT_TOUCHED}")
+        PairingId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn message_id(&self) -> MessageId {
-        unreachable!("{NOT_TOUCHED}")
+        MessageId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn origin_epoch(&self) -> OriginEpoch {
-        unreachable!("{NOT_TOUCHED}")
+        OriginEpoch::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn request_id(&self) -> RequestId {
-        unreachable!("{NOT_TOUCHED}")
+        RequestId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 }
 
@@ -1151,6 +1249,14 @@ impl FakeTrust {
 
     pub(crate) fn pairing_count(&self) -> usize {
         self.pairings.lock().expect("信任锁").len()
+    }
+
+    /// 由信任写集提交的审计行（`consume_pairing`/`settle_pairing`/撤销等同事务写入）。
+    ///
+    /// 真实存储把这些行写进同一张审计表，因此读取入口是 `AuditStore::query`；替身把两张表分开，
+    /// 这里给出等价视图，免得用例漏看写集里的留痕。
+    pub(crate) fn audits(&self) -> Vec<AuditRecord> {
+        self.audits.lock().expect("信任锁").clone()
     }
 
     /// 让下一次落定失败（用于覆盖「写集提交失败 → 不得产生内存已批准、库无信任」）。
@@ -1239,6 +1345,19 @@ impl TrustStore for FakeTrust {
 
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
         Ok(self.peers.lock().expect("信任锁").get(id.as_str()).cloned())
+    }
+
+    /// 该对端最近一次配对：替身按 `pairings` 的登记顺序取最后一条匹配（真实实现按
+    /// `created_at`/`pairing_id` 降序，两者都只服务「最近一次」这一个语义）。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError> {
+        let pairings = self.pairings.lock().expect("信任锁");
+        let peers = self.peers.lock().expect("信任锁");
+        let matched: Vec<PairingRecord> = peers
+            .iter()
+            .filter(|(_, row)| row.id() == peer)
+            .filter_map(|(pairing_id, _)| pairings.get(pairing_id).cloned())
+            .collect();
+        Ok(matched.into_iter().last())
     }
 
     async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
@@ -1600,6 +1719,12 @@ impl FakeTrust {
             ),
             record,
         );
+        // 与存储层同款（§11.6 第 4 条）：批准把对端公钥从 `owned_pairing_peer` 转入 `owned_peer_key`，
+        // 它是握手验签材料的**唯一**来源（`IDENTITY_AND_AUTH_CONTRACT.md` §5.1），既有行允许沿用。
+        self.keys.lock().expect("信任锁").insert(
+            (peer.id().kind().to_owned(), peer.id().id_text().to_owned()),
+            peer.public_key().clone(),
+        );
     }
 }
 
@@ -1803,6 +1928,15 @@ impl TestWorld {
 
     /// 显式控制 `daemon.public_origin`（`None` 覆盖「未配置 → 配对方法失败关闭」的分支）。
     pub(crate) fn with_public_origin(origin: Option<&str>) -> Self {
+        Self::build(origin, store_arc())
+    }
+
+    /// 用带固定水位的存储替身装配（Node Link 握手视图读 `head()` 的用例）。
+    pub(crate) fn with_store(store: Arc<dyn SessionStore>) -> Self {
+        Self::build(Some(TEST_PUBLIC_ORIGIN), store)
+    }
+
+    fn build(origin: Option<&str>, store: Arc<dyn SessionStore>) -> Self {
         let clock = FakeClock::new();
         let keystore = FakeKeystore::default();
         let trust = FakeTrust::default();
@@ -1818,7 +1952,7 @@ impl TestWorld {
         ));
         let core = Arc::new(Self::assemble_use_cases(
             &clock,
-            &store_arc(),
+            &store,
             &deliveries_arc(),
             &exports,
             &audit,
@@ -1864,7 +1998,7 @@ impl TestWorld {
                 exports: exports.clone(),
                 publisher: Arc::new(NotTouched),
                 clock: clock.clone(),
-                ids: Arc::new(FakeIds),
+                ids: Arc::new(FakeIds::default()),
                 audit: Some(audit.clone()),
             },
             BrokerConfig::default(),
@@ -1883,7 +2017,7 @@ impl TestWorld {
                     .expect("agent ref"),
             ])),
             clock,
-            ids: Arc::new(FakeIds),
+            ids: Arc::new(FakeIds::default()),
         })
     }
 

@@ -777,6 +777,13 @@ pub trait TrustStore: Send + Sync {
     /// 已认领的对端行（确认事务从它读回公钥，§11.5）。
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;
 
+    /// 该对端**最近一次**配对（`design.md` D3：Node Link 握手准入手里的绑定与待消费配对来源）。
+    ///
+    /// 配对行本身是「登记方宣告的 `host_binding`」的唯一权威（`PairingRecord`，§11.2 第 1 条），
+    /// 而节点信任行不带该列；同一对端先后可能有多条配对行，因此这里按 `created_at`、`pairing_id`
+    /// 降序取一条，结果确定（同一次读取的输入决定同一次读取的输出）。没有任何配对行时返回 `None`。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError>;
+
     async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError>;
 
     async fn put_node(&self, write: NodeWrite) -> Result<(), PortError>;

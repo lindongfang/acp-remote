@@ -748,13 +748,13 @@ impl HandshakeFailure {
 
     /// §14.2 登记集合里对应的审计动作。
     ///
-    /// Sync 设备侧认证失败登记为 `device.auth_failed`；Node Link 侧在 v1 的审计词表里**没有**
-    /// 对应的动作（§14.2 只有 `node.paired`/`node.trust_revoked`/`node.identity_changed`），
-    /// 因此返回 `None` 而不借用设备侧动作——这是一个已知的文档缺口，不在这里自造取值。
+    /// 失败分类与服务端映射的分工：Sync 设备侧认证失败是 `device.auth_failed`，Node Link 侧是
+    /// `node.auth_failed`（两个动作于 2026-09-26 随 design D12 进入审计词表，落库列由存储的 v3 重建
+    /// 扩宽）。返回的是**动作**而非审计行：具体行由调用方按本次连接的对端身份组装并落库。
     pub fn audit(&self) -> Option<AuditAction> {
         match self.kind {
             ConnectionKind::SyncDevice => Some(AuditAction::DeviceAuthFailed),
-            ConnectionKind::NodeLink => None,
+            ConnectionKind::NodeLink => Some(AuditAction::NodeAuthFailed),
         }
     }
 }

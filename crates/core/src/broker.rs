@@ -3240,6 +3240,8 @@ pub(crate) mod test_support {
         pub(crate) pairings: Mutex<Vec<PairingRecord>>,
         /// 已认领的配对对端行（`consume_pairing` 的身份判定从它读；测试按需 seed，默认空）。
         pub(crate) peers: Mutex<Vec<(PairingId, PairingPeer)>>,
+        /// 已绑定的身份材料（`peer_key` 从它读；测试按需 seed，默认空）。
+        pub(crate) keys: Mutex<Vec<(PeerIdentity, PeerPublicKey)>>,
         /// 节点角色行（`add_import` 的 owner 前置校验从它读）。
         pub(crate) nodes: Mutex<Vec<NodeRecord>>,
         /// 目录里的可用 Agent（`put_export` 的前置校验从它读；默认空）。
@@ -4432,8 +4434,11 @@ pub(crate) mod test_support {
                 .collect())
         }
 
-        async fn peer_key(&self, _peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
-            Ok(None)
+        async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
+            Ok(lock(&self.world.keys)
+                .iter()
+                .find(|(identity, _)| identity == peer)
+                .map(|(_, key)| key.clone()))
         }
 
         async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
@@ -4448,6 +4453,27 @@ pub(crate) mod test_support {
                 .iter()
                 .find(|(pairing, _)| pairing == id)
                 .map(|(_, peer)| peer.clone()))
+        }
+
+        /// 该对端最近一次配对：替身按 `world.peers` 的登记顺序取最后一条匹配（真实实现按
+        /// `created_at`/`pairing_id` 降序，两者都只要「最近一次」这一个语义）。
+        async fn pairing_for(
+            &self,
+            peer: &PeerIdentity,
+        ) -> Result<Option<PairingRecord>, PortError> {
+            let peers = lock(&self.world.peers);
+            let pairings = lock(&self.world.pairings);
+            let matched: Vec<PairingRecord> = peers
+                .iter()
+                .filter(|(_, row)| row.id() == peer)
+                .filter_map(|(pairing, _)| {
+                    pairings
+                        .iter()
+                        .find(|record| record.id() == pairing)
+                        .cloned()
+                })
+                .collect();
+            Ok(matched.into_iter().last())
         }
 
         async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {

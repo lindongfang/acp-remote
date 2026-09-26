@@ -2,7 +2,7 @@
 //!
 //! 写集语义逐条对应 `docs/CORE_PORTS_AND_STORAGE.md` §11.6 的第 1–8 条；每条写路径都是一个
 //! `BEGIN IMMEDIATE` 事务，状态、集合字段与审计一次提交。读路径（`device`/`devices`/`node`/`nodes`/
-//! `nodes_for`/`peer_key`/`pairing`/`pairing_peer`）不写任何行。
+//! `nodes_for`/`peer_key`/`pairing`/`pairing_peer`/`pairing_for`）不写任何行。
 //!
 //! 配对的两条机器事实都来自**配对记录本身**，不需要在写集里额外携带：
 //!
@@ -384,6 +384,27 @@ impl TrustStore for SqliteStore {
                 .db()?;
         let binding = binding.ok_or(StorageError::Corrupt("peer row without its pairing row"))?;
         Ok(Some(pairing_peer_from_row(&row, &binding)?))
+    }
+
+    /// 该对端最近一次配对（`design.md` D3 的握手准入读取）。
+    ///
+    /// 配对表与对端表通过 `pairing_id` 关联：内层子查询按 `created_at`、`pairing_id` 降序取一条
+    /// （两个键都是定宽文本，字典序即时间序；`pairing_id` 作为同时刻的确定性 tie-break），外层仍用
+    /// `PAIRING_COLUMNS` 读同一个表，因此列名不会因 JOIN 而歧义。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError> {
+        let sql = format!(
+            "SELECT {PAIRING_COLUMNS} FROM owned_pairing WHERE pairing_id = (\
+             SELECT k.pairing_id FROM owned_pairing_peer k JOIN owned_pairing p \
+             ON p.pairing_id = k.pairing_id WHERE k.peer_kind = ?1 AND k.peer_id = ?2 \
+             ORDER BY p.created_at DESC, p.pairing_id DESC LIMIT 1)"
+        );
+        let row = sqlx::query(&sql)
+            .bind(peer.kind())
+            .bind(peer.id_text())
+            .fetch_optional(&self.pools().read)
+            .await
+            .db()?;
+        Ok(row.as_ref().map(pairing_from_row).transpose()?)
     }
 
     /// §11.6 第 1 条：同 ID 不得换绑公钥，也不得把 `revoked` 改回 `active`。
