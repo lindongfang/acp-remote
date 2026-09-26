@@ -760,12 +760,17 @@ impl UseCases {
         })
     }
 
-    /// Node Link 握手的审计留痕（`SECURITY_DESIGN.md` §14.2 的 `node.authenticated`/`node.auth_failed`）。
+    /// Node Link 的审计留痕（`SECURITY_DESIGN.md` §14.2 的 `node.authenticated`/`node.auth_failed`
+    /// 与 `authorization.denied`）。
     ///
-    /// 只接受这两个动作（其余一律 `authorization.scope_denied`）：握手是安全动作、成败都要留痕，但这个
-    /// 入口不是通用审计写面。归因一律按 Node Link 对端——`actor` 与 `via_node` 都是该对端 id，
-    /// `target = Node(对端)`，`localPrincipalRef` 为 `None`（节点级信任模型，§8.3），`detailDigest` 为空
-    /// （握手的细分失败原因只在结构化日志里，不进审计行）。
+    /// 只接受这三个动作（其余一律 `authorization.scope_denied`）：握手与授权拒绝都是安全动作、都要
+    /// 留痕，但这个入口不是通用审计写面。归因一律按 Node Link 对端——`actor` 与 `via_node` 都是该对端
+    /// id，`target = Node(对端)`，`localPrincipalRef` 为 `None`（节点级信任模型，§8.3），`detailDigest`
+    /// 为空（细分失败原因只在结构化日志里，不进审计行）。
+    ///
+    /// `authorization.denied` 服务 `server::node_link` 的命令管线：它的可见性/授权交集（Export grant
+    /// ∩ 信任记录 grant）比 `Broker::authorize` 的 Owner 侧判定更严，被它拒的命令不会到达 broker，
+    /// 因此拒绝留痕只能经本入口（`design.md` D8 第 2 步）。
     ///
     /// 首次认证成功（已批准配对 → `consumed`）的 `node.authenticated` 由
     /// [`UseCases::consume_pairing`] 的写集提交；重复认证成功（没有待消费配对）的留痕与
@@ -780,7 +785,9 @@ impl UseCases {
     ) -> Result<(), PortError> {
         if !matches!(
             action,
-            AuditAction::NodeAuthenticated | AuditAction::NodeAuthFailed
+            AuditAction::NodeAuthenticated
+                | AuditAction::NodeAuthFailed
+                | AuditAction::AuthorizationDenied
         ) {
             return Err(PortError::InvalidRequest("authorization.scope_denied"));
         }
@@ -1671,6 +1678,9 @@ mod tests {
                 exports: Arc::new(FakeExports {
                     world: world.clone(),
                 }),
+                trust: Arc::new(FakeTrust {
+                    world: world.clone(),
+                }),
                 publisher: Arc::new(TestPublisher {
                     world: world.clone(),
                 }),
@@ -2024,6 +2034,23 @@ mod tests {
             } else {
                 None
             },
+        )
+        .expect("node record")
+    }
+
+    /// 与 [`node_record`] 相同，但 grants 由调用方给出（Owner 侧授权的查询用例）。
+    fn paired_node(id: &NodeId, grants: &[&str]) -> NodeRecord {
+        NodeRecord::try_new(
+            id.clone(),
+            "office access",
+            NodeKind::Access,
+            crate::model::Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
+            crate::model::GrantSet::try_from_iter(grants.iter().copied()).expect("grants"),
+            NodeState::Paired,
+            None,
+            crate::broker::test_support::ts(0),
+            None,
+            None,
         )
         .expect("node record")
     }
@@ -2847,6 +2874,142 @@ mod tests {
             PortError::InvalidRequest(code) if *code == "authorization.scope_denied"
         ));
         assert_eq!(fixture.world.audits.lock().expect("lock").len(), before);
+
+        // WP6（任务 2.17）：适配层比 broker 更严的越权拒绝路径需要留痕，因此该入口也接受
+        // `authorization.denied`（仍不开口成通用审计写面）。
+        block_on(fixture.use_cases.record_node_link_auth(
+            &node,
+            AuditAction::AuthorizationDenied,
+            AuditOutcome::Denied,
+        ))
+        .expect("越权拒绝留痕必须可写");
+        let denied = fixture.world.audits.lock().expect("lock").clone();
+        assert_eq!(denied.len(), before + 1);
+        assert_eq!(denied[before].action(), AuditAction::AuthorizationDenied);
+        assert_eq!(denied[before].outcome(), AuditOutcome::Denied);
+        assert_eq!(denied[before].via_node(), Some(&node));
+    }
+
+    /// WP6（任务 2.17）：Owner 侧 `Actor::Node` 的**无会话命令**（`session.list`/`command.status`/
+    /// `session.create`）必须有可判定的授权路径——原先 `node_allowed` 在 `session = None` 时恒拒，
+    /// 这些命令在 Owner 侧永远不可用（§6 第 5 条的裁决）。
+    #[test]
+    fn owner_side_node_commands_without_a_session_use_the_trust_record_and_a_covering_export() {
+        let fixture = fixture();
+        let node = NodeId::new(&uuid_text(124)).expect("node");
+        let actor = Actor::Node {
+            node: node.clone(),
+            access_node: node.clone(),
+        };
+        // 信任行 grants 与 Export scopes 的交集只有 `grant.observe`：观察类命令可用，
+        // `grant.remote-work` 类命令不可用。
+        fixture
+            .world
+            .nodes
+            .lock()
+            .expect("lock")
+            .push(paired_node(&node, &["grant.observe"]));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-observe",
+                &["agent-1"],
+                &["grant.observe"],
+                false,
+            ));
+
+        // 无会话命令：已配对 + grants 含所需 grant + 存在覆盖该命令的 Export → 通过。
+        let summaries = block_on(fixture.use_cases.list_sessions(
+            &actor,
+            SessionQuery {
+                only: None,
+                states: Vec::new(),
+                limit: None,
+            },
+        ))
+        .expect("session.list 必须对 Owner 侧节点可用");
+        assert_eq!(
+            summaries.len(),
+            1,
+            "返回本机 owned 摘要（适配层再按可见 Export 过滤）"
+        );
+        assert!(
+            block_on(
+                fixture
+                    .use_cases
+                    .command_status(&actor, RequestId::new(&uuid_text(950)).expect("uuid"),)
+            )
+            .expect("command.status 必须对 Owner 侧节点可用")
+            .is_none(),
+            "未提交过的 requestId 没有记录"
+        );
+
+        // 信任记录 grants 不含该 grant → 拒绝（`grant.observe` 不在 remote-work 节点的 grants 里）。
+        let remote_work = NodeId::new(&uuid_text(125)).expect("node");
+        fixture
+            .world
+            .nodes
+            .lock()
+            .expect("lock")
+            .push(paired_node(&remote_work, &["grant.remote-work"]));
+        let error = block_on(fixture.use_cases.list_sessions(
+            &Actor::Node {
+                node: remote_work.clone(),
+                access_node: remote_work,
+            },
+            SessionQuery {
+                only: None,
+                states: Vec::new(),
+                limit: None,
+            },
+        ))
+        .expect_err("授予面不含该命令时失败关闭");
+        assert!(matches!(
+            error,
+            PortError::InvalidRequest(reason) if reason == "authorization.scope_denied"
+        ));
+
+        // 没有信任行 / 行已撤销 / 没有覆盖该命令的 Export：三种情况都失败关闭。
+        let unknown = NodeId::new(&uuid_text(126)).expect("node");
+        let revoked = NodeId::new(&uuid_text(127)).expect("node");
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &revoked,
+            NodeKind::Access,
+            NodeState::Revoked,
+        ));
+        for candidate in [unknown, revoked] {
+            assert!(
+                block_on(fixture.use_cases.list_sessions(
+                    &Actor::Node {
+                        node: candidate.clone(),
+                        access_node: candidate,
+                    },
+                    SessionQuery {
+                        only: None,
+                        states: Vec::new(),
+                        limit: None,
+                    },
+                ))
+                .is_err(),
+                "未知与已撤销的节点都不得通过"
+            );
+        }
+        fixture.world.exports.lock().expect("lock").clear();
+        assert!(
+            block_on(fixture.use_cases.list_sessions(
+                &actor,
+                SessionQuery {
+                    only: None,
+                    states: Vec::new(),
+                    limit: None,
+                },
+            ))
+            .is_err(),
+            "没有任何覆盖该命令的 Export 时失败关闭"
+        );
     }
 
     /// design D12：claim/status 在 `LocalCli` 之外只接受**绑定该配对**的 `Actor::PairingClaimant`；

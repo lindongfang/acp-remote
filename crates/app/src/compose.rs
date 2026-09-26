@@ -224,6 +224,7 @@ impl Composition {
                 deliveries: Arc::clone(&deliveries),
                 backends,
                 exports: Arc::clone(&export_store),
+                trust: Arc::clone(&trust_store),
                 publisher: Arc::new(LoggingPublisher),
                 clock: Arc::clone(&clock),
                 ids: Arc::clone(&ids),

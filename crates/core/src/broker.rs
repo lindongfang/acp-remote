@@ -31,11 +31,11 @@ use crate::model::{
     CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind, CreateSessionRequest, Digest,
     ElicitationAction, ElicitationValues, EndpointEvent, EntityRef, EventKind, EventOrigin,
     EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind, InteractionResolution,
-    LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, OriginEventRef, OwnedSessionRef,
-    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
-    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef,
-    RequestId, Resolution, Sequence, SessionId, SessionReference, SessionState, StoredPolicy,
-    Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
+    LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, NodeKind, NodeState,
+    OriginEventRef, OwnedSessionRef, PendingEvent, PendingInteraction, PermissionDecision,
+    PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock, PromptRequest,
+    PublicError, RemoteSessionRef, RequestId, Resolution, Sequence, SessionId, SessionReference,
+    SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
     decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
     object_members as json_members, top_level_member,
 };
@@ -45,7 +45,7 @@ use crate::ports::{
     IdempotencyRecord, InteractionResolved, ModeChange, NewSession, NewTurn, OwnedCommit,
     PendingInteractionWrite, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch,
     ReplayLimit, SessionBackendFactory, SessionEndpoint, SessionStore, SessionUpdate, StateChange,
-    TurnChange, TurnUpdate,
+    TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -233,6 +233,9 @@ pub struct BrokerDeps {
     pub deliveries: Arc<dyn RemoteDeliveryStore>,
     pub backends: Arc<dyn SessionBackendFactory>,
     pub exports: Arc<dyn ExportStore>,
+    /// 节点信任记录：`Actor::Node` 的 Owner 侧授权需要「该 Access 信任行已配对且 grants 含所需 grant」
+    /// （§6.5），因此授权判定不能只靠 Export 记录。
+    pub trust: Arc<dyn TrustStore>,
     pub publisher: Arc<dyn EventPublisher>,
     pub clock: Arc<dyn Clock>,
     pub ids: Arc<dyn IdGenerator>,
@@ -560,6 +563,19 @@ impl Broker {
         Err(denied)
     }
 
+    /// `Actor::Node` 的判定：Access 侧与 Owner 侧各有一条路径，任一成立即通过。
+    ///
+    /// Access 侧（本节点是 `node` 的**客户端**）：本地 `ImportRecord.grants` 覆盖该命令。
+    ///
+    /// Owner 侧（本节点是导出方）：有效权限是「Export grant ∩ 该 Access 信任记录 grant」的交集——
+    /// 信任记录必须是已配对的 `access` 行且其 `grants` 含该命令所需的 grant；同时某个未撤销
+    /// `ExportRecord` 必须覆盖该命令（`scopes` 含该 grant）并与该节点的信任记录 grants 有交集
+    /// （`export.scopes ∩ node.grants ≠ ∅`，与 Node Link 的可见性口径同源）；此外**会话命令**还必须
+    /// 落在覆盖目标会话 agent 的 Export 上。
+    ///
+    /// 无会话命令（`session.list`/`command.status`/`session.create`）没有目标会话可比对 agent，
+    /// 因此 Owner 侧按「该节点是否与某个覆盖该命令的 Export 有关联」判定；`session.list` 的结果过滤
+    /// 与 `session.create` 的参数校验仍由 `server::node_link` 按其单点可见性策略完成，本层只判授权。
     async fn node_allowed(
         &self,
         node: &NodeId,
@@ -575,7 +591,22 @@ impl Broker {
                 return Ok(true);
             }
         }
-        // Owner 侧：某个未撤销 Export 覆盖该命令，且覆盖目标会话的 agent。
+        // 节点信任记录：Owner 侧的有效权限是「Export grant ∩ 该 Access 信任记录 grant」的交集，
+        // 因此信任行缺失/未配对或 grants 不含该命令所需的 grant 时直接失败关闭（不因为某个 Export
+        // 恰好覆盖就放行）。
+        let trust = self
+            .deps
+            .trust
+            .node(node, NodeKind::Access)
+            .await?
+            .filter(|row| row.state() == NodeState::Paired);
+        let Some(trust) = trust else {
+            return Ok(false);
+        };
+        if !trust.grants().contains(grant) {
+            return Ok(false);
+        }
+        // Owner 侧：某个未撤销 Export 覆盖该命令；会话命令还必须覆盖目标会话的 agent。
         let agent = match session {
             Some(session) => self
                 .deps
@@ -585,19 +616,33 @@ impl Broker {
                 .map(|snapshot| snapshot.session.agent().clone()),
             None => None,
         };
-        let Some(agent) = agent else {
+        if session.is_some() && agent.is_none() {
             return Ok(false);
-        };
+        }
         for export in self.deps.exports.exports().await? {
             if export.revoked_at().is_some() || !export.scopes().contains(grant) {
                 continue;
             }
             if export
-                .agent_ids()
+                .scopes()
                 .iter()
-                .any(|id| id.as_str() == agent.agent_id().as_str())
+                .all(|scope| !trust.grants().contains(scope))
             {
-                return Ok(true);
+                // 与该节点信任记录不相交的 Export 不是它的授权来源（Node Link 的可见性口径）。
+                continue;
+            }
+            match &agent {
+                Some(agent) => {
+                    if export
+                        .agent_ids()
+                        .iter()
+                        .any(|id| id.as_str() == agent.agent_id().as_str())
+                    {
+                        return Ok(true);
+                    }
+                }
+                // 无会话命令：与该节点有关联且覆盖该命令的 Export 存在即通过。
+                None => return Ok(true),
             }
         }
         Ok(false)
@@ -5009,6 +5054,9 @@ pub(crate) mod test_support {
                     exports: Arc::new(FakeExports {
                         world: world.clone(),
                     }),
+                    trust: Arc::new(FakeTrust {
+                        world: world.clone(),
+                    }),
                     publisher: Arc::new(TestPublisher {
                         world: world.clone(),
                     }),
@@ -6091,6 +6139,9 @@ mod tests {
                     world: world.clone(),
                 }),
                 exports: Arc::new(FakeExports {
+                    world: world.clone(),
+                }),
+                trust: Arc::new(FakeTrust {
                     world: world.clone(),
                 }),
                 publisher: Arc::new(TestPublisher {

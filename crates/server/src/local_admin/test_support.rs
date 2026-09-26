@@ -2060,6 +2060,7 @@ impl TestWorld {
                 deliveries: deliveries.clone(),
                 backends: Arc::new(NotTouched),
                 exports: exports.clone(),
+                trust: Arc::new(trust.clone()),
                 publisher: Arc::new(NotTouched),
                 clock: clock.clone(),
                 ids: Arc::new(FakeIds::default()),
