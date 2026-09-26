@@ -8,12 +8,15 @@
 //! - **每连接待发送队列有界**：条数上限由 `tokio::sync::mpsc` 的容量给出，字节上限由 [`ConnectionHandle`]
 //!   自行计数（`maxPendingQueueBytes`/`maxPendingQueueMessages` 双上限，§2.5）。达到上限即
 //!   [`SendFault::HighWater`]，调用方（WP5）据此停读新的快照批次；本模块不丢消息、不阻塞其他连接；
+//! - **序号只在投递确定时消耗**：出站 `connectionSequence` 的分配、容量准入与入队在同一临界区（
+//!   [`OutboundState`]）：被高水位拒绝的投递不消耗序号（§2.2 要求序号严格 +1，缺号只能被对端判为
+//!   `sequence_invalid`，而协议没有重同步规则）；
 //! - **关闭是请求而非暴力断开**：`request_close` 只登记目标 close code 并唤醒会话；会话先排空已入队的
 //!   消息（撤销推送必须能先送达）再发 close 帧（§14.2）。
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -31,6 +34,26 @@ use crate::node_link::conn::limits::SessionLimits;
 pub(crate) struct Outbound {
     pub(crate) text: String,
     pub(crate) bytes: u64,
+}
+
+/// 出站账本：待发送队列的占用与出站序号共用**一个**临界区。
+///
+/// 两者必须同锁：`connectionSequence` 一旦提交就必须真的发出去（§2.2 要求本方向严格 +1，对端按
+/// `sequence_invalid` 校验），因此准入失败时不能消耗序号。
+#[derive(Debug, Default)]
+struct OutboundState {
+    /// 已提交的出站序号；下一条消息用它 +1 作为候选值（认证后从 1 开始）。
+    sequence: u64,
+    pending_messages: u64,
+    pending_bytes: u64,
+}
+
+impl OutboundState {
+    /// 容量预算：条数与字节双上限（§2.5）。字节预算要等编码后才准，因此它是准入的第二道。
+    fn admits(&self, limits: SessionLimits, bytes: u64) -> bool {
+        self.pending_messages < limits.max_pending_queue_messages() as u64
+            && self.pending_bytes + bytes <= limits.max_pending_queue_bytes()
+    }
 }
 
 /// 投递失败的分类：都是**调用方**（WP5/WP6）要处理的判定，不是本模块的错误。
@@ -62,9 +85,8 @@ pub struct ConnectionHandle {
     limits: SessionLimits,
     ids: Arc<dyn IdGenerator>,
     outbound: mpsc::Sender<Outbound>,
-    pending_bytes: AtomicU64,
-    pending_messages: AtomicU64,
-    outbound_sequence: Mutex<u64>,
+    /// 出站账本（待发送占用 + 出站序号；见 [`OutboundState`]）。
+    outbound_state: Mutex<OutboundState>,
     close_code: AtomicU16,
     close_reason: Mutex<Option<&'static str>>,
     /// 关闭请求的唤醒信号（会话正阻塞在 `recv()` 时也要能立刻收到）。
@@ -100,9 +122,7 @@ impl ConnectionHandle {
             limits,
             ids,
             outbound,
-            pending_bytes: AtomicU64::new(0),
-            pending_messages: AtomicU64::new(0),
-            outbound_sequence: Mutex::new(0),
+            outbound_state: Mutex::new(OutboundState::default()),
             close_code: AtomicU16::new(0),
             close_reason: Mutex::new(None),
             close_signal: Notify::new(),
@@ -135,18 +155,48 @@ impl ConnectionHandle {
     ///
     /// 只接受认证后 type（`AuthState::PostAuth`）；`node.hello`/`node.challenge`/`node.proof` 不能经
     /// 本入口发送（认证前消息由握手阶段直接写帧）。
+    ///
+    /// 准入判定、序号分配与入队在**同一个临界区**内完成（RV1-WP4-F1）：序号先是候选值，只有容量预算
+    /// 通过（且真的入队）才提交。因此被高水位拒绝的投递不消耗序号——否则本方向此后每一帧都带缺口，
+    /// 合规对端必须一直报 `sequence_invalid`，而协议没有重同步规则。
     pub fn send<T: Serialize>(&self, message_type: MessageType, body: &T) -> Result<(), SendFault> {
-        let text = self.encode(message_type, body)?;
-        self.enqueue(text)
+        let mut state = lock(&self.outbound_state);
+        // ① 用候选序号装配信封：装配失败不触碰账本（也不消耗序号）。
+        let candidate = state.sequence + 1;
+        let text = self.encode(message_type, body, candidate)?;
+        let bytes = text.len() as u64;
+        // ② 容量预算（条数 + 字节双上限）。
+        if !state.admits(self.limits, bytes) {
+            drop(state);
+            self.mark_saturated();
+            return Err(SendFault::HighWater);
+        }
+        // ③ 入队成功才提交序号与占用；`try_send` 不阻塞，持锁是安全的。
+        match self.outbound.try_send(Outbound { text, bytes }) {
+            Ok(()) => {
+                state.sequence = candidate;
+                state.pending_messages += 1;
+                state.pending_bytes += bytes;
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                // 预算是上界，而 `pending_messages` 覆盖了管道里的全部消息，因此这条分支实际不可达；
+                // `Full` 对调用方与 `HighWater` 是同一个处置，这里同样不提交序号。
+                drop(state);
+                self.mark_saturated();
+                Err(SendFault::HighWater)
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(SendFault::Closed),
+        }
     }
 
-    /// 装配一条认证后消息的原始 JSON 文本（不投队列；会话测试与 `link.error` 共用同一路径）。
-    pub(crate) fn encode<T: Serialize>(
+    /// 用给定序号装配一条认证后消息的原始 JSON 文本（不投队列、不触碰账本）。
+    fn encode<T: Serialize>(
         &self,
         message_type: MessageType,
         body: &T,
+        sequence: u64,
     ) -> Result<String, SendFault> {
-        let sequence = self.next_sequence();
         let message_id =
             Uuid::parse(self.ids.message_id().as_str()).map_err(|_| SendFault::Encoding)?;
         let sequence =
@@ -165,33 +215,12 @@ impl ConnectionHandle {
         envelope.encode().map_err(|_| SendFault::Encoding)
     }
 
-    /// 把一条已装配的原始 JSON 文本投进队列。
-    pub(crate) fn enqueue(&self, text: String) -> Result<(), SendFault> {
-        let bytes = text.len() as u64;
-        if self.pending_bytes.load(Ordering::SeqCst) + bytes > self.limits.max_pending_queue_bytes()
-        {
-            self.mark_saturated();
-            return Err(SendFault::HighWater);
-        }
-        match self.outbound.try_send(Outbound { text, bytes }) {
-            Ok(()) => {
-                self.pending_bytes.fetch_add(bytes, Ordering::SeqCst);
-                self.pending_messages.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.mark_saturated();
-                Err(SendFault::HighWater)
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => Err(SendFault::Closed),
-        }
-    }
-
     /// 已入队未写出的量。
     pub fn pending(&self) -> PendingQueue {
+        let state = lock(&self.outbound_state);
         PendingQueue {
-            messages: self.pending_messages.load(Ordering::SeqCst),
-            bytes: self.pending_bytes.load(Ordering::SeqCst),
+            messages: state.pending_messages,
+            bytes: state.pending_bytes,
         }
     }
 
@@ -200,7 +229,8 @@ impl ConnectionHandle {
     /// 「刚被拒过」也计入：队里可能已经没有消息（那条消息根本没入队），但高水位状态仍然成立，
     /// 调用方应先停下来而不是继续尝试。一旦 `consumed` 观察到队列回到上限之下，该状态自动清除。
     pub fn saturated(&self) -> bool {
-        if lock(&self.saturated_since).is_some() {
+        let rejected_recently = lock(&self.saturated_since).is_some();
+        if rejected_recently {
             return true;
         }
         let pending = self.pending();
@@ -243,18 +273,14 @@ impl ConnectionHandle {
 
     /// 队列消费记账（会话写出后调用）。
     pub(crate) fn consumed(&self, outbound: &Outbound) {
-        self.pending_bytes
-            .fetch_sub(outbound.bytes, Ordering::SeqCst);
-        self.pending_messages.fetch_sub(1, Ordering::SeqCst);
+        {
+            let mut state = lock(&self.outbound_state);
+            state.pending_messages = state.pending_messages.saturating_sub(1);
+            state.pending_bytes = state.pending_bytes.saturating_sub(outbound.bytes);
+        }
         if !self.saturated() {
             *lock(&self.saturated_since) = None;
         }
-    }
-
-    fn next_sequence(&self) -> u64 {
-        let mut sequence = lock(&self.outbound_sequence);
-        *sequence += 1;
-        *sequence
     }
 
     fn mark_saturated(&self) {

@@ -24,6 +24,9 @@
 //! | [R44]/[R45] limits 只下调 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them` |
 //! | [R46] 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable`、`json_structure_limits_are_enforced_on_the_wire` |
 //! | [R47] 信封与 connectionSequence 校验 | `envelope_and_sequence_violations_are_rejected_without_closing`、`a_binary_frame_is_closed_with_4400` |
+//! | [R47] 出站序号只在投递确认时消耗（`connectionSequence` 不得留缺口） | `a_rejected_delivery_does_not_consume_the_outbound_sequence` |
+//! | [R40] 认证收尾推进 `owned_node.last_connected_at`（§11.6 第 9 条） | `authentication_advances_the_node_last_connected_time` |
+//! | §2.5 准入闸门（10 次/分钟、同源在途握手配额） | `the_eleventh_authentication_attempt_from_one_address_is_rate_limited`、`the_fifth_in_flight_handshake_from_one_address_is_refused`、`authenticated_connections_do_not_hold_the_in_flight_handshake_quota` |
 //! | [R48] 序号回退被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
 //! | [R49] post_mvp 消息显式拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing`（`catalog.changed`/`link.backpressure`） |
 //! | [R50] 未知字段被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
@@ -47,8 +50,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    AuditAction, AuditOutcome, EntityRef, NodeId, NodeState, PairingId, PairingPeer, PairingState,
-    PeerIdentity,
+    AuditAction, AuditOutcome, EntityRef, NodeId, NodeKind, NodeState, PairingId, PairingPeer,
+    PairingState, PeerIdentity,
 };
 use acp_core::ports::{AuditQuery, AuditStore as _, SessionStore};
 use acp_core::use_cases::NodeLinkHandshakeView;
@@ -66,7 +69,8 @@ use crate::local_admin::envelope::{AdminOutcome, AdminRequest, AdminResponse, de
 use crate::local_admin::handler::LocalAdminHandler as _;
 use crate::local_admin::method::Method;
 use crate::local_admin::test_support::{
-    FixedStore, TEST_PUBLIC_ORIGIN, TEST_SERVER_EPOCH, TestWorld, test_nonce, test_public_key,
+    FakeIds, FixedStore, TEST_PUBLIC_ORIGIN, TEST_SERVER_EPOCH, TestWorld, test_nonce,
+    test_public_key,
 };
 use crate::node_link::conn::handshake::SUPPORTED_FEATURES;
 use crate::node_link::conn::limits::{
@@ -74,9 +78,12 @@ use crate::node_link::conn::limits::{
     DEFAULT_MAX_IN_FLIGHT_COMMANDS, DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_MAX_PENDING_QUEUE_BYTES,
     DEFAULT_MAX_PENDING_QUEUE_MESSAGES, DEFAULT_RESOURCE_SNAPSHOT_BATCH_SIZE, NodeLinkConfig,
 };
+use crate::node_link::conn::registry::Outbound;
 use crate::node_link::conn::session::HEARTBEAT_SILENCE_TIMEOUT;
 use crate::node_link::conn::{
-    ConnectionRegistry, HANDSHAKE_TIMEOUT, NodeLinkConn, WS_PATH, WS_SUBPROTOCOL, WsEndpoint,
+    AUTH_ATTEMPTS_PER_MINUTE, ConnectionHandle, ConnectionRegistry, HANDSHAKE_TIMEOUT,
+    MAX_IN_FLIGHT_HANDSHAKES_PER_IP, NodeLinkConn, SendFault, SessionLimits, WS_PATH,
+    WS_SUBPROTOCOL, WsEndpoint,
 };
 use crate::transport::net::{NetConfig, NetError, NetListener, Shutdown, ShutdownHandle};
 
@@ -1019,6 +1026,206 @@ async fn handshake_completes_and_enters_the_business_phase() {
     harness.stop().await;
 }
 
+/// 该节点 `access` 行上的 `last_connected_at`（管理视图 `lastSeenAt` 的同一列）。
+fn last_connected_at(harness: &Harness) -> Option<String> {
+    harness
+        .world
+        .trust
+        .nodes_of(ACCESS_NODE)
+        .into_iter()
+        .find(|record| record.kind() == NodeKind::Access)
+        .and_then(|record| record.last_connected_at().map(|at| at.as_str().to_owned()))
+}
+
+/// [R40]/§11.6 第 9 条：认证收尾把 `owned_node.last_connected_at` 推进到本次认证时间。
+///
+/// 三段落分别对应的三件事：① 首次认证（有已批准配对的消费写集）必须让它非空；② 重复认证（没有
+/// 待消费配对）继续推进；③ 更早的认证时间不得倒退已存值（「只前进」）。每次成功认证都留一行
+/// `node.authenticated`——首次由消费写集写，重复认证与 `last_connected_at` 同一事务写。
+#[tokio::test]
+async fn authentication_advances_the_node_last_connected_time() {
+    let harness = Harness::new().await;
+    let _ = harness.approved_pairing().await;
+    let first_auth_at = harness.world.clock.text();
+
+    // ① 首次认证。
+    let mut first = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut first, ACCESS_NODE, false).await;
+    assert_eq!(
+        last_connected_at(&harness),
+        Some(first_auth_at.clone()),
+        "首次认证的收尾写集必须写下 last_connected_at"
+    );
+    first.send_close().await;
+    assert_eventually(
+        || harness.conn.registry().active() == 0,
+        "第一条连接结束后必须从注册表摘除",
+    )
+    .await;
+
+    // ② 重复认证：没有待消费配对，但时间仍然推进到本次认证时刻。
+    const SECOND_AUTH_AT: &str = "2026-09-18T09:12:04.412Z";
+    harness.world.clock.set(SECOND_AUTH_AT);
+    let mut second = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut second, ACCESS_NODE, false).await;
+    assert_eq!(
+        last_connected_at(&harness),
+        Some(SECOND_AUTH_AT.to_owned()),
+        "重复认证必须推进 last_connected_at"
+    );
+    second.send_close().await;
+    assert_eventually(
+        || harness.conn.registry().active() == 0,
+        "第二条连接结束后必须从注册表摘除",
+    )
+    .await;
+
+    // ③ 时钟回拨：更早的认证时间不得覆盖已存值。
+    harness.world.clock.set("2026-09-18T09:12:03.000Z");
+    let mut third = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut third, ACCESS_NODE, false).await;
+    assert_eq!(
+        last_connected_at(&harness),
+        Some(SECOND_AUTH_AT.to_owned()),
+        "`last_connected_at` 只前进不倒退"
+    );
+    let rows = harness
+        .audit_rows(vec![AuditAction::NodeAuthenticated])
+        .await;
+    assert_eq!(rows.len(), 3, "每次成功认证各留一行：{rows:?}");
+    assert!(
+        rows.iter().all(|row| row.outcome() == AuditOutcome::Success
+            && row.via_node() == Some(&node(ACCESS_NODE))),
+        "重复认证的归因与首次一致：{rows:?}"
+    );
+    harness.stop().await;
+}
+
+/// [RV1-WP4-F3]：在途握手配额只在握手阶段内持有——同源第 5 条**已认证**连接不被拒绝。
+///
+/// 句子里的「同源」是真实条件：所有连接都来自 `127.0.0.1`。五条连接全部保持打开（句柄不因连接
+/// 结束而释放），因此本用例锁定的区别只有一处：配额在认证完成时释放，而不是在会话结束时。
+#[tokio::test]
+async fn authenticated_connections_do_not_hold_the_in_flight_handshake_quota() {
+    let harness = Harness::new().await;
+    let _ = harness.approved_pairing().await;
+    let mut clients = Vec::new();
+    for _ in 0..MAX_IN_FLIGHT_HANDSHAKES_PER_IP + 1 {
+        let mut client = Client::connect(harness.addr).await;
+        let _ = authenticated(&mut client, ACCESS_NODE, false).await;
+        clients.push(client);
+    }
+    assert_eq!(
+        harness.conn.registry().active(),
+        MAX_IN_FLIGHT_HANDSHAKES_PER_IP + 1,
+        "同源已认证连接不得被在途握手配额拒绝"
+    );
+    assert_eq!(harness.conn.in_flight_handshakes(), 0, "握手完成即释放配额");
+    // 最后一条仍然可以往来（拒绝路径的副产物不会残留到业务阶段）。
+    clients
+        .last_mut()
+        .expect("第 5 条连接")
+        .ping_round_trip(0x91)
+        .await;
+    harness.stop().await;
+}
+
+/// [RV1-WP4-F3]/[RV1-WP4-F4]：在途握手配额的拒绝路径——同源并发 5 条**未认证**连接的第 5 条被拒。
+///
+/// 前 4 条各自完成 `node.hello`（拿到 `node.challenge` 就证明它的会话已持有配额）并停在等 proof 阶段；
+/// 第 5 条在会话第一步（读到任何帧之前）就被拒。两种极端的区别就是 F3 的修复点：未认证的连接仍然
+/// 占配额，已认证的不占。
+#[tokio::test]
+async fn the_fifth_in_flight_handshake_from_one_address_is_refused() {
+    let harness = Harness::new().await;
+    let _ = harness.approved_pairing().await;
+    let mut half_open = Vec::new();
+    for _ in 0..MAX_IN_FLIGHT_HANDSHAKES_PER_IP {
+        let mut client = Client::connect(harness.addr).await;
+        send_hello(
+            &mut client,
+            ACCESS_NODE,
+            &declared_features(),
+            &[REQUIRED_FEATURE],
+        )
+        .await;
+        let _ = client.expect_type("node.challenge").await;
+        half_open.push(client);
+    }
+    assert_eq!(
+        harness.conn.in_flight_handshakes(),
+        MAX_IN_FLIGHT_HANDSHAKES_PER_IP,
+        "半开握手必须占配额"
+    );
+
+    let mut fifth = Client::connect(harness.addr).await;
+    let error = fifth.expect_error("nodelink.resource.rate_limited").await;
+    assert_eq!(error["retryable"], json!(true), "限流可重试：{error}");
+    assert_eq!(
+        error["details"],
+        json!({}),
+        "在途配额拒绝没有重试等待时间（与认证限流区分）"
+    );
+    assert_eq!(fifth.expect_close().await, 4429, "配额耗尽以 4429 关闭");
+    // 零副作用：没有新增信任行、没有成功认证审计、没有连接登记。
+    assert_eq!(
+        harness.world.trust.node_count(),
+        1,
+        "只有配对批准写入的那一行"
+    );
+    assert!(
+        harness
+            .audit_rows(vec![AuditAction::NodeAuthenticated])
+            .await
+            .is_empty()
+    );
+    assert_eq!(harness.conn.registry().active(), 0);
+    drop(half_open);
+    harness.stop().await;
+}
+
+/// [RV1-WP4-F4]：单 IP 新认证尝试的固定限流（§2.5：10 次/分钟）——同一 IP 的第 11 次建连被拒。
+///
+/// 前 10 次建连都在会话开始后立即断开：每次都必须先占用配额（`in_flight_handshakes() == 1` 证明
+/// `run()` 已经跑过限流判定）再释放，因此两条闸门不会互相干扰（否则第 5 次就会撞上在途配额，
+/// 用例会验到另一条拒绝路径上去）。
+#[tokio::test]
+async fn the_eleventh_authentication_attempt_from_one_address_is_rate_limited() {
+    let harness = Harness::new().await;
+    for _ in 0..AUTH_ATTEMPTS_PER_MINUTE {
+        let client = Client::connect(harness.addr).await;
+        assert_eventually(
+            || harness.conn.in_flight_handshakes() == 1,
+            "会话必须已开始并占用配额",
+        )
+        .await;
+        drop(client);
+        assert_eventually(
+            || harness.conn.in_flight_handshakes() == 0,
+            "断开后配额必须释放",
+        )
+        .await;
+    }
+
+    let mut eleventh = Client::connect(harness.addr).await;
+    let error = eleventh
+        .expect_error("nodelink.resource.rate_limited")
+        .await;
+    assert_eq!(error["retryable"], json!(true), "限流可重试：{error}");
+    assert!(
+        error["details"]["retryAfterMs"]
+            .as_u64()
+            .is_some_and(|millis| millis > 0),
+        "必须给出重试等待毫秒数：{error}"
+    );
+    assert_eq!(eleventh.expect_close().await, 4429, "限流以 4429 关闭");
+    // 零副作用：没有信任行、没有审计、没有连接登记。
+    assert_eq!(harness.world.trust.node_count(), 0);
+    assert!(harness.audit_rows(vec![]).await.is_empty());
+    assert_eq!(harness.conn.registry().active(), 0);
+    harness.stop().await;
+}
+
 /// 挑战/就绪消息 body 的 `selectedFeatures`。
 fn feature_ids(body: &Value) -> Vec<String> {
     body["selectedFeatures"]
@@ -1636,11 +1843,13 @@ async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     client.ping_round_trip(0x5d).await;
 
     client.step("⑧ 未知 type");
-    // ⑧ 未知 type → type_unsupported（不泄露「存在但未实现」与「完全未知」的差异）。
+    // ⑧ 未知 type → type_unsupported（不泄露「存在但未实现」与「完全未知」的差异）。信封结构与 JSON
+    //    都合法，因此该序号已被对端占用（§2.2 的序号记账与 type 无关，与 post_mvp 同口径）。
     client.send_post_auth("node.future.thing", json!({})).await;
     client
         .expect_error("nodelink.protocol.type_unsupported")
         .await;
+    client.advance_after_accepted();
     client.ping_round_trip(0x5e).await;
 
     client.step("⑨ post_mvp");
@@ -1948,6 +2157,68 @@ async fn a_saturated_connection_is_disconnected_without_affecting_its_peer() {
     );
     healthy.ping_round_trip(0x82).await;
     harness.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 连接句柄：序号与队列账本（RV1-WP4-F1）
+// ---------------------------------------------------------------------------------------------
+
+/// 一条已入队消息信封里的 `connectionSequence`（对端看到的那个值）。
+fn outbound_sequence(outbound: &Outbound) -> String {
+    let message: Value = serde_json::from_str(&outbound.text).expect("出站消息是 JSON");
+    message["connectionSequence"]
+        .as_str()
+        .expect("认证后消息必须带序号")
+        .to_owned()
+}
+
+/// [R47]：出站 `connectionSequence` 只在**投递确定**时消耗。
+///
+/// 队列压到高水位（条数 1 / 字节 1 KiB）→ 触发一次 `HighWater` → 排空 → 再发一条：两条真正入队的
+/// 消息的序号必须是 1、2。对端按 §2.2 要求严格加一，被拒的投递不得烧掉序号——否则本方向此后每一帧
+/// 都带缺口，合规对端必须一直报 `sequence_invalid`，而协议没有重同步规则。
+#[test]
+fn a_rejected_delivery_does_not_consume_the_outbound_sequence() {
+    let limits = SessionLimits::negotiate(&NodeLinkConfig {
+        max_pending_queue_messages: 1,
+        max_pending_queue_bytes: 1_024,
+        ..NodeLinkConfig::default()
+    });
+    let (handle, mut receiver) = ConnectionHandle::new(
+        Uuid::parse(&uuid_text()).expect("连接标识是规范 uuid"),
+        node(ACCESS_NODE),
+        "127.0.0.1".parse().expect("loopback 地址"),
+        limits,
+        Arc::new(FakeIds::default()),
+    );
+
+    // ① 压到高水位：第一条入队，第二条被拒（条数预算只有 1 条的余量）。
+    handle
+        .send(MessageType::LinkPing, &json!({ "nonce": ping_nonce(0x61) }))
+        .expect("第一条必须入队");
+    assert_eq!(
+        handle.send(MessageType::LinkPing, &json!({ "nonce": ping_nonce(0x62) })),
+        Err(SendFault::HighWater),
+        "队列满时必须高水位拒绝"
+    );
+    assert!(handle.saturated(), "高水位判定必须对投递方可见");
+    assert_eq!(handle.pending().messages, 1);
+
+    // ② 排空（会话侧取出消息后记账）。
+    let first = receiver.try_recv().expect("第一条已入队");
+    handle.consumed(&first);
+    assert_eq!(handle.pending().messages, 0);
+
+    // ③ 再发一条：序号必须与第一条连续。
+    handle
+        .send(MessageType::LinkPing, &json!({ "nonce": ping_nonce(0x63) }))
+        .expect("排空后必须能继续投递");
+    let second = receiver.try_recv().expect("再发的那条已入队");
+    assert_eq!(
+        [outbound_sequence(&first), outbound_sequence(&second)],
+        ["1".to_owned(), "2".to_owned()],
+        "被拒的投递不得消耗序号"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

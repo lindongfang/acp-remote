@@ -19,8 +19,13 @@
 //! - type：未知 `type` 与 v1 首切片的 post_mvp 消息族 → `nodelink.protocol.type_unsupported`；
 //!   认证前收到只许认证后出现的业务消息（R38）也是 4401 关闭而不是「schema 错误」：连接阶段本身就不对，
 //!   只回一条可恢复的错误会让业务消息看起来「被接受但没生效」。
+//!
+//! 序号记账与 type 无关（§2.2）：`connectionSequence` 属于**对端发出的消息**，本机接不接受它的
+//! type/body 不影响对端已经用掉的序号。因此「信封结构、JSON、连接字段都合法且序号正好是下一个」时，
+//! 无论 type 是 post_mvp 族还是完全未知，**两条路径都推进期望序号**（RV1-WP4-F5 的统一口径：
+//! 一个显式拒绝不得让连接之后全部错位）。
 
-use node_link_protocol::common::{Nullable, RawObject, Uuid};
+use node_link_protocol::common::{DecimalString, Nullable, RawObject, Uuid};
 use node_link_protocol::envelope::{AuthState, Envelope, EnvelopeError, MessageType, Phase};
 use node_link_protocol::error::{Body, ErrorCode};
 
@@ -92,12 +97,13 @@ pub(crate) fn judge(
         }
         // 未知 type 与被篡改的 type 都收敛到同一类（不泄露「存在但未实现」与「完全未知」的差异）。
         Err(EnvelopeError::UnknownType { .. }) => {
+            // 序号记账与 post_mvp 同口径：信封（含连接字段）能解析、序号正好是下一个时推期望序号。
             return (
                 Inbound::Rejected {
                     code: ErrorCode::ProtocolTypeUnsupported,
                     message: TYPE_MESSAGE,
                 },
-                None,
+                unknown_type_next_sequence(text, phase, expected_sequence, connection_id),
             );
         }
         Err(EnvelopeError::BodyNotJson(_)) => {
@@ -238,6 +244,38 @@ pub(crate) fn judge(
             (Inbound::Message(envelope), Some(sequence + 1))
         }
     }
+}
+
+/// `judge` 在未知 `type` 时的序号记账（§2.2 的「序号属于对端发出的消息」）。
+///
+/// `Envelope::decode` 报 `UnknownType` 时已经验证了：§2.5 的结构上限、JSON 语法、信封字段形状
+/// （`protocolVersion`/`messageId`/`body`）全部成立，只有 `type` 不在词表里；因此这里可以再读一次帧，
+/// 按信封形状取连接字段。记账条件与已知 type 的路径逐条一致（认证后、`connectionId` 与本次连接相同、
+/// `connectionSequence` 是规范十进制串、不超过 v1 上界、正好是期望值）：任一不满足就不记账——对端
+/// 没有为这条消息消耗它的下一个序号。
+fn unknown_type_next_sequence(
+    text: &str,
+    phase: Phase,
+    expected_sequence: Option<u64>,
+    connection_id: Option<&Uuid>,
+) -> Option<u64> {
+    if phase != Phase::PostAuth {
+        // 认证前的消息不携带连接字段（§2.2），也没有期望序号。
+        return None;
+    }
+    let expected = expected_sequence?;
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let object = value.as_object()?;
+    let id = Uuid::parse(object.get("connectionId")?.as_str()?).ok()?;
+    if connection_id.is_some_and(|connection| id != *connection) {
+        return None;
+    }
+    let sequence = DecimalString::parse(object.get("connectionSequence")?.as_str()?).ok()?;
+    let sequence = sequence.as_str().parse::<u64>().ok()?;
+    if sequence != expected || sequence > MAX_SEQUENCE {
+        return None;
+    }
+    Some(sequence + 1)
 }
 
 /// 认证前消息 type 的允许性（§2.1/§12.2：连接建立后的第一条必须是 `node.hello`）。

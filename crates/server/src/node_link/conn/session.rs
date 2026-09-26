@@ -7,11 +7,14 @@
 //! 阶段划分（`node.hello → node.challenge → node.proof → node.ready`）：
 //!
 //! 1. **准入**：认证前先过两道闸——单 IP 认证尝试 10 次/分钟（§2.5，键是接入层给出的真实
-//!    `client_ip`）与单 IP 在途握手配额（半开连接不占满接入层的 TLS 握手池）；
+//!    `client_ip`）与单 IP 在途握手配额（半开连接不占满接入层的 TLS 握手池）；配额凭证只覆盖握手
+//!    阶段，认证完成即释放（已认证的连接不再占它）；
 //! 2. **握手**：只允许 `node.hello`/`node.proof`（+ 双向的 `link.error`），其余消息以 4401 关闭；
 //!    整个握手 15 秒内必须完成，超时 4408；
-//! 3. **认证收尾**：`Authority::complete_auth` 的写集（已批准配对 → `consumed` + 审计）经
-//!    `UseCases::consume_pairing` 在**同一事务**提交成功后才发 `node.ready`（`design.md` D3）；
+//! 3. **认证收尾**：`Authority::complete_auth` 的写集经 `UseCases::consume_pairing`（已批准配对 →
+//!    `consumed` + 审计 + 对端节点行的 `last_connected_at`）或 `UseCases::record_node_connected`
+//!    （没有待消费配对时的重复认证：`last_connected_at` + 审计）在**同一事务**提交成功后才发
+//!    `node.ready`（`design.md` D3；`CORE_PORTS_AND_STORAGE.md` §11.6 第 8/9 条）；
 //! 4. **业务**：认证后的消息逐条判定阶段、信封、序号与 type，再交给 [`MessageRoute`]；
 //!    连接的心跳、静默超时与慢消费者看门狗在同一 `select!` 里推进。
 //!
@@ -177,6 +180,13 @@ impl NodeLinkConn {
         self
     }
 
+    /// 测试专用：当前被占用的在途握手配额数（源地址无关；用例需要确定性地知道「配额已满/已释放」，
+    /// 否则只能靠轮询等待，而配额本身是固定常量、不可从外部观测）。
+    #[cfg(test)]
+    pub(crate) fn in_flight_handshakes(&self) -> usize {
+        self.handshakes.in_flight()
+    }
+
     /// 连接注册表句柄（WP5/WP6 与撤销传播共用）。
     pub fn registry(&self) -> &Arc<ConnectionRegistry> {
         &self.registry
@@ -287,24 +297,34 @@ impl Session {
             return;
         }
         // ② 在途握手配额（RV2-WP2FIX-F2 的取舍结论：便宜就做）。
-        let Some(_slot) = self.conn.handshakes.acquire(client_ip) else {
-            warn!(
-                event = "node_link.handshake_slots_exhausted",
-                client_ip = %client_ip,
-                max = MAX_IN_FLIGHT_HANDSHAKES_PER_IP,
-                "too many handshakes in flight for this client address"
-            );
-            self.refuse(
-                close::RATE_LIMITED,
-                ErrorCode::ResourceRateLimited,
-                "too many handshakes in flight for this client address",
-                RawObject::empty(),
-            )
-            .await;
-            return;
+        //
+        // 凭证只覆盖**握手阶段**：认证完成（或握手结束）立即释放，因此本配额限制的是「同一源地址上
+        // 尚未完成认证的连接数」，而不是「同源连接数」——已经认证的连接不再占配额（§2.5 与
+        // [`MAX_IN_FLIGHT_HANDSHAKES_PER_IP`] 的取向都只谈半开握手）。
+        let handshake_slot = match self.conn.handshakes.acquire(client_ip) {
+            Some(slot) => slot,
+            None => {
+                warn!(
+                    event = "node_link.handshake_slots_exhausted",
+                    client_ip = %client_ip,
+                    max = MAX_IN_FLIGHT_HANDSHAKES_PER_IP,
+                    "too many handshakes in flight for this client address"
+                );
+                self.refuse(
+                    close::RATE_LIMITED,
+                    ErrorCode::ResourceRateLimited,
+                    "too many handshakes in flight for this client address",
+                    RawObject::empty(),
+                )
+                .await;
+                return;
+            }
         };
+        let flow = self.handshake_phase().await;
+        // 握手已结束（认证成功或连接关闭）：配额在这里释放，业务阶段不再持有它。
+        drop(handshake_slot);
 
-        match self.handshake_phase().await {
+        match flow {
             Flow::Ready { handle, receiver } => self.business_phase(handle, receiver).await,
             Flow::Continue | Flow::Finished => {}
         }
@@ -413,7 +433,9 @@ impl Session {
     /// `node.hello`：版本交集 → feature 协商 → 组装 `PeerTrust` → 签发挑战 → `node.challenge`。
     async fn on_hello(&mut self, envelope: &Envelope) -> Flow {
         if self.handshake.expecting_proof() {
-            // 重复 hello：握手是单向的，重新协商会让已签发的挑战悬空。
+            // 由 `pre_auth_allowed` 保证不可达：进入「等 proof」之后 `node.hello` 不再在认证前白名单
+            // 里，`on_pre_auth` 会以 4401 关闭连接，根本到不了这里。保留这条分支只为把状态机写全——
+            // 重复 hello 若真的进来就会重签一次挑战，让已签发的那个悬空（所以这里是失败关闭而不是忽略）。
             self.refuse(
                 close::UNAUTHENTICATED,
                 ErrorCode::ProtocolTypeUnsupported,
@@ -564,7 +586,9 @@ impl Session {
             self.handshake.view.clone(),
             self.handshake.client_nonce.clone(),
         ) else {
-            // 没有 hello 的 proof：挑战不存在，对端看到与「挑战不匹配」同一类失败。
+            // 由 `pre_auth_allowed` 保证不可达：不在「等 proof」阶段时 `node.proof` 不在认证前白名单里，
+            // `on_pre_auth` 会以 4401 关闭连接；挑战、快照与 client nonce 因此必然齐备。保留这条分支
+            // 只为不 panic（也能挡住未来把状态机改回去时的悬空 proof）。
             self.refuse_with_details(
                 close::UNAUTHENTICATED,
                 ErrorCode::AuthProofInvalid,
@@ -699,22 +723,15 @@ impl Session {
                 );
             }
             None => {
-                // 首次认证之外的成功握手没有写集，留痕由这里补（`consume_pairing` 已写过一条时不重复）。
-                if let Err(error) = self
-                    .conn
-                    .core
-                    .record_node_link_auth(
-                        &access_node,
-                        AuditAction::NodeAuthenticated,
-                        AuditOutcome::Success,
-                    )
-                    .await
-                {
+                // 首次认证之外的成功握手没有配对可消费，但收尾写集仍然存在：`last_connected_at` 与
+                // `node.authenticated` 必须在同一事务提交（§11.6 第 9 条；`consume_pairing` 已写过一条的
+                // 场合不重复）。
+                if let Err(error) = self.conn.core.record_node_connected(&access_node).await {
                     warn!(
-                        event = "node_link.auth_audit_failed",
+                        event = "node_link.connected_write_failed",
                         access_node_id = access_node.as_str(),
                         error = ?error,
-                        "the authentication audit row could not be written; the connection is closed"
+                        "the authentication wrap-up write set could not be written; the connection is closed"
                     );
                     return self.internal_fault(envelope).await;
                 }
@@ -1355,6 +1372,12 @@ impl HandshakeSlots {
             inner: Arc::new(Mutex::new(BTreeMap::new())),
             max_per_ip,
         }
+    }
+
+    /// 当前被占用的配额数（源地址求和；测试观测口，见 [`NodeLinkConn::in_flight_handshakes`]）。
+    #[cfg(test)]
+    fn in_flight(&self) -> usize {
+        lock(&self.inner).values().sum()
     }
 
     fn acquire(&self, ip: IpAddr) -> Option<HandshakeSlot> {
