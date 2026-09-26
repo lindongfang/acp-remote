@@ -449,6 +449,20 @@ pub struct PairingDraft {
     pub pairing_request_id: PairingRequestId,
 }
 
+/// 配对通道可读的**非秘密**请求材料：claim 响应与 Owner 证明需要的 server nonce 与请求标识。
+///
+/// 二者与 secret 同生同灭（`state::PairingMaterial`），因此 secret 已被清除时这里也读不到（`None`）；
+/// 它们本身不是凭据（wire 上会原样发给对端），所以只经
+/// [`Authority::pairing_request_material`](crate::Authority::pairing_request_material) 读取，不由状态机
+/// 主动下发，也不与 secret 一起暴露。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingRequestMaterial {
+    /// 本机为该配对生成的 server nonce（`node-link-pairing-owner-proof/v1` 的 `serverNonce`）。
+    pub server_nonce: Nonce,
+    /// 本机为该配对生成的请求标识（claim 响应与状态查询共用）。
+    pub pairing_request_id: PairingRequestId,
+}
+
 /// 本地确认（批准/拒绝）的决策。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairingDecision {

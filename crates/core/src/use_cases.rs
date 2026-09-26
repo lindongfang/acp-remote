@@ -48,6 +48,21 @@ pub struct ModeListing {
     pub version: Version,
 }
 
+/// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
+///
+/// 三个字段都是端点判定与回包所需的**持久事实**：记录（状态/绑定/过期/登记集合）、已固定的对端行
+/// （幂等重试的比对输入）与已批准后的对端节点行（`grant.*` 的唯一来源；`PairingRecord` 不带
+/// `granted_*`）。视图本身不包含任何秘密材料：pairing secret 只在状态机内存里。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingChannelView {
+    /// 配对记录。
+    pub record: PairingRecord,
+    /// 已固定的对端行；claim 之前为 `None`。
+    pub peer: Option<crate::model::PairingPeer>,
+    /// 已批准后该对端的节点角色行（`owned_node` 的 `access` 行）；未批准、非节点对端或行缺失时为 `None`。
+    pub node: Option<NodeRecord>,
+}
+
 /// §4 的用例面实现。组合根持有一个 `Arc<UseCases>`。
 pub struct UseCases {
     broker: Arc<Broker>,
@@ -625,6 +640,43 @@ impl UseCases {
                 context: WriteContext { at, audit: audits },
             })
             .await
+    }
+
+    /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
+    ///
+    /// 与 [`UseCases::claim_pairing`]/[`UseCases::pairing`] 同一套访问规则：本机入口，或绑定该配对的
+    /// `PairingClaimant`。认领路径允许在 proof 校验**之前**读取（端点必须拿到记录才能校验 HMAC），
+    /// 但**不含任何写入**：状态推进仍只能经 `claim_pairing` 的写集，且只在 proof 通过后提交；
+    /// 拒绝形状与其它配对通道入口逐字相同（不让该错误变成配对 id 预言机）。
+    pub async fn pairing_channel_view(
+        &self,
+        actor: &Actor,
+        id: &PairingId,
+    ) -> Result<Option<PairingChannelView>, PortError> {
+        require_pairing_access(actor, id)?;
+        let Some(record) = self.trust.pairing(id).await? else {
+            return Ok(None);
+        };
+        let peer = self.trust.pairing_peer(id).await?;
+        // `grant.*` 只在已批准后的节点行上（§11.2 第 3 条：确认事务创建 `owned_node`）。Node Link 的
+        // claim 恒为 `access`（`NODE_LINK_PROTOCOL.md` §13.2 的 `nodeKind` 是常量），因此这里读 `access` 行；
+        // 同一对端的 `owner` 行属于另一个方向，不属于本次配对。
+        let node = match (
+            record.state(),
+            peer.as_ref().map(crate::model::PairingPeer::id),
+        ) {
+            (
+                PairingState::Approved | PairingState::Consumed,
+                Some(PeerIdentity::Node(node_id)),
+            ) => self
+                .trust
+                .nodes_for(node_id)
+                .await?
+                .into_iter()
+                .find(|row| row.kind() == NodeKind::Access),
+            _ => None,
+        };
+        Ok(Some(PairingChannelView { record, peer, node }))
     }
 
     /// 已认领的对端行（读回公钥是确认事务的前置输入，§11.5）。
@@ -2054,6 +2106,120 @@ mod tests {
         assert!(
             fixture.world.write_audits.lock().expect("lock").is_empty(),
             "被拒的认领不得产生任何写集审计"
+        );
+    }
+
+    /// design D12（seam 补全）：配对通道的只读视图只对绑定该配对的 claimant 开放，不含任何写入；
+    /// 未认领的配对没有对端行，未知配对 id 返回 `None`（而不是错误）。
+    #[test]
+    fn pairing_channel_view_is_bound_to_the_claimant() {
+        let fixture = fixture();
+        let node_id = NodeId::new(&uuid_text(66)).expect("node");
+        let pairing = PairingId::new(&uuid_text(67)).expect("pairing");
+        seed_pairing(
+            &fixture.world,
+            &pairing,
+            PairingTarget::Node,
+            PairingState::PendingConfirmation,
+            peer(PeerIdentity::Node(node_id.clone())),
+        );
+        let bound = Actor::PairingClaimant {
+            pairing: pairing.clone(),
+        };
+        let view = block_on(fixture.use_cases.pairing_channel_view(&bound, &pairing))
+            .expect("claimant view")
+            .expect("seeded pairing");
+        assert_eq!(view.record.state(), PairingState::PendingConfirmation);
+        assert_eq!(
+            view.peer.as_ref().map(crate::model::PairingPeer::id),
+            Some(&PeerIdentity::Node(node_id))
+        );
+        assert!(view.node.is_none(), "未批准时没有授权集可读");
+
+        // 本机入口保持可读；其它 actor 与绑定别的配对的 claimant 都是同一种拒绝。
+        assert!(
+            block_on(
+                fixture
+                    .use_cases
+                    .pairing_channel_view(&Actor::LocalCli, &pairing)
+            )
+            .expect("local view")
+            .is_some()
+        );
+        let other = Actor::PairingClaimant {
+            pairing: PairingId::new(&uuid_text(68)).expect("pairing"),
+        };
+        let device = Actor::Device {
+            device: DeviceId::new(&uuid_text(69)).expect("device"),
+            scopes: ScopeSet::empty(),
+        };
+        for denied in [&other, &device] {
+            let error = block_on(fixture.use_cases.pairing_channel_view(denied, &pairing))
+                .expect_err("未绑定该配对的 actor 必须被拒");
+            assert!(
+                matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
+                "拒绝形状必须与 require_local 一致，得到 {error:?}"
+            );
+        }
+
+        // 未知配对 id：`None`，不是错误（端点据此区分 404 与 401）。
+        let unknown = PairingId::new(&uuid_text(70)).expect("pairing");
+        let bound_unknown = Actor::PairingClaimant {
+            pairing: unknown.clone(),
+        };
+        assert!(
+            block_on(
+                fixture
+                    .use_cases
+                    .pairing_channel_view(&bound_unknown, &unknown)
+            )
+            .expect("unknown pairing")
+            .is_none()
+        );
+        assert!(
+            fixture.world.write_audits.lock().expect("lock").is_empty(),
+            "只读视图不产生任何写集审计"
+        );
+    }
+
+    /// design D12（seam 补全）：`approved`/`consumed` 时视图带上该对端的 `access` 节点行
+    /// （`grant.*` 的唯一来源）；同一对端的 `owner` 行属于另一个方向，不被选中。
+    #[test]
+    fn pairing_channel_view_exposes_the_granted_grants_after_approval() {
+        let fixture = fixture();
+        let node_id = NodeId::new(&uuid_text(76)).expect("node");
+        let pairing = PairingId::new(&uuid_text(77)).expect("pairing");
+        seed_pairing(
+            &fixture.world,
+            &pairing,
+            PairingTarget::Node,
+            PairingState::Approved,
+            peer(PeerIdentity::Node(node_id.clone())),
+        );
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node_id,
+            NodeKind::Access,
+            NodeState::Paired,
+        ));
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node_id,
+            NodeKind::Owner,
+            NodeState::Paired,
+        ));
+
+        let bound = Actor::PairingClaimant {
+            pairing: pairing.clone(),
+        };
+        let view = block_on(fixture.use_cases.pairing_channel_view(&bound, &pairing))
+            .expect("claimant view")
+            .expect("seeded pairing");
+        let node = view
+            .node
+            .expect("已批准的配对必须带出该对端的 access 节点行");
+        assert_eq!(node.kind(), NodeKind::Access);
+        assert_eq!(
+            node.grants().iter().collect::<Vec<&str>>(),
+            vec!["grant.remote-work"]
         );
     }
 
