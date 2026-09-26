@@ -8,13 +8,16 @@
 > 上位文档：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.1/§4.7/§5/§6/§7/§8/§10、[INITIAL_DESIGN.md](./INITIAL_DESIGN.md) §5/§10、[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §3/§9/§10/§11/§14、[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §6/§7/§12/§15、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13/§14/§15、[CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) §4/§5/§6、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5
 > 作用：冻结 `core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 的 v2 表结构、保留/清理与 migration。**本文件是这些内容的唯一权威来源**；`MODULE_ARCHITECTURE.md` §4.1/§4.7 只保留职责边界。
 > 标记约定：`[决定]` = 本合同新定且不改变既有协议语义；`[待确认]` = 触及协议或产品语义，需用户确认；`[open]` = 明确留到实现阶段。
-> 修订（2026-09-23）：§11.5–§11.9 的形状已并入 §3.5/§3.6/§3.7/§5.1/§5.3/§7.2/§7.3/§7.4，§11 改为「形状已并入」索引（只留设计理由）；`scripts/check-contract-drift.mjs` 对新增端口签名与 DDL 逐条断言。`storage-sqlite` 的管理 store 落盘实现已落地（`crates/storage-sqlite/src/admin/`，写集一事务提交、失败关闭与容量纳入）。**Daemon/CLI 接线与 `server`/`app` 的入站适配器已随切片 4 `daemon-cli-and-local-admin` 落地**（`server` 的本地管理与 `app` 组合根/CLI，见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9/§4.10；`identity-auth`/`identity-keystore` 两个身份 crate 已于 2026-09-24 落地，见 §4.8/§4.12）；仍未实现的是 `server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client`。在远程与网络适配器落地前，不能把合同检查或存储测试通过解释为配对、撤销或本地配置已经端到端可用。
+> 修订（2026-09-23）：§11.5–§11.9 的形状已并入 §3.5/§3.6/§3.7/§5.1/§5.3/§7.2/§7.3/§7.4，§11 改为「形状已并入」索引（只留设计理由）；`scripts/check-contract-drift.mjs` 对新增端口签名与 DDL 逐条断言。`storage-sqlite` 的管理 store 落盘实现已落地（`crates/storage-sqlite/src/admin/`，写集一事务提交、失败关闭与容量纳入）。**Daemon/CLI 接线与 `server`/`app` 的入站适配器已随切片 4 `daemon-cli-and-local-admin` 落地**（`server` 的本地管理与 `app` 组合根/CLI，见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9/§4.10；`identity-auth`/`identity-keystore` 两个身份 crate 已于 2026-09-24 落地，见 §4.8/§4.12）；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 的 Owner 侧入站面已随切片 5 `node-link-owner` 落地，见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9）。在远程与网络适配器落地前，不能把合同检查或存储测试通过解释为配对、撤销或本地配置已经端到端可用。
 > 版本：0.6（2026-09-23：§11 从「表设计 + 要求」补成可实现合同——新增 §11.5 身份值对象与读取形状、§11.6 管理写入 DTO 与端口签名（目标形状）、§11.7 管理表 DDL（目标形状）、§11.8 版本常量/migration/fixture 约定。**§11.5–§11.8 是 `[待实现]` 的目标形状**：它们不写入 §5/§7，因为 `scripts/check-contract-drift.mjs` 把 §5 的 ```rust 块与 `crates/core/src/ports.rs`、§7 的 ```sql 块与 `crates/storage-sqlite/src/migrate.rs` 逐条绑定；实现变更必须把这些形状并入 §5/§7 并让漂移门禁断言，在此之前不得只加表就声明管理状态可用）
 > 版本：0.7（2026-09-23：§11.5–§11.9 落地——§5.3 换为写集端口（`WriteContext`/`PendingAudit` + 全部写集 DTO + `TrustStore`/`ExportStore` 新签名 + `LocalConfigStore`/`CredentialResolver`），§3.5/§3.6/§3.7 补 `PeerPublicKey`、`ResolvedWorkspace` 与本地配置值对象，§7 升级为 v2 表结构（9 张管理表 + 2 个索引 + `imported_import` 拆分），§7.2 新增 v1 → v2 迁移规则与 v2 夹具，§9 增补判据 23–29，§11 改为索引）
 > 版本：0.9（2026-09-23：§2 的错误枚举补齐 `ConflictKind::{AlreadyExists, IdentityMismatch, DuplicateOwnership}` 与 `UnavailableKind::KeystoreUnavailable` 及到 `local.conflict`/`local.unavailable` 的映射义务；§11.6 写集语义第 4 条按目标族区分落定审计（设备 `pairing.approved` / 节点 `node.paired`）；签名、判据与 DDL 未变）
 > 版本：0.8（2026-09-23：管理 store 的落盘实现落地（`crates/storage-sqlite/src/admin/`）后，把 §5.3/§9/§11 与关联文档里「仍待实现」的陈述改为与实现一致；合同形状、判据与 DDL 未变）
 > 版本：0.10（2026-09-23：补齐管理存储的**终态与单调性守卫**——§5.2 补 imported 写路径的归属前置（`upsert_session`/`commit_receipt` 先验 `(ownerNodeId, exportId)` 归属，否则 `NotFound(Export)` 且零写入）、§5.3 补 `put_export` 撤销终态 / 身份材料读取核对同行指纹 / 活动时间只前进（显式 `CASE`）、§7.4 补迟到回调拒绝与「重导入后无法区分新旧连接」的已知边界、§9 新增判据 30。**§5/§7 的代码块、端口签名与 DDL 未变**，漂移门禁继续逐条成立；wire 协议、封闭词表与本地管理方法集未变）
 > 版本：0.11（2026-09-24：§10.3 的 view 收口落地——§5.1 写明 `TurnAccepted.turn` 是适配器侧占位/审计值（turn 归属由 core 定稿），§6 新增第 19 条（提交前注入 `turnId` 与会话 `version`、冲突与漂移失败关闭、imported 路径保留 Owner 取值），§9 新增判据 31；端口签名与 DDL 均未变）
+> 版本：0.12（2026-09-26，`node-link-owner` 变更 WP5：为 Node Link 的资源读面补三条窄 seam——`ReadView::node_link_slice`（会话摘要 + origin head + 未决交互含创建事件 id + `after` 之后的事件含正文，同一次只读事务）、`ReadView::session_event_payload`（按会话归属取正文）、`AuditStore::watermark`（管理写集水位 = `catalogRevision` 的唯一来源）；`NodeLinkHandshakeView` 增 `catalog_revision` 字段（`catalogRevision` 不再取 `store.head()`）。§4 补两条 `[决定]`（`catalogRevision` 口径含已登记的精度边界、三条资源读 seam 的绑定规则），§5.2/§5.3 的 trait 签名同步；DDL 未变，漂移门禁继续逐条成立）
+
+> 版本：0.13（2026-09-26，`node-link-owner` 变更 WP6 修复轮次（RV1-WP6-F1）：`session.create` 的幂等与终态落进 `owned_command`——§4 补一条用例入口（`create_session` / `settle_session_create`）、§5.1 的 `[决定]` 同步签名与指纹义务、§6 新增第 20 条（创建提交回填 `session_id`、终态提交、崩溃窗口走第 16 条恢复、重试与冲突）。**§5/§7 的代码块与 DDL 未变**（未新增端口方法与表列），漂移门禁继续逐条成立）
 
 ## 1. 范围与非目标
 
@@ -143,9 +146,9 @@ pub enum UnavailableKind {
 
 | 类型 | 形状 | 出处 |
 |---|---|---|
-| `Actor` | enum `Device { device: DeviceId, scopes: ScopeSet } ｜ Node { node: NodeId, access_node: NodeId } ｜ LocalCli`；`ScopeSet` 为 scope 名集合 | `MODULE_ARCHITECTURE.md` §5；`SECURITY_DESIGN.md` §10.2 |
+| `Actor` | enum `Device { device: DeviceId, scopes: ScopeSet } ｜ Node { node: NodeId, access_node: NodeId } ｜ LocalCli ｜ PairingClaimant { pairing: PairingId }`；`ScopeSet` 为 scope 名集合。`Node` 的 `node` 是**对端（claimant／连接对端）节点 id**（本轮钉死）：Owner 侧即 claim 里声明的 `accessNodeId`，Access 侧即本地 Import 的 `ownerNodeId`（`NODE_LINK_PROTOCOL.md` §12.5）；配对消费与握手的对端比对（`TrustStore::consume_pairing`、`PairingConsumption`）只比它，`AuditRecord.via_node` 与 broker 判定 Import 授权时的 `ImportRecord.owner_node_id` 也是同一口径；`access_node` 的既有含义不变（该连接的 Access 端点）。`PairingClaimant` 是配对 HTTP 通道的认领方（design D12，构造规则见 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1）：**绑定一个配对**，只在该配对为本次调用目标时才被用例面接受，且永不被 broker 授予任何命令 | `MODULE_ARCHITECTURE.md` §5；`SECURITY_DESIGN.md` §10.2 |
 | `DeviceRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.3（含 `deviceId`、指纹、`scopes`、状态、时间戳） | 同左 |
-| `NodeRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.4（含 `nodeId`、指纹、`grants`、`state`、`ownerEndpoint`）；同一 `nodeId` 可同时存在 `access`/`owner` 两行，读取与撤销按 `(NodeId, NodeKind)` 取行，两种角色共享一条身份材料（§11.5/§5.3） | 同左 |
+| `NodeRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.4（含 `nodeId`、指纹、`grants`、`state`、`ownerEndpoint`）；同一 `nodeId` 可同时存在 `access`/`owner` 两行，读取与撤销按 `(NodeId, NodeKind)` 取行，两种角色共享一条身份材料（§11.5/§5.3）。`lastConnectedAt` 是**最近一次认证成功时间**（§11.6 第 9 条）：每次成功认证的收尾写集都推进它，值只前进不倒退（§5.3 约束） | 同左 |
 | `PairingRecord` | `{ id: PairingId, target: PairingTarget(Device｜Node), state: PairingState, display_name: Option<String(1..=128)>, requested_scopes: ScopeSet, requested_grants: GrantSet, secret_digest: Digest, host_binding: String(1..=2048), created_at, expires_at, claimed_at: Option, approved_at: Option, terminal_at: Option }`；构造校验：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；`host_binding` 非空（空串 → `InvalidValue::Empty`）；**设备配对不得带 grants、节点配对不得带 scopes**。`secret_digest` 是 pairing secret 的 SHA-256——明文只存在于创建方内存（`SECURITY_DESIGN.md` §13.1）。`host_binding` 是**登记方**宣告的绑定（设备为 canonical origin，节点为本机在该配对中的 endpoint），落 `owned_pairing.host_binding`，认领时必须被对端逐字回显（§11.2 第 1 条、§7.3） | 本合同（**首个实现已冻结**，见 `crates/core/src/model/identity.rs`）；方法形状见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 |
 | `PairingState` | enum `Created｜Claimed｜PendingConfirmation｜Approved｜Rejected｜Expired｜Consumed`；终态 = `Rejected｜Expired｜Consumed`；`Claimed` **不对外可见**（只在服务端事务与审计里出现） | `SYNC_PROTOCOL.md` §7.0 |
 | `PeerIdentity` | enum `Device(DeviceId)｜Node(NodeId)`；`kind()` 给出 "device"/"node" | 本合同 |
@@ -153,10 +156,11 @@ pub enum UnavailableKind {
 | `PairingPeer` | `{ id: PeerIdentity, display_name: String(1..=128), public_key: PeerPublicKey, host_binding: String(1..=2048), client_nonce: Nonce }`；指纹不再单独存放，由 `public_key.fingerprint()` 派生（`LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的 wire 字段 `publicKeyFingerprint` 语义不变，值变成派生结果）；`host_binding` 是 claim 里回显的绑定（设备为 `canonicalOrigin`、节点为 `endpoint`），必须与登记的 `PairingRecord.host_binding` 逐字相等，`owned_pairing_peer` 不单独存该列（读取时从配对行回填） | `SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2 |
 | `PairingClaim` | `{ pairing: PairingId, peer: PairingPeer, requested_scopes: ScopeSet, requested_grants: GrantSet }`——HMAC/proof 由**调用方**验证，进入本类型时只剩已核对的事实；设备配对不对带 grants、节点配对不得带 scopes | 本合同（`TrustStore::claim_pairing` 的输入） |
 | `PairingSettlement` | enum `Approved { granted_scopes: ScopeSet, granted_grants: GrantSet }｜Rejected { reason: Option<String(≤256)> }`；`granted_*` 是**用户确认的最终集合**（不是请求值）；`reason` 是简短原因，不进审计正文 | 本合同（`TrustStore::settle_pairing` 的输入） |
+| `PairingConsumption` | `{ pairing: PairingId, actor: Actor, context: WriteContext }`；`actor` 是本次认证的主体，只接受与该配对**已批准对端**一致的 `Actor::Node`/`Actor::Device`，`context.audit` 必须携带与它同主的审计行（`node.authenticated`/`device.authenticated`） | 本合同（`TrustStore::consume_pairing` 的输入） |
 | `ExportRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 `ExportView`（`exportId`、`agentIds`、`workspaceAliases`、`defaultWorkspaceAlias`、`templates`、**`scopes`**、`cachePolicy`、`createdAt`、`revokedAt`） | 同左（字段名已按本次决定与 Node Link 对齐） |
 | `ImportRecord` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 `ImportRecord`（`importId`、`ownerEndpoint`、`ownerNodeId`、`exportIds`、`grants`） | 同左 |
 | `AuditRecord` | `{ at: Timestamp, action: AuditAction, actor: Actor, via_node: Option<NodeId>, local_principal_ref: Option<String(≤128)>, target: EntityRef, outcome: AuditOutcome, detail_digest: Option<Digest> }`；**不含任何内容** | `SECURITY_DESIGN.md` §14.2 |
-| `AuditAction` | 闭合枚举：`PairingCreated｜PairingClaimed｜PairingApproved｜PairingRejected｜PairingExpired｜DeviceAuthenticated｜DeviceAuthFailed｜DeviceRevoked｜DeviceScopesChanged｜NodePaired｜NodeTrustRevoked｜NodeIdentityChanged｜ExportCreated｜ExportRevoked｜ImportAdded｜ImportRemoved｜ProviderConfigured｜AuthorizationDenied｜RateLimitTriggered｜StorageIntegrityFailed` | `SECURITY_DESIGN.md` §14.2 |
+| `AuditAction` | 闭合枚举：`PairingCreated｜PairingClaimed｜PairingApproved｜PairingRejected｜PairingExpired｜DeviceAuthenticated｜DeviceAuthFailed｜DeviceRevoked｜DeviceScopesChanged｜NodePaired｜NodeAuthenticated｜NodeAuthFailed｜NodeTrustRevoked｜NodeIdentityChanged｜ExportCreated｜ExportRevoked｜ImportAdded｜ImportRemoved｜ProviderConfigured｜AuthorizationDenied｜RateLimitTriggered｜StorageIntegrityFailed` | `SECURITY_DESIGN.md` §14.2 |
 | `AuditOutcome` | enum `Success｜Denied｜Failed` | 本合同 |
 
 ### 3.6 后端与能力
@@ -190,6 +194,7 @@ pub enum UnavailableKind {
 | 用例族 | 入口 | 调用方 |
 |---|---|---|
 | `SessionCommands` | `submit_command(actor, ClientCommand) -> CommandReceipt` | `server::sync`、`server::node_link`、`server::acp_facade` |
+| `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceAlias>) -> SessionId`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条） |
 | `SessionQueries` | `list_sessions(actor, SessionQuery) -> Vec<SessionSummary>`、`read_session(actor, ReadQuery) -> HistoryPage` | 同上 |
 | `ConfigCommands` | `set_mode(actor, SessionReference, ModeId) -> Version`、`set_config(actor, SessionReference, ConfigOptionId, ConfigValue) -> Version` | 同上 |
 | `PermissionCommands` | `resolve_interaction(actor, SessionReference, InteractionId, InteractionResolution) -> Resolution` | 同上 |
@@ -197,6 +202,24 @@ pub enum UnavailableKind {
 | `DeviceManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的 `device.*`/`node.*` | `server::local_admin`、`app::cli` |
 | `ExportManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 的 `export.*`/`import.*` 写方法 | 同上 |
 | `RemoteCatalogQueries` | 见 §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
+| `PairingChannel` | `claim_pairing(actor, PairingClaim) -> PairingClaimOutcome`、`pairing(actor, PairingId) -> Option<PairingRecord>`、`pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`、`consume_pairing(actor, PairingId) -> PairingRecord` | `server::node_link`（及未来 `server::sync`）；前两项另由 `server::local_admin` 以 `Actor::LocalCli` 调用 |
+| `NodeLinkHandshake` | `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`、`record_node_link_auth(accessNodeId, AuditAction, AuditOutcome) -> ()`、`record_node_connected(accessNodeId) -> ()` | `server::node_link`（及未来 `server::sync` 的同形入口） |
+
+`[决定]` 配对通道的 actor 规则（design D12）：`claim_pairing`/`pairing`/`pairing_channel_view` 在 `Actor::LocalCli` 之外**只**接受 `Actor::PairingClaimant`，且 `actor.pairing` 必须等于本次调用的目标配对，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绝形状，不区分「不是本机入口」与「绑定了别的配对」）；`consume_pairing` **只**接受与该配对已批准对端一致的 `Actor::Node`/`Actor::Device`，把 `approved` 推进到 `consumed`（`terminal_at` + 审计同一写集），已是 `consumed` 且对端一致时幂等成功（不覆盖首次 `terminal_at`，也不重复写审计）。
+
+`[决定]`（2026-09-26，seam 补全）`pairing_channel_view` 是配对 HTTP 端点的**唯一**只读入口：它一次带回记录、已认领的对端行与已批准后的对端节点行（`grant.*` 的唯一来源，`PairingRecord` 不带 `granted_*`），不含任何写入，也不返回秘密材料（pairing secret 只在状态机内存）。认领路径允许在 proof 校验**之前**读取（端点必须先拿到记录才能校验 HMAC），但状态推进仍只能经 `claim_pairing` 的写集、且只在 proof 通过后提交；拒绝仍收集在同一类 `authorization.scope_denied`。入口绑定式读取（claimant 只能读自己那个配对的三类行）是硬约束：不允许放开为通用只读。
+
+`[决定]`（2026-09-26，WSS 握手 seam 补全；同一方向的第二次补全）`NodeLinkHandshake` 是 WSS 握手准入的三条窄入口，服务 `design.md` D3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1：
+
+- `node_link_handshake_view(access_node)`：用例面**唯一**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor, catalog_revision: u64 }`：五项都是握手本次调用需要且只需要的持久事实；`head` 是 `serverEpoch` 的来源，`catalog_revision` 是 `node.challenge.catalogRevision` / `node.ready.catalogRevision` 的来源。
+- `record_node_link_auth(access_node, action, outcome)`：只接受 `node.authenticated`/`node.auth_failed`/`authorization.denied`（其余 → `authorization.scope_denied`），归因 `actor`/`via_node` 都是该对端 id、`target = Node(对端)`、`localPrincipalRef` 为 `None`（§8.3 节点级信任）。首次认证成功（已批准配对 → `consumed`）的那条 `node.authenticated` 由 `consume_pairing` 的写集提交，适配器不得再补一条。`authorization.denied` 服务命令管线：`server::node_link` 的可见性/授权交集比 `Broker::authorize` 的 Owner 侧判定更严，被它拒的命令不会到达 broker，拒绝留痕只能经本入口（`design.md` D8 第 2 步）。
+- `record_node_connected(access_node)`：**重复认证**（没有待消费配对）的收尾写集（§11.6 第 9 条）——把 `(access_node, access)` 行的 `last_connected_at` 推进到本次时间（只前进不倒退）并把 `node.authenticated` 在同一事务提交；归因与上一条逐字一致。首次认证的同一职责由 `consume_pairing` 的写集承担，两者不得互相替代（否则 `lastConnectedAt` 会停在首次认证的时刻）。
+
+`[决定]`（2026-09-26，`node-link-owner` 变更 D4/G5 的实现期结论）**`catalogRevision` 的唯一来源是 [`AuditStore::watermark`]**（本机审计自增序列，`storage-sqlite` 取 `sqlite_sequence.owned_audit`），不再用 `store.head()`：全局水位会随保留期裁剪回退，而 `catalogRevision` 要跨重启与清理单调。`node.challenge`/`node.ready`/`catalog.snapshot` 三个字段同源（实测不变式：同一次握手的挑战与 `node.ready` 必然相等，因为两者用同一份视图快照）。**已登记的精度边界**：该水位随每一行审计前进，包括 `node.auth_failed`/`authorization.denied`/`rate_limit.triggered` 这类不改变导出目录的动作，因此「revision 未变 ⇒ 目录未变」并不成立（反向「目录变了 ⇒ revision 必变」成立）。v1 不依赖前者：`knownRevision` 非空时仍回完整快照（`catalog.changed` 属 `post_mvp`）。
+
+`[决定]`（2026-09-26，同一变更）**Node Link 资源读面的三条端口 seam（`ReadView::node_link_slice`/`ReadView::session_event_payload`/`AuditStore::watermark`）与它们的四个用例入口（`node_link_catalog_view`/`node_link_session_view`/`node_link_replay`/`node_link_event_payload`）**（见 `server::node_link` 的 catalog/resource 模块）：与 `NodeLinkHandshake` 同一模式——无 `actor`、按已认证 `accessNodeId` 绑定、零写入、零审计；会话级读必须同时给出 `(access_node, exportId, session)`，由 core 硬校验「对端是已配对的 `access` 行 + Export 存在且未撤销 + 会话的 Agent 属于该 Export」，**不得**复用 `Broker::authorize` 的 `Actor::Node` 分支（那是 Access 侧本地客户端的语义）。「这个 Export 是否对该节点可见」是适配器的**单点可见性策略**（D14：未撤销且 `export.scopes ∩ 节点 grants ≠ ∅`），不在 core 重复实现。
+
+四个用例入口都不放宽既有 `LocalCli` 路径的行为，也不新增任何对端可见的能力。
 
 ## 5. `core::ports` 出站端口
 
@@ -241,7 +264,7 @@ pub trait SessionEndpoint: Send + Sync {
 - `[决定]` 后端事件通道：`create`/`open` 接收 `EventSink`（`[决定]` 定义为 `Arc<dyn Fn(EndpointEvent) + Send + Sync>` 的包装类型，由 core 提供有界队列的发送端）；`EventSink` 的调用顺序即提交顺序，broker 按该顺序组装 `OwnedCommit`（§6 第 1/3 条）。**不**在 `SessionEndpoint` 上暴露 `next_event`，以免后端自己持有排序权。
 - `[决定]` **`TurnAccepted.turn` 是适配器侧占位/审计值，不是 turn 归属的权威来源**：turn 归属一律由 core 在提交前用自己的 `TurnId`（`IdGenerator::turn_id`）定稿并写入 `owned_event.turn_id` 与事件 view 的 `turnId`（§6 第 19 条）；适配器返回的值**不得**参与归属决策、不得产生第二个 turn 行，也不得影响事件顺序（§9 判据 31）。
 - `[决定]` `read_history` 的分流：owned 由 `storage-sqlite` 从事件日志回答；imported 由 `node-link-client` 在线回源 Owner，Owner 不可达返回 `PortError::Unavailable(RemoteUnavailable)`。
-- `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, request, workspace_alias)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。
+- `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, requestId, requestFingerprint, request, workspace_alias)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。`requestId` 与 `requestFingerprint` 由适配层传入（Node Link 的幂等键是 `(ownerNodeId, accessNodeId, requestId)`，指纹是 ACPR-CJ1 之后的解码 payload 摘要）：core **不得**自造 requestId 或指纹，否则同一次重试会得到第二个幂等键（§6 第 20 条）。终态由 `UseCases::settle_session_create(actor, requestId, status, result, error)` 提交（没有持久记录或记录已终结时是幂等 no-op），`completed` 的 `result` 由适配层投影（Node Link 的 `SessionCreateResult` 原文）。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。
 
 ### 5.2 持久化端口
 
@@ -301,6 +324,11 @@ pub trait ReadView: Send + Sync {
     /// 可用时 `raw_json` 必须字节保真，不可用时按行里的 `acp_raw_unavailable_reason` 还原为
     /// `AcpRaw::Unavailable`。事件不存在返回 `None`。
     async fn event_payload(&self, event: &EventId) -> Result<Option<EventPayload>, PortError>;
+    /// Node Link 的会话读视图（`NODE_LINK_PROTOCOL.md` §12.4，`design.md` D6）：`after` 之后的会话事件
+    /// **含持久化正文**，以及快照需要元数据（`after` 的 epoch 是否一致由调用方判定）。
+    async fn node_link_slice(&self, session: &SessionId, after: Option<OriginCursor>, limit: ReplayLimit) -> Result<NodeLinkSlice, PortError>;
+    /// 指定会话内某条 owned 事件的正文（事件 id 与会话必须同时匹配，否则 `None`）；还原规则同 `event_payload`。
+    async fn session_event_payload(&self, session: &SessionId, event: &EventId) -> Result<Option<EventPayload>, PortError>;
 }
 
 pub struct DeliveryReceipt {
@@ -446,6 +474,28 @@ pub struct ExpiryWrite {
     pub context: WriteContext,
 }
 
+/// 消费一个已批准的配对（§11.6 第 8 条）。
+///
+/// `actor` 是本次认证的主体：只接受与该配对**已批准对端**一致的 `Actor::Node`/`Actor::Device`（存储层
+/// 在同一事务内与 `owned_pairing_peer` 比对）；`context.audit` 必须携带与 `actor` 同主的审计行
+/// （`node.authenticated`/`device.authenticated`，`SECURITY_DESIGN.md` §14.2）。写集还推进对端节点行的
+/// `last_connected_at`（§11.6 第 9 条）：`actor` 为 `Actor::Node` 时该行是 `(actor.node, access)`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingConsumption {
+    pub pairing: PairingId,
+    pub actor: Actor,
+    pub context: WriteContext,
+}
+
+/// 认证成功的收尾写集（§11.6 第 9 条）：`(node, kind)` 行的 `last_connected_at` 与 `context.audit`
+/// （`node.authenticated` 成功行）同一事务提交；服务「认证成功但没有待消费配对」的重复认证。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeConnectedWrite {
+    pub node: NodeId,
+    pub kind: NodeKind,
+    pub context: WriteContext,
+}
+
 /// 写入/更新一个 Export（§11.6）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportWrite {
@@ -532,6 +582,13 @@ pub trait TrustStore: Send + Sync {
     /// 已认领的对端行（确认事务从它读回公钥，§11.5）。
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError>;
 
+    /// 该对端**最近一次**配对（`design.md` D3：Node Link 握手准入手里的绑定与待消费配对来源）。
+    ///
+    /// 配对行本身是「登记方宣告的 `host_binding`」的唯一权威（`PairingRecord`，§11.2 第 1 条），
+    /// 而节点信任行不带该列；同一对端先后可能有多条配对行，因此这里按 `created_at`、`pairing_id`
+    /// 降序取一条，结果确定（同一次读取的输入决定同一次读取的输出）。没有任何配对行时返回 `None`。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError>;
+
     async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError>;
 
     async fn put_node(&self, write: NodeWrite) -> Result<(), PortError>;
@@ -553,6 +610,16 @@ pub trait TrustStore: Send + Sync {
     ) -> Result<TrustRecordRef, PortError>;
 
     async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError>;
+
+    /// 消费一个已批准的配对（§11.6 第 8 条）：单事务把状态推进到 `consumed` 并写 `terminal_at`、追加
+    /// `context.audit`；已是 `consumed` 且 `actor` 与对端一致时幂等成功（不覆盖首次 `terminal_at`，也
+    /// 不重复写审计）。写集还推进对端节点行的 `last_connected_at`（见 [`PairingConsumption`]）。
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError>;
+
+    /// 认证成功的收尾写集（§11.6 第 9 条）：单事务把 `(node, kind)` 行的 `last_connected_at` 推进到
+    /// `context.at`（只前进不倒退、不抹掉已存值）并追加 `context.audit`；该行不存在 →
+    /// `NotFound(EntityRef::Node)`。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError>;
 }
 
 /// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。
@@ -636,6 +703,10 @@ pub trait AuditStore: Send + Sync {
     async fn append(&self, record: AuditRecord) -> Result<(), PortError>;
 
     async fn query(&self, query: AuditQuery) -> Result<Vec<AuditRecord>, PortError>;
+
+    /// 管理写集的变更水位（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）：只增不减的审计自增序号，
+    /// 不得随清理回退（Export/信任写集各追加一行审计，因此它正是这些写集的变更点）。
+    async fn watermark(&self) -> Result<u64, PortError>;
 }
 
 /// 内容寻址附件的引用。`id` 由存储层分配（`AttachmentStore::put` 不接受 id 参数）。
@@ -717,11 +788,18 @@ pub trait IdGenerator: Send + Sync {
 2. imported：`node-link-client` → broker 组装 `DeliveryReceipt` → `RemoteDeliveryStore::commit_receipt` → 发布（正文只在内存）。
 3. `[决定]` 每会话串行：一个会话一个 actor，命令/后端事件/终态在同一串行队列内处理；不同会话并行。
 4. `[决定]` active turn：同一会话最多一个非终态 turn。`sessions.queue_policy = queue` 时按持久化接受顺序排队，超过 `sessions.max_queued_turns`（16）返回 `session.busy`；`= reject_busy` 时直接返回 `session.busy`（`CONFIG_REFERENCE.md` §4）。
-5. `[决定]` 授权调用点：所有用例入口先按 `actor` 的 scope/grant 与 Export 交集判定；core 不信任 adapter 的“已授权”标志。
+5. `[决定]` 授权调用点：所有用例入口先按 `actor` 的 scope/grant 与 Export 交集判定；core 不信任 adapter 的“已授权”标志。`Actor::Node` 的判定分两侧：**Access 侧**（本节点是对方的客户端）要求本地 `ImportRecord.grants` 覆盖该命令；**Owner 侧**（本节点是导出方）要求该对端的 `access` 信任行已配对且 `grants` 含该命令所需的 grant（`required_grant`），**并且**存在一个未撤销的 `ExportRecord`——它的 `scopes` 含该 grant、与本节点信任记录的 grants 有交集（`export.scopes ∩ node.grants ≠ ∅`，与 Node Link 的可见性口径同源）、且会话命令还需覆盖目标会话的 agent。**无会话命令**（`session.list`/`command.status`/`session.create`）没有目标会话可比对 agent，因此只需前两条（信任 grant + 存在满足条件的 Export）；它的结果过滤（`session.list` 只列该节点可见 Export 内的会话）与参数校验（`session.create` 的 `agentId`/`exportId`/`workspaceAlias`）仍由 `server::node_link` 按其单点可见性策略完成，本层只判授权。为使该判定成立，`BrokerDeps` 必须注入 `TrustStore`（授权不能只靠 Export 记录）；`session.create` 的 `CreateSessionRequest` 不携带 `exportId`（Export 归属由适配层在调用前校验），因此本层对它的 Owner 侧判定按上述“存在满足条件的 Export”执行。
 6. `[决定]` 幂等键是**协议维度**的 `(actor, requestId)`：Sync 侧 actor 由 `deviceId` 决定（`SYNC_PROTOCOL.md` §11.1），Node Link 侧由 `(ownerNodeId, accessNodeId)` 决定（`NODE_LINK_PROTOCOL.md` §12.5）。重复提交时必须比对 `command`/`kind`/`session`/`expected_version`/`request_fingerprint`：任一不同 → `command.idempotency_conflict`；全同 → 返回首次结果（`CommitOutcome::replayed`），**不得**二次派发。
 7. `[决定]` 权限仲裁：`resolve_interaction` 的 first-writer-wins；`interaction.already_resolved` 之后到达的应答必须被拒绝且不覆盖既有结果。
 8. `[决定]` 模型/配置切换只在 turn 边界生效；非终态 turn 期间的 `set_mode`/`set_config` 排队到边界或返回 `state.version_conflict`。
 9. `[决定]` 磁盘写失败：`commit` 返回 `PortError::Unavailable` → 命令显式失败或 `uncertain`；**不得**发布对应事件（`SECURITY_DESIGN.md` §15）。
+    - **非终态批次失败不得只丢弃**（`node-link-owner` 的 WP7 修复轮次 RV1-WP7-F3）：失败批次携带在跑 turn 的事件时，broker 必须用一次提交把该 turn 终结为 `failed`、把命令置为 `uncertain`，并把该 turn **已落盘** delta 的 `agent.message.completed`（第 14 条）与它们同批提交——缺的那一块不伪造。
+    - 被终结的 turn 进入「已放弃」集合：它后续到达的事件（含终态）不再提交，因此库里不会出现「报完成但正文缺失」的记录；适配器不带 turn 标识时，无在跑 turn 的迟到事件按最后被放弃的 turn 归属（归属集合见第 19 条的 `turnId` 集合），而不是被记到下一个 turn 上。
+    - **被放弃的 turn 继续占住会话槽**（`node-link-owner` 的 WP7 修复轮次 RV2-WP7-F1）：在它的终态被端点观测到之前，`dispatch_one` **不得**提升下一个排队 turn。理由是归属只能靠「有在跑 turn 时归给它」推断（第 19 条）：一旦提前派发，下一个 turn 就成了那个「在跑的 turn」，上一个 turn 的迟到事件（含终态）会被记到它头上——客户端看到下一个命令 `completed`，而它的正文被按上一个 turn 的收尾折叠。占住期间它的迟到事件（含 permission/elicitation 请求）一律按它归属并丢弃：不落库、不写交互行、不广播——这是相对第 19 条「无归属时照常落库（`turnId` 为 NULL）」的**有意更强的处置**，只在有可归属的被放弃 turn 时适用；收敛这个已经终结为 `uncertain` 的 turn 是端点的职责。占住期间该会话按**仍有 active turn** 处理（`TurnQueue.running` 未清空），客户端可见后果是：`session.mode.set`/`session.config.set` 返回 `state.version_conflict`（第 8 条），`session.prompt` 按 `sessions.queue_policy` 受理排队或返回 `session.busy`（第 4 条）。
+        - 释放占位有两条路径：①该 turn 的终态事件到达（按上面丢弃，但视为「端点已观测到它结束」）；②兜底——占位消耗的驱动轮次达到 core 常量 `ABANDONED_TURN_HOLD_ROUNDS`（`1200` 轮；组合根按 `storage.flush_interval_ms` 驱动活动会话，默认 250 ms 一轮 ≈ 5 分钟）。core 不读时钟、不设定时器，因此兜底按轮次而不按墙钟计时：端点永不收敛时优先让会话继续可用。
+        - 仍有排队 turn 时，这次放弃提交把会话状态写成 `queued`（而非 `failed`）：组合根的合并窗口只枚举 `queued`/`running`/`waiting_*` 的会话，写成 `failed` 会让该会话再也不被驱动，兜底轮次永远推不动。
+        - 释放之后无归属事件回到「归给在跑的 turn」的既有规则（第 19 条/§10.3），因此兜底是最后手段：它只在端点确实不再收敛时触发。**它的代价要显式登记**：占位一旦释放，该被放弃 turn 若还有迟到事件（含它终态之后的尾巴），会按在跑的 turn 归属并照常提交——兜底把窗口收窄到有界轮次，不是消除它；这是「提前派发（每个被放弃的 turn 都会发作）」与「会话永久卡住」之间的取舍，彻底消除需要适配器为 `EndpointEvent` 给出权威 turn 标识（本切片不要求）。
+    - 该路径不压缩已落盘的 delta（第 15 条是可选动作），也不向调用方冒泡错误（与带终态的批次失败时的既有口径一致）：可观测信号就是上面两条持久事件（core 不含日志依赖，`AGENTS.md` §7）；失败批次没有在跑 turn 可归属时（例如会话级事件）仍然只有「不发布」这一个效果，没有命令可终结。
 10. `[决定]` `storage.flush_interval_ms = 250` 允许把同一会话短窗口内的 delta 合并为一次 `commit`；合并不得改变顺序、不得跨 turn 边界、不得延迟终态事件。
 11. `[决定]` `OwnedCommit.events` 只接受 `StoredPolicy`；`Ephemeral` 由 broker 在组装前过滤（内存转发），`commit` 收到 `Ephemeral` 视为 `InvalidRequest`（类型上已不可表达）。
 12. `[决定]` 快照与重放必须来自 `SessionStore::read_view()` 返回的同一读视图，`sync.snapshot_begin`/`sync.snapshot_end` 与之后的事件游标都以该视图的 `head()` 为 barrier（`SYNC_PROTOCOL.md` §9.3/§9.4）。
@@ -751,9 +829,16 @@ pub trait IdGenerator: Send + Sync {
     - **turn 归属**：事件类型属于 §10.3 要求 `turnId` 的集合（`turn.*`、`user.message.delta`、`agent.message.delta`、`agent.message.completed`、`agent.thought.delta`、`tool.call.started`/`updated`/`completed`、`permission.requested`、`elicitation.requested`）且该事件已被归属到某个 turn 时，view 顶层必须有 `turnId`，取值等于 core 已定稿的权威 turn；**不得**向其它事件类型添加未协商字段，无归属的事件不得出现该字段。适配器已给出同名字段时：取值一致 → 保留原字节；取值不同或值不是字符串 → 显式 `InvalidRequest`、不写任何行、不发布任何帧。归属只在批组装时定稿一次，注入是它的唯一消费者（不重新推导）。
     - **会话版本**：事件类型属于 §10.3 要求 `version` 的集合（`session.mode.changed`、`session.config.changed`）时，view 顶层必须有十进制字符串 `version`，取值等于该次提交后的会话版本。推导规则与存储层一致：含 `StateChange` 的提交为当前版本 + 1，否则不变；提交后必须与 `CommitOutcome.version` 比对，不一致 → `PortError::Corrupt`、不发布该批、不得报告成功（比对发生在存储返回之后，已落盘的行不由 core 撤销）。幂等命中（`replayed`）时不比对：返回的是首次提交的结果，第二次提交的 view 不得被重写。imported 路径**不**注入这两个字段（`turnId`/`version` 由拥有该会话的节点注入，`payloadDigest` 覆盖 Owner 给出的视图字节），只保留其取值。
     - **两个已登记的边界**：① 失败关闭（`turnId` 冲突或版本漂移）发生在 `flush` 组装之后，该批适配器事件**不再重投**（调用方按本条 ① 的失败语义——与 §6 第 9 条同口径——决定是否把 turn 判为失败），不得重试时假装该批从未到达；② 无状态变更的提交里存储层**不**校验 `expected_version`（§5.2 只对 `Update` 校验），因此 core 的推导/比对就是该组合的失败关闭点，且可能发生在落盘之后。
-    - **无归属的降级**：turn 终结后晚到的、类型属于 §10.3 `turnId` 集合的事件（适配器异步尾巴）没有权威 turn，**不**注入（`owned_event.turn_id` 与 view 同时为 NULL），宁可缺字段也不伪造；该降级必须有用例固定，并留给 Sync 切片裁定是否拒绝。
+    - **无归属的降级**：turn 终结后晚到的、类型属于 §10.3 `turnId` 集合的事件（适配器异步尾巴）没有权威 turn，**不**注入（`owned_event.turn_id` 与 view 同时为 NULL），宁可缺字段也不伪造；该降级必须有用例固定，并留给 Sync 切片裁定是否拒绝。**例外**：被放弃的 turn（§6 第 9 条）的迟到事件按那一条归属到它并被丢弃，不走本降级——第 9 条对同一事件类有意给出比本条更强的处置（丢弃 > 无归属落库），因为「正文已经缺块的 turn」不得再往库里写尾巴；两条的适用边界就是「有没有可归属的被放弃 turn」。
+20. `[决定]` **`session.create` 的幂等与终态落盘**（`node-link-owner` 的 WP6 修复轮次 RV1-WP6-F1）：创建走**两次提交**，幂等键是第 6 条的 `(actor, requestId)`（Owner 侧 `actor` 是该 `access` 对端，`kind = mutation`，`expected_version = None`，`command = "session.create"`）：
+    - **创建提交**：`StateChange::Create` 与幂等行在**同一事务**里落盘。幂等行的 `session = None`（装配期尚无目标会话），`session_id` 由存储层在事务内分配后**回填该列**——终态提交与第 16 条的启动恢复都按 `(session_id, request_id)` 定位该行，回填前那两处都定位不到它。`request_fingerprint` 取 ACPR-CJ1 之后的解码 payload 摘要，由适配层计算并作为参数传入（core 不依赖 `acpr-wire`）。
+    - **幂等比对里的 `session` 分量**：`IdempotencyRecord.session = None` 的语义是「装配期无目标会话」（目前只有 `session.create`），存储层**不**用行里存储层的创建结果与它比对；`command`/`kind`/`expected_version`/`request_fingerprint` 四项仍然恒比（第 6 条）。命中且四项相同 → 返回行里记的首次 `sessionId`（`CommitOutcome.replayed`，不创建第二个会话、不开第二个后端端点）；任一不同 → `PortError::Conflict(IdempotencyConflict)`。
+    - **终态提交**：一条 `command.completed`/`command.failed`/`command.uncertain` 事件（`causation = requestId`）+ `CommandTerminalRecord`。`completed` 的 `result` 是适配层投影的结果原文（Node Link 的 `SessionCreateResult`）、`completed` 必须有 `terminal_event_id`（§7.3 的 CHECK）；`failed`/`uncertain` 携带结构化错误。没有持久记录（创建在幂等行落盘前就失败）或记录已终结时，终态提交是**幂等 no-op**，不覆盖首次结果。
+    - **落盘前失败不构成持久首次结果**（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F1）：幂等行落盘前失败（如存储写失败）的 `session.create` 没有持久记录，因此同 `requestId` 重查回 `nodelink.command.not_found`，且重试可以创建出另一个会话、得到与首次尝试不同的结果——`failed` 终态只适用于适配层在同一 `requestId` 上能复现的确定类失败（授权拒绝、本机 workspace 解析失败），不得把落盘失败也描述成「重试结果确定」。
+    - **`settle_session_create` 只终结 `session.create` 的记录**（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F2）：该 `(actor, requestId)` 的持久记录 `command != "session.create"` 时返回 `InvalidRequest` 且零写入（适配层误用，wire 不可达），不得把别的命令的幂等行改写成创建的终态。
+    - **崩溃窗口**：两次提交之间崩溃留下 `accepted` 行 + 已创建的会话；第 16 条的启动恢复把它终结为 `uncertain`（`command.uncertain` 事件 + `terminal_event_id`），**不**重放副作用、也不猜测创建是否成功。该行不是无会话命令：`owned_command.session_id` 已回填，恢复走「有会话」分支。
 
-## 7. `storage-sqlite` v2 表结构
+## 7. `storage-sqlite` v3 表结构
 
 ### 7.1 文件、PRAGMA、连接与权限
 
@@ -767,18 +852,19 @@ pub trait IdGenerator: Send + Sync {
 
 ### 7.2 Migration
 
-- `[决定]` `PRAGMA user_version` = 文件格式版本（当前 **v2 = 2**）；`meta` 保存两族 schema 版本：`owned_schema_version`、`imported_schema_version`（当前都为 2）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
+- `[决定]` `PRAGMA user_version` = 文件格式版本（当前 **v3 = 3**）；`meta` 保存两族 schema 版本：`owned_schema_version`、`imported_schema_version`（当前都为 3）。三个常量是 `crates/storage-sqlite/src/migrate.rs` 的 `FILE_FORMAT_VERSION`/`OWNED_SCHEMA_VERSION`/`IMPORTED_SCHEMA_VERSION`。
 - `[决定]` 两族 migration 分开维护；单事务、可重复执行、失败整体回滚；文件格式版本**或**任一表结构版本高于本二进制已知版本 → 拒绝启动，不降级写入。
-- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 2` 时，在同一 `BEGIN IMMEDIATE` 事务内执行 v2 升级；`user_version = 2` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL 建成 v2 形状（此时 `user_version` 是 0，不能只按版本号判断）。
-- `[决定]` v1 → v2 升级步骤（顺序固定，四步都在同一事务内）：
+- `[决定]` **升级判据**：库内已有 schema（`owned_session` 存在）且 `user_version < 3` 时，在同一 `BEGIN IMMEDIATE` 事务内按版本执行对应的升级段（v1 库走 v2 段再走 v3 段，v2 库只走 v3 段）；`user_version = 3` 的库**跳过**全部升级步骤，因此第二次打开不重写 `sqlite_master`、不写任何行（§9.1）；空目录新建的库直接由 §7.3/§7.4 的 DDL 建成 v3 形状（此时 `user_version` 是 0，不能只按版本号判断）。
+- `[决定]` v1 → v2 升级步骤（顺序固定，都在同一事务内）：
   1. 执行 §7.3/§7.4 的 DDL 常量：`CREATE ... IF NOT EXISTS` 建出新增的管理表与 `imported_import_export`，既有表不动；
   2. `owned_audit` 与 `imported_audit` 走 **12-step 表重建**（SQLite 不能修改既有 CHECK）：新建带完整 `action` CHECK 的表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 → `RENAME` → 重建索引；之后按升级前的 `sqlite_sequence` 回填序列，**AUTOINCREMENT 不得回退**（审计有 365 天 TTL，尾部行被清理后 `seq` 会领先于 `max(audit_id)`）；
   3. `imported_import` 重建：去掉 `export_id` 与 `UNIQUE (owner_node_id, export_id)`，新增 `grants_json`；原行的 `(owner_node_id, export_id)` 与 `created_at` 迁为一条 `imported_import_export` 关联行（`added_at` = 原 `created_at`）。旧行**没有可信的 grants 来源**，因此 `grants_json` 一律写 `'[]'`——**不得凭空补齐或默认放权**，这类 Import 保持不可用，等本地重新授权；
-  4. `meta.owned_schema_version`/`meta.imported_schema_version` 写为 `'2'`，并置 `PRAGMA user_version = 2`。
+  4. 本段**不单独落盘版本**：`meta.owned_schema_version`/`meta.imported_schema_version` 与 `PRAGMA user_version` 都由同一事务内紧随其后的 v2 → v3 段在**全部**表重建结束后统一写为 `'3'`/`3`（见下一条），因此不存在「已写 v2 版本号、表仍是 v1 形状」的中间落盘。
+- `[决定]` **v2 → v3 升级步骤**（与 v2 段在同一事务内、顺序在后）：两张审计表同样走 12-step 表重建，**列集合与列顺序逐字不变**，只扩宽 CHECK——`actor_kind` 增 `'pairing_claimant'`（配对认领方的审计归因）、`action` 增 `'node.authenticated'`/`'node.auth_failed'`（节点握手留痕）；之后按本次升级前的 `sqlite_sequence` 回填序列（两段重建各自 `DROP` 过审计表，因此序列只在**全部**重建结束后回填一次），并置两个 schema 版本为 `'3'`、`PRAGMA user_version = 3`。`owned_command` **不重建**：认领方永不提交命令，它的 `actor_kind` CHECK 保持 `('device','node','cli')`（design D12）——因此 v3 库上两张审计表接受四值、`owned_command` 只接受三值。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
 - `[决定]` 管理表纳入 §7.5 的容量度量（TEXT 列 + 附件字节）与清理顺序；撤销 tombstone 不因容量压力被删除，空间不足时拒绝新写入而不是删活动信任或未到期审计。
-- `[决定]` 迁移测试资产：`fixtures/storage/v2/empty.sqlite3`（v2 空库）、`fixtures/storage/v2/from-v1.sqlite3`（含会话/事件/cursor/幂等/审计数据的 v1 库，`owned_audit` 故意留下 `audit_id = 1,2,5` 的空洞以覆盖「序列领先于 `max(audit_id)`」）与 `fixtures/storage/v2/too-new.sqlite3`（`user_version = 3`）；`fixtures/storage/v1/` 的两个文件保留为历史资产。夹具生成方式写在 `crates/storage-sqlite/tests/migration.rs` 的 `regenerate_v2_fixtures` 用例里（默认 `#[ignore]`）。
-- `[决定]` 回滚：v2 库不能被 v1 二进制打开（版本过新拒绝启动），因此回滚 = 恢复升级前的数据库备份 + 回退二进制；本合同**不提供**自动降级迁移。
+- `[决定]` 迁移测试资产：`fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**——`empty.sqlite3`（v2 形状的空库，v2 → v3 用例的输入）、`from-v1.sqlite3`（含会话/事件/cursor/幂等/审计数据的 v1 库，`owned_audit` 故意留下 `audit_id = 1,2,5` 的空洞以覆盖「序列领先于 `max(audit_id)`」；v1 → v2 → v3 连续升级用例的输入）与 `too-new.sqlite3`（`user_version = 3`，v3 之后不再「过新」，保留为历史资产）；`fixtures/storage/v1/` 的两个文件是更早的历史资产。当前二进制不再能生成 v2 形状的空库，因此 `from-v1.sqlite3` 的生成器（`crates/storage-sqlite/tests/migration.rs` 的 `regenerate_v1_fixture`，默认 `#[ignore]`）只重建它；「版本过新拒绝启动」用例改在临时副本上把 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`；「已是最新版则不重写」用例改在空目录新建的当前版本库上判定。
+- `[决定]` 回滚：v3 库不能被旧二进制打开（版本过新拒绝启动），因此回滚 = 恢复升级前的数据库备份 + 回退二进制；本合同**不提供**自动降级迁移。
 
 ### 7.3 `owned_*` 表
 
@@ -901,10 +987,10 @@ CREATE TABLE owned_audit (
   action       TEXT NOT NULL CHECK (action IN (
                  'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
                  'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
-                 'node.paired','node.trust_revoked','node.identity_changed',
+                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
                  'export.created','export.revoked','import.added','import.removed','provider.configured',
                  'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
   actor_id     TEXT NOT NULL,
   via_node_id  TEXT,
   local_principal_ref TEXT,
@@ -1156,10 +1242,10 @@ CREATE TABLE imported_audit (
   action       TEXT NOT NULL CHECK (action IN (
                  'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
                  'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
-                 'node.paired','node.trust_revoked','node.identity_changed',
+                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
                  'export.created','export.revoked','import.added','import.removed','provider.configured',
                  'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
   actor_id     TEXT NOT NULL,
   owner_node_id TEXT, export_id TEXT, session_id TEXT,
   request_id   TEXT,
@@ -1234,7 +1320,7 @@ CREATE TABLE imported_import_export (
 
 ## 9. 验收判据（实现该合同的测试）
 
-1. **migration**：用 `fixtures/storage/v2/empty.sqlite3` 启动 → 版本不变、无错误；连续两次启动后 `PRAGMA user_version`、`meta.*_schema_version` 与 `sqlite_master` 里每条 SQL 文本**逐字节相同**（幂等）；打开 `fixtures/storage/v2/too-new.sqlite3`（`user_version = 3`）→ 返回具名错误且不写入任何行；`fixtures/storage/v2/from-v1.sqlite3` 的 v1 → v2 升级按判据 28 断言保留性。
+1. **migration**：空目录新建的当前版本库连续两次启动后 `PRAGMA user_version`、`meta.*_schema_version`、`sqlite_master` 里每条 SQL 文本与全部表的行集**逐字节相同**（幂等）；把 `fixtures/storage/v2/empty.sqlite3`（v2 形状）的临时副本的 `user_version` 顶到 `FILE_FORMAT_VERSION + 1` → 返回具名错误且不写入任何行；`fixtures/storage/v2/from-v1.sqlite3` 的 v1 → v2 → v3 连续升级按判据 28 断言保留性。
 2. **单事务提交**：用一个装饰 `SessionStore` 的测试替身统计 `commit` 调用次数，并对第二次调用注入失败；断言
 (a) 每个 mutation 恰好一次**接受提交**（幂等行那一次；重试与 `Ephemeral` 过滤都不新增提交，见 §6 第 6/11 条）——一次 mutation 天然还会产生终态提交与 delta 合批提交，本条只约束接受语义不得重复；
 (b) 失败后 `owned_session.version`、`owned_turn`、`owned_event`、`owned_command` 与调用前快照逐行相同；
@@ -1250,7 +1336,7 @@ CREATE TABLE imported_import_export (
 11. **权限仲裁**：两个**并发**解析请求（单写连接会串行化它们，判据看的是结果而不是交错）恰好一个 `Resolved`；已解析后再次应答 → `AlreadyResolved` 且 `resolved_at`/`decision_option_id` 不变；对不存在的 `interactionId` → `PortError::NotFound`。
 12. **ACL 判定**：把平台 ACL 读取抽象成纯函数（输入为合成的权限视图），单测覆盖「组/其他可写」「非当前用户可读写」等视图 → 判定为宽松；正式模式下宽松即失败关闭。真实第二账号的端到端检查作为可选集成测试。
 13. **端口纯度**：`cargo tree -p core --edges normal` 的输出与冻结 allow-list 逐行相等（黄金文件）——`core` 的直接依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`——其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验，不签名也不验签），因此 `ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8`/`spki`/`pem-rfc7468` 等签名与编码栈**不在**闭包内；完整普通依赖闭包与 allow-list 逐项登记在 `scripts/check-crate-boundaries.mjs` 的 `CORE_ALLOWED_CLOSURE`；`cargo public-api -p core` 快照不得出现 §3/§5 之外的类型（该半条需要 nightly toolchain + 外部 `cargo-public-api`，未安装时应记录为**未执行**并说明替代判据，不得声称已通过）。
-14. **审计**：`action` 只能取 §3.5 的枚举（表级 CHECK + 用例层枚举，**每个取值都要有写入用例**，含该合同 §7.3 与 §7.4 的 `action` CHECK 里 `export.*`/`import.*`/`provider.configured` 五类）；`owned_audit` 与 `imported_audit` 都要有「黄金列清单」测试（逐列 `PRAGMA table_info` 比对，新增内容列即失败）。
+14. **审计**：`action` 只能取 §3.5 的枚举（表级 CHECK + 用例层枚举，**每个取值都要有写入用例**，含该合同 §7.3 与 §7.4 的 `action` CHECK 里 `export.*`/`import.*`/`provider.configured` 五类，以及 v3 新增的 `node.authenticated`/`node.auth_failed`）；`actor_kind` 的取值集在两张审计表上与 `ActorKind` 逐值相等，但在 `owned_command` 上**只有三值**（无 `pairing_claimant`，design D12）；`owned_audit` 与 `imported_audit` 都要有「黄金列清单」测试（逐列 `PRAGMA table_info` 比对，新增内容列即失败）。
 15. **交互创建**：一次 `commit` 写入 `interaction` 事件 + `PendingInteractionWrite` 后，`owned_interaction` 恰好一行且 `request_event` 等于**配对事件**的 `global_sequence`（列类型见 §7.3；§9 判据 10 的悬空引用为 0）；装配方传入的任何占位值都不得入库；同一提交里 `interactions` 与 `state.interaction` 同时出现 → `InvalidRequest`；随后 `HistoryInclude.pending_interactions` 读回的行 `options` 为空，而按事件流取到配对事件的 `id` 后 `ReadView::event_payload(id)` 能还原出非空 `options`。
 16. **正文读取**：`ReadView::event_payload` 返回的 `view` 文本与库内 `payload_json` **逐字节**相同（含未知字段与嵌套），`AcpRaw::Available.raw_json` 与写入时逐字节相同；原文被清理过的行返回 `AcpRaw::Unavailable`，且 `reason`、`byte_length`、`sha256` 三者都必须与行内列一致（**摘要不得因为原文被清理而丢失**——`acp_sha256` 与 `acp_raw_json` 只有在没有不可用原因时才同有同无）；不存在的事件 id 返回 `None`。
 17. **非会话级事件**：`session: None` 的提交落库后 `session_sequence`/`origin_epoch`/`origin_sequence` 三列都是 NULL，且该行仍出现在 `replay` 流里；`session: Some` 的事件三列都非 NULL（成对 CHECK 不得被绕过）。
@@ -1264,7 +1350,7 @@ CREATE TABLE imported_import_export (
 25. **配对公钥与信任材料**（§11.5、§5.3）：认领并重启后仍能经 `TrustStore::peer_key` 取到验签公钥；指纹与公钥不一致的写集无法落库（表级 CHECK + 用例层构造校验）。
 26. **Export/Import 归属与完整移除**（§11.6、§7.4）：`ImportWrite.exports` 必须等于 `record.export_ids()`（分歧 → `InvalidRequest`）；同一 `(owner_node_id, export_id)` 归属冲突 → `Conflict(DuplicateOwnership)`；`remove_import` 与连接级 `drop_import` 的删除权威不重叠，完整移除后审计行仍在。
 27. **本地配置与凭据边界**（§11.6、§5.3）：至多一个默认 profile 且切换默认是一次原子写集；Provider 引用只存字段名/keystore 引用/版本，换绑递增版本；种子 profile 与「已初始化」标记同事务提交、空种子也标记、重复打开不重导；`CredentialResolver::resolve_env` 只返回 `env_allowlist` ∩ `env` 绑定，引用失效 → `Unavailable(KeystoreUnavailable)` 失败关闭，日志只记变量名与数量。
-28. **v1 → v2 升级的保留与幂等**（§7.2）：升级保留 `server_epoch`、事件 `global_sequence`/`session_sequence` 与 origin cursor、`requestId` 与幂等行、命令终态与全部既有审计；`audit_id` 与其 `AUTOINCREMENT` 序列不回退，审计表的新取值在升级库上可写；`imported_import` 不再有 `export_id`，Export 关联迁入 `imported_import_export` 且 `added_at` 取原 `created_at`，无可信来源的 grants 保持 `'[]'`（该 Import 不可用）；升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变。
+28. **旧库升级的保留与幂等**（§7.2）：升级保留 `server_epoch`、事件 `global_sequence`/`session_sequence` 与 origin cursor、`requestId` 与幂等行、命令终态与全部既有审计；`audit_id` 与其 `AUTOINCREMENT` 序列不回退（v1 → v2 → v3 连续升级也要保持），审计表的新取值在升级库上可写、`owned_command` 的 `actor_kind` 不接受 `pairing_claimant`；`imported_import` 不再有 `export_id`，Export 关联迁入 `imported_import_export` 且 `added_at` 取原 `created_at`，无可信来源的 grants 保持 `'[]'`（该 Import 不可用）；升级后第二次打开 `sqlite_master`/`meta`/行集逐字节不变。
 29. **管理状态纳入容量与失败关闭**（§7.5、§8）：容量度量包含管理表的 TEXT 列；超限时拒绝新写入而不删除活动信任、撤销记录或未到期审计；损坏库或宽松权限下**管理写路径**与 owned 写路径一样全部被拒，只读查询仍可用。
 30. **管理记录的终态与单调性**（§11.1、§11.2 第 4/5 条、§5.2/§5.3 约束、§7.4）：① `put_export` 对已撤销的 Export 不得清除 `revoked_at`——传入未撤销记录 → `Conflict(AlreadyExists)` 且该行逐列不变，传入 `revoked_at` 非空记录 → `InvalidRequest` 且零写入（含零审计）；② 完整移除 Import 后，携带该 `(ownerNodeId, exportId)` 的 `upsert_session` 与 `commit_receipt` 都返回 `NotFound(Export)`，`imported_session`/`imported_delivery_index`/`imported_command_ref` 保持为空且不推进 `local_sequence`；③ `owned_peer_key`/`owned_pairing_peer`/`owned_device` 中任一行 `fingerprint` 与同行 `public_key` 的派生值不一致时，对应读取路径（设备记录含单读与列表读）返回 `PortError::Corrupt` 且不返回材料；④ `last_seen_at`/`last_connected_at` 在「旧值为空」「新值更早」「新值为空」三种边界下都不丢值、不倒退，且不使调用失败或丢弃同写集的其他字段。
 31. **§10.3 的 view 身份与版本**（§6 第 19 条）：① 适配器视图不含 `turnId` 时，落盘 view 与 `owned_event.turn_id` 都等于 core 的权威 turn，且该 view 除新增的**一个前置成员**外逐字节不变（含未知字段、嵌套结构；ACP 原文 `raw_json`/`sha256`/`byte_length` 不变）；② 会话级或无归属事件不出现 `turnId`；未列入 §10.3 的类型（如 `terminal.output`）不新增该字段；③ 视图已带 `turnId` 且取值一致 → 字节不变且只出现一次，取值不一致 → `InvalidRequest` 且该批零落盘、零发布、turn 状态不变；④ 含 `session.mode.changed`/`session.config.changed` 的提交：无 `StateChange` 时注入当前版本且不递增，含 `StateChange` 时注入递增后的版本，两者都必须等于存储层返回值；存储返回不一致 → 不发布且不报成功；⑤ 幂等重放的 view 与首次落盘逐字节相同且不二次注入；⑥ 适配器 `prompt` 返回任意值（含全零占位）都不产生第二个 turn 行，也不改变归属。
@@ -1302,6 +1388,11 @@ CREATE TABLE imported_import_export (
 - `[已裁定]`（2026-09-23）管理写集需要的 `ConflictKind` 新取值（`AlreadyExists`、`IdentityMismatch`、`DuplicateOwnership`）与 `UnavailableKind::KeystoreUnavailable`：枚举本体、`ALL`/`as_str` 与 §2 的取值表已同批落地（`crates/core/src/model/error.rs`）；写集侧映射义务与 `port_error_public` 不得用通配臂吞掉新取值的陷阱见 §5.3 与 §11.6 末段。
 - `[已裁定]`（2026-09-23）`AuditAction` 追加 `ExportCreated`/`ExportRevoked`/`ImportAdded`/`ImportRemoved`/`ProviderConfigured`（`SECURITY_DESIGN.md` §14.2）：落库靠 §7.3 与 §7.4 两张审计表 `action` CHECK 的扩宽；既有 v1 库走 §7.2 的第 ② 步 12-step 表重建（保留全部行与 `audit_id`、`AUTOINCREMENT` 序列不回退）。
 - `[已裁定]`（2026-09-23）首切片 workspace template 必须零参数（`NODE_LINK_PROTOCOL.md` §10）；有参 template 属 `post_mvp`，启用前必须定义值的来源与用途。
+- `[已裁定]`（2026-09-26）配对通道的 actor 与用例面扩展（design D12，用户裁定方案 A）：`core::model` 新增 `Actor::PairingClaimant { pairing: PairingId }`（`ActorKind::PairingClaimant` = `'pairing_claimant'`）与两个节点审计动作；`claim_pairing`/`pairing` 另接受绑定该配对的认领方，新增 `consume_pairing(actor, PairingId)` 与 `TrustStore::consume_pairing`（`PairingConsumption`）；存储走 **v2 → v3** 迁移（两张审计表的 `actor_kind`/`action` CHECK 扩宽，12-step 表重建），`owned_command` 不动——`pairing_claimant` 永不可提交命令。涉及 §3.5/§4/§5.3/§7.2/§7.3/§7.4 与 `SECURITY_DESIGN.md` §14.2、`IDENTITY_AND_AUTH_CONTRACT.md` §5.1，漂移门禁随动。
+- `[已裁定]`（2026-09-26）D12 的 seam 补全（用户裁定 A 的实现细化，不改变方向）：§4 新增只读入口 `pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`（记录 + 已认领对端行 + 已批准后的对端 `access` 节点行，绑定式读取、零写入）；`identity-auth` 新增 `Authority::verify_node_link_pairing_status`（用本机内存里的 pairing secret 校验 `node-link-pairing-status/v1` 的 HMAC）与 `Authority::pairing_request_material`（返回 claim 响应与 Owner 证明需要的**非秘密** `serverNonce`/`pairingRequestId`，与 secret 同生同灭）；claim 路径的读取顺序与拒绝口径写在 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1。
+- `[已裁定]`（2026-09-26）WSS 握手 seam 补全（`node-link-owner` 的 WP4/任务 2.28，主 Agent 裁定方案 A，与 D12 同方向）：§4 新增 `NodeLinkHandshake` 两项——只读入口 `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`（用例面唯一无 `actor` 的入口：按单个自报 node id 返回该节点的 `access` 信任行、已绑定验签公钥、最近一次配对与本机水位 `store.head()`；未知 id 返回空视图而不是错误，零写入、零审计）与窄写入口 `record_node_link_auth(accessNodeId, action, outcome)`（只接受 `node.authenticated`/`node.auth_failed`，其余 → `authorization.scope_denied`）；§5.3 新增 `TrustStore::pairing_for(peer) -> Option<PairingRecord>`（该对端最近一次配对：登记方宣告的 `host_binding` 与「待消费配对」的唯一来源——节点信任行不带绑定列）。既有 `LocalCli` 路径的行为不变，不新增对端可见能力；`identity-auth` 的 `HandshakeFailure::audit()` 对 NodeLink 从 `None` 改为 `Some(node.auth_failed)`（原注释所称的「词表缺口」已由上述两个动作补上）。
+- `[已裁定]`（2026-09-26）认证收尾的 `last_connected_at`（`node-link-owner` 的 wp4-fix1 轮次 / RV1-WP4-F2，主 Agent 裁定选项①）：认证收尾必须在写集里推进 `owned_node.last_connected_at`（「最近一次认证成功时间」）——首次认证在 `consume_pairing` 的写集里（§11.6 第 8 条），重复认证在新增的 `TrustStore::record_node_connected`（`NodeConnectedWrite`，§5.3/§11.6 第 9 条）里；两条路径的时间与 `node.authenticated` 各自同事务，值只前进不倒退（§3.5/§5.3 约束）。原实现没有任何生产调用方推进该列（`put_node`/`upsert_node` 只被配对确认与测试使用），管理视图 `lastSeenAt` 因此恒空。涉及 §3.5/§4/§5.3/§11.6 与 `crates/{core,storage-sqlite,server}`，漂移门禁随动。
+- `[已裁定]`（2026-09-26）Owner 侧无会话节点命令的授权与两条 seam 的收口（`node-link-owner` 的 WP6/任务 2.17–2.19，主 Agent 裁定方案 (1)）：`Broker::node_allowed` 原先在 `session = None` 时恒返回 `false`，因此 `UseCases::{create_session,command_status,list_sessions}` 对 Owner 侧 `Actor::Node` 恒拒，而 `NODE_LINK_PROTOCOL.md` §12.5/§12.7 要求这些命令可用。修正：Owner 侧判定改为「该对端 `access` 信任行已配对且 `grants` 含 `required_grant`」+「存在未撤销且覆盖该命令的 Export（`scopes` 含该 grant、`scopes ∩ grants ≠ ∅`）」，会话命令另需该 Export 覆盖目标会话的 agent；无会话命令（`session.list`/`command.status`/`session.create`）只要求前两条。为此 `BrokerDeps` 新增必需的 `Arc<dyn TrustStore>`（授权不能只靠 Export 记录）；`record_node_link_auth` 的接受动作集扩到 `authorization.denied`（适配层比 broker 更严的越权拒绝路径需要留痕，R69）；`session.list` 的会话过滤与 `session.create` 的参数校验仍由 `server::node_link` 承担。涉及 §4/§6 第 5 条/§10 与 `crates/{core,server,app}`，漂移门禁（§5/§7）不受影响。
 - `[已裁定]`（2026-09-23）`identity-keystore` 的 Windows 第一档位与 Linux 失败关闭：Windows 用 DPAPI（当前用户）包裹私钥 + 进程内签名，Linux 维持失败关闭；持久化 fallback、CNG/TPM 不可导出档位均需单独 ADR，wrapper 选型与 MSRV 约束见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20。实现前合同见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §7/§9。
 - `[open]` 未来加密离线正文缓存（必须新 feature + Owner 明示授权 + ADR；本合同不预留任何静默开关）。
 
@@ -1309,7 +1400,7 @@ CREATE TABLE imported_import_export (
 
 `[已并入]`（2026-09-23）本节收口的设计**形状**已经落地：值对象在 §3.5/§3.6，写入 DTO、端口签名与 workspace 解析规则在 §5.1/§5.3，管理与 Import 关联表的 DDL 在 §7.3/§7.4，版本常量与 v1 → v2 迁移规则在 §7.2，验收判据在 §9 判据 23–29；`scripts/check-contract-drift.mjs` 把 §5/§7 与 `crates/core/src/ports.rs`、`crates/storage-sqlite/src/migrate.rs` 逐条绑定，因此本节不再保留签名与 DDL 正文（第二份副本必然漂移）。
 
-本节剩下的是**设计理由**与到上述段落的指针。`storage-sqlite` 的**管理 store 落盘实现**（`TrustStore`/`ExportStore`/`LocalConfigStore` 的事务、失败关闭与容量纳入）已落地；Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`/`server::transport::local`）与 `app`（组合根、CLI、`acp-stdio`）已随切片 4 `daemon-cli-and-local-admin` 落地；仍未实现的是 `server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client`（`identity-auth`/`identity-keystore` 已落地）——在这些适配器完成之前，不得把这些存储测试通过解释为配对、撤销或本地配置已经端到端可用。配置与管理状态的来源优先级以 `CONFIG_REFERENCE.md` 的「配置与管理状态的权威」为准。
+本节剩下的是**设计理由**与到上述段落的指针。`storage-sqlite` 的**管理 store 落盘实现**（`TrustStore`/`ExportStore`/`LocalConfigStore` 的事务、失败关闭与容量纳入）已落地；Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`/`server::transport::local`）与 `app`（组合根、CLI、`acp-stdio`）已随切片 4 `daemon-cli-and-local-admin` 落地；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 的 **Owner 侧入站面**已随切片 5 `node-link-owner` 落地，Access 侧出站属切片 6，见 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.9；`identity-auth`/`identity-keystore` 已落地）——在这些适配器完成之前，不得把这些存储测试通过解释为配对、撤销或本地配置已经端到端可用。配置与管理状态的来源优先级以 `CONFIG_REFERENCE.md` 的「配置与管理状态的权威」为准。
 
 ### 11.1 数据归属与表设计
 
@@ -1408,6 +1499,8 @@ CREATE TABLE imported_import_export (
 5. `revoke_device`/`revoke_node`：单事务写撤销时间、状态与审计；**提交后**才由组合根关闭适用连接并对管理调用作答（§11.2 第 3 条）。连接清理失败不回滚已提交的撤销。
 6. `expire_pairings`：只终结「未确认且 `expires_at <= at`」的行，写 `pairing.expired`；已批准信任不受影响。
 7. `put_export`/`revoke_export`/`add_import`/`remove_import`：审计取值分别用 `export.created`/`export.revoked`/`import.added`/`import.removed`（§7.3 与 §7.4 的 `action` CHECK），与状态同事务（§11.2 第 4/5 条）。
+8. `consume_pairing`（design D12）：`actor` 必须与 `owned_pairing_peer` 的对端**同类同 id**（不一致 → `Conflict(IdentityMismatch)`），且写集里的主体与每一条 `context.audit` 的归因必须一致（分歧 → `InvalidRequest`，接线错误失败关闭）；只有 `approved` 能推进到 `consumed`（条件更新 `AND state = 'approved'`，`terminal_at` 取本次 `at`，`node.authenticated`/`device.authenticated` 与状态同事务），并在同一事务推进对端节点行的 `last_connected_at`（第 9 条；`actor` 为 `Actor::Node` 时该行是配对批准写下的那个 `access` 行，`Actor::Device` 的配对没有节点行）；已是 `consumed` 且对端一致时幂等成功（**不**覆盖首次 `terminal_at`、**不**重复写审计，也不重复推进 `last_connected_at`——那是同一次消费的重复提交）；其余状态具名拒绍（`expired` → `Expired`、`rejected` → `Consumed`、未批准 → `InvalidRequest`），配对行或对端行缺失分别是 `NotFound`/`Corrupt`。该写集不设容量门：它只推进一个状态、不新增管理行，而且是认证收尾的安全动作（与 `revoke_*`/`expire_pairings` 同类）。
+9. `record_node_connected`（`NodeConnectedWrite`，认证成功的收尾写集；新增于 2026-09-26 的 `node-link-owner` 修复轮次）：重复认证（没有待消费配对）把 `(node, kind)` 行的 `last_connected_at` 推进到 `context.at`，并把 `context.audit`（该对端的 `node.authenticated` 成功行）在**同一事务**提交；值只前进不倒退（与 `upsert_node` 的三分支 `CASE` 同口径，§5.3 约束），行不存在 → `NotFound(EntityRef::Node)`。首次认证的同一职责在 `consume_pairing` 的写集里（第 8 条）：两条路径都不得省——`lastConnectedAt` 的语义是「最近一次认证成功时间」，只在首次认证写会让它对后续连接说谎。不设容量门（只更新一个时间列、不新增管理行）；`context.audit` 必须非空（认证成功是安全动作，§11.6 的写集约束）。
 
 `[决定]` **Export/Import 写集**：形状见 §5.3（`ExportWrite`/`ExportRevocation`/`ImportWrite`/`ImportRemoval`）。`ExportStore` 的写面把 `upsert_export`/`revoke_export`/`upsert_import`/`remove_import`（携带 `at`）替换为 `put_export`/`revoke_export`/`add_import`/`remove_import`，读取面不变。
 
@@ -1440,7 +1533,7 @@ CREATE TABLE imported_import_export (
 - **跨两族的列类型约定**：`public_key` 是 STRICT 表的 **BLOB** 列：adapter 必须绑定字节（`Vec<u8>`/`&[u8]`），绑定 hex 或 base64 文本会被 STRICT 直接拒绝。这层拒绝是特性（阻止「同一份材料两种编码」的静默分叉），不是障碍。
 - 管理表的集合字段（`*_json`）由 SQLite adapter 按领域构造器校验后编码；身份、状态、时间、唯一键与外键用显式列，不用 JSON blob 承担仲裁（§11.1）。
 - `imported_import` 自身升级后仍**不含任何正文列**，并继续纳入 §9 判据 6 的无正文黄金列清单检查。
-- `owned_audit`/`imported_audit` 复用既有列集合、不新增内容列；升级只扩宽 `action` 的 CHECK（12-step 重建），因此列清单测试（§9 判据 14）的期望值不变。
+- `owned_audit`/`imported_audit` 复用既有列集合、不新增内容列；v2 → v3 升级只扩宽 `actor_kind`/`action` 的 CHECK（12-step 重建），因此列清单测试（§9 判据 14）的期望值不变。
 - 收口前的一次性现场校验（在 SQLite 上实际执行这 12 条语句并对 16 条约束做正反断言）只是探针惯例（`INITIAL_DESIGN.md` §16），**未入库、也不构成实现完成**；这些断言现在由常驻测试承载：`tests/enum_coverage.rs`（枚举逐值）、`tests/imported.rs` 与 `tests/commit.rs`（黄金列清单）、`tests/migration.rs`（升级保留、幂等、`audit_id`/序列、Import 归属迁移与缺 grants 行为）。
 
 ### 11.8 版本常量、migration 与 fixture（并入 §7.2）

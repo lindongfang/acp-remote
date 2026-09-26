@@ -4,9 +4,9 @@ mod support;
 
 use acp_core::model::{
     Actor, AgentId, AgentRef, CommandKind, CommandResult, CommandStatus, CommandTerminalRecord,
-    ConflictKind, Digest, EntityRef, EventKind, EventOrigin, EventType, InteractionId, OriginEpoch,
-    PendingEvent, PortError, PublicError, RequestId, Sequence, SessionId, SessionState,
-    StoredPolicy, Timestamp, TurnId, TurnState, ViewJson,
+    ConflictKind, Digest, EntityRef, EventKind, EventOrigin, EventType, InteractionId,
+    OriginCursor, OriginEpoch, PendingEvent, PortError, PublicError, RequestId, Sequence,
+    SessionId, SessionState, StoredPolicy, Timestamp, TurnId, TurnState, ViewJson,
 };
 use acp_core::ports::{
     HistoryInclude, HistoryQuery, IdempotencyRecord, ModeChange, NewTurn, OwnedCommit, ReplayLimit,
@@ -1285,13 +1285,142 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
     let health = store.health().await.expect("health");
     assert!(health.integrity_ok);
     assert!(!health.read_only);
-    assert_eq!(health.user_version, 2);
+    assert_eq!(health.user_version, 3);
 
     let found = store
         .find_request(&request(REQUEST), &actor())
         .await
         .expect("find");
     assert!(found.is_none());
+    store.close().await;
+}
+
+/// WP5（任务 2.14）：`ReadView::node_link_slice` 在同一次读视图里给出会话摘要、origin head、
+/// 未决交互（含创建事件 id）与 `after` 之后的 origin 事件**含正文**。
+#[tokio::test]
+async fn node_link_slice_returns_origin_events_and_pending_interactions() {
+    let dir = temp_dir("commit-node-link-slice");
+    let store = store(&dir).await;
+    let created = store.commit(create_session("slice")).await.expect("create");
+    let session = created.session_id.expect("session id");
+    store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(1),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![
+                event(
+                    EventKind::State,
+                    "session.state.changed",
+                    r#"{"state":"idle"}"#,
+                    None,
+                ),
+                event(
+                    EventKind::FinalMessage,
+                    "agent.message.completed",
+                    r#"{"messageId":"m1"}"#,
+                    None,
+                ),
+            ],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(idempotency(REQUEST, "slice", None)),
+            command_terminal: None,
+            origin_epoch: None,
+        })
+        .await
+        .expect("commit events");
+
+    // 未决交互行直接落库（`OwnedCommit` 没有创建字段，§6 第 13 条的已知合同缺口）：
+    // `request_event` 指向第二条事件，切片必须能把它的 `event_id` 带回来。
+    let path = dir.join("acp-remote.sqlite3");
+    let pool = raw_write_pool(&path).await;
+    let second_event: i64 = sqlx::query_scalar(
+        "SELECT global_sequence FROM owned_event WHERE event_type = 'agent.message.completed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("second event");
+    sqlx::query(
+        "INSERT INTO owned_interaction (interaction_id, session_id, kind, request_event, \
+         state, created_at) VALUES (?1, ?2, 'permission', ?3, 'pending', ?4)",
+    )
+    .bind(INTERACTION)
+    .bind(session.as_str())
+    .bind(second_event)
+    .bind(AT)
+    .execute(&pool)
+    .await
+    .expect("seed pending interaction");
+    pool.close().await;
+
+    let requested = SessionId::new("11111111-1111-4111-8111-111111111111").expect("session");
+    assert_ne!(session, requested, "会话 id 由存储层分配");
+
+    let requested = SessionId::new(REQUEST).expect("session");
+    assert_ne!(session, requested, "会话 id 由存储层分配");
+
+    let view = store.read_view().await.expect("read view");
+    let slice = view
+        .node_link_slice(&session, None, ReplayLimit::new(10))
+        .await
+        .expect("slice");
+    assert_eq!(slice.summary.session_id(), &session);
+    assert_eq!(slice.summary.state(), SessionState::Idle);
+    assert_eq!(slice.events.len(), 2, "两条会话事件都在切片里");
+    assert_eq!(
+        slice.events[0].event.origin_sequence,
+        Some(Sequence::new(1).expect("sequence"))
+    );
+    assert_eq!(
+        slice.head.origin_sequence.get(),
+        2,
+        "head 是最大 origin 序列"
+    );
+    assert!(
+        slice.events[0].payload.view.as_str().contains("state"),
+        "事件正文与定位同源（来自同一次读视图）"
+    );
+    assert_eq!(slice.pending_interactions.len(), 1);
+    assert_eq!(
+        slice.pending_interactions[0].interaction.id().as_str(),
+        INTERACTION
+    );
+    assert!(
+        !slice.pending_interactions[0]
+            .origin_event
+            .as_str()
+            .is_empty(),
+        "创建事件 id 必须被带回（wire 的 payloadDigest 需要它的 payload）"
+    );
+
+    // `after` 按 origin 序列前进：只取该点之后的事件。
+    let after = OriginCursor {
+        origin_epoch: slice.head.origin_epoch.clone(),
+        origin_sequence: Sequence::new(1).expect("sequence"),
+    };
+    let resumed = view
+        .node_link_slice(&session, Some(after), ReplayLimit::new(10))
+        .await
+        .expect("resumed slice");
+    assert_eq!(resumed.events.len(), 1);
+    assert_eq!(
+        resumed.events[0].event.event_type.as_str(),
+        "agent.message.completed"
+    );
+
+    // 会话不存在 → NotFound。
+    let unknown = SessionId::new(REQUEST).expect("session");
+    assert!(matches!(
+        view.node_link_slice(&unknown, None, ReplayLimit::new(1))
+            .await,
+        Err(PortError::NotFound(_))
+    ));
+
+    // 读视图持有一个显式只读事务：先释放它再关池，否则 `close()` 会等一个永不结束的连接。
+    drop(view);
     store.close().await;
 }
 
@@ -1381,4 +1510,207 @@ async fn expected_version_is_part_of_the_idempotency_check() {
     );
     pool.close().await;
     store.close().await;
+}
+
+/// §6 第 20 条（`node-link-owner` 的 RV1-WP6-F1）：`session.create` 的幂等行与创建在同一事务里落盘，
+/// 目标会话 id 由存储层回填；终态提交按 `(session, requestId)` 定位该行；重启后同一 `(actor, requestId)`
+/// 重试重放首次结果（不重复创建），同键不同指纹冲突，崩溃窗口由 `unsettled_commands` 暴露给启动恢复。
+#[tokio::test]
+async fn session_create_persists_its_idempotency_row_and_terminal() {
+    let dir = temp_dir("commit-create-idempotent");
+    let store = store(&dir).await;
+
+    // ① 创建 = 状态提交 + 幂等行（`session: None`，由存储层回填新建会话 id）。
+    let created = store
+        .commit(OwnedCommit {
+            state: Some(StateChange::Create(acp_core::ports::NewSession {
+                title: None,
+                agent: agent(),
+            })),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor(),
+                request: request(REQUEST),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                session: None,
+                expected_version: None,
+                request_fingerprint: fingerprint("create-a"),
+                accepted_at: at(0),
+            }),
+            ..create_session("create")
+        })
+        .await
+        .expect("create session");
+    let session = created.session_id.clone().expect("allocated session id");
+    assert!(created.replayed.is_none());
+
+    let accepted = store
+        .find_request(&request(REQUEST), &actor())
+        .await
+        .expect("find")
+        .expect("幂等行已落盘");
+    assert_eq!(accepted.status(), CommandStatus::Accepted);
+    assert_eq!(accepted.session(), Some(&session), "行里带新建会话 id");
+    assert!(accepted.terminal_event().is_none());
+
+    // ② 终态提交：结果与终态事件一起落盘（`completed` 必须有 `terminal_event_id`）。
+    let result = CommandResult::from_json_text(r#"{"sessionId":"x"}"#).expect("result");
+    store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(1),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event(
+                EventKind::Structured,
+                "command.completed",
+                &format!(r#"{{"requestId":"{REQUEST}","result":{{}}}}"#),
+                Some(request(REQUEST)),
+            )],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(
+                CommandTerminalRecord::try_new(
+                    CommandStatus::Completed,
+                    Some(at(1)),
+                    None,
+                    Some(result.clone()),
+                    None,
+                )
+                .expect("terminal record"),
+            ),
+            origin_epoch: None,
+        })
+        .await
+        .expect("terminal");
+    assert!(
+        store
+            .unsettled_commands(ReplayLimit::new(16))
+            .await
+            .expect("unsettled")
+            .is_empty(),
+        "终结后不再列入启动恢复的输入"
+    );
+
+    // ③ 重启：重开存储后仍是同一条持久事实（终态 + 事件 id + 结果）。
+    store.close().await;
+    let reopened = SqliteStore::open(StorageConfig::new(&dir), &at(0))
+        .await
+        .expect("reopen store");
+    let record = reopened
+        .find_request(&request(REQUEST), &actor())
+        .await
+        .expect("find")
+        .expect("终态记录");
+    assert_eq!(record.status(), CommandStatus::Completed);
+    assert!(
+        record.terminal_event().is_some(),
+        "completed 的 terminalEventId 来源必须非空"
+    );
+    assert_eq!(
+        record.result().map(CommandResult::as_str),
+        Some(result.as_str())
+    );
+
+    // ④ 重启后同键重试：重放首次结果，不重复创建。
+    let replay = reopened
+        .commit(OwnedCommit {
+            idempotency: Some(IdempotencyRecord {
+                actor: actor(),
+                request: request(REQUEST),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                session: None,
+                expected_version: None,
+                request_fingerprint: fingerprint("create-a"),
+                accepted_at: at(2),
+            }),
+            ..create_session("replay")
+        })
+        .await
+        .expect("replay");
+    assert_eq!(
+        replay.session_id,
+        Some(session.clone()),
+        "重放回首次创建的会话"
+    );
+    assert!(replay.replayed.is_some());
+    let pool = raw_pool(&dir.join(storage_sqlite::migrate::DATABASE_FILE)).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_session").await,
+        1,
+        "同键重试不得重复创建会话"
+    );
+    pool.close().await;
+
+    // ⑤ 同键不同指纹：`idempotency_conflict`，零副作用。
+    let conflict = reopened
+        .commit(OwnedCommit {
+            idempotency: Some(IdempotencyRecord {
+                actor: actor(),
+                request: request(REQUEST),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                session: None,
+                expected_version: None,
+                request_fingerprint: fingerprint("create-b"),
+                accepted_at: at(2),
+            }),
+            ..create_session("conflict")
+        })
+        .await
+        .expect_err("同键不同指纹必须冲突");
+    assert!(
+        matches!(
+            conflict,
+            PortError::Conflict(ConflictKind::IdempotencyConflict)
+        ),
+        "得到 {conflict:?}"
+    );
+    reopened.close().await;
+}
+
+/// §6 第 16/20 条：创建只落了幂等行（终态从未提交）时，重启后的 `unsettled_commands` 必须把它交给
+/// 启动恢复终结为 `uncertain`——行里带着新建会话 id，恢复因此能定位到那个会话。
+#[tokio::test]
+async fn session_create_crash_window_is_visible_to_startup_recovery() {
+    let dir = temp_dir("commit-create-crash-window");
+    let store = store(&dir).await;
+    let created = store
+        .commit(OwnedCommit {
+            state: Some(StateChange::Create(acp_core::ports::NewSession {
+                title: None,
+                agent: agent(),
+            })),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor(),
+                request: request(REQUEST),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                session: None,
+                expected_version: None,
+                request_fingerprint: fingerprint("create-a"),
+                accepted_at: at(0),
+            }),
+            ..create_session("crash")
+        })
+        .await
+        .expect("create session");
+    let session = created.session_id.expect("session id");
+    store.close().await;
+
+    // 重启：恢复输入就是这一条 accepted 行，且带着会话 id。
+    let reopened = SqliteStore::open(StorageConfig::new(&dir), &at(0))
+        .await
+        .expect("reopen store");
+    let unsettled = reopened
+        .unsettled_commands(ReplayLimit::new(16))
+        .await
+        .expect("unsettled");
+    assert_eq!(unsettled.len(), 1, "崩溃窗口必须暴露给启动恢复");
+    assert_eq!(unsettled[0].command(), "session.create");
+    assert_eq!(unsettled[0].session(), Some(&session));
+    reopened.close().await;
 }

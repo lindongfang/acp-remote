@@ -48,3 +48,18 @@ keywords = [
 ]
 # 未验证项（如实登记）：本机无 gitleaks，因此「规则确实会在合成样例上命中」这一点**没有**本地证据，
 # 只能由 CI 的 `secrets` job 承担；若 CI 侧判定该规则从未命中，应在此处调整 keywords 或改用默认规则集。
+
+# 已记录的假阳性（按本文件第 1、2 条政策的最小范围条目）。
+#
+# 命中对象：`Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==` —— **RFC 6455 §1.3 的公开握手示例值**
+# （规范正文里的示例字符串），被默认规则集的 `generic-api-key` 当作候选凭据。它不是任何真实凭据，
+# 也没有对应的服务端秘密；由主 Agent 在 `node-link-owner` 变更交付期核对（PR #28 的 `secrets` job）。
+# 代码侧已把该字面量移除（`test_client.rs` 改为运行时由 16 字节数组编码），这条只为覆盖**历史的那个提交**
+# 仍在 PR 范围内、而 PR 范围扫描会重放旧 diff 的情形；下次全历史扫描（每日 `schedule`）同样受益。
+# 范围故意收窄到「确切字符串 + 确切文件」，不放行目录、不放宽全局规则；若该文件将来不再包含 WebSocket
+# 示例请求，应删掉此条。
+[[allowlists]]
+description = "RFC 6455 §1.3 公开示例的 Sec-WebSocket-Key（非凭据）；代码已移除该字面量，此条仅豁免历史 diff"
+regexTarget = "line"
+regexes = ['''Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==''']
+paths = ['''crates/server/src/transport/net/test_client\.rs''']

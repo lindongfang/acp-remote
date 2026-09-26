@@ -32,7 +32,7 @@ const PAIRING_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/pairing.schema.json";
 
 const EXPECTED_VALID_MESSAGE_CASES: usize = 38;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
-const EXPECTED_BODY_REJECTED: usize = 8;
+const EXPECTED_BODY_REJECTED: usize = 9;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;
 
 fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {

@@ -33,10 +33,10 @@ use acp_core::model::{
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
     DropReport, HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery,
-    ImportedSessionRecord, ModeChange, NewTurn, OwnedCommit, PruneReport, ReadView, ReceiptOutcome,
-    RemoteCommandRef, RemoteDeliveryStore, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy,
-    SessionAttachment, SessionQuery, SessionStore, StateChange, StoreHealth, TurnChange,
-    TurnUpdate,
+    ImportedSessionRecord, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
+    PendingInteractionOrigin, PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef,
+    RemoteDeliveryStore, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment,
+    SessionQuery, SessionStore, StateChange, StoreHealth, TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -319,6 +319,9 @@ pub(crate) fn actor_key(actor: &Actor) -> (ActorKind, String) {
 ///
 /// `owned_command` 只存 §7.3 冻结的两列，因此还原是**有损**的：设备 scopes 不在表里（授权由 core 判定，
 /// 存储不参与），这里给 `ScopeSet::empty()`；Node 的复合键按 `"{node}/{access_node}"` 拆回。
+///
+/// `pairing_claimant` 在此**明确失败**：`owned_command.actor_kind` 的 CHECK 只有 `device`/`node`/`cli`
+/// （认领方永不提交命令，design D12），真读到这一行说明库被外部改写——按列值损坏处理，不猜一个 actor。
 fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> {
     match kind {
         ActorKind::Device => Ok(Actor::Device {
@@ -336,6 +339,10 @@ fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> 
             })
         }
         ActorKind::Cli => Ok(Actor::LocalCli),
+        ActorKind::PairingClaimant => Err(StorageError::ColumnValue {
+            column: "owned_command.actor_kind",
+            expected: "device, node or cli",
+        }),
     }
 }
 
@@ -529,6 +536,47 @@ fn event_from_row(row: &SqliteRow) -> Result<CommittedEvent, StorageError> {
         created_at: decode(&text(row, "created_at")?, "owned_event.created_at")?,
     };
     Ok(event)
+}
+
+/// `owned_event` 的一行 → 持久化正文（`ReadView::event_payload` 与 `session_event_payload` 共用）。
+///
+/// `view` 直接取库内 `payload_json` 的**原样文本**（只经 `ViewJson` 做形状校验，不重新序列化）；
+/// `acp` 按 `acp_raw_unavailable_reason` 分两路还原（字节数必须与原文一致）。
+fn payload_from_row(row: &SqliteRow) -> Result<EventPayload, PortError> {
+    let view = ViewJson::new(&text(row, "payload_json")?)
+        .map_err(|_| PortError::Corrupt("stored payload_json is not a JSON object"))?;
+    let reason: Option<RawUnavailableReason> = decode_opt(
+        opt_text(row, "acp_raw_unavailable_reason")?,
+        "owned_event.acp_raw_unavailable_reason",
+    )?;
+    let acp = match reason {
+        Some(reason) => {
+            let byte_length = match opt_int(row, "acp_byte_length")? {
+                Some(value) => u64::try_from(value)
+                    .map_err(|_| PortError::Corrupt("stored acp_byte_length is negative"))?,
+                None => 0,
+            };
+            let sha256 =
+                decode_opt::<Digest>(opt_text(row, "acp_sha256")?, "owned_event.acp_sha256")?;
+            Some(AcpRaw::unavailable(reason, byte_length, sha256))
+        }
+        None => match opt_text(row, "acp_raw_json")? {
+            Some(raw_json) => {
+                let media_type = text(row, "acp_media_type")?;
+                let sha256 = decode::<Digest>(&text(row, "acp_sha256")?, "owned_event.acp_sha256")?;
+                Some(
+                    AcpRaw::available(&media_type, &raw_json, sha256)
+                        .map_err(|_| PortError::Corrupt("stored ACP raw is inconsistent"))?,
+                )
+            }
+            None => None,
+        },
+    };
+    let payload = EventPayload::new(view, acp);
+    payload
+        .validate()
+        .map_err(|_| PortError::Corrupt("stored event payload is inconsistent"))?;
+    Ok(payload)
 }
 
 fn command_record_from_row(row: &SqliteRow) -> Result<CommandRecord, StorageError> {
@@ -805,9 +853,15 @@ fn verify_idempotent(
 ) -> Result<(), PortError> {
     let stored_session = opt_text(row, "session_id").map_err(PortError::from)?;
     let stored_expected = opt_int(row, "expected_version").map_err(PortError::from)?;
+    // `idem.session = None` 表示「该命令没有装配期可知的目标会话」（目前只有 `session.create`：它的
+    // `session_id` 由存储层在创建事务内分配，见 §6 第 20 条），此时不参与比对——否则同键重试会被误判为冲突。
+    let session_matches = match idem.session.as_ref() {
+        Some(session) => stored_session.as_deref() == Some(session.as_str()),
+        None => true,
+    };
     let same = text(row, "command").map_err(PortError::from)? == idem.command
         && text(row, "kind").map_err(PortError::from)? == idem.kind.as_str()
-        && stored_session.as_deref() == idem.session.as_ref().map(SessionId::as_str)
+        && session_matches
         && stored_expected.map(|value| value.to_string())
             == idem.expected_version.map(|value| value.to_string())
         && text(row, "request_fingerprint").map_err(PortError::from)?
@@ -875,10 +929,12 @@ impl SqliteStore {
                     },
                     None => (Version::new(0), None),
                 };
-                // 命中路径不写任何行，显式结束事务。
+                // 命中路径不写任何行，显式结束事务。§6 第 20 条：`idem.session` 为 `None` 时以行里记的
+                // 目标会话作答（`session.create` 的重试因此能拿回首次创建的那个 sessionId）。
+                let session_id = idem.session.clone().or_else(|| record.session().cloned());
                 drop(tx);
                 return Ok(CommitOutcome {
-                    session_id: idem.session.clone(),
+                    session_id,
                     origin_epoch,
                     version,
                     appended: Vec::new(),
@@ -1303,7 +1359,17 @@ impl SqliteStore {
 
         // ---- 命令（幂等行 + 终态；§7.3 的 CHECK 形状由 `CommandRecord::try_new` 先行校验）
         if let Some(idem) = commit.idempotency.as_ref() {
-            write_command(&mut tx, idem, commit.command_terminal.as_ref()).await?;
+            // §6 第 20 条：会话级命令的幂等行落**目标会话**；`session.create` 的目标会话是本次事务刚分配的
+            // 那一个（装配方预知不了 id），因此这里用 `session_id` 回填它的 `None`——否则终态块与启动恢复
+            // 都无法按 `(session, requestId)` 定位该行。
+            let idem = match (idem.session.as_ref(), session_id.as_ref()) {
+                (None, Some(created)) => acp_core::ports::IdempotencyRecord {
+                    session: Some(created.clone()),
+                    ..idem.clone()
+                },
+                _ => idem.clone(),
+            };
+            write_command(&mut tx, &idem, commit.command_terminal.as_ref()).await?;
         }
         if let Some(request) = &terminal_request {
             let session = session_id.as_ref().ok_or(PortError::InvalidRequest(
@@ -2270,41 +2336,139 @@ impl ReadView for SqlReadView {
         let Some(row) = row else {
             return Ok(None);
         };
-        let view = ViewJson::new(&text(&row, "payload_json")?)
-            .map_err(|_| PortError::Corrupt("stored payload_json is not a JSON object"))?;
-        let reason: Option<RawUnavailableReason> = decode_opt(
-            opt_text(&row, "acp_raw_unavailable_reason")?,
-            "owned_event.acp_raw_unavailable_reason",
-        )?;
-        let acp = match reason {
-            Some(reason) => {
-                let byte_length = match opt_int(&row, "acp_byte_length")? {
-                    Some(value) => u64::try_from(value)
-                        .map_err(|_| PortError::Corrupt("stored acp_byte_length is negative"))?,
-                    None => 0,
-                };
-                let sha256 =
-                    decode_opt::<Digest>(opt_text(&row, "acp_sha256")?, "owned_event.acp_sha256")?;
-                Some(AcpRaw::unavailable(reason, byte_length, sha256))
-            }
-            None => match opt_text(&row, "acp_raw_json")? {
-                Some(raw_json) => {
-                    let media_type = text(&row, "acp_media_type")?;
-                    let sha256 =
-                        decode::<Digest>(&text(&row, "acp_sha256")?, "owned_event.acp_sha256")?;
-                    Some(
-                        AcpRaw::available(&media_type, &raw_json, sha256)
-                            .map_err(|_| PortError::Corrupt("stored ACP raw is inconsistent"))?,
-                    )
-                }
-                None => None,
-            },
+        Ok(Some(payload_from_row(&row)?))
+    }
+
+    /// Node Link 的会话读视图（`NODE_LINK_PROTOCOL.md` §12.4）：一次只读事务内取回「快照元数据
+    /// （会话摘要、origin head、未决交互）+ `after` 之后的事件与正文」。
+    ///
+    /// head 取该会话已提交的最大 `origin_sequence`，epoch 取该会话行上的值：清理按 `global_sequence`
+    /// 升序删旧行，因此最大值不会因保留期清理而丢失。会话不存在返回 `NotFound`。
+    async fn node_link_slice(
+        &self,
+        session: &SessionId,
+        after: Option<OriginCursor>,
+        limit: ReplayLimit,
+    ) -> Result<NodeLinkSlice, PortError> {
+        let mut guard = self.tx.lock().await;
+        let row = sqlx::query(&format!(
+            "SELECT {SESSION_COLUMNS} FROM owned_session WHERE session_id = ?1"
+        ))
+        .bind(session.as_str())
+        .fetch_optional(&mut **guard)
+        .await
+        .db()?;
+        let Some(row) = row else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
         };
-        let payload = EventPayload::new(view, acp);
-        payload
-            .validate()
-            .map_err(|_| PortError::Corrupt("stored event payload is inconsistent"))?;
-        Ok(Some(payload))
+        let summary = session_summary_from_row(&row)?;
+        let origin_epoch: OriginEpoch =
+            decode(&text(&row, "origin_epoch")?, "owned_session.origin_epoch")?;
+        let from = after
+            .as_ref()
+            .map_or(0, |cursor| cursor.origin_sequence.get());
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
+             AND origin_sequence > ?2 AND compacted_into IS NULL \
+             ORDER BY origin_sequence ASC LIMIT ?3"
+        ))
+        .bind(session.as_str())
+        .bind(storable(from)?)
+        .bind(i64::from(limit.events()))
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let event = event_from_row(row)?;
+            events.push(OwnedEventRecord {
+                event,
+                payload: payload_from_row(row)?,
+            });
+        }
+        let head_sequence: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(origin_sequence) FROM owned_event WHERE session_id = ?1",
+        )
+        .bind(session.as_str())
+        .fetch_one(&mut **guard)
+        .await
+        .db()?;
+        let head_sequence = match head_sequence {
+            Some(value) => sequence(value, "owned_event.origin_sequence")?,
+            None => Sequence::new(0).map_err(|_| StorageError::Corrupt("sequence zero"))?,
+        };
+        // 未决交互的创建事件由 `request_event`（`owned_event.global_sequence`）定位，取它的
+        // `event_id`：wire 的 `pending_interactions[].payloadDigest` 需要那个事件的 payload。
+        // 创建事件受 §7.5 的清理谓词保护（引用它的事件不会被删）；关联缺失只能来自合同外的直接写入，
+        // 此时**失败关闭**而不是静默少投影一个条目。
+        let interactions = sqlx::query(
+            "SELECT i.interaction_id, i.kind, i.session_id, i.created_at, e.event_id \
+             FROM owned_interaction i \
+             LEFT JOIN owned_event e ON e.global_sequence = i.request_event \
+             WHERE i.session_id = ?1 AND i.state = 'pending' \
+             ORDER BY i.created_at ASC, i.interaction_id ASC",
+        )
+        .bind(session.as_str())
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let mut pending_interactions = Vec::with_capacity(interactions.len());
+        for row in &interactions {
+            let interaction = PendingInteraction::try_new(
+                decode(
+                    &text(row, "interaction_id")?,
+                    "owned_interaction.interaction_id",
+                )?,
+                decode(&text(row, "kind")?, "owned_interaction.kind")?,
+                decode(&text(row, "session_id")?, "owned_interaction.session_id")?,
+                decode(&text(row, "created_at")?, "owned_interaction.created_at")?,
+                Vec::<InteractionOption>::new(),
+            )
+            .map_err(|_| StorageError::ColumnValue {
+                column: "owned_interaction",
+                expected: "pending interaction metadata",
+            })?;
+            let Some(event_id) = opt_text(row, "event_id")? else {
+                return Err(PortError::Corrupt(
+                    "pending interaction without a paired origin event",
+                ));
+            };
+            let origin_event = decode(&event_id, "owned_event.event_id")?;
+            pending_interactions.push(PendingInteractionOrigin {
+                interaction,
+                origin_event,
+            });
+        }
+        Ok(NodeLinkSlice {
+            summary,
+            head: OriginCursor {
+                origin_epoch,
+                origin_sequence: head_sequence,
+            },
+            pending_interactions,
+            events,
+        })
+    }
+
+    async fn session_event_payload(
+        &self,
+        session: &SessionId,
+        event: &EventId,
+    ) -> Result<Option<EventPayload>, PortError> {
+        let mut guard = self.tx.lock().await;
+        let row = sqlx::query(
+            "SELECT payload_json, acp_media_type, acp_raw_json, acp_byte_length, acp_sha256, \
+             acp_raw_unavailable_reason FROM owned_event WHERE event_id = ?1 AND session_id = ?2",
+        )
+        .bind(event.as_str())
+        .bind(session.as_str())
+        .fetch_optional(&mut **guard)
+        .await
+        .db()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(Some(payload_from_row(&row)?))
     }
 
     async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {

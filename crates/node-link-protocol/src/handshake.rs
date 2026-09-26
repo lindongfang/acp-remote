@@ -74,6 +74,13 @@ pub struct NodeChallenge {
     pub server_nonce: Base64Url<32>,
     #[serde(rename = "selectedFeatures")]
     pub selected_features: FeatureList,
+    /// Owner 当前目录修订号，与 `node.ready.catalogRevision` 同源。
+    ///
+    /// 两个连接 transcript domain（`node-link-challenge/v1`、`node-link-proof/v1`）的 tag 6 都取本字段：
+    /// Access 必须能用它验证 `nodeProof` 并构造自己的 `node.proof`。字段缺失即握手无法完成，
+    /// 因此 schema 与本文把它列为必需（2026-09-26 的 v1 内合同修订，design.md D13）。
+    #[serde(rename = "catalogRevision")]
+    pub catalog_revision: DecimalString,
     /// §9.4 连接节点挑战 domain 的 P1363 签名（64 字节）。
     #[serde(rename = "nodeProof")]
     pub node_proof: Base64Url<64>,

@@ -97,11 +97,11 @@ node-link-client    # 待落地
 storage-sqlite      # 已落地
 identity-auth       # 已落地
 identity-keystore   # 已落地
-server              # 已落地（仅切片 4 范围：本地通道 + local_admin）
-app                 # 已落地（仅切片 4 范围：daemon / CLI / 组合根）
+server              # 已落地（切片 4 本地通道 + local_admin；切片 5 的 transport::net + node_link；sync / acp_facade 待落地）
+app                 # 已落地（切片 4 的 daemon / CLI / 组合根；切片 5 接线网络接入面与 Node Link 路由）
 ```
 
-上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，切片 4 的落地范围见 [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md) §3 `[现状]`）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
+上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，切片 4/5 的落地范围见 [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md) §3 `[现状]`）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
 
 依赖必须指向更稳定的内层：
 
@@ -261,7 +261,7 @@ cargo test --locked --workspace --all-features
 
 ## 9. 测试要求
 
-根据改动选择对应测试（`node-link-client`、macOS/Linux 的 keystore 后端与 `server::sync`/`server::node_link`/`server::acp_facade` 尚未落地，其条目在对应适配器落地时生效；`server` 的本地管理通道与 `app` 已随切片 4 落地，条目已生效）：
+根据改动选择对应测试（`node-link-client`、macOS/Linux 的 keystore 后端与 `server::sync`/`server::acp_facade` 尚未落地，其条目在对应适配器落地时生效；`server` 的本地管理通道、`transport::net` 与 `node_link`，以及 `app` 已随切片 4/5 落地，条目已生效）：
 
 - `core`：状态转换、值对象、owned/imported 分流、每会话串行、事务提交和不变量。
 - `acp-protocol`：官方 fixture、未知字段往返、扩展 payload 和版本兼容。

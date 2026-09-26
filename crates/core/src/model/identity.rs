@@ -100,11 +100,16 @@ name_set!(
 );
 
 token_enum!(
-    /// 调用者类别（`owned_command.actor_kind` 的 CHECK 取值）。
+    /// 调用者类别。
+    ///
+    /// 落库列有两处，**取值集不同**：`owned_audit`/`imported_audit` 的 `actor_kind` 接受全部四个取值
+    /// （`pairing_claimant` 只出现在审计归因里），而 `owned_command.actor_kind`（§7.3）只有
+    /// `device`/`node`/`cli`——认领方永不提交命令，撞 CHECK 即失败关闭（design D12）。
     ActorKind {
         Device => "device",
         Node => "node",
         Cli => "cli",
+        PairingClaimant => "pairing_claimant",
     }
 );
 
@@ -118,6 +123,11 @@ pub enum Actor {
     Node { node: NodeId, access_node: NodeId },
     /// 本机 CLI/桌面入口（`local.*` 能力，不经远程身份）。
     LocalCli,
+    /// 配对通道的认领方（design D12）：已由 pairingSecret proof 验证、但尚无持久身份的对端。
+    ///
+    /// **绑定该配对**：只有 `pairing` 等于本次调用的目标配对时才被用例面接受。构造规则见
+    /// `IDENTITY_AND_AUTH_CONTRACT.md` §5.1——只能由配对 HTTP 端点在 claim/status 的 proof 验证成功后构造。
+    PairingClaimant { pairing: PairingId },
 }
 
 impl Actor {
@@ -127,11 +137,13 @@ impl Actor {
             Self::Device { .. } => ActorKind::Device,
             Self::Node { .. } => ActorKind::Node,
             Self::LocalCli => ActorKind::Cli,
+            Self::PairingClaimant { .. } => ActorKind::PairingClaimant,
         }
     }
 
     /// 写入存储的单列 actor id（§7.3 的 `actor_id`）：
-    /// device → 设备 UUID；node → `"{node}/{access_node}"`（承载复合幂等键）；cli → `"cli"`。
+    /// device → 设备 UUID；node → `"{node}/{access_node}"`（承载复合幂等键）；cli → `"cli"`；
+    /// pairing_claimant → 该配对 id（认领方在配对内是唯一的）。
     pub fn id_text(&self) -> String {
         match self {
             Self::Device { device, .. } => device.as_str().to_owned(),
@@ -139,6 +151,7 @@ impl Actor {
                 format!("{}/{}", node.as_str(), access_node.as_str())
             }
             Self::LocalCli => "cli".to_owned(),
+            Self::PairingClaimant { pairing } => pairing.as_str().to_owned(),
         }
     }
 
@@ -146,7 +159,7 @@ impl Actor {
     pub fn scopes(&self) -> Option<&ScopeSet> {
         match self {
             Self::Device { scopes, .. } => Some(scopes),
-            Self::Node { .. } | Self::LocalCli => None,
+            Self::Node { .. } | Self::LocalCli | Self::PairingClaimant { .. } => None,
         }
     }
 
@@ -154,7 +167,7 @@ impl Actor {
     pub fn device_id(&self) -> Option<&DeviceId> {
         match self {
             Self::Device { device, .. } => Some(device),
-            Self::Node { .. } | Self::LocalCli => None,
+            Self::Node { .. } | Self::LocalCli | Self::PairingClaimant { .. } => None,
         }
     }
 
@@ -162,7 +175,15 @@ impl Actor {
     pub fn node_ids(&self) -> Option<(&NodeId, &NodeId)> {
         match self {
             Self::Node { node, access_node } => Some((node, access_node)),
-            Self::Device { .. } | Self::LocalCli => None,
+            Self::Device { .. } | Self::LocalCli | Self::PairingClaimant { .. } => None,
+        }
+    }
+
+    /// 认领方绑定的配对（配对通道用例面据此判定授权）。
+    pub fn pairing(&self) -> Option<&PairingId> {
+        match self {
+            Self::PairingClaimant { pairing } => Some(pairing),
+            Self::Device { .. } | Self::Node { .. } | Self::LocalCli => None,
         }
     }
 
@@ -873,6 +894,8 @@ token_enum!(
         DeviceRevoked => "device.revoked",
         DeviceScopesChanged => "device.scopes_changed",
         NodePaired => "node.paired",
+        NodeAuthenticated => "node.authenticated",
+        NodeAuthFailed => "node.auth_failed",
         NodeTrustRevoked => "node.trust_revoked",
         NodeIdentityChanged => "node.identity_changed",
         ExportCreated => "export.created",

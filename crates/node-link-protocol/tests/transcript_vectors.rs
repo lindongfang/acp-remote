@@ -135,3 +135,71 @@ fn transcript_negatives_are_rejected_with_declared_error() {
         "{PROTOCOL}: {rejected} 个 transcript 负向量按声明错误被拒，跳过 {skipped_public_keys} 个公钥负向量"
     );
 }
+
+/// 修订项（2026-09-26，design D13）：`node.challenge` 的 `catalogRevision` 就是两个连接 domain 的 tag 6 来源。
+///
+/// 用例把「Access 从握手消息里读到的值」写进固定向量的输入再逐字节复算 transcript：`valid/node-challenge.json`
+/// 与该向量说的是同一个 revision，且该字段确实进入编码（`identity-auth` 的验签路径消费同一张表）。
+#[test]
+fn the_challenge_fixture_carries_the_connection_transcript_revision() {
+    use node_link_protocol::envelope::Envelope;
+    use node_link_protocol::handshake::NodeChallenge;
+
+    let registry = support::registry();
+    let fixture = support::read_json(&support::repo_path(&format!(
+        "{FIXTURE_ROOT}valid/node-challenge.json"
+    )));
+    let envelope = Envelope::decode(&fixture.to_string()).expect("fixture 信封合法");
+    let body: NodeChallenge =
+        serde_json::from_str(envelope.body().get()).expect("node.challenge body 合法");
+    let revision: u64 = body
+        .catalog_revision
+        .as_str()
+        .parse()
+        .expect("catalogRevision 是十进制串");
+
+    let mut checked = 0;
+    // 两个连接 domain 的 tag 6 同源：同一个 wire 值必须能复算出两份向量。
+    for relative in ["transcripts/challenge.json", "transcripts/node-proof.json"] {
+        let vector = support::read_json(&support::repo_path(&format!("{FIXTURE_ROOT}{relative}")));
+        let mut input = vector["input"].clone();
+        assert_eq!(
+            input["catalogRevision"].as_u64(),
+            Some(revision),
+            "{relative}：向量与 node.challenge fixture 的 revision 必须一致"
+        );
+        // 用**从 wire 读到的**值替回输入，其余字段仍取向量（clientNonce 属 node.hello，不在本消息里）。
+        input["catalogRevision"] = serde_json::Value::from(revision);
+
+        let domain = vector["domain"].as_str().expect("domain");
+        let spec = domain_spec(&DOMAINS, domain).unwrap_or_else(|| panic!("{relative}：未登记"));
+        let entry = support::registry_domain_entry(&registry, domain).expect("registry entry");
+        let owned = values_from_input(spec, &input, &entry);
+        let values: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+        let encoded = encode_transcript(spec, &values).expect("可编码");
+
+        assert_eq!(
+            acpr_transcript::encode_base64url(&encoded),
+            vector["expected"]["transcriptBase64url"]
+                .as_str()
+                .expect("expected transcript"),
+            "{relative}：用 wire 的 catalogRevision 复算结果与固定向量不一致"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 2, "两个连接 domain 都必须复算");
+
+    // fixture 与 challenge 向量是同一份握手消息（证明它与向量同源，不只是 revision 相同）。
+    let challenge_vector = support::read_json(&support::repo_path(&format!(
+        "{FIXTURE_ROOT}transcripts/challenge.json"
+    )));
+    assert_eq!(
+        fixture["body"]["connectionId"], challenge_vector["input"]["connectionId"],
+        "connectionId 必须与向量一致"
+    );
+    assert_eq!(
+        fixture["body"]["nodeProof"], challenge_vector["expected"]["p1363Signature"],
+        "nodeProof 必须与向量的签名一致"
+    );
+    println!("{PROTOCOL}: node.challenge 的 catalogRevision 复算两个连接 domain 的固定向量一致");
+}

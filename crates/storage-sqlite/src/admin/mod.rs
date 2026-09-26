@@ -106,8 +106,8 @@ pub(crate) async fn insert_expiry_audit(
 /// 返回 `Unavailable(StorageFull)`，由调用方回滚整个写集（不留下半条授权）。
 ///
 /// 只加在**会新增行**的写路径上（`put_*`/`create_pairing`/`claim_pairing`/`settle_pairing`/
-/// `add_import`/`mark_seeded`）。撤销、移除与过期扫描既不增长库、又是安全动作，必须保持可用
-/// （§11.2 第 4/5 条要求撤销先提交再阻断访问）。
+/// `add_import`/`mark_seeded`）。撤销、移除、过期扫描与**配对消费**（`consume_pairing`，只推进状态、
+/// 不新增管理行）既不增长库、又是安全动作，必须保持可用（§11.2 第 4/5 条要求撤销先提交再阻断访问）。
 pub(crate) async fn enforce_capacity_gate(
     store: &SqliteStore,
     tx: &mut Transaction<'_, Sqlite>,

@@ -121,9 +121,16 @@ impl Clock for FakeClock {
 pub(crate) struct FakeAudit {
     records: Arc<Mutex<Vec<AuditRecord>>>,
     failure: Arc<Mutex<Option<PortError>>>,
+    /// 管理写集水位（`AuditStore::watermark`，即 `catalogRevision` 的来源）：用例把它固定成已知值，
+    /// 而不靠审计行数（真实实现取 `sqlite_sequence`）。
+    watermark: Arc<Mutex<u64>>,
 }
 
 impl FakeAudit {
+    /// 固定本次测试的管理写集水位（`catalogRevision`）。
+    pub(crate) fn set_watermark(&self, value: u64) {
+        *self.watermark.lock().expect("审计锁") = value;
+    }
     pub(crate) fn seed(&self, record: AuditRecord) {
         self.records.lock().expect("审计锁").push(record);
     }
@@ -195,6 +202,10 @@ impl AuditStore for FakeAudit {
             .filter(|record| query.actions.is_empty() || query.actions.contains(&record.action()))
             .cloned()
             .collect())
+    }
+
+    async fn watermark(&self) -> Result<u64, PortError> {
+        Ok(*self.watermark.lock().expect("审计锁"))
     }
 }
 
@@ -624,9 +635,20 @@ impl IdentityKeystore for FakeKeystore {
     async fn sign(
         &self,
         _handle: &KeyHandle,
-        _transcript: &[u8],
+        transcript: &[u8],
     ) -> Result<identity_auth::P1363Signature, KeystoreError> {
-        unreachable!("{NOT_TOUCHED}")
+        // 测试用固定私钥：标量 1，其公钥就是 [`test_public_key`] 的基点 G。因此
+        // `sign_node_link_pairing_owner_proof` 的产物能在用例里被**同一个**公钥验证（R20）；
+        // 这不是密码学材料，也不进生产路径（`p256` 只是本 crate 的 dev-dependency）。
+        use p256::ecdsa::signature::Signer as _;
+        // 标量必须在 1..n 内，且其公钥要等于 [`test_public_key`]（基点 G）——即标量 1（大端）。
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        let signing =
+            p256::ecdsa::SigningKey::from_slice(&scalar).map_err(|_| KeystoreError::Unavailable)?;
+        let signature: p256::ecdsa::Signature = signing.sign(transcript);
+        identity_auth::P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
+            .map_err(|_| KeystoreError::Unavailable)
     }
 
     async fn delete(&self, _handle: &KeyHandle) -> Result<(), KeystoreError> {
@@ -791,7 +813,6 @@ impl AgentCatalog for FakeCatalog {
 
 /// 未被本轮路由触及的端口实现：所有方法都 `unreachable!`，用作 `UseCases`/`Broker` 的占位依赖。
 pub(crate) struct NotTouched;
-
 #[async_trait::async_trait]
 impl SessionStore for NotTouched {
     async fn commit(&self, _commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
@@ -915,6 +936,87 @@ impl RemoteDeliveryStore for NotTouched {
     }
 }
 
+/// 「只有水位是真的」存储替身：`head()` 返回构造时给定的固定水位，其余方法仍不触及。
+///
+/// Node Link 握手视图（`UseCases::node_link_handshake_view`）是本仓库唯一会读 `head()` 的无副作用入口，
+/// 用例需要它给 `node.ready.catalogRevision`/`serverEpoch` 一个**可判定**的值（不是常量、不依赖时钟）。
+/// 除 `head()` 外的方法保持 `unreachable!`，以免替身比真实存储更宽容。
+#[derive(Clone)]
+pub(crate) struct FixedStore {
+    head: GlobalCursor,
+}
+
+impl FixedStore {
+    pub(crate) fn new(server_epoch: &str, global_sequence: u64) -> Self {
+        Self {
+            head: GlobalCursor::new(
+                ServerEpoch::new(server_epoch).expect("固定 epoch 合法"),
+                Sequence::new(global_sequence).expect("固定水位合法"),
+            ),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for FixedStore {
+    async fn commit(&self, _commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn load(&self, _session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn list(&self, _query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn head(&self) -> Result<GlobalCursor, PortError> {
+        Ok(self.head.clone())
+    }
+
+    async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn find_request(
+        &self,
+        _request: &RequestId,
+        _actor: &Actor,
+    ) -> Result<Option<CommandRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn unsettled_commands(
+        &self,
+        _limit: ReplayLimit,
+    ) -> Result<Vec<CommandRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn retention_window(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<(Sequence, Sequence)>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn prune(
+        &self,
+        _policy: RetentionPolicy,
+        _at: Timestamp,
+    ) -> Result<PruneReport, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn health(&self) -> Result<StoreHealth, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+}
+
+/// `FixedStore` 的水位 epoch（与 `TEST_PUBLIC_ORIGIN` 同一套固定素材）。
+pub(crate) const TEST_SERVER_EPOCH: &str = "018f6f89-8a23-7a10-a0d3-f92e6a31d952";
+
 #[async_trait::async_trait]
 impl SessionBackendFactory for NotTouched {
     async fn create(
@@ -1012,6 +1114,10 @@ impl TrustStore for NotTouched {
         unreachable!("{NOT_TOUCHED}")
     }
 
+    async fn pairing_for(&self, _peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
     async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
@@ -1049,33 +1155,58 @@ impl TrustStore for NotTouched {
     async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
+
+    async fn consume_pairing(
+        &self,
+        _write: PairingConsumption,
+    ) -> Result<PairingRecord, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn record_node_connected(&self, _write: NodeConnectedWrite) -> Result<(), PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
 }
 
-pub(crate) struct FakeIds;
+/// 确定性 id 生成器：单调递增的规范 uuid 文本（与 core 内部测试的 `TestIds` 同款）。
+///
+/// 它是端口替身里唯一**必须能用**的生成器：Node Link 的每条出站消息都要一个 `messageId`
+/// （`UseCases::ids()`），而 id 对调用方是不透明值，用例只要求「唯一且形状规范」。
+#[derive(Default)]
+pub(crate) struct FakeIds {
+    next: std::sync::atomic::AtomicU64,
+}
+
+impl FakeIds {
+    fn next_text(&self) -> String {
+        let value = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        format!("00000000-0000-4000-8000-{value:012x}")
+    }
+}
 
 impl IdGenerator for FakeIds {
     fn turn_id(&self) -> TurnId {
-        unreachable!("{NOT_TOUCHED}")
+        TurnId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn interaction_id(&self) -> InteractionId {
-        unreachable!("{NOT_TOUCHED}")
+        InteractionId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn pairing_id(&self) -> PairingId {
-        unreachable!("{NOT_TOUCHED}")
+        PairingId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn message_id(&self) -> MessageId {
-        unreachable!("{NOT_TOUCHED}")
+        MessageId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn origin_epoch(&self) -> OriginEpoch {
-        unreachable!("{NOT_TOUCHED}")
+        OriginEpoch::new(&self.next_text()).expect("规范 uuid 文本")
     }
 
     fn request_id(&self) -> RequestId {
-        unreachable!("{NOT_TOUCHED}")
+        RequestId::new(&self.next_text()).expect("规范 uuid 文本")
     }
 }
 
@@ -1133,6 +1264,14 @@ impl FakeTrust {
 
     pub(crate) fn pairing_count(&self) -> usize {
         self.pairings.lock().expect("信任锁").len()
+    }
+
+    /// 由信任写集提交的审计行（`consume_pairing`/`settle_pairing`/撤销等同事务写入）。
+    ///
+    /// 真实存储把这些行写进同一张审计表，因此读取入口是 `AuditStore::query`；替身把两张表分开，
+    /// 这里给出等价视图，免得用例漏看写集里的留痕。
+    pub(crate) fn audits(&self) -> Vec<AuditRecord> {
+        self.audits.lock().expect("信任锁").clone()
     }
 
     /// 让下一次落定失败（用于覆盖「写集提交失败 → 不得产生内存已批准、库无信任」）。
@@ -1221,6 +1360,19 @@ impl TrustStore for FakeTrust {
 
     async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
         Ok(self.peers.lock().expect("信任锁").get(id.as_str()).cloned())
+    }
+
+    /// 该对端最近一次配对：替身按 `pairings` 的登记顺序取最后一条匹配（真实实现按
+    /// `created_at`/`pairing_id` 降序，两者都只服务「最近一次」这一个语义）。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError> {
+        let pairings = self.pairings.lock().expect("信任锁");
+        let peers = self.peers.lock().expect("信任锁");
+        let matched: Vec<PairingRecord> = peers
+            .iter()
+            .filter(|(_, row)| row.id() == peer)
+            .filter_map(|(pairing_id, _)| pairings.get(pairing_id).cloned())
+            .collect();
+        Ok(matched.into_iter().last())
     }
 
     async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
@@ -1450,9 +1602,124 @@ impl TrustStore for FakeTrust {
     async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
+
+    /// 与存储层同款（§11.6 第 8 条）：主体与审计归因一致 → 读配对行/对端行 → 对端同类同 id → 只有
+    /// `approved` 能推进到 `consumed`（`terminal_at` 取本次 `at`，审计同写集，并推进对端节点行的
+    /// `last_connected_at`），已是 `consumed` 且对端一致时幂等成功（不覆盖首次时间、不重复写审计）。
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError> {
+        if write
+            .context
+            .audit
+            .iter()
+            .any(|row| row.actor != write.actor)
+        {
+            return Err(PortError::InvalidRequest(
+                "consume_pairing actor must match every audit row",
+            ));
+        }
+        let mut pairings = self.pairings.lock().expect("信任锁");
+        let Some(record) = pairings.get(write.pairing.as_str()).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Pairing(write.pairing)));
+        };
+        let Some(peer) = self
+            .peers
+            .lock()
+            .expect("信任锁")
+            .get(write.pairing.as_str())
+            .cloned()
+        else {
+            return Err(PortError::Corrupt("pairing has no peer row"));
+        };
+        if !peer_matches_actor(&write.actor, peer.id()) {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+        match record.state() {
+            PairingState::Consumed => return Ok(record),
+            PairingState::Approved => {}
+            state if state.is_terminal() => return Err(terminal_conflict(state)),
+            _ => return Err(PortError::InvalidRequest("pairing has not been approved")),
+        }
+        let consumed = PairingRecord::try_new(
+            record.id().clone(),
+            record.target(),
+            PairingState::Consumed,
+            record.display_name().map(str::to_owned),
+            record.requested_scopes().clone(),
+            record.requested_grants().clone(),
+            record.secret_digest().clone(),
+            record.host_binding(),
+            record.created_at().clone(),
+            record.expires_at().clone(),
+            record.claimed_at().cloned(),
+            record.approved_at().cloned(),
+            Some(write.context.at.clone()),
+        )
+        .expect("消费后的配对记录合法");
+        self.append_audits(&write.context.at, write.context.audit);
+        if let Actor::Node { node, .. } = &write.actor {
+            self.advance_node_connected_at(node, NodeKind::Access, &write.context.at)?;
+        }
+        pairings.insert(write.pairing.as_str().to_owned(), consumed.clone());
+        Ok(consumed)
+    }
+
+    /// 与存储层同款（§11.6 第 9 条）：推进 `last_connected_at`（只前进不倒退）与 `context.audit`
+    /// 同一写集；行不存在 → `NotFound(Node)`。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError> {
+        self.advance_node_connected_at(&write.node, write.kind, &write.context.at)?;
+        self.append_audits(&write.context.at, write.context.audit);
+        Ok(())
+    }
+}
+
+/// 主体与对端身份的一致性（与 `core::use_cases` 的同名判定同口径）。
+fn peer_matches_actor(actor: &Actor, peer: &PeerIdentity) -> bool {
+    match (actor, peer) {
+        (Actor::Device { device, .. }, PeerIdentity::Device(id)) => device == id,
+        (Actor::Node { node, .. }, PeerIdentity::Node(id)) => node == id,
+        _ => false,
+    }
 }
 
 impl FakeTrust {
+    /// 认证收尾推进节点行的 `last_connected_at`（§11.6 第 9 条）：与存储层同款——只前进不倒退、
+    /// 不抹掉已存值（比较按固定宽度 UTC 毫秒文本的字典序）；行不存在 → `NotFound(Node)`。
+    ///
+    /// 替身只改这一个字段（不像 `upsert_node` 那样重写整行），撤销时间与原因保持原样。
+    fn advance_node_connected_at(
+        &self,
+        node: &NodeId,
+        kind: NodeKind,
+        at: &Timestamp,
+    ) -> Result<(), PortError> {
+        let mut nodes = self.nodes.lock().expect("信任锁");
+        let key = (node.as_str().to_owned(), kind.as_str().to_owned());
+        let Some(record) = nodes.get(&key).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Node(node.clone())));
+        };
+        if record
+            .last_connected_at()
+            .is_some_and(|stored| stored.as_str() >= at.as_str())
+        {
+            return Ok(());
+        }
+        let advanced = NodeRecord::try_new(
+            record.node_id().clone(),
+            record.display_name(),
+            record.kind(),
+            record.node_public_key_fingerprint().clone(),
+            record.grants().clone(),
+            record.state(),
+            record.owner_endpoint().map(str::to_owned),
+            record.created_at().clone(),
+            Some(at.clone()),
+            record.revoked_at().cloned(),
+        )
+        .expect("推进时间后的节点记录合法");
+        nodes.insert(key, advanced);
+        Ok(())
+    }
+
     fn append_audits(&self, at: &Timestamp, audit: Vec<PendingAudit>) {
         let mut audits = self.audits.lock().expect("信任锁");
         for pending in audit {
@@ -1516,6 +1783,12 @@ impl FakeTrust {
             ),
             record,
         );
+        // 与存储层同款（§11.6 第 4 条）：批准把对端公钥从 `owned_pairing_peer` 转入 `owned_peer_key`，
+        // 它是握手验签材料的**唯一**来源（`IDENTITY_AND_AUTH_CONTRACT.md` §5.1），既有行允许沿用。
+        self.keys.lock().expect("信任锁").insert(
+            (peer.id().kind().to_owned(), peer.id().id_text().to_owned()),
+            peer.public_key().clone(),
+        );
     }
 }
 
@@ -1560,20 +1833,61 @@ impl EntropySource for FakeEntropy {
     }
 }
 
-/// 记录撤销后关闭了哪些设备/节点（断言「提交后才关闭」的观察点）。
+/// 记录撤销后关闭了哪些设备/节点、通知了哪些 Export（断言「提交后才关闭/推送」的观察点）。
+///
+/// RV1-WP6-F10：`close_node`/`export_revoked` 在通知**当时**经持久读入口回读该行的撤销状态
+/// （`TrustStore::nodes_for` / `ExportStore::export`），并把「回读时是否已经撤销」随通知一起记下。
+/// 这样「提交后才通知」不再只能从调用顺序间接推断（一条日志看不出先后），而是一个可断言的持久事实：
+/// 用例断言每一次通知的回读值都是 `true`。
 #[derive(Clone, Default)]
 pub(crate) struct RecordingCloser {
     devices: Arc<Mutex<Vec<String>>>,
     nodes: Arc<Mutex<Vec<String>>>,
+    exports: Arc<Mutex<Vec<String>>>,
+    /// 持久读入口（`TestWorld` 装配；未装配时回读记 `false`，断言会失败而不是静默通过）。
+    trust: Option<FakeTrust>,
+    export_store: Option<FakeExports>,
+    node_revoked_when_notified: Arc<Mutex<Vec<bool>>>,
+    export_revoked_when_notified: Arc<Mutex<Vec<bool>>>,
 }
 
 impl RecordingCloser {
+    /// 带持久读入口的观察点。
+    pub(crate) fn with_stores(trust: FakeTrust, exports: FakeExports) -> Self {
+        Self {
+            trust: Some(trust),
+            export_store: Some(exports),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn closed_devices(&self) -> Vec<String> {
         self.devices.lock().expect("关闭锁").clone()
     }
 
     pub(crate) fn closed_nodes(&self) -> Vec<String> {
         self.nodes.lock().expect("关闭锁").clone()
+    }
+
+    /// 收到 `export.revoked` 通知的 Export（按调用顺序）。
+    pub(crate) fn revoked_exports(&self) -> Vec<String> {
+        self.exports.lock().expect("关闭锁").clone()
+    }
+
+    /// 每次 `close_node` 通知**当时**回读的持久状态：`true` = 该节点的行已经全部带撤销时间。
+    pub(crate) fn nodes_revoked_when_notified(&self) -> Vec<bool> {
+        self.node_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .clone()
+    }
+
+    /// 每次 `export_revoked` 通知**当时**回读的持久状态：`true` = 该 Export 已经带撤销时间。
+    pub(crate) fn exports_revoked_when_notified(&self) -> Vec<bool> {
+        self.export_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .clone()
     }
 }
 
@@ -1587,10 +1901,40 @@ impl ConnectionCloser for RecordingCloser {
     }
 
     async fn close_node(&self, node: &NodeId) {
+        let revoked = match &self.trust {
+            Some(trust) => match acp_core::ports::TrustStore::nodes_for(trust, node).await {
+                // §11.6：同一事务令两种角色的行一起进入 `revoked`，因此「已撤销」= 行存在且都带撤销时间。
+                Ok(rows) => !rows.is_empty() && rows.iter().all(|row| row.revoked_at().is_some()),
+                Err(_) => false,
+            },
+            None => false,
+        };
+        self.node_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .push(revoked);
         self.nodes
             .lock()
             .expect("关闭锁")
             .push(node.as_str().to_owned());
+    }
+
+    async fn export_revoked(&self, export: &ExportId) {
+        let revoked = match &self.export_store {
+            Some(store) => match acp_core::ports::ExportStore::export(store, export).await {
+                Ok(Some(record)) => record.revoked_at().is_some(),
+                _ => false,
+            },
+            None => false,
+        };
+        self.export_revoked_when_notified
+            .lock()
+            .expect("关闭锁")
+            .push(revoked);
+        self.exports
+            .lock()
+            .expect("关闭锁")
+            .push(export.as_str().to_owned());
     }
 }
 
@@ -1719,6 +2063,15 @@ impl TestWorld {
 
     /// 显式控制 `daemon.public_origin`（`None` 覆盖「未配置 → 配对方法失败关闭」的分支）。
     pub(crate) fn with_public_origin(origin: Option<&str>) -> Self {
+        Self::build(origin, store_arc())
+    }
+
+    /// 用带固定水位的存储替身装配（Node Link 握手视图读 `head()` 的用例）。
+    pub(crate) fn with_store(store: Arc<dyn SessionStore>) -> Self {
+        Self::build(Some(TEST_PUBLIC_ORIGIN), store)
+    }
+
+    fn build(origin: Option<&str>, store: Arc<dyn SessionStore>) -> Self {
         let clock = FakeClock::new();
         let keystore = FakeKeystore::default();
         let trust = FakeTrust::default();
@@ -1734,7 +2087,7 @@ impl TestWorld {
         ));
         let core = Arc::new(Self::assemble_use_cases(
             &clock,
-            &store_arc(),
+            &store,
             &deliveries_arc(),
             &exports,
             &audit,
@@ -1744,13 +2097,13 @@ impl TestWorld {
         Self {
             clock,
             config,
-            exports,
+            exports: exports.clone(),
             audit,
             keystore,
             daemon: FakeDaemon::default(),
-            trust,
+            trust: trust.clone(),
             authority,
-            closer: Arc::new(RecordingCloser::default()),
+            closer: Arc::new(RecordingCloser::with_stores(trust, exports)),
             core,
             public_origin: origin.map(str::to_owned),
             temporary: Arc::default(),
@@ -1778,9 +2131,10 @@ impl TestWorld {
                 deliveries: deliveries.clone(),
                 backends: Arc::new(NotTouched),
                 exports: exports.clone(),
+                trust: Arc::new(trust.clone()),
                 publisher: Arc::new(NotTouched),
                 clock: clock.clone(),
-                ids: Arc::new(FakeIds),
+                ids: Arc::new(FakeIds::default()),
                 audit: Some(audit.clone()),
             },
             BrokerConfig::default(),
@@ -1799,7 +2153,7 @@ impl TestWorld {
                     .expect("agent ref"),
             ])),
             clock,
-            ids: Arc::new(FakeIds),
+            ids: Arc::new(FakeIds::default()),
         })
     }
 

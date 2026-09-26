@@ -600,12 +600,12 @@ fn node_link_challenge_requires_catalog_revision() {
     let issue = block_on(state.authority.hello(&node_request, &node_trust))
         .expect("Node Link 挑战必须签发");
     assert!(issue.host_proof.as_bytes().iter().any(|byte| *byte != 0));
-    // Node Link 的失败在 v1 审计词表里没有对应动作（文档缺口，不自造取值）。
+    // Node Link 的失败映射到 `node.auth_failed`（§14.2 的两个节点握手动作随 design D12 进入词表）。
     let failure = identity_auth::HandshakeFailure::new(
         HandshakeError::UnknownChallenge,
         ConnectionKind::NodeLink,
     );
-    assert_eq!(failure.audit(), None);
+    assert_eq!(failure.audit(), Some(AuditAction::NodeAuthFailed));
     assert_eq!(
         failure.public_class(),
         HandshakeFailureClass::AuthenticationFailed

@@ -1,13 +1,16 @@
-//! §9.1/§9.28：migration 的幂等、「版本过新拒绝启动且不写入任何行」与 **v1 → v2 升级的数据保留**。
+//! §9.1/§9.28：migration 的幂等、「版本过新拒绝启动且不写入任何行」与 **旧库升级的数据保留**。
 //!
-//! 夹具是 `fixtures/storage/v2/` 的三件套（空库、v1 库、过新库）；`fixtures/storage/v1/` 的两个文件
-//! 保留为历史资产，只被下面的夹具生成器当作 `from-v1.sqlite3` 的基底读取。
+//! 夹具 `fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**：`empty.sqlite3` 是 v2 形状的
+//! 空库（v2 → v3 升级用例的输入），`from-v1.sqlite3` 是 v1 库（v1 → v2 → v3 连续升级的输入），
+//! `too-new.sqlite3`（`user_version = 3`）在 v3 之后不再「过新」，过新用例改为用 `empty.sqlite3` 的临时
+//! 副本判定（把该副本的 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`）。`fixtures/storage/v1/` 的两个
+//! 文件是更早的历史资产，只被下面的 `from-v1.sqlite3` 生成器当作基底读取。
 
 mod support;
 
 use acp_core::model::{AuditAction, EventId, ExportId, Sequence, Timestamp};
 use storage_sqlite::error::StorageError;
-use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig};
+use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig}; // probe
 use storage_sqlite::session_store::SqliteStore;
 use support::*;
 
@@ -61,14 +64,68 @@ async fn texts(pool: &sqlx::SqlitePool, sql: &str) -> Vec<String> {
         .unwrap_or_else(|error| panic!("{sql}: {error}"))
 }
 
-/// v2 夹具库已经是 v2：启动**不得**改动 `sqlite_master`、`meta` 或 `user_version`，连续两次启动后
-/// 逐字节相同（§9.1 的幂等判据）。
-#[tokio::test]
-async fn v2_fixture_is_untouched_by_two_consecutive_starts() {
-    let dir = temp_dir("migrate-idempotent");
-    let path = copy_fixture("empty.sqlite3", &dir);
+/// 取某张表在 `sqlite_master` 里的 DDL 文本（表不存在时返回空串）。
+async fn table_ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
+    texts(
+        pool,
+        &format!("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '{table}'"),
+    )
+    .await
+    .first()
+    .cloned()
+    .unwrap_or_default()
+}
 
-    // 启动前：夹具自身的形态就是判据基线。
+/// 往 `owned_audit` 插一行审计（§7.3 的列子集）；取值是否被 CHECK 接受由调用方断言。
+async fn insert_audit_row(
+    pool: &sqlx::SqlitePool,
+    audit_id: i64,
+    action: &str,
+    actor_kind: &str,
+    actor_id: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO owned_audit (audit_id, at, action, actor_kind, actor_id, target_kind, \
+         target_id, outcome) VALUES (?1, ?2, ?3, ?4, ?5, 'export', ?6, 'success')",
+    )
+    .bind(audit_id)
+    .bind(AT)
+    .bind(action)
+    .bind(actor_kind)
+    .bind(actor_id)
+    .bind(FIXTURE_EXPORT)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// 往 `owned_command` 插一行最简查询命令：用于断言 `actor_kind` 的 CHECK 只接受三个值。
+async fn insert_command_row(pool: &sqlx::SqlitePool, actor_kind: &str) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO owned_command (actor_kind, actor_id, request_id, command, kind, \
+         request_fingerprint, accepted_at, status) \
+         VALUES (?1, 'cli', 'fixture-request', 'session.list', 'query', 'fp', ?2, 'accepted')",
+    )
+    .bind(actor_kind)
+    .bind(AT)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// **已经是当前版本**的库连续两次启动后必须逐一字节不变（§9.1 的幂等判据）。
+///
+/// 起点是空目录新建出来的当前版本库：v2 之后的旧夹具不再代表「当前形状」，因此「已是最新版则不重写」
+/// 改在真实新建的库上判定；升级后的库由 `second_open_of_an_upgraded_database_rewrites_nothing` 逐行断言。
+#[tokio::test]
+async fn current_version_database_is_untouched_by_two_consecutive_starts() {
+    let dir = temp_dir("migrate-idempotent");
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("create store");
+    store.close().await;
+    let path = dir.join("acp-remote.sqlite3");
+
     let pool = raw_pool(&path).await;
     let before_schema = schema_sql(&pool).await;
     let before_meta = meta_rows(&pool).await;
@@ -78,15 +135,19 @@ async fn v2_fixture_is_untouched_by_two_consecutive_starts() {
         .iter()
         .find(|(key, _)| key == "server_epoch")
         .map(|(_, value)| value.clone())
-        .expect("fixture carries server_epoch");
+        .expect("a fresh database carries server_epoch");
+    let mut before_rows = Vec::new();
+    for table in TABLES {
+        before_rows.push((*table, table_snapshot(&pool, table).await));
+    }
     pool.close().await;
 
     for round in 1..=2 {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 2);
-        assert_eq!(store.metadata().imported_schema_version, 2);
+        assert_eq!(store.metadata().owned_schema_version, 3);
+        assert_eq!(store.metadata().imported_schema_version, 3);
         store.close().await;
 
         let pool = raw_pool(&path).await;
@@ -114,13 +175,20 @@ async fn v2_fixture_is_untouched_by_two_consecutive_starts() {
             Some(server_epoch.clone()),
             "server_epoch must survive restarts unchanged"
         );
+        for (table, before) in &before_rows {
+            assert_eq!(
+                table_snapshot(&pool, table).await,
+                *before,
+                "round {round} changed rows in {table}"
+            );
+        }
         pool.close().await;
     }
 }
 
-/// 空目录首次启动：建库并把 `user_version`/两族版本写到 v2。
+/// 新建库直接把 `user_version` 与两族 schema 版本写到当前版本。
 #[tokio::test]
-async fn fresh_directory_is_created_at_version_two() {
+async fn fresh_directory_is_created_at_the_current_version() {
     let dir = temp_dir("migrate-fresh");
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
@@ -145,18 +213,15 @@ async fn fresh_directory_is_created_at_version_two() {
             "meta.{key} must exist"
         );
     }
-    assert_eq!(
-        meta.iter()
-            .find(|(key, _)| key == "owned_schema_version")
-            .map(|(_, value)| value.as_str()),
-        Some("2")
-    );
-    assert_eq!(
-        meta.iter()
-            .find(|(key, _)| key == "imported_schema_version")
-            .map(|(_, value)| value.as_str()),
-        Some("2")
-    );
+    for key in ["owned_schema_version", "imported_schema_version"] {
+        assert_eq!(
+            meta.iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.as_str()),
+            Some("3"),
+            "meta.{key} must be written at the current version"
+        );
+    }
     assert_eq!(
         meta.iter()
             .find(|(key, _)| key == "created_at")
@@ -166,11 +231,25 @@ async fn fresh_directory_is_created_at_version_two() {
     pool.close().await;
 }
 
-/// §9.1/§9.28：`user_version = 3` 的库必须被具名拒绝，且一行都不写。
+/// §9.1/§9.28：`user_version` 高于本二进制已知版本的库必须被具名拒绝，且一行都不写。
+///
+/// v3 之后 `fixtures/storage/v2/too-new.sqlite3`（`user_version = 3`）不再「过新」，因此判据改在临时
+/// 副本上判定：拿当前版本的历史夹具（v2 形状的空库）把版本顶到 `FILE_FORMAT_VERSION + 1`。
 #[tokio::test]
 async fn too_new_database_is_rejected_without_writing_rows() {
     let dir = temp_dir("migrate-too-new");
-    let path = copy_fixture("too-new.sqlite3", &dir);
+    let path = copy_fixture("empty.sqlite3", &dir);
+    let future_version = FILE_FORMAT_VERSION + 1;
+    let pool = raw_write_pool(&path).await;
+    sqlx::query(&format!("PRAGMA user_version = {future_version}"))
+        .execute(&pool)
+        .await
+        .expect("forge a newer file format");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
 
     let pool = raw_pool(&path).await;
     let before_schema = schema_sql(&pool).await;
@@ -186,14 +265,17 @@ async fn too_new_database_is_rejected_without_writing_rows() {
         .expect_err("a newer file format must be rejected");
     match error {
         StorageError::FileFormatTooNew { found, supported } => {
-            assert_eq!(found, 3);
+            assert_eq!(found, future_version);
             assert_eq!(supported, FILE_FORMAT_VERSION);
         }
         other => panic!("expected FileFormatTooNew, got {other}"),
     }
 
     let pool = raw_pool(&path).await;
-    assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 3);
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        future_version
+    );
     assert_eq!(schema_sql(&pool).await, before_schema);
     assert_eq!(meta_rows(&pool).await, before_meta);
     for (table, before) in before_rows {
@@ -206,10 +288,10 @@ async fn too_new_database_is_rejected_without_writing_rows() {
     pool.close().await;
 }
 
-/// §9.28：v1 → v2 升级保留事件序号、origin cursor、幂等行与全部审计，`audit_id` 与其 AUTOINCREMENT
-/// 序列不回退，审计表的新取值可用；Import 的 Export 关联搬到关联表，**不补 grants**。
+/// §9.28：v1 → v2 → v3 连续升级保留事件序号、origin cursor、幂等行与全部审计，`audit_id` 与其
+/// AUTOINCREMENT 序列不回退，审计表的新取值可用；Import 的 Export 关联搬到关联表，**不补 grants**。
 #[tokio::test]
-async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
+async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let dir = temp_dir("migrate-from-v1");
     let path = copy_fixture("from-v1.sqlite3", &dir);
 
@@ -249,9 +331,9 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
 
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
-        .expect("a v1 database must upgrade to v2");
-    assert_eq!(store.metadata().owned_schema_version, 2);
-    assert_eq!(store.metadata().imported_schema_version, 2);
+        .expect("a v1 database must upgrade to the current version");
+    assert_eq!(store.metadata().owned_schema_version, 3);
+    assert_eq!(store.metadata().imported_schema_version, 3);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
     // `event_payload` 还原——不是「行还在但读不出来」。
@@ -311,8 +393,8 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
                 .into_iter()
                 .find(|(name, _)| name == key)
                 .map(|(_, value)| value),
-            Some("2".to_owned()),
-            "meta.{key} must be advanced to 2"
+            Some("3".to_owned()),
+            "meta.{key} must be advanced to the current version"
         );
     }
 
@@ -506,6 +588,144 @@ async fn v1_fixture_upgrades_to_v2_and_preserves_rows() {
     pool.close().await;
 }
 
+/// §7.2/§9.28：**v2 → v3** 只扩宽两张审计表的 `actor_kind`/`action` CHECK——行、`audit_id` 与
+/// `AUTOINCREMENT` 序列都不动，`owned_command` 的 `actor_kind` 仍是三值（认领方永不提交命令）。
+#[tokio::test]
+async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
+    let dir = temp_dir("migrate-from-v2");
+    let path = copy_fixture("empty.sqlite3", &dir);
+
+    // 夹具必须真的长着 v2 的样子：`user_version = 2`，且两张审计表的 CHECK 还不接受新取值。
+    let pool = raw_write_pool(&path).await;
+    assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 2);
+    for table in ["owned_audit", "imported_audit"] {
+        let ddl = table_ddl(&pool, table).await;
+        assert!(
+            !ddl.contains("pairing_claimant"),
+            "{table} 应是 v2 形状的 CHECK：{ddl}"
+        );
+        assert!(
+            !ddl.contains("node.authenticated"),
+            "{table} 应是 v2 形状的 CHECK：{ddl}"
+        );
+    }
+    // 种入 v2 取值可写的审计行，并留下「序列领先于 max(audit_id)」的空洞（同 28 判据的判别力来源）。
+    for (audit_id, action, actor_kind, actor_id) in [
+        (1_i64, "device.authenticated", "device", FIXTURE_NODE),
+        (2, "node.paired", "node", FIXTURE_NODE),
+        (7, "export.created", "cli", "cli"),
+    ] {
+        insert_audit_row(&pool, audit_id, action, actor_kind, actor_id)
+            .await
+            .expect("v2 的审计取值必须可写");
+    }
+    sqlx::query("DELETE FROM owned_audit WHERE audit_id = 7")
+        .execute(&pool)
+        .await
+        .expect("hole");
+    sqlx::query(
+        "INSERT INTO imported_audit (at, action, actor_kind, actor_id, target_kind, target_id, \
+         outcome) VALUES (?1, 'node.paired', 'node', ?2, 'node', ?2, 'success')",
+    )
+    .bind(AT)
+    .bind(FIXTURE_NODE)
+    .execute(&pool)
+    .await
+    .expect("seed imported audit");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    // 升级前：v2 形状的 CHECK 必须真的拒绍新词表（否则下面的「升级后可写」不具判别力）。
+    let refused_action =
+        insert_audit_row(&pool, 8, "node.authenticated", "node", FIXTURE_NODE).await;
+    assert!(
+        refused_action.is_err(),
+        "v2 形状的 CHECK 不应接受 node.authenticated：{refused_action:?}"
+    );
+    let refused_actor = insert_audit_row(
+        &pool,
+        8,
+        "pairing.created",
+        "pairing_claimant",
+        FIXTURE_PAIRING,
+    )
+    .await;
+    assert!(
+        refused_actor.is_err(),
+        "v2 形状的 CHECK 不应接受 pairing_claimant：{refused_actor:?}"
+    );
+    pool.close().await;
+
+    let store = SqliteStore::open(still_writable(&dir), &at())
+        .await
+        .expect("a v2 database must upgrade to the current version");
+    assert_eq!(store.metadata().owned_schema_version, 3);
+    assert_eq!(store.metadata().imported_schema_version, 3);
+    store.close().await;
+
+    let pool = raw_write_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        FILE_FORMAT_VERSION
+    );
+    for key in ["owned_schema_version", "imported_schema_version"] {
+        assert_eq!(
+            meta_rows(&pool)
+                .await
+                .into_iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value),
+            Some("3".to_owned()),
+            "meta.{key} 必须升到 3"
+        );
+    }
+    // 行与 `audit_id` 逐行保留；序列不回退（7 > max(audit_id) = 2）。
+    assert_eq!(
+        ints(&pool, "SELECT audit_id FROM owned_audit ORDER BY audit_id").await,
+        vec![1, 2]
+    );
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT seq FROM sqlite_sequence WHERE name = 'owned_audit'"
+        )
+        .await,
+        7,
+        "12-step 重建不得把 AUTOINCREMENT 序列压回 max(audit_id)"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
+        1
+    );
+    // 新取值在升级库上可写：两个 node 动作 + 认领方的 `actor_kind`。
+    insert_audit_row(&pool, 20, "node.authenticated", "node", FIXTURE_NODE)
+        .await
+        .expect("node.authenticated 必须可写");
+    insert_audit_row(&pool, 21, "node.auth_failed", "node", FIXTURE_NODE)
+        .await
+        .expect("node.auth_failed 必须可写");
+    insert_audit_row(
+        &pool,
+        22,
+        "pairing.claimed",
+        "pairing_claimant",
+        FIXTURE_PAIRING,
+    )
+    .await
+    .expect("pairing_claimant 必须可写");
+    // `owned_command` 不动：认领方不会也不得提交命令。
+    insert_command_row(&pool, "cli")
+        .await
+        .expect("旧取值仍可写");
+    let refused = insert_command_row(&pool, "pairing_claimant").await;
+    assert!(
+        refused.is_err(),
+        "owned_command.actor_kind 不得接受认领方：{refused:?}"
+    );
+    pool.close().await;
+}
+
 /// §7.2 与 spec 的「升级中途失败整体回滚」：v1 → v2 的 DDL、12-step 重建与 Import 拆分都在**同一
 /// 事务**内，因此第二段脚本失败时第一段的建表与重建也必须回滚——库要么是完整的 v1，要么是完整的
 /// v2，不存在「管理表已建、审计 CHECK 未换」的半升级状态；去掉故障后重新打开必须能升级成功。
@@ -594,8 +814,8 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 2);
-    assert_eq!(store.metadata().imported_schema_version, 2);
+    assert_eq!(store.metadata().owned_schema_version, 3);
+    assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 }
 
@@ -726,67 +946,33 @@ const FIXTURE_IMPORT_REQUEST: &str = "88888888-8888-4888-8888-888888888888";
 const FIXTURE_LAST_ORIGIN_SEQUENCE: i64 = 7;
 const FIXTURE_ACKED_ORIGIN_SEQUENCE: i64 = 5;
 const FIXTURE_LOCAL_SEQUENCE: i64 = 1;
-/// 夹具里被钉死的 `meta.server_epoch`（`open` 默认写随机 UUID，会让夹具不可逐字节复现）。
-const FIXTURE_SERVER_EPOCH: &str = "00000000-0000-4000-8000-0000000000ff";
+/// 配对 id（`pairing_claimant` 审计行的 `actor_id`；column 上无 CHECK，但保持与产品同形状）。
+const FIXTURE_PAIRING: &str = "99999999-9999-4999-8999-999999999999";
 
-/// 生成 `fixtures/storage/v2/` 的三件夹具。默认忽略；重建方式：
+/// 重建 `fixtures/storage/v2/from-v1.sqlite3`（**v1 形状**的升级输入）。默认忽略；重建方式：
 ///
 /// ```text
-/// cargo test -p storage-sqlite --test migration -- --ignored regenerate_v2_fixtures
+/// cargo test -p storage-sqlite --test migration -- --ignored regenerate_v1_fixture
 /// ```
 ///
-/// - `empty.sqlite3`：临时目录上跑一次真实的 v2 打开路径（`SqliteStore::open`），关闭时
-///   `wal_checkpoint(TRUNCATE)` 会把 WAL 归并回主库，因此复制出来的文件是自洽的；
-/// - `too-new.sqlite3`：`empty.sqlite3` 的副本 + `PRAGMA user_version = 3`（该用例要求版本高于本
-///   二进制已知版本，且库内容与打开前逐字节相同）；
 /// - `from-v1.sqlite3`：**v1 历史夹具** `fixtures/storage/v1/empty.sqlite3` 的副本 + 一组带
 ///   会话/事件/cursor/幂等/审计数据的 v1 行，保持 `user_version = 1`；`owned_audit` 故意留下
 ///   `audit_id = 1,2,5` 的空洞（写入 1..=7 后删掉 3/4/6/7，因此 `sqlite_sequence.seq = 7` 真正领先于
 ///   `max(audit_id) = 5`；`imported_audit` 同款：1/2 与 `seq = 3`），升级用例据此断言序列不回退。
+///
+/// 同目录的另两件是**冻结的历史资产**，当前二进制不再能生成它们：
+///
+/// - `empty.sqlite3` 是 v2 形状的空库（v2 → v3 升级用例的输入）——v3 之后 `open` 只会建出 v3 形状，
+///   因此它只是「升级输入」，不再是「当前版本」的代表；
+/// - `too-new.sqlite3`（`user_version = 3`）在 v3 之后不再「过新」，过新用例改为把 `empty.sqlite3`
+///   的临时副本顶到 `FILE_FORMAT_VERSION + 1`。
 #[tokio::test]
-#[ignore = "夹具生成器：只在需要重建 fixtures/storage/v2 时手动运行"]
-async fn regenerate_v2_fixtures() {
+#[ignore = "夹具生成器：只在需要重建 fixtures/storage/v2/from-v1.sqlite3 时手动运行"]
+async fn regenerate_v1_fixture() {
     let fixtures = repo_path("fixtures/storage/v2");
     std::fs::create_dir_all(&fixtures).expect("create fixtures/storage/v2");
 
-    // ① v2 空库：走真实的 migration 路径，不手写 DDL。
-    let dir = temp_dir("fixture-v2-empty");
-    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
-        .await
-        .expect("create v2 fixture database");
-    store.close().await;
-    let database = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    // `open` 会写一个随机 `server_epoch`；夹具必须逐字节可复现（否则每次重建都产生无意义的二进制
-    // 差异），因此把它钉成一个字面量——`created_at`/`last_prune_at` 来自注入的 `at()`，本来就是确定的。
-    let pool = raw_write_pool(&database).await;
-    sqlx::query("UPDATE meta SET value = ?1 WHERE key = 'server_epoch'")
-        .bind(FIXTURE_SERVER_EPOCH)
-        .execute(&pool)
-        .await
-        .expect("pin server_epoch");
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&pool)
-        .await
-        .expect("checkpoint");
-    pool.close().await;
-    std::fs::copy(&database, fixtures.join("empty.sqlite3")).expect("write empty.sqlite3");
-
-    // ② 过新库：v2 形状 + `user_version = 3`。
-    let dir = temp_dir("fixture-v2-too-new");
-    let path = copy_fixture_from("v2", "empty.sqlite3", &dir);
-    let pool = raw_write_pool(&path).await;
-    sqlx::query("PRAGMA user_version = 3")
-        .execute(&pool)
-        .await
-        .expect("bump user_version");
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&pool)
-        .await
-        .expect("checkpoint");
-    pool.close().await;
-    std::fs::copy(&path, fixtures.join("too-new.sqlite3")).expect("write too-new.sqlite3");
-
-    // ③ v1 库：以历史夹具为基底插入 v1 形状的行。
+    // v1 库：以历史夹具为基底插入 v1 形状的行。
     let dir = temp_dir("fixture-v2-from-v1");
     let path = copy_fixture_from("v1", "empty.sqlite3", &dir);
     let pool = raw_write_pool(&path).await;

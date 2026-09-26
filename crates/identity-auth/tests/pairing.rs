@@ -13,7 +13,7 @@ use identity_auth::{
 
 use support::{
     DEVICE, FakeClock, FakeKeystore, HOST, ORIGIN, OTHER_DEVICE, PAIRING, PeerKey, SequenceEntropy,
-    authority, device, grants, node, nonce_from_hex, pairing, scopes, ts,
+    authority, device, grants, node, nonce_from_hex, pairing, request_id, scopes, ts,
 };
 
 /// 基准时刻之后的若干秒（只用于过期类用例；状态机不读系统时间）。
@@ -1035,4 +1035,167 @@ fn claim_never_rebinds_existing_peer() {
     // 已认领的固定值保持不变。
     assert_eq!(claimed.public_key, peer.public_key());
     let _: ClaimedPairing = (*claimed).clone();
+}
+
+// ---------------------------------------------------------------------------------------------
+// 配对通道的 seam（design D12）：状态查询证明入口与只读请求材料
+// ---------------------------------------------------------------------------------------------
+
+/// Node Link 配对端点的测试 endpoint（`NODE_LINK_PROTOCOL.md` §13.1）。
+const ENDPOINT: &str = "wss://owner.example.ts.net/node-link/v1";
+/// 另一台本机（用于「不服务别的 owner 的 transcript」）。
+const OTHER_NODE: &str = "018f6f89-8a23-7a10-a0d3-f92e6a31d952";
+
+fn node_spec() -> PairingSpec {
+    PairingSpec::Node {
+        endpoint: identity_auth::NodeEndpoint::parse(ENDPOINT).expect("测试用 endpoint 必须规范"),
+        kind: NodeKind::Owner,
+    }
+}
+
+fn node_request() -> RequestedCapabilities {
+    RequestedCapabilities {
+        scopes: scopes(&[]),
+        grants: grants(&["grant.observe", "grant.command"]),
+    }
+}
+
+/// 一个已创建的 Node Link 配对（对端将是 Access Node）。
+fn create_node_pairing() -> Created {
+    let keystore = FakeKeystore::new();
+    let entropy = SequenceEntropy::new();
+    let clock = FakeClock::new();
+    let state_machine = authority(&keystore, &entropy, &clock);
+    let draft = state_machine
+        .begin_pairing(
+            &pairing(PAIRING),
+            &node_spec(),
+            &node_request(),
+            Some("Office Access"),
+            &ts(CREATED),
+            &ts(WITHIN_WINDOW),
+        )
+        .expect("创建节点配对必须成功");
+    Created {
+        authority: state_machine,
+        keystore,
+        entropy,
+        clock,
+        draft,
+    }
+}
+
+/// 状态查询证明的输入（Access 侧用二维码里的 secret 计算 proof）。
+fn status_input(request_nonce_hex: &str) -> identity_auth::NodeLinkPairingStatus {
+    identity_auth::NodeLinkPairingStatus {
+        owner_node_id: node(HOST),
+        access_node_id: node(DEVICE),
+        pairing_id: pairing(PAIRING),
+        pairing_request_id: request_id("b2f3fbfa-c2c6-4f49-9e0c-643d152de18d"),
+        request_nonce: nonce_from_hex(request_nonce_hex),
+    }
+}
+
+#[test]
+fn node_link_status_proof_round_trips_with_the_pairing_secret() {
+    // R26/R28：有效 proof 通过；同一输入换一把 secret 计算的 proof 不通过（HMAC 失败，不区分原因）。
+    let created = create_node_pairing();
+    let input = status_input("aa");
+    let proof = input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    assert_eq!(
+        created
+            .authority
+            .verify_node_link_pairing_status(&input, &proof),
+        Ok(())
+    );
+
+    let mut other_input = input.clone();
+    other_input.request_nonce = nonce_from_hex("bb");
+    let other_proof = other_input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    assert_eq!(
+        created
+            .authority
+            .verify_node_link_pairing_status(&input, &other_proof),
+        Err(PairingError::Proof(identity_auth::ProofError::Hmac)),
+        "nonce 不同的 transcript 不能通过"
+    );
+}
+
+#[test]
+fn node_link_status_proof_rejects_a_foreign_owner_node() {
+    // §13.3 的 ownerNodeId 必须就是本节点：本入口不为别的 owner 装配 transcript。
+    let created = create_node_pairing();
+    let input = status_input("aa");
+    let proof = input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    let mut foreign = input.clone();
+    foreign.owner_node_id = node(OTHER_NODE);
+    assert_eq!(
+        created
+            .authority
+            .verify_node_link_pairing_status(&foreign, &proof),
+        Err(PairingError::ClaimMismatch)
+    );
+}
+
+#[test]
+fn node_link_status_proof_requires_the_in_memory_secret() {
+    // §4.3：secret 只在内存（重启即丢），因此 restart 之后任何 proof 都无法校验。
+    let created = create_node_pairing();
+    let input = status_input("aa");
+    let proof = input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    assert_eq!(
+        created.authority.reset_memory().0,
+        1,
+        "重启清理 1 条内存材料"
+    );
+    assert_eq!(
+        created
+            .authority
+            .verify_node_link_pairing_status(&input, &proof),
+        Err(PairingError::SecretUnavailable)
+    );
+}
+
+#[test]
+fn pairing_request_material_is_readable_until_the_secret_is_cleared() {
+    // claim 响应与 Owner 证明需要的两个非秘密值：与 secret 同生同灭，且不属于秘密材料。
+    let created = create_node_pairing();
+    let material = created
+        .authority
+        .pairing_request_material(&pairing(PAIRING))
+        .expect("刚创建的配对必须有请求材料");
+    assert_eq!(material.server_nonce, created.draft.server_nonce);
+    assert_eq!(
+        material.pairing_request_id,
+        created.draft.pairing_request_id
+    );
+    assert_eq!(
+        created
+            .authority
+            .pairing_request_material(&pairing("2bc8b944-2a4f-46a7-8c31-b2c40923f60b")),
+        None,
+        "未曾创建的配对没有请求材料"
+    );
+
+    // 过期扫描是 secret 的硬上界：同一时刻材料一起消失。
+    created.clock.set(AFTER_WINDOW);
+    let due = created.authority.due_pairings(
+        std::slice::from_ref(&created.draft.record),
+        &ts(AFTER_WINDOW),
+    );
+    assert_eq!(due, vec![pairing(PAIRING)], "未终结的配对需要提交终态写集");
+    assert_eq!(
+        created
+            .authority
+            .pairing_request_material(&pairing(PAIRING)),
+        None
+    );
 }

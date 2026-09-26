@@ -14,6 +14,7 @@
       "node-link.raw-acp.v1",
       "node-link.session-create.v1"
     ],
+    "catalogRevision": "42",
     "nodeProof": "zYaaF6eKvSWQ2ozqvVQaVYVYPO4ytlDmpfBNr2Rrvuyvnf88zysPF2Wz8tGuBZwBbqxou4DMav7wkl9ew5POgg"
   }
 }

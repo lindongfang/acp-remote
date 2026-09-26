@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use acp_core::model::{AgentId, AgentProfile, ProviderEnvBinding};
 use serde::Deserialize;
+use server::transport::net::{DEFAULT_LISTEN, TlsMode};
 use storage_sqlite::migrate::StorageConfig as SqliteStorageConfig;
 
 /// `daemon.data_dir` 未配置时的目录名（平台用户配置目录下的 `acp-remote/`）。
@@ -74,7 +75,8 @@ pub enum KeystoreChoice {
 pub struct DevMode {
     /// 发布构建默认关闭；启用时启动输出必须显示非安全状态。
     pub enabled: bool,
-    /// 允许明文 HTTP/WS（只允许 loopback）。本切片没有网络 listener，因此**未接线**。
+    /// 允许明文 HTTP/WS（**只允许 loopback**）。非 loopback 监听地址上该开关不生效：
+    /// `NetListener::bind` 以 `NetError::PlaintextDevNonLoopback` 失败关闭（`SECURITY_DESIGN.md` §7.3）。
     pub allow_plaintext: bool,
     /// 使用进程期临时身份。
     pub ephemeral_identity: bool,
@@ -164,8 +166,19 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// `daemon.public_origin`（canonical public origin；未配置为 `None`）。
     pub public_origin: Option<String>,
-    /// `daemon.shutdown_grace_ms`。
+    /// `daemon.shutdown_grace_ms`（网络 listener 的排空宽限也取它，见 `NetConfig::drain_grace`）。
     pub shutdown_grace_ms: u64,
+    /// `daemon.listen`：共享 HTTP/WSS listener 地址字面量（默认 `127.0.0.1:8765`）。
+    ///
+    /// 只做「取到文本」这一层：是否为合法的 `IP:端口` 由 `NetListener::bind` 判定并在非法时拒绝启动
+    /// （与端口占用、权限不足同一条失败关闭路径，见 `daemon.listen` 的启动序列）。
+    pub listen: String,
+    /// `daemon.allowed_hosts`：反向代理场景下的 `Host` 白名单；空表示按 `public_origin` 推导。
+    pub allowed_hosts: Vec<String>,
+    /// `daemon.trusted_proxies`：允许采信 `Forwarded`/`X-Forwarded-*` 的对端地址。
+    pub trusted_proxies: Vec<String>,
+    /// `daemon.tls.*`：`proxy`/`direct` 两种终止模式（`direct` 带两个 PEM 路径）。
+    pub tls: TlsMode,
     /// `storage.flush_interval_ms`：broker 的 delta 合并窗口（`CORE_PORTS_AND_STORAGE.md` §6 第 10 条），
     /// 由组合根的定时器按下述间隔触发 `pump`。它不是存储刷盘开关（`storage-sqlite` 不参与，见
     /// `crates/storage-sqlite/src/migrate.rs` 的 `StorageConfig` 注记）。
@@ -266,6 +279,16 @@ impl Config {
             });
         }
         let public_origin = daemon.public_origin.clone();
+        // 网络接入面的四个键（`daemon.listen`/`allowed_hosts`/`trusted_proxies`/`tls.*`）在本切片接线：
+        // 取值与校验原样交给 `server::transport::net`（键名、默认值与失败关闭判据的权威是
+        // `CONFIG_REFERENCE.md` §1 与该模块），本模块只负责「从 TOML 取到值」。
+        let listen = daemon
+            .listen
+            .clone()
+            .unwrap_or_else(|| DEFAULT_LISTEN.to_owned());
+        let allowed_hosts = daemon.allowed_hosts.clone().unwrap_or_default();
+        let trusted_proxies = daemon.trusted_proxies.clone().unwrap_or_default();
+        let tls = resolve_tls(daemon.tls.as_ref())?;
 
         let storage_section = raw.storage.unwrap_or_default();
         let storage = storage_section.to_storage_config(&data_dir)?;
@@ -280,20 +303,6 @@ impl Config {
         }
 
         let mut unwired = Vec::new();
-        if daemon.listen.is_some() {
-            unwired.push("daemon.listen".to_owned());
-        }
-        if daemon.allowed_hosts.is_some() {
-            unwired.push("daemon.allowed_hosts".to_owned());
-        }
-        if daemon.trusted_proxies.is_some() {
-            unwired.push("daemon.trusted_proxies".to_owned());
-        }
-        if let Some(tls) = &daemon.tls {
-            for key in tls.present_keys() {
-                unwired.push(key.to_owned());
-            }
-        }
         // `daemon.instance_lock = "ipc"`：本切片的单实例锁恒为 OS advisory 文件锁（`fs4`），两者互斥
         // 语义相同，因此按「已知但未接线」处理并在启动日志里显式说明，不静默换实现。
         if let Some(instance_lock) = daemon.instance_lock.as_deref() {
@@ -379,10 +388,6 @@ impl Config {
                         .to_owned(),
             });
         }
-        if dev_mode.allow_plaintext {
-            unwired.push("dev_mode.allow_plaintext".to_owned());
-        }
-
         let logging = raw
             .logging
             .map_or_else(|| Ok(LoggingConfig::default()), RawLogging::into_config)?;
@@ -391,6 +396,10 @@ impl Config {
             data_dir,
             public_origin,
             shutdown_grace_ms,
+            listen,
+            allowed_hosts,
+            trusted_proxies,
+            tls,
             flush_interval_ms,
             storage,
             seeds,
@@ -543,19 +552,40 @@ struct RawTls {
     key_path: Option<String>,
 }
 
-impl RawTls {
-    fn present_keys(&self) -> Vec<&'static str> {
-        let mut keys = Vec::new();
-        if self.mode.is_some() {
-            keys.push("daemon.tls.mode");
+/// `daemon.tls.*` → [`TlsMode`]（`CONFIG_REFERENCE.md` §1）。
+///
+/// 失败关闭：未知模式、`direct` 缺 PEM 路径、以及 `proxy` 模式下给了 PEM 路径（会被静默忽略的形态）
+/// 都在解析期拒绝，不把矛盾配置带进启动序列。PEM 文件本身的可读性、权限与解析由 `NetListener::bind`
+/// （`transport::net::tls`）判定——那条路径同样失败关闭，且不把私钥内容写进错误消息。
+fn resolve_tls(raw: Option<&RawTls>) -> Result<TlsMode, ConfigError> {
+    let mode = raw.and_then(|tls| tls.mode.as_deref()).unwrap_or("proxy");
+    match mode {
+        "proxy" => {
+            if raw.is_some_and(|tls| tls.cert_path.is_some() || tls.key_path.is_some()) {
+                return Err(ConfigError::Invalid {
+                    detail: "`daemon.tls.cert_path`/`daemon.tls.key_path` 只在 `daemon.tls.mode = \"direct\"` 时有效"
+                        .to_owned(),
+                });
+            }
+            Ok(TlsMode::Proxy)
         }
-        if self.cert_path.is_some() {
-            keys.push("daemon.tls.cert_path");
+        "direct" => {
+            let cert_path = raw.and_then(|tls| tls.cert_path.as_ref());
+            let key_path = raw.and_then(|tls| tls.key_path.as_ref());
+            match (cert_path, key_path) {
+                (Some(cert_path), Some(key_path)) => Ok(TlsMode::Direct {
+                    cert_path: PathBuf::from(cert_path),
+                    key_path: PathBuf::from(key_path),
+                }),
+                _ => Err(ConfigError::Invalid {
+                    detail: "`daemon.tls.mode = \"direct\"` 需要 `daemon.tls.cert_path` 与 `daemon.tls.key_path`"
+                        .to_owned(),
+                }),
+            }
         }
-        if self.key_path.is_some() {
-            keys.push("daemon.tls.key_path");
-        }
-        keys
+        other => Err(ConfigError::Invalid {
+            detail: format!("`daemon.tls.mode` 只能是 `proxy` 或 `direct`（收到 `{other}`）"),
+        }),
     }
 }
 
@@ -907,6 +937,12 @@ mod tests {
         );
         assert!(config.storage.strict_permissions);
         assert!(config.public_origin.is_none());
+        // 网络接入面的四个键在本切片接线：默认值来自 `CONFIG_REFERENCE.md` §1（与
+        // `transport::net` 的内置默认值同源，不在这里另写一份字面量）。
+        assert_eq!(config.listen, DEFAULT_LISTEN);
+        assert!(config.allowed_hosts.is_empty());
+        assert!(config.trusted_proxies.is_empty());
+        assert!(matches!(config.tls, TlsMode::Proxy));
         assert_eq!(config.keystore, KeystoreChoice::Platform);
         assert!(config.fail_closed_on_missing_keystore);
         assert_eq!(config.logging, LoggingConfig::default());
@@ -1008,15 +1044,7 @@ name = "OPENAI_API_KEY"
         let config = parse(
             r#"
 [daemon]
-listen = "0.0.0.0:8765"
-allowed_hosts = ["example.ts.net"]
-trusted_proxies = ["127.0.0.1:443"]
 instance_lock = "ipc"
-
-[daemon.tls]
-mode = "direct"
-cert_path = "/tmp/cert.pem"
-key_path = "/tmp/key.pem"
 
 [sync]
 max_message_bytes = 1048576
@@ -1029,30 +1057,98 @@ idle_timeout_ms = 1000
 
 [terminal]
 keep_head_bytes = 1024
-
-[dev_mode]
-allow_plaintext = true
 "#,
         )
         .expect("未接线段落必须被接受");
         for key in [
-            "daemon.listen",
-            "daemon.allowed_hosts",
-            "daemon.trusted_proxies",
             "daemon.instance_lock(ipc)",
-            "daemon.tls.mode",
-            "daemon.tls.cert_path",
-            "daemon.tls.key_path",
             "sync.max_message_bytes",
             "node_link.heartbeat_interval_ms",
             "sessions.idle_timeout_ms",
             "terminal.keep_head_bytes",
-            "dev_mode.allow_plaintext",
         ] {
             assert!(
                 config.unwired.iter().any(|key_name| key_name == key),
                 "缺少 `{key}`：{:?}",
                 config.unwired
+            );
+        }
+        // 本切片接线后的键不得再出现在「已知但未接线」清单里（否则启动日志会谎报）。
+        for key in [
+            "daemon.listen",
+            "daemon.allowed_hosts",
+            "daemon.trusted_proxies",
+            "daemon.tls.mode",
+            "daemon.tls.cert_path",
+            "daemon.tls.key_path",
+            "dev_mode.allow_plaintext",
+        ] {
+            assert!(
+                !config.unwired.iter().any(|key_name| key_name == key),
+                "`{key}` 已接线，不得再报未接线",
+            );
+        }
+    }
+
+    /// 网络接入面的四个键 + `dev_mode.allow_plaintext` 从 TOML 取到值（接线后的解析面）。
+    #[test]
+    fn the_listener_keys_are_wired_into_the_config() {
+        let config = parse(
+            r#"
+[daemon]
+listen = "0.0.0.0:8765"
+allowed_hosts = ["example.ts.net", "proxy.internal"]
+trusted_proxies = ["127.0.0.1:443"]
+
+[daemon.tls]
+mode = "direct"
+cert_path = "/tmp/owner-cert.pem"
+key_path = "/tmp/owner-key.pem"
+
+[dev_mode]
+enabled = true
+allow_plaintext = true
+"#,
+        )
+        .expect("四个键必须被接受并接线");
+        assert_eq!(config.listen, "0.0.0.0:8765");
+        assert_eq!(
+            config.allowed_hosts,
+            vec!["example.ts.net", "proxy.internal"]
+        );
+        assert_eq!(config.trusted_proxies, vec!["127.0.0.1:443"]);
+        assert!(config.dev_mode.allow_plaintext);
+        match &config.tls {
+            TlsMode::Direct {
+                cert_path,
+                key_path,
+            } => {
+                assert_eq!(cert_path, &PathBuf::from("/tmp/owner-cert.pem"));
+                assert_eq!(key_path, &PathBuf::from("/tmp/owner-key.pem"));
+            }
+            other => panic!("`mode = \"direct\"` 必须解析为 direct，实际 {other:?}"),
+        }
+    }
+
+    /// `daemon.tls.*` 的矛盾/不完整形态在解析期失败关闭（不把矛盾配置带进启动序列）。
+    #[test]
+    fn contradictory_tls_configuration_is_rejected() {
+        for (text, expect) in [
+            (
+                "[daemon.tls]\nmode = \"direct\"\ncert_path = \"/tmp/c.pem\"\n",
+                "daemon.tls.key_path",
+            ),
+            ("[daemon.tls]\nmode = \"direct\"\n", "daemon.tls.cert_path"),
+            (
+                "[daemon.tls]\nmode = \"proxy\"\ncert_path = \"/tmp/c.pem\"\nkey_path = \"/tmp/k.pem\"\n",
+                "daemon.tls.mode",
+            ),
+            ("[daemon.tls]\nmode = \"tunnel\"\n", "daemon.tls.mode"),
+        ] {
+            let error = parse(text).expect_err("必须失败关闭");
+            assert!(
+                error.to_string().contains(expect),
+                "期望提及 `{expect}`，实际：{error}"
             );
         }
     }

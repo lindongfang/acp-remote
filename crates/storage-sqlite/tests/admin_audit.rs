@@ -129,6 +129,43 @@ fn policy() -> RetentionPolicy {
     }
 }
 
+/// WP5（任务 2.13）：`watermark` 取 `owned_audit` 的自增序列（`sqlite_sequence`），**在清理之后仍单调**——
+/// `catalogRevision` 不得因保留期清理而回退（`store.head()` 做不到这一点）。
+#[tokio::test]
+async fn watermark_is_monotonic_across_retention_cleanup() {
+    let (_dir, store) = open("audit-watermark").await;
+    assert_eq!(
+        store.watermark().await.expect("watermark"),
+        0,
+        "未写过任何审计时为 0"
+    );
+    for at_text in [OLD, OLD] {
+        store
+            .append(cli_record(
+                at_text,
+                AuditAction::ExportCreated,
+                EntityRef::Export(ExportId::new(EXPORT).expect("export id")),
+            ))
+            .await
+            .expect("append audit");
+    }
+    assert_eq!(store.watermark().await.expect("watermark"), 2);
+
+    // 把两行都扫掉（阈值 = at - 365 天，早于两行的时刻）。
+    let report = store
+        .prune(policy(), timestamp("2027-09-18T00:00:00.000Z"))
+        .await
+        .expect("prune");
+    assert_eq!(report.removed_audit, 2, "两行都应被清理");
+    assert!(all(&store).await.is_empty(), "清理后没有审计行");
+    assert_eq!(
+        store.watermark().await.expect("watermark"),
+        2,
+        "水位不得随清理回退（catalogRevision 必须单调）"
+    );
+    store.close().await;
+}
+
 /// 读回全部行（`AuditQuery::default()` 的语义：不设任何过滤、不限行数）。
 async fn all(store: &SqliteStore) -> Vec<AuditRecord> {
     store

@@ -1486,6 +1486,30 @@ fn actor_exposes_the_storage_identity_columns() {
     assert_eq!(ActorKind::from_str("local_cli"), Err(InvalidValue::Field));
 }
 
+/// design D12：配对认领方是第四个 `Actor` 变体，且绑定一个配对——它既不带 scopes，也不是设备/节点，
+/// 只靠 `pairing()` 让用例面判定授权。
+#[test]
+fn pairing_claimant_actor_is_bound_to_one_pairing() {
+    let pairing = PairingId::from_str(UUID_C).expect("pairing");
+    let claimant = Actor::PairingClaimant {
+        pairing: pairing.clone(),
+    };
+    assert_eq!(claimant.kind(), ActorKind::PairingClaimant);
+    assert_eq!(claimant.kind().as_str(), "pairing_claimant");
+    assert_eq!(claimant.id_text(), UUID_C, "审计行的 actor_id 即该配对 id");
+    assert_eq!(claimant.pairing(), Some(&pairing));
+    assert!(claimant.scopes().is_none());
+    assert!(claimant.device_id().is_none());
+    assert!(claimant.node_ids().is_none());
+    assert!(!claimant.is_local_cli());
+    assert_eq!(Actor::LocalCli.pairing(), None);
+    assert_eq!(
+        ActorKind::from_str("pairing_claimant").expect("kind"),
+        ActorKind::PairingClaimant
+    );
+    assert_eq!(ActorKind::ALL.len(), 4);
+}
+
 #[test]
 fn device_record_ties_revocation_state_to_timestamp() {
     let device = DeviceId::from_str(UUID_B).expect("device");
@@ -1754,11 +1778,24 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
 
 #[test]
 fn audit_record_carries_no_content_and_closed_action_set() {
-    assert_eq!(AuditAction::ALL.len(), 20);
+    assert_eq!(AuditAction::ALL.len(), 22);
     assert_eq!(AuditAction::PairingCreated.as_str(), "pairing.created");
     assert_eq!(
         AuditAction::from_str("storage.integrity_failed").expect("action"),
         AuditAction::StorageIntegrityFailed
+    );
+    assert_eq!(
+        AuditAction::NodeAuthenticated.as_str(),
+        "node.authenticated",
+        "节点握手留痕的动作 token"
+    );
+    assert_eq!(
+        AuditAction::from_str("node.authenticated").expect("action"),
+        AuditAction::NodeAuthenticated
+    );
+    assert_eq!(
+        AuditAction::from_str("node.auth_failed").expect("action"),
+        AuditAction::NodeAuthFailed
     );
     assert_eq!(
         AuditAction::from_str("something.else"),

@@ -449,7 +449,7 @@ local.audit.export         本地审计导出（不含会话正文）
 ```text
 pairing.created / claimed / approved / rejected / expired
 device.authenticated / auth_failed / revoked / scopes_changed
-node.paired / node.trust_revoked / node.identity_changed
+node.paired / node.authenticated / node.auth_failed / node.trust_revoked / node.identity_changed
 export.created / revoked
 import.added / removed
 provider.configured
@@ -457,6 +457,8 @@ authorization.denied
 rate_limit.triggered
 storage.integrity_failed
 ```
+
+`[决定]`（2026-09-26）新增 `node.authenticated`/`node.auth_failed` 两类：节点握手是安全动作，成功与失败都要留痕，而此前节点侧只有 `node.paired`/`node.trust_revoked`/`node.identity_changed`，握手的成败只能靠误用其它取值表达。首次认证把已批准配对推进到 `consumed` 时**不另设动作**——那次转移随该写集记录 `node.authenticated`（设备为 `device.authenticated`）；配对的认领方也会出现在审计里（`actor_kind = 'pairing_claimant'`），落库时两张审计表的 `actor_kind`/`action` CHECK 必须同步扩宽（12-step 表重建，见 `CORE_PORTS_AND_STORAGE.md` §7.2/§11.8）。
 
 `[决定]`（2026-09-23）新增 `export.created`/`export.revoked`/`import.added`/`import.removed`/`provider.configured` 五类：Export/Import 的授权面与 Provider 凭据写入都是安全动作，而管理写集要求“涉及已登记安全动作的 mutation 其成功审计与状态同事务提交”（`CORE_PORTS_AND_STORAGE.md` §11.2 第 6 条）；没有取值只能靠误用 `node.trust_revoked`/`authorization.denied`，事后无法区分。本地个人配置（`agent.configure`/`workspace.select`）**不**登记，保持“只记安全动作”的取舍。落库时 `owned_audit`/`imported_audit` 的 CHECK 要同步改，而 SQLite 不能修改现有 CHECK，必须走 12-step 表重建（见该文档 §11.8）。
 

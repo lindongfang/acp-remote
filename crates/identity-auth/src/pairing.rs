@@ -13,13 +13,14 @@ use crate::authority::Authority;
 use crate::error::PairingError;
 use crate::state::PairingMaterial;
 use crate::transcript::{
-    NodeLinkPairingProof, NodeLinkPairingSas, SyncPairingProof, SyncPairingSas,
+    NodeLinkPairingProof, NodeLinkPairingSas, NodeLinkPairingStatus, SyncPairingProof,
+    SyncPairingSas,
 };
 use crate::types::{
     CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
     Completion, IdentityFact, PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PairingDecision,
-    PairingDraft, PairingRequestId, PairingSpec, PairingStatusView, RequestedCapabilities, Sas,
-    at_or_after, is_unconfirmed,
+    PairingDraft, PairingProof, PairingRequestId, PairingRequestMaterial, PairingSpec,
+    PairingStatusView, RequestedCapabilities, Sas, at_or_after, is_unconfirmed,
 };
 
 impl Authority {
@@ -409,6 +410,39 @@ impl Authority {
     /// 单个配对的累计 proof 失败次数。
     pub fn failure_count(&self, pairing: &PairingId) -> u32 {
         self.state().failures(pairing)
+    }
+
+    /// 配对通道可读的**非秘密**请求材料（claim 响应与 Owner 证明需要；design D12 的 seam 补全）。
+    ///
+    /// 与 secret 同生同灭（同一个内存条目）：secret 已被清除（过期扫描、重启、首次认证成功后）
+    /// 或该配对未曾创建时返回 `None`。返回的两个值都不是凭据——它们会原样出现在 claim 响应里，
+    /// 因此可以经公开入口读取；secret 本身**不**经任何入口返回。
+    pub fn pairing_request_material(&self, pairing: &PairingId) -> Option<PairingRequestMaterial> {
+        self.state()
+            .material(pairing)
+            .map(|material| PairingRequestMaterial {
+                server_nonce: material.server_nonce.clone(),
+                pairing_request_id: material.pairing_request_id.clone(),
+            })
+    }
+
+    /// Node Link 配对状态查询证明（`node-link-pairing-status/v1`，`NODE_LINK_PROTOCOL.md` §9.4/§13.3）。
+    ///
+    /// 密钥是本机内存里该配对的 pairing secret（§4.3）：secret 缺失（未创建、已被清除）与 HMAC 不匹配
+    /// 都是具名失败，adapter 必须把两者收敛为同一个对端可见的失败（§4.5：不泄露校验差异）。
+    /// `input.owner_node_id` 必须等于本节点：本入口只服务本节点登记的配对，不替别的 owner 装配 transcript。
+    pub fn verify_node_link_pairing_status(
+        &self,
+        input: &NodeLinkPairingStatus,
+        proof: &PairingProof,
+    ) -> Result<(), PairingError> {
+        if &input.owner_node_id != self.local_node() {
+            return Err(PairingError::ClaimMismatch);
+        }
+        let Some(secret) = self.state().secret(&input.pairing_id) else {
+            return Err(PairingError::SecretUnavailable);
+        };
+        input.verify(&secret, proof).map_err(PairingError::from)
     }
 
     /// 内存中是否仍持有该配对的 secret（测试与诊断用；不暴露内容）。

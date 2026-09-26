@@ -54,6 +54,6 @@ pub use types::{
     Completion, ConnectionBinding, ConnectionKind, CredentialStatus, HandshakeFailure,
     HandshakeFailureClass, IdentityFact, NodeEndpoint, P1363Signature, PAIRING_MAX_FAILURES,
     PAIRING_MAX_SECONDS, PROTOCOL_VERSION, PairingDecision, PairingDraft, PairingProof,
-    PairingRequestId, PairingSecret, PairingSpec, PairingStatusView, PeerTrust,
-    RequestedCapabilities, Sas,
+    PairingRequestId, PairingRequestMaterial, PairingSecret, PairingSpec, PairingStatusView,
+    PeerTrust, RequestedCapabilities, Sas,
 };

@@ -260,6 +260,12 @@
       "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
       "viewDef": "#/$defs/turn.delta_compacted",
       "valid": true
+    },
+    {
+      "fixture": "invalid/node-challenge-missing-catalog-revision.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
     }
   ],
   "transcriptVectors": [
