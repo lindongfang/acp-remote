@@ -1,7 +1,8 @@
 # ACP Remote 模块架构
 
-> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 与 `app` 只覆盖切片 4 的本地通道与组合根范围，见 §3 `[现状]` 与 `README.md` 的 crate 表）
+> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin` 与切片 5 的 `transport::net` + `node_link`，`sync`/`acp_facade` 仍待后续切片；`app` 已按切片 4/5 接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.3
+> 修订记录（2026-09-26，node-link-owner 变更 WP8 收口）：§3 状态行、§3 `[现状]` 与 §4.9 `[现状]` 按切片 5 的实绩写回——`server::transport::net` 与 `server::node_link` 已落地（Node Link 只覆盖 Owner 侧入站面，`sync`/`acp_facade` 仍待后续切片），WP1 在本文件留下的「已进入实现、尚未落地」注记随之收敛。
 > 修订记录（2026-09-26，node-link-owner 变更 WP1）：§3.1 新增依赖口径 `[决定]`（Node Link 的 HTTP/WS/TLS 栈与 dev 用自签证书生成、落选候选与解析证据）；§4.9 加注 `node_link` 已进入实现、**尚未落地**；§5 矩阵的 `server` 行把 `acpr-wire` 格改为 ✓，并在表下注记限定该依赖只用于 ACPR-CJ1 digest 前像。
 > 修订记录（2026-09-25，daemon-cli-and-local-admin 切片 4）：§3 状态行与 §4.9/§4.10 把 `server`（本地通道 + `local_admin`）与 `app`（daemon/CLI/组合根）标为已落地、范围仍限本切片；§3.1 记下当前成员数（十二个）；§5 表下注记收敛——`storage-sqlite` 已是矩阵列、`node-link-client` 仍是列外行，并如实说明门禁对「行缺席」是静默的。
 > 修订记录（2026-09-24，identity-auth-and-keystore）：§3 状态行与 §3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价、并标注 macOS/Linux 后端未实现；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
@@ -127,6 +128,8 @@ crates/
 平台安全存储是第二处例外：`identity-keystore` 独立成 crate 是为了隔离平台依赖（原生 keystore API 与 `cfg` 分支），让 `identity-auth` 的状态机在所有平台都能编译与单测（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
 
 > `[现状]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4 已落地）上表中 `server` 与 `app` 已落地，但**只覆盖本切片范围**：`server` 只有 `transport` 的本地通道部分（平台 IPC listener、对端凭据校验、framing）与 `local_admin`（管理信封与方法路由），`sync`/`node_link`/`acp_facade` 仍待后续切片；`app` 的 daemon、CLI 与组合根已落地。其余行保持既有状态（`node-link-client` 仍待切片 6）。另外新增一个不影响上表结构的 crate 目录：`vendor/windows-local-ipc`（切片 4 自研的 Win32 FFI wrapper，path 依赖、不在 workspace `members` 里，见 §3.1）。成员仍按「真正落地时才写入 `members`」推进：当前 `members` 就是本节除 `node-link-client` 之外的十二个，§5 的列是这十二个再加 `vendor/windows-local-ipc`，`node-link-client` 只作为「行」出现（待切片 6 落地、当前没有依赖方），详见 §5 表下注记。
+>
+> （2026-09-26 更新，`node-link-owner` 变更切片 5 已落地）`server` 的范围扩为四条路径：在上一段的 `transport::local` 与 `local_admin` 之上，新增 `transport::net`（默认 loopback 的共享 HTTP/WSS listener、TLS `proxy`/`direct`、`Host` 边界与 path 路由）与 `node_link`（Owner 侧配对 HTTP、节点握手、Export catalog、resource、command 与撤销传播），由 `app` 组合根接线；`sync`/`acp_facade` 与 `node-link-client` 仍待后续切片。
 
 ### 3.1 Workspace 基线
 
@@ -231,7 +234,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
-管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（唯一按合同的例外是 `import.add`：本切片没有可用的 Node Link catalog 快照，它恒返回 `local.unavailable`）；仍未实现的是 `server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client`。业务决定仍由 core 用例拥有。
+管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（唯一按合同的例外是 `import.add`：它需要 Owner 的 catalog 快照，而提供该快照的 Access 侧 `node-link-client` 属切片 6，因此它恒返回 `local.unavailable`）；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 已随切片 5 落地，见 §4.9）。业务决定仍由 core 用例拥有。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
@@ -358,9 +361,7 @@ port/          # keystore 端口定义（trait），实现见 identity-keystore
 
 ### 4.9 `server`
 
-> `[现状]`（2026-09-25，切片 4 已落地）本 crate 已落地，但只有两条路径：`server::transport::local`（endpoint、对端凭据校验、framing、channel 绑定与未完成请求上限）与 `server::local_admin`（管理信封与方法路由）；`sync`/`node_link`/`acp_facade` 尚无实现。`acp_facade` 缺席期间 Daemon 对 `0x02` 连接的处理（完成 framing 校验后立即关闭并记结构化警告）记在 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §3.1 的实现状态注记里；本节的职责划分与下述约束不变。
->
-> （2026-09-26 更新，`node-link-owner` 变更）`node_link` 已进入实现（该变更交付中、**尚未落地**），`sync`/`acp_facade` 仍待后续切片；因此本节的「已落地」范围仍只含 `transport::local` 与 `local_admin`，`node_link` 的落地陈述由该变更收口时另行更新。
+> `[现状]`（2026-09-26，切片 4 与切片 5 已落地）本 crate 已落地的路径有四条：`server::transport::local`（endpoint、对端凭据校验、framing、channel 绑定与未完成请求上限）、`server::local_admin`（管理信封与方法路由）、`server::transport::net`（默认 loopback 的共享 HTTP/WSS listener、TLS `proxy`/`direct` 两种终止方式、`Host` 边界，以及 `/sync/v1`、`/node-link/v1`、两类 `/pairing/*` 的 path 路由）与 `server::node_link`（配对 HTTP、节点握手、catalog、resource、command 与撤销传播，由 `app` 组合根按 §4.10 接线）。**仍未落地**：`sync`/`acp_facade` 待后续切片；Node Link 也只覆盖 Owner 侧入站面，Access 侧的出站重连管理器属切片 6 的 `node-link-client`。`acp_facade` 缺席期间 Daemon 对 `0x02` 连接的处理（完成 framing 校验后立即关闭并记结构化警告）记在 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §3.1 的实现状态注记里；本节的职责划分与下述约束不变。
 
 唯一职责：承载所有入站协议 adapter，类似 Pi server 对连接、attachment 和应用服务路由的集中承载，但不把各协议合并成一个 wire format。
 
@@ -382,7 +383,7 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 
 ### 4.10 `app`
 
-> `[现状]`（2026-09-25，切片 4 已落地）`app` 已落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
+> `[现状]`（2026-09-25 切片 4 已落地；2026-09-26 按切片 5 补充接线范围）`app` 已落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。切片 5（`node-link-owner`）另把网络接入面接了进来：`server::transport::net` 的 listener 与 `server::node_link` 的三个路由（catalog/resource/command）随 Daemon 启动，关闭序列先同步停掉网络 accept 再走后续步骤；Node Link 的**出站**重连管理器仍属切片 6，`daemon.status.links` 因此恒为空。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
 
 唯一职责：发布 `acp-remote` 可执行程序并作为组合根。它装配 daemon、CLI、server、backend、配置、单实例锁、健康状态和 graceful shutdown，但不得承载业务规则。
 
