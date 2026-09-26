@@ -42,6 +42,11 @@
 
 - 不适用：单工作包（WP1）、首个交付单元（DU1），无代码交接；依据见 `plan.md` 的 Dependency Handoffs。
 
+### 5.1/5.2 集成就绪（2026-09-26，主 Agent）
+
+- 5.1：独立集成 Agent 已创建（worker `c28d2fe2`，deepseek/deepseek-flash，fresh 上下文，未参与实现/review），交接 roles/integrator.md 要点、计划、证据清单与合入条件；主 Agent 未兼任。
+- 5.2：DU1 组成核对 = WP1（independent，无 TP）。证据有效性：PV1/PV2（三连跑）于 `af64e85` 执行（其后仅 openspec 簿记提交），RV1 PASS 于 `af64e85`；候选轮将按 6.3 对最终候选重跑 PV1/PV2，故当前证据有效且会被候选轮刷新。
+
 ### Project Verify 记录
 
 | Check | 执行者/版本 | 命令 | 结果 | 证据 |
