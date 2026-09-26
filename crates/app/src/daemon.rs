@@ -15,9 +15,14 @@
 //! 8. 发布锁记录（含 endpoint 定位串）→ 开放网络接入与本地通道的接受循环。
 //!
 //! 关闭顺序（`SECURITY_DESIGN.md` §12.1）：停接入层（本地接受循环已退出 + 网络 listener 停止 accept 并
-//! 按 `daemon.shutdown_grace_ms` 排空在途连接）→ 取消后台任务 → 停止 Agent → 刷新存储
-//! （`wal_checkpoint(TRUNCATE)`）→ 清理并释放单实例锁。`daemon.stop` 在本序列**开始**时返回
-//! `{accepted: true}`，因此序列的第一步保留了在途连接的排空窗口（见 [`MIN_DRAIN_MS`]）。
+//! 按 `daemon.shutdown_grace_ms` 排空在途连接）→ 取消后台任务（**超时也要 abort 并回收**：任务的端口
+//! 克隆还在时 `Arc::try_unwrap` 会失败，`Composition::close` 会报 `StoreStillShared`）→ 停止 Agent →
+//! 刷新存储（`wal_checkpoint(TRUNCATE)`）→ 清理 endpoint 残留与运行记录 → 释放单实例锁。
+//!
+//! 收尾由 [`ShutdownCleanup`] 持有：**无论前面的步骤成功、失败还是提前返回**，清理都会执行，且单实例锁
+//! 一定在记录删除之后才释放（否则外部会看到「锁可获取但运行记录仍在」的陈旧记录窗口）。`daemon.stop`
+//! 在本序列**开始**时返回 `{accepted: true}`，因此序列的第一步保留了在途连接的排空窗口（见
+//! [`MIN_DRAIN_MS`]）。
 
 use std::path::Path;
 use std::sync::Arc;
@@ -510,14 +515,21 @@ impl OwnedTasks {
         });
     }
 
-    /// 取消并等待全部任务结束（`deadline` 之前；超时才 abort）。
+    /// 取消并等待全部任务结束（`deadline` 之前；超时才 abort，但**仍要等它被回收**）。
+    ///
+    /// 超时分支不能只丢掉 `JoinHandle`（那是 detach）：被 detach 的任务会继续运行，并在
+    /// `Composition::close` 之前一直持有端口克隆（每个端口都是同一个 `Arc<SqliteStore>` 的
+    /// `store.clone()`，见 `crate::compose`），于是关闭序列随机报 `StoreStillShared`。
     async fn cancel_all(self, deadline: Instant) {
         for task in &self.tasks {
             task.cancel.notify_waiters();
         }
         for task in self.tasks {
             let name = task.name;
-            match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), task.handle)
+            let mut handle = task.handle;
+            // 借 `&mut handle` 等：超时后还要 abort 并 `await` 同一个句柄，所以不能把它移动进
+            // `timeout_at`（那会在超时时直接 drop 句柄 = detach）。
+            match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut handle)
                 .await
             {
                 Ok(Ok(())) => tracing::info!(
@@ -537,11 +549,15 @@ impl OwnedTasks {
                     error = %error,
                     "后台任务异常结束"
                 ),
-                Err(_) => tracing::warn!(
-                    event = "daemon.task_stop_timeout",
-                    task = name,
-                    "后台任务未在期限内退出：强制中止"
-                ),
+                Err(_) => {
+                    handle.abort();
+                    let _ = handle.await;
+                    tracing::warn!(
+                        event = "daemon.task_stop_timeout",
+                        task = name,
+                        "后台任务未在期限内退出：已中止并回收"
+                    );
+                }
             }
         }
     }
@@ -1405,6 +1421,9 @@ async fn close(
     grace_ms: u64,
 ) -> Result<(), DaemonError> {
     let started = Instant::now();
+    // 收尾守卫：持有单实例锁与 endpoint 定位串。此后任何提前返回（`?`、panic）都会经 `Drop` 走
+    // 「清理 endpoint 与运行记录 → 释放锁」，因此不会留下「锁可获取但运行记录仍在」的窗口。
+    let cleanup = ShutdownCleanup::new(endpoint_locator, lock);
     let deadline = started + Duration::from_millis(grace_ms.max(MIN_DRAIN_MS));
 
     // 1) 停接入层：本地接受循环已在 `accept_loop` 退出时释放 endpoint（不再接受新连接）；这里**先以同步
@@ -1454,22 +1473,72 @@ async fn close(
     drop(host);
 
     // 4) 刷新存储（含 `wal_checkpoint(TRUNCATE)`）。
-    composition.close().await.map_err(DaemonError::StoreClose)?;
-    tracing::info!(
-        event = "daemon.storage_closed",
-        "存储已刷新（wal_checkpoint(TRUNCATE)）并关闭连接池"
-    );
+    let stored = composition.close().await.map_err(DaemonError::StoreClose);
+    if stored.is_ok() {
+        tracing::info!(
+            event = "daemon.storage_closed",
+            "存储已刷新（wal_checkpoint(TRUNCATE)）并关闭连接池"
+        );
+    }
 
-    // 5) 清理 endpoint 残留与本次运行记录，然后释放单实例锁。
-    cleanup_endpoint(&endpoint_locator);
-    lock.remove_record();
-    drop(lock);
-    tracing::info!(
-        event = "daemon.stopped",
-        elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "关闭序列完成，单实例锁已释放"
-    );
-    Ok(())
+    // 5) 收尾：清理 endpoint 残留与本次运行记录，然后释放单实例锁。无条件执行——上一步失败时也必须
+    //    走到这里，否则会留下陈旧运行记录（旧实现用 `?` 直接返回，把它整个跳过了）。
+    cleanup.finish(
+        stored,
+        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    )
+}
+
+/// 关闭序列的收尾守卫：清理 endpoint 残留与本次运行记录，**然后**释放单实例锁。
+///
+/// 为什么是守卫而不是顺序调用：`close()` 里任何一处提前返回（`?`、panic）都会跳过收尾，而收尾被跳过的
+/// 后果正是「锁已释放、运行记录还在」（CLI 与 `daemon status` 会把它读成上一次运行的残留）。`Drop` 因此
+/// 兜底执行同一条清理路径。`lock` 放在 [`Option`] 里、清理时 `take` 出来并在删除记录之后释放，保证锁
+/// 一定最后释放（顺序不可交换）。清理幂等：记录已不存在、endpoint 已消失都不算失败。
+struct ShutdownCleanup {
+    endpoint_locator: String,
+    lock: Option<DaemonLock>,
+}
+
+impl ShutdownCleanup {
+    fn new(endpoint_locator: String, lock: DaemonLock) -> Self {
+        Self {
+            endpoint_locator,
+            lock: Some(lock),
+        }
+    }
+
+    /// 清理 endpoint 残留 → 删除运行记录 → 释放单实例锁。
+    fn cleanup(&mut self) {
+        cleanup_endpoint(&self.endpoint_locator);
+        if let Some(lock) = self.lock.take() {
+            lock.remove_record();
+            // `lock` 在此 drop = 释放单实例锁：必须在运行记录已删除之后。
+        }
+    }
+
+    /// 显式收尾：清理后释放锁，并把关闭结果**原样**返回（失败不得被收尾吞掉）。
+    fn finish(
+        mut self,
+        outcome: Result<(), DaemonError>,
+        elapsed_ms: u64,
+    ) -> Result<(), DaemonError> {
+        self.cleanup();
+        tracing::info!(
+            event = "daemon.stopped",
+            elapsed_ms,
+            failed = outcome.is_err(),
+            "关闭序列结束：运行记录已清理，单实例锁已释放"
+        );
+        outcome
+    }
+}
+
+impl Drop for ShutdownCleanup {
+    /// 提前返回或 panic 的兜底：走与 [`ShutdownCleanup::finish`] 相同的清理路径（幂等）。
+    fn drop(&mut self) {
+        self.cleanup();
+    }
 }
 
 /// 排空在途连接：到 `deadline` 仍未结束的连接被中止（响应已无法送达，也不允许在连接之外继续持有语义）。
@@ -1789,5 +1858,135 @@ mod tests {
         // `PATH` 里必然存在的目录本身不是文件；用一个不可能存在的名字断言查找失败。
         assert!(!command_available("acpr-not-a-real-command-9f3"));
         assert!(!candidate_names("x").is_empty());
+    }
+
+    /// 临时目录（`Drop` 时递归删除）。
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let unique = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "acpr-daemon-{label}-{}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("创建临时目录");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// 单元测试临时目录名的去重计数。
+    static NEXT_TEMP_DIR: AtomicU32 = AtomicU32::new(0);
+
+    /// 取锁 + 发布运行记录（两个收尾用例的共同前置）。
+    fn locked_with_record(
+        label: &str,
+    ) -> (TempDir, std::path::PathBuf, std::path::PathBuf, DaemonLock) {
+        let dir = TempDir::new(label);
+        let lock_path = crate::lock::lock_path(&dir.path);
+        let record_path = crate::lock::record_path(&dir.path);
+        let mut lock = DaemonLock::acquire(&lock_path).expect("取锁");
+        lock.publish(&LockRecord {
+            instance_id: "0123456789abcdef".to_owned(),
+            pid: std::process::id(),
+            endpoint: None,
+        })
+        .expect("发布运行记录");
+        assert!(
+            crate::lock::read_record(&record_path)
+                .expect("可读")
+                .is_some(),
+            "前置：运行记录已发布"
+        );
+        (dir, lock_path, record_path, lock)
+    }
+
+    /// 取消超时不得留下 detached task（`AGENTS.md` §7）：被 detach 的任务会继续运行，并在
+    /// `Composition::close` 之前一直持有端口克隆（每个端口都是同一个 `Arc<SqliteStore>` 的克隆），
+    /// 让关闭序列随机报 `StoreStillShared`。
+    #[tokio::test]
+    async fn cancel_all_reaps_a_task_that_ignores_the_cancel_signal() {
+        struct MarkOnDrop(Arc<AtomicBool>);
+        impl Drop for MarkOnDrop {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut tasks = OwnedTasks::new();
+        tasks.spawn("never_stops", Arc::new(Notify::new()), {
+            let dropped = Arc::clone(&dropped);
+            async move {
+                let _mark = MarkOnDrop(dropped);
+                std::future::pending::<()>().await;
+            }
+        });
+
+        // 期限已过 = 超时分支：关闭宽限被前面的步骤（在途连接排空）用满时的真实形态。
+        tasks.cancel_all(Instant::now()).await;
+
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "超时分支必须 abort 并等任务回收，不得留下 detached task"
+        );
+    }
+
+    /// 关闭步骤失败（例如 `Composition::close` 报 `StoreStillShared`）时，收尾仍必须删除运行记录、
+    /// 释放单实例锁，并把失败**原样**返回。
+    #[test]
+    fn shutdown_cleanup_removes_the_record_and_releases_the_lock_on_failure() {
+        let (_dir, lock_path, record_path, lock) = locked_with_record("cleanup-failed");
+
+        let outcome = ShutdownCleanup::new("acpr-no-such-endpoint".to_owned(), lock).finish(
+            Err(DaemonError::StoreClose(ComposeError::StoreStillShared)),
+            0,
+        );
+
+        assert!(
+            matches!(
+                outcome,
+                Err(DaemonError::StoreClose(ComposeError::StoreStillShared))
+            ),
+            "关闭失败必须原样返回，不能被收尾吞掉"
+        );
+        assert_eq!(
+            crate::lock::read_record(&record_path).expect("可读"),
+            None,
+            "失败路径也必须删除运行记录"
+        );
+        assert!(
+            matches!(crate::lock::probe(&lock_path), crate::lock::LockState::Free),
+            "失败路径也必须释放单实例锁"
+        );
+    }
+
+    /// 提前返回或 panic 走 `Drop` 兜底时走同一条清理路径（锁同样在记录删除之后才释放）。
+    #[test]
+    fn shutdown_cleanup_falls_back_to_drop() {
+        let (_dir, lock_path, record_path, lock) = locked_with_record("cleanup-drop");
+
+        drop(ShutdownCleanup::new(
+            "acpr-no-such-endpoint".to_owned(),
+            lock,
+        ));
+
+        assert_eq!(
+            crate::lock::read_record(&record_path).expect("可读"),
+            None,
+            "`Drop` 兜底也必须删除运行记录"
+        );
+        assert!(
+            matches!(crate::lock::probe(&lock_path), crate::lock::LockState::Free),
+            "`Drop` 兜底也必须释放单实例锁"
+        );
     }
 }

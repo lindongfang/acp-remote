@@ -727,3 +727,60 @@ fn the_status_result_keeps_the_documented_field_set() {
     assert_eq!(started_at.len(), 24, "{started_at}");
     assert!(daemon.stop().success());
 }
+/// R13：宽限被前面的步骤用满（在途连接把排空预算耗尽）时，关闭仍必须正常收尾——后台任务的取消
+/// 窗口此时已经过期，但不得因此留下 detached 任务或陈旧运行记录。
+///
+/// 钉住的是 CI 上 `cli_commands::daemon_stop_waits_for_the_lock_and_the_process_exit` 随机失败的根因：
+/// `OwnedTasks::cancel_all` 的超时分支只记日志并丢掉 `JoinHandle`（= detach），任务继续持有端口克隆，
+/// `Composition::close` 随机报 `StoreStillShared`，而清理（删除运行记录）在 `?` 之后——外部于是看到
+/// 「锁可获取、运行记录还在」，Daemon 也以非零码退出。
+#[test]
+fn stop_cleans_up_even_when_the_drain_budget_is_spent() {
+    // `shutdown_grace_ms = 0` 被 `MIN_DRAIN_MS`（200 ms）托底：在途连接会把这段预算用满，
+    // 后面的取消期限因此已经过期（超时分支）。
+    let mut daemon = Daemon::configure_with("stop-budget-spent", "shutdown_grace_ms = 0\n", "");
+    daemon.start();
+    let record_path = app::lock::record_path(daemon.data_dir());
+    let lock_path = app::lock::lock_path(daemon.data_dir());
+
+    // 在途本地连接：它不会自行结束，本地排空只能等满宽限。
+    let mut held = daemon.open_connection();
+    assert!(matches!(
+        outcome_of(&held.call(Method::DaemonStatus, params())),
+        ClientOutcome::Success(_)
+    ));
+
+    let run = run_cli(
+        "stop-budget-spent-cli",
+        Some(daemon.config_path()),
+        &["daemon", "stop"],
+        Stdin::Null,
+    );
+    run.assert_success();
+    assert!(run.stdout.contains("已停止"), "{}", run.stdout);
+
+    // 外部可见的不变量：记录已删除、锁已释放，且 Daemon 正常退出（存储真的被刷新）。
+    assert_eq!(
+        app::lock::read_record(&record_path).expect("可读"),
+        None,
+        "正常关闭必须删除运行记录：日志={}",
+        daemon.log()
+    );
+    assert!(
+        matches!(app::lock::probe(&lock_path), app::lock::LockState::Free),
+        "CLI 必须在锁释放后才退出"
+    );
+    let status = daemon.wait_exit();
+    assert!(
+        status.success(),
+        "清理与存储刷新都必须完成（未留下持有存储句柄的任务）：{status} 日志={}",
+        daemon.log()
+    );
+    assert_eq!(
+        daemon.log_events("daemon.storage_closed").len(),
+        1,
+        "存储必须被真正刷新：日志={}",
+        daemon.log()
+    );
+    held.close();
+}
