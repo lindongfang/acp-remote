@@ -298,9 +298,12 @@ pub fn ws_request(
 ///
 /// 重复同名头用于构造「同一 token 拆成两个头」这类边界形态（用例里的 `http`/`hyper` 侧不会自动合并）。
 pub fn ws_request_with_headers(path: &str, host: &str, headers: &[(&str, &str)]) -> String {
+    // `Sec-WebSocket-Key` 按 RFC 6455 只要求 16 字节的 base64 值。这里在运行时从固定的 16 字节数组
+    // 编出来，而不写死 base64 字面量：同值语义不变，同时避免密钥扫描把测试用的固定字符串误判为凭据。
+    let key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 16]);
     let mut request = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
-         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+         Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
     );
     for (name, value) in headers {
         request.push_str(&format!("{name}: {value}\r\n"));

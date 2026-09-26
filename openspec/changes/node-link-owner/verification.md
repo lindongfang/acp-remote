@@ -108,6 +108,8 @@
 
 ## Check Plan Changes
 
+- 2026-09-26（交付期，用户裁决 A）：PR #28 的 CI 报 `RUSTSEC-2026-0009`（`time 0.3.45`，经 dev 依赖 `rcgen`）；修复版 `time 0.3.47` 声明 MSRV 1.88 > 仓库 1.85。用户选择「接受 dev-only 依赖的 MSRV 例外并记录口径」：`cargo update -p time --precise 0.3.47`，并在 `docs/MODULE_ARCHITECTURE.md` §3.1 新增 `[决定]` 写明「MSRV 1.85 约束正常依赖闭包；dev-dependencies 跟随固定工具链」。同批修复 CI 的密钥扫描误报（`test_client.rs` 的 RFC 6455 示例 `Sec-WebSocket-Key` 改为运行时从 16 字节数组编码，不引允许清单）。该变更使已验收目标版本前移，按流程重跑受影响检查并更新验收记录。
+
 - 2026-09-26（WP3 合同扩展，主 Agent 裁决）：2.25/2.26 的写入范围扩至测试文件（`crates/core/src/model/tests.rs`、`crates/storage-sqlite/tests/{enum_coverage,migration,commit,admin_store}.rs` 及确需的同目录既有测试文件）——原范围漏列，完成条件强制要求这些测试。夹具策略选 A：不新增 v3 二进制夹具（v2→v3 用既有 `fixtures/storage/v2/empty.sqlite3`、v1→v3 沿用 `from-v1.sqlite3` 并加强断言、「过新拒绝」改用临时副本 + `PRAGMA user_version = 4`）；`owned_command` 的 actor_kind CHECK 保持三元组不动，enum_coverage 期望拆分；全部断言改动须在 coder handoff 中逐条列出原/新/理由供 reviewer 核对。
 - 2026-09-26（3.5 派发更正）：主 Agent 的 3.5 派单漏列 [PV5]（权威 tasks.md 要求 [PV3]+[PV5] 本机），执行者按权威判据请示后裁决附加执行（选 B）；后续 3.7/3.9/3.11/3.13/3.15 派单必须带 [PV5]。
 - 2026-09-26（用户裁决，原话「A」）：WP4 发现 v1 wire 内部不一致（连接 transcript 域含 tag 6 `catalogRevision` 但 `node.challenge`/`node.hello` 不带该字段，首次连接握手不可能完成）——按方案 A 给 `node.challenge` 增必需字段 `catalogRevision`，同步 NODE_LINK_PROTOCOL §12.2/修订记录、handshake.schema.json、fixtures、node-link-protocol 类型与 conn 实现；design.md 增 D13，tasks.md 增 2.29；§2.5 JSON 结构上限执行点列入 2.30（实现既定上限，不改合同文本）。
