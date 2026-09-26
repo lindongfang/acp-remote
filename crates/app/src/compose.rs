@@ -9,11 +9,11 @@
 //! | `CredentialResolver` | [`KeystoreCredentialResolver`]（keystore 条目命名与 `provider.configure` 同规则） |
 //! | `Clock` | [`crate::clock::SystemClock`] |
 //! | `IdGenerator` | [`UuidIdGenerator`] |
-//! | `EventPublisher` | [`LoggingPublisher`]（本切片没有订阅者） |
+//! | `EventPublisher` | [`ForkedPublisher`]（结构化日志 + Node Link 事件扇出，[`forked_publisher`]） |
 //! | `EntropySource` / `IdentityKeystore` | `identity_keystore::{OsEntropy, FileKeystore, EphemeralKeystore}` |
 //! | `identity_auth::Authority` | 组合根持有的共享状态机 |
 //! | `AuditHook`（连接级拒绝） | [`AuditSink`]（有界通道 + 由组合根持有的写任务） |
-//! | `ConnectionCloser` | [`RevocationCloser`]（本切片没有按设备/节点持有的连接表） |
+//! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知接到 Node Link 的连接注册表与命令管线） |
 //! | `DaemonControl` | `crate::daemon::AppDaemonControl` |
 //!
 //! 关闭期的资源释放由 [`Composition::close`] 负责：它逐一释放共享句柄，再执行 `storage-sqlite` 的
@@ -24,8 +24,9 @@ use std::sync::Arc;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, DeviceId,
-    EntityRef, ExportId, NodeId, PortError, SecretValue, ServerEpoch, Timestamp, UnavailableKind,
+    Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent,
+    DeviceId, EntityRef, ExportId, NodeId, PortError, SecretValue, ServerEpoch, Timestamp,
+    UnavailableKind,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CredentialResolver, EventPublisher,
@@ -37,6 +38,8 @@ use agent_host::{AgentHost, HostConfig};
 use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey, SecretPurpose};
 use identity_keystore::{EphemeralKeystore, FileKeystore, OsEntropy};
 use server::local_admin::ConnectionCloser;
+use server::node_link::CommandRoute;
+use server::node_link::resource::NodeLinkPublisher;
 use server::transport::local::{AuditHook, AuthorizationDenied};
 use storage_sqlite::error::StorageError;
 use storage_sqlite::session_store::SqliteStore;
@@ -172,7 +175,13 @@ impl Composition {
     ///
     /// **不**取单实例锁、**不**创建 endpoint、**不**写管理状态（种子导入由 [`Composition::seed_if_needed`]）：
     /// 启动序列的顺序由 `crate::daemon` 掌握。
-    pub async fn assemble(config: Config) -> Result<Self, ComposeError> {
+    ///
+    /// `publisher` 是 broker 提交成功后的发布端口（`CORE_PORTS_AND_STORAGE.md` §6 第 1/3 条）：组合根用它
+    /// 注入 [`forked_publisher`] 的分叉（日志 + Node Link 扇出），测试可只注入 [`LoggingPublisher`]。
+    pub async fn assemble(
+        config: Config,
+        publisher: Arc<dyn EventPublisher>,
+    ) -> Result<Self, ComposeError> {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
         let started_at = clock.now();
         let store = Arc::new(
@@ -225,7 +234,7 @@ impl Composition {
                 backends,
                 exports: Arc::clone(&export_store),
                 trust: Arc::clone(&trust_store),
-                publisher: Arc::new(LoggingPublisher),
+                publisher,
                 clock: Arc::clone(&clock),
                 ids: Arc::clone(&ids),
                 audit: Some(Arc::clone(&audit_store)),
@@ -734,45 +743,85 @@ impl AuditHook for AuditSink {
     }
 }
 
-/// `ConnectionCloser`：撤销提交后关闭该设备/节点的 active connection 并通知 Export 撤销。
+/// `ConnectionCloser`：撤销提交后关闭该设备/节点的 active connection 并通知 Export 撤销（`design.md` D7）。
 ///
-/// 本切片**没有**按设备/节点维度持有的连接表：本地管理通道按 OS 用户授权（不绑定设备身份），
-/// `server::sync` 尚未落地。因此本实现记录一条结构化事件并明确「本次没有可关闭的连接/可推送的连接」，
-/// 而不是假装成功关闭了某个连接；WP7 装配 `server::node_link` 的连接注册表与撤销传播时替换本实现。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RevocationCloser;
+/// `local_admin` 已经在**持久提交成功之后**才调本实现（`local_admin::pairing`），因此这里只做「通知与关闭」：
+/// 推送/关闭失败只记日志，不回滚已提交的撤销。授权判定不依赖推送——`node_link` 在处理 `resource.attach`、
+/// `command.submit` 与 catalog 订阅时按当次持久化记录复核（D7）。
+///
+/// `close_device` 目前没有可关闭的连接：`server::sync` 未落地（设备连接属切片 7），本实现记录一条结构化
+/// 事件并明确「本次没有可关闭的连接」，不假装成功。
+#[derive(Debug)]
+pub struct NodeLinkCloser {
+    command: Arc<CommandRoute>,
+}
+
+impl NodeLinkCloser {
+    /// 装配：`command` 是本机（Owner）的命令管线，它内部持有连接注册表与 resource 路由。
+    pub fn new(command: Arc<CommandRoute>) -> Self {
+        Self { command }
+    }
+}
 
 #[async_trait::async_trait]
-impl ConnectionCloser for RevocationCloser {
+impl ConnectionCloser for NodeLinkCloser {
     async fn close_device(&self, device: &DeviceId) {
         tracing::info!(
             event = "daemon.revocation_connection_sweep",
             target_kind = "device",
             target_id = %device.as_str(),
             closed_connections = 0u64,
-            "撤销已提交：本切片没有按设备持有的连接表（server::sync/node_link 未落地）"
+            "撤销已提交：本切片没有按设备持有的连接表（server::sync 未落地，设备连接属切片 7）"
         );
     }
 
     async fn close_node(&self, node: &NodeId) {
+        let closed = self.command.node_revoked(node).await;
         tracing::info!(
             event = "daemon.revocation_connection_sweep",
             target_kind = "node",
             target_id = %node.as_str(),
-            closed_connections = 0u64,
-            "撤销已提交：本切片没有按节点持有的连接表（Node Link 未接线）"
+            closed_connections = u64::try_from(closed).unwrap_or(u64::MAX),
+            "撤销已提交：已推送 node.trust.revoked 并以 4410 关闭该节点的连接"
         );
     }
 
     async fn export_revoked(&self, export: &ExportId) {
+        let notified = self.command.export_revoked(export).await;
         tracing::info!(
             event = "daemon.export_revoked_notification",
             target_kind = "export",
             target_id = %export.as_str(),
-            notified_connections = 0u64,
-            "撤销已提交：本切片没有按 Export 持有的连接表（Node Link 未接线）"
+            notified_connections = u64::try_from(notified).unwrap_or(u64::MAX),
+            "撤销已提交：已向持有该 Export 的活跃连接推送 export.revoked"
         );
     }
+}
+
+/// `EventPublisher` 分叉（`design.md` D6）：一路保留组合根的结构化日志（[`LoggingPublisher`] 的既有语义），
+/// 一路把同一个已提交投递转发给 `server::node_link` 的事件扇出。
+///
+/// 分叉点在 `app`（组合根）而不在 `server`：`server::node_link` 不需要知道其他消费方。`publish` 仍是同步
+/// 且非阻塞的（扇出侧队列满只丢这一条并记日志，已提交的事务不回滚，见 D6 的既定取舍）。
+struct ForkedPublisher {
+    node_link: NodeLinkPublisher,
+}
+
+impl EventPublisher for ForkedPublisher {
+    fn publish(&self, delivery: CommittedDelivery) {
+        LoggingPublisher.publish(delivery.clone());
+        // 只有 `CommittedDelivery::Owned` 会变成 `resource.event`（imported 投递不跨节点再导出，§4）。
+        self.node_link.publish(delivery);
+    }
+}
+
+/// 装配 broker 的发布端口与它的事件队列（组合根在 [`Composition::assemble`] 之前调用）。
+///
+/// 返回的接收端交给 `server::node_link::ResourceRoute::dispatch`（由 `crate::daemon` spawn 并纳入关闭
+/// 序列）；两者必须同时存在，否则事件会在扇出消费者出现之前被丢弃。
+pub fn forked_publisher() -> (Arc<dyn EventPublisher>, mpsc::Receiver<CommittedEvent>) {
+    let (node_link, queue) = NodeLinkPublisher::channel();
+    (Arc::new(ForkedPublisher { node_link }), queue)
 }
 
 #[cfg(test)]
@@ -781,7 +830,7 @@ mod tests {
     use acp_core::model::{AgentId, ProviderEnvBinding, ProviderRefKind};
     use server::local_admin::{
         AdminOutcome, DaemonControl, DaemonStatus, LocalAdminDeps, LocalAdminHandler,
-        LocalAdminRouter, PairingSessions, decode_request,
+        LocalAdminRouter, NoConnections, PairingSessions, decode_request,
     };
 
     /// 每个用例一个独立临时目录（用例结束即删）。
@@ -892,9 +941,10 @@ mod tests {
     #[tokio::test]
     async fn credentials_resolve_through_the_shared_keystore_layout() {
         let dir = TempDir::new("credentials");
-        let composition = Composition::assemble(dev_config(&dir.path, ""))
-            .await
-            .expect("装配");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, ""), Arc::new(LoggingPublisher))
+                .await
+                .expect("装配");
         let keystore = Arc::clone(composition.keystore());
         let clock = Arc::clone(composition.clock());
         let store = composition.audit_store();
@@ -908,7 +958,7 @@ mod tests {
             pairing: Arc::new(PairingSessions::new(
                 Arc::clone(composition.authority()),
                 None,
-                Arc::new(RevocationCloser),
+                Arc::new(NoConnections),
             )),
         });
         let payload = serde_json::to_vec(&serde_json::json!({
@@ -1040,9 +1090,10 @@ mod tests {
     #[tokio::test]
     async fn a_shared_store_handle_blocks_the_checkpoint() {
         let dir = TempDir::new("shared");
-        let composition = Composition::assemble(dev_config(&dir.path, ""))
-            .await
-            .expect("装配");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, ""), Arc::new(LoggingPublisher))
+                .await
+                .expect("装配");
         // 先留一份句柄：`close()` 会消费 `composition`，结尾还要靠它显式关池。
         let store = Arc::clone(&composition.store);
         let extra = composition.attachments();
@@ -1064,9 +1115,10 @@ mod tests {
         let dir = TempDir::new("seed");
         let seeds =
             "[[agents.profiles]]\nagent_id = \"codex\"\ncommand = \"codex-acp\"\ndefault = true\n";
-        let composition = Composition::assemble(dev_config(&dir.path, seeds))
-            .await
-            .expect("装配");
+        let composition =
+            Composition::assemble(dev_config(&dir.path, seeds), Arc::new(LoggingPublisher))
+                .await
+                .expect("装配");
         assert_eq!(
             composition.seed_if_needed().await.expect("首次导入"),
             SeedOutcome::Imported { count: 1 }
@@ -1115,9 +1167,10 @@ mod tests {
             .expect("运行期改动");
         composition.close().await.expect("可关闭");
 
-        let restarted = Composition::assemble(dev_config(&dir.path, seeds))
-            .await
-            .expect("重启装配");
+        let restarted =
+            Composition::assemble(dev_config(&dir.path, seeds), Arc::new(LoggingPublisher))
+                .await
+                .expect("重启装配");
         assert_eq!(
             restarted.seed_if_needed().await.expect("重启"),
             SeedOutcome::AlreadySeeded

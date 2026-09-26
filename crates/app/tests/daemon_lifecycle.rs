@@ -85,7 +85,21 @@ fn a_fresh_start_takes_the_lock_creates_the_endpoint_and_imports_the_seeds() {
         status["publicOrigin"],
         json!("https://acpr-test.example.invalid")
     );
-    assert_eq!(status["listen"], json!([]), "本切片没有网络 listener");
+    // `listen` 是实际绑定的网络监听地址（用例的配置是 `127.0.0.1:0`，因此端口由内核分配）：
+    // 既要与配置同源（loopback），也要真的可达——不是只写在 status 里的字面量。
+    let listen = status["listen"].as_array().expect("listen 是数组");
+    assert_eq!(
+        listen.len(),
+        1,
+        "共享 listener 必须且只能报告一个绑定地址：{listen:?}"
+    );
+    let addr: std::net::SocketAddr = listen[0]
+        .as_str()
+        .expect("listen 项是文本")
+        .parse()
+        .expect("listen 项是 ip:port");
+    assert!(addr.ip().is_loopback(), "{addr}");
+    std::net::TcpStream::connect(addr).expect("status 报告的监听地址必须真的可达");
     assert_eq!(
         status["links"],
         json!([]),

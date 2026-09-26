@@ -9,11 +9,14 @@
 //! 3. 首次种子导入（`seed_state`/`mark_seeded` 单事务）；
 //! 4. 启动恢复（`recover_unsettled`，§6 第 16 条：在取锁与开始监听**之前**）；
 //! 5. 单实例锁 + `instanceId`（`fs4`，见 `crate::lock`）；
-//! 6. 本地管理 endpoint（`LocalEndpoint::bind`，`runtime_dir = None` 表示按 §2.1 读 `XDG_RUNTIME_DIR`）；
-//! 7. 发布锁记录（含 endpoint 定位串）→ 接受循环。
+//! 6. 构建 Node Link 接入面并绑定 `daemon.listen`（TLS `direct` 的 PEM 在绑定前加载，两者失败都拒绝
+//!    启动：`design.md` D10/D11）；
+//! 7. 本地管理 endpoint（`LocalEndpoint::bind`，`runtime_dir = None` 表示按 §2.1 读 `XDG_RUNTIME_DIR`）；
+//! 8. 发布锁记录（含 endpoint 定位串）→ 开放网络接入与本地通道的接受循环。
 //!
-//! 关闭顺序（`SECURITY_DESIGN.md` §12.1）：停接入层（不再接受新连接）→ 取消后台任务 → 停止 Agent →
-//! 刷新存储（`wal_checkpoint(TRUNCATE)`）→ 清理并释放单实例锁。`daemon.stop` 在本序列**开始**时返回
+//! 关闭顺序（`SECURITY_DESIGN.md` §12.1）：停接入层（本地接受循环已退出 + 网络 listener 停止 accept 并
+//! 按 `daemon.shutdown_grace_ms` 排空在途连接）→ 取消后台任务 → 停止 Agent → 刷新存储
+//! （`wal_checkpoint(TRUNCATE)`）→ 清理并释放单实例锁。`daemon.stop` 在本序列**开始**时返回
 //! `{accepted: true}`，因此序列的第一步保留了在途连接的排空窗口（见 [`MIN_DRAIN_MS`]）。
 
 use std::path::Path;
@@ -23,23 +26,31 @@ use std::time::{Duration, Instant};
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
+    Actor, CommittedEvent, NodeId, PeerPublicKey, PortError, SessionId, SessionState, Timestamp,
 };
 use acp_core::ports::{AttachmentStore as _, SessionQuery};
 use acp_core::use_cases::UseCases;
+use identity_auth::Authority;
 use server::local_admin::{
     AdminError, AdminRequest, AdminResponse, DaemonAgent, DaemonControl, DaemonCounts,
     DaemonStatus, LocalAdminDeps, LocalAdminHandler, LocalAdminRouter, LocalErrorCode,
     PairingSessions,
 };
+use server::node_link::{
+    CLAIM_PATH, CatalogRoute, CommandRoute, NodeLinkConfig, NodeLinkConn, PairingHttp,
+    PairingHttpConfig, ResourceRoute, Routes, STATUS_PATH, WS_PATH, WS_SUBPROTOCOL, WsEndpoint,
+    conn::ConnectionRegistry,
+};
 use server::transport::local::{
     AuditHook, EndpointError, InstanceId, LocalConnectionHandlers, LocalEndpoint,
     LocalEndpointConfig, LocalStream, serve_connection,
 };
-use tokio::sync::Notify;
+use server::transport::net::{NetConfig, NetError, NetListener, RouteError, Shutdown};
+use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::compose::{AuditWriter, ComposeError, Composition, RevocationCloser};
+use crate::compose::{AuditWriter, ComposeError, Composition, NodeLinkCloser, forked_publisher};
+use crate::config::Config;
 use crate::config::Loaded;
 use crate::lock::{DaemonLock, LockError, LockRecord};
 use storage_sqlite::session_store::SqliteStore;
@@ -64,6 +75,77 @@ const ACCEPT_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// 关闭序列里等待后台任务自行退出的时间上限。
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 网络接入面（`daemon.listen`/`daemon.tls.*`）的启动失败：绑定、TLS 配置或路由注册。
+///
+/// 三者都是失败关闭：任何一项失败都不得降级为「无网络接入」继续运行（`specs/node-link-listener` 的
+/// R1/R3/R14）。
+#[derive(Debug, thiserror::Error)]
+pub enum NetworkError {
+    /// `NetListener::bind` 失败（地址非法、端口被占用、TLS 配置不可用、明文开发模式与监听地址冲突）。
+    #[error("绑定 `daemon.listen` 失败")]
+    Listener(#[source] NetError),
+    /// 路由注册失败（path 重复或形态非法）：属配置/装配错误，不得静默跳过该端点。
+    #[error("注册接入面路由失败")]
+    Route(#[source] RouteError),
+}
+
+impl NetworkError {
+    /// 不含完整敏感路径的简短说明（TLS 文件路径不进日志，`SECURITY_DESIGN.md` §14.1）。
+    fn message(&self) -> String {
+        match self {
+            Self::Listener(NetError::InvalidListen { .. }) => {
+                "`daemon.listen` is not a valid `ip:port` literal".to_owned()
+            }
+            Self::Listener(NetError::PlaintextDevNonLoopback { .. }) => {
+                "`dev_mode.allow_plaintext` only applies to a loopback `daemon.listen`".to_owned()
+            }
+            Self::Listener(NetError::InvalidPublicOrigin { .. }) => {
+                "`daemon.public_origin` is not a valid `http(s)://host[:port]`".to_owned()
+            }
+            Self::Listener(NetError::InvalidAllowedHost { .. }) => {
+                "`daemon.allowed_hosts` contains an invalid host".to_owned()
+            }
+            Self::Listener(NetError::InvalidTrustedProxy { .. }) => {
+                "`daemon.trusted_proxies` contains an invalid address".to_owned()
+            }
+            Self::Listener(NetError::InvalidLimit { name }) => {
+                format!("the limit `{name}` must not be zero")
+            }
+            Self::Listener(NetError::TlsFileUnreadable { role, .. }) => {
+                format!("the TLS {} file is missing or unreadable", tls_role(*role))
+            }
+            Self::Listener(NetError::TlsPemInvalid { role }) => {
+                format!("the TLS {} file is not a usable PEM", tls_role(*role))
+            }
+            Self::Listener(NetError::TlsInsecurePermissions { role, .. }) => format!(
+                "the TLS {} file permissions cannot be guaranteed",
+                tls_role(*role)
+            ),
+            Self::Listener(NetError::TlsKeyCertificateMismatch) => {
+                "the TLS certificate and private key do not match".to_owned()
+            }
+            Self::Listener(NetError::TlsConfigBuild) => {
+                "the TLS configuration cannot be built".to_owned()
+            }
+            Self::Listener(NetError::Bind { .. }) => {
+                "`daemon.listen` cannot be bound (address in use or not permitted)".to_owned()
+            }
+            Self::Listener(NetError::Serve { .. }) => {
+                "the listener failed while serving".to_owned()
+            }
+            Self::Route(_) => "the ingress route cannot be registered".to_owned(),
+        }
+    }
+}
+
+/// TLS 文件角色的英文名（`serve` 侧的 `describe()` 是给用户看的中文，组合根的错误消息统一用英文分类）。
+fn tls_role(role: server::transport::net::TlsFile) -> &'static str {
+    match role {
+        server::transport::net::TlsFile::Certificate => "certificate",
+        server::transport::net::TlsFile::PrivateKey => "private key",
+    }
+}
+
 /// Daemon 启动或运行失败。全部错误以非零退出码结束，并给出一行结构化 stderr。
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -79,6 +161,9 @@ pub enum DaemonError {
     /// endpoint 创建失败（权限不符、路径被占用、符号链接、旧 socket 仍存活……）。
     #[error("本地管理 endpoint 创建失败")]
     Endpoint(#[source] EndpointError),
+    /// 网络接入面不可用（绑定失败、TLS 配置失败、路由注册失败）。
+    #[error("网络接入面不可用")]
+    Network(#[source] NetworkError),
     /// 关闭时存储未能完成检查点（仍有共享句柄）。
     #[error("关闭时存储未能完成检查点")]
     StoreClose(#[source] ComposeError),
@@ -96,6 +181,7 @@ impl DaemonError {
             Self::Compose(_) | Self::Lock(_) | Self::Endpoint(_) | Self::StoreClose(_) => {
                 LocalErrorCode::Unavailable.as_str()
             }
+            Self::Network(_) => LocalErrorCode::Unavailable.as_str(),
         }
     }
 
@@ -125,6 +211,7 @@ impl DaemonError {
                 "the local admin endpoint rejected a peer".to_owned()
             }
             Self::StoreClose(error) => error.message(),
+            Self::Network(error) => error.message(),
         }
     }
 }
@@ -253,6 +340,8 @@ struct AppDaemonControl {
     instance_id: String,
     data_dir: String,
     public_origin: Option<String>,
+    /// `daemon.status.listen`：实际绑定的网络监听地址（`NetListener::local_addrs` 的文本形式）。
+    listen: Vec<String>,
     started_at: Timestamp,
     started_instant: Instant,
     node_id: NodeId,
@@ -264,8 +353,8 @@ struct AppDaemonControl {
 #[async_trait::async_trait]
 impl DaemonControl for AppDaemonControl {
     async fn status(&self) -> DaemonStatus {
-        // `links` 恒空：Node Link 连接管理器在本切片不存在（§5.2 的字段注记）。
-        // `listen` 恒空：网络 listener（`server::sync`/`server::node_link`）尚未落地。
+        // `links` 恒空：Node Link 的**出站**重连管理器属切片 6（入站连接由 `server::node_link` 的
+        // 连接注册表管理，不进 `daemon.status`，§5.2 的字段注记）。
         DaemonStatus {
             version: self.version.clone(),
             instance_id: self.instance_id.clone(),
@@ -275,7 +364,7 @@ impl DaemonControl for AppDaemonControl {
             uptime_ms: u64::try_from(self.started_instant.elapsed().as_millis())
                 .unwrap_or(u64::MAX),
             data_dir: self.data_dir.clone(),
-            listen: Vec::new(),
+            listen: self.listen.clone(),
             public_origin: self.public_origin.clone(),
             counts: self.counts().await,
             agents: self.agents().await,
@@ -731,6 +820,276 @@ fn spawn_merge_window<M: MergeWindow + 'static>(
     });
 }
 
+/// `app::config` → `server::transport::net::NetConfig`（**唯一的字段映射点**）。
+///
+/// `node_link.*` 的可下调限额在本 WP 仍是「已知但未接线」（`app::config::Config::unwired`）：本函数
+/// 因此不把 `node_link.max_message_bytes` 接进接入层，而取 `NetConfig::default()` 的单消息上限——它与
+/// `NodeLinkConfig::default()` 是同一个 1 MiB，因此「传输层在分配前拒绝」与「`node.ready.limits`
+/// 下发给对端的值」不会分叉。接线 `node_link.*` 属同一收敛任务（键清单的改写需先由主 Agent 确认），
+/// 本函数是该接线的唯一落点。
+pub fn net_config(config: &Config) -> NetConfig {
+    NetConfig {
+        listen: config.listen.clone(),
+        public_origin: config.public_origin.clone(),
+        allowed_hosts: config.allowed_hosts.clone(),
+        trusted_proxies: config.trusted_proxies.clone(),
+        tls: config.tls.clone(),
+        allow_plaintext_dev: config.dev_mode.allow_plaintext,
+        // 网络 listener 的排空宽限与整条关闭序列同源（`daemon.shutdown_grace_ms`）。
+        drain_grace: Duration::from_millis(config.shutdown_grace_ms),
+        ..NetConfig::default()
+    }
+}
+
+/// Node Link 入站面的装配件：连接注册表与三个路由（catalog/resource/command）。
+///
+/// 路由的 node id **必须**是本机（Owner）node id（`Authority::local_node`）：它是
+/// `remoteSessionRef.ownerNodeId` 的判定基准，传错会让**全部** `resource.attach`/`resource.ack` 被拒。
+/// 两者都只从 `authority` 派生（唯一来源），并由全链路集成测试真实跑通 attach/ack 钉死。
+pub struct NodeLinkIngress {
+    registry: Arc<ConnectionRegistry>,
+    resource: Arc<ResourceRoute>,
+    command: Arc<CommandRoute>,
+}
+
+impl NodeLinkIngress {
+    /// 连接注册表（撤销传播与扇出共用同一个句柄）。
+    pub fn registry(&self) -> &Arc<ConnectionRegistry> {
+        &self.registry
+    }
+
+    /// 资源路由（attach/subscribe/ack 与事件扇出）。
+    pub fn resource(&self) -> &Arc<ResourceRoute> {
+        &self.resource
+    }
+
+    /// 命令路由（`command.submit`/`command.status` 与撤销传播）。
+    pub fn command(&self) -> &Arc<CommandRoute> {
+        &self.command
+    }
+
+    /// 装配三个路由（不触碰 listener 与网络）。
+    pub fn assemble(core: Arc<UseCases>, authority: Arc<Authority>) -> Self {
+        let registry = ConnectionRegistry::new();
+        let resource = Arc::new(ResourceRoute::new(
+            Arc::clone(&core),
+            Arc::clone(&registry),
+            authority.local_node().clone(),
+        ));
+        let command = Arc::new(CommandRoute::new(
+            Arc::clone(&core),
+            Arc::clone(&registry),
+            Arc::clone(&resource),
+            authority,
+        ));
+        Self {
+            registry,
+            resource,
+            command,
+        }
+    }
+
+    /// 本路由集的组合件：`Routes` 按序询问，第一个认领的胜出（catalog → resource → command）。
+    fn routes(&self, core: Arc<UseCases>) -> Routes {
+        let parts: Vec<Arc<dyn server::node_link::MessageRoute>> = vec![
+            Arc::new(CatalogRoute::new(core)),
+            Arc::clone(&self.resource) as Arc<dyn server::node_link::MessageRoute>,
+            Arc::clone(&self.command) as Arc<dyn server::node_link::MessageRoute>,
+        ];
+        Routes::new(parts)
+    }
+}
+
+/// 把 Node Link 的全部 path 注册到共享 listener（WSS + 配对 claim/status）并返回路由集。
+///
+/// 这是**唯一的 Node Link 接线点**：组合根（[`NetIngress::start`]）与受控路径全链路集成测试都调它，
+/// 因此「路由顺序」「node id 来源」「配对端点的安全响应头」不会在两处漂移。
+///
+/// 配对端点的四个安全响应头经 `PairingHttp::default_response_headers` **同时**声明给接入层
+/// （`register_post` 的每路径默认响应头）：否则接入层在调用处理器前产生的 413/Host 400 不带这些头。
+pub fn register_node_link_paths(
+    listener: &mut NetListener,
+    core: &Arc<UseCases>,
+    authority: &Arc<Authority>,
+    link: &NodeLinkConfig,
+) -> Result<NodeLinkIngress, NetworkError> {
+    let ingress = NodeLinkIngress::assemble(Arc::clone(core), Arc::clone(authority));
+    let conn = Arc::new(
+        NodeLinkConn::new(
+            Arc::clone(core),
+            Arc::clone(authority),
+            link.clone(),
+            Arc::clone(&ingress.registry),
+        )
+        .with_route(Arc::new(ingress.routes(Arc::clone(core)))),
+    );
+    listener
+        .register_ws(WS_PATH, WS_SUBPROTOCOL, WsEndpoint::handler(conn))
+        .map_err(NetworkError::Route)?;
+    let pairing = Arc::new(PairingHttp::new(
+        Arc::clone(core),
+        Arc::clone(authority),
+        PairingHttpConfig {
+            // 同一份快照：`node_link` 的握手 endpoint 与配对端点都取 `daemon.public_origin`。
+            public_origin: link.public_origin.clone(),
+        },
+    ));
+    let default_headers = pairing.default_response_headers();
+    listener
+        .register_post(CLAIM_PATH, pairing.claim_handler(), default_headers)
+        .map_err(NetworkError::Route)?;
+    listener
+        .register_post(STATUS_PATH, pairing.status_handler(), default_headers)
+        .map_err(NetworkError::Route)?;
+    Ok(ingress)
+}
+
+/// 网络接入面的所有者句柄：listener、事件扇出与命令终态观察共用同一个关闭信号（`design.md` D11）。
+///
+/// 三个任务都由本结构持有；「停接入层」就是触发该信号并等它们结束（超时 abort），因此在关闭路径上
+/// 不遗留 detached task。
+pub struct NetIngress {
+    /// 停止 accept、排空在途连接与退出两个分发循环的信号。
+    shutdown: server::transport::net::ShutdownHandle,
+    /// 实际绑定的监听地址（`daemon.status.listen`）。
+    listen: Vec<String>,
+    command: Arc<CommandRoute>,
+    registry: Arc<ConnectionRegistry>,
+    tasks: Vec<(&'static str, JoinHandle<()>)>,
+}
+
+impl NetIngress {
+    /// 装配并启动网络接入面：绑定 `daemon.listen`（含 TLS 加载）→ 注册全部 path → spawn 三个任务。
+    ///
+    /// 绑定或注册失败时返回 `Err`：调用方必须拒绝启动（**不**降级为「无网络接入」），且此时还没有任何
+    /// 任务被 spawn（listener 在出错路径上随 `listener` 一起 drop，端口立即释放）。
+    pub async fn start(
+        composition: &Composition,
+        event_queue: mpsc::Receiver<CommittedEvent>,
+    ) -> Result<Self, NetworkError> {
+        let mut listener = NetListener::bind(net_config(composition.config()))
+            .await
+            .map_err(NetworkError::Listener)?;
+        // 启动期告警（非 loopback 监听、proxy 模式的明文面、平台权限不可核验）必须出现在启动输出里：
+        // `ListenerWarning` 只描述事实，是否继续由运维决定（它们都不是失败关闭）。
+        for warning in listener.warnings() {
+            tracing::warn!(event = "daemon.listener_warning", warning = %warning, "{warning}");
+        }
+        let core = Arc::clone(composition.use_cases());
+        let authority = Arc::clone(composition.authority());
+        let ingress = register_node_link_paths(
+            &mut listener,
+            &core,
+            &authority,
+            &NodeLinkConfig {
+                public_origin: composition.config().public_origin.clone(),
+                ..NodeLinkConfig::default()
+            },
+        )?;
+        let listen = listener
+            .local_addrs()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<String>>();
+        let (shutdown, signal) = Shutdown::channel();
+        let listener_signal = signal.clone();
+        let mut tasks: Vec<(&'static str, JoinHandle<()>)> = Vec::new();
+        tasks.push((
+            "node_link_listener",
+            tokio::spawn(async move {
+                if let Err(error) = listener.serve(listener_signal).await {
+                    tracing::warn!(
+                        event = "daemon.listener_failed",
+                        error = %error,
+                        "网络接入面在服务期间失败"
+                    );
+                }
+            }),
+        ));
+        tasks.push((
+            "node_link_fanout",
+            tokio::spawn({
+                let resource = Arc::clone(&ingress.resource);
+                let signal = signal.clone();
+                async move { resource.dispatch(event_queue, signal).await }
+            }),
+        ));
+        tasks.push((
+            "node_link_commands",
+            tokio::spawn({
+                let command = Arc::clone(&ingress.command);
+                let signal = signal.clone();
+                async move { command.dispatch(signal).await }
+            }),
+        ));
+        tracing::info!(
+            event = "daemon.ingress_ready",
+            listen = ?listen,
+            "网络接入面已就绪：Node Link 的 WSS 与配对 HTTP 开始接受连接"
+        );
+        Ok(Self {
+            shutdown,
+            listen,
+            command: ingress.command,
+            registry: ingress.registry,
+            tasks,
+        })
+    }
+
+    /// 实际绑定的监听地址（`daemon.status.listen` 的来源）。
+    pub fn listen(&self) -> Vec<String> {
+        self.listen.clone()
+    }
+
+    /// 命令路由句柄（撤销通知缝 `NodeLinkCloser` 装配用）。
+    pub fn command(&self) -> &Arc<CommandRoute> {
+        &self.command
+    }
+
+    /// 连接注册表句柄（撤销传播的观察面；目前只由测试与 `CommandRoute` 使用）。
+    pub fn registry(&self) -> &Arc<ConnectionRegistry> {
+        &self.registry
+    }
+
+    /// 停接入层：触发关闭信号（listener 停止 accept，并按 `NetConfig::drain_grace` 排空在途连接；两个
+    /// 分发循环随之退出）→ 逐个等待任务结束；到 `deadline` 仍未退出的任务被 abort 并记一条警告。
+    pub async fn stop(self, deadline: Instant) {
+        self.shutdown.trigger();
+        for (name, mut handle) in self.tasks {
+            match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut handle)
+                .await
+            {
+                Ok(Ok(())) => tracing::info!(
+                    event = "daemon.task_stopped",
+                    task = name,
+                    "网络接入面任务已结束"
+                ),
+                Ok(Err(error)) if error.is_cancelled() => tracing::info!(
+                    event = "daemon.task_stopped",
+                    task = name,
+                    cancelled = true,
+                    "网络接入面任务已被取消"
+                ),
+                Ok(Err(error)) => tracing::error!(
+                    event = "daemon.task_failed",
+                    task = name,
+                    error = %error,
+                    "网络接入面任务异常结束"
+                ),
+                Err(_) => {
+                    handle.abort();
+                    let _ = handle.await;
+                    tracing::warn!(
+                        event = "daemon.task_stop_timeout",
+                        task = name,
+                        "网络接入面任务未在期限内退出：已强制中止"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// 运行前台 Daemon，直到关闭序列完成。
 ///
 /// 返回 `Ok(())` 表示按 `SECURITY_DESIGN.md` §12.1 的顺序正常关闭；任何启动失败都以 `Err` 结束
@@ -766,8 +1125,11 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         );
     }
     let flush_interval = Duration::from_millis(config.flush_interval_ms);
+    // 事件扇出的分叉在装配 broker 之前建立：发布端口注入 `Composition`，队列交给网络接入面的分发循环
+    // （`design.md` D6）。两者必须同时存在，否则已提交事件会在消费者出现前被丢弃。
+    let (publisher, event_queue) = forked_publisher();
 
-    let composition = Composition::assemble(config)
+    let composition = Composition::assemble(config, publisher)
         .await
         .map_err(DaemonError::Compose)?;
     match composition.seed_if_needed().await {
@@ -808,6 +1170,13 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         Err(error) => return Err(DaemonError::Lock(error)),
     };
 
+    // Node Link 接入面：恢复、种子导入与启动恢复都已完成，而本地通道尚未开放（`design.md` D11）。
+    // 绑定失败（地址非法、端口被占用、TLS `direct` 的 PEM 不可用、明文开发模式与非 loopback 冲突）
+    // 一律拒绝启动，不降级为「无网络接入」运行。
+    let net_ingress = NetIngress::start(&composition, event_queue)
+        .await
+        .map_err(DaemonError::Network)?;
+
     // 连接级拒绝的审计写任务：endpoint 需要 hook，因此先于 endpoint 创建（由本函数持有到关闭序列）。
     let (audit_hook, audit_writer): (Arc<dyn AuditHook>, AuditWriter) = {
         let (sink, writer) = AuditWriter::start(
@@ -844,6 +1213,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         instance_id: instance_id.as_str().to_owned(),
         data_dir: composition.config().data_dir.display().to_string(),
         public_origin: composition.config().public_origin.clone(),
+        listen: net_ingress.listen(),
         started_at: composition.started_at().clone(),
         started_instant: composition.started_instant(),
         node_id: composition.identity().node_id().clone(),
@@ -861,7 +1231,9 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         pairing: Arc::new(PairingSessions::new(
             Arc::clone(composition.authority()),
             composition.config().public_origin.clone(),
-            Arc::new(RevocationCloser),
+            // `node.revoke`/`export.revoke` 持久提交后的通知缝：真实实现（推送 + 4410 关闭），
+            // 不再是「只记日志」的桩（`design.md` D7）。
+            Arc::new(NodeLinkCloser::new(Arc::clone(net_ingress.command()))),
         )),
     });
     let handlers = Arc::new(LocalConnectionHandlers::new(Arc::new(ShuttingDownGate {
@@ -888,8 +1260,9 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         event = "daemon.ready",
         instance_id = instance_id.as_str(),
         endpoint = endpoint_locator.as_str(),
+        listen = ?net_ingress.listen(),
         node_id = composition.identity().node_id().as_str(),
-        "Daemon 已就绪：本地管理通道开始接受连接（同一 OS 用户）"
+        "Daemon 已就绪：本地管理通道与网络接入面开始接受连接"
     );
 
     let outcome = accept_loop(endpoint, Arc::clone(&handlers), &shutdown).await;
@@ -911,6 +1284,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         outcome.connections,
         tasks,
         audit_writer,
+        net_ingress,
         Arc::clone(composition.host()),
         composition,
         lock,
@@ -1015,6 +1389,7 @@ async fn close(
     mut connections: JoinSet<()>,
     tasks: OwnedTasks,
     audit_writer: AuditWriter,
+    net_ingress: NetIngress,
     host: Arc<agent_host::AgentHost>,
     composition: Composition,
     lock: DaemonLock,
@@ -1023,9 +1398,10 @@ async fn close(
     let started = Instant::now();
     let deadline = started + Duration::from_millis(grace_ms.max(MIN_DRAIN_MS));
 
-    // 1) 停接入层：`accept_loop` 在退出时 drop 了 endpoint（接受任务随之结束）——listener 已释放，
-    //    不再接受新连接。
+    // 1) 停接入层：本地接受循环已在 `accept_loop` 退出时释放 endpoint（不再接受新连接），网络 listener
+    //    在这里停止 accept 并按 `daemon.shutdown_grace_ms` 排空在途连接（与本地连接的排空共用同一预算）。
     tracing::info!(event = "daemon.ingress_stopped", "已停止接受新连接");
+    let stopping_ingress = net_ingress.stop(deadline);
 
     // 排空在途连接：`daemon.stop` 的响应此刻仍在写出路径上，必须给它机会落地。
     let drain_ms = deadline
@@ -1038,6 +1414,7 @@ async fn close(
         "等待在途连接结束"
     );
     drain_connections(&mut connections, deadline).await;
+    stopping_ingress.await;
 
     // 2) 取消后台周期任务与信号监听（先于停止 Agent）。
     tasks
