@@ -13,3 +13,4 @@ pub mod error;
 pub mod handshake;
 pub mod pairing;
 pub mod resource;
+pub mod structure;

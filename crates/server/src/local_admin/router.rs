@@ -407,6 +407,8 @@ impl LocalAdminRouter {
             .revoke_export(&actor, &export_id)
             .await
             .map_err(|error| params::map_port_error(OPERATION, error))?;
+        // D7：推送在持久提交**之后**，失败只记日志、不回滚已提交的撤销（实现自身承担日志）。
+        self.deps.pairing.export_revoked(&export_id).await;
         // §5.5：必须在持久状态提交后才返回。撤销时间取读回的持久值，不由本层时钟猜。
         let record = self
             .deps
@@ -1841,6 +1843,60 @@ mod tests {
         assert_eq!(code, LocalErrorCode::InvalidParams);
     }
 
+    /// [R76]：`export.revoke` 在**持久化提交成功之后**经 `ConnectionCloser` 通知 Node Link；
+    /// 重试（`local.not_found`）不得重复通知，也不回滚已提交的撤销。
+    #[tokio::test]
+    async fn export_revoke_notifies_the_connection_closer_after_the_persisted_commit() {
+        let world = TestWorld::new();
+        let router = world.router();
+        result_of(
+            &router
+                .handle(request(Method::ExportCreate, export_params(&world)))
+                .await,
+        );
+        assert!(
+            world.closer.revoked_exports().is_empty(),
+            "创建不产生撤销通知"
+        );
+
+        let revoked = result_of(
+            &router
+                .handle(request(
+                    Method::ExportRevoke,
+                    json!({"exportId": "export-1"}),
+                ))
+                .await,
+        );
+        assert_eq!(revoked["exportId"], json!("export-1"));
+        assert_eq!(
+            world.closer.revoked_exports(),
+            vec!["export-1".to_owned()],
+            "提交成功后必须通知（推送/关闭失败只记日志，不回滚撤销）"
+        );
+        // [R76]/RV1-WP6-F10：通知**当时**回读存储，该行已经是撤销态——「提交后才通知」是持久事实，
+        // 不只是调用顺序看起来对。
+        assert_eq!(
+            world.closer.exports_revoked_when_notified(),
+            vec![true],
+            "通知必须发生在撤销提交之后"
+        );
+
+        let (code, _) = error_of(
+            &router
+                .handle(request(
+                    Method::ExportRevoke,
+                    json!({"exportId": "export-1"}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::NotFound);
+        assert_eq!(
+            world.closer.revoked_exports(),
+            vec!["export-1".to_owned()],
+            "重试不得再走一次撤销与通知"
+        );
+    }
+
     #[tokio::test]
     async fn import_add_is_always_unavailable_and_import_remove_maps_not_found() {
         let world = TestWorld::new();
@@ -2621,6 +2677,12 @@ mod tests {
         assert_eq!(revoked["nodeId"], json!(NODE_ID));
         assert_eq!(revoked["revokedAt"], json!(first_at));
         assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
+        // RV1-WP6-F10：关闭通知**当时**回读存储，两种角色行都已经带撤销时间。
+        assert_eq!(
+            world.closer.nodes_revoked_when_notified(),
+            vec![true],
+            "关闭必须发生在撤销提交之后"
+        );
 
         // ② 重试同一撤销 → `local.not_found`，且不再触发一次关闭。
         world.clock.set("2026-09-18T11:00:00.000Z");

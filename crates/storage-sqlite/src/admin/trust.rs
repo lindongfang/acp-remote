@@ -1,8 +1,8 @@
 //! `TrustStore` 的 SQLite 实现（设备、节点双角色、配对、身份材料）。
 //!
-//! 写集语义逐条对应 `docs/CORE_PORTS_AND_STORAGE.md` §11.6 的第 1–6 条；每条写路径都是一个
+//! 写集语义逐条对应 `docs/CORE_PORTS_AND_STORAGE.md` §11.6 的第 1–9 条；每条写路径都是一个
 //! `BEGIN IMMEDIATE` 事务，状态、集合字段与审计一次提交。读路径（`device`/`devices`/`node`/`nodes`/
-//! `nodes_for`/`peer_key`/`pairing`/`pairing_peer`）不写任何行。
+//! `nodes_for`/`peer_key`/`pairing`/`pairing_peer`/`pairing_for`）不写任何行。
 //!
 //! 配对的两条机器事实都来自**配对记录本身**，不需要在写集里额外携带：
 //!
@@ -10,7 +10,8 @@
 //!    （`PairingPeer::host_binding`），不一致按身份不匹配拒绝。
 //! 2. 节点对端的角色：节点配对行只由 `node.pair.begin --mode owner` 创建，而 `LOCAL_ADMIN_PROTOCOL.md`
 //!    §5.4 明确「`--mode access` 本机没有 `confirm` 调用」（claim 的 `nodeKind` 固定为 `access`），因此
-//!    批准时的对端角色恒为 `NodeKind::Access`，无需在写集里携带（见 `approve_node`）。
+//!    批准时的对端角色恒为 `NodeKind::Access`，无需在写集里携带（见 `approve_node`）；认证收尾推进
+//!    `last_connected_at`（§11.6 第 9 条，见 `advance_node_connected_at`）用的是同一个推导。
 //!
 //! `put_device`/`put_node` 拒绝 `revoked` 状态：撤销是 `revoke_device`/`revoke_node` 的职责，只有它们
 //! 携带 `RevokeReason`（`owned_device`/`owned_node` 的 CHECK 要求 `state = 'revoked'` 与
@@ -23,14 +24,14 @@ use sqlx::sqlite::SqliteRow;
 
 use acp_core::model::PairingSettlement;
 use acp_core::model::{
-    ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, GrantSet, NodeId, NodeKind,
-    NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState, PairingTarget,
-    PeerIdentity, PeerPublicKey, PortError, ScopeSet, Timestamp,
+    Actor, ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, GrantSet, NodeId,
+    NodeKind, NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState,
+    PairingTarget, PeerIdentity, PeerPublicKey, PortError, ScopeSet, Timestamp,
 };
 use acp_core::ports::{
-    DeviceRevocation, DeviceWrite, ExpiryWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
-    PairingClaimWrite, PairingSettlementWrite, PairingWrite, RevokeReason, TrustRecordRef,
-    TrustStore,
+    DeviceRevocation, DeviceWrite, ExpiryWrite, NodeConnectedWrite, NodeRevocation, NodeWrite,
+    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, RevokeReason, TrustRecordRef, TrustStore,
 };
 
 use crate::admin::{
@@ -384,6 +385,27 @@ impl TrustStore for SqliteStore {
                 .db()?;
         let binding = binding.ok_or(StorageError::Corrupt("peer row without its pairing row"))?;
         Ok(Some(pairing_peer_from_row(&row, &binding)?))
+    }
+
+    /// 该对端最近一次配对（`design.md` D3 的握手准入读取）。
+    ///
+    /// 配对表与对端表通过 `pairing_id` 关联：内层子查询按 `created_at`、`pairing_id` 降序取一条
+    /// （两个键都是定宽文本，字典序即时间序；`pairing_id` 作为同时刻的确定性 tie-break），外层仍用
+    /// `PAIRING_COLUMNS` 读同一个表，因此列名不会因 JOIN 而歧义。
+    async fn pairing_for(&self, peer: &PeerIdentity) -> Result<Option<PairingRecord>, PortError> {
+        let sql = format!(
+            "SELECT {PAIRING_COLUMNS} FROM owned_pairing WHERE pairing_id = (\
+             SELECT k.pairing_id FROM owned_pairing_peer k JOIN owned_pairing p \
+             ON p.pairing_id = k.pairing_id WHERE k.peer_kind = ?1 AND k.peer_id = ?2 \
+             ORDER BY p.created_at DESC, p.pairing_id DESC LIMIT 1)"
+        );
+        let row = sqlx::query(&sql)
+            .bind(peer.kind())
+            .bind(peer.id_text())
+            .fetch_optional(&self.pools().read)
+            .await
+            .db()?;
+        Ok(row.as_ref().map(pairing_from_row).transpose()?)
     }
 
     /// §11.6 第 1 条：同 ID 不得换绑公钥，也不得把 `revoked` 改回 `active`。
@@ -911,11 +933,195 @@ impl TrustStore for SqliteStore {
         tx.commit().await.db()?;
         Ok(terminated)
     }
+
+    /// §11.6 第 8 条：消费一个已批准的配对（首次认证成功）。
+    ///
+    /// 三条硬约束都在同一个 `BEGIN IMMEDIATE` 事务里判定：
+    /// - `write.actor` 必须与 `owned_pairing_peer` 的对端**同类同 id**（授权面）；不匹配 →
+    ///   `Conflict(IdentityMismatch)`；
+    /// - 只有 `approved` 能推进到 `consumed`（条件更新带 `AND state = 'approved'`），`terminal_at` 取本次
+    ///   `WriteContext.at`；
+    /// - 已是 `consumed` 且对端一致时幂等成功：**不**覆盖首次 `terminal_at`、**不**重复写审计（同一
+    ///   次消费只留一条留痕）。
+    ///
+    /// 其余状态一律具名拒绝：`expired` → `Expired`、`rejected` → `Consumed`（与 `terminal_conflict`
+    /// 同口径）、`created`/`claimed`/`pending_confirmation` 尚未批准 → `InvalidRequest`。
+    ///
+    /// 状态推进的那条路径还推进对端节点行的 `last_connected_at`（§11.6 第 9 条）：`actor` 为
+    /// `Actor::Node` 时打的就是配对批准写下的 `access` 行，与 `consumed`、`terminal_at`、审计同一事务。
+    /// 幂等分支（已是 `consumed`）不重复推进：那是同一次消费的重复提交，首条提交已经写过认证时间。
+    ///
+    /// 不设有容量门（与 `revoke_*`/`expire_pairings` 同类）：认证收尾是安全动作，不得因容量压力被
+    /// 卡住；它只把配对行推进一个状态、不新增管理行。
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError> {
+        self.writable()?;
+        // 写集里的主体既决定授权、也决定审计归因：两者分歧说明调用方接线错误，失败关闭。
+        if write
+            .context
+            .audit
+            .iter()
+            .any(|row| row.actor != write.actor)
+        {
+            return Err(PortError::InvalidRequest(
+                "consume_pairing actor must match every audit row",
+            ));
+        }
+        let mut tx = self
+            .pools()
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .db()?;
+        let sql = format!("SELECT {PAIRING_COLUMNS} FROM owned_pairing WHERE pairing_id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(write.pairing.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .db()?;
+        let Some(row) = row else {
+            return Err(PortError::NotFound(EntityRef::Pairing(write.pairing)));
+        };
+        let record = pairing_from_row(&row)?;
+        let peer_sql =
+            format!("SELECT {PAIRING_PEER_COLUMNS} FROM owned_pairing_peer WHERE pairing_id = ?1");
+        let peer_row = sqlx::query(&peer_sql)
+            .bind(write.pairing.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .db()?;
+        let Some(peer_row) = peer_row else {
+            // 没有对端行就没有可核对的身份，也无法证明「谁在消费」：按损坏失败关闭。
+            return Err(PortError::Corrupt("pairing has no peer row"));
+        };
+        let peer = pairing_peer_from_row(&peer_row, record.host_binding())?;
+        if !peer_matches_actor(&write.actor, peer.id()) {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+        match record.state() {
+            PairingState::Consumed => {
+                tx.commit().await.db()?;
+                return Ok(record);
+            }
+            PairingState::Approved => {}
+            state if state.is_terminal() => return Err(terminal_conflict(state)),
+            _ => {
+                return Err(PortError::InvalidRequest("pairing has not been approved"));
+            }
+        }
+        let consumed = sqlx::query(
+            "UPDATE owned_pairing SET state = 'consumed', terminal_at = ?2 \
+             WHERE pairing_id = ?1 AND state = 'approved'",
+        )
+        .bind(write.pairing.as_str())
+        .bind(write.context.at.as_str())
+        .execute(&mut *tx)
+        .await
+        .db()?
+        .rows_affected();
+        if consumed == 0 {
+            // 条件更新的回读判定（与 `claim_pairing`/`settle_pairing` 同一手法）：同一事务内的状态
+            // 守卫已排除「从未 approved」，因此这里只可能是并发中的后者已经把行推进到了 `consumed`——
+            // 同一个对端的重复消费，按幂等成功回答（不补审计）。
+            let current = sqlx::query(&sql)
+                .bind(write.pairing.as_str())
+                .fetch_optional(&mut *tx)
+                .await
+                .db()?;
+            let Some(current) = current else {
+                return Err(PortError::NotFound(EntityRef::Pairing(write.pairing)));
+            };
+            let current = pairing_from_row(&current)?;
+            if current.state() == PairingState::Consumed {
+                tx.commit().await.db()?;
+                return Ok(current);
+            }
+            return Err(terminal_conflict(current.state()));
+        }
+        insert_audit_rows(&mut tx, &write.context.at, &write.context.audit).await?;
+        if let Actor::Node { node, .. } = &write.actor {
+            // 节点对端：配对批准写下的角色行恒为 `access`（模块头的第 2 条机器事实）。
+            advance_node_connected_at(&mut tx, node, NodeKind::Access, &write.context.at).await?;
+        }
+        let consumed_record = PairingRecord::try_new(
+            record.id().clone(),
+            record.target(),
+            PairingState::Consumed,
+            record.display_name().map(str::to_owned),
+            record.requested_scopes().clone(),
+            record.requested_grants().clone(),
+            record.secret_digest().clone(),
+            record.host_binding(),
+            record.created_at().clone(),
+            record.expires_at().clone(),
+            record.claimed_at().cloned(),
+            record.approved_at().cloned(),
+            Some(write.context.at.clone()),
+        )?;
+        tx.commit().await.db()?;
+        Ok(consumed_record)
+    }
+
+    /// §11.6 第 9 条：认证成功的收尾写集（重复认证：没有待消费配对）。
+    ///
+    /// 两件事一个事务：把 `(node, kind)` 行的 `last_connected_at` 推进到 `context.at`（只前进不倒退、
+    /// 已存值不得被抹掉），并追加 `context.audit`（该对端的 `node.authenticated` 成功行）。行不存在 →
+    /// `NotFound(EntityRef::Node)`：这条入口是认证收尾，「没有行」意味着调用方拿着一个信任面不存在的
+    /// 对端，静默成功会让管理视图与信任面不一致。
+    ///
+    /// 不设有容量门（同 `consume_pairing` 的取舍）：它只更新一个时间列、不新增管理行。
+    async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError> {
+        self.writable()?;
+        let mut tx = self
+            .pools()
+            .write
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .db()?;
+        advance_node_connected_at(&mut tx, &write.node, write.kind, &write.context.at).await?;
+        insert_audit_rows(&mut tx, &write.context.at, &write.context.audit).await?;
+        tx.commit().await.db()?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
 // 写集内部
 // ---------------------------------------------------------------------------------------------
+
+/// 认证收尾推进某节点角色行的 `last_connected_at`（§11.6 第 9 条）。
+///
+/// 只前进不倒退：该列的语义是「最近一次认证成功时间」，「只前进」的比较口径与 `upsert_node` 的三分支
+/// `CASE` 相同（固定宽度 UTC 毫秒文本，字典序即时间序，§3.2）——放在这里用显式比较表达，避免为
+/// 一个时间列重写整行（`upsert_node` 会一并写回 `revoked_at`/`revoke_reason`，而本路径不得触碰它们）。
+/// 行不存在 → `NotFound(EntityRef::Node)`（调用方已通过信任面的 proof 校验，行缺失就是内部不一致）。
+async fn advance_node_connected_at(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    node: &NodeId,
+    kind: NodeKind,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    let row =
+        sqlx::query("SELECT last_connected_at FROM owned_node WHERE node_id = ?1 AND kind = ?2")
+            .bind(node.as_str())
+            .bind(kind.as_str())
+            .fetch_optional(&mut **tx)
+            .await
+            .db()?;
+    let Some(row) = row else {
+        return Err(PortError::NotFound(EntityRef::Node(node.clone())));
+    };
+    if opt_text(&row, "last_connected_at")?.is_some_and(|stored| stored.as_str() >= at.as_str()) {
+        return Ok(());
+    }
+    sqlx::query("UPDATE owned_node SET last_connected_at = ?3 WHERE node_id = ?1 AND kind = ?2")
+        .bind(node.as_str())
+        .bind(kind.as_str())
+        .bind(at.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    Ok(())
+}
 
 fn fingerprint_text(fingerprint: &Fingerprint) -> String {
     fingerprint.as_str().to_owned()
@@ -939,6 +1145,15 @@ fn terminal_conflict(state: PairingState) -> PortError {
         PortError::Conflict(ConflictKind::Expired)
     } else {
         PortError::Conflict(ConflictKind::Consumed)
+    }
+}
+
+/// 配对的对端行与本次消费主体的身份比对（§11.6 第 8 条）：类别或 id 任一不同都不算一致。
+fn peer_matches_actor(actor: &Actor, peer: &PeerIdentity) -> bool {
+    match (actor, peer) {
+        (Actor::Device { device, .. }, PeerIdentity::Device(id)) => device == id,
+        (Actor::Node { node, .. }, PeerIdentity::Node(id)) => node == id,
+        _ => false,
     }
 }
 

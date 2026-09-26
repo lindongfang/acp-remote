@@ -14,12 +14,12 @@ use sqlx::{Executor, Sqlite};
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v2：新增管理表与 `imported_import` 拆分）。
-pub const FILE_FORMAT_VERSION: i64 = 2;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v3：两张审计表的 `actor_kind`/`action` CHECK 扩宽）。
+pub const FILE_FORMAT_VERSION: i64 = 3;
 /// §7.2：`meta.owned_schema_version` 的已知版本。
-pub const OWNED_SCHEMA_VERSION: i64 = 2;
+pub const OWNED_SCHEMA_VERSION: i64 = 3;
 /// §7.2：`meta.imported_schema_version` 的已知版本。
-pub const IMPORTED_SCHEMA_VERSION: i64 = 2;
+pub const IMPORTED_SCHEMA_VERSION: i64 = 3;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -162,10 +162,10 @@ CREATE TABLE IF NOT EXISTS owned_audit (
   action       TEXT NOT NULL CHECK (action IN (
                  'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
                  'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
-                 'node.paired','node.trust_revoked','node.identity_changed',
+                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
                  'export.created','export.revoked','import.added','import.removed','provider.configured',
                  'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
   actor_id     TEXT NOT NULL,
   via_node_id  TEXT,
   local_principal_ref TEXT,
@@ -405,10 +405,10 @@ CREATE TABLE IF NOT EXISTS imported_audit (
   action       TEXT NOT NULL CHECK (action IN (
                  'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
                  'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
-                 'node.paired','node.trust_revoked','node.identity_changed',
+                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
                  'export.created','export.revoked','import.added','import.removed','provider.configured',
                  'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
-  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
   actor_id     TEXT NOT NULL,
   owner_node_id TEXT, export_id TEXT, session_id TEXT,
   request_id   TEXT,
@@ -434,9 +434,8 @@ CREATE TABLE IF NOT EXISTS imported_import_export (
 /// §7.2 的 v1 → v2 升级：`owned_audit` 的 12-step 表重建（§11.8 第 7 条）。
 ///
 /// SQLite 不能修改既有 CHECK，只能新建表 → 按列拷贝**全部行（含 `audit_id`）** → `DROP` 旧表 →
-/// `RENAME` → 重建索引。下表的列与 CHECK 必须与 `OWNED_SCHEMA_V1` 的 `owned_audit` 逐字一致：
-/// `tests/enum_coverage.rs` 按**新建库**的 DDL 断言 `AuditAction::ALL` 逐值相等，升级库由
-/// `tests/migration.rs` 的升级用例既查 DDL 文本又按行为插入新取值。
+/// `RENAME` → 重建索引。本常量重建出的是 **v2 形状**（下一段 `V3_UPGRADE_OWNED` 再把它扩到 v3 形状的
+/// CHECK）：v1 库必须能连续 `v1 → v2 → v3` 升级，两段各自保持可核算的目标形状。
 ///
 /// `sqlite_sequence` 由 `migrate()` 在重建前后单独回填（`DROP TABLE` 会带走那一行，只按现存行的
 /// `max(audit_id)` 回填会让已清理过尾部行的库序列回退）。
@@ -473,7 +472,8 @@ CREATE INDEX IF NOT EXISTS owned_audit_action ON owned_audit(action, at);
 /// §7.2 的 v1 → v2 升级：`imported_audit` 的 12-step 重建 + `imported_import` 的拆分迁移。
 ///
 /// 顺序不可交换，原因有二：
-/// - `imported_audit` 的重建与 `owned_audit` 同法（列与 CHECK 与 `IMPORTED_SCHEMA_V1` 逐字一致）；
+/// - `imported_audit` 的重建与 `owned_audit` 同法（重建出的是 **v2 形状**的列与 CHECK，随后由
+///   `V3_UPGRADE_IMPORTED` 扩到 v3 形状）；
 /// - `imported_import` 被 `imported_import_export` 的外键引用，而 `foreign_keys = ON` 时 `DROP TABLE`
 ///   会先做隐式 DELETE 并按 `ON DELETE CASCADE` 删掉子行。因此先把原行里的 Export 关联搬进一张
 ///   **没有外键**的过渡表，再重建父表，最后才写进真正的关联表。
@@ -536,6 +536,75 @@ ALTER TABLE imported_import_v2 RENAME TO imported_import;
 INSERT INTO imported_import_export (import_id, owner_node_id, export_id, added_at)
   SELECT import_id, owner_node_id, export_id, added_at FROM imported_import_export_pending;
 DROP TABLE imported_import_export_pending;
+"#;
+
+/// §7.2 的 v2 → v3 升级：`owned_audit` 的 12-step 表重建（与 v2 升级同款手法）。
+///
+/// 只有两处 CHECK 变化，列集合与列顺序**逐字不变**（因此 §9 判据 14 的黄金列清单期望值不动）：
+/// `actor_kind` 增 `'pairing_claimant'`（配对认领方的审计归因），`action` 增
+/// `'node.authenticated'`/`'node.auth_failed'`（节点握手留痕）。`owned_command` **不重建**：
+/// 认领方永不提交命令，它的 `actor_kind` CHECK 保持三值（design D12）。
+const V3_UPGRADE_OWNED: &str = r#"
+CREATE TABLE owned_audit_v3 (
+  audit_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  action       TEXT NOT NULL CHECK (action IN (
+                 'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
+                 'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
+                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
+                 'export.created','export.revoked','import.added','import.removed','provider.configured',
+                 'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
+  actor_id     TEXT NOT NULL,
+  via_node_id  TEXT,
+  local_principal_ref TEXT,
+  target_kind  TEXT NOT NULL, target_id TEXT NOT NULL,
+  outcome      TEXT NOT NULL CHECK (outcome IN ('success','denied','failed')),
+  detail_digest TEXT
+) STRICT;
+
+INSERT INTO owned_audit_v3 (audit_id, at, action, actor_kind, actor_id, via_node_id, local_principal_ref,
+                            target_kind, target_id, outcome, detail_digest)
+  SELECT audit_id, at, action, actor_kind, actor_id, via_node_id, local_principal_ref,
+         target_kind, target_id, outcome, detail_digest FROM owned_audit;
+
+DROP TABLE owned_audit;
+ALTER TABLE owned_audit_v3 RENAME TO owned_audit;
+CREATE INDEX IF NOT EXISTS owned_audit_at ON owned_audit(at);
+CREATE INDEX IF NOT EXISTS owned_audit_action ON owned_audit(action, at);
+"#;
+
+/// §7.2 的 v2 → v3 升级：`imported_audit` 同款重建（两表的 CHECK 必须一起扩宽，否则「本机可写的
+/// 动作在收到的审计元数据上写不进去」）。
+const V3_UPGRADE_IMPORTED: &str = r#"
+CREATE TABLE imported_audit_v3 (
+  audit_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  at           TEXT NOT NULL,
+  action       TEXT NOT NULL CHECK (action IN (
+                 'pairing.created','pairing.claimed','pairing.approved','pairing.rejected','pairing.expired',
+                 'device.authenticated','device.auth_failed','device.revoked','device.scopes_changed',
+                 'node.paired','node.authenticated','node.auth_failed','node.trust_revoked','node.identity_changed',
+                 'export.created','export.revoked','import.added','import.removed','provider.configured',
+                 'authorization.denied','rate_limit.triggered','storage.integrity_failed')),
+  actor_kind   TEXT NOT NULL CHECK (actor_kind IN ('device','node','cli','pairing_claimant')),
+  actor_id     TEXT NOT NULL,
+  owner_node_id TEXT, export_id TEXT, session_id TEXT,
+  request_id   TEXT,
+  local_principal_ref TEXT,
+  target_kind  TEXT NOT NULL, target_id TEXT NOT NULL,
+  outcome      TEXT NOT NULL CHECK (outcome IN ('success','denied','failed')),
+  detail_digest TEXT
+) STRICT;
+
+INSERT INTO imported_audit_v3 (audit_id, at, action, actor_kind, actor_id, owner_node_id, export_id,
+                               session_id, request_id, local_principal_ref, target_kind, target_id,
+                               outcome, detail_digest)
+  SELECT audit_id, at, action, actor_kind, actor_id, owner_node_id, export_id, session_id, request_id,
+         local_principal_ref, target_kind, target_id, outcome, detail_digest FROM imported_audit;
+
+DROP TABLE imported_audit;
+ALTER TABLE imported_audit_v3 RENAME TO imported_audit;
+CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 "#;
 
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
@@ -841,8 +910,8 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 /// 写版本」在拿锁后整体执行，避免与外部进程的写事务在升级锁时冲突。
 ///
 /// 升级判据 =「升级前已有 schema」+ `user_version < FILE_FORMAT_VERSION`：版本号与表结构在同一个
-/// 事务里落盘，所以这两个条件一起出现就等价于「库是 v1 形状」。新建库由两个 DDL 常量直接建成 v2
-/// （`user_version` 此时是 0，不能只按版本判断）；已经是 v2 的库**跳过**全部升级步骤，因此第二次
+/// 事务里落盘，所以这两个条件一起出现就等价于「库是旧形状」。新建库由两个 DDL 常量直接建成当前形状
+/// （`user_version` 此时是 0，不能只按版本判断）；已经是最新版的库**跳过**全部升级步骤，因此第二次
 /// 打开不产生任何 DDL、行级或版本写入（§9.1 的逐字节幂等）。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
     let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
@@ -879,13 +948,22 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
     }
 
     if !new_database && file_version < FILE_FORMAT_VERSION {
-        // v1 → v2（§7.2 的四步）：两张审计表的 CHECK 扩宽与 `imported_import` 的拆分必须在同一个
-        // 事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态（§11.8 第 7 条）。
+        // v1 → v2 → v3（§7.2 的四步升级）：两张审计表的 CHECK 扩宽与 `imported_import` 的拆分必须在
+        // 同一个事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态
+        // （§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此每一段都是 12-step 表重建，且把
+        // 全部行（含 `audit_id`）一起搬过去。
+        //
+        // 序列在**全部**重建之前取一次、之后回填一次：每段重建的 `DROP TABLE` 都会带走
+        // `sqlite_sequence` 里的那一行，分段回填会让前一段的回填结果被后一段再次丢掉。
         let sequences = audit_sequences(&mut *tx).await?;
-        sqlx::raw_sql(V2_UPGRADE_OWNED).execute(&mut *tx).await?;
-        sqlx::raw_sql(V2_UPGRADE_IMPORTED).execute(&mut *tx).await?;
+        if file_version < 2 {
+            sqlx::raw_sql(V2_UPGRADE_OWNED).execute(&mut *tx).await?;
+            sqlx::raw_sql(V2_UPGRADE_IMPORTED).execute(&mut *tx).await?;
+        }
+        sqlx::raw_sql(V3_UPGRADE_OWNED).execute(&mut *tx).await?;
+        sqlx::raw_sql(V3_UPGRADE_IMPORTED).execute(&mut *tx).await?;
         restore_audit_sequences(&mut tx, &sequences).await?;
-        mark_v2_schema_versions(&mut tx).await?;
+        mark_schema_versions(&mut tx).await?;
     }
 
     write_meta_if_absent(&mut tx, META_SERVER_EPOCH, &new_server_epoch()).await?;
@@ -996,13 +1074,11 @@ async fn restore_audit_sequences(
     Ok(())
 }
 
-/// §7.2：v2 升级的最后一步：把两族版本键写成当前常量。
+/// §7.2：升级的最后一步：把两族版本键写成当前常量。
 ///
 /// `write_meta_if_absent` 只在键缺失时写入，升级路径必须显式覆盖既有值（新建库走不到这里，它的版本
 /// 键由 `write_meta_if_absent` 按当前常量写入）。
-async fn mark_v2_schema_versions(
-    tx: &mut sqlx::Transaction<'_, Sqlite>,
-) -> Result<(), StorageError> {
+async fn mark_schema_versions(tx: &mut sqlx::Transaction<'_, Sqlite>) -> Result<(), StorageError> {
     for (key, value) in [
         (META_OWNED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION),
         (META_IMPORTED_SCHEMA_VERSION, IMPORTED_SCHEMA_VERSION),

@@ -44,13 +44,14 @@
         "body": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["selectedProtocolVersion", "connectionId", "ownerNodeId", "serverNonce", "selectedFeatures", "nodeProof"],
+          "required": ["selectedProtocolVersion", "connectionId", "ownerNodeId", "serverNonce", "selectedFeatures", "catalogRevision", "nodeProof"],
           "properties": {
             "selectedProtocolVersion": { "const": 1 },
             "connectionId": { "$ref": "common.schema.json#/$defs/uuid" },
             "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
             "serverNonce": { "$ref": "common.schema.json#/$defs/base64url32" },
             "selectedFeatures": { "$ref": "common.schema.json#/$defs/featureList" },
+            "catalogRevision": { "$ref": "common.schema.json#/$defs/decimalString" },
             "nodeProof": { "$ref": "common.schema.json#/$defs/base64url64" }
           }
         }

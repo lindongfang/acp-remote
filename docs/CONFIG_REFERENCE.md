@@ -9,6 +9,7 @@
 > 修订记录（2026-09-18，0.5）：补齐 `storage.attachment_dir`——`CORE_PORTS_AND_STORAGE.md` §7.1 新增的附件目录配置键，此前只在合同里定义、未落到本表；§5.1 增加「备份与拷贝」说明（WAL 模式下不能只拷主库文件）。
 > 修订记录（2026-09-23，0.6）：核对「配置与管理状态的权威」与 seed 语义——与 `CORE_PORTS_AND_STORAGE.md` §5.3 的 `LocalConfigStore`/`SeedWrite` 一致（首次初始化单事务导入全部合法 profile、空列表也标记完成、初始化完成后数据库是唯一权威、重启不重导、旧配置不得复活已撤销 Export 或已删除 Import），本轮**不改语义**；凭据注入小节的引用由 §11.6 改为 §5.3，管理状态的持久化边界与升级规则改指 §7.2/§7.3/§7.4 与 §11。
 > 修订记录（2026-09-23，0.7）：管理 store 的落盘实现已落地（`crates/storage-sqlite/src/admin/`），标题与「待实现」标记随之去掉；配置键名、默认值与 seed 语义**未变**（仍以本节为唯一权威）。
+> 修订记录（2026-09-26，0.8）：按 `node-link-owner`（切片 5）的实绩写回三处——§1 的 `daemon.allowed_hosts` 行补「`public_origin` 与 `allowed_hosts` 都为空（默认配置）时只接受 loopback 形态 `Host`」这一分支（原先只写了「为空时按 `public_origin` 推导」）并在 §1 末尾补 `public_origin` 的 canonical origin 口径与实现现状；§2/§3 加「本交付版本只解析、不消费」注记（`sync.*` 与 `node_link.*` 均被登记为未接线）。键名、类型、默认值**未变**（仍以本节为唯一权威）。
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 
 本文是 Daemon 运行时配置键名、类型、默认值与可否调整的**唯一权威来源**。协议层限额不在此重复定义：
@@ -44,7 +45,7 @@
 | `daemon.data_dir` | path | 平台用户配置目录下的 `acp-remote/` | SQLite、附件、日志的根目录；权限要求见 `SECURITY_DESIGN.md` §13.2 |
 | `daemon.listen` | string | `"127.0.0.1:8765"` | HTTP/WSS listener 地址；**Sync、Node Link 与两者的配对 HTTP 共用同一个 listener，按 path 路由**（`/sync/v1`、`/node-link/v1`、`/sync/v1/pairing/*`、`/node-link/v1/pairing/*`）。默认只监听 loopback；监听 `0.0.0.0`/`[::]` 必须显式配置并在启动输出中告警 |
 | `daemon.public_origin` | string\\|null | `null` | canonical public origin（`scheme://host[:port]`）；配置了远程入口就必须给出，用于 Origin/Host 校验与配对二维码 |
-| `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host |
+| `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host。**`public_origin` 与 `allowed_hosts` 两者都为空**（默认配置：只监听 loopback）时只接受 loopback 形态的 `Host`（`127.0.0.0/8`、`[::1]`、`localhost`，忽略端口）——这是 `SECURITY_DESIGN.md` §7.2「限制 Host，拒绝任意 Host 转发和 DNS rebinding」在默认配置下的补全，判定与用例在 `crates/server/src/transport/net/host.rs` |
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
 | `daemon.instance_lock` | enum | `"file"` | 单实例锁实现：`file`\\|`ipc`；见 `SECURITY_DESIGN.md` §12.1。**当前切片只接线 `file`**（`fs4` 的 OS advisory 文件锁；两种取值的互斥语义相同），显式写 `ipc` 会被解析但在启动时以 `daemon.config_unwired`（debug 级）注明「已解析但不生效」，不静默换实现 |
 | `daemon.shutdown_grace_ms` | integer | `10000` | 关闭时等待接入层停止、Agent 退出与存储刷新的上限 |
@@ -62,6 +63,7 @@
 | 局域网 / Tailscale / WireGuard 直连 | 非 loopback 地址（同上告警） | 仍需 `direct` + 自备证书（如 `tailscale cert`） | 同上 | 不存在「明文 wss」；`dev_mode.allow_plaintext` 只允许 loopback（§10） |
 
 - `public_origin` 是 Origin/Host 校验、PWA canonical origin 与配对 URL/endpoint 的**权威 host**；Node Link 不依赖 Origin（对端不是浏览器），但仍受 `Host`/`daemon.allowed_hosts` 与 `SECURITY_DESIGN.md` §7.1 的 TLS 边界约束。
+- `public_origin` 的取值口径是 canonical origin（`https://<authority>`），与身份侧 `CanonicalOrigin::parse`（`crates/identity-auth/src/types.rs`，只认 `https://` 前缀）一致。**实现现状（已知偏差）**：`server::transport::net` 的 `HostPolicy` 只要求它能解析成 `http`/`https` 的 origin（`crates/server/src/transport/net/host.rs`），因此 `http://` 字面量能过 Host 边界、却会在配对 URL 派生处失败关闭；本交付版本未收紧这一点，收紧时两处必须同时改。
 
 ## 2. `sync`
 只列出运行时可调项，具体默认值与上限语义以 `SYNC_PROTOCOL.md` §14 为准：
@@ -73,6 +75,8 @@
 | `sync.max_replay_events_per_batch` | `500` | `auth.authenticated.limits.maxReplayEventsPerBatch` |
 
 上表三项是 v1 中唯一允许按部署下调的 Sync 限额；§14 的其余上限是固定常量，不得通过配置放宽或收窄。
+
+**本交付版本未接线（2026-09-26）**：上表三个键与 §3 的 `node_link.*` 一样，当前只被解析（类型由 `serde` 判定）、不被消费——`server::sync` 尚未落地，因此显式配置它们**不生效**（被登记进 `Config::unwired` 并以 debug 级 `daemon.config_unwired` 逐键上报）；判定与理由见 §3 的注记。
 
 ## 3. `node_link`
 
@@ -89,6 +93,8 @@
 | `node_link.heartbeat_interval_ms` | `30000` | `node.ready.limits.heartbeatIntervalMs` |
 
 其余 Node Link 上限（握手超时 15 秒、心跳超时 90 秒、JSON 嵌套深度 64、单对象字段数 1024、单数组元素数 10000、节点名称 128 bytes）是固定 v1 常量。
+
+**本交付版本未接线（2026-09-26，`node-link-owner` 切片 5）**：上表七个键能被解析（仅类型层面），但 `app` 的配置加载**不消费它们**——它们被登记进 `Config::unwired`，启动时以 debug 级 `daemon.config_unwired` 逐键上报，也就是说显式配置该批键在当前交付版本里**不生效**（`net_config` 取 `NetConfig::default()` 的值）。之所以不影响行为：`NetConfig::default()` 与 `server::node_link` 的 `NodeLinkConfig::default()` 都取本节/`NODE_LINK_PROTOCOL.md` §2.5 的默认值，因此「接线后按配置下调」与当前实现的下发值一致；接线（含非法与越界取值的拒绝）属后续切片。
 
 ## 4. `sessions`
 

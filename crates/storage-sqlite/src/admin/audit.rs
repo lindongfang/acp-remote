@@ -51,7 +51,8 @@ fn pending_audit(record: &AuditRecord) -> PendingAudit {
 /// 从 §7.3 的 `(actor_kind, actor_id)` 还原 `Actor`。
 ///
 /// 与 `owned_command` 的还原同款、**同样有损**：审计列只有这两列，设备 scopes 不在表里——审计只记录
-/// 归因，授权不在持久层判定。Node 的复合键按 `"{node}/{access_node}"` 拆回（`Actor::id_text` 的形状）。
+/// 归因，授权不在持久层判定。Node 的复合键按 `"{node}/{access_node}"` 拆回（`Actor::id_text` 的形状）；
+/// 认领方（`pairing_claimant`）的 `actor_id` 就是该配对 id。
 fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> {
     match kind {
         ActorKind::Device => Ok(Actor::Device {
@@ -69,6 +70,9 @@ fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> 
             })
         }
         ActorKind::Cli => Ok(Actor::LocalCli),
+        ActorKind::PairingClaimant => Ok(Actor::PairingClaimant {
+            pairing: decode(id, "owned_audit.actor_id")?,
+        }),
     }
 }
 
@@ -261,5 +265,25 @@ impl AuditStore for SqliteStore {
             records.push(audit_from_row(row)?);
         }
         Ok(records)
+    }
+
+    /// 管理写集的变更水位（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）。
+    ///
+    /// 取 `sqlite_sequence` 里 `owned_audit` 的自增值（即 `audit_id` **曾经**写入过的最大值），不是
+    /// `MAX(audit_id)`：后者在保留期清理把审计行全部删掉后会回退，而 `catalogRevision` 必须跨重启与
+    /// 清理单调。`sqlite_sequence` 的那一行由 SQLite 维护、migration 重建审计表时刻意回填
+    ///（`migrate.rs` 的 `audit_sequences`/`restore_audit_sequences`），因此它不是实现细节而是本水位的
+    /// 权威来源。表/行缺失（未写过任何审计）时取 0。
+    async fn watermark(&self) -> Result<u64, PortError> {
+        let value: Option<i64> =
+            sqlx::query_scalar("SELECT seq FROM sqlite_sequence WHERE name = 'owned_audit'")
+                .fetch_optional(&self.pools().read)
+                .await
+                .db()?;
+        match value {
+            Some(value) => u64::try_from(value)
+                .map_err(|_| PortError::Corrupt("owned_audit sqlite_sequence is negative")),
+            None => Ok(0),
+        }
     }
 }

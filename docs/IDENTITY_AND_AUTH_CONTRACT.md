@@ -200,6 +200,7 @@ impl ClaimedPairing {
 `[决定]`：
 
 - secret 只在创建方（或 claim 方）内存中存在；落库的只有 SHA-256 digest（`owned_pairing.secret_digest`）。
+- `[决定]`（2026-09-26）与 secret **同生同灭**的两个非秘密值：server nonce 与 pairing request id（claim 响应与 Owner 证明的 transcript 字段）。它们不是凭据（wire 上会原样发给对端），因此可经 `Authority::pairing_request_material` 读取；secret 被清除时它们一起消失（同上一次 `None`）。入口登记见 §5.1。
 - 最迟在 `expires_at` 清除；`approved` 配对在首次 WSS 认证成功时提前清除；`rejected` 可为可靠轮询保留到原过期时间，但**不得超过**该时间。
 - 二维码 fragment 与完整配对载荷读取后立即清除，不得进入日志或 analytics（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。
 - Daemon 重启不能凭 digest 恢复 secret：启动时终结「未确认且无法继续验密」的配对，客户端重新发起；已批准的信任记录保留，正常重连不要求重新配对（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.3）。
@@ -258,7 +259,9 @@ pub struct ProofSubmission {
 
 /// 3. 收尾：认证成功后的**唯一**副作用入口（配对转 consumed、last_seen、审计）。
 /// 它**不**直接写库：返回需要推进为 consumed 的配对，由调用方在
-/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集里同一事务提交。
+/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集里同一事务提交——
+/// 有待消费配对（首次认证）用 `TrustStore::consume_pairing`，没有（重复认证）用
+/// `TrustStore::record_node_connected`（2026-09-26 新增，同样推进 last_seen 并写审计）。
 pub struct Completion {
     pub fact: IdentityFact,
     pub at: Timestamp,                          // 同一次写入的审计与 last_seen 用同一时间
@@ -302,8 +305,9 @@ pub struct PeerTrust {
   → `HandshakeError::UntrustedPeer`）：它拦住「adapter 传错快照、用别的对端的公钥验签」这类接线错误。
   失败分类仍统一为对端可见的 `AuthenticationFailed`。
 - `[决定]`（2026-09-24 实现）诊断/测试入口属于公开 API 的一部分：`Authority::challenge_cache_len()`、
-  `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。除 `pairing_status` 外都**不**返回
-  秘密材料，只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
+  `pairing_status`/`failure_count`/`has_secret` 与常量 `MAX_CHALLENGES`。这些入口都**不**返回秘密材料；
+  除 `pairing_status` 与下条登记的 `has_secret` 生产用途（status 端点的 secret 生命周期分支）外，
+  其余只供回归测试与本地诊断使用；新增同类入口时在本节登记，避免公开面静默膨胀。
 - `[决定]`（2026-09-24 实现）`Authority` 的**全部**公开入口都在此登记（避免公开面静默膨胀）：
   `reset_memory()`（启动语义：丢弃全部内存 secret 与挑战缓存并返回清理计数，随后由调用方按 §4.3 终结
   已无法继续验密的配对；**不**触碰持久材料）、`node_public_key()`（async；经 keystore 端口读本节点公钥）、
@@ -311,11 +315,20 @@ pub struct PeerTrust {
   `sign_sync_host_challenge`/`sign_node_link_pairing_owner_proof`/`sign_node_link_challenge`，async；
   各签发一次域分离证明）、`mark_pairing_approved(&PairingId) -> bool`（**调用方在 §11.6 提交成功后**置位
   「该配对已批准」，见 §4.1 与 design D3：内存态绝不超前于已提交状态）、`challenge_cache_len()`、
-  `failure_count`、`has_secret`（测试/诊断，不含秘密材料）、常量 `MAX_CHALLENGES`，以及构造子
+  `failure_count`、`has_secret`（不含秘密材料；除测试/诊断外，也由配对 HTTP 端点的 status 通道用于 secret
+  生命周期分支——本机已不持有其 secret 时终态配对回 200、非终态回 401，见 §13.3）、常量
+  `MAX_CHALLENGES`，以及构造子
   `new(clock, entropy, local_node, keystore)`（组合根装配用，§2「调用方负责装配」）。
   认证收尾对外只有**一个**名字 `complete_auth`（其实现体是 crate 私有的 `complete`）。
   「三个握手入口中唯一带 `await` 的是 `hello`」——另有上列的 `async` 辅助入口（`node_public_key`/四个
   `sign_*`），因此该表述限指三个握手入口。
+- `[决定]`（2026-09-26，配对通道 seam 补全）新增的公开入口同样在此登记（两个都不返回秘密材料）：
+  `verify_node_link_pairing_status(&NodeLinkPairingStatus, &PairingProof) -> Result<(), PairingError>`
+  （用本机内存里该配对的 pairing secret 校验 `node-link-pairing-status/v1` 的 HMAC；secret 缺失与 HMAC
+  不匹配分别是 `SecretUnavailable`/`Proof(Hmac)`，adapter 必须把两者收敛为同一个 401；`owner_node_id`
+  必须等于本节点）与 `pairing_request_material(&PairingId) -> Option<PairingRequestMaterial>`
+  （返回 claim 响应与 Owner 证明需要的 `serverNonce`/`pairingRequestId`，与 secret 同生同灭，见 §4.3）。
+  Sync 侧的设备配对状态查询入口在同一定型下后续补上（同一形状，domain 不同）。
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
 - `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。
 - `[决定]` 三个入口都不读系统时间、不碰 SQLite：持久化事实由返回值带着交给调用方，由写集端口落库（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）。
@@ -339,6 +352,8 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 ```
 
 - `[决定]` core 的 `Actor` 只能由本节的验证输出构造（`Actor::Device`/`Actor::Node`）。`Actor::LocalCli` 只能由本地通道适配器在 OS 用户边界校验后构造（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2）；`localPrincipalRef` 只进审计，**不是** Owner 认证的最终用户身份（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8.3）。
+- `[决定]`（2026-09-26）`Actor::PairingClaimant { pairing }` 只能由**配对 HTTP 端点**在 claim/status 的证明校验路径上构造，且**绑定该配对**（绑定该配对的只读可在校验前，写集只在通过后）：用例面只在 `actor.pairing` 等于本次调用的目标配对时才受理，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绍形状，不让错误变成配对 id 预言机）。它既不是设备也不是节点，永不被 broker 授予任何命令，只用于配对通道与审计归因（`CORE_PORTS_AND_STORAGE.md` §3.5/§4 与 `SECURITY_DESIGN.md` §14.2）。
+- `[决定]`（2026-09-26，seam 补全）claim 路径的**读取顺序与写入口径**：端点在 `verify_claim` **之前**可以先用绑定该配对的 claimant 只读它自己那个配对的记录/对端行/已批准后的授权集（`core::use_cases::pairing_channel_view`）——因为 HMAC 校验必须先拿到配对记录；这次读取**零写入**、不产生审计，也不向对端泄露任何东西。状态推进仍只能经 `claim_pairing` 的写集，且只在 `verify_claim` 通过后提交；status 路径同样先以绑定该配对的 claimant 只读该配对（零写入），再验 proof（`verify_node_link_pairing_status`），proof 失败只回 401。所有 proof/绑定失败在对端一律收敛为同一类失败（§4.5），401 不泄露具体校验差异。
 - `[决定]` `Revoked`/`Unknown` 必须映射为 `auth.device_revoked`/`auth.device_unknown`（节点侧为 Node Link 的对应码），不得降级为 `authorization.scope_denied`——两类的可重试性与客户端行为不同。
 
 ### 5.2 nonce、重放与时钟

@@ -1,7 +1,9 @@
 # ACP Remote 模块架构
 
-> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 与 `app` 只覆盖切片 4 的本地通道与组合根范围，见 §3 `[现状]` 与 `README.md` 的 crate 表）
+> 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin` 与切片 5 的 `transport::net` + `node_link`，`sync`/`acp_facade` 仍待后续切片；`app` 已按切片 4/5 接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.3
+> 修订记录（2026-09-26，node-link-owner 变更 WP8 收口）：§3 状态行、§3 `[现状]` 与 §4.9 `[现状]` 按切片 5 的实绩写回——`server::transport::net` 与 `server::node_link` 已落地（Node Link 只覆盖 Owner 侧入站面，`sync`/`acp_facade` 仍待后续切片），WP1 在本文件留下的「已进入实现、尚未落地」注记随之收敛。
+> 修订记录（2026-09-26，node-link-owner 变更 WP1）：§3.1 新增依赖口径 `[决定]`（Node Link 的 HTTP/WS/TLS 栈与 dev 用自签证书生成、落选候选与解析证据）；§4.9 加注 `node_link` 已进入实现、**尚未落地**；§5 矩阵的 `server` 行把 `acpr-wire` 格改为 ✓，并在表下注记限定该依赖只用于 ACPR-CJ1 digest 前像。
 > 修订记录（2026-09-25，daemon-cli-and-local-admin 切片 4）：§3 状态行与 §4.9/§4.10 把 `server`（本地通道 + `local_admin`）与 `app`（daemon/CLI/组合根）标为已落地、范围仍限本切片；§3.1 记下当前成员数（十二个）；§5 表下注记收敛——`storage-sqlite` 已是矩阵列、`node-link-client` 仍是列外行，并如实说明门禁对「行缺席」是静默的。
 > 修订记录（2026-09-24，identity-auth-and-keystore）：§3 状态行与 §3.1 的依赖口径记录两个身份 crate 已落地、DPAPI wrapper 取 `windows-dpapi 0.2.0`；§4.12 写入选型结论与三条已知代价、并标注 macOS/Linux 后端未实现；§5 矩阵的 `identity-auth`/`identity-keystore` 两行由 `check:boundaries` 按实际 `cargo metadata` 断言。
 > 修订记录（2026-09-24，core-turn-view-fields）：§4.1 补「适配器产 ACP 派生投影、broker 补 `SYNC_PROTOCOL.md` §10.3 身份与会话版本」的职责分工；§4.7 写明 `owned_session.version` 由存储层在事务内实现、core 只按同一规则推导并在提交后比对（不一致 → `PortError::Corrupt` 失败关闭）。
@@ -126,6 +128,8 @@ crates/
 平台安全存储是第二处例外：`identity-keystore` 独立成 crate 是为了隔离平台依赖（原生 keystore API 与 `cfg` 分支），让 `identity-auth` 的状态机在所有平台都能编译与单测（[ADR-0006](./adr/0006-identity-keystore-split.md)）。
 
 > `[现状]`（2026-09-25，`daemon-cli-and-local-admin` 切片 4 已落地）上表中 `server` 与 `app` 已落地，但**只覆盖本切片范围**：`server` 只有 `transport` 的本地通道部分（平台 IPC listener、对端凭据校验、framing）与 `local_admin`（管理信封与方法路由），`sync`/`node_link`/`acp_facade` 仍待后续切片；`app` 的 daemon、CLI 与组合根已落地。其余行保持既有状态（`node-link-client` 仍待切片 6）。另外新增一个不影响上表结构的 crate 目录：`vendor/windows-local-ipc`（切片 4 自研的 Win32 FFI wrapper，path 依赖、不在 workspace `members` 里，见 §3.1）。成员仍按「真正落地时才写入 `members`」推进：当前 `members` 就是本节除 `node-link-client` 之外的十二个，§5 的列是这十二个再加 `vendor/windows-local-ipc`，`node-link-client` 只作为「行」出现（待切片 6 落地、当前没有依赖方），详见 §5 表下注记。
+>
+> （2026-09-26 更新，`node-link-owner` 变更切片 5 已落地）`server` 的范围扩为四条路径：在上一段的 `transport::local` 与 `local_admin` 之上，新增 `transport::net`（默认 loopback 的共享 HTTP/WSS listener、TLS `proxy`/`direct`、`Host` 边界与 path 路由）与 `node_link`（Owner 侧配对 HTTP、节点握手、Export catalog、resource、command 与撤销传播），由 `app` 组合根接线；`sync`/`acp_facade` 与 `node-link-client` 仍待后续切片。
 
 ### 3.1 Workspace 基线
 
@@ -148,6 +152,13 @@ crates/
   - 单实例锁（`Cargo.toml` 的 `fs4`、`daemon-cli-and-local-admin` 变更的 design.md 决策 4）用 OS advisory 文件锁：选 `fs4 1.1`，按 `docs/SECURITY_DESIGN.md` §20 的四个判据核验——**语义**：unix `flock(LOCK_EX)`、Windows `LockFileEx(LOCKFILE_EXCLUSIVE_LOCK)`，公开 API 只有独占锁与 `try_lock`/`TryLockError`（safe API，unsafe 收敛在 crate 内部）；**许可证** `MIT OR Apache-2.0`（在 `deny.toml` allow 列表内）；**MSRV** 显式声明 `1.75.0`（≤ 1.85）；**维护状态** 1.1.0 发布于 2026-04-28，Windows 侧要求 `windows-sys ^0.61`（与本仓库 lock 里已有的 `0.61.2` 同族，不新增版本族）。落选候选 `fd-lock 4.0.4` 的三条硬伤：未声明 `rust-version`（MSRV 不可核）、最近发版 2025-03-10、API 是读写双分支（`RwLock::read` 走 `LOCK_SH`，与「单实例锁必须互斥」的语义不匹配，且 Windows 侧只锁 1 字节）。
   - 调用点约束：固定工具链的 `std::fs::File` 自带 `lock`/`try_lock`（1.89 稳定），与 `fs4::FileExt` 同名且方法解析优先级更高；本仓库 MSRV 是 1.85，因此必须写全限定调用（`fs4::FileExt::try_lock(&file)`）或显式 `use fs4::FileExt;` 并避免落入 std 的同名方法——用了 std 的版本就等于把 MSRV 抬到 1.89（需单独决定）。
   - `vendor/windows-local-ipc`（`daemon-cli-and-local-admin` 变更的 design.md 决策 3）以**仓库内 path 依赖**登记：写在根 `Cargo.toml` 的 `workspace.exclude`，因而不是 workspace 成员、不继承 `unsafe_code = "forbid"`（它必须写 `unsafe`）、不发布；`server` 是它唯一的依赖方，§5 矩阵因此把它登记为「列」。`deny.toml` 的 `[sources]` 注记说明 path 来源为什么不经 registry/git 判定，以及它的许可证与 wildcard 判定由哪几条承担。
+- `[决定]`（2026-09-26，`node-link-owner` 变更 WP1）Node Link 的 HTTP/WS/TLS 依赖口径（版本与 feature 只维护在 `[workspace.dependencies]`，本行与它保持一致；四判据核验的命令、原始输出与来源记录见 `openspec/changes/node-link-owner/reports/wp1-deps.log`）：
+  - **`axum 0.8`**（HTTP 路由 + `axum::extract::ws` 的 WebSocket upgrade，底层是 `tokio-tungstenite`）：`MIT`；解析版本 0.8.9 显式声明 `rust-version = 1.80`（≤ 1.85）；2026-04-14 发布，仓库活跃。默认 feature 保留 axum 自己的基线（`http1`/`tokio`/`json`/`tracing` 等），只增量开启 `ws`；axum 的 ws 不依赖 `tungstenite` 的压缩 feature，因此「协商到 `permessage-deflate` 必须拒绝」由 upgrade 层显式判定，不靠关某个 feature。
+  - **`rustls 0.23` + `tokio-rustls 0.26`**（TLS `direct` 模式的终止）：许可证分别是 `Apache-2.0 OR ISC OR MIT` 与 `MIT OR Apache-2.0`；两者都声明 `rust-version = 1.71`；2026-09-14 / 2026-09-04 发布，维护活跃。**provider 固定为 rustls 自带的 `ring`**：rustls 的默认 provider 是 `aws-lc-rs`，它经 `aws-lc-sys` 的 build-dependency `cmake` 要求 CMake（Windows x86_64 还需 NASM 或 `prebuilt-nasm`），会把「固定 Rust 工具链即可构建」（`rust-toolchain.toml` 的约定）变成「还要装构建工具」，而且本机与 CI 判定会分叉（本机 `cmake`/`nasm` 都不存在）。`ring 0.17.14` 的许可证是 `Apache-2.0 AND ISC`（两分支都在 `deny.toml` 的 allow 内）、`rust-version = 1.66.0`，且 crates.io 包内带有预生成的汇编/对象文件，构建只需 C 编译器（本机实测通过，见日志）。因为 feature 是加法的，`rustls` 与 `tokio-rustls` **两处都必须** `default-features = false`（只关一侧仍会被 `rustls/aws_lc_rs` 拉回 aws-lc-rs）。落选候选：`aws-lc-rs`（构建前提，见上）；纯 Rust 的 `rustls-rustcrypto`（最新仅 `0.0.2-alpha`，2024-04-24 后再无发布，0.0.x 不足以承担 TLS 安全边界）；`axum-server 0.8`（许可证 `MIT`、`rust-version = 1.82`，本身不违反四判据，但它的 `tls-rustls` feature 写死了 `rustls/aws-lc-rs`，只能经 `tls-rustls-no-provider` 绕过，且它替调用方拥有 listener，与 D2 的「`transport::net` 自己拥有 listener 与 TLS 终止」冲突）。
+  - **PEM 解析用 `rustls-pki-types 1` 的 `pem` 模块**（`rustls_pki_types::pem::PemObject`）：许可证 `MIT OR Apache-2.0`、`rust-version = 1.60`、2026-07-23 发布。D1 当初列的候选 `rustls-pemfile 2` 已被上游**归档**（其 README 明确说明能力已并入 `rustls-pki-types` 并给出迁移对照），而该模块本就是 rustls 的传递依赖，因此不再登记这层已冻结的中间层。
+  - 测试用自签证书**不提交私钥材料**：`crates/server/tests` 用 dev-dependency `rcgen 0.14` 现算 ECDSA P-256 自签证书与私钥（本次解析到 0.14.7：`rust-version = 1.71`；`0.14.8` 起声明 1.88，MSRV 感知解析因此选 0.14.7）。落选方案是提交一份「仅测试用」PEM fixture：那需要给 `.gitleaks.toml` 加允许清单条目（它现在为空），属安全策略变更，且仍要维护固定材料。
+  - 解析与编译证据：`cargo metadata` 解析出 327 个包，其中 `rust_version > 1.85` 的为 0 个，且 `aws-lc-rs`/`aws-lc-sys`/`cmake` 均不在解析图中；`cargo check --locked -p server --all-targets --all-features` 在固定工具链 1.98.1 上通过（`ring` 的原生部分由 `cc` 现场编译出 16 个目标文件与静态库）。许可证对账（本地近似 `cargo-deny licenses`）后，`deny.toml` 的 `[licenses] allow` **无需新增条目**；这批依赖在 WP2 起被 `server::transport::net` 与 `server::node_link` 消费（WP1 只登记与核验）。
+  - 同批登记的还有 §5 的 `server` → `acpr-wire` 格：`node-link-protocol` 只再导出 wire 值对象、不再导出 `cj1`，而 `payloadDigest`/`snapshotDigest` 的前像（ACPR-CJ1）只能有一份实现，因此 `server::node_link` 直接依赖 `acpr-wire`；除 digest 计算外不得使用其业务类型（§5 表下注记）。
 - `[workspace.lints]` 默认 `clippy::all = "deny"`，并保持 `AGENTS.md` §8 要求的 `cargo clippy --workspace --all-targets --all-features -- -D warnings` 可直接通过。
 - 保持默认 `panic = "unwind"`：`AGENTS.md` §7 要求正常路径无 `unwrap()`/`expect()`，而测试与 `cargo test` 需要 unwind；不通过 `panic = "abort"` 掩盖失败。
 - workspace 成员随实现增量增长：每个 crate 真正落地时才加入 `members`，最终为 §3 列出的十三个（ADR-0007 引入 `acpr-wire` 后由十二改为十三）；不得为凑齐列表创建只有占位实现的空 crate。切片 4 落地后是十二个：§3 除 `node-link-client` 之外的十二个都在 `members` 里。`vendor/windows-local-ipc` 不是成员（`workspace.exclude`，上一段的依赖口径）。
@@ -223,7 +234,7 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 
 签名以 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5 为准。
 
-管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（唯一按合同的例外是 `import.add`：本切片没有可用的 Node Link catalog 快照，它恒返回 `local.unavailable`）；仍未实现的是 `server::sync`/`server::node_link`/`server::acp_facade` 与 `node-link-client`。业务决定仍由 core 用例拥有。
+管理状态的端口签名在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3，SQLite 落盘实现在 `crates/storage-sqlite/src/admin/`（配对确认、撤销与审计、Import 删除与交付清理都是完整管理写集的一次原子提交，§9 判据 23–29）。Daemon/CLI 接线与 `server` 的**本地**入站适配器（`server::local_admin`）已随切片 4 落地（`identity-auth`/`identity-keystore` 见 §4.8/§4.12，`app` 见 §4.10），因此这些管理能力已可经本地通道端到端使用（两处按合同的例外：`import.add` 需要 Owner 的 catalog 快照，而提供该快照的 Access 侧 `node-link-client` 属切片 6，因此它恒返回 `local.unavailable`；`node pair --mode access` 返回 `local.unsupported`）；仍未实现的是 `server::sync`/`server::acp_facade` 与 `node-link-client`（`server::transport::net` 与 `server::node_link` 的 Owner 侧入站面已随切片 5 落地，Access 侧出站属切片 6，见 §4.9）。业务决定仍由 core 用例拥有。
 
 `SessionStore` 必须提供单一事务提交 API，不能让 Broker 分别调用 `SessionRepository`、`EventJournal`、`CommandDeduper` 后假设三次调用天然原子。`SessionEndpoint` 表示带生命周期的会话句柄；本地与远程 backend 都实现相同接口，但不得把进程、socket 或 wire DTO 暴露给 core。
 
@@ -350,7 +361,7 @@ port/          # keystore 端口定义（trait），实现见 identity-keystore
 
 ### 4.9 `server`
 
-> `[现状]`（2026-09-25，切片 4 已落地）本 crate 已落地，但只有两条路径：`server::transport::local`（endpoint、对端凭据校验、framing、channel 绑定与未完成请求上限）与 `server::local_admin`（管理信封与方法路由）；`sync`/`node_link`/`acp_facade` 尚无实现。`acp_facade` 缺席期间 Daemon 对 `0x02` 连接的处理（完成 framing 校验后立即关闭并记结构化警告）记在 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §3.1 的实现状态注记里；本节的职责划分与下述约束不变。
+> `[现状]`（2026-09-26，切片 4 与切片 5 已落地）本 crate 已落地的路径有四条：`server::transport::local`（endpoint、对端凭据校验、framing、channel 绑定与未完成请求上限）、`server::local_admin`（管理信封与方法路由）、`server::transport::net`（默认 loopback 的共享 HTTP/WSS listener、TLS `proxy`/`direct` 两种终止方式、`Host` 边界，以及 `/sync/v1`、`/node-link/v1`、两类 `/pairing/*` 的 path 路由）与 `server::node_link`（配对 HTTP、节点握手、catalog、resource、command 与撤销传播，由 `app` 组合根按 §4.10 接线）。**仍未落地**：`sync`/`acp_facade` 待后续切片；Node Link 也只覆盖 Owner 侧入站面，Access 侧的出站重连管理器属切片 6 的 `node-link-client`。`acp_facade` 缺席期间 Daemon 对 `0x02` 连接的处理（完成 framing 校验后立即关闭并记结构化警告）记在 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §3.1 的实现状态注记里；本节的职责划分与下述约束不变。
 
 唯一职责：承载所有入站协议 adapter，类似 Pi server 对连接、attachment 和应用服务路由的集中承载，但不把各协议合并成一个 wire format。
 
@@ -372,7 +383,7 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 
 ### 4.10 `app`
 
-> `[现状]`（2026-09-25，切片 4 已落地）`app` 已落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
+> `[现状]`（2026-09-25 切片 4 已落地；2026-09-26 按切片 5 补充接线范围）`app` 已落地：daemon 的启动/关闭序列与单实例锁（含 `instanceId`）、配置加载与首次种子导入、周期任务（清理/刷盘）装配（Node Link 重连按该变更 design 的非目标只留装配点），以及下面列出的全部 CLI 子命令与 `doctor`/`acp-stdio`。切片 5（`node-link-owner`）另把网络接入面接了进来：`server::transport::net` 的 listener 与 `server::node_link` 的三个路由（catalog/resource/command）随 Daemon 启动，关闭序列先同步停掉网络 accept 再走后续步骤；Node Link 的**出站**重连管理器仍属切片 6，`daemon.status.links` 因此恒为空。二维码图形渲染按 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 的合同解读在本切片记「终端不支持」，CLI 只打印 `pairingUrl` 文本。
 
 唯一职责：发布 `acp-remote` 可执行程序并作为组合根。它装配 daemon、CLI、server、backend、配置、单实例锁、健康状态和 graceful shutdown，但不得承载业务规则。
 
@@ -475,7 +486,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 | storage-sqlite | ✓ |  |  | — |  |  |  | ✓ |  |  |  |  |  |
 | identity-auth | ✓ |  |  |  | ✓ | ✓ | ✓ |  | — |  |  |  |  |
 | identity-keystore |  |  |  |  |  |  |  |  | ✓ | — |  |  |  |
-| server | ✓ | ✓ |  |  | ✓ | ✓ |  |  | ✓ |  | — |  | ✓ |
+| server | ✓ | ✓ |  |  | ✓ | ✓ |  | ✓ | ✓ |  | — |  | ✓ |
 | app | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |  |
 | windows-local-ipc |  |  |  |  |  |  |  |  |  |  |  |  | — |
 
@@ -485,6 +496,7 @@ CLI 通过 core use case 或受认证的本地管理 transport 工作，不能�
 
 - 三个 protocol crate 彼此也不直接依赖；它们共享的 transcript codec 结构与表驱动校验来自叶子 crate `acpr-transcript`（协议 crate 只导出自己的 `DOMAINS` 表并调用它），跨协议共用的 wire 值对象与字段校验机制来自叶子 crate `acpr-wire`（`docs/adr/0007-shared-wire-value-crate.md`），包含 ACP raw 的 Node Link 字段只是受约束 bytes/string，不通过 Rust 类型依赖 ACP DTO。
 - `storage-sqlite` 依赖 `acpr-wire` **只为** §7.3/§9.9 要求的 `payload_digest = base64url(SHA-256(ACPR-CJ1(payload_json)))`：ACPR-CJ1 是跨 Sync/Node Link 的共享机制，只能有一份实现（v1 早期因为存储层手写摘要而与协议侧口径不一致）；除该函数外不得使用 `acpr-wire` 的业务类型，也不得经它访问协议语义。
+- `server` 对 `acpr-wire` 的依赖**只为** ACPR-CJ1 规范 JSON 与 digest 计算（`payloadDigest`/`snapshotDigest` 前像的唯一实现，`NODE_LINK_PROTOCOL.md` §12.4）：`node-link-protocol` 只再导出 wire 值对象、不再导出 `cj1`（`docs/adr/0007-shared-wire-value-crate.md`），因此该实现在 `server::node_link` 侧只能直接取自 `acpr-wire`；除该模块外不得使用 `acpr-wire` 的业务类型，也不得经它访问协议语义。登记时机与理由见 §3.1 的 `[决定]`（2026-09-26）。
 - `identity-auth` 依赖两个协议 crate 与 `acpr-transcript` 仅用于 transcript 编解码与 domain/字段 tag 定义：它不复制这些常量，也不使用协议 crate 的业务类型或业务规则。
 - `server` 对 `identity-auth` 的依赖只用于完成连接认证；业务授权仍由 core 对 `Actor + grant facts` 执行。
 - `app` 可以依赖全部具体 crate，但只做装配；任何其他 crate 不得依赖 `app`。
