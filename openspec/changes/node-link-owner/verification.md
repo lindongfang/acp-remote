@@ -255,6 +255,12 @@
 | 3.16 | reviewer / review / work-package | 0161a7782f12e29278aa311b1e1784b08d4ae8b9 | REVIEW / RV1-WP8 | reports/rv1-wp8.md | PASS / NEW | 独立检视（reviewer 8d784dc9）；2 MINOR + 2 观察见 Review Findings；RV3-WP7-F1/F2/F3 附带核对生效 |
 | RV1-WP8-F1/F2/O1 | main / fix / work-package | a882c06f71c8c4c2e4b509eb175d77d54e1cb921 | DELIVERY / RV1-WP8 | reports/rv1-wp8.md | PASS / NEW | 主 Agent 当场修复（限定语补齐、修订记录顺序、例外量词）；npm run check 绿；候选 review（6.4）核对 |
 | 6.4 | reviewer / review / candidate | 92fb9fdc22938c0ad743d7dec7a1d0932b38cde5 | REVIEW / RV2-DU1 | reports/rv2-du1.md | PASS / NEW | 候选 merge 检视（reviewer b35b3fef）：无冲突/无遗漏/无夹带/门禁未弱化、主 Agent 修复与各 RV 待核对项在候选树生效；F1（工件 doc-links，已修复并复绿）/F3/F4 已处理，F2 按既定同步口径 |
+| 6.6 | integrator / merge / main | 654c0c1944c75bbc016eab775f3f3ff8aca9bf35 | DELIVERY / NOT_APPLICABLE | reports/du1-integrate.md | PASS / NEW | ff-only 合入（premerge 门禁 PASS 后）；refs 未移动、is-ancestor 成立；未推送/未回滚 |
+| 6.7 | integrator / merge / main | 654c0c1944c75bbc016eab775f3f3ff8aca9bf35 | CHECK / PV1/PV2/PV5 | reports/du1-integrate.md | PASS / NEW | 主分支检查：973 passed / 394 passed；flake 用例本轮 PASS 未复现 |
+| 6.8 | main / merge / main | 654c0c19 | REVIEW / RV2-DU1（复用） | reports/rv2-du1.md | NOT_APPLICABLE / REUSED | ff 合入无新增差异，按计划由主 Agent 记录依据（原 review ID RV2-DU1 已核实候选树与源一致），不重复同范围审查 |
+| 7.1 | coder / implement / final-main | 392efb791015b6a86a99ec9fd2ead45fe8c2881a | CHECK / PV1 | reports/final-alternative-checks.md | PASS / NEW | `npm run verify` 退 0；15 子检查逐个 0；workspace 973 passed / 0 failed / 2 ignored；du1-pv1.log「最终替代验证轮次」 |
+| 7.1 | coder / implement / final-main | 392efb791015b6a86a99ec9fd2ead45fe8c2881a | CHECK / PV2/PV3/PV4 | reports/final-alternative-checks.md | PASS / NEW | boundaries 退 0；PV3 309/0/0；PV4 85/0/0 |
+| 7.1 | coder / implement / final-main | 392efb791015b6a86a99ec9fd2ead45fe8c2881a | CHECK / PV5 | reports/final-alternative-checks.md | PASS / NEW | 本机 394 passed / 0 failed；约定形式 e2e 2/2；无资源残留 |
 | WP6 coder 自报登记 | 8bc2ff3 | worker 1248254e | wp6-handoff.md「需要知晓的设计事实」 | report-only：① `session.read`/`session.mode.list`/`session.config.list` 本切片显式回 `command.unsupported`（结果形状属切片 6 正文路径；符合「不虚报」不变量）——主 Agent 接受并记录，RV1-WP6 核对；② `session.create` 幂等只在进程内（core 不写 owned_command）——**持久化幂等缺口**，RV1-WP6 重点评估是否需在切片内补；③ in-flight 越限复用 `rate_limited`；④ capability 维度在适配层不可判定（如实失败）；⑤ compose.rs 连带已列入检视 | 记录；②待 RV1-WP6 裁决 | — |
 
 ## Failures and Retests
@@ -315,6 +321,9 @@ alternative_checks:
 - DU1 候选（attempt 2，权威）：base `94a64e1f` + 源 `4c5a3f00` → 候选 `92fb9fdc22938c0ad743d7dec7a1d0932b38cde5`（`merge --no-ff`，无冲突，候选树与源逐字节一致）。候选检查：PV1/PV2/PV5 全 exit 0（973 passed / 394 passed；证据 `reports/du1-candidate.log` + `reports/du1-integrate.md`）。attempt 1（`8d87df18`，源 `f02d2565`）因 check:docs（rv1-wp8.md 的 §7.2 归属）被取代，已按裁决修源并重建。
 - DU1 候选（attempt 3，当前）：源 `5f62e77f`（仅 openspec/ 规划工件同步，零代码变化）→ 候选 `654c0c1944c75bbc016eab775f3f3ff8aca9bf35`；PV1/PV2 在新候选重跑 exit 0（含 check:docs 对工件内容的扫描），PV5 按「零代码变化 + openspec/ 不在测试面」REUSED（依据见 `reports/du1-integrate.md` §0）。
 - 集成执行者：worker 子 Agent c51411bd（独立集成 worktree `D:\Project\acp-remote-wt\nl-owner-integration`）。
+- DU1 合入（6.6，执行者 8fd1ca8f）：前置障碍处理（DEVELOPMENT_PLAN.md 行尾噪声恢复 + 未跟踪规划目录移至备份）→ `git merge --ff-only 654c0c19` → main = `654c0c19`（与候选同一提交对象）；防竞态核实（refs 未移动、is-ancestor 成立）。主分支检查（6.7 前半，均为 NEW）：PV1/PV2/PV5 全绿（973 passed / 394 passed，flake 用例本轮 PASS 未复现）。记录见 `reports/du1-integrate.md` §10。
+- 合入后规划记录回写（主 Agent）：备份目录的最新 `verification.md`/`tasks.md` 覆盖回 main 并提交 `392efb791015b6a86a99ec9fd2ead45fe8c2881a`（纯 openspec/ 工件）；`du1-integrate.md` 保留跟踪版本（较新，含 round 3 + §10）；15 个被 gitignore 的 .log 原始证据已从备份恢复到主检出工作区（不入库为既定惯例）。
+- 6.8（主分支差异检视）：合入为 ff 到候选，无新增差异——由主 Agent 记录依据（原 review = RV2-DU1，候选树与源逐字节一致已经其核实），不重复同范围审查。
 
 ## Test Design and Authoring
 

@@ -75,13 +75,13 @@
 - [x] 6.3 DU1；检查执行者；前置：6.2。完成候选 Project Verify：[PV1]（`npm run verify`）与 [PV2]（`check-crate-boundaries`），将版本、范围、结果及有效复用依据关联到 `verification.md`。
 - [x] 6.4 DU1；独立 reviewer；前置：6.2，可与 6.3 并行。只读检视固定候选的新增交互与冲突解决，修复后独立复核，记录隔离设置、版本及报告（`reports/rv2-du1.md`）。
 - [x] 6.5 DU1；前置：固定候选及所需资源。E2E `not-applicable`：核对计划中的理由、依据与 `downgrade_approval` 记录有效，并完成适用替代检查的候选轮次——候选上执行 [PV5] 受控路径全链路集成测试（`cargo test --locked -p server -p app --all-features` 的相关用例，本机 Windows）并把原始日志写入 `reports/pv5-windows-nodelink.log`；连续失败计入 `x-agentic.e2e.maxAttempts`（默认 3），达到后停止自动重跑并交用户决策。
-- [ ] 6.6 DU1；合并负责人；前置：6.3、6.4、6.5。确认候选检查、独立 review 与替代验证通过，核实仓库规则与本地主分支基线，并运行 `npx --quiet --no-install openspec-agentic workflow check --change node-link-owner --stage premerge --planning-root <权威规划根> --json`（非 PASS 不合入）；以条件更新或串行合并机制防止竞态，直接合入 `refs/heads/main`，无须再次询问用户，记录实际提交；基线变化时重开受影响候选任务。
-- [ ] 6.7 DU1；检查执行者；前置：6.6。核对实际主分支结果与候选一致性，完成 [PV1]/[PV2] 主分支回归；有效复用逐项记录原证据及适用性。
-- [ ] 6.8 DU1；独立 reviewer；前置：6.6。独立检视合并新增差异；无新增差异由主 Agent 记录依据及原 review ID，不强制同范围重复审查，可与 6.7 并行。
+- [x] 6.6 DU1；合并负责人；前置：6.3、6.4、6.5。确认候选检查、独立 review 与替代验证通过，核实仓库规则与本地主分支基线，并运行 `npx --quiet --no-install openspec-agentic workflow check --change node-link-owner --stage premerge --planning-root <权威规划根> --json`（非 PASS 不合入）；以条件更新或串行合并机制防止竞态，直接合入 `refs/heads/main`，无须再次询问用户，记录实际提交；基线变化时重开受影响候选任务。
+- [x] 6.7 DU1；检查执行者；前置：6.6。核对实际主分支结果与候选一致性，完成 [PV1]/[PV2] 主分支回归；有效复用逐项记录原证据及适用性。
+- [x] 6.8 DU1；独立 reviewer；前置：6.6。独立检视合并新增差异；无新增差异由主 Agent 记录依据及原 review ID，不强制同范围重复审查，可与 6.7 并行。
 
 ## 7. Final E2E
 
-- [ ] 7.1 全变更；主 Agent；前置：主分支检查（6.7、6.8）。执行最终替代验证（`not-applicable` 路径）：在最终主分支版本上重跑 [PV1]（`npm run verify`）、[PV3]/[PV4] 与 [PV5] 受控路径全链路集成测试，逐项记录命令、版本、退出码与日志路径（`reports/du1-pv1.log`、`reports/pv5-windows-nodelink.log`、`reports/wp7-integration.log`），并核实临时资源已清理。
+- [x] 7.1 全变更；主 Agent；前置：主分支检查（6.7、6.8）。执行最终替代验证（`not-applicable` 路径）：在最终主分支版本上重跑 [PV1]（`npm run verify`）、[PV3]/[PV4] 与 [PV5] 受控路径全链路集成测试，逐项记录命令、版本、退出码与日志路径（`reports/du1-pv1.log`、`reports/pv5-windows-nodelink.log`、`reports/wp7-integration.log`），并核实临时资源已清理。
 - [ ] 7.2 全变更；主 Agent；前置：7.1。汇总替代验证证据：核对 `not-applicable` 的理由/依据/`downgrade_approval` 三要素仍有效、Coverage Index 的 R1–R83 全部有有效证据、无未解决 FAIL/BLOCKED；全部必要检查通过后完成。
 - [ ] 7.3 [e2e-owned] 全变更；扩展；前置：7.2。运行 `npx --quiet --no-install openspec-agentic e2e check --change node-link-owner`，仅 PASS 自动勾选；此行只检查门禁（不适用判据已按计划固化且替代验证已完成），不执行测试或汇总。
 
