@@ -1,0 +1,26 @@
+//! Node Link 的入站适配层（`docs/MODULE_ARCHITECTURE.md` §4.9、`design.md` D2/D3）。
+//!
+//! 分层：`transport::net` 只负责连接与字节/帧规则（listener 绑定、TLS 终止、Host/代理头边界、path 路由、
+//! 请求体上限、WS upgrade 规则），本模块负责 Node Link 的协议语义；两者之间只经 `HttpHandler`/
+//! `HttpRequest`/`HttpResponse`/`PeerInfo`（WP4 起还有 `WsHandler`）的公开形状通信，不 import `axum` 类型。
+//!
+//! 本切片落地的范围（`node-link-owner` 的 WP3）：配对 HTTP（[`pairing`] 的 claim/status 端点）。
+//! `conn`（握手与连接生命周期）、`catalog`、`resource`、`command` 属 WP4–WP6。
+//!
+//! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §4/§5）：
+//!
+//! - 只调用 `core::use_cases`（配对通道以 `Actor::PairingClaimant`）与 `identity-auth` 的公开入口，
+//!   不查 SQLite、不调用 `node-link-client`，也不调用 `server::local_admin` 等平级 adapter；
+//! - 不读系统时间：时间一律来自状态机注入的 `Clock`（`Authority::now`）；
+//! - 不读配置文件：组合根把判定所需的配置快照注入构造器（[`PairingHttpConfig`]）；
+//! - 不注册路由、不绑定 listener：接线属组合根（WP7）。
+//!
+//! 唯一权威：`docs/NODE_LINK_PROTOCOL.md` §13（配对 HTTP）与 §2.5（固定限流），行为范围以
+//! `openspec/changes/node-link-owner/specs/node-link-pairing-http/spec.md` 的 R19–R35 为准。
+
+pub mod pairing;
+
+#[cfg(test)]
+mod tests;
+
+pub use pairing::{CLAIM_PATH, PairingHttp, PairingHttpConfig, STATUS_PATH};

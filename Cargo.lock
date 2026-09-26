@@ -1919,6 +1919,7 @@ dependencies = [
  "identity-auth",
  "nix",
  "node-link-protocol",
+ "p256",
  "rcgen",
  "rustls",
  "rustls-pki-types",

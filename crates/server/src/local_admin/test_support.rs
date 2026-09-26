@@ -624,9 +624,20 @@ impl IdentityKeystore for FakeKeystore {
     async fn sign(
         &self,
         _handle: &KeyHandle,
-        _transcript: &[u8],
+        transcript: &[u8],
     ) -> Result<identity_auth::P1363Signature, KeystoreError> {
-        unreachable!("{NOT_TOUCHED}")
+        // 测试用固定私钥：标量 1，其公钥就是 [`test_public_key`] 的基点 G。因此
+        // `sign_node_link_pairing_owner_proof` 的产物能在用例里被**同一个**公钥验证（R20）；
+        // 这不是密码学材料，也不进生产路径（`p256` 只是本 crate 的 dev-dependency）。
+        use p256::ecdsa::signature::Signer as _;
+        // 标量必须在 1..n 内，且其公钥要等于 [`test_public_key`]（基点 G）——即标量 1（大端）。
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        let signing =
+            p256::ecdsa::SigningKey::from_slice(&scalar).map_err(|_| KeystoreError::Unavailable)?;
+        let signature: p256::ecdsa::Signature = signing.sign(transcript);
+        identity_auth::P1363Signature::try_from_bytes(signature.to_bytes().as_slice())
+            .map_err(|_| KeystoreError::Unavailable)
     }
 
     async fn delete(&self, _handle: &KeyHandle) -> Result<(), KeystoreError> {
