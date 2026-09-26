@@ -73,8 +73,8 @@
 - [x] 6.1 DU1；主 Agent（机械核实可交 environment/recon）；前置：5.2。按计划核实目标仓库及主分支当前提交（`git rev-parse refs/heads/main` 等），记录准确引用及核实证据；无法确认目标时保持 BLOCKED。
 - [x] 6.2 DU1；集成负责人；前置：6.1。基于已核实基线构造 DU1 候选，固定基线和候选版本，记录组成与构建结果。
 - [x] 6.3 DU1；检查执行者；前置：6.2。完成候选 Project Verify：[PV1]（`npm run verify`）与 [PV2]（`check-crate-boundaries`），将版本、范围、结果及有效复用依据关联到 `verification.md`。
-- [ ] 6.4 DU1；独立 reviewer；前置：6.2，可与 6.3 并行。只读检视固定候选的新增交互与冲突解决，修复后独立复核，记录隔离设置、版本及报告（`reports/rv2-du1.md`）。
-- [ ] 6.5 DU1；前置：固定候选及所需资源。E2E `not-applicable`：核对计划中的理由、依据与 `downgrade_approval` 记录有效，并完成适用替代检查的候选轮次——候选上执行 [PV5] 受控路径全链路集成测试（`cargo test --locked -p server -p app --all-features` 的相关用例，本机 Windows）并把原始日志写入 `reports/pv5-windows-nodelink.log`；连续失败计入 `x-agentic.e2e.maxAttempts`（默认 3），达到后停止自动重跑并交用户决策。
+- [x] 6.4 DU1；独立 reviewer；前置：6.2，可与 6.3 并行。只读检视固定候选的新增交互与冲突解决，修复后独立复核，记录隔离设置、版本及报告（`reports/rv2-du1.md`）。
+- [x] 6.5 DU1；前置：固定候选及所需资源。E2E `not-applicable`：核对计划中的理由、依据与 `downgrade_approval` 记录有效，并完成适用替代检查的候选轮次——候选上执行 [PV5] 受控路径全链路集成测试（`cargo test --locked -p server -p app --all-features` 的相关用例，本机 Windows）并把原始日志写入 `reports/pv5-windows-nodelink.log`；连续失败计入 `x-agentic.e2e.maxAttempts`（默认 3），达到后停止自动重跑并交用户决策。
 - [ ] 6.6 DU1；合并负责人；前置：6.3、6.4、6.5。确认候选检查、独立 review 与替代验证通过，核实仓库规则与本地主分支基线，并运行 `npx --quiet --no-install openspec-agentic workflow check --change node-link-owner --stage premerge --planning-root <权威规划根> --json`（非 PASS 不合入）；以条件更新或串行合并机制防止竞态，直接合入 `refs/heads/main`，无须再次询问用户，记录实际提交；基线变化时重开受影响候选任务。
 - [ ] 6.7 DU1；检查执行者；前置：6.6。核对实际主分支结果与候选一致性，完成 [PV1]/[PV2] 主分支回归；有效复用逐项记录原证据及适用性。
 - [ ] 6.8 DU1；独立 reviewer；前置：6.6。独立检视合并新增差异；无新增差异由主 Agent 记录依据及原 review ID，不强制同范围重复审查，可与 6.7 并行。

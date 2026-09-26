@@ -274,7 +274,46 @@
 
 ## Merge History
 
+```agentic-premerge
+version: 1
+delivery_unit: DU1
+target_ref: refs/heads/main
+target_commit: 94a64e1f15d26f54a6601985fd13b1440fec8170
+candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+contract_digest: "sha256:2e3b3a0bdc82d5d1ffaeb125d35c9550e2e437296c777f298a2efd4aabb82c2e"
+verify:
+  result: PASS
+  candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+  evidence: {path: reports/du1-candidate.log, sha256: "sha256:199c894596be1e44548ec03827d81d11202bb90b67f7135a4bbeda85b9b3103b"}
+review:
+  result: PASS
+  candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+  reviewer: "RV2-DU1（reviewer 子 Agent b35b3fef，不继承实现/集成对话）"
+  author: "各 WP coder 子 Agent（worker）"
+  evidence: {path: reports/rv2-du1.md, sha256: "sha256:0c3a3943837075465113763e5af05fcea04adc6dc48a9b79d71cd3138681b074"}
+alternative_checks:
+  - name: "cargo test --locked -p server --all-features [PV3]：listener 绑定/路由/Host 边界/TLS 失败关闭、配对 HTTP 全状态码与幂等、握手与信封/序号规则、catalog 过滤、attach/generation、snapshot/replay、event 持久化顺序与 raw 保真、ack 单调性、命令授权/幂等/终态/session.create 约束、撤销传播、心跳与慢连接、审计边界，schema/fixture 漂移测试消费同一 manifest。"
+    result: PASS
+    candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+    evidence: {path: reports/du1-candidate.log, sha256: "sha256:199c894596be1e44548ec03827d81d11202bb90b67f7135a4bbeda85b9b3103b"}
+  - name: "cargo test --locked -p app --all-features [PV4]：配置 unwired 收敛、启动/关闭序列含网络 listener、daemon.status.listen 实际地址。"
+    result: PASS
+    candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+    evidence: {path: reports/du1-candidate.log, sha256: "sha256:199c894596be1e44548ec03827d81d11202bb90b67f7135a4bbeda85b9b3103b"}
+  - name: "受控路径全链路集成测试 [PV5]（crates/server 或 crates/app 的集成用例，本机 Windows 执行并留证）：脚本化 fake Access 客户端经真实 loopback listener 完成 配对 claim → 本地确认 → 握手 → catalog.snapshot → attach → snapshot/event/ack → command（含 session.create 正常与各拒绝路径）→ 撤销传播；TLS direct 用自签证书跑通同一握手。"
+    result: PASS
+    candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+    evidence: {path: reports/du1-candidate.log, sha256: "sha256:199c894596be1e44548ec03827d81d11202bb90b67f7135a4bbeda85b9b3103b"}
+  - name: "npm run check / npm run verify [PV1]/[PV2]：合同门禁与全 workspace 测试，确认新增依赖与矩阵格不破坏既有 crate。"
+    result: PASS
+    candidate_commit: 654c0c1944c75bbc016eab775f3f3ff8aca9bf35
+    evidence: {path: reports/du1-candidate.log, sha256: "sha256:199c894596be1e44548ec03827d81d11202bb90b67f7135a4bbeda85b9b3103b"}
+```
+
+证据摘要与版本化报告：verify = `reports/du1-candidate.log`（sha256:199c8945…3103b）；review = `reports/rv2-du1.md`（sha256:0c3a3943…1b074）；替代检查逐项报告：`reports/wp6-fix-verify.md`（PV3 口径，sha256:666fbdcb…89ab）、`reports/wp7-fix2-verify.md`（PV4/PV5 约定形式，sha256:37774320…a086）、`reports/pv5-windows-nodelink.log`（PV5 全链路，sha256:3af1a3d2…85b9）。
+
 - DU1 候选（attempt 2，权威）：base `94a64e1f` + 源 `4c5a3f00` → 候选 `92fb9fdc22938c0ad743d7dec7a1d0932b38cde5`（`merge --no-ff`，无冲突，候选树与源逐字节一致）。候选检查：PV1/PV2/PV5 全 exit 0（973 passed / 394 passed；证据 `reports/du1-candidate.log` + `reports/du1-integrate.md`）。attempt 1（`8d87df18`，源 `f02d2565`）因 check:docs（rv1-wp8.md 的 §7.2 归属）被取代，已按裁决修源并重建。
+- DU1 候选（attempt 3，当前）：源 `5f62e77f`（仅 openspec/ 规划工件同步，零代码变化）→ 候选 `654c0c1944c75bbc016eab775f3f3ff8aca9bf35`；PV1/PV2 在新候选重跑 exit 0（含 check:docs 对工件内容的扫描），PV5 按「零代码变化 + openspec/ 不在测试面」REUSED（依据见 `reports/du1-integrate.md` §0）。
 - 集成执行者：worker 子 Agent c51411bd（独立集成 worktree `D:\Project\acp-remote-wt\nl-owner-integration`）。
 
 ## Test Design and Authoring
