@@ -43,6 +43,18 @@ uuid.workspace = true
 # `LocalAdminHandler` 是可 dyn 化的异步 trait（与 core 的端口用同一个 proc-macro，不引入 runtime）。
 async-trait.workspace = true
 
+# --- Node Link（`node-link-owner` 变更，WP1 只登记依赖，使用代码自 WP2 的 `transport::net` 起落地）---
+# 版本口径只在根 `Cargo.toml` 的 `[workspace.dependencies]`，选型与核验结论见 docs/MODULE_ARCHITECTURE.md §3.1。
+# ACPR-CJ1 规范 JSON 与 digest 计算（§5 表下注记：只为 `payloadDigest`/`snapshotDigest` 的前像）。
+acpr-wire = { path = "../acpr-wire" }
+# 共享 listener 的 HTTP 路由与 WebSocket upgrade（`axum::extract::ws`）。
+axum.workspace = true
+# TLS `direct` 模式终止：rustls + tokio-rustls（provider = `ring`；为什么必须关默认 feature 见根 `Cargo.toml`）。
+rustls.workspace = true
+tokio-rustls.workspace = true
+# `direct` 模式的证书/私钥 PEM 解析（`rustls_pki_types::pem::PemObject`）。
+rustls-pki-types.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 # WP2 冻结的 safe API（SDDL 创建首个 pipe 实例、当前用户 SID、已连接对端的 SID）；非 Windows 上该 crate
 # 编译为空 crate，因此调用点必须 cfg 门控（本 crate 的平台代码只在 platform/windows.rs 里出现）。
@@ -62,6 +74,8 @@ tokio.workspace = true
 # 单元测试用最小 fake 端口构造 `core::use_cases::UseCases`（只实现被路由触及的方法）。
 core = { path = "../core" }
 identity-auth = { path = "../identity-auth" }
+# TLS `direct` 用例现算 ECDSA P-256 自签证书与私钥（因此仓库不提交任何私钥材料）。
+rcgen.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 # Windows 用例直接核对 pipe 名里的 SID 哈希规则（§2.1），需要与实现同一个 SID 来源。

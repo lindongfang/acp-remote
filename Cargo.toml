@@ -97,6 +97,32 @@ fs4 = "1.1"
 # 选型结论（版本、许可证、MSRV、传递依赖）见 WP4b 报告与 docs/MODULE_ARCHITECTURE.md §3.1。
 rpassword = "7.5"
 
+# `server` 的 Node Link HTTP/WS/TLS 栈（`node-link-owner` 变更 WP1 按 docs/SECURITY_DESIGN.md §20 的四判据
+# ——语义适配、许可证、MSRV ≤ 1.85、维护状态——核验后登记）：版本口径只维护在这里，完整核验证据、来源与落选候选
+# （`aws-lc-rs`/`rustls-rustcrypto`/`axum-server`/`rustls-pemfile`）见 docs/MODULE_ARCHITECTURE.md §3.1 的
+# `[决定]`（2026-09-26）与 openspec/changes/node-link-owner/reports/wp1-deps.log。
+#
+# HTTP 路由 + WebSocket upgrade（`axum::extract::ws`）：保留 axum 自己的基线 feature（`http1`/`tokio`/`json`/
+# `tracing` 等），只增量开启 `ws`。axum 的 ws 默认不协商 `permessage-deflate`（它不依赖 `tungstenite` 的压缩
+# feature），因此「协商到压缩必须拒绝」只需在 upgrade 层显式判定，不靠关闭某个 feature。
+axum = { version = "0.8", features = ["ws"] }
+# TLS `direct` 模式的终止实现。**必须关默认 feature**：rustls 0.23 的默认 provider 是 `aws-lc-rs`，它经
+# `aws-lc-sys` 要求 CMake 参与构建（build-dependency `cmake`，Windows x86_64 另需 NASM 或 `prebuilt-nasm`），
+# 那会把「固定 Rust 工具链即可构建」（rust-toolchain.toml 的约定）变成「还要装构建工具」，而且本机与 CI 判定
+# 会分叉。这里显式选择 rustls 自带的 `ring` provider：rustls 自身仍是纯 Rust，原生实现局限在一个已审计的 crate 内。
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
+# 同理，`tokio-rustls` 的默认 feature 会经 `rustls/aws_lc_rs` 把 provider 拉回 aws-lc-rs（feature 是加法的，
+# 只关 rustls 一边的默认值不够），因此这里也关默认 feature、只开 `ring`。
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }
+# PEM 解析用 rustls 家族自己的 `pem` 模块（`rustls_pki_types::pem::PemObject`）：design.md D1 列的候选
+# `rustls-pemfile 2` 已被上游归档（GitHub archived，README 明确指向本模块），因此改登记它的后继 API；
+# 该 crate 本就是 rustls 的传递依赖，不引入新的传递依赖（旧接口与其 `base64` 依赖都绕开了）。
+rustls-pki-types = { version = "1", features = ["std"] }
+# 测试用自签证书的生成（仅 dev-dependency，供 `crates/server/tests` 的 TLS `direct` 用例现算 ECDSA P-256
+# 自签证书与私钥）：因此仓库里不提交任何私钥材料，`.gitleaks.toml` 不需要为此新增允许清单条目。
+# 实际启用的依赖链只有 `pem`/`ring`/`rustls-pki-types`/`time`/`yasna`（`zeroize`/`x509-parser`/`aws-lc-rs` 为可选、未启用）；除 `base64 0.22`（`pem` 与 axum 的 `ws` 共用，与既有 0.23 并存，`[bans] multiple-versions = "warn"` 只提示）外不引入新 crate。MSRV 与版本选择依据见 §3.1 的 `[决定]`。
+rcgen = "0.14"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
