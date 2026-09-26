@@ -23,11 +23,12 @@
 //! `node.hello`）都不再被处理，连接以 4429 关闭。效果等价——未认证的连接无法产生任何业务副作用。
 //!
 //! **catalogRevision 的口径**：`node.challenge.catalogRevision` 与 `node.ready.catalogRevision` 同源，
-//! 都取本机全局水位 `store.head()` 的 `globalSequence`（跨重启单调的十进制串）。握手两侧必须同源：
-//! 该值进入 `node-link-challenge/v1`/`node-link-proof/v1` 的 tag 6，Access 用 `node.challenge` 给的值
-//! 签 proof，Owner 用签发挑战时的同一个值验签。catalog 投影本体在 WP5，届时
-//! `catalog.snapshot.revision` 必须与本值同源；这是本轮登记在案的临时口径（见 WP4 handoff），
-//! 不是最终语义。
+//! 都取本机**管理写集水位**（`AuditStore::watermark()`）：Export 与信任写集各自追加一行审计，因此它
+//! 正是这三个值要表达的「目录修订号」，且跨重启与保留期清理单调（`store.head()` 会随裁剪回退，已弃
+//! 用——design D4 的实现期结论，见 WP4/WP5 handoff）。握手两侧必须同源：该值进入
+//! `node-link-challenge/v1`/`node-link-proof/v1` 的 tag 6，Access 用 `node.challenge` 给的值签 proof，
+//! Owner 用签发挑战时的同一个值验签。`catalog.snapshot.revision` 与本值同源（WP5 的
+//! [`crate::node_link::catalog`]）。
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -519,7 +520,7 @@ impl Session {
                 .await;
             return Flow::Continue;
         };
-        let catalog_revision = view.head.global_sequence.get();
+        let catalog_revision = view.catalog_revision;
         let request = ChallengeRequest {
             kind: ConnectionKind::NodeLink,
             peer: PeerIdentity::Node(access_node.clone()),
@@ -1298,8 +1299,7 @@ fn ready_body(
 ) -> Option<NodeReady> {
     Some(NodeReady {
         owner_node_id: Uuid::parse(authority.local_node().as_str()).ok()?,
-        catalog_revision: DecimalString::parse(&view.head.global_sequence.get().to_string())
-            .ok()?,
+        catalog_revision: DecimalString::parse(&view.catalog_revision.to_string()).ok()?,
         limits: limits.to_wire()?,
         server_epoch: Uuid::parse(view.head.server_epoch.as_str()).ok()?,
     })

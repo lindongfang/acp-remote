@@ -266,4 +266,24 @@ impl AuditStore for SqliteStore {
         }
         Ok(records)
     }
+
+    /// 管理写集的变更水位（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）。
+    ///
+    /// 取 `sqlite_sequence` 里 `owned_audit` 的自增值（即 `audit_id` **曾经**写入过的最大值），不是
+    /// `MAX(audit_id)`：后者在保留期清理把审计行全部删掉后会回退，而 `catalogRevision` 必须跨重启与
+    /// 清理单调。`sqlite_sequence` 的那一行由 SQLite 维护、migration 重建审计表时刻意回填
+    ///（`migrate.rs` 的 `audit_sequences`/`restore_audit_sequences`），因此它不是实现细节而是本水位的
+    /// 权威来源。表/行缺失（未写过任何审计）时取 0。
+    async fn watermark(&self) -> Result<u64, PortError> {
+        let value: Option<i64> =
+            sqlx::query_scalar("SELECT seq FROM sqlite_sequence WHERE name = 'owned_audit'")
+                .fetch_optional(&self.pools().read)
+                .await
+                .db()?;
+        match value {
+            Some(value) => u64::try_from(value)
+                .map_err(|_| PortError::Corrupt("owned_audit sqlite_sequence is negative")),
+            None => Ok(0),
+        }
+    }
 }

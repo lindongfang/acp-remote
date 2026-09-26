@@ -3089,10 +3089,11 @@ pub(crate) mod test_support {
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
         DeviceWrite, DropReport, ExpiryWrite, ExportRevocation, ExportWrite, IdempotentReplay,
         ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
-        NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite,
-        PairingConsumption, PairingSettlementWrite, PairingWrite, ProfileWrite, ProviderRefWrite,
-        PruneReport, RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth,
-        TrustRecordRef, TrustStore, TurnAccepted, WorkspaceWrite,
+        NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite, OwnedEventRecord,
+        PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+        PairingWrite, PendingInteractionOrigin, ProfileWrite, ProviderRefWrite, PruneReport,
+        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef,
+        TrustStore, TurnAccepted, WorkspaceWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -3278,6 +3279,9 @@ pub(crate) mod test_support {
     pub(crate) struct InteractionRow {
         pub(crate) pending: PendingInteraction,
         pub(crate) resolution: Option<InteractionResolved>,
+        /// 创建该交互的 origin 事件 id（`node_link_slice` 的 `pending_interactions` 需要它；
+        /// 真实存储用 `owned_interaction.request_event` 回查）。
+        pub(crate) origin_event: EventId,
     }
 
     /// 一次提交里的事件类型序列（§6.10 的合批断言）。
@@ -3457,11 +3461,13 @@ pub(crate) mod test_support {
         }
 
         pub(crate) fn seed_interaction(&self, pending: PendingInteraction) {
+            let origin_event = EventId::new(&uuid_text(0)).expect("事件 id");
             lock(&self.state).interactions.insert(
                 pending.id().as_str().to_owned(),
                 InteractionRow {
                     pending,
                     resolution: None,
+                    origin_event,
                 },
             );
         }
@@ -3573,6 +3579,12 @@ pub(crate) mod test_support {
 
         async fn query(&self, _query: AuditQuery) -> Result<Vec<AuditRecord>, PortError> {
             Ok(lock(&self.world.audits).clone())
+        }
+
+        /// 测试替身的「曾经写入过的最大审计序号」＝已追加的行数：用例据此断言
+        /// `catalogRevision` 取自审计水位（真实实现在 `storage-sqlite`，用 `sqlite_sequence`）。
+        async fn watermark(&self) -> Result<u64, PortError> {
+            Ok(lock(&self.world.audits).len() as u64)
         }
     }
 
@@ -3824,26 +3836,39 @@ pub(crate) mod test_support {
             // `interactionId` 找到同一提交里那条 `kind = interaction` 事件）由存储层完成，配不到即整
             // 事务失败——事件 id 只存在于存储层，不经过 broker。
             for write in &commit.interactions {
-                let paired = commit.events.iter().any(|event| {
+                let paired = commit.events.iter().find(|event| {
                     interaction_request_kind(&event.event_type).is_some()
                         && view_interaction_id(&event.payload.view).as_ref()
                             == Some(write.interaction.id())
                 });
-                if !paired {
+                let Some(paired) = paired else {
                     return Err(PortError::InvalidRequest(
                         "交互写入必须与同一提交里带同一 interactionId 的事件配对（§6 第 13 条）",
                     ));
-                }
+                };
                 if let Some(existing) = state.interactions.get(write.interaction.id().as_str()) {
                     if existing.resolution.is_some() {
                         return Err(PortError::Conflict(ConflictKind::AlreadyResolved));
                     }
                 }
+                // 创建它的那条事件就是同一提交里配对成功的那条（`node_link_slice` 的
+                // `pending_interactions[].origin_event` 要从它取 payload）。`commit.events` 与
+                // `appended` 同序，因此下标直接对应。
+                let position = commit
+                    .events
+                    .iter()
+                    .position(|event| std::ptr::eq(event, paired))
+                    .ok_or(PortError::Corrupt("交互事件未在本次提交中落盘"))?;
+                let origin_event = appended
+                    .get(position)
+                    .map(|event| event.id.clone())
+                    .ok_or(PortError::Corrupt("交互事件未在本次提交中落盘"))?;
                 state.interactions.insert(
                     write.interaction.id().as_str().to_owned(),
                     InteractionRow {
                         pending: write.interaction.clone(),
                         resolution: None,
+                        origin_event,
                     },
                 );
             }
@@ -4165,6 +4190,89 @@ pub(crate) mod test_support {
                 .event_payloads
                 .get(event.as_str())
                 .cloned())
+        }
+
+        async fn node_link_slice(
+            &self,
+            session: &SessionId,
+            after: Option<OriginCursor>,
+            limit: ReplayLimit,
+        ) -> Result<NodeLinkSlice, PortError> {
+            let state = lock(&self.world.state);
+            let Some(stored) = state.sessions.get(session.as_str()) else {
+                return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+            };
+            let Some(epoch) = state.epochs.get(session.as_str()).cloned() else {
+                return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+            };
+            let from = after
+                .as_ref()
+                .map_or(0, |cursor| cursor.origin_sequence.get());
+            let mut events = Vec::new();
+            for event in &state.events {
+                if event.session.as_ref() != Some(session) {
+                    continue;
+                }
+                let Some(origin) = event.origin_sequence else {
+                    continue;
+                };
+                if origin.get() <= from {
+                    continue;
+                }
+                if events.len() as u32 >= limit.events() {
+                    break;
+                }
+                let Some(payload) = state.event_payloads.get(event.id.as_str()).cloned() else {
+                    continue;
+                };
+                events.push(OwnedEventRecord {
+                    event: event.clone(),
+                    payload,
+                });
+            }
+            let head_sequence = state
+                .events
+                .iter()
+                .filter(|event| event.session.as_ref() == Some(session))
+                .filter_map(|event| event.origin_sequence)
+                .map(Sequence::get)
+                .max()
+                .unwrap_or(0);
+            let pending_interactions = state
+                .interactions
+                .values()
+                .filter(|row| row.pending.session() == session && row.resolution.is_none())
+                .map(|row| PendingInteractionOrigin {
+                    interaction: row.pending.clone(),
+                    origin_event: row.origin_event.clone(),
+                })
+                .collect();
+            Ok(NodeLinkSlice {
+                summary: stored.summary(),
+                head: OriginCursor {
+                    origin_epoch: epoch,
+                    origin_sequence: Sequence::new(head_sequence)
+                        .map_err(|_| PortError::Corrupt("origin sequence out of range"))?,
+                },
+                pending_interactions,
+                events,
+            })
+        }
+
+        async fn session_event_payload(
+            &self,
+            session: &SessionId,
+            event: &EventId,
+        ) -> Result<Option<EventPayload>, PortError> {
+            let state = lock(&self.world.state);
+            let belongs = state
+                .events
+                .iter()
+                .any(|row| row.id == *event && row.session.as_ref() == Some(session));
+            if !belongs {
+                return Ok(None);
+            }
+            Ok(state.event_payloads.get(event.as_str()).cloned())
         }
 
         async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {

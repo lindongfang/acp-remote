@@ -351,6 +351,7 @@ mod tests {
                     .expect("epoch"),
                 acp_core::model::Sequence::new(0).expect("sequence"),
             ),
+            catalog_revision: 7,
         };
         assert_eq!(node_endpoint(&view, None), None, "没有可宣告的 endpoint");
         let endpoint = node_endpoint(&view, Some("https://owner.example.ts.net"))
@@ -399,6 +400,7 @@ mod tests {
                     .expect("epoch"),
                 acp_core::model::Sequence::new(7).expect("sequence"),
             ),
+            catalog_revision: 7,
         };
         assert_eq!(
             pending_pairing(&view).map(|record| record.id().clone()),

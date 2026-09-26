@@ -97,8 +97,11 @@ const OWNER_NODE: &str = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
 /// 从未配对的 Access Node（[R43]）。
 const UNKNOWN_NODE: &str = "9c8f6b1d-7a35-4f0b-9b6a-2f6d5c4e3b1a";
-/// `FixedStore` 的水位：`node.ready.catalogRevision`/`serverEpoch` 必须与它同源。
-const HEAD_SEQUENCE: u64 = 7;
+/// 本机的目录修订号（`catalogRevision`）：`AuditStore::watermark()` 的来源（`FakeAudit` 按本值播种子
+/// 条审计行）；`node.challenge`/`node.ready` 必须与它同源。
+const CATALOG_REVISION: u64 = 7;
+/// `FixedStore` 的 `head()` 值（`serverEpoch` 的来源；`catalogRevision` 已改取审计水位，不再用它）。
+const STORE_HEAD_SEQUENCE: u64 = 7;
 /// 单次 I/O 的超时（用例失败要快速失败，不挂住测试进程）。
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// [`a_handshake_that_never_gets_a_hello_is_closed_with_4408`] 需要等满 15 秒握手窗口。
@@ -122,6 +125,9 @@ struct Harness {
 impl Harness {
     /// 起一个已注册 `/node-link/v1` 的接入层（`127.0.0.1:0`，端口由内核分配）。
     async fn start(world: TestWorld, config: NodeLinkConfig) -> Self {
+        // `catalogRevision` 取审计水位（`AuditStore::watermark`，design D4/G5 的口径）：把本机世界的水位
+        // 固定为 [`CATALOG_REVISION`]，断言值因此可判定。
+        world.audit.set_watermark(CATALOG_REVISION);
         let registry = ConnectionRegistry::new();
         let conn = Arc::new(NodeLinkConn::new(
             world.core.clone(),
@@ -166,9 +172,14 @@ impl Harness {
         .await
     }
 
-    /// 默认世界与默认配置（水位固定为 [`HEAD_SEQUENCE`]）。
+    /// 默认世界与默认配置（`serverEpoch` 固定为 [`TEST_SERVER_EPOCH`]，`catalogRevision` 固定为
+    /// [`CATALOG_REVISION`]）。
     async fn new() -> Self {
-        Self::with_store(Arc::new(FixedStore::new(TEST_SERVER_EPOCH, HEAD_SEQUENCE))).await
+        Self::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        )))
+        .await
     }
 
     /// 结束接入层（用例末尾调用；端口随 listener 释放）。
@@ -901,7 +912,7 @@ async fn handshake_completes_and_enters_the_business_phase() {
     let selected = feature_ids(&body);
     let catalog_revision = challenge_catalog_revision(&challenge);
     assert_eq!(
-        catalog_revision, HEAD_SEQUENCE,
+        catalog_revision, CATALOG_REVISION,
         "挑战的修订号必须与本机水位同源"
     );
     let mut expected_selected: Vec<String> = SUPPORTED_FEATURES
@@ -950,7 +961,7 @@ async fn handshake_completes_and_enters_the_business_phase() {
     assert_eq!(ready["body"]["ownerNodeId"], json!(OWNER_NODE));
     assert_eq!(
         ready["body"]["catalogRevision"],
-        json!(HEAD_SEQUENCE.to_string()),
+        json!(CATALOG_REVISION.to_string()),
         "catalogRevision 必须与本机水位同源"
     );
     assert_eq!(ready["body"]["serverEpoch"], json!(TEST_SERVER_EPOCH));
@@ -1576,7 +1587,10 @@ async fn an_unknown_node_gets_a_challenge_and_fails_as_node_unknown() {
 #[tokio::test]
 async fn node_ready_echoes_the_negotiated_limits_and_never_raises_them() {
     let harness = Harness::start(
-        TestWorld::with_store(Arc::new(FixedStore::new(TEST_SERVER_EPOCH, HEAD_SEQUENCE))),
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
         NodeLinkConfig {
             public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
             // 三个下调项 + 两个试图上调的配置。
@@ -1926,7 +1940,10 @@ fn read_fixture(relative: &str) -> Value {
 #[tokio::test]
 async fn heartbeat_round_trip_keeps_the_connection_alive() {
     let harness = Harness::start(
-        TestWorld::with_store(Arc::new(FixedStore::new(TEST_SERVER_EPOCH, HEAD_SEQUENCE))),
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
         NodeLinkConfig {
             public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
             heartbeat_interval_ms: 1_000,
@@ -1972,7 +1989,10 @@ async fn heartbeat_round_trip_keeps_the_connection_alive() {
 /// [`protocol_constants_are_not_configurable`] 锁定，本用例证明的是「静默判定 → 4408」这条机制。
 #[tokio::test]
 async fn silence_beyond_the_window_is_closed_with_4408() {
-    let world = TestWorld::with_store(Arc::new(FixedStore::new(TEST_SERVER_EPOCH, HEAD_SEQUENCE)));
+    let world = TestWorld::with_store(Arc::new(FixedStore::new(
+        TEST_SERVER_EPOCH,
+        STORE_HEAD_SEQUENCE,
+    )));
     let registry = ConnectionRegistry::new();
     let conn = Arc::new(
         NodeLinkConn::new(
@@ -2048,7 +2068,10 @@ async fn silence_beyond_the_window_is_closed_with_4408() {
 /// 调成 1.5 秒（同 [R80] 的理由：30 秒的真实等待在用例里不可接受）。
 #[tokio::test]
 async fn a_saturated_connection_is_disconnected_without_affecting_its_peer() {
-    let world = TestWorld::with_store(Arc::new(FixedStore::new(TEST_SERVER_EPOCH, HEAD_SEQUENCE)));
+    let world = TestWorld::with_store(Arc::new(FixedStore::new(
+        TEST_SERVER_EPOCH,
+        STORE_HEAD_SEQUENCE,
+    )));
     let registry = ConnectionRegistry::new();
     let conn = Arc::new(
         NodeLinkConn::new(

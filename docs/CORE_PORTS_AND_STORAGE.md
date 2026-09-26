@@ -15,6 +15,7 @@
 > 版本：0.8（2026-09-23：管理 store 的落盘实现落地（`crates/storage-sqlite/src/admin/`）后，把 §5.3/§9/§11 与关联文档里「仍待实现」的陈述改为与实现一致；合同形状、判据与 DDL 未变）
 > 版本：0.10（2026-09-23：补齐管理存储的**终态与单调性守卫**——§5.2 补 imported 写路径的归属前置（`upsert_session`/`commit_receipt` 先验 `(ownerNodeId, exportId)` 归属，否则 `NotFound(Export)` 且零写入）、§5.3 补 `put_export` 撤销终态 / 身份材料读取核对同行指纹 / 活动时间只前进（显式 `CASE`）、§7.4 补迟到回调拒绝与「重导入后无法区分新旧连接」的已知边界、§9 新增判据 30。**§5/§7 的代码块、端口签名与 DDL 未变**，漂移门禁继续逐条成立；wire 协议、封闭词表与本地管理方法集未变）
 > 版本：0.11（2026-09-24：§10.3 的 view 收口落地——§5.1 写明 `TurnAccepted.turn` 是适配器侧占位/审计值（turn 归属由 core 定稿），§6 新增第 19 条（提交前注入 `turnId` 与会话 `version`、冲突与漂移失败关闭、imported 路径保留 Owner 取值），§9 新增判据 31；端口签名与 DDL 均未变）
+> 版本：0.12（2026-09-26，`node-link-owner` 变更 WP5：为 Node Link 的资源读面补三条窄 seam——`ReadView::node_link_slice`（会话摘要 + origin head + 未决交互含创建事件 id + `after` 之后的事件含正文，同一次只读事务）、`ReadView::session_event_payload`（按会话归属取正文）、`AuditStore::watermark`（管理写集水位 = `catalogRevision` 的唯一来源）；`NodeLinkHandshakeView` 增 `catalog_revision` 字段（`catalogRevision` 不再取 `store.head()`）。§4 补两条 `[决定]`（`catalogRevision` 口径含已登记的精度边界、三条资源读 seam 的绑定规则），§5.2/§5.3 的 trait 签名同步；DDL 未变，漂移门禁继续逐条成立）
 
 ## 1. 范围与非目标
 
@@ -207,9 +208,13 @@ pub enum UnavailableKind {
 
 `[决定]`（2026-09-26，WSS 握手 seam 补全；同一方向的第二次补全）`NodeLinkHandshake` 是 WSS 握手准入的三条窄入口，服务 `design.md` D3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1：
 
-- `node_link_handshake_view(access_node)`：用例面**唯一**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor }`：四项都是握手本次调用需要且只需要的持久事实，`head` 同时是 `serverEpoch` 与 catalogue revision 的来源。
+- `node_link_handshake_view(access_node)`：用例面**唯一**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor, catalog_revision: u64 }`：五项都是握手本次调用需要且只需要的持久事实；`head` 是 `serverEpoch` 的来源，`catalog_revision` 是 `node.challenge.catalogRevision` / `node.ready.catalogRevision` 的来源。
 - `record_node_link_auth(access_node, action, outcome)`：只接受 `node.authenticated`/`node.auth_failed`（其余 → `authorization.scope_denied`），归因 `actor`/`via_node` 都是该对端 id、`target = Node(对端)`、`localPrincipalRef` 为 `None`（§8.3 节点级信任）。首次认证成功（已批准配对 → `consumed`）的那条 `node.authenticated` 由 `consume_pairing` 的写集提交，适配器不得再补一条。
 - `record_node_connected(access_node)`：**重复认证**（没有待消费配对）的收尾写集（§11.6 第 9 条）——把 `(access_node, access)` 行的 `last_connected_at` 推进到本次时间（只前进不倒退）并把 `node.authenticated` 在同一事务提交；归因与上一条逐字一致。首次认证的同一职责由 `consume_pairing` 的写集承担，两者不得互相替代（否则 `lastConnectedAt` 会停在首次认证的时刻）。
+
+`[决定]`（2026-09-26，`node-link-owner` 变更 D4/G5 的实现期结论）**`catalogRevision` 的唯一来源是 [`AuditStore::watermark`]**（本机审计自增序列，`storage-sqlite` 取 `sqlite_sequence.owned_audit`），不再用 `store.head()`：全局水位会随保留期裁剪回退，而 `catalogRevision` 要跨重启与清理单调。`node.challenge`/`node.ready`/`catalog.snapshot` 三个字段同源（实测不变式：同一次握手的挑战与 `node.ready` 必然相等，因为两者用同一份视图快照）。**已登记的精度边界**：该水位随每一行审计前进，包括 `node.auth_failed`/`authorization.denied`/`rate_limit.triggered` 这类不改变导出目录的动作，因此「revision 未变 ⇒ 目录未变」并不成立（反向「目录变了 ⇒ revision 必变」成立）。v1 不依赖前者：`knownRevision` 非空时仍回完整快照（`catalog.changed` 属 `post_mvp`）。
+
+`[决定]`（2026-09-26，同一变更）**Node Link 资源读面的三条窄 seam**（`node_link_catalog_view`/`node_link_session_view`/`node_link_replay`/`node_link_event_payload`，见 `server::node_link` 的 catalog/resource 模块）：与 `NodeLinkHandshake` 同一模式——无 `actor`、按已认证 `accessNodeId` 绑定、零写入、零审计；会话级读必须同时给出 `(access_node, exportId, session)`，由 core 硬校验「对端是已配对的 `access` 行 + Export 存在且未撤销 + 会话的 Agent 属于该 Export」，**不得**复用 `Broker::authorize` 的 `Actor::Node` 分支（那是 Access 侧本地客户端的语义）。「这个 Export 是否对该节点可见」是适配器的**单点可见性策略**（D14：未撤销且 `export.scopes ∩ 节点 grants ≠ ∅`），不在 core 重复实现。
 
 三条入口都不放宽既有 `LocalCli` 路径的行为，也不新增任何对端可见的能力。
 
@@ -316,6 +321,11 @@ pub trait ReadView: Send + Sync {
     /// 可用时 `raw_json` 必须字节保真，不可用时按行里的 `acp_raw_unavailable_reason` 还原为
     /// `AcpRaw::Unavailable`。事件不存在返回 `None`。
     async fn event_payload(&self, event: &EventId) -> Result<Option<EventPayload>, PortError>;
+    /// Node Link 的会话读视图（`NODE_LINK_PROTOCOL.md` §12.4，`design.md` D6）：`after` 之后的会话事件
+    /// **含持久化正文**，以及快照需要元数据（`after` 的 epoch 是否一致由调用方判定）。
+    async fn node_link_slice(&self, session: &SessionId, after: Option<OriginCursor>, limit: ReplayLimit) -> Result<NodeLinkSlice, PortError>;
+    /// 指定会话内某条 owned 事件的正文（事件 id 与会话必须同时匹配，否则 `None`）；还原规则同 `event_payload`。
+    async fn session_event_payload(&self, session: &SessionId, event: &EventId) -> Result<Option<EventPayload>, PortError>;
 }
 
 pub struct DeliveryReceipt {
@@ -690,6 +700,10 @@ pub trait AuditStore: Send + Sync {
     async fn append(&self, record: AuditRecord) -> Result<(), PortError>;
 
     async fn query(&self, query: AuditQuery) -> Result<Vec<AuditRecord>, PortError>;
+
+    /// 管理写集的变更水位（`NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）：只增不减的审计自增序号，
+    /// 不得随清理回退（Export/信任写集各追加一行审计，因此它正是这些写集的变更点）。
+    async fn watermark(&self) -> Result<u64, PortError>;
 }
 
 /// 内容寻址附件的引用。`id` 由存储层分配（`AttachmentStore::put` 不接受 id 参数）。

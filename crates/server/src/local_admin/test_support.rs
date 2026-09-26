@@ -121,9 +121,16 @@ impl Clock for FakeClock {
 pub(crate) struct FakeAudit {
     records: Arc<Mutex<Vec<AuditRecord>>>,
     failure: Arc<Mutex<Option<PortError>>>,
+    /// 管理写集水位（`AuditStore::watermark`，即 `catalogRevision` 的来源）：用例把它固定成已知值，
+    /// 而不靠审计行数（真实实现取 `sqlite_sequence`）。
+    watermark: Arc<Mutex<u64>>,
 }
 
 impl FakeAudit {
+    /// 固定本次测试的管理写集水位（`catalogRevision`）。
+    pub(crate) fn set_watermark(&self, value: u64) {
+        *self.watermark.lock().expect("审计锁") = value;
+    }
     pub(crate) fn seed(&self, record: AuditRecord) {
         self.records.lock().expect("审计锁").push(record);
     }
@@ -195,6 +202,10 @@ impl AuditStore for FakeAudit {
             .filter(|record| query.actions.is_empty() || query.actions.contains(&record.action()))
             .cloned()
             .collect())
+    }
+
+    async fn watermark(&self) -> Result<u64, PortError> {
+        Ok(*self.watermark.lock().expect("审计锁"))
     }
 }
 

@@ -23,12 +23,13 @@ use crate::model::{
     AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind,
     CommandReceipt, CommandRecord, ConfigOption, ConfigOptionId, ConfigValue, ConflictKind,
     CreateSessionRequest, DeviceId, DeviceRecord, ElicitationAction, ElicitationValues, EntityRef,
-    ExportId, ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId,
-    InteractionResolution, LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState,
-    OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingState,
-    PairingTarget, PeerIdentity, PeerPublicKey, PortError, ProviderRef, RequestId, Resolution,
-    ResolvedWorkspace, SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
-    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord,
+    EventId, EventPayload, EventType, ExportId, ExportRecord, GlobalCursor, ImportId, ImportRecord,
+    InteractionId, InteractionResolution, LocalCursor, ModeId, ModeState, NodeId, NodeKind,
+    NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef, PairingClaim, PairingId,
+    PairingRecord, PairingSettlement, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
+    PendingInteraction, PortError, ProviderRef, RequestId, Resolution, ResolvedWorkspace,
+    SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind,
+    Version, WorkspaceAlias, WorkspaceRecord,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
@@ -68,7 +69,10 @@ pub struct PairingChannelView {
 ///
 /// 四个字段都是握手本次调用需要且只需要的持久事实：该对端的 `access` 信任行（凭据状态与 grant）、
 /// 已绑定的验签公钥、最近一次配对（登记方宣告的 `host_binding` 与是否待消费）、本机全局水位
-/// （`serverEpoch` 与 `catalogRevision` 的来源）。不含任何秘密材料：pairing secret 只在状态机内存。
+/// （`serverEpoch` 的来源）。不含任何秘密材料：pairing secret 只在状态机内存。
+///
+/// `catalog_revision` 与 [`NodeLinkCatalogView::revision`] **同源**（都是 `AuditStore::watermark()`）：
+/// `node.challenge`/`node.ready` 与 `catalog.snapshot` 必须报同一个目录修订号（D4/G5 的口径结论）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeLinkHandshakeView {
     /// 该对端的 `access` 角色行；未配对/未批准时为 `None`（未知节点照常签发挑战）。
@@ -77,8 +81,72 @@ pub struct NodeLinkHandshakeView {
     pub public_key: Option<PeerPublicKey>,
     /// 该对端最近一次配对；`None` = 该对端从未配对。
     pub pairing: Option<PairingRecord>,
-    /// 本机全局水位（`store.head()`）：`serverEpoch` 与 catalogue revision 的来源。
+    /// 本机全局水位（`store.head()`）：`serverEpoch` 的来源。
     pub head: GlobalCursor,
+    /// 管理写集水位（`AuditStore::watermark()`）：`catalogRevision` 的唯一来源。
+    pub catalog_revision: u64,
+}
+
+/// Node Link 的 catalog 投影源（`design.md` D4；`NODE_LINK_PROTOCOL.md` §12.3）。
+///
+/// 只承载投影需要的持久事实：管理写集水位（`revision`，取自 `AuditStore::watermark`）、该对端的
+/// `access` 信任行（可见性策略与 grant 判定的输入，未配对时为 `None`）与本机全部 Export 记录
+/// （含已撤销；撤销由条目自己的 `revoked` 标记表达）。不含任何秘密材料。
+///
+/// 这是**无 actor** 的窄入口（与 [`NodeLinkHandshakeView`] 同一模式）：授权面收窄到「单个已认证的
+/// accessNodeId」，节点绑定由连接层保证；`exportIds` 一类可见性策略是调用方的单点边界。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkCatalogView {
+    /// 管理写集水位（`AuditStore::watermark`）：`catalogRevision` 的唯一来源。
+    pub revision: u64,
+    /// 该对端的 `access` 角色行；未配对/未批准时为 `None`。
+    pub node: Option<NodeRecord>,
+    /// 本机全部 Export 记录（含已撤销）。
+    pub exports: Vec<ExportRecord>,
+    /// 本机 Agent 目录（投影 `agents[].name` 的唯一来源；名字不进存储合同）。
+    pub agents: Vec<AgentDescriptor>,
+}
+
+/// Node Link 会话视图（`NODE_LINK_PROTOCOL.md` §12.4 的快照元数据）。
+///
+/// 只承载快照确实需要的元数据：会话状态/版本、origin epoch 与 origin head、未决交互。正文（消息、
+/// turn、diff、终端输出、ACP raw）**不在这里**，也不得进快照。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkSessionView {
+    /// 会话摘要（`state`/`version` 是 `sessionMeta` 的两个字段）。
+    pub session: SessionSummary,
+    /// 该会话当前 origin cursor（`resource.snapshot_begin.cursor` 的来源）。
+    pub head: OriginCursor,
+    /// 未决交互的元数据 + 创建它的 origin 事件 id（正文由调用方按 id 取）。
+    pub pending_interactions: Vec<NodeLinkPendingInteraction>,
+}
+
+/// 快照里的一个未决交互条目（`NODE_LINK_PROTOCOL.md` §12.4 的 `pending_interactions` item）。
+///
+/// `origin_event` 是**创建该交互的 origin 事件**：wire 的 `payloadDigest` 由调用方用该事件的 payload
+/// 按 ACPR-CJ1 规则现算（core 不依赖 `acpr-wire`），因此这里给出事件定位而不是摘要。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLinkPendingInteraction {
+    pub interaction: PendingInteraction,
+    pub origin_event: EventId,
+}
+
+/// Node Link 的 origin 事件投递单元（`resource.event` 与增量重放共用的形状）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkEvent {
+    pub event_id: EventId,
+    pub event_type: EventType,
+    pub origin_epoch: OriginEpoch,
+    pub origin_sequence: Sequence,
+    pub created_at: Timestamp,
+    pub payload: EventPayload,
+}
+/// `node_link_replay` 的结果：本批事件 + 该会话当前的 origin head。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeLinkReplay {
+    pub events: Vec<NodeLinkEvent>,
+    /// 该会话当前的 origin cursor（`resource.snapshot_end.cursor` / `resource.event` 之后的续读点）。
+    pub head: OriginCursor,
 }
 
 /// §4 的用例面实现。组合根持有一个 `Arc<UseCases>`。
@@ -682,11 +750,13 @@ impl UseCases {
         let public_key = self.trust.peer_key(&peer).await?;
         let pairing = self.trust.pairing_for(&peer).await?;
         let head = self.store.head().await?;
+        let catalog_revision = self.audit.watermark().await?;
         Ok(NodeLinkHandshakeView {
             node,
             public_key,
             pairing,
             head,
+            catalog_revision,
         })
     }
 
@@ -759,6 +829,171 @@ impl UseCases {
                 context: WriteContext { at, audit: audits },
             })
             .await
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Node Link 资源读面（WP5 的窄 seam；design D6）
+    // ---------------------------------------------------------------------------------------
+
+    /// Node Link 的 catalog 投影源（`design.md` D4；`NODE_LINK_PROTOCOL.md` §12.3）。
+    ///
+    /// **无 actor**（与 [`UseCases::node_link_handshake_view`] 同一模式）：连接层在认证完成后以已认证
+    /// 的 `access_node` 调用，授权面因此收窄到「单个已认证 node id」。零写入、零审计。未知 id 返回
+    /// `node = None` 的空视图（不用错误区分存在性）；本机 Export 记录与撤销状态一律**当场从持久化记
+    /// 录读**，不做缓存副本（因此撤销天然即时生效）。
+    pub async fn node_link_catalog_view(
+        &self,
+        access_node: &NodeId,
+    ) -> Result<NodeLinkCatalogView, PortError> {
+        let node = self.trust.node(access_node, NodeKind::Access).await?;
+        let exports = self.exports.exports().await?;
+        let agents = self.catalog.agents().await?;
+        let revision = self.audit.watermark().await?;
+        Ok(NodeLinkCatalogView {
+            revision,
+            node,
+            exports,
+            agents,
+        })
+    }
+
+    /// Node Link 快照的元数据视图（`NODE_LINK_PROTOCOL.md` §12.4）：会话状态/版本、origin head 与未决
+    /// 交互（不含任何正文）。
+    pub async fn node_link_session_view(
+        &self,
+        access_node: &NodeId,
+        export: &ExportId,
+        session: &SessionId,
+    ) -> Result<NodeLinkSessionView, PortError> {
+        self.node_link_session_access(access_node, export, session)
+            .await?;
+        let slice = self
+            .store
+            .read_view()
+            .await?
+            .node_link_slice(session, None, ReplayLimit::new(0))
+            .await?;
+        Ok(NodeLinkSessionView {
+            session: slice.summary,
+            head: slice.head,
+            pending_interactions: slice
+                .pending_interactions
+                .into_iter()
+                .map(|row| NodeLinkPendingInteraction {
+                    interaction: row.interaction,
+                    origin_event: row.origin_event,
+                })
+                .collect(),
+        })
+    }
+
+    /// Node Link 的 origin 游标重放（`NODE_LINK_PROTOCOL.md` §12.4）：`after` 之后的会话事件含正文。
+    ///
+    /// `after` 为 `None` 时从该会话开头取本批（快照结束点由返回的 `head` 表达）；`after` 的
+    /// `origin_epoch` 与该会话当前 epoch 不一致时返回 `InvalidRequest("nodelink.origin_epoch_mismatch")`，
+    /// 由适配器映射为 `nodelink.protocol.sequence_invalid`（不从错误位置重放）。
+    pub async fn node_link_replay(
+        &self,
+        access_node: &NodeId,
+        export: &ExportId,
+        session: &SessionId,
+        after: Option<OriginCursor>,
+        limit: ReplayLimit,
+    ) -> Result<NodeLinkReplay, PortError> {
+        self.node_link_session_access(access_node, export, session)
+            .await?;
+        let slice = self
+            .store
+            .read_view()
+            .await?
+            .node_link_slice(session, after.clone(), limit)
+            .await?;
+        if let Some(cursor) = &after
+            && cursor.origin_epoch != slice.head.origin_epoch
+        {
+            return Err(PortError::InvalidRequest("nodelink.origin_epoch_mismatch"));
+        }
+        let mut events = Vec::with_capacity(slice.events.len());
+        for record in slice.events {
+            let origin_epoch = record
+                .event
+                .origin_epoch
+                .ok_or(PortError::Corrupt("session event without an origin epoch"))?;
+            let origin_sequence = record.event.origin_sequence.ok_or(PortError::Corrupt(
+                "session event without an origin sequence",
+            ))?;
+            events.push(NodeLinkEvent {
+                event_id: record.event.id,
+                event_type: record.event.event_type,
+                origin_epoch,
+                origin_sequence,
+                created_at: record.event.created_at,
+                payload: record.payload,
+            });
+        }
+        Ok(NodeLinkReplay {
+            events,
+            head: slice.head,
+        })
+    }
+
+    /// 某会话内一条事件的持久化正文（事件扇出的正文来源）。
+    ///
+    /// 与 [`UseCases::node_link_replay`] 同一套归属前置：调用方必须给出该连接 attachment 上的
+    /// `(access_node, export, session)`，因此本入口不是按任意 event id 的通用读取。
+    pub async fn node_link_event_payload(
+        &self,
+        access_node: &NodeId,
+        export: &ExportId,
+        session: &SessionId,
+        event: &EventId,
+    ) -> Result<Option<EventPayload>, PortError> {
+        self.node_link_session_access(access_node, export, session)
+            .await?;
+        self.store
+            .read_view()
+            .await?
+            .session_event_payload(session, event)
+            .await
+    }
+
+    /// Node Link 会话读的归属前置：对端是已配对的 `access` 行、Export 存在且未撤销、会话存在且其
+    /// Agent 属于该 Export。
+    ///
+    /// 「这个 Export 是否对该节点可见」（`design.md` D4 的 `exportIds` 口径）不在 core 判定：它是
+    /// 适配器的**单点可见性策略**（待用户裁决，见 WP5 handoff）；core 只守住「sessionRef 确实属于该
+    /// Export」这条硬底线，避免把 `(exportId, sessionId)` 当成可任意组合的读取钥匙。
+    async fn node_link_session_access(
+        &self,
+        access_node: &NodeId,
+        export: &ExportId,
+        session: &SessionId,
+    ) -> Result<(), PortError> {
+        if self
+            .trust
+            .node(access_node, NodeKind::Access)
+            .await?
+            .filter(|row| row.state() == NodeState::Paired)
+            .is_none()
+        {
+            return Err(PortError::InvalidRequest("authorization.scope_denied"));
+        }
+        let Some(record) = self.exports.export(export).await? else {
+            return Err(PortError::NotFound(EntityRef::Export(export.clone())));
+        };
+        let Some(snapshot) = self.store.load(session).await? else {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        };
+        let agent = snapshot.session.agent().agent_id();
+        if record.is_revoked()
+            || !record
+                .agent_ids()
+                .iter()
+                .any(|candidate| candidate == agent)
+        {
+            return Err(PortError::InvalidRequest("export.not_granted"));
+        }
+        Ok(())
     }
 
     /// 配对通道的只读视图（claim/status HTTP 端点；design D12 的 seam 补全）。
@@ -1364,8 +1599,8 @@ mod tests {
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
-        AgentId, AgentRef, CommandKind, CommandPayload, Nonce, PairingState, ResourceOrigin,
-        ScopeSet,
+        AgentId, AgentRef, CommandKind, CommandPayload, CommittedEvent, Nonce, PairingState,
+        ResourceOrigin, ScopeSet, ViewJson,
     };
     use crate::ports::HistoryInclude;
 
@@ -2228,6 +2463,333 @@ mod tests {
                 && fixture.world.audits.lock().expect("lock").is_empty(),
             "握手准入读取零写入、无审计"
         );
+    }
+
+    /// WP5（任务 2.13）：catalog 投影源只读持久事实：信任行、全部 Export 与**审计水位**（`catalogRevision`
+    /// 的来源，不是 `store.head()`）；未知节点是空视图而不是错误；零写入。
+    #[test]
+    fn node_link_catalog_view_reads_the_audit_watermark() {
+        let fixture = fixture();
+        let node = NodeId::new(&uuid_text(121)).expect("node");
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node,
+            NodeKind::Access,
+            NodeState::Paired,
+        ));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-visible",
+                &["agent-1"],
+                &["grant.observe"],
+                false,
+            ));
+        for _ in 0..3 {
+            fixture.world.audits.lock().expect("lock").push(
+                AuditRecord::try_new(
+                    crate::broker::test_support::ts(0),
+                    AuditAction::ExportCreated,
+                    Actor::LocalCli,
+                    None,
+                    None,
+                    EntityRef::Export(ExportId::new("export-visible").expect("export id")),
+                    AuditOutcome::Success,
+                    None,
+                )
+                .expect("审计行"),
+            );
+        }
+
+        let view = block_on(fixture.use_cases.node_link_catalog_view(&node)).expect("catalog view");
+        assert_eq!(view.revision, 3, "revision 取自审计水位");
+        assert_eq!(
+            view.node.as_ref().map(NodeRecord::state),
+            Some(NodeState::Paired)
+        );
+        assert_eq!(view.exports.len(), 1);
+        assert_eq!(view.exports[0].export_id().as_str(), "export-visible");
+
+        let unknown = NodeId::new(&uuid_text(122)).expect("node");
+        let empty = block_on(fixture.use_cases.node_link_catalog_view(&unknown)).expect("空视图");
+        assert!(empty.node.is_none(), "未知节点不用错误区分存在性");
+        assert_eq!(empty.revision, 3, "水位与节点无关");
+
+        assert!(
+            fixture.world.write_audits.lock().expect("lock").is_empty(),
+            "catalog 投影是零写入的"
+        );
+    }
+
+    /// WP5（任务 2.14）：会话读的归属前置——对端必须是已配对的 `access` 行、Export 必须存在且未撤销、
+    /// 会话的 Agent 必须属于该 Export；epoch 不一致的重放一律拒绝（不从错误位置重放）。
+    #[test]
+    fn node_link_session_reads_are_bound_to_the_node_and_export() {
+        let fixture = fixture();
+        let node = NodeId::new(&uuid_text(123)).expect("node");
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node,
+            NodeKind::Access,
+            NodeState::Paired,
+        ));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-a",
+                &["agent-1"],
+                &["grant.observe"],
+                false,
+            ));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-revoked",
+                &["agent-1"],
+                &["grant.observe"],
+                true,
+            ));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-other-agent",
+                &["agent-2"],
+                &["grant.observe"],
+                false,
+            ));
+        let session = fixture.session.clone();
+        let export = ExportId::new("export-a").expect("export id");
+
+        let view = block_on(
+            fixture
+                .use_cases
+                .node_link_session_view(&node, &export, &session),
+        )
+        .expect("会话视图");
+        assert_eq!(view.session.session_id(), &session);
+        assert_eq!(view.head.origin_sequence.get(), 0, "尚无事件的会话序列为 0");
+        assert!(view.pending_interactions.is_empty());
+
+        // 未知 Export / 未知会话 → NotFound（适配器映射为 export.not_found）。
+        let unknown_export = ExportId::new("export-none").expect("export id");
+        assert!(matches!(
+            block_on(
+                fixture
+                    .use_cases
+                    .node_link_session_view(&node, &unknown_export, &session)
+            ),
+            Err(PortError::NotFound(EntityRef::Export(_)))
+        ));
+        let unknown_session = SessionId::new(&uuid_text(999)).expect("session");
+        assert!(matches!(
+            block_on(
+                fixture
+                    .use_cases
+                    .node_link_session_view(&node, &export, &unknown_session)
+            ),
+            Err(PortError::NotFound(EntityRef::Session(_)))
+        ));
+
+        // 已撤销 Export 与「Agent 不属于该 Export」→ 拒绝且不改语义。
+        for rejected in ["export-revoked", "export-other-agent"] {
+            let export = ExportId::new(rejected).expect("export id");
+            assert!(
+                matches!(
+                    block_on(
+                        fixture
+                            .use_cases
+                            .node_link_session_view(&node, &export, &session)
+                    ),
+                    Err(PortError::InvalidRequest("export.not_granted"))
+                ),
+                "{rejected} 必须被拒"
+            );
+        }
+
+        // 没有 `access` 行（或行未配对）时一律 `authorization.scope_denied`。
+        let unknown_node = NodeId::new(&uuid_text(124)).expect("node");
+        assert!(matches!(
+            block_on(
+                fixture
+                    .use_cases
+                    .node_link_session_view(&unknown_node, &export, &session)
+            ),
+            Err(PortError::InvalidRequest("authorization.scope_denied"))
+        ));
+
+        // 重放的 epoch 不一致 → 显式拒绝。
+        let wrong_epoch = OriginCursor {
+            origin_epoch: OriginEpoch::new(&uuid_text(777)).expect("epoch"),
+            origin_sequence: Sequence::new(0).expect("sequence"),
+        };
+        assert!(matches!(
+            block_on(fixture.use_cases.node_link_replay(
+                &node,
+                &export,
+                &session,
+                Some(wrong_epoch),
+                ReplayLimit::new(10),
+            )),
+            Err(PortError::InvalidRequest("nodelink.origin_epoch_mismatch"))
+        ));
+    }
+
+    /// WP5（任务 2.14/2.15）：origin 重放按 `origin_sequence > after` 取事件含正文，head 是该会话的
+    /// 最大 origin 序列；事件正文读取按会话归属收窄。
+    #[test]
+    fn node_link_replay_returns_origin_events_with_payloads() {
+        let fixture = fixture();
+        let node = NodeId::new(&uuid_text(131)).expect("node");
+        fixture.world.nodes.lock().expect("lock").push(node_record(
+            &node,
+            NodeKind::Access,
+            NodeState::Paired,
+        ));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-replay",
+                &["agent-1"],
+                &["grant.observe"],
+                false,
+            ));
+        let session = fixture.session.clone();
+        let epoch = {
+            let state = crate::broker::test_support::lock(&fixture.world.state);
+            state
+                .epochs
+                .get(session.as_str())
+                .cloned()
+                .expect("fixture 必须为会话写入 origin epoch")
+        };
+        let first = EventId::new(&uuid_text(141)).expect("event");
+        let second = EventId::new(&uuid_text(142)).expect("event");
+        {
+            let mut state = crate::broker::test_support::lock(&fixture.world.state);
+            for (index, id) in [&first, &second].into_iter().enumerate() {
+                let sequence = Sequence::new(index as u64 + 1).expect("sequence");
+                state.events.push(CommittedEvent {
+                    id: id.clone(),
+                    event_type: EventType::new("session.created").expect("event type"),
+                    session: Some(session.clone()),
+                    session_sequence: Some(sequence),
+                    global_sequence: sequence,
+                    origin_epoch: Some(epoch.clone()),
+                    origin_sequence: Some(sequence),
+                    created_at: crate::broker::test_support::ts(index as u32),
+                });
+                state.event_payloads.insert(
+                    id.as_str().to_owned(),
+                    EventPayload::new(
+                        ViewJson::new(&format!(r#"{{"index":{index}}}"#)).expect("view"),
+                        None,
+                    ),
+                );
+            }
+        }
+
+        let export = ExportId::new("export-replay").expect("export id");
+        let replay = block_on(fixture.use_cases.node_link_replay(
+            &node,
+            &export,
+            &session,
+            None,
+            ReplayLimit::new(10),
+        ))
+        .expect("重放");
+        assert_eq!(replay.events.len(), 2);
+        assert_eq!(replay.events[0].origin_sequence.get(), 1);
+        assert_eq!(replay.events[1].event_id, second);
+        assert_eq!(replay.head.origin_epoch, epoch);
+        assert_eq!(replay.head.origin_sequence.get(), 2);
+
+        // 非空 cursor：只取该点之后的事件，且按 origin 序列比较。
+        let after = OriginCursor {
+            origin_epoch: epoch.clone(),
+            origin_sequence: Sequence::new(1).expect("sequence"),
+        };
+        let resumed = block_on(fixture.use_cases.node_link_replay(
+            &node,
+            &export,
+            &session,
+            Some(after),
+            ReplayLimit::new(10),
+        ))
+        .expect("增量重放");
+        assert_eq!(resumed.events.len(), 1);
+        assert_eq!(resumed.events[0].event_id, second);
+
+        // 正文读取按会话归属收窄：事件存在但不属于该会话时为 `None`。
+        let other_session = SessionId::new(&uuid_text(998)).expect("session");
+        assert!(
+            block_on(fixture.use_cases.node_link_event_payload(
+                &node,
+                &export,
+                &other_session,
+                &first
+            ))
+            .is_err(),
+            "会话不存在时正文读取失败关闭（先过归属前置）"
+        );
+        assert!(
+            block_on(
+                fixture
+                    .use_cases
+                    .node_link_event_payload(&node, &export, &session, &first)
+            )
+            .expect("正文读取")
+            .is_some()
+        );
+    }
+
+    /// 测试用 Export 记录（可见性策略在适配器，core 只校验「会话属于该 Export」）。
+    fn export_record(id: &str, agents: &[&str], grants: &[&str], revoked: bool) -> ExportRecord {
+        let alias = WorkspaceAlias::new("project").expect("alias");
+        ExportRecord::try_new(
+            ExportId::new(id).expect("export id"),
+            "team export",
+            agents
+                .iter()
+                .map(|agent| AgentId::new(agent).expect("agent id"))
+                .collect(),
+            vec![
+                crate::model::WorkspaceAliasEntry::try_new(alias.clone(), "Project")
+                    .expect("alias entry"),
+            ],
+            alias.clone(),
+            vec![
+                crate::model::ExportTemplate::try_new(
+                    crate::model::TemplateId::new("coding").expect("template id"),
+                    "Coding",
+                    alias.clone(),
+                    Vec::new(),
+                )
+                .expect("template"),
+            ],
+            crate::model::TemplateId::new("coding").expect("template id"),
+            crate::model::GrantSet::try_from_iter(grants).expect("grants"),
+            crate::model::CachePolicy::NoContentCache,
+            crate::broker::test_support::ts(0),
+            if revoked {
+                Some(crate::broker::test_support::ts(1))
+            } else {
+                None
+            },
+        )
+        .expect("export record")
     }
 
     /// 任务 2.28：握手审计入口只追加 `node.authenticated`/`node.auth_failed`，归因与目标都是该对端；
