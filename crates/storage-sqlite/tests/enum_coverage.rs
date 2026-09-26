@@ -144,6 +144,19 @@ fn revoke_reason_tokens() -> Vec<String> {
         .collect()
 }
 
+/// `owned_command.actor_kind` 的 CHECK 允许值。
+///
+/// **刻意不等于 `ActorKind::ALL`**（design D12）：`owned_command` 不接受 `pairing_claimant`——配对
+/// 认领方只能出现在配对通道，永不可提交命令（broker 侧对它一律拒绝授权）。两张审计表的
+/// `actor_kind` 仍然按 `ActorKind::ALL` 断言，因此新增一个 `ActorKind` 变体时两处会分别给出
+/// 「审计表少一个值」与「命令表多收一个值」两种具名失败。
+fn command_actor_kinds() -> Vec<String> {
+    ["device", "node", "cli"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
 /// 每张表的 DDL 文本，按表名索引。
 async fn table_sql(pool: &sqlx::SqlitePool, table: &str) -> String {
     let sql: Option<String> =
@@ -199,11 +212,7 @@ async fn ddl_enum_lists_match_the_core_enums() {
             "acp_raw_unavailable_reason",
             tokens(RawUnavailableReason::ALL, RawUnavailableReason::as_str),
         ),
-        (
-            "owned_command",
-            "actor_kind",
-            tokens(ActorKind::ALL, ActorKind::as_str),
-        ),
+        ("owned_command", "actor_kind", command_actor_kinds()),
         (
             "owned_command",
             "kind",

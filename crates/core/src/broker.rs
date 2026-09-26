@@ -532,6 +532,8 @@ impl Broker {
     /// - `Device`：`scopes` 是展开后的独立 scope（等于命令名），必须含该命令。
     /// - `Node`：Access 侧要求本地 `ImportRecord.grants` 覆盖该命令；Owner 侧要求某个未撤销
     ///   `ExportRecord` 既覆盖该命令、又覆盖目标会话的 agent。两者任一成立即通过。
+    /// - `PairingClaimant`：**任何命令都不授权**（design D12：认领方只存在于配对通道，且那里不经
+    ///   broker 授权）；命中即失败关闭并记一条 `authorization.denied`。
     pub async fn authorize(
         &self,
         actor: &Actor,
@@ -547,6 +549,8 @@ impl Broker {
                 .node_allowed(node, command, session)
                 .await
                 .unwrap_or(false),
+            // 配对认领方没有 scope/grant 面：不给任何命令授权（见方法文档）。
+            Actor::PairingClaimant { .. } => false,
         };
         if allowed {
             return Ok(());
@@ -3076,19 +3080,19 @@ pub(crate) mod test_support {
         AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
         AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId,
         ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
-        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingTarget,
-        PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef, ResourceOrigin, SeedState,
-        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias,
-        WorkspaceRecord,
+        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
+        PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
+        ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+        WorkspaceAlias, WorkspaceRecord,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
         DeviceWrite, DropReport, ExpiryWrite, ExportRevocation, ExportWrite, IdempotentReplay,
         ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
-        NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingSettlementWrite,
-        PairingWrite, ProfileWrite, ProviderRefWrite, PruneReport, RemoteCommandRef,
-        RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef, TrustStore,
-        TurnAccepted, WorkspaceWrite,
+        NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
+        PairingSettlementWrite, PairingWrite, ProfileWrite, ProviderRefWrite, PruneReport,
+        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef,
+        TrustStore, TurnAccepted, WorkspaceWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -3234,6 +3238,8 @@ pub(crate) mod test_support {
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
         /// 配对行：`settle_pairing` 的目标族由它读出（§11.6 第 2 条）。
         pub(crate) pairings: Mutex<Vec<PairingRecord>>,
+        /// 已认领的配对对端行（`consume_pairing` 的身份判定从它读；测试按需 seed，默认空）。
+        pub(crate) peers: Mutex<Vec<(PairingId, PairingPeer)>>,
         /// 节点角色行（`add_import` 的 owner 前置校验从它读）。
         pub(crate) nodes: Mutex<Vec<NodeRecord>>,
         /// 目录里的可用 Agent（`put_export` 的前置校验从它读；默认空）。
@@ -4437,8 +4443,11 @@ pub(crate) mod test_support {
                 .cloned())
         }
 
-        async fn pairing_peer(&self, _id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
-            Ok(None)
+        async fn pairing_peer(&self, id: &PairingId) -> Result<Option<PairingPeer>, PortError> {
+            Ok(lock(&self.world.peers)
+                .iter()
+                .find(|(pairing, _)| pairing == id)
+                .map(|(_, peer)| peer.clone()))
         }
 
         async fn put_device(&self, _write: DeviceWrite) -> Result<(), PortError> {
@@ -4504,6 +4513,49 @@ pub(crate) mod test_support {
 
         async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
             Ok(0)
+        }
+
+        /// 消费已批准的配对：本替身只实现「状态推进到 `consumed` + 审计入账」与状态拒绝；权威的
+        /// 对端身份判定在用例层（`UseCases::consume_pairing` 先于本调用完成，否则根本到不了这里）。
+        /// 幂等命中**不**追加审计（与真实实现的写集语义一致：不改状态就不产生新的留痕）。
+        async fn consume_pairing(
+            &self,
+            write: PairingConsumption,
+        ) -> Result<PairingRecord, PortError> {
+            let mut pairings = lock(&self.world.pairings);
+            let Some(index) = pairings
+                .iter()
+                .position(|record| record.id() == &write.pairing)
+            else {
+                return Err(missing_pairing());
+            };
+            let record = pairings[index].clone();
+            match record.state() {
+                PairingState::Consumed => Ok(record),
+                PairingState::Approved => {
+                    let consumed = PairingRecord::try_new(
+                        record.id().clone(),
+                        record.target(),
+                        PairingState::Consumed,
+                        record.display_name().map(str::to_owned),
+                        record.requested_scopes().clone(),
+                        record.requested_grants().clone(),
+                        record.secret_digest().clone(),
+                        record.host_binding(),
+                        record.created_at().clone(),
+                        record.expires_at().clone(),
+                        record.claimed_at().cloned(),
+                        record.approved_at().cloned(),
+                        Some(write.context.at.clone()),
+                    )?;
+                    pairings[index] = consumed.clone();
+                    lock(&self.world.write_audits)
+                        .extend(write.context.audit.iter().map(|audit| audit.action));
+                    Ok(consumed)
+                }
+                PairingState::Expired => Err(PortError::Conflict(ConflictKind::Expired)),
+                _ => Err(PortError::Conflict(ConflictKind::Consumed)),
+            }
         }
     }
 

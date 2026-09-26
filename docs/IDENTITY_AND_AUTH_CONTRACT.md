@@ -258,7 +258,8 @@ pub struct ProofSubmission {
 
 /// 3. 收尾：认证成功后的**唯一**副作用入口（配对转 consumed、last_seen、审计）。
 /// 它**不**直接写库：返回需要推进为 consumed 的配对，由调用方在
-/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集里同一事务提交。
+/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集（`TrustStore::consume_pairing`，
+/// 新增于 2026-09-26）里同一事务提交。
 pub struct Completion {
     pub fact: IdentityFact,
     pub at: Timestamp,                          // 同一次写入的审计与 last_seen 用同一时间
@@ -339,6 +340,7 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 ```
 
 - `[决定]` core 的 `Actor` 只能由本节的验证输出构造（`Actor::Device`/`Actor::Node`）。`Actor::LocalCli` 只能由本地通道适配器在 OS 用户边界校验后构造（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2）；`localPrincipalRef` 只进审计，**不是** Owner 认证的最终用户身份（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8.3）。
+- `[决定]`（2026-09-26）`Actor::PairingClaimant { pairing }` 只能由**配对 HTTP 端点**在 claim/status 的 proof 验证成功后构造，且**绑定该配对**：用例面只在 `actor.pairing` 等于本次调用的目标配对时才受理，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绍形状，不让错误变成配对 id 预言机）。它既不是设备也不是节点，永不被 broker 授予任何命令，只用于配对通道与审计归因（`CORE_PORTS_AND_STORAGE.md` §3.5/§4 与 `SECURITY_DESIGN.md` §14.2）。
 - `[决定]` `Revoked`/`Unknown` 必须映射为 `auth.device_revoked`/`auth.device_unknown`（节点侧为 Node Link 的对应码），不得降级为 `authorization.scope_denied`——两类的可重试性与客户端行为不同。
 
 ### 5.2 nonce、重放与时钟

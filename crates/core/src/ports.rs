@@ -679,6 +679,18 @@ pub struct ExpiryWrite {
     pub context: WriteContext,
 }
 
+/// 消费一个已批准的配对（§11.6 第 8 条）。
+///
+/// `actor` 是本次认证的主体：只接受与该配对**已批准对端**一致的 `Actor::Node`/`Actor::Device`（存储层
+/// 在同一事务内与 `owned_pairing_peer` 比对）；`context.audit` 必须携带与 `actor` 同主的审计行
+/// （`node.authenticated`/`device.authenticated`，`SECURITY_DESIGN.md` §14.2）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairingConsumption {
+    pub pairing: PairingId,
+    pub actor: Actor,
+    pub context: WriteContext,
+}
+
 /// 写入/更新一个 Export（§11.6）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportWrite {
@@ -786,6 +798,11 @@ pub trait TrustStore: Send + Sync {
     ) -> Result<TrustRecordRef, PortError>;
 
     async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError>;
+
+    /// 消费一个已批准的配对（§11.6 第 8 条）：单事务把状态推进到 `consumed` 并写 `terminal_at`、追加
+    /// `context.audit`；已是 `consumed` 且 `actor` 与对端一致时幂等成功（不覆盖首次 `terminal_at`，也
+    /// 不重复写审计）。
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError>;
 }
 
 /// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。

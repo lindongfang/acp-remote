@@ -1049,6 +1049,13 @@ impl TrustStore for NotTouched {
     async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
+
+    async fn consume_pairing(
+        &self,
+        _write: PairingConsumption,
+    ) -> Result<PairingRecord, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
 }
 
 pub(crate) struct FakeIds;
@@ -1448,6 +1455,13 @@ impl TrustStore for FakeTrust {
     }
 
     async fn expire_pairings(&self, _write: ExpiryWrite) -> Result<u64, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn consume_pairing(
+        &self,
+        _write: PairingConsumption,
+    ) -> Result<PairingRecord, PortError> {
         unreachable!("{NOT_TOUCHED}")
     }
 }

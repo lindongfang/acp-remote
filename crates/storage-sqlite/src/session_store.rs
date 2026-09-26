@@ -319,6 +319,9 @@ pub(crate) fn actor_key(actor: &Actor) -> (ActorKind, String) {
 ///
 /// `owned_command` 只存 §7.3 冻结的两列，因此还原是**有损**的：设备 scopes 不在表里（授权由 core 判定，
 /// 存储不参与），这里给 `ScopeSet::empty()`；Node 的复合键按 `"{node}/{access_node}"` 拆回。
+///
+/// `pairing_claimant` 在此**明确失败**：`owned_command.actor_kind` 的 CHECK 只有 `device`/`node`/`cli`
+/// （认领方永不提交命令，design D12），真读到这一行说明库被外部改写——按列值损坏处理，不猜一个 actor。
 fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> {
     match kind {
         ActorKind::Device => Ok(Actor::Device {
@@ -336,6 +339,10 @@ fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> 
             })
         }
         ActorKind::Cli => Ok(Actor::LocalCli),
+        ActorKind::PairingClaimant => Err(StorageError::ColumnValue {
+            column: "owned_command.actor_kind",
+            expected: "device, node or cli",
+        }),
     }
 }
 

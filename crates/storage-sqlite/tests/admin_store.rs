@@ -46,9 +46,9 @@ use acp_core::model::{
 use acp_core::ports::{
     DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
     ExportWrite, ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore,
-    NodeRevocation, NodeWrite, PairingClaimWrite, PairingSettlementWrite, PairingWrite,
-    PendingAudit, ProfileWrite, ProviderRefWrite, RemoteDeliveryStore, RevokeReason, SeedWrite,
-    SessionStore, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
+    NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite, RemoteDeliveryStore, RevokeReason,
+    SeedWrite, SessionStore, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
 };
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
@@ -197,6 +197,27 @@ fn context(minute: u32, audit: Vec<PendingAudit>) -> WriteContext {
     WriteContext {
         at: at(minute),
         audit,
+    }
+}
+
+/// 与 `audit()` 同款，但归因主体可指定：`consume_pairing` 要求写集主体与审计归因一致（§11.6 第 8 条）。
+fn audit_for(actor: Actor, action: AuditAction, target: EntityRef) -> PendingAudit {
+    PendingAudit {
+        action,
+        actor,
+        via_node: None,
+        local_principal_ref: None,
+        target,
+        outcome: AuditOutcome::Success,
+        detail_digest: None,
+    }
+}
+
+/// 消费配对用的设备主体（该端口不看 scopes）。
+fn device_actor() -> Actor {
+    Actor::Device {
+        device: device_id(),
+        scopes: ScopeSet::empty(),
     }
 }
 
@@ -1306,6 +1327,368 @@ async fn a_pairing_can_be_settled_only_once() {
     assert_eq!(audit_rows(&pool, AuditAction::PairingApproved).await, 1);
     assert_eq!(audit_rows(&pool, AuditAction::PairingRejected).await, 0);
     pool.close().await;
+}
+
+/// §11.6 第 8 条 / design D12：消费把 `approved` 推进到 `consumed`、写 `terminal_at` 并在同一写集里
+/// 追加 `device.authenticated`；同一对端重复调用幂等成功（不覆盖首次时间、不重复写审计）；重启后保持。
+#[tokio::test]
+async fn consume_pairing_advances_an_approved_pairing_once() {
+    let dir = temp_dir("admin-pairing-consume");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+
+    let consumed = store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: device_actor(),
+            context: context(
+                3,
+                vec![audit_for(
+                    device_actor(),
+                    AuditAction::DeviceAuthenticated,
+                    EntityRef::Pairing(pairing_id()),
+                )],
+            ),
+        })
+        .await
+        .expect("consume an approved pairing");
+    assert_eq!(consumed.state(), PairingState::Consumed);
+    assert_eq!(consumed.terminal_at(), Some(&at(3)));
+    assert_eq!(consumed.approved_at(), Some(&at(2)), "批准时间不得被改写");
+
+    // 幂等重试：同一对端的重复消费成功，且不改写首次时间。
+    let again = store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: device_actor(),
+            context: context(
+                4,
+                vec![audit_for(
+                    device_actor(),
+                    AuditAction::DeviceAuthenticated,
+                    EntityRef::Pairing(pairing_id()),
+                )],
+            ),
+        })
+        .await
+        .expect("a repeated consumption is idempotent");
+    assert_eq!(again.state(), PairingState::Consumed);
+    assert_eq!(again.terminal_at(), Some(&at(3)), "首次消费时间不得被改写");
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(audit_rows(&pool, AuditAction::DeviceAuthenticated).await, 1);
+    pool.close().await;
+
+    // 重启后状态保持（同一库再打开）。
+    let store = open(&dir).await;
+    let after = store
+        .pairing(&pairing_id())
+        .await
+        .expect("pairing")
+        .expect("pairing row");
+    assert_eq!(after.state(), PairingState::Consumed);
+    assert_eq!(after.terminal_at(), Some(&at(3)));
+    store.close().await;
+}
+
+/// 消费的授权面：只接受与该配对已批准对端同类同 id 的主体；写集主体与审计归因分歧按接线错误拒绝，
+/// 且任何被拒路径都不得改动配对行或留下审计。
+#[tokio::test]
+async fn consume_pairing_refuses_a_mismatched_peer_or_audit_actor() {
+    let dir = temp_dir("admin-pairing-consume-peer");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+
+    // 同类别但不同 id。
+    assert_conflict(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: Actor::Device {
+                    device: remote_device_id(),
+                    scopes: ScopeSet::empty(),
+                },
+                context: context(3, Vec::new()),
+            })
+            .await
+            .expect_err("a foreign device must not consume the pairing"),
+        ConflictKind::IdentityMismatch,
+    );
+    // 类别不对：设备配对不能被节点主体消费。
+    assert_conflict(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: Actor::Node {
+                    node: node_id(),
+                    access_node: peer_node_id(),
+                },
+                context: context(3, Vec::new()),
+            })
+            .await
+            .expect_err("a node must not consume a device pairing"),
+        ConflictKind::IdentityMismatch,
+    );
+    // 写集主体与审计归因分歧（`audit()` 的归因恒为 `Actor::LocalCli`）。
+    assert_invalid_request(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: device_actor(),
+                context: context(
+                    3,
+                    vec![audit(
+                        AuditAction::DeviceAuthenticated,
+                        EntityRef::Pairing(pairing_id()),
+                        AuditOutcome::Success,
+                    )],
+                ),
+            })
+            .await
+            .expect_err("a divergent audit attribution must fail closed"),
+        "consume_pairing actor must match every audit row",
+    );
+
+    let after = store
+        .pairing(&pairing_id())
+        .await
+        .expect("pairing")
+        .expect("pairing row");
+    assert_eq!(
+        after.state(),
+        PairingState::Approved,
+        "被拒路径不得推进状态"
+    );
+    assert_eq!(after.terminal_at(), None);
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let pool = raw_pool(&path).await;
+    assert_eq!(audit_rows(&pool, AuditAction::DeviceAuthenticated).await, 0);
+    pool.close().await;
+}
+
+/// 消费的状态面：未批准、已拒绝、已过期都具名拒绝；配对行或对端行缺失各自具名。
+#[tokio::test]
+async fn consume_pairing_refuses_unapproved_terminal_and_missing_rows() {
+    // 未批准（只 claim 过）。
+    let dir = temp_dir("admin-pairing-consume-unapproved");
+    let store = open(&dir).await;
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(30),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    store
+        .claim_pairing(device_claim(&device_id()))
+        .await
+        .expect("claim");
+    assert_invalid_request(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: device_actor(),
+                context: context(3, Vec::new()),
+            })
+            .await
+            .expect_err("an unapproved pairing must not be consumed"),
+        "pairing has not been approved",
+    );
+    store.close().await;
+
+    // 已拒绝的配对。
+    let dir = temp_dir("admin-pairing-consume-rejected");
+    let store = open(&dir).await;
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(30),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    store
+        .claim_pairing(device_claim(&device_id()))
+        .await
+        .expect("claim");
+    store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: pairing_id(),
+            settlement: PairingSettlement::rejected(Some("wrong device")).expect("rejection"),
+            context: context(2, Vec::new()),
+        })
+        .await
+        .expect("reject");
+    assert_conflict(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: device_actor(),
+                context: context(3, Vec::new()),
+            })
+            .await
+            .expect_err("a rejected pairing must not be consumed"),
+        ConflictKind::Consumed,
+    );
+    store.close().await;
+
+    // 已过期的配对（登记时 `expires` = t2，认领在 t1，扫捕在 t5 把它终结）。
+    let dir = temp_dir("admin-pairing-consume-expired");
+    let store = open(&dir).await;
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(2),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    store
+        .claim_pairing(device_claim(&device_id()))
+        .await
+        .expect("claim");
+    assert_eq!(
+        store
+            .expire_pairings(ExpiryWrite {
+                context: context(5, Vec::new()),
+            })
+            .await
+            .expect("expire sweep"),
+        1
+    );
+    assert_conflict(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: device_actor(),
+                context: context(6, Vec::new()),
+            })
+            .await
+            .expect_err("an expired pairing must not be consumed"),
+        ConflictKind::Expired,
+    );
+    store.close().await;
+
+    // 配对行缺失。
+    let dir = temp_dir("admin-pairing-consume-missing");
+    let store = open(&dir).await;
+    let missing = PairingId::new("abcdefab-1111-4111-8111-abcdefabcdef").expect("pairing id");
+    assert!(matches!(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: missing.clone(),
+                actor: device_actor(),
+                context: context(3, Vec::new()),
+            })
+            .await
+            .expect_err("an unknown pairing must be refused"),
+        PortError::NotFound(EntityRef::Pairing(id)) if id == missing
+    ));
+    store.close().await;
+
+    // 对端行缺失（库被外部改写）：失败关闭。
+    let dir = temp_dir("admin-pairing-consume-headless");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store.close().await;
+    let raw = raw_write_pool(&path).await;
+    sqlx::query("DELETE FROM owned_pairing_peer WHERE pairing_id = ?1")
+        .bind(PAIRING)
+        .execute(&raw)
+        .await
+        .expect("drop peer row");
+    raw.close().await;
+    let store = open(&dir).await;
+    assert!(matches!(
+        store
+            .consume_pairing(PairingConsumption {
+                pairing: pairing_id(),
+                actor: device_actor(),
+                context: context(3, Vec::new()),
+            })
+            .await
+            .expect_err("a pairing without a peer row must fail closed"),
+        PortError::Corrupt(_)
+    ));
+    store.close().await;
+}
+
+/// §11.2 第 6 条 / §9 判据 23：审计写失败时整个消费写集回滚——配对仍停在 `approved`、`terminal_at`
+/// 为空、也没有半条审计；触发器移除后同一写集成功。
+#[tokio::test]
+async fn a_failed_audit_write_leaves_the_pairing_approved() {
+    let dir = temp_dir("admin-pairing-consume-rollback");
+    let store = open(&dir).await;
+    approve_device(&store, &device_id(), 2).await;
+
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    let raw = raw_write_pool(&path).await;
+    sqlx::query(
+        "CREATE TRIGGER block_audit BEFORE INSERT ON owned_audit BEGIN \
+         SELECT RAISE(ABORT, 'audit blocked'); END",
+    )
+    .execute(&raw)
+    .await
+    .expect("install trigger");
+
+    let error = store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: device_actor(),
+            context: context(
+                3,
+                vec![audit_for(
+                    device_actor(),
+                    AuditAction::DeviceAuthenticated,
+                    EntityRef::Pairing(pairing_id()),
+                )],
+            ),
+        })
+        .await
+        .expect_err("an unwritable audit row must fail the write set");
+    assert!(
+        matches!(error, PortError::Backend(_)),
+        "约束/触发器失败必须给出具名错误，got {error}"
+    );
+    let after = store
+        .pairing(&pairing_id())
+        .await
+        .expect("pairing")
+        .expect("pairing row");
+    assert_eq!(
+        after.state(),
+        PairingState::Approved,
+        "失败写集不得留下半状态"
+    );
+    assert_eq!(after.terminal_at(), None);
+
+    sqlx::query("DROP TRIGGER block_audit")
+        .execute(&raw)
+        .await
+        .expect("drop trigger");
+    raw.close().await;
+
+    // 触发器移除后同一写集成功（证明失败来自审计写入，而不是这条写集本身非法）。
+    let consumed = store
+        .consume_pairing(PairingConsumption {
+            pairing: pairing_id(),
+            actor: device_actor(),
+            context: context(
+                4,
+                vec![audit_for(
+                    device_actor(),
+                    AuditAction::DeviceAuthenticated,
+                    EntityRef::Pairing(pairing_id()),
+                )],
+            ),
+        })
+        .await
+        .expect("the same write set succeeds without the trigger");
+    assert_eq!(consumed.state(), PairingState::Consumed);
+    store.close().await;
 }
 
 /// spec：拒绝或过期不创建信任；配对进入终态且此后不能被再次认领。

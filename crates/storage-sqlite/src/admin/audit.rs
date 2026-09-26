@@ -51,7 +51,8 @@ fn pending_audit(record: &AuditRecord) -> PendingAudit {
 /// 从 §7.3 的 `(actor_kind, actor_id)` 还原 `Actor`。
 ///
 /// 与 `owned_command` 的还原同款、**同样有损**：审计列只有这两列，设备 scopes 不在表里——审计只记录
-/// 归因，授权不在持久层判定。Node 的复合键按 `"{node}/{access_node}"` 拆回（`Actor::id_text` 的形状）。
+/// 归因，授权不在持久层判定。Node 的复合键按 `"{node}/{access_node}"` 拆回（`Actor::id_text` 的形状）；
+/// 认领方（`pairing_claimant`）的 `actor_id` 就是该配对 id。
 fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> {
     match kind {
         ActorKind::Device => Ok(Actor::Device {
@@ -69,6 +70,9 @@ fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> 
             })
         }
         ActorKind::Cli => Ok(Actor::LocalCli),
+        ActorKind::PairingClaimant => Ok(Actor::PairingClaimant {
+            pairing: decode(id, "owned_audit.actor_id")?,
+        }),
     }
 }
 

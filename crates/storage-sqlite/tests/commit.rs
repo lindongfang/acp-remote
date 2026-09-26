@@ -1285,7 +1285,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
     let health = store.health().await.expect("health");
     assert!(health.integrity_ok);
     assert!(!health.read_only);
-    assert_eq!(health.user_version, 2);
+    assert_eq!(health.user_version, 3);
 
     let found = store
         .find_request(&request(REQUEST), &actor())
