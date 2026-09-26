@@ -828,8 +828,11 @@ impl CommandRoute {
                 self.send_terminal(handle, &record)
             }
             _ => {
-                // 没有持久记录：创建在幂等行落盘前就失败（授权、本机 workspace 解析、写盘失败）。
-                // 这类失败是确定的（同一请求重试得到同一结果），本地回 `failed` 终态。
+                // 没有持久记录：创建在幂等行落盘前就失败。本层能确认的只有**确定类失败**——授权拒绝
+                // 与本机 workspace 解析失败：同一 requestId 重试得到同一结果，本地回 `failed` 终态。
+                // 存储写失败落在同一窗口却不属这一类：它没有留下持久首次结果（`CORE_PORTS_AND_STORAGE.md`
+                // §6 第 20 条、`NODE_LINK_PROTOCOL.md` §12.7），同 requestId 重查 `command.status` 回
+                // `nodelink.command.not_found`，重试可以创建出另一个会话。
                 if let Some(body) = create_terminal(&submit.request_id, &outcome, &self.clock()) {
                     let _ = handle.send(MessageType::CommandTerminal, &body);
                 }

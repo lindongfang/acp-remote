@@ -827,6 +827,8 @@ pub trait IdGenerator: Send + Sync {
     - **创建提交**：`StateChange::Create` 与幂等行在**同一事务**里落盘。幂等行的 `session = None`（装配期尚无目标会话），`session_id` 由存储层在事务内分配后**回填该列**——终态提交与第 16 条的启动恢复都按 `(session_id, request_id)` 定位该行，回填前那两处都定位不到它。`request_fingerprint` 取 ACPR-CJ1 之后的解码 payload 摘要，由适配层计算并作为参数传入（core 不依赖 `acpr-wire`）。
     - **幂等比对里的 `session` 分量**：`IdempotencyRecord.session = None` 的语义是「装配期无目标会话」（目前只有 `session.create`），存储层**不**用行里存储层的创建结果与它比对；`command`/`kind`/`expected_version`/`request_fingerprint` 四项仍然恒比（第 6 条）。命中且四项相同 → 返回行里记的首次 `sessionId`（`CommitOutcome.replayed`，不创建第二个会话、不开第二个后端端点）；任一不同 → `PortError::Conflict(IdempotencyConflict)`。
     - **终态提交**：一条 `command.completed`/`command.failed`/`command.uncertain` 事件（`causation = requestId`）+ `CommandTerminalRecord`。`completed` 的 `result` 是适配层投影的结果原文（Node Link 的 `SessionCreateResult`）、`completed` 必须有 `terminal_event_id`（§7.3 的 CHECK）；`failed`/`uncertain` 携带结构化错误。没有持久记录（创建在幂等行落盘前就失败）或记录已终结时，终态提交是**幂等 no-op**，不覆盖首次结果。
+    - **落盘前失败不构成持久首次结果**（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F1）：幂等行落盘前失败（如存储写失败）的 `session.create` 没有持久记录，因此同 `requestId` 重查回 `nodelink.command.not_found`，且重试可以创建出另一个会话、得到与首次尝试不同的结果——`failed` 终态只适用于适配层在同一 `requestId` 上能复现的确定类失败（授权拒绝、本机 workspace 解析失败），不得把落盘失败也描述成「重试结果确定」。
+    - **`settle_session_create` 只终结 `session.create` 的记录**（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F2）：该 `(actor, requestId)` 的持久记录 `command != "session.create"` 时返回 `InvalidRequest` 且零写入（适配层误用，wire 不可达），不得把别的命令的幂等行改写成创建的终态。
     - **崩溃窗口**：两次提交之间崩溃留下 `accepted` 行 + 已创建的会话；第 16 条的启动恢复把它终结为 `uncertain`（`command.uncertain` 事件 + `terminal_event_id`），**不**重放副作用、也不猜测创建是否成功。该行不是无会话命令：`owned_command.session_id` 已回填，恢复走「有会话」分支。
 
 ## 7. `storage-sqlite` v3 表结构

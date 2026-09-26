@@ -1339,6 +1339,9 @@ impl Broker {
     /// [`CommandTerminalRecord::try_new`] 校验）。**幂等 no-op** 的两种情况：该 `(actor, requestId)`
     /// 没有持久记录（创建在幂等行落盘前就失败），或记录已经终结（首次结果不覆盖）。
     ///
+    /// 只终结 `command == "session.create"` 的持久记录：该 `(actor, requestId)` 记着别的命令时是
+    /// 适配层误用（wire 不可达），显式 `InvalidRequest`，不把那条命令的幂等行改写成创建的终态。
+    ///
     /// 落盘失败（`Unavailable`）不报成功：行仍是 `accepted`，由启动恢复按 §6 第 16 条终结为 `uncertain`。
     pub async fn settle_session_create(
         &self,
@@ -1354,6 +1357,11 @@ impl Broker {
         let Some(record) = self.deps.store.find_request(request, actor).await? else {
             return Ok(false);
         };
+        if record.command() != "session.create" {
+            return Err(PortError::InvalidRequest(
+                "settle_session_create 只能终结 session.create 的持久记录（§6 第 20 条）",
+            ));
+        }
         if record.status().is_terminal() {
             return Ok(false);
         }
@@ -5642,6 +5650,43 @@ mod tests {
             ) => assert_eq!(first, second, "仍为 accepted 的重放返回原 turnId"),
             other => panic!("幂等重放应返回同一 turn：{other:?}"),
         }
+    }
+
+    /// §6 第 20 条：`settle_session_create` 只终结 `session.create` 的持久记录。同一 `(actor, requestId)`
+    /// 记着别的命令时（适配层误用，wire 不可达）必须 `InvalidRequest`，不得把那条命令改写成创建的终态。
+    #[test]
+    fn settle_session_create_rejects_other_commands() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let request = harness.request(1);
+        let before = harness.world.command(&request).expect("幂等行");
+        assert_eq!(before.command(), "session.prompt");
+
+        let result =
+            CommandResult::from_json_text(r#"{"sessionId":"first"}"#).expect("result object");
+        let error = block_on(harness.broker.settle_session_create(
+            &harness.actor(),
+            &request,
+            CommandStatus::Completed,
+            Some(result),
+            None,
+        ))
+        .expect_err("非 session.create 的记录不得被终结");
+        assert!(
+            matches!(error, PortError::InvalidRequest(_)),
+            "得到 {error:?}"
+        );
+        let after = harness.world.command(&request).expect("幂等行");
+        assert_eq!(after.command(), "session.prompt");
+        assert_eq!(after.status(), before.status(), "既有命令的终态不得被改写");
     }
 
     /// §6.6：指纹不同 → `command.idempotency_conflict`；不同 actor 用同一 requestId 是两条命令。
