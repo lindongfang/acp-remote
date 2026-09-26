@@ -794,6 +794,7 @@ consumed
 ```
 
 - **状态查询一律返回 `200`**，包括 `expired` 与 `consumed`；业务状态只由 body 的 `status` 表达。
+- 本机已不持有配对 secret 时（到期，或 `approved` 配对首次 WSS 认证成功后按上方末条清除），终态配对（`rejected`/`expired`/`consumed`）的状态查询仍按 `200` 报告其业务状态（终态判定不依赖对端输入），非终态配对返回 `401`。
 - `approved` 响应只返回该节点的非秘密元数据、`grant.*` 与 Owner identity；不签发 bearer token。首次正式 WSS 连接仍执行完整 challenge-response。
 - 状态查询在 `pending_confirmation`、`approved` 和 `rejected` 下可以安全重复；每次轮询生成新 `requestNonce`，只有网络重试才复用原 nonce 并获得原响应。
 - 观察到 `approved` 后开始 WSS 认证；观察到 `rejected`、`expired` 或 `consumed` 后停止轮询。

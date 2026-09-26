@@ -964,18 +964,24 @@ async fn every_pairing_response_carries_the_four_security_headers() {
     let pairing = harness.begin().await;
     let nonce = nonce_text(0x0e);
 
-    // 201（成功）与 400/401/403/404/409/410/429（各种失败）都带四个头。
-    let responses = vec![
-        harness
-            .claim(&claim_body(&pairing, ACCESS_NODE, &nonce))
-            .await,
-        harness.claim(b"not json").await,
-        harness
-            .claim(&claim_body(&pairing, ACCESS_NODE, &nonce_text(0x0f)))
-            .await,
-        harness.claim(b"{}").await,
-    ];
-    for response in &responses {
+    // 本用例断言成功（201）与两类 400（JSON 语法错误、缺字段）以及 409（同一 Access Node 换 nonce 的重复
+    // claim）；401/403/404/410/413/429 与接入层 400 的安全头由各自的专测覆盖。
+    let claimed = harness
+        .claim(&claim_body(&pairing, ACCESS_NODE, &nonce))
+        .await;
+    assert_eq!(claimed.status, 201, "首次 claim 成功（§13.2）");
+    let malformed = harness.claim(b"not json").await;
+    assert_eq!(malformed.status, 400, "JSON 语法错误是 400（§13.4）");
+    let repeated = harness
+        .claim(&claim_body(&pairing, ACCESS_NODE, &nonce_text(0x0f)))
+        .await;
+    assert_eq!(
+        repeated.status, 409,
+        "同节点换 nonce 的重复 claim 是 409（§13.4）"
+    );
+    let missing = harness.claim(b"{}").await;
+    assert_eq!(missing.status, 400, "缺字段的 schema 错误是 400（§13.4）");
+    for response in [&claimed, &malformed, &repeated, &missing] {
         response.assert_security_headers();
     }
     harness.stop().await;

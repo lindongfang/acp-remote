@@ -242,6 +242,9 @@ impl PairingHttp {
                 };
                 match self.core.claim_pairing(&actor, claim).await {
                     Ok(_) => {}
+                    // 同内容并发 claim 的极窄窗口：两个 `verify_claim` 都判 `Claimed`，后落库者撞上存储层的
+                    // `AlreadyClaimed` → 409。此分支是自愈的——客户端用**相同内容**再试一次即被
+                    // `verify_claim` 识别为幂等重试（`Repeat`）并按原 pairing request 回 201，不产生第二条记录。
                     Err(PortError::Conflict(
                         ConflictKind::AlreadyClaimed | ConflictKind::IdentityMismatch,
                     )) => {
