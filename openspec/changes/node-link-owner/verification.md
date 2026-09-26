@@ -356,10 +356,26 @@ alternative_checks:
 
 ```agentic-assessment
 assessment_id: "FA-2026-09-26-01"
-target_commit: "b4e375be9c71f5a4a048c768142ef304bfed5a78"
+target_commit: "f8d94d251af6d60cc722fd3c365813db9036a1df"
 contract_digest: "sha256:2e3b3a0bdc82d5d1ffaeb125d35c9550e2e437296c777f298a2efd4aabb82c2e"
 result: PASS
 evidence:
+  - path: reports/wp2-transport-net.log
+    sha256: "sha256:94a2e89f772194bda70d97892163a5bd27d7fe3f430233b1472207d19f72188c"
+  - path: reports/wp3-contract.log
+    sha256: "sha256:21b5175457d10f718d0345180746047005089743c490c27f19bc46bf34a80211"
+  - path: reports/wp3-pairing-http.log
+    sha256: "sha256:46afb6ca2ecb15fb5a5e41524e25fce4f47cc3a1d27f2d9ef71787e785ae5c4d"
+  - path: reports/wp4-handshake.log
+    sha256: "sha256:f6375cb4585e87a5eeb9ef3cffe888c406786397cd069283b63aa33196a55002"
+  - path: reports/wp5-catalog-resource.log
+    sha256: "sha256:4298b04cb95055eb59b1fb0d6f4fef92289ae8021dc1e412870bb27c1020bd9f"
+  - path: reports/wp6-command.log
+    sha256: "sha256:0bcb55ccf458d3bdf3212f4a8680fb0813ee02d73adb5872451542a467e50851"
+  - path: reports/wp7-app-wiring.log
+    sha256: "sha256:ef9c8cc23389b75ce5e561d827f6defb8ac0525b53e0b4c0390525673b422bf5"
+  - path: reports/pv5-windows-nodelink.log
+    sha256: "sha256:e0e57e72d34d9395ea28be1f53ad30f0d99eaf2c6d06c1a8e7fb7848b533abce"
   - path: reports/final-alternative-checks.md
     sha256: "sha256:45504c3047e503328b1c74f1e4151e5254780fb4305e161d9895489f77a13881"
   - path: reports/du1-integrate.md

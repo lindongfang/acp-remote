@@ -87,4 +87,4 @@
 
 ## 8. Final Verification
 
-- [ ] 8.1 [final-verification] 使用 agentic-verify 执行最终验收（/opsx:verify 同样读取该入口），核对用户意图（切片 5 原文与三项裁决）、需求（R1–R83）、设计（D1–D11）、计划、任务与最终主分支证据；记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change node-link-owner --stage final --json`，全部通过才完成；验收结论单独报告 PASS / FAIL / BLOCKED，不以 CLI 的 `all_done` 代替。
+- [x] 8.1 [final-verification] 使用 agentic-verify 执行最终验收（/opsx:verify 同样读取该入口），核对用户意图（切片 5 原文与三项裁决）、需求（R1–R83）、设计（D1–D11）、计划、任务与最终主分支证据；记录当前 agentic-assessment 后运行 `npx --quiet --no-install openspec-agentic workflow check --change node-link-owner --stage final --json`，全部通过才完成；验收结论单独报告 PASS / FAIL / BLOCKED，不以 CLI 的 `all_done` 代替。
