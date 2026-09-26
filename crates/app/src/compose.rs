@@ -25,7 +25,7 @@ use std::sync::Arc;
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, DeviceId,
-    EntityRef, NodeId, PortError, SecretValue, ServerEpoch, Timestamp, UnavailableKind,
+    EntityRef, ExportId, NodeId, PortError, SecretValue, ServerEpoch, Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CredentialResolver, EventPublisher,
@@ -734,11 +734,11 @@ impl AuditHook for AuditSink {
     }
 }
 
-/// `ConnectionCloser`：撤销提交后关闭该设备/节点的 active connection。
+/// `ConnectionCloser`：撤销提交后关闭该设备/节点的 active connection 并通知 Export 撤销。
 ///
 /// 本切片**没有**按设备/节点维度持有的连接表：本地管理通道按 OS 用户授权（不绑定设备身份），
-/// `server::sync`/`server::node_link` 尚未落地。因此本实现记录一条结构化事件并明确「本次没有可关闭的
-/// 连接」，而不是假装成功关闭了某个连接；切片 6 装配连接表时替换本实现。
+/// `server::sync` 尚未落地。因此本实现记录一条结构化事件并明确「本次没有可关闭的连接/可推送的连接」，
+/// 而不是假装成功关闭了某个连接；WP7 装配 `server::node_link` 的连接注册表与撤销传播时替换本实现。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RevocationCloser;
 
@@ -760,7 +760,17 @@ impl ConnectionCloser for RevocationCloser {
             target_kind = "node",
             target_id = %node.as_str(),
             closed_connections = 0u64,
-            "撤销已提交：本切片没有按节点持有的连接表（Node Link 未落地）"
+            "撤销已提交：本切片没有按节点持有的连接表（Node Link 未接线）"
+        );
+    }
+
+    async fn export_revoked(&self, export: &ExportId) {
+        tracing::info!(
+            event = "daemon.export_revoked_notification",
+            target_kind = "export",
+            target_id = %export.as_str(),
+            notified_connections = 0u64,
+            "撤销已提交：本切片没有按 Export 持有的连接表（Node Link 未接线）"
         );
     }
 }

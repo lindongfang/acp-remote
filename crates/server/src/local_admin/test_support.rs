@@ -1833,11 +1833,12 @@ impl EntropySource for FakeEntropy {
     }
 }
 
-/// 记录撤销后关闭了哪些设备/节点（断言「提交后才关闭」的观察点）。
+/// 记录撤销后关闭了哪些设备/节点、通知了哪些 Export（断言「提交后才关闭/推送」的观察点）。
 #[derive(Clone, Default)]
 pub(crate) struct RecordingCloser {
     devices: Arc<Mutex<Vec<String>>>,
     nodes: Arc<Mutex<Vec<String>>>,
+    exports: Arc<Mutex<Vec<String>>>,
 }
 
 impl RecordingCloser {
@@ -1847,6 +1848,11 @@ impl RecordingCloser {
 
     pub(crate) fn closed_nodes(&self) -> Vec<String> {
         self.nodes.lock().expect("关闭锁").clone()
+    }
+
+    /// 收到 `export.revoked` 通知的 Export（按调用顺序）。
+    pub(crate) fn revoked_exports(&self) -> Vec<String> {
+        self.exports.lock().expect("关闭锁").clone()
     }
 }
 
@@ -1864,6 +1870,13 @@ impl ConnectionCloser for RecordingCloser {
             .lock()
             .expect("关闭锁")
             .push(node.as_str().to_owned());
+    }
+
+    async fn export_revoked(&self, export: &ExportId) {
+        self.exports
+            .lock()
+            .expect("关闭锁")
+            .push(export.as_str().to_owned());
     }
 }
 
