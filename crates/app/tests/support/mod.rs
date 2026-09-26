@@ -10,8 +10,17 @@
 //! - 每个用例都在 `dev_mode.enabled = true` + `identity.keystore = "ephemeral"` 下运行：CI 的 Linux
 //!   runner 没有平台 keystore，而本切片要求 fail-closed，只有显式开发模式才允许进程内 keystore
 //!   （`CONFIG_REFERENCE.md` §8/§10）。测试因此**不**覆盖平台 keystore 路径（见交接说明）。
+//!
+//! 网络接入面接线后，基础配置一律写 `listen = "127.0.0.1:0"`（内核分配端口）：默认的固定端口 8765
+//! 会让并行用例（以及同一台机器上的其他实例）互相抢端口（plan 的「Runtime Resources」规则）。
+//! 需要特定监听地址的用例用 `Daemon::configure_with_listen`。
 
 #![allow(dead_code)] // 各用例文件只用到其中一部分辅助函数
+
+// 受控路径全链路集成测试的 Owner 侧与 Access 侧（`node_link_e2e`）：生产接线 + 真实 loopback
+// listener + 脚本化 fake Access 客户端。其余用例文件不使用这两个模块。
+pub mod nodelink;
+pub mod owner;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -125,20 +134,103 @@ pub struct Daemon {
     endpoint: Option<String>,
 }
 
+/// 基础配置里三段可覆盖内容的来源（`build` 的唯一入参形状）。
+struct ConfigParts<'a> {
+    /// `daemon.listen`（`None` = `127.0.0.1:0`）。
+    listen: Option<&'a str>,
+    /// 追加到 `[daemon]` 段落里的键。
+    daemon: &'a str,
+    /// 追加到 `[dev_mode]` 段落里的键。
+    dev_mode: &'a str,
+    /// 追加在整份配置末尾的段落/表（例如 `[[agents.profiles]]`）。
+    extra: &'a str,
+}
+
 impl Daemon {
     /// 写好独立配置（不启动）。`extra` 追加在基础配置之后（例如 `[[agents.profiles]]`）。
     pub fn configure(label: &str, extra: &str) -> Self {
-        Self::build(TempRoot::new(label), label, "", extra)
+        Self::build(
+            TempRoot::new(label),
+            label,
+            ConfigParts {
+                listen: None,
+                daemon: "",
+                dev_mode: "",
+                extra,
+            },
+        )
     }
 
     /// 同上，但允许覆盖基础 `[daemon]` 段落里的键（例如 `shutdown_grace_ms`）。
     pub fn configure_with(label: &str, daemon_extra: &str, extra: &str) -> Self {
-        Self::build(TempRoot::new(label), label, daemon_extra, extra)
+        Self::build(
+            TempRoot::new(label),
+            label,
+            ConfigParts {
+                listen: None,
+                daemon: daemon_extra,
+                dev_mode: "",
+                extra,
+            },
+        )
+    }
+
+    /// 同上，但显式给出 `daemon.listen`（共享 listener 接线后的绑定/失败关闭用例）。
+    ///
+    /// 基础配置默认写 `listen = "127.0.0.1:0"`（内核分配端口）：并行用例与同一台机器上的其他实例
+    /// 不会因为默认的固定端口 8765 互相抢端口（plan 的「Runtime Resources」规则）。
+    pub fn configure_with_listen(
+        label: &str,
+        listen: &str,
+        daemon_extra: &str,
+        extra: &str,
+    ) -> Self {
+        Self::build(
+            TempRoot::new(label),
+            label,
+            ConfigParts {
+                listen: Some(listen),
+                daemon: daemon_extra,
+                dev_mode: "",
+                extra,
+            },
+        )
+    }
+
+    /// 同上，但允许覆盖基础 `[dev_mode]` 段落里的键（例如 `allow_plaintext`）。
+    ///
+    /// 基础配置固定 `[dev_mode]` 的表头，因此覆盖只能经本构造器（写第二段 `[dev_mode]` 会被 TOML
+    /// 判成重复键）。
+    pub fn configure_with_dev_mode(
+        label: &str,
+        listen: &str,
+        dev_mode_extra: &str,
+        extra: &str,
+    ) -> Self {
+        Self::build(
+            TempRoot::new(label),
+            label,
+            ConfigParts {
+                listen: Some(listen),
+                daemon: "",
+                dev_mode: dev_mode_extra,
+                extra,
+            },
+        )
     }
 
     /// 同一数据目录的**第二轮运行**（重启用例）：配置/日志/输出各自独立文件，数据目录与运行时目录相同。
     pub fn configure_in(&self, label: &str, extra: &str) -> Self {
-        let mut next = Self::build(TempRoot::borrowed(self.root()), label, "", extra);
+        let mut next = Self::build(
+            TempRoot::borrowed(self.root()),
+            label,
+            ConfigParts {
+                listen: None,
+                daemon: "",
+                dev_mode: "",
+                extra,
+            },
+        );
         next.data_dir = self.data_dir.clone();
         #[cfg(unix)]
         {
@@ -147,7 +239,7 @@ impl Daemon {
         next
     }
 
-    fn build(root: TempRoot, label: &str, daemon_extra: &str, extra: &str) -> Self {
+    fn build(root: TempRoot, label: &str, parts: ConfigParts<'_>) -> Self {
         let data_dir = root.path().join("data");
         #[cfg(unix)]
         let runtime_dir = root.path().join("runtime");
@@ -171,6 +263,7 @@ impl Daemon {
             r#"[daemon]
 data_dir = "{data_dir}"
 public_origin = "https://acpr-test.example.invalid"
+listen = "{listen}"
 {daemon_extra}
 
 [identity]
@@ -179,6 +272,7 @@ keystore = "ephemeral"
 [dev_mode]
 enabled = true
 ephemeral_identity = true
+{dev_mode_extra}
 
 [logging]
 level = "info"
@@ -188,6 +282,10 @@ file = "{log}"
 {extra}
 "#,
             data_dir = data_dir.display().to_string().replace('\\', "/"),
+            listen = parts.listen.unwrap_or("127.0.0.1:0"),
+            daemon_extra = parts.daemon,
+            dev_mode_extra = parts.dev_mode,
+            extra = parts.extra,
             log = log_text,
         );
         std::fs::write(&config_path, text).expect("配置文件");
