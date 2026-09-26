@@ -359,7 +359,7 @@ impl ResourceRoute {
             Ok(view) => view,
             Err(error) => return self.attach_fault(handle, &error, message),
         };
-        let Some(session_meta) = session_meta(&view) else {
+        let Some(session_meta) = session_meta(&view.session) else {
             return self.fault(handle, &PortError::Corrupt("session state"), message);
         };
         // ③ 签发新的 attachment/generation：同一连接内 generation 单调递增，旧的那个被覆盖
@@ -468,7 +468,7 @@ impl ResourceRoute {
             Ok(view) => view,
             Err(error) => return self.attach_fault(handle, &error, message),
         };
-        let Some(session_meta) = session_meta(&view) else {
+        let Some(session_meta) = session_meta(&view.session) else {
             return self.fault(handle, &PortError::Corrupt("session state"), message);
         };
         let Some(cursor) = wire_cursor(&view) else {
@@ -844,6 +844,57 @@ impl ResourceRoute {
             .cloned()
     }
 
+    /// WP6（`design.md` D7/D8）的 additive seam：session-scoped 命令复核「当前 attachment」。
+    ///
+    /// 返回该 `(attachmentId, attachmentGeneration)` 在当前连接上生效的 `remoteSessionRef`；任何不匹配
+    /// （未知 id、过期代际、已被新 `resource.attach` 覆盖、属于别会话）都返回 `None`——调用方据此回
+    /// `attach_generation_stale`。attachment 表只有这一份（WP5 持有），命令层不得另建镜像。
+    pub fn current_attachment_session_ref(
+        &self,
+        handle: &ConnectionHandle,
+        attachment_id: &Uuid,
+        generation: u64,
+    ) -> Option<RemoteSessionRef> {
+        let state = lock(&self.states);
+        let state = state.get(handle.connection_id().as_str())?;
+        state
+            .attachments
+            .values()
+            .find(|attachment| {
+                attachment.id == *attachment_id && attachment.generation == generation
+            })
+            .map(|attachment| attachment.remote.clone())
+    }
+
+    /// WP6（`design.md` D7、R77）的 additive seam：撤销 Export 后清除内存中的 attachment 与订阅，并
+    /// 返回受影响的 `connectionId`。
+    ///
+    /// 清除是「旧连接不得继续取资源」的内存面（授权面由逐消息的持久化复核保证）；调用方（撤销传播）用
+    /// 返回的 id 从连接注册表解析句柄并推送 `export.revoked`。已结束连接的条目顺带回收，与扇出路径的
+    /// 惰性回收同一标准。
+    pub fn revoke_export(&self, export: &ExportId) -> Vec<String> {
+        let mut states = lock(&self.states);
+        let mut affected = Vec::new();
+        for (key, state) in states.iter_mut() {
+            let sessions: Vec<String> = state
+                .attachments
+                .iter()
+                .filter(|(_, attachment)| &attachment.export == export)
+                .map(|(session, _)| session.clone())
+                .collect();
+            if sessions.is_empty() {
+                continue;
+            }
+            affected.push(key.clone());
+            for session in sessions {
+                state.attachments.remove(&session);
+                state.subscriptions.remove(&session);
+            }
+        }
+        affected.sort();
+        affected
+    }
+
     /// 可恢复的协议拒绝（连接保持可用）。
     fn protocol_error(
         &self,
@@ -1163,8 +1214,11 @@ fn snapshot_end(
 }
 
 /// 快照的 `sessionMeta`（只承载 `state`/`version`）。
-fn session_meta(view: &acp_core::use_cases::NodeLinkSessionView) -> Option<SessionMeta> {
-    let state = match view.session.state() {
+///
+/// `pub(crate)` 是因为 WP6 的 `session.create` 终态结果要用同一个映射（`SessionCreateResult.sessionMeta`）——
+/// 两处必须同形，不复制第二份。
+pub(crate) fn session_meta(summary: &acp_core::model::SessionSummary) -> Option<SessionMeta> {
+    let state = match summary.state() {
         CoreSessionState::Idle => WireSessionState::Idle,
         CoreSessionState::Queued => WireSessionState::Queued,
         CoreSessionState::Running => WireSessionState::Running,
@@ -1175,7 +1229,7 @@ fn session_meta(view: &acp_core::use_cases::NodeLinkSessionView) -> Option<Sessi
     };
     Some(SessionMeta {
         state,
-        version: DecimalString::parse(&view.session.version().get().to_string()).ok()?,
+        version: DecimalString::parse(&summary.version().get().to_string()).ok()?,
     })
 }
 

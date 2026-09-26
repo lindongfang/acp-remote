@@ -26,6 +26,7 @@
 //! `openspec/changes/node-link-owner/specs/node-link-pairing-http/spec.md` 的 R19–R35 为准。
 
 pub mod catalog;
+pub mod command;
 pub mod conn;
 pub mod pairing;
 pub mod resource;
@@ -34,6 +35,7 @@ pub mod resource;
 mod tests;
 
 pub use catalog::CatalogRoute;
+pub use command::CommandRoute;
 pub use conn::{
     MessageRoute, NodeLinkConfig, NodeLinkConn, RouteOutcome, WS_PATH, WS_SUBPROTOCOL, WsEndpoint,
 };
