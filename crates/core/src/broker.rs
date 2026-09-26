@@ -1610,6 +1610,8 @@ impl Broker {
     }
 
     /// 落盘 + 派发下一个排队 turn，直到该会话无事可做（§6.3/§6.4）。
+    ///
+    /// 被放弃 turn 的【占位】未释放时只落盘、不派发下一个排队 turn（§6 第 9 条，见 [`HeldTurn`]）。
     pub async fn pump(&self, session: &SessionId) -> Result<(), PortError> {
         let slot = self.owned_slot(session);
         let _guard = slot.gate.guard().await;
@@ -6308,6 +6310,9 @@ mod tests {
         block_on(harness.broker.pump(&harness.session)).expect("pump");
         assert_eq!(harness.world.prompt_count(), 1);
 
+        // 合同登记值：§6 第 9 条写的是 `1200` 轮，这里把常量钉死在用例里（合同与实现不得各自漂移）。
+        assert_eq!(ABANDONED_TURN_HOLD_ROUNDS, 1200, "§6 第 9 条登记值");
+
         // 占位按驱动轮次计时：放弃提交所在的那次 `pump` 已消耗第一轮，此后每次 `pump` 消耗一轮。
         let mut rounds = 1;
         while rounds + 1 < ABANDONED_TURN_HOLD_ROUNDS {
@@ -6320,6 +6325,57 @@ mod tests {
             harness.world.prompt_count(),
             2,
             "兑底必须释放占位，否则会话永久卡住"
+        );
+    }
+
+    /// §6 第 4/8/9 条（RV3-WP7-F2）：占位期该会话按「仍有 active turn」处理，因此模式切换被显式拒绝
+    /// （v1 不排队），而不是因为该 turn 已经终结就被放行。
+    #[test]
+    fn mode_change_rejected_while_an_abandoned_turn_holds_the_session_slot() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 提交顺序：1 = 接受、2 = 派发、3 = 增量批次（本用例注入失败），4 = 放弃提交。
+        harness.world.fail_commit_at(3);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                uuid_text(616)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        // 端点还没给出被放弃 turn 的终态 → 占位仍在，不能用「版本不匹配」冒充这个拒绝，
+        // 因此 expected_version 取当前版本。
+        let current = harness
+            .world
+            .session(&harness.session)
+            .expect("session")
+            .version();
+        let actor = harness.actor();
+        let command = mode_command(&actor, &harness.session, &harness.request(2), current);
+        let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
+        match receipt {
+            CommandReceipt::Rejected { error } => {
+                assert_eq!(error.code(), "state.version_conflict");
+            }
+            CommandReceipt::Accepted { .. } => {
+                panic!("占位期会话仍有 active turn，模式切换必须被拒绝")
+            }
+        }
+        assert!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .current_mode()
+                .is_none(),
+            "被拒的模式切换不得改状态"
         );
     }
 
