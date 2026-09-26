@@ -205,7 +205,7 @@ pub enum UnavailableKind {
 
 `[决定]`（2026-09-26，seam 补全）`pairing_channel_view` 是配对 HTTP 端点的**唯一**只读入口：它一次带回记录、已认领的对端行与已批准后的对端节点行（`grant.*` 的唯一来源，`PairingRecord` 不带 `granted_*`），不含任何写入，也不返回秘密材料（pairing secret 只在状态机内存）。认领路径允许在 proof 校验**之前**读取（端点必须先拿到记录才能校验 HMAC），但状态推进仍只能经 `claim_pairing` 的写集、且只在 proof 通过后提交；拒绝仍收集在同一类 `authorization.scope_denied`。入口绑定式读取（claimant 只能读自己那个配对的三类行）是硬约束：不允许放开为通用只读。
 
-`[决定]`（2026-09-26，WSS 握手 seam 补全；同一方向的第二次补全）`NodeLinkHandshake` 是 WSS 握手准入的两条窄入口，服务 `design.md` D3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1：
+`[决定]`（2026-09-26，WSS 握手 seam 补全；同一方向的第二次补全）`NodeLinkHandshake` 是 WSS 握手准入的三条窄入口，服务 `design.md` D3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1：
 
 - `node_link_handshake_view(access_node)`：用例面**唯一**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor }`：四项都是握手本次调用需要且只需要的持久事实，`head` 同时是 `serverEpoch` 与 catalogue revision 的来源。
 - `record_node_link_auth(access_node, action, outcome)`：只接受 `node.authenticated`/`node.auth_failed`（其余 → `authorization.scope_denied`），归因 `actor`/`via_node` 都是该对端 id、`target = Node(对端)`、`localPrincipalRef` 为 `None`（§8.3 节点级信任）。首次认证成功（已批准配对 → `consumed`）的那条 `node.authenticated` 由 `consume_pairing` 的写集提交，适配器不得再补一条。

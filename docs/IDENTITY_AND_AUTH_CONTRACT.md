@@ -259,8 +259,9 @@ pub struct ProofSubmission {
 
 /// 3. 收尾：认证成功后的**唯一**副作用入口（配对转 consumed、last_seen、审计）。
 /// 它**不**直接写库：返回需要推进为 consumed 的配对，由调用方在
-/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集（`TrustStore::consume_pairing`，
-/// 新增于 2026-09-26）里同一事务提交。
+/// [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6 的写集里同一事务提交——
+/// 有待消费配对（首次认证）用 `TrustStore::consume_pairing`，没有（重复认证）用
+/// `TrustStore::record_node_connected`（2026-09-26 新增，同样推进 last_seen 并写审计）。
 pub struct Completion {
     pub fact: IdentityFact,
     pub at: Timestamp,                          // 同一次写入的审计与 last_seen 用同一时间
