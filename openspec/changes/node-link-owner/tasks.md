@@ -65,14 +65,14 @@
 
 ## 5. Integration Readiness
 
-- [ ] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
-- [ ] 5.2 DU1；前置：3.1–3.16；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP8），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
+- [x] 5.1 主 Agent（仅一次，不随交付单元复制）。单独创建独立集成 Agent，显式交接 `roles/integrator.md` 全文、本计划与相关契约、源提交及已验收证据、独立集成 worktree、目标分支 `refs/heads/main` 与授权边界（apply 已授权本地合入；推送远端、回滚、发布需另行授权）。完成条件：记录集成 Agent 的实际 ID、上下文方式与交接清单；主 Agent 不兼任集成执行者；宿主缺少独立执行能力时本任务与第 6 组合并入相关任务记 BLOCKED，并如实上报。
+- [x] 5.2 DU1；前置：3.1–3.16；主 Agent。复核 DU1 的预定模式（`integrated`）与组成（WP1–WP8），核对 [PV1]–[PV5] 与 RV1 的有效证据，确认无未解决的阻断项与未登记漂移；`integrated` 模式下引用组合后的 verify/review 结果，不重复单 WP 的检查。完成条件：计划与依赖已同步（无待更新项）、就绪判据全部满足；变化先同步计划与依赖再进入第 6 组。
 
 ## 6. Merge Unit
 
-- [ ] 6.1 DU1；主 Agent（机械核实可交 environment/recon）；前置：5.2。按计划核实目标仓库及主分支当前提交（`git rev-parse refs/heads/main` 等），记录准确引用及核实证据；无法确认目标时保持 BLOCKED。
-- [ ] 6.2 DU1；集成负责人；前置：6.1。基于已核实基线构造 DU1 候选，固定基线和候选版本，记录组成与构建结果。
-- [ ] 6.3 DU1；检查执行者；前置：6.2。完成候选 Project Verify：[PV1]（`npm run verify`）与 [PV2]（`check-crate-boundaries`），将版本、范围、结果及有效复用依据关联到 `verification.md`。
+- [x] 6.1 DU1；主 Agent（机械核实可交 environment/recon）；前置：5.2。按计划核实目标仓库及主分支当前提交（`git rev-parse refs/heads/main` 等），记录准确引用及核实证据；无法确认目标时保持 BLOCKED。
+- [x] 6.2 DU1；集成负责人；前置：6.1。基于已核实基线构造 DU1 候选，固定基线和候选版本，记录组成与构建结果。
+- [x] 6.3 DU1；检查执行者；前置：6.2。完成候选 Project Verify：[PV1]（`npm run verify`）与 [PV2]（`check-crate-boundaries`），将版本、范围、结果及有效复用依据关联到 `verification.md`。
 - [ ] 6.4 DU1；独立 reviewer；前置：6.2，可与 6.3 并行。只读检视固定候选的新增交互与冲突解决，修复后独立复核，记录隔离设置、版本及报告（`reports/rv2-du1.md`）。
 - [ ] 6.5 DU1；前置：固定候选及所需资源。E2E `not-applicable`：核对计划中的理由、依据与 `downgrade_approval` 记录有效，并完成适用替代检查的候选轮次——候选上执行 [PV5] 受控路径全链路集成测试（`cargo test --locked -p server -p app --all-features` 的相关用例，本机 Windows）并把原始日志写入 `reports/pv5-windows-nodelink.log`；连续失败计入 `x-agentic.e2e.maxAttempts`（默认 3），达到后停止自动重跑并交用户决策。
 - [ ] 6.6 DU1；合并负责人；前置：6.3、6.4、6.5。确认候选检查、独立 review 与替代验证通过，核实仓库规则与本地主分支基线，并运行 `npx --quiet --no-install openspec-agentic workflow check --change node-link-owner --stage premerge --planning-root <权威规划根> --json`（非 PASS 不合入）；以条件更新或串行合并机制防止竞态，直接合入 `refs/heads/main`，无须再次询问用户，记录实际提交；基线变化时重开受影响候选任务。

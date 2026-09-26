@@ -254,6 +254,7 @@
 | 2.24 | coder / implement / work-package | 0161a7782f12e29278aa311b1e1784b08d4ae8b9 | CHECK / PV1/PV2 | reports/wp8-handoff.md | PASS / NEW | 固定提交上 npm run verify + boundaries 两轮 exit 0；workspace 973 passed / 0 failed；core 闭包与 allow-list 一致；du1-pv1.log W7/WP8 轮次 |
 | 3.16 | reviewer / review / work-package | 0161a7782f12e29278aa311b1e1784b08d4ae8b9 | REVIEW / RV1-WP8 | reports/rv1-wp8.md | PASS / NEW | 独立检视（reviewer 8d784dc9）；2 MINOR + 2 观察见 Review Findings；RV3-WP7-F1/F2/F3 附带核对生效 |
 | RV1-WP8-F1/F2/O1 | main / fix / work-package | a882c06f71c8c4c2e4b509eb175d77d54e1cb921 | DELIVERY / RV1-WP8 | reports/rv1-wp8.md | PASS / NEW | 主 Agent 当场修复（限定语补齐、修订记录顺序、例外量词）；npm run check 绿；候选 review（6.4）核对 |
+| 6.4 | reviewer / review / candidate | 92fb9fdc22938c0ad743d7dec7a1d0932b38cde5 | REVIEW / RV2-DU1 | reports/rv2-du1.md | PASS / NEW | 候选 merge 检视（reviewer b35b3fef）：无冲突/无遗漏/无夹带/门禁未弱化、主 Agent 修复与各 RV 待核对项在候选树生效；F1（工件 doc-links，已修复并复绿）/F3/F4 已处理，F2 按既定同步口径 |
 | WP6 coder 自报登记 | 8bc2ff3 | worker 1248254e | wp6-handoff.md「需要知晓的设计事实」 | report-only：① `session.read`/`session.mode.list`/`session.config.list` 本切片显式回 `command.unsupported`（结果形状属切片 6 正文路径；符合「不虚报」不变量）——主 Agent 接受并记录，RV1-WP6 核对；② `session.create` 幂等只在进程内（core 不写 owned_command）——**持久化幂等缺口**，RV1-WP6 重点评估是否需在切片内补；③ in-flight 越限复用 `rate_limited`；④ capability 维度在适配层不可判定（如实失败）；⑤ compose.rs 连带已列入检视 | 记录；②待 RV1-WP6 裁决 | — |
 
 ## Failures and Retests
@@ -268,8 +269,13 @@
 | EX4 / 2.13–2.16 | worker cc8a957a 运行 30 分钟超时终止（WP5 工作量超单次窗口；此前已有一次 steer 送达 G1 裁决） | 主 Agent | 盘点确认部分改动（G2/G5 seam，1086 行增量）可编译后原运行 resume（12b1deaf），指令改为分批提交（seam 一批、catalog/attach/event 各批） | 不适用 | resume 完成：交付 2dce835 + db46308 + 1264821 + 6b1f0b9，门禁绿 | 已解决 |
 | EX5 / 2.17–2.20 | worker f0c2daea 运行 30 分钟超时终止（WP6 体量；此前已送达 Q1/Q2/Q3 与授权修正裁决） | 主 Agent | 盘点确认部分改动可编译后原运行 resume（1248254e），指令分批提交；compose.rs 的撤销缝连带改动列入 RV1-WP6 检视 | 不适用 | resume 完成：交付 3638ebd + bbf042e + 4cbdf8a + 8bc2ff3，门禁绿 | 已解决 |
 | EX6 / 2.21–2.22 | worker 8c8eca4e 运行 30 分钟超时终止（WP7 体量） | 主 Agent | 盘点确认部分改动（app 接线 + 集成测试文件）可编译后原运行 resume（668dbd32），指令分批提交（接线一批、集成测试一批） | 不适用 | resume 完成：交付 07b956c + a3109c8，门禁绿；恢复轮修复了一个测试客户端自身的空转 bug（非产品问题） | 已解决 |
+| EX7 / 6.2–6.3 | 集成候选首轮 PV1 FAIL：rv1-wp8.md 第 36 行「§7.2」缺文档名被 check:docs 误判归属（该报告在 f02d2565 提交进仓库后才被门禁扫到，0161a778 的绿证据早于它） | 主 Agent | 源分支勘误（4c5a3f00，补「SECURITY_DESIGN」文档名 + 勘误注记），主仓库 check-doc-links 复绿；集成方重建候选 | 不适用 | 待候选重跑 | 处理中 |
+| EX8 / 6.3 | 候选首轮 PV5 的 `the_status_result_keeps_the_documented_field_set` 间歇失败（约 1/6，负载相关；隔离跑与整轮均 PASS；5c869160→f02d256 间无 app/server 代码改动） | 主 Agent | 裁决：登记为 flake、以 PASS 轮次为准；若候选/主分支轮次再出现同类失败则升级为缺陷立案 | 不适用 | 候选重跑与主分支轮次观察 | 已登记（观察中） |
 
-（待记录：DU1 候选与合入；合入前放置 agentic-premerge 证据块。）
+## Merge History
+
+- DU1 候选（attempt 2，权威）：base `94a64e1f` + 源 `4c5a3f00` → 候选 `92fb9fdc22938c0ad743d7dec7a1d0932b38cde5`（`merge --no-ff`，无冲突，候选树与源逐字节一致）。候选检查：PV1/PV2/PV5 全 exit 0（973 passed / 394 passed；证据 `reports/du1-candidate.log` + `reports/du1-integrate.md`）。attempt 1（`8d87df18`，源 `f02d2565`）因 check:docs（rv1-wp8.md 的 §7.2 归属）被取代，已按裁决修源并重建。
+- 集成执行者：worker 子 Agent c51411bd（独立集成 worktree `D:\Project\acp-remote-wt\nl-owner-integration`）。
 
 ## Test Design and Authoring
 
