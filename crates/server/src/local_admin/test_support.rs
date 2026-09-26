@@ -1469,11 +1469,70 @@ impl TrustStore for FakeTrust {
         unreachable!("{NOT_TOUCHED}")
     }
 
-    async fn consume_pairing(
-        &self,
-        _write: PairingConsumption,
-    ) -> Result<PairingRecord, PortError> {
-        unreachable!("{NOT_TOUCHED}")
+    /// 与存储层同款（§11.6 第 8 条）：主体与审计归因一致 → 读配对行/对端行 → 对端同类同 id → 只有
+    /// `approved` 能推进到 `consumed`（`terminal_at` 取本次 `at`，审计同写集），已是 `consumed` 且对端
+    /// 一致时幂等成功（不覆盖首次时间、不重复写审计）。
+    async fn consume_pairing(&self, write: PairingConsumption) -> Result<PairingRecord, PortError> {
+        if write
+            .context
+            .audit
+            .iter()
+            .any(|row| row.actor != write.actor)
+        {
+            return Err(PortError::InvalidRequest(
+                "consume_pairing actor must match every audit row",
+            ));
+        }
+        let mut pairings = self.pairings.lock().expect("信任锁");
+        let Some(record) = pairings.get(write.pairing.as_str()).cloned() else {
+            return Err(PortError::NotFound(EntityRef::Pairing(write.pairing)));
+        };
+        let Some(peer) = self
+            .peers
+            .lock()
+            .expect("信任锁")
+            .get(write.pairing.as_str())
+            .cloned()
+        else {
+            return Err(PortError::Corrupt("pairing has no peer row"));
+        };
+        if !peer_matches_actor(&write.actor, peer.id()) {
+            return Err(PortError::Conflict(ConflictKind::IdentityMismatch));
+        }
+        match record.state() {
+            PairingState::Consumed => return Ok(record),
+            PairingState::Approved => {}
+            state if state.is_terminal() => return Err(terminal_conflict(state)),
+            _ => return Err(PortError::InvalidRequest("pairing has not been approved")),
+        }
+        let consumed = PairingRecord::try_new(
+            record.id().clone(),
+            record.target(),
+            PairingState::Consumed,
+            record.display_name().map(str::to_owned),
+            record.requested_scopes().clone(),
+            record.requested_grants().clone(),
+            record.secret_digest().clone(),
+            record.host_binding(),
+            record.created_at().clone(),
+            record.expires_at().clone(),
+            record.claimed_at().cloned(),
+            record.approved_at().cloned(),
+            Some(write.context.at.clone()),
+        )
+        .expect("消费后的配对记录合法");
+        self.append_audits(&write.context.at, write.context.audit);
+        pairings.insert(write.pairing.as_str().to_owned(), consumed.clone());
+        Ok(consumed)
+    }
+}
+
+/// 主体与对端身份的一致性（与 `core::use_cases` 的同名判定同口径）。
+fn peer_matches_actor(actor: &Actor, peer: &PeerIdentity) -> bool {
+    match (actor, peer) {
+        (Actor::Device { device, .. }, PeerIdentity::Device(id)) => device == id,
+        (Actor::Node { node, .. }, PeerIdentity::Node(id)) => node == id,
+        _ => false,
     }
 }
 

@@ -17,7 +17,12 @@
 //! | [R23] proof 无效不泄露差异 | `invalid_proof_is_unauthorized_without_leaking_the_difference` |
 //! | [R24] 相同内容重试幂等 | `retrying_the_same_claim_returns_the_original_pairing_request` |
 //! | [R25] 过期配对 410 | `expired_pairing_is_rejected_with_410` |
-//! | [R30]/[R31] 安全响应头与凭据边界 | `every_pairing_response_carries_the_four_security_headers`、`pairing_responses_never_carry_the_pairing_secret` |
+//! | [R26]/[R27] 五状态一律 200 | `status_reports_the_five_business_states_with_200` |
+//! | [R28] status proof 无效 401 | `status_with_an_invalid_proof_is_unauthorized` |
+//! | [R29] 重试复用 nonce 返回原响应 | `status_retry_with_the_same_nonce_returns_the_original_response` |
+//! | [R30]/[R31] 安全响应头与凭据边界 | `every_pairing_response_carries_the_four_security_headers`、`pairing_responses_never_carry_the_pairing_secret`、`status_responses_carry_the_security_headers_and_no_secret` |
+//! | [R32] secret 按期清除 | `status_reports_the_five_business_states_with_200`（expired/consumed 两条路径断言 secret 已清除） |
+//! | [R33]/[R35] status 限流 | `status_rate_limit_returns_429_after_sixty_queries_per_pairing`、`pairing::tests::pairing_id_window_*` |
 //! | [R34] claim 超限 429 | `claim_rate_limit_returns_429_after_ten_attempts_per_ip` |
 
 use std::net::SocketAddr;
@@ -28,11 +33,13 @@ use acp_core::model::{NodeId, NodeKind, Nonce, PairingId, PairingState, PeerPubl
 use acp_core::ports::TrustStore as _;
 use base64::Engine as _;
 use identity_auth::{
-    NodeLinkPairingOwnerProof, NodeLinkPairingProof, P1363Signature, PairingRequestId,
-    PairingSecret,
+    NodeLinkPairingOwnerProof, NodeLinkPairingProof, NodeLinkPairingStatus, P1363Signature,
+    PairingRequestId, PairingSecret,
 };
 use node_link_protocol::common::{Base64Url, NonEmptyText, ProtocolVersionV1, Uuid};
-use node_link_protocol::pairing::{AccessNodeKind, ClaimRequest, Endpoint, QrPayload};
+use node_link_protocol::pairing::{
+    AccessNodeKind, ClaimRequest, Endpoint, QrPayload, StatusRequest,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -42,7 +49,7 @@ use crate::local_admin::envelope::{AdminOutcome, AdminRequest, AdminResponse, de
 use crate::local_admin::handler::LocalAdminHandler as _;
 use crate::local_admin::method::Method;
 use crate::local_admin::test_support::{TestWorld, test_nonce, test_public_key};
-use crate::node_link::pairing::{CLAIM_PATH, PairingHttp, PairingHttpConfig};
+use crate::node_link::pairing::{CLAIM_PATH, PairingHttp, PairingHttpConfig, STATUS_PATH};
 use crate::transport::net::{NetConfig, NetError, NetListener, Shutdown, ShutdownHandle};
 
 /// 测试用 Access Node 标识（`NODE_LINK_PROTOCOL.md` §13.2 的 `accessNodeId`）。
@@ -98,6 +105,9 @@ impl Harness {
         listener
             .register_post(CLAIM_PATH, pairing.claim_handler())
             .expect("注册 claim 端点");
+        listener
+            .register_post(STATUS_PATH, pairing.status_handler())
+            .expect("注册 status 端点");
         let addr = listener.local_addrs()[0];
         let (shutdown, signal) = Shutdown::channel();
         let join = tokio::spawn(async move { listener.serve(signal).await });
@@ -163,6 +173,11 @@ impl Harness {
     /// 发送一条 claim 请求，可指定 `Content-Type`（`None` = 不带该头）。
     async fn claim_with(&self, body: &[u8], content_type: Option<&str>) -> Response {
         self.post(CLAIM_PATH, body, content_type).await
+    }
+
+    /// 发送一条 status 请求（`application/json`）。
+    async fn status(&self, body: &[u8]) -> Response {
+        self.post(STATUS_PATH, body, Some("application/json")).await
     }
 
     /// 发送一个 POST 请求到已注册的 path。
@@ -973,4 +988,393 @@ fn nonce_helper_matches_the_shared_test_nonce() {
     let shared = test_nonce();
     assert_eq!(shared.as_str().len(), 43);
     assert_eq!(nonce_text(0x00), shared.as_str());
+}
+
+// ---------------------------------------------------------------------------------------------
+// R26–R29、R32–R35：status 端点
+// ---------------------------------------------------------------------------------------------
+
+/// 一个自洽的 `pairingRequestId` 占位值（HMAC 覆盖声明值本身，因此 proof 仍自洽；真实的
+/// `pairingRequestId` 由 claim 响应的用例断言过来源）。
+const PLACEHOLDER_REQUEST_ID: &str = "b2f3fbfa-c2c6-4f49-9e0c-643d152de18d";
+
+/// 构造一次 status 查询：proof 用给定的 secret 对 `node-link-pairing-status/v1` 计算。
+fn status_request_with_secret(
+    pairing: &Pairing,
+    secret: &PairingSecret,
+    pairing_request_id: &str,
+    request_nonce: &str,
+) -> StatusRequest {
+    let nonce = Nonce::new(request_nonce).expect("规范 nonce");
+    let proof = NodeLinkPairingStatus {
+        owner_node_id: node(OWNER_NODE),
+        access_node_id: node(ACCESS_NODE),
+        pairing_id: pairing_id(&pairing.id),
+        pairing_request_id: PairingRequestId::parse(pairing_request_id).expect("规范 request id"),
+        request_nonce: nonce.clone(),
+    }
+    .hmac(secret)
+    .expect("证明必须可计算");
+    StatusRequest {
+        protocol_version: ProtocolVersionV1::new(1).expect("v1"),
+        owner_node_id: uuid(OWNER_NODE),
+        access_node_id: uuid(ACCESS_NODE),
+        pairing_id: uuid(&pairing.id),
+        pairing_request_id: uuid(pairing_request_id),
+        request_nonce: wire_nonce(nonce.as_str()),
+        proof: wire_proof(&proof),
+    }
+}
+
+/// 用二维码里的 secret 构造一次 status 查询。
+fn status_request(
+    pairing: &Pairing,
+    pairing_request_id: &str,
+    request_nonce: &str,
+) -> StatusRequest {
+    status_request_with_secret(pairing, &pairing.secret, pairing_request_id, request_nonce)
+}
+
+/// status 请求体。
+fn status_body(pairing: &Pairing, pairing_request_id: &str, request_nonce: &str) -> Vec<u8> {
+    serde_json::to_vec(&status_request(pairing, pairing_request_id, request_nonce))
+        .expect("status 请求可序列化")
+}
+
+/// 第 `index` 个不同的 32 字节 nonce（避免重试缓存命中）。
+fn nonce_for_index(index: usize) -> String {
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(&u64::try_from(index).expect("小整数").to_be_bytes());
+    bytes[31] &= 0b1111_1100;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+impl Harness {
+    /// 以有效 proof 查询一次状态。
+    async fn query_status(
+        &self,
+        pairing: &Pairing,
+        request_id: &str,
+        request_nonce: &str,
+    ) -> Response {
+        self.status(&status_body(pairing, request_id, request_nonce))
+            .await
+    }
+}
+
+/// claim 一次并回带本次的 `pairingRequestId`（status 请求必须带同一个值）。
+async fn claimed(harness: &Harness, pairing: &Pairing) -> String {
+    let response = harness
+        .claim(&claim_body(pairing, ACCESS_NODE, &nonce_text(0x20)))
+        .await;
+    assert_eq!(response.status, 201, "claim 必须成功");
+    response.json()["pairingRequestId"]
+        .as_str()
+        .expect("pairingRequestId")
+        .to_owned()
+}
+
+/// 用真实路径把配对推进到 `approved`（本机用户在本地通道上确认）。
+async fn approve(harness: &Harness, pairing: &Pairing) {
+    let response = harness
+        .world
+        .router()
+        .handle(admin_request(
+            Method::NodePairConfirm,
+            json!({"pairingId": pairing.id, "grants": ["grant.observe"]}),
+        ))
+        .await;
+    let result = success(&response);
+    assert_eq!(result["grants"], json!(["grant.observe"]));
+}
+
+/// 用真实路径把配对推进到 `rejected`。
+async fn reject(harness: &Harness, pairing: &Pairing) {
+    let response = harness
+        .world
+        .router()
+        .handle(admin_request(
+            Method::NodePairReject,
+            json!({"pairingId": pairing.id, "reason": null}),
+        ))
+        .await;
+    let _ = success(&response);
+}
+
+/// R26/R27/R32：五种业务状态一律 200，业务状态只由 body 的 `status` 表达。
+#[tokio::test]
+async fn status_reports_the_five_business_states_with_200() {
+    let harness = Harness::with_origin().await;
+
+    // ① pending_confirmation（claim 之后、本机确认之前）。
+    let pending = harness.begin().await;
+    let request_id = claimed(&harness, &pending).await;
+    let response = harness
+        .query_status(&pending, &request_id, &nonce_text(0x21))
+        .await;
+    assert_eq!(response.status, 200);
+    response.assert_security_headers();
+    let body = response.json();
+    assert_eq!(body["status"], json!("pending_confirmation"));
+    assert_eq!(body["expiresAt"], json!(pending.expires_at));
+    assert_eq!(body["pairingRequestId"], json!(request_id));
+    assert_eq!(
+        body.as_object().expect("对象").len(),
+        4,
+        "未批准的状态只带四个字段（不签发凭据、不带 node/owner）"
+    );
+
+    // ② approved：非秘密元数据 + 已授予的 grant + Owner identity。
+    approve(&harness, &pending).await;
+    let approved = harness
+        .query_status(&pending, &request_id, &nonce_text(0x22))
+        .await;
+    assert_eq!(approved.status, 200);
+    let body = approved.json();
+    assert_eq!(body["status"], json!("approved"));
+    assert_eq!(body["node"]["accessNodeId"], json!(ACCESS_NODE));
+    assert_eq!(body["node"]["name"], json!("Office Access"));
+    assert_eq!(
+        body["node"]["scopes"],
+        json!(["grant.observe"]),
+        "已授予集合来自本机确认后的节点行，而不是登记/请求值"
+    );
+    assert_eq!(body["owner"]["ownerNodeId"], json!(OWNER_NODE));
+    assert!(
+        body["owner"]["ownerPublicKey"].is_string(),
+        "owner 块只给身份公钥，不签发任何凭据"
+    );
+    assert!(
+        body.get("token").is_none() && body.get("credential").is_none(),
+        "approved 不签发 bearer 凭据"
+    );
+    assert_eq!(
+        body.as_object().expect("对象").len(),
+        6,
+        "approved 恰好带四个公共字段 + node + owner"
+    );
+
+    // ③ rejected。
+    let rejected = harness.begin().await;
+    let rejected_id = claimed(&harness, &rejected).await;
+    reject(&harness, &rejected).await;
+    let response = harness
+        .query_status(&rejected, &rejected_id, &nonce_text(0x23))
+        .await;
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json()["status"], json!("rejected"));
+
+    // ④ expired：过期扫描清除内存 secret（§4.3），此后 status 按 §13.4 的「过期语义」回 200 + expired。
+    let expired = harness.begin().await;
+    let expired_id = claimed(&harness, &expired).await;
+    harness.world.clock.set(&expired.expires_at);
+    let record = harness.record(&expired);
+    let due = harness.world.authority.due_pairings(
+        std::slice::from_ref(&record),
+        &Timestamp::new(&expired.expires_at).expect("时间戳"),
+    );
+    assert_eq!(
+        due,
+        vec![pairing_id(&expired.id)],
+        "未终结的配对需要提交终态写集"
+    );
+    assert!(
+        !harness.world.authority.has_secret(&pairing_id(&expired.id)),
+        "到期后本机不再持有 pairingSecret"
+    );
+    let response = harness
+        .query_status(&expired, &expired_id, &nonce_text(0x24))
+        .await;
+    assert_eq!(response.status, 200, "expired 也是 200（§13.4）");
+    assert_eq!(response.json()["status"], json!("expired"));
+
+    // ⑤ consumed：首次 WSS 认证成功后的收尾（`complete_auth` → `consume_pairing`）。
+    let consumed = harness.begin().await;
+    let consumed_id = claimed(&harness, &consumed).await;
+    approve(&harness, &consumed).await;
+    let completion = harness.world.authority.complete_auth(
+        identity_auth::IdentityFact::Node {
+            node: node(ACCESS_NODE),
+            kind: NodeKind::Access,
+            grants: acp_core::model::GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+        },
+        Some(&pairing_id(&consumed.id)),
+        &Timestamp::new("2026-09-18T09:12:03.412Z").expect("时间戳"),
+    );
+    assert_eq!(
+        completion.consume_pairing,
+        Some(pairing_id(&consumed.id)),
+        "首次认证成功后需要把该配对推进为 consumed"
+    );
+    harness
+        .world
+        .core
+        .consume_pairing(
+            &acp_core::model::Actor::Node {
+                node: node(ACCESS_NODE),
+                access_node: node(OWNER_NODE),
+            },
+            &pairing_id(&consumed.id),
+        )
+        .await
+        .expect("消费写集");
+    assert_eq!(harness.record(&consumed).state(), PairingState::Consumed);
+    assert!(
+        !harness
+            .world
+            .authority
+            .has_secret(&pairing_id(&consumed.id)),
+        "首次认证成功后 secret 提前清除（§4.3）"
+    );
+    let response = harness
+        .query_status(&consumed, &consumed_id, &nonce_text(0x25))
+        .await;
+    assert_eq!(response.status, 200, "consumed 也是 200（§13.4）");
+    assert_eq!(response.json()["status"], json!("consumed"));
+
+    harness.stop().await;
+}
+
+/// R28：proof 无效（含未登记的 pairingId）→ 401，且不返回任何业务状态。
+#[tokio::test]
+async fn status_with_an_invalid_proof_is_unauthorized() {
+    let harness = Harness::with_origin().await;
+    let pairing = harness.begin().await;
+    let _ = claimed(&harness, &pairing).await;
+
+    // ① 篡改 proof。
+    let mut tampered: Value = serde_json::from_slice(&status_body(
+        &pairing,
+        PLACEHOLDER_REQUEST_ID,
+        &nonce_text(0x26),
+    ))
+    .expect("status 请求体是 JSON");
+    let mut proof_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(tampered["proof"].as_str().expect("proof"))
+        .expect("base64url");
+    proof_bytes[0] ^= 0xff;
+    tampered["proof"] = json!(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(proof_bytes));
+    let tampered = harness
+        .status(&serde_json::to_vec(&tampered).expect("可序列化"))
+        .await;
+
+    // ② 用**另一把** secret 对同一个配对的 transcript 计算 proof。
+    let foreign_pairing = harness.begin().await;
+    let foreign = status_request_with_secret(
+        &pairing,
+        &foreign_pairing.secret,
+        PLACEHOLDER_REQUEST_ID,
+        &nonce_text(0x26),
+    );
+    let foreign = harness
+        .status(&serde_json::to_vec(&foreign).expect("可序列化"))
+        .await;
+
+    for response in [&tampered, &foreign] {
+        assert_eq!(response.status, 401, "proof 无效 → 401（§13.3）");
+        response.assert_security_headers();
+        let body = response.json();
+        assert_eq!(body["code"], json!("nodelink.auth.proof_invalid"));
+        assert!(body.get("status").is_none(), "401 不返回任何业务状态信息");
+    }
+    assert_eq!(error_shape(&tampered), error_shape(&foreign));
+
+    // 未登记的 pairingId 同样是 401（status 端点不区分存在性）。
+    let unknown = Pairing {
+        id: "2bc8b944-2a4f-46a7-8c31-b2c40923f60b".to_owned(),
+        secret: PairingSecret::try_from_bytes(&[0x22; 32]).expect("32 字节 secret"),
+        endpoint: pairing.endpoint.clone(),
+        expires_at: pairing.expires_at.clone(),
+    };
+    let unknown = harness
+        .query_status(&unknown, PLACEHOLDER_REQUEST_ID, &nonce_text(0x27))
+        .await;
+    assert_eq!(unknown.status, 401);
+    assert!(unknown.json().get("status").is_none());
+    harness.stop().await;
+}
+
+/// R29：同一 `requestNonce` 的重复请求返回原响应；新 nonce 的轮询看到最新状态。
+#[tokio::test]
+async fn status_retry_with_the_same_nonce_returns_the_original_response() {
+    let harness = Harness::with_origin().await;
+    let pairing = harness.begin().await;
+    let request_id = claimed(&harness, &pairing).await;
+    let nonce = nonce_text(0x28);
+
+    let first = harness.query_status(&pairing, &request_id, &nonce).await;
+    assert_eq!(first.status, 200);
+    assert_eq!(first.json()["status"], json!("pending_confirmation"));
+
+    // 状态推进到 approved 之后，用同一个 `requestNonce` 重试：仍返回原响应（§13.3）。
+    approve(&harness, &pairing).await;
+    let retry = harness.query_status(&pairing, &request_id, &nonce).await;
+    assert_eq!(retry.status, 200);
+    assert_eq!(retry.json(), first.json(), "网络重试必须返回原响应");
+
+    // 新 nonce 的轮询不受重试缓存影响。
+    let fresh = harness
+        .query_status(&pairing, &request_id, &nonce_text(0x29))
+        .await;
+    assert_eq!(fresh.status, 200);
+    assert_eq!(fresh.json()["status"], json!("approved"));
+    harness.stop().await;
+}
+
+/// R33/R35：status 每 `pairingId` 60 次/分钟，第 61 次 429。
+#[tokio::test]
+async fn status_rate_limit_returns_429_after_sixty_queries_per_pairing() {
+    let harness = Harness::with_origin().await;
+    let pairing = harness.begin().await;
+    let request_id = claimed(&harness, &pairing).await;
+    for index in 0..60 {
+        let response = harness
+            .query_status(&pairing, &request_id, &nonce_for_index(index))
+            .await;
+        assert_eq!(response.status, 200, "第 {index} 次查询必须在限额内");
+    }
+    let limited = harness
+        .query_status(&pairing, &request_id, &nonce_for_index(60))
+        .await;
+    assert_eq!(limited.status, 429, "第 61 次查询超限（§2.5）");
+    limited.assert_security_headers();
+    let body = limited.json();
+    assert_eq!(body["code"], json!("nodelink.resource.rate_limited"));
+    assert!(body["details"]["retryAfterMs"].as_u64().is_some());
+    harness.stop().await;
+}
+
+/// R30/R31：status 端点的响应同样带四个安全头，且不出现 `pairingSecret`。
+#[tokio::test]
+async fn status_responses_carry_the_security_headers_and_no_secret() {
+    let harness = Harness::with_origin().await;
+    let pairing = harness.begin().await;
+    let request_id = claimed(&harness, &pairing).await;
+    let secret_text =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(pairing.secret.as_bytes());
+
+    let mut bad_proof: Value =
+        serde_json::from_slice(&status_body(&pairing, &request_id, &nonce_text(0x2a)))
+            .expect("status 请求体是 JSON");
+    bad_proof["proof"] = json!(nonce_text(0x2b));
+    let responses = vec![
+        harness
+            .query_status(&pairing, &request_id, &nonce_text(0x2c))
+            .await,
+        harness
+            .status(&serde_json::to_vec(&bad_proof).expect("可序列化"))
+            .await,
+        harness.status(b"not json").await,
+    ];
+    for response in &responses {
+        response.assert_security_headers();
+        assert!(
+            !response.text().contains(&secret_text),
+            "status 响应不得包含 pairingSecret"
+        );
+    }
+    assert_eq!(responses[0].status, 200);
+    assert_eq!(responses[1].status, 401);
+    assert_eq!(responses[2].status, 400);
+    harness.stop().await;
 }

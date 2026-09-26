@@ -17,27 +17,35 @@
 //!
 //! limits（§2.5）是固定常量、不可配置：claim 每 IP 10 次/分钟。
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::str::FromStr as _;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    Actor, ConflictKind, NodeId, NodeKind, Nonce, PairingId, PairingPeer, PairingRecord,
-    PairingState, PeerIdentity, PeerPublicKey, PortError,
+    Actor, ConflictKind, NodeId, NodeKind, NodeRecord, Nonce, PairingId, PairingPeer,
+    PairingRecord, PairingState, PeerIdentity, PeerPublicKey, PortError,
 };
 use acp_core::use_cases::UseCases;
 use axum::body::Bytes;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use identity_auth::{
     Authority, CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection,
-    ClaimedPairing, NodeEndpoint, NodeLinkPairingOwnerProof, P1363Signature, PairingProof,
-    PairingRequestMaterial, RequestedCapabilities,
+    ClaimedPairing, NodeEndpoint, NodeLinkPairingOwnerProof, NodeLinkPairingStatus, P1363Signature,
+    PairingProof, PairingRequestMaterial, RequestedCapabilities,
 };
 use node_link_protocol::common::{
-    Base64Url, Nullable, ProtocolVersionV1, RawObject, Timestamp, Uuid,
+    Base64Url, GrantList, GrantName, NodeName, Nullable, ProtocolVersionV1, RawObject, Timestamp,
+    Uuid,
 };
 use node_link_protocol::error::{Body as ErrorBody, ErrorCode};
-use node_link_protocol::pairing::{ClaimRequest, ClaimResponse, PendingConfirmation};
+use node_link_protocol::pairing::{
+    ClaimRequest, ClaimResponse, NodeBlock, OwnerBlock, PairingStatus, PendingConfirmation,
+    StatusRequest, StatusResponse,
+};
 
+use crate::transport::net::ratelimit::MAX_TRACKED_KEYS;
 use crate::transport::net::{
     HttpHandler, HttpRequest, HttpResponse, RateLimit, SlidingWindowLimiter,
 };
@@ -50,6 +58,12 @@ pub const STATUS_PATH: &str = "/node-link/v1/pairing/status";
 
 /// claim 的固定限流（§2.5：10 次/分钟/IP，不可配置）。
 const CLAIM_LIMIT_PER_MINUTE: u32 = 10;
+
+/// status 的固定限流（§2.5：60 次/分钟/`pairingId`，不可配置）。
+const STATUS_LIMIT_PER_MINUTE: u32 = 60;
+
+/// `requestNonce` → 原响应的缓存条目上限（§13.3 的重试语义；超出后淘汰最早的一条）。
+const MAX_STATUS_REPLAYS: usize = 1024;
 
 /// 限流窗口（§2.5 的两条配对限流都以 1 分钟为窗口）。
 const LIMIT_WINDOW: Duration = Duration::from_secs(60);
@@ -75,6 +89,10 @@ pub struct PairingHttp {
     config: PairingHttpConfig,
     /// claim 限流：键是 `PeerInfo::client_ip`（对端真实连接地址；不可信来源的转发头不生效）。
     claim_limit: SlidingWindowLimiter,
+    /// status 限流：键是 `pairingId`（§2.5 的另一条固定限流）。
+    status_limit: PairingIdWindow,
+    /// status 的「网络重试返回原响应」缓存（§13.3）。
+    status_replays: Mutex<StatusReplays>,
 }
 
 impl PairingHttp {
@@ -85,12 +103,21 @@ impl PairingHttp {
             authority,
             config,
             claim_limit: SlidingWindowLimiter::new(CLAIM_LIMIT_PER_MINUTE, LIMIT_WINDOW),
+            status_limit: PairingIdWindow::new(STATUS_LIMIT_PER_MINUTE, LIMIT_WINDOW),
+            status_replays: Mutex::new(StatusReplays::default()),
         }
     }
 
     /// claim 端点的处理器（组合根注册到 [`CLAIM_PATH`]）。
     pub fn claim_handler(self: &Arc<Self>) -> Arc<dyn HttpHandler> {
         Arc::new(ClaimEndpoint {
+            pairing: self.clone(),
+        })
+    }
+
+    /// status 端点的处理器（组合根注册到 [`STATUS_PATH`]）。
+    pub fn status_handler(self: &Arc<Self>) -> Arc<dyn HttpHandler> {
+        Arc::new(StatusEndpoint {
             pairing: self.clone(),
         })
     }
@@ -298,6 +325,172 @@ impl PairingHttp {
         }
     }
 
+    /// `POST /node-link/v1/pairing/status`（§13.3）：校验 `node-link-pairing-status/v1` 的 HMAC 后**一律**
+    /// 返回 200，业务状态只由 body 的 `status` 表达（`expired`/`consumed` 也不例外）。
+    async fn status(&self, request: HttpRequest) -> HttpResponse {
+        // ① 只接受 application/json（§13.1）。
+        if !is_json_content_type(&request.headers) {
+            return reject(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProtocolSchemaInvalid,
+                "content type must be application/json",
+            );
+        }
+        // ② 解码：JSON 语法错误与字段/schema 错误都是 400（§13.4）。
+        let status_request = match decode_status(&request.body) {
+            Ok(request) => request,
+            Err(code) => {
+                return reject(
+                    StatusCode::BAD_REQUEST,
+                    code,
+                    "the request body is not a valid pairing status query",
+                );
+            }
+        };
+        let Some(input) = StatusInput::from_wire(&status_request) else {
+            return reject(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProtocolSchemaInvalid,
+                "the request body is not a valid pairing status query",
+            );
+        };
+        // ③ 限流（§2.5：60 次/分钟/pairingId）：超限的请求不进入配对状态机。
+        if let RateLimit::Denied { retry_after } = self.status_limit.check(input.pairing.as_str()) {
+            return rate_limited(retry_after);
+        }
+        // ④ 只读该配对自身（claimant 绑定该配对；和 claim 一样，读取不产生任何写入）。
+        let actor = Actor::PairingClaimant {
+            pairing: input.pairing.clone(),
+        };
+        let view = match self.core.pairing_channel_view(&actor, &input.pairing).await {
+            Ok(Some(view)) => view,
+            // 未登记的 pairingId：本端点的存在性不对外区分，且没有 secret 就无法证明身份 → 401。
+            Ok(None) => return proof_invalid(),
+            Err(error) => return self.port_error("status", &input.pairing, error),
+        };
+        let record = &view.record;
+        let peer_view = view.peer.as_ref().map(|peer| claimed_pairing(record, peer));
+        let state = self
+            .authority
+            .pairing_status(record, peer_view.as_ref(), None)
+            .state;
+        let status = wire_status(state);
+        // ⑤ 证明校验：本机仍持有该配对的 secret 时一律先验 proof（终态也一样），失败 → 401（§13.3）。
+        //    secret 已被清除（§4.3：过期扫描、重启、首次认证成功后）时无法验 proof：此时只对**终态**
+        //    回 200 + 该状态（§13.4：状态查询用 200 + `status=expired|consumed` 表达），非终态回 401。
+        if self.authority.has_secret(&input.pairing) {
+            if self.verify_status_proof(&input).is_err() {
+                return proof_invalid();
+            }
+        } else if !matches!(
+            state,
+            PairingState::Expired | PairingState::Consumed | PairingState::Rejected
+        ) {
+            return proof_invalid();
+        }
+        // ⑥ 网络重试：同一 `requestNonce` 的请求返回原响应（§13.3）。缓存只在身份已判定后读取，
+        //    因此 401 路径不会回出任何业务状态。
+        let replay_key = input.replay_key();
+        if let Some(body) = self.replay_body(&replay_key) {
+            return ok_body(body);
+        }
+        // ⑦ 组装 200 响应（五状态一律 200）。`approved` 才带 `node`/`owner`（schema 的 if/then/else）。
+        let Some(body) = self
+            .status_body(record, status, view.node.as_ref(), &input)
+            .await
+        else {
+            return internal_unavailable();
+        };
+        let Ok(bytes) = serde_json::to_vec(&body) else {
+            return internal_unavailable();
+        };
+        let bytes = Bytes::from(bytes);
+        self.remember_replay(replay_key, bytes.clone());
+        secure(HttpResponse::json(StatusCode::OK, bytes))
+    }
+
+    /// 校验 `node-link-pairing-status/v1` 的 HMAC（§13.3）：密钥是本机内存里该配对的 secret。
+    fn verify_status_proof(&self, input: &StatusInput) -> Result<(), identity_auth::PairingError> {
+        let status = NodeLinkPairingStatus {
+            owner_node_id: input.owner_node.clone(),
+            access_node_id: input.access_node.clone(),
+            pairing_id: input.pairing.clone(),
+            pairing_request_id: input.pairing_request_id.clone(),
+            request_nonce: input.request_nonce.clone(),
+        };
+        self.authority
+            .verify_node_link_pairing_status(&status, &input.proof)
+    }
+
+    /// 组装 `statusResponse`（§13.3）：`approved` 带非秘密元数据 + 已授予的 `grant.*` + Owner identity，
+    /// 不签发任何凭据；其余状态只带状态与过期时间。
+    async fn status_body(
+        &self,
+        record: &PairingRecord,
+        status: PairingStatus,
+        node: Option<&NodeRecord>,
+        input: &StatusInput,
+    ) -> Option<StatusResponse> {
+        let (node_block, owner_block) = if status == PairingStatus::Approved {
+            let node = node?;
+            let owner_public_key = self.authority.node_public_key().await.ok()?;
+            let grants = node
+                .grants()
+                .iter()
+                .map(GrantName::from_str)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            (
+                Some(NodeBlock {
+                    access_node_id: Uuid::parse(node.node_id().as_str()).ok()?,
+                    name: NodeName::parse(node.display_name()).ok()?,
+                    scopes: GrantList::new(grants).ok()?,
+                }),
+                Some(OwnerBlock {
+                    owner_node_id: Uuid::parse(self.authority.local_node().as_str()).ok()?,
+                    owner_public_key: Base64Url::<65>::parse(&encode_base64url(
+                        owner_public_key.as_bytes(),
+                    ))
+                    .ok()?,
+                }),
+            )
+        } else {
+            (None, None)
+        };
+        // 请求标识取本机登记的材料（权威）；secret 已清除时（终态回退路径）回显请求里的值。
+        let pairing_request_id = self
+            .authority
+            .pairing_request_material(&input.pairing)
+            .map(|material| material.pairing_request_id)
+            .unwrap_or_else(|| input.pairing_request_id.clone());
+        Some(StatusResponse {
+            protocol_version: ProtocolVersionV1::new(1).ok()?,
+            pairing_request_id: Uuid::parse(pairing_request_id.as_str()).ok()?,
+            status,
+            expires_at: Timestamp::parse(record.expires_at().as_str()).ok()?,
+            node: node_block,
+            owner: owner_block,
+        })
+    }
+
+    /// 该 `(pairingId, requestNonce)` 已缓存的原响应体。
+    fn replay_body(&self, key: &str) -> Option<Bytes> {
+        let replays = self
+            .status_replays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        replays.body(key)
+    }
+
+    /// 记住本次成功响应（§13.3 的重试语义；条目数有上限）。
+    fn remember_replay(&self, key: String, body: Bytes) {
+        let mut replays = self
+            .status_replays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        replays.remember(key, body);
+    }
+
     /// claim 的 `endpoint` host 是否与 `daemon.public_origin` 一致（§13.1/§13.2）。
     ///
     /// 只比较 authority（`host[:port]`，与 `wss://<authority>/node-link/v1` 的推导同源）；逐字回显由
@@ -353,6 +546,18 @@ impl HttpHandler for ClaimEndpoint {
     }
 }
 
+/// status 端点的 [`HttpHandler`]（薄包装：把请求交给 [`PairingHttp`]）。
+struct StatusEndpoint {
+    pairing: Arc<PairingHttp>,
+}
+
+#[async_trait::async_trait]
+impl HttpHandler for StatusEndpoint {
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        self.pairing.status(request).await
+    }
+}
+
 /// wire 的 claim 请求 → 内部值对象。
 ///
 /// wire 类型已经校验过形状；这里的失败只可能是「形状合法但取值不可用」（例如公钥不在 P-256 上），
@@ -385,7 +590,7 @@ impl ClaimInput {
     }
 }
 
-/// 持久化的对端行 → 状态机的对端视图（唯一用途：`verify_claim` 的幂等比对输入）。
+/// 持久化的对端行 → 状态机的对端视图（唯一用途：`verify_claim` 的幂等比对输入、状态视图的 SAS 入参）。
 ///
 /// `requested` 取配对行登记的集合：与 [`ClaimFields`] 的构造同源（Node Link 的 claim 不带请求集合）。
 fn claimed_pairing(record: &PairingRecord, peer: &PairingPeer) -> ClaimedPairing {
@@ -438,6 +643,180 @@ fn decode_claim(body: &[u8]) -> Result<ClaimRequest, ErrorCode> {
             ErrorCode::ProtocolSchemaInvalid
         }
     })
+}
+
+/// status 请求体的解码（同 [`decode_claim`] 的两级错误分类）。
+fn decode_status(body: &[u8]) -> Result<StatusRequest, ErrorCode> {
+    serde_json::from_slice::<StatusRequest>(body).map_err(|error| match error.classify() {
+        serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+            ErrorCode::ProtocolInvalidJson
+        }
+        serde_json::error::Category::Data | serde_json::error::Category::Io => {
+            ErrorCode::ProtocolSchemaInvalid
+        }
+    })
+}
+
+/// wire 的 status 请求 → 内部值对象（失败只可能是「形状合法但取值不可用」）。
+struct StatusInput {
+    pairing: PairingId,
+    owner_node: NodeId,
+    access_node: NodeId,
+    pairing_request_id: identity_auth::PairingRequestId,
+    request_nonce: Nonce,
+    proof: PairingProof,
+}
+
+impl StatusInput {
+    fn from_wire(request: &StatusRequest) -> Option<Self> {
+        Some(Self {
+            pairing: PairingId::new(request.pairing_id.as_str()).ok()?,
+            owner_node: NodeId::new(request.owner_node_id.as_str()).ok()?,
+            access_node: NodeId::new(request.access_node_id.as_str()).ok()?,
+            pairing_request_id: identity_auth::PairingRequestId::parse(
+                request.pairing_request_id.as_str(),
+            )
+            .ok()?,
+            request_nonce: Nonce::new(&encode_base64url(request.request_nonce.as_bytes())).ok()?,
+            proof: PairingProof::try_from_bytes(request.proof.as_bytes()).ok()?,
+        })
+    }
+
+    /// 重放缓存的键：`(pairingId, requestNonce)`（§13.3：只有网络重试才复用原 nonce）。
+    fn replay_key(&self) -> String {
+        format!("{}\0{}", self.pairing.as_str(), self.request_nonce.as_str())
+    }
+}
+
+/// 状态机的配对状态 → wire 的 `PairingStatus`（§13.3 的五状态）。
+///
+/// `created`/`claimed` 在配对通道里没有对外名字：未完成本机确认的配对统一呈现为
+/// `pending_confirmation`（与 `LOCAL_ADMIN_PROTOCOL.md` §5.4 的 `claimed` 同义），且 `created`
+/// 的配对只有在 Access 自己拿到 secret 后才能被查询。
+fn wire_status(state: PairingState) -> PairingStatus {
+    match state {
+        PairingState::Approved => PairingStatus::Approved,
+        PairingState::Consumed => PairingStatus::Consumed,
+        PairingState::Rejected => PairingStatus::Rejected,
+        PairingState::Expired => PairingStatus::Expired,
+        PairingState::Created | PairingState::Claimed | PairingState::PendingConfirmation => {
+            PairingStatus::PendingConfirmation
+        }
+    }
+}
+
+/// 401（proof 无效或 secret 已不可用）：本端点的所有身份失败共用同一形状与文本（§13.3）。
+fn proof_invalid() -> HttpResponse {
+    reject(
+        StatusCode::UNAUTHORIZED,
+        ErrorCode::AuthProofInvalid,
+        PROOF_INVALID_MESSAGE,
+    )
+}
+
+/// 已缓存的 200 响应（重试路径原样重发首次响应体）。
+fn ok_body(body: Bytes) -> HttpResponse {
+    secure(HttpResponse::json(StatusCode::OK, body))
+}
+
+/// status 的「网络重试返回原响应」缓存（§13.3）。
+///
+/// 只保存成功响应；键是 `(pairingId, requestNonce)`，条目数有上限（先入先出淘汰最早的）。
+#[derive(Default)]
+struct StatusReplays {
+    entries: VecDeque<(String, Bytes)>,
+}
+
+impl StatusReplays {
+    fn body(&self, key: &str) -> Option<Bytes> {
+        self.entries
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, body)| body.clone())
+    }
+
+    fn remember(&mut self, key: String, body: Bytes) {
+        if self.entries.len() >= MAX_STATUS_REPLAYS {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key, body));
+    }
+}
+
+/// 按 `pairingId` 计数的滑动窗口（§2.5：status 60 次/分钟/`pairingId`）。
+///
+/// 与 `transport::net` 的 [`SlidingWindowLimiter`] 同构，但**键不是对端地址**：那一个的键固定为
+/// `IpAddr`（`PeerInfo::client_ip` 是它的唯一来源），本端点的键是配对标识。两者都实现 §2.5 的固定窗口
+/// 语义（含键集上限与失败关闭），各自有自己的边界用例。
+struct PairingIdWindow {
+    limit: u32,
+    window: Duration,
+    state: Mutex<HashMap<String, VecDeque<Instant>>>,
+}
+
+impl PairingIdWindow {
+    fn new(limit: u32, window: Duration) -> Self {
+        Self {
+            limit,
+            window,
+            state: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn check(&self, key: &str) -> RateLimit {
+        self.check_at(key, Instant::now())
+    }
+
+    /// 与 [`PairingIdWindow::check`] 相同，但由调用方给出时刻（单测用）。
+    fn check_at(&self, key: &str, now: Instant) -> RateLimit {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.limit == 0 {
+            return RateLimit::Denied {
+                retry_after: self.window,
+            };
+        }
+        if !state.contains_key(key) && state.len() >= MAX_TRACKED_KEYS {
+            state.retain(|_, attempts| {
+                attempts
+                    .back()
+                    .is_some_and(|last| now.duration_since(*last) < self.window)
+            });
+            if state.len() >= MAX_TRACKED_KEYS {
+                // 满了且没有可淘汰的空窗口：拒绝新键（失败关闭），不放弃对既有键的计数。
+                return RateLimit::Denied {
+                    retry_after: self.window,
+                };
+            }
+        }
+        let attempts = state.entry(key.to_owned()).or_default();
+        while let Some(front) = attempts.front() {
+            if now.duration_since(*front) < self.window {
+                break;
+            }
+            attempts.pop_front();
+        }
+        let recorded = u32::try_from(attempts.len()).unwrap_or(u32::MAX);
+        if recorded >= self.limit {
+            let retry_after = attempts
+                .front()
+                .map(|front| self.window.saturating_sub(now.duration_since(*front)))
+                .unwrap_or(self.window);
+            return RateLimit::Denied { retry_after };
+        }
+        attempts.push_back(now);
+        RateLimit::Allowed {
+            remaining: self.limit - recorded - 1,
+        }
+    }
+
+    /// 当前跟踪的键数（单测用）。
+    #[cfg(test)]
+    fn tracked_keys(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
 }
 
 /// `Content-Type` 是否为 `application/json`（允许 `; charset=…` 之类的参数，§13.1）。
@@ -549,4 +928,92 @@ fn secure(response: HttpResponse) -> HttpResponse {
             HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// status 的限流键是 `pairingId`（不是对端地址），窗口语义与接入层的 `SlidingWindowLimiter` 同口径。
+    #[test]
+    fn pairing_id_window_counts_per_key_and_recovers_after_the_window() {
+        let window = PairingIdWindow::new(2, Duration::from_secs(60));
+        let now = Instant::now();
+        assert_eq!(
+            window.check_at("pairing-a", now),
+            RateLimit::Allowed { remaining: 1 }
+        );
+        assert_eq!(
+            window.check_at("pairing-a", now),
+            RateLimit::Allowed { remaining: 0 }
+        );
+        assert!(matches!(
+            window.check_at("pairing-a", now),
+            RateLimit::Denied { .. }
+        ));
+        // 另一个 pairingId 有自己的窗口，不受影响。
+        assert_eq!(
+            window.check_at("pairing-b", now),
+            RateLimit::Allowed { remaining: 1 }
+        );
+        assert_eq!(window.tracked_keys(), 2);
+        // 窗口滑过之后该键恢复可用。
+        assert!(matches!(
+            window.check_at("pairing-a", now + Duration::from_secs(60)),
+            RateLimit::Allowed { .. }
+        ));
+    }
+
+    /// 键数到上限后拒绝新键（失败关闭），既有键的计数不被重置。
+    #[test]
+    fn pairing_id_window_fails_closed_when_the_key_set_is_full() {
+        let window = PairingIdWindow::new(60, Duration::from_secs(60));
+        let now = Instant::now();
+        for index in 0..MAX_TRACKED_KEYS {
+            assert!(matches!(
+                window.check_at(&format!("pairing-{index}"), now),
+                RateLimit::Allowed { .. }
+            ));
+        }
+        assert!(matches!(
+            window.check_at("pairing-overflow", now),
+            RateLimit::Denied { .. }
+        ));
+        assert_eq!(window.tracked_keys(), MAX_TRACKED_KEYS);
+    }
+
+    /// 五状态映射：`created`/`claimed` 对外都是 `pending_confirmation`（配对通道没有别的对外名字）。
+    #[test]
+    fn wire_status_covers_the_five_external_states() {
+        assert_eq!(
+            wire_status(PairingState::Created),
+            PairingStatus::PendingConfirmation
+        );
+        assert_eq!(
+            wire_status(PairingState::Claimed),
+            PairingStatus::PendingConfirmation
+        );
+        assert_eq!(
+            wire_status(PairingState::PendingConfirmation),
+            PairingStatus::PendingConfirmation
+        );
+        assert_eq!(wire_status(PairingState::Approved), PairingStatus::Approved);
+        assert_eq!(wire_status(PairingState::Rejected), PairingStatus::Rejected);
+        assert_eq!(wire_status(PairingState::Expired), PairingStatus::Expired);
+        assert_eq!(wire_status(PairingState::Consumed), PairingStatus::Consumed);
+    }
+
+    /// 重放缓存：同一键返回原响应，条目数有上限（超限淘汰最早的一条）。
+    #[test]
+    fn status_replays_are_bounded_and_keyed_by_pairing_and_nonce() {
+        let mut replays = StatusReplays::default();
+        replays.remember("a\0n1".to_owned(), Bytes::from_static(b"first"));
+        assert_eq!(replays.body("a\0n1"), Some(Bytes::from_static(b"first")));
+        assert_eq!(replays.body("a\0n2"), None);
+        assert_eq!(replays.body("b\0n1"), None);
+        for index in 0..MAX_STATUS_REPLAYS {
+            replays.remember(format!("k\0{index}"), Bytes::from_static(b"x"));
+        }
+        assert!(replays.entries.len() <= MAX_STATUS_REPLAYS);
+    }
 }

@@ -7,6 +7,10 @@
 //! 本切片落地的范围（`node-link-owner` 的 WP3）：配对 HTTP（[`pairing`] 的 claim/status 端点）。
 //! `conn`（握手与连接生命周期）、`catalog`、`resource`、`command` 属 WP4–WP6。
 //!
+//! WP3 内部的两条固定限流（`NODE_LINK_PROTOCOL.md` §2.5，不可配置）：claim 10 次/分钟/IP（复用接入层的
+//! `SlidingWindowLimiter`，键是 `PeerInfo::client_ip`）与 status 60 次/分钟/`pairingId`（`pairing` 内部的
+//! `PairingIdWindow`，因为接入层限流器的键固定是 `IpAddr`，而 `pairingId` 不是地址）。超限一律 429。
+//!
 //! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §4/§5）：
 //!
 //! - 只调用 `core::use_cases`（配对通道以 `Actor::PairingClaimant`）与 `identity-auth` 的公开入口，
