@@ -246,6 +246,14 @@ pub struct BrokerDeps {
 /// 不带 wire 指纹的入口使用的规范占位摘要（32 个零字节的 base64url，无填充、末字符在规范集合内）。
 const PLACEHOLDER_FINGERPRINT: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
+/// §6 第 9 条（RV2-WP7-F1）的兜底：被放弃 turn 的【占位】最多消耗多少个**驱动轮次**。
+///
+/// core 不读时钟、不设定时器，因此这里按轮次而不是墙钟计时：每个驱动轮次 = 一次派发尝试，组合根按
+/// `storage.flush_interval_ms`（默认 250 ms）周期驱动活动会话，`1200` 轮 ≈ 5 分钟。轮次用尽仍未观测到
+/// 终态说明端点的 turn 边界已不可信，此时优先让会话继续可用（释放占位，迟到事件的归属回到「在跑的
+/// turn」规则）。
+const ABANDONED_TURN_HOLD_ROUNDS: u32 = 1200;
+
 /// 每会话串行门（§6.3：一个会话一个串行队列，不同会话并行）。
 ///
 /// core 不依赖 runtime，因此这里用 std 互斥量 + `Waker` 自己实现 FIFO 异步门：等待者按到达顺序取号，
@@ -394,6 +402,25 @@ struct TurnQueue {
     running_request: Option<RequestId>,
     running_actor: Option<Actor>,
     waiting: VecDeque<QueuedTurn>,
+    /// §6 第 9 条（RV2-WP7-F1）：被放弃、但还没有被端点观测到终态的 turn——它继续占住
+    /// `running` 槽位（见 [`HeldTurn`]）。
+    held: Option<HeldTurn>,
+}
+
+/// 被放弃的 turn 的【占位】：`abandon_failed_turn` 之后不让出 `running` 槽位，直到它的终态被端点观测到。
+///
+/// 为什么必须占住：适配器（`agent-host`）发出的 `EndpointEvent` **不带** turn 标识，归属只能由 core 按
+/// 「有在跑 turn 时归给它」推断（§10.3）。若放弃后立刻派发下一个排队 turn，下一个 turn 就成了「在跑的
+/// turn」，被放弃 turn 的迟到事件（含终态）会被记到它头上——客户端看到下一个命令 `completed`，而它的
+/// 正文被按上一个 turn 的收尾折叠（RV2-WP7-F1）。占住期间迟到事件一律按被放弃的 turn 归属并丢弃。
+///
+/// 释放路径：①该 turn 的终态事件到达（视为端点已观测到该 turn 结束）；②兜底：占位轮次用尽
+/// （[`ABANDONED_TURN_HOLD_ROUNDS`]，避免端点永不收敛时会话永久卡住）。释放之后无归属事件的归属
+/// 回到「在跑的 turn」规则，因此兜底是最后手段而不是常规路径。
+struct HeldTurn {
+    turn: TurnId,
+    /// 已经消耗的驱动轮次（每轮 = 一次派发尝试，见 [`Slot::hold_blocks_dispatch`]）。
+    rounds: u32,
 }
 
 /// 一个会话的运行时状态（owned 与 imported 各一份，键见 [`Broker::slot_key`]）。
@@ -450,6 +477,54 @@ impl Slot {
         queue.running = None;
         queue.running_request = None;
         queue.running_actor = None;
+    }
+
+    /// 该会话是否还有等待派发的 turn（放弃提交用它决定会话状态，见 [`Broker::abandon_failed_turn`]）。
+    fn has_waiting_turn(&self) -> bool {
+        !lock(&self.queue).waiting.is_empty()
+    }
+
+    /// §6 第 9 条（RV2-WP7-F1）：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
+    fn hold_abandoned_turn(&self, turn: &TurnId) {
+        let mut queue = lock(&self.queue);
+        queue.held = Some(HeldTurn {
+            turn: turn.clone(),
+            rounds: 0,
+        });
+    }
+
+    /// 释放【占位】：只有占位者本人能释放（更早被放弃的 turn 的迟到终态不得提前放行会话）。
+    fn release_held_turn(&self, turn: &TurnId) {
+        let mut queue = lock(&self.queue);
+        if queue.held.as_ref().map(|held| &held.turn) != Some(turn) {
+            return;
+        }
+        queue.held = None;
+        if queue.running.as_ref() == Some(turn) {
+            queue.running = None;
+            queue.running_request = None;
+            queue.running_actor = None;
+        }
+    }
+
+    /// 派发前的占位检查。返回 `true` = 仍在占位、本轮不得派发；`false` = 没有占位（可派发）。
+    ///
+    /// 兜底在这里推进（core 不读时钟、不设定时器，因此按驱动轮次而不是墙钟计时，见
+    /// [`ABANDONED_TURN_HOLD_ROUNDS`]）。
+    fn hold_blocks_dispatch(&self) -> bool {
+        let expired = {
+            let mut queue = lock(&self.queue);
+            let Some(held) = queue.held.as_mut() else {
+                return false;
+            };
+            held.rounds = held.rounds.saturating_add(1);
+            if held.rounds < ABANDONED_TURN_HOLD_ROUNDS {
+                return true;
+            }
+            held.turn.clone()
+        };
+        self.release_held_turn(&expired);
+        false
     }
 }
 
@@ -1618,6 +1693,11 @@ impl Broker {
             // 否则库里会留下「报完成但正文缺失」的记录。
             if let Some(turn_id) = turn.as_ref() {
                 if lock(&slot.abandoned).contains(turn_id) {
+                    // §6 第 9 条（RV2-WP7-F1）：该 turn 的终态到达即「端点已观测到它结束」，占位随之
+                    // 释放（事件本身仍被丢弃）。
+                    if is_turn_terminal(&event.event_type) {
+                        slot.release_held_turn(turn_id);
+                    }
                     continue;
                 }
             }
@@ -1827,6 +1907,11 @@ impl Broker {
 
     /// 派发一个排队 turn：Queued → Running（`turn.started`）→ 后端 `prompt`。
     async fn dispatch_one(&self, slot: &Slot, session: &SessionId) -> Result<bool, PortError> {
+        // §6 第 9 条（RV2-WP7-F1）：被放弃 turn 的【占位】未释放前不得提升下一个排队 turn，
+        // 否则它的迟到事件会被记到下一个 turn 上（见 [`HeldTurn`]）。兜底轮次也在这里推进。
+        if slot.hold_blocks_dispatch() {
+            return Ok(false);
+        }
         let next = {
             let mut queue = lock(&slot.queue);
             if queue.running.is_some() {
@@ -1975,6 +2060,11 @@ impl Broker {
     ///
     /// 已落盘的 delta 仍按 §6 第 14 条收尾成 `agent.message.completed`（缺的段落不伪造）；不压缩它们
     /// （§6 第 15 条是可选动作），错误路径上不再多发一次提交。
+    ///
+    /// **不让出会话槽**（RV2-WP7-F1）：放弃的 turn 继续占住 `running`（[`HeldTurn`]），直到它的终态被
+    /// 端点观测到；此前 `dispatch_one` 不得提升下一个排队 turn。这也会把它迟到的 permission/
+    /// elicitation 请求一并丢弃（不落交互行、不广播）——已经被终结为 `uncertain` 的 turn 不再接受
+    /// 交互，收敛该 turn 是端点的职责（`AGENTS.md` §3：一个状态只能有一个权威写入者）。
     async fn abandon_failed_turn(
         &self,
         slot: &Slot,
@@ -1990,7 +2080,7 @@ impl Broker {
         let completed = self.completed_events_for(slot, turn)?;
         lock(&slot.deltas).remove(turn.as_str());
         lock(&slot.turn_deltas).remove(turn.as_str());
-        slot.finish_turn();
+        slot.hold_abandoned_turn(turn);
         let Some(request) = request else {
             return Ok(());
         };
@@ -2022,7 +2112,15 @@ impl Broker {
             at: at.clone(),
             expected_version: None,
             state: Some(StateChange::Update(SessionUpdate {
-                state: Some(SessionState::Failed),
+                // 会话状态按「还有没有排队 turn」投影：放弃自己的 turn 不等于该会话没有工作。
+                // 仍排队的 turn 必须继续被驱动（组合根的合并窗口只枚举 `queued`/`running`/
+                // `waiting_*` 的会话），因此这种情况下不能写成 `Failed`——否则该会话再也不会被驱动，
+                // RV2-WP7-F1 的兜底轮次永远推不动（§6 第 9 条）。
+                state: Some(if slot.has_waiting_turn() {
+                    SessionState::Queued
+                } else {
+                    SessionState::Failed
+                }),
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
@@ -2050,7 +2148,7 @@ impl Broker {
                 self.publish(&outcome.appended);
                 Ok(())
             }
-            // 存储仍然不可用：该 turn 在内存里已放弃（`abandoned` + `finish_turn`），不再有
+            // 存储仍然不可用：该 turn 在内存里已放弃（`abandoned` + 占位），不再有
             // 「completed 但正文缺失」的记录会产生；不发布任何东西（§6.9）。
             Err(PortError::Unavailable(_)) => Ok(()),
             Err(error) => Err(error),
@@ -6081,6 +6179,216 @@ mod tests {
             payload.view.as_str().contains("Hello") && !payload.view.as_str().contains("lost"),
             "只收尾已落盘的段落：{}",
             payload.view.as_str()
+        );
+    }
+
+    /// §6 第 9 条（RV2-WP7-F1）：被放弃 turn 的迟到终态不得记到下一个 turn 上。
+    ///
+    /// 适配器发出的 `EndpointEvent` 不带 turn 标识（`agent-host` 的 mapper 固定 `turn: None`），归属只能
+    /// 按「有在跑 turn 时归给它」推断（§10.3）。因此放弃之后**不得**立刻提升下一个排队 turn：否则 T1 的
+    /// 迟到 `turn.completed` 会把 T2 报成完成，并把 T2 已落盘的正文按 T1 的终态折叠。
+    #[test]
+    fn a_late_terminal_of_an_abandoned_turn_does_not_complete_the_next_turn() {
+        let harness = Harness::new(BrokerConfig::default());
+        // T1：空脚本（派发后不发任何事件）；T2：只发一条增量，自己不收尾。
+        harness.world.push_script(Script::new(Vec::new()));
+        let second = MessageId::new(&uuid_text(612)).expect("message");
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"second"}}"#,
+                second.as_str()
+            ),
+        )]));
+        let first = MessageId::new(&uuid_text(610)).expect("message");
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(matches!(
+            harness.submit_prompt(2, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 提交顺序：1 = T1 接受、2 = T1 派发、3 = T2 接受、4 = T1 的增量批次（本用例注入失败）。
+        harness.world.fail_commit_at(4);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"first"}}"#,
+                first.as_str()
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        // ① 被放弃 turn 的终态还没被观测到：T2 不得被派发，且会话必须仍是可被驱动的状态。
+        assert_eq!(harness.world.prompt_count(), 1, "不得提前派发 T2");
+        let queued = harness
+            .world
+            .turns(&harness.session)
+            .into_iter()
+            .filter(|turn| turn.state() == TurnState::Queued)
+            .count();
+        assert_eq!(queued, 1, "T2 必须还在排队");
+        assert_eq!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .state(),
+            SessionState::Queued,
+            "放弃后仍排队的会话必须是合并窗口能枚举到的状态（否则兑底永远推不动）"
+        );
+
+        // ② 无归属的迟到终态：按被放弃的 T1 归属并丢弃，同时释放占位。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+
+        // ③ T2 不得被记成完成；它自己的事件也不得被丢弃。
+        assert_eq!(
+            harness
+                .world
+                .command(&harness.request(2))
+                .expect("幂等行")
+                .status(),
+            CommandStatus::Accepted,
+            "T1 的迟到终态不得把 T2 的命令报成完成"
+        );
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            vec![
+                "turn.queued",
+                "turn.started",
+                "turn.queued",
+                "turn.failed",
+                "command.uncertain",
+                "turn.started",
+                "agent.message.delta",
+            ],
+            "迟到终态被丢弃；观测到它之后 T2 才被派发（其增量必须落盘）"
+        );
+        let turns = harness.world.turns(&harness.session);
+        assert_eq!(
+            turns.iter().map(|turn| turn.state()).collect::<Vec<_>>(),
+            vec![TurnState::Failed, TurnState::Running],
+            "T2 只能是 Running，不得是 Completed：{turns:?}"
+        );
+        assert!(harness.world.published_after_commit());
+    }
+
+    /// §6 第 9 条（RV2-WP7-F1）的兑底：端点始终没有观测到终态时，占位必须在有界轮次后释放，
+    /// 否则排队的 turn 永远不被派发、会话永久卡住。
+    #[test]
+    fn an_unobserved_abandoned_turn_hold_is_released_after_the_bounded_rounds() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(Vec::new()));
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert!(matches!(
+            harness.submit_prompt(2, 'B'),
+            CommandReceipt::Accepted { .. }
+        ));
+        harness.world.fail_commit_at(4);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                uuid_text(613)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        assert_eq!(harness.world.prompt_count(), 1);
+
+        // 占位按驱动轮次计时：放弃提交所在的那次 `pump` 已消耗第一轮，此后每次 `pump` 消耗一轮。
+        let mut rounds = 1;
+        while rounds + 1 < ABANDONED_TURN_HOLD_ROUNDS {
+            block_on(harness.broker.pump(&harness.session)).expect("pump");
+            rounds += 1;
+        }
+        assert_eq!(harness.world.prompt_count(), 1, "轮次未用尽前不得派发 T2");
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        assert_eq!(
+            harness.world.prompt_count(),
+            2,
+            "兑底必须释放占位，否则会话永久卡住"
+        );
+    }
+
+    /// §6 第 9/19 条（RV2-WP7-F3）：被放弃 turn 的迟到事件走第 9 条的「归属到被放弃的 turn 并被丢弃」，
+    /// **不是**第 19 条的「无归属降级」（带着 NULL 的 `turn_id` 照常落库）。
+    #[test]
+    fn a_late_event_of_an_abandoned_turn_is_dropped_instead_of_degraded_without_a_turn() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(Vec::new()));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        // 提交顺序：1 = 接受、2 = 派发、3 = 增量批次（本用例注入失败），4 = 放弃提交。
+        harness.world.fail_commit_at(3);
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"lost"}}"#,
+                uuid_text(614)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        // 迟到终态被丢弃并释放占位：此后这个会话没有在跑的 turn。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "turn.completed",
+            &turn_view("completed"),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        let before = harness.world.event_types(&harness.session);
+
+        // 没有在跑 turn，但归属者（被放弃的 turn）存在：迟到增量按 §6 第 9 条丢弃，不落库。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &format!(
+                r#"{{"messageId":"{}","deltaIndex":"0","text":"tail"}}"#,
+                uuid_text(615)
+            ),
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        assert_eq!(
+            harness.world.event_types(&harness.session),
+            before,
+            "被放弃 turn 的迟到增量不得落库"
+        );
+
+        // 阳性对照：会话级事件不属于第 19 条的 `turnId` 集合，它照常提交（turn 归属为 NULL）——
+        // 证明上一条是「归属到被放弃的 turn」，而不是「迟到的都丢」。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "session.origin.online_changed",
+            r#"{"online":true}"#,
+        ));
+        block_on(harness.broker.pump(&harness.session)).expect("pump");
+        let mut expected = before;
+        expected.push("session.origin.online_changed".to_owned());
+        assert_eq!(harness.world.event_types(&harness.session), expected);
+        let event = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .find(|event| event.event_type.as_str() == "session.origin.online_changed")
+            .expect("会话级事件必须落库");
+        assert!(
+            harness.world.event_turn(&event.id).is_none(),
+            "无归属的降级：turn 归属为 NULL"
         );
     }
 
