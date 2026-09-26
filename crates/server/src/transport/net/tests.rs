@@ -13,7 +13,7 @@
 //! | [R8] 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
 //! | [R9]/[R10] Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
 //! | [R11] 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
-//! | [R12]/[R13] TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（RV1-WP2-F3 回归） |
+//! | [R12]/[R13] TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（RV1-WP2-F3 回归）、`saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections`（RV2-WP2FIX-F1 回归） |
 //! | [R14] direct 模式证书缺失即拒绝启动 | `direct_mode_missing_certificate_fails_closed`、`direct_mode_invalid_pem_fails_closed`、`direct_mode_relaxed_permissions_fail_closed`（Unix）、`direct_mode_permissions_are_unverifiable_on_this_platform`（Windows，`[PV5]`） |
 //! | [R15] 非 loopback 明文边界 | `plaintext_proxy_non_loopback_warns`、`plaintext_dev_flag_rejects_non_loopback`（`listener` 模块） |
 //! | [R16]/[R17] 请求体上限 | `pairing_body_over_the_limit_is_rejected_with_413` |
@@ -1073,6 +1073,73 @@ async fn idle_tcp_connections_do_not_block_new_connections() {
     )
     .await
     .expect("只连接不握手的对端不得阻塞新连接的接入")
+    .expect("TLS 连接");
+    connection
+        .write_all(&http_request(
+            "POST",
+            CLAIM_PATH,
+            &host_of(server.addr),
+            &[],
+            b"{}",
+        ))
+        .await
+        .expect("写请求");
+    assert_eq!(
+        connection.read_response().await.expect("读响应").status,
+        200
+    );
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections() {
+    // [R12]（RV2-WP2FIX-F1 回归）：握手池被「只连接不握手」的连接**占满**时，新连接既不被丢弃、
+    // 也不被拒绝——它等一个槽位，并在既有握手因超时归还槽位后照常完成 TLS 握手与请求。
+    //
+    // 用例按 `TLS_HANDSHAKE_POOL_SIZE` 精确填满池（不写死槽位数，容量调整时不会静默失去覆盖）。
+    // 区分度：背压实现只等**一个**既有握手超时（时间与排队连接数无关）；在 accept 里顺序握手的
+    // 老实现要等「池容量 × 单次握手超时」，因此 5 s 的上限能分开两者（注入的 500 ms × 64 = 32 s）。
+    let certificate = TestCertificate::generate();
+    let server = start_server(
+        NetConfig {
+            tls: TlsMode::Direct {
+                cert_path: certificate.cert_path.clone(),
+                key_path: certificate.key_path.clone(),
+            },
+            ..loopback_config()
+        },
+        |listener| {
+            // 测试专用注入：把单次握手超时从生产的 10 s 缩到 500 ms，让「池满 → 等槽位 → 超时
+            // 归还槽位」在用例时限内真实经过；公开语义与生产默认值不变（池容量仍是生产常量）。
+            listener.override_handshake_timeout(Duration::from_millis(500));
+            listener
+                .register_post(
+                    CLAIM_PATH,
+                    Arc::new(RecordingHttpHandler {
+                        calls: Arc::new(AtomicUsize::new(0)),
+                        last_client_ip: Arc::new(std::sync::Mutex::new(None)),
+                        status: StatusCode::OK,
+                    }),
+                )
+                .expect("注册 claim");
+        },
+    )
+    .await;
+    // 占满全部槽位：只建立 TCP、不发 ClientHello 的连接（无需任何凭据），每个槽位各自占用到超时。
+    let _idle: Vec<_> = {
+        let mut idle = Vec::new();
+        for _ in 0..listener::TLS_HANDSHAKE_POOL_SIZE {
+            idle.push(connect(server.addr).await.expect("TCP 连接"));
+        }
+        idle
+    };
+    // 新连接在池满时只能等槽位：它排在既有连接之后（TCP 接收队列 FIFO），因此被 accept 时池已耗尽。
+    let mut connection = tokio::time::timeout(
+        Duration::from_secs(5),
+        connect_tls(server.addr, client_tls_config(certificate.der.clone())),
+    )
+    .await
+    .expect("池满时新连接必须等槽位，不得被丢弃或无限推迟")
     .expect("TLS 连接");
     connection
         .write_all(&http_request(

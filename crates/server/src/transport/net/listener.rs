@@ -55,7 +55,10 @@ const SESSION_QUEUE_CAPACITY: usize = 64;
 /// 的连接把新连接的接入推迟一个握手超时——只有同时占满 [`TLS_HANDSHAKE_POOL_SIZE`] 个槽位（每个槽位
 /// 最多占用 [`TLS_HANDSHAKE_TIMEOUT`]）才会对新连接施加背压。上限固定且较小：本 Daemon 是个人节点，
 /// 并发的**尚未认证**握手没有理由超过这个量级。
-const TLS_HANDSHAKE_POOL_SIZE: usize = 64;
+///
+/// `pub(super)` 只为让 `net::tests` 的池满用例按实际容量精确填满槽位（容量本身仍不可配置，
+/// 消费面只有本模块）；用例若把槽位数写死就会在容量调整时静默失去覆盖。
+pub(super) const TLS_HANDSHAKE_POOL_SIZE: usize = 64;
 
 /// 握手结果交接队列的容量（等于池容量：每个槽位至多产生一个待投递结果）。
 const HANDSHAKE_READY_CAPACITY: usize = TLS_HANDSHAKE_POOL_SIZE;
@@ -63,6 +66,7 @@ const HANDSHAKE_READY_CAPACITY: usize = TLS_HANDSHAKE_POOL_SIZE;
 /// TLS 握手的接入层超时：池里的单次握手不得无限占用槽位。
 ///
 /// 这是接入层实现细节（不是协议限额，协议限额见 `NODE_LINK_PROTOCOL.md` §2.5），因此不出现在配置键里。
+/// 测试可以注入更短的值（`NetListener` 上的测试专用注入点），生产默认值不变。
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// listener 绑定/服务失败。所有变体都要求调用方**拒绝启动或拒绝继续**，不得降级。
@@ -209,6 +213,8 @@ pub struct NetListener {
     tcp: TcpListener,
     routes: RouteTable,
     warnings: Vec<ListenerWarning>,
+    /// 单次 TLS 握手的超时（生产固定为 [`TLS_HANDSHAKE_TIMEOUT`]；测试可注入更短的值）。
+    handshake_timeout: Duration,
 }
 
 /// 手写 `Debug`：只展示运维需要的事实（监听地址、是否终止 TLS、告警），不展开注册表，也不打印证书路径
@@ -290,7 +296,17 @@ impl NetListener {
             tcp,
             routes: RouteTable::default(),
             warnings,
+            handshake_timeout: TLS_HANDSHAKE_TIMEOUT,
         })
+    }
+
+    /// 测试专用注入点：把单次 TLS 握手的超时缩短，让「池满 → 等槽位 → 既有握手超时归还槽位」这条
+    /// 路径在用例时限内真实经过（否则要等 [`TLS_HANDSHAKE_POOL_SIZE`] × [`TLS_HANDSHAKE_TIMEOUT`]）。
+    ///
+    /// 只改变超时长度，不改变接入选层的公开语义：池容量、背压与丢弃口径都由本模块的生产常量决定。
+    #[cfg(test)]
+    pub(super) fn override_handshake_timeout(&mut self, timeout: Duration) {
+        self.handshake_timeout = timeout;
     }
 
     /// 实际绑定的监听地址清单（`daemon.status.listen` 的来源）。
@@ -350,6 +366,7 @@ impl NetListener {
             permits: Arc::new(Semaphore::new(TLS_HANDSHAKE_POOL_SIZE)),
             ready_tx,
             ready_rx,
+            handshake_timeout: self.handshake_timeout,
         };
         let serve_signal = shutdown.clone();
         let outer_signal = shutdown.clone();
@@ -496,6 +513,8 @@ struct NetAcceptor {
     ready_tx: mpsc::Sender<(NetStream, SocketAddr)>,
     /// 已完成握手的连接（由 `accept` 交给 `axum::serve`）。
     ready_rx: mpsc::Receiver<(NetStream, SocketAddr)>,
+    /// 单次握手的超时（生产固定为 [`TLS_HANDSHAKE_TIMEOUT`]；测试可注入更短的值）。
+    handshake_timeout: Duration,
 }
 
 impl NetAcceptor {
@@ -519,10 +538,12 @@ impl NetAcceptor {
             Err(_) => return None,
         };
         let ready = self.ready_tx.clone();
+        let handshake_timeout = self.handshake_timeout;
         self.handshakes.spawn(async move {
-            let handshake =
-                tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await;
+            let handshake = tokio::time::timeout(handshake_timeout, acceptor.accept(stream)).await;
             // 先归还槽位再投递结果：投递可能因队列满而等待，槽位不该被投递阻塞。
+            // **本行先于结果投递是死锁自由性的前提，不得移动到 send 之后**：若持有槽位的任务去等结果
+            // 队列，而 `accept` 又因池满等槽位，两者就会互相等待。
             drop(permit);
             match handshake {
                 Ok(Ok(stream)) => {
@@ -555,6 +576,10 @@ impl Listener for NetAcceptor {
             tokio::select! {
                 // 已完成的握手（与 accept 的先后无关，握手结果先到就先服务）。
                 ready = self.ready_rx.recv() => {
+                    // `None`（全部发送端已丢弃）在本结构里不可达：`ready_tx` 由 [`NetAcceptor`]
+                    // 自己持有一份（见该字段的注释），因此只要这个值还活着，接收端就至少有一个
+                    // 存活的发送端。留这个分支是为了不改动 `if let` 的形状；它**只做兜底**，
+                    // 不能在此空转——空循环体会变成忙等。
                     if let Some(connection) = ready {
                         return connection;
                     }
