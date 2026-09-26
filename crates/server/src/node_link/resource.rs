@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acp_core::model::{
     AcpRaw, CommittedDelivery, CommittedEvent, EntityRef, EventPayload as CoreEventPayload,
-    ExportId, InteractionKind, OriginCursor as CoreOriginCursor, PortError, RawUnavailableReason,
-    SessionId, SessionState as CoreSessionState,
+    ExportId, InteractionKind, NodeId, OriginCursor as CoreOriginCursor, PortError,
+    RawUnavailableReason, SessionId, SessionState as CoreSessionState,
 };
 use acp_core::ports::{EventPublisher, ReplayLimit};
 use acp_core::use_cases::{NodeLinkEvent, NodeLinkReplay, UseCases};
@@ -94,6 +94,9 @@ struct Subscription {
 pub struct ResourceRoute {
     core: Arc<UseCases>,
     registry: Arc<ConnectionRegistry>,
+    /// 本机（Owner）node id：`remoteSessionRef.ownerNodeId` 的判定基准（见
+    /// [`ResourceRoute::owner_matches`]）。
+    node_id: NodeId,
     states: Mutex<BTreeMap<String, ConnectionState>>,
 }
 
@@ -107,11 +110,13 @@ impl std::fmt::Debug for ResourceRoute {
 }
 
 impl ResourceRoute {
-    /// 装配。`registry` 是连接注册表（扇出按 `connectionId` 找当前句柄）。
-    pub fn new(core: Arc<UseCases>, registry: Arc<ConnectionRegistry>) -> Self {
+    /// 装配。`registry` 是连接注册表（扇出按 `connectionId` 找当前句柄）；`node_id` 是本机 node id，
+    /// 组合根传 `Authority::local_node`（它也是握手 `node.ready.ownerNodeId` 的来源）。
+    pub fn new(core: Arc<UseCases>, registry: Arc<ConnectionRegistry>, node_id: NodeId) -> Self {
         Self {
             core,
             registry,
+            node_id,
             states: Mutex::new(BTreeMap::new()),
         }
     }
@@ -191,6 +196,12 @@ impl ResourceRoute {
                 }
             };
             let Some(payload) = payload else {
+                warn!(
+                    event = "node_link.fanout_payload_invalid",
+                    access_node_id = handle.node_id().as_str(),
+                    event_id = event.id.as_str(),
+                    "the stored event payload is missing or cannot be mapped to a resource.event payload"
+                );
                 continue;
             };
             let Some(body) = event_body(event, &attachment.remote, payload) else {
@@ -217,12 +228,15 @@ impl ResourceRoute {
     /// 订阅了该会话的连接（顺序按 `connectionId` 稳定）。
     ///
     /// 连接结束时 `conn` 会从注册表移除句柄，但不会通知路由；这里以「注册表里还在」为活跃判据，因此
-    /// 已结束连接的状态表条目不会被再次投递（条目本身留到下次 [`ResourceRoute::forget_if_closed`] 或
-    /// 该连接再次注册时被覆盖——单进程内连接数是连接生命周期有界的）。
+    /// 已结束连接的状态表条目不会被再次投递。同时**顺带回收**这些条目（[`ResourceRoute::forget_if_closed`]
+    /// 只在投递失败且句柄已摘除时清理，正常结束的连接永远走不到那条路）：不回收的话状态表会按
+    /// 历史连接数单调增长，每次扇出的扫描成本随之线性上升。回收只发生在扇出时（没有事件要投递的
+    /// 连接不产生任何成本），因此它是惰性的、不需要额外的生命周期回调。
     fn subscribers(&self, session: &SessionId) -> Vec<(String, Arc<ConnectionHandle>, Attachment)> {
         let handles = self.registry.handles();
-        let states = lock(&self.states);
+        let mut states = lock(&self.states);
         let mut targets = Vec::new();
+        let mut ended = Vec::new();
         for (key, state) in states.iter() {
             let Some(subscription) = state.subscriptions.get(session.as_str()) else {
                 continue;
@@ -239,9 +253,14 @@ impl ResourceRoute {
                 .iter()
                 .find(|handle| handle.connection_id().as_str() == key)
             else {
+                // 连接已结束（见本方法的说明）：登记回收，不在遍历中改动表。
+                ended.push(key.clone());
                 continue;
             };
             targets.push((key.clone(), Arc::clone(handle), attachment.clone()));
+        }
+        for key in ended {
+            states.remove(&key);
         }
         targets
     }
@@ -308,13 +327,18 @@ impl ResourceRoute {
         message: &Envelope,
     ) -> RouteOutcome {
         let remote = &request.remote_session_ref;
+        // ① 复合身份的本机分量复核：`ownerNodeId` 必须是本机（Owner）——否则这个 `remoteSessionRef`
+        //    指向的是另一个 Owner 的会话，本机不签发任何 attachment；与「会话不存在」同码，不泄露差别。
+        if !self.owner_matches(remote) {
+            return self.protocol_error(handle, ErrorCode::ExportNotFound, message);
+        }
         let (Some(export), Some(session)) = (
             export_id(remote.export_id.as_str()),
             session_id(remote.session_id.as_str()),
         ) else {
             return self.protocol_error(handle, ErrorCode::ExportNotFound, message);
         };
-        // ① 可见性复核（D14 的唯一判定点）：未知/未配对的节点、未导出的 Export、已撤销的 Export，
+        // ② 可见性复核（D14 的唯一判定点）：未知/未配对的节点、未导出的 Export、已撤销的 Export，
         //    以及与该节点 grants 不相交的 Export 都在这里被挡住。
         match catalog::export_is_visible(&self.core, handle.node_id(), &export).await {
             Ok(true) => {}
@@ -323,7 +347,7 @@ impl ResourceRoute {
             }
             Err(error) => return self.fault(handle, &error, message),
         }
-        // ② 会话归属复核（core 的会话绑定只读入口同时校验对端是已配对的 access 行、Export 未撤销、
+        // ③ 会话归属复核（core 的会话绑定只读入口同时校验对端是已配对的 access 行、Export 未撤销、
         //    会话的 Agent 属于该 Export）。
         let view = match self
             .core
@@ -461,11 +485,23 @@ impl ResourceRoute {
             session_meta,
         };
         let mut interaction_items = Vec::with_capacity(view.pending_interactions.len());
+        let mut omitted = 0_usize;
         for pending in &view.pending_interactions {
-            let Some(body) = self.pending_interaction(handle, attachment, pending).await else {
-                continue;
-            };
-            interaction_items.push(body);
+            match self.pending_interaction(handle, attachment, pending).await {
+                Some(body) => interaction_items.push(body),
+                // 单条的失败原因由 `pending_interaction` 记日志；这里累计，循环后汇总一条。
+                None => omitted += 1,
+            }
+        }
+        if omitted > 0 {
+            warn!(
+                event = "node_link.snapshot_items_omitted",
+                access_node_id = handle.node_id().as_str(),
+                resource = "pending_interactions",
+                omitted = omitted,
+                total = view.pending_interactions.len(),
+                "the snapshot omits pending interactions that cannot be mapped; the access node sees a shorter snapshot"
+            );
         }
         // ② 切分：`resourceSnapshotBatchSize`（schema 的 maxItems 是 500，限额只会更小）。
         let batch = handle.limits().resource_snapshot_batch_size() as usize;
@@ -571,7 +607,33 @@ impl ResourceRoute {
     }
 
     /// 未决交互 item：`payloadDigest` 是**创建该交互的 origin 事件的 payload** 的 ACPR-CJ1 摘要。
+    ///
+    /// 映射任一步失败都会让该 item **不进快照**（对端因此少看到一条未决交互），所以这条省略必须留有
+    /// 可观测的记录：只带标识、不含任何正文（与 `node_link.fanout_event_invalid` 同一口径）。
     async fn pending_interaction(
+        &self,
+        handle: &ConnectionHandle,
+        attachment: &Attachment,
+        pending: &acp_core::use_cases::NodeLinkPendingInteraction,
+    ) -> Option<PendingInteraction> {
+        let mapped = self
+            .map_pending_interaction(handle, attachment, pending)
+            .await;
+        if mapped.is_none() {
+            warn!(
+                event = "node_link.snapshot_pending_interaction_unmappable",
+                access_node_id = handle.node_id().as_str(),
+                session_id = attachment.session.as_str(),
+                interaction_id = pending.interaction.id().as_str(),
+                origin_event_id = pending.origin_event.as_str(),
+                "the pending interaction cannot be mapped to a snapshot item; it is left out of the snapshot"
+            );
+        }
+        mapped
+    }
+
+    /// [`ResourceRoute::pending_interaction`] 的映射体（任一步失败都返回 `None`，调用方负责记日志）。
+    async fn map_pending_interaction(
         &self,
         handle: &ConnectionHandle,
         attachment: &Attachment,
@@ -638,9 +700,21 @@ impl ResourceRoute {
     ) -> Result<(), ()> {
         for event in &replay.events {
             let Some(payload) = wire_payload(&event.payload) else {
+                warn!(
+                    event = "node_link.replay_event_payload_invalid",
+                    access_node_id = handle.node_id().as_str(),
+                    event_id = event.event_id.as_str(),
+                    "the replayed event payload cannot be mapped to a resource.event payload"
+                );
                 continue;
             };
             let Some(body) = replay_event_body(event, &attachment.remote, payload) else {
+                warn!(
+                    event = "node_link.replay_event_invalid",
+                    access_node_id = handle.node_id().as_str(),
+                    event_id = event.event_id.as_str(),
+                    "the replayed event cannot be mapped to a resource.event"
+                );
                 continue;
             };
             if handle.send(MessageType::ResourceEvent, &body).is_err() {
@@ -676,6 +750,12 @@ impl ResourceRoute {
             return self.protocol_error(handle, ErrorCode::ProtocolSchemaInvalid, message);
         };
         // ① 归属：`sessionRef` 必须指向本连接当前 attachment 所属的会话（含 export 与 owner 一致）。
+        //    owner 分量先判：`ownerNodeId` 不等于本机时，这个 `sessionRef` 就不等于本连接 attachment 的
+        //    sessionRef（§12.4：「`sessionRef` 不属于本连接」→ `sequence_invalid`），因此与「没有
+        //    attachment」「epoch 不符」同码，一律不记账。
+        if !self.owner_matches(&request.session_ref) {
+            return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
+        }
         let Some(attachment) = self.attachment_for(handle, &export, &session) else {
             return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
         };
@@ -718,6 +798,14 @@ impl ResourceRoute {
     // -----------------------------------------------------------------------------------------
     // 状态查询与错误映射
     // -----------------------------------------------------------------------------------------
+
+    /// `remoteSessionRef` 的本机分量判定：复合身份的 `ownerNodeId` 必须指向本机（Owner）。
+    ///
+    /// 不成立时该 ref 指的不是本机的会话：「一个状态只能有一个权威写入者」要求本机只认自己的资源，
+    /// 而且回显一个对端自报的 owner 分量会把伪造身份变成事实（因此两处入口都在签发/记账**之前**比对）。
+    fn owner_matches(&self, remote: &RemoteSessionRef) -> bool {
+        remote.owner_node_id.as_str() == self.node_id.as_str()
+    }
 
     /// 当前生效的 attachment（`resource.subscribe` 的前置）：必须存在同 `(id, generation)` 的条目。
     fn current_attachment(
