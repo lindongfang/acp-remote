@@ -33,7 +33,7 @@ report-only 观察（非本次 diff 引入）：
 ## Assessment（摘要）
 
 - 状态一致性与「未落地」措辞：通过（12 成员、未落地 crate 全篇标注、Node Link 限定 4 处）。
-- CONFIG_REFERENCE §1 第三分支与 §7.2 引用：通过（与 host.rs 逐条相符）。
+- CONFIG_REFERENCE §1 第三分支与 SECURITY_DESIGN §7.2 引用：通过（与 host.rs 逐条相符）。【主 Agent 勘误：本行原文缺文档名，被 check:docs 误判归属；§7.2 实指 SECURITY_DESIGN.md §7.2，此处仅补文档名，不改结论】
 - §2/§3 未接线注记（RV1-WP7 观察项①）：通过（与 config.rs/daemon.rs/limits.rs 相符）。
 - public_origin「契约 + 已知偏差」：通过（偏差被显式登记）。
 - DEVELOPMENT_PLAN §2 四条验收与证据路径：通过（e2e 断言支撑、日志存在）。
