@@ -214,9 +214,9 @@ pub enum UnavailableKind {
 
 `[决定]`（2026-09-26，`node-link-owner` 变更 D4/G5 的实现期结论）**`catalogRevision` 的唯一来源是 [`AuditStore::watermark`]**（本机审计自增序列，`storage-sqlite` 取 `sqlite_sequence.owned_audit`），不再用 `store.head()`：全局水位会随保留期裁剪回退，而 `catalogRevision` 要跨重启与清理单调。`node.challenge`/`node.ready`/`catalog.snapshot` 三个字段同源（实测不变式：同一次握手的挑战与 `node.ready` 必然相等，因为两者用同一份视图快照）。**已登记的精度边界**：该水位随每一行审计前进，包括 `node.auth_failed`/`authorization.denied`/`rate_limit.triggered` 这类不改变导出目录的动作，因此「revision 未变 ⇒ 目录未变」并不成立（反向「目录变了 ⇒ revision 必变」成立）。v1 不依赖前者：`knownRevision` 非空时仍回完整快照（`catalog.changed` 属 `post_mvp`）。
 
-`[决定]`（2026-09-26，同一变更）**Node Link 资源读面的三条窄 seam**（`node_link_catalog_view`/`node_link_session_view`/`node_link_replay`/`node_link_event_payload`，见 `server::node_link` 的 catalog/resource 模块）：与 `NodeLinkHandshake` 同一模式——无 `actor`、按已认证 `accessNodeId` 绑定、零写入、零审计；会话级读必须同时给出 `(access_node, exportId, session)`，由 core 硬校验「对端是已配对的 `access` 行 + Export 存在且未撤销 + 会话的 Agent 属于该 Export」，**不得**复用 `Broker::authorize` 的 `Actor::Node` 分支（那是 Access 侧本地客户端的语义）。「这个 Export 是否对该节点可见」是适配器的**单点可见性策略**（D14：未撤销且 `export.scopes ∩ 节点 grants ≠ ∅`），不在 core 重复实现。
+`[决定]`（2026-09-26，同一变更）**Node Link 资源读面的三条端口 seam（`ReadView::node_link_slice`/`ReadView::session_event_payload`/`AuditStore::watermark`）与它们的四个用例入口（`node_link_catalog_view`/`node_link_session_view`/`node_link_replay`/`node_link_event_payload`）**（见 `server::node_link` 的 catalog/resource 模块）：与 `NodeLinkHandshake` 同一模式——无 `actor`、按已认证 `accessNodeId` 绑定、零写入、零审计；会话级读必须同时给出 `(access_node, exportId, session)`，由 core 硬校验「对端是已配对的 `access` 行 + Export 存在且未撤销 + 会话的 Agent 属于该 Export」，**不得**复用 `Broker::authorize` 的 `Actor::Node` 分支（那是 Access 侧本地客户端的语义）。「这个 Export 是否对该节点可见」是适配器的**单点可见性策略**（D14：未撤销且 `export.scopes ∩ 节点 grants ≠ ∅`），不在 core 重复实现。
 
-三条入口都不放宽既有 `LocalCli` 路径的行为，也不新增任何对端可见的能力。
+四个用例入口都不放宽既有 `LocalCli` 路径的行为，也不新增任何对端可见的能力。
 
 ## 5. `core::ports` 出站端口
 
