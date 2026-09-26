@@ -762,8 +762,8 @@ async fn submit(fixture: &mut Fixture, route: &CommandRoute, body: Value) -> Vec
 }
 
 /// 一条命令记录（`CommandRecord` 的 13 字段，按 §11.2 的相容性填齐）。
-struct RecordSpec {
-    request: &'static str,
+struct RecordSpec<'a> {
+    request: &'a str,
     status: CoreStatus,
     command: &'static str,
     kind: CommandKind,
@@ -773,7 +773,7 @@ struct RecordSpec {
     fingerprint: Digest,
 }
 
-fn record(spec: RecordSpec) -> CommandRecord {
+fn record(spec: RecordSpec<'_>) -> CommandRecord {
     let at = ts("2026-09-18T09:12:03.412Z");
     let accepted_at = match spec.status {
         CoreStatus::Rejected => None,
@@ -1707,32 +1707,40 @@ async fn the_watcher_pushes_the_terminal_once_the_record_is_terminal() {
 /// [R66]/[R45] 后半：单连接 in-flight 上限（已接受未终结的 mutation 数）生效并给出退避提示。
 #[tokio::test]
 async fn the_in_flight_limit_is_enforced_per_connection() {
+    // [R45] 后半：`node_link.max_in_flight_commands` 下调为 8 时，该连接第 9 个并发命令被按上限规则拒绝。
     let mut fixture = Fixture::build(
         &["grant.observe", "grant.interact", "grant.remote-work"],
         NodeLinkConfig {
-            max_in_flight_commands: 1,
+            max_in_flight_commands: 8,
             ..NodeLinkConfig::default()
         },
         true,
     )
     .await;
     let route = fixture.route();
-    let request = CoreRequestId::new(REQUEST).expect("request id");
-    fixture.world.store.seed_command(record(RecordSpec {
-        request: REQUEST,
-        status: CoreStatus::Accepted,
-        command: "session.prompt",
-        kind: CommandKind::Mutation,
-        result: None,
-        error: None,
-        terminal_event: false,
-        fingerprint: digest_of("a"),
-    }));
-    route.watch(&fixture.handle, &request);
+    let live: Vec<CoreRequestId> = (0..8)
+        .map(|index| {
+            CoreRequestId::new(&format!("00000000-0000-4000-8000-{index:012x}"))
+                .expect("request id")
+        })
+        .collect();
+    for request in &live {
+        fixture.world.store.seed_command(record(RecordSpec {
+            request: request.as_str(),
+            status: CoreStatus::Accepted,
+            command: "session.prompt",
+            kind: CommandKind::Mutation,
+            result: None,
+            error: None,
+            terminal_event: false,
+            fingerprint: digest_of("a"),
+        }));
+        route.watch(&fixture.handle, request);
+    }
 
     assert!(
         !route.admit_in_flight(&fixture.handle).await,
-        "达到协商上限后必须拒绝新命令"
+        "第 9 个并发命令必须按上限规则拒绝"
     );
     let frames = fixture.drain();
     let errors = of_type(&frames, "link.error");
@@ -1743,9 +1751,10 @@ async fn the_in_flight_limit_is_enforced_per_connection() {
         "限流必须给出 retryAfterMs"
     );
 
-    // 记录终结后配额释放（在途数按持久化记录判定，不看进程内计时）。
+    // 其中一条终结后配额释放（在途数按持久化记录判定，不看进程内计时）。
+    let first = live[0].clone();
     fixture.world.store.seed_command(record(RecordSpec {
-        request: REQUEST,
+        request: first.as_str(),
         status: CoreStatus::Completed,
         command: "session.prompt",
         kind: CommandKind::Mutation,
