@@ -35,7 +35,7 @@ use acp_core::ports::{
     SessionQuery, SessionStore, StoreHealth, TrustStore, TurnAccepted,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
-use identity_auth::{Authority, EntropySource, IdentityKeystore, KeyHandle, KeyPurpose};
+use identity_auth::{Authority, EntropySource, IdentityKeystore};
 use identity_keystore::{EphemeralKeystore, OsEntropy};
 use server::local_admin::{
     AdminOutcome, AdminRequest, AdminResponse, DaemonControl, DaemonStatus, LocalAdminDeps,
@@ -142,8 +142,8 @@ impl OwnerNode {
             .expect("本机身份就绪");
         let authority = Arc::new(Authority::new(
             identity.node_id().clone(),
-            KeyHandle::new(&format!("{}/primary", KeyPurpose::NodeIdentity.as_str()))
-                .expect("keystore 条目引用合法"),
+            // 条目标签只有一个来源：`app::identity` 给出的 `NodeIdentity::key()`（不再复刻私有常量）。
+            identity.key().clone(),
             Arc::clone(&keystore),
             Arc::clone(&entropy),
             Arc::clone(&clock),

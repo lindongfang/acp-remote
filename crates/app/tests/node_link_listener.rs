@@ -307,12 +307,42 @@ fn proxy_mode_off_loopback_starts_with_a_warning() {
 }
 
 /// D11 的 unwired 收敛：四个键 + `dev_mode.allow_plaintext` 不再出现在「已知但未接线」里。
+///
+/// **必须在 debug 级下跑**：`daemon.config_unwired` 是 debug 事件（`app::daemon`），info 级下这份清单
+/// 恒空，断言就退化成恒真（RV1-WP7-F1）。因此本用例在 `logging.level = "debug"` 下运行，并用**阳性对照**
+/// 证明这条通道在这个运行配置与读取路径上真的可观察：同一构造器、同一级别，只多一个确实未接线的键
+/// （`daemon.instance_lock = "ipc"`）。
 #[test]
 fn the_wired_listener_keys_are_no_longer_reported_as_unwired() {
-    let mut daemon = Daemon::configure_with_dev_mode(
+    // 阳性对照：`daemon.config_unwired` 必须能在同一配置形状下被读到。
+    let mut control = Daemon::configure_with_dev_mode_and_log_level(
+        "unwired-control",
+        "127.0.0.1:0",
+        "instance_lock = \"ipc\"\n",
+        "allow_plaintext = true\n",
+        "debug",
+        "",
+    );
+    control.start();
+    let control_keys: Vec<String> = control
+        .log_events("daemon.config_unwired")
+        .iter()
+        .filter_map(|event| event["key"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        control_keys
+            .iter()
+            .any(|key| key == "daemon.instance_lock(ipc)"),
+        "阳性对照失败：debug 级下必须看得到未接线清单的明细，实际 {control_keys:?}"
+    );
+    assert!(control.stop().success());
+
+    let mut daemon = Daemon::configure_with_dev_mode_and_log_level(
         "unwired-convergence",
         "127.0.0.1:0",
+        "",
         "allow_plaintext = true\n",
+        "debug",
         "",
     );
     daemon.start();

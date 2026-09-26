@@ -1051,10 +1051,19 @@ impl NetIngress {
         &self.registry
     }
 
-    /// 停接入层：触发关闭信号（listener 停止 accept，并按 `NetConfig::drain_grace` 排空在途连接；两个
-    /// 分发循环随之退出）→ 逐个等待任务结束；到 `deadline` 仍未退出的任务被 abort 并记一条警告。
-    pub async fn stop(self, deadline: Instant) {
+    /// 停接入层的**第一步（同步）**：触发关闭信号。触发后 listener 停止 accept（并按
+    /// `NetConfig::drain_grace` 排空在途连接），事件扇出与命令分发两个循环随之退出。
+    ///
+    /// 它必须是一个同步方法：关闭序列要**先**真的让网络面停 accept，再去排空本地在途连接。合并成
+    /// `async fn` 会让触发推迟到 `await` 点执行，于是整个本地排空窗口内网络 listener 仍在接受新连接。
+    /// 等待三个任务结束是第二步（[`NetIngress::wait_stopped`]）。
+    pub fn trigger_shutdown(&self) {
         self.shutdown.trigger();
+    }
+
+    /// 停接入层的**第二步（异步）**：等三个任务结束；到 `deadline` 仍未退出的任务被 abort 并记一条
+    /// 警告。任务全部结束意味着 accept 已停、在途连接已按宽限排空或已被强制中止。
+    pub async fn wait_stopped(self, deadline: Instant) {
         for (name, mut handle) in self.tasks {
             match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut handle)
                 .await
@@ -1398,10 +1407,12 @@ async fn close(
     let started = Instant::now();
     let deadline = started + Duration::from_millis(grace_ms.max(MIN_DRAIN_MS));
 
-    // 1) 停接入层：本地接受循环已在 `accept_loop` 退出时释放 endpoint（不再接受新连接），网络 listener
-    //    在这里停止 accept 并按 `daemon.shutdown_grace_ms` 排空在途连接（与本地连接的排空共用同一预算）。
+    // 1) 停接入层：本地接受循环已在 `accept_loop` 退出时释放 endpoint（不再接受新连接）；这里**先以同步
+    //    调用**触发网络关停——listener 立即停止 accept 并按 `daemon.shutdown_grace_ms` 排空在途连接
+    //    （与本地连接的排空共用同一预算）。触发之后才记「已停止接受新连接」：合并成一个 `async fn`
+    //    会把触发推迟到 `await` 点，日志与实际时机就会对不上（RV1-WP7-F2）。
+    net_ingress.trigger_shutdown();
     tracing::info!(event = "daemon.ingress_stopped", "已停止接受新连接");
-    let stopping_ingress = net_ingress.stop(deadline);
 
     // 排空在途连接：`daemon.stop` 的响应此刻仍在写出路径上，必须给它机会落地。
     let drain_ms = deadline
@@ -1414,7 +1425,8 @@ async fn close(
         "等待在途连接结束"
     );
     drain_connections(&mut connections, deadline).await;
-    stopping_ingress.await;
+    // 第二步：等三个网络接入任务结束（超时 abort）——它们全部结束时 accept 已停。
+    net_ingress.wait_stopped(deadline).await;
 
     // 2) 取消后台周期任务与信号监听（先于停止 Agent）。
     tasks

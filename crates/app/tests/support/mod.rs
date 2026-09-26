@@ -134,7 +134,7 @@ pub struct Daemon {
     endpoint: Option<String>,
 }
 
-/// 基础配置里三段可覆盖内容的来源（`build` 的唯一入参形状）。
+/// 基础配置里各段可覆盖内容的来源（`build` 的唯一入参形状）。
 struct ConfigParts<'a> {
     /// `daemon.listen`（`None` = `127.0.0.1:0`）。
     listen: Option<&'a str>,
@@ -142,6 +142,8 @@ struct ConfigParts<'a> {
     daemon: &'a str,
     /// 追加到 `[dev_mode]` 段落里的键。
     dev_mode: &'a str,
+    /// `[logging] level` 的覆盖（`None` = `info`）：debug 级事件的可观察性用例需要它。
+    logging_level: Option<&'a str>,
     /// 追加在整份配置末尾的段落/表（例如 `[[agents.profiles]]`）。
     extra: &'a str,
 }
@@ -156,6 +158,7 @@ impl Daemon {
                 listen: None,
                 daemon: "",
                 dev_mode: "",
+                logging_level: None,
                 extra,
             },
         )
@@ -170,6 +173,7 @@ impl Daemon {
                 listen: None,
                 daemon: daemon_extra,
                 dev_mode: "",
+                logging_level: None,
                 extra,
             },
         )
@@ -192,6 +196,7 @@ impl Daemon {
                 listen: Some(listen),
                 daemon: daemon_extra,
                 dev_mode: "",
+                logging_level: None,
                 extra,
             },
         )
@@ -214,6 +219,33 @@ impl Daemon {
                 listen: Some(listen),
                 daemon: "",
                 dev_mode: dev_mode_extra,
+                logging_level: None,
+                extra,
+            },
+        )
+    }
+
+    /// 同上，但可同时覆盖 `[daemon]`、`[dev_mode]` 与 `[logging] level`。
+    ///
+    /// `daemon.config_unwired` 是 debug 级事件（`app::daemon`），因此「哪些键已接线」的用例必须在
+    /// debug 级下跑，并用一条确实未接线的键（例如 `daemon.instance_lock = "ipc"`）做阳性对照；
+    /// 这三个覆盖项必须能同时给出，否则对照与断言会跑在两份不同的配置上。
+    pub fn configure_with_dev_mode_and_log_level(
+        label: &str,
+        listen: &str,
+        daemon_extra: &str,
+        dev_mode_extra: &str,
+        logging_level: &str,
+        extra: &str,
+    ) -> Self {
+        Self::build(
+            TempRoot::new(label),
+            label,
+            ConfigParts {
+                listen: Some(listen),
+                daemon: daemon_extra,
+                dev_mode: dev_mode_extra,
+                logging_level: Some(logging_level),
                 extra,
             },
         )
@@ -228,6 +260,7 @@ impl Daemon {
                 listen: None,
                 daemon: "",
                 dev_mode: "",
+                logging_level: None,
                 extra,
             },
         );
@@ -275,7 +308,7 @@ ephemeral_identity = true
 {dev_mode_extra}
 
 [logging]
-level = "info"
+level = "{logging_level}"
 format = "json"
 file = "{log}"
 
@@ -285,6 +318,7 @@ file = "{log}"
             listen = parts.listen.unwrap_or("127.0.0.1:0"),
             daemon_extra = parts.daemon,
             dev_mode_extra = parts.dev_mode,
+            logging_level = parts.logging_level.unwrap_or("info"),
             extra = parts.extra,
             log = log_text,
         );

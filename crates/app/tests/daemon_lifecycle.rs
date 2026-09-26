@@ -7,6 +7,7 @@
 
 mod support;
 
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use app::{ClientOutcome, DaemonLock, outcome_of};
@@ -506,6 +507,89 @@ fn stop_is_accepted_first_and_requests_during_shutdown_are_unavailable() {
         "每次运行的 instanceId 必须不同"
     );
     assert!(restarted.stop().success());
+}
+
+/// R12/R13 + RV1-WP7-F2：`daemon.stop` 返回 accepted 之后，网络 listener 必须**已停止 accept**。
+///
+/// 可观测的后果是「新连接不再被服务」：本地排空窗口内进程仍存活（下面用地一条本地长连接把它撞开），
+/// 而监听地址在这整个窗口里等不到任何 HTTP 响应。旧实现把触发推到了 `await` 点（本地排空之后），
+/// 因此同一条请求在当时会被正常作答。
+///
+/// 不用「TCP 连接被拒」做判据：应用的 accept 循环停下后监听套接字仍然打开（在途连接排空期间由
+/// `axum::serve` 持有），内核 backlog 会照常完成握手——`connect` 仍会成功，它不能区分「已停 accept」
+/// 与「仍在 accept」。
+#[test]
+fn the_network_listener_stops_serving_new_connections_before_the_local_drain_finishes() {
+    let mut daemon = Daemon::configure_with("stop-accept", "shutdown_grace_ms = 5000\n", "");
+    daemon.start();
+    let status = daemon.ok_value(Method::DaemonStatus, params());
+    let listen = status["listen"].as_array().expect("listen 是数组");
+    assert_eq!(listen.len(), 1, "共享 listener 只报告一个地址：{listen:?}");
+    let addr: std::net::SocketAddr = listen[0]
+        .as_str()
+        .expect("listen 项是文本")
+        .parse()
+        .expect("listen 项是 ip:port");
+    assert!(
+        probe_http(addr, Duration::from_secs(2)),
+        "就绪后的监听地址必须真的服务请求"
+    );
+
+    // 在途本地连接：关闭序列的本地排空必须等它结束，Daemon 因此在断言期间一直存活。
+    let mut held = daemon.open_connection();
+    assert!(matches!(
+        outcome_of(&held.call(Method::DaemonStatus, params())),
+        ClientOutcome::Success(_)
+    ));
+    let response = daemon.call(Method::DaemonStop, support::stop_params());
+    assert!(
+        matches!(outcome_of(&response), ClientOutcome::Success(_)),
+        "daemon.stop 必须被接受"
+    );
+
+    // 关闭序列必须先宣布停接入层（该日志在**同步**触发之后，见 `close` 的步骤 1）。
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && daemon.log_events("daemon.ingress_stopped").is_empty() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        daemon.log_events("daemon.ingress_stopped").len(),
+        1,
+        "关闭序列必须已经开始：{}",
+        daemon.log()
+    );
+    assert!(
+        !probe_http(addr, Duration::from_millis(500)),
+        "停接入层之后不得再服务新连接（本地排空窗口内 listener 仍在 accept）：{}",
+        daemon.log()
+    );
+    assert!(
+        daemon.is_running(),
+        "拒绝必须是停 accept 的结果，而不是进程已退出"
+    );
+
+    held.close();
+    assert!(daemon.wait_exit().success(), "关闭序列完成后必须正常退出");
+}
+
+/// 向监听地址发一条最小 HTTP 请求，返回「是否收到响应」。连接失败、写入失败与等不到任何字节都算
+/// 「没有响应」（停 accept 之后三种情形都会出现：套接字已关闭、backlog 里的连接无人认领）。
+fn probe_http(addr: std::net::SocketAddr, wait: Duration) -> bool {
+    use std::io::{Read as _, Write as _};
+    let Ok(mut stream) = TcpStream::connect(addr) else {
+        return false;
+    };
+    stream.set_read_timeout(Some(wait)).expect("读超时");
+    stream.set_write_timeout(Some(wait)).expect("写超时");
+    let request = format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        support::nodelink::PUBLIC_HOST
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buffer = [0u8; 64];
+    matches!(stream.read(&mut buffer), Ok(read) if read > 0)
 }
 
 /// R15/R16：周期任务至少在启动时跑过一次，并在关闭序列里被取消（不遗留 detached task）。
