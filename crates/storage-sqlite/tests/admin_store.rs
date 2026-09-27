@@ -1409,6 +1409,81 @@ async fn node_pairing_approval_rejects_invalid_export_ids_without_writing() {
     store.close().await;
 }
 
+/// 设备配对的落定不接受 `exportIds`：与「设备配对必须不带 grants」同一处、同一口径的显式拒绝
+/// （清单只属于节点配对；授权相关字段不得被静默丢弃），且失败零写入零审计。
+#[tokio::test]
+async fn a_device_pairing_must_not_carry_export_ids() {
+    let dir = temp_dir("admin-device-export-ids");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(30),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    store
+        .claim_pairing(device_claim(&device_id()))
+        .await
+        .expect("claim pairing");
+
+    let error = store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: pairing_id(),
+            settlement: approved_settlement()
+                .with_granted_export_ids(vec![ExportId::new(EXPORT).expect("export id")]),
+            context: context(
+                2,
+                vec![audit(
+                    AuditAction::PairingApproved,
+                    EntityRef::Pairing(pairing_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect_err("设备配对带清单必须拒绝落定");
+    assert_invalid_request(error, "a device pairing must not carry export ids");
+
+    assert!(
+        store.devices().await.expect("devices").is_empty(),
+        "失败路径不得创建信任行"
+    );
+    assert!(
+        store
+            .peer_key(&PeerIdentity::Device(device_id()))
+            .await
+            .expect("peer key")
+            .is_none(),
+        "失败路径不得写身份材料"
+    );
+    assert_eq!(
+        store
+            .pairing(&pairing_id())
+            .await
+            .expect("pairing")
+            .expect("pairing row")
+            .state(),
+        PairingState::PendingConfirmation,
+        "失败路径不得推进配对状态"
+    );
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_device").await,
+        0,
+        "失败路径不得写设备行"
+    );
+    assert_eq!(
+        audit_rows(&pool, AuditAction::PairingApproved).await,
+        0,
+        "失败路径不得写审计"
+    );
+    pool.close().await;
+    store.close().await;
+}
+
 /// §11.2 第 1 条回归：claim 必须逐字回显登记时宣告的本机绑定；回显别的机器一律以身份不匹配拒绝，
 /// 且不推进状态、不写对端行。
 #[tokio::test]

@@ -560,6 +560,9 @@ impl TrustStore for SqliteStore {
     }
 
     /// §11.6 第 5 条：按 NodeId 撤销，同一事务覆盖两种角色（`owned_peer_key` 作为 tombstone 保留）。
+    ///
+    /// 撤销只改 `state`/`revoked_at`/`revoke_reason`，**不**清理 `export_ids_json`：清单不随撤销级联清理
+    /// （可见性由撤销状态本身挡住，撤销后的行仍保留当初点名的清单）。
     async fn revoke_node(&self, write: NodeRevocation) -> Result<(), PortError> {
         self.writable()?;
         let mut tx = self
@@ -863,6 +866,13 @@ impl TrustStore for SqliteStore {
                         if !granted_grants.is_empty() {
                             return Err(PortError::InvalidRequest(
                                 "a device pairing must not carry grants",
+                            ));
+                        }
+                        // 清单是节点配对独有的授权面（`PairingDecision` 不含它），设备方向带上非空清单是
+                        // 构造错误：授权相关字段不得被静默丢弃，因此与上面 grants 同款显式拒绝。
+                        if !granted_export_ids.is_empty() {
+                            return Err(PortError::InvalidRequest(
+                                "a device pairing must not carry export ids",
                             ));
                         }
                         approve_device(&mut tx, &peer, granted_scopes, &write.context.at).await?;
