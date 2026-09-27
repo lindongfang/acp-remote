@@ -1422,13 +1422,15 @@ impl TrustStore for FakeTrust {
                 .revoked_at()
                 .cloned()
                 .unwrap_or_else(|| write.context.at.clone());
+            // 撤销只改 `state`/`revoked_at`，**不**清理清单：与存储层同形（真实 `revoke_node` 只 UPDATE 这三
+            // 列，`owned_node.export_ids_json` 逐字保留；节点可见性由撤销状态本身挡住）。
             *record = NodeRecord::try_new(
                 record.node_id().clone(),
                 record.display_name(),
                 record.kind(),
                 record.node_public_key_fingerprint().clone(),
                 record.grants().clone(),
-                Vec::new(),
+                record.export_ids().to_vec(),
                 NodeState::Revoked,
                 record.owner_endpoint().map(str::to_owned),
                 record.created_at().clone(),

@@ -251,7 +251,7 @@ impl CatalogRoute {
 /// ① 该 Export 未撤销；② `export.scopes ∩ 该节点信任记录 grants ≠ ∅`；
 /// ③ `exportId ∈ 该节点信任记录的 exportIds`（收窄型白名单，空清单 = 看不到任何 Export）。
 ///
-/// 清单只能收窄不掉宽：条件③ 只能删条目，不能绕过条件②。结果按 `exportId` 升序（批次内顺序稳定，
+/// 清单只能收窄不放宽：条件③ 只能删条目，不能绕过条件②。结果按 `exportId` 升序（批次内顺序稳定，
 /// 同一份投影在多次订阅里逐条一致）；节点信任行缺失或未配对时可见集为空（连接层已保证认证，这里只是
 /// 失败关闭）。
 pub(crate) fn visible_exports<'a>(
