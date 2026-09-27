@@ -927,7 +927,7 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 - **启动连接**：组合根启动完成后，对每条 `kind = owner` 且 `state = paired` 的记录自动发起连接；`pending`/`revoked` 不连。
 - **重连退避**：断线后指数退避（初值 1 s、上限 60 s、每次翻倍），并且**不得小于**服务端给出的退避要求（`nodelink.resource.rate_limited` 的 `details.retryAfterMs`，§14.1）。
 - **心跳超时**：按 `node_link.heartbeat_interval_ms`（默认 30 s）发送心跳；超过 90 s（固定常量，§2.5）未收到对端任何消息 → 关闭连接并进入重连，**不**删除信任、**不**清理无正文索引。
-- **撤销即停**：收到 `node.trust.revoked`（§12.6）或本地 `node.revoke` 提交后→停止重连并关闭连接。该条**只**由撤销触发（这两个触发条件之一），**不**包括服务端因其它原因主动关闭连接——例如 `node.pair.confirm` 提交后的重新配对以 `1000` 关闭该节点的活动连接（§8.2）：那只是连接作废、授权已重算，对端仍按上面的首次/启动连接与重连退避规则自动重连。
+- **撤销即停**：收到 `node.trust.revoked`（§12.3）或本地 `node.revoke` 提交后→停止重连并关闭连接。该条**只**由撤销触发（这两个触发条件之一），**不**包括服务端因其它原因主动关闭连接——例如 `node.pair.confirm` 提交后的重新配对以 `1000` 关闭该节点的活动连接（§8.2）：那只是连接作废、授权已重算，对端仍按上面的首次/启动连接与重连退避规则自动重连。
 - **每次连接都重取 catalog**：catalog 是连接期内存数据（§12.3），重连后重新 `catalog.subscribe`；先 `resource.attach` 再恢复订阅（本节首段）。
 - **不自动重放副作用**：重连只自动恢复安全查询与订阅；mutation 只能按原 `requestId` 查询终态（本节首段）。
 - **状态可见性**：Access 侧链路状态由组合根暴露在本地管理的 `daemon.status.links[]`（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.2），**不**写进 `owned_node`/`imported_import` 等持久记录（运行时状态不是授权状态）。
