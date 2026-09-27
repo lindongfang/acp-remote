@@ -10,7 +10,9 @@ mod support;
 
 use acp_core::model::{AuditAction, EventId, ExportId, Sequence, Timestamp};
 use storage_sqlite::error::StorageError;
-use storage_sqlite::migrate::{FILE_FORMAT_VERSION, StorageConfig}; // probe
+use storage_sqlite::migrate::{
+    FILE_FORMAT_VERSION, IMPORTED_SCHEMA_VERSION, OWNED_SCHEMA_VERSION, StorageConfig,
+}; // probe
 use storage_sqlite::session_store::SqliteStore;
 use support::*;
 
@@ -40,6 +42,28 @@ const TABLES: &[&str] = &[
     "imported_command_ref",
     "imported_audit",
     "imported_import_export",
+];
+
+/// owned 家族的表（R14 的列清单相等断言用：升级库与新建库必须逐项相等）。
+const OWNED_TABLES: &[&str] = &[
+    "meta",
+    "owned_session",
+    "owned_turn",
+    "owned_event",
+    "owned_command",
+    "owned_interaction",
+    "owned_audit",
+    "owned_attachment",
+    "owned_attachment_link",
+    "owned_device",
+    "owned_node",
+    "owned_peer_key",
+    "owned_pairing",
+    "owned_pairing_peer",
+    "owned_export",
+    "owned_agent_profile",
+    "owned_workspace",
+    "owned_provider_ref",
 ];
 
 fn at() -> Timestamp {
@@ -74,6 +98,15 @@ async fn table_ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
     .first()
     .cloned()
     .unwrap_or_default()
+}
+
+/// `meta` 里一个版本键的值（缺失时为 `None`）。
+async fn meta_version(pool: &sqlx::SqlitePool, key: &str) -> Option<String> {
+    meta_rows(pool)
+        .await
+        .into_iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value)
 }
 
 /// 往 `owned_audit` 插一行审计（§7.3 的列子集）；取值是否被 CHECK 接受由调用方断言。
@@ -146,7 +179,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 3);
+        assert_eq!(store.metadata().owned_schema_version, 4);
         assert_eq!(store.metadata().imported_schema_version, 3);
         store.close().await;
 
@@ -213,12 +246,13 @@ async fn fresh_directory_is_created_at_the_current_version() {
             "meta.{key} must exist"
         );
     }
-    for key in ["owned_schema_version", "imported_schema_version"] {
+    for (key, expected_version) in [
+        ("owned_schema_version", OWNED_SCHEMA_VERSION),
+        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
+    ] {
         assert_eq!(
-            meta.iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value.as_str()),
-            Some("3"),
+            meta_version(&pool, key).await,
+            Some(expected_version.to_string()),
             "meta.{key} must be written at the current version"
         );
     }
@@ -332,7 +366,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 3);
+    assert_eq!(store.metadata().owned_schema_version, 4);
     assert_eq!(store.metadata().imported_schema_version, 3);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
@@ -386,14 +420,13 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         Some(server_epoch_before),
         "server_epoch must survive the upgrade"
     );
-    for key in ["owned_schema_version", "imported_schema_version"] {
+    for (key, expected_version) in [
+        ("owned_schema_version", OWNED_SCHEMA_VERSION),
+        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
+    ] {
         assert_eq!(
-            meta_rows(&pool)
-                .await
-                .into_iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value),
-            Some("3".to_owned()),
+            meta_version(&pool, key).await,
+            Some(expected_version.to_string()),
             "meta.{key} must be advanced to the current version"
         );
     }
@@ -544,22 +577,23 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
         2
     );
 
-    // spec 的「黄金列清单逐项相等」：升级库的 `imported_*` 列必须与**新建库**逐项相等——
-    // 否则重建脚本的列名/列集合可以悄悄与 DDL 常量分叉。
+    // spec 的「黄金列清单逐项相等」（R14）：升级库的**两族**每张表都必须与新建库逐项相等——
+    // 否则重建脚本/新增列的列名、列顺序、列集合可以悄悄与 DDL 常量分叉。v4 的
+    // `owned_node.export_ids_json` 由 `ALTER TABLE` 追加，因此这条断言同时证明它落在列清单末尾。
     let fresh_dir = temp_dir("migrate-fresh-columns");
     let fresh_store = SqliteStore::open(StorageConfig::new(&fresh_dir), &at())
         .await
         .expect("fresh v2 store");
     fresh_store.close().await;
     let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
-    for table in [
+    for table in OWNED_TABLES.iter().copied().chain([
         "imported_import",
         "imported_import_export",
         "imported_session",
         "imported_delivery_index",
         "imported_command_ref",
         "imported_audit",
-    ] {
+    ]) {
         assert_eq!(
             column_names(&pool, table).await,
             column_names(&fresh_pool, table).await,
@@ -660,7 +694,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 3);
+    assert_eq!(store.metadata().owned_schema_version, 4);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -669,15 +703,14 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
         scalar_i64(&pool, "PRAGMA user_version").await,
         FILE_FORMAT_VERSION
     );
-    for key in ["owned_schema_version", "imported_schema_version"] {
+    for (key, expected_version) in [
+        ("owned_schema_version", OWNED_SCHEMA_VERSION),
+        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
+    ] {
         assert_eq!(
-            meta_rows(&pool)
-                .await
-                .into_iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value),
-            Some("3".to_owned()),
-            "meta.{key} 必须升到 3"
+            meta_version(&pool, key).await,
+            Some(expected_version.to_string()),
+            "meta.{key} 必须升到当前版本"
         );
     }
     // 行与 `audit_id` 逐行保留；序列不回退（7 > max(audit_id) = 2）。
@@ -724,6 +757,209 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
         "owned_command.actor_kind 不得接受认领方：{refused:?}"
     );
     pool.close().await;
+}
+
+///
+/// §7.2/R13/R14（`design.md` D3）：**v3 → v4 只给 `owned_node` 追加一列**。
+///
+/// 夹具 `fixtures/storage/v2/` 里没有 v3 形状的文件（那是历史资产的忠实副本，本次不改夹具），因此本用例
+/// 在测试里现场造一个 v3 库：先在新建库（v4 形状）上写入既有节点行与审计行，再把 v4 才有的
+/// `export_ids_json` 列 `DROP` 掉并把两个版本键降到 3——它对升级段而言就是「有节点行、没有清单列的
+/// v3 库」。
+///
+/// 三条判据：
+///
+/// 1. 既有节点行的 `export_ids_json` 为 `'[]'`（`NOT NULL` 由默认值满足，**不得默认放权**），其余列逐字不变；
+/// 2. owned/imported 两族每张表的列名/顺序/类型/`NOT NULL`/默认值与**新建库**逐项相等（`export_ids_json`
+///    在末尾——`ALTER TABLE` 与 DDL 常量两边的列顺序因此必须一致）；
+/// 3. 除 `owned_node` 外每条表的 DDL 文本逐字节不变，且 `PRAGMA user_version` 为 4、两族版本键为 4/3——
+///    `file_version < 3` 的守卫因此是真的：v3 库不会重跑 v2/v3 那两段 12-step 重建。
+///
+/// 第 3 条的判别力来自「同名表的 12-step 重建文本与新建库文本不同」，用例用 `owned_audit` 直接断言这一点
+/// （`rebuild_text_differs_from_the_fresh_text`），因此它不是一个永远成立的空断言。
+
+#[tokio::test]
+async fn v3_database_upgrades_to_v4_by_appending_the_export_id_column_only() {
+    let dir = temp_dir("migrate-from-v3");
+    let created = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("create the store that is then rewound to v3");
+    created.close().await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+
+    // 造 v3 库：现有库里已经有真的行（节点行 + 审计行），再去掉 v4 才有的列、把版本降到 3。
+    let pool = raw_write_pool(&path).await;
+    sqlx::query(
+        r#"INSERT INTO owned_node (node_id, kind, display_name, fingerprint, grants_json, state,
+         owner_endpoint, created_at, last_connected_at, revoked_at, revoke_reason)
+         VALUES (?1, 'access', 'office access', ?2, '["grant.remote-work"]', 'paired', NULL, ?3,
+         NULL, NULL, NULL)"#,
+    )
+    .bind(FIXTURE_NODE)
+    .bind("a".repeat(64))
+    .bind(AT)
+    .execute(&pool)
+    .await
+    .expect("seed a paired access node row");
+    insert_audit_row(&pool, 1, "node.paired", "node", FIXTURE_NODE)
+        .await
+        .expect("seed a node.paired audit row");
+    sqlx::query("ALTER TABLE owned_node DROP COLUMN export_ids_json")
+        .execute(&pool)
+        .await
+        .expect("rewind owned_node to its v3 shape");
+    sqlx::query("PRAGMA user_version = 3")
+        .execute(&pool)
+        .await
+        .expect("rewind the file format version");
+    sqlx::query("UPDATE meta SET value = '3' WHERE key = 'owned_schema_version'")
+        .execute(&pool)
+        .await
+        .expect("rewind the owned schema version");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+
+    // 升级前逐表快照（DDL 文本与列清单），供升级后逐项比对。
+    assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 3);
+    assert!(
+        !column_names(&pool, "owned_node")
+            .await
+            .contains(&"export_ids_json".to_owned()),
+        "造出来的库必须真的没有清单列"
+    );
+    let mut ddl_before = Vec::new();
+    for table in TABLES {
+        ddl_before.push((*table, table_ddl(&pool, table).await));
+    }
+    pool.close().await;
+
+    let store = SqliteStore::open(still_writable(&dir), &at())
+        .await
+        .expect("a v3 database must upgrade to v4");
+    assert_eq!(store.metadata().owned_schema_version, 4);
+    assert_eq!(store.metadata().imported_schema_version, 3);
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        FILE_FORMAT_VERSION
+    );
+    for (key, expected_version) in [
+        ("owned_schema_version", OWNED_SCHEMA_VERSION),
+        ("imported_schema_version", IMPORTED_SCHEMA_VERSION),
+    ] {
+        assert_eq!(
+            meta_version(&pool, key).await,
+            Some(expected_version.to_string()),
+            "meta.{key} 必须升到当前版本"
+        );
+    }
+
+    // ① 既有节点行：清单为空、其余列逐字不变（升级不得默认放权，也不得改行）。
+    assert_eq!(
+        texts(
+            &pool,
+            "SELECT export_ids_json || '|' || node_id || '|' || kind || '|' || display_name || '|' || \
+             fingerprint || '|' || grants_json || '|' || state || '|' || COALESCE(owner_endpoint, '∅') \
+             || '|' || created_at || '|' || COALESCE(last_connected_at, '∅') || '|' || \
+             COALESCE(revoked_at, '∅') || '|' || COALESCE(revoke_reason, '∅') FROM owned_node"
+        )
+        .await,
+        vec![format!(
+            "[]|{FIXTURE_NODE}|access|office access|{}|[\"grant.remote-work\"]|paired|∅|{AT}|∅|∅|∅",
+            "a".repeat(64)
+        )],
+        "升级后既有行的清单必须是默认的空清单、其余列逐字不变"
+    );
+    assert_eq!(
+        ints(&pool, "SELECT audit_id FROM owned_audit ORDER BY audit_id").await,
+        vec![1],
+        "升级不得动既有审计行"
+    );
+
+    // ② 两族列清单（名称/顺序/类型/NOT NULL/默认值）与新建库逐项相等。
+    let fresh_dir = temp_dir("migrate-fresh-columns-v3");
+    let fresh_store = SqliteStore::open(StorageConfig::new(&fresh_dir), &at())
+        .await
+        .expect("fresh store");
+    fresh_store.close().await;
+    let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
+    for table in OWNED_TABLES.iter().copied().chain([
+        "imported_import",
+        "imported_import_export",
+        "imported_session",
+        "imported_delivery_index",
+        "imported_command_ref",
+        "imported_audit",
+    ]) {
+        assert_eq!(
+            column_specs(&pool, table).await,
+            column_specs(&fresh_pool, table).await,
+            "升级库的 {table} 列（名称/顺序/类型/NOT NULL/默认值）必须与新建库逐项相等"
+        );
+    }
+    let node_specs = column_specs(&pool, "owned_node").await;
+    assert_eq!(
+        node_specs.last().map(|spec| spec.0.clone()),
+        Some("export_ids_json".to_owned()),
+        "新增列必须在列清单末尾（ALTER TABLE 与 DDL 常量两边同序）"
+    );
+    assert_eq!(
+        node_specs.last().map(|spec| (spec.2, spec.3.clone())),
+        Some((true, Some("'[]'".to_owned()))),
+        "新增列必须 NOT NULL 且默认空清单"
+    );
+    fresh_pool.close().await;
+
+    // ③ 除 owned_node 外每条表的 DDL 逐字节不变（v3 库不得重跑 12-step 重建）。
+    for (table, ddl) in ddl_before {
+        let after = table_ddl(&pool, table).await;
+        if table == "owned_node" {
+            assert!(
+                after.contains("export_ids_json"),
+                "owned_node 必须带上新的清单列：{after}"
+            );
+            continue;
+        }
+        assert_eq!(
+            after, ddl,
+            "升级不得重写 {table} 的 DDL（那意味着重跑了重建段）"
+        );
+    }
+    pool.close().await;
+}
+
+/// 上条用例第 ③ 条判据的判别力来源：同名审计表的 12-step 重建文本与新建库的 DDL 文本**不同**
+/// （重建文本没有 `IF NOT EXISTS`、表名写法也不同）。若两者相同，则「升级后 DDL 不变」就变成空断言。
+#[tokio::test]
+async fn rebuild_text_differs_from_the_fresh_text() {
+    let dir = temp_dir("migrate-rebuild-text");
+    let path = copy_fixture("from-v1.sqlite3", &dir);
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("a v1 database must upgrade through the rebuild segments");
+    store.close().await;
+    let rebuilt_pool = raw_pool(&path).await;
+
+    let fresh_dir = temp_dir("migrate-rebuild-text-fresh");
+    let fresh_store = SqliteStore::open(StorageConfig::new(&fresh_dir), &at())
+        .await
+        .expect("fresh store");
+    fresh_store.close().await;
+    let fresh_pool = raw_pool(&fresh_dir.join("acp-remote.sqlite3")).await;
+
+    for table in ["owned_audit", "imported_audit"] {
+        assert_ne!(
+            table_ddl(&rebuilt_pool, table).await,
+            table_ddl(&fresh_pool, table).await,
+            "{table}：重建文本必须与新建文本不同，否则 DDL 逐字断言没有判别力"
+        );
+    }
+    rebuilt_pool.close().await;
+    fresh_pool.close().await;
 }
 
 /// §7.2 与 spec 的「升级中途失败整体回滚」：v1 → v2 的 DDL、12-step 重建与 Import 拆分都在**同一
@@ -814,7 +1050,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 3);
+    assert_eq!(store.metadata().owned_schema_version, 4);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 }

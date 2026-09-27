@@ -5,7 +5,7 @@
 //! `result` 的字段集合与 §5.2–§5.5 的表格逐项对应，未知字段不会被凭空造出来。
 
 use acp_core::model::{
-    AgentProfile, DeviceRecord, ExportRecord, ImportRecord, NodeRecord, TemplateParam,
+    AgentProfile, DeviceRecord, ExportId, ExportRecord, ImportRecord, NodeRecord, TemplateParam,
     TemplateParamValue, Timestamp, WorkspaceRecord,
 };
 use serde_json::Value;
@@ -192,6 +192,11 @@ pub(crate) fn node(record: &NodeRecord) -> JsonObject {
             text(record.node_public_key_fingerprint().as_str()),
         ),
         ("grants", string_array(record.grants().iter())),
+        // §5.4 的 exportIds：该节点可见的 Export 清单（空清单如实输出 []，不隐藏，与运维视角一致）。
+        (
+            "exportIds",
+            string_array(record.export_ids().iter().map(ExportId::as_str)),
+        ),
         ("state", text(record.state().as_str())),
         (
             "ownerEndpoint",

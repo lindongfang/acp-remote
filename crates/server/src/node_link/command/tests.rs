@@ -587,6 +587,7 @@ impl Fixture {
                 NodeKind::Access,
                 test_public_key().fingerprint(),
                 GrantSet::try_from_iter(grants.iter().copied()).expect("grants"),
+                vec![export_id()],
                 NodeState::Paired,
                 None,
                 ts("2026-09-18T09:00:00.000Z"),
@@ -2214,6 +2215,7 @@ async fn node_revocation_notifies_then_closes_with_4410() {
             NodeKind::Access,
             test_public_key().fingerprint(),
             GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+            Vec::new(),
             NodeState::Revoked,
             None,
             ts("2026-09-18T09:00:00.000Z"),
@@ -2236,6 +2238,37 @@ async fn node_revocation_notifies_then_closes_with_4410() {
     assert!(
         route.pending_of(&fixture.handle).is_empty(),
         "撤销后该连接的观察表随连接消失"
+    );
+}
+
+/// 重新配对（`node.pair.confirm`）作废既有连接：不推 `node.trust.revoked`，以 1000 正常关闭。
+///
+/// 与 [`node_revocation_notifies_then_closes_with_4410`] 成对：两条路径的 wire 表现必须可区分。合规客户端
+/// 把 4410 与 `node.trust.revoked` 都读成「停止重连」（`NODE_LINK_PROTOCOL.md` §15、§14.2），若复用撤销
+/// 路径，「该节点重连取新 catalog」就会变成「该节点已被撤销」。
+#[tokio::test]
+async fn node_reauth_closes_with_1000_and_no_revocation_notification() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let node = NodeId::new(ACCESS_NODE).expect("node id");
+
+    assert_eq!(route.node_reauth(&node).await, 1);
+    let frames = fixture.drain();
+    assert!(
+        of_type(&frames, "node.trust.revoked").is_empty(),
+        "重新配对不是撤销：不得推送 node.trust.revoked"
+    );
+    assert_eq!(
+        fixture.handle.close_request(),
+        Some((
+            1000,
+            "the node trust was re-confirmed; reconnect to fetch the updated catalog"
+        )),
+        "必须以正常关闭（1000）与「重连取新 catalog」的 reason 关闭"
+    );
+    assert!(
+        route.pending_of(&fixture.handle).is_empty(),
+        "作废后该连接的观察表随连接消失"
     );
 }
 
@@ -2286,7 +2319,8 @@ async fn export_revocation_clears_attachments_and_rejects_later_commands() {
     assert_eq!(error_code(rejected[0]), "nodelink.export.not_granted");
 }
 
-/// [R66]：`session.list` 只返回 agent 属于该节点可见 Export 的会话（D14 的唯一判定点）。
+/// [R66]：`session.list` 只返回 agent 属于该节点可见 Export 的会话（`catalog::visible_exports` 是唯一
+/// 判定点）。
 #[tokio::test]
 async fn session_list_only_returns_sessions_of_visible_exports() {
     let mut fixture = Fixture::new().await;

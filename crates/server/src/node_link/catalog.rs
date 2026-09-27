@@ -1,12 +1,13 @@
-//! Node Link 的 catalog 投影与 `catalog.subscribe` 处理（`design.md` D4/D14、`NODE_LINK_PROTOCOL.md` §12.3）。
+//! Node Link 的 catalog 投影与 `catalog.subscribe` 处理（`design.md` D4/D7、`NODE_LINK_PROTOCOL.md`
+//! §12.3）。
 //!
 //! 三条边界：
 //!
 //! - **实时投影，不做缓存副本**：每次 `catalog.subscribe` 都按当次持久化记录重新投影（core 的
 //!   `node_link_catalog_view`），因此撤销不需要等任何推送就立即生效（D7 的推送只负责「立即通知」）；
 //! - **可见性只有一个判定点**：[`visible_exports`] 是「哪些 Export 对该 Access 可见」的**唯一**实现
-//!   （D14 的用户裁决：未撤销且 `export.scopes ∩ 该节点信任记录 grants ≠ ∅`；`exportIds` 独立维度
-//!   属后续阶段待办）。撤销也在这里生效——已撤销的 Export 不进 catalog；
+//!   （`node-trust-export-ids/design.md` D1 的三条件：未撤销、`export.scopes ∩ 该节点信任记录 grants
+//!   ≠ ∅`、`exportId ∈ 该节点的 exportIds` 清单）。撤销也在这里生效——已撤销的 Export 不进 catalog；
 //! - **零参数 template 是发布前置**：首切片发布的 template 必须是 `params = []`（§12.3）。带参数的
 //!   Export 无法在本切片内忠实发布，因此整个投影**失败关闭**（回 `internal.unavailable` 并记日志），
 //!   既不静默丢弃该 Export，也不发布一个违反 MUST 的条目。
@@ -245,11 +246,14 @@ impl CatalogRoute {
     }
 }
 
-/// 可见性策略（`design.md` D14 的用户裁决，唯一的过滤点）：未撤销且
-/// `export.scopes ∩ 该节点信任记录 grants ≠ ∅`。
+/// 可见性策略（`node-trust-export-ids/design.md` D1 的三条件，唯一的过滤点）：
 ///
-/// 结果按 `exportId` 升序（批次内顺序稳定，同一份投影在多次订阅里逐条一致）；节点信任行缺失或未配对时
-/// 可见集为空（连接层已保证认证，这里只是失败关闭）。
+/// ① 该 Export 未撤销；② `export.scopes ∩ 该节点信任记录 grants ≠ ∅`；
+/// ③ `exportId ∈ 该节点信任记录的 exportIds`（收窄型白名单，空清单 = 看不到任何 Export）。
+///
+/// 清单只能收窄不放宽：条件③ 只能删条目，不能绕过条件②。结果按 `exportId` 升序（批次内顺序稳定，
+/// 同一份投影在多次订阅里逐条一致）；节点信任行缺失或未配对时可见集为空（连接层已保证认证，这里只是
+/// 失败关闭）。
 pub(crate) fn visible_exports<'a>(
     node: Option<&NodeRecord>,
     exports: &'a [ExportRecord],
@@ -261,6 +265,7 @@ pub(crate) fn visible_exports<'a>(
         .iter()
         .filter(|export| !export.is_revoked())
         .filter(|export| intersects(export, node))
+        .filter(|export| is_nominated(export, node))
         .collect();
     visible.sort_by(|left, right| left.export_id().as_str().cmp(right.export_id().as_str()));
     visible
@@ -274,11 +279,19 @@ fn intersects(export: &ExportRecord, node: &NodeRecord) -> bool {
         .any(|scope| node.grants().contains(scope))
 }
 
+/// 该 Export 是否被这条信任记录点名（`exportId ∈ node.exportIds`）。
+fn is_nominated(export: &ExportRecord, node: &NodeRecord) -> bool {
+    node.export_ids()
+        .iter()
+        .any(|allowed| allowed == export.export_id())
+}
+
 /// 单个 Export 是否对该 Access 节点可见（[`visible_exports`] 的单项形式，供 `resource.attach` 复用）。
 ///
 /// 可见性只有一个判定点：这里的实现直接复用 [`visible_exports`]，因此 catalog 与 resource 不可能
-/// 对同一个 Export 给出不同结论。未知/未配对的节点、已撤销的 Export、与 grants 不相交的 Export
-/// 都返回 `Ok(false)`；`Err` 只表示读视图失败（内部故障，调用方按 `internal.unavailable` 处置）。
+/// 对同一个 Export 给出不同结论。未知/未配对的节点、已撤销的 Export、与 grants 不相交的 Export，以及
+/// **不在该节点 `exportIds` 清单内**的 Export 都返回 `Ok(false)`；`Err` 只表示读视图失败（内部故障，
+/// 调用方按 `internal.unavailable` 处置）。
 pub(crate) async fn export_is_visible(
     core: &acp_core::use_cases::UseCases,
     node: &acp_core::model::NodeId,
@@ -423,7 +436,7 @@ mod tests {
         acp_core::model::Timestamp::new(text).expect("固定时间戳")
     }
 
-    fn node(grants: &[&str], state: NodeState) -> NodeRecord {
+    fn node(grants: &[&str], export_ids: &[&str], state: NodeState) -> NodeRecord {
         // `revoked_at` 与 `Revoked` 必须成对成立（模型不变量）。
         let revoked_at =
             (state == NodeState::Revoked).then(|| timestamp("2026-06-01T00:00:00.000Z"));
@@ -433,6 +446,10 @@ mod tests {
             acp_core::model::NodeKind::Access,
             test_public_key().fingerprint(),
             acp_core::model::GrantSet::try_from_iter(grants.iter().copied()).expect("grants"),
+            export_ids
+                .iter()
+                .map(|id| acp_core::model::ExportId::new(id).expect("export id"))
+                .collect(),
             state,
             None,
             timestamp("2026-01-01T00:00:00.000Z"),
@@ -440,6 +457,11 @@ mod tests {
             revoked_at,
         )
         .expect("节点记录")
+    }
+
+    /// 该节点点名了全部三个测试 Export（默认夹具：可见性只由 grants 与撤销状态区分）。
+    fn node_with_all_test_exports(grants: &[&str], state: NodeState) -> NodeRecord {
+        node(grants, &[E1, E2, E3], state)
     }
 
     fn export(id: &str, scopes: &[&str], revoked: bool) -> ExportRecord {
@@ -474,7 +496,7 @@ mod tests {
     /// R51/R52 的可见性规则：**E2 与节点 grants 不相交即不可见**（2026-09-26 裁决的 (b)）。
     #[test]
     fn visibility_requires_a_non_empty_scopes_intersection_with_the_node_grants() {
-        let paired = node(&["grant.observe"], NodeState::Paired);
+        let paired = node_with_all_test_exports(&["grant.observe"], NodeState::Paired);
         let visible = export(
             "11111111-1111-4111-8111-111111111111",
             &["grant.observe", "grant.interact"],
@@ -492,10 +514,19 @@ mod tests {
         assert_eq!(kept[0].export_id(), visible.export_id());
 
         // 空 scopes、空 grants 都是不相交：空集与任何集合的交集为空。
-        assert!(visible_exports(Some(&node(&[], NodeState::Paired)), &exports).is_empty());
         assert!(
             visible_exports(
-                Some(&node(&["grant.observe"], NodeState::Paired)),
+                Some(&node_with_all_test_exports(&[], NodeState::Paired)),
+                &exports
+            )
+            .is_empty()
+        );
+        assert!(
+            visible_exports(
+                Some(&node_with_all_test_exports(
+                    &["grant.observe"],
+                    NodeState::Paired
+                )),
                 &[export("33333333-3333-4333-8333-333333333333", &[], false)]
             )
             .is_empty()
@@ -505,7 +536,7 @@ mod tests {
     /// R51/R52 的两条边界：已撤销的 Export 不进 catalog；节点行不存在或未配对时可见集为空。
     #[test]
     fn visibility_drops_revoked_exports_and_requires_a_paired_node() {
-        let paired = node(&["grant.observe"], NodeState::Paired);
+        let paired = node_with_all_test_exports(&["grant.observe"], NodeState::Paired);
         let live = export(
             "11111111-1111-4111-8111-111111111111",
             &["grant.observe"],
@@ -527,10 +558,72 @@ mod tests {
         );
         assert!(
             visible_exports(
-                Some(&node(&["grant.observe"], NodeState::Revoked)),
+                Some(&node_with_all_test_exports(
+                    &["grant.observe"],
+                    NodeState::Revoked
+                )),
                 &exports
             )
             .is_empty()
+        );
+    }
+
+    /// `design.md` D1 的条件③（收窄型白名单）：清单只能删可见条目，不能放宽条件②；空清单 = 空可见集；
+    /// 清单内但已撤销的 Export 仍不可见，且清单本身不被清理。
+    #[test]
+    fn visibility_narrows_to_the_nominated_export_ids_without_widening() {
+        let e1 = export(E1, &["grant.observe"], false);
+        let e2 = export(E2, &["grant.observe"], false);
+        let disjoint = export(E3, &["grant.remote-work"], false);
+        let exports = vec![e1.clone(), e2.clone(), disjoint];
+
+        // 只点名 E1：E2 虽然符合条件①②也不可见（收窄）。
+        let narrowed = visible_exports(
+            Some(&node(&["grant.observe"], &[E1], NodeState::Paired)),
+            &exports,
+        );
+        assert_eq!(
+            narrowed.len(),
+            1,
+            "清单外的 Export 必须被过滤：{narrowed:?}"
+        );
+        assert_eq!(narrowed[0].export_id(), e1.export_id());
+
+        // 空清单：一个都看不到（即使 scopes ∩ grants 非空）。
+        assert!(
+            visible_exports(
+                Some(&node(&["grant.observe"], &[], NodeState::Paired)),
+                &exports
+            )
+            .is_empty(),
+            "空清单 = 空可见集（不得默认放权）"
+        );
+
+        // 清单不能放宽条件②：点名了 E3 但 E3 与该节点 grants 不相交 → 仍不可见。
+        assert!(
+            visible_exports(
+                Some(&node(&["grant.observe"], &[E3], NodeState::Paired)),
+                &exports
+            )
+            .is_empty(),
+            "清单只能收窄：点名不能绕过 scopes ∩ grants"
+        );
+
+        // 清单内但已撤销：仍不可见（条件①优先），且清单条目本身不被级联清理。
+        let node_row = node(&["grant.observe"], &[E1, E2], NodeState::Paired);
+        let revoked_but_nominated = export(E2, &["grant.observe"], true);
+        let exports = [revoked_but_nominated, e1.clone()];
+        let kept = visible_exports(Some(&node_row), &exports);
+        assert_eq!(kept.len(), 1, "已撤销者即使被点名也不可见");
+        assert_eq!(kept[0].export_id(), e1.export_id());
+        assert_eq!(
+            node_row.export_ids(),
+            [
+                acp_core::model::ExportId::new(E1).expect("export id"),
+                acp_core::model::ExportId::new(E2).expect("export id")
+            ]
+            .as_slice(),
+            "可见性判定不得改写信任行的清单"
         );
     }
 
@@ -557,9 +650,10 @@ mod tests {
         /// 默认可见集为空（用例自己 `seed_export`）。
         fn new(catalog_snapshot_batch_size: u64) -> Self {
             let world = TestWorld::new();
-            world
-                .trust
-                .seed_node(node(&["grant.observe"], NodeState::Paired));
+            world.trust.seed_node(node_with_all_test_exports(
+                &["grant.observe"],
+                NodeState::Paired,
+            ));
             let (handle, outbound) = ConnectionHandle::new(
                 Uuid::parse(CONNECTION).expect("connection id"),
                 acp_core::model::NodeId::new(ACCESS_NODE).expect("node id"),
@@ -727,10 +821,46 @@ mod tests {
         assert_eq!(frames[0]["body"]["exports"], json!([]));
     }
 
+    /// `design.md` D1 的条件③（路由层）：信任行只点名 E1 时，E2/E3 即使 scopes 相交也不进快照；
+    /// 空清单给出一个空快照（而不是省略帧）。
+    #[tokio::test]
+    async fn the_catalog_snapshot_narrows_to_the_nominated_export_ids() {
+        let mut fixture = Fixture::new(500);
+        for id in [E1, E2, E3] {
+            fixture
+                .world
+                .exports
+                .seed_export(export(id, &["grant.observe"], false));
+        }
+        // 覆盖同一 `(nodeId, kind)` 的信任行：只点名 E1。
+        fixture
+            .world
+            .trust
+            .seed_node(node(&["grant.observe"], &[E1], NodeState::Paired));
+        let route = fixture.route();
+
+        let frames = fixture.subscribe(&route).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            export_ids(&frames[0]),
+            vec![E1],
+            "清单外的 Export 必须从快照里消失（即使 scopes 相交）"
+        );
+
+        // 空清单：仍然回一帧空快照。
+        fixture
+            .world
+            .trust
+            .seed_node(node(&["grant.observe"], &[], NodeState::Paired));
+        let frames = fixture.subscribe(&route).await;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0]["body"]["exports"], json!([]));
+    }
+
     /// 批次内顺序稳定：按 `exportId` 升序，与记录顺序无关。
     #[test]
     fn visibility_is_sorted_by_export_id() {
-        let paired = node(&["grant.observe"], NodeState::Paired);
+        let paired = node_with_all_test_exports(&["grant.observe"], NodeState::Paired);
         let exports = vec![
             export(
                 "33333333-3333-4333-8333-333333333333",

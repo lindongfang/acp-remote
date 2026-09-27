@@ -444,6 +444,7 @@ mod tests {
                 NodeKind::Access,
                 acp_core::model::Fingerprint::new(&"b".repeat(64)).expect("fingerprint"),
                 GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+                Vec::new(),
                 NodeState::Paired,
                 None,
                 ts("2026-09-26T00:00:00.000Z"),

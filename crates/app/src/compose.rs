@@ -13,7 +13,7 @@
 //! | `EntropySource` / `IdentityKeystore` | `identity_keystore::{OsEntropy, FileKeystore, EphemeralKeystore}` |
 //! | `identity_auth::Authority` | 组合根持有的共享状态机 |
 //! | `AuditHook`（连接级拒绝） | [`AuditSink`]（有界通道 + 由组合根持有的写任务） |
-//! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知接到 Node Link 的连接注册表与命令管线） |
+//! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知与重新配对的连接作废接到 Node Link 的连接注册表与命令管线） |
 //! | `DaemonControl` | `crate::daemon::AppDaemonControl` |
 //!
 //! 关闭期的资源释放由 [`Composition::close`] 负责：它逐一释放共享句柄，再执行 `storage-sqlite` 的
@@ -743,14 +743,18 @@ impl AuditHook for AuditSink {
     }
 }
 
-/// `ConnectionCloser`：撤销提交后关闭该设备/节点的 active connection 并通知 Export 撤销（`design.md` D7）。
+/// `ConnectionCloser`：授权变化提交后关闭该设备/节点的 active connection 并通知 Export 撤销
+/// （`design.md` D7）。
 ///
 /// `local_admin` 已经在**持久提交成功之后**才调本实现（`local_admin::pairing`），因此这里只做「通知与关闭」：
-/// 推送/关闭失败只记日志，不回滚已提交的撤销。授权判定不依赖推送——`node_link` 在处理 `resource.attach`、
+/// 推送/关闭失败只记日志，不回滚已提交的授权变化。授权判定不依赖推送——`node_link` 在处理 `resource.attach`、
 /// `command.submit` 与 catalog 订阅时按当次持久化记录复核（D7）。
 ///
 /// `close_device` 目前没有可关闭的连接：`server::sync` 未落地（设备连接属切片 7），本实现记录一条结构化
 /// 事件并明确「本次没有可关闭的连接」，不假装成功。
+///
+/// `close_node` 与 `close_node_after_reauth` 走**两条不同**的 node_link 路径：前者是撤销（推
+/// `node.trust.revoked` + 4410），后者是重新配对收窄授权（不推消息 + 1000），不能互换。
 #[derive(Debug)]
 pub struct NodeLinkCloser {
     command: Arc<CommandRoute>,
@@ -783,6 +787,17 @@ impl ConnectionCloser for NodeLinkCloser {
             target_id = %node.as_str(),
             closed_connections = u64::try_from(closed).unwrap_or(u64::MAX),
             "撤销已提交：已推送 node.trust.revoked 并以 4410 关闭该节点的连接"
+        );
+    }
+
+    async fn close_node_after_reauth(&self, node: &NodeId) {
+        let closed = self.command.node_reauth(node).await;
+        tracing::info!(
+            event = "daemon.reauth_connection_sweep",
+            target_kind = "node",
+            target_id = %node.as_str(),
+            closed_connections = u64::try_from(closed).unwrap_or(u64::MAX),
+            "重新配对：已关闭既有连接，等待对端重连取新 catalog"
         );
     }
 
