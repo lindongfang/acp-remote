@@ -61,7 +61,7 @@ pub trait ConnectionCloser: Send + Sync {
     /// `node.trust.revoked`、也不得以 4410 关闭（见 trait 文档）。
     async fn close_node_after_reauth(&self, node: &NodeId);
 
-    /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`NODE_LINK_PROTOCOL.md` §12.6 的
+    /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`NODE_LINK_PROTOCOL.md` §12.3 的
     /// `export.revoked`；没有连接时是 no-op）。推送失败不回滚已提交的撤销；授权面不依赖该推送。
     async fn export_revoked(&self, export: &ExportId);
 }

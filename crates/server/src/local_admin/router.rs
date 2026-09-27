@@ -813,8 +813,13 @@ impl LocalAdminRouter {
 
     /// `node.pair.confirm`（§5.4）：分配初始 `grant.*`、带上本次点名的可见 Export 清单并创建信任记录。
     ///
-    /// 信任行提交成功后关闭该节点的现有活动连接（与 `node.revoke` 同一机制），强制重新握手后按新
-    /// 清单重算——同一节点重新配对并收窄清单时，既有 attachment 不得继续收到该 Export 的事件。
+    /// 信任行提交成功后关闭该节点的现有活动连接，强制重新握手后按新清单重算——同一节点重新配对并收窄
+    /// 清单时，既有 attachment 不得继续收到该 Export 的事件。
+    ///
+    /// `node.revoke` 与节点方向的 `node.pair.confirm` 都是**提交后关连接**，但两条路径的**语义与关闭码
+    /// 不同**：撤销推 `node.trust.revoked` 并以 `4410` 关闭并停止重连；重新配对**不**推消息、以 `1000`
+    /// （正常关闭）+ close reason 关闭，要求对端重连以重取 catalog（`NODE_LINK_PROTOCOL.md`
+    /// §8.2/§14.2/§15）。
     ///
     /// `exportIds` 是**必填**参数（缺失/不是字符串数组由 `params::node_pair_confirm` 以
     /// `local.invalid_params` 拒绝）；清单里每个 id 是否存在、是否已撤销、是否与本次 `grants` 相交
