@@ -340,8 +340,9 @@ impl ResourceRoute {
         ) else {
             return self.protocol_error(handle, ErrorCode::ExportNotFound, message);
         };
-        // ② 可见性复核（D14 的唯一判定点）：未知/未配对的节点、未导出的 Export、已撤销的 Export，
-        //    以及与该节点 grants 不相交的 Export 都在这里被挡住。
+        // ② 可见性复核（`catalog::visible_exports` 是唯一判定点）：未知/未配对的节点、未导出的 Export、
+        //    已撤销的 Export、与该节点 grants 不相交的 Export，以及不在该节点 `exportIds` 清单内的
+        //    Export 都在这里被挡住。
         match catalog::export_is_visible(&self.core, handle.node_id(), &export).await {
             Ok(true) => {}
             Ok(false) => {

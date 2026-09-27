@@ -18,8 +18,9 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    Actor, AgentProfile, Fingerprint, GrantSet, NodeKind, PairingId, PairingPeer, PairingRecord,
-    PairingState, PairingTarget, PeerIdentity, ProviderRef, ScopeSet, Timestamp, WorkspaceRecord,
+    Actor, AgentProfile, ExportId, Fingerprint, GrantSet, NodeKind, PairingId, PairingPeer,
+    PairingRecord, PairingState, PairingTarget, PeerIdentity, ProviderRef, ScopeSet, Timestamp,
+    WorkspaceRecord,
 };
 use acp_core::ports::{AuditQuery, AuditStore, Clock, TrustRecordRef};
 use acp_core::use_cases::UseCases;
@@ -810,7 +811,12 @@ impl LocalAdminRouter {
         ]))
     }
 
-    /// `node.pair.confirm`（§5.4）：分配初始 `grant.*` 并创建信任记录。
+    /// `node.pair.confirm`（§5.4）：分配初始 `grant.*`、带上本次点名的可见 Export 清单并创建信任记录。
+    ///
+    /// `exportIds` 是**必填**参数（缺失/不是字符串数组由 `params::node_pair_confirm` 以
+    /// `local.invalid_params` 拒绝）；清单里每个 id 是否存在、是否已撤销、是否与本次 `grants` 相交
+    /// 由存储层的落定事务校验（`design.md` D4），失败时它把 `local.not_found`/`local.invalid_params`
+    /// 原样带回。
     async fn node_pair_confirm(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.pair.confirm";
         let confirm = params::node_pair_confirm(params)?;
@@ -834,7 +840,10 @@ impl LocalAdminRouter {
             .pairing
             .authority()
             .settle(&record, &decision, &now)
-            .map_err(|error| params::map_pairing_error(OPERATION, error))?;
+            .map_err(|error| params::map_pairing_error(OPERATION, error))?
+            // 配对权威只产出集合对的批准结果（`PairingDecision` 不含 `exportIds`），Node Link 的可见
+            // 清单在本机管理面附加：它只属于节点配对（设备配对没有这一面）。
+            .with_granted_export_ids(confirm.export_ids.clone());
         let reference = self
             .deps
             .core
@@ -862,6 +871,10 @@ impl LocalAdminRouter {
         Ok(object(vec![
             ("nodeId", text(node_id.as_str())),
             ("grants", string_array(confirm.grants.iter())),
+            (
+                "exportIds",
+                string_array(confirm.export_ids.iter().map(ExportId::as_str)),
+            ),
             ("confirmedAt", timestamp(&confirmed_at)),
         ]))
     }
@@ -2662,7 +2675,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": pairing_id, "grants": ["grant.observe"]}),
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe"], "exportIds": []}),
                 ))
                 .await,
         );
@@ -2856,12 +2869,17 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": pairing_id, "grants": ["grant.observe"]}),
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe"], "exportIds": []}),
                 ))
                 .await,
         );
         assert_eq!(confirmed["nodeId"], json!(NODE_ID));
         assert_eq!(confirmed["grants"], json!(["grant.observe"]));
+        assert_eq!(
+            confirmed["exportIds"],
+            json!([]),
+            "空清单必须如实回显（不等于省略字段）"
+        );
         assert_eq!(confirmed["confirmedAt"], json!(world.clock_text()));
 
         let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
@@ -2870,6 +2888,7 @@ mod tests {
         assert_eq!(listed["nodes"][0]["kind"], json!("access"));
         assert_eq!(listed["nodes"][0]["state"], json!("paired"));
         assert_eq!(listed["nodes"][0]["grants"], json!(["grant.observe"]));
+        assert_eq!(listed["nodes"][0]["exportIds"], json!([]));
         assert_eq!(listed["nodes"][0]["ownerEndpoint"], json!(null));
         assert_eq!(listed["nodes"][0]["lastConnectedAt"], json!(null));
         assert_eq!(listed["nodes"][0]["displayName"], json!("Access Node"));
@@ -3081,6 +3100,73 @@ mod tests {
         );
     }
 
+    /// §5.4 的 `exportIds` 三条运行期判据（JSON Schema 不表达逐方法形状）：
+    ///
+    /// 1. 缺失 → `local.invalid_params`；
+    /// 2. 不是字符串数组（或不是数组）→ `local.invalid_params`；
+    /// 3. 合法数组 → 去重 + 字典序后**透传**为信任行的清单，并在 `result` 里回显同一份顺序。
+    #[tokio::test]
+    async fn node_pair_confirm_requires_and_forwards_the_export_ids() {
+        let world = TestWorld::new();
+        let router = world.router();
+
+        // ① 缺字段：不是「空清单」，必须显式给出（否则旧客户端会静默拿到空清单）。
+        let pairing_id = begin_and_claim_node(&world, &router).await;
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": pairing_id, "grants": []}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+        assert!(message.contains("exportIds"), "{message}");
+        assert_eq!(world.trust.node_count(), 0, "缺字段不得创建信任");
+
+        // ② 类型不符：`null`、字符串、带非字符串项的数组都是参数非法。
+        for params in [
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": null}),
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": "export-1"}),
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": ["export-1", 7]}),
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": [""]}),
+        ] {
+            let (code, _) = error_of(
+                &router
+                    .handle(request(Method::NodePairConfirm, params.clone()))
+                    .await,
+            );
+            assert_eq!(code, LocalErrorCode::InvalidParams, "{params}");
+        }
+        assert_eq!(world.trust.node_count(), 0);
+
+        // ③ 合法清单（乱序 + 重复）→ 归一化后透传，并在 result 里回显。
+        let confirmed = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({
+                        "pairingId": pairing_id,
+                        "grants": [],
+                        "exportIds": ["export-b", "export-a", "export-b"],
+                    }),
+                ))
+                .await,
+        );
+        assert_eq!(confirmed["exportIds"], json!(["export-a", "export-b"]));
+        let node = world.trust.nodes_of(NODE_ID);
+        assert_eq!(node.len(), 1);
+        assert_eq!(
+            node[0]
+                .export_ids()
+                .iter()
+                .map(acp_core::model::ExportId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["export-a", "export-b"],
+            "透传的清单必须与落盘值同序（去重 + 字典序）"
+        );
+    }
+
     #[tokio::test]
     async fn node_confirm_and_reject_error_paths_answer_the_documented_codes() {
         let world = TestWorld::new();
@@ -3092,7 +3178,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": pairing_id, "grants": ["grant.observe", "grant.remote-work"]}),
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe", "grant.remote-work"], "exportIds": []}),
                 ))
                 .await,
         );
@@ -3119,7 +3205,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": unclaimed, "grants": []}),
+                    json!({"pairingId": unclaimed, "grants": [], "exportIds": []}),
                 ))
                 .await,
         );
@@ -3142,7 +3228,7 @@ mod tests {
             ),
             (
                 Method::NodePairConfirm,
-                json!({"pairingId": pairing_id, "grants": []}),
+                json!({"pairingId": pairing_id, "grants": [], "exportIds": []}),
             ),
         ] {
             let (code, _) = error_of(&router.handle(request(method, params)).await);
@@ -3187,6 +3273,7 @@ mod tests {
             NodeKind::Access,
             test_public_key().fingerprint(),
             GrantSet::empty(),
+            Vec::new(),
             NodeState::Pending,
             None,
             Timestamp::new("2026-09-18T09:00:00.000Z").expect("timestamp"),
@@ -3215,7 +3302,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": node_pairing, "grants": ["grant.observe"]}),
+                    json!({"pairingId": node_pairing, "grants": ["grant.observe"], "exportIds": []}),
                 ))
                 .await,
         );

@@ -648,11 +648,16 @@ impl Broker {
     ///
     /// Access 侧（本节点是 `node` 的**客户端**）：本地 `ImportRecord.grants` 覆盖该命令。
     ///
-    /// Owner 侧（本节点是导出方）：有效权限是「Export grant ∩ 该 Access 信任记录 grant」的交集——
-    /// 信任记录必须是已配对的 `access` 行且其 `grants` 含该命令所需的 grant；同时某个未撤销
-    /// `ExportRecord` 必须覆盖该命令（`scopes` 含该 grant）并与该节点的信任记录 grants 有交集
-    /// （`export.scopes ∩ node.grants ≠ ∅`，与 Node Link 的可见性口径同源）；此外**会话命令**还必须
-    /// 落在覆盖目标会话 agent 的 Export 上。
+    /// Owner 侧（本节点是导出方）：有效权限是「Export grant ∩ 该 Access 信任记录 grant ∩ 该信任记录
+    /// 点名的 Export 清单」的交集——信任记录必须是已配对的 `access` 行且其 `grants` 含该命令所需的
+    /// grant；同时某个未撤销 `ExportRecord` 必须覆盖该命令（`scopes` 含该 grant）、与该节点的信任
+    /// 记录 grants 相交（`export.scopes ∩ node.grants ≠ ∅`）并**在该节点的 `export_ids` 内**
+    /// （与 Node Link 目录层的可见性口径同源，用户 2026-09-27 裁决的收窄型白名单）；此外**会话命令**
+    /// 还必须落在覆盖目标会话 agent 的 Export 上。
+    ///
+    /// 清单只收窄不放宽：空清单（或目标 Export 不在清单内）时即使 `scopes ∩ grants` 非空也不授权——
+    /// 与 Node Link 目录层（适配器的唯一可见性判定点）用同一份信任记录、同一份清单，因此两处对同一个
+    /// Export 不会给出不同结论。
     ///
     /// 无会话命令（`session.list`/`command.status`/`session.create`）没有目标会话可比对 agent，
     /// 因此 Owner 侧按「该节点是否与某个覆盖该命令的 Export 有关联」判定；`session.list` 的结果过滤
@@ -710,6 +715,14 @@ impl Broker {
                 .all(|scope| !trust.grants().contains(scope))
             {
                 // 与该节点信任记录不相交的 Export 不是它的授权来源（Node Link 的可见性口径）。
+                continue;
+            }
+            if !trust
+                .export_ids()
+                .iter()
+                .any(|allowed| allowed == export.export_id())
+            {
+                // 清单外的 Export 不是它的授权来源（清单只收窄；空清单时这里恒 continue）。
                 continue;
             }
             match &agent {

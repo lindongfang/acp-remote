@@ -587,6 +587,7 @@ impl Fixture {
                 NodeKind::Access,
                 test_public_key().fingerprint(),
                 GrantSet::try_from_iter(grants.iter().copied()).expect("grants"),
+                vec![export_id()],
                 NodeState::Paired,
                 None,
                 ts("2026-09-18T09:00:00.000Z"),
@@ -2214,6 +2215,7 @@ async fn node_revocation_notifies_then_closes_with_4410() {
             NodeKind::Access,
             test_public_key().fingerprint(),
             GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+            Vec::new(),
             NodeState::Revoked,
             None,
             ts("2026-09-18T09:00:00.000Z"),
@@ -2286,7 +2288,8 @@ async fn export_revocation_clears_attachments_and_rejects_later_commands() {
     assert_eq!(error_code(rejected[0]), "nodelink.export.not_granted");
 }
 
-/// [R66]：`session.list` 只返回 agent 属于该节点可见 Export 的会话（D14 的唯一判定点）。
+/// [R66]：`session.list` 只返回 agent 属于该节点可见 Export 的会话（`catalog::visible_exports` 是唯一
+/// 判定点）。
 #[tokio::test]
 async fn session_list_only_returns_sessions_of_visible_exports() {
     let mut fixture = Fixture::new().await;

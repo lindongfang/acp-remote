@@ -2,7 +2,8 @@
 //!
 //! 驱动方式：脚本化 fake Access 客户端（`support::nodelink`）经**真实 loopback listener** 走完
 //! 配对 claim → 本地确认（真实 `LocalAdminRouter`）→ status approved → 握手（含 `catalogRevision`
-//! 验签路径）→ `catalog.snapshot`（grant 交集过滤）→ `session.create` → `resource.attach`/`subscribe`
+//! 验签路径）→ `catalog.snapshot`（未撤销 ∧ grants 相交 ∧ 在确认点名的 `exportIds` 清单内）→
+//! `session.create` → `resource.attach`/`subscribe`
 //! → `resource.event`/`ack` → `session.prompt` 的终态推送 → `export.revoke`/`node.revoke` 的撤销传播。
 //! Owner 侧用真实 SQLite + 真实 `Authority` + 组合根自己的装配点（`app::daemon`）。
 //!
@@ -25,10 +26,13 @@ use support::owner::OwnerNode;
 
 /// 本用例扮演的 Access Node 标识。
 const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-/// 可见的 Export（`scopes` 与节点 grants 有交集）。
+/// 可见的 Export（`scopes` 与节点 grants 有交集，且是本次确认点名的唯一一条）。
 const EXPORT_VISIBLE: &str = "export.visible";
 /// 不可见的 Export（`scopes` 与节点 grants 不相交）。
 const EXPORT_HIDDEN: &str = "export.hidden";
+/// 可见性被清单收窄的 Export：`scopes` 与节点 grants **相交**，但本次确认没有点名它
+/// （`design.md` D1 的条件③）。
+const EXPORT_NARROWED: &str = "export.narrowed";
 /// 注册的 workspace alias（`session.create` 只能带别名，不能带路径）。
 const WORKSPACE_ALIAS: &str = "project.one";
 /// Agent selector。
@@ -76,6 +80,8 @@ impl Chain {
         for (export_id, scopes) in [
             (EXPORT_VISIBLE, GRANTS.to_vec()),
             (EXPORT_HIDDEN, vec!["grant.approve"]),
+            // 第三条的 scopes 与节点 grants 相交：它能被排除只能来自确认时点名的清单。
+            (EXPORT_NARROWED, GRANTS.to_vec()),
         ] {
             owner
                 .admin(
@@ -138,17 +144,27 @@ impl Chain {
         let body = reply.json();
         support::nodelink::verify_owner_proof(&ticket, &body, &access, &client_nonce);
 
-        // ④ 本地确认（真实的 local_admin 入口）。
+        // ④ 本地确认（真实的 local_admin 入口）：`exportIds` 是必需参数，本例只点名 `EXPORT_VISIBLE`，
+        // 因此 `EXPORT_NARROWED`（scopes 相交）也必须对该节点不可见。
         let confirmed = owner
             .admin(
                 Method::NodePairConfirm,
-                json!({ "pairingId": pairing_id, "grants": GRANTS }),
+                json!({
+                    "pairingId": pairing_id,
+                    "grants": GRANTS,
+                    "exportIds": [EXPORT_VISIBLE],
+                }),
             )
             .await;
         assert_eq!(
             confirmed["nodeId"],
             json!(ACCESS_NODE),
             "确认必须创建该 Access Node 的信任记录"
+        );
+        assert_eq!(
+            confirmed["exportIds"],
+            json!([EXPORT_VISIBLE]),
+            "confirm 的 result 必须回显本次点名的清单"
         );
 
         // ⑤ status approved（同一 secret 的 HMAC 证明）。
@@ -239,7 +255,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         let owner = &chain.owner;
         let mut client = chain.connect().await;
 
-        // ① catalog.snapshot：可见性 = 未撤销 ∧ scopes ∩ 节点 grants ≠ ∅。
+        // ① catalog.snapshot：可见性 = 未撤销 ∧ scopes ∩ 节点 grants ≠ ∅ ∧ 在确认点名的清单内。
         client.step("catalog.subscribe");
         client
             .send("catalog.subscribe", json!({ "knownRevision": null }))
@@ -255,11 +271,15 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         assert_eq!(
             ids,
             vec![EXPORT_VISIBLE],
-            "可见集必须只含 scopes 与节点 grants 有交集的 Export：{snapshot}"
+            "可见集必须只含同时满足三个条件的 Export：{snapshot}"
         );
         assert!(
             !ids.contains(&EXPORT_HIDDEN),
             "与节点 grants 不相交的 Export 不得出现在 catalog 里"
+        );
+        assert!(
+            !ids.contains(&EXPORT_NARROWED),
+            "清单外的 Export 不得出现在 catalog 里（即使 scopes ∩ grants 非空）"
         );
 
         // ② session.create 正常路径：accepted(result = null) → terminal(SessionCreateResult)。
@@ -363,7 +383,23 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
             json!("workspaceAlias")
         );
 
+        // ④b 清单外的 Export 不能经 `resource.attach` 进入（与 catalog 同一个判定点）：即使给出的是一个
+        // 合法会话的 `sessionRef`，把 `exportId` 换成清单外的那个也会被可见性复核挡住。
+        client.step("resource.attach on a narrowed export");
+        let mut narrowed = session.clone();
+        narrowed["exportId"] = json!(EXPORT_NARROWED);
+        client
+            .send("resource.attach", json!({ "remoteSessionRef": narrowed }))
+            .await;
+        let refused = client.expect("link.error").await;
+        assert_eq!(
+            refused["body"]["code"],
+            json!("nodelink.export.not_granted"),
+            "清单外的 Export 与「与 grants 不相交」同一个判定点、同一个错误码：{refused}"
+        );
+
         // ⑤ resource.attach → 新 generation；旧代际被拒。
+
         client.step("resource.attach");
         client
             .send("resource.attach", json!({ "remoteSessionRef": session }))
@@ -686,7 +722,7 @@ fn tls_direct_terminates_the_same_handshake() {
         owner
             .admin(
                 Method::NodePairConfirm,
-                json!({ "pairingId": pairing_id, "grants": GRANTS }),
+                json!({ "pairingId": pairing_id, "grants": GRANTS, "exportIds": [] }),
             )
             .await;
         let status = support::nodelink::status_request(

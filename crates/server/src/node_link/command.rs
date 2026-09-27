@@ -8,7 +8,7 @@
 //!    因此本模块在严格解码**之前**先看原始 payload 的键与取值（绝对路径）；
 //! 2. **授权交集**：Export grant ∩ 该节点信任记录 grant。core 的 `Broker::authorize` 对 Node actor 只判
 //!    「信任记录 grants 含所需 grant 且存在覆盖它的未撤销 Export」，本层按 grant 与命令的会话归属再收敛
-//!    到**具体 Export**（`catalog::visible_exports` 是可见性的唯一判定点，D14）；越权一律
+//!    到**具体 Export**（`catalog::visible_exports` 是可见性的唯一判定点，见该模块的 D1 三条件）；越权一律
 //!    `command.rejected(nodelink.export.not_granted)` 且**无副作用**，并按 R69/R82 写一条
 //!    `authorization.denied` 审计——core 自己的拒绝路径会留痕，但本层拒的命令不会到达 core，因此必须
 //!    自己写（`UseCases::record_node_link_auth` 接受该动作）；
@@ -547,7 +547,8 @@ impl CommandRoute {
         RouteOutcome::Claimed
     }
 
-    /// `session.list` 的可见性过滤（D14 的唯一判定点）：只保留 agent 属于该节点可见 Export 的会话。
+    /// `session.list` 的可见性过滤（`catalog::visible_exports` 是唯一判定点）：只保留 agent 属于该节点
+    /// 可见 Export 的会话。
     ///
     /// core 的 `list_sessions` 返回本机全部 owned 摘要（存储层只按 `query` 取行），因此过滤在这里做；
     /// 判定复用 `catalog::visible_exports`，与 attach/catalog 不可能给出不同结论。结果按 `sessionId`

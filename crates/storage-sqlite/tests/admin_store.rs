@@ -327,6 +327,35 @@ fn node_pairing() -> PairingRecord {
     .expect("pairing record")
 }
 
+/// 与 [`node_pairing`] 同形但可指定 `pairingId` 与对端展示名（一个用例里要跑多条节点配对时用）。
+fn node_pairing_with_id(pairing: PairingId, display_name: &str) -> PairingRecord {
+    PairingRecord::try_new(
+        pairing,
+        PairingTarget::Node,
+        PairingState::Created,
+        Some(display_name.to_owned()),
+        ScopeSet::empty(),
+        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+        digest(PAIRING_SECRET),
+        NODE_ENDPOINT,
+        at(0),
+        at(30),
+        None,
+        None,
+        None,
+    )
+    .expect("pairing record")
+}
+
+/// `owned_node.export_ids_json` 的列文本（按 `node_id` 取，行必须存在）。
+async fn export_ids_json(pool: &SqlitePool, node: &NodeId) -> String {
+    sqlx::query_scalar("SELECT export_ids_json FROM owned_node WHERE node_id = ?1")
+        .bind(node.as_str())
+        .fetch_one(pool)
+        .await
+        .expect("owned_node.export_ids_json")
+}
+
 /// 节点配对的认领：对端（Access 节点）回显登记时的 endpoint。
 fn node_claim(id: &NodeId) -> PairingClaimWrite {
     let peer = PairingPeer::try_new(
@@ -389,6 +418,7 @@ fn node_record(kind: NodeKind, fingerprint: Fingerprint, state: NodeState) -> No
         kind,
         fingerprint,
         GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+        Vec::new(),
         state,
         match kind {
             NodeKind::Owner => Some("wss://owner.example/acpr".to_owned()),
@@ -431,6 +461,7 @@ fn node_record_with_connected(
         kind,
         fingerprint,
         GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+        Vec::new(),
         NodeState::Paired,
         match kind {
             NodeKind::Owner => Some("wss://owner.example/acpr".to_owned()),
@@ -484,6 +515,15 @@ fn export_record_with(id: &str) -> ExportRecord {
 
 /// 带 `revoked_at` 的 Export 记录：`put_export` MUST 拒绝携带它的写入（撤销只走 `revoke_export`）。
 fn export_record_with_revocation(id: &str, revoked_at: Option<Timestamp>) -> ExportRecord {
+    export_record_with_scopes(id, &["grant.remote-work"], revoked_at)
+}
+
+/// 自定义 `scopes` 的 Export 记录：`exportIds` 校验用例需要「与本次 grants 相交」与「不相交」两种输入。
+fn export_record_with_scopes(
+    id: &str,
+    scopes: &[&str],
+    revoked_at: Option<Timestamp>,
+) -> ExportRecord {
     ExportRecord::try_new(
         ExportId::new(id).expect("export id"),
         "team export",
@@ -509,7 +549,7 @@ fn export_record_with_revocation(id: &str, revoked_at: Option<Timestamp>) -> Exp
             .expect("template"),
         ],
         TemplateId::new("coding").expect("template id"),
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+        GrantSet::try_from_iter(scopes.iter().copied()).expect("grants"),
         CachePolicy::NoContentCache,
         at(4),
         revoked_at,
@@ -630,6 +670,35 @@ async fn approve_node(store: &SqliteStore, peer: &NodeId, minute: u32) -> TrustR
         })
         .await
         .expect("approve node pairing")
+}
+
+/// 登记 + 认领一条节点配对（`exportIds` 的两个用例都以它为前置）。
+async fn create_and_claim_node_pairing(store: &SqliteStore, peer: &NodeId, record: PairingRecord) {
+    let pairing = record.id().clone();
+    store
+        .create_pairing(PairingWrite {
+            record,
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create node pairing");
+    let mut claim = node_claim(peer);
+    claim.claim = acp_core::model::PairingClaim::try_new(
+        pairing,
+        PairingPeer::try_new(
+            PeerIdentity::Node(peer.clone()),
+            "office access",
+            peer_public_key(),
+            NODE_ENDPOINT,
+            nonce("node-client-nonce"),
+        )
+        .expect("pairing peer"),
+        ScopeSet::empty(),
+        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+    )
+    .expect("claim");
+    claim.context = context(1, Vec::new());
+    store.claim_pairing(claim).await.expect("claim");
 }
 
 /// `(node, access)` 行的认证时间（读面断言用；行必须存在）。
@@ -1085,6 +1154,261 @@ async fn node_pairing_approval_persists_access_trust() {
     pool.close().await;
 }
 
+/// `node.pair.confirm` 的 `exportIds`（`design.md` D2/D4）：清单经 `ALTER TABLE` 追加的列落盘，并被
+/// 归一化为去重 + 字典序；空集合编成 `'[]'`，读回（`node.list`/`node` 的路径）得到同一份集合。
+#[tokio::test]
+async fn node_pairing_approval_stores_the_nominated_export_ids() {
+    let dir = temp_dir("admin-node-export-ids");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    for record in [
+        export_record_with(EXPORT),
+        export_record_with(SECOND_EXPORT),
+    ] {
+        store
+            .put_export(ExportWrite {
+                record,
+                context: context(4, Vec::new()),
+            })
+            .await
+            .expect("put export");
+    }
+    let peer = peer_node_id();
+    create_and_claim_node_pairing(&store, &peer, node_pairing()).await;
+
+    // 输入故意乱序且带重复：落盘与回读必须都是去重 + 字典序。
+    store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: pairing_id(),
+            settlement: PairingSettlement::approved(
+                ScopeSet::empty(),
+                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            )
+            .with_granted_export_ids(vec![
+                second_export(),
+                remote_export(),
+                second_export(),
+            ]),
+            context: context(
+                2,
+                vec![audit(
+                    AuditAction::NodePaired,
+                    EntityRef::Node(peer.clone()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect("approve node pairing with a nominated list");
+
+    let row = store
+        .node(&peer, NodeKind::Access)
+        .await
+        .expect("node")
+        .expect("node row");
+    assert_eq!(
+        row.export_ids(),
+        [remote_export(), second_export()].as_slice(),
+        "读回必须与落盘同序（去重 + 字典序）"
+    );
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        export_ids_json(&pool, &peer).await,
+        r#"["export-one","export-two"]"#,
+        "列文本必须是有类型 JSON 数组文本（空集合固定 '[]'）"
+    );
+    assert_eq!(audit_rows(&pool, AuditAction::NodePaired).await, 1);
+
+    // 空清单同样合法：落盘 `'[]'`（= 该节点看不到任何 Export），配对照常建立。
+    let other = NodeId::new("88888888-8888-4888-8888-888888888888").expect("node id");
+    let empty_pairing = PairingId::new("aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa").expect("pairing id");
+    create_and_claim_node_pairing(
+        &store,
+        &other,
+        node_pairing_with_id(
+            empty_pairing.clone(),
+            "88888888-8888-4888-8888-888888888888",
+        ),
+    )
+    .await;
+    store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: empty_pairing,
+            settlement: PairingSettlement::approved(
+                ScopeSet::empty(),
+                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            ),
+            context: context(3, Vec::new()),
+        })
+        .await
+        .expect("空清单必须合法（空清单 = 看不到任何 Export，而不是配对失败）");
+    assert!(
+        store
+            .node(&other, NodeKind::Access)
+            .await
+            .expect("node")
+            .expect("node row")
+            .export_ids()
+            .is_empty()
+    );
+    assert_eq!(
+        export_ids_json(&pool, &other).await,
+        "[]",
+        "空集合必须固定编成 '[]'"
+    );
+
+    // 撤销清单内的 Export 不级联清理条目（`design.md` D1 的条件③与「重新上架得到新 id」口径）。
+    store
+        .revoke_export(ExportRevocation {
+            export: remote_export(),
+            context: context(5, Vec::new()),
+        })
+        .await
+        .expect("revoke export");
+    assert_eq!(
+        store
+            .node(&peer, NodeKind::Access)
+            .await
+            .expect("node")
+            .expect("node row")
+            .export_ids(),
+        [remote_export(), second_export()].as_slice(),
+        "撤销不级联清理清单（条目保留，可见性由「未撤销」条件自然失效）"
+    );
+    assert!(
+        store
+            .export(&remote_export())
+            .await
+            .expect("export")
+            .expect("export row")
+            .is_revoked(),
+        "Export 自身的撤销照常落盘"
+    );
+    pool.close().await;
+    store.close().await;
+}
+
+/// `design.md` D4 的三类失败与「失败零写入」：非法条目以具名错误拒绝，且不创建信任行、不推进配对状态、
+/// 不写审计（整事务回滚）。错误分类与适配层的 `local.not_found` / `local.invalid_params` 一一对应。
+#[tokio::test]
+async fn node_pairing_approval_rejects_invalid_export_ids_without_writing() {
+    let dir = temp_dir("admin-node-export-ids-invalid");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    // 两条已存在的 Export：一条已撤销、一条 scopes 与本次 grants 不相交。
+    store
+        .put_export(ExportWrite {
+            record: export_record_with(EXPORT),
+            context: context(4, Vec::new()),
+        })
+        .await
+        .expect("put export");
+    store
+        .put_export(ExportWrite {
+            record: export_record_with_scopes(SECOND_EXPORT, &["grant.observe"], None),
+            context: context(4, Vec::new()),
+        })
+        .await
+        .expect("put export with disjoint scopes");
+    store
+        .revoke_export(ExportRevocation {
+            export: remote_export(),
+            context: context(4, Vec::new()),
+        })
+        .await
+        .expect("revoke the first export");
+
+    // (清单, 断言)；三类失败各自对应一个具名错误。
+    type ErrorAssertion = fn(PortError);
+    let cases: [(Vec<ExportId>, ErrorAssertion); 3] = [
+        (
+            vec![ExportId::new("export-never-created").expect("export id")],
+            |error| match error {
+                PortError::NotFound(EntityRef::Export(id)) => {
+                    assert_eq!(id.as_str(), "export-never-created");
+                }
+                other => panic!("不存在的 id 必须是 NotFound(Export)，得到 {other}"),
+            },
+        ),
+        (vec![remote_export()], |error| match error {
+            PortError::NotFound(EntityRef::Export(id)) => assert_eq!(id.as_str(), EXPORT),
+            other => panic!("已撤销的 id 必须是 NotFound(Export)，得到 {other}"),
+        }),
+        (vec![second_export()], |error| {
+            assert_invalid_request(
+                error,
+                "granted export ids must intersect the granted grants",
+            );
+        }),
+    ];
+
+    for (index, (export_ids, assert_error)) in cases.into_iter().enumerate() {
+        let peer = peer_node_id();
+        let pairing =
+            PairingId::new(&format!("bbbbbbbb-1111-4111-8111-{index:012}")).expect("pairing id");
+        create_and_claim_node_pairing(
+            &store,
+            &peer,
+            node_pairing_with_id(pairing.clone(), peer.as_ref()),
+        )
+        .await;
+
+        let error = store
+            .settle_pairing(PairingSettlementWrite {
+                pairing: pairing.clone(),
+                settlement: PairingSettlement::approved(
+                    ScopeSet::empty(),
+                    GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+                )
+                .with_granted_export_ids(export_ids),
+                context: context(
+                    2,
+                    vec![audit(
+                        AuditAction::NodePaired,
+                        EntityRef::Node(peer.clone()),
+                        AuditOutcome::Success,
+                    )],
+                ),
+            })
+            .await
+            .expect_err("非法清单必须拒绝落定");
+        assert_error(error);
+
+        assert!(
+            store.nodes().await.expect("nodes").is_empty(),
+            "失败路径不得创建信任行"
+        );
+        assert_eq!(
+            store
+                .pairing(&pairing)
+                .await
+                .expect("pairing")
+                .expect("pairing row")
+                .state(),
+            PairingState::PendingConfirmation,
+            "失败路径不得推进配对状态"
+        );
+        let pool = raw_pool(&path).await;
+        assert_eq!(
+            scalar_i64(&pool, "SELECT COUNT(*) FROM owned_node WHERE node_id = ?1").await,
+            0,
+            "失败路径不得写节点行"
+        );
+        assert_eq!(
+            audit_rows(&pool, AuditAction::NodePaired).await,
+            0,
+            "失败路径不得写审计"
+        );
+        assert_eq!(
+            scalar_i64(&pool, "SELECT COUNT(*) FROM owned_pairing").await,
+            index as i64 + 1,
+            "失败路径不得动既有配对行"
+        );
+        pool.close().await;
+    }
+    store.close().await;
+}
+
 /// §11.2 第 1 条回归：claim 必须逐字回显登记时宣告的本机绑定；回显别的机器一律以身份不匹配拒绝，
 /// 且不推进状态、不写对端行。
 #[tokio::test]
@@ -1285,6 +1609,7 @@ async fn only_a_fresh_node_pairing_can_lift_a_node_revocation() {
             NodeKind::Access,
             fingerprint,
             GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            Vec::new(),
             NodeState::Paired,
             None,
             at(1),
@@ -1831,6 +2156,7 @@ async fn record_node_connected_advances_the_access_row_once_forward() {
         approved.kind(),
         approved.node_public_key_fingerprint().clone(),
         approved.grants().clone(),
+        approved.export_ids().to_vec(),
         approved.state(),
         approved.owner_endpoint().map(str::to_owned),
         approved.created_at().clone(),

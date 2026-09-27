@@ -1428,6 +1428,7 @@ impl TrustStore for FakeTrust {
                 record.kind(),
                 record.node_public_key_fingerprint().clone(),
                 record.grants().clone(),
+                Vec::new(),
                 NodeState::Revoked,
                 record.owner_endpoint().map(str::to_owned),
                 record.created_at().clone(),
@@ -1546,6 +1547,7 @@ impl TrustStore for FakeTrust {
             PairingSettlement::Approved {
                 granted_scopes,
                 granted_grants,
+                granted_export_ids,
             } => {
                 if write.context.at.as_str() >= record.expires_at().as_str() {
                     return Err(PortError::Conflict(ConflictKind::Expired));
@@ -1572,7 +1574,12 @@ impl TrustStore for FakeTrust {
                                 "a node pairing must not carry scopes",
                             ));
                         }
-                        self.approve_node(&peer, granted_grants, &write.context.at);
+                        self.approve_node(
+                            &peer,
+                            granted_grants,
+                            granted_export_ids,
+                            &write.context.at,
+                        );
                     }
                 }
                 PairingState::Approved
@@ -1709,6 +1716,7 @@ impl FakeTrust {
             record.kind(),
             record.node_public_key_fingerprint().clone(),
             record.grants().clone(),
+            record.export_ids().to_vec(),
             record.state(),
             record.owner_endpoint().map(str::to_owned),
             record.created_at().clone(),
@@ -1758,8 +1766,15 @@ impl FakeTrust {
         self.seed_device(record);
     }
 
-    /// 批准（节点）：对端角色恒为 `Access`，`ownerEndpoint` 为 `None`。
-    fn approve_node(&self, peer: &PairingPeer, granted_grants: &GrantSet, at: &Timestamp) {
+    /// 批准（节点）：对端角色恒为 `Access`，`ownerEndpoint` 为 `None`；`granted_export_ids` 是本次
+    /// `node.pair.confirm` 点名的可见 Export 清单（随信任行挂盘，成为可见性的第三个条件）。
+    fn approve_node(
+        &self,
+        peer: &PairingPeer,
+        granted_grants: &GrantSet,
+        granted_export_ids: &[ExportId],
+        at: &Timestamp,
+    ) {
         let PeerIdentity::Node(node_id) = peer.id() else {
             unreachable!("目标族已由写集保证")
         };
@@ -1769,6 +1784,7 @@ impl FakeTrust {
             NodeKind::Access,
             peer.public_key_fingerprint(),
             granted_grants.clone(),
+            granted_export_ids.to_vec(),
             NodeState::Paired,
             None,
             at.clone(),

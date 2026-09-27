@@ -736,15 +736,33 @@ pub struct NodePairConfirm {
     pub pairing_id: PairingId,
     /// 用户确认的最终 `grant.*` 集合（不是请求值）。
     pub grants: GrantSet,
+    /// 用户确认的可见 Export 清单（`exportIds`）：**必填**，可为空数组（空清单 = 该节点看不到任何
+    /// Export）；已去重、字典序（与落盘、`node.list` 回显同一份顺序）。条目是否存在/未撤销/与本次
+    /// grants 相交由存储层的落定事务校验（`design.md` D4）。
+    pub export_ids: Vec<ExportId>,
 }
 
-/// `node.pair.confirm`（§5.4）：`{ pairingId, grants }`；节点配对不带 scopes（未知字段即拒绝）。
+/// `node.pair.confirm`（§5.4）：`{ pairingId, grants, exportIds }`；节点配对不带 scopes（未知字段即拒绝）。
+/// `exportIds` 是**必需**字段：缺失或不是字符串数组一律 `local.invalid_params`（§5.4 的「必填」由守护
+/// 进程运行期强制；`envelope.schema.json` 只把 `params` 建模为通用对象，不表达逐方法形状）。
 pub fn node_pair_confirm(params: &JsonObject) -> Result<NodePairConfirm, AdminError> {
-    reject_unknown_fields(params, &["pairingId", "grants"])?;
+    reject_unknown_fields(params, &["pairingId", "grants", "exportIds"])?;
     let pairing_id = pairing_id_field(params)?;
     let grants = GrantSet::try_from_iter(strings(params, "grants")?)
         .map_err(|error| from_invalid("parameter `grants`", error))?;
-    Ok(NodePairConfirm { pairing_id, grants })
+    let mut export_ids = strings(params, "exportIds")?
+        .into_iter()
+        .map(|id| ExportId::new(&id).map_err(|error| from_invalid("parameter `exportIds`", error)))
+        .collect::<Result<Vec<ExportId>, AdminError>>()?;
+    // 与 `NodeRecord` 的构造归一化同口径（集合语义）：重复项去掉、按字典序排序，因此本次 `result`
+    // 回显的清单与 `node.list` 的落盘值逐项一致。
+    export_ids.sort();
+    export_ids.dedup();
+    Ok(NodePairConfirm {
+        pairing_id,
+        grants,
+        export_ids,
+    })
 }
 
 /// `device.pair.reject` / `node.pair.reject` 的已校验参数（§5.3/§5.4）。
