@@ -2241,6 +2241,37 @@ async fn node_revocation_notifies_then_closes_with_4410() {
     );
 }
 
+/// 重新配对（`node.pair.confirm`）作废既有连接：不推 `node.trust.revoked`，以 1000 正常关闭。
+///
+/// 与 [`node_revocation_notifies_then_closes_with_4410`] 成对：两条路径的 wire 表现必须可区分。合规客户端
+/// 把 4410 与 `node.trust.revoked` 都读成「停止重连」（`NODE_LINK_PROTOCOL.md` §15、§14.2），若复用撤销
+/// 路径，「该节点重连取新 catalog」就会变成「该节点已被撤销」。
+#[tokio::test]
+async fn node_reauth_closes_with_1000_and_no_revocation_notification() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let node = NodeId::new(ACCESS_NODE).expect("node id");
+
+    assert_eq!(route.node_reauth(&node).await, 1);
+    let frames = fixture.drain();
+    assert!(
+        of_type(&frames, "node.trust.revoked").is_empty(),
+        "重新配对不是撤销：不得推送 node.trust.revoked"
+    );
+    assert_eq!(
+        fixture.handle.close_request(),
+        Some((
+            1000,
+            "the node trust was re-confirmed; reconnect to fetch the updated catalog"
+        )),
+        "必须以正常关闭（1000）与「重连取新 catalog」的 reason 关闭"
+    );
+    assert!(
+        route.pending_of(&fixture.handle).is_empty(),
+        "作废后该连接的观察表随连接消失"
+    );
+}
+
 /// [R77]/[R76]：Export 撤销推 `export.revoked`、清内存 attachment，且此后的命令按持久化记录被拒。
 #[tokio::test]
 async fn export_revocation_clears_attachments_and_rejects_later_commands() {

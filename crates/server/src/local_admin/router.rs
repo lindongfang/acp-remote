@@ -879,8 +879,10 @@ impl LocalAdminRouter {
         // 比对清单，可见性的唯一判定点仍是适配器（`node_link::catalog`）与 core 的 Owner 侧命令授权
         // （与 `node.exportIds` 无运行期修改入口的设计一致），所以这里不在 core 的读 seam 复制条件③。
         //
-        // 与 `node.revoke` 用同一把「授权变化 → 关连接」的机制（已提交 → 关闭 → 返回）。
-        self.deps.pairing.close_node(&node_id).await;
+        // 与 `node.revoke` 共用「授权变化 → 关连接」的时机（已提交 → 关闭 → 返回），但**不复用**它的撤销
+        // 语义：这里不推 `node.trust.revoked`、也不以 4410 关闭，而是正常关闭让对端重连取新 catalog
+        // （`NODE_LINK_PROTOCOL.md` §15：4410 与 `node.trust.revoked` 都表示「停止重连」）。
+        self.deps.pairing.close_node_after_reauth(&node_id).await;
         Ok(object(vec![
             ("nodeId", text(node_id.as_str())),
             ("grants", string_array(confirm.grants.iter())),
@@ -2692,11 +2694,16 @@ mod tests {
                 ))
                 .await,
         );
-        // 确认本身也走「授权变化 → 关连接」（提交后一次，回读时该行未撤销），因此后面的撤销是**第二次**
-        // 关闭：本用例对关闭次数的断言都以「确认 1 次 + 撤销 1 次 = 2」为基准，不能把确认的那次当成
-        // 撤销的那次。
-        assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
-        assert_eq!(world.closer.nodes_revoked_when_notified(), vec![false]);
+        // 确认本身走的是**重新配对**的作废路径（`close_node_after_reauth`），与后面的撤销关闭分列两张表：
+        // 因此撤销的计数仍是「撤销 1 次」，不能把确认的那次当成撤销的那次。
+        assert_eq!(
+            world.closer.closed_nodes_after_reauth(),
+            vec![NODE_ID.to_owned()]
+        );
+        assert!(
+            world.closer.closed_nodes().is_empty(),
+            "确认不得走撤销的关闭路径（`close_node` 只属于 `node.revoke`）"
+        );
 
         // ① 首次撤销成功：返回持久化的撤销时间。
         let first_at = world.clock_text();
@@ -2709,14 +2716,19 @@ mod tests {
         assert_eq!(revoked["revokedAt"], json!(first_at));
         assert_eq!(
             world.closer.closed_nodes(),
-            vec![NODE_ID.to_owned(); 2],
-            "确认一次 + 撤销一次"
+            vec![NODE_ID.to_owned()],
+            "撤销必须走撤销的关闭路径（`close_node`）"
         );
-        // RV1-WP6-F10：撤销时的关闭通知**当时**回读存储，两种角色行都已经带撤销时间（确认时的那次不在
-        // 撤销之后，因此是 `false`）。
+        assert_eq!(
+            world.closer.closed_nodes_after_reauth(),
+            vec![NODE_ID.to_owned()],
+            "撤销不得再多走一次重新配对的作废路径"
+        );
+        // RV1-WP6-F10：撤销时的关闭通知**当时**回读存储，两种角色行都已经带撤销时间（确认走的是另一条
+        // 路径，不进这张表）。
         assert_eq!(
             world.closer.nodes_revoked_when_notified(),
-            vec![false, true],
+            vec![true],
             "撤销的关闭必须发生在撤销提交之后"
         );
 
@@ -2731,7 +2743,7 @@ mod tests {
         assert!(message.contains(NODE_ID), "{message}");
         assert_eq!(
             world.closer.closed_nodes().len(),
-            2,
+            1,
             "重试不得再走一次撤销与关闭"
         );
         assert_eq!(
@@ -2750,7 +2762,7 @@ mod tests {
                 .await,
         );
         assert_eq!(code, LocalErrorCode::NotFound);
-        assert_eq!(world.closer.closed_nodes().len(), 2);
+        assert_eq!(world.closer.closed_nodes().len(), 1);
     }
 
     #[tokio::test]
@@ -2904,11 +2916,17 @@ mod tests {
             "空清单必须如实回显（不等于省略字段）"
         );
         assert_eq!(confirmed["confirmedAt"], json!(world.clock_text()));
-        // 确认提交后按 `node.revoke` 的同一机制关闭该节点的既有连接（重新配对时新清单因此立刻生效）。
-        // 首次配对在生产里恒是 no-op（配对行落定前没有可认证的活动连接），观察点因此只有一次调用，
-        // 且这次关闭发生在**未撤销**的行上（它是「授权变化」的作废语义，不是撤销）：
-        assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
-        assert_eq!(world.closer.nodes_revoked_when_notified(), vec![false]);
+        // 确认提交后作废该节点的既有连接，但走的是**重新配对**的路径（不推 `node.trust.revoked`、正常
+        // 关闭），不是撤销：`close_node` 只属于 `node.revoke`。首次配对在生产里恒是 no-op（配对行落定前
+        // 没有可认证的活动连接），观察点因此只有一次调用。
+        assert_eq!(
+            world.closer.closed_nodes_after_reauth(),
+            vec![NODE_ID.to_owned()]
+        );
+        assert!(
+            world.closer.closed_nodes().is_empty(),
+            "确认不得走撤销的关闭路径"
+        );
 
         let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
         assert_eq!(listed["nodes"].as_array().expect("数组").len(), 1);
@@ -2933,8 +2951,13 @@ mod tests {
         assert_eq!(revoked["revokedAt"], json!(world.clock_text()));
         assert_eq!(
             world.closer.closed_nodes(),
-            vec![NODE_ID.to_owned(); 2],
-            "确认一次 + 撤销一次"
+            vec![NODE_ID.to_owned()],
+            "撤销走撤销的关闭路径（确认的那次记在重新配对的表里）"
+        );
+        assert_eq!(
+            world.closer.nodes_revoked_when_notified(),
+            vec![true],
+            "撤销的关闭必须发生在撤销提交之后"
         );
         let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
         assert_eq!(listed["nodes"][0]["state"], json!("revoked"));

@@ -43,6 +43,9 @@
 //! 记日志：权威判定始终按当次持久化记录（`catalog::visible_exports` 与 `node_link_session_view`），
 //! 因此即使推送丢失，已撤销的 Export/节点也无法继续取资源或发命令。
 //!
+//! **重新配对的连接作废**：[`CommandRoute::node_reauth`] 与撤销同址同序（提交后关闭），但不推消息、
+//! 以正常关闭（1000）让对端重连取新 catalog——授权收窄不是撤销，对端不得据此停止重连。
+//!
 //! 本切片**显式不支持**的三个查询（`session.read`/`session.mode.list`/`session.config.list`）：它们的
 //! wire 结果形状（`sessionReadResult`/`modeListResult`/`configListResult`）需要把正文/活体元数据投影成
 //! Sync 登记的视图，其中 `session.read` 的 `messages` 还要事件正文的聚合投影——那属 Access facade 的正文
@@ -1555,7 +1558,7 @@ impl CommandRoute {
     }
 
     // -----------------------------------------------------------------------------------------
-    // 撤销传播（D7）
+    // 授权变化的连接传播（D7：撤销；重新配对）
     // -----------------------------------------------------------------------------------------
 
     /// `node.revoke` 提交后：推送 `node.trust.revoked` 并以 4410 关闭该节点的全部连接（返回连接数）。
@@ -1619,6 +1622,34 @@ impl CommandRoute {
             access_node_id = node.as_str(),
             connections = handles.len(),
             "the revoked node trust was propagated to its active connections"
+        );
+        handles.len()
+    }
+
+    /// `node.pair.confirm` 提交后：以**正常关闭**（1000）作废该节点的全部连接（返回连接数）。
+    ///
+    /// 重新配对不是撤销：这里**不**推 `node.trust.revoked`，也不以 4410（「节点已撤销」）关闭
+    /// （`NODE_LINK_PROTOCOL.md` §15 规定这两者都表示「停止重连」），而是让对端按已提交的新清单重连
+    /// 并重取 catalog。关闭同样是**请求**，会话会先排空已入队消息再发 close 帧。
+    pub async fn node_reauth(&self, node: &NodeId) -> usize {
+        let handles = self.registry.handles_for_node(node);
+        if handles.is_empty() {
+            return 0;
+        }
+        for handle in &handles {
+            handle.request_close(
+                close::NORMAL,
+                "the node trust was re-confirmed; reconnect to fetch the updated catalog",
+            );
+        }
+        for handle in &handles {
+            self.forget_connection(handle.connection_id().as_str());
+        }
+        info!(
+            event = "node_link.node_reauth_invalidated_connections",
+            access_node_id = node.as_str(),
+            connections = handles.len(),
+            "the re-confirmed node trust invalidated its existing connections; the peer is expected to reconnect"
         );
         handles.len()
     }

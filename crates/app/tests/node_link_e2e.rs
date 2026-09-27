@@ -714,7 +714,11 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
 /// 这条路径（`node.pair.begin → claim → node.pair.confirm`）不经过 `node.revoke`，而 `approve_node` 对
 /// 「同一 `nodeId` 已有 `paired` 行」没有状态守卫，因此清单可以被静默改写。可见性只在适配器
 /// （`node_link::catalog`）与 core 的 Owner 侧命令授权上判定：若确认不落到**连接边界**，这条连接会继续
-/// 按旧清单收到该 Export 的 `resource.event`（本用例的负向对照就是删掉那条 `close_node`）。
+/// 按旧清单收到该 Export 的 `resource.event`（本用例的负向对照就是删掉 `node_reauth` 的调用）。
+///
+/// 关闭语义也是用例的一部分：收窄不是撤销，必须以 **1000（正常关闭）**关闭、且全程不给对端
+/// `node.trust.revoked`——合规客户端把 4410 与那条消息都读成「停止重连」（`NODE_LINK_PROTOCOL.md`
+/// §15、§14.2），复用撤销路径会把「重连取新 catalog」变成「已被撤销、不再重连」。
 #[test]
 fn a_narrowing_repair_closes_the_live_attachment() {
     support::block_on(async {
@@ -825,16 +829,31 @@ fn a_narrowing_repair_closes_the_live_attachment() {
         );
 
         // ④ 授权变化必须落到连接边界：既有连接被关闭，新连接上的判定全部按已提交的信任行重算。
-        // 机制与 `node.revoke` 相同（同一把「授权变化 → 关连接」），但该节点并未撤销，因此没有
-        // `node.trust.revoked` 推送，只有 close 帧。若确认不作废连接，这条连接会继续收到该 Export 的
-        // `resource.event`——超时即「连接仍然活着」就是那个缺口。
+        // 但该节点并未撤销，因此这里**既没有** `node.trust.revoked` 推送，**也不用** 4410：关闭是以
+        // 1000（正常关闭）发出的「重连取新 catalog」信号。若确认不作废连接，这条连接会继续收到该 Export
+        // 的 `resource.event`——超时即「连接仍然活着」就是那个缺口。
         client.step("repair close");
         let code = tokio::time::timeout(std::time::Duration::from_secs(10), client.close_code())
             .await
             .expect(
                 "重新配对确认后既有连接必须被关闭（超时 = 连接仍然活着，收窄后的清单没有生效）",
             );
-        assert_eq!(code, 4410, "重新配对按 `node.revoke` 的同一机制关闭连接");
+        assert_eq!(
+            code, 1000,
+            "重新配对不是撤销：必须以正常关闭（1000）发出，不能复用 4410「节点已撤销」"
+        );
+        // 全程不得出现撤销通知：`close_code` 把 close 帧之前的文本帧收进待取队列，因此「队列里没有
+        // `node.trust.revoked`」就是「对端在关闭前没收到撤销推送」的可观察等价断言（撤销路径会先 send
+        // 再 close，会话排空已入队消息后才发 close 帧，所以这条消息只能出现在这里）。
+        let revoked_notifications: Vec<&Value> = client
+            .pending()
+            .iter()
+            .filter(|message| message["type"] == json!("node.trust.revoked"))
+            .collect();
+        assert!(
+            revoked_notifications.is_empty(),
+            "重新配对不是撤销：对端不得收到 node.trust.revoked（收到就会停止重连）：{revoked_notifications:?}"
+        );
 
         // ⑤ 同一身份重新握手：按已提交的空清单重算，catalog 为空（旧 attachment 无法在空清单下复活）。
         let mut fresh = NodeLinkClient::connect_plain(owner.addr).await;

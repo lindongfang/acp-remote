@@ -1857,10 +1857,14 @@ impl EntropySource for FakeEntropy {
 /// （`TrustStore::nodes_for` / `ExportStore::export`），并把「回读时是否已经撤销」随通知一起记下。
 /// 这样「提交后才通知」不再只能从调用顺序间接推断（一条日志看不出先后），而是一个可断言的持久事实：
 /// 用例断言每一次通知的回读值都是 `true`。
+///
+/// `close_node`（撤销）与 `close_node_after_reauth`（重新配对收窄）分列两张表：两者语义不同，合成一个
+/// 计数就会让「撤销不得复用重新配对的关闭路径」这件事不可断言。
 #[derive(Clone, Default)]
 pub(crate) struct RecordingCloser {
     devices: Arc<Mutex<Vec<String>>>,
     nodes: Arc<Mutex<Vec<String>>>,
+    nodes_after_reauth: Arc<Mutex<Vec<String>>>,
     exports: Arc<Mutex<Vec<String>>>,
     /// 持久读入口（`TestWorld` 装配；未装配时回读记 `false`，断言会失败而不是静默通过）。
     trust: Option<FakeTrust>,
@@ -1883,8 +1887,15 @@ impl RecordingCloser {
         self.devices.lock().expect("关闭锁").clone()
     }
 
+    /// `node.revoke` 关闭的节点（按调用顺序）。
     pub(crate) fn closed_nodes(&self) -> Vec<String> {
         self.nodes.lock().expect("关闭锁").clone()
+    }
+
+    /// `node.pair.confirm` 作废连接的节点（按调用顺序）——与 [`Self::closed_nodes`] 分开记录，
+    /// 两类关闭因此可区分。
+    pub(crate) fn closed_nodes_after_reauth(&self) -> Vec<String> {
+        self.nodes_after_reauth.lock().expect("关闭锁").clone()
     }
 
     /// 收到 `export.revoked` 通知的 Export（按调用顺序）。
@@ -1932,6 +1943,13 @@ impl ConnectionCloser for RecordingCloser {
             .expect("关闭锁")
             .push(revoked);
         self.nodes
+            .lock()
+            .expect("关闭锁")
+            .push(node.as_str().to_owned());
+    }
+
+    async fn close_node_after_reauth(&self, node: &NodeId) {
+        self.nodes_after_reauth
             .lock()
             .expect("关闭锁")
             .push(node.as_str().to_owned());

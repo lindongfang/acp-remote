@@ -1,7 +1,7 @@
 //! 配对编排的注入口（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4、`design.md` 决策 6）。
 //!
 //! [`PairingSessions`] 把配对方法需要的四件东西拼在一起：组合根注入的 `identity-auth` 配对状态机、
-//! 本机 canonical origin、节点身份公钥（经状态机转发的 keystore 端口）与撤销后关闭连接的钩子。
+//! 本机 canonical origin、节点身份公钥（经状态机转发的 keystore 端口）与授权变化后关闭连接的钩子。
 //!
 //! 边界纪律：
 //!
@@ -35,13 +35,17 @@ use crate::local_admin::error::{AdminError, LocalErrorCode};
 /// （`SYNC_PROTOCOL.md` §7、§14；`LOCAL_ADMIN_PROTOCOL.md` §5.3）。`expiresInMs` 只能收窄。
 pub const PAIRING_WINDOW_MS: u64 = 300_000;
 
-/// 撤销提交后关闭该设备/节点的 active connection 与通知 Export 撤销（`§5.3`/`§5.4`、
-/// `SECURITY_DESIGN.md` §9.5、`design.md` D7）。
+/// 「授权已变化」提交后关闭该设备/节点的 active connection 与通知 Export 撤销
+/// （`§5.3`/`§5.4`、`SECURITY_DESIGN.md` §9.5、`design.md` D7）。
 ///
-/// 组合根是连接表的唯一持有者，因此 server 只表达「这个身份/资源已被撤销」这一事实，由实现决定关闭哪些
-/// 连接、推送哪条撤销消息、以及如何停止本地重连。三个方法都返回 `()`：撤销已经在 core 的事务里提交，
-/// 关闭/推送失败只能记日志，不能让方法失败或回滚（与 §11.6 第 5 条「先提交再通知，发送失败不撤销
-/// 数据库决定」同款口径）。
+/// 组合根是连接表的唯一持有者，因此 server 只表达「这个身份/资源的授权已经变了」这一事实，由实现决定
+/// 关闭哪些连接、推送（或不推送）哪条消息、以及如何停止本地重连。四个方法都返回 `()`：事实已经在 core
+/// 的事务里提交，关闭/推送失败只能记日志，不能让方法失败或回滚（与 §11.6 第 5 条「先提交再通知，发送
+/// 失败不撤销数据库决定」同款口径）。
+///
+/// 两种节点级关闭**语义不同、不能互换**：[`Self::close_node`] 是撤销（推 `node.trust.revoked`、以 4410
+/// 关闭，对端据此停止重连），[`Self::close_node_after_reauth`] 是重新配对收窄授权（不推消息、正常关闭，
+/// 对端应当重连取新 catalog）。
 #[async_trait::async_trait]
 pub trait ConnectionCloser: Send + Sync {
     /// 关闭该设备的全部 active connection（没有连接时是 no-op）。
@@ -49,6 +53,13 @@ pub trait ConnectionCloser: Send + Sync {
 
     /// 关闭该节点的全部 active connection，并停止本地对该节点的重连（没有连接时是 no-op）。
     async fn close_node(&self, node: &NodeId);
+
+    /// 作废该节点在**重新配对**（`node.pair.confirm`）之前建立的 active connection（没有连接时是
+    /// no-op）。
+    ///
+    /// 这不是撤销：该节点仍然 paired，对端应当重连并在新连接上重取 catalog，因此实现**不得**推送
+    /// `node.trust.revoked`、也不得以 4410 关闭（见 trait 文档）。
+    async fn close_node_after_reauth(&self, node: &NodeId);
 
     /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`NODE_LINK_PROTOCOL.md` §12.6 的
     /// `export.revoked`；没有连接时是 no-op）。推送失败不回滚已提交的撤销；授权面不依赖该推送。
@@ -63,6 +74,8 @@ impl ConnectionCloser for NoConnections {
     async fn close_device(&self, _device: &DeviceId) {}
 
     async fn close_node(&self, _node: &NodeId) {}
+
+    async fn close_node_after_reauth(&self, _node: &NodeId) {}
 
     async fn export_revoked(&self, _export: &ExportId) {}
 }
@@ -220,6 +233,12 @@ impl PairingSessions {
     /// `node.revoke` 提交后关闭该节点的 active connection（并停止本地重连）。
     pub async fn close_node(&self, node: &NodeId) {
         self.closer.close_node(node).await;
+    }
+
+    /// `node.pair.confirm` 提交后作废该节点的既有连接（**不是**撤销：不推 `node.trust.revoked`，
+    /// 正常关闭让对端重连按新清单重算）。
+    pub async fn close_node_after_reauth(&self, node: &NodeId) {
+        self.closer.close_node_after_reauth(node).await;
     }
 
     /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`export.revoked`）。
