@@ -19,7 +19,7 @@
 
 > 版本：0.13（2026-09-26，`node-link-owner` 变更 WP6 修复轮次（RV1-WP6-F1）：`session.create` 的幂等与终态落进 `owned_command`——§4 补一条用例入口（`create_session` / `settle_session_create`）、§5.1 的 `[决定]` 同步签名与指纹义务、§6 新增第 20 条（创建提交回填 `session_id`、终态提交、崩溃窗口走第 16 条恢复、重试与冲突）。**§5/§7 的代码块与 DDL 未变**（未新增端口方法与表列），漂移门禁继续逐条成立）
 
-> 版本：0.14（2026-09-27，`node-trust-export-ids` 变更：信任记录增 `exportIds` 收窄型白名单——§3.5 给 `NodeRecord`/`PairingSettlement::Approved` 加清单字段，§4 的单点可见性策略与 §6 第 5 条的 Owner 侧授权判定改为三条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`），§7 升级到 v4（`owned_node` 末尾追加 `export_ids_json`，`ALTER TABLE ADD COLUMN`，既有行置空、不得默认放权），§7.2 版本常量改 4/4/3，§9 新增判据 32 并同步判据 1/28 的版本链与 owned 列清单断言，§10 给历史裁定条目补当前口径提示，§11.3 的「过新」用例取值改为 5，§11.6 第 4 条补清单校验与审计不新增，§11.7/§11.8 补集合列说明与「为什么只加列不重建」）。**本次未改任何端口签名：§5 的 rust 块与 `crates/core/src/ports.rs` 均未变；§7 的 SQL 块已同批更新**，漂移门禁继续逐条成立）
+> 版本：0.14（2026-09-27，`node-trust-export-ids` 变更：信任记录增 `exportIds` 收窄型白名单——§3.5 给 `NodeRecord`/`PairingSettlement::Approved` 加清单字段，§4 的单点可见性策略与 §6 第 5 条的 Owner 侧授权判定改为三条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`），§7 升级到 v4（`owned_node` 末尾追加 `export_ids_json`，`ALTER TABLE ADD COLUMN`，既有行置空、不得默认放权），§7.2 版本常量改 4/4/3，§9 新增判据 32 并同步判据 1/28 的版本链与 owned 列清单断言，§10 给历史裁定条目补当前口径提示，§11.3 的「过新」用例取值改为 5，§11.6 第 4 条补清单校验与审计不新增，§11.7/§11.8 补集合列说明与「为什么只加列不重建」。**本次未改任何端口签名：§5 的 rust 块与 `crates/core/src/ports.rs` 均未变；§7 的 SQL 块已同批更新**，漂移门禁继续逐条成立）
 
 ## 1. 范围与非目标
 
