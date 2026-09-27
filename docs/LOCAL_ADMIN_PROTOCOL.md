@@ -1,6 +1,7 @@
 # ACP Remote 本地管理通道
 
 > 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）的**本地通道部分已落地**（`server::transport::local` + `server::local_admin` + `app`），`server::acp_facade` 待切片 6——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 版本：1.4（2026-09-27，v1 内合同修订，未实现未发布：`node.pair.confirm` 的 `params` 增加**必填** `exportIds`（可为空数组）、`result` 回显它，`NodeRecord`（因而 `node.list`）增加 `exportIds`；按 §8 属不兼容变更，因 v1 未发布、CLI 与 Daemon 同版本发布，按 v1 内合同修订处理，先例为 `node.challenge.catalogRevision`；并同步「改清单 = 重新配对（落定后关闭活动连接，收窄自下一次握手生效）」）  
 > 版本：1.3（2026-09-25：方法名允许段内连字符；`node.rotate-key.begin` 进入 v1 方法词表，修正 §5.7 与机器词表的不一致）  
 > 版本：1.2（2026-09-25：新增 §3.1 实现状态注记——`server::acp_facade` 落地前，Daemon 对 `0x02` 连接在 framing 校验后即连即关；`daemon-cli-and-local-admin` 变更的 design.md 决策 5）  
 > 版本：1.1（2026-09-23：新增 §3.1 `0x02` ACP 流的会话生命周期；管理载荷的 envelope 与错误码改为机器表达，目录见 [`schemas/local-admin/v1/`](../schemas/local-admin/v1/)）  
@@ -336,6 +337,7 @@ displayName             string              # ≤128
 kind                    "access" | "owner"  # 该记录代表的对端角色：access = 我们信任的 Access Node；owner = 我们导入的 Owner Node
 nodePublicKeyFingerprint string             # 同 DeviceRecord 的指纹规则
 grants                  string[]            # grant.* 子集
+exportIds               string[]            # 该节点可见 Export 的白名单（去重、字典序；空数组 = 看不到任何 Export；语义见 NODE_LINK_PROTOCOL.md §8.2）
 state                   "pending" | "paired" | "revoked"
 ownerEndpoint           string | null       # kind = "owner" 时为 wss:// 端点
 createdAt               timestamp
@@ -376,9 +378,11 @@ peerPublicKeyFingerprint string | null
 
 #### `node.pair.confirm`
 
-- `params`：`{ pairingId, grants: string[] }`
-- `result`：`{ nodeId, grants, confirmedAt }`
+- `params`：`{ pairingId, grants: string[], exportIds: string[] }`——`exportIds` 是**必填**字段（取值可以是空数组）；缺少该字段 → `local.invalid_params`，且不创建信任。`schemas/local-admin/v1/envelope.schema.json` 只把 `params`/`result` 建模为通用对象（逐方法形状由本文拥有），因此「必填」由 Daemon 在运行期强制，不写进 JSON Schema。
+- `result`：`{ nodeId, grants, exportIds, confirmedAt }`——`exportIds` 回显本次填报的最终清单。
 - 只有 Owner 侧本地确认才创建信任记录并分配初始 `grant.*`（`NODE_LINK_PROTOCOL.md` §13.2）；必须在持久状态提交后才返回。
+- `exportIds` 是「该节点可见 Export」的白名单，**只能收窄**：可见性 = `NODE_LINK_PROTOCOL.md` §8.2 的三个条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`）。每个 `exportId` 必须本机存在且未撤销，否则 `local.not_found`；其 `scopes` 必须与本次 `grants` 有交集，否则 `local.invalid_params`。三类失败（缺少字段、不存在/已撤销、与 `grants` 不相交）都不创建信任、不推进配对状态、不写审计。空清单合法，等于该节点看不到任何 Export（即使 `scopes` 与 `grants` 相交）。
+- 清单只在确认时填报，没有配对后修改入口（已知限制，见 `NODE_LINK_PROTOCOL.md` §8.2）：改清单只能重新配对——要么先 `node.revoke` 再重新配对，要么直接重新配对；两种做法都在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效。`export.revoke` 不级联清理清单条目。v3 及更早的库升级到 v4 后既有节点行的清单为空，这类配对需要在本机重新确认才能恢复可见（`NODE_LINK_PROTOCOL.md` §8.2 的升级副作用）。
 
 #### `node.pair.reject`
 
@@ -590,7 +594,7 @@ $ acp-remote device pair --request session.read --sas 481502 --fingerprint ab12�
   - `export.create`、`import.add` 重试得到 `local.conflict`；`*.revoke`、`*.remove` 重试得到 `local.not_found`；
   - CLI 不得自动重试任何 mutation 方法。
 - **endpoint 创建失败**（权限不符、路径被占用、socket 被替换为符号链接、目录权限不符、旧 socket 仍存活）→ 正式模式拒绝启动，不得降级为“无管理通道”或临时暴露无认证 endpoint（ADR-0004 决策 8、`SECURITY_DESIGN.md` §8）。
-- **撤销与关闭顺序**：`device.revoke`、`node.revoke`、`export.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
+- **撤销与关闭顺序**：`device.revoke`、`node.revoke`、`export.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；节点方向的 `node.pair.confirm` 在信任行提交后同样关闭该节点的活动连接（收窄/重新授权自下一次握手生效，`NODE_LINK_PROTOCOL.md` §8.2）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
 - **审计与日志**：拒绝连接、`SECURITY_DESIGN.md` §14.2 类别覆盖的安全动作（配对批准/拒绝、撤销、凭据配置等）记对应审计事件；**方法失败只记结构化日志**——§14.2 的封闭类别里没有「方法失败」，不得复用 `authorization.denied` 把参数错误与 scope 拒绝混为一谈。日志遵守 §14.1 的允许字段。
 
 ## 8. 版本与演进
