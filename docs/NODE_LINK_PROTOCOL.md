@@ -2,6 +2,7 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。节点侧状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）尚未实现。  
 > 版本：1.0  
+> 修订记录（2026-09-27，v1 内合同修订，未实现未发布，`node-trust-export-ids` 变更）：§8.2 的信任记录新增 `exportIds`（按节点收窄可见 Export 的白名单）——可见性三条件、清单只能收窄、`export.revoke` 不级联清理清单条目、只在配对确认时填报（无配对后修改入口，属已知限制）、v3 及更早的库升级到 v4 后既有节点行清单为空（不得默认放权）。Node Link wire 与 fixture 不变：`exportIds` 不进握手/catalog/resource/command，消息形状与错误码登记均未动。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布）：`node.challenge` 增加必需字段 `catalogRevision`(decimal string)——§9.3/§9.4 的两个连接 transcript domain 都含 tag 6 `catalogRevision`，而此前的握手消息不带该字段，Access 无法在首次连接上验证 `nodeProof` 或构造自己的 proof（design.md D13 的用户裁决 A）；§8.2 明确首阶段 Export 可见性只取「未撤销且 `export.scopes ∩` 信任记录 `grants ≠ ∅`」，`exportIds` 维度推后（用户裁决 (b)，与 `node-link-owner` 的 R51/R52 一致）。  
 > 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceAlias`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
@@ -266,10 +267,19 @@ accessNodeId
 accessPublicKey
 nodeName / nodeKind
 scopes          # grant.* 子集
+exportIds       # ExportId 集合；本机 node.pair.confirm 填报，只能收窄可见 Export
 createdAt / revokedAt
 ```
 
-首阶段**不使用**独立的 `exportIds` 维度（v1 的信任记录不落这一列）：Export 可见性只由「该 Export 未撤销」与「`export.scopes ∩` 该节点信任记录的 `grants ≠ ∅`」两个条件决定，`catalog.snapshot` 与 `resource.attach` 共用同一份判定，不得各自实现一套。空交集（包括 Export 的 `scopes` 为空）即不可见，因此「按节点枚举 Export」这类更细的授权粒度被显式推迟：将来要落地 `exportIds`，必须同时定义它在配对时的填报、撤销语义与迁移，并按 §2.3 的兼容流程处理，不能把现有字段当成已有能力。
+信任记录**带** `exportIds`（`ExportId` 集合，由本机在配对确认时填报，见 `LOCAL_ADMIN_PROTOCOL.md` §5.4）：Export 对该 Access 节点可见必须**同时**满足三个条件——① 该 Export 未撤销；② `export.scopes ∩` 该节点信任记录的 `grants ≠ ∅`；③ `export.exportId ∈ exportIds`。`catalog.snapshot` 与 `resource.attach`（以及 Owner 侧的命令授权判定）复用**同一份**判定，不得各自实现一套。**清单只能收窄，不能放宽**：条件 ③ 与 ② 取交集，任何路径都不得因清单绕过 `scopes ∩ grants`（有效权限是交集，§10）。空清单即看不到任何 Export——包括 `scopes` 与 `grants` 相交的那些；Export 的 `scopes` 为空同样不可见。
+
+`export.revoke` **不**级联清理清单条目：撤销后该 Export 只是不再满足条件 ① 而不可见，条目原样保留；重新 `export.create` 得到新的 `exportId`，旧 id 不会因此复活。
+
+本切片**只在配对确认时填报**（`node.pair.confirm` 的必填 `exportIds`，`LOCAL_ADMIN_PROTOCOL.md` §5.4）：没有「配对后修改清单」的入口，修改 = `node.revoke` + 重新配对，这是本切片的**已知限制**。填报时每个 id 必须本机存在且未撤销（否则 `local.not_found`），其 `scopes` 必须与本次 `grants` 有交集（否则 `local.invalid_params`）；三类失败都不创建信任。
+
+**升级副作用**：v3 及更早的库升级到 v4 后 `owned_node.export_ids_json` 由默认值得到 `'[]'`，既有节点行的清单因而是空的——这些配对在 Owner 本机重新 `node pair confirm` 之前看不到任何 Export，连接与握手仍然正常。这是有意的：清单是必需集合，迁移**不得默认放权**（`CORE_PORTS_AND_STORAGE.md` §7.2/§7.3）。
+
+Node Link **wire 不加字段**：`exportIds` 只在本机管理面与 CLI 可见，Access 既不理解、也拿不到自己的清单，仍按 catalog 可见集推导 `local.not_found`/`local.unavailable`；握手、catalog、resource、command 的 wire 形状与 `fixtures/node-link/v1/` 因此都不变，§2.3 的兼容流程无需启动。收窄清单也**不改 Access 侧的 Import 行为**：Owner 收窄后，对端本地已导入的 Import 仍然存在，只是对应 Export 从 catalog 消失，后续交付按既有规则失败（本次只文档化，`import.*` 的行为与孤儿 Import 的清理都不变）。
 
 ### 8.3 无传递信任
 
