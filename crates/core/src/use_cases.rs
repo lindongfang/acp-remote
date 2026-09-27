@@ -993,9 +993,11 @@ impl UseCases {
     /// Node Link 会话读的归属前置：对端是已配对的 `access` 行、Export 存在且未撤销、会话存在且其
     /// Agent 属于该 Export。
     ///
-    /// 「这个 Export 是否对该节点可见」（`design.md` D4 的 `exportIds` 口径）不在 core 判定：它是
-    /// 适配器的**单点可见性策略**（待用户裁决，见 WP5 handoff）；core 只守住「sessionRef 确实属于该
-    /// Export」这条硬底线，避免把 `(exportId, sessionId)` 当成可任意组合的读取钥匙。
+    /// 「这个 Export 是否对该节点可见」（`design.md` D1 的三条件：未撤销 ∧ `scopes ∩ grants ≠ ∅`
+    /// ∧ `exportId ∈ node.export_ids`）不在本入口判定：它是适配器的**单点可见性策略**
+    /// （`node_link::catalog::visible_exports`），命令授权则由 `Broker::node_allowed` 按同一份信任
+    /// 记录判定；core 这里只守住「sessionRef 确实属于该 Export」这条硬底线，避免把
+    /// `(exportId, sessionId)` 当成可任意组合的读取钥匙。
     async fn node_link_session_access(
         &self,
         access_node: &NodeId,
@@ -2238,6 +2240,7 @@ mod tests {
             kind,
             crate::model::Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
             crate::model::GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
+            Vec::new(),
             state,
             match kind {
                 NodeKind::Owner => Some("wss://owner.example/acpr".to_owned()),
@@ -2254,14 +2257,18 @@ mod tests {
         .expect("node record")
     }
 
-    /// 与 [`node_record`] 相同，但 grants 由调用方给出（Owner 侧授权的查询用例）。
-    fn paired_node(id: &NodeId, grants: &[&str]) -> NodeRecord {
+    /// 与 [`node_record`] 相同，但 grants 与点名的 Export 清单由调用方给出（Owner 侧授权的查询用例）。
+    fn paired_node(id: &NodeId, grants: &[&str], export_ids: &[&str]) -> NodeRecord {
         NodeRecord::try_new(
             id.clone(),
             "office access",
             NodeKind::Access,
             crate::model::Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
             crate::model::GrantSet::try_from_iter(grants.iter().copied()).expect("grants"),
+            export_ids
+                .iter()
+                .map(|id| ExportId::new(id).expect("export id"))
+                .collect(),
             NodeState::Paired,
             None,
             crate::broker::test_support::ts(0),
@@ -3120,13 +3127,12 @@ mod tests {
             access_node: node.clone(),
         };
         // 信任行 grants 与 Export scopes 的交集只有 `grant.observe`：观察类命令可用，
-        // `grant.remote-work` 类命令不可用。
-        fixture
-            .world
-            .nodes
-            .lock()
-            .expect("lock")
-            .push(paired_node(&node, &["grant.observe"]));
+        // `grant.remote-work` 类命令不可用；该行点名的 Export 清单同时是授权的第三个条件。
+        fixture.world.nodes.lock().expect("lock").push(paired_node(
+            &node,
+            &["grant.observe"],
+            &["export-observe"],
+        ));
         fixture
             .world
             .exports
@@ -3167,12 +3173,11 @@ mod tests {
 
         // 信任记录 grants 不含该 grant → 拒绝（`grant.observe` 不在 remote-work 节点的 grants 里）。
         let remote_work = NodeId::new(&uuid_text(125)).expect("node");
-        fixture
-            .world
-            .nodes
-            .lock()
-            .expect("lock")
-            .push(paired_node(&remote_work, &["grant.remote-work"]));
+        fixture.world.nodes.lock().expect("lock").push(paired_node(
+            &remote_work,
+            &["grant.remote-work"],
+            &["export-observe"],
+        ));
         let error = block_on(fixture.use_cases.list_sessions(
             &Actor::Node {
                 node: remote_work.clone(),
@@ -3228,6 +3233,88 @@ mod tests {
             .is_err(),
             "没有任何覆盖该命令的 Export 时失败关闭"
         );
+    }
+
+    /// 用户 2026-09-27 裁决的收窄型白名单（`design.md` D1 的条件③）：Owner 侧授权必须要求目标 Export
+    /// 在该信任记录的 `export_ids` 内，且**清单为空时即使 `scopes ∩ grants` 非空也不可用**
+    /// （与 `node_link::catalog::visible_exports` 同口径）。
+    #[test]
+    fn owner_side_node_authorization_requires_the_export_to_be_nominated() {
+        let fixture = fixture();
+        let node = NodeId::new(&uuid_text(131)).expect("node");
+        let actor = Actor::Node {
+            node: node.clone(),
+            access_node: node.clone(),
+        };
+        // 两个 Export 的 scopes 都与信任行 grants 相交（条件②恒成立），差别只在清单（条件③）
+        // 与它们覆盖的 agent：两个不可用都只能是条件③造成的。
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-covered",
+                &["agent-1"],
+                &["grant.observe"],
+                false,
+            ));
+        fixture
+            .world
+            .exports
+            .lock()
+            .expect("lock")
+            .push(export_record(
+                "export-other-agent",
+                &["agent-2"],
+                &["grant.observe"],
+                false,
+            ));
+        let read = |actor: &Actor| {
+            block_on(fixture.use_cases.read_session(
+                actor,
+                HistoryQuery {
+                    session: fixture.session.clone(),
+                    include: HistoryInclude {
+                        messages: false,
+                        turns: false,
+                        pending_interactions: false,
+                        config_options: false,
+                        capabilities: false,
+                    },
+                    after: None,
+                    limit: ReplayLimit::default(),
+                },
+            ))
+        };
+        let seed_node = |export_ids: &[&str]| {
+            let mut nodes = fixture.world.nodes.lock().expect("lock");
+            nodes.retain(|record| record.node_id() != &node);
+            nodes.push(paired_node(&node, &["grant.observe"], export_ids));
+        };
+
+        // ① 清单点名覆盖该会话 agent 的 Export → 通过。
+        seed_node(&["export-covered"]);
+        read(&actor).expect("清单内且 scopes ∩ grants 非空时必须可用");
+
+        // ② 清单不含该 Export（只列了另一个）→ 不可用，即使它的 scopes ∩ grants 非空。
+        seed_node(&["export-other-agent"]);
+        let error = read(&actor).expect_err("清单外的 Export 不得成为授权来源");
+        assert!(
+            matches!(
+                error,
+                PortError::InvalidRequest(reason) if reason == "authorization.scope_denied"
+            ),
+            "与目录层同口径：不可见即不可用"
+        );
+
+        // ③ 空清单 → 不可用（方案 A：空清单 = 看不到任何 Export，不得默认放权）。
+        seed_node(&[]);
+        let error = read(&actor).expect_err("空清单时即使 scopes ∩ grants 非空也不得授权");
+        assert!(matches!(
+            error,
+            PortError::InvalidRequest(reason) if reason == "authorization.scope_denied"
+        ));
     }
 
     /// design D12：claim/status 在 `LocalCli` 之外只接受**绑定该配对**的 `Actor::PairingClaimant`；

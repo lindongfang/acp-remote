@@ -14,11 +14,11 @@ use sqlx::{Executor, Sqlite};
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v3：两张审计表的 `actor_kind`/`action` CHECK 扩宽）。
-pub const FILE_FORMAT_VERSION: i64 = 3;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v4：`owned_node` 末尾新增 `export_ids_json`）。
+pub const FILE_FORMAT_VERSION: i64 = 4;
 /// §7.2：`meta.owned_schema_version` 的已知版本。
-pub const OWNED_SCHEMA_VERSION: i64 = 3;
-/// §7.2：`meta.imported_schema_version` 的已知版本。
+pub const OWNED_SCHEMA_VERSION: i64 = 4;
+/// §7.2：`meta.imported_schema_version` 的已知版本（本次不变：v4 只动 owned 家族的 `owned_node`）。
 pub const IMPORTED_SCHEMA_VERSION: i64 = 3;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS owned_node (
   last_connected_at TEXT,
   revoked_at     TEXT,
   revoke_reason  TEXT CHECK (revoke_reason IN ('user_requested','key_changed','compromised')),
+  export_ids_json TEXT NOT NULL DEFAULT '[]',  -- LOCAL_ADMIN_PROTOCOL.md §5.4 的 exportIds[]
   PRIMARY KEY (node_id, kind),
   CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
   CHECK ((kind = 'owner') = (owner_endpoint IS NOT NULL)),
@@ -607,6 +608,18 @@ ALTER TABLE imported_audit_v3 RENAME TO imported_audit;
 CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 "#;
 
+/// §7.2 的 v3 → v4 升级：`owned_node` 末尾追加 `export_ids_json`。
+///
+/// **只加列，不做 12-step 表重建**：重建的唯一理由是改既有 CHECK（v2 → v3 的先例），而本段不动任何
+/// 约束。`ALTER TABLE ADD COLUMN` 也把列追加在末尾，因此升级库与新建库的 `pragma table_info` 列顺序
+/// 逐项相等。整表 `NOT NULL` 由默认值满足，因此既有节点行得到 `'[]'`——即**不默认放权**（升级后这些
+/// 配对在本机重新 `node pair confirm` 之前看不到任何 Export，连接与握手仍然正常）。
+///
+/// 本段不碰 `imported_*`（imported 家族版本保持 3），也不碰任何行与序号。
+const V4_UPGRADE_OWNED: &str = r#"
+ALTER TABLE owned_node ADD COLUMN export_ids_json TEXT NOT NULL DEFAULT '[]';
+"#;
+
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
 ///
 /// 配置加载属 `app`；本结构只承载 `storage-sqlite` 需要知道的部分（`storage.flush_interval_ms` 不在
@@ -913,6 +926,10 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 /// 事务里落盘，所以这两个条件一起出现就等价于「库是旧形状」。新建库由两个 DDL 常量直接建成当前形状
 /// （`user_version` 此时是 0，不能只按版本判断）；已经是最新版的库**跳过**全部升级步骤，因此第二次
 /// 打开不产生任何 DDL、行级或版本写入（§9.1 的逐字节幂等）。
+///
+/// 事务内每段升级另有自己的版本守卫（`file_version < N`，见函数体），因此老库连续升级、而「已经比某段
+/// 新」的库不会重跑那一段的 12-step 重建。v4 段另外只作用于**升级前就存在**的 `owned_node`（v1 库没有
+/// 这张表，它由 DDL 常量直接建成当前形状）。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
     let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
 
@@ -925,6 +942,9 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         });
     }
     let new_database = !table_exists(&mut *tx, "owned_session").await?;
+    // v4 段只给**升级前就存在**的 `owned_node` 追加列：v1 库没有这张表，它由下面的 DDL 常量按**当前
+    // 形状**（已含 `export_ids_json`）建出来，那时再 `ALTER TABLE ADD COLUMN` 就是重复列。
+    let owned_node_pre_existing = table_exists(&mut *tx, "owned_node").await?;
 
     sqlx::raw_sql(OWNED_SCHEMA_V1).execute(&mut *tx).await?;
     sqlx::raw_sql(IMPORTED_SCHEMA_V1).execute(&mut *tx).await?;
@@ -948,10 +968,14 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
     }
 
     if !new_database && file_version < FILE_FORMAT_VERSION {
-        // v1 → v2 → v3（§7.2 的四步升级）：两张审计表的 CHECK 扩宽与 `imported_import` 的拆分必须在
-        // 同一个事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态
-        // （§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此每一段都是 12-step 表重建，且把
-        // 全部行（含 `audit_id`）一起搬过去。
+        // v1 → v2 → v3 → v4（§7.2 的连续升级）：两张审计表的 CHECK 扩宽与 `imported_import` 的拆分必须
+        // 在同一个事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态
+        // （§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此 v2/v3 两段都是 12-step 表重建，且把
+        // 全部行（含 `audit_id`）一起搬过去；v4 段只往 `owned_node` 加列（不重建）。
+        //
+        // 每段都有自己的版本守卫（`file_version < N`）：升级判据是 `file_version < FILE_FORMAT_VERSION`，
+        // 不守卫的段会在「文件格式已经比该段新、但仍低于最新版」时重复执行那些 12-step 重建——例如
+        // 常量推进到 4 之后，一个 v3 库会重跑 v3 段（多余且会重写 `sqlite_master`）。
         //
         // 序列在**全部**重建之前取一次、之后回填一次：每段重建的 `DROP TABLE` 都会带走
         // `sqlite_sequence` 里的那一行，分段回填会让前一段的回填结果被后一段再次丢掉。
@@ -960,8 +984,13 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
             sqlx::raw_sql(V2_UPGRADE_OWNED).execute(&mut *tx).await?;
             sqlx::raw_sql(V2_UPGRADE_IMPORTED).execute(&mut *tx).await?;
         }
-        sqlx::raw_sql(V3_UPGRADE_OWNED).execute(&mut *tx).await?;
-        sqlx::raw_sql(V3_UPGRADE_IMPORTED).execute(&mut *tx).await?;
+        if file_version < 3 {
+            sqlx::raw_sql(V3_UPGRADE_OWNED).execute(&mut *tx).await?;
+            sqlx::raw_sql(V3_UPGRADE_IMPORTED).execute(&mut *tx).await?;
+        }
+        if file_version < 4 && owned_node_pre_existing {
+            sqlx::raw_sql(V4_UPGRADE_OWNED).execute(&mut *tx).await?;
+        }
         restore_audit_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;
     }

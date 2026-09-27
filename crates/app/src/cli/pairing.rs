@@ -163,6 +163,8 @@ pub(crate) struct PairArgs {
     pub(crate) display_name: Option<String>,
     /// `node.pair.begin` 的 `requestedGrants`。
     pub(crate) grants: Vec<String>,
+    /// `node.pair.confirm` 的 `exportIds`（可重复的 `--export-id`；零次 = 空清单）。
+    pub(crate) export_ids: Vec<String>,
     /// 非交互确认用的 SAS（逐字匹配）。
     pub(crate) sas: Option<String>,
     /// 非交互确认用的指纹（逐字匹配）。
@@ -180,6 +182,7 @@ impl From<&super::DevicePair> for PairArgs {
             pairing_url: None,
             display_name: None,
             grants: Vec::new(),
+            export_ids: Vec::new(),
             sas: args.sas.clone(),
             fingerprint: args.fingerprint.clone(),
             expires_in_ms: args.expires_in_ms,
@@ -196,6 +199,7 @@ impl From<&super::NodePair> for PairArgs {
             pairing_url: args.pairing_url.clone(),
             display_name: args.display_name.clone(),
             grants: args.grant.clone(),
+            export_ids: args.export_id.clone(),
             sas: args.sas.clone(),
             fingerprint: args.fingerprint.clone(),
             expires_in_ms: args.expires_in_ms,
@@ -339,11 +343,33 @@ pub(crate) fn begin_params(target: PairTarget, args: &PairArgs) -> JsonObject {
 }
 
 /// `*.pair.confirm` 的 `params`：提交**展示过的**请求集合。
-pub(crate) fn confirm_params(target: PairTarget, pairing_id: &str, claim: &Claim) -> JsonObject {
+///
+/// 节点方向另带必需的 `exportIds`（§5.4）：它是**用户命令行给出的**清单（`--export-id`，可重复），
+/// 因此不经 `status` 回显，也不受「提交展示过的集合」约束——清单是本次授权的一部分，不是对端的请求值。
+pub(crate) fn confirm_params(
+    target: PairTarget,
+    pairing_id: &str,
+    claim: &Claim,
+    export_ids: &[String],
+) -> JsonObject {
     let mut params = JsonObject::new();
     params.insert("pairingId".to_owned(), Value::from(pairing_id));
     params.insert(target.granted_key().to_owned(), strings(&claim.requested));
+    if target == PairTarget::Node {
+        params.insert("exportIds".to_owned(), strings(export_ids));
+    }
     params
+}
+
+/// 空清单的醒目提醒（§5.4/`design.md` D6）：零个 `--export-id` 是合法输入（空清单 = 该节点看不到
+/// 任何 Export），但必须让人当场看见这个后果。提醒**不阻断**：确认仍照常执行（不引入新开关）。
+pub(crate) fn empty_export_ids_notice(
+    target: PairTarget,
+    export_ids: &[String],
+) -> Option<&'static str> {
+    (target == PairTarget::Node && export_ids.is_empty()).then_some(
+        "警告：本次确认没有点名任何 Export（--export-id 一次都没给）：该节点将看不到任何 Export。",
+    )
 }
 
 /// `*.pair.reject` 的 `params`（§5.3/§5.4 两个方向同形）：`reason = null` = 用户主动拒绝，不附理由。
@@ -371,6 +397,10 @@ pub(crate) fn verify_supplied(claim: &Claim, supplied: &Supplied) -> Result<(), 
 }
 
 /// 配对仪式（§5.8）。成功后打印对端 id。
+///
+/// 零个 `--export-id` 时在「展示认领信息」与「确认」之间打印 [`empty_export_ids_notice`]：提醒就在
+/// 用户落定前一刻出现，且**不阻断**（确认照常执行）。提醒走 stdout，与配对提示同一通道——stderr 的
+/// 契约是「失败时恰好一行 JSON」（见 `crates/app/tests/support`），不得混入人类可读文本。
 pub(crate) fn run(
     context: &mut Context,
     target: PairTarget,
@@ -387,6 +417,9 @@ pub(crate) fn run(
     let claimed = runtime.block_on(await_claim(&endpoint, target, args))?;
     // 认领后**先**展示，再允许确认（§5.8 的第 2 步）。
     println!("{}", claimed.claim.display(target));
+    if let Some(notice) = empty_export_ids_notice(target, &args.export_ids) {
+        println!("{notice}");
+    }
     let answer = match &supplied {
         // 非交互：`--sas`/`--fingerprint` 逐字一致才继续；不一致即失败（不调 confirm、不调 reject、不改状态）。
         Some(supplied) => {
@@ -400,6 +433,7 @@ pub(crate) fn run(
         target,
         &claimed.pairing_id,
         &claimed.claim,
+        &args.export_ids,
         answer,
     ))?;
     print_result(&result);
@@ -451,6 +485,7 @@ async fn settle_claim<M: PairCalls + Send>(
     target: PairTarget,
     pairing_id: &str,
     claim: &Claim,
+    export_ids: &[String],
     answer: Answer,
 ) -> Result<JsonObject, Failure> {
     if answer == Answer::Rejected {
@@ -467,7 +502,10 @@ async fn settle_claim<M: PairCalls + Send>(
         ));
     }
     calls
-        .call(target.confirm(), confirm_params(target, pairing_id, claim))
+        .call(
+            target.confirm(),
+            confirm_params(target, pairing_id, claim, export_ids),
+        )
         .await
 }
 
@@ -692,7 +730,7 @@ mod tests {
             (PairTarget::Node, Method::NodePairReject),
         ] {
             let mut spy = CallSpy::default();
-            let error = settle_claim(&mut spy, target, "P", &claim(), Answer::Rejected)
+            let error = settle_claim(&mut spy, target, "P", &claim(), &[], Answer::Rejected)
                 .await
                 .expect_err("用户拒绝必须以失败退出（不得改判成功）");
             assert_eq!(
@@ -733,6 +771,7 @@ mod tests {
             PairTarget::Device,
             "P",
             &claim(),
+            &[],
             Answer::Rejected,
         )
         .await
@@ -757,7 +796,7 @@ mod tests {
             (PairTarget::Node, Method::NodePairConfirm, "grants"),
         ] {
             let mut spy = CallSpy::default();
-            settle_claim(&mut spy, target, "P", &claim(), Answer::Confirmed)
+            settle_claim(&mut spy, target, "P", &claim(), &[], Answer::Confirmed)
                 .await
                 .expect("确认必须调 confirm");
             assert_eq!(spy.methods(), vec![expected]);
@@ -874,14 +913,100 @@ mod tests {
         );
 
         let claim = claim();
+        // 设备方向没有 `exportIds` 面：传进来也不进 params（§5.3 的形状）。
         assert_eq!(
-            Value::Object(confirm_params(PairTarget::Device, "P", &claim)),
+            Value::Object(confirm_params(
+                PairTarget::Device,
+                "P",
+                &claim,
+                &["export-1".to_owned()],
+            )),
             serde_json::json!({ "pairingId": "P", "scopes": ["session.list", "session.read"] })
         );
+        // 节点方向：零个 `--export-id` → 空清单；多个 → 按命令行顺序原样提交（Daemon 归一化）。
         assert_eq!(
-            Value::Object(confirm_params(PairTarget::Node, "P", &claim)),
-            serde_json::json!({ "pairingId": "P", "grants": ["session.list", "session.read"] })
+            Value::Object(confirm_params(PairTarget::Node, "P", &claim, &[])),
+            serde_json::json!({
+                "pairingId": "P",
+                "grants": ["session.list", "session.read"],
+                "exportIds": [],
+            })
         );
+        assert_eq!(
+            Value::Object(confirm_params(
+                PairTarget::Node,
+                "P",
+                &claim,
+                &["export-b".to_owned(), "export-a".to_owned()],
+            )),
+            serde_json::json!({
+                "pairingId": "P",
+                "grants": ["session.list", "session.read"],
+                "exportIds": ["export-b", "export-a"],
+            })
+        );
+    }
+
+    /// §5.4/`design.md` D6：零个 `--export-id` 时给出醒目提醒但**不改判**（确认仍照常执行），
+    /// 且提醒只属于节点方向（设备方向没有这一面）。
+    #[tokio::test]
+    async fn an_empty_export_id_list_warns_without_blocking() {
+        let notice = empty_export_ids_notice(PairTarget::Node, &[])
+            .expect("空清单必须给出提醒（该节点将看不到任何 Export）");
+        assert!(notice.contains("该节点将看不到任何 Export"), "{notice}");
+        assert!(notice.contains("警告"), "{notice}");
+        assert!(
+            empty_export_ids_notice(PairTarget::Node, &["export-1".to_owned()]).is_none(),
+            "给了清单就不提醒"
+        );
+        assert!(
+            empty_export_ids_notice(PairTarget::Device, &[]).is_none(),
+            "设备方向没有 exportIds 面，不提醒"
+        );
+
+        // 「不阻断」的机器可判据：提醒存在的同时，确认路径照常调 `confirm`，且 `exportIds` 是空数组
+        // （不是省略字段——省略会被 Daemon 以 `local.invalid_params` 拒绝）。
+        let mut spy = CallSpy::default();
+        settle_claim(
+            &mut spy,
+            PairTarget::Node,
+            "P",
+            &claim(),
+            &[],
+            Answer::Confirmed,
+        )
+        .await
+        .expect("提醒不得阻断确认");
+        assert_eq!(spy.methods(), vec![Method::NodePairConfirm]);
+        assert_eq!(spy.params(0)["exportIds"], serde_json::json!([]));
+    }
+
+    /// `node pair` 的命令行映射：`--export-id` 可重复、零次得到空清单（`node list` 的展示由 Daemon 的
+    /// `result` 原样输出，见 `view::node` 的 `exportIds`）。
+    #[test]
+    fn the_node_pair_flags_map_to_the_confirm_params() {
+        let empty = PairArgs::from(&super::super::NodePair {
+            mode: Some("owner".to_owned()),
+            pairing_url: None,
+            display_name: None,
+            grant: Vec::new(),
+            export_id: Vec::new(),
+            sas: None,
+            fingerprint: None,
+            expires_in_ms: None,
+        });
+        assert!(empty.export_ids.is_empty(), "零次 = 空清单");
+        let two = PairArgs::from(&super::super::NodePair {
+            mode: Some("owner".to_owned()),
+            pairing_url: None,
+            display_name: None,
+            grant: Vec::new(),
+            export_id: vec!["export-1".to_owned(), "export-2".to_owned()],
+            sas: None,
+            fingerprint: None,
+            expires_in_ms: None,
+        });
+        assert_eq!(two.export_ids, vec!["export-1", "export-2"]);
     }
 
     /// 展示块必须含名称、指纹、SAS、请求集合与过期时间（确认前的人工核对材料）。

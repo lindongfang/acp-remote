@@ -238,6 +238,12 @@ struct NodePair {
     /// 本机允许授予的 grant 上限（逗号分隔，可重复）。
     #[arg(long = "grant", value_delimiter = ',', value_name = "GRANT")]
     grant: Vec<String>,
+    /// 该 Access 节点可见的 Export 清单（可重复；一次都不给 = 空清单，该节点看不到任何 Export）。
+    ///
+    /// 清单只收窄可见性：它不绕过 Export 的 `scopes` 与该节点 grants 的交集，也不影响 Node Link 的
+    /// 握手与连接（空清单的节点仍能配对、握手，只是 catalog 为空）。
+    #[arg(long = "export-id", value_name = "ID")]
+    export_id: Vec<String>,
     /// 非交互场景必须与 `--fingerprint` 同时给出：6 位 SAS（逐字匹配）。
     #[arg(long, value_name = "DIGITS")]
     sas: Option<String>,

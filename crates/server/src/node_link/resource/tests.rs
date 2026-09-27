@@ -422,6 +422,7 @@ impl Fixture {
                 NodeKind::Access,
                 test_public_key().fingerprint(),
                 GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+                vec![export_id()],
                 NodeState::Paired,
                 None,
                 ts("2026-09-18T09:00:00.000Z"),
@@ -630,6 +631,61 @@ async fn a_reissued_attachment_invalidates_the_previous_generation() {
     assert_eq!(
         error_code(&frames[0]),
         "nodelink.resource.attach_generation_stale"
+    );
+}
+
+/// `design.md` D1 的条件③（与 catalog 同口径）：不在该节点 `exportIds` 清单内的 Export 即使
+/// scopes 与 grants 相交也不可见 → `resource.attach` 以 `export.not_granted` 拒绝（与 catalog 的
+/// 「清单外不出现」是同一个判定点：`catalog::export_is_visible` 直接复用 `visible_exports`）。
+#[tokio::test]
+async fn an_export_outside_the_nominated_list_is_not_granted() {
+    let mut fixture = Fixture::new().await;
+    // 覆盖同一信任行，把清单换成另一条 id（原 Export 从清单里消失）。
+    fixture.world.trust.seed_node(
+        NodeRecord::try_new(
+            NodeId::new(ACCESS_NODE).expect("node id"),
+            "Office Access",
+            NodeKind::Access,
+            test_public_key().fingerprint(),
+            GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+            vec![ExportId::new("export-other").expect("export id")],
+            NodeState::Paired,
+            None,
+            ts("2026-09-18T09:00:00.000Z"),
+            None,
+            None,
+        )
+        .expect("信任行"),
+    );
+    let route = fixture.route();
+    let envelope = fixture.envelope(
+        MessageType::ResourceAttach,
+        json!({ "remoteSessionRef": fixture.remote_session_ref() }),
+    );
+    assert_eq!(
+        route.route(&fixture.handle, &envelope).await,
+        RouteOutcome::Claimed
+    );
+    let frames = fixture.drain();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["type"], "link.error");
+    assert_eq!(
+        error_code(&frames[0]),
+        "nodelink.export.not_granted",
+        "清单外的 Export 与「与 grants 不相交」同码（可见性只有一个判定点）"
+    );
+    let row = acp_core::ports::TrustStore::node(
+        &fixture.world.trust,
+        &NodeId::new(ACCESS_NODE).expect("node id"),
+        NodeKind::Access,
+    )
+    .await
+    .expect("信任行")
+    .expect("行存在");
+    assert_eq!(
+        row.export_ids().len(),
+        1,
+        "用例前提：覆盖后的清单只点名另一条 Export"
     );
 }
 

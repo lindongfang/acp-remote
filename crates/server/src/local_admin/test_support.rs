@@ -1422,12 +1422,15 @@ impl TrustStore for FakeTrust {
                 .revoked_at()
                 .cloned()
                 .unwrap_or_else(|| write.context.at.clone());
+            // 撤销只改 `state`/`revoked_at`，**不**清理清单：与存储层同形（真实 `revoke_node` 只 UPDATE 这三
+            // 列，`owned_node.export_ids_json` 逐字保留；节点可见性由撤销状态本身挡住）。
             *record = NodeRecord::try_new(
                 record.node_id().clone(),
                 record.display_name(),
                 record.kind(),
                 record.node_public_key_fingerprint().clone(),
                 record.grants().clone(),
+                record.export_ids().to_vec(),
                 NodeState::Revoked,
                 record.owner_endpoint().map(str::to_owned),
                 record.created_at().clone(),
@@ -1546,6 +1549,7 @@ impl TrustStore for FakeTrust {
             PairingSettlement::Approved {
                 granted_scopes,
                 granted_grants,
+                granted_export_ids,
             } => {
                 if write.context.at.as_str() >= record.expires_at().as_str() {
                     return Err(PortError::Conflict(ConflictKind::Expired));
@@ -1572,7 +1576,12 @@ impl TrustStore for FakeTrust {
                                 "a node pairing must not carry scopes",
                             ));
                         }
-                        self.approve_node(&peer, granted_grants, &write.context.at);
+                        self.approve_node(
+                            &peer,
+                            granted_grants,
+                            granted_export_ids,
+                            &write.context.at,
+                        );
                     }
                 }
                 PairingState::Approved
@@ -1709,6 +1718,7 @@ impl FakeTrust {
             record.kind(),
             record.node_public_key_fingerprint().clone(),
             record.grants().clone(),
+            record.export_ids().to_vec(),
             record.state(),
             record.owner_endpoint().map(str::to_owned),
             record.created_at().clone(),
@@ -1758,8 +1768,15 @@ impl FakeTrust {
         self.seed_device(record);
     }
 
-    /// 批准（节点）：对端角色恒为 `Access`，`ownerEndpoint` 为 `None`。
-    fn approve_node(&self, peer: &PairingPeer, granted_grants: &GrantSet, at: &Timestamp) {
+    /// 批准（节点）：对端角色恒为 `Access`，`ownerEndpoint` 为 `None`；`granted_export_ids` 是本次
+    /// `node.pair.confirm` 点名的可见 Export 清单（随信任行挂盘，成为可见性的第三个条件）。
+    fn approve_node(
+        &self,
+        peer: &PairingPeer,
+        granted_grants: &GrantSet,
+        granted_export_ids: &[ExportId],
+        at: &Timestamp,
+    ) {
         let PeerIdentity::Node(node_id) = peer.id() else {
             unreachable!("目标族已由写集保证")
         };
@@ -1769,6 +1786,7 @@ impl FakeTrust {
             NodeKind::Access,
             peer.public_key_fingerprint(),
             granted_grants.clone(),
+            granted_export_ids.to_vec(),
             NodeState::Paired,
             None,
             at.clone(),
@@ -1839,10 +1857,14 @@ impl EntropySource for FakeEntropy {
 /// （`TrustStore::nodes_for` / `ExportStore::export`），并把「回读时是否已经撤销」随通知一起记下。
 /// 这样「提交后才通知」不再只能从调用顺序间接推断（一条日志看不出先后），而是一个可断言的持久事实：
 /// 用例断言每一次通知的回读值都是 `true`。
+///
+/// `close_node`（撤销）与 `close_node_after_reauth`（重新配对收窄）分列两张表：两者语义不同，合成一个
+/// 计数就会让「撤销不得复用重新配对的关闭路径」这件事不可断言。
 #[derive(Clone, Default)]
 pub(crate) struct RecordingCloser {
     devices: Arc<Mutex<Vec<String>>>,
     nodes: Arc<Mutex<Vec<String>>>,
+    nodes_after_reauth: Arc<Mutex<Vec<String>>>,
     exports: Arc<Mutex<Vec<String>>>,
     /// 持久读入口（`TestWorld` 装配；未装配时回读记 `false`，断言会失败而不是静默通过）。
     trust: Option<FakeTrust>,
@@ -1865,8 +1887,15 @@ impl RecordingCloser {
         self.devices.lock().expect("关闭锁").clone()
     }
 
+    /// `node.revoke` 关闭的节点（按调用顺序）。
     pub(crate) fn closed_nodes(&self) -> Vec<String> {
         self.nodes.lock().expect("关闭锁").clone()
+    }
+
+    /// `node.pair.confirm` 作废连接的节点（按调用顺序）——与 [`Self::closed_nodes`] 分开记录，
+    /// 两类关闭因此可区分。
+    pub(crate) fn closed_nodes_after_reauth(&self) -> Vec<String> {
+        self.nodes_after_reauth.lock().expect("关闭锁").clone()
     }
 
     /// 收到 `export.revoked` 通知的 Export（按调用顺序）。
@@ -1914,6 +1943,13 @@ impl ConnectionCloser for RecordingCloser {
             .expect("关闭锁")
             .push(revoked);
         self.nodes
+            .lock()
+            .expect("关闭锁")
+            .push(node.as_str().to_owned());
+    }
+
+    async fn close_node_after_reauth(&self, node: &NodeId) {
+        self.nodes_after_reauth
             .lock()
             .expect("关闭锁")
             .push(node.as_str().to_owned());
