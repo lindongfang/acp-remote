@@ -110,39 +110,9 @@ impl Chain {
                 .await;
         }
 
-        // ② 配对开始（二维码）。
-        let begin = owner
-            .admin(
-                Method::NodePairBegin,
-                json!({
-                    "mode": "owner",
-                    "pairingUrl": null,
-                    "displayName": "Owner Node",
-                    "requestedGrants": GRANTS,
-                }),
-            )
-            .await;
-        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
-        let pairing_url = begin["pairingUrl"].as_str().expect("pairingUrl");
-        let ticket = support::nodelink::ticket_from_url(pairing_url, &pairing_id);
-
-        // ③ Access 侧 claim（HMAC proof），并验证 Owner 证明。
-        let client_nonce = support::nodelink::nonce_text(0x41);
-        let claim = support::nodelink::claim_request(&ticket, &access, &client_nonce);
-        let reply = support::nodelink::post_json(
-            owner.addr,
-            server::node_link::CLAIM_PATH,
-            &serde_json::to_vec(&claim).expect("claim 可序列化"),
-        )
-        .await;
-        assert_eq!(
-            reply.status,
-            201,
-            "合法 claim 必须返回 201：{}",
-            String::from_utf8_lossy(&reply.body)
-        );
-        let body = reply.json();
-        support::nodelink::verify_owner_proof(&ticket, &body, &access, &client_nonce);
+        // ②③ 配对开始（二维码）+ Access 侧 claim（HMAC proof），并验证 Owner 证明。
+        let (ticket, body) = begin_and_claim(&owner, &access, 0x41).await;
+        let pairing_id = ticket.pairing_id.clone();
 
         // ④ 本地确认（真实的 local_admin 入口）：`exportIds` 是必需参数，本例只点名 `EXPORT_VISIBLE`，
         // 因此 `EXPORT_NARROWED`（scopes 相交）也必须对该节点不可见。
@@ -203,6 +173,30 @@ impl Chain {
         }
     }
 
+    /// 同一 Access 身份对同一 Owner **再**走一次配对（不 `node.revoke`），并用 `export_ids` 在本机确认。
+    ///
+    /// 返回本次配对的 ticket（重新握手要用它取 Owner 身份材料）与 `confirm` 的 result。
+    /// `nonce_seed` 必须与首次配对不同，避免两个配对共用同一个 client nonce。
+    async fn repair_and_confirm(
+        &self,
+        export_ids: Value,
+        nonce_seed: u8,
+    ) -> (PairingTicket, Value) {
+        let (ticket, _claim) = begin_and_claim(&self.owner, &self.access, nonce_seed).await;
+        let confirmed = self
+            .owner
+            .admin(
+                Method::NodePairConfirm,
+                json!({
+                    "pairingId": ticket.pairing_id.clone(),
+                    "grants": GRANTS,
+                    "exportIds": export_ids,
+                }),
+            )
+            .await;
+        (ticket, confirmed)
+    }
+
     /// 在真实 loopback listener 上完成 WSS 握手（含 `catalogRevision` 验签）。
     async fn connect(&self) -> NodeLinkClient {
         let mut client = NodeLinkClient::connect_plain(self.owner.addr).await;
@@ -215,6 +209,48 @@ impl Chain {
         .await;
         client
     }
+}
+
+/// 配对准备（②③）：`node.pair.begin --mode owner` → Access 侧 claim（HMAC proof）→ 验 Owner 证明。
+///
+/// 返回本次配对的 ticket 与 claim 响应体（`pairingRequestId`/`serverNonce` 供 status 用）。
+async fn begin_and_claim(
+    owner: &OwnerNode,
+    access: &AccessKey,
+    nonce_seed: u8,
+) -> (PairingTicket, Value) {
+    let begin = owner
+        .admin(
+            Method::NodePairBegin,
+            json!({
+                "mode": "owner",
+                "pairingUrl": null,
+                "displayName": "Owner Node",
+                "requestedGrants": GRANTS,
+            }),
+        )
+        .await;
+    let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
+    let pairing_url = begin["pairingUrl"].as_str().expect("pairingUrl");
+    let ticket = support::nodelink::ticket_from_url(pairing_url, &pairing_id);
+
+    let client_nonce = support::nodelink::nonce_text(nonce_seed);
+    let claim = support::nodelink::claim_request(&ticket, access, &client_nonce);
+    let reply = support::nodelink::post_json(
+        owner.addr,
+        server::node_link::CLAIM_PATH,
+        &serde_json::to_vec(&claim).expect("claim 可序列化"),
+    )
+    .await;
+    assert_eq!(
+        reply.status,
+        201,
+        "合法 claim 必须返回 201：{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    let body = reply.json();
+    support::nodelink::verify_owner_proof(&ticket, &body, access, &client_nonce);
+    (ticket, body)
 }
 
 /// 主人的 `session.create` 请求（`payload` 只允许四个键，禁带 `cwd`/`mcpServers`）。
@@ -668,6 +704,158 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
             4410,
             "节点撤销必须以 4410 关闭连接"
         );
+
+        chain.owner.stop().await;
+    });
+}
+
+/// 同一节点在**不撤销**的情况下重新配对并把清单收窄时，早已建立的 attachment 必须随连接作废。
+///
+/// 这条路径（`node.pair.begin → claim → node.pair.confirm`）不经过 `node.revoke`，而 `approve_node` 对
+/// 「同一 `nodeId` 已有 `paired` 行」没有状态守卫，因此清单可以被静默改写。可见性只在适配器
+/// （`node_link::catalog`）与 core 的 Owner 侧命令授权上判定：若确认不落到**连接边界**，这条连接会继续
+/// 按旧清单收到该 Export 的 `resource.event`（本用例的负向对照就是删掉那条 `close_node`）。
+#[test]
+fn a_narrowing_repair_closes_the_live_attachment() {
+    support::block_on(async {
+        let chain = Chain::up_to_approval("e2e-repair").await;
+        let owner = &chain.owner;
+        let mut client = chain.connect().await;
+
+        // ① 重新配对之前：本次点名清单里的 Export 可见（与主链同一个三条件判定点）。
+        client.step("catalog.subscribe");
+        client
+            .send("catalog.subscribe", json!({ "knownRevision": null }))
+            .await;
+        let snapshot = client.expect("catalog.snapshot").await;
+        let visible: Vec<&str> = snapshot["body"]["exports"]
+            .as_array()
+            .expect("exports 数组")
+            .iter()
+            .map(|entry| entry["exportId"].as_str().expect("exportId"))
+            .collect();
+        assert_eq!(visible, vec![EXPORT_VISIBLE], "收窄之前：{snapshot}");
+
+        // ② 在该 Export 上建立一条**活的** attachment：会话 → attach → subscribe → 收到一条正文事件。
+        client.step("session.create");
+        client
+            .send(
+                "command.submit",
+                session_create_body(
+                    &support::nodelink::uuid_text(),
+                    EXPORT_VISIBLE,
+                    WORKSPACE_ALIAS,
+                ),
+            )
+            .await;
+        let _ = client.expect("command.accepted").await;
+        let terminal = client.expect("command.terminal").await;
+        assert_eq!(terminal["body"]["terminal"]["status"], json!("completed"));
+        let session = terminal["body"]["terminal"]["result"]["remoteSessionRef"].clone();
+        let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
+
+        client.step("resource.attach");
+        client
+            .send("resource.attach", json!({ "remoteSessionRef": session }))
+            .await;
+        let attached = client.expect("resource.attached").await;
+        let attachment = json!({
+            "attachmentId": attached["body"]["attachmentId"],
+            "attachmentGeneration": attached["body"]["attachmentGeneration"],
+        });
+
+        client.step("resource.subscribe");
+        client
+            .send(
+                "resource.subscribe",
+                json!({
+                    "attachmentId": attachment["attachmentId"],
+                    "attachmentGeneration": attachment["attachmentGeneration"],
+                    "cursor": null,
+                }),
+            )
+            .await;
+        let _ = client.expect("resource.snapshot_begin").await;
+        let _ = client.expect("resource.snapshot_chunk").await;
+        let _ = client.expect("resource.snapshot_end").await;
+
+        let marker = "marker-before-repair-71bd";
+        client.step("session.prompt");
+        client
+            .send(
+                "command.submit",
+                session_prompt_body(
+                    &support::nodelink::uuid_text(),
+                    &session,
+                    &attachment,
+                    marker,
+                ),
+            )
+            .await;
+        let _ = client.expect("command.accepted").await;
+        assert_eq!(owner.release_events(marker), 2, "delta + turn 终态");
+        owner
+            .broker
+            .pump(&session_key(&session_id))
+            .await
+            .expect("提交后端事件");
+        // 会话状态机先行的 `turn.queued`/`turn.started` 也走 `resource.event`，因此要等到带本次 marker 的
+        // 正文事件才算「这条 attachment 真的在收事件」。
+        loop {
+            let candidate = client.expect("resource.event").await;
+            if candidate["body"]["payload"]["view"]
+                .to_string()
+                .contains(marker)
+            {
+                break;
+            }
+        }
+
+        // ③ 用更窄的清单（空 = 无可见）重新配对同一节点并确认：全程不 revoke。
+        let (ticket, confirmed) = chain.repair_and_confirm(json!([]), 0x71).await;
+        assert_eq!(
+            confirmed["nodeId"],
+            json!(ACCESS_NODE),
+            "重新配对必须落在同一节点身份上（没有 revoke、也没有新 nodeId）：{confirmed}"
+        );
+        assert_eq!(
+            confirmed["exportIds"],
+            json!([]),
+            "本次确认的清单必须如实回显（空清单 = 看不到任何 Export）：{confirmed}"
+        );
+
+        // ④ 授权变化必须落到连接边界：既有连接被关闭，新连接上的判定全部按已提交的信任行重算。
+        // 机制与 `node.revoke` 相同（同一把「授权变化 → 关连接」），但该节点并未撤销，因此没有
+        // `node.trust.revoked` 推送，只有 close 帧。若确认不作废连接，这条连接会继续收到该 Export 的
+        // `resource.event`——超时即「连接仍然活着」就是那个缺口。
+        client.step("repair close");
+        let code = tokio::time::timeout(std::time::Duration::from_secs(10), client.close_code())
+            .await
+            .expect(
+                "重新配对确认后既有连接必须被关闭（超时 = 连接仍然活着，收窄后的清单没有生效）",
+            );
+        assert_eq!(code, 4410, "重新配对按 `node.revoke` 的同一机制关闭连接");
+
+        // ⑤ 同一身份重新握手：按已提交的空清单重算，catalog 为空（旧 attachment 无法在空清单下复活）。
+        let mut fresh = NodeLinkClient::connect_plain(owner.addr).await;
+        support::nodelink::handshake(
+            &mut fresh,
+            &chain.access,
+            &ticket,
+            &support::nodelink::nonce_text(0x73),
+        )
+        .await;
+        fresh.step("catalog.subscribe after repair");
+        fresh
+            .send("catalog.subscribe", json!({ "knownRevision": null }))
+            .await;
+        let snapshot = fresh.expect("catalog.snapshot").await;
+        assert_eq!(
+            snapshot["body"]["exports"],
+            json!([]),
+            "空清单必须对新连接立即生效：{snapshot}"
+        );
+        drop(fresh);
 
         chain.owner.stop().await;
     });
