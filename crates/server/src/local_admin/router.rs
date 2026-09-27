@@ -18,8 +18,9 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    Actor, AgentProfile, Fingerprint, GrantSet, NodeKind, PairingId, PairingPeer, PairingRecord,
-    PairingState, PairingTarget, PeerIdentity, ProviderRef, ScopeSet, Timestamp, WorkspaceRecord,
+    Actor, AgentProfile, ExportId, Fingerprint, GrantSet, NodeKind, PairingId, PairingPeer,
+    PairingRecord, PairingState, PairingTarget, PeerIdentity, ProviderRef, ScopeSet, Timestamp,
+    WorkspaceRecord,
 };
 use acp_core::ports::{AuditQuery, AuditStore, Clock, TrustRecordRef};
 use acp_core::use_cases::UseCases;
@@ -810,7 +811,20 @@ impl LocalAdminRouter {
         ]))
     }
 
-    /// `node.pair.confirm`（§5.4）：分配初始 `grant.*` 并创建信任记录。
+    /// `node.pair.confirm`（§5.4）：分配初始 `grant.*`、带上本次点名的可见 Export 清单并创建信任记录。
+    ///
+    /// 信任行提交成功后关闭该节点的现有活动连接，强制重新握手后按新清单重算——同一节点重新配对并收窄
+    /// 清单时，既有 attachment 不得继续收到该 Export 的事件。
+    ///
+    /// `node.revoke` 与节点方向的 `node.pair.confirm` 都是**提交后关连接**，但两条路径的**语义与关闭码
+    /// 不同**：撤销推 `node.trust.revoked` 并以 `4410` 关闭并停止重连；重新配对**不**推消息、以 `1000`
+    /// （正常关闭）+ close reason 关闭，要求对端重连以重取 catalog（`NODE_LINK_PROTOCOL.md`
+    /// §8.2/§14.2/§15）。
+    ///
+    /// `exportIds` 是**必填**参数（缺失/不是字符串数组由 `params::node_pair_confirm` 以
+    /// `local.invalid_params` 拒绝）；清单里每个 id 是否存在、是否已撤销、是否与本次 `grants` 相交
+    /// 由存储层的落定事务校验（`design.md` D4），失败时它把 `local.not_found`/`local.invalid_params`
+    /// 原样带回。
     async fn node_pair_confirm(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.pair.confirm";
         let confirm = params::node_pair_confirm(params)?;
@@ -834,7 +848,10 @@ impl LocalAdminRouter {
             .pairing
             .authority()
             .settle(&record, &decision, &now)
-            .map_err(|error| params::map_pairing_error(OPERATION, error))?;
+            .map_err(|error| params::map_pairing_error(OPERATION, error))?
+            // 配对权威只产出集合对的批准结果（`PairingDecision` 不含 `exportIds`），Node Link 的可见
+            // 清单在本机管理面附加：它只属于节点配对（设备配对没有这一面）。
+            .with_granted_export_ids(confirm.export_ids.clone());
         let reference = self
             .deps
             .core
@@ -859,9 +876,25 @@ impl LocalAdminRouter {
             );
         }
         let confirmed_at = self.approved_at(OPERATION, &confirm.pairing_id).await?;
+        // 本次确认改变了该节点的**授权**（`grants` 与点名的 `exportIds` 清单都可能与既有行不同），
+        // 因此提交成功后把变化落到**连接边界**：强制该节点重新握手、重新订阅，新连接上的一切判定都按
+        // 已提交的信任行重算。首次配对这里恒是 no-op（配对行落定前不存在已配对身份，握手无法通过，
+        // 因而没有可关闭的活动连接）；同一节点在未撤销的情况下重新配对并把清单**收窄**时，若不作废
+        // 既有连接，早已建立的 attachment 会继续收到该 Export 的 `resource.event`——实时扇出不逐条
+        // 比对清单，可见性的唯一判定点仍是适配器（`node_link::catalog`）与 core 的 Owner 侧命令授权
+        // （与 `node.exportIds` 无运行期修改入口的设计一致），所以这里不在 core 的读 seam 复制条件③。
+        //
+        // 与 `node.revoke` 共用「授权变化 → 关连接」的时机（已提交 → 关闭 → 返回），但**不复用**它的撤销
+        // 语义：这里不推 `node.trust.revoked`、也不以 4410 关闭，而是正常关闭让对端重连取新 catalog
+        // （`NODE_LINK_PROTOCOL.md` §15：4410 与 `node.trust.revoked` 都表示「停止重连」）。
+        self.deps.pairing.close_node_after_reauth(&node_id).await;
         Ok(object(vec![
             ("nodeId", text(node_id.as_str())),
             ("grants", string_array(confirm.grants.iter())),
+            (
+                "exportIds",
+                string_array(confirm.export_ids.iter().map(ExportId::as_str)),
+            ),
             ("confirmedAt", timestamp(&confirmed_at)),
         ]))
     }
@@ -2662,9 +2695,19 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": pairing_id, "grants": ["grant.observe"]}),
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe"], "exportIds": []}),
                 ))
                 .await,
+        );
+        // 确认本身走的是**重新配对**的作废路径（`close_node_after_reauth`），与后面的撤销关闭分列两张表：
+        // 因此撤销的计数仍是「撤销 1 次」，不能把确认的那次当成撤销的那次。
+        assert_eq!(
+            world.closer.closed_nodes_after_reauth(),
+            vec![NODE_ID.to_owned()]
+        );
+        assert!(
+            world.closer.closed_nodes().is_empty(),
+            "确认不得走撤销的关闭路径（`close_node` 只属于 `node.revoke`）"
         );
 
         // ① 首次撤销成功：返回持久化的撤销时间。
@@ -2676,12 +2719,22 @@ mod tests {
         );
         assert_eq!(revoked["nodeId"], json!(NODE_ID));
         assert_eq!(revoked["revokedAt"], json!(first_at));
-        assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
-        // RV1-WP6-F10：关闭通知**当时**回读存储，两种角色行都已经带撤销时间。
+        assert_eq!(
+            world.closer.closed_nodes(),
+            vec![NODE_ID.to_owned()],
+            "撤销必须走撤销的关闭路径（`close_node`）"
+        );
+        assert_eq!(
+            world.closer.closed_nodes_after_reauth(),
+            vec![NODE_ID.to_owned()],
+            "撤销不得再多走一次重新配对的作废路径"
+        );
+        // RV1-WP6-F10：撤销时的关闭通知**当时**回读存储，两种角色行都已经带撤销时间（确认走的是另一条
+        // 路径，不进这张表）。
         assert_eq!(
             world.closer.nodes_revoked_when_notified(),
             vec![true],
-            "关闭必须发生在撤销提交之后"
+            "撤销的关闭必须发生在撤销提交之后"
         );
 
         // ② 重试同一撤销 → `local.not_found`，且不再触发一次关闭。
@@ -2694,8 +2747,8 @@ mod tests {
         assert_eq!(code, LocalErrorCode::NotFound);
         assert!(message.contains(NODE_ID), "{message}");
         assert_eq!(
-            world.closer.closed_nodes(),
-            vec![NODE_ID.to_owned()],
+            world.closer.closed_nodes().len(),
+            1,
             "重试不得再走一次撤销与关闭"
         );
         assert_eq!(
@@ -2856,13 +2909,29 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": pairing_id, "grants": ["grant.observe"]}),
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe"], "exportIds": []}),
                 ))
                 .await,
         );
         assert_eq!(confirmed["nodeId"], json!(NODE_ID));
         assert_eq!(confirmed["grants"], json!(["grant.observe"]));
+        assert_eq!(
+            confirmed["exportIds"],
+            json!([]),
+            "空清单必须如实回显（不等于省略字段）"
+        );
         assert_eq!(confirmed["confirmedAt"], json!(world.clock_text()));
+        // 确认提交后作废该节点的既有连接，但走的是**重新配对**的路径（不推 `node.trust.revoked`、正常
+        // 关闭），不是撤销：`close_node` 只属于 `node.revoke`。首次配对在生产里恒是 no-op（配对行落定前
+        // 没有可认证的活动连接），观察点因此只有一次调用。
+        assert_eq!(
+            world.closer.closed_nodes_after_reauth(),
+            vec![NODE_ID.to_owned()]
+        );
+        assert!(
+            world.closer.closed_nodes().is_empty(),
+            "确认不得走撤销的关闭路径"
+        );
 
         let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
         assert_eq!(listed["nodes"].as_array().expect("数组").len(), 1);
@@ -2870,6 +2939,7 @@ mod tests {
         assert_eq!(listed["nodes"][0]["kind"], json!("access"));
         assert_eq!(listed["nodes"][0]["state"], json!("paired"));
         assert_eq!(listed["nodes"][0]["grants"], json!(["grant.observe"]));
+        assert_eq!(listed["nodes"][0]["exportIds"], json!([]));
         assert_eq!(listed["nodes"][0]["ownerEndpoint"], json!(null));
         assert_eq!(listed["nodes"][0]["lastConnectedAt"], json!(null));
         assert_eq!(listed["nodes"][0]["displayName"], json!("Access Node"));
@@ -2884,7 +2954,16 @@ mod tests {
         );
         assert_eq!(revoked["nodeId"], json!(NODE_ID));
         assert_eq!(revoked["revokedAt"], json!(world.clock_text()));
-        assert_eq!(world.closer.closed_nodes(), vec![NODE_ID.to_owned()]);
+        assert_eq!(
+            world.closer.closed_nodes(),
+            vec![NODE_ID.to_owned()],
+            "撤销走撤销的关闭路径（确认的那次记在重新配对的表里）"
+        );
+        assert_eq!(
+            world.closer.nodes_revoked_when_notified(),
+            vec![true],
+            "撤销的关闭必须发生在撤销提交之后"
+        );
         let listed = result_of(&router.handle(request(Method::NodeList, json!({}))).await);
         assert_eq!(listed["nodes"][0]["state"], json!("revoked"));
         assert_eq!(listed["nodes"][0]["revokedAt"], json!(world.clock_text()));
@@ -3081,6 +3160,73 @@ mod tests {
         );
     }
 
+    /// §5.4 的 `exportIds` 三条运行期判据（JSON Schema 不表达逐方法形状）：
+    ///
+    /// 1. 缺失 → `local.invalid_params`；
+    /// 2. 不是字符串数组（或不是数组）→ `local.invalid_params`；
+    /// 3. 合法数组 → 去重 + 字典序后**透传**为信任行的清单，并在 `result` 里回显同一份顺序。
+    #[tokio::test]
+    async fn node_pair_confirm_requires_and_forwards_the_export_ids() {
+        let world = TestWorld::new();
+        let router = world.router();
+
+        // ① 缺字段：不是「空清单」，必须显式给出（否则旧客户端会静默拿到空清单）。
+        let pairing_id = begin_and_claim_node(&world, &router).await;
+        let (code, message) = error_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({"pairingId": pairing_id, "grants": []}),
+                ))
+                .await,
+        );
+        assert_eq!(code, LocalErrorCode::InvalidParams);
+        assert!(message.contains("exportIds"), "{message}");
+        assert_eq!(world.trust.node_count(), 0, "缺字段不得创建信任");
+
+        // ② 类型不符：`null`、字符串、带非字符串项的数组都是参数非法。
+        for params in [
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": null}),
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": "export-1"}),
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": ["export-1", 7]}),
+            json!({"pairingId": pairing_id, "grants": [], "exportIds": [""]}),
+        ] {
+            let (code, _) = error_of(
+                &router
+                    .handle(request(Method::NodePairConfirm, params.clone()))
+                    .await,
+            );
+            assert_eq!(code, LocalErrorCode::InvalidParams, "{params}");
+        }
+        assert_eq!(world.trust.node_count(), 0);
+
+        // ③ 合法清单（乱序 + 重复）→ 归一化后透传，并在 result 里回显。
+        let confirmed = result_of(
+            &router
+                .handle(request(
+                    Method::NodePairConfirm,
+                    json!({
+                        "pairingId": pairing_id,
+                        "grants": [],
+                        "exportIds": ["export-b", "export-a", "export-b"],
+                    }),
+                ))
+                .await,
+        );
+        assert_eq!(confirmed["exportIds"], json!(["export-a", "export-b"]));
+        let node = world.trust.nodes_of(NODE_ID);
+        assert_eq!(node.len(), 1);
+        assert_eq!(
+            node[0]
+                .export_ids()
+                .iter()
+                .map(acp_core::model::ExportId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["export-a", "export-b"],
+            "透传的清单必须与落盘值同序（去重 + 字典序）"
+        );
+    }
+
     #[tokio::test]
     async fn node_confirm_and_reject_error_paths_answer_the_documented_codes() {
         let world = TestWorld::new();
@@ -3092,7 +3238,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": pairing_id, "grants": ["grant.observe", "grant.remote-work"]}),
+                    json!({"pairingId": pairing_id, "grants": ["grant.observe", "grant.remote-work"], "exportIds": []}),
                 ))
                 .await,
         );
@@ -3119,7 +3265,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": unclaimed, "grants": []}),
+                    json!({"pairingId": unclaimed, "grants": [], "exportIds": []}),
                 ))
                 .await,
         );
@@ -3142,7 +3288,7 @@ mod tests {
             ),
             (
                 Method::NodePairConfirm,
-                json!({"pairingId": pairing_id, "grants": []}),
+                json!({"pairingId": pairing_id, "grants": [], "exportIds": []}),
             ),
         ] {
             let (code, _) = error_of(&router.handle(request(method, params)).await);
@@ -3187,6 +3333,7 @@ mod tests {
             NodeKind::Access,
             test_public_key().fingerprint(),
             GrantSet::empty(),
+            Vec::new(),
             NodeState::Pending,
             None,
             Timestamp::new("2026-09-18T09:00:00.000Z").expect("timestamp"),
@@ -3215,7 +3362,7 @@ mod tests {
             &router
                 .handle(request(
                     Method::NodePairConfirm,
-                    json!({"pairingId": node_pairing, "grants": ["grant.observe"]}),
+                    json!({"pairingId": node_pairing, "grants": ["grant.observe"], "exportIds": []}),
                 ))
                 .await,
         );

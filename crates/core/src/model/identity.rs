@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 
 use super::error::InvalidValue;
 use super::ids::{
-    DeviceId, EntityRef, Fingerprint, NodeId, PairingId, is_endpoint, is_grant_name, is_scope_name,
-    require_bounded,
+    DeviceId, EntityRef, ExportId, Fingerprint, NodeId, PairingId, is_endpoint, is_grant_name,
+    is_scope_name, require_bounded,
 };
 use super::scalars::{Digest, Nonce, Timestamp};
 use sha2::Digest as _;
@@ -303,6 +303,11 @@ token_enum!(
 );
 
 /// 节点记录（`node.list` 与配对结果共用）。
+///
+/// `export_ids` 是 Owner 侧信任记录点名的 Export 清单（`LOCAL_ADMIN_PROTOCOL.md` §5.4 的 `exportIds`，
+/// 用户 2026-09-27 裁决的收窄型白名单）：空清单表示该节点看不到任何 Export，且清单只能收窄可见性，
+/// 不能放宽 `scopes ∩ grants`。构造器把它归一化为去重、字典序的清单（与 `GrantSet`/`ScopeSet` 的集合
+/// 语义同款）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeRecord {
     node_id: NodeId,
@@ -310,6 +315,7 @@ pub struct NodeRecord {
     kind: NodeKind,
     node_public_key_fingerprint: Fingerprint,
     grants: GrantSet,
+    export_ids: Vec<ExportId>,
     state: NodeState,
     owner_endpoint: Option<String>,
     created_at: Timestamp,
@@ -319,7 +325,8 @@ pub struct NodeRecord {
 
 impl NodeRecord {
     /// 构造。`display_name` ≤128 字符；`revoked_at` 与 `state = revoked` 一致；
-    /// `owner_endpoint` 仅在 `kind = owner` 时存在，且必须是 `wss://` 端点。
+    /// `owner_endpoint` 仅在 `kind = owner` 时存在，且必须是 `wss://` 端点；
+    /// `export_ids` 去重并按字典序排序（空清单合法）。
     #[allow(clippy::too_many_arguments)] // 与 §5.4 的记录字段一一对应
     pub fn try_new(
         node_id: NodeId,
@@ -327,6 +334,7 @@ impl NodeRecord {
         kind: NodeKind,
         node_public_key_fingerprint: Fingerprint,
         grants: GrantSet,
+        export_ids: Vec<ExportId>,
         state: NodeState,
         owner_endpoint: Option<String>,
         created_at: Timestamp,
@@ -354,6 +362,7 @@ impl NodeRecord {
             kind,
             node_public_key_fingerprint,
             grants,
+            export_ids: normalized_export_ids(export_ids),
             state,
             owner_endpoint,
             created_at,
@@ -385,6 +394,11 @@ impl NodeRecord {
     /// `grant.*` 集合。
     pub fn grants(&self) -> &GrantSet {
         &self.grants
+    }
+
+    /// 该节点可见的 Export 清单（去重、字典序；空清单 = 看不到任何 Export）。
+    pub fn export_ids(&self) -> &[ExportId] {
+        &self.export_ids
     }
 
     /// 状态。
@@ -840,17 +854,39 @@ pub enum PairingSettlement {
     Approved {
         granted_scopes: ScopeSet,
         granted_grants: GrantSet,
+        /// 该节点可见的 Export 清单（`LOCAL_ADMIN_PROTOCOL.md` §5.4 的 `exportIds`；已去重、字典序，
+        /// 空集合 = 看不到任何 Export）。设备配对恒为空集合。
+        granted_export_ids: Vec<ExportId>,
     },
     /// 拒绝：可选简短原因（≤256 字符），不进审计正文。
     Rejected { reason: Option<String> },
 }
 
 impl PairingSettlement {
-    /// 批准。
+    /// 批准。点名的 Export 清单默认空（节点配对由调用方经
+    /// [`PairingSettlement::with_granted_export_ids`] 附上，设备配对没有这一面）。
     pub fn approved(granted_scopes: ScopeSet, granted_grants: GrantSet) -> Self {
         Self::Approved {
             granted_scopes,
             granted_grants,
+            granted_export_ids: Vec::new(),
+        }
+    }
+
+    /// 在已批准的结果上附上本次点名的 Export 清单（归一化为去重、字典序）；
+    /// 非批准结果原样返回（`exportIds` 只属于批准）。
+    pub fn with_granted_export_ids(self, export_ids: Vec<ExportId>) -> Self {
+        match self {
+            Self::Approved {
+                granted_scopes,
+                granted_grants,
+                ..
+            } => Self::Approved {
+                granted_scopes,
+                granted_grants,
+                granted_export_ids: normalized_export_ids(export_ids),
+            },
+            other => other,
         }
     }
 
@@ -879,6 +915,16 @@ impl PairingSettlement {
             },
         }
     }
+}
+
+/// 归一化 Export 清单：去重并按字典序排序（`ExportId` 有全序，排序即稳定序）。
+///
+/// 空输入合法（= 看不到任何 Export）；重复项静默去重（集合语义与 `GrantSet`/`ScopeSet` 同款），
+/// 因此落盘、回显与可见性判定三处永远看到同一份清单。
+fn normalized_export_ids(mut export_ids: Vec<ExportId>) -> Vec<ExportId> {
+    export_ids.sort();
+    export_ids.dedup();
+    export_ids
 }
 
 token_enum!(

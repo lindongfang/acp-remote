@@ -1128,7 +1128,7 @@ async fn approve(harness: &Harness, pairing: &Pairing) {
         .router()
         .handle(admin_request(
             Method::NodePairConfirm,
-            json!({"pairingId": pairing.id, "grants": ["grant.observe"]}),
+            json!({"pairingId": pairing.id, "grants": ["grant.observe"], "exportIds": []}),
         ))
         .await;
     let result = success(&response);

@@ -1568,6 +1568,7 @@ fn node_record_requires_owner_endpoint_only_for_owner_kind() {
             kind,
             fingerprint(),
             GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+            Vec::new(),
             NodeState::Paired,
             endpoint.map(str::to_owned),
             ts(T0),
@@ -1589,6 +1590,54 @@ fn node_record_requires_owner_endpoint_only_for_owner_kind() {
     assert_eq!(owner.kind(), NodeKind::Owner);
     assert_eq!(owner.owner_endpoint(), Some("wss://owner.example"));
     assert_eq!(owner.grants().len(), 1);
+    assert!(
+        owner.export_ids().is_empty(),
+        "未点名任何 Export 时清单为空（空清单合法）"
+    );
+}
+
+/// `exportIds` 是收窄型白名单（`design.md` D1 的条件③）：清单归一化为去重、字典序，空集合合法，
+/// 且与 `GrantSet`/`ScopeSet` 同款地静默去重（集合语义）。
+#[test]
+fn node_record_normalizes_the_nominated_export_ids() {
+    let build = |export_ids: Vec<&str>| {
+        NodeRecord::try_new(
+            NodeId::from_str(UUID_C).expect("node"),
+            "Work PC",
+            NodeKind::Access,
+            fingerprint(),
+            GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+            export_ids
+                .into_iter()
+                .map(|id| ExportId::new(id).expect("export id"))
+                .collect(),
+            NodeState::Paired,
+            None,
+            ts(T0),
+            None,
+            None,
+        )
+        .expect("节点记录")
+    };
+    let names = |record: &NodeRecord| -> Vec<String> {
+        record
+            .export_ids()
+            .iter()
+            .map(|id| id.as_str().to_owned())
+            .collect()
+    };
+
+    assert!(build(Vec::new()).export_ids().is_empty(), "空清单合法");
+    assert_eq!(
+        names(&build(vec!["export-b", "export-a"])),
+        vec!["export-a", "export-b"],
+        "清单按字典序排序（与落盘、回显同一份顺序）"
+    );
+    assert_eq!(
+        names(&build(vec!["export-b", "export-a", "export-b"])),
+        vec!["export-a", "export-b"],
+        "重复项按集合语义去重"
+    );
 }
 
 /// 配对登记方宣告的绑定（设备为 canonical origin，节点为本机 endpoint）。
@@ -1768,6 +1817,31 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
     );
     assert!(settlement.is_approved());
     settlement.validate().expect("settlement");
+    // 点名清单只属于批准：`approved` 默认空，`with_granted_export_ids` 归一化为去重、字典序。
+    assert_eq!(
+        settlement,
+        PairingSettlement::Approved {
+            granted_scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+            granted_grants: GrantSet::empty(),
+            granted_export_ids: Vec::new(),
+        }
+    );
+    let nominated = settlement.with_granted_export_ids(vec![
+        ExportId::new("export-b").expect("export id"),
+        ExportId::new("export-a").expect("export id"),
+        ExportId::new("export-b").expect("export id"),
+    ]);
+    assert_eq!(
+        nominated,
+        PairingSettlement::Approved {
+            granted_scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+            granted_grants: GrantSet::empty(),
+            granted_export_ids: vec![
+                ExportId::new("export-a").expect("export id"),
+                ExportId::new("export-b").expect("export id"),
+            ],
+        }
+    );
     let rejected = PairingSettlement::rejected(Some("user said no")).expect("rejected");
     assert!(!rejected.is_approved());
     assert_eq!(

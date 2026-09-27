@@ -241,7 +241,7 @@ impl Harness {
             .router()
             .handle(admin_request(
                 Method::NodePairConfirm,
-                json!({"pairingId": pairing, "grants": grants}),
+                json!({"pairingId": pairing, "grants": grants, "exportIds": []}),
             ))
             .await;
         assert_eq!(

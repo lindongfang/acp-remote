@@ -231,6 +231,31 @@ pub async fn column_names(pool: &SqlitePool, table: &str) -> Vec<String> {
         .collect()
 }
 
+/// 表结构的逐列规格：`(列名, 类型, NOT NULL, 默认值表达式)`，顺序即 `PRAGMA table_info` 的顺序。
+///
+/// 与 [`column_names`] 同一用途但更严：升级库与新建库必须连类型、`NOT NULL` 与默认值都逐项相等
+/// （v4 的 `owned_node.export_ids_json` 就是靠这条判定「`ALTER TABLE` 追加的列与 DDL 常量同形」）。
+pub async fn column_specs(
+    pool: &SqlitePool,
+    table: &str,
+) -> Vec<(String, String, bool, Option<String>)> {
+    let rows = sqlx::query(&format!("PRAGMA table_info({table})"))
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|error| panic!("table_info {table}: {error}"));
+    rows.iter()
+        .map(|row| {
+            (
+                row.try_get::<String, _>("name").expect("name"),
+                row.try_get::<String, _>("type").expect("type"),
+                row.try_get::<i64, _>("notnull").expect("notnull") != 0,
+                row.try_get::<Option<String>, _>("dflt_value")
+                    .expect("dflt_value"),
+            )
+        })
+        .collect()
+}
+
 /// 与 `session_store::measure_total` **同口径**的度量：两族全部表的所有 TEXT 列 `length()` 之和
 /// + `owned_attachment.byte_length` 之和（列清单从 `pragma_table_info` 取，不手抄）。
 ///
