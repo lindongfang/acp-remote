@@ -62,7 +62,7 @@ win32job = "2"
 # 用 safe wrapper（`nix`）而不直接用 `libc`：workspace 固定 `unsafe_code = "forbid"`，直接 FFI 必须写 `unsafe`。
 # `socket`/`user` 是切片 4 新增的基线 feature：`server::transport::local` 用 `SO_PEERCRED` 比对对端 uid
 # （`sockopt::PeerCredentials` 与 `getsockopt` 都不在 `net` 门后，因此不必开 `net`）与当前进程的 `getuid`。
-nix = { version = "0.30", default-features = false, features = ["signal", "process", "socket", "user"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "process", "socket", "user"] }
 
 # 密码学原语按 docs/MODULE_ARCHITECTURE.md §3.1 固定版本；已由 `identity-auth`（验签）与 `identity-keystore`
 # （进程内签名）消费，不要在别处另选实现。
