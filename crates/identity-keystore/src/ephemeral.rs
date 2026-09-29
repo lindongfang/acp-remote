@@ -16,7 +16,7 @@ use identity_auth::{
     EntropySource, IdentityKeystore, KeyHandle, KeyPurpose, KeystoreError, P1363Signature,
     SecretBytes, SecretPurpose,
 };
-use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use p256::elliptic_curve::sec1::ToSec1Point as _;
 
 /// 进程内条目。
 ///
@@ -106,7 +106,7 @@ impl IdentityKeystore for EphemeralKeystore {
         let secret = self.get(handle)?;
         let secret_key = p256::SecretKey::from_slice(secret.as_bytes())
             .map_err(|_| KeystoreError::EntryCorrupt)?;
-        let point = secret_key.public_key().to_encoded_point(false);
+        let point = secret_key.public_key().to_sec1_point(false);
         PeerPublicKey::try_from_bytes(point.as_bytes()).map_err(|_| KeystoreError::EntryCorrupt)
     }
 
