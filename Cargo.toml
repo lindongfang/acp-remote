@@ -70,7 +70,7 @@ nix = { version = "0.31", default-features = false, features = ["signal", "proce
 # `hmac`/`signature`/`pkcs8`…）属身份边界，`identity-auth`/`identity-keystore` 用 `features = ["ecdsa"]`
 # 增量开启（**不开 `pkcs8`**：私钥存 32 字节标量，签名输出 64 字节 P1363，不引入 DER 路径）；
 # feature 是加法的，因此这里不能替下游「少开」，只能由默认值决定基线（`AGENTS.md` §12）。
-p256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+p256 = { version = "0.14", default-features = false, features = ["arithmetic"] }
 sha2 = "0.11"
 hmac = "0.13"
 
