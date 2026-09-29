@@ -200,7 +200,7 @@ agentic 变更的通用工作流（proposal → specs/design → plan → tasks 
 
 - 流程、模板、角色与检查协议：`openspec/schemas/agentic/`；
 - 最终验收入口：[`.agents/skills/agentic-verify/SKILL.md`](.agents/skills/agentic-verify/SKILL.md)；
-- 角色模型与 E2E 开关：`openspec/config.yaml` 的 `x-agentic`；
+- 扩展配置（角色模型、并发派发池、E2E 开关）：`openspec/agentic.yaml`；
 - 项目画像（仓库结构、命令索引、约束与运行环境）：`openspec/config.yaml` 的 `context`。
 
 非 agentic 改动沿用同一协作要求：一次改动尽量形成小而完整的纵向切片。
@@ -218,9 +218,9 @@ gh pr merge --squash --delete-branch
 
 agentic 变更在候选合入前还须按 `openspec/schemas/agentic/procedures/workflow-check.md` 执行
 `npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage premerge --planning-root <权威规划根> --json`；
-它核对候选版本、Project Verify、独立 review 与适用的候选 E2E/替代检查证据。角色报告的交接索引以
-`openspec/schemas/agentic/roles/handoff.md` 为准。该门由主 Agent 在本地候选 worktree 执行，**不接入 CI**：
-扩展随 0.2.4 提供的 `openspec/schemas/agentic/ci/github-premerge.yml` 是可选模板（要求 PR 正文恰好一行
+它核对候选版本、Project Verify、独立 review 与主 Agent 的覆盖核对结果（单元候选阶段不执行 E2E）。角色报告的交接索引以
+`openspec/schemas/agentic/roles/_shared/role-report.md` 为准。该门由主 Agent 在本地候选 worktree 执行，**不接入 CI**：
+扩展随 0.3.0 提供的 `openspec/schemas/agentic/ci/github-premerge.yml` 是可选模板（要求 PR 正文恰好一行
 `Agentic-Change: <变更名>`，并把 `agentic-premerge` 设为受保护分支的必需状态）；本仓库以单人协作为主、
 已有五个必需检查，暂不采纳该模板。该检查不代替本节的 PR 与必需 CI 检查。
 
@@ -329,7 +329,7 @@ agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`
 
 - `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`，其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验）——`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 与 `base64` 属协议与身份边界，**不得**进入 core 的闭包。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
-- 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`npm run check:agentic` 会断言以上前提。
+- 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`openspec/agentic.yaml` 是扩展独占配置（角色模型、`dispatch.pool`、`e2e`），由 `init` / `update` 播种并保留项目写入的值。`npm run check:agentic` 会断言以上前提。
 
 ## 13. 回复与沟通
 
@@ -358,3 +358,20 @@ OpenSpec 流程中的 CLI 状态 `all_done` 只表示任务复选框完成。收
 
 本条验收规则本身不授权合并、推送、回滚、发布或归档；agentic apply 的本地合入授权见 schema.yaml。
 普通项目审查、schema 编辑不要求执行产品变更的验收流程。
+
+## 并发派发（agentic apply）
+
+并发编码按流水线与调用窗口执行，不按批次互等：主 Agent 是唯一调度台，按“依赖就绪（同交付单元 code 依赖
+的上游已进入已验收集成基线，跨交付单元 code 依赖的上游已合入主分支）+ 契约已冻结 + 运行态资源空闲 +
+状态未开工”逐个开工，有几个能开工就开几个，空窗口不预建实例。
+每个工作包在同一时刻最多一个实例；coder 交付即销毁，reviewer 在同一窗口新建；tester 提交产物、main 确认
+可读且交接完整后即释放（不等 review PASS），execute/retest 每轮独立派发新建实例；review 不通过走
+修复中（新的实现实例），复检必须换新 reviewer。
+
+开工与流转用 `openspec-agentic dispatch --change <变更> --wp <WP> --executor <ID> [--role coder|tester]`
+（流转用 `--state <state>`，重做用 `--reopen --reason`，上限 3 轮）留可核对记录。`verification.md` 的
+`## Dispatch Reconciliation` 必须逐工作包与台账、Handoff Index 对得上，final/archive 要求每个工作包状态为 merged。
+工作包状态必须落盘；重复派发与非法流转是 `workflow check` 的门禁。存在可并发层级（同层同角色 >=2
+且对应池容量 >=2）时，这些已开工工作包（blocked / superseded 已释放窗口，不计入）的占用窗口至少需有
+一对真实重叠；同层同时有 coder 与 tester 已开工时，还需至少一对跨角色重叠窗口。否则 premerge/final/archive
+判不合格（实际串行必须留证；该时间戳由 dispatch 命令写入，是偏离探测而非并行证明）。

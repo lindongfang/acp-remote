@@ -20,7 +20,7 @@ skip_specs 必须由有效变更元数据和 CLI skipped 状态确认。
 按以下主题逐组核对；通过任务 ID、Check ID、Review ID、测试报告 ID、E2E ID 和问题 ID
 追踪到固定版本的原始报告及具体证据。同一材料可引用，不要求重复复制。
 旧证据缺少新字段时可用准确来源、版本和位置建立无歧义映射；无法确定关联则列出缺失项，不编造 ID 或结果。
-读取 `roles/handoff.md` 的共用索引契约。对本次各角色报告，主 Agent 须在 verification.md 的
+读取 `roles/_shared/role-report.md` 的共用索引契约。对本次各角色报告，主 Agent 须在 verification.md 的
 Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从原始材料建立同等无歧义映射时适用上述兼容规则。
 索引缺失或尚未汇入时，不以报告摘要或已勾选任务替代。
 
@@ -30,11 +30,12 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
 | 审计组 | 核对 verification.md 的节 |
 | --- | --- |
 | Contracts and Coverage | Target、Checks、Check Plan Changes |
-| Handoff Traceability | Handoff Index、Checks、Review Findings、Candidate E2E、Main E2E、Merge History |
-| Delivery and Versions | Merge History、Dependency Handoffs、Candidate E2E、Main E2E |
-| Project Checks and Resources | Checks、Check Plan Changes、Runtime Resources |
+| Handoff Traceability | Handoff Index、Checks、Review Findings、Main E2E、Merge History |
+| Delivery and Versions | Merge History、Dependency Handoffs、Main E2E |
+| Project Checks and Resources | Checks、Check Plan Changes、Runtime Resources、Dispatch Reconciliation |
 | Independent Reviews | Review Findings |
-| E2E Design and Execution | Test Design and Authoring、Candidate E2E、Main E2E、Checks |
+| Independent Validation | Independent Validation |
+| E2E Design and Execution | Test Design and Authoring、Main E2E、Checks |
 | Issue Closure and Evidence Validity | Failures and Retests、Review Findings、Final Assessment |
 
 各角色的 handoff 报告按其字段汇总到 verification.md 的对应节（同一节可来自多个角色；映射仅作定位，
@@ -42,17 +43,18 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
 
 | 角色 | handoff 主要字段 | 汇入 verification.md 的节 |
 | --- | --- | --- |
-| main | 全部权威记录与最终判断 | Final Assessment、Check Plan Changes |
+| main | 全部权威记录与最终判断 | Final Assessment、Check Plan Changes、Dependency Declaration Review、Worktree Handoff、Premerge History |
 | coder | handoff_index、changes / checks / evidence_paths | Handoff Index、Checks、Dependency Handoffs、Failures and Retests |
-| tester | handoff_index、phase=design-author/execute/retest、checks / evidence_paths | Handoff Index、Test Design and Authoring、Candidate E2E、Main E2E、Failures and Retests |
+| tester | handoff_index、phase=design-author/execute/retest、checks / evidence_paths | Handoff Index、Test Design and Authoring、Main E2E、Failures and Retests |
 | reviewer | handoff_index、target_revision / issues / result（Review Context、Findings、Assessment） | Handoff Index、Review Findings、Failures and Retests |
-| validator | handoff_index、observations / evidence_paths（Additional Independent Validation） | Handoff Index、Checks、Failures and Retests |
-| integrator | handoff_index、target_revision / changes / checks（源/base/candidate/main、防竞态） | Handoff Index、Merge History、Dependency Handoffs |
-| environment | handoff_index、role / phase / commands / observations / resource_cleanup | Handoff Index、Runtime Resources、Target |
+| validator | handoff_index、observations / evidence_paths、phase=validation | Handoff Index、Independent Validation、Failures and Retests |
+| merger | handoff_index、target_revision / changes / checks（源/base/candidate/main、防竞态） | Handoff Index、Merge History、Premerge History、Dependency Handoffs |
+| scout | handoff_index、phase=recon、commands / observations | Handoff Index、Target |
+| provisioner | handoff_index、role / phase / commands / observations / resource_cleanup | Handoff Index、Runtime Resources、Worktree Handoff、Target |
 
 ### Handoff Traceability
 
-- 逐任务对照 tasks.md 与每份角色报告索引，核对 `task_id`、role/phase/stage、固定目标提交、
+- 逐任务对照 tasks.md 与每份角色报告索引，核对 `task_id`、role/phase/stage、`round`、固定目标提交、
   `evidence_type`/`evidence_id`、`report_path`、result、`evidence_status`、`applicability_basis`；
   多个 ID 和候选/已合入阶段须分别成行。verification.md 应引用每份报告路径并保留这些行的映射，
   不用一个分片或阶段的 PASS 代替另一项。
@@ -79,18 +81,30 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
 
 ### Delivery and Versions
 
-- 核对规划时确定的交付单元、模式和就绪复核；逐个取最新主分支构造候选，required 时对应测试
-  及关键候选 E2E 必须通过才合入。检查合入前基线复核和防竞态记录，实际结果一致性及必要回归
+- 核对规划时确定的交付单元、模式和就绪复核；逐个取最新主分支构造候选，候选 Project Verify
+  以及 Coverage Index 覆盖核对必须通过才合入（候选阶段不执行 E2E）。检查合入前基线复核和防竞态记录，实际结果一致性及必要回归
   通过后才处理下一功能单元。无新增差异不强制重复同范围人工 review，但需原结论及差异依据。
-- 候选与最终 E2E 分别审计：同轮固定代码/用例、产物标识或哈希、配置及环境/依赖版本，
-  明确允许的分片命名空间差异。候选子集不替代最终规定完整覆盖；变化后的证据逐项判断有效性。
+- 依赖声明审查（开工前门禁）：`## Dependency Declaration Review` 的 Review ID 必须与 plan.md 字段一致，
+  Reviewer 不得是任何工作包 Owner，Result 为 PASS，Plan Revision 等于当前契约摘要，`Review ID + Round`
+  与 reviewer 报告一致，报告可读；计划或契约变化后未重新审查即失效。
+- worktree 交接：`## Worktree Handoff` 由 main 汇总登记，按 (WP, Attempt) 覆盖每个已开工工作包的每轮尝试；
+  worktree 与计划一致、基线提交可核实、Provisioner 必须来自已登记的 provisioner 交接行且该行报告被引用、
+  Executor 绑定该轮认领执行者（不随 reviewer/merger 接管变动）、Received At 不晚于该轮首次执行事件
+  （首次 coding、重开 fixing）。
+- premerge 交接：`## Premerge History` 由 main 汇总登记，每个交付单元一行，receipt 是 premerge PASS 之后持久化的合法
+  `agentic-premerge` 块；核对 candidate/target/contract_digest/requirements_digest/delivery_unit/证据摘要与行一致（不是只看文件存在），
+  receipt 的行为契约摘要（proposal+specs）仍等于当前值；plan/tasks 等执行安排变化不使历史 receipt 失效，
+  该单元工作包均有独立 review、台账 ready-to-merge/merged 与 DELIVERY PASS；final 核对每个 Merge History
+  的 Candidate 都有 premerge PASS，且交付单元两边一致。
+- 最终 E2E 审计：固定代码/用例、产物标识或哈希、配置及环境/依赖版本，明确允许的分片命名空间差异；
+  变化后的证据逐项判断其有效性。候选与主分支的 Project Verify、review 证据按各自阶段另行审计。
 
 - 核对每个工作包的依赖交接记录：相关集成验证前的上游已验收提交、下游验证基线和包含关系。
   上游更新后的下游任务及证据应已重新评估，受影响部分有重跑和复核结果。
 - 核对每次候选、实际合入和主分支检查的版本、顺序、范围及证据；前次失败或受阻时，
   后续功能合入应暂停。恢复需有修复/回滚后的主分支检查、此前失败/受阻检查（包括 E2E）
   的通过证据和更新候选记录。
-- 核对独立集成 Agent 的实际 ID、上下文方式、独立分支/worktree、交接输入及原始报告，
+- 核对独立合入 Agent（merger）的实际 ID、上下文方式、独立分支/worktree、交接输入及原始报告，
   确认主 Agent 未兼任且未复用实现者、测试 Agent 或 reviewer；允许继承必要对话和延续集成上下文。
   检查批次集成、候选、合入及主分支检查的实际执行者、本地合入条件和串行更新记录。
   未建立独立执行角色或缺必要证明时保持 BLOCKED；已确认角色违规为 FAIL，不能仅凭合并结果放行。
@@ -105,11 +119,25 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
   实现 Agent 执行命令无需编码对话隔离；若计划另有独立探索性验证，则核对其隔离及执行证据。
   并发运行的数据库、端口、容器、账号等资源需有隔离记录，或串行占用记录。
   无法确认共享资源是否污染结果时，将受影响证据记为待复验，而非直接通过。
+- 核对 `Execution Waves`（静态层级）与 `Dispatch Reconciliation`（逐工作包）：依赖类型与 `Serialization Reason`
+  是否有可核对的证据路径，理由码是否与该包的声明前提一致；同层写入重叠是否已在 `Shared File Ownership` 登记。
+- 对账表的 `Attempt` / `Executor` / `State` 需与 `Handoff Index` 的 `Executor / Agent` 及
+  `dispatch-queue.jsonl` 台账互相对得上（同一工作包同一时刻最多一个实例），不得接受自报数字；
+  final/archive 时每个工作包状态必须为 merged。
+- 存在可并发层级时，台账中已开工工作包的占用窗口（coding/fixing → ready-to-merge/merged）至少有一对真实重叠；
+  否则按“实际串行”处理，要求留证或回写计划。该时间戳仍属主体自报，不构成进程级并行证明。
+- 核对 `## Merge History`：每个交付单元一次本地合入一行；**同一目标分支只能有一个 Merger**（串行不变式），
+  Candidate 必须是 Merged 的祖先且 Merged 在目标引用上；final/archive 至少一行，缺失或违反即阻断。
 
 ### Independent Reviews
 
 - 逐项读取独立 review 报告，核对 Review ID、任务及阶段、实际子 Agent ID、上下文隔离、base/target 和范围；
-  CRITICAL/MAJOR 必须有复核闭环。复用结论应引用原 review ID，并解释版本差异和适用性。
+  `## Review Findings` 需逐工作包覆盖（`Work Package` 列非空、Reviewer 不得是该 WP 的 Owner），阻断项必须闭环。
+  CRITICAL/MAJOR 必须有复核闭环。复核复用同一 Review ID，每条 `Review ID + Round`（同一 ID 的每轮）各占一行，
+  轮次由显式 `Round` 区分；以 `Round` 最大的一轮为当前结论（不是“最高 target”，Git SHA 无高低序），
+  历史轮次保留不覆盖；新一轮未完成或受阻时不得回退引用旧轮 PASS；复用其他结论须引用原 ID 并解释版本差异和适用性。
+- 独立验证是常设角色： 必须至少一行且 Result 为 PASS（FAIL/BLOCKED 阻断验收），
+  逐项对应 plan.md 的验证任务；不得以“无需验证”或 NOT_APPLICABLE 代替。
 - 逐项核对报告列出的待补 Check ID、影响及主 Agent 后续核对证据；必要项须已完成，
   范围/配置变化或新问题须有独立复核。不能用静态 review PASS 代替尚未通过的测试或证据核对。
   用例编写阶段不要求后期运行材料，但候选及最终执行准备所需的分配、版本和资源检查不能遗漏。
@@ -118,7 +146,9 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
 
 - E2E mode 只接受 required 或 not-applicable。required 必须有最终主分支实际运行版本、
   全部约定场景和 PASS 证据；环境不可用是 BLOCKED，实际测试失败是 FAIL。
-  not-applicable 必须有 reason、basis 和非空 alternative_checks，替代检查逐项通过；
+  not-applicable 必须有 reason、basis 和非空 alternative_checks；每个替代检查 ID 必须在计划任务中以 [ID] 声明，
+  final 阶段在 verification.md 的 `## Checks` 表中有一行 PASS 与可读证据，并由本程序逐项审计其充分性；
+  `e2e check` 只确认 mode、字段与降级批准，不核对每项替代检查的原始结果（缺失 ID/任务或 Checks PASS 由 workflow check 拒收）。
   E2E 本身保留 NOT_APPLICABLE。替代验证必须是另列的主 Agent 任务，不并入 [e2e-owned] 行；
   该行在 not-applicable 下只确认“不适用判据已按计划固化”，完成条件同为 e2e check PASS。
   检查 mode 变更依据及历史，不因失败自动降级。
@@ -137,9 +167,9 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
   开关为 false 时按上一条核对三字段，不因关闭而免除 reason、basis、非空 alternative_checks。
   该检查只做结构比对，不证明 E2E 真的执行过；required 的执行依据是变更目录下的执行记录
   （`npx --quiet --no-install openspec-agentic e2e run` 写入，含命令、退出码、提交与输出片段）：
-  无成功记录即 FAIL；配置了 `x-agentic.e2e.command` 时人工记录不能替代自动执行，且成功记录的 command 必须与该命令一致；
+  无成功记录即 FAIL；配置了 `e2e.command` 时人工记录不能替代自动执行，且成功记录的 command 必须与该命令一致；
   最近一次相关尝试必须成功（更新的失败不能被更早的 pass 掩盖），候选阶段记录（`--stage candidate`）不满足最终门；
-  连续失败达到 `x-agentic.e2e.maxAttempts`（默认 3）时判 BLOCKED：核对已保留的失败尝试、问题 ID 与已尝试方案，
+  连续失败达到 `e2e.maxAttempts`（默认 3）时判 BLOCKED：核对已保留的失败尝试、问题 ID 与已尝试方案，
   确认自动重跑确已停止；不得把“达到上限”当 FAIL 继续循环，也不得删除记录或自行提高上限续圈（提高上限需用户决定）；
   记录停在旧提交且之后有变更目录之外的改动时视为失效，须重跑。人工记录须有执行人与证据引用。
   记录本身不能证明测试真实性，实际执行、入口、分片与断言仍按以下条目核对。

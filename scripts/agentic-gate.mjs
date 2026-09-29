@@ -10,7 +10,8 @@
 // 两个步骤的判据见 `AGENTS.md` §10、§12：
 //   1. `openspec-agentic doctor`：断言所用流程确为扩展（@dongfanglin/openspec-agentic）的 agentic
 //      —— 项目本地引擎版本等于扩展 pin 的版本、`openspec/config.yaml` 的 `schema` 为 `agentic`、
-//      `x-agentic.configVersion` 为 1、受管文件与清单无漂移、`AGENTS.md` 有验收路由；
+//      `openspec/agentic.yaml` 的角色与 `dispatch.pool` / `e2e` 配置可解析、受管文件与清单无漂移、
+//      `AGENTS.md` 有验收路由；
 //   2. `openspec validate --all --strict`：校验变更与规范资产，无活动变更时以 0 退出。
 
 import { spawnSync } from "node:child_process";

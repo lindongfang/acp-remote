@@ -61,14 +61,17 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'openspec/schemas') -Force | Out-Null
     Copy-Item -LiteralPath $schemaSource -Destination (Join-Path $fixtureRoot 'openspec/schemas/agentic') -Recurse
     Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/openspec/config.yaml') -Destination (Join-Path $fixtureRoot 'openspec/config.yaml')
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'assets/openspec/agentic.yaml') -Destination (Join-Path $fixtureRoot 'openspec/agentic.yaml')
     # Distinct fixture markers prove input routing without matching Chinese prose.
     $fixtureConfig = Get-Content -LiteralPath (Join-Path $fixtureRoot 'openspec/config.yaml') -Raw -Encoding UTF8
     $fixtureConfig = $fixtureConfig -replace '(?m)^context: \|\r?$', "context: |`n  CLI_CONTEXT_SENTINEL"
     $fixtureConfig = $fixtureConfig -replace '(?m)(  apply:\r?\n    guidance:)', "`$1`n      - CLI_APPLY_SENTINEL"
     $fixtureConfig = $fixtureConfig -replace '(?m)(  archive:\r?\n    guidance:)', "`$1`n      - CLI_ARCHIVE_SENTINEL"
     # 夹具项目级 E2E 入口：CLI-13 用它验证流程内执行能真的跑起来。
-    $fixtureConfig = $fixtureConfig -replace '(?m)^(    command: )""', '$1"node --version"'
     Set-FixtureFile 'openspec/config.yaml' $fixtureConfig
+    $fixtureAgentic = Get-Content -LiteralPath (Join-Path $fixtureRoot 'openspec/agentic.yaml') -Raw -Encoding UTF8
+    $fixtureAgentic = $fixtureAgentic -replace '(?m)^(  command: )""', '$1"node --version"'
+    Set-FixtureFile 'openspec/agentic.yaml' $fixtureAgentic
     Push-Location $fixtureRoot
     try {
         Start-Scenario 'CLI-01'
@@ -151,12 +154,13 @@ try {
         Assert-That (@($status.artifacts | Where-Object { $_.id -match 'test|e2e' }).Count -eq 0) 'Test design became a pre-apply artifact'
         $resolvedSchema = Invoke-OpenSpecJson @('schema', 'which', 'agentic', '--json')
         Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/tester.md')) 'Test-agent instructions are absent from the resolved schema'
-        Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/integrator.md')) 'Integration-agent instructions are absent from the resolved schema'
-        Assert-That ($apply.instruction -match 'roles/integrator\.md') 'Apply did not deliver the integrator entrypoint'
-        Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/environment.md')) 'Environment-agent instructions are absent from the resolved schema'
-        Assert-That ($apply.instruction -match 'roles/environment\.md' -and $apply.instruction -match 'recon phase' -and $apply.instruction -match 'fork_turns') 'Apply did not preserve the isolated environment handoff contract'
+        Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/merger.md')) 'Merger instructions are absent from the resolved schema'
+        Assert-That ($apply.instruction -match 'roles/merger.md') 'Apply did not deliver the merger entrypoint'
+        Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/scout.md')) 'Scout instructions are absent from the resolved schema'
+        Assert-That ($apply.instruction -match 'roles/scout.md' -and $apply.instruction -match 'roles/provisioner.md') 'Apply did not preserve the scout/provisioner handoff contract'
         Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/reviewer.md')) 'Reviewer instructions are absent from the resolved schema'
         Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'procedures/acceptance.md')) 'Final verification procedure is absent from the resolved schema'
+        Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path 'roles/_shared/role-report.md')) 'Shared role report contract is absent from the resolved schema'
         Assert-That ($apply.instruction -match 'roles/reviewer\.md' -and $apply.instruction -match 'roles/tester\.md' -and $apply.instruction -match 'procedures/acceptance\.md') 'Apply did not deliver the separated role and procedure paths'
         foreach ($role in @('coder', 'validator')) {
             Assert-That (Test-Path -LiteralPath (Join-Path $resolvedSchema.path "roles/$role.md")) "Role instructions are absent from the resolved schema: $role"
@@ -207,7 +211,7 @@ try {
         Start-Scenario 'CLI-10'
         Assert-That ($LASTEXITCODE -eq 0) 'Role model config write failed'
         $roles = Invoke-OpenSpecAgenticJson @('roles', '--json')
-        Assert-That (@($roles.roles).Count -eq 7) 'Role registry size changed'
+        Assert-That (@($roles.roles).Count -eq 8) 'Role registry size changed'
         $tester = @($roles.roles | Where-Object { $_.id -eq 'tester' })[0]
         Assert-That ($tester.model -eq '@current' -and $tester.inheritCurrent) 'Default role did not inherit the current session model'
         $reviewer = @($roles.roles | Where-Object { $_.id -eq 'reviewer' })[0]
@@ -230,9 +234,9 @@ try {
         Assert-That ($e2eDefault.enabled -eq $true) 'E2E switch is not enabled by default'
         Assert-That ($e2eDefault.command -eq 'node --version') 'Fixture E2E command was not read from config'
         Assert-That (@($e2eDefault.errors).Count -eq 0) 'Valid E2E switch config reported errors'
-        $e2eConfigPath = Join-Path $fixtureRoot 'openspec/config.yaml'
+        $e2eConfigPath = Join-Path $fixtureRoot 'openspec/agentic.yaml'
         $e2eEnabledText = [IO.File]::ReadAllText($e2eConfigPath, $utf8)
-        $e2eDisabledText = $e2eEnabledText -replace '(?m)^    enabled: true', '    enabled: false'
+        $e2eDisabledText = $e2eEnabledText -replace '(?m)^  enabled: true', '  enabled: false'
         Assert-That ($e2eDisabledText -ne $e2eEnabledText) 'Fixture config lost the seeded e2e switch'
         [IO.File]::WriteAllText($e2eConfigPath, $e2eDisabledText, $utf8)
         $e2eOff = Invoke-OpenSpecAgenticJson @('e2e', '--json')
@@ -303,28 +307,28 @@ mode: required
         Start-Scenario 'CLI-14'
         # 行级单一所有者：判 PASS 时自动勾选带 [e2e-owned] 标记的最终 E2E 任务行（CLI-13 已留下成功记录）。
         # 真实模板形状：最终 E2E 行由扩展拥有，最终验收行（[final-verification]）在验收期间必须待办。
-        Set-FixtureFile "$changePath/tasks.md" "- [x] 1.1 已完成`n- [ ] 7.1 [e2e-owned] 最终 E2E`n- [ ] 8.1 [final-verification] 最终验收`n"
+        Set-FixtureFile "$changePath/tasks.md" "- [x] 1.1 已完成`n- [ ] 8.3 [e2e-owned] 最终 E2E`n- [ ] 9.1 [final-verification] 最终验收`n"
         $owned = Invoke-OpenSpecAgenticJson @('e2e', 'check', '--change', 'regression', '--json')
         Assert-That ($owned.result -eq 'PASS' -and $owned.changes[0].marked -eq $true) 'PASS 时未回写机器拥有的 E2E 任务行'
         $ownedTasks = [IO.File]::ReadAllText((Join-Path $fixtureRoot "$changePath/tasks.md"), $utf8)
-        Assert-That ($ownedTasks -match '\[x\] 7\.1 \[e2e-owned\]') 'tasks.md 的 [e2e-owned] 行未被勾选'
-        Assert-That ($ownedTasks -match '\[ \] 8\.1 \[final-verification\]') '最终验收行不应被回写，应保持待办'
+        Assert-That ($ownedTasks -match '\[x\] 8\.3 \[e2e-owned\]') 'tasks.md 的 [e2e-owned] 行未被勾选'
+        Assert-That ($ownedTasks -match '\[ \] 9\.1 \[final-verification\]') '最终验收行不应被回写，应保持待办'
         $ownedAgain = Invoke-OpenSpecAgenticJson @('e2e', 'check', '--change', 'regression', '--json')
         Assert-That ($ownedAgain.result -eq 'PASS' -and $ownedAgain.changes[0].marked -eq $false) '重复检查不应再次回写'
         Complete-Scenario
         Start-Scenario 'CLI-15'
-        # 结构回归只验证共用契约被投递且验收入口明确消费；拒收/重开判断由 BEH-116..119 验证。
-        Assert-That ($readyInstruction.Contains('roles/handoff.md') -and $readyInstruction.Contains('handoff_index')) 'Apply lost the shared handoff contract'
-        $handoff = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'roles/handoff.md') -Raw -Encoding UTF8
+        # 结构回归只验证共用契约被投递且验收入口明确消费；拒收/重开判断由 BEH-116、118、119、179 验证。
+        Assert-That ($readyInstruction.Contains('roles/_shared/role-report.md') -and $readyInstruction.Contains('handoff_index')) 'Apply lost the shared handoff contract'
+        $handoff = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'roles/_shared/role-report.md') -Raw -Encoding UTF8
         foreach ($field in @('task_id', 'role', 'phase', 'stage', 'target_revision', 'evidence_type', 'evidence_id', 'report_path', 'result', 'evidence_status', 'applicability_basis', 'source_evidence')) {
             Assert-That ($handoff.Contains($field)) "Shared handoff contract lost field: $field"
         }
         foreach ($state in @('NEW', 'REUSED', 'INVALID', 'PENDING')) {
             Assert-That ($handoff.Contains($state)) "Shared handoff contract lost evidence state: $state"
         }
-        foreach ($role in @('coder', 'tester', 'reviewer', 'integrator', 'validator', 'environment')) {
+        foreach ($role in @('coder', 'tester', 'reviewer', 'merger', 'validator', 'scout', 'provisioner')) {
             $instructions = Get-Content -LiteralPath (Join-Path $resolvedSchema.path "roles/$role.md") -Raw -Encoding UTF8
-            Assert-That ($instructions.Contains('roles/handoff.md') -and $instructions.Contains('handoff_index')) "Role lost shared index instruction: $role"
+            Assert-That ($instructions.Contains('roles/_shared/role-report.md') -and $instructions.Contains('handoff_index')) "Role lost shared index instruction: $role"
         }
         $acceptance = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'procedures/acceptance.md') -Raw -Encoding UTF8
         $verificationTemplate = Get-Content -LiteralPath (Join-Path $resolvedSchema.path 'templates/verification.md') -Raw -Encoding UTF8

@@ -11,7 +11,7 @@ const root = new URL("../", import.meta.url);
 const routes = [
   {
     anchor: "Implement tasks from an OpenSpec change.",
-    instruction: "**本项目的 agentic 入口：** `openspec status` 返回 `schemaName: agentic` 时，先读取仓库 `AGENTS.md`、`openspec/config.yaml` 与 agentic schema 的 apply 指令，按其中的计划、候选合入检查、E2E、角色交接和最终验收要求执行。报告可归档前须运行 `.agents/skills/agentic-verify/SKILL.md`；`all_done` 只表示任务复选框完成。下方通用步骤仅在不与上述规则冲突时适用。",
+    instruction: "**本项目的 agentic 入口：** `openspec status` 返回 `schemaName: agentic` 时，先读取仓库 `AGENTS.md`、`openspec/config.yaml`、`openspec/agentic.yaml` 与 agentic schema 的 apply 指令，按其中的计划、并发派发台账、候选合入检查、E2E、角色交接和最终验收要求执行。报告可归档前须运行 `.agents/skills/agentic-verify/SKILL.md`；`all_done` 只表示任务复选框完成。下方通用步骤仅在不与上述规则冲突时适用。",
     files: [
       ".agents/skills/openspec-apply-change/SKILL.md",
       ".pi/prompts/opsx-apply.md",

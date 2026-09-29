@@ -13,11 +13,12 @@
 | 优先级 | 文件 | 运行期读者 | 运行期投递 | 定义什么 | 不得包含 |
 | --- | --- | --- | --- | --- | --- |
 | 1 | [schema.yaml](schema.yaml) | 主 Agent（`npx --quiet --no-install openspec instructions`） | artifact/apply `instruction`；**`all_done` 后不下发** | 依赖图、产物生成要求、apply 调度顺序与门禁判据、模型解析契约正文 | 角色内部操作细节 |
-| 2 | [roles/](roles/) | 各子 Agent（全文显式传入） | 由主 Agent 作为调用输入传入，引擎不注入 | 该角色的输入、边界、执行步骤和报告格式 | 其他角色职责、项目级配置 |
+| 2 | [roles/](roles/) | 各子 Agent（全文显式传入） | 由主 Agent 作为调用输入传入，引擎不注入 | **7 份角色指令 + [roles/_shared/](roles/_shared/) 下的 1 份共用报告契约（[role-report.md](roles/_shared/role-report.md)，不是角色）**：该角色的输入、边界、执行步骤和报告格式 | 其他角色职责、项目级配置 |
 | 3 | [templates/](templates/) | 主 Agent（同一次 instructions 调用） | 同一次 instructions 的 `template` 字段 | 产物骨架、字段填写来源和格式示例 | 规则正文 |
 | 4 | [procedures/acceptance.md](procedures/acceptance.md) | 主 Agent（最终验收） | 由 skill 或等效入口完整读取 | 验收目标、审计组、判定和记录 | 流程调度 |
 | 5 | [openspec/config.yaml](../../config.yaml) | 主 Agent（注入 instructions） | 每次 instructions 都注入 `context` 与 `operationGuidance`；**`all_done` 后仍注入**；同项目其他 schema 的变更也会收到同一份文本，故 agentic 规则须带适用前缀 | 稳定项目画像、项目级补充项与优先级说明、`all_done` 后的验收兜底、归档规则（schema 无 archive 段） | 单次变更状态、未经核实的项目事实、除 `all_done` 兜底外的 schema 门禁正文 |
-| 6 | 本 README | 维护者、使用者 | 不投递（仅人读） | 结构解释、文件索引、移植清单、验证入口 | 任何新规则 |
+| 6 | [openspec/agentic.yaml](../../agentic.yaml) | 主 Agent（`openspec-agentic roles` / `dispatch` / `e2e`） | 由扩展 CLI 按需从磁盘重读；引擎不读该文件 | 角色模型、池容量、E2E 开关 | 流程门禁正文、项目画像 |
+| 7 | 本 README | 维护者、使用者 | 不投递（仅人读） | 结构解释、文件索引、移植清单、验证入口 | 任何新规则 |
 
 投递保证决定规则落点，不只是文风问题：
 
@@ -30,7 +31,7 @@
   且 `all_done` 后不再需要，config 侧重复没有投递理由。
 
 同一规则同时出现在多处时，按 `schema.yaml` instruction > `openspec/config.yaml` context/guidance > 本 README 裁决。
-roles 与 procedures 不参与该顺序：它们自足定义各自读者范围内的行为，子 Agent 只收到对应文件。
+roles/（含 `_shared/role-report.md` 报告契约）与 procedures 不参与该顺序：它们自足定义各自读者范围内的行为，子 Agent 只收到对应文件。
 
 artifact instruction 放生成要求、依赖语义与校验判据；字段填写来源和格式示例放在同一次 instructions
 下发的 template 注释中，同一句话不两处维护。
@@ -59,7 +60,7 @@ operation guidance 提供对应操作的附加指导；二者不创建新阶段�
 
 config 的 `context` 按 Repository Structure、Standard Commands、Engineering Constraints 和
 Runtime Environment 维护稳定项目画像。安装模板中的“未配置”是待适配状态，不是可猜测的默认值；
-需要时由 environment/recon 隔离采集客观事实，主 Agent 确认后更新。单次变更的范围、提交、工作包、
+需要时由 scout 隔离采集客观事实，主 Agent 确认后更新。单次变更的范围、提交、工作包、
 临时资源及执行证据分别属于 plan.md、tasks.md 和 verification.md，不写入全局 context。
 
 可跳过增量规范的唯一例外是 `skip_specs`：仅适用于规范层面行为不变（纯重构、工具或文档变更）的变更，
@@ -93,7 +94,7 @@ flowchart TD
   TEST --> V2["用例/脚本基础检查 ∥ 独立用例 review"]
   V1 --> UNIT[交付单元就绪，复核既定方案]
   V2 --> UNIT
-  UNIT --> LOOP["逐个合入单元（串行）<br/>取最新本地主分支 → 构建一个候选 → 候选测试 ∥ 差异 review<br/>required 时关键 E2E → 复核基线并防竞态本地合入<br/>实际结果一致性 + 必要回归"]
+  UNIT --> LOOP["逐个合入单元（串行）<br/>取最新本地主分支 → 构建一个候选 → 候选 Project Verify ∥ 差异 review<br/>复核基线并防竞态本地合入<br/>实际结果一致性 + 必要回归"]
   LOOP --> MODE{"plan.md 的 Main E2E mode"}
   MODE -->|required| E2E["最终主分支完整 E2E<br/>单入口命令内部并行分片"]
   MODE -->|not-applicable| ALT["核对 reason / basis<br/>完成替代验证"]
@@ -105,14 +106,24 @@ flowchart TD
 ```
 
 `∥` 表示可针对同一代码版本并行执行。图展示成功路径；失败按 schema 与角色规则回到相应检查节点。
-各交付单元基于最新本地主分支验证，门禁通过后直接本地合入，无须每次确认；required 时每个候选执行关键 E2E，全部合入后执行最终完整 E2E。
+各交付单元基于最新本地主分支验证，门禁通过后直接本地合入，无须每次确认；全部单元合入后执行一次完整最终 E2E（候选阶段不执行 E2E）。
 not-applicable 时完成计划中的替代验证，`verification.md` 在整个执行过程持续更新。
 
 ## Operating Model
 
 `plan.md` 定义工作包、资源、交付单元和检查策略，`tasks.md` 跟踪进度，`verification.md` 连续记录实际证据。
-契约明确后，coder 与 tester 可并行；每个交付单元在最新主分支上构造候选，完成适用 Verify、独立 review 和
-关键 E2E 后合入本地主分支，再完成主分支检查。执行 apply 已授权此本地合入，无须逐单元人工批准。
+契约明确后，主 Agent 按流水线与调用窗口逐个开工：能开工 = 依赖就绪（同交付单元 code 依赖的上游已进入
+已验收集成基线；跨交付单元 code 依赖的上游已合入主分支）+ 契约已冻结 + 资源空闲 + 状态未开工，
+就开工，不按批次互等；`plan.md` 的 Execution Waves 只静态登记最早可开工层级，想串行必须写明
+Serialization Reason，无理由串行按计划不合格处理。coder 交付即销毁、reviewer 在同一窗口新建；
+tester 提交产物、主 Agent 确认可读且交接完整后即释放（不等待 review PASS），`execute` / `retest`
+每轮独立派发新建实例并从持久材料恢复上下文；每个工作包在同一时刻最多一个实例，状态由
+`dispatch-queue.jsonl` 台账记录；状态台账只记录当前活跃执行者，worktree 交接绑定该轮认领执行者。
+每个交付单元在最新主分支上构造候选，完成候选 Project Verify 与独立 review 后合入本地主分支，
+再完成主分支检查（候选阶段不执行 E2E）。依赖声明审查在派发实现前完成
+（reviewer `phase: plan`、`stage: plan`，结果绑定当前 contractDigest）；
+provisioner 的 worktree 交接与每次 premerge PASS 由子角色返回结构化记录、主 Agent 校验后写入
+verification 的 `## Worktree Handoff` 与 `## Premerge History`，final 逐交付单元核对。执行 apply 已授权此本地合入，无须逐单元人工批准。
 最终主分支 E2E 与最终验收的具体判据以 schema、roles 和 acceptance 为准。
 
 工作包、交付单元与运行资源的规则正文在 `schema.yaml` 的 plan instruction，字段与填写方式在
@@ -120,15 +131,14 @@ not-applicable 时完成计划中的替代验证，`verification.md` 在整个�
 
 ### E2E Switch
 
-项目级 E2E 校验开关位于项目 `openspec/config.yaml` 的 `x-agentic.e2e`，由 agentic 扩展解析；
+项目级 E2E 校验开关位于扩展独占的 `openspec/agentic.yaml` 的 `e2e` 段，由 agentic 扩展解析；
 未配置时按 `enabled: true` 处理，因此老项目升级后不会静默跳过 E2E。
 
 ```yaml
-x-agentic:
-  e2e:
-    enabled: true        # 缺省开启：每次变更的 Main E2E mode 必须为 required
-    command: ""          # 可选：项目真实 E2E 命令或入口
-    maxAttempts: 3       # 同一变更连续失败的 E2E 重试上限；达到后停止自动重跑，须用户介入
+e2e:
+  enabled: true        # 缺省开启：每次变更的 Main E2E mode 必须为 required
+  command: ""          # 可选：项目真实 E2E 命令或入口
+  maxAttempts: 3       # 同一变更连续失败的 E2E 重试上限；达到后停止自动重跑，须用户介入
 ```
 
 `maxAttempts`（默认 3）限制“E2E 失败 → 修复 → 重跑”的循环：同一变更连续失败达到该值后，
@@ -141,7 +151,7 @@ npx --quiet --no-install openspec-agentic e2e run --change <变更>  # 在流程
 npx --quiet --no-install openspec-agentic e2e check --change <变更>  # 比对开关、计划判据与执行记录
 ```
 
-`e2e run` 是 **apply 阶段的 E2E 任务**入口：执行 `x-agentic.e2e.command`（可用 `--command` 覆盖；
+`e2e run` 是 **apply 阶段的 E2E 任务**入口：执行 `e2e.command`（可用 `--command` 覆盖；
 `--stage candidate|final` 标注候选/最终阶段；人工场景用 `--manual --by --evidence [--result pass|fail|blocked] [--cases <范围>]`；
 测试 worktree 用 `--planning-root <权威规划根>` 把记录写回权威变更目录），输出实时透传，
 退出码 `0` 通过 / `1` E2E 失败 / `2` 无法执行（缺命令、缺变更、参数不完整、执行前产品代码脏，或已达 `maxAttempts` 连续失败上限）；
@@ -171,15 +181,14 @@ npx --quiet --no-install openspec-agentic e2e check --change <变更>  # 比对�
 最终 Main E2E 的并行只发生在**项目 E2E 命令内部**，流程层面对外仍是一个入口：
 
 ```powershell
-# 每轮只调用一次；分片并行由 x-agentic.e2e.command 内部完成
+# 每轮只调用一次；分片并行由 e2e.command 内部完成
 npx --quiet --no-install openspec-agentic e2e run --change <变更> --stage final
 ```
 
-- `x-agentic.e2e.command` 指向项目自己的聚合入口（如 `node scripts/e2e-parallel.mjs`），由它在内部并发分片、
+- `e2e.command` 指向项目自己的聚合入口（如 `node scripts/e2e-parallel.mjs`），由它在内部并发分片、
   汇总退出码：任一分片失败或约定用例零执行即非零退出；各分片写独立报告。
 - **不得**按分片多次调用 `e2e run --stage final`：`e2e check` 只认最近一条 final 记录，多个 final 记录会让
-  失败分片被后完成的通过分片掩盖；这也与“记录命令须与 `x-agentic.e2e.command` 一致”的门禁冲突。
-- 候选关键 E2E 用 `--stage candidate`，可按交付单元/分片分别留证，由主 Agent 汇总，不受最终门限制。
+  失败分片被后完成的通过分片掩盖；这也与“记录命令须与 `e2e.command` 一致”的门禁冲突。
 - 分片资源必须隔离（数据库/schema、端口、账号、可写目录、外部服务），无法隔离时串行或按独占队列排队；
   分片数不超过可用隔离资源。
 - `verification.md` 的 `Main E2E` 节按唯一 E2E ID 核对各分片覆盖、固定版本与隔离证据，分片报告路径逐项引用。
@@ -188,27 +197,28 @@ npx --quiet --no-install openspec-agentic e2e run --change <变更> --stage fina
 
 ### Role Models
 
-7 个角色的模型只在项目 `openspec/config.yaml` 的 `x-agentic.roles` 中配置。agentic 扩展不维护宿主列表，
+8 个常设角色的模型只在扩展独占的 `openspec/agentic.yaml`（与引擎的 `config.yaml` 同目录，分成两个文件）中配置，
+便于经常变动的模型配置与需要提交的流程配置分开维护。agentic 扩展不维护宿主列表，
 也不转换或校验模型目录；模型标识符原样交给当前 Agent 宿主解释。
 
 ```yaml
-x-agentic:
-  roles:
-    main: "@current"
-    coder: provider/fast-model
-    reviewer: { model: provider/review-model }
+roles:
+  main: "@current"
+  coder: provider/fast-model
+  reviewer: { model: provider/review-model }
 ```
 
-键为 `main`、`coder`、`integrator`、`tester`、`validator`、`reviewer`、`environment`；
-值可以直接写非空模型字符串，也可以写 `{ model: <模型> }`。安装时 7 个角色都初始化为
+`roles` 的键为 `main`、`coder`、`tester`、`reviewer`、`validator`、`merger`、`scout`、`provisioner`；
+值可以直接写非空模型字符串，也可以写 `{ model: <模型> }`。安装时 8 个常设角色都初始化为
 `@current`；这是扩展保留值，表示继承主会话当前实际模型，不是交给宿主解析的模型名。
-`x-agentic.roles` 是 agentic 扩展的项目级配置，由 `npx --quiet --no-install openspec-agentic roles` 解析；角色文件和产物模板不定义模型。
+`agentic.yaml` 是 agentic 扩展的项目级配置（与 `dispatch`、`e2e` 同文件），由 `npx --quiet --no-install openspec-agentic roles` 解析；角色文件和产物模板不定义模型。
+默认值来自安装包内的 `assets/openspec/agentic.yaml` 模板：`init` 用它播种新项目；`update` 先迁移旧位置，仅在文件缺失且无可迁移内容时用模板初始化，否则只补缺失键并保留显式增删；`roles set` 在缺文件时也据此新建。
 
 | 命令 | 作用 |
 | --- | --- |
-| `npx --quiet --no-install openspec-agentic roles [--json]` | 每次从磁盘重新读取并校验 7 个角色的当前模型映射 |
-| `npx --quiet --no-install openspec-agentic roles --strict` | 额外要求 7 个角色全部显式配置 |
-| `npx --quiet --no-install openspec-agentic roles set\|unset <角色> [模型]` | 直接维护 `openspec/config.yaml` 的 `x-agentic.roles` |
+| `npx --quiet --no-install openspec-agentic roles [--json]` | 每次从磁盘重新读取并校验 8 个常设角色的当前模型映射 |
+| `npx --quiet --no-install openspec-agentic roles --strict` | 额外要求 8 个常设角色全部显式配置 |
+| `npx --quiet --no-install openspec-agentic roles set\|unset <角色> [模型]` | 直接维护 `openspec/agentic.yaml` 的 `roles` |
 | `npx --quiet --no-install openspec-agentic doctor` | 安装完整性、引擎版本、schema 与角色配置校验 |
 
 ```powershell
@@ -217,7 +227,7 @@ npx --quiet --no-install openspec-agentic roles unset coder
 ```
 
 `openspec config` 的其他键（`profile`、`workflows` 等）仍由引擎管理**全局配置**；
-`x-agentic.roles` 由 agentic 扩展接管并写入项目配置。
+`agentic.yaml` 由 agentic 扩展接管。该文件是否纳入版本库由使用它的项目决定。
 
 模型解析契约的权威正文在 [schema.yaml](schema.yaml) 的 apply instruction；本节只是人类可读速查，不新增规则：
 入口为 `npx --quiet --no-install openspec-agentic roles --json`（每次派发前重读，不缓存），`@current` 表示继承
@@ -229,17 +239,19 @@ npx --quiet --no-install openspec-agentic roles unset coder
 | 检查 | 时机 | 关注内容 | 复用边界 |
 | --- | --- | --- | --- |
 | Local Checks | 编码期间 | 对当前改动做快速反馈 | 不能替代交付清单 |
-| Project Verify | 分支交付、适用的集成阶段、合并候选及主分支 | 构建、静态/类型检查、单元和集成测试；不含 E2E | 需核对代码内容、命令/配置、环境和范围 |
+| Dependency Declaration Review | plan 阶段（开工前门禁） | 独立 reviewer 核实 code / contract / resource 声明属实，结果绑定当前 contractDigest | 计划或契约变化后失效，须重新审查 |
+| Project Verify | 分支交付、合并候选及主分支（执行者：工作包=coder，候选与主分支=merger） | 构建、静态/类型检查、单元和集成测试；不含 E2E | 需核对代码内容、命令/配置、环境和范围 |
 | Code Review | 各分支交付与适用的集成/合并阶段 | 非作者检查实际 diff，关注正确性、边界、安全及回归 | 无新增差异时记录依据并沿用结论 |
-| Candidate E2E | required（项目开关开启或缺省时为强制）时每个候选合入前 | 对应交付单元的关键路径与跨组件行为 | 不能替代最终完整覆盖 |
-| Main E2E | required（同上）时全部单元合入后的最终主分支每轮执行一次 | 从真实入口验证关键用户路径及跨组件行为 | 仅计划明确时增加中间 Main E2E |
+| Worktree Handoff | provisioner 创建/回收 worktree 时（main 登记） | 按 (WP, Attempt) 记录 worktree、基线、本轮认领执行者与开工前接收时间 | 计划 worktree 或该轮认领执行者变化时失效 |
+| Premerge History | 每次候选合入前 | 记录交付单元、全部工作包、目标/候选与 premerge PASS | 新候选重建后旧行保留；final 逐单元核对 |
+| Main E2E | required（同上）时全部单元合入后的最终主分支每轮执行一次；**单元级候选阶段不执行 E2E** | 从真实入口验证关键用户路径及跨组件行为 | 每轮只调用一次聚合入口 |
 | Final Verification | apply 中其他适用任务完成后由主 Agent 执行；也可通过 `/opsx:verify` 手动核查 | 核对需求、设计、计划、任务、实现和证据的一致性 | 不替代实际测试、独立检视或 E2E |
 
 检查清单、角色隔离与证据复用条件见 schema.yaml 的 plan instruction；候选与主分支的
 执行及失败处理见 apply instruction，验收判读见 procedures/acceptance.md。
 
-`schema.yaml`、`templates/` 与 `roles/` 正文中的“实现 Agent”“集成 Agent”“测试 Agent”“验证 Agent”
-分别指 `coder`、`integrator`、`tester`、`validator`；指向写入目标时用文件名（`plan.md`、`tasks.md`），
+`schema.yaml`、`templates/` 与 `roles/` 正文中的“实现 Agent”“合入 Agent”“测试 Agent”“验证 Agent”
+分别指 `coder`、`merger`、`tester`、`validator`；指向写入目标时用文件名（`plan.md`、`tasks.md`），
 描述依赖关系时用产物名（plan、tasks）。
 
 ## Documents
@@ -253,11 +265,13 @@ npx --quiet --no-install openspec-agentic roles unset coder
 | --- | --- | --- |
 | [schema.yaml](schema.yaml) | artifacts 的生成路径、模板、依赖及 instruction；apply.requires、tracked 文件和 apply 调度指令 | 依赖图、artifact 生成要求、apply 调度和交付门禁 |
 | [templates/](templates/) | proposal、spec、design、plan、tasks、verification 的产物结构 | 对应产物的字段与填写方式 |
-| [roles/](roles/) | reviewer、coder、validator、tester、integrator、environment 的输入、边界、程序和报告要求 | 对应角色的执行行为 |
+| [roles/](roles/) | 7 份角色指令（coder、tester、reviewer、validator、merger、scout、provisioner）的输入、边界、程序和报告要求 | 对应角色的执行行为 |
+| [roles/_shared/](roles/_shared/) | 1 份共用报告契约 [role-report.md](roles/_shared/role-report.md)：所有角色报告的统一字段、`handoff_index` 与 role→phase→stage 枚举（不是角色，无模型键） | 所有角色报告的统一格式 |
 | [procedures/acceptance.md](procedures/acceptance.md) | 最终验收的目标核对、证据审计、任务例外及判定程序 | 最终 PASS/FAIL/BLOCKED 的判定和记录规则 |
-| [openspec/config.yaml](../../config.yaml) | 项目唯一配置：默认 schema 选择、context 共享补充、`operations.guidance`、角色模型 `x-agentic.roles` 与项目级 E2E 开关 `x-agentic.e2e` | 项目级补充项与优先级说明；扩展不保留第二套配置；角色模型由 `npx --quiet --no-install openspec-agentic roles` 解析，E2E 开关由 `npx --quiet --no-install openspec-agentic e2e` 解析；归档规则只能写入 `operations.archive.guidance`（schema 级 `archive` 段可通过校验但不随 instructions 下发） |
-| [agentic-verify/SKILL.md](../../../.agents/skills/agentic-verify/SKILL.md) | 解析变更和 schema，定位并读取最终验收程序 | 验收入口如何取得上下文及加载指令 |
-| [AGENTS.md](../../../AGENTS.md) | 将 agentic 最终验收、手动 verify 和归档前检查路由到项目 skill | 宿主何时必须进入专用验收入口 |
+| [openspec/config.yaml](../../config.yaml) | 引擎侧项目配置：默认 schema 选择、context 共享补充、`operations.guidance` | 项目级补充项与优先级说明；扩展不保留第二套配置 |
+| [openspec/agentic.yaml](../../agentic.yaml) | 扩展侧项目配置：角色模型 `roles`、并发派发 `dispatch.pool`、项目级 E2E 开关 `e2e` | 角色模型由 `npx --quiet --no-install openspec-agentic roles` 解析，E2E 开关由 `npx --quiet --no-install openspec-agentic e2e` 解析，池容量由 `openspec-agentic dispatch` 解析；归档规则不写在这里 |
+| agentic-verify/SKILL.md | 解析变更和 schema，定位并读取最终验收程序 | 验收入口如何取得上下文及加载指令；源码位于 `assets/skills/agentic-verify/SKILL.md`，安装后为目标项目 `.agents/skills/agentic-verify/SKILL.md` |
+| AGENTS.md | 将 agentic 最终验收、手动 verify 和归档前检查路由到项目 skill | 宿主何时必须进入专用验收入口；源码位于 `assets/AGENTS.md`，安装后为目标项目根 `AGENTS.md`；扩展发行源仓库自身的根 `AGENTS.md` 是开发说明，不是本模板 |
 | [tests/agentic-workflow.ps1](tests/agentic-workflow.ps1) | 在临时样例中检查 CLI 依赖、状态和指导输入 | CLI 兼容性及流程配置回归检查 |
 | [tests/scenarios.md](tests/scenarios.md) | 宿主 Agent 行为的验证场景与预期 | 调度、隔离、证据判断等行为应如何验证 |
 | [README.md](README.md) | 整体流程、职责、接入方式和执行边界说明 | 本文件；修改它不会自动改变 CLI 或角色指令 |
@@ -295,13 +309,13 @@ CLI 检测文档是否存在并统计任务复选框，不会自动启动 Agent�
 `e2e check` 仍只用 `[final-verification]` 定位允许待办的验收行；`workflow check` 额外要求它和
 `[e2e-owned]` 各存在且唯一、不能共用一行。需要不可绕过的强制时仍须在受控入口或 CI 中调用。
 归档 guidance 是提示层补充；若需要强制阻止未验收合并或归档，应另行实现 CI、分支保护或执行器检查，
-不能声称本配置已提供这些能力。可选方案是在 CI 中执行可自动化的 Project Verify、候选 E2E 和证据完整性检查，
+不能声称本配置已提供这些能力。可选方案是在 CI 中执行可自动化的 Project Verify 与证据完整性检查，
 将其设为分支保护的必需状态检查；对最终 Main E2E 和人工/Agent 审查，用合并队列或合入后的受控流水线记录结果，
 并以受保护的发布/归档入口拒绝缺少有效 PASS 证据的变更。
 
 旧变更如果已存在 tasks.md，需在继续 apply 前补写 plan.md 和验收任务；apply 显式依赖全部规划 artifact。
 
-工作流不预设各角色使用的具体模型：模型由 `openspec/config.yaml` 的 `x-agentic.roles` 配置（见 [Role Models](#role-models)），
+工作流不预设各角色使用的具体模型：模型由 `openspec/agentic.yaml` 的 `roles` 配置（见 [Role Models](#role-models)），
 未配置时使用宿主默认，模型差异不改变角色职责与独立性要求；
 本流程在门禁通过后直接合入计划中的本地主分支，无须每次询问；角色分配、验收与归档不授权回滚、推送或发布。
 
@@ -314,7 +328,7 @@ CLI 检测文档是否存在并统计任务复选框，不会自动启动 Agent�
 - 对照本项目 `openspec/config.yaml`，在目标项目兼容配置中选择 `schema: agentic`；已有变更仍须核对自身 schema。
 - 将该配置的 `context` 合入目标项目已有 context，保留业务约束，不直接覆盖原文。
 - 合入 `operations.apply.guidance` 和 `operations.archive.guidance`，保留目标项目已有指导、其他 operations、rules、store 等配置；逐项解决冲突，不整份覆盖 config.yaml。
-- `openspec/config.yaml` 模板把 7 个角色全部初始化为 `@current`；按需覆盖个别角色模型。
+- 照本项目 `openspec/agentic.yaml` 建立扩展侧配置：`roles` 全部初始化为 `@current`（按需覆盖个别角色模型）、`dispatch.pool` 取默认或项目真实容量、`e2e` 按项目情况填写；不要把这些键写回 `openspec/config.yaml`。
 - 用目标 CLI 检查 schema 解析结果及 instructions 中的 `context`、`operationGuidance`，确认 apply/archive 均收到指导；不要仅凭文件已复制判断接入完成。`npx --quiet --no-install openspec-agentic roles --json` 确认当前角色模型解析结果。
 
 只复制 schema 不会自动安装或改写宿主的 `/opsx:verify`。
@@ -348,7 +362,7 @@ required E2E 还需可用的真实产品驱动、隔离运行资源，或计划�
 ## Validation
 
 在项目根目录运行 `npx --quiet --no-install openspec schema validate agentic --json` 校验结构与 artifact 模板；
-`npx --quiet --no-install openspec-agentic roles` 校验 `x-agentic.roles` 配置并始终读取磁盘中的当前值。
+`npx --quiet --no-install openspec-agentic roles` 校验 `openspec/agentic.yaml` 配置并始终读取磁盘中的当前值。
 实际执行时检查 `npx --quiet --no-install openspec status --change <name> --json` 的阶段依赖，
 并通过 `npx --quiet --no-install openspec instructions <artifact> --change <name> --json` 获取对应阶段内容。
 这些命令用于检查流程配置，不替代目标项目的测试、代码检视或 E2E。
