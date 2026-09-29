@@ -46,6 +46,13 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 30
+    # `@fission-ai/openspec` 在 `package.json` 里是精确 pin，且必须与 `@dongfanglin/openspec-agentic`
+    # 声明的 peer 版本（`0.2.4` → `1.13.0`）完全一致：`npm ci` 会因 peer 冲突直接 ERESOLVE，
+    # 而 `npm run check:agentic` 的 `openspec-agentic doctor` 也会断言「项目本地引擎版本 == 扩展 pin 的
+    # 版本」。引擎升级的路径是 `openspec-agentic update`（连同扩展一起升并刷新受管文件哈希），
+    # 不是 Dependabot 单独升这一项；不忽略它会每周复现同一个必失败的 PR（#32）。
+    ignore:
+      - dependency-name: "@fission-ai/openspec"
     groups:
       # 这些包只用于合同校验脚本与提交钩子（见 package.json 的 description），
       # 它们的升级会影响门禁本身的行为，因此仍需过全部 CI。
