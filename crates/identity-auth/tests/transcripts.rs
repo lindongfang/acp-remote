@@ -433,7 +433,7 @@ impl FakePublicKey {
         let bytes =
             support::hex("0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a");
         let signing = p256::ecdsa::SigningKey::from_slice(&bytes).expect("合法标量");
-        let point = p256::ecdsa::VerifyingKey::from(&signing).to_encoded_point(false);
+        let point = p256::ecdsa::VerifyingKey::from(&signing).to_sec1_point(false);
         PeerPublicKey::try_from_bytes(point.as_bytes()).expect("导出的公钥必须合法")
     }
 }

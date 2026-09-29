@@ -59,7 +59,7 @@ impl AccessKey {
 
     /// 65 字节 SEC1 未压缩公钥（配对与验签用）。
     pub fn public_key(&self) -> PeerPublicKey {
-        let point = self.signing.verifying_key().to_encoded_point(false);
+        let point = self.signing.verifying_key().to_sec1_point(false);
         PeerPublicKey::try_from_bytes(point.as_bytes()).expect("65 字节 SEC1 公钥")
     }
 

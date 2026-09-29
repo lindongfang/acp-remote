@@ -178,25 +178,31 @@ const CORE_ALLOWED_CLOSURE = [
   "sha2",
   // 上面四者的 proc-macro 与曲线栈传递依赖（`p256` 只开 `arithmetic`：曲线点校验需要的
   // `sec1`/`elliptic-curve`/`primeorder`/`group`/`ff` 等；`sha2` 的 `digest`/`block-buffer`；
-  // 以及它们共用的 `generic-array`/`hybrid-array`/`subtle`/`zeroize`）。它们随上述依赖出现，
+  // 以及它们共用的 `hybrid-array`/`subtle`/`zeroize`）。它们随上述依赖出现，
   // 不是独立选择；新增任何一个都必须先按 AGENTS.md §7 审查。**签名与编码栈不在闭包内**：
   // core 既不签名也不验签，因此 `ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8`/`spki`/`pem-rfc7468`/
   // `base64ct` 都不应出现在这里——出现即说明有人把 workspace 的默认 feature 又放开了（`sec1` 自带的
   // `base16ct` 十六进制解码仍在闭包内）。
+  // `p256 0.14` 换上 `crypto-bigint 0.7` 后，大整数底座与其常量时间工具的 `cmov`/`cpubits`/`ctutils`/
+  // `num-traits` 取代了 `crypto-bigint 0.5` 时代的 `generic-array`；曲线窗口算法另带 `primefield`/`wnaf`。
   "base16ct",
   "block-buffer",
   "cfg-if",
+  "cmov",
   "const-oid",
+  "cpubits",
   "cpufeatures",
   "crypto-bigint",
   "crypto-common",
+  "ctutils",
   "der",
   "digest",
   "elliptic-curve",
   "ff",
-  "generic-array",
   "group",
   "hybrid-array",
+  "num-traits",
+  "primefield",
   "primeorder",
   "proc-macro2",
   "quote",
@@ -207,6 +213,7 @@ const CORE_ALLOWED_CLOSURE = [
   "thiserror-impl",
   "typenum",
   "unicode-ident",
+  "wnaf",
   "zeroize",
 ];
 

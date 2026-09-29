@@ -75,7 +75,7 @@ impl PeerKey {
     pub fn from_seed(seed_hex: &str) -> Self {
         let bytes = hex(seed_hex);
         let signing = p256::ecdsa::SigningKey::from_slice(&bytes).expect("合法标量");
-        let point = p256::ecdsa::VerifyingKey::from(&signing).to_encoded_point(false);
+        let point = p256::ecdsa::VerifyingKey::from(&signing).to_sec1_point(false);
         let public_key = PeerPublicKey::try_from_bytes(point.as_bytes()).expect("合法公钥");
         Self {
             signing,
@@ -292,7 +292,7 @@ impl FakeKeystore {
         let signing =
             p256::ecdsa::SigningKey::from_slice(&bytes).expect("固定标量必须是合法 P-256 私钥");
         let verifying = p256::ecdsa::VerifyingKey::from(&signing);
-        let point = verifying.to_encoded_point(false);
+        let point = verifying.to_sec1_point(false);
         let public_key =
             PeerPublicKey::try_from_bytes(point.as_bytes()).expect("导出的公钥必须合法");
         Arc::new(Self {
@@ -326,7 +326,7 @@ impl FakeKeystore {
         let bytes = hex("0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a");
         let signing =
             p256::ecdsa::SigningKey::from_slice(&bytes).expect("固定标量必须是合法 P-256 私钥");
-        let point = p256::ecdsa::VerifyingKey::from(&signing).to_encoded_point(false);
+        let point = p256::ecdsa::VerifyingKey::from(&signing).to_sec1_point(false);
         PeerPublicKey::try_from_bytes(point.as_bytes()).expect("导出的公钥必须合法")
     }
 
