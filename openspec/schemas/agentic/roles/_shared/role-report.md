@@ -1,4 +1,4 @@
-# Shared Handoff Index Contract
+# Shared Role Report Contract
 
 本文件是所有角色报告共用的最小交接索引契约。主 Agent 派发时将全文与对应角色指令一起传入；
 角色只填写自己执行或检视的范围，不汇总其他角色，也不修改权威 plan.md、tasks.md、verification.md。
@@ -20,10 +20,12 @@ NOT_APPLICABLE；`agent_context` 写实际 Agent ID 与隔离/继承方式，`ta
 ```yaml
 handoff_index:
   - task_id: "2.1"
+    work_package: WP1
     role: coder
     phase: implement
+    round: NOT_APPLICABLE
     stage: work-package
-    target_revision: "<完整提交 SHA；尚无提交时写 NOT_AVAILABLE 并说明>"
+    target_revision: "<完整提交 SHA；规划审查可填当前 contractDigest；尚无提交时写 NOT_AVAILABLE 并说明>"
     evidence_type: CHECK
     evidence_id: PV1
     report_path: "<相对权威 changeDir 的路径或绝对路径>"
@@ -33,8 +35,28 @@ handoff_index:
     source_evidence: NOT_APPLICABLE
 ```
 
-`task_id` 必须对应权威 tasks.md；`role` 是报告角色；`phase` 使用角色定义的阶段；
-`stage` 取 `recon`、`runtime`、`work-package`、`candidate`、`main` 或 `final-main` 中的适用值。
+`task_id` 必须对应权威 tasks.md；`work_package` 填该证据对应的工作包（DELIVERY / REVIEW 行必填，环境、规划行写 NOT_APPLICABLE）；`role` 是报告角色；`phase` 与 `stage` 按下表取值：
+
+| Role | Phase | Stage |
+| --- | --- | --- |
+| coder | `implement`、`fix` | `work-package` |
+| tester | `design-author` | `work-package` |
+| tester | `execute`、`retest` | `final-main` |
+| reviewer | `plan` | `plan`（目标为当前 `contractDigest`，不是提交 SHA） |
+| reviewer | `branch`、`test-case`、`integration`、`merge`、`post-merge` | `work-package`、`candidate` 或 `main`，按本轮 `target_revision` 所绑定的版本；复核轮沿用原类型 |
+| validator | `validation` | `final-main` |
+| merger | `integrate`、`candidate` | `candidate` |
+| merger | `merge` | `main` |
+| scout | `recon` | `recon` |
+| provisioner | `runtime` | `runtime` |
+
+`stage` 表示该行证据绑定的目标版本：`work-package` 是工作包/用例编写提交，`candidate` 是合入候选
+（merger 复用本单元已有的执行 worktree，`integrate` 与 `candidate` 绑同一候选提交），
+`main` 是合入后的主分支提交，`final-main` 是全部单元合入后的最终主分支版本，`plan` 是规划契约摘要
+（依赖声明审查，`target_revision` 写当时的 `contractDigest`，不要求先有提交），`recon` 与 `runtime`
+是尚未绑定代码的环境事实。只有同一阶段的证据才能互相顶替，跨阶段必须分行。
+reviewer 的 `phase` 取本轮 Review Type（复核轮沿用原类型与原 Review ID）；`main` 不提交角色报告（它汇总各角色索引进 verification.md），
+因此不在表中。合法枚举与绑定关系以本表为准，角色专有字段与判定细节见对应 `roles/*.md`。
 `target_revision` 是本行结果所针对的固定提交；环境资源尚未绑定代码时记录已核实的目标提交，
 确实尚不存在时用 NOT_AVAILABLE 并说明依赖，不能猜测。`evidence_type` 取 CHECK、E2E、REVIEW、
 VALIDATION、RESOURCE 或 DELIVERY；没有计划内检查 ID 的资源/交付行，`evidence_id` 写 NOT_APPLICABLE。
@@ -53,6 +75,14 @@ VALIDATION、RESOURCE 或 DELIVERY；没有计划内检查 ID 的资源/交付�
 不得写 PASS；PENDING 的 `result` 必须为 BLOCKED。目标提交尚不存在或无法核实时，不能报告该任务 PASS。
 NEW/REUSED 的报告路径必须可读，且 ID、任务、阶段、目标版本和实际报告一致；
 INVALID/PENDING 不能完成受影响任务。Check/E2E/Review ID 标识检查或用例，不单独标识一次证据记录；
-同一 ID 可在不同任务、阶段或目标版本重新执行。逐条按任务 ID、阶段、目标版本和原始报告核对。
+同一 ID 可在不同任务、阶段或目标版本重新执行。**Review ID 在一条检视线程内复用**：
+同一检视对象、同一类型、同一阶段的复核轮沿用该 ID，轮次由**显式 `round` 字段**区分
+（`round` 在线程内从 1 递增；同一目标也允许再次审查，例如补齐材料后从 BLOCKED 重新判断）；
+仅在类型/对象/阶段变化时新发 Review ID。`Review ID + Round` 是该检视行的唯一键；
+同一线程有多轮时，当前结论以**显式 `round` 最大**的一轮为准（不是“最高 `target_revision`”，
+Git SHA 无高低序），历史轮次保留不覆盖。问题 ID `<Review ID>-F<n>` 在线程内连续编号，不因轮次重置。
+`round` 对非检视行写 `NOT_APPLICABLE`；检视行必填且与对应 `roles/*.md` 报告的轮次一致。
+新一轮未完成或受阻时不得回退引用旧轮 PASS；历史阻断问题必须逐 ID 明确闭环。
+逐条按任务 ID、阶段、目标版本和原始报告核对。
 不同角色声称引用同一次证据记录时，来源、版本和结果才必须一致；同一 ID 的不同次执行
 分别保留各自结论，不能互相覆盖。真正冲突须报告给主 Agent，不得自行改写他人报告或替全局判 PASS。
