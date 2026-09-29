@@ -4,8 +4,8 @@
 
 - 变更：`node-trust-export-ids`（changeDir：`D:\Project\acp-remote\openspec\changes\node-trust-export-ids`，权威规划根同）。
 - 代码仓库：`D:\Project\acp-remote`。
-- 目标主分支：`refs/heads/main` = `3cadb12d79456750e40644a2ea53c96380b700e6`（2026-09-27 核实；本地与 `origin/main` 同 SHA，`git worktree list` 显示主检出位于 `main`）。
-- 执行基线：起点提交 = 上述 `3cadb12d`；运行时基线见 `reports/env1-baseline.log`（task 1.1）。
+- 目标主分支：`refs/heads/main` = `561f3ff973c27d3f78928e33256b21e5141a7677`（2026-09-29 收尾验收时核实）。本变更的代码实际经 PR #30 以 squash 提交 `9349aa0` 进入 `origin/main`，规划工件由 PR #34（`5540028`）进入；`3cadb12d` 是未推送的本地候选基线，已不在主分支历史上。
+- 执行基线：起点提交 = `3cadb12d`；运行时基线见 `reports/env1-baseline.log`（task 1.1）。收尾验收在 `561f3ff` 上重跑了全部替代检查（见下方「收尾验收」）。
 
 ## Handoff Index
 
@@ -215,21 +215,60 @@ alternative_checks:
 | 无 | — | — | — | — | — | 其余无失败或受阻记录 |
 | ISSUE-1（文档门禁在主检出变红） | `39be2f77` / [PV1] `check:docs` / 主检出 | 主 Agent（自己写入的记录文本） | 把 `verification.md:70` 的「本文件 §3.5」改为指名 `CORE_PORTS_AND_STORAGE.md` §3.5（另含一处同类表述），并登记门禁取位规则（见 Check Plan Changes） | RV4-DOCS 报告（reports/rv4-docs.md）的越界发现 | 主检出 `node scripts/check-doc-links.mjs` = exit 0（381 链接 / 7003 章节引用 / 350 文件，于 `3cadb12` + 本变更未跟踪产物上） | **已解决**（主 Agent 亲自复跑主检出门禁为 0；集成阶段 `npm run check` 会再复核） |
 
+## 收尾验收（2026-09-29）
+
+本变更的代码与规划工件此前已分别由 PR #30（squash 提交 `9349aa0`）与 PR #34（`5540028`）进入 `origin/main`，但收尾未完成：tasks 未勾、`## Final Assessment` 停在 apply 起点、归档未执行。本轮在 `refs/heads/main` = `561f3ff` 上据实补完并重做最终验收。
+
+| 检查 | 命令 | 目标 | 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| [PV1] | `npm run verify`（合同门禁 10/10 + fmt + clippy `-D warnings` + workspace 测试） | `561f3ff` | PASS / exit 0 | reports/final-alt-verify-pv1.log |
+| [PV2] | `node scripts/check-crate-boundaries.mjs` | `561f3ff` | PASS / exit 0（12 crate） | reports/final-pv2.log |
+| [PV3] | `cargo test --locked -p storage-sqlite -p core --all-features` | `561f3ff` | PASS / exit 0 | reports/final-pv3.log |
+| [PV4]/[PV5] | `cargo test --locked -p server -p app --all-features` | `561f3ff` | PASS / exit 0（`node_link_e2e`、`node_pair_export_ids` 全绿） | reports/final-pv4-pv5.log |
+
+语义核对：交付代码与三份增量规范逐项一致——`NodeRecord.export_ids` 归一化（去重/字典序/空集合合法，`crates/core/src/model/identity.rs`）、catalog 可见性第三条件 `exportId ∈ node.export_ids`（唯一判定点，`crates/server/src/node_link/catalog.rs`）、`node.pair.confirm` 的 `exportIds` 必填（`crates/server/src/local_admin/params.rs`）、CLI 可重复 `--export-id` 与零次警告不阻断（`crates/app/src/cli/pairing.rs`）、存储 v4 追加列与常量 4/4/3（`crates/storage-sqlite/src/migrate.rs`）、重新配对以关闭码 `1000` 作废既有连接且不推 `node.trust.revoked`（`crates/server/src/node_link/command.rs`）。独立 review 记录见 `reports/rv1-impl.md`、`reports/rv1-docs.md`、`reports/rv5-impl.md`。
+
+交付血统说明：`## Merge History` 记录的是 2026-09-27 的本地 `main` 合入（`38c6b723`，候选 `64e179c6`）；该本地线未推送，且不在 `origin/main` 历史上。实际交付为 squash PR #30（`9349aa0`）。本轮不改写历史记录，仅补充本说明，并以当前主分支 `561f3ff` 为验收目标。
+
 ## Final Assessment
 
 ```agentic-assessment
-assessment_id: "FA-2026-09-27-01"
-target_commit: "3cadb12d79456750e40644a2ea53c96380b700e6"
+assessment_id: "FA-2026-09-29-01"
+target_commit: "561f3ff973c27d3f78928e33256b21e5141a7677"
 contract_digest: "sha256:8cc6ecf1af02fcdaa5f2ca289dbdf3698f369feb73158dd3fec88e445c23871d"
-result: BLOCKED
+result: PASS
 evidence:
+  - path: reports/du1-pv1.log
+    sha256: "sha256:8c425dea063e579edd1a06b81a61898545fda9d93191632b74f67575299efda7"
+  - path: reports/pv5-windows-nodelink.log
+    sha256: "sha256:259e05fd23fe1b33fd005627cc1781c3dec891f2431db043cae4fbd7027cbc25"
+  - path: reports/wp4-app.log
+    sha256: "sha256:59213c0a6db3781cbc5a8c910a9f81edc713f132df4e6bc4d6644c3ea8c7ae85"
+  - path: reports/final-alt-verify-pv1.log
+    sha256: "sha256:982ba74fe4936d436a1054faf493f4765dd8b5a98e09866f72d2f486597bf554"
+  - path: reports/final-pv2.log
+    sha256: "sha256:787824ce9f4b7775cebf9d85057529781d8d41eef8313f9a347676da415f1851"
+  - path: reports/final-pv3.log
+    sha256: "sha256:a0d54522c1ab937ff91a6371641ec37b2ca6493d541f916c25f53ef49b361d99"
+  - path: reports/final-pv4-pv5.log
+    sha256: "sha256:8147ee2c46a725dc5e65697d9fa078c08cd5f757c9ac33028c12bb9e97283edc"
+  - path: reports/rv5-impl.md
+    sha256: "sha256:0d37a94b39f6597cfd180811f64699258c86adb4798b6da4a489b05bfd9eac8e"
+  - path: reports/du1-integration.md
+    sha256: "sha256:87a7700161913ea550de9edb5940d895baf30cc39e8ef889a55d6964e4d0edb1"
+  - path: reports/du1-main-merge.md
+    sha256: "sha256:f637cc331ab28b05a883dd687973cedac0efd708ee4c45494798cdc7dabf3803"
+  - path: reports/rv1-impl.md
+    sha256: "sha256:cab9e51b80e614f3f72539d07ad5378b66fbe4f0553ccee48797fa1939b65ce5"
+  - path: reports/rv1-docs.md
+    sha256: "sha256:14a088cde19fdc7947948704e0c92fb9150622cf764e051f73190272f38b5836"
   - path: reports/env1-baseline.log
-    sha256: "sha256:3bf835a29dbe7e4e8af31eee4b418bc3e07c72b72cf16563ecefd4eab29ecd2d"
+    sha256: "sha256:a1fe29a563dfd58e9e4f6b4f5152e930df67ac5f9f0a5045af70c7bb06439dd1"
 ```
 
-- Assessment ID / Time: FA-2026-09-27-01（apply 起点；待实现与最终验收后更新）
-- Target / Task: `refs/heads/main` = `3cadb12d`；最终验收任务 = tasks.md 的 8.1
-- CLI State: `openspec status --change node-trust-export-ids --json` 于 2026-09-27 apply 起点查询：5/5 产物 done、任务 0/23（原始输出见本文件 Target 与 tasks.md）
-- Audit / Evidence: 尚未进入验收；当前已登记运行时基线、契约变化、四轮文档 review（RV1–RV4-DOCS）与首轮代码 review（RV1-IMPL = PASS）。契约摘要已因规划文本勘误（`plan.md` 的 `alternative_checks` 与 `design.md` D9 的错误码/`import.add` 预期）重算为 `sha256:6ee0bb31`（plan 门禁仍 PASS）
-- Result / Open Issues: **BLOCKED**（实现与检查未开始；不是 FAIL）
-- Required Follow-up: 完成 tasks.md 1.1–7.3 后按 `.agents/skills/agentic-verify/SKILL.md` 重做验收并更新本轮 assessment
+- Assessment ID / Time: FA-2026-09-29-01（收尾验收）
+- Target / Task: `refs/heads/main` = `561f3ff`；最终验收任务 = tasks.md 的 8.1
+- CLI State: `openspec status --change node-trust-export-ids --json`：5/5 产物 done；`e2e check` 结论见 tasks 7.3。
+- Audit / Evidence: 见「收尾验收」与 `## Checks`。全部替代检查在 `561f3ff` 上 exit 0；增量规范 R1–R18 的落点代码已逐项核对；无未闭环 CRITICAL/MAJOR；ISSUE-2（既有 flaky）、ISSUE-3（测试技术债）为非阻断遗留。
+- Result / Open Issues: **PASS**（目标 `561f3ff` 及上述有效证据）；非阻断遗留见 `Failures and Retests`。
+- Required Follow-up: 归档；归档提交会移动 `refs/heads/main`，使本 assessment 的 target 与主分支不再相等（归档后该变更不再被扩展解析，属既定情形）。
