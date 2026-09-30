@@ -1264,8 +1264,9 @@ local.audit.export
 | `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
 | `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
 | `session.create` | mutation | 禁止 | `{ agentId, exportId, workspaceAlias, templateParams?: object }` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；Sync v1 收到返回 `command.unsupported` |
+| `session.resume` | mutation | 仅 Node Link（经 `sessionRef`） | `{}` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；`accepted` 的 `result` 为 `null`，成功终态为 `completed SessionResumeResult`（`remoteSessionRef` + `sessionMeta`）；目标 Agent 未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败；Sync v1 收到返回 `command.unsupported` |
 
-本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（12 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举只包含其中 `transport` 含 `sync` 的 11 条；`session.create` 只经 Node Link 接受且必须满足 `grant.remote-work`，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在本文件的枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 12 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（13 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举只包含其中 `transport` 含 `sync` 的 11 条；`session.create` 与 `session.resume` 只经 Node Link 接受且必须满足 `grant.remote-work`，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在本文件的枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
 
 `ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 

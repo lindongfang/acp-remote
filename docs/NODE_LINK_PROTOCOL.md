@@ -406,7 +406,7 @@ createdAt / revokedAt
 | `grant.interact` | `session.prompt`、`session.cancel`、`elicitation.respond` |
 | `grant.configure-session` | `session.mode.set`、`session.config.set` |
 | `grant.approve` | `permission.resolve` |
-| `grant.remote-work` | `session.create` |
+| `grant.remote-work` | `session.create`、`session.resume` |
 
 - `grant.interact` 不含审批：审批必须显式给 `grant.approve`。
 - 设备配对分组使用 `pack.*`，预录用 `preset.*`（`preset.remote-control` = `pack.observe` + `pack.interact` + `pack.configure-session` + `pack.approve`；`preset.read-only` = `pack.observe`）。命令、pack、grant 的完整对应关系与 `local.*` 本地管理能力见 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2。
@@ -584,7 +584,7 @@ resource.attach → resource.attached → resource.subscribe
 | `command.terminal` | Owner → Access | `requestId`、`command`(命令名)、`terminal`(`{ status, terminalAt, terminalEventId, result, error }`) | 全部必需 | 终态；`status` ∈ `"completed"`\|`"failed"`\|`"rejected"`\|`"uncertain"`；`terminalEventId` 是 `T \| null` 字段：`command.status` 重查返回时必须非 `null`，其余情况可为 `null`；`status=completed` 时 `result` 为非空 object 且 `error=null`，其余 status 必须给出 `error` |
 | `command.status` | Access → Owner | `targetRequestId`(UUID) | 必需 | 重查同一 `requestId` 的终态；回复使用同一信封的 `command.terminal` 形状 |
 
-- `command.submit` 的 `command` 取值是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的 12 个命令名；`sessionRef`、`attachmentId`、`attachmentGeneration`、`expectedVersion` 在不适用时显式写 `null`，不用省略代替。
+- `command.submit` 的 `command` 取值是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的 13 个命令名；`sessionRef`、`attachmentId`、`attachmentGeneration`、`expectedVersion` 在不适用时显式写 `null`，不用省略代替。
 - `command.accepted`、`command.rejected` 与 `command.terminal` 都必须携带 `command`，取该 request 提交时的命令名（`command.status` 查询的回复填被查询 mutation 的命令名）；结果形状因此可以只凭帧自洽分派，不依赖接收方本地的 requestId 表。
 - `command.status` 有两种等价形式：作为 `command.submit` 的 `command` 提交（`payload = { "targetRequestId": … }`），或使用独立的 `command.status` 消息。两者产生相同的 `command.terminal` 形状回复；独立消息不占用 mutation 的幂等键。
 - `command.accepted` 与 `command.terminal` 可以连续发送，也可以只发送 `command.terminal`：同步查询结果放在 `command.accepted.result` 或 `command.terminal.terminal.result`；`command.terminal` 始终是权威终态，客户端以 `requestId` 去重。
@@ -620,6 +620,7 @@ resource.attach → resource.attached → resource.subscribe
 | `session.config.set` | `{ "configId": string, "value": … }`，body 的 `expectedVersion` 必须存在 |
 | `permission.resolve` | `{ "interactionId": UUID, "optionId": string }` |
 | `session.create` | `{ "agentId": string, "exportId": string, "workspaceAlias": string, "templateParams": object（可选） }` |
+| `session.resume` | `{}`（空 object；出现任何键即以 `nodelink.command.unsupported_field` 拒绝） |
 
 `session.create` 的硬约束：
 
@@ -644,6 +645,19 @@ resource.attach → resource.attached → resource.subscribe
 - `sessionId` 由 Owner 生成并写入自身事件日志；Access 不得改写、重编号或本地顶替。Access 用该 `remoteSessionRef` 发起 `resource.attach`（§12.4），成功后才提交该会话的其他命令。
 - `status = "failed"` 时 `terminal.error` 给出 `PublicError`（例如 `nodelink.export.not_granted`、`nodelink.command.unsupported_field`）；`status = "uncertain"` 表示崩溃窗口内无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
 - 注记（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F1）：幂等行落盘前失败（如 Owner 存储写失败）的 `session.create` **不是持久首次结果**——Owner 在那一轮仍会发一帧本地 `command.terminal`，但同 `requestId` 的 `command.status` 重查回 `nodelink.command.not_found`，重试也可以创建出另一个会话、得到与首次尝试不同的结果。因此 `failed` 只对同一 `requestId` 可复现的确定类失败（授权拒绝、本机 workspace 解析失败）成立；Access 不得把落盘失败类的 `failed` 当成可稳定重放的终止事实（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条）。
+
+`session.resume` 的硬约束：
+
+- `payload` 必须是空对象：出现任何键（例如 `cwd`、`agentId`）时，Owner **必须**以 `command.rejected` 回复，`error.code = "nodelink.command.unsupported_field"`、`details.field` 给出被拒的字段名，且不得启动 Agent 进程、不得部分应用参数。
+- `sessionRef`/`attachmentId`/`attachmentGeneration` 必须为指向该 Export 可见会话的非 `null` 值（resume 是会话范围命令）；`expectedVersion` 必须为 `null`。
+- 恢复所需的 Agent 标识、ACP 会话标识与创建时目录一律由 Owner 从自身持久化记录读取，不接受客户端提供，也不回退到别名重新解析。
+- 该会话没有持久化恢复数据（恢复列为 `NULL`）与「目标 Agent 未宣告 `sessionCapabilities.resume`」走同一条路径：终态失败、错误码 `nodelink.command.unsupported`，**不得**降级为新建会话；能力只有经 `initialize` 才能得知，因此能力不支持的判定发生在进程拉起之后、发送 `session/resume` 之前，并由终态错误如实回报。
+
+`session.resume` 的结果契约：
+
+- Owner 先回 `command.accepted`（`result` 为 `null`），恢复完成后发 `command.terminal`；`status = "completed"` 时 `terminal.result` 必须是 `SessionResumeResult`，字段形状与 `SessionCreateResult` 一致（`remoteSessionRef` + `sessionMeta`），`status = "failed"`/`"uncertain"` 时必须给出 `PublicError`。
+- 恢复是带副作用的 mutation（Owner 可能因此拉起一个 Agent 进程）：`status = "uncertain"` 表示崩溃窗口内无法确认副作用是否发生，Access **不得**自动重试 `session.resume`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
+- 创建时目录的复校验失败（目录被删、被改成文件、规范化结果与创建时不同）返回 `nodelink.internal.unavailable`；同一 `(ownerNodeId, accessNodeId, requestId)` 的重复提交仍返回首次结果，不做第二次恢复。
 
 `node-link-owner` 切片的结果投影范围（已登记的实现期收窄，2026-09-26）：本切片的 Owner 只为 `session.list` 与 `session.create` 投影 wire 结果，**`session.read`/`session.mode.list`/`session.config.list` 一律回 `nodelink.command.unsupported`**（`command.rejected`）。原因是它们的 `sessionReadResult`/`modeListResult`/`configListResult` 需要把会话正文、活体元数据与交互投影成 Sync 登记的视图，其中 `session.read` 的 `messages` 还要对事件正文做聚合——那条路径属 Access facade 的正文切片。Owner **不得**为避免该错误而返回被裁剪的结果或把结构化事件退化成文本（§15 的保真要求优先）；Access 在本切片遇到该错误码就应显式报「该命令在本版本不可用」，不要当成重试可恢复的失败。
 
@@ -915,7 +929,7 @@ close reason 不得包含敏感信息，且不是结构化错误的替代品。
 - session-scoped command 必须携带当前 `attachmentId`/`attachmentGeneration`；重连后先重新 attach，再恢复订阅。
 - 同一会话最多一个 active turn，由 Owner Node 最终强制执行。
 - 多个 Access Node 同时提交命令时，Owner 使用会话版本与串行队列裁决。
-- Agent 调用结果无法确认时，Owner 写入 `uncertain`；Access Node 不能自行重试产生第二次副作用。
+- Agent 调用结果无法确认时，Owner 写入 `uncertain`；Access Node 不能自行重试产生第二次副作用。`session.create` 与 `session.resume` 都会改变 Owner 本机状态（后者会拉起 Agent 进程），因此两者在不确定窗口结束后必须靠原 `requestId` 查询终态，不得重发。
 - 断线恢复只自动重建安全查询和订阅；mutation 必须通过原 `requestId` 查询状态，不因新 attachment 自动重放。
 - Export 撤销后立即拒绝新命令并关闭订阅；Access 删除 import、无正文交付索引和内存内容。若未来启用离线正文缓存，不得声称 Owner 可以远程可靠擦除所有副本。
 - 慢消费者触发 backpressure 或断开后，由 origin cursor 重放补回，不得丢弃 Owner 事件或阻塞其他连接。

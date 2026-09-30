@@ -19,12 +19,15 @@ fixture 中的密钥、签名、nonce、ID 和内容全部是公开测试数据�
 | `valid/resource-event.json` | `message.schema.json` | origin 三元组、`payload.view` 开放扩展点、`payload.acp` 的 `rawJson`/`byteLength`/`sha256` |
 | `valid/resource-ack.json` | `message.schema.json` | origin cursor 累计 ACK |
 | `valid/command-submit-session-create.json` | `message.schema.json` | `session.create` 的四个合法键与 `templateParams` |
+| `valid/command-submit-session-resume.json` | `message.schema.json` | `session.resume` 的空对象 payload 与会话范围字段（`sessionRef`/`attachmentId`/`attachmentGeneration` 非 `null`、`expectedVersion` 为 `null`） |
 | `valid/command-submit-session-prompt.json` | `message.schema.json` | session 范围命令携带 `attachmentId`/`attachmentGeneration` |
 | `valid/command-terminal.json` | `message.schema.json` | `terminal.status=completed` 时 `result` 为非空 object、`error=null` |
+| `valid/command-terminal-session-resume-completed.json` | `message.schema.json` | `session.resume` 成功终态的 `result` 是 `sessionResumeResult`（`remoteSessionRef` + `sessionMeta`） |
 | `valid/export-revoked.json` | `message.schema.json` | Export 撤销通知 |
 | `valid/pairing-claim-request.json` | `pairing.schema.json` | claim 请求与 HMAC `proof` 形状 |
 | `valid/pairing-status-approved.json` | `pairing.schema.json` | `status=approved` 时返回 `node` 与 `owner` |
 | `invalid/session-create-with-cwd.json` | `message.schema.json` | `session.create` payload 出现 `cwd`（`additionalProperties`） |
+| `invalid/session-resume-with-cwd.json` | `message.schema.json` | `session.resume` payload 出现任意键（`additionalProperties`） |
 | `invalid/resource-event-missing-origin.json` | `message.schema.json` | 缺少 origin 三元组（`required`） |
 | `invalid/stale-attachment-generation.json` | `message.schema.json` | `attachmentGeneration` 用数字而不是无前导零十进制字符串（`oneOf`） |
 | `invalid/command-unknown-field.json` | `message.schema.json` | `command.submit` body 出现未登记字段（`unevaluatedProperties`） |
@@ -32,6 +35,7 @@ fixture 中的密钥、签名、nonce、ID 和内容全部是公开测试数据�
 `invalid/` 意图说明：
 
 - `session-create-with-cwd.json` 在 schema 层被 closed object 拒绝；运行时对 `cwd`、`mcpServers`、绝对路径或凭据字段必须返回更具体的 `nodelink.command.unsupported_field`（见 `docs/NODE_LINK_PROTOCOL.md` §2.4、§12.7）。
+- `session-resume-with-cwd.json` 同样在 schema 层被 closed object 拒绝（`session.resume` 的 payload 必须是空对象）：运行时对**任何**键必须返回 `nodelink.command.unsupported_field` + `details.field`，且不得启动 Agent 进程或部分应用参数（见 `docs/NODE_LINK_PROTOCOL.md` §2.4、§12.7）。
 - `stale-attachment-generation.json` 只证明 generation 的 wire 编码规则（十进制字符串）；真正的“generation 陈旧”判定属运行时状态机，必须返回 `nodelink.resource.attach_generation_stale`，不能靠 schema 表达。
 
 ## transcript 固定向量

@@ -191,7 +191,10 @@ if (catalog) {
     if (command.name !== "session.create" && command.scope !== command.name) {
       errors.push(`commands.json: ${command.name} scope must equal command name`);
     }
-    if (!command.pack && command.name !== "session.create") {
+    // `pack.*` 是设备/配对面概念：只经 Node Link 接受的命令（`transport` 不含 `sync`）没有设备包，
+    // 因此允许 `pack: null`；含 `sync` 的命令必须有 pack。判据是 transport 而不是命令名——
+    // 新增 Node Link-only 命令不需要改本门禁。
+    if (!command.pack && (command.transport ?? []).includes("sync")) {
       errors.push(`commands.json: ${command.name} has no pack`);
     }
   }
