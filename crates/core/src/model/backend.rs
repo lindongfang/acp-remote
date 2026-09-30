@@ -4,11 +4,14 @@
 //! 元素。它们只描述「哪个 Agent、哪个 workspace alias、哪些能力、什么事件」，不含任何 ACP DTO。
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
-use super::config::ResolvedWorkspace;
+use super::config::{ResolvedWorkspace, no_nul};
 use super::error::InvalidValue;
 use super::event::{EventKind, EventPayload, EventType};
-use super::ids::{AgentRef, RequestId, TemplateId, TurnId, is_template_id, require_bounded};
+use super::ids::{
+    AgentRef, AgentSessionId, RequestId, TemplateId, TurnId, is_template_id, require_bounded,
+};
 use super::json::ViewJson;
 use super::scalars::Timestamp;
 use super::session::{ConfigValue, ResourceOrigin};
@@ -177,6 +180,56 @@ impl CreateSessionRequest {
             origin,
         }
     }
+}
+
+/// 会话恢复请求（§3.6）：输入是该会话持久化的恢复数据，**不是**客户端提供的参数。
+///
+/// `workspace_cwd` 是持久化的「创建时 canonical path」**原文**（由核心在创建时用自己的
+/// [`ResolvedWorkspace::canonical_path`] 写入）：它不带 workspace 别名，因为别名的指向可以被
+/// 改写或删除，而恢复一律以持久化取值为权威、**不得**按别名重新解析。构造约束与
+/// `ResolvedWorkspace::canonical_path` 同口径（非空、≤4096 字符、不含 NUL、绝对路径形状）；
+/// 存在性、目录性与 `canonicalize` 一致性由恢复用例在调用后端**之前**复校验（§5.1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeSessionRequest {
+    pub agent: AgentRef,
+    pub agent_session_id: AgentSessionId,
+    pub workspace_cwd: String,
+}
+
+impl ResumeSessionRequest {
+    /// 构造（只做形状校验，不触碰文件系统）。
+    pub fn try_new(
+        agent: AgentRef,
+        agent_session_id: AgentSessionId,
+        workspace_cwd: String,
+    ) -> Result<Self, InvalidValue> {
+        if require_bounded(&workspace_cwd, 1, 4096).is_err()
+            || !no_nul(&workspace_cwd)
+            || !Path::new(&workspace_cwd).is_absolute()
+        {
+            return Err(InvalidValue::Field);
+        }
+        Ok(Self {
+            agent,
+            agent_session_id,
+            workspace_cwd,
+        })
+    }
+}
+
+/// 会话行里恢复所需的持久化取值（§3.6）。
+///
+/// 两个 `Option` 直接对应 `owned_session` 的两列：`NULL` 的语义是「该会话没有可用于恢复的取值」，
+/// 恢复必须显式失败，**不得**用别名重解析或用任何默认值补齐。
+///
+/// 这两个字段**不进** [`super::Session`]/[`super::SessionSummary`]：`workspace_cwd` 是本机规范化
+/// 路径，进入可投影形状会违反 §3.6 的既有边界（`canonical_path` 不进事件、错误 `details`、审计
+/// `detail_digest` 前像或 Node Link catalog）。读取走 `SessionStore::load_recovery` 窄入口。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRecoveryRecord {
+    pub agent: AgentRef,
+    pub agent_session_id: Option<AgentSessionId>,
+    pub workspace_cwd: Option<String>,
 }
 
 /// `SessionEndpoint` 输出流的元素（§3.6）。

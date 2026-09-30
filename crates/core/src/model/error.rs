@@ -87,11 +87,16 @@ pub enum UnavailableKind {
     /// 平台 keystore 不可用或引用失效（§11.6 的 `CredentialResolver` 失败关闭；由本地管理适配器
     /// 映射为 `local.unavailable`）。
     KeystoreUnavailable,
+    /// 后端不支持该操作（不是临时故障）：目标 Agent 未宣告该操作所需的能力，或该会话没有该操作
+    /// 所需的持久化数据（§2）。`port_error_public` 取既有码 `command.unsupported`；Node Link 适配器
+    /// 映射为既有 `nodelink.command.unsupported`，本地管理适配器映射为既有 `local.unavailable`
+    /// （都不新增 wire 码）。
+    BackendUnsupported,
 }
 
 impl UnavailableKind {
     /// 全部取值，顺序即声明顺序。
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Busy,
         Self::StorageFull,
         Self::IoError,
@@ -99,6 +104,7 @@ impl UnavailableKind {
         Self::OwnerOffline,
         Self::ExportRevoked,
         Self::KeystoreUnavailable,
+        Self::BackendUnsupported,
     ];
 
     /// 稳定的下划线标记（同上，不是 wire 错误码）。
@@ -111,6 +117,7 @@ impl UnavailableKind {
             Self::OwnerOffline => "owner_offline",
             Self::ExportRevoked => "export_revoked",
             Self::KeystoreUnavailable => "keystore_unavailable",
+            Self::BackendUnsupported => "backend_unsupported",
         }
     }
 }
@@ -172,6 +179,8 @@ pub enum InvalidValue {
     TemplateId,
     /// `AgentId` 为空或超过 128 个字符。
     AgentId,
+    /// `AgentSessionId` 为空、超过 512 个字符或含 NUL。
+    AgentSessionId,
     /// `EventType` 不匹配 `^[a-z0-9_.-]{1,128}$`。
     EventType,
     /// scope 名不匹配 `^[a-z][a-z0-9._-]{0,127}$`。
@@ -226,6 +235,7 @@ impl InvalidValue {
             Self::WorkspaceAlias => "workspace alias must match ^[a-z0-9][a-z0-9._-]{0,63}$",
             Self::TemplateId => "template id must match ^[A-Za-z0-9._-]{1,64}$",
             Self::AgentId => "agent id must be 1..=128 characters",
+            Self::AgentSessionId => "agent session id must be 1..=512 characters without NUL",
             Self::EventType => "event type must match ^[a-z0-9_.-]{1,128}$",
             Self::ScopeName => "scope name must match ^[a-z][a-z0-9._-]{0,127}$",
             Self::GrantName => "grant name must match ^grant\\.[a-z][a-z0-9._-]{0,63}$",

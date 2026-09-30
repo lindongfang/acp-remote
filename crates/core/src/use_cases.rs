@@ -287,6 +287,24 @@ impl UseCases {
             .await
     }
 
+    /// `session.resume` 的终态（§5.1）：把已持久化的 `accepted` 行推进到终态。与
+    /// [`UseCases::settle_session_create`] **同形**，但只终结 `session.resume` 的持久记录。
+    ///
+    /// 结果由适配层投影（`remoteSessionRef.exportId` 只有适配层有），core 的恢复用例只返回
+    /// `SessionId`；没有持久记录或记录已终结时是**幂等 no-op**（返回 `false`）。
+    pub async fn settle_session_resume(
+        &self,
+        actor: &Actor,
+        request_id: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        self.broker
+            .settle_session_resume(actor, request_id, status, result, error)
+            .await
+    }
+
     // ---------------------------------------------------------------------------------------
     // SessionQueries（§4）
     // ---------------------------------------------------------------------------------------
@@ -1634,8 +1652,8 @@ mod tests {
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
-        AgentId, AgentRef, CommandKind, CommandPayload, CommittedEvent, Nonce, PairingState,
-        ResourceOrigin, ScopeSet, ViewJson,
+        AgentId, AgentRef, AgentSessionId, CommandKind, CommandPayload, CommittedEvent, Nonce,
+        PairingState, ResourceOrigin, ScopeSet, ViewJson,
     };
     use crate::ports::HistoryInclude;
 
@@ -1966,6 +1984,93 @@ mod tests {
     /// 已创建会话的条数（断言「不重复创建」用）。
     fn session_count(fixture: &Fixture) -> usize {
         lock(&fixture.world.state).sessions.len()
+    }
+
+    /// [R6]/[R17] + design D2：`create_session` 在 `factory.create` 成功返回后**紧接着**提交一次两列
+    /// 写入（不是终态提交）：`agent_session_id` 来自 `SessionEndpoint::agent_session_id()`，
+    /// `workspace_cwd` 来自 core **自己**已解析的 `ResolvedWorkspace::canonical_path()`。该提交使会话
+    /// 的可见版本变为 2（创建提交 v1 + 两列提交 v2）。
+    #[test]
+    fn create_session_writes_the_recovery_columns_right_after_create() {
+        let fixture = fixture();
+        let agent_session_id = AgentSessionId::new("acp-session-1").expect("agent session id");
+        fixture.world.set_agent_session_id(agent_session_id.clone());
+        let workspace = temp_dir(&format!("acpr-resume-{}-a", std::process::id()));
+        let alias = WorkspaceAlias::new("resume").expect("alias");
+        let record = WorkspaceRecord::try_new(
+            alias.clone(),
+            "Resume",
+            workspace.to_str().expect("path"),
+            crate::broker::test_support::ts(0),
+            crate::broker::test_support::ts(0),
+        )
+        .expect("workspace record");
+        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+
+        let created = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            Some(alias),
+        ))
+        .expect("create");
+
+        let expected = std::fs::canonicalize(&*workspace)
+            .expect("canonicalize")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        let columns = lock(&fixture.world.state)
+            .recoveries
+            .get(created.as_str())
+            .cloned()
+            .expect("两列已落盘");
+        assert_eq!(columns.agent_session_id, Some(agent_session_id));
+        assert_eq!(columns.workspace_cwd, Some(expected.clone()));
+        assert_eq!(
+            fixture
+                .world
+                .session(&created)
+                .expect("会话行")
+                .version()
+                .get(),
+            2,
+            "创建提交（v1）+ 紧接着的两列提交（v2）"
+        );
+
+        // 恢复流程读到的就是这两个持久化取值（可读回、不推导）。
+        assert_eq!(columns.workspace_cwd.as_deref(), Some(expected.as_str()));
+    }
+
+    /// [R7]/§3.6：`agent_session_id()` 为 `None`（未取得标识）时**两列都不写**，也不产生那次追加
+    /// 提交——该会话不被当作可恢复会话。
+    #[test]
+    fn create_session_writes_no_recovery_columns_without_an_agent_session_id() {
+        let fixture = fixture();
+        let created = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            None,
+        ))
+        .expect("create");
+
+        assert!(
+            lock(&fixture.world.state).recoveries.is_empty(),
+            "未取得标识时不得写入占位取值"
+        );
+        assert_eq!(
+            fixture
+                .world
+                .session(&created)
+                .expect("会话行")
+                .version()
+                .get(),
+            1,
+            "没有第二次提交"
+        );
     }
 
     /// [R66]/§6 第 6 条与第 20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在

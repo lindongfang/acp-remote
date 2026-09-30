@@ -6,6 +6,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use super::config::no_nul;
 use super::error::InvalidValue;
 
 // ---------------------------------------------------------------- 校验谓词
@@ -192,6 +193,17 @@ fn check_agent_id(text: &str) -> Result<(), InvalidValue> {
     require_bounded(text, 1, 128).map_err(|_| InvalidValue::AgentId)
 }
 
+/// 非空、≤512 字符、不含 NUL。
+///
+/// 上界是本机约束（该取值不经过任何 wire），够覆盖实际 Agent 给出的不透明会话标识；
+/// 不含 NUL 是为了能安全落进 `TEXT` 列、日志与子进程参数。
+fn check_agent_session_id(text: &str) -> Result<(), InvalidValue> {
+    if require_bounded(text, 1, 512).is_err() || !no_nul(text) {
+        return Err(InvalidValue::AgentSessionId);
+    }
+    Ok(())
+}
+
 fn check_mode_id(text: &str) -> Result<(), InvalidValue> {
     require_bounded(text, 1, 256)
 }
@@ -307,6 +319,14 @@ newtype!(
     /// Export 内 Agent selector（1..=128 字符，非空；schema 只约束长度）。
     AgentId,
     check_agent_id
+);
+newtype!(
+    /// **ACP（Agent 侧）会话标识**：Agent 在 `session/new`/`session/resume` 里给出的不透明标识，
+    /// 与 core 的 `SessionId` 不是同一个东西（后者是本机 UUID）。非空、≤512 字符、不含 NUL；
+    /// 由后端经 [`crate::ports::SessionEndpoint::agent_session_id`] 交给 core 落盘（§3.1/§3.6），
+    /// core **不得**在未取得标识时编造取值。
+    AgentSessionId,
+    check_agent_session_id
 );
 
 newtype!(

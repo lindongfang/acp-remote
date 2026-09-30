@@ -888,6 +888,8 @@ impl Broker {
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
             }))
         };
         let turns = vec![TurnChange::Create(NewTurn {
@@ -1017,6 +1019,8 @@ impl Broker {
                     mode: ModeChange::Set(mode_ref(mode)?),
                     closed_at: None,
                     interaction: None,
+                    agent_session_id: None,
+                    workspace_cwd: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1082,6 +1086,8 @@ impl Broker {
                     mode: ModeChange::Unchanged,
                     closed_at: None,
                     interaction: None,
+                    agent_session_id: None,
+                    workspace_cwd: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1278,6 +1284,8 @@ impl Broker {
                 resolution: resolution.clone(),
                 resolved_by: actor.clone(),
             }),
+            agent_session_id: None,
+            workspace_cwd: None,
         });
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -1418,12 +1426,46 @@ impl Broker {
         }
         let slot = self.owned_slot(&session);
         let sink = self.sink(&session);
+        // 两列的落盘取值必须在 `create` 消费掉请求之前取出：`workspace_cwd` 来自 core **自己**已解析
+        // 的结果（不依赖后端回报），`agent_session_id` 来自后端对 `session/new` 的实际响应。
+        let workspace_cwd = create
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.canonical_path().to_owned());
         let endpoint: Arc<dyn SessionEndpoint> = self
             .deps
             .backends
             .create(&session, create, sink)
             .await?
             .into();
+        // 恢复所需的两个取值在 `factory.create` 成功返回后**紧接着**落盘（§6 第 20 条、§5.2）：
+        // 不等适配层的终态提交——那样会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，
+        // 而且终态提交拿不到 core 解析出的 cwd。`agent_session_id()` 为 `None`（未取得标识）时
+        // **两列都不写**：该会话不被当作可恢复会话，`NULL` 就是「没有可用于恢复的数据」（§3.6）。
+        if let Some(agent_session_id) = endpoint.agent_session_id().cloned() {
+            let at = self.now();
+            let commit = OwnedCommit {
+                session: Some(session.clone()),
+                at,
+                expected_version: None,
+                state: Some(StateChange::Update(SessionUpdate {
+                    state: None,
+                    mode: ModeChange::Unchanged,
+                    closed_at: None,
+                    interaction: None,
+                    agent_session_id: Some(agent_session_id),
+                    workspace_cwd,
+                })),
+                turns: Vec::new(),
+                events: Vec::new(),
+                interactions: Vec::new(),
+                compacted: Vec::new(),
+                idempotency: None,
+                command_terminal: None,
+                origin_epoch: None,
+            };
+            self.commit_owned(commit).await?;
+        }
         *lock(&slot.endpoint) = Some(endpoint);
         Ok(session)
     }
@@ -1476,6 +1518,90 @@ impl Broker {
             _ => (
                 "command.uncertain",
                 view_command_uncertain(request, "无法确认会话是否已创建")?,
+            ),
+        };
+        let event = pending_event(
+            event_type,
+            EventKind::Structured,
+            view,
+            None,
+            Some(request.clone()),
+            StoredPolicy::Durable,
+            Some(actor),
+        )?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: Some(terminal),
+            origin_epoch: None,
+        };
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                self.publish(&outcome.appended);
+                Ok(true)
+            }
+            Err(PortError::Unavailable(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `session.resume` 的终态提交（§5.1、§12.7）。返回本次是否真的写入了终态。
+    ///
+    /// 与 [`Broker::settle_session_create`] **同形**，但**只**终结 `command == "session.resume"` 的
+    /// 持久记录：该 `(actor, requestId)` 记着别的命令时是适配层误用（wire 不可达），显式
+    /// `InvalidRequest`。结果（`SessionResumeResult`）由适配层投影——`remoteSessionRef.exportId`
+    /// 只有适配层有，core 的恢复用例不持有 Export 信息。
+    ///
+    /// **幂等 no-op** 的两种情况与 create 同：该 `(actor, requestId)` 没有持久记录（恢复在幂等行
+    /// 落盘前就失败），或记录已经终结（首次结果不覆盖）。落盘失败（`Unavailable`）不报成功：行仍是
+    /// `accepted`，由启动恢复按 §6 第 16 条终结为 `uncertain`。
+    pub async fn settle_session_resume(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
+        if !status.is_terminal() {
+            return Err(PortError::InvalidRequest("命令终态必须是终止态"));
+        }
+        let Some(record) = self.deps.store.find_request(request, actor).await? else {
+            return Ok(false);
+        };
+        if record.command() != "session.resume" {
+            return Err(PortError::InvalidRequest(
+                "settle_session_resume 只能终结 session.resume 的持久记录（§5.1）",
+            ));
+        }
+        if record.status().is_terminal() {
+            return Ok(false);
+        }
+        let Some(session) = record.session().cloned() else {
+            return Err(PortError::Corrupt(
+                "session.resume 的持久记录缺少目标会话（§5.1）",
+            ));
+        };
+        let at = self.now();
+        let terminal =
+            CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
+        let (event_type, view) = match status {
+            CommandStatus::Completed => {
+                ("command.completed", view_command_completed(request, None)?)
+            }
+            CommandStatus::Failed => ("command.failed", view_command_failed(request, None)?),
+            _ => (
+                "command.uncertain",
+                view_command_uncertain(request, "无法确认会话是否已恢复")?,
             ),
         };
         let event = pending_event(
@@ -1837,6 +1963,8 @@ impl Broker {
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
             })
         });
         let kinds: Vec<EventKind> = events.iter().map(|event| event.kind).collect();
@@ -1953,6 +2081,8 @@ impl Broker {
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: next.turn.clone(),
@@ -2014,6 +2144,8 @@ impl Broker {
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.turn.clone(),
@@ -2140,6 +2272,8 @@ impl Broker {
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.clone(),
@@ -2409,6 +2543,8 @@ impl Broker {
                     mode: ModeChange::Unchanged,
                     closed_at: None,
                     interaction: None,
+                    agent_session_id: None,
+                    workspace_cwd: None,
                 }));
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
                 events.extend(self.backfill_completed(&*view, &page, turn.id()).await?);
@@ -3083,6 +3219,12 @@ impl Broker {
                 UnavailableKind::KeystoreUnavailable => {
                     ("internal.unavailable", "凭据存储不可用", true)
                 }
+                // 「后端不支持该操作」不是临时故障：取既有码 `command.unsupported`（Node Link
+                // 适配器映射为 `nodelink.command.unsupported`），本地管理适配器映射为
+                // `local.unavailable`。
+                UnavailableKind::BackendUnsupported => {
+                    ("command.unsupported", "后端不支持该操作", false)
+                }
                 UnavailableKind::Busy
                 | UnavailableKind::StorageFull
                 | UnavailableKind::IoError
@@ -3517,13 +3659,14 @@ pub(crate) mod test_support {
 
     use super::*;
     use crate::model::{
-        AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
-        AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId, ExportId,
-        ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
+        AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
+        AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId,
+        ExportId, ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
         OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
         PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
-        ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
-        WorkspaceAlias, WorkspaceRecord,
+        ResourceOrigin, ResumeSessionRequest, SeedState, ServerEpoch, Session,
+        SessionRecoveryRecord, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias,
+        WorkspaceRecord,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -3687,11 +3830,28 @@ pub(crate) mod test_support {
         pub(crate) nodes: Mutex<Vec<NodeRecord>>,
         /// 目录里的可用 Agent（`put_export` 的前置校验从它读；默认空）。
         pub(crate) catalog_agents: Mutex<Vec<AgentDescriptor>>,
+        /// `SessionEndpoint::agent_session_id` 的返回值（默认 `None` = 未取得标识，即 R7 的情形）。
+        pub(crate) agent_session_id: Mutex<Option<AgentSessionId>>,
+        /// 后继后端收到的恢复请求（断言「未调用后端」与「传的就是持久化取值」）。
+        pub(crate) resume_requests: Mutex<Vec<ResumeSessionRequest>>,
+        /// `resume` 的脚本化错误（先进先出弹出；空 = 成功返回端点）。
+        pub(crate) resume_errors: Mutex<VecDeque<PortError>>,
+    }
+
+    /// `owned_session` 的两列恢复数据（§3.6 `SessionRecoveryRecord`）。
+    ///
+    /// 与 `WorldState.sessions` 分开存，以守住「这两列**不进** `Session`/`SessionSummary`」的形状约定。
+    #[derive(Clone, Default)]
+    pub(crate) struct RecoveryColumns {
+        pub(crate) agent_session_id: Option<AgentSessionId>,
+        pub(crate) workspace_cwd: Option<String>,
     }
 
     #[derive(Default)]
     pub(crate) struct WorldState {
         pub(crate) sessions: HashMap<String, Session>,
+        /// 会话 id → `owned_session` 的两列恢复数据（§3.6 的窄读取源）。
+        pub(crate) recoveries: HashMap<String, RecoveryColumns>,
         pub(crate) turns: HashMap<String, Vec<Turn>>,
         pub(crate) events: Vec<CommittedEvent>,
         pub(crate) commands: HashMap<String, CommandRecord>,
@@ -3842,6 +4002,13 @@ pub(crate) mod test_support {
                 .map(|(_, record)| record.clone())
         }
 
+        /// 直接写一条命令行（测试用来构造「已 accepted 的 `session.resume` 记录」）。
+        pub(crate) fn seed_command(&self, record: CommandRecord) {
+            lock(&self.state)
+                .commands
+                .insert(command_key(record.actor(), record.request()), record);
+        }
+
         pub(crate) fn session(&self, session: &SessionId) -> Option<Session> {
             lock(&self.state).sessions.get(session.as_str()).cloned()
         }
@@ -3898,6 +4065,27 @@ pub(crate) mod test_support {
                 .epochs
                 .insert(id.as_str().to_owned(), origin_epoch_of(500));
             state.sessions.insert(id.as_str().to_owned(), session);
+        }
+
+        /// 让后端在下次 `create`/`resume` 时暴露这个 ACP 会话标识（默认 `None` = 未取得，即 R7 的情形）。
+        pub(crate) fn set_agent_session_id(&self, id: AgentSessionId) {
+            *lock(&self.agent_session_id) = Some(id);
+        }
+
+        /// 直接写会话的两列恢复数据（模拟既有行的 `NULL` 时传 `None`）。
+        pub(crate) fn seed_recovery(
+            &self,
+            session: &SessionId,
+            agent_session_id: Option<AgentSessionId>,
+            workspace_cwd: Option<String>,
+        ) {
+            lock(&self.state).recoveries.insert(
+                session.as_str().to_owned(),
+                RecoveryColumns {
+                    agent_session_id,
+                    workspace_cwd,
+                },
+            );
         }
 
         pub(crate) fn seed_interaction(&self, pending: PendingInteraction) {
@@ -4144,6 +4332,20 @@ pub(crate) mod test_support {
                     state
                         .sessions
                         .insert(session_id.as_str().to_owned(), updated);
+                    // §5.2：两列只在写入时改，`None` = 不改该列（fake 同样按列语义实现，
+                    // 以便恢复流程「只读两列」的断言能真的跑在写入路径上）。
+                    if update.agent_session_id.is_some() || update.workspace_cwd.is_some() {
+                        let columns = state
+                            .recoveries
+                            .entry(session_id.as_str().to_owned())
+                            .or_default();
+                        if let Some(agent_session_id) = update.agent_session_id.clone() {
+                            columns.agent_session_id = Some(agent_session_id);
+                        }
+                        if let Some(workspace_cwd) = update.workspace_cwd.clone() {
+                            columns.workspace_cwd = Some(workspace_cwd);
+                        }
+                    }
                 }
                 None => {}
             }
@@ -4545,6 +4747,32 @@ pub(crate) mod test_support {
                 .commands
                 .get(&command_key(actor, request))
                 .cloned())
+        }
+
+        /// §3.6：恢复数据的窄读取。会话行不存在、或任一列为 `NULL`（没有可用于恢复的数据）时为 `None`。
+        async fn load_recovery(
+            &self,
+            session: &SessionId,
+        ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+            let state = lock(&self.world.state);
+            let Some(found) = state.sessions.get(session.as_str()) else {
+                return Ok(None);
+            };
+            let columns = state
+                .recoveries
+                .get(session.as_str())
+                .cloned()
+                .unwrap_or_default();
+            let (Some(agent_session_id), Some(workspace_cwd)) =
+                (columns.agent_session_id, columns.workspace_cwd)
+            else {
+                return Ok(None);
+            };
+            Ok(Some(SessionRecoveryRecord {
+                agent: found.agent().clone(),
+                agent_session_id: Some(agent_session_id),
+                workspace_cwd: Some(workspace_cwd),
+            }))
         }
 
         /// §6 第 16 条：仍为 `accepted` 且没有终态事件的 mutation 命令。
@@ -5310,6 +5538,7 @@ pub(crate) mod test_support {
                 world: self.world.clone(),
                 sink,
                 reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+                agent_session_id: lock(&self.world.agent_session_id).clone(),
             }))
         }
 
@@ -5322,6 +5551,27 @@ pub(crate) mod test_support {
                 world: self.world.clone(),
                 sink,
                 reference,
+                agent_session_id: lock(&self.world.agent_session_id).clone(),
+            }))
+        }
+
+        /// 恢复：请求记进 `world.resume_requests`（测试断言「未调用后端」与「传的就是持久化取值」）；
+        /// `world.resume_errors` 非空时依次弹出并返回（模拟「后端不支持」类错误）。
+        async fn resume(
+            &self,
+            session: &SessionId,
+            request: ResumeSessionRequest,
+            sink: EventSink,
+        ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+            lock(&self.world.resume_requests).push(request);
+            if let Some(error) = lock(&self.world.resume_errors).pop_front() {
+                return Err(error);
+            }
+            Ok(Box::new(FakeEndpoint {
+                world: self.world.clone(),
+                sink,
+                reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+                agent_session_id: lock(&self.world.agent_session_id).clone(),
             }))
         }
     }
@@ -5330,12 +5580,18 @@ pub(crate) mod test_support {
         pub(crate) world: Arc<FakeWorld>,
         pub(crate) sink: EventSink,
         pub(crate) reference: SessionReference,
+        /// 本次绑定的 ACP 会话标识（`None` = Agent 未给出，R7）。
+        pub(crate) agent_session_id: Option<AgentSessionId>,
     }
 
     #[async_trait]
     impl SessionEndpoint for FakeEndpoint {
         fn reference(&self) -> SessionReference {
             self.reference.clone()
+        }
+
+        fn agent_session_id(&self) -> Option<&AgentSessionId> {
+            self.agent_session_id.as_ref()
         }
 
         async fn prompt(
@@ -5580,8 +5836,8 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use crate::model::{
-        AcpRaw, AgentId, AgentRef, DeviceId, EventId, ExportId, InteractionKind, InteractionOption,
-        ModeState, PendingInteraction, ResourceOrigin, ScopeSet,
+        AcpRaw, AgentId, AgentRef, AgentSessionId, DeviceId, EventId, ExportId, InteractionKind,
+        InteractionOption, ModeState, PendingInteraction, ResourceOrigin, ScopeSet,
     };
 
     fn device_without_scopes() -> Actor {
@@ -5930,6 +6186,199 @@ mod tests {
             None,
         ))
         .expect_err("非 session.create 的记录不得被终结");
+        assert!(
+            matches!(error, PortError::InvalidRequest(_)),
+            "得到 {error:?}"
+        );
+        let after = harness.world.command(&request).expect("幂等行");
+        assert_eq!(after.command(), "session.prompt");
+        assert_eq!(after.status(), before.status(), "既有命令的终态不得被改写");
+    }
+
+    /// §3.6/§5.2：恢复数据走**窄读取**；会话不存在、或任一列为 `NULL` 时是 `None`（`NULL` 不是错误，
+    /// 也不得被推导或补齐）。
+    #[test]
+    fn load_recovery_reports_null_columns_as_absent() {
+        let harness = Harness::new(BrokerConfig::default());
+        let store = FakeStore {
+            world: harness.world.clone(),
+        };
+        let agent_session_id = AgentSessionId::new("acp-session-7").expect("agent session id");
+
+        assert!(
+            block_on(store.load_recovery(&harness.session))
+                .expect("read")
+                .is_none(),
+            "夹具预置的会话没有恢复数据（两列 NULL）"
+        );
+        let unknown = SessionId::new(&uuid_text(404)).expect("session id");
+        assert!(
+            block_on(store.load_recovery(&unknown))
+                .expect("read")
+                .is_none(),
+            "未知会话与两列 NULL 同形"
+        );
+
+        harness.world.seed_recovery(
+            &harness.session,
+            Some(agent_session_id.clone()),
+            Some("C:\\work".to_owned()),
+        );
+        let record = block_on(store.load_recovery(&harness.session))
+            .expect("read")
+            .expect("record");
+        assert_eq!(record.agent.agent_id().as_str(), "agent-1");
+        assert_eq!(record.agent_session_id, Some(agent_session_id));
+        assert_eq!(record.workspace_cwd.as_deref(), Some("C:\\work"));
+
+        // 只有一列：仍然没有可用于恢复的数据（两列是一体的）。
+        harness
+            .world
+            .seed_recovery(&harness.session, None, Some("C:\\work".to_owned()));
+        assert!(
+            block_on(store.load_recovery(&harness.session))
+                .expect("read")
+                .is_none()
+        );
+    }
+
+    /// §2/§5.1：「后端不支持该操作」取既有码 `command.unsupported`，且是**不可重试**的一类
+    /// （与「临时故障」区分）；Node Link / 本地管理适配器各自映射到既有 wire 码。
+    #[test]
+    fn backend_unsupported_maps_to_the_existing_unsupported_code() {
+        let harness = Harness::new(BrokerConfig::default());
+        let public = harness
+            .broker
+            .port_error_public(&PortError::Unavailable(UnavailableKind::BackendUnsupported))
+            .expect("map");
+        assert_eq!(public.code(), "command.unsupported");
+        assert!(!public.retryable(), "不支持不是可重试的临时故障");
+    }
+
+    /// 已 `accepted` 的 `session.resume` 持久记录（`settle_session_resume` 的定位目标）。
+    fn accepted_resume_record(
+        harness: &Harness,
+        request: &RequestId,
+        fingerprint: char,
+    ) -> CommandRecord {
+        CommandRecord::try_new(
+            Some(harness.session.clone()),
+            request.clone(),
+            "session.resume",
+            CommandKind::Mutation,
+            harness.actor(),
+            Some(ts(1)),
+            CommandStatus::Accepted,
+            None,
+            None,
+            None,
+            None,
+            None,
+            digest(fingerprint),
+        )
+        .expect("command record")
+    }
+
+    /// §5.1：`settle_session_resume` 只终结 `session.resume` 的持久记录；同一条记录重复终结（或从未
+    /// 落盘）是**幂等 no-op**，不覆盖首次结果。
+    #[test]
+    fn settle_session_resume_terminates_only_its_own_record_and_is_idempotent() {
+        let harness = Harness::new(BrokerConfig::default());
+        let actor = harness.actor();
+        let request = harness.request(11);
+        harness
+            .world
+            .seed_command(accepted_resume_record(&harness, &request, 'R'));
+
+        let result =
+            CommandResult::from_json_text(r#"{"sessionId":"acp-1"}"#).expect("result object");
+        let written = block_on(harness.broker.settle_session_resume(
+            &actor,
+            &request,
+            CommandStatus::Completed,
+            Some(result.clone()),
+            None,
+        ))
+        .expect("settle");
+        assert!(written, "第一次终结必须真的写入");
+        let after = harness.world.command(&request).expect("记录");
+        assert_eq!(after.command(), "session.resume");
+        assert_eq!(after.status(), CommandStatus::Completed);
+        assert!(
+            after.terminal_event().is_some(),
+            "终态必须带 terminalEventId"
+        );
+        assert_eq!(
+            after.result().map(CommandResult::as_str),
+            Some(result.as_str())
+        );
+
+        // 已终结：幂等 no-op，不覆盖首次结果。
+        let again = block_on(
+            harness.broker.settle_session_resume(
+                &actor,
+                &request,
+                CommandStatus::Failed,
+                None,
+                Some(
+                    PublicError::coded("nodelink.command.unsupported", "unsupported", false)
+                        .expect("error"),
+                ),
+            ),
+        )
+        .expect("second settle");
+        assert!(!again, "已终结的记录不覆盖首次结果");
+        let unchanged = harness.world.command(&request).expect("记录");
+        assert_eq!(unchanged.status(), CommandStatus::Completed);
+        assert_eq!(
+            unchanged.result().map(CommandResult::as_str),
+            Some(result.as_str())
+        );
+
+        // 没有持久记录（恢复在幂等行落盘前就失败）：幂等 no-op。
+        let missing = harness.request(12);
+        assert!(
+            !block_on(harness.broker.settle_session_resume(
+                &actor,
+                &missing,
+                CommandStatus::Completed,
+                Some(result),
+                None,
+            ))
+            .expect("missing record")
+        );
+    }
+
+    /// §5.1：`session.resume` 的终态入口不得改写别的命令的幂等行（适配层误用，wire 不可达）。
+    #[test]
+    fn settle_session_resume_rejects_other_commands() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+        let request = harness.request(1);
+        let before = harness.world.command(&request).expect("幂等行");
+        assert_eq!(before.command(), "session.prompt");
+
+        let error = block_on(
+            harness.broker.settle_session_resume(
+                &harness.actor(),
+                &request,
+                CommandStatus::Failed,
+                None,
+                Some(
+                    PublicError::coded("nodelink.command.unsupported", "unsupported", false)
+                        .expect("error"),
+                ),
+            ),
+        )
+        .expect_err("非 session.resume 的记录不得被终结");
         assert!(
             matches!(error, PortError::InvalidRequest(_)),
             "得到 {error:?}"
@@ -6811,6 +7260,8 @@ mod tests {
                     ),
                     resolved_by: Actor::LocalCli,
                 }),
+                agent_session_id: None,
+                workspace_cwd: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -7369,6 +7820,8 @@ mod tests {
                     mode: ModeChange::Unchanged,
                     closed_at: None,
                     interaction: None,
+                    agent_session_id: None,
+                    workspace_cwd: None,
                 })),
                 turns: vec![TurnChange::Create(NewTurn {
                     turn: turn.clone(),
@@ -7783,6 +8236,8 @@ mod tests {
                 mode: ModeChange::Unchanged,
                 closed_at: None,
                 interaction: None,
+                agent_session_id: None,
+                workspace_cwd: None,
             })),
             turns: Vec::new(),
             events: vec![event],
