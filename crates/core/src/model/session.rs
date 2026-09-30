@@ -751,8 +751,9 @@ fn check_prompt_len(len: usize) -> Result<(), InvalidValue> {
     Ok(())
 }
 
-/// 命令 payload：按命令名一对一（§3.3）。`session.create` 不在其中——它经
-/// [`super::CreateSessionRequest`] 与 Node Link 的 `session.create` 路径进入（§12.7）。
+/// 命令 payload：按命令名一对一（§3.3）。`session.create` 与 `session.resume` 都不在其中——它们
+/// 分别经 [`super::CreateSessionRequest`] 与 Node Link 的 `session.create`/`session.resume` 专用路径
+/// 进入（§12.7）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandPayload {
     SessionList {},

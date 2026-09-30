@@ -51,10 +51,13 @@ pub enum ConflictKind {
 }
 pub enum UnavailableKind {
     Busy, StorageFull, IoError, RemoteUnavailable, OwnerOffline, ExportRevoked, KeystoreUnavailable,
+    BackendUnsupported,
 }
 ```
 
 `ConflictKind::{AlreadyExists, IdentityMismatch, DuplicateOwnership}` 与 `UnavailableKind::KeystoreUnavailable` 是管理写集引入的取值（§11.6），与本表同批落地（`crates/core/src/model/error.rs` 的 `ALL`/`as_str` 逐项一致）；本地管理适配器把它们映射为 `LOCAL_ADMIN_PROTOCOL.md` §6 的 `local.conflict`/`local.unavailable`，`port_error_public` 必须显式覆盖这四个取值，不得落进通配臂。
+
+`[决定]` `UnavailableKind::BackendUnsupported`（「后端不支持该操作」）语义上**不是临时故障**：目标 Agent 未宣告该操作所需的能力，或该会话没有该操作所需的持久化数据（§3.6 的两列 `NULL`）时使用它。`port_error_public` 取既有码 `command.unsupported`（不可重试）；Node Link 适配器映射为既有 `nodelink.command.unsupported`，本地管理适配器映射为既有 `local.unavailable`——**不新增**任何错误码、feature ID 或 `local.*` 取值。它与 `IoError`/`StorageFull` 等「存储或后端不可用」类取值必须可区分（同一输入不得有两个错误码）。
 
 `sqlx::Error`（或任何适配器错误）必须在适配器内映射成上表之一后才可进入 core（`MODULE_ARCHITECTURE.md` §8）。
 
@@ -69,6 +72,7 @@ pub enum UnavailableKind {
 | `ImportId` | newtype over `^[A-Za-z0-9._-]{1,128}$`，Access 本地为主键 | `LOCAL_ADMIN_PROTOCOL.md` §5.5 |
 | `WorkspaceAlias` | `^[a-z0-9][a-z0-9._-]{0,63}$` | `NODE_LINK_PROTOCOL.md` §12.3 |
 | `AgentRef` | `{ agentId: String(1..=128), name: String(1..=128) }` | `schemas/sync/v1/common.schema.json#/$defs/sessionSummary` |
+| `AgentSessionId` | **Agent（ACP）侧会话标识**：非空、≤512 字符、不含 NUL（不经过任何 wire，因此上限是本机约束，不引入 schema）；与 core 的 `SessionId`（本机 UUID）不是同一个东西。由 [`SessionEndpoint::agent_session_id`] 交给 core 落盘（§3.6/§5.2），core **不得**在未取得标识时编造取值（`crates/core/src/model/ids.rs`） | 本合同（§5.1/§5.2） |
 | `OwnedSessionRef` | `{ sessionId }` | `MODULE_ARCHITECTURE.md` §4.1 |
 | `RemoteSessionRef` | `{ ownerNodeId, exportId, sessionId }` | `NODE_LINK_PROTOCOL.md` §7 |
 | `OriginEventRef` | `{ ownerNodeId, originEpoch, originEventId }` | `NODE_LINK_PROTOCOL.md` §7 |
@@ -110,7 +114,7 @@ pub enum UnavailableKind {
 | `ConfigOption` | `{ id, name, description: Option<String(≤1024)>, category: Option<String(≤128)>, kind: Select｜Boolean, current: ConfigValue, options }` | 同上 |
 | `CommandKind` | enum `Query ｜ Mutation`（取自 `commands.json` 的分类） | `compatibility/commands/v1/commands.json` |
 | `ClientCommand` | `{ actor: Actor, request: RequestId, command: String(命令名), kind: CommandKind, session: Option<SessionId>, expected_version: Option<Version>, payload: CommandPayload }` | `SYNC_PROTOCOL.md` §11.5 |
-| `CommandPayload` | enum，按命令名一对一：`SessionList{} ｜ SessionRead{ include } ｜ CommandStatus{ target_request: RequestId } ｜ ModeList{} ｜ ConfigList{} ｜ Prompt{ content } ｜ Cancel{turn: Option<TurnId>} ｜ ModeSet{mode} ｜ ConfigSet{id,value} ｜ PermissionResolve{interaction, option_id} ｜ ElicitationRespond{interaction, action, values}` | `SYNC_PROTOCOL.md` §11.5、§12.7 |
+| `CommandPayload` | enum，按命令名一对一：`SessionList{} ｜ SessionRead{ include } ｜ CommandStatus{ target_request: RequestId } ｜ ModeList{} ｜ ConfigList{} ｜ Prompt{ content } ｜ Cancel{turn: Option<TurnId>} ｜ ModeSet{mode} ｜ ConfigSet{id,value} ｜ PermissionResolve{interaction, option_id} ｜ ElicitationRespond{interaction, action, values}`。`session.create` 与 `session.resume` **均不在其中**：两者各有专用路径（分别经 `CreateSessionRequest` 与 `ResumeSessionRequest`、由 §4 的 `SessionLifecycle` 入口受理），增删这两个命令不改本枚举 | `SYNC_PROTOCOL.md` §11.5、§12.7 |
 | `CommandReceipt` | enum `Accepted{ request: RequestId, turn: Option<TurnId> } ｜ Rejected{ error: PublicError }`（同步接受，不含终态） | `SYNC_PROTOCOL.md` §11.2 |
 | `CommandStatus` | enum `Accepted｜Completed｜Failed｜Rejected｜Uncertain` | `SYNC_PROTOCOL.md` §11.2 |
 | `CommandRecord` | `{ session: Option<SessionId>, request: RequestId, command: String, kind: CommandKind, actor: Actor, accepted_at: Option<Timestamp>, status: CommandStatus, terminal_at: Option<Timestamp>, terminal_event: Option<EventId>, result: Option<CommandResult>, error: Option<PublicError>, expected_version: Option<Version>, request_fingerprint: Digest }` | `SYNC_PROTOCOL.md` §11.2/§11.4 |
@@ -173,6 +177,8 @@ pub enum UnavailableKind {
 | `Capability` / `CapabilitySet` | `Capability { kind: String(1..=128), detail: Option<String(≤256)> }`；`CapabilitySet` 为去重集合 | `ACP_COMPATIBILITY_MATRIX.md` §4 |
 | `CreateSessionRequest` | `{ agent: AgentRef, workspace: Option<ResolvedWorkspace>, template: Option<TemplateSelection>, origin: ResourceOrigin }`——alias → 路径的解析在 `UseCases::create_session` 内完成（§5.1），后端只收已解析路径 | `NODE_LINK_PROTOCOL.md` §12.7 |
 | `ResolvedWorkspace` | `{ alias: WorkspaceAlias, canonical_path: String }`；`canonical_path` 是本机规范化绝对路径，只交给后端，不得进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog（解析、校验与失败分类见 §5.1） | 本合同 |
+| `ResumeSessionRequest` | `{ agent: AgentRef, agent_session_id: AgentSessionId, workspace_cwd: String }`——恢复的输入**全部取自 Owner 自身的持久化记录**（客户端不得提供，Node Link 的 `session.resume` payload 是空对象）。`workspace_cwd` 是持久化的「创建时 canonical path」**原文**，不带 workspace 别名（别名指向可被改写或删除，恢复一律以持久化取值为权威、不得按别名重解析）；构造校验与 `ResolvedWorkspace::canonical_path` 同口径（非空、≤4096 字符、无 NUL、绝对路径形状），存在性/目录性/`canonicalize` 一致性由恢复用例在调用后端**之前**复校验（§5.1） | 本合同（§5.1） |
+| `SessionRecoveryRecord` | `{ agent: AgentRef, agent_session_id: Option<AgentSessionId>, workspace_cwd: Option<String> }`——`owned_session` 两列在 core 侧的读取形状：`None` 就是 `NULL`，语义为「该会话没有可用于恢复的数据」，恢复必须显式失败，**不得**推导、补齐或用别名重解析。两列**不进** `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，进入可投影形状会违反本条对 `canonical_path` 的边界），只经窄读取 `SessionStore::load_recovery` 进出（§5.2） | 本合同（§5.2） |
 | `TemplateSelection` | `{ template_id: String(1..=128), params: Vec<(String, ConfigValue)> }` | `NODE_LINK_PROTOCOL.md` §12.3 |
 | `PromptRequest` | `{ content: Vec<PromptContentBlock> }`（形状见协议 crate 的 `promptContentBlock`） | `SYNC_PROTOCOL.md` §11.5 |
 | `EndpointEvent` | `{ kind: EventKind, event_type: EventType, payload: EventPayload, turn: Option<TurnId>, causation: Option<RequestId>, at: Timestamp }`（`SessionEndpoint` 的输出流元素） | 本合同 |
@@ -196,7 +202,7 @@ pub enum UnavailableKind {
 | 用例族 | 入口 | 调用方 |
 |---|---|---|
 | `SessionCommands` | `submit_command(actor, ClientCommand) -> CommandReceipt` | `server::sync`、`server::node_link`、`server::acp_facade` |
-| `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceAlias>) -> SessionId`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条） |
+| `SessionLifecycle` | `create_session(actor, RequestId, Digest, CreateSessionRequest, Option<WorkspaceAlias>) -> SessionId`、`settle_session_create(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool`、`resume_session(actor, RequestId, Digest, SessionId) -> SessionId`、`settle_session_resume(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` | `server::node_link`（§6 第 20 条；`resume_session`/`settle_session_resume` 见 §5.1） |
 | `SessionQueries` | `list_sessions(actor, SessionQuery) -> Vec<SessionSummary>`、`read_session(actor, ReadQuery) -> HistoryPage` | 同上 |
 | `ConfigCommands` | `set_mode(actor, SessionReference, ModeId) -> Version`、`set_config(actor, SessionReference, ConfigOptionId, ConfigValue) -> Version` | 同上 |
 | `PermissionCommands` | `resolve_interaction(actor, SessionReference, InteractionId, InteractionResolution) -> Resolution` | 同上 |
@@ -243,11 +249,18 @@ pub trait SessionBackendFactory: Send + Sync {
     /// 交付后端事件。
     async fn create(&self, session: &SessionId, request: CreateSessionRequest, sink: EventSink) -> Result<Box<dyn SessionEndpoint>, PortError>;
     async fn open(&self, reference: SessionReference, sink: EventSink) -> Result<Box<dyn SessionEndpoint>, PortError>;
+    /// 进程不在的会话恢复（`session.resume`）：按持久化取值重新拉起 Agent 子进程并发送
+    /// `session/resume { sessionId, cwd }`；能力门控（未宣告时**不得发送**该请求、并在返回前回收本次拉起的
+    /// 子进程）与「同一会话只有一条活跃绑定」由实现负责。
+    async fn resume(&self, session: &SessionId, request: ResumeSessionRequest, sink: EventSink) -> Result<Box<dyn SessionEndpoint>, PortError>;
 }
 
 #[async_trait]
 pub trait SessionEndpoint: Send + Sync {
     fn reference(&self) -> SessionReference;
+    /// 本次绑定对应的 Agent 侧会话标识（创建后由 core 落盘，恢复得到的端点同样可读）；未取得时为 `None`，
+    /// 实现**不得**编造占位值。
+    fn agent_session_id(&self) -> Option<&AgentSessionId>;
     async fn prompt(&self, request: PromptRequest, at: Timestamp) -> Result<TurnAccepted, PortError>;
     async fn cancel(&self, turn: Option<TurnId>) -> Result<(), PortError>;
     /// 模式的只读枚举（`session.mode.list` 的唯一来源，§6 第 17 条）：候选列表来自 ACP 的
@@ -267,6 +280,7 @@ pub trait SessionEndpoint: Send + Sync {
 - `[决定]` **`TurnAccepted.turn` 是适配器侧占位/审计值，不是 turn 归属的权威来源**：turn 归属一律由 core 在提交前用自己的 `TurnId`（`IdGenerator::turn_id`）定稿并写入 `owned_event.turn_id` 与事件 view 的 `turnId`（§6 第 19 条）；适配器返回的值**不得**参与归属决策、不得产生第二个 turn 行，也不得影响事件顺序（§9 判据 31）。
 - `[决定]` `read_history` 的分流：owned 由 `storage-sqlite` 从事件日志回答；imported 由 `node-link-client` 在线回源 Owner，Owner 不可达返回 `PortError::Unavailable(RemoteUnavailable)`。
 - `[决定]` **workspace 解析归 core**（§3.6 的 `CreateSessionRequest.workspace` 是 `Option<ResolvedWorkspace>`）：`UseCases::create_session(actor, requestId, requestFingerprint, request, workspace_alias)` 在调用 `SessionBackendFactory::create` **之前**完成 alias → 规范化绝对路径的解析与校验，后端只收到 `ResolvedWorkspace`，**不得**自己查存储、也不得按约定拼路径。`requestId` 与 `requestFingerprint` 由适配层传入（Node Link 的幂等键是 `(ownerNodeId, accessNodeId, requestId)`，指纹是 ACPR-CJ1 之后的解码 payload 摘要）：core **不得**自造 requestId 或指纹，否则同一次重试会得到第二个幂等键（§6 第 20 条）。终态由 `UseCases::settle_session_create(actor, requestId, status, result, error)` 提交（没有持久记录或记录已终结时是幂等 no-op），`completed` 的 `result` 由适配层投影（Node Link 的 `SessionCreateResult` 原文）。校验（与 `SECURITY_DESIGN.md` §12.3 同口径）：必须是绝对路径、必须存在、必须是目录；`canonicalize`（解析 symlink/junction/大小写/`.` 与 `..`）的结果作为权威值，拒绝相对路径与含 `..` 的输入。失败分类：alias 未在该 Export 中声明 → 参数类错误（`NODE_LINK_PROTOCOL.md` §12.7 的 `nodelink.export.not_granted`）；alias 已声明但**本机**解析失败（目录被删/不是目录/`canonicalize` 失败）→ `PortError::Unavailable(UnavailableKind::IoError)`，在线映射为服务端错误（`nodelink.internal.unavailable`），**不得**降级为参数错误。别名命名空间：Export 的 `workspace_aliases[].alias` 就是本机 `owned_workspace.alias`，Export 不复制路径，`export.create` 必须校验每个 alias 已存在。`canonical_path` 只出现在该调用入参里：不进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog。UNC/网络路径允许解析且不改变授权模型，是否记结构化警告由 `server` 层决定（core 不引入日志依赖）。
+- `[决定]` **`resume_session` 的用例顺序与终态归属**（§4 的 `SessionLifecycle`；`session.resume` 与 `session.create` 同形：`CommandPayload` 里没有对应变体，`accepted` 行与幂等行由该用例在**同一事务**里自建，幂等行的 `session` 指向目标会话）：① 授权（`grant.remote-work`，与 `session.create` 同口径）——授权先于一切本机读取与文件系统访问，未授权时不得读取会话行、不得区分会话是否存在；② `SessionStore::load_recovery` 窄读取；两列为 `NULL`（或不存在恢复数据）时与「后端不支持该操作」走**同一条路径**（`Unavailable(BackendUnsupported)`），**不启动进程**、不降级为新建会话；③ cwd 复校验（同创建口径：绝对、存在、是目录，且 `canonicalize` 的结果与持久化取值**逐字相同**）——失败返回 `Unavailable(IoError)`（服务端不可用类），**不**回退到按别名重新解析、也不改用「最接近」的目录；④ `SessionBackendFactory::resume`（唯一可能 spawn 的副作用）；⑤ 只返回 `SessionId`（会话重新可交互），**不**投影、**不**写终态。终态由适配层用与 `session_create_result` 同源的映射投影（`remoteSessionRef.exportId` 只有适配器有）后经 `UseCases::settle_session_resume(actor, &RequestId, CommandStatus, Option<CommandResult>, Option<PublicError>) -> bool` 提交；该入口与 `settle_session_create` **同形**，但**只**终结 `command == "session.resume"` 的持久记录（该 `(actor, requestId)` 记着别的命令时 `InvalidRequest` 且零写入），**没有持久记录或记录已终结时是幂等 no-op**（返回 `false`），落盘失败不报成功（行仍 `accepted`，由启动恢复按 §6 第 16 条终结为 `uncertain`）；投影失败时适配层按既有 `session.create` 模式结 `uncertain`（不用 `failed` 说谎）。
 
 ### 5.2 持久化端口
 
@@ -306,6 +320,11 @@ pub trait SessionStore: Send + Sync {
     /// 一致性读视图：`sync.snapshot_*` 必须在本方法返回的视图内完成（barrier 依据）。
     async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError>;
     async fn find_request(&self, request: &RequestId, actor: &Actor) -> Result<Option<CommandRecord>, PortError>;
+    /// 该会话的恢复数据（§3.6 的 `SessionRecoveryRecord`）：`agent` 取自会话行，两个 `Option` 直接对应
+    /// `owned_session` 的 `agent_session_id`/`workspace_cwd`。**窄读取**：这两列不进
+    /// `Session`/`SessionSummary`；会话行不存在、或任一列为 `NULL`（没有可用于恢复的数据）时返回 `Ok(None)`
+    /// ——`NULL` 不是错误，也不得被推导或补齐。
+    async fn load_recovery(&self, session: &SessionId) -> Result<Option<SessionRecoveryRecord>, PortError>;
     /// 启动恢复（§6 第 16 条）：`status='accepted'` 且 `terminal_event_id IS NULL` 的 mutation 行，
     /// 按 `accepted_at` 升序；走 §7.3 的 `owned_command_status` 索引。
     async fn unsettled_commands(&self, limit: ReplayLimit) -> Result<Vec<CommandRecord>, PortError>;
@@ -361,6 +380,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` imported 写路径的**归属前置**（§11.2 第 5 条）：`upsert_session` 与 `commit_receipt` 都必须在同一写事务内先确认 `(owner_node_id, export_id)` 仍归属某个 Import（`imported_import_export` 有行），否则返回 `NotFound(EntityRef::Export(exportId))` 且零写入——不重建 `imported_session`、不写 `imported_delivery_index`/`imported_command_ref`，也不推进 `local_sequence`。关联行缺失即「该 Import 已被完整移除或从未添加」；同一 `(ownerNodeId, exportId)` 被重新导入后无法区分新旧连接（需导入实例标识或连接代际，见 §7.4）。
 - `[决定]` `origin_epoch` 由 **core** 在创建会话时用 `IdGenerator` 生成并传入（响应审查：存储层返回它会让无创建需求的提交也必须回读）；存储层只校验“该会话已有 epoch 时必须一致”。
 - `[决定]` 幂等命中返回 `CommitOutcome::replayed`，不追加事件、不改状态。
+- `[决定]` **`StateChange::Update` 新增两个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd`）：`None` = 不改该列。它们只在 `create_session` 里、`SessionBackendFactory::create` 成功返回后**紧接着**的一次提交写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`（不依赖后端回报）；`agent_session_id()` 为 `None` 时两列都不写，该会话不被当作可恢复会话。**不**等适配层的终态提交：终态提交会 bump 版本，会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，且终态入口拿不到 core 解析的 cwd。写入之后这两列**只读**：恢复流程只经 `load_recovery` 读它们，MUST NOT 覆写（`design.md` D2 的契约订正）。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
 

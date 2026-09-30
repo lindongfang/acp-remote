@@ -2205,11 +2205,20 @@ fn port_error_and_kinds_are_wired_to_the_model_errors() {
         "unavailable: storage_full"
     );
     assert_eq!(ConflictKind::ALL.len(), 9);
-    assert_eq!(UnavailableKind::ALL.len(), 7);
+    assert_eq!(UnavailableKind::ALL.len(), 8);
     assert_eq!(ConflictKind::AlreadyResolved.as_str(), "already_resolved");
     assert_eq!(
         UnavailableKind::RemoteUnavailable.as_str(),
         "remote_unavailable"
+    );
+    // 「后端不支持该操作」是 `UnavailableKind` 的独立取值：与「临时故障」类可区分（§2、§5.1）。
+    assert_eq!(
+        UnavailableKind::BackendUnsupported.as_str(),
+        "backend_unsupported"
+    );
+    assert_eq!(
+        PortError::Unavailable(UnavailableKind::BackendUnsupported).to_string(),
+        "unavailable: backend_unsupported"
     );
     // Infallible 到 PortError 的收敛存在（供 `TryFrom<u64>` 的不可失败分支使用）。
     let never: Result<Version, std::convert::Infallible> = Ok(Version::from(1));
@@ -2500,6 +2509,76 @@ fn local_config_values_enforce_their_invariants() {
     );
     // §3.7：环境变量名有独立模式（`is_env_name`），超长即被拒。
     assert!(ProviderEnvBinding::try_new("openai", "api_key", &"A".repeat(200)).is_err());
+}
+
+/// §3.1：`AgentSessionId` 是非空、≤512 字符、无 NUL 的 newtype；非法输入是具名错误
+/// （与「未取得标识」的 `None` 可区分——`None` 不是空串）。
+#[test]
+fn agent_session_id_is_bounded_and_nul_free() {
+    assert_eq!(
+        AgentSessionId::new("acp-session-1").expect("合法").as_str(),
+        "acp-session-1"
+    );
+    assert_eq!(
+        AgentSessionId::new(&"a".repeat(512))
+            .expect("上限内")
+            .as_str()
+            .len(),
+        512
+    );
+    assert_eq!(AgentSessionId::new(""), Err(InvalidValue::AgentSessionId));
+    assert_eq!(
+        AgentSessionId::new(&"a".repeat(513)),
+        Err(InvalidValue::AgentSessionId)
+    );
+    assert_eq!(
+        AgentSessionId::new("a\0b"),
+        Err(InvalidValue::AgentSessionId)
+    );
+    assert!(matches!(
+        PortError::from(InvalidValue::AgentSessionId),
+        PortError::InvalidRequest("agent session id must be 1..=512 characters without NUL")
+    ));
+}
+
+/// §3.6：`ResumeSessionRequest` 只承载**持久化的**取值，其中 `workspace_cwd` 必须是绝对路径形状
+/// （存在性、目录性与 `canonicalize` 一致性由恢复用例在调用后端之前复校验，不在构造器里做）。
+#[test]
+fn resume_session_request_validates_the_persisted_working_directory() {
+    let agent = agent_ref();
+    let id = AgentSessionId::new("acp-session-1").expect("agent session id");
+    let absolute = std::env::temp_dir().to_string_lossy().into_owned();
+
+    let request = ResumeSessionRequest::try_new(agent.clone(), id.clone(), absolute.clone())
+        .expect("绝对路径合法");
+    assert_eq!(request.agent, agent);
+    assert_eq!(request.agent_session_id, id);
+    assert_eq!(request.workspace_cwd, absolute);
+
+    for rejected in [
+        String::new(),
+        "relative/path".to_owned(),
+        format!("{absolute}\0x"),
+        format!("{absolute}{}", "a".repeat(5000)),
+    ] {
+        assert_eq!(
+            ResumeSessionRequest::try_new(agent.clone(), id.clone(), rejected.clone()),
+            Err(InvalidValue::Field),
+            "必须拒绝 {rejected:?}"
+        );
+    }
+}
+
+/// §3.6：`SessionRecoveryRecord` 的两个 `Option` 就是 `owned_session` 的两列（`None` = `NULL`）。
+#[test]
+fn session_recovery_record_reports_absent_columns_as_none() {
+    let record = SessionRecoveryRecord {
+        agent: agent_ref(),
+        agent_session_id: None,
+        workspace_cwd: Some("C:\\work".to_owned()),
+    };
+    assert!(record.agent_session_id.is_none());
+    assert_eq!(record.workspace_cwd.as_deref(), Some("C:\\work"));
 }
 
 #[test]
