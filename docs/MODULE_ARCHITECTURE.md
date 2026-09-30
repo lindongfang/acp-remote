@@ -222,7 +222,7 @@ RemoteCatalogQueries
 ```text
 AgentCatalog             枚举可用 Agent 与能力
 SessionBackendFactory    受约束地 create/open/resume SessionEndpoint（`resume` 是进程不在时的唯一恢复入口，能力门控在实现侧）
-SessionEndpoint          reference/agent-session-id/prompt/cancel/modes/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session（`modes` 是 `session.mode.list` 的唯一候选来源；`agent_session_id` 是创建后回填 ACP 会话标识的来源，未取得时返回 `None`）
+SessionEndpoint          reference/agent_session_id/prompt/cancel/modes/set-mode/list-config/set-config/resolve-interaction/read-history/close，绑定单个 live session（`modes` 是 `session.mode.list` 的唯一候选来源；`agent_session_id` 是创建后回填 ACP 会话标识的来源，未取得时返回 `None`）
 SessionStore             原子提交 owned session 状态、事件与 requestId 幂等；提供 head、一致性读视图与恢复数据的窄读取（`load_recovery`）
 RemoteDeliveryStore      只提交 imported event 的 cursor/digest/local-sequence 索引
 TrustStore               设备、节点配对、信任与撤销元数据
