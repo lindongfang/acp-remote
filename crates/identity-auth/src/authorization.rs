@@ -68,7 +68,7 @@ pub const GRANTS: &[(&str, &[&str])] = &[
         &["session.mode.set", "session.config.set"],
     ),
     ("grant.approve", &["permission.resolve"]),
-    ("grant.remote-work", &["session.create"]),
+    ("grant.remote-work", &["session.create", "session.resume"]),
 ];
 
 /// 7 项本地管理能力：永不远程授予，也不参与任何展开（`SECURITY_DESIGN.md` §10.3）。
@@ -158,7 +158,7 @@ pub fn expand_grant_scopes(name: &str) -> Result<Vec<String>, AuthorizationError
     Ok(members.iter().map(|member| (*member).to_owned()).collect())
 }
 
-/// 全部命令名（`packs ∪ grants` 的成员集合；与 `commands.json` 的 12 条命令逐项相等，由测试断言）。
+/// 全部命令名（`packs ∪ grants` 的成员集合；与 `commands.json` 的 13 条命令逐项相等，由测试断言）。
 pub fn command_names() -> BTreeSet<&'static str> {
     let mut names = BTreeSet::new();
     for (_, members) in PACKS.iter().chain(GRANTS.iter()) {

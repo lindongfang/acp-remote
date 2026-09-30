@@ -127,6 +127,7 @@ pub fn required_grant(command: &str) -> Option<&'static str> {
         "session.mode.set" | "session.config.set" => "grant.configure-session",
         "permission.resolve" => "grant.approve",
         "session.create" => "grant.remote-work",
+        "session.resume" => "grant.remote-work",
         _ => return None,
     };
     Some(grant)

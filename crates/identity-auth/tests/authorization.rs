@@ -100,7 +100,7 @@ fn local_capabilities_match_machine_catalog() {
 
 #[test]
 fn command_names_cover_the_whole_catalog() {
-    // R54 / 展开结果只可能是登记命令：`packs ∪ grants` 必须覆盖目录里的 12 条命令。
+    // R54 / 展开结果只可能是登记命令：`packs ∪ grants` 必须覆盖目录里的 13 条命令。
     let catalog = catalog();
     let mut expected: Vec<String> = catalog["commands"]
         .as_array()
@@ -264,7 +264,8 @@ fn node_request_expands_grants_to_command_scopes() {
     assert_eq!(request.grants.len(), 2);
     assert!(request.grants.contains("grant.remote-work"));
     assert!(request.scopes.contains("session.create"));
-    assert_eq!(request.scopes.len(), 6);
+    assert!(request.scopes.contains("session.resume"));
+    assert_eq!(request.scopes.len(), 7);
     // grant 名本身不是命令名，绝不进入 scope 集合。
     assert!(!request.scopes.contains("grant.observe"));
 }

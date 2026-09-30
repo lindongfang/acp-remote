@@ -42,6 +42,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-submit-session-resume.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/command-submit-session-prompt.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": true
@@ -83,6 +88,12 @@
       "expectedKeyword": "additionalProperties"
     },
     {
+      "fixture": "invalid/session-resume-with-cwd.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
       "fixture": "invalid/resource-event-missing-origin.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": false,
@@ -106,6 +117,11 @@
     },
     {
       "fixture": "valid/command-terminal-session-create-completed.json",
+      "schema": "../../../schemas/node-link/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-terminal-session-resume-completed.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": true
     },
