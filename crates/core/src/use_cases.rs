@@ -287,6 +287,25 @@ impl UseCases {
             .await
     }
 
+    /// `session.resume`（Node Link，§12.7、§5.1）：恢复**进程不在**的 owned 会话，成功后返回该会话。
+    ///
+    /// 输入全部取自 Owner 自身的持久化记录（客户端不得提供 agent/cwd）：`request_id` 与
+    /// `request_fingerprint` 由适配层给出（与 [`UseCases::create_session`] 同一幂等口径），`session`
+    /// 由适配层从 `sessionRef` 解析。授权先于一切本机读取与文件系统访问；调用方拿到的只是
+    /// `SessionId`——终态由适配层投影 `SessionResumeResult` 后经
+    /// [`UseCases::settle_session_resume`] 提交。
+    pub async fn resume_session(
+        &self,
+        actor: &Actor,
+        request_id: RequestId,
+        request_fingerprint: Digest,
+        session: SessionId,
+    ) -> Result<SessionId, PortError> {
+        self.broker
+            .resume_session(actor, &request_id, &request_fingerprint, &session)
+            .await
+    }
+
     /// `session.resume` 的终态（§5.1）：把已持久化的 `accepted` 行推进到终态。与
     /// [`UseCases::settle_session_create`] **同形**，但只终结 `session.resume` 的持久记录。
     ///
@@ -2070,6 +2089,301 @@ mod tests {
                 .get(),
             1,
             "没有第二次提交"
+        );
+    }
+
+    /// 一个已带两列恢复数据的夹具：临时目录 + `agent_session_id`。
+    fn resume_fixture(name: &str) -> (Fixture, TempDir, crate::model::AgentSessionId) {
+        let fixture = fixture();
+        let workspace = temp_dir(&format!("acpr-{name}-{}", std::process::id()));
+        let canonical = std::fs::canonicalize(&*workspace)
+            .expect("canonicalize")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        let agent_session_id = crate::model::AgentSessionId::new("acp-session-9").expect("id");
+        fixture.world.seed_recovery(
+            &fixture.session,
+            Some(agent_session_id.clone()),
+            Some(canonical),
+        );
+        (fixture, workspace, agent_session_id)
+    }
+
+    fn resume_request_id(n: u64) -> crate::model::RequestId {
+        crate::model::RequestId::new(&uuid_text(80 + n)).expect("request id")
+    }
+
+    /// [R26]/[R27]/[R31]/§5.1：`resume_session` 的输入全部取自持久化记录（`agent`/`agent_session_id`/
+    /// 持久化 cwd 原文），成功后写 `accepted` + 幂等行（`session` 指向目标会话）并只返回 `SessionId`。
+    #[test]
+    fn resume_session_uses_the_persisted_values_and_commits_an_accepted_row() {
+        let (fixture, _workspace, agent_session_id) = resume_fixture("resume-ok");
+        let actor = Actor::LocalCli;
+        let request = resume_request_id(1);
+        let canonical = lock(&fixture.world.state)
+            .recoveries
+            .get(fixture.session.as_str())
+            .expect("两列")
+            .workspace_cwd
+            .clone()
+            .expect("cwd");
+
+        let resumed = block_on(fixture.use_cases.resume_session(
+            &actor,
+            request.clone(),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect("resume");
+        assert_eq!(resumed, fixture.session, "只返回目标会话标识");
+
+        let received = fixture.world.resume_requests.lock().expect("lock").clone();
+        assert_eq!(received.len(), 1, "后端只被调用一次");
+        assert_eq!(received[0].agent.agent_id().as_str(), "agent-1");
+        assert_eq!(received[0].agent_session_id, agent_session_id);
+        assert_eq!(
+            received[0].workspace_cwd, canonical,
+            "传给后端的就是持久化原文，不按别名重新解析"
+        );
+
+        let record = fixture.world.command(&request).expect("幂等行");
+        assert_eq!(record.command(), "session.resume");
+        assert_eq!(record.status(), CommandStatus::Accepted);
+        assert_eq!(record.session(), Some(&fixture.session));
+    }
+
+    /// [R28]/§6 第 6 条：同键重试不重复派发——幂等行已存在时早退，不再调用后端。
+    #[test]
+    fn resume_session_replay_does_not_spawn_a_second_endpoint() {
+        let (fixture, _workspace, _) = resume_fixture("resume-replay");
+        let actor = Actor::LocalCli;
+        for _ in 0..2 {
+            block_on(fixture.use_cases.resume_session(
+                &actor,
+                resume_request_id(2),
+                digest('R'),
+                fixture.session.clone(),
+            ))
+            .expect("resume");
+        }
+        assert_eq!(
+            fixture.world.resume_requests.lock().expect("lock").len(),
+            1,
+            "同键重试只发生一次副作用"
+        );
+    }
+
+    /// [R23]/[R24]/[R25]：cwd 复校验失败在**调用后端之前**发生，且是服务端不可用类；
+    /// 持久化取值不被改写，也不回退到任何新解析结果。
+    #[test]
+    fn resume_session_revalidates_the_persisted_directory_before_calling_the_backend() {
+        // 目录被删除。
+        let (fixture, workspace, _) = resume_fixture("resume-missing");
+        drop(workspace);
+        let error = block_on(fixture.use_cases.resume_session(
+            &Actor::LocalCli,
+            resume_request_id(3),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect_err("目录不存在必须失败");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        assert!(
+            fixture
+                .world
+                .resume_requests
+                .lock()
+                .expect("lock")
+                .is_empty(),
+            "复校验失败时不得调用后端（不启动进程）"
+        );
+        assert!(
+            fixture.world.command(&resume_request_id(3)).is_none(),
+            "提交前失败不留 accepted 行"
+        );
+
+        // 规范化结果与持久化取值不同（附加 `.` 的等价路径只能经库被篡改到达）。
+        let (fixture, workspace, _) = resume_fixture("resume-dotted");
+        let canonical = std::fs::canonicalize(&*workspace)
+            .expect("canonicalize")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        let dotted = format!("{canonical}{}.", std::path::MAIN_SEPARATOR);
+        fixture.world.seed_recovery(
+            &fixture.session,
+            Some(crate::model::AgentSessionId::new("acp-session-9").expect("id")),
+            Some(dotted.clone()),
+        );
+        let error = block_on(fixture.use_cases.resume_session(
+            &Actor::LocalCli,
+            resume_request_id(4),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect_err("未规范化的持久化值必须被拒");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        assert!(
+            fixture
+                .world
+                .resume_requests
+                .lock()
+                .expect("lock")
+                .is_empty()
+        );
+        assert_eq!(
+            lock(&fixture.world.state)
+                .recoveries
+                .get(fixture.session.as_str())
+                .expect("两列")
+                .workspace_cwd,
+            Some(dotted),
+            "持久化取值不得被改写"
+        );
+
+        // 取值无法通过值对象构造（这里用含 NUL 的篡改值）：服务端不可用类，不是「不支持」。
+        let (fixture, _workspace, _) = resume_fixture("resume-nul");
+        fixture.world.seed_recovery(
+            &fixture.session,
+            Some(crate::model::AgentSessionId::new("acp-session-9").expect("id")),
+            Some("C:\\work\0x".to_owned()),
+        );
+        let error = block_on(fixture.use_cases.resume_session(
+            &Actor::LocalCli,
+            resume_request_id(5),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect_err("非法持久化取值必须被拒");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+    }
+
+    /// [R21-2]/[R37]/§3.6：两列为 `NULL`（没有可用恢复数据）时与「能力不支持」同一条路径——
+    /// `BackendUnsupported`、**不启动进程**、不降级为新建会话。
+    #[test]
+    fn resume_session_reports_missing_recovery_data_as_unsupported() {
+        let fixture = fixture();
+        let request = resume_request_id(6);
+        let error = block_on(fixture.use_cases.resume_session(
+            &Actor::LocalCli,
+            request.clone(),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect_err("两列 NULL 必须显式失败");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::BackendUnsupported)
+        ));
+        assert!(
+            fixture
+                .world
+                .resume_requests
+                .lock()
+                .expect("lock")
+                .is_empty(),
+            "不得启动进程"
+        );
+        assert_eq!(
+            session_count(&fixture),
+            1,
+            "不得降级为新建会话（会话数不变）"
+        );
+        assert!(fixture.world.command(&request).is_none());
+    }
+
+    /// [R31]/§5.1：授权先于一切本机读取——未授权时既不读会话行也不触碰文件系统，且与会话是否存在
+    /// 不可区分。
+    #[test]
+    fn resume_session_authorizes_before_reading_the_session_row() {
+        let (fixture, _workspace, _) = resume_fixture("resume-denied");
+        let device = Actor::Device {
+            device: crate::model::DeviceId::new(&uuid_text(52)).expect("device"),
+            scopes: ScopeSet::empty(),
+        };
+        let error = block_on(fixture.use_cases.resume_session(
+            &device,
+            resume_request_id(7),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect_err("越权恢复必须被拒");
+        assert!(
+            matches!(
+                error,
+                PortError::InvalidRequest("authorization.scope_denied")
+            ),
+            "得到 {error:?}"
+        );
+        assert_eq!(
+            fixture.world.recovery_read_count(),
+            0,
+            "拒绝不得读取该会话行（因此也无法区分会话是否存在）"
+        );
+        assert!(
+            fixture
+                .world
+                .resume_requests
+                .lock()
+                .expect("lock")
+                .is_empty()
+        );
+    }
+
+    /// [R37]/§5.1：后端报告「不支持」（Agent 未宣告能力）时原样上抛，且 `accepted` 行仍在——
+    /// 由适配层结 `failed` 终态（`command.uncertain` 只留给「已 accepted、尚未确认副作用」的窗口）。
+    #[test]
+    fn resume_session_propagates_the_backend_unsupported_error() {
+        let (fixture, _workspace, _) = resume_fixture("resume-unsupported");
+        fixture
+            .world
+            .resume_errors
+            .lock()
+            .expect("lock")
+            .push_back(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        let request = resume_request_id(8);
+        let error = block_on(fixture.use_cases.resume_session(
+            &Actor::LocalCli,
+            request.clone(),
+            digest('R'),
+            fixture.session.clone(),
+        ))
+        .expect_err("后端不支持必须上抛");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::BackendUnsupported)
+        ));
+        assert_eq!(
+            fixture.world.command(&request).expect("幂等行").status(),
+            CommandStatus::Accepted,
+            "先 accepted 再工作：后端失败时行仍为 accepted，等适配层结终态"
+        );
+        // 终态由适配层结：结过之后不再覆盖。
+        let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"acp-9"}"#)
+            .expect("result object");
+        assert!(
+            block_on(fixture.use_cases.settle_session_resume(
+                &Actor::LocalCli,
+                &request,
+                CommandStatus::Completed,
+                Some(result),
+                None,
+            ))
+            .expect("settle")
+        );
+        assert_eq!(
+            fixture.world.command(&request).expect("终态行").status(),
+            CommandStatus::Completed
         );
     }
 

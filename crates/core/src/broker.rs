@@ -34,10 +34,11 @@ use crate::model::{
     InteractionResolution, LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, NodeKind,
     NodeState, OriginEventRef, OwnedSessionRef, PendingEvent, PendingInteraction,
     PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock,
-    PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution, Sequence, SessionId,
-    SessionReference, SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind,
-    Version, ViewJson, decode_json_string as json_string, encode_json_string as json_text,
-    insert_string_member_front, object_members as json_members, top_level_member,
+    PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution, ResumeSessionRequest,
+    Sequence, SessionId, SessionRecoveryRecord, SessionReference, SessionState, StoredPolicy,
+    Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
+    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
+    object_members as json_members, top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
@@ -1468,6 +1469,80 @@ impl Broker {
         }
         *lock(&slot.endpoint) = Some(endpoint);
         Ok(session)
+    }
+
+    /// `session.resume`（§5.1、§12.7）：进程不在的 owned 会话的恢复入口。
+    ///
+    /// 顺序（**授权先于一切本机读取**）：① 授权 → ② `SessionStore::load_recovery` 窄读取 →
+    /// ③ 请求构造与 cwd 复校验（对象是持久化原文）→ ④ `SessionBackendFactory::resume`（唯一可能
+    /// spawn 的副作用）→ ⑤ 返回 `SessionId`（会话重新可交互），**不**投影、**不**写终态。
+    ///
+    /// `accepted` 行与幂等行由本方法**自建**，提交点与 `session.create` 相同（先回 accepted、再做
+    /// 工作）：`session.resume` 没有 `CommandPayload` 变体，也不走通用 mutation 管线（否则终态会被
+    /// 通用臂先提交，`settle_session_resume` 就退化为幂等 no-op）。终态由适配层用同源映射投影
+    /// `SessionResumeResult`（`remoteSessionRef.exportId` 只有它有）后经
+    /// [`Broker::settle_session_resume`] 提交。
+    ///
+    /// 两类「不支持」走同一条路径（`Unavailable(BackendUnsupported)`）：该会话没有持久化恢复数据
+    /// （两列 `NULL`/行不存在），以及后端自己报告「该 Agent 未宣告能力」。本机取值不成立（cwd 复校验
+    /// 失败、持久化值无法通过值对象构造）是**服务端不可用类**（`Unavailable(IoError)`），两者不得混用。
+    pub async fn resume_session(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        request_fingerprint: &Digest,
+        session: &SessionId,
+    ) -> Result<SessionId, PortError> {
+        self.authorize(actor, "session.resume", Some(session), request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        // ②：两列 `NULL`（或会话行不存在）= 没有可用于恢复的数据 = 对本次操作不支持，不启动进程。
+        let Some(record) = self.deps.store.load_recovery(session).await? else {
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        };
+        // ③：请求全部来自持久化记录；cwd 在这里重新校验（「它曾经合法」不是跳过理由）。
+        let resume = resume_request(record)?;
+        revalidate_resume_workspace(&resume.workspace_cwd)?;
+        let at = self.now();
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at: at.clone(),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: actor.clone(),
+                request: request.clone(),
+                command: "session.resume".to_owned(),
+                kind: CommandKind::Mutation,
+                // 与 `session.create` 不同：目标会话在提交前就已知，幂等行直接指向它（§6 第 20 条）。
+                session: Some(session.clone()),
+                expected_version: None,
+                request_fingerprint: request_fingerprint.clone(),
+                accepted_at: at,
+            }),
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        if outcome.replayed.is_some() {
+            // 同键重试（或并发重复）：首次结果已存在，副作用只发生一次、不重复 spawn。
+            return Ok(session.clone());
+        }
+        // ④：唯一副作用（可能拉起 Agent 子进程）。
+        let slot = self.owned_slot(session);
+        let sink = self.sink(session);
+        let endpoint: Arc<dyn SessionEndpoint> = self
+            .deps
+            .backends
+            .resume(session, resume, sink)
+            .await?
+            .into();
+        *lock(&slot.endpoint) = Some(endpoint);
+        Ok(session.clone())
     }
 
     /// `session.create` 的终态提交（§6 第 20 条、§12.7）。返回本次是否真的写入了终态。
@@ -3530,6 +3605,43 @@ fn view_turn_error(turn: &TurnId, error: &PublicError) -> Result<ViewJson, PortE
     ))
 }
 
+/// 恢复请求的构造（§3.6）：全部输入取自持久化记录。
+///
+/// 记录里两个 `Option` 中任一为 `None` 时与「没有恢复数据」同义（`load_recovery` 已按该口径收敛），
+/// 返回 `BackendUnsupported`；取值**无法通过值对象构造**（相对路径、空串、超长、含 NUL——只能经库
+/// 被篡改或写入侧 bug 到达）属于**服务端不可用类**（`IoError`），不得归入「不支持」那一类。
+fn resume_request(record: SessionRecoveryRecord) -> Result<ResumeSessionRequest, PortError> {
+    let (Some(agent_session_id), Some(workspace_cwd)) =
+        (record.agent_session_id, record.workspace_cwd)
+    else {
+        return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+    };
+    ResumeSessionRequest::try_new(record.agent, agent_session_id, workspace_cwd)
+        .map_err(|_| PortError::Unavailable(UnavailableKind::IoError))
+}
+
+/// 恢复时的工作目录复校验（与创建同口径）：绝对、存在、是目录，且 `canonicalize` 的结果与持久化
+/// 取值**逐字相同**。
+///
+/// 失败一律是 `Unavailable(IoError)`（服务端不可用类）：**不**回退到按别名重新解析，也不改用
+/// 「最接近」的目录；「它曾经合法」不是跳过校验的理由（每次恢复都重新校验）。
+fn revalidate_resume_workspace(workspace_cwd: &str) -> Result<(), PortError> {
+    let io = || PortError::Unavailable(UnavailableKind::IoError);
+    let candidate = std::path::Path::new(workspace_cwd);
+    if !candidate.is_absolute() {
+        return Err(io());
+    }
+    let metadata = std::fs::metadata(candidate).map_err(|_| io())?;
+    if !metadata.is_dir() {
+        return Err(io());
+    }
+    let canonical = std::fs::canonicalize(candidate).map_err(|_| io())?;
+    if canonical.to_str() != Some(workspace_cwd) {
+        return Err(io());
+    }
+    Ok(())
+}
+
 fn view_command_completed(
     request: &RequestId,
     result: Option<&str>,
@@ -3664,9 +3776,8 @@ pub(crate) mod test_support {
         ExportId, ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
         OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
         PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
-        ResourceOrigin, ResumeSessionRequest, SeedState, ServerEpoch, Session,
-        SessionRecoveryRecord, SessionSnapshot, SessionSummary, Turn, WorkspaceAlias,
-        WorkspaceRecord,
+        ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+        WorkspaceAlias, WorkspaceRecord,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -3836,6 +3947,8 @@ pub(crate) mod test_support {
         pub(crate) resume_requests: Mutex<Vec<ResumeSessionRequest>>,
         /// `resume` 的脚本化错误（先进先出弹出；空 = 成功返回端点）。
         pub(crate) resume_errors: Mutex<VecDeque<PortError>>,
+        /// `load_recovery` 的调用次数（断言「授权先于本机读取」：未授权时不得读会话行）。
+        pub(crate) recovery_reads: AtomicUsize,
     }
 
     /// `owned_session` 的两列恢复数据（§3.6 `SessionRecoveryRecord`）。
@@ -4007,6 +4120,11 @@ pub(crate) mod test_support {
             lock(&self.state)
                 .commands
                 .insert(command_key(record.actor(), record.request()), record);
+        }
+
+        /// `load_recovery` 的调用次数（「授权先于本机读取」的可观察证据）。
+        pub(crate) fn recovery_read_count(&self) -> usize {
+            self.recovery_reads.load(Ordering::SeqCst)
         }
 
         pub(crate) fn session(&self, session: &SessionId) -> Option<Session> {
@@ -4754,6 +4872,7 @@ pub(crate) mod test_support {
             &self,
             session: &SessionId,
         ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+            self.world.recovery_reads.fetch_add(1, Ordering::SeqCst);
             let state = lock(&self.world.state);
             let Some(found) = state.sessions.get(session.as_str()) else {
                 return Ok(None);
