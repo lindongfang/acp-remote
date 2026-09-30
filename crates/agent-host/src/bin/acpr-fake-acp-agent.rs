@@ -9,6 +9,11 @@
 //! `stderr-protocol-noise`（在 **stderr** 上写语法完全合法的 ACP 报文，stdout 仍正常应答），
 //! 另有 `--dump-env <path>` 便于断言注入给子进程的环境变量集合。
 //!
+//! 会话恢复（`session/resume`）的三个场景：`resume-ok`（已宣告 `sessionCapabilities.resume` 且恢复
+//! 成功）、`resume-error`（已宣告能力却拒绝恢复，例如原生会话已被清理）、`session-new-error`
+//! （`session/new` 返回错误）。`--dump-requests <path>` 把每次收到的带 `method` 的入站报文按行追加
+//! method 名，供用例断言「某个请求发过 / 没发过」。
+//!
 //! `--heartbeat-file <path>` 让子进程在存活期间每 50 ms 追加一个字节（`heartbeat-child` 直接用它，
 //! 其余场景另外开一个线程写同一个文件）：进程是否真的结束因此可以在**进程外**观察，而不依赖进程内的
 //! `is_running()` 状态位。
@@ -26,6 +31,7 @@ struct Args {
     scenario: String,
     heartbeat_file: Option<String>,
     dump_env: Option<String>,
+    dump_requests: Option<String>,
     capabilities: Value,
     /// `session/new` 不返回 `modes`（用于「未宣告」路径）。
     no_modes: bool,
@@ -42,6 +48,7 @@ impl Args {
             scenario: "normal".to_owned(),
             heartbeat_file: None,
             dump_env: None,
+            dump_requests: None,
             capabilities: json!({}),
             no_modes: false,
             no_config_options: false,
@@ -59,6 +66,7 @@ impl Args {
                 ("--scenario", Some(value)) => args.scenario = value,
                 ("--heartbeat-file", Some(value)) => args.heartbeat_file = Some(value),
                 ("--dump-env", Some(value)) => args.dump_env = Some(value),
+                ("--dump-requests", Some(value)) => args.dump_requests = Some(value),
                 ("--capabilities", Some(value)) => {
                     args.capabilities = serde_json::from_str(&value).unwrap_or_else(|_| json!({}));
                 }
@@ -128,6 +136,9 @@ fn main() -> ExitCode {
             // 对端发来的非法 JSON 不是本 fake 的职责范围：忽略。
             continue;
         };
+        if let Some(method) = message.get("method").and_then(Value::as_str) {
+            dump_method(&args, method);
+        }
         handle(&message, &mut state, &mut out, &args);
     }
     ExitCode::SUCCESS
@@ -158,6 +169,20 @@ fn heartbeat_loop(path: &str) -> Result<(), ()> {
         }
         let _ = file.flush();
         std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// `--dump-requests <path>`：追加一行 method（正常错误都静默：本选项只服务于测试断言）。
+fn dump_method(args: &Args, method: &str) {
+    let Some(path) = &args.dump_requests else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{method}");
     }
 }
 
@@ -200,6 +225,18 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                     .is_some();
             if !shaped {
                 std::process::exit(8);
+            }
+            if args.scenario == "session-new-error" {
+                // 会话创建失败（Agent 返回明确错误）：不得伪造一个会话标识。
+                write_line(
+                    out,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32002, "message": "无法创建会话" },
+                    }),
+                );
+                return;
             }
             state.session_seq += 1;
             let session_id = format!("acp-session-{}", state.session_seq);
@@ -297,6 +334,35 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                 std::process::exit(7);
             }
             respond(out, &id, json!({}));
+        }
+        (Some("session/resume"), Some(id)) => {
+            // 形状校验：`ResumeSessionRequest` 的 `sessionId` 与 `cwd` 都是 pinned schema 的必填字段。
+            // 形状不合规即退出，让「发出缺必填字段的恢复请求」变成测试里可观察的失败。
+            let params = message.get("params");
+            let shaped = params
+                .and_then(|params| params.get("sessionId"))
+                .and_then(Value::as_str)
+                .is_some()
+                && params
+                    .and_then(|params| params.get("cwd"))
+                    .and_then(Value::as_str)
+                    .is_some();
+            if !shaped {
+                std::process::exit(8);
+            }
+            match args.scenario.as_str() {
+                // 已宣告能力、Agent 却拒绝恢复（例如原生会话已被清理）：明确失败，不伪造成功。
+                "resume-error" => write_line(
+                    out,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32001, "message": "原生会话已被清理" },
+                    }),
+                ),
+                // `resume-ok` 与本 fake 的其它场景都是恢复成功：模式与配置项都缺失是合法响应。
+                _ => respond(out, &id, json!({})),
+            }
         }
         (Some("session/prompt"), Some(id)) => {
             state.prompt_seq += 1;

@@ -17,8 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use acp_core::model::{
-    AgentDescriptor, AgentId, AgentProfile, AgentRef, Capability, CapabilitySet,
-    CreateSessionRequest, PortError, ResourceOrigin, SessionId, SessionReference,
+    AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, Capability, CapabilitySet,
+    CreateSessionRequest, PortError, ResourceOrigin, ResumeSessionRequest, SessionId,
+    SessionReference, UnavailableKind,
 };
 use acp_core::ports::{
     AgentCatalog, Clock, CredentialResolver, EventSink, IdGenerator, LocalConfigStore,
@@ -204,6 +205,17 @@ impl AgentHost {
     ///
     /// 一把异步锁串行化「启动 + initialize」：并发调用不会造出两个进程、两个 Job 或两条协商。
     async fn ensure_runtime(&self, agent: &AgentId) -> Result<Arc<AgentRuntime>, HostError> {
+        Ok(self.ensure_runtime_tracked(agent).await?.0)
+    }
+
+    /// 同 [`AgentHost::ensure_runtime`]，并回报「本次调用是否真的拉起了一个新进程」。
+    ///
+    /// 恢复的能力门控需要这个区别：能力未宣告时必须回收**本次为恢复而拉起**的子进程，而复用到的
+    /// 既有进程可能正在服务其它会话，不得被一次失败的恢复连带结束（`design.md` D4）。
+    async fn ensure_runtime_tracked(
+        &self,
+        agent: &AgentId,
+    ) -> Result<(Arc<AgentRuntime>, bool), HostError> {
         // 关闭中不得再启动新进程（`shutdown_all` 已置位）：显式失败，不静默超时、不偷偷拉起来。
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(HostError::NotRunning);
@@ -218,7 +230,7 @@ impl AgentHost {
         let stale = runtimes.get(agent).cloned();
         if let Some(runtime) = stale {
             if runtime.supervisor.is_running() {
-                return Ok(runtime);
+                return Ok((runtime, false));
             }
             // 进程已退出：不跨代复用这个 runtime（也不留残留映射）——先作废它的会话端点与映射，
             // 再按关闭顺序回收整棵树与任务，最后按「不存在」重启（新一代）。
@@ -256,7 +268,61 @@ impl AgentHost {
         runtime.touch();
         spawn_router(Arc::clone(&runtime), incoming);
         runtimes.insert(agent.clone(), Arc::clone(&runtime));
-        Ok(runtime)
+        Ok((runtime, true))
+    }
+
+    /// 让出同一 core 会话在任何运行时里的既有绑定。
+    ///
+    /// 恢复成功后必须保证「同一 core 会话只有一条活跃绑定」（`specs/local-agent-host/spec.md` 的
+    /// 「反复恢复不产生第二个端点」）：旧绑定先停止接受 turn，再摘出映射，随后本次恢复才登记新绑定。
+    /// 旧绑定可能落在另一个运行时（同一会话在两个 Agent 进程上都留有映射），因此按目录全扫而不是
+    /// 只看目标运行时。
+    async fn evict_binding(&self, session: &SessionId) {
+        let runtimes: Vec<Arc<AgentRuntime>> =
+            self.runtimes.lock().await.values().cloned().collect();
+        for runtime in runtimes {
+            let existing = lock(&runtime.by_core).get(session.as_str()).cloned();
+            let Some(acp_id) = existing else { continue };
+            match runtime.session_for_acp(&acp_id) {
+                Some(previous) => {
+                    previous.close_session();
+                    runtime.remove_session(&previous);
+                }
+                // 映射不完整（只有 `by_core` 条目）：只摘掉它，不猜一个端点出来。
+                None => {
+                    lock(&runtime.by_core).remove(session.as_str());
+                }
+            }
+        }
+    }
+
+    /// 回收**本次恢复**拉起的运行时（进程树、映射与会话绑定一并让出）。
+    ///
+    /// 只在 `spawned` 为真时动手：复用到的既有进程可能正在服务其它会话，不能因为一次恢复失败被
+    /// 连带结束；而能力未宣告时规格要求的可观察保证正是「回收本次为恢复而拉起的子进程」。
+    async fn discard_spawned_runtime(
+        &self,
+        agent: &AgentId,
+        runtime: &Arc<AgentRuntime>,
+        spawned: bool,
+    ) {
+        if !spawned {
+            return;
+        }
+        {
+            let mut runtimes = self.runtimes.lock().await;
+            if runtimes
+                .get(agent)
+                .is_some_and(|current| Arc::ptr_eq(current, runtime))
+            {
+                runtimes.remove(agent);
+            }
+        }
+        for session in runtime.sessions() {
+            session.close_session();
+        }
+        runtime.clear_sessions();
+        runtime.supervisor.shutdown().await;
     }
 
     /// 执行 `initialize` 并解出能力声明（只记录 Agent 真宣告的内容）。
@@ -474,9 +540,13 @@ impl SessionBackendFactory for AgentHost {
                 .to_port_error()
             })?;
 
+        // `session/new` 成功返回的 ACP 会话标识：core 用它落盘（§3.6）。取不出合法 `AgentSessionId`
+        // （空、超过 512 字符或含 NUL）时给 `None`，由 core 决定两列都不写——**不**编造占位值。
+        let agent_session_id = AgentSessionId::new(&response.session_id).ok();
         let session = Arc::new(AcpSession::new(SessionInit {
             session: session.clone(),
             acp_session_id: response.session_id,
+            agent_session_id,
             supervisor: Arc::clone(&runtime.supervisor),
             sink,
             ids: Arc::clone(&self.ids),
@@ -526,6 +596,89 @@ impl SessionBackendFactory for AgentHost {
         }
         Err(PortError::InvalidRequest("没有该会话的活动 endpoint"))
     }
+
+    /// 进程不在时的会话恢复（`session/resume`，`design.md` D4）。
+    ///
+    /// 顺序就是能力门控的落点：`initialize`（`ensure_runtime` 复用既有启动路径）→ 读**协商到的**
+    /// 能力 → 未宣告就到此为止（不发 `session/resume`、不建绑定，并回收本次拉起的子进程）→ 宣告了
+    /// 才发送 `session/resume { sessionId, cwd }`。
+    ///
+    /// 发送的取值**全部来自持久化记录**（`request`）：本层不读存储、不解析路径、也不做任何补齐，
+    /// `cwd` 就是 `request.workspace_cwd` 原文（不含 workspace 别名）。
+    async fn resume(
+        &self,
+        session: &SessionId,
+        request: ResumeSessionRequest,
+        sink: EventSink,
+    ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+        let ResumeSessionRequest {
+            agent,
+            agent_session_id,
+            workspace_cwd,
+        } = request;
+        let agent_id = agent.agent_id().clone();
+        let (runtime, spawned) = self
+            .ensure_runtime_tracked(&agent_id)
+            .await
+            .map_err(|error| error.to_port_error())?;
+        let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
+
+        if !capabilities.supports_session_resume() {
+            // 协商能力只能经 `initialize` 得知，而 `initialize` 必然已经拉起进程；因此这里的可观察
+            // 保证是「一个字节都不发」+「回收本次为恢复而拉起的子进程」，不是「不启动进程」。
+            self.discard_spawned_runtime(&agent_id, &runtime, spawned)
+                .await;
+            return Err(PortError::Unavailable(UnavailableKind::BackendUnsupported));
+        }
+
+        let params = session_resume_params(&agent_session_id, &workspace_cwd)?;
+        let value = match runtime
+            .supervisor
+            .request("session/resume", &params, limits::SHORT_REQUEST_TIMEOUT)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                // Agent 拒绝（或进程消失/超时）：明确失败，且不留下本次拉起的进程。
+                self.discard_spawned_runtime(&agent_id, &runtime, spawned)
+                    .await;
+                return Err(error.to_port_error());
+            }
+        };
+        let response: message::SessionResumeResponse = match serde_json::from_value(value) {
+            Ok(response) => response,
+            Err(error) => {
+                self.discard_spawned_runtime(&agent_id, &runtime, spawned)
+                    .await;
+                return Err(HostError::SpawnFailed {
+                    detail: format!("无法解码 session/resume 响应：{error}"),
+                }
+                .to_port_error());
+            }
+        };
+
+        // 旧绑定先让出：成功恢复后同一 core 会话只能有一条能派发 turn 的绑定。
+        self.evict_binding(session).await;
+        let endpoint_session = Arc::new(AcpSession::new(SessionInit {
+            session: session.clone(),
+            acp_session_id: agent_session_id.as_str().to_owned(),
+            // 恢复得到的端点读回的必须是**持久化**的标识（不是新会话标识，也不是占位值）。
+            agent_session_id: Some(agent_session_id),
+            supervisor: Arc::clone(&runtime.supervisor),
+            sink,
+            ids: Arc::clone(&self.ids),
+            clock: Arc::clone(&self.clock),
+            capabilities,
+            modes: response.modes,
+            config_options: response.config_options.unwrap_or_default(),
+        }));
+        if let Err(error) = runtime.insert_session(&endpoint_session) {
+            self.discard_spawned_runtime(&agent_id, &runtime, spawned)
+                .await;
+            return Err(error.to_port_error());
+        }
+        Ok(Box::new(Endpoint::new(endpoint_session)))
+    }
 }
 
 /// `session/new` 的参数。
@@ -553,6 +706,21 @@ fn session_new_params(request: &CreateSessionRequest) -> Result<Value, PortError
         "cwd": workspace.canonical_path(),
         "mcpServers": [],
     }))
+}
+
+/// `session/resume` 的参数。
+///
+/// 两个字段都是 pinned schema（`schemas/acp/v1/upstream/schema.json` 的 `ResumeSessionRequest`）的
+/// **必填**字段，取值逐字来自持久化记录：`sessionId` 是该会话持久化的 ACP 会话标识，`cwd` 是持久化的
+/// 「创建时 canonical path」原文。字段名与形状取自 `acp-protocol` 的类型化 DTO，本层不另抄一份；
+/// 路径的解析、存在性与 `canonicalize` 一致性都由 core 在调用本端口**之前**复校验（§5.1）。
+fn session_resume_params(
+    agent_session_id: &AgentSessionId,
+    workspace_cwd: &str,
+) -> Result<Value, PortError> {
+    let request = message::SessionResumeRequest::new(agent_session_id.as_str(), workspace_cwd);
+    // 两个字符串字段的编码不会失败；沿用 `initialize` 对「自编码失败」的既有映射。
+    serde_json::to_value(&request).map_err(|_| HostError::IdUnavailable.to_port_error())
 }
 
 /// 从 profile 造 `AgentRef`。
@@ -642,5 +810,36 @@ fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 恢复请求的参数逐字来自持久化取值：恰好是 `sessionId` 与 `cwd` 两个必填字段。
+    ///
+    /// 键集合也是断言对象：**不得**把 workspace 别名、默认值或任何补齐字段发出去
+    /// （`design.md` D3 的 Round 13 订正：恢复路径以持久化取值为权威、不按别名重解析）。
+    #[test]
+    fn resume_params_carry_the_persisted_values_verbatim() {
+        let id = AgentSessionId::new("acp-session-restored").expect("agent session id");
+        let params = session_resume_params(&id, r"C:\work\demo").expect("params");
+        assert_eq!(
+            params,
+            json!({ "sessionId": "acp-session-restored", "cwd": "C:\\work\\demo" })
+        );
+        let mut keys: Vec<&str> = params
+            .as_object()
+            .expect("对象")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["cwd", "sessionId"],
+            "参数只允许这两个键：{params}"
+        );
     }
 }

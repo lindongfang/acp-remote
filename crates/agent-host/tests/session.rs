@@ -1,4 +1,4 @@
-//! 会话端点：事件映射与保真、turn 生命周期、交互往返、能力门控与映射表。
+//! 会话端点：事件映射与保真、turn 生命周期、交互往返、能力门控、会话恢复与映射表。
 
 mod support;
 
@@ -6,17 +6,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acp_core::model::{
-    AgentId, AgentProfile, AgentRef, CreateSessionRequest, ExportId, InteractionResolution, NodeId,
-    OriginEpoch, PermissionDecision, PermissionDecisionKind, PortError, PromptContentBlock,
-    RemoteSessionRef, ResourceOrigin, SessionId, SessionReference,
+    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest, ExportId,
+    InteractionResolution, NodeId, OriginEpoch, OwnedSessionRef, PermissionDecision,
+    PermissionDecisionKind, PortError, PromptContentBlock, RemoteSessionRef, ResourceOrigin,
+    ResumeSessionRequest, SessionId, SessionReference, UnavailableKind,
 };
 use acp_core::ports::{AgentCatalog, SessionBackendFactory, SessionEndpoint};
 use agent_host::runtime_running;
 use agent_host::{AgentHost, HostConfig};
 use serde_json::Value;
 use support::{
-    Collector, FAKE_AGENT, FakeConfig, FakeCredentials, TestClock, TestIds, digest_of, profile,
-    profile_with,
+    Collector, FAKE_AGENT, FakeConfig, FakeCredentials, TempFile, TestClock, TestIds, digest_of,
+    profile, profile_with,
 };
 
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
@@ -24,6 +25,9 @@ const CRASH_SESSION: &str = "66666666-6666-4666-8666-666666666666";
 const GATE_SESSION: &str = "77777777-7777-4777-8777-777777777777";
 const BLOCK_SESSION: &str = "88888888-8888-4888-8888-888888888888";
 const OTHER_SESSION: &str = "22222222-2222-4222-8222-222222222222";
+const RESUME_SESSION: &str = "33333333-3333-4333-8333-333333333333";
+const RESUME_REFUSED_SESSION: &str = "44444444-4444-4444-8444-444444444444";
+const REPEATED_RESUME_SESSION: &str = "55555555-5555-4555-8555-555555555555";
 
 fn host(profiles: Vec<AgentProfile>, credentials: FakeCredentials) -> Arc<AgentHost> {
     Arc::new(AgentHost::new(
@@ -75,6 +79,53 @@ fn prompt(text: &str) -> acp_core::model::PromptRequest {
         PromptContentBlock::from_json_text(&format!("{{\"type\":\"text\",\"text\":\"{text}\"}}"))
             .expect("block"),
     ])
+}
+
+/// 恢复的输入：持久化的 ACP 会话标识 + 持久化的创建时 cwd 原文。
+///
+/// 恢复路径上没有别名、没有客户端参数，因此用例只能从这两个可能来自存储的取值构造请求
+/// （目录的有效性由 core 在调用后端**之前**复校验，本 crate 不解析路径）。
+fn resume_request(agent_session_id: &str, workspace_cwd: &str) -> ResumeSessionRequest {
+    ResumeSessionRequest::try_new(
+        agent_ref(),
+        AgentSessionId::new(agent_session_id).expect("agent session id"),
+        workspace_cwd.to_owned(),
+    )
+    .expect("resume request")
+}
+
+/// 本机上一个存在的绝对目录（用作持久化的创建时 cwd 原文）。
+fn persisted_workspace_cwd() -> String {
+    std::env::temp_dir().to_string_lossy().into_owned()
+}
+
+/// `--dump-requests <path>` 的记录：每次收到的带 `method` 的入站报文一行。
+fn dumped_methods(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 等子进程的心跳文件出现（它在存活期间由该进程创建）。
+async fn wait_for_file(path: &std::path::Path, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    path.exists()
+}
+
+fn file_len(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+}
+
+fn agent_id() -> AgentId {
+    AgentId::new("agent-1").expect("id")
 }
 
 /// 事件里的 `acp` 原文必须与 Agent 发出的那一行**逐字节相同**。
@@ -829,5 +880,336 @@ async fn stderr_protocol_messages_never_reach_the_endpoint() {
         "stderr 上的报文不得让进程退出"
     );
     drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// R5/R6：创建成功后后端把 `session/new` 给出的 ACP 会话标识原样交给 core（不自行读写存储、不编造）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_exposes_the_acp_session_id_verbatim() {
+    let collector = Collector::new();
+    let host = host(vec![profile("agent-1", FAKE_AGENT)], FakeCredentials::ok());
+    let endpoint = create(&host, SESSION, &collector).await;
+    assert_eq!(
+        endpoint.agent_session_id().map(AgentSessionId::as_str),
+        Some("acp-session-1"),
+        "创建成功后必须暴露 Agent 给出的 ACP 会话标识"
+    );
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// R7：`session/new` 未成功完成时不得产生任何 ACP 会话标识。
+///
+/// 后端唯一的暴露口是端点，因此「没有端点」就是「没有标识」；同时断言失败的创建不留下可被 `open`
+/// 复用的绑定（否则 core 会把一个没有标识的会话当作可恢复会话）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_session_new_yields_no_endpoint_and_no_identifier() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "session-new-error"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let error = outcome_error(
+        host.create(
+            &session_id(SESSION),
+            CreateSessionRequest::new(
+                agent_ref(),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
+            collector.sink(),
+        )
+        .await,
+    );
+    assert!(
+        matches!(error, PortError::InvalidRequest(_)),
+        "Agent 拒绝 session/new 必须明确失败：{error}"
+    );
+    let opened = host
+        .open(
+            SessionReference::Owned(OwnedSessionRef::new(session_id(SESSION))),
+            collector.sink(),
+        )
+        .await;
+    assert!(
+        opened.is_err(),
+        "失败的创建不得留下端点（没有端点 = 没有标识可以交给 core）"
+    );
+    assert!(collector.is_empty(), "失败的创建不得产生事件");
+    host.shutdown_all().await;
+}
+
+/// R8/R9/R26/R35：Agent 宣告 `sessionCapabilities.resume` 时，按持久化取值拉起进程、发送
+/// `session/resume`，并把会话抬回可交互状态（端点接受 prompt 并完成 turn）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_restores_an_interactive_endpoint_when_the_capability_is_declared() {
+    let collector = Collector::new();
+    let dumps = TempFile::new("acpr-fake-acp-resume.requests");
+    let dump_path = dumps.to_string_lossy().into_owned();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &[
+                "--scenario",
+                "resume-ok",
+                "--capabilities",
+                "{\"sessionCapabilities\":{\"resume\":{}}}",
+                "--dump-requests",
+                &dump_path,
+            ],
+        )],
+        FakeCredentials::ok(),
+    );
+    let session = session_id(RESUME_SESSION);
+    let endpoint = host
+        .resume(
+            &session,
+            resume_request("acp-session-restored", &persisted_workspace_cwd()),
+            collector.sink(),
+        )
+        .await
+        .expect("宣告能力后恢复必须成功");
+    assert_eq!(
+        endpoint.agent_session_id().map(AgentSessionId::as_str),
+        Some("acp-session-restored"),
+        "恢复得到的端点必须读回持久化的 ACP 会话标识（不是新会话标识）"
+    );
+    assert_eq!(
+        endpoint.reference().session_id().as_str(),
+        RESUME_SESSION,
+        "端点引用必须是 core 给的 SessionId"
+    );
+
+    endpoint
+        .prompt(prompt("恢复之后"), support::timestamp())
+        .await
+        .expect("恢复后的端点必须接受 prompt");
+    assert!(
+        collector
+            .wait_for_type("turn.completed", Duration::from_secs(10))
+            .await,
+        "恢复后的 turn 必须完成：{:?}",
+        collector.event_types()
+    );
+
+    let methods = dumped_methods(&dumps);
+    assert!(
+        methods.iter().any(|method| method == "session/resume"),
+        "必须发送 session/resume：{methods:?}"
+    );
+    assert!(
+        !methods.iter().any(|method| method == "session/new"),
+        "恢复不得静默改走新建会话：{methods:?}"
+    );
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// R10/R37：能力未宣告（字段省略）时恢复入口显式返回「后端不支持」：**不发** `session/resume`，
+/// 并在返回前回收本次为恢复而拉起的子进程（进程外证据：心跳文件不再增长）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undeclared_resume_capability_is_refused_without_sending_the_request() {
+    let collector = Collector::new();
+    let dumps = TempFile::new("acpr-fake-acp-undeclared-resume.requests");
+    let heartbeat = TempFile::new("acpr-fake-acp-undeclared-resume.heartbeat");
+    let dump_path = dumps.to_string_lossy().into_owned();
+    let heartbeat_path = heartbeat.to_string_lossy().into_owned();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &[
+                "--scenario",
+                "normal",
+                "--heartbeat-file",
+                &heartbeat_path,
+                "--dump-requests",
+                &dump_path,
+            ],
+        )],
+        FakeCredentials::ok(),
+    );
+    let error = outcome_error(
+        host.resume(
+            &session_id(RESUME_REFUSED_SESSION),
+            resume_request("acp-session-undeclared", &persisted_workspace_cwd()),
+            collector.sink(),
+        )
+        .await,
+    );
+    assert!(
+        matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::BackendUnsupported)
+        ),
+        "能力未宣告必须表达为「后端不支持」：{error}"
+    );
+
+    // ① 一个字节都没发：Agent 只看到过 initialize。
+    let methods = dumped_methods(&dumps);
+    assert!(
+        methods.iter().any(|method| method == "initialize"),
+        "恢复前必须先协商能力：{methods:?}"
+    );
+    assert!(
+        !methods.iter().any(|method| method == "session/resume"),
+        "能力未宣告时不得发送 session/resume：{methods:?}"
+    );
+
+    // ② 本次拉起的子进程已被回收（进程外证据，不依赖进程内的状态位）。
+    assert!(
+        wait_for_file(&heartbeat, Duration::from_secs(2)).await,
+        "子进程应在被回收前留下心跳文件"
+    );
+    let size = file_len(&heartbeat);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        file_len(&heartbeat),
+        size,
+        "恢复失败后不得残留子进程（心跳仍在增长）"
+    );
+    assert!(
+        !runtime_running(&host, &agent_id()),
+        "运行时目录里不得留下本次为恢复拉起的进程"
+    );
+
+    // ③ 没有留下任何绑定。
+    assert!(
+        host.open(
+            SessionReference::Owned(OwnedSessionRef::new(session_id(RESUME_REFUSED_SESSION))),
+            collector.sink(),
+        )
+        .await
+        .is_err(),
+        "失败的恢复不得留下端点"
+    );
+    assert!(collector.is_empty());
+    host.shutdown_all().await;
+}
+
+/// R11：Agent 宣告了能力却拒绝恢复——明确失败、不伪造成功、不改走新建、不留进程。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_refusal_of_resume_fails_explicitly() {
+    let collector = Collector::new();
+    let dumps = TempFile::new("acpr-fake-acp-resume-error.requests");
+    let heartbeat = TempFile::new("acpr-fake-acp-resume-error.heartbeat");
+    let dump_path = dumps.to_string_lossy().into_owned();
+    let heartbeat_path = heartbeat.to_string_lossy().into_owned();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &[
+                "--scenario",
+                "resume-error",
+                "--capabilities",
+                "{\"sessionCapabilities\":{\"resume\":{}}}",
+                "--heartbeat-file",
+                &heartbeat_path,
+                "--dump-requests",
+                &dump_path,
+            ],
+        )],
+        FakeCredentials::ok(),
+    );
+    let error = outcome_error(
+        host.resume(
+            &session_id(RESUME_REFUSED_SESSION),
+            resume_request("acp-session-gone", &persisted_workspace_cwd()),
+            collector.sink(),
+        )
+        .await,
+    );
+    assert!(
+        matches!(error, PortError::InvalidRequest(_)),
+        "Agent 拒绝恢复必须明确失败：{error}"
+    );
+    let methods = dumped_methods(&dumps);
+    assert!(
+        methods.iter().any(|method| method == "session/resume"),
+        "宣告了能力才发送 session/resume：{methods:?}"
+    );
+    assert!(
+        !methods.iter().any(|method| method == "session/new"),
+        "拒绝后不得静默改走新建会话：{methods:?}"
+    );
+    assert!(
+        host.open(
+            SessionReference::Owned(OwnedSessionRef::new(session_id(RESUME_REFUSED_SESSION))),
+            collector.sink(),
+        )
+        .await
+        .is_err(),
+        "失败的恢复不得留下端点"
+    );
+    assert!(collector.is_empty(), "失败的恢复不得产生事件");
+
+    // 本次拉起的子进程已被回收。
+    assert!(
+        wait_for_file(&heartbeat, Duration::from_secs(2)).await,
+        "子进程应在被回收前留下心跳文件"
+    );
+    let size = file_len(&heartbeat);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(file_len(&heartbeat), size, "恢复失败后不得残留子进程");
+    host.shutdown_all().await;
+}
+
+/// R12：反复恢复不产生第二个端点——旧绑定先让出（旧端点不再接受 turn），新端点可用。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_resume_leaves_a_single_dispatching_binding() {
+    let first = Collector::new();
+    let second = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &[
+                "--scenario",
+                "resume-ok",
+                "--capabilities",
+                "{\"sessionCapabilities\":{\"resume\":{}}}",
+            ],
+        )],
+        FakeCredentials::ok(),
+    );
+    let session = session_id(REPEATED_RESUME_SESSION);
+    let request = resume_request("acp-session-restored", &persisted_workspace_cwd());
+    let stale = host
+        .resume(&session, request.clone(), first.sink())
+        .await
+        .expect("第一次恢复");
+    let current = host
+        .resume(&session, request, second.sink())
+        .await
+        .expect("第二次恢复");
+
+    // 旧绑定已经让出：不得再派发 turn（否则同一会话会有两个端点并行派发）。
+    let refused = outcome_error(stale.prompt(prompt("旧端点"), support::timestamp()).await);
+    assert!(
+        matches!(refused, PortError::InvalidRequest(_)),
+        "旧绑定必须先让出：{refused}"
+    );
+    // 新端点照常可用。
+    current
+        .prompt(prompt("新端点"), support::timestamp())
+        .await
+        .expect("新端点必须可派发");
+    assert!(
+        second
+            .wait_for_type("turn.completed", Duration::from_secs(10))
+            .await,
+        "恢复后的 turn 必须完成：{:?}",
+        second.event_types()
+    );
+    assert_eq!(first.count("turn.completed"), 0, "旧绑定不得再产生事件");
+    drop(stale);
+    drop(current);
     host.shutdown_all().await;
 }
