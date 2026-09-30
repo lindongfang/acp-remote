@@ -21,14 +21,14 @@ use sqlx::{Row, SqliteConnection, Transaction};
 use tokio::sync::Mutex;
 
 use acp_core::model::{
-    AcpRaw, Actor, ActorKind, AgentId, AgentRef, AttachmentGeneration, AttachmentId, CommandRecord,
-    CommandResult, CommandStatus, CommittedDelivery, CommittedEvent, ConflictKind, Digest,
-    EntityRef, EventId, EventKind, EventPayload, GlobalCursor, ImportId, InteractionOption,
-    InteractionResolution, LocalCursor, ModeId, ModeRef, OriginCursor, OriginEpoch, OriginEventRef,
-    PendingInteraction, PortError, PublicError, RawUnavailableReason, RemoteSessionRef, RequestId,
-    ResourceOrigin, ScopeSet, Sequence, ServerEpoch, Session, SessionId, SessionSnapshot,
-    SessionState, SessionSummary, StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version,
-    ViewJson,
+    AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
+    AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
+    ConflictKind, Digest, EntityRef, EventId, EventKind, EventPayload, GlobalCursor, ImportId,
+    InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef, OriginCursor,
+    OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError, RawUnavailableReason,
+    RemoteSessionRef, RequestId, ResourceOrigin, ScopeSet, Sequence, ServerEpoch, Session,
+    SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy,
+    Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
@@ -1082,12 +1082,18 @@ impl SqliteStore {
                 };
                 let (mode_id, mode_name) = mode_columns(&update.mode);
                 // `CASE WHEN ?x IS NULL` 让「未提供的字段保持原值」，避免把已关闭会话的
-                // `closed_at` 或既有状态写成 NULL。
+                // `closed_at` 或既有状态写成 NULL。恢复所需的 `agent_session_id`/`workspace_cwd` 走同一条
+                // 规则（§7.2 的 v5 两列）：`None` = 不改该列，因此恢复流程（它永远传 `None`）不可能
+                // 覆写已持久化的取值（spec R22）；两列也不在任何读投影里（§3.6 的窄读取）。
+                // 参数编号按各语句自己连续编号：SQLite 的 `?NNN` 是按位置绑定，中间留空会让后面的
+                // 绑定落到未使用的下标上（`?7 IS NULL` 恒真 → 静默不写）。
                 let statement = match &update.mode {
                     ModeChange::Unchanged => {
                         "UPDATE owned_session SET \
                          state = CASE WHEN ?1 IS NULL THEN state ELSE ?1 END, \
                          closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
+                         agent_session_id = CASE WHEN ?5 IS NULL THEN agent_session_id ELSE ?5 END, \
+                         workspace_cwd = CASE WHEN ?6 IS NULL THEN workspace_cwd ELSE ?6 END, \
                          version = version + 1, updated_at = ?3 \
                          WHERE session_id = ?4 RETURNING version"
                     }
@@ -1095,6 +1101,8 @@ impl SqliteStore {
                         "UPDATE owned_session SET \
                          state = CASE WHEN ?1 IS NULL THEN state ELSE ?1 END, \
                          closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
+                         agent_session_id = CASE WHEN ?7 IS NULL THEN agent_session_id ELSE ?7 END, \
+                         workspace_cwd = CASE WHEN ?8 IS NULL THEN workspace_cwd ELSE ?8 END, \
                          version = version + 1, updated_at = ?3, \
                          current_mode_id = ?5, current_mode_name = ?6 \
                          WHERE session_id = ?4 RETURNING version"
@@ -1108,6 +1116,9 @@ impl SqliteStore {
                 if let ModeChange::Set(_) = &update.mode {
                     query = query.bind(mode_id).bind(mode_name);
                 }
+                let query = query
+                    .bind(update.agent_session_id.as_ref().map(AgentSessionId::as_str))
+                    .bind(update.workspace_cwd.as_deref());
                 let new_version: Option<i64> = query.fetch_optional(&mut *tx).await.db()?;
                 version = match new_version {
                     Some(value) => parse_version(value, "owned_session.version")?,
@@ -2037,6 +2048,43 @@ impl SessionStore for SqliteStore {
             Some(row) => Ok(Some(command_record_from_row(&row)?)),
             None => Ok(None),
         }
+    }
+
+    /// §3.6/§5.2：恢复所需的两个持久化取值的**窄读取**。
+    ///
+    /// 两列不进 `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，进入可投影形状会违反
+    /// §3.6 的边界）；因此恢复路径只能经本入口取值。会话行不存在、或两列中任一为 `NULL` 时返回
+    /// `Ok(None)`——`NULL` 是「该会话没有可用于恢复的数据」，**不是**错误，也**不得**被补全、推导或以
+    /// 别名解析结果替换。取值形状非法（库被外部改写）按列值损坏报错，不返回半条记录。
+    async fn load_recovery(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        let row = sqlx::query(
+            "SELECT agent_id, agent_name, agent_session_id, workspace_cwd FROM owned_session \
+             WHERE session_id = ?1",
+        )
+        .bind(session.as_str())
+        .fetch_optional(&self.pools.read)
+        .await
+        .db()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let agent = agent_from_row(&row)?;
+        let agent_session_id = decode_opt(
+            opt_text(&row, "agent_session_id")?,
+            "owned_session.agent_session_id",
+        )?;
+        let workspace_cwd = opt_text(&row, "workspace_cwd")?;
+        if agent_session_id.is_none() || workspace_cwd.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(SessionRecoveryRecord {
+            agent,
+            agent_session_id,
+            workspace_cwd,
+        }))
     }
 
     /// §5.2：该会话**仍可重放**的 `session_sequence` 下界/上界；没有可重放行时返回 `None`。

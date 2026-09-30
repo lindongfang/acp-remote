@@ -133,6 +133,8 @@ async fn commit_writes_state_turns_events_and_terminal_in_one_transaction() {
             state: Some(SessionState::Running),
             mode: ModeChange::Unchanged,
             closed_at: None,
+            agent_session_id: None,
+            workspace_cwd: None,
             interaction: None,
         })),
         turns: vec![TurnChange::Create(NewTurn {
@@ -266,6 +268,8 @@ async fn failed_commit_rolls_back_every_row() {
             state: Some(SessionState::Running),
             mode: ModeChange::Unchanged,
             closed_at: None,
+            agent_session_id: None,
+            workspace_cwd: None,
             interaction: None,
         })),
         turns: vec![TurnChange::Create(NewTurn {
@@ -814,6 +818,8 @@ async fn interaction_resolution_is_first_writer_wins() {
             state: None,
             mode: ModeChange::Unchanged,
             closed_at: None,
+            agent_session_id: None,
+            workspace_cwd: None,
             interaction: Some(acp_core::ports::InteractionResolved {
                 interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                 resolution: InteractionResolution::Permission(
@@ -899,6 +905,8 @@ async fn interaction_resolution_is_first_writer_wins() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: Some(acp_core::ports::InteractionResolved {
                     interaction: InteractionId::new("99999999-9999-4999-8999-999999999999")
                         .expect("interaction id"),
@@ -1166,6 +1174,8 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: None,
             })),
             turns: Vec::new(),
@@ -1199,6 +1209,8 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: None,
             })),
             turns: Vec::new(),
@@ -1226,6 +1238,8 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: None,
             })),
             turns: Vec::new(),

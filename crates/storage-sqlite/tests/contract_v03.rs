@@ -259,6 +259,8 @@ async fn creating_and_resolving_in_one_commit_is_rejected() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: Some(InteractionResolved {
                     interaction: InteractionId::new(INTERACTION).expect("id"),
                     resolution: InteractionResolution::Permission(
