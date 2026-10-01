@@ -186,7 +186,7 @@ exit=0   # 131 passed / 0 failed / 2 ignored
 | `Doc-tests storage_sqlite` | 0 passed |
 | **合计** | **131 passed / 0 failed / 2 ignored** |
 
-与 `wp4-coder.md` / `cr4-review.md` §9 报告的 **131 passed / 0 failed / 2 ignored** **逐字一致**（ignored 为 `commit::crash_child` 与 `migration::regenerate_v1_fixture`，均为既有 `#[ignore]`）。`migration.rs` 12 passed 覆盖 CR4 记述的「新增 2 条、改写 1 条」。
+与 `wp4-coder.md` 的 PV1 小节、`cr4-review.md` 的 `Assessment` 小节记录的 **131 passed / 0 failed / 2 ignored** **逐字一致**（ignored 为 `commit::crash_child` 与 `migration::regenerate_v1_fixture`，均为既有 `#[ignore]`）。`migration.rs` 12 passed 覆盖 CR4 记述的「新增 2 条、改写 1 条」。
 
 日志：`merge-u1-integrate-wp4-PV1-stage1.log` §`[3/3]`。
 
