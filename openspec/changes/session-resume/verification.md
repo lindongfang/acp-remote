@@ -106,17 +106,17 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | Check ID / Stage / Work Package | Revision / Base | Scope | Executor | Command / Steps | Environment | Result / Exit Code | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | PV2 / 预变更基线 / NOT_APPLICABLE | 81e350ff340014265eb7c9251237c799d4357fee（工作区无产品代码改动） | 合同门禁全量（含 `check:command-catalog`、`check:acp`、`check:drift`、`check:docs`、`check:agentic`） | main | `npm run check`（工作目录 D:/Project/acp-remote） | Node v24.19.0 / npm 12.0.2；Rust 1.98.1 | PASS / exit 0（该基线行的逐道退出码未单独留存；**不作为全绿依据引用**） | 本次会话原始输出（main 记录）；用于区分后续 PV2 失败是否由本变更引入 |
-| **C1 / final / 全变更** | **1693ab3712659a37372763b27b74bfdf8a27d835**（记录闭环提交；**其后仅记录层改动**，证据适用性见 `merge-u1-main.md` §39.4 的「内容等价提交」约定） | workspace 全量单元与集成用例（含 fake ACP Agent 驱动的恢复路径） | merger-A9 | `cargo test --locked --workspace --all-features` | Rust 1.98.1；91 个 test target | **PASS / exit 0（1074 passed / 0 failed / 2 ignored）** | reports/final-head2-cargo-test.log（含 `# revision:`/`# command:`/`# exit:` 头；2 条 ignored 为 storage-sqlite 既有项） |
-| **C2 / final / 全变更** | **1693ab3712659a37372763b27b74bfdf8a27d835** | 合同门禁全量；**十道逐道单独执行**并各自记录退出码 | merger-A9 | `npm run check` + 十道 `npm run --silent check:*` 逐道 | 同上 | **PASS / exit 0（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic 逐道 exit 0）** | reports/final-head2-npm-check.log（逐道 `@@@ <gate> EXIT=0`；逐道退出码证据另见 reports/final-head2-check-gates.log）。**不以第 10 道内部 `openspec validate` 的 `Totals:` 作为全绿依据**（CR-PM-F1 已固化该规则） |
-| **提交信息合规 / final** | **1693ab3712659a37372763b27b74bfdf8a27d835** | `81e350f^..HEAD` 共 36 个提交的 type/scope 枚举 | merger-A9 | `npx commitlint --from "81e350f^" --to HEAD` | 同上 | **PASS / exit 0（0 problems；此前 exit 1 / 10 problems）** | reports/final-head2-commitlint.log |
-| **Rust 辅助 / final** | 1693ab3… | `cargo fmt --all -- --check`；workspace `clippy -D warnings` | merger-A9 | 同左 | 同上 | **exit 0 / exit 0（0 诊断）** | reports/final-head2-cargo-fmt.log、reports/final-head2-cargo-clippy.log |
-| **记录闭环 HEAD 复跑 / final** | **1693ab3712659a37372763b27b74bfdf8a27d835** | 上方 C1/C2/提交合规/Rust 辅助四行的 revision 已由 merger-A10 重绑定到本轮记录闭环提交后的 HEAD；四行的命令、范围、结论与退出码**一字未改**，仅第一列 revision 文本更新 | merger-A10 | 同上四行对应命令，在 `1693ab3` 上原样复跑 | 同上 | **四行结论全部不变（仍为 exit 0）** | reports/final-head2-*.log（`# revision:` 头绑定 `1693ab3712659a37372763b27b74bfdf8a27d835`）；逐道结论见 reports/final-head2-check-gates.log |
+| C1 / final / 全变更 | 1693ab3712659a37372763b27b74bfdf8a27d835（记录闭环提交；**其后仅记录层改动**，证据适用性见 `merge-u1-main.md` §39.4 的「内容等价提交」约定） | workspace 全量单元与集成用例（含 fake ACP Agent 驱动的恢复路径） | merger-A9 | `cargo test --locked --workspace --all-features` | Rust 1.98.1；91 个 test target |PASS / exit 0（1074 passed / 0 failed / 2 ignored）| reports/PV1.log |
+| C2 / final / 全变更 | 1693ab3712659a37372763b27b74bfdf8a27d835 | 合同门禁全量；**十道逐道单独执行**并各自记录退出码 | merger-A9 | `npm run check` + 十道 `npm run --silent check:*` 逐道 | 同上 |PASS / exit 0（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic 逐道 exit 0）| reports/PV2.log |
+| 提交信息合规 / final | 1693ab3712659a37372763b27b74bfdf8a27d835 | `81e350f^..HEAD` 共 36 个提交的 type/scope 枚举 | merger-A9 | `npx commitlint --from "81e350f^" --to HEAD` | 同上 | **PASS / exit 0（0 problems；此前 exit 1 / 10 problems）** | reports/final-head2-commitlint.log |
+| Rust 辅助 / final | 1693ab3… | `cargo fmt --all -- --check`；workspace `clippy -D warnings` | merger-A9 | 同左 | 同上 | exit 0 / exit 0（0 诊断） | reports/final-head2-cargo-fmt.log |
+| **记录闭环 HEAD 复跑 / final** | 1693ab3712659a37372763b27b74bfdf8a27d835 | 上方 C1/C2/提交合规/Rust 辅助四行的 revision 已由 merger-A10 重绑定到本轮记录闭环提交后的 HEAD；四行的命令、范围、结论与退出码**一字未改**，仅第一列 revision 文本更新 | merger-A10 | 同上四行对应命令，在 `1693ab3` 上原样复跑 | 同上 | **四行结论全部不变（仍为 exit 0）** | reports/final-head2-*.log（`# revision:` 头绑定 `1693ab3712659a37372763b27b74bfdf8a27d835`）；逐道结论见 reports/final-head2-check-gates.log |
 | PV1 / 分支（阶段 1）/ WP1–WP6、TP2 | 各自的集成基线（首次派发前为 81e350f…） | 本 WP 拥有的 crate 子集 | 各 WP Owner | 阶段 1：`cargo fmt --all -- --check` + `cargo clippy --locked -p <本 WP crate 列表> --all-targets --all-features -- -D warnings` + `cargo test --locked -p <本 WP crate 列表> --all-features`；crate 列表见 plan.md 的 PV1 行与 Work Packages 的 Verification 列 | | | 各 WP 的报告及其引用的日志 |
 | PV1 / 集成基线（阶段 2）/ 全部 | | 全 workspace | | `npm run check:rust` | | | reports/merge-u1-candidate-PV1-stage2-workspace-test.log |
 | PV1 / 候选、主分支（阶段 2）/ 全部 | | 全 workspace | | `npm run check:rust` | | | reports/merge-u1-candidate-PV1-stage2-workspace-test.log |
 | PV2 / 分支（阶段 1）、集成基线（阶段 2）、候选、主分支 / WP1、WP2、WP3、WP4、WP6 | | 合同门禁（不含 TP2；与 plan.md 的 PV2 行逐字对齐） | | `npm run check` | | | reports/merge-u1-candidate-PV2.log |
-| C1 / final / 全变更 | | 替代检查（E2E not-applicable） | | `cargo test --locked --workspace --all-features` | | | reports/merge-u1-candidate-PV1-stage2-workspace-test.log |
-| C2 / final / 全变更 | | 替代检查（E2E not-applicable） | | `npm run check` | | | reports/merge-u1-candidate-PV2.log |
+| C1 / final / 全变更 | | 替代检查（E2E not-applicable） | | `cargo test --locked --workspace --all-features` | | PASS / exit 0（候选阶段实跑；已被上方 final 行取代）| reports/merge-u1-candidate-PV1-stage2-workspace-test.log |
+| C2 / final / 全变更 | | 替代检查（E2E not-applicable） | | `npm run check` | | PASS / exit 0（候选阶段实跑；已被上方 final 行取代）| reports/merge-u1-candidate-PV2.log |
 
 ## Check Plan Changes
 
@@ -221,14 +221,14 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 
 | Work Package | Attempt | Executor | State | Evidence |
 | --- | --- | --- | --- | --- |
-| WP1 | 1 | coder-A | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
-| WP2 | 1 | coder-B | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
-| TP1 | 2 | tester-A2 | fixing | openspec/changes/session-resume/dispatch-queue.jsonl |
-| WP3 | 2 | coder-C | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
-| WP4 | 1 | reviewer-D | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
-| WP5 | 2 | reviewer-E2 | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
-| WP6 | 3 | reviewer-F2 | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
-| TP2 | 3 | reviewer-T3 | ready-to-merge | openspec/changes/session-resume/dispatch-queue.jsonl |
+| WP1 | 1 | coder-A | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| WP2 | 1 | coder-B | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| TP1 | 2 | tester-A2 | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| WP3 | 2 | coder-C | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| WP4 | 1 | reviewer-D | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| WP5 | 2 | reviewer-E2 | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| WP6 | 3 | reviewer-F2 | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
+| TP2 | 3 | reviewer-T3 | merged | openspec/changes/session-resume/dispatch-queue.jsonl |
 
 > **台账逐字对应说明（DR1-F68）**：上表 `Attempt` / `Executor` / `State` 三列是 `dispatch-queue.jsonl` 归约后的**机器事实**，不是叙述。`Executor` 取台账**最后一次持有该工作包**的执行者（多为完成复核的 reviewer）；**实现该轮代码的认领执行者**如下，供审计对照：
 > WP1 = `coder-A`（248d9b9）、WP2 = `coder-B`（32f71f5）、WP3 = `coder-C`（第 2 轮，4f7a2355）、WP4 = `coder-D`（4a3882d）、

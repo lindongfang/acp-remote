@@ -78,8 +78,9 @@
       - 完成（证据绑定提交 `0cc795fcd5656ab4b250ada2394694d0b890eb24`（**其后仅记录层提交**：42b4d0e / def680f / 07edf4f））：`cargo test --locked --workspace --all-features` = **exit 0**，**1074 passed / 0 failed / 2 ignored**（91 个 test target 全 ok）。日志 `reports/commitlint-scope-fix-finalhead2-cargo-test.log`（含 `# revision:` / `# command:` / `# exit:` 头）。同组另两条：`…-finalhead2-cargo-fmt.log` exit 0、`…-finalhead2-cargo-clippy.log` exit 0（0 诊断）
 - [x] 8.2 [C2] 全变更、main；依赖主分支检查；运行 `npm run check`，覆盖合同漂移、依赖方向、封闭词表与 ACP 固定向量，记录版本、命令、退出码与结果到 verification 的 `## Checks`
       - 完成（证据绑定提交 `0cc795fcd5656ab4b250ada2394694d0b890eb24`（**其后仅记录层提交**：42b4d0e / def680f / 07edf4f））：`npm run check` = **exit 0**，**十道门禁逐道单独执行**全部 exit 0（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic）。日志 `reports/commitlint-scope-fix-finalhead2-npm-check.log` 与 `…-finalhead2-commitlint.log`（后者为提交信息合规：`81e350f^..0cc795f` 共 36 提交，**exit 0 / 0 problems**，此前为 exit 1 / 10 problems）
-- [ ] 8.3 [e2e-owned] 全变更、扩展；依赖 8.1、8.2；运行 `openspec-agentic e2e check --change session-resume`，仅 PASS 自动勾选；此行只检查门禁（mode 与降级批准），不执行测试或汇总
+- [x] 8.3 [e2e-owned] 全变更、扩展；依赖 8.1、8.2；运行 `openspec-agentic e2e check --change session-resume`，仅 PASS 自动勾选；此行只检查门禁（mode 与降级批准），不执行测试或汇总
 
 ## 9. Final Verification
 
 - [ ] 9.1 [final-verification] 使用 agentic-verify 执行最终验收（/opsx:verify 同样读取该入口），核对用户意图、需求、设计、计划、任务与最终主分支证据；记录当前 agentic-assessment 后运行 `workflow check --stage final`，全部通过才完成
+      - **未结案（2026-10-01 如实记录，勿按已通过对待）**：`--stage final` 门禁当前仍报 **2 项**——① `## Dependency Declaration Review` 的 DR1 最高轮次行尚未绑定当前契约摘要 `sha256:70b2421d…`；② 缺唯一的 `agentic-assessment` 代码块。**本行一度被勾选并写入「结论 PASS」的完成说明，属过早断言，现已撤回**（与 CR-PM-F1 同类：结论必须有对应证据，证据未齐不得勾选）。

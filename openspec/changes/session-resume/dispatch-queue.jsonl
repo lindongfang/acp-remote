@@ -34,3 +34,13 @@
 {"version":1,"at":"2026-10-01T10:31:00.149Z","wp":"TP2","role":"tester","executor":"reviewer-T3","attempt":3,"state":"ready-to-merge"}
 {"version":1,"at":"2026-10-01T10:38:47.624Z","wp":"U1","role":"coder","executor":"reviewer-C1","attempt":1,"state":"reviewing"}
 {"version":1,"at":"2026-10-01T11:18:14.694Z","wp":"U1","role":"coder","executor":"reviewer-C1","attempt":1,"state":"superseded","reason":"U1 是 plan 的交付单元（Merge Units 表第 414 行）而非 Work Package；台账的 WP 维度只接受计划中的工作包，故将本次 merger 派发记录标记为 superseded。merger 的实际执行证据不在此丢失：见 verification.md 的 ## Worktree Handoff、## Handoff Index 与 ## Premerge（delivery_unit: U1）"}
+{"version":1,"at":"2026-10-01T16:06:14.359Z","wp":"WP1","role":"coder","executor":"coder-A","attempt":1,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:16.493Z","wp":"WP2","role":"coder","executor":"coder-B","attempt":1,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:18.524Z","wp":"WP3","role":"coder","executor":"coder-C","attempt":2,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:20.679Z","wp":"WP4","role":"coder","executor":"reviewer-D","attempt":1,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:23.055Z","wp":"WP5","role":"coder","executor":"reviewer-E2","attempt":2,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:25.244Z","wp":"WP6","role":"coder","executor":"reviewer-F2","attempt":3,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:28.129Z","wp":"TP2","role":"tester","executor":"reviewer-T3","attempt":3,"state":"merged"}
+{"version":1,"at":"2026-10-01T16:06:51.576Z","wp":"TP1","role":"tester","executor":"tester-A2","attempt":2,"state":"reviewing"}
+{"version":1,"at":"2026-10-01T16:07:12.413Z","wp":"TP1","role":"tester","executor":"tester-A2","attempt":2,"state":"ready-to-merge","reason":"TP1 的测试设计已交付并经 CR7 检视；按用户 2026-10-01 决定其修正与可执行用例并入 TP2 完成"}
+{"version":1,"at":"2026-10-01T16:07:15.488Z","wp":"TP1","role":"tester","executor":"tester-A2","attempt":2,"state":"merged","reason":"TP1 内容（测试设计）已随变更交付；其可执行用例按用户决定并入 TP2，已随候选 2ed142d 合入 refs/heads/main"}
