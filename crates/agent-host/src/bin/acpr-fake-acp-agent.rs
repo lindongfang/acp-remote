@@ -14,6 +14,11 @@
 //! （`session/new` 返回错误）。`--dump-requests <path>` 把每次收到的带 `method` 的入站报文按行追加
 //! method 名，供用例断言「某个请求发过 / 没发过」。
 //!
+//! `--dump-request-params <path>` 是与它**并列**的独立选项：每次收到带 `method` 的入站报文，向该文件
+//! 追加一行单行 JSON `{"method":…,"params":…}`（`params` 缺失时为 `null`），供用例断言**发出去的取值**
+//! （例如 `session/resume` 的 `params.sessionId` 与 `params.cwd` 逐字等于期望值）。
+//! `--dump-requests` 的冻结语义（每行只有 method）因此保持不变；两个选项可同时给出，各自写各自的文件。
+//!
 //! `--heartbeat-file <path>` 让子进程在存活期间每 50 ms 追加一个字节（`heartbeat-child` 直接用它，
 //! 其余场景另外开一个线程写同一个文件）：进程是否真的结束因此可以在**进程外**观察，而不依赖进程内的
 //! `is_running()` 状态位。
@@ -32,6 +37,7 @@ struct Args {
     heartbeat_file: Option<String>,
     dump_env: Option<String>,
     dump_requests: Option<String>,
+    dump_request_params: Option<String>,
     capabilities: Value,
     /// `session/new` 不返回 `modes`（用于「未宣告」路径）。
     no_modes: bool,
@@ -43,18 +49,23 @@ struct Args {
 
 impl Args {
     fn parse() -> Self {
-        let argv: Vec<String> = std::env::args().collect();
+        Self::from_argv(&std::env::args().skip(1).collect::<Vec<String>>())
+    }
+
+    /// 从去掉程序名的 argv 解析（与 `parse` 同一实现，便于直接对参数序列做断言）。
+    fn from_argv(argv: &[String]) -> Self {
         let mut args = Self {
             scenario: "normal".to_owned(),
             heartbeat_file: None,
             dump_env: None,
             dump_requests: None,
+            dump_request_params: None,
             capabilities: json!({}),
             no_modes: false,
             no_config_options: false,
             exit_on_config_write: false,
         };
-        let mut index = 1;
+        let mut index = 0;
         while index < argv.len() {
             let key = argv[index].as_str();
             // 值是可选的：下一个 token 若以 `--` 开头，说明当前是个开关（否则开关会吞掉后面的开关）。
@@ -67,6 +78,7 @@ impl Args {
                 ("--heartbeat-file", Some(value)) => args.heartbeat_file = Some(value),
                 ("--dump-env", Some(value)) => args.dump_env = Some(value),
                 ("--dump-requests", Some(value)) => args.dump_requests = Some(value),
+                ("--dump-request-params", Some(value)) => args.dump_request_params = Some(value),
                 ("--capabilities", Some(value)) => {
                     args.capabilities = serde_json::from_str(&value).unwrap_or_else(|_| json!({}));
                 }
@@ -137,7 +149,7 @@ fn main() -> ExitCode {
             continue;
         };
         if let Some(method) = message.get("method").and_then(Value::as_str) {
-            dump_method(&args, method);
+            dump_inbound(&args, method, message.get("params"));
         }
         handle(&message, &mut state, &mut out, &args);
     }
@@ -172,17 +184,43 @@ fn heartbeat_loop(path: &str) -> Result<(), ()> {
     }
 }
 
+/// 收到一条带 `method` 的入站报文时，按**各自给定的路径**记录到两个 dump 选项。
+///
+/// 两个选项完全独立：只给出其中一个时，另一个不产生任何文件。
+fn dump_inbound(args: &Args, method: &str, params: Option<&Value>) {
+    dump_method(args, method);
+    dump_request_params(args, method, params);
+}
+
 /// `--dump-requests <path>`：追加一行 method（正常错误都静默：本选项只服务于测试断言）。
 fn dump_method(args: &Args, method: &str) {
-    let Some(path) = &args.dump_requests else {
+    if let Some(path) = &args.dump_requests {
+        append_line(path, method);
+    }
+}
+
+/// `--dump-request-params <path>`：追加一行单行 JSON `{"method":…,"params":…}`。
+///
+/// `params` 缺失（通知没有参数、或对端省略）时写 `null`，因此每行的键集合恒为 `{method, params}`。
+fn dump_request_params(args: &Args, method: &str, params: Option<&Value>) {
+    let Some(path) = &args.dump_request_params else {
         return;
     };
+    let line = json!({
+        "method": method,
+        "params": params.cloned().unwrap_or(Value::Null),
+    });
+    append_line(path, &line.to_string());
+}
+
+/// 以「追加一行」的方式写 `path`（正常错误都静默：本选项只服务于测试断言）。
+fn append_line(path: &str, line: &str) {
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
     {
-        let _ = writeln!(file, "{method}");
+        let _ = writeln!(file, "{line}");
     }
 }
 
@@ -784,4 +822,181 @@ fn notify(out: &mut impl Write, method: &str, params: Value) {
 fn write_line(out: &mut impl Write, value: &Value) {
     let _ = writeln!(out, "{value}");
     let _ = out.flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Args, Value, dump_inbound, json};
+
+    /// 用例独占的临时文件路径：`Drop` 时尽力删除（正常结束与 panic 展开两条路径都生效）。
+    struct TempPath(std::path::PathBuf);
+
+    impl TempPath {
+        fn new(name: &str) -> Self {
+            Self(
+                std::env::temp_dir()
+                    .join(format!("acpr-fake-params-{}-{name}", std::process::id())),
+            )
+        }
+    }
+
+    impl std::ops::Deref for TempPath {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempPath {
+        fn drop(&mut self) {
+            // 尽力而为，不 panic：文件可能从未被创建。
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// 按 argv 构造参数（程序名已在 `from_argv` 里被剔除）。
+    fn args_from(argv: &[&str]) -> Args {
+        Args::from_argv(
+            &argv
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<String>>(),
+        )
+    }
+
+    /// 文件的全部行（文件不存在时返回空序列）。
+    fn lines(path: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// `session/resume` 形状的一行请求（用例断言的正是它发出去的取值）。
+    fn resume_request(session_id: &str, cwd: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "session/resume",
+            "params": { "sessionId": session_id, "cwd": cwd },
+        })
+    }
+
+    /// 新选项：每行是单行合法 JSON，同时含 `method` 与 `params`，取值逐字保真。
+    #[test]
+    fn dump_request_params_keeps_method_and_params_per_line() {
+        let path = TempPath::new("both-fields.jsonl");
+        let cwd = "/持久化的/cwd";
+        let args = args_from(&["--dump-request-params", &path.to_string_lossy()]);
+
+        dump_inbound(
+            &args,
+            "session/resume",
+            resume_request("acp-session-1", cwd).get("params"),
+        );
+        dump_inbound(&args, "session/cancel", None);
+
+        let written = lines(&path);
+        assert_eq!(written.len(), 2, "每条请求一行：{written:?}");
+        for line in &written {
+            // 单行、合法 JSON、键集合恰为 {method, params}。
+            let value: Value = serde_json::from_str(line).expect("每行都是合法 JSON");
+            let object = value.as_object().expect("每行都是 JSON 对象");
+            let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, ["method", "params"]);
+            assert!(object["method"].is_string());
+        }
+        // 发出去的取值逐字可读（`cwd` 是 R26 的线级证据，`sessionId` 是 R8 的）。
+        let first: Value = serde_json::from_str(&written[0]).expect("首行");
+        assert_eq!(first["method"], json!("session/resume"));
+        assert_eq!(first["params"]["sessionId"], json!("acp-session-1"));
+        assert_eq!(first["params"]["cwd"], json!(cwd));
+        // 缺失的 `params` 写成 `null`，而不是让键消失或整行缺字段。
+        let second: Value = serde_json::from_str(&written[1]).expect("次行");
+        assert_eq!(second["method"], json!("session/cancel"));
+        assert_eq!(second["params"], Value::Null);
+    }
+
+    /// 两个选项可并存：各自写各自的文件，`--dump-requests` 仍每行只写 method。
+    #[test]
+    fn both_dump_options_coexist_in_independent_files() {
+        let methods = TempPath::new("methods.txt");
+        let params = TempPath::new("params.jsonl");
+        let args = args_from(&[
+            "--dump-requests",
+            &methods.to_string_lossy(),
+            "--dump-request-params",
+            &params.to_string_lossy(),
+        ]);
+
+        dump_inbound(
+            &args,
+            "session/resume",
+            resume_request("acp-session-2", "/tmp/x").get("params"),
+        );
+        dump_inbound(&args, "session/update", None);
+
+        // 冻结语义未被改写：method 文件里没有 JSON、没有 params。
+        assert_eq!(lines(&methods), vec!["session/resume", "session/update"]);
+        let params_lines = lines(&params);
+        assert_eq!(params_lines.len(), 2);
+        let first: Value = serde_json::from_str(&params_lines[0]).expect("首行是 JSON");
+        assert_eq!(first["params"]["cwd"], json!("/tmp/x"));
+    }
+
+    /// 只给一个选项时，另一个文件根本不出现。
+    #[test]
+    fn a_single_option_creates_only_its_own_file() {
+        let methods = TempPath::new("only-methods.txt");
+        let params = TempPath::new("never-written.jsonl");
+        let args = args_from(&["--dump-requests", &methods.to_string_lossy()]);
+
+        dump_inbound(&args, "session/resume", Some(&json!({ "cwd": "/tmp/y" })));
+
+        assert_eq!(lines(&methods), vec!["session/resume"]);
+        assert!(!params.exists(), "未给出的选项不得创建文件");
+    }
+
+    /// 两个选项都不给：没有任何副作用（不创建文件、不 panic）。
+    #[test]
+    fn without_options_nothing_is_written() {
+        let methods = TempPath::new("no-methods.txt");
+        let params = TempPath::new("no-params.jsonl");
+        let args = args_from(&["--scenario", "resume-ok"]);
+
+        dump_inbound(
+            &args,
+            "session/resume",
+            resume_request("acp-session-3", "/tmp/z").get("params"),
+        );
+
+        assert!(args.dump_requests.is_none());
+        assert!(args.dump_request_params.is_none());
+        assert!(!methods.exists(), "未给出的选项不得创建文件");
+        assert!(!params.exists(), "未给出的选项不得创建文件");
+    }
+
+    /// 选项解析：路径后面的开关不被吞掉，两选项都能独立给出。
+    #[test]
+    fn option_parsing_keeps_following_switches() {
+        let path = TempPath::new("parsed.jsonl");
+        let args = args_from(&[
+            "--scenario",
+            "resume-ok",
+            "--dump-request-params",
+            &path.to_string_lossy(),
+            "--no-modes",
+        ]);
+
+        assert_eq!(args.scenario, "resume-ok");
+        assert!(args.no_modes, "路径之后的开关必须仍被识别");
+        assert_eq!(
+            args.dump_request_params.as_deref(),
+            Some(&*path.to_string_lossy())
+        );
+        assert!(args.dump_requests.is_none());
+    }
 }

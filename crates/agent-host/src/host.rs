@@ -621,6 +621,8 @@ impl SessionBackendFactory for AgentHost {
             .ensure_runtime_tracked(&agent_id)
             .await
             .map_err(|error| error.to_port_error())?;
+        // 读的是该 runtime 协商并缓存下来的能力：本次拉起进程时 `initialize` 刚协商过；复用既有进程
+        // （`spawned == false`）时读到的是**那个进程此前**的协商结果——不重新协商，也不虚报能力。
         let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
 
         if !capabilities.supports_session_resume() {
