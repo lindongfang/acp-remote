@@ -698,6 +698,11 @@ fn an_unauthorized_resume_is_rejected_before_any_local_read() {
             absent_denied["body"]["error"]["code"], denied["body"]["error"]["code"],
             "存在与不存在不得产生可区分的响应"
         );
+        // 「不存在」侧的额外防泄露断言：`details` 两条路径**实测同为 `{}`（空对象，非 `null`）**——
+        // 两条都走 `command.rs::deny` 的 `CommandFault::NotGranted(None)` 分支（`RawObject::empty()`）。
+        // 所以这是**结构性防泄露守卫**（若将来某条路径回 `NotGranted(Some(parameter))`，本断言会失败），
+        // 而不是当前的判别点；真正的判别力在上一条 `code` 断言与「目录已被删除」这个前提上。
+        // 口径来源：CR8-S1 的实测（见 `reports/tp2-tester.md §10`）。
         assert_eq!(
             absent_denied["body"]["error"]["details"], denied["body"]["error"]["details"],
             "错误详情也不得泄露目标会话的存在性"
@@ -975,13 +980,20 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
     });
 }
 
-/// R24 + R25 + CR7-F2：目录复校验的两个失败变体，以及「`NULL` 与能力不支持同路径」的归类。
+/// R24 + R25 + CR7-F2：目录复校验的两个失败变体，以及「能力不支持」的归类。
 ///
 /// - 目录被删除 ⇒ `nodelink.internal.unavailable`（服务端不可用类），后端**不被调用**；
 /// - 持久化路径仍存在但 `canonicalize` 结果不同 ⇒ 同样是 `internal.unavailable`，且**持久化取值
 ///   未被改写**（不使用新解析出的路径）；
-/// - 两列为 `NULL` 的会话 ⇒ 与「能力不支持」同一条路径（`nodelink.command.unsupported`，CR7-F2
-///   裁决后的规格措辞），**不是** `internal.unavailable`。
+/// - 能力不支持（受控后端回 `BackendUnsupported`）⇒ `nodelink.command.unsupported`，**不是**
+///   `internal.unavailable`。
+///
+/// **本用例不造「两列为 `NULL` 的会话」**（第 ③ 段只把**受控后端**切到
+/// `ResumeBehavior::BackendUnsupported`，会话自身的两列始终有值）。两列 `NULL` 侧的真实证据在别处：
+/// `server/src/node_link/command/tests.rs::session_resume_without_persisted_recovery_data_fails_as_unsupported`
+/// 与 `crates/storage-sqlite/tests/resume_columns.rs`（`a_half_null_recovery_pair_is_still_no_recovery_data`
+/// / `upgraded_sessions_keep_their_bytes_and_report_no_recovery_data`）。规格要求这两者**同一条路径**
+/// （`nodelink.command.unsupported`，CR7-F2 裁决后的措辞），本用例负责的是「能力不支持」这一侧。
 #[test]
 fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
     support::block_on(async {
@@ -1102,6 +1114,10 @@ fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
 
         // ③ 能力不支持与「目录不可用」是两个可区分的路径（CR7-F2 裁决后的规格措辞：两列为 `NULL`
         //    与能力不支持同路径，其余校验失败仍是服务端不可用类）。
+        //    本段只把**受控后端**切到 `BackendUnsupported`，**没有**造出两列 `NULL` 的会话；
+        //    两列 `NULL` 侧由 `server/src/node_link/command/tests.rs::
+        //    session_resume_without_persisted_recovery_data_fails_as_unsupported` 与
+        //    `crates/storage-sqlite/tests/resume_columns.rs` 承担。
         owner
             .resume_probe
             .set_behavior(ResumeBehavior::BackendUnsupported);

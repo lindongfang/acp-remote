@@ -136,16 +136,23 @@ async fn ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
 /// 这正是 spec R13/R16 要求的性质（「两列只做追加，MUST NOT 触发 12-step 表重建」）。既有迁移用例
 /// （`migration.rs`）对 `owned_session` 只断言 `after.contains("agent_session_id")`，因此**如果有人
 /// 把 v5 段误写成重建**（例如为加 CHECK 而重建 `owned_session`），那些断言**仍然会通过**。本用例补上
-/// 缺口，并且自带一条**反证**：仓库自己登记的判别式是「重建文本没有 `IF NOT EXISTS`、表名写法也不同」
-/// （见 `migration.rs::rebuild_text_differs_from_the_fresh_text`），本用例据此断言：
+/// 缺口，并且自带一条**反证**：本仓库的 12-step 重建段一律写成
+/// `CREATE TABLE owned_x_vN (…) … DROP TABLE owned_x; ALTER TABLE owned_x_vN RENAME TO owned_x`，
+/// SQLite 会把改名后的存储文本记成**带双引号的表名**（`CREATE TABLE "owned_x" (`），而
+/// `ALTER TABLE … ADD COLUMN` 是**原地追加**、表名保持不带引号。本用例据此断言：
 ///
-/// 1. `owned_session` 升级后的 DDL **含** `IF NOT EXISTS`（新建/追加文本的写法），**不含**重建用的
-///    临时表名（`owned_session_v2` / `_v3` / `_v5`）；
+/// 1. `owned_session` 升级后的存储文本以**不带引号**的 `CREATE TABLE owned_session (` 开头（即追加
+///    路径），且**不含**重建用的临时表名（`owned_session_v2` / `_v3` / `_v5`）。
+///    **注意**：`IF NOT EXISTS` **不能**用作判别式——实测 `ALTER TABLE ADD COLUMN` 会把它从存储文本里
+///    去掉，而重建文本本来就没有它，**两条路径都不含**，按它断言会恒真（实测表见
+///    `reports/tp2-test-design.md §2.1`；本用例内联注释 ① 同样记录了这次标定）。判别式只认
+///    「表名是否带双引号」。
 /// 2. 既有列的**原始定义文本**（含列名后的空白与 `STRICT` 结尾）在升级后逐字节保留——重建会重排空白、
 ///    重新排版并改写 `STRICT` 之外的形式；
 /// 3. 两列位于列清单**末尾**且是纯追加（`PRAGMA table_info` 的 `cid` 连续、无空洞）；
-/// 4. 反证：v1 库升级里**确实会重建**的 `owned_audit`，其文本**不含** `IF NOT EXISTS`——证明本用例
-///    的判别式不是恒真。
+/// 4. 反证：v1 库升级里**确实会重建**的 `owned_audit`，其文本以**带双引号**的
+///    `CREATE TABLE "owned_audit" (` 开头（RENAME 的签名）——证明本用例的判别式不是恒真。若把 ① 的
+///    判别式方向写反或改成恒真表达式，本断言会立刻失败。
 #[tokio::test]
 async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
     let dir = temp_dir("tp2-append-not-rebuild");

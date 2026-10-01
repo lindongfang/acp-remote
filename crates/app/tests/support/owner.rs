@@ -9,9 +9,12 @@
 //! - 撤销通知缝用 `app::compose::NodeLinkCloser`（组合根注入 `local_admin` 的真实实现）；
 //! - 本地确认走真实的 `LocalAdminRouter`（与本地通道服务的是同一个处理器），因此 `node.pair.confirm`/
 //!   `export.revoke`/`node.revoke` 的持久化与通知顺序都被真实执行；
-//! - **两处刻意的测试替身**：① Agent 后端用脚本化端点（真实 ACP 子进程不在本测试范围，且会引入
-//!   进程/平台依赖）；② `SessionStore` 套一层可控失败的装饰器（R61 的故障注入点）——它只在提交的
-//!   事件批次带指定 marker 时失败，其余提交原样落地。
+//! - **三处刻意的测试替身/测试介入**：① Agent 后端用脚本化端点（真实 ACP 子进程不在本测试范围，
+//!   且会引入进程/平台依赖）；② `SessionStore` 套一层可控失败的装饰器（R61 的故障注入点）——它只在
+//!   提交的事件批次带指定 marker 时失败，其余提交原样落地；③ `overwrite_persisted_workspace_cwd`
+//!   （TP2 第 2 轮新增）经 `sqlx` **原始 SQL** 直接改写 `owned_session.workspace_cwd`，**绕过全部端口
+//!   与本地管理方法**——这是三者中介入最深的一处：产品写路径永远写入 `canonicalize` 的结果，「持久化
+//!   取值仍存在但 `canonicalize` 结果与之逐字不同」这一形状无法经任何产品入口产生。
 //!   其余端口（trust/export/audit/config/attachments/deliveries）都是真实现。
 
 use std::path::PathBuf;
