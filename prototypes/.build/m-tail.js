@@ -55,12 +55,23 @@ function appbar(title, sub, right, back){
     '<div class="ab-title"><div class="t">'+title+'</div>'+(sub?'<div class="s">'+sub+'</div>':'')+'</div>' +
     (right||'') + themeBtnHtml() + '</div>';
 }
-function themeBtnHtml(){
-  var dark = effTheme() === "dark";
-  return '<button class="ab-btn" data-act="theme" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式">' +
-    (dark ? "☀️" : "🌙") + '</button>';
+/* 主题图标：实心 SVG，含义=点击后的效果，颜色=亮橙（data-ic，深浅两套由 CSS 给） */
+var SUN_RAYS  = "M12 2.6v2M12 19.4v2M4.7 4.7l1.4 1.4M17.9 17.9l1.4 1.4M2.6 12h2M19.4 12h2M4.7 19.3l1.4-1.4M17.9 6.1l1.4-1.4";
+var MOON_C    = "M20.2 14.6A8.4 8.4 0 0 1 9.4 3.8a8.4 8.4 0 1 0 10.8 10.8z";
+function svg(inner, fill){
+  return '<svg viewBox="0 0 24 24" fill="'+(fill||"none")+'" stroke="currentColor" stroke-width="1.6" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+inner+'</svg>';
 }
-
+function themeGlyph(){
+  /* 点击后变成什么：白天显示月亮（点了变黑），黑夜显示太阳（点了变白） */
+  return (effTheme() === "dark")
+    ? svg('<circle cx="12" cy="12" r="4.8" fill="currentColor" stroke="none"/><path d="'+SUN_RAYS+' stroke-width="1.8"/></svg>')
+    : svg('<path d="'+MOON_C+'" fill="currentColor"/></svg>', "none");
+}
+function themeBtnHtml(){
+  return '<button class="ab-btn" data-ic="orange" data-act="theme" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式">' +
+    themeGlyph() + '</button>';
+}
 function viewDirs(){
   var h = appbar('目录', HOSTNAME + ' · 点此打开主机与连接', '<button class="ab-btn" data-act="host">⋯</button>', false);
   var body = '<div class="scroll">';
