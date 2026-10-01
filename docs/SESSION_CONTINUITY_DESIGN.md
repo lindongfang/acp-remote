@@ -1,7 +1,7 @@
 # 会话延续设计：历史查看、恢复、灌历史与同目录换 Agent（候选）
 
-> 状态：**候选设计（未实现）；设计决策已全部定 2026-09-29，待实施**。本文只做可行性分析与设计决策记录，不新增任何产品、协议或安全合同，也不代表任何能力已经存在。
-> 日期：2026-09-29
+> 状态：**B（恢复会话）已在 OpenSpec 变更 `session-resume` 中实施到 Owner 侧 Node Link 路由与本地 Agent 主机（2026-10-01 收口）**；A、C、D 的分析与结论不变，仍按 §6 的「当前可做性」栏陈述。设计决策已于 2026-09-29 全部定稿，实施后的实际形状以 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.7、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.6/§5.1/§7.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) 为准。
+> 日期：2026-09-29（状态注记 2026-10-01）
 > 用途：作为后续 OpenSpec agentic 变更的输入；实施时必须按 `AGENTS.md` §10 同步对应的权威文档、schema、fixture 与命令目录。
 > 非权威声明：产品行为以 [INITIAL_DESIGN.md](./INITIAL_DESIGN.md) 为准，节点协议以 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 为准，ACP 覆盖状态以机器矩阵 `compatibility/acp/v1/matrix.json` 为准。本文出现冲突时，一律以上述权威来源为准。
 
@@ -97,12 +97,12 @@ config_option_update, session_info_update, usage_update
 
 **已定：采用 B2 —— ACP `session/resume`**（决策见 §7）。选择 B2 的直接收益是：`session/resume` **不重放历史**，因此没有「历史对账」问题（见下）。
 
-**协议层现状**（`compatibility/acp/v1/matrix.json`）：
+**协议层现状**（`compatibility/acp/v1/matrix.json`；下表已于 2026-10-01 按实施后取值刷新）：
 
 | 方法 | delivery | broker / sync / pwa | facade |
 |---|---|---|---|
 | `session/load` | `post_mvp` | `explicit_unsupported` | `not_advertised` |
-| `session/resume` | `post_mvp` | `explicit_unsupported` | `not_advertised` |
+| `session/resume` | `conditional_mvp` | `project_and_preserve` / `explicit_unsupported` / `explicit_unsupported` | `not_advertised` |
 
 本次只需要把 `session/resume` 提升；`session/load` 保持 `post_mvp` 不实现。
 
@@ -110,14 +110,16 @@ config_option_update, session_info_update, usage_update
 
 **能力门控**：`sessionCapabilities.resume`——`Omitted`/`null` 均表示不支持，`{}` 表示支持（`crates/acp-protocol/src/capability.rs` 的 `supports_session_resume()` 已按此语义实现）。
 
-**acp-remote 侧的数据缺口**
+**acp-remote 侧的数据缺口**（缺口判断已于 2026-09-29 做出；两列的实际落点见下句「已落地」）
 
-| 需要的数据 | 现状 | 位置 |
+| 需要的数据 | 缺口判断时的现状 | 位置 |
 |---|---|---|
 | Agent 侧 sessionId | **只在内存**（`agent-host` 的 `by_acp` / `by_core` 映射） | 库表无此列 |
 | 创建时的 `cwd` | **完全不持久化** | `owned_session` 无 workspace 列 |
 | acp-remote 自己的 sessionId | 有 | `owned_session.session_id` |
 | agent_id | 有 | `owned_session.agent_id` |
+
+> 已落地（2026-10-01）：`owned_session` 在文件格式 **v5** 追加了可空的 `agent_session_id` 与 `workspace_cwd` 两列（只追加、不推导、不回填；`CORE_PORTS_AND_STORAGE.md` §7.3），由窄读取 `SessionStore::load_recovery` 单独取回，**不**进入 `Session`/`SessionSummary` 的可投影面；两列中任一列为 `NULL` 时该会话不可恢复（走 `nodelink.command.unsupported`）。
 
 > 注意：`cwd` 必须记录**创建时解析出的真实路径**，不能在恢复时重新解析 alias——alias 之后可能被改指向别的目录，而 `session/resume` 要求 cwd 与创建时一致。
 
@@ -218,13 +220,13 @@ session.create { exportId, agentId: "pi", workspaceAlias: "A", templateParams }
 |---|---|---|
 | ~~D1~~ | ~~触发通道~~ | **已定：B2（`session/resume`）**，见 §7 |
 | ~~D2~~ | ~~历史对账~~ | **已定：不适用**——`session/resume` 不重放历史，见 §6.2 |
-| D3 | 持久化 | 给 `owned_session` 增加哪些列（Agent 侧 sessionId、创建时 cwd），迁移版本号与 fixture |
-| D4 | 能力诚实 | 未宣告 `sessionCapabilities.resume` 的 Agent 必须显式返回「不支持」，不得虚报，也不得静默降级为 C（见 §12.1 决策 2） |
+| D3 | 持久化 | **已定（2026-10-01 落地）**：`owned_session` 追加可空的 `agent_session_id` 与 `workspace_cwd`（创建流程内紧接着一次提交，**不**在恢复流程覆写），文件格式推进到 v5；取值缺失即「该会话不可恢复」，不得推导 |
+| D4 | 能力诚实 | **已定**：未宣告 `sessionCapabilities.resume` 的 Agent 必须显式返回「不支持」（wire 码 `nodelink.command.unsupported`），不得虚报，也不得静默降级为 C（见 §12.1 决策 2）。门控在进程拉起之后、发送 `session/resume` 之前：此时**不发送**恢复请求，且本次拉起的子进程已在返回前终止并回收，会话状态不变 |
 | ~~D5~~ | ~~远程授权~~ | **已定：复用 `grant.remote-work`**（不新增维度，见 §12.1 决策 3）；防会话存在性探测仍按「授权先于本机读取」执行 |
-| D6 | 幂等与不确定 | resume 是副作用（会 spawn 进程）；沿用 requestId 幂等，失败窗口必须进 `uncertain`，不盲目重试 |
-| D7 | 会话状态机 | 恢复后会话从持久态如何回到可交互态；与 active turn、队列策略的交互（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5 的并发语义） |
-| D8 | C 的上下文裁剪 | 灌历史时的选取范围、大小上限、是否标注来源，避免 token 爆炸与误认为恢复 |
-| D9 | 环境校验与恢复授权边界 | 见 §8.1 |
+| D6 | 幂等与不确定 | **已定**：沿用 `requestId` 幂等（同键不同语义回 `nodelink.command.idempotency_conflict`）；`uncertain` **只**属于崩溃窗口（accepted 已落盘但本次未能结算）。能力未宣告、恢复列为 `NULL`、创建时目录复校验失败、payload 非法与越权这五类**确定类**失败一律结 `failed`，不得用 `uncertain` 掩盖 |
+| D7 | 会话状态机 | **已定（2026-10-01 落地）**：恢复把同一 core 会话从持久态抬回可交互态并重新绑定单一端点（同一会话只有一条活跃绑定，不产生第二个端点）；并发语义不变（同一会话最多一个 active turn） |
+| D8 | C 的上下文裁剪 | 灌历史时的选取范围、大小上限、是否标注来源，避免 token 爆炸与误认为恢复（**本次不实施**） |
+| D9 | 环境校验与恢复授权边界 | **已定（2026-10-01 落地）**：恢复前对持久化的 `cwd` 重做同口径校验（目录不存在/被改成文件/`canonicalize` 结果与创建时不同均拒），返回 `nodelink.internal.unavailable`；不回退到别的目录、不重解析 alias。见 §8.1 |
 | ~~D10~~ | ~~Export 粒度~~ | **已定：保持现状**，每个 Agent 一条 Export；不放宽 `export.create`（见 §12.1 决策 5） |
 | ~~D11~~ | ~~同目录并发~~ | **已定：不管**，完全交给使用者（见 §12.1 决策 6） |
 
@@ -247,7 +249,7 @@ session.create { exportId, agentId: "pi", workspaceAlias: "A", templateParams }
 - `crates/core`：`Session`/`OwnedSessionRef` 是否携带 Agent 侧 sessionId；新增恢复用例入口；`core::ports::SessionEndpoint` 是否需要 `load` 能力。
 - `crates/storage-sqlite`：`owned_session` 加列 + migration（版本常量推进）+ 升级/幂等/字节稳定测试。
 - `crates/agent-host`：持久化并回填 Agent 侧 sessionId；新增「重启进程后 load/resume」路径；能力门控。
-- `crates/acp-protocol`：`session/resume` 的 DTO 与状态（当前为 `NotImplemented`）；`session/load` 保持不支持。
+- `crates/acp-protocol`：`session/resume` 的类型化 DTO **已实现**（`methods.rs` 的 `implemented: true`，`delivery = conditional_mvp`；CR1-F2 的陈旧陈述已于 2026-10-01 更正）；`session/load` 保持不支持。端到端门控在 `agent-host`，`facade` 仍 `not_advertised`，因此没有对外宣告。
 - `crates/server`：`node_link` 的命令路由新增/扩展（若新增命令）；`acp_facade` 宣告与转发（facade 尚未落地）；若放宽 Export 粒度，`local_admin::params` 的 1 项约束。
 - `crates/app`：CLI 展示与传参；组合根装配。
 

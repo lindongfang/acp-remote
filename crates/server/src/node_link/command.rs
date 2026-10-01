@@ -80,7 +80,7 @@ use node_link_protocol::command::{
 };
 use node_link_protocol::common::{
     ExportId as WireExportId, Nullable, PublicError, RawObject, RemoteSessionRef,
-    SessionCreateResult, Text, Timestamp as WireTimestamp, Uuid,
+    SessionCreateResult, SessionMeta, SessionResumeResult, Text, Timestamp as WireTimestamp, Uuid,
 };
 use node_link_protocol::envelope::{Envelope, MessageType};
 use node_link_protocol::error::ErrorCode;
@@ -136,10 +136,14 @@ struct PendingCommand {
     since: Instant,
 }
 
-/// `session.create` 的首次结果（终态回读与「没有持久记录」时的本地合成都用它）。
+/// `session.create` / `session.resume` 的首次结果（终态回读与「没有持久记录」时的本地合成都用它）。
+///
+/// `Completed` 承载 wire 的具名结果变体（[`CommandResultPayload::SessionCreate`] /
+/// [`CommandResultPayload::SessionResume`]）而不是 core 的类型：终态**以持久记录为唯一权威**，
+/// 而记录里存的就是该形状的原文。
 #[derive(Debug, Clone)]
-enum CreateOutcome {
-    Completed(SessionCreateResult),
+enum LocalOutcome {
+    Completed(CommandResultPayload),
     Failed(PublicError),
     Uncertain(PublicError),
 }
@@ -234,7 +238,7 @@ impl CommandRoute {
     async fn on_submit(&self, handle: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
         // ① `session.create` 的禁带字段：schema 会判成 `schema_invalid`，而 §12.7 要求更具体的
         //    `unsupported_field` + `details.field`，因此先看原始 payload（不创建会话、不部分应用参数）。
-        let forbidden = forbidden_session_create_field(message.body().get());
+        let forbidden = forbidden_payload_field(message.body().get());
         if let Some((request, command, field)) = forbidden {
             return self.reject_field(handle, command, &request, &field);
         }
@@ -258,6 +262,7 @@ impl CommandRoute {
                 self.on_status(handle, message, &target).await
             }
             CommandName::SessionCreate => self.on_session_create(handle, message, &submit).await,
+            CommandName::SessionResume => self.on_session_resume(handle, message, &submit).await,
             command => self.on_dispatched(handle, message, &submit, command).await,
         }
     }
@@ -729,7 +734,7 @@ impl CommandRoute {
                 .session_create_result(handle.node_id(), &export_id, &session)
                 .await
             {
-                Ok(result) => CreateOutcome::Completed(result),
+                Ok(result) => LocalOutcome::Completed(CommandResultPayload::SessionCreate(result)),
                 Err(error) => {
                     // 会话确实已创建：不能用 `failed` 撒谎（那会让 Access 以为没有会话），按 §12.7 的
                     // `uncertain` 语义终结本次命令（Access 不得自动重试）。
@@ -740,7 +745,7 @@ impl CommandRoute {
                         error = ?error,
                         "the created session cannot be projected into SessionCreateResult"
                     );
-                    CreateOutcome::Uncertain(error_info("nodelink.command.uncertain"))
+                    LocalOutcome::Uncertain(error_info("nodelink.command.uncertain"))
                 }
             },
             Err(PortError::Conflict(acp_core::model::ConflictKind::IdempotencyConflict)) => {
@@ -753,8 +758,14 @@ impl CommandRoute {
                 );
             }
             Err(error) => {
-                // 创建失败：`create_session` 的提交与后端创建在同一调用内，失败即没有可用会话，
-                // 因此是 `failed`（`uncertain` 保留给「无法确认是否已创建」的窗口）。
+                // 会话行与幂等行在 **Create 那一次提交**里一起落盘（§6 第 20 条），因此「有没有持久
+                // 记录」就是「会话行有没有被提交」的**权威判据**：`create_session` 返回错误时它仍可能已经
+                // 提交了会话行（例如紧接着的两列提交遇 `StorageFull`/`IoError`，core 用 `?` 上抛，而
+                // 已构造的端点来不及登记）。
+                //
+                // 那一类**不得**结 `failed`：Access 会以为根本没有会话，而 Owner 侧留下一条永不回传
+                // 会话标识的孤儿行。沿用本处理器投影失败分支的同一判据（不能用 `failed` 撒谎）结
+                // `uncertain`。没有记录则相反——会话行确实没提交，`failed` 是如实的确定类结论。
                 warn!(
                     event = "node_link.session_create_failed",
                     access_node_id = handle.node_id().as_str(),
@@ -762,14 +773,22 @@ impl CommandRoute {
                     error = ?error,
                     "session.create could not be completed"
                 );
-                CreateOutcome::Failed(error_info(&port_error_code(&error)))
+                let committed = matches!(
+                    self.core.command_status(&actor, request.clone()).await,
+                    Ok(Some(_))
+                );
+                if committed {
+                    LocalOutcome::Uncertain(error_info("nodelink.command.uncertain"))
+                } else {
+                    LocalOutcome::Failed(error_info(&port_error_code(&error)))
+                }
             }
         };
         // 终态落盘（§6 第 20 条）：把幂等行推进到终态。投影失败时写 `uncertain`（会话已创建，
         // 不能报 `failed`）；创建立即失败时写 `failed`（没有可用会话）。`failed`/`uncertain` 的错误
         // 取本层映射后的 wire 错误（code/message/retryable/details 一并落盘，回读因此逐字一致）。
         let settled = match &outcome {
-            CreateOutcome::Completed(result) => match serde_json::to_string(result)
+            LocalOutcome::Completed(result) => match serde_json::to_string(result)
                 .ok()
                 .and_then(|text| acp_core::model::CommandResult::from_json_text(&text).ok())
             {
@@ -793,7 +812,7 @@ impl CommandRoute {
                     Ok(false)
                 }
             },
-            CreateOutcome::Failed(error) => self
+            LocalOutcome::Failed(error) => self
                 .core
                 .settle_session_create(
                     &actor,
@@ -804,7 +823,7 @@ impl CommandRoute {
                 )
                 .await
                 .map(|_| true),
-            CreateOutcome::Uncertain(error) => self
+            LocalOutcome::Uncertain(error) => self
                 .core
                 .settle_session_create(
                     &actor,
@@ -837,7 +856,12 @@ impl CommandRoute {
                 // 存储写失败落在同一窗口却不属这一类：它没有留下持久首次结果（`CORE_PORTS_AND_STORAGE.md`
                 // §6 第 20 条、`NODE_LINK_PROTOCOL.md` §12.7），同 requestId 重查 `command.status` 回
                 // `nodelink.command.not_found`，重试可以创建出另一个会话。
-                if let Some(body) = create_terminal(&submit.request_id, &outcome, &self.clock()) {
+                if let Some(body) = local_terminal(
+                    CommandName::SessionCreate,
+                    &submit.request_id,
+                    &outcome,
+                    &self.clock(),
+                ) {
                     let _ = handle.send(MessageType::CommandTerminal, &body);
                 }
             }
@@ -887,6 +911,41 @@ impl CommandRoute {
         export: &CoreExportId,
         session: &SessionId,
     ) -> Result<SessionCreateResult, PortError> {
+        let (remote_session_ref, session_meta) = self
+            .remote_session_ref_and_meta(access_node, export, session)
+            .await?;
+        Ok(SessionCreateResult {
+            remote_session_ref,
+            session_meta,
+        })
+    }
+
+    /// 恢复成功后组装 `SessionResumeResult`：与 [`Self::session_create_result`] **同源**的映射
+    /// （DR1-F41），因此两条路径的回包形状必然一致；`remoteSessionRef.exportId` 只有适配层有，
+    /// core 的 `resume_session` 只返回 `SessionId`。
+    async fn session_resume_result(
+        &self,
+        access_node: &NodeId,
+        export: &CoreExportId,
+        session: &SessionId,
+    ) -> Result<SessionResumeResult, PortError> {
+        let (remote_session_ref, session_meta) = self
+            .remote_session_ref_and_meta(access_node, export, session)
+            .await?;
+        Ok(SessionResumeResult {
+            remote_session_ref,
+            session_meta,
+        })
+    }
+
+    /// `remoteSessionRef` + `sessionMeta` 的**唯一**投影：`sessionId` 永远来自 Owner（core 的会话
+    /// 身份），`sessionMeta` 取自该会话的持久化摘要（读面按**该 Access 节点**的可见性复核）。
+    async fn remote_session_ref_and_meta(
+        &self,
+        access_node: &NodeId,
+        export: &CoreExportId,
+        session: &SessionId,
+    ) -> Result<(RemoteSessionRef, SessionMeta), PortError> {
         let view = self
             .core
             .node_link_session_view(access_node, export, session)
@@ -905,14 +964,242 @@ impl CommandRoute {
                 "the export id cannot be expressed on the wire",
             ));
         };
-        Ok(SessionCreateResult {
-            remote_session_ref: RemoteSessionRef {
+        Ok((
+            RemoteSessionRef {
                 owner_node_id,
                 export_id,
                 session_id,
             },
             session_meta,
-        })
+        ))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // session.resume
+    // -----------------------------------------------------------------------------------------
+
+    /// `session.resume`（§12.7、§5.1）：恢复**进程不在**的 owned 会话。
+    ///
+    /// 与 `session.create` 同形的管线：授权 → 幂等 → `accepted(result = null)` → 工作 → 终态落盘，
+    /// 只是输入全部取自 Owner 自身的持久化记录（客户端不得提供），因此没有参数校验分支。
+    async fn on_session_resume(
+        &self,
+        handle: &ConnectionHandle,
+        message: &Envelope,
+        submit: &CommandSubmit,
+    ) -> RouteOutcome {
+        if !matches!(&submit.payload, WirePayload::SessionResume(_)) {
+            return self.reject_schema(handle, message, "the session.resume payload is invalid");
+        }
+        // ① 定位会话（只解析 `sessionRef`，不做任何本机读取）。
+        let target = match self.session_target(handle, message, submit) {
+            Ok(target) => target,
+            Err(outcome) => return outcome,
+        };
+        // ② 授权先于一切本机读取与文件系统访问（R31）：`grant.remote-work` 与该会话所属 Export 的
+        //    交集，同 `session.create` 口径。越权一律 `command.rejected(nodelink.export.not_granted)`
+        //    且无副作用，响应不因会话是否存在而不同（`session_target` 已把两种不可区分情形合并）。
+        if let Err(fault) = self
+            .authorize_node(handle.node_id(), "grant.remote-work", Some(&target.export))
+            .await
+        {
+            return self
+                .deny(
+                    handle,
+                    message,
+                    CommandName::SessionResume,
+                    &submit.request_id,
+                    fault,
+                )
+                .await;
+        }
+        // ③ attachment 代际复核（§12.5）：命令必须携带当前 attachment。
+        if let Err(outcome) = self.attachment_is_current(handle, message, submit, &target) {
+            return outcome;
+        }
+        // ④ 幂等：幂等键 `(ownerNodeId, accessNodeId, requestId)`，持久事实在 core 的 `owned_command`
+        //    里（core 的 `resume_session` 自建 `accepted` 行）。同键不同语义回
+        //    `nodelink.command.idempotency_conflict`，**不**触发第二次 spawn。
+        let Some(fingerprint) = fingerprint_of(&submit.payload) else {
+            return self.reject_schema(handle, message, "the payload cannot be fingerprinted");
+        };
+        let actor = node_actor(handle.node_id());
+        let Some(request) = core_request(&submit.request_id) else {
+            return self.reject_schema(handle, message, "the requestId is not a uuid");
+        };
+        match self.core.command_status(&actor, request.clone()).await {
+            Ok(Some(record)) => {
+                let same = record.command() == CommandName::SessionResume.as_str()
+                    && record.kind() == CommandKind::Mutation
+                    && record.request_fingerprint() == &fingerprint;
+                if !same {
+                    return self.reject_code(
+                        handle,
+                        CommandName::SessionResume,
+                        &submit.request_id,
+                        "nodelink.command.idempotency_conflict",
+                    );
+                }
+                if record.status().is_terminal() {
+                    self.send_terminal(handle, &record);
+                } else {
+                    let accepted_at = record
+                        .accepted_at()
+                        .cloned()
+                        .unwrap_or_else(|| self.clock());
+                    self.send_accepted(
+                        handle,
+                        &submit.request_id,
+                        CommandName::SessionResume,
+                        &accepted_at,
+                        None,
+                    );
+                    self.watch(handle, &request);
+                }
+                return RouteOutcome::Claimed;
+            }
+            Ok(None) => {}
+            Err(error) => return self.port_fault(handle, message, &error),
+        }
+        if !self.admit_in_flight(handle).await {
+            return RouteOutcome::Claimed;
+        }
+        // ⑤ 先回 `accepted(result = null)`，恢复完成后发 `terminal`（两者连续入队）。
+        self.send_accepted(
+            handle,
+            &submit.request_id,
+            CommandName::SessionResume,
+            &self.clock(),
+            None,
+        );
+        // ⑥ 恢复（core 用例内部：授权 → 窄读取 → cwd 复校验 → `factory.resume`；**授权先于本机读取**）。
+        let outcome = match self
+            .core
+            .resume_session(&actor, request.clone(), fingerprint, target.session.clone())
+            .await
+        {
+            Ok(session) => match self
+                .session_resume_result(handle.node_id(), &target.export, &session)
+                .await
+            {
+                Ok(result) => LocalOutcome::Completed(CommandResultPayload::SessionResume(result)),
+                Err(error) => {
+                    // 会话确实已恢复：不能用 `failed` 撒谎（那会让 Access 以为没有恢复，而 Owner 侧
+                    // 有一个已可交互却拿不到 `remoteSessionRef` 的会话），与 `session.create` 投影失败
+                    // 分支同判据（DR1-F41）。
+                    warn!(
+                        event = "node_link.session_resume_result_failed",
+                        access_node_id = handle.node_id().as_str(),
+                        request_id = submit.request_id.as_str(),
+                        error = ?error,
+                        "the resumed session cannot be projected into SessionResumeResult"
+                    );
+                    LocalOutcome::Uncertain(error_info("nodelink.command.uncertain"))
+                }
+            },
+            Err(PortError::Conflict(acp_core::model::ConflictKind::IdempotencyConflict)) => {
+                // 同键不同语义（§12.5）：回 `command.rejected` 且零副作用。
+                return self.reject_code(
+                    handle,
+                    CommandName::SessionResume,
+                    &submit.request_id,
+                    "nodelink.command.idempotency_conflict",
+                );
+            }
+            Err(error) => {
+                // 恢复失败即**确定类**失败（DR1-F39）：能力未宣告、该会话无持久化恢复数据（两列 NULL）、
+                // cwd 复校验失败、越权 —— 这几类 core 都已给出明确结论（`BackendUnsupported` 走
+                // `nodelink.command.unsupported`，复校验失败走服务端不可用类），一律结 `failed`。
+                // `uncertain` 只属于崩溃窗口（accepted 已落盘但本次没能结算），由启动恢复按
+                // `CORE_PORTS_AND_STORAGE.md` §6 第 16 条终结，不在本层制造。
+                warn!(
+                    event = "node_link.session_resume_failed",
+                    access_node_id = handle.node_id().as_str(),
+                    request_id = submit.request_id.as_str(),
+                    error = ?error,
+                    "session.resume could not be completed"
+                );
+                LocalOutcome::Failed(error_info(&port_error_code(&error)))
+            }
+        };
+        // ⑦ 终态落盘：core 的 `settle_session_resume` 只终结 `session.resume` 的持久记录（§5.1）。
+        let settled = match &outcome {
+            LocalOutcome::Completed(result) => match serde_json::to_string(result)
+                .ok()
+                .and_then(|text| acp_core::model::CommandResult::from_json_text(&text).ok())
+            {
+                Some(result) => self
+                    .core
+                    .settle_session_resume(
+                        &actor,
+                        &request,
+                        CoreStatus::Completed,
+                        Some(result),
+                        None,
+                    )
+                    .await
+                    .map(|_| true),
+                None => {
+                    warn!(
+                        event = "node_link.session_resume_result_unencodable",
+                        request_id = submit.request_id.as_str(),
+                        "the resumed session result cannot be persisted"
+                    );
+                    Ok(false)
+                }
+            },
+            LocalOutcome::Failed(error) => self
+                .core
+                .settle_session_resume(
+                    &actor,
+                    &request,
+                    CoreStatus::Failed,
+                    None,
+                    core_error(error),
+                )
+                .await
+                .map(|_| true),
+            LocalOutcome::Uncertain(error) => self
+                .core
+                .settle_session_resume(
+                    &actor,
+                    &request,
+                    CoreStatus::Uncertain,
+                    None,
+                    core_error(error),
+                )
+                .await
+                .map(|_| true),
+        };
+        if let Err(error) = settled {
+            warn!(
+                event = "node_link.session_resume_terminal_failed",
+                access_node_id = handle.node_id().as_str(),
+                request_id = submit.request_id.as_str(),
+                error = ?error,
+                "the session.resume terminal could not be persisted"
+            );
+        }
+        // 回包以**持久记录**为唯一权威（重试与 `command.status` 重查因此与首次同形）。
+        match self.core.command_status(&actor, request.clone()).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_terminal(handle, &record)
+            }
+            _ => {
+                // 没有持久记录：恢复在幂等行落盘前就失败（授权、窄读取、cwd 复校验）。本层能确认的
+                // 只有**确定类失败**，因此本地回 `failed` 终态；存储写失败落在同一窗口却不属这一类，
+                // 它没有留下持久首次结果，同 requestId 重查回 `nodelink.command.not_found`。
+                if let Some(body) = local_terminal(
+                    CommandName::SessionResume,
+                    &submit.request_id,
+                    &outcome,
+                    &self.clock(),
+                ) {
+                    let _ = handle.send(MessageType::CommandTerminal, &body);
+                }
+            }
+        }
+        RouteOutcome::Claimed
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1250,7 +1537,9 @@ impl CommandRoute {
             return;
         };
         let result = match (command, turn) {
-            (CommandName::SessionCreate, _) => Nullable::null(),
+            // `session.create` 与 `session.resume` 的 accepted 必须为 `null`（schema 的 `if/then` 与
+            // §12.7）：两者都是异步的，结果由 `command.terminal` 的具名结果变体给出。
+            (CommandName::SessionCreate | CommandName::SessionResume, _) => Nullable::null(),
             (_, Some(turn)) => match uuid_of(turn.as_str()) {
                 Some(turn) => Nullable::from_option(Some(CommandResultPayload::Object(
                     details_object(&serde_json::json!({ "turnId": turn.as_str() })),
@@ -1748,35 +2037,42 @@ impl MessageRoute for CommandRoute {
 // 纯函数：判定、映射与 wire 装配
 // ---------------------------------------------------------------------------------------------
 
-/// `session.create` 的禁带字段判定（§12.7）：返回 `(requestId, command, 字段名)`。
+/// 两个「本切片不接受客户端参数」的命令的禁带字段判定（§12.7）。
 ///
+/// `session.create`：返回 `(requestId, command, 字段名)`。
 /// - 不在 `agentId`/`exportId`/`workspaceAlias`/`templateParams` 白名单里的键一律拒
 ///   （`cwd`/`mcpServers`/`apiKey`/`token`/`env`/`credential` 等）；
 /// - 白名单键上的**绝对路径**取值也拒（`workspaceAlias` 的 pattern 已挡住大部分，这里覆盖驱动号与
 ///   UNC 形态）；
 /// - `templateParams` 出现且不是空对象即拒（首切片 template 零参数）。
 ///
+/// `session.resume`：**任何**键都拒（`payload` 必须是空对象 `{}`；恢复所需的 Agent 标识、ACP 会话
+/// 标识与创建时目录一律取自 Owner 自身的持久化记录）。
+///
 /// 这是一个**判定**（只看键与取值形态），不是解析路径：真正落地的参数一律由严格解码后的类型给出。
-/// body 不是 `session.create`、或取不到 `requestId`/`command` 时返回 `None`，交给严格解码处理；
+/// body 不是这两个命令、或取不到 `requestId`/`command` 时返回 `None`，交给严格解码处理；
 /// 键超过 `details.field` 的上限时回 [`UNKNOWN_FIELD`]，不把超长输入塞进错误体。
-fn forbidden_session_create_field(body: &str) -> Option<(Uuid, CommandName, String)> {
+fn forbidden_payload_field(body: &str) -> Option<(Uuid, CommandName, String)> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
     let command = value.get("command")?.as_str()?;
-    if command != CommandName::SessionCreate.as_str() {
-        return None;
-    }
     let request = Uuid::parse(value.get("requestId")?.as_str()?).ok()?;
     let command = CommandName::from_str(command).ok()?;
     let payload = value.get("payload")?.as_object()?;
+    let rejected = |key: &str, value: &serde_json::Value| match command {
+        CommandName::SessionResume => true,
+        CommandName::SessionCreate => {
+            !matches!(
+                key,
+                "agentId" | "exportId" | "workspaceAlias" | "templateParams"
+            ) || match key {
+                "templateParams" => !is_empty_object(value),
+                _ => value.as_str().is_some_and(is_absolute_path),
+            }
+        }
+        _ => false,
+    };
     for (key, value) in payload {
-        let rejected = !matches!(
-            key.as_str(),
-            "agentId" | "exportId" | "workspaceAlias" | "templateParams"
-        ) || match key.as_str() {
-            "templateParams" => !is_empty_object(value),
-            _ => value.as_str().is_some_and(is_absolute_path),
-        };
-        if rejected {
+        if rejected(key.as_str(), value) {
             let field = if key.chars().count() <= MAX_DETAILS_FIELD {
                 key.clone()
             } else {
@@ -1879,8 +2175,9 @@ fn terminal_body(record: &CommandRecord, at: &CoreTimestamp) -> Option<CommandTe
 
 /// `completed` 终态的结果对象。
 ///
-/// `session.create` 必须回 `SessionCreateResult`（schema 的 `if/then`）：持久记录里存的正是该形状的
-/// 原文，这里还原成具名变体；形态不符（不是本切片写的行）→ 退回开放对象并记一条警告（不伪造 `{}`）。
+/// `session.create` 必须回 `SessionCreateResult`、`session.resume` 必须回 `SessionResumeResult`
+/// （schema 的 `if/then`）：持久记录里存的正是该形状的原文，这里还原成具名变体；形态不符（不是本切片
+/// 写的行）→ 退回开放对象并记一条警告（不伪造 `{}`）。
 fn completed_result(
     command: CommandName,
     record: &CommandRecord,
@@ -1897,6 +2194,18 @@ fn completed_result(
                 event = "node_link.session_create_result_unreadable",
                 request_id = record.request().as_str(),
                 "the persisted session.create result is not a SessionCreateResult"
+            ),
+        }
+    }
+    if command == CommandName::SessionResume {
+        match serde_json::from_str::<SessionResumeResult>(object.get()) {
+            Ok(resumed) => {
+                return Nullable::from_option(Some(CommandResultPayload::SessionResume(resumed)));
+            }
+            Err(_) => warn!(
+                event = "node_link.session_resume_result_unreadable",
+                request_id = record.request().as_str(),
+                "the persisted session.resume result is not a SessionResumeResult"
             ),
         }
     }
@@ -1924,36 +2233,35 @@ fn core_error(error: &PublicError) -> Option<acp_core::model::PublicError> {
     .ok()
 }
 
-/// `session.create` 的终态（`completed` 带 `SessionCreateResult`，其余带原错误）。
+/// `session.create` / `session.resume` 的本地合成终态（`completed` 带具名结果变体，其余带原错误）。
 ///
-/// 只在**没有**持久记录时使用（创建在幂等行落盘前就失败）：有记录的场景一律以记录为唯一权威。
-fn create_terminal(
+/// 只在**没有**持久记录时使用（工作在幂等行落盘前就失败）：有记录的场景一律以记录为唯一权威。
+fn local_terminal(
+    command: CommandName,
     request: &Uuid,
-    outcome: &CreateOutcome,
+    outcome: &LocalOutcome,
     at: &CoreTimestamp,
 ) -> Option<CommandTerminal> {
     let terminal_at = wire_timestamp(at)?;
     Some(CommandTerminal {
         request_id: request.clone(),
-        command: CommandName::SessionCreate,
+        command,
         terminal: match outcome {
-            CreateOutcome::Completed(result) => Terminal {
+            LocalOutcome::Completed(result) => Terminal {
                 status: TerminalStatus::Completed,
                 terminal_at,
                 terminal_event_id: Nullable::null(),
-                result: Nullable::from_option(Some(CommandResultPayload::SessionCreate(
-                    result.clone(),
-                ))),
+                result: Nullable::from_option(Some(result.clone())),
                 error: Nullable::null(),
             },
-            CreateOutcome::Failed(error) => Terminal {
+            LocalOutcome::Failed(error) => Terminal {
                 status: TerminalStatus::Failed,
                 terminal_at,
                 terminal_event_id: Nullable::null(),
                 result: Nullable::null(),
                 error: Nullable::from_option(Some(error.clone())),
             },
-            CreateOutcome::Uncertain(error) => Terminal {
+            LocalOutcome::Uncertain(error) => Terminal {
                 status: TerminalStatus::Uncertain,
                 terminal_at,
                 terminal_event_id: Nullable::null(),
@@ -2066,6 +2374,13 @@ fn port_error_code(error: &PortError) -> String {
     match error {
         PortError::InvalidRequest(reason) => (*reason).to_owned(),
         PortError::NotFound(_) => "command.not_found".to_owned(),
+        // 「后端不支持该操作」（§2）：目标 Agent 未宣告能力，或该会话没有持久化恢复数据。它**不是**
+        // 临时故障——重试不会变，因此映射到既有的永久失败码 `nodelink.command.unsupported`
+        // （registry 里 `retryable = false`），而不是按可重试处理的 `internal.unavailable`。
+        // 本函数只产出 core 侧的错误**文本**，wire 码由 `wire_error` 解析（不新增任何错误码）。
+        PortError::Unavailable(acp_core::model::UnavailableKind::BackendUnsupported) => {
+            "nodelink.command.unsupported".to_owned()
+        }
         _ => "internal.unavailable".to_owned(),
     }
 }
@@ -2261,6 +2576,11 @@ fn core_payload(command: CommandName, submit: &CommandSubmit) -> Result<CorePayl
         },
         WirePayload::SessionCreate(_) => {
             return Err("session.create is dispatched by its own handler");
+        }
+        // 与 `session.create` 同形（DR1-F48 的 Path A）：`session.resume` 没有 core payload 变体，
+        // 它的 `accepted` 行与幂等行由 core 的 `resume_session` 自建，因此本函数不映射它。
+        WirePayload::SessionResume(_) => {
+            return Err("session.resume is dispatched by its own handler");
         }
     };
     if payload.family()

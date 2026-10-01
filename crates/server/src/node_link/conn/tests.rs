@@ -2275,6 +2275,10 @@ fn fixtures_are_consumed_by_the_handshake_and_error_layers() {
         "invalid/resource-ack-missing-session.json",
         "invalid/command-terminal-missing-command.json",
         "invalid/session-create-accepted-with-result.json",
+        // `session.resume` 的非空 payload：信封与 `sessionRef`/attachment 合法，body 级由命令路由
+        // 回 `command.rejected(nodelink.command.unsupported_field)` + `details.field`（比 schema 的
+        // `additionalProperties` 更具体，§12.7）。
+        "invalid/session-resume-with-cwd.json",
     ];
 
     let mut handshake_bodies = 0usize;
