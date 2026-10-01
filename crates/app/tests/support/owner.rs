@@ -22,11 +22,12 @@ use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    Actor, AgentDescriptor, AgentRef, CapabilitySet, CommandRecord, ConfigOption,
+    Actor, AgentDescriptor, AgentRef, AgentSessionId, CapabilitySet, CommandRecord, ConfigOption,
     CreateSessionRequest, EndpointEvent, EventKind, EventPayload, EventType, GlobalCursor,
     InteractionId, InteractionResolution, ModeId, ModeState, OwnedSessionRef, PortError,
-    PromptRequest, RequestId, Sequence, SessionId, SessionReference, SessionSnapshot,
-    SessionSummary, Timestamp, TurnId, UnavailableKind, ViewJson,
+    PromptRequest, RequestId, ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord,
+    SessionReference, SessionSnapshot, SessionSummary, Timestamp, TurnId, UnavailableKind,
+    ViewJson,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, ExportStore,
@@ -453,6 +454,14 @@ impl SessionStore for FlakySessionStore {
         self.inner.unsettled_commands(limit).await
     }
 
+    /// 窄读取（§3.6）：原样转发（故障注入只作用在 `commit`，不作用在读面）。
+    async fn load_recovery(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        self.inner.load_recovery(session).await
+    }
+
     async fn retention_window(
         &self,
         session: &SessionId,
@@ -510,6 +519,7 @@ impl SessionBackendFactory for ScriptedBackends {
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
         Ok(Box::new(ScriptedEndpoint {
             reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+            agent_session_id: None,
             sink,
             parked: Arc::clone(&self.parked),
         }))
@@ -522,6 +532,23 @@ impl SessionBackendFactory for ScriptedBackends {
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
         Ok(Box::new(ScriptedEndpoint {
             reference,
+            agent_session_id: None,
+            sink,
+            parked: Arc::clone(&self.parked),
+        }))
+    }
+
+    /// 恢复：脚本端点不启动进程，只把同一会话重新绑定，并回带**持久化的** ACP 会话标识
+    /// （受控路径用例用它断言恢复后的可交互性）。
+    async fn resume(
+        &self,
+        session: &SessionId,
+        request: ResumeSessionRequest,
+        sink: EventSink,
+    ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+        Ok(Box::new(ScriptedEndpoint {
+            reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+            agent_session_id: Some(request.agent_session_id.clone()),
             sink,
             parked: Arc::clone(&self.parked),
         }))
@@ -578,6 +605,8 @@ impl Parked {
 /// 「哪一条事件到了连接上」（也让 R61 的注入能精确命中一条事件批次）。
 struct ScriptedEndpoint {
     reference: SessionReference,
+    /// 本次绑定的 ACP 会话标识（恢复时由 `ResumeSessionRequest` 带入；创建脚本端点不产生）。
+    agent_session_id: Option<AgentSessionId>,
     sink: EventSink,
     parked: Arc<Parked>,
 }
@@ -619,6 +648,10 @@ impl ScriptedEndpoint {
 impl SessionEndpoint for ScriptedEndpoint {
     fn reference(&self) -> SessionReference {
         self.reference.clone()
+    }
+
+    fn agent_session_id(&self) -> Option<&AgentSessionId> {
+        self.agent_session_id.as_ref()
     }
 
     async fn prompt(
