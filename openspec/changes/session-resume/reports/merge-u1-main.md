@@ -635,3 +635,184 @@ handoff_index:
     applicability_basis: "merger 只提供检视素材、不承担检视结论；6.8 的 REVIEW 行由主 Agent 另行派发独立 reviewer。本轮素材：本报告第 17.4 节（change 目录外零差异）+ reports/merge-u1-main-diff-materials.md（该文件本轮首次入库，含前两轮小节）；本轮两次提交把 change 目录内的差异文件数补到 71 个（全仓 133 个），产品代码差异仍为零。"
     source_evidence: NOT_APPLICABLE
 ```
+
+# 第 4 轮：独立验证结论入库与最终 HEAD 门禁复跑（merger-A8）
+
+> 本节是实例 `merger-A8` 的追加记录，**上文第 1 轮（merger-A5）、第 2 轮（merger-A6）、第 3 轮（merger-A7）内容原样保留、不覆盖、不删除**。
+> 触发原因：上一实例 merger-A7 已在 `3458542…` 与 `6af2549…` 上取得完整门禁 exit 0 并结案 tasks 6.7，但**最终 HEAD `976b34c…` 未再跑门禁**（当时工作区存在主 Agent 的并发改动，merger-A7 据此拒绝在脏工作区上取证并如实上报）。
+> 本轮职责：**只做 git 提交与门禁验证**，**不合并任何分支**。不动 `crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**`、脚本与 CI 配置；对 `verification.md` 的唯一写入是 `## Merge History` 追加一行 `M1-收尾`。
+> 本轮范围：`tasks.md` **6.8** 的**证据侧**（向独立 reviewer 提供可核对的最终 HEAD 与门禁日志）。6.8 的 REVIEW 结论不在本角色职责内。
+
+## 22. 本轮起点、暂存逐项核对与提交
+
+### 22.1 起点与两次提交
+
+| 项 | 值 |
+| --- | --- |
+| 起点 HEAD | `976b34ccebbf755e61aa87eaeafac35e6f1f480e`（`refs/heads/main`） |
+| 分支 / 工作区 | `main` / 主工作区 `D:/Project/acp-remote`（复用主工作区，未新建、未切换分支） |
+| 提交 1 | **`ac5de2a6bc91cb3320c3a9286a5169fb4183753a`**，父提交 `976b34ccebbf755e61aa87eaeafac35e6f1f480e`，标题 `docs(repo): 登记独立验证结论与报告` |
+| 提交 2 | **`661932db812459c90a249f6202ecdcaf0430351c`**，父提交 `ac5de2a6bc91cb3320c3a9286a5169fb4183753a`，标题 `docs(repo): 回填 Merge History 收尾行与独立验证裁定` |
+
+两次提交均为**普通追加提交**（未 `--amend` / 未 `merge` / 未 `rebase` / 未 `push` / 未开 PR / 未动其它 worktree / 未删 `target/`）。
+
+### 22.2 暂存逐项核对（提交 1）
+
+`git status --short` 与 `git diff --stat` 核对结果与派单描述**逐字一致**，恰好 2 项，无第三项：
+
+| # | 状态 | 路径 | 核对结论 |
+| --- | --- | --- | --- |
+| 1 | `M`（已修改） | `openspec/changes/session-resume/verification.md` | `git diff` 仅含 `## Independent Validation` 表格 7.1 行回填（4 增 1 删）：Target Revision 由空填为 `69f1ac1bc6af81461d199257f512965f646ec55c`、Result 填 PASS 结论与依据摘要、新增两段「依据摘要 / 仍未闭合」说明 |
+| 2 | `??`（未跟踪） | `openspec/changes/session-resume/reports/validation-session-resume.md` | validator-A 独立验证报告，33 823 字节 / 384 行 |
+
+- 两条路径 **100% 落在 `openspec/changes/session-resume/**`** 内。
+- **`crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**`、`scripts/**`、`.github/workflows/**` 零改动**（`git status --porcelain --untracked-files=all` 全量输出仅 2 行，已逐行确认）。
+- `reports/*.log` 由 `.gitignore:27`（`openspec/changes/**/reports/**/*.log`）忽略，`git add` **未使用 `-f`**，`.log` 未入库（`git check-ignore -v` 已确认规则命中）。
+- 提交后 `git status --short` 输出为空。
+
+### 22.3 暂存逐项核对（提交 2）
+
+`git diff --cached --name-status` 输出恰好 **1 个文件**：`M openspec/changes/session-resume/verification.md`（`2 insertions(+)`），含 2 个 hunk：
+
+| # | hunk 位置 | 内容 | 授权来源 |
+| --- | --- | --- | --- |
+| 1 | `## Merge History` 表末 | 追加 `M1-收尾` 行（Merge ID 唯一、Target Ref `refs/heads/main`、Merger `merger-A8`、记录提交 1 的 sha 与本轮门禁结论） | 派单第 (C) 项明示授权 |
+| 2 | `## Independent Validation` 段末 | 追加「用户裁定（2026-10-01）：不做运行时验证」行 | **主 Agent 显式授权（B 方案）**，见 §26 |
+
+> **关于 hunk 2 的授权留痕**：该行由**主 Agent 在本轮门禁执行期间并发写入工作区**，并**明确书面授权** merger-A8 连带提交（B 方案），理由是该裁定本属权威文档应有内容、留在工作区会再次制造「工作区不脏 → 最终 HEAD 未跑门禁」的老问题。merger-A8 未自行扩大范围，也未改动该行任何字词。
+
+### 22.4 提交信息的 scope 取舍（供后续同类提交参考）
+
+派单建议的标题 `docs(session-resume): 登记独立验证结论与报告` **被本地 `commitlint` 钩子拒绝**（`scope must be one of [core, storage, sync, node-link, acp, agent-host, identity, server, app, frontend, transcript, wire, compat, scripts, docs, ci, deps, release, repo]`，exit 1）：`commitlint.config.mjs` 的 `SCOPES` 词表**不含 `session-resume`**。
+
+按 `AGENTS.md` §8「scope 可选；写了就必须落在词表里」，本轮改用词表内且有仓库先例的 **`docs(repo)`**（先例：`69f1ac1 docs(repo): 修正 WP4 集成报告中对评审报告的节引用`），并经**主 Agent 确认保留该选择**。本轮未修改 `commitlint.config.mjs` 词表（不在授权范围，且不属「新增仓库边界」）。
+
+> **残余风险（如实登记，非本轮可修）**：`main` 上已有的 `20c1623`、`3458542`、`6af2549`、`774ee9e`、`976b34c` 五个提交标题同为 `docs(session-resume): …`，scope 同样不在词表内，推送后 CI `commits` job 会判失败。本轮**未 amend / 未 rebase**（硬边界禁止），修法需主 Agent 决定（改词表或另开修正提交）。
+
+## 23. 最终 HEAD 上的完整门禁证据（权威）
+
+### 23.1 在 `ac5de2a6bc91cb3320c3a9286a5169fb4183753a` 上（提交 1 的最终 HEAD）
+
+| # | 检查 | 命令 | 退出码 | 日志 |
+| --- | --- | --- | --- | --- |
+| 1 | 合同门禁总入口 | `npm run check` | **0** | `reports/final-main-gates-npm-check.log` |
+| 2 | schema 门禁 | `npm run --silent check:schemas` | 0 | `reports/final-main-gates-check-schemas.log` |
+| 3 | 命令目录门禁 | `npm run --silent check:commands` | 0 | `reports/final-main-gates-check-commands.log` |
+| 4 | 错误码词表门禁 | `npm run --silent check:errors` | 0 | `reports/final-main-gates-check-errors.log` |
+| 5 | feature 词表门禁 | `npm run --silent check:features` | 0 | `reports/final-main-gates-check-features.log` |
+| 6 | fixture/资产门禁 | `npm run --silent check:assets` | 0 | `reports/final-main-gates-check-assets.log` |
+| 7 | ACP 固定向量门禁 | `npm run --silent check:acp` | 0 | `reports/final-main-gates-check-acp.log` |
+| 8 | 文档引用门禁 | `npm run --silent check:docs` | 0 | `reports/final-main-gates-check-docs.log` |
+| 9 | crate 依赖方向门禁 | `npm run --silent check:boundaries` | 0 | `reports/final-main-gates-check-boundaries.log` |
+| 10 | 合同漂移门禁 | `npm run --silent check:drift` | 0 | `reports/final-main-gates-check-drift.log` |
+| 11 | agentic 门禁 | `npm run --silent check:agentic` | 0 | `reports/final-main-gates-check-agentic.log` |
+| 12 | 格式 | `cargo fmt --all -- --check` | **0** | `reports/final-main-gates-cargo-fmt.log` |
+| 13 | 静态检查 | `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | **0**（0 诊断） | `reports/final-main-gates-cargo-clippy.log` |
+| 14 | 工作区测试 | `cargo test --locked --workspace --all-features` | **0**，**1074 passed / 0 failed / 2 ignored** | `reports/final-main-gates-cargo-test-workspace.log` |
+
+- 十道门禁**逐道单独执行**并各自记录退出码（串行 `for` 循环，逐条写入日志），**不以 `check:agentic` 内部 `openspec validate` 的 `Totals: 20 passed, 0 failed` 充当全绿依据**——CR-PM-F1 指出的取据错误在本轮已系统性纠正。
+- 全部 14 份日志首两行为 `# revision: ac5de2a6bc91cb3320c3a9286a5169fb4183753a` 与 `# command: <完整命令>`，末行为 `# exit: <退出码>`。
+- 测试总数与预期一致（1074 / 0 / 2）；2 条 `#[cfg(unix)]` 用例在本机（Windows）为 ignored，与 validator 登记的 PENDING 项一致，**未被写成已通过**。
+
+### 23.2 在 `661932db812459c90a249f6202ecdcaf0430351c` 上（提交 2 的最终 HEAD，`## Merge History` 回填后）
+
+| 检查 | 命令 | 退出码 | 日志 |
+| --- | --- | --- | --- |
+| 文档引用门禁 | `node scripts/check-doc-links.mjs` | **0**（404 条相对链接、9 356 处章节引用、485 个 markdown 文件） | `reports/final-main-gates-postbackfill-check-doc-links.log` |
+| 合同门禁总入口 | `npm run check` | **0** | `reports/final-main-gates-postbackfill-npm-check.log` |
+
+- 目的：确认 `M1-收尾` 行（含 `reports/final-main-gates-npm-check.log` 等新引用）**未引入新的引用归属错误**。结论：无。
+- 该两次提交之间 `git diff ac5de2a..661932d` 仅含 `verification.md` 一个文件、2 行新增，**产品代码零差异**，故 §23.1 的 Rust 三条结论对 `661932d` 同样成立（差异不触及任何 crate）；本轮按派单要求在此 HEAD 上**至少**复跑 `check-doc-links` 与 `npm run check`，两者均绿。
+
+## 24. 工作区状态
+
+- 提交 1、提交 2 完成后 `git status --short` 均为**空输出**：工作区干净。
+- 唯一残留是 `.gitignore:27` 忽略的 `reports/*.log`（证据日志，按设计不入库）。
+- **本报告自身（第 4 轮小节）入库产生第 3 次提交**，内容仅 `reports/merge-u1-main.md` 一个文件（追加式，+180 行，前三轮原样保留）。该提交同样在主工作区复跑 `node scripts/check-doc-links.mjs` 与 `npm run check`。因「把结果写回本文件」会再次产生新提交、形成自引用死循环，其结果以**本轮 handoff 回复与 acceptance report** 为准（sha 见回复），不在此自证。
+
+## 25. 本轮未执行项（明确声明）
+
+1. **未合并任何分支**：无 `git merge` / `rebase` / `push` / `commit --amend`，未开 PR，未动其它 worktree，未删 `target/`。
+2. **未运行 `cargo-deny` / `gitleaks`**：本机不可执行，只由 CI 的 `deps` / `advisories` / `secrets` 三个 job 判定，**「本地绿」不等于这三项通过**。
+3. **未运行 `#[cfg(unix)]` 用例**：本机为 Windows，2 条用例无编译无执行证据，保持 validator 登记的 PENDING。
+4. **未运行 Main E2E**：`plan.md` 的 `### Main E2E` 为 `not-applicable`（用户 2026-09-30 已批准降级），本轮不越权改判。
+5. **未运行 `workflow check --stage premerge`**：本轮是 `phase: merge` / `stage: main` 的收尾取证，不是新候选；premerge 判定已在 `reports/premerge-receipt-u1.md` 固化，不重复执行、不改写。
+6. **未做 6.8 的检视结论**：见 §27。
+7. **未修改** `plan.md`、`tasks.md`、`crates/**`、`docs/**`；`verification.md` 的写入仅 §22.3 表列的 2 个 hunk。
+
+## 26. 需要主 Agent 知晓的判断与留痕
+
+| # | 事项 | 本轮处置 | 依据 |
+| --- | --- | --- | --- |
+| 1 | 派单建议的提交 scope 不合规 | 改用 `docs(repo)`，经主 Agent 确认保留 | `commitlint.config.mjs` `SCOPES` 词表；`AGENTS.md` §8 |
+| 2 | 主 Agent 在门禁期间并发写入 `verification.md`（用户裁定行） | 报主 Agent 裁决后，按其**明示授权（B 方案）**连带提交，未自行决定 | 派单硬边界「除 `## Merge History` 追加一行外不得改 verification.md 内容」 |
+| 3 | 历史 5 个 `docs(session-resume)` 提交 scope 不合规 | **如实登记为残余风险，未自行修**（amend/rebase 被硬边界禁止） | `AGENTS.md` §8「scope 写了就必须落在词表里」 |
+| 4 | 报告本体的入库 | 本报告小节写入后**由本轮再提交一次**（第 3 次提交），并在该 HEAD 上复跑 `check-doc-links` 与 `npm run check`，以保持「最终 HEAD 有门禁、工作区干净」闭环 | 避免重演 merger-A7 遇到的「最终 HEAD 未跑门禁」 |
+
+## 27. 下一步
+
+1. 主 Agent 可派发独立 reviewer 完成 **6.8** 的 REVIEW 行；本报告 §23 的最终 HEAD、逐道退出码与日志路径，以及 `reports/merge-u1-main-diff-materials.md` 构成检视素材。
+2. `main` 尚未推送（硬边界禁止 `push`）；历史 5 个提交的 scope 问题需主 Agent 决定修法后再推送，否则 CI `commits` job 会红。
+3. 后续登记（tasks 8.x / 9.1）由主 Agent 在本轮收工后进行，避免再次出现主 Agent 与 merger 同写一份权威文档的竞态。
+
+## 28. 第 4 轮 handoff_index
+
+```yaml
+handoff_index:
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "661932db812459c90a249f6202ecdcaf0430351c"
+    evidence_type: DELIVERY
+    evidence_id: NOT_APPLICABLE
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: NOT_APPLICABLE
+    evidence_status: NEW
+    applicability_basis: "merger 只提供检视素材、不承担检视结论；6.8 的 REVIEW 行由主 Agent 另行派发独立 reviewer。本轮素材：最终 HEAD 661932db812459c90a249f6202ecdcaf0430351c、§23.1 与 §23.2 的逐道门禁退出码与日志、reports/merge-u1-main-diff-materials.md，以及本轮两次提交（ac5de2a、661932d，均只改 openspec/changes/session-resume/**，产品代码零差异）。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "ac5de2a6bc91cb3320c3a9286a5169fb4183753a"
+    evidence_type: CHECK
+    evidence_id: PV1
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "在提交 1 的最终 HEAD ac5de2a6bc91cb3320c3a9286a5169fb4183753a 上于主工作区亲跑三条：cargo fmt --all -- --check (exit 0，reports/final-main-gates-cargo-fmt.log)、cargo clippy --locked --workspace --all-targets --all-features -- -D warnings (exit 0、0 诊断，reports/final-main-gates-cargo-clippy.log)、cargo test --locked --workspace --all-features (exit 0，1074 passed / 0 failed / 2 ignored，reports/final-main-gates-cargo-test-workspace.log)。三份日志均含 # revision / # command / # exit。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "ac5de2a6bc91cb3320c3a9286a5169fb4183753a"
+    evidence_type: CHECK
+    evidence_id: PV2
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "npm run check 在 ac5de2a6bc91cb3320c3a9286a5169fb4183753a 上 exit 0（reports/final-main-gates-npm-check.log）。为避免 && 短路掩盖结论、也避免拿第 10 道门禁内部的 validate 汇总充当全绿依据，十道门禁另逐道单独执行：schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic 各自 exit 0（reports/final-main-gates-check-*.log 共 10 份）。CR-PM-F1 的取据错误已纠正，本轮不引用 reports/merge-u1-main-final-*.log。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "661932db812459c90a249f6202ecdcaf0430351c"
+    evidence_type: CHECK
+    evidence_id: PV2
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "## Merge History 回填后的最终 HEAD 661932db812459c90a249f6202ecdcaf0430351c 上复跑：node scripts/check-doc-links.mjs exit 0（404 相对链接 / 9356 章节引用 / 485 文件，reports/final-main-gates-postbackfill-check-doc-links.log）、npm run check exit 0（reports/final-main-gates-postbackfill-npm-check.log）。用于确认 M1-收尾 行的新引用未引入引用归属错误；ac5de2a..661932d 仅 verification.md 2 行新增，产品代码零差异，故 PV1 三条 Rust 结论对该 HEAD 同样成立。"
+    source_evidence: NOT_APPLICABLE
+```
