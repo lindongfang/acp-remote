@@ -44,6 +44,7 @@ use server::local_admin::{
 };
 use server::node_link::{CommandRoute, NodeLinkConfig};
 use server::transport::net::{NetListener, Shutdown};
+use sqlx::Connection as _;
 use storage_sqlite::session_store::SqliteStore;
 use tokio::task::JoinHandle;
 
@@ -127,11 +128,16 @@ impl OwnerNode {
         );
         let fault_marker = Arc::new(Mutex::new(None));
         let rejected_commits = Arc::new(AtomicU32::new(0));
+        // 计数器的**唯一实例**：`FlakySessionStore::load_recovery` 递增它，`OwnerNode::recovery_reads()`
+        // 读同一个 `Arc`。此前两处各建了一个 `Arc`（装饰器一个、观察字段一个），计数恒为 0，
+        // 使 R31 的「授权先于本机读取」断言恒真；修正记录见 `reports/tp2-tester.md` 第 2 轮
+        // （TP2 tester-A2），并已在 R31 用例里补了「计数器确实在动」的自检断言。
+        let recovery_reads = Arc::new(AtomicU32::new(0));
         let sessions: Arc<dyn SessionStore> = Arc::new(FlakySessionStore {
             inner: Arc::clone(&store),
             marker: Arc::clone(&fault_marker),
             rejected: Arc::clone(&rejected_commits),
-            recovery_reads: Arc::new(AtomicU32::new(0)),
+            recovery_reads: Arc::clone(&recovery_reads),
         });
         let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
         let exports: Arc<dyn ExportStore> = store.clone();
@@ -259,7 +265,7 @@ impl OwnerNode {
             parked,
             rejected_commits,
             resume_probe,
-            recovery_reads: Arc::new(AtomicU32::new(0)),
+            recovery_reads,
             sessions,
             core,
             broker,
@@ -307,6 +313,43 @@ impl OwnerNode {
         SqliteStore::open(config, &app::clock::SystemClock::new().now())
             .await
             .expect("重开同一 data_dir 的真实存储")
+    }
+
+    /// 用**原始 SQL** 把 `owned_session.workspace_cwd` 改写成给定的逐字取值。
+    ///
+    /// 只服务于 R25 的前置构造。产品写路径（`workspace.select` → `canonicalize` → 持久化）**永远**写入
+    /// 规范化结果，所以「持久化取值仍然存在、但 `canonicalize` 的结果与之逐字不同」这个形状**无法**经
+    /// 任何端口或本地管理方法产生——只能直接写库（这一行 dev-dependency 的唯一理由）。
+    ///
+    /// 改写之后产品侧**看不到**这次改写的痕迹：读路径 `load_recovery` 原样返回该字符串，复校验
+    /// （`core` 的 `revalidate_resume_workspace`）也只看到「字符串对不上」。因此用例必须自己证明拒绝
+    /// 来自「`canonicalize` 结果逐字比对」这一条，而不是值对象构造失败或路径不存在。
+    pub async fn overwrite_persisted_workspace_cwd(
+        &self,
+        session: &SessionId,
+        workspace_cwd: &str,
+    ) {
+        let config = storage_sqlite::migrate::StorageConfig::new(self.data_dir());
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(config.database_path())
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_secs(10));
+        let mut connection: sqlx::SqliteConnection = sqlx::Connection::connect_with(&options)
+            .await
+            .expect("打开同一 data_dir 的原始 SQL 连接");
+        let changed =
+            sqlx::query("UPDATE owned_session SET workspace_cwd = ?1 WHERE session_id = ?2")
+                .bind(workspace_cwd)
+                .bind(session.as_str())
+                .execute(&mut connection)
+                .await
+                .expect("改写持久化 workspace_cwd")
+                .rows_affected();
+        assert_eq!(
+            changed, 1,
+            "必须恰好改写一行 owned_session（否则 R25 的前置根本没造出来）"
+        );
+        connection.close().await.expect("关闭原始 SQL 连接");
     }
 
     /// 释放某个 marker 暂存的后端事件（模拟 Agent 在 accepted 之后产出）；返回释放条数。

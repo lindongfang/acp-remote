@@ -624,6 +624,27 @@ fn an_unauthorized_resume_is_rejected_before_any_local_read() {
         .await;
 
         let attachment = attach(&mut client, &session).await;
+
+        // 观察点自检（不是假设）：`recovery_reads` 必须真的在计数，否则下面「授权先于本机读取」的
+        // 「计数不变」断言是**恒真**的。（该计数器曾因 `Arc` 建了两个实例而恒为 0，TP2 tester-A2 修正。）
+        let session_key =
+            acp_core::model::SessionId::new(session["sessionId"].as_str().expect("sessionId"))
+                .expect("session id");
+        let probe_before = owner.recovery_reads();
+        assert!(
+            owner
+                .sessions
+                .load_recovery(&session_key)
+                .await
+                .expect("读回")
+                .is_some(),
+            "R31 的前提：目标会话确有持久化恢复数据"
+        );
+        assert!(
+            owner.recovery_reads() > probe_before,
+            "load_recovery 的计数器必须真的递增，否则「授权先于本机读取」是恒真断言"
+        );
+
         let reads_before = owner.recovery_reads();
         let resume_calls_before = owner.resume_probe.calls();
 
@@ -1187,4 +1208,394 @@ fn any_resume_payload_field_is_rejected_before_side_effects() {
 
         owner.stop().await;
     });
+}
+
+// ===== R25 / R24 的「路径存在、但不再是当初那个路径」两族 =====
+//
+// 三条用例覆盖同一个判定（`core::broker::revalidate_resume_workspace` 里
+// 「`canonicalize` 的结果与持久化取值逐字相同」）的三种达成方式，**平台分工不同**：
+//
+// - 平台无关变体：本机（Windows）**真实执行并通过**；
+// - `#[cfg(unix)]` 两族：只在 Unix 上编译与运行，本机（Windows）**从未执行**，
+//   由 Linux CI 的 `checks` job（`ubuntu-latest`）真实执行。**本地未执行不等于通过。**
+//
+// 三条用例的共同前提是「路径仍然存在」——这正是 R25 与 R24（目录已被删除）的分界：
+// 若路径不存在，测到的就是 R24 的判定，`canonicalize` 逐字比对这条分支就永远没被走到。
+
+/// R25 的**平台无关**变体：持久化路径**仍然存在、仍是目录**，但 `canonicalize` 的结果与持久化取值
+/// **逐字不同** ⇒ 拒绝恢复，且**不使用**新解析出的路径发送 `session/resume`。
+///
+/// 「未规范化但存在」的形态用**尾部多余分隔符**实现（`…/dir` vs `…/dir/`）。选它而不是 `..` 或 `.`
+/// 是因为实测（`rustc` 单文件探针，Windows）：canonicalize 在 Windows 上返回 `\\?\` verbatim 前缀的
+/// 路径，而 verbatim 路径**不做归一化**——`..`、`.`、`//`、`/.` 这些形态在 Windows 上连 `metadata`
+/// 都会直接失败（os error 123/3），根本达不到「仍然存在」。尾部分隔符在两个平台上都同时满足
+/// 「`metadata` 成功且是目录」与「`canonicalize` 结果不同」，是唯一真正平台无关的形态。
+///
+/// **判别力**（如果实现回退成「直接用新解析出的路径」）：新解析出的路径恰好就是**那个完全合法、
+/// 已注册、仍然存在的**目录（前提断言④），因此回退实现会
+/// ① 得到 `completed` 而不是 `failed`、② 让后端 `resume` 计数 +1、③ 让后端收到的 cwd 等于合法目录——
+/// 三条断言全部失败。
+#[test]
+fn a_persisted_cwd_whose_canonical_form_differs_is_refused_before_any_backend_call() {
+    use acp_core::model::{AgentId, AgentRef, ResumeSessionRequest};
+
+    support::block_on(async {
+        let workspace = workspace_dir("resume-noncanonical");
+        let non_canonical = format!("{}{}", workspace.display(), std::path::MAIN_SEPARATOR);
+        let paired =
+            Paired::up_to_approval("resume-noncanonical", ACCESS_WORK, &FULL_GRANTS, &workspace)
+                .await;
+        let (owner, access, ticket) = paired.into_parts();
+        let mut client = connect(&owner, &access, &ticket).await;
+        let (session, attachment) = create_session(&mut client).await;
+        let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
+        let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
+        let calls_before = owner.resume_probe.calls();
+
+        // 前置①：产品写路径**只会**持久化规范化结果——这正是必须绕过端口直接写库的原因。
+        let created = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("创建成功后必须持久化恢复数据");
+        assert_eq!(
+            created.workspace_cwd.as_deref(),
+            Some(workspace.to_string_lossy().as_ref()),
+            "产品写路径持久化的必须是规范化结果"
+        );
+        owner
+            .overwrite_persisted_workspace_cwd(&session_key, &non_canonical)
+            .await;
+
+        // 前置②：产品**读**路径现在看到的就是那个未规范化取值（改写确实生效，且没有第二处口径）。
+        let tampered = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("恢复数据仍在");
+        assert_eq!(
+            tampered.workspace_cwd.as_deref(),
+            Some(non_canonical.as_str()),
+            "读路径必须原样返回库里的字节"
+        );
+        assert_eq!(
+            tampered.agent_session_id, created.agent_session_id,
+            "只改写 cwd 一列（另一列是 R22 的对照）"
+        );
+        assert_eq!(tampered.agent, created.agent, "agent 不得被改写");
+
+        // 前置③：R25 的四个条件同时成立，且**失败点唯一**（下面四条全是断言，不是假设）。
+        let candidate = std::path::Path::new(&non_canonical);
+        assert!(
+            candidate.is_absolute(),
+            "复校验的第一条（绝对）必须通过，否则失败点不是本用例要测的那一条"
+        );
+        let metadata = std::fs::metadata(&non_canonical)
+            .expect("R25 的前提：持久化路径仍然存在（不存在就是 R24「目录被删」）");
+        assert!(metadata.is_dir(), "复校验的第三条（是目录）必须通过");
+        let canonical =
+            std::fs::canonicalize(&non_canonical).expect("R25 的前提：新解析结果可得出");
+        assert_ne!(
+            canonical.to_str(),
+            Some(non_canonical.as_str()),
+            "R25 的前提：canonicalize 的结果与持久化取值逐字不同"
+        );
+        assert_eq!(
+            canonical, workspace,
+            "新解析出的路径恰好是那个合法且已注册的目录（回退实现会因此恢复成功）"
+        );
+
+        // 前置④：值对象**接受**该取值（绝对、非空、无 NUL、长度合规）——因此拒绝不可能来自
+        // `ResumeSessionRequest::try_new`，只能来自 canonicalize 的逐字比对。
+        assert!(
+            ResumeSessionRequest::try_new(
+                AgentRef::try_new(AgentId::new(AGENT).expect("agent id"), "Codex")
+                    .expect("agent ref"),
+                tampered
+                    .agent_session_id
+                    .clone()
+                    .expect("创建成功后必须持久化 ACP 会话标识"),
+                non_canonical.clone(),
+            )
+            .is_ok(),
+            "值对象必须接受该取值：否则本用例测到的是值对象构造失败而不是 R25"
+        );
+
+        // 走真实恢复入口。
+        client.step("resume with non-canonical persisted cwd");
+        client
+            .send(
+                "command.submit",
+                session_resume_body(
+                    &support::nodelink::uuid_text(),
+                    &session,
+                    &attachment,
+                    json!({}),
+                ),
+            )
+            .await;
+        client.expect("command.accepted").await;
+        let terminal = client.expect("command.terminal").await;
+        assert_eq!(
+            terminal["body"]["terminal"]["status"],
+            json!("failed"),
+            "规范化结果与持久化取值不同必须拒绝恢复：{terminal}"
+        );
+        assert_eq!(
+            terminal["body"]["terminal"]["error"]["code"],
+            json!("nodelink.internal.unavailable"),
+            "服务端不可用类（不是 unsupported，CR7-F2 口径）：{terminal}"
+        );
+
+        // 「不使用新解析出的路径发送 session/resume」：后端**一次都没被调用**。
+        assert_eq!(
+            owner.resume_probe.calls(),
+            calls_before,
+            "复校验必须发生在调用后端之前——后端未被调用即「没有发出任何 session/resume」"
+        );
+        assert!(
+            owner.resume_probe.last_request().is_none(),
+            "本用例内后端从未收到过任何恢复请求（因此也不可能收到新解析出的路径）"
+        );
+
+        // R22：持久化取值不得被改写成新解析出的路径。
+        let after = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("恢复数据仍在");
+        assert_same_recovery(&tampered, &after, "规范化结果变化被拒之后");
+
+        // 没有产生新会话。
+        let listed = owner
+            .sessions
+            .list(acp_core::ports::SessionQuery::default())
+            .await
+            .expect("列出会话");
+        assert_eq!(listed.len(), 1, "被拒的恢复不得创建新会话：{listed:?}");
+
+        let _ = std::fs::remove_dir_all(&workspace);
+        owner.stop().await;
+    });
+}
+
+/// R25 的 `#[cfg(unix)]` 变体（**符号链接改指**）：持久化路径**仍然存在、仍是目录**，但它已被换成
+/// 指向别处的符号链接 ⇒ `canonicalize` 结果与持久化取值不同 ⇒ 拒绝恢复、不发出 `session/resume`。
+///
+/// 这是 spec 给 R25 举的原例。**执行平台**：本机是 Windows 开发机，本用例**从未执行**；由 Linux CI 的
+/// `checks` job（`ubuntu-latest`）真实执行。本地未执行**不等于**通过。
+#[cfg(unix)]
+#[test]
+fn a_persisted_directory_replaced_by_a_symlink_is_refused_before_any_backend_call() {
+    support::block_on(async {
+        let base = workspace_dir("resume-symlink");
+        let real = base.join("real");
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&real).expect("建立持久化目录");
+        std::fs::create_dir_all(&elsewhere).expect("建立改指目标目录");
+
+        let paired =
+            Paired::up_to_approval("resume-symlink", ACCESS_WORK, &FULL_GRANTS, &real).await;
+        let (owner, access, ticket) = paired.into_parts();
+        let mut client = connect(&owner, &access, &ticket).await;
+        let (session, attachment) = create_session(&mut client).await;
+        let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
+        let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
+        let calls_before = owner.resume_probe.calls();
+
+        let created = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("恢复数据");
+        assert_eq!(
+            created.workspace_cwd.as_deref(),
+            Some(real.to_string_lossy().as_ref()),
+            "持久化取值必须是 real 的规范化结果"
+        );
+
+        // 把持久化路径**本身**换成指向别处的符号链接（spec 给 R25 举的原例）。
+        std::fs::remove_dir_all(&real).expect("移除原目录");
+        std::os::unix::fs::symlink(
+            std::fs::canonicalize(&elsewhere).expect("改指目标可规范化"),
+            &real,
+        )
+        .expect("建立符号链接");
+
+        // 前提自证（断言，不是假设）。
+        let metadata = std::fs::metadata(&real).expect("R25 的前提：路径仍然存在");
+        assert!(metadata.is_dir(), "符号链接仍解析为目录");
+        let canonical = std::fs::canonicalize(&real).expect("新解析结果可得出");
+        assert_ne!(
+            canonical.to_str(),
+            created.workspace_cwd.as_deref(),
+            "R25 的前提：canonicalize 结果与持久化取值逐字不同"
+        );
+        assert_eq!(
+            canonical,
+            std::fs::canonicalize(&elsewhere).expect("改指目标可规范化"),
+            "新解析出的路径是别处那个目录（回退实现会拿它去恢复）"
+        );
+
+        client.step("resume with symlink retargeted");
+        client
+            .send(
+                "command.submit",
+                session_resume_body(
+                    &support::nodelink::uuid_text(),
+                    &session,
+                    &attachment,
+                    json!({}),
+                ),
+            )
+            .await;
+        client.expect("command.accepted").await;
+        let terminal = client.expect("command.terminal").await;
+        assert_eq!(
+            terminal["body"]["terminal"]["status"],
+            json!("failed"),
+            "符号链接改指必须拒绝恢复：{terminal}"
+        );
+        assert_eq!(
+            terminal["body"]["terminal"]["error"]["code"],
+            json!("nodelink.internal.unavailable"),
+            "服务端不可用类：{terminal}"
+        );
+        assert_eq!(
+            owner.resume_probe.calls(),
+            calls_before,
+            "不得用新解析出的路径发出 session/resume"
+        );
+        let after = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("恢复数据仍在");
+        assert_same_recovery(&created, &after, "符号链接改指被拒之后");
+
+        let _ = std::fs::remove_dir_all(&base);
+        owner.stop().await;
+    });
+}
+
+/// R24 的 `#[cfg(unix)]` 变体（**权限丢失**）：持久化目录变得**不可访问** ⇒ 服务端不可用类错误、
+/// 不启动/不派发任何东西。
+///
+/// 权限作用在持久化目录的**父目录**上而不是叶子目录：`stat`/`lstat` 路径上的每个分量都需要**父目录**的
+/// search 权限，只把叶子目录 chmod 成 `000` 并不会让 `metadata`/`canonicalize` 失败（叶子自身不参与
+/// 自己的查找）。本用例用前提断言自证这一点（下方 `metadata(...).is_err()`），因此即使平台行为与预期
+/// 不同也会**响亮地**失败而不是默默退化成另一个场景。
+///
+/// **执行平台**：本机是 Windows 开发机，本用例**从未执行**；由 Linux CI 的 `checks` job
+/// （`ubuntu-latest`，非 root）真实执行。本地未执行**不等于**通过。
+#[cfg(unix)]
+#[test]
+fn an_inaccessible_persisted_directory_is_refused_before_any_backend_call() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    support::block_on(async {
+        let base = workspace_dir("resume-chmod");
+        let work = base.join("work");
+        std::fs::create_dir_all(&work).expect("建立持久化目录");
+
+        let paired = Paired::up_to_approval("resume-chmod", ACCESS_WORK, &FULL_GRANTS, &work).await;
+        let (owner, access, ticket) = paired.into_parts();
+        let mut client = connect(&owner, &access, &ticket).await;
+        let (session, attachment) = create_session(&mut client).await;
+        let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
+        let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
+        let calls_before = owner.resume_probe.calls();
+
+        let created = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("恢复数据");
+        assert_eq!(
+            created.workspace_cwd.as_deref(),
+            Some(work.to_string_lossy().as_ref()),
+            "持久化取值必须是 work 的规范化结果"
+        );
+
+        // 去掉**父目录**的访问权限（Drop 时恢复，避免残留 `000` 污染临时目录）。
+        let restore = ModeRestore::new(&base);
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+
+        // 前提自证：该形态必须真的让持久化路径不可访问（以 root 运行时本用例的前提不成立，
+        // 此时会在这里失败，而不是给出一条「本该失败却通过了」的假证据）。
+        assert!(
+            std::fs::metadata(&work).is_err(),
+            "chmod 000 必须让持久化路径不可访问；若本进程是 root，POSIX 权限检查对它无效"
+        );
+
+        client.step("resume with inaccessible workspace");
+        client
+            .send(
+                "command.submit",
+                session_resume_body(
+                    &support::nodelink::uuid_text(),
+                    &session,
+                    &attachment,
+                    json!({}),
+                ),
+            )
+            .await;
+        client.expect("command.accepted").await;
+        let terminal = client.expect("command.terminal").await;
+        assert_eq!(
+            terminal["body"]["terminal"]["status"],
+            json!("failed"),
+            "不可访问的持久化目录必须拒绝恢复：{terminal}"
+        );
+        assert_eq!(
+            terminal["body"]["terminal"]["error"]["code"],
+            json!("nodelink.internal.unavailable"),
+            "服务端不可用类：{terminal}"
+        );
+        assert_eq!(
+            owner.resume_probe.calls(),
+            calls_before,
+            "不可访问时不得启动/派发任何后端"
+        );
+        let after = owner
+            .sessions
+            .load_recovery(&session_key)
+            .await
+            .expect("读回")
+            .expect("恢复数据仍在");
+        assert_same_recovery(&created, &after, "权限丢失被拒之后");
+
+        drop(restore);
+        let _ = std::fs::remove_dir_all(&base);
+        owner.stop().await;
+    });
+}
+
+/// `Drop` 时把目录模式位恢复成 `0700`（`#[cfg(unix)]` 用例用；权限丢失用例在 panic 时也靠它收尾）。
+#[cfg(unix)]
+struct ModeRestore {
+    path: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl ModeRestore {
+    fn new(path: &std::path::Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ModeRestore {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o700));
+    }
 }
