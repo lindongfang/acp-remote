@@ -63,17 +63,20 @@
       - 完成：premerge 门禁 PASS 后由 merger-A5 合入本地 `refs/heads/main`（合并提交 `0d2be6d`）；**规划与证据资产随本次合入一起入库**（用户 2026-10-01 决定），`.log` 按 `.gitignore` 双重排除、暂存数 0；未 push、未开 PR。receipt：`reports/premerge-receipt-u1.md`（`## Premerge History` 的 M1 行）
 - [x] 6.7 U1 检查执行者核对实际主分支结果与候选一致性，完成计划内 PV1/PV2 回归；有效复用逐项记录原证据及适用性
       - **2026-10-01 闭环（merger-A7，CR-PM-F1/F2 结案）**：工作区修正已作为两次追加提交进入 `refs/heads/main`——`20c1623ba3cf8ce751082b2699ef66b76f76f3cf`（父 `69f1ac1bc6af81461d199257f512965f646ec55c`，含引用归属修正与三份新报告入库）与 `3458542b9edf0f4374e257ca84255299bf2ed28f`（回填 `## Merge History` 的 M1-后续 行）。在**该新 HEAD** 上亲跑 PV1/PV2：`npm run check` **exit 0**，日志 `reports/merge-u1-main-closure-npm-check.log`（含 `# revision` / `# command` / `# exit` 三行头）；十道门禁另逐道单独执行，**每一道 exit 0**，日志 `reports/merge-u1-main-closure-check-gates.log`。PV1 三条：`cargo fmt --all -- --check` exit 0、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` exit 0（0 诊断）、`cargo test --locked --workspace --all-features` exit 0（**1074 passed / 0 failed / 2 ignored**，91 个 test target 全 ok）。**一致性核对**：这两次提交只动 `openspec/changes/session-resume/**` 下的规划与证据资产，`crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**` 零差异，故实际主分支的代码面与候选 `2ed142d` 一致。逐道结论与日志清单见 `reports/merge-u1-main.md` 第 3 轮。
-      - **2026-10-01 撤回结案（CR-PM-F1/F2）**：本行原写「PV2 `npm run check` exit 0，十道门禁全绿（`Totals: 20 passed, 0 failed`）」，经独立检视判为**不实记录**并已撤回勾选，理由有三：①所引证据 `reports/merge-u1-main-final-check.log` 的实际内容是 `CHECK_EXIT=1`（止于第 7 道 check:docs），与结论直接矛盾；②主 Agent 事后自行跑通的那次 `npm run check` **未落盘为日志文件**，无可核对证据；③`Totals: 20 passed, 0 failed` 是 `check:agentic` 内部 `openspec validate` 的汇总，**不能**用作「十道门禁全绿」的依据。**现状**：工作区的 `plan.md` 引用修正与三份新报告**尚未提交**，故 HEAD `69f1ac1` 上的合同门禁仍为红。**结案条件**：把工作区修正提交进 `refs/heads/main` 后，在**新 HEAD 上**重跑 `npm run check`、把完整输出落盘为日志，再据此勾选。
+      - **2026-10-01 撤回结案（CR-PM-F1/F2）**：本行原写「PV2 `npm run check` exit 0，十道门禁全绿（`Totals: 20 passed, 0 failed`）」，经独立检视判为**不实记录**并已撤回勾选，理由有三：①所引证据 `reports/merge-u1-main-final-check.log` 的实际内容是 `CHECK_EXIT=1`（止于第 7 道 check:docs），与结论直接矛盾；②主 Agent 事后自行跑通的那次 `npm run check` **未落盘为日志文件**，无可核对证据；③`Totals: 20 passed, 0 failed` 是 `check:agentic` 内部 `openspec validate` 的汇总，**不能**用作「十道门禁全绿」的依据。**撤回当时的现状**（保留为历史，不代表当前状态）：当时工作区的 `plan.md` 引用修正与三份新报告尚未提交，故 HEAD `69f1ac1` 上的合同门禁为红。**该结案条件已于同日满足**——修正随 `20c1623`/`3458542` 入库，新 HEAD 上门禁 exit 0，见上一行的闭环记录。**结案条件**：把工作区修正提交进 `refs/heads/main` 后，在**新 HEAD 上**重跑 `npm run check`、把完整输出落盘为日志，再据此勾选。
 - [ ] 6.8 U1 独立 reviewer 检视合并新增差异；无新增差异由主 Agent 记录依据及原 review ID，可与 6.7 并行
 
 ## 7. Independent Validation
 
-- [ ] 7.1 [validation] 全变更、validator；依赖最后一个 Merge Unit 组；按 plan.md 的 `## Independent Validation` 表在最终主分支固定版本执行验证，返回覆盖充分性结论、待验证假设判定（含目标 Agent 的能力宣告侦察）、隔离方式与独立报告路径
+- [x] 7.1 [validation] 全变更、validator；依赖最后一个 Merge Unit 组；按 plan.md 的 `## Independent Validation` 表在最终主分支固定版本执行验证，返回覆盖充分性结论、待验证假设判定（含目标 Agent 的能力宣告侦察）、隔离方式与独立报告路径
+      - 完成：独立验证 **PASS**（validator-A，run ecea488d-5b29-4fc0-bfe5-73e03b3a841a；target `69f1ac1…`）。覆盖充分性：Coverage Index **37/37** 行的 `source.heading` 逐字实存，抽查 **18 行**（超要求 12）在 `crates/**` grep 命中真实函数定义，用例名层面 0 处对不上。待验证假设以**只读侦察**判 PASS（本机存在真实 ACP Agent `omp.exe`，静态取证其内嵌源码含 `sessionCapabilities.resume` 宣告与 `resumeSession` 实质实现，入参与本仓 `SessionResumeRequest` 逐字段兼容；**非 fake Agent 自证**）。风险盲区与未闭合项如实登记。报告 `reports/validation-session-resume.md`，结论已登记入 verification.md 的 `## Independent Validation`
 
 ## 8. Final E2E
 
-- [ ] 8.1 [C1] 全变更、main；依赖主分支检查；运行 `cargo test --locked --workspace --all-features`，覆盖改动 crate 的单元与集成用例（含 fake ACP Agent 驱动的恢复路径），记录版本、命令、退出码与结果到 verification 的 `## Checks`
-- [ ] 8.2 [C2] 全变更、main；依赖主分支检查；运行 `npm run check`，覆盖合同漂移、依赖方向、封闭词表与 ACP 固定向量，记录版本、命令、退出码与结果到 verification 的 `## Checks`
+- [x] 8.1 [C1] 全变更、main；依赖主分支检查；运行 `cargo test --locked --workspace --all-features`，覆盖改动 crate 的单元与集成用例（含 fake ACP Agent 驱动的恢复路径），记录版本、命令、退出码与结果到 verification 的 `## Checks`
+      - 完成（证据绑定**最终 HEAD** `0cc795fcd5656ab4b250ada2394694d0b890eb24`）：`cargo test --locked --workspace --all-features` = **exit 0**，**1074 passed / 0 failed / 2 ignored**（91 个 test target 全 ok）。日志 `reports/commitlint-scope-fix-finalhead2-cargo-test.log`（含 `# revision:` / `# command:` / `# exit:` 头）。同组另两条：`…-finalhead2-cargo-fmt.log` exit 0、`…-finalhead2-cargo-clippy.log` exit 0（0 诊断）
+- [x] 8.2 [C2] 全变更、main；依赖主分支检查；运行 `npm run check`，覆盖合同漂移、依赖方向、封闭词表与 ACP 固定向量，记录版本、命令、退出码与结果到 verification 的 `## Checks`
+      - 完成（证据绑定**最终 HEAD** `0cc795fcd5656ab4b250ada2394694d0b890eb24`）：`npm run check` = **exit 0**，**十道门禁逐道单独执行**全部 exit 0（schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic）。日志 `reports/commitlint-scope-fix-finalhead2-npm-check.log` 与 `…-finalhead2-commitlint.log`（后者为提交信息合规：`81e350f^..0cc795f` 共 36 提交，**exit 0 / 0 problems**，此前为 exit 1 / 10 problems）
 - [ ] 8.3 [e2e-owned] 全变更、扩展；依赖 8.1、8.2；运行 `openspec-agentic e2e check --change session-resume`，仅 PASS 自动勾选；此行只检查门禁（mode 与降级批准），不执行测试或汇总
 
 ## 9. Final Verification
