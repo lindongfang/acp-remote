@@ -143,6 +143,16 @@
         "sessionMeta": { "$ref": "#/$defs/sessionMeta" }
       }
     },
+    "sessionResumeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remoteSessionRef", "sessionMeta"],
+      "description": "session.resume 的成功终态结果，字段形状与 sessionCreateResult 一致，见 docs/NODE_LINK_PROTOCOL.md §12.7；恢复完成后由 command.terminal 携带本形状。",
+      "properties": {
+        "remoteSessionRef": { "$ref": "#/$defs/remoteSessionRef" },
+        "sessionMeta": { "$ref": "#/$defs/sessionMeta" }
+      }
+    },
     "pendingInteraction": {
       "type": "object",
       "additionalProperties": false,

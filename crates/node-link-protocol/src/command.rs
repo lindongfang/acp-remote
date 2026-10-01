@@ -5,8 +5,8 @@
 //! 承载；本模块只承载 body，与 handshake/catalog/resource/error 四个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它 `transport`
-//! 含 `node_link` 的 12 条命令的镜像（顺序与该 registry 一致，即 Sync 的 11 条之后多出只经 Node Link
-//! 接受的 `session.create`）。
+//! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即 Sync 的 11 条之后多出只经 Node Link
+//! 接受的 `session.create` 与 `session.resume`）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
 //!
@@ -17,12 +17,13 @@
 //!   判别式不符一律报 [`ValueError::Shape`]，不退回开放对象、不按其中一个解释；
 //! - `command.accepted`/`command.terminal` 的 `allOf/if-then`：`session.create` 的 accepted 不携带结果
 //!   （`result` 必须是 `null`），`completed` 终态必须携带结果，`session.create` 的 `completed` 结果必须是
-//!   [`SessionCreateResult`]；`status` 不是 `completed` 时必须给出非 `null` 的 [`PublicError`]。
+//!   [`SessionCreateResult`]、`session.resume` 的必须是 [`SessionResumeResult`]；`status` 不是
+//!   `completed` 时必须给出非 `null` 的 [`PublicError`]。
 //!
 //! `Deserialize` 返回 `Ok` 即表示该 body 满足 schema。本层**不**校验 schema 也不表达的东西：
 //!
-//! - `session.create` 的 `cwd`/`mcpServers`/绝对路径/凭据字段由 `additionalProperties: false` 拒绝
-//!   （未知键是形状错误），因此不需要白名单；
+//! - `session.create` 的 `cwd`/`mcpServers`/绝对路径/凭据字段、以及 `session.resume` 的**任何**键都由
+//!   `additionalProperties: false` 拒绝（未知键是形状错误），因此不需要白名单；
 //! - `templateParams` 的键是否属于该 Export 声明的 template 由 Owner 在应用前校验（§12.7），本层只校验
 //!   它是 object 且顶层键数 ≤ 32；
 //! - `attachmentGeneration` 是否过期、重复提交的幂等性、`expectedVersion` 冲突判定都是会话状态机。
@@ -37,8 +38,8 @@ use serde_json::value::RawValue;
 
 use crate::common::{
     AgentId, DecimalString, ExportId, NonEmptyText, Nullable, PublicError, RawObject,
-    RemoteSessionRef, SessionCreateResult, Timestamp, Uuid, ValueError, WorkspaceAlias,
-    deserialize_optional_non_null,
+    RemoteSessionRef, SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError,
+    WorkspaceAlias, deserialize_optional_non_null,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`
@@ -51,8 +52,8 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `node_link` 的 12 条命令，顺序
-/// 与该 registry 一致（也是 `docs/NODE_LINK_PROTOCOL.md` §12.5 引用的那 12 个命令名）。
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `node_link` 的 13 条命令，顺序
+/// 与该 registry 一致（也是 `docs/NODE_LINK_PROTOCOL.md` §12.5 引用的那 13 个命令名）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandName {
     /// `session.list`
@@ -79,11 +80,13 @@ pub enum CommandName {
     PermissionResolve,
     /// `session.create`
     SessionCreate,
+    /// `session.resume`
+    SessionResume,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 node_link 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 12] = [
+    pub const ALL: [CommandName; 13] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -96,11 +99,12 @@ impl CommandName {
         CommandName::SessionConfigSet,
         CommandName::PermissionResolve,
         CommandName::SessionCreate,
+        CommandName::SessionResume,
     ];
 
     /// body 顶层是否**必须**携带 `sessionRef`/`attachmentId`/`attachmentGeneration`。
     ///
-    /// 十二个 `submit*` def 把这三个字段绑成一组：会话范围命令三者都必须是 `$ref` 指向的非 `null` 值，
+    /// 十三个 `submit*` def 把这三个字段绑成一组：会话范围命令三者都必须是 `$ref` 指向的非 `null` 值，
     /// 其余命令（`session.list`、`command.status`、`session.create`）三者都必须显式为 `null`
     /// （§12.5："在不适用时显式写 `null`，不用省略代替"）。
     pub fn requires_session_attachment(self) -> bool {
@@ -133,6 +137,7 @@ impl CommandName {
             CommandName::SessionConfigSet => "session.config.set",
             CommandName::PermissionResolve => "permission.resolve",
             CommandName::SessionCreate => "session.create",
+            CommandName::SessionResume => "session.resume",
         }
     }
 }
@@ -686,7 +691,17 @@ pub struct SessionCreate {
     pub template_params: Option<TemplateParams>,
 }
 
-/// `commandSubmit.body.payload`（`command.schema.json#/$defs/commandSubmit` 的 `body.oneOf` 12 个分支）。
+/// `session.resume` 的 `payload`（`command.schema.json#/$defs/submitSessionResume`）：只允许空 object。
+///
+/// 恢复所需的 Agent、ACP 会话标识与创建时目录一律取自 Owner 自身的持久化记录，因此 payload 不接受任何
+/// 键：出现任意键（例如 `cwd`、`agentId`）时由 `additionalProperties: false` 在这里就被拒（未知键是形状
+/// 错误），Owner 侧再以 `nodelink.command.unsupported_field` 回复 `command.rejected` 并保证不启动 Agent
+/// 进程、不部分应用参数（§12.7）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionResume {}
+
+/// `commandSubmit.body.payload`（`command.schema.json#/$defs/commandSubmit` 的 `body.oneOf` 13 个分支）。
 ///
 /// 变体顺序与 schema 的 `oneOf` 顺序一致（也就是 [`CommandName::ALL`] 的顺序）。payload 里没有自己的
 /// 判别字段，所以本枚举**没有** `Deserialize`：判别只能由 [`CommandSubmit::command`] 给出，见
@@ -721,6 +736,8 @@ pub enum CommandPayload {
     PermissionResolve(PermissionResolve),
     /// `session.create` 的 payload。
     SessionCreate(SessionCreate),
+    /// `session.resume` 的 payload。
+    SessionResume(SessionResume),
 }
 
 impl CommandPayload {
@@ -739,6 +756,7 @@ impl CommandPayload {
             CommandPayload::SessionConfigSet(_) => CommandName::SessionConfigSet,
             CommandPayload::PermissionResolve(_) => CommandName::PermissionResolve,
             CommandPayload::SessionCreate(_) => CommandName::SessionCreate,
+            CommandPayload::SessionResume(_) => CommandName::SessionResume,
         }
     }
 
@@ -803,6 +821,10 @@ impl CommandPayload {
                 "{ agentId, exportId, workspaceAlias, templateParams? }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
+            CommandName::SessionResume => {
+                parse_payload(payload, "空 object（sessionResume 的 payload）")
+                    .map(CommandPayload::SessionResume)
+            }
         }
     }
 }
@@ -1003,14 +1025,17 @@ impl<'de> Deserialize<'de> for TerminalStatus {
 /// （默认的 externally tagged 编码会写成 `{"SessionCreate": …}`，与 schema 不符）；判别由命令名与终态
 /// 给出，见 [`CommandResultPayload::from_accepted`] / [`CommandResultPayload::from_terminal`]。
 ///
-/// Node Link v1 只给 `session.create` 的成功终态取了名字（`sessionCreateResult`）：其余命令的结果形状
-/// 与 Sync 的同名命令相同但引用不到本 schema（`command.schema.json` 的 `result` 只有基类型
-/// `object | null`），因此按 [`RawObject`] 字节保真承载，本层不做类型化解释。
+/// Node Link v1 只给 `session.create` 与 `session.resume` 的成功终态取了名字（`sessionCreateResult`、
+/// `sessionResumeResult`）：其余命令的结果形状与 Sync 的同名命令相同但引用不到本 schema
+/// （`command.schema.json` 的 `result` 只有基类型 `object | null`），因此按 [`RawObject`] 字节保真承载，
+/// 本层不做类型化解释。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum CommandResultPayload {
     /// `session.create` 的 `completed` 结果（§12.7 的结果契约）。
     SessionCreate(SessionCreateResult),
+    /// `session.resume` 的 `completed` 结果（§12.7 的结果契约）。
+    SessionResume(SessionResumeResult),
     /// 其余情况的开放结果对象。
     Object(RawObject),
 }
@@ -1034,8 +1059,8 @@ impl CommandResultPayload {
         open_result_object(result)
     }
 
-    /// `command.terminal.terminal.result`：`session.create` 的 `completed` 必须是
-    /// [`SessionCreateResult`]；其余情况是 `object | null`。
+    /// `command.terminal.terminal.result`：`session.create` 与 `session.resume` 的 `completed` 必须是各自的
+    /// 结果类型；其余情况是 `object | null`。
     ///
     /// `completed` 必须有结果、其余 status 的 `error` 规则在 [`Terminal::validate`] 里执行。
     fn from_terminal(
@@ -1049,6 +1074,13 @@ impl CommandResultPayload {
                 "sessionCreateResult（session.create 的 completed）",
             )
             .map(|value| Nullable::value(CommandResultPayload::SessionCreate(value)));
+        }
+        if status == TerminalStatus::Completed && command == CommandName::SessionResume {
+            return parse_result::<SessionResumeResult>(
+                result,
+                "sessionResumeResult（session.resume 的 completed）",
+            )
+            .map(|value| Nullable::value(CommandResultPayload::SessionResume(value)));
         }
         open_result_object(result)
     }
@@ -1146,8 +1178,8 @@ impl Terminal {
 /// `command.terminal` 消息的 body（`command.schema.json#/$defs/commandTerminal` 的 `body`）。
 ///
 /// `command` 决定 `terminal.result` 的形状（`session.create` 的 `completed` 必须是
-/// [`SessionCreateResult`]），因此反序列化必须把两者一起看，不能用「先解 command 再解 terminal」的
-/// 两段式。
+/// [`SessionCreateResult`]、`session.resume` 的必须是 [`SessionResumeResult`]），因此反序列化必须把两者
+/// 一起看，不能用「先解 command 再解 terminal」的两段式。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandTerminal {
     #[serde(rename = "requestId")]
@@ -1284,4 +1316,135 @@ fn require_null<T>(
 /// `RawValue` 的字面量是否为 JSON `null`。
 fn is_json_null(raw: &RawValue) -> bool {
     raw.get().trim() == "null"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一个合法的 `session.resume` `command.submit` body：会话范围三字段非 `null`、`expectedVersion`
+    /// 为 `null`、`payload` 是空对象（§12.5/§12.7）。
+    const SUBMIT: &str = r#"{
+        "requestId": "5d5ebeeb-eea9-453f-9e66-363c86cbd83e",
+        "command": "session.resume",
+        "sessionRef": {
+            "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+            "exportId": "export-main",
+            "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+        },
+        "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",
+        "attachmentGeneration": "1",
+        "expectedVersion": null,
+        "payload": {}
+    }"#;
+
+    /// 一个合法的 `session.resume` `command.terminal` body：`completed` 携带 `SessionResumeResult`。
+    const TERMINAL: &str = r#"{
+        "requestId": "5d5ebeeb-eea9-453f-9e66-363c86cbd83e",
+        "command": "session.resume",
+        "terminal": {
+            "status": "completed",
+            "terminalAt": "2026-09-18T09:12:31.400Z",
+            "terminalEventId": "e3f4a506-1728-4a3b-dbec-fda0b1c2d3e4",
+            "result": {
+                "remoteSessionRef": {
+                    "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
+                    "exportId": "export-main",
+                    "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
+                },
+                "sessionMeta": { "state": "idle", "version": "4" }
+            },
+            "error": null
+        }
+    }"#;
+
+    /// 把 [`SUBMIT`] 解析成 JSON 对象后按闭包改写，再交回解码入口（构造负例时只改一处）。
+    fn submit_with(edit: impl FnOnce(&mut serde_json::Value)) -> Result<CommandSubmit, String> {
+        let mut value: serde_json::Value = serde_json::from_str(SUBMIT).expect("测试样例是 JSON");
+        edit(&mut value);
+        let text = serde_json::to_string(&value).expect("可序列化");
+        serde_json::from_str::<CommandSubmit>(&text).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn session_resume_is_the_thirteenth_command_and_round_trips() {
+        assert_eq!(CommandName::ALL.len(), 13);
+        assert_eq!(CommandName::ALL[12], CommandName::SessionResume);
+        assert_eq!(CommandName::SessionResume.as_str(), "session.resume");
+        assert_eq!(
+            "session.resume".parse::<CommandName>().expect("可解析"),
+            CommandName::SessionResume
+        );
+        // 会话范围命令：三个 attachment 字段必须非 `null`，`expectedVersion` 必须为 `null`。
+        assert!(CommandName::SessionResume.requires_session_attachment());
+        assert!(!CommandName::SessionResume.requires_expected_version());
+    }
+
+    #[test]
+    fn session_resume_only_accepts_an_empty_payload() {
+        let submit =
+            serde_json::from_str::<CommandSubmit>(SUBMIT).expect("空对象 payload 必须被接受");
+        assert_eq!(submit.command, CommandName::SessionResume);
+        assert!(matches!(submit.payload, CommandPayload::SessionResume(_)));
+
+        let encoded = serde_json::to_string(&submit).expect("可序列化");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&encoded).expect("JSON"),
+            serde_json::from_str::<serde_json::Value>(SUBMIT).expect("JSON"),
+            "往返不得改变字段"
+        );
+
+        // 恢复所需的输入全部来自 Owner 的持久化记录，因此 payload 的任何键都是形状错误。
+        for (label, edit) in [
+            (
+                "payload 出现任意键",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["payload"] = serde_json::json!({ "cwd": "/home/dev/company-agent" });
+                }) as Box<dyn FnOnce(&mut serde_json::Value)>,
+            ),
+            (
+                "expectedVersion 非 null",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["expectedVersion"] = serde_json::json!("1");
+                }),
+            ),
+            (
+                "sessionRef 为 null",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["sessionRef"] = serde_json::Value::Null;
+                }),
+            ),
+            (
+                "attachmentGeneration 为 null",
+                Box::new(|value: &mut serde_json::Value| {
+                    value["attachmentGeneration"] = serde_json::Value::Null;
+                }),
+            ),
+        ] {
+            assert!(
+                submit_with(edit).is_err(),
+                "{label}：必须被拒绝，不能退回开放对象"
+            );
+        }
+    }
+
+    #[test]
+    fn session_resume_completed_result_is_typed() {
+        let terminal = serde_json::from_str::<CommandTerminal>(TERMINAL)
+            .expect("completed 结果必须是 sessionResumeResult");
+        assert_eq!(terminal.command, CommandName::SessionResume);
+        assert!(matches!(
+            terminal.terminal.result.as_ref(),
+            Some(CommandResultPayload::SessionResume(_))
+        ));
+
+        // 形状不符（缺 `remoteSessionRef`/`sessionMeta`）的结果不得被当成开放对象放行。
+        let mut value: serde_json::Value = serde_json::from_str(TERMINAL).expect("测试样例是 JSON");
+        value["terminal"]["result"] = serde_json::json!({});
+        assert!(
+            serde_json::from_str::<CommandTerminal>(&serde_json::to_string(&value).expect("JSON"))
+                .is_err(),
+            "session.resume 的 completed 结果必须是 sessionResumeResult"
+        );
+    }
 }

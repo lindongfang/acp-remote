@@ -282,6 +282,13 @@ impl SessionStore for SliceStore {
         unreachable!("WP5 路由用例不列举会话")
     }
 
+    async fn load_recovery(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<acp_core::model::SessionRecoveryRecord>, PortError> {
+        unreachable!("WP5 路由用例不读恢复数据")
+    }
+
     async fn head(&self) -> Result<GlobalCursor, PortError> {
         Ok(self.head.clone())
     }

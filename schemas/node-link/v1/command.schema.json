@@ -58,7 +58,8 @@
         "session.mode.set",
         "session.config.set",
         "permission.resolve",
-        "session.create"
+        "session.create",
+        "session.resume"
       ],
       "description": "唯一来源是 compatibility/commands/v1/commands.json；顺序与 transport 含 node_link 的命令集合一致。"
     },
@@ -230,6 +231,9 @@
                 },
                 {
                   "$ref": "#/$defs/submitSessionCreate"
+                },
+                {
+                  "$ref": "#/$defs/submitSessionResume"
                 }
               ]
             }
@@ -769,6 +773,40 @@
       ],
       "unevaluatedProperties": false
     },
+    "submitSessionResume": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/submitBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "const": "session.resume"
+            },
+            "sessionRef": {
+              "$ref": "common.schema.json#/$defs/remoteSessionRef"
+            },
+            "attachmentId": {
+              "$ref": "common.schema.json#/$defs/uuid"
+            },
+            "attachmentGeneration": {
+              "$ref": "common.schema.json#/$defs/decimalString"
+            },
+            "expectedVersion": {
+              "type": "null"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "maxProperties": 0,
+              "description": "session.resume 的 payload 必须是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录取自 Owner 自身的持久化记录。出现任何键时返回 command.rejected + nodelink.command.unsupported_field，且不得启动 Agent 进程或部分应用参数。"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
     "commandAccepted": {
       "allOf": [
         {
@@ -1032,6 +1070,41 @@
                         "properties": {
                           "result": {
                             "$ref": "common.schema.json#/$defs/sessionCreateResult"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "required": [
+                      "command",
+                      "terminal"
+                    ],
+                    "properties": {
+                      "command": {
+                        "const": "session.resume"
+                      },
+                      "terminal": {
+                        "required": [
+                          "status"
+                        ],
+                        "properties": {
+                          "status": {
+                            "const": "completed"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "then": {
+                    "description": "session.resume 成功时 terminal.result 必须是 sessionResumeResult。",
+                    "properties": {
+                      "terminal": {
+                        "properties": {
+                          "result": {
+                            "$ref": "common.schema.json#/$defs/sessionResumeResult"
                           }
                         }
                       }

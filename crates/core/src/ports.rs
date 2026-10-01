@@ -19,18 +19,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::model::{
-    Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
-    AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind, CommandRecord,
-    CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOption,
-    ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord, Digest,
-    EndpointEvent, EntityRef, EventId, EventPayload, EventType, ExportId, ExportRecord,
+    Actor, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
+    AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
+    CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
+    ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord,
+    Digest, EndpointEvent, EntityRef, EventId, EventPayload, EventType, ExportId, ExportRecord,
     GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution, LocalCursor,
     MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
     OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
     PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    ProviderRef, PublicError, RemoteSessionRef, RequestId, SecretValue, SeedState, Sequence,
-    ServerEpoch, SessionId, SessionReference, SessionSnapshot, SessionState, SessionSummary,
-    Timestamp, Turn, TurnId, TurnState, Version, WorkspaceAlias, WorkspaceRecord,
+    ProviderRef, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, SecretValue,
+    SeedState, Sequence, ServerEpoch, SessionId, SessionRecoveryRecord, SessionReference,
+    SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
+    WorkspaceAlias, WorkspaceRecord,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -92,11 +93,30 @@ pub trait SessionBackendFactory: Send + Sync {
         reference: SessionReference,
         sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError>;
+
+    /// 进程不在的会话恢复（`session.resume`）：按 [`ResumeSessionRequest::agent`] 重新拉起 Agent 子
+    /// 进程并发送 `session/resume { sessionId, cwd }`，成功后返回可接受 turn 的端点。
+    ///
+    /// 与 `open` 的分工：`open` 只重新绑定**还活着**的进程内会话，本方法是唯一会为恢复而 spawn
+    /// 的入口。能力门控（目标 Agent 未宣告时**不得发送** `session/resume`、并在返回前回收本次拉起
+    /// 的子进程）与「同一会话只有一条活跃绑定」都由实现负责；能力不支持与「后端不支持该操作」
+    /// 一律返回 [`PortError::Unavailable`] 的 `BackendUnsupported`。
+    async fn resume(
+        &self,
+        session: &SessionId,
+        request: ResumeSessionRequest,
+        sink: EventSink,
+    ) -> Result<Box<dyn SessionEndpoint>, PortError>;
 }
 
 #[async_trait]
 pub trait SessionEndpoint: Send + Sync {
     fn reference(&self) -> SessionReference;
+
+    /// 本次绑定对应的 Agent 侧会话标识（ACP 会话标识）：创建成功后由 core 落盘，恢复得到的端点同样
+    /// 可读（§3.6）。未取得标识（启动失败、超时、Agent 返回错误）时返回 `None`——实现**不得**编造
+    /// 占位值，返回的取值必须来自 Agent 的实际响应。
+    fn agent_session_id(&self) -> Option<&AgentSessionId>;
 
     async fn prompt(
         &self,
@@ -160,6 +180,12 @@ pub struct SessionUpdate {
     /// 受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` →
     /// `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
     pub interaction: Option<InteractionResolved>,
+    /// `owned_session.agent_session_id`：`None` = 不改该列。只在 `session.create` 里由 core 用
+    /// `SessionEndpoint::agent_session_id()` 的返回值写入一次，此后只读（恢复流程只读这两列）。
+    pub agent_session_id: Option<AgentSessionId>,
+    /// `owned_session.workspace_cwd`：`None` = 不改该列。只在 `session.create` 里由 core 用自己已
+    /// 解析的 `ResolvedWorkspace::canonical_path()` 写入一次（**不依赖后端回报**），此后只读。
+    pub workspace_cwd: Option<String>,
 }
 
 /// 交互的一次解析（`InteractionResolution` + 解析者，供 `owned_interaction` 的
@@ -373,6 +399,17 @@ pub trait SessionStore: Send + Sync {
         request: &RequestId,
         actor: &Actor,
     ) -> Result<Option<CommandRecord>, PortError>;
+
+    /// 该会话的恢复数据（§3.6）：`agent` 取自会话行，两个 `Option` 直接对应 `owned_session` 的
+    /// `agent_session_id`/`workspace_cwd`。
+    ///
+    /// **窄读取**：这两列不进 `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，不得进入
+    /// 可投影形状，§3.6）。会话行不存在，或任一列为 `NULL`（该会话没有可用于恢复的数据）时返回
+    /// `Ok(None)`——`NULL` 不是错误，也不得被推导或补齐。
+    async fn load_recovery(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError>;
 
     /// 启动恢复用（§6 第 16 条）：仍为 `accepted` 且没有终态事件的 mutation 命令，最多 `limit` 条。
     async fn unsettled_commands(&self, limit: ReplayLimit)

@@ -517,6 +517,105 @@ pub struct SessionMode {
     pub meta: Option<Value>,
 }
 
+/// `session/resume` 请求参数。
+///
+/// 两个字段都是上游固定快照的 **required** 字段（`schemas/acp/v1/upstream/schema.json` 的
+/// `ResumeSessionRequest`）：[`SessionResumeRequest::from_params`] 缺一即显式失败，**不用默认值补齐**。
+/// 发送时机由能力协商决定——只有 Agent 宣告 `agentCapabilities.sessionCapabilities.resume` 后才允许
+/// 发出（矩阵 `method.session_resume` 的 `capability`）；门控在 `agent-host`，本 crate 只做类型化编解码。
+/// 未知字段与 `_meta` 的保真不依赖本结构：保真路径是 [`Envelope`] 承载的原文。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionResumeRequest {
+    /// Agent 侧会话标识（恢复目标）。
+    #[serde(rename = "sessionId")]
+    pub session_id: String,
+    /// 工作目录（绝对路径；由调用方给出，本 crate 不解析、不拼路径）。
+    pub cwd: String,
+    /// `_meta`。
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+impl SessionResumeRequest {
+    /// 以 Agent 侧会话标识与工作目录构造（`_meta` 由调用方按需设置）。
+    #[must_use]
+    pub fn new(session_id: impl Into<String>, cwd: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            cwd: cwd.into(),
+            meta: None,
+        }
+    }
+
+    /// 从 `session/resume` 的 `params` 解码。
+    ///
+    /// 失败分类刻意可区分：缺字段是 [`AcpError::MissingField`]，存在但类型不符是
+    /// [`AcpError::InvalidField`]；两种都不构造 DTO，也不用默认值补齐。
+    pub fn from_params(params: &Value) -> Result<Self> {
+        Ok(Self {
+            session_id: required_string(params, "sessionId")?,
+            cwd: required_string(params, "cwd")?,
+            meta: params.get("_meta").cloned(),
+        })
+    }
+}
+
+/// `session/resume` 请求（含方法名与方向校验）。
+///
+/// 未实现的方法在这里得到 [`AcpError::Unsupported`]，方向不符得到 [`AcpError::WrongDirection`]
+/// （均由 [`client_params`] 按 [`crate::methods`] 的登记表判定）。
+pub fn session_resume_request(envelope: &Envelope) -> Result<SessionResumeRequest> {
+    SessionResumeRequest::from_params(&client_params(envelope, "session/resume")?)
+}
+
+/// `session/resume` 响应。
+///
+/// 与 `session/new` 不同，恢复的响应**不**返回会话标识（调用方本来就持有 `sessionId`），因此这里只有
+/// 可选的模式与配置选项；两者都缺失是合法响应。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionResumeResponse {
+    /// 模式状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<SessionModeState>,
+    /// 配置选项（结构较深，按原始对象保留）。
+    #[serde(
+        rename = "configOptions",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub config_options: Option<Vec<Value>>,
+    /// `_meta`。
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+/// required 字符串字段：缺失与类型不符是两种可区分的错误，且错误详情只带字段名与 JSON 值类型
+/// （不带字段取值，避免把消息正文带进日志）。
+fn required_string(params: &Value, field: &str) -> Result<String> {
+    match params.get(field) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(other) => Err(AcpError::InvalidField {
+            field: field.to_owned(),
+            detail: format!("必须是字符串，收到 {}", value_kind(other)),
+        }),
+        None => Err(AcpError::MissingField {
+            field: field.to_owned(),
+        }),
+    }
+}
+
+/// JSON 值的类型名（错误详情用，不含取值）。
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 /// `session/prompt` 请求参数。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptRequest {
@@ -604,4 +703,125 @@ pub fn config_value_boolean(value: bool) -> Value {
 #[must_use]
 pub fn config_value_id(value_id: &str) -> Value {
     json!({ "value": value_id })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::methods::MethodStatus;
+
+    /// 带 id、未知字段与 `_meta` 的 `session/resume` 请求（原始字节固定，便于比对保真）。
+    const RESUME_REQUEST: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"session/resume","params":{"sessionId":"acp-1","cwd":"C:\\work\\demo","futureFieldFromNewerAcp":{"nested":[1,2]},"_meta":{"example.dev/note":"resume"}}}"#;
+
+    fn envelope_of(bytes: &[u8]) -> Envelope {
+        Envelope::classify(RawDocument::parse_bytes(bytes).expect("合法消息")).expect("分类")
+    }
+
+    #[test]
+    fn resume_request_decodes_typed_fields_and_re_encodes_byte_exact() {
+        let envelope = envelope_of(RESUME_REQUEST);
+        let request = session_resume_request(&envelope).expect("session/resume 请求可解码");
+        assert_eq!(request.session_id, "acp-1");
+        assert_eq!(request.cwd, r"C:\work\demo");
+        assert_eq!(request.meta, Some(json!({ "example.dev/note": "resume" })));
+
+        // 保真：再编码就是原文，未知字段与 `_meta` 仍在原文里（既没被丢弃，也没被改写）。
+        assert_eq!(envelope.document().encode().as_bytes(), RESUME_REQUEST);
+        let text = envelope.document().encode();
+        assert!(text.contains("futureFieldFromNewerAcp"), "未知字段被丢弃");
+        assert!(text.contains("example.dev/note"), "`_meta` 被丢弃");
+    }
+
+    #[test]
+    fn resume_request_encode_is_limited_to_the_pinned_fields() {
+        let request = SessionResumeRequest::new("acp-1", r"C:\work\demo");
+        let params = serde_json::to_value(&request).expect("可序列化");
+        assert_eq!(
+            params,
+            json!({ "sessionId": "acp-1", "cwd": "C:\\work\\demo" }),
+            "`_meta` 缺省时不得凭空出现"
+        );
+        let decoded = SessionResumeRequest::from_params(&params).expect("自己编码的请求必须可解码");
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn resume_request_rejects_missing_and_mistyped_required_fields() {
+        let cases = [
+            (json!({}), "sessionId"),
+            (json!({ "cwd": "/work" }), "sessionId"),
+            (json!({ "cwd": "/work", "sessionId": 3 }), "sessionId"),
+            (json!({ "sessionId": "acp-1" }), "cwd"),
+            (json!({ "sessionId": "acp-1", "cwd": null }), "cwd"),
+            (json!({ "sessionId": "acp-1", "cwd": ["/work"] }), "cwd"),
+        ];
+        for (params, field) in cases {
+            match SessionResumeRequest::from_params(&params) {
+                Err(AcpError::MissingField { field: actual }) if actual == field => {}
+                Err(AcpError::InvalidField { field: actual, .. }) if actual == field => {}
+                other => panic!(
+                    "{params}: 期望指向 {field} 的 MissingField/InvalidField，实际 {other:?}"
+                ),
+            }
+        }
+
+        // 两种分类必须可区分，不能合并成一个「不合法」。
+        assert_eq!(
+            SessionResumeRequest::from_params(&json!({ "sessionId": "acp-1" })).unwrap_err(),
+            AcpError::MissingField {
+                field: "cwd".to_owned()
+            }
+        );
+        assert_eq!(
+            SessionResumeRequest::from_params(&json!({ "sessionId": "acp-1", "cwd": 3 }))
+                .unwrap_err(),
+            AcpError::InvalidField {
+                field: "cwd".to_owned(),
+                detail: "必须是字符串，收到 number".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn resume_response_decodes_typed_view_and_re_encodes_byte_exact() {
+        let bytes = br#"{"jsonrpc":"2.0","id":7,"result":{"modes":{"currentModeId":"ask","availableModes":[]},"configOptions":[],"futureField":true,"_meta":{"example.dev/note":"resume"}}}"#;
+        let envelope = envelope_of(bytes);
+        let response: SessionResumeResponse =
+            decode_response(&envelope).expect("session/resume 响应可解码");
+        assert_eq!(
+            response
+                .modes
+                .as_ref()
+                .map(|modes| modes.current_mode_id.as_str()),
+            Some("ask")
+        );
+        assert_eq!(response.config_options, Some(Vec::new()));
+        assert_eq!(response.meta, Some(json!({ "example.dev/note": "resume" })));
+        assert_eq!(envelope.document().encode().as_bytes(), bytes);
+    }
+
+    #[test]
+    fn session_load_stays_explicitly_unsupported() {
+        // R4：新增 `session/resume` 不得动 `session/load` 的既有语义。
+        let envelope = envelope_of(
+            br#"{"jsonrpc":"2.0","id":8,"method":"session/load","params":{"sessionId":"acp-1","cwd":"/work","mcpServers":[]}}"#,
+        );
+        assert_eq!(envelope.status(), Some(MethodStatus::NotImplemented));
+        let error = envelope
+            .ensure_direction(MethodDirection::ClientToAgent)
+            .expect_err("session/load 仍必须显式不支持");
+        assert!(
+            matches!(
+                error,
+                AcpError::Unsupported { ref method, status: MethodStatus::NotImplemented }
+                    if method == "session/load"
+            ),
+            "期望 Unsupported(NotImplemented)，实际 {error}"
+        );
+        // 而 `session/resume` 是已实现的类型化方法，两者的登记状态不得互相漂移。
+        assert_eq!(
+            crate::methods::status_of("session/resume"),
+            MethodStatus::Implemented
+        );
+    }
 }

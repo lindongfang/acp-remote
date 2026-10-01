@@ -284,9 +284,11 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.config.set` | mutation | `session.config.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
 | `permission.resolve` | mutation | `permission.resolve` | `pack.approve` | `grant.approve` | mvp |
 | `session.create` | mutation | `session.create` | 无（仅 Node Link） | `grant.remote-work` | mvp（Node Link）/ Sync 首版不暴露 |
+| `session.resume` | mutation | `session.resume` | 无（仅 Node Link） | `grant.remote-work` | conditional_mvp（取决于目标 Agent 的 `sessionCapabilities.resume`） |
 
 - 查询类命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`）全部归 `pack.observe`，因此断线恢复所需的 `command.status` 不需要额外授权。
 - `session.create` 是设备/Access principal 的 scope，同时要求 Owner 侧 `grant.remote-work`；请求只能引用 Export 中发布的 Agent 与 workspace template，不能提交任意 Owner 路径或 Provider/MCP 凭据。Node Link 首个纵向切片必须实现它以支持 Zed `session/new`；Sync 首版不暴露该入口。
+- `session.resume` 同样只归 `grant.remote-work`（不新增授权维度），它的 payload 是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录一律取自 Owner 自身的持久化记录，不接受客户端提供。目标 Agent 未宣告 `sessionCapabilities.resume` 时显式失败，不降级为新建会话。
 - 配对预设：`preset.remote-control` = `pack.observe` + `pack.interact` + `pack.configure-session` + `pack.approve`；`preset.read-only` = `pack.observe`。配对确认页必须完整展示最终 scopes，不能用含糊的“完全访问”替代。
 - 设备记录与 wire 只保存独立 scopes，不保存 pack 或 preset 名称；`pack.*`、`preset.*`、`grant.*` 都是授权管理的输入形式，落到 wire 前必须展开。
 - `pack.approve` 单独分组是为了让风险在配对和设备管理 UI 中清晰可见，不是为了削弱远程控制；跨节点的 `grant.interact` 不包含审批，审批必须显式授予 `grant.approve`。远程客户端可以选择 Agent 当前 permission request 明确提供、且 Owner 本地策略允许的任一 option；如果 Agent 明确说明某个 option 会形成持久授权，客户端必须展示该持续范围。客户端不能伪造新 option，也不能在请求之外修改 Owner 的全局沙箱或权限策略。

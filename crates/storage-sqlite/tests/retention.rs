@@ -601,6 +601,8 @@ async fn prune_clears_expired_events_referenced_by_terminal_interactions() {
                 state: None,
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: Some(InteractionResolved {
                     interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                     resolution: InteractionResolution::Permission(
@@ -732,6 +734,8 @@ async fn capacity_reports_storage_full_not_backend_when_events_are_referenced() 
                 state: None,
                 mode: ModeChange::Unchanged,
                 closed_at: None,
+                agent_session_id: None,
+                workspace_cwd: None,
                 interaction: Some(InteractionResolved {
                     interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                     resolution: InteractionResolution::Permission(
