@@ -505,7 +505,7 @@ handoff_index:
 
 - **`target_revision`（本节所有检查的目标版本）= `3458542b9edf0f4374e257ca84255299bf2ed28f`**
 - 环境：`cwd=D:/Project/acp-remote`，分支 `main`，`CARGO_TARGET_DIR` 未设置（沿用仓库根默认 `target/`），Node v24.19.0 / npm 12.0.2
-- 每份日志首三行为 `# revision: <完整 sha>`、`# command: <完整命令>`、`# exit: <退出码>`，可与本节表格逐项对照
+- 每份日志都含三行可核对的标记：**开头**为 `# revision: <完整 sha>`、`# command: <完整命令>`、`# env: <环境>`，**末尾**为 `# exit: <真实退出码>`（退出码在命令跑完后追加，以免预先写入未发生的结论；逐道门禁日志另有每道一行的 `@@@ <gate> EXIT=<码>`）。可与本节表格逐项对照
 
 ### 17.1 PV2：`npm run check` —— **exit 0**
 
@@ -542,7 +542,7 @@ handoff_index:
 
 ### 17.5 结案提交之后的复核（最终 HEAD）
 
-6.7 的结案提交 `6af25498c26abd610aa107d99e73b2765ced3af7` 只含 `tasks.md` 的一处勾选与本报告的第 3 轮小节（纯 md）。为确认**入库后**的仓库状态仍为绿，在该提交上又跑了一次完整 `npm run check`：**exit 0**，十道门禁全部执行（日志 `reports/merge-u1-main-closure-postcommit-npm-check.log`，首三行为 revision/command/exit，末行 `# exit: 0`）。PV1 三条未重跑——`crates/**` 自 `0d2be6d` 起零差异，17.4 已给出该依据。本小节之后的提交仅为本段记录的落库，不含任何其它文件。
+6.7 的结案提交 `6af25498c26abd610aa107d99e73b2765ced3af7` 只含 `tasks.md` 的一处勾选与本报告的第 3 轮小节（纯 md）。为确认**入库后**的仓库状态仍为绿，在该提交上又跑了一次完整 `npm run check`：**exit 0**，十道门禁全部执行（日志 `reports/merge-u1-main-closure-postcommit-npm-check.log`，首三行为 revision/command/env，末行 `# exit: 0`）。PV1 三条未重跑——`crates/**` 自 `0d2be6d` 起零差异，17.4 已给出该依据。本小节之后的提交仅为本段记录的落库，不含任何其它文件。
 
 ## 18. 6.7 结案判定与依据
 
