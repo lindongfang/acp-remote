@@ -39,6 +39,11 @@ export const SCOPES = [
   "identity", // identity-auth、identity-keystore
   "server",
   "app", // daemon、CLI、组合根
+  // 会话恢复（session.resume）交付面：一个能力横跨 acp-protocol 的 `session/resume` DTO、
+  // node-link-protocol + server::node_link 的命令路由、core 的 `resume_session` 用例、
+  // storage-sqlite 的 v5 恢复列与 `load_recovery`、agent-host 的进程不在时恢复路径，
+  // 以及 app 的组合根接线。它不是 §3.1 里的某个 crate 或模块，因此单列一个跨层交付面 scope。
+  "session-resume",
   "frontend", // Web/PWA 与后续原生客户端
   "transcript", // acpr-transcript
   "wire", // acpr-wire
@@ -49,6 +54,13 @@ export const SCOPES = [
   "deps",
   "release", // npm 分发与发布
   "repo", // 仓库级配置（workspace、.gitignore、AGENTS.md 等）
+  // 历史兼容项，**不是**交付面边界：`test` 本是上面 `TYPES` 里的类型而非 scope，
+  // 历史提交 `3484541 docs(test): 订正 R25 覆盖分档与判别式注释` 把它误用成了 scope。
+  // 该提交已进入 `main` 且经评估不再改写（改写会连带改变其后 10 个后继提交的 SHA，
+  // 并使 openspec/changes/session-resume/ 下多份已入库报告的证据引用悬空），
+  // 因此在这里收录以让 CI `commits` job 能通过。**新增提交不要用它**：
+  // 只改测试请用 `test(<交付面>)`，例如 `test(core)`、`test(storage)`。
+  "test",
 ];
 
 export default {
