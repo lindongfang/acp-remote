@@ -356,6 +356,7 @@ alternative_checks:
 | --- | --- | --- | --- | --- | --- | --- |
 | M1 | U1 | refs/heads/main | merger-A5（合入）/ merger-A6（主分支回归）/ merger-A7（闭环修正） | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **0d2be6d**（`--no-ff`，父提交对 `81e350ff340014265eb7c9251237c799d4357fee` + 候选 `2ed142d…`，零冲突）+ 修正提交 `69f1ac1` | reports/merge-u1-main.md、reports/merge-u1-main-diff-materials.md、reports/premerge-receipt-u1.md |
 | M1-后续 | U1 | refs/heads/main | merger-A7 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **20c1623ba3cf8ce751082b2699ef66b76f76f3cf**（追加提交，父提交 `69f1ac1bc6af81461d199257f512965f646ec55c`；`plan.md` 引用归属修正 + 三份新报告入库 + `## Merge History` 回填；用于消除 CR-PM-F2「HEAD 门禁红」）。其后另有一次仅改 `tasks.md` 6.7 与本轮报告的闭环提交，sha 见 `reports/merge-u1-main.md` 第 3 轮 | reports/cr-pm-post-merge-review.md、reports/merge-u1-main.md |
+| M1-收尾 | U1 | refs/heads/main | merger-A8 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | `ac5de2a6bc91cb3320c3a9286a5169fb4183753a`（父提交 `976b34ccebbf755e61aa87eaeafac35e6f1f480e`；validator-A 独立验证结论入库：`## Independent Validation` 7.1 行回填 + `reports/validation-session-resume.md`）+ 本行 `## Merge History` 回填与用户裁定行（提交 sha 见 `reports/merge-u1-main.md` 第 4 轮）。两次提交均在**各自最终 HEAD** 上取得完整门禁 exit 0 | reports/validation-session-resume.md、reports/merge-u1-main.md、reports/final-main-gates-npm-check.log |
 
 ## Premerge History
 
@@ -375,6 +376,7 @@ alternative_checks:
 
 > **7.1 的待验证假设为何不是 BLOCKED（依据摘要）**：本机存在真实 ACP Agent `omp.exe`（Oh My Pi）；validator 对其二进制做**静态取证**，内嵌源码逐字含 `sessionCapabilities: { list: {}, fork: {}, resume: {}, close: {} }`（宣告成立）与 `async resumeSession(e)` 的实质实现（读取 sessionId / cwd / mcpServers，入参与本仓 `acp-protocol` 的 `SessionResumeRequest` 逐字段兼容）。对照之下 `codex.exe` 对 `sessionCapabilities` 命中为 0（不宣告该能力，走已被 R10/R37 覆盖的不支持路径）。**限制（随结论传递）**：**未启动 `omp`、未发起任何真实会话**，故为**静态证据**而非运行时握手观测；若要求运行时证据，本项应改判 PENDING，且需单独授权「启动真实 Agent 进程」（超出本次只读边界）。
 > **仍未闭合（不计入 PASS）**：① 2 条 `#[cfg(unix)]` 用例 **PENDING**（validator 独立复现交叉编译失败 `cargo check --target x86_64-unknown-linux-gnu` exit 101、缺 `x86_64-linux-gnu-gcc`，零编译零执行证据；证据链无一处写成已通过）；② `cargo-deny` / `gitleaks` 本机不可执行，只由 CI 判定。
+> **用户裁定（2026-10-01）：不做运行时验证。** validator 提出的「是否升级为运行时握手证据」选项（需授权在本机启动真实 Agent 进程 `omp.exe`）**由用户明确否决**。因此第（2）项**保持 PASS，依据为静态取证**（内嵌源码含能力宣告与 `resumeSession` 实质实现，入参与本仓 `SessionResumeRequest` 逐字段兼容），**不升级为运行时观测**。此裁定一并记录理由：本变更的风险点不在上游 Agent 的能力宣告上（那属于上游 Agent 自身行为），且不应为流程收尾引入对真实 Agent 进程的运行期依赖。
 
 ## Main E2E
 
