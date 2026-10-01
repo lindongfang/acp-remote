@@ -51,6 +51,8 @@ const OWNER_NODE: &str = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 const EXPORT: &str = "11111111-1111-4111-8111-111111111111";
 /// 已存在的会话。
 const SESSION: &str = "3ae1c07c-9242-46e9-a9d2-4ec58c130f4a";
+/// 第二个同样已授权、同样可恢复的会话（幂等冲突用例需要它）。
+const SESSION_2: &str = "3ae1c07c-9242-46e9-a9d2-4ec58c130f4b";
 /// 本次连接。
 const CONNECTION: &str = "5ae1c07c-9242-46e9-a9d2-4ec58c130f4c";
 /// 终态事件（`command.terminal.terminalEventId` 的来源）。
@@ -85,8 +87,13 @@ fn digest_of(text: &str) -> Digest {
 }
 
 fn session_summary() -> SessionSummary {
+    session_summary_of(SESSION)
+}
+
+/// 与 [`session_summary`] 同形、只是会话 id 不同的摘要。
+fn session_summary_of(session: &str) -> SessionSummary {
     SessionSummary::try_new(
-        session_id(),
+        SessionId::new(session).expect("session id"),
         Some("Session".to_owned()),
         agent_ref(),
         SessionState::Idle,
@@ -129,6 +136,9 @@ struct CommandStore {
     recoveries: Arc<Mutex<BTreeMap<String, SessionRecoveryRecord>>>,
     commits: Arc<Mutex<Vec<OwnedCommit>>>,
     commit_calls: Arc<AtomicUsize>,
+    /// `load_recovery` 的调用次数：用来区分「授权先于本机读取」与「授权先于副作用提交」——只数
+    /// `commit` 的话，两者在被拒路径上的表现一样（[R31] 用例需要这条独立证据）。
+    recovery_reads: Arc<AtomicUsize>,
 }
 
 impl CommandStore {
@@ -147,6 +157,10 @@ impl CommandStore {
 
     fn commit_calls(&self) -> usize {
         self.commit_calls.load(Ordering::SeqCst)
+    }
+
+    fn recovery_read_calls(&self) -> usize {
+        self.recovery_reads.load(Ordering::SeqCst)
     }
 }
 
@@ -344,6 +358,7 @@ impl SessionStore for CommandStore {
         &self,
         session: &SessionId,
     ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        self.recovery_reads.fetch_add(1, Ordering::SeqCst);
         let Some(record) = lock(&self.recoveries).get(session.as_str()).cloned() else {
             return Ok(None);
         };
@@ -850,13 +865,18 @@ impl Fixture {
 
     /// 走完 `resource.attach`，返回 `(attachmentId, attachmentGeneration)`。
     async fn attach(&mut self) -> (String, String) {
+        self.attach_session(SESSION).await
+    }
+
+    /// 同 [`Self::attach`]，但 attach 到另一个会话（幂等冲突用例需要第二个同样合法的 attachment）。
+    async fn attach_session(&mut self, session: &str) -> (String, String) {
         let envelope = self.envelope(
             MessageType::ResourceAttach,
             json!({
                 "remoteSessionRef": {
                     "ownerNodeId": OWNER_NODE,
                     "exportId": EXPORT,
-                    "sessionId": SESSION,
+                    "sessionId": session,
                 },
             }),
         );
@@ -2673,8 +2693,13 @@ fn canonical_workspace(label: &str) -> Workspace {
 
 /// 种下该会话的持久化恢复数据（`agent_session_id` + 创建时规范化目录）。
 fn seed_recoverable(store: &CommandStore, cwd: &std::path::Path) {
+    seed_recoverable_for(store, &session_id(), cwd);
+}
+
+/// 同 [`seed_recoverable`]，但目标是另一个会话。
+fn seed_recoverable_for(store: &CommandStore, session: &SessionId, cwd: &std::path::Path) {
     store.seed_recovery(
-        &session_id(),
+        session,
         SessionRecoveryRecord {
             agent: agent_ref(),
             agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
@@ -2740,6 +2765,73 @@ async fn session_resume_returns_accepted_then_the_composite_result() {
     assert!(body["terminal"]["error"].is_null());
 }
 
+/// [CR6-F1]/§12.5：`session.resume` 的 `payload` 恒为 `{}`，语义全部落在 `sessionRef` 上，因此幂等
+/// 比对除了指纹还必须包含**会话身份**：同一 `(ownerNodeId, accessNodeId, requestId)` 改指另一个
+/// **同样已授权、同样可恢复**的会话时，必须回 `nodelink.command.idempotency_conflict`，而不是把首次
+/// 那个会话的终态结果回给调用方。
+#[tokio::test]
+async fn session_resume_reusing_a_request_id_for_another_session_is_an_idempotency_conflict() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let workspace = canonical_workspace("idem");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let (attachment, generation) = fixture.attach().await;
+
+    let first = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some((&attachment, &generation)),
+        ),
+    )
+    .await;
+    let terminal = of_type(&first, "command.terminal");
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0]["body"]["terminal"]["status"], "completed");
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["result"]["remoteSessionRef"]["sessionId"], SESSION,
+        "首次恢复的终态属于第一个会话"
+    );
+
+    // 第二个会话：同一 Export、同一授权、同样有持久化恢复数据——因此「换一个会话」本身是合法的，
+    // 冲突只可能来自 requestId 复用。
+    let other = SessionId::new(SESSION_2).expect("session id");
+    fixture
+        .world
+        .store
+        .seed_session(session_summary_of(SESSION_2));
+    seed_recoverable_for(&fixture.world.store, &other, &workspace);
+    let (other_attachment, other_generation) = fixture.attach_session(SESSION_2).await;
+
+    let mut body = session_submit_body(
+        REQUEST,
+        "session.resume",
+        json!({}),
+        Some((&other_attachment, &other_generation)),
+    );
+    body["sessionRef"]["sessionId"] = json!(SESSION_2);
+    let frames = submit(&mut fixture, &route, body).await;
+
+    let rejected = of_type(&frames, "command.rejected");
+    assert_eq!(
+        rejected.len(),
+        1,
+        "同一 requestId 改指另一个会话必须被拒，而不是重新接受"
+    );
+    assert_eq!(
+        error_code(rejected[0]),
+        "nodelink.command.idempotency_conflict"
+    );
+    assert!(
+        of_type(&frames, "command.accepted").is_empty()
+            && of_type(&frames, "command.terminal").is_empty(),
+        "不得回首次会话的终态结果（那会把一个会话的结果说成另一个会话的）"
+    );
+}
+
 /// [R33]/§12.7：`payload` 携带任何键时以 `command.rejected`（`nodelink.command.unsupported_field`）
 /// 拒绝并给出 `details.field`，且不启动 Agent 进程、不改会话状态。
 #[tokio::test]
@@ -2788,8 +2880,10 @@ async fn session_resume_with_any_payload_field_is_rejected_without_side_effects(
 }
 
 /// [R31]：只持 `grant.observe` 的 Access 提交 `session.resume` 时，回
-/// `command.rejected(nodelink.export.not_granted)`，不读取会话行、不启动进程，且响应**不因会话是否
-/// 存在而不同**。
+/// `command.rejected(nodelink.export.not_granted)`，不启动进程，且响应**不因会话是否存在而不同**。
+///
+/// 「不读取会话行」与「不产生副作用」是两条独立断言：`recovery_read_calls` 证明前者（`load_recovery`
+/// 是读会话行的唯一入口），`commit_calls` 证明后者。
 #[tokio::test]
 async fn an_unauthorized_session_resume_is_rejected_before_any_local_read() {
     let mut fixture = Fixture::with_grants(&["grant.observe"]).await;
@@ -2798,6 +2892,7 @@ async fn an_unauthorized_session_resume_is_rejected_before_any_local_read() {
     let workspace = canonical_workspace("denied");
     seed_recoverable(&fixture.world.store, &workspace);
     let before = fixture.world.store.commit_calls();
+    let reads_before = fixture.world.store.recovery_read_calls();
 
     let body = session_submit_body(
         REQUEST,
@@ -2811,9 +2906,14 @@ async fn an_unauthorized_session_resume_is_rejected_before_any_local_read() {
     assert_eq!(rejected[0]["body"]["command"], "session.resume");
     assert_eq!(error_code(rejected[0]), "nodelink.export.not_granted");
     assert_eq!(
+        fixture.world.store.recovery_read_calls(),
+        reads_before,
+        "授权必须先于本机读取（否则响应会因会话是否存在而不同）"
+    );
+    assert_eq!(
         fixture.world.store.commit_calls(),
         before,
-        "越权恢复不得触发任何提交（即授权先于本机读取与副作用）"
+        "越权恢复不得触发任何提交（即授权先于副作用）"
     );
 
     // 响应不因会话是否存在而不同：换一个不存在的会话 id，得到**同形**的拒绝。

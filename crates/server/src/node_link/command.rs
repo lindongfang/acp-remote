@@ -1020,6 +1020,10 @@ impl CommandRoute {
         // ④ 幂等：幂等键 `(ownerNodeId, accessNodeId, requestId)`，持久事实在 core 的 `owned_command`
         //    里（core 的 `resume_session` 自建 `accepted` 行）。同键不同语义回
         //    `nodelink.command.idempotency_conflict`，**不**触发第二次 spawn。
+        //    本命令的 `payload` 恒为 `{}`，语义全部落在 `sessionRef` 上，因此指纹之外**必须**再比
+        //    会话身份（§12.5「`sessionRef` 语义不同即冲突」）：core 的 `resume_session` 落幂等行时
+        //    已把目标会话写进 `session`（`broker.rs` 的 `IdempotencyRecord.session`），只比指纹会把
+        //    「同 requestId 改指另一个同样已授权的会话」误判成同语义，从而回上一个会话的终态结果。
         let Some(fingerprint) = fingerprint_of(&submit.payload) else {
             return self.reject_schema(handle, message, "the payload cannot be fingerprinted");
         };
@@ -1031,7 +1035,8 @@ impl CommandRoute {
             Ok(Some(record)) => {
                 let same = record.command() == CommandName::SessionResume.as_str()
                     && record.kind() == CommandKind::Mutation
-                    && record.request_fingerprint() == &fingerprint;
+                    && record.request_fingerprint() == &fingerprint
+                    && record.session() == Some(&target.session);
                 if !same {
                     return self.reject_code(
                         handle,
