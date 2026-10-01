@@ -355,7 +355,7 @@ alternative_checks:
 | Merge ID | Delivery Unit | Target Ref | Merger | Candidate Commit | Merged Commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | M1 | U1 | refs/heads/main | merger-A5（合入）/ merger-A6（主分支回归）/ merger-A7（闭环修正） | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **0d2be6d**（`--no-ff`，父提交对 `81e350ff340014265eb7c9251237c799d4357fee` + 候选 `2ed142d…`，零冲突）+ 修正提交 `69f1ac1` | reports/merge-u1-main.md、reports/merge-u1-main-diff-materials.md、reports/premerge-receipt-u1.md |
-| M1-后续 | U1 | refs/heads/main | merger-A7 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **待填**（合并后闭环修正：`plan.md` 引用归属 + 三份新报告入库 + `## Merge History` 回填；用于消除 CR-PM-F2「HEAD 门禁红」） | reports/cr-pm-post-merge-review.md |
+| M1-后续 | U1 | refs/heads/main | merger-A7 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **20c1623ba3cf8ce751082b2699ef66b76f76f3cf**（追加提交，父提交 `69f1ac1bc6af81461d199257f512965f646ec55c`；`plan.md` 引用归属修正 + 三份新报告入库 + `## Merge History` 回填；用于消除 CR-PM-F2「HEAD 门禁红」）。其后另有一次仅改 `tasks.md` 6.7 与本轮报告的闭环提交，sha 见 `reports/merge-u1-main.md` 第 3 轮 | reports/cr-pm-post-merge-review.md、reports/merge-u1-main.md |
 
 ## Premerge History
 
