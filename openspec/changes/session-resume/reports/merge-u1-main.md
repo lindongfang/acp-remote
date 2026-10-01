@@ -1018,3 +1018,19 @@ handoff_index:
     applicability_basis: "本轮交付面：CI commits job 的提交 scope 合规修正。按用户裁定的 B 只扩充 commitlint.config.mjs 的 SCOPES 两项（session-resume 为新交付面；test 为如实注明来由的历史兼容项）并同步 AGENTS.md 第 8 节一句，唯一入库提交 cae3dbd19e38fede8243ebc63f07012ab438c721（tree 4a80460）。未 rebase / amend / 改提交信息 / merge / push，历史与全部既有 SHA 保持不变，因此前四轮记录里的所有 SHA 引用继续有效。第 29.2 节如实留痕了被否决的原方案 A（改写 3484541 会连带改变 10 个 SHA 并使约 12 个已入库文件的证据引用悬空）。"
     source_evidence: NOT_APPLICABLE
 ```
+
+## 36. 记录提交之后的最终 HEAD 复核（封板）
+
+`cae3dbd` 之后只有一条**纯文档**的记录提交（把 §29–§35 与 `## Merge History` 的 `M1-提交信息合规` 行入库）。为不把「门禁通过的 HEAD」与「记录所在的 HEAD」混为一谈，在记录提交 `ee5179539e120e7fa2d08bc28eb4cb24e57b5edb` 上复跑了同一组检查：
+
+| 命令 | 退出码 | 日志 |
+| --- | --- | --- |
+| `npx commitlint --from "81e350f^" --to HEAD` | **0** | `reports/commitlint-scope-fix-finalhead-commitlint.log` |
+| `npm run check` 十道逐道（schemas / commands / errors / features / assets / acp / docs / boundaries / drift / agentic） | **10 道全 0** | `reports/commitlint-scope-fix-finalhead-npm-check.log`（每道后附 `@@@ <gate> EXIT=<码>`） |
+| `cargo fmt --all -- --check` | **0** | `reports/commitlint-scope-fix-finalhead-cargo-fmt.log` |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | **0** | `reports/commitlint-scope-fix-finalhead-cargo-clippy.log` |
+| `cargo test --locked --workspace --all-features` | **0**（1074 passed / 0 failed / 2 ignored） | `reports/commitlint-scope-fix-finalhead-cargo-test.log` |
+
+本节自身所在提交（仅追加 §36 与订正 `## Merge History` 一行的措辞）在落盘后同样复跑了上述检查，取据落盘为 `reports/commitlint-scope-fix-finalhead2-*.log`（各日志首行的 `# revision:` 给出该提交的完整 SHA）。
+
+适用性：`cae3dbd..ee51795` 与其后的记录提交只改 `verification.md` 与 `reports/merge-u1-main.md` 两个 `.md`，`crates/`、`commitlint.config.mjs`、`AGENTS.md` 均自 `cae3dbd` 起未再变动；因此 §31 的结论在后续 HEAD 上继续成立，本节的复跑是为了让「最新 HEAD 亲自绿」这件事有独立取据，而不是靠推断。
