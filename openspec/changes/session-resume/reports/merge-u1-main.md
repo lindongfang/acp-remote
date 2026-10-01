@@ -540,6 +540,10 @@ handoff_index:
 
 `git diff --name-only 69f1ac1 3458542` 的全部输出都落在 `openspec/changes/session-resume/**` 之内，`crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**` **零差异**。⇒ 实际主分支的**产品代码面与候选 `2ed142d` 逐字节一致**，本轮 PV1/PV2 的结果对候选同样成立。
 
+### 17.5 结案提交之后的复核（最终 HEAD）
+
+6.7 的结案提交 `6af25498c26abd610aa107d99e73b2765ced3af7` 只含 `tasks.md` 的一处勾选与本报告的第 3 轮小节（纯 md）。为确认**入库后**的仓库状态仍为绿，在该提交上又跑了一次完整 `npm run check`：**exit 0**，十道门禁全部执行（日志 `reports/merge-u1-main-closure-postcommit-npm-check.log`，首三行为 revision/command/exit，末行 `# exit: 0`）。PV1 三条未重跑——`crates/**` 自 `0d2be6d` 起零差异，17.4 已给出该依据。本小节之后的提交仅为本段记录的落库，不含任何其它文件。
+
 ## 18. 6.7 结案判定与依据
 
 **结论：PASS（已结案）。** 依据是本轮**新落盘**的日志，不是上一轮那份 exit 1 的记录：
