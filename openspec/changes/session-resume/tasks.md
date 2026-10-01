@@ -59,8 +59,10 @@
 - [x] 6.3 U1 检查执行者按 PV1/PV2 完成候选 Project Verify，将版本、范围、结果及有效复用依据关联到 verification
 - [x] 6.4 U1 独立 reviewer 只读检视固定候选的新增交互和冲突解决，修复后独立复核，记录隔离设置、版本及报告；可与 6.3 并行
 - [x] 6.5 U1 主 Agent 核对 plan.md 的 Coverage Index：37 行需求/场景都要有实现证据与检查证据；未覆盖的行不得勾选，重开受影响任务
-- [ ] 6.6 U1 合入负责人先以 `agentic-premerge` 块运行 `workflow check --stage premerge` 取得 PASS，再把该块持久化为版本化 receipt、在 verification 的 `## Premerge History` 记一行，确认候选检查/独立 review/覆盖核对均通过并复核本地主分支基线后，直接合入计划中的本地主分支，记录实际提交
+- [x] 6.6 U1 合入负责人先以 `agentic-premerge` 块运行 `workflow check --stage premerge` 取得 PASS，再把该块持久化为版本化 receipt、在 verification 的 `## Premerge History` 记一行，确认候选检查/独立 review/覆盖核对均通过并复核本地主分支基线后，直接合入计划中的本地主分支，记录实际提交
+      - 完成：premerge 门禁 PASS 后由 merger-A5 合入本地 `refs/heads/main`（合并提交 `0d2be6d`）；**规划与证据资产随本次合入一起入库**（用户 2026-10-01 决定），`.log` 按 `.gitignore` 双重排除、暂存数 0；未 push、未开 PR。receipt：`reports/premerge-receipt-u1.md`（`## Premerge History` 的 M1 行）
 - [ ] 6.7 U1 检查执行者核对实际主分支结果与候选一致性，完成计划内 PV1/PV2 回归；有效复用逐项记录原证据及适用性
+      - **2026-10-01 撤回结案（CR-PM-F1/F2）**：本行原写「PV2 `npm run check` exit 0，十道门禁全绿（`Totals: 20 passed, 0 failed`）」，经独立检视判为**不实记录**并已撤回勾选，理由有三：①所引证据 `reports/merge-u1-main-final-check.log` 的实际内容是 `CHECK_EXIT=1`（止于第 7 道 check:docs），与结论直接矛盾；②主 Agent 事后自行跑通的那次 `npm run check` **未落盘为日志文件**，无可核对证据；③`Totals: 20 passed, 0 failed` 是 `check:agentic` 内部 `openspec validate` 的汇总，**不能**用作「十道门禁全绿」的依据。**现状**：工作区的 `plan.md` 引用修正与三份新报告**尚未提交**，故 HEAD `69f1ac1` 上的合同门禁仍为红。**结案条件**：把工作区修正提交进 `refs/heads/main` 后，在**新 HEAD 上**重跑 `npm run check`、把完整输出落盘为日志，再据此勾选。
 - [ ] 6.8 U1 独立 reviewer 检视合并新增差异；无新增差异由主 Agent 记录依据及原 review ID，可与 6.7 并行
 
 ## 7. Independent Validation

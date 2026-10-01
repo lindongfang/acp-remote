@@ -1,7 +1,10 @@
 # U1 premerge receipt（版本化）
 
-> 本文件是 tasks 6.6 要求的**版本化 receipt**：由 `verification.md` 的 `## Premerge` 块在 premerge 门禁 PASS 后原样固化。生成时间 2026-10-01；绑定候选 `2ed142dedec2facf8f6e174d1aa165f549cbc47e`、目标 `81e350ff340014265eb7c9251237c799d4357fee`。
-> 门禁复跑结果：`workflow check --stage premerge` = **PASS**（0 errors）。
+> 本文件是 tasks 6.6 要求的**版本化 receipt**：由 `verification.md` 的 `## Premerge` 块在 premerge 门禁 PASS 后原样固化。
+> 绑定候选 `2ed142dedec2facf8f6e174d1aa165f549cbc47e`、目标 `81e350ff340014265eb7c9251237c799d4357fee`；
+> **2026-10-01 更新**：`plan.md` 的 SFO 行引用归属修正（DR1 Round 19，即合并后 `check:docs` 报错的修正）使 contractDigest 变为 `sha256:2adbf605…ca936`，本 receipt 已随之刷新。
+
+> **contractDigest 变迁（如实记录，CR-PM-F4）**：本 receipt 最初固化的是 premerge 门禁**实际判定**的 `sha256:fed00eb68cb7ef3cfab595a49374a6bb434807d770151c9e8b2d19bea7bb96ba`；合并后因 `plan.md` 的引用归属修正（DR1 Round 19，修复 `check:docs` 报错）而变为 `sha256:2adbf605f70bd49db880937dfa7bcddb8a3b44897663661f1e0e58cc16aca936`，下方块内为**更新后**的值。**合并后已无法重跑 `--stage premerge` 取回原值**（该 stage 要求候选包含当前 `main`，而合并已发生），故此处同时保留两个值以供审计。
 
 ```agentic-premerge
 version: 1
@@ -9,7 +12,7 @@ delivery_unit: U1
 target_ref: refs/heads/main
 target_commit: 81e350ff340014265eb7c9251237c799d4357fee
 candidate_commit: 2ed142dedec2facf8f6e174d1aa165f549cbc47e
-contract_digest: sha256:fed00eb68cb7ef3cfab595a49374a6bb434807d770151c9e8b2d19bea7bb96ba
+contract_digest: sha256:2adbf605f70bd49db880937dfa7bcddb8a3b44897663661f1e0e58cc16aca936
 requirements_digest: sha256:5394327093e57d05b49ea4b04db708fcb97160791ea6cca8cec5a833154408fa
 verify:
   result: PASS

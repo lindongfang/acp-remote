@@ -91,6 +91,7 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | DR1 | 16 | reviewer-DR（第十六个独立实例 run 1b8da3a7-fb1c-40c9-8e9a-3752b5e05d17，首次运行基础设施中断后由 57423f65 恢复完成，fresh context） | sha256:ce6bb8c7c5d6b92172e8a2b5f2428b416b305fd47488af557c9d923e1aad1ef3 | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round16.md |
 | DR1 | 17 | reviewer-DR（第十七个独立实例 run 43307c2f-afa2-4fd3-9a5a-1d8f46c3775c，fresh context；contractDigest 由 main 代实测） | sha256:700caa254e736c1d5f8c5678ff823df5b695d4ec29b24ca70f0bd7592e5a019c | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round17.md |
 | DR1 | 18 | reviewer-DR（第十八个独立实例 run 4b293eab-b23c-4487-8001-06566766188e，fresh context；contractDigest 由 main 代实测） | sha256:fed00eb68cb7ef3cfab595a49374a6bb434807d770151c9e8b2d19bea7bb96ba | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round18.md |
+| DR1 | 19 | reviewer-DR（第十九个独立实例 run 9f9760d1-7287-453a-8b94-8620d758ee15，fresh context；contractDigest 由 main 代实测） | sha256:2adbf605f70bd49db880937dfa7bcddb8a3b44897663661f1e0e58cc16aca936 | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round19.md |
 
 > **DR1 Round 16/17 的详细结论**（表格 `Result` 列按门禁判据只留裸 `PASS`，详见对应报告与 `## Planning Findings`）：
 > - Round 16（`sha256:ce6bb8c7…`）：0×CRITICAL/0×MAJOR；新报 F65–F71（5×MINOR + 1×SUGGESTION + 2×MINOR）；明确指出 `tasks.md` 追加完成说明会变更摘要（复选框状态被归一化、不入摘要）、`U1` 不是 Work Package、台账并发窗口满足。
@@ -113,6 +114,8 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | C2 / final / 全变更 | | 替代检查（E2E not-applicable） | | `npm run check` | | | reports/merge-u1-candidate-PV2.log |
 
 ## Check Plan Changes
+
+- 2026-10-01（合并后 `check:docs` 事故，**已固化为流程规则**）：`npm run check` 第7 道 `check:docs` 连续两次因**同一类原因**报红——**在报告里逐字复述一条“引用归属写错”的错误句子，会让复述文本本身再次触发同一个检查**。已发生三次：① `reports/merge-u1-main.md` 描述 merger 报告里的杜撰节号；② `reports/merge-u1-main.md` 描述 `plan.md` 的节号误归属；③ `reports/dr1-dependency-review-round19.md` 描述 `plan.md` 的同款误归属（自触发 2 处）。**成因**：`scripts/check-doc-links.mjs` 只按「`§` 前 48 字符、切子句、取最后一个可解析的 `.md` 名」做**字面归属**，不区分「引用」与「描述一个错误的引用」。**规则（后续所有报告适用）**：**不得逐字引用已知错误的引用句子**；改用「把 X 的第 N 节写成了归属 Y 的节号」这类**描述性表述**，并显式注明「为避免复述触发门禁，此处不逐字引用」。**已验证**：按此规则改写后 `node scripts/check-doc-links.mjs` = exit 0。
 
 - 2026-10-01（WP6 并入后，main）：**`app` 证据缺口正式关闭**。该缺口自集成基线 `b0a387b`（只含 WP1+WP2）起连续登记三轮——`app` 直接依赖 `server`，`server` 一失败它就永远不被编译，因此 `crates/app/tests/support/owner.rs` 的三个替身错误一直被遮蔽，「它们的失败恰好是已登记原因」这句话**连续三轮不能断言**（原Handoff Index 逐轮追加行，现已由本条取代）。**关闭依据**：WP6 收口 `server` 后，merger-A4 实测 workspace clippy **0 诊断**、workspace test **1041 passed**，且额外跑 `-v` 取证**12/12 workspace 成员实际重查、无 Fresh 单元**（main 已复核该日志含 12 条 `Checking/Compiling` 行）⇒ `app` 被实际编译且无诊断。**结论**：三个替身已随 WP6 补齐并**已被真正编译验证**，不再是「只有静态证据」。
 
@@ -324,7 +327,7 @@ delivery_unit: U1
 target_ref: refs/heads/main
 target_commit: 81e350ff340014265eb7c9251237c799d4357fee
 candidate_commit: 2ed142dedec2facf8f6e174d1aa165f549cbc47e
-contract_digest: sha256:fed00eb68cb7ef3cfab595a49374a6bb434807d770151c9e8b2d19bea7bb96ba
+contract_digest: sha256:2adbf605f70bd49db880937dfa7bcddb8a3b44897663661f1e0e58cc16aca936
 requirements_digest: sha256:5394327093e57d05b49ea4b04db708fcb97160791ea6cca8cec5a833154408fa
 verify:
   result: PASS
@@ -351,7 +354,8 @@ alternative_checks:
 
 | Merge ID | Delivery Unit | Target Ref | Merger | Candidate Commit | Merged Commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-|  | U1 | refs/heads/main | | | | |
+| M1 | U1 | refs/heads/main | merger-A5（合入）/ merger-A6（主分支回归）/ merger-A7（闭环修正） | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **0d2be6d**（`--no-ff`，父提交对 `81e350ff340014265eb7c9251237c799d4357fee` + 候选 `2ed142d…`，零冲突）+ 修正提交 `69f1ac1` | reports/merge-u1-main.md、reports/merge-u1-main-diff-materials.md、reports/premerge-receipt-u1.md |
+| M1-后续 | U1 | refs/heads/main | merger-A7 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **待填**（合并后闭环修正：`plan.md` 引用归属 + 三份新报告入库 + `## Merge History` 回填；用于消除 CR-PM-F2「HEAD 门禁红」） | reports/cr-pm-post-merge-review.md |
 
 ## Premerge History
 

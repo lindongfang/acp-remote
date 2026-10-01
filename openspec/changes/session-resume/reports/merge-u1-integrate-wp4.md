@@ -456,7 +456,7 @@ handoff_index:
       （--all-targets 覆盖 lib + lib test + 6 个集成测试目标，即 WP4 修过的 14 处 SessionUpdate 字面量全部编译通过）；
       cargo test --locked -p storage-sqlite --all-features exit 0，131 passed / 0 failed / 2 ignored
       （3 lib + 15 + 43 + 5 + 18 + 3 + 5 + 2 + 10 + 12 + 4 + 8 + 3；ignored 为 commit::crash_child 与
-      migration::regenerate_v1_fixture，均为既有 #[ignore]），与 wp4-coder.md 及 cr4-review.md §9
+      migration::regenerate_v1_fixture，均为既有 #[ignore]），与 wp4-coder.md 及 cr4-review.md 的 Assessment
       报告的 131/0/2 逐字一致。
       环境：cwd=D:/Project/acp-remote-wt/session-resume-du1、
       CARGO_TARGET_DIR=D:/Project/acp-remote-target/session-resume-du1（本单元独占，复用缓存）、

@@ -367,7 +367,7 @@ rows:
 | schemas/node-link/v1/、fixtures/node-link/v1/ | WP2 | WP2 | WP2 | PV2 | 单一写者 |
 | crates/acp-protocol/src/lib.rs | WP1 | WP1 | WP1 | PV1 | 单一写者 |
 | crates/core/src/lib.rs | WP3 | WP3 | WP3 | PV1 | 单一写者 |
-| docs/MODULE_ARCHITECTURE.md | WP3 | WP3 | WP3 | PV2 | DR1-F50：`AGENTS.md` §10 要求 core 端口签名/值对象变化同步 §4.1，此前无 WP 拥有该文件。区域=§4.1 的会话后端端口行（补 `resume`/`agent_session_id`）、`SessionStore` 行（补 `load_recovery`）、值对象清单（加 3 项）。单一写者 |
+| docs/MODULE_ARCHITECTURE.md | WP3 | WP3 | WP3 | PV2 | DR1-F50：`AGENTS.md` §10 要求 core 端口签名/值对象变化时更新 `docs/CORE_PORTS_AND_STORAGE.md` 并同步 `docs/MODULE_ARCHITECTURE.md` §4.1，此前无 WP 拥有该文件。区域=§4.1 的会话后端端口行（补 `resume`/`agent_session_id`）、`SessionStore` 行（补 `load_recovery`）、值对象清单（加 3 项）。单一写者 |
 | docs/NODE_LINK_PROTOCOL.md | WP2, WP6 | WP6 | WP2 → WP6 | WP6: PV2 | DR1-F51：WP2 交付后该文件后续修改权原为无主（CR2-F3 已登记）。WP6 只补两处：:662 收窄句加 `session.resume`、§12.7 示例加「可见版本为 2」的非规范注记。两包分处 W1/W4，不并发 |
 | crates/**/tests/ 的新增用例文件 | TP2 | TP2 | TP2 | PV1 | TP2 独占**新增**测试文件；WP1–WP6 的写范围含各自 `src/**`（含内联 `#[cfg(test)]` 单元测试）与上表逐文件登记的既有测试目录/文件 |
 | crates/agent-host/tests/ | WP5, TP2 | TP2 | WP5 → TP2 | TP2: PV1 | 既有集成测试目录（如 `session.rs`）。WP5 为覆盖 R5–R12 会在此扩展；TP2 在其后新增用例。两包分处 W3/W5，不并发 |
