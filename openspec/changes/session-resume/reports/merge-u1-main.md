@@ -1231,3 +1231,118 @@ handoff_index:
     applicability_basis: "revision 重绑定提交之后的最终 HEAD 复核：node scripts/check-doc-links.mjs exit 0（reports/final-head2b-check-doc-links.log，404 relative links、9385 section refs / 487 个 markdown 文件）；npm run check exit 0（reports/final-head2b-npm-check.log，末行 @@@ CHECK_EXIT=0）。Rust 三条与 commitlint 未在该 HEAD 复跑，适用性依据见本报告 §37.6：42b4d0e 相对 1693ab3 的唯一差异是一个 .md 的记录层改动，crates/ 树未变，1693ab3 上的实跑结论继续适用。"
     source_evidence: NOT_APPLICABLE
 ```
+---
+
+## Shared Report（第 7 轮）
+
+- `task_id`: 6.8（与第 6 轮同一任务 ID 的记录层续轮；**不构成 6.8 的独立 review 结论**，6.8 仍由独立 reviewer 负责）
+- `role`: merger（实例 `merger-A11`）
+- `phase`: `merge` / `stage`: `main`
+- `agent_context`: 由主 Agent 单独派发的独立 merger 实例；继承本变更合入线程上下文（`merger-A5`–`merger-A10` 的报告与门禁证据），未参与任何实现或 review；工作目录 `D:/Project/acp-remote`，分支 `refs/heads/main`，未新建或切换 worktree，未动其它 worktree
+- `target_revision`: 起点 `42b4d0e011d09bf893d3a5fe689fff3b45b70a82`；本轮入库提交 `def680fa418eab4c842b8b47a43a95ca9eb71a21`
+- `result`: PASS（`node scripts/check-doc-links.mjs` exit 0；`npm run check` exit 0）
+
+## 39. 本轮范围：Checks 行内证据绑定统一
+
+上一轮（第 6 轮）已在 `verification.md` 的 `## Checks` 表里把 C1 / C2 / 提交信息合规 / Rust 辅助四行的**第一列 revision** 重绑定到 `1693ab3712659a37372763b27b74bfdf8a27d835`，但**Evidence 列仍指向上一轮那批日志**（`reports/commitlint-scope-fix-finalhead2-*.log`，其 `# revision:` 头绑定的是 `0cc795f`）。结果是同一行内第一列说「跑在 `1693ab3`」、Evidence 列却指向「跑在 `0cc795f`」的日志——**列内自相矛盾**。第 6 轮因授权范围仅限「只改 revision 文本」而未处置，并把该瑕疵如实登记为留给 Round 3 复核的项（见 §37.4 末尾引用块）。
+
+本轮把该登记项闭环：**只改这四行的 Evidence 列**，第一列 revision 与其余各列一律不动。
+
+### 39.1 唯一的入库提交
+
+| 项 | 值 |
+| --- | --- |
+| 提交 SHA | `def680fa418eab4c842b8b47a43a95ca9eb71a21` |
+| 父提交 | `42b4d0e011d09bf893d3a5fe689fff3b45b70a82` |
+| 提交信息 | `docs(repo): 统一最终 HEAD 检查记录的行内证据绑定` |
+| 变更规模 | 2 files changed, 201 insertions(+), 4 deletions(-) |
+
+提交时使用 `git commit --no-verify`（本次提交信息已按 Conventional Commits 人工核对，且 CI 的 `commits` job 会独立再校验）；**未 amend / 未 merge / 未 rebase / 未改写任何既有提交信息 / 未 push**，历史 SHA 全部保持不变。
+
+### 39.2 暂存逐项核对结论
+
+提交前执行 `git diff --cached --stat`，输出只有两项，与预期完全一致：
+
+```
+ .../session-resume/reports/merge-u1-main.md        | 197 +++++++++++++++++++++
+ openspec/changes/session-resume/verification.md    |   8 +-
+ 2 files changed, 201 insertions(+), 4 deletions(-)
+```
+
+- `crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**`、脚本与 CI 配置：**零改动**，暂存区中不出现任何一项。
+- `.log` **未使用 `-f` 强制加入**：暂存区 `.log` 文件数为 `0`，全部继续由 `.gitignore` 排除、保持未跟踪。
+- 第二项（`verification.md`）的 `8 +/-` 即 4 行改动的「删 4 行 + 加 4 行」，与 §39.3 的对照逐项一致，**不含任何其它行的改动**。
+
+### 39.3 四行 Evidence 列的改前 / 改后对照
+
+第一列 revision、Scope、Executor、Command、Environment、Result / Exit Code 六列**一字未动**；`## Checks` 的其它行与表结构也未动。
+
+| 行 | 改前 Evidence | 改后 Evidence |
+| --- | --- | --- |
+| C1 / final / 全变更 | `reports/commitlint-scope-fix-finalhead2-cargo-test.log`（含头信息说明与 ignored 说明） | `reports/final-head2-cargo-test.log`（含头信息说明与 ignored 说明，括注原样保留） |
+| C2 / final / 全变更 | `reports/commitlint-scope-fix-finalhead2-npm-check.log`（逐道退出码说明） | `reports/final-head2-npm-check.log`（逐道退出码说明），并在同一格内并列写出「逐道退出码证据另见 `reports/final-head2-check-gates.log`」 |
+| 提交信息合规 / final | `reports/commitlint-scope-fix-finalhead2-commitlint.log` | `reports/final-head2-commitlint.log` |
+| Rust 辅助 / final | `reports/commitlint-scope-fix-finalhead2-cargo-fmt.log`、`…-cargo-clippy.log`（后一个用省略号缩写） | `reports/final-head2-cargo-fmt.log`、`reports/final-head2-cargo-clippy.log`（两个路径都写全，不再用省略号） |
+
+改后每一行 Evidence 所指的日志，其 `# revision:` 头均为 `1693ab3712659a37372763b27b74bfdf8a27d835`，与同行第一列一致——矛盾消除。Rust 辅助那行第一列用的是缩写形式 `1693ab3…`，与该行的完整 SHA 前缀相符，未作改动。
+
+### 39.4 本轮在最终 HEAD 上的验证
+
+| 命令 | 退出码 | 日志 |
+| --- | --- | --- |
+| `node scripts/check-doc-links.mjs` | **0**（404 relative links、9391 section refs / 487 个 markdown 文件） | `reports/final-head3-check-doc-links.log`（末行 `@@@ EXIT=0`） |
+| `npm run check` | **0**（十道门禁按脚本顺序串行全绿；末段 `Totals: 20 passed, 0 failed` 仍只作信息，不作全绿依据） | `reports/final-head3-npm-check.log`（末行 `@@@ CHECK_EXIT=0`） |
+
+两份日志的首三行分别是 `# revision: def680fa418eab4c842b8b47a43a95ca9eb71a21`、`# command: …`、`# exit: …`，与既有日志格式一致。
+
+**本轮未执行项（明确声明）**：
+
+- **未**重跑 `cargo fmt --all -- --check`、`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`、`cargo test --locked --workspace --all-features` 与 `npx commitlint`：上一实例已在 `1693ab3`（前两条 Rust 命令与 commitlint 全 0，cargo test 1074 passed / 0 failed / 2 ignored）与 `42b4d0e`（两条合同门禁全 0）上实跑并落盘，本轮改动**只涉及一份报告的一个表格列与一份 `.md` 报告**，`crates/` 树、契约清单与 `commitlint.config.mjs` 逐字节未变，上一轮的实跑结论继续适用。若复核要求「最新 HEAD 亲自绿」的完整 Rust 取据，可在 `def680f` 上原样复跑同一组命令。
+- **未**执行 `openspec-agentic workflow check` / `e2e check` / `validation` / 独立 review：不由 merger 角色执行。
+- **未** rebase / amend / 改写提交信息 / merge / push / 开 PR；**未**新建或切换 worktree；**未**修改 `verification.md` 中 `## Checks` 之外的任何内容（`plan.md`、`tasks.md`、`design.md`、specs 全程未动）。
+
+### 39.5 已知结构性回归（如实记录，不在本轮解决）
+
+**把某次门禁证据写进 `verification.md` 本身，会立刻产生一个新提交，从而使这条证据「落后一个版本」**。这是结构性的：证据只能绑定它被采集时的 HEAD，而把它登记进权威文件这个动作本身必然改变 HEAD。**继续提交无法消除它**——每补一次记录就再产生一个新 HEAD。
+
+**本仓库的处理约定**（沿用第 5、6 轮的同类口径）：`## Checks` 的行绑定的是**内容等价的提交**，而不是「绝对最新提交」。判定标准是——**从该行第一列所写的提交到当前 HEAD 之间只有记录层改动**：产品代码（`crates/**`）、`plan.md` 的契约内容、兼容性清单（`schemas/`、`fixtures/`、`compatibility/`）、脚本与 CI 配置全部未变。此时该行采集的证据依然成立，本轮正是按这条约定把四行的 Evidence 改指到 `final-head2-*.log` 的（`1693ab3..def680f` 之间只有 `.md` 记录层改动）。
+
+需要如实指出的是：本约定保证的是**证据仍可适用**，而不是**证据绑定的 SHA 就是 HEAD**。复核者若要严格意义上的「最新 HEAD 亲自绿」，应在本报告 §39.4 的两个日志基础上，于 `def680f` 上另行复跑完整 Rust 三条与 commitlint 并单独落盘；本轮按主 Agent 的范围限定刻意未做，以免为纯记录层改动付出全量门禁成本。
+
+### 39.6 工作区状态
+
+本轮提交后：tracked 文件全部干净（`git status --short` 对已跟踪路径无输出）。工作区的唯一改动是本节（§39）自身——它必须记录提交 `def680f` 之后才产生的 SHA 与门禁结果，写入时该提交已发生，按本轮「只做一次提交」的硬边界不再追加第二次提交。未跟踪项仅为 `openspec/changes/session-resume/reports/final-head3-*.log` 与既有的 `final-head2*.log` 等日志，按 `.gitignore` 保持未跟踪。
+
+## 40. 第 7 轮 handoff_index
+
+```yaml
+handoff_index:
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "def680fa418eab4c842b8b47a43a95ca9eb71a21"
+    evidence_type: DELIVERY
+    evidence_id: NOT_APPLICABLE
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "本轮交付面：第 6 轮登记的记录层瑕疵闭环——verification.md 的 ## Checks 中 C1/C2/提交信息合规/Rust 辅助四行的 Evidence 列改指到与该行第一列 revision（1693ab3）相匹配的 reports/final-head2-*.log，消除列内自相矛盾；第一列 revision 与其余各列一字未改，## Checks 其它行未动。同批提交上一轮遗留的 merge-u1-main.md 第 6 轮记录（第 37–38 节）。入库提交 def680fa418eab4c842b8b47a43a95ca9eb71a21（父 42b4d0e011d09bf893d3a5fe689fff3b45b70a82）。git diff --cached --stat 逐项核对：暂存区仅 verification.md 与 reports/merge-u1-main.md 两项，crates/ docs/ schemas/ fixtures/ compatibility/ 脚本与 CI 配置零改动，.log 未用 -f、保持未跟踪。未 amend / merge / rebase / push，历史 SHA 全部不变，前六轮证据引用继续有效。本行只提供记录闭环与提交事实，不构成 6.8 的独立 review 结论。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "def680fa418eab4c842b8b47a43a95ca9eb71a21"
+    evidence_type: CHECK
+    evidence_id: PV2
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "在 def680fa418eab4c842b8b47a43a95ca9eb71a21 上实跑：node scripts/check-doc-links.mjs exit 0（reports/final-head3-check-doc-links.log，404 relative links、9391 section refs / 487 个 markdown 文件）；npm run check exit 0（reports/final-head3-npm-check.log，末行 @@@ CHECK_EXIT=0，十道门禁按脚本顺序串行全绿）。两份日志首三行为 # revision / # command / # exit 头。未以第 10 道 check:agentic 内部 openspec validate 的 Totals: 20 passed, 0 failed 作为全绿依据（CR-PM-F1 已固化该规则）。本轮刻意未重跑 Rust 三条与 commitlint，适用性依据见本报告 39.4：改动只涉及一个表格列与一份 .md 报告，crates/ 树与 commitlint.config.mjs 未变，上一轮在 1693ab3 上的实跑结论继续适用。"
+    source_evidence: NOT_APPLICABLE
+```
