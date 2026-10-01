@@ -816,3 +816,205 @@ handoff_index:
     applicability_basis: "## Merge History 回填后的最终 HEAD 661932db812459c90a249f6202ecdcaf0430351c 上复跑：node scripts/check-doc-links.mjs exit 0（404 相对链接 / 9356 章节引用 / 485 文件，reports/final-main-gates-postbackfill-check-doc-links.log）、npm run check exit 0（reports/final-main-gates-postbackfill-npm-check.log）。用于确认 M1-收尾 行的新引用未引入引用归属错误；ac5de2a..661932d 仅 verification.md 2 行新增，产品代码零差异，故 PV1 三条 Rust 结论对该 HEAD 同样成立。"
     source_evidence: NOT_APPLICABLE
 ```
+
+---
+
+# 第 5 轮：提交 scope 合规修正（不改历史，merger-A9）
+
+## Shared Report（第 5 轮）
+
+- `task_id`: 6.8（本轮只提供主分支 HEAD 门禁与提交信息合规的证据；**不构成 6.8 的独立 review 结论**，6.8 仍由独立 reviewer 负责）
+- `role`: merger（实例 `merger-A9`）
+- `phase`: `merge` / `stage`: `main`
+- `agent_context`: 由主 Agent 单独派发的独立 merger 实例；继承本变更合入线程的上下文（`merger-A5`–`merger-A8` 的报告与门禁证据），未参与任何实现或 review；工作目录 `D:/Project/acp-remote`，分支 `refs/heads/main`，未新建或切换 worktree
+- `target_revision`: 起点 `2ec1f0fbf82785ae28963558734c8ef0b1b7a7d0`；本轮入库提交 `cae3dbd19e38fede8243ebc63f07012ab438c721`（tree `4a8046046ae1d3dea59fffd816ee1f05cbe1c86c`）
+- `result`: PASS（commitlint exit 0、`npm run check` 十道门禁逐道 exit 0、PV1 三条 exit 0）
+
+## 29. 本轮问题与最终处置（B′：只扩词表，不动历史）
+
+### 29.1 触发问题
+
+CI 的 `commits` job 会对推送范围跑 `npx commitlint`。在起点 HEAD 上：
+
+```text
+npx commitlint --from "81e350f^" --to HEAD   →  exit 1，found 10 problems（全部 scope-enum）
+```
+
+| scope | 条数 | 提交 |
+| --- | --- | --- |
+| `session-resume` | 9 | `0d2be6d`（合并提交）、`20c1623`、`3458542`、`6af2549`、`774ee9e`、`976b34c`、`f04a989`、`f8133f2`、`a02e2fd` |
+| `test` | 1 | `3484541`（`docs(test): 订正 R25 覆盖分档与判别式注释`） |
+
+`commitlint.config.mjs` 的 `SCOPES` 原本不含这两个词。commitlint 默认会忽略合并提交，因此 `0d2be6d` 实际不计入；但本轮按**词表本身合规**处理，不依赖该忽略规则。
+
+### 29.2 原方案 A 已被否决——merger 在动手前拦下的连带影响（如实留痕）
+
+任务书原给的方案 A 是「把 `session-resume` 加进词表 + 改写 `3484541` 的提交信息（`docs(test)` → `docs(repo)`），必要时再一并刷新引用」。merger 在执行改写**之前**核实到：
+
+- `3484541` 是 `81e350f^..HEAD` 这 33 条提交里的**普通提交**（父 `f44301e`，非合并提交）。Git 按内容寻址，**改写它的提交信息会连带改变其后 10 个提交的 SHA**：`3484541`、`2ed142d`、`0d2be6d`、`20c1623`、`3458542`、`6af2549`、`774ee9e`、`976b34c`、`ac5de2a`、`661932d`、`2ec1f0f`。其前 21 条（含 `f04a989`/`f8133f2`/`a02e2fd`）SHA 不变。
+- 这些 SHA 已被 **约 12 个已入库文件**当作证据引用（`.gitignore` 已排除的 `reports/**/*.log` 不计）：`verification.md`、`tasks.md`、`reports/premerge-receipt-u1.md`、`reports/validation-session-resume.md`、`reports/cr-c1-candidate-review.md`、`reports/cr8-review-round2.md`、`reports/dr1-dependency-review-round16-19.md`、`reports/merge-u1-candidate.md`、`reports/merge-u1-main.md`、`reports/merge-u1-main-diff-materials.md`、`reports/tp2-test-design.md`、`reports/tp2-tester.md`。
+- 其中**规范性绑定**（写错即假记录，不是一刀切可刷新）：`verification.md` 的 `## Merge History` 的 Merged Commit 列、`## Premerge` 块，以及 `reports/premerge-receipt-u1.md` 的 `candidate_commit`/`target_commit`。
+- 代价与收益失衡：原任务书只把 A 估成「改一条提交信息」。用户据此裁定**改选 B′——不动历史，只扩词表**，并由 merger 在 `commitlint.config.mjs` / `AGENTS.md` 里**如实写明** `test` 是为兼容历史误用而收录的词表项，不把它伪装成正常边界。
+
+**本轮实际执行：未 rebase、未 amend、未改任何提交信息、未 merge、未 push。**
+
+## 30. 唯一的入库提交
+
+### 30.1 提交
+
+```text
+cae3dbd19e38fede8243ebc63f07012ab438c721
+父提交 2ec1f0fbf82785ae28963558734c8ef0b1b7a7d0
+tree     4a8046046ae1d3dea59fffd816ee1f05cbe1c86c
+信息     build(repo): 扩充 commitlint scope 词表以容纳会话恢复交付面
+```
+
+`git commit --no-verify`（跳过本地 `commit-msg`/`pre-commit` 钩子：钩子会跑 `npm run check`，与本轮门禁取据重复；CI 侧判定不受影响）。
+
+### 30.2 暂存内容逐项核对（结论：只含预期集合，无越界路径）
+
+| 文件 | 改动 | 是否越界 |
+| --- | --- | --- |
+| `commitlint.config.mjs` | `SCOPES` 新增 2 项 + 注释共 +12 行；**既有 19 项一字未动** | 否 |
+| `AGENTS.md` | §8 提交约定段落内**插入一句**（+1 行改动行）；其它章节未触碰 | 否 |
+
+未触碰 `crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**`、`scripts/**`、CI 配置；未触碰任何其它 worktree；未删除 `target/`。
+
+### 30.3 `commitlint.config.mjs` 的词表改动（diff 摘要）
+
+```diff
+   "app", // daemon、CLI、组合根
++  // 会话恢复（session.resume）交付面：一个能力横跨 acp-protocol 的 `session/resume` DTO、
++  // node-link-protocol + server::node_link 的命令路由、core 的 `resume_session` 用例、
++  // storage-sqlite 的 v5 恢复列与 `load_recovery`、agent-host 的进程不在时恢复路径，
++  // 以及 app 的组合根接线。它不是 §3.1 里的某个 crate 或模块，因此单列一个跨层交付面 scope。
++  "session-resume",
+   "frontend", // Web/PWA 与后续原生客户端
+   ...
+   "repo", // 仓库级配置（workspace、.gitignore、AGENTS.md 等）
++  // 历史兼容项，**不是**交付面边界：`test` 本是上面 `TYPES` 里的类型而非 scope，
++  // 历史提交 `3484541 docs(test): 订正 R25 覆盖分档与判别式注释` 把它误用成了 scope。
++  // 该提交已进入 `main` 且经评估不再改写（改写会连带改变其后 10 个后继提交的 SHA，
++  // 并使 openspec/changes/session-resume/ 下多份已入库报告的证据引用悬空），
++  // 因此在这里收录以让 CI `commits` job 能通过。**新增提交不要用它**：
++  // 只改测试请用 `test(<交付面>)`，例如 `test(core)`、`test(storage)`。
++  "test",
+ ];
+```
+
+放置位置的理由：`session-resume` 紧跟 `app`（它贯穿到组合根，且不对应 §3.1 的任何单个 crate）；`test` 置于词表末尾的兼容项位置，与其它边界项视觉分离。
+
+### 30.4 `AGENTS.md` §8 的改动（diff 摘要）
+
+在「仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。」之后**插入一句**，说明两个 scope 的由来：
+
+- `session-resume`：会话恢复的跨层交付面（列出它横跨的 6 个 crate/模块，并点明因此不对应 §3.1 的某个 crate）；
+- `test`：**历史兼容项而不是交付面边界**——`test` 本是类型词表里的类型，历史提交 `3484541 docs(test): …` 误用作 scope 且已进入 `main`，经评估改写会连带改变其后 10 个提交的 SHA 并使多份已入库报告的证据引用悬空，故只收进 scope 词表让 CI `commits` job 通过；**新增提交不要用它**，只改测试请写 `test(<交付面>)`。
+
+§8 其余内容、AGENTS.md 其它章节均未改动。未新增 markdown 文档链接（§8 该段既有的 `commitlint.config.mjs` 链接保持原样），因此 `check:docs` 的引用归属门禁不受影响。
+
+## 31. 验证证据（权威，全部落盘）
+
+所有日志均带 `# revision:` / `# command:` / `# exit:` 头。
+
+### 31.1 commitlint：由 exit 1 / 10 problems 转为 exit 0
+
+| 版本 | 命令 | exit | 问题数 | 日志 |
+| --- | --- | --- | --- | --- |
+| 改词表前（`2ec1f0f`） | `npx commitlint --from "81e350f^" --to HEAD` | **1** | **10** | §29.1 的原始终端输出即主 Agent 实测证据 |
+| 改词表后（`cae3dbd`） | 同上 | **0** | **0** | `reports/commitlint-scope-fix-commitlint.log` |
+
+### 31.2 PV2：`npm run check`
+
+- 整体：`npm run check` → **exit 0**，日志 `reports/commitlint-scope-fix-npm-check-full.log`。
+- **逐道**（每道单独执行，避免 `&&` 短路掩盖结论；也**不以第 10 道 `check:agentic` 内部的 `openspec validate` 的 `Totals:` 充当全绿依据**）。日志 `reports/commitlint-scope-fix-npm-check.log`，每道后附一行 `@@@ <gate> EXIT=<码>`：
+
+| # | 门禁 | 退出码 |
+| --- | --- | --- |
+| 1 | `check:schemas` | 0 |
+| 2 | `check:commands` | 0 |
+| 3 | `check:errors` | 0 |
+| 4 | `check:features` | 0 |
+| 5 | `check:assets` | 0 |
+| 6 | `check:acp` | 0 |
+| 7 | `check:docs` | 0 |
+| 8 | `check:boundaries` | 0 |
+| 9 | `check:drift` | 0 |
+| 10 | `check:agentic` | 0 |
+
+### 31.3 PV1：三条 Rust 门禁（在 `cae3dbd19e38fede8243ebc63f07012ab438c721` 上）
+
+| 命令 | 退出码 | 日志 |
+| --- | --- | --- |
+| `cargo fmt --all -- --check` | **0** | `reports/commitlint-scope-fix-cargo-fmt.log` |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | **0** | `reports/commitlint-scope-fix-cargo-clippy.log` |
+| `cargo test --locked --workspace --all-features` | **0** | `reports/commitlint-scope-fix-cargo-test.log` |
+
+`cargo test` 汇总：**1074 passed / 0 failed / 2 ignored**（与预期一致）。
+
+### 31.4 适用性说明
+
+本轮改动只涉及 `commitlint.config.mjs`（Node 侧词表）与 `AGENTS.md`（纯文档），**不触碰任何 `crates/**`**。`git diff 2ec1f0f cae3dbd -- crates/` 为空，因此 PV1 三条 Rust 结论对改词表前后的 HEAD 同时成立；本轮仍按计划在 `cae3dbd` 上实跑并留证，不以「必然不变」的推断代替实跑。
+
+## 32. 本轮未执行项（明确声明）
+
+- 未 push、未开 PR、未 merge、未 rebase、未 amend、未改任何既有提交信息。
+- 未在改动后的 HEAD 上执行 `openspec-agentic workflow check`（那是主 Agent 在最终验收阶段按 schema 执行的门，本轮不越权执行、也不代其判定）。
+- §29.2 所述的悬空引用风险按 B′ 裁定**整体不成立**（没有产生悬空引用），因此没有、也不需要做任何引用刷新。
+
+## 33. 工作区状态
+
+本轮两个入库动作完成后 `git status --porcelain` 为空（干净）。`target/` 保留未清理。
+
+## 34. 下一步
+
+1. 主 Agent 按 schema 执行 `workflow check` 与最终验收；本轮证据可直接引用。
+2. `references/heads/main` 从未 push，本轮改动是首次推送前的最后机会；推送后 CI 的 `commits` job 应对 `81e350f^..HEAD` 报 exit 0。
+
+## 35. 第 5 轮 handoff_index
+
+```yaml
+handoff_index:
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "cae3dbd19e38fede8243ebc63f07012ab438c721"
+    evidence_type: CHECK
+    evidence_id: PV2
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "扩词表后在 cae3dbd19e38fede8243ebc63f07012ab438c721 上，npx commitlint --from 81e350f^ --to HEAD 由 exit 1 / 10 problems 转为 exit 0（reports/commitlint-scope-fix-commitlint.log）；npm run check 整体 exit 0（reports/commitlint-scope-fix-npm-check-full.log），十道门禁 schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic 各自单独执行均 exit 0（reports/commitlint-scope-fix-npm-check.log，每道后附 @@@ <gate> EXIT=<码>），不以第 10 道内部的 validate 汇总充当全绿依据。本行只提供主分支 HEAD 门禁与提交信息合规证据，不构成 6.8 的独立 review 结论。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "cae3dbd19e38fede8243ebc63f07012ab438c721"
+    evidence_type: CHECK
+    evidence_id: PV1
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "在 cae3dbd19e38fede8243ebc63f07012ab438c721 上实跑：cargo fmt --all -- --check exit 0（reports/commitlint-scope-fix-cargo-fmt.log）；cargo clippy --locked --workspace --all-targets --all-features -- -D warnings exit 0（reports/commitlint-scope-fix-cargo-clippy.log）；cargo test --locked --workspace --all-features exit 0，汇总 1074 passed / 0 failed / 2 ignored（reports/commitlint-scope-fix-cargo-test.log）。本轮只改 commitlint.config.mjs 与 AGENTS.md，crates/ 树与其父提交 2ec1f0f 完全相同，故结论同样覆盖改动前的基线。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "cae3dbd19e38fede8243ebc63f07012ab438c721"
+    evidence_type: DELIVERY
+    evidence_id: NOT_APPLICABLE
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "本轮交付面：CI commits job 的提交 scope 合规修正。按用户裁定的 B 只扩充 commitlint.config.mjs 的 SCOPES 两项（session-resume 为新交付面；test 为如实注明来由的历史兼容项）并同步 AGENTS.md 第 8 节一句，唯一入库提交 cae3dbd19e38fede8243ebc63f07012ab438c721（tree 4a80460）。未 rebase / amend / 改提交信息 / merge / push，历史与全部既有 SHA 保持不变，因此前四轮记录里的所有 SHA 引用继续有效。第 29.2 节如实留痕了被否决的原方案 A（改写 3484541 会连带改变 10 个 SHA 并使约 12 个已入库文件的证据引用悬空）。"
+    source_evidence: NOT_APPLICABLE
+```
