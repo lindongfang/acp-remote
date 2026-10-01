@@ -453,3 +453,181 @@ handoff_index:
     applicability_basis: "merger 只提供合并新增差异的检视素材，不承担检视结论；tasks 6.8 的 REVIEW 行由主 Agent 另行派发独立 reviewer 承担。本轮素材见本报告第 10 节与 reports/merge-u1-main-diff-materials.md 第 2 轮小节：81e350f..HEAD = 130 files / +23103 / -213（62 产品合同文档 + 68 规划证据资产）、24 条提交、69f1ac1 为 1 行 md 修正；复核结论是合并没有引入任何新产品代码差异（2ed142d→0d2be6d 与 2ed142d→HEAD 在 change 目录外均为空输出，68 个差异文件 100% 落在 openspec/changes/session-resume/**）。"
     source_evidence: NOT_APPLICABLE
 ```
+
+---
+
+# 第 3 轮：合并后闭环修正与新 HEAD 门禁复跑（merger-A7）
+
+> 本节是实例 `merger-A7` 的追加记录，**上文第 1 轮（merger-A5）与第 2 轮（merger-A6）内容原样保留、不覆盖、不删除**。
+> 触发原因：`reports/cr-pm-post-merge-review.md` 判 FAIL，两项 MAJOR——CR-PM-F1（权威记录把一次 exit 1 的运行写成 exit 0 全绿，并拿第 10 道门禁内部子步骤的 validate 汇总充当「十道门禁全绿」依据）、CR-PM-F2（HEAD 上合同门禁仍为红，三份关键报告未入库）。
+> 本轮职责：**只做 git 提交与门禁验证**，**不再合并任何分支**。内容层修正由主 Agent 完成，本轮不重写其结论，只提交并在**新 HEAD** 上取得可核对的门禁日志。
+
+## 16. 本轮起点、暂存逐项核对与提交
+
+### 16.1 起点
+
+| 项 | 值 |
+| --- | --- |
+| 实例 | `merger-A7`（merger 角色独立执行者；未担任 coder / tester / reviewer） |
+| 工作目录 | `D:/Project/acp-remote`（主工作区，分支 `main`） |
+| 本轮起点 HEAD | `69f1ac1bc6af81461d199257f512965f646ec55c`（第 2 轮的 `target_revision`；本轮**未改动**该版本的任何判定） |
+| 硬边界遵守情况 | **未**执行 `git merge` / `rebase` / `push` / `commit --amend`；**未**开 PR；**未**动其它 worktree；**未**删除任何 `target/` 目录；`git commit` 一律带 `--no-verify` |
+
+### 16.2 暂存内容逐项核对（结论：只含预期集合，无越界路径）
+
+工作区初始状态（`git status --short` / `git diff --stat`）为 5 个已修改 md + 3 个未跟踪 md，**逐项核对如下**：
+
+| 路径 | 初始态 | 归属 | 核对结论 |
+| --- | --- | --- | --- |
+| `openspec/changes/session-resume/plan.md` | 已修改（1 行） | 主 Agent 的引用归属修正 | 符合预期 |
+| `openspec/changes/session-resume/tasks.md` | 已修改 | 6.6 勾选 + 6.7 撤回结案记录 | 符合预期 |
+| `openspec/changes/session-resume/verification.md` | 已修改 | DR1 第 19 行、`## Merge History` 两行、`## Check Plan Changes` 一条流程规则 | 符合预期 |
+| `openspec/changes/session-resume/reports/merge-u1-integrate-wp4.md` | 已修改（1 行） | 评审报告节引用改指真实小节（CR-PM-F3） | 符合预期 |
+| `openspec/changes/session-resume/reports/premerge-receipt-u1.md` | 已修改 | contractDigest 变迁如实记录（CR-PM-F4） | 符合预期 |
+| `openspec/changes/session-resume/reports/dr1-dependency-review-round19.md` | 未跟踪（新增） | CR-PM 指名的三份未入库报告之一 | 符合预期 |
+| `openspec/changes/session-resume/reports/merge-u1-main.md` | 未跟踪（新增） | 同上（**就是本文件**，第 1/2 轮内容首次入库） | 符合预期 |
+| `openspec/changes/session-resume/reports/merge-u1-main-diff-materials.md` | 未跟踪（新增） | 同上 | 符合预期 |
+
+**结论**：全部 8 个路径都在 `openspec/changes/session-resume/**` 之下，**没有任何 `crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**`、脚本或配置被触碰**，也**没有任何 `.log` 进入暂存**（`.gitignore` 对原始证据日志双重排除，本轮 `git add` 未使用 `-f`，暂存后 `.log` 仍显示为忽略项）。据此未触发「发现越界路径即停止」的停机条件。
+
+### 16.3 两次追加提交（**未 amend 任何既有提交**）
+
+| # | sha | 父提交 | 内容 |
+| --- | --- | --- | --- |
+| 1 | `20c1623ba3cf8ce751082b2699ef66b76f76f3cf` | `69f1ac1bc6af81461d199257f512965f646ec55c` | 主体修正 8 个文件（+829 / −8）：引用归属修正、6.6 勾选与 6.7 撤回记录、verification 三处回填、三份新报告入库、receipt 的 digest 变迁说明 |
+| 2 | `3458542b9edf0f4374e257ca84255299bf2ed28f` | `20c1623ba3cf8ce751082b2699ef66b76f76f3cf` | 仅 1 行：把 `## Merge History` 的 M1-后续 行「Merged Commit」格由「待填」回填为第 1 次提交的完整 sha |
+
+**6.6 的最终合并提交 = `20c1623ba3cf8ce751082b2699ef66b76f76f3cf`**（其父为 `69f1ac1…`，即合并提交 `0d2be6d` 之后的第一个修正提交）。分两次提交而非 `--amend` 的原因：保留已写进 `## Merge History` 的 `20c1623` 这个 sha 不被改写，历史可审计。
+
+提交后 `git status --short` 为**空**（除 `.gitignore` 排除的 `*.log` 外无本轮引入的未跟踪遗留）。
+
+## 17. 新 HEAD 上的门禁复跑（权威证据，均已落盘）
+
+- **`target_revision`（本节所有检查的目标版本）= `3458542b9edf0f4374e257ca84255299bf2ed28f`**
+- 环境：`cwd=D:/Project/acp-remote`，分支 `main`，`CARGO_TARGET_DIR` 未设置（沿用仓库根默认 `target/`），Node v24.19.0 / npm 12.0.2
+- 每份日志首三行为 `# revision: <完整 sha>`、`# command: <完整命令>`、`# exit: <退出码>`，可与本节表格逐项对照
+
+### 17.1 PV2：`npm run check` —— **exit 0**
+
+日志：`reports/merge-u1-main-closure-npm-check.log`（末行 `# exit: 0`）。这是**完整串行链**的一次运行，`&&` 无短路，十道全部执行完毕。
+
+### 17.2 十道门禁**逐道**结论与退出码
+
+为避免「串行链里前一道失败会掩盖后面几道」，也避免拿第 10 道门禁内部子步骤的 validate 汇总充当全绿依据，本轮把 `package.json` 的 `check` 链拆开**逐道单独执行**一次，日志：`reports/merge-u1-main-closure-check-gates.log`。
+
+| # | 门禁 | 退出码 | 结论 |
+| --- | --- | --- | --- |
+| 1 | `check:schemas` | 0 | PASS |
+| 2 | `check:commands` | 0 | PASS |
+| 3 | `check:errors` | 0 | PASS |
+| 4 | `check:features` | 0 | PASS |
+| 5 | `check:assets` | 0 | PASS |
+| 6 | `check:acp` | 0 | PASS |
+| 7 | `check:docs` | 0 | **PASS**（第 2 轮唯一失败的那一道，本轮无任何错误；CR-PM-F2 的直接消除点） |
+| 8 | `check:boundaries` | 0 | PASS |
+| 9 | `check:drift` | 0 | PASS |
+| 10 | `check:agentic` | 0 | PASS（其输出中的 validate 汇总行只是本道**内部**子步骤的结果，**本报告不以它作为全绿依据**） |
+
+### 17.3 PV1 三条
+
+| 阶段 | 完整命令 | 退出码 | 结论 | 日志 |
+| --- | --- | --- | --- | --- |
+| 1 | `cargo fmt --all -- --check` | 0 | PASS（无输出即无差异） | `reports/merge-u1-main-closure-PV1-stage1-fmt.log` |
+| 1 | `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | 0 | PASS（0 诊断） | `reports/merge-u1-main-closure-PV1-stage1-clippy.log` |
+| 2 | `cargo test --locked --workspace --all-features` | 0 | PASS（**1074 passed / 0 failed / 2 ignored**，91 个 test target 全部 `test result: ok`，无一个 FAILED） | `reports/merge-u1-main-closure-PV1-stage2-workspace-test.log` |
+
+### 17.4 一致性核对（6.7 的另一半义务）
+
+`git diff --name-only 69f1ac1 3458542` 的全部输出都落在 `openspec/changes/session-resume/**` 之内，`crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**` **零差异**。⇒ 实际主分支的**产品代码面与候选 `2ed142d` 逐字节一致**，本轮 PV1/PV2 的结果对候选同样成立。
+
+## 18. 6.7 结案判定与依据
+
+**结论：PASS（已结案）。** 依据是本轮**新落盘**的日志，不是上一轮那份 exit 1 的记录：
+
+1. PV2 `npm run check` 在新 HEAD 上 **exit 0**（`reports/merge-u1-main-closure-npm-check.log`），十道门禁另有逐道单独执行的 exit 0 记录（`reports/merge-u1-main-closure-check-gates.log`）——**不是**用第 10 道门禁内部的 validate 汇总充当依据，CR-PM-F1 的取据方式已纠正。
+2. PV1 三条 exit 0，workspace 测试 1074 passed / 0 failed / 2 ignored（各带三行头的独立日志）。
+3. 一致性核对通过（17.4）。
+
+`tasks.md` 的 6.7 据此勾选，并保留第 2 轮写入的撤回记录作为历史（不删除、不改写）。6.8 是独立 reviewer 的检视行，**不由本角色结案**，其检视素材沿用本报告第 10 节与 `reports/merge-u1-main-diff-materials.md`（三份报告入库后，change 目录内的差异文件数由 68 增至 71、全仓由 130 增至 133；change 目录外仍为零差异）。
+
+## 19. 本轮未执行项（明确声明）
+
+| 未执行 | 原因 |
+| --- | --- |
+| **未 merge / rebase / push / commit --amend** | 本轮硬边界：只做提交与验证，不做任何合并类操作 |
+| **未开 PR、未创建远端分支、未归档** | 硬边界；远端交付与归档由主 Agent 单独发起 |
+| **未动其它 worktree、未删除任何 `target/`** | 硬边界；`D:/Project/acp-remote-wt/session-resume-du1` 原样保留 |
+| **未修改** `plan.md` / `verification.md` 的内容 | 本轮对二者的写入仅为：入库主 Agent 已完成的修正，以及任务指定的 sha 回填；未新增业务判断 |
+| **未修改** `crates/**`、`docs/**`、`schemas/**`、`fixtures/**`、`compatibility/**`、任何脚本或配置 | 本角色硬边界；也确保门禁变绿**不是**靠改代码或改文档实现的 |
+| **未重跑** `workflow check --stage premerge` | 合并已发生，该 stage 的判定条件（候选须包含当前目标基线）在结构上不再成立；其使命已在合并时完成 |
+| **未执行 E2E** | `plan.md` 的 Main E2E 为 `mode: not-applicable`（经用户批准），替代检查为 PV1 / PV2 |
+| **未执行** `cargo-deny` / `gitleaks` | 需要网络或额外二进制，只在 CI 判定（`AGENTS.md` 第 8 节、`docs/adr/0008-ci-supply-chain-tooling.md`）；**本地无等价物，不得据本报告宣称已通过** |
+| **未对 6.8 下结论** | 独立 reviewer 职责，本角色只提供检视素材 |
+
+## 20. 下一步
+
+1. **（主 Agent）** 核对本轮两次提交与 `## Merge History` 的 M1-后续 行，并把本轮 PV1/PV2 的证据行汇总进 `verification.md`。
+2. **（主 Agent 调度）** 按 tasks 6.8 派独立 reviewer 检视合并新增差异，素材见本报告第 10、17.4 节与 `reports/merge-u1-main-diff-materials.md`。
+3. **（主 Agent）** 远端交付（push / PR）与归档在上述闭环后单独发起。
+
+## 21. 第 3 轮 handoff_index
+
+```yaml
+handoff_index:
+  - task_id: "6.6"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "3458542b9edf0f4374e257ca84255299bf2ed28f"
+    evidence_type: DELIVERY
+    evidence_id: NOT_APPLICABLE
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "6.6 的最终合并提交为 20c1623ba3cf8ce751082b2699ef66b76f76f3cf（父 69f1ac1bc6af81461d199257f512965f646ec55c），其后为 3458542b9edf0f4374e257ca84255299bf2ed28f 的 sha 回填。暂存内容逐项核对：8 个路径 100% 落在 openspec/changes/session-resume/**，无 crates/docs/schemas/fixtures/compatibility 改动，无 .log 入库（git add 未用 -f）。未 merge/rebase/push/amend，未开 PR，未动其它 worktree，未删 target/。sha 已写入 verification.md 的 ## Merge History M1-后续 行。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.7"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "3458542b9edf0f4374e257ca84255299bf2ed28f"
+    evidence_type: CHECK
+    evidence_id: PV1
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "在新 HEAD 3458542b9edf0f4374e257ca84255299bf2ed28f 上于主工作区亲跑三条：cargo fmt --all -- --check (exit 0，日志 reports/merge-u1-main-closure-PV1-stage1-fmt.log)、cargo clippy --locked --workspace --all-targets --all-features -- -D warnings (exit 0、0 诊断，日志 reports/merge-u1-main-closure-PV1-stage1-clippy.log)、cargo test --locked --workspace --all-features (exit 0，1074 passed / 0 failed / 2 ignored，91 个 test target 全 ok，日志 reports/merge-u1-main-closure-PV1-stage2-workspace-test.log)。三份日志首三行为 revision/command/exit。一致性：git diff 69f1ac1..3458542 在 change 目录外零差异，代码面与候选 2ed142d 一致，故结论对候选同样成立。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.7"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "3458542b9edf0f4374e257ca84255299bf2ed28f"
+    evidence_type: CHECK
+    evidence_id: PV2
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: PASS
+    evidence_status: NEW
+    applicability_basis: "npm run check 在新 HEAD 3458542b9edf0f4374e257ca84255299bf2ed28f 上 exit 0（日志 reports/merge-u1-main-closure-npm-check.log，完整串行链无短路）。为避免 && 短路掩盖结论、也避免拿第 10 道门禁内部的 validate 汇总充当全绿依据，另把十道门禁逐道单独执行：schemas/commands/errors/features/assets/acp/docs/boundaries/drift/agentic 全部 exit 0（日志 reports/merge-u1-main-closure-check-gates.log，其中第 7 道 check:docs 是第 2 轮唯一失败项，本轮无任何错误）。CR-PM-F1 所指的取据错误（拿 exit 1 的旧日志与 validate 汇总当全绿依据）在本轮已纠正，本轮不引用 reports/merge-u1-main-final-*.log。"
+    source_evidence: NOT_APPLICABLE
+  - task_id: "6.8"
+    work_package: DELIVERY
+    role: merger
+    phase: merge
+    round: NOT_APPLICABLE
+    stage: main
+    target_revision: "3458542b9edf0f4374e257ca84255299bf2ed28f"
+    evidence_type: DELIVERY
+    evidence_id: NOT_APPLICABLE
+    report_path: "openspec/changes/session-resume/reports/merge-u1-main.md"
+    result: NOT_APPLICABLE
+    evidence_status: NEW
+    applicability_basis: "merger 只提供检视素材、不承担检视结论；6.8 的 REVIEW 行由主 Agent 另行派发独立 reviewer。本轮素材：本报告第 17.4 节（change 目录外零差异）+ reports/merge-u1-main-diff-materials.md（该文件本轮首次入库，含前两轮小节）；本轮两次提交把 change 目录内的差异文件数补到 71 个（全仓 133 个），产品代码差异仍为零。"
+    source_evidence: NOT_APPLICABLE
+```
