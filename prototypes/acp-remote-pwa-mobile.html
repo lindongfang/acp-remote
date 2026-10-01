@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#ffffff" />
 <title>ACP Remote · PWA 原型（移动端）</title>
+<script>
+/* 主题：跟随系统（默认）/ 白天 / 黑夜。先于首次绘制设置，避免闪白。 */
+(function(){
+  try{
+    var m = localStorage.getItem("acpr-proto-theme") || "system";
+    var eff = (m === "system")
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : m;
+    document.documentElement.setAttribute("data-theme", eff);
+  }catch(e){}
+})();
+</script>
 <style>
   :root{
     --bg:#f6f7f9; --panel:#ffffff; --panel-2:#fbfbfc; --line:#e4e6eb; --line-2:#eef0f3;
@@ -18,8 +30,7 @@
     --shadow:0 1px 2px rgba(18,21,26,.05),0 8px 24px rgba(18,21,26,.06);
     --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
   }
-  @media (prefers-color-scheme: dark){
-    :root{
+  :root[data-theme="dark"]{
       --bg:#0e1116; --panel:#151a21; --panel-2:#11151b; --line:#252c36; --line-2:#1e242c;
       --ink:#e8ecf2; --ink-2:#a8b1bd; --ink-3:#79838f;
       --accent:#8098f9; --accent-ink:#a5b4fc; --accent-soft:#1b2237;
@@ -37,15 +48,15 @@
   button{font:inherit;color:inherit}
   /* 桌面上显示为手机画布 */
   .frame{width:100%;max-width:430px;height:100dvh;max-height:100dvh;background:var(--bg);
-    display:flex;flex-direction:column;position:relative;overflow:hidden}
+    display:flex;flex-direction:column;position:relative;overflow:hidden;container-type:inline-size}
   @media (min-width:520px){
     body{background:#eceef2}
     .frame{height:92vh;max-height:920px;border-radius:26px;box-shadow:0 18px 60px rgba(18,21,26,.18);border:1px solid #dcdfe6}
   }
 
   /* ---------- app bar ---------- */
-  .appbar{flex:none;padding:calc(var(--sat) + 8px) 12px 8px;background:var(--panel);
-    border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;min-height:52px}
+  .appbar{flex:none;padding:calc(var(--sat) + 5px) 12px 5px;background:var(--panel);
+    border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;min-height:48px}
   .ab-btn{border:0;background:transparent;min-width:44px;min-height:44px;border-radius:10px;cursor:pointer;
     color:var(--accent);display:grid;place-items:center}
   .ab-btn:active{background:var(--accent-soft)}
@@ -64,48 +75,56 @@
   .dot.closed{opacity:.55}
 
   /* ---------- 通用 ---------- */
-  .scroll{flex:1;overflow:auto;padding:12px;padding-bottom:calc(12px + var(--sab))}
+  .scroll{flex:1;overflow:auto;padding:10px 12px;padding-bottom:calc(10px + var(--sab))}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);
-    overflow:hidden;margin-bottom:12px}
-  .dhead{display:flex;align-items:center;gap:8px;padding:12px 14px;background:var(--panel-2);
+    overflow:hidden;margin-bottom:9px}
+  .caret{width:13px;flex:none;color:var(--ink-3);font-size:10px;text-align:center;cursor:pointer;transition:transform .15s}
+  .card.collapsed .caret{transform:rotate(-90deg)}
+  .card.collapsed .dbody{display:none}
+  .dhead .caret{color:var(--ink-3)}
+  .dhead{display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--panel-2);
     border-bottom:1px solid var(--line)}
-  .dicon{width:26px;height:26px;border-radius:8px;background:var(--accent-soft);color:var(--accent-ink);
-    display:grid;place-items:center;font-size:13px;flex:none}
+  .dicon{width:20px;height:20px;border-radius:6px;background:var(--accent-soft);color:var(--accent-ink);
+    display:grid;place-items:center;font-size:11px;flex:none}
   .dname{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .dpath{font-family:var(--mono);font-size:11px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--ink-3);flex:none}
-  .dbody{display:block;margin-left:22px;border-left:2px solid var(--line-2)}
-  .srow{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-2);
-    cursor:pointer;min-height:56px}
+  .chip.flat{border-color:transparent;background:transparent;padding:2px 2px}
+  .dbody{display:block;margin-left:14px;border-left:2px solid var(--line-2)}
+  .srow{display:flex;align-items:center;gap:9px;padding:6px 12px;border-bottom:1px solid var(--line-2);
+    cursor:pointer;min-height:44px}
   .srow:last-child{border-bottom:0}
   .srow:active{background:var(--panel-2)}
   .srow.on{background:var(--accent-soft)}
-  .srow .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14.5px}
+  .srow .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13.5px}
   .srow .t.noname{font-style:italic;color:var(--ink-3)}
-  .srow .w{font-size:11.5px;color:var(--ink-3);flex:none}
+  .srow .w{font-size:11px;color:var(--ink-3);flex:none}
   .srow .st{font-size:11.5px;color:var(--warn);flex:none;font-weight:600}
   .linkbtn{border:0;background:transparent;color:var(--accent);font-size:13.5px;cursor:pointer;
-    padding:10px 8px;min-height:44px;border-radius:8px}
+    padding:7px 5px;min-height:38px;border-radius:8px}
+  .cardacts{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    border-top:1px solid var(--line-2);padding:1px 10px 1px 12px}
+  .cardacts .linkbtn{font-size:12.5px;min-height:32px;padding:5px 4px}
   .linkbtn:active{background:var(--accent-soft)}
-  .btn{border:1px solid var(--line);background:var(--panel);padding:11px 16px;border-radius:10px;
-    cursor:pointer;min-height:44px;font-weight:600}
+  .btn{border:1px solid var(--line);background:var(--panel);padding:9px 15px;border-radius:10px;
+    cursor:pointer;min-height:42px;font-weight:600}
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .btn.stop{background:var(--danger);border-color:var(--danger);color:#fff}
   .btn[disabled]{opacity:.5}
   .btn.block{display:block;width:100%}
-  .blank{text-align:center;padding:52px 24px;color:var(--ink-3)}
+  .blank{text-align:center;padding:38px 20px;color:var(--ink-3)}
   .blank h2{color:var(--ink);font-size:17px;margin:0 0 8px}
   .search{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
-    border-radius:10px;padding:10px 12px;margin-bottom:10px}
+    border-radius:9px;height:34px;padding:0 10px;margin-bottom:6px}
   .search input{flex:1;border:0;outline:0;background:transparent;font:inherit;color:var(--ink)}
-  .segbar{display:flex;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel);margin-bottom:10px}
-  .segbar button{flex:1;border:0;background:transparent;padding:11px 0;cursor:pointer;font-size:13.5px;color:var(--ink-2)}
+  .segbar{display:flex;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel);margin-bottom:8px}
+  .segbar button{flex:1;border:0;background:transparent;padding:9px 0;cursor:pointer;font-size:13.5px;color:var(--ink-2)}
   .segbar button+button{border-left:1px solid var(--line)}
   .segbar button.on{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
   .notice{border-radius:10px;padding:11px 13px;font-size:13px;display:flex;gap:9px;align-items:flex-start;margin-bottom:10px}
   .notice.warn{background:var(--warn-soft);color:var(--warn)}
   .notice.info{background:var(--accent-soft);color:var(--accent-ink)}
-  .connstrip{flex:none;display:flex;align-items:center;gap:9px;padding:8px 14px;background:var(--accent-soft);
+  .connstrip{flex:none;display:flex;align-items:center;gap:9px;padding:6px 13px;background:var(--accent-soft);
     color:var(--accent-ink);font-size:12.5px;border-bottom:1px solid var(--line)}
   .connstrip.warn{background:var(--warn-soft);color:var(--warn)}
   .spin{width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
@@ -114,16 +133,19 @@
 
   /* ---------- 对话 ---------- */
   .tabbar{flex:none;display:flex;gap:0;border-top:1px solid var(--line);background:var(--panel)}
-  .tabbar button{flex:1;border:0;background:transparent;padding:11px 0;cursor:pointer;font-size:13px;
-    color:var(--ink-3);min-height:48px;display:flex;align-items:center;justify-content:center;gap:7px}
+  .tabbar button{flex:1;border:0;background:transparent;padding:8px 0;cursor:pointer;font-size:13px;
+    color:var(--ink-3);min-height:42px;display:flex;align-items:center;justify-content:center;gap:7px}
   .tabbar button.on{color:var(--accent);font-weight:700;box-shadow:inset 0 -2px 0 var(--accent)}
-  .composer{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:8px 12px calc(8px + var(--sab))}
-  .chips{display:flex;gap:7px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch}
+  .composer{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:6px 12px calc(6px + var(--sab))}
+  .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch}
   .chip-pick{flex:none;border:1px solid var(--line);background:var(--panel-2);border-radius:999px;
-    padding:6px 12px;font-size:12.5px;color:var(--ink-2);cursor:pointer;min-height:34px}
+    padding:5px 11px;font-size:12.5px;color:var(--ink-2);cursor:pointer;min-height:32px}
+  .chips .chip-pick{font-size:12px;padding:4px 10px;min-height:28px}
+  /* 选中态用底色区分（不用勾） */
+  .chip-pick.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
   .chip-pick b{color:var(--ink)}
   .chip-ctx{flex:none;display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);
-    background:var(--panel-2);border-radius:999px;padding:6px 12px;font-size:12px;color:var(--ink-2);min-height:34px}
+    background:var(--panel-2);border-radius:999px;padding:5px 11px;font-size:12px;color:var(--ink-2);min-height:32px}
   .chip-ctx .bar{width:52px;height:5px;border-radius:3px;background:var(--line);overflow:hidden}
   .chip-ctx .bar i{display:block;height:100%;background:var(--ok)}
   .chip-ctx.warn .bar i{background:var(--warn)} .chip-ctx.crit .bar i{background:var(--danger)}
@@ -131,11 +153,11 @@
   .inputrow{display:flex;gap:8px;align-items:flex-end;border:1px solid var(--line);border-radius:14px;
     padding:8px 10px;background:var(--panel-2)}
   .inputrow textarea{flex:1;border:0;outline:0;background:transparent;font:inherit;color:var(--ink);
-    resize:none;min-height:40px;max-height:120px;line-height:1.5}
-  .hintrow{font-size:11px;color:var(--ink-3);margin-top:6px;display:flex;gap:10px;flex-wrap:wrap}
+    resize:none;min-height:34px;max-height:104px;line-height:1.45}
+  .hintrow{font-size:11px;color:var(--ink-3);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}
   .msg-user{max-width:84%;margin-left:auto;background:var(--accent-soft);border-radius:14px;
-    padding:10px 13px;margin-top:14px;word-break:break-word}
-  .msg-agent{margin-top:16px}
+    padding:9px 12px;margin-top:10px;word-break:break-word}
+  .msg-agent{margin-top:12px}
   .msg-agent .bubble{background:var(--panel);border:1px solid var(--line);border-radius:14px;
     padding:12px 13px;word-break:break-word}
   .who{font-size:11px;color:var(--ink-3);margin:0 2px 5px}
@@ -143,20 +165,20 @@
   .tstamp{font-size:11px;color:var(--ink-3);margin-top:4px}
   .msg-user+.tstamp{text-align:right}
   .fold{border:1px solid var(--line);border-left:3px solid var(--line);border-radius:10px;
-    background:var(--panel);overflow:hidden;margin-top:8px}
+    background:var(--panel);overflow:hidden;margin-top:6px}
   .fold.think{border-left-color:var(--think);background:var(--think-soft)}
   .fold.tool{border-left-color:var(--tool);background:var(--tool-soft)}
   .fold.perm{border-left-color:var(--warn);background:var(--warn-soft)}
   .fold.think .kind{color:var(--think)} .fold.tool .kind{color:var(--tool)} .fold.perm .kind{color:var(--warn)}
-  .fold .fh{background:transparent;display:flex;align-items:center;gap:9px;padding:11px 12px;cursor:pointer;
-    font-size:13px;color:var(--ink-2);min-height:44px}
+  .fold .fh{background:transparent;display:flex;align-items:center;gap:9px;padding:8px 11px;cursor:pointer;
+    font-size:13px;color:var(--ink-2);min-height:40px}
   .fold .caret{width:12px;flex:none}
   .fold.open .caret{transform:rotate(90deg)}
   .fold .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fold .ttl.mono{font-family:var(--mono);font-size:11.5px}
   .fold .st{font-size:11.5px;color:var(--ink-3);flex:none}
   .fold .st.ok{color:var(--ok)} .fold .st.run{color:var(--accent)}
-  .fold .fb{padding:10px 12px;border-top:1px solid var(--line-2);font-size:13px;color:var(--ink-2);
+  .fold .fb{padding:9px 11px;border-top:1px solid var(--line-2);font-size:13px;color:var(--ink-2);
     white-space:pre-wrap;background:var(--panel)}
   .fold:not(.open) .fb{display:none}
   .fold .fb.dim{color:var(--ink-3);font-style:italic}
@@ -170,7 +192,7 @@
   .fb .prev .ctx{color:var(--ink-3)}
   .fb .out{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:8px;
     font-family:var(--mono);font-size:11px;margin:0 0 9px;white-space:pre;overflow:auto}
-  .code{margin-top:10px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;
+  .code{margin-top:8px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;
     overflow:hidden;background:var(--panel)}
   .code .ch{display:flex;align-items:center;gap:8px;padding:7px 11px;background:var(--accent-soft);
     border-bottom:1px solid var(--line-2);font-size:11.5px;color:var(--accent-ink)}
@@ -182,21 +204,21 @@
   .s-kw{color:var(--accent-ink);font-weight:600} .s-str{color:var(--ok)} .s-num{color:var(--warn)}
   .s-com{color:var(--ink-3);font-style:italic} .s-dec{color:var(--think)}
   .md>:first-child{margin-top:0} .md>:last-child{margin-bottom:0}
-  .md p{margin:0 0 9px;white-space:pre-wrap}
-  .md h1{font-size:17px;margin:14px 0 7px} .md h2{font-size:16px;margin:14px 0 7px} .md h3{font-size:15px;margin:12px 0 6px}
-  .md ul,.md ol{margin:0 0 9px;padding-left:22px} .md li{margin:3px 0}
+  .md p{margin:0 0 7px;white-space:pre-wrap}
+  .md h1{font-size:17px;margin:11px 0 5px} .md h2{font-size:16px;margin:11px 0 5px} .md h3{font-size:15px;margin:9px 0 4px}
+  .md ul,.md ol{margin:0 0 7px;padding-left:20px} .md li{margin:2px 0}
   .md blockquote{margin:0 0 9px;padding:8px 12px;border-left:3px solid var(--line);
     background:var(--panel-2);border-radius:0 8px 8px 0;color:var(--ink-2)}
   .md code{font-family:var(--mono);font-size:.9em;background:var(--panel-2);border:1px solid var(--line);
     border-radius:5px;padding:1px 5px}
-  .md table{border-collapse:collapse;margin:0 0 10px;font-size:12.5px;width:100%}
+  .md table{border-collapse:collapse;margin:0 0 8px;font-size:12.5px;width:100%}
   .md th,.md td{border:1px solid var(--line);padding:6px 8px;text-align:left}
   .md th{background:var(--panel-2);font-weight:600}
   .md a{color:var(--accent)}
   .md .imgblk{color:var(--ink-3);font-style:italic;font-size:12.5px}
   .md .badlink{color:var(--danger);text-decoration:line-through}
   .perm{border:1px solid var(--warn);border-left:3px solid var(--warn);background:var(--warn-soft);
-    border-radius:12px;padding:12px;margin-top:8px}
+    border-radius:12px;padding:11px;margin-top:6px}
   .perm .ptitle{font-weight:600;font-size:14px;margin-bottom:6px}
   .perm .pdesc{font-family:var(--mono);font-size:11.5px;background:var(--panel);border:1px solid var(--line);
     border-radius:7px;padding:8px;margin:8px 0 11px;white-space:pre-wrap}
@@ -209,7 +231,7 @@
   .perm .opts .btn.p-reject{background:var(--danger)}
   .perm .opts .btn:active{filter:brightness(.94)}
   .deg{border:1px dashed var(--line);border-left:3px solid var(--ink-3);background:var(--panel-2);
-    border-radius:10px;padding:11px 12px;margin-top:8px}
+    border-radius:10px;padding:10px 11px;margin-top:6px}
   .deg.warn{border-left-color:var(--warn);border-color:var(--warn-soft)}
   .deg .dh{font-size:13.5px;font-weight:600;display:flex;gap:8px;align-items:center}
   .deg .det{margin:6px 0 0;font-size:12.5px;color:var(--ink-2)}
@@ -222,8 +244,8 @@
     gap:8px;background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:999px;
     padding:10px 16px;font-size:13px;color:var(--ink-2);z-index:9;min-height:44px}
   .jumppill b{color:var(--accent)}
-  .fitem{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line-2);
-    cursor:pointer;min-height:52px}
+  .fitem{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line-2);
+    cursor:pointer;min-height:48px}
   .fitem:active{background:var(--panel-2)} .fitem.on{background:var(--accent-soft)}
   .fst{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;font-size:10px;font-weight:700;flex:none}
   .fst.M{background:var(--warn-soft);color:var(--warn)} .fst.A{background:var(--ok-soft);color:var(--ok)}
@@ -237,6 +259,9 @@
   .diff .add{background:var(--ok-soft);color:var(--ok)}
   .diff .ctx{color:var(--ink-3)}
   .diff .hd{background:var(--panel-2);color:var(--ink-3);font-size:10.5px;padding:4px 9px}
+
+  /* 容器查询：按画布宽度而非视口判断，桌面预览手机时同样生效 */
+  @container (max-width:520px){ .kbdhint{display:none} }
 
   /* ---------- 底部 sheet（全屏） ---------- */
   .scrim{position:fixed;inset:0;background:rgba(10,12,16,.45);opacity:0;pointer-events:none;
@@ -285,25 +310,25 @@
     margin-top:12px;line-height:1.6}
 
   /* ---------- 配对 ---------- */
-  .pairbody{flex:1;overflow:auto;padding:20px 18px calc(24px + var(--sab))}
-  .pair h1{font-size:23px;line-height:1.3;margin:0 0 10px}
+  .pairbody{flex:1;overflow:auto;padding:16px 16px calc(18px + var(--sab))}
+  .pair h1{font-size:21px;line-height:1.3;margin:0 0 8px}
   .pair h2{font-size:15px;margin:0 0 10px}
-  .lede{margin:0 0 22px;color:var(--ink-2)}
+  .lede{margin:0 0 16px;color:var(--ink-2)}
   .sasgrid{display:flex;gap:7px;margin:0 0 16px}
-  .sasgrid span{flex:1;aspect-ratio:3/4;display:grid;place-items:center;font-family:var(--mono);
-    font-size:26px;font-weight:600;background:var(--panel-2);border:1px solid var(--line);border-radius:10px}
+  .sasgrid span{flex:1;aspect-ratio:1/1;display:grid;place-items:center;font-family:var(--mono);
+    font-size:24px;font-weight:600;background:var(--panel-2);border:1px solid var(--line);border-radius:10px}
   .kvbox{border:1px solid var(--line);border-radius:10px;padding:12px;margin:0 0 18px;background:var(--panel)}
   .glyph{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:22px;
     background:var(--warn-soft);color:var(--warn);margin:0 0 18px}
   .glyph.danger{background:var(--danger-soft);color:var(--danger)}
   .olsteps{margin:0;padding-left:20px;font-size:13.5px;color:var(--ink-2)}
-  .olsteps li{margin:5px 0}
+  .olsteps li{margin:3px 0}
   .scopelist{list-style:none;margin:0;padding:0}
-  .scopelist li{display:flex;gap:10px;font-size:13.5px;margin:7px 0;align-items:flex-start}
+  .scopelist li{display:flex;gap:10px;font-size:13.5px;margin:5px 0;align-items:flex-start}
   .tick{width:17px;height:17px;border-radius:5px;border:1.5px solid var(--line);flex:none;margin-top:3px;
     display:grid;place-items:center;font-size:11px}
   .tick.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
-  .countdown{display:flex;align-items:center;gap:12px;margin:18px 0 6px}
+  .countdown{display:flex;align-items:center;gap:12px;margin:12px 0 4px}
   .cdtime{font-family:var(--mono);font-size:20px}
   .hint{font-size:12.5px;color:var(--ink-3);line-height:1.6}
 
@@ -340,6 +365,11 @@
 <section class="console" id="console">
   <header id="consoleHead">原型控制台 <span style="margin-left:auto;font-size:10px;color:var(--ink-3)">not product UI</span></header>
   <div class="body">
+    <label>主题<select id="themeSel">
+      <option value="system">跟随系统</option>
+      <option value="light">白天</option>
+      <option value="dark">黑夜</option>
+    </select></label>
     <div class="row" id="navRow">
       <button data-go="#/dirs">目录</button>
       <button data-go="#/chat/s1">对话</button>
@@ -732,7 +762,12 @@ function appbar(title, sub, right, back){
   return '<div class="appbar">' +
     (back!==false ? '<button class="ab-btn" data-act="back">‹</button>' : '') +
     '<div class="ab-title"><div class="t">'+title+'</div>'+(sub?'<div class="s">'+sub+'</div>':'')+'</div>' +
-    (right||'')+'</div>';
+    (right||'') + themeBtnHtml() + '</div>';
+}
+function themeBtnHtml(){
+  var dark = effTheme() === "dark";
+  return '<button class="ab-btn" data-act="theme" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式">' +
+    (dark ? "☀️" : "🌙") + '</button>';
 }
 
 function viewDirs(){
@@ -751,23 +786,28 @@ function viewDirs(){
     var rows = all.filter(passFilter);
     if(!rows.length && q) return;
     var active0 = all.filter(function(s){ return s.state==="running"||s.state==="queued"; }).length;
-    body += '<div class="card"><div class="dhead">' +
+    var collapsed = !!A.open["d-"+dir.id];
+    body += '<div class="card'+(collapsed?" collapsed":"")+'"><div class="dhead">' +
+      '<span class="caret" data-toggle="d-'+dir.id+'">▼</span>' +
       '<span class="dicon">▤</span><span class="dname">'+esc(dir.name)+'</span>' +
-      (active0?'<span class="chip" style="color:var(--ok);border-color:transparent;background:var(--ok-soft)">运行中 '+active0+'</span>':'') +
-      '<span class="chip">'+all.length+' 个</span></div><div class="dbody">' +
-      rows.slice(0,5).map(function(s){ return srow(s); }).join("") +
-      (all.length>5 ? '<div style="padding:2px 0"><button class="linkbtn" data-all="'+dir.id+'">查看全部 '+all.length+' 个 ›</button></div>' : '') +
-      (!all.length ? '<div style="padding:12px 14px;color:var(--ink-3);font-size:13px">这个目录还没有会话</div>' : '') +
-      '<div style="padding:4px 0"><button class="linkbtn" data-new="'+dir.id+'">⊕ 新建会话</button></div>' +
-      '</div></div>';
+      (active0?'<span class="chip flat" style="color:var(--ok);background:var(--ok-soft)">运行中 '+active0+'</span>':'') +
+      '<span class="chip flat">'+all.length+' 个会话</span></div><div class="dbody">' +
+      rows.slice(0,3).map(function(s){ return srow(s); }).join("") +
+      (!all.length ? '<div style="padding:10px 12px;color:var(--ink-3);font-size:13px">这个目录还没有会话</div>' : '') +
+      '<div class="cardacts">' +
+        (all.length>3 ? '<button class="linkbtn" data-all="'+dir.id+'">查看全部 '+all.length+' 个 ›</button>' : '<span></span>') +
+        '<button class="linkbtn" data-new="'+dir.id+'">⊕ 新建会话</button>' +
+      '</div></div></div>';
   });
   body += '</div>';
   return h + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
-    '<div style="padding:10px 12px 0"><div class="search"><span>🔍</span>' +
+    '<div style="padding:8px 12px 0"><div class="search"><span>🔍</span>' +
     '<input data-q value="'+esc(A.query)+'" placeholder="搜索目录或会话" /></div>' +
-    '<div class="segbar"><button data-f="all" class="'+(A.filter==="all"?"on":"")+'">全部</button>' +
-    '<button data-f="running" class="'+(A.filter==="running"?"on":"")+'">运行中</button>' +
-    '<button data-f="waiting" class="'+(A.filter==="waiting"?"on":"")+'">待处理</button></div></div>' + body + '</div>';
+    '<div class="chips" style="margin-bottom:6px">' +
+      '<button class="chip-pick'+(A.filter==="all"?" on":"")+'" data-f="all">全部</button>' +
+      '<button class="chip-pick'+(A.filter==="running"?" on":"")+'" data-f="running">运行中</button>' +
+      '<button class="chip-pick'+(A.filter==="waiting"?" on":"")+'" data-f="waiting">待处理</button>' +
+    '</div></div>' + body + '</div>';
 }
 function srow(s){
   var name = s.title ? esc(s.title) : '<span class="noname">未命名会话</span>';
@@ -881,7 +921,7 @@ function chatPane(s){
       (isClosed()?"会话已关闭":(active()?"进行中，完成后可继续输入":"给 Agent 发消息"))+'"></textarea>' +
       (active()?'<button class="btn stop" data-act="stop">■ 停止</button>'
                :'<button class="btn primary" data-act="send">发送</button>')+'</div>' +
-    '<div class="hintrow"><span>Enter 发送 · Shift+Enter 换行</span><span>📎 附件暂不支持</span></div></div>';
+    '<div class="hintrow"><span class="kbdhint">Enter 发送 · Shift+Enter 换行</span><span>📎 附件暂不支持</span></div></div>';
   return head + strip + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
     body + tabbar + composer + '</div>';
 }
@@ -1047,6 +1087,33 @@ function newSessionSheet(){
     '<button class="btn block primary" style="margin-top:14px" data-act="create">创建会话</button>';
 }
 
+/* ============ 主题（跟随系统 / 白天 / 黑夜） ============ */
+var THEME_KEY = "acpr-proto-theme";
+function storedTheme(){ try{ return localStorage.getItem(THEME_KEY) || "system"; }catch(e){ return "system"; } }
+function effTheme(){
+  return (storedTheme() === "system")
+    ? ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light")
+    : storedTheme();
+}
+function applyTheme(mode){
+  var eff = mode;
+  if(mode === "system"){
+    eff = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  }
+  document.documentElement.setAttribute("data-theme", eff);
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute("content", eff === "dark" ? "#0e1116" : "#ffffff");
+  try{ localStorage.setItem(THEME_KEY, mode); }catch(e){}
+  if($("themeSel")) $("themeSel").value = mode;
+}
+if(window.matchMedia){
+  var mq = window.matchMedia("(prefers-color-scheme: dark)");
+  var onSys = function(){ if(storedTheme() === "system") applyTheme("system"); };
+  if(mq.addEventListener) mq.addEventListener("change", onSys); else if(mq.addListener) mq.addListener(onSys);
+}
+$("themeSel").value = storedTheme();
+$("themeSel").onchange = function(){ applyTheme(this.value); render(); };
+
 /* ============ 跳到用户输入（移动端：手动定位，不用 scrollIntoView） ============ */
 function updateJump(){
   var st = $("stream"), pill = $("jumpPill");
@@ -1104,6 +1171,9 @@ function render(){
 }
 function bind(){
   var f = $("frame");
+  /* 一次性绑定：#frame 是常驻元素，每次 render 都 addEventListener 会累积，
+     导致一次点击被处理 N 次（主题切换这种 toggle 会被抵消，表现为「有时失效」） */
+  if(!f.__bound){ f.__bound = true;
   f.addEventListener("click", function(ev){
     var t = ev.target;
     var go = t.closest("[data-go]");
@@ -1139,6 +1209,7 @@ function bind(){
     var tg = t.closest("[data-toggle]");
     if(tg){ A.open[tg.dataset.toggle] = !A.open[tg.dataset.toggle]; render(); return; }
   });
+  }
   var q = f.querySelector("[data-q]");
   if(q) q.addEventListener("input", function(){ A.query = this.value; render();
     var el = $("frame").querySelector("[data-q]"); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
@@ -1155,6 +1226,7 @@ function bind(){
 }
 function handleAct(a){
   if(a==="back"){ if(sheetState.type){ closeSheet(); return; } history.length > 1 ? history.back() : (location.hash="#/dirs"); return; }
+  if(a==="theme"){ applyTheme(effTheme() === "dark" ? "light" : "dark"); render(); return; }
   if(a==="host"){ openSheet("host"); return; }
   if(a==="sessions"){ location.hash="#/sessions"; return; }
   if(a==="send"){

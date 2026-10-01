@@ -3,7 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#ffffff" />
 <title>ACP Remote · PWA 原型（桌面 · 单文件整合版）</title>
+<script>
+/* 主题：跟随系统（默认）/ 白天 / 黑夜。先于首次绘制设置，避免闪白。
+   产品形态应由系统决定，手动切换只是原型评审用的覆盖项。 */
+(function(){
+  try{
+    var m = localStorage.getItem("acpr-proto-theme") || "system";
+    var eff = (m === "system")
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : m;
+    document.documentElement.setAttribute("data-theme", eff);
+  }catch(e){}
+})();
+</script>
 <style>
   :root{
     --bg:#f6f7f9; --panel:#ffffff; --panel-2:#fbfbfc; --line:#e4e6eb; --line-2:#eef0f3;
@@ -16,8 +30,7 @@
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
     --shadow:0 1px 2px rgba(18,21,26,.05),0 8px 24px rgba(18,21,26,.06);
   }
-  @media (prefers-color-scheme: dark){
-    :root{
+  :root[data-theme="dark"]{
       --bg:#0e1116; --panel:#151a21; --panel-2:#11151b; --line:#252c36; --line-2:#1e242c;
       --ink:#e8ecf2; --ink-2:#a8b1bd; --ink-3:#79838f;
       --accent:#8098f9; --accent-ink:#a5b4fc; --accent-soft:#1b2237;
@@ -61,7 +74,7 @@
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .btn.stop{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
   .btn.stop:hover{background:#a51f1f;border-color:#a51f1f}
-  @media (prefers-color-scheme: dark){ .btn.stop:hover{background:#dc2626;border-color:#dc2626} }
+  :root[data-theme="dark"] .btn.stop:hover{background:#dc2626;border-color:#dc2626}
   .btn[disabled]{opacity:.55;cursor:not-allowed}
   .btn.sm{padding:5px 11px;font-size:12.5px}
   .iconbtn{border:1px solid var(--line);background:var(--panel-2);width:30px;height:30px;border-radius:8px;
@@ -309,7 +322,7 @@
   .perm .opts .btn.p-always:hover{filter:brightness(.94)}
   .perm .opts .btn.p-reject{background:var(--danger)}
   .perm .opts .btn.p-reject:hover{background:#a51f1f;border-color:transparent}
-  @media (prefers-color-scheme: dark){ .perm .opts .btn.p-reject:hover{background:#dc2626} }
+  :root[data-theme="dark"] .perm .opts .btn.p-reject:hover{background:#dc2626}
   .streamfail{color:var(--danger);background:var(--danger-soft);border:1px solid transparent;
     border-left:3px solid var(--danger);border-radius:9px;padding:9px 12px;font-size:13px}
   .jumpbar{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:10px;padding:8px 12px;margin:-6px 0 12px;
@@ -529,6 +542,7 @@
   <div class="spacer"></div>
   <span class="badge ok" id="connBadge" role="button" tabindex="0">● 在线</span>
   <span class="badge warn" id="devBadge" style="display:none">开发模式</span>
+  <button class="iconbtn" id="themeBtn" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式">🌙</button>
   <button class="iconbtn" id="helpBtn" title="说明">ⓘ</button>
 </header>
 
@@ -558,6 +572,13 @@
 <section class="console" id="console">
   <header id="consoleHead">原型控制台 <span class="tagc">not product UI</span></header>
   <div class="body">
+    <label>主题
+      <select id="themeSel">
+        <option value="system">跟随系统</option>
+        <option value="light">白天</option>
+        <option value="dark">黑夜</option>
+      </select>
+    </label>
     <div class="row" id="navRow">
       <button data-go="#/pair">配对</button>
       <button data-go="#/dirs">目录</button>
@@ -766,7 +787,39 @@
   };
 
   /* ==================== 状态 ==================== */
-  /* ==================== 连接状态机 + 主机与连接面板 ==================== */
+  /* ==================== 主题（跟随系统 / 白天 / 黑夜） ==================== */
+  var THEME_KEY = "acpr-proto-theme";
+  function storedTheme(){ try{ return localStorage.getItem(THEME_KEY) || "system"; }catch(e){ return "system"; } }
+  function effTheme(){
+    return (storedTheme() === "system")
+      ? ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light")
+      : storedTheme();
+  }
+  function paintThemeBtn(){
+    var b = $("themeBtn"); if(!b) return;
+    var dark = effTheme() === "dark";
+    b.textContent = dark ? "☀️" : "🌙";
+    b.title = (dark ? "当前：黑夜" : "当前：白天") + "，点击切换";
+  }
+  function applyTheme(mode){
+    var eff = mode;
+    if(mode === "system"){
+      eff = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+    }
+    document.documentElement.setAttribute("data-theme", eff);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if(meta) meta.setAttribute("content", eff === "dark" ? "#0e1116" : "#ffffff");
+    try{ localStorage.setItem(THEME_KEY, mode); }catch(e){}
+    if($("themeSel")) $("themeSel").value = mode;
+    paintThemeBtn();
+  }
+  if(window.matchMedia){
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    var onSys = function(){ if(storedTheme() === "system") applyTheme("system"); };
+    if(mq.addEventListener) mq.addEventListener("change", onSys); else if(mq.addListener) mq.addListener(onSys);
+  }
+
+/* ==================== 连接状态机 + 主机与连接面板 ==================== */
   var HOSTINFO = {
     deviceName:"我的台式机", deviceId:"2ae1c07c-9242-46e9-a9d2-4ec58c130f49", clientKind:"浏览器 PWA",
     hostId:"bdb2ec20-f98c-4d87-b789-e540d527ef87",
@@ -1850,6 +1903,10 @@
   $("pairSel").onchange=function(){ A.pairLeft=PAIR_TTL; location.hash="#/pair/"+this.value; };
   $("sceneSel").onchange=function(){ A.scene=this.value; A.query=""; A.filter="all"; render(); };
   $("connSel").onchange=function(){ A.conn=this.value; A.clearArmed=false; render(); };
+  $("themeSel").value = storedTheme();
+  $("themeSel").onchange = function(){ applyTheme(this.value); };
+  $("themeBtn").onclick = function(){ applyTheme(effTheme() === "dark" ? "light" : "dark"); };
+  paintThemeBtn();
   $("scenarioSel").onchange=function(){ A.chatScenario=this.value; render(); };
   $("ctxSel").onchange=function(){ A.ctx=this.value; render(); };
   $("createSel").onchange=function(){ A.createResult=this.value; };

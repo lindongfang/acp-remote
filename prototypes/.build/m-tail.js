@@ -53,7 +53,12 @@ function appbar(title, sub, right, back){
   return '<div class="appbar">' +
     (back!==false ? '<button class="ab-btn" data-act="back">‹</button>' : '') +
     '<div class="ab-title"><div class="t">'+title+'</div>'+(sub?'<div class="s">'+sub+'</div>':'')+'</div>' +
-    (right||'')+'</div>';
+    (right||'') + themeBtnHtml() + '</div>';
+}
+function themeBtnHtml(){
+  var dark = effTheme() === "dark";
+  return '<button class="ab-btn" data-act="theme" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式">' +
+    (dark ? "☀️" : "🌙") + '</button>';
 }
 
 function viewDirs(){
@@ -72,23 +77,28 @@ function viewDirs(){
     var rows = all.filter(passFilter);
     if(!rows.length && q) return;
     var active0 = all.filter(function(s){ return s.state==="running"||s.state==="queued"; }).length;
-    body += '<div class="card"><div class="dhead">' +
+    var collapsed = !!A.open["d-"+dir.id];
+    body += '<div class="card'+(collapsed?" collapsed":"")+'"><div class="dhead">' +
+      '<span class="caret" data-toggle="d-'+dir.id+'">▼</span>' +
       '<span class="dicon">▤</span><span class="dname">'+esc(dir.name)+'</span>' +
-      (active0?'<span class="chip" style="color:var(--ok);border-color:transparent;background:var(--ok-soft)">运行中 '+active0+'</span>':'') +
-      '<span class="chip">'+all.length+' 个</span></div><div class="dbody">' +
-      rows.slice(0,5).map(function(s){ return srow(s); }).join("") +
-      (all.length>5 ? '<div style="padding:2px 0"><button class="linkbtn" data-all="'+dir.id+'">查看全部 '+all.length+' 个 ›</button></div>' : '') +
-      (!all.length ? '<div style="padding:12px 14px;color:var(--ink-3);font-size:13px">这个目录还没有会话</div>' : '') +
-      '<div style="padding:4px 0"><button class="linkbtn" data-new="'+dir.id+'">⊕ 新建会话</button></div>' +
-      '</div></div>';
+      (active0?'<span class="chip flat" style="color:var(--ok);background:var(--ok-soft)">运行中 '+active0+'</span>':'') +
+      '<span class="chip flat">'+all.length+' 个会话</span></div><div class="dbody">' +
+      rows.slice(0,3).map(function(s){ return srow(s); }).join("") +
+      (!all.length ? '<div style="padding:10px 12px;color:var(--ink-3);font-size:13px">这个目录还没有会话</div>' : '') +
+      '<div class="cardacts">' +
+        (all.length>3 ? '<button class="linkbtn" data-all="'+dir.id+'">查看全部 '+all.length+' 个 ›</button>' : '<span></span>') +
+        '<button class="linkbtn" data-new="'+dir.id+'">⊕ 新建会话</button>' +
+      '</div></div></div>';
   });
   body += '</div>';
   return h + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
-    '<div style="padding:10px 12px 0"><div class="search"><span>🔍</span>' +
+    '<div style="padding:8px 12px 0"><div class="search"><span>🔍</span>' +
     '<input data-q value="'+esc(A.query)+'" placeholder="搜索目录或会话" /></div>' +
-    '<div class="segbar"><button data-f="all" class="'+(A.filter==="all"?"on":"")+'">全部</button>' +
-    '<button data-f="running" class="'+(A.filter==="running"?"on":"")+'">运行中</button>' +
-    '<button data-f="waiting" class="'+(A.filter==="waiting"?"on":"")+'">待处理</button></div></div>' + body + '</div>';
+    '<div class="chips" style="margin-bottom:6px">' +
+      '<button class="chip-pick'+(A.filter==="all"?" on":"")+'" data-f="all">全部</button>' +
+      '<button class="chip-pick'+(A.filter==="running"?" on":"")+'" data-f="running">运行中</button>' +
+      '<button class="chip-pick'+(A.filter==="waiting"?" on":"")+'" data-f="waiting">待处理</button>' +
+    '</div></div>' + body + '</div>';
 }
 function srow(s){
   var name = s.title ? esc(s.title) : '<span class="noname">未命名会话</span>';
@@ -202,7 +212,7 @@ function chatPane(s){
       (isClosed()?"会话已关闭":(active()?"进行中，完成后可继续输入":"给 Agent 发消息"))+'"></textarea>' +
       (active()?'<button class="btn stop" data-act="stop">■ 停止</button>'
                :'<button class="btn primary" data-act="send">发送</button>')+'</div>' +
-    '<div class="hintrow"><span>Enter 发送 · Shift+Enter 换行</span><span>📎 附件暂不支持</span></div></div>';
+    '<div class="hintrow"><span class="kbdhint">Enter 发送 · Shift+Enter 换行</span><span>📎 附件暂不支持</span></div></div>';
   return head + strip + '<div style="flex:1;display:flex;flex-direction:column;min-height:0">' +
     body + tabbar + composer + '</div>';
 }
@@ -368,6 +378,33 @@ function newSessionSheet(){
     '<button class="btn block primary" style="margin-top:14px" data-act="create">创建会话</button>';
 }
 
+/* ============ 主题（跟随系统 / 白天 / 黑夜） ============ */
+var THEME_KEY = "acpr-proto-theme";
+function storedTheme(){ try{ return localStorage.getItem(THEME_KEY) || "system"; }catch(e){ return "system"; } }
+function effTheme(){
+  return (storedTheme() === "system")
+    ? ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light")
+    : storedTheme();
+}
+function applyTheme(mode){
+  var eff = mode;
+  if(mode === "system"){
+    eff = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  }
+  document.documentElement.setAttribute("data-theme", eff);
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute("content", eff === "dark" ? "#0e1116" : "#ffffff");
+  try{ localStorage.setItem(THEME_KEY, mode); }catch(e){}
+  if($("themeSel")) $("themeSel").value = mode;
+}
+if(window.matchMedia){
+  var mq = window.matchMedia("(prefers-color-scheme: dark)");
+  var onSys = function(){ if(storedTheme() === "system") applyTheme("system"); };
+  if(mq.addEventListener) mq.addEventListener("change", onSys); else if(mq.addListener) mq.addListener(onSys);
+}
+$("themeSel").value = storedTheme();
+$("themeSel").onchange = function(){ applyTheme(this.value); render(); };
+
 /* ============ 跳到用户输入（移动端：手动定位，不用 scrollIntoView） ============ */
 function updateJump(){
   var st = $("stream"), pill = $("jumpPill");
@@ -425,6 +462,9 @@ function render(){
 }
 function bind(){
   var f = $("frame");
+  /* 一次性绑定：#frame 是常驻元素，每次 render 都 addEventListener 会累积，
+     导致一次点击被处理 N 次（主题切换这种 toggle 会被抵消，表现为「有时失效」） */
+  if(!f.__bound){ f.__bound = true;
   f.addEventListener("click", function(ev){
     var t = ev.target;
     var go = t.closest("[data-go]");
@@ -460,6 +500,7 @@ function bind(){
     var tg = t.closest("[data-toggle]");
     if(tg){ A.open[tg.dataset.toggle] = !A.open[tg.dataset.toggle]; render(); return; }
   });
+  }
   var q = f.querySelector("[data-q]");
   if(q) q.addEventListener("input", function(){ A.query = this.value; render();
     var el = $("frame").querySelector("[data-q]"); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
@@ -476,6 +517,7 @@ function bind(){
 }
 function handleAct(a){
   if(a==="back"){ if(sheetState.type){ closeSheet(); return; } history.length > 1 ? history.back() : (location.hash="#/dirs"); return; }
+  if(a==="theme"){ applyTheme(effTheme() === "dark" ? "light" : "dark"); render(); return; }
   if(a==="host"){ openSheet("host"); return; }
   if(a==="sessions"){ location.hash="#/sessions"; return; }
   if(a==="send"){
