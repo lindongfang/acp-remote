@@ -9,9 +9,12 @@
 //! - 撤销通知缝用 `app::compose::NodeLinkCloser`（组合根注入 `local_admin` 的真实实现）；
 //! - 本地确认走真实的 `LocalAdminRouter`（与本地通道服务的是同一个处理器），因此 `node.pair.confirm`/
 //!   `export.revoke`/`node.revoke` 的持久化与通知顺序都被真实执行；
-//! - **两处刻意的测试替身**：① Agent 后端用脚本化端点（真实 ACP 子进程不在本测试范围，且会引入
-//!   进程/平台依赖）；② `SessionStore` 套一层可控失败的装饰器（R61 的故障注入点）——它只在提交的
-//!   事件批次带指定 marker 时失败，其余提交原样落地。
+//! - **三处刻意的测试替身/测试介入**：① Agent 后端用脚本化端点（真实 ACP 子进程不在本测试范围，
+//!   且会引入进程/平台依赖）；② `SessionStore` 套一层可控失败的装饰器（R61 的故障注入点）——它只在
+//!   提交的事件批次带指定 marker 时失败，其余提交原样落地；③ `overwrite_persisted_workspace_cwd`
+//!   （TP2 第 2 轮新增）经 `sqlx` **原始 SQL** 直接改写 `owned_session.workspace_cwd`，**绕过全部端口
+//!   与本地管理方法**——这是三者中介入最深的一处：产品写路径永远写入 `canonicalize` 的结果，「持久化
+//!   取值仍存在但 `canonicalize` 结果与之逐字不同」这一形状无法经任何产品入口产生。
 //!   其余端口（trust/export/audit/config/attachments/deliveries）都是真实现。
 
 use std::path::PathBuf;
@@ -44,6 +47,7 @@ use server::local_admin::{
 };
 use server::node_link::{CommandRoute, NodeLinkConfig};
 use server::transport::net::{NetListener, Shutdown};
+use sqlx::Connection as _;
 use storage_sqlite::session_store::SqliteStore;
 use tokio::task::JoinHandle;
 
@@ -64,6 +68,10 @@ pub struct OwnerNode {
     parked: Arc<Parked>,
     /// 被拒绝的 commit 次数（断言「故障确实发生过」）。
     pub rejected_commits: Arc<AtomicU32>,
+    /// `load_recovery` 的调用计数（R31「授权先于本机读取」的计数证据）。
+    recovery_reads: Arc<AtomicU32>,
+    /// 恢复入口的观察点（`resume` 调用计数、最近一次请求、可配置结果）。
+    pub resume_probe: Arc<ResumeProbe>,
     /// 真实存储的会话端口（测试用它做持久事实的只读断言）。
     pub sessions: Arc<dyn SessionStore>,
     /// 用例面。
@@ -123,10 +131,16 @@ impl OwnerNode {
         );
         let fault_marker = Arc::new(Mutex::new(None));
         let rejected_commits = Arc::new(AtomicU32::new(0));
+        // 计数器的**唯一实例**：`FlakySessionStore::load_recovery` 递增它，`OwnerNode::recovery_reads()`
+        // 读同一个 `Arc`。此前两处各建了一个 `Arc`（装饰器一个、观察字段一个），计数恒为 0，
+        // 使 R31 的「授权先于本机读取」断言恒真；修正记录见 `reports/tp2-tester.md` 第 2 轮
+        // （TP2 tester-A2），并已在 R31 用例里补了「计数器确实在动」的自检断言。
+        let recovery_reads = Arc::new(AtomicU32::new(0));
         let sessions: Arc<dyn SessionStore> = Arc::new(FlakySessionStore {
             inner: Arc::clone(&store),
             marker: Arc::clone(&fault_marker),
             rejected: Arc::clone(&rejected_commits),
+            recovery_reads: Arc::clone(&recovery_reads),
         });
         let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
         let exports: Arc<dyn ExportStore> = store.clone();
@@ -151,8 +165,10 @@ impl OwnerNode {
         ));
 
         let parked = Arc::new(Parked::default());
+        let resume_probe = Arc::new(ResumeProbe::default());
         let backends: Arc<dyn SessionBackendFactory> = Arc::new(ScriptedBackends {
             parked: Arc::clone(&parked),
+            probe: Arc::clone(&resume_probe),
         });
         let catalog: Arc<dyn AgentCatalog> = Arc::new(ScriptedCatalog);
         let (publisher, queue) = app::compose::forked_publisher();
@@ -251,6 +267,8 @@ impl OwnerNode {
             fault_marker,
             parked,
             rejected_commits,
+            resume_probe,
+            recovery_reads,
             sessions,
             core,
             broker,
@@ -282,6 +300,59 @@ impl OwnerNode {
     pub fn fail_commits_with(&self, marker: Option<&str>) {
         let mut current = self.fault_marker.lock().expect("故障开关");
         *current = marker.map(str::to_owned);
+    }
+
+    /// `load_recovery` 的调用次数（读会话行的唯一入口；R31「授权先于本机读取」的计数证据）。
+    pub fn recovery_reads(&self) -> u32 {
+        self.recovery_reads.load(Ordering::SeqCst)
+    }
+
+    /// 重开**同一 `data_dir`** 的真实存储，让用例对持久化事实做独立复核。
+    ///
+    /// 用于把「不确定性存在于持久化行、而不只在进程内」这一维度显式化：关掉 broker 之后另开一个
+    /// store 实例，`command.status` 读回的仍是同一条持久记录。
+    pub async fn reopen_store(&self) -> SqliteStore {
+        let config = storage_sqlite::migrate::StorageConfig::new(self.data_dir());
+        SqliteStore::open(config, &app::clock::SystemClock::new().now())
+            .await
+            .expect("重开同一 data_dir 的真实存储")
+    }
+
+    /// 用**原始 SQL** 把 `owned_session.workspace_cwd` 改写成给定的逐字取值。
+    ///
+    /// 只服务于 R25 的前置构造。产品写路径（`workspace.select` → `canonicalize` → 持久化）**永远**写入
+    /// 规范化结果，所以「持久化取值仍然存在、但 `canonicalize` 的结果与之逐字不同」这个形状**无法**经
+    /// 任何端口或本地管理方法产生——只能直接写库（这一行 dev-dependency 的唯一理由）。
+    ///
+    /// 改写之后产品侧**看不到**这次改写的痕迹：读路径 `load_recovery` 原样返回该字符串，复校验
+    /// （`core` 的 `revalidate_resume_workspace`）也只看到「字符串对不上」。因此用例必须自己证明拒绝
+    /// 来自「`canonicalize` 结果逐字比对」这一条，而不是值对象构造失败或路径不存在。
+    pub async fn overwrite_persisted_workspace_cwd(
+        &self,
+        session: &SessionId,
+        workspace_cwd: &str,
+    ) {
+        let config = storage_sqlite::migrate::StorageConfig::new(self.data_dir());
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(config.database_path())
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_secs(10));
+        let mut connection: sqlx::SqliteConnection = sqlx::Connection::connect_with(&options)
+            .await
+            .expect("打开同一 data_dir 的原始 SQL 连接");
+        let changed =
+            sqlx::query("UPDATE owned_session SET workspace_cwd = ?1 WHERE session_id = ?2")
+                .bind(workspace_cwd)
+                .bind(session.as_str())
+                .execute(&mut connection)
+                .await
+                .expect("改写持久化 workspace_cwd")
+                .rows_affected();
+        assert_eq!(
+            changed, 1,
+            "必须恰好改写一行 owned_session（否则 R25 的前置根本没造出来）"
+        );
+        connection.close().await.expect("关闭原始 SQL 连接");
     }
 
     /// 释放某个 marker 暂存的后端事件（模拟 Agent 在 accepted 之后产出）；返回释放条数。
@@ -324,6 +395,8 @@ impl OwnerNode {
             fault_marker,
             parked: _,
             rejected_commits,
+            resume_probe,
+            recovery_reads,
             sessions,
             core,
             broker,
@@ -354,6 +427,8 @@ impl OwnerNode {
         drop(sessions);
         drop(fault_marker);
         drop(rejected_commits);
+        drop(resume_probe);
+        drop(recovery_reads);
         match Arc::try_unwrap(store) {
             Ok(store) => store.close().await,
             Err(_) => panic!("存储仍有其它持有者：关闭序列会漏掉 checkpoint"),
@@ -397,6 +472,7 @@ struct FlakySessionStore {
     inner: Arc<SqliteStore>,
     marker: Arc<Mutex<Option<String>>>,
     rejected: Arc<AtomicU32>,
+    recovery_reads: Arc<AtomicU32>,
 }
 
 impl FlakySessionStore {
@@ -459,6 +535,7 @@ impl SessionStore for FlakySessionStore {
         &self,
         session: &SessionId,
     ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        self.recovery_reads.fetch_add(1, Ordering::SeqCst);
         self.inner.load_recovery(session).await
     }
 
@@ -504,9 +581,59 @@ impl AgentCatalog for ScriptedCatalog {
     }
 }
 
+/// 会话后端替身的 `resume` 结果（用例可配置，以驱动失败路径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResumeBehavior {
+    /// 成功：重新绑定并回带持久化的 ACP 会话标识。
+    #[default]
+    Ok,
+    /// 目标 Agent 未宣告 `sessionCapabilities.resume`（「后端不支持」）。
+    BackendUnsupported,
+    /// 其余服务端不可用类失败（与上一项的错误码**不同**，因此两类可区分）。
+    Unavailable,
+    /// 恢复失败发生在后端内部（区别于「不支持」，用于证明不是同一个漏斗）。
+    Refused,
+}
+
+/// 恢复入口的观察点：调用次数、最近一次请求、可配置结果。
+#[derive(Default)]
+pub struct ResumeProbe {
+    calls: AtomicU32,
+    last: Mutex<Option<ResumeSessionRequest>>,
+    behavior: Mutex<ResumeBehavior>,
+}
+
+impl ResumeProbe {
+    /// `resume` 被调用的次数。
+    pub fn calls(&self) -> u32 {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    /// 最近一次后端收到的 `ResumeSessionRequest`（断言「发出去的是持久化原文」）。
+    pub fn last_request(&self) -> Option<ResumeSessionRequest> {
+        self.last.lock().expect("观察点").clone()
+    }
+
+    /// 配置下一次（及之后）`resume` 的结果。
+    pub fn set_behavior(&self, behavior: ResumeBehavior) {
+        *lock(&self.behavior) = behavior;
+    }
+
+    fn record(&self, request: &ResumeSessionRequest) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        *lock(&self.last) = Some(request.clone());
+    }
+}
+
 /// 会话后端替身：`create`/`open` 返回脚本化端点（不启动进程）。
 struct ScriptedBackends {
     parked: Arc<Parked>,
+    probe: Arc<ResumeProbe>,
+}
+
+/// 脚本化 `create` 建立的 ACP 会话标识（可预测，便于用例断言 core 持久化的就是它）。
+fn scripted_agent_session_id(session: &SessionId) -> AgentSessionId {
+    AgentSessionId::new(&format!("acp-{}", &session.as_str()[..8])).expect("会话标识")
 }
 
 #[async_trait::async_trait]
@@ -517,9 +644,10 @@ impl SessionBackendFactory for ScriptedBackends {
         _request: CreateSessionRequest,
         sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+        // R5：创建成功后端必须**暴露**本次建立的 ACP 会话标识（由 core 持久化，后端不碰存储）。
         Ok(Box::new(ScriptedEndpoint {
             reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
-            agent_session_id: None,
+            agent_session_id: Some(scripted_agent_session_id(session)),
             sink,
             parked: Arc::clone(&self.parked),
         }))
@@ -539,19 +667,27 @@ impl SessionBackendFactory for ScriptedBackends {
     }
 
     /// 恢复：脚本端点不启动进程，只把同一会话重新绑定，并回带**持久化的** ACP 会话标识
-    /// （受控路径用例用它断言恢复后的可交互性）。
+    ///（受控路径用例用它断言恢复后的可交互性）。结果由 [`ResumeProbe`] 配置。
     async fn resume(
         &self,
         session: &SessionId,
         request: ResumeSessionRequest,
         sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
-        Ok(Box::new(ScriptedEndpoint {
-            reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
-            agent_session_id: Some(request.agent_session_id.clone()),
-            sink,
-            parked: Arc::clone(&self.parked),
-        }))
+        self.probe.record(&request);
+        match *lock(&self.probe.behavior) {
+            ResumeBehavior::BackendUnsupported => {
+                Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
+            }
+            ResumeBehavior::Unavailable => Err(PortError::Unavailable(UnavailableKind::IoError)),
+            ResumeBehavior::Refused => Err(PortError::InvalidRequest("Agent 拒绝 session/resume")),
+            ResumeBehavior::Ok => Ok(Box::new(ScriptedEndpoint {
+                reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+                agent_session_id: Some(request.agent_session_id.clone()),
+                sink,
+                parked: Arc::clone(&self.parked),
+            })),
+        }
     }
 }
 
