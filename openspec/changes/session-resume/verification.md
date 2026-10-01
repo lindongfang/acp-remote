@@ -371,7 +371,10 @@ alternative_checks:
 
 | Task | Target Revision | Result | Report Path |
 | --- | --- | --- | --- |
-| 7.1 | | | reports/validation-session-resume.md |
+| 7.1 | 69f1ac1bc6af81461d199257f512965f646ec55c | **PASS**（0×CRITICAL/0×MAJOR；覆盖充分性 PASS、迁移 PASS、能力门控 PASS 含 1 处 MINOR 盲区、回滚限制 PASS 含 1 处记录层 MINOR；待验证假设以**只读侦察**判 PASS，**非 fake Agent 自证**） | reports/validation-session-resume.md |
+
+> **7.1 的待验证假设为何不是 BLOCKED（依据摘要）**：本机存在真实 ACP Agent `omp.exe`（Oh My Pi）；validator 对其二进制做**静态取证**，内嵌源码逐字含 `sessionCapabilities: { list: {}, fork: {}, resume: {}, close: {} }`（宣告成立）与 `async resumeSession(e)` 的实质实现（读取 sessionId / cwd / mcpServers，入参与本仓 `acp-protocol` 的 `SessionResumeRequest` 逐字段兼容）。对照之下 `codex.exe` 对 `sessionCapabilities` 命中为 0（不宣告该能力，走已被 R10/R37 覆盖的不支持路径）。**限制（随结论传递）**：**未启动 `omp`、未发起任何真实会话**，故为**静态证据**而非运行时握手观测；若要求运行时证据，本项应改判 PENDING，且需单独授权「启动真实 Agent 进程」（超出本次只读边界）。
+> **仍未闭合（不计入 PASS）**：① 2 条 `#[cfg(unix)]` 用例 **PENDING**（validator 独立复现交叉编译失败 `cargo check --target x86_64-unknown-linux-gnu` exit 101、缺 `x86_64-linux-gnu-gcc`，零编译零执行证据；证据链无一处写成已通过）；② `cargo-deny` / `gitleaks` 本机不可执行，只由 CI 判定。
 
 ## Main E2E
 
