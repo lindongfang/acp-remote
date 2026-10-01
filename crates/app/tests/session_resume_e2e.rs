@@ -181,11 +181,7 @@ impl Paired {
 }
 
 /// 在真实 loopback listener 上完成 WSS 握手（含 `catalogRevision` 验签）。
-async fn connect(
-    owner: &OwnerNode,
-    access: &AccessKey,
-    ticket: &PairingTicket,
-) -> NodeLinkClient {
+async fn connect(owner: &OwnerNode, access: &AccessKey, ticket: &PairingTicket) -> NodeLinkClient {
     let mut client = NodeLinkClient::connect_plain(owner.addr).await;
     support::nodelink::handshake(
         &mut client,
@@ -254,7 +250,10 @@ fn command_status_body(request_id: &str, target: &str) -> Value {
 
 async fn attach(client: &mut NodeLinkClient, session: &Value) -> Value {
     client
-        .send("resource.attach", json!({ "remoteSessionRef": session.clone() }))
+        .send(
+            "resource.attach",
+            json!({ "remoteSessionRef": session.clone() }),
+        )
         .await;
     let attached = client.expect("resource.attached").await;
     json!({
@@ -293,13 +292,8 @@ fn a_successful_resume_returns_the_session_reference_and_leaves_the_columns_unto
     support::block_on(async {
         let original = workspace_dir("resume-original");
         let moved = workspace_dir("resume-moved");
-        let paired = Paired::up_to_approval(
-            "resume-ok",
-            ACCESS_WORK,
-            &FULL_GRANTS,
-            &original,
-        )
-        .await;
+        let paired =
+            Paired::up_to_approval("resume-ok", ACCESS_WORK, &FULL_GRANTS, &original).await;
         let (owner, access, ticket) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
 
@@ -452,11 +446,7 @@ fn a_successful_resume_returns_the_session_reference_and_leaves_the_columns_unto
             2,
             "恢复后的会话必须真的能派发 turn"
         );
-        owner
-            .broker
-            .pump(&session_key)
-            .await
-            .expect("提交后端事件");
+        owner.broker.pump(&session_key).await.expect("提交后端事件");
         client.expect("command.terminal").await;
 
         owner.stop().await;
@@ -464,7 +454,11 @@ fn a_successful_resume_returns_the_session_reference_and_leaves_the_columns_unto
 }
 
 /// 两条 `SessionRecoveryRecord` 必须逐字相同（R22 的字节断言）。
-fn assert_same_recovery(before: &SessionRecoveryRecord, after: &SessionRecoveryRecord, label: &str) {
+fn assert_same_recovery(
+    before: &SessionRecoveryRecord,
+    after: &SessionRecoveryRecord,
+    label: &str,
+) {
     assert_eq!(
         before.agent_session_id, after.agent_session_id,
         "{label}：agent_session_id 不得被改写"
@@ -499,8 +493,7 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
         client.send("command.submit", body).await;
         let replay = client.expect("command.terminal").await;
         assert_eq!(
-            replay["body"]["terminal"]["result"],
-            first["body"]["terminal"]["result"],
+            replay["body"]["terminal"]["result"], first["body"]["terminal"]["result"],
             "同键重试必须逐字回首次结果：{replay}"
         );
         assert_eq!(
@@ -681,13 +674,11 @@ fn an_unauthorized_resume_is_rejected_before_any_local_read() {
             .await;
         let absent_denied = client.expect("command.rejected").await;
         assert_eq!(
-            absent_denied["body"]["error"]["code"],
-            denied["body"]["error"]["code"],
+            absent_denied["body"]["error"]["code"], denied["body"]["error"]["code"],
             "存在与不存在不得产生可区分的响应"
         );
         assert_eq!(
-            absent_denied["body"]["error"]["details"],
-            denied["body"]["error"]["details"],
+            absent_denied["body"]["error"]["details"], denied["body"]["error"]["details"],
             "错误详情也不得泄露目标会话的存在性"
         );
         assert_eq!(
@@ -709,7 +700,8 @@ fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
     support::block_on(async {
         let workspace = workspace_dir("resume-unsupported");
         let paired =
-            Paired::up_to_approval("resume-unsupported", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
+            Paired::up_to_approval("resume-unsupported", ACCESS_WORK, &FULL_GRANTS, &workspace)
+                .await;
         let (owner, access, ticket) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
         let (session, attachment) = create_session(&mut client).await;
@@ -756,9 +748,7 @@ fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
         );
 
         // ② Agent 明确拒绝恢复：同样是 failed，但是**另一个**错误码（两类失败不共漏斗）。
-        owner
-            .resume_probe
-            .set_behavior(ResumeBehavior::Refused);
+        owner.resume_probe.set_behavior(ResumeBehavior::Refused);
         client.step("resume refused by agent");
         client
             .send(
@@ -786,11 +776,7 @@ fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
             .list(acp_core::ports::SessionQuery::default())
             .await
             .expect("列出会话");
-        assert_eq!(
-            listed.len(),
-            1,
-            "失败的恢复不得创建新会话：{listed:?}"
-        );
+        assert_eq!(listed.len(), 1, "失败的恢复不得创建新会话：{listed:?}");
         // ④ 两列未被改写。
         let after = owner
             .sessions
@@ -856,7 +842,10 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
             .find(|message| message["type"] == json!("command.terminal"))
             .cloned();
         assert!(
-            owner.rejected_commits.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            owner
+                .rejected_commits
+                .load(std::sync::atomic::Ordering::SeqCst)
+                >= 1,
             "故障必须真的命中终态提交"
         );
         owner.fail_commits_with(None);
@@ -877,7 +866,10 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
         // ③ 经 wire 的 `command.status` 重查：`uncertain` 而不是猜测成功/失败。
         client.step("command.status after recovery");
         client
-            .send("command.submit", command_status_body(&support::nodelink::uuid_text(), &request))
+            .send(
+                "command.submit",
+                command_status_body(&support::nodelink::uuid_text(), &request),
+            )
             .await;
         let reread = client.expect("command.terminal").await;
         assert_eq!(reread["body"]["command"], json!("session.resume"));
@@ -974,7 +966,8 @@ fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
     support::block_on(async {
         let workspace = workspace_dir("resume-revalidate");
         let paired =
-            Paired::up_to_approval("resume-revalidate", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
+            Paired::up_to_approval("resume-revalidate", ACCESS_WORK, &FULL_GRANTS, &workspace)
+                .await;
         let (owner, access, ticket) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
         let (session, attachment) = create_session(&mut client).await;
@@ -1088,7 +1081,9 @@ fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
 
         // ③ 能力不支持与「目录不可用」是两个可区分的路径（CR7-F2 裁决后的规格措辞：两列为 `NULL`
         //    与能力不支持同路径，其余校验失败仍是服务端不可用类）。
-        owner.resume_probe.set_behavior(ResumeBehavior::BackendUnsupported);
+        owner
+            .resume_probe
+            .set_behavior(ResumeBehavior::BackendUnsupported);
         client.step("resume when backend cannot resume");
         client
             .send(

@@ -21,7 +21,8 @@ use serde_json::json;
 
 /// 分类一条内联报文（真实入口的第一步）。
 fn envelope_of(bytes: &[u8]) -> Envelope {
-    Envelope::classify(RawDocument::parse_bytes(bytes).expect("合法 JSON-RPC 文档")).expect("可分类")
+    Envelope::classify(RawDocument::parse_bytes(bytes).expect("合法 JSON-RPC 文档"))
+        .expect("可分类")
 }
 
 /// 一条带 id、未知字段、`_meta` 与**超出 JS 安全整数**取值的 `session/resume` 请求。
@@ -134,7 +135,9 @@ fn missing_required_fields_are_rejected_without_defaults() {
         match SessionResumeRequest::from_params(&params) {
             Err(AcpError::MissingField { field: actual }) if actual == field => {}
             Err(AcpError::InvalidField { field: actual, .. }) if actual == field => {}
-            other => panic!("{params}: 期望指向 {field} 的 MissingField/InvalidField，实际 {other:?}"),
+            other => {
+                panic!("{params}: 期望指向 {field} 的 MissingField/InvalidField，实际 {other:?}")
+            }
         }
     }
 
@@ -192,7 +195,10 @@ fn session_load_stays_unsupported_and_resume_is_implemented() {
     );
 
     // 同一张登记表里 `session/resume` 是已实现的方法，两者的状态不得互相漂移。
-    assert_eq!(methods::status_of("session/resume"), MethodStatus::Implemented);
+    assert_eq!(
+        methods::status_of("session/resume"),
+        MethodStatus::Implemented
+    );
     assert_eq!(ReExportedStatus::Implemented, MethodStatus::Implemented);
 
     // 其余三个既有方法同样未被顺带提升（回归护栏）。

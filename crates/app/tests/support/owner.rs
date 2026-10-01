@@ -633,9 +633,7 @@ impl SessionBackendFactory for ScriptedBackends {
             ResumeBehavior::BackendUnsupported => {
                 Err(PortError::Unavailable(UnavailableKind::BackendUnsupported))
             }
-            ResumeBehavior::Unavailable => {
-                Err(PortError::Unavailable(UnavailableKind::IoError))
-            }
+            ResumeBehavior::Unavailable => Err(PortError::Unavailable(UnavailableKind::IoError)),
             ResumeBehavior::Refused => Err(PortError::InvalidRequest("Agent 拒绝 session/resume")),
             ResumeBehavior::Ok => Ok(Box::new(ScriptedEndpoint {
                 reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),

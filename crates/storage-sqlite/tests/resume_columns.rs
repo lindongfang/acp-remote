@@ -213,7 +213,9 @@ async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
     );
     // 追加列紧跟在最后一个既有列之后（SQLite 的追加渲染形状）。
     assert!(
-        ddl_after.contains(&format!("{head_before}, agent_session_id TEXT, workspace_cwd TEXT)")),
+        ddl_after.contains(&format!(
+            "{head_before}, agent_session_id TEXT, workspace_cwd TEXT)"
+        )),
         "两列必须紧跟既有列追加：{ddl_after}"
     );
 
@@ -278,14 +280,19 @@ async fn upgraded_sessions_keep_their_bytes_and_report_no_recovery_data() {
 
     let before = raw_pool(&path).await;
     let kept_before = other_columns_quote(&before, SESSION).await.expect("会话行");
-    let other_before = other_columns_quote(&before, SESSION_OTHER).await.expect("会话行");
+    let other_before = other_columns_quote(&before, SESSION_OTHER)
+        .await
+        .expect("会话行");
     before.close().await;
 
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("升级到 v5");
     assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
-    assert_eq!(store.metadata().imported_schema_version, IMPORTED_SCHEMA_VERSION);
+    assert_eq!(
+        store.metadata().imported_schema_version,
+        IMPORTED_SCHEMA_VERSION
+    );
     let session = SessionId::new(SESSION).expect("session id");
     // 端口层的读回语义：`NULL` 是「没有恢复数据」，因此是 `Ok(None)`（不是 Err，也不是别的形状）。
     assert_eq!(
@@ -536,23 +543,27 @@ async fn two_consecutive_opens_leave_the_schema_byte_identical() {
             .await
             .unwrap_or_else(|error| panic!("第 {round} 次打开必须成功：{error}"));
         assert_eq!(store.metadata().owned_schema_version, OWNED_SCHEMA_VERSION);
-        assert_eq!(store.metadata().imported_schema_version, IMPORTED_SCHEMA_VERSION);
+        assert_eq!(
+            store.metadata().imported_schema_version,
+            IMPORTED_SCHEMA_VERSION
+        );
         store.close().await;
     }
 
     let pool = raw_pool(&path).await;
     let schema = schema_sql(&pool).await;
-    assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, FILE_FORMAT_VERSION);
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        FILE_FORMAT_VERSION
+    );
     assert_eq!(meta_version_of(&pool, "owned_schema_version").await, "5");
     assert_eq!(meta_version_of(&pool, "imported_schema_version").await, "3");
     // 每条 owned 表的 DDL 都必须带上两列（且只有 owned_session 带）。
     assert!(
-        schema
-            .iter()
-            .any(|(kind, name, sql)| kind == "table"
-                && name == "owned_session"
-                && sql.contains("agent_session_id")
-                && sql.contains("workspace_cwd")),
+        schema.iter().any(|(kind, name, sql)| kind == "table"
+            && name == "owned_session"
+            && sql.contains("agent_session_id")
+            && sql.contains("workspace_cwd")),
         "owned_session 的 DDL 必须含两列：{schema:?}"
     );
     // 再开第三次仍不重写任何文本。
@@ -578,4 +589,3 @@ async fn meta_version_of(pool: &sqlx::SqlitePool, key: &str) -> String {
         .expect("读 meta")
         .unwrap_or_else(|| panic!("meta.{key} 必须存在"))
 }
-

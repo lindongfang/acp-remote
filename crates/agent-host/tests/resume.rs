@@ -25,9 +25,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acp_core::model::{
-    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest,
-    OwnedSessionRef, PortError, PromptContentBlock, PromptRequest, ResumeSessionRequest,
-    ResourceOrigin, SessionId, SessionReference, UnavailableKind,
+    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest, OwnedSessionRef,
+    PortError, PromptContentBlock, PromptRequest, ResourceOrigin, ResumeSessionRequest, SessionId,
+    SessionReference, UnavailableKind,
 };
 use acp_core::ports::{SessionBackendFactory, SessionEndpoint};
 use agent_host::{AgentHost, HostConfig, runtime_running};
@@ -122,10 +122,7 @@ fn params_of<'a>(rows: &'a [Value], method: &str) -> &'a Value {
         .iter()
         .filter(|row| row["method"] == serde_json::Value::String(method.to_owned()))
         .collect();
-    assert!(
-        !matched.is_empty(),
-        "dump 里必须出现 {method}：{rows:?}"
-    );
+    assert!(!matched.is_empty(), "dump 里必须出现 {method}：{rows:?}");
     let params = &matched[0]["params"];
     assert!(
         !params.is_null(),
@@ -555,12 +552,8 @@ async fn resuming_twice_reuses_one_process_and_leaves_one_dispatchable_endpoint(
         .expect("第二次恢复");
 
     // ① 恰好一个端点能派发 turn（不预设是哪一个——spec 只要求「旧绑定先让出或本次被明确拒绝」）。
-    let stale_outcome = stale
-        .prompt(prompt("旧端点"), support::timestamp())
-        .await;
-    let current_outcome = current
-        .prompt(prompt("新端点"), support::timestamp())
-        .await;
+    let stale_outcome = stale.prompt(prompt("旧端点"), support::timestamp()).await;
+    let current_outcome = current.prompt(prompt("新端点"), support::timestamp()).await;
     let dispatchable = usize::from(stale_outcome.is_ok()) + usize::from(current_outcome.is_ok());
     assert_eq!(
         dispatchable, 1,
@@ -641,23 +634,23 @@ async fn creating_two_sessions_exposes_two_distinct_agent_session_ids() {
     )]);
 
     async fn create_with(
-    host: &Arc<AgentHost>,
-    session: SessionId,
-    collector: &Collector,
-) -> Box<dyn SessionEndpoint> {
-    host.create(
-        &session,
-        CreateSessionRequest::new(
-            agent_ref(),
-            Some(support::workspace()),
-            None,
-            ResourceOrigin::Local,
-        ),
-        collector.sink(),
-    )
-    .await
-    .expect("创建会话")
-}
+        host: &Arc<AgentHost>,
+        session: SessionId,
+        collector: &Collector,
+    ) -> Box<dyn SessionEndpoint> {
+        host.create(
+            &session,
+            CreateSessionRequest::new(
+                agent_ref(),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
+            collector.sink(),
+        )
+        .await
+        .expect("创建会话")
+    }
 
     let one = create_with(&host, session_id(RESUME_LINE_SESSION), &first).await;
     let two = create_with(&host, session_id(RESUME_TWICE_SESSION), &second).await;
