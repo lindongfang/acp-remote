@@ -8,15 +8,17 @@ context: |
 
   ## Repository Structure
   - 项目类型与技术栈：Rust workspace（edition 2024，rust-version 1.85）承载 core 与协议 crate；Node ≥ 22.12 承载跨语言合同资产的机器校验；协议 wire schema/fixture 跨 Rust 与 TypeScript 共享。
-  - 主要模块、入口与职责边界：`crates/` 现有 10 个已登记成员（`acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`、`acp-protocol`、`agent-host`、`identity-auth`、`identity-keystore`）；`node-link-client`、`server`、`app` 与前端尚未实现（其中 `identity-auth`/`identity-keystore` 于 2026-09-24 落地，见 `docs/MODULE_ARCHITECTURE.md` §4.8/§4.12）。职责边界唯一权威：`docs/MODULE_ARCHITECTURE.md`。
+  - 主要模块、入口与职责边界：`crates/` 现有 **12** 个已登记 workspace 成员（`acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`、`acp-protocol`、`agent-host`、`identity-auth`、`identity-keystore`、`server`、`app`）；另有非成员目录 `vendor/windows-local-ipc`（写在根 `Cargo.toml` 的 `workspace.exclude`，只被 `server` 以 path 依赖消费）。**尚未实现**：`node-link-client`（切片 6）、`server::sync` 与 `server::acp_facade`，以及前端工程（`prototypes/` 下只有单文件设计原型，不是产品代码）。`docs/MODULE_ARCHITECTURE.md` §3 的目录树是规划视图、**不代表已实现**；已落地范围以该节 §3 的 `[现状]` 注记与 `README.md` 的「仓库当前状态」为准。职责边界唯一权威：`docs/MODULE_ARCHITECTURE.md`。
+  - 本节记录仓库事实，随每个落地的变更刷新；核对来源固定为 `README.md` 的「仓库当前状态」与 `docs/MODULE_ARCHITECTURE.md` §3 的 `[现状]` 注记，两处冲突时以 `docs/` 为准。不要把单次变更的计划、提交或临时资源写进本节。
   - 共享代码及依赖方向：`docs/MODULE_ARCHITECTURE.md` §5 依赖矩阵；由 `npm run check` 的 `check:boundaries`（`cargo metadata`）断言。
-  - 生成文件、第三方代码和禁止直接修改目录：构建产物 `target/`、`node_modules/`、`dist/` 不手工编辑；`openspec/schemas/agentic/`、`.pi/`、`.agents/skills/openspec-*` 由 OpenSpec 引擎与扩展安装/升级维护（受管文件，手改会被 `doctor`/`update` 判为漂移）。
+  - 生成文件、第三方代码和禁止直接修改目录：构建产物 `target/`、`node_modules/`、`dist/` 不手工编辑；`openspec/schemas/agentic/**`、`.agents/skills/agentic-verify/SKILL.md` 与引擎安装的宿主入口（`.pi/prompts/opsx-*.md`、`.pi/skills/openspec-*/`、`.agents/skills/openspec-*/`、`.omp/commands/opsx-*.md`、`.omp/skills/openspec-*/`）是受管文件，只能经 OpenSpec 引擎与扩展的 `init`/`update` 升级（手改会被 `doctor` 判为漂移，或被 `npm run check:agentic` 的宿主入口同步检查判失败）；`vendor/windows-local-ipc` 是仓库内 vendored 的第三方 wrapper，不做与任务无关的改动。`openspec/config.yaml` 不是受管文件：`schema` 必须为 `agentic`，`context` 与 `operations.guidance` 由本项目维护（`AGENTS.md` §12）。
   - 默认主分支及本地/远端语义：`refs/heads/main`；origin 为 `git@github.com:lindongfang/acp-remote.git`。
 
   ## Standard Commands
   - 依赖安装：`npm ci`（Node ≥ 22.12；`package-lock.json` 与 `Cargo.lock` 均已入库）。
   - Local Checks / Project Verify：以仓库 `AGENTS.md` §8（本地入口 `npm run verify`）与 §10（合同门禁与 CI job 清单）为唯一权威，本节不复制命令清单。
-  - E2E：`openspec/agentic.yaml` 的 `e2e.command` 未配置。当前阶段没有可端到端运行的产品路径，Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。**该方式已于 2026-09-23 经用户确认（原话：同意 a；a = 保持命令为空、首个实现切片在 plan.md 写 downgrade_approval）**，因此首个实现切片无需再就「要不要配 E2E 命令」重新讨论；每个切片仍须各自记录当次批准，不得引用本次确认代替。
+  - E2E：`openspec/agentic.yaml` 的 `e2e.command` 仍为空（`e2e.enabled: true`，缺省即开启）。Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。**该方式已于 2026-09-23 经用户确认（原话：同意 a；a = 保持命令为空、首个实现切片在 plan.md 写 downgrade_approval）**；每个切片仍须各自记录当次批准，不得引用本次确认代替。
+    当时给出的理由「当前阶段没有可端到端运行的产品路径」在切片 4/5 落地后已不再精确：`app` 的 daemon/CLI 与 `server::transport::local` + `local_admin` 已可经本地通道端到端使用，Owner 侧 Node Link 入站面（`server::transport::net` + `server::node_link`）亦可运行；但 `server::sync`/`server::acp_facade`、`node-link-client` 与前端仍未落地，也尚无覆盖关键用户路径的可复现 E2E 入口。因此「是否配置 `e2e.command` 并把 Main E2E 改为 `required`」是需要用户单独决策的开放项，本节只记录现状与已批准的做法，不预设结论。
 
   ## Engineering Constraints
   - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7 与 §9；安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。
