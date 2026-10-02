@@ -952,13 +952,17 @@ pub struct CommandStatusRecord {
 /// 变体顺序与 schema 的 `allOf` 顺序一致。`result` 的值就是结果对象本身，因此必须 `untagged`
 /// （默认的 externally tagged 编码会写成 `{"SessionList": …}`，与 schema 不符）；判别由
 /// [`CommandResult::command`] 与 [`CommandResult::status`] 给出，见 [`CommandResultPayload::from_raw`]。
+///
+/// [`SessionCreate`] 的载荷按间接层承载（[`Box`] 对 serde 透明：`Serialize` 与
+/// `Deserialize` 的结果与非装箱时逐字节相同），否则它随 [`SessionSummary`] 增长会把整个枚举
+/// 撑大到其余变体的数倍（`clippy::large_enum_variant`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum CommandResultPayload {
     /// `session.list` 的完成结果。
     SessionList(SessionListResult),
     /// `session.create` 的完成结果。
-    SessionCreate(SessionCreateResult),
+    SessionCreate(Box<SessionCreateResult>),
     /// `session.read` 的完成结果。
     SessionRead(SessionReadResult),
     /// `session.config.list` 的完成结果。
@@ -996,7 +1000,9 @@ impl CommandResultPayload {
                         result,
                         "sessionCreateResult（session.create 的 completed）",
                     )
-                    .map(|value| Nullable::value(CommandResultPayload::SessionCreate(value)));
+                    .map(|value| {
+                        Nullable::value(CommandResultPayload::SessionCreate(Box::new(value)))
+                    });
                 }
                 CommandName::SessionRead => {
                     return parse_result::<SessionReadResult>(
@@ -1316,12 +1322,21 @@ mod tests {
             r#"{{"requestId":"{REQUEST}","command":"session.create","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":"{TERMINAL}","result":{{"sessionId":"{SESSION}","session":{SUMMARY}}},"error":null}}"#
         );
         let result: CommandResult = serde_json::from_str(&completed).expect("completed 必须接受");
-        assert!(
-            matches!(
-                result.result.as_ref(),
-                Some(CommandResultPayload::SessionCreate(_))
-            ),
-            "completed 的 result 必须是 sessionCreateResult"
+        let payload = match result.result.as_ref() {
+            Some(CommandResultPayload::SessionCreate(payload)) => payload,
+            other => panic!("completed 的 result 必须是 sessionCreateResult：{other:?}"),
+        };
+        assert_eq!(
+            payload.session_id.as_str(),
+            SESSION,
+            "sessionId 必须是载荷里的那个"
+        );
+        // 装箱只是内存表示：重编码必须与 wire 原文逐字节相同。
+        assert_eq!(
+            serde_json::to_string(result.result.as_ref().expect("completed 必须有 result"))
+                .expect("CommandResultPayload 必须可序列化"),
+            format!(r#"{{"sessionId":"{SESSION}","session":{SUMMARY}}}"#),
+            "Box 对 serde 透明：装箱不得改变 wire"
         );
 
         // 缺少 `session` 的结果不得按基类型 `object` 放行。
