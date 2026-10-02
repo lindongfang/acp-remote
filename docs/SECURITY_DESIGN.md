@@ -239,6 +239,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 - 用户确认前设备记录不能获得 active 权限。
 - 配对授予的 scope 是**设备级**的，不是配对瞬间的资源快照。`session.create`（设备授权包 `pack.create-session`，只含这一个命令名，且不进任何预设、必须被显式请求）就是这条规则的样板：它的判定以「该 workspace 当前是否已登记、该 Agent 当前是否已配置」为准，因此**一次授予覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent，新登记的资源自动进入已授权范围，无需重新授权**。配对确认页必须原样展示这句副作用，不能只列 scope 名称。撤销该 scope 或撤销设备立即使后续命令被拒（见 §10.2）。
 - 每个新 WSS 完整认证，不签发长期 bearer session/refresh token。
+- Node identity 变化进入 `identity_changed`，不能自动接受。
 
 ### 9.5 撤销与轮换
 

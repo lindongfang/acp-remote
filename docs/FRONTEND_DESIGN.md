@@ -3,7 +3,7 @@
 > 状态：编码前客户端约束  
 > 版本：0.4
 > 修订记录（2026-10-02）：§2.2 与 §9 第 1 条把「PWA 不展示会话创建」改为受限的目录内创建入口（feature `core.session-create.v1`），并记录原型来源；§4.1 新增目录浏览与目录内创建会话；§7 把 workspace/Agent 目录引用纳入可缓存的最小数据（只存引用）。  
-> 修订记录（2026-09-18）：明确 PWA 本地缓存为固定常量（摘要缓存 8 MiB、TTL 30 天、LRU），imported 正文不占用配额。
+> 修订记录（2026-09-18）：明确 PWA 本地缓存为固定常量（摘要缓存 8 MiB、TTL 30 天、LRU），imported 正文不占用配额。  
 > 日期：2026-10-02（2026-09-18 基线）
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 后端模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)
