@@ -733,7 +733,7 @@ sync.caught_up
       "globalSequence": "2318"
     },
     "schemaVersion": 1,
-    "chunkCount": 6
+    "chunkCount": 8
   }
 }
 ```
@@ -759,13 +759,13 @@ sync.caught_up
       "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
       "globalSequence": "2318"
     },
-    "chunkCount": 6,
+    "chunkCount": 8,
     "snapshotDigest": "<base64url-32-byte-sha256>"
   }
 }
 ```
 
-`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。Node Link 的 `resource.snapshot_end.snapshotDigest` 使用同一规则（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4）。
+`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer。示例中的 `8` 是协商了 `core.local-catalog.v1` 时的一次完整快照（每种资源一个 chunk）；未协商该 feature 时目录资源 MUST NOT 发送，`chunkCount` 为 `6`。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。Node Link 的 `resource.snapshot_end.snapshotDigest` 使用同一规则（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4）。
 
 客户端必须把 snapshot 写入以 `snapshotId` 隔离的暂存区；只有 chunk 连续、数量、cursor 和 digest 全部验证后，才能在一个本地事务中替换旧缓存。收到另一个 `snapshot_begin` 时必须丢弃旧的未完成暂存区。v1 不支持 snapshot chunk 断点续传；连接断开、digest 错误、顺序错误或空间不足时，客户端丢弃整个暂存 snapshot，重连后重新请求。验证失败不得损坏最后一个已完成缓存。
 
@@ -799,7 +799,7 @@ Snapshot item 的最低 schema：
 
 `agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。所有 session-scoped item 必须引用同一 snapshot 中存在或客户端已有的 session。`content`、config option、interaction 和 capability 的具体值对象与第 10.3、11.5 节相同，不得为 snapshot 发明另一套语义。
 
-`workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。目录元素只含本表列出的字段——本机规范化路径（`canonicalPath` 及其任何分段）MUST NOT 出现在快照、摘要或任何对端可见输出中（见第 12.3 节）。已登记但没有任何会话的 workspace 仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。
+`workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。目录元素只含本表列出的字段——本机规范化路径（`canonicalPath` 及其任何分段）MUST NOT 出现在快照、摘要或任何对端可见输出中（见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 12.3 节）。已登记但没有任何会话的 workspace 仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。`workspaces`/`agents` 的读取归在既有 `session.list` scope（`pack.observe`）之下，与会话列表同一屏；本次不新增 scope。
 
 `origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不进入 Access Node 的 snapshot；客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner。
 
@@ -1087,7 +1087,7 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 
 `workspace` 是 feature `core.local-catalog.v1` 门控下的**可选**字段，刻意不在 `SessionSummary` 的必填集合中：该 schema 是 `additionalProperties: false`，未协商该 feature 的客户端收到 `null`（而不是键缺席）会把整条摘要判为非法。因此键在场时的三态含义是——缺席＝未协商、`null`＝未分组、`WorkspaceRef`＝归属该目录。`WorkspaceRef` 与 `AgentCatalogEntry` 是第 9.4 节 `workspaces`/`agents` 两种快照资源的元素形状，同一个值对象不得在两处定义出不同形态。
 
-这两个值对象只承载**引用**：别名是稳定主键，`displayName` 是用户输入、按不可信内容转义渲染。本机规范化路径是派生权威值，MUST NOT 出现在 `SessionSummary`、`workspaces`/`agents` item、事件载荷、错误 `details`、`command.result` 或审计记录的前像中的任何字段（见第 12.3 节）。会话的目录归属按创建时解析使用的别名持久化，不随同一别名重指向新目录而漂移；该别名已从本机登记表删除时 `alias` 保持不变、`displayName` 回退为别名本身。
+这两个值对象只承载**引用**：别名是稳定主键，`displayName` 是用户输入、按不可信内容转义渲染。本机规范化路径是派生权威值，MUST NOT 出现在 `SessionSummary`、`workspaces`/`agents` item、事件载荷、错误 `details`、`command.result` 或审计记录的前像中的任何字段（见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 12.3 节）。会话的目录归属按创建时解析使用的别名持久化，不随同一别名重指向新目录而漂移；该别名已从本机登记表删除时 `alias` 保持不变、`displayName` 回退为别名本身。
 
 `AgentContentBlock` v1 的公共 view 支持：
 

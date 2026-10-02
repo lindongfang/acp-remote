@@ -407,7 +407,7 @@ pub enum SessionState {
 /// `common.schema.json#/$defs/workspaceRef`：本机已登记目录的**引用**。
 ///
 /// wire 上只有别名与展示名：本机规范化路径是派生权威值，不得出现在任何对端可见输出
-/// （`SYNC_PROTOCOL.md` §9.4、§12.3）。展示名取自 `owned_workspace.display_name`，登记已删除时
+/// （`SYNC_PROTOCOL.md` §9.4、`SECURITY_DESIGN.md` §12.3）。展示名取自 `owned_workspace.display_name`，登记已删除时
 /// 回退为别名本身。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
