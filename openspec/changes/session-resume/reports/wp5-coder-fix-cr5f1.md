@@ -79,7 +79,7 @@ CR5-F1 指出：fake ACP child 的 `--dump-requests` 只写 method，而 TP1 的
 工作目录统一为 `D:/Project/acp-remote-wt/session-resume-wp5`（worktree 根），
 `CARGO_TARGET_DIR=D:/Project/acp-remote-target/session-resume-wp5`，
 配置：`--locked`，工具链由仓库 `rust-toolchain.toml` 固定。
-完整原始输出：**[`reports/wp5-coder-fix-cr5f1-PV1.log`](wp5-coder-fix-cr5f1-PV1.log)**。
+完整原始输出：`reports/wp5-coder-fix-cr5f1-PV1.log`（该文件按 `.gitignore` 排除、不随仓库分发，仅在产生它的工作区保留；CI/新克隆中不可读属预期）。
 
 | Check ID | 命令 | 结果 | 退出码 | 日志位置 |
 | --- | --- | --- | --- | --- |

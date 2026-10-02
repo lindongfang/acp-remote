@@ -124,6 +124,8 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 
 ## Check Plan Changes
 
+- 2026-10-02（PR #37 的 CI 首次运行，main）：**`checks` job 报红，暴露一处本地门禁永远看不见的缺陷**——`reports/wp5-coder-fix-cr5f1.md` 用 **markdown 链接**指向 `reports/wp5-coder-fix-cr5f1-PV1.log`，而 `reports/**/*.log` 按 `.gitignore` 排除：**本地磁盘存在该文件故 `check:docs` 通过，CI 干净克隆中不存在故失败**（`doc link check failed: 1 problem(s)`）。已改为行内路径并注明「不随仓库分发、CI/新克隆中不可读属预期」；并额外全量复核「markdown 相对链接是否指向未跟踪文件」＝ **0**。
+  - **教训**：「本地绿」对「**引用了未被版本控制的产物**」这一类缺陷**完全无效**，与 `#[cfg(unix)]` 两条用例 PENDING 同源——都是**本地平台/环境覆盖不到、只能由 CI 判定**的判定项。这正是「未在本地执行 ≠ 通过」的一个具体实例。
 - 2026-10-02（DR1 Round 22/23，main）：**补上 `agentic-assessment` 块后才暴露的一批记录层缺陷**。此前 `--stage plan`/`--stage premerge` 一路绿，是因为 `block(verificationText,'agentic-assessment')`（`workflow-check.mjs:1261`）在块缺失时**先 `throw` 并退出**，其后的 `checkMergeHistory`/`checkIndependentValidation`/`checkPremergeHistory` 等**一条都不执行**。补块后实测一次暴露 **12 条**（`reports/final-gate-final-2026-10-02-fail.json`）：| `## Merge History` 的 8 条脏格（长括注整格喂给 `isAncestor`、`Merger` 列并列多执行者）；1 条多合入执行者；1 条 7.1 `Result` 非整格 `PASS`；1 条 7.1 缺 PASS 记录；1 条 Merge History 的 candidate 与 Premerge History 对不上。
   - **处置**：`## Merge History` 压成 1 行裸值（簿记提交移入表下注记）；7.1 的 `Result` 改为**整格恰好 `PASS`**；`checkPremergeHistory` 的 candidate 对应关系随之恢复。
   - **同时订正两条被两位 reviewer 说错的判据**：Round 20/21 建议「7.1 改为以**裸 `PASS` 开头**」**不准确**——判据是整格比较（`String(result).trim().toUpperCase() !== 'PASS'`），`PASS（…）` 照样失败（DR1-F95）；`Dependency Declaration Review` 的 `Result` 同理（DR1-E8）。
