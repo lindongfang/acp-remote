@@ -445,7 +445,7 @@ alternative_checks:
 
 ```agentic-assessment
 assessment_id: "session-resume-final-2026-10-02"
-target_commit: 9c3e1fa97d5bfe94b528da250857894f70117cf3
+target_commit: b7f599b57eafdbcfce2ce45bd6244abfe3fba50c
 contract_digest: sha256:93356f963422dac3a2d95ad700449b914432c83d267e12d422bfdc7a71329ba2
 result: PASS
 evidence:
