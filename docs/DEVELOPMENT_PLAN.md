@@ -1,7 +1,7 @@
 # ACP Remote 开发计划
 
 > 状态：实施路线图；记录建议的交付顺序与验收节点，不新增产品、协议或安全合同。
-> 基线：2026-09-23（2026-09-24 随 `identity-auth-and-keystore` 补充切片 3 的落地状态，2026-09-25 随 `daemon-cli-and-local-admin` 补充切片 4 的落地状态，2026-09-26 随 `node-link-owner` 补充切片 5 的落地状态，2026-10-01 随 `session-resume` 补充 Owner 侧会话恢复的落地状态）。实际能力以代码和测试为准；各项待实现内容以其权威文档为准。
+> 基线：2026-09-23（2026-09-24 随 `identity-auth-and-keystore` 补充切片 3 的落地状态，2026-09-25 随 `daemon-cli-and-local-admin` 补充切片 4 的落地状态，2026-09-26 随 `node-link-owner` 补充切片 5 的落地状态，2026-10-01 随 `session-resume` 补充 Owner 侧会话恢复的落地状态，2026-10-02 随 `sync-workspaces-and-create` 补充切片 7 的 Sync 合同新增 `session.create` 与本机 workspace/Agent 目录）。实际能力以代码和测试为准；各项待实现内容以其权威文档为准。
 
 ## 1. 目标与边界
 
@@ -59,7 +59,9 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 在 Node Link 闭环后实现 `server::sync` 的设备认证、snapshot、事件、ACK、补发和命令终态；建立 TypeScript + Expo/React Native 通用工程，首个交付只构建 Daemon 本地托管的 Web/PWA。客户端状态、平台 adapter 与功能范围以[前端设计](FRONTEND_DESIGN.md)为准。
 
-验收：PWA 能配对、查看和继续已有会话，展示流式及关键结构化事件、处理权限请求、取消 turn、查看与切换模型；重连从已 ACK cursor 恢复且不重复显示或执行命令。首版不提供会话创建入口；Owner 离线时只显示可用元数据，不把输入误报为已发送。
+本切片的 Sync 合同现在**包含** `session.create`（feature `core.session-create.v1`）与本机 workspace/Agent 目录（feature `core.local-catalog.v1`）：命令目录、两份协议 schema、`sync-protocol` 的 `CommandName`/payload/result、授权镜像的 `pack.create-session` 与固定向量都已就位，客户端在目录内提交 `{ workspaceAlias, agentId }` 即可创建会话。合同就位**不等于**能力可用：`server::sync`（快照组装、命令处理、授权判定与终态投递）仍属本切片待实现部分，上述合同只冻结它要消费的形状。
+
+验收：PWA 能配对、浏览本机目录、查看和继续已有会话，展示流式及关键结构化事件、处理权限请求、取消 turn、查看与切换模型；重连从已 ACK cursor 恢复且不重复显示或执行命令。在已登记目录内提交 `session.create` 能收到 `accepted` → `completed { sessionId, session }` 的终态，未持 `session.create` scope 的设备被服务端以 `authorization.scope_denied` 拒绝且无副作用。Owner 离线时只显示可用元数据，不把输入误报为已发送。
 
 ### 8. 稳定性、兼容性与发布
 

@@ -1,9 +1,10 @@
 # ACP Remote 前端设计
 
 > 状态：编码前客户端约束  
-> 版本：0.3
-> 修订记录（2026-09-18）：明确 PWA 本地缓存为固定常量（摘要缓存 8 MiB、TTL 30 天、LRU），imported 正文不占用配额。  
-> 日期：2026-09-18
+> 版本：0.4
+> 修订记录（2026-10-02）：§2.2 与 §9 第 1 条把「PWA 不展示会话创建」改为受限的目录内创建入口（feature `core.session-create.v1`），并记录原型来源；§4.1 新增目录浏览与目录内创建会话；§7 把 workspace/Agent 目录引用纳入可缓存的最小数据（只存引用）。  
+> 修订记录（2026-09-18）：明确 PWA 本地缓存为固定常量（摘要缓存 8 MiB、TTL 30 天、LRU），imported 正文不占用配额。
+> 日期：2026-10-02（2026-09-18 基线）
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 后端模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)
 
@@ -37,7 +38,7 @@
 
 - 可以访问当前节点本地拥有或从其他节点导入、且已授权的 Agent/会话。
 - 可以查看历史和实时事件、继续对话、取消 turn、处理权限请求、选择模型和调用 Agent 暴露且被允许的能力。
-- 当前 PWA v1 不展示会话创建；Node Link 已支持的 `session.create` 只能选择 Owner 导出的 Agent 与 workspace template，未来 PWA 只增加该受限入口。
+- 第一阶段 PWA 在本机目录内提供受限的会话创建入口：`session.create` 的选择器来自本机已登记的 workspace 目录与已配置的 Agent（feature `core.local-catalog.v1` 的快照资源供数，离线也可渲染），提交只带 `{ workspaceAlias, agentId }` 两个引用（feature `core.session-create.v1`）。客户端**不**展示也不构造规范化路径、目录追加、MCP 配置或凭据；Node Link 侧 `session.create` 额外要求 Owner 导出的 workspace template，PWA 不使用这条形状。
 - 客户端不能提交任意 Owner 路径、配置 Provider 凭据、扩大沙箱权限或直接发送任意 ACP JSON-RPC。
 - UI 隐藏按钮不是安全措施；Access 与 Owner Node 必须分别执行授权。
 
@@ -103,6 +104,8 @@ clients/
 - 主机连接与首次配对。
 - 主机身份显示、连接状态和重新配对入口。
 - 已有会话列表与会话详情。
+- workspace 目录浏览：目录列表（以目录为主角）、目录内会话列表、目录搜索、空目录与"没有任何目录"两种空态；目录项只显示展示名与别名，不显示或不可编辑规范化路径。目录数据随快照下发（`core.local-catalog.v1`），因此离线时目录页仍可渲染。
+- 目录内创建会话：在目录详情页提交 `session.create`，选择本机已配置的 Agent profile；未持 `session.create` scope 时入口禁用并说明"这台设备没有创建会话的权限，需要电脑端授予"，不得以隐藏以外的方式伪装成可用；提交期间显示创建中状态，收到终态后进入新会话或显示结构化失败原因。
 - 历史快照、cursor 补发和实时事件切换。
 - 用户 prompt、Agent 流式回复和最终消息。
 - 第一阶段只发送文本 prompt；图片、文件和 resource 输入必须明确显示不支持，不能静默删除后提交剩余内容。
@@ -232,6 +235,7 @@ PWA 首个版本只持久化连接和恢复所需的最小数据：
 - 最后确认的 global/session cursor。
 - 客户端 UI 偏好。
 - 待确认命令的 `requestId` 和最小恢复信息。
+- workspace 目录与 Agent profile 的引用缓存（别名、展示名、默认标记），用于离线渲染目录页与创建选择器；只存引用，不存规范化路径（§2.2 与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5）。目录项随快照重建校正，清除后重新同步即可。
 
 规则：
 
@@ -279,7 +283,7 @@ Android/iOS 应复用：
 
 PWA MVP 至少满足：
 
-1. 只能查看和操作当前节点可见的已有会话；PWA v1 无法通过 UI 或构造普通命令创建会话。
+1. 可以查看和操作当前节点可见的已有会话；会话创建是**受限**入口而不是被禁止的能力：只能在已登记的 workspace 目录内创建，Agent 只能从本机已配置的 profile 中选择，提交的 payload 只有 `{ workspaceAlias, agentId }` 两个引用——客户端无法通过 UI 或构造普通命令提交规范化路径、目录追加、MCP 配置或凭据。未持 `session.create` scope 的设备该入口不可用，且服务端也必须拒绝；目录与 Agent 目录在离线状态下仍可渲染（数据来自快照）。该入口的交互口径以 [`prototypes/acp-remote-pwa.html`](../prototypes/acp-remote-pwa.html) 为原型来源：目录页（`#/dirs`）、目录详情（`#/dir/work-api`）与「在此目录新建会话」弹层——目录为主角的列表、按月分档的详情、只列出本机已配置 Agent 的选择器、「将在你的电脑上启动一个 Agent 进程」的副作用提示，以及无权限时的「这台设备没有创建会话的权限，需要电脑端授予」文案。
 2. 能完成配对、认证、订阅、历史追平和实时切换。
 3. 网络断开后自动重连，并从最后 ACK cursor 补发，不重复显示事件。
 4. prompt 重试不会导致 Agent 重复执行。

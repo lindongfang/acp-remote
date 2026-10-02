@@ -5,7 +5,7 @@
 //! [`crate::envelope`] 承载；本模块只承载 `body`，与 `auth`/`control`/`error` 三个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它
-//! `transport` 含 `sync` 的 11 条命令的镜像（`session.create` 只经 Node Link 接受，Sync v1 收到时
+//! `transport` 含 `sync` 的 12 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
 //! 按 `command.unsupported` 拒绝）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
@@ -45,8 +45,12 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 11 条命令，顺序
-/// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.create` 的结果）。
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 12 条命令，顺序
+/// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
+///
+/// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧只有
+/// `{ workspaceAlias, agentId }`（`exportId`/`templateParams` 是跨节点 Export 概念，见
+/// `docs/SYNC_PROTOCOL.md` §11.5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandName {
     /// `session.list`
@@ -71,11 +75,13 @@ pub enum CommandName {
     SessionConfigSet,
     /// `permission.resolve`
     PermissionResolve,
+    /// `session.create`
+    SessionCreate,
 }
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 11] = [
+    pub const ALL: [CommandName; 12] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
@@ -87,6 +93,7 @@ impl CommandName {
         CommandName::SessionModeSet,
         CommandName::SessionConfigSet,
         CommandName::PermissionResolve,
+        CommandName::SessionCreate,
     ];
 
     /// 查询命令（`docs/SYNC_PROTOCOL.md` §11.5 的"类别"列）：不进入异步队列，`command.result` 的
@@ -103,9 +110,13 @@ impl CommandName {
     }
 
     /// body 顶层是否**必须**携带 `sessionId`（各 def 的 `required` 列表；其余命令按
-    /// `additionalProperties: false` 反过来禁止它）。
+    /// `additionalProperties: false` 反过来禁止它）。`session.create` 的目标会话尚不存在，因此与
+    /// `session.list`/`command.status` 一样禁止该键。
     pub fn requires_session_id(self) -> bool {
-        !matches!(self, CommandName::SessionList | CommandName::CommandStatus)
+        !matches!(
+            self,
+            CommandName::SessionList | CommandName::CommandStatus | CommandName::SessionCreate
+        )
     }
 
     /// body 顶层是否**必须**携带 `expectedVersion`（只有 `session.config.set` 与 `session.mode.set`）。
@@ -129,6 +140,7 @@ impl CommandName {
             CommandName::SessionModeSet => "session.mode.set",
             CommandName::SessionConfigSet => "session.config.set",
             CommandName::PermissionResolve => "permission.resolve",
+            CommandName::SessionCreate => "session.create",
         }
     }
 }
@@ -243,6 +255,22 @@ impl<'de> Deserialize<'de> for CommandState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionList {}
+
+/// `sessionCreate`（`command.schema.json#/$defs/sessionCreate`）的 `payload`：
+/// `{ workspaceAlias, agentId }`。
+///
+/// 两个字段都是**引用**：workspace 别名对应本机 `owned_workspace` 已登记的行，`agentId` 对应本机
+/// 已配置的 Agent profile。规范化路径、目录追加、MCP 配置与凭据都不在 wire 上，因此
+/// `deny_unknown_fields` 会把 `cwd`/`exportId`/`templateParams` 之类的键直接拒成
+/// [`ValueError::Shape`]——与 schema 的 `additionalProperties: false` 同口径。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionCreate {
+    #[serde(rename = "workspaceAlias")]
+    pub workspace_alias: NonEmptyText<128>,
+    #[serde(rename = "agentId")]
+    pub agent_id: NonEmptyText<128>,
+}
 
 /// `session.read.payload.include` 的元素（schema 的 `items.enum`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -613,6 +641,8 @@ pub struct CommandStatus {
 pub enum CommandPayload {
     /// `session.list` 的 payload。
     SessionList(SessionList),
+    /// `session.create` 的 payload。
+    SessionCreate(SessionCreate),
     /// `session.read` 的 payload。
     SessionRead(SessionRead),
     /// `session.prompt` 的 payload。
@@ -646,6 +676,11 @@ impl CommandPayload {
                 parse_payload(payload, "空 object（sessionList 的 payload）")
                     .map(CommandPayload::SessionList)
             }
+            CommandName::SessionCreate => parse_payload(
+                payload,
+                "{ workspaceAlias, agentId }（sessionCreate 的 payload）",
+            )
+            .map(CommandPayload::SessionCreate),
             CommandName::SessionRead => {
                 parse_payload(payload, "{ include: 资源名数组 }（sessionRead 的 payload）")
                     .map(CommandPayload::SessionRead)
@@ -695,7 +730,7 @@ impl CommandPayload {
     }
 }
 
-/// `command` 消息的 body（`command.schema.json#/$defs/command` 的 `body`，其 `oneOf` 的 11 个 def）。
+/// `command` 消息的 body（`command.schema.json#/$defs/command` 的 `body`，其 `oneOf` 的 12 个 def）。
 ///
 /// `sessionId` 与 `expectedVersion` 是**条件**字段：哪些命令必须携带、哪些命令禁止携带由 schema
 /// 的 `required`/`additionalProperties: false` 决定（[`CommandName::requires_session_id`] /
@@ -815,6 +850,19 @@ pub struct SessionListResult {
     pub sessions: Vec<SessionSummary>,
 }
 
+/// `sessionCreateResult`（`command.schema.json#/$defs/sessionCreateResult`）：`session.create` 的
+/// 完成结果——新会话的标识与它的 [`SessionSummary`]。
+///
+/// 摘要复用 `session.list`/`session.created` 的同一形状，因此目录引用等可选字段只在本机与对端
+/// 协商过对应 feature 时出现。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionCreateResult {
+    #[serde(rename = "sessionId")]
+    pub session_id: Uuid,
+    pub session: SessionSummary,
+}
+
 /// `sessionReadResult.resources`：字段与 `sync.snapshotChunk` 的同名资源一致（schema 直接引用
 /// `sync.schema.json#/$defs/snapshotItem.*`）。每个键都可缺失，但出现时必须是数组（不可为 `null`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -909,6 +957,8 @@ pub struct CommandStatusRecord {
 pub enum CommandResultPayload {
     /// `session.list` 的完成结果。
     SessionList(SessionListResult),
+    /// `session.create` 的完成结果。
+    SessionCreate(SessionCreateResult),
     /// `session.read` 的完成结果。
     SessionRead(SessionReadResult),
     /// `session.config.list` 的完成结果。
@@ -940,6 +990,13 @@ impl CommandResultPayload {
                         "sessionListResult（session.list 的 completed）",
                     )
                     .map(|value| Nullable::value(CommandResultPayload::SessionList(value)));
+                }
+                CommandName::SessionCreate => {
+                    return parse_result::<SessionCreateResult>(
+                        result,
+                        "sessionCreateResult（session.create 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::SessionCreate(value)));
                 }
                 CommandName::SessionRead => {
                     return parse_result::<SessionReadResult>(
@@ -1168,4 +1225,121 @@ fn parse_result<T: DeserializeOwned>(
 /// `RawValue` 的字面量是否为 JSON `null`。
 fn is_json_null(raw: &RawValue) -> bool {
     raw.get().trim() == "null"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REQUEST: &str = "5f2a91c4-8d3b-4e77-b0a6-1c4d9e8f2a35";
+    const SESSION: &str = "5d73cd10-a465-43cd-b3f1-704e2d49e99e";
+    const TERMINAL: &str = "3a6b8d15-9c42-4f07-b1e8-5d7c2a9f0e31";
+    const SUMMARY: &str = concat!(
+        r#"{"sessionId":""#,
+        "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        r#"","title":null,"agent":{"agentId":"claude-code","name":"Claude Code"},"#,
+        r#""state":"idle","origin":{"kind":"local"},"currentMode":null,"version":"1","#,
+        r#""createdAt":"2026-09-17T12:12:01.000Z","updatedAt":"2026-09-17T12:12:01.000Z"}"#
+    );
+
+    fn body(command: &str, extra: &str, payload: &str) -> String {
+        format!(r#"{{"requestId":"{REQUEST}","command":"{command}",{extra}"payload":{payload}}}"#)
+    }
+
+    #[test]
+    fn command_name_covers_the_sync_subset_and_round_trips() {
+        assert_eq!(CommandName::ALL.len(), 12, "sync 子集是 12 条命令");
+        assert!(
+            CommandName::ALL
+                .iter()
+                .all(|name| name.to_string() == name.as_str())
+        );
+        assert_eq!(
+            CommandName::from_str("session.create"),
+            Ok(CommandName::SessionCreate)
+        );
+        assert!(
+            !CommandName::SessionCreate.is_query(),
+            "session.create 是 mutation，不进查询命令集合"
+        );
+        assert!(
+            !CommandName::SessionCreate.requires_session_id(),
+            "会话尚不存在，body 顶层不得携带 sessionId"
+        );
+        assert!(!CommandName::SessionCreate.requires_expected_version());
+    }
+
+    #[test]
+    fn session_create_accepts_only_the_two_registered_references() {
+        let command: Command = serde_json::from_str(&body(
+            "session.create",
+            "",
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code"}"#,
+        ))
+        .expect("两个引用都在时必须接受");
+        assert_eq!(
+            command.payload,
+            CommandPayload::SessionCreate(SessionCreate {
+                workspace_alias: NonEmptyText::parse("work-api").expect("非空"),
+                agent_id: NonEmptyText::parse("claude-code").expect("非空"),
+            })
+        );
+
+        for rejected in [
+            // 路径与目录追加不是授权输入（SECURITY_DESIGN.md §12.3）。
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code","cwd":"C:\\repo"}"#,
+            // 跨节点 Export 概念在 Sync 面不存在。
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code","exportId":"export-laptop-zed"}"#,
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code","templateParams":{}}"#,
+            // 凭据与 MCP 配置同样不进入 wire。
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code","mcpServers":{}}"#,
+            // 两个键都必需，空串不满足取值域。
+            r#"{"workspaceAlias":"work-api"}"#,
+            r#"{"workspaceAlias":"","agentId":"claude-code"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Command>(&body("session.create", "", rejected)).is_err(),
+                "payload 必须被拒：{rejected}"
+            );
+        }
+
+        // 顶层 sessionId 由 `additionalProperties: false` 拒绝（不是被静默忽略）。
+        let with_session = format!(
+            r#"{{"requestId":"{REQUEST}","command":"session.create","sessionId":"{SESSION}","payload":{{"workspaceAlias":"work-api","agentId":"claude-code"}}}}"#
+        );
+        assert!(serde_json::from_str::<Command>(&with_session).is_err());
+    }
+
+    #[test]
+    fn session_create_result_is_bound_to_completed() {
+        let completed = format!(
+            r#"{{"requestId":"{REQUEST}","command":"session.create","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":"{TERMINAL}","result":{{"sessionId":"{SESSION}","session":{SUMMARY}}},"error":null}}"#
+        );
+        let result: CommandResult = serde_json::from_str(&completed).expect("completed 必须接受");
+        assert!(
+            matches!(
+                result.result.as_ref(),
+                Some(CommandResultPayload::SessionCreate(_))
+            ),
+            "completed 的 result 必须是 sessionCreateResult"
+        );
+
+        // 缺少 `session` 的结果不得按基类型 `object` 放行。
+        let missing = completed.replace(&format!(r#","session":{SUMMARY}"#), "");
+        assert!(serde_json::from_str::<CommandResult>(&missing).is_err());
+
+        // mutation 的 completed 必须给出唯一 terminalEventId。
+        let no_terminal = completed.replace(
+            &format!(r#""terminalEventId":"{TERMINAL}""#),
+            r#""terminalEventId":null"#,
+        );
+        assert!(serde_json::from_str::<CommandResult>(&no_terminal).is_err());
+
+        // accepted：result 与 terminalEventId 均为 null，error 为 null。
+        let accepted = format!(
+            r#"{{"requestId":"{REQUEST}","command":"session.create","status":"accepted","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":null,"result":null,"error":null}}"#
+        );
+        let accepted: CommandResult = serde_json::from_str(&accepted).expect("accepted 必须接受");
+        assert!(accepted.result.is_null());
+    }
 }
