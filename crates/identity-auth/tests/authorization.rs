@@ -239,7 +239,7 @@ fn local_capabilities_are_never_granted_remotely() {
 
 #[test]
 fn device_request_expands_packs_and_explicit_scopes() {
-    // R59–R61 / 设备请求 = 包展开 ∪ 显式 scope；`session.create` 只能经 `grant.remote-work`。
+    // R59–R61 / 设备请求 = 包展开 ∪ 显式 scope。
     let scopes = expand_device_request(
         &["pack.observe".to_owned()],
         &["permission.resolve".to_owned()],
@@ -253,6 +253,39 @@ fn device_request_expands_packs_and_explicit_scopes() {
     let with_create =
         expand_device_request(&[], &["session.create".to_owned()]).expect("登记命令名必须可展开");
     assert!(with_create.contains("session.create"));
+}
+
+#[test]
+fn create_session_pack_expands_to_session_create_and_stays_out_of_presets() {
+    // R37–R39 / `pack.create-session` 只展开为 `session.create`，且不进任何 preset：
+    // 配对时必须显式请求，默认预设不得悄悄获得创建会话的能力。
+    let expansion = expand_pack("pack.create-session").expect("包必须可展开");
+    assert_eq!(expansion, vec!["session.create".to_owned()]);
+
+    for (preset, members) in PRESETS {
+        assert!(
+            !members.contains(&"pack.create-session"),
+            "{preset} 不得包含 pack.create-session"
+        );
+        let scopes = expand_preset(preset).expect("预设必须可展开");
+        assert!(
+            !scopes.scopes.iter().any(|scope| scope == "session.create"),
+            "{preset} 展开后不得出现 session.create"
+        );
+    }
+
+    // 显式请求该包等价于显式请求 `session.create`（wire 与记录里只有命令名）。
+    let requested = expand_device_request(&["pack.create-session".to_owned()], &[])
+        .expect("配对请求必须可展开");
+    assert_eq!(requested.len(), 1);
+    assert!(requested.contains("session.create"));
+    assert!(!requested.contains("pack.create-session"));
+    assert!(
+        requested
+            == expand_device_request(&[], &["session.create".to_owned()])
+                .expect("显式 scope 必须可展开"),
+        "包展开与显式 scope 请求必须给出同一集合"
+    );
 }
 
 #[test]
@@ -302,7 +335,7 @@ fn pack_members_are_registered_commands_with_matching_grant() {
     let catalog = catalog();
     for command in catalog["commands"].as_array().expect("必须是数组") {
         let name = command["name"].as_str().expect("命令必须有名字");
-        //  没有设备包（只用节点授权），因此  允许为 null。
+        // `pack` 只对只经 Node Link 接受的命令（`session.resume`）允许为 null；有包的命令必须能由它展开出来。
         let grant = command["grant"].as_str().expect("命令必须有授权");
         if let Some(pack) = command["pack"].as_str() {
             assert!(

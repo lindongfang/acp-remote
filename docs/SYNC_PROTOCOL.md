@@ -3,7 +3,8 @@
 > 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。会话状态机、保留窗口、命令终态与授权判定尚未实现。  
 > 协议版本：1  
 > 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
-> 日期：2026-09-18
+> 修订记录（2026-10-02）：`session.create` 经 Sync 暴露（feature `core.session-create.v1`）——§11.3 把它移入可授予集合并写明双层授权与设备级判定，§11.5 给出 Sync 面的 `{ workspaceAlias, agentId }` payload、`accepted`/`completed` 终态与失败分类，§16.2 说明它是可选 feature 引入而非 major version；§5.2 新增 `core.session-create.v1` 与 `core.local-catalog.v1` 两条 feature。本次不新增任何错误码（映射见 §11.5）。
+> 日期：2026-10-02（2026-09-18 基线；同日追加 `session.create` 与本机目录 feature）
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
 ## 1. 文档职责
@@ -183,8 +184,10 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.event-ack.v1` | 客户端 ACK 与断线续传（`sync.ack`） | mvp | 否 |
 | `acp.raw-payload.v1` | 事件携带 ACP 原文（`rawAcp.rawJson` 保真，见 §10.3） | mvp | 否 |
 | `resource.remote-origin.v1` | imported 资源来源承载（§9.6：`ownerNodeId`/`exportId`/origin cursor/`online`） | mvp | 否 |
+| `core.local-catalog.v1` | 本机 workspace 目录与 Agent profile 随快照下发（§9.4 的 `workspaces`/`agents` 资源、§10.3 的 `workspaceRef`/`agentCatalogEntry`），以及 `SessionSummary` 的可选 `workspace` 字段；`session.create` 的选择器由它供数 | mvp | 否 |
+| `core.session-create.v1` | Sync 面 `session.create`（§11.5 的 `{ workspaceAlias, agentId }` payload 与 `completed { sessionId, session }` 终态结果） | mvp | 否 |
 
-- 本表的五个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的七个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
@@ -1210,13 +1213,14 @@ elicitation.respond
 session.mode.set
 session.config.set
 permission.resolve
+session.create
 ```
 
 Sync v1 尚未定义，或仅允许 Node 本地管理入口：
 
 ```text
-session.create
 session.delete
+session.resume
 local.workspace.select
 local.agent.configure
 local.provider.configure
@@ -1226,7 +1230,7 @@ local.node.rotate-key
 local.audit.export
 ```
 
-`session.create` 是 Node Link 命令，首阶段 Sync 不暴露；将来经 Sync 暴露时必须同时满足 `grant.remote-work`，且只能引用 Export 发布的 agent 与 workspace template。命令到 scope、pack、grant 的权威映射以 `compatibility/commands/v1/commands.json` 和 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 10.2 节的表为准，本节只声明 Sync 面可授予哪些命令名；第 11.5 节表首列是 Sync v1 接受的完整命令集合。
+`session.create` 经 Sync 暴露，但授权是**双层**的：设备侧必须持 scope `session.create`（配对时来自设备授权包 `pack.create-session`，该包不进任何预设、只能被显式请求），Owner 侧必须满足 `grant.remote-work`。与 Node Link 面同名，但 payload 不同：Sync 侧只接受本机已登记 workspace 的别名与已配置的 Agent 标识（`{ workspaceAlias, agentId }`），没有 Export 概念，因此不接受 `exportId`、`templateParams` 或任何绝对路径。判定以"该资源当前是否已登记/已配置"为准，因此一次授予覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 9 与 10.2 节）。命令到 scope、pack、grant 的权威映射以 `compatibility/commands/v1/commands.json` 和 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 10.2 节的表为准，本节只声明 Sync 面可授予哪些命令名；第 11.5 节表首列是 Sync v1 接受的完整命令集合。
 
 未知命令返回 `command.unsupported`。底层 Agent 不支持的已知能力返回 `capability.unsupported_by_agent`，Broker 无法表达时返回 `capability.unsupported_by_broker`，不能伪装成功。
 
@@ -1279,10 +1283,14 @@ local.audit.export
 | `session.mode.set` | mutation | 必须 | `{ modeId }`，body `expectedVersion` 必须存在 | `session.mode.changed` 后 `command.completed` |
 | `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
 | `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
-| `session.create` | mutation | 禁止 | `{ agentId, exportId, workspaceAlias, templateParams?: object }` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；Sync v1 收到返回 `command.unsupported` |
+| `session.create` | mutation | 禁止（会话尚不存在） | `{ workspaceAlias, agentId }`；只允许这两个键，出现 `cwd`、`exportId`、`templateParams`、任何绝对路径、MCP 配置或凭据字段一律 `protocol.schema_invalid` | `accepted { result: null, terminalEventId: null }` → `completed { sessionId, session: SessionSummary }` 并附唯一 `terminalEventId`；未持 scope 或引用未登记的别名/Agent 以 `authorization.scope_denied` 拒绝（无副作用），已登记但本机解析失败以 `internal.unavailable` 拒绝，已接受但无法确认 Agent 启动结果以 `uncertain` 终结；同一 `requestId` 重发返回首次结果，不产生第二个会话 |
 | `session.resume` | mutation | 仅 Node Link（经 `sessionRef`） | `{}` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；`accepted` 的 `result` 为 `null`，成功终态为 `completed SessionResumeResult`（`remoteSessionRef` + `sessionMeta`）；目标 Agent 未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败；Sync v1 收到返回 `command.unsupported` |
 
-本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（13 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举只包含其中 `transport` 含 `sync` 的 11 条；`session.create` 与 `session.resume` 只经 Node Link 接受且必须满足 `grant.remote-work`，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在本文件的枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（13 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 12 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
+
+`session.create` 在两个传输面同名但 payload 不同，本表是 Sync 面的形状；Node Link 面仍额外要求 `exportId`，并允许可选的 `templateParams`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 第 12.7 节）。两个面共用同一套命令名、幂等与终态语义：先 `accepted` 再 `completed`/`failed`/`uncertain`，同一 `requestId` 重发必须返回首次结果。`session.create` 的 `accepted` 必须携带 `result: null`——这是服务端语义要求（与 `command.status` 的 `acceptedAt` 同类），schema 的 `accepted` 分支不对 `result` 取值做约束，因此客户端不得依赖它在 wire 上被强制。
+
+`session.create` 端到端能力由 feature `core.session-create.v1` 协商：未选中时服务端按 §4.2/§12.2 返回 `protocol.feature_required`，不得静默接受。`workspaceAlias` 与 `agentId` 的可选来源（目录页与 Agent 选择器）由 `core.local-catalog.v1` 的快照资源供数；两者都是**引用**，规范化路径、目录追加与凭据任何情况下都不得出现在 wire、缓存或错误 `details` 中。
 
 `ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 
@@ -1499,7 +1507,7 @@ v1 默认上限：
 - 改变排序、ACK、cursor 或幂等语义。
 - 改变 transcript codec、算法、domain 或 field tag。
 - 引入 binary framing、压缩、附件传输或不同 Transport Profile。
-- 增加 `session.create`、imported resource origin（feature `resource.remote-origin.v1`，见第 9.6 节）等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。
+- 增加 `session.create`、imported resource origin（feature `resource.remote-origin.v1`，见第 9.6 节）、本机 workspace/Agent 目录（feature `core.local-catalog.v1`）等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。`session.create` 与本机目录已按此条以**可选 feature** 引入（`core.session-create.v1`、`core.local-catalog.v1`，见第 5.2 节）：未协商的客户端行为与引入前完全一致，既有字段含义、排序与幂等语义都没有变化，因此不需要 major version。
 
 ### 16.3 数据迁移
 

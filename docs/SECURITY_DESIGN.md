@@ -1,8 +1,9 @@
 # ACP Remote 安全设计
 
 > 状态：编码前安全基线（Draft）  
-> 版本：0.3
-> 日期：2026-09-18  
+> 版本：0.4
+> 日期：2026-10-02  
+> 修订记录（2026-10-02）：§9.4 新增「配对授予的 scope 是设备级而非资源快照」的显式规则，并写出 `session.create` 的设备级副作用；§10.2 把 `session.create` 归入新设备授权包 `pack.create-session`（不进任何预设），声明 Sync 面已暴露该入口与其 `{ workspaceAlias, agentId }` payload；§10.3 区分两个传输面的 workspace 引用边界；§11.2 把目录展示名列为按不可信内容渲染。  
 > 修订记录（2026-09-18）：§13.4 的可持久化元数据白名单显式加入「不含内容的审计元数据」，消除与 §11.5「保留审计记录」的矛盾。
 > 适用范围：Owner/Access Node、Node Link、Daemon、CLI、PWA、后续原生客户端、ACP Agent 子进程及 npm 发布链路
 
@@ -236,6 +237,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 - Device/Node pairing 只能由目标节点本地管理入口创建和确认。
 - 配对 UI 必须显示设备名称、key fingerprint、SAS、请求 scopes 和过期时间。
 - 用户确认前设备记录不能获得 active 权限。
+- 配对授予的 scope 是**设备级**的，不是配对瞬间的资源快照。`session.create`（设备授权包 `pack.create-session`，只含这一个命令名，且不进任何预设、必须被显式请求）就是这条规则的样板：它的判定以「该 workspace 当前是否已登记、该 Agent 当前是否已配置」为准，因此**一次授予覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent，新登记的资源自动进入已授权范围，无需重新授权**。配对确认页必须原样展示这句副作用，不能只列 scope 名称。撤销该 scope 或撤销设备立即使后续命令被拒（见 §10.2）。
 - 每个新 WSS 完整认证，不签发长期 bearer session/refresh token。
 - Node identity 变化进入 `identity_changed`，不能自动接受。
 
@@ -283,11 +285,12 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.mode.set` | mutation | `session.mode.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
 | `session.config.set` | mutation | `session.config.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
 | `permission.resolve` | mutation | `permission.resolve` | `pack.approve` | `grant.approve` | mvp |
-| `session.create` | mutation | `session.create` | 无（仅 Node Link） | `grant.remote-work` | mvp（Node Link）/ Sync 首版不暴露 |
+| `session.create` | mutation | `session.create` | `pack.create-session` | `grant.remote-work` | mvp（Node Link 与 Sync 共用命令名，payload 不同） |
 | `session.resume` | mutation | `session.resume` | 无（仅 Node Link） | `grant.remote-work` | conditional_mvp（取决于目标 Agent 的 `sessionCapabilities.resume`） |
 
 - 查询类命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`）全部归 `pack.observe`，因此断线恢复所需的 `command.status` 不需要额外授权。
-- `session.create` 是设备/Access principal 的 scope，同时要求 Owner 侧 `grant.remote-work`；请求只能引用 Export 中发布的 Agent 与 workspace template，不能提交任意 Owner 路径或 Provider/MCP 凭据。Node Link 首个纵向切片必须实现它以支持 Zed `session/new`；Sync 首版不暴露该入口。
+- `session.create` 是设备/Access principal 的 scope，同时要求 Owner 侧 `grant.remote-work`。**Sync 面已暴露该入口**：设备侧 scope 来自配对时显式请求的 `pack.create-session`（该包不进任何预设），payload 只接受本机已登记 workspace 的别名与已配置 Agent 的标识 `{ workspaceAlias, agentId }`——没有 Export 概念，因此 `exportId`、`templateParams`、`cwd`、绝对路径、MCP 配置与凭据一律不被接受。Node Link 侧仍额外要求 `exportId` 与 Export 发布的 workspace template，形状见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.7；两个面共用同一套命令名、幂等与终态语义。Node Link 首个纵向切片必须实现它以支持 Zed `session/new`。
+- **`session.create` 的授权是设备级而不是资源级，因此有明确副作用**：判定以「该资源当前是否已登记（workspace）或已配置（Agent）」为准，而不是以配对时的快照为准。授予 `session.create` scope **覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent；新登记的资源无需重新授权即自动进入已授权范围**。这条语义不得只隐含在 scope 名称之下——配对确认页与设备管理 UI 必须原样展示它。撤销该 scope 或撤销设备立即使后续创建被拒且无副作用（不启动进程、不写会话行、不分配会话标识）。
 - `session.resume` 同样只归 `grant.remote-work`（不新增授权维度），它的 payload 是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录一律取自 Owner 自身的持久化记录，不接受客户端提供。目标 Agent 未宣告 `sessionCapabilities.resume` 时显式失败，不降级为新建会话。
 - 配对预设：`preset.remote-control` = `pack.observe` + `pack.interact` + `pack.configure-session` + `pack.approve`；`preset.read-only` = `pack.observe`。配对确认页必须完整展示最终 scopes，不能用含糊的“完全访问”替代。
 - 设备记录与 wire 只保存独立 scopes，不保存 pack 或 preset 名称；`pack.*`、`preset.*`、`grant.*` 都是授权管理的输入形式，落到 wire 前必须展开。
@@ -307,7 +310,7 @@ local.node.rotate-key      Node Identity 轮换
 local.audit.export         本地审计导出（不含会话正文）
 ```
 
-远程 `session.create` 是唯一与 workspace 相关的受限远程能力，且只能引用 Export 发布的 alias/template。未来改变这条边界属于产品与安全边界变更，需要更新本文及 `INITIAL_DESIGN.md`，不能只增加一个 command schema。
+远程 `session.create` 是唯一与 workspace 相关的受限远程能力。Node Link 面只能引用 Export 发布的 alias/template；Sync 面只能引用本机当前已登记的 workspace 别名与已配置的 Agent 标识（wire 上传 `{ workspaceAlias, agentId }`，规范化路径、目录追加与凭据永远不出网）。两者都不得让客户端提交任意 Owner 路径或 Provider/MCP 凭据。未来改变这条边界属于产品与安全边界变更，需要更新本文及 `INITIAL_DESIGN.md`，不能只增加一个 command schema。
 
 ### 10.4 并发决策
 
@@ -334,6 +337,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 终端使用纯文本/受控 ANSI renderer，不把输出写入 `innerHTML`。
 - diff、路径、工具参数和错误栈使用文本节点或经过测试的结构化组件。
 - ACP `rawJson` 只能作为文本查看、复制或受控下载，不能执行、注入 DOM 或作为授权输入。
+- 目录展示名（`displayName`）是用户经 `local.workspace.select` 输入的**不可信内容**（§4.3）：按 §4.3 的转义规则渲染，不得当 HTML/Markdown 解析、不得据此拼接路径或 URL、不得进入 `innerHTML`。目录别名是稳定主键；规范化路径既不是授权输入，也不出网（§12.3）。
 - sanitizer 配置、Markdown renderer 和链接策略必须有恶意 fixture。
 
 ### 11.3 Service Worker 与缓存
