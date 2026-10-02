@@ -1,3 +1,5 @@
+> ⚠️ **本文件的状态取样时间早于后续提交。执行前必须重新取值**：用 `git rev-parse refs/heads/main` 取目标提交、用 `workflow check --stage plan --json` 取契约摘要，不要沿用本文件里的任何字面值。
+
 # session-resume 变更交接说明（环境阻塞，非代码问题）
 
 > **本文件的作用**：本变更的实现、独立复核、合入与门禁已全部完成；**唯一未完成的是最后一步「独立复核绑定 + 最终验收落章」**，它卡在一个**环境级故障**上（子 Agent 无法启动），需要宿主修复后按本文件执行。
@@ -18,9 +20,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 本地 `HEAD` | `feb0674f226fa78ae935f72e943a02723a23d4fe` |
+| 本地 `HEAD` | 以 `git rev-parse refs/heads/main` 实测为准（本文件写入时为 `feb0674f…`，其后又有提交） |
 | 远端 `origin/main` | `81e350f`（**本变更一次都未推送**） |
-| 工作区 tracked | **干净**（0 项改动） |
+| 工作区 tracked | 以 `git status --porcelain` 实测为准（**本文件写入后又有未提交改动**：F84–F88 的修复） |
 | 任务 | **39/40**（仅 9.1 未结案，原因已如实写入 `tasks.md`） |
 | `--stage plan` | PASS |
 | `--stage premerge` | PASS（receipt：`reports/premerge-receipt-u1.md`） |
@@ -35,7 +37,7 @@
 1. `Dependency Declaration Review 的 DR1 Plan Revision 未绑定当前规划契约摘要` —— 需 DR1 第 20 轮独立复核
 2. `需要唯一的 agentic-assessment 代码块` —— 需 final 门禁通过后才可定稿
 
-当前契约摘要：`sha256:70b2421d9046ca7db46a7631f260c739daef870ed535daafda680cf2de8b5f2c`
+当前契约摘要：`<以 --stage plan --json 实测值为准>`
 
 ## 3. 恢复后的执行步骤
 
@@ -44,25 +46,30 @@
 派发要点（可直接使用）：
 
 - Review ID `DR1`、**Round 20**，**必须是全新独立实例**，未参与前 19 轮与任何工作包实现。
-- Review Type `plan`；Target Revision = **`sha256:70b2421d9046ca7db46a7631f260c739daef870ed535daafda680cf2de8b5f2c`**。
+- Review Type `plan`；Target Revision = **`<以 --stage plan --json 实测值为准>`**。
 - 对照基线：`requirementsDigest` 应仍为 `sha256:5394327093e57d05b49ea4b04db708fcb97160791ea6cca8cec5a833154408fa`（与 Round 14–19 相同）；若变化须立即声明。
 - 复核范围**刻意收窄**：
   1. 摘要自 Round 19 的 `2adbf605…` 变为 `70b2421d…`，是否**只**因 `tasks.md` 追加完成说明文本（`proposal.md`/`design.md`/`plan.md`/`specs/**` 未被触碰）；
   2. `verification.md` 五处权威记录的**结构自洽与引用可解析**：`## Checks`（final 四行 Result 以 `PASS` 开头、Evidence 为**裸路径**且文件存在）、`## Dispatch Reconciliation`（8 行与台账归约结果逐字一致、State 全为 `merged`、Evidence 为含斜杠的仓库相对路径）、`## Merge History`、`## Review Findings`（CR-PM 两行**位于表头与分隔行之后**）、`## Independent Validation`（7.1 已填）。
-  3. `tasks.md` 39 个 `[x]` 均带完成说明；9.1 未勾选且原因如实。
+  3. `tasks.md` 39 项 `[x]`、9.1 未勾选且原因如实；**但并非每项都带完成说明**——实测只有 6.6/6.7/6.8/7.1/8.1/8.2 六项附「完成（…）」说明，其余任务的证据在 `verification.md` 的 `## Checks` 与 `## Handoff Index`。
 - 只读边界：不得修改任何文件、不得提交、不得跑 `cargo`/`npm`；不得采信 `verification.md` 自述。
 - 报告落 `reports/dr1-dependency-review-round20.md`；findings 从 **DR1-F84** 起（F83 已被 Round 19 使用）。
 - 若它无 shell 需实测摘要，用 `contact_supervisor` 向主 Agent 索取。
 
 ### 步骤 2：把 Round 20 结果登记进 DR1 表
 
-在 `verification.md` 的 `## Dependency Declaration Review` 末尾追加一行（保持 `Result` 为**裸 `PASS`**，与既往行格式一致——门禁按 `/^\s*PASS\b/` 匹配，加粗符号会导致判定失败）：
+在 `verification.md` 的 `## Dependency Declaration Review` 末尾追加一行。**两个格式硬约束**：
+
+- `Result` 必须**整格精确等于裸 `PASS`**——门禁判据是精确比较（`String(result).trim().toUpperCase() !== 'PASS'`），加粗或括注都会判失败。
+- `Report Path` 用**变更目录相对**写法 `reports/…`：门禁按 `existsAt([changeRoot, projectRoot], report)` 解析，该写法在变更目录与仓库根两个基准下都能命中。
 
 ```
-| DR1 | 20 | reviewer-DR（第 20 个独立实例 run <run-id>，fresh context） | sha256:70b2421d9046ca7db46a7631f260c739daef870ed535daafda680cf2de8b5f2c | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round20.md |
+| DR1 | 20 | reviewer-DR（第 20 个独立实例 run <run-id>，fresh context） | <以 --stage plan --json 实测值为准> | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round20.md |
 ```
 
 ### 步骤 3：跑 `--stage final`，确认归零
+
+⚠️ **必须在 `D:/Project/acp-remote` 执行**，不能在 `D:/Project/acp-remote-wt/session-resume-du1`：门禁判据是 `HEAD === refs/heads/main`，而 du1 是集成分支 worktree，其 HEAD 与 `main` 不等，会报 `当前代码 HEAD 与计划目标引用不一致`（与该 worktree 的真实状态无关，纯属执行位置错误）。
 
 ```
 cd D:/Project/acp-remote-wt/session-resume-du1   # 或任何 HEAD == refs/heads/main 的干净工作区
@@ -79,7 +86,7 @@ id: session-resume-final-2026-10-01
 result: PASS
 assessment_id: session-resume-final-2026-10-01
 target_commit: feb0674f226fa78ae935f72e943a02723a23d4fe   ← 必须是执行当时的 HEAD
-contract_digest: sha256:70b2421d9046ca7db46a7631f260c739daef870ed535daafda680cf2de8b5f2c   ← 必须与当时实测值一致
+contract_digest: <以 --stage plan --json 实测值为准>   ← 必须与当时实测值一致
 assessor: main（semantic audit）
 unresolved:
   - "2 条 #[cfg(unix)] 用例 PENDING：本机 Windows 从未执行，交叉编译缺 x86_64-linux-gnu-gcc，零编译证据；待 Linux CI checks job 首次编译+执行"

@@ -83,4 +83,4 @@
 ## 9. Final Verification
 
 - [ ] 9.1 [final-verification] 使用 agentic-verify 执行最终验收（/opsx:verify 同样读取该入口），核对用户意图、需求、设计、计划、任务与最终主分支证据；记录当前 agentic-assessment 后运行 `workflow check --stage final`，全部通过才完成
-      - **未结案（2026-10-01 如实记录，勿按已通过对待）**：`--stage final` 门禁当前仍报 **2 项**——① `## Dependency Declaration Review` 的 DR1 最高轮次行尚未绑定当前契约摘要 `sha256:70b2421d…`；② 缺唯一的 `agentic-assessment` 代码块。**本行一度被勾选并写入「结论 PASS」的完成说明，属过早断言，现已撤回**（与 CR-PM-F1 同类：结论必须有对应证据，证据未齐不得勾选）。
+      - **未结案（2026-10-01 如实记录，勿按已通过对待）**：`--stage final` 门禁当前仍报 **2 项**——① `## Dependency Declaration Review` 的 DR1 最高轮次行尚未绑定当前契约摘要（**以 `--stage plan --json` 的实测值为准**，勿写死具体值）；② 缺唯一的 `agentic-assessment` 代码块。**本行一度被勾选并写入「结论 PASS」的完成说明，属过早断言，现已撤回**（与 CR-PM-F1 同类：结论必须有对应证据，证据未齐不得勾选）。

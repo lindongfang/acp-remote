@@ -92,6 +92,8 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | DR1 | 17 | reviewer-DR（第十七个独立实例 run 43307c2f-afa2-4fd3-9a5a-1d8f46c3775c，fresh context；contractDigest 由 main 代实测） | sha256:700caa254e736c1d5f8c5678ff823df5b695d4ec29b24ca70f0bd7592e5a019c | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round17.md |
 | DR1 | 18 | reviewer-DR（第十八个独立实例 run 4b293eab-b23c-4487-8001-06566766188e，fresh context；contractDigest 由 main 代实测） | sha256:fed00eb68cb7ef3cfab595a49374a6bb434807d770151c9e8b2d19bea7bb96ba | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round18.md |
 | DR1 | 19 | reviewer-DR（第十九个独立实例 run 9f9760d1-7287-453a-8b94-8620d758ee15，fresh context；contractDigest 由 main 代实测） | sha256:2adbf605f70bd49db880937dfa7bcddb8a3b44897663661f1e0e58cc16aca936 | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round19.md |
+| DR1 | 20 | reviewer-DR（第 20 个独立实例 run 3859f164-dc71-4002-80dc-c8fcde4b7965，fresh context；contractDigest 由 main 代实测） | sha256:d720f7d6479058d77eca829619f68e4f45922c905d9fb2ebade10e995762091c | PASS | reports/dr1-dependency-review-round20.md |
+| DR1 | 21 | reviewer-DR（第 21 个独立实例 run 4d8536ce-45e0-417a-aa93-29d9a99df0b4，fresh context；contractDigest 由 main 代实测） | sha256:6ee3e5d5e36075f4927fa822bef1c927757a3719f0f346e186857eb18da4dd29 | PASS | reports/dr1-dependency-review-round21.md |
 
 > **DR1 Round 16/17 的详细结论**（表格 `Result` 列按门禁判据只留裸 `PASS`，详见对应报告与 `## Planning Findings`）：
 > - Round 16（`sha256:ce6bb8c7…`）：0×CRITICAL/0×MAJOR；新报 F65–F71（5×MINOR + 1×SUGGESTION + 2×MINOR）；明确指出 `tasks.md` 追加完成说明会变更摘要（复选框状态被归一化、不入摘要）、`U1` 不是 Work Package、台账并发窗口满足。
@@ -234,7 +236,7 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 > WP1 = `coder-A`（248d9b9）、WP2 = `coder-B`（32f71f5）、WP3 = `coder-C`（第 2 轮，4f7a2355）、WP4 = `coder-D`（4a3882d）、
 > WP5 = `coder-E`（首轮 4e53fcf）→ `coder-E2`（修复轮 1376e1b）、WP6 = `coder-F`（超时、零交付）→ `coder-F2`（主体 76ab011）→ `coder-F3`（修复轮 a7bc596）、
 > TP1 = `tester-A`（设计报告，CR7 判 FAIL）、TP2 = `tester-A` → `tester-A2` → `tester-A3`（依次 f8133f2/a02e2fd、f44301e、3484541）。
-> **TP1 保持 `fixing`**：按用户 2026-10-01 决定，TP1 的修正与可执行用例已并入 TP2，TP1 本包不再单独派修复轮；该状态已在 `plan.md` 的 `## Merge Strategy` 的 U1 就绪名单中移除（DR1-F71），**不作为合入就绪条件**，但台账事实照实保留、不粉饰。
+> **TP1 已结案为 `merged`**（台账 2026-10-01T16:07:15Z，attempt 2，认领执行者 `tester-A2`）：按用户 2026-10-01 决定，TP1 的修正与可执行用例已并入 TP2 完成并随候选合入；该状态同时在 `plan.md` 的 `## Merge Strategy` 的 U1 就绪名单中移除（DR1-F71），故 TP1 不作为 U1 的合入就绪条件，但台账事实为 `merged`、如实记录。
 > **U1（交付单元）不在本表**：它不是 Work Package（见 `plan.md` 的 Merge Units 表），其台账记录已标记 `superseded`；执行证据见 `## Handoff Index` 的 merger DELIVERY 行与 `## Premerge` 的 `delivery_unit: U1`。
 
 
@@ -243,7 +245,8 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | ID | Work Package | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | CR-PM | U1 | 69f1ac1 → 0cc795f | reviewer-PM（run 9a86b747，无 shell） | 合并后差异与主分支回归证据 | **MAJOR ×2**（F1 tasks 6.7 记录不实门禁结论并勾选；F2 被检视版本门禁红 + 关键证据未入库 + Merge History 空表） | F1/F2 已闭环：6.7 一度撤回并改写为如实记录，新 HEAD 取得 exit 0 后才重新勾选；`plan.md` 修正与三份报告已入库；`## Merge History` 已回填 | **Round 2 已复核闭环**（reports/cr-pm-post-merge-review-round2.md） |
-| CR-PM | U1 | 0cc795f | reviewer-PM2（run 6f9fa48c，无 shell） | 合并后差异复核第二轮 | **MAJOR ×3**（F7 Round 1 报告从未落盘却被引用、且 Round 1 判定未登记进本表；F8 工作区 tasks.md 未入库，与 F2 同类复发；F9 `## Checks` 缺最终 HEAD 的 C1/C2 行）+ MINOR ×2（F10 tasks 6.7 撤回记录用现在时；F11 暂存核对表另一处份数不自洽） | F7/F8/F9/F10/F11 均已处置：Round 1 报告补录入库、本表补 CR-PM 行；工作区 tasks.md 随本轮入库；`## Checks` 补最终 HEAD 的 C1/C2/提交合规/Rust 辅助四行；F10 改为历史时点表述；F11 份数统一 | **待 Round 3 复核** |
+| CR-PM | U1 | 0cc795f | reviewer-PM2（run 6f9fa48c，无 shell） | 合并后差异复核第二轮 | **MAJOR ×3**（F7 Round 1 报告从未落盘却被引用、且 Round 1 判定未登记进本表；F8 工作区 tasks.md 未入库，与 F2 同类复发；F9 `## Checks` 缺最终 HEAD 的 C1/C2 行）+ MINOR ×2（F10 tasks 6.7 撤回记录用现在时；F11 暂存核对表另一处份数不自洽） | F7/F8/F9/F10/F11 均已处置：Round 1 报告补录入库、本表补 CR-PM 行；工作区 tasks.md 随本轮入库；`## Checks` 补最终 HEAD 的 C1/C2/提交合规/Rust 辅助四行；F10 改为历史时点表述；F11 份数统一 | **Round 3 已复核闭环** |
+| CR-PM | U1 | 0cc795f | reviewer-PM3（run 4ce133b6，fresh context，无 shell） | 合并后差异复核第三轮（最终） | **PASS**（0×CRITICAL/0×MAJOR）：Round 2 的 F7–F11 全部真正闭环（F7 按「CR-PM 两行是否落在表头与分隔行之后」复核、F9 按「每行 revision 是否与其 Evidence 日志的 `# revision:` 逐字相等」复核，均通过）；验证 37 行证据链一致；唯一新发现 F12（措辞过时）非阻断 | 已闭环；报告 `reports/cr-pm-post-merge-review-round3.md`（由 9715911 入库）。该实例无 shell 未能亲跑的三项（`git diff --name-only`、`git ls-files *.log`、`commitlint`）由 main 代跑并全部证实：合并后仅动 `AGENTS.md` 与 `commitlint.config.mjs`、零个 `.log` 入库、commitlint exit 0 / 0 problems | **已闭环**（Round 3 PASS） |
 | CR3-F1 | WP3 | 4f7a2355 | reviewer, run 194a161d…） | `broker.rs` 的 `factory.create` 成功后两列提交失败 + `server/…/command.rs` 的 `Failed` 分支 | MINOR（**reviewer 明示不判阻断**）：两列提交失败时 `Create` 已落盘、适配层归 `failed` → 「会话已存在却被报 failed」的孤儿会话；该类在基线已存在（`factory.create` 失败即走同支），提交点是 DR1 Round 9 冻结的取舍 | **main 裁决：采纳选项 ①** —— 由 **WP6** 结 `uncertain`（沿用其自身「不能用 `failed` 撒谎」的既有判据）。该义务**已随 DCR Round 14 批次回写**：`plan.md` WP6 行「额外义务 ④（CR3-F1）」与 `tasks.md` 2.6 额外义务 ④ 均已写明（本行原记「尚未写入 plan/tasks」属记录滞后，2026-10-01 经实测订正；**本行原先引用的「额外义务 ④（CR3-F1）」标签已于 2026-10-01 随 DR1-F62/F63 的回写一并废弃**，现两处均为 `额外义务（CR3-F1 · uncertain 终态）`（DR1 Round 17 复核确认），见 `## Check Plan Changes`） | **已回写完成**（2026-10-01 实测确认；WP6 派发时按此执行） |
 | CR3-F2 | WP3 | 4f7a2355 | reviewer, run 194a161d…） | design D3 步骤 5 的「（会话状态抬回可交互态）」措辞 | SUGGESTION：`resume_session` 在 core 侧不写 `StateChange`；该保证由「端点重新绑定」承担 | 接受为措辞项；口径已在本行登记为「指端点绑定」；下次触及 design 时收紧措辞 | 已处裁量 |
 | CR3-F3 | WP3 | 4f7a2355 | reviewer, run 194a161d…） | `use_cases.rs` 的 R31 用例用 `Actor::Device` | SUGGESTION：Device 分支不读会话行，故对「Node 分支先于本机读取」举证力弱（代码本身满足 R31 字面） | 接受；已列入 **TP2** 派发提示（补一条 `Actor::Node` 的 R31 用例：同 requestId 对「存在但不覆盖 agent」与「不存在」断言同一响应且 `load_recovery` 计数为 0） | 待 TP2 |
@@ -380,7 +383,7 @@ alternative_checks:
 
 | Task | Target Revision | Result | Report Path |
 | --- | --- | --- | --- |
-| 7.1 | 69f1ac1bc6af81461d199257f512965f646ec55c | **PASS**（0×CRITICAL/0×MAJOR；覆盖充分性 PASS、迁移 PASS、能力门控 PASS 含 1 处 MINOR 盲区、回滚限制 PASS 含 1 处记录层 MINOR；待验证假设以**只读侦察**判 PASS，**非 fake Agent 自证**） | reports/validation-session-resume.md |
+| 7.1 | 69f1ac1bc6af81461d199257f512965f646ec55c | PASS（0×CRITICAL/0×MAJOR；覆盖充分性 PASS、迁移 PASS、能力门控 PASS 含 1 处 MINOR 盲区、回滚限制 PASS 含 1 处记录层 MINOR；待验证假设以**只读侦察**判 PASS，**非 fake Agent 自证**） | reports/validation-session-resume.md |
 
 > **7.1 的待验证假设为何不是 BLOCKED（依据摘要）**：本机存在真实 ACP Agent `omp.exe`（Oh My Pi）；validator 对其二进制做**静态取证**，内嵌源码逐字含 `sessionCapabilities: { list: {}, fork: {}, resume: {}, close: {} }`（宣告成立）与 `async resumeSession(e)` 的实质实现（读取 sessionId / cwd / mcpServers，入参与本仓 `acp-protocol` 的 `SessionResumeRequest` 逐字段兼容）。对照之下 `codex.exe` 对 `sessionCapabilities` 命中为 0（不宣告该能力，走已被 R10/R37 覆盖的不支持路径）。**限制（随结论传递）**：**未启动 `omp`、未发起任何真实会话**，故为**静态证据**而非运行时握手观测；若要求运行时证据，本项应改判 PENDING，且需单独授权「启动真实 Agent 进程」（超出本次只读边界）。
 > **仍未闭合（不计入 PASS）**：① 2 条 `#[cfg(unix)]` 用例 **PENDING**（validator 独立复现交叉编译失败 `cargo check --target x86_64-unknown-linux-gnu` exit 101、缺 `x86_64-linux-gnu-gcc`，零编译零执行证据；证据链无一处写成已通过）；② `cargo-deny` / `gitleaks` 本机不可执行，只由 CI 判定。
