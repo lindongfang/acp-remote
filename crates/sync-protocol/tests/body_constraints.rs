@@ -139,7 +139,10 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
             "[{\"alias\":\"project.1\",\"displayName\":\"Project One\"}]",
         ),
     );
-    assert!(workspaces.is_ok(), "workspaces chunk 必须被接受：{workspaces:?}");
+    assert!(
+        workspaces.is_ok(),
+        "workspaces chunk 必须被接受：{workspaces:?}"
+    );
 
     let agents: Result<SnapshotChunk, String> = decode(
         "sync.snapshot_chunk",
@@ -200,8 +203,7 @@ fn session_summary_workspace_keeps_absent_null_and_value_apart() {
     ] {
         let parsed: SessionSummary = serde_json::from_str(&summary_with(workspace))
             .unwrap_or_else(|error| panic!("{expected} 形态必须合法：{error}"));
-        let reserialized =
-            serde_json::to_value(&parsed).expect("已解码的摘要必然可序列化");
+        let reserialized = serde_json::to_value(&parsed).expect("已解码的摘要必然可序列化");
         match expected {
             "absent" => assert!(
                 reserialized.get("workspace").is_none(),
