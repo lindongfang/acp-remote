@@ -778,6 +778,8 @@ turns
 pending_interactions
 config_options
 capabilities
+workspaces
+agents
 ```
 
 设备无权读取的字段和资源不得进入 snapshot。
@@ -786,14 +788,18 @@ Snapshot item 的最低 schema：
 
 | Resource | 每个 item 的必填字段 |
 |---|---|
-| `sessions` | `sessionId`, `agent`, `state`, `origin`, `version`, `createdAt`, `updatedAt`; `title`, `currentMode` 可为 `null` |
+| `sessions` | `sessionId`, `agent`, `state`, `origin`, `version`, `createdAt`, `updatedAt`; `title`, `currentMode` 可为 `null`；`workspace` 是 `core.local-catalog.v1` 门控下的**可选**引用（缺席或 `null`，见第 10.3 节） |
 | `messages` | `messageId`, `sessionId`, `role`, `content`, `status`, `createdAt`; `turnId` 可为 `null` |
 | `turns` | `turnId`, `sessionId`, `state`, `createdAt`; `startedAt`, `completedAt`, `terminalError` 可为 `null` |
 | `pending_interactions` | `interactionId`, `sessionId`, `kind`, `state`, `schema`, `createdAt` |
 | `config_options` | `sessionId`, `configOptions`, `version` |
 | `capabilities` | `sessionId`, `agentCapabilities`, `brokerAdditions` |
+| `workspaces` | `alias`, `displayName`；受 feature `core.local-catalog.v1` 门控 |
+| `agents` | `agentId`, `displayName`, `default`；受 feature `core.local-catalog.v1` 门控 |
 
 `agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。所有 session-scoped item 必须引用同一 snapshot 中存在或客户端已有的 session。`content`、config option、interaction 和 capability 的具体值对象与第 10.3、11.5 节相同，不得为 snapshot 发明另一套语义。
+
+`workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。目录元素只含本表列出的字段——本机规范化路径（`canonicalPath` 及其任何分段）MUST NOT 出现在快照、摘要或任何对端可见输出中（见第 12.3 节）。已登记但没有任何会话的 workspace 仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。
 
 `origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不进入 Access Node 的 snapshot；客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner。
 
@@ -865,6 +871,8 @@ remoteOrigin = {
 - imported 事件没有可回放的本地正文：`sync.subscribe` 从 cursor 增量重放时，Access 必须按 origin cursor 向 Owner 重新获取对应事件后再交付；无法回源的区间（例如已超出 Owner 的保留窗口或 Owner 离线）必须以 `sync.reset_required`（`reason` 取 `cursor_expired` 或 `epoch_mismatch`）让客户端重建会话视图，不得发送只有 `sha256`/digest 而没有内容的伪事件，也不得把内存中的临时投递当作可重放历史。
 
 未协商该 feature 时，Access 不得返回任何 `origin.kind = "remote"` 的会话，也不得发送带非空 `remoteOrigin` 的事件。
+
+imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner 侧投影携带目录引用为止。Access Node MUST NOT 用自己的 workspace 集合为 imported 会话猜测归属，也不得按本机规范化路径反查。
 
 ## 10. Event
 
@@ -1053,10 +1061,14 @@ SessionSummary {
   currentMode: ModeRef | null,
   version: decimal string,
   createdAt: timestamp,
-  updatedAt: timestamp
+  updatedAt: timestamp,
+  workspace?: WorkspaceRef | null
 }
 
 ModeRef { modeId: string, displayName: string }
+WorkspaceRef { alias: string, displayName: string }
+AgentCatalogEntry { agentId: string, displayName: string, default: boolean }
+
 ModeState { currentModeId: string | null, availableModes: ModeRef[], version: decimal string }
 SessionConfigOptionView {
   id: string,
@@ -1072,6 +1084,10 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 ```
 
 `SessionConfigOptionView` 是 ACP `SessionConfigOption` 的公开投影，按原样保留 `id`、`name`、`description`、`category` 和 `type`；`category` 为 `model` 或 `model_config` 的条目就是模型选择项，`currentValue` 是当前选中的 `value`（`type: "boolean"` 时为 boolean）。模型和模式都不再有独立的 Sync 专用类型。
+
+`workspace` 是 feature `core.local-catalog.v1` 门控下的**可选**字段，刻意不在 `SessionSummary` 的必填集合中：该 schema 是 `additionalProperties: false`，未协商该 feature 的客户端收到 `null`（而不是键缺席）会把整条摘要判为非法。因此键在场时的三态含义是——缺席＝未协商、`null`＝未分组、`WorkspaceRef`＝归属该目录。`WorkspaceRef` 与 `AgentCatalogEntry` 是第 9.4 节 `workspaces`/`agents` 两种快照资源的元素形状，同一个值对象不得在两处定义出不同形态。
+
+这两个值对象只承载**引用**：别名是稳定主键，`displayName` 是用户输入、按不可信内容转义渲染。本机规范化路径是派生权威值，MUST NOT 出现在 `SessionSummary`、`workspaces`/`agents` item、事件载荷、错误 `details`、`command.result` 或审计记录的前像中的任何字段（见第 12.3 节）。会话的目录归属按创建时解析使用的别名持久化，不随同一别名重指向新目录而漂移；该别名已从本机登记表删除时 `alias` 保持不变、`displayName` 回退为别名本身。
 
 `AgentContentBlock` v1 的公共 view 支持：
 

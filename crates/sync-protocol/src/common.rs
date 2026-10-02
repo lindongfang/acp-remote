@@ -26,6 +26,23 @@ pub use acpr_wire::{
     UIntAtLeast, Uuid, ValueError, deserialize_optional_non_null,
 };
 
+/// schema 里"键可缺失、出现时可为 `null`"的字段的 `deserialize_with`，配
+/// `#[serde(default, deserialize_with = "...")]` 使用。
+///
+/// 单独一个 `Option<Nullable<T>>` 不足以表达三态：serde 的 `Option` 在 `null` 上直接返回
+/// `None`，于是"键缺席"与"键在但为 `null`"都被压成同一个值，往返时会把显式 `null` 的键丢掉。
+/// 这里让"键在不在"由外层 `default` 负责、"值是不是 `null`"由 [`Nullable`] 负责——因此
+/// `None` 只在键缺席时产生。
+pub fn deserialize_optional_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Nullable<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Nullable::<T>::deserialize(deserializer).map(Some)
+}
+
 /// `common.schema.json#/$defs/publicError`：跨消息引用的公开错误形状，四个键都必需。
 ///
 /// 形状与校验来自 [`acpr_wire::PublicError`]；`code` 绑定的词表是 sync 线的 [`ErrorCode`]。
@@ -387,6 +404,30 @@ pub enum SessionState {
     Closed,
 }
 
+/// `common.schema.json#/$defs/workspaceRef`：本机已登记目录的**引用**。
+///
+/// wire 上只有别名与展示名：本机规范化路径是派生权威值，不得出现在任何对端可见输出
+/// （`SYNC_PROTOCOL.md` §9.4、§12.3）。展示名取自 `owned_workspace.display_name`，登记已删除时
+/// 回退为别名本身。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRef {
+    pub alias: NonEmptyText<64>,
+    #[serde(rename = "displayName")]
+    pub display_name: NonEmptyText<128>,
+}
+
+/// `common.schema.json#/$defs/agentCatalogEntry`：本机已配置 Agent 的目录条目。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCatalogEntry {
+    #[serde(rename = "agentId")]
+    pub agent_id: NonEmptyText<128>,
+    #[serde(rename = "displayName")]
+    pub display_name: NonEmptyText<128>,
+    pub default: bool,
+}
+
 /// `common.schema.json#/$defs/sessionSummary`：会话列表/快照里的会话投影。
 ///
 /// `title` 与 `currentMode` 是 required 且可 `null`（见 [`Nullable`]）。
@@ -406,6 +447,23 @@ pub struct SessionSummary {
     pub created_at: Timestamp,
     #[serde(rename = "updatedAt")]
     pub updated_at: Timestamp,
+    /// 目录归属引用（`core.local-catalog.v1` 门控下的**可选**字段），三态：
+    ///
+    /// - `None`：键**缺席**。未协商该 feature 时必须是这个形状——schema 是
+    ///   `additionalProperties: false`，发 `null` 会让未协商的旧客户端拒绝整条摘要，所以该字段
+    ///   不在 `required` 中，且 `None` 被 `skip_serializing_if` 跳过。
+    /// - `Some(Nullable::null())`：键在、值为 `null`，表示「未分组」。
+    /// - `Some(Nullable::value(..))`：键在、带引用。
+    ///
+    /// imported（远程来源）会话固定投影为 `Some(Nullable::null())`，不得用本机 workspace
+    /// 集合为它猜测归属。
+    #[serde(
+        rename = "workspace",
+        default,
+        deserialize_with = "deserialize_optional_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<Nullable<WorkspaceRef>>,
 }
 
 #[cfg(test)]

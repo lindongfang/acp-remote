@@ -209,6 +209,28 @@
                       "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.capabilities" } }
                     }
                   }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "workspaces" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.workspaces" } }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": { "resource": { "const": "agents" } },
+                    "required": ["resource"]
+                  },
+                  "then": {
+                    "properties": {
+                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.agents" } }
+                    }
+                  }
                 }
               ]
             }
@@ -259,7 +281,7 @@
       "unevaluatedProperties": false
     },
     "snapshotResource": {
-      "enum": ["sessions", "messages", "turns", "pending_interactions", "config_options", "capabilities"]
+      "enum": ["sessions", "messages", "turns", "pending_interactions", "config_options", "capabilities", "workspaces", "agents"]
     },
     "snapshotItem.sessions": { "$ref": "common.schema.json#/$defs/sessionSummary" },
     "snapshotItem.messages": {
@@ -336,6 +358,8 @@
         "agentCapabilities": { "type": "object" },
         "brokerAdditions": { "type": "object" }
       }
-    }
+    },
+    "snapshotItem.workspaces": { "$ref": "common.schema.json#/$defs/workspaceRef" },
+    "snapshotItem.agents": { "$ref": "common.schema.json#/$defs/agentCatalogEntry" }
   }
 }
