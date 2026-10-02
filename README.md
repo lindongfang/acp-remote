@@ -23,6 +23,8 @@
 
 尚未开始：前端工程，以及 `node-link-client`（切片 6）与 `server::sync`/`server::acp_facade`（每落地一个才加入 workspace `members`）。
 
+仓库另含一份**前端设计原型**（`prototypes/`）：单文件 PWA 原型（`acp-remote-pwa.html` 与移动版 `acp-remote-pwa-mobile.html`，零外部资源、hash 路由，含配对/目录/目录详情/对话四页与控制台状态切换），并附 [`IMPLEMENTATION-GAPS.md`](prototypes/IMPLEMENTATION-GAPS.md) 按层列出「要实现还差什么」及源码行号证据。**它不是产品代码**：不参与构建、不被任何 crate 打包、没有测试，其中的结论也尚未同步到权威文档；与 `docs/` 冲突时以 `docs/` 为准。
+
 Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已在 OpenSpec 变更 `session-resume` 中落地到组合根接线的真实 `SqliteStore` + `AgentHost`：`owned_session` 在文件格式 v5 追加可空的 `agent_session_id`/`workspace_cwd`（只追加、不推导），`acp-protocol` 有 `session/resume` 的类型化 DTO（`delivery = conditional_mvp`，端到端门控在 `agent-host`），`agent-host` 按持久化标识重新拉起进程并按 `sessionCapabilities.resume` 门控发送，`core` 有 `resume_session`/`settle_session_resume` 用例，`server::node_link` 路由 `session.resume`（授权先于本机读取、`payload` 非空即拒、终态与 `uncertain` 只用于崩溃窗口）。设计取舍见[会话延续设计](docs/SESSION_CONTINUITY_DESIGN.md)。仍需 Access 侧 `node-link-client` 才能从客户端发起。
 
 当前优先交付 Windows x64 的 Daemon/CLI 与 Node Link 闭环，Linux 延后开发；完整平台顺序见 [初始设计 §14](docs/INITIAL_DESIGN.md#14-npm-分发)。共享代码的 Linux CI 保留，不代表 Linux 产品已可运行。

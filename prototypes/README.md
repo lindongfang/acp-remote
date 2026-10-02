@@ -33,7 +33,7 @@
 
 ## 实现缺口清单
 
-[`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) 是从本原型反推出的「要实现还差什么」，按层列出前端工程、、合同级缺口、已有基础、待支撑与待设计的项，附源码行号证据，供写 openspec 变更提案时切分任务。
+[`IMPLEMENTATION-GAPS.md`](./IMPLEMENTATION-GAPS.md) 是从本原型反推出的「要实现还差什么」，按层列出前端工程、合同级缺口、已有基础、待支撑与待设计的项，附源码行号证据，供写 openspec 变更提案时切分任务。
 
 > 它不是权威文档：产品行为、协议语义与安全模型仍以 `docs/` 为准。
 
