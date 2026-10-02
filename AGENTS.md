@@ -220,7 +220,7 @@ agentic 变更在候选合入前还须按 `openspec/schemas/agentic/procedures/w
 `npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage premerge --planning-root <权威规划根> --json`；
 它核对候选版本、Project Verify、独立 review 与主 Agent 的覆盖核对结果（单元候选阶段不执行 E2E）。角色报告的交接索引以
 `openspec/schemas/agentic/roles/_shared/role-report.md` 为准。该门由主 Agent 在本地候选 worktree 执行，**不接入 CI**：
-扩展随 0.3.0 提供的 `openspec/schemas/agentic/ci/github-premerge.yml` 是可选模板（要求 PR 正文恰好一行
+扩展随 0.4.0 提供的 `openspec/schemas/agentic/ci/github-premerge.yml` 是可选模板（要求 PR 正文恰好一行
 `Agentic-Change: <变更名>`，并把 `agentic-premerge` 设为受保护分支的必需状态）；本仓库以单人协作为主、
 已有五个必需检查，暂不采纳该模板。该检查不代替本节的 PR 与必需 CI 检查。
 
@@ -369,7 +369,9 @@ OpenSpec 流程中的 CLI 状态 `all_done` 只表示任务复选框完成。收
 修复中（新的实现实例），复检必须换新 reviewer。
 
 开工与流转用 `openspec-agentic dispatch --change <变更> --wp <WP> --executor <ID> [--role coder|tester]`
-（流转用 `--state <state>`，重做用 `--reopen --reason`，上限 3 轮）留可核对记录。`verification.md` 的
+（流转用 `--state <state>`，重做用 `--reopen --retry-kind implementation|contract|environment|runtime --reason <依据>`）留可核对记录。
+四类尝试分别计数、各限 3 次，Attempt 持续递增，不按总轮数限制；首次 coding 和未指定 `--retry-kind` 的旧调用计入 implementation。
+按真实原因分类，不得通过改记类型绕过限额；达到对应类别上限时停止该类自动重试并交用户决策。`verification.md` 的
 `## Dispatch Reconciliation` 必须逐工作包与台账、Handoff Index 对得上，final/archive 要求每个工作包状态为 merged。
 工作包状态必须落盘；重复派发与非法流转是 `workflow check` 的门禁。存在可并发层级（同层同角色 >=2
 且对应池容量 >=2）时，这些已开工工作包（blocked / superseded 已释放窗口，不计入）的占用窗口至少需有

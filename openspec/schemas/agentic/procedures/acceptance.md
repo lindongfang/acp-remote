@@ -84,8 +84,8 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
 - 核对规划时确定的交付单元、模式和就绪复核；逐个取最新主分支构造候选，候选 Project Verify
   以及 Coverage Index 覆盖核对必须通过才合入（候选阶段不执行 E2E）。检查合入前基线复核和防竞态记录，实际结果一致性及必要回归
   通过后才处理下一功能单元。无新增差异不强制重复同范围人工 review，但需原结论及差异依据。
-- 依赖声明审查（开工前门禁）：`## Dependency Declaration Review` 的 Review ID 必须与 plan.md 字段一致，
-  Reviewer 不得是任何工作包 Owner，Result 为 PASS，Plan Revision 等于当前契约摘要，`Review ID + Round`
+- 依赖声明审查（propose 收尾完成，apply 复查有效性）：`## Dependency Declaration Review` 的 Review ID 必须与 plan.md 字段一致，
+  Reviewer 不得是任何工作包 Owner，Result 为 PASS，Plan Revision 等于当前 planningDigest（旧记录按原 contractDigest），`Review ID + Round`
   与 reviewer 报告一致，报告可读；计划或契约变化后未重新审查即失效。
 - worktree 交接：`## Worktree Handoff` 由 main 汇总登记，按 (WP, Attempt) 覆盖每个已开工工作包的每轮尝试；
   worktree 与计划一致、基线提交可核实、Provisioner 必须来自已登记的 provisioner 交接行且该行报告被引用、
@@ -126,16 +126,29 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
   final/archive 时每个工作包状态必须为 merged。
 - 存在可并发层级时，台账中已开工工作包的占用窗口（coding/fixing → ready-to-merge/merged）至少有一对真实重叠；
   否则按“实际串行”处理，要求留证或回写计划。该时间戳仍属主体自报，不构成进程级并行证明。
-- 核对 `## Merge History`：每个交付单元一次本地合入一行；**同一目标分支只能有一个 Merger**（串行不变式），
+- 核对 `## Merge History`：每次本地合入一行，含修复合入；**同一目标分支同一时刻只能有一个 Merger**（串行不变式），
   Candidate 必须是 Merged 的祖先且 Merged 在目标引用上；final/archive 至少一行，缺失或违反即阻断。
+  身份更替核对 Merger Windows 全部执行窗口互斥及 Merger Takeovers 的前任释放、继任接收、固定目标版本和原始交接证据。
+  会话中断不自动等于释放，须确认前任停止；时间戳不构成进程级互斥证明。
+  需求授权调整后用 Receipt Revalidations 关联原 receipt 摘要、授权/影响分析、当前需求下复验及替代合入记录。
+  旧 receipt 和报告不改写；当前有效替代须覆盖原单元全部 WP/TP 和历史候选，最终运行绑定当前版本。
+  receipt 缺 work_packages 时从已核对的 Premerge History 的 Work Packages 恢复集合；显式填写却与行不一致仍阻断。
+  premerge 核对本单元 Coverage Index 贡献及候选证据；跨单元行按计划的闭环单元/阶段推进，
+  final 核对全变更每行的实现、检查和最终 E2E（或合法替代检查）证据。
 
 ### Independent Reviews
 
 - 逐项读取独立 review 报告，核对 Review ID、任务及阶段、实际子 Agent ID、上下文隔离、base/target 和范围；
   `## Review Findings` 需逐工作包覆盖（`Work Package` 列非空、Reviewer 不得是该 WP 的 Owner），阻断项必须闭环。
-  CRITICAL/MAJOR 必须有复核闭环。复核复用同一 Review ID，每条 `Review ID + Round`（同一 ID 的每轮）各占一行，
+  CRITICAL/MAJOR 必须有复核闭环。复核复用同一 Review ID，显式填写 Review ID / Round / Result，
+  按 Review ID + Work Package 分组，每轮按问题 ID 留行（同轮可多行，Result 一致）；
   轮次由显式 `Round` 区分；以 `Round` 最大的一轮为当前结论（不是“最高 target”，Git SHA 无高低序），
   历史轮次保留不覆盖；新一轮未完成或受阻时不得回退引用旧轮 PASS；复用其他结论须引用原 ID 并解释版本差异和适用性。
+  手工与 workflow record 共用模板列和最大 Round 规则；旧无 Round 表仅兼容单轮，无法唯一判轮时迁移后再验收。
+  premerge 仅要求当前单元及传递 code 上游的最新轮 PASS/闭环，无关单元 FAIL/BLOCKED 不构成完成屏障；
+  全表结构和身份仍校验，final/archive 全量检查。
+  contract 依赖只核对消费方 Contract Freeze 的路径@版本及可读性，不等待提供方产品代码 review 或交付完成；
+  当前单元或 code 上游消费的契约未冻结/不可读时仍拒绝合入。
 - 独立验证是常设角色： 必须至少一行且 Result 为 PASS（FAIL/BLOCKED 阻断验收），
   逐项对应 plan.md 的验证任务；不得以“无需验证”或 NOT_APPLICABLE 代替。
 - 逐项核对报告列出的待补 Check ID、影响及主 Agent 后续核对证据；必要项须已完成，
@@ -174,6 +187,9 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
   记录停在旧提交且之后有变更目录之外的改动时视为失效，须重跑。人工记录须有执行人与证据引用。
   记录本身不能证明测试真实性，实际执行、入口、分片与断言仍按以下条目核对。
 - required 时按计划 E2E ID 核对用例编写/独立审查记录及执行者，确认代码、用例和运行产物版本。
+  新计划声明 Test Authoring Protocol: staged-v2；设计阶段只登记 DESIGN，可运行用例/脚本或明确人工方案
+  加基础检查证据才登记 design-author 的 DELIVERY PASS。编写交付不要求提前填写运行 Executor 或分片版本。
+  核对 Handoff Receipts 原始报告哈希；启用 --require-ack 的作者/检视接管须各自有匹配的接收确认。
   核对 TP 的设计/编写及执行 Agent ID、产品编码对话隔离设置和输入版本；用例作者不得自审。
   核对完整用例清单与各执行分片的分配/返回 ID，编写分组可重排但不能漏测或把重试计为新覆盖。
   各分片需对应同一固定目标版本及明确的资源隔离/独占证据；版本变化后的旧结果须有适用性
@@ -195,6 +211,9 @@ Handoff Index 逐份引用报告路径及全部索引行；旧报告仅在能从
 
 历史 FAIL/BLOCKED 不必删除；只有明确被后续有效证据解决的记录才不再阻断。
 版本改变时不能只看最新一行 PASS：逐项判断旧证据是否仍覆盖最终版本，缺少依据则待复验。
+最终 E2E 失败后暂停后续功能合入及归档，允许按原问题 ID 重开原 WP/TP 的必要修复合入：
+新 attempt / 新实例交付，独立 review，原单元新 Merge ID 的候选门禁，主分支回归，再跑完整最终 E2E。
+重开受影响任务及最终验证，保留失败和重试计数；纯环境恢复只补就绪证据与复测。
 
 ## Tasks and Result
 
@@ -220,3 +239,8 @@ PASS 后才勾选最终验收任务；FAIL/BLOCKED 时保持或恢复该任务�
 检查协议及本地目标引用边界见 procedures/workflow-check.md；原始历史不能因刷新摘要而删除。
 输出应分别说明 CLI 任务状态和本次验收结论。仅 PASS 可报告“该版本可归档”，
 归档前目标版本或证据再变化时需重新验收。此步骤不自动合并、回滚或归档。
+
+按 plan.md 的 User Deliverables 逐项核对用户完成标准并交接：产物位置/版本、安装/运行入口、
+配置与使用说明、接收方、完成或受阻依据。最终回复分别说明本地合入、远端交付、部署/发布、
+归档的实际状态，未执行的操作写明原因。新增交付约定不扩大操作授权；规划或构建产物不能视为已发布。
+旧计划无此表时从用户已确认目标补齐交付约定，不增设未授权远端操作为完成条件。

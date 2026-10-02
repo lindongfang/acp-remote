@@ -10,7 +10,7 @@
 
 调度者将本模板全文与以下输入显式传入：
 
-- Phase：design-author / execute / retest；测试工作包 TP ID、功能域/用户路径范围。
+- Phase：design / design-author / execute / retest；测试工作包 TP ID、功能域/用户路径范围。
 - Contracts：proposal、适用 specs、必要 design/接口契约、plan.md 和项目规则的路径及版本。
 - Workspace：权威规划根、代码及独立测试 worktree 绝对路径（由 provisioner 创建）、固定起点提交、
   允许写入的测试文件/脚本范围。
@@ -46,18 +46,28 @@
    属于 E2E，须按最终主分支执行协议调度，不冒充基础检查。
 5. 交另一位独立 reviewer 检查已列用例与需求映射、真实入口和断言；不能自审或以基础检查通过宣称 E2E 通过。
 
+### design：设计交付
+
+返回需求映射、稳定 E2E ID、真实入口、前置状态和可观察断言即可登记 DESIGN。
+设计完成不表示测试包完成，不登记 DELIVERY PASS，不要求后期 Executor、分片固定版本或执行报告。
+进入 design-author 继续编写可运行用例/脚本；前置契约不明确时仅阻塞受影响场景，无关场景继续。
+
 ### design-author：作者交付判据与阶段完成判据
 
 作者交付（本角色宣布；三项齐备即交付并释放实例，不等待 review）：
 
 | # | 条件 | 可检查形式 |
 | --- | --- | --- |
-| 1 | 每个 E2E ID 在 `E2E Ownership and Cases` 有一行且字段全部非空 | ID / 需求场景 / 入口 / 前置数据 / 步骤与断言 / 用例路径 / Executor / **Reviewer 非空且 ≠ Author** |
+| 1 | 每个 E2E ID 的编写字段齐备 | ID / 需求场景 / Author / 入口 / 前置数据 / 步骤与断言 / 可读用例路径 / **Reviewer 非空且 ≠ Author**；Executor、执行版本和分片分配在执行前补齐 |
 | 2 | 用例与脚本基础检查 PASS | 命令 + 退出码 + 日志路径 |
-| 3 | `E2E Ownership and Cases` 与 `E2E Execution Waves` 两表都补齐 | 两表引用同一组稳定 ID |
+| 3 | 交付可运行用例/脚本或既定人工方案，并声明 `test_delivery` | 自动化 artifacts 不能只有设计文档；人工路径须已有明确方案；basic_checks 引用本报告的 PASS 检查 ID 与命令/零退出码/日志 |
+
+原始报告按共用契约保存，`test_delivery` 按 TP ID 分组；main 用 workflow record 导入。
+新计划的 `Test Authoring Protocol: staged-v2` 会在合入和最终门核对编写交付，设计文档不能替代。
 
 阶段完成（由主 Agent 判定，不由本角色等待）：该集合通过一次独立 `test-case` review，无未解决 CRITICAL/MAJOR。
 作者提交产物、基础检查证据与 handoff，主 Agent 确认可读且交接完整后即释放 tester 实例；
+随即在该 TP 的同一流水线窗口启动新的独立 reviewer，不等待其他 TP 或产品编码工作包交付。
 阶段完成在 reviewer 报告落盘并被主 Agent 接收、记录 Review ID 后判定——两者是两个事件。
 
 **本角色不宣布"集合已齐"**：写得对不对由 reviewer 判，齐不齐由主 Agent 的 Coverage Index 判，

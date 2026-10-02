@@ -22,7 +22,7 @@
 - Work Package：工作包 ID 或本次集成范围。
 - Repository：代码仓库的绝对路径；使用固定提交或固定在目标提交的干净检视 worktree。
 - Base Revision：准确的基线提交，不使用可能移动的分支名代替。
-- Target Revision：准确的目标提交，指出本轮实际要验收的版本。规划审查（Review Type: plan）填当前 `contractDigest`。
+- Target Revision：准确的目标提交，指出本轮实际要验收的版本。规划审查（Review Type: plan）填当前 `planningDigest`（plan-v2 语义规划摘要）。
 - Scope：预期检视范围及集成关系；不得以范围说明隐去相关代码和调用方。
 - Requirements：proposal、适用 specs、design、plan.md 中相关契约的绝对路径或明确版本。
 - Project Rules：适用的 AGENTS.md 路径及项目检视约定。
@@ -30,9 +30,14 @@
 - Check Plan：plan.md 中的 Project Verify 清单及版本；清单/脚本/配置变更记录见 verification.md 的 Check Plan Changes。
 - Previous Findings：仅 recheck 时提供原 Review ID、待复核问题 ID、原始位置和影响。
 
-规划审查专有：`plan` 类型不针对代码 diff；Base Revision 写 NOT_APPLICABLE，Target Revision 写当前 `contractDigest`，
+规划审查专有：`plan` 类型不针对代码 diff；Base Revision 写 NOT_APPLICABLE，Target Revision 写当前 `planningDigest`，
 Scope 为 plan.md 的依赖类型、批次、资源互斥与写入归属声明，Requirements 为 proposal/specs/design 的版本；
 结论写入 verification 的 `## Dependency Declaration Review`，绑定该摘要与 `Review ID + Round`。
+首次规划审查在 propose 收尾完成，不依赖执行 worktree；apply 开始或恢复时，摘要未变且原审查有效就复用 PASS，
+只有缺失、失效或契约摘要变化时才补做或重新派发规划审查。
+同时核对工作包所依赖的行为契约可满足且无冲突：proposal/specs/design 对同一条件的结果一致，
+资源和前置状态能支持约定场景，错误码与断言不互相矛盾；有明确依据的不可能场景或契约冲突按 MAJOR 报告。
+这项检查在 propose 提前发现会阻止实现或测试编写的问题，不替代后续代码检视和覆盖充分性验证。
 
 缺失本阶段必要输入、无法读取目标版本或需要上下文澄清时，列出受阻范围和缺失项；
 结论按下文 FAIL/BLOCKED 优先级判定，不用受阻状态覆盖已确认的阻断缺陷。
@@ -55,7 +60,7 @@ Scope 为 plan.md 的依赖类型、批次、资源互斥与写入归属声明�
 
 ## Review Procedure
 
-范围按层区分：plan 核实 plan.md 的依赖声明、批次、资源互斥与写入归属（目标为当前 `contractDigest`，不读代码 diff）；
+范围按层区分：plan 核实 plan.md 的依赖声明、批次、资源互斥与写入归属（目标为当前 `planningDigest`，不读代码 diff）；
 branch 检查 specs 符合性、局部正确性及边界；test-case 检查已列用例的需求映射、入口、断言有效性、
 负向路径和稳定性，只判“用例写得对不对”——缺失用例与风险盲区由主 Agent 的 Coverage Index 与 validator 负责；
 integration 检查组合接口/语义；merge 检查最新主分支新增交互和冲突解决；post-merge 检查实际结果相对候选的新增差异。
@@ -148,4 +153,6 @@ Repository、Base/Target Revision）、读取的规则与需求、实际检查�
 主 Agent 将本轮报告、实际 Agent ID 及隔离设置关联到 verification 的 Review Findings 和对应任务，
 按问题 ID 将产品缺陷交实现 Agent、用例/脚本缺陷交测试 Agent；契约或环境问题由主 Agent 协调责任人。
 修复后由新的独立 reviewer 按原问题 ID 复核，主 Agent 保留原报告及后续结论，供交付与最终验收核对。
+每个工作包交付即独立启动本角色，不等待其他工作包的作者或检视结束。仅主 Agent 汇总表格式错误时，
+由主 Agent 修正记录并重跑机械检查；原报告、目标版本和检视范围均未变化时无需增加检视轮次。
 reviewer 只返回上述报告，不代替主 Agent 写入记录或分派修复任务。
