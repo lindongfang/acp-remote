@@ -94,6 +94,8 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | DR1 | 19 | reviewer-DR（第十九个独立实例 run 9f9760d1-7287-453a-8b94-8620d758ee15，fresh context；contractDigest 由 main 代实测） | sha256:2adbf605f70bd49db880937dfa7bcddb8a3b44897663661f1e0e58cc16aca936 | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round19.md |
 | DR1 | 20 | reviewer-DR（第 20 个独立实例 run 3859f164-dc71-4002-80dc-c8fcde4b7965，fresh context；contractDigest 由 main 代实测） | sha256:d720f7d6479058d77eca829619f68e4f45922c905d9fb2ebade10e995762091c | PASS | reports/dr1-dependency-review-round20.md |
 | DR1 | 21 | reviewer-DR（第 21 个独立实例 run 4d8536ce-45e0-417a-aa93-29d9a99df0b4，fresh context；contractDigest 由 main 代实测） | sha256:6ee3e5d5e36075f4927fa822bef1c927757a3719f0f346e186857eb18da4dd29 | PASS | reports/dr1-dependency-review-round21.md |
+| DR1 | 22 | reviewer-DR（第 22 个独立实例 run b69217c2-92ad-48c4-84e4-696f49a04274，fresh context；contractDigest 由 main 代实测） | sha256:b706a9caf3ba8aec3b410d41bc9ce8f75f6806cafe3281064739c2a2c6d92464 | FAIL | reports/dr1-dependency-review-round22.md |
+| DR1 | 23 | reviewer-DR（第 23 个独立实例 run b7f26d96-92d9-4761-bb0c-c318244312fa，fresh context；contractDigest 由 main 代实测） | sha256:b706a9caf3ba8aec3b410d41bc9ce8f75f6806cafe3281064739c2a2c6d92464 | PASS | reports/dr1-dependency-review-round23.md |
 
 > **DR1 Round 16/17 的详细结论**（表格 `Result` 列按门禁判据只留裸 `PASS`，详见对应报告与 `## Planning Findings`）：
 > - Round 16（`sha256:ce6bb8c7…`）：0×CRITICAL/0×MAJOR；新报 F65–F71（5×MINOR + 1×SUGGESTION + 2×MINOR）；明确指出 `tasks.md` 追加完成说明会变更摘要（复选框状态被归一化、不入摘要）、`U1` 不是 Work Package、台账并发窗口满足。
@@ -122,6 +124,10 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 
 ## Check Plan Changes
 
+- 2026-10-02（DR1 Round 22/23，main）：**补上 `agentic-assessment` 块后才暴露的一批记录层缺陷**。此前 `--stage plan`/`--stage premerge` 一路绿，是因为 `block(verificationText,'agentic-assessment')`（`workflow-check.mjs:1261`）在块缺失时**先 `throw` 并退出**，其后的 `checkMergeHistory`/`checkIndependentValidation`/`checkPremergeHistory` 等**一条都不执行**。补块后实测一次暴露 **12 条**（`reports/final-gate-final-2026-10-02-fail.json`）：| `## Merge History` 的 8 条脏格（长括注整格喂给 `isAncestor`、`Merger` 列并列多执行者）；1 条多合入执行者；1 条 7.1 `Result` 非整格 `PASS`；1 条 7.1 缺 PASS 记录；1 条 Merge History 的 candidate 与 Premerge History 对不上。
+  - **处置**：`## Merge History` 压成 1 行裸值（簿记提交移入表下注记）；7.1 的 `Result` 改为**整格恰好 `PASS`**；`checkPremergeHistory` 的 candidate 对应关系随之恢复。
+  - **同时订正两条被两位 reviewer 说错的判据**：Round 20/21 建议「7.1 改为以**裸 `PASS` 开头**」**不准确**——判据是整格比较（`String(result).trim().toUpperCase() !== 'PASS'`），`PASS（…）` 照样失败（DR1-F95）；`Dependency Declaration Review` 的 `Result` 同理（DR1-E8）。
+  - **教训（已影响后续所有记录改动）**：**门禁的「早失败」会掩盖「晚失败」**——块缺失时看到的那「1 条」并不代表只有 1 条问题；同理，**不能把「某阶段绿」当作「该阶段所有判据都跑过」**。
 - 2026-10-01（合并后 `check:docs` 事故，**已固化为流程规则**）：`npm run check` 第7 道 `check:docs` 连续两次因**同一类原因**报红——**在报告里逐字复述一条“引用归属写错”的错误句子，会让复述文本本身再次触发同一个检查**。已发生三次：① `reports/merge-u1-main.md` 描述 merger 报告里的杜撰节号；② `reports/merge-u1-main.md` 描述 `plan.md` 的节号误归属；③ `reports/dr1-dependency-review-round19.md` 描述 `plan.md` 的同款误归属（自触发 2 处）。**成因**：`scripts/check-doc-links.mjs` 只按「`§` 前 48 字符、切子句、取最后一个可解析的 `.md` 名」做**字面归属**，不区分「引用」与「描述一个错误的引用」。**规则（后续所有报告适用）**：**不得逐字引用已知错误的引用句子**；改用「把 X 的第 N 节写成了归属 Y 的节号」这类**描述性表述**，并显式注明「为避免复述触发门禁，此处不逐字引用」。**已验证**：按此规则改写后 `node scripts/check-doc-links.mjs` = exit 0。
 
 - 2026-10-01（WP6 并入后，main）：**`app` 证据缺口正式关闭**。该缺口自集成基线 `b0a387b`（只含 WP1+WP2）起连续登记三轮——`app` 直接依赖 `server`，`server` 一失败它就永远不被编译，因此 `crates/app/tests/support/owner.rs` 的三个替身错误一直被遮蔽，「它们的失败恰好是已登记原因」这句话**连续三轮不能断言**（原Handoff Index 逐轮追加行，现已由本条取代）。**关闭依据**：WP6 收口 `server` 后，merger-A4 实测 workspace clippy **0 诊断**、workspace test **1041 passed**，且额外跑 `-v` 取证**12/12 workspace 成员实际重查、无 Fresh 单元**（main 已复核该日志含 12 条 `Checking/Compiling` 行）⇒ `app` 被实际编译且无诊断。**结论**：三个替身已随 WP6 补齐并**已被真正编译验证**，不再是「只有静态证据」。
@@ -280,7 +286,7 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 
 ## Planning Findings（DR1 线程）
 
-> 本表承载**规划门禁线程 DR1** 的发现（Round 1–16）。它们**不属于任何工作包**，故与上方 `## Review Findings` 分表存放：门禁只对 `## Review Findings` 逐行校验「`Work Package` 必须是计划内的工作包 ID」，规划级发现在该表中会因 `NOT_APPLICABLE（规划）` 被判非法。逐条结论与处置见本表、对应轮次报告与 `## Dependency Declaration Review`。
+> 本表承载**规划门禁线程 DR1** 的发现。**登记口径说明（DR1-F100）**：本表主要登记 Round 1–16 的逐条发现；Round 17–21 的发现（F65–F92）与 Round 22/23 的发现未逐条入表，其结论以对应轮次报告为准。**下方 F93–F99 为 Round 22/23 的发现，按 reviewer 建议补登记。**它们**不属于任何工作包**，故与上方 `## Review Findings` 分表存放：门禁只对 `## Review Findings` 逐行校验「`Work Package` 必须是计划内的工作包 ID」，规划级发现在该表中会因 `NOT_APPLICABLE（规划）` 被判非法。逐条结论与处置见本表、对应轮次报告与 `## Dependency Declaration Review`。
 
 | ID | Work Package | Revision | Reviewer | Location | Severity / Impact | Resolution | Recheck |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -323,6 +329,13 @@ e94efd20002023cc7296ed15ec32c9d0a75fd327dae1bddace154f674df68987  specs/storage-
 | DR1-F12 | NOT_APPLICABLE（规划） | sha256:17460283… | reviewer, run 96c922ec…） | plan.md `crates/**/tests/` 行与 WP 整 crate 写范围、tasks 2.4 | MINOR：两条声明不能同时为真 | 该行改为逐文件登记 `crates/storage-sqlite/tests/migration.rs`（WP4,TP2；Merge Owner=TP2；Order=WP4→TP2），并明确 WP1–WP6 含各自 `src/**` 内联单元测试 | 待 DR1 Round 3 复核 |
 | DR1-F62 | NOT_APPLICABLE（规划） | sha256:1154ae4b… | reviewer, run 0e3dc534…） | `plan.md:120` Contract Changes 的 Round 14 表「落点」列 | MINOR：仍写「plan WP6 行「额外义务 ④」」，而全库已无任何「额外义务 ④」标签（本轮回写已弃用序号）⇒ **悬空引用**，按序号检索会落空 | **main 处置（2026-10-01）：按 reviewer 建议不为此再压一轮才派 WP6**；本行改用 finding ID 表述，WP6 派发提示已强制要求用 `CR3-F1`/`DR1-F41`/`DR1-F42`/`DR1-F51` 而非序号引用。**待下次触碰 `plan.md` 时与 F63 同批修**（会变更摘要，需再开一轮） | **挂起：下次触碰 `plan.md` 时** |
 | DR1-F63 | NOT_APPLICABLE（规划） | sha256:1154ae4b… | reviewer, run 0e3dc534…） | `plan.md:328` WP6 行对照 `tasks.md:29` | MINOR：**F57 只闭环了一半**——`tasks.md` 五个义务标签已全部改为 finding ID，但 `plan.md:328` 仍留一个裸「②」且无 `DR1-F42` 标签；另两处义务顺序相反 | 同 F62：不阻塞派发。**如实记录 `verification.md` 的 F57 条曾写作「两处全部改用 finding ID」，与实际文本不符**（plan 侧尚余1 处序号），已在 `## Check Plan Changes` 的 Round 15 段订正。**待与 F62 同批修** | **挂起：下次触碰 `plan.md` 时** |
+| DR1-F93 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b69217c2…） | `verification.md` 验收块 `contract_digest` | **MAJOR**：块内为旧值 `6ee3e5d5…`，实测为 `b706a9ca…` ⇒ `--stage final` 必然报「验收结论的 contract_digest 已失效」 | 已改为实测值（Round 23 实测门禁已不再报该条） | **Round 23 已复核闭环** |
+| DR1-F94 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b69217c2…） | `verification.md:447`、`tasks.md:86` 及所引 `reports/final-gate-final-2026-10-02.json` | MINOR：两处断言 final 门禁 exit 0，而该 JSON 实为 FAIL + 12 条 ⇒ 自述与其自身引用的产物互相矛盾 | 失败中间态已另存 `…-fail.json`；绿态输出按 (C2) 第 4 步写入原路径 | **待绿态产物落盘后闭环（DR1-F99）** |
+| DR1-F95 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b69217c2…） | Round 20/21 报告与交接件对 `## Independent Validation` 判据的描述 | MINOR：写成「以**裸 `PASS` 开头**即可」，实测判据是**整格**恰好 `PASS`，`PASS（…）` 仍失败 | 交接件与 `## Check Plan Changes` 均已订正为整格比较 | **Round 23 已复核闭环** |
+| DR1-F96 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b69217c2…） | 验收块自指约束 | MINOR：未写明「块的最后一次编辑必须留在工作区不提交」⇒ 按字面先写块再提交会瞬间变红 | 已在验收块内写入自指约束整条（含「块已提交且该 tip 上仍绿不存在」与先例引用） | **Round 23 已复核闭环** |
+| DR1-F97 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b69217c2…） | 交接件步骤 3 代码块 / 步骤 2 模板行 | MINOR：说明已改而命令与模板未改（`cd` 指向 du1 worktree、`Report Path` 用仓库相对），两处自相矛盾 | `cd` 改为 `D:/Project/acp-remote`；模板行改为变更目录相对 `reports/…` | **Round 23 已复核闭环** |
+| DR1-F98 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b7f26d96…） | 验收块「Contract / Requirements」行 | MINOR：F93 只改了块字段，**同一事实的第二处**仍写旧摘要 `6ee3e5d5…` | 已改为实测值并注明以实测为准 | 本批已处置 |
+| DR1-F99 | NOT_APPLICABLE（规划） | sha256:b706a9ca… | reviewer, run b7f26d96…） | `reports/final-gate-final-2026-10-02.json` | MINOR：「通过那次」的产物**不存在**（只存在改名的 `-fail.json`）⇒ 两处 exit 0 断言此刻为假 | 按 (C2) 第 4 步在绑定版本上跑出绿态并写入该路径；**不改 `tasks.md` 文字**（避免摘要漂移） | 本批已处置（见下） |
 | DR1-F64 | NOT_APPLICABLE（规划） | sha256:1154ae4b… | reviewer, run 0e3dc534…） | `plan.md:375` 新增 SFO 行的 File 列 | SUGGESTION：该行 File 带反引号（`` `crates/server/tests/` ``），而门禁 `workflow-check.mjs:106` 的 `scopeOverlap` 是裸字符串比较、不去反引号⇒ 将来若被检出也匹配不上（当前无实际影响，该登记对门禁本就惰性） | 接受为已知项（与同表其余 22 行风格不一致，但不影响门禁判定）；**待与 F62/F63 同批去掉反引号** | 已处裁量 |
 
 ## Premerge
@@ -364,10 +377,18 @@ alternative_checks:
 
 | Merge ID | Delivery Unit | Target Ref | Merger | Candidate Commit | Merged Commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1 | U1 | refs/heads/main | merger-A5（合入）/ merger-A6（主分支回归）/ merger-A7（闭环修正） | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **0d2be6d**（`--no-ff`，父提交对 `81e350ff340014265eb7c9251237c799d4357fee` + 候选 `2ed142d…`，零冲突）+ 修正提交 `69f1ac1` | reports/merge-u1-main.md、reports/merge-u1-main-diff-materials.md、reports/premerge-receipt-u1.md |
-| M1-后续 | U1 | refs/heads/main | merger-A7 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | **20c1623ba3cf8ce751082b2699ef66b76f76f3cf**（追加提交，父提交 `69f1ac1bc6af81461d199257f512965f646ec55c`；`plan.md` 引用归属修正 + 三份新报告入库 + `## Merge History` 回填；用于消除 CR-PM-F2「HEAD 门禁红」）。其后另有一次仅改 `tasks.md` 6.7 与本轮报告的闭环提交，sha 见 `reports/merge-u1-main.md` 第 3 轮 | reports/cr-pm-post-merge-review.md、reports/merge-u1-main.md |
-| M1-收尾 | U1 | refs/heads/main | merger-A8 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | `ac5de2a6bc91cb3320c3a9286a5169fb4183753a`（父提交 `976b34ccebbf755e61aa87eaeafac35e6f1f480e`；validator-A 独立验证结论入库：`## Independent Validation` 7.1 行回填 + `reports/validation-session-resume.md`）+ 本行 `## Merge History` 回填与用户裁定行（提交 sha 见 `reports/merge-u1-main.md` 第 4 轮）。两次提交均在**各自最终 HEAD** 上取得完整门禁 exit 0 | reports/validation-session-resume.md、reports/merge-u1-main.md、reports/final-main-gates-npm-check.log |
-| M1-提交信息合规 | U1 | refs/heads/main | merger-A9 | `2ed142dedec2facf8f6e174d1aa165f549cbc47e`（未变） | **未改动历史**（无 rebase / amend / 改提交信息 / merge / push）。唯一的入库提交 `cae3dbd19e38fede8243ebc63f07012ab438c721`（父提交 `2ec1f0fbf82785ae28963558734c8ef0b1b7a7d0`，tree `4a80460`）只扩充 `commitlint.config.mjs` 的 `SCOPES` 两项——新增 `session-resume`（会话恢复跨层交付面）与 `test`（历史兼容项，如实注明由来）——并同步 `AGENTS.md` §8 一句。使 `npx commitlint --from "81e350f^" --to HEAD` 由 **exit 1 / 10 problems** 转为 **exit 0**；`npm run check` 十道门禁逐道 exit 0、三条 Rust 门禁 exit 0（workspace 1074 passed / 0 failed / 2 ignored）均在 **`cae3dbd…`** 上取得，其后仅追加一条纯文档的记录提交 `ee5179539e120e7fa2d08bc28eb4cb24e57b5edb`（本行 + `reports/merge-u1-main.md` 第 5 轮），该提交上的同组检查亦全绿，取据见 `reports/merge-u1-main.md` §36 | reports/merge-u1-main.md、reports/commitlint-scope-fix-commitlint.log、reports/commitlint-scope-fix-npm-check.log、reports/commitlint-scope-fix-cargo-test.log、reports/commitlint-scope-fix-finalhead-*.log |
+| M1 | U1 | refs/heads/main | merger-A5 | 2ed142dedec2facf8f6e174d1aa165f549cbc47e | 0d2be6d403551dc75cb7662f5a515dbc22fb2bd3 | reports/merge-u1-main.md |
+
+> **为何表中各格只写裸值**：门禁 `checkMergeHistory` 把 `Candidate Commit` / `Merged Commit` 整格喂给 `isAncestor`，并要求**同一目标分支只出现一个 Merger**（按目标 ref 聚合后再判 `seen.size > 1`）。因此括注与并列执行者必须移出表格。此前四行都写了长括注、`Merger` 列并列 A5/A6/A7，`--stage final` 因此报 8 条 `Merge History` 错误——这些错误长期不可见，是因为验收块缺失时门禁在更早一步 `throw`，后续检查根本没执行（补齐 `agentic-assessment` 后才暴露）。
+>
+> **M1 之后的提交（簿记层，不构成新的合入，故不单列 Merge ID）**：
+> - `69f1ac1…`：`--no-ff` 合入的修正提交，与 M1 一并登记。
+> - `20c1623…`（父 `69f1ac1`；执行者 merger-A7）：`plan.md` 引用归属修正 + 三份新报告入库 + 本表回填，用于消除 CR-PM-F2「HEAD 门禁红」；其后另有一次仅改 `tasks.md` 6.7 与本轮报告的闭环提交。
+> - `ac5de2a6…`（父 `976b34cc`；执行者 merger-A8）：validator-A 独立验证结论入库（本文件 `## Independent Validation` 7.1 行 + `reports/validation-session-resume.md`）+ 本表回填与用户裁定行。
+> - `cae3dbd1…`（父 `2ec1f0fb`，tree `4a80460`；执行者 merger-A9）：只扩充 `commitlint.config.mjs` 的 `SCOPES` 两项（`session-resume`、`test`）并同步 `AGENTS.md` §8 一句；`ee51795…` 为其后的纯文档记录提交。
+> - 上述提交**均未 rebase / amend 改写历史、均未 push**；`origin/main` 自始至终为 `81e350f`。
+> - 合入参数：`--no-ff`，父提交对 `81e350ff340014265eb7c9251237c799d4357fee` + 候选 `2ed142dedec2facf8f6e174d1aa165f549cbc47e`，零冲突。
+> - 证据：`reports/merge-u1-main.md`、`reports/merge-u1-main-diff-materials.md`、`reports/premerge-receipt-u1.md`、`reports/cr-pm-post-merge-review.md`、`reports/validation-session-resume.md`、`reports/commitlint-scope-fix-commitlint.log`。
 
 ## Premerge History
 
@@ -383,8 +404,9 @@ alternative_checks:
 
 | Task | Target Revision | Result | Report Path |
 | --- | --- | --- | --- |
-| 7.1 | 69f1ac1bc6af81461d199257f512965f646ec55c | PASS（0×CRITICAL/0×MAJOR；覆盖充分性 PASS、迁移 PASS、能力门控 PASS 含 1 处 MINOR 盲区、回滚限制 PASS 含 1 处记录层 MINOR；待验证假设以**只读侦察**判 PASS，**非 fake Agent 自证**） | reports/validation-session-resume.md |
+| 7.1 | 69f1ac1bc6af81461d199257f512965f646ec55c | PASS | reports/validation-session-resume.md |
 
+> **7.1 的结论摘要**（原写在表格 `Result` 格内，因门禁判据是整格精确等于裸 `PASS`，已移至表下）：（0×CRITICAL/0×MAJOR；覆盖充分性 PASS、迁移 PASS、能力门控 PASS 含 1 处 MINOR 盲区、回滚限制 PASS 含 1 处记录层 MINOR；待验证假设以**只读侦察**判 PASS，**非 fake Agent 自证**）
 > **7.1 的待验证假设为何不是 BLOCKED（依据摘要）**：本机存在真实 ACP Agent `omp.exe`（Oh My Pi）；validator 对其二进制做**静态取证**，内嵌源码逐字含 `sessionCapabilities: { list: {}, fork: {}, resume: {}, close: {} }`（宣告成立）与 `async resumeSession(e)` 的实质实现（读取 sessionId / cwd / mcpServers，入参与本仓 `acp-protocol` 的 `SessionResumeRequest` 逐字段兼容）。对照之下 `codex.exe` 对 `sessionCapabilities` 命中为 0（不宣告该能力，走已被 R10/R37 覆盖的不支持路径）。**限制（随结论传递）**：**未启动 `omp`、未发起任何真实会话**，故为**静态证据**而非运行时握手观测；若要求运行时证据，本项应改判 PENDING，且需单独授权「启动真实 Agent 进程」（超出本次只读边界）。
 > **仍未闭合（不计入 PASS）**：① 2 条 `#[cfg(unix)]` 用例 **PENDING**（validator 独立复现交叉编译失败 `cargo check --target x86_64-unknown-linux-gnu` exit 101、缺 `x86_64-linux-gnu-gcc`，零编译零执行证据；证据链无一处写成已通过）；② `cargo-deny` / `gitleaks` 本机不可执行，只由 CI 判定。
 > **用户裁定（2026-10-01）：不做运行时验证。** validator 提出的「是否升级为运行时握手证据」选项（需授权在本机启动真实 Agent 进程 `omp.exe`）**由用户明确否决**。因此第（2）项**保持 PASS，依据为静态取证**（内嵌源码含能力宣告与 `resumeSession` 实质实现，入参与本仓 `SessionResumeRequest` 逐字段兼容），**不升级为运行时观测**。此裁定一并记录理由：本变更的风险点不在上游 Agent 的能力宣告上（那属于上游 Agent 自身行为），且不应为流程收尾引入对真实 Agent 进程的运行期依赖。
@@ -412,6 +434,36 @@ alternative_checks:
 
 ## Final Assessment
 
-<!-- 语义审计后写入唯一 agentic-assessment 块；apply 尚未进入实现阶段，留待 tasks 9.1。 -->
+```agentic-assessment
+assessment_id: "session-resume-final-2026-10-02"
+target_commit: c9ab2fc34859ed75819d55e827e58aa8c479cc0f
+contract_digest: sha256:b706a9caf3ba8aec3b410d41bc9ce8f75f6806cafe3281064739c2a2c6d92464
+result: PASS
+evidence:
+  - path: reports/merge-u1-candidate-PV1-stage2-workspace-test.log
+    sha256: "sha256:a93f928e74d1e517b3185d22492d6f8b67ea65f0fd0dbe5931ee73ff99761f0a"
+  - path: reports/merge-u1-candidate-PV2.log
+    sha256: "sha256:ea718e0d81b9d09dca30081cdfcb5fd9732e2a05f6bd6faf900d70dad0648f4c"
+  - path: reports/PV1.log
+    sha256: "sha256:bd79f79ed04194e5fdd760860889b0731ce53b9cb94d328970dbc58ba82263b3"
+  - path: reports/dr1-dependency-review-round20.md
+    sha256: "sha256:0b30775bb3caca8edf86b634082fcfa416db7b633dbc24e4307e87544f6f623e"
+  - path: reports/dr1-dependency-review-round21.md
+    sha256: "sha256:668ad50168f89c061d8d8e1bcc1ba22ffedc8145aa491d51c013e86480dbca7b"
+  - path: reports/dr1-dependency-review-round22.md
+    sha256: "sha256:016f5341c971384c12aea0d018dcfa5e88c29453edd15977c44ee675f5564fa6"
+```
+
+- Assessment ID / Time：`session-resume-final-2026-10-02`，主 Agent 执行（任务 9.1，`[final-verification]`），2026-10-02。
+- Target / Task：`refs/heads/main` = `c9ab2fc34859ed75819d55e827e58aa8c479cc0f`（验收前以 `git rev-parse refs/heads/main` 核实；**验收块按自指约束不随该提交**——写入本块的提交会使 `refs/heads/main` 前移，故其后的提交仅为簿记层，不改动任何产品代码。与 `archive/2026-09-26-test-temp-dir-cleanup` 的既有记录约定一致）。
+- Contract / Requirements：`contractDigest` = `sha256:b706a9caf3ba8aec3b410d41bc9ce8f75f6806cafe3281064739c2a2c6d92464`（**以 `--stage plan --json` 的实测值为准**；本行原写 `6ee3e5d5…`，DR1-F93 只改了块字段 `contract_digest` 而漏改本行，已由 DR1-F98 订正）；`requirementsDigest` = `sha256:5394327093e57d05b49ea4b04db708fcb97160791ea6cca8cec5a833154408fa`（自 DR1 Round 14 起未变 ⇒ 行为契约一字未动）。
+- Gate State：`workflow check --stage plan` = **exit 0 / 0 errors**；`--stage final` = **exit 0 / 0 errors**（在绑定版本 `c9ab2fc…` 上实测）。**两份产物均保留**：通过那次见 `reports/final-gate-final-2026-10-02.json`，此前的失败中间态见 `reports/final-gate-final-2026-10-02-fail.json`——后者记录了补上验收块后一度暴露的 **12 条**记录结构错误（8 条 `Merge History` 脏格 + 1 条多执行者 + 1 条 7.1 非裸 `PASS` + 1 条 7.1 缺 PASS 记录 + 1 条缺 premerge 对应行），其根因是该批错误长期被「验收块缺块时门禁提前 `throw`」掩盖（DR1-F94 要求结论必须与产物一致）。
+- Audit / Evidence：workspace `cargo test --locked --workspace --all-features` = exit 0（**1074 passed / 0 failed / 2 ignored**，91 个 test target）；`cargo fmt` exit 0；`clippy -D warnings` exit 0（0 诊断）；`npm run check` 十道门禁逐道 exit 0；`check-doc-links` exit 0；commitlint exit 0 / 0 problems。全量证据见 `## Checks`、`## Handoff Index` 与 `## Review Findings`。
+- **自指约束（DR1-F96，必须按此理解本次 PASS 的范围）**：本块住在 `verification.md` 内，而门禁要求 `assessment.target_commit === refs/heads/main`。**任何把本块一并提交的动作都会立刻让 `target_commit` 失效**，且提交不可能包含自己的提交号（`amend` 同理）⇒「块已提交且该 tip 上仍绿」**不存在**。本块的 `target_commit` 绑定**验收执行时的目标版本 `c9ab2fc…`**，随后本块随一次只动记录层（`tasks.md` 的 9.1 说明、本文件、`reports/**`）的提交入库，tip 因此前移 —— 与 `archive/2026-09-26-test-temp-dir-cleanup` 的既有先例一致：**块落后一个只动记录层的提交，且不得据此认为任意 tip 都可直接复用本结论**。若需在更晚的 tip 上重新成立，须按 DR1 第 22 轮报告 (C) 的顺序重跑（更新该值并把这次编辑留在工作区不提交）。
+- Reviews：DR1 第 20 轮（`d720f7d6…`，PASS，F84–F88）、第 21 轮（`sha256:6ee3e5d5…`，PASS，F89–F92）与第 22 轮（`sha256:b706a9caf3ba8aec3b410d41bc9ce8f75f6806cafe3281064739c2a2c6d92464`，**FAIL：1×MAJOR F93 + 4×MINOR F94–F97**，其 F93/F94/F96 已在本批处置，F95/F97 已订正记录）均已完成或处置；CR1–CR8、CR-C1、CR-PM Round 1–3、validator 7.1 均 PASS 且 findings 已闭环。
+- 计划中的独立验证任务 7.1：PASS（validator，`reports/validation-session-resume.md`）。
+- Unresolved（如实列出，不计入本次 PASS 的判定范围）：① 2 条 `#[cfg(unix)]` 用例（符号链接改指、`chmod 000`）**PENDING**——本机 Windows 从未执行、交叉编译缺 `x86_64-linux-gnu-gcc`，零编译零执行证据，待 Linux CI `checks` job 首次编译执行；② `cargo-deny` 与 `gitleaks` 本机不可执行，仅由 CI 判定；③ validator 登记的 5 处 MINOR 盲区（`agent-host` 三条失败/保护分支无用例，含「复用既有进程时不得回收它」；`Broker::resume_session` × 生产 `AgentHost::resume` 组合未被同一测试覆盖；回滚限制未在交付说明复述）；④ commitlint 词表中 `test` 为历史兼容项（不得在新提交使用）。
+- Runtime / E2E：按用户 2026-10-01 决定**不做运行时验证**（不启动真实 Agent 握手），保持 validator 的静态取证结论；`.openspec.yaml` 的 E2E mode 为 `not-applicable`。
+
 
 

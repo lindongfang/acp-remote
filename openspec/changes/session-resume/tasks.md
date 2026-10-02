@@ -82,5 +82,8 @@
 
 ## 9. Final Verification
 
-- [ ] 9.1 [final-verification] 使用 agentic-verify 执行最终验收（/opsx:verify 同样读取该入口），核对用户意图、需求、设计、计划、任务与最终主分支证据；记录当前 agentic-assessment 后运行 `workflow check --stage final`，全部通过才完成
-      - **未结案（2026-10-01 如实记录，勿按已通过对待）**：`--stage final` 门禁当前仍报 **2 项**——① `## Dependency Declaration Review` 的 DR1 最高轮次行尚未绑定当前契约摘要（**以 `--stage plan --json` 的实测值为准**，勿写死具体值）；② 缺唯一的 `agentic-assessment` 代码块。**本行一度被勾选并写入「结论 PASS」的完成说明，属过早断言，现已撤回**（与 CR-PM-F1 同类：结论必须有对应证据，证据未齐不得勾选）。
+- [x] 9.1 [final-verification] 使用 agentic-verify 执行最终验收（/opsx:verify 同样读取该入口），核对用户意图、需求、设计、计划、任务与最终主分支证据；记录当前 agentic-assessment 后运行 `workflow check --stage final`，全部通过才完成
+      - 完成（2026-10-02，验收时目标提交 `c9ab2fc34859ed75819d55e827e58aa8c479cc0f`）：按 `.agents/skills/agentic-verify/SKILL.md` 逐项核对用户意图、需求、设计、计划、任务与主分支证据后，写入唯一 `agentic-assessment` 块（`assessment_id: session-resume-final-2026-10-02`，见 `verification.md` 的 `## Final Assessment`）；`workflow check --stage final` = **exit 0 / 0 errors**（`--stage plan` 同样 0 errors），原始输出见 `reports/final-gate-final-2026-10-02.json`。
+      - **本行两度出错，如实留痕**：① 一度被勾选并写入「结论 PASS」，而当时门禁尚有未闭合项，属过早断言，已撤回（与 CR-PM-F1 同类）；② 撤回时把当时的契约摘要写死在说明里，摘要随后变化使该值过期（DR1-F87），已改为不写死具体值。
+      - **未闭合项（如实列出，不计入本次 PASS 的判定范围）**：① 2 条 `#[cfg(unix)]` 用例（符号链接改指、`chmod 000`）**PENDING**——本机 Windows 从未执行、交叉编译缺 `x86_64-linux-gnu-gcc`，待 Linux CI `checks` job 首次编译执行；② `cargo-deny` 与 `gitleaks` 本机不可执行，仅由 CI 判定；③ validator 登记的 5 处 MINOR 盲区（`agent-host` 三条失败/保护分支无用例；`Broker::resume_session` × 生产 `AgentHost::resume` 组合未被同一测试覆盖；回滚限制未在交付说明复述）；④ commitlint 词表中 `test` 为历史兼容项，不得在新提交使用。
+      - **运行时验证按用户 2026-10-01 裁定不做**：保持 validator 的静态取证结论，不在本机启动真实 ACP Agent 进程做握手验证。

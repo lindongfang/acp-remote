@@ -60,11 +60,11 @@
 
 在 `verification.md` 的 `## Dependency Declaration Review` 末尾追加一行。**两个格式硬约束**：
 
-- `Result` 必须**整格精确等于裸 `PASS`**——门禁判据是精确比较（`String(result).trim().toUpperCase() !== 'PASS'`），加粗或括注都会判失败。
+- `Result` 必须**整格精确等于裸 `PASS`**——门禁判据是**整格去首尾空白后忽略大小写恰好等于 `PASS`**（`String(result).trim().toUpperCase() !== 'PASS'`）——加粗、括注、前缀式写法（如 `PASS（…）`）都会判失败（DR1-F95 实测订正：此前「以裸 `PASS` 开头即可」的说法不准确）。
 - `Report Path` 用**变更目录相对**写法 `reports/…`：门禁按 `existsAt([changeRoot, projectRoot], report)` 解析，该写法在变更目录与仓库根两个基准下都能命中。
 
 ```
-| DR1 | 20 | reviewer-DR（第 20 个独立实例 run <run-id>，fresh context） | <以 --stage plan --json 实测值为准> | PASS | openspec/changes/session-resume/reports/dr1-dependency-review-round20.md |
+| DR1 | 20 | reviewer-DR（第 20 个独立实例 run <run-id>，fresh context） | <以 --stage plan --json 实测值为准> | PASS | reports/dr1-dependency-review-round20.md |
 ```
 
 ### 步骤 3：跑 `--stage final`，确认归零
@@ -72,7 +72,7 @@
 ⚠️ **必须在 `D:/Project/acp-remote` 执行**，不能在 `D:/Project/acp-remote-wt/session-resume-du1`：门禁判据是 `HEAD === refs/heads/main`，而 du1 是集成分支 worktree，其 HEAD 与 `main` 不等，会报 `当前代码 HEAD 与计划目标引用不一致`（与该 worktree 的真实状态无关，纯属执行位置错误）。
 
 ```
-cd D:/Project/acp-remote-wt/session-resume-du1   # 或任何 HEAD == refs/heads/main 的干净工作区
+cd D:/Project/acp-remote   # 或任何 HEAD == refs/heads/main 的干净工作区
 npx --quiet --no-install openspec-agentic workflow check --change session-resume --stage final --planning-root D:/Project/acp-remote --json
 ```
 （注意 `final` 阶段要求 **代码 HEAD == 计划目标引用**，所以必须在 `refs/heads/main` 所在的工作区执行。）
