@@ -186,6 +186,13 @@ pub struct SessionUpdate {
     /// `owned_session.workspace_cwd`：`None` = 不改该列。只在 `session.create` 里由 core 用自己已
     /// 解析的 `ResolvedWorkspace::canonical_path()` 写入一次（**不依赖后端回报**），此后只读。
     pub workspace_cwd: Option<String>,
+    /// `owned_session.workspace_alias`：`None` = 不改该列。与 `workspace_cwd` 在**同一次提交**里写入，
+    /// 取值是本次创建解析使用的**别名原文**（`ResolvedWorkspace::alias()`，不依赖后端回报），此后只读。
+    ///
+    /// 写入后**只有读取路径**消费它（`SessionStore::list` 投影出 `SessionSummary::workspace`）；
+    /// 恢复流程既不读也不改它（`SessionRecoveryRecord` 里没有这一项，§3.6）。`None` 语义为「未分组」，
+    /// MUST NOT 由 `workspace_cwd` 反查别名补齐（`design.md` D1）。
+    pub workspace_alias: Option<String>,
 }
 
 /// 交互的一次解析（`InteractionResolution` + 解析者，供 `owned_interaction` 的
@@ -387,6 +394,12 @@ pub trait SessionStore: Send + Sync {
 
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
 
+    /// 会话列表。返回的每个 [`SessionSummary`] 的 `workspace` **必须**取自该会话行持久化的
+    /// `owned_session.workspace_alias`（展示名按别名关联目录记录取得，取不到时回退为别名本身）；
+    /// 别名为 `NULL` 时就是 `None`（未分组）。
+    ///
+    /// 实现 MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，
+    /// 「不反查」是恢复与归属稳定（别名重指向不改变既有会话归属）的前提（§3.6、`design.md` D1/D6）。
     async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError>;
 
     async fn head(&self) -> Result<GlobalCursor, PortError>;
@@ -406,6 +419,9 @@ pub trait SessionStore: Send + Sync {
     /// **窄读取**：这两列不进 `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，不得进入
     /// 可投影形状，§3.6）。会话行不存在，或任一列为 `NULL`（该会话没有可用于恢复的数据）时返回
     /// `Ok(None)`——`NULL` 不是错误，也不得被推导或补齐。
+    ///
+    /// 本方法**不读 `workspace_alias`**：恢复一律以持久化的 cwd 原文为权威，不按别名重解析，目录归属
+    /// 是投影期的事（§3.6、`design.md` D1）。
     async fn load_recovery(
         &self,
         session: &SessionId,

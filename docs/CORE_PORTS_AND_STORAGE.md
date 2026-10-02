@@ -22,6 +22,7 @@
 > 版本：0.14（2026-09-27，`node-trust-export-ids` 变更：信任记录增 `exportIds` 收窄型白名单——§3.5 给 `NodeRecord`/`PairingSettlement::Approved` 加清单字段，§4 的单点可见性策略与 §6 第 5 条的 Owner 侧授权判定改为三条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`），§7 升级到 v4（`owned_node` 末尾追加 `export_ids_json`，`ALTER TABLE ADD COLUMN`，既有行置空、不得默认放权），§7.2 版本常量改 4/4/3，§9 新增判据 32 并同步判据 1/28 的版本链与 owned 列清单断言，§10 给历史裁定条目补当前口径提示，§11.3 的「过新」用例取值改为 5，§11.6 第 4 条补清单校验与审计不新增，§11.7/§11.8 补集合列说明与「为什么只加列不重建」。**本次未改任何端口签名：§5 的 rust 块与 `crates/core/src/ports.rs` 均未变；§7 的 SQL 块已同批更新**，漂移门禁继续逐条成立）
 
 > 版本：0.15（2026-09-30，`session-resume` 变更：会话恢复（`session/resume`）所需的端口与持久化形状——§2 的 `UnavailableKind` 增 `BackendUnsupported`（后端不支持该操作 = 未宣告能力，或该会话没有恢复数据；映射既有 `command.unsupported`/`nodelink.command.unsupported`/`local.unavailable`，不新增错误码），§3.1 增 `AgentSessionId`，§3.3 注明 `session.create` 与 `session.resume` 均走专用路径、不在 `CommandPayload` 枚举中，§3.6 增 `ResumeSessionRequest`（`workspace_cwd` 为持久化原文、不带别名）与 `SessionRecoveryRecord`（两列**不进** `Session`/`SessionSummary`），§4 的 `SessionLifecycle` 增 `resume_session`/`settle_session_resume`，§5.1 增 `SessionBackendFactory::resume`/`SessionEndpoint::agent_session_id` 与恢复用例顺序（授权先于一切本机读取）的 `[决定]`，§5.2 增 `SessionStore::load_recovery` 窄读取与 `StateChange::Update` 两列（`None` = 不改该列、写入后只读）的 `[决定]`，§7 升级到 v5（`owned_session` 末尾追加 `agent_session_id`/`workspace_cwd` 两列，`ALTER TABLE ADD COLUMN`、可空无默认值、既有会话行得 `NULL` 且 `NULL` 不得被补齐或按别名重解析），§7.2 版本常量改 5/5/3 并新增 v4 → v5 升级段，§9 同步判据 1/28 的版本链与 owned 列清单/旧行保留/读回不推导断言，§11.3 的「过新」用例取值改为 6。**§5 的 rust 块由本次变更的 core 侧（`session-resume` WP3）同批更新、§7 的 SQL 块由本条目同批更新**，漂移门禁继续逐条成立）
+> 版本：0.16（2026-10-02，`sync-workspaces-and-create` 变更 WP3：会话目录归属在 core 侧的形状——§3.1 新增 `WorkspaceRef`（`{ alias, displayName }`，无路径字段），§3.6 注明 `workspace_alias` 是第三列但**不是**恢复列（不进 `SessionRecoveryRecord`、不进 `Session` 聚合，恢复既不读也不改），§5.2 把 `StateChange::Update` 的窄写入列从两个扩为三个（新增 `workspace_alias`，与 `workspace_cwd` 同一次提交、创建时写一次），并写死「目录归属的投影来源只有持久化的别名、不得按 `workspace_cwd` 反查」的 `[决定]`。`SessionSummary.workspace` 是可投影字段（`None` = 未分组），`workspace_cwd` 仍不进可投影形状。**§5/§7 的代码块与 DDL 之外未变**（未新增端口方法与表列），漂移门禁继续逐条绑定）
 
 ## 1. 范围与非目标
 
@@ -74,6 +75,7 @@ pub enum UnavailableKind {
 | `ImportId` | newtype over `^[A-Za-z0-9._-]{1,128}$`，Access 本地为主键 | `LOCAL_ADMIN_PROTOCOL.md` §5.5 |
 | `WorkspaceAlias` | `^[a-z0-9][a-z0-9._-]{0,63}$` | `NODE_LINK_PROTOCOL.md` §12.3 |
 | `AgentRef` | `{ agentId: String(1..=128), name: String(1..=128) }` | `schemas/sync/v1/common.schema.json#/$defs/sessionSummary` |
+| `WorkspaceRef` | `{ alias: WorkspaceAlias, displayName: String(1..=128) }`——**会话目录归属在可投影形状里的唯一载体**：只有符号名与展示名，**没有路径字段**（`canonical_path` 的出网禁令见 §3.6/§5.1）。`alias` 是稳定主键，`displayName` 是 `local.workspace.select` 的用户原文（不可信输入，按有界文本校验、由接收端转义渲染，`SECURITY_DESIGN.md` §11.2）；目录被删除时展示名回退为别名本身。`SessionSummary.workspace` 是它的 `Option` 包装，`None` = 未分组 | `design.md` D1；`schemas/sync/v1/common.schema.json#/$defs/workspaceRef`；`SECURITY_DESIGN.md` §12.3 |
 | `AgentSessionId` | **Agent（ACP）侧会话标识**：非空、≤512 字符、不含 NUL（不经过任何 wire，因此上限是本机约束，不引入 schema）；与 core 的 `SessionId`（本机 UUID）不是同一个东西。由 [`SessionEndpoint::agent_session_id`] 交给 core 落盘（§3.6/§5.2），core **不得**在未取得标识时编造取值（`crates/core/src/model/ids.rs`） | 本合同（§5.1/§5.2） |
 | `OwnedSessionRef` | `{ sessionId }` | `MODULE_ARCHITECTURE.md` §4.1 |
 | `RemoteSessionRef` | `{ ownerNodeId, exportId, sessionId }` | `NODE_LINK_PROTOCOL.md` §7 |
@@ -180,7 +182,7 @@ pub enum UnavailableKind {
 | `CreateSessionRequest` | `{ agent: AgentRef, workspace: Option<ResolvedWorkspace>, template: Option<TemplateSelection>, origin: ResourceOrigin }`——alias → 路径的解析在 `UseCases::create_session` 内完成（§5.1），后端只收已解析路径 | `NODE_LINK_PROTOCOL.md` §12.7 |
 | `ResolvedWorkspace` | `{ alias: WorkspaceAlias, canonical_path: String }`；`canonical_path` 是本机规范化绝对路径，只交给后端，不得进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog（解析、校验与失败分类见 §5.1） | 本合同 |
 | `ResumeSessionRequest` | `{ agent: AgentRef, agent_session_id: AgentSessionId, workspace_cwd: String }`——恢复的输入**全部取自 Owner 自身的持久化记录**（客户端不得提供，Node Link 的 `session.resume` payload 是空对象）。`workspace_cwd` 是持久化的「创建时 canonical path」**原文**，不带 workspace 别名（别名指向可被改写或删除，恢复一律以持久化取值为权威、不得按别名重解析）；构造校验与 `ResolvedWorkspace::canonical_path` 同口径（非空、≤4096 字符、无 NUL、绝对路径形状），存在性/目录性/`canonicalize` 一致性由恢复用例在调用后端**之前**复校验（§5.1） | 本合同（§5.1） |
-| `SessionRecoveryRecord` | `{ agent: AgentRef, agent_session_id: Option<AgentSessionId>, workspace_cwd: Option<String> }`——`owned_session` 两列在 core 侧的读取形状：`None` 就是 `NULL`，语义为「该会话没有可用于恢复的数据」，恢复必须显式失败，**不得**推导、补齐或用别名重解析。两列**不进** `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，进入可投影形状会违反本条对 `canonical_path` 的边界），只经窄读取 `SessionStore::load_recovery` 进出（§5.2） | 本合同（§5.2） |
+| `SessionRecoveryRecord` | `{ agent: AgentRef, agent_session_id: Option<AgentSessionId>, workspace_cwd: Option<String> }`——`owned_session` 两列在 core 侧的读取形状：`None` 就是 `NULL`，语义为「该会话没有可用于恢复的数据」，恢复必须显式失败，**不得**推导、补齐或用别名重解析。两列**不进** `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，进入可投影形状会违反本条对 `canonical_path` 的边界），只经窄读取 `SessionStore::load_recovery` 进出（§5.2）。`owned_session.workspace_alias` 是**第三列但不是恢复列**：它不进本类型、也不进 `Session` 聚合，只出现在 `SessionSummary.workspace`（§3.1 的 `WorkspaceRef`）里；恢复路径既不读它也不改它 | 本合同（§5.2） |
 | `TemplateSelection` | `{ template_id: String(1..=128), params: Vec<(String, ConfigValue)> }` | `NODE_LINK_PROTOCOL.md` §12.3 |
 | `PromptRequest` | `{ content: Vec<PromptContentBlock> }`（形状见协议 crate 的 `promptContentBlock`） | `SYNC_PROTOCOL.md` §11.5 |
 | `EndpointEvent` | `{ kind: EventKind, event_type: EventType, payload: EventPayload, turn: Option<TurnId>, causation: Option<RequestId>, at: Timestamp }`（`SessionEndpoint` 的输出流元素） | 本合同 |
@@ -317,6 +319,9 @@ pub struct CommitOutcome {
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
+    /// 会话列表。每个 `SessionSummary.workspace` **必须**取自该会话行持久化的
+    /// `owned_session.workspace_alias`（§3.1 的 `WorkspaceRef`）：展示名按别名关联目录记录，取不到时回退为
+    /// 别名本身；别名为 `NULL` 时就是 `None`（未分组），MUST NOT 按 `workspace_cwd` 反查别名补齐。
     async fn list(&self, query: SessionQuery) -> Result<Vec<SessionSummary>, PortError>;
     async fn head(&self) -> Result<GlobalCursor, PortError>;
     /// 一致性读视图：`sync.snapshot_*` 必须在本方法返回的视图内完成（barrier 依据）。
@@ -326,6 +331,7 @@ pub trait SessionStore: Send + Sync {
     /// `owned_session` 的 `agent_session_id`/`workspace_cwd`。**窄读取**：这两列不进
     /// `Session`/`SessionSummary`；会话行不存在、或任一列为 `NULL`（没有可用于恢复的数据）时返回 `Ok(None)`
     /// ——`NULL` 不是错误，也不得被推导或补齐。
+    /// 本方法**不读 `workspace_alias`**：恢复以持久化 cwd 原文为权威，目录归属是投影期的事。
     async fn load_recovery(&self, session: &SessionId) -> Result<Option<SessionRecoveryRecord>, PortError>;
     /// 启动恢复（§6 第 16 条）：`status='accepted'` 且 `terminal_event_id IS NULL` 的 mutation 行，
     /// 按 `accepted_at` 升序；走 §7.3 的 `owned_command_status` 索引。
@@ -382,7 +388,8 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` imported 写路径的**归属前置**（§11.2 第 5 条）：`upsert_session` 与 `commit_receipt` 都必须在同一写事务内先确认 `(owner_node_id, export_id)` 仍归属某个 Import（`imported_import_export` 有行），否则返回 `NotFound(EntityRef::Export(exportId))` 且零写入——不重建 `imported_session`、不写 `imported_delivery_index`/`imported_command_ref`，也不推进 `local_sequence`。关联行缺失即「该 Import 已被完整移除或从未添加」；同一 `(ownerNodeId, exportId)` 被重新导入后无法区分新旧连接（需导入实例标识或连接代际，见 §7.4）。
 - `[决定]` `origin_epoch` 由 **core** 在创建会话时用 `IdGenerator` 生成并传入（响应审查：存储层返回它会让无创建需求的提交也必须回读）；存储层只校验“该会话已有 epoch 时必须一致”。
 - `[决定]` 幂等命中返回 `CommitOutcome::replayed`，不追加事件、不改状态。
-- `[决定]` **`StateChange::Update` 新增两个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd`）：`None` = 不改该列。它们只在 `create_session` 里、`SessionBackendFactory::create` 成功返回后**紧接着**的一次提交写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`（不依赖后端回报）；`agent_session_id()` 为 `None` 时两列都不写，该会话不被当作可恢复会话。**不**等适配层的终态提交：终态提交会 bump 版本，会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，且终态入口拿不到 core 解析的 cwd。写入之后这两列**只读**：恢复流程只经 `load_recovery` 读它们，MUST NOT 覆写（`design.md` D2 的契约订正）。
+- `[决定]` **`StateChange::Update` 新增三个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd` 与承载 §3.1 `WorkspaceRef` 的 `workspace_alias`）：`None` = 不改该列。它们只在 `create_session` 里、`SessionBackendFactory::create` 成功返回后**紧接着**的一次提交写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`，`workspace_alias` 取**同一次解析**用掉的别名原文 `ResolvedWorkspace::alias()`（三者都不依赖后端回报）；`agent_session_id()` 为 `None` 时三列都不写，该会话不被当作可恢复会话，目录归属也就是「未分组」。**不**等适配层的终态提交：终态提交会 bump 版本，会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，且终态入口拿不到 core 解析的 cwd。写入之后这三列**只读**：恢复流程只经 `load_recovery` 读其中两列，MUST NOT 覆写，MUST NOT 读或写 `workspace_alias`（`design.md` D1 的归属来源 + D2 的契约订正）。
+- `[决定]` **目录归属的投影来源只有持久化的别名**：`SessionStore::list`（以及 `ReadView` 中返回摘要的 `read_session`/`node_link_slice`）给出的 `SessionSummary.workspace` 必须由 `owned_session.workspace_alias` 关联 `owned_workspace` 的展示名得出——该 JOIN 留在同时拥有两张表的存储实现内部，不上浮到 core。MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，「不反查」才能保证同一别名重指向后老会话的归属不漂移、投影期不引入对别名解析表的隐式耦合（`design.md` D1/D6，`workspace-resolution` 的创建时持久化要求）。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
 

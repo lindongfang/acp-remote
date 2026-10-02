@@ -418,6 +418,42 @@ impl ModeRef {
     }
 }
 
+/// workspace 目录引用：`{ alias, displayName }`（`schemas/sync/v1/common.schema.json#/$defs/workspaceRef`）。
+///
+/// **只承载引用，不承载路径**：`canonical_path` 是本机规范化绝对路径（§3.6/§5.1 的禁令），因此本类型
+/// 没有路径字段，投影期也无从泄漏。`displayName` 是用户在 `local.workspace.select` 登记的原文，属
+/// 「不可信输入」类：按有界文本校验，渲染责任在接收端（`SECURITY_DESIGN.md` §11.2）。
+///
+/// 目录归属**只**来自会话行上持久化的 `workspace_alias`；`NULL` 就是「未分组」，MUST NOT 反向按
+/// `workspace_cwd` 解析别名来补齐（`workspace-resolution` 的创建时持久化要求）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkspaceRef {
+    alias: WorkspaceAlias,
+    display_name: String,
+}
+
+impl WorkspaceRef {
+    /// 构造。`display_name` 非空、≤128 字符、不含 NUL（与 `WorkspaceRecord::display_name` 同口径，
+    /// §3.7）。
+    pub fn try_new(alias: WorkspaceAlias, display_name: &str) -> Result<Self, InvalidValue> {
+        require_bounded(display_name, 1, 128)?;
+        Ok(Self {
+            alias,
+            display_name: display_name.to_owned(),
+        })
+    }
+
+    /// workspace 符号名（稳定主键；不是路径）。
+    pub fn alias(&self) -> &WorkspaceAlias {
+        &self.alias
+    }
+
+    /// 展示名（目录改名会传播到既有会话的投影取值；目录被删除时回退为别名本身）。
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+}
+
 /// owned 会话引用（`MODULE_ARCHITECTURE.md` §4.1）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OwnedSessionRef {

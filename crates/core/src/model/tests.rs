@@ -540,10 +540,14 @@ fn session_constructor_checks_cross_field_invariants() {
         Err(InvalidValue::TooLong { max: 512 })
     );
 
-    let summary = local_session(SessionState::Running, None).summary();
+    let summary = local_session(SessionState::Running, None).summary(None);
     assert_eq!(summary.session_id(), &session_id());
     assert_eq!(summary.state(), SessionState::Running);
     assert_eq!(summary.version(), Version::from(1));
+    assert!(
+        summary.workspace().is_none(),
+        "聚合不带目录归属：不显式给出就是未分组"
+    );
 }
 
 #[test]
