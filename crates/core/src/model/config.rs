@@ -33,7 +33,7 @@ fn is_provider_id(text: &str) -> bool {
     text.len() <= 64 && is_spec_id(text)
 }
 
-fn no_nul(text: &str) -> bool {
+pub(crate) fn no_nul(text: &str) -> bool {
     !text.contains('\0')
 }
 

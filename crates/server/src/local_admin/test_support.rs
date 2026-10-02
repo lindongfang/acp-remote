@@ -850,6 +850,13 @@ impl SessionStore for NotTouched {
         unreachable!("{NOT_TOUCHED}")
     }
 
+    async fn load_recovery(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
     async fn retention_window(
         &self,
         _session: &SessionId,
@@ -994,6 +1001,13 @@ impl SessionStore for FixedStore {
         unreachable!("{NOT_TOUCHED}")
     }
 
+    async fn load_recovery(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
     async fn retention_window(
         &self,
         _session: &SessionId,
@@ -1031,6 +1045,15 @@ impl SessionBackendFactory for NotTouched {
     async fn open(
         &self,
         _reference: SessionReference,
+        _sink: EventSink,
+    ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
+    async fn resume(
+        &self,
+        _session: &SessionId,
+        _request: ResumeSessionRequest,
         _sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
         unreachable!("{NOT_TOUCHED}")

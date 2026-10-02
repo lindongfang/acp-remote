@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    ConfigOption, ConfigValue, ElicitationAction, EndpointEvent, InteractionId, InteractionKind,
-    InteractionResolution, ModeId, ModeRef, ModeState, OwnedSessionRef, PortError,
+    AgentSessionId, ConfigOption, ConfigValue, ElicitationAction, EndpointEvent, InteractionId,
+    InteractionKind, InteractionResolution, ModeId, ModeRef, ModeState, OwnedSessionRef, PortError,
     PromptContentBlock, PromptRequest, PublicError, SessionId, SessionReference, Timestamp, TurnId,
 };
 use acp_core::ports::{
@@ -59,6 +59,7 @@ struct Inner {
 pub struct AcpSession {
     reference: SessionReference,
     acp_session_id: String,
+    agent_session_id: Option<AgentSessionId>,
     supervisor: Arc<Supervisor>,
     sink: EventSink,
     ids: Arc<dyn IdGenerator>,
@@ -80,8 +81,10 @@ impl std::fmt::Debug for AcpSession {
 pub(crate) struct SessionInit {
     /// core 已分配的会话标识。
     pub session: SessionId,
-    /// `session/new` 协商出的 ACP 会话标识。
+    /// 本端点绑定的 ACP 会话标识（创建时来自 `session/new`，恢复时来自持久化记录）。
     pub acp_session_id: String,
+    /// 同上标识的 core 形状（`None` = Agent 给的标识取不出合法值，core 因此两列都不写）。
+    pub agent_session_id: Option<AgentSessionId>,
     /// 该 Agent 的进程监督者。
     pub supervisor: Arc<Supervisor>,
     /// core 的事件出口。
@@ -104,6 +107,7 @@ impl AcpSession {
         let SessionInit {
             session,
             acp_session_id,
+            agent_session_id,
             supervisor,
             sink,
             ids,
@@ -115,6 +119,7 @@ impl AcpSession {
         Self {
             reference: SessionReference::Owned(OwnedSessionRef::new(session)),
             acp_session_id,
+            agent_session_id,
             supervisor,
             sink,
             ids,
@@ -137,6 +142,12 @@ impl AcpSession {
     #[must_use]
     pub fn acp_session_id(&self) -> &str {
         &self.acp_session_id
+    }
+
+    /// ACP 会话标识的 core 形状（未取得时 `None`）：由 core 落盘，本层**不**编造占位值。
+    #[must_use]
+    pub fn agent_session_id(&self) -> Option<&AgentSessionId> {
+        self.agent_session_id.as_ref()
     }
 
     /// core 会话标识。
@@ -543,6 +554,7 @@ impl AcpSession {
         Self {
             reference: self.reference.clone(),
             acp_session_id: self.acp_session_id.clone(),
+            agent_session_id: self.agent_session_id.clone(),
             supervisor: Arc::clone(&self.supervisor),
             sink,
             ids: Arc::clone(&self.ids),
@@ -746,6 +758,10 @@ impl Endpoint {
 impl SessionEndpoint for Endpoint {
     fn reference(&self) -> SessionReference {
         self.session.reference.clone()
+    }
+
+    fn agent_session_id(&self) -> Option<&AgentSessionId> {
+        self.session.agent_session_id()
     }
 
     async fn prompt(

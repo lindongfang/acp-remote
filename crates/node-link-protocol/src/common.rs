@@ -424,6 +424,19 @@ pub struct SessionCreateResult {
     pub session_meta: SessionMeta,
 }
 
+/// `common.schema.json#/$defs/sessionResumeResult`：`session.resume` 的成功终态结果。
+///
+/// 字段形状与 [`SessionCreateResult`] 一致（`remoteSessionRef` + `sessionMeta`）；恢复完成后由
+/// `command.terminal` 携带本形状（`docs/NODE_LINK_PROTOCOL.md` §12.7）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionResumeResult {
+    #[serde(rename = "remoteSessionRef")]
+    pub remote_session_ref: RemoteSessionRef,
+    #[serde(rename = "sessionMeta")]
+    pub session_meta: SessionMeta,
+}
+
 /// `common.schema.json#/$defs/pendingInteraction.kind`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InteractionKind {

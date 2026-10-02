@@ -3,6 +3,7 @@
 > 状态：编码前契约（Draft）  
 > ACP wire 版本：1  
 > 修订记录（2026-09-18）：新增 §6 `acp_facade` 的 `session/new` 映射与错误映射；`elicitation/create` 的 capability 占位符改为 `clientCapabilities.elicitation.form`；新增 `meta_fields_byte_exact`、`extension_method_explicit_unsupported` 两个不变量，未知判别子改为 `visible_degradation`；capability 路径改为可校验的字面量；`content.resource_link` 的 gate 由 `embeddedContext` 改为 `null`（上游把它列为 baseline，不是 opt-in）；补齐 Sync/Node Link 的 `elicitation.respond` 动作集到 ACP 的 `accept`/`decline`/`cancel`（此前缺 `decline`，会让 Access 节点上的上游客户端无法表达"拒绝"）。  
+> 修订记录（2026-09-30）：`method.session_resume` 与 `cap.agent.session_resume` 的 `delivery` 由 `post_mvp` 提升为 `conditional_mvp`，`broker` 层由 `explicit_unsupported` 改为 `project_and_preserve`（`acp=native`、`sync`/`pwa=explicit_unsupported`、`facade=not_advertised` 不变）；`session/load` 仍为 `post_mvp`。  
 > 上游快照已 vendored 到 `schemas/acp/v1/upstream/schema.json`，`check:acp` 强制重算其 sha256 并与本文固定值比对；`fixtures/acp/v1` 由 `manifest.json` 驱动、按同一快照做 ajv 校验。
 > 上游快照：`agentclientprotocol/agent-client-protocol@c4137ab3b168d97f0ad6c542f483b6a417b2d610`  
 > 核对日期：2026-09-18  
@@ -182,7 +183,15 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 6. capability 未宣告、已宣告但 Broker 不支持、Broker 支持但 PWA 不支持三种路径可区分；
 7. `acp-facade` 只宣告经端到端测试证明的能力。
 
-`session/list`、`session/delete`、`session/resume`、`session/close`、完整 config option、文件服务和 agent→client 的 `terminal/*` 服务方法可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
+`session/list`、`session/delete`、`session/close`、完整 config option、文件服务和 agent→client 的 `terminal/*` 服务方法可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
+
+`session/resume` 不在上述 `post_mvp` 集合：`method.session_resume` 与 `cap.agent.session_resume` 的 `delivery` 为 `conditional_mvp`，启用条件就是 Agent 经 `initialize` 宣告 `agentCapabilities.sessionCapabilities.resume`（矩阵行的 `capability`，Rust 侧判定见 `crates/acp-protocol` 的 `supports_session_resume()`）。因此：
+
+- 宣告了能力时，Owner 侧的恢复路径按 ACP 原生语义发送 `session/resume`（required `sessionId` 与 `cwd`），请求与响应经类型化 DTO 编解码，未知字段与 `_meta` 仍逐字节保真；该路径属本次变更的计划交付范围。
+- 未宣告能力时必须**显式**返回不支持，不得发送 `session/resume`，也不得静默降级为新建会话（`AGENTS.md` §3 的「能力诚实」）；
+- 该行其余层的目标行为固定为 `acp=native`、`broker=project_and_preserve`（core 建公共领域视图并保留 ACP raw）、`sync=explicit_unsupported`、`pwa=explicit_unsupported`、`facade=not_advertised`：本次变更的计划交付范围只覆盖 Owner/Daemon 侧路径，Sync/PWA 入口与 `acp_facade` 的宣告不在本阶段范围内，因此 §6 不给它映射。
+
+`session/load` 保持 `post_mvp`：「已知但未实现、必须显式不支持」的既有语义不因 `session/resume` 的提升而改变。
 
 这里的 ACP `session/list` 是底层 Agent 的可选原生方法，不等同于 ACP Remote 自己列出 Daemon 会话的 Sync `session.list`。同理，`promptCapabilities.image/audio/embeddedContext` 只约束 Client 向 Agent 发送的 prompt 内容；Agent 输出中出现相同 content block 时仍必须保留并明确呈现，不能因未宣告 prompt 输入能力而丢弃。
 

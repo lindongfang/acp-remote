@@ -14,10 +14,12 @@ use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    CachePolicy, CommandResult, ConflictKind, Digest, EventId, EventPayload, ExportTemplate,
-    GlobalCursor, GrantSet, NodeKind, NodeRecord, OriginCursor as CoreOriginCursor, OriginEpoch,
-    OwnedSessionRef, PromptRequest, Sequence, ServerEpoch, Session, SessionReference, SessionState,
-    SessionSummary, TemplateId, WorkspaceAlias, WorkspaceAliasEntry as CoreAliasEntry,
+    AgentSessionId, CachePolicy, CommandResult, ConflictKind, Digest, EntityRef, EventId,
+    EventPayload, ExportTemplate, GlobalCursor, GrantSet, NodeKind, NodeRecord,
+    OriginCursor as CoreOriginCursor, OriginEpoch, OwnedSessionRef, PromptRequest,
+    ResumeSessionRequest, Sequence, ServerEpoch, Session, SessionRecoveryRecord, SessionReference,
+    SessionState, SessionSummary, TemplateId, WorkspaceAlias,
+    WorkspaceAliasEntry as CoreAliasEntry,
 };
 use acp_core::ports::{
     AgentCatalog, AuditQuery, CommitOutcome, EventSink, HistoryPage, HistoryQuery, NodeLinkSlice,
@@ -49,6 +51,8 @@ const OWNER_NODE: &str = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 const EXPORT: &str = "11111111-1111-4111-8111-111111111111";
 /// 已存在的会话。
 const SESSION: &str = "3ae1c07c-9242-46e9-a9d2-4ec58c130f4a";
+/// 第二个同样已授权、同样可恢复的会话（幂等冲突用例需要它）。
+const SESSION_2: &str = "3ae1c07c-9242-46e9-a9d2-4ec58c130f4b";
 /// 本次连接。
 const CONNECTION: &str = "5ae1c07c-9242-46e9-a9d2-4ec58c130f4c";
 /// 终态事件（`command.terminal.terminalEventId` 的来源）。
@@ -83,8 +87,13 @@ fn digest_of(text: &str) -> Digest {
 }
 
 fn session_summary() -> SessionSummary {
+    session_summary_of(SESSION)
+}
+
+/// 与 [`session_summary`] 同形、只是会话 id 不同的摘要。
+fn session_summary_of(session: &str) -> SessionSummary {
     SessionSummary::try_new(
-        session_id(),
+        SessionId::new(session).expect("session id"),
         Some("Session".to_owned()),
         agent_ref(),
         SessionState::Idle,
@@ -123,8 +132,13 @@ fn session_of(summary: &SessionSummary) -> Session {
 struct CommandStore {
     commands: Arc<Mutex<BTreeMap<String, CommandRecord>>>,
     sessions: Arc<Mutex<Vec<SessionSummary>>>,
+    /// `owned_session` 的两列恢复数据（§3.6 `SessionRecoveryRecord`），按会话 id 存。
+    recoveries: Arc<Mutex<BTreeMap<String, SessionRecoveryRecord>>>,
     commits: Arc<Mutex<Vec<OwnedCommit>>>,
     commit_calls: Arc<AtomicUsize>,
+    /// `load_recovery` 的调用次数：用来区分「授权先于本机读取」与「授权先于副作用提交」——只数
+    /// `commit` 的话，两者在被拒路径上的表现一样（[R31] 用例需要这条独立证据）。
+    recovery_reads: Arc<AtomicUsize>,
 }
 
 impl CommandStore {
@@ -136,8 +150,17 @@ impl CommandStore {
         lock(&self.sessions).push(summary);
     }
 
+    /// 种下该会话的持久化恢复数据（`session.resume` 的前提）。
+    fn seed_recovery(&self, session: &SessionId, record: SessionRecoveryRecord) {
+        lock(&self.recoveries).insert(session.as_str().to_owned(), record);
+    }
+
     fn commit_calls(&self) -> usize {
         self.commit_calls.load(Ordering::SeqCst)
+    }
+
+    fn recovery_read_calls(&self) -> usize {
+        self.recovery_reads.load(Ordering::SeqCst)
     }
 }
 
@@ -169,6 +192,39 @@ impl SessionStore for CommandStore {
                     replayed: Some(acp_core::ports::IdempotentReplay { record: existing }),
                 });
             }
+        }
+        // `session.resume` 的 `accepted` 提交（core 的 `resume_session` 自建幂等行）：没有 `StateChange`、
+        // 也没有 `command_terminal`，只在既有会话行旁落一条 `accepted` 命令记录（§5.1）。
+        if commit.state.is_none() && commit.command_terminal.is_none() {
+            let idem = commit
+                .idempotency
+                .as_ref()
+                .ok_or(PortError::InvalidRequest("accepted 提交缺少幂等行"))?;
+            self.seed_command(
+                CommandRecord::try_new(
+                    idem.session.clone(),
+                    idem.request.clone(),
+                    &idem.command,
+                    idem.kind,
+                    idem.actor.clone(),
+                    Some(idem.accepted_at.clone()),
+                    CoreStatus::Accepted,
+                    None,
+                    None,
+                    None,
+                    None,
+                    idem.expected_version,
+                    idem.request_fingerprint.clone(),
+                )
+                .expect("session.resume 的 accepted 行"),
+            );
+            return Ok(CommitOutcome {
+                session_id: commit.session.clone(),
+                origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
+                version: Version::new(1),
+                appended: Vec::new(),
+                replayed: None,
+            });
         }
         let Some(StateChange::Create(new)) = &commit.state else {
             // 终态提交：按同一批 `command.*` 事件的 causation 定位行，推进到终态。
@@ -294,6 +350,26 @@ impl SessionStore for CommandStore {
             summaries.truncate(limit as usize);
         }
         Ok(summaries)
+    }
+
+    /// 窄读取（§3.6）：会话行不存在，或任一列为 `NULL` 时返回 `Ok(None)`——`NULL` 不是错误，也不得被
+    /// 推导或补齐。core 的 `resume_session` 把 `Ok(None)` 与「后端不支持」归为同一条路径。
+    async fn load_recovery(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<SessionRecoveryRecord>, PortError> {
+        self.recovery_reads.fetch_add(1, Ordering::SeqCst);
+        let Some(record) = lock(&self.recoveries).get(session.as_str()).cloned() else {
+            return Ok(None);
+        };
+        match (record.agent_session_id, record.workspace_cwd) {
+            (Some(agent_session_id), Some(workspace_cwd)) => Ok(Some(SessionRecoveryRecord {
+                agent: record.agent,
+                agent_session_id: Some(agent_session_id),
+                workspace_cwd: Some(workspace_cwd),
+            })),
+            _ => Ok(None),
+        }
     }
 
     async fn head(&self) -> Result<GlobalCursor, PortError> {
@@ -453,6 +529,17 @@ impl SessionBackendFactory for FakeBackends {
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
         Ok(Box::new(FakeEndpoint { reference }))
     }
+
+    async fn resume(
+        &self,
+        session: &SessionId,
+        _request: ResumeSessionRequest,
+        _sink: EventSink,
+    ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+        Ok(Box::new(FakeEndpoint {
+            reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+        }))
+    }
 }
 
 /// Agent 目录替身：只承担 `node_link_catalog_view` 的展示名来源（空目录也合法，名字回退到 agentId）。
@@ -484,6 +571,10 @@ struct FakeEndpoint {
 impl SessionEndpoint for FakeEndpoint {
     fn reference(&self) -> SessionReference {
         self.reference.clone()
+    }
+
+    fn agent_session_id(&self) -> Option<&AgentSessionId> {
+        None
     }
 
     async fn prompt(
@@ -774,13 +865,18 @@ impl Fixture {
 
     /// 走完 `resource.attach`，返回 `(attachmentId, attachmentGeneration)`。
     async fn attach(&mut self) -> (String, String) {
+        self.attach_session(SESSION).await
+    }
+
+    /// 同 [`Self::attach`]，但 attach 到另一个会话（幂等冲突用例需要第二个同样合法的 attachment）。
+    async fn attach_session(&mut self, session: &str) -> (String, String) {
         let envelope = self.envelope(
             MessageType::ResourceAttach,
             json!({
                 "remoteSessionRef": {
                     "ownerNodeId": OWNER_NODE,
                     "exportId": EXPORT,
-                    "sessionId": SESSION,
+                    "sessionId": session,
                 },
             }),
         );
@@ -893,6 +989,7 @@ fn session_submit_body(
             | "session.mode.set"
             | "session.config.set"
             | "permission.resolve"
+            | "session.resume"
     );
     let (attachment_id, generation) = match attachment {
         Some((id, generation)) => (json!(id), json!(generation)),
@@ -1033,7 +1130,7 @@ fn forbidden_session_create_fields_are_recognised_before_the_typed_decode() {
         ),
         (allowed.clone(), None),
     ] {
-        let found = forbidden_session_create_field(&body(payload));
+        let found = forbidden_payload_field(&body(payload));
         assert_eq!(
             found.as_ref().map(|(_, _, field)| field.as_str()),
             expected,
@@ -1056,15 +1153,57 @@ fn forbidden_session_create_fields_are_recognised_before_the_typed_decode() {
         "payload": {},
     })
     .to_string();
-    assert!(forbidden_session_create_field(&other).is_none());
+    assert!(forbidden_payload_field(&other).is_none());
 
     // 超长键不冒充字段名（`details.field` 的上限是 128）。
     let long_key = "k".repeat(MAX_DETAILS_FIELD + 1);
-    let found = forbidden_session_create_field(&body(json!({ long_key.clone(): 1 })));
+    let found = forbidden_payload_field(&body(json!({ long_key.clone(): 1 })));
     assert_eq!(
         found.map(|(_, _, field)| field),
         Some(UNKNOWN_FIELD.to_owned())
     );
+}
+
+/// [R33]/§12.7：`session.resume` 的 `payload` 必须是空对象——**任何**键都在严格解码之前被拒
+/// （schema 的 `additionalProperties: false` 只会给 `schema_invalid`，而协议要求更具体的
+/// `nodelink.command.unsupported_field` + `details.field`）。
+#[test]
+fn forbidden_session_resume_fields_are_recognised_before_the_typed_decode() {
+    let body = |payload: Value| {
+        json!({
+            "requestId": REQUEST,
+            "command": "session.resume",
+            "sessionRef": null,
+            "attachmentId": null,
+            "attachmentGeneration": null,
+            "expectedVersion": null,
+            "payload": payload,
+        })
+        .to_string()
+    };
+
+    for (payload, expected) in [
+        (json!({}), None),
+        (json!({ "cwd": "/tmp" }), Some("cwd")),
+        (json!({ "agentId": "codex" }), Some("agentId")),
+        (json!({ "agentSessionId": "acp-1" }), Some("agentSessionId")),
+        (
+            json!({ "workspaceAlias": "project" }),
+            Some("workspaceAlias"),
+        ),
+        (json!({ "templateParams": {} }), Some("templateParams")),
+    ] {
+        let found = forbidden_payload_field(&body(payload));
+        assert_eq!(
+            found.as_ref().map(|(_, _, field)| field.as_str()),
+            expected,
+            "session.resume 的 payload 不接受任何键（§12.7）"
+        );
+        if let Some((request, command, _)) = found {
+            assert_eq!(request.as_str(), REQUEST);
+            assert_eq!(command, CommandName::SessionResume);
+        }
+    }
 }
 
 #[test]
@@ -2514,4 +2653,473 @@ async fn queries_without_a_v1_projection_are_rejected_explicitly() {
             "{command} 不得回被裁剪的结果"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// session.resume（R22、R27–R37）
+// ---------------------------------------------------------------------------------------------
+
+/// 恢复用例的临时工作目录：句柄析构时删掉自己，因此测试不在系统临时目录里留残留。
+struct Workspace {
+    path: std::path::PathBuf,
+}
+
+impl std::ops::Deref for Workspace {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        // 目录可能已被用例自己删掉（删除后复校验的用例），删不掉也不是失败。
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// 一个**真实存在**且 `canonicalize` 结果与自身逐字相同的目录（core 的 cwd 复校验要求）。
+///
+/// 复校验比较的是「持久化取值」与 `canonicalize` 的结果，因此临时目录的**前缀**必须先规范化；
+/// `std::env::temp_dir()` 在 Windows 上通常是短路径名，直接拼子目录不保证逐字相等。
+fn canonical_workspace(label: &str) -> Workspace {
+    let root = std::fs::canonicalize(std::env::temp_dir()).expect("临时目录可规范化");
+    let path = root.join(format!("acp-remote-resume-{label}"));
+    std::fs::create_dir_all(&path).expect("建立恢复用的目录");
+    let path = std::fs::canonicalize(&path).expect("新建目录可规范化");
+    Workspace { path }
+}
+
+/// 种下该会话的持久化恢复数据（`agent_session_id` + 创建时规范化目录）。
+fn seed_recoverable(store: &CommandStore, cwd: &std::path::Path) {
+    seed_recoverable_for(store, &session_id(), cwd);
+}
+
+/// 同 [`seed_recoverable`]，但目标是另一个会话。
+fn seed_recoverable_for(store: &CommandStore, session: &SessionId, cwd: &std::path::Path) {
+    store.seed_recovery(
+        session,
+        SessionRecoveryRecord {
+            agent: agent_ref(),
+            agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
+            workspace_cwd: Some(cwd.to_string_lossy().into_owned()),
+        },
+    );
+}
+
+/// 种下「会话行存在、但两列中有一列是 `NULL`」的恢复数据（如升级前的旧会话）。
+fn seed_half_recoverable(store: &CommandStore) {
+    store.seed_recovery(
+        &session_id(),
+        SessionRecoveryRecord {
+            agent: agent_ref(),
+            agent_session_id: None,
+            workspace_cwd: Some("C:/never-read".to_owned()),
+        },
+    );
+}
+
+/// [R34]/§12.7：正常恢复先回 `accepted(result = null)`，再回 `completed` 终态且结果带
+/// `remoteSessionRef` 与 `sessionMeta`。
+#[tokio::test]
+async fn session_resume_returns_accepted_then_the_composite_result() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("ok");
+    seed_recoverable(&fixture.world.store, &workspace);
+
+    let frames = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some((&attachment, &generation)),
+        ),
+    )
+    .await;
+
+    let accepted = of_type(&frames, "command.accepted");
+    assert_eq!(accepted.len(), 1, "恢复必须先回 accepted");
+    assert_eq!(accepted[0]["body"]["command"], "session.resume");
+    assert_eq!(
+        accepted[0]["body"]["result"],
+        Value::Null,
+        "accepted 不携带结果（§12.7）"
+    );
+
+    let terminal = of_type(&frames, "command.terminal");
+    assert_eq!(terminal.len(), 1, "恢复完成必须回终态");
+    let body = &terminal[0]["body"];
+    assert_eq!(body["command"], "session.resume");
+    assert_eq!(body["terminal"]["status"], "completed");
+    // 结果是具名的 `SessionResumeResult`：`remoteSessionRef` 的三个字段 + `sessionMeta`。
+    let result = &body["terminal"]["result"];
+    assert_eq!(result["remoteSessionRef"]["ownerNodeId"], OWNER_NODE);
+    assert_eq!(result["remoteSessionRef"]["exportId"], EXPORT);
+    assert_eq!(result["remoteSessionRef"]["sessionId"], SESSION);
+    assert_eq!(result["sessionMeta"]["state"], "idle");
+    assert!(body["terminal"]["error"].is_null());
+}
+
+/// [CR6-F1]/§12.5：`session.resume` 的 `payload` 恒为 `{}`，语义全部落在 `sessionRef` 上，因此幂等
+/// 比对除了指纹还必须包含**会话身份**：同一 `(ownerNodeId, accessNodeId, requestId)` 改指另一个
+/// **同样已授权、同样可恢复**的会话时，必须回 `nodelink.command.idempotency_conflict`，而不是把首次
+/// 那个会话的终态结果回给调用方。
+#[tokio::test]
+async fn session_resume_reusing_a_request_id_for_another_session_is_an_idempotency_conflict() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let workspace = canonical_workspace("idem");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let (attachment, generation) = fixture.attach().await;
+
+    let first = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some((&attachment, &generation)),
+        ),
+    )
+    .await;
+    let terminal = of_type(&first, "command.terminal");
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0]["body"]["terminal"]["status"], "completed");
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["result"]["remoteSessionRef"]["sessionId"], SESSION,
+        "首次恢复的终态属于第一个会话"
+    );
+
+    // 第二个会话：同一 Export、同一授权、同样有持久化恢复数据——因此「换一个会话」本身是合法的，
+    // 冲突只可能来自 requestId 复用。
+    let other = SessionId::new(SESSION_2).expect("session id");
+    fixture
+        .world
+        .store
+        .seed_session(session_summary_of(SESSION_2));
+    seed_recoverable_for(&fixture.world.store, &other, &workspace);
+    let (other_attachment, other_generation) = fixture.attach_session(SESSION_2).await;
+
+    let mut body = session_submit_body(
+        REQUEST,
+        "session.resume",
+        json!({}),
+        Some((&other_attachment, &other_generation)),
+    );
+    body["sessionRef"]["sessionId"] = json!(SESSION_2);
+    let frames = submit(&mut fixture, &route, body).await;
+
+    let rejected = of_type(&frames, "command.rejected");
+    assert_eq!(
+        rejected.len(),
+        1,
+        "同一 requestId 改指另一个会话必须被拒，而不是重新接受"
+    );
+    assert_eq!(
+        error_code(rejected[0]),
+        "nodelink.command.idempotency_conflict"
+    );
+    assert!(
+        of_type(&frames, "command.accepted").is_empty()
+            && of_type(&frames, "command.terminal").is_empty(),
+        "不得回首次会话的终态结果（那会把一个会话的结果说成另一个会话的）"
+    );
+}
+
+/// [R33]/§12.7：`payload` 携带任何键时以 `command.rejected`（`nodelink.command.unsupported_field`）
+/// 拒绝并给出 `details.field`，且不启动 Agent 进程、不改会话状态。
+#[tokio::test]
+async fn session_resume_with_any_payload_field_is_rejected_without_side_effects() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("field");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let before = fixture.world.store.commit_calls();
+
+    for (payload, field) in [
+        (json!({ "cwd": "/tmp" }), "cwd"),
+        (json!({ "agentId": "codex" }), "agentId"),
+    ] {
+        let frames = submit(
+            &mut fixture,
+            &route,
+            session_submit_body(
+                REQUEST,
+                "session.resume",
+                payload,
+                Some((&attachment, &generation)),
+            ),
+        )
+        .await;
+        let rejected = of_type(&frames, "command.rejected");
+        assert_eq!(rejected.len(), 1, "带字段的 payload 必须被拒");
+        assert_eq!(rejected[0]["body"]["command"], "session.resume");
+        assert_eq!(
+            error_code(rejected[0]),
+            "nodelink.command.unsupported_field"
+        );
+        assert_eq!(rejected[0]["body"]["error"]["details"]["field"], field);
+        assert!(
+            of_type(&frames, "command.accepted").is_empty()
+                && of_type(&frames, "command.terminal").is_empty(),
+            "被拒的 payload 不得进入 accepted/terminal 管线"
+        );
+    }
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        before,
+        "被拒的 payload 不得产生任何副作用"
+    );
+}
+
+/// [R31]：只持 `grant.observe` 的 Access 提交 `session.resume` 时，回
+/// `command.rejected(nodelink.export.not_granted)`，不启动进程，且响应**不因会话是否存在而不同**。
+///
+/// 「不读取会话行」与「不产生副作用」是两条独立断言：`recovery_read_calls` 证明前者（`load_recovery`
+/// 是读会话行的唯一入口），`commit_calls` 证明后者。
+#[tokio::test]
+async fn an_unauthorized_session_resume_is_rejected_before_any_local_read() {
+    let mut fixture = Fixture::with_grants(&["grant.observe"]).await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("denied");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let before = fixture.world.store.commit_calls();
+    let reads_before = fixture.world.store.recovery_read_calls();
+
+    let body = session_submit_body(
+        REQUEST,
+        "session.resume",
+        json!({}),
+        Some((&attachment, &generation)),
+    );
+    let denied = submit(&mut fixture, &route, body.clone()).await;
+    let rejected = of_type(&denied, "command.rejected");
+    assert_eq!(rejected.len(), 1, "越权恢复必须回 command.rejected");
+    assert_eq!(rejected[0]["body"]["command"], "session.resume");
+    assert_eq!(error_code(rejected[0]), "nodelink.export.not_granted");
+    assert_eq!(
+        fixture.world.store.recovery_read_calls(),
+        reads_before,
+        "授权必须先于本机读取（否则响应会因会话是否存在而不同）"
+    );
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        before,
+        "越权恢复不得触发任何提交（即授权先于副作用）"
+    );
+
+    // 响应不因会话是否存在而不同：换一个不存在的会话 id，得到**同形**的拒绝。
+    let mut absent = body;
+    absent["sessionRef"]["sessionId"] = json!("9ae1c07c-9242-46e9-a9d2-4ec58c130f4a");
+    let absent = submit(&mut fixture, &route, absent).await;
+    let absent_rejected = of_type(&absent, "command.rejected");
+    assert_eq!(absent_rejected.len(), 1);
+    assert_eq!(absent_rejected[0]["body"]["command"], "session.resume");
+    assert_eq!(
+        error_code(absent_rejected[0]),
+        error_code(rejected[0]),
+        "存在与不存在不得产生可区分的响应"
+    );
+}
+
+/// [R37]/D3：该会话没有持久化恢复数据（两列 `NULL`，如升级前的旧会话）时以
+/// `nodelink.command.unsupported` **终态失败**，不启动进程、不降级为新建会话。
+#[tokio::test]
+async fn session_resume_without_persisted_recovery_data_fails_as_unsupported() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    seed_half_recoverable(&fixture.world.store);
+
+    let frames = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some((&attachment, &generation)),
+        ),
+    )
+    .await;
+
+    let terminal = of_type(&frames, "command.terminal");
+    assert_eq!(terminal.len(), 1, "必须回终态");
+    let body = &terminal[0]["body"];
+    assert_eq!(
+        body["terminal"]["status"], "failed",
+        "两列为 NULL 是确定类失败，终态必须是 failed（DR1-F39）"
+    );
+    assert_eq!(
+        body["terminal"]["error"]["code"],
+        "nodelink.command.unsupported"
+    );
+    assert!(
+        body["terminal"]["result"].is_null(),
+        "失败终态不携带结果，也不得报告成功"
+    );
+}
+
+/// [R25]/§12.7：持久化的创建时目录在恢复前被删除时，恢复在调用后端**之前**失败并返回服务端不可用
+/// 类错误，不启动 Agent 进程。
+#[tokio::test]
+async fn session_resume_with_a_deleted_workspace_fails_as_unavailable() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("deleted");
+    seed_recoverable(&fixture.world.store, &workspace);
+    // 种下后立即删除：持久化取值不再对应任何目录（「它曾经合法」不是跳过校验的理由）。
+    std::fs::remove_dir_all(&*workspace).expect("删除恢复目录");
+
+    let frames = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some((&attachment, &generation)),
+        ),
+    )
+    .await;
+
+    let terminal = of_type(&frames, "command.terminal");
+    assert_eq!(terminal.len(), 1);
+    let body = &terminal[0]["body"];
+    assert_eq!(body["terminal"]["status"], "failed");
+    assert_eq!(
+        body["terminal"]["error"]["code"], "nodelink.internal.unavailable",
+        "目录复校验失败是服务端不可用类（不是 unsupported）"
+    );
+}
+
+/// [R67]/§12.5：同 `requestId` 重试 `session.resume` 返回首次结果，副作用只发生一次。
+#[tokio::test]
+async fn a_repeated_session_resume_replays_the_first_result() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("replay");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let body = session_submit_body(
+        REQUEST,
+        "session.resume",
+        json!({}),
+        Some((&attachment, &generation)),
+    );
+
+    let first = submit(&mut fixture, &route, body.clone()).await;
+    let first_terminal = of_type(&first, "command.terminal");
+    assert_eq!(first_terminal.len(), 1);
+    assert_eq!(first_terminal[0]["body"]["terminal"]["status"], "completed");
+
+    let second = submit(&mut fixture, &route, body).await;
+    let second_terminal = of_type(&second, "command.terminal");
+    assert_eq!(second_terminal.len(), 1, "同键重试必须回首次终态");
+    assert_eq!(
+        second_terminal[0]["body"]["terminal"]["result"],
+        first_terminal[0]["body"]["terminal"]["result"],
+        "重试的结果必须与首次逐字一致"
+    );
+    assert!(
+        of_type(&second, "command.accepted").is_empty(),
+        "首次已终结时重试直接回终态，不再 accepted"
+    );
+}
+
+/// [R67]/§12.5：同一 `requestId` 配不同语义（本例换成 `session.create`）时回
+/// `nodelink.command.idempotency_conflict`，不执行第二次副作用。
+#[tokio::test]
+async fn the_same_request_id_with_a_different_command_conflicts() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("conflict");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let before = fixture.world.store.commit_calls();
+
+    submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some((&attachment, &generation)),
+        ),
+    )
+    .await;
+    let after_resume = fixture.world.store.commit_calls();
+
+    let frames = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.create",
+            json!({
+                "agentId": "codex",
+                "exportId": EXPORT,
+                "workspaceAlias": "project",
+            }),
+            None,
+        ),
+    )
+    .await;
+    let rejected = of_type(&frames, "command.rejected");
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(
+        error_code(rejected[0]),
+        "nodelink.command.idempotency_conflict"
+    );
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        after_resume,
+        "冲突的请求不得触发任何提交"
+    );
+    assert!(after_resume > before);
+}
+
+/// [R27]/§12.5：`session.resume` 必须携带当前 attachment；过期时回 `attach_generation_stale`，
+/// 且不启动进程。
+#[tokio::test]
+async fn session_resume_with_a_stale_attachment_is_rejected() {
+    let mut fixture = Fixture::new().await;
+    let route = fixture.route();
+    let (_attachment, generation) = fixture.attach().await;
+    let workspace = canonical_workspace("stale");
+    seed_recoverable(&fixture.world.store, &workspace);
+    let before = fixture.world.store.commit_calls();
+
+    let frames = submit(
+        &mut fixture,
+        &route,
+        session_submit_body(
+            REQUEST,
+            "session.resume",
+            json!({}),
+            Some(("6ae1c07c-9242-46e9-a9d2-4ec58c130f4a", &generation)),
+        ),
+    )
+    .await;
+    let errors = of_type(&frames, "link.error");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        error_code(errors[0]),
+        "nodelink.resource.attach_generation_stale"
+    );
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        before,
+        "过期 attachment 不得触发任何副作用"
+    );
 }

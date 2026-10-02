@@ -131,12 +131,14 @@ pub const METHODS: &[MethodSpec] = &[
         Delivery::PostMvp,
         false,
     ),
+    // `session/resume` 在本 crate 已可实现（有类型化请求/响应 DTO），但是 **条件启用**：只有 Agent 经
+    // `initialize` 宣告 `agentCapabilities.sessionCapabilities.resume` 后才能发出，门控在 `agent-host`。
     spec(
         "session/resume",
         MethodDirection::ClientToAgent,
         MethodKind::Request,
-        Delivery::PostMvp,
-        false,
+        Delivery::ConditionalMvp,
+        true,
     ),
     spec(
         "session/close",
