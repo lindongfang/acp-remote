@@ -2,7 +2,7 @@
 //!
 //! 权威是 `docs/CORE_PORTS_AND_STORAGE.md` §7.2/§7.3 与 `openspec/changes/sync-workspaces-and-create/`
 //! 的 `storage-schema-v2-migration` / `workspace-resolution` 增量（`design.md` D1/D6）。本文件**不**复述
-//! `migration.rs` 已有��� v1 → v6 连续升级保留性与 `resume_columns.rs` 的恢复两列判据，只补目录归属列
+//! `migration.rs` 已有的 v1 → v6 连续升级保留性与 `resume_columns.rs` 的恢复两列判据，只补目录归属列
 //! 自己的维度：
 //!
 //! - **v5 → v6 升级**：既有会话行的其余列逐字节不变、`workspace_alias` 是真正的 `NULL`（不是空串、
@@ -13,13 +13,17 @@
 //! - **展示名解析**：别名已登记 → 取 `owned_workspace.display_name`；别名不再登记 → 回退为别名本身；
 //!   同一别名重指向别的目录 → 既有会话的归属不变；
 //! - **恢复不改写**：走一遍恢复流程的存储交互后该列逐字节不变。
+//! - **模式变更同批写入**：`ModeChange::Set`（它用 `?5/?6/?7` 之后的**另一套**编号）与非空别名同批
+//!   提交时，模式与别名都真的落盘（bind 编号错位会让其中一侧被静默吞掉）。
 //!
 //! 全部用例只经真实 SQLite 文件与 `storage_sqlite::migrate` 打开路径取证（`sqlite_master` / `quote()` /
 //! `PRAGMA table_info` / 端口），断言读的是库文件里的字节。
 
 mod support;
 
-use acp_core::model::{AgentSessionId, OriginEpoch, Timestamp, WorkspaceAlias, WorkspaceRecord};
+use acp_core::model::{
+    AgentSessionId, ModeId, ModeRef, OriginEpoch, Timestamp, WorkspaceAlias, WorkspaceRecord,
+};
 use acp_core::ports::{
     ModeChange, NewSession, OwnedCommit, SessionQuery, SessionStore, SessionUpdate, StateChange,
 };
@@ -414,6 +418,137 @@ async fn the_written_alias_round_trips_verbatim_and_an_unwritten_row_stays_none(
         quoted_alias(&pool, ungrouped.as_str()).await,
         "NULL",
         "未写入的行必须保持 NULL"
+    );
+    pool.close().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 模式变更与目录归属同批写入
+// ---------------------------------------------------------------------------------------------
+
+/// **同一条** `SessionUpdate` 里既 `ModeChange::Set(..)` 又带 `workspace_alias` 时，两侧都真的落盘：
+/// 模式经 `load` 读回、别名经摘要投影读回，且库内字节与写入的原文相同。
+///
+/// 判别力：`ModeChange::Set` 变体的 UPDATE 用的是**另一套** bind 编号（`?5/?6` 是模式，
+/// `?7/?8/?9` 才是恢复两列与目录归属列），而 `Unchanged` 变体是 `?5/?6/?7`。两条语句各自独立
+/// 编号，一旦某条被整体错位，SQLite 会把绑定落到**别的列**上（或让 `?N IS NULL` 恒真而静默不写）
+/// ——全仓其余用例都用 `workspace_alias: None` 走这条路，覆盖不到「`Set` + 非空别名」这一组合。
+/// 本用例是它的唯一防线：模式与别名读回断言任一失败，即说明编号已经错位。
+#[tokio::test]
+async fn a_mode_change_commit_also_persists_the_workspace_alias() {
+    let dir = temp_dir("tp4-set-mode-with-alias");
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("新建库");
+    let path = dir.join(DATABASE_FILE);
+    let session = store
+        .commit(create_session("set-mode"))
+        .await
+        .expect("创建会话")
+        .session_id
+        .expect("分配的 sessionId");
+
+    let written = store
+        .commit(OwnedCommit {
+            session: Some(session.clone()),
+            at: at(),
+            expected_version: None,
+            state: Some(StateChange::Update(SessionUpdate {
+                state: None,
+                mode: ModeChange::Set(
+                    ModeRef::try_new(ModeId::new("code").expect("mode id"), "Code")
+                        .expect("mode ref"),
+                ),
+                closed_at: None,
+                interaction: None,
+                agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
+                workspace_cwd: Some(absolute_path("set-mode")),
+                workspace_alias: Some(ALIAS.to_owned()),
+            })),
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        })
+        .await
+        .expect("同批写入模式与目录归属");
+    assert_eq!(written.version.get(), 2, "含状态变更的提交推进会话版本");
+    store.close().await;
+
+    let pool = raw_write_pool(&path).await;
+    register_workspace(&pool, ALIAS, "Acp Remote", "set-mode").await;
+    pool.close().await;
+
+    // ① 模式变更真的落盘（`load` 的窄读取路径）。
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("重开");
+    let snapshot = store
+        .load(&session)
+        .await
+        .expect("读取会话")
+        .expect("会话存在");
+    let mode = snapshot
+        .session
+        .current_mode()
+        .expect("`ModeChange::Set` 必须写入 current_mode_id/current_mode_name");
+    assert_eq!(mode.mode_id().as_str(), "code");
+    assert_eq!(mode.display_name(), "Code");
+
+    // ② 目录归属真的落盘（摘要投影路径）。
+    let workspace = store
+        .list(SessionQuery {
+            only: Some(vec![session.clone()]),
+            states: Vec::new(),
+            limit: None,
+        })
+        .await
+        .expect("读取会话列表")[0]
+        .workspace()
+        .expect("同批提交的别名必须读回")
+        .clone();
+    assert_eq!(
+        workspace.alias().as_str(),
+        ALIAS,
+        "`ModeChange::Set` 变体下别名不得被 bind 编号错位吞掉"
+    );
+    assert_eq!(workspace.display_name(), "Acp Remote");
+
+    // ③ 恢复两列同样落在这条语句上：它们与别名共用 `Set` 变体的编号，一并复核。
+    let record = store
+        .load_recovery(&session)
+        .await
+        .expect("窄读取")
+        .expect("两列都已写入");
+    assert_eq!(
+        record.agent_session_id.as_ref().map(AgentSessionId::as_str),
+        Some("acp-session-1"),
+        "`agent_session_id` 必须落到自己的位置，而不是被相邻编号挪走"
+    );
+    assert_eq!(
+        record.workspace_cwd.as_deref(),
+        Some(absolute_path("set-mode").as_str())
+    );
+    store.close().await;
+
+    // ④ 库文件字节层面的复核：别名是写入的原文，不是空串、不是 `NULL`、也不是相邻列的值。
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        quoted_alias(&pool, session.as_str()).await,
+        format!("'{ALIAS}'")
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT quote(current_mode_id) FROM owned_session WHERE session_id = ?1",
+        )
+        .bind(session.as_str())
+        .fetch_one(&pool)
+        .await
+        .expect("读 current_mode_id"),
+        "'code'"
     );
     pool.close().await;
 }
