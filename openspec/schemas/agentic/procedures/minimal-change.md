@@ -153,11 +153,18 @@ e2e.command = npm run e2e；每轮 final 一个聚合入口，任一失败/零�
 达到项目重试上限停止并交用户决策，不删失败记录。
 ## Completion Criteria
 全部交付/集成检查、review 和 E2E 通过；main 按 agentic-verify 审计，再执行 workflow check final。
+## User Deliverables
+| Deliverable | Location / Version | Usage / Configuration | Recipient | Completion Standard | Authorization / Prerequisites |
+| --- | --- | --- | --- | --- | --- |
+| CSV 导出工具及使用说明 | 最终本地主分支；源码入口和文档路径见交付报告 | 报告注明安装、启动、导出命令与配置方法 | 用户 | 用户可按说明导出 CSV；测试与原始证据有效 | 本地实现/合入；远端交付、部署/发布与归档按用户已有授权执行 |
+最终回复逐项交接，并分别说明本地合入、远端交付、部署/发布和归档的实际状态。
 ````
 
 ## tasks.md
 
 所有项初始待办；下面示例的任务描述已经包含负责人、依赖和完成条件。
+这些是 apply 执行任务；propose 已完成规划、独立依赖声明审查与 workflow check --stage plan，
+并在 verification.md 登记当前 planningDigest 的 PASS。apply 先确认该门禁有效，再创建执行 worktree；旧全文摘要记录仍按 contractDigest 核对。
 
 ```markdown
 ## 1. Setup

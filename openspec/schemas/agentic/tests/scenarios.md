@@ -181,14 +181,14 @@ CLI 自动回归脚本只证明结构、依赖和指令传递行为，不能证�
 | BEH-139 | premerge | E2E 不复用 | 候选 rebase 前后内容指纹相同，试图复用 E2E 记录 | 内容指纹只对 Verify 与 review 开放；E2E 只在最终主分支执行一次，一律重跑，不得指纹复用 |
 | BEH-140 | premerge | premerge reconciliation | 交付单元合入前 verification 只有 agentic-premerge 块，没有对账行 | premerge 至少校验已填写的对账行与台账流转：缺表、Evidence 不可读或有行不一致即阻断合入，不要求覆盖全部工作包 |
 | BEH-141 | apply | 候选/合入失败后打回 | 工作包已到 ready-to-merge，premerge 判 FAIL（候选 Verify 或 review 失败/基线移动）；或已 merged 后主分支回归失败、上游变化 | 两个状态都可 `--reopen` 进入 fixing（新的实现实例），之后再走 reviewing→ready-to-merge→merged；不得因状态机死胡同而只能手改台账 |
-| BEH-142 | apply | 重做上限 | 同一工作包反复打回，attempt 已到 3 | 重做上限固定 3 轮，再 reopen 直接拒绝并要求交用户决策；不得无限自动重试 |
+| BEH-142 | apply | 重做上限 | 同一工作包同类尝试已到 3 | implementation / contract / environment / runtime 各类上限 3，Attempt 持续递增；对应类型再 reopen 拒绝，不能用另一原因掩盖产品缺陷；旧无类型尝试仍计 implementation |
 | BEH-143 | apply | 流水线容量 | 已有 3 个 coder 工作包处于 coding/reviewing/fixing，再 claim 第 4 个 coder 工作包 | 按计划 Role 列的车道统计占用，达到 dispatch.pool.coding 时拒绝开工，等窗口释放；池大小是上限不是目标 |
 | BEH-144 | verification | 真实并发负向探针 | 台账显示同层同角色已开工 >=2，但两条工作包的占用窗口（coding/fixing → ready-to-merge/merged）在时间上不重叠（实际串行跑完） | premerge/final 判不合格：实际串行必须留证；时间戳由 dispatch 的 claim/transition 自动写入，不得以手写 --windows 代替。只统计已开工的 WP，避免误伤尚未开工的后续层级 |
 | BEH-145 | planning | 写入重叠不再作为串行理由 | 规划者把两个 WP 的 Write Scope 写成同一粗目录，再用 `file-conflict: <路径>` 把其中一个排到下一层 | file-conflict 已不再是被接受的串行理由码；写入重叠只要求 Shared File Ownership 登记，不得据此串行 |
 | BEH-146 | planning | Role 列取值非法 | Work Packages 表有 Role 列，某 WP 写 `dev` / 空 | Role 列存在时每行必须是 coder 或 tester，否则计划判不合格（写错会静默改变并发分组） |
 | BEH-147 | verification | 台账 role 与计划 Role 不一致 | 计划 Role 为 tester 的 TP1，显式用 `--role coder` 开工（漏传时 CLI 会按计划推断为 tester，不会错位） | 台账每次事件的 role 必须与计划 Role 一致（计划缺 Role 列时按 Owner 规范化），否则判不合格；否则池容量与并发分组会错位 |
 | BEH-148 | apply | 显式非法 --role | 运行 `dispatch --wp TP1 --executor tester-A --role dev` | CLI 在写入台账前就报 `未知角色 "dev"；可用角色：coder、tester` 并非零退出，不等到 workflow check 才以“台账与计划不一致”报 FAIL |
-| BEH-149 | apply | coder 未交付崩溃 | coder 在 `coding` 阶段失败/会话结束，未交固定提交 | 可用 `--reopen --reason <原因>` 从 coding 打回修复中（attempt+1，新的实现实例）；无 --reason 则拒绝；重做上限 3 轮同样适用，不再只能手改台账 |
+| BEH-149 | apply | coder 未交付崩溃 | coder 在 `coding` 阶段失败/会话结束，未交固定提交 | 用 `--reopen --retry-kind <真实原因类型> --reason <原因>` 从 coding 打回修复中（Attempt 持续递增，新的实现实例）；无 --reason 拒绝；implementation、contract、environment、runtime 各限 3 次，首次 coding 与旧无类型调用计 implementation，不按总轮数停止 |
 | BEH-150 | verification | 计划演进（拆包/删包/改 ID） | 已开工的 WP 被从计划 Work Packages 表删除，台账里仍为 coding | 台账里既不在计划中、也未被标 superseded 的工作包判不合格；先 `--state superseded --reason <原因> [--superseded-by <WP>]` 退役后才放行 |
 | BEH-151 | apply | 受阻交付可表达 | 某 WP 等外部依赖，反复停在 coding（或直接卡死） | 用 `--state blocked --reason <原因>`：释放窗口、可持续等待，可用 `--reopen` 恢复；不再靠把 WP 停在 coding 表达 BLOCKED |
 | BEH-152 | planning | required 缺测试工作包 | Main E2E 为 required，但 Work Packages 里没有任何 Role: tester 的 TP | 计划判不合格：required E2E 必需独立测试工作包 |
@@ -211,7 +211,7 @@ CLI 自动回归脚本只证明结构、依赖和指令传递行为，不能证�
 | BEH-169 | review | 复核复用同一 Review ID | 同一 WP 首检 FAIL（F1、F2）后修复交付，进入复核轮 | 复核新建隔离 reviewer，但**复用原 Review ID**；每轮各占一行并由显式 `Round` 区分；新发现按 `<Review ID>-F3` 连续编号不重置；以 `Round` 最大的一轮为当前结论（不是“最高 target_revision”，Git SHA 无高低序），历史轮次保留不覆盖 |
 | BEH-170 | planning | 单元级不做 E2E | plan.md 的 E2E Execution Plan 只保留 final-main 行，候选阶段没有 E2E 任务 | 候选门只核对候选 Project Verify + 独立 review + Coverage Index 覆盖核对；不得因缺少候选 E2E 记录判失败 |
 | BEH-171 | apply | 资源操作按资源表判定 | 一个工作包只有自身 worktree 内的本地检查，另一个工作包需要共享测试数据库 | 前者由执行者在已分配资源内完成；后者（表中登记的共享资源）一律由 provisioner 分配、隔离与清理，执行者不得自行启动或重置 |
-| BEH-172 | planning | 依赖声明审查是开工前门禁 | plan.md 写了 Dependency Declaration Review，但 verification.md 缺 `## Dependency Declaration Review`，或结果不是 PASS、Reviewer 是工作包 Owner、Plan Revision 不是当前契约摘要、报告不可读 | plan 阶段判不合格，不得派发实现；计划/契约变化后旧审查失效，须重新审查并更新该行 |
+| BEH-172 | planning | propose 收尾完成依赖声明审查与 plan 门禁 | plan.md 写了 Dependency Declaration Review，但 verification.md 缺 `## Dependency Declaration Review`，或结果不是 PASS、Reviewer 是工作包 Owner、Plan Revision 不是当前契约摘要、报告不可读 | plan 阶段判不合格，不得报告 propose 完成或派发实现；apply 复查有效性，摘要未变则复用有效 PASS，计划/契约变化后须重新审查并更新该行 |
 | BEH-173 | apply | worktree 交接口 | 某工作包已开工（台账有记录），但 `## Worktree Handoff` 缺该轮行、worktree 与计划不一致、基线不可核实、Provisioner 与 Executor 相同、Handoff Index 无 provisioner 交接行或该行报告未被引用、Executor 与该轮认领执行者不一致、Received At 晚于该轮首次执行事件（首次 coding / 重开 fixing）、同一 (WP, Attempt, Executor) 重复行，或多轮尝试的记录缺少 Attempt（旧格式无法唯一映射） | premerge/final 判不合格，即使候选 Project Verify 与 review 都 PASS |
 | BEH-174 | premerge | 逐交付单元核对 premerge PASS | 某交付单元已合入（Merge History 有行），但 `## Premerge History` 没有该 Candidate 的 PASS，或 Delivery Unit 两边不一致，或 receipt 不是合法的 `agentic-premerge` 块、其 candidate/target/contract_digest/requirements_digest/delivery_unit/证据摘要与行及目标版本不一致 | final/archive 判不合格；该行在 premerge PASS 之后才写入，final 逐行读取 receipt 核对内容、结果与版本，不以“文件存在”代替 |
 | BEH-175 | premerge | provisioner 身份不可自报 | Handoff Index 没有 provisioner 交接行，或 Worktree Handoff 填了一个未登记的 Provisioner，或 Evidence 未引用该 provisioner 登记的报告路径 | premerge/final 判不合格：Provisioner 必须来自已登记交接行，且 Worktree Handoff 的 Evidence 引用该行报告 |
@@ -221,7 +221,7 @@ CLI 自动回归脚本只证明结构、依赖和指令传递行为，不能证�
 | BEH-179 | apply | 同单元依赖从集成基线开工 | WP2 依赖同单元 WP1；WP1 已实现、独立 review 通过并合入本单元集成基线，单元尚未合入主分支 | 允许派发 WP2（从该集成基线开工）；不得把 WP1 台账提前标为 merged，也不得把“仅建了个集成提交”当成已验收 |
 | BEH-180 | apply | 跨单元上游未合入不得开工 | WP2 依赖另一交付单元的 WP1；WP1 只进了集成基线/候选，尚未合入主分支 | 不得派发 WP2（跨单元 code 依赖必须等上游已合入主分支）；运行期不得自行放宽 |
 | BEH-181 | apply | worktree 交接按尝试保留历史 | 同一 WP 第一次 coding 后被打回，第二轮由新执行者从 fixing 开始；台账最后一条事件的 executor 是 reviewer | 每轮尝试各有一行交接，绑定该轮认领执行者（agent-B）而非 reviewer 接管者；Received At 不得晚于该轮首次执行事件（第二轮为 fixing）；同一 (WP, Attempt, Executor) 重复行拒绝；多轮缺 Attempt 的旧格式必须逐轮补录 |
-| BEH-182 | review | 规划审查有独立阶段 | plan.md 的 Dependency Declaration Review 要求独立 reviewer 核实依赖声明 | 该审查用 `phase: plan`、`stage: plan`，目标为当前 `contractDigest`（不是代码 SHA）；结论写入 `## Dependency Declaration Review`（`Review ID + Round`）；contractDigest 变化后旧审查失效，须重新派发，且不得把新 round/实际 reviewer ID 反写进 plan.md |
+| BEH-182 | review | 规划审查有独立阶段 | plan.md 的 Dependency Declaration Review 要求独立 reviewer 核实依赖声明 | 该审查用 `phase: plan`、`stage: plan`，新报告目标为当前 `planningDigest`（不是代码 SHA）；结论写入 `## Dependency Declaration Review`（`Review ID + Round`）；语义规划变化后失效，执行分配不重审；旧 contractDigest 记录仍按全文核对，不得自动换绑 |
 | BEH-183 | review | 同一目标多轮审查 | 首轮因缺材料判 BLOCKED，补齐后对同一目标重判 | `Review ID + Round` 为唯一键；Round 在线程内从 1 递增，同一目标也允许再次审查；新一轮未完成或受阻时不得回退引用旧轮 PASS，历史阻断问题逐 ID 闭环 |
 | BEH-184 | apply | 权威记录写入职责 | provisioner / merger 想直接改 verification 的 `## Worktree Handoff` / `## Premerge History` | 子角色只返回结构化记录与 handoff_index（可写自己的报告/日志/产物）；由 main 校验后写入权威 verification.md；机械检查只能核对记录，不宣称验证了文件实际由谁写入 |
 | BEH-185 | final | 执行安排变化不使历史 receipt 失效 | 单元 A 已合入；随后为单元 B 补齐用例表、执行者或分片等 plan.md/tasks.md 内容 | 历史 receipt 只要求行为契约摘要（requirements_digest = proposal+specs）仍成立；plan/tasks 变化后 final 仍 PASS，不要求历史全文摘要等于当前全文 |
@@ -231,9 +231,19 @@ CLI 自动回归脚本只证明结构、依赖和指令传递行为，不能证�
 | BEH-189 | apply | 流水线容量口径 | 项目问“能否保证子 Agent 总数不超过 coding+testing” | `dispatch.pool` 只限制 coder/tester 并发工作包，merger/validator/scout/provisioner 不计入；文档不得宣称它限制实际 Agent 总数 |
 | BEH-190 | premerge | 当前候选未入表也要核就绪 | `## Premerge History` 已有旧候选行，但当前候选尚未入表，且没有派发台账/交付/worktree 交接 | 仍先核对该 `delivery_unit` 全部工作包就绪；不得因“当前候选无行”而提前放行 |
 | BEH-191 | final | 引用契约纳入需求摘要 | 变更设 `skip_specs: true`，行为依据来自 Coverage Index 引用的既有规范；修改该既有需求 | `requirements_digest` 必须随引用契约变化；否则历史合入成为漏检，final 会错误放行 |
-| BEH-192 | final | 旧 receipt 迁移 | 历史 receipt 缺 `requirements_digest`，随后 plan/tasks（全文摘要）变化 | 旧凭据仅在全文摘要未变时兼容；全文已变则 final 拒绝，要求迁移（补 `requirements_digest`）或补充可核对的复验依据 |
+| BEH-192 | final | 旧 receipt 迁移 | 历史 receipt 缺 `requirements_digest`，随后 plan/tasks（全文摘要）变化 | 旧凭据仅在全文摘要未变时兼容；全文已变则 final 拒绝，保留原文件并用 Receipt Revalidations 指向当前有效复验 receipt |
+| BEH-193 | final | Merger 接管 | merger-A 合入后释放，merger-B 接收并继续合入 | Merger Windows 覆盖每次合入且互斥，Merger Takeovers 关联释放/接收、固定目标版本和可读证据时允许身份更替；重叠、缺证据或目标不一致阻断 |
+| BEH-194 | final | 需求授权调整后的历史复验 | MU1 已合入，需求获授权调整，修复并重新 review/Verify/合入 | 保留原 receipt，以 Original SHA-256、授权及复验证据关联当前有效替代 Merge ID；替代覆盖原单元全部 WP/TP 及历史候选；循环、失效替代、缺报告或篡改原凭据拒绝 |
+| BEH-195 | premerge/final | 逐单元覆盖范围 | MU1 已完成，MU2 尚在实现或跨单元需求待后续闭环 | premerge 核对 MU1 贡献及候选证据；跨单元行声明闭环单元/阶段；final 核对所有行及最终运行证据，不要求 MU1 等待最终 E2E |
+| BEH-196 | apply | 最终 E2E 失败修复 | 所有单元已合入，最终 E2E 发现产品缺陷 | 暂停后续功能合入及归档，允许原问题 ID 的必要修复：原 WP/TP 新 attempt/实例、原单元新 Merge ID、独立 review、候选门禁、合入、主分支回归、新一轮完整 E2E；重开受影响任务，不清零失败/重试计数 |
+| BEH-197 | final | Review Findings 最新轮阻断 | 第一轮 PASS，第二轮 BLOCKED，表格倒序且 SHA 无时间序 | 手工/导入使用 Review ID / Round / Result，按 Review ID + WP 的最大 Round 判定；第二轮 BLOCKED 阻断，旧轮 FAIL 在有效闭环后保留，不以行序或 SHA 排序 |
+| BEH-198 | plan/final | 用户交付 | 用户要求可用工具，只有代码和内部验收报告 | 规划 User Deliverables，明确产物、位置、安装/运行/配置/使用方式、接收方和完成标准；最终逐项交接，区分本地合入、远端交付、部署/发布与归档状态；交付约定不扩大授权 |
+| BEH-199 | final/archive | 缺工作包字段的旧凭据迁移 | 旧 receipt 未写 work_packages，需求调整后修复/审查/复验及再次合入均已完成 | 从已核对的 Premerge History 的 Work Packages 恢复集合，保留旧凭据；替代覆盖完整原集合即可通过，空历史集合或显式集合与行矛盾仍拒绝 |
+| BEH-200 | premerge | 无关单元 review 受阻 | 当前 MU1 就绪，无关 MU2 最新 review 为 FAIL/BLOCKED | MU1 premerge 可通过；当前单元或必要 code 上游的最新轮失败仍拒绝，final/archive 全量核对 |
+| BEH-201 | premerge | 冻结契约不等待上游实现 review | TP1 按冻结可读契约完成编写/review，WP1 仍 coding 且无实现 review | TP1 独立单元 premerge PASS；改成不可读契约路径（静态层级合法）后因契约无效拒绝；code 上游仍须实现 review |
 
 ## CLI Regression Baseline
+
 
 `agentic-workflow.ps1` 的通过记录；本表只覆盖 CLI 结构、依赖和指令传递，不含宿主 Agent 行为场景。
 

@@ -27,6 +27,9 @@
 ## Runtime
 
 1. **worktree**：按计划的工作包基线与统一命名规则创建分支/worktree，记录实际路径与提交；
+   apply 确认规划门禁有效后，仅准备主 Agent 本次选定、依赖已满足且有流水线容量的工作包；
+   不按 Work Packages 全表预建后续 worktree。必要依赖安装、目录联接与缓存隔离属于本次就绪检查，
+   与 worktree 一起交接，逐包就绪即返回，不等待其他包。重开时优先复用该包已有 worktree 并核实基线与隔离。
    并按 `(WP, Attempt)` 每轮尝试返回结构化交接记录（worktree、基线提交、本轮认领执行者、开工前接收时间，
    Received At 不得晚于该轮首次执行事件：首次为 coding，重开为 fixing），随 Handoff Index 交给主 Agent；
    由主 Agent 校验后写入 verification 的 `## Worktree Handoff`（本角色不直接修改 verification.md）。
