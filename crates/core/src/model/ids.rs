@@ -433,8 +433,8 @@ pub struct WorkspaceRef {
 }
 
 impl WorkspaceRef {
-    /// 构造。`display_name` 非空、≤128 字符、不含 NUL（与 `WorkspaceRecord::display_name` 同口径，
-    /// §3.7）。
+    /// 构造。`display_name` 非空、≤128 字符（与 `WorkspaceRecord::display_name` 同口径，§3.7：
+    /// 仓库对「展示名」类字段只做字符数校验，NUL 校验只施加于路径与命令行类字段）。
     pub fn try_new(alias: WorkspaceAlias, display_name: &str) -> Result<Self, InvalidValue> {
         require_bounded(display_name, 1, 128)?;
         Ok(Self {
