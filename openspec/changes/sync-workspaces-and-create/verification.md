@@ -124,7 +124,7 @@
 
 | Merge ID | Delivery Unit | Target Ref | Merger | Candidate Commit | Merged Commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1 | U1（integrated） | refs/heads/main | merger-1-r2 | a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7 | fad57bb8905a5a225ec9d5d291526206f68d1912 | 本地主分支两步入账：(1) 候选以 `--no-ff` 合入 `60af6e0`；(2) 期间远端 main 被 #42/#43 推进，本地并入最新 `origin/main` 后在其上完成第二步入账并重跑验证。候选 `a6f6210` 仍是本提交的严格祖先。**未 push**。receipt 见 `## Premerge History` |
+| M1 | U1（integrated） | refs/heads/main | merger-1-r2 | a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7 | b96fcdc178b76b09e666000860da1ae8e60c742e | 本地主分支两步入账：(1) 候选以 `--no-ff` 合入 `60af6e0`；(2) 并入推进后的 `origin/main`（#42/#43）并在合并树上完成验证。候选 `a6f6210` 仍是本提交的严格祖先；最终目标版本上 `npm run verify` 退出码 0（`reports/main-verify-final.log`）。**未 push**。receipt 见 `## Premerge History` |
 
 > 失败的候选构建不记入本表（`final`/`archive` 会核验「Candidate 是 Merged 的祖先」且「Merged 在目标引用上」，未合入的候选不满足）。两次候选构建的完整经过、失败项与处置记在 `## Failures and Retests` 与 `## Premerge History`。
 
@@ -223,7 +223,7 @@ mode: `not-applicable`（见 plan.md 的 `### Main E2E`）。reason：合同与�
 
 ```agentic-assessment
 assessment_id: "AV-1-sync-workspaces-and-create-2026-10-03"
-target_commit: "fad57bb8905a5a225ec9d5d291526206f68d1912"
+target_commit: "b96fcdc178b76b09e666000860da1ae8e60c742e"
 contract_digest: "sha256:08669be58a99bae6bdcae2c415fc4f4324580caef22f0611ad14314de627b5ba"
 result: PASS
 evidence:
@@ -241,10 +241,12 @@ evidence:
     sha256: "sha256:1992850d2a57bcb0aa916895a9e2479e83d33b3fcd0d25b5ea4f68e51436603d"
   - path: reports/main-verify-0.4.log
     sha256: "sha256:bde1bc375d94b38dae47a7b50a88ef7addbb39527abb925e9f1fcf0aeb2b247d"
+  - path: reports/main-verify-final.log
+    sha256: "sha256:4bc12af58490ff9f72c95ab3aabf10835980e024fb5a129ddb899e2aa07622a8"
 ```
 
 - **Assessment ID / Time**：AV-1，2026-10-03，主 Agent（最终验收）。
-- **Target / Task**：代码仓库 `D:\Project\acp-remote`，目标分支 `main` = `00211d3b53a2bb52790ea0b754ced3ca9c8a56d1`（候选合并 + 上游 #42/#43 推进后的目标版本；agentic 0.4.0 要求在目标版本上重验，已重跑）；最终验收任务 8.1（`[final-verification]`）。规划/证据文档（`openspec/changes/sync-workspaces-and-create/**`）为未跟踪的工作区内容，与代码提交不同源，已逐项说明其对应关系。
+- **Target / Task**：代码仓库 `D:\Project\acp-remote`，目标分支 `main` = `b96fcdc178b76b09e666000860da1ae8e60c742e`（候选合并 + 上游 #42/#43 推进后的目标版本；agentic 0.4.0 要求在目标版本上重验，已重跑）；最终验收任务 8.1（`[final-verification]`）。规划/证据文档（`openspec/changes/sync-workspaces-and-create/**`）为未跟踪的工作区内容，与代码提交不同源，已逐项说明其对应关系。
 - **CLI State**：独立记录——`openspec status --change sync-workspaces-and-create --json` 返回 `schemaName: agentic`、`isPlanningComplete: true`、`isComplete: true`（查询时点 2026-10-03，本轮验收收尾前）。**CLI 的 `all_done` / `isComplete` 只是任务复选框状态，不作为验收结论。**
 - **Audit / Evidence**（按 `procedures/acceptance.md` 的审计组）：
   - *Contracts and Coverage*：proposal 的 Intent/Constraints/非目标/成功判据逐条对照实际交付方向一致（B 路径口径、设备级授权语义均按用户原话执行）；53 行覆盖索引按声明判据复核为 **33 行有实现 / 12 行部分落地 / 8 行仅 wire 合同**，其中 8 行（R6–R12、R14）因 `crates/server/src` 尚无 `sync` 模块而**无运行时落点**，已在 `## Candidate Builds` 显式声明不作为「已实现」。`## Checks`、`## Check Plan Changes` 与该口径一致。
