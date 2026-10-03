@@ -35,3 +35,4 @@ openspec/changes/**/reports/**/*.log
 # 让 HEAD 再前进一格，形成自指（target_commit 永远差一次提交）。因此**活动变更**的验收记录留在
 # 工作区、不随提交进入仓库；已归档变更的记录照旧入库。`reports/**/*.log` 同样不入库。
 openspec/changes/sync-workspaces-and-create/verification.md
+openspec/changes/archive/*/verification.md
