@@ -123,7 +123,7 @@
 
 | Merge ID | Delivery Unit | Target Ref | Merger | Candidate Commit | Merged Commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1 | U1（integrated） | refs/heads/main | merger-1-r2 | a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7 | 60af6e0b7e135e55959e7c8ff0240dbd33043c28 | 本地主分支合入（2026-10-03）：parents = 6c093f1… + 候选；git diff a6f6210 HEAD 为空 ⇒ **树内容与候选逐字相同**，候选 PV1/检视/ALT1/ALT2 证据全部适用；merge-base --is-ancestor 已核实。首次执行曾用 fast-forward（candidate == merged），因门禁要求 candidate 为 merged 的严格祖先而以 --no-ff 重做。**未 push，origin/main 仍在 6c093f1**。receipt 见 ## Premerge History |
+| M1 | U1（integrated） | refs/heads/main | merger-1-r2 | a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7 | 00211d3b53a2bb52790ea0b754ced3ca9c8a56d1 | 本地主分支两步入账：(1) 候选以 `--no-ff` 合入 `60af6e0b7e135e55959e7c8ff0240dbd33043c28`；(2) 期间远端 main 被 #42/#43 推进（补记原型、agentic 升 0.4.0），遂把最新 `origin/main` 并入，得 `00211d3b53a2bb52790ea0b754ced3ca9c8a56d1`。`git diff 60af6e0 00211d3b53a2bb52790ea0b754ced3ca9c8a56d1` 仅含上游那两个提交的文件；候选 `a6f6210` 仍是其严格祖先。在新目标版本上重跑了 `npm run verify`（绿，日志 reports/main-verify-0.4.log）并按 agentic 0.4.0 重过 final/archive。**未 push，origin/main 当时仍在 6c093f1**。receipt 见 `## Premerge History` |
 
 > 失败的候选构建不记入本表（`final`/`archive` 会核验「Candidate 是 Merged 的祖先」且「Merged 在目标引用上」，未合入的候选不满足）。两次候选构建的完整经过、失败项与处置记在 `## Failures and Retests` 与 `## Premerge History`。
 
@@ -222,7 +222,7 @@ mode: `not-applicable`（见 plan.md 的 `### Main E2E`）。reason：合同与�
 
 ```agentic-assessment
 assessment_id: "AV-1-sync-workspaces-and-create-2026-10-03"
-target_commit: "60af6e0b7e135e55959e7c8ff0240dbd33043c28"
+target_commit: "00211d3b53a2bb52790ea0b754ced3ca9c8a56d1"
 contract_digest: "sha256:08669be58a99bae6bdcae2c415fc4f4324580caef22f0611ad14314de627b5ba"
 result: PASS
 evidence:
@@ -238,10 +238,12 @@ evidence:
     sha256: "sha256:c8978e2082de58f1f81e557841e0b678f28ab780ef31d1b9e7b4e6497c9b2d42"
   - path: reports/main-workspace-test.log
     sha256: "sha256:1992850d2a57bcb0aa916895a9e2479e83d33b3fcd0d25b5ea4f68e51436603d"
+  - path: reports/main-verify-0.4.log
+    sha256: "sha256:bde1bc375d94b38dae47a7b50a88ef7addbb39527abb925e9f1fcf0aeb2b247d"
 ```
 
 - **Assessment ID / Time**：AV-1，2026-10-03，主 Agent（最终验收）。
-- **Target / Task**：代码仓库 `D:\Project\acp-remote`，目标分支 `main` = `60af6e0b7e135e55959e7c8ff0240dbd33043c28`（合并提交；其树与被检视候选 `a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7` 逐字相同）；最终验收任务 8.1（`[final-verification]`）。规划/证据文档（`openspec/changes/sync-workspaces-and-create/**`）为未跟踪的工作区内容，与代码提交不同源，已逐项说明其对应关系。
+- **Target / Task**：代码仓库 `D:\Project\acp-remote`，目标分支 `main` = `00211d3b53a2bb52790ea0b754ced3ca9c8a56d1`（候选合并 + 上游 #42/#43 推进后的目标版本；agentic 0.4.0 要求在目标版本上重验，已重跑）；最终验收任务 8.1（`[final-verification]`）。规划/证据文档（`openspec/changes/sync-workspaces-and-create/**`）为未跟踪的工作区内容，与代码提交不同源，已逐项说明其对应关系。
 - **CLI State**：独立记录——`openspec status --change sync-workspaces-and-create --json` 返回 `schemaName: agentic`、`isPlanningComplete: true`、`isComplete: true`（查询时点 2026-10-03，本轮验收收尾前）。**CLI 的 `all_done` / `isComplete` 只是任务复选框状态，不作为验收结论。**
 - **Audit / Evidence**（按 `procedures/acceptance.md` 的审计组）：
   - *Contracts and Coverage*：proposal 的 Intent/Constraints/非目标/成功判据逐条对照实际交付方向一致（B 路径口径、设备级授权语义均按用户原话执行）；53 行覆盖索引按声明判据复核为 **33 行有实现 / 12 行部分落地 / 8 行仅 wire 合同**，其中 8 行（R6–R12、R14）因 `crates/server/src` 尚无 `sync` 模块而**无运行时落点**，已在 `## Candidate Builds` 显式声明不作为「已实现」。`## Checks`、`## Check Plan Changes` 与该口径一致。
@@ -253,4 +255,4 @@ evidence:
   - *E2E Design and Execution*：mode `not-applicable`，reason/basis/非空 alternative_checks 齐备；降级批准含**用户原话、时间、来源**且显式限定范围（本变更 Main E2E，不涉及其它变更与仓库 e2e 开关配置），经依赖声明复核 Round 7 判定合规。替代检查 ALT1（`npm run check`）与 ALT2（`cargo test --locked --workspace --all-features`）在 `## Checks` 各有一行 PASS 与可读证据，且在 `tasks.md` 以 `[ALT1]`/`[ALT2]` 声明为独立的主 Agent 任务（未并入 `[e2e-owned]` 行）。`e2e check` 判 PASS 并已按标记勾选该行；E2E 本身保留 NOT_APPLICABLE。
   - *Issue Closure and Evidence Validity*：`## Failures and Retests` 保留全部历史 FAIL/BLOCKED（含 4 次因模型配额 429 未能派发独立复核、DOC-LINKS-1 引用形式更正、两次候选门禁失败），每条均有责任人与处置；4 条 `FOLLOWUP-*` 明确标注不阻塞本变更且须在后续变更关闭。
 - **Result / Open Issues**：**PASS**。无 CRITICAL/MAJOR 未闭环项。四项后续（F-11 测试缺口、F-12 文档与实现顺序矛盾、F-13 既有偶发测试、F-07 原型分析文档过期）均已留痕，不影响本版本结论。**未推送、未归档**：`origin/main` 仍在 `6c093f1…`；远端交付按 `AGENTS.md` §8 走 PR 路径，需单独授权。
-- **Required Follow-up**：（无阻断项）。PASS 仅对本轮目标提交 `60af6e0b7e135e55959e7c8ff0240dbd33043c28`（树内容等同候选 `a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7`）与上述证据成立；目标版本或证据再变化时须重新验收。归档前须运行 `--stage archive` 且全部任务完成。
+- **Required Follow-up**：（无阻断项）。PASS 仅对本轮目标提交 `00211d3b53a2bb52790ea0b754ced3ca9c8a56d1` 与上述证据成立；目标版本或证据再变化时须重新验收。归档前须运行 `--stage archive` 且全部任务完成。
