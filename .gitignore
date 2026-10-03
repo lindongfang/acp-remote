@@ -30,3 +30,8 @@ openspec/changes/**/reports/**/*.log
 # 现行约定是 openspec/changes/<变更>/reports/（见上），仓库根不再接受证据/日志目录，
 # 因此这份遗留目录整体不入库；本地文件保留，是否删除由开发者自行决定。
 /reports/
+
+# agentic 0.4.0 要求 `## Final Assessment` 的 target_commit 绑定目标提交，而验收记录本身入库会
+# 让 HEAD 再前进一格，形成自指（target_commit 永远差一次提交）。因此**活动变更**的验收记录留在
+# 工作区、不随提交进入仓库；已归档变更的记录照旧入库。`reports/**/*.log` 同样不入库。
+openspec/changes/sync-workspaces-and-create/verification.md
