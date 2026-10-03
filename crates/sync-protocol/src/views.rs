@@ -58,6 +58,8 @@ pub const VIEW_ENUMS: &[(&str, &str, &[&str])] = &[
         "/properties/stream",
         &["stdout", "stderr"],
     ),
+    ("agent.connected", "/properties/state", &["connected"]),
+    ("agent.disconnected", "/properties/state", &["disconnected"]),
 ];
 
 /// `session.plan.changed.entries[].priority`。
@@ -222,6 +224,104 @@ impl<'de> Deserialize<'de> for TerminalStream {
     }
 }
 
+/// `agent.connected.state`：封闭词表只有一个取值，客户端可据此把连接事件与断开事件区分开。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentConnectedState {
+    Connected,
+}
+
+impl AgentConnectedState {
+    pub const ALL: [AgentConnectedState; 1] = [AgentConnectedState::Connected];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentConnectedState::Connected => "connected",
+        }
+    }
+}
+
+impl fmt::Display for AgentConnectedState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AgentConnectedState {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        AgentConnectedState::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "state",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for AgentConnectedState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentConnectedState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<Self>().map_err(DeError::custom)
+    }
+}
+
+/// `agent.disconnected.state`：与 [`AgentConnectedState`] 互不相同的唯一取值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentDisconnectedState {
+    Disconnected,
+}
+
+impl AgentDisconnectedState {
+    pub const ALL: [AgentDisconnectedState; 1] = [AgentDisconnectedState::Disconnected];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentDisconnectedState::Disconnected => "disconnected",
+        }
+    }
+}
+
+impl fmt::Display for AgentDisconnectedState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AgentDisconnectedState {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        AgentDisconnectedState::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "state",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for AgentDisconnectedState {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentDisconnectedState {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<Self>().map_err(DeError::custom)
+    }
+}
+
 /// `elicitation.resolved.action`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ElicitationAction {
@@ -357,7 +457,7 @@ pub struct SessionCommand {
 pub struct AgentConnected {
     #[serde(rename = "agentId")]
     pub agent_id: NonEmptyText<128>,
-    pub state: NonEmptyText<32>,
+    pub state: AgentConnectedState,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }
@@ -367,7 +467,7 @@ pub struct AgentConnected {
 pub struct AgentDisconnected {
     #[serde(rename = "agentId")]
     pub agent_id: NonEmptyText<128>,
-    pub state: NonEmptyText<32>,
+    pub state: AgentDisconnectedState,
     /// 非 required：键缺失即无错误详情；键存在时 schema 只允许 `publicError`，不接受 `null`。
     #[serde(
         default,
@@ -503,6 +603,8 @@ pub struct ElicitationResolved {
 }
 
 /// `file.changed`（`event-views.schema.json#/$defs/file.changed`）。
+///
+/// `addedLines`/`deletedLines`/`outsideWorkspace` 是可选字段，schema 的 `required` 集合不含它们。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChanged {
     #[serde(rename = "changeId")]
@@ -511,6 +613,33 @@ pub struct FileChanged {
     #[serde(rename = "displayPath")]
     pub display_path: NonEmptyText<1024>,
     pub summary: Text<2048>,
+    /// 非 required：键缺失即「本次工具调用判定不出行数」，不得读成零改动；
+    /// 键存在时 schema 只允许 `decimalString`，不接受 `null`。
+    #[serde(
+        rename = "addedLines",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub added_lines: Option<DecimalString>,
+    /// 非 required：键缺失即「本次工具调用判定不出行数」，不得读成零改动；
+    /// 键存在时 schema 只允许 `decimalString`，不接受 `null`。
+    #[serde(
+        rename = "deletedLines",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub deleted_lines: Option<DecimalString>,
+    /// 非 required：键缺失即路径在该会话工作区之内；
+    /// 键存在时 schema 只允许 `boolean`，不接受 `null`。
+    #[serde(
+        rename = "outsideWorkspace",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub outside_workspace: Option<bool>,
     #[serde(flatten)]
     pub extra: ExtraFields,
 }
