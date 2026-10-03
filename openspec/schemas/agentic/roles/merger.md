@@ -32,6 +32,11 @@
    仅创建一个集成提交不算解锁下游。合入按交付单元逐个串行，不按 wave 合入；wave 只决定并发编码范围，
    多个 wave 的工作包可归属于同一交付单元。下游工作包有 code 依赖时，同一交付单元内从该集成基线开工，
    跨交付单元时须等上游已合入主分支；不得直接以本地主分支为起点承接未合入的跨单元上游。
+   提前交付 integrated 基线时按 roles/_shared/role-report.md 的可选 integration_baseline 结构返回
+   固定提交、当前 contractDigest/planningDigest 和逐上游 Attempt/源提交，并提供同版本 candidate CHECK/DELIVERY 索引。
+   独立 candidate review 由 main 调度，main 确认接收后导入；status 才能机械识别，不把集成提交本身写成已验收。
+   首次选择待合入单元前读取 workflow status 的 mergeQueue/recommendedMerge；遵守计划顺序，
+   同顺序组优先处理解锁下游最多的完整单元。队列只表示可准备候选验证，实际合入仍执行下列门禁与回归。
 2. 基于最新目标主分支构造固定候选，执行计划内 Project Verify。将候选及新增交互/冲突差异
    交回主 Agent，由其调度独立 reviewer；等待对应版本的有效报告。
 3. 可以在约定范围内解决集成冲突，记录解决内容并交独立 reviewer。涉及需求/接口取舍时

@@ -44,13 +44,13 @@ Detailed Workflow、Operating Model、Check Levels。
 整体流程分为 **explore → propose → apply → archive** 四个阶段，对应宿主 Agent 的 `/opsx:*` 入口。
 这些入口不是 schema.yaml 中注册的 operation，也不是可直接执行的终端命令：宿主提供入口，
 CLI 提供 schema 解析、状态和 instructions，宿主读取这些输入后执行具体工作。
-propose 增加并发执行计划，apply 增加并发编码、独立代码审查、校验及 E2E 测试（项目开关开启时为强制），
+propose 完成规划、独立依赖声明审查与 plan 检查，apply 增加并发编码、独立代码审查、校验及 E2E 测试（项目开关开启时为强制），
 并要求宿主主 Agent 在 apply 结束前完成最终验收；这些是宿主的流程义务，不是 CLI 自动门禁。
 
 | 阶段 | 宿主入口 | 主要职责 | 产出与下一阶段条件 |
 | --- | --- | --- | --- |
 | explore | `/opsx:explore` | 调研现状、讨论方案、澄清问题和范围；不承担产品编码、交付或最终验收 | 形成可用于提案的问题、目标与约束 |
-| propose | `/opsx:propose` | proposal 记录动机与范围；specs/design 可并行，生成 plan.md 前由主 Agent 组织共同收敛；plan.md 确定交付单元、合并模式、E2E 适用性与覆盖；tasks 转为可跟踪任务 | proposal、specs、design、plan.md、tasks.md 就绪；有效 skip_specs 可跳过增量规范 |
+| propose | `/opsx:propose` | proposal 记录动机与范围；specs/design 可并行，生成 plan.md 前由主 Agent 组织共同收敛；plan.md 确定交付单元、合并模式、E2E 适用性与覆盖；生成 tasks 后由独立 reviewer 审查依赖声明，再运行 workflow check --stage plan | 规划文件就绪且独立依赖声明审查、plan 检查对当前 planningDigest 均 PASS；有效 skip_specs 可跳过增量规范 |
 | apply | `/opsx:apply` | 按计划并发编码与测试设计、分支交付、独立审查、集成及主分支验收；主 Agent 必须执行最终验收 | 实际交付和完整证据；最终验收 PASS 后具备归档条件 |
 | archive | `/opsx:archive` | 核对验收仍有效，确认目标版本未变；规范同步与变更移动由归档操作执行 | 本次变更及其规划、执行证据可追溯 |
 
@@ -87,7 +87,9 @@ flowchart TD
   DE --> CONV
   CONV --> PLAN["plan.md<br/>交付单元与合并模式、E2E 适用性、写入归属<br/>检查清单、资源、目标主分支"]
   PLAN --> TASKS[tasks.md]
-  TASKS --> AP["/opsx:apply"]
+  TASKS --> DR["propose 收尾<br/>独立依赖声明审查"]
+  DR --> PC["workflow check --stage plan<br/>当前规划版本 PASS"]
+  PC --> AP["/opsx:apply<br/>确认既有门禁有效 → 准备执行资源"]
   AP --> IMPL["coder A…N<br/>并行编码"]
   AP --> TEST["tester A…N<br/>并行设计场景与断言"]
   IMPL --> V1["Project Verify ∥ 独立 Code Review"]
@@ -106,6 +108,11 @@ flowchart TD
 ```
 
 `∥` 表示可针对同一代码版本并行执行。图展示成功路径；失败按 schema 与角色规则回到相应检查节点。
+图中的编码、测试与检视节点按每个 WP/TP 独立触发：某包交付即启动自己的 reviewer，
+不等待同层全部作者结束。apply 仅为当前依赖满足且有流水线容量的包准备 worktree 和必要依赖，
+逐包就绪即派发。契约阻断项集中修正后复审；仅记录格式错误由 main 修正并重跑机械检查，
+PASS 的非阻断建议不要求清零；报告随交付即时保存登记，未派发的修复不提前记 fixing。
+完整调度与返工规则见 [procedures/scheduling.md](procedures/scheduling.md)。
 各交付单元基于最新本地主分支验证，门禁通过后直接本地合入，无须每次确认；全部单元合入后执行一次完整最终 E2E（候选阶段不执行 E2E）。
 not-applicable 时完成计划中的替代验证，`verification.md` 在整个执行过程持续更新。
 
@@ -121,7 +128,7 @@ tester 提交产物、主 Agent 确认可读且交接完整后即释放（不等
 `dispatch-queue.jsonl` 台账记录；状态台账只记录当前活跃执行者，worktree 交接绑定该轮认领执行者。
 每个交付单元在最新主分支上构造候选，完成候选 Project Verify 与独立 review 后合入本地主分支，
 再完成主分支检查（候选阶段不执行 E2E）。依赖声明审查在派发实现前完成
-（reviewer `phase: plan`、`stage: plan`，结果绑定当前 contractDigest）；
+（reviewer `phase: plan`、`stage: plan`，结果绑定当前 planningDigest；旧 contractDigest 记录按全文核对）；
 provisioner 的 worktree 交接与每次 premerge PASS 由子角色返回结构化记录、主 Agent 校验后写入
 verification 的 `## Worktree Handoff` 与 `## Premerge History`，final 逐交付单元核对。执行 apply 已授权此本地合入，无须逐单元人工批准。
 最终主分支 E2E 与最终验收的具体判据以 schema、roles 和 acceptance 为准。
@@ -239,7 +246,7 @@ npx --quiet --no-install openspec-agentic roles unset coder
 | 检查 | 时机 | 关注内容 | 复用边界 |
 | --- | --- | --- | --- |
 | Local Checks | 编码期间 | 对当前改动做快速反馈 | 不能替代交付清单 |
-| Dependency Declaration Review | plan 阶段（开工前门禁） | 独立 reviewer 核实 code / contract / resource 声明属实，结果绑定当前 contractDigest | 计划或契约变化后失效，须重新审查 |
+| Dependency Declaration Review | propose 收尾（plan 门禁） | 独立 reviewer 核实 code / contract / resource 声明属实，结果绑定当前 planningDigest；与 plan 检查均 PASS 才完成 propose | apply 复查；语义规划变化后重审，执行分配不重审；旧全文摘要仍按原规则核对 |
 | Project Verify | 分支交付、合并候选及主分支（执行者：工作包=coder，候选与主分支=merger） | 构建、静态/类型检查、单元和集成测试；不含 E2E | 需核对代码内容、命令/配置、环境和范围 |
 | Code Review | 各分支交付与适用的集成/合并阶段 | 非作者检查实际 diff，关注正确性、边界、安全及回归 | 无新增差异时记录依据并沿用结论 |
 | Worktree Handoff | provisioner 创建/回收 worktree 时（main 登记） | 按 (WP, Attempt) 记录 worktree、基线、本轮认领执行者与开工前接收时间 | 计划 worktree 或该轮认领执行者变化时失效 |
