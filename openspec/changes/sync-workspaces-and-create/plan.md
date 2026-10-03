@@ -339,7 +339,7 @@ rows:
 ## Target Repository and Main Branch
 
 - Code Repository: `D:\Project\acp-remote`
-- Target Ref: `refs/heads/main`（规划时提交 `6c093f145aa3d69dcd573a6d94e31b692acb5d4b`）
+- Target Ref: `refs/heads/main`。规划基线为 `6c093f1…`；交付期间远端被 #42（补记 PWA 原型）与 #43（`build(deps)` 升级 openspec-agentic 0.3.0 → 0.4.0）推进，本地已并入最新 `origin/main` 并在新基线上重跑 Project Verify 与 final/archive（见 `verification.md` 的「上游基线推进事件」）
 - Version Confirmation Owner: 规划期只读调查由 scout（任务 1.1）执行；候选构建与合入瞬间的基线复核由 merger 执行；目标选择由 main 确认
 - Confirmation Method / Evidence: 规划期读取 `.git/refs/heads/main` 的实际内容；合入期由 merger 用 `git rev-parse refs/heads/main` 复核并把引用与结果记入 `verification.md`。不默认 HEAD 即目标。
 

@@ -58,6 +58,7 @@
 | reviewer-plan | 4 | reviewer-plan | sha256:4f87d0b0d429ca240158599354b4b4eeceebf702ce1771db0f758e18ec56b968 | PASS | reports/dependency-declaration-review-round4.md |
 | reviewer-plan | 5 | reviewer-plan | sha256:d477497ed80a20db8a7aa4e073d06bd7b7c0661c22c6ccdd5e8e81f842c3da3b | PASS | reports/dependency-declaration-review-round5.md |
 | reviewer-plan | 6 | reviewer-plan | sha256:19bc702f1c78f625f6a048c5c37e0cb8ca1f822c9d00b71ecd3830657a5c4cfe | PASS | reports/dependency-declaration-review-round6.md |
+| reviewer-plan | 8 | reviewer-plan | sha256:9b16ff4bcad3ab83b4666d05c913347a1ecb09669d0e05b209cfb4398078b849 | PASS | reports/dependency-declaration-review-round8.md |
 | reviewer-plan | 7 | reviewer-plan | sha256:08669be58a99bae6bdcae2c415fc4f4324580caef22f0611ad14314de627b5ba | PASS | reports/dependency-declaration-review-round7.md |
 
 ## Checks
@@ -123,7 +124,7 @@
 
 | Merge ID | Delivery Unit | Target Ref | Merger | Candidate Commit | Merged Commit | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1 | U1（integrated） | refs/heads/main | merger-1-r2 | a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7 | 00211d3b53a2bb52790ea0b754ced3ca9c8a56d1 | 本地主分支两步入账：(1) 候选以 `--no-ff` 合入 `60af6e0b7e135e55959e7c8ff0240dbd33043c28`；(2) 期间远端 main 被 #42/#43 推进（补记原型、agentic 升 0.4.0），遂把最新 `origin/main` 并入，得 `00211d3b53a2bb52790ea0b754ced3ca9c8a56d1`。`git diff 60af6e0 00211d3b53a2bb52790ea0b754ced3ca9c8a56d1` 仅含上游那两个提交的文件；候选 `a6f6210` 仍是其严格祖先。在新目标版本上重跑了 `npm run verify`（绿，日志 reports/main-verify-0.4.log）并按 agentic 0.4.0 重过 final/archive。**未 push，origin/main 当时仍在 6c093f1**。receipt 见 `## Premerge History` |
+| M1 | U1（integrated） | refs/heads/main | merger-1-r2 | a6f6210bcb8c1aacd81a09bf5169cb5eb5e287c7 | fad57bb8905a5a225ec9d5d291526206f68d1912 | 本地主分支两步入账：(1) 候选以 `--no-ff` 合入 `60af6e0`；(2) 期间远端 main 被 #42/#43 推进，本地并入最新 `origin/main` 后在其上完成第二步入账并重跑验证。候选 `a6f6210` 仍是本提交的严格祖先。**未 push**。receipt 见 `## Premerge History` |
 
 > 失败的候选构建不记入本表（`final`/`archive` 会核验「Candidate 是 Merged 的祖先」且「Merged 在目标引用上」，未合入的候选不满足）。两次候选构建的完整经过、失败项与处置记在 `## Failures and Retests` 与 `## Premerge History`。
 
@@ -222,7 +223,7 @@ mode: `not-applicable`（见 plan.md 的 `### Main E2E`）。reason：合同与�
 
 ```agentic-assessment
 assessment_id: "AV-1-sync-workspaces-and-create-2026-10-03"
-target_commit: "00211d3b53a2bb52790ea0b754ced3ca9c8a56d1"
+target_commit: "fad57bb8905a5a225ec9d5d291526206f68d1912"
 contract_digest: "sha256:08669be58a99bae6bdcae2c415fc4f4324580caef22f0611ad14314de627b5ba"
 result: PASS
 evidence:
