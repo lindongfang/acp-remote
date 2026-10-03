@@ -1,9 +1,9 @@
 {
   "protocolVersion": 1,
   "type": "sync.snapshot_begin",
-  "messageId": "16f85fd2-554d-46de-bc2a-09fab2c2201f",
+  "messageId": "e7c1a360-9b48-4d25-8f71-2c0b6d5a4e93",
   "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
-  "connectionSequence": "7",
+  "connectionSequence": "69",
   "body": {
     "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
     "cursor": {
@@ -11,7 +11,6 @@
       "globalSequence": "2318"
     },
     "schemaVersion": 1,
-    "chunkCount": 3
+    "chunkCount": 8
   }
 }
-

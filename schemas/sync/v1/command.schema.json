@@ -82,7 +82,23 @@
         }
       }
     },
+    "sessionReadBefore": {
+      "description": "session.read 的分页游标：由消息创建时间与消息标识复合构成（design D2）。两个键都必需——只给其中一项是单字段游标，按 protocol.schema_invalid 拒绝，服务端 MUST NOT 猜测或补全缺失的排序分量。排序 MUST NOT 依赖 messageId 的数值或字典序（docs/SYNC_PROTOCOL.md §3.3、§11.5）：服务端按 createdAt 升序返回一页，并在同一 createdAt 内以稳定可重复的次序排列 messageId 作为 tie-breaker，使相邻两页不重不漏。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["createdAt", "messageId"],
+      "properties": {
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "messageId": { "$ref": "common.schema.json#/$defs/uuid" }
+      }
+    },
+    "sessionReadLimit": {
+      "description": "客户端请求的单页上限，是结构性计数（integer，与 chunkCount 同类，§3.3）。省略时服务端按配置默认页返回；超过服务端为该会话配置的明细条数上限时服务端收敛到自己的上限并照常返回，MUST NOT 因此让请求失败，因此本字段没有 maximum。",
+      "type": "integer",
+      "minimum": 1
+    },
     "sessionRead": {
+      "description": "Sync 面的 session.read：before 与 limit 只在本传输面生效（design D3）。Node Link 面的同名命令载荷不含这两个键，其行为与本变更前一致（docs/NODE_LINK_PROTOCOL.md §12.7）。",
       "type": "object",
       "additionalProperties": false,
       "required": ["requestId", "command", "sessionId", "payload"],
@@ -99,7 +115,9 @@
               "type": "array",
               "uniqueItems": true,
               "items": { "enum": ["messages", "turns", "pending_interactions", "config_options", "capabilities"] }
-            }
+            },
+            "before": { "$ref": "#/$defs/sessionReadBefore" },
+            "limit": { "$ref": "#/$defs/sessionReadLimit" }
           }
         }
       }
@@ -292,9 +310,10 @@
       }
     },
     "sessionReadResult": {
+      "description": "session.read 的完成结果。resources 的每个键都可缺席；hasEarlier 是必填布尔值，指示本次返回的这一页之前是否仍有更早内容，客户端据此决定是否继续用最早一条的 (createdAt, messageId) 构造 before 翻页。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessionId", "resources"],
+      "required": ["sessionId", "resources", "hasEarlier"],
       "properties": {
         "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "resources": {
@@ -322,7 +341,8 @@
               "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.capabilities" }
             }
           }
-        }
+        },
+        "hasEarlier": { "type": "boolean" }
       }
     },
     "configListResult": {

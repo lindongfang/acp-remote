@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "d7f3a620-8b41-4e59-a0c3-71b8d6f2e904",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "52",
+  "body": {
+    "snapshotId": "5c72f0a9-1d64-4b83-a2f7-6e0c9b8d7a15",
+    "chunkIndex": "0",
+    "resource": "sessions",
+    "items": [
+      {
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "title": "修复测试",
+        "agent": { "agentId": "claude-code", "name": "Claude Code" },
+        "state": "waiting_permission",
+        "origin": { "kind": "local" },
+        "currentMode": { "modeId": "default", "displayName": "Default" },
+        "version": "42",
+        "createdAt": "2026-09-17T11:00:00.000Z",
+        "updatedAt": "2026-09-17T12:11:01.000Z"
+      }
+    ]
+  }
+}

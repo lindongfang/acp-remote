@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "0a4b8e15-7c92-4d36-b8f0-3e5c1a7d9b62",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "68",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "1",
+    "resource": "config_options",
+    "items": []
+  }
+}

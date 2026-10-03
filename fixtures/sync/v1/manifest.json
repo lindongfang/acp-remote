@@ -27,9 +27,69 @@
       "valid": true
     },
     {
-      "fixture": "valid/sync-snapshot-chunk-config-options.json",
+      "fixture": "invalid/snapshot-chunk-detail-resource-messages.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/snapshot-chunk-detail-resource-config-options.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/snapshot-begin-chunk-count-too-large.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "maximum"
+    },
+    {
+      "fixture": "valid/sync-snapshot-sessions-only-begin.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-sessions-only-chunk.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-sessions-only-end.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-read-default-page.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-read-paged.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-read-paged-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-read-last-page-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-session-read-single-field-before.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-result-session-read-missing-has-earlier.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
     },
     {
       "fixture": "valid/sync-snapshot-chunk-sessions-workspace.json",
