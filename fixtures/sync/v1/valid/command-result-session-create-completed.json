@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "f0a3d682-5c07-4a19-8f3b-2e6d9a4c7b08",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "57",
+  "body": {
+    "requestId": "5f2a91c4-8d3b-4e77-b0a6-1c4d9e8f2a35",
+    "command": "session.create",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:12:00.000Z",
+    "terminalEventId": "3a6b8d15-9c42-4f07-b1e8-5d7c2a9f0e31",
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "session": {
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "title": null,
+        "agent": { "agentId": "claude-code", "name": "Claude Code" },
+        "state": "idle",
+        "origin": { "kind": "local" },
+        "currentMode": null,
+        "version": "1",
+        "createdAt": "2026-09-17T12:12:01.000Z",
+        "updatedAt": "2026-09-17T12:12:01.000Z"
+      }
+    },
+    "error": null
+  }
+}

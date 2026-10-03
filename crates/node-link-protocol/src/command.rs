@@ -5,8 +5,10 @@
 //! 承载；本模块只承载 body，与 handshake/catalog/resource/error 四个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它 `transport`
-//! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即 Sync 的 11 条之后多出只经 Node Link
-//! 接受的 `session.create` 与 `session.resume`）。
+//! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即 Sync 面接受的 12 条之后多出只经
+//! Node Link 接受的 `session.resume`；`session.create` 两个面同名，但 payload 不同——本面的
+//! `{ agentId, exportId, workspaceAlias, templateParams? }` 含跨节点 Export 概念，Sync 面只有
+//! `{ workspaceAlias, agentId }`，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
 //!

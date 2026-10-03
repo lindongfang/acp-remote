@@ -1,0 +1,56 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "d0b46f18-9a25-4c73-8e61-73f2c5a90d14",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "11",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "0",
+    "resource": "sessions",
+    "items": [
+      {
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "title": "目录内会话",
+        "agent": { "agentId": "claude-code", "name": "Claude Code" },
+        "state": "idle",
+        "origin": { "kind": "local" },
+        "currentMode": null,
+        "version": "42",
+        "createdAt": "2026-09-17T11:00:00.000Z",
+        "updatedAt": "2026-09-17T12:11:01.000Z",
+        "workspace": { "alias": "project.1", "displayName": "Project One" }
+      },
+      {
+        "sessionId": "7f95ef32-c687-45ef-b59f-9263ef60bb88",
+        "title": "未分组会话",
+        "agent": { "agentId": "claude-code", "name": "Claude Code" },
+        "state": "idle",
+        "origin": { "kind": "local" },
+        "currentMode": null,
+        "version": "1",
+        "createdAt": "2026-09-17T11:30:00.000Z",
+        "updatedAt": "2026-09-17T11:30:00.000Z",
+        "workspace": null
+      },
+      {
+        "sessionId": "90a6fa43-d798-46f0-c60a-0374f071cc99",
+        "title": "imported 会话",
+        "agent": { "agentId": "zed-agent", "name": "Zed Agent" },
+        "state": "running",
+        "origin": {
+          "kind": "remote",
+          "ownerNodeId": "1f0d5c4b-3a29-4877-9615-0e1d2c3b4a59",
+          "exportId": "export-laptop-zed",
+          "originEpoch": "2a1b0c9d-8e7f-4a6b-b5c4-3d2e1f0a9b87",
+          "online": true
+        },
+        "currentMode": null,
+        "version": "7",
+        "createdAt": "2026-09-17T12:00:00.000Z",
+        "updatedAt": "2026-09-17T12:11:02.500Z",
+        "workspace": null
+      }
+    ]
+  }
+}

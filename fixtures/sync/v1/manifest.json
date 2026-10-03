@@ -32,12 +32,59 @@
       "valid": true
     },
     {
+      "fixture": "valid/sync-snapshot-chunk-sessions-workspace.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-chunk-workspaces.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/sync-snapshot-chunk-agents.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/sync-ack.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
     },
     {
       "fixture": "valid/command-session-prompt.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-session-create.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-create-accepted.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-create-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-session-create-with-cwd.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/command-session-create-with-session-id.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "valid/auth-client-hello-session-create.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
     },
@@ -175,6 +222,18 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/snapshot-chunk-workspace-item-has-path.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/snapshot-chunk-agent-item-missing-default.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
     },
     {
       "fixture": "valid/auth-server-challenge.json",

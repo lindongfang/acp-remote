@@ -240,6 +240,10 @@ impl UseCases {
     ///
     /// UNC/网络路径允许使用；core 不持日志设施，因此「网络路径」的结构化警告由接入层在解析成功
     /// 后记录，本层不因它改变授权模型（`design.md` D6）。
+    ///
+    /// 解析成功时，**别名原文与该次解析得到的规范化路径一起**落进该会话行（`design.md` D1/D6）：
+    /// 别名是目录归属的权威投影来源，路径是恢复流程的权威取值，二者独立保存、互不推导。目录归属
+    /// 的读取与展示名关联都在读路径（`SessionStore::list`），本方法不投影任何引用。
     pub async fn create_session(
         &self,
         actor: &Actor,
@@ -2060,6 +2064,201 @@ mod tests {
 
         // 恢复流程读到的就是这两个持久化取值（可读回、不推导）。
         assert_eq!(columns.workspace_cwd.as_deref(), Some(expected.as_str()));
+    }
+
+    /// 登记一个目录记录（`local.workspace.select` 的形状），返回其别名与目录守卫（创建流程要
+    /// `canonicalize` 该目录，因此它必须在整个用例期间真实存在）。
+    fn register_workspace(
+        fixture: &Fixture,
+        unique: u64,
+        alias_text: &str,
+        display: &str,
+    ) -> (WorkspaceAlias, TempDir) {
+        let alias = WorkspaceAlias::new(alias_text).expect("alias");
+        let path = temp_dir(&format!("acpr-ws-{unique}-{}", std::process::id()));
+        let record = WorkspaceRecord::try_new(
+            alias.clone(),
+            display,
+            path.to_str().expect("path"),
+            crate::broker::test_support::ts(0),
+            crate::broker::test_support::ts(0),
+        )
+        .expect("workspace record");
+        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        (alias, path)
+    }
+
+    /// 一个带目录的会话（登记目录 + 打开后端），返回会话 id、别名与目录守卫。
+    ///
+    /// 守卫必须交回调用方：恢复路径会重新校验持久化 cwd，目录提前消失就不是「别名不被恢复改写」
+    /// 而是「目录已删除」了。
+    fn create_session_in(
+        fixture: &Fixture,
+        unique: u64,
+    ) -> (crate::model::SessionId, WorkspaceAlias, TempDir) {
+        let (alias, dir) = register_workspace(fixture, unique, "repo", "Repository");
+        let session = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            Some(alias.clone()),
+        ))
+        .expect("create");
+        (session, alias, dir)
+    }
+
+    /// 读路径投影出的目录归属：`别名|展示名`（`None` = 未分组）。
+    fn projected_workspace(fixture: &Fixture, session: &crate::model::SessionId) -> Option<String> {
+        let summaries = block_on(fixture.use_cases.list_sessions(
+            &Actor::LocalCli,
+            SessionQuery {
+                only: None,
+                states: Vec::new(),
+                limit: None,
+            },
+        ))
+        .expect("list");
+        summaries
+            .into_iter()
+            .find(|summary| summary.session_id() == session)
+            .expect("会话在列表里")
+            .workspace()
+            .map(|workspace| {
+                format!(
+                    "{}|{}",
+                    workspace.alias().as_str(),
+                    workspace.display_name()
+                )
+            })
+    }
+
+    /// `design.md` D1/§3.6：创建时把**别名原文**与该次解析得到的规范化路径**一起**写进会话行，二者
+    /// 独立保存；归属投影取自持久化的别名（展示名按别名关联目录记录）。
+    #[test]
+    fn create_session_persists_the_resolved_alias_next_to_the_canonical_path() {
+        let fixture = fixture();
+        fixture.world.set_agent_session_id(
+            crate::model::AgentSessionId::new("acp-session-alias").expect("agent session id"),
+        );
+        let (created, alias, _dir) = create_session_in(&fixture, 201);
+
+        let state = lock(&fixture.world.state);
+        assert_eq!(
+            state.workspace_aliases.get(created.as_str()),
+            Some(&alias),
+            "别名原文按创建时的解析结果落盘"
+        );
+        assert!(
+            state.recoveries[created.as_str()].workspace_cwd.is_some(),
+            "路径与别名是同一次提交里的两列，互不推导"
+        );
+        drop(state);
+        assert_eq!(
+            projected_workspace(&fixture, &created).as_deref(),
+            Some("repo|Repository"),
+            "读路径按持久化别名投影展示名"
+        );
+    }
+
+    /// `design.md` D1/`workspace-resolution`：别名为 `NULL` 就是「未分组」，**不得**按 `workspace_cwd`
+    /// 反查别名解析表补齐——即使那条路径当前确实能匹配某个已登记目录。
+    #[test]
+    fn a_null_workspace_alias_is_never_backfilled_from_the_canonical_path() {
+        let fixture = fixture();
+        let (_alias, dir) = register_workspace(&fixture, 202, "repo", "Repository");
+        let canonical = std::fs::canonicalize(&*dir)
+            .expect("canonicalize")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        // 只有 cwd、别名列为 `NULL` 的既有行（v6 之前创建的会话就是这个形状）。
+        fixture.world.seed_recovery(
+            &fixture.session,
+            Some(crate::model::AgentSessionId::new("acp-legacy").expect("agent session id")),
+            Some(canonical),
+        );
+
+        assert_eq!(
+            projected_workspace(&fixture, &fixture.session),
+            None,
+            "路径能匹配到已登记目录也不得补出归属"
+        );
+    }
+
+    /// `design.md` D1：别名被改指到另一个目录并改名之后，既有会话的归属仍是那个别名、规范化路径列
+    /// 保持创建时的原值（展示名随目录记录更新——归属不漂移、路径不被改写）。
+    #[test]
+    fn repointing_a_workspace_keeps_the_persisted_ownership() {
+        let fixture = fixture();
+        fixture.world.set_agent_session_id(
+            crate::model::AgentSessionId::new("acp-session-repoint").expect("agent session id"),
+        );
+        let (created, alias, _dir) = create_session_in(&fixture, 203);
+        let original_cwd = lock(&fixture.world.state).recoveries[created.as_str()]
+            .workspace_cwd
+            .clone()
+            .expect("cwd");
+
+        let moved = temp_dir(&format!("acpr-ws-moved-{}", std::process::id()));
+        block_on(
+            fixture.use_cases.put_workspace(
+                &Actor::LocalCli,
+                WorkspaceRecord::try_new(
+                    alias,
+                    "Moved",
+                    moved.to_str().expect("path"),
+                    crate::broker::test_support::ts(1),
+                    crate::broker::test_support::ts(1),
+                )
+                .expect("workspace record"),
+            ),
+        )
+        .expect("put workspace");
+
+        assert_eq!(
+            projected_workspace(&fixture, &created).as_deref(),
+            Some("repo|Moved"),
+            "归属仍是原别名，展示名跟随目录记录"
+        );
+        assert_eq!(
+            lock(&fixture.world.state).recoveries[created.as_str()]
+                .workspace_cwd
+                .as_deref(),
+            Some(original_cwd.as_str()),
+            "规范化路径列保持创建时的原值，不被改写"
+        );
+    }
+
+    /// §3.6/`design.md` D6：恢复路径**不读也不写** `workspace_alias`——恢复输入仍只来自两列窄读取，
+    /// 落盘的别名在恢复前后逐字不变。
+    #[test]
+    fn resume_session_neither_reads_nor_rewrites_the_workspace_alias() {
+        let fixture = fixture();
+        fixture.world.set_agent_session_id(
+            crate::model::AgentSessionId::new("acp-session-resume-alias")
+                .expect("agent session id"),
+        );
+        let (created, _alias, _dir) = create_session_in(&fixture, 204);
+        let before = lock(&fixture.world.state).workspace_aliases.clone();
+
+        block_on(fixture.use_cases.resume_session(
+            &Actor::LocalCli,
+            resume_request_id(90),
+            digest('B'),
+            created.clone(),
+        ))
+        .expect("resume");
+
+        assert_eq!(
+            lock(&fixture.world.state).workspace_aliases,
+            before,
+            "恢复不得改写别名列"
+        );
+        let record = block_on(fixture.use_cases.store.load_recovery(&created))
+            .expect("load recovery")
+            .expect("恢复数据");
+        assert!(record.workspace_cwd.is_some(), "恢复输入仍只来自两列窄读取");
     }
 
     /// [R7]/§3.6：`agent_session_id()` 为 `None`（未取得标识）时**两列都不写**，也不产生那次追加

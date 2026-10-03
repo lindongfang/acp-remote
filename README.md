@@ -12,7 +12,7 @@
 | `acpr-wire` | 跨协议共用的 wire 值对象与字段校验机制（叶子 crate，无协议词表） |
 | `core` | `core::model` 的值对象与不变量、`core::use_cases` 用例面、`core::ports` 端口签名、`core::broker`（每会话串行、active turn、幂等、交互仲裁、先提交后发布、失败关闭）；运行时依赖只有 `async-trait`/`thiserror`/`p256`/`sha2`（后两者用于 `PeerPublicKey` 的构造期点校验与指纹派生） |
 | `storage-sqlite` | §7 的 `owned_*`/`imported_*` 表结构与 migration、保留窗口/容量清理（含 imported 家族度量）、附件内容寻址、崩溃恢复与只读失败关闭；实现 `SessionStore`/`ReadView`/`RemoteDeliveryStore`/`AttachmentStore`，以及 §7 管理表上的三个管理 store（`TrustStore`/`ExportStore`/`LocalConfigStore`：写集一事务提交、失败关闭、容量纳入） |
-| `sync-protocol` | v1 的全部 18 个消息类型（信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族 body）、33 个事件视图的类型化投影，以及配对 HTTPS 载荷（二维码 / claim / status / HTTP 错误体） |
+| `sync-protocol` | v1 的全部 18 个消息类型（信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族 body）、33 个事件视图的类型化投影、12 条 Sync 命令的封闭词表（含 `session.create` 的 `{ workspaceAlias, agentId }` payload 与 `completed { sessionId, session }` 终态结果），以及配对 HTTPS 载荷（二维码 / claim / status / HTTP 错误体） |
 | `node-link-protocol` | §9.3/§9.4 的 transcript domain/tag 表、v1 的全部 29 个消息类型（信封与分派，`handshake`/`catalog`/`resource`/`command`/`error` 五个家族 body）与配对 HTTPS 载荷 |
 | `acp-protocol` | JSON-RPC 信封分类与方向/required 校验、ACP v1 wire DTO（`initialize`/`session/new`/`session/prompt`/`session/update` 的 11 种判别子/`session/request_permission`/elicitation 与 content block）、`RawDocument` 原文承载与逐字节回写、capability wire 形状、固定 v1 消息上限（1 MiB），以及由 `fixtures/acp/v1/manifest.json` 与 `compatibility/acp/v1/matrix.json` 驱动的契约测试 |
 | `identity-auth` | 身份、配对、签名与授权的**纯状态机**：设备/节点一次性配对（创建/认领/落定/过期/重启终结/SAS）、逐连接 challenge-response（挑战一次性、注入时钟 15 秒窗口、验签公钥只来自持久化信任、P1363 only）、授权词表展开（`pack.*`/`preset.*`/`grant.*` → 命令级 scope，`local.*` 永不远程授予）与 12 个 transcript domain 的装配/验签/HMAC/SAS；不访问存储、不读系统时间、无平台 `cfg`，密钥与随机性经端口注入 |
@@ -24,6 +24,8 @@
 尚未开始：前端工程，以及 `node-link-client`（切片 6）与 `server::sync`/`server::acp_facade`（每落地一个才加入 workspace `members`）。
 
 Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已在 OpenSpec 变更 `session-resume` 中落地到组合根接线的真实 `SqliteStore` + `AgentHost`：`owned_session` 在文件格式 v5 追加可空的 `agent_session_id`/`workspace_cwd`（只追加、不推导），`acp-protocol` 有 `session/resume` 的类型化 DTO（`delivery = conditional_mvp`，端到端门控在 `agent-host`），`agent-host` 按持久化标识重新拉起进程并按 `sessionCapabilities.resume` 门控发送，`core` 有 `resume_session`/`settle_session_resume` 用例，`server::node_link` 路由 `session.resume`（授权先于本机读取、`payload` 非空即拒、终态与 `uncertain` 只用于崩溃窗口）。设计取舍见[会话延续设计](docs/SESSION_CONTINUITY_DESIGN.md)。仍需 Access 侧 `node-link-client` 才能从客户端发起。
+
+切片 7 的 **Sync 合同**已包含 `session.create` 与本机 workspace/Agent 目录（OpenSpec 变更 `sync-workspaces-and-create`）：命令目录把 `session.create` 的 transport 扩为 `["sync","node_link"]` 并归入新设备授权包 `pack.create-session`（不进任何 preset，Node Link 侧形状不变），`schemas/sync/v1/command.schema.json` 与 `sync-protocol` 的 `CommandName`/payload/result 一致登记，feature registry 新增 `core.session-create.v1` 与 `core.local-catalog.v1`，`identity-auth` 的 `PACKS` 镜像同步，`docs/SYNC_PROTOCOL.md` §5.2/§11.3/§11.5/§16.2、`docs/SECURITY_DESIGN.md` §9/§10.2/§11.2 与 `docs/FRONTEND_DESIGN.md` §2.2/§4.1/§7/§9 随之更新，固定向量见 `fixtures/sync/v1/`。**这只是合同**：快照组装、命令处理、授权判定与终态投递属 `server::sync`，仍未落地（见上一段的「仍未落地」）。
 
 当前优先交付 Windows x64 的 Daemon/CLI 与 Node Link 闭环，Linux 延后开发；完整平台顺序见 [初始设计 §14](docs/INITIAL_DESIGN.md#14-npm-分发)。共享代码的 Linux CI 保留，不代表 Linux 产品已可运行。
 

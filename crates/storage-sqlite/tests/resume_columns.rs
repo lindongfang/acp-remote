@@ -40,10 +40,12 @@ fn at() -> Timestamp {
     Timestamp::new(AT).expect("规范时间戳")
 }
 
-/// 把当前版本库回退成 **v4 形状**（去掉两列、降版本号），返回库文件路径。
+/// 把当前版本库回退成 **v4 形状**（去掉 v5/v6 才有的三列、降版本号），返回库文件路径。
 ///
 /// 与既有 `migration.rs` 的 v4 构造手法同源（`DROP COLUMN` + `PRAGMA user_version` + `meta` 回写 +
 /// `wal_checkpoint(TRUNCATE)`），**不新增 `fixtures/storage/v4/` 夹具**，避免与 WP4 的夹具族所有权纠缠。
+/// v6 追加的 `workspace_alias`（目录归属）也必须一起去掉——否则 v5 段加完两列、v6 段再加一列时，
+/// `ADD COLUMN` 会撞上「duplicate column」。本文件的判据仍只看**恢复两列**。
 async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
     let store = SqliteStore::open(StorageConfig::new(dir), &at())
         .await
@@ -51,7 +53,7 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
     store.close().await;
     let path = dir.join(DATABASE_FILE);
     let pool = raw_write_pool(&path).await;
-    for column in ["agent_session_id", "workspace_cwd"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -128,14 +130,14 @@ async fn ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
-// CR4-F3（强制输入）：v4→v5 必须是「ALTER 追加」，不得触发 12-step 重建。
+// CR4-F3（强制输入）：v4→v6 必须是「ALTER 追加」，不得触发 12-step 重建。
 // ---------------------------------------------------------------------------------------------
 
-/// **判别式**断言：v4→v5 段对 `owned_session` 只做 `ALTER TABLE … ADD COLUMN`，不重建表。
+/// **判别式**断言：v4→v6 段对 `owned_session` 只做 `ALTER TABLE … ADD COLUMN`，不重建表。
 ///
-/// 这正是 spec R13/R16 要求的性质（「两列只做追加，MUST NOT 触发 12-step 表重建」）。既有迁移用例
+/// 这正是 spec R13/R16 要求的性质（「这些列只做追加，MUST NOT 触发 12-step 表重建」）。既有迁移用例
 /// （`migration.rs`）对 `owned_session` 只断言 `after.contains("agent_session_id")`，因此**如果有人
-/// 把 v5 段误写成重建**（例如为加 CHECK 而重建 `owned_session`），那些断言**仍然会通过**。本用例补上
+/// 把 v5/v6 段误写成重建**（例如为加 CHECK 而重建 `owned_session`），那些断言**仍然会通过**。本用例补上
 /// 缺口，并且自带一条**反证**：本仓库的 12-step 重建段一律写成
 /// `CREATE TABLE owned_x_vN (…) … DROP TABLE owned_x; ALTER TABLE owned_x_vN RENAME TO owned_x`，
 /// SQLite 会把改名后的存储文本记成**带双引号的表名**（`CREATE TABLE "owned_x" (`），而
@@ -149,12 +151,12 @@ async fn ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
 ///    「表名是否带双引号」。
 /// 2. 既有列的**原始定义文本**（含列名后的空白与 `STRICT` 结尾）在升级后逐字节保留——重建会重排空白、
 ///    重新排版并改写 `STRICT` 之外的形式；
-/// 3. 两列位于列清单**末尾**且是纯追加（`PRAGMA table_info` 的 `cid` 连续、无空洞）；
+/// 3. 三列位于列清单**末尾**且是纯追加（`PRAGMA table_info` 的 `cid` 连续、无空洞）；
 /// 4. 反证：v1 库升级里**确实会重建**的 `owned_audit`，其文本以**带双引号**的
 ///    `CREATE TABLE "owned_audit" (` 开头（RENAME 的签名）——证明本用例的判别式不是恒真。若把 ① 的
 ///    判别式方向写反或改成恒真表达式，本断言会立刻失败。
 #[tokio::test]
-async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
+async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_owned_session() {
     let dir = temp_dir("tp2-append-not-rebuild");
     let path = rewind_to_v4(&dir).await;
     let before_pool = raw_pool(&path).await;
@@ -169,7 +171,7 @@ async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
 
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
-        .expect("v4 库必须能升到 v5");
+        .expect("v4 库必须能升到 v6");
     store.close().await;
 
     let pool = raw_pool(&path).await;
@@ -193,7 +195,12 @@ async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
         "owned_session 被 12-step 重建了（表名带引号是 RENAME 的签名）：{ddl_after}"
     );
     // 反向：重建不得在本库留下任何临时表（追加不建任何对象）。
-    for table in ["owned_session_v2", "owned_session_v3", "owned_session_v5"] {
+    for table in [
+        "owned_session_v2",
+        "owned_session_v3",
+        "owned_session_v5",
+        "owned_session_v6",
+    ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -221,13 +228,13 @@ async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
     // 追加列紧跟在最后一个既有列之后（SQLite 的追加渲染形状）。
     assert!(
         ddl_after.contains(&format!(
-            "{head_before}, agent_session_id TEXT, workspace_cwd TEXT)"
+            "{head_before}, agent_session_id TEXT, workspace_cwd TEXT, workspace_alias TEXT)"
         )),
-        "两列必须紧跟既有列追加：{ddl_after}"
+        "三列必须紧跟既有列追加：{ddl_after}"
     );
 
-    // ③ 列清单是「原 12 列 + 末尾两列」的严格追加，`cid` 连续无空洞。
-    assert_eq!(columns_after.len(), 14, "v5 的 owned_session 是 14 列");
+    // ③ 列清单是「原 12 列 + 末尾三列」的严格追加，`cid` 连续无空洞。
+    assert_eq!(columns_after.len(), 15, "v6 的 owned_session 是 15 列");
     assert_eq!(
         &columns_after[..12],
         &columns_before[..],
@@ -235,10 +242,15 @@ async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
     );
     assert_eq!(columns_after[12].0, "agent_session_id");
     assert_eq!(columns_after[13].0, "workspace_cwd");
+    assert_eq!(columns_after[14].0, "workspace_alias");
     assert_eq!(
-        (&columns_after[12].1, &columns_after[13].1),
-        (&"TEXT".to_owned(), &"TEXT".to_owned()),
-        "两列都是 TEXT"
+        (
+            &columns_after[12].1,
+            &columns_after[13].1,
+            &columns_after[14].1
+        ),
+        (&"TEXT".to_owned(), &"TEXT".to_owned(), &"TEXT".to_owned()),
+        "三列都是 TEXT"
     );
     let cids: Vec<i64> = sqlx::query_scalar("SELECT cid FROM pragma_table_info('owned_session')")
         .fetch_all(&pool)
@@ -246,11 +258,11 @@ async fn v5_appends_the_recovery_columns_instead_of_rebuilding_owned_session() {
         .expect("读 cid");
     assert_eq!(
         cids,
-        (0..14).collect::<Vec<i64>>(),
+        (0..15).collect::<Vec<i64>>(),
         "cid 必须连续无空洞（追加不会留空洞；重建会按重建脚本重排）"
     );
 
-    // ④ 反证：v1→v5 的路径里**确实**重建 `owned_audit`，其文本的表名**带双引号**（RENAME 的签名）——
+    // ④ 反证：v1→v6 的路径里**确实**重建 `owned_audit`，其文本的表名**带双引号**（RENAME 的签名）——
     //    因此 ① 的判别式不是恒真（若方向写反，本断言会立刻失败）。
     let v1_dir = temp_dir("tp2-append-not-rebuild-v1");
     let v1_path = copy_fixture("from-v1.sqlite3", &v1_dir);
@@ -563,15 +575,22 @@ async fn two_consecutive_opens_leave_the_schema_byte_identical() {
         scalar_i64(&pool, "PRAGMA user_version").await,
         FILE_FORMAT_VERSION
     );
-    assert_eq!(meta_version_of(&pool, "owned_schema_version").await, "5");
-    assert_eq!(meta_version_of(&pool, "imported_schema_version").await, "3");
-    // 每条 owned 表的 DDL 都必须带上两列（且只有 owned_session 带）。
+    assert_eq!(
+        meta_version_of(&pool, "owned_schema_version").await,
+        OWNED_SCHEMA_VERSION.to_string()
+    );
+    assert_eq!(
+        meta_version_of(&pool, "imported_schema_version").await,
+        IMPORTED_SCHEMA_VERSION.to_string()
+    );
+    // 每条 owned 表的 DDL 都必须带上追加的三列（且只有 owned_session 带）。
     assert!(
         schema.iter().any(|(kind, name, sql)| kind == "table"
             && name == "owned_session"
             && sql.contains("agent_session_id")
-            && sql.contains("workspace_cwd")),
-        "owned_session 的 DDL 必须含两列：{schema:?}"
+            && sql.contains("workspace_cwd")
+            && sql.contains("workspace_alias")),
+        "owned_session 的 DDL 必须含追加的三列：{schema:?}"
     );
     // 再开第三次仍不重写任何文本。
     pool.close().await;

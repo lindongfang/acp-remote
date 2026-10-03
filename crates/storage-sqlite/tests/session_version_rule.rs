@@ -169,6 +169,7 @@ async fn state_change_commits_bump_the_session_version_by_one() {
             closed_at: None,
             agent_session_id: None,
             workspace_cwd: None,
+            workspace_alias: None,
             interaction: None,
         }))
     };
@@ -226,6 +227,7 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
                 interaction: None,
             })),
             Vec::new(),
@@ -270,6 +272,7 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
                     closed_at: None,
                     agent_session_id: None,
                     workspace_cwd: None,
+                    workspace_alias: None,
                     interaction: None,
                 })),
                 Vec::new(),

@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "e2b7c490-1f38-4d65-9a0c-7d6e3b8f1a54",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "56",
+  "body": {
+    "requestId": "5f2a91c4-8d3b-4e77-b0a6-1c4d9e8f2a35",
+    "command": "session.create",
+    "status": "accepted",
+    "acceptedAt": "2026-09-17T12:12:00.000Z",
+    "terminalEventId": null,
+    "result": null,
+    "error": null
+  }
+}

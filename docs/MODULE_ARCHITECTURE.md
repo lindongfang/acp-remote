@@ -189,7 +189,7 @@ ClientCommand / CommandPayload / CommandReceipt / CommandRecord / CommandTermina
 InteractionId / InteractionKind / InteractionOption / PermissionDecision / InteractionResolution / PendingInteraction / Resolution
 Event / EventType / EventKind / EventOrigin / EventPayload / AcpRaw / PersistencePolicy / StoredPolicy
 AgentRef / AgentDescriptor / CapabilitySet / ConfigOptionId / ConfigOption / ConfigValue / ModeRef / ModeId
-AgentSessionId / ResumeSessionRequest / SessionRecoveryRecord
+AgentSessionId / ResumeSessionRequest / SessionRecoveryRecord / WorkspaceRef
 Sequence / Version / AttachmentGeneration / ServerEpoch / OriginEpoch / GlobalCursor / OriginCursor / LocalCursor / Timestamp / Digest
 Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord / AuditRecord / AuditAction
 ```
