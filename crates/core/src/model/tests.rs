@@ -540,7 +540,7 @@ fn session_constructor_checks_cross_field_invariants() {
         Err(InvalidValue::TooLong { max: 512 })
     );
 
-    let summary = local_session(SessionState::Running, None).summary();
+    let summary = local_session(SessionState::Running, None).summary(None);
     assert_eq!(summary.session_id(), &session_id());
     assert_eq!(summary.state(), SessionState::Running);
     assert_eq!(summary.version(), Version::from(1));
@@ -2539,6 +2539,43 @@ fn agent_session_id_is_bounded_and_nul_free() {
         PortError::from(InvalidValue::AgentSessionId),
         PortError::InvalidRequest("agent session id must be 1..=512 characters without NUL")
     ));
+}
+
+/// §3.1：`WorkspaceRef` 只承载 `{ alias, displayName }`；`display_name` 走仓库对「展示名」类字段的
+/// 统一口径 `require_bounded(1, 128)`（与 `WorkspaceRecord::display_name` / `AgentRef` 相同）——
+/// 只数 Unicode 字符数，**不**查 NUL，NUL 校验只施加于路径与命令行类字段。
+#[test]
+fn workspace_ref_bounds_the_display_name_and_keeps_both_fields() {
+    let alias = WorkspaceAlias::new("acp-remote").expect("alias");
+
+    let workspace = WorkspaceRef::try_new(alias.clone(), "Repo").expect("workspace ref");
+    assert_eq!(workspace.alias(), &alias);
+    assert_eq!(workspace.alias().as_str(), "acp-remote");
+    assert_eq!(workspace.display_name(), "Repo");
+
+    assert_eq!(
+        WorkspaceRef::try_new(alias.clone(), ""),
+        Err(InvalidValue::Empty)
+    );
+    assert_eq!(
+        WorkspaceRef::try_new(alias.clone(), &"r".repeat(129)),
+        Err(InvalidValue::TooLong { max: 128 })
+    );
+    assert_eq!(
+        WorkspaceRef::try_new(alias.clone(), &"r".repeat(128))
+            .expect("上限内")
+            .display_name()
+            .chars()
+            .count(),
+        128
+    );
+    // 现行口径下展示名不查 NUL（NUL 只作用于路径/命令行字段）：构造成功，原文往返。
+    assert_eq!(
+        WorkspaceRef::try_new(alias, "Re\0po")
+            .expect("与 WorkspaceRecord 同口径")
+            .display_name(),
+        "Re\0po"
+    );
 }
 
 /// §3.6：`ResumeSessionRequest` 只承载**持久化的**取值，其中 `workspace_cwd` 必须是绝对路径形状

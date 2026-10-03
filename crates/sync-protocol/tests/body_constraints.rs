@@ -122,6 +122,107 @@ fn snapshot_chunk_index_is_a_decimal_string_and_items_follow_the_resource() {
     assert!(unknown_resource.is_err(), "未登记的 resource 必须被拒");
 }
 
+/// `workspaces`/`agents` 是与既有六类同级的快照资源：元素形状由 `resource` 决定，未登记取值被拒，
+/// 且 `items` 里只允许出现 wire 合同的两个字段（`canonicalPath` 之类一律拒）。
+#[test]
+fn catalog_snapshot_resources_enforce_their_item_shape() {
+    let chunk = |resource: &str, items: &str| {
+        format!(
+            "{{\"snapshotId\":\"{EVENT_ID}\",\"chunkIndex\":\"0\",\"resource\":\"{resource}\",\"items\":{items}}}"
+        )
+    };
+
+    let workspaces: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk(
+            "workspaces",
+            "[{\"alias\":\"project.1\",\"displayName\":\"Project One\"}]",
+        ),
+    );
+    assert!(
+        workspaces.is_ok(),
+        "workspaces chunk 必须被接受：{workspaces:?}"
+    );
+
+    let agents: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk(
+            "agents",
+            "[{\"agentId\":\"claude-code\",\"displayName\":\"Claude Code\",\"default\":true}]",
+        ),
+    );
+    assert!(agents.is_ok(), "agents chunk 必须被接受：{agents:?}");
+
+    // `default` 是必填：缺它就不是 `agentCatalogEntry`。
+    let missing_default: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk(
+            "agents",
+            "[{\"agentId\":\"claude-code\",\"displayName\":\"Claude Code\"}]",
+        ),
+    );
+    assert!(missing_default.is_err(), "agents item 缺 default 必须被拒");
+
+    // 本机规范化路径不得出现在 wire 上（§12.3）：多一个键即拒。
+    let leaked_path: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk(
+            "workspaces",
+            "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"canonicalPath\":\"C:/src/p\"}]",
+        ),
+    );
+    assert!(leaked_path.is_err(), "workspaces item 带路径必须被拒");
+
+    // 两类资源的 items 不得互换。
+    let swapped: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk("workspaces", "[{\"agentId\":\"claude-code\"}]"),
+    );
+    assert!(swapped.is_err(), "resource 与 items 形状不符必须被拒");
+}
+
+/// `sessionSummary.workspace` 是 feature 门控下的可选字段，三态必须各自保持自己的字节形状：
+/// 键缺席（未协商）、显式 `null`（未分组）、带引用。往返把显式 `null` 压成缺席会让
+/// `additionalProperties: false` 下的旧客户端行为与新客户端分歧，因此这一条逐态比对重编码结果。
+#[test]
+fn session_summary_workspace_keeps_absent_null_and_value_apart() {
+    let summary_with = |workspace: &str| {
+        format!(
+            "{{\"sessionId\":\"{SESSION_ID}\",\"title\":null,\"agent\":{{\"agentId\":\"omp\",\"name\":\"Oh My Pi\"}},\"state\":\"idle\",\"origin\":{{\"kind\":\"local\"}},\"currentMode\":null,\"version\":\"7\",\"createdAt\":\"{CREATED_AT}\",\"updatedAt\":\"{CREATED_AT}\"{workspace}}}"
+        )
+    };
+
+    for (workspace, expected) in [
+        // 缺席：与旧客户端看到的字节完全一致，一个字段都不多。
+        ("", "absent"),
+        (",\"workspace\":null", "null"),
+        (
+            ",\"workspace\":{\"alias\":\"project.1\",\"displayName\":\"Project One\"}",
+            "value",
+        ),
+    ] {
+        let parsed: SessionSummary = serde_json::from_str(&summary_with(workspace))
+            .unwrap_or_else(|error| panic!("{expected} 形态必须合法：{error}"));
+        let reserialized = serde_json::to_value(&parsed).expect("已解码的摘要必然可序列化");
+        match expected {
+            "absent" => assert!(
+                reserialized.get("workspace").is_none(),
+                "未协商时 workspace 必须是**缺席**而不是 null：{reserialized}"
+            ),
+            "null" => assert_eq!(
+                reserialized.get("workspace"),
+                Some(&serde_json::Value::Null),
+                "显式 null 的键不得在往返中被压成缺席：{reserialized}"
+            ),
+            _ => assert_eq!(
+                reserialized["workspace"]["alias"],
+                serde_json::json!("project.1"),
+                "带引用的形态必须原样往返：{reserialized}"
+            ),
+        }
+    }
+}
+
 #[test]
 fn snapshot_session_state_enum_is_enforced() {
     let ok: Result<SnapshotChunk, String> = decode(

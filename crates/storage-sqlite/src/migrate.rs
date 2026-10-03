@@ -14,12 +14,12 @@ use sqlx::{Executor, Sqlite};
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v5：`owned_session` 末尾新增 `agent_session_id`/
-/// `workspace_cwd`）。
-pub const FILE_FORMAT_VERSION: i64 = 5;
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v6：`owned_session` 末尾新增目录归属列
+/// `workspace_alias`；v5 追加的 `agent_session_id`/`workspace_cwd` 保持不变）。
+pub const FILE_FORMAT_VERSION: i64 = 6;
 /// §7.2：`meta.owned_schema_version` 的已知版本。
-pub const OWNED_SCHEMA_VERSION: i64 = 5;
-/// §7.2：`meta.imported_schema_version` 的已知版本（本次不变：v5 只动 owned 家族的 `owned_session`）。
+pub const OWNED_SCHEMA_VERSION: i64 = 6;
+/// §7.2：`meta.imported_schema_version` 的已知版本（v5/v6 都只动 owned 家族的 `owned_session`）。
 pub const IMPORTED_SCHEMA_VERSION: i64 = 3;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS owned_session (
   updated_at        TEXT NOT NULL,
   closed_at         TEXT,
   agent_session_id  TEXT,                      -- Agent（ACP）侧会话标识；NULL = 该会话没有可用于恢复的标识，不得被补齐/推导
-  workspace_cwd     TEXT                       -- 创建时解析出的规范化绝对路径；NULL = 同上（不得按别名重解析来填上）
+  workspace_cwd     TEXT,                      -- 创建时解析出的规范化绝对路径；NULL = 同上（不得按别名重解析来填上）
+  workspace_alias   TEXT                       -- 创建时解析使用的目录别名原文；NULL = 未分组（不得按 workspace_cwd 反查补齐）
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS owned_turn (
@@ -637,6 +638,21 @@ ALTER TABLE owned_session ADD COLUMN agent_session_id TEXT;
 ALTER TABLE owned_session ADD COLUMN workspace_cwd TEXT;
 "#;
 
+/// §7.2 的 v5 → v6 升级：`owned_session` 末尾追加 `workspace_alias`（会话的目录归属）。
+///
+/// **只加列，不做 12-step 表重建**（重建的唯一理由是改既有 CHECK，v2 → v3 的先例）：一列可空、
+/// **无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有目录归属（未分组）」，
+/// `MUST NOT` 被任何读取路径按 `workspace_cwd` 反查 `owned_workspace` 补齐，也 `MUST NOT` 用空串或
+/// 占位别名代替（空串做不到这一点：它会让「已分组」判定被默认值蒙蔽，与 v5 两列同一理由）。
+///
+/// 该列与 v5 两列同属会话创建的那一次窄写提交（`CASE WHEN ?x IS NULL THEN col ELSE ?x END`），
+/// 恢复流程既不读也不改它。`ALTER TABLE ADD COLUMN` 把列追加在末尾，因此升级库与新建库的
+/// `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。本段不碰 `imported_*`（imported 家族版本
+/// 保持 3），也不碰任何行与序号。
+const V6_UPGRADE_OWNED: &str = r#"
+ALTER TABLE owned_session ADD COLUMN workspace_alias TEXT;
+"#;
+
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
 ///
 /// 配置加载属 `app`；本结构只承载 `storage-sqlite` 需要知道的部分（`storage.flush_interval_ms` 不在
@@ -946,7 +962,7 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 ///
 /// 事务内每段升级另有自己的版本守卫（`file_version < N`，见函数体），因此老库连续升级、而「已经比某段
 /// 新」的库不会重跑那一段的 12-step 重建。v4 段另外只作用于**升级前就存在**的 `owned_node`（v1 库没有
-/// 这张表，它由 DDL 常量直接建成当前形状）；v5 段的追加对象 `owned_session` 是「升级库 vs 新建库」的
+/// 这张表，它由 DDL 常量直接建成当前形状）；v5/v6 两段的追加对象 `owned_session` 是「升级库 vs 新建库」的
 /// 判据本身，走升级分支即必然已存在。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
     let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
@@ -963,8 +979,8 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
     // v4 段只给**升级前就存在**的 `owned_node` 追加列：v1 库没有这张表，它由下面的 DDL 常量按**当前
     // 形状**（已含 `export_ids_json`）建出来，那时再 `ALTER TABLE ADD COLUMN` 就是重复列。
     let owned_node_pre_existing = table_exists(&mut *tx, "owned_node").await?;
-    // v5 段的追加对象是 `owned_session`，而它正是「库是升级库还是新建库」的判据：走升级分支就说明它
-    // 在 DDL 常量执行前已经存在（v1 起每代都有这张表），因此 v5 段不再单独探测。
+    // v5/v6 两段的追加对象是 `owned_session`，而它正是「库是升级库还是新建库」的判据：走升级分支就说明它
+    // 在 DDL 常量执行前已经存在（v1 起每代都有这张表），因此这两段不再单独探测。
 
     sqlx::raw_sql(OWNED_SCHEMA_V1).execute(&mut *tx).await?;
     sqlx::raw_sql(IMPORTED_SCHEMA_V1).execute(&mut *tx).await?;
@@ -988,11 +1004,11 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
     }
 
     if !new_database && file_version < FILE_FORMAT_VERSION {
-        // v1 → v2 → v3 → v4 → v5（§7.2 的连续升级）：两张审计表的 CHECK 扩宽与 `imported_import` 的
+        // v1 → v2 → v3 → v4 → v5 → v6（§7.2 的连续升级）：两张审计表的 CHECK 扩宽与 `imported_import` 的
         // 拆分必须在同一个事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态
         // （§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此 v2/v3 两段都是 12-step 表重建，且把
-        // 全部行（含 `audit_id`）一起搬过去；v4 段只往 `owned_node` 加列、v5 段只往 `owned_session`
-        // 加列（都不重建）。
+        // 全部行（含 `audit_id`）一起搬过去；v4 段只往 `owned_node` 加列、v5/v6 两段只往
+        // `owned_session` 加列（都不重建）。
         //
         // 每段都有自己的版本守卫（`file_version < N`）：升级判据是 `file_version < FILE_FORMAT_VERSION`，
         // 不守卫的段会在「文件格式已经比该段新、但仍低于最新版」时重复执行那些 12-step 重建——例如
@@ -1014,6 +1030,9 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         }
         if file_version < 5 {
             sqlx::raw_sql(V5_UPGRADE_OWNED).execute(&mut *tx).await?;
+        }
+        if file_version < 6 {
+            sqlx::raw_sql(V6_UPGRADE_OWNED).execute(&mut *tx).await?;
         }
         restore_audit_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

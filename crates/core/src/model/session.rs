@@ -25,8 +25,8 @@ use super::error::InvalidValue;
 use super::identity::Actor;
 use super::ids::{
     AgentRef, ConfigOptionId, EventId, ExportId, InteractionId, ModeId, ModeRef, NodeId,
-    OriginEpoch, OwnedSessionRef, RemoteSessionRef, RequestId, SessionId, TurnId, is_error_code,
-    is_scope_name, require_bounded,
+    OriginEpoch, OwnedSessionRef, RemoteSessionRef, RequestId, SessionId, TurnId, WorkspaceRef,
+    is_error_code, is_scope_name, require_bounded,
 };
 use super::scalars::{Digest, GlobalCursor, Timestamp, Version};
 
@@ -286,7 +286,11 @@ impl Session {
     }
 
     /// 可投影摘要（`SYNC_PROTOCOL.md` §9.6 的 `sessionSummary`）。
-    pub fn summary(&self) -> SessionSummary {
+    ///
+    /// `workspace` 由调用方给出：`Session` 聚合**不持有**目录别名（别名是 `owned_session` 上的一列
+    /// 归属数据，与 `agent_session_id`/`workspace_cwd` 同属窄列口径），因此本方法必须显式接收读取
+    /// 路径给出的引用；不给就是「未分组」，core 不会替调用方去反查别名（§3.6、`design.md` D1）。
+    pub fn summary(&self, workspace: Option<WorkspaceRef>) -> SessionSummary {
         SessionSummary {
             session_id: self.id.clone(),
             title: self.title.clone(),
@@ -297,12 +301,18 @@ impl Session {
             version: self.version,
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            workspace,
         }
     }
 }
 
 /// `Session` 的可投影子集：owned 与 imported 用同一形状，且**不含任何正文**
 /// （`SYNC_PROTOCOL.md` §9.6）。
+///
+/// `workspace` 是会话的目录归属（`{ alias, displayName } | null`）：它**只**来自会话行上持久化的
+/// `workspace_alias`，读路径 MUST NOT 按 `workspace_cwd` 反查别名解析表来补齐（§3.6/§5.2，
+/// `design.md` D1）。`Session` 聚合本身不持有该值（别名不是会话的状态，见 [`Session::summary`]），
+/// 因此这里的取值由存储层在读会话行时给出。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSummary {
     session_id: SessionId,
@@ -314,6 +324,7 @@ pub struct SessionSummary {
     version: Version,
     created_at: Timestamp,
     updated_at: Timestamp,
+    workspace: Option<WorkspaceRef>,
 }
 
 impl SessionSummary {
@@ -329,6 +340,7 @@ impl SessionSummary {
         version: Version,
         created_at: Timestamp,
         updated_at: Timestamp,
+        workspace: Option<WorkspaceRef>,
     ) -> Result<Self, InvalidValue> {
         if let Some(title) = &title {
             require_bounded(title, 0, 512)?;
@@ -343,6 +355,7 @@ impl SessionSummary {
             version,
             created_at,
             updated_at,
+            workspace,
         })
     }
 
@@ -389,6 +402,11 @@ impl SessionSummary {
     /// 最近更新时间。
     pub fn updated_at(&self) -> &Timestamp {
         &self.updated_at
+    }
+
+    /// 目录归属：`None` = 未分组（持久化别名为 `NULL`；不得由 `workspace_cwd` 推导补齐）。
+    pub fn workspace(&self) -> Option<&WorkspaceRef> {
+        self.workspace.as_ref()
     }
 }
 

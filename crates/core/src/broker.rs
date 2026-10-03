@@ -891,6 +891,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             }))
         };
         let turns = vec![TurnChange::Create(NewTurn {
@@ -1022,6 +1023,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
+                    workspace_alias: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1089,6 +1091,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
+                    workspace_alias: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1287,6 +1290,7 @@ impl Broker {
             }),
             agent_session_id: None,
             workspace_cwd: None,
+            workspace_alias: None,
         });
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -1428,21 +1432,27 @@ impl Broker {
         let slot = self.owned_slot(&session);
         let sink = self.sink(&session);
         // 两列的落盘取值必须在 `create` 消费掉请求之前取出：`workspace_cwd` 来自 core **自己**已解析
-        // 的结果（不依赖后端回报），`agent_session_id` 来自后端对 `session/new` 的实际响应。
+        // 的结果（不依赖后端回报），`workspace_alias` 是同一次解析用掉的**别名原文**（目录归属的权威
+        // 投影来源，`design.md` D1），`agent_session_id` 来自后端对 `session/new` 的实际响应。
         let workspace_cwd = create
             .workspace
             .as_ref()
             .map(|workspace| workspace.canonical_path().to_owned());
+        let workspace_alias = create
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.alias().as_str().to_owned());
         let endpoint: Arc<dyn SessionEndpoint> = self
             .deps
             .backends
             .create(&session, create, sink)
             .await?
             .into();
-        // 恢复所需的两个取值在 `factory.create` 成功返回后**紧接着**落盘（§6 第 20 条、§5.2）：
-        // 不等适配层的终态提交——那样会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，
-        // 而且终态提交拿不到 core 解析出的 cwd。`agent_session_id()` 为 `None`（未取得标识）时
-        // **两列都不写**：该会话不被当作可恢复会话，`NULL` 就是「没有可用于恢复的数据」（§3.6）。
+        // 恢复所需的两个取值与目录别名在 `factory.create` 成功返回后**紧接着**落盘（§6 第 20 条、
+        // §5.2）：不等适配层的终态提交——那样会让回归给 Access 的 `sessionMeta.version` 与落盘值
+        // 错开，而且终态提交拿不到 core 解析出的 cwd。`agent_session_id()` 为 `None`（未取得标识）时
+        // **三列都不写**：该会话不被当作可恢复会话，`NULL` 就是「没有可用于恢复的数据」（§3.6），
+        // 目录归属同理为「未分组」。别名此后**只读**：恢复路径不读也不改它。
         if let Some(agent_session_id) = endpoint.agent_session_id().cloned() {
             let at = self.now();
             let commit = OwnedCommit {
@@ -1456,6 +1466,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: Some(agent_session_id),
                     workspace_cwd,
+                    workspace_alias,
                 })),
                 turns: Vec::new(),
                 events: Vec::new(),
@@ -2040,6 +2051,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             })
         });
         let kinds: Vec<EventKind> = events.iter().map(|event| event.kind).collect();
@@ -2158,6 +2170,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: next.turn.clone(),
@@ -2221,6 +2234,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.turn.clone(),
@@ -2349,6 +2363,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.clone(),
@@ -2620,6 +2635,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
+                    workspace_alias: None,
                 }));
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
                 events.extend(self.backfill_completed(&*view, &page, turn.id()).await?);
@@ -3777,7 +3793,7 @@ pub(crate) mod test_support {
         OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
         PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
         ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
-        WorkspaceAlias, WorkspaceRecord,
+        WorkspaceAlias, WorkspaceRecord, WorkspaceRef,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -3960,11 +3976,42 @@ pub(crate) mod test_support {
         pub(crate) workspace_cwd: Option<String>,
     }
 
+    impl FakeWorld {
+        /// 读取路径上的目录归属（§3.6/§5.2、`design.md` D1）：**只**按会话行持久化的
+        /// `workspace_alias` 取值，展示名按别名查目录记录（storage 侧那条 LEFT JOIN 的等价物），
+        /// 目录记录不存在时回退为别名本身——因此目录被删除/改名都不影响既有会话的归属。
+        ///
+        /// 本函数**不**看 `workspace_cwd`：`NULL` 就是未分组，任何情况下都不按路径反查别名。
+        pub(crate) fn workspace_ref(
+            &self,
+            state: &WorldState,
+            session: &SessionId,
+        ) -> Option<WorkspaceRef> {
+            let alias = state.workspace_aliases.get(session.as_str())?;
+            let display_name = lock(&self.workspaces)
+                .iter()
+                .find(|record| record.alias() == alias)
+                .map_or_else(
+                    || alias.as_str().to_owned(),
+                    |record| record.display_name().to_owned(),
+                );
+            // 取值来自已校验的 `WorkspaceRecord.display_name`（或别名原文），构造不会失败。
+            Some(
+                WorkspaceRef::try_new(alias.clone(), &display_name)
+                    .expect("目录引用的展示名已由值对象校验过"),
+            )
+        }
+    }
+
     #[derive(Default)]
     pub(crate) struct WorldState {
         pub(crate) sessions: HashMap<String, Session>,
         /// 会话 id → `owned_session` 的两列恢复数据（§3.6 的窄读取源）。
         pub(crate) recoveries: HashMap<String, RecoveryColumns>,
+        /// 会话 id → `owned_session.workspace_alias`（目录归属的**唯一**来源；缺席 = `NULL` = 未分组）。
+        ///
+        /// 与 `sessions`/`recoveries` 分开存，和 storage 侧一样：别名不是聚合的状态，恢复流程也不读它。
+        pub(crate) workspace_aliases: HashMap<String, WorkspaceAlias>,
         pub(crate) turns: HashMap<String, Vec<Turn>>,
         pub(crate) events: Vec<CommittedEvent>,
         pub(crate) commands: HashMap<String, CommandRecord>,
@@ -4464,6 +4511,12 @@ pub(crate) mod test_support {
                             columns.workspace_cwd = Some(workspace_cwd);
                         }
                     }
+                    // §5.2：`workspace_alias` 同为窄写列，`None` = 不改；写入后只被读路径消费。
+                    if let Some(alias) = update.workspace_alias.clone() {
+                        state
+                            .workspace_aliases
+                            .insert(session_id.as_str().to_owned(), WorkspaceAlias::new(&alias)?);
+                    }
                 }
                 None => {}
             }
@@ -4837,7 +4890,7 @@ pub(crate) mod test_support {
                 .filter(|session| {
                     query.states.is_empty() || query.states.contains(&session.state())
                 })
-                .map(|session| session.summary())
+                .map(|session| session.summary(self.world.workspace_ref(&state, session.id())))
                 .collect();
             if let Some(limit) = query.limit {
                 summaries.truncate(limit as usize);
@@ -5049,7 +5102,7 @@ pub(crate) mod test_support {
                 })
                 .collect();
             Ok(NodeLinkSlice {
-                summary: stored.summary(),
+                summary: stored.summary(self.world.workspace_ref(&state, session)),
                 head: OriginCursor {
                     origin_epoch: epoch,
                     origin_sequence: Sequence::new(head_sequence)
@@ -5115,7 +5168,7 @@ pub(crate) mod test_support {
                 Vec::new()
             };
             Ok(HistoryPage {
-                session: session.summary(),
+                session: session.summary(self.world.workspace_ref(&state, &query.session)),
                 events,
                 turns,
                 interactions,
@@ -7381,6 +7434,7 @@ mod tests {
                 }),
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -7941,6 +7995,7 @@ mod tests {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
+                    workspace_alias: None,
                 })),
                 turns: vec![TurnChange::Create(NewTurn {
                     turn: turn.clone(),
@@ -8357,6 +8412,7 @@ mod tests {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
             })),
             turns: Vec::new(),
             events: vec![event],

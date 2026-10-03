@@ -220,6 +220,25 @@
         "originSequence": { "$ref": "#/$defs/decimalString" }
       }
     },
+    "workspaceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "displayName"],
+      "properties": {
+        "alias": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "agentCatalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentId", "displayName", "default"],
+      "properties": {
+        "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "default": { "type": "boolean" }
+      }
+    },
     "sessionSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -245,7 +264,10 @@
         },
         "version": { "$ref": "#/$defs/decimalString" },
         "createdAt": { "$ref": "#/$defs/timestamp" },
-        "updatedAt": { "$ref": "#/$defs/timestamp" }
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "workspace": {
+          "oneOf": [{ "$ref": "#/$defs/workspaceRef" }, { "type": "null" }]
+        }
       }
     },
     "agentContentBlock": {

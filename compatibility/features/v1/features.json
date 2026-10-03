@@ -35,6 +35,18 @@
           "description": "imported 资源来源承载（§9.6：ownerNodeId/exportId/origin cursor/online）",
           "delivery": "mvp",
           "required": false
+        },
+        {
+          "id": "core.local-catalog.v1",
+          "description": "本机 workspace 目录与 Agent profile 随快照下发（§9.4 `workspaces`/`agents` 资源与 §10.3 的 workspaceRef/agentCatalogEntry），`session.create` 的选择器由它供数",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.session-create.v1",
+          "description": "Sync 面 `session.create`（§11.5 的 `{ workspaceAlias, agentId }` payload 与 completed 终态结果）",
+          "delivery": "mvp",
+          "required": false
         }
       ]
     },

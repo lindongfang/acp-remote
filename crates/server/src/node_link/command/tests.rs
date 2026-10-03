@@ -102,6 +102,9 @@ fn session_summary_of(session: &str) -> SessionSummary {
         Version::new(3),
         ts("2026-09-18T09:00:00.000Z"),
         ts("2026-09-18T09:12:00.000Z"),
+        // Node Link 的 `sessionMeta` 只取 `state`/`version`（`NODE_LINK_PROTOCOL.md` §12.4），目录归属
+        // 不在 Node Link 的投影面内。
+        None,
     )
     .expect("会话摘要")
 }
@@ -293,6 +296,7 @@ impl SessionStore for CommandStore {
                 Version::new(1),
                 commit.at.clone(),
                 commit.at.clone(),
+                None,
             )
             .expect("新建会话摘要"),
         );
@@ -2477,6 +2481,7 @@ async fn session_list_only_returns_sessions_of_visible_exports() {
             Version::new(1),
             ts("2026-09-18T09:00:00.000Z"),
             ts("2026-09-18T09:00:00.000Z"),
+            None,
         )
         .expect("会话摘要"),
     );
