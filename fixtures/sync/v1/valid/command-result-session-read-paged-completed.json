@@ -1,0 +1,50 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "5d92b6e1-07ac-4f38-b2d4-9e1a6c3f8057",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "62",
+  "body": {
+    "requestId": "a1d95f30-6c47-4e82-bb09-3f7a2c5e8d61",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:12:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": [
+          {
+            "messageId": "c3a91d40-5e18-42b7-8f06-1d2e3f4a5b6c",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "先跑一遍测试。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:58:00.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          },
+          {
+            "messageId": "7a4e60b2-8c31-4d59-a7f2-0b9c8d7e6f50",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "失败的那条再看一下。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:58:00.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          },
+          {
+            "messageId": "1b6d3f85-4a27-4c90-b3e8-5d2f1a0c9b74",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "agent",
+            "content": [{ "type": "text", "text": "这条已经修好了。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:59:00.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          }
+        ]
+      },
+      "hasEarlier": true
+    },
+    "error": null
+  }
+}

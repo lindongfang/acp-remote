@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "6a4d1f83-2b07-4e59-8c31-7d5e0f9a3b62",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "64",
+  "body": {
+    "requestId": "b7c30e59-8a14-4d76-92f0-3e6b1d4c8a05",
+    "command": "session.read",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "payload": {
+      "include": ["messages"],
+      "before": {
+        "messageId": "7c1d4e6f-8a90-4b2c-9d3e-5f6a7b8c9d0e"
+      },
+      "limit": 20
+    }
+  }
+}

@@ -118,13 +118,19 @@
                 "snapshotId": { "$ref": "common.schema.json#/$defs/uuid" },
                 "cursor": { "$ref": "common.schema.json#/$defs/cursor" },
                 "schemaVersion": { "const": 1 },
-                "chunkCount": { "type": "integer", "minimum": 0, "maximum": 100000 }
+                "chunkCount": { "$ref": "#/$defs/snapshotChunkCount" }
               }
             }
           }
         }
       ],
       "unevaluatedProperties": false
+    },
+    "snapshotChunkCount": {
+      "description": "本次快照实际下发的 chunk 数，begin 与 end 必须一致。上界等于可下发资源的种类数（$defs/snapshotResource），因此快照至多承载清单类资源；未协商 core.local-catalog.v1 时只下发 sessions，取 1。",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3
     },
     "snapshotChunk": {
       "allOf": [
@@ -152,61 +158,6 @@
                   "then": {
                     "properties": {
                       "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.sessions" } }
-                    }
-                  }
-                },
-                {
-                  "if": {
-                    "properties": { "resource": { "const": "messages" } },
-                    "required": ["resource"]
-                  },
-                  "then": {
-                    "properties": {
-                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.messages" } }
-                    }
-                  }
-                },
-                {
-                  "if": {
-                    "properties": { "resource": { "const": "turns" } },
-                    "required": ["resource"]
-                  },
-                  "then": {
-                    "properties": {
-                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.turns" } }
-                    }
-                  }
-                },
-                {
-                  "if": {
-                    "properties": { "resource": { "const": "pending_interactions" } },
-                    "required": ["resource"]
-                  },
-                  "then": {
-                    "properties": {
-                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.pending_interactions" } }
-                    }
-                  }
-                },
-                {
-                  "if": {
-                    "properties": { "resource": { "const": "config_options" } },
-                    "required": ["resource"]
-                  },
-                  "then": {
-                    "properties": {
-                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.config_options" } }
-                    }
-                  }
-                },
-                {
-                  "if": {
-                    "properties": { "resource": { "const": "capabilities" } },
-                    "required": ["resource"]
-                  },
-                  "then": {
-                    "properties": {
-                      "items": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/snapshotItem.capabilities" } }
                     }
                   }
                 },
@@ -253,7 +204,7 @@
               "properties": {
                 "snapshotId": { "$ref": "common.schema.json#/$defs/uuid" },
                 "cursor": { "$ref": "common.schema.json#/$defs/cursor" },
-                "chunkCount": { "type": "integer", "minimum": 0, "maximum": 100000 },
+                "chunkCount": { "$ref": "#/$defs/snapshotChunkCount" },
                 "snapshotDigest": { "$ref": "common.schema.json#/$defs/base64url32" }
               }
             }
@@ -281,7 +232,8 @@
       "unevaluatedProperties": false
     },
     "snapshotResource": {
-      "enum": ["sessions", "messages", "turns", "pending_interactions", "config_options", "capabilities", "workspaces", "agents"]
+      "description": "sync.snapshot_chunk.resource 的封闭词表：快照只承载 sessions/workspaces/agents 三类清单资源。五类 session-scoped 明细资源 messages/turns/pending_interactions/config_options/capabilities 一律不进快照，无论会话的 origin.kind 是 local 还是 remote（docs/SYNC_PROTOCOL.md §9.4，design D1）；它们的元素形状仍由下面的 snapshotItem.* 定义，供 session.read 的结果复用（command.schema.json#/$defs/sessionReadResult.resources）。本枚举的取值与 crates/sync-protocol 的 sync::SnapshotResource::ALL 逐条同序，由 tests/schema_drift.rs::snapshot_resources_match_schema_enum 双向门禁。",
+      "enum": ["sessions", "workspaces", "agents"]
     },
     "snapshotItem.sessions": { "$ref": "common.schema.json#/$defs/sessionSummary" },
     "snapshotItem.messages": {

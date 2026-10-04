@@ -609,7 +609,7 @@ resource.attach → resource.attached → resource.subscribe
 | `command` | `payload` |
 |---|---|
 | `session.list` | `{}`（空 object） |
-| `session.read` | `{ "include": ["messages"\|"turns"\|"pending_interactions"\|"config_options"\|"capabilities", …] }` |
+| `session.read` | `{ "include": ["messages"\|"turns"\|"pending_interactions"\|"config_options"\|"capabilities", …] }`；**分页参数只存在于 Sync 面**：`before`/`limit` 不在本面出现，带了按 `nodelink.command.unsupported_field` 拒绝，不带则按本表的既有形状返回，行为与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5 新增分页之前完全一致 |
 | `command.status` | `{ "targetRequestId": UUID }` |
 | `session.mode.list` | `{}` |
 | `session.config.list` | `{}` |
@@ -621,6 +621,8 @@ resource.attach → resource.attached → resource.subscribe
 | `permission.resolve` | `{ "interactionId": UUID, "optionId": string }` |
 | `session.create` | `{ "agentId": string, "exportId": string, "workspaceAlias": string, "templateParams": object（可选） }` |
 | `session.resume` | `{}`（空 object；出现任何键即以 `nodelink.command.unsupported_field` 拒绝） |
+
+`session.read` 在两个传输面同名但载荷不同：Sync 侧的 payload 另有可选的 `before`（`(createdAt, messageId)` 复合游标）与 `limit`，本面一律没有这两个键。Node Link 侧不提供分页不是遗漏，而是本协议的有意边界——本面的会话正文受 §12.4 的 `no-content-cache` 硬约束，Access 侧根本不保留正文，没有可翻页的副本。代价与理由见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5。
 
 `session.create` 的硬约束：
 
