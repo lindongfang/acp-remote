@@ -1530,15 +1530,22 @@ async fn a_notification_without_a_title_keeps_the_existing_one() {
     assert_eq!(after_first.session.title(), Some("保留我"));
 
     // 只有更新时间：ACP 原文里没有 `title` 键（公共 view 的 `title` 是 `null` 也无法区分，故读原文）。
-    push_info_update(&fixture, None, "null", stamp(52)).await;
+    // **判别力构造**：这条通知事件的 `at` 故意取一个**早于**上一次写入的取值（`stamp(1)` < `stamp(51)`）。
+    // 若实现把权威更新时间取成**事件自报时间**，该列会**倒退**；只有取 Daemon 提交时钟（`commit.at`）
+    // 才会前进。这正是「用了提交时钟」与「用了事件时间」的分界。
+    push_info_update(&fixture, None, "null", stamp(1)).await;
     let after_second = fixture.session_row().await;
     assert_eq!(
         after_second.session.title(),
         Some("保留我"),
         "R9：只有更新时间时标题必须保持不变"
     );
-    // 规范硬要求：该次提交**不得**把 Daemon 权威时间回写成 Agent 自报的 2020 值（旧实现会把
-    // `updated_at` 置为 Agent 自报时间；D7 要求它取 Daemon 持久化时间）。
+    assert!(
+        after_second.session.updated_at().as_str() > after_first.session.updated_at().as_str(),
+        "R9/D7：`updated_at` 必须前进到 Daemon 提交时钟（不得取事件自报时间，否则倒退）；实际 {} → {}",
+        after_first.session.updated_at(),
+        after_second.session.updated_at()
+    );
     assert!(
         !after_second
             .session
@@ -1548,10 +1555,6 @@ async fn a_notification_without_a_title_keeps_the_existing_one() {
         "R9/D7：权威更新时间不得取 Agent 自报值，实际 {}",
         after_second.session.updated_at()
     );
-    // 已知的实现缺口（登记，非 spec 的明文硬要求）：`updated_at` 的取值来自**事件自身的 `at`**，
-    // 因此「只携带更新时间」的通知若其事件 `at` 早于上一次写，该列不会前进（目录排序按它，D7）。
-    // 本用例不断言前进，以免把这条实现自由度当成失败；缺口在交付报告里登记。
-    let _ = after_first;
 }
 
 /// `TP2-R9-CLEAR`：通知显式把标题置空时呈现为未命名会话。
