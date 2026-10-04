@@ -1232,6 +1232,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: acp_core::ports::ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: Some(agent_session_id.clone()),

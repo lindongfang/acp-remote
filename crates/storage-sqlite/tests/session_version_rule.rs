@@ -166,6 +166,7 @@ async fn state_change_commits_bump_the_session_version_by_one() {
             mode: ModeChange::Set(
                 ModeRef::try_new(ModeId::new("code").expect("mode id"), "Code").expect("mode ref"),
             ),
+            title: None,
             closed_at: None,
             agent_session_id: None,
             workspace_cwd: None,
@@ -224,6 +225,7 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
             Some(StateChange::Update(SessionUpdate {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
@@ -269,6 +271,7 @@ async fn a_state_change_with_a_stale_expected_version_is_rejected() {
                 Some(StateChange::Update(SessionUpdate {
                     state: Some(SessionState::Queued),
                     mode: ModeChange::Unchanged,
+                    title: None,
                     closed_at: None,
                     agent_session_id: None,
                     workspace_cwd: None,

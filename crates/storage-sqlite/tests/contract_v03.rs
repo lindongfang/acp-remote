@@ -258,6 +258,7 @@ async fn creating_and_resolving_in_one_commit_is_rejected() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,

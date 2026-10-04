@@ -25,18 +25,22 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 
+use crate::derive::{
+    self, FILE_CHANGE_DEDUP_CAPACITY, TitleIntent, file_change_event, file_changed_view,
+    title_intent,
+};
 use crate::model::{
-    Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind, CommandPayload,
-    CommandReceipt, CommandRecord, CommandResult, CommandStatus, CommandTerminalRecord,
-    CommittedDelivery, CommittedEvent, ConfigOptionId, ConfigValue, ConflictKind,
-    CreateSessionRequest, Digest, ElicitationAction, ElicitationValues, EndpointEvent, EntityRef,
-    EventKind, EventOrigin, EventPayload, EventType, GlobalCursor, InteractionId, InteractionKind,
-    InteractionResolution, LocalCursor, MemberValue, MessageId, ModeId, ModeRef, NodeId, NodeKind,
-    NodeState, OriginEventRef, OwnedSessionRef, PendingEvent, PendingInteraction,
-    PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError, PromptContentBlock,
-    PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution, ResumeSessionRequest,
-    Sequence, SessionId, SessionRecoveryRecord, SessionReference, SessionState, StoredPolicy,
-    Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
+    AcpRaw, Actor, AuditAction, AuditOutcome, AuditRecord, ClientCommand, CommandKind,
+    CommandPayload, CommandReceipt, CommandRecord, CommandResult, CommandStatus,
+    CommandTerminalRecord, CommittedDelivery, CommittedEvent, ConfigOptionId, ConfigValue,
+    ConflictKind, CreateSessionRequest, Digest, ElicitationAction, ElicitationValues,
+    EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
+    InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue, MessageId,
+    ModeId, ModeRef, NodeId, NodeKind, NodeState, OriginEventRef, OwnedSessionRef, PendingEvent,
+    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
+    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
+    ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord, SessionReference,
+    SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
     decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
     object_members as json_members, top_level_member,
 };
@@ -443,6 +447,12 @@ struct Slot {
     /// 最后一个也是「需要 `turnId` 但适配器未带标识的迟到事件」的兜底归属者（适配层不带 turn，
     /// 归属由 [`crate::broker`] 按 §10.3 的集合完成）。
     abandoned: Mutex<Vec<TurnId>>,
+    /// 每会话的 `file.changed` 去重日志：`(toolCallId, 展示路径)` 的插入顺序 FIFO（容量见
+    /// [`FILE_CHANGE_DEDUP_CAPACITY`]）。R5 要求同一个工具调用内容里的同一处改动只派生一条事件，
+    /// 而适配器会在 `tool.call.started` 与 `tool.call.updated` 里重复携带同一个 Diff 元素。
+    ///
+    /// 只登记**已提交**的键（提交成功后才插入）：落盘失败的批次不得吃掉下一次重试的派生。
+    file_changes: Mutex<Vec<String>>,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -592,6 +602,7 @@ impl Broker {
                     deltas: Mutex::new(HashMap::new()),
                     turn_deltas: Mutex::new(HashMap::new()),
                     abandoned: Mutex::new(Vec::new()),
+                    file_changes: Mutex::new(Vec::new()),
                 })
             })
             .clone()
@@ -606,6 +617,117 @@ impl Broker {
     pub fn sink(&self, session: &SessionId) -> EventSink {
         let slot = self.owned_slot(session);
         EventSink::new(move |event| slot.push_event(event))
+    }
+
+    /// **节点级**事件的出口（`design.md` D6、R8）：`agent.connected`/`agent.disconnected` 是节点级事件
+    /// （会话标识为空），不属于任何会话槽位，因此不能走 [`Broker::sink`]——那条路径会把事件归到某个会话上。
+    ///
+    /// sink 的调用是同步的，而提交是异步的；core 不依赖 runtime，因此这里把每条事件交给调用方在能驱动
+    /// future 的位置（组合根本就有 runtime）经 [`Broker::commit_node_event`] 提交。节点级事件稀少（每个
+    /// profile 进程各一次），不需要合并窗口。
+    pub async fn node_submit(&self, event: EndpointEvent) -> Result<(), PortError> {
+        self.commit_node_event(event).await
+    }
+
+    /// 节点级事件的提交入口：校验后按 `session: None` 的提交落库并发布。
+    ///
+    /// 校验（失败即 [`PortError::InvalidRequest`]，**不做**任何降级写入）：
+    /// - `event_type` 只能是 `agent.connected`/`agent.disconnected`；
+    /// - `kind` 必须是 [`EventKind::State`]，`turn`/`causation` 必须为空（节点级事件不属于任何 turn）；
+    /// - `payload.acp` 必须为 `None`（节点级事件没有 ACP 原文）；
+    /// - view 必须带非空 `agentId`，且 `state` 与该事件类型的唯一取值一致（`SYNC_PROTOCOL.md` §10.3
+    ///   的封闭词表：`connected` / `disconnected`）。
+    pub async fn commit_node_event(&self, event: EndpointEvent) -> Result<(), PortError> {
+        let event_type = event.event_type.as_str();
+        let expected_state = match event_type {
+            "agent.connected" => "connected",
+            "agent.disconnected" => "disconnected",
+            _ => {
+                return Err(PortError::InvalidRequest(
+                    "节点级事件只接受 agent.connected/agent.disconnected（§10.3）",
+                ));
+            }
+        };
+        if event.kind != EventKind::State {
+            return Err(PortError::InvalidRequest(
+                "节点级 Agent 事件必须是 state 类别（§10.3）",
+            ));
+        }
+        if event.turn.is_some() || event.causation.is_some() {
+            return Err(PortError::InvalidRequest(
+                "节点级 Agent 事件不属于任何 turn，也不由命令触发（§10.3）",
+            ));
+        }
+        if event.payload.acp.is_some() {
+            return Err(PortError::InvalidRequest(
+                "节点级 Agent 事件不携带 ACP 原文（§10.3）",
+            ));
+        }
+        event.payload.validate().map_err(PortError::from)?;
+        let (agent_id, state) = derive::node_event_parts(event.payload.view.as_str());
+        if agent_id.is_none() {
+            return Err(PortError::InvalidRequest(
+                "节点级 Agent 事件的 view 必须带非空 agentId（§10.3）",
+            ));
+        }
+        if state.as_deref() != Some(expected_state) {
+            return Err(PortError::InvalidRequest(
+                "节点级 Agent 事件的 state 取值必须与事件类型一致（§10.3 的封闭词表）",
+            ));
+        }
+        let pending = pending_event(
+            event_type,
+            EventKind::State,
+            event.payload.view,
+            None,
+            None,
+            StoredPolicy::Durable,
+            None,
+        )?;
+        let commit = OwnedCommit {
+            session: None,
+            at: event.at,
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: vec![pending],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: None,
+            command_terminal: None,
+            origin_epoch: None,
+        };
+        let outcome = self.commit_owned(commit).await?;
+        self.publish(&outcome.appended);
+        Ok(())
+    }
+
+    /// 会话的规范化工作目录（`owned_session.workspace_cwd`）。
+    ///
+    /// 走 `SessionStore::load_recovery` 这个**窄读取**：`workspace_cwd` 是本机规范化路径，按 §3.6 不得进入
+    /// 任何可投影形状（`Session`/`SessionSummary`/`read_session`/`node_link_slice` 都不带它），但它正是
+    /// 展示路径相对化的根。`None` = 该会话没有可用于恢复的取值（未登记 workspace，或行不存在），
+    /// 此时派生按「无法证明在工作区内」处理（越界 + 只给文件名称），绝不静默下发绝对路径。
+    async fn workspace_root(&self, session: &SessionId) -> Result<Option<String>, PortError> {
+        match self.deps.store.load_recovery(session).await? {
+            Some(record) => Ok(record.workspace_cwd),
+            None => Ok(None),
+        }
+    }
+
+    /// 从 `tool.call.*` 的 view 派生 `file.changed`（R5–R7）；view 不含类型化 Diff 时返回 `None`。
+    async fn derive_file_changes(
+        &self,
+        view: &ViewJson,
+        session: &SessionId,
+    ) -> Result<Option<Vec<derive::DerivedFileChange>>, PortError> {
+        if !derive::view_carries_diff(view.as_str()).map_err(PortError::from)? {
+            return Ok(None);
+        }
+        let root = self.workspace_root(session).await?;
+        let changes = derive::derived_file_changes(view.as_str(), root.as_deref())
+            .map_err(PortError::from)?;
+        Ok(Some(changes))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -887,6 +1009,7 @@ impl Broker {
             Some(StateChange::Update(SessionUpdate {
                 state: Some(SessionState::Queued),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,
@@ -1019,6 +1142,7 @@ impl Broker {
                 let state = StateChange::Update(SessionUpdate {
                     state: None,
                     mode: ModeChange::Set(mode_ref(mode)?),
+                    title: None,
                     closed_at: None,
                     interaction: None,
                     agent_session_id: None,
@@ -1087,6 +1211,7 @@ impl Broker {
                 let state = StateChange::Update(SessionUpdate {
                     state: None,
                     mode: ModeChange::Unchanged,
+                    title: None,
                     closed_at: None,
                     interaction: None,
                     agent_session_id: None,
@@ -1282,6 +1407,7 @@ impl Broker {
         let state = StateChange::Update(SessionUpdate {
             state: None,
             mode: ModeChange::Unchanged,
+            title: None,
             closed_at: None,
             interaction: Some(InteractionResolved {
                 interaction: interaction.clone(),
@@ -1462,6 +1588,7 @@ impl Broker {
                 state: Some(StateChange::Update(SessionUpdate {
                     state: None,
                     mode: ModeChange::Unchanged,
+                    title: None,
                     closed_at: None,
                     interaction: None,
                     agent_session_id: Some(agent_session_id),
@@ -1903,6 +2030,10 @@ impl Broker {
         let mut delta_plan: Vec<(usize, TurnId, DeltaFragment)> = Vec::new();
         let mut completed_events: Vec<PendingEvent> = Vec::new();
         let mut compact_after: Option<(TurnId, usize)> = None;
+        // R5：本批实际派生的 `file.changed` 去重键（提交成功后才登记，见 [`Slot::file_changes`]）。
+        let mut file_change_plan: Vec<String> = Vec::new();
+        // R9：`session.info.changed` 投影出的标题窄写入（两层可选，`None` = 本次不改标题）。
+        let mut title_update: Option<Option<String>> = None;
         // 失败批次是否携带了**在跑的** turn 的事件：只有它才需要在写失败时放弃该 turn（§6 第 9 条）。
         let mut running_in_chunk = false;
         for (event_index, event) in chunk.into_iter().enumerate() {
@@ -1972,6 +2103,57 @@ impl Broker {
                     interaction,
                     turn: turn.clone(),
                 });
+            }
+            // R5–R7（`design.md` D4/D5）：`file.changed` 的派生源**只有** ACP 工具调用内容里的类型化
+            // Diff 元素——适配器把它逐字节投影到 view 的 `diff` 数组，这里按该键派生。相对化需要会话的
+            // 规范化工作目录，因此先做一次窄读取（只在真的含 `diff` 时才读）。
+            if file_change_event(event.event_type.as_str()) {
+                if let Some(changes) = self
+                    .derive_file_changes(&event.payload.view, session)
+                    .await?
+                {
+                    for change in changes {
+                        let key = change.dedup_key();
+                        // R5：同一处改动只派生一次。去重有两个来源——本批已计划派生的键（同一个工具调用
+                        // 的 `started`/`updated` 会落在同一次 `commit_chunk` 里）与已提交的去重日志。
+                        if lock(&slot.file_changes).contains(&key)
+                            || file_change_plan.iter().any(|planned| planned == &key)
+                        {
+                            continue;
+                        }
+                        file_change_plan.push(key);
+                        let view = ViewJson::new(&file_changed_view(&change, session.as_str()))
+                            .map_err(PortError::from)?;
+                        events.push(pending_event(
+                            "file.changed",
+                            EventKind::Structured,
+                            view,
+                            turn.clone(),
+                            event.causation.clone(),
+                            StoredPolicy::Durable,
+                            running_actor.as_ref(),
+                        )?);
+                    }
+                }
+            }
+            // R9（`design.md` D7）：Agent 的 `session_info_update` 同时是标题的**唯一**来源。标题只由
+            // 通知单向写入，因此这里把该通知投影成一次 `SessionUpdate.title` 的窄写入；通知没带标题
+            // （只带更新时间）时保持既有标题不变。
+            if event.event_type.as_str() == "session.info.changed" {
+                let acp_raw = event.payload.acp.as_ref().and_then(AcpRaw::as_available);
+                let intent = title_intent(
+                    acp_raw.map(|(_, raw, _, _)| raw),
+                    event.payload.view.as_str(),
+                )
+                .map_err(PortError::from)?;
+                if let TitleIntent::Set(text) = intent {
+                    title_update = Some(Some(text));
+                } else if intent == TitleIntent::Clear {
+                    title_update = Some(None);
+                }
+                // 事件 view 的 `updatedAt` 照常转发 Agent 自报值；会话的**权威**更新时间取 Daemon
+                // 持久化时间（`commit.at`，由存储层写进 `owned_session.updated_at`），不使用 Agent
+                // 自报值决定排序（`design.md` D7）。
             }
             // §6.11：`Ephemeral` 由 `PendingEvent::from_persistence` 直接排除（`None` = 只做内存转发）。
             if let Some(pending) = PendingEvent::from_persistence(
@@ -2043,17 +2225,21 @@ impl Broker {
                 )?);
             }
         }
-        let state = session_state.map(|state| {
-            StateChange::Update(SessionUpdate {
-                state: Some(state),
+        // R9：标题窄写入与 turn 终态的状态修改合批（`None` = 本批不改标题、也不改状态）。
+        let state = if session_state.is_some() || title_update.is_some() {
+            Some(StateChange::Update(SessionUpdate {
+                state: session_state,
                 mode: ModeChange::Unchanged,
+                title: title_update,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
                 workspace_alias: None,
-            })
-        });
+            }))
+        } else {
+            None
+        };
         let kinds: Vec<EventKind> = events.iter().map(|event| event.kind).collect();
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -2072,6 +2258,17 @@ impl Broker {
             Ok(outcome) => {
                 if had_terminal {
                     slot.finish_turn();
+                }
+                // R5：只登记**已提交**的 `file.changed` 去重键（失败批次不得吃掉重试的派生）。
+                if !file_change_plan.is_empty() {
+                    let mut log = lock(&slot.file_changes);
+                    for key in file_change_plan {
+                        if !log.contains(&key) {
+                            log.push(key);
+                        }
+                    }
+                    let excess = log.len().saturating_sub(FILE_CHANGE_DEDUP_CAPACITY);
+                    log.drain(..excess);
                 }
                 // §6 第 14/15 条：只登记**已提交**的 delta（cursor 由存储层分配后回传）。
                 for (event_index, turn, fragment) in delta_plan {
@@ -2166,6 +2363,7 @@ impl Broker {
             state: Some(StateChange::Update(SessionUpdate {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,
@@ -2230,6 +2428,7 @@ impl Broker {
             state: Some(StateChange::Update(SessionUpdate {
                 state: Some(SessionState::Failed),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,
@@ -2359,6 +2558,7 @@ impl Broker {
                     SessionState::Failed
                 }),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,
@@ -2631,6 +2831,7 @@ impl Broker {
                 state = Some(StateChange::Update(SessionUpdate {
                     state: Some(SessionState::Failed),
                     mode: ModeChange::Unchanged,
+                    title: None,
                     closed_at: None,
                     interaction: None,
                     agent_session_id: None,
@@ -4481,10 +4682,17 @@ pub(crate) mod test_support {
                         .closed_at
                         .clone()
                         .or_else(|| current.closed_at().cloned());
+                    // R9（`design.md` D7）：两层可选 —— `None` = 不改该列、`Some(None)` = 显式置空、
+                    // `Some(Some(text))` = 写入。fake 与 `storage-sqlite` 的列语义逐条一致。
+                    let title = match &update.title {
+                        None => current.title().map(str::to_owned),
+                        Some(None) => None,
+                        Some(Some(text)) => Some(text.clone()),
+                    };
                     let updated = Session::try_new(
                         current.id().clone(),
                         current.reference().clone(),
-                        current.title().map(str::to_owned),
+                        title,
                         current.agent().clone(),
                         next_state,
                         current.origin().clone(),
@@ -7420,6 +7628,7 @@ mod tests {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: Some(InteractionResolved {
                     interaction: interaction.clone(),
@@ -7991,6 +8200,7 @@ mod tests {
                 state: Some(StateChange::Update(SessionUpdate {
                     state: Some(SessionState::Queued),
                     mode: ModeChange::Unchanged,
+                    title: None,
                     closed_at: None,
                     interaction: None,
                     agent_session_id: None,
@@ -8408,6 +8618,7 @@ mod tests {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,
@@ -8741,6 +8952,418 @@ mod tests {
         assert_eq!(
             stored_view(&harness, &stored[0]),
             r#"{"version":"1","currentModeId":"code"}"#
+        );
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // R5–R9：core 派生的三类生产者（`sync-scope-and-pwa-client` 变更 WP3）
+    // -----------------------------------------------------------------------------------------
+
+    /// 工具调用事件 view 的装配（`toolCallId` + 可选 `diff`）。
+    fn tool_call_view(tool_call_id: &str, diff: Option<&str>) -> String {
+        match diff {
+            Some(diff) => {
+                format!(r#"{{"toolCallId":"{tool_call_id}","state":"in_progress","diff":{diff}}}"#)
+            }
+            None => format!(r#"{{"toolCallId":"{tool_call_id}","state":"in_progress"}}"#),
+        }
+    }
+
+    /// 会话的规范化工作目录根（R7 相对化的依据）：真实创建目录并让目录本身就存在，避免
+    /// symlink/verbatim 前缀造成的口径差异。`load_recovery` 是窄读取，两列都要有值。
+    fn workspace_root() -> String {
+        static ROOT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            let root = std::env::temp_dir().join("acp-remote-wp3-root");
+            std::fs::create_dir_all(root.join("src")).expect("临时工作目录");
+            std::fs::write(root.join("src").join("main.rs"), "x").expect("临时文件");
+            std::fs::canonicalize(&root)
+                .expect("canonicalize 临时工作目录")
+                .to_string_lossy()
+                .into_owned()
+        });
+        ROOT.clone()
+    }
+
+    /// 该 view 的派生事件（按事件类型过滤已提交的领域事件）。
+    fn stored_views_of(harness: &Harness, event_type: &str) -> Vec<String> {
+        harness
+            .world
+            .events(&harness.session)
+            .iter()
+            .filter(|event| event.event_type.as_str() == event_type)
+            .map(|event| stored_view(harness, event))
+            .collect()
+    }
+
+    /// R5 + R7：含类型化 Diff 的工具调用派生**恰好一条** `file.changed`，展示路径相对化到工作目录根。
+    #[test]
+    fn a_typed_diff_derives_one_file_change_with_a_relativized_display_path() {
+        let harness = Harness::new(BrokerConfig::default());
+        let root = workspace_root();
+        harness.world.seed_recovery(
+            &harness.session,
+            Some(AgentSessionId::new("acp-wp3").expect("agent session id")),
+            Some(root.clone()),
+        );
+        let inside = std::path::Path::new(&root).join("src").join("main.rs");
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                &tool_call_view(
+                    "tool-1",
+                    Some(&format!(
+                        r#"[{{"path":{},"oldText":"let a = 1;","newText":"let a = 2;"}}]"#,
+                        json_text(&inside.to_string_lossy())
+                    )),
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let receipt = harness.submit_prompt(1, 'A');
+        assert!(matches!(
+            receipt,
+            CommandReceipt::Accepted { turn: Some(_), .. }
+        ));
+        let changes = stored_views_of(&harness, "file.changed");
+        assert_eq!(changes.len(), 1, "R5：恰好一条 file.changed");
+        assert!(
+            changes[0].contains(r#""displayPath":"src/main.rs""#),
+            "R7：展示路径相对化，实际 {}",
+            changes[0]
+        );
+        assert!(
+            changes[0].contains(r#""addedLines":"1""#)
+                && changes[0].contains(r#""deletedLines":"1""#),
+            "R6：行级差异而不是行数差，实际 {}",
+            changes[0]
+        );
+        assert!(
+            !changes[0].contains(&root),
+            "不得下发工作目录根的任何片段：{}",
+            changes[0]
+        );
+    }
+
+    /// R5：不含类型化 Diff 的工具调用**不**派生 `file.changed`（`rawInput` 里的编辑结构不作数）。
+    #[test]
+    fn a_tool_call_without_a_typed_diff_derives_nothing() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                r#"{"toolCallId":"tool-9","state":"in_progress","rawInput":{"path":"/etc/passwd","newText":"x"}}"#,
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'B');
+        assert!(
+            stored_views_of(&harness, "file.changed").is_empty(),
+            "R5：MUST NOT 从 rawInput 推断文件改动"
+        );
+    }
+
+    /// R5：同一个工具调用在 `started`/`updated` 里重复携带同一个 Diff 元素时只派生一次。
+    #[test]
+    fn a_repeated_diff_element_is_derived_only_once() {
+        let harness = Harness::new(BrokerConfig::default());
+        let root = workspace_root();
+        harness.world.seed_recovery(
+            &harness.session,
+            Some(AgentSessionId::new("acp-wp3").expect("agent session id")),
+            Some(root.clone()),
+        );
+        let inside = std::path::Path::new(&root).join("dup.txt");
+        let diff = format!(
+            r#"[{{"path":{},"oldText":"a","newText":"b"}}]"#,
+            json_text(&inside.to_string_lossy())
+        );
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                &tool_call_view("tool-dup", Some(&diff)),
+            ),
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.updated",
+                &tool_call_view("tool-dup", Some(&diff)),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'C');
+        let changes = stored_views_of(&harness, "file.changed");
+        assert_eq!(
+            changes.len(),
+            1,
+            "R5：同一处改动不得重复派生，实际 {changes:?}"
+        );
+    }
+
+    /// R7：工作区外的路径只下发文件名称，并显式置 `outsideWorkspace`。
+    #[test]
+    fn a_path_outside_the_workspace_is_marked_and_keeps_only_the_file_name() {
+        let harness = Harness::new(BrokerConfig::default());
+        let root = workspace_root();
+        harness.world.seed_recovery(
+            &harness.session,
+            Some(AgentSessionId::new("acp-wp3").expect("agent session id")),
+            Some(root.clone()),
+        );
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                &tool_call_view(
+                    "tool-out",
+                    Some(r#"[{"path":"/etc/secret.txt","oldText":"a","newText":"b"}]"#),
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'D');
+        let changes = stored_views_of(&harness, "file.changed");
+        assert_eq!(changes.len(), 1);
+        assert!(
+            changes[0].contains(r#""outsideWorkspace":true"#)
+                && changes[0].contains(r#""displayPath":"secret.txt""#),
+            "R7：越界时标记且只给文件名称，实际 {}",
+            changes[0]
+        );
+        assert!(!changes[0].contains(".."), "不得下发回退层级");
+    }
+
+    /// R6：判定不出行数时**省略**两项（不填零）。
+    #[test]
+    fn a_diff_without_new_text_omits_the_line_counts() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                &tool_call_view("tool-bare", Some(r#"[{"path":"bare.txt","oldText":"a"}]"#)),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'E');
+        let changes = stored_views_of(&harness, "file.changed");
+        assert_eq!(changes.len(), 1);
+        assert!(
+            !changes[0].contains("addedLines") && !changes[0].contains("deletedLines"),
+            "R6：判定不出时省略而非填零，实际 {}",
+            changes[0]
+        );
+    }
+
+    /// R5：派生**不改写** ACP 原文的字节、摘要与字节长度。
+    #[test]
+    fn deriving_a_file_change_leaves_the_acp_raw_document_untouched() {
+        let harness = Harness::new(BrokerConfig::default());
+        let raw = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call","toolCallId":"tool-acp","content":[{"type":"diff","path":"src/a.rs","oldText":"a","newText":"b"}]}}}"#;
+        let digest = digest('Z');
+        let acp = AcpRaw::available("application/json", raw, digest.clone()).expect("acp");
+        let mut event = endpoint_event(
+            EventKind::Structured,
+            "tool.call.started",
+            &tool_call_view(
+                "tool-acp",
+                Some(r#"[{"path":"src/a.rs","oldText":"a","newText":"b"}]"#),
+            ),
+        );
+        event.payload.acp = Some(acp.clone());
+        harness.world.push_script(Script::new(vec![
+            event,
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'F');
+        assert_eq!(stored_views_of(&harness, "file.changed").len(), 1);
+        // 携带 Diff 的那条工具调用事件仍在库里，且 ACP 三要素逐字不变。
+        let stored = harness.world.events(&harness.session);
+        let tool_call = stored
+            .iter()
+            .find(|event| event.event_type.as_str() == "tool.call.started")
+            .expect("工具调用事件");
+        let payload = crate::broker::lock(&harness.world.state)
+            .event_payloads
+            .get(tool_call.id.as_str())
+            .cloned()
+            .expect("正文");
+        assert_eq!(payload.acp.as_ref(), Some(&acp), "派生不得改动 ACP 原文");
+    }
+
+    /// R8：节点级 `agent.connected` 落库且会话标识为空；`sessionId`/`sessionSequence` 同时为 NULL。
+    #[test]
+    fn a_node_level_agent_event_is_committed_without_session_identity() {
+        let harness = Harness::new(BrokerConfig::default());
+        let event = endpoint_event(
+            EventKind::State,
+            "agent.connected",
+            r#"{"agentId":"agent-1","state":"connected"}"#,
+        );
+        block_on(harness.broker.commit_node_event(event)).expect("commit");
+        let view = block_on(harness.broker.read_view()).expect("view");
+        let batch = block_on(view.replay(None, ReplayLimit::default())).expect("replay");
+        let node_event = batch
+            .events
+            .iter()
+            .find_map(|delivery| match delivery {
+                CommittedDelivery::Owned(event)
+                    if event.event_type.as_str() == "agent.connected" =>
+                {
+                    Some(event.clone())
+                }
+                _ => None,
+            })
+            .expect("节点级事件进入 replay 流");
+        assert!(node_event.session.is_none(), "R8：会话标识必须为空");
+        assert!(node_event.session_sequence.is_none());
+        assert!(node_event.origin_epoch.is_none());
+        assert!(node_event.origin_sequence.is_none());
+        assert!(node_event.global_sequence.get() > 0, "仍有全局序号");
+    }
+
+    /// R8：节点级事件的形状校验失败关闭（类型/类别/state 词表/turn/ACP 原文）。
+    #[test]
+    fn node_level_events_fail_closed_on_shape_violations() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 事件类型不在节点级词表内。
+        assert!(
+            block_on(harness.broker.commit_node_event(endpoint_event(
+                EventKind::State,
+                "session.mode.changed",
+                r#"{"state":"connected"}"#,
+            )))
+            .is_err()
+        );
+        // state 与事件类型不一致（`agent.connected` 只能取 `connected`）。
+        assert!(
+            block_on(harness.broker.commit_node_event(endpoint_event(
+                EventKind::State,
+                "agent.connected",
+                r#"{"agentId":"a","state":"disconnected"}"#,
+            )))
+            .is_err()
+        );
+        // 缺 agentId。
+        assert!(
+            block_on(harness.broker.commit_node_event(endpoint_event(
+                EventKind::State,
+                "agent.connected",
+                r#"{"state":"connected"}"#,
+            )))
+            .is_err()
+        );
+        // 类别不是 state。
+        assert!(
+            block_on(harness.broker.commit_node_event(endpoint_event(
+                EventKind::Structured,
+                "agent.connected",
+                r#"{"agentId":"a","state":"connected"}"#,
+            )))
+            .is_err()
+        );
+    }
+
+    /// R9：`session_info_update` 把标题单向写入会话；`updatedAt` 取 Daemon 持久化时间。
+    #[test]
+    fn a_session_info_update_writes_the_title_from_the_agent_notification() {
+        let harness = Harness::new(BrokerConfig::default());
+        let raw = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"session_info_update","title":"新标题","updatedAt":"2020-01-01T00:00:00.000Z"}}}"#;
+        let mut event = endpoint_event(
+            EventKind::State,
+            "session.info.changed",
+            r#"{"title":"新标题","updatedAt":"2020-01-01T00:00:00.000Z"}"#,
+        );
+        event.payload.acp =
+            Some(AcpRaw::available("application/json", raw, digest('Y')).expect("acp"));
+        harness.world.push_script(Script::new(vec![
+            event,
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'G');
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(session.title(), Some("新标题"), "R9：标题来自通知");
+        assert_ne!(
+            session.updated_at().as_str(),
+            "2020-01-01T00:00:00.000Z",
+            "R9：权威更新时间取 Daemon 持久化时间，不采用 Agent 自报值"
+        );
+    }
+
+    /// R9：通知只携带更新时间时既有标题保持不变；显式置空时标题变空。
+    #[test]
+    fn a_session_info_update_without_a_title_keeps_the_existing_one() {
+        let harness = Harness::new(BrokerConfig::default());
+        let set =
+            r#"{"params":{"update":{"sessionUpdate":"session_info_update","title":"保留我"}}}"#;
+        let mut first = endpoint_event(
+            EventKind::State,
+            "session.info.changed",
+            r#"{"title":"保留我","updatedAt":"2020-01-01T00:00:00.000Z"}"#,
+        );
+        first.payload.acp =
+            Some(AcpRaw::available("application/json", set, digest('X')).expect("acp"));
+        // 只有更新时间（ACP 原文里没有 `title` 键，公共 view 是 `null`）。
+        let only_time = r#"{"params":{"update":{"sessionUpdate":"session_info_update","updatedAt":"2021-01-01T00:00:00.000Z"}}}"#;
+        let mut second = endpoint_event(
+            EventKind::State,
+            "session.info.changed",
+            r#"{"title":null,"updatedAt":"2021-01-01T00:00:00.000Z"}"#,
+        );
+        second.payload.acp =
+            Some(AcpRaw::available("application/json", only_time, digest('W')).expect("acp"));
+        harness.world.push_script(Script::new(vec![
+            first,
+            second,
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'H');
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_eq!(
+            session.title(),
+            Some("保留我"),
+            "缺 title 的通知不得清空标题"
+        );
+    }
+
+    /// R9：通知显式把标题置空时呈现为未命名会话。
+    #[test]
+    fn a_session_info_update_with_an_explicit_null_clears_the_title() {
+        let harness = Harness::new(BrokerConfig::default());
+        let set =
+            r#"{"params":{"update":{"sessionUpdate":"session_info_update","title":"先有标题"}}}"#;
+        let mut first = endpoint_event(
+            EventKind::State,
+            "session.info.changed",
+            r#"{"title":"先有标题","updatedAt":"2020-01-01T00:00:00.000Z"}"#,
+        );
+        first.payload.acp =
+            Some(AcpRaw::available("application/json", set, digest('V')).expect("acp"));
+        let clear = r#"{"params":{"update":{"sessionUpdate":"session_info_update","title":null}}}"#;
+        let mut second = endpoint_event(
+            EventKind::State,
+            "session.info.changed",
+            r#"{"title":null,"updatedAt":"2021-01-01T00:00:00.000Z"}"#,
+        );
+        second.payload.acp =
+            Some(AcpRaw::available("application/json", clear, digest('U')).expect("acp"));
+        harness.world.push_script(Script::new(vec![
+            first,
+            second,
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'I');
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert!(session.title().is_none(), "R9：显式置空 → 未命名会话");
+    }
+
+    /// R9：创建时标题为空，且没有任何客户端路径能写标题（命令目录里没有重命名会话的命令）。
+    #[test]
+    fn a_freshly_created_session_has_no_title_and_no_rename_command_exists() {
+        assert!(
+            !required_grant("session.rename").is_some(),
+            "R9：不得存在重命名会话的命令（`required_grant` 是命令目录的手工镜像）"
         );
     }
 }

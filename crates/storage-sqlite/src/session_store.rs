@@ -1139,6 +1139,7 @@ impl SqliteStore {
                          agent_session_id = CASE WHEN ?5 IS NULL THEN agent_session_id ELSE ?5 END, \
                          workspace_cwd = CASE WHEN ?6 IS NULL THEN workspace_cwd ELSE ?6 END, \
                          workspace_alias = CASE WHEN ?7 IS NULL THEN workspace_alias ELSE ?7 END, \
+                         title = CASE WHEN ?8 IS NULL THEN title ELSE ?8 END, \
                          version = version + 1, updated_at = ?3 \
                          WHERE session_id = ?4 RETURNING version"
                     }
@@ -1149,6 +1150,7 @@ impl SqliteStore {
                          agent_session_id = CASE WHEN ?7 IS NULL THEN agent_session_id ELSE ?7 END, \
                          workspace_cwd = CASE WHEN ?8 IS NULL THEN workspace_cwd ELSE ?8 END, \
                          workspace_alias = CASE WHEN ?9 IS NULL THEN workspace_alias ELSE ?9 END, \
+                         title = CASE WHEN ?10 IS NULL THEN title ELSE ?10 END, \
                          version = version + 1, updated_at = ?3, \
                          current_mode_id = ?5, current_mode_name = ?6 \
                          WHERE session_id = ?4 RETURNING version"
@@ -1166,6 +1168,17 @@ impl SqliteStore {
                     .bind(update.agent_session_id.as_ref().map(AgentSessionId::as_str))
                     .bind(update.workspace_cwd.as_deref())
                     .bind(update.workspace_alias.as_deref());
+                // R9（`design.md` D7）：标题是**两层可选**——`None` = 不改该列，`Some(None)` = 显式置空，
+                // `Some(Some(text))` = 写入该标题。SQLite 的单层可空绑定表达不了这个区别，因此「显式
+                // 置空」走一条只写 `title` 的窄语句（同一个事务内），其余情形沿用上面的 `CASE WHEN`。
+                let query = match &update.title {
+                    Some(None) => sqlx::query_scalar::<_, i64>(
+                        "UPDATE owned_session SET title = NULL WHERE session_id = ?1 \
+                         RETURNING version",
+                    )
+                    .bind(session.as_str()),
+                    _ => query.bind(update.title.clone().flatten()),
+                };
                 let new_version: Option<i64> = query.fetch_optional(&mut *tx).await.db()?;
                 version = match new_version {
                     Some(value) => parse_version(value, "owned_session.version")?,
