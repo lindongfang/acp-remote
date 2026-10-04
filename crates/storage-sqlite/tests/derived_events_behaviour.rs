@@ -1067,6 +1067,47 @@ async fn an_inner_dotdot_that_stays_inside_is_inside() {
     );
 }
 
+/// `TP2-R7-ABS-INNER-DOTDOT`：**绝对**路径内部含 `..` 但规范化后仍在区内 → 仍判区内。
+///
+/// 回归防护（Main 点名的 `「区内含 .. 但未越界」` 的绝对形式）：修复前导 `..` 计数时若把「路径里出现
+/// `..`」一律判越界，这条会红。
+#[tokio::test]
+async fn an_absolute_path_with_an_inner_dotdot_that_stays_inside_is_inside() {
+    let root = temp_dir("tp2-r7-abs-inner-root");
+    std::fs::create_dir_all(root.join("api").join("sub")).expect("工作目录");
+    let canonical = canonical_dir(&root);
+    let fixture = Fixture::new("tp2-r7-abs-inner", Some(&canonical)).await;
+    let reported = PathBuf::from(&canonical)
+        .join("api")
+        .join("..")
+        .join("api")
+        .join("file.txt");
+    fixture.push(event(
+        EventKind::Structured,
+        "tool.call.started",
+        &tool_call_view(
+            "tool-abs-inner",
+            &[diff_element(
+                &reported.to_string_lossy(),
+                Some("a"),
+                Some("b"),
+            )],
+        ),
+        stamp(10),
+    ));
+    fixture.flush().await.expect("flush");
+
+    let views = fixture.stored_views("file.changed").await;
+    assert_eq!(views.len(), 1);
+    assert!(
+        views[0].contains("\"displayPath\":\"api/file.txt\"")
+            && !views[0].contains("outsideWorkspace")
+            && !views[0].contains(".."),
+        "R7：绝对路径内部的 `..` 规范化后仍在区内，必须判区内且不下发 `..`，实际 {}",
+        views[0]
+    );
+}
+
 /// `TP2-R7-ESCAPE-MANY`：**多级**前导 `..` 同样必须只给文件名称（`design.md` D5 点名的动机输入）。
 #[tokio::test]
 async fn multiple_leading_parent_traversals_keep_only_the_file_name() {
