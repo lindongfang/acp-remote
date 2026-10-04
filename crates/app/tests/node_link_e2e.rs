@@ -1042,3 +1042,272 @@ async fn ping(client: &mut NodeLinkClient, seed: u8) {
 fn session_key(session_id: &str) -> acp_core::model::SessionId {
     acp_core::model::SessionId::new(session_id).expect("sessionId 是规范 uuid 文本")
 }
+
+// ---------------------------------------------------------------------------------------------
+// AC1（tasks 4.1）：节点级事件的**组合根接线**在真实组合根 + 真实 SQLite + 真实 fake ACP 子进程上
+// 落库，且会话标识为空、不被会话级投递路径误收。
+//
+// 为什么在这里（`node_link_e2e.rs`）：tasks 4.1 把 AC1 的证据面钉在本文件；本节补的正是本文件其余用例
+// **覆盖不到**的一段——其余用例用脚本化后端（`support::owner::OwnerNode`），不启动真实 Agent 进程，
+// 因此**永远不会产生** `agent.connected`；而节点级事件的唯一生产来源是真实 profile 进程的生命周期。
+//
+// 本节的装配点是 `app::compose::Composition` **本身**（不是测试自建的替身）：若 `compose.rs` 没有把
+// `NodeEvents` 接到 `Broker::commit_node_event`（规划缺口「节点级事件的组合根接线无人认领」），
+// `NodeEvents` 保持 unbound，`agent.connected` 会在 core 之前被丢弃，本节的落库断言必然失败。
+//
+// 已知边界：真实 Agent 的 Diff/标题场景与本节的 profile 进程生命周期无关，本文件其余用例已用脚本化
+// 后端覆盖；本节**不**重复。
+// ---------------------------------------------------------------------------------------------
+
+/// fake ACP Agent 可执行文件：优先取 `ACPR_FAKE_ACP_AGENT`，否则按「测试可执行文件同 target 目录」
+/// 推断（`<profile>/deps/<test>` → `<profile>/acpr-fake-acp-agent[.exe]`）。
+///
+/// AC1 的环境列明写「fake ACP Agent」。它由 `agent-host` 提供，`cargo test -p app` **不**会构建它，
+/// 因此这里在缺失时**明确失败**（不静默跳过——跳过的测试不算通过）：先跑一次 PV1/PV2，或
+/// `cargo build -p agent-host --bin acpr-fake-acp-agent`。
+fn fake_acp_agent_binary() -> std::path::PathBuf {
+    // 显式覆盖（CI/矩阵需要时可指定；取值必须是可执行的 fake ACP Agent）。
+    if let Ok(explicit) = std::env::var("ACPR_FAKE_ACP_AGENT") {
+        let path = std::path::PathBuf::from(explicit);
+        assert!(
+            path.is_file(),
+            "ACPR_FAKE_ACP_AGENT 指向的文件不存在：{}",
+            path.display()
+        );
+        return path;
+    }
+    let test_exe = std::env::current_exe().expect("测试可执行文件路径");
+    let profile_dir = test_exe
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("测试可执行文件位于 <profile>/deps/");
+    let name = if cfg!(windows) {
+        "acpr-fake-acp-agent.exe"
+    } else {
+        "acpr-fake-acp-agent"
+    };
+    let path = profile_dir.join(name);
+    assert!(
+        path.is_file(),
+        "AC1 需要 fake ACP Agent（与测试同 target 目录）：{} 不存在。\
+         请先 `cargo build -p agent-host --bin acpr-fake-acp-agent`（或先跑 PV1/PV2 构建全工作区），\
+         或用 ACPR_FAKE_ACP_AGENT 指定它的路径。",
+        path.display()
+    );
+    path
+}
+
+/// 直接读**真实 SQLite** 的 `owned_event`（`(event_id, session_id 或 '<null>')`）。
+///
+/// AC1「可按事件库读回」最直接的证据：读的是落盘行，不经过任何 `Broker` 的内存状态。
+async fn owned_event_rows(data_dir: &std::path::Path, event_type: &str) -> Vec<(String, String)> {
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(data_dir.join("acp-remote.sqlite3"))
+            .read_only(true)
+            .busy_timeout(std::time::Duration::from_secs(10)),
+    )
+    .await
+    .expect("打开真实 SQLite（只读）");
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT event_id, COALESCE(session_id, '<null>') FROM owned_event \
+         WHERE event_type = ?1 ORDER BY global_sequence",
+    )
+    .bind(event_type)
+    .fetch_all(&pool)
+    .await
+    .expect("查询 owned_event");
+    pool.close().await;
+    rows
+}
+
+/// 组合根的开发模式配置：显式进程内 keystore + 一条指向 fake ACP Agent 的 profile 种子。
+fn ac1_config(data_dir: &std::path::Path, agent_command: &str) -> app::Config {
+    let command = agent_command.replace('\\', "/");
+    let text = format!(
+        "[daemon]\ndata_dir = {dir:?}\n[identity]\nkeystore = \"ephemeral\"\n\
+         [dev_mode]\nenabled = true\n\
+         [[agents.profiles]]\nagent_id = \"codex\"\ndisplay_name = \"Codex\"\n\
+         command = \"{command}\"\nargs = [\"--scenario\", \"normal\"]\nenv_allowlist = []\ndefault = true\n",
+        dir = data_dir.display(),
+    );
+    app::Config::from_toml(&text).expect("AC1 配置合法")
+}
+
+/// 32 字节 base64url（无填充）的 payload 摘要（`session.create` 的幂等指纹位）。
+fn ac1_digest(label: &str) -> acp_core::model::Digest {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(label.as_bytes());
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+    acp_core::model::Digest::new(&encoded).expect("32 字节摘要")
+}
+
+/// R30–R35（`specs/core-derived-events/spec.md` §「Agent 连接状态是节点级生命周期」）+ AC1：
+/// profile 进程**建立**（真实 ACP 子进程、经组合根自己的装配）时产生一次 `agent.connected`，它经
+/// `compose.rs` 的接线 → `Broker::commit_node_event` **落库**，`owned_event.session_id` 为空。
+///
+/// 同时断言**不被会话级投递路径误收**：组合根实际安装的 `forked_publisher` → `NodeLinkPublisher`
+/// （`server::node_link::resource`）是「按会话归属投递」的入站路径，它必须丢弃会话标识为空的事件；
+/// 因此扇出队列里**不出现**任何节点级事件（其余会话级事件仍会出现，见下方的正向对照）。
+#[test]
+fn ac1_the_composition_root_persists_node_level_events_without_session_identity() {
+    use acp_core::model::{
+        Actor, AgentId, AgentRef, CreateSessionRequest, Digest, ResolvedWorkspace, ResourceOrigin,
+        WorkspaceAlias,
+    };
+
+    support::block_on(async {
+        let root = support::TempRoot::new("ac1-node");
+        let data_dir = root.join("data");
+        support::create_owner_only_dir(&data_dir);
+        let fake = fake_acp_agent_binary();
+
+        // 组合根**实际安装**的发布分叉：扇出接收端留在这里，用来断言节点级事件不进入会话级投递路径。
+        let (publisher, mut fanout) = app::compose::forked_publisher();
+        let composition = app::compose::Composition::assemble(
+            ac1_config(&data_dir, &fake.display().to_string()),
+            publisher,
+        )
+        .await
+        .expect("组合根装配");
+
+        // 前置：接线已落地（这正是规划缺口的核心——接线缺失时这里是 false）。
+        assert!(
+            composition.host().node_events_bound(),
+            "组合根必须已接线 NodeEvents（否则节点级事件在 core 之前被丢弃）"
+        );
+
+        // 种子导入 profile（fake ACP Agent），随后创建会话：`SessionBackendFactory::create` 会**惰性**
+        // 拉起真实子进程并完成 initialize，由此产生本进程实例唯一的一次 `agent.connected`。
+        assert_eq!(
+            composition.seed_if_needed().await.expect("种子导入"),
+            app::compose::SeedOutcome::Imported { count: 1 }
+        );
+
+        let agent =
+            AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
+        let workspace = ResolvedWorkspace::try_new(
+            WorkspaceAlias::new("project.one").expect("alias"),
+            data_dir.display().to_string(),
+        )
+        .expect("workspace");
+        let request =
+            CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
+        let request_id = composition.ids().request_id();
+        let fingerprint: Digest = ac1_digest("ac1-session-create");
+        let session = composition
+            .use_cases()
+            .create_session(&Actor::LocalCli, request_id, fingerprint, request, None)
+            .await
+            .expect("session.create（会拉起真实 fake ACP 子进程）");
+        assert_eq!(
+            session.as_str().len(),
+            36,
+            "会话 id 必须是规范 uuid 文本：{session}"
+        );
+
+        // 落库是组合根 runtime 上的异步提交任务，轮询等待（上限 15 s）。
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(data_dir.join("acp-remote.sqlite3"))
+                .read_only(true)
+                .busy_timeout(std::time::Duration::from_secs(10)),
+        )
+        .await
+        .expect("打开真实 SQLite（只读）");
+
+        // §7.3 的四组 CHECK 成对成立：节点级事件的 `session_id` 为空时，`session_sequence`/
+        // `origin_epoch`/`origin_sequence` 必须**同时**为空（否则落盘行违反表级 CHECK）。一并对拍。
+        type NodeRow = (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let mut rows: Vec<NodeRow> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            rows = sqlx::query_as::<_, NodeRow>(
+                "SELECT event_id, session_id, session_sequence, origin_epoch, origin_sequence \
+                 FROM owned_event WHERE event_type = 'agent.connected' ORDER BY global_sequence",
+            )
+            .fetch_all(&pool)
+            .await
+            .expect("查询 owned_event");
+            if !rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "R30：进程建立必须**恰好一次**落库 agent.connected（接线缺失时会漏掉）；实际 {} 行",
+            rows.len()
+        );
+        let (event_id, session_id, session_sequence, origin_epoch, origin_sequence) = &rows[0];
+        assert!(
+            session_id.is_none(),
+            "R30/R8：节点级事件的 session_id 必须为空（事件 {event_id}）；实际 {session_id:?}"
+        );
+        assert!(
+            session_sequence.is_none(),
+            "会话标识为空时 session_sequence 必须同时为空（§7.3 成对 CHECK）；实际 {session_sequence:?}"
+        );
+        assert!(
+            origin_epoch.is_none() && origin_sequence.is_none(),
+            "节点级事件不得有会话级 origin 游标（§7.3）；实际 {origin_epoch:?}/{origin_sequence:?}"
+        );
+
+        // 「不被会话级投递路径误收」：扇出队列（组合根实际安装的 `NodeLinkPublisher`）不得出现节点级事件。
+        // 给提交/发布一点余量后把队列看空，收集可见的事件类型。
+        let mut seen: Vec<String> = Vec::new();
+        let drain_deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while std::time::Instant::now() < drain_deadline {
+            match fanout.try_recv() {
+                Ok(event) => seen.push(event.event_type.as_str().to_owned()),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        // 丢弃点在 `crates/server/src/node_link/resource.rs` 的 `NodeLinkPublisher::publish`：
+        // `if event.session.is_none() { return; }`——节点级事件的会话标识为空，因此**不得**进入扇出。
+        // 本场景（`normal`）不产生会话级事件，队列应恰为空；若非空也不得含任何 `agent.*`。
+        assert!(
+            !seen.iter().any(|kind| kind.starts_with("agent.")),
+            "会话级投递路径不得收到节点级事件（agent.*）；实际收到 {seen:?}"
+        );
+        assert!(
+            seen.is_empty(),
+            "会话级投递路径只承载会话级事件，本场景应为空；实际 {seen:?}"
+        );
+
+        pool.close().await;
+
+        // 关闭序列（与 `crates/app/src/daemon.rs::close` 同序）：先停 Agent（此处产生本进程实例唯一的一次
+        // `agent.disconnected`，其提交任务由组合根的 sink spawn），**再** `Composition::close`——后者会先
+        // 排空这些提交任务，然后才关存储。若不先 `shutdown_all`，退出路由任务会持有 `AgentRuntime`（进而
+        // 持有 `NodeEvents` → `Broker` → 存储），`close` 会以上报 `StoreStillShared` 的方式**如实失败**
+        // 而不是静默跳过检查点。
+        composition.host().shutdown_all().await;
+        composition.close().await.expect("组合根可关闭");
+
+        // R32：断开事件同样落库且会话标识为空（`shutdown_all` 结束进程时产生）。
+        let disconnected = owned_event_rows(&data_dir, "agent.disconnected").await;
+        assert_eq!(
+            disconnected.len(),
+            1,
+            "R32：进程退出必须**恰好一次**落库 agent.disconnected；实际 {disconnected:?}"
+        );
+        assert_eq!(
+            disconnected[0].1, "<null>",
+            "R32：断开事件的 session_id 必须为空"
+        );
+    });
+}
