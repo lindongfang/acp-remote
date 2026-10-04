@@ -35,11 +35,11 @@ use crate::config::HostConfig;
 use crate::error::HostError;
 use crate::launch;
 use crate::limits;
+use crate::node::{self, AgentLifecycle, ExitCause, ExitMark, NodeEvents};
 use crate::process::Supervisor;
 use crate::session::{AcpSession, Endpoint, SessionInit};
 
 /// 一个 Agent 的运行时（一个进程 + 该进程上的全部会话）。
-#[derive(Debug)]
 struct AgentRuntime {
     supervisor: Arc<Supervisor>,
     /// 协商缓存与**进程代**绑定（`generation` 变化即失效——这里每次启动都是新实例，因此天然成立）。
@@ -51,10 +51,39 @@ struct AgentRuntime {
     by_core: std::sync::Mutex<HashMap<String, String>>,
     /// 进程级最近活动时间（没有活动会话时的空闲回收判据）。
     last_activity: std::sync::Mutex<std::time::Instant>,
+    /// 该 profile 的 Agent 标识（节点级事件里的 `agentId`）。
+    agent: AgentId,
+    /// 节点级事件的交付口（组合根注入；未接线时静默丢弃）。
+    ///
+    /// 与 `AgentHost` 共享同一个 `Arc<RwLock<..>>`：组合根可以在任何时刻接线，已建立的进程实例
+    /// 的下一次上报因此也能走到新通道（进程**已经发生过**的连接不会被补报——补报会违反「恰好一次」）。
+    node_events: Arc<std::sync::RwLock<NodeEvents>>,
+    /// 该进程实例的连接生命周期（`Stopped → Connected → Disconnected` 各一次）。
+    lifecycle: std::sync::Mutex<AgentLifecycle>,
+    /// 该进程实例是否已被判定退出（断开上报的前置；与 `Supervisor` 的退出标记同源）。
+    exit_mark: ExitMark,
+    /// 时钟（节点级事件的时间戳）。
+    clock: Arc<dyn Clock>,
+}
+
+impl std::fmt::Debug for AgentRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentRuntime")
+            .field("agent", &self.agent)
+            .field("generation", &self.generation)
+            .field("running", &self.supervisor.is_running())
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentRuntime {
-    fn new(supervisor: Arc<Supervisor>, generation: u64) -> Self {
+    fn new(
+        supervisor: Arc<Supervisor>,
+        generation: u64,
+        agent: AgentId,
+        node_events: Arc<std::sync::RwLock<NodeEvents>>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             supervisor,
             generation,
@@ -62,7 +91,44 @@ impl AgentRuntime {
             by_acp: std::sync::Mutex::new(HashMap::new()),
             by_core: std::sync::Mutex::new(HashMap::new()),
             last_activity: std::sync::Mutex::new(std::time::Instant::now()),
+            agent,
+            node_events,
+            lifecycle: std::sync::Mutex::new(AgentLifecycle::default()),
+            exit_mark: ExitMark::new(),
+            clock,
         }
+    }
+
+    /// 上报本进程实例的连接（**恰好一次**）。
+    ///
+    /// `AgentLifecycle::on_spawn` 在 `Stopped` 之外恒为假，因此复用既有进程的路径（`create`/`resume`/
+    /// `agent_capabilities` 三条入口都经 `ensure_runtime_tracked` 复用 runtime）不会产生第二条连接。
+    fn report_connected(&self) {
+        let first = lock(&self.lifecycle).on_spawn();
+        if !first {
+            return;
+        }
+        let events = read(&self.node_events).clone();
+        node::report_connected(&events, &self.agent, self.clock.as_ref());
+    }
+
+    /// 上报本进程实例的断开（**恰好一次**，且只在「已判定退出」之后）。
+    fn report_disconnected(&self) {
+        let oversize = self.supervisor.exit_was_oversize();
+        // 先取「应否上报」再判前置：`on_exit` 保证 `Connected → Disconnected` 只成立一次。
+        let due = lock(&self.lifecycle).on_exit();
+        if !due {
+            return;
+        }
+        let exited = self.exit_mark.take_disconnect() || self.supervisor.has_exited();
+        let events = read(&self.node_events).clone();
+        node::report_disconnected(
+            &events,
+            &self.agent,
+            ExitCause::classify(oversize),
+            exited,
+            self.clock.as_ref(),
+        );
     }
 
     /// 进程代（诊断与测试用）。
@@ -139,16 +205,22 @@ impl AgentRuntime {
         lock(&self.by_acp).values().cloned().collect()
     }
 
-    /// 进程退出时收敛：进行中的 turn 必须以明确失败结束（**一次**），能力缓存随之失效。
+    /// 进程退出时收敛：进行中的 turn 必须以明确失败结束（**一次**），能力缓存随之失效，
+    /// 并上报本进程实例的节点级断开（**一次**，且不早于退出判定）。
     fn on_exit(&self) {
+        // 先在 `Supervisor` 侧标记退出（幂等），再上报：即便退出监视任务被 abort 而没有走到
+        // `mark_exit`，这里也让「已退出」成立，断开上报因此永远不会早于它（spec 的顺序要求）。
         let status = self
             .supervisor
             .exit_status()
             .unwrap_or_else(|| "未知".to_owned());
+        self.supervisor.mark_exit_if_running(status.clone());
+        self.exit_mark.mark();
         for session in self.sessions() {
             session.on_agent_exit(&status);
         }
         lock(&self.capabilities).take();
+        self.report_disconnected();
     }
 }
 
@@ -163,12 +235,18 @@ pub struct AgentHost {
     generations: std::sync::Mutex<HashMap<AgentId, u64>>,
     /// 关闭标志：`shutdown_all()` 先置位，此后 `ensure_runtime` 一律拒绝启动新进程。
     shutting_down: AtomicBool,
+    /// 节点级 `agent.connected`/`agent.disconnected` 的交付口（组合根注入）。
+    ///
+    /// 默认未接线（事件静默丢弃）：本 crate 在没有同步入站面时不发明投递通道，也**不**把节点级事件
+    /// 塞进某个会话的 `EventSink`（那会把它们错误地归属到一个会话上）。
+    node_events: Arc<std::sync::RwLock<NodeEvents>>,
 }
 
 impl std::fmt::Debug for AgentHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentHost")
             .field("idle_timeout", &self.host_config.idle_timeout())
+            .field("node_events", &self.node_events_bound())
             .finish_non_exhaustive()
     }
 }
@@ -192,7 +270,29 @@ impl AgentHost {
             runtimes: Mutex::new(HashMap::new()),
             generations: std::sync::Mutex::new(HashMap::new()),
             shutting_down: AtomicBool::new(false),
+            node_events: Arc::new(std::sync::RwLock::new(NodeEvents::unbound())),
         }
+    }
+
+    /// 注入节点级事件的交付口（组合根把 core 的节点级提交入口包成 [`NodeEvents`] 后调用）。
+    ///
+    /// 可在任何时刻调用：已建立的进程实例共享同一个交付口句柄，它们**此后**的断开上报会走到新通道。
+    /// （此前已经发生过的连接不会被补报——补报会违反「恰好一次」。）
+    #[must_use]
+    pub fn with_node_events(self, node_events: NodeEvents) -> Self {
+        self.set_node_events(node_events);
+        self
+    }
+
+    /// 同 [`AgentHost::with_node_events`]，但作用于已构造的实例。
+    pub fn set_node_events(&self, node_events: NodeEvents) {
+        *write(&self.node_events) = node_events;
+    }
+
+    /// 节点级事件的交付口是否已接线（诊断用）。
+    #[must_use]
+    pub fn node_events_bound(&self) -> bool {
+        read(&self.node_events).is_bound()
     }
 
     /// 空闲回收判据（`None` = 不因空闲关闭）。
@@ -251,7 +351,28 @@ impl AgentHost {
             *next += 1;
             *next
         };
-        let runtime = Arc::new(AgentRuntime::new(Arc::clone(&supervisor), generation));
+        let runtime = Arc::new(AgentRuntime::new(
+            Arc::clone(&supervisor),
+            generation,
+            agent.clone(),
+            Arc::clone(&self.node_events),
+            Arc::clone(&self.clock),
+        ));
+        // 退出上报钩子：断开事件的唯一触发点（无论哪条路径先观察到退出，钩子只被取走一次）。
+        // 它在 `converge_exit` 的顺序下被调用，因此钩子里 `supervisor.is_running()` 必然已为假。
+        //
+        // 用 `Weak` 而非 `Arc`：钩子由 `Supervisor` 持有，而 `AgentRuntime` 又持有 `Supervisor`，
+        // 强引用会构成环（`Supervisor::drop` 的进程树清理因此永不执行）。进程退出时目录与路由任务
+        // 都还持有强引用，`upgrade()` 成功；运行时已被让出时钩子是无副作用的空操作（那一刻断开已由
+        // 让出路径显式上报过）。
+        {
+            let reporter = Arc::downgrade(&runtime);
+            supervisor.set_exit_reporter(move |_oversize| {
+                if let Some(runtime) = reporter.upgrade() {
+                    runtime.report_disconnected();
+                }
+            });
+        }
 
         match self.initialize(&runtime, limits::STARTUP_TIMEOUT).await {
             Ok(capabilities) => {
@@ -259,13 +380,19 @@ impl AgentHost {
                 *lock(&runtime.capabilities) = Some(capabilities);
             }
             Err(error) => {
-                // 协商失败：不留下半开的进程（进程树与任务一并回收）。
+                // 协商失败：不留下半开的进程（进程树与任务一并回收）。**不上报连接**——该进程从未
+                // 可服务会话，因此也就没有连接可上报（`AgentLifecycle::on_spawn` 从未被调用）。
                 supervisor.shutdown().await;
                 return Err(error);
             }
         }
 
         runtime.touch();
+        // 连接上报在进程**确实可服务会话**之后（`initialize` 成功），且每个进程实例一次。
+        // 必须早于 `spawn_router`：退出路由（`on_exit`）在进程立即死亡时会尝试上报断开，
+        // 若连接尚未上报，那条断开会被 `AgentLifecycle` 判为「从未连接」而丢弃——
+        // 于是留下一个「已死但被当作从未建立」的进程，与其真实生命周期不符。
+        runtime.report_connected();
         spawn_router(Arc::clone(&runtime), incoming);
         runtimes.insert(agent.clone(), Arc::clone(&runtime));
         Ok((runtime, true))
@@ -810,6 +937,22 @@ pub fn runtime_generation(host: &AgentHost, agent: &AgentId) -> Option<u64> {
 
 fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// 读锁（中毒时让出内部值，口径同 [`lock`]）。
+pub(crate) fn read<T>(lock: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    match lock.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// 写锁（中毒时让出内部值，口径同 [`lock`]）。
+fn write<T>(lock: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    match lock.write() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }

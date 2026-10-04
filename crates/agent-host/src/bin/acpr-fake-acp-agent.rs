@@ -239,6 +239,18 @@ fn handle(message: &Value, state: &mut State, out: &mut impl Write, args: &Args)
                 // 超过固定启动超时（10 s），用于断言 initialize 超时路径。
                 std::thread::sleep(std::time::Duration::from_secs(20));
             }
+            if args.scenario == "initialize-error" {
+                // 协商明确失败：进程从未可服务会话，因此「连接/断开」都不该被上报。
+                write_line(
+                    out,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32000, "message": "无法协商" },
+                    }),
+                );
+                return;
+            }
             respond(
                 out,
                 &id,

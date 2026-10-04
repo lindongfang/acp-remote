@@ -1213,3 +1213,411 @@ async fn repeated_resume_leaves_a_single_dispatching_binding() {
     drop(current);
     host.shutdown_all().await;
 }
+
+// -------------------------------------------------------------------------------------------
+// R8 / D6：profile 进程的连接生命周期上报（节点级 `agent.connected` / `agent.disconnected`）
+// -------------------------------------------------------------------------------------------
+
+/// 一个带节点级事件收集器的 host；收集器的 sink 在现场回读「运行时是否仍被当作在运行」。
+fn host_with_node_events(
+    profiles: Vec<AgentProfile>,
+    credentials: FakeCredentials,
+) -> (Arc<AgentHost>, Collector) {
+    let node = Collector::new();
+    let host = Arc::new(
+        AgentHost::new(
+            Arc::new(FakeConfig::new(profiles)),
+            Arc::new(credentials),
+            HostConfig::default(),
+            Arc::new(TestIds::new()),
+            Arc::new(TestClock::new()),
+        )
+        .with_node_events(agent_host::NodeEvents::new(node.sink())),
+    );
+    (host, node)
+}
+
+/// 等某个 `event_type` 的节点级事件出现（带超时）。
+async fn wait_for_node_event(collector: &Collector, event_type: &str) -> bool {
+    collector
+        .wait_for_type(event_type, Duration::from_secs(10))
+        .await
+}
+
+/// 首次建立时上报一次连接；同一进程被多个会话复用**不得**产生第二条连接。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_process_reports_connect_once_and_reuse_adds_nothing() {
+    let (host, node) =
+        host_with_node_events(vec![profile("agent-1", FAKE_AGENT)], FakeCredentials::ok());
+
+    let first = Collector::new();
+    let _endpoint = create(&host, SESSION, &first).await;
+    assert!(
+        wait_for_node_event(&node, "agent.connected").await,
+        "首个会话建立进程后必须上报一次连接"
+    );
+    assert_eq!(node.count("agent.connected"), 1);
+    assert_eq!(node.count("agent.disconnected"), 0);
+    let view: Value =
+        serde_json::from_str(&node.first_view("agent.connected").expect("view")).expect("json");
+    assert_eq!(view["agentId"], "agent-1");
+    assert_eq!(view["state"], "connected", "封闭词表的唯一取值");
+    assert_eq!(
+        view.as_object().expect("object").len(),
+        2,
+        "节点级连接视图只有 agentId 与 state：{view}"
+    );
+
+    // 第二个、第三个会话复用同一进程：连接**不得**重复上报。
+    let second = Collector::new();
+    let _endpoint2 = create(&host, OTHER_SESSION, &second).await;
+    let third = Collector::new();
+    let _endpoint3 = create(&host, RESUME_SESSION, &third).await;
+    assert!(runtime_running(&host, &agent_id()), "三个会话共用同一进程");
+    assert_eq!(
+        node.count("agent.connected"),
+        1,
+        "复用既有进程不得重复上报连接"
+    );
+
+    host.shutdown_all().await;
+    assert!(
+        wait_for_node_event(&node, "agent.disconnected").await,
+        "进程退出时必须上报断开"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(node.count("agent.disconnected"), 1, "断开恰好一次");
+}
+
+/// `agent_capabilities` 触发的首次 spawn 同样产生一次连接（进程确实可服务会话即可观察），
+/// 后续复用不产生第二条。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capability_probe_spawn_reports_connect_once() {
+    let (host, node) = host_with_node_events(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &[
+                "--scenario",
+                "normal",
+                "--capabilities",
+                r#"{"loadSession":true}"#,
+            ],
+        )],
+        FakeCredentials::ok(),
+    );
+    let _ = host.agent_capabilities(&agent_ref()).await;
+    assert!(wait_for_node_event(&node, "agent.connected").await);
+    let _ = host.agent_capabilities(&agent_ref()).await;
+    assert_eq!(node.count("agent.connected"), 1, "复用不重复上报");
+    host.shutdown_all().await;
+}
+
+/// 空闲回收终止进程时同样上报一次断开。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_reclaim_reports_disconnect_once() {
+    let (host, node) =
+        host_with_node_events(vec![profile("agent-1", FAKE_AGENT)], FakeCredentials::ok());
+    let collector = Collector::new();
+    let _endpoint = create(&host, SESSION, &collector).await;
+    assert!(wait_for_node_event(&node, "agent.connected").await);
+    assert_eq!(node.count("agent.disconnected"), 0);
+
+    // 空闲时长为 0 的超时下，一次扫描即命中（会话无进行中的 turn）。
+    host.sweep_idle(Duration::from_nanos(1)).await;
+    assert!(
+        wait_for_node_event(&node, "agent.disconnected").await,
+        "被空闲回收终止的进程必须上报断开"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(node.count("agent.disconnected"), 1, "断开恰好一次");
+    host.shutdown_all().await;
+}
+
+/// 自然退出（Agent 自己结束）同样上报断开，且恰好一次。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn natural_exit_reports_disconnect_once() {
+    let (host, node) = host_with_node_events(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "crash-on-prompt"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let collector = Collector::new();
+    let endpoint = create(&host, SESSION, &collector).await;
+    assert!(wait_for_node_event(&node, "agent.connected").await);
+
+    // `crash-on-prompt`：Agent 在 prompt 期间自己退出（不是被我们结束）。
+    let _ = endpoint
+        .prompt(
+            acp_core::model::PromptRequest::new(vec![
+                PromptContentBlock::from_json_text("{\"type\":\"text\",\"text\":\"崩溃\"}")
+                    .expect("block"),
+            ]),
+            support::timestamp(),
+        )
+        .await;
+    assert!(
+        wait_for_node_event(&node, "agent.disconnected").await,
+        "进程自然退出必须上报断开"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(node.count("agent.disconnected"), 1, "断开恰好一次");
+    let view: Value =
+        serde_json::from_str(&node.first_view("agent.disconnected").expect("view")).expect("json");
+    assert_eq!(view["state"], "disconnected");
+    assert_eq!(view["error"]["code"], "internal.unavailable");
+    host.shutdown_all().await;
+}
+
+/// 超限退出：断开上报**不早于**该运行时被判定为已退出。
+///
+/// 判据在现场采集：节点级事件的 sink 是**同步**交付路径，断开事件到达的那一刻读到的
+/// `runtime_running(...)` 必须不是 `true`（`true` 就是 spec 禁止的「已断开但仍被当作存活」窗口）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversize_exit_reports_disconnect_after_the_exit_verdict() {
+    let (host, node) = host_with_node_events(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "huge-line"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let collector = Collector::new();
+    let endpoint = create(&host, SESSION, &collector).await;
+    assert!(
+        wait_for_node_event(&node, "agent.connected").await,
+        "先有连接"
+    );
+
+    // 这里把节点级收集器的 sink 换成「现场回读」版本：同一条同步调用链上读运行时状态。
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let probe = {
+        let observed = Arc::clone(&observed);
+        let host = Arc::clone(&host);
+        agent_host::NodeEvents::new(acp_core::ports::EventSink::new(move |event| {
+            if event.event_type.as_str() == "agent.disconnected" {
+                let still_running = runtime_running(&host, &agent_id());
+                if let Ok(mut guard) = observed.lock() {
+                    guard.push(still_running);
+                }
+            }
+        }))
+    };
+    host.set_node_events(probe);
+
+    let _ = endpoint
+        .prompt(prompt("触发超限"), support::timestamp())
+        .await
+        .ok();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while observed.lock().expect("lock").is_empty() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let observed = observed.lock().expect("lock").clone();
+    assert_eq!(observed.len(), 1, "超限退出只上报一次断开：{observed:?}");
+    assert!(
+        !observed[0],
+        "断开上报时该运行时不得仍被当作在运行：{observed:?}"
+    );
+    assert!(!runtime_running(&host, &agent_id()), "超限后运行时已退出");
+    host.shutdown_all().await;
+}
+
+/// 未拒绝 `initialize` 的进程（协商失败即被回收）**不上报**连接，因此也不上报断开。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_initialize_reports_neither_connect_nor_disconnect() {
+    let (host, node) = host_with_node_events(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "initialize-error"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let collector = Collector::new();
+    let result = host
+        .create(
+            &session_id(SESSION),
+            CreateSessionRequest::new(
+                agent_ref(),
+                Some(support::workspace()),
+                None,
+                ResourceOrigin::Local,
+            ),
+            collector.sink(),
+        )
+        .await;
+    assert!(result.is_err(), "协商失败必须显式失败");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        node.count("agent.connected"),
+        0,
+        "从未可服务会话的进程不上报连接"
+    );
+    assert_eq!(node.count("agent.disconnected"), 0, "因此也不上报断开");
+    host.shutdown_all().await;
+}
+
+// -------------------------------------------------------------------------------------------
+// R22 / D4：工具调用里的类型化 Diff 元素随工具调用一并交付（逐字节原文）
+// -------------------------------------------------------------------------------------------
+
+/// 含 Diff 的工具调用：三个 `tool.call.*` 事件的 view 带 `diff` 数组，元素是**原文子串** +
+/// 按 JSON 语义解码的 `path`/`oldText`/`newText`；ACP 原文三要素逐字不变。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn typed_diff_elements_are_delivered_with_the_tool_call() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "chunked-updates"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let endpoint = create(&host, SESSION, &collector).await;
+    endpoint
+        .prompt(prompt("编辑"), support::timestamp())
+        .await
+        .expect("prompt");
+    assert!(
+        collector
+            .wait_for_type("tool.call.started", Duration::from_secs(10))
+            .await,
+        "工具调用必须到达：{:?}",
+        collector.event_types()
+    );
+
+    for event in collector.snapshot() {
+        let event_type = event.event_type.as_str().to_owned();
+        if !event_type.starts_with("tool.call.") {
+            continue;
+        }
+        let view: Value =
+            serde_json::from_str(event.payload.view.as_str()).expect("view 是 JSON 对象");
+        // 原文三要素必须可读（本用例只断言存在性；保真断言在下面按内容比对）。
+        assert!(
+            event.payload.acp.is_some(),
+            "{event_type}: 工具调用必须携带 ACP 原文"
+        );
+        let Some(diff) = view.get("diff") else {
+            // `tool.call.updated`/`completed` 在 fake 场景里只带普通内容块：这时 diff 键必须**缺席**
+            // （不是 null、不是空数组），因为「不含 Diff 的工具调用」在视图层就是不可派生的。
+            assert!(
+                !event_type.is_empty(),
+                "diff 键缺席是合法的（该次更新的内容里没有 Diff 元素）"
+            );
+            continue;
+        };
+        let elements = diff.as_array().expect("diff 恒为数组");
+        assert!(!elements.is_empty(), "diff 键出现时至少一个元素");
+        let raw_json = event
+            .payload
+            .acp
+            .as_ref()
+            .and_then(|acp| acp.as_available().map(|(_, raw, _, _)| raw.to_owned()))
+            .expect("原文");
+        for element in elements {
+            let slice = element["raw"].as_str().expect("raw 切片");
+            assert!(
+                raw_json.contains(slice),
+                "{event_type}: diff 元素的 raw 必须是 ACP **原文**的子串（逐字节）"
+            );
+            assert_eq!(element["path"], "src/main.rs");
+            assert_eq!(element["oldText"], "let a = 1;");
+            assert_eq!(element["newText"], "let a = 2;");
+        }
+    }
+
+    // `tool.call.started` 的内容里确实有 Diff 元素：它必须带 `diff` 键（防空转守卫）。
+    let started: Value = serde_json::from_str(
+        &collector
+            .first_view("tool.call.started")
+            .expect("tool.call.started view"),
+    )
+    .expect("view");
+    assert!(
+        started.get("diff").is_some(),
+        "含 Diff 元素的工具调用必须带 diff 键：{started}"
+    );
+    assert!(
+        started.get("rawInput").is_none(),
+        "适配器不把 rawInput 投影进视图：{started}"
+    );
+
+    drop(endpoint);
+    host.shutdown_all().await;
+}
+
+/// Diff 逐字节：`raw` 切片与原文的字节偏移关系（含 `RawDocument` 的 `member_literal` 口径），
+/// 且工具调用的 `payload.acp` 摘要与原文一致（三要素之一）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn diff_slice_is_byte_identical_and_acp_raw_matches_its_digest() {
+    let collector = Collector::new();
+    let host = host(
+        vec![profile_with(
+            "agent-1",
+            FAKE_AGENT,
+            &["--scenario", "chunked-updates"],
+        )],
+        FakeCredentials::ok(),
+    );
+    let endpoint = create(&host, SESSION, &collector).await;
+    endpoint
+        .prompt(prompt("编辑"), support::timestamp())
+        .await
+        .expect("prompt");
+    assert!(
+        collector
+            .wait_for_type("tool.call.started", Duration::from_secs(10))
+            .await
+    );
+
+    let event = collector
+        .snapshot()
+        .into_iter()
+        .find(|event| event.event_type.as_str() == "tool.call.started")
+        .expect("tool.call.started");
+    let (media_type, raw_json, byte_length, sha256) = event
+        .payload
+        .acp
+        .as_ref()
+        .and_then(|acp| acp.as_available())
+        .expect("原文");
+    assert_eq!(media_type, "application/json");
+    assert_eq!(
+        byte_length as usize,
+        raw_json.len(),
+        "byteLength 与原文逐字节一致"
+    );
+    assert_eq!(
+        sha256.as_str(),
+        digest_of(raw_json).as_str(),
+        "sha256 必须与原文逐字节对应"
+    );
+
+    let view: Value = serde_json::from_str(event.payload.view.as_str()).expect("view");
+    let element = &view["diff"][0];
+    let slice = element["raw"].as_str().expect("raw");
+    let offset = raw_json.find(slice).expect("raw 必须在原文里");
+    assert_eq!(
+        &raw_json[offset..offset + slice.len()],
+        slice,
+        "raw 是原文的逐字节子串"
+    );
+    // 这四个字段都是本次交付的载体；缺任何一个都会让 WP3 的派生失去输入。
+    for field in ["path", "oldText", "newText", "raw"] {
+        assert!(
+            element.get(field).is_some(),
+            "diff 元素必须带 {field}：{element}"
+        );
+    }
+
+    drop(endpoint);
+    host.shutdown_all().await;
+}
