@@ -53,7 +53,7 @@ struct AgentRuntime {
     last_activity: std::sync::Mutex<std::time::Instant>,
     /// 该 profile 的 Agent 标识（节点级事件里的 `agentId`）。
     agent: AgentId,
-    /// 节点级事件的交付口（组合根注入；未接线时静默丢弃）。
+    /// 节点级事件的交付口（组合根注入；未接线时交付返回 [`crate::NodeEventError::Unbound`] 并记日志）。
     ///
     /// 与 `AgentHost` 共享同一个 `Arc<RwLock<..>>`：组合根可以在任何时刻接线，已建立的进程实例
     /// 的下一次上报因此也能走到新通道（进程**已经发生过**的连接不会被补报——补报会违反「恰好一次」）。
@@ -109,7 +109,11 @@ impl AgentRuntime {
             return;
         }
         let events = read(&self.node_events).clone();
-        node::report_connected(&events, &self.agent, self.clock.as_ref());
+        if node::report_connected(&events, &self.agent, self.clock.as_ref()).is_err() {
+            // `NodeEvents::send` 已经记了「未接线」的 `error` 日志；这里补上「哪个进程实例」的上下文，
+            // 让漏接在日志里可定位（事件本身**没有**被交付，也就不会落库）。
+            crate::node::log_undelivered("agent.connected", &self.agent);
+        }
     }
 
     /// 上报本进程实例的断开（**恰好一次**，且只在「已判定退出」之后）。
@@ -122,13 +126,17 @@ impl AgentRuntime {
         }
         let exited = self.exit_mark.take_disconnect() || self.supervisor.has_exited();
         let events = read(&self.node_events).clone();
-        node::report_disconnected(
+        if node::report_disconnected(
             &events,
             &self.agent,
             ExitCause::classify(oversize),
             exited,
             self.clock.as_ref(),
-        );
+        )
+        .is_err()
+        {
+            crate::node::log_undelivered("agent.disconnected", &self.agent);
+        }
     }
 
     /// 进程代（诊断与测试用）。
@@ -237,8 +245,9 @@ pub struct AgentHost {
     shutting_down: AtomicBool,
     /// 节点级 `agent.connected`/`agent.disconnected` 的交付口（组合根注入）。
     ///
-    /// 默认未接线（事件静默丢弃）：本 crate 在没有同步入站面时不发明投递通道，也**不**把节点级事件
-    /// 塞进某个会话的 `EventSink`（那会把它们错误地归属到一个会话上）。
+    /// 默认未接线。未接线**不是**静默成功：交付会返回 [`crate::NodeEventError::Unbound`] 并记 `error`
+    /// 级日志。本 crate 在没有同步入站面时不发明投递通道，也**不**把节点级事件塞进某个会话的
+    /// `EventSink`（那会把它们错误地归属到一个会话上）。
     node_events: Arc<std::sync::RwLock<NodeEvents>>,
 }
 

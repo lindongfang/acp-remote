@@ -11,16 +11,45 @@
 //!   因此这里只交付「已构造好的事件」，投递通道由组合根经 [`NodeEvents`] 注入。
 //! - 断开上报 `MUST NOT` 早于该运行时被标记为已退出：由 [`ExitMark`] 承载「先标记、后上报」的顺序
 //!   （结构上不可绕过，不是注释约定）。
+//! - 投递通道**未接线**是可观测的故障，不是空操作：见 [`NodeEventError`]（`reports/review-w4-r1.md`
+//!   的 F1——把「接缝漏接」变成运行时无声失败是被禁止的）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use acp_core::model::{AgentId, EndpointEvent, EventKind, EventType, Timestamp, ViewJson};
 use acp_core::ports::{Clock, EventSink};
 
+/// 节点级事件**无法**交给投递通道的原因。
+///
+/// 存在的理由（`reports/review-w4-r1.md` F1）：[`NodeEvents::unbound`] 是组合根尚未接线时的状态，而
+/// 「未接线」与「已投递」是两件事。把前者当成后者，会让整条节点级事件链（core 的
+/// `Broker::commit_node_event` 落库、`core-derived-events` R8 的「节点级事件落库且会话标识为空」）在
+/// 漏接时无声停摆——事件在 core 之前就被丢掉，没有任何人看得见。因此未接线时**返回错误并记一条
+/// `error` 级日志**，调用方与运维都必须看见。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeEventError {
+    /// 出口未接线（组合根没有调用 `AgentHost::with_node_events`/`set_node_events`）。
+    ///
+    /// 这个取值的语义是**事件没有被交付**（也就不会被落库），绝不是「已交付」。
+    Unbound,
+}
+
+impl std::fmt::Display for NodeEventError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "节点级事件出口未接线（组合根未调用 AgentHost::with_node_events/set_node_events）",
+        )
+    }
+}
+
+impl std::error::Error for NodeEventError {}
+
 /// 节点级事件的交付口，由组合根注入。
 ///
-/// 未接线时（[`NodeEvents::unbound`]）事件被静默丢弃：`agent-host` 在没有组合根注入通道时仍需可用
-/// （既有单测与诊断路径都不接线），且**绝不**伪造成「已投递」。
+/// 未接线时（[`NodeEvents::unbound`]）事件**不会**被静默丢弃：[`NodeEvents::send`] 返回
+/// [`NodeEventError::Unbound`] 并记一条 `error` 级日志。`agent-host` 在没有组合根注入通道时仍然可用
+/// （构造、目录查询、会话端点都不依赖它），但本类型**绝不**把丢弃伪装成投递——接线缺失必须在
+/// 开发期（错误返回值）或运行期（日志）被看见。
 #[derive(Clone)]
 pub struct NodeEvents {
     sink: Option<EventSink>,
@@ -41,7 +70,7 @@ impl Default for NodeEvents {
 }
 
 impl NodeEvents {
-    /// 未接线的出口（事件无处可去，静默丢弃）。
+    /// 未接线的出口：**不是**空操作——[`NodeEvents::send`] 会返回 [`NodeEventError::Unbound`]。
     #[must_use]
     pub fn unbound() -> Self {
         Self { sink: None }
@@ -59,9 +88,27 @@ impl NodeEvents {
         self.sink.is_some()
     }
 
-    fn send(&self, event: EndpointEvent) {
-        if let Some(sink) = &self.sink {
-            sink.send(event);
+    /// 交付一条节点级事件。
+    ///
+    /// 已接线：同步交给 sink（`EventSource` 是同步调用面），返回 `Ok(())`。
+    ///
+    /// 未接线：**不静默丢弃**——记一条 `error` 级日志（运维可见）并返回
+    /// [`NodeEventError::Unbound`]（开发期可见）。返回 `Ok(())` 只表示「已交给 sink」，
+    /// 不表示下游已落库（落库是 core 的事）；但返回 `Err` 时才确定地表示「事件没有去向」。
+    pub fn send(&self, event: EndpointEvent) -> Result<(), NodeEventError> {
+        match &self.sink {
+            Some(sink) => {
+                sink.send(event);
+                Ok(())
+            }
+            None => {
+                tracing::error!(
+                    event_type = event.event_type.as_str(),
+                    "节点级事件没有交付通道：组合根未接线 NodeEvents，事件被丢弃\
+                     （AgentHost::new(...).with_node_events(...) 或 set_node_events(...) 未调用）"
+                );
+                Err(NodeEventError::Unbound)
+            }
         }
     }
 }
@@ -255,18 +302,35 @@ pub(crate) fn now(clock: &dyn Clock) -> Timestamp {
     clock.now()
 }
 
-/// 上报连接（事件构造失败时静默跳过：`ViewJson`/`EventType` 的校验对这两个常量形状不会失败）。
-pub(crate) fn report_connected(events: &NodeEvents, agent: &AgentId, clock: &dyn Clock) -> bool {
+/// 为「事件没有交付通道」补一条带 Agent 上下文的 `error` 日志。
+///
+/// [`NodeEvents::send`] 已经为未接线记了一条（含 `event_type`）；本函数由持有 Agent 标识的调用方
+/// （`AgentRuntime`）补上 `agent_id`，让漏接在运行期可定位到具体 profile 进程。
+pub(crate) fn log_undelivered(event_type: &str, agent: &AgentId) {
+    tracing::error!(
+        event_type,
+        agent_id = agent.as_str(),
+        "节点级事件未交付：该进程的这条连接/断开不会被落库（组合根漏接 NodeEvents）"
+    );
+}
+
+/// 上报连接。
+///
+/// 返回 [`NodeEventError`] 表示事件**没有**被交付（当前唯一原因：出口未接线）。事件构造失败时静默跳过
+/// （`ViewJson`/`EventType` 的校验对这两个常量形状不会失败），此时返回 `Ok(())`——没有事件需要交付，
+/// 也就无所谓投递失败。
+pub(crate) fn report_connected(
+    events: &NodeEvents,
+    agent: &AgentId,
+    clock: &dyn Clock,
+) -> Result<(), NodeEventError> {
     match connected_event(agent, now(clock)) {
-        Some(event) => {
-            events.send(event);
-            true
-        }
-        None => false,
+        Some(event) => events.send(event),
+        None => Ok(()),
     }
 }
 
-/// 上报断开；`exited` 为假时**不上报**（返回 `false`）。
+/// 上报断开；`exited` 为假时**不上报**（返回 `Ok(())`，没有事件需要交付）。
 ///
 /// 这是 spec 的「断开 MUST NOT 早于该运行时被判定为已退出」在调用面的表达：调用方必须先把运行时
 /// 标记为退出（`ExitMark::mark` 并由 `Supervisor::is_running()` 反映）。
@@ -276,16 +340,13 @@ pub(crate) fn report_disconnected(
     cause: ExitCause,
     exited: bool,
     clock: &dyn Clock,
-) -> bool {
+) -> Result<(), NodeEventError> {
     if !exited {
-        return false;
+        return Ok(());
     }
     match disconnected_event(agent, Some(cause.public_error()), now(clock)) {
-        Some(event) => {
-            events.send(event);
-            true
-        }
-        None => false,
+        Some(event) => events.send(event),
+        None => Ok(()),
     }
 }
 
@@ -409,11 +470,13 @@ mod tests {
         event.event_type.as_str()
     }
 
-    /// 未接线的出口不投递也不 panic（`agent-host` 在没有组合根注入通道时仍需可用）。
+    /// 未接线的出口**不静默丢弃**：`send` 返回 `Err(Unbound)`（F1 的机器判据——接线缺失在开发期
+    /// 可见），同时绝不 panic、绝不伪造成「已投递」。已接线的出口交付并返回 `Ok`。
     #[test]
-    fn unbound_node_events_drop_silently_but_stay_reportable() {
+    fn unbound_node_events_refuse_to_drop_silently() {
         let events = NodeEvents::unbound();
         assert!(!events.is_bound());
+
         let collector = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = {
             let collector = std::sync::Arc::clone(&collector);
@@ -425,19 +488,26 @@ mod tests {
         };
         let bound = NodeEvents::new(sink);
         assert!(bound.is_bound());
+
         let clock = FixedClock;
-        assert!(report_connected(&events, &agent(), &clock));
-        assert!(report_disconnected(
-            &bound,
-            &agent(),
-            ExitCause::Normal,
-            true,
-            &clock
-        ));
-        assert_eq!(collector.lock().expect("lock").len(), 1);
+        // 未接线：上报返回 `Err`（事件没有去向），且没有任何东西被「投递」。
+        assert_eq!(
+            report_connected(&events, &agent(), &clock),
+            Err(NodeEventError::Unbound),
+            "未接线的 outlet 必须拒绝，而不是报告成功"
+        );
+        assert_eq!(
+            report_disconnected(&events, &agent(), ExitCause::Normal, true, &clock),
+            Err(NodeEventError::Unbound),
+            "未接线的 outlet 必须拒绝，而不是报告成功"
+        );
+        // 已接线：交付一次并返回 `Ok`。
+        assert!(report_connected(&bound, &agent(), &clock).is_ok());
+        assert!(report_disconnected(&bound, &agent(), ExitCause::Normal, true, &clock).is_ok());
+        assert_eq!(collector.lock().expect("lock").len(), 2);
     }
 
-    /// 未判定退出时 `report_disconnected` 是空操作（不产生事件）。
+    /// 未判定退出时 `report_disconnected` 是空操作：没有事件需要交付，因此**不**是投递失败。
     #[test]
     fn report_disconnected_is_a_noop_before_the_exit_verdict() {
         let collector = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -450,14 +520,21 @@ mod tests {
             })
         };
         let bound = NodeEvents::new(sink);
-        assert!(!report_disconnected(
-            &bound,
-            &agent(),
-            ExitCause::Normal,
-            false,
-            &FixedClock
-        ));
+        assert!(
+            report_disconnected(&bound, &agent(), ExitCause::Normal, false, &FixedClock).is_ok()
+        );
         assert!(collector.lock().expect("lock").is_empty());
+        // 即便出口未接线，「未判定退出」也不是投递失败——没有事件产生。
+        assert!(
+            report_disconnected(
+                &NodeEvents::unbound(),
+                &agent(),
+                ExitCause::Normal,
+                false,
+                &FixedClock
+            )
+            .is_ok()
+        );
     }
 
     struct FixedClock;

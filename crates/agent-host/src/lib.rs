@@ -40,5 +40,5 @@ pub use config::HostConfig;
 pub use error::HostError;
 pub use host::{AgentHost, runtime_generation, runtime_running, spawn_idle_sweep};
 pub use launch::{LaunchSpec, resolve_launch};
-pub use node::{NodeEvents, PublicErrorView};
+pub use node::{NodeEventError, NodeEvents, PublicErrorView};
 pub use session::{AcpSession, Endpoint};

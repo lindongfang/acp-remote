@@ -13,7 +13,7 @@ use acp_core::model::{
 };
 use acp_core::ports::{AgentCatalog, SessionBackendFactory, SessionEndpoint};
 use agent_host::runtime_running;
-use agent_host::{AgentHost, HostConfig};
+use agent_host::{AgentHost, HostConfig, NodeEventError};
 use serde_json::Value;
 use support::{
     Collector, FAKE_AGENT, FakeConfig, FakeCredentials, TempFile, TestClock, TestIds, digest_of,
@@ -1460,6 +1460,40 @@ async fn failed_initialize_reports_neither_connect_nor_disconnect() {
         "从未可服务会话的进程不上报连接"
     );
     assert_eq!(node.count("agent.disconnected"), 0, "因此也不上报断开");
+    host.shutdown_all().await;
+}
+
+/// F1（`reports/review-w4-r1.md`）：**未接线**的节点级出口不是空操作。
+///
+/// 组合根漏接 `NodeEvents` 时，事件必须在开发期/运行期被看见，而不是在 core 之前被无声丢弃：
+/// - `node_events_bound()` 为假（接线缺失在进程内可查询）；
+/// - `NodeEvents::send` 返回 [`NodeEventError::Unbound`]（开发期可见的机器判据）；
+/// - 接线后（`set_node_events`）同一个实例即生效，交付返回 `Ok`。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unbound_node_events_are_visible_not_silently_dropped() {
+    // 默认构造 = 未接线。
+    let host = host(vec![profile("agent-1", FAKE_AGENT)], FakeCredentials::ok());
+    assert!(
+        !host.node_events_bound(),
+        "默认构造的 AgentHost 未接线节点级出口"
+    );
+
+    // 未接线的出口明确拒绝（而不是返回成功）：这就是「漏接被看见」的判据。
+    let unbound = agent_host::NodeEvents::unbound();
+    assert!(!unbound.is_bound());
+    assert_eq!(
+        unbound.send(
+            agent_host::node::connected_event(&agent_id(), support::timestamp())
+                .expect("connected event")
+        ),
+        Err(NodeEventError::Unbound),
+        "未接线的出口必须拒绝，而不是静默丢弃"
+    );
+
+    // 接线之后即可交付：同一个实例（`set_node_events`）在一处接线即全局生效。
+    let node = Collector::new();
+    host.set_node_events(agent_host::NodeEvents::new(node.sink()));
+    assert!(host.node_events_bound(), "接线后必须可见");
     host.shutdown_all().await;
 }
 
