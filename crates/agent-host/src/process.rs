@@ -29,25 +29,50 @@ use crate::platform::ProcessTree;
 
 type Pending = HashMap<u64, oneshot::Sender<Result<Value, HostError>>>;
 
+/// 退出上报钩子的类型别名（避免在结构体字段上出现难以阅读的裸 `Box<dyn Fn(bool)>`）。
+type ExitReporter = Box<dyn Fn(bool) + Send + Sync>;
+
 /// 退出状态（供失败分类与日志使用；不含任何正文）。
-#[derive(Debug)]
 struct ExitState {
     done: AtomicBool,
+    /// 该进程是否因**单条 stdout 消息超限**被结束（决定节点级断开事件的错误类别）。
+    oversize: AtomicBool,
     status: Mutex<Option<String>>,
     notify: Notify,
+    /// 退出路径的**唯一**上报钩子（每个进程实例一次；由 `Supervisor` 的构造方注入）。
+    ///
+    /// 形参是「本次退出是否因超限结束」；具体原因由上报方从 [`Supervisor::exit_was_oversize`] 自取，
+    /// 因此这里不再重复传递。
+    report_exit: Mutex<Option<ExitReporter>>,
 }
 
 impl ExitState {
     fn new() -> Self {
         Self {
             done: AtomicBool::new(false),
+            oversize: AtomicBool::new(false),
             status: Mutex::new(None),
             notify: Notify::new(),
+            report_exit: Mutex::new(None),
         }
     }
 
     fn status(&self) -> Option<String> {
         self.status.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 超限结束的标记：由 `abort_agent` 在**标记退出之前**置位。
+    fn mark_oversize(&self) {
+        self.oversize.store(true, Ordering::SeqCst);
+    }
+
+    fn is_oversize(&self) -> bool {
+        self.oversize.load(Ordering::SeqCst)
+    }
+
+    /// 是否已被判定退出。
+    fn is_done(&self) -> bool {
+        self.done.load(Ordering::SeqCst)
     }
 
     fn mark(&self, status: String) {
@@ -56,6 +81,31 @@ impl ExitState {
         }
         self.done.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
+    }
+
+    /// 上报退出的**唯一**入口：第一条到达的退出路径执行钩子，其余路径什么都不做。
+    ///
+    /// 这就是「断开上报 MUST NOT 早于该运行时被判定为已退出」的落点——钩子在 `mark` **之后**调用，
+    /// 因此钩子里的 `supervisor.is_running()` 必然已为假。
+    fn report_exit(&self) {
+        let hook = self
+            .report_exit
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(hook) = hook {
+            hook(self.is_oversize());
+        }
+    }
+}
+
+impl std::fmt::Debug for ExitState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExitState")
+            .field("done", &self.is_done())
+            .field("oversize", &self.oversize)
+            .field("status", &self.status())
+            .finish_non_exhaustive()
     }
 }
 
@@ -207,6 +257,45 @@ impl Supervisor {
     #[must_use]
     pub fn has_exited(&self) -> bool {
         self.exit.done.load(Ordering::SeqCst)
+    }
+
+    /// 本次退出是否因单条 stdout 消息超限（节点级断开事件的错误类别据此判定）。
+    #[must_use]
+    pub fn exit_was_oversize(&self) -> bool {
+        self.exit.is_oversize()
+    }
+
+    /// 进程退出：
+    ///
+    /// 1. 把未完成请求以明确错误收敛（幂等：未完成请求只被结算一次）；
+    /// 2. **标记退出**（`is_running()` 立即为假）；
+    /// 3. 最后才调用退出上报钩子（节点级断开事件）。
+    ///
+    /// 顺序即契约：钩子被调用时 `is_running()` 已为假、`exit_was_oversize()` 已是终值。
+    /// 已判定退出时它是幂等空操作。
+    fn converge_exit(&self, status: String) {
+        if self.exit.is_done() {
+            return;
+        }
+        self.fail_pending(|| HostError::AgentExited {
+            status: status.clone(),
+        });
+        tracing::info!(status = %status, "Agent 进程退出");
+        let final_status = self.exit.status().unwrap_or(status);
+        self.exit.mark(final_status);
+        self.exit.report_exit();
+    }
+
+    /// 注入退出上报钩子（每个进程实例一次；`AgentHost` 用它发节点级断开事件）。
+    pub fn set_exit_reporter(&self, reporter: impl Fn(bool) + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.exit.report_exit.lock() {
+            *slot = Some(Box::new(reporter));
+        }
+    }
+
+    /// 幂等标记退出（已达成的退出判定不被覆盖，也不重复触发钩子）。
+    pub fn mark_exit_if_running(&self, status: String) {
+        self.converge_exit(status);
     }
 
     /// 退出状态的可读描述。
@@ -385,6 +474,11 @@ impl Supervisor {
                 let _ = handle.await;
             }
         }
+        // 6) 收敛退出：子任务已全部结束，此时若进程仍未被判定为退出（例如它在 grace 内自行退出但
+        //    读任务的 EOF 因管道持有者未全部关闭而尚未观察到），由本路径补上——**断开上报不早于退出
+        //    判定**由 `converge_exit` 的顺序保证，且钩子只被取走一次。
+        let status = self.exit.status().unwrap_or_else(|| "已关闭".to_owned());
+        self.converge_exit(status);
     }
 
     /// 把一个外部任务登记进本监督者的任务集：**所有权仍在本结构**，关闭时一并 join。
@@ -502,10 +596,15 @@ fn abort_agent(
     tree: &crate::platform::ProcessTree,
 ) {
     tracing::error!(reason, limit, actual, "ACP stdout 违反上限，结束该 Agent");
-    // 顺序即契约（`local-agent-host` 增量规范「超限结束的失败关闭顺序」）：先标记退出
-    // （`is_running()` 立即为假，坏 runtime 不会被继续复用），再唤醒等待中的请求，最后结束整棵树。
-    // 反过来则被错误唤醒的调用方会在「错误已可见、Agent 仍显示在运行」的窗口里观察到不一致。
+    // 顺序即契约（`local-agent-host` 增量规范「超限结束的失败关闭顺序」）：先标记**超限原因**，
+    // 再标记退出（`is_running()` 立即为假，坏 runtime 不会被继续复用），再唤醒等待中的请求，
+    // 最后结束整棵树。反过来则被错误唤醒的调用方会在「错误已可见、Agent 仍显示在运行」的窗口里
+    // 观察到不一致。
+    exit.mark_oversize();
     exit.mark(format!("ACP 消息超限（{actual} > {limit} 字节）"));
+    // 上报钩子只被第一条退出路径取走（`ExitState::report_exit` 的 `take`），因此这里与
+    // `wait_loop` 的退出监视不会重复上报。
+    exit.report_exit();
     let drained: Vec<(u64, oneshot::Sender<Result<Value, HostError>>)> = pending
         .lock()
         .map(|mut map| map.drain().collect())
@@ -633,12 +732,16 @@ async fn stderr_loop(mut stderr: tokio::process::ChildStderr, ring: Arc<Mutex<St
     );
 }
 
-/// 退出监视：进程退出时收敛未完成请求并唤醒关闭路径。
+/// 退出监视：进程退出时收敛未完成请求、唤醒关闭路径，并上报节点级断开（恰好一次）。
 async fn wait_loop(mut child: Child, exit: Arc<ExitState>, pending: Arc<Mutex<Pending>>) {
     let status = match child.wait().await {
         Ok(status) => format!("{status}"),
         Err(error) => format!("wait 失败：{error}"),
     };
+    if exit.is_done() {
+        // 已被其它路径判定退出（超限结束）：那条路径负责上报与收敛，这里什么都不做。
+        return;
+    }
     let drained: Vec<(u64, oneshot::Sender<Result<Value, HostError>>)> = pending
         .lock()
         .map(|mut map| map.drain().collect())
@@ -650,4 +753,5 @@ async fn wait_loop(mut child: Child, exit: Arc<ExitState>, pending: Arc<Mutex<Pe
     }
     tracing::info!(status = %status, "Agent 进程退出");
     exit.mark(status);
+    exit.report_exit();
 }
