@@ -178,10 +178,12 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 1. `initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` 的 fake Agent 端到端测试，并覆盖 Owner—Access Node Link；
 2. 全部 11 种 `session/update` 的解码与 raw 保真测试，即使 PWA 尚不能完整呈现其中某项；
 3. text prompt 输入；Agent 输出的五种 content block 均不会静默丢失；
-4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化，agent→client 的 `terminal/*` 服务方法不在此列——它们仍是 `post_mvp`、`facade=not_advertised`；
+4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；其中 `tool_content.diff` 是 `file.changed` 事件的**唯一**派生源（`delivery = mvp`），首阶段即交付行级差异统计 `addedLines`/`deletedLines` 与相对化展示路径 `displayPath`／`outsideWorkspace`，且行数只覆盖 Agent 在工具调用里声明的改动——shell 驱动的改动不计入、判定不出时省略而非填零，字段语义见 `SYNC_PROTOCOL.md` §10.3；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化，agent→client 的 `terminal/*` 服务方法不在此列——它们仍是 `post_mvp`、`facade=not_advertised`；
 5. `_meta`、下划线扩展方法和未知未来 discriminator 的保真/显式不支持行为：已知消息内出现的未知字段与任意层级的 `_meta` 必须逐字节保真（`invariant.meta_fields_byte_exact`，`expectation = byte_exact`）；未知的 `_` 前缀方法必须由 facade 显式拒绝（ACP 方法未找到的等价错误），不得转发或静默丢弃（`invariant.extension_method_explicit_unsupported`）；未出现在上游固定快照中的 `sessionUpdate` 判别子按未知事件可见降级并保留 `acp.rawJson`（`invariant.future_update_visible`，`expectation = visible_degradation`）。`visible_degradation` 的含义是：无法理解的结构化字段必须保留原文并向用户可见降级，既不得静默丢弃，也不得降格为普通文本；这与 `explicit_unsupported` 的区别在于前者仍保持内容可见，后者是明确的拒绝。
 6. capability 未宣告、已宣告但 Broker 不支持、Broker 支持但 PWA 不支持三种路径可区分；
 7. `acp-facade` 只宣告经端到端测试证明的能力。
+
+`update.session_info_update` 的 `delivery = mvp`，首阶段即交付会话标题的单向更新：标题的唯一来源是该判别子投影出的 `session.info.changed`，更新方向为 Agent → 会话摘要，`sync` 层不提供任何客户端发起的重命名命令（命令目录中不存在该命令，`sync = event` 只承载 Agent 通知的投影）。字段语义与「无客户端重命名入口」的表述见 `SYNC_PROTOCOL.md` §10.3。
 
 `session/list`、`session/delete`、`session/close`、完整 config option、文件服务和 agent→client 的 `terminal/*` 服务方法可以排在后续阶段（`delivery=post_mvp`，按 §3.4 必须 `facade=not_advertised` 且不得通过 `sync`/`pwa` 宣告），但必须由矩阵驱动明确拒绝，不能被成功响应、空响应或普通文本替代。
 

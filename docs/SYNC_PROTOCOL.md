@@ -1025,12 +1025,23 @@ device.revoked
 | `elicitation.requested` | `interactionId`, `turnId`, `title`, `schema`, `initialValues` |
 | `elicitation.resolved` | `interactionId`, `action: "submit"|"decline"|"cancel"`, `resolvedByDeviceId: UUID|null` |
 | `terminal.output` | `terminalId`, `chunkIndex: decimal string`, `stream: "stdout"|"stderr"`, `text`, `truncated: boolean` |
-| `file.changed` | `changeId`, `kind`, `displayPath`, `summary`; diff 或结构化详情可选 |
-| `agent.connected`, `agent.disconnected` | `agentId`, `state`; disconnected 可带 `error` |
+| `file.changed` | `changeId`, `kind`, `displayPath`, `summary`; 可选 `addedLines`/`deletedLines`（decimal string，行级差异统计）、`outsideWorkspace`（boolean）；diff 或结构化详情可选 |
+| `agent.connected` | `agentId`, `state: "connected"`；节点级事件（`sessionId` 为空），描述 Agent profile 进程而非任何单个会话 |
+| `agent.disconnected` | `agentId`, `state: "disconnected"`, 可选 `error`；同为节点级事件 |
 | `command.completed` | `requestId`, `result` |
 | `command.failed` | `requestId`, `error: PublicError` |
 | `command.uncertain` | `requestId`, `reason`, `mayHaveReachedAgent: true` |
 | `device.revoked` | `deviceId`, `revokedAt`；只发送给仍有权查看设备状态的其他客户端 |
+
+`file.changed` 的三个可选字段的语义固定如下，客户端必须照此呈现，不得自行推断：
+
+- `addedLines`/`deletedLines` 是**行级差异**的统计，不是改动前后两段文本的行数相减。两段文本行数相等但内容不同时仍必须报告非零改动；新建文件的全部行计为新增、删除为零，删除文件反之。判定不出行数时**省略这两项**，客户端呈现为「未同步」或不可用，MUST NOT 呈现为「零改动」。
+- 这两个字段只覆盖**Agent 在其工具调用里声明的改动**：派生源是 ACP 工具调用内容中的类型化 Diff 元素（见 `CORE_PORTS_AND_STORAGE.md`）。判定只依据该次调用内容**是否含 Diff 元素**，与改动由谁驱动无关：调用内容中不含 Diff 元素的（例如只做 shell 重定向、脚本或外部工具驱动的改动），其行数统计不计入，也不产生 `file.changed` 事件。
+- `displayPath` 是**相对该会话工作区根**的路径，不下发绝对路径，也不含工作区根的任何片段或回退层级。路径经规范化后不在工作区根之下时置 `outsideWorkspace: true`，此时 `displayPath` 只给出该文件的名称。是否位于工作区之外按**规范化后的前缀关系**判定，不得仅按字符串前缀判断。
+
+`agent.connected`/`agent.disconnected` 的 `state` 是**封闭词表**：连接事件只取 `"connected"`，断开事件只取 `"disconnected"`，两者互不相同，客户端据此区分事件类型，不得依赖自由文本或别的取值。它们是**节点级**事件（事件信封的 `sessionId` 为空），生命周期归属于 Agent profile 的进程：同一 profile 的进程被多个会话复用时不会重复产生连接事件，Agent 连接状态也**不表达**任何单个会话的活跃程度。当前这两类事件尚无投递通道，客户端在该通道就绪前 MUST 把缺失的覆盖层呈现为状态未知，不得以其它信号推断连接状态。
+
+会话标题的更新是**单向**的：标题只来自 Agent 的 `session/update` 中 `session_info_update` 投影出的 `session.info.changed`（见上表），据此写入会话摘要。命令目录中**不存在**任何由客户端发起的重命名会话的命令，服务端也不提供绕过该通知直接写入标题的路径；通知只携带更新时间而不含标题时标题保持不变，通知显式把标题置空时客户端呈现为未命名会话。
 
 ACP `session/update` 判别子到 Sync event type 的完整映射（判别子取值以上游 ACP v1 固定快照为准）：
 
