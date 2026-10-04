@@ -151,6 +151,8 @@ pub struct ManifestCase {
     pub expected_keyword: Option<String>,
     /// 事件视图夹具声明的 `payload.view` 绑定（`#/$defs/<eventType>`）。
     pub view_def: Option<String>,
+    /// 只针对某个子模式的用例声明；存在即表示 `fixture` 是片段而不是完整 WSS 消息。
+    pub schema_pointer: Option<String>,
 }
 
 pub fn manifest_cases(manifest_relative: &str) -> Vec<ManifestCase> {
@@ -166,6 +168,9 @@ pub fn manifest_cases(manifest_relative: &str) -> Vec<ManifestCase> {
                 .as_str()
                 .map(|keyword| keyword.to_owned()),
             view_def: case["viewDef"].as_str().map(|def| def.to_owned()),
+            schema_pointer: case["schemaPointer"]
+                .as_str()
+                .map(|pointer| pointer.to_owned()),
         })
         .collect()
 }

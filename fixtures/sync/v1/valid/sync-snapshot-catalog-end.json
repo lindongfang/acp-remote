@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_end",
+  "messageId": "3b7e4a16-8c29-4f50-9d63-5a1b8e2c7f04",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "83",
+  "body": {
+    "snapshotId": "7a1e5c40-9b28-4d63-a5f1-3c8e0b2d6f97",
+    "cursor": {
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2402"
+    },
+    "chunkCount": 3,
+    "snapshotDigest": "R2F0YWxvZy1zbmFwc2hvdC1kaWdlc3QtMzJieXRlcyE"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "84f0b7d3-1c65-4a29-8e07-3b6d9f2a5c48",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "73",
+  "body": {
+    "requestId": "e7c2a934-5b18-4d60-9f37-2a6b8d0c4e51",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:13:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": [
+          {
+            "messageId": "7d5f1a3c-6e48-4b90-8f13-2a4d9c0b7e55",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "这是最早的一条。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:56:00.000Z",
+            "turnId": null
+          },
+          {
+            "messageId": "2a4d9c0b-7e55-4c18-a6d3-8e0f1b2c3d49",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "再往前一条。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:57:00.000Z",
+            "turnId": null
+          }
+        ]
+      },
+      "hasEarlier": false
+    },
+    "error": null
+  }
+}

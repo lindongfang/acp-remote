@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "47b2e8d0-5c61-4a39-9f14-8e6d0a3b7c25",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "77",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "1",
+    "resource": "capabilities",
+    "items": [
+      {
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "agentCapabilities": { "tools": { "read": true } },
+        "brokerAdditions": { "sessionLimits": { "maxPages": 3 } }
+      }
+    ]
+  }
+}

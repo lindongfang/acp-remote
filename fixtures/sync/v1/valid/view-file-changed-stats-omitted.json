@@ -1,0 +1,26 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "6b0c9e31-4d78-4a25-8f61-3e7b2d5a0c94",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "100",
+  "body": {
+    "globalSequence": "2370",
+    "sessionSequence": "230",
+    "eventId": "f3a6c904-2b58-4d17-a9e3-7c0f5b1d8a26",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "file.changed",
+    "causationRequestId": null,
+    "origin": { "kind": "agent", "deviceId": null },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:16:00.000Z",
+    "payload": {
+      "view": {
+        "changeId": "2e7d4a19-5c83-4b06-9f52-1a8c3e6b0d47",
+        "kind": "modified",
+        "displayPath": "src/main.ts",
+        "summary": "本轮改动无法从工具调用判定行数，故省略统计。"
+      }
+    }
+  }
+}

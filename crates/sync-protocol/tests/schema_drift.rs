@@ -283,42 +283,78 @@ fn view_enums_match_schema() {
     );
 
     // Rust 镜像的 `ALL`/`as_str` 序列必须等于登记序列（否则登记表与镜像又会各自漂移）。
-    let registered_values = |event_type: &str, pointer: &str| -> Vec<&'static str> {
-        views::VIEW_ENUMS
+    //
+    // 判据由 `VIEW_ENUMS` **驱动的对照表**给出，而不是逐条硬编码枚举清单：新增一个封闭 enum 时
+    // 只需在对照表里登记它，这条断言就自动覆盖；漏登记会在这里被 `MISSING` 分支当场拒掉。此前
+    // 这里是硬编码的四条 `assert_eq!`，`AgentConnectedState`/`AgentDisconnectedState` 因此长期
+    // 不在第三方向的覆盖里（review-wp2-r1 的 F3 与 review-mu1a-candidate-r1 的 MU2A-R1-F1）。
+    type Mirror = fn() -> Vec<&'static str>;
+    let mirrors: &[(&str, &str, Mirror)] = &[
+        (
+            "session.plan.changed",
+            "/properties/entries/items/properties/priority",
+            || {
+                views::PlanPriority::ALL
+                    .map(|value| value.as_str())
+                    .to_vec()
+            },
+        ),
+        (
+            "session.plan.changed",
+            "/properties/entries/items/properties/status",
+            || views::PlanStatus::ALL.map(|value| value.as_str()).to_vec(),
+        ),
+        ("elicitation.resolved", "/properties/action", || {
+            views::ElicitationAction::ALL
+                .map(|value| value.as_str())
+                .to_vec()
+        }),
+        ("terminal.output", "/properties/stream", || {
+            views::TerminalStream::ALL
+                .map(|value| value.as_str())
+                .to_vec()
+        }),
+        ("agent.connected", "/properties/state", || {
+            views::AgentConnectedState::ALL
+                .map(|value| value.as_str())
+                .to_vec()
+        }),
+        ("agent.disconnected", "/properties/state", || {
+            views::AgentDisconnectedState::ALL
+                .map(|value| value.as_str())
+                .to_vec()
+        }),
+    ];
+
+    // 双向：登记表里的每个条目都必须在本表里有镜像，本表的每个条目也必须已登记。
+    let mut mirrored: BTreeSet<(&str, &str)> = BTreeSet::new();
+    for (event_type, pointer, mirror) in mirrors {
+        let registered = views::VIEW_ENUMS
             .iter()
             .find(|(registered_type, registered_pointer, _)| {
-                *registered_type == event_type && *registered_pointer == pointer
+                *registered_type == *event_type && *registered_pointer == *pointer
             })
             .map(|(_, _, values)| values.to_vec())
-            .unwrap_or_else(|| panic!("{event_type}{pointer} 未登记"))
-    };
-    assert_eq!(
-        views::PlanPriority::ALL
-            .map(|value| value.as_str())
-            .to_vec(),
-        registered_values(
-            "session.plan.changed",
-            "/properties/entries/items/properties/priority"
-        ),
-    );
-    assert_eq!(
-        views::PlanStatus::ALL.map(|value| value.as_str()).to_vec(),
-        registered_values(
-            "session.plan.changed",
-            "/properties/entries/items/properties/status"
-        ),
-    );
-    assert_eq!(
-        views::ElicitationAction::ALL
-            .map(|value| value.as_str())
-            .to_vec(),
-        registered_values("elicitation.resolved", "/properties/action"),
-    );
-    assert_eq!(
-        views::TerminalStream::ALL
-            .map(|value| value.as_str())
-            .to_vec(),
-        registered_values("terminal.output", "/properties/stream"),
+            .unwrap_or_else(|| panic!("{event_type}{pointer} 未登记"));
+        assert_eq!(
+            mirror(),
+            registered,
+            "{event_type}{pointer} 的 Rust 镜像 (ALL/as_str) 与 views::VIEW_ENUMS 不一致"
+        );
+        assert!(
+            mirrored.insert((event_type, pointer)),
+            "{event_type}{pointer} 在镜像表里重复登记"
+        );
+    }
+    let unmirrored: Vec<String> = views::VIEW_ENUMS
+        .iter()
+        .filter(|(event_type, pointer, _)| !mirrored.contains(&(*event_type, *pointer)))
+        .map(|(event_type, pointer, _)| format!("{event_type}{pointer}"))
+        .collect();
+    assert!(
+        unmirrored.is_empty(),
+        "views::VIEW_ENUMS 里还有未与 Rust 镜像对照的条目——新增封闭 enum 时须在此登记，\
+         否则「Rust 镜像与登记表同序」这条判据会静默漏掉它：{unmirrored:?}"
     );
 }
 

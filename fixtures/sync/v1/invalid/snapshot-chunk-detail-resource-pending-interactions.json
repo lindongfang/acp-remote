@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "6c1a47f9-8b30-4d65-a2e7-5f0b9d3c8164",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "76",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "1",
+    "resource": "pending_interactions",
+    "items": [
+      {
+        "interactionId": "d0a95b36-1c48-4f72-8e59-7b2c4d6a0f13",
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "kind": "permission",
+        "state": "pending",
+        "schema": { "type": "object", "properties": { "path": { "type": "string" } } },
+        "createdAt": "2026-09-17T12:00:30.000Z"
+      }
+    ]
+  }
+}

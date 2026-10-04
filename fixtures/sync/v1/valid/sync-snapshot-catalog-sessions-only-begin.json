@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_begin",
+  "messageId": "8a2c5e71-0d46-4b39-8f72-3c1d9b6a4e50",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "84",
+  "body": {
+    "snapshotId": "2d8f6b13-7c04-4a95-8e21-6b3d5f9c0a47",
+    "cursor": {
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2402"
+    },
+    "schemaVersion": 1,
+    "chunkCount": 1
+  }
+}

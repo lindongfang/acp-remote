@@ -1,0 +1,59 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "2a9c6f14-7b35-4d08-ae63-1f0b8d5c9247",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "71",
+  "body": {
+    "requestId": "b41f8d20-3c67-4a95-8e02-7d5c9a1b6f30",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:12:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": [
+          {
+            "messageId": "c47a90b2-6e35-4d18-8f26-9b0d3e7a5c14",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "先跑一遍测试。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:58:00.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          },
+          {
+            "messageId": "3e5a7c91-2d48-4f60-9b13-6c8d0e2f4a51",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "agent",
+            "content": [{ "type": "text", "text": "失败的那条我先定位。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:58:00.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          },
+          {
+            "messageId": "9b2d4f60-8a13-4c57-9e2b-7d5f1a3c6e48",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "agent",
+            "content": [{ "type": "text", "text": "定位到了，是排序断言。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:59:00.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          },
+          {
+            "messageId": "5f8e1d37-2a64-4b90-bc15-3d7e9f0a1c62",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "那把更早的一页也给我。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T12:00:00.000Z",
+            "turnId": null
+          }
+        ]
+      },
+      "hasEarlier": true
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "changeId": "f955151e-316e-4b2f-a61d-1d4d075331c5",
+  "kind": "modified",
+  "displayPath": "fixtures/sync/v1/manifest.json",
+  "summary": "追加事件视图用例",
+  "addedLines": "12",
+  "deletedLines": "+3",
+  "outsideWorkspace": false
+}
