@@ -665,7 +665,10 @@ impl Broker {
         }
         event.payload.validate().map_err(PortError::from)?;
         let (agent_id, state) = derive::node_event_parts(event.payload.view.as_str());
-        if agent_id.is_none() {
+        // 按**形状**而非缺席判定：JSON 的空串也是 `Some("")`，只查 `is_none()` 会让空 `agentId` 通过并落一条
+        // schema 非法（`minLength: 1`）的节点级事件，消费端 `NonEmptyText<128>` 解析失败。core 是节点级事件
+        // 的最后一道形状防线（§10.3）。
+        if agent_id.as_deref().is_none_or(str::is_empty) {
             return Err(PortError::InvalidRequest(
                 "节点级 Agent 事件的 view 必须带非空 agentId（§10.3）",
             ));
@@ -9134,6 +9137,59 @@ mod tests {
         assert!(!changes[0].contains(".."), "不得下发回退层级");
     }
 
+    /// F2（`review-w3-r1`）：同一次工具调用里的两个**同名**越界文件各派生一条 `file.changed`。
+    ///
+    /// 判别力：去重键与 `changeId` 若取**展示路径**（越界时按 R7 收窄为 `file_name()`），第二个元素
+    /// 会命中本批已计划的键而被静默 `continue`——本用例断言 2 条、且两条 `changeId` 不同。
+    #[test]
+    fn two_same_named_outside_files_derive_two_distinct_changes() {
+        let harness = Harness::new(BrokerConfig::default());
+        let root = workspace_root();
+        harness.world.seed_recovery(
+            &harness.session,
+            Some(AgentSessionId::new("acp-wp3").expect("agent session id")),
+            Some(root),
+        );
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                &tool_call_view(
+                    "tool-same",
+                    Some(
+                        r#"[{"path":"/etc/nginx/nginx.conf","oldText":"a","newText":"b"},{"path":"/tmp/nginx.conf","oldText":"c","newText":"d"}]"#,
+                    ),
+                ),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let _ = harness.submit_prompt(1, 'H');
+        let changes = stored_views_of(&harness, "file.changed");
+        assert_eq!(
+            changes.len(),
+            2,
+            "两处同名但不同目录的越界改动各派生一条，实际 {changes:?}"
+        );
+        let ids: Vec<String> = changes.iter().map(|view| change_id_of(view)).collect();
+        assert_ne!(ids[0], ids[1], "同名越界文件的 changeId 不得相同");
+        for view in &changes {
+            assert!(
+                view.contains(r#""displayPath":"nginx.conf""#)
+                    && view.contains(r#""outsideWorkspace":true"#),
+                "R7：越界只下发文件名，实际 {view}"
+            );
+        }
+    }
+
+    /// 派生 view 的 `changeId`（供去重/唯一性断言取值）。
+    fn change_id_of(view: &str) -> String {
+        let marker = r#""changeId":""#;
+        let start = view.find(marker).expect("changeId 必须存在") + marker.len();
+        let rest = &view[start..];
+        let end = rest.find('"').expect("changeId 是字符串");
+        rest[..end].to_owned()
+    }
+
     /// R6：判定不出行数时**省略**两项（不填零）。
     #[test]
     fn a_diff_without_new_text_omits_the_line_counts() {
@@ -9253,6 +9309,17 @@ mod tests {
                 r#"{"state":"connected"}"#,
             )))
             .is_err()
+        );
+        // F3（`review-w3-r1`）：**空串** agentId 也是形状非法（schema `minLength: 1`）——只判 `is_none()`
+        // 会让它通过并落一条消费端解析不了的事件。
+        assert!(
+            block_on(harness.broker.commit_node_event(endpoint_event(
+                EventKind::State,
+                "agent.connected",
+                r#"{"agentId":"","state":"connected"}"#,
+            )))
+            .is_err(),
+            "空串 agentId 必须被拒绝（§10.3 的 schema 是 minLength: 1）"
         );
         // 类别不是 state。
         assert!(

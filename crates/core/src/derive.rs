@@ -144,13 +144,20 @@ pub(crate) struct DerivedFileChange {
     pub(crate) outside: bool,
     /// 行数统计；`None` = 判定不出（省略两项）。
     pub(crate) stats: Option<(u64, u64)>,
+    /// 工具调用给出的**原始 `path` 原文**（`display_path` 相对化/越界收窄**之前**的取值）。
+    ///
+    /// **不参与投影**：任何 view 字段都不读它。它只作「同一处改动」的稳定标识——展示路径是有损的
+    /// （越界时只留 `file_name()`），两个不同目录下的同名越界文件会退化出同一个展示值；去重键与
+    /// `changeId` 若取展示路径就会把它们当成同一处改动而吞掉一条。R5 要求「同一处改动只派生一次」，
+    /// 判据必须比展示值更精细（`design.md` D5）。
+    pub(crate) origin_key: String,
 }
 
 impl DerivedFileChange {
-    /// 去重键（`toolCallId` + 展示路径）。展示路径已经过相对化/越界收窄，因此「同一处改动」在不同
-    /// 事件里给出同一个键。
+    /// 去重键（`toolCallId` + **原始路径原文**）。展示路径经过相对化/越界收窄，是有损的，不能用来判定
+    /// 「是不是同一处改动」；工具调用给出的原始路径对同一处改动稳定，且能区分同名但不同目录的文件。
     pub(crate) fn dedup_key(&self) -> String {
-        format!("{}\u{1}{}", self.tool_call_id, self.display_path)
+        format!("{}\u{1}{}", self.tool_call_id, self.origin_key)
     }
 
     /// `summary`：摘要字段（`file.changed` 的必填字段）。只描述本次改动本身，不携带 Free-form 原文。
@@ -160,14 +167,15 @@ impl DerivedFileChange {
 
     /// 派生的 `changeId`。
     ///
-    /// 取 `SHA-256(会话 + toolCallId + 展示路径)` 的前 16 字节并置 UUIDv4 的版本/变体位：**确定性**且
-    /// 形状合法（`common.schema.json#/$defs/uuid` 只要求规范小写 UUID 文本）。去重日志使得同一个
-    /// `(工具调用, 路径)` 只派生一条事件，因此确定性不会带来重复的 `changeId`；反过来，它让
-    /// 「同一处改动」在任何重放/重试下都得到同一个 id。
+    /// 取 `SHA-256(会话 + toolCallId + **原始路径原文**)` 的前 16 字节并置 UUIDv4 的版本/变体位：
+    /// **确定性**且形状合法（`common.schema.json#/$defs/uuid` 只要求规范小写 UUID 文本）。去重日志
+    /// 使得同一个 `(工具调用, 路径)` 只派生一条事件，因此确定性不会带来重复的 `changeId`；反过来，它让
+    /// 「同一处改动」在任何重放/重试下都得到同一个 id。取原始路径而非展示路径：展示路径越界时被收窄为
+    /// `file_name()`，两个不同目录的同名文件会得到同一个 `changeId`（与去重键同一缺陷）。
     pub(crate) fn change_id(&self, session: &str) -> String {
         canonical_uuid(&format!(
             "{session}\u{1}{}\u{1}{}",
-            self.tool_call_id, self.display_path
+            self.tool_call_id, self.origin_key
         ))
     }
 }
@@ -237,6 +245,9 @@ fn derive_from_elements(
             display_path,
             outside,
             stats,
+            // 去重键与 `changeId` 取工具调用给出的原始路径：展示路径在越界时被收窄为文件名，是有损的
+            // （两个不同目录下的同名越界文件会碰撞，后者被静默当成重复丢掉）。
+            origin_key: path,
         });
     }
     Ok(derived)
@@ -810,6 +821,40 @@ mod tests {
         assert!(
             derived_file_changes(view, None).expect("可解析").is_empty(),
             "没有 toolCallId 就无法保证不重复派生"
+        );
+    }
+
+    /// F2（`review-w3-r1`）：两个**同名但不同目录**的越界文件是两处改动。
+    ///
+    /// 展示路径在越界时按合同收窄为 `file_name()`（R7），因此两者的 `display_path` 相同；若去重键
+    /// 与 `changeId` 取展示路径就会碰撞，第二条被当成「同一处改动」而静默丢掉。去重键与 `changeId`
+    /// 必须取工具调用给出的**原始路径**（`origin_key`，不参与投影）。
+    #[test]
+    fn derived_changes_distinguish_same_named_outside_files() {
+        let view = r#"{"toolCallId":"tool-1","diff":[{"path":"/etc/nginx/nginx.conf","oldText":"a","newText":"b"},{"path":"/tmp/nginx.conf","oldText":"c","newText":"d"}]}"#;
+        let derived = derived_file_changes(view, Some("/work/api")).expect("可解析");
+        assert_eq!(derived.len(), 2, "两处改动都要派生");
+        assert_eq!(derived[0].display_path, "nginx.conf");
+        assert_eq!(derived[1].display_path, "nginx.conf");
+        assert!(derived[0].outside && derived[1].outside);
+        assert_eq!(derived[0].origin_key, "/etc/nginx/nginx.conf");
+        assert_eq!(derived[1].origin_key, "/tmp/nginx.conf");
+        assert_ne!(
+            derived[0].dedup_key(),
+            derived[1].dedup_key(),
+            "同名越界文件不得共用去重键"
+        );
+        assert_ne!(
+            derived[0].change_id("session-1"),
+            derived[1].change_id("session-1"),
+            "同名越界文件的 changeId 必须互不相同"
+        );
+        // 展示路径仍然只给文件名（R7 的输出不因去重键的改动而变化）。
+        let view_text = file_changed_view(&derived[1], "session-1");
+        assert!(view_text.contains(r#""displayPath":"nginx.conf""#));
+        assert!(
+            !view_text.contains("origin_key") && !view_text.contains("/tmp/"),
+            "原始路径不参与投影：{view_text}"
         );
     }
 
