@@ -1588,6 +1588,66 @@ async fn clearing_a_title_in_a_batch_with_a_version_event_keeps_the_whole_batch(
     );
 }
 
+/// `TP2-R9-STORE-UNCHANGED-KEEP`：`ModeChange::Unchanged` 下「不改标题」必须保留既有标题，且版本与时间照常推进。
+///
+/// 覆盖缺口（`title_write.rs` 的补充判据）：既有用例只在 `ModeChange::Set` 语句下验证过 `title: None`
+/// 的「不改」语义；组合根路径（`commit_chunk`）恒用 `ModeChange::Unchanged`，而该语句的标题 CASE 是
+/// `CASE WHEN ?9 THEN NULL WHEN ?8 IS NULL THEN title ELSE ?8 END`——`?8 IS NULL` 这一支只在这里被钉住。
+#[tokio::test]
+async fn unchanged_mode_without_a_title_keeps_it_and_still_advances_the_version() {
+    let fixture = Fixture::new("tp2-r9-store-unchanged-keep", None).await;
+    let write_title = |value: Option<Option<String>>| OwnedCommit {
+        session: Some(fixture.session.clone()),
+        at: stamp(62),
+        expected_version: None,
+        state: Some(StateChange::Update(SessionUpdate {
+            state: None,
+            mode: ModeChange::Unchanged,
+            title: value,
+            closed_at: None,
+            interaction: None,
+            agent_session_id: None,
+            workspace_cwd: None,
+            workspace_alias: None,
+        })),
+        turns: Vec::new(),
+        events: Vec::new(),
+        interactions: Vec::new(),
+        compacted: Vec::new(),
+        idempotency: None,
+        command_terminal: None,
+        origin_epoch: None,
+    };
+    fixture
+        .store
+        .commit(write_title(Some(Some("保留我".to_owned()))))
+        .await
+        .expect("先写入标题");
+    let before = fixture.session_row().await;
+
+    let outcome = fixture
+        .store
+        .commit(write_title(None))
+        .await
+        .expect("不改标题的提交必须成功");
+    assert_eq!(
+        outcome.version.get(),
+        before.session.version().get() + 1,
+        "含 StateChange ⇒ 版本 +1"
+    );
+    let after = fixture.session_row().await;
+    assert_eq!(
+        after.session.title(),
+        Some("保留我"),
+        "R9：`None` = 不改该列，既有标题不得被清空"
+    );
+    assert_eq!(
+        after.session.updated_at().as_str(),
+        stamp(62).as_str(),
+        "权威更新时间取 commit.at"
+    );
+}
+
 /// `TP2-R9-NO-RENAME-ENTRY`：命令目录中不存在重命名会话的命令，core 也没有写标题的第二条路径。
 #[tokio::test]
 async fn the_command_catalog_has_no_rename_entry() {
