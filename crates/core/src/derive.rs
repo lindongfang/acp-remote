@@ -304,17 +304,21 @@ fn member_raw<'a>(text: &'a str, key: &str) -> Result<Option<&'a str>, InvalidVa
 pub(crate) fn display_path(workspace_root: Option<&str>, reported: &str) -> (String, bool) {
     let reported_path = Path::new(reported);
     if !reported_path.is_absolute() {
+        // 相对形式按「相对该会话工作目录根」解释（ACP 上游是绝对路径，适配器也可能给出相对形式）。
+        // 前导 `..` 逃出根时按越界处理——判据是**显式计数**的逃逸层级，不是缓冲区里的第一个组件：
+        // 只做词法折叠会丢掉越出根的那个 `..`（见 `Normalized::escapes`）。
         let normalized = normalize(reported_path);
-        if normalized.as_os_str().is_empty()
-            || matches!(normalized.components().next(), Some(Component::ParentDir))
-        {
+        if normalized.escapes > 0 {
             return outside_display(reported_path);
         }
-        // 相对形式按「相对该会话工作目录根」解释（ACP 上游是绝对路径，适配器也可能给出相对形式）；
+        if normalized.path.as_os_str().is_empty() {
+            // 规范化后什么都没剩（空串、`.`、`./`）：没有可下发的文件改动。
+            return outside_display(reported_path);
+        }
         // 无法与工作目录根比较（根未登记）时同样从严，按越界处理而不是默认信任。
         match workspace_root.map(|root| canonical_path(Path::new(root))) {
             Some(root) if !root.as_os_str().is_empty() => {
-                let candidate = normalize(&root.join(&normalized));
+                let candidate = join_lexically(&root, &normalized.path);
                 match candidate.strip_prefix(&root) {
                     Ok(rest) => match relative_text(rest) {
                         Some(text) => (text, false),
@@ -345,6 +349,17 @@ pub(crate) fn display_path(workspace_root: Option<&str>, reported: &str) -> (Str
     }
 }
 
+/// 在**词法上**把已规范化的相对片段接到根后面：先拼接再折叠，让片段内部的 `..` 能真正回退到根里的层级。
+///
+/// 直接 `root.join(segment)` 会让 `sub/../file.txt` 带着未折叠的 `..` 进入 `strip_prefix` 的比较（`Path` 的
+/// 前缀比较是组件级字面量比较），从而把合法区内路径误判为越界。片段已保证没有前导 `..`（调用方先查
+/// [`Normalized::escapes`]），因此折叠后仍落在根之下。
+fn join_lexically(root: &Path, segment: &Path) -> PathBuf {
+    let mut joined = root.to_path_buf();
+    joined.push(segment);
+    normalize(&joined).path
+}
+
 /// 越界路径的展示值：只给文件名称（不含任何目录片段、不含回退层级）。
 fn outside_display(path: &Path) -> (String, bool) {
     let name = path
@@ -369,22 +384,64 @@ fn relative_text(path: &Path) -> Option<String> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// 词法规范化：去掉 `.`、处理 `..`（越出根部时保留前导 `..`）、合并重复分隔符。
-fn normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
+/// 词法规范化的结果：路径本身 + **显式计数**的逃逸层级。
+struct Normalized {
+    /// 折叠 `.`/`..` 之后的路径：前缀与根原样保留；未能匹配的**前导** `..` 按原数留在路径最前面。
+    ///
+    /// 该取值只在 [`Normalized::escapes`] 为 0 时才是「相对某个根」的可用路径；否则它仍带前导
+    /// `..`（[`display_path`] 因此判越界，不拿它做前缀比较）。
+    path: PathBuf,
+    /// 无法回退的**前导** `..` 个数（相对路径专用）。
+    ///
+    /// `> 0` 表示该路径逃出了它的起点：`../../etc/passwd` 是 2、`../etc/passwd` 是 1、`a/../b` 是 0。
+    /// 绝对根（`/`、`C:\`、`\\server\share`）之上没有可回退的层级，因此该计数在绝对路径上恒为 0，
+    /// 根段的 `..` 一律被吞掉。
+    escapes: usize,
+}
+
+/// 词法规范化：去掉 `.`、处理 `..`、合并重复分隔符，并**显式统计**逃出起点的前导 `..` 个数。
+///
+/// 前导 `..` 的个数必须显式计数，**绝不能**依赖 `PathBuf::pop()` 的返回值：`pop()` 在弹掉
+/// `Prefix`/`RootDir` 组件（`C:\`、`\\server\share`）时返回 `true` 而非失败，于是第二个前导 `..` 会把
+/// 根前缀「成功」弹掉、得到一个空缓冲区，随后的路径段被当成普通相对路径追加——`../../etc/passwd`
+/// 因此被判成工作区内并下发 `etc/passwd`（R7 的信息泄露缺陷）。
+///
+/// 逐组件规则：
+/// - `Prefix`/`RootDir` 进入结果前缀，并把已累计的 `..` 一次性作废（绝对根之上不可回退：`/..` = `/`、
+///   `C:\..` = `C:\`）；
+/// - `Normal` 压栈（它只能取消**它前面**的 `..`，不能取消前导 `..`）；
+/// - `ParentDir` 优先弹掉栈顶的 `Normal`；栈空时——绝对根下丢弃（根段不可回退），相对形式下计入
+///   [`Normalized::escapes`]。
+fn normalize(path: &Path) -> Normalized {
+    let mut base = PathBuf::new();
+    let mut rooted = false;
+    let mut escapes = 0usize;
+    let mut stack: Vec<OsString> = Vec::new();
     for component in path.components() {
         match component {
-            Component::Prefix(_) | Component::RootDir => out.push(component.as_os_str()),
+            Component::Prefix(_) => base.push(component.as_os_str()),
+            Component::RootDir => {
+                base.push(component.as_os_str());
+                rooted = true;
+                escapes = 0;
+            }
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
+                if stack.pop().is_none() && !rooted {
+                    escapes += 1;
                 }
             }
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part) => stack.push(part.to_os_string()),
         }
     }
-    out
+    let mut out = base;
+    for _ in 0..escapes {
+        out.push("..");
+    }
+    for part in stack {
+        out.push(part);
+    }
+    Normalized { path: out, escapes }
 }
 
 /// 规范化一个**可能尚不存在**的路径：优先 `canonicalize`（解析 symlink/junction/大小写），失败时逐级
@@ -396,7 +453,7 @@ fn canonical_path(path: &Path) -> PathBuf {
     if let Ok(resolved) = std::fs::canonicalize(path) {
         return strip_verbatim(resolved);
     }
-    let normalized = normalize(path);
+    let normalized = normalize(path).path;
     let mut tail: Vec<OsString> = Vec::new();
     let mut cursor: &Path = &normalized;
     while let Some(parent) = cursor.parent() {
@@ -741,10 +798,179 @@ mod tests {
     }
 
     #[test]
+    fn display_path_escapes_many_leading_parent_traversals() {
+        // R7 的动机输入（`design.md` D5）：`../../etc/passwd` 必须判越界且只给文件名称。
+        // 旧实现用 `PathBuf::pop()` 的返回值计数前导 `..`，而 `pop()` 弹掉根前缀时返回 `true`，
+        // 于是第二个 `..` 把根弹掉、计数归零，`etc/passwd` 被当成相对路径追加，整条路径被误判为区内
+        // 并把工作区外的**目录结构**下发到面向客户端的字段上。
+        for reported in [
+            "../../etc/passwd",
+            "../../../etc/passwd",
+            "../../../../../../a/b/c",
+            "../../Users/alice/.ssh/id_rsa",
+        ] {
+            let (display, outside) = display_path(Some("/work/api"), reported);
+            assert!(outside, "R7：{reported} 必须判越界");
+            assert!(
+                !display.contains('/'),
+                "R7：越界只给文件名称，不得下发目录结构，实际 {display}"
+            );
+            assert!(
+                !display.contains(".."),
+                "R7：不得下发回退层级，实际 {display}"
+            );
+            assert!(
+                !display.contains("work") && !display.contains("api") && !display.contains("etc"),
+                "R7：不得下发工作目录根或区外目录的片段，实际 {display}"
+            );
+        }
+    }
+
+    #[test]
+    fn display_path_escapes_multi_level_traversal_to_the_declared_file_names() {
+        assert_eq!(
+            display_path(Some("/work/api"), "../../etc/passwd"),
+            ("passwd".to_owned(), true)
+        );
+        assert_eq!(
+            display_path(Some("/work/api"), "../../Users/alice/.ssh/id_rsa"),
+            ("id_rsa".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn display_path_keeps_an_inner_parent_traversal_that_stays_inside() {
+        // 回归红线：区内路径**内部**的 `..` 只要规范化后仍在根之下，就必须判为区内。
+        for reported in ["/work/api/../api/x", "sub/../file.txt", "a/b/../../c.rs"] {
+            let (display, outside) = display_path(Some("/work/api"), reported);
+            assert!(!outside, "R7：{reported} 未越界，不得误判");
+            assert!(
+                !display.contains(".."),
+                "R7：区内展示值不得含回退层级，实际 {display}"
+            );
+        }
+        assert_eq!(
+            display_path(Some("/work/api"), "/work/api/../api/x"),
+            ("x".to_owned(), false)
+        );
+        assert_eq!(
+            display_path(Some("/work/api"), "sub/../file.txt"),
+            ("file.txt".to_owned(), false)
+        );
+        assert_eq!(
+            display_path(Some("/work/api"), "a/b/../../c.rs"),
+            ("c.rs".to_owned(), false)
+        );
+    }
+
+    #[test]
     fn display_path_accepts_a_relative_form_as_workspace_relative() {
         let (display, outside) = display_path(Some("/work/api"), "src/main.rs");
         assert!(!outside);
         assert_eq!(display, "src/main.rs");
+    }
+
+    #[test]
+    fn display_path_treats_the_workspace_root_itself_by_the_spec() {
+        // 「恰好等于工作区根」既不是越界下发（根的任何片段）也不是一个文件：只下发哨兵 `.` 并标记越界，
+        // 使客户端呈现为不可用而不是把根路径当成改动对象。用真实临时目录，使根与报告路径同形（与
+        // `display_path_relativizes_inside_the_workspace` 同一口径）。
+        let root = std::env::temp_dir();
+        let root_text = root.to_string_lossy().into_owned();
+        let (display, outside) = display_path(Some(&root_text), &root_text);
+        assert!(outside, "R7：根本身不得当作区内文件");
+        assert_eq!(display, ".", "R7：不得下发根的任何片段");
+        assert_ne!(display, "api");
+    }
+
+    /// `C:\..\..\etc\passwd`：根段的 `..` 一律被吞掉（绝对根之上不可回退）；在 Windows 上盘符根必须
+    /// 原样保留（这正是旧实现被 `pop()` 弹掉的那一段）。UNC 份额根同理。
+    #[cfg(windows)]
+    #[test]
+    fn normalize_counts_leading_parent_traversals_without_popping_the_root() {
+        let normalized = normalize(Path::new(r"C:\..\..\etc\passwd"));
+        assert_eq!(normalized.escapes, 0, "绝对根之上没有可回退的层级");
+        assert_eq!(normalized.path, Path::new(r"C:\etc\passwd"));
+
+        let unc = normalize(Path::new(r"\\server\share\..\..\x"));
+        assert_eq!(unc.escapes, 0);
+        assert_eq!(unc.path, Path::new(r"\\server\share\x"));
+    }
+
+    #[test]
+    fn normalize_counts_leading_traversals_on_relative_paths() {
+        // 相对形式：前导 `..` 逐级计数，`Normal` 只能抵消**它前面**的 `..`。
+        assert_eq!(normalize(Path::new("../etc/passwd")).escapes, 1);
+        assert_eq!(normalize(Path::new("../../etc/passwd")).escapes, 2);
+        assert_eq!(normalize(Path::new("../../../../a/b")).escapes, 4);
+        assert_eq!(normalize(Path::new("a/../b")).escapes, 0);
+        assert_eq!(normalize(Path::new("a/../../b")).escapes, 1);
+        // 越界时路径仍带前导 `..`（调用方据此判越界，不拿它做前缀比较）。
+        assert_eq!(
+            normalize(Path::new("../../etc/passwd")).path,
+            Path::new("../../etc/passwd")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_marks_the_root_under_a_windows_prefix() {
+        // 根被 `pop()` 吃掉的形状：`C:\`、`C:\..`、`C:\a\..\..` 都必须保留根前缀且计数为 0。
+        // verbatim 前缀的剥离发生在 `strip_verbatim`（`canonicalize` 之后），词法层原样保留。
+        for (input, expected) in [
+            (r"C:\", r"C:\"),
+            (r"C:\..", r"C:\"),
+            (r"C:\a\..\..", r"C:\"),
+            (r"C:\a\b\..", r"C:\a"),
+        ] {
+            let normalized = normalize(Path::new(input));
+            assert_eq!(normalized.escapes, 0, "{input}");
+            assert!(normalized.path.has_root(), "{input}: 根必须保留");
+            assert_eq!(
+                normalized.path.as_os_str().to_string_lossy(),
+                expected,
+                "{input}"
+            );
+        }
+        // UNC 份额根本身同样不可回退。
+        let unc = normalize(Path::new(r"\\server\share\a\..\.."));
+        assert_eq!(unc.escapes, 0);
+        assert_eq!(unc.path.as_os_str().to_string_lossy(), r"\\server\share\");
+    }
+
+    #[test]
+    fn display_path_traversal_shapes_stay_outside_on_every_platform() {
+        // 越界的**判定**必须与平台无关：这些形状是 R7 的核心判据，不应因宿主是 Windows 而改变。
+        // （Unix 形式的根前缀在 Windows 上是普通组件，因此 `C:\..\..\etc\passwd` 只在 Windows 上
+        // 走真实前缀分支；其余形状在两条平台上都走同一段计数逻辑。）
+        assert_eq!(
+            display_path(Some("/work/api"), "../../etc/passwd"),
+            ("passwd".to_owned(), true)
+        );
+        assert_eq!(
+            display_path(Some("/work/api"), "../../../a/b"),
+            ("b".to_owned(), true)
+        );
+        assert_eq!(
+            display_path(Some("/work/api"), "/work/api/../api/x"),
+            ("x".to_owned(), false)
+        );
+        assert_eq!(
+            display_path(Some("/work/api"), "src/main.rs"),
+            ("src/main.rs".to_owned(), false)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn display_path_treats_a_windows_parent_traversal_as_outside() {
+        // `C:\..\..\etc\passwd`：根被吞掉后**不得**把 `etc\passwd` 当成区内相对路径。
+        let root = std::env::temp_dir();
+        let root_text = root.to_string_lossy().into_owned();
+        let outside = format!(r"{}\..\..\Windows\System32\drivers\etc\hosts", root_text);
+        let (display, outside_flag) = display_path(Some(&root_text), &outside);
+        assert!(outside_flag, "R7：越过盘符根必须判越界");
+        assert_eq!(display, "hosts", "R7：只给文件名称");
     }
 
     #[test]

@@ -2037,6 +2037,13 @@ impl Broker {
         let mut file_change_plan: Vec<String> = Vec::new();
         // R9：`session.info.changed` 投影出的标题窄写入（两层可选，`None` = 本次不改标题）。
         let mut title_update: Option<Option<String>> = None;
+        // R9（`design.md` D7）：本批是否出现过 `session.info.changed`。
+        //
+        // 通知即使**只带更新时间**（标题意图 `Unchanged`）也是一次会话信息更新：会话的**权威**更新时间
+        // 必须随之推进到本次 Daemon 提交时钟（`commit.at`），否则 `SYNC_PROTOCOL.md` §10.2 的
+        // `ORDER BY updated_at DESC` 目录排序会停在旧值上。因此只要本批含该事件，就必须产出一次
+        // `SessionUpdate`（`title: None` = 不改该列），让存储层照常写 `updated_at` 与 `version`。
+        let mut info_update_seen = false;
         // 失败批次是否携带了**在跑的** turn 的事件：只有它才需要在写失败时放弃该 turn（§6 第 9 条）。
         let mut running_in_chunk = false;
         for (event_index, event) in chunk.into_iter().enumerate() {
@@ -2143,6 +2150,7 @@ impl Broker {
             // 通知单向写入，因此这里把该通知投影成一次 `SessionUpdate.title` 的窄写入；通知没带标题
             // （只带更新时间）时保持既有标题不变。
             if event.event_type.as_str() == "session.info.changed" {
+                info_update_seen = true;
                 let acp_raw = event.payload.acp.as_ref().and_then(AcpRaw::as_available);
                 let intent = title_intent(
                     acp_raw.map(|(_, raw, _, _)| raw),
@@ -2156,7 +2164,8 @@ impl Broker {
                 }
                 // 事件 view 的 `updatedAt` 照常转发 Agent 自报值；会话的**权威**更新时间取 Daemon
                 // 持久化时间（`commit.at`，由存储层写进 `owned_session.updated_at`），不使用 Agent
-                // 自报值决定排序（`design.md` D7）。
+                // 自报值决定排序（`design.md` D7）。只要本事件出现，`updated_at` 就必须前进一步——
+                // 因此下面的 `state` 组装把它计入「本次需要一次 `SessionUpdate`」的判据。
             }
             // §6.11：`Ephemeral` 由 `PendingEvent::from_persistence` 直接排除（`None` = 只做内存转发）。
             if let Some(pending) = PendingEvent::from_persistence(
@@ -2228,8 +2237,8 @@ impl Broker {
                 )?);
             }
         }
-        // R9：标题窄写入与 turn 终态的状态修改合批（`None` = 本批不改标题、也不改状态）。
-        let state = if session_state.is_some() || title_update.is_some() {
+        // R9：标题窄写入、通知带来的权威时间推进与 turn 终态的状态修改合批（`None` = 本批不改状态）。
+        let state = if session_state.is_some() || title_update.is_some() || info_update_seen {
             Some(StateChange::Update(SessionUpdate {
                 state: session_state,
                 mode: ModeChange::Unchanged,
@@ -9355,6 +9364,50 @@ mod tests {
             session.updated_at().as_str(),
             "2020-01-01T00:00:00.000Z",
             "R9：权威更新时间取 Daemon 持久化时间，不采用 Agent 自报值"
+        );
+    }
+
+    /// R9/D7：通知**只带更新时间**时（标题意图为「不改」），会话的权威更新时间仍必须前进到本次
+    /// Daemon 提交时钟——`SYNC_PROTOCOL.md` §10.2 的目录排序按 `updated_at DESC`，该列不前进排序就是错的。
+    ///
+    /// 判别力：只把「标题意图」变成 `SessionUpdate`（`None` = 不改标题时不产出任何会话写入）时，
+    /// 本批不写 `owned_session`，`updated_at` 停在旧值上——断言二（`after > before`）失败。
+    #[test]
+    fn a_session_info_update_without_a_title_still_advances_the_updated_at() {
+        let harness = Harness::new(BrokerConfig::default());
+        // 先制造一个较早的基线（prompt 期间的多条提交会推进 TestClock）。
+        let _ = harness.submit_prompt(1, 'K');
+        let before = harness
+            .world
+            .session(&harness.session)
+            .expect("会话")
+            .updated_at()
+            .clone();
+
+        // ACP 原文里**没有** `title` 键 = 只带更新时间（通知的部分更新语义）。
+        let only_time = r#"{"params":{"update":{"sessionUpdate":"session_info_update","updatedAt":"2020-01-01T00:00:00.000Z"}}}"#;
+        let mut event = endpoint_event(
+            EventKind::State,
+            "session.info.changed",
+            r#"{"title":null,"updatedAt":"2020-01-01T00:00:00.000Z"}"#,
+        );
+        event.payload.acp =
+            Some(AcpRaw::available("application/json", only_time, digest('T')).expect("acp"));
+        // 事件自报的时间**早于**该会话上一次写入：权威时间不得被它拖回去。
+        event.at = ts(0);
+        harness.broker.sink(&harness.session).send(event);
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+
+        let session = harness.world.session(&harness.session).expect("会话");
+        assert_ne!(
+            session.updated_at().as_str(),
+            "2020-01-01T00:00:00.000Z",
+            "R9/D7：权威更新时间不得取 Agent 自报值"
+        );
+        assert!(
+            session.updated_at().as_str() > before.as_str(),
+            "R9/D7：只带更新的通知也必须把 updated_at 推进到提交时钟（排序依据），{before} → {}",
+            session.updated_at()
         );
     }
 
