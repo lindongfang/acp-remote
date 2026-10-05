@@ -1,8 +1,8 @@
 /**
  * 生命周期端口的 **Web/PWA** 实现。
  *
- * 归属 WP5b。把 `document.visibilitychange`、`pagehide`（以及 `beforeunload` 作为
- * 旧浏览器兜底）收敛成 {@link LifecyclePort}，让 WP6/WP7 不直接依赖 DOM。
+ * 归属 WP5b。把 `document.visibilitychange` 与 `window.pagehide` 收敛成
+ * {@link LifecyclePort}，让 WP6/WP7 不直接依赖 DOM。
  *
  * v1 只交付 Web：**不写** `.native.ts`（`tasks.md` 2.6）。
  */
@@ -29,14 +29,15 @@ class WebLifecycle implements LifecyclePort {
     const onPageHide = () => listener({ kind: "pagehide" });
 
     document.addEventListener("visibilitychange", onVisibilityChange);
-    // `pagehide` 是 bfcache 场景下可靠的一侧；`beforeunload` 只作兜底。
+    // 只用 `pagehide`：它在正常卸载与 bfcache 两侧都可靠。**不**挂 `beforeunload`——
+    // 注册该监听器本身就会让页面在桌面 Chrome/Firefox 失去 bfcache 资格
+    // （https://web.dev/articles/bfcache），把前进/后退退化成整页重载并重跑握手，
+    // 正好抵消选择 `pagehide` 的初衷。
     window.addEventListener("pagehide", onPageHide);
-    window.addEventListener("beforeunload", onPageHide);
 
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("pagehide", onPageHide);
-      window.removeEventListener("beforeunload", onPageHide);
     };
   }
 

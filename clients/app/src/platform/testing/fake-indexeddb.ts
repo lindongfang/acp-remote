@@ -6,8 +6,8 @@
  *
  * 它不是 IndexedDB 的完整实现，也**不**声称实现对结构化克隆的保真：
  * 值按引用保存。真正的浏览器语义（结构化克隆 `CryptoKey` 后仍 `extractable === false`）
- * 由 `src/platform/secure-storage.browser.test.ts` 在 Chromium 里核对——
- * 这正是「不要把替身当成浏览器证据」的边界。
+ * 由 `clients/app/scripts/run-browser-check.mjs` 在真实 Chromium 里执行
+ * `testing/browser-checks.ts` 核对——这正是「不要把替身当成浏览器证据」的边界。
  */
 
 /** 替身里的一条记录。 */

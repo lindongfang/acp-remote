@@ -12,8 +12,8 @@
  * 2. 经过持久化往返（写入替身 → 清进程内缓存 → 重新读出）后，私钥句柄仍然
  *    `extractable === false`，且存储中的记录**不含**任何私钥字节形式。
  *
- * 真实浏览器的 IndexedDB 结构化克隆语义由 `secure-storage.browser.test.ts`（Chromium）核对；
- * 本文件是可在 CI 里常驻运行的那一半。
+ * 真实浏览器的 IndexedDB 结构化克隆语义由 `clients/app/scripts/run-browser-check.mjs`
+ * 在真实 Chromium 里执行 `testing/browser-checks.ts` 核对；本文件是可在 CI 里常驻运行的那一半。
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
@@ -136,5 +136,39 @@ describe("R11：设备身份由不可导出密钥承载", () => {
     expect(extractablePair.privateKey.extractable).toBe(true);
     const reopened = reopenStore();
     await expect(reopened.loadIdentity()).rejects.toMatchObject({ kind: "corrupt_entry" });
+  });
+
+  it("并发 ensureIdentity 收敛到同一把密钥，且与落盘记录一致（F3）", async () => {
+    const store = reopenStore();
+    const [first, second] = await Promise.all([
+      store.ensureIdentity({ deviceId: DEVICE_ID, canonicalOrigin: ORIGIN }),
+      store.ensureIdentity({ deviceId: DEVICE_ID, canonicalOrigin: ORIGIN }),
+    ]);
+
+    // 两次并发调用必须是同一身份：公钥相同、句柄同一。
+    expect(first.publicKeyBase64Url).toBe(second.publicKeyBase64Url);
+    expect(first.privateKey).toBe(second.privateKey);
+
+    // 且与持久化记录一致，只写入了一条记录（没有第二个写入者覆盖）。
+    const rehydrated = await reopenStore().loadIdentity();
+    expect(rehydrated?.publicKeyBase64Url).toBe(first.publicKeyBase64Url);
+    expect(globalThis.__fakeIndexedDBDump()).toHaveLength(1);
+  });
+
+  it("并发的不同来源请求不会静默共享同一身份（F3）", async () => {
+    const store = reopenStore();
+    const [first, second] = await Promise.allSettled([
+      store.ensureIdentity({ deviceId: DEVICE_ID, canonicalOrigin: ORIGIN }),
+      store.ensureIdentity({
+        deviceId: DEVICE_ID,
+        canonicalOrigin: "https://other-host.example.ts.net",
+      }),
+    ]);
+
+    expect(first.status).toBe("fulfilled");
+    expect(second.status).toBe("rejected");
+    if (second.status === "rejected") {
+      expect(second.reason).toMatchObject({ kind: "origin_mismatch" });
+    }
   });
 });

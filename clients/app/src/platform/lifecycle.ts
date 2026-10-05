@@ -16,7 +16,7 @@ export type VisibilityState = "visible" | "hidden";
 export type LifecycleEvent =
   /** 页面变为前台/后台。后台时不应假装已在线，也不应把输入标记为已发送。 */
   | { readonly kind: "visibility"; readonly state: VisibilityState }
-  /** 页面即将被卸载（`pagehide`/`beforeunload`）：用于释放连接、丢弃未完成快照。 */
+  /** 页面即将被卸载（`pagehide`）：用于释放连接、丢弃未完成快照。 */
   | { readonly kind: "pagehide" };
 
 /** 取消订阅。 */

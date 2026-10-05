@@ -23,6 +23,7 @@ import {
   type ImportedMetadata,
   type LocalCachePort,
   type VolatileImportedContent,
+  assertPersistableForOrigin,
   estimateEntryBytes,
   evictToFit,
 } from "./local-cache";
@@ -61,6 +62,29 @@ export function openLocalCache(): LocalCachePort {
 }
 
 class WebLocalCache implements LocalCachePort {
+  /**
+   * 写路径串行化队列（F2）。
+   *
+   * `#commit` 与 `get` 的过期/命中回写都是**全量读-改-写**（`#readAll` → 收敛 → `#replaceAll`），
+   * 两次重叠操作会在读与写之间交错，后写者以自己读到的旧快照覆盖先写者已落盘的条目
+   * （`putLocalSummary` 与 `putImportedMetadata` 并发时二者只存其一；`clear()` 与 `put` 并发时
+   * `clear()` 会被抢跑留下残余）。同一实例内的**持久写操作**因此必须串行：这里用一条
+   * promise 链把每个写操作接在上一个之后，使「读快照 → 收敛 → 原子写回」成为临界区。
+   *
+   * 只串行化会改持久状态的操作（三个 `put`/`clear` 与 `get` 的回写）；只读的 `stats` 不必排队。
+   */
+  #writeChain: Promise<unknown> = Promise.resolve();
+
+  /** 把 `operation` 接到串行队列尾部；前序失败不阻断后续操作。 */
+  #serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.#writeChain.then(operation, operation);
+    this.#writeChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   #openDatabase(): Promise<IDBDatabase> {
     if (typeof indexedDB === "undefined") {
       return Promise.reject(new Error("IndexedDB 不可用（非安全上下文或浏览器不支持）"));
@@ -138,6 +162,10 @@ class WebLocalCache implements LocalCachePort {
     readonly summary: string;
     readonly nowMs: number;
   }): Promise<void> {
+    // F4：R20 的落盘守门必须真的接线，而不是只声明。这里转发**整个**入参（而非只转发
+    // 得到类型许可的 `summary`）：结构化类型允许更宽的对象经变量流入，只要上游多带一个
+    // `metadata` 字段，守门就必须看见并按 CachePolicyError 拒绝。
+    assertPersistableForOrigin({ kind: "local" }, input);
     const entry: CacheEntry = {
       kind: "local",
       key: input.key,
@@ -145,12 +173,14 @@ class WebLocalCache implements LocalCachePort {
       updatedAtMs: input.nowMs,
       lastUsedAtMs: input.nowMs,
     };
-    const database = await this.#openDatabase();
-    try {
-      await this.#commit(database, entry, input.nowMs);
-    } finally {
-      database.close();
-    }
+    await this.#serialize(async () => {
+      const database = await this.#openDatabase();
+      try {
+        await this.#commit(database, entry, input.nowMs);
+      } finally {
+        database.close();
+      }
+    });
   }
 
   async putImportedMetadata(input: {
@@ -158,6 +188,9 @@ class WebLocalCache implements LocalCachePort {
     readonly metadata: ImportedMetadata;
     readonly nowMs: number;
   }): Promise<void> {
+    // F4：imported 落盘入口的唯一闸门。同样转发**整个**入参，使「这条 imported 记录
+    // 是否夹带了正文（`summary`）」在运行期被真的检查，而不是由结构的类型形状默默放行。
+    assertPersistableForOrigin({ kind: "imported" }, input);
     const entry: CacheEntry = {
       kind: "imported",
       key: input.key,
@@ -165,50 +198,56 @@ class WebLocalCache implements LocalCachePort {
       updatedAtMs: input.nowMs,
       lastUsedAtMs: input.nowMs,
     };
-    const database = await this.#openDatabase();
-    try {
-      await this.#commit(database, entry, input.nowMs);
-    } finally {
-      database.close();
-    }
+    await this.#serialize(async () => {
+      const database = await this.#openDatabase();
+      try {
+        await this.#commit(database, entry, input.nowMs);
+      } finally {
+        database.close();
+      }
+    });
   }
 
   async get(key: string, nowMs: number): Promise<CacheHit | null> {
-    const database = await this.#openDatabase();
-    let entry: CacheEntry | undefined;
-    try {
-      entry = (await this.#readAll(database)).find((candidate) => candidate.key === key);
-      if (entry === undefined) return null;
-      const ttlMs = entry.kind === "local" ? SUMMARY_CACHE_TTL_MS : IMPORTED_METADATA_TTL_MS;
-      const remainingTtlMs = ttlMs - (nowMs - entry.updatedAtMs);
-      if (remainingTtlMs <= 0) {
-        // 过期即丢弃；读取路径不返回过期数据。
+    return this.#serialize(async () => {
+      const database = await this.#openDatabase();
+      let entry: CacheEntry | undefined;
+      try {
+        entry = (await this.#readAll(database)).find((candidate) => candidate.key === key);
+        if (entry === undefined) return null;
+        const ttlMs = entry.kind === "local" ? SUMMARY_CACHE_TTL_MS : IMPORTED_METADATA_TTL_MS;
+        const remainingTtlMs = ttlMs - (nowMs - entry.updatedAtMs);
+        if (remainingTtlMs <= 0) {
+          // 过期即丢弃；读取路径不返回过期数据。
+          await this.#replaceAll(
+            database,
+            (await this.#readAll(database)).filter((candidate) => candidate.key !== key),
+          );
+          return null;
+        }
+        const touched: CacheEntry = { ...entry, lastUsedAtMs: nowMs };
         await this.#replaceAll(
           database,
-          (await this.#readAll(database)).filter((candidate) => candidate.key !== key),
+          (await this.#readAll(database)).map((candidate) =>
+            candidate.key === key ? touched : candidate,
+          ),
         );
-        return null;
+        return { entry: touched, remainingTtlMs };
+      } finally {
+        database.close();
       }
-      const touched: CacheEntry = { ...entry, lastUsedAtMs: nowMs };
-      await this.#replaceAll(
-        database,
-        (await this.#readAll(database)).map((candidate) =>
-          candidate.key === key ? touched : candidate,
-        ),
-      );
-      return { entry: touched, remainingTtlMs };
-    } finally {
-      database.close();
-    }
+    });
   }
 
   async clear(): Promise<void> {
-    const database = await this.#openDatabase();
-    try {
-      await this.#replaceAll(database, []);
-    } finally {
-      database.close();
-    }
+    return this.#serialize(async () => {
+      const database = await this.#openDatabase();
+      try {
+        await this.#replaceAll(database, []);
+      } finally {
+        database.close();
+      }
+    });
   }
 
   async stats(nowMs: number): Promise<CacheStats> {

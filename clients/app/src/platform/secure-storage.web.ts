@@ -21,7 +21,6 @@
  */
 
 import {
-  DEVICE_IDENTITY_ORIGIN_KEY,
   DEVICE_IDENTITY_STORE,
   SecureStorageError,
   type DeviceIdentity,
@@ -71,6 +70,14 @@ export function openDeviceIdentityStore(): DeviceIdentityPort {
 class WebDeviceIdentityStore implements DeviceIdentityPort {
   /** 进程内缓存：避免每次签名都读一遍 IndexedDB。 */
   #cached: DeviceIdentity | null = null;
+
+  /**
+   * `ensureIdentity` 的 in-flight promise（F3）。
+   *
+   * 供并发调用者共享同一次「检查 + 生成 + 写入」；完成后立即清空，
+   * 使后续调用（含来源变化）仍走完整的检查路径。
+   */
+  #pendingEnsure: Promise<DeviceIdentity> | null = null;
 
   /** 打开数据库；连接由调用方 `close()`，避免长生命周期句柄泄漏。 */
   #openDatabase(): Promise<IDBDatabase> {
@@ -123,13 +130,11 @@ class WebDeviceIdentityStore implements DeviceIdentityPort {
     });
   }
 
-  /** 清除身份记录与绑定来源。 */
+  /** 清除身份记录。来源绑定保存在同一条记录的 `canonicalOrigin` 字段里，随之删除。 */
   #deleteRecords(database: IDBDatabase): Promise<void> {
     return new Promise((resolve, reject) => {
       const transaction = database.transaction(DEVICE_IDENTITY_STORE, "readwrite");
-      const store = transaction.objectStore(DEVICE_IDENTITY_STORE);
-      store.delete(IDENTITY_RECORD_KEY);
-      store.delete(DEVICE_IDENTITY_ORIGIN_KEY);
+      transaction.objectStore(DEVICE_IDENTITY_STORE).delete(IDENTITY_RECORD_KEY);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () =>
         reject(new SecureStorageError("storage_unavailable", "清除身份记录失败"));
@@ -242,6 +247,38 @@ class WebDeviceIdentityStore implements DeviceIdentityPort {
     if (!CANONICAL_ORIGIN_PATTERN.test(input.canonicalOrigin)) {
       throw new SecureStorageError("corrupt_entry", "规范化来源形状非法");
     }
+
+    // F3——single-flight。本方法原本是 check-then-act：两个并发调用都读到
+    // `loadIdentity() === null`，于是各自生成并写入一把密钥，先返回者的句柄随后与
+    // 落盘身份不一致（R11 的幂等契约被违反）。这里把「检查 + 生成 + 写入」收敛到
+    // **同一个 in-flight promise**：并发的第二、第三个调用共享第一次的结果。
+    const inFlight = this.#pendingEnsure;
+    if (inFlight !== null) {
+      const identity = await inFlight;
+      // 并发的不同来源请求不得静默拿到另一个来源的身份（与串行路径的 origin_mismatch 同口径）。
+      if (identity.canonicalOrigin !== input.canonicalOrigin) {
+        throw new SecureStorageError(
+          "origin_mismatch",
+          "已绑定的规范化来源与本次来源不同：必须回到主机侧重新配对",
+        );
+      }
+      return identity;
+    }
+
+    const pending = this.#ensureIdentityOnce(input);
+    this.#pendingEnsure = pending;
+    try {
+      return await pending;
+    } finally {
+      this.#pendingEnsure = null;
+    }
+  }
+
+  /** `ensureIdentity` 的实际工作体；由 `#pendingEnsure` 保证同实例内单次执行。 */
+  async #ensureIdentityOnce(input: {
+    readonly deviceId: string;
+    readonly canonicalOrigin: string;
+  }): Promise<DeviceIdentity> {
     const existing = await this.loadIdentity();
     if (existing !== null) {
       if (existing.canonicalOrigin !== input.canonicalOrigin) {

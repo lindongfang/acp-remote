@@ -39,9 +39,6 @@ export interface DeviceIdentity {
  */
 export const DEVICE_IDENTITY_STORE = "acp-remote/device-identity/v1";
 
-/** 与设备身份绑定的 epoch 记录键：来源变化必须重新配对（R11 场景 3）。 */
-export const DEVICE_IDENTITY_ORIGIN_KEY = "canonical-origin";
-
 /**
  * 安全存储错误。
  *

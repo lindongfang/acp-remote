@@ -40,7 +40,7 @@ export {
   evictToFit,
 } from "./local-cache";
 export type { DeviceIdentity, DeviceIdentityPort, SecureStorageErrorKind } from "./secure-storage";
-export { DEVICE_IDENTITY_ORIGIN_KEY, DEVICE_IDENTITY_STORE, SecureStorageError } from "./secure-storage";
+export { DEVICE_IDENTITY_STORE, SecureStorageError } from "./secure-storage";
 export { createVolatileImportedContent } from "./local-cache.web";
 
 import type { LifecyclePort } from "./lifecycle";

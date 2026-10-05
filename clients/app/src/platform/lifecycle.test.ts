@@ -13,7 +13,6 @@ import { openLifecycle } from "./lifecycle.web";
 interface ListenerBook {
   visibilitychange: (() => void)[];
   pagehide: (() => void)[];
-  beforeunload: (() => void)[];
 }
 
 /** DOM 替身：类型化句柄，测试里直接读 `visibilityState` 而不做内联断言。 */
@@ -28,7 +27,7 @@ const ORIGINAL_WINDOW = Object.getOwnPropertyDescriptor(globalThis, "window");
 
 /** 装一个最小 `document`/`window` 替身。 */
 function installDomDouble(initialVisibility: "visible" | "hidden"): DomDouble {
-  const listeners: ListenerBook = { visibilitychange: [], pagehide: [], beforeunload: [] };
+  const listeners: ListenerBook = { visibilitychange: [], pagehide: [] };
   const state = { visibilityState: initialVisibility as string };
   const addEventListener = (type: keyof ListenerBook, listener: () => void) => {
     listeners[type]?.push(listener);
@@ -93,18 +92,29 @@ describe("生命周期端口", () => {
     expect(received).toHaveLength(1);
     expect(dom.listeners.visibilitychange).toHaveLength(0);
     expect(dom.listeners.pagehide).toHaveLength(0);
-    expect(dom.listeners.beforeunload).toHaveLength(0);
   });
 
-  it("pagehide 与 beforeunload 都产生 pagehide 事件", () => {
+  it("pagehide 产生 pagehide 事件；不注册 beforeunload（bfcache 失格诱因）", () => {
     const dom = installDomDouble("visible");
     const lifecycle = openLifecycle();
     const received: LifecycleEvent[] = [];
-    lifecycle.subscribe((event) => received.push(event));
+    const unsubscribe = lifecycle.subscribe((event) => received.push(event));
 
     dom.listeners.pagehide.forEach((listener) => listener());
-    dom.listeners.beforeunload.forEach((listener) => listener());
-    expect(received).toEqual([{ kind: "pagehide" }, { kind: "pagehide" }]);
+    expect(received).toEqual([{ kind: "pagehide" }]);
+
+    // bfcache：注册 `beforeunload` 监听器会让页面失去资格，因此实现不得注册它。
+    const windowDouble = globalThis.window as unknown as { addEventListener: (type: string) => void };
+    const registered: string[] = [];
+    const originalAdd = windowDouble.addEventListener;
+    windowDouble.addEventListener = (type: string) => registered.push(type);
+    const second = openLifecycle();
+    const off = second.subscribe(() => {});
+    windowDouble.addEventListener = originalAdd;
+    expect(registered).not.toContain("beforeunload");
+    expect(registered).toContain("pagehide");
+    off();
+    unsubscribe();
   });
 
   it("持久化请求在缺少 navigator.storage 时返回 false（不抛错）", async () => {

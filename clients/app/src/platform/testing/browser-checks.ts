@@ -12,7 +12,14 @@
  */
 
 import { openPlatform } from "../index";
-import { DEVICE_PROOF_DOMAIN, encodeTranscript, type ByteArray, type TranscriptField } from "../transcript";
+import { CachePolicyError, type ImportedMetadata } from "../local-cache";
+import {
+  DEVICE_PROOF_DOMAIN,
+  TranscriptError,
+  encodeTranscript,
+  type ByteArray,
+  type TranscriptField,
+} from "../transcript";
 import { encodeBase64Url, encodeNulJoinedUtf8, encodeU16be, encodeUtf8, encodeUuid16 } from "../transcript";
 
 export interface BrowserCheckResult {
@@ -198,6 +205,115 @@ export async function runBrowserChecks(): Promise<BrowserCheckResult[]> {
     platform.importedContent.get("remote-1") === null,
     "内存载体已清空",
   );
+
+  // ── F1：domain 长度按 UTF-8 字节数判定，超限抛错而非静默截断 ─────────────
+  {
+    const oversized = "\u4e2d".repeat(30000); // 30000 码元 / 90000 UTF-8 字节
+    let threw = false;
+    try {
+      encodeTranscript(oversized, []);
+    } catch (error) {
+      threw = error instanceof TranscriptError;
+    }
+    record(
+      "F1 多字节超长 domain 抛 TranscriptError（不静默截断）",
+      threw && oversized.length < 0xffff && new TextEncoder().encode(oversized).length > 0xffff,
+      `码元 ${oversized.length} / 字节 ${new TextEncoder().encode(oversized).length}`,
+    );
+  }
+
+  // ── F2：并发缓存写入不丢条目，clear 胜出 ───────────────────────────────
+  {
+    const concurrent = openPlatform().localCache;
+    await concurrent.clear(); // 前面 R20 探针留下的 imported 条目会干扰计数
+    await Promise.all([
+      concurrent.putLocalSummary({ key: "A", summary: "并发摘要 A", nowMs: Date.now() }),
+      concurrent.putImportedMetadata({
+        key: "B",
+        metadata: {
+          ownerNodeId: DEVICE_PROOF_INPUT.hostId,
+          exportId: "export-2",
+          sessionId: "session-2",
+          originCursor: "2-3",
+          localSequence: "8",
+          contentDigestSha256: "b".repeat(64),
+          acks: [],
+        },
+        nowMs: Date.now(),
+      }),
+    ]);
+    const afterConcurrent = await concurrent.stats(Date.now());
+    record(
+      "F2 并发两条 put 都落盘（不丢条目）",
+      afterConcurrent.localEntries === 1 && afterConcurrent.importedEntries === 1,
+      `local=${afterConcurrent.localEntries} imported=${afterConcurrent.importedEntries}`,
+    );
+
+    await concurrent.putLocalSummary({ key: "A", summary: "清除前", nowMs: Date.now() });
+    await Promise.all([
+      concurrent.putLocalSummary({ key: "A", summary: "清除后并发写", nowMs: Date.now() }),
+      concurrent.clear(),
+    ]);
+    const afterClear = await concurrent.stats(Date.now());
+    record(
+      "F2 clear 与并发 put 竞争时存储为空",
+      afterClear.localEntries === 0 && afterClear.importedEntries === 0,
+      `local=${afterClear.localEntries} imported=${afterClear.importedEntries}`,
+    );
+  }
+
+  // ── F3：并发 ensureIdentity 收敛到同一把密钥 ────────────────────────────
+  {
+    await platform.deviceIdentity.clearIdentity();
+    const [a, b] = await Promise.all([
+      platform.deviceIdentity.ensureIdentity({
+        deviceId: DEVICE_PROOF_INPUT.deviceId,
+        canonicalOrigin: origin,
+      }),
+      platform.deviceIdentity.ensureIdentity({
+        deviceId: DEVICE_PROOF_INPUT.deviceId,
+        canonicalOrigin: origin,
+      }),
+    ]);
+    const persisted = await openPlatform().deviceIdentity.loadIdentity();
+    record(
+      "F3 并发 ensureIdentity 得到同一把密钥且与落盘一致",
+      a.publicKeyBase64Url === b.publicKeyBase64Url &&
+        persisted?.publicKeyBase64Url === a.publicKeyBase64Url,
+      `same=${String(a.publicKeyBase64Url === b.publicKeyBase64Url)}`,
+    );
+  }
+
+  // ── F4：R20 落盘守门真的接线 ────────────────────────────────────────────
+  {
+    const guarded = openPlatform().localCache;
+    const smuggled = {
+      key: "smuggle-1",
+      metadata: {
+        ownerNodeId: DEVICE_PROOF_INPUT.hostId,
+        exportId: "export-3",
+        sessionId: "session-3",
+        originCursor: "3-4",
+        localSequence: "9",
+        contentDigestSha256: "c".repeat(64),
+        acks: [],
+        body: "IMPORTED-BODY-SENTINEL",
+      } as unknown as ImportedMetadata,
+      nowMs: Date.now(),
+    };
+    let rejected = false;
+    try {
+      await guarded.putImportedMetadata(smuggled);
+    } catch (error) {
+      rejected = error instanceof CachePolicyError;
+    }
+    const afterGuard = await guarded.stats(Date.now());
+    record(
+      "F4 imported 正文夹带被守门拒绝且未落盘",
+      rejected && afterGuard.importedEntries === 0,
+      `rejected=${String(rejected)} imported=${afterGuard.importedEntries}`,
+    );
+  }
 
   // ── 清理：清除身份与缓存，避免同一 profile 残留 ──────────────────────────
   await platform.deviceIdentity.clearIdentity();

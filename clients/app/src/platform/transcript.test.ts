@@ -20,6 +20,7 @@ import {
   DEVICE_PROOF_DOMAIN,
   TRANSCRIPT_CODEC_VERSION,
   TRANSCRIPT_MAGIC,
+  TranscriptError,
   encodeBase64Url,
   encodeNulJoinedUtf8,
   encodeTranscript,
@@ -221,6 +222,19 @@ describe("R11：transcript 编码器的结构性拒绝", () => {
   it("空 domain 与含 NUL 的字符串被拒绝", () => {
     expect(() => encodeTranscript("", [])).toThrow(/domain/);
     expect(() => encodeUtf8("a\u0000b")).toThrow(/NUL/);
+  });
+
+  it("UTF-8 字节数超过 u16 上限的 domain 被拒绝（不以码元数判定、不静默截断）", () => {
+    // 30000 个码元（String.length 远低于 65535）但 90000 UTF-8 字节。
+    const oversized = "\u4e2d".repeat(30000);
+    expect(oversized.length).toBeLessThan(0xffff);
+    expect(new TextEncoder().encode(oversized).length).toBeGreaterThan(0xffff);
+    expect(() => encodeTranscript(oversized, [])).toThrow(TranscriptError);
+    // 边界以内（65535 字节）仍然接受，且写出的 u16be 前缀等于真实字节数。
+    const atLimit = "a".repeat(0xffff);
+    const encoded = encodeTranscript(atLimit, []);
+    const view = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength);
+    expect(view.getUint16(5, false)).toBe(0xffff);
   });
 
   it("negotiatedFeatures 必须按 UTF-8 字节升序且无重复", () => {

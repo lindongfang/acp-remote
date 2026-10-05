@@ -196,11 +196,25 @@ export function evictToFit(input: {
   return { kept, evicted };
 }
 
+/** `ImportedMetadata` 的允许清单：落在持久层的 imported 记录只准有这些字段。 */
+const IMPORTED_METADATA_FIELDS: readonly string[] = [
+  "ownerNodeId",
+  "exportId",
+  "sessionId",
+  "originCursor",
+  "localSequence",
+  "contentDigestSha256",
+  "acks",
+];
+
 /**
- * R20 的**唯一**落盘守门函数：给定来源，返回该来源允许进入持久存储的内容形状。
+ * R20 的**唯一**落盘守门函数：给定来源，校验该来源允许进入持久存储的内容形状。
  *
- * 这是一次显式的判别，而不是注释里的约定：任何想把 imported 正文写进持久层的调用路径
- * 都必须先过这里，而 imported 分支在类型上就拿不到 `summary`。
+ * 这是一次显式的**运行期**判别，而不是注释里的约定：任何想把 imported 内容写进持久层的
+ * 调用路径都必须先过这里。结构化 TypeScript 类型允许**更宽**的对象经变量流入
+ * （多余字段不被类型检查拦下），因此守门不能只靠类型：imported 分支在运行期拒绝
+ * (a) 携带正文 `summary`，(b) `metadata` 里出现任何 `ImportedMetadata` 允许清单之外的字段
+ * （例如 `{ ...metadata, body }`）。这正对应 `docs/FRONTEND_DESIGN.md` §7 的「允许清单」。
  */
 export function assertPersistableForOrigin(
   origin: CacheOrigin,
@@ -213,8 +227,16 @@ export function assertPersistableForOrigin(
         "imported 资源正文 MUST NOT 写入任何持久浏览器存储（R20）",
       );
     }
-    if (content.metadata === undefined) {
+    if (content.metadata === undefined || content.metadata === null || typeof content.metadata !== "object") {
       throw new CachePolicyError("content_not_allowed", "imported 持久条目必须携带无正文元数据");
+    }
+    for (const field of Object.keys(content.metadata)) {
+      if (!IMPORTED_METADATA_FIELDS.includes(field)) {
+        throw new CachePolicyError(
+          "content_not_allowed",
+          `imported 持久元数据只允许允许清单内的字段，收到：${field}`,
+        );
+      }
     }
     return;
   }

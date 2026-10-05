@@ -171,4 +171,58 @@ describe("R20：缓存端口行为与 imported 不落盘", () => {
     // 最久未使用的 `a` 应已被淘汰。
     expect(await cache.get("a", NOW)).toBeNull();
   });
+
+  it("并发写入不丢条目：两条并发 put 都落盘（F2）", async () => {
+    const cache = openLocalCache();
+    await Promise.all([
+      cache.putLocalSummary({ key: "A", summary: "本地摘要 A", nowMs: NOW }),
+      cache.putImportedMetadata({ key: "B", metadata: PERSISTABLE_METADATA, nowMs: NOW }),
+    ]);
+
+    const stats = await cache.stats(NOW);
+    expect(stats.localEntries).toBe(1);
+    expect(stats.importedEntries).toBe(1);
+    expect((await cache.get("A", NOW))?.entry.kind).toBe("local");
+    expect((await cache.get("B", NOW))?.entry.kind).toBe("imported");
+  });
+
+  it("clear 与并发 put 竞争时 clear 胜出，存储为空（F2）", async () => {
+    const cache = openLocalCache();
+    await cache.putLocalSummary({ key: "A", summary: "旧摘要", nowMs: NOW });
+
+    await Promise.all([
+      cache.putLocalSummary({ key: "A", summary: "新摘要", nowMs: NOW }),
+      cache.clear(),
+    ]);
+
+    const stats = await cache.stats(NOW);
+    expect(stats.localEntries).toBe(0);
+    expect(stats.importedEntries).toBe(0);
+  });
+
+  it("落盘守门被真的接线：imported 元数据携带正文即拒绝且未落盘（F4）", async () => {
+    const cache = openLocalCache();
+    const withBody = {
+      ...PERSISTABLE_METADATA,
+      body: "imported 会话正文",
+    } as unknown as ImportedMetadata;
+
+    await expect(
+      cache.putImportedMetadata({ key: "r1", metadata: withBody, nowMs: NOW }),
+    ).rejects.toBeInstanceOf(CachePolicyError);
+    expect((await cache.stats(NOW)).importedEntries).toBe(0);
+  });
+
+  it("落盘守门被真的接线：本节点条目携带 imported 元数据形状即拒绝（F4）", async () => {
+    const cache = openLocalCache();
+    const smuggled = {
+      key: "s1",
+      summary: "摘要",
+      metadata: PERSISTABLE_METADATA,
+      nowMs: NOW,
+    } as unknown as { readonly key: string; readonly summary: string; readonly nowMs: number };
+
+    await expect(cache.putLocalSummary(smuggled)).rejects.toBeInstanceOf(CachePolicyError);
+    expect((await cache.stats(NOW)).localEntries).toBe(0);
+  });
 });

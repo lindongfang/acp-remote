@@ -156,19 +156,25 @@ export function encodeNulJoinedUtf8(parts: readonly string[]): ByteArray {
  *
  * `fields` 必须按 `tag` 严格升序且唯一；重复先于乱序判定（与 Rust 侧 `encode` 一致）。
  * 结构非法时抛 `TranscriptError`，不产出半成品字节。
+ *
+ * domain 的 u16 长度上限按 **UTF-8 字节数**判定（与 `setUint16` 实际写入的前缀、以及
+ * Rust 侧 `lib.rs` 的 `domain.len()` 同一基准）。按 UTF-16 码元数判定会让多字节域
+ * 通过守卫后被 `setUint16` 静默按模 65536 截断，产出一个无法还原 domain 的头部。
  */
 export function encodeTranscript(
   domain: string,
   fields: readonly TranscriptField[],
 ): ByteArray {
-  if (domain.length === 0 || domain.includes("\u0000") || domain.length > 0xffff) {
-    throw new TranscriptError("invalid_domain", "domain 为空、含 NUL 或超过 u16 上限");
+  const domainBytes = new TextEncoder().encode(domain);
+  if (domain.length === 0 || domain.includes("\u0000") || domainBytes.length > 0xffff) {
+    throw new TranscriptError(
+      "invalid_domain",
+      "domain 为空、含 NUL 或 UTF-8 字节数超过 u16 上限",
+    );
   }
   if (fields.length > 0xffff) {
     throw new TranscriptError("too_many_fields", "字段数量超过 u16 上限");
   }
-
-  const domainBytes = new TextEncoder().encode(domain);
   // magic(4) + codecVersion(1) + domainLength(2) + domain + fieldCount(2)
   const header: ByteArray = new Uint8Array(4 + 1 + 2 + domainBytes.length + 2);
   const headerView = new DataView(header.buffer);
