@@ -17,7 +17,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use acp_core::model::{AgentId, EndpointEvent, EventKind, EventType, Timestamp, ViewJson};
-use acp_core::ports::{Clock, EventSink};
+use acp_core::ports::{Clock, NodeEventSink};
 
 /// 节点级事件**无法**交给投递通道的原因。
 ///
@@ -52,7 +52,7 @@ impl std::error::Error for NodeEventError {}
 /// 开发期（错误返回值）或运行期（日志）被看见。
 #[derive(Clone)]
 pub struct NodeEvents {
-    sink: Option<EventSink>,
+    sink: Option<NodeEventSink>,
 }
 
 impl std::fmt::Debug for NodeEvents {
@@ -76,9 +76,9 @@ impl NodeEvents {
         Self { sink: None }
     }
 
-    /// 接线的出口（组合根把 core 的节点级事件入口包成 [`EventSink`] 后注入）。
+    /// 接线的出口（组合根把 core 的节点级事件入口包成 [`NodeEventSink`] 后注入）。
     #[must_use]
-    pub fn new(sink: EventSink) -> Self {
+    pub fn new(sink: NodeEventSink) -> Self {
         Self { sink: Some(sink) }
     }
 
@@ -480,7 +480,7 @@ mod tests {
         let collector = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = {
             let collector = std::sync::Arc::clone(&collector);
-            EventSink::new(move |event| {
+            NodeEventSink::new(move |event| {
                 if let Ok(mut guard) = collector.lock() {
                     guard.push(event);
                 }
@@ -513,7 +513,7 @@ mod tests {
         let collector = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = {
             let collector = std::sync::Arc::clone(&collector);
-            EventSink::new(move |event| {
+            NodeEventSink::new(move |event| {
                 if let Ok(mut guard) = collector.lock() {
                     guard.push(event);
                 }

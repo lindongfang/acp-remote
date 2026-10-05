@@ -14,9 +14,10 @@ use acp_core::model::{
     SecretValue, Timestamp, WorkspaceAlias, WorkspaceRecord,
 };
 use acp_core::ports::{
-    Clock, CredentialResolver, EventSink, IdGenerator, LocalConfigStore, ProfileWrite,
-    ProviderRefWrite, SeedWrite, WorkspaceWrite,
+    Clock, CredentialResolver, EventSink, IdGenerator, LocalConfigStore, NodeEventSink,
+    ProfileWrite, ProviderRefWrite, SeedWrite, WorkspaceWrite,
 };
+
 use agent_host::LaunchSpec;
 
 /// fake ACP child 的可执行文件（由 cargo 在测试构建时提供）。
@@ -117,6 +118,17 @@ impl Collector {
     pub fn sink(&self) -> EventSink {
         let events = Arc::clone(&self.events);
         EventSink::new(move |event| {
+            if let Ok(mut guard) = events.lock() {
+                guard.push(event);
+            }
+        })
+    }
+
+    /// 造一个 `NodeEventSink`（节点级专用类型；与 [`Self::sink`] 同形，仅类型不同）。
+    #[must_use]
+    pub fn node_sink(&self) -> NodeEventSink {
+        let events = Arc::clone(&self.events);
+        NodeEventSink::new(move |event| {
             if let Ok(mut guard) = events.lock() {
                 guard.push(event);
             }

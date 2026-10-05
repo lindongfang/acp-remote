@@ -31,7 +31,8 @@ use acp_core::model::{
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CredentialResolver, EventPublisher,
-    EventSink, IdGenerator, LocalConfigStore, RetentionPolicy, SessionBackendFactory, SessionStore,
+    IdGenerator, LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory,
+    SessionStore,
 };
 use acp_core::ports::{ExportStore, RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
@@ -296,7 +297,7 @@ impl Composition {
         // 全部在 `assemble` 返回之后（`daemon` 的接入层与管理面）。因此本进程的第一次 `agent.connected`
         // 必然发生在接线完成之后，不会被漏掉（`NodeEvents` 不回填已发生的事件）。
         //
-        // 桥接（同步 → 异步）：`EventSink` 的闭包是同步的，`commit_node_event` 是异步的，而 core 不依赖
+        // 桥接（同步 → 异步）：`NodeEventSink` 的闭包是同步的，`commit_node_event` 是异步的，而 core 不依赖
         // runtime。组合根本就持有 runtime，因此闭包用 `tokio::runtime::Handle::current()`（`assemble` 是
         // `async fn`，调用点必然在 runtime 上下文内）`spawn` 一个提交任务。**不用 `Handle::block_on`**：
         // 闭包会在 async worker 上下文里被调用（进程读循环的同步钩子路径），在那里 `block_on` 会 panic。
@@ -922,7 +923,7 @@ impl EventPublisher for ForkedPublisher {
 
 /// 节点级事件的同步出口 → 异步提交的桥（`Composition::assemble` 的接线用）。
 ///
-/// `EventSink::new` 的闭包是同步的（core 的 `NodeEvents::send` 在进程读循环的同步钩子路径上调用它），
+/// `NodeEventSink::new` 的闭包是同步的（core 的 `NodeEvents::send` 在进程读循环的同步钩子路径上调用它），
 /// 而 `Broker::commit_node_event` 是异步的。本函数把每条事件 `spawn` 到组合根自己的 runtime 上提交，
 /// 并把任务句柄登记进 `tasks`，供 [`Composition::close`] 在关闭存储前等待。
 ///
@@ -940,8 +941,8 @@ fn node_event_sink(
     broker: std::sync::Weak<Broker>,
     runtime: tokio::runtime::Handle,
     tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-) -> EventSink {
-    EventSink::new(move |event: EndpointEvent| {
+) -> NodeEventSink {
+    NodeEventSink::new(move |event: EndpointEvent| {
         let Some(broker) = broker.upgrade() else {
             // 组合根正在关闭/已释放：此时没有需要落库的提交通道，如实告警（不静默吞掉）。
             // 正常关闭序列里 Agent 先于 `Broker` 释放，断开事件在那之前已经提交（见 `close` 的屏障）。

@@ -1232,7 +1232,7 @@ fn host_with_node_events(
             Arc::new(TestIds::new()),
             Arc::new(TestClock::new()),
         )
-        .with_node_events(agent_host::NodeEvents::new(node.sink())),
+        .with_node_events(agent_host::NodeEvents::new(node.node_sink())),
     );
     (host, node)
 }
@@ -1398,7 +1398,7 @@ async fn oversize_exit_reports_disconnect_after_the_exit_verdict() {
     let probe = {
         let observed = Arc::clone(&observed);
         let host = Arc::clone(&host);
-        agent_host::NodeEvents::new(acp_core::ports::EventSink::new(move |event| {
+        agent_host::NodeEvents::new(acp_core::ports::NodeEventSink::new(move |event| {
             if event.event_type.as_str() == "agent.disconnected" {
                 let still_running = runtime_running(&host, &agent_id());
                 if let Ok(mut guard) = observed.lock() {
@@ -1492,7 +1492,7 @@ async fn unbound_node_events_are_visible_not_silently_dropped() {
 
     // 接线之后即可交付：同一个实例（`set_node_events`）在一处接线即全局生效。
     let node = Collector::new();
-    host.set_node_events(agent_host::NodeEvents::new(node.sink()));
+    host.set_node_events(agent_host::NodeEvents::new(node.node_sink()));
     assert!(host.node_events_bound(), "接线后必须可见");
     host.shutdown_all().await;
 }
