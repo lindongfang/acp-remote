@@ -1,0 +1,35 @@
+{
+  "name": "acp-remote-app",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ACP Remote Web/PWA 客户端（`docs/FRONTEND_DESIGN.md` §3 的七层工程）。v1 只交付 Web/PWA，不产出 Android/iOS 原生包；本包自身的类型检查与测试脚本独立于仓库根 `npm run check`。",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --web",
+    "export:web": "expo export --platform web",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "service": "vite preview",
+    "check": "npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "expo": "~54.0.0",
+    "expo-constants": "~18.0.0",
+    "expo-router": "~6.0.0",
+    "expo-status-bar": "~3.0.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-web": "~0.21.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "typescript": "~5.9.2",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0"
+  }
+}
