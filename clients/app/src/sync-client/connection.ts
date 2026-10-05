@@ -690,17 +690,22 @@ export class SyncConnection {
   async #onSnapshotEnd(message: SyncSnapshotEnd): Promise<void> {
     try {
       const verified = await this.#staging.complete(message);
-      this.#onEvent({ kind: "snapshot_verified", snapshot: verified });
       // 快照 cursor 之后的事件会补发，随后 `sync.caught_up`（§9.4）。
       // 快照 cursor 同样是屏障：快照涵盖的序号之前的内容都已落进已完成状态，账本水位必须一并
       // 推进，否则恢复游标与水位分叉（与 #onCaughtUp 同理）。跨 epoch 或序号非法的快照游标
       // 不采纳：它与账本对同一条游标的判断必须一致。
+      //
+      // 判定必须**先于** `snapshot_verified`：消费方（门面）一收到该事件就把快照的 cursor
+      // 写成恢复点，若账本随后拒绝这条屏障，被写入的就是一条越界或跨 epoch 的游标——它会在
+      // 下次连接的 `resumeFrom` 构造期让 `new EventLedger(...)` 抛 `sequence_out_of_range`，
+      // 异常逃出 socket 回调后连接再也建立不起来。因此「未被账本采纳的快照」根本不交付。
       const barrier = verified.cursor;
       const advance = this.#ledger?.advanceTo(barrier);
       if (advance !== undefined && advance.kind === "rejected") {
         this.#onEvent({ kind: "rejected", reason: `snapshot_barrier_${advance.reason}`, detail: barrier.globalSequence });
         return;
       }
+      this.#onEvent({ kind: "snapshot_verified", snapshot: verified });
       this.#moveAcked(barrier);
     } catch (error) {
       if (error instanceof SnapshotValidationError) {

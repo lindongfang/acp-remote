@@ -20,6 +20,7 @@
 
 import type { CommandMessage, Cursor, Uuid } from "../protocol";
 import { SyncConnection, type AuthenticatedInfo, type ClientBlockCause, type SyncClientEvent } from "./connection";
+import { compareCursors } from "./connection";
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
 import type { VerifiedSnapshot } from "./snapshot";
@@ -257,11 +258,30 @@ export class SyncClient {
     return id;
   }
 
+  /**
+   * 快照屏障能否被门面采纳（只前进、epoch 相同）。
+   *
+   * 连接层已在 `#onSnapshotEnd` 里先让账本判过一次；这里再判一次是**必要的冗余**：
+   * 门面是唯一把游标写进恢复点的地方，若它无条件采纳，`#ackedCursor` 就可能与账本水位分叉。
+   * 分叉的后果是不可自愈的——一条更旧的屏障成为下次连接的 `resumeFrom` 后，它之后的真实事件
+   * 永远补不回来；而一条越界游标还会让 `new EventLedger({resumeFrom})` 在**构造期**抛错，
+   * 异常逃出 socket 回调后连接再也建立不起来。
+   */
+  #isAdoptableBarrier(cursor: Cursor): boolean {
+    const acked = this.#ackedCursor;
+    if (acked === null) return true;
+    // 跨 epoch 的序号不可比：外来游标一律不采纳（与 `#moveAcked` 同一口径）。
+    if (acked.serverEpoch !== cursor.serverEpoch) return false;
+    return compareCursors(cursor, acked) >= 0;
+  }
+
   #onConnectionEvent(event: SyncClientEvent): void {
     if (event.kind === "snapshot_verified") {
-      // 只有验证通过才替换：失败路径根本不会走到这里。
-      this.#snapshots.replace(event.snapshot, this.#now());
-      this.#ackedCursor = event.snapshot.cursor;
+      // 只有验证通过**且**账本已采纳其屏障才替换；失败或被拒的路径根本不会走到这里。
+      if (this.#isAdoptableBarrier(event.snapshot.cursor)) {
+        this.#snapshots.replace(event.snapshot, this.#now());
+        this.#ackedCursor = event.snapshot.cursor;
+      }
     }
     if (event.kind === "event") {
       // 事件已处理并 ACK：把恢复点抬到它的事件序号（由账本的游标给出，避免自己拼游标）。
