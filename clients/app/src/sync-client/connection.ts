@@ -293,6 +293,16 @@ export class SyncConnection {
     return this.#connectionId;
   }
 
+  /**
+   * socket 是否已经关闭。
+   *
+   * 认证信息与 `connectionId` 只属于**活着的**连接（§8.4：认证状态关闭后立即失效），
+   * 因此消费方需要判活而不是只判「是否持有连接对象」——连接对象在关闭后仍然存在。
+   */
+  get closed(): boolean {
+    return this.#closed;
+  }
+
   /** 认证结果；未认证时为 `null`（消费方据此判断能否派发命令）。 */
   get authenticatedInfo(): AuthenticatedInfo | null {
     return this.#authenticated;
@@ -750,6 +760,9 @@ export class SyncConnection {
       this.#onEvent({ kind: "closed", code, retryable: false });
       return;
     }
+    // socket 已由服务端关闭：认证状态随之失效（§8.4），消费方据此不再拿 `connectionId`。
+    // 之前只置位客户端主动 `close()` 的路径，服务端关闭这条会留下一个「仍在线」的连接对象。
+    this.#closed = true;
     // 连接已结束：撤销待触发的重订阅，恢复交给重连（那里有全局退避）。
     this.#cancelGapResubscribe();
     this.discardStaging("connection_closed");

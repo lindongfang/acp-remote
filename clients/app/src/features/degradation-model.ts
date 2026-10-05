@@ -157,6 +157,22 @@ export function isDegraded(input: {
   return referencesUndeliveredBinary(input.view);
 }
 
+/**
+ * 一条**事件消息**是否需要降级呈现（生产管线的唯一入口）。
+ *
+ * 与 {@link isDegraded} 的差别只有一处，但这一处是必须的：调用方不再自己拼 `raw`。
+ * 原文可用性必须由 `event.body.payload.acp` 得出——把它写死成 `{kind:"absent"}` 会让
+ * 「事件类型已知 + 原文因单条上限/保留期未下发」这一组合永远判不出降级，用户因此看到
+ * **静默丢失**，而 R18 要求这类原文必须呈现明确的未同步说明。
+ */
+export function isDegradedEvent(event: EventMessage): boolean {
+  return isDegraded({
+    eventType: event.body.eventType,
+    view: event.body.payload.view,
+    raw: rawAvailability(event.body.payload.acp),
+  });
+}
+
 /** 显式不支持时优先取事件视图里的说明，其次取公开错误的消息。 */
 function unsupportedDetail(input: {
   readonly view: Readonly<Record<string, unknown>>;

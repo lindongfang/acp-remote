@@ -48,7 +48,7 @@ import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./ports"
 import type { ConversationHeaderModel, ConversationPageModel, UsageReading } from "./conversation-model";
 import { buildConversationModel, conversationCapabilities } from "./conversation-model";
 import type { DegradedEventModel } from "./degradation-model";
-import { buildDegradedEventModel, isDegraded } from "./degradation-model";
+import { buildDegradedEventModel, isDegradedEvent } from "./degradation-model";
 import type { CreateSessionEntryModel, CreateSessionRefs } from "./create-session-model";
 import {
   assertCreateSessionRefs,
@@ -170,11 +170,15 @@ function usageIn(event: EventMessage): UsageReading | null {
   return { used, size };
 }
 
-/** 事件是否需要降级卡片（R18）：未识别、原文未下发、显式不支持、引用未下发的二进制内容。 */
+/**
+ * 事件是否需要降级卡片（R18）：未识别、原文未下发、显式不支持、引用未下发的二进制内容。
+ *
+ * 判定经 {@link isDegradedEvent}，它按 `payload.acp` 得出原文可用性。早先这里硬编码
+ * `raw: {kind:"absent"}`，使「事件类型已知 + 原文未下发」这一组合永远判不出降级，
+ * 生产路径上 `raw_not_synced` 分支不可达——用户看到的是静默丢失（R18 MUST 禁止）。
+ */
 function degradedModelFor(event: EventMessage): DegradedEventModel | null {
-  if (!isDegraded({ eventType: event.body.eventType, view: event.body.payload.view, raw: { kind: "absent" } })) {
-    return null;
-  }
+  if (!isDegradedEvent(event)) return null;
   return buildDegradedEventModel({ event });
 }
 
@@ -213,8 +217,6 @@ export interface ClientStoreOptions {
   readonly now: () => number;
   /** 已建立连接的标识；未连接为 `null`（此时不派发任何命令）。 */
   readonly identity: ConnectionIdentity;
-  /** 主机身份；未配对时传 `null`（不编造地址与指纹）。 */
-  readonly host?: HostIdentityModel | null;
   /** imported 会话来源节点的展示名。 */
   readonly ownerLabelOf?: (ownerNodeId: string) => string;
 }
@@ -237,7 +239,6 @@ export class ClientStore {
   readonly #ids: IdentifierSource;
   readonly #now: () => number;
   readonly #identity: ConnectionIdentity;
-  readonly #host: HostIdentityModel | null;
   readonly #ownerLabelOf: (ownerNodeId: string) => string;
   readonly #overlayStore = new AgentConnectionOverlayStore();
   readonly #pendingReads = new Map<Uuid, PendingRead>();
@@ -249,7 +250,6 @@ export class ClientStore {
     this.#ids = options.ids;
     this.#now = options.now;
     this.#identity = options.identity;
-    this.#host = options.host ?? null;
     this.#ownerLabelOf = options.ownerLabelOf ?? ((ownerNodeId: string) => ownerNodeId);
   }
 
@@ -486,7 +486,7 @@ export class ClientStore {
       overlay: this.#state.overlay,
       connection: this.#state.connection.state,
       blocking: this.#state.connection.blocking,
-      host: this.#host,
+      host: this.#state.host,
     });
   }
 
@@ -532,6 +532,17 @@ export class ClientStore {
   /** 更新配对页状态。 */
   setPairing(pairing: PairingPageModel): void {
     this.#commit({ ...this.#state, pairing });
+  }
+
+  /**
+   * 记录已配对的主机身份。
+   *
+   * 它是**状态**而不是构造参数：组合根先装配 store、再异步读 IndexedDB 里的设备身份与配对
+   * 记录，主机身份因此在 store 构造之后才变得可用；构造期定格会让主机面板在真实运行时永远
+   * 显示「未配对」。未配对时保持 `null`——不编造地址与指纹（R19）。
+   */
+  setHostIdentity(host: HostIdentityModel): void {
+    this.#commit({ ...this.#state, host });
   }
 
   /**

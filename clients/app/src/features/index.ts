@@ -84,7 +84,7 @@ export {
   UNSUPPORTED_LABELS,
   buildDegradedEventModel,
   isDegraded,
-  unsupportedByFromErrorCode,
+  isDegradedEvent,
 } from "./degradation-model";
 
 // ── R19 主机与连接 ──────────────────────────────────────────────────────────

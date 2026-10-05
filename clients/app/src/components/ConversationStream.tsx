@@ -36,7 +36,13 @@ function DegradedEntry({
   readonly model: DegradedEventModel;
   readonly onOpenDiagnostics: (eventId: string) => void;
 }): ReactElement {
-  const unsupportedBy = model.reason.kind === "unsupported" ? model.reason.by : "client";
+  // 非 `unsupported` 原因（原文未下发 / 二进制未下发 / 未登记事件）**不是**「客户端不支持」：
+  // 兜底成 `"client"` 会把「内容没下发」误报成「客户端能力不支持」，让用户按错误原因排查。
+  const unsupportedBy = model.reason.kind === "unsupported" ? model.reason.by : null;
+  // 「客户端没有专用视图」只对前两类降级成立：原文未下发 / 二进制未下发时客户端**有**视图，
+  // 缺的是内容，宣称「未提供专用视图」同样是错误归因。
+  const noDedicatedView =
+    model.reason.kind === "unsupported" || model.reason.kind === "no_dedicated_view";
   const raw =
     model.raw.kind === "available"
       ? ({ kind: "available", rawJson: model.raw.rawJson } as const)
@@ -46,7 +52,12 @@ function DegradedEntry({
 
   return (
     <li data-degraded-entry={model.eventId}>
-      <DegradedEventCard eventType={model.eventType} unsupportedBy={unsupportedBy} raw={raw} />
+      <DegradedEventCard
+        eventType={model.eventType}
+        unsupportedBy={unsupportedBy}
+        noDedicatedView={noDedicatedView}
+        raw={raw}
+      />
       {model.reason.kind === "raw_not_synced" ? (
         <p data-raw-not-synced={model.reason.reason}>{RAW_NOT_SYNCED_LABELS[model.reason.reason]}</p>
       ) : null}

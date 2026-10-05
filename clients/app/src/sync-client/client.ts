@@ -134,9 +134,14 @@ export class SyncClient {
     return this.#blocked;
   }
 
-  /** 已关闭连接或未连接。 */
+  /**
+   * 是否有一条**活着**的连接（socket 尚未关闭）。
+   *
+   * 判定问的是 socket 而不是「是否持有连接对象」：后者在服务端关闭之后仍为真，
+   * 组合根会据此以为还在线并跳过重连。
+   */
   get connected(): boolean {
-    return this.#connection !== null;
+    return this.#connection !== null && !this.#connection.closed;
   }
 
   /** 已确认游标；重连时作为 `sync.subscribe` 的恢复点。 */
@@ -147,6 +152,23 @@ export class SyncClient {
   /** 认证信息；未认证时为 `null`。 */
   get authenticatedInfo(): AuthenticatedInfo | null {
     return this.#connection?.authenticatedInfo ?? null;
+  }
+
+  /**
+   * 当前连接的标识（`auth.authenticated.connectionId`）；**没有活着的已认证连接时为 `null`**。
+   *
+   * 组合根与 `ClientStore` 需要它来给命令信封填必填字段（`$defs.command`）。它此前只有私有的
+   * `#connection?.connectionId`，于是 feature 层的 `ConnectionIdentity` 在真实运行时**永远**
+   * 取不到值——创建会话的第一道闸门恒不过。
+   *
+   * 「活着的」这个限定不可省：连接实例随 socket 关闭后仍留在 `#connection` 上（重连才替换它），
+   * 直接透传会让**已断开**的连接继续拿到标识，于是 `session.create` 能被派发到一条死连接上，
+   * 而服务端根本收不到。§8.4 也明确「认证状态只属于当前 WSS 连接，关闭后立即失效」。
+   * 只读暴露，不提供任何「连接不存在时编一个 id」的入口。
+   */
+  get connectionId(): Uuid | null {
+    if (!this.connected) return null;
+    return this.#connection?.connectionId ?? null;
   }
 
   /** 建立一条连接并完成逐连接握手。阻断状态下拒绝连接（spec：停止自动重连）。 */
@@ -247,6 +269,12 @@ export class SyncClient {
     const resumeFrom = acked !== null && acked.serverEpoch === serverEpoch ? acked : null;
     const ledger = new EventLedger({ serverEpoch, resumeFrom });
     this.#ledger = ledger;
+    // 换 epoch 时恢复点必须**一起**丢掉（与 `connection.ts` 的 `#onAuthenticated` 同一口径）。
+    // 留着它有两个后果：`ackedCursor` 对外呈现一条永远比较不出前进的游标（组合根会把它
+    // 持久化成下次连接的 `resumeFrom`），而 `#isAdoptableBarrier` 若以它为 epoch 基准，
+    // 会把重建后的第一条合法快照判成「外来 epoch」而永久拒掉——重建快照只发一次，
+    // 随后的增量事件救不回它（§9.4 的正常恢复路径，不是异常）。
+    if (acked !== null && acked.serverEpoch !== serverEpoch) this.#ackedCursor = null;
     return ledger;
   }
 
@@ -259,13 +287,19 @@ export class SyncClient {
   }
 
   /**
-   * 快照屏障能否被门面采纳（只前进、epoch 相同）。
+   * 快照屏障能否被门面采纳（同 epoch 且只前进）。
    *
    * 连接层已在 `#onSnapshotEnd` 里先让账本判过一次；这里再判一次是**必要的冗余**：
    * 门面是唯一把游标写进恢复点的地方，若它无条件采纳，`#ackedCursor` 就可能与账本水位分叉。
    * 分叉的后果是不可自愈的——一条更旧的屏障成为下次连接的 `resumeFrom` 后，它之后的真实事件
    * 永远补不回来；而一条越界游标还会让 `new EventLedger({resumeFrom})` 在**构造期**抛错，
    * 异常逃出 socket 回调后连接再也建立不起来。
+   *
+   * **基准为什么只能是 `#ackedCursor` 而不是别的**：跨 epoch 的游标不可比，所以「同 epoch」
+   * 这件事本身必须相对于某个**当前有效**的 epoch 来判定。`#ackedCursor` 在 `#ledgerFor`
+   * 换 epoch 时已被清空（见那里的注释），因此它与账本始终同 epoch；早先以它为基准的版本
+   * 在 epoch 变化时仍持有旧 epoch 的游标，于是把重建后的第一条**合法**快照判成外来游标
+   * 永久丢弃——这正是本守卫在引入时带来的回归。
    */
   #isAdoptableBarrier(cursor: Cursor): boolean {
     const acked = this.#ackedCursor;
