@@ -14,12 +14,57 @@
  */
 
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
-import { repoRoot, syncFixtureDir, syncManifestPath } from "./paths";
+import { repoRoot, syncFixtureDir, syncManifestPath, syncSchemaDir } from "./paths";
 
 /** manifest 的 `schemaVersion`（当前冻结为 1）。 */
 export const MANIFEST_SCHEMA_VERSION = 1;
+
+/** `viewDef` 的统一形状：`#/$defs/<eventType>`。 */
+export const VIEW_DEF_PREFIX = "#/$defs/";
+
+/**
+ * `path` 是否严格落在 `dir` 之下（同目录不算，越界/异盘不算）。
+ *
+ * `viewSchema`/`schema` 必须解析到 `schemas/sync/v1/` 之下——正反样例与视图都取自
+ * **同一份**仓库根资产，因此绝对路径或上溯越界的写法必须在解析期被拒绝，
+ * 而不是被 `resolve` 直接采用。
+ */
+function isInsideDir(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * 一个 case 的 `viewSchema`/`viewDef` 成对性与形状核对。
+ *
+ * 允许两者都缺席（非事件样例）；只要出现一个，另一个必须同时出现且形状正确——
+ * 否则会出现「声明了 `viewDef` 却从未被比较」或「`viewDef` 被静默丢弃」的空声明。
+ */
+function assertViewBinding(item: Record<string, unknown>, index: number, path: string): void {
+  const hasSchema = item["viewSchema"] !== undefined;
+  const hasDef = item["viewDef"] !== undefined;
+  if (hasSchema !== hasDef) {
+    throw new Error(
+      `manifest.cases[${index}] 的 viewSchema 与 viewDef 必须成对声明：${path}`,
+    );
+  }
+  if (!hasSchema) return;
+  if (typeof item["viewSchema"] !== "string" || item["viewSchema"].length === 0) {
+    throw new Error(`manifest.cases[${index}].viewSchema 缺失或为空：${path}`);
+  }
+  const viewDef = item["viewDef"];
+  if (
+    typeof viewDef !== "string" ||
+    !viewDef.startsWith(VIEW_DEF_PREFIX) ||
+    viewDef.length === VIEW_DEF_PREFIX.length
+  ) {
+    throw new Error(
+      `manifest.cases[${index}].viewDef 必须是 ${VIEW_DEF_PREFIX}<eventType>：${path}`,
+    );
+  }
+}
 
 /**
  * 一条 fixture case 的公共字段。
@@ -37,7 +82,10 @@ interface FixtureCaseBase {
 /** 正向样例：必须通过对应 schema。 */
 export interface ValidFixtureCase extends FixtureCaseBase {
   readonly valid: true;
-  /** 事件样例可追加：`payload.view` 还须用该视图 `$defs` 校验。 */
+  /**
+   * 事件样例可追加：`payload.view` 还须用该视图 `$defs` 校验。
+   * 若给出，则 `viewDef` 必须同时给出（反之亦然）——两者成对声明，`assertManifest` 会核对。
+   */
   readonly viewSchema?: string;
   /** 形如 `#/$defs/agent.message.delta` 的 JSON Pointer。 */
   readonly viewDef?: string;
@@ -133,6 +181,7 @@ function assertManifest(value: unknown, path: string): asserts value is FixtureM
     if (item["valid"] === false && typeof item["expectedKeyword"] !== "string") {
       throw new Error(`manifest.cases[${index}]（invalid）缺少 expectedKeyword：${path}`);
     }
+    assertViewBinding(item, index, path);
   }
 }
 
@@ -141,21 +190,31 @@ function assertManifest(value: unknown, path: string): asserts value is FixtureM
  *
  * `schema` 的解析基准是 manifest 所在目录（`fixtures/sync/v1/`）——
  * `../../../schemas/sync/v1/x.schema.json` 由此落到 `<repo>/schemas/sync/v1/x.schema.json`。
+ *
+ * 解析结果被约束在各自的资产目录之下：`fixture` 必须落在 `fixtures/sync/v1/`、
+ * `schema`/`viewSchema` 必须落在 `schemas/sync/v1/`，否则抛错。这样 `resolve` 不会
+ * 把一个绝对路径或越界上溯的写法直接采用成「同一份资产」。
  */
 export function resolveFixtureCase(
   entry: FixtureCase,
   manifestPath: string = syncManifestPath,
 ): ResolvedFixtureCase {
   const base = dirname(manifestPath);
-  return {
-    case: entry,
-    fixturePath: resolve(syncFixtureDir, entry.fixture),
-    schemaPath: resolve(base, entry.schema),
-    viewSchemaPath:
-      entry.valid && entry.viewSchema !== undefined
-        ? resolve(base, entry.viewSchema)
-        : null,
-  };
+  const fixturePath = resolve(syncFixtureDir, entry.fixture);
+  const schemaPath = resolve(base, entry.schema);
+  const viewSchema = entry.valid ? entry.viewSchema : undefined;
+  const viewSchemaPath = viewSchema === undefined ? null : resolve(base, viewSchema);
+
+  if (!isInsideDir(syncFixtureDir, fixturePath)) {
+    throw new Error(`manifest 的 fixture 越出 fixtures/sync/v1/：${entry.fixture}`);
+  }
+  if (!isInsideDir(syncSchemaDir, schemaPath)) {
+    throw new Error(`manifest 的 schema 越出 schemas/sync/v1/：${entry.schema}`);
+  }
+  if (viewSchemaPath !== null && !isInsideDir(syncSchemaDir, viewSchemaPath)) {
+    throw new Error(`manifest 的 viewSchema 越出 schemas/sync/v1/：${String(viewSchema)}`);
+  }
+  return { case: entry, fixturePath, schemaPath, viewSchemaPath };
 }
 
 /** manifest 相对仓库根的路径；报告与测试据此证明「读的是同一份资产」。 */

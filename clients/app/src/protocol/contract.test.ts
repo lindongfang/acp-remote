@@ -10,7 +10,8 @@
  *    （逐条从 schema 读出 `required`/`enum` 与镜像比对，而不是抄一份常量）。
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -21,6 +22,8 @@ import {
   MANIFEST_SCHEMA_VERSION,
   readManifest,
   resolveFixtureCase,
+  type FixtureCase,
+  type ValidFixtureCase,
 } from "./manifest";
 import { repoRoot, syncFixtureDir, syncSchemaDir, syncManifestPath, SYNC_SCHEMA_FILES } from "./paths";
 import { KNOWN_EVENT_TYPE_COUNT, isKnownEventType, projectView } from "./event";
@@ -74,7 +77,96 @@ describe("AC3：消费同一份仓库根协议资产", () => {
       expect(existsSync(resolved.schemaPath), `schema 不存在：${entry.schema}`).toBe(true);
       // schema 路径必须落在仓库根 schemas/ 之下。
       expect(resolved.schemaPath.replaceAll("\\", "/")).toContain("/schemas/sync/v1/");
+      // viewSchema 同样必须落在仓库根 schemas/ 之下，且指向 event-views 那一份。
+      if (resolved.viewSchemaPath !== null) {
+        expect(resolved.viewSchemaPath.replaceAll("\\", "/")).toContain("/schemas/sync/v1/");
+        expect(resolved.viewSchemaPath).toBe(join(syncSchemaDir, "event-views.schema.json"));
+      }
     }
+  });
+
+  it("每条 viewDef 都指向 event-views.schema.json 的 $defs 且与 fixture 的 eventType 一致", () => {
+    const viewDefs = defs(readSchema("event-views.schema.json"));
+    // 先用类型谓词收窄，避免在 `InvalidFixtureCase` 上读 `viewDef`。
+    const hasViewDef = (
+      entry: FixtureCase,
+    ): entry is ValidFixtureCase & { readonly viewDef: string } =>
+      entry.valid && entry.viewDef !== undefined;
+    const casesWithView = readManifest().cases.filter(hasViewDef);
+    // 视图绑定确实被使用（不是一份空声明）。
+    expect(casesWithView.length).toBeGreaterThan(0);
+
+    for (const entry of casesWithView) {
+      const viewDef = entry.viewDef;
+      expect(viewDef).toMatch(/^#\/\$defs\/[A-Za-z0-9._-]+$/);
+      const eventType = viewDef.slice("#/$defs/".length);
+      expect(Object.hasOwn(viewDefs, eventType), `$defs 缺少 ${eventType}`).toBe(true);
+
+      // viewSchema 必须同时给出，并被解析到 event-views 那一份。
+      const resolved = resolveFixtureCase(entry);
+      expect(resolved.viewSchemaPath).toBe(join(syncSchemaDir, "event-views.schema.json"));
+      // `viewDef` 指定的 $defs 键就是该 fixture 的 `body.eventType`。
+      const fixture = JSON.parse(readFileSync(resolved.fixturePath, "utf8")) as {
+        body?: { eventType?: unknown };
+      };
+      expect(fixture.body?.eventType).toBe(eventType);
+    }
+  });
+
+  it("viewSchema 越出 schemas/sync/v1/ 会被拒绝（绝对路径与上溯都不采用）", () => {
+    const outsideAbsolute = "C:/Windows/System32/drivers/etc/hosts";
+    expect(() =>
+      resolveFixtureCase({
+        fixture: "valid/event-agent-delta.json",
+        schema: "../../../schemas/sync/v1/message.schema.json",
+        valid: true,
+        viewSchema: outsideAbsolute,
+        viewDef: "#/$defs/agent.message.delta",
+      }),
+    ).toThrow(/viewSchema 越出 schemas\/sync\/v1\//);
+
+    expect(() =>
+      resolveFixtureCase({
+        fixture: "valid/event-agent-delta.json",
+        schema: "../../../schemas/sync/v1/message.schema.json",
+        valid: true,
+        viewSchema: "../../../../docs/FRONTEND_DESIGN.md",
+        viewDef: "#/$defs/agent.message.delta",
+      }),
+    ).toThrow(/viewSchema 越出 schemas\/sync\/v1\//);
+  });
+
+  it("assertManifest 拒绝半声明的 viewSchema/viewDef 与非法 viewDef 形状", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wp5a-manifest-"));
+    const writeCase = (caseValue: Record<string, unknown>): string => {
+      const file = join(dir, `${Math.random().toString(36).slice(2)}.json`);
+      writeFileSync(file, JSON.stringify({ schemaVersion: 1, cases: [caseValue] }), "utf8");
+      return file;
+    };
+    const base = {
+      fixture: "valid/event-agent-delta.json",
+      schema: "../../../schemas/sync/v1/message.schema.json",
+      valid: true,
+    };
+
+    // 只有 viewDef、没有 viewSchema：旧实现静默解析为 viewSchemaPath: null，viewDef 被丢弃。
+    expect(() => readManifest(writeCase({ ...base, viewDef: "#/$defs/agent.message.delta" }))).toThrow(
+      /viewSchema 与 viewDef 必须成对声明/,
+    );
+    // 只有 viewSchema、没有 viewDef。
+    expect(() =>
+      readManifest(writeCase({ ...base, viewSchema: "../../../schemas/sync/v1/event-views.schema.json" })),
+    ).toThrow(/viewSchema 与 viewDef 必须成对声明/);
+    // viewDef 不是 `#/$defs/<eventType>` 形状。
+    expect(() =>
+      readManifest(
+        writeCase({
+          ...base,
+          viewSchema: "../../../schemas/sync/v1/event-views.schema.json",
+          viewDef: "$defs/agent.message.delta",
+        }),
+      ),
+    ).toThrow(/#\/\$defs\/<eventType>/);
   });
 
   it("manifest 的 schema 引用与 SYNC_SCHEMA_FILES 的清单一致", () => {
@@ -224,5 +316,84 @@ describe("AC3：fixture 目录无本地副本", () => {
     expect(rootFixtures).toContain("valid");
     expect(rootFixtures).toContain("invalid");
     expect(rootFixtures).toContain("transcripts");
+  });
+});
+
+describe("F1：protocol barrel 不得把 Node 内置模块带进 web bundle", () => {
+  const protocolDir = join(repoRoot, "clients", "app", "src", "protocol");
+  const barrelPath = join(protocolDir, "index.ts");
+
+  /** `src/protocol/index.ts` 里全部**运行期**（非 `export type`）的 `from "…"` 目标。 */
+  function runtimeReexportTargets(source: string): string[] {
+    const targets: string[] = [];
+    const pattern = /(?:^|\n)\s*export\s+(?!type\b)[^;]*?\bfrom\s+["']([^"']+)["']/g;
+    for (const match of source.matchAll(pattern)) {
+      const target = match[1];
+      if (target !== undefined) targets.push(target);
+    }
+    return targets;
+  }
+
+  /** 一个模块里全部**运行期**（非 `import type`）import 的说明符。 */
+  function runtimeImportSpecifiers(source: string): string[] {
+    const specifiers: string[] = [];
+    const patterns = [
+      /(?:^|\n)\s*import\s+(?!type\b)[^;]*?\bfrom\s+["']([^"']+)["']/g,
+      /(?:^|\n)\s*(?:import|export)\s*["']([^"']+)["']/g,
+      /(?:^|\n)\s*import\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ];
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) {
+        const specifier = match[1];
+        if (specifier !== undefined) specifiers.push(specifier);
+      }
+    }
+    return specifiers;
+  }
+
+  /**
+   * 从 barrel 的运行期重导出出发，按**运行期** import 做传递闭包，收集触达的 `node:*` 模块。
+   * 只查直接重导出会漏掉 `./event → ./x → node:fs` 这类一步之遥的牵连。
+   */
+  function nodeBuiltinsReachableFromBarrel(): string[] {
+    const reachable = new Set<string>();
+    const seen = new Set<string>([barrelPath]);
+    const queue = runtimeReexportTargets(readFileSync(barrelPath, "utf8")).map((target) =>
+      resolve(protocolDir, target),
+    );
+    while (queue.length > 0) {
+      const file = queue.pop();
+      if (file === undefined) continue;
+      const source = readFileSync(`${file}.ts`, "utf8");
+      for (const specifier of runtimeImportSpecifiers(source)) {
+        if (specifier.startsWith("node:")) {
+          reachable.add(specifier);
+          continue;
+        }
+        if (!specifier.startsWith(".")) continue;
+        const next = resolve(protocolDir, specifier);
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+    return [...reachable].sort();
+  }
+
+  it("barrel 的运行期重导出只含不依赖 node:* 的模块（含传递闭包）", () => {
+    expect(runtimeReexportTargets(readFileSync(barrelPath, "utf8"))).toEqual(["./event"]);
+    expect(nodeBuiltinsReachableFromBarrel()).toEqual([]);
+  });
+
+  it("类型面仍从 barrel 公开（`export type *` 保留）", () => {
+    const barrel = readFileSync(barrelPath, "utf8");
+    for (const layer of ["common", "auth", "sync", "command", "event", "error", "pairing"]) {
+      expect(barrel).toContain(`export type * from "./${layer}"`);
+    }
+    // 读仓库根文件的两个入口只能以**类型**形式出现（`export type` 被 TS 变换整体擦除），
+    // 不得有任何运行期重导出——否则 Node 内置模块会被带进 web bundle。
+    expect(runtimeReexportTargets(barrel)).not.toContain("./paths");
+    expect(runtimeReexportTargets(barrel)).not.toContain("./manifest");
+    expect(barrel).toContain('export type { FixtureCase, FixtureManifest, ResolvedFixtureCase } from "./manifest"');
   });
 });

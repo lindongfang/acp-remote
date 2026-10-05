@@ -55,19 +55,26 @@ export const ORDERED_LAYERS: readonly LayerName[] = [
 ];
 
 /**
- * 把 `src/` 相对路径映射成层级名。
+ * 把一个**文件或目录**的工程相对路径映射成层级名。
  *
- * `src/<layer>/…` 取第一段；其余（如 `src/layers.ts` 本身）返回 `null`，
- * 表示该文件不属于任何一层，测试对它不做方向判定。
+ * 接受三类输入：
+ *
+ * - `src/<layer>/…`（文件，如 `src/protocol/common.ts`）；
+ * - `src/<layer>`（**裸 barrel / 目录目标**，如 `import x from "../domain"` 解析出的
+ *   `src/domain`）——这里必须取到层级，否则按目录目标写的反向依赖会被静默放过；
+ * - `app/…`（Expo Router 页面，如 `app/session/[id].tsx`）。
+ *
+ * 其余（如 `src/layers.ts` 本身、`src/layers.test.ts`）返回 `null`，
+ * 表示该路径不属于任何一层，测试对它不做方向判定。
  */
 export function layerOfSourcePath(
   relativePath: string,
 ): LayerName | typeof PLATFORM_LAYER | null {
   const normalized = relativePath.replaceAll("\\", "/");
   const prefix = normalized.startsWith("src/") ? normalized.slice("src/".length) : normalized;
-  const slash = prefix.indexOf("/");
-  if (slash === -1) return null;
-  const head = prefix.slice(0, slash);
+  // 只取第一段：`src/<layer>/x`、`src/<layer>` 与 `app/x` 都落在同一段判定上。
+  const [head] = prefix.split("/");
+  if (head === undefined || head === "") return null;
   if (head === PLATFORM_LAYER) return PLATFORM_LAYER;
   if (head in LAYER_ORDER) return head as LayerName;
   return null;
