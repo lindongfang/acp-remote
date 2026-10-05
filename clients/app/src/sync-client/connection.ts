@@ -38,6 +38,8 @@ import { decodeWireMessage } from "./wire";
 import { EventLedger, isImportedEventIdConsistent } from "./dedupe";
 import type {
   ByteArray,
+  ClockPort,
+  CancelTimer,
   DeviceIdentityLike,
   DeviceIdentityMaterial,
   HostIdentityPort,
@@ -76,6 +78,31 @@ const CLOSE = {
   deviceRevoked: 4410,
   connectionReplaced: 4411,
   serverUnavailable: 4500,
+} as const;
+
+/**
+ * 序号缺口后的重新订阅：退避参数与连续次数上限。
+ *
+ * ## 为什么必须有上限而不是「一直重订阅」
+ *
+ * §9.2/§9.5 明文允许全局 sequence 对单个设备存在**因权限过滤而不可见**的空洞。
+ * 一旦缺口落在这样的空洞上，从最后确认位置重订阅会拿回**同一条**事件，缺口判定原地复现——
+ * 无界重订阅既补不齐缺口，又对服务端构成持续 `sync.subscribe` 洪泛（与 §8.5 要避免的
+ * 重连风暴同类）。因此重订阅必须既有退避（一次比一次久）又有次数上限（到顶就停，
+ * 把后续恢复交给状态层按重连退避重新来）。
+ *
+ * 取值依据：
+ * - `baseDelayMs = 250`：既能救回「偶发一次乱序」这种最常见的真缺口，又低于用户感知的
+ *   亚秒级停顿阈值，不会让正常抖动被放大成恢复风暴。
+ * - 倍率 2、`maxDelayMs = 4000`：250/500/1000/2000/4000，连续 5 次累计 7.75s，
+ *   足以覆盖服务端一次短暂重放抖动，又不会在几秒内把服务端打穿。
+ * - `maxAttempts = 5`：单条连接最多补发 5 次；到顶后上报 `gap_resubscribe_exhausted`
+ *   并停止，恢复路径回到「重连 + 快照重建」，那是有全局退避的通道。
+ */
+const GAP_RESUBSCRIBE = {
+  baseDelayMs: 250,
+  maxDelayMs: 4_000,
+  maxAttempts: 5,
 } as const;
 
 /** 阻断原因（与 `src/state/connection-machine.ts` 的 `BlockingCause` 一一对应）。 */
@@ -140,8 +167,14 @@ export interface SyncConnectionOptions {
   readonly openSocket: (input: { readonly url: string; readonly handlers: SocketHandlers }) => SocketPort;
   /** 上一次已确认的持久游标；首次为 `null`（§9.2）。 */
   readonly resumeCursor: Cursor | null;
+  /**
+   * 时钟端口：缺口恢复的退避定时。
+   *
+   * 用端口而不是直接 `setTimeout`，是为了让退避可被测试确定性地推进（真实计时器会让
+   * 「订阅次数是否有界」这类断言依赖竞态窗口）；它同时也是 §8.5 退避策略的既定接缝。
+   */
+  readonly clock: ClockPort;
   readonly onEvent: (event: SyncClientEvent) => void;
-  /** `clientKind`：v1 的 PWA 取 `pwa`。 */
   readonly clientKind?: "pwa" | "android" | "ios" | "desktop";
   /**
    * 取本 epoch 的去重账本。
@@ -198,6 +231,15 @@ export class SyncConnection {
   #closed = false;
   /** 已 ACK 的游标，用于保证「只能前进」。 */
   #lastAcked: Cursor | null;
+  /**
+   * 连续缺口恢复的次数：每成功处理一条 `new` 事件或收到 `caught_up` 即清零。
+   *
+   * 清零是必要的：一次已补齐的缺口说明恢复通道是通的，后续零星抖动应当拿到**完整**的
+   * 重试预算，而不是继承上一轮的余额。
+   */
+  #gapAttempts = 0;
+  /** 待触发的缺口重订阅定时器；同一时刻至多一个。 */
+  #gapRetry: CancelTimer | null = null;
 
   constructor(options: SyncConnectionOptions, staging: SnapshotStaging) {
     this.#options = options;
@@ -251,6 +293,7 @@ export class SyncConnection {
   /** 主动关闭（用户断开）。 */
   close(code: number = CLOSE.normal, reason = "client_closed"): void {
     this.#closed = true;
+    this.#cancelGapResubscribe();
     this.#socket.close(code, reason);
   }
 
@@ -373,6 +416,15 @@ export class SyncConnection {
     this.#connectionId = message.connectionId;
     // 账本的 epoch 必须来自本次认证结果；换 epoch 即意味着必须重建快照。
     this.#ledger = this.#options.ledgerFor(message.body.serverEpoch);
+    // 恢复游标必须与账本对 epoch 的处理保持一致：`ledgerFor` 在 epoch 变化时把 `resumeFrom`
+    // 置 null（旧 epoch 的序号与新事件库不可比），连接侧这两份游标也必须一起丢掉。
+    // 不丢的话会同时坏掉两条链路：`sync.subscribe` 带着旧 epoch 游标 → 服务端回
+    // `sync.cursor_invalid`（§9.4）只上报不恢复；且 `compareCursors` 跨 epoch 恒判回退，
+    // 于是此后每条事件都产出 `ack_not_advancing`，一条 ACK 也发不出去（违反 §9.5）。
+    if (this.#acked !== null && this.#acked.serverEpoch !== message.body.serverEpoch) {
+      this.#acked = null;
+      this.#lastAcked = null;
+    }
     this.#sendSubscribe();
     this.#onEvent({ kind: "authenticated", info: message.body });
     this.#onEvent({ kind: "replaying", cursor: this.#acked });
@@ -476,18 +528,65 @@ export class SyncConnection {
     if (verdict.kind === "gap") {
       this.#onEvent({ kind: "gap_detected", expected: verdict.expected, received: verdict.received });
       // 缺口必须**真的**恢复：只上报而不重新订阅，事件流会静默停摆，
-      // 此后每条事件都判 gap（R14「从最后确认的位置连续恢复」）。
-      this.#sendSubscribe();
+      // 此后每条事件都判 gap（R14「从最后确认的位置连续恢复」）。但恢复必须退避且有上限，
+      // 否则补不齐的缺口会变成对服务端的无界 `sync.subscribe` 洪泛。
+      this.#scheduleGapResubscribe();
       return;
     }
     const cursor = ledger.commit(message);
+    // 缺口已补齐：把重试预算清零，后续零星抖动拿到的应是完整预算。
+    this.#gapAttempts = 0;
     this.#onEvent({ kind: "event", event: message });
     this.#sendAck(cursor);
+  }
+
+  /**
+   * 缺口后**带退避与上限**地重新订阅。
+   *
+   * 只重发是不够的：缺口可能落在 §9.2/§9.5 允许的「因权限过滤不可见」空洞上，此时重订阅
+   * 会拿回同一条事件、缺口原地复现——无界重订阅既补不齐，又是对服务端的持续洪泛。
+   * 因此每次恢复都比上一次更久，且到顶后停止并上报，由状态层按重连退避重新进入。
+   */
+  #scheduleGapResubscribe(): void {
+    if (this.#gapAttempts >= GAP_RESUBSCRIBE.maxAttempts) {
+      this.#onEvent({
+        kind: "rejected",
+        reason: "gap_resubscribe_exhausted",
+        detail: `连续 ${this.#gapAttempts} 次缺口恢复仍未补齐，等待重连`,
+      });
+      return;
+    }
+    this.#gapAttempts += 1;
+    const delayMs = Math.min(
+      GAP_RESUBSCRIBE.baseDelayMs * 2 ** (this.#gapAttempts - 1),
+      GAP_RESUBSCRIBE.maxDelayMs,
+    );
+    this.#cancelGapResubscribe();
+    this.#gapRetry = this.#options.clock.schedule(delayMs, () => {
+      this.#gapRetry = null;
+      // 连接已关闭时不再打扰服务端：恢复路径交给重连（那里有全局退避）。
+      if (this.#closed) return;
+      this.#sendSubscribe();
+    });
+  }
+
+  /** 取消尚未触发的缺口重订阅。 */
+  #cancelGapResubscribe(): void {
+    if (this.#gapRetry === null) return;
+    this.#gapRetry();
+    this.#gapRetry = null;
   }
 
   #onCaughtUp(message: SyncCaughtUp): void {
     // 即使某段序号因权限过滤不可见，也可以 ACK caught_up 的 cursor（§9.5）。
     this.#acked = message.body.cursor;
+    // `caught_up` 是服务端给的**屏障**：它声明这条序号之前对本设备可见的事件都已交付。
+    // 必须同样喂给账本，否则「已确认游标」与账本水位成为两份会漂移的拷贝——重连时账本按旧值
+    // 起步，紧接的第一条可见事件（屏障之后）必被判缺口，重订阅又拿回同一条事件，
+    // 事件流一条都不呈现（详见 EventLedger.advanceTo 的注释）。
+    this.#ledger?.advanceTo(message.body.cursor);
+    // 追平完成：本条连接的重试预算重新计满。
+    this.#gapAttempts = 0;
     this.#sendAck(message.body.cursor);
     this.#onEvent({ kind: "online", cursor: message.body.cursor });
   }
@@ -531,6 +630,9 @@ export class SyncConnection {
       this.#onEvent({ kind: "snapshot_verified", snapshot: verified });
       // 快照 cursor 之后的事件会补发，随后 `sync.caught_up`；ACK 推进到快照 cursor。
       this.#acked = verified.cursor;
+      // 快照 cursor 同样是屏障：快照涵盖的序号之前的内容都已落进已完成状态，
+      // 账本必须一并推进，否则恢复游标与账本水位分叉（与 #onCaughtUp 同理）。
+      this.#ledger?.advanceTo(verified.cursor);
     } catch (error) {
       if (error instanceof SnapshotValidationError) {
         // 保留上一次已完成状态；重连后重新请求（§9.4）。
@@ -574,6 +676,8 @@ export class SyncConnection {
       this.#onEvent({ kind: "closed", code, retryable: false });
       return;
     }
+    // 连接已结束：撤销待触发的重订阅，恢复交给重连（那里有全局退避）。
+    this.#cancelGapResubscribe();
     this.discardStaging("connection_closed");
     const blocked = blockCauseForCloseCode(code);
     if (blocked !== null) {
@@ -586,6 +690,8 @@ export class SyncConnection {
 
   #block(cause: ClientBlockCause, code: number): void {
     this.#closed = true;
+    // 阻断态下不再补发任何东西：重订阅定时器必须随阻断一起撤销。
+    this.#cancelGapResubscribe();
     this.#staging.discard("connection_blocked");
     this.#onEvent({ kind: "blocked", cause, code });
     this.#socket.close(code, cause);

@@ -109,6 +109,36 @@ export class EventLedger {
     return { serverEpoch: this.#epoch, globalSequence: event.body.globalSequence };
   }
 
+  /**
+   * 用**服务端给出的屏障游标**推进账本（`sync.caught_up.cursor`、已验证快照的 cursor）。
+   *
+   * ## 为什么需要这个 API
+   *
+   * `#lastSequence` 原本只有 `commit()` 一个推进点，于是它与「已确认游标」成了两份会漂移的
+   * 拷贝：`sync.caught_up` 允许 ACK 一段**因 scope 过滤而不可见**的序号（§9.5），此时已确认游标
+   * 被抬到屏障 N，但账本仍停在旧值。重连时账本按旧值起步，紧接着的第一条可见事件 N+k（k>1）
+   * 必然被判成缺口 → 从屏障重新订阅 → 服务端按 §9.3 重放**同一条**事件 → 再判缺口 → 无界循环，
+   * 事件流一条都不呈现。把屏障也喂给账本，两份拷贝就此对齐。
+   *
+   * ## 为什么不吞掉真缺口
+   *
+   * 屏障的语义是「这条序号之前**对本设备可见**的事件都已交付」，因此屏障**之下**的空洞已被
+   * 服务端的重放消解；屏障**之上**的缺口仍由 {@link evaluate} 的 `last + 1` 判定照常发现。
+   * 两者同时成立：屏障只推进「已处理水位」，不关闭任何缺口检测。
+   *
+   * 规则：只前进不后退；跨 epoch 的游标不可比（§9.4 的 epoch 已变更意味着事件库重建），
+   * 此时返回 `false` 而不是强行采用——否则会用一段不相干的序号覆盖真实水位。
+   *
+   * @returns 账本水位是否被推进。
+   */
+  advanceTo(cursor: Cursor): boolean {
+    if (cursor.serverEpoch !== this.#epoch) return false;
+    const target = BigInt(cursor.globalSequence);
+    if (this.#lastSequence !== null && target <= BigInt(this.#lastSequence)) return false;
+    this.#lastSequence = cursor.globalSequence;
+    return true;
+  }
+
   /** 当前已记住的去重键数量（诊断与测试断言用）。 */
   get seenCount(): number {
     return this.#seen.size;

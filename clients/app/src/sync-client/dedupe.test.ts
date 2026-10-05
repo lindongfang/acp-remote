@@ -167,3 +167,37 @@ describe("imported 事件 ID 一致性（§9.6）", () => {
     expect(isImportedEventIdConsistent(makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000001" }))).toBe(true);
   });
 });
+
+describe("NEW-1：账本接受服务端屏障游标", () => {
+  it("推进到屏障后，屏障之上的真缺口仍被判缺口", () => {
+    const ledger = new EventLedger({ serverEpoch: EPOCH });
+    // 屏障 100：序号 1..100 之中可能有过滤掉的不可见段（§9.2/§9.5 明确允许）。
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toBe(true);
+    expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "100" });
+
+    // 屏障之上仍有缺口：屏障不是「关闭缺口检测」的开关。
+    // 反例：若 advanceTo 把水位写成无限大或跳过连续性判定，这里会是 new → 断言变红。
+    expect(ledger.evaluate(makeEvent({ globalSequence: "103", eventId: "aaaaaaaa-0000-4000-8000-000000000103" }))).toEqual({
+      kind: "gap",
+      expected: "101",
+      received: "103",
+    });
+    // 屏障之后紧接的那条才是 new。
+    expect(ledger.evaluate(makeEvent({ globalSequence: "101", eventId: "aaaaaaaa-0000-4000-8000-000000000101" }))).toEqual({
+      kind: "new",
+    });
+  });
+
+  it("只前进不后退：更旧的屏障不得让水位回退", () => {
+    const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "500" } });
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toBe(false);
+    expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "500" });
+  });
+
+  it("跨 epoch 的屏障被拒绝（事件库已重建，序号不可比）", () => {
+    const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "7" } });
+    expect(ledger.advanceTo({ serverEpoch: "11111111-2222-4333-8444-555555555555", globalSequence: "99999" })).toBe(false);
+    // 反例：若强行采用不相干的游标，真实水位会被一段无关序号覆盖。
+    expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "7" });
+  });
+});

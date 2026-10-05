@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { SnapshotStaging, SnapshotValidationError } from "./snapshot";
 import type { SnapshotDiscardReason } from "./snapshot";
+import type { DigestPort } from "./ports";
 import { decodeWireMessage } from "./wire";
 import { encodeBase64Url } from "./base64url";
 import { SnapshotRepository } from "./client";
@@ -329,13 +330,22 @@ describe("CRITICAL-1：burst 投递下的 chunk 摄入", () => {
   });
 });
 
-describe("MINOR-2：丢弃原因可观测", () => {
+describe("MINOR-2 / NEW-5：丢弃原因可观测", () => {
   it("每次 discard 都记录结构化原因，成功提交后清空", () => {
     const staging = new SnapshotStaging(fakeDigest());
     staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
     staging.discard("reset_required");
     expect(staging.lastDiscardReason).toBe("reset_required");
+  });
 
+  it("首次 begin 不谎报「被新快照取代」，取代真实发生时才记", () => {
+    const staging = new SnapshotStaging(fakeDigest());
+    // 首次快照：没有任何暂存区可取代。
+    // 反例：若 begin 无条件记 superseded_by_new_snapshot，这里就是该假警报 → 断言变红。
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    expect(staging.lastDiscardReason).toBeNull();
+
+    // 确有旧暂存区在被取代：此时必须记，且覆盖上一条无关的原因。
     staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
     expect(staging.lastDiscardReason).toBe("superseded_by_new_snapshot");
   });
@@ -352,3 +362,73 @@ describe("MINOR-2：丢弃原因可观测", () => {
     expect(staging.lastDiscardReason).toBe("digest_mismatch");
   });
 });
+
+describe("NEW-3 / NEW-4：摘要端口失败路径", () => {
+  it("digest reject 时 complete 抛 SnapshotValidationError、暂存区被丢弃且诊断反映本次失败", async () => {
+    const staging = new SnapshotStaging(failingDigest());
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    // 先写一次与本次失败无关的原因，模拟「诊断停在旧值」的失真形态。
+    staging.discard("reset_required");
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    const chunk = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+    await staging.acceptChunk(chunk.rawText, chunk.message);
+    const end = makeSnapshotEnd({
+      snapshotId: SNAPSHOT_ID,
+      chunkCount: 1,
+      digest: expectedSnapshotDigest([chunk.rawText]),
+    });
+
+    // 反例：若 digest 的原始错误直接冒泡（修复前是 `Error: digest exploded`），这里会变红；
+    // 连接层 `catch` 只认 SnapshotValidationError，别的类型会进无人处理的 promise。
+    const failure = await staging.complete(end).then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(SnapshotValidationError);
+    expect(failure).toMatchObject({ reason: "digest_unavailable" });
+    // 暂存区必须已被丢弃：残留会让下一次 begin 之前的 complete() 有机会读到旧 chunk 集合。
+    expect(staging.hasPending).toBe(false);
+    // 诊断必须反映**本次**失败，而不是上一次 begin 写的 superseded_by_new_snapshot。
+    expect(staging.lastDiscardReason).toBe("digest_unavailable");
+  });
+
+  it("摘要 promise 在暂存区被 discard 后成为孤儿时不产生 unhandledRejection", async () => {
+    // 摘要端口替身：先挂着不决，用测试在 discard 之后再让它失败。
+    let failDigest: (error: Error) => void = () => {};
+    const digest: DigestPort = {
+      sha256: () =>
+        new Promise<Uint8Array>((_resolve, reject) => {
+          failDigest = reject;
+        }),
+    };
+    const staging = new SnapshotStaging(digest);
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    const chunk = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+    await staging.acceptChunk(chunk.rawText, chunk.message);
+    // 乱序 chunk / 断线 / 阻断都会让暂存区在 complete() 之前被丢弃。
+    staging.discard("connection_closed");
+    failDigest(new Error("digest exploded"));
+
+    const unhandled: unknown[] = [];
+    process.on("unhandledRejection", (reason: unknown) => {
+      unhandled.push(reason);
+    });
+    try {
+      // `unhandledRejection` 由 Node 在当前轮微任务排空后的 check 阶段派发，因此这里推进
+      // 一次事件循环阶段（不是「等够久」的真实计时）。
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      process.removeAllListeners("unhandledRejection");
+    }
+    // 反例：若 push 的摘要 promise 无人挂 handler（修复前实测 unhandledRejection count: 1）→ 变红。
+    expect(unhandled).toHaveLength(0);
+  });
+});
+
+/** 每次调用都 reject 的摘要端口替身（模拟本机实现/环境故障）。 */
+function failingDigest(): DigestPort {
+  return {
+    async sha256(): Promise<Uint8Array> {
+      throw new Error("digest exploded");
+    },
+  };
+}

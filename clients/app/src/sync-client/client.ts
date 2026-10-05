@@ -23,7 +23,7 @@ import { SyncConnection, type AuthenticatedInfo, type ClientBlockCause, type Syn
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
 import type { VerifiedSnapshot } from "./snapshot";
-import type { DigestPort, RandomPort, SocketHandlers, SocketPort, TranscriptCodec, DeviceIdentityLike, HostIdentityPort } from "./ports";
+import type { ClockPort, DigestPort, RandomPort, SocketHandlers, SocketPort, TranscriptCodec, DeviceIdentityLike, HostIdentityPort } from "./ports";
 
 /** 已完成（可离线渲染）的快照状态。 */
 export interface CompletedSnapshot {
@@ -81,6 +81,8 @@ export interface SyncClientOptions {
   readonly resumeCursor: Cursor | null;
   /** 事件的唯一消费者（`src/state/` 的连接机与后续的 feature 层）。 */
   readonly onEvent: (event: SyncClientEvent) => void;
+  /** 时钟端口：缺口恢复的退避定时（§8.5 的退避接缝，组合根提供实现）。 */
+  readonly clock: ClockPort;
   readonly nowMs?: () => number;
 }
 
@@ -154,6 +156,7 @@ export class SyncClient {
         host: this.#options.host,
         random: this.#options.random,
         transcript: this.#options.transcript,
+        clock: this.#options.clock,
         openSocket: this.#options.openSocket,
         resumeCursor: this.#ackedCursor,
         ledgerFor: (serverEpoch) => this.#ledgerFor(serverEpoch),

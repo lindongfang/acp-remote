@@ -78,7 +78,14 @@ export type SnapshotDiscardReason =
   /** 连接断开：未完成快照按 §9.4 丢弃。 */
   | "connection_closed"
   /** 进入阻断态（撤销/不兼容/身份变化/被顶替）：不得留下任何未完成内容。 */
-  | "connection_blocked";
+  | "connection_blocked"
+  /**
+   * 摘要端口自身失败（`DigestPort.sha256` 抛错），与「算出来不等于期望」是两回事。
+   *
+   * 单独一个 reason 是因为诊断必须能区分「字节对但被篡改」与「本地算不出」：
+   * 前者指向服务端/传输，后者指向本机实现或环境，退避与重试策略完全不同。
+   */
+  | "digest_unavailable";
 
 /** 快照验证失败。 */
 export class SnapshotValidationError extends Error {
@@ -129,9 +136,11 @@ export class SnapshotStaging {
     return this.#lastDiscardReason;
   }
 
-  /** 新的 `snapshot_begin`：无条件丢弃旧的未完成暂存区后开始新的（§9.4）。 */
+  /** 新的 `snapshot_begin`：丢弃仍在的旧暂存区后开始新的（§9.4）。 */
   begin(begin: SyncSnapshotBegin): StagedSnapshot {
-    this.discard("superseded_by_new_snapshot");
+    // 只有确实存在旧暂存区才记「被新快照取代」：首次快照没有任何东西可取代，
+    // 无条件写会让这个诊断字段在健康路径上给出假警报（NEW-5）。
+    if (this.#staged !== null) this.discard("superseded_by_new_snapshot");
     this.#staged = {
       snapshotId: begin.body.snapshotId,
       cursor: begin.body.cursor,
@@ -182,7 +191,14 @@ export class SnapshotStaging {
       resources: mergeResources(staged.resources, chunk),
     };
     // 摘要只发起、不等待：校验失败路径一律 discard，序号与资源不会留下半份状态。
-    this.#chunkDigests.push(this.#digest.sha256(new TextEncoder().encode(rawText)));
+    //
+    // 同时必须**当场**挂一个拒绝处理器：这份 promise 只被 `complete()` 的 `Promise.all`
+    // 等待，而 `discard()`（乱序 chunk / 断线 / 阻断）会把整个数组换掉，届时它就成了孤儿，
+    // 摘要端口一失败就是一次 `unhandledRejection`（Node 下按版本会直接终止进程）。
+    // 挂处理器不改变传播：存进数组的仍是**同一个** promise，`Promise.all` 照样会抛。
+    const digest = this.#digest.sha256(new TextEncoder().encode(rawText));
+    void digest.catch(() => {});
+    this.#chunkDigests.push(digest);
     return this.#staged;
   }
 
@@ -214,8 +230,17 @@ export class SnapshotStaging {
     }
 
     // 两级哈希：每 chunk 一次，再对连接结果做一次（§9.4）。按 index 等待各 chunk 的摘要。
-    const joined = concatBytes(await Promise.all(this.#chunkDigests));
-    const computed = await this.#digest.sha256(joined);
+    //
+    // 摘要端口失败是**本地故障**而不是校验不通过，但它同样让这份暂存区不可提交：
+    // 若不显式 discard，残留的 chunk 集合会被下一次快照开始前的 `complete()` 读到，
+    // 且 `lastDiscardReason` 会停在上一次无关的原因上，把「为什么没提交」答错。
+    let computed: Uint8Array;
+    try {
+      computed = await this.#digest.sha256(concatBytes(await Promise.all(this.#chunkDigests)));
+    } catch (error) {
+      this.discard("digest_unavailable");
+      throw new SnapshotValidationError("digest_unavailable", `快照摘要计算失败：${describeError(error)}`);
+    }
     const expected = decodeDigestText(end.body.snapshotDigest);
     if (!bytesEqual(computed, expected)) {
       this.discard("digest_mismatch");
@@ -236,6 +261,12 @@ export class SnapshotStaging {
     // 原因必须留下来：调用方与测试据此断言「为什么这次快照没提交」。
     this.#lastDiscardReason = reason;
   }
+}
+
+/** 把任意抛出值转成可放进错误消息的短文本（非 `Error` 的抛出值也必须有话说）。 */
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 /** 合并一个 chunk 进资源集（D1：只有三类清单资源）。 */

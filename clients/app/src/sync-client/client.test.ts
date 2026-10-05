@@ -14,6 +14,7 @@ import { SyncClient } from "./client";
 import type { SyncClientEvent } from "./connection";
 import type { CommandMessage, Cursor, Uuid } from "../protocol";
 import {
+  FakeClock,
   FakeHostIdentity,
   FakeIdentity,
   FakeRandom,
@@ -55,12 +56,14 @@ interface ClientHarness {
   readonly client: SyncClient;
   readonly sockets: FakeSocketFactory;
   readonly events: SyncClientEvent[];
+  readonly clock: FakeClock;
 }
 
 /** 建一个未连接的门面替身环境；`resumeCursor` 模拟「上次持久化的确认游标」。 */
 function buildClient(input: { readonly resumeCursor?: Cursor | null } = {}): ClientHarness {
   const sockets = new FakeSocketFactory();
   const events: SyncClientEvent[] = [];
+  const clock = new FakeClock();
   const client = new SyncClient({
     hostId: HOST_ID,
     url: "wss://host.example:8443/sync",
@@ -71,16 +74,19 @@ function buildClient(input: { readonly resumeCursor?: Cursor | null } = {}): Cli
     digest: fakeDigest(),
     openSocket: sockets.open,
     resumeCursor: input.resumeCursor ?? null,
+    clock,
     onEvent: (event) => {
       events.push(event);
     },
     nowMs: () => 1_700_000_000_000,
   });
-  return { client, sockets, events };
+  return { client, sockets, events, clock };
 }
 
 /** `auth.authenticated` 的默认 serverEpoch。 */
 const SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
+/** 服务端事件库重建后的新 epoch（§9.4）。 */
+const NEXT_SERVER_EPOCH = "11111111-2222-4333-8444-555555555555";
 
 /** 对**当前最近建立**的连接跑完握手（重连用例用它驱动第二条连接）。 */
 async function authenticate(context: ClientHarness): Promise<void> {
@@ -381,6 +387,47 @@ describe("CRITICAL-2：重连后账本与去重不得重置", () => {
 
     // 反例：若账本在认证时被重建（resumeFrom=null），2319 会要求首条恰为 1 → 判 gap → 断言变红。
     expect(context.events.some((event) => event.kind === "gap_detected")).toBe(false);
+  });
+});
+
+describe("NEW-2：epoch 变化后订阅游标与 ACK 必须重新起步", () => {
+  it("服务端 epoch 变化后首个 sync.subscribe 的 cursor 为 null，且新 epoch 的事件能被 ACK", async () => {
+    const context = buildClient({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "2317" } });
+    await authenticate(context);
+    context.sockets.latest.deliver(
+      makeEvent({ globalSequence: "2318", eventId: "aaaaaaaa-0000-4000-8000-000000002318" }),
+    );
+    await waitUntil(() => context.events.some((event) => event.kind === "event"), "处理高序号事件");
+    expect(context.client.ackedCursor).toEqual({ serverEpoch: SERVER_EPOCH, globalSequence: "2318" });
+
+    // 服务端事件库重建（§9.4 列为必须重建快照的**正常**场景），epoch 随之变化。
+    context.sockets.latest.serverClose(1006, "abnormal");
+    context.client.connect();
+    const socket = context.sockets.latest;
+    socket.open();
+    await waitUntil(() => socket.types().includes("auth.client_hello"), "重连发出 clientHello");
+    socket.deliver(makeChallenge({ connectionId: CONNECTION_ID }));
+    await waitUntil(() => socket.types().includes("auth.client_proof"), "重连发出 clientProof");
+    socket.deliver(makeAuthenticated({ connectionId: CONNECTION_ID, serverEpoch: NEXT_SERVER_EPOCH }));
+    await waitUntil(() => socket.types().includes("sync.subscribe"), "重连发出 subscribe");
+
+    // (a) 旧 epoch 的游标绝不能发出去：服务端对它只回 `sync.cursor_invalid`（§9.4/:660），
+    //     客户端只上报不恢复，事件流就此停摆。
+    // 反例：若 epoch 变化后仍带旧游标，这里会拿到 {serverEpoch: 旧, globalSequence: "2318"} → 变红。
+    const subscribe = socket.last("sync.subscribe");
+    expect((subscribe?.["body"] as { cursor: unknown }).cursor).toBeNull();
+
+    // (b) 跨 epoch 后 ACK 必须恢复：#lastAcked 若仍持旧游标，`compareCursors` 恒判回退，
+    //     于是每条事件都产出 ack_not_advancing，一条 sync.ack 也发不出去（违反 §9.5）。
+    socket.deliver(makeEvent({ globalSequence: "1", eventId: "bbbbbbbb-0000-4000-8000-000000000001" }));
+    socket.deliver(makeEvent({ globalSequence: "2", eventId: "bbbbbbbb-0000-4000-8000-000000000002" }));
+    socket.deliver(makeEvent({ globalSequence: "3", eventId: "bbbbbbbb-0000-4000-8000-000000000003" }));
+
+    const acks = socket.sent.filter((message) => message.parsed["type"] === "sync.ack");
+    // 反例：若 #lastAcked 未清空，这里是 0 条 ACK、3 条 ack_not_advancing → 变红。
+    expect(acks).toHaveLength(3);
+    expect(context.events.some((event) => event.kind === "rejected" && event.reason === "ack_not_advancing")).toBe(false);
+    expect(context.client.ackedCursor).toEqual({ serverEpoch: NEXT_SERVER_EPOCH, globalSequence: "3" });
   });
 });
 

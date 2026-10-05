@@ -22,6 +22,8 @@ import { SyncConnection } from "../connection";
 import { EventLedger } from "../dedupe";
 import type {
   ByteArray,
+  CancelTimer,
+  ClockPort,
   DeviceIdentityLike,
   HostChallengeInput,
   HostIdentityPort,
@@ -429,6 +431,64 @@ export interface RecordingDigest {
 }
 
 /**
+ * 假时钟：定时器只在 `advanceBy` 时到期。
+ *
+ * 缺口恢复的退避必须可被确定性推进，否则「订阅次数是否有界」这类断言只能依赖真实竞态窗口，
+ * 既可能偶发通过也可能偶发挂死。`pending` 记录每个待触发的 `{ delayMs, task }`，
+ * 测试既能推进时间，也能直接断言「还有几个定时器在等」。
+ */
+export class FakeClock implements ClockPort {
+  #nowMs: number;
+  #nextId = 1;
+  readonly #timers = new Map<number, { readonly dueMs: number; readonly task: () => void }>();
+
+  constructor(startMs = 0) {
+    this.#nowMs = startMs;
+  }
+
+  now(): number {
+    return this.#nowMs;
+  }
+
+  schedule(delayMs: number, task: () => void): CancelTimer {
+    const id = this.#nextId;
+    this.#nextId += 1;
+    this.#timers.set(id, { dueMs: this.#nowMs + delayMs, task });
+    return () => {
+      this.#timers.delete(id);
+    };
+  }
+
+  /** 推进时间并同步触发所有到期的定时器（含推进期间新排入但已到期者）。 */
+  advanceBy(delayMs: number): void {
+    this.#nowMs += delayMs;
+    for (;;) {
+      const due = [...this.#timers.entries()]
+        .filter(([, timer]) => timer.dueMs <= this.#nowMs)
+        .sort((left, right) => left[1].dueMs - right[1].dueMs);
+      const first = due[0];
+      if (first === undefined) return;
+      this.#timers.delete(first[0]);
+      first[1].task();
+    }
+  }
+
+  /** 反复推进直到不再有待触发的定时器（上限只用于把「永不收敛」变成明确失败）。 */
+  runPending(maxSteps = 50): void {
+    for (let step = 0; step < maxSteps && this.#timers.size > 0; step += 1) {
+      const next = [...this.#timers.values()].reduce((min, timer) => Math.min(min, timer.dueMs), Number.MAX_SAFE_INTEGER);
+      this.advanceBy(next - this.#nowMs);
+    }
+    if (this.#timers.size > 0) throw new Error("定时器未收敛");
+  }
+
+  /** 当前待触发的定时器数量。 */
+  get pendingTimers(): number {
+    return this.#timers.size;
+  }
+}
+
+/**
  * 等待一个可观察条件成立。
  *
  * 用**微任务轮转**而不是定时器：握手链上的每一步都是对已决 promise 的 `await`
@@ -456,5 +516,6 @@ export interface Harness {
   readonly host: FakeHostIdentity;
   readonly digest: RecordingDigest;
   readonly events: SyncClientEvent[];
+  readonly clock: FakeClock;
   readonly ledger: EventLedger;
 }
