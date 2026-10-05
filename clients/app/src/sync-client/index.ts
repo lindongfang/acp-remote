@@ -66,8 +66,8 @@ export { cursorsEqual, decodeWireMessage, isCommandStatusRecord, isCursor, isErr
 export { Base64UrlError, bytesEqual, decodeBase64Url, encodeBase64Url } from "./base64url";
 
 // ── 去重、快照与分页 ───────────────────────────────────────────────────────
-export { EventLedger, isImportedEventIdConsistent } from "./dedupe";
-export type { EventVerdict } from "./dedupe";
+export { EventLedger, isImportedEventIdConsistent, SEQUENCE_UPPER_BOUND } from "./dedupe";
+export type { BarrierVerdict, EventVerdict, SequenceRejection } from "./dedupe";
 export { SnapshotStaging, SnapshotValidationError } from "./snapshot";
 export type { SnapshotDiscardReason, StagedResources, StagedSnapshot, VerifiedSnapshot } from "./snapshot";
 export {

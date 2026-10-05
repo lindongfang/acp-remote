@@ -175,8 +175,8 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_PATTERN.test(value);
 }
 
-/** 类型守卫：`decimalString`。 */
-function isDecimalString(value: unknown): value is string {
+/** 类型守卫：`decimalString`。导出是为了让 `EventLedger` 复用同一份判定，避免账本与解码器对序号形状各说各话。 */
+export function isDecimalString(value: unknown): value is string {
   return typeof value === "string" && DECIMAL_PATTERN.test(value);
 }
 

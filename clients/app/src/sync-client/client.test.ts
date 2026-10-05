@@ -37,6 +37,9 @@ const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 const SNAPSHOT_ID = "8194de43-e213-423d-acf4-2e3549304566";
 const REQUEST_ID = "4c4dafda-dd98-442e-8d55-252b75bac72d";
 
+/** 第二份快照的 `snapshotId`。 */
+const NEXT_SNAPSHOT_ID = "5b0d4c1e-6d4a-4a1e-9c3d-2f7b6c8d9e01";
+
 const SESSIONS_ITEM = [
   {
     sessionId: "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
@@ -59,11 +62,16 @@ interface ClientHarness {
   readonly clock: FakeClock;
 }
 
-/** 建一个未连接的门面替身环境；`resumeCursor` 模拟「上次持久化的确认游标」。 */
-function buildClient(input: { readonly resumeCursor?: Cursor | null } = {}): ClientHarness {
+/**
+ * 建一个未连接的门面替身环境。
+ *
+ * @param input.resumeCursor 模拟「上次持久化的确认游标」。
+ * @param input.omitNowMs 不注入 `nowMs`，用来断言门面只保留**一套**时间来源（MINOR-3）。
+ */
+function buildClient(input: { readonly resumeCursor?: Cursor | null; readonly omitNowMs?: boolean } = {}): ClientHarness {
   const sockets = new FakeSocketFactory();
   const events: SyncClientEvent[] = [];
-  const clock = new FakeClock();
+  const clock = new FakeClock(input.omitNowMs === true ? 1_700_000_000_000 : 0);
   const client = new SyncClient({
     hostId: HOST_ID,
     url: "wss://host.example:8443/sync",
@@ -78,9 +86,19 @@ function buildClient(input: { readonly resumeCursor?: Cursor | null } = {}): Cli
     onEvent: (event) => {
       events.push(event);
     },
-    nowMs: () => 1_700_000_000_000,
+    ...(input.omitNowMs === true ? {} : { nowMs: () => 1_700_000_000_000 }),
   });
   return { client, sockets, events, clock };
+}
+
+/** 交付一份单 chunk 的合法快照并等待它进入仓库。 */
+async function deliverCompleteSnapshot(context: ClientHarness, snapshotId: Uuid): Promise<void> {
+  const socket = context.sockets.latest;
+  socket.deliver(makeSnapshotBegin({ snapshotId, chunkCount: 1 }));
+  const chunk = makeSnapshotChunk({ snapshotId, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+  socket.deliver(chunk.rawText);
+  socket.deliver(makeSnapshotEnd({ snapshotId, chunkCount: 1, digest: expectedSnapshotDigest([chunk.rawText]) }));
+  await waitUntil(() => context.client.snapshots.current?.snapshotId === snapshotId, "快照进入仓库");
 }
 
 /** `auth.authenticated` 的默认 serverEpoch。 */
@@ -473,5 +491,28 @@ describe("CRITICAL-3：客户端方向出站序号", () => {
       expect(message?.["connectionId"]).toBeUndefined();
     }
     void context;
+  });
+});
+
+describe("MINOR-3：门面只有一套时间来源", () => {
+  it("未注入 nowMs 时，快照时间戳实时读自 clock.now()", async () => {
+    const context = buildClient({ omitNowMs: true });
+    await authenticate(context);
+    await deliverCompleteSnapshot(context, SNAPSHOT_ID);
+    expect(context.client.snapshots.current?.verifiedAtMs).toBe(1_700_000_000_000);
+
+    // 推进同一个时钟，第二份快照的时间戳跟着走。
+    // 反例：若门面内部另有一份默认时间源（或把 `nowMs` 固定在构造期），这里会不变 → 断言变红。
+    context.clock.advanceBy(5_000);
+    await deliverCompleteSnapshot(context, NEXT_SNAPSHOT_ID);
+    expect(context.client.snapshots.current?.verifiedAtMs).toBe(1_700_000_005_000);
+  });
+
+  it("显式注入 nowMs 时以它为准（覆盖仍然可用）", async () => {
+    const context = buildClient();
+    context.clock.advanceBy(5_000);
+    await authenticate(context);
+    await deliverCompleteSnapshot(context, SNAPSHOT_ID);
+    expect(context.client.snapshots.current?.verifiedAtMs).toBe(1_700_000_000_000);
   });
 });

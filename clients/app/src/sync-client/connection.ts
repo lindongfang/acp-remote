@@ -81,23 +81,34 @@ const CLOSE = {
 } as const;
 
 /**
- * 序号缺口后的重新订阅：退避参数与连续次数上限。
+ * 发现丢失区间后的重新订阅：退避参数与连续次数上限。
  *
- * ## 为什么必须有上限而不是「一直重订阅」
+ * ## 触发条件（与上一轮相比已收紧）
  *
- * §9.2/§9.5 明文允许全局 sequence 对单个设备存在**因权限过滤而不可见**的空洞。
- * 一旦缺口落在这样的空洞上，从最后确认位置重订阅会拿回**同一条**事件，缺口判定原地复现——
- * 无界重订阅既补不齐缺口，又对服务端构成持续 `sync.subscribe` 洪泛（与 §8.5 要避免的
- * 重连风暴同类）。因此重订阅必须既有退避（一次比一次久）又有次数上限（到顶就停，
- * 把后续恢复交给状态层按重连退避重新来）。
+ * 触发源只有一个：账本判出 `late`——**服务端声明过「这条序号之前都已交付」，却又送来一条
+ * 客户端从未呈现过的事件**（详见 `dedupe.ts` 文件头）。scope 过滤造成的合法空洞**不再**触发
+ * 重订阅：§9.2 明文「全局 sequence 对单个设备可以有不可见的空洞，不能据此推断隐藏事件」，
+ * 按空洞重订阅只会拿回同一条事件、原地打转，并对服务端构成持续的 `sync.subscribe` 洪泛。
+ *
+ * ## 为什么仍然必须有上限而不是「一直重订阅」
+ *
+ * 服务端违反 barrier 声明是可能持续发生的（同一个漏投区间会被反复重投）。若不设上限，
+ * 每次重订阅都只是把同一条迟到事件再送一遍，永远补不齐新的东西。因此重订阅既有退避
+ * （一次比一次久）又有次数上限（到顶就停，把后续恢复交给状态层按重连退避重新来）。
  *
  * 取值依据：
- * - `baseDelayMs = 250`：既能救回「偶发一次乱序」这种最常见的真缺口，又低于用户感知的
- *   亚秒级停顿阈值，不会让正常抖动被放大成恢复风暴。
+ * - `baseDelayMs = 250`：能救回「服务端补投只晚了几百毫秒」这类最常见的抖动，又低于用户
+ *   感知的亚秒级停顿阈值，不会把一次服务端抖动放大成恢复风暴。
  * - 倍率 2、`maxDelayMs = 4000`：250/500/1000/2000/4000，连续 5 次累计 7.75s，
  *   足以覆盖服务端一次短暂重放抖动，又不会在几秒内把服务端打穿。
  * - `maxAttempts = 5`：单条连接最多补发 5 次；到顶后上报 `gap_resubscribe_exhausted`
  *   并停止，恢复路径回到「重连 + 快照重建」，那是有全局退避的通道。
+ *
+ * ## 预算何时清零（P1-B）
+ *
+ * 只有**水位被屏障真正抬高**（`advanceTo` 返回 `advanced`）或**有新事件被呈现**才清零。
+ * §9.3 要求服务端每次重放后都发一条 `sync.caught_up`，所以「收到过 `caught_up` 就清零」会让
+ * 预算每轮复位、退避恒为 250ms、`maxAttempts` 永远不可达——这条安全网等于不存在。
  */
 const GAP_RESUBSCRIBE = {
   baseDelayMs: 250,
@@ -130,7 +141,12 @@ export type SyncClientEvent =
   | { readonly kind: "event"; readonly event: EventMessage }
   /** 一条重复事件被丢弃（诊断用，**不**触发任何副作用）。 */
   | { readonly kind: "duplicate_dropped"; readonly eventId: Uuid }
-  /** 序号出现缺口：客户端从最后确认位置重新订阅，不推进游标。 */
+  /**
+   * 检测到丢失区间：服务端声明过「`expected` 之前都已交付」，却送来了 `received`（低于水位）。
+   *
+   * 该事件随后仍会被 `event` 补齐呈现（R14 不允许丢失），同时触发有界重订阅。
+   * scope 过滤造成的合法空洞**不会**产生本事件（§9.2）。
+   */
   | { readonly kind: "gap_detected"; readonly expected: string; readonly received: string }
   /** 命令结果。 */
   | { readonly kind: "command_result"; readonly result: CommandResultMessage }
@@ -232,10 +248,12 @@ export class SyncConnection {
   /** 已 ACK 的游标，用于保证「只能前进」。 */
   #lastAcked: Cursor | null;
   /**
-   * 连续缺口恢复的次数：每成功处理一条 `new` 事件或收到 `caught_up` 即清零。
+   * 连续丢失恢复的次数：只有「真的有进展」才清零——即呈现了一条 `new` 事件，或屏障**确实抬高**
+   * 了水位（`advanceTo` 返回 `advanced`）。
    *
-   * 清零是必要的：一次已补齐的缺口说明恢复通道是通的，后续零星抖动应当拿到**完整**的
-   * 重试预算，而不是继承上一轮的余额。
+   * 清零是必要的：一次已闭合的丢失说明恢复通道是通的，后续零星抖动应当拿到**完整**的重试预算。
+   * 而「收到过 `caught_up`」**不**算进展：§9.3 要求每次重放后都发一条，按它清零会让预算每轮
+   * 复位、退避上限永远不可达（见 `GAP_RESUBSCRIBE` 的注释）。
    */
   #gapAttempts = 0;
   /** 待触发的缺口重订阅定时器；同一时刻至多一个。 */
@@ -506,9 +524,10 @@ export class SyncConnection {
   }
 
   /**
-   * 事件去重 + 缺口处理。
+   * 事件去重 + 丢失处理。
    *
-   * 重复事件**不**推进游标也不触发呈现；缺口要求从最后确认位置恢复，不静默跳过。
+   * 重复事件**不**推进水位也不触发呈现；低于权威水位却从未呈现过的事件（`late`）必须**补齐
+   * 呈现**并触发有界重订阅。scope 过滤造成的合法空洞（§9.2）不判为丢失，也不触发重订阅。
    */
   #onEventMessage(message: EventMessage): void {
     if (!isImportedEventIdConsistent(message)) {
@@ -525,27 +544,36 @@ export class SyncConnection {
       this.#onEvent({ kind: "duplicate_dropped", eventId: message.body.eventId });
       return;
     }
-    if (verdict.kind === "gap") {
-      this.#onEvent({ kind: "gap_detected", expected: verdict.expected, received: verdict.received });
-      // 缺口必须**真的**恢复：只上报而不重新订阅，事件流会静默停摆，
-      // 此后每条事件都判 gap（R14「从最后确认的位置连续恢复」）。但恢复必须退避且有上限，
-      // 否则补不齐的缺口会变成对服务端的无界 `sync.subscribe` 洪泛。
+    if (verdict.kind === "rejected") {
+      this.#onEvent({ kind: "rejected", reason: verdict.reason, detail: message.body.globalSequence });
+      return;
+    }
+    if (verdict.kind === "late") {
+      // 水位之下却从未呈现过：这是**真实的**丢失区间证据（服务端违反 barrier 声明，
+      // 或客户端此前误丢）。两条 R14 要求在这里冲突，冲突时选「不丢」——
+      // 重复呈现是可见且可去重的，丢弃是静默且不可逆的。
+      ledger.commit(message);
+      this.#onEvent({ kind: "gap_detected", expected: verdict.watermark, received: verdict.received });
+      this.#onEvent({ kind: "event", event: message });
+      // 恢复必须真的做：重新订阅能确认服务端是否还压着别的未交付事件。但预算**不**因这条
+      // 补齐而清零——丢失区间尚未闭合，正是要用满退避预算的时候。
       this.#scheduleGapResubscribe();
+      // 不发 ACK：水位不前进，ACK 只能前进（§9.5）；该序号已被更高的已确认游标覆盖。
       return;
     }
     const cursor = ledger.commit(message);
-    // 缺口已补齐：把重试预算清零，后续零星抖动拿到的应是完整预算。
+    // 真的有进展：把重试预算清零，后续零星抖动拿到的应是完整预算。
     this.#gapAttempts = 0;
     this.#onEvent({ kind: "event", event: message });
     this.#sendAck(cursor);
   }
 
   /**
-   * 缺口后**带退避与上限**地重新订阅。
+   * 发现丢失区间后**带退避与上限**地重新订阅。
    *
-   * 只重发是不够的：缺口可能落在 §9.2/§9.5 允许的「因权限过滤不可见」空洞上，此时重订阅
-   * 会拿回同一条事件、缺口原地复现——无界重订阅既补不齐，又是对服务端的持续洪泛。
-   * 因此每次恢复都比上一次更久，且到顶后停止并上报，由状态层按重连退避重新进入。
+   * 只重发是不够的：重订阅能确认服务端是否还压着别的未交付事件。而不设上限则会让同一个
+   * 漏投区间被无限次重投——无界重订阅既补不齐，又是对服务端的持续洪泛。因此每次恢复都比
+   * 上一次更久，且到顶后停止并上报，由状态层按重连退避重新进入。
    */
   #scheduleGapResubscribe(): void {
     if (this.#gapAttempts >= GAP_RESUBSCRIBE.maxAttempts) {
@@ -577,18 +605,53 @@ export class SyncConnection {
     this.#gapRetry = null;
   }
 
+  /**
+   * `sync.caught_up`：服务端给出的**权威屏障**（§9.3 第 4 步）。
+   *
+   * 屏障声明「这条序号之前对本设备可见的事件都已交付」。因此：
+   *
+   * - 屏障**之下**未投递的空洞已被服务端消解（§9.5：即使某段序号全部因权限过滤而不可见，
+   *   客户端也可以 ACK `caught_up.cursor`），水位必须采纳它——否则「已确认游标」与账本水位
+   *   成为两份会漂移的拷贝（详见 `EventLedger.advanceTo` 的注释）。
+   * - 屏障**之上**到达的未呈现事件仍会被判 `late` 并补齐，因此采纳屏障不关闭丢失检测。
+   * - 跨 epoch 的屏障**不可采纳**（§9.4：epoch 变更意味着事件库重建，序号不可比）。账本
+   *   与本方法必须给出**同一个**判断：账本拒绝时既不 ACK 也不宣告 online，只上报原因。
+   */
   #onCaughtUp(message: SyncCaughtUp): void {
-    // 即使某段序号因权限过滤不可见，也可以 ACK caught_up 的 cursor（§9.5）。
-    this.#acked = message.body.cursor;
-    // `caught_up` 是服务端给的**屏障**：它声明这条序号之前对本设备可见的事件都已交付。
-    // 必须同样喂给账本，否则「已确认游标」与账本水位成为两份会漂移的拷贝——重连时账本按旧值
-    // 起步，紧接的第一条可见事件（屏障之后）必被判缺口，重订阅又拿回同一条事件，
-    // 事件流一条都不呈现（详见 EventLedger.advanceTo 的注释）。
-    this.#ledger?.advanceTo(message.body.cursor);
-    // 追平完成：本条连接的重试预算重新计满。
-    this.#gapAttempts = 0;
-    this.#sendAck(message.body.cursor);
-    this.#onEvent({ kind: "online", cursor: message.body.cursor });
+    const barrier = message.body.cursor;
+    const ledger = this.#ledger;
+    if (ledger === null) {
+      this.#onEvent({ kind: "rejected", reason: "caught_up_before_auth", detail: barrier.globalSequence });
+      return;
+    }
+    const advance = ledger.advanceTo(barrier);
+    if (advance.kind === "rejected") {
+      this.#onEvent({ kind: "rejected", reason: `caught_up_${advance.reason}`, detail: barrier.globalSequence });
+      return;
+    }
+    // 预算清零的条件是「水位确实被抬高」，不是「收到过 caught_up」：§9.3 要求每次重订阅后都
+    // 有一条 `caught_up`，按后者清零会让预算每轮复位、退避上限永远不可达（P1-B）。
+    if (advance.kind === "advanced") this.#gapAttempts = 0;
+    // ACK 只能前进（§9.5）：重复或更旧的屏障不重发 ACK，也不让 `#acked` 回退。
+    if (this.#moveAcked(barrier)) this.#sendAck(barrier);
+    this.#onEvent({ kind: "online", cursor: this.#acked ?? barrier });
+  }
+
+  /**
+   * 只前进不后退地采纳一条屏障游标为已确认游标（§9.5）。
+   *
+   * epoch 不同一律拒绝：跨 epoch 的序号不可比（§9.4），把外来游标写进 `#acked` 会让随后每条
+   * 真实事件的 ACK 都被判回退，一条也发不出去。
+   *
+   * @returns 已确认游标是否真的前进了。
+   */
+  #moveAcked(barrier: Cursor): boolean {
+    const current = this.#acked;
+    if (current !== null && (current.serverEpoch !== barrier.serverEpoch || compareCursors(barrier, current) <= 0)) {
+      return false;
+    }
+    this.#acked = barrier;
+    return true;
   }
 
   /**
@@ -628,11 +691,17 @@ export class SyncConnection {
     try {
       const verified = await this.#staging.complete(message);
       this.#onEvent({ kind: "snapshot_verified", snapshot: verified });
-      // 快照 cursor 之后的事件会补发，随后 `sync.caught_up`；ACK 推进到快照 cursor。
-      this.#acked = verified.cursor;
-      // 快照 cursor 同样是屏障：快照涵盖的序号之前的内容都已落进已完成状态，
-      // 账本必须一并推进，否则恢复游标与账本水位分叉（与 #onCaughtUp 同理）。
-      this.#ledger?.advanceTo(verified.cursor);
+      // 快照 cursor 之后的事件会补发，随后 `sync.caught_up`（§9.4）。
+      // 快照 cursor 同样是屏障：快照涵盖的序号之前的内容都已落进已完成状态，账本水位必须一并
+      // 推进，否则恢复游标与水位分叉（与 #onCaughtUp 同理）。跨 epoch 或序号非法的快照游标
+      // 不采纳：它与账本对同一条游标的判断必须一致。
+      const barrier = verified.cursor;
+      const advance = this.#ledger?.advanceTo(barrier);
+      if (advance !== undefined && advance.kind === "rejected") {
+        this.#onEvent({ kind: "rejected", reason: `snapshot_barrier_${advance.reason}`, detail: barrier.globalSequence });
+        return;
+      }
+      this.#moveAcked(barrier);
     } catch (error) {
       if (error instanceof SnapshotValidationError) {
         // 保留上一次已完成状态；重连后重新请求（§9.4）。

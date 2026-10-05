@@ -81,8 +81,14 @@ export interface SyncClientOptions {
   readonly resumeCursor: Cursor | null;
   /** 事件的唯一消费者（`src/state/` 的连接机与后续的 feature 层）。 */
   readonly onEvent: (event: SyncClientEvent) => void;
-  /** 时钟端口：缺口恢复的退避定时（§8.5 的退避接缝，组合根提供实现）。 */
+  /**
+   * 时钟端口：快照时间戳与缺口恢复的退避定时。
+   *
+   * 只保留**一个**时间来源（§8.5 的退避接缝）：`nowMs` 不作为独立入口要求组合根提供第二个时钟，
+   * 缺省时委托 `clock.now()`——两套时钟若来自不同时源，快照时间戳与退避就会给出互相矛盾的诊断。
+   */
   readonly clock: ClockPort;
+  /** 覆盖时钟读数（测试与「时间戳不来自时钟」的场景可显式注入）；缺省用 `clock.now()`。 */
   readonly nowMs?: () => number;
 }
 
@@ -113,7 +119,7 @@ export class SyncClient {
 
   constructor(options: SyncClientOptions) {
     this.#options = options;
-    this.#now = options.nowMs ?? (() => 0);
+    this.#now = options.nowMs ?? ((): number => options.clock.now());
     this.#ackedCursor = options.resumeCursor;
   }
 

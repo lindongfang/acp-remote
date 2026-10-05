@@ -90,6 +90,109 @@ async function completeHandshake(context: Harness): Promise<void> {
   await waitUntil(() => context.sockets.latest.types().includes("sync.subscribe"), "发出 subscribe");
 }
 
+/** 事件库里某条事件的稳定 `eventId`（与 `makeEvent` 的 messageId 规则对齐，便于阅读断言）。 */
+function eventIdFor(sequence: string): string {
+  return `aaaaaaaa-0000-4000-8000-${sequence.padStart(12, "0")}`;
+}
+
+/** `sync.caught_up`（服务端屏障，§9.3 第 4 步）。 */
+function caughtUp(sequence: string): Record<string, unknown> {
+  return {
+    protocolVersion: 1,
+    type: "sync.caught_up",
+    messageId: `cccccccc-1111-4111-8111-${sequence.padStart(12, "0")}`,
+    connectionId: CONNECTION_ID,
+    connectionSequence: "1",
+    body: { cursor: { serverEpoch: SERVER_EPOCH, globalSequence: sequence } },
+  };
+}
+
+/** 一条 §9.3 合规的「增量重放 + 屏障」应答器。 */
+interface ReplayServer {
+  /** 交付队列里的全部消息（真实 WSS 上消息异步到达；同步递归只会把失控表现成爆栈）。 */
+  drain(): void;
+  /** 再排入一次「重放 + caught_up」。 */
+  replay(): void;
+  /** 推进服务端 head（模拟服务端继续产生事件）。 */
+  setHead(sequence: string): void;
+  /** 收到的 `sync.subscribe` 条数（含认证后的首条）。 */
+  subscribeCount(): number;
+}
+
+/**
+ * 把假服务端建模成 §9.3 的**响应式**重放器。
+ *
+ * ## 为什么必须有它
+ *
+ * 前三轮的替身都停在「客户端主动发、服务端被动等」，于是 §9.3 的两个关键语义——「收到
+ * `sync.subscribe` 就重放可见事件」与「重放后必发 `sync.caught_up`」——根本没被建模。
+ * 缺了它们，「服务端漏投」「屏障吞事件」「退避上限不可达」这一整类缺陷在测试里无法构造，
+ * 用例只能证明「服务端什么都不做时有界」。
+ *
+ * @param options.visible 本设备**可见**的序号；`withheld` 里的序号是服务端明知可见却不投递的
+ *   （正常服务端不会有，这里用来构造真实的丢失区间）。
+ */
+function attachReplayServer(
+  context: Harness,
+  options: {
+    readonly visible: readonly string[];
+    readonly head: string;
+    readonly withheld?: ReadonlySet<string>;
+  },
+): ReplayServer {
+  const socket = context.sockets.latest;
+  let head = options.head;
+  let lastCursor: string | null = null;
+  const queue: unknown[] = [];
+  let subscribes = 0;
+
+  const enqueueReplay = (): void => {
+    for (const sequence of options.visible) {
+      if (options.withheld?.has(sequence) === true) continue;
+      if (lastCursor !== null && BigInt(sequence) <= BigInt(lastCursor)) continue;
+      queue.push(makeEvent({ globalSequence: sequence, eventId: eventIdFor(sequence) }));
+    }
+    queue.push(caughtUp(head));
+  };
+
+  // 包装必须在握手**之前**装上：认证后的首条 subscribe 同样是服务端重放的触发点。
+  const originalSend = socket.send.bind(socket);
+  socket.send = (text: string): void => {
+    originalSend(text);
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || !("type" in parsed)) return;
+    if (parsed.type !== "sync.subscribe") return;
+    if (!("body" in parsed)) return;
+    const body: unknown = parsed.body;
+    if (typeof body !== "object" || body === null || !("cursor" in body)) return;
+    const cursor: unknown = body.cursor;
+    lastCursor =
+      typeof cursor === "object" && cursor !== null && "globalSequence" in cursor && typeof cursor.globalSequence === "string"
+        ? cursor.globalSequence
+        : null;
+    subscribes += 1;
+    enqueueReplay();
+  };
+
+  return {
+    drain: () => {
+      for (const message of queue.splice(0)) socket.deliver(message);
+    },
+    replay: () => enqueueReplay(),
+    setHead: (sequence: string) => {
+      head = sequence;
+    },
+    subscribeCount: () => subscribes,
+  };
+}
+
+/** 被呈现的事件序号序列（R14 的「不丢、不重」都落在这条序列上）。 */
+function presentedSequences(context: Harness): string[] {
+  return context.events
+    .filter((event) => event.kind === "event")
+    .map((event) => event.event.body.globalSequence);
+}
+
 describe("R11：逐连接签名握手", () => {
   it("握手按 clientHello → serverChallenge → clientProof → authenticated 四步发出", async () => {
     const context = setup();
@@ -235,174 +338,203 @@ describe("R11/R12：subscribe 与重放追平", () => {
     expect(context.connection.ackedCursor?.globalSequence).toBe("3");
   });
 
-  it("序号出现缺口时不推进游标并上报 gap", async () => {
+  it("scope 过滤造成的序号空洞不判丢失：直接呈现并推进水位，不重订阅", async () => {
     const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
     await completeHandshake(context);
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "5", eventId: "aaaaaaaa-0000-4000-8000-000000000005" }));
+    // §9.2：2/3/4 因权限过滤对本设备不可见，下一条可见事件是 5。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "5", eventId: eventIdFor("5") }));
 
-    expect(context.events.find((event) => event.kind === "gap_detected")).toMatchObject({
-      expected: "2",
-      received: "5",
-    });
-    // 反例：若缺口被静默跳过，ACK 会前进到 5 → 本断言变红。
-    expect(context.sockets.latest.sent.filter((m) => m.parsed["type"] === "sync.ack")).toHaveLength(0);
-    expect(context.connection.ackedCursor?.globalSequence).toBe("1");
+    // 反例：若仍按 `last + 1` 判缺口，这里会是 gap_detected + 一条待触发的重订阅 → 断言变红。
+    expect(context.events.some((event) => event.kind === "gap_detected")).toBe(false);
+    expect(context.clock.pendingTimers).toBe(0);
+    expect(presentedSequences(context)).toEqual(["5"]);
+    expect(context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.ack")).toHaveLength(1);
+    expect(context.connection.ackedCursor?.globalSequence).toBe("5");
   });
 });
 
-describe("MAJOR-1 / NEW-1：缺口恢复既补齐又必须有界", () => {
-  it("判 gap 后从最后确认游标重发 subscribe（不静默停摆）", async () => {
+describe("§9.3 判别力：重放 + 屏障 + scope 空洞", () => {
+  /**
+   * 主用例：一条真正按 §9.3 建模的服务端（收到 `sync.subscribe` → 重放可见事件 → 发
+   * `sync.caught_up` → 之后继续实时事件），设备侧存在因 scope 过滤而不可见的序号段。
+   *
+   * 事件库布局：
+   * - seq 1：上次会话已确认；
+   * - seq 2/3/4：因权限过滤对本设备**不可见**（§9.2 明文允许的常态）；
+   * - seq 5/6/7：可见，重放时投递；
+   * - seq 9：可见但服务端漏投（它随后发 `caught_up@9`，即**违反了自己的屏障声明**）。
+   */
+  it("每条服务端投递的可见事件都被呈现；合法空洞不触发重订阅；漏投可检出且能补齐", async () => {
     const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
-    await completeHandshake(context);
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "5", eventId: "aaaaaaaa-0000-4000-8000-000000000005" }));
-    // 重订阅带退避：先确认定时器确实在等，再推进时钟。
-    expect(context.clock.pendingTimers).toBe(1);
-    expect(context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.subscribe")).toHaveLength(1);
-    context.clock.advanceBy(250);
-
-    const subscribes = context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.subscribe");
-    expect(subscribes).toHaveLength(2);
-    // 恢复点必须是最后确认位置（seq 1），不是缺口后的 5，也不是 null。
-    expect((subscribes[1]?.parsed["body"] as { cursor: unknown }).cursor).toEqual({
-      serverEpoch: SERVER_EPOCH,
-      globalSequence: "1",
+    const server = attachReplayServer(context, {
+      visible: ["5", "6", "7", "9"],
+      head: "9",
+      withheld: new Set(["9"]),
     });
-    // 重订阅本身也必须是合法的出站序号（不能与上一条重复）。
-    expect(subscribes[1]?.parsed["connectionSequence"]).toBe("2");
+    await completeHandshake(context);
+    server.drain();
+
+    // (1) 服务端实际投递的 5/6/7 全部呈现：不存在「已投递但被丢弃」的事件。
+    //     反例：修复前这里是 presented=["8"]（5/6/7 被 gap 分支丢掉）→ 断言变红。
+    expect(presentedSequences(context)).toEqual(["5", "6", "7"]);
+    // (2) 2/3/4 的空洞不产生任何丢失判定，也不触发重订阅。
+    expect(context.events.filter((event) => event.kind === "gap_detected")).toHaveLength(0);
+    expect(context.clock.pendingTimers).toBe(0);
+    expect(server.subscribeCount()).toBe(1);
+    // (3) 屏障被采纳为权威水位（§9.5：不可见段也可以 ACK `caught_up.cursor`）。
+    expect(context.connection.ackedCursor).toEqual({ serverEpoch: SERVER_EPOCH, globalSequence: "9" });
+    expect(context.events.find((event) => event.kind === "online")).toMatchObject({
+      cursor: { globalSequence: "9" },
+    });
+
+    // (4) 屏障之后的实时事件继续正常呈现（事件流没有停摆）。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "11", eventId: eventIdFor("11") }));
+    expect(presentedSequences(context)).toEqual(["5", "6", "7", "11"]);
+
+    // (5) 事后让服务端重放 5/6/7：不重复呈现，也不丢。
+    server.replay();
+    server.drain();
+    expect(presentedSequences(context)).toEqual(["5", "6", "7", "11"]);
+    expect(context.events.filter((event) => event.kind === "duplicate_dropped")).toHaveLength(3);
+    expect(context.events.filter((event) => event.kind === "gap_detected")).toHaveLength(0);
+
+    // (6) 服务端把此前漏投的 9 补投过来：必须被检出（丢失区间证据）并**补齐呈现**。
+    //     反例：修复前这类事件被当作 duplicate 静默丢弃、永久不可恢复 → 断言变红。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "9", eventId: eventIdFor("9") }));
+    expect(presentedSequences(context)).toEqual(["5", "6", "7", "11", "9"]);
+    expect(context.events.filter((event) => event.kind === "gap_detected")).toEqual([
+      { kind: "gap_detected", expected: "11", received: "9" },
+    ]);
+    // 补齐后水位不动（未呈现过的序号不满足「已处理」），但从最后确认位置重新订阅去看是否还有漏投。
+    expect(context.connection.ackedCursor?.globalSequence).toBe("11");
+    expect(context.clock.pendingTimers).toBe(1);
+
+    // (7) 同一条再投一次是重复，不二次呈现。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "9", eventId: eventIdFor("9") }));
+    expect(presentedSequences(context)).toEqual(["5", "6", "7", "11", "9"]);
   });
 
-  it("重新订阅后从断点续传的事件可正常处理", async () => {
+  /**
+   * 退避预算（P1-B）：§9.3 要求服务端**每次**重放后都发 `caught_up`，所以「收到过 `caught_up`
+   * 就清零预算」会让预算每轮复位、退避恒为 250ms、`maxAttempts` 永远不可达。
+   *
+   * 事件库：seq 2/3/4 不可见；5/6/7 重放；10..15 可见但服务端违反屏障声明不投递，随后逐轮补投；
+   * 屏障固定停在 15，因此每一轮重订阅的 `caught_up` 都**不推进**水位。
+   */
+  it("水位不前进时预算不被 caught_up 清零：退避递增、到顶后上报并停止", async () => {
     const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
+    const server = attachReplayServer(context, {
+      visible: ["5", "6", "7", "10", "11", "12", "13", "14", "15"],
+      head: "15",
+      withheld: new Set(["10", "11", "12", "13", "14", "15"]),
+    });
     await completeHandshake(context);
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "9", eventId: "aaaaaaaa-0000-4000-8000-000000000009" }));
-    await waitUntil(() => context.events.some((event) => event.kind === "gap_detected"), "上报缺口");
-    context.clock.advanceBy(250);
+    server.drain();
+    expect(presentedSequences(context)).toEqual(["5", "6", "7"]);
+    expect(context.connection.ackedCursor?.globalSequence).toBe("15");
 
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }));
-
-    // 反例：若缺口后事件流停摆，这里会是 0 条 event → 断言变红。
-    expect(context.events.filter((event) => event.kind === "event")).toHaveLength(1);
-    expect(context.connection.ackedCursor?.globalSequence).toBe("2");
-  });
-
-  it("响应式服务端：每次收到 subscribe 就重放同一条事件时，重订阅次数必须有界", async () => {
-    // 这是 NEW-1 的判别力用例。替身此前的形态是「被动事件注入」，
-    // 于是「客户端主动重订阅 → 服务端重放 → 客户端再判 gap」这个闭环根本不存在。
-    // 这里把服务端建模成**响应式**：每收到一条 `sync.subscribe` 就按 §9.3 重放同一条可见事件。
-    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
-
-    const socket = context.sockets.latest;
-    const subscribes = (): number => socket.sent.filter((message) => message.parsed["type"] === "sync.subscribe").length;
-    // 服务端把收到的每条 subscribe 都重放成同一条可见事件（§9.3），闭环因此成立且永不自愈。
-    // 重放放在队列里而不是同步递归：真实 WSS 上消息异步到达，同步递归只会把「无界」
-    // 表现成爆栈，测不出次数。
-    //
-    // 包装必须在握手**之前**装上：认证后的首条 subscribe 同样是服务端重放的触发点，
-    // 漏掉它整条闭环就不会启动，用例会变成恒真。
-    let replaysQueued = 0;
-    const originalSend = socket.send.bind(socket);
-    socket.send = (text: string): void => {
-      originalSend(text);
-      const parsed: unknown = JSON.parse(text);
-      if (typeof parsed === "object" && parsed !== null && "type" in parsed && parsed.type === "sync.subscribe") {
-        replaysQueued += 1;
-      }
-    };
-    await completeHandshake(context);
-    // 客户端只确认到 seq 1，重放的是 seq 5 → 每次重放都判缺口。
-
-    // 服务端每轮最多重放 50 条，总共 60 轮：上限 3000 次重放，远大于修复前实测的
-    // 303 subscribe / 302 gap，但有界——修复前的问题是「客户端每收到一条就立刻再要一次」，
-    // 不设上限的话测试自身会 OOM 而非给出可读的失败数字。
-    const rounds = 60;
-    const perRoundCap = 50;
-    for (let round = 0; round < rounds; round += 1) {
-      for (let delivered = 0; delivered < perRoundCap && replaysQueued > 0; delivered += 1) {
-        replaysQueued -= 1;
-        socket.deliver(makeEvent({ globalSequence: "5", eventId: "aaaaaaaa-0000-4000-8000-000000000005" }));
-      }
-      await Promise.resolve();
-      context.clock.advanceBy(4000);
+    const delays = [250, 500, 1000, 2000, 4000];
+    const withheld = ["10", "11", "12", "13", "14"];
+    for (const [index, sequence] of withheld.entries()) {
+      context.sockets.latest.deliver(makeEvent({ globalSequence: sequence, eventId: eventIdFor(sequence) }));
+      expect(context.clock.pendingTimers).toBe(1);
+      // 退避确实在递增：提前 1ms 不触发，正点才触发。
+      const delayMs = delays[index] ?? 0;
+      context.clock.advanceBy(delayMs - 1);
+      expect(server.subscribeCount()).toBe(1 + index);
+      context.clock.advanceBy(1);
+      expect(server.subscribeCount()).toBe(2 + index);
+      // §9.3：重订阅后服务端重放（游标之上无新事件）+ 发 `caught_up@15`（水位不前进）。
+      server.drain();
+      // 恢复点必须是最后确认位置。
+      const subscribes = context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.subscribe");
+      expect((subscribes.at(-1)?.parsed["body"] as { cursor: unknown }).cursor).toEqual({
+        serverEpoch: SERVER_EPOCH,
+        globalSequence: "15",
+      });
     }
 
-    // 反例：若重订阅无上限，这里会是三位数（与 reviewer 的 303 同量级）→ 断言变红。
-    expect(subscribes()).toBeLessThanOrEqual(6);
-    // 到达上限后客户端彻底安静：既没有待触发的定时器，也不再向服务端要任何东西。
-    // （`gap_resubscribe_exhausted` 只在服务端**继续推送**缺口事件时才发，见下一条用例；
-    // 此处服务端已无请求可回应。）
+    // 第 6 条漏投事件：预算已到顶 → 上报可诊断原因，并且**真的不再重订阅**（不是只上报）。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "15", eventId: eventIdFor("15") }));
+    expect(context.events.some((event) => event.kind === "rejected" && event.reason === "gap_resubscribe_exhausted")).toBe(
+      true,
+    );
     expect(context.clock.pendingTimers).toBe(0);
-    // 事件流没有停摆的原因：这条事件本身被判成缺口（seq 5 vs 期望 2），
-    // 因此 0 条 event 呈现是**正确**的（R14「MUST NOT 出现丢失区间」不允许跳过它）。
-    expect(context.events.filter((event) => event.kind === "event")).toHaveLength(0);
+    expect(server.subscribeCount()).toBe(1 + delays.length);
+
+    // 安全网只停「重订阅」，不停「呈现」：到顶之后到达的可见事件仍必须补齐。
+    expect(presentedSequences(context)).toEqual(["5", "6", "7", "10", "11", "12", "13", "14", "15"]);
   });
 
-  it("caught_up 把账本推进到屏障后，下一条可见事件不再被判缺口（无界循环的根因被消除）", async () => {
+  it("屏障真正抬高水位时预算才复位，下一段抖动拿得到完整预算", async () => {
+    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
+    const server = attachReplayServer(context, {
+      visible: ["5", "6", "7", "10", "11", "12", "13", "14", "15"],
+      head: "15",
+      withheld: new Set(["10", "11", "12", "13", "14", "15"]),
+    });
+    await completeHandshake(context);
+    server.drain();
+
+    // 连续 6 条漏投事件把预算走完。
+    for (const sequence of ["10", "11", "12", "13", "14", "15"]) {
+      context.sockets.latest.deliver(makeEvent({ globalSequence: sequence, eventId: eventIdFor(sequence) }));
+      context.clock.advanceBy(4000);
+      server.drain();
+    }
+    expect(context.events.some((event) => event.kind === "rejected" && event.reason === "gap_resubscribe_exhausted")).toBe(
+      true,
+    );
+
+    // 服务端继续推进 head 并重放：这一次 `caught_up@40` **抬高了水位** → 预算复位。
+    server.setHead("40");
+    server.replay();
+    server.drain();
+    expect(context.connection.ackedCursor?.globalSequence).toBe("40");
+
+    // 新一段抖动拿得到完整预算（第 1 次就是 250ms）。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "39", eventId: eventIdFor("39") }));
+    expect(context.clock.pendingTimers).toBe(1);
+    context.clock.advanceBy(249);
+    expect(server.subscribeCount()).toBe(1 + 5);
+    context.clock.advanceBy(1);
+    expect(server.subscribeCount()).toBe(1 + 5 + 1);
+  });
+
+  it("caught_up 把账本推进到屏障后，下一条可见事件直接呈现（恢复通道与水位对齐）", async () => {
     // 触发条件不是边缘情况：§9.2/§9.5 明文允许存在因 scope 过滤而不可见的序号段。
     const context = setup();
+    await completeHandshake(context);
+    // 序号 100 之前的事件因权限过滤不可见（这是常态，不是异常）。
+    context.sockets.latest.deliver(caughtUp("100"));
+    // 屏障之后的**第一条可见事件**序号必然大于 100（中间有不可见段）。
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "101", eventId: eventIdFor("101") }));
+
+    // 反例：若账本不感知 caught_up（修复前），这里是 gap_detected 且 subscribe 会反复重发。
+    expect(context.events.filter((event) => event.kind === "gap_detected")).toHaveLength(0);
+    expect(presentedSequences(context)).toEqual(["101"]);
+    expect(context.connection.ackedCursor?.globalSequence).toBe("101");
+  });
+
+  it("跨 epoch 的 caught_up 不被采纳：不 ACK、不宣告 online、也不推进已确认游标", async () => {
+    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
     await completeHandshake(context);
     context.sockets.latest.deliver({
       protocolVersion: 1,
       type: "sync.caught_up",
-      messageId: "cccccccc-1111-4111-8111-000000000001",
+      messageId: "cccccccc-1111-4111-8111-000000000002",
       connectionId: CONNECTION_ID,
       connectionSequence: "1",
-      // 序号 100 之前的事件因权限过滤不可见（这是常态，不是异常）。
-      body: { cursor: { serverEpoch: SERVER_EPOCH, globalSequence: "100" } },
+      body: { cursor: { serverEpoch: "11111111-2222-4333-8444-555555555555", globalSequence: "500" } },
     });
-    // 屏障之后的**第一条可见事件**序号必然大于 100（中间有不可见段）。
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "101", eventId: "aaaaaaaa-0000-4000-8000-000000000101" }));
 
-    // 反例：若账本不感知 caught_up（修复前），这里是 gap_detected 且 subscribe 会反复重发。
-    expect(context.events.filter((event) => event.kind === "gap_detected")).toHaveLength(0);
-    expect(context.events.filter((event) => event.kind === "event")).toHaveLength(1);
-    expect(context.connection.ackedCursor?.globalSequence).toBe("101");
-  });
-
-  it("连续缺口达到上限后停止重订阅，并上报可诊断的原因", async () => {
-    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
-    await completeHandshake(context);
-    const subscribes = (): number =>
-      context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.subscribe").length;
-    const baseline = subscribes();
-
-    // 每次投一条不同 eventId 但同为 seq 5 的事件，制造补不齐的连续缺口。
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      context.sockets.latest.deliver(
-        makeEvent({
-          globalSequence: "5",
-          eventId: `bbbbbbbb-0000-4000-8000-${String(attempt).padStart(12, "0")}`,
-        }),
-      );
-      context.clock.advanceBy(4000);
-    }
-
-    // 反例：若没有上限（修复前实测 45 次 subscribe / 44 次 gap，一对一放大）。
-    expect(subscribes()).toBeLessThanOrEqual(baseline + 5);
-    expect(context.events.some((event) => event.kind === "rejected" && event.reason === "gap_resubscribe_exhausted")).toBe(true);
-  });
-
-  it("缺口补齐后重试预算清零，下一段抖动拿得到完整预算", async () => {
-    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
-    await completeHandshake(context);
-    // 先耗尽预算。
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      context.sockets.latest.deliver(
-        makeEvent({
-          globalSequence: "5",
-          eventId: `cccccccc-0000-4000-8000-${String(attempt).padStart(12, "0")}`,
-        }),
-      );
-      context.clock.advanceBy(4000);
-    }
-    expect(context.events.some((event) => event.kind === "rejected" && event.reason === "gap_resubscribe_exhausted")).toBe(true);
-
-    // 服务端补发缺的那一条 → 缺口补齐。
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }));
-    expect(context.events.filter((event) => event.kind === "event")).toHaveLength(1);
-
-    // 新一轮抖动：预算已重置，第 1 次就能重新订阅。
-    context.sockets.latest.deliver(makeEvent({ globalSequence: "9", eventId: "dddddddd-0000-4000-8000-000000000009" }));
-    expect(context.clock.pendingTimers).toBe(1);
+    // 反例：账本拒绝（epoch 不可比）而连接侧仍照单采纳，会让外来游标覆盖真实恢复点 → 断言变红。
+    expect(context.connection.ackedCursor?.globalSequence).toBe("1");
+    expect(context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.ack")).toHaveLength(0);
+    expect(context.events.some((event) => event.kind === "online")).toBe(false);
+    expect(context.events.some((event) => event.kind === "rejected" && event.reason === "caught_up_epoch_mismatch")).toBe(
+      true,
+    );
   });
 });
 

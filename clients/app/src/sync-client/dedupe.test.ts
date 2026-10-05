@@ -4,8 +4,8 @@
  * 判别力来源：
  * - 把去重键换成连接序号 → 「同一 eventId 不同 messageId」用例变红；
  * - 把去重键换成 `messageId` → 同上（WSS 信封 ID 每次重连都变）；
- * - 去掉缺口判定 → 「序号跳跃」用例变红；
- * - 把「序号已处理过」当作新事件 → 「重复事件不推进游标」用例变红。
+ * - 重新引入「序号必须连续 ⇒ 丢失」的判定 → 「scope 过滤造成的空洞」用例变红；
+ * - 把「水位之下未见过」直接判重复 → 「真实丢失仍可检出」用例变红（静默丢失）。
  */
 
 import { describe, expect, it } from "vitest";
@@ -44,29 +44,35 @@ describe("R14：按 eventId 去重", () => {
     expect(evaluate(ledger, second)).toEqual({ kind: "duplicate" });
   });
 
-  it("去重键不是连接序号：序号相同但 eventId 不同仍判重复", () => {
+  it("去重键不是序号：序号相同但 eventId 不同不是重复事件，按丢失证据补齐", () => {
     const ledger = new EventLedger({ serverEpoch: EPOCH });
     const first = makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000001" });
     const second = makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000002" });
 
     expect(evaluate(ledger, first)).toEqual({ kind: "new" });
-    // 反例：若键是 `globalSequence`，第二条会被当新事件 → 断言变红。
-    expect(evaluate(ledger, second)).toEqual({ kind: "duplicate" });
+    // 同一个序号、不同 eventId = 服务端复用了一个事件位。§9.3 的屏障声明过「这条之前都已交付」，
+    // 因此这是**另一条**从未交付的事件，不是第一条的重投。
+    // 反例：若按序号去重（判 duplicate 丢弃），这条事件就永久丢了 → 断言变红。
+    expect(ledger.evaluate(second)).toEqual({ kind: "late", watermark: "1", received: "1" });
   });
 });
 
-describe("R14：连续性与丢失区间", () => {
-  it("从续接游标起步：第一条必须是游标的下一条", () => {
+describe("R14：scope 过滤造成的空洞不是丢失", () => {
+  it("续接游标之后的序号跳跃直接接受，不判缺口也不要求补齐", () => {
     const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "10" } });
     expect(ledger.cursor?.globalSequence).toBe("10");
 
+    // §9.2：「全局 sequence 对单个设备可以有不可见的空洞，不能据此推断隐藏事件。」
+    // 反例：若仍按 `last + 1` 判缺口，这里会返回 gap → 断言变红。
     expect(evaluate(ledger, makeEvent({ globalSequence: "12", eventId: "aaaaaaaa-0000-4000-8000-000000000012" }))).toEqual({
-      kind: "gap",
-      expected: "11",
-      received: "12",
-    });
-    expect(evaluate(ledger, makeEvent({ globalSequence: "11", eventId: "aaaaaaaa-0000-4000-8000-000000000011" }))).toEqual({
       kind: "new",
+    });
+    expect(ledger.cursor?.globalSequence).toBe("12");
+    // 空洞的那条若后来补投，它落在水位之下 → 判 `late`（真实丢失证据），而不是被静默丢弃。
+    expect(ledger.evaluate(makeEvent({ globalSequence: "11", eventId: "aaaaaaaa-0000-4000-8000-000000000011" }))).toEqual({
+      kind: "late",
+      watermark: "12",
+      received: "11",
     });
   });
 
@@ -84,7 +90,7 @@ describe("R14：连续性与丢失区间", () => {
     expect(ledger.seenCount).toBe(1);
   });
 
-  it("首次同步从序号 1 开始；不从 1 开始判缺口", () => {
+  it("首次同步：没有水位时任何序号都直接接受", () => {
     const ledger = new EventLedger({ serverEpoch: EPOCH });
     expect(evaluate(ledger, makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000001" }))).toEqual({
       kind: "new",
@@ -100,22 +106,35 @@ describe("R14：连续性与丢失区间", () => {
     });
   });
 
-  it("缺口不推进游标，后续补齐后可继续", () => {
+  it("水位之下未呈现过的事件判 late；补齐后水位不动，再投判重复", () => {
     const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "1" } });
-    expect(evaluate(ledger, makeEvent({ globalSequence: "3", eventId: "aaaaaaaa-0000-4000-8000-000000000003" }))).toEqual({
-      kind: "gap",
-      expected: "2",
-      received: "3",
-    });
-    expect(ledger.cursor?.globalSequence).toBe("1");
+    // 服务端声明过「1..10 都已交付」，随后补投其中一条 → 真实的丢失区间证据。
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "10" })).toEqual({ kind: "advanced" });
+    const missed = makeEvent({ globalSequence: "4", eventId: "aaaaaaaa-0000-4000-8000-000000000004" });
 
-    expect(evaluate(ledger, makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }))).toEqual({
+    // 反例：若判 duplicate 丢弃，这条事件永久不可恢复 → 断言变红。
+    expect(ledger.evaluate(missed)).toEqual({ kind: "late", watermark: "10", received: "4" });
+    // 补齐呈现后水位仍停在屏障：§9.5 的 ACK 是「最高已连续处理的可见事件 cursor」，
+    // 未呈现过的序号不满足「已处理」。
+    ledger.commit(missed);
+    expect(ledger.cursor?.globalSequence).toBe("10");
+    expect(ledger.seenCount).toBe(1);
+    // 再次重投同一条 → 判重复，不二次呈现。
+    expect(ledger.evaluate(missed)).toEqual({ kind: "duplicate" });
+  });
+
+  it("水位之下的乱序投递同样判 late：服务端不能靠倒序把事件塞过检测", () => {
+    const ledger = new EventLedger({ serverEpoch: EPOCH });
+    expect(evaluate(ledger, makeEvent({ globalSequence: "8", eventId: "aaaaaaaa-0000-4000-8000-000000000008" }))).toEqual({
       kind: "new",
     });
-    expect(evaluate(ledger, makeEvent({ globalSequence: "3", eventId: "aaaaaaaa-0000-4000-8000-000000000003" }))).toEqual({
-      kind: "new",
+    // 屏障尚未到达时先收到更旧的 5：这不是 scope 空洞（空洞只能是服务端不投递），
+    // 而是一次真实的乱序投递，客户端必须记住它而不是按连续性丢在门外。
+    expect(ledger.evaluate(makeEvent({ globalSequence: "5", eventId: "aaaaaaaa-0000-4000-8000-000000000005" }))).toEqual({
+      kind: "late",
+      watermark: "8",
+      received: "5",
     });
-    expect(ledger.cursor?.globalSequence).toBe("3");
   });
 });
 
@@ -126,7 +145,8 @@ describe("去重窗口有界", () => {
       expect(evaluate(ledger, makeEvent({ globalSequence: String(index), eventId: `aaaaaaaa-0000-4000-8000-${String(index).padStart(12, "0")}` }))).toEqual({ kind: "new" });
     }
     expect(ledger.seenCount).toBe(3);
-    // 被淘汰的第一条重投时靠「序号已处理过」判为重复，而不是被当新事件。
+    // 被淘汰的第一条重投时落在「已释放的记忆段」里：既无法回忆它是否呈现过，也就不把它当成
+    // 新的丢失区间去补齐呈现——窗口只约束记忆，不约束正确性。
     expect(evaluate(ledger, makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000001" }))).toEqual({
       kind: "duplicate",
     });
@@ -168,36 +188,60 @@ describe("imported 事件 ID 一致性（§9.6）", () => {
   });
 });
 
-describe("NEW-1：账本接受服务端屏障游标", () => {
-  it("推进到屏障后，屏障之上的真缺口仍被判缺口", () => {
+describe("屏障是权威水位（§9.3/§9.4/§9.5）", () => {
+  it("采纳屏障后，屏障之上的序号跳跃仍直接接受（空洞不是丢失）", () => {
     const ledger = new EventLedger({ serverEpoch: EPOCH });
     // 屏障 100：序号 1..100 之中可能有过滤掉的不可见段（§9.2/§9.5 明确允许）。
-    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toBe(true);
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toEqual({ kind: "advanced" });
     expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "100" });
 
-    // 屏障之上仍有缺口：屏障不是「关闭缺口检测」的开关。
-    // 反例：若 advanceTo 把水位写成无限大或跳过连续性判定，这里会是 new → 断言变红。
-    expect(ledger.evaluate(makeEvent({ globalSequence: "103", eventId: "aaaaaaaa-0000-4000-8000-000000000103" }))).toEqual({
-      kind: "gap",
-      expected: "101",
-      received: "103",
-    });
-    // 屏障之后紧接的那条才是 new。
-    expect(ledger.evaluate(makeEvent({ globalSequence: "101", eventId: "aaaaaaaa-0000-4000-8000-000000000101" }))).toEqual({
+    // 屏障之下未投递的空洞已被服务端消解；屏障之上到达的可见事件同样不必连续。
+    expect(evaluate(ledger, makeEvent({ globalSequence: "103", eventId: "aaaaaaaa-0000-4000-8000-000000000103" }))).toEqual({
       kind: "new",
     });
+    expect(ledger.cursor?.globalSequence).toBe("103");
   });
 
-  it("只前进不后退：更旧的屏障不得让水位回退", () => {
-    const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "500" } });
-    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toBe(false);
-    expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "500" });
+  it("重复或更旧的屏障是 already_covered：水位不动，且与 advanced 区分开", () => {
+    const ledger = new EventLedger({ serverEpoch: EPOCH });
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toEqual({ kind: "advanced" });
+    // 连接层据此判断「恢复通道是否真的推进了水位」；把二者混为一谈会让退避上限不可达。
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "100" })).toEqual({ kind: "already_covered" });
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "40" })).toEqual({ kind: "already_covered" });
+    expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "100" });
   });
 
   it("跨 epoch 的屏障被拒绝（事件库已重建，序号不可比）", () => {
     const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "7" } });
-    expect(ledger.advanceTo({ serverEpoch: "11111111-2222-4333-8444-555555555555", globalSequence: "99999" })).toBe(false);
+    expect(ledger.advanceTo({ serverEpoch: "11111111-2222-4333-8444-555555555555", globalSequence: "99999" })).toEqual({
+      kind: "rejected",
+      reason: "epoch_mismatch",
+    });
     // 反例：若强行采用不相干的游标，真实水位会被一段无关序号覆盖。
     expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "7" });
+  });
+
+  it("越界与形状非法的屏障被拒绝：故障服务端不得把水位推到无法自愈的位置", () => {
+    const ledger = new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "7" } });
+    // `decodeCaughtUp` 只做 Cursor 形状检查，不查上界，因此上界必须由账本自己守住。
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "999999999999999999999" })).toEqual({
+      kind: "rejected",
+      reason: "sequence_out_of_range",
+    });
+    expect(ledger.advanceTo({ serverEpoch: EPOCH, globalSequence: "-5" })).toEqual({
+      kind: "rejected",
+      reason: "malformed_sequence",
+    });
+    // 反例：越界屏障被采纳后，此后每条真实事件都落在水位之下 → 事件流静默停摆且无法自愈。
+    expect(ledger.cursor).toEqual({ serverEpoch: EPOCH, globalSequence: "7" });
+    expect(ledger.evaluate(makeEvent({ globalSequence: "8", eventId: "aaaaaaaa-0000-4000-8000-000000000008" }))).toEqual({
+      kind: "new",
+    });
+  });
+
+  it("形状非法的续接游标在构造期就响亮地失败，不静默退化成无游标", () => {
+    expect(
+      () => new EventLedger({ serverEpoch: EPOCH, resumeFrom: { serverEpoch: EPOCH, globalSequence: "0x10" } }),
+    ).toThrow(/malformed_sequence/);
   });
 });
