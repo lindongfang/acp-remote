@@ -307,6 +307,8 @@ export function makeChallenge(input: {
 export function makeAuthenticated(input: {
   readonly connectionId: Uuid;
   readonly deviceId?: Uuid;
+  /** 服务端方向的计数器值；用于断言客户端**不**抄服务端的序号。 */
+  readonly serverConnectionSequence?: string;
   readonly serverEpoch?: Uuid;
 }): AuthAuthenticated {
   return {
@@ -314,7 +316,7 @@ export function makeAuthenticated(input: {
     type: "auth.authenticated",
     messageId: "8a536862-9a18-4766-b4ce-a2e478734980",
     connectionId: input.connectionId,
-    connectionSequence: "1",
+    connectionSequence: input.serverConnectionSequence ?? "1",
     body: {
       deviceId: input.deviceId ?? "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
       scopes: ["session.list", "session.read"],

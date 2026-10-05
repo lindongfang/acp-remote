@@ -172,10 +172,17 @@ export function applyStatusRecord(
  *
  * 返回的记录**必须** `requestId` 不变而 `dispatchCount` 递增——这正是「不得为同一意图
  * 生成新标识」的可核对落点。
+ *
+ * `accepted` 同样拒绝重试：服务端已经确认接受过这条命令，把它推回 `submitting`
+ * 会让 `mayDisplayAsAccepted` 变 false，用户从「已接受」闪回「等待服务器确认」——
+ * 那是**本地**回退了一个服务端结论。终态之后只能靠 `command.status` 查询，不靠重发。
  */
 export function retrySameRequest(record: CommandRecord): CommandRecord {
   if (isTerminalState(record.state)) {
     throw new Error(`命令 ${record.requestId} 已终结为 ${record.state}，不可重试`);
+  }
+  if (record.state === "accepted") {
+    throw new Error(`命令 ${record.requestId} 已被服务器接受，不可重试（改用 command.status 查询）`);
   }
   return { ...record, state: "submitting", dispatchCount: record.dispatchCount + 1 };
 }

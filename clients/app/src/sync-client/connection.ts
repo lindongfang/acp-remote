@@ -30,7 +30,6 @@ import type {
   SyncSnapshotBegin,
   SyncSnapshotChunk,
   SyncSnapshotEnd,
-  SyncSubscribe,
   SyncWireMessage,
   Uuid,
 } from "../protocol";
@@ -47,7 +46,7 @@ import type {
   SocketPort,
   TranscriptCodec,
 } from "./ports";
-import { SnapshotStaging, SnapshotValidationError, type VerifiedSnapshot } from "./snapshot";
+import { SnapshotStaging, SnapshotValidationError, type SnapshotDiscardReason, type VerifiedSnapshot } from "./snapshot";
 
 /** 本实现的协议版本（`schemas/sync/v1` 的 `const 1`）。 */
 const PROTOCOL_VERSION = 1;
@@ -175,7 +174,14 @@ export class SyncConnection {
   /** 已加载的设备身份材料（握手期间缓存，避免每条消息重复读 IndexedDB）。 */
   #identityMaterial: DeviceIdentityMaterial | null = null;
   #connectionId: Uuid | null = null;
-  #connectionSequence = 0;
+  /**
+   * 客户端方向的 `connectionSequence` 计数器（§4.1）。
+   *
+   * 认证完成后每条出站消息都必须带它，且从 `1` 开始**严格加一**；两个方向各自维护，
+   * 因此这里既不能抄服务端 `auth.authenticated` 里的序号（那是服务端方向的计数器），
+   * 也不能让认证前的消息消耗它（§4.1 要求认证前省略该字段）。
+   */
+  #outboundSequence = 0;
   /** 本连接的认证结果（scopes 与限额据此生效）。 */
   #authenticated: AuthenticatedInfo | null = null;
   /**
@@ -248,9 +254,9 @@ export class SyncConnection {
     this.#socket.close(code, reason);
   }
 
-  /** 丢弃未完成的暂存快照（`sync.reset_required` 与断线都要调）。 */
-  discardStaging(): void {
-    this.#staging.discard("reset_required");
+  /** 丢弃未完成的暂存快照；`reason` 记录「为什么这次快照没提交」（§9.4）。 */
+  discardStaging(reason: SnapshotDiscardReason = "reset_required"): void {
+    this.#staging.discard(reason);
   }
   /** 读取并缓存设备身份材料；本连接只读一次（读一次即可覆盖整个握手）。 */
   async #loadIdentityMaterial(): Promise<DeviceIdentityMaterial | null> {
@@ -367,17 +373,27 @@ export class SyncConnection {
     this.#connectionId = message.connectionId;
     // 账本的 epoch 必须来自本次认证结果；换 epoch 即意味着必须重建快照。
     this.#ledger = this.#options.ledgerFor(message.body.serverEpoch);
-    const subscribe: SyncSubscribe = {
+    this.#sendSubscribe();
+    this.#onEvent({ kind: "authenticated", info: message.body });
+    this.#onEvent({ kind: "replaying", cursor: this.#acked });
+  }
+
+  /**
+   * 从最后确认游标发出 `sync.subscribe`。
+   *
+   * 认证后首次订阅与「序号缺口后的恢复」走**同一条**路径：两者都要从 `#acked` 重新订阅，
+   * 区别只在于游标是否为空。缺口恢复必须真的重发，否则事件流会静默停摆（R14「连续恢复」）。
+   */
+  #sendSubscribe(): void {
+    this.#send({
       protocolVersion: PROTOCOL_VERSION,
       type: "sync.subscribe",
       messageId: this.#random.uuid(),
-      connectionId: message.connectionId,
-      connectionSequence: message.connectionSequence,
+      connectionId: this.#requireConnectionId(),
+      // 客户端方向自己的计数器（§4.1），不抄服务端信封里的序号。
+      connectionSequence: this.#nextOutboundSequence(),
       body: { cursor: this.#acked, scope: "machine" },
-    };
-    this.#send(subscribe);
-    this.#onEvent({ kind: "authenticated", info: message.body });
-    this.#onEvent({ kind: "replaying", cursor: this.#acked });
+    });
   }
 
   // ── 入站分派 ──────────────────────────────────────────────────────────────
@@ -423,7 +439,7 @@ export class SyncConnection {
           type: "control.pong",
           messageId: this.#random.uuid(),
           connectionId: this.#requireConnectionId(),
-          connectionSequence: String(this.#connectionSequence),
+          connectionSequence: this.#nextOutboundSequence(),
           body: { nonce: message.body.nonce },
         });
         return;
@@ -459,6 +475,9 @@ export class SyncConnection {
     }
     if (verdict.kind === "gap") {
       this.#onEvent({ kind: "gap_detected", expected: verdict.expected, received: verdict.received });
+      // 缺口必须**真的**恢复：只上报而不重新订阅，事件流会静默停摆，
+      // 此后每条事件都判 gap（R14「从最后确认的位置连续恢复」）。
+      this.#sendSubscribe();
       return;
     }
     const cursor = ledger.commit(message);
@@ -488,7 +507,7 @@ export class SyncConnection {
         type: "sync.snapshot_request",
         messageId: this.#random.uuid(),
         connectionId: this.#requireConnectionId(),
-        connectionSequence: String(this.#connectionSequence),
+        connectionSequence: this.#nextOutboundSequence(),
         body: { reason: message.body.reason },
       });
     }
@@ -555,7 +574,7 @@ export class SyncConnection {
       this.#onEvent({ kind: "closed", code, retryable: false });
       return;
     }
-    this.discardStaging();
+    this.discardStaging("connection_closed");
     const blocked = blockCauseForCloseCode(code);
     if (blocked !== null) {
       this.#onEvent({ kind: "blocked", cause: blocked, code });
@@ -567,16 +586,26 @@ export class SyncConnection {
 
   #block(cause: ClientBlockCause, code: number): void {
     this.#closed = true;
-    this.#staging.discard("reset_required");
+    this.#staging.discard("connection_blocked");
     this.#onEvent({ kind: "blocked", cause, code });
     this.#socket.close(code, cause);
   }
 
   // ── 出站 ────────────────────────────────────────────────────────────────
 
-  /** 派发一条命令（稳定 `requestId` 由调用方给出，重试复用同一 ID）。 */
+  /**
+   * 派发一条命令（稳定 `requestId` 由调用方给出，重试复用同一 ID）。
+   *
+   * 信封的 `connectionSequence` 在这里**覆盖**成客户端方向计数器的下一个值：命令的出站
+   * 序号属于连接层的事，调用方构造的命令体不该也不需要自己维护计数器。未认证时不覆盖——
+   * 此时 §4.1 要求省略该字段，调用方给什么就发什么。
+   */
   sendCommand(command: CommandMessage): void {
-    this.#send(command);
+    if (this.#connectionId === null) {
+      this.#send(command);
+      return;
+    }
+    this.#send({ ...command, connectionSequence: this.#nextOutboundSequence() });
   }
 
   /** ACK 只能前进：回退值被忽略并记录诊断（§9.5）。 */
@@ -593,10 +622,16 @@ export class SyncConnection {
       type: "sync.ack",
       messageId: this.#random.uuid(),
       connectionId: this.#requireConnectionId(),
-      connectionSequence: String(this.#connectionSequence),
+      connectionSequence: this.#nextOutboundSequence(),
       body: { cursor },
     };
     this.#send(ack);
+  }
+
+  /** 取客户端方向的下一个出站序号（从 `1` 开始严格加一，§4.1）。 */
+  #nextOutboundSequence(): string {
+    this.#outboundSequence += 1;
+    return String(this.#outboundSequence);
   }
 
   #send(message: SyncWireMessage): void {

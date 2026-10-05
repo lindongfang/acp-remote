@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { SyncClient } from "./client";
 import type { SyncClientEvent } from "./connection";
-import type { CommandMessage, Uuid } from "../protocol";
+import type { CommandMessage, Cursor, Uuid } from "../protocol";
 import {
   FakeHostIdentity,
   FakeIdentity,
@@ -24,6 +24,7 @@ import {
   makeAuthenticated,
   makeChallenge,
   makeCommandResult,
+  makeEvent,
   makeSnapshotBegin,
   makeSnapshotChunk,
   makeSnapshotEnd,
@@ -56,8 +57,8 @@ interface ClientHarness {
   readonly events: SyncClientEvent[];
 }
 
-/** 建一个已认证的面门替身环境。 */
-function buildClient(): ClientHarness {
+/** 建一个未连接的门面替身环境；`resumeCursor` 模拟「上次持久化的确认游标」。 */
+function buildClient(input: { readonly resumeCursor?: Cursor | null } = {}): ClientHarness {
   const sockets = new FakeSocketFactory();
   const events: SyncClientEvent[] = [];
   const client = new SyncClient({
@@ -69,7 +70,7 @@ function buildClient(): ClientHarness {
     transcript: new FakeTranscript(),
     digest: fakeDigest(),
     openSocket: sockets.open,
-    resumeCursor: null,
+    resumeCursor: input.resumeCursor ?? null,
     onEvent: (event) => {
       events.push(event);
     },
@@ -78,14 +79,19 @@ function buildClient(): ClientHarness {
   return { client, sockets, events };
 }
 
+/** `auth.authenticated` 的默认 serverEpoch。 */
+const SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
+
+/** 对**当前最近建立**的连接跑完握手（重连用例用它驱动第二条连接）。 */
 async function authenticate(context: ClientHarness): Promise<void> {
   context.client.connect();
-  context.sockets.latest.open();
-  await waitUntil(() => context.sockets.latest.types().includes("auth.client_hello"), "发出 clientHello");
-  context.sockets.latest.deliver(makeChallenge({ connectionId: CONNECTION_ID }));
-  await waitUntil(() => context.sockets.latest.types().includes("auth.client_proof"), "发出 clientProof");
-  context.sockets.latest.deliver(makeAuthenticated({ connectionId: CONNECTION_ID }));
-  await waitUntil(() => context.sockets.latest.types().includes("sync.subscribe"), "发出 subscribe");
+  const socket = context.sockets.latest;
+  socket.open();
+  await waitUntil(() => socket.types().includes("auth.client_hello"), "发出 clientHello");
+  socket.deliver(makeChallenge({ connectionId: CONNECTION_ID }));
+  await waitUntil(() => socket.types().includes("auth.client_proof"), "发出 clientProof");
+  socket.deliver(makeAuthenticated({ connectionId: CONNECTION_ID, serverEpoch: SERVER_EPOCH }));
+  await waitUntil(() => socket.types().includes("sync.subscribe"), "发出 subscribe");
 }
 
 /** 造一条 `session.prompt` 命令。 */
@@ -275,5 +281,150 @@ describe("R14：门面只在快照验证通过后替换", () => {
 
     // 反例：若 reset 不丢弃暂存区，这份快照会被验证通过并替换仓库 → 断言变红。
     expect(context.client.snapshots.current).toBeNull();
+  });
+});
+
+describe("CRITICAL-1：socket 级 burst 下的多 chunk 快照", () => {
+  it("三个 chunk 背靠背投递（不逐个 await）仍能完成并替换仓库", async () => {
+    const context = buildClient();
+    await authenticate(context);
+    const socket = context.sockets.latest;
+
+    socket.deliver(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 3 }));
+    const chunks = [
+      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM }),
+      makeSnapshotChunk({
+        snapshotId: SNAPSHOT_ID,
+        chunkIndex: "1",
+        resource: "workspaces",
+        items: [{ alias: "api", displayName: "API" }],
+      }),
+      makeSnapshotChunk({
+        snapshotId: SNAPSHOT_ID,
+        chunkIndex: "2",
+        resource: "agents",
+        items: [{ agentId: "claude", displayName: "Claude", default: true }],
+      }),
+    ];
+    // WSS 的真实投递形态：三条 chunk 连着下来，中间**没有**任何 await 把它们拆开。
+    for (const chunk of chunks) socket.deliver(chunk.rawText);
+    socket.deliver(
+      makeSnapshotEnd({
+        snapshotId: SNAPSHOT_ID,
+        chunkCount: 3,
+        digest: expectedSnapshotDigest(chunks.map((chunk) => chunk.rawText)),
+      }),
+    );
+    await waitUntil(() => context.client.snapshots.current !== null, "快照进入仓库");
+
+    const current = context.client.snapshots.current;
+    expect(current?.resources.sessions).toHaveLength(1);
+    expect(current?.resources.workspaces).toHaveLength(1);
+    expect(current?.resources.agents).toHaveLength(1);
+    // 反例：若 chunk 处理在摘要的 await 处交错，chunk 1 会读到未推进的 receivedChunks
+    // 被判 chunk_out_of_order 并 discard → 这里会出现 rejected 且仓库仍为 null → 断言变红。
+    expect(context.events.filter((event) => event.kind === "rejected")).toEqual([]);
+  });
+});
+
+describe("CRITICAL-2：重连后账本与去重不得重置", () => {
+  it("连接 → 断 → 重连 → 重投已见事件判重复，且从最后确认位置续传", async () => {
+    const context = buildClient();
+    await authenticate(context);
+    const first = context.sockets.latest;
+
+    const seq1 = makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000001" });
+    const seq2 = makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" });
+    first.deliver(seq1);
+    first.deliver(seq2);
+    await waitUntil(() => context.events.filter((event) => event.kind === "event").length === 2, "处理两条事件");
+
+    // 服务端异常断开（非阻断），状态层随后调用 connect()。
+    first.serverClose(1006, "abnormal");
+    await authenticate(context);
+    const second = context.sockets.latest;
+    expect(second).not.toBe(first);
+
+    // 重连必须从最后确认位置（seq 2）续传，而不是从无游标开始。
+    const subscribe = second.last("sync.subscribe");
+    expect((subscribe?.["body"] as { cursor: unknown }).cursor).toEqual({
+      serverEpoch: SERVER_EPOCH,
+      globalSequence: "2",
+    });
+
+    // 服务端在切换窗口里重投第一条：必须判重复，不得二次呈现。
+    second.deliver(seq1);
+    await waitUntil(
+      () => context.events.filter((event) => event.kind === "duplicate_dropped").length === 1,
+      "重投判重复",
+    );
+    expect(context.events.filter((event) => event.kind === "event")).toHaveLength(2);
+  });
+
+  it("重连后首个事件序号远大于 1 时不得判成缺口（续传起点不是 1）", async () => {
+    // 上次持久化的确认游标在 2317：本次连接处理 2318，断线后服务端从 2319 续发。
+    const context = buildClient({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "2317" } });
+    await authenticate(context);
+    context.sockets.latest.deliver(
+      makeEvent({ globalSequence: "2318", eventId: "aaaaaaaa-0000-4000-8000-000000002318" }),
+    );
+    await waitUntil(() => context.events.some((event) => event.kind === "event"), "处理高序号事件");
+
+    context.sockets.latest.serverClose(1006, "abnormal");
+    await authenticate(context);
+
+    // 服务端从最后确认位置续发 2319。
+    context.sockets.latest.deliver(
+      makeEvent({ globalSequence: "2319", eventId: "aaaaaaaa-0000-4000-8000-000000002319" }),
+    );
+    await waitUntil(() => context.events.filter((event) => event.kind === "event").length === 2, "续传事件被处理");
+
+    // 反例：若账本在认证时被重建（resumeFrom=null），2319 会要求首条恰为 1 → 判 gap → 断言变红。
+    expect(context.events.some((event) => event.kind === "gap_detected")).toBe(false);
+  });
+});
+
+describe("CRITICAL-3：客户端方向出站序号", () => {
+  it("认证后的出站消息序号从 1 开始严格递增，且不抄服务端计数器", async () => {
+    const context = buildClient();
+    context.client.connect();
+    const socket = context.sockets.latest;
+    socket.open();
+    await waitUntil(() => socket.types().includes("auth.client_hello"), "发出 clientHello");
+    socket.deliver(makeChallenge({ connectionId: CONNECTION_ID }));
+    await waitUntil(() => socket.types().includes("auth.client_proof"), "发出 clientProof");
+    // 服务端方向的计数器给一个显眼的值：客户端若抄它，第一条 subscribe 就会是 42。
+    socket.deliver(makeAuthenticated({ connectionId: CONNECTION_ID, serverConnectionSequence: "42" }));
+    await waitUntil(() => socket.types().includes("sync.subscribe"), "发出 subscribe");
+
+    socket.deliver(makeEvent({ globalSequence: "1", eventId: "aaaaaaaa-0000-4000-8000-000000000001" }));
+    socket.deliver(makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }));
+    context.client.dispatch(promptCommand(REQUEST_ID));
+    await waitUntil(() => socket.types().includes("sync.ack"), "发出 ACK");
+
+    const afterAuth = socket.sent
+      .filter((message) => message.parsed["connectionId"] !== undefined)
+      .map((message) => `${String(message.parsed["type"])}:${String(message.parsed["connectionSequence"])}`);
+    // 反例：若 subscribe 抄服务端序号（42）→ 第一项变 subscribe:42 → 断言变红。
+    expect(afterAuth[0]).toBe("sync.subscribe:1");
+    // 反例：若计数器恒为 0 或不递增 → 这里会出现重复或 0 → 断言变红。
+    expect(afterAuth.map((entry) => entry.split(":")[1])).toEqual(
+      afterAuth.map((_entry, index) => String(index + 1)),
+    );
+  });
+
+  it("认证前的两条消息不带 connectionSequence（§4.1）", async () => {
+    const context = buildClient();
+    context.client.connect();
+    const socket = context.sockets.latest;
+    socket.open();
+    await waitUntil(() => socket.types().includes("auth.client_hello"), "发出 clientHello");
+
+    for (const type of ["auth.client_hello", "auth.client_proof"]) {
+      const message = socket.last(type);
+      expect(message?.["connectionSequence"]).toBeUndefined();
+      expect(message?.["connectionId"]).toBeUndefined();
+    }
+    void context;
   });
 });

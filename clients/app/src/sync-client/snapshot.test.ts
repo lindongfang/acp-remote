@@ -257,7 +257,7 @@ describe("D1：会话明细资源不得进入快照", () => {
 });
 
 describe("暂存丢弃原因", () => {
-  it("discard 接受全部六个结构化原因且不抛错", () => {
+  it("discard 接受全部结构化原因且不抛错", () => {
     const staging = new SnapshotStaging(fakeDigest());
     const reasons: readonly SnapshotDiscardReason[] = [
       "reset_required",
@@ -267,11 +267,88 @@ describe("暂存丢弃原因", () => {
       "cursor_mismatch",
       "digest_mismatch",
       "snapshot_id_mismatch",
+      "connection_closed",
+      "connection_blocked",
     ];
     for (const reason of reasons) {
       staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
       staging.discard(reason);
+      // 原因必须被记录，否则「为什么没提交」不可观测。
+      expect(staging.lastDiscardReason).toBe(reason);
       expect(staging.hasPending).toBe(false);
     }
+  });
+});
+
+describe("CRITICAL-1：burst 投递下的 chunk 摄入", () => {
+  it("三个 chunk 不经 await 连着投递仍按 index 收齐并验证通过", async () => {
+    const digest = fakeDigest();
+    const staging = new SnapshotStaging(digest);
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 3 }));
+
+    const chunks = [
+      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM }),
+      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ alias: "api", displayName: "API" }] }),
+      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "2", resource: "agents", items: [{ agentId: "claude", displayName: "Claude", default: true }] }),
+    ];
+    // 不逐个 await：模拟同一条 WSS 上的背靠背投递。
+    const accepted = chunks.map((chunk) => staging.acceptChunk(chunk.rawText, chunk.message));
+    await Promise.all(accepted);
+
+    // 反例：若序号推进被摘要的 await 隔开，chunk 1 会读到未推进的 receivedChunks
+    // → chunk_out_of_order 且暂存区被清空 → 下面的 complete 抛错 → 断言变红。
+    const verified = await staging.complete(
+      makeSnapshotEnd({
+        snapshotId: SNAPSHOT_ID,
+        chunkCount: 3,
+        digest: expectedSnapshotDigest(chunks.map((chunk) => chunk.rawText)),
+      }),
+    );
+    expect(verified.receivedChunks).toBe(3);
+    expect(verified.resources.agents).toHaveLength(1);
+  });
+
+  it("摘要按 chunkIndex 连接，与完成顺序无关", async () => {
+    // 反例：若摘要按完成顺序追加（例如统一 await 之后再 push），摘要链会错位 → 断言变红。
+    const digest = fakeDigest();
+    const staging = new SnapshotStaging(digest);
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 2 }));
+    const first = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+    const second = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ alias: "api", displayName: "API" }] });
+    await staging.acceptChunk(first.rawText, first.message);
+    await staging.acceptChunk(second.rawText, second.message);
+
+    await staging.complete(
+      makeSnapshotEnd({
+        snapshotId: SNAPSHOT_ID,
+        chunkCount: 2,
+        digest: expectedSnapshotDigest([first.rawText, second.rawText]),
+      }),
+    );
+    expect(staging.hasPending).toBe(false);
+  });
+});
+
+describe("MINOR-2：丢弃原因可观测", () => {
+  it("每次 discard 都记录结构化原因，成功提交后清空", () => {
+    const staging = new SnapshotStaging(fakeDigest());
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    staging.discard("reset_required");
+    expect(staging.lastDiscardReason).toBe("reset_required");
+
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    expect(staging.lastDiscardReason).toBe("superseded_by_new_snapshot");
+  });
+
+  it("校验失败时 lastDiscardReason 与抛出的 reason 一致", async () => {
+    const staging = new SnapshotStaging(fakeDigest());
+    staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 1 }));
+    const chunk = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
+    await staging.acceptChunk(chunk.rawText, chunk.message);
+    await expect(
+      staging.complete(makeSnapshotEnd({ snapshotId: SNAPSHOT_ID, chunkCount: 1, digest: encodeBase64Url(new Uint8Array(32).fill(3)) })),
+    ).rejects.toMatchObject({ reason: "digest_mismatch" });
+    // 反例：若 discard 忽略 reason（`void reason`），这里是 null → 断言变红。
+    expect(staging.lastDiscardReason).toBe("digest_mismatch");
   });
 });

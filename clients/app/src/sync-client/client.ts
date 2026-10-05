@@ -6,8 +6,9 @@
  * - 持有**去重账本**与**快照仓库**（最后一次已完成状态），跨连接复用：
  *   账本跨连接保留才能识别 §8.5 切换窗口里的重复投递；快照仓库跨连接保留才能在
  *   `sync.reset_required` 时保持「上一次已完成状态」。
- * - 把 `SyncClientEvent` 翻译成连接状态机事件（`src/state/`），并把阻断态落到底层
- *   `stopAutoReconnect` 上——**状态机是唯一判定源**，门面不自己判断该不该重连。
+ * - **转发** `SyncClientEvent`：本层原样交给消费方，由组合根（WP7）翻译成连接状态机事件，
+   并把阻断态落到底层 `stopAutoReconnect` 上——**状态机是唯一判定源**，门面不自己判断该不该重连。
+ * - 跨连接持有**已确认游标**：重连时用它订阅并给账本定位续传起点。
  * - 以稳定 `requestId` 派发命令；重连后重试**复用**同一 ID，或改用 `command.status` 查询。
  *
  * ## 快照替换为什么是「先验证、后一次替换」
@@ -98,11 +99,20 @@ export class SyncClient {
   #ledger: EventLedger | null = null;
   /** 阻断后停止自动重连；`src/state/` 显式解除前不再接受 `connect()`。 */
   #blocked: ClientBlockCause | null = null;
+  /**
+   * 已确认游标（跨连接存活）。
+   *
+   * 它必须活在门面上而不是某个 `SyncConnection` 实例里：实例随连接消亡，而 R14 要求
+   * 「从最后确认的位置连续恢复」——若每次重连都退回构造期的 `options.resumeCursor`，
+   * 服务端就会从头重放整段历史。
+   */
+  #ackedCursor: Cursor | null;
   readonly #now: () => number;
 
   constructor(options: SyncClientOptions) {
     this.#options = options;
     this.#now = options.nowMs ?? (() => 0);
+    this.#ackedCursor = options.resumeCursor;
   }
 
   /** 快照仓库（离线渲染目录页的唯一数据来源）。 */
@@ -118,6 +128,11 @@ export class SyncClient {
   /** 已关闭连接或未连接。 */
   get connected(): boolean {
     return this.#connection !== null;
+  }
+
+  /** 已确认游标；重连时作为 `sync.subscribe` 的恢复点。 */
+  get ackedCursor(): Cursor | null {
+    return this.#ackedCursor;
   }
 
   /** 认证信息；未认证时为 `null`。 */
@@ -140,7 +155,7 @@ export class SyncClient {
         random: this.#options.random,
         transcript: this.#options.transcript,
         openSocket: this.#options.openSocket,
-        resumeCursor: this.#options.resumeCursor,
+        resumeCursor: this.#ackedCursor,
         ledgerFor: (serverEpoch) => this.#ledgerFor(serverEpoch),
         onEvent: (event) => {
           this.#onConnectionEvent(event);
@@ -194,6 +209,7 @@ export class SyncClient {
       type: "command",
       messageId: input.requestId,
       connectionId: this.#requireConnectionId(),
+      // 占位：真正的出站序号由 `SyncConnection.sendCommand` 用客户端方向计数器覆盖（§4.1）。
       connectionSequence: "0",
       body: {
         requestId: input.requestId,
@@ -207,13 +223,19 @@ export class SyncClient {
    * 取本 epoch 的去重账本。
    *
    * epoch 相同时复用既有账本——这是 §8.5 切换窗口去重的前提；epoch 变化意味着
-   * 服务端事件库已重建，必须丢弃旧账本（并等待  重建快照）。
+   * 服务端事件库已重建，必须丢弃旧账本（并等待 `sync.reset_required` 重建快照）。
+   *
+   * 这里是账本的**唯一**构造点：认证事件不得重建它，否则 `seenEventIds` 与游标一起清零，
+   * 重投的旧事件会被二次呈现（R14「重复投递 MUST NOT 造成重复呈现」）。
    */
   #ledgerFor(serverEpoch: string): EventLedger {
     const existing = this.#ledger;
     if (existing !== null && existing.serverEpoch === serverEpoch) return existing;
     // 从最后确认游标起步：重连后的第一条事件必须是该游标的下一条。
-    const ledger = new EventLedger({ serverEpoch, resumeFrom: this.#options.resumeCursor });
+    // 跨 epoch 的游标不可比，服务端事件库已重建 → 必须从无游标状态重新同步。
+    const acked = this.#ackedCursor;
+    const resumeFrom = acked !== null && acked.serverEpoch === serverEpoch ? acked : null;
+    const ledger = new EventLedger({ serverEpoch, resumeFrom });
     this.#ledger = ledger;
     return ledger;
   }
@@ -230,9 +252,14 @@ export class SyncClient {
     if (event.kind === "snapshot_verified") {
       // 只有验证通过才替换：失败路径根本不会走到这里。
       this.#snapshots.replace(event.snapshot, this.#now());
+      this.#ackedCursor = event.snapshot.cursor;
     }
-    if (event.kind === "authenticated") {
-      this.#ledger = new EventLedger({ serverEpoch: event.info.serverEpoch });
+    if (event.kind === "event") {
+      // 事件已处理并 ACK：把恢复点抬到它的事件序号（由账本的游标给出，避免自己拼游标）。
+      this.#ackedCursor = this.#ledger?.cursor ?? this.#ackedCursor;
+    }
+    if (event.kind === "online") {
+      this.#ackedCursor = event.cursor;
     }
     if (event.kind === "blocked") {
       // 阻断后停止自动重连：状态机不再调用 `connect()`，本层也拒绝。

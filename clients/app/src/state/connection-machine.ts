@@ -159,13 +159,15 @@ export function isBlockingState(state: ConnectionStateName): state is BlockingSt
  * - `unpaired → connecting`：没有设备身份就没有可签名的握手，连接必然失败。
  * - `* → online`（除 `replaying --caught_up-->`）：在线只能由追平完成产生，
  *   不存在「连上就是在线」的捷径。
- * - `replaced → connect_started` 之外的无确认路径：`replaced` 的恢复必须由用户显式动作
- *   （`blocking_cleared` → `disconnected` → `connect_started`）触发，避免两个标签页互相顶替。
+ * - `*阻断态 → connect_started`：恢复必须由显式动作触发
+   （`blocking_cleared` → `disconnected` → `connect_started`），避免两个标签页互相顶替。
  */
 const ALLOWED_SOURCES: Record<ConnectionEvent["kind"], Partial<Record<ConnectionStateName, true>>> = {
   pair_started: { unpaired: true, disconnected: true, revoked: true, identity_changed: true, incompatible: true },
   pair_succeeded: { pairing: true },
   identity_lost: { online: true, disconnected: true, reconnecting: true, revoked: true, identity_changed: true },
+  // 阻断态**不在**来源里：恢复必须先 `blocking_cleared`（回到 disconnected），否则
+  // `transition` 会把 `blocking` 清成 null，丢掉 R12 要求阻断态携带的原因与下一步。
   connect_started: {
     disconnected: true,
     connecting: true,
@@ -173,10 +175,6 @@ const ALLOWED_SOURCES: Record<ConnectionEvent["kind"], Partial<Record<Connection
     replaying: true,
     online: true,
     reconnecting: true,
-    revoked: true,
-    incompatible: true,
-    identity_changed: true,
-    replaced: true,
   },
   socket_opened: { connecting: true, reconnecting: true },
   subscribed: { authenticating: true },

@@ -190,6 +190,28 @@ describe("R13：重连后以同一标识确认结果", () => {
   });
 });
 
+describe("MINOR-3：已接受的命令不可被本地回退", () => {
+  it("accepted 不接受重试（服务端已确认，不退回等待确认）", () => {
+    const accepted = applyCommandResult(submitted(), result("accepted"));
+    // 反例：若 accepted 可重试，retrySameRequest 会把它变成 submitting、acceptedAt 保留，
+    // 而 mayDisplayAsAccepted 变 false → 用户从「已接受」闪回「等待服务器确认」→ 断言变红。
+    expect(() => retrySameRequest(accepted)).toThrow(/已被服务器接受/);
+    expect(accepted.state).toBe("accepted");
+    expect(mayDisplayAsAccepted(accepted, true)).toBe(true);
+  });
+});
+
+describe("MINOR-4：呈现已接受仍以 online 为前提（FRONTEND_DESIGN §5）", () => {
+  it("断线后不显示已接受——设计文档要求只有 online 才可显示", () => {
+    const accepted = applyCommandResult(submitted(), result("accepted"));
+    const offline = markConnectionLost(accepted);
+    // `docs/FRONTEND_DESIGN.md` §5：「只有进入 `online` 后，客户端才能把命令显示为已被服务器接受」。
+    // spec 只禁止「确认前显示已接受」，未要求断线后撤回服务端结论——此处的 `false` 由设计文档决定。
+    expect(mayDisplayAsAccepted(accepted, true)).toBe(true);
+    expect(mayDisplayAsAccepted(offline, false)).toBe(false);
+  });
+});
+
 describe("R13：各终态的载荷语义", () => {
   it("rejected 不带结果但带结构化错误", () => {
     const rejected = applyCommandResult(submitted(), result("rejected"));

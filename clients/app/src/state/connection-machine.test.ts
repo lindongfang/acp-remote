@@ -177,6 +177,7 @@ describe("R12：阻断态停止自动重连并说明恢复路径", () => {
       const blocked = transition(online, { kind: "blocked", cause });
       expect(blocked.blocking?.cause).toBe(cause);
       // 反例：若阻断不带说明，UI 只能显示「连不上」→ 断言变红。
+      expect(blocked.blocking).not.toBeNull();
       expect(blocked.blocking?.reason.length ?? 0).toBeGreaterThan(0);
       expect(blocked.blocking?.nextStep.length ?? 0).toBeGreaterThan(0);
       // 反例：若阻断态仍自动重连，这里会是 true → 断言变红。
@@ -297,5 +298,40 @@ describe("R12：迁移表是显式约束", () => {
     for (const [kind, sources] of Object.entries(allowedSourceStates())) {
       expect(sources.length, kind).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("MINOR-1：阻断态不得直接发起连接", () => {
+  it("四个阻断态都不接受 connect_started（恢复必须先 blocking_cleared）", () => {
+    const sources = allowedSourceStates().connect_started;
+    for (const blocking of Object.keys(BLOCKING_STATES) as BlockingState[]) {
+      // 反例：若阻断态仍在来源里，调用方发一次 connect_started 就会把 blocking 清成 null，
+      // R12 要求携带的原因与下一步被静默丢弃 → 断言变红。
+      expect(sources, blocking).not.toContain(blocking);
+      const current: ConnectionMachineState = {
+        state: blocking,
+        blocking: {
+          state: blocking,
+          cause: "device_revoked",
+          reason: "设备已被撤销",
+          nextStep: "重新配对",
+        },
+        caughtUp: false,
+      };
+      expect(() => transition(current, { kind: "connect_started", fromReconnect: true }), blocking).toThrow(
+        IllegalConnectionTransition,
+      );
+    }
+  });
+
+  it("blocking_cleared 之后才可 connect_started", () => {
+    const blocked: ConnectionMachineState = {
+      state: "replaced",
+      blocking: { state: "replaced", cause: "replaced_by_other_connection", reason: "被顶替", nextStep: "手动重连" },
+      caughtUp: false,
+    };
+    expect(transition(transition(blocked, { kind: "blocking_cleared" }), { kind: "connect_started", fromReconnect: false }).state).toBe(
+      "connecting",
+    );
   });
 });

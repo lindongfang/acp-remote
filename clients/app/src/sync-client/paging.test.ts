@@ -83,6 +83,25 @@ describe("R3：游标由时间与标识复合构成", () => {
     expect(cursor).toEqual({ createdAt: T0, messageId: "zzz" });
   });
 
+  it("页内同刻消息按出现顺序取第一条（前置条件：服务端按 (createdAt, messageId) 升序）", () => {
+    // 该前置条件由服务端契约保证，客户端不用 messageId 排序（spec 场景「不按标识排序」）。
+    const page = [
+      message({ messageId: "m-first", createdAt: T0 }),
+      message({ messageId: "m-second", createdAt: T0 }),
+    ];
+    // 反例：若改成按 messageId 排序或用「后出现者胜」，这里会变成 m-second → 断言变红。
+    expect(earliestCursor(page)).toEqual({ createdAt: T0, messageId: "m-first" });
+  });
+
+  it("时间比较按 epoch 毫秒而非字典序（形状固定时两者等价）", () => {
+    const page = [
+      message({ messageId: "m-early", createdAt: "2026-10-01T00:00:00.000Z" }),
+      message({ messageId: "m-late", createdAt: "2026-10-01T00:00:01.000Z" }),
+      message({ messageId: "m-mid", createdAt: "2026-10-01T00:00:00.500Z" }),
+    ];
+    expect(earliestCursor(page)).toEqual({ createdAt: "2026-10-01T00:00:00.000Z", messageId: "m-early" });
+  });
+
   it("空页返回 null 游标", () => {
     expect(earliestCursor([])).toBeNull();
   });
@@ -133,6 +152,20 @@ describe("R2：hasEarlier 驱动向上翻页", () => {
     const older = [message({ messageId: "m-5", createdAt: T0 })];
     // 反例：若不检测重叠，拼接后同一条消息会显示两次 → 断言变红。
     expect(() => assertPagesDoNotOverlap(newer, older)).toThrow(/重叠/);
+  });
+
+  it("较早页含有比最新页最早一条更新的消息时判漏读并抛错", () => {
+    const newer = [message({ messageId: "m-5", createdAt: T1 })];
+    // 标识不重叠，但「较早页」里出现了**更新**的消息：续取游标越过了一部分消息。
+    const older = [message({ messageId: "m-9", createdAt: "2026-10-01T00:00:02.000Z" })];
+    // 反例：若只查 messageId 重叠而不看时间边界，这里静默通过 → 断言变红。
+    expect(() => assertPagesDoNotOverlap(newer, older)).toThrow(/漏读/);
+  });
+
+  it("正常升序的相邻两页不抛错", () => {
+    const newer = [message({ messageId: "m-5", createdAt: T1 })];
+    const older = [message({ messageId: "m-4", createdAt: T0 })];
+    expect(() => assertPagesDoNotOverlap(newer, older)).not.toThrow();
   });
 });
 

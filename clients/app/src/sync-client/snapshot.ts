@@ -74,7 +74,11 @@ export type SnapshotDiscardReason =
   /** digest 不匹配。 */
   | "digest_mismatch"
   /** chunk 的 `snapshotId` 与 begin 不一致。 */
-  | "snapshot_id_mismatch";
+  | "snapshot_id_mismatch"
+  /** 连接断开：未完成快照按 §9.4 丢弃。 */
+  | "connection_closed"
+  /** 进入阻断态（撤销/不兼容/身份变化/被顶替）：不得留下任何未完成内容。 */
+  | "connection_blocked";
 
 /** 快照验证失败。 */
 export class SnapshotValidationError extends Error {
@@ -95,8 +99,16 @@ export class SnapshotValidationError extends Error {
  */
 export class SnapshotStaging {
   #staged: StagedSnapshot | null = null;
-  /** 每个已到达 chunk 的 SHA-256（32 字节），按 index 顺序。 */
-  #chunkDigests: Uint8Array[] = [];
+  /**
+   * 每个已接受 chunk 的摘要计算，按 `chunkIndex` **占位**存放。
+   *
+   * 占位而不是「算完再追加」是必须的：服务端在同一条 WSS 上背靠背下发 chunk，
+   * 摘要的 `await` 完成顺序与到达顺序无关；按完成顺序追加会把摘要链接错，
+   * `complete()` 的两级哈希随之失配。
+   */
+  #chunkDigests: Promise<Uint8Array>[] = [];
+  /** 最近一次丢弃的原因：`SnapshotDiscardReason` 存在的意义就是让「为什么没提交」可观测。 */
+  #lastDiscardReason: SnapshotDiscardReason | null = null;
   readonly #digest: DigestPort;
 
   constructor(digest: DigestPort) {
@@ -111,6 +123,10 @@ export class SnapshotStaging {
   /** 是否持有未完成的暂存区（`reset_required` 的处理要看它）。 */
   get hasPending(): boolean {
     return this.#staged !== null;
+  }
+  /** 最近一次丢弃的原因；从未丢弃过时为 `null`。 */
+  get lastDiscardReason(): SnapshotDiscardReason | null {
+    return this.#lastDiscardReason;
   }
 
   /** 新的 `snapshot_begin`：无条件丢弃旧的未完成暂存区后开始新的（§9.4）。 */
@@ -129,6 +145,12 @@ export class SnapshotStaging {
 
   /**
    * 收下一个 chunk。
+   *
+   * **连续性判定、序号推进与资源合并之间不得有 `await`**：服务端在同一条 WSS 上连发
+   * chunk 0/1/2 时，本方法会在摘要的 `await` 处让出执行权，下一个 chunk 随即读到**尚未推进**的
+   * `receivedChunks`，被判成 `chunk_out_of_order` 并把整份暂存区 `discard()` 掉——
+   * 于是任何 `chunkCount >= 2` 的快照（正常情况）永远无法完成。
+   * 因此这里把状态提交放在摘要计算的**发起**之前；摘要按 index 占位，完成顺序不影响摘要链。
    *
    * @param rawText 该 chunk 的**原始** wire 文本：digest 按原始 UTF-8 bytes 计算，
    *   重新序列化 JSON 会改变字节从而改变 digest（§9.4 明确禁止）。
@@ -152,13 +174,15 @@ export class SnapshotStaging {
       throw new SnapshotValidationError("chunk_count_mismatch", "chunk 数超过 chunkCount");
     }
 
-    // digest 先算：即便后续校验失败，暂存区也已经整体丢弃，不会留下半份内容。
-    this.#chunkDigests.push(await this.#digest.sha256(new TextEncoder().encode(rawText)));
+    // 同步段：校验 → 推进序号 → 合并资源，中间没有任何 `await`。
+    const index = staged.receivedChunks;
     this.#staged = {
       ...staged,
-      receivedChunks: staged.receivedChunks + 1,
+      receivedChunks: index + 1,
       resources: mergeResources(staged.resources, chunk),
     };
+    // 摘要只发起、不等待：校验失败路径一律 discard，序号与资源不会留下半份状态。
+    this.#chunkDigests.push(this.#digest.sha256(new TextEncoder().encode(rawText)));
     return this.#staged;
   }
 
@@ -189,8 +213,8 @@ export class SnapshotStaging {
       throw new SnapshotValidationError("cursor_mismatch", "end 的 cursor 与 begin 不一致");
     }
 
-    // 两级哈希：每 chunk 一次，再对连接结果做一次（§9.4）。
-    const joined = concatBytes(this.#chunkDigests);
+    // 两级哈希：每 chunk 一次，再对连接结果做一次（§9.4）。按 index 等待各 chunk 的摘要。
+    const joined = concatBytes(await Promise.all(this.#chunkDigests));
     const computed = await this.#digest.sha256(joined);
     const expected = decodeDigestText(end.body.snapshotDigest);
     if (!bytesEqual(computed, expected)) {
@@ -201,14 +225,16 @@ export class SnapshotStaging {
     const verified: VerifiedSnapshot = { ...staged, snapshotDigest: end.body.snapshotDigest };
     this.#staged = null;
     this.#chunkDigests = [];
+    this.#lastDiscardReason = null;
     return verified;
   }
 
-  /** 丢弃未完成的暂存区（`sync.reset_required` 或连接断开）。 */
+  /** 丢弃未完成的暂存区（`sync.reset_required`、连接断开或进入阻断态）。 */
   discard(reason: SnapshotDiscardReason): void {
     this.#staged = null;
     this.#chunkDigests = [];
-    void reason;
+    // 原因必须留下来：调用方与测试据此断言「为什么这次快照没提交」。
+    this.#lastDiscardReason = reason;
   }
 }
 

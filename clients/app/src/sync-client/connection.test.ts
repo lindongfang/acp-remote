@@ -241,6 +241,63 @@ describe("R11/R12：subscribe 与重放追平", () => {
   });
 });
 
+describe("MAJOR-1：序号缺口必须真的恢复", () => {
+  it("判 gap 后从最后确认游标重发 subscribe（不静默停摆）", async () => {
+    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
+    await completeHandshake(context);
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "5", eventId: "aaaaaaaa-0000-4000-8000-000000000005" }));
+    await waitUntil(
+      () => context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.subscribe").length === 2,
+      "缺口后重新订阅",
+    );
+
+    const subscribes = context.sockets.latest.sent.filter((message) => message.parsed["type"] === "sync.subscribe");
+    // 恢复点必须是最后确认位置（seq 1），不是缺口后的 5，也不是 null。
+    expect((subscribes[1]?.parsed["body"] as { cursor: unknown }).cursor).toEqual({
+      serverEpoch: SERVER_EPOCH,
+      globalSequence: "1",
+    });
+    // 重订阅本身也必须是合法的出站序号（不能与上一条重复）。
+    expect(subscribes[1]?.parsed["connectionSequence"]).toBe("2");
+  });
+
+  it("重新订阅后从断点续传的事件可正常处理", async () => {
+    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
+    await completeHandshake(context);
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "9", eventId: "aaaaaaaa-0000-4000-8000-000000000009" }));
+    await waitUntil(() => context.events.some((event) => event.kind === "gap_detected"), "上报缺口");
+
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }));
+
+    // 反例：若缺口后事件流停摆，这里会是 0 条 event → 断言变红。
+    expect(context.events.filter((event) => event.kind === "event")).toHaveLength(1);
+    expect(context.connection.ackedCursor?.globalSequence).toBe("2");
+  });
+});
+
+describe("CRITICAL-3：出站序号从 1 严格递增", () => {
+  it("同连接内连续 ACK 与 subscribe 的序号不重复、不回退", async () => {
+    const context = setup({ resumeCursor: { serverEpoch: SERVER_EPOCH, globalSequence: "1" } });
+    await completeHandshake(context);
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "2", eventId: "aaaaaaaa-0000-4000-8000-000000000002" }));
+    context.sockets.latest.deliver(makeEvent({ globalSequence: "3", eventId: "aaaaaaaa-0000-4000-8000-000000000003" }));
+    context.sockets.latest.deliver({
+      protocolVersion: 1,
+      type: "control.ping",
+      messageId: "eeeeeeee-1111-4111-8111-000000000001",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "1",
+      body: { nonce: "AQID" },
+    });
+
+    const sequences = context.sockets.latest.sent
+      .filter((message) => message.parsed["connectionId"] !== undefined)
+      .map((message) => message.parsed["connectionSequence"]);
+    // 反例：若 ACK 恒为 "0" 或 subscribe 抄服务端序号 → 断言变红。
+    expect(sequences).toEqual(["1", "2", "3", "4"]);
+  });
+});
+
 describe("R12：阻断态", () => {
   it("close 4411 映射为被顶替，不自动重连", () => {
     expect(blockCauseForCloseCode(4411)).toBe("replaced_by_other_connection");
