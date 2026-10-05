@@ -57,3 +57,38 @@ export const BLOCKING_CONNECTION_STATES: Record<ConnectionState, true | undefine
   online: undefined,
   reconnecting: undefined,
 };
+
+export type {
+  BlockingCause,
+  BlockingDetail,
+  BlockingState,
+  ConnectionEvent,
+  ConnectionMachineState,
+  ConnectionStateName,
+} from "./connection-machine";
+export {
+  BLOCKING_STATES,
+  CONNECTION_STATES,
+  IllegalConnectionTransition,
+  allowedSourceStates,
+  canMarkInputAsSent,
+  initialConnectionState,
+  isBlockingState,
+  shouldAutoReconnect,
+  transition,
+} from "./connection-machine";
+
+export type { CommandRecord } from "./command-machine";
+export {
+  COMMAND_STATES,
+  PENDING_CONFIRMATION_LABEL,
+  applyCommandResult,
+  applyStatusRecord,
+  createCommand,
+  isTerminalState,
+  markConnectionLost,
+  markSubmitting,
+  mayDisplayAsAccepted,
+  retrySameRequest,
+  shouldPresentUncertain,
+} from "./command-machine";
