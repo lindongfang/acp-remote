@@ -3,7 +3,11 @@
   "display": "ACP Remote Web/PWA",
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -16,7 +20,6 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -29,11 +32,14 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "useUnknownInCatchVariables": true,
-
-    "types": ["react", "node"],
-    "baseUrl": ".",
+    "types": [
+      "react",
+      "node"
+    ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
   "include": [
@@ -44,5 +50,9 @@
     "expo-env.d.ts",
     "vitest.config.ts"
   ],
-  "exclude": ["node_modules", "dist", ".expo"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".expo"
+  ]
 }
