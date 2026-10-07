@@ -1,0 +1,15 @@
+{"version":1,"at":"2026-10-03T09:27:27.770Z","wp":"WP1","role":"coder","executor":"coding-1","attempt":1,"state":"coding","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T09:27:29.103Z","wp":"WP2","role":"coder","executor":"coding-2","attempt":1,"state":"coding","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T09:41:34.424Z","wp":"WP2","role":"coder","executor":"review-2","attempt":1,"state":"reviewing","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T09:50:14.055Z","wp":"WP2","role":"coder","executor":"coding-2b","attempt":2,"state":"fixing","retry_kind":"implementation","reason":"review-wp2-r1 FAIL: views.rs:460/470 的 state 仍为 NonEmptyText<32>，新枚举未被任何字段使用，Rust 镜像比 schema 更宽松","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T09:56:26.220Z","wp":"WP2","role":"coder","executor":"review-2b","attempt":2,"state":"reviewing","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T10:13:03.555Z","wp":"WP1","role":"coder","executor":"review-1","attempt":1,"state":"reviewing","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T10:48:17.047Z","wp":"WP1","role":"coder","executor":"coding-1b","attempt":2,"state":"fixing","retry_kind":"implementation","reason":"review-wp1-r1 PASS 但留 MINOR M1/M2/M3：chunkCount 下界未入文档、SnapshotItemConfigOption 成无消费者孤儿、limit 未列入 3.3 结构性常量清单","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T10:48:18.498Z","wp":"WP2","role":"coder","executor":"coding-2c","attempt":3,"state":"fixing","retry_kind":"implementation","reason":"review-wp2-r2 PASS 但留 MINOR F5：两个 agent fixture 仍带非空 sessionId，与节点级事件 sessionId MUST 为空矛盾，下游会照抄","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T11:44:08.353Z","wp":"WP1","role":"coder","executor":"review-1b","attempt":2,"state":"reviewing","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T11:44:09.488Z","wp":"WP2","role":"coder","executor":"review-2d","attempt":3,"state":"reviewing","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T11:44:10.622Z","wp":"WP1","role":"coder","executor":"review-1b","attempt":2,"state":"ready-to-merge","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T11:47:28.012Z","wp":"WP2","role":"coder","executor":"review-2d","attempt":3,"state":"ready-to-merge","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T11:47:29.149Z","wp":"TP1","role":"tester","executor":"testing-1","attempt":1,"state":"coding","runtime_confirmation":true}
+{"version":1,"at":"2026-10-03T12:49:28.682Z","wp":"TP1","role":"tester","executor":"testing-1","attempt":1,"state":"blocked","runtime_confirmation":true,"reason":"Attempt 1 已交付 12 项增量并自检通过；阻塞于 MU1a 合入——TP1 的断言必须编译并跑在 WP1/WP2 的交付提交上（MU1b 设计）。MU1a 合入后从该提交分支重建 worktree 并重跑门禁"}
+{"version":1,"at":"2026-10-03T15:18:15.411Z","wp":"WP2","role":"coder","executor":"coding-2","attempt":3,"state":"superseded","runtime_confirmation":true,"reason":"调度方遗漏 ack 步骤，该 attempt 台账不可回填；按用户 2026-10-03 裁决重跑以得到干净台账"}

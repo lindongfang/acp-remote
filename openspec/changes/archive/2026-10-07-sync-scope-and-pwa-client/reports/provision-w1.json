@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "task_id": "provision-w1",
+  "role": "provisioner",
+  "phase": "runtime",
+  "agent_context": {
+    "agent_id": "ProvisionerW1",
+    "isolation": "fork_turns=none"
+  },
+  "target_revision": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+  "scope": "Wave 1 runtime provisioning for WP1 and WP2 only (worktrees, cargo target isolation, shared node_modules confirmation, repo readiness check).",
+  "changes": "NOT_APPLICABLE",
+  "checks": "NOT_APPLICABLE",
+  "issues": [],
+  "result": "PASS",
+  "evidence_paths": [
+    "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1.json",
+    "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1.md",
+    "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1-check.log"
+  ],
+  "runtime": {
+    "target_version_served": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+    "baseline_verified_before_provision": {
+      "command": "git rev-parse refs/heads/main",
+      "cwd": "D:\\Project\\acp-remote",
+      "output": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "expected": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "match": true
+    }
+  },
+  "commands": [
+    {
+      "id": "PV-BASE",
+      "command": "git rev-parse refs/heads/main",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f"
+    },
+    {
+      "id": "PV-WT1",
+      "command": "git worktree add .worktrees/wp1 -b feat/wp1-sync-snapshot-contract 353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": "Preparing worktree (new branch 'feat/wp1-sync-snapshot-contract')\nHEAD is now at 353ba6e Merge remote-tracking branch 'origin/main' into main\nwarning: worktree clone fell back to plain checkout: git worktree add: Windows block clone unsupported for \\\\?\\D:\\Project\\acp-remote\\.agents\\skills\\.openspec-target -> D:\\Project\\acp-remote\\.worktrees\\wp1\\.agents\\skills\\.openspec-target: \u51fd\u6570\u4e0d\u6b63\u786e\u3002 (os error 1)"
+    },
+    {
+      "id": "PV-WT2",
+      "command": "git worktree add .worktrees/wp2 -b feat/wp2-derived-event-fields 353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": "Preparing worktree (new branch 'feat/wp2-derived-event-fields')\nHEAD is now at 353ba6e Merge remote-tracking branch 'origin/main' into main\nwarning: worktree clone fell back to plain checkout: git worktree add: Windows block clone unsupported for \\\\?\\D:\\Project\\acp-remote\\.agents\\skills\\.openspec-target -> D:\\Project\\acp-remote\\.worktrees\\wp2\\.agents\\skills\\.openspec-target: \u51fd\u6570\u4e0d\u6b63\u786e\u3002 (os error 1)"
+    },
+    {
+      "id": "PV-H1",
+      "command": "git -C .worktrees/wp1 rev-parse HEAD",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f"
+    },
+    {
+      "id": "PV-H2",
+      "command": "git -C .worktrees/wp2 rev-parse HEAD",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f"
+    },
+    {
+      "id": "PV-TGT",
+      "command": "mkdir -p .target-wt/wp2",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": ".target-wt/wp2 created; absolute path D:\\Project\\acp-remote\\.target-wt\\wp2"
+    },
+    {
+      "id": "PV-NM",
+      "command": "ls -d node_modules",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "output": "node_modules"
+    },
+    {
+      "id": "PV-READY",
+      "command": "npm run check",
+      "cwd": "D:\\Project\\acp-remote",
+      "exit_code": 0,
+      "log_path": "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1-check.log",
+      "output_summary": [
+        "check:schemas \u2192 schema fixtures OK: 127 valid, 30 invalid (ajv Draft 2020-12), 39 event views bound",
+        "check:commands \u2192 command catalog OK: 13 commands",
+        "check:errors \u2192 error registry OK: 58 codes across 2 protocols",
+        "check:features \u2192 feature registry OK: 13 feature ids across 2 protocols",
+        "check:assets \u2192 contract assets OK: 17 schemas, 170 fixture files, 12 transcript vectors re-encoded from input, 20 negative vectors rejected as declared, 2 SAS values recomputed",
+        "check:acp \u2192 ACP compatibility matrix OK: 25 methods, 11 updates, 5 content blocks, 3 tool content types, 19 capabilities, 8 invariants, 10 test families (71 rows, schema validated by ajv)",
+        "check:docs \u2192 PASS",
+        "check:boundaries \u2192 PASS",
+        "check:drift \u2192 PASS",
+        "check:agentic \u2192 Totals: 22 passed, 0 failed (22 items); agentic \u5bbf\u4e3b\u5165\u53e3\u68c0\u67e5\u5b8c\u6210\uff1a17 \u4e2a\u6587\u4ef6"
+      ]
+    }
+  ],
+  "observations": [
+    "\u4e24\u4e2a worktree \u521b\u5efa\u5747\u4f9d\u8d56\u539f\u5148\u7b97\u6cd5\u7684 Windows \u56de\u9000\u65e5\u5fd7\uff08\u4ec5\u5f71\u54cd .agents/skills/.openspec-target \u5b50\u76ee\u5f55\u7684\u5757\u590d\u5236\uff0c\u5df2\u56de\u9000\u4e3a\u666e\u901a checkout\uff0c\u4e0d\u5f71\u54cd\u4ed3\u5e93\u6e90\u6587\u4ef6\u6216 HEAD\uff09\u3002",
+    "\u672c\u8f6e\u672a\u6267\u884c\u4efb\u4f55 git add\uff0c\u672a\u4fee\u6539 .gitignore\uff1b.worktrees/ \u4e0e .target-wt/ \u5747\u672a\u8ffd\u8e2a\u4e3a\u53d7\u63a7\u5185\u5bb9\u3002",
+    "\u672c\u8f6e\u53ea\u4e3a WP1/WP2 \u51c6\u5907\u8d44\u6e90\uff0c\u672a\u4e3a\u5176\u4ed6\u5de5\u4f5c\u5305\u521b\u5efa\u4efb\u4f55\u8d44\u6e90\u3002",
+    "\u672c\u62a5\u544a\u7684 PASS \u4ec5\u8868\u793a\u8d44\u6e90\u5c31\u7eea\uff0c\u4e0d\u8868\u793a\u4efb\u4f55\u4ea7\u54c1\u68c0\u67e5\u901a\u8fc7\u3002"
+  ],
+  "resource_cleanup": {
+    "owned_resources": [
+      "D:\\Project\\acp-remote\\.worktrees\\wp1 (branch feat/wp1-sync-snapshot-contract)",
+      "D:\\Project\\acp-remote\\.worktrees\\wp2 (branch feat/wp2-derived-event-fields)",
+      "D:\\Project\\acp-remote\\.target-wt\\wp2 (WP2 \u72ec\u7acb CARGO_TARGET_DIR)"
+    ],
+    "policy": "\u4ea4\u63a5\u540e\u7531 provisioner \u5728\u4ea4\u4ed8\u5355\u5143\u5b8c\u6210\u65f6\u6838\u5b9e\u56de\u6536\uff1b\u672c\u8f6e\u672a\u6e05\u7406\u4efb\u4f55\u5176\u4ed6\u6267\u884c\u8005\u7684 worktree \u6216\u8d44\u6e90\uff0c\u672a\u542f\u52a8\u4efb\u4f55\u4f8b\u5982\u3002",
+    "released_now": "NONE"
+  },
+  "worktree_handoff": [
+    {
+      "work_package": "WP1",
+      "attempt": 1,
+      "worktree": "D:\\Project\\acp-remote\\.worktrees\\wp1",
+      "branch": "feat/wp1-sync-snapshot-contract",
+      "baseline_revision": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "baseline_verified_in_worktree": true,
+      "executor": "coding-1",
+      "role": "coder",
+      "received_at": "2026-10-03T17:21:58+08:00",
+      "isolation": {
+        "node_modules": "D:\\Project\\acp-remote\\node_modules (shared, read-only)",
+        "cargo_target_dir": "NOT_APPLICABLE"
+      },
+      "readiness_check": {
+        "command": "npm run check",
+        "cwd": "D:\\Project\\acp-remote",
+        "exit_code": 0,
+        "log_path": "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1-check.log"
+      }
+    },
+    {
+      "work_package": "WP2",
+      "attempt": 1,
+      "worktree": "D:\\Project\\acp-remote\\.worktrees\\wp2",
+      "branch": "feat/wp2-derived-event-fields",
+      "baseline_revision": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "baseline_verified_in_worktree": true,
+      "executor": "coding-2",
+      "role": "coder",
+      "received_at": "2026-10-03T17:21:58+08:00",
+      "isolation": {
+        "cargo_target_dir": "D:\\Project\\acp-remote\\.target-wt\\wp2",
+        "node_modules": "D:\\Project\\acp-remote\\node_modules (shared, read-only)"
+      },
+      "readiness_check": {
+        "command": "npm run check",
+        "cwd": "D:\\Project\\acp-remote",
+        "exit_code": 0,
+        "log_path": "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1-check.log"
+      }
+    }
+  ],
+  "handoff_index": [
+    {
+      "task_id": "provision-w1",
+      "work_package": "WP1",
+      "role": "provisioner",
+      "phase": "runtime",
+      "round": "NOT_APPLICABLE",
+      "stage": "runtime",
+      "target_revision": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "evidence_type": "RESOURCE",
+      "evidence_id": "NOT_APPLICABLE",
+      "report_path": "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1.json",
+      "result": "PASS",
+      "evidence_status": "NEW",
+      "applicability_basis": "Worktree .worktrees/wp1 created on branch feat/wp1-sync-snapshot-contract from refs/heads/main at 353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f; baseline re-verified inside the worktree; root node_modules confirmed present and shared read-only; repo-root 'npm run check' exited 0 on the served revision.",
+      "source_evidence": "NOT_APPLICABLE"
+    },
+    {
+      "task_id": "provision-w1",
+      "work_package": "WP2",
+      "role": "provisioner",
+      "phase": "runtime",
+      "stage": "runtime",
+      "round": "NOT_APPLICABLE",
+      "target_revision": "353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f",
+      "evidence_type": "RESOURCE",
+      "evidence_id": "NOT_APPLICABLE",
+      "report_path": "openspec/changes/sync-scope-and-pwa-client/reports/provision-w1.json",
+      "result": "PASS",
+      "evidence_status": "NEW",
+      "applicability_basis": "Worktree .worktrees/wp2 created on branch feat/wp2-derived-event-fields from refs/heads/main at 353ba6ef4b9a32c0e73f53c4d5b5cb1ececf2d0f; baseline re-verified inside the worktree; isolated CARGO_TARGET_DIR D:\\Project\\acp-remote\\.target-wt\\wp2 created; repo-root 'npm run check' exited 0 on the served revision.",
+      "source_evidence": "NOT_APPLICABLE"
+    }
+  ]
+}
