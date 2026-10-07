@@ -7,8 +7,10 @@
  * 因此「不可导出私钥经真实 IndexedDB 往返仍是 `extractable === false`」「真实
  * `crypto.subtle` 拒绝导出不可导出私钥」这两条只能在这里核对。
  *
- * 零第三方依赖：只用到 Node 内建的 `http`/`fs`/`os`/`child_process`/`fetch`/`WebSocket`，
- * 以及 `clients/app/node_modules/` 里已有的 `esbuild`（打包 TS，产出写到系统临时目录）。
+ * 依赖：Node 内建的 `http`/`fs`/`os`/`child_process`/`fetch`/`WebSocket`，外加 `esbuild`
+ * （打包 TS，产出写到系统临时目录）。`esbuild` 已在 `clients/app/package.json` 里**显式**声明为
+ * devDependency——它此前只经 vite/vitest 间接安装，属未声明的传递依赖，靠字面路径加载，
+ * 安装布局一变就会失败（见 `loadEsbuild` 的注释）。
  *
  * 用法（cwd = clients/app）：
  *   node scripts/run-browser-check.mjs
@@ -24,6 +26,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -50,11 +53,26 @@ function locateBrowser() {
   throw new Error("找不到 Chromium 内核浏览器；用 BROWSER_PATH 指定可执行文件");
 }
 
-/** 用 app 自带的 esbuild 把断言入口打成自包含 IIFE。 */
+/** 把 app 自带的 esbuild 打成自包含 IIFE。
+ *
+ * 用**模块解析**而不是字面路径：`join(APP_ROOT, "node_modules", "esbuild", "lib", "main.js")`
+ * 这类写法把「esbuild 被提升到顶层」当成既定事实，而安装布局会随依赖树变化——
+ * vitest 5 的依赖里不再有 esbuild，升上去就会 `ERR_MODULE_NOT_FOUND`（`e2e/run-e2e.mjs`
+ * 的头部注释记的就是这次事故，`review-wp5b-r2` 也把它登记为遗留 P3）。
+ * 先按裸说明符解析，失败再经 `createRequire` 从 `clients/app/package.json` 出发解析。
+ * esbuild 现已在 `package.json` 里显式声明为 devDependency，不再是传递依赖。
+ */
+async function loadEsbuild() {
+  try {
+    return await import("esbuild");
+  } catch {
+    const require = createRequire(join(APP_ROOT, "package.json"));
+    return await import(pathToFileURL(require.resolve("esbuild")).href);
+  }
+}
+
 async function bundleChecks() {
-  const esbuild = await import(
-    pathToFileURL(join(APP_ROOT, "node_modules", "esbuild", "lib", "main.js")).href
-  );
+  const esbuild = await loadEsbuild();
   const build = esbuild.build ?? esbuild.default?.build;
   const result = await build({
     entryPoints: [ENTRY],
