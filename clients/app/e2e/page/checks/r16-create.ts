@@ -195,10 +195,22 @@ const checks: readonly Check[] = [
       const readEntry = async (scopes: readonly string[] | null): Promise<string> => {
         const mounted = await mountScenario(baseScenario({ scopes }));
         try {
-          await waitFor(
-            () => query(mounted.container, '[data-route="dir-detail"]') !== null,
-            "目录详情页渲染",
-          );
+          // 取模型前必须先等**该场景的认证结果真的落地**，否则读到的可能只是「什么都还没发生」：
+          // 有 scope 的场景要等 `auth.authenticated` 把 scopes 写进 store；未认证的场景
+          // 服务端不会下发认证，因此以「客户端确实签出了设备证明」为握手走完的标志。
+          // 旧写法等的是 `[data-route="dir-detail"]`——它同时被占位 `RuntimeUnavailable` 命中，
+          // 于是这条等待在首帧占位时就成立，两个场景都可能读到「未认证」，断言随机变红。
+          if (scopes === null) {
+            await waitFor(
+              () => (mounted.host?.deviceProofs.length ?? 0) === 1,
+              "客户端签出设备证明（服务端不再下发认证）",
+            );
+          } else {
+            await waitFor(
+              () => mounted.composition?.store.state.scopes !== null,
+              "认证授予的 scopes 已落地",
+            );
+          }
           const entry = mounted.composition?.store.createEntry("alpha");
           if (entry === undefined) throw new Error("组合根未装配");
           const host = document.createElement("div");

@@ -201,8 +201,12 @@ const checks: readonly Check[] = [
     async run() {
       const mounted = await mountScenario(baseScenario({ route: dirRoute("alpha") }));
       try {
+        // 等待条件必须用只有真实 `DirectoryDetail` 才发的属性：`[data-route="dir-detail"]`
+        // 同时被占位 `RuntimeUnavailable` 命中，用它等待会在首帧占位时就成立，
+        // 随后的「展示名 / 别名」断言便与 `start()` 的 resolve 形成竞态。
+        // `data-directory-alias` 只在真实详情页算出模型后出现（占位不发）。
         await waitFor(
-          () => query(mounted.container, '[data-route="dir-detail"]') !== null,
+          () => query(mounted.container, '[data-route="dir-detail"][data-directory-alias]') !== null,
           "目录详情页",
         );
         expectEqual(
@@ -222,8 +226,10 @@ const checks: readonly Check[] = [
     name: "R15-6 目录存在但没有会话：详情页必须呈现「还没有会话」，不得说成「链接失效」",
     async run() {
       await withScenario(baseScenario({ sessions: [], route: dirRoute("alpha") }), async (container) => {
+        // 同 R15-5：等待条件不能是 `[data-route="dir-detail"]`（占位也发它），
+        // 否则断言可能在页面还停在占位时执行，红法就变成时序问题而不是本用例要抓的缺陷。
         await waitFor(
-          () => query(container, '[data-route="dir-detail"]') !== null,
+          () => query(container, '[data-route="dir-detail"][data-directory-alias]') !== null,
           "空目录的详情页",
         );
         expectThat(

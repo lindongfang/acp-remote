@@ -90,9 +90,26 @@ function decodeBase64UrlLoose(text: string): Uint8Array<ArrayBuffer> {
   return out as Uint8Array<ArrayBuffer>;
 }
 
-/** 翻转签名的最后一个字符：长度不变、base64url 合法、验签必然失败。 */
+/**
+ * 真正改坏一条签名：解码 → 翻转首字节的最高位 → 按 base64url 重新编码。
+ *
+ * ## 为什么不能只改**最后一个字符**（本轮修掉的偶发红根因）
+ *
+ * 64 字节的签名编码成 86 个 base64url 字符：86 × 6 = 516 位，而数据只有 512 位，
+ * 于是**末字符只有高 2 位有效**，低 4 位是补零。把末字符在 `A` / `B`（索引 0 / 1，
+ * 高 2 位都是 `00`）之间翻转时，若原末字符恰好是 `A`——编码器补零后这正是「末 2 位为 00」
+ * 的唯一写法，概率 1/4——解码回来的字节序列**与原来逐字节相同**：
+ * 客户端（`src/sync-client/base64url.ts:60` 的 `decodeBase64Url`，只取前 8 位、丢弃补位）
+ * 拿到的是同一条合法签名，验签通过、连接照常走到 `online`，CR-3 因此报
+ * 「连接未进入 identity_changed 阻断态」。实测 4/10 次运行如此。
+ *
+ * 翻转解码后的**首字节**则必然改变签名：置起 r 的最高位后 r ≥ 2^255 > 曲线阶 n，
+ * 验签不可能通过（ECDSA 要求 1 ≤ r < n）。
+ */
 function flipSignature(signature: string): string {
-  return `${signature.slice(0, -1)}${signature.slice(-1) === "A" ? "B" : "A"}`;
+  const bytes = decodeBase64UrlLoose(signature);
+  bytes[0] = (bytes[0] ?? 0) ^ 0x80;
+  return encodeBase64Url(bytes);
 }
 
 export interface FakeHostOptions {

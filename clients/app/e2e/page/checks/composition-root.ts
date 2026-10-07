@@ -60,10 +60,17 @@ const checks: readonly Check[] = [
       mountRoute(DIRS_ROUTE);
       const mounted = await mountRootLayout();
       try {
-        // 先等目录页真的出现，再断言 RuntimeUnavailable 已消失：挂载后 React 的首帧
+        // 先等**真实页面**渲染出来，再断言 RuntimeUnavailable 已消失：挂载后 React 的首帧
         // 还没跑，此时「没有 unavailable」与「什么都还没渲染」长得一模一样。
+        //
+        // 等待条件必须用**只有真实 `DirectoryList` 才会发**的属性：`[data-route="dirs"]`
+        // 不能用作这个防呆——store 为 `null` 时的占位 `RuntimeUnavailable`
+        // （`src/components/RuntimeUnavailable.tsx:24`）同样渲染 `<section data-route={route}>`，
+        // 于是等待会在**首帧占位**时立即成立，紧随其后的断言便与 `composition.start()`
+        // 的 resolve 形成真竞态（间歇性误红）。`data-directory-state="loading"` 只有
+        // `DirectoryList` 的加载分支会发（`src/components/DirectoryList.tsx:39`）。
         await waitFor(
-          () => query(mounted.container, '[data-route="dirs"]') !== null,
+          () => query(mounted.container, '[data-directory-state="loading"]') !== null,
           "真实目录页渲染",
         );
         expectThat(
@@ -116,6 +123,13 @@ const checks: readonly Check[] = [
         expectEqual(state?.scopes?.length ?? 0, 3, "认证授予的 scopes");
 
         // 选择器链路：store → 模型 → 页面。
+        //
+        // store 断言看的是状态机，可能先于 React 把 store 交给页面；DOM 断言前必须先等
+        // 真实页面渲染出来（`[data-directory-list]` 只在 `DirectoryList` 的列表分支里）。
+        await waitFor(
+          () => query(mounted.container, '[data-directory-list="directories"]') !== null,
+          "目录页渲染出目录列表",
+        );
         expectThat(
           queryAll(mounted.container, "li[data-directory-alias]").length === 2,
           "目录页必须渲染出两条目录（模型已到达页面）",
@@ -141,6 +155,14 @@ const checks: readonly Check[] = [
           "页面必须呈现阻断原因",
         );
         // 阻断不是崩溃：目录页仍然渲染（此刻是「尚未收到第一份快照」）。
+        //
+        // 等待条件必须用**只有真实页面才发**的属性：`[data-route="dirs"]` 同时被占位
+        // `RuntimeUnavailable` 命中，用它等待可能在首帧占位时就成立。这里用
+        // `[data-connection-state]`（`ConnectionBadge`，占位不发）。
+        await waitFor(
+          () => query(mounted.container, "[data-connection-state]") !== null,
+          "阻断态下真实页面渲染",
+        );
         expectThat(query(mounted.container, '[data-route="dirs"]') !== null, "阻断态下页面仍应渲染目录页");
         expectThat(
           query(mounted.container, '[data-directory-state="loading"]') !== null,
@@ -160,10 +182,13 @@ const checks: readonly Check[] = [
           () => mounted.composition?.store.state.connection.state === "unpaired",
           "记录非法时状态机停在 unpaired",
         );
-        // 状态机断言看的是 store，可能先于 React 首帧满足；DOM 断言前先等页面渲染。
+        // 状态机断言看的是 store，可能先于 React 首帧满足；DOM 断言前先等真实页面渲染。
+        // 等待条件用 `[data-connection-state]`（`ConnectionBadge`）而不是
+        // `[data-route="dirs"]`：后者同时被占位 `RuntimeUnavailable` 命中，
+        // 等待会在首帧占位时就成立，后续断言便与 `start()` 的 resolve 形成竞态。
         await waitFor(
-          () => query(mounted.container, '[data-route="dirs"]') !== null,
-          "未配对时目录页仍应渲染",
+          () => query(mounted.container, "[data-connection-state]") !== null,
+          "未配对时真实页面渲染",
         );
         // 验签绝不被跳过：连接连发都没发，设备证明自然也没有。
         expectEqual(mounted.host?.sent.length ?? -1, 0, "记录非法时不得发出任何 wire 帧");

@@ -41,11 +41,52 @@ export const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 
 // ── 断言 ────────────────────────────────────────────────────────────────────
 
+declare global {
+  interface Window {
+    /** 页面级错误收集器：由 `run-e2e.mjs` 注入的 bootstrap 建立；未注入时为 `undefined`。 */
+    __pageErrors?: readonly unknown[];
+  }
+}
+
+/**
+ * 页面快照：DOM 片段 + 页面级错误。失败定位靠它。
+ *
+ * ## 为什么不能直接切 `document.body.innerHTML`
+ *
+ * 页面 body 的开头是启动占位 `<div id="root">` 与那段收集页面错误的 bootstrap `<script>`；
+ * 二者加起来就吃掉了 600 字符的窗口，真正被挂载的组件树（容器排在它们**之后**）一个字都看不到。
+ * 这里先摘掉脚本节点再截，让片段落在组件树上。
+ *
+ * ## 为什么要在**抛错当时**取，而不是在 `runChecks` 捕获时取
+ *
+ * 每条用例都在 `finally` 里卸载容器（`dispose()` 后的组合根不可复活）。等错误冒泡到
+ * `runChecks` 时页面已经被拆空，快照只剩 `<div id="root"></div>`——这正是此前失败明细
+ * 无法定位偶发红的原因。因此 `CheckFailure` 在构造时就把它固定下来。
+ *
+ * ## 为什么要带页面级错误
+ *
+ * 页面错误（未捕获异常 / 未处理的 promise 拒绝）不会让用例直接变红，只会让它**超时**：
+ * 握手里某一跳抛错时页面停在原状态，用例报的是「等待 X 超时」，真正的原因却只躺在
+ * `window.__pageErrors` 里没人看。收集器由 `run-e2e.mjs` 的 HTML 注入。
+ */
+function pageSnapshot(): string {
+  const errors = (window.__pageErrors ?? []).map((entry) => String(entry));
+  // `cloneNode` 的返回类型是 `Node`；文档 body 是元素，它的深克隆同样是元素。
+  const clone = document.body.cloneNode(true) as HTMLElement;
+  for (const script of [...clone.querySelectorAll("script")]) script.remove();
+  const errorText = errors.length === 0 ? "（无）" : errors.join(" | ");
+  return `页面：${clone.innerHTML.slice(0, 600)}｜页面错误：${errorText}`;
+}
+
 /** 断言失败：整条检查判红，错误消息进入结果明细。 */
 export class CheckFailure extends Error {
+  /** 抛错**当时**的页面快照（用例的 `finally` 之后页面已被拆空，所以必须现在取）。 */
+  readonly snapshot: string;
+
   constructor(message: string) {
     super(message);
     this.name = "CheckFailure";
+    this.snapshot = pageSnapshot();
   }
 }
 
@@ -100,8 +141,11 @@ export async function runChecks(checks: readonly Check[]): Promise<CheckResult[]
       results.push({
         name: check.name,
         passed: false,
-        // 失败时附上页面片段：没有它，「等不到某个选择器」这类失败根本无法定位。
-        detail: `${error instanceof Error ? error.message : String(error)}｜页面：${document.body.innerHTML.slice(0, 600)}`,
+        // 失败时附上页面快照：没有它，「等不到某个选择器」这类失败根本无法定位。
+        // `CheckFailure` 自带抛错当时的快照（那时容器还在）；其它异常只能现取（页面已空）。
+        detail: `${error instanceof Error ? error.message : String(error)}｜${
+          error instanceof CheckFailure ? error.snapshot : pageSnapshot()
+        }`,
       });
     }
   }
