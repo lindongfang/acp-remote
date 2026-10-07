@@ -319,7 +319,10 @@
         "changeId": { "$ref": "common.schema.json#/$defs/uuid" },
         "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
         "displayPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
-        "summary": { "type": "string", "maxLength": 2048 }
+        "summary": { "type": "string", "maxLength": 2048 },
+        "addedLines": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "deletedLines": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "outsideWorkspace": { "type": "boolean" }
       },
       "additionalProperties": true
     },
@@ -328,7 +331,7 @@
       "required": ["agentId", "state"],
       "properties": {
         "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "state": { "type": "string", "minLength": 1, "maxLength": 32 }
+        "state": { "enum": ["connected"] }
       },
       "additionalProperties": true
     },
@@ -337,7 +340,7 @@
       "required": ["agentId", "state"],
       "properties": {
         "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "state": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "state": { "enum": ["disconnected"] },
         "error": { "$ref": "common.schema.json#/$defs/publicError" }
       },
       "additionalProperties": true

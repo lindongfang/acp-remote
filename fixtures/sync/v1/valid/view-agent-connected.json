@@ -6,9 +6,9 @@
   "connectionSequence": "76",
   "body": {
     "globalSequence": "2365",
-    "sessionSequence": "225",
+    "sessionSequence": null,
     "eventId": "b5da3cfe-6a33-4dc6-a02c-3e3764e89c64",
-    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "sessionId": null,
     "eventType": "agent.connected",
     "causationRequestId": null,
     "origin": {

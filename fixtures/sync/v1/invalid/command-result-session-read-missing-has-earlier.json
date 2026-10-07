@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "d1e7b3a6-5c08-4f42-9b7e-2a6c8f0d3e91",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "65",
+  "body": {
+    "requestId": "a1d95f30-6c47-4e82-bb09-3f7a2c5e8d61",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:12:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": []
+      }
+    },
+    "error": null
+  }
+}

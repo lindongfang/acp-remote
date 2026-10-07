@@ -1,0 +1,17 @@
+# `clients/app` 的生成产物与本地状态不入库。
+# 说明：仓库根 `.gitignore` 已有 `node_modules/` 与 `dist/`，本文件只补前端工程特有的目录；
+# 重复列出的项是为了让「在 clients/app 内 git status 干净」可独立成立。
+
+# Expo / Metro 的缓存与导出目录
+.expo/
+web-build/
+
+# TypeScript 增量信息（本项目 noEmit，正常不产生）
+*.tsbuildinfo
+
+# Vite / vitest 的缓存
+.vite/
+coverage/
+
+# 平台与编辑器状态
+.DS_Store

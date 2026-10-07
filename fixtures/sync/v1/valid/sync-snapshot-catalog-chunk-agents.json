@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "9d0c3f52-6b14-4e78-8a35-2c9e7d1f4b06",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "82",
+  "body": {
+    "snapshotId": "7a1e5c40-9b28-4d63-a5f1-3c8e0b2d6f97",
+    "chunkIndex": "2",
+    "resource": "agents",
+    "items": [
+      { "agentId": "claude-code", "displayName": "Claude Code", "default": true },
+      { "agentId": "codex", "displayName": "Codex", "default": false }
+    ]
+  }
+}

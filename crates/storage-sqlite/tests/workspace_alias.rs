@@ -349,6 +349,7 @@ async fn the_written_alias_round_trips_verbatim_and_an_unwritten_row_stays_none(
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
@@ -459,6 +460,7 @@ async fn a_mode_change_commit_also_persists_the_workspace_alias() {
                     ModeRef::try_new(ModeId::new("code").expect("mode id"), "Code")
                         .expect("mode ref"),
                 ),
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
@@ -769,6 +771,7 @@ async fn the_resume_flow_neither_reads_nor_rewrites_the_alias() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: Some(AgentSessionId::new("acp-session-1").expect("会话标识")),
@@ -815,6 +818,7 @@ async fn the_resume_flow_neither_reads_nor_rewrites_the_alias() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 interaction: None,
                 agent_session_id: None,

@@ -1,0 +1,32 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "4e7c9a02-1d38-4b65-9f27-8c0a5e3b1d96",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "92",
+  "body": {
+    "requestId": "9b3e6f18-2c47-4a05-8d92-7e1b4c8f3a60",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:20:01.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": [
+          {
+            "messageId": "d8e7f6a5-b4c3-4291-8071-6f5e4d3c2b1a",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "紧接同刻两条之前的第三条。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T12:17:59.000Z",
+            "turnId": null
+          }
+        ]
+      },
+      "hasEarlier": false
+    },
+    "error": null
+  }
+}

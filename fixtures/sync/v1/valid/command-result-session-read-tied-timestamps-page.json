@@ -1,0 +1,41 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "b5c0e437-6f18-4d92-a3b6-8e1c5f0a7d29",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "91",
+  "body": {
+    "requestId": "3f8a2c76-5d14-4b09-8e37-6c0f9a2b5d41",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:20:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": [
+          {
+            "messageId": "f0d27b43-8c19-4e56-a7b2-5d3e9c0f1a68",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "同一毫秒的第一条。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T12:18:00.000Z",
+            "turnId": null
+          },
+          {
+            "messageId": "0a1b2c3d-4e5f-4061-8273-94a5b6c7d8e9",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "agent",
+            "content": [{ "type": "text", "text": "同一毫秒的第二条。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T12:18:00.000Z",
+            "turnId": null
+          }
+        ]
+      },
+      "hasEarlier": true
+    },
+    "error": null
+  }
+}

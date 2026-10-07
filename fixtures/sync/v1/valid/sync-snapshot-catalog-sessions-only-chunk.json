@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "c6f1d804-5e37-49a2-b6c8-0d4f3a7e2b15",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "85",
+  "body": {
+    "snapshotId": "2d8f6b13-7c04-4a95-8e21-6b3d5f9c0a47",
+    "chunkIndex": "0",
+    "resource": "sessions",
+    "items": [
+      {
+        "sessionId": "b41e7a92-3d05-4c68-9f17-2e8a6b0d5c34",
+        "title": "单类清单快照",
+        "agent": { "agentId": "claude-code", "name": "Claude Code" },
+        "state": "idle",
+        "origin": { "kind": "local" },
+        "currentMode": { "modeId": "default", "displayName": "Default" },
+        "version": "3",
+        "createdAt": "2026-09-17T10:00:00.000Z",
+        "updatedAt": "2026-09-17T12:14:00.000Z"
+      }
+    ]
+  }
+}

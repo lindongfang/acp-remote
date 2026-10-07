@@ -1,0 +1,18 @@
+{
+  "protocolVersion": 1,
+  "type": "error",
+  "messageId": "0d7c41a8-5e29-4b63-9f80-2a6d1c4e7b35",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "95",
+  "body": {
+    "code": "sync.cursor_invalid",
+    "message": "请求的 before 早于本节点对该会话消息的保留窗口，更早的消息已按保留策略清理。",
+    "retryable": true,
+    "correlationId": "3b8e0c47-5d92-4a16-b7f0-9c2d5a8e1360",
+    "details": {
+      "reason": "cursor_expired",
+      "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      "globalSequence": "2402"
+    }
+  }
+}

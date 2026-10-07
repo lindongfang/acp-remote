@@ -403,6 +403,7 @@ async fn elicitation_decline_round_trips() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,

@@ -100,7 +100,7 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 - 不允许重复对象键、无效 Unicode、`NaN`、`Infinity` 或尾随内容。
 - 所有序号和计数器在线上必须编码为无前导零的十进制字符串（`^(0|[1-9][0-9]*)$`）。v1 中属于该规则的字段包括 `globalSequence`、`sessionSequence`、`connectionSequence`、`cursor.globalSequence`、`originSequence`、`version`、`expectedVersion`、`byteLength`、`deltaIndex` 和 `chunkIndex`；新增同义字段时按同一规则处理。
 - v1 的序号上界是 `2^63−1`（实现用 64 位有符号整数承载，见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.2）：超出该值的序号是协议错误（`protocol.schema_invalid`），接收方不得截断、回绕或钳制到边界。Node Link 沿用同一上界。
-- 结构性常量保持 integer：`protocolVersion`、`minProtocolVersion`、`maxProtocolVersion`、`selectedProtocolVersion`、`schemaVersion`、`chunkCount`、`heartbeatIntervalMs` 和 `limits.*` 中的字节、条数、连接数上限。schema 里的 `maxItems`、`maxLength` 等校验常量不因该规则变成字符串。
+- 结构性常量保持 integer：`protocolVersion`、`minProtocolVersion`、`maxProtocolVersion`、`selectedProtocolVersion`、`schemaVersion`、`chunkCount`、`heartbeatIntervalMs`、`limit`（Sync 面 `session.read` 的可选页大小）和 `limits.*` 中的字节、条数、连接数上限。schema 里的 `maxItems`、`maxLength` 等校验常量不因该规则变成字符串。
 - 时间使用 UTC RFC 3339，精确到毫秒，例如 `2026-09-17T12:10:00.123Z`；毫秒精度是强制的，秒精度或其他精度都不合法。该规则同样适用于配对二维码与配对状态响应中的 `expiresAt`。
 - UUID 使用带连字符的小写 canonical 文本；v1 接受 UUIDv4，服务端生成的有序 ID可以使用 UUIDv7，但排序不得依赖 UUID。
 - **ACP Remote canonical JSON v1（ACPR-CJ1）** 是为结构化负载定义的确定性序列化，供 `payloadDigest` 一类内容摘要使用：UTF-8 编码、无 BOM、无前后空白；对象成员名按 UTF-16 code unit 升序排列，不允许重复键；字符串使用 JSON 最小转义（`"`、`\` 与 `< U+0020` 的控制字符，控制字符写作小写十六进制 `\u00XX`）；数字必须是整数且 `|n| ≤ 2^53−1`，`view` 与 interaction payload 内禁止浮点；顶层必须是 object 或 array。内容摘要按 `base64url(SHA-256(ACPR-CJ1(value)))` 计算，接收方不得用自己重新序列化的结果替代。  
@@ -736,7 +736,7 @@ sync.caught_up
       "globalSequence": "2318"
     },
     "schemaVersion": 1,
-    "chunkCount": 8
+    "chunkCount": 3
   }
 }
 ```
@@ -762,28 +762,25 @@ sync.caught_up
       "serverEpoch": "00384a03-bc90-4095-b65d-82fb8cc47e13",
       "globalSequence": "2318"
     },
-    "chunkCount": 8,
+    "chunkCount": 3,
     "snapshotDigest": "<base64url-32-byte-sha256>"
   }
 }
 ```
 
-`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer。示例中的 `8` 是协商了 `core.local-catalog.v1` 时的一次完整快照（每种资源一个 chunk）；未协商该 feature 时目录资源 MUST NOT 发送，`chunkCount` 为 `6`。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。Node Link 的 `resource.snapshot_end.snapshotDigest` 使用同一规则（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4）。
+`chunkIndex` 是从 `0` 开始的十进制字符串，按 index 顺序连续递增，服务端必须按 index 顺序发送。`chunkCount` 在 begin/end 中必须一致，且保持 integer；它 MUST 等于本次快照实际下发的 chunk 数，取值在 `1..=3` 之间——上界是 3（可下发资源的种类数，见下），下界是 1：`sessions` chunk 恒发，即使会话为空也照发一个空数组，因此 `chunkCount: 0` 是形状错误。示例中的 `3` 是协商了 `core.local-catalog.v1` 时的一次完整快照（每种资源一个 chunk）；未协商该 feature 时目录资源 MUST NOT 发送，`chunkCount` 为 `1`。服务端 MUST NOT 声明多于实际发送的 chunk 数，客户端发现 chunk 数与 `chunkCount` 不符时按本节丢弃整个暂存 snapshot。`snapshotDigest` 的计算方式是：对每个完整 `sync.snapshot_chunk` WebSocket message 的原始 UTF-8 bytes 分别计算 SHA-256，按 chunk index 连接这些 32-byte digest，再计算一次 SHA-256。客户端不能通过重新序列化 JSON 计算 digest。Node Link 的 `resource.snapshot_end.snapshotDigest` 使用同一规则（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4）。
 
 客户端必须把 snapshot 写入以 `snapshotId` 隔离的暂存区；只有 chunk 连续、数量、cursor 和 digest 全部验证后，才能在一个本地事务中替换旧缓存。收到另一个 `snapshot_begin` 时必须丢弃旧的未完成暂存区。v1 不支持 snapshot chunk 断点续传；连接断开、digest 错误、顺序错误或空间不足时，客户端丢弃整个暂存 snapshot，重连后重新请求。验证失败不得损坏最后一个已完成缓存。
 
-v1 snapshot 资源种类：
+v1 snapshot 资源种类——`sync.snapshot_chunk.resource` 只允许下列三类清单资源（`schemas/sync/v1/sync.schema.json` 的 `$defs/snapshotResource`）：
 
 ```text
 sessions
-messages
-turns
-pending_interactions
-config_options
-capabilities
 workspaces
 agents
 ```
+
+五类 session-scoped 明细资源 `messages`、`turns`、`pending_interactions`、`config_options`、`capabilities` **MUST NOT 进入快照**，无论会话的 `origin.kind` 是 `local` 还是 `remote`——本节此前只对 imported 会话作此豁免，现已收窄为全部会话，口径与 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4「正文绝不入快照」一致。会话明细一律由 `session.read` 在线按复合游标分页取得（见第 11.5 节），快照因此只随会话**条数**增长，与消息总量无关。`resource` 取这五个值之一的 chunk 按 `protocol.schema_invalid` 拒绝。
 
 设备无权读取的字段和资源不得进入 snapshot。
 
@@ -792,19 +789,21 @@ Snapshot item 的最低 schema：
 | Resource | 每个 item 的必填字段 |
 |---|---|
 | `sessions` | `sessionId`, `agent`, `state`, `origin`, `version`, `createdAt`, `updatedAt`; `title`, `currentMode` 可为 `null`；`workspace` 是 `core.local-catalog.v1` 门控下的**可选**引用（缺席或 `null`，见第 10.3 节） |
-| `messages` | `messageId`, `sessionId`, `role`, `content`, `status`, `createdAt`; `turnId` 可为 `null` |
-| `turns` | `turnId`, `sessionId`, `state`, `createdAt`; `startedAt`, `completedAt`, `terminalError` 可为 `null` |
-| `pending_interactions` | `interactionId`, `sessionId`, `kind`, `state`, `schema`, `createdAt` |
-| `config_options` | `sessionId`, `configOptions`, `version` |
-| `capabilities` | `sessionId`, `agentCapabilities`, `brokerAdditions` |
+| `messages` | `messageId`, `sessionId`, `role`, `content`, `status`, `createdAt`; `turnId` 可为 `null`；**只经 `session.read` 返回，不进快照** |
+| `turns` | `turnId`, `sessionId`, `state`, `createdAt`; `startedAt`, `completedAt`, `terminalError` 可为 `null`；**只经 `session.read` 返回，不进快照** |
+| `pending_interactions` | `interactionId`, `sessionId`, `kind`, `state`, `schema`, `createdAt`；**只经 `session.read` 返回，不进快照** |
+| `config_options` | `sessionId`, `configOptions`, `version`；**只经 `session.read` 返回，不进快照** |
+| `capabilities` | `sessionId`, `agentCapabilities`, `brokerAdditions`；**只经 `session.read` 返回，不进快照** |
 | `workspaces` | `alias`, `displayName`；受 feature `core.local-catalog.v1` 门控 |
 | `agents` | `agentId`, `displayName`, `default`；受 feature `core.local-catalog.v1` 门控 |
 
-`agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。所有 session-scoped item 必须引用同一 snapshot 中存在或客户端已有的 session。`content`、config option、interaction 和 capability 的具体值对象与第 10.3、11.5 节相同，不得为 snapshot 发明另一套语义。
+`agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。上表中标为「不进快照」的五类元素形状由 `session.read` 的结果直接复用（`command.schema.json#/$defs/sessionReadResult.resources` 引用同一批 `snapshotItem.*` 定义），因此会话明细只有一套值对象，不得为快照与回源发明两套语义。
 
 `workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。目录元素只含本表列出的字段——本机规范化路径（`canonicalPath` 及其任何分段）MUST NOT 出现在快照、摘要或任何对端可见输出中（见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 12.3 节）。已登记但没有任何会话的 workspace 仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。`workspaces`/`agents` 的读取归在既有 `session.list` scope（`pack.observe`）之下，与会话列表同一屏；本次不新增 scope。
 
-`origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的 `messages`、`turns`、`pending_interactions` 和 `config_options` 不进入 Access Node 的 snapshot；客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner。
+`origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的正文始终由 Owner 权威，客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner；本地会话的明细同样只经 `session.read` 现取，两者在 wire 上没有区别。
+
+**明细缺席不是「为空」**：客户端在快照里找不到某会话的明细资源时，该会话的明细状态是「尚未加载」而不是「没有消息、没有待处理交互」。客户端 MUST NOT 据此向用户呈现该会话为空。待处理交互数由 `SessionSummary.state` 的 `waiting_permission`/`waiting_input` 得出（目录页徽标），交互细节按需用 `session.read { include: ["pending_interactions"] }` 取得。
 
 ### 9.5 ACK
 
@@ -1026,12 +1025,23 @@ device.revoked
 | `elicitation.requested` | `interactionId`, `turnId`, `title`, `schema`, `initialValues` |
 | `elicitation.resolved` | `interactionId`, `action: "submit"|"decline"|"cancel"`, `resolvedByDeviceId: UUID|null` |
 | `terminal.output` | `terminalId`, `chunkIndex: decimal string`, `stream: "stdout"|"stderr"`, `text`, `truncated: boolean` |
-| `file.changed` | `changeId`, `kind`, `displayPath`, `summary`; diff 或结构化详情可选 |
-| `agent.connected`, `agent.disconnected` | `agentId`, `state`; disconnected 可带 `error` |
+| `file.changed` | `changeId`, `kind`, `displayPath`, `summary`; 可选 `addedLines`/`deletedLines`（decimal string，行级差异统计）、`outsideWorkspace`（boolean）；diff 或结构化详情可选 |
+| `agent.connected` | `agentId`, `state: "connected"`；节点级事件（`sessionId` 为空），描述 Agent profile 进程而非任何单个会话 |
+| `agent.disconnected` | `agentId`, `state: "disconnected"`, 可选 `error`；同为节点级事件 |
 | `command.completed` | `requestId`, `result` |
 | `command.failed` | `requestId`, `error: PublicError` |
 | `command.uncertain` | `requestId`, `reason`, `mayHaveReachedAgent: true` |
 | `device.revoked` | `deviceId`, `revokedAt`；只发送给仍有权查看设备状态的其他客户端 |
+
+`file.changed` 的三个可选字段的语义固定如下，客户端必须照此呈现，不得自行推断：
+
+- `addedLines`/`deletedLines` 是**行级差异**的统计，不是改动前后两段文本的行数相减。两段文本行数相等但内容不同时仍必须报告非零改动；新建文件的全部行计为新增、删除为零，删除文件反之。判定不出行数时**省略这两项**，客户端呈现为「未同步」或不可用，MUST NOT 呈现为「零改动」。
+- 这两个字段只覆盖**Agent 在其工具调用里声明的改动**：派生源是 ACP 工具调用内容中的类型化 Diff 元素（见 `CORE_PORTS_AND_STORAGE.md`）。判定只依据该次调用内容**是否含 Diff 元素**，与改动由谁驱动无关：调用内容中不含 Diff 元素的（例如只做 shell 重定向、脚本或外部工具驱动的改动），其行数统计不计入，也不产生 `file.changed` 事件。
+- `displayPath` 是**相对该会话工作区根**的路径，不下发绝对路径，也不含工作区根的任何片段或回退层级。路径经规范化后不在工作区根之下时置 `outsideWorkspace: true`，此时 `displayPath` 只给出该文件的名称。是否位于工作区之外按**规范化后的前缀关系**判定，不得仅按字符串前缀判断。
+
+`agent.connected`/`agent.disconnected` 的 `state` 是**封闭词表**：连接事件只取 `"connected"`，断开事件只取 `"disconnected"`，两者互不相同，客户端据此区分事件类型，不得依赖自由文本或别的取值。它们是**节点级**事件（事件信封的 `sessionId` 为空），生命周期归属于 Agent profile 的进程：同一 profile 的进程被多个会话复用时不会重复产生连接事件，Agent 连接状态也**不表达**任何单个会话的活跃程度。当前这两类事件尚无投递通道，客户端在该通道就绪前 MUST 把缺失的覆盖层呈现为状态未知，不得以其它信号推断连接状态。
+
+会话标题的更新是**单向**的：标题只来自 Agent 的 `session/update` 中 `session_info_update` 投影出的 `session.info.changed`（见上表），据此写入会话摘要。命令目录中**不存在**任何由客户端发起的重命名会话的命令，服务端也不提供绕过该通知直接写入标题的路径；通知只携带更新时间而不含标题时标题保持不变，通知显式把标题置空时客户端呈现为未命名会话。
 
 ACP `session/update` 判别子到 Sync event type 的完整映射（判别子取值以上游 ACP v1 固定快照为准）：
 
@@ -1273,7 +1283,7 @@ local.audit.export
 | Command | 类别 | `sessionId` | Payload | 成功结果/终态 |
 |---|---|---|---|---|
 | `session.list` | query | 禁止 | `{}` | `completed { sessions: SessionSummary[] }` |
-| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities` | `completed SessionReadResult`，结构与对应 snapshot resources 相同；imported 会话回源 Owner |
+| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities`；Sync 面另接受可选 `before`（复合游标）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier`；imported 会话回源 Owner |
 | `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
 | `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
@@ -1291,6 +1301,21 @@ local.audit.export
 `session.create` 在两个传输面同名但 payload 不同，本表是 Sync 面的形状；Node Link 面仍额外要求 `exportId`，并允许可选的 `templateParams`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 第 12.7 节）。两个面共用同一套命令名、幂等与终态语义：先 `accepted` 再 `completed`/`failed`/`uncertain`，同一 `requestId` 重发必须返回首次结果。`session.create` 的 `accepted` 必须携带 `result: null`——这是服务端语义要求（与 `command.status` 的 `acceptedAt` 同类），schema 的 `accepted` 分支不对 `result` 取值做约束，因此客户端不得依赖它在 wire 上被强制。
 
 `session.create` 端到端能力由 feature `core.session-create.v1` 协商：未选中时服务端按 §4.2/§12.2 返回 `protocol.feature_required`，不得静默接受。`workspaceAlias` 与 `agentId` 的可选来源（目录页与 Agent 选择器）由 `core.local-catalog.v1` 的快照资源供数；两者都是**引用**，规范化路径、目录追加与凭据任何情况下都不得出现在 wire、缓存或错误 `details` 中。
+
+`session.read` 是会话明细的唯一入口（第 9.4 节：五类明细资源不进快照），因此它在 Sync 面带分页参数：
+
+- **`before` 是由消息创建时间与消息标识复合而成的游标**，`{ createdAt, messageId }`，两个键都必需。服务端 MUST 按 `createdAt` 升序返回一页，并在同一 `createdAt` 的多条消息之间给出稳定且可重复的次序（以 `messageId` 作 tie-breaker），使相邻两页不重不漏。`createdAt` 是 Daemon 持久化时间（第 10.2 节），不是客户端时间。
+- **排序 MUST NOT 依赖 `messageId` 的数值或字典序**（第 3.3 节「排序不得依赖 UUID」）。`messageId` 只在同一创建时刻内部定序；消息标识的数值次序与创建时间次序不一致时，结果仍按创建时间给出。
+- **单字段游标被拒**：只提供 `messageId` 或只提供 `createdAt` 的 `before` 按 `protocol.schema_invalid` 拒绝，服务端 MUST NOT 猜测或补全缺失的排序分量。`before` 只接受这两个键，出现别的键（例如 `offset`）同样拒绝——偏移量分页不是 v1 的形状。
+- **省略 `before` 返回最新一页**；客户端把上一次结果中最早一条的 `(createdAt, messageId)` 作为下一次请求的 `before`，得到紧接在它之前的更早一页，不与上一次重叠也不跳条。同一会话在明细未变化时以同一 `before` 重复读取 MUST 返回相同结果。
+- **默认页是最近 20 条用户输入**（`role: "user"` 的消息数）。用户输入与 turn 边界天然接近，是用户能数得清的量，服务端按此计数取页，使一页体积对用户可预期。
+- **`limit` 是可选的整数码数**（`minimum: 1`，与 `chunkCount` 同属第 3.3 节的结构性常量一类，不走十进制字符串规则）。省略时用服务端配置默认页；**超过服务端为该会话配置的明细条数上限时，服务端收敛到自己的上限并照常返回，MUST NOT 因此让请求失败**——因此 schema 上没有 `maximum`。
+- **到达最早一条时**结果给出 `hasEarlier: false`，且不返回空占位；客户端据此停止翻页。
+- **保留窗口之前的游标显式不可读**：请求的 `before` 早于该节点对与会话消息的保留窗口、且更早的消息已按保留策略清理时，服务端返回 `sync.cursor_invalid`（`details.reason = "cursor_expired"`），MUST NOT 静默返回更少的元素让客户端误以为已到最早一条。
+
+`SessionReadResult` 的 `resources` 每个键都可缺席，但 `hasEarlier` 是必填布尔值，指示本次返回的这一页之前是否仍有更早内容；它缺席即形状错误，客户端不得默认成 `false`。
+
+**分页只作用于 Sync 面**（design D3）：`before` 与 `limit` 只在 `schemas/sync/v1/command.schema.json` 生效。`schemas/node-link/v1/command.schema.json` 与 `crates/node-link-protocol` 的同名命令 DTO 不含这两个键，行为与本变更前完全一致——按既有形状发起、不带任何分页参数的 Node Link 调用方照常返回该会话明细，MUST NOT 因缺少分页参数被拒绝。代价是同一个命令名在两个协议下的载荷形状不同：Node Link 侧的正文有 `no-content-cache` 硬约束（第 12.4 节），Access 侧根本不保留正文，不需要分页。
 
 `ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 

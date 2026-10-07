@@ -132,6 +132,7 @@ async fn commit_writes_state_turns_events_and_terminal_in_one_transaction() {
         state: Some(StateChange::Update(SessionUpdate {
             state: Some(SessionState::Running),
             mode: ModeChange::Unchanged,
+            title: None,
             closed_at: None,
             agent_session_id: None,
             workspace_cwd: None,
@@ -268,6 +269,7 @@ async fn failed_commit_rolls_back_every_row() {
         state: Some(StateChange::Update(SessionUpdate {
             state: Some(SessionState::Running),
             mode: ModeChange::Unchanged,
+            title: None,
             closed_at: None,
             agent_session_id: None,
             workspace_cwd: None,
@@ -819,6 +821,7 @@ async fn interaction_resolution_is_first_writer_wins() {
         StateChange::Update(SessionUpdate {
             state: None,
             mode: ModeChange::Unchanged,
+            title: None,
             closed_at: None,
             agent_session_id: None,
             workspace_cwd: None,
@@ -907,6 +910,7 @@ async fn interaction_resolution_is_first_writer_wins() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
@@ -1177,6 +1181,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: None,
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
@@ -1213,6 +1218,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
@@ -1243,6 +1249,7 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
             state: Some(StateChange::Update(SessionUpdate {
                 state: Some(SessionState::Running),
                 mode: ModeChange::Unchanged,
+                title: None,
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,

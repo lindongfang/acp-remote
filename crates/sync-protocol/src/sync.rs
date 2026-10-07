@@ -12,9 +12,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use crate::common::{
-    AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, ConfigOptionView, Cursor,
-    DecimalString, NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawObject,
-    SessionSummary, Timestamp, Uuid, ValueError, WorkspaceRef,
+    AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, Cursor, DecimalString,
+    NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawObject, SessionSummary, Timestamp,
+    Uuid, ValueError, WorkspaceRef,
 };
 
 /// `sync.resetRequired.reason` / `sync.snapshotRequest.reason` 的取值（`sync.schema.json` 的两处 `enum`）。
@@ -77,28 +77,24 @@ impl<'de> Deserialize<'de> for ResetReason {
     }
 }
 
-/// `sync.snapshotChunk.resource`：同一 body 里的 `items` 的元素类型由它决定
-/// （`sync.schema.json#/$defs/snapshotResource` 与 `snapshotChunk` 的 `allOf`/`if`/`then`）。
+/// `sync.snapshotChunk.resource`：`sync.schema.json#/$defs/snapshotResource` 的封闭词表镜像。
+///
+/// 快照只承载 `sessions`/`workspaces`/`agents` 三类清单资源。五类 session-scoped 明细资源
+/// `messages`/`turns`/`pending_interactions`/`config_options`/`capabilities` **不进快照**，无论会话的
+/// `origin.kind` 是 `local` 还是 `remote`（`docs/SYNC_PROTOCOL.md` §9.4，design D1）；会话明细一律由
+/// `session.read` 在线按复合游标分页取得，其元素形状仍由本模块的 [`SnapshotItemMessage`] 等类型承载。
+///
+/// 取值集合与顺序由 `tests/schema_drift.rs::snapshot_resources_match_schema_enum` 与 schema 双向门禁。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SnapshotResource {
     Sessions,
-    Messages,
-    Turns,
-    PendingInteractions,
-    ConfigOptions,
-    Capabilities,
     Workspaces,
     Agents,
 }
 
 impl SnapshotResource {
-    pub const ALL: [SnapshotResource; 8] = [
+    pub const ALL: [SnapshotResource; 3] = [
         SnapshotResource::Sessions,
-        SnapshotResource::Messages,
-        SnapshotResource::Turns,
-        SnapshotResource::PendingInteractions,
-        SnapshotResource::ConfigOptions,
-        SnapshotResource::Capabilities,
         SnapshotResource::Workspaces,
         SnapshotResource::Agents,
     ];
@@ -106,11 +102,6 @@ impl SnapshotResource {
     pub fn as_str(self) -> &'static str {
         match self {
             SnapshotResource::Sessions => "sessions",
-            SnapshotResource::Messages => "messages",
-            SnapshotResource::Turns => "turns",
-            SnapshotResource::PendingInteractions => "pending_interactions",
-            SnapshotResource::ConfigOptions => "config_options",
-            SnapshotResource::Capabilities => "capabilities",
             SnapshotResource::Workspaces => "workspaces",
             SnapshotResource::Agents => "agents",
         }
@@ -359,20 +350,6 @@ pub struct SnapshotItemPendingInteraction {
     pub created_at: Timestamp,
 }
 
-/// `sync.snapshotItem.config_options` 的单个元素。
-///
-/// 元素形状与 `common.schema.json#/$defs/configOptionView` 不是同一个 `$defs`：这里多一层按会话
-/// 归组的 `sessionId`/`version`，数组元素复用 [`ConfigOptionView`]。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SnapshotItemConfigOption {
-    #[serde(rename = "sessionId")]
-    pub session_id: Uuid,
-    #[serde(rename = "configOptions")]
-    pub config_options: Vec<ConfigOptionView>,
-    pub version: DecimalString,
-}
-
 /// `sync.snapshotItem.capabilities` 的单个元素。
 ///
 /// `agentCapabilities`/`brokerAdditions` 都是 schema 的开放 `{"type": "object"}`：能力集合由各自的
@@ -401,15 +378,11 @@ pub type SnapshotItemAgent = AgentCatalogEntry;
 /// （`sync.schema.json#/$defs/snapshotChunk` 的 `allOf`/`if`/`then`）。
 ///
 /// 枚举变体与 [`SnapshotResource`] 一一对应，因此「variant 与 `resource` 不一致」的值不存在：
-/// 反序列化由 [`SnapshotItems::parse`] 按 `resource` 分派，序列化只写数组本身。
+/// 反序列化由 [`SnapshotItems::parse`] 按 `resource` 分派，序列化只写数组本身。会话明细资源的
+/// 元素类型（[`SnapshotItemMessage`] 等）不再有对应变体——它们不进快照，只经 `session.read` 返回。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SnapshotItems {
     Sessions(Vec<SessionSummary>),
-    Messages(Vec<SnapshotItemMessage>),
-    Turns(Vec<SnapshotItemTurn>),
-    PendingInteractions(Vec<SnapshotItemPendingInteraction>),
-    ConfigOptions(Vec<SnapshotItemConfigOption>),
-    Capabilities(Vec<SnapshotItemCapability>),
     Workspaces(Vec<SnapshotItemWorkspace>),
     Agents(Vec<SnapshotItemAgent>),
 }
@@ -428,31 +401,6 @@ impl SnapshotItems {
                 let items = parse_items::<SessionSummary>(raw, "snapshotItem.sessions")?;
                 SnapshotItems::Sessions(items)
             }
-            SnapshotResource::Messages => {
-                let items = parse_items::<SnapshotItemMessage>(raw, "snapshotItem.messages")?;
-                SnapshotItems::Messages(items)
-            }
-            SnapshotResource::Turns => {
-                let items = parse_items::<SnapshotItemTurn>(raw, "snapshotItem.turns")?;
-                SnapshotItems::Turns(items)
-            }
-            SnapshotResource::PendingInteractions => {
-                let items = parse_items::<SnapshotItemPendingInteraction>(
-                    raw,
-                    "snapshotItem.pending_interactions",
-                )?;
-                SnapshotItems::PendingInteractions(items)
-            }
-            SnapshotResource::ConfigOptions => {
-                let items =
-                    parse_items::<SnapshotItemConfigOption>(raw, "snapshotItem.config_options")?;
-                SnapshotItems::ConfigOptions(items)
-            }
-            SnapshotResource::Capabilities => {
-                let items =
-                    parse_items::<SnapshotItemCapability>(raw, "snapshotItem.capabilities")?;
-                SnapshotItems::Capabilities(items)
-            }
             SnapshotResource::Workspaces => {
                 let items = parse_items::<SnapshotItemWorkspace>(raw, "snapshotItem.workspaces")?;
                 SnapshotItems::Workspaces(items)
@@ -468,11 +416,6 @@ impl SnapshotItems {
     pub fn resource(&self) -> SnapshotResource {
         match self {
             SnapshotItems::Sessions(_) => SnapshotResource::Sessions,
-            SnapshotItems::Messages(_) => SnapshotResource::Messages,
-            SnapshotItems::Turns(_) => SnapshotResource::Turns,
-            SnapshotItems::PendingInteractions(_) => SnapshotResource::PendingInteractions,
-            SnapshotItems::ConfigOptions(_) => SnapshotResource::ConfigOptions,
-            SnapshotItems::Capabilities(_) => SnapshotResource::Capabilities,
             SnapshotItems::Workspaces(_) => SnapshotResource::Workspaces,
             SnapshotItems::Agents(_) => SnapshotResource::Agents,
         }
@@ -482,11 +425,6 @@ impl SnapshotItems {
     pub fn len(&self) -> usize {
         match self {
             SnapshotItems::Sessions(items) => items.len(),
-            SnapshotItems::Messages(items) => items.len(),
-            SnapshotItems::Turns(items) => items.len(),
-            SnapshotItems::PendingInteractions(items) => items.len(),
-            SnapshotItems::ConfigOptions(items) => items.len(),
-            SnapshotItems::Capabilities(items) => items.len(),
             SnapshotItems::Workspaces(items) => items.len(),
             SnapshotItems::Agents(items) => items.len(),
         }
@@ -502,11 +440,6 @@ impl Serialize for SnapshotItems {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             SnapshotItems::Sessions(items) => items.serialize(serializer),
-            SnapshotItems::Messages(items) => items.serialize(serializer),
-            SnapshotItems::Turns(items) => items.serialize(serializer),
-            SnapshotItems::PendingInteractions(items) => items.serialize(serializer),
-            SnapshotItems::ConfigOptions(items) => items.serialize(serializer),
-            SnapshotItems::Capabilities(items) => items.serialize(serializer),
             SnapshotItems::Workspaces(items) => items.serialize(serializer),
             SnapshotItems::Agents(items) => items.serialize(serializer),
         }
@@ -567,8 +500,10 @@ pub struct SnapshotRequest {
 
 /// `sync.snapshot_begin` 的 body（`sync.schema.json#/$defs/snapshotBegin`；`docs/SYNC_PROTOCOL.md` §9.4）。
 ///
-/// `schemaVersion` 是 `const 1`，用 [`ProtocolVersionV1`] 表达；`chunkCount` 是 `0..=100000` 的整数，
-/// 必须与 `sync.snapshot_end` 的 `chunkCount` 一致（一致性由会话层校验）。
+/// `schemaVersion` 是 `const 1`，用 [`ProtocolVersionV1`] 表达；`chunkCount` 是 `1..=3` 的整数，
+/// 必须与 `sync.snapshot_end` 的 `chunkCount` 一致（一致性由会话层校验）。上界 3 等于可下发资源的
+/// 种类数（[`SnapshotResource::ALL`]），因此声明的块数不可能超出实际能承载的清单类资源；未协商
+/// `core.local-catalog.v1` 时只下发 `sessions`，取 1。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotBegin {
@@ -578,7 +513,7 @@ pub struct SnapshotBegin {
     #[serde(rename = "schemaVersion")]
     pub schema_version: ProtocolVersionV1,
     #[serde(rename = "chunkCount")]
-    pub chunk_count: BoundedU64<0, 100_000>,
+    pub chunk_count: BoundedU64<1, 3>,
 }
 
 /// `sync.snapshot_chunk` 的 body（`sync.schema.json#/$defs/snapshotChunk`；`docs/SYNC_PROTOCOL.md` §9.4）。
@@ -657,7 +592,8 @@ impl<'de> Deserialize<'de> for SnapshotChunk {
 /// `sync.snapshot_end` 的 body（`sync.schema.json#/$defs/snapshotEnd`；`docs/SYNC_PROTOCOL.md` §9.4）。
 ///
 /// `snapshotDigest` 是对各 chunk 原始字节按序计算的 32 字节摘要（算法见 §9.4），wire 上是
-/// `base64url32`。
+/// `base64url32`。`chunkCount` 的 `1..=3` 与 [`SnapshotBegin::chunk_count`] 同源：它必须等于实际
+/// 下发的 chunk 数，上界等于可下发资源的种类数（[`SnapshotResource::ALL`]）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotEnd {
@@ -665,7 +601,7 @@ pub struct SnapshotEnd {
     pub snapshot_id: Uuid,
     pub cursor: Cursor,
     #[serde(rename = "chunkCount")]
-    pub chunk_count: BoundedU64<0, 100_000>,
+    pub chunk_count: BoundedU64<1, 3>,
     #[serde(rename = "snapshotDigest")]
     pub snapshot_digest: Base64Url<32>,
 }
@@ -675,4 +611,56 @@ pub struct SnapshotEnd {
 #[serde(deny_unknown_fields)]
 pub struct Ack {
     pub cursor: Cursor,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SNAPSHOT: &str = "8194de43-e213-423d-acf4-2e3549304566";
+    const EPOCH: &str = "00384a03-bc90-4095-b65d-82fb8cc47e13";
+
+    fn chunk(resource: &str) -> Result<SnapshotChunk, serde_json::Error> {
+        serde_json::from_str(&format!(
+            r#"{{"snapshotId":"{SNAPSHOT}","chunkIndex":"0","resource":"{resource}","items":[]}}"#
+        ))
+    }
+
+    #[test]
+    fn snapshot_chunk_carries_only_catalog_resources() {
+        assert_eq!(SnapshotResource::ALL.len(), 3, "快照只承载三类清单资源");
+        for resource in ["sessions", "workspaces", "agents"] {
+            assert!(chunk(resource).is_ok(), "清单类资源必须可下发：{resource}");
+        }
+        // 五类会话明细资源不进快照，对本地会话同样如此（§9.4 / design D1）。
+        for resource in [
+            "messages",
+            "turns",
+            "pending_interactions",
+            "config_options",
+            "capabilities",
+        ] {
+            assert!(
+                chunk(resource).is_err(),
+                "会话明细资源不得进入快照：{resource}"
+            );
+        }
+        assert!(chunk("everything").is_err(), "未登记的 resource 必须被拒");
+    }
+
+    #[test]
+    fn chunk_count_matches_the_resources_a_snapshot_can_carry() {
+        let begin = |count: u32| {
+            serde_json::from_str::<SnapshotBegin>(&format!(
+                r#"{{"snapshotId":"{SNAPSHOT}","cursor":{{"serverEpoch":"{EPOCH}","globalSequence":"2318"}},"schemaVersion":1,"chunkCount":{count}}}"#
+            ))
+        };
+        for count in [1, 3] {
+            assert!(begin(count).is_ok(), "chunkCount {count} 必须被接受");
+        }
+        // 0 与超出资源种类数的取值都意味着「声明了发不出的块」，与 §9.4 的 chunkCount 口径冲突。
+        for count in [0, 4, 100_000] {
+            assert!(begin(count).is_err(), "chunkCount {count} 必须被拒");
+        }
+    }
 }

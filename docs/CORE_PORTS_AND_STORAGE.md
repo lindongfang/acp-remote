@@ -25,6 +25,8 @@
 > 版本：0.16（2026-10-02，`sync-workspaces-and-create` 变更 WP3：会话目录归属在 core 侧的形状——§3.1 新增 `WorkspaceRef`（`{ alias, displayName }`，无路径字段），§3.6 注明 `workspace_alias` 是第三列但**不是**恢复列（不进 `SessionRecoveryRecord`、不进 `Session` 聚合，恢复既不读也不改），§5.2 把 `StateChange::Update` 的窄写入列从两个扩为三个（新增 `workspace_alias`，与 `workspace_cwd` 同一次提交、创建时写一次），并写死「目录归属的投影来源只有持久化的别名、不得按 `workspace_cwd` 反查」的 `[决定]`。`SessionSummary.workspace` 是可投影字段（`None` = 未分组），`workspace_cwd` 仍不进可投影形状。**§5/§7 的代码块与 DDL 之外未变**（未新增端口方法与表列），漂移门禁继续逐条绑定）
 > 版本：0.17（2026-10-03，`sync-workspaces-and-create` 变更 WP4：目录归属列在存储层的落盘与投影——§7 升级到 **v6**（`owned_session` 末尾追加 `workspace_alias TEXT`，`ALTER TABLE ADD COLUMN`、可空无默认值、既有行置 `NULL` 且**不得**按 `workspace_cwd` 反查补齐），§7.2 版本常量改 6/6/3（imported 家族仍为 3）并新增 v5 → v6 升级段与「不反查」的 `[决定]`，§7.3 的 `owned_session` DDL 同步，§9 判据 1/28 的版本链与列清单断言改为 v6，§11.3 的「过新」用例取值改为 `user_version = 7`。展示名由存储层在读投影里按别名 `LEFT JOIN owned_workspace` 取得（取不到回退为别名本身，该 JOIN 不上浮到 core）；`load_recovery` 仍不读该列。**§5 的 rust 块与端口签名未变**，§7 的 SQL 块已同批更新，漂移门禁继续逐条成立）
 
+> 版本：0.18（2026-10-04，`sync-scope-and-pwa-client` 变更 WP3：core 派生事件的生产者与两种写入形状——§5.2 的 `StateChange::Update` 增**两层可选**标题字段（`Option<Option<String>>`：`None` = 不改该列、`Some(None)` = 显式置空、`Some(Some(text))` = 写入；唯一来源是 Agent 的 `session_info_update` 经 broker 投影的 `session.info.changed`，**不存在**客户端重命名入口），§5.4 增**节点级**事件通道 `NodeEventSink`（与 `EventSink` 同形的包装类型，但语义是「不属于任何会话的事件」，使「节点级事件不得进入会话槽位」在类型上可见），§6 新增第 21 条（`file.changed` 的派生源与行级差异统计、展示路径的规范化前缀相对化、节点级 `agent.*` 事件的产生与落库、会话标题的单向更新与 `updatedAt` 取 Daemon 持久化时间）。**§7 的 SQL 块与 DDL 未变**（节点级事件的 `owned_event` 三列 CHECK 已就位，不新增 migration；标题列 `owned_session.title` 早已存在），漂移门禁继续逐条成立）
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -389,7 +391,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` imported 写路径的**归属前置**（§11.2 第 5 条）：`upsert_session` 与 `commit_receipt` 都必须在同一写事务内先确认 `(owner_node_id, export_id)` 仍归属某个 Import（`imported_import_export` 有行），否则返回 `NotFound(EntityRef::Export(exportId))` 且零写入——不重建 `imported_session`、不写 `imported_delivery_index`/`imported_command_ref`，也不推进 `local_sequence`。关联行缺失即「该 Import 已被完整移除或从未添加」；同一 `(ownerNodeId, exportId)` 被重新导入后无法区分新旧连接（需导入实例标识或连接代际，见 §7.4）。
 - `[决定]` `origin_epoch` 由 **core** 在创建会话时用 `IdGenerator` 生成并传入（响应审查：存储层返回它会让无创建需求的提交也必须回读）；存储层只校验“该会话已有 epoch 时必须一致”。
 - `[决定]` 幂等命中返回 `CommitOutcome::replayed`，不追加事件、不改状态。
-- `[决定]` **`StateChange::Update` 新增三个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd` 与承载 §3.1 `WorkspaceRef` 的 `workspace_alias`）：`None` = 不改该列。它们只在 `create_session` 里、`SessionBackendFactory::create` 成功返回后**紧接着**的一次提交写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`，`workspace_alias` 取**同一次解析**用掉的别名原文 `ResolvedWorkspace::alias()`（三者都不依赖后端回报）；`agent_session_id()` 为 `None` 时三列都不写，该会话不被当作可恢复会话，目录归属也就是「未分组」。**不**等适配层的终态提交：终态提交会 bump 版本，会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，且终态入口拿不到 core 解析的 cwd。写入之后这三列**只读**：恢复流程只经 `load_recovery` 读其中两列，MUST NOT 覆写，MUST NOT 读或写 `workspace_alias`（`design.md` D1 的归属来源 + D2 的契约订正）。
+- `[决定]` **`StateChange::Update` 新增三个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd` 与承载 §3.1 `WorkspaceRef` 的 `workspace_alias`）：`None` = 不改该列。它们只在 `create_session` 里、`SessionBackendFactory::create` 成功返回后**紧接着**的一次提交写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`，`workspace_alias` 取**同一次解析**用掉的别名原文 `ResolvedWorkspace::alias()`（三者都不依赖后端回报）；`agent_session_id()` 为 `None` 时三列都不写，该会话不被当作可恢复会话，目录归属也就是「未分组」。**不**等适配层的终态提交：终态提交会 bump 版本，会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，且终态入口拿不到 core 解析的 cwd。写入之后这三列**只读**：恢复流程只经 `load_recovery` 读其中两列，MUST NOT 覆写，MUST NOT 读或写 `workspace_alias`（`design.md` D1 的归属来源 + D2 的契约订正）。**`title` 是两层可选**（`sync-scope-and-pwa-client` 变更 WP3 新增）：`Option<Option<String>>` —— `None` = 不改该列、`Some(None)` = **显式置空**（写入 `NULL`）、`Some(Some(text))` = 写入该标题（上限 512 字符）。上面「`None` = 不改该列」的单层口径**覆盖不了**置空这第三个状态，因此存储层的 `CASE WHEN ?x IS NULL` 之外必须再叠一条**哨兵参数**判定来表达「本次提交要置空」；置空与其余列共用**同一条** `UPDATE`，故版本递增（`version = version + 1`）与 `updated_at = commit.at` 对两条路径一致。该字段的语义、唯一来源（Agent 的 `session_info_update` 经 broker 投影出的 `session.info.changed`，**不存在**客户端重命名入口）与失败关闭口径见 §6 第 21 条。
 - `[决定]` **目录归属的投影来源只有持久化的别名**：`SessionStore::list`（以及 `ReadView` 中返回摘要的 `read_session`/`node_link_slice`）给出的 `SessionSummary.workspace` 必须由 `owned_session.workspace_alias` 关联 `owned_workspace` 的展示名得出——该 JOIN 留在同时拥有两张表的存储实现内部，不上浮到 core。MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，「不反查」才能保证同一别名重指向后老会话的归属不漂移、投影期不引入对别名解析表的隐式耦合（`design.md` D1/D6，`workspace-resolution` 的创建时持久化要求）。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
@@ -797,6 +799,13 @@ pub trait AttachmentStore: Send + Sync {
 /// 调用顺序即提交顺序（§6 第 1/3 条）。**不是** trait——§5.1 的 `[决定]` 与实现一致。
 #[derive(Clone)]
 pub struct EventSink(Arc<dyn Fn(EndpointEvent) + Send + Sync>);
+/// **节点级**事件的交付通道（`design.md` D6、R8）：与 `EventSink` 同形（同一个 `Clone` + `send`
+/// 契约），但语义不同——它承载的是**不属于任何会话**的事件（`agent.connected`/`agent.disconnected`）。
+/// 单独成一个类型而不是复用 `EventSink`，是为了让「节点级事件不得进入会话槽位」在类型上可见：
+/// 持有一个 `EventSink` 意味着「这是某个会话的事件」，而本类型的消费者只能是
+/// `Broker::commit_node_event`。
+#[derive(Clone)]
+pub struct NodeEventSink(Arc<dyn Fn(EndpointEvent) + Send + Sync>);
 pub trait EventPublisher: Send + Sync { fn publish(&self, delivery: CommittedDelivery); }
 pub trait Clock: Send + Sync { fn now(&self) -> Timestamp; }
 
@@ -813,6 +822,7 @@ pub trait IdGenerator: Send + Sync {
 - `[决定]` `event_id`：由存储层在提交事务内分配（`SessionStore::commit`），**不**由 `IdGenerator` 提供，避免出现“先生成后提交”导致的两个来源。
 - `[决定]` `IdGenerator` **不提供** `session_id()`/`event_id()`（由存储层在事务内分配，§3.1）与 `attachment_id()`（由 `AttachmentStore::put` 分配并返回，§7.3）：同一个 id 只能有一个来源。
 - `[决定]` `publish` 不返回结果，且不得回滚已提交事务；订阅注册与背压属于 `server`（它持有注册表与有界队列），`app` 把同一个 hub 交给 core 与 server（`MODULE_ARCHITECTURE.md` §6）。
+- `[决定]` **节点级事件不走 `EventSink`**（`sync-scope-and-pwa-client` 变更 WP3、`design.md` D6）：`agent.connected`/`agent.disconnected` 的会话标识为空，而 `EventSink` 是**会话槽位**的入口（`Broker::sink(&SessionId)` 把事件塞进该会话的 pending 队列），走它会把节点级事件归到某个会话上。节点级事实的产生点在适配器（只有它知道「本次是新 spawn 还是复用」与「进程真的退出了」），因此 `agent-host` 用 `NodeEventSink` 交付**已构造好的 `EndpointEvent`**，core 侧的唯一提交入口是 `Broker::commit_node_event`（校验事件类型/类别/turn/ACP 原文/`agentId`/`state` 词表，失败即 `InvalidRequest`），提交形状是 `session: None` 的 `OwnedCommit`。这两类事件当前**没有投递通道**（唯一的入站适配器按会话归属投递），本切片只交付产生与持久化。
 
 ## 6. Broker 的顺序与事务契约
 
@@ -869,6 +879,12 @@ pub trait IdGenerator: Send + Sync {
     - **落盘前失败不构成持久首次结果**（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F1）：幂等行落盘前失败（如存储写失败）的 `session.create` 没有持久记录，因此同 `requestId` 重查回 `nodelink.command.not_found`，且重试可以创建出另一个会话、得到与首次尝试不同的结果——`failed` 终态只适用于适配层在同一 `requestId` 上能复现的确定类失败（授权拒绝、本机 workspace 解析失败），不得把落盘失败也描述成「重试结果确定」。
     - **`settle_session_create` 只终结 `session.create` 的记录**（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F2）：该 `(actor, requestId)` 的持久记录 `command != "session.create"` 时返回 `InvalidRequest` 且零写入（适配层误用，wire 不可达），不得把别的命令的幂等行改写成创建的终态。
     - **崩溃窗口**：两次提交之间崩溃留下 `accepted` 行 + 已创建的会话；第 16 条的启动恢复把它终结为 `uncertain`（`command.uncertain` 事件 + `terminal_event_id`），**不**重放副作用、也不猜测创建是否成功。该行不是无会话命令：`owned_command.session_id` 已回填，恢复走「有会话」分支。
+21. `[决定]` **core 派生的三类生产者**（`sync-scope-and-pwa-client` 变更 WP3；`design.md` D4/D5/D6/D7）：协议早已登记而 core 长期没有生产者的三类事件在本条落地。它们都是**投影**（读适配器给的 `view`/ACP 原文），不新增端口、不新增表、不新增 migration。
+    - **`file.changed` 的派生源唯一**（R5）：只来自 ACP 工具调用内容里的**类型化 Diff 元素**——适配器（`agent-host`）把它逐字节投影成 `tool.call.*` 事件 view 的 `diff` 键（形式为元素数组，元素含 `path`/`oldText`/`newText`/逐字节 `raw`），broker 按该键派生。**MUST NOT** 从 `rawInput` 等自由形状字段推断文件改动；同一个工具调用可能在 `tool.call.started` 与 `tool.call.updated` 里重复携带同一个 Diff 元素，因此派生的去重键是 `(toolCallId, 工具调用给出的**原始 `path` 原文**)`——**不是**展示路径（越界时按 R7 收窄为文件名，是有损的，两个不同目录下的同名越界文件会碰撞而让其一被静默丢弃），且只登记**已提交**的键（落盘失败的批次不得吃掉重试的派生）。派生**不改动**该次 ACP 原文的字节、其摘要与字节长度（`payload.acp` 三要素在派生前后逐字不变）。
+    - **行数用行级差异统计**（R6）：`addedLines`/`deletedLines` 由 `oldText`/`newText` 之间的**行级 Myers diff** 得出（`D = (N−lcs)+(M−lcs)`，`added = M−lcs`、`deleted = N−lcs`，只求编辑距离即可，因此实现是线性空间）；**MUST NOT** 用两段文本的行数相减代替——行数相等而内容不同时必须仍报出非零改动。`oldText` 缺席 = 新建文件（全部行计新增、删除为零）；`newText` 缺席或超出工作预算 = **省略这两项**（`MUST NOT` 以零代替未知）。省略时那两个键在 view 里整个缺席。
+    - **展示路径相对化**（R7）：`displayPath` 是相对该会话**工作目录根**（`owned_session.workspace_cwd`，经 `SessionStore::load_recovery` 窄读取取得）的形式，不下发绝对路径、不含工作目录根的任何片段或回退层级；经**规范化后**的组件前缀关系判定不在其下（含工作目录根未登记、报告路径是绝对路径而根不存在、相对形式带回退层级逃出根）时置 `outsideWorkspace: true` 且只下发文件名称。字符串前缀相同但不在其下（`/work/api` 与 `/work/api-tools`）不得被判为工作区内。
+    - **节点级 Agent 事件**（R8）：`agent.connected`/`agent.disconnected` 由适配器经 `NodeEventSink` 交付**已构造好的 `EndpointEvent`**，core 侧唯一入口是 `Broker::commit_node_event`——校验后按 `session: None` 的 `OwnedCommit` 落库（`owned_event` 的 `session_id`/`session_sequence`/`origin_epoch`/`origin_sequence` 四列由既有 CHECK 约束为同时为空），**不新增 migration**。`state` 是封闭词表且与该事件类型一一对应；这些事件**不表达**任何会话的活跃程度，也不得经会话级投递路径归属到任意会话。
+    - **会话标题单向由 Agent 通知更新**（R9）：`StateChange::Update.title` 是**两层可选**（`None` = 不改该列、`Some(None)` = 显式置空、`Some(Some(text))` = 写入），唯一来源是 ACP `session_info_update` 投影出的 `session.info.changed`。判定「通知有没有携带标题」读的是 **ACP 原文**（`payload.acp` 的 `params.update.title` 键是否存在）——公共 view 的 `title` 是 `SYNC_PROTOCOL.md` §10.3 的 required 字段（`string|null`），键永远存在，表达不了「缺席 vs 显式 null」；ACP 原文不可用时退回 view 并把 `null` 当作「不改」（最保守解释，绝不把「不改」误判成「清空」）。标题超长（> 512 字符）→ 失败关闭（`InvalidRequest`），不写入违反值对象不变量的取值。**`updatedAt` 取 Daemon 持久化时间**（`commit.at`，由存储层写进 `owned_session.updated_at`）：view 里照常转发 Agent 自报值，但决定排序的权威时间不是它。命令目录**不存在**任何重命名会话的命令，也没有绕过该通知直接写标题的路径。
 
 ## 7. `storage-sqlite` v6 表结构（`imported_*` 家族仍为 v3）
 

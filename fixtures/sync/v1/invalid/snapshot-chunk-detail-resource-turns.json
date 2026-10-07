@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "3b8e0c47-5d92-4a16-b7f0-9c2d5a8e1360",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "75",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "1",
+    "resource": "turns",
+    "items": [
+      {
+        "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+        "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+        "state": "running",
+        "createdAt": "2026-09-17T11:58:00.000Z",
+        "startedAt": "2026-09-17T11:58:00.000Z",
+        "completedAt": null,
+        "terminalError": null
+      }
+    ]
+  }
+}

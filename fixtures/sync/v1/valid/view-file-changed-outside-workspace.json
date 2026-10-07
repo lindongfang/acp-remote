@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "8f4a2d67-1c39-4e80-b5a2-6d0f7c3b9e15",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "101",
+  "body": {
+    "globalSequence": "2371",
+    "sessionSequence": "231",
+    "eventId": "0c9e5b32-7a14-4d68-9f03-2b6e8c1a4d57",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "eventType": "file.changed",
+    "causationRequestId": null,
+    "origin": { "kind": "agent", "deviceId": null },
+    "remoteOrigin": null,
+    "createdAt": "2026-09-17T12:16:30.000Z",
+    "payload": {
+      "view": {
+        "changeId": "a5d2f803-6e47-4c19-b8f2-3d0a7e5c9b61",
+        "kind": "modified",
+        "displayPath": "outside.txt",
+        "summary": "工作区外的路径只下发文件名，不含回退层级。",
+        "outsideWorkspace": true
+      }
+    }
+  }
+}

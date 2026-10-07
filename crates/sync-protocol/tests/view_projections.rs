@@ -20,7 +20,8 @@ const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
 /// 声明了 `viewDef` 的夹具数（`event-remote-origin.json` 与三条事件夹具复用同一批 event 类型）。
-const EXPECTED_VIEW_CASES: usize = 36;
+/// MU1b 的 TP1 追加了两条 `file.changed` 合法视图夹具（统计省略、工作区外），因此由 36 增至 38。
+const EXPECTED_VIEW_CASES: usize = 38;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
 const EXPECTED_DISTINCT_VIEWS: usize = 34;
 

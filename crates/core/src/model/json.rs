@@ -243,6 +243,14 @@ pub(crate) enum MemberValue {
     NonText,
 }
 
+/// [`object_members`] 的 crate 内公共读取面（broker 需要按键读取**任意深度**的 object，而不只是顶层）。
+///
+/// 与 `object_members` 逐条同口径（保持文本顺序、值的原文切片、解码后的键），只是把它暴露给同 crate
+/// 的其它模块；本函数不改变校验强度。
+pub(crate) fn json_object_members(text: &str) -> Result<Vec<(String, &str)>, InvalidValue> {
+    object_members(text)
+}
+
 /// 读取顶层 object 的一个成员。
 ///
 /// 与 [`object_members`] 同一口径：输入必须已经过 [`validate_document`]。
@@ -286,6 +294,42 @@ pub(crate) fn insert_string_member_front(
     }
     out.push_str(rest);
     Ok(out)
+}
+
+/// 若 `raw` 是 JSON 数组，返回各元素的**原文切片**（空数组返回空 `Vec`）；否则 `None`。
+///
+/// 与 [`string_array_items`] 同一套扫描口径，只是不限定元素形状——供需要按元素再判断的调用方使用。
+pub(crate) fn array_items(raw: &str) -> Option<Vec<&str>> {
+    let mut scanner = Scanner {
+        bytes: raw.as_bytes(),
+        pos: 0,
+        depth: 0,
+        max_depth: 0,
+    };
+    scanner.skip_ws();
+    if scanner.peek() != Some(b'[') {
+        return None;
+    }
+    scanner.pos += 1;
+    let mut items = Vec::new();
+    scanner.skip_ws();
+    if scanner.peek() == Some(b']') {
+        return Some(items);
+    }
+    loop {
+        scanner.skip_ws();
+        let start = scanner.pos;
+        if scanner.scan_value().is_err() {
+            return None;
+        }
+        items.push(&raw[start..scanner.pos]);
+        scanner.skip_ws();
+        match scanner.peek() {
+            Some(b',') => scanner.pos += 1,
+            Some(b']') => return Some(items),
+            _ => return None,
+        }
+    }
 }
 
 /// 若 `raw` 是「全部元素都是 JSON 字符串」的数组，返回解码后的元素（空数组返回空 `Vec`）；否则 `None`。

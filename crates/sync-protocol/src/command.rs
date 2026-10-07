@@ -29,8 +29,8 @@ use serde_json::value::RawValue;
 
 use crate::common::{
     ConfigOptionValue, ConfigOptionView, DecimalString, ModeState, NonEmptyText, Nullable,
-    PromptContentBlock, PublicError, RawObject, SessionSummary, Timestamp, Uuid, ValueError,
-    deserialize_optional_non_null,
+    PromptContentBlock, PublicError, RawObject, SessionSummary, Timestamp, UIntAtLeast, Uuid,
+    ValueError, deserialize_optional_non_null,
 };
 use crate::sync::{
     SnapshotItemCapability, SnapshotItemMessage, SnapshotItemPendingInteraction, SnapshotItemTurn,
@@ -380,11 +380,35 @@ impl<'de> Deserialize<'de> for IncludeList {
     }
 }
 
-/// `sessionRead`（`command.schema.json#/$defs/sessionRead`）的 `payload`：`{ include }`。
+/// `sessionReadBefore`（`command.schema.json#/$defs/sessionReadBefore`）：`session.read` 的复合分页
+/// 游标 `{ createdAt, messageId }`（`docs/SYNC_PROTOCOL.md` §11.5，design D2）。
+///
+/// 两个键都必需，因此 `deny_unknown_fields` 与「只给一项」共同把单字段游标拒成
+/// [`ValueError::Shape`]——服务端不得猜测或补全缺失的排序分量。排序键是 `createdAt` 升序，
+/// `messageId` 只作同一时刻内的 tie-breaker；它的数值与字典序都不是排序依据（§3.3）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionReadBefore {
+    #[serde(rename = "createdAt")]
+    pub created_at: Timestamp,
+    #[serde(rename = "messageId")]
+    pub message_id: Uuid,
+}
+
+/// `sessionRead`（`command.schema.json#/$defs/sessionRead`）的 `payload`：
+/// `{ include, before?, limit? }`。
+///
+/// `before` 与 `limit` 只在 Sync 传输面生效（design D3）：`node-link-protocol` 的同名命令载荷不含
+/// 这两个键，本 crate 不镜像它们。省略 `before` 表示取最新一页；`limit` 省略时服务端用配置默认页，
+/// 超过服务端上限时服务端收敛到自己的上限而不报错，因此 schema 侧没有 `maximum`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionRead {
     pub include: IncludeList,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<SessionReadBefore>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<UIntAtLeast<1>>,
 }
 
 /// `session.prompt.payload.content`：`1..=64` 个 [`PromptContentBlock`]（schema 的 `minItems`/`maxItems`）。
@@ -681,10 +705,11 @@ impl CommandPayload {
                 "{ workspaceAlias, agentId }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
-            CommandName::SessionRead => {
-                parse_payload(payload, "{ include: 资源名数组 }（sessionRead 的 payload）")
-                    .map(CommandPayload::SessionRead)
-            }
+            CommandName::SessionRead => parse_payload(
+                payload,
+                "{ include: 资源名数组, before?: { createdAt, messageId }, limit?: >=1 }（sessionRead 的 payload）",
+            )
+            .map(CommandPayload::SessionRead),
             CommandName::SessionPrompt => parse_payload(
                 payload,
                 "{ content: PromptContentBlock[] }（sessionPrompt 的 payload）",
@@ -903,12 +928,17 @@ pub struct SessionReadResources {
 /// `sessionReadResult`（`command.schema.json#/$defs/sessionReadResult`）：`session.read` 的完成结果。
 ///
 /// 非本端导入的会话由 Owner 回源（`docs/SYNC_PROTOCOL.md` §11.5），wire 形状不受影响。
+///
+/// `has_earlier` 是必填布尔值：本次返回的这一页之前是否仍有更早内容。它为 `false` 时客户端必须停止
+/// 翻页，不得把「本页为空」当作「已到最早一条」之外的任何结论。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionReadResult {
     #[serde(rename = "sessionId")]
     pub session_id: Uuid,
     pub resources: SessionReadResources,
+    #[serde(rename = "hasEarlier")]
+    pub has_earlier: bool,
 }
 
 /// `configListResult`（`command.schema.json#/$defs/configListResult`）：`session.config.list` 的
@@ -1356,5 +1386,90 @@ mod tests {
         );
         let accepted: CommandResult = serde_json::from_str(&accepted).expect("accepted 必须接受");
         assert!(accepted.result.is_null());
+    }
+    #[test]
+    fn session_read_paging_is_optional_and_the_cursor_is_composite() {
+        let include_only = body(
+            "session.read",
+            &format!(r#""sessionId":"{SESSION}","#),
+            r#"{"include":["messages"]}"#,
+        );
+        let command: Command =
+            serde_json::from_str(&include_only).expect("只给 include 必须接受：默认页由服务端决定");
+        let payload = match command.payload {
+            CommandPayload::SessionRead(payload) => payload,
+            other => panic!("payload 必须是 SessionRead：{other:?}"),
+        };
+        assert_eq!(payload.before, None, "省略 before 即请求最新一页");
+        assert_eq!(payload.limit, None, "省略 limit 不得被要求显式给出页大小");
+
+        let paged = body(
+            "session.read",
+            &format!(r#""sessionId":"{SESSION}","#),
+            r#"{"include":["messages"],"before":{"createdAt":"2026-09-17T12:00:00.000Z","messageId":"7c1d4e6f-8a90-4b2c-9d3e-5f6a7b8c9d0e"},"limit":20}"#,
+        );
+        let payload = match serde_json::from_str::<Command>(&paged)
+            .expect("复合游标必须接受")
+            .payload
+        {
+            CommandPayload::SessionRead(payload) => payload,
+            other => panic!("payload 必须是 SessionRead：{other:?}"),
+        };
+        let before = payload.before.expect("before 必须被解析成复合游标");
+        assert_eq!(
+            before.message_id.as_str(),
+            "7c1d4e6f-8a90-4b2c-9d3e-5f6a7b8c9d0e"
+        );
+        assert_eq!(payload.limit.expect("limit 必须被解析").get(), 20);
+
+        for rejected in [
+            // 单字段游标：只给 messageId 不得被补全 createdAt（design D2 / §11.5）。
+            r#"{"include":["messages"],"before":{"messageId":"7c1d4e6f-8a90-4b2c-9d3e-5f6a7b8c9d0e"}}"#,
+            // 单字段游标：只给 createdAt 同理。
+            r#"{"include":["messages"],"before":{"createdAt":"2026-09-17T12:00:00.000Z"}}"#,
+            // 游标只接受这两个键：拿 messageId 当排序依据的自造字段不是形状的一部分。
+            r#"{"include":["messages"],"before":{"createdAt":"2026-09-17T12:00:00.000Z","messageId":"7c1d4e6f-8a90-4b2c-9d3e-5f6a7b8c9d0e","offset":20}}"#,
+            // limit 是结构性计数：0 与小数都不是合法页大小。
+            r#"{"include":["messages"],"limit":0}"#,
+            r#"{"include":["messages"],"limit":20.5}"#,
+            // 偏移量分页是被否决的替代（design D2）：不得出现在 wire 上。
+            r#"{"include":["messages"],"offset":20}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Command>(&body(
+                    "session.read",
+                    &format!(r#""sessionId":"{SESSION}","#),
+                    rejected,
+                ))
+                .is_err(),
+                "payload 必须被拒：{rejected}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_read_result_carries_has_earlier() {
+        let result = |has_earlier: &str| {
+            format!(
+                r#"{{"requestId":"{REQUEST}","command":"session.read","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":null,"result":{{"sessionId":"{SESSION}","resources":{{"messages":[]}},"hasEarlier":{has_earlier}}},"error":null}}"#
+            )
+        };
+
+        for (wire, expected) in [("true", true), ("false", false)] {
+            let parsed: CommandResult =
+                serde_json::from_str(&result(wire)).expect("hasEarlier 两态都必须接受");
+            let payload = match parsed.result.as_ref() {
+                Some(CommandResultPayload::SessionRead(payload)) => payload,
+                other => panic!("completed 的 result 必须是 sessionReadResult：{other:?}"),
+            };
+            assert_eq!(
+                payload.has_earlier, expected,
+                "hasEarlier 必须逐字承载服务端结论"
+            );
+        }
+
+        // 必填：缺席时不得按默认值放行——客户端无法区分「没有更早内容」与「服务端没说」。
+        let missing = result("true").replace(r#","hasEarlier":true"#, "");
+        assert!(serde_json::from_str::<CommandResult>(&missing).is_err());
     }
 }

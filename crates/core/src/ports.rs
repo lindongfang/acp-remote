@@ -153,6 +153,11 @@ pub trait SessionEndpoint: Send + Sync {
 // ---------------------------------------------------------------------------------------------
 
 /// 一次提交里对会话行的修改。`OwnedCommit::state` 为 `None` 时只追加事件与 turn 变更。
+///
+/// `Update` 的载荷（`SessionUpdate`）比 `Create` 大得多，但两者的形状是已冻结的合同、调用点全部按值
+/// 构造：装箱会改动全部调用点与匹配点的写法，收益只是省下每次提交一次的枚举尺寸，因此这里显式保留
+/// 按值载荷。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum StateChange {
     /// 新建 owned 会话：`OwnedCommit.session` 必须为 `None`、`expected_version` 必须为 `None`、
@@ -172,6 +177,16 @@ pub struct NewSession {
 pub struct SessionUpdate {
     /// `None` = 不改会话状态（例如只解析一个交互）。
     pub state: Option<SessionState>,
+    /// `owned_session.title`：**两层可选**。
+    ///
+    /// - `None` = 不改该列（ACP `SessionInfoUpdate` 是所有字段可选的部分更新：通知只携带
+    ///   `updatedAt` 时标题必须保持不变）；
+    /// - `Some(None)` = 把标题显式置空（通知把 `<title>` 显式置空 → 客户端呈现为未命名会话）；
+    /// - `Some(Some(text))` = 写入该标题（上限 512 字符，与 `Session::title` 同一约束）。
+    ///
+    /// 唯一来源是 Agent 的 `session_info_update` 通知经 broker 投影的 `session.info.changed`
+    /// （`design.md` D7）：不存在客户端发起的重命名命令，也没有绕过该通知直接写标题的路径。
+    pub title: Option<Option<String>>,
     pub mode: ModeChange,
     /// `Some` 时会话进入 `Closed` 并写 `closed_at`。
     pub closed_at: Option<Timestamp>,
@@ -1095,6 +1110,30 @@ impl EventSink {
 impl std::fmt::Debug for EventSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("EventSink")
+    }
+}
+
+/// **节点级**事件的交付通道（`design.md` D6、R8）：与 [`EventSink`] 同形（同一个 `Clone` + `send` 契约），
+/// 但语义不同——它承载的是**不属于任何会话**的事件（`agent.connected`/`agent.disconnected`）。
+///
+/// 单独成一个类型而不是复用 `EventSink`，是为了让「节点级事件不得进入会话槽位」在类型上可见：持有一个
+/// `EventSink` 意味着「这是某个会话的事件」，而本类型的消费者只能是 [`crate::broker::Broker::commit_node_event`]。
+#[derive(Clone)]
+pub struct NodeEventSink(Arc<dyn Fn(EndpointEvent) + Send + Sync>);
+
+impl NodeEventSink {
+    pub fn new(f: impl Fn(EndpointEvent) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    pub fn send(&self, event: EndpointEvent) {
+        (self.0)(event)
+    }
+}
+
+impl std::fmt::Debug for NodeEventSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NodeEventSink")
     }
 }
 

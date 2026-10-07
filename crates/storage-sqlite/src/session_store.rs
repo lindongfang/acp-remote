@@ -1139,6 +1139,7 @@ impl SqliteStore {
                          agent_session_id = CASE WHEN ?5 IS NULL THEN agent_session_id ELSE ?5 END, \
                          workspace_cwd = CASE WHEN ?6 IS NULL THEN workspace_cwd ELSE ?6 END, \
                          workspace_alias = CASE WHEN ?7 IS NULL THEN workspace_alias ELSE ?7 END, \
+                         title = CASE WHEN ?9 THEN NULL WHEN ?8 IS NULL THEN title ELSE ?8 END, \
                          version = version + 1, updated_at = ?3 \
                          WHERE session_id = ?4 RETURNING version"
                     }
@@ -1149,6 +1150,7 @@ impl SqliteStore {
                          agent_session_id = CASE WHEN ?7 IS NULL THEN agent_session_id ELSE ?7 END, \
                          workspace_cwd = CASE WHEN ?8 IS NULL THEN workspace_cwd ELSE ?8 END, \
                          workspace_alias = CASE WHEN ?9 IS NULL THEN workspace_alias ELSE ?9 END, \
+                         title = CASE WHEN ?11 THEN NULL WHEN ?10 IS NULL THEN title ELSE ?10 END, \
                          version = version + 1, updated_at = ?3, \
                          current_mode_id = ?5, current_mode_name = ?6 \
                          WHERE session_id = ?4 RETURNING version"
@@ -1166,6 +1168,16 @@ impl SqliteStore {
                     .bind(update.agent_session_id.as_ref().map(AgentSessionId::as_str))
                     .bind(update.workspace_cwd.as_deref())
                     .bind(update.workspace_alias.as_deref());
+                // R9（`design.md` D7）：标题是**两层可选**——`None` = 不改该列，`Some(None)` = 显式置空，
+                // `Some(Some(text))` = 写入该标题。SQLite 的 `?N IS NULL` 区分不了「不改」与「置空」，因此
+                // 借一条按真值判定的**哨兵**参数 `?9`（`ModeChange::Set` 下是 `?11`）把「不改」编码成
+                // `?9 = 0 且 ?8 IS NULL`、把「置空」编码成 `?9 = 1`：一个 `CASE` 同时表达三态，与其余列共用
+                // **同一条**语句，因此 `version = version + 1`、`updated_at = ?3` 与同一提交里的其它列一律
+                // 照写（§5.2/§6 第 21 条；旧实现另起窄语句，曾丢弃这三者）。
+                // `?N` 的编号与绑定顺序一一对应（`?8` 是标题值、`?9` 是置空哨兵；`ModeChange::Set` 下依次
+                // 为 `?10`/`?11`），因此这两条绑定必须按值、哨兵的顺序追加。
+                let clear_title = i64::from(matches!(update.title, Some(None)));
+                let query = query.bind(update.title.clone().flatten()).bind(clear_title);
                 let new_version: Option<i64> = query.fetch_optional(&mut *tx).await.db()?;
                 version = match new_version {
                     Some(value) => parse_version(value, "owned_session.version")?,

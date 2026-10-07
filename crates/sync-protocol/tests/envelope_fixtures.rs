@@ -22,11 +22,17 @@ use sync_protocol::sync;
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
-const EXPECTED_VALID_MESSAGE_CASES: usize = 67;
+const EXPECTED_VALID_MESSAGE_CASES: usize = 89;
 const EXPECTED_ENVELOPE_REJECTED: usize = 2;
-const EXPECTED_BODY_REJECTED: usize = 9;
+const EXPECTED_BODY_REJECTED: usize = 21;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 const EXPECTED_SKIPPED_PAIRING: usize = 5;
+/// 只针对某个 **子模式**（`schemaPointer`）的载荷用例：它们不是一条完整的 WSS 消息，因此不经过
+/// 信封层。三类来源：acp 上游的片段（`fixtures/acp/v1/...`）、事件视图封闭 enum 与可选字段的
+/// 负例（`event-views.schema.json#/$defs/*`）、以及 `sync.cursor_invalid.details.reason` 的词表
+/// 负例（`common.schema.json#/$defs/errorCode`）。它们由 `check-schema-fixtures.mjs` 的
+/// `checkValueAtPointer` 与 `tests/contract_vectors_r1_r9.rs` 覆盖。
+const EXPECTED_TARGETED_PAYLOADS: usize = 9;
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/sync/v1/pairing.schema.json";
 
 fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {
@@ -121,15 +127,23 @@ fn every_manifest_case_behaves_as_declared() {
     let mut envelope_rejected = 0;
     let mut body_rejected = 0;
     let mut skipped_pairing = 0;
+    let mut targeted_payloads = 0;
 
     for case in &cases {
         if !is_wss_message(&case.schema) {
+            if case.schema.ends_with(PAIRING_SCHEMA_SUFFIX) {
+                skipped_pairing += 1;
+                continue;
+            }
+            // `schemaPointer` 只校验子模式的片段：不是完整消息，由 `check-schema-fixtures.mjs`
+            // 的 `checkValueAtPointer` 与 `tests/contract_vectors_r1_r9.rs` 覆盖，这里只计数，
+            // 以免把「片段不是消息」误判成「消息被拒」。
             assert!(
-                case.schema.ends_with(PAIRING_SCHEMA_SUFFIX),
-                "{}：非 WSS 用例只允许是 pairing 载荷（其余需在本测试内覆盖）",
+                case.schema_pointer.is_some(),
+                "{}：非 WSS 用例必须是 pairing 载荷或 `schemaPointer` 片段（其余需在本测试内覆盖）",
                 case.fixture
             );
-            skipped_pairing += 1;
+            targeted_payloads += 1;
             continue;
         }
 
@@ -209,10 +223,15 @@ fn every_manifest_case_behaves_as_declared() {
         skipped_pairing, EXPECTED_SKIPPED_PAIRING,
         "非 WSS 用例数变化"
     );
+    assert_eq!(
+        targeted_payloads, EXPECTED_TARGETED_PAYLOADS,
+        "schemaPointer 子模式用例数变化"
+    );
 
     println!(
         "sync envelope: {valid_message_cases} 条合法消息全部保真并类型化往返一致，\
-{envelope_rejected} 条被信封层拒绝，{body_rejected} 条被 body 层拒绝，跳过 {skipped_pairing} 条非 WSS 用例"
+{envelope_rejected} 条被信封层拒绝，{body_rejected} 条被 body 层拒绝，跳过 {skipped_pairing} 条非 WSS 用例、\
+{targeted_payloads} 条 schemaPointer 子模式用例"
     );
 }
 

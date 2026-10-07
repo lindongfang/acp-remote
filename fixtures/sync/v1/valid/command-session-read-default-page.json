@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "3b1c7f52-9d84-4a6e-b0c3-5e8a1f2d4b60",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "60",
+  "body": {
+    "requestId": "9c4e17ba-2f83-4d05-a6b1-7e0d9c8f3a24",
+    "command": "session.read",
+    "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+    "payload": {
+      "include": ["messages", "pending_interactions"]
+    }
+  }
+}

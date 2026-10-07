@@ -21,20 +21,22 @@
 //! 失败——那时**不静默跳过检查点**，而是上报为关闭错误。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent,
-    DeviceId, EntityRef, ExportId, NodeId, PortError, SecretValue, ServerEpoch, Timestamp,
-    UnavailableKind,
+    DeviceId, EndpointEvent, EntityRef, ExportId, NodeId, PortError, SecretValue, ServerEpoch,
+    Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
     AgentCatalog, AttachmentStore, AuditStore, Clock, CredentialResolver, EventPublisher,
-    IdGenerator, LocalConfigStore, RetentionPolicy, SessionBackendFactory, SessionStore,
+    IdGenerator, LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory,
+    SessionStore,
 };
 use acp_core::ports::{ExportStore, RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
-use agent_host::{AgentHost, HostConfig};
+use agent_host::{AgentHost, HostConfig, NodeEvents};
 use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey, SecretPurpose};
 use identity_keystore::{EphemeralKeystore, FileKeystore, OsEntropy};
 use server::local_admin::ConnectionCloser;
@@ -55,6 +57,12 @@ const KEYSTORE_DIRECTORY: &str = "keystore";
 
 /// 连接级拒绝审计队列的容量（有界，避免被拒绝连接造成无界内存增长）。
 const AUDIT_CHANNEL_CAPACITY: usize = 64;
+
+/// 关闭序列等待节点级事件提交排空的上限（`Composition::close` 的屏障）。
+///
+/// 节点级事件稀少（每个 profile 进程各一次）且提交是单条事务；正常情形下毫秒级完成。**必须有**上限：
+/// `close()` 不得无限期挂住，超过上限如实上报为关闭错误（见 [`ComposeError::NodeEventsPending`]）。
+const NODE_EVENT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 组合根装配失败。全部失败即拒绝启动（失败关闭）。
 #[derive(Debug, thiserror::Error)]
@@ -82,6 +90,10 @@ pub enum ComposeError {
     /// 关闭时仍有其它组件持有存储句柄，无法完成 `wal_checkpoint(TRUNCATE)`。
     #[error("关闭时存储仍被其他组件持有")]
     StoreStillShared,
+    /// 关闭时仍有节点级事件提交未完成，存储不得在此之前关闭（否则最后一条
+    /// `agent.disconnected` 会因写入撞上已关闭的存储而丢失）。
+    #[error("关闭时仍有节点级事件提交未完成")]
+    NodeEventsPending,
 }
 
 impl ComposeError {
@@ -107,6 +119,9 @@ impl ComposeError {
             Self::Identity(_) => "this node's identity is not usable".to_owned(),
             Self::KeystoreUnavailable => "no platform keystore backend is available".to_owned(),
             Self::StoreStillShared => "the store is still shared at shutdown time".to_owned(),
+            Self::NodeEventsPending => {
+                "node-level event submissions did not drain before the shutdown deadline".to_owned()
+            }
         }
     }
 }
@@ -168,6 +183,13 @@ pub struct Composition {
     /// （core 不读时钟、不设定时器，见 `crates/core/src/broker.rs` 模块头）。
     broker: Arc<Broker>,
     use_cases: Arc<UseCases>,
+    /// 节点级事件提交任务的句柄（组合根持有，与 sink 闭包共享）。
+    ///
+    /// `NodeEvents` 的出口是**同步**闭包，而 `Broker::commit_node_event` 是异步的：每次投递都在组合根
+    /// 自己的 runtime 上 `spawn` 一个提交任务，句柄登记在这里。存在的唯一理由是**关闭顺序**——若不等待，
+    /// 最后一条 `agent.disconnected`（在 `AgentHost::shutdown_all` 内投递）会与紧随其后的
+    /// `Composition::close()` 竞争，存储可能在提交被 poll 到之前就关闭（见 [`Composition::close`]）。
+    node_event_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Composition {
@@ -259,6 +281,37 @@ impl Composition {
             clock: Arc::clone(&clock),
             ids: Arc::clone(&ids),
         }));
+
+        // 节点级事件缝（`design.md` D6、`core-derived-events` R8）：把 WP4 的 `NodeEvents` 接到 WP3 的
+        // `Broker::commit_node_event`。这是本文件承接的**规划缺口收尾**——该缝在 `plan.md` 没有所有者行。
+        //
+        // 为什么用 `set_node_events` 而不是 `with_node_events`：`with_node_events` 消耗 `self` 且必须在
+        // `AgentHost::new` **当时**接，而这里的依赖方向相反——`Broker` 需要 `host`（作为
+        // `SessionBackendFactory`），`node_sink` 闭包又需要 `Broker`，三者构成
+        // `host → sink → broker → backends → host` 的环。唯一的解法是先建 `host`、再建 `broker`，
+        // 然后**原地**接线。`set_node_events` 是 `&self`，经 `Arc<AgentHost>` 解引用即可调用。
+        //
+        // 为什么在这里（`assemble` 末尾）是安全的：本函数**不**打开 endpoint、**不** spawn Agent——
+        // `AgentHost::ensure_runtime` 只在 `SessionBackendFactory::create`/`resume` 或
+        // `AgentCatalog::agent_capabilities` 被调用时才由 `Broker::endpoint_for` 惰性触发，而那些调用点
+        // 全部在 `assemble` 返回之后（`daemon` 的接入层与管理面）。因此本进程的第一次 `agent.connected`
+        // 必然发生在接线完成之后，不会被漏掉（`NodeEvents` 不回填已发生的事件）。
+        //
+        // 桥接（同步 → 异步）：`NodeEventSink` 的闭包是同步的，`commit_node_event` 是异步的，而 core 不依赖
+        // runtime。组合根本就持有 runtime，因此闭包用 `tokio::runtime::Handle::current()`（`assemble` 是
+        // `async fn`，调用点必然在 runtime 上下文内）`spawn` 一个提交任务。**不用 `Handle::block_on`**：
+        // 闭包会在 async worker 上下文里被调用（进程读循环的同步钩子路径），在那里 `block_on` 会 panic。
+        //
+        // 提交任务**不是**游离的：句柄登记进 `node_event_tasks`，由 [`Composition::close`] 在关闭存储
+        // **之前**等待（带 5 s 上限）——否则最后一条 `agent.disconnected` 会撞上已关闭的存储。
+        let node_event_tasks = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let node_handle = tokio::runtime::Handle::current();
+        host.set_node_events(NodeEvents::new(node_event_sink(
+            Arc::downgrade(&broker),
+            node_handle,
+            Arc::clone(&node_event_tasks),
+        )));
+
         Ok(Self {
             config,
             started_at,
@@ -272,6 +325,7 @@ impl Composition {
             host,
             broker,
             use_cases,
+            node_event_tasks,
         })
     }
 
@@ -408,6 +462,11 @@ impl Composition {
     ///
     /// **调用方必须先释放其它持有者**（连接处理器、`DaemonControl`、周期任务、审计写任务、Agent 宿主）：
     /// 否则 `Arc::try_unwrap` 失败，本方法上报 [`ComposeError::StoreStillShared`] 并**不**假装已检查点。
+    ///
+    /// **先排空节点级事件提交**：`agent.disconnected` 的最后一次投递发生在 `AgentHost::shutdown_all`
+    /// 内部，其提交任务由 [`node_event_sink`] spawn。若不等这些任务完成就关池，最后一条断开事件会因写入
+    /// 撞上已关闭的存储而丢失（R8 退化为一条日志）。等待带 5 s 上限；超时**如实上报**
+    /// [`ComposeError::NodeEventsPending`] 而不是静默继续。
     pub async fn close(self) -> Result<(), ComposeError> {
         let Self {
             store,
@@ -420,6 +479,7 @@ impl Composition {
             ids,
             identity,
             config,
+            node_event_tasks,
             ..
         } = self;
         // 显式释放：`UseCases`/`Broker`/`AgentHost` 各自持有存储句柄（`Arc<dyn …>` 克隆）。
@@ -432,6 +492,30 @@ impl Composition {
         drop(ids);
         drop(identity);
         drop(config);
+        // 关闭前的屏障：等已登记的节点级提交任务结束（sink 闭包仍可能登记新任务，因此循环取用，
+        // 直到「一轮下来没有新增且未结束的任务」或超时）。
+        let deadline = std::time::Instant::now() + NODE_EVENT_DRAIN_TIMEOUT;
+        loop {
+            let pending: Vec<tokio::task::JoinHandle<()>> = {
+                let mut tasks = node_event_tasks
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                tasks.retain(|task| !task.is_finished());
+                // 取出再等待：不必持锁跨越 `await`（否则 sink 闭包会阻塞）。
+                std::mem::take(&mut *tasks)
+            };
+            if pending.is_empty() {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero()
+                || tokio::time::timeout(remaining, futures_join(pending))
+                    .await
+                    .is_err()
+            {
+                return Err(ComposeError::NodeEventsPending);
+            }
+        }
         match Arc::try_unwrap(store) {
             Ok(store) => {
                 store.close().await;
@@ -439,6 +523,13 @@ impl Composition {
             }
             Err(_) => Err(ComposeError::StoreStillShared),
         }
+    }
+}
+
+/// 等待全部句柄结束（`JoinHandle` 没有 `futures` 依赖，这里就地串起来）。
+async fn futures_join(handles: Vec<tokio::task::JoinHandle<()>>) {
+    for handle in handles {
+        let _ = handle.await;
     }
 }
 
@@ -828,6 +919,57 @@ impl EventPublisher for ForkedPublisher {
         // 只有 `CommittedDelivery::Owned` 会变成 `resource.event`（imported 投递不跨节点再导出，§4）。
         self.node_link.publish(delivery);
     }
+}
+
+/// 节点级事件的同步出口 → 异步提交的桥（`Composition::assemble` 的接线用）。
+///
+/// `NodeEventSink::new` 的闭包是同步的（core 的 `NodeEvents::send` 在进程读循环的同步钩子路径上调用它），
+/// 而 `Broker::commit_node_event` 是异步的。本函数把每条事件 `spawn` 到组合根自己的 runtime 上提交，
+/// 并把任务句柄登记进 `tasks`，供 [`Composition::close`] 在关闭存储前等待。
+///
+/// **持 `Weak<Broker>` 而非 `Arc`**：`AgentHost` 持有 `NodeEvents`（⇒ 本闭包），而 `Broker` 持有
+/// `AgentHost`（作为 `SessionBackendFactory`）——若本闭包再持 `Arc<Broker>`，就构成
+/// `host → NodeEvents → Broker → host` 的强引用环。环会让 `AgentHost` 与 `Broker` 永不析构，
+/// 进而让它们各自持有的存储句柄永不释放，`Composition::close` 会（**正确地**）以
+/// [`ComposeError::StoreStillShared`] 拒绝检查点。`Weak` 断开该环。
+///
+/// 失败**不静默**：`commit_node_event` 的 `Err` 一律记一条 `error` 级日志（`agent.connected`/
+/// `agent.disconnected` 未落库，R8 不成立），绝不用 `let _ =` 吞掉——那会让「事件没有落库」重新变成
+/// 不可观测。任务句柄被 `JoinHandle::is_finished` 回收，不随进程生命周期无界增长（节点级事件每个
+/// profile 进程各一次，量极小）。
+fn node_event_sink(
+    broker: std::sync::Weak<Broker>,
+    runtime: tokio::runtime::Handle,
+    tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+) -> NodeEventSink {
+    NodeEventSink::new(move |event: EndpointEvent| {
+        let Some(broker) = broker.upgrade() else {
+            // 组合根正在关闭/已释放：此时没有需要落库的提交通道，如实告警（不静默吞掉）。
+            // 正常关闭序列里 Agent 先于 `Broker` 释放，断开事件在那之前已经提交（见 `close` 的屏障）。
+            tracing::warn!(
+                event = "daemon.node_event_commit_skipped",
+                event_type = event.event_type.as_str(),
+                "组合根已释放，节点级事件无法提交"
+            );
+            return;
+        };
+        let handle = runtime.spawn(async move {
+            if let Err(error) = broker.commit_node_event(event).await {
+                // 含内层原因的稳定 token 交 `port_error_token`，不回显可能含 SQL/路径的内层文本（§14.1）。
+                tracing::error!(
+                    event = "daemon.node_event_commit_failed",
+                    reason = port_error_token(&error),
+                    "节点级事件提交失败：agent.connected/agent.disconnected 未落库（R8）"
+                );
+            }
+        });
+        // 先回收已结束的句柄（避免长跑进程里句柄列表无界增长），再登记本次的。
+        let mut tasks = tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(handle);
+    })
 }
 
 /// 装配 broker 的发布端口与它的事件队列（组合根在 [`Composition::assemble`] 之前调用）。

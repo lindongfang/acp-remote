@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "ACP Remote",
+    "slug": "acp-remote",
+    "version": "0.0.0",
+    "scheme": "acp-remote",
+    "platforms": ["web"],
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "experiments": {
+      "typedRoutes": true
+    },
+    "plugins": ["expo-router"]
+  }
+}
