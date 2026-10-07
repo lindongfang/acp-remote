@@ -30,7 +30,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // 只扫描仓库自己的文本，跳过构建产物与依赖目录（与 .gitignore 的意图一致，但这里不解析 git）。
 // 注意不要整体跳过以 `.` 开头的目录：`.agents/`、`.github/`、`.pi/` 里也有需要判定的文档。
-const SKIP_DIRS = new Set([".git", ".husky", "node_modules", "target", "dist"]);
+//
+// `.worktrees/` 与 `.target-wt/` 必须跳过：它们是 agentic apply 的临时工作区（已在 `.gitignore` 里），
+// 每个都含一份仓库的完整副本。本地存在它们时，扫描集会混入上万份重复文档，而**引用归属判定依赖
+// 扫描集合**——同一份 `verification.md` 在纯检出的检出集下会命中「该引用指向某文档，但该文档没有
+// 这一节」，在有 worktree 的本地却因重复副本改变了归因而通过。实测：同一提交在纯检出下报 1 problem
+// （8395 份 md），在主检出（有 `.worktrees/`）下报 OK（9016 份 md）——即本机 `check:docs` 会给假绿。
+const SKIP_DIRS = new Set([".git", ".husky", "node_modules", "target", "dist", ".worktrees", ".target-wt"]);
 
 const errors = [];
 const info = [];
