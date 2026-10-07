@@ -17,7 +17,7 @@
     "check": "npm run typecheck && npm run test"
   },
   "dependencies": {
-    "expo": "~54.0.0",
+    "expo": "~57.0.20",
     "expo-constants": "~18.0.0",
     "expo-router": "~6.0.0",
     "expo-status-bar": "~3.0.0",
