@@ -15,6 +15,7 @@ use std::path::Path;
 
 use sync_protocol::envelope::MessageType;
 use sync_protocol::error::ErrorCode;
+use sync_protocol::sync::SnapshotResource;
 use sync_protocol::views::{self, VIEW_TYPES};
 
 /// `schemas/sync/v1/` 下的全部 schema，按文件名索引。
@@ -318,6 +319,31 @@ fn view_enums_match_schema() {
             .map(|value| value.as_str())
             .to_vec(),
         registered_values("terminal.output", "/properties/stream"),
+    );
+}
+
+/// 快照资源封闭 enum 的镜像门禁：`sync::SnapshotResource::ALL` 与 `sync.schema.json` 的
+/// `$defs.snapshotResource.enum` 相等（逐条且同序）。
+///
+/// 根因与 `view_enums_match_schema` 同源：schema 枚举与 Rust 镜像之间没有判据时，两侧可以静默
+/// 漂移——只在一侧新增取值时所有夹具门禁仍然全绿，而 `server::sync` 消费 Rust 枚举、客户端校验
+/// schema。同序一并断言，是因为 `chunkIndex` 的发送顺序以 schema 的列表顺序为准。
+#[test]
+fn snapshot_resources_match_schema_enum() {
+    let set = SchemaSet::load(&support::repo_path("schemas/sync/v1"));
+    let document = set.document("sync.schema.json");
+
+    let declared: Vec<&str> = document["$defs"]["snapshotResource"]["enum"]
+        .as_array()
+        .unwrap_or_else(|| panic!("sync.schema.json 的 $defs.snapshotResource 不是 closed enum"))
+        .iter()
+        .map(|value| value.as_str().expect("enum 取值必须是字符串"))
+        .collect();
+
+    assert_eq!(
+        SnapshotResource::ALL.map(|value| value.as_str()).to_vec(),
+        declared,
+        "$defs.snapshotResource.enum 与 SnapshotResource::ALL 不一致"
     );
 }
 

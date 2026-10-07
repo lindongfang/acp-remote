@@ -2494,6 +2494,9 @@ fn session_summary(
         .ok()?,
         created_at: wire_timestamp(summary.created_at())?,
         updated_at: wire_timestamp(summary.updated_at())?,
+        // Node Link 投影不扩展目录引用（本次变更的 Non-Goal）：键保持**缺席**而非 `null`，
+        // 因此未协商 `core.local-catalog.v1` 的客户端不会因未知字段拒绝整条摘要。
+        workspace: None,
     })
 }
 

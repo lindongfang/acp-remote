@@ -1,0 +1,30 @@
+{"version":1,"at":"2026-10-02T14:04:25.134Z","wp":"WP1","role":"coder","executor":"coder-vocab","attempt":1,"state":"coding"}
+{"version":1,"at":"2026-10-02T14:04:28.650Z","wp":"WP2","role":"coder","executor":"coder-wire","attempt":1,"state":"coding"}
+{"version":1,"at":"2026-10-02T14:04:30.502Z","wp":"WP3","role":"coder","executor":"coder-core","attempt":1,"state":"coding"}
+{"version":1,"at":"2026-10-02T14:30:13.193Z","wp":"WP2","role":"coder","executor":"reviewer-wire","attempt":1,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T14:38:22.128Z","wp":"WP2","role":"coder","executor":"coder-wire-fix","attempt":2,"state":"fixing","reason":"CR2 MINOR F1-F4"}
+{"version":1,"at":"2026-10-02T14:39:27.087Z","wp":"WP1","role":"coder","executor":"reviewer-vocab","attempt":1,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T14:45:38.771Z","wp":"WP2","role":"coder","executor":"reviewer-wire-2","attempt":2,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T14:50:54.263Z","wp":"WP3","role":"coder","executor":"reviewer-core","attempt":1,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T15:07:01.789Z","wp":"WP1","role":"coder","executor":"coder-vocab-fix","attempt":2,"state":"fixing","reason":"review findings"}
+{"version":1,"at":"2026-10-02T15:07:03.578Z","wp":"WP3","role":"coder","executor":"coder-core-fix","attempt":2,"state":"fixing","reason":"review findings"}
+{"version":1,"at":"2026-10-02T15:13:21.008Z","wp":"WP1","role":"coder","executor":"reviewer-vocab-2","attempt":2,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T15:22:52.659Z","wp":"WP3","role":"coder","executor":"reviewer-core-2","attempt":2,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T15:44:19.210Z","wp":"WP1","role":"coder","executor":"merger-1","attempt":2,"state":"ready-to-merge"}
+{"version":1,"at":"2026-10-02T15:44:21.054Z","wp":"WP2","role":"coder","executor":"merger-1","attempt":2,"state":"ready-to-merge"}
+{"version":1,"at":"2026-10-02T15:44:22.809Z","wp":"WP3","role":"coder","executor":"merger-1","attempt":2,"state":"ready-to-merge"}
+{"version":1,"at":"2026-10-02T15:44:25.310Z","wp":"WP4","role":"coder","executor":"coder-storage","attempt":1,"state":"coding"}
+{"version":1,"at":"2026-10-02T16:31:07.361Z","wp":"WP4","role":"coder","executor":"reviewer-storage","attempt":1,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T17:04:05.492Z","wp":"WP4","role":"coder","executor":"coder-storage-fix","attempt":2,"state":"fixing","reason":"CR4 F-01 F-04"}
+{"version":1,"at":"2026-10-02T17:22:25.795Z","wp":"WP4","role":"coder","executor":"reviewer-storage-2","attempt":2,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T17:58:38.991Z","wp":"WP1","role":"coder","executor":"coder-vocab-fix2","attempt":3,"state":"fixing","reason":"CLIPPY-1 large_enum_variant"}
+{"version":1,"at":"2026-10-02T17:58:41.059Z","wp":"WP2","role":"coder","executor":"coder-wire-fix2","attempt":3,"state":"fixing","reason":"FMT-1 rustfmt"}
+{"version":1,"at":"2026-10-02T18:45:31.667Z","wp":"WP1","role":"coder","executor":"reviewer-candidate","attempt":3,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T18:45:33.493Z","wp":"WP2","role":"coder","executor":"reviewer-candidate","attempt":3,"state":"reviewing"}
+{"version":1,"at":"2026-10-02T18:45:35.289Z","wp":"WP1","role":"coder","executor":"merger-1-r2","attempt":3,"state":"ready-to-merge"}
+{"version":1,"at":"2026-10-02T18:45:37.115Z","wp":"WP2","role":"coder","executor":"merger-1-r2","attempt":3,"state":"ready-to-merge"}
+{"version":1,"at":"2026-10-02T18:45:41.429Z","wp":"WP4","role":"coder","executor":"merger-1-r2","attempt":2,"state":"ready-to-merge"}
+{"version":1,"at":"2026-10-02T19:17:16.426Z","wp":"WP1","role":"coder","executor":"merger-1-r2","attempt":3,"state":"merged"}
+{"version":1,"at":"2026-10-02T19:17:18.211Z","wp":"WP2","role":"coder","executor":"merger-1-r2","attempt":3,"state":"merged"}
+{"version":1,"at":"2026-10-02T19:17:20.074Z","wp":"WP3","role":"coder","executor":"merger-1-r2","attempt":2,"state":"merged"}
+{"version":1,"at":"2026-10-02T19:17:21.910Z","wp":"WP4","role":"coder","executor":"merger-1-r2","attempt":2,"state":"merged"}

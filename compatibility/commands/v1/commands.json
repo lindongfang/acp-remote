@@ -13,14 +13,15 @@
     { "name": "session.mode.set", "kind": "mutation", "scope": "session.mode.set", "pack": "pack.configure-session", "grant": "grant.configure-session", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
     { "name": "session.config.set", "kind": "mutation", "scope": "session.config.set", "pack": "pack.configure-session", "grant": "grant.configure-session", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
     { "name": "permission.resolve", "kind": "mutation", "scope": "permission.resolve", "pack": "pack.approve", "grant": "grant.approve", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.create", "kind": "mutation", "scope": "session.create", "pack": null, "grant": "grant.remote-work", "transport": ["node_link"], "delivery": "mvp" },
+    { "name": "session.create", "kind": "mutation", "scope": "session.create", "pack": "pack.create-session", "grant": "grant.remote-work", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "pack": null, "grant": "grant.remote-work", "transport": ["node_link"], "delivery": "conditional_mvp" }
   ],
   "packs": {
     "pack.observe": ["session.list", "session.read", "command.status", "session.mode.list", "session.config.list"],
     "pack.interact": ["session.prompt", "session.cancel", "elicitation.respond"],
     "pack.configure-session": ["session.mode.set", "session.config.set"],
-    "pack.approve": ["permission.resolve"]
+    "pack.approve": ["permission.resolve"],
+    "pack.create-session": ["session.create"]
   },
   "presets": {
     "preset.remote-control": ["pack.observe", "pack.interact", "pack.configure-session", "pack.approve"],

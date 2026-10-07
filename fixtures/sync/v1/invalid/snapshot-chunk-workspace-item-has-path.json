@@ -1,0 +1,19 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "b7e4a290-3f18-4c56-91d0-6a2c8e5f0134",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "12",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "1",
+    "resource": "workspaces",
+    "items": [
+      {
+        "alias": "project.1",
+        "displayName": "Project One",
+        "canonicalPath": "C:/Users/dev/src/project"
+      }
+    ]
+  }
+}

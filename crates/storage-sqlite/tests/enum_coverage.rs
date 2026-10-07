@@ -406,6 +406,7 @@ async fn elicitation_decline_round_trips() {
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
+                workspace_alias: None,
                 interaction: Some(InteractionResolved {
                     interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                     resolution: InteractionResolution::elicitation(

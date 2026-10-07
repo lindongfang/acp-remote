@@ -28,7 +28,7 @@ use acp_core::model::{
     OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError, RawUnavailableReason,
     RemoteSessionRef, RequestId, ResourceOrigin, ScopeSet, Sequence, ServerEpoch, Session,
     SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy,
-    Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
+    Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceAlias, WorkspaceRef,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
@@ -48,9 +48,24 @@ const EVENT_COLUMNS: &str = "global_sequence, session_id, session_sequence, orig
      payload_json, payload_digest, acp_media_type, acp_raw_json, acp_byte_length, acp_sha256, \
      acp_raw_unavailable_reason, created_at, expires_at, compacted_into";
 
-/// `owned_session` 的读列。
+/// `owned_session` 的读列（`load` 的 `Session` 聚合：不带目录归属）。
 const SESSION_COLUMNS: &str = "session_id, title, agent_id, agent_name, state, origin_epoch, \
      current_mode_id, current_mode_name, version, created_at, updated_at, closed_at";
+
+/// 返回 [`SessionSummary`] 的三条读路径（`list`/`read_session`/`node_link_slice`）的读列：
+/// `SESSION_COLUMNS` 加上**持久化的目录别名**与**按别名关联到的展示名**。
+///
+/// 归属的唯一来源是 `owned_session.workspace_alias`；展示名按别名 LEFT JOIN `owned_workspace` 取得，
+/// 接不上时回退为别名本身。`MUST NOT` 按 `workspace_cwd` 反查别名——`NULL` 就是未分组
+/// （`design.md` D1/D6）。JOIN 留在本 crate（两张表都是 owned 家族），不上浮到 core。
+const SESSION_SUMMARY_COLUMNS: &str = "s.session_id, s.title, s.agent_id, s.agent_name, s.state, \
+     s.origin_epoch, s.current_mode_id, s.current_mode_name, s.version, s.created_at, \
+     s.updated_at, s.closed_at, s.workspace_alias, w.display_name AS workspace_display_name";
+
+/// [`SESSION_SUMMARY_COLUMNS`] 的 FROM 子句。列一律带表前缀：`created_at`/`updated_at` 在
+/// `owned_workspace` 上同名，不加前缀会让 `ORDER BY` 与读列变成歧义列。
+const SESSION_SUMMARY_FROM: &str = "owned_session s \
+     LEFT JOIN owned_workspace w ON w.alias = s.workspace_alias";
 
 /// `owned_command` 的读列。
 const COMMAND_COLUMNS: &str = "actor_kind, actor_id, request_id, session_id, command, kind, \
@@ -450,6 +465,32 @@ fn mode_from_row(row: &SqliteRow) -> Result<Option<ModeRef>, StorageError> {
     }
 }
 
+/// 摘要里的目录归属（`SessionSummary.workspace`）。
+///
+/// 权威来源**只有** `owned_session.workspace_alias`：`NULL` 就是「未分组」（`None`），不按
+/// `owned_session.workspace_cwd` 反查别名解析表补齐——否则同一别名重指向后既有会话的归属会漂移
+/// （`design.md` D1/D6、`workspace-resolution` 的「不按路径反查归属」）。
+///
+/// 展示名由 [`SESSION_SUMMARY_FROM`] 的 LEFT JOIN 按别名关联 `owned_workspace` 取得；**关联不上**
+/// （目录被删除）时回退为**别名本身**——别名仍被携带，分组因此不消失，且不泄漏规范化路径。
+fn workspace_from_row(row: &SqliteRow) -> Result<Option<WorkspaceRef>, StorageError> {
+    let Some(alias) = opt_text(row, "workspace_alias")? else {
+        return Ok(None);
+    };
+    let alias = WorkspaceAlias::new(&alias).map_err(|_| StorageError::ColumnValue {
+        column: "owned_session.workspace_alias",
+        expected: "workspace alias",
+    })?;
+    let display_name =
+        opt_text(row, "workspace_display_name")?.unwrap_or_else(|| alias.as_str().to_owned());
+    let reference =
+        WorkspaceRef::try_new(alias, &display_name).map_err(|_| StorageError::ColumnValue {
+            column: "owned_workspace.display_name",
+            expected: "workspace display name",
+        })?;
+    Ok(Some(reference))
+}
+
 fn session_summary_from_row(row: &SqliteRow) -> Result<SessionSummary, StorageError> {
     let summary = SessionSummary::try_new(
         decode(&text(row, "session_id")?, "owned_session.session_id")?,
@@ -461,6 +502,7 @@ fn session_summary_from_row(row: &SqliteRow) -> Result<SessionSummary, StorageEr
         parse_version(int(row, "version")?, "owned_session.version")?,
         decode(&text(row, "created_at")?, "owned_session.created_at")?,
         decode(&text(row, "updated_at")?, "owned_session.updated_at")?,
+        workspace_from_row(row)?,
     )
     .map_err(|_| StorageError::ColumnValue {
         column: "owned_session",
@@ -1082,9 +1124,11 @@ impl SqliteStore {
                 };
                 let (mode_id, mode_name) = mode_columns(&update.mode);
                 // `CASE WHEN ?x IS NULL` 让「未提供的字段保持原值」，避免把已关闭会话的
-                // `closed_at` 或既有状态写成 NULL。恢复所需的 `agent_session_id`/`workspace_cwd` 走同一条
-                // 规则（§7.2 的 v5 两列）：`None` = 不改该列，因此恢复流程（它永远传 `None`）不可能
-                // 覆写已持久化的取值（spec R22）；两列也不在任何读投影里（§3.6 的窄读取）。
+                // `closed_at` 或既有状态写成 NULL。恢复所需的 `agent_session_id`/`workspace_cwd` 与
+                // 目录归属的 `workspace_alias` 走同一条规则（§7.2 的 v5/v6 三列）：`None` = 不改该列，
+                // 因此恢复流程（它永远传 `None`）不可能覆写已持久化的取值（spec R22），`workspace_alias`
+                // 也不会被恢复改写。恢复两列不在任何读投影里（§3.6 的窄读取）；`workspace_alias` 只由
+                // 摘要投影消费。
                 // 参数编号按各语句自己连续编号：SQLite 的 `?NNN` 是按位置绑定，中间留空会让后面的
                 // 绑定落到未使用的下标上（`?7 IS NULL` 恒真 → 静默不写）。
                 let statement = match &update.mode {
@@ -1094,6 +1138,7 @@ impl SqliteStore {
                          closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
                          agent_session_id = CASE WHEN ?5 IS NULL THEN agent_session_id ELSE ?5 END, \
                          workspace_cwd = CASE WHEN ?6 IS NULL THEN workspace_cwd ELSE ?6 END, \
+                         workspace_alias = CASE WHEN ?7 IS NULL THEN workspace_alias ELSE ?7 END, \
                          version = version + 1, updated_at = ?3 \
                          WHERE session_id = ?4 RETURNING version"
                     }
@@ -1103,6 +1148,7 @@ impl SqliteStore {
                          closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
                          agent_session_id = CASE WHEN ?7 IS NULL THEN agent_session_id ELSE ?7 END, \
                          workspace_cwd = CASE WHEN ?8 IS NULL THEN workspace_cwd ELSE ?8 END, \
+                         workspace_alias = CASE WHEN ?9 IS NULL THEN workspace_alias ELSE ?9 END, \
                          version = version + 1, updated_at = ?3, \
                          current_mode_id = ?5, current_mode_name = ?6 \
                          WHERE session_id = ?4 RETURNING version"
@@ -1118,7 +1164,8 @@ impl SqliteStore {
                 }
                 let query = query
                     .bind(update.agent_session_id.as_ref().map(AgentSessionId::as_str))
-                    .bind(update.workspace_cwd.as_deref());
+                    .bind(update.workspace_cwd.as_deref())
+                    .bind(update.workspace_alias.as_deref());
                 let new_version: Option<i64> = query.fetch_optional(&mut *tx).await.db()?;
                 version = match new_version {
                     Some(value) => parse_version(value, "owned_session.version")?,
@@ -1983,22 +2030,22 @@ impl SessionStore for SqliteStore {
         if query.limit == Some(0) {
             return Ok(Vec::new());
         }
-        let mut sql = format!("SELECT {SESSION_COLUMNS} FROM owned_session");
+        let mut sql = format!("SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM}");
         let mut clauses = Vec::new();
         let mut binds: Vec<String> = Vec::new();
         if let Some(only) = &query.only {
-            clauses.push(format!("session_id IN ({})", placeholders(only.len())));
+            clauses.push(format!("s.session_id IN ({})", placeholders(only.len())));
             binds.extend(only.iter().map(|id| id.as_str().to_owned()));
         }
         if !query.states.is_empty() {
-            clauses.push(format!("state IN ({})", placeholders(query.states.len())));
+            clauses.push(format!("s.state IN ({})", placeholders(query.states.len())));
             binds.extend(query.states.iter().map(|state| state.as_str().to_owned()));
         }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
         }
-        sql.push_str(" ORDER BY updated_at DESC, session_id ASC");
+        sql.push_str(" ORDER BY s.updated_at DESC, s.session_id ASC");
         if let Some(limit) = query.limit {
             sql.push_str(&format!(" LIMIT {limit}"));
         }
@@ -2400,7 +2447,7 @@ impl ReadView for SqlReadView {
     ) -> Result<NodeLinkSlice, PortError> {
         let mut guard = self.tx.lock().await;
         let row = sqlx::query(&format!(
-            "SELECT {SESSION_COLUMNS} FROM owned_session WHERE session_id = ?1"
+            "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} WHERE s.session_id = ?1"
         ))
         .bind(session.as_str())
         .fetch_optional(&mut **guard)
@@ -2523,7 +2570,7 @@ impl ReadView for SqlReadView {
         let mut guard = self.tx.lock().await;
         let head = head_of(&mut guard).await?;
         let row = sqlx::query(&format!(
-            "SELECT {SESSION_COLUMNS} FROM owned_session WHERE session_id = ?1"
+            "SELECT {SESSION_SUMMARY_COLUMNS} FROM {SESSION_SUMMARY_FROM} WHERE s.session_id = ?1"
         ))
         .bind(query.session.as_str())
         .fetch_optional(&mut **guard)

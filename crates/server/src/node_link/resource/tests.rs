@@ -212,6 +212,8 @@ fn session_summary() -> SessionSummary {
         Version::new(3),
         ts("2026-09-18T09:00:00.000Z"),
         ts("2026-09-18T09:12:00.000Z"),
+        // 目录归属不在 Node Link 的投影面内（`sessionMeta` 只取 `state`/`version`）。
+        None,
     )
     .expect("会话摘要")
 }

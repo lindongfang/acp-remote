@@ -1,0 +1,16 @@
+{
+  "protocolVersion": 1,
+  "type": "sync.snapshot_chunk",
+  "messageId": "4c1f0b7a-2d68-4e39-8a15-6b3c9d0e7f21",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "9",
+  "body": {
+    "snapshotId": "8194de43-e213-423d-acf4-2e3549304566",
+    "chunkIndex": "1",
+    "resource": "workspaces",
+    "items": [
+      { "alias": "project.1", "displayName": "Project One" },
+      { "alias": "scratch", "displayName": "scratch" }
+    ]
+  }
+}

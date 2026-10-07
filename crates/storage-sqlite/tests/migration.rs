@@ -210,7 +210,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 5);
+        assert_eq!(store.metadata().owned_schema_version, 6);
         assert_eq!(store.metadata().imported_schema_version, 3);
         store.close().await;
 
@@ -397,7 +397,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, 6);
     assert_eq!(store.metadata().imported_schema_version, 3);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
@@ -725,7 +725,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, 6);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -791,27 +791,28 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
 }
 
 ///
-/// §7.2/R13/R19：**v3 → v4 只给 `owned_node` 追加一列，v4 → v5 只给 `owned_session` 追加两列**。
+/// §7.2/R13/R19：**v3 → v4 只给 `owned_node` 追加一列，v4 → v5/v6 只给 `owned_session` 追加三列**。
 ///
 /// 夹具 `fixtures/storage/v2/` 里没有 v3 形状的文件（那是历史资产的忠实副本，本次不改夹具），因此本用例
-/// 在测试里现场造一个 v3 库：先在新建库（当前形状）上写入既有节点行与审计行，再把 v4/v5 才有的列
-/// （`owned_node.export_ids_json` 与 `owned_session.agent_session_id`/`workspace_cwd`）`DROP` 掉并把两个
-/// 版本键降到 3——它对升级段而言就是「有节点行、没有清单列、没有恢复列」的 v3 库。
+/// 在测试里现场造一个 v3 库：先在新建库（当前形状）上写入既有节点行与审计行，再把 v4/v5/v6 才有的列
+/// （`owned_node.export_ids_json` 与 `owned_session.agent_session_id`/`workspace_cwd`/`workspace_alias`）
+/// `DROP` 掉并把两个版本键降到 3——它对升级段而言就是「有节点行、没有清单列、没有恢复列、没有目录归属列」
+/// 的 v3 库。
 ///
 /// 三条判据：
 ///
 /// 1. 既有节点行的 `export_ids_json` 为 `'[]'`（`NOT NULL` 由默认值满足，**不得默认放权**），其余列逐字不变；
 /// 2. owned/imported 两族每张表的列名/顺序/类型/`NOT NULL`/默认值与**新建库**逐项相等（两组追加列
 ///    都在各自表的末尾——`ALTER TABLE` 与 DDL 常量两边的列顺序因此必须一致）；
-/// 3. 除 `owned_node`（v4 段）与 `owned_session`（v5 段）外每条表的 DDL 文本逐字节不变，且
-///    `PRAGMA user_version` 为 5、两族版本键为 5/3——`file_version < 3` 的守卫因此是真的：v3 库不会重跑
+/// 3. 除 `owned_node`（v4 段）与 `owned_session`（v5/v6 两段）外每条表的 DDL 文本逐字节不变，且
+///    `PRAGMA user_version` 为 6、两族版本键为 6/3——`file_version < 3` 的守卫因此是真的：v3 库不会重跑
 ///    v2/v3 那两段 12-step 重建。
 ///
 /// 第 3 条的判别力来自「同名表的 12-step 重建文本与新建库文本不同」，用例用 `owned_audit` 直接断言这一点
 /// （`rebuild_text_differs_from_the_fresh_text`），因此它不是一个永远成立的空断言。
 
 #[tokio::test]
-async fn v3_database_upgrades_to_v5_by_appending_the_export_id_and_recovery_columns_only() {
+async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_columns_only() {
     let dir = temp_dir("migrate-from-v3");
     let created = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
@@ -840,7 +841,7 @@ async fn v3_database_upgrades_to_v5_by_appending_the_export_id_and_recovery_colu
         .execute(&pool)
         .await
         .expect("rewind owned_node to its v3 shape");
-    for column in ["agent_session_id", "workspace_cwd"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -884,7 +885,7 @@ async fn v3_database_upgrades_to_v5_by_appending_the_export_id_and_recovery_colu
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, 6);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -958,32 +959,39 @@ async fn v3_database_upgrades_to_v5_by_appending_the_export_id_and_recovery_colu
         Some((true, Some("'[]'".to_owned()))),
         "新增列必须 NOT NULL 且默认空清单"
     );
-    // v5 的两列：都在 `owned_session` 末尾、都可空且**无默认值**（NULL = 没有可恢复数据，不是空串）。
+    // v5/v6 的三列：都在 `owned_session` 末尾、都可空且**无默认值**（NULL = 没有可恢复数据/未分组，
+    // 不是空串也不是占位别名）。
     let session_specs = column_specs(&pool, "owned_session").await;
-    let recovery_specs: Vec<_> = session_specs
+    let appended_specs: Vec<_> = session_specs
         .iter()
-        .filter(|spec| matches!(spec.0.as_str(), "agent_session_id" | "workspace_cwd"))
+        .filter(|spec| {
+            matches!(
+                spec.0.as_str(),
+                "agent_session_id" | "workspace_cwd" | "workspace_alias"
+            )
+        })
         .cloned()
         .collect();
     assert_eq!(
-        session_specs[session_specs.len().saturating_sub(2)..].to_vec(),
-        recovery_specs,
-        "recovery 两列必须是 owned_session 的最后两列"
+        session_specs[session_specs.len().saturating_sub(3)..].to_vec(),
+        appended_specs,
+        "追加的三列必须是 owned_session 的最后三列"
     );
     assert_eq!(
-        recovery_specs
+        appended_specs
             .iter()
             .map(|spec| (spec.0.clone(), spec.2, spec.3.clone()))
             .collect::<Vec<_>>(),
         vec![
             ("agent_session_id".to_owned(), false, None),
             ("workspace_cwd".to_owned(), false, None),
+            ("workspace_alias".to_owned(), false, None),
         ],
-        "recovery 两列必须可空且无默认值"
+        "追加的三列必须可空且无默认值"
     );
     fresh_pool.close().await;
 
-    // ③ 除 owned_node（v4 段）与 owned_session（v5 段）外每条表的 DDL 逐字节不变
+    // ③ 除 owned_node（v4 段）与 owned_session（v5/v6 两段）外每条表的 DDL 逐字节不变
     // （v3 库不得重跑 12-step 重建）。
     for (table, ddl) in ddl_before {
         let after = table_ddl(&pool, table).await;
@@ -993,10 +1001,10 @@ async fn v3_database_upgrades_to_v5_by_appending_the_export_id_and_recovery_colu
                 "owned_node 必须带上新的清单列：{after}"
             ),
             "owned_session" => {
-                for column in ["agent_session_id", "workspace_cwd"] {
+                for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
                     assert!(
                         after.contains(column),
-                        "owned_session 必须带上恢复列 {column}：{after}"
+                        "owned_session 必须带上追加列 {column}：{after}"
                     );
                 }
             }
@@ -1009,18 +1017,19 @@ async fn v3_database_upgrades_to_v5_by_appending_the_export_id_and_recovery_colu
     pool.close().await;
 }
 
-/// §7.2/R13/R16：**v4 → v5 只给 `owned_session` 末尾追加两个可空列**。
+/// §7.2/R13/R16：**v4 → v6 只给 `owned_session` 末尾追加三个可空列**（v5 两列 + v6 的 `workspace_alias`）。
 ///
-/// 造 v4 库的手法与上一条同款：新建当前形状的库 → 写入一条真的 owned 会话行（除 v5 的两列外列列有值）
-/// → `DROP` 掉 v5 才有的两列并把版本键降到 4。三条判据：
+/// 造 v4 库的手法与上一条同款：新建当前形状的库 → 写入一条真的 owned 会话行（除追加的三列外列列有值）
+/// → `DROP` 掉才有的三列并把版本键降到 4。三条判据：
 ///
-/// 1. 既有会话行的其余列逐字节不变，`agent_session_id`/`workspace_cwd` 为 `NULL`（不是空串、不是占位值）；
+/// 1. 既有会话行的其余列逐字节不变，三列都是 `NULL`（不是空串、不是占位别名/路径）；
 /// 2. `NULL` 不被任何读取路径补齐、推导或以别名解析结果替换——`load_recovery` 对这条会话返回
-///    `Ok(None)`（= 该会话没有可用于恢复的数据，恢复必须显式失败）；
+///    `Ok(None)`（= 该会话没有可用于恢复的数据，恢复必须显式失败），摘要的 `workspace` 是 `None`
+///    （= 未分组）；
 /// 3. 除 `owned_session` 外每条表的 DDL 文本逐字节不变（v4 库不得重跑任何 12-step 重建），
-///    `PRAGMA user_version` 与两族版本键为 5/5/3；两族列清单与新建库逐项相等。
+///    `PRAGMA user_version` 与两族版本键为 6/6/3；两族列清单与新建库逐项相等。
 #[tokio::test]
-async fn v4_database_upgrades_to_v5_by_appending_the_recovery_columns_only() {
+async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let dir = temp_dir("migrate-from-v4");
     let created = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
@@ -1043,7 +1052,7 @@ async fn v4_database_upgrades_to_v5_by_appending_the_recovery_columns_only() {
     .execute(&pool)
     .await
     .expect("seed a session row without the recovery columns");
-    for column in ["agent_session_id", "workspace_cwd"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -1063,7 +1072,7 @@ async fn v4_database_upgrades_to_v5_by_appending_the_recovery_columns_only() {
         .expect("checkpoint");
 
     assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 4);
-    for column in ["agent_session_id", "workspace_cwd"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
         assert!(
             !column_names(&pool, "owned_session")
                 .await
@@ -1080,7 +1089,7 @@ async fn v4_database_upgrades_to_v5_by_appending_the_recovery_columns_only() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, 6);
     assert_eq!(store.metadata().imported_schema_version, 3);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
@@ -1129,21 +1138,21 @@ async fn v4_database_upgrades_to_v5_by_appending_the_recovery_columns_only() {
         ints(
             &pool,
             "SELECT COUNT(*) FROM owned_session \
-             WHERE agent_session_id IS NULL AND workspace_cwd IS NULL"
+             WHERE agent_session_id IS NULL AND workspace_cwd IS NULL AND workspace_alias IS NULL"
         )
         .await,
         vec![1],
-        "既有会话行的两列必须是 NULL"
+        "既有会话行的三列必须是 NULL"
     );
     assert_eq!(
         ints(
             &pool,
             "SELECT COUNT(*) FROM owned_session \
-             WHERE agent_session_id = '' OR workspace_cwd = ''"
+             WHERE agent_session_id = '' OR workspace_cwd = '' OR workspace_alias = ''"
         )
         .await,
         vec![0],
-        "两列不得被空串（或任何占位值）填上"
+        "三列不得被空串（或任何占位值）填上"
     );
 
     // 两族列清单（名称/顺序/类型/NOT NULL/默认值）与新建库逐项相等。
@@ -1173,10 +1182,10 @@ async fn v4_database_upgrades_to_v5_by_appending_the_recovery_columns_only() {
     for (table, ddl) in ddl_before {
         let after = table_ddl(&pool, table).await;
         if table == "owned_session" {
-            for column in ["agent_session_id", "workspace_cwd"] {
+            for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
                 assert!(
                     after.contains(column),
-                    "owned_session 必须带上恢复列 {column}：{after}"
+                    "owned_session 必须带上追加列 {column}：{after}"
                 );
             }
             continue;
@@ -1227,6 +1236,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
                 interaction: None,
                 agent_session_id: Some(agent_session_id.clone()),
                 workspace_cwd: Some(workspace_cwd.clone()),
+                workspace_alias: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -1462,7 +1472,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 5);
+    assert_eq!(store.metadata().owned_schema_version, 6);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 }

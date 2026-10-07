@@ -12,9 +12,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use crate::common::{
-    AgentContentBlock, Base64Url, BoundedU64, ConfigOptionView, Cursor, DecimalString,
-    NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawObject, SessionSummary, Timestamp,
-    Uuid, ValueError,
+    AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, ConfigOptionView, Cursor,
+    DecimalString, NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawObject,
+    SessionSummary, Timestamp, Uuid, ValueError, WorkspaceRef,
 };
 
 /// `sync.resetRequired.reason` / `sync.snapshotRequest.reason` 的取值（`sync.schema.json` 的两处 `enum`）。
@@ -87,16 +87,20 @@ pub enum SnapshotResource {
     PendingInteractions,
     ConfigOptions,
     Capabilities,
+    Workspaces,
+    Agents,
 }
 
 impl SnapshotResource {
-    pub const ALL: [SnapshotResource; 6] = [
+    pub const ALL: [SnapshotResource; 8] = [
         SnapshotResource::Sessions,
         SnapshotResource::Messages,
         SnapshotResource::Turns,
         SnapshotResource::PendingInteractions,
         SnapshotResource::ConfigOptions,
         SnapshotResource::Capabilities,
+        SnapshotResource::Workspaces,
+        SnapshotResource::Agents,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -107,6 +111,8 @@ impl SnapshotResource {
             SnapshotResource::PendingInteractions => "pending_interactions",
             SnapshotResource::ConfigOptions => "config_options",
             SnapshotResource::Capabilities => "capabilities",
+            SnapshotResource::Workspaces => "workspaces",
+            SnapshotResource::Agents => "agents",
         }
     }
 }
@@ -382,6 +388,15 @@ pub struct SnapshotItemCapability {
     pub broker_additions: RawObject,
 }
 
+/// `sync.snapshotItem.workspaces` 的单个元素。
+///
+/// `snapshotItem.workspaces` 在 schema 里是 `common.schema.json#/$defs/workspaceRef` 的 `$ref`，
+/// 因此直接复用同一个类型，不另立同形结构。
+pub type SnapshotItemWorkspace = WorkspaceRef;
+
+/// `sync.snapshotItem.agents` 的单个元素；同理是 `#/$defs/agentCatalogEntry` 的别名。
+pub type SnapshotItemAgent = AgentCatalogEntry;
+
 /// `sync.snapshotChunk.items`：元素类型由同一 body 的 `resource` 决定
 /// （`sync.schema.json#/$defs/snapshotChunk` 的 `allOf`/`if`/`then`）。
 ///
@@ -395,6 +410,8 @@ pub enum SnapshotItems {
     PendingInteractions(Vec<SnapshotItemPendingInteraction>),
     ConfigOptions(Vec<SnapshotItemConfigOption>),
     Capabilities(Vec<SnapshotItemCapability>),
+    Workspaces(Vec<SnapshotItemWorkspace>),
+    Agents(Vec<SnapshotItemAgent>),
 }
 
 impl SnapshotItems {
@@ -436,6 +453,14 @@ impl SnapshotItems {
                     parse_items::<SnapshotItemCapability>(raw, "snapshotItem.capabilities")?;
                 SnapshotItems::Capabilities(items)
             }
+            SnapshotResource::Workspaces => {
+                let items = parse_items::<SnapshotItemWorkspace>(raw, "snapshotItem.workspaces")?;
+                SnapshotItems::Workspaces(items)
+            }
+            SnapshotResource::Agents => {
+                let items = parse_items::<SnapshotItemAgent>(raw, "snapshotItem.agents")?;
+                SnapshotItems::Agents(items)
+            }
         })
     }
 
@@ -448,6 +473,8 @@ impl SnapshotItems {
             SnapshotItems::PendingInteractions(_) => SnapshotResource::PendingInteractions,
             SnapshotItems::ConfigOptions(_) => SnapshotResource::ConfigOptions,
             SnapshotItems::Capabilities(_) => SnapshotResource::Capabilities,
+            SnapshotItems::Workspaces(_) => SnapshotResource::Workspaces,
+            SnapshotItems::Agents(_) => SnapshotResource::Agents,
         }
     }
 
@@ -460,6 +487,8 @@ impl SnapshotItems {
             SnapshotItems::PendingInteractions(items) => items.len(),
             SnapshotItems::ConfigOptions(items) => items.len(),
             SnapshotItems::Capabilities(items) => items.len(),
+            SnapshotItems::Workspaces(items) => items.len(),
+            SnapshotItems::Agents(items) => items.len(),
         }
     }
 
@@ -478,6 +507,8 @@ impl Serialize for SnapshotItems {
             SnapshotItems::PendingInteractions(items) => items.serialize(serializer),
             SnapshotItems::ConfigOptions(items) => items.serialize(serializer),
             SnapshotItems::Capabilities(items) => items.serialize(serializer),
+            SnapshotItems::Workspaces(items) => items.serialize(serializer),
+            SnapshotItems::Agents(items) => items.serialize(serializer),
         }
     }
 }

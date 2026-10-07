@@ -11,6 +11,10 @@ use acp_core::model::{GrantSet, ScopeSet};
 use crate::error::AuthorizationError;
 
 /// 设备授权包（`pack.*` → 命令名集合）。
+///
+/// `pack.create-session` 只有 `session.create` 一个成员，且**不进任何 preset**：配对时只能被显式
+/// 请求。展开后授权判定是设备级的——覆盖该节点当时及此后新增的全部已登记 workspace 与已配置
+/// Agent（`SECURITY_DESIGN.md` §9/§10.2 的显式规则），不是配对时的资源快照。
 pub const PACKS: &[(&str, &[&str])] = &[
     (
         "pack.observe",
@@ -31,6 +35,7 @@ pub const PACKS: &[(&str, &[&str])] = &[
         &["session.mode.set", "session.config.set"],
     ),
     ("pack.approve", &["permission.resolve"]),
+    ("pack.create-session", &["session.create"]),
 ];
 
 /// 配对预设（`preset.*` → `pack.*` 集合；递归展开到命令名）。

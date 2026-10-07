@@ -9,7 +9,7 @@
   "$defs": {
     "requestId": { "$ref": "common.schema.json#/$defs/uuid" },
     "commandName": {
-      "description": "唯一来源是 compatibility/commands/v1/commands.json；本枚举只含 transport 含 sync 的命令（不含只经 Node Link 接受的 session.create）。",
+      "description": "唯一来源是 compatibility/commands/v1/commands.json；本枚举只含 transport 含 sync 的命令。session.resume 只经 Node Link 接受，不在本枚举里。",
       "enum": [
         "session.list",
         "session.read",
@@ -21,7 +21,8 @@
         "elicitation.respond",
         "session.mode.set",
         "session.config.set",
-        "permission.resolve"
+        "permission.resolve",
+        "session.create"
       ]
     },
     "command": {
@@ -37,6 +38,7 @@
         "body": {
           "oneOf": [
             { "$ref": "#/$defs/sessionList" },
+            { "$ref": "#/$defs/sessionCreate" },
             { "$ref": "#/$defs/sessionRead" },
             { "$ref": "#/$defs/sessionPrompt" },
             { "$ref": "#/$defs/sessionCancel" },
@@ -59,6 +61,25 @@
         "requestId": { "$ref": "#/$defs/requestId" },
         "command": { "const": "session.list" },
         "payload": { "type": "object", "additionalProperties": false }
+      }
+    },
+    "sessionCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "command", "payload"],
+      "description": "Sync 面的 session.create：body 顶层不得携带 sessionId（会话尚不存在）。payload 只允许 workspaceAlias 与 agentId 两个键——出现 cwd、exportId、templateParams、任何绝对路径、MCP 配置或凭据字段时按 protocol.schema_invalid 拒绝，不得创建会话或部分应用参数。",
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "command": { "const": "session.create" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workspaceAlias", "agentId"],
+          "properties": {
+            "workspaceAlias": { "type": "string", "minLength": 1, "maxLength": 128, "description": "本机已登记 workspace 的别名；规范化路径不得出现在 wire 上。" },
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 128, "description": "本机已配置的 Agent profile 标识。" }
+          }
+        }
       }
     },
     "sessionRead": {
@@ -317,6 +338,16 @@
       }
     },
     "modeListResult": { "$ref": "common.schema.json#/$defs/modeState" },
+    "sessionCreateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "session"],
+      "description": "session.create 的 completed 结果：新会话标识 + 其 SessionSummary。",
+      "properties": {
+        "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "session": { "$ref": "common.schema.json#/$defs/sessionSummary" }
+      }
+    },
     "commandStatusRecord": {
       "type": "object",
       "additionalProperties": false,
@@ -375,6 +406,13 @@
                 "required": ["command", "status"]
               },
               "then": { "properties": { "result": { "$ref": "#/$defs/sessionListResult" } } }
+            },
+            {
+              "if": {
+                "properties": { "command": { "const": "session.create" }, "status": { "const": "completed" } },
+                "required": ["command", "status"]
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/sessionCreateResult" } } }
             },
             {
               "if": {
