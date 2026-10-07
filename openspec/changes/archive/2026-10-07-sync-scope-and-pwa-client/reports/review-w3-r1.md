@@ -82,7 +82,7 @@ result: FAIL
 - 断言有效性核验：`deriving_a_file_change_leaves_the_acp_raw_document_untouched`（`broker.rs:9167-9199`）在**提交前**构造 `AcpRaw::available(media_type, raw, Digest)`，派生后从 fake 事件日志按 `event_id` 取回 `event_payloads` 中的 `payload`，断言 `payload.acp.as_ref() == Some(&acp)`。该比较是**整个 `AcpRaw` 的结构相等**（`media_type`/`raw_json`/`byte_length`/`sha256` 四个字段全部参与），且 fake 的 `event_payloads` 是在 **commit 时** 写入的 payload 克隆（`broker.rs:4833`），因此「派生路径改动 `tool.call.*` payload」会被捕获，断言**非恒真**：取回的是提交后的落盘内容，不是测试自己持有的那个值。断言中 `payload.acp` 为 `Some` 而非恒 `None`（否则 `Some(&acp)` 比较会失败），`file.changed` 计数 `assert_eq!(..., 1)` 与前置条件成立。**可以捕获改动**。
 - 其映射到「摘要与字节长度」的语义也成立：`AcpRaw::available` 由 `raw_json.len()` 导出 `byte_length`（`model/event.rs:92-104`），故结构相等即字节长度相等；`sha256` 是独立字段，被同一比较覆盖。
 
-结论：**成立**，无缺陷。（该用例跑在 fake 端口上；真实 SQLite 的 ACP 列往返由既有 `event_payload` 保真用例与 §9 判据覆盖，本次未复跑。）
+结论：**成立**，无缺陷。（该用例跑在 fake 端口上；真实 SQLite 的 ACP 列往返由既有 `event_payload` 保真用例与 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据覆盖，本次未复跑。）
 
 ---
 
