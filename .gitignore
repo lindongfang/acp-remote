@@ -36,3 +36,7 @@ openspec/changes/**/reports/**/*.log
 # 工作区、不随提交进入仓库；已归档变更的记录照旧入库。`reports/**/*.log` 同样不入库。
 openspec/changes/sync-workspaces-and-create/verification.md
 openspec/changes/archive/*/verification.md
+
+# Agentic apply 的临时工作区（worktree 与独占构建目录），不入版本控制
+.worktrees/
+.target-wt/
