@@ -795,7 +795,18 @@ pub fn run_cli(label: &str, config: Option<&Path>, args: &[&str], stdin: Stdin) 
     if let Stdin::Bytes(bytes) = &stdin {
         use std::io::Write as _;
         let mut pipe = child.stdin.take().expect("stdin 管道");
-        pipe.write_all(bytes).expect("写 stdin");
+        // `BrokenPipe` 是**预期**的，不是失败：被测 CLI 的离线/缺失 facade 场景会在读到 stdin 之前
+        // 就失败退出并关闭管道，于是这里写入必然落空。进程退出越快，越容易命中——这是一次真实的
+        // CI flake（`acp_stdio_fails_clearly_offline_without_polluting_stdout` 单独失败）。
+        // 该调用方真正要断言的是退出码、stderr 的 JSON 与 stdout 为空，stdin 是否写完不影响它们。
+        // 其余 I/O 错误仍照常 panic：那才说明测试装配有问题。
+        if let Err(error) = pipe.write_all(bytes) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "写 stdin 失败（非对端提前关闭）：{error}"
+            );
+        }
         // 关闭 stdin：字节泵与配对仪式都必须能在对端关闭时退出（不留半开的管道）。
         drop(pipe);
     }
