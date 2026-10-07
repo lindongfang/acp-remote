@@ -73,4 +73,15 @@ export default {
     "body-max-line-length": [0],
     "footer-max-line-length": [0],
   },
+  // 合并提交豁免的**本意**由 `@commitlint/config-conventional` 提供，但它只认
+  // `Merge pull request` / `Merge branch x` 这类 git 默认措辞（大写、无冒号）；
+  // 本仓库按中文习惯写成 `merge: 并入 …` 或 `merge(candidate): …`，一条都不匹配，
+  // 于是合并提交被当成普通提交去核对 type/scope 词表而失败——偏离的是书写形式，
+  // 不是「合并提交不承载交付语义、不该按 Conventional Commits 校验」这条本意。
+  // 因此这里按同一本意补一条前缀豁免，而不是把 `merge` 塞进 `TYPES`：后者还得把
+  // `candidate`/`integ` 这类**工作流产物**塞进 `SCOPES`，而 `AGENTS.md` §8 把 scope
+  // 定义为「模块与交付面边界」，二者不是同一层概念，塞进去会污染词表。
+  // 范围仍然很窄：只豁免「以 `merge`（可带 scope）加冒号开头」的合并消息，
+  // 普通提交一律照常按词表校验。
+  ignores: [(message) => /^merge(\([^)]+\))?!?:/.test(String(message ?? '').split('\n')[0])],
 };
