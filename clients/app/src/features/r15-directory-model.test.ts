@@ -262,4 +262,24 @@ describe("R15 目录详情", () => {
       }),
     ).toMatchObject({ kind: "unknown_directory", alias: "not-there" });
   });
+
+  it("目录存在但没有任何会话：仍按别名取到该目录，落到「还没有会话」而不是「链接已失效」", () => {
+    // 生产路径：经 ClientStore 读详情模型（与页面取数同一条路），不直调构建函数。
+    const { store } = storeWith({ sessions: [], workspaces: WORKSPACES, agents: [] });
+
+    // 反例（本条即该反例的回归）：`buildDirectoryViews` 在「有目录但都没有会话」时返回
+    // `empty/directories_without_sessions`、不携带目录项；若详情模型据此把目录集取成空数组，
+    // 别名明明在快照里却找不到，这里会退化成 `unknown_directory`，断言变红。
+    // 渲染层的对应断言在 `src/components/r15-directory-list.test.ts`（features 层不得 import components）。
+    const detail = store.directoryDetail("work-api");
+    expect(detail.kind).toBe("ready");
+    if (detail.kind !== "ready") return;
+    expect(detail.directory.alias).toBe("work-api");
+    expect(detail.directory.displayName).toBe("api");
+    expect(detail.directory.counts).toEqual({ total: 0, active: 0, pending: 0 });
+    expect(detail.sessions).toEqual([]);
+
+    // 对照：修好上一条不能把失效别名也算成存在的目录——真正不存在的别名仍是第三种呈现。
+    expect(store.directoryDetail("not-there").kind).toBe("unknown_directory");
+  });
 });

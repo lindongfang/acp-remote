@@ -20,6 +20,7 @@
 
 import type { DirectoryListState, DirectoryView, SessionSummaryView } from "../domain";
 import { UNTITLED_SESSION_LABEL, buildDirectoryViews, buildSessionSummaryView } from "../domain";
+import type { WorkspaceRef } from "../protocol";
 import type { StagedResources } from "../sync-client";
 import type { ConnectionStateName } from "../state";
 
@@ -171,6 +172,38 @@ function toSessionRow(summary: SessionSummaryView): SessionRowModel {
 }
 
 /**
+ * 在快照目录里按别名定位目录项。
+ *
+ * 列表页与详情页对「有目录、但每个目录内都没有会话」的处置**不同**（R15：别名失效与
+ * 「目录存在但没有会话」MUST 是两种可区分的呈现）：列表页要呈现
+ * `directories_without_sessions` 空态，于是 `buildDirectoryViews` 在这一态**不携带目录项**；
+ * 而详情页仍必须能按别名取到该目录——否则别名明明在快照里也会被说成「链接已失效」，
+ * 把用户引向「目录被删了」的错误结论。
+ *
+ * 该状态下每个目录的会话汇总恒为零：`directories_without_sessions` 的定义就是
+ * 「没有任何会话归属任何已登记目录」（`buildDirectoryViews` 里的 `hasAnySession` 为假），
+ * 因此这里由快照目录直接投影出零汇总行，无需再走一遍会话聚合。
+ */
+function findDirectoryByAlias(
+  list: DirectoryListState,
+  workspaces: readonly WorkspaceRef[],
+  alias: string,
+): DirectoryView | undefined {
+  if (list.kind === "ready") {
+    return list.directories.find((candidate) => candidate.alias === alias);
+  }
+  if (list.empty !== "directories_without_sessions") return undefined;
+  const workspace = workspaces.find((candidate) => candidate.alias === alias);
+  if (workspace === undefined) return undefined;
+  return {
+    id: workspace.alias,
+    displayName: workspace.displayName,
+    alias: workspace.alias,
+    counts: { total: 0, active: 0, pending: 0 },
+  };
+}
+
+/**
  * 目录详情模型：某个别名下的会话列表。
  *
  * `alias` 不在快照目录里时返回 `unknown_directory`——它与「目录存在但没有会话」不是同一件事，
@@ -186,8 +219,7 @@ export function buildDirectoryDetailModel(input: {
   if (input.resources === null) return { kind: "loading" };
 
   const list = buildDirectoryViews(input.resources.workspaces, input.resources.sessions);
-  const directories = list.kind === "ready" ? list.directories : [];
-  const directory = directories.find((candidate) => candidate.alias === input.alias);
+  const directory = findDirectoryByAlias(list, input.resources.workspaces, input.alias);
   if (directory === undefined) {
     return { kind: "unknown_directory", alias: input.alias };
   }

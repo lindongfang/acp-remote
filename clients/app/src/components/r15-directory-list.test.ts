@@ -6,7 +6,8 @@
  * - 目录项只显示展示名与别名 → 快照资源里的 `path`/`root` 不得出现在 HTML 里；
  * - 同名目录不以路径消歧 → 两个同名目录必须各自带别名，且没有任何路径片段；
  * - 两种空态可区分 → 两段文案与 `data-empty-state` 都不同；
- * - 断连仍可渲染并标注来源 → 断连时目录行仍在，且标注「来自上次同步」。
+ * - 断连仍可渲染并标注来源 → 断连时目录行仍在，且标注「来自上次同步」；
+ * - 目录详情里「别名失效」与「目录存在但无会话」是两种呈现 → 两种文案互不冒充。
  *
  * 判别力：断言的是**渲染后的 HTML 字符串**而不是模型字段——模型里没有路径字段并不能
  * 保证组件不会去渲染别的东西（例如从 alias 派生一个「父目录」标签）。
@@ -19,10 +20,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { DirectoryDetail } from "./DirectoryDetail";
 import { DirectoryList } from "./DirectoryList";
 import { DIRECTORY_EMPTY_COPY, buildDirectoryPageModel } from "../features/directory-model";
-import type { DirectoryPageModel } from "../features/directory-model";
-import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session } from "../features/testing/fixtures";
+import type { DirectoryDetailModel, DirectoryPageModel } from "../features/directory-model";
+import { buildCreateSessionEntryModel } from "../features/create-session-model";
+import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session, storeWith } from "../features/testing/fixtures";
 
 const SESSIONS = [
   session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" }),
@@ -36,6 +39,28 @@ function renderDirectoryList(model: DirectoryPageModel): string {
     createElement(DirectoryList, {
       model,
       onOpenDirectory: () => undefined,
+    }),
+  );
+}
+
+/**
+ * 渲染目录详情。模型由 `ClientStore.directoryDetail` 取（与页面同一条取数路径），
+ * 因此这里断言的是用户真正看到的那句话，而不是模型字段。
+ */
+function renderDirectoryDetail(model: DirectoryDetailModel): string {
+  return renderToStaticMarkup(
+    createElement(DirectoryDetail, {
+      model,
+      createEntry: buildCreateSessionEntryModel({
+        directoryAlias: "work-api",
+        scopes: ["session.create"],
+        agents: [],
+        record: null,
+        connectionOnline: true,
+      }),
+      onOpenSession: () => undefined,
+      onCreateSession: () => undefined,
+      canCreate: true,
     }),
   );
 }
@@ -159,5 +184,27 @@ describe("R15 两种空态可区分", () => {
     // 反例：若无快照时渲染「本机没有任何目录」，这里会出现 data-empty-state，断言变红。
     expect(html).toContain('data-directory-state="loading"');
     expect(html).not.toContain("data-empty-state");
+  });
+});
+
+describe("R15 目录详情：链接失效与「目录存在但无会话」是两种呈现", () => {
+  it("目录存在但没有任何会话：渲染「还没有会话」，不渲染「链接已失效」的告警", () => {
+    // 生产路径：模型经 ClientStore 取出（与页面同一路径），不直调构建函数。
+    const { store } = storeWith({ resources: resources({ sessions: [], workspaces: WORKSPACES }) });
+    const html = renderDirectoryDetail(store.directoryDetail("work-api"));
+
+    expect(html).toContain('data-directory-sessions="empty"');
+    expect(html).toContain("这个目录里还没有会话");
+    // 反例：若详情模型把「有目录但无会话」当成别名失效，这里渲染的是告警，断言变红。
+    expect(html).not.toContain('data-directory-detail-state="unknown_directory"');
+    expect(html).not.toContain("可能已被删除");
+  });
+
+  it("对照：别名不在快照里才是「链接已失效」——两种呈现互不冒充", () => {
+    const { store } = storeWith({ resources: resources({ sessions: [], workspaces: WORKSPACES }) });
+    const html = renderDirectoryDetail(store.directoryDetail("not-there"));
+
+    expect(html).toContain('data-directory-detail-state="unknown_directory"');
+    expect(html).not.toContain('data-directory-sessions="empty"');
   });
 });
