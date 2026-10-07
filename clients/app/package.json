@@ -14,22 +14,22 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "service": "vite preview",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test && npm run export:web"
   },
   "dependencies": {
-    "expo": "~54.0.0",
-    "expo-constants": "~18.0.0",
-    "expo-router": "~6.0.0",
-    "expo-status-bar": "~3.0.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "react-native": "0.87.1",
+    "expo": "~57.0.0",
+    "expo-constants": "~57.0.21",
+    "expo-router": "~57.0.25",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
     "react-native-web": "~0.21.0"
   },
   "devDependencies": {
-    "@types/react": "~19.3.0",
+    "@types/react": "~19.2.4",
     "esbuild": "^0.28.2",
-    "typescript": "~5.9.2",
+    "typescript": "~6.0.3",
     "vite": "^8.2.2",
     "vitest": "^5.0.0"
   }
