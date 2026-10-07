@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@/*": ["../src/*"],
+      "expo-router": ["./page/router-stub.tsx"]
+    }
+  },
+  "include": ["page/**/*", "../app/**/*", "../src/**/*"]
+}
