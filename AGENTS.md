@@ -253,6 +253,13 @@ cargo test --locked --workspace --all-features
 `deny.toml`）与 `gitleaks`（密钥扫描，配置见 `.gitleaks.toml`）。它们不在 `npm run verify` 里，因此
 「本地绿」不等于这两类判定通过；工具版本与已知残余风险见 `docs/adr/0008-ci-supply-chain-tooling.md`。
 
+**npm 侧的 advisory 判定由 `scripts/check-dependency-advisories.mjs` 承担**（CI 的 `deps` job 调用它，不再直接跑
+`npm audit`）：`npm audit` 没有 ignore 机制，而仓库有一条**上游无修复**的 advisory（`braces` 的
+`GHSA-vfj7-8cjw-p6xm`，受影响范围是 `*`，3.x 线最新版 3.0.3 即被通报版本），直接跑会让该 job 永远红灯、
+每次合并都走 bypass。该脚本**按 advisory ID 放行已登记项**，未登记项与任何 `critical` 一律失败；每条豁免的
+理由、适用范围与**到期条件**写在该脚本的 `ALLOWED` 数组里，新增或删除都必须改那里。它不参与
+`npm run check`（那条入口保持离线），只在 CI 运行。
+
 提交时 `.husky/pre-commit` 会自动跑 `cargo fmt --check` + `npm run check` + `cargo clippy`（涉及 Rust 时）。
 它可以用 `git commit --no-verify` 跳过，且检查的是工作区内容而不是暂存快照，因此它是「更早发现失败」，
 不是门禁本身的实现。

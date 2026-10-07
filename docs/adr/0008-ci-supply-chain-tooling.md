@@ -119,6 +119,18 @@ action」。这条约束在实践中有两个问题：
      作为紧急出口。因此默认路径变成 PR（三个只能在 CI 跑的判定因此成为先于落地的门禁），
      但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `AGENTS.md` §8。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
+     同类的 npm 侧问题已具体化：`deps` job 的 npm 判定现由 `scripts/check-dependency-advisories.mjs` 承担
+     （不再直接跑 `npm audit`）。原因是仓库有一条**上游无修复**的 advisory——`braces` 的
+     `GHSA-vfj7-8cjw-p6xm`（栈耗尽 DoS），npm 上其受影响范围是 `*`，3.x 线最新版 3.0.3 即被通报版本，
+     `fixAvailable` 为 false；直接跑 `npm audit --audit-level=high` 会让该 job **永远红灯**，
+     于是每次合并都得走管理员 bypass——长期看那比这条 DoS 更危险（它把「绕过门禁」变成习惯）。
+     豁免刻意收窄：**按 advisory ID 放行**（不按包名、不按 severity），未登记项与任何 `critical` 一律失败；
+     每条豁免登记理由、适用范围与**到期条件**（上游发布含修复的 `braces`，或 `@fission-ai/openspec`
+     换掉 `fast-glob`/`micromatch` 链时删除）。当前放行项的适用范围是：整条链位于 `devDependencies`
+     （仓库根 `dependencies` 为空），是本地合同校验与提交钩子的工具链、不随产品分发，且传入 `braces`
+     的 glob 模式由 `@fission-ai/openspec` 扫描本地 `openspec/**` 时构造、非外部输入，故该 DoS 所需的
+     攻击者可控嵌套模式在本仓库不成立。**这是有条件豁免，不是关掉检查**：脚本对未登记的 advisory
+     照常失败，已实测（改错 ID → 报「未登记的 advisory」；把登记严重度降级 → 报与实际不符）。
   5. **本机（Windows）无法执行这些判定的等价物**：crates.io index 传输在本机网络下不稳定，
      `cargo install --locked cargo-deny@0.20.2` 未能完成，因此 `deny.toml` 的字段形状是对齐 cargo-deny 0.20.2
      自带模板（只保留能给出理由的键）写成的，**首次真实执行发生在 CI**。这条同样适用于 `.gitleaks.toml`。

@@ -108,10 +108,16 @@ jobs:
         with:
           node-version: "22"
 
-      - name: npm audit（high 及以上）
+      - name: npm audit（high 及以上，已登记的 advisory 除外）
         # `npm audit` 只读 package-lock.json，不需要 `npm ci`；指定 Node 版本是因为
         # audit 的判定语义随 npm 版本变化，不想依赖 runner 当时的默认 npm。
-        run: npm audit --audit-level=high
+        #
+        # `npm audit` 没有 ignore 机制，而仓库当前有一条**上游无修复**的 advisory
+        # （`braces` 的 GHSA-vfj7-8cjw-p6xm，受影响范围是 `*`，3.x 线最新版即被通报版本）。
+        # 直接跑 audit 会让本 job 永远红灯、每次合并都走管理员 bypass——那比这条 DoS 更危险。
+        # `scripts/check-dependency-advisories.mjs` 按 **advisory ID** 放行已登记项，
+        # 未登记项与任何 critical 一律失败；豁免的理由与到期条件写在该脚本的 `ALLOWED`。
+        run: node scripts/check-dependency-advisories.mjs
 
   advisories:
     name: 依赖安全公告
