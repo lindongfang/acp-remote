@@ -60,6 +60,34 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # `clients/app` 是**独立的 npm 工程**（自带 `package.json` 与 `package-lock.json`），
+  # 根条目 `directory: "/"` 不覆盖它。此前没有这条声明时，Dependabot 仍会为该 manifest
+  # 生成更新，但走的是**默认配置**：标题会写成 `... in /clients/app`，其中 `/clients/app`
+  # 被 `commitlint` 当成 scope，而 scope 是「模块与交付面边界」、路径不在词表里，因此
+  # `commits` job 必失败（#49–#53）。显式声明后即可带上与根条目一致的 `commit-message.prefix`，
+  # 标题不再含路径，同时沿用同一套冷却期与分组策略。
+  #
+  # 注意前端工程的验证面：`clients/app` 的 `tsc` / `vitest` / Chromium / `e2e` **不在**
+  # CI 的五个必需检查内（它们只跑仓库根的门禁），因此这里的升级即使 CI 全绿，
+  # 合并前仍须在本地跑一遍 `clients/app` 的四道验证。
+  - package-ecosystem: npm
+    directory: "/clients/app"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    groups:
+      # 与根条目同理：minor/patch 合并成一个 PR；major 不分组，需逐个读迁移说明。
+      # expo / react-native 的主版本升级会动构建配置，尤其需要单独审阅。
+      clients-app-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
