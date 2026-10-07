@@ -13,9 +13,13 @@
  *
  * ## 判别力
  *
- * 期望表是本文件手写的常量。任何一条迁移被增删，两侧立刻不等 → 用例变红。
- * 反之，若把断言弱化成「不抛错即可」，任何多出来的迁移都会静默通过——因此每条
- * 合法组合都同时断言**目标状态**与**阻断载荷**，每条非法组合都断言异常类型与两个字段。
+ * 本文件手写**两张**表：合法来源（`EXPECTED_SOURCES`）与目标态（`EXPECTED_TARGET`
+ * 及三张按参数展开的分支表）。任何一条迁移被增删，来源表两侧立刻不等 → 用例变红；
+ * 任何一条合法迁移落到错误的目标态，目标态断言立刻不等 → 用例变红。反之，
+ * 若把断言弱化成「不抛错即可」，多出来的迁移与选错的目标态都会静默通过。
+ *
+ * 因此每条合法组合都同时断言**目标状态**与后续不变式（阻断载荷、`caughtUp` 恒等式），
+ * 每条非法组合都断言异常类型与两个字段。
  */
 
 import { describe, expect, it } from "vitest";
@@ -161,6 +165,63 @@ function expectedSourcesOf(kind: ConnectionEvent["kind"]): ReadonlySet<Connectio
   return new Set(EXPECTED_SOURCES[kind]);
 }
 
+/**
+ * 每个事件的**目标态**（手写期望表**第二列**，与 `EXPECTED_SOURCES` 并列）。
+ *
+ * 这一列同样手写：**不从 `transition` 的分支反推**，否则「实现改了目标态」会连期望表一起
+ * 被改绿。它守住的是「来源合法 ≠ 落点正确」——例如 `disconnect_requested` 必须落到
+ * `disconnected`（用户主动断开不是「未配对」），`identity_lost` 必须落到 `unpaired`
+ * （本地身份没了不是「已断开」）。只断言「不抛错」是抓不住这类错的。
+ */
+const EXPECTED_TARGET: Readonly<
+  Record<Exclude<ConnectionEvent["kind"], "connect_started" | "connection_closed" | "blocked">, ConnectionStateName>
+> = {
+  // 用户发起配对 → 配对中。
+  pair_started: "pairing",
+  // 拿到设备身份后停在「已断开」，不直接在线（在线只能由追平完成产生）。
+  pair_succeeded: "disconnected",
+  // 本地身份没了 → 未配对（spec「本地数据被清除后按身份丢失处理」）。
+  identity_lost: "unpaired",
+  // socket 已开、握手开始 → 认证中。
+  socket_opened: "authenticating",
+  // 认证成功并已发 subscribe，仍在补齐事件 → 重放追平。
+  subscribed: "replaying",
+  // 屏障到达、本地内容追平 → 在线。
+  caught_up: "online",
+  // 用户主动断开 → 已断开（**不是**未配对，也不是重连中）。
+  disconnect_requested: "disconnected",
+  // 阻断解除 → 已断开：恢复必须重新走握手与追平，不得直接在线。
+  blocking_cleared: "disconnected",
+};
+
+/** `connect_started` 的目标态按「是否来自退避重连」分支（手写表，非实现分支）。 */
+const EXPECTED_CONNECT_TARGET = { initial: "connecting", reconnect: "reconnecting" } as const;
+
+/** `connection_closed` 的目标态按「是否可重试」分支（手写表，非实现分支）。 */
+const EXPECTED_CLOSED_TARGET = { retryable: "reconnecting", fatal: "disconnected" } as const;
+
+/** `blocked` 的目标态由**阻断原因**决定（因果名与状态名不同名，故显式列出）。 */
+const TARGET_BY_CAUSE: Readonly<Record<BlockingCause, BlockingState>> = {
+  device_revoked: "revoked",
+  version_incompatible: "incompatible",
+  host_identity_changed: "identity_changed",
+  replaced_by_other_connection: "replaced",
+};
+
+/** 一条事件的期望目标态（把上面三张手写表按参数展开）。 */
+function expectedTargetOf(event: ConnectionEvent): ConnectionStateName {
+  switch (event.kind) {
+    case "connect_started":
+      return event.fromReconnect ? EXPECTED_CONNECT_TARGET.reconnect : EXPECTED_CONNECT_TARGET.initial;
+    case "connection_closed":
+      return event.retryable ? EXPECTED_CLOSED_TARGET.retryable : EXPECTED_CLOSED_TARGET.fatal;
+    case "blocked":
+      return TARGET_BY_CAUSE[event.cause];
+    default:
+      return EXPECTED_TARGET[event.kind];
+  }
+}
+
 describe("R12：迁移表与手写期望表逐条一致（132 种组合穷举）", () => {
   it("状态集合恰好是 12 个，与本文件的枚举无差集", () => {
     expect(Object.keys(CONNECTION_STATES).sort()).toEqual([...ALL_STATES].sort());
@@ -180,23 +241,33 @@ describe("R12：迁移表与手写期望表逐条一致（132 种组合穷举）
     expect(mismatches).toEqual([]);
   });
 
-  it("每条合法组合都真的被接受，且不抛错", () => {
+  it("每条合法组合都真的被接受，且落到手写期望表的目标态", () => {
     const rejected: string[] = [];
+    const wrongTarget: string[] = [];
     for (const kind of ALL_EVENT_KINDS) {
       const sources = expectedSourcesOf(kind);
       for (const state of ALL_STATES) {
         if (!sources.has(state)) continue;
         for (const event of everyEvent(kind)) {
+          let next: ConnectionMachineState;
           try {
-            transition(machineIn(state), event);
+            next = transition(machineIn(state), event);
           } catch (error) {
             rejected.push(`${state} --${kind}--> 抛错：${String(error)}`);
+            continue;
+          }
+          const expected = expectedTargetOf(event);
+          if (next.state !== expected) {
+            wrongTarget.push(`${state} --${kind}--> 期望 ${expected} 实际 ${next.state}`);
           }
         }
       }
     }
     // 反例：期望表说合法、实现说非法（或抛别的错），这里会红。
     expect(rejected).toEqual([]);
+    // 反例：迁移被接受却落到错误的目标态（例如 disconnect_requested → unpaired、
+    // identity_lost → disconnected），这里逐条列出差异 → 断言变红。
+    expect(wrongTarget).toEqual([]);
   });
 
   it("每条非法组合都抛 IllegalConnectionTransition，且 from/event 字段正确", () => {

@@ -151,6 +151,12 @@ describe("R20：imported 会话来源离线时输入不被标记为已发送", (
     expect(mayMarkInputAsSent({ online: true, origin: LOCAL })).toBe(true);
     expect(mayMarkInputAsSent({ online: false, origin: LOCAL })).toBe(false);
   });
+
+  // 注意：上面两条守的是 `mayMarkInputAsSent` 这个**无生产调用方**的导出（全仓只有定义与
+  // re-export）。真正决定界面能否标记已发送的是 `conversationCapabilities`，它经
+  // `ClientStore.conversationPage()` 被调用，用的是另一套判据——因此上面两条**不覆盖生产路径**，
+  // 把生产判据改松它们不会红。生产路径的对应断言在
+  // `src/features/r20-input-mark-production-path.test.ts`。
 });
 
 describe("R20：本节点摘要缓存按固定容量 + TTL + LRU 淘汰（真实管线）", () => {

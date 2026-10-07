@@ -606,6 +606,28 @@ describe("R11/AC3：host-challenge 向量经真实 HostIdentityPort 验签", () 
     }
   });
 
+  it("features 乱序喂进握手仍通过真实验签：生产在编码前排序（§5.2）", async () => {
+    const sorted = inputOf(hostChallengeVector);
+    // 把向量里已按 UTF-8 升序的 features **反转**成乱序，让它原样出现在 wire 的
+    // `auth.server_challenge.selectedFeatures` 上（wire 解码器不校验顺序）。
+    const shuffled: HandshakeInput = { ...sorted, features: [...sorted.features].reverse() };
+    const harness = await setup({ ...shuffled, hostPublicKeyBase64Url: hostChallengeVector.expected.publicKey });
+    try {
+      const socket = harness.sockets.latest;
+      socket.open();
+      await waitFor(() => socket.types().includes("auth.client_hello"), "发出 clientHello");
+      // 签名是**向量自带**的：它签的是升序 features 的 transcript。乱序输入若能通过验签，
+      // 只可能是因为生产在编码前把它排回了升序。
+      socket.deliver(serverChallenge(shuffled, hostChallengeVector.expected.p1363Signature));
+      // 反例：若生产去掉了 `sortedFeatures`，`encodeNulJoinedUtf8` 会以 `field_order` 硬拒绝
+      // （输入未升序），验签全程不发 → 这里超时失败。
+      await waitFor(() => socket.types().includes("auth.client_proof"), "乱序 features 排序后仍验签通过");
+      expect(harness.store.state.connection.blocking).toBeNull();
+    } finally {
+      harness.composition.dispose();
+    }
+  });
+
   it("同一向量换一个字节即被真实验签拒绝并进入 identity_changed", async () => {
     const input = inputOf(hostChallengeVector);
     // 保持 hostId/公钥不变，把 serverNonce 换成向量之外的值：transcript 必然不同。
@@ -639,7 +661,8 @@ describe("R11/AC3：host-challenge 向量经真实 HostIdentityPort 验签", () 
     expect(new TextDecoder().decode(encoded.subarray(7, 7 + domainLength))).toBe(hostChallengeVector.domain);
     expect(view.getUint16(7 + domainLength, false)).toBe(domain.fields.length);
 
-    // 未排序的 features 会被 `encodeNulJoinedUtf8` 硬拒绝（§5.2 的守卫，不是约定）。
+    // 这条断言的是**向量自带**的 features 已有序（输入数据的性质），不是生产排序；
+    // 生产在编码前排序由上面「features 乱序喂进握手仍通过真实验签」那条覆盖。
     const features = hostChallengeVector.input["negotiatedFeatures"] as readonly string[];
     expect(sortedFeatures(features)).toEqual([...features]);
   });

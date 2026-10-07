@@ -261,33 +261,19 @@ describe("R14：scope 过滤造成的空洞不是丢失（§9.2/§9.3 交叉场�
 describe("R14：服务端漏投一条可见事件时必须补齐并有界重订阅", () => {
   it("低于水位却从未呈现过的事件被补齐呈现一次，并触发一次重订阅", async () => {
     const context = setup();
+    // 与上面「scope 空洞」场景**复用同一个** §9.3 服务端模型，只把 7 挂进 `withheld`：
+    // 服务端明知它可见，却在首轮重放（`caught_up` 之前）也不投它。
+    const server = attachReplayServer(context, { withheld: new Set(["7"]) });
     const socket = context.sockets.latest;
-    const queue: unknown[] = [];
-    let subscribes = 0;
-    let withheldPending: string | null = "7";
-    const originalSend = socket.send.bind(socket);
-    socket.send = (text: string): void => {
-      originalSend(text);
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      if (parsed["type"] !== "sync.subscribe") return;
-      subscribes += 1;
-      // 每一轮都重放 cursor 之后的事件，但**永远不投**被扣下的那条。
-      for (const sequence of Object.keys(VISIBLE).sort((left, right) => Number(left) - Number(right))) {
-        if (VISIBLE[sequence] !== true) continue;
-        if (sequence === withheldPending) continue;
-        queue.push(eventFor(sequence));
-      }
-      queue.push(caughtUp(HEAD));
-    };
 
     await completeHandshake(context);
-    for (const message of queue.splice(0)) socket.deliver(message);
+    server.drain();
     await waitUntil(() => context.events.some((event) => event.kind === "online"), "首轮追平完成");
 
     // 7 在首轮确实没被呈现，barrier 却已声明到 10：这是服务端漏投的真实证据。
     expect(presentedSequences(context)).not.toContain("7");
     expect(context.events.filter((event) => event.kind === "gap_detected")).toHaveLength(0);
-    expect(subscribes).toBe(1);
+    expect(server.subscribeCount()).toBe(1);
 
     // 服务端终于补投 7（低于权威水位、客户端从未呈现过）。
     socket.deliver(eventFor("7"));
@@ -303,8 +289,8 @@ describe("R14：服务端漏投一条可见事件时必须补齐并有界重订�
 
     // 缺口恢复确实发生：退避到期后客户端真的重发了 subscribe。
     context.clock.advanceBy(250);
-    await waitUntil(() => subscribes === 2, "退避到期后重订阅");
-    for (const message of queue.splice(0)) socket.deliver(message);
+    await waitUntil(() => server.subscribeCount() === 2, "退避到期后重订阅");
+    server.drain();
   });
 
   it("缺口恢复有次数上限：服务端持续漏投时停止并上报，不无限重订阅", async () => {
@@ -378,6 +364,27 @@ describe("R14：同一 eventId 重复投递不重复呈现、不重复触发副�
     // 反例：若去重键用了 messageId，这里会呈现两次 → 断言变红。
     expect(presentedSequences(context)).toEqual(["1"]);
     expect(context.events.filter((event) => event.kind === "duplicate_dropped")).toHaveLength(1);
+  });
+
+  it("同序号但 eventId 不同判 late（补齐呈现）而非 duplicate（去重键不是序号）", async () => {
+    const context = setup();
+    const socket = context.sockets.latest;
+    await completeHandshake(context);
+
+    socket.deliver(eventFor("1"));
+    await waitUntil(() => presentedSequences(context).length > 0, "首条事件被呈现");
+
+    // 同一 globalSequence、**不同** eventId：这不是重复投递，而是「水位之下一条从未呈现过
+    // 的事件」——必须补齐呈现，而不是按序号判重丢弃（丢弃即永久丢失）。
+    const twin = eventFor("1");
+    twin["messageId"] = "22222222-2222-4222-8222-222222222222";
+    (twin["body"] as Record<string, unknown>)["eventId"] = "bbbbbbbb-0000-4000-8000-000000000001";
+    socket.deliver(twin);
+    await waitUntil(() => context.events.some((event) => event.kind === "gap_detected"), "检出丢失区间");
+
+    // 反例：若去重键换成 globalSequence，第二条会被判重复丢弃 → 这里永远等不到 gap_detected → 变红。
+    expect(context.events.filter((event) => event.kind === "duplicate_dropped")).toHaveLength(0);
+    expect(presentedSequences(context)).toEqual(["1", "1"]);
   });
 
   it("重连后账本跨连接保留：切换窗口里的重复事件仍被识别", async () => {
