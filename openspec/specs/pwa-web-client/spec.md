@@ -4,11 +4,6 @@
 
 定义 ACP Remote 的首个 Web/PWA 客户端的可观察行为：客户端分层与依赖方向、WebCrypto 不可导出设备身份与配对、Sync 连接的互斥状态机、命令的终态语义、目录页与对话页的呈现，以及 imported 资源的 no-content-cache 离线边界。
 
-## Purpose
-
-定义 ACP Remote 的首个 Web/PWA 客户端的可观察行为：客户端分层与依赖方向、WebCrypto 不可导出设备身份与配对、Sync 连接的互斥状态机、命令的终态语义、目录页与对话页的呈现，以及 imported 资源的 no-content-cache 离线边界。
-
-
 ## Requirements
 
 ### Requirement: 客户端分层与依赖方向
