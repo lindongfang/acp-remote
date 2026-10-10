@@ -21,16 +21,16 @@
     "expo-constants": "~57.0.21",
     "expo-router": "~57.0.25",
     "expo-status-bar": "~57.0.1",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "react-native": "0.86.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.87.1",
     "react-native-web": "~0.21.0"
   },
   "devDependencies": {
-    "@types/react": "~19.2.4",
+    "@types/react": "~19.3.0",
     "esbuild": "^0.28.2",
     "typescript": "~6.0.3",
-    "vite": "^8.2.2",
-    "vitest": "^5.0.0"
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3"
   }
 }
