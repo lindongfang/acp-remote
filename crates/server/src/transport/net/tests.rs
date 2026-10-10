@@ -13,7 +13,7 @@
 //! | 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
 //! | Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
 //! | 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
-//! | TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（RV1-WP2-F3 回归）、`saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections`（RV2-WP2FIX-F1 回归） |
+//! | TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（回归）、`saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections`（回归） |
 //! | direct 模式证书缺失即拒绝启动 | `direct_mode_missing_certificate_fails_closed`、`direct_mode_invalid_pem_fails_closed`、`direct_mode_relaxed_permissions_fail_closed`（Unix）、`direct_mode_permissions_are_unverifiable_on_this_platform`（Windows，`[PV5]`） |
 //! | 非 loopback 明文边界 | `plaintext_proxy_non_loopback_warns`、`plaintext_dev_flag_rejects_non_loopback`（`listener` 模块） |
 //! | 请求体上限 | `pairing_body_over_the_limit_is_rejected_with_413` |
@@ -1198,7 +1198,7 @@ async fn direct_mode_terminates_tls_and_rejects_plaintext() {
 
 #[tokio::test]
 async fn idle_tcp_connections_do_not_block_new_connections() {
-    // （RV1-WP2-F3 回归）：`direct` 模式的 TLS 握手不占用 accept 关键路径——若干只建立 TCP、
+    // （回归）：`direct` 模式的 TLS 握手不占用 accept 关键路径——若干只建立 TCP、
     // 不发 ClientHello 的连接（无需任何凭据）不得把新连接的接入推迟一个握手超时（10 s）。
     let certificate = TestCertificate::generate();
     let server = start_server(
@@ -1259,7 +1259,7 @@ async fn idle_tcp_connections_do_not_block_new_connections() {
 
 #[tokio::test]
 async fn saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections() {
-    // （RV2-WP2FIX-F1 回归）：握手池被「只连接不握手」的连接**占满**时，新连接既不被丢弃、
+    // （回归）：握手池被「只连接不握手」的连接**占满**时，新连接既不被丢弃、
     // 也不被拒绝——它等一个槽位，并在既有握手因超时归还槽位后照常完成 TLS 握手与请求。
     //
     // 用例按 `TLS_HANDSHAKE_POOL_SIZE` 精确填满池（不写死槽位数，容量调整时不会静默失去覆盖）。

@@ -1540,7 +1540,7 @@ async fn expected_version_is_part_of_the_idempotency_check() {
     store.close().await;
 }
 
-/// §6 第 20 条（`node-link-owner` 的 RV1-WP6-F1）：`session.create` 的幂等行与创建在同一事务里落盘，
+/// §6 第 20 条（`node-link-owner`）：`session.create` 的幂等行与创建在同一事务里落盘，
 /// 目标会话 id 由存储层回填；终态提交按 `(session, requestId)` 定位该行；重启后同一 `(actor, requestId)`
 /// 重试重放首次结果（不重复创建），同键不同指纹冲突，崩溃窗口由 `unsettled_commands` 暴露给启动恢复。
 #[tokio::test]

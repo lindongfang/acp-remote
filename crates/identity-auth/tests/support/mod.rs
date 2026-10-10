@@ -236,7 +236,7 @@ impl EntropySource for SequenceEntropy {
         //
         // 为什么不是简单递增字节计数器：单字节轨道的周期是 256，而一次 `hello` 恰好消耗
         // 48 字节（nonce 32 + 挑战标识 16），48 与 256 的 gcd 为 16 → 只有 16 个互异的挑战标识，
-        // 会让「缓存上限」这类用例恒真（参见 RV2-WP2 的 F2）。按调用序号播种可保证不同调用互异。
+        // 会让「缓存上限」这类用例恒真。按调用序号播种可保证不同调用互异。
         // 这里不主张密码学强度：它只用于确定性测试。
         let mut calls = self.calls.lock().expect("熵源锁");
         let seed = *calls;

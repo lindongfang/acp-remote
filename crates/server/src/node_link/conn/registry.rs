@@ -156,7 +156,7 @@ impl ConnectionHandle {
     /// 只接受认证后 type（`AuthState::PostAuth`）；`node.hello`/`node.challenge`/`node.proof` 不能经
     /// 本入口发送（认证前消息由握手阶段直接写帧）。
     ///
-    /// 准入判定、序号分配与入队在**同一个临界区**内完成（RV1-WP4-F1）：序号先是候选值，只有容量预算
+    /// 准入判定、序号分配与入队在**同一个临界区**内完成：序号先是候选值，只有容量预算
     /// 通过（且真的入队）才提交。因此被高水位拒绝的投递不消耗序号——否则本方向此后每一帧都带缺口，
     /// 合规对端必须一直报 `sequence_invalid`，而协议没有重同步规则。
     pub fn send<T: Serialize>(&self, message_type: MessageType, body: &T) -> Result<(), SendFault> {

@@ -1256,7 +1256,7 @@ fn terminal_mapping_keeps_the_command_name_and_the_terminal_contract() {
     }
     assert!(body.terminal.error.is_null());
 
-    // RV1-WP6-F3：core 记录里 `result` 为 NULL 时仍回空 object（schema 只要求 object，§12.5 的
+    // core 记录里 `result` 为 NULL 时仍回空 object（schema 只要求 object，§12.5 的
     // 「非空」= 非 null）——不编造字段。
     let null_result = record(RecordSpec {
         request: REQUEST,
@@ -1365,7 +1365,7 @@ fn the_error_registry_maps_core_codes_without_inventing_new_ones() {
     );
     assert!(!error_info("authorization.scope_denied").retryable);
 
-    // RV1-WP6-F8 正例：已知**永久**失败必须映射到非 retryable 的语义最近登记码，不能冒充
+    // 正例：已知**永久**失败必须映射到非 retryable 的语义最近登记码，不能冒充
     // `internal.unavailable`（那在 registry 里是 retryable = true，会把永久失败标成可重试）。
     for (core_code, expected) in [
         (
@@ -2509,7 +2509,7 @@ async fn session_list_only_returns_sessions_of_visible_exports() {
     assert!(body["terminal"]["terminalEventId"].is_null());
 }
 
-/// RV1-WP6-F12：关闭序列触发终态观察循环立刻结束——它由组合根 spawn，必须随 `Shutdown` 退出，
+/// 关闭序列触发终态观察循环立刻结束——它由组合根 spawn，必须随 `Shutdown` 退出，
 /// 不遗留 detached task（`AGENTS.md` §7）。
 #[tokio::test]
 async fn the_terminal_watcher_stops_on_shutdown() {
@@ -2530,7 +2530,7 @@ async fn the_terminal_watcher_stops_on_shutdown() {
         .expect("观察任务正常结束");
 }
 
-/// RV1-WP6-F12：超过观察预算的观察项被放弃（只记日志、不发帧），对端仍可凭 `command.status` 重查。
+/// 超过观察预算的观察项被放弃（只记日志、不发帧），对端仍可凭 `command.status` 重查。
 #[tokio::test]
 async fn the_watcher_abandons_an_observation_that_outlives_its_budget() {
     let mut fixture = Fixture::new().await;
@@ -2554,7 +2554,7 @@ async fn the_watcher_abandons_an_observation_that_outlives_its_budget() {
     assert!(fixture.drain().is_empty(), "放弃时不得发任何帧");
 }
 
-/// RV1-WP6-F2：连接离开注册表后，它的命令状态（限流窗口 + 观察表）随之回收——判据是注册表的
+/// 连接离开注册表后，它的命令状态（限流窗口 + 观察表）随之回收——判据是注册表的
 /// 存活集合，不依赖「它是否还有 in-flight 命令」，否则只被限流窗口引用的空状态会永远留下。
 #[tokio::test]
 async fn connection_state_is_reaped_once_the_connection_leaves_the_registry() {
@@ -2579,11 +2579,11 @@ async fn connection_state_is_reaped_once_the_connection_leaves_the_registry() {
     route.poll_pending().await;
     assert!(
         lock(&route.states).is_empty(),
-        "离开注册表的连接不得留下空状态（RV1-WP6-F2）"
+        "离开注册表的连接不得留下空状态"
     );
 }
 
-/// RV1-WP6-F3：`command.accepted.result` 透传 core 收据里的 turn——`session.create` 必须为 `null`
+/// `command.accepted.result` 透传 core 收据里的 turn——`session.create` 必须为 `null`
 /// （schema 的 `if/then`），带 turn 的命令回 `{"turnId": …}`。
 #[tokio::test]
 async fn command_accepted_result_carries_the_receipt_turn() {
@@ -2770,7 +2770,7 @@ async fn session_resume_returns_accepted_then_the_composite_result() {
     assert!(body["terminal"]["error"].is_null());
 }
 
-/// [CR6-F1]/§12.5：`session.resume` 的 `payload` 恒为 `{}`，语义全部落在 `sessionRef` 上，因此幂等
+/// §12.5：`session.resume` 的 `payload` 恒为 `{}`，语义全部落在 `sessionRef` 上，因此幂等
 /// 比对除了指纹还必须包含**会话身份**：同一 `(ownerNodeId, accessNodeId, requestId)` 改指另一个
 /// **同样已授权、同样可恢复**的会话时，必须回 `nodelink.command.idempotency_conflict`，而不是把首次
 /// 那个会话的终态结果回给调用方。
@@ -2961,7 +2961,7 @@ async fn session_resume_without_persisted_recovery_data_fails_as_unsupported() {
     let body = &terminal[0]["body"];
     assert_eq!(
         body["terminal"]["status"], "failed",
-        "两列为 NULL 是确定类失败，终态必须是 failed（DR1-F39）"
+        "两列为 NULL 是确定类失败，终态必须是 failed"
     );
     assert_eq!(
         body["terminal"]["error"]["code"],

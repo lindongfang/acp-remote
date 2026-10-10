@@ -22,7 +22,7 @@
 //!
 //! 序号记账与 type 无关（§2.2）：`connectionSequence` 属于**对端发出的消息**，本机接不接受它的
 //! type/body 不影响对端已经用掉的序号。因此「信封结构、JSON、连接字段都合法且序号正好是下一个」时，
-//! 无论 type 是 post_mvp 族还是完全未知，**两条路径都推进期望序号**（RV1-WP4-F5 的统一口径：
+//! 无论 type 是 post_mvp 族还是完全未知，**两条路径都推进期望序号**（统一口径：
 //! 一个显式拒绝不得让连接之后全部错位）。
 
 use node_link_protocol::common::{DecimalString, Nullable, RawObject, Uuid};

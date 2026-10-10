@@ -1876,7 +1876,7 @@ impl EntropySource for FakeEntropy {
 
 /// 记录撤销后关闭了哪些设备/节点、通知了哪些 Export（断言「提交后才关闭/推送」的观察点）。
 ///
-/// RV1-WP6-F10：`close_node`/`export_revoked` 在通知**当时**经持久读入口回读该行的撤销状态
+/// `close_node`/`export_revoked` 在通知**当时**经持久读入口回读该行的撤销状态
 /// （`TrustStore::nodes_for` / `ExportStore::export`），并把「回读时是否已经撤销」随通知一起记下。
 /// 这样「提交后才通知」不再只能从调用顺序间接推断（一条日志看不出先后），而是一个可断言的持久事实：
 /// 用例断言每一次通知的回读值都是 `true`。

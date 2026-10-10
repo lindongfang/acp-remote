@@ -252,7 +252,7 @@ pub struct BrokerDeps {
 /// 不带 wire 指纹的入口使用的规范占位摘要（32 个零字节的 base64url，无填充、末字符在规范集合内）。
 const PLACEHOLDER_FINGERPRINT: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-/// §6 第 9 条（RV2-WP7-F1）的兜底：被放弃 turn 的【占位】最多消耗多少个**驱动轮次**。
+/// §6 第 9 条的兜底：被放弃 turn 的【占位】最多消耗多少个**驱动轮次**。
 ///
 /// core 不读时钟、不设定时器，因此这里按轮次而不是墙钟计时：每个驱动轮次 = 一次派发尝试，组合根按
 /// `storage.flush_interval_ms`（默认 250 ms）周期驱动活动会话，`1200` 轮 ≈ 5 分钟。轮次用尽仍未观测到
@@ -408,7 +408,7 @@ struct TurnQueue {
     running_request: Option<RequestId>,
     running_actor: Option<Actor>,
     waiting: VecDeque<QueuedTurn>,
-    /// §6 第 9 条（RV2-WP7-F1）：被放弃、但还没有被端点观测到终态的 turn——它继续占住
+    /// §6 第 9 条：被放弃、但还没有被端点观测到终态的 turn——它继续占住
     /// `running` 槽位（见 [`HeldTurn`]）。
     held: Option<HeldTurn>,
 }
@@ -418,7 +418,7 @@ struct TurnQueue {
 /// 为什么必须占住：适配器（`agent-host`）发出的 `EndpointEvent` **不带** turn 标识，归属只能由 core 按
 /// 「有在跑 turn 时归给它」推断（§10.3）。若放弃后立刻派发下一个排队 turn，下一个 turn 就成了「在跑的
 /// turn」，被放弃 turn 的迟到事件（含终态）会被记到它头上——客户端看到下一个命令 `completed`，而它的
-/// 正文被按上一个 turn 的收尾折叠（RV2-WP7-F1）。占住期间迟到事件一律按被放弃的 turn 归属并丢弃。
+/// 正文被按上一个 turn 的收尾折叠。占住期间迟到事件一律按被放弃的 turn 归属并丢弃。
 ///
 /// 释放路径：①该 turn 的终态事件到达（视为端点已观测到该 turn 结束）；②兜底：占位轮次用尽
 /// （[`ABANDONED_TURN_HOLD_ROUNDS`]，避免端点永不收敛时会话永久卡住）。释放之后无归属事件的归属
@@ -496,7 +496,7 @@ impl Slot {
         !lock(&self.queue).waiting.is_empty()
     }
 
-    /// §6 第 9 条（RV2-WP7-F1）：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
+    /// §6 第 9 条：放弃 `turn` 之后不让出 `running` 槽位，而是登记为待观测的占位。
     fn hold_abandoned_turn(&self, turn: &TurnId) {
         let mut queue = lock(&self.queue);
         queue.held = Some(HeldTurn {
@@ -2062,7 +2062,7 @@ impl Broker {
             // 否则库里会留下「报完成但正文缺失」的记录。
             if let Some(turn_id) = turn.as_ref() {
                 if lock(&slot.abandoned).contains(turn_id) {
-                    // §6 第 9 条（RV2-WP7-F1）：该 turn 的终态到达即「端点已观测到它结束」，占位随之
+                    // §6 第 9 条：该 turn 的终态到达即「端点已观测到它结束」，占位随之
                     // 释放（事件本身仍被丢弃）。
                     if is_turn_terminal(&event.event_type) {
                         slot.release_held_turn(turn_id);
@@ -2222,7 +2222,7 @@ impl Broker {
                     running_actor.as_ref(),
                 )?);
                 // §11.2 的终态收据：`completed` 带上这条命令自己的 turn（收据里唯一有意义的分量），
-                // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是 RV1-WP6-F3 的修复
+                // `failed` 的无 turn 信息（错误已单独落盘）。终态结果的这次落盘是这次修复
                 // 点：在此之前所有 `completed` 记录的 `result` 都是 NULL，适配层只能回空 object。
                 let result = match (status, terminal_turn.as_ref()) {
                     (CommandStatus::Completed, Some(turn)) => Some(turn_result(turn)?),
@@ -2328,7 +2328,7 @@ impl Broker {
                     return Ok(());
                 }
                 // §6.9：非终态批次的失败不能只丢弃——该 turn 的正文已经缺了一块，若让同一 turn 的
-                // 终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录（RV1-WP7-F3）。
+                // 终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录。
                 if running_in_chunk {
                     self.abandon_failed_turn(
                         slot,
@@ -2347,7 +2347,7 @@ impl Broker {
 
     /// 派发一个排队 turn：Queued → Running（`turn.started`）→ 后端 `prompt`。
     async fn dispatch_one(&self, slot: &Slot, session: &SessionId) -> Result<bool, PortError> {
-        // §6 第 9 条（RV2-WP7-F1）：被放弃 turn 的【占位】未释放前不得提升下一个排队 turn，
+        // §6 第 9 条：被放弃 turn 的【占位】未释放前不得提升下一个排队 turn，
         // 否则它的迟到事件会被记到下一个 turn 上（见 [`HeldTurn`]）。兜底轮次也在这里推进。
         if slot.hold_blocks_dispatch() {
             return Ok(false);
@@ -2495,7 +2495,7 @@ impl Broker {
         }
     }
 
-    /// §6 第 9 条（RV1-WP7-F3）：非终态批次落盘失败后放弃在跑的 turn。
+    /// §6 第 9 条：非终态批次落盘失败后放弃在跑的 turn。
     ///
     /// 为什么必须终结而不能只丢批次：该 turn 的正文已经缺了一块，若它在后续批次里照常走到终态，库里
     /// 就会留下「报完成但正文缺失」的记录。因此这里把 turn 终结为 `failed`、把命令置为 `uncertain`
@@ -2509,7 +2509,7 @@ impl Broker {
     /// 已落盘的 delta 仍按 §6 第 14 条收尾成 `agent.message.completed`（缺的段落不伪造）；不压缩它们
     /// （§6 第 15 条是可选动作），错误路径上不再多发一次提交。
     ///
-    /// **不让出会话槽**（RV2-WP7-F1）：放弃的 turn 继续占住 `running`（[`HeldTurn`]），直到它的终态被
+    /// **不让出会话槽**：放弃的 turn 继续占住 `running`（[`HeldTurn`]），直到它的终态被
     /// 端点观测到；此前 `dispatch_one` 不得提升下一个排队 turn。这也会把它迟到的 permission/
     /// elicitation 请求一并丢弃（不落交互行、不广播）——已经被终结为 `uncertain` 的 turn 不再接受
     /// 交互，收敛该 turn 是端点的职责（`AGENTS.md` §3：一个状态只能有一个权威写入者）。
@@ -2563,7 +2563,7 @@ impl Broker {
                 // 会话状态按「还有没有排队 turn」投影：放弃自己的 turn 不等于该会话没有工作。
                 // 仍排队的 turn 必须继续被驱动（组合根的合并窗口只枚举 `queued`/`running`/
                 // `waiting_*` 的会话），因此这种情况下不能写成 `Failed`——否则该会话再也不会被驱动，
-                // RV2-WP7-F1 的兜底轮次永远推不动（§6 第 9 条）。
+                // 兜底轮次永远推不动（§6 第 9 条）。
                 state: Some(if slot.has_waiting_turn() {
                     SessionState::Queued
                 } else {
@@ -3187,7 +3187,7 @@ impl Broker {
 
     /// 终态提交（§11.2：终态只通过一个持久化的 `command.*` 事件表达）。
     ///
-    /// `result` 是该命令终态的收据结果（RV1-WP6-F3）：有 turn 的命令带 `{"turnId":…}`、模式/配置切换
+    /// `result` 是该命令终态的收据结果：有 turn 的命令带 `{"turnId":…}`、模式/配置切换
     /// 带 `{"version":…}`，其余为 `None`（适配层按 §12.5 回空 object，不编造字段）。
     #[allow(clippy::too_many_arguments)] // 终态的四个分量（status/error/result/version）+ 会话/命令/时间
     async fn commit_terminal(
@@ -3919,7 +3919,7 @@ fn version_text(version: &Version) -> String {
     version.get().to_string()
 }
 
-/// 终态结果：`{"turnId":"…"}`（turn 作用域命令的收据字段，RV1-WP6-F3）。
+/// 终态结果：`{"turnId":"…"}`（turn 作用域命令的收据字段）。
 ///
 /// Node Link 的 `command.terminal.terminal.result` 是开放 object，带 turnId 使 Access 能把命令与 turn
 /// 对上；缺它时适配层只能回空 object（§12.5 的「非空」= 非 null，但空 object 丢失了这条信息）。
@@ -3928,7 +3928,7 @@ fn turn_result(turn: &TurnId) -> Result<CommandResult, PortError> {
         .map_err(PortError::from)
 }
 
-/// 终态结果：`{"version":"…"}`（模式/配置切换的收据字段，RV1-WP6-F3）。
+/// 终态结果：`{"version":"…"}`（模式/配置切换的收据字段）。
 fn version_result(version: &Version) -> Result<CommandResult, PortError> {
     CommandResult::from_json_text(&format!(r#"{{"version":"{}"}}"#, version.get()))
         .map_err(PortError::from)
@@ -6816,7 +6816,7 @@ mod tests {
         );
     }
 
-    /// §11.2/RV1-WP6-F3：终态记录带上收据里有意义的分量——prompt 的 `completed` 带 `{"turnId":…}`，
+    /// §11.2：终态记录带上收据里有意义的分量——prompt 的 `completed` 带 `{"turnId":…}`，
     /// 模式切换的 `completed` 带 `{"version":…}`。在此之前终态记录的 `result` 恒为 NULL，适配层只能回
     /// 空 object（`NODE_LINK_PROTOCOL.md` §12.5 允许，但丢掉了这两条可用的关联信息）。
     #[test]
@@ -6915,7 +6915,7 @@ mod tests {
         assert!(harness.world.published_after_commit());
     }
 
-    /// §6 第 9 条（RV1-WP7-F3）：**非终态**批次的写失败不得只丢弃——该 turn 的正文已经缺了一块，
+    /// §6 第 9 条：**非终态**批次的写失败不得只丢弃——该 turn 的正文已经缺了一块，
     /// 若让同一 turn 的终态批照常 `completed`，库里就留下「报完成但正文缺失」的记录。
     #[test]
     fn a_failed_non_terminal_batch_terminates_the_turn_instead_of_silently_dropping_it() {
@@ -6959,7 +6959,7 @@ mod tests {
         assert!(harness.world.published_after_commit());
     }
 
-    /// §6 第 9/14 条（RV1-WP7-F3）：被放弃的 turn 仍要为**已落盘**的 delta 收尾（`completed`），
+    /// §6 第 9/14 条：被放弃的 turn 仍要为**已落盘**的 delta 收尾（`completed`），
     /// 缺的那一块不伪造，迟到的事件与终态一律不再提交。
     #[test]
     fn an_abandoned_turn_still_finalises_the_deltas_it_persisted() {
@@ -7039,7 +7039,7 @@ mod tests {
         );
     }
 
-    /// §6 第 9 条（RV2-WP7-F1）：被放弃 turn 的迟到终态不得记到下一个 turn 上。
+    /// §6 第 9 条：被放弃 turn 的迟到终态不得记到下一个 turn 上。
     ///
     /// 适配器发出的 `EndpointEvent` 不带 turn 标识（`agent-host` 的 mapper 固定 `turn: None`），归属只能
     /// 按「有在跑 turn 时归给它」推断（§10.3）。因此放弃之后**不得**立刻提升下一个排队 turn：否则 T1 的
@@ -7138,7 +7138,7 @@ mod tests {
         assert!(harness.world.published_after_commit());
     }
 
-    /// §6 第 9 条（RV2-WP7-F1）的兑底：端点始终没有观测到终态时，占位必须在有界轮次后释放，
+    /// §6 第 9 条的兑底：端点始终没有观测到终态时，占位必须在有界轮次后释放，
     /// 否则排队的 turn 永远不被派发、会话永久卡住。
     #[test]
     fn an_unobserved_abandoned_turn_hold_is_released_after_the_bounded_rounds() {
@@ -7183,7 +7183,7 @@ mod tests {
         );
     }
 
-    /// §6 第 4/8/9 条（RV3-WP7-F2）：占位期该会话按「仍有 active turn」处理，因此模式切换被显式拒绝
+    /// §6 第 4/8/9 条：占位期该会话按「仍有 active turn」处理，因此模式切换被显式拒绝
     /// （v1 不排队），而不是因为该 turn 已经终结就被放行。
     #[test]
     fn mode_change_rejected_while_an_abandoned_turn_holds_the_session_slot() {
@@ -7234,7 +7234,7 @@ mod tests {
         );
     }
 
-    /// §6 第 9/19 条（RV2-WP7-F3）：被放弃 turn 的迟到事件走第 9 条的「归属到被放弃的 turn 并被丢弃」，
+    /// §6 第 9/19 条：被放弃 turn 的迟到事件走第 9 条的「归属到被放弃的 turn 并被丢弃」，
     /// **不是**第 19 条的「无归属降级」（带着 NULL 的 `turn_id` 照常落库）。
     #[test]
     fn a_late_event_of_an_abandoned_turn_is_dropped_instead_of_degraded_without_a_turn() {

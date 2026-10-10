@@ -1242,7 +1242,7 @@ async fn a_finished_connection_state_entry_is_reclaimed_by_the_next_fan_out() {
     );
 }
 
-/// [RV2-WP5-F1]：「attach 后从未 subscribe 即断开」的连接也要被回收——它的状态表条目、没有本会话
+/// 「attach 后从未 subscribe 即断开」的连接也要被回收——它的状态表条目、没有本会话
 /// 订阅，回收判据必须放在订阅判定**之前**才能扫到它。
 #[tokio::test]
 async fn a_finished_connection_that_never_subscribed_is_reclaimed() {
@@ -1276,7 +1276,7 @@ async fn a_finished_connection_that_never_subscribed_is_reclaimed() {
     );
 }
 
-/// [RV2-WP5-F1]：「re-attach 清掉订阅后断开」的连接也要被回收——`resource.attach` 会清掉该会话的旧
+/// 「re-attach 清掉订阅后断开」的连接也要被回收——`resource.attach` 会清掉该会话的旧
 /// 订阅（§12.4，Access 必须重新 subscribe），因此这类条目同样不再持有本会话订阅。
 #[tokio::test]
 async fn a_finished_connection_whose_reattach_cleared_its_subscription_is_reclaimed() {
