@@ -224,6 +224,8 @@ core use_cases   -> core ports + core model
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
 - `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），其清单与判据见 `README.md` 的「合同检查」。改动合同资产或 crate 依赖后必须让它全绿。
+- 提交信息的 type/scope 词表以 `commitlint.config.mjs` 为唯一机器定义（`.husky/commit-msg` 与 CI 的 `commits` job 都按它判定），不要在任何地方再抄一份词表。**scope 表示模块与交付面边界，不是目录名**：`crates/storage-sqlite/` 用 `storage`、`crates/*-protocol/` 用去掉 `-protocol` 的短名、`identity-*` 用 `identity`、`acpr-*` 用 `transcript`/`wire`、`clients/` 用 `frontend`。
+- AI 提交信息生成器（Oh My Pi 的 `omp commit`、`omp git` 的「Generate message」）**不读** `commitlint.config.mjs`：它自带一份更宽的 type 词表，并按**文件路径目录名**推 scope，实测还会忽略 `AGENTS.md` 里的补充约束，因此常生成 `chore(storage-sqlite): …` 这类被钩子拒绝的消息。被拒时提交不落地、改动留在暂存区，按 `commitlint.config.mjs` 的词表改 scope/type 后重新提交即可。它只是本地便利工具，不参与门禁；直接手写提交信息同样合法。
 
 ## 10. 回复与沟通
 
