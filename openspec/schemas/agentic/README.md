@@ -17,7 +17,7 @@
 | 3 | [templates/](templates/) | 主 Agent（同一次 instructions 调用） | 同一次 instructions 的 `template` 字段 | 产物骨架、字段填写来源和格式示例 | 规则正文 |
 | 4 | [procedures/acceptance.md](procedures/acceptance.md) | 主 Agent（最终验收） | 由 skill 或等效入口完整读取 | 验收目标、审计组、判定和记录 | 流程调度 |
 | 5 | [openspec/config.yaml](../../config.yaml) | 主 Agent（注入 instructions） | 每次 instructions 都注入 `context` 与 `operationGuidance`；**`all_done` 后仍注入**；同项目其他 schema 的变更也会收到同一份文本，故 agentic 规则须带适用前缀 | 稳定项目画像、项目级补充项与优先级说明、`all_done` 后的验收兜底、归档规则（schema 无 archive 段） | 单次变更状态、未经核实的项目事实、除 `all_done` 兜底外的 schema 门禁正文 |
-| 6 | [openspec/agentic.yaml](../../agentic.yaml) | 主 Agent（`openspec-agentic roles` / `dispatch` / `e2e`） | 由扩展 CLI 按需从磁盘重读；引擎不读该文件 | 角色模型、池容量、E2E 开关 | 流程门禁正文、项目画像 |
+| 6 | `openspec/agentic.yaml`（本仓库不保留该文件） | 主 Agent（`openspec-agentic roles` / `dispatch` / `e2e`） | 由扩展 CLI 按需从磁盘重读；引擎不读该文件 | 角色模型、池容量、E2E 开关 | 流程门禁正文、项目画像 |
 | 7 | 本 README | 维护者、使用者 | 不投递（仅人读） | 结构解释、文件索引、移植清单、验证入口 | 任何新规则 |
 
 投递保证决定规则落点，不只是文风问题：
@@ -276,7 +276,7 @@ npx --quiet --no-install openspec-agentic roles unset coder
 | [roles/_shared/](roles/_shared/) | 1 份共用报告契约 [role-report.md](roles/_shared/role-report.md)：所有角色报告的统一字段、`handoff_index` 与 role→phase→stage 枚举（不是角色，无模型键） | 所有角色报告的统一格式 |
 | [procedures/acceptance.md](procedures/acceptance.md) | 最终验收的目标核对、证据审计、任务例外及判定程序 | 最终 PASS/FAIL/BLOCKED 的判定和记录规则 |
 | [openspec/config.yaml](../../config.yaml) | 引擎侧项目配置：默认 schema 选择、context 共享补充、`operations.guidance` | 项目级补充项与优先级说明；扩展不保留第二套配置 |
-| [openspec/agentic.yaml](../../agentic.yaml) | 扩展侧项目配置：角色模型 `roles`、并发派发 `dispatch.pool`、项目级 E2E 开关 `e2e` | 角色模型由 `npx --quiet --no-install openspec-agentic roles` 解析，E2E 开关由 `npx --quiet --no-install openspec-agentic e2e` 解析，池容量由 `openspec-agentic dispatch` 解析；归档规则不写在这里 |
+| `openspec/agentic.yaml`（本仓库不保留该文件） | 扩展侧项目配置：角色模型 `roles`、并发派发 `dispatch.pool`、项目级 E2E 开关 `e2e` | 角色模型由 `npx --quiet --no-install openspec-agentic roles` 解析，E2E 开关由 `npx --quiet --no-install openspec-agentic e2e` 解析，池容量由 `openspec-agentic dispatch` 解析；归档规则不写在这里 |
 | agentic-verify/SKILL.md | 解析变更和 schema，定位并读取最终验收程序 | 验收入口如何取得上下文及加载指令；源码位于 `assets/skills/agentic-verify/SKILL.md`，安装后为目标项目 `.agents/skills/agentic-verify/SKILL.md` |
 | AGENTS.md | 将 agentic 最终验收、手动 verify 和归档前检查路由到项目 skill | 宿主何时必须进入专用验收入口；源码位于 `assets/AGENTS.md`，安装后为目标项目根 `AGENTS.md`；扩展发行源仓库自身的根 `AGENTS.md` 是开发说明，不是本模板 |
 | [tests/agentic-workflow.ps1](tests/agentic-workflow.ps1) | 在临时样例中检查 CLI 依赖、状态和指导输入 | CLI 兼容性及流程配置回归检查 |

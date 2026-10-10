@@ -36,7 +36,7 @@
 | A3 | **Sync Client**：连接、challenge-response 认证、`subscribe`、ACK、增量重放、快照暂存与原子替换、`eventId` 去重、`requestId` 幂等重试 | `SYNC_PROTOCOL §8–§11` |
 | A4 | 状态机：连接 9 态、命令 6 态 | 原型已实现这些判定逻辑，可直接对照迁移 |
 | A5 | 页面：配对 / 目录 / 目录详情 / 对话 / 变更文件 / 降级卡片 / 诊断抽屉 / 主机与连接面板 | 对应原型四条路由 + 浮层 |
-| A6 | 协议 DTO 层：消费 `schemas/sync/v1/**` 与 `fixtures/sync/v1/**`，与 Rust 共用同一份合同 | `AGENTS.md §10` 要求两端同源 |
+| A6 | 协议 DTO 层：消费 `schemas/sync/v1/**` 与 `fixtures/sync/v1/**`，与 Rust 共用同一份合同 | `AGENTS.md §8` 要求两端同源 |
 | A7 | 测试：fixture 契约测试、状态机、幂等重试、浏览器 E2E、敏感信息不落盘 | `FRONTEND_DESIGN §10` |
 
 ---
@@ -133,7 +133,7 @@
 | # | 缺什么 | 依据 |
 |---|---|---|
 | G1 | **设计结论回写** `docs/FRONTEND_DESIGN.md` | 原型已定的数十个交互，目前一条都没进权威文档 |
-| G2 | **openspec 变更提案**（C1 / C2 / C3 各自涉及 core、storage、sync、compat 四处合同） | `AGENTS.md §8/§10` |
+| G2 | **openspec 变更提案**（C1 / C2 / C3 各自涉及 core、storage、sync、compat 四处合同） | `AGENTS.md §8` |
 | G3 | 把 `FRONTEND_DESIGN §9` 的 10 条验收标准做成可执行检查 | `FRONTEND_DESIGN §9` |
 
 ---

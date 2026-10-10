@@ -602,4 +602,4 @@ $ acp-remote device pair --request session.read --sas 481502 --fingerprint ab12�
 - `v` 是通道版本，v1 只接受 `1`。framing、endpoint 授权模型或信封字段语义的不兼容变更必须新增 `v` 值（或新增 ADR），不能在同一 `v` 内静默改变语义。
 - 兼容变更：新增方法（旧 Daemon 返回 `local.unsupported`，新 CLI 必须处理它）、新增可选 `params` 字段（实现方必须容忍缺失）、新增 `result` 字段（客户端忽略未知字段，§1.1）。
 - 不兼容变更示例：给已有方法增加必填 `params` 字段、改变已有字段含义、改变 `result` 中已有字段的类型。
-- 方法集、envelope、framing、endpoint 位置或授权规则变化时，必须更新本文；触发条件见 `AGENTS.md` §10。
+- 方法集、envelope、framing、endpoint 位置或授权规则变化时，必须更新本文；触发条件见 `AGENTS.md` §8。

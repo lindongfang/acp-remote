@@ -12,11 +12,11 @@
 - [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md)：客户端与 Daemon 之间认证、消息、游标、重放、幂等和 wire schema 的权威来源。
 - [docs/NODE_LINK_PROTOCOL.md](docs/NODE_LINK_PROTOCOL.md)：ACP Remote 节点之间资源导出/导入、权威、认证、授权、重放和幂等边界的权威来源。
 - [docs/LOCAL_ADMIN_PROTOCOL.md](docs/LOCAL_ADMIN_PROTOCOL.md)：CLI 与 Daemon 之间本地管理通道的请求/响应编码、framing、两类载荷（管理信封与 ACP 流）的会话语义与方法集的唯一权威来源。
-- [docs/IDENTITY_AND_AUTH_CONTRACT.md](docs/IDENTITY_AND_AUTH_CONTRACT.md)：`identity-auth` 内部状态机、握手入口契约、授权展开、nonce/重放规则与 `identity-keystore` 端口的唯一权威来源（wire 仍以 Sync/Node Link 为准，持久化仍以 `CORE_PORTS_AND_STORAGE.md` §11 为准）。
+- [docs/IDENTITY_AND_AUTH_CONTRACT.md](docs/IDENTITY_AND_AUTH_CONTRACT.md)：`identity-auth` 内部状态机、握手入口契约、授权展开、nonce/重放规则与 `identity-keystore` 端口的唯一权威来源（wire 仍以 Sync/Node Link 为准，持久化仍以 [`CORE_PORTS_AND_STORAGE.md`](docs/CORE_PORTS_AND_STORAGE.md) §3.5–§3.7/§7 为准）。
 - [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)：系统威胁模型、信任边界、授权、数据保护、供应链和安全验收的权威来源。
 - [docs/ACP_COMPATIBILITY_MATRIX.md](docs/ACP_COMPATIBILITY_MATRIX.md)：ACP v1 覆盖范围、各层处理策略和兼容性验收矩阵的权威来源；机器合同位于 `compatibility/acp/v1/matrix.json`。
 - [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)：Daemon 配置键名、类型、默认值与可否调整的唯一权威来源；协议层限额仍以 Sync、Node Link 两份协议文档为准。
-- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` v2 表结构/保留/migration 的唯一权威来源；管理状态（配对/信任/Export/Import/本地配置）的形状已并入 §3.5–§3.7/§5/§7 并由合同漂移门禁逐条断言，§11 只保留设计理由与索引。
+- [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md)：`core::model` 值对象、`core::use_cases` 用例面、`core::ports` 端口签名、broker 事务顺序与 `storage-sqlite` 表结构/保留/migration 的唯一权威来源（当前 §7 为 v6、`imported_*` 家族为 v3）；管理状态（配对/信任/Export/Import/本地配置）的形状已并入 §3.5–§3.7/§5/§7 并由合同漂移门禁逐条断言，§11 只保留设计理由与索引。
 - [docs/adr/](docs/adr/)：已经接受的架构决策；相关 ADR 优先于仍保留的早期候选描述。
 
 另见 `README.md` 的「权威文档」表（同一批文档的一览）。
@@ -30,15 +30,15 @@
 ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
 - 一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；同一节点可以同时承担 Owner 和 Access 角色。
-- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 不复制远程会话正文，可持久化的字段清单见 §6。
+- 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 不复制远程会话正文，可持久化的字段清单见 [`CORE_PORTS_AND_STORAGE.md`](docs/CORE_PORTS_AND_STORAGE.md) §7。
 - 手机、电脑、Zed、PWA 和 CLI 是客户端形态，不是固定权限角色；能力由 principal scope、Export Policy 和端到端 capability 决定。
-- Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`（Zed `session/new` 的映射规则见 §5 Node Link）；当前 PWA MVP 可以不展示创建入口。
+- Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`（Zed `session/new` 的映射规则见 [`ACP_COMPATIBILITY_MATRIX.md`](docs/ACP_COMPATIBILITY_MATRIX.md) §6）；当前 PWA MVP 可以不展示创建入口。
 - Zed 是可选客户端，项目不得与 Zed 强绑定。
 - 对直接管理的 Agent，Owner Node Daemon 是其唯一 ACP Client，负责 Codex、Oh My Pi 等 Agent 的生命周期；Access Node 通过 Node Link 访问，不直接接管远程 Agent stdio。
 - 第一阶段不提供应用级云服务器或持久云中继；Owner Node 离线时，远程控制不可用。
 - LAN、Tailscale 或其他网络路径都是可替换的部署方式，核心不能依赖 Tailscale SDK、CLI 或身份体系。
 - 核心、Daemon 和 CLI 使用 Rust；npm 只负责分发预编译二进制，最终用户不应被要求安装 Rust 工具链。
-- 交付顺序：Node Link 是首个产品纵向切片，前端首个交付紧随其后，只实现由 Daemon 本地托管的 Web/PWA，Android/iOS 原生客户端属于后续阶段（前端边界见 §5）。
+- 交付顺序：Node Link 是首个产品纵向切片，前端首个交付紧随其后，只实现由 Daemon 本地托管的 Web/PWA，Android/iOS 原生客户端属于后续阶段（前端边界见 [`FRONTEND_DESIGN.md`](docs/FRONTEND_DESIGN.md)）。
 
 不要在没有明确需求的情况下引入账号中心、云数据库、遥测平台、第三方消息中继或厂商锁定的网络能力。
 
@@ -97,11 +97,11 @@ node-link-client    # 待落地
 storage-sqlite      # 已落地
 identity-auth       # 已落地
 identity-keystore   # 已落地
-server              # 已落地（切片 4 本地通道 + local_admin；切片 5 的 transport::net + node_link；sync / acp_facade 待落地）
-app                 # 已落地（切片 4 的 daemon / CLI / 组合根；切片 5 接线网络接入面与 Node Link 路由）
+server              # 已落地（本地通道 + local_admin + transport::net + node_link；sync / acp_facade 待落地）
+app                 # 已落地（daemon / CLI / 组合根；已接线网络接入面与 Node Link 路由）
 ```
 
-上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，切片 4/5 的落地范围见 [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md) §3 `[现状]`）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
+上表「待落地」只是已经确定的边界，不代表已实现（现状一览见 `README.md` 的「仓库当前状态」，落地范围与编号见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)）。物理 crate 采用 Pi 风格的粗粒度边界：`core` 内含 model/use_cases/ports/broker，`server` 内含 sync/node_link/acp_facade/local_admin，`app` 内含 daemon/CLI/组合根。协议因兼容周期独立而分别建 crate。只有需要阻止反向依赖、独立发布或拥有独立协议/平台实现时才继续拆 crate；平级模块共享的底层实现下沉为叶子 crate（`acpr-transcript`，见 `docs/adr/0005-shared-transcript-codec.md`；跨协议共用的 wire 值对象与校验机制见 `acpr-wire`，`docs/adr/0007-shared-wire-value-crate.md`），不通过横向依赖复用。平台实现同样单独成 crate：`identity-keystore` 只为隔离平台 keystore 依赖而存在（`docs/adr/0006-identity-keystore-split.md`）。
 
 依赖必须指向更稳定的内层：
 
@@ -145,7 +145,7 @@ core use_cases   -> core ports + core model
 - 所有输入都有长度、数量、频率和资源限制。
 - 慢客户端不能阻塞 Broker 或 Agent；断开后依靠 cursor 重放。
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
-- Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §10。
+- Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §8。
 - 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant/pack 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
 - transcript domain 与字段 tag 表由 `compatibility/transcripts/v1/transcripts.json` 机器登记；`fixtures/*/v1/transcripts/` 的固定向量必须能由该表从 `input` 重新编码得到，否则视为实现或表格错误。
 
@@ -193,102 +193,9 @@ core use_cases   -> core ports + core model
 - 新增依赖前检查其必要性、维护状态、许可证、平台支持和安全风险。
 - 保持公开 API 最小；第一阶段默认 workspace-private。
 
-## 8. 实现工作流
+## 8. 文档维护
 
-agentic 变更的通用工作流（proposal → specs/design → plan → tasks → apply → verification → archive）、
-角色职责、任务下放与最终验收判据由本项目安装的 OpenSpec agentic 扩展定义，本文件不重复：
-
-- 流程、模板、角色与检查协议：`openspec/schemas/agentic/`；
-- 最终验收入口：[`.agents/skills/agentic-verify/SKILL.md`](.agents/skills/agentic-verify/SKILL.md)；
-- 扩展配置（角色模型、并发派发池、E2E 开关）：`openspec/agentic.yaml`；
-- 项目画像（仓库结构、命令索引、约束与运行环境）：`openspec/config.yaml` 的 `context`。
-
-非 agentic 改动沿用同一协作要求：一次改动尽量形成小而完整的纵向切片。
-
-变更落地走 PR——`main` 的 ruleset 要求 PR 与必需检查（理由、设置与现状见 `README.md` 的「分支保护」小节）：
-
-```text
-git switch -c <type>/<topic>
-…提交…                          # 标题必须是 Conventional Commits，见下文
-git push -u origin HEAD
-gh pr create --fill              # squash 合并用 PR 标题当提交信息，因此标题同样要合规
-gh pr checks --watch
-gh pr merge --squash --delete-branch
-```
-
-agentic 变更在候选合入前还须按 `openspec/schemas/agentic/procedures/workflow-check.md` 执行
-`npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage premerge --planning-root <权威规划根> --json`；
-它核对候选版本、Project Verify、独立 review 与主 Agent 的覆盖核对结果（单元候选阶段不执行 E2E）。角色报告的交接索引以
-`openspec/schemas/agentic/roles/_shared/role-report.md` 为准。该门由主 Agent 在本地候选 worktree 执行，**不接入 CI**：
-扩展随 0.4.0 提供的 `openspec/schemas/agentic/ci/github-premerge.yml` 是可选模板（要求 PR 正文恰好一行
-`Agentic-Change: <变更名>`，并把 `agentic-premerge` 设为受保护分支的必需状态）；本仓库以单人协作为主、
-已有五个必需检查，暂不采纳该模板。该检查不代替本节的 PR 与必需 CI 检查。
-
-bypass 名单里保留着 `Repository admin`，所以**直推 main 在技术上仍然可行，但那是紧急出口而不是日常路径**：
-绕过后 `deps` / `advisories` / `secrets` 三个只能在 CI 运行的判定就不再是先于落地的门禁，只会变成事后通知。
-规则集开了 `strict_required_status_checks_policy`，因此 PR 需要先合入最新 main 再跑一轮才能合并——
-“PR 绿了”与“合并后 main 仍绿”是同一件事。
-
-提交信息遵循 Conventional Commits：`<type>(<scope>)!?: <主题>`，主题用中文，破坏性变更在 type/scope 后加 `!` 或写 `BREAKING CHANGE:` 尾注。type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，不要在别处再抄一份；scope 可选，写了就必须落在词表里，仓库新增边界（新 crate、新协议、新交付面）时在同一改动里补词表。当前词表另有两个需要说明的 scope：`session-resume` 是会话恢复的跨层交付面（横跨 acp-protocol 的 `session/resume` DTO、node-link-protocol 与 `server::node_link` 的命令路由、core 的 `resume_session` 用例、storage-sqlite 的 v5 恢复列与 `load_recovery`、agent-host 的恢复路径和 app 的组合根接线，因此不对应 §3.1 里的某个 crate）；`test` 是**历史兼容项而不是交付面边界**——`test` 本是类型词表里的类型，历史提交 `3484541 docs(test): …` 误把它用作 scope 且已进入 `main`，经评估改写该提交会连带改变其后 10 个提交的 SHA 并使 `openspec/changes/session-resume/` 下多份已入库报告的证据引用悬空，故只把它收进 scope 词表让 CI `commits` job 通过；**新增提交不要用它**，只改测试请写 `test(<交付面>)`（如 `test(core)`、`test(storage)`）。
-
-**合并提交豁免**：`commitlint.config.mjs` 的 `ignores` 豁免「以 `merge`（可带 scope）加冒号开头」的合并消息（如 `merge: 并入 …`、`merge(candidate): …`）。这是恢复 `@commitlint/config-conventional` 的**本意**——它的默认豁免只认 `Merge pull request` / `Merge branch x` 这类 git 默认措辞（大写、无冒号），本仓库按中文习惯写成小写加冒号，一条都不匹配，于是合并提交被当成普通提交去核对 type/scope 词表而失败。**没有**把 `merge` 收进 `TYPES`：那还得把 `candidate`/`integ` 这类工作流产物塞进 `SCOPES`，而 scope 是「模块与交付面边界」（见上），二者不是同一层概念。豁免范围只限合并消息，普通提交一律照常按词表校验。本地由 husky 装配的 `.husky/commit-msg` 钩子在 `npm install` 时生效并拒绝不合规信息（`git commit --no-verify` 可跳过本地钩子，但跳过不了 CI），CI 的 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次。会话内可用项目级 `/commit` 提示模板生成并落地提交信息：仓库随版本控制提供 [`.pi/prompts/commit.md`](.pi/prompts/commit.md) 与 [`.omp/commands/commit.md`](.omp/commands/commit.md)（分别由 Pi CLI 与 Oh My Pi 读取），两者正文必须保持一致（改其一必须同步另一个）；它只读取 `commitlint.config.mjs` 的词表，不复制词表，也不绕过钩子。
-
-本地完成改动的入口是**一条命令**（与 CI 的 `checks` job 同源，不要在本地另抄一套参数）：
-
-```text
-npm ci          # 首次或依赖变动后
-npm run verify  # = npm run check（合同门禁，§10、§12）+ npm run check:rust（下面三条）
-```
-
-`npm run check:rust` 展开为下面三条；需要单独执行时用它们，但参数必须与脚本一致——工具链版本由
-`rust-toolchain.toml` 固定，本地与 CI 因此判定同一个编译器：
-
-```text
-cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace --all-features
-```
-
-有两类判定**只在 CI 运行**，因为它们需要网络或额外二进制：`cargo-deny`（依赖许可证、来源与 advisory，配置见
-`deny.toml`）与 `gitleaks`（密钥扫描，配置见 `.gitleaks.toml`）。它们不在 `npm run verify` 里，因此
-「本地绿」不等于这两类判定通过；工具版本与已知残余风险见 `docs/adr/0008-ci-supply-chain-tooling.md`。
-
-**npm 侧的 advisory 判定由 `scripts/check-dependency-advisories.mjs` 承担**（CI 的 `deps` job 调用它，不再直接跑
-`npm audit`）：`npm audit` 没有 ignore 机制，而仓库有一条**上游无修复**的 advisory（`braces` 的
-`GHSA-vfj7-8cjw-p6xm`，受影响范围是 `*`，3.x 线最新版 3.0.3 即被通报版本），直接跑会让该 job 永远红灯、
-每次合并都走 bypass。该脚本**按 advisory ID 放行已登记项**，未登记项与任何 `critical` 一律失败；每条豁免的
-理由、适用范围与**到期条件**写在该脚本的 `ALLOWED` 数组里，新增或删除都必须改那里。它不参与
-`npm run check`（那条入口保持离线），只在 CI 运行。
-
-提交时 `.husky/pre-commit` 会自动跑 `cargo fmt --check` + `npm run check` + `cargo clippy`（涉及 Rust 时）。
-它可以用 `git commit --no-verify` 跳过，且检查的是工作区内容而不是暂存快照，因此它是「更早发现失败」，
-不是门禁本身的实现。
-
-如果某个命令因平台、缺少外部 Agent 或环境限制无法执行，必须在交付说明中准确写明，不能声称已经通过。
-
-不要顺手重构无关代码。优先修改根因，并保持补丁范围可审查。
-
-## 9. 测试要求
-
-根据改动选择对应测试（`node-link-client`、macOS/Linux 的 keystore 后端与 `server::sync`/`server::acp_facade` 尚未落地，其条目在对应适配器落地时生效；`server` 的本地管理通道、`transport::net` 与 `node_link`，以及 `app` 已随切片 4/5 落地，条目已生效）：
-
-- `core`：状态转换、值对象、owned/imported 分流、每会话串行、事务提交和不变量。
-- `acp-protocol`：官方 fixture、未知字段往返、扩展 payload 和版本兼容。
-- `agent-host`：fake ACP child、超时、取消、崩溃和乱序响应。
-- `node-link-client`：fake Owner、attachment generation、显式重连、origin 去重和 uncertain。
-- `storage-sqlite`：migration、owned 原子提交、imported 无正文约束、TTL、容量限制和崩溃恢复。
-- `identity-auth`：设备/节点配对过期、重放、密钥变化、无传递信任、撤销和错误权限。
-- `server::sync`：认证、限流、backpressure、ACK 和断线续传。
-- `server::node_link`：Export 过滤、attachment、节点认证、ACK 和撤销。
-- `server::acp_facade`：ACP contract、能力协商真实性、扩展透传和会话重放。
-
-普通 CI 使用可控的 fake ACP Agent。真实 Codex/OMP 测试属于可选兼容性套件，不应成为普通单元测试的硬依赖。
-
-修复 bug 时，除非客观上无法稳定复现，否则先添加或同时添加能够覆盖该问题的回归测试。
-
-## 10. 文档维护
-
-通用的文档维护时机与层级规则由 OpenSpec agentic schema 定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复 schema 正文。
+通用的文档维护时机与层级规则由项目 schema（`openspec/schemas/agentic/`）定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复 schema 正文。
 
 - 产品行为和产品级同步策略变化：更新 `docs/INITIAL_DESIGN.md`。
 - 威胁模型、信任边界、授权默认、数据保护或供应链要求变化：更新 `docs/SECURITY_DESIGN.md`；改变已接受密码学/传输决策时同时新增或更新 ADR。
@@ -305,42 +212,20 @@ cargo test --locked --workspace --all-features
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
 - CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
-- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），串行运行各道门禁（**顺序与数量以 `package.json` 的 `check` 脚本为准**）—— 各道门禁的完整清单与判据见 `README.md` 的「合同检查」，本文件不重复枚举，只固定四条独有硬约束：**文档引用门禁**（`scripts/check-doc-links.mjs`）的引用归属刻意保守——只认同一子句内紧邻指名的文档，无法归因的只统计不判定，因此它**不能**代替重编号后通读文档；**合同漂移门禁**（`scripts/check-contract-drift.mjs`）逐条比对 `docs/CORE_PORTS_AND_STORAGE.md` §7（`storage-sqlite` v1 表结构）与 `crates/storage-sqlite/src/migrate.rs`，以及 `docs/CORE_PORTS_AND_STORAGE.md` §5（`core::ports` 出站端口）与 `crates/core/src/ports.rs`（归一化后相等；`IF NOT EXISTS`、注释与空白不算差异）；**crate 依赖方向门禁**以 `MODULE_ARCHITECTURE.md` §5（依赖矩阵）为唯一判据，用 `cargo metadata` 校验每个 crate 的实际依赖，并硬约束 `core` 不引入 runtime/DB/HTTP/子进程/wire protocol 依赖；**封闭词表门禁**（也在 `scripts/check-command-catalog.mjs` 里）除命令目录外还断言本地管理的方法集、本地错误码与 `local.*` 能力三处一致：`docs/LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`，`local.*` 能力 ↔ `compatibility/commands/v1/commands.json` 的 `localCapabilities`；命令目录侧还按 `transport` 判定 `pack`——`pack.*` 是设备/配对面概念，`transport` 不含 `sync` 的命令（只经 Node Link 接受）允许 `pack: null`，含 `sync` 的命令必须有 pack，该判据不按命令名硬编码。`check:agentic`（`scripts/agentic-gate.mjs`）的判据与离线语义见 §12。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。**新增或调整门禁时必须在同一改动里同步四处**：`package.json` 的 `check` 脚本、本段说明、`README.md` 的「合同检查」小节、`.github/workflows/ci.yml` 的注释——漏一处就会出现「文档写八道、实际跑十道」的漂移。
-
-CI 已接入五个 job（`.github/workflows/ci.yml`，push、PR 与每日定时都跑）：`checks`、`commits`、`deps`、`advisories`、`secrets`，各 job 的判定内容见 `README.md` 的「合同检查」；后三个需要网络或额外二进制，**没有本地等价物属于 `npm run verify`**，未在本地执行不等于通过（工具版本、许可证与向外发送的数据见 `docs/adr/0008-ci-supply-chain-tooling.md`）。依赖更新由 `.github/dependabot.yml` 提出（含冷却期；分组升级同样要过全部 job）。
-
-Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
-
-main 的分支保护是 GitHub 仓库设置（不在版本控制内），它决定以上判定能否真的拦住合并；**必需检查的 context 取 check-runs 的上报名，不是 workflow 里的 job id**（填错会存下一个永远不会上报的名字，规则变成永久等待且自己因为 admin bypass 感觉不到），当前状态、取法与严格档判据见 `README.md` 的「分支保护」小节。Linux runner 会额外执行 `#[cfg(unix)]` 的权限路径（`0700` 目录、`0600` 文件、模式位判定），这些在 Windows 开发机上不会跑到。
-
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。
 
-`check:agentic` 还通过 `scripts/sync-agentic-host-entrypoints.mjs --check` 核对 Pi、Oh My Pi 与通用 Agent 的中文 agentic 路由；运行 OpenSpec 引擎的 `update` 刷新通用英文入口后，用 `npm run sync:agentic-hosts` 恢复项目路由，再运行 `npm run check:agentic`。
+## 9. 工具链约定
 
-## 11. 完成定义
-
-agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`、最终验收与归档判据）以 `openspec/schemas/agentic/` 与 [`.agents/skills/agentic-verify/SKILL.md`](.agents/skills/agentic-verify/SKILL.md) 为准，本文件不重复；验收入口、`all_done` 语义与归档前检查的要求见文末「Agentic workflow」（该段是 agentic 扩展的受管路由，标题不可改动）。
-
-对本仓库的任何改动，以下底线仍然适用：
-
-- 行为符合用户需求和 §3 的不变量。
-- 依赖方向（§4）没有被破坏。
-- 成功路径、失败路径及关键边界有相应测试（§9）。
-- 相关检查已执行，或明确记录未执行原因。
-- 没有泄漏敏感信息，也没有引入未经授权的云依赖。
-- 影响设计的变更已经同步到权威文档（§10）。
-
-## 12. 工具链约定
-
-本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §10。
+本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §8。
 
 - `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`，其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验）——`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 与 `base64` 属协议与身份边界，**不得**进入 core 的闭包。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
-- 日常 OpenSpec 命令一律走项目本地引擎（`npx --quiet --no-install openspec …`），不要用任何全局安装的 `openspec`；所用的 `agentic` schema 由 `@dongfanglin/openspec-agentic` 提供（不是上游默认的 `spec-driven`），版本 pin 见 `package.json`。变更期间的文件在 `openspec/changes/<change>/`（proposal / spec / design / plan / tasks / verification），归档后能力规范落入 `openspec/specs/<capability>/spec.md`；`openspec/config.yaml` 的 `schema` 必须是 `agentic`，其 `context` 只记录项目画像事实（结构、命令、约束、环境），不承载新的产品规则。**产品行为、协议 wire、安全与端口合同的权威仍是 `docs/**` 与 `compatibility/**`**（§1）：两者冲突时以既定文档为准，并在同一变更里同步两边。`openspec/schemas/agentic/**` 与 `.agents/skills/agentic-verify/SKILL.md` 是扩展受管文件（哈希在 `openspec/.agentic-install.json`），只能经 `openspec-agentic update` 升级，不手工编辑；`openspec/agentic.yaml` 是扩展独占配置（角色模型、`dispatch.pool`、`e2e`），由 `init` / `update` 播种并保留项目写入的值。`npm run check:agentic` 会断言以上前提。
+- Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
+- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），其清单与判据见 `README.md` 的「合同检查」；`check:agentic`（`scripts/agentic-gate.mjs`）只跑 `openspec validate --all --strict`，断言变更与规范资产通过严格校验。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。
 
-## 13. 回复与沟通
+## 10. 回复与沟通
 
 本节约束 Agent 对用户的**回复方式**，不改变任何产品、协议或技术决策。
 
@@ -352,37 +237,3 @@ agentic 变更的完成定义（任务复选框、`workflow check`、`e2e check`
 - **回复长度与问题匹配**：简单问题一两句话回答，不要把每次回复都写成设计文档；复杂问题也先给一页能看懂的摘要，细节放后面。
 
 技术决策本身（协议语义、安全模型、端口签名等）不因追求通俗而简化或失真；通俗的是**表达方式**，不是内容。
-
-# Agentic workflow
-
-本节是 agentic 验收路由；`check:agentic` 断言 AGENTS.md 包含本节标题，扩展升级时保留本节的本地化内容，不要改动或删除。
-
-本项目的 agentic 变更使用 [.agents/skills/agentic-verify/SKILL.md](.agents/skills/agentic-verify/SKILL.md)
-作为最终验收入口。执行 `/opsx-verify`、最终验收或归档前检查时，先读取该 skill；
-其他 schema 沿用自身流程。宿主没有 skill 发现能力时，也应直接读取该文件。
-
-OpenSpec 流程中的 CLI 状态 `all_done` 只表示任务复选框完成。收到该状态后，若要报告 agentic 变更
-可归档，仍须执行上述验收；不得仅凭 CLI 的默认归档提示形成验收结论。
-保留 CLI 原始状态，另行报告证据验收的 PASS / FAIL / BLOCKED。
-
-本条验收规则本身不授权合并、推送、回滚、发布或归档；agentic apply 的本地合入授权见 schema.yaml。
-普通项目审查、schema 编辑不要求执行产品变更的验收流程。
-
-## 并发派发（agentic apply）
-
-并发编码按流水线与调用窗口执行，不按批次互等：主 Agent 是唯一调度台，按“依赖就绪（同交付单元 code 依赖
-的上游已进入已验收集成基线，跨交付单元 code 依赖的上游已合入主分支）+ 契约已冻结 + 运行态资源空闲 +
-状态未开工”逐个开工，有几个能开工就开几个，空窗口不预建实例。
-每个工作包在同一时刻最多一个实例；coder 交付即销毁，reviewer 在同一窗口新建；tester 提交产物、main 确认
-可读且交接完整后即释放（不等 review PASS），execute/retest 每轮独立派发新建实例；review 不通过走
-修复中（新的实现实例），复检必须换新 reviewer。
-
-开工与流转用 `openspec-agentic dispatch --change <变更> --wp <WP> --executor <ID> [--role coder|tester]`
-（流转用 `--state <state>`，重做用 `--reopen --retry-kind implementation|contract|environment|runtime --reason <依据>`）留可核对记录。
-四类尝试分别计数、各限 3 次，Attempt 持续递增，不按总轮数限制；首次 coding 和未指定 `--retry-kind` 的旧调用计入 implementation。
-按真实原因分类，不得通过改记类型绕过限额；达到对应类别上限时停止该类自动重试并交用户决策。`verification.md` 的
-`## Dispatch Reconciliation` 必须逐工作包与台账、Handoff Index 对得上，final/archive 要求每个工作包状态为 merged。
-工作包状态必须落盘；重复派发与非法流转是 `workflow check` 的门禁。存在可并发层级（同层同角色 >=2
-且对应池容量 >=2）时，这些已开工工作包（blocked / superseded 已释放窗口，不计入）的占用窗口至少需有
-一对真实重叠；同层同时有 coder 与 tester 已开工时，还需至少一对跨角色重叠窗口。否则 premerge/final/archive
-判不合格（实际串行必须留证；该时间戳由 dispatch 命令写入，是偏离探测而非并行证明）。

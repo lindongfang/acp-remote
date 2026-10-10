@@ -78,7 +78,7 @@ action」。这条约束在实践中有两个问题：
    与 `unknown-git` 为 `deny`，直接拒绝 crates.io 之外的来源。
 6. **工具链版本唯一来源是 `rust-toolchain.toml`**，CI 用 sed 从该文件读取 channel，workflow 里不再写版本号。
    固定到具体版本而不是 `stable` 的理由：clippy 的 lint 集合与 rustfmt 的输出随版本变化，
-   `AGENTS.md` §8 用 `-D warnings` 把 clippy 当门禁，版本不固定就会产生「本机绿、CI 红」这类只能靠人记住的假失败。
+   `cargo clippy` 在 `npm run check:rust` 与 CI 里以 `-D warnings` 当门禁，版本不固定就会产生「本机绿、CI 红」这类只能靠人记住的假失败。
 7. **密钥扫描的允许清单政策**（`.gitleaks.toml` 内的正文是权威）：只允许公开的固定测试向量或已记录的假阳性，
    每条必须写理由与核对人；真实凭据的正确处置是轮换 + 清理历史 + 记录事件（`SECURITY_DESIGN.md` §17），
    不是加允许清单。
@@ -117,7 +117,7 @@ action」。这条约束在实践中有两个问题：
      `deletion` + `non_fast_forward` + `required_status_checks`（`strict = true`，五个上报名）+
      `pull_request`（`required_approving_review_count = 0`），并**保留 `RepositoryRole admin` 的 bypass**
      作为紧急出口。因此默认路径变成 PR（三个只能在 CI 跑的判定因此成为先于落地的门禁），
-     但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `AGENTS.md` §8。
+     但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `README.md` 的「分支保护」小节。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
      同类的 npm 侧问题已具体化：`deps` job 的 npm 判定现由 `scripts/check-dependency-advisories.mjs` 承担
      （不再直接跑 `npm audit`）。原因是仓库有一条**上游无修复**的 advisory——`braces` 的
@@ -134,8 +134,8 @@ action」。这条约束在实践中有两个问题：
   5. **本机（Windows）无法执行这些判定的等价物**：crates.io index 传输在本机网络下不稳定，
      `cargo install --locked cargo-deny@0.20.2` 未能完成，因此 `deny.toml` 的字段形状是对齐 cargo-deny 0.20.2
      自带模板（只保留能给出理由的键）写成的，**首次真实执行发生在 CI**。这条同样适用于 `.gitleaks.toml`。
-  6. 门禁数量与 CI job 数量不再有单一数字定义：`AGENTS.md` §10 与 `README.md` 说明「顺序以 `package.json` 的
-     `check` 脚本为准」，新增门禁时必须同时更新 `package.json`、`AGENTS.md` §10、`README.md` 与 CI 注释。
+  6. 门禁数量与 CI job 数量不再有单一数字定义：`README.md` 说明「顺序以 `package.json` 的
+     `check` 脚本为准」，新增门禁时必须同时更新 `package.json`、`AGENTS.md` §8、`README.md` 与 CI 注释。
 - 与 `SECURITY_DESIGN.md` §16.2 的关系：本 ADR 是该节「固定 action/toolchain major 或 digest」的具体化，
   并补充两条该节原本没有的义务——「第三方 action 的许可证与向外发送的数据必须在 ADR 记录」、
   「官方 action 的 major 必须跟随 runtime 生命周期」。

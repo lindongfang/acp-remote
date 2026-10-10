@@ -36,7 +36,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // 扫描集合**——同一份 `verification.md` 在纯检出的检出集下会命中「该引用指向某文档，但该文档没有
 // 这一节」，在有 worktree 的本地却因重复副本改变了归因而通过。实测：同一提交在纯检出下报 1 problem
 // （8395 份 md），在主检出（有 `.worktrees/`）下报 OK（9016 份 md）——即本机 `check:docs` 会给假绿。
+//
+// `openspec/changes/archive/` 同样跳过：归档记录是**历史证据**，按约定不可改写（`verification.md`
+// 的 target_commit 一旦回填就不能再动）。它们引用的是当时版本的章节号，`AGENTS.md` 重编号或删节后
+// 必然失配——把历史纳入判定等于让每次章节调整都永久红，且只能靠改写历史来消。归档目录自己的
+// 内部链接（变更报告之间）也不再判定，这是可接受的代价：归档的价值是可追溯，不是持续合规。
 const SKIP_DIRS = new Set([".git", ".husky", "node_modules", "target", "dist", ".worktrees", ".target-wt"]);
+// 相对仓库根的路径前缀，命中即整棵子树跳过（用路径而非目录名，避免误伤别处的同名目录）。
+const SKIP_PATH_PREFIXES = ["openspec/changes/archive/"];
 
 const errors = [];
 const info = [];
@@ -46,6 +53,8 @@ function listMarkdown(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
+      const childRel = toRepoPath(join(dir, entry.name)) + "/";
+      if (SKIP_PATH_PREFIXES.some((p) => childRel.startsWith(p))) continue;
       found.push(...listMarkdown(join(dir, entry.name)));
       continue;
     }

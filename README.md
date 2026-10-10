@@ -21,7 +21,9 @@
 | `server` | 入站 adapter 的宿主（`docs/MODULE_ARCHITECTURE.md` §4.9），当前落地四条路径：`server::transport::local`（平台本地 IPC 的 endpoint 与访问控制——Windows Named Pipe 的 SDDL、Unix 的 `0700` 目录 + `0600` socket、连接后对端凭据校验，以及帧编解码、首帧 channel 绑定、未完成请求上限、`0x02` 在 facade 缺席期的失败方式）、`server::local_admin`（管理信封与 `local.*` 错误码的值对象/编解码、方法分发表与方法路由）、`server::transport::net`（默认 loopback 的共享 HTTP/WSS listener、TLS `proxy`/`direct` 两种终止方式、`Host` 边界，以及 `/sync/v1`、`/node-link/v1`、两类 `/pairing/*` 的 path 路由）与 `server::node_link`（配对 HTTP、节点握手与鉴权留痕、Export catalog、resource 快照/重放/ack、命令管线与终态推送、撤销传播）。**仍未落地**：`server::sync` 与 `server::acp_facade`；Node Link 也**只有 Owner 侧入站面**，Access 侧的出站重连管理器属切片 6 的 `node-link-client` |
 | `app` | 组合根与 `acp-remote` 可执行程序（`docs/MODULE_ARCHITECTURE.md` §4.10）：daemon 的启动/关闭序列（停接入层 → 取消周期任务 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 释放锁；详见 `SECURITY_DESIGN.md` §12.1）与单实例锁（`instanceId` + 锁记录）、配置加载与未接线段落的显式上报、周期任务装配、本节点身份与由节点公钥派生的 `nodeId`、本地管理通道客户端，以及 `LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表的全部 CLI 子命令与 `doctor`/`acp-stdio`（`daemon start` 是前台进程；`acp-stdio` 只是 stdin/stdout ↔ channel `0x02` 的字节泵） |
 
-尚未开始：前端工程，以及 `node-link-client`（切片 6）与 `server::sync`/`server::acp_facade`（每落地一个才加入 workspace `members`）。
+尚未开始：`node-link-client`（切片 6）与 `server::sync`/`server::acp_facade`（每落地一个才加入 workspace `members`）。
+
+前端工程已落地在 `clients/app`（Expo/React Native 通用工程，当前 `expo ~57`；`app/` 路由与 `src/{domain,features,protocol,platform}` 分层，自带 `check` = typecheck + vitest + `expo export`）。它是独立 npm 工程，不在根 `npm run check` 的链上——改动它时在 `clients/app` 下单独跑 `npm run check`。
 
 仓库另含一份**前端设计原型**（`prototypes/`）：单文件 PWA 原型（`acp-remote-pwa.html` 与移动版 `acp-remote-pwa-mobile.html`，零外部资源、hash 路由，含配对/目录/目录详情/对话四页与控制台状态切换），并附 [`IMPLEMENTATION-GAPS.md`](prototypes/IMPLEMENTATION-GAPS.md) 按层列出「要实现还差什么」及源码行号证据。**它不是产品代码**：不参与构建、不被任何 crate 打包、没有测试，其中的结论也尚未同步到权威文档；与 `docs/` 冲突时以 `docs/` 为准。
 
@@ -51,6 +53,7 @@ Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已�
 | [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md) | 前端阶段、状态模型与平台边界 |
 | [docs/IDENTITY_AND_AUTH_CONTRACT.md](docs/IDENTITY_AND_AUTH_CONTRACT.md) | 身份与认证：配对状态机、握手入口、授权展开与 keystore 端口（已定型；`identity-auth`/`identity-keystore` 已按它落地） |
 | [docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md) | Daemon 配置键、类型与默认值 |
+| [docs/CORE_PORTS_AND_STORAGE.md](docs/CORE_PORTS_AND_STORAGE.md) | `core` 值对象、用例面、端口签名、broker 事务顺序与 `storage-sqlite` 表结构/保留/migration |
 | [docs/adr/](docs/adr/) | 已接受的架构决策 |
 
 ## 合同检查
@@ -72,11 +75,11 @@ CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与�
 
 `deps` / `advisories` / `secrets` 需要网络或额外二进制，**没有包含在 `npm run verify` 里**（依赖判决见 [`deny.toml`](deny.toml)，密钥扫描规则见 [`.gitleaks.toml`](.gitleaks.toml)）；工具版本、许可证、向外发送的数据与已知残余风险见 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md)。依赖更新由 [`.github/dependabot.yml`](.github/dependabot.yml) 提出：升版前有冷却期（避免第一时间采用刚发布的版本），minor/patch 分组、major 单独提交，且分组 PR 同样要过全部 job。
 
-提交信息遵循 Conventional Commits（`<type>(<scope>)!?: <主题>`）：type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，本地由 husky 的 `.husky/commit-msg` 钩子在 `npm install` 时装配，CI 的独立 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次（`npm run lint:commits -- --from <base> --to <head>`，`--no-verify` 绕得过本地钩子但绕不过它）。规则说明见 `AGENTS.md` §8。
+提交信息遵循 Conventional Commits（`<type>(<scope>)!?: <主题>`）：type 与 scope 词表以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义，本地由 husky 的 `.husky/commit-msg` 钩子在 `npm install` 时装配，CI 的独立 `commits` job 会对本次推送/合并请求引入的提交范围再校验一次（`npm run lint:commits -- --from <base> --to <head>`，`--no-verify` 绕得过本地钩子但绕不过它）。词表与合并豁免规则以 [`commitlint.config.mjs`](commitlint.config.mjs) 为唯一机器定义。
 
 上游 ACP 固定快照（`schemas/acp/v1/upstream/schema.json`，来源与 sha256 见 `compatibility/acp/v1/matrix.json` 的 `protocol` 块）由 `check:acp` 重算 digest 并校验 commit 与 major 版本目录；`fixtures/acp/v1` 也按同一快照做 ajv 校验。升级快照必须同时改固定值、vendored 文件与矩阵行，且先通过 `node scripts/check-acp-compatibility.mjs`。
 
-`check:agentic` 还会核对 `.pi`、`.omp` 和 `.agents` 的中文 agentic 宿主路由；引擎 `openspec update` 刷新英文通用入口后，运行 `npm run sync:agentic-hosts` 恢复项目路由。
+`check:agentic`（[`scripts/agentic-gate.mjs`](scripts/agentic-gate.mjs)）只跑 `openspec validate --all --strict`，断言变更与规范资产通过严格校验。它不再跑 `openspec-agentic doctor` 或 `sync-agentic-host-entrypoints.mjs`：前者的前提是扩展受管文件（`.agents/skills/agentic-verify/SKILL.md`、`openspec/.agentic-install.json`）在位，后者把中文 agentic 路由写回 `.pi/`、`.omp/`、`.agents/skills/`——这些文件与宿主目录都不在仓库里。扩展包本身（`@dongfanglin/openspec-agentic`）仍由 `package.json` 精确 pin。
 
 ## 分支保护
 
@@ -116,8 +119,8 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 
 这一档（**PR 必需 + 保留 admin 紧急出口**）的实际含义：默认路径是 PR，因此三个只能在 CI 运行的判定
 （依赖许可证与来源、依赖安全公告、密钥扫描）是先于落地的门禁；bypass 让直推仍然可行，但那是紧急出口不是
-日常路径（直推会跳过这三个判定）。变更落地流程（分支 → PR → `gh pr checks --watch` → squash 合并）写在
-`AGENTS.md` §8。
+日常路径（直推会跳过这三个判定）。变更落地流程是：分支 → PR → `gh pr checks --watch` → squash 合并
+（`gh pr create --fill`；squash 合并用 PR 标题当提交信息，因此标题同样要合规）。
 
 没有再上「移除 bypass」的理由：对单人仓库它不是对你的安全边界（你本来就能改 ruleset），只是减速带；
 而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。

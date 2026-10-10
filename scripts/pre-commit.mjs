@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 // 倾向于「先提交，等 CI 告诉我」。本脚本把 CI 里最快的几类判定前移到提交时：
 //   1. 本地密钥扫描（`gitleaks git --pre-commit --redact --staged`，扫暂存内容；本机没装 gitleaks 时只提示并跳过）；
 //   2. `cargo fmt --check`（改动 Rust 时）；
-//   3. `npm run check`（全部合同门禁，离线、~4 秒，见 `AGENTS.md` §10）；
+//   3. `npm run check`（全部合同门禁，离线、~4 秒）；
 //   4. `cargo clippy -D warnings`（改动 Rust 时，与 CI 参数一致）。
 // 顺序是有意的：密钥一旦推出去，在公开仓库上就是公开的（不可逆），所以它排在最前、最便宜。
 // 刻意**不跑** `cargo test`：它是分钟级判定，属于 `npm run verify` 与 CI，不属于提交前。
@@ -99,7 +99,7 @@ if (rustTouched) {
 }
 steps.push([npm, ["run", "check"]]);
 if (rustTouched) {
-  // 与 CI 的静态检查参数逐字一致（`AGENTS.md` §8）；工具链版本由 `rust-toolchain.toml` 固定。
+  // 与 CI 的静态检查参数逐字一致；工具链版本由 `rust-toolchain.toml` 固定。
   steps.push(["cargo", ["clippy", "--locked", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]]);
 }
 

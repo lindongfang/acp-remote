@@ -383,7 +383,7 @@ local.audit.export         本地审计导出（不含会话正文）
 | 空闲回收 | 复用 `sessions.idle_timeout_ms` | `0` = 不因空闲关闭；非零时只有「无 active 会话且空闲超过该值」才关闭进程 |
 | 内存 | **规则而非数值** | 无法可靠测量 RSS；改为可判定规则：必须流式处理 ACP 消息与 stderr，不得缓存完整会话正文，超限即报错并结束该 Agent |
 
-  这些常量落在 `agent-host`，并由 `agent-host` 的 fake ACP child 测试固定（`AGENTS.md` §9）；需要随部署变化的只有 `sessions.idle_timeout_ms`。
+  这些常量落在 `agent-host`，并由 `agent-host` 的 fake ACP child 测试固定（测试要求见 `docs/MODULE_ARCHITECTURE.md` §11）；需要随部署变化的只有 `sessions.idle_timeout_ms`。
 - Windows 使用 Job Object 或等价机制清理完整子进程树。
 - Agent 崩溃、乱序或非法 JSON 形成明确事件，不能使 Daemon 接受伪造客户端身份。
 

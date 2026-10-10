@@ -240,7 +240,7 @@ if (workspaceEdges.has("core")) {
   }
   for (const name of closure) {
     if (!CORE_ALLOWED_CLOSURE.includes(name)) {
-      errors.push(`core：依赖闭包出现未登记成员 ${name}——新增依赖必须先按 AGENTS.md §7 审查并在 §9 判据 13 与本表登记`);
+      errors.push(`core：依赖闭包出现未登记成员 ${name}——新增依赖必须先按 AGENTS.md §7 审查并在 docs/CORE_PORTS_AND_STORAGE.md §9 判据 13 与本表登记`);
     }
   }
 }

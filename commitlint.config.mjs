@@ -2,7 +2,7 @@
 //
 // 类型与 scope 词表只在这里维护一处：本地 `commit-msg` 钩子（`.husky/commit-msg`）、
 // CI 的提交范围校验（`.github/workflows/ci.yml` 的 `commits` job，走 `npm run lint:commits`）
-// 和文档（`AGENTS.md` §8）都指向本文件，不要在别处再抄一份词表。
+// 和文档（`README.md` 的「合同检查」）都指向本文件，不要在别处再抄一份词表。
 //
 // 与 `@commitlint/config-conventional` 的差异，都是为了中文仓库的实际书写：
 // - 主题用中文书写，没有大小写概念，因此关闭 `subject-case`；
@@ -11,7 +11,7 @@
 //
 // 合并提交、`Revert ...` 与 `fixup!` / `squash!` 提交由 commitlint 的默认 ignore 规则跳过。
 // scope 可选；写了就必须落在 `SCOPES` 里。仓库出现新边界（新 crate、新协议、新交付面）时
-// 在这里补一项，并在同一提交里更新 `AGENTS.md` §8 的说明。
+// 在这里补一项，并在同一提交里更新 `README.md` 的提交信息说明。
 
 /** 允许的提交类型。`!` 或 `BREAKING CHANGE:` 表示破坏性变更。 */
 export const TYPES = [
@@ -79,8 +79,8 @@ export default {
   // 于是合并提交被当成普通提交去核对 type/scope 词表而失败——偏离的是书写形式，
   // 不是「合并提交不承载交付语义、不该按 Conventional Commits 校验」这条本意。
   // 因此这里按同一本意补一条前缀豁免，而不是把 `merge` 塞进 `TYPES`：后者还得把
-  // `candidate`/`integ` 这类**工作流产物**塞进 `SCOPES`，而 `AGENTS.md` §8 把 scope
-  // 定义为「模块与交付面边界」，二者不是同一层概念，塞进去会污染词表。
+  // `candidate`/`integ` 这类**工作流产物**塞进 `SCOPES`，而 scope 的定义是「模块与交付面边界」，
+  // 二者不是同一层概念，塞进去会污染词表。
   // 范围仍然很窄：只豁免「以 `merge`（可带 scope）加冒号开头」的合并消息，
   // 普通提交一律照常按词表校验。
   ignores: [(message) => /^merge(\([^)]+\))?!?:/.test(String(message ?? '').split('\n')[0])],

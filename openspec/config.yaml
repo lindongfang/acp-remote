@@ -11,17 +11,17 @@ context: |
   - 主要模块、入口与职责边界：`crates/` 现有 **12** 个已登记 workspace 成员（`acpr-transcript`、`acpr-wire`、`core`、`storage-sqlite`、`sync-protocol`、`node-link-protocol`、`acp-protocol`、`agent-host`、`identity-auth`、`identity-keystore`、`server`、`app`）；另有非成员目录 `vendor/windows-local-ipc`（写在根 `Cargo.toml` 的 `workspace.exclude`，只被 `server` 以 path 依赖消费）。**尚未实现**：`node-link-client`（切片 6）、`server::sync` 与 `server::acp_facade`，以及前端工程（`prototypes/` 下只有单文件设计原型，不是产品代码）。`docs/MODULE_ARCHITECTURE.md` §3 的目录树是规划视图、**不代表已实现**；已落地范围以该节 §3 的 `[现状]` 注记与 `README.md` 的「仓库当前状态」为准。职责边界唯一权威：`docs/MODULE_ARCHITECTURE.md`。
   - 本节记录仓库事实，随每个落地的变更刷新；核对来源固定为 `README.md` 的「仓库当前状态」与 `docs/MODULE_ARCHITECTURE.md` §3 的 `[现状]` 注记，两处冲突时以 `docs/` 为准。不要把单次变更的计划、提交或临时资源写进本节。
   - 共享代码及依赖方向：`docs/MODULE_ARCHITECTURE.md` §5 依赖矩阵；由 `npm run check` 的 `check:boundaries`（`cargo metadata`）断言。
-  - 生成文件、第三方代码和禁止直接修改目录：构建产物 `target/`、`node_modules/`、`dist/` 不手工编辑；`openspec/schemas/agentic/**`、`.agents/skills/agentic-verify/SKILL.md` 与引擎安装的宿主入口（`.pi/prompts/opsx-*.md`、`.pi/skills/openspec-*/`、`.agents/skills/openspec-*/`、`.omp/commands/opsx-*.md`、`.omp/skills/openspec-*/`）是受管文件，只能经 OpenSpec 引擎与扩展的 `init`/`update` 升级（手改会被 `doctor` 判为漂移，或被 `npm run check:agentic` 的宿主入口同步检查判失败）；`vendor/windows-local-ipc` 是仓库内 vendored 的第三方 wrapper，不做与任务无关的改动。`openspec/config.yaml` 不是受管文件：`schema` 必须为 `agentic`，`context` 与 `operations.guidance` 由本项目维护（`AGENTS.md` §12）。
+  - 生成文件、第三方代码和禁止直接修改目录：构建产物 `target/`、`node_modules/`、`dist/` 不手工编辑；`openspec/schemas/agentic/**`、`.agents/skills/agentic-verify/SKILL.md` 与引擎安装的宿主入口（`.pi/prompts/opsx-*.md`、`.pi/skills/openspec-*/`、`.agents/skills/openspec-*/`、`.omp/commands/opsx-*.md`、`.omp/skills/openspec-*/`）是受管文件，只能经 OpenSpec 引擎与扩展的 `init`/`update` 升级（手改会被 `doctor` 判为漂移，或被 `npm run check:agentic` 的宿主入口同步检查判失败）；`vendor/windows-local-ipc` 是仓库内 vendored 的第三方 wrapper，不做与任务无关的改动。`openspec/config.yaml` 不是受管文件：`schema` 必须为 `agentic`，`context` 与 `operations.guidance` 由本项目维护。
   - 默认主分支及本地/远端语义：`refs/heads/main`；origin 为 `git@github.com:lindongfang/acp-remote.git`。
 
   ## Standard Commands
   - 依赖安装：`npm ci`（Node ≥ 22.12；`package-lock.json` 与 `Cargo.lock` 均已入库）。
-  - Local Checks / Project Verify：以仓库 `AGENTS.md` §8（本地入口 `npm run verify`）与 §10（合同门禁与 CI job 清单）为唯一权威，本节不复制命令清单。
+  - Local Checks / Project Verify：本地入口 `npm run verify`（= `npm run check` + `npm run check:rust`），合同门禁与 CI job 清单见 `README.md` 的「合同检查」，本节不复制命令清单。
   - E2E：`openspec/agentic.yaml` 的 `e2e.command` 仍为空（`e2e.enabled: true`，缺省即开启）。Main E2E 按变更记 `not-applicable`，需用户逐变更批准并写入 `plan.md` 的 `downgrade_approval`（原话、时间、来源）；替代验证至少覆盖改动相关的 cargo 测试与 `npm run check`，并按 schema 要求另列为主 Agent 任务。**该方式已于 2026-09-23 经用户确认（原话：同意 a；a = 保持命令为空、首个实现切片在 plan.md 写 downgrade_approval）**；每个切片仍须各自记录当次批准，不得引用本次确认代替。
     当时给出的理由「当前阶段没有可端到端运行的产品路径」在切片 4/5 落地后已不再精确：`app` 的 daemon/CLI 与 `server::transport::local` + `local_admin` 已可经本地通道端到端使用，Owner 侧 Node Link 入站面（`server::transport::net` + `server::node_link`）亦可运行；但 `server::sync`/`server::acp_facade`、`node-link-client` 与前端仍未落地，也尚无覆盖关键用户路径的可复现 E2E 入口。因此「是否配置 `e2e.command` 并把 Main E2E 改为 `required`」是需要用户单独决策的开放项，本节只记录现状与已批准的做法，不预设结论。
 
   ## Engineering Constraints
-  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7 与 §9；安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。
+  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7；测试要求见 `docs/MODULE_ARCHITECTURE.md` §11。安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。
   - 子目录 AGENTS.md 或其他必须继续读取的项目规则：暂无子目录 `AGENTS.md`；改动前必须先读仓库根 `AGENTS.md` 及其列出的权威文档。
 
   ## Runtime Environment
@@ -34,7 +34,7 @@ context: |
   文档正文使用简体中文；保留 agentic 模板中的英文结构标题、规范关键词、标识符和路径。
   本节仅适用于 agentic 变更；其他 schema 沿用自身流程。工作流以 schema.yaml 为准，角色规则以 roles/ 为准。
   扩展独占配置（角色模型、`dispatch.pool`、`e2e`）在 `openspec/agentic.yaml`；本节与 `context` 只记录项目画像事实。
-  本仓库的 agentic 变更先在本地主分支完成合入，交付到远端 main 时遵循 AGENTS.md §8 的 PR 与必需检查；
+  本仓库的 agentic 变更先在本地主分支完成合入，交付到远端 main 时遵循 `README.md`「分支保护」小节的 PR 与必需检查；
   schema 中的本地合入步骤不能替代 PR。
   候选合入前按 schema 的 premerge 阶段检查（单元候选阶段不执行 E2E）；角色报告的交接索引格式以
   roles/_shared/role-report.md 为准，主 Agent 将其映射到 verification.md。
@@ -50,7 +50,7 @@ operations:
       - 仅对 agentic 变更：主 Agent 在其他适用任务完成后于 apply 内主动执行最终验收；按 AGENTS.md 读取 .agents/skills/agentic-verify/SKILL.md（无 skill 发现能力时直接读取），核对当前目标及 verification.md 的有效证据。无需等待用户另发 /opsx:verify。
       - 仅对 agentic 变更：即使 CLI 返回 all_done，也须完成上述语义验收，按 verification 模板维护当前 agentic-assessment，并运行 npx --quiet --no-install openspec-agentic workflow check --change <变更> --stage final --json；机械 PASS 不代替证据审计，非 PASS 不勾选最终验收。旧变更缺字段时据实补齐，不编造证据。
       - 仅对 agentic 变更：保留 CLI 原始状态，单独报告验收 PASS / FAIL / BLOCKED；仅 PASS 可报告当前版本具备归档条件，不自动归档。E2E 执行与 [e2e-owned] 门禁须已在 apply 内按 schema 和 tasks 完成；连续失败达到 e2e.maxAttempts 时停止自动重跑并交用户决策，不得改写记录绕过。
-      - 仅对 agentic 变更：远端 main 的交付继续走 AGENTS.md §8 的 PR 路径，本地合入不能替代 PR 与必需 CI 检查。
+      - 仅对 agentic 变更：远端 main 的交付继续走 `README.md`「分支保护」小节的 PR 路径，本地合入不能替代 PR 与必需 CI 检查。
   archive:
     guidance:
       - 仅对 agentic 变更：按 AGENTS.md 读取 .agents/skills/agentic-verify/SKILL.md（无 skill 发现能力时直接读取），复核当前目标版本的最终验收、plan.md、tasks.md 与 verification.md；不得直接沿用旧会话的 PASS。required 须有当前有效的最终完整 E2E PASS；not-applicable 须有理由、依据、通过的替代验证及开关开启或缺省时的用户降级批准，E2E 本身仍记 NOT_APPLICABLE。
