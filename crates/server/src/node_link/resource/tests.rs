@@ -595,7 +595,7 @@ fn error_code(frame: &Value) -> &str {
     frame["body"]["code"].as_str().expect("错误码")
 }
 
-/// [R53]/[R54]/[R55]：attach 签发新代际，重新 attach 覆盖旧代际，旧 frame 被按「代际过期」拒绝。
+/// attach 签发新代际，重新 attach 覆盖旧代际，旧 frame 被按「代际过期」拒绝。
 #[tokio::test]
 async fn a_reissued_attachment_invalidates_the_previous_generation() {
     let mut fixture = Fixture::new().await;
@@ -698,7 +698,7 @@ async fn an_export_outside_the_nominated_list_is_not_granted() {
     );
 }
 
-/// [R52]/[R53]：与节点 grants 不相交的 Export 即便存在也不可见 → `export.not_granted`。
+/// 与节点 grants 不相交的 Export 即便存在也不可见 → `export.not_granted`。
 #[tokio::test]
 async fn an_export_disjoint_from_the_node_grants_is_not_granted() {
     let mut fixture = Fixture::new().await;
@@ -748,7 +748,7 @@ async fn an_export_disjoint_from_the_node_grants_is_not_granted() {
     assert_eq!(error_code(&frames[0]), "nodelink.export.not_granted");
 }
 
-/// [R53]：Export 存在但会话不属于本机 → `export.not_found`（不泄露「会话存在与否」之外的差别）。
+/// Export 存在但会话不属于本机 → `export.not_found`（不泄露「会话存在与否」之外的差别）。
 #[tokio::test]
 async fn an_unknown_session_is_reported_as_export_not_found() {
     let mut fixture = Fixture::new().await;
@@ -772,7 +772,7 @@ async fn an_unknown_session_is_reported_as_export_not_found() {
     assert_eq!(error_code(&frames[0]), "nodelink.export.not_found");
 }
 
-/// [R52]（F4）：`remoteSessionRef.ownerNodeId` 指向另一个 Owner 时，本机**不签发** attachment：
+/// （F4）：`remoteSessionRef.ownerNodeId` 指向另一个 Owner 时，本机**不签发** attachment：
 /// 复合身份的 owner 分量由对端自报，本机不能把外来的 owner 当成自己的资源（与「会话不在这台 Owner
 /// 上」同码，不泄露差别）。
 #[tokio::test]
@@ -810,7 +810,7 @@ async fn an_attachment_is_refused_for_a_foreign_owner_node() {
     );
 }
 
-/// [R56]/[R57]/[R58]：`cursor = null` 的快照只有元数据，且 `snapshotDigest` 能由收到的帧复算。
+/// `cursor = null` 的快照只有元数据，且 `snapshotDigest` 能由收到的帧复算。
 #[tokio::test]
 async fn a_snapshot_carries_metadata_only_and_a_verifiable_digest() {
     let mut fixture = Fixture::new().await;
@@ -864,7 +864,7 @@ async fn a_snapshot_carries_metadata_only_and_a_verifiable_digest() {
     );
 }
 
-/// [R58]：未决交互按协商的 `resourceSnapshotBatchSize` 分批，`pending_interactions` 的
+/// 未决交互按协商的 `resourceSnapshotBatchSize` 分批，`pending_interactions` 的
 /// `payloadDigest` 取自创建该交互的 origin 事件。
 #[tokio::test]
 async fn pending_interactions_are_batched_by_the_negotiated_limit() {
@@ -918,7 +918,7 @@ fn end_of(frames: &[Frame]) -> Value {
     of_type(frames, "resource.snapshot_end")[0]["body"].clone()
 }
 
-/// [R59]/[R62]：origin 增量重放按 cursor 之后的 origin 序列继续；epoch 不符 → `sequence_invalid`。
+/// origin 增量重放按 cursor 之后的 origin 序列继续；epoch 不符 → `sequence_invalid`。
 #[tokio::test]
 async fn replay_resumes_after_the_cursor_and_rejects_an_epoch_mismatch() {
     let slice = NodeLinkSlice {
@@ -993,7 +993,7 @@ async fn replay_resumes_after_the_cursor_and_rejects_an_epoch_mismatch() {
     assert_eq!(error_code(&frames[0]), "nodelink.protocol.sequence_invalid");
 }
 
-/// [R63]/[R64]：ACK 只推进水位；回退与 epoch 不符一律 `sequence_invalid`，且不影响后续 ACK。
+/// ACK 只推进水位；回退与 epoch 不符一律 `sequence_invalid`，且不影响后续 ACK。
 #[tokio::test]
 async fn ack_progress_is_monotonic_and_bound_to_the_attachment() {
     let mut fixture = Fixture::new().await;
@@ -1073,7 +1073,7 @@ async fn ack_progress_is_monotonic_and_bound_to_the_attachment() {
     assert_eq!(error_code(&frames[0]), "nodelink.protocol.sequence_invalid");
 }
 
-/// [R64]（F4）：`resource.ack.sessionRef.ownerNodeId` 不等于本机时，该 ref 就不等于本连接 attachment
+/// （F4）：`resource.ack.sessionRef.ownerNodeId` 不等于本机时，该 ref 就不等于本连接 attachment
 /// 的 sessionRef（§12.4「`sessionRef` 不属于本连接」）→ `sequence_invalid`，并且**不推进水位**。
 #[tokio::test]
 async fn an_ack_from_a_foreign_owner_node_is_rejected_without_advancing_the_watermark() {
@@ -1127,7 +1127,7 @@ async fn an_ack_from_a_foreign_owner_node_is_rejected_without_advancing_the_wate
     assert!(fixture.drain().is_empty(), "本机的 sessionRef 仍然推进水位");
 }
 
-/// [R65]：扇出入口经有界 channel + 异步分发，把已持久化事件投给订阅了该会话的连接。
+/// 扇出入口经有界 channel 异步分发，把已持久化事件投给订阅了该会话的连接。
 #[tokio::test]
 async fn persisted_events_reach_the_subscribed_connection() {
     let mut fixture = Fixture::new().await;
@@ -1204,7 +1204,7 @@ async fn events_are_not_delivered_without_a_live_subscription() {
     let _ = tokio::time::timeout(IO_TIMEOUT, dispatch).await;
 }
 
-/// [R65]（F3）：连接正常结束后，它的状态表条目在下一次扇出时被回收——`conn` 结束时只把句柄从注册表
+/// （F3）：连接正常结束后，它的状态表条目在下一次扇出时被回收——`conn` 结束时只把句柄从注册表
 /// 摘除、不通知路由，因此回收必须发生在以「注册表里还在」为活跃判据的那条路径上。
 #[tokio::test]
 async fn a_finished_connection_state_entry_is_reclaimed_by_the_next_fan_out() {

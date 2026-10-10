@@ -12,28 +12,28 @@
 //!
 //! | 需求 | 用例 |
 //! |---|---|
-//! | [R36] 握手准入与版本/feature 协商 | `handshake_completes_and_enters_the_business_phase`、`an_envelope_version_other_than_v1_is_closed_with_4406`、`a_handshake_that_never_gets_a_hello_is_closed_with_4408` |
-//! | [R37] 正常握手完成 | `handshake_completes_and_enters_the_business_phase` |
-//! | [R38] 认证前发送业务消息 | `a_business_message_before_hello_is_closed_with_4401` |
-//! | [R39] 必需 feature 未满足 | `a_missing_required_feature_is_reported_with_details_and_closed` |
-//! | [R40] 节点双向认证与凭据状态 | `handshake_completes_and_enters_the_business_phase`（双向证明与审计） |
-//! | [R37]/[R40] 的验收项（任务 2.29） | `the_challenge_catalog_revision_is_the_proof_transcript_source` |
-//! | [R41] proof 无效被拒绝 | `an_invalid_proof_is_closed_with_4401_and_audited` |
-//! | [R42] 已撤销节点连接被拒绝 | `a_revoked_node_is_closed_with_4410` |
-//! | [R43] 未知节点不泄露存在性之外的能力 | `an_unknown_node_gets_a_challenge_and_fails_as_node_unknown` |
-//! | [R44]/[R45] limits 只下调 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them` |
-//! | [R46] 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable`、`json_structure_limits_are_enforced_on_the_wire` |
-//! | [R47] 信封与 connectionSequence 校验 | `envelope_and_sequence_violations_are_rejected_without_closing`、`a_binary_frame_is_closed_with_4400` |
-//! | [R47] 出站序号只在投递确认时消耗（`connectionSequence` 不得留缺口） | `a_rejected_delivery_does_not_consume_the_outbound_sequence` |
-//! | [R40] 认证收尾推进 `owned_node.last_connected_at`（§11.6 第 9 条） | `authentication_advances_the_node_last_connected_time` |
+//! | 握手准入与版本/feature 协商 | `handshake_completes_and_enters_the_business_phase`、`an_envelope_version_other_than_v1_is_closed_with_4406`、`a_handshake_that_never_gets_a_hello_is_closed_with_4408` |
+//! | 正常握手完成 | `handshake_completes_and_enters_the_business_phase` |
+//! | 认证前发送业务消息 | `a_business_message_before_hello_is_closed_with_4401` |
+//! | 必需 feature 未满足 | `a_missing_required_feature_is_reported_with_details_and_closed` |
+//! | 节点双向认证与凭据状态 | `handshake_completes_and_enters_the_business_phase`（双向证明与审计） |
+//! | 的验收项（任务 2.29） | `the_challenge_catalog_revision_is_the_proof_transcript_source` |
+//! | proof 无效被拒绝 | `an_invalid_proof_is_closed_with_4401_and_audited` |
+//! | 已撤销节点连接被拒绝 | `a_revoked_node_is_closed_with_4410` |
+//! | 未知节点不泄露存在性之外的能力 | `an_unknown_node_gets_a_challenge_and_fails_as_node_unknown` |
+//! | limits 只下调 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them` |
+//! | 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable`、`json_structure_limits_are_enforced_on_the_wire` |
+//! | 信封与 connectionSequence 校验 | `envelope_and_sequence_violations_are_rejected_without_closing`、`a_binary_frame_is_closed_with_4400` |
+//! | 出站序号只在投递确认时消耗（`connectionSequence` 不得留缺口） | `a_rejected_delivery_does_not_consume_the_outbound_sequence` |
+//! | 认证收尾推进 `owned_node.last_connected_at`（§11.6 第 9 条） | `authentication_advances_the_node_last_connected_time` |
 //! | §2.5 准入闸门（10 次/分钟、同源在途握手配额） | `the_eleventh_authentication_attempt_from_one_address_is_rate_limited`、`the_fifth_in_flight_handshake_from_one_address_is_refused`、`authenticated_connections_do_not_hold_the_in_flight_handshake_quota` |
-//! | [R48] 序号回退被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
-//! | [R49] post_mvp 消息显式拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing`（`catalog.changed`/`link.backpressure`） |
-//! | [R50] 未知字段被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
-//! | [R32] 首次认证清除已批准配对 | `handshake_completes_and_enters_the_business_phase` |
-//! | [R79]/[R80] 心跳与 90 秒静默 | `heartbeat_round_trip_keeps_the_connection_alive`、`silence_beyond_the_window_is_closed_with_4408` |
-//! | [R81] 慢连接不影响其他连接 | `a_saturated_connection_is_disconnected_without_affecting_its_peer` |
-//! | [R82]/[R83] 审计与日志边界 | `handshake_completes_and_enters_the_business_phase`、`an_invalid_proof_is_closed_with_4401_and_audited` |
+//! | 序号回退被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
+//! | post_mvp 消息显式拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing`（`catalog.changed`/`link.backpressure`） |
+//! | 未知字段被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
+//! | 首次认证清除已批准配对 | `handshake_completes_and_enters_the_business_phase` |
+//! | 心跳与 90 秒静默 | `heartbeat_round_trip_keeps_the_connection_alive`、`silence_beyond_the_window_is_closed_with_4408` |
+//! | 慢连接不影响其他连接 | `a_saturated_connection_is_disconnected_without_affecting_its_peer` |
+//! | 审计与日志边界 | `handshake_completes_and_enters_the_business_phase`、`an_invalid_proof_is_closed_with_4401_and_audited` |
 //! | 验收「schema/fixture 漂移」 | `fixtures_are_consumed_by_the_handshake_and_error_layers` |
 //!
 //! 两处**刻意的测试手法**（都在用例里就地说明）：
@@ -95,7 +95,7 @@ use crate::transport::net::{NetConfig, NetError, NetListener, Shutdown, Shutdown
 const OWNER_NODE: &str = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 /// 测试扮演的 Access Node（经真实配对通道批准）。
 const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-/// 从未配对的 Access Node（[R43]）。
+/// 从未配对的 Access Node。
 const UNKNOWN_NODE: &str = "9c8f6b1d-7a35-4f0b-9b6a-2f6d5c4e3b1a";
 /// 本机的目录修订号（`catalogRevision`）：`AuditStore::watermark()` 的来源（`FakeAudit` 按本值播种子
 /// 条审计行）；`node.challenge`/`node.ready` 必须与它同源。
@@ -259,7 +259,7 @@ impl Harness {
         pairing
     }
 
-    /// 本机用户撤销该节点（`node.revoke`，[R42] 的前置）。
+    /// 本机用户撤销该节点（`node.revoke` 的前置）。
     async fn revoke_node(&self, node_id: &str) {
         let response = self
             .world
@@ -789,7 +789,7 @@ fn challenge_catalog_revision(challenge: &Value) -> u64 {
         .expect("catalogRevision 是无前导零的十进制串")
 }
 
-/// 发送 `node.proof`：`mutate` 可破坏签名以覆盖 [R41]。
+/// 发送 `node.proof`：`mutate` 可破坏签名以覆盖该拒绝路径。
 ///
 /// 两个输入都只从 `node.challenge` 取：`connectionId`/`serverNonce`/`selectedFeatures` 与
 /// [`challenge_catalog_revision`]（Access 侧拿不到别的来源）。
@@ -885,7 +885,7 @@ fn assert_no_connection_fields(message: &Value) {
 // R36/R37/R40/R32：正常握手
 // ---------------------------------------------------------------------------------------------
 
-/// [R36]/[R37]/[R40]/[R32]：已配对节点完成整条四步握手后进入业务阶段。
+/// 已配对节点完成整条四步握手后进入业务阶段。
 ///
 /// 逐项断言：挑战信封省略连接字段、Owner 挑战证明可验证、`node.ready` 的 `catalogRevision`/`serverEpoch`
 /// 与持久化水位同源、limits 与 §2.5 默认值一致、连接已登记、首次认证在同一写集里把已批准配对推进到
@@ -1048,7 +1048,7 @@ fn last_connected_at(harness: &Harness) -> Option<String> {
         .and_then(|record| record.last_connected_at().map(|at| at.as_str().to_owned()))
 }
 
-/// [R40]/§11.6 第 9 条：认证收尾把 `owned_node.last_connected_at` 推进到本次认证时间。
+/// §11.6 第 9 条：认证收尾把 `owned_node.last_connected_at` 推进到本次认证时间。
 ///
 /// 三段落分别对应的三件事：① 首次认证（有已批准配对的消费写集）必须让它非空；② 重复认证（没有
 /// 待消费配对）继续推进；③ 更早的认证时间不得倒退已存值（「只前进」）。每次成功认证都留一行
@@ -1251,7 +1251,7 @@ fn feature_ids(body: &Value) -> Vec<String> {
 // 2.29 的验收用例：`node.challenge.catalogRevision` 是 proof transcript 的 tag 6 来源
 // ---------------------------------------------------------------------------------------------
 
-/// [R37]/[R40]（任务 2.29 的验收项，design D13）：Access 只能从 `node.challenge` 拿到 `catalogRevision`，
+/// （任务 2.29 的验收项，design D13）：Access 只能从 `node.challenge` 拿到 `catalogRevision`，
 /// 用它构造的 `node-link-proof/v1` transcript 必须通过验签；改用别的值必然 `proof_invalid`。
 ///
 /// 反例是这条用例的关键：它证明该字段真的进了验签输入（Owner 用签发挑战时记录的同一个值验证），
@@ -1302,7 +1302,7 @@ async fn assert_eventually(mut condition: impl FnMut() -> bool, message: &str) {
 // R38/R39：认证前的消息准入
 // ---------------------------------------------------------------------------------------------
 
-/// [R38]：握手前收到业务消息 → `link.error`（`type_unsupported`）+ 4401 关闭，且不产生任何副作用。
+/// 握手前收到业务消息 → `link.error`（`type_unsupported`）4401 关闭，且不产生任何副作用。
 #[tokio::test]
 async fn a_business_message_before_hello_is_closed_with_4401() {
     let harness = Harness::new().await;
@@ -1336,7 +1336,7 @@ async fn a_business_message_before_hello_is_closed_with_4401() {
     harness.stop().await;
 }
 
-/// [R39]：对端要求 Owner 不实现的 feature → `feature_required` + `details.features` + 关闭。
+/// 对端要求 Owner 不实现的 feature → `feature_required` `details.features` 关闭。
 #[tokio::test]
 async fn a_missing_required_feature_is_reported_with_details_and_closed() {
     let harness = Harness::new().await;
@@ -1377,7 +1377,7 @@ async fn a_missing_required_feature_is_reported_with_details_and_closed() {
     harness.stop().await;
 }
 
-/// [R36]：信封 `protocolVersion` 不是 1 → `version_unsupported` + 4406。
+/// 信封 `protocolVersion` 不是 1 → `version_unsupported` 4406。
 #[tokio::test]
 async fn an_envelope_version_other_than_v1_is_closed_with_4406() {
     let harness = Harness::new().await;
@@ -1402,7 +1402,7 @@ async fn an_envelope_version_other_than_v1_is_closed_with_4406() {
 // R36：握手超时
 // ---------------------------------------------------------------------------------------------
 
-/// [R36]：握手窗口内没有 `node.hello` → 15 秒后以 4408 关闭，且不留认证失败审计（对端身份未知）。
+/// 握手窗口内没有 `node.hello` → 15 秒后以 4408 关闭，且不留认证失败审计（对端身份未知）。
 ///
 /// 这里必须等满真实的 15 秒：窗口是 §2.5 的固定常量，缩短它就无法证明生产路径上的窗口是 15 秒。
 #[tokio::test]
@@ -1431,7 +1431,7 @@ async fn a_handshake_that_never_gets_a_hello_is_closed_with_4408() {
 // R41/R42/R43：认证结果
 // ---------------------------------------------------------------------------------------------
 
-/// [R41]：签名被破坏的 proof → `proof_invalid` + 4401 + `node.auth_failed` 审计，信任记录不变。
+/// 签名被破坏的 proof → `proof_invalid` 4401 `node.auth_failed` 审计，信任记录不变。
 #[tokio::test]
 async fn an_invalid_proof_is_closed_with_4401_and_audited() {
     let harness = Harness::new().await;
@@ -1485,7 +1485,7 @@ async fn an_invalid_proof_is_closed_with_4401_and_audited() {
     harness.stop().await;
 }
 
-/// [R41] 的第二个分支：nonce 对不上（签名本身有效，但为另一个挑战签发）同样 `proof_invalid`。
+/// 的第二个分支：nonce 对不上（签名本身有效，但为另一个挑战签发）同样 `proof_invalid`。
 #[tokio::test]
 async fn a_proof_for_another_challenge_is_rejected_with_the_same_code() {
     let harness = Harness::new().await;
@@ -1516,7 +1516,7 @@ async fn a_proof_for_another_challenge_is_rejected_with_the_same_code() {
     harness.stop().await;
 }
 
-/// [R42]：已撤销节点即使交出签名有效的 proof 也被拒 → `node_revoked` + 4410。
+/// 已撤销节点即使交出签名有效的 proof 也被拒 → `node_revoked` 4410。
 #[tokio::test]
 async fn a_revoked_node_is_closed_with_4410() {
     let harness = Harness::new().await;
@@ -1543,7 +1543,7 @@ async fn a_revoked_node_is_closed_with_4410() {
     harness.stop().await;
 }
 
-/// [R43]：从未配对的节点照常拿到挑战（不用错误区分存在性），proof 阶段失败并映射为 `node_unknown`。
+/// 从未配对的节点照常拿到挑战（不用错误区分存在性），proof 阶段失败并映射为 `node_unknown`。
 #[tokio::test]
 async fn an_unknown_node_gets_a_challenge_and_fails_as_node_unknown() {
     let harness = Harness::new().await;
@@ -1583,7 +1583,7 @@ async fn an_unknown_node_gets_a_challenge_and_fails_as_node_unknown() {
 // R44/R45/R46：limits
 // ---------------------------------------------------------------------------------------------
 
-/// [R44]/[R45]/[R46]：`node.ready.limits` 只下调、与连接内部判定同一份数字，固定常量不受配置影响。
+/// `node.ready.limits` 只下调、与连接内部判定同一份数字，固定常量不受配置影响。
 #[tokio::test]
 async fn node_ready_echoes_the_negotiated_limits_and_never_raises_them() {
     let harness = Harness::start(
@@ -1636,7 +1636,7 @@ async fn node_ready_echoes_the_negotiated_limits_and_never_raises_them() {
     harness.stop().await;
 }
 
-/// [R46]：握手超时与心跳静默超时是固定常量（15 s / 90 s），不是配置项、也不随协商变化。
+/// 握手超时与心跳静默超时是固定常量（15 s 90 s），不是配置项、也不随协商变化。
 #[test]
 fn protocol_constants_are_not_configurable() {
     assert_eq!(HANDSHAKE_TIMEOUT, Duration::from_secs(15));
@@ -1668,7 +1668,7 @@ fn protocol_constants_are_not_configurable() {
     assert_eq!(node_link_protocol::structure::MAX_ARRAY_ELEMENTS, 10_000);
 }
 
-/// [R46]：§2.5 的三个固定 JSON 结构上限在真实连接的 wire 解码边界生效。
+/// §2.5 的三个固定 JSON 结构上限在真实连接的 wire 解码边界生效。
 ///
 /// 判定在协议层（`node_link_protocol::structure`，§2.4 的「长度限制必须在 wire DTO 边界验证」），
 /// 适配器只负责把越界映射到既有的 decode 错误路径（`nodelink.protocol.schema_invalid`，消息级拒绝、
@@ -1772,7 +1772,7 @@ fn array_details(count: usize) -> Value {
 // R47/R48/R49/R50：信封、序号与 type
 // ---------------------------------------------------------------------------------------------
 
-/// [R47]/[R48]/[R49]/[R50]：已认证连接上的信封/序号/type 违规判定。
+/// 已认证连接上的信封/序号/type 违规判定。
 ///
 /// 断言的两件事同等重要：（1）错误码与信封形状符合 §2.2/§14.1；（2）消息级拒绝**不关闭**连接——
 /// 每次拒绝后都跑一次 `link.ping`/`link.pong` 往返，且被拒绝的消息不推进入站序号。
@@ -1903,7 +1903,7 @@ async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     harness.stop().await;
 }
 
-/// [R47]：binary 帧不是本协议的载荷 → `invalid_json` + 4400 关闭。
+/// binary 帧不是本协议的载荷 → `invalid_json` 4400 关闭。
 #[tokio::test]
 async fn a_binary_frame_is_closed_with_4400() {
     let harness = Harness::new().await;
@@ -1934,7 +1934,7 @@ fn read_fixture(relative: &str) -> Value {
 // R79/R80/R81：心跳、静默与慢连接
 // ---------------------------------------------------------------------------------------------
 
-/// [R79]：按协商的间隔发送 `link.ping`，回填 nonce 的 `link.pong` 让连接继续存活。
+/// 按协商的间隔发送 `link.ping`，回填 nonce 的 `link.pong` 让连接继续存活。
 ///
 /// 间隔用 `node.ready.limits.heartbeatIntervalMs = 1_000`（schema 下限）驱动，无需等待真实 30 秒。
 #[tokio::test]
@@ -1983,7 +1983,7 @@ async fn heartbeat_round_trip_keeps_the_connection_alive() {
     harness.stop().await;
 }
 
-/// [R80]：静默超过窗口（§2.5 固定 90 秒）→ 4408 关闭，信任记录不受影响。
+/// 静默超过窗口（§2.5 固定 90 秒）→ 4408 关闭，信任记录不受影响。
 ///
 /// 窗口用 [`NodeLinkConn::with_test_windows`] 调成 2 秒：90 秒的真实等待在用例里不可接受，而窗口取值由
 /// [`protocol_constants_are_not_configurable`] 锁定，本用例证明的是「静默判定 → 4408」这条机制。
@@ -2062,10 +2062,10 @@ async fn silence_beyond_the_window_is_closed_with_4408() {
     harness.stop().await;
 }
 
-/// [R81]：慢消费者（待发送队列持续高水位）被断开，同 Owner 上其他连接不受影响。
+/// 慢消费者（待发送队列持续高水位）被断开，同 Owner 上其他连接不受影响。
 ///
 /// 队列上限下调到 1 条 / 1 KiB，客户端的读被暂停；慢消费者宽限用 [`NodeLinkConn::with_test_windows`]
-/// 调成 1.5 秒（同 [R80] 的理由：30 秒的真实等待在用例里不可接受）。
+/// 调成 1.5 秒（同 的理由：30 秒的真实等待在用例里不可接受）。
 #[tokio::test]
 async fn a_saturated_connection_is_disconnected_without_affecting_its_peer() {
     let world = TestWorld::with_store(Arc::new(FixedStore::new(
@@ -2195,7 +2195,7 @@ fn outbound_sequence(outbound: &Outbound) -> String {
         .to_owned()
 }
 
-/// [R47]：出站 `connectionSequence` 只在**投递确定**时消耗。
+/// 出站 `connectionSequence` 只在**投递确定**时消耗。
 ///
 /// 队列压到高水位（条数 1 / 字节 1 KiB）→ 触发一次 `HighWater` → 排空 → 再发一条：两条真正入队的
 /// 消息的序号必须是 1、2。对端按 §2.2 要求严格加一，被拒的投递不得烧掉序号——否则本方向此后每一帧
@@ -2256,7 +2256,7 @@ fn a_rejected_delivery_does_not_consume_the_outbound_sequence() {
 /// |---|---|---|
 /// | WP4 解码的 body 族（`node.hello`/`node.challenge`/`node.proof`/`node.ready`） | 信封判定通过 + body 能解码成类型化 DTO + 往返保真 | 信封/body 至少一层拒绝 |
 /// | 握手与心跳的 `link.*` 族 | 同上（`link.error` 认证前无连接字段、认证后有） | 信封判定拒绝（`schema_invalid`） |
-/// | WP5/WP6 的业务族 | 信封判定通过（post_mvp 一族按 [R49] 拒绝） | 信封判定通过、body 级拒绝归 WP5/WP6 |
+/// | WP5/WP6 的业务族 | 信封判定通过（post_mvp 一族按 拒绝） | 信封判定通过、body 级拒绝归 WP5/WP6 |
 ///
 /// 新增 fixture 必须落进这三张表之一，否则本用例失败（漂移门禁的意图：manifest 是唯一来源）。
 #[test]

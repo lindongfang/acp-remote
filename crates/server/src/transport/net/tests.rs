@@ -4,21 +4,21 @@
 //!
 //! | 场景 | 用例 |
 //! |---|---|
-//! | [R1] 共享 listener 绑定与失败关闭 | `local_addrs_reports_the_real_bound_address`、`bind_fails_closed_when_the_address_is_taken` |
-//! | [R2] 默认 loopback 启动 | `default_config_binds_only_loopback`（默认值的权威断言在 `config` 模块；真实 8765 端口的端到端绑定由 WP7 的 `[PV4]` 覆盖） |
-//! | [R3] 绑定失败即拒绝启动 | `bind_fails_closed_when_the_address_is_taken` |
-//! | [R4] 非 loopback 监听告警 | `non_loopback_listen_warns_without_failing` |
-//! | [R5]/[R7] 按 path 路由、Sync 明确不可用 | `unregistered_paths_return_404` |
-//! | [R6] Node Link 端点正常升级 | `ws_upgrade_with_the_required_subprotocol_succeeds` |
-//! | [R8] 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
-//! | [R9]/[R10] Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
-//! | [R11] 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
-//! | [R12]/[R13] TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（RV1-WP2-F3 回归）、`saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections`（RV2-WP2FIX-F1 回归） |
-//! | [R14] direct 模式证书缺失即拒绝启动 | `direct_mode_missing_certificate_fails_closed`、`direct_mode_invalid_pem_fails_closed`、`direct_mode_relaxed_permissions_fail_closed`（Unix）、`direct_mode_permissions_are_unverifiable_on_this_platform`（Windows，`[PV5]`） |
-//! | [R15] 非 loopback 明文边界 | `plaintext_proxy_non_loopback_warns`、`plaintext_dev_flag_rejects_non_loopback`（`listener` 模块） |
-//! | [R16]/[R17] 请求体上限 | `pairing_body_over_the_limit_is_rejected_with_413` |
+//! | 共享 listener 绑定与失败关闭 | `local_addrs_reports_the_real_bound_address`、`bind_fails_closed_when_the_address_is_taken` |
+//! | 默认 loopback 启动 | `default_config_binds_only_loopback`（默认值的权威断言在 `config` 模块；真实 8765 端口的端到端绑定由 WP7 的 `[PV4]` 覆盖） |
+//! | 绑定失败即拒绝启动 | `bind_fails_closed_when_the_address_is_taken` |
+//! | 非 loopback 监听告警 | `non_loopback_listen_warns_without_failing` |
+//! | 按 path 路由、Sync 明确不可用 | `unregistered_paths_return_404` |
+//! | Node Link 端点正常升级 | `ws_upgrade_with_the_required_subprotocol_succeeds` |
+//! | 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
+//! | Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
+//! | 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
+//! | TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（RV1-WP2-F3 回归）、`saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections`（RV2-WP2FIX-F1 回归） |
+//! | direct 模式证书缺失即拒绝启动 | `direct_mode_missing_certificate_fails_closed`、`direct_mode_invalid_pem_fails_closed`、`direct_mode_relaxed_permissions_fail_closed`（Unix）、`direct_mode_permissions_are_unverifiable_on_this_platform`（Windows，`[PV5]`） |
+//! | 非 loopback 明文边界 | `plaintext_proxy_non_loopback_warns`、`plaintext_dev_flag_rejects_non_loopback`（`listener` 模块） |
+//! | 请求体上限 | `pairing_body_over_the_limit_is_rejected_with_413` |
 //! | 每路径默认响应头（`register_post` 的第三个参数） | `path_default_headers_cover_access_layer_rejections_and_keep_route_isolation`、`path_default_headers_do_not_override_or_duplicate_handler_headers`、`invalid_path_default_headers_are_rejected_at_registration` |
-//! | [R18] 超大 WebSocket 消息被拒绝 | `oversize_ws_message_closes_with_1009` |
+//! | 超大 WebSocket 消息被拒绝 | `oversize_ws_message_closes_with_1009` |
 //! | 关闭排空（D11） | `shutdown_drains_and_releases_the_listener`、`binary_frames_are_passed_to_the_handler` |
 
 use std::net::SocketAddr;
@@ -172,7 +172,7 @@ async fn wait_for_counter(counter: &Arc<AtomicUsize>, expected: usize) {
 
 #[tokio::test]
 async fn local_addrs_reports_the_real_bound_address() {
-    // [R1]/[R2]：绑定随机 loopback 端口后，`daemon.status.listen` 的来源就是实际地址（不是配置里的 0）。
+    // 绑定随机 loopback 端口后，`daemon.status.listen` 的来源就是实际地址（不是配置里的 0）。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_post(
@@ -197,7 +197,7 @@ async fn local_addrs_reports_the_real_bound_address() {
 
 #[tokio::test]
 async fn default_config_binds_only_loopback() {
-    // [R2]/[R4]：默认配置只落在 loopback（`CONFIG_REFERENCE.md` §1 的默认值断言在 `config` 模块）。
+    // 默认配置只落在 loopback（`CONFIG_REFERENCE.md` §1 的默认值断言在 `config` 模块）。
     let config = NetConfig::default();
     assert_eq!(config.listen, "127.0.0.1:8765");
     let bound: SocketAddr = config.listen.parse().expect("默认值可解析");
@@ -206,7 +206,7 @@ async fn default_config_binds_only_loopback() {
 
 #[tokio::test]
 async fn bind_fails_closed_when_the_address_is_taken() {
-    // [R1]/[R3]：地址被占用即拒绝启动，且不留下半初始化的监听。
+    // 地址被占用即拒绝启动，且不留下半初始化的监听。
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("占位 listener");
@@ -225,7 +225,7 @@ async fn bind_fails_closed_when_the_address_is_taken() {
 
 #[tokio::test]
 async fn non_loopback_listen_warns_without_failing() {
-    // [R4]：非 loopback 是显式配置的后果，只告警不拒绝；`proxy` 模式再加一条明文面告警（D10）。
+    // 非 loopback 是显式配置的后果，只告警不拒绝；`proxy` 模式再加一条明文面告警（D10）。
     let listener = NetListener::bind(NetConfig {
         listen: "0.0.0.0:0".to_owned(),
         ..NetConfig::default()
@@ -249,7 +249,7 @@ async fn non_loopback_listen_warns_without_failing() {
 
 #[tokio::test]
 async fn plaintext_proxy_non_loopback_warns() {
-    // [R15]：非 loopback + 明文只可能在显式 proxy 形态下成立，且必须告警。
+    // 非 loopback 明文只可能在显式 proxy 形态下成立，且必须告警。
     let listener = NetListener::bind(NetConfig {
         listen: "0.0.0.0:0".to_owned(),
         tls: TlsMode::Proxy,
@@ -262,7 +262,7 @@ async fn plaintext_proxy_non_loopback_warns() {
 
 #[tokio::test]
 async fn unregistered_paths_return_404() {
-    // [R5]/[R7]：只有注册过的 path 有服务；`/sync/v1*` 与未知 path 一律 404，不进任何处理器。
+    // 只有注册过的 path 有服务；`/sync/v1*` 与未知 path 一律 404，不进任何处理器。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_ws(
@@ -322,7 +322,7 @@ async fn unregistered_paths_return_404() {
 
 #[tokio::test]
 async fn ws_upgrade_with_the_required_subprotocol_succeeds() {
-    // [R6]：带约定 subprotocol、不请求压缩的升级成功，响应回填 subprotocol，处理器收到会话。
+    // 带约定 subprotocol、不请求压缩的升级成功，响应回填 subprotocol，处理器收到会话。
     let messages = Arc::new(AtomicUsize::new(0));
     let subprotocol = Arc::new(std::sync::Mutex::new(None));
     let handler = Arc::new(EchoWsHandler {
@@ -362,7 +362,7 @@ async fn ws_upgrade_with_the_required_subprotocol_succeeds() {
 
 #[tokio::test]
 async fn ws_upgrade_without_the_subprotocol_is_rejected() {
-    // [R8]：未声明约定 subprotocol 的升级被拒绝（不建立连接、不返回业务级错误消息）。
+    // 未声明约定 subprotocol 的升级被拒绝（不建立连接、不返回业务级错误消息）。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_ws(
@@ -394,7 +394,7 @@ async fn ws_upgrade_without_the_subprotocol_is_rejected() {
 
 #[tokio::test]
 async fn ws_upgrade_with_compression_is_rejected() {
-    // [R8]：协商到 permessage-deflate 的升级必须被拒绝（`NODE_LINK_PROTOCOL.md` §2.1）。
+    // 协商到 permessage-deflate 的升级必须被拒绝（`NODE_LINK_PROTOCOL.md` §2.1）。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_ws(
@@ -430,7 +430,7 @@ async fn ws_upgrade_with_compression_is_rejected() {
 
 #[tokio::test]
 async fn repeated_subprotocol_headers_follow_the_token_rule() {
-    // [R8]（N3）：同一 token 拆成两个 `Sec-WebSocket-Protocol` 头时锁定本层行为。
+    // （N3）：同一 token 拆成两个 `Sec-WebSocket-Protocol` 头时锁定本层行为。
     //
     // 本层与 `axum::extract::ws::WebSocketUpgrade` 用同一口径（都是 `get_all(...)` → 按逗号切分 →
     // trim → 精确匹配），因此结论是**接受**而不是拒绝：任意一个（或两个）头值里以 token 形式出现约定
@@ -499,7 +499,7 @@ async fn repeated_subprotocol_headers_follow_the_token_rule() {
 
 #[tokio::test]
 async fn plain_get_on_the_ws_path_is_rejected() {
-    // [R8]：非升级请求对 WS path 返回明确 4xx（axum 的升级提取器给出 400/405/426）。
+    // 非升级请求对 WS path 返回明确 4xx（axum 的升级提取器给出 400/405/426）。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_ws(
@@ -529,7 +529,7 @@ async fn plain_get_on_the_ws_path_is_rejected() {
 
 #[tokio::test]
 async fn wrong_host_is_rejected_before_routing() {
-    // [R9]/[R10]：Host 不匹配返回明确错误，且不进入任何 path 的处理逻辑（含未注册 path：先 400 而不是 404）。
+    // Host 不匹配返回明确错误，且不进入任何 path 的处理逻辑（含未注册 path：先 400 而不是 404）。
     let calls = Arc::new(AtomicUsize::new(0));
     let server = start_server(
         NetConfig {
@@ -585,7 +585,7 @@ async fn wrong_host_is_rejected_before_routing() {
 
 #[tokio::test]
 async fn wrong_host_is_rejected_on_the_ws_upgrade_path() {
-    // [R9]/[R10]（N2）：Host 边界同样覆盖 `/node-link/v1` 的升级路径——先 400，且 WS 处理器零调用。
+    // （N2）：Host 边界同样覆盖 `/node-link/v1` 的升级路径——先 400，且 WS 处理器零调用。
     let calls = Arc::new(AtomicUsize::new(0));
     let server = start_server(
         NetConfig {
@@ -631,7 +631,7 @@ async fn wrong_host_is_rejected_on_the_ws_upgrade_path() {
 
 #[tokio::test]
 async fn allowed_hosts_whitelist_is_used_when_configured() {
-    // [R9]：`allowed_hosts` 非空时以白名单为准（此时 `public_origin` 不参与判定）。
+    // `allowed_hosts` 非空时以白名单为准（此时 `public_origin` 不参与判定）。
     let server = start_server(
         NetConfig {
             public_origin: Some("https://owner.example.com".to_owned()),
@@ -675,7 +675,7 @@ async fn allowed_hosts_whitelist_is_used_when_configured() {
 
 #[tokio::test]
 async fn default_configuration_accepts_loopback_host_only() {
-    // [R9]/[R10]：默认配置（无 public_origin、无 allowed_hosts）只接受 loopback 形态的 Host。
+    // 默认配置（无 public_origin、无 allowed_hosts）只接受 loopback 形态的 Host。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_post(
@@ -714,7 +714,7 @@ async fn default_configuration_accepts_loopback_host_only() {
 
 #[tokio::test]
 async fn forwarded_headers_are_ignored_from_untrusted_peers() {
-    // [R11]：直连客户端（不在 trusted_proxies 内）的 X-Forwarded-For 被忽略，限流/日志用真实对端地址。
+    // 直连客户端（不在 trusted_proxies 内）的 X-Forwarded-For 被忽略，限流/日志用真实对端地址。
     let last_client_ip = Arc::new(std::sync::Mutex::new(None));
     let server = start_server(loopback_config(), |listener| {
         listener
@@ -753,7 +753,7 @@ async fn forwarded_headers_are_ignored_from_untrusted_peers() {
 
 #[tokio::test]
 async fn forwarded_headers_are_honored_from_trusted_proxies() {
-    // [R11]：对端在 trusted_proxies 内时才采信转发头（同机反代形态）。
+    // 对端在 trusted_proxies 内时才采信转发头（同机反代形态）。
     let server = start_server(
         NetConfig {
             trusted_proxies: vec!["127.0.0.1".to_owned()],
@@ -793,7 +793,7 @@ async fn forwarded_headers_are_honored_from_trusted_proxies() {
 
 #[tokio::test]
 async fn pairing_body_over_the_limit_is_rejected_with_413() {
-    // [R16]/[R17]：请求体超限返回 413，且不解析内容、不调用处理器（§13.4）。
+    // 请求体超限返回 413，且不解析内容、不调用处理器（§13.4）。
     let calls = Arc::new(AtomicUsize::new(0));
     let server = start_server(
         NetConfig {
@@ -1004,7 +1004,7 @@ async fn invalid_path_default_headers_are_rejected_at_registration() {
 
 #[tokio::test]
 async fn oversize_ws_message_closes_with_1009() {
-    // [R18]：超过 maxMessageBytes 的消息按 1009 拒绝，且处理器拿不到这条消息。
+    // 超过 maxMessageBytes 的消息按 1009 拒绝，且处理器拿不到这条消息。
     let messages = Arc::new(AtomicUsize::new(0));
     let server = start_server(
         NetConfig {
@@ -1051,7 +1051,7 @@ async fn oversize_ws_message_closes_with_1009() {
 
 #[tokio::test]
 async fn binary_frames_are_passed_to_the_handler() {
-    // [R16]：binary 帧原样上送（是否按 `link.error` 拒绝由 `server::node_link` 决定，§2.1）。
+    // binary 帧原样上送（是否按 `link.error` 拒绝由 `server::node_link` 决定，§2.1）。
     let handler = Arc::new(EchoWsHandler {
         messages: Arc::new(AtomicUsize::new(0)),
         last_binary: Arc::new(std::sync::Mutex::new(None)),
@@ -1137,7 +1137,7 @@ async fn shutdown_drains_and_releases_the_listener() {
 
 #[tokio::test]
 async fn direct_mode_terminates_tls_and_rejects_plaintext() {
-    // [R12]/[R13]：direct 模式只接受 TLS 握手成功的连接。
+    // direct 模式只接受 TLS 握手成功的连接。
     let certificate = TestCertificate::generate();
     let server = start_server(
         NetConfig {
@@ -1198,7 +1198,7 @@ async fn direct_mode_terminates_tls_and_rejects_plaintext() {
 
 #[tokio::test]
 async fn idle_tcp_connections_do_not_block_new_connections() {
-    // [R12]（RV1-WP2-F3 回归）：`direct` 模式的 TLS 握手不占用 accept 关键路径——若干只建立 TCP、
+    // （RV1-WP2-F3 回归）：`direct` 模式的 TLS 握手不占用 accept 关键路径——若干只建立 TCP、
     // 不发 ClientHello 的连接（无需任何凭据）不得把新连接的接入推迟一个握手超时（10 s）。
     let certificate = TestCertificate::generate();
     let server = start_server(
@@ -1259,7 +1259,7 @@ async fn idle_tcp_connections_do_not_block_new_connections() {
 
 #[tokio::test]
 async fn saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections() {
-    // [R12]（RV2-WP2FIX-F1 回归）：握手池被「只连接不握手」的连接**占满**时，新连接既不被丢弃、
+    // （RV2-WP2FIX-F1 回归）：握手池被「只连接不握手」的连接**占满**时，新连接既不被丢弃、
     // 也不被拒绝——它等一个槽位，并在既有握手因超时归还槽位后照常完成 TLS 握手与请求。
     //
     // 用例按 `TLS_HANDSHAKE_POOL_SIZE` 精确填满池（不写死槽位数，容量调整时不会静默失去覆盖）。
@@ -1327,7 +1327,7 @@ async fn saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_conne
 
 #[tokio::test]
 async fn direct_mode_does_not_warn_about_plaintext() {
-    // [R12]：direct 模式不产生「明文面」告警（只有 loopback 监听本身也不告警）。
+    // direct 模式不产生「明文面」告警（只有 loopback 监听本身也不告警）。
     let certificate = TestCertificate::generate();
     let listener = NetListener::bind(NetConfig {
         tls: TlsMode::Direct {
@@ -1353,7 +1353,7 @@ async fn direct_mode_does_not_warn_about_plaintext() {
 
 #[tokio::test]
 async fn direct_mode_missing_certificate_fails_closed() {
-    // [R14]：证书/私钥缺失即拒绝启动，不降级为明文监听。
+    // 证书/私钥缺失即拒绝启动，不降级为明文监听。
     let missing = std::env::temp_dir().join(format!(
         "acpr-net-missing-{}-{:?}",
         std::process::id(),
@@ -1373,7 +1373,7 @@ async fn direct_mode_missing_certificate_fails_closed() {
 
 #[tokio::test]
 async fn direct_mode_invalid_pem_fails_closed() {
-    // [R14]：PEM 解析失败即拒绝启动，错误消息不含文件内容。
+    // PEM 解析失败即拒绝启动，错误消息不含文件内容。
     let certificate = TestCertificate::generate();
     std::fs::write(
         &certificate.key_path,
@@ -1397,7 +1397,7 @@ async fn direct_mode_invalid_pem_fails_closed() {
 #[cfg(unix)]
 #[tokio::test]
 async fn direct_mode_relaxed_permissions_fail_closed() {
-    // [R14]：Unix 上宽松权限（组/其他可读）即拒绝启动（`SECURITY_DESIGN.md` §13.2）。
+    // Unix 上宽松权限（组/其他可读）即拒绝启动（`SECURITY_DESIGN.md` §13.2）。
     use std::os::unix::fs::PermissionsExt as _;
     let certificate = TestCertificate::generate();
     std::fs::set_permissions(
@@ -1453,7 +1453,7 @@ async fn direct_mode_relaxed_permissions_fail_closed() {
 #[cfg(not(unix))]
 #[tokio::test]
 async fn direct_mode_permissions_are_unverifiable_on_this_platform() {
-    // [R14]（`[PV5]` 的本机轮次）：Windows 上 ACL 读取需要不安全代码，因此判定是「未核验 + 警告」，
+    // （`[PV5]` 的本机轮次）：Windows 上 ACL 读取需要不安全代码，因此判定是「未核验 警告」，
     // 既不失败关闭也不声称已核验（`CORE_PORTS_AND_STORAGE.md` §7.1 的已裁定口径）。
     let certificate = TestCertificate::generate();
     let listener = NetListener::bind(NetConfig {

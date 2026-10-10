@@ -10,20 +10,20 @@
 //!
 //! | 需求 | 用例 |
 //! |---|---|
-//! | [R17] 配对请求体超限 | `claim_body_over_the_transport_limit_is_rejected_with_413` |
-//! | [R19]/[R20] claim 成功路径 | `claim_enters_pending_confirmation_and_returns_a_verifiable_owner_proof` |
-//! | [R21] 重复 claim 被拒绝 | `repeated_claim_from_another_access_node_is_rejected_with_409` |
-//! | [R22] 失败语义与状态码 | `malformed_claim_body_is_rejected_with_400`、`unknown_pairing_is_rejected_with_404`、`endpoint_host_outside_the_configured_origin_is_rejected_with_403`、`expired_pairing_is_rejected_with_410`、`claiming_without_a_configured_origin_is_rejected_with_403` |
-//! | [R23] proof 无效不泄露差异 | `invalid_proof_is_unauthorized_without_leaking_the_difference` |
-//! | [R24] 相同内容重试幂等 | `retrying_the_same_claim_returns_the_original_pairing_request` |
-//! | [R25] 过期配对 410 | `expired_pairing_is_rejected_with_410` |
-//! | [R26]/[R27] 五状态一律 200 | `status_reports_the_five_business_states_with_200` |
-//! | [R28] status proof 无效 401 | `status_with_an_invalid_proof_is_unauthorized` |
-//! | [R29] 重试复用 nonce 返回原响应 | `status_retry_with_the_same_nonce_returns_the_original_response` |
-//! | [R30]/[R31] 安全响应头与凭据边界 | `every_pairing_response_carries_the_four_security_headers`、`pairing_responses_never_carry_the_pairing_secret`、`status_responses_carry_the_security_headers_and_no_secret`、`access_layer_rejections_on_the_pairing_paths_carry_the_security_headers`（413/Host-400，RV1-WP3C 裁决项①） |
-//! | [R32] secret 按期清除 | `status_reports_the_five_business_states_with_200`（expired/consumed 两条路径断言 secret 已清除） |
-//! | [R33]/[R35] status 限流 | `status_rate_limit_returns_429_after_sixty_queries_per_pairing`、`pairing::tests::pairing_id_window_*` |
-//! | [R34] claim 超限 429 | `claim_rate_limit_returns_429_after_ten_attempts_per_ip` |
+//! | 配对请求体超限 | `claim_body_over_the_transport_limit_is_rejected_with_413` |
+//! | claim 成功路径 | `claim_enters_pending_confirmation_and_returns_a_verifiable_owner_proof` |
+//! | 重复 claim 被拒绝 | `repeated_claim_from_another_access_node_is_rejected_with_409` |
+//! | 失败语义与状态码 | `malformed_claim_body_is_rejected_with_400`、`unknown_pairing_is_rejected_with_404`、`endpoint_host_outside_the_configured_origin_is_rejected_with_403`、`expired_pairing_is_rejected_with_410`、`claiming_without_a_configured_origin_is_rejected_with_403` |
+//! | proof 无效不泄露差异 | `invalid_proof_is_unauthorized_without_leaking_the_difference` |
+//! | 相同内容重试幂等 | `retrying_the_same_claim_returns_the_original_pairing_request` |
+//! | 过期配对 410 | `expired_pairing_is_rejected_with_410` |
+//! | 五状态一律 200 | `status_reports_the_five_business_states_with_200` |
+//! | status proof 无效 401 | `status_with_an_invalid_proof_is_unauthorized` |
+//! | 重试复用 nonce 返回原响应 | `status_retry_with_the_same_nonce_returns_the_original_response` |
+//! | 安全响应头与凭据边界 | `every_pairing_response_carries_the_four_security_headers`、`pairing_responses_never_carry_the_pairing_secret`、`status_responses_carry_the_security_headers_and_no_secret`、`access_layer_rejections_on_the_pairing_paths_carry_the_security_headers`（413/Host-400，RV1-WP3C 裁决项①） |
+//! | secret 按期清除 | `status_reports_the_five_business_states_with_200`（expired/consumed 两条路径断言 secret 已清除） |
+//! | status 限流 | `status_rate_limit_returns_429_after_sixty_queries_per_pairing`、`pairing::tests::pairing_id_window_*` |
+//! | claim 超限 429 | `claim_rate_limit_returns_429_after_ten_attempts_per_ip` |
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -987,7 +987,7 @@ async fn every_pairing_response_carries_the_four_security_headers() {
     harness.stop().await;
 }
 
-/// [R30]/[R31]（RV1-WP3C 的安全头覆盖）：§13.1 的「所有配对 HTTP 响应」也包括接入层在调用处理器前
+/// （RV1-WP3C 的安全头覆盖）：§13.1 的「所有配对 HTTP 响应」也包括接入层在调用处理器前
 /// 产生的拒绝——413（请求体超限）与 400（Host 不匹配）——它们靠注册时声明的每路径默认响应头满足。
 #[tokio::test]
 async fn access_layer_rejections_on_the_pairing_paths_carry_the_security_headers() {

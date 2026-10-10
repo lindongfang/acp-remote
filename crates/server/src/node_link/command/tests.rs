@@ -140,7 +140,7 @@ struct CommandStore {
     commits: Arc<Mutex<Vec<OwnedCommit>>>,
     commit_calls: Arc<AtomicUsize>,
     /// `load_recovery` 的调用次数：用来区分「授权先于本机读取」与「授权先于副作用提交」——只数
-    /// `commit` 的话，两者在被拒路径上的表现一样（[R31] 用例需要这条独立证据）。
+    /// `commit` 的话，两者在被拒路径上的表现一样（需要这条独立证据）。
     recovery_reads: Arc<AtomicUsize>,
 }
 
@@ -1091,7 +1091,7 @@ fn record(spec: RecordSpec<'_>) -> CommandRecord {
 // 纯函数契约
 // ---------------------------------------------------------------------------------------------
 
-/// [R74]/[R72] 的前半：`session.create` 的禁带字段与绝对路径在**严格解码之前**就被识别。
+/// 的前半：`session.create` 的禁带字段与绝对路径在**严格解码之前**就被识别。
 #[test]
 fn forbidden_session_create_fields_are_recognised_before_the_typed_decode() {
     let body = |payload: Value| {
@@ -1168,7 +1168,7 @@ fn forbidden_session_create_fields_are_recognised_before_the_typed_decode() {
     );
 }
 
-/// [R33]/§12.7：`session.resume` 的 `payload` 必须是空对象——**任何**键都在严格解码之前被拒
+/// §12.7：`session.resume` 的 `payload` 必须是空对象——**任何**键都在严格解码之前被拒
 /// （schema 的 `additionalProperties: false` 只会给 `schema_invalid`，而协议要求更具体的
 /// `nodelink.command.unsupported_field` + `details.field`）。
 #[test]
@@ -1226,7 +1226,7 @@ fn absolute_path_shapes_cover_posix_windows_and_unc() {
     }
 }
 
-/// [R66] 的终态形状：`completed` 带非空 `result`、其余 status 带 `error`，
+/// 的终态形状：`completed` 带非空 `result`、其余 status 带 `error`，
 /// 且 `command` 取该 request 提交时的命令名。
 #[test]
 fn terminal_mapping_keeps_the_command_name_and_the_terminal_contract() {
@@ -1365,7 +1365,7 @@ fn the_error_registry_maps_core_codes_without_inventing_new_ones() {
     );
     assert!(!error_info("authorization.scope_denied").retryable);
 
-    // [R66]/RV1-WP6-F8 正例：已知**永久**失败必须映射到非 retryable 的语义最近登记码，不能冒充
+    // RV1-WP6-F8 正例：已知**永久**失败必须映射到非 retryable 的语义最近登记码，不能冒充
     // `internal.unavailable`（那在 registry 里是 retryable = true，会把永久失败标成可重试）。
     for (core_code, expected) in [
         (
@@ -1416,7 +1416,7 @@ fn the_error_registry_maps_core_codes_without_inventing_new_ones() {
     );
 }
 
-/// [R66] 的幂等键：指纹按 ACPR-CJ1 对**解码后**的 payload 取（键序无关，语义相关）。
+/// 的幂等键：指纹按 ACPR-CJ1 对**解码后**的 payload 取（键序无关，语义相关）。
 #[test]
 fn the_request_fingerprint_is_acpr_cj1_over_the_decoded_payload() {
     let first: WireSubmit = serde_json::from_value(json!({
@@ -1462,7 +1462,7 @@ fn the_request_fingerprint_is_acpr_cj1_over_the_decoded_payload() {
 // 路由层用例
 // ---------------------------------------------------------------------------------------------
 
-/// [R66]：`session.create` 的四个字段必须显式为 `null`，`session.mode.set` 必须带 `expectedVersion`。
+/// `session.create` 的四个字段必须显式为 `null`，`session.mode.set` 必须带 `expectedVersion`。
 #[tokio::test]
 async fn session_create_null_rules_and_expected_version_are_enforced_at_the_wire_boundary() {
     let mut fixture = Fixture::new().await;
@@ -1508,7 +1508,7 @@ async fn session_create_null_rules_and_expected_version_are_enforced_at_the_wire
     );
 }
 
-/// [R69]/[R82]/[R83]：越权命令回 `command.rejected`、无副作用、且留下 `authorization.denied` 审计。
+/// 越权命令回 `command.rejected`、无副作用、且留下 `authorization.denied` 审计。
 #[tokio::test]
 async fn an_unauthorized_command_is_rejected_audited_and_has_no_side_effect() {
     // 信任记录只有 `grant.observe`：`session.prompt` 需要 `grant.interact`。
@@ -1556,7 +1556,7 @@ async fn an_unauthorized_command_is_rejected_audited_and_has_no_side_effect() {
     );
 }
 
-/// [R74]：禁带字段被拒、`details.field` 指明字段、且**不创建会话**。
+/// 禁带字段被拒、`details.field` 指明字段、且**不创建会话**。
 #[tokio::test]
 async fn session_create_forbidden_fields_are_rejected_without_creating_a_session() {
     let mut fixture = Fixture::new().await;
@@ -1590,7 +1590,7 @@ async fn session_create_forbidden_fields_are_rejected_without_creating_a_session
     );
 }
 
-/// [R75]：未知 `workspaceAlias` 回 `not_granted` 并带 `details.parameter`，不创建会话。
+/// 未知 `workspaceAlias` 回 `not_granted` 并带 `details.parameter`，不创建会话。
 #[tokio::test]
 async fn session_create_with_an_unknown_workspace_alias_is_rejected_with_the_parameter() {
     let mut fixture = Fixture::new().await;
@@ -1643,7 +1643,7 @@ async fn session_create_with_an_unknown_workspace_alias_is_rejected_with_the_par
     assert_eq!(fixture.world.store.commit_calls(), 0);
 }
 
-/// [R72]：首切片 template 零参数——带 `templateParams` 的请求必须明确拒绝。
+/// 首切片 template 零参数——带 `templateParams` 的请求必须明确拒绝。
 #[tokio::test]
 async fn session_create_with_template_parameters_is_rejected() {
     let mut fixture = Fixture::new().await;
@@ -1702,7 +1702,7 @@ async fn session_create_with_template_parameters_is_rejected() {
     );
 }
 
-/// [R73]/[R72]：正常创建先回 `accepted(result = null)`，再回带复合引用的 `completed` 终态。
+/// 正常创建先回 `accepted(result = null)`，再回带复合引用的 `completed` 终态。
 #[tokio::test]
 async fn session_create_returns_accepted_then_the_composite_result() {
     let mut fixture = Fixture::new().await;
@@ -1786,7 +1786,7 @@ async fn session_create_returns_accepted_then_the_composite_result() {
     assert_eq!(reread[0]["body"]["terminal"]["result"], result.clone());
 }
 
-/// [R66]/§6 第 20 条：`session.create` 的幂等键 `(accessNodeId, requestId)` 是**持久事实**——同键
+/// §6 第 20 条：`session.create` 的幂等键 `(accessNodeId, requestId)` 是**持久事实**——同键
 /// 同语义回首次结果（含重启后），同键不同语义 `nodelink.command.idempotency_conflict`，都不重复创建。
 #[tokio::test]
 async fn a_repeated_session_create_request_replays_the_first_result() {
@@ -1859,7 +1859,7 @@ async fn a_repeated_session_create_request_replays_the_first_result() {
     );
 }
 
-/// [R70]/§6 第 20 条：创建的崩溃窗口（幂等行已落盘、终态从未提交）由启动恢复终结为 `uncertain`，
+/// §6 第 20 条：创建的崩溃窗口（幂等行已落盘、终态从未提交）由启动恢复终结为 `uncertain`，
 /// 重查与重试都回该持久终态，且不重复创建。
 #[tokio::test]
 async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
@@ -1949,7 +1949,7 @@ async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
     assert_ne!(session.as_str(), "");
 }
 
-/// [R67]：相同 `(requestId, command, payload)` 的重复 mutation 回首次结果且不二次派发。
+/// 相同 `(requestId, command, payload)` 的重复 mutation 回首次结果且不二次派发。
 #[tokio::test]
 async fn a_repeated_request_id_replays_the_first_terminal() {
     let mut fixture = Fixture::new().await;
@@ -1990,7 +1990,7 @@ async fn a_repeated_request_id_replays_the_first_terminal() {
     );
 }
 
-/// [R68]：同键不同语义的 mutation 回 `idempotency_conflict` 且不执行第二次副作用。
+/// 同键不同语义的 mutation 回 `idempotency_conflict` 且不执行第二次副作用。
 #[tokio::test]
 async fn the_same_request_id_with_a_different_payload_conflicts() {
     let mut fixture = Fixture::new().await;
@@ -2024,7 +2024,7 @@ async fn the_same_request_id_with_a_different_payload_conflicts() {
     assert_eq!(fixture.world.store.commit_calls(), 0);
 }
 
-/// [R66]：`command.status` 重查 mutation 的终态——带 `command` 名、`terminalEventId` 非 null。
+/// `command.status` 重查 mutation 的终态——带 `command` 名、`terminalEventId` 非 null。
 #[tokio::test]
 async fn command_status_replies_the_terminal_of_the_mutation() {
     let mut fixture = Fixture::new().await;
@@ -2082,7 +2082,7 @@ async fn command_status_replies_the_terminal_of_the_mutation() {
     assert_eq!(body["terminal"]["result"]["kind"], "turn.completed");
 }
 
-/// [R66]：未终结的 mutation 在两种 `command.status` 形式下都回同形的 `command.accepted`
+/// 未终结的 mutation 在两种 `command.status` 形式下都回同形的 `command.accepted`
 /// （`acceptedAt` 取首次接受时间）。
 #[tokio::test]
 async fn command_status_replies_accepted_for_an_unfinished_mutation() {
@@ -2129,7 +2129,7 @@ async fn command_status_replies_accepted_for_an_unfinished_mutation() {
     assert_eq!(standalone[0]["body"], accepted[0]["body"]);
 }
 
-/// [R70]：崩溃窗口写入的 `uncertain` 原样透传，不猜测成功或失败。
+/// 崩溃窗口写入的 `uncertain` 原样透传，不猜测成功或失败。
 #[tokio::test]
 async fn an_uncertain_terminal_is_passed_through() {
     let mut fixture = Fixture::new().await;
@@ -2167,7 +2167,7 @@ async fn an_uncertain_terminal_is_passed_through() {
     assert!(body["terminal"]["result"].is_null());
 }
 
-/// [R66]：未知 `targetRequestId` 不猜命令名——连接级 `command.not_found`。
+/// 未知 `targetRequestId` 不猜命令名——连接级 `command.not_found`。
 #[tokio::test]
 async fn command_status_for_an_unknown_request_is_a_link_error() {
     let mut fixture = Fixture::new().await;
@@ -2237,10 +2237,10 @@ async fn the_watcher_pushes_the_terminal_once_the_record_is_terminal() {
     assert!(route.pending_of(&fixture.handle).is_empty());
 }
 
-/// [R66]/[R45] 后半：单连接 in-flight 上限（已接受未终结的 mutation 数）生效并给出退避提示。
+/// 后半：单连接 in-flight 上限（已接受未终结的 mutation 数）生效并给出退避提示。
 #[tokio::test]
 async fn the_in_flight_limit_is_enforced_per_connection() {
-    // [R45] 后半：`node_link.max_in_flight_commands` 下调为 8 时，该连接第 9 个并发命令被按上限规则拒绝。
+    // 后半：`node_link.max_in_flight_commands` 下调为 8 时，该连接第 9 个并发命令被按上限规则拒绝。
     let mut fixture = Fixture::build(
         &["grant.observe", "grant.interact", "grant.remote-work"],
         NodeLinkConfig {
@@ -2302,7 +2302,7 @@ async fn the_in_flight_limit_is_enforced_per_connection() {
     );
 }
 
-/// [R71]：单连接 120/分钟；连续超限以 4429 关闭（`retryable = true` + `retryAfterMs`）。
+/// 单连接 120/分钟；连续超限以 4429 关闭（`retryable = true` `retryAfterMs`）。
 #[tokio::test]
 async fn the_command_rate_limit_replies_rate_limited_and_then_closes() {
     // 只有 `grant.observe`：被拒的命令因此在授权交集处失败，成本与真实越权命令同量级。
@@ -2343,7 +2343,7 @@ async fn the_command_rate_limit_replies_rate_limited_and_then_closes() {
     assert!(closed, "持续超限必须关闭连接（4429）");
 }
 
-/// [R78]：节点撤销推送 `node.trust.revoked` 并以 4410 关闭。
+/// 节点撤销推送 `node.trust.revoked` 并以 4410 关闭。
 #[tokio::test]
 async fn node_revocation_notifies_then_closes_with_4410() {
     let mut fixture = Fixture::new().await;
@@ -2415,7 +2415,7 @@ async fn node_reauth_closes_with_1000_and_no_revocation_notification() {
     );
 }
 
-/// [R77]/[R76]：Export 撤销推 `export.revoked`、清内存 attachment，且此后的命令按持久化记录被拒。
+/// Export 撤销推 `export.revoked`、清内存 attachment，且此后的命令按持久化记录被拒。
 #[tokio::test]
 async fn export_revocation_clears_attachments_and_rejects_later_commands() {
     let mut fixture = Fixture::new().await;
@@ -2462,7 +2462,7 @@ async fn export_revocation_clears_attachments_and_rejects_later_commands() {
     assert_eq!(error_code(rejected[0]), "nodelink.export.not_granted");
 }
 
-/// [R66]：`session.list` 只返回 agent 属于该节点可见 Export 的会话（`catalog::visible_exports` 是唯一
+/// `session.list` 只返回 agent 属于该节点可见 Export 的会话（`catalog::visible_exports` 是唯一
 /// 判定点）。
 #[tokio::test]
 async fn session_list_only_returns_sessions_of_visible_exports() {
@@ -2725,7 +2725,7 @@ fn seed_half_recoverable(store: &CommandStore) {
     );
 }
 
-/// [R34]/§12.7：正常恢复先回 `accepted(result = null)`，再回 `completed` 终态且结果带
+/// §12.7：正常恢复先回 `accepted(result = null)`，再回 `completed` 终态且结果带
 /// `remoteSessionRef` 与 `sessionMeta`。
 #[tokio::test]
 async fn session_resume_returns_accepted_then_the_composite_result() {
@@ -2837,7 +2837,7 @@ async fn session_resume_reusing_a_request_id_for_another_session_is_an_idempoten
     );
 }
 
-/// [R33]/§12.7：`payload` 携带任何键时以 `command.rejected`（`nodelink.command.unsupported_field`）
+/// §12.7：`payload` 携带任何键时以 `command.rejected`（`nodelink.command.unsupported_field`）
 /// 拒绝并给出 `details.field`，且不启动 Agent 进程、不改会话状态。
 #[tokio::test]
 async fn session_resume_with_any_payload_field_is_rejected_without_side_effects() {
@@ -2884,7 +2884,7 @@ async fn session_resume_with_any_payload_field_is_rejected_without_side_effects(
     );
 }
 
-/// [R31]：只持 `grant.observe` 的 Access 提交 `session.resume` 时，回
+/// 只持 `grant.observe` 的 Access 提交 `session.resume` 时，回
 /// `command.rejected(nodelink.export.not_granted)`，不启动进程，且响应**不因会话是否存在而不同**。
 ///
 /// 「不读取会话行」与「不产生副作用」是两条独立断言：`recovery_read_calls` 证明前者（`load_recovery`
@@ -2935,7 +2935,7 @@ async fn an_unauthorized_session_resume_is_rejected_before_any_local_read() {
     );
 }
 
-/// [R37]/D3：该会话没有持久化恢复数据（两列 `NULL`，如升级前的旧会话）时以
+/// D3：该会话没有持久化恢复数据（两列 `NULL`，如升级前的旧会话）时以
 /// `nodelink.command.unsupported` **终态失败**，不启动进程、不降级为新建会话。
 #[tokio::test]
 async fn session_resume_without_persisted_recovery_data_fails_as_unsupported() {
@@ -2973,7 +2973,7 @@ async fn session_resume_without_persisted_recovery_data_fails_as_unsupported() {
     );
 }
 
-/// [R25]/§12.7：持久化的创建时目录在恢复前被删除时，恢复在调用后端**之前**失败并返回服务端不可用
+/// §12.7：持久化的创建时目录在恢复前被删除时，恢复在调用后端**之前**失败并返回服务端不可用
 /// 类错误，不启动 Agent 进程。
 #[tokio::test]
 async fn session_resume_with_a_deleted_workspace_fails_as_unavailable() {
@@ -3007,7 +3007,7 @@ async fn session_resume_with_a_deleted_workspace_fails_as_unavailable() {
     );
 }
 
-/// [R67]/§12.5：同 `requestId` 重试 `session.resume` 返回首次结果，副作用只发生一次。
+/// §12.5：同 `requestId` 重试 `session.resume` 返回首次结果，副作用只发生一次。
 #[tokio::test]
 async fn a_repeated_session_resume_replays_the_first_result() {
     let mut fixture = Fixture::new().await;
@@ -3041,7 +3041,7 @@ async fn a_repeated_session_resume_replays_the_first_result() {
     );
 }
 
-/// [R67]/§12.5：同一 `requestId` 配不同语义（本例换成 `session.create`）时回
+/// §12.5：同一 `requestId` 配不同语义（本例换成 `session.create`）时回
 /// `nodelink.command.idempotency_conflict`，不执行第二次副作用。
 #[tokio::test]
 async fn the_same_request_id_with_a_different_command_conflicts() {
@@ -3094,7 +3094,7 @@ async fn the_same_request_id_with_a_different_command_conflicts() {
     assert!(after_resume > before);
 }
 
-/// [R27]/§12.5：`session.resume` 必须携带当前 attachment；过期时回 `attach_generation_stale`，
+/// §12.5：`session.resume` 必须携带当前 attachment；过期时回 `attach_generation_stale`，
 /// 且不启动进程。
 #[tokio::test]
 async fn session_resume_with_a_stale_attachment_is_rejected() {

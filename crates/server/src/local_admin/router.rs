@@ -1876,7 +1876,7 @@ mod tests {
         assert_eq!(code, LocalErrorCode::InvalidParams);
     }
 
-    /// [R76]：`export.revoke` 在**持久化提交成功之后**经 `ConnectionCloser` 通知 Node Link；
+    /// `export.revoke` 在**持久化提交成功之后**经 `ConnectionCloser` 通知 Node Link；
     /// 重试（`local.not_found`）不得重复通知，也不回滚已提交的撤销。
     #[tokio::test]
     async fn export_revoke_notifies_the_connection_closer_after_the_persisted_commit() {
@@ -1906,7 +1906,7 @@ mod tests {
             vec!["export-1".to_owned()],
             "提交成功后必须通知（推送/关闭失败只记日志，不回滚撤销）"
         );
-        // [R76]/RV1-WP6-F10：通知**当时**回读存储，该行已经是撤销态——「提交后才通知」是持久事实，
+        // RV1-WP6-F10：通知**当时**回读存储，该行已经是撤销态——「提交后才通知」是持久事实，
         // 不只是调用顺序看起来对。
         assert_eq!(
             world.closer.exports_revoked_when_notified(),
@@ -2223,7 +2223,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------------------------
-    // 设备/节点配对与信任（§5.3/§5.4、[R42]–[R48]）
+    // 设备/节点配对与信任（§5.3/§5.4）
     // -----------------------------------------------------------------------------------------
 
     use acp_core::model::{
