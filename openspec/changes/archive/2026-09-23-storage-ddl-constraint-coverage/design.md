@@ -1,5 +1,5 @@
 <!-- 承接 proposal 的动机、范围与影响，说明如何实现以及技术决策的理由。
-     本变更 skip_specs，既有行为契约引用 docs/CORE_PORTS_AND_STORAGE.md §7.2/§7.3/§7.4。 -->
+ 本变更 skip_specs，既有行为契约引用 docs/CORE_PORTS_AND_STORAGE.md §7.2/§7.3/§7.4。 -->
 
 ## Context
 

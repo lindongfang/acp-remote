@@ -1,4 +1,5 @@
-<!-- 说明实现方案与决策理由；行为以 specs 为准，协作安排写 plan.md。 -->
+<!-- 说明实现方案与决策理由；行为以 specs 为准，
+-->
 
 ## Context
 
@@ -97,7 +98,7 @@ core 侧**不新增用例**：`UseCases::create_session`（`use_cases.rs:243`）
 ### D6 v6 迁移与合同漂移门禁
 
 ```
-ALTER TABLE owned_session ADD COLUMN workspace_alias TEXT;   -- 可空、无默认值、只追加
+ALTER TABLE owned_session ADD COLUMN workspace_alias TEXT; -- 可空、无默认值、只追加
 ```
 
 - 版本常量：`FILE_FORMAT_VERSION`、`OWNED_SCHEMA_VERSION` 5 → 6（`migrate.rs:19`/`:21`），新增 `V6_UPGRADE_OWNED` 段并挂到连续升级链；imported 家族保持 3。

@@ -49,9 +49,9 @@ Export 对该 Access 节点可见 ⟺ **三个条件同时成立**：
 - `core::model` 的 `PairingSettlement::Approved` 增加 `granted_export_ids: Vec<ExportId>`（已去重、字典序排序）。
 - 校验放在**存储层的 `settle_pairing` 事务内**，与既有 `granted_grants ⊆ requested_grants` 同址（`crates/storage-sqlite/src/admin/trust.rs`）。理由：先读后写若分两次调用就不原子，会出现「校验通过后该 Export 刚好被撤销、写进一条永不生效的清单」。
 - 规则：
-  - 每个 id 必须能在 `owned_export` 里查到且未撤销 → 否则 `NotFound(EntityRef::Export)`，适配层映射 `local.not_found`；
-  - 每个 id 的 `scopes` 与本次 `granted_grants` 必须有交集 → 否则 `InvalidRequest`，适配层映射 `local.invalid_params`；
-  - 空集合合法（= 该节点看不到任何 Export），此时不查任何 Export。
+ - 每个 id 必须能在 `owned_export` 里查到且未撤销 → 否则 `NotFound(EntityRef::Export)`，适配层映射 `local.not_found`；
+ - 每个 id 的 `scopes` 与本次 `granted_grants` 必须有交集 → 否则 `InvalidRequest`，适配层映射 `local.invalid_params`；
+ - 空集合合法（= 该节点看不到任何 Export），此时不查任何 Export。
 - 失败即整事务回滚：不创建信任行、不推进配对状态、不写审计（与 `settle_pairing` 既有语义一致）。
 
 ## D5 形状与 wire：只在本机管理面暴露，Node Link 不加字段
@@ -85,9 +85,9 @@ Export 对该 Access 节点可见 ⟺ **三个条件同时成立**：
 - `server`：`visible_exports` 的三个条件组合（含空清单 = 空结果、清单内但已撤销 = 不可见）；`resource.attach` 与 catalog 结论一致（复用同一实现，加一条回归断言）。
 - `app`：CLI 参数映射（零个/多个 `--export-id`）与空清单警告；`node list` 输出含清单。
 - 端到端（受控路径，[PV5] 口径）：Owner 端配两个 Export，确认时只给一个 → Access 侧 catalog 只见其一、`attach` 被拒的 Export 返回 `nodelink.export.not_granted`；`import.add` 在本切片**恒**返回 `local.unavailable`（Access 侧客户端未落地 → 本机没有任何 catalog 快照，`server::local_admin::router` 的 `import_add` 不校验参数就直接返回可重试的 `local.unavailable`），因此受控路径**不**断言 `import.add` 的 `local.not_found`（那是 §5.5 里「有快照但无该 id」分支的语义，本切片不可达）。
-  - 勘误（2026-09-27，实现期复核，两处）：
-    - 「`attach` 被拒的 Export 返回 `export.not_found`」有误——`resource.attach` 的既有判定是：① `ownerNodeId` 不是本机、或 id 不可解析 → `nodelink.export.not_found`（与「会话不存在」同码，不泄露差别）；② 解析得出 id 但**可见性复核失败**（已撤销、`scopes ∩ grants` 不相交、**不在 `exportIds` 清单内**）→ `nodelink.export.not_granted`（`crates/server/src/node_link/resource.rs`）。两个码都在 `compatibility/errors/v1/errors.json` 的词表内，因此本次**不改 wire 错误码**；specs 未规定 `attach` 的错误码，**无验收场景受影响**。
-    - 「`import.add` 该 export 得到 `local.not_found`」在本切片不成立（见上）；§5.5 的 `local.not_found` 分支留给 Access 侧客户端落地后的切片验证。
+ - 勘误（2026-09-27，实现期复核，两处）：
+ - 「`attach` 被拒的 Export 返回 `export.not_found`」有误——`resource.attach` 的既有判定是：① `ownerNodeId` 不是本机、或 id 不可解析 → `nodelink.export.not_found`（与「会话不存在」同码，不泄露差别）；② 解析得出 id 但**可见性复核失败**（已撤销、`scopes ∩ grants` 不相交、**不在 `exportIds` 清单内**）→ `nodelink.export.not_granted`（`crates/server/src/node_link/resource.rs`）。两个码都在 `compatibility/errors/v1/errors.json` 的词表内，因此本次**不改 wire 错误码**；specs 未规定 `attach` 的错误码，**无验收场景受影响**。
+ - 「`import.add` 该 export 得到 `local.not_found`」在本切片不成立（见上）；§5.5 的 `local.not_found` 分支留给 Access 侧客户端落地后的切片验证。
 
 ## D10 影响面（与 proposal 的 Impact 一致）
 

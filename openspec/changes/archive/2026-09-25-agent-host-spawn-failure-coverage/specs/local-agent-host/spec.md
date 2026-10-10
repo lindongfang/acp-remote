@@ -1,6 +1,7 @@
 # Delta: local-agent-host
 
-<!-- 按 proposal 的能力清单写增量行为与场景；技术方案和执行安排分别见 design.md、plan.md。 -->
+<!-- 按 proposal 的能力清单写增量行为与场景；技术方案见 design.md。
+-->
 
 ## MODIFIED Requirements
 

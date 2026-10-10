@@ -14,43 +14,6 @@
 - **词汇与合同同步**：`compatibility/commands/v1/commands.json`、`compatibility/features/v1/features.json`、`schemas/sync/v1/**`、`fixtures/sync/v1/**`，以及 `docs/SYNC_PROTOCOL.md`、`docs/SECURITY_DESIGN.md`、`docs/FRONTEND_DESIGN.md`、`docs/CORE_PORTS_AND_STORAGE.md` 的相应章节。
 - **本次不包含**：`server::sync` 与 `/ui` 托管的实现、前端工程、`node-link-client` 与 `server::acp_facade`、把规范化路径下发（原型详情页显示真实路径的方案）、`sessions.queue_policy` 的口径决定（原型对「进行中拒绝发送」与 `queued` 状态自相矛盾）。
 
-## Intent and Constraints
-
-```agentic-intent
-sources:
-  - "用户 2026-10-02 本会话原话：「以原型为准，原来明确不做的，现在都要按照原型来补充」——确立原型为 PWA v1 的范围基准"
-  - "用户 2026-10-02 本会话原话：「那就B」——目录标识口径选 B：wire 上只投影 { alias, displayName }，不投影规范化路径（方案 A/C 均被否决）"
-  - "用户 2026-10-02 本会话原话：「那就设备级」——session.create 对设备按设备级 scope 生效"
-  - "原型文件：prototypes/acp-remote-pwa.html（桌面端）与 prototypes/acp-remote-pwa-mobile.html（移动端）；目录数据 DIRS/EXTRA_DIRS（`:731`）、创建弹层（`:1909`）、目录页与详情页（`:1335`、`:1422`）、scopes 列表含 session.create 默认 off（`:723`）"
-  - "既有权威约束：docs/FRONTEND_DESIGN.md §9（第 1 条验收标准）、docs/SECURITY_DESIGN.md §9/§12.3、docs/SYNC_PROTOCOL.md §11.3/§16.2、docs/CORE_PORTS_AND_STORAGE.md §3.6（workspace_cwd 不得进入可投影形状）"
-constraints:
-  - "目录在 wire 上只以 { alias, displayName } 表示；规范化路径 MUST 继续不出现在 catalog、事件、错误 details、快照、审计前像与任何对端可见输出中"
-  - "session.create 的设备级授权语义 MUST 被显式记录，包括「此后新登记的 workspace 与新建的 Agent profile 自动进入该设备可启动范围」这一副作用"
-  - "会话创建 MUST 使用本机已登记的 workspace 别名与已配置的 Agent profile；不接受客户端提交的绝对路径、目录追加或 Provider/MCP 凭据"
-  - "本次为合同与规范变更，MUST NOT 在本次实现 server::sync、/ui 或任何前端代码"
-  - "协议合同变更必须同步 schemas/、fixtures/、compatibility/ 与权威文档，并让 npm run check 全绿"
-  - "新增能力不得削弱既有不变量：先持久化后广播、每会话单 active turn、稳定 requestId 幂等、崩溃窗口进 uncertain"
-non_goals:
-  - "不实现 server::sync 入站适配层、/ui 静态托管与前端工程（后续独立变更）"
-  - "不实现 node-link-client 与 server::acp_facade（切片 6，非 PWA 硬前置）"
-  - "不把规范化路径或其派生片段下发给设备（否决方案 A 与 C）"
-  - "不裁决 sessions.queue_policy（原型'进行中拒绝发送'与 queued 状态自相矛盾，记为 design 的 Open Question）"
-  - "不为移动端原型缺失的门控（canCreate、revoked/incompatible/replaced 阻断态）单独定义语义，一律以桌面端为准"
-success_criteria:
-  - "命令目录、feature 登记、两份协议 schema 与 SYNC §11.5 / SECURITY §10.2 表格逐项一致，npm run check 全绿"
-  - "SessionSummary 携带 workspace 引用，且任何对端可见输出都不含规范化路径（由规格场景与固定向量断言）"
-  - "设备 scope 词表包含 session.create，且新 pack 在展开表（commands.json ↔ identity-auth 镜像）中一致"
-  - "旧库（v1–v5）可升级到 v6，升级后既有会话行的 workspace_alias 为 NULL 且被解释为'未分组'，连续两次打开 DDL 逐字节相同"
-decision_bounds:
-  - "可自主决定：字段与类型命名、feature 的粒度与命名、快照资源的组织方式、pack 命名、payload 校验顺序、spec 场景与用例命名"
-  - "需用户决策：改动安全模型或信任边界、改变设备级授权的语义、新增或重命名超出本次登记的封闭词表条目、扩展范围到 server::sync/前端实现"
-assumptions:
-  - "原型在离线态仍渲染目录页与'离线 · 2 分钟前同步'，因此目录数据必须离线可用 → 以快照资源承载，而不是仅提供在线查询命令"
-  - "preset.remote-control 不纳入 session.create（原型把该 scope 默认设为关闭、由用户在配对时单独勾选）"
-  - "displayName 是同名目录的唯一消歧依据（原型仅在重名时才显示额外路径信息，B 口径下该信息由用户命名承担）"
-  - "桌面端原型语义优先于移动端（移动端缺 canCreate 门控与三个阻断态）"
-```
-
 ## Capabilities
 
 ### New Capabilities

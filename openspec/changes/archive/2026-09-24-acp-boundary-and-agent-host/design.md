@@ -97,10 +97,10 @@
 
 - 内部 trait `ProcessTree` 抽象「结束整棵树」：`platform.rs` 内 `#[cfg(windows)]` 的分支用 Job Object、`#[cfg(unix)]` 的分支用进程组（概念上即 `platform::windows` / `platform::unix`，实现为同一文件内的 cfg 模块）。**平台分支 `cfg` 只落在这个文件**：crate 其余部分不出现平台分支 `cfg`（`launch.rs` 只有 1 处 `#[cfg(test)]`）。
 - **Windows**：`win32job` 2.x（`Job::create` → `limit_kill_on_job_close()` → `set_extended_limit_info()`；结束手段是关闭/丢弃该 Job 的句柄（wrapper 未封装 `TerminateJobObject`，直接 FFI 被 `unsafe_code = "forbid"` 禁止））。**每个 Agent 一个 Job**，句柄由 Daemon 侧的 supervisor 持有。
-  - 为什么不是单一全局 Job：单 Job 下无法只结束某一棵 Agent 树（结束整个 Job 会波及全部 Agent），而本 crate 必须支持按 Agent 结束（空闲回收、单个 Agent 崩溃/超时）。`KILL_ON_JOB_CLOSE` 的关键性质（Daemon 崩溃或句柄关闭即停止整棵树）在每 Agent 一个 Job 下同样成立，因为句柄全由 Daemon 进程持有。该解释随本变更写入 `MODULE_ARCHITECTURE.md` §4.5；`KILL_ON_JOB_CLOSE`、Daemon 持有、父→孙清理三条约束不变。
-  - 赋值时机：Job 先创建并设置 `KILL_ON_JOB_CLOSE`，再 spawn（`tokio::process::Command`，Windows 上 `Child::raw_handle()` 取句柄），spawn 成功后**在写入任何 stdin 之前**立即 assign。探针同样是「先 spawn 后 assign」，残余窗口见风险 2。
-  - 被否的备选：`process-wrap` 10（MSRV 1.87 > 仓库 1.85，需用户决定是否抬 MSRV）；`command-group`（MSRV 1.68 但已弃用，且不提供 Job Object）；直接 FFI `kernel32`（被 workspace `unsafe_code = "forbid"` 禁止）。
-  - 退路：实现第一步核验 `win32job` 的传递依赖 MSRV、许可证与维护状态；若不合格或传导抬高 MSRV → **回到用户决策**（抬 MSRV，或新增 ADR + 为该 crate 覆盖 lint），不擅自放开 `unsafe`。
+ - 为什么不是单一全局 Job：单 Job 下无法只结束某一棵 Agent 树（结束整个 Job 会波及全部 Agent），而本 crate 必须支持按 Agent 结束（空闲回收、单个 Agent 崩溃/超时）。`KILL_ON_JOB_CLOSE` 的关键性质（Daemon 崩溃或句柄关闭即停止整棵树）在每 Agent 一个 Job 下同样成立，因为句柄全由 Daemon 进程持有。该解释随本变更写入 `MODULE_ARCHITECTURE.md` §4.5；`KILL_ON_JOB_CLOSE`、Daemon 持有、父→孙清理三条约束不变。
+ - 赋值时机：Job 先创建并设置 `KILL_ON_JOB_CLOSE`，再 spawn（`tokio::process::Command`，Windows 上 `Child::raw_handle()` 取句柄），spawn 成功后**在写入任何 stdin 之前**立即 assign。探针同样是「先 spawn 后 assign」，残余窗口见风险 2。
+ - 被否的备选：`process-wrap` 10（MSRV 1.87 > 仓库 1.85，需用户决定是否抬 MSRV）；`command-group`（MSRV 1.68 但已弃用，且不提供 Job Object）；直接 FFI `kernel32`（被 workspace `unsafe_code = "forbid"` 禁止）。
+ - 退路：实现第一步核验 `win32job` 的传递依赖 MSRV、许可证与维护状态；若不合格或传导抬高 MSRV → **回到用户决策**（抬 MSRV，或新增 ADR + 为该 crate 覆盖 lint），不擅自放开 `unsafe`。
 - **Unix**：spawn 前 `CommandExt::process_group(0)` 使子进程成为新进程组组长；结束用 `nix::sys::signal::killpg(pid, SIGKILL)`，随后 `wait` 回收。CI 在 Linux 上执行这条路径。
 
 ### D7 固定 v1 常量与有界处理

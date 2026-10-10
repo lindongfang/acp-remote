@@ -1,5 +1,5 @@
 <!-- 本文件定义变更动机、范围、能力与影响；行为细节放入 specs，技术方案放入 design.md，
-     协作安排放入 plan.md。本变更不改变 wire schema 与 DDL，只收口管理存储的状态完整性。 -->
+ 协作安排见 tasks.md。本变更不改变 wire schema 与 DDL，只收口管理存储的状态完整性。 -->
 
 ## Why
 
@@ -20,45 +20,6 @@
 - **活动时间单调不减**：`upsert_device`/`upsert_node` 的该两列改为显式 `CASE`：旧值为空写入新值、新值为空保留旧值、两者非空取较大者；不返回错误，也不因该列丢弃同一次写入的其他字段。
 - **合同同步**：`docs/CORE_PORTS_AND_STORAGE.md` 的 §5.2/§5.3 约束、§7.4 的 `[决定]`、§9 验收判据与 §11.2 第 5 条补上上述规则；**不改** §5/§7 的 fenced 代码块（端口签名与 DDL 文本不变，漂移门禁继续逐条成立）。
 - 不包含：新增 Import 实例标识或连接代际字段、新增 `ConflictKind`/错误码取值、改 DDL/迁移、改 wire schema 与 `compatibility/` 词表、任何前端或协议行为。
-
-## Intent and Constraints
-
-```agentic-intent
-sources:
-  - "用户原始缺陷清单（2026-09-23 本会话，原话）：『当前实现有以下问题，修复』，随后列出四条——『Import 删除后可被迟到回调部分重建。 upsert_session 不检查 Import 是否仍存在；删除后仍可重新写入 imported 会话，进而写入交付收据。』『Export 撤销可被更新操作清除。 put_export 会用传入的 revoked_at = None 覆盖已撤销记录，使 Export 重新可用。』『损坏的身份材料未失败关闭。 load_peer_key 读取公钥时不核对已存指纹；两者不一致仍返回公钥。』『最近活动时间可倒退。 设备与节点 upsert 接受比已存值更早的 last_seen_at 或 last_connected_at。』"
-  - "用户复核意见（2026-09-23 本会话，逐字要点）：「Import：…无归属返回 NotFound(Export)，这与 §11.2 一致。不过，若同一 Owner/Export 随后被重新导入，旧回调也会通过这项检查。要区分新旧连接，还需要导入实例或连接代际标识；仅靠这对 ID 无法做到。」"
-  - "用户复核意见（2026-09-23 本会话）：「Export：所述失败规则自洽。应先拒绝传入 revoked_at = Some，再对『库中已撤销、传入未撤销』的情况返回 Conflict(AlreadyExists)。目前对外管理方法只有 export.create 和 export.revoke，所以清除撤销标记主要是现有 put_export 端口的漏洞，尚非已暴露的 export.update 操作。」"
-  - "用户复核意见（2026-09-23 本会话）：「身份材料：核对同行指纹的方向正确，但 load_existing_device_key 不足以覆盖普通读取。它只是写设备时的兜底路径；device() 读取记录时并不经过它。若目标是『损坏的设备记录一经读取就失败关闭』，还需在设备记录读取路径校验其 public_key 与 fingerprint。owned_peer_key 和 owned_pairing_peer 的同行校验按你写的方式即可。」"
-  - "用户复核意见（2026-09-23 本会话）：「活动时间：目标正确，给出的 MAX 表达式有空值错误。SQLite 的标量 MAX(新时间, NULL) 返回 NULL；旧值为空时，你的表达式会丢掉首次写入的新时间。我用内存 SQLite 验证了这一点。应使用显式 CASE 处理任一侧为空，再对两个非空值取 MAX；固定宽度 UTC 时间文本可按字典序比较。」"
-  - "用户决策（2026-09-23 本会话）：本变更 Main E2E 记 not-applicable；回复原话：「A同意，B a」与「A同意，B  b」。"
-  - "用户决策（2026-09-23 本会话）：授权边界选 (b)——授权本地合入 refs/heads/main；不含推送、创建 PR、发布与归档。用户先后回复「B a」与「B  b」，按后一条（更晚的更正）记录为 (b)。"
-constraints:
-  - "先读 AGENTS.md §1/§3/§4/§6/§7/§9/§10/§12 与 docs/CORE_PORTS_AND_STORAGE.md 相关章节；不改与本次四条缺陷无关的代码。"
-  - "四条修复都必须在既有写事务内完成守卫，不得新增「两次 await 共用一个连接池」式的伪原子操作，也不得先提交状态再补审计。"
-  - "失败关闭优先：非法状态与损坏材料返回具名错误，不得静默保留或静默修复（不新增 ConflictKind/错误码取值，复用 NotFound/Conflict(AlreadyExists)/InvalidRequest/Corrupt）。"
-  - "不改 DDL、端口签名、值对象形状、wire schema、schemas/fixtures/compatibility 封闭词表；§5/§7 的 fenced 代码块必须保持不变，check:contract-drift 逐条成立。"
-  - "文档正文简体中文，保留英文结构标题、规范关键词与标识符；权威文档同步按 AGENTS.md §10 的映射执行。"
-  - "本地入口 npm run verify（npm run check + cargo fmt/clippy/test）；cargo-deny 与 gitleaks 只在 CI 运行，本地不得声称通过。"
-  - "不做推送、不开 PR、不发布、不归档；合入仅限本地 refs/heads/main（用户 (b) 授权）。"
-non_goals:
-  - "不新增 Import 实例标识、import generation 或连接代际字段，也不新增 DDL/迁移：同一 (ownerNodeId, exportId) 被重新导入后，仅凭这对 ID 无法区分新旧连接的迟到回调；该残留缺口按用户复核意见记为已知限制并留待后续变更（属需用户决策项）。"
-  - "不新增 export.update 一类对外管理方法，也不改 LOCAL_ADMIN_PROTOCOL 的方法集与错误映射。"
-  - "不改 id 生成、审计取值、保留策略、容量门与 prune 逻辑。"
-  - "不重构 admin store 与 imported 家族的既有实现结构，不顺手调整无关注释或测试。"
-success_criteria:
-  - "Import 完整移除后，携带该 (ownerNodeId, exportId) 的 upsert_session 与 commit_receipt 都返回 NotFound(Export(exportId))，imported_session/imported_delivery_index/imported_command_ref 保持为空且不产生新 local_sequence。"
-  - "已撤销 Export 上：传入未撤销记录得到 Conflict(AlreadyExists) 且库内首次 revoked_at 不变；传入 revoked_at 非空记录得到 InvalidRequest 且零写入。"
-  - "owned_peer_key / owned_pairing_peer / owned_device 任一行指纹与公钥不一致时，相应读取路径返回损坏类错误且不返回材料；一致时读取照常。"
-  - "设备与节点的活动时间：旧值为空时首次写入落库（不被 NULL 吞掉）、更早时间戳不使已存值倒退、空值不抹掉已存值，且调用成功。"
-  - "docs/CORE_PORTS_AND_STORAGE.md 已同步上述规则；npm run check（含 check:contract-drift）与 cargo fmt/clippy/test 全绿。"
-decision_bounds:
-  - "可自主：CASE 表达式的具体写法、错误消息文本、回归用例的组织与命名、文档段落落点、注释措辞修正。"
-  - "需用户决策：新增 DDL/迁移或字段（含 Import 实例/代际标识）、端口签名变化、新增 ConflictKind/UnavailableKind/错误码取值、E2E 模式变化、除本地合入以外的仓库动作（推送/PR/发布/归档）。"
-assumptions:
-  - "四条缺陷的现状描述经只读核对成立（HEAD 1ef6640；四条路径与行号见 design.md 的 Context），既有 DDL 与既有测试为基线事实。"
-  - "设备记录读取路径失败关闭会连带让 devices() 列表读取失败；这是有意的失败关闭语义，不提供自动修复。"
-  - "重导入后旧回调仍可通过归属检查是本变更不覆盖的残留缺口，按 non_goals 记录并在 design 的风险中说明后续闭合方向。"
-```
 
 ## Capabilities
 

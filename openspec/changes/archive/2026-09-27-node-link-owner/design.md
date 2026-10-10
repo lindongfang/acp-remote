@@ -29,24 +29,24 @@
 
 ### D1 HTTP/WS/TLS 栈选型：axum + tokio-rustls（核验后登记）
 
-候选栈：**axum 0.8**（HTTP 路由 + `axum::extract::ws` 的 WebSocket，底层 tokio-tungstenite）+ **tokio-rustls / rustls 0.23**（`direct` 模式）+ PEM 解析（原列 `rustls-pemfile 2`；WP1 核验发现其上游已归档，**实际改用 `rustls-pki-types` 的 `pem` 模块**——它本就是 rustls 的传递依赖，不新增供应商；核验证据 `reports/wp1-deps.log`）。理由：
+候选栈：**axum 0.8**（HTTP 路由 + `axum::extract::ws` 的 WebSocket，底层 tokio-tungstenite）+ **tokio-rustls / rustls 0.23**（`direct` 模式）+ PEM 解析（原列 `rustls-pemfile 2`；WP1 核验发现其上游已归档，**实际改用 `rustls-pki-types` 的 `pem` 模块**——它本就是 rustls 的传递依赖，不新增供应商
 
 - axum 是 Tokio 生态维护最活跃的 HTTP 栈之一，WS 支持成熟；workspace 已有 Tokio 事实标准，不引入第二个运行时。
 - rustls 是纯 Rust TLS，满足 `unsafe_code = "forbid"` 与「使用经过审查的实现」的要求；无原生依赖，Windows/Linux CI 行为一致。
 - axum 的 WebSocket 默认不启用 `permessage-deflate`（需显式 feature），天然满足 §2.1「协商到压缩必须拒绝」；subprotocol 白名单在 upgrade 时显式校验。
 
-**核验任务（实现第一批次执行并留证）**：按 `SECURITY_DESIGN.md` §20 四判据核验 axum/tokio-tungstenite/rustls/tokio-rustls/rustls-pki-types 的语义适配、许可证（须落在 `deny.toml` allow 内）、MSRV ≤ 1.85 与维护状态；结论与证据写入 `reports/wp1-deps.log`。（WP1 已执行：provider 定为 rustls 自带 `ring`，落选 `aws-lc-rs` 与 `rustls-rustcrypto`，理由见 Check Plan Changes 与 `reports/wp1-deps.log`。）**核验失败时不擅自换约束**：回到用户决策（换栈或本切片只接线 `proxy`）。替代候选（如 `axum-server` 托管 TLS）在核验记录中一并给出取舍。
+**核验任务（实现第一批次执行并留证）**：按 `SECURITY_DESIGN.md` §20 四判据核验 axum/tokio-tungstenite/rustls/tokio-rustls/rustls-pki-types 的语义适配、许可证（须落在 `deny.toml` allow 内）、MSRV ≤ 1.85 与维护状态
 
 ### D2 模块划分：transport::net 承载连接级规则，node_link 承载协议语义
 
 ```text
-server::transport::net      listener 绑定、TLS 终止（proxy/direct）、Host/代理头边界、
-                            path 路由、请求体上限、WS upgrade 规则（subprotocol/拒绝压缩）
-server::node_link::pairing  claim/status HTTP 处理器（调用 identity-auth 配对状态机 + core 用例）
-server::node_link::conn     连接生命周期：握手状态机驱动、信封/序号校验、心跳/超时、发送队列
-server::node_link::catalog  catalog.subscribe/snapshot 投影
+server::transport::net listener 绑定、TLS 终止（proxy/direct）、Host/代理头边界、
+ path 路由、请求体上限、WS upgrade 规则（subprotocol/拒绝压缩）
+server::node_link::pairing claim/status HTTP 处理器（调用 identity-auth 配对状态机 + core 用例）
+server::node_link::conn 连接生命周期：握手状态机驱动、信封/序号校验、心跳/超时、发送队列
+server::node_link::catalog catalog.subscribe/snapshot 投影
 server::node_link::resource attach/generation 注册表、snapshot、event 扇出、ack
-server::node_link::command  command 管线（授权、幂等、派发、终态映射、限流）
+server::node_link::command command 管线（授权、幂等、派发、终态映射、限流）
 ```
 
 - `transport::net` 不含任何 Node Link 业务语义（与 `transport::local` 同层级：连接与字节/帧规则）；`node_link` 各模块只经 `core::use_cases` 与 `identity-auth` 入口工作，不查询 SQLite、不调用其他 adapter。

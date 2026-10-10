@@ -20,13 +20,13 @@
 ### 1. crate 与模块划分
 
 - `server`：
-  - `server::transport::local`：endpoint 创建（Named Pipe / Unix socket）、SDDL/权限设置、对端凭据校验、frame 读写与连接级规则（首帧定 channel、混用/空帧/超长关闭、未完成请求上限 32、`0x02` 方向背压上限 1 MiB 的接线点）。不放任何业务语义。
-  - `server::local_admin`：管理信封值对象与编解码（closed object、`v=1`、camelCase、错误只含 `code`/`message`）、方法分发表、参数校验与 `core::use_cases` 调用、`local.*` 错误码映射。信封/方法词表以 `include_str!` 内嵌 `schemas/local-admin/v1/envelope.schema.json` 做漂移断言测试，fixture 目录的 valid/invalid 信封做往返测试。
-  - 组合根数据需求（`daemon.status` 字段、`daemon.stop` 触发）以 `server::local_admin` 定义、由 `app` 实现的窄 trait（如 `DaemonControl`）注入：`server` 不反向依赖 `app`，`daemon.status`/`daemon.stop` 因此「由组合根回答」而不经用例层。
+ - `server::transport::local`：endpoint 创建（Named Pipe / Unix socket）、SDDL/权限设置、对端凭据校验、frame 读写与连接级规则（首帧定 channel、混用/空帧/超长关闭、未完成请求上限 32、`0x02` 方向背压上限 1 MiB 的接线点）。不放任何业务语义。
+ - `server::local_admin`：管理信封值对象与编解码（closed object、`v=1`、camelCase、错误只含 `code`/`message`）、方法分发表、参数校验与 `core::use_cases` 调用、`local.*` 错误码映射。信封/方法词表以 `include_str!` 内嵌 `schemas/local-admin/v1/envelope.schema.json` 做漂移断言测试，fixture 目录的 valid/invalid 信封做往返测试。
+ - 组合根数据需求（`daemon.status` 字段、`daemon.stop` 触发）以 `server::local_admin` 定义、由 `app` 实现的窄 trait（如 `DaemonControl`）注入：`server` 不反向依赖 `app`，`daemon.status`/`daemon.stop` 因此「由组合根回答」而不经用例层。
 - `app`：
-  - `app::daemon`：启动序列（加载配置 → 初始化存储与迁移 → 种子导入 → keystore/身份材料 → 单实例锁 → endpoint → 周期任务）、关闭序列（停接入 → 取消任务 → 停 Agent → 刷存储/checkpoint → 清锁）。
-  - `app::cli`：clap 参数解析（kebab-case flags → camelCase params 的唯一映射点）、本地通道客户端、配对仪式编排、输出渲染与退出码。
-  - `app::compose`：组合根——构造 `Arc<dyn …>` 端口实现（storage-sqlite、identity-keystore、entropy、clock、id generator）并注入 server 与 daemon。
+ - `app::daemon`：启动序列（加载配置 → 初始化存储与迁移 → 种子导入 → keystore/身份材料 → 单实例锁 → endpoint → 周期任务）、关闭序列（停接入 → 取消任务 → 停 Agent → 刷存储/checkpoint → 清锁）。
+ - `app::cli`：clap 参数解析（kebab-case flags → camelCase params 的唯一映射点）、本地通道客户端、配对仪式编排、输出渲染与退出码。
+ - `app::compose`：组合根——构造 `Arc<dyn …>` 端口实现（storage-sqlite、identity-keystore、entropy、clock、id generator）并注入 server 与 daemon。
 - 信封值对象的唯一归属是 `server::local_admin`；`app::cli` 经对 `server` 的依赖复用同一类型，不产生第二份 wire DTO。
 
 ### 2. 异步与运行时
@@ -43,7 +43,7 @@
 
 ### 4. 单实例锁与 instanceId
 
-**两个文件**（WP4a 实测后的修正，见 `verification.md` 的 WP4a 裁定）：`<dataDir>/daemon.lock` 只承载互斥（OS advisory 文件锁，`fs4::FileExt::try_lock`，纯 safe API；必须全限定调用，`std::fs::File::try_lock` 同名且会抬高 MSRV）；`<dataDir>/daemon.instance.json` 承载**可读记录**（`instanceId` 16 字符小写 hex（`getrandom` 64 bit）、pid、endpoint 路径与 `publicOrigin`）。拆成两个文件是平台强制：Windows 上字节范围锁会让**读取**同一文件的进程收到 `ERROR_LOCK_VIOLATION`（WP4a 实测），单文件方案下 CLI 无法读回记录。不变量：记录文件在**取锁成功之后**以「临时文件 + 原子改名」写入，正常关闭时删除；「有记录、锁可获取」= 陈旧记录，判定为未运行。锁获取失败 → 明确错误退出，绝不强杀、不启动第二个实例。CLI 判定「Daemon 是否运行」只读实例记录 + 尝试加锁，不打开数据库。Unix 旧 socket 文件在持锁后确认无活跃 listener 才允许删除重建，否则拒绝启动（§7 endpoint 失败关闭清单）。
+**两个文件**（WP4a 实测后的修正，：`<dataDir>/daemon.lock` 只承载互斥（OS advisory 文件锁，`fs4::FileExt::try_lock`，纯 safe API；必须全限定调用，`std::fs::File::try_lock` 同名且会抬高 MSRV）；`<dataDir>/daemon.instance.json` 承载**可读记录**（`instanceId` 16 字符小写 hex（`getrandom` 64 bit）、pid、endpoint 路径与 `publicOrigin`）。拆成两个文件是平台强制：Windows 上字节范围锁会让**读取**同一文件的进程收到 `ERROR_LOCK_VIOLATION`（WP4a 实测），单文件方案下 CLI 无法读回记录。不变量：记录文件在**取锁成功之后**以「临时文件 + 原子改名」写入，正常关闭时删除；「有记录、锁可获取」= 陈旧记录，判定为未运行。锁获取失败 → 明确错误退出，绝不强杀、不启动第二个实例。CLI 判定「Daemon 是否运行」只读实例记录 + 尝试加锁，不打开数据库。Unix 旧 socket 文件在持锁后确认无活跃 listener 才允许删除重建，否则拒绝启动（§7 endpoint 失败关闭清单）。
 
 ### 5. `0x02` 在 facade 缺席期的失败方式
 

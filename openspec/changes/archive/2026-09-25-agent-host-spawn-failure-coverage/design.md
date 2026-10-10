@@ -1,6 +1,7 @@
 # Design: agent-host-spawn-failure-coverage
 
-<!-- 说明实现方案与决策理由；行为以 specs 为准，协作安排写 plan.md。 -->
+<!-- 说明实现方案与决策理由；行为以 specs 为准，
+-->
 
 ## Context
 

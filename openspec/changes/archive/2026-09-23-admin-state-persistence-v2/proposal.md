@@ -17,42 +17,6 @@
 - 文档与门禁同步：§11.5–§11.9 的形状并入 §5.3/§7.2/§7.3/§7.4 并在 §9 判据补充、§11 标记为已实现；`IDENTITY_AND_AUTH_CONTRACT.md` §2/§3、`MODULE_ARCHITECTURE.md` §3.1/§4.1/§4.7/§5、`AGENTS.md` §12、`scripts/check-crate-boundaries.mjs` 的 `CORE_ALLOWED_CLOSURE` 同步 core 新增的 `p256`/`sha2` 依赖。
 - 本次不包含：`server::*`、`app`、`identity-auth`、`identity-keystore`、`agent-host`、`node-link-client` 与前端代码；配对 proof/HMAC/transcript 验证与 WSS 握手；Sync/Node Link wire schema 与错误码词表；catalog 投影表。
 
-## Intent and Constraints
-
-```agentic-intent
-sources:
-  - "用户请求（2026-09-23 本会话）：「将核心与存储合同 §11 的目标形状落入 core 端口和 storage-sqlite：身份与信任记录、配对、Export/Import、审计、本地配置和 Agent profile。把新增端口及 DDL 分别并入该合同 §5/§7，使合同漂移门禁能检查实际实现。验收：旧数据库升级、事务原子性、重启恢复、撤销及损坏记录失败关闭均有测试；imported 表和端口仍不能写入远程会话正文。」"
-  - "用户决策（2026-09-23 本会话）：PeerPublicKey 校验位置选方案 A——core 引入 p256/sha2，构造即校验并把指纹计算留在 core::model，同步更新 §9 判据 13 / check-crate-boundaries.mjs 的 allow-list / AGENTS.md §12。"
-  - "用户决策（2026-09-23 本会话）：「本变更（admin-state-persistence-v2）同意 Main E2E 记 not-applicable，替代验证为 core/storage-sqlite 的 cargo 测试 + npm run check + 合同漂移门禁 + v1→v2 迁移夹具。」"
-  - "权威合同：docs/CORE_PORTS_AND_STORAGE.md §11.1–§11.9（§11.8 的收口清单列出本变更必须同时完成的六件事）；docs/IDENTITY_AND_AUTH_CONTRACT.md §2/§3/§4；docs/MODULE_ARCHITECTURE.md §4.7/§5；docs/LOCAL_ADMIN_PROTOCOL.md §5.3–§5.5；docs/CONFIG_REFERENCE.md 的「配置与管理状态的权威」；docs/SECURITY_DESIGN.md §13.1/§14.2/§15。"
-constraints:
-  - "遵守 AGENTS.md §3 的不变量：端口纯度与单一写入口、失败关闭、审计不含内容、凭据不入库、imported 家族不得写入远程会话正文。"
-  - "core 只新增已批准的 p256/sha2（Q1 方案 A）；仍不依赖 runtime/DB/HTTP/子进程/wire protocol，allow-list 四处定义必须同一改动内同步。"
-  - "storage-sqlite 是管理状态的唯一持久化实现；一次端口调用一个事务一个完整写集，不新增独立数据库或通用配置服务。"
-  - "表结构、端口签名与 §5/§7 逐条一致：合同漂移门禁（scripts/check-contract-drift.mjs）必须能对本次新增内容断言，§7 仍是 2 个 ```sql 块。"
-  - "本地入口 npm run verify（npm run check + cargo fmt/clippy/test）；cargo-deny / gitleaks 只在 CI 运行，本地不得声称通过。"
-  - "管理 DTO 与集合字段在 adapter 内按领域构造器校验后编码为有类型 JSON 数组；身份、状态、时间、唯一键与外键用显式列，不用 JSON blob 承担仲裁。"
-non_goals:
-  - "不实现 server::*、app、identity-auth、identity-keystore、agent-host、node-link-client 与前端代码。"
-  - "不实现配对 proof/HMAC/transcript 验证、WSS 握手、nonce/SAS 生命周期与 keystore 平台后端。"
-  - "不新增 catalog 投影表、不做离线 Import 编辑、不做应用层数据库加密（SECURITY_DESIGN §13.1 既定决策）。"
-  - "不改变 Sync/Node Link wire schema、错误码、feature 词表与 fixture（npm run check 仍需照常通过）。"
-success_criteria:
-  - "v1 数据库迁移到 v2 后事件、cursor、幂等行与审计逐条保留；重复打开幂等（schema 文本逐字节不变）；版本高于已知版本的库拒绝打开且零写入。"
-  - "管理 mutation 的状态、引用与审计在同一事务提交；注入审计写失败/磁盘满/约束冲突时整事务回滚，不出现半条授权或「提交成功但没有持久信任」。"
-  - "重启后撤销仍有效、未确认配对不再可用、已配对身份与 profile/workspace/provider 引用/seed 标记保留。"
-  - "损坏记录与宽松权限在正式模式下对写路径失败关闭（PortError::Corrupt 等），只读查询仍可用。"
-  - "imported 黄金列清单不变，端口与表都不出现远程会话正文；remove/drop 后审计行仍在。"
-  - "npm run check 全绿（含合同漂移门禁对新端口签名与新 DDL 的逐条断言）；core/storage-sqlite 的 cargo 测试全绿。"
-decision_bounds:
-  - "可自主：模块内部实现细节、列命名与索引、测试组织、错误映射的具体分支、migration 语句顺序（除漂移门禁绑定的常量边界）。"
-  - "需用户决策：把 p256/sha2 之外的依赖加入 core 闭包；改变 §11 的安全/协议语义或 §3 不变量；改变本变更的范围与验收判据。"
-assumptions:
-  - "§11.5–§11.9 的目标形状可直接实现且不需要协议侧改动；同期没有其他变更并行修改 core / storage-sqlite 的同一批文件。"
-  - "fixtures/storage/v2/from-v1.sqlite3 需新建（v1 目录只有 empty 与 too-new 两个夹具），内容为含会话/事件/cursor/幂等/审计数据的 v1 库。"
-  - "p256 0.13 / sha2 0.11 已在 workspace.dependencies 预留，core 只需 workspace = true 引用，不新增 Cargo.lock 版本选择。"
-```
-
 ## Capabilities
 
 ### New Capabilities
