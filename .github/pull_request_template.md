@@ -9,7 +9,7 @@ PR 模板。判据来源是 AGENTS.md 的文档维护映射（§8）与 `README.
 
 ## 变更内容
 
-<!-- 做了什么，以及为什么现在做。若这是 agentic 变更，链接 openspec/changes/<change>/。 -->
+<!-- 做了什么，以及为什么现在做。若这是 OpenSpec 变更，链接 openspec/changes/<change>/。 -->
 
 ## 影响面
 

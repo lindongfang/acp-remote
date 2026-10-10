@@ -1463,7 +1463,7 @@ async fn failed_initialize_reports_neither_connect_nor_disconnect() {
     host.shutdown_all().await;
 }
 
-/// F1（`reports/review-w4-r1.md`）：**未接线**的节点级出口不是空操作。
+/// F1：**未接线**的节点级出口不是空操作。
 ///
 /// 组合根漏接 `NodeEvents` 时，事件必须在开发期/运行期被看见，而不是在 core 之前被无声丢弃：
 /// - `node_events_bound()` 为假（接线缺失在进程内可查询）；

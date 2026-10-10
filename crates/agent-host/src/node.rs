@@ -11,7 +11,7 @@
 //!   因此这里只交付「已构造好的事件」，投递通道由组合根经 [`NodeEvents`] 注入。
 //! - 断开上报 `MUST NOT` 早于该运行时被标记为已退出：由 [`ExitMark`] 承载「先标记、后上报」的顺序
 //!   （结构上不可绕过，不是注释约定）。
-//! - 投递通道**未接线**是可观测的故障，不是空操作：见 [`NodeEventError`]（`reports/review-w4-r1.md`
+//! - 投递通道**未接线**是可观测的故障，不是空操作：见 [`NodeEventError`]（审查报告
 //!   的 F1——把「接缝漏接」变成运行时无声失败是被禁止的）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +21,7 @@ use acp_core::ports::{Clock, NodeEventSink};
 
 /// 节点级事件**无法**交给投递通道的原因。
 ///
-/// 存在的理由（`reports/review-w4-r1.md` F1）：[`NodeEvents::unbound`] 是组合根尚未接线时的状态，而
+/// 存在的理由（审查报告 F1）：[`NodeEvents::unbound`] 是组合根尚未接线时的状态，而
 /// 「未接线」与「已投递」是两件事。把前者当成后者，会让整条节点级事件链（core 的
 /// `Broker::commit_node_event` 落库、`core-derived-events` R8 的「节点级事件落库且会话标识为空」）在
 /// 漏接时无声停摆——事件在 core 之前就被丢掉，没有任何人看得见。因此未接线时**返回错误并记一条

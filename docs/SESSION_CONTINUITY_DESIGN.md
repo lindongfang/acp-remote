@@ -2,7 +2,7 @@
 
 > 状态：**B（恢复会话）已在 OpenSpec 变更 `session-resume` 中实施到 Owner 侧 Node Link 路由与本地 Agent 主机（2026-10-01 收口）**；A、C、D 的分析与结论不变，仍按 §6 的「当前可做性」栏陈述。设计决策已于 2026-09-29 全部定稿，实施后的实际形状以 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.7、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.6/§5.1/§7.3 与 [ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) 为准。
 > 日期：2026-09-29（状态注记 2026-10-01）
-> 用途：作为后续 OpenSpec agentic 变更的输入；实施时必须按 `AGENTS.md` §8 同步对应的权威文档、schema、fixture 与命令目录。
+> 用途：作为后续 OpenSpec 变更的输入；实施时必须按 `AGENTS.md` §8 同步对应的权威文档、schema、fixture 与命令目录。
 > 非权威声明：产品行为以 [INITIAL_DESIGN.md](./INITIAL_DESIGN.md) 为准，节点协议以 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 为准，ACP 覆盖状态以机器矩阵 `compatibility/acp/v1/matrix.json` 为准。本文出现冲突时，一律以上述权威来源为准。
 
 ## 1. 场景与问题
@@ -308,5 +308,5 @@ session.create { exportId, agentId: "pi", workspaceAlias: "A", templateParams }
 
 ### 12.2 待决
 
-无。本文件所列决策已全部确定，可进入实施规划（OpenSpec agentic 变更）。
+无。本文件所列决策已全部确定，可进入实施规划（OpenSpec 变更）。
 

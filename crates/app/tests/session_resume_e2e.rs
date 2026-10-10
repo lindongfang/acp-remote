@@ -702,7 +702,7 @@ fn an_unauthorized_resume_is_rejected_before_any_local_read() {
         // 两条都走 `command.rs::deny` 的 `CommandFault::NotGranted(None)` 分支（`RawObject::empty()`）。
         // 所以这是**结构性防泄露守卫**（若将来某条路径回 `NotGranted(Some(parameter))`，本断言会失败），
         // 而不是当前的判别点；真正的判别力在上一条 `code` 断言与「目录已被删除」这个前提上。
-        // 口径来源：CR8-S1 的实测（见 `reports/tp2-tester.md §10`）。
+        // 口径来源：CR8-S1 的实测。
         assert_eq!(
             absent_denied["body"]["error"]["details"], denied["body"]["error"]["details"],
             "错误详情也不得泄露目标会话的存在性"

@@ -133,7 +133,7 @@ impl OwnerNode {
         let rejected_commits = Arc::new(AtomicU32::new(0));
         // 计数器的**唯一实例**：`FlakySessionStore::load_recovery` 递增它，`OwnerNode::recovery_reads()`
         // 读同一个 `Arc`。此前两处各建了一个 `Arc`（装饰器一个、观察字段一个），计数恒为 0，
-        // 使 R31 的「授权先于本机读取」断言恒真；修正记录见 `reports/tp2-tester.md` 第 2 轮
+        // 使 R31 的「授权先于本机读取」断言恒真；修正记录见测试轮报告
         // （TP2 tester-A2），并已在 R31 用例里补了「计数器确实在动」的自检断言。
         let recovery_reads = Arc::new(AtomicU32::new(0));
         let sessions: Arc<dyn SessionStore> = Arc::new(FlakySessionStore {

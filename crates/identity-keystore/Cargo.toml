@@ -24,7 +24,7 @@ getrandom.workspace = true
 
 # DPAPI wrapper（`docs/SECURITY_DESIGN.md` §20 的候选）：只在 Windows 构建中参与编译；
 # 语义是「包裹字节 + 进程内解开」，`Scope::User` 表示当前用户。选型实证见
-# `docs/MODULE_ARCHITECTURE.md` §4.12 与 `reports/` 内的 [PV5] 留证。
+# `docs/MODULE_ARCHITECTURE.md` §4.12 与 §4.12 的 [PV5] 留证。
 [target.'cfg(windows)'.dependencies]
 windows-dpapi.workspace = true
 

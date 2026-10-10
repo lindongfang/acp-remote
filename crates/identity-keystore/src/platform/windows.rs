@@ -4,7 +4,7 @@
 //! 「用当前用户的凭据包裹字节 / 解开字节」；私钥在进程内解开后立即用于 `p256` 签名，
 //! 明文不出本进程、不进日志。
 //!
-//! 已知代价（实证见 `reports/wp3-dpapi-verification.log`）：
+//! 已知代价（已用真实 DPAPI 用例实证）：
 //!
 //! - wrapper `windows-dpapi 0.2.0` 传递依赖已停止维护的 `winapi 0.3`；
 //! - wrapper 不暴露 `CRYPTPROTECT_UI_FORBIDDEN`，因此本实现**总是**传入附加熵（由条目头派生），

@@ -195,7 +195,7 @@ core use_cases   -> core ports + core model
 
 ## 8. 文档维护
 
-通用的文档维护时机与层级规则由项目 schema（`openspec/schemas/agentic/`）定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复 schema 正文。
+通用的文档维护时机与层级规则由仓库的变更流程定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复通用流程正文。
 
 - 产品行为和产品级同步策略变化：更新 `docs/INITIAL_DESIGN.md`。
 - 威胁模型、信任边界、授权默认、数据保护或供应链要求变化：更新 `docs/SECURITY_DESIGN.md`；改变已接受密码学/传输决策时同时新增或更新 ADR。
@@ -223,7 +223,7 @@ core use_cases   -> core ports + core model
 - `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`，其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验）——`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 与 `base64` 属协议与身份边界，**不得**进入 core 的闭包。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
-- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），其清单与判据见 `README.md` 的「合同检查」；`check:agentic`（`scripts/agentic-gate.mjs`）只跑 `openspec validate --all --strict`，断言变更与规范资产通过严格校验。改动合同资产、agentic 资产或 crate 依赖后必须让它全绿。
+- `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），其清单与判据见 `README.md` 的「合同检查」。改动合同资产或 crate 依赖后必须让它全绿。
 
 ## 10. 回复与沟通
 

@@ -1,10 +1,8 @@
-# OpenSpec 引擎与 agentic 扩展的安装产物按内容哈希纳入 `openspec/.agentic-install.json`，
-# 哈希基于 LF 内容计算；Windows 的 core.autocrlf=true 会把检出内容转成 CRLF，使 manifest 判为漂移
-# （实测：同一文件 LF 与 CRLF 的 sha256 不同，干净克隆后 `openspec-agentic doctor` 报 FAIL）。
+# OpenSpec 引擎安装的受管产物按内容比对判定漂移，比对基于 LF 内容；Windows 的 core.autocrlf=true
+# 会把检出内容转成 CRLF，使同一文件 LF 与 CRLF 的 sha256 不同而被判为漂移。
 # 因此这些树固定以 LF 检出。
 openspec/** text eol=lf
 .agents/** text eol=lf
-.pi/** text eol=lf
 
 # vendored 上游 ACP 快照由 compatibility/acp/v1/matrix.json 的 protocol.schemaSha256 逐字节 pin，
 # 而 scripts/check-acp-compatibility.mjs 直接哈希磁盘上的字节。

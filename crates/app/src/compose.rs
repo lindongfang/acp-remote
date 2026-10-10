@@ -649,7 +649,7 @@ impl EventPublisher for LoggingPublisher {
 /// 命名与 `provider.configure`（`server::local_admin::router`）**同规则**：
 ///
 /// - 条目标签 = `<ProviderRef.keystore_ref>.<fieldName>`，而 `keystore_ref` 由 `provider.configure` 写为
-///   `sha256(providerId)` 前 16 个小写 hex 字符 + `@v<version>`（`reports/wp3b1-handoff.md`）；
+///   `sha256(providerId)` 前 16 个小写 hex 字符 + `@v<version>`；
 /// - 因此本实现**读回** `ProviderRef`（SQLite 只保存非秘密引用），不自行重算摘要，避免两处口径漂移。
 ///
 /// 失败一律 `Unavailable(KeystoreUnavailable)`（失败关闭）：绑定名不在白名单、Provider 引用或字段不存在、

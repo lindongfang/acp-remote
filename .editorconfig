@@ -2,7 +2,7 @@
 #
 # 为什么需要它（`.gitattributes` 只管 git 一侧，管不到编辑器怎么写盘）：
 # 本仓库有两类内容按「磁盘字节」判定，Windows 上用 CRLF 保存就会本机误报——
-#   1. agentic 受管文件按 LF 内容哈希纳入 `openspec/.agentic-install.json`；
+#   1. OpenSpec 引擎安装的受管产物按 LF 内容比对判定漂移；
 #   2. vendored 上游 ACP 快照由 `compatibility/acp/v1/matrix.json` 逐字节 pin sha256。
 # 本机的 `core.autocrlf=true` 会把检出内容转成 CRLF，所以这里把工作区统一到 LF，与仓库 blob 一致。
 # 这份文件只影响编辑器行为，不是门禁判据；判据仍在 `.gitattributes` 与对应脚本。

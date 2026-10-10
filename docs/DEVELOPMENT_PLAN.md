@@ -71,9 +71,9 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 ## 4. 切片交付规则
 
-- 每个实施切片按仓库的 OpenSpec agentic 流程建立变更，明确目标、任务与证据；优先提交小而完整、可审查的纵向 PR。
+- 每个实施切片按仓库的 OpenSpec 变更流程建立变更，明确目标、任务与证据；优先提交小而完整、可审查的纵向 PR。
 - 修改 wire、封闭词表、端口、存储或能力支持状态时，在同一变更中维护对应权威文档、schema、fixture、兼容性矩阵和合同门禁。crate 依赖遵循[模块架构 §5](MODULE_ARCHITECTURE.md#5-依赖矩阵)。
 - 本地运行 `npm run verify`；PR 以仓库规定的 CI 检查验收。真实 Codex/OMP 属兼容性套件，不替代普通 CI 中的 fake ACP Agent 测试。
-- 某切片的必要端到端路径出现后，应以真实可运行路径验收；此前的替代验证和 agentic E2E 判定按该变更的计划与仓库流程记录，不把合同检查通过等同于产品闭环。
+- 某切片的必要端到端路径出现后，应以真实可运行路径验收；此前的替代验证按该变更的计划与仓库流程记录，不把合同检查通过等同于产品闭环。
 
 **建议的第一项实施变更**：管理状态与配置持久化。它是身份、CLI、Agent profile 和 Node Link 的共同前置依赖；合同形状已并入 §3/§5/§7，core 端口与 SQLite 落盘两层已实现，Daemon/CLI 接线也已随切片 4 落地，剩余工作是端到端验收。

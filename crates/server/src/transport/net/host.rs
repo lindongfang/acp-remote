@@ -12,7 +12,7 @@
 //! 严格照字面「只接受与 `public_origin` 一致的 Host」会让默认 loopback 配置的配对/Node Link 端点不可达
 //! （与 `specs/node-link-listener/spec.md` 的「默认 loopback 启动」场景冲突），而放行任意 Host 违反
 //! `SECURITY_DESIGN.md` §7.2「限制 Host，拒绝任意 Host 转发和 DNS rebinding」。因此两者之间取
-//! 「只接受 loopback 形态」，由本变更的 supervisor 裁定（见 `reports/wp2-handoff.md` 的冻结形状说明）。
+//! 「只接受 loopback 形态」，由本变更的 supervisor 裁定（冻结形状由本变更的 supervisor 裁定）。
 //!
 //! 端口一律忽略：比较的是 host 名（HTTP 语义里端口不参与主机归属判定，反向代理形态下对外端口与
 //! Daemon 实际端口本来就不一致）。Host 解析失败、缺失或同一请求出现多个 `Host` 都算不接受。
