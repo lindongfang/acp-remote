@@ -249,7 +249,7 @@ session.create { exportId, agentId: "pi", workspaceAlias: "A", templateParams }
 - `crates/core`：`Session`/`OwnedSessionRef` 是否携带 Agent 侧 sessionId；新增恢复用例入口；`core::ports::SessionEndpoint` 是否需要 `load` 能力。
 - `crates/storage-sqlite`：`owned_session` 加列 + migration（版本常量推进）+ 升级/幂等/字节稳定测试。
 - `crates/agent-host`：持久化并回填 Agent 侧 sessionId；新增「重启进程后 load/resume」路径；能力门控。
-- `crates/acp-protocol`：`session/resume` 的类型化 DTO **已实现**（`methods.rs` 的 `implemented: true`，`delivery = conditional_mvp`；CR1-F2 的陈旧陈述已于 2026-10-01 更正）；`session/load` 保持不支持。端到端门控在 `agent-host`，`facade` 仍 `not_advertised`，因此没有对外宣告。
+- `crates/acp-protocol`：`session/resume` 的类型化 DTO **已实现**（`methods.rs` 的 `implemented: true`，`delivery = conditional_mvp`；此前的陈旧陈述已于 2026-10-01 更正）；`session/load` 保持不支持。端到端门控在 `agent-host`，`facade` 仍 `not_advertised`，因此没有对外宣告。
 - `crates/server`：`node_link` 的命令路由新增/扩展（若新增命令）；`acp_facade` 宣告与转发（facade 尚未落地）；若放宽 Export 粒度，`local_admin::params` 的 1 项约束。
 - `crates/app`：CLI 展示与传参；组合根装配。
 
