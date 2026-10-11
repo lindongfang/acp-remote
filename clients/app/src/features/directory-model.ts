@@ -3,9 +3,10 @@
  *
  * ## 三条结构性约束如何被落到类型上
  *
- * 1. **目录项只有展示名与别名**：`DirectoryRowModel` 的字段就是这三样加三项汇总，
+ * 1. **目录项只有展示名、别名、汇总与最近活动时间**：`DirectoryRowModel` 的字段就这四样，
  *    **没有**任何可以反推路径的槽位（没有 id 派生自路径、没有父目录、没有末段、没有 cwd）。
- *    `WorkspaceRef` 在 wire 上本就只有 `alias`/`displayName`，本层再投影一次，
+ *    `WorkspaceRef` 在 wire 上本就只有 `alias`/`displayName`，本层再投影一次；
+ *    `latestActivityAt` 是该目录下会话自身的 `updatedAt`（固定形状的 UTC 串），同样不含路径。
  *    于是「多带一个 path 字段」在类型与渲染两处都不成立。
  * 2. **同名目录以别名区分**：`displayName` 允许重复，`alias` 是唯一标识且**始终**渲染。
  *    组件没有任何「同名时才显示别名」的分支——那种分支就是路径消歧的入口。
@@ -31,11 +32,18 @@ export interface DirectoryCountsModel {
   readonly pending: number;
 }
 
-/** 一个目录项：**只有**展示名、别名与汇总。 */
+/**
+ * 一个目录项：**只有**展示名、别名、三项汇总与最近活动时间。
+ *
+ * `latestActivityAt` 是该目录下会话 `updatedAt` 的**最大值**（`Timestamp` 是固定形状的 UTC 串，
+ * 字典序即时间序）；该目录没有任何会话时为 `null`——**不**用当前时间或别的信号顶替。
+ * 它与 `counts` 一样只由快照资源推出，因此断连时仍可呈现。
+ */
 export interface DirectoryRowModel {
   readonly alias: string;
   readonly displayName: string;
   readonly counts: DirectoryCountsModel;
+  readonly latestActivityAt: string | null;
 }
 
 /** 目录内容的来源：实时同步 vs 上一次成功同步的快照（断连时必须明确标注）。 */
@@ -92,6 +100,14 @@ export type DirectoryPageModel =
   | {
       readonly kind: "empty";
       readonly empty: "no_directories" | "directories_without_sessions";
+      /**
+       * 已登记的目录项：`no_directories` 时为 `[]`；`directories_without_sessions` 时为各目录的
+       * 零汇总行（汇总全 0、无活动时间），于是空态指引里的「在下面选一个目录」有真实入口。
+       *
+       * 它**不**改变本支的语义：`empty` 仍然只表达「没有目录 / 目录里从来没有会话」两种情形，
+       * `data-empty-state` 仍只在 `empty` 出现，`ready` / `no_match` / `loading` 的判定条件不变。
+       */
+      readonly directories: readonly DirectoryRowModel[];
       readonly contentOrigin: DirectoryContentOrigin;
       readonly lastSyncedAtMs: number | null;
     }
@@ -157,8 +173,14 @@ export const CONTENT_ORIGIN_LABELS: Readonly<Record<DirectoryContentOrigin, stri
   last_sync: "内容来自上次同步，当前未连接",
 };
 
-/** 目录是列表的主要组织单位：目录名出现在标题上，会话数/运行中/待处理来自会话摘要。 */
-function toRow(directory: DirectoryView): DirectoryRowModel {
+/**
+ * 目录项投影：目录名出现在标题上，会话数/运行中/待处理来自会话摘要，最近活动时间由调用方传入
+ * （见 {@link latestActivityByAlias}）。
+ *
+ * 带会话聚合结果的目录项（目录页 `ready` 支的每一项与详情页的目录）都走这里，因此不会有第二份
+ * 行构造漏掉新字段；「目录存在但没有任何会话」的零汇总项没有聚合结果可投影，另见 {@link zeroRow}。
+ */
+function toRow(directory: DirectoryView, latestActivityAt: string | null): DirectoryRowModel {
   return {
     alias: directory.alias,
     displayName: directory.displayName,
@@ -167,7 +189,48 @@ function toRow(directory: DirectoryView): DirectoryRowModel {
       active: directory.counts.active,
       pending: directory.counts.pending,
     },
+    latestActivityAt,
   };
+}
+
+/**
+ * 「目录存在但没有任何会话」时的零汇总目录项。
+ *
+ * 该状态下每个目录的会话汇总恒为零：`directories_without_sessions` 的定义就是
+ * 「没有任何会话归属任何已登记目录」（`buildDirectoryViews` 里的 `hasAnySession` 为假），
+ * 因此由快照目录直接投影，不必再走一遍会话聚合。这一支也没有任何会话，活动时间固定为 `null`
+ * ——**不**用当前时间或别的信号顶替。列表页在空态下列出它，详情页也由它按别名取到该目录。
+ */
+function zeroRow(workspace: WorkspaceRef): DirectoryRowModel {
+  return {
+    alias: workspace.alias,
+    displayName: workspace.displayName,
+    counts: { total: 0, active: 0, pending: 0 },
+    latestActivityAt: null,
+  };
+}
+
+/**
+ * 每个目录的最近活动时间：该目录下会话 `updatedAt` 的**最大值**。
+ *
+ * 用字符串比较取最大值，不经过 `Date`：`Timestamp` 是固定形状的 UTC 串
+ * （`src/protocol/common.ts` 的 `$defs.timestamp`），字典序即时间序，而 `Date` 会把时间换算到
+ * 本地时区；也**不**取「第一条」或「当前时间」——活动时间必须是会话自身携带的事实。
+ * 会话不按目录分组前的时间序排列，因此这里与列表顺序无关（构造点见 `toRow` 的调用方）。
+ *
+ * 没有会话的目录不出现在返回值里，调用方回落为 `null`；键只在已登记别名上被查询
+ * （`ready` 的目录项来自快照 `workspaces`，详情页的别名也必先在这份目录里定位到），
+ * 因此未登记目录的会话不进入任何目录项，与 `buildSessionRowsByAlias` 的收录口径一致。
+ */
+function latestActivityByAlias(sessions: readonly SessionSummary[]): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const summary of sessions) {
+    const alias = summary.workspace?.alias;
+    if (alias === undefined) continue;
+    const current = map.get(alias);
+    if (current === undefined || summary.updatedAt > current) map.set(alias, summary.updatedAt);
+  }
+  return map;
 }
 
 /** 断连（含未配对与全部阻断态）时内容来源是「上次同步」。 */
@@ -232,6 +295,13 @@ export function buildDirectoryPageModel(input: {
     return {
       kind: "empty",
       empty: list.empty,
+      // 空态也列出已登记的目录：`directories_without_sessions` 的指引写着「在下面选一个目录」，
+      // 那一支必须真有目录项（每一项都是零汇总行），否则指引指向不存在的入口；
+      // `no_directories` 时确实是空数组。本支的 kind/empty 取值与判定条件都不因此改变。
+      directories:
+        list.empty === "directories_without_sessions"
+          ? input.resources.workspaces.map((workspace) => zeroRow(workspace))
+          : [],
       contentOrigin,
       lastSyncedAtMs: input.lastSyncedAtMs,
     };
@@ -250,9 +320,10 @@ export function buildDirectoryPageModel(input: {
     return { kind: "no_match", contentOrigin, lastSyncedAtMs: input.lastSyncedAtMs };
   }
 
+  const latestActivity = latestActivityByAlias(input.resources.sessions);
   return {
     kind: "ready",
-    directories: directories.map(toRow),
+    directories: directories.map((directory) => toRow(directory, latestActivity.get(directory.alias) ?? null)),
     contentOrigin,
     lastSyncedAtMs: input.lastSyncedAtMs,
   };
@@ -320,27 +391,24 @@ export function buildSessionRowsByAlias(input: {
  * 而详情页仍必须能按别名取到该目录——否则别名明明在快照里也会被说成「链接已失效」，
  * 把用户引向「目录被删了」的错误结论。
  *
- * 该状态下每个目录的会话汇总恒为零：`directories_without_sessions` 的定义就是
- * 「没有任何会话归属任何已登记目录」（`buildDirectoryViews` 里的 `hasAnySession` 为假），
- * 因此这里由快照目录直接投影出零汇总行，无需再走一遍会话聚合。
+ * 两条支路各自给出一个目录项：`ready` 支的目录经 {@link toRow} 投影（活动时间由调用方算好传入，
+ * 与列表页的目录项同一份口径）；空态支的目录由快照目录直接投影成 {@link zeroRow}——该状态下
+ * 每个目录的会话汇总恒为零（`directories_without_sessions` 的定义就是「没有任何会话归属任何
+ * 已登记目录」），活动时间也固定为 `null`（该别名下没有任何会话）。
  */
 function findDirectoryByAlias(
   list: DirectoryListState,
   workspaces: readonly WorkspaceRef[],
   alias: string,
-): DirectoryView | undefined {
+  latestActivityAt: string | null,
+): DirectoryRowModel | undefined {
   if (list.kind === "ready") {
-    return list.directories.find((candidate) => candidate.alias === alias);
+    const found = list.directories.find((candidate) => candidate.alias === alias);
+    return found === undefined ? undefined : toRow(found, latestActivityAt);
   }
   if (list.empty !== "directories_without_sessions") return undefined;
   const workspace = workspaces.find((candidate) => candidate.alias === alias);
-  if (workspace === undefined) return undefined;
-  return {
-    id: workspace.alias,
-    displayName: workspace.displayName,
-    alias: workspace.alias,
-    counts: { total: 0, active: 0, pending: 0 },
-  };
+  return workspace === undefined ? undefined : zeroRow(workspace);
 }
 
 /** 月份档：入参已按时间倒序，因此首次出现即倒序；`count` 是该月的行数。 */
@@ -376,7 +444,10 @@ export function buildDirectoryDetailModel(input: {
   if (input.resources === null) return { kind: "loading" };
 
   const list = buildDirectoryViews(input.resources.workspaces, input.resources.sessions);
-  const directory = findDirectoryByAlias(list, input.resources.workspaces, input.alias);
+  // 最近活动时间与列表页同一份口径：该目录下会话 `updatedAt` 的最大值，没有会话即 `null`
+  // （「目录存在但没有任何会话」这一支也算出 `null`，与空态下列出的零汇总项一致）。
+  const latestActivityAt = latestActivityByAlias(input.resources.sessions).get(input.alias) ?? null;
+  const directory = findDirectoryByAlias(list, input.resources.workspaces, input.alias, latestActivityAt);
   if (directory === undefined) {
     return { kind: "unknown_directory", alias: input.alias };
   }
@@ -400,7 +471,8 @@ export function buildDirectoryDetailModel(input: {
 
   return {
     kind: "ready",
-    directory: toRow(directory),
+    // 目录项与列表页走同一条投影（`toRow`）：汇总来自快照聚合，活动时间即上面算出的最大值。
+    directory,
     month,
     sessions,
     months,

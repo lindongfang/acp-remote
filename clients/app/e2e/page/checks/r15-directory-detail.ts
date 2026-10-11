@@ -22,25 +22,35 @@
  *   再比对两档的 `data-*` 集合逐项相同——宽度覆盖没生效时前置断言就会红，不会变成
  *   「拿同一条渲染路径自证」。
  *
- * ## 未覆盖：跨路由进入详情页（路由替身的限制，不是产品行为）
+ * ## 跨路由进入详情页（替身修好之后才可测）
  *
- * `router-stub.tsx` 的 `Stack` 直接**调用** `current.component()`（而不是把它作为元素类型
- * 交给 React），于是路由组件的 hooks 挂在 `Stack` 自己的 fiber 上。两条路由的组件类型不同时
- * （目录页 ↔ 详情页），切路由会在同一根 fiber 的同一个 hook 槽位上遇到「上一轮是 `useContext`、
- * 这一轮是 `useSyncExternalStore`」，React 的 update 分派器读前一个 effect 的 `deps.length`
- * 时抛 `TypeError: Cannot read properties of undefined (reading 'length')`，整棵树被卸载。
+ * `router-stub.tsx` 的 `Stack` 早先写成 `return current.component()`：那是在 `Stack` 自己的
+ * fiber 上**调用**路由组件，路由组件的 hooks 与 `Stack` 的 `useSyncExternalStore` 共用同一批
+ * 槽位。切到 hooks 序列不同的路由组件（目录页 ↔ 详情页）时，React 的更新分派器拿上一轮的
+ * `deps` 比对新一轮的 effect，抛
+ * `TypeError: Cannot read properties of undefined (reading 'length')`（栈顶是
+ * `areHookInputsEqual ← updateEffectImpl ← updateSyncExternalStore ← useLocalSearchParams`）
+ * 并把整棵树卸载——实测点击目录项后容器 `innerHTML` 变空、`[data-route]` 一个都不剩。
  *
- * 因此「点击查看全部 → 进入详情页」与「返回目录页后查询词仍在」两个场景在本套件里**没有**用例：
- * 它们需要跨路由切换，而在替身下那必然崩。把 `Stack` 改成 `createElement(current.component)`
- * 可以绕开这一处，但详情路由随即停在「同步运行时未装配」（探针实测），说明路由替身不是一行能改
- * 对的。详情页本身的能力（分档、目录内搜索、两页字段互不影响、按宽度自适应）都由**直接挂载
- * 详情路由**的用例覆盖，与这条限制无关。
+ * 因此替身改成把路由组件当**子元素**渲染（`createElement(current.component, { key: current.path })`），
+ * 于是 R15-21（两条入口都进入**该目录**的详情页）、R15-22（返回目录页后查询词仍在）、
+ * R15-23/R15-24（零会话的两种情形都能进入详情页）四条用例可以真的走一遍跨路由。
+ *
+ * `key` 是必要的：同类型路由之间切换（`/dir/alpha` → `/dir/beta`）时若不重挂，上一屏的局部
+ * 状态会被带进下一屏（实测：在 alpha 选过的 Agent 会在 beta 的弹层里仍处于选中态）。
+ * 目录页 ↔ 详情页是类型切换，两种写法都能重挂——所以 `key` 不是那两条用例的前提，但它是
+ * 「每个路由一屏」这条替身语义的一部分。
+ *
+ * 仍未覆盖：真实 expo-router 的 URL 同步与浏览器历史——替身只提供 `push`/`back` 的内存栈。
  */
 
 import {
   AGENTS,
+  DIRECTORY_ROUTES,
   DIRS_ROUTE,
   SECRET_FRAGMENTS,
+  SESSION_ALPHA,
+  SESSION_BETA,
   WORKSPACES_WITH_PATHS,
   dirRoute,
   seriesSessionId,
@@ -299,8 +309,8 @@ const checks: readonly Check[] = [
 
       // (1) 目录页的查询词写的是 `directoryQuery`，详情页读的是 `directoryDetailQuery`：前者
       // 即使命中了这个目录里的会话，也不得改变详情页呈现的内容。
-      // 直接写 store 是因为替身路由一次只挂一条路由（跨路由切换会让 React 的 hook 槽位错位，
-      // 见文件头的说明），而这条用例要断的是**渲染**读的是哪个字段。
+      // 这里直接写 store 而不是先在目录页打字再导航：要断的是**渲染读的是哪个字段**，
+      // 直接写入才能把「同一个值」同时放进两个字段的对照里（跨路由的那条路径由 R15-21/R15-22 覆盖）。
       const detail = await mountScenario(baseScenario({ sessions }));
       try {
         await waitForDirectoryDetail(detail.container);
@@ -491,6 +501,222 @@ const checks: readonly Check[] = [
           "回落之后不是「没有符合条件的会话」",
         );
       });
+    },
+  },
+  {
+    name: "R15-21 跨路由：卡片标题与「查看全部 N 个」两条入口都进入**该目录**的详情页",
+    async run() {
+      await withScenario(
+        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES }),
+        async (container) => {
+          await waitForDirectoryList(container);
+
+          // 入口一：卡片**标题**（与会话数无关的那个）。
+          click(
+            query(container, '[data-directory-alias="alpha"] [data-action="open-directory"]'),
+            "alpha 的卡片标题入口",
+          );
+          await waitFor(
+            () => query(container, '[data-route="dir-detail"][data-directory-alias="alpha"]') !== null,
+            "标题入口进入 alpha 的详情页",
+          );
+          // 进入的是**那一个**目录：别名与它名下的会话都要对得上（走错目录/没带参数都会红）。
+          expectEqual(
+            textOf(query(container, "[data-directory-alias-label]")),
+            "alpha",
+            "详情页的别名",
+          );
+          expectEqual(rowIdsOf(container), [SESSION_ALPHA], "详情页列出的是 alpha 名下的会话");
+
+          // 返回目录页，再从另一个入口进另一个目录：两条入口不能串到同一目录上。
+          click(query(container, '[data-action="back-to-dirs"]'), "返回目录");
+          await waitForDirectoryList(container);
+          click(
+            query(container, '[data-directory-alias="beta"] [data-action="open-directory-all"]'),
+            "beta 的「查看全部」入口",
+          );
+          await waitFor(
+            () => query(container, '[data-route="dir-detail"][data-directory-alias="beta"]') !== null,
+            "「查看全部」入口进入 beta 的详情页",
+          );
+          expectEqual(rowIdsOf(container), [SESSION_BETA], "详情页列出的是 beta 名下的会话");
+        },
+      );
+    },
+  },
+  {
+    name: "R15-22 跨路由：返回目录页后目录页的查询词仍在，命中集合也仍是那次搜索的结果",
+    async run() {
+      // 「部署」只出现在 alpha 的会话标题里（两条目录的展示名都是 api、别名也不含这两个字）。
+      const sessions = [
+        ...sessionSeries({
+          alias: "alpha",
+          idPrefix: "aaaaaaaa",
+          titles: ["部署检查"],
+          at: ["2026-10-05T09:00:00.000Z"],
+          states: ["running"],
+        }),
+        ...sessionSeries({
+          alias: "beta",
+          idPrefix: "bbbbbbbb",
+          titles: ["文档整理"],
+          at: ["2026-10-03T09:00:00.000Z"],
+          states: ["waiting_input"],
+        }),
+      ];
+      await withScenario(
+        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES, sessions }),
+        async (container) => {
+          await waitForDirectoryList(container);
+          expectEqual(queryAll(container, "[data-directory-alias]").length, 2, "初始两条目录项");
+
+          typeIntoInput(container, "[data-directory-search]", "部署", "目录页搜索框");
+          await waitFor(
+            () => queryAll(container, "[data-directory-alias]").length === 1,
+            "按会话标题搜索后只剩 alpha",
+          );
+          expectEqual(
+            query(container, "[data-directory-alias]")?.getAttribute("data-directory-alias") ?? null,
+            "alpha",
+            "命中的是 alpha",
+          );
+
+          click(
+            query(container, '[data-directory-alias="alpha"] [data-action="open-directory"]'),
+            "进入 alpha 的详情页",
+          );
+          await waitForDirectoryDetail(container);
+
+          click(query(container, '[data-action="back-to-dirs"]'), "返回目录");
+          await waitForDirectoryList(container);
+
+          // 查询词住在 store 里，因此返回时（页面是重挂的）它仍在——写成组件局部状态就会在这里红。
+          expectEqual(
+            query(container, "[data-directory-search]")?.getAttribute("data-directory-search-value"),
+            "部署",
+            "返回目录页后受控搜索框里的查询词",
+          );
+          // 而且列表**确实**仍被它筛过：只留文字、列表已复原的写法在这里红。
+          expectEqual(
+            queryAll(container, "[data-directory-alias]").map((node) =>
+              node.getAttribute("data-directory-alias"),
+            ),
+            ["alpha"],
+            "返回目录页后命中集合仍是那次搜索的结果",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "R15-23 零会话（全部目录都没有会话）：空态与目录项同时呈现，且每一项都能进入详情页并看到创建入口",
+    async run() {
+      await withScenario(
+        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES, sessions: [] }),
+        async (container) => {
+          await waitFor(() => query(container, "[data-empty-state]") !== null, "空态渲染");
+          expectEqual(
+            query(container, "[data-empty-state]")?.getAttribute("data-empty-state") ?? null,
+            "directories_without_sessions",
+            "空态标识",
+          );
+          // 空态与目录列表**同时**存在：空态指引写着「在下面选一个目录」，列表就必须真的在。
+          expectThat(
+            query(container, '[data-directory-list="directories"]') !== null,
+            "空态下必须仍然列出目录项（否则指引指向一个不存在的列表）",
+          );
+          expectEqual(queryAll(container, "[data-directory-alias]").length, 2, "两条目录项都要在");
+          expectEqual(
+            queryAll(container, '[data-action="open-directory"]').length,
+            2,
+            "每条目录项都要有进入详情页的标题入口",
+          );
+          expectEqual(
+            queryAll(container, '[data-action="open-directory-all"]').length,
+            0,
+            "一条会话都没有时不得呈现「查看全部 N 个」",
+          );
+
+          click(
+            query(container, '[data-directory-alias="alpha"] [data-action="open-directory"]'),
+            "alpha 的卡片标题入口",
+          );
+          await waitFor(
+            () => query(container, '[data-route="dir-detail"][data-directory-alias="alpha"]') !== null,
+            "零会话的目录也能进入详情页",
+          );
+          expectThat(
+            query(container, '[data-directory-sessions="empty"]') !== null,
+            "详情页必须说明该目录里还没有会话",
+          );
+          expectThat(
+            query(container, '[data-directory-detail-state="unknown_directory"]') === null,
+            "目录存在时不得呈现「链接失效」",
+          );
+          // 死路的终点就是这个入口：一台新机器上的第一个会话只能从这里创建。
+          expectThat(
+            query(container, '[data-action="open-create-sheet"]') !== null,
+            "零会话的目录详情页必须有创建会话入口",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "R15-24 零会话（部分目录没有会话）：0 会话的目录项仍有标题入口、没有「查看全部」，且能进入它的详情页",
+    async run() {
+      const sessions = sessionSeries({
+        alias: "alpha",
+        idPrefix: "aaaaaaaa",
+        titles: ["部署检查"],
+        at: ["2026-10-05T09:00:00.000Z"],
+        states: ["running"],
+      });
+      await withScenario(
+        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES, sessions }),
+        async (container) => {
+          await waitForDirectoryList(container);
+          const beta = query(container, '[data-directory-alias="beta"]');
+          expectThat(beta !== null, "0 会话的目录也要作为目录项呈现");
+          expectEqual(
+            ["total", "active", "pending"].map((kind) =>
+              textOf(query(beta, `[data-directory-count="${kind}"]`)),
+            ),
+            ["0", "0", "0"],
+            "beta 的三项汇总为零",
+          );
+          expectThat(
+            query(beta, '[data-action="open-directory"]') !== null,
+            "0 会话的目录项必须仍有标题入口",
+          );
+          expectThat(
+            query(beta, '[data-action="open-directory-all"]') === null,
+            "0 会话的目录项不得呈现「查看全部 N 个」",
+          );
+          expectThat(
+            query(beta, "[data-directory-latest-at]") === null,
+            "0 会话的目录项不得呈现活动时间",
+          );
+
+          click(query(beta, '[data-action="open-directory"]'), "beta 的卡片标题入口");
+          await waitFor(
+            () => query(container, '[data-route="dir-detail"][data-directory-alias="beta"]') !== null,
+            "进入 beta 的详情页",
+          );
+          expectThat(
+            query(container, '[data-directory-sessions="empty"]') !== null,
+            "beta 的详情页必须说明该目录里还没有会话",
+          );
+          expectThat(
+            query(container, '[data-directory-detail-state="unknown_directory"]') === null,
+            "目录存在时不得呈现「链接失效」",
+          );
+          expectThat(
+            query(container, '[data-action="open-create-sheet"]') !== null,
+            "beta 的详情页必须有创建会话入口",
+          );
+        },
+      );
     },
   },
 ];

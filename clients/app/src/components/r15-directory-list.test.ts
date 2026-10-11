@@ -7,7 +7,15 @@
  * - 同名目录不以路径消歧 → 两个同名目录必须各自带别名，且没有任何路径片段；
  * - 两种空态可区分 → 两段文案与 `data-empty-state` 都不同；
  * - 断连仍可渲染并标注来源 → 断连时目录行仍在，且标注「来自上次同步」；
- * - 目录详情里「别名失效」与「目录存在但无会话」是两种呈现 → 两种文案互不冒充。
+ * - 目录详情里「别名失效」与「目录存在但无会话」是两种呈现 → 两种文案互不冒充；
+ * - 空态指引指向列表 → 有目录时空态与目录列表**同时**呈现（含目录项），一个目录都没有时
+ *   不得出现任何目录项（design D1-1，这正是原型里那条「进不去」的死路）；
+ * - 每个目录项都可进入详情页 → 标题入口**与会话数无关**，且与「查看全部 N 个 ›」的动作取值
+ *   可区分（design D3；`[data-directory-alias]` 仍每项恰好一处）；
+ * - 最近活动时间与会话挂钩 → 只在该目录有会话时呈现，且取该目录下**最晚**的那条；
+ * - 目录内创建入口 → 调用方给了回调才呈现（缺省不留痕）。
+ *
+ * 逐项的断言用 `cardSegments` 把 HTML 按卡片切开：整页 `toContain` 分不清「这一项有、那一项没有」。
  *
  * 判别力：断言的是**渲染后的 HTML 字符串**而不是模型字段——模型里没有路径字段并不能
  * 保证组件不会去渲染别的东西（例如从 alias 派生一个「父目录」标签）。
@@ -46,6 +54,7 @@ function renderDirectoryList(
     readonly sessionsByAlias?: ReadonlyMap<string, readonly SessionRowModel[]>;
     readonly query?: string;
     readonly createPermissionNote?: string | null;
+    readonly onCreateSession?: (alias: string) => void;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -59,8 +68,21 @@ function renderDirectoryList(
       onOpenSession: () => undefined,
       createPermissionNote: options.createPermissionNote ?? null,
       ...(options.sessionsByAlias === undefined ? {} : { sessionsByAlias: options.sessionsByAlias }),
+      ...(options.onCreateSession === undefined ? {} : { onCreateSession: options.onCreateSession }),
     }),
   );
+}
+
+/**
+ * 把渲染结果按**卡片根节点**切成一段一段：每段的起点就是该项根节点上的 `data-directory-alias="`。
+ *
+ * 用**前瞻**切分（而不是把那个属性本身当分隔符吃掉），于是段内还能继续断言「这一项上一共有几处
+ * 别名」——别名一旦被顺手挂到标题入口或「⊕ 新建」按钮上，段内计数就 > 1（R15-1 数它的个数）。
+ * 逐段断言才能表达「**这一项**有没有那个入口/那个时间」：整页 `toContain` 分不清「A 项有时间、
+ * B 项没有」和「两项都有」。段数即目录项数。
+ */
+function cardSegments(html: string): readonly string[] {
+  return html.split(/(?=data-directory-alias=")/).slice(1);
 }
 
 /**
@@ -205,6 +227,50 @@ describe("R15 两种空态可区分", () => {
     expect(html).toContain('data-directory-state="loading"');
     expect(html).not.toContain("data-empty-state");
   });
+
+  it("有目录但零会话：空态与目录列表**同时**呈现，列表在空态文案之后", () => {
+    // 这就是那条死路：空态指引写着「在下面选一个目录进入详情页」，此前下面什么也没有。
+    const model = buildDirectoryPageModel({
+      resources: resources({ sessions: [], workspaces: WORKSPACES }),
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    expect(model.kind).toBe("empty");
+
+    const html = renderDirectoryList(model);
+
+    // 空态标记与文案仍按既有取值出现……
+    expect(html).toContain('data-empty-state="directories_without_sessions"');
+    expect(html).toContain(DIRECTORY_EMPTY_COPY.directories_without_sessions.guidance);
+    // ……指引下方的**列表也必须真的在**，否则指引指向空处（spec「空态指引与实际呈现一致」）。
+    expect(html).toContain('data-directory-list="directories"');
+    expect(html.match(/data-directory-alias="/g)).toHaveLength(2);
+    expect(html.indexOf(DIRECTORY_EMPTY_COPY.directories_without_sessions.guidance)).toBeLessThan(
+      html.indexOf('data-directory-alias="'),
+    );
+    // 每个目录项都带标题入口 → 零会话的机器上仍能进入某个详情页（死路的另一半修复）。
+    expect(html.match(/data-action="open-directory"/g)).toHaveLength(2);
+    // 这些目录一条会话都没有 → 不得呈现任何活动时间（不拿当前时间/同步时刻顶替）。
+    expect(html).not.toContain("data-directory-latest-at");
+    expect(html).not.toContain("最近");
+  });
+
+  it("一个目录都没有的空态：不呈现任何目录项，也不呈现目录列表容器", () => {
+    const model = buildDirectoryPageModel({
+      resources: resources({ sessions: [], workspaces: [] }),
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    expect(model.kind).toBe("empty");
+
+    const html = renderDirectoryList(model);
+
+    expect(html).toContain('data-empty-state="no_directories"');
+    // 反例：若空态无条件渲染列表容器，这里会出现空的 `data-directory-list`（消费者会误以为有列表）。
+    expect(html).not.toContain("data-directory-list");
+    expect(html).not.toContain("data-directory-alias");
+    expect(html).not.toContain('data-action="open-directory"');
+  });
 });
 
 describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () => {
@@ -291,11 +357,12 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(html).toContain("查看全部 7 个");
     // 反例：若内联不限条数地全列出来，这里会出现 7 条会话行。
     expect(html.match(/data-session-id="/g)).toHaveLength(5);
-    // 超过上限时必须有进入详情页的入口，否则「更早的会话」无处可看。
-    expect(html).toContain('data-action="open-directory"');
+    // 超过上限时必须有进入详情页的入口，否则「更早的会话」无处可看；这里断言的是**查看全部**
+    // 这一个取值（`open-directory` 现在归标题入口，两者必须可区分，见下一条）。
+    expect(html).toContain('data-action="open-directory-all"');
   });
 
-  it("对照：一个会话都没有的目录项不呈现「查看全部」入口", () => {
+  it("对照：0 会话的目录项不呈现「查看全部」，但仍有标题入口（与会话数无关）", () => {
     // 只给 `work-api` 一条会话：`personal-api` 的会话数是 0（列表仍非空 → 仍是 ready）。
     const onlyWorkApi = [session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" })];
     const model = buildDirectoryPageModel({
@@ -307,8 +374,23 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     const html = renderDirectoryList(model);
 
     // 反例：若无条件渲染入口，两个目录项会各出一个「查看全部 0 个」。
-    expect(html.match(/data-action="open-directory"/g)).toHaveLength(1);
+    expect(html.match(/data-action="open-directory-all"/g)).toHaveLength(1);
     expect(html).not.toContain("查看全部 0 个");
+    // 另一条路径任何时候都在（每项一处）：0 会话的 `personal-api` 靠它进详情页。
+    expect(html.match(/data-action="open-directory"/g)).toHaveLength(2);
+
+    const cards = cardSegments(html);
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      // 每个目录项**恰好一处**标题入口；`data-directory-alias` 也只在这里的根节点出现一次。
+      expect(card.match(/data-action="open-directory"/g)).toHaveLength(1);
+      expect(card.match(/data-directory-alias="/g)).toHaveLength(1);
+    }
+    // 反例：若标题入口被实现成「有会话才可点」，0 会话那一项就没有入口，断言变红。
+    const noSessions = cards.filter((card) => !card.startsWith('data-directory-alias="work-api"'));
+    expect(noSessions).toHaveLength(1);
+    expect(noSessions[0]).toContain('data-action="open-directory"');
+    expect(noSessions[0]).not.toContain("open-directory-all");
   });
 
   it("无创建会话权限：呈现提示条；有权限时不呈现（缺省不留痕）", () => {
@@ -359,6 +441,95 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     const withoutClock = renderDirectoryList(never);
     expect(withoutClock).not.toContain("data-synced-at");
     expect(withoutClock).not.toContain("已同步");
+  });
+});
+
+describe("R15 目录项：最近活动时间与目录内创建入口", () => {
+  it("最近活动时间取该目录下**最晚**的会话时间，逐项各算各的", () => {
+    // 顺序刻意「最大在中间」：取第一条或最后一条都会得到别的值。
+    const model = buildDirectoryPageModel({
+      resources: resources({
+        sessions: [
+          session({ id: "cccccccc-0000-4000-8000-000000000001", updatedAt: "2026-09-30T23:00:00.000Z" }),
+          session({ id: "cccccccc-0000-4000-8000-000000000002", updatedAt: "2026-10-02T08:00:00.000Z" }),
+          session({ id: "cccccccc-0000-4000-8000-000000000003", updatedAt: "2026-10-01T00:00:00.000Z" }),
+          session({
+            id: "cccccccc-0000-4000-8000-000000000004",
+            alias: "personal-api",
+            updatedAt: "2026-08-01T05:30:00.000Z",
+          }),
+        ],
+        workspaces: WORKSPACES,
+      }),
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+
+    const cards = cardSegments(renderDirectoryList(model));
+    expect(cards).toHaveLength(2);
+
+    const workApi = cards.find((card) => card.startsWith('data-directory-alias="work-api"'));
+    expect(workApi).toBeDefined();
+    // 精确值经属性原样进 DOM；展示文本是 **UTC 固定切片**，因此可以逐字断言（不随机器时区漂移）。
+    expect(workApi).toContain('data-directory-latest-at="2026-10-02T08:00:00.000Z"');
+    expect(workApi).toContain("最近 2026-10-02 08:00 UTC");
+    // 反例：取第一条（09-30）、最后一条（10-01）或拿当前时间顶替，上面两条都会变红。
+    expect(workApi).not.toContain('data-directory-latest-at="2026-09-30T23:00:00.000Z"');
+    expect(workApi).not.toContain('data-directory-latest-at="2026-10-01T00:00:00.000Z"');
+    // 每项恰好一处：时间也由卡片自己渲染一次，不会顺带复制到子元素上。
+    expect(workApi?.match(/data-directory-latest-at="/g)).toHaveLength(1);
+
+    // 反例：若把「全机最大」当每项的值，personal-api 会显示 10-02 而不是它自己的 08-01。
+    const personalApi = cards.find((card) => card.startsWith('data-directory-alias="personal-api"'));
+    expect(personalApi).toBeDefined();
+    expect(personalApi).toContain('data-directory-latest-at="2026-08-01T05:30:00.000Z"');
+    expect(personalApi).not.toContain("2026-10-02T08:00:00.000Z");
+  });
+
+  it("对照：一条会话都没有的目录项不呈现任何活动时间", () => {
+    const model = buildDirectoryPageModel({
+      resources: resources({
+        sessions: [session({ id: "cccccccc-0000-4000-8000-000000000005", updatedAt: "2026-10-02T08:00:00.000Z" })],
+        workspaces: WORKSPACES,
+      }),
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+
+    const cards = cardSegments(renderDirectoryList(model));
+    const withoutSessions = cards.filter((card) => !card.startsWith('data-directory-alias="work-api"'));
+    expect(withoutSessions).toHaveLength(1);
+    // 反例：无会话时若拿当前时间/同步时刻顶替，这里会出现属性或「最近 …」。
+    expect(withoutSessions[0]).not.toContain("data-directory-latest-at");
+    expect(withoutSessions[0]).not.toContain("最近");
+
+    // 对照：同一页上有会话的那项**确实**呈现了时间——否则上一条可能只是「谁都没渲染」。
+    const withSessions = cards.filter((card) => card.startsWith('data-directory-alias="work-api"'));
+    expect(withSessions).toHaveLength(1);
+    expect(withSessions[0]).toContain('data-directory-latest-at="2026-10-02T08:00:00.000Z"');
+  });
+
+  it("目录内创建入口：调用方给了回调才呈现；不给时不留痕", () => {
+    const model = buildDirectoryPageModel({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+
+    const granted = renderDirectoryList(model, { onCreateSession: () => undefined });
+    expect(granted.match(/data-action="create-session"/g)).toHaveLength(2);
+    expect(granted).toContain("⊕ 新建");
+    // 新入口不得把 `data-directory-alias` 再挂一份（R15-1 数它的个数）。
+    expect(granted.match(/data-directory-alias="/g)).toHaveLength(2);
+    // 每个目录项各一处：入口是卡片级的，不会因为内联会话行多出几份。
+    for (const card of cardSegments(granted)) {
+      expect(card.match(/data-action="create-session"/g)).toHaveLength(1);
+    }
+
+    // 缺省（未持有 `session.create` 时页面就是这样传的）→ 入口不呈现，且不留别痕迹。
+    const denied = renderDirectoryList(model);
+    expect(denied).not.toContain('data-action="create-session"');
+    expect(denied).not.toContain("⊕ 新建");
   });
 });
 

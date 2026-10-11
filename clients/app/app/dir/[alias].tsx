@@ -14,6 +14,13 @@
  *
  * 这两个字段是**单份**的（store 单例跨路由存活），因此进入某个目录时要复位
  * （`resetDirectoryDetailView`）——否则在目录 A 选的月份档/敲的查询词会带进目录 B。
+ *
+ * ## 创建弹层的开关为什么不在本页
+ *
+ * `ClientState.createSheetAlias` 是**单份**状态：目录页的卡片创建入口与详情页的创建入口
+ * 读写的是它，两页各自只做一次派生读取（本页即 `createSheetAlias === alias`）。本页因此
+ * **没有**本地 `sheetOpen`——否则两页各持一份，同一时刻可能出现两个弹层。同样因为它跨路由
+ * 存活，进入本页时先 `closeCreateSheet()` 复位一次，避免把别处打开的弹层带进来。
  */
 
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -76,7 +83,6 @@ export default function DirectoryDetailRoute(): ReactElement {
   const router = useRouter();
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [agentId, setAgentId] = useState<string | null>(null);
 
   // 目录内查询词与月份档是单份 store 状态、跨路由存活；进入（或切换到）某个目录时复位一次，
@@ -87,10 +93,24 @@ export default function DirectoryDetailRoute(): ReactElement {
     store.resetDirectoryDetailView();
   }, [store, alias]);
 
+  // 创建弹层的开关**不落在本页**：它由 store 的单份 `createSheetAlias` 派生（见下方
+  // `sheetOpen`），目录页呈现的那一份也是它。同样因为它跨路由存活，进入本页时先复位一次，
+  // 否则会把别的路由上打开的弹层带进详情页。
+  useEffect(() => {
+    if (store === null || typeof alias !== "string") return;
+    store.closeCreateSheet();
+  }, [store, alias]);
+
   if (store === null || state === null) return <RuntimeUnavailable route="dir-detail" />;
   if (typeof alias !== "string" || alias.length === 0) return <RuntimeUnavailable route="dir-detail" />;
 
   const entry = store.createEntry(alias);
+
+  /**
+   * 弹层的打开状态：**唯一来源**是 store 的 `createSheetAlias`（等于本页的目录别名时才呈现）。
+   * 本页不再持有 `useState` 开关——否则目录页与详情页会各持一份，同一时刻可能出现两个弹层。
+   */
+  const sheetOpen = state.createSheetAlias === alias;
 
   return (
     <View role="main" style={styles.root}>
@@ -130,7 +150,6 @@ export default function DirectoryDetailRoute(): ReactElement {
         }}
         onCreateSession={() => {
           store.openCreateSheet(alias);
-          setSheetOpen(true);
         }}
       />
 
@@ -149,7 +168,6 @@ export default function DirectoryDetailRoute(): ReactElement {
           }}
           onClose={() => {
             store.closeCreateSheet();
-            setSheetOpen(false);
           }}
         />
       ) : null}

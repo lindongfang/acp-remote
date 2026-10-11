@@ -12,6 +12,9 @@
  * - 分档：用了 2026-09 / 2026-10 两个月份与一条 2020 年的会话——若实现改用「当前时间」，
  *   三个月份会并成一档，`months` 与「今天所在的档」两条断言都会变红；
  * - `no_match`：只在非默认查询/筛选下构造可达用例，并对照「缺省输入永不进入」。
+ * - 最近活动时间：夹具里 `work-api` 的三条会话**最新的一条在中间**、`personal-api` 有一条**全局最晚**
+ *   的会话——取第一条 / 取最后一条 / 取全局最大值 / 取当前时间的实现各会得到不同的值，只有
+ *   「该目录下 `updatedAt` 的最大值」等于 `10-02`。
  * - 月份档对账：构造「请求的档已不在派生档集合里」的可达用例（目录内查询收缩档集合、
  *   跨目录残留上一个目录的档），断言生效月份回落到能被控件表示的 `"all"`——没有对账时
  *   这些用例会得到空白列表 + 无选中控件，正是本文件要挡住的错态。
@@ -23,7 +26,7 @@ import { UNTITLED_SESSION_LABEL } from "../domain";
 import type { SessionSummary, WorkspaceRef } from "../protocol";
 import type { DirectoryDetailModel, DirectoryFilter, DirectoryPageModel } from "./directory-model";
 import { buildDirectoryDetailModel, buildDirectoryPageModel, monthKeyOf } from "./directory-model";
-import { CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
+import { ACTIVITY_SESSIONS, CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
 
 /** 三个目录，展示名、别名、名下会话标题两两不相交，便于把「命中来自哪一处」分离出来。 */
 const DIRS = [
@@ -88,6 +91,14 @@ function detail(input: {
 function aliasesOf(model: DirectoryPageModel): readonly string[] {
   if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
   return model.directories.map((directory) => directory.alias);
+}
+
+/** 取 ready 目录页里某个目录的最近活动时间；目录不在页面里时直接失败。 */
+function activityOf(model: DirectoryPageModel, alias: string): string | null {
+  if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
+  const row = model.directories.find((directory) => directory.alias === alias);
+  if (row === undefined) throw new Error(`目录页里没有 ${alias}`);
+  return row.latestActivityAt;
 }
 
 describe("目录页搜索：展示名 / 别名 / 会话标题三种命中", () => {
@@ -155,6 +166,41 @@ describe("目录页状态筛选", () => {
     ]);
     // 叠加后无命中即 no_match——不是 ready。
     expect(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "核心", filter: "pending" }).kind).toBe("no_match");
+  });
+});
+
+describe("目录页最近活动时间：该目录下 updatedAt 的最大值", () => {
+  it("取最大值：既不是数组第一条，也不是最后一条，更不是当前时间", () => {
+    const model = page({ sessions: ACTIVITY_SESSIONS });
+    // `work-api` 的三条时间依次为 09-30（首）/ 10-02（中，最晚）/ 08-15（末）。
+    // 反例：取第一条 → 09-30；取最后一条 → 08-15；取当前时间 → 运行当天。三者都不等于 10-02。
+    expect(activityOf(model, "work-api")).toBe("2026-10-02T08:00:00.000Z");
+    expect(activityOf(model, "work-api")).not.toBe(ACTIVITY_SESSIONS[0]?.updatedAt);
+    expect(activityOf(model, "work-api")).not.toBe(ACTIVITY_SESSIONS[2]?.updatedAt);
+    // 原值直出：模型给出会话自身的 `updatedAt`（不做格式化、也不做本地时区换算）。
+    expect(activityOf(model, "work-api")).toBe(ACTIVITY_SESSIONS[1]?.updatedAt);
+  });
+
+  it("按目录各算各的：别的目录更晚的会话不算进来", () => {
+    const model = page({ sessions: ACTIVITY_SESSIONS });
+    // `personal-api` 的那条是**全局**最晚（12-31）；反例：按整份快照取最大值时，下面第一条会变成 12-31。
+    expect(activityOf(model, "personal-api")).toBe("2026-12-31T23:59:59.000Z");
+    expect(activityOf(model, "work-api")).not.toBe("2026-12-31T23:59:59.000Z");
+  });
+
+  it("该目录没有会话 → null（不呈现，也不用当前时间顶替）", () => {
+    // `CROSS_MONTH_SESSIONS` 全在 `work-api` 下：`personal-api` 一条会话都没有。
+    const model = page({ sessions: CROSS_MONTH_SESSIONS });
+    expect(activityOf(model, "personal-api")).toBeNull();
+    // 对照：有会话的目录仍给出时间，且取的是最晚的那条而不是第一条（数组里第一条更早）。
+    expect(activityOf(model, "work-api")).toBe("2026-10-02T08:00:00.000Z");
+    expect(activityOf(model, "work-api")).not.toBe(CROSS_MONTH_SESSIONS[0]?.updatedAt);
+  });
+
+  it("目录详情也带上该目录的最近活动时间（与列表页同一条投影）", () => {
+    const model = detail({ sessions: ACTIVITY_SESSIONS, alias: "work-api" });
+    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
+    expect(model.directory.latestActivityAt).toBe("2026-10-02T08:00:00.000Z");
   });
 });
 

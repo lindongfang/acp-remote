@@ -15,11 +15,11 @@
 |---|---|---|
 | 合同（目录字段 / Sync `session.create` / Agent 目录 / 快照范围） | **已落地** | `openspec/specs/sync-workspace-catalog`、`sync-session-create`、`sync-snapshot-scope`；`compatibility/commands/v1/commands.json` 的 `session.create` 已含 `transport: ["sync"]`；`schemas/sync/v1/common.schema.json` 的 `sessionSummary` 已有 `workspace` |
 | 前端工程与逻辑层（配对状态机、连接 12 态、快照/重放、事件去重、命令幂等、目录模型、创建入口、对话读取与翻页、降级卡片与诊断、主机面板、imported 不落盘） | **已落地** | `clients/app/src/**`，含单测与浏览器 E2E（`clients/app/e2e/`） |
-| 前端**视觉与交互层** | **基本未落地** | 组件是无样式语义标记（全仓无 CSS / `StyleSheet`）；对话页只读 |
+| 前端**视觉与交互层** | **部分落地** | 目录页与目录详情页（`clients/app/app/index.tsx`、`clients/app/app/dir/[alias].tsx`）及其页内组件已用 `clients/app/src/components/theme.ts` 的浅/深两套 token + `StyleSheet.create` 出样式，`DirectoryList` / `DirectoryDetail` 各有一个 720px 宽屏断点；**尚未迁移**：对话页、配对页、`hosts` 页壳，以及 `ConversationStream` / `ContextUsageBar` / `DegradedEventCard` / `DiagnosticsDrawer` / `PairingPanel` 仍是未挂样式的语义标记。对话页仍只读 |
 | `server::sync` | **仍未落地** | `crates/server/src/transport/net/route.rs` 注释：未注册 path（含 `/sync/v1*`）一律 404 |
 | `/ui` 静态资源托管 | **仍未落地** | 无任何注册的静态路由 |
 
-一句话：**能算、能测的层都有了；用户能看见、能点的层基本还没有，且它连不上真机。**
+一句话：**能算、能测的层都有了；用户能看见、能点的层除目录页与目录详情页（已出样式与宽屏分档）外基本还没有，且它连不上真机。**
 
 ---
 
@@ -66,12 +66,22 @@
 
 ### 2.2 目录页与目录详情
 
-- 搜索框（按目录名 / 会话标题）。
-- 状态筛选分段（全部 / 运行中 / 待处理）。
-- 每个目录内最多 3～5 条会话 + 「查看全部」+ 目录折叠。
-- 详情页按月分档 + 月份分段 + 「当前显示 N / M」。
-- 离线提示条与同步时间（「已同步 14:33」/「离线 · 2 分钟前同步」）。
-- 目录页顶部的「这台设备没有创建会话的权限」提示条（实现只在详情页按钮上表达）。
+原型（`prototypes/acp-remote-pwa.html` 的 `viewDirs` / `viewDirDetail`）与实现（`clients/app/src/components/DirectoryList.tsx`、`DirectoryCard.tsx`、`DirectoryDetail.tsx`）的逐项对照，状态按变更 `pwa-directory-ui` 与 `pwa-directory-ui-followup` 落地后的代码核对。
+
+上一版这里列的六条缺口——搜索框、状态筛选分段、目录内联会话行 +「查看全部」+ 折叠、详情页按月分档、离线提示条与同步时间、目录页权限提示条——**已全部补齐，不再是缺口**；下表把它们与本次补上的两项（最近活动时间、卡片级创建入口）以及死路的修复一并记下，供后继提案核对。
+
+| 原型有 | 实现现状 |
+|---|---|
+| 搜索框（按目录名 / 会话标题）、状态筛选分段（全部 / 运行中 / 待处理） | **已实现**：受控输入写进 store；两种空态下不呈现工具条，「搜索无结果」另作第三种呈现，不冒充空态 |
+| 每个目录内最多 3～5 条会话 + 「查看全部」+ 卡片折叠 | **已实现**：内联上限 5 条；折叠只翻本项（`data-directory-collapsed`），不影响其它目录项 |
+| 详情页按月分档 + 月份分段 + 「当前显示 N / M」 | **已实现**：分档与两个数字都在 `directory-model` 的纯函数里；「目录里从来没有会话」与「被查询、月份档挡住」是两种互不冒充的呈现 |
+| 离线提示条与同步时间（「已同步 14:33」/「离线 · 2 分钟前同步」） | **已实现**：来源标注（`data-content-origin`）+ UTC 固定切片的同步时刻（`data-synced-at`）；从未成功同步过时不呈现任何时间 |
+| 目录页顶部的「这台设备没有创建会话的权限」提示条 | **已实现**：`data-create-permission-note`，文案取自创建入口模型的 `permission.note`，与详情页同源 |
+| 卡片头部的「最近 <活动时间>」（`dwhen`） | **已实现**：`data-directory-latest-at` 带原始时间，文案为「最近 YYYY-MM-DD HH:MM UTC」；取该目录下会话 `updatedAt` 的最大值，无会话时不呈现 |
+| 卡片上的「⊕ 新建」（原型用 `A.canCreate` 门控） | **已实现**：`data-action="create-session"`，与目录详情页共用同一条 `session.create` 与同一份权限判定，载荷仍只有 `{ workspaceAlias, agentId }` 两个引用；无权限时卡片不呈现该入口，说明由页面顶部承担 |
+| 卡片头部可进入详情页 | **实现优于原型**：原型只有「查看全部」且只在有会话时给出，0 会话的目录因此进不去；实现把目录名做成 `data-action="open-directory"` 的入口，与会话数无关，有会话时再保留「查看全部 N 个 ›」（`data-action="open-directory-all"`），两个入口的机器标识可区分 |
+| （原型同样进不去的死路）0 会话时既进不去目录详情页、也建不了第一个会话 | **已修复**：空态（已登记目录但无会话）下同时呈现空态标记与其下的目录列表（`data-directory-list="directories"`），空态指引说的「在下面选一个目录」第一次指向真实存在的列表；本机一个目录都没有（`no_directories`）时不呈现任何目录项 |
+| 卡片体内 0 会话时的「这个目录还没有会话」提示行 | **仍缺**（本段唯一残留项）：卡片体在无内联会话行时是空白；目录页只给出目录项本身，可达性不受影响 |
 
 ### 2.3 顶栏 / 主机与连接
 
@@ -99,9 +109,9 @@
 
 ### 2.6 全局
 
-- **无任何样式**：无 CSS、无 Tailwind、无 `StyleSheet`，组件没有任何 `style`/`className`。
+- **样式基座已落地，覆盖面只到目录页与主机面板**：`clients/app` 的 `src/` 与 `app/` 下仍无 `.css` 文件、无 Tailwind、无 `className`（原型 `prototypes/acp-remote-pwa.html` 自带的 CSS 不进实现）；样式走 `react-native-web` 的 `StyleSheet`，基座是 `clients/app/src/components/theme.ts` 的浅/深两套颜色 token 与间距/圆角/字号/字族尺度，由 11 个组件（`ConnectionBadge`、`CreateSessionSheet`、`DirectoryCard`、`DirectoryDetail`、`DirectoryList`、`EmptyState`、`HostConnectionPanel`、`RuntimeUnavailable`、`SegmentControl`、`SessionRow`、`StatusPill`）与两个路由（`app/index.tsx`、`app/dir/[alias].tsx`）以 `StyleSheet.create` 消费；`ConversationStream`、`ContextUsageBar`、`DegradedEventCard`、`DiagnosticsDrawer`、`PairingPanel` 与对话页、配对页、`hosts` 页壳仍是不带 `style` 的语义标记。
 - 无 PWA `manifest.json`、service worker、安装引导、图标。
-- 无响应式断点（移动端原型已画出，实现未做）。
+- 响应式只在目录这一块做了一档宽度分档：`DirectoryList.tsx` 的 `WIDE_BREAKPOINT = 720`（可用宽度 ≥720px 时目录卡片并排，否则单列）与 `DirectoryDetail.tsx` 的 `WIDE_LAYOUT_MIN_WIDTH = 720`（≥720px 时头部与工具条并排；两档渲染的信息集合相同）；对话页、配对页、`hosts` 页无断点（移动端原型已画出，实现未做）。
 - 无 i18n（原型为 zh-CN）。
 
 ---

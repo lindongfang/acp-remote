@@ -78,6 +78,48 @@ export const CROSS_MONTH_SESSIONS: readonly SessionSummary[] = [
   }),
 ];
 
+/**
+ * 最近活动时间夹具：同一个目录下的会话**故意不按时间排列**，且**全局最晚的一条在别的目录**。
+ *
+ * `work-api` 的三条依次为 `09-30`（首）/ `10-02`（中，最晚）/ `08-15`（末），`personal-api`
+ * 有一条 `12-31` 的会话。于是四种错法各自得到不同的值：
+ *
+ * - 取数组第一条 → `09-30`；取最后一条 → `08-15`；取全局最大值 → `12-31`（别的目录的会话）；
+ *   取当前时间 → 运行当天。只有「该目录下 `updatedAt` 的最大值」等于 `10-02`。
+ *
+ * 用法见 `directory-filter.test.ts` 的「目录页最近活动时间」。
+ */
+export const ACTIVITY_SESSIONS: readonly SessionSummary[] = [
+  session({
+    id: "ffffffff-0000-4000-8000-000000000001",
+    title: "早先的一次提交",
+    state: "idle",
+    alias: "work-api",
+    updatedAt: "2026-09-30T23:00:00.000Z",
+  }),
+  session({
+    id: "ffffffff-0000-4000-8000-000000000002",
+    title: "最晚的一次提交",
+    state: "running",
+    alias: "work-api",
+    updatedAt: "2026-10-02T08:00:00.000Z",
+  }),
+  session({
+    id: "ffffffff-0000-4000-8000-000000000003",
+    title: "最早的一次提交",
+    state: "idle",
+    alias: "work-api",
+    updatedAt: "2026-08-15T01:00:00.000Z",
+  }),
+  session({
+    id: "ffffffff-0000-4000-8000-000000000004",
+    title: "别的目录的跨年会话",
+    state: "idle",
+    alias: "personal-api",
+    updatedAt: "2026-12-31T23:59:59.000Z",
+  }),
+];
+
 /** 默认快照资源：两个同名目录、两条会话、两个同名 Agent。 */
 export function resources(input: {
   readonly sessions?: readonly SessionSummary[];

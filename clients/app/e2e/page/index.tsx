@@ -20,6 +20,11 @@ import type { CheckResult } from "./support";
  *
  * R15 的目录页与目录详情页分成两个文件（各自一个检查集），共用同一套 `data-*` 口径与
  * 夹具来源；两者之间没有顺序依赖，放在一起只是让同一需求的用例连成一段输出。
+ *
+ * 跨路由的用例（进入某个目录的详情页、返回目录页后查询词仍在、零会话的目录也可达）
+ * 放在**详情集**里：它们要先挂目录页、再导航过去，而共用的等待与打字机关
+ * （`waitForDirectoryList` / `typeIntoInput` / `withScenario`）都在目录页那一半，
+ * 由详情集单向导入——反过来导入会成环。
  */
 const ALL_CHECKS = [
   ...COMPOSITION_CHECKS,
