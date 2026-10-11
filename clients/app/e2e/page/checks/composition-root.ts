@@ -131,7 +131,7 @@ const checks: readonly Check[] = [
           "目录页渲染出目录列表",
         );
         expectThat(
-          queryAll(mounted.container, "li[data-directory-alias]").length === 2,
+          queryAll(mounted.container, "[data-directory-alias]").length === 2,
           "目录页必须渲染出两条目录（模型已到达页面）",
         );
       } finally {

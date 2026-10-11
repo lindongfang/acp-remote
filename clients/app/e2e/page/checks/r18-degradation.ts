@@ -7,7 +7,7 @@
  *
  * ## 判别力
  *
- * - 「原文未下发」用**负向断言**：`pre[data-raw-json]` 必须不存在（占位原文会在这里出现）。
+ * - 「原文未下发」用**负向断言**：`[data-raw-json]` 必须不存在（占位原文会在这里出现）。
  * - 「内容未下发 ≠ 客户端不支持」是 WP7 第 1 轮的 MAJOR-2：断言整页**不出现**
  *   `data-unsupported-by` 与「当前客户端未提供专用视图」，只允许出现在真正的不支持卡片上。
  * - 每条负向断言都配**对照**事件（原文可用且事件已知 → 不产生降级卡片），
@@ -175,7 +175,7 @@ async function withDegradedPage(
   const mounted = await mountScenario(baseScenario(overrides));
   try {
     await waitFor(
-      () => queryAll(mounted.container, "li[data-degraded-entry]").length >= 7,
+      () => queryAll(mounted.container, "[data-degraded-entry]").length >= 7,
       "降级卡片渲染",
     );
     await body(mounted.container);
@@ -216,7 +216,7 @@ const checks: readonly Check[] = [
         await openDiagnostics(container, EVENT_RAW_NOT_SYNCED);
         // MUST NOT：占位原文会出现在这个槽位上，它必须不存在。
         expectThat(
-          query(container, "pre[data-raw-json]") === null,
+          query(container, "[data-raw-json]") === null,
           "原文未下发时不得渲染原文占位",
         );
         const unavailable = query(container, '[data-diagnostics-drawer] [data-raw-unavailable="size_limit"]');
@@ -322,7 +322,7 @@ const checks: readonly Check[] = [
     async run() {
       await withDegradedPage(async (container) => {
         await openDiagnostics(container, EVENT_UNKNOWN_WITH_RAW);
-        const raw = query(container, 'pre[data-raw-json="available"]');
+        const raw = query(container, '[data-raw-json="available"]');
         expectThat(raw !== null, "原文可用时诊断抽屉必须给出 rawJson");
         expectEqual(textOf(raw), RAW_JSON_TEXT, "抽屉里的原文必须与服务端下发的逐字一致");
         // 元数据无论原文是否可用都必须完整呈现。
@@ -351,10 +351,10 @@ const checks: readonly Check[] = [
           query(container, `[data-degraded-entry="${EVENT_NO_DEGRADATION}"]`) === null,
           "事件已知且原文可用时不得产生降级卡片",
         );
-        const entries = queryAll(container, "li[data-degraded-entry]");
+        const entries = queryAll(container, "[data-degraded-entry]");
         expectEqual(entries.length, 7, "降级卡片总数（八条事件里只有一条不降级）");
         expectEqual(
-          queryAll(container, "pre[data-raw-json]").length,
+          queryAll(container, "[data-raw-json]").length,
           0,
           "抽屉未打开时页面上不得出现原文槽位",
         );

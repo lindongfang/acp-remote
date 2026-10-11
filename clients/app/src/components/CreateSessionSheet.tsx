@@ -40,8 +40,9 @@ export interface CreateSessionSheetProps {
  *
  * RNW 按 `role` 选语义标签：`heading` + `aria-level: 2` → `<h2>`。`aria-level` 不在
  * `react-native` 的公开类型里（RNW 比 RN 多认它），因此这里显式声明一次、把这个**运行时**
- * 属性原样透传：属性名与取值不得改名。R16 的浏览器用例用 `[data-create-sheet] h2` 读目录
- * 别名（`e2e/page/checks/r16-create.ts:155`），退化成 `div` 会让它读到空串。
+ * 属性原样透传：属性名与取值不得改名。语义标签是读屏与文档结构的依据，退化成 `div` 会把
+ * 「这是弹层标题」这件事丢掉；同时标题上另带 `data-create-sheet-title="true"`（见下面
+ * `dataSet`），消费方按**属性**取这段文字，不必依赖 RNW 的标签映射。
  */
 const TITLE_PROPS = { role: "heading", "aria-level": 2 } as unknown as TextProps;
 
@@ -299,7 +300,7 @@ export function CreateSessionSheet({
       dataSet={{ createSheet: model.directoryAlias, createPermission: model.permission.kind }}
     >
       <View style={styles.head}>
-        <Text {...TITLE_PROPS} style={styles.title}>
+        <Text {...TITLE_PROPS} style={styles.title} dataSet={{ createSheetTitle: "true" }}>
           {`在「${model.directoryAlias}」里新建会话`}
         </Text>
         <Pressable role="button" style={styles.close} dataSet={{ action: "close-create-sheet" }} onPress={onClose}>

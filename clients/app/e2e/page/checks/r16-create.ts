@@ -20,7 +20,14 @@ import { createRoot } from "react-dom/client";
 
 import { CreateSessionSheet } from "../../../src/components";
 
-import { AGENTS, WORKSPACES_WITH_PATHS, dirRoute, sessionsForBothDirectories } from "../fixtures";
+import {
+  AGENTS,
+  DIRECTORY_ROUTES,
+  DIRS_ROUTE,
+  WORKSPACES_WITH_PATHS,
+  dirRoute,
+  sessionsForBothDirectories,
+} from "../fixtures";
 import {
   CANONICAL_ORIGIN,
   click,
@@ -31,6 +38,7 @@ import {
   expectThat,
   mountScenario,
   query,
+  queryAll,
   textOf,
   waitFor,
 } from "../support";
@@ -152,7 +160,7 @@ const checks: readonly Check[] = [
         // 对照：弹层本身的渲染也不泄露路径（弹层只有目录别名，没有任何路径来源）。
         expectAbsent(domHtml(mounted.container), "D:\\", "创建弹层渲染泄露了本机路径");
         expectEqual(
-          textOf(sheet.querySelector("h2")).includes("alpha"),
+          textOf(query(sheet, "[data-create-sheet-title]")).includes("alpha"),
           true,
           "创建弹层标题应给出目录别名",
         );
@@ -257,6 +265,110 @@ const checks: readonly Check[] = [
         deniedReason !== unauthenticatedReason,
         `未认证与无 scope 的拒绝理由必须不同（都是 ${deniedReason}）`,
       );
+    },
+  },
+  {
+    name: "R16-4 目录卡片的创建入口：弹层属于被点的那一项，同一时刻只有一个，提交载荷仍是两个引用",
+    async run() {
+      const mounted = await mountScenario(
+        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES }),
+      );
+      try {
+        await waitFor(
+          () => queryAll(mounted.container, "[data-directory-alias]").length === 2,
+          "目录页渲染出两条目录",
+        );
+        // 有权限时**每个**目录项各有一个创建入口：一个都没有 = 入口没接线；只有一个 = 入口
+        // 被挂成了页面级按钮而不是卡片上的那一个。
+        expectEqual(
+          queryAll(mounted.container, '[data-action="create-session"]').length,
+          2,
+          "每个目录项各有一个「⊕ 新建」入口",
+        );
+
+        click(
+          query(mounted.container, '[data-directory-alias="alpha"] [data-action="create-session"]'),
+          "alpha 的卡片创建入口",
+        );
+        await waitFor(() => query(mounted.container, "[data-create-sheet]") !== null, "创建弹层打开");
+        expectEqual(
+          queryAll(mounted.container, "[data-create-sheet]").length,
+          1,
+          "同一时刻只有一个创建弹层",
+        );
+        expectEqual(
+          query(mounted.container, "[data-create-sheet]")?.getAttribute("data-create-sheet") ?? null,
+          "alpha",
+          "弹层绑定的是被点的那一项",
+        );
+        expectThat(
+          textOf(query(mounted.container, "[data-create-sheet-title]")).includes("alpha"),
+          "弹层标题必须给出被点目录的别名",
+        );
+
+        // 弹层开着时点**另一个**目录项的入口：换的是同一个弹层，不是再叠一个。
+        click(
+          query(mounted.container, '[data-directory-alias="beta"] [data-action="create-session"]'),
+          "beta 的卡片创建入口",
+        );
+        await waitFor(
+          () => query(mounted.container, "[data-create-sheet]")?.getAttribute("data-create-sheet") === "beta",
+          "弹层切换到 beta",
+        );
+        expectEqual(
+          queryAll(mounted.container, "[data-create-sheet]").length,
+          1,
+          "切换后仍然只有一个创建弹层",
+        );
+
+        // 提交：断言的是实际发出的那一帧字节（与 R16-1 同一手法）。
+        expectEqual(
+          query(mounted.container, '[data-action="submit-create"]')?.hasAttribute("disabled") ?? false,
+          true,
+          "未选 Agent 时提交按钮应禁用",
+        );
+        click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "Agent codex-a");
+        await waitFor(
+          () => query(mounted.container, 'button[data-agent-id="codex-a"]')?.getAttribute("data-selected") === "true",
+          "Agent 被选中",
+        );
+        click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
+        await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "发出 session.create 帧");
+        const frame = createFrame(mounted.host?.sent ?? []);
+        expectThat(frame !== null, "点击提交后必须真的发出一帧 session.create");
+        const parsed: unknown = JSON.parse(frame ?? "{}");
+        const payload = (parsed as { body: { payload: unknown } }).body.payload;
+        expectEqual(
+          Object.keys(payload as Record<string, unknown>).sort(),
+          ["agentId", "workspaceAlias"],
+          "目录卡片发起的创建，载荷仍恰好是两个引用",
+        );
+        // 目录引用是**被点的那一项**，不是页面第一次渲染时的那一个。
+        expectEqual(
+          (payload as { workspaceAlias: string }).workspaceAlias,
+          "beta",
+          "载荷里的目录引用",
+        );
+        expectEqual((payload as { agentId: string }).agentId, "codex-a", "载荷里的 Agent 引用");
+        expectNone(frame ?? "", FORBIDDEN_IN_PAYLOAD, "session.create 帧里出现了越界字段名");
+        expectAbsent(frame ?? "", "D:", "session.create 帧里出现了本机盘符路径");
+
+        // 进入详情页时弹层复位：上一条弹层不会被带到下一屏（同一时刻因此永远只有一个）。
+        click(
+          query(mounted.container, '[data-directory-alias="beta"] [data-action="open-directory"]'),
+          "beta 的卡片标题入口",
+        );
+        await waitFor(
+          () => query(mounted.container, '[data-route="dir-detail"][data-directory-alias="beta"]') !== null,
+          "进入 beta 的详情页",
+        );
+        await waitFor(
+          () => query(mounted.container, "[data-create-sheet]") === null,
+          "进入详情页后弹层已复位",
+        );
+      } finally {
+        await mounted.unmount();
+      }
     },
   },
 ];

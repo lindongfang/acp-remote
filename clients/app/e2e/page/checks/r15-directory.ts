@@ -242,8 +242,9 @@ const checks: readonly Check[] = [
           const node = query(mounted.container, "[data-empty-state]");
           return [
             node?.getAttribute("data-empty-state") ?? "",
-            textOf(node?.querySelector("h2")),
-            textOf(node?.querySelector("p")),
+            // 标题与指引按**显式锚点**取，不依赖 RNW 把 `role` 映射成 `h2`/`p`。
+            textOf(node?.querySelector("[data-empty-state-title]")),
+            textOf(node?.querySelector("[data-empty-state-guidance]")),
           ];
         } finally {
           await mounted.unmount();
@@ -382,7 +383,8 @@ const checks: readonly Check[] = [
         expectEqual(countsOf(card), ["6", "0", "0"], "目录项的三项汇总按全量口径");
 
         // 入口文案里的 N 是目录的**会话总数**（不是内联行数）：写成 5 或写成内联行数都会在这里红。
-        const openAll = query(card, '[data-action="open-directory"]');
+        // 「查看全部」的动作取值是 `open-directory-all`（与卡片标题的 `open-directory` 区分开）。
+        const openAll = query(card, '[data-action="open-directory-all"]');
         expectThat(openAll !== null, "会话数超过内联上限时必须给出进入详情页的入口");
         expectThat(
           textOf(openAll).includes("查看全部 6 个"),
@@ -392,7 +394,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-11 没有会话的目录项不呈现「查看全部」入口（对照：有会话的目录项必须有）",
+    name: "R15-11 0 会话的目录项仍有进入详情页的标题入口，但不呈现「查看全部」（对照：有会话的目录项两个入口都在）",
     async run() {
       const onlyAlpha = sessionSeries({
         alias: "alpha",
@@ -406,13 +408,38 @@ const checks: readonly Check[] = [
         expectEqual(aliasesOf(container), ["alpha", "beta"], "两条目录都要呈现（一条没有会话）");
         const beta = query(container, '[data-directory-alias="beta"]');
         expectEqual(countsOf(beta), ["0", "0", "0"], "beta 的三项汇总为零");
+        // 0 条会话：没有「查看全部 N 个」（那里也没有会话可看），但**必须**留下标题入口——
+        // 否则这台机器上没有任何路径进入该目录的详情页，详情页的创建入口也随之不可达。
         expectThat(
-          query(beta, '[data-action="open-directory"]') === null,
+          query(beta, '[data-action="open-directory-all"]') === null,
           "0 条会话的目录项不得给出「查看全部 N 个」入口（那里也没有会话可看）",
         );
         expectThat(
-          query(container, '[data-directory-alias="alpha"] [data-action="open-directory"]') !== null,
-          "对照：有会话的目录项必须给出入口",
+          query(beta, '[data-action="open-directory"]') !== null,
+          "0 条会话的目录项必须仍有进入详情页的标题入口",
+        );
+        // 对照：有会话的目录项两个入口都在，且「查看全部」的 N 是它的会话总数。
+        const alpha = query(container, '[data-directory-alias="alpha"]');
+        expectThat(
+          query(alpha, '[data-action="open-directory"]') !== null,
+          "对照：有会话的目录项必须给出标题入口",
+        );
+        const openAll = query(alpha, '[data-action="open-directory-all"]');
+        expectThat(openAll !== null, "对照：有会话的目录项必须给出「查看全部」入口");
+        expectThat(
+          textOf(openAll).includes("查看全部 1 个"),
+          `对照：「查看全部」的 N 是会话总数，实际 ${JSON.stringify(textOf(openAll))}`,
+        );
+        // 两个入口各自每条目录项恰好一处：把新属性挂到卡片根节点或重复渲染都会在这里红。
+        expectEqual(
+          queryAll(container, '[data-action="open-directory"]').length,
+          2,
+          "每条目录项恰好一个标题入口",
+        );
+        expectEqual(
+          queryAll(container, '[data-action="open-directory-all"]').length,
+          1,
+          "只有有会话的那一项带「查看全部」",
         );
       });
     },
@@ -474,6 +501,81 @@ const checks: readonly Check[] = [
           "从未成功替换过快照时不得呈现任何同步时刻",
         );
         expectAbsent(domText(container), "已同步", "从未同步过的页面不该出现「已同步」文案");
+      });
+    },
+  },
+  {
+    name: "R15-19 目录项呈现该目录下最晚的会话时间（UTC 固定切片）；没有会话的目录项不呈现任何时间",
+    async run() {
+      // 三条会话里**最晚的那条在中间**：取第一条、取最后一条、取「当前时间」都会在这里红。
+      // 快照的数组顺序不影响呈现（行在模型里按会话自身时间倒序排过），因此这里可以故意乱序。
+      const sessions = sessionSeries({
+        alias: "alpha",
+        idPrefix: "aaaaaaaa",
+        titles: ["十月四日", "十月六日", "九月二十日"],
+        at: [
+          "2026-10-04T09:00:00.000Z",
+          "2026-10-06T09:00:00.000Z",
+          "2026-09-20T09:00:00.000Z",
+        ],
+      });
+      await withScenario(baseScenario({ sessions }), async (container) => {
+        await waitForDirectoryList(container);
+        const latest = query(container, '[data-directory-alias="alpha"] [data-directory-latest-at]');
+        expectThat(latest !== null, "有会话的目录项必须呈现最近活动时间");
+        expectEqual(
+          latest?.getAttribute("data-directory-latest-at") ?? null,
+          "2026-10-06T09:00:00.000Z",
+          "最近活动时间的原值必须是该目录下**最晚**的那条会话时间",
+        );
+        // 展示文本是 UTC 固定切片（`YYYY-MM-DD HH:MM UTC`）：走本地时区或画「N 分钟前」都会红。
+        expectEqual(textOf(latest), "最近 2026-10-06 09:00 UTC", "最近活动时间的展示文本（UTC 固定切片）");
+        // 没有会话的目录项不呈现时间，也不拿当前时间顶替（beta 一条会话都没有）。
+        expectThat(
+          query(container, '[data-directory-alias="beta"] [data-directory-latest-at]') === null,
+          "0 会话的目录项不得呈现任何活动时间",
+        );
+        expectEqual(
+          queryAll(container, "[data-directory-latest-at]").length,
+          1,
+          "整页只有有会话的那一项带活动时间",
+        );
+      });
+    },
+  },
+  {
+    name: "R15-20 目录页的创建权限：无 session.create 时给出提示条且卡片上没有创建入口；有权限时相反",
+    async run() {
+      // 无权限：入口**不呈现**（不是呈现成禁用），说明由页面顶部的提示条承担。
+      await withScenario(baseScenario({ scopes: ["session.list", "session.read"] }), async (container) => {
+        await waitForDirectoryList(container);
+        const note = query(container, "[data-create-permission-note]");
+        expectThat(note !== null, "无创建权限时目录页必须给出提示条（不能只把入口藏起来）");
+        expectThat(
+          textOf(note).includes("电脑端"),
+          `提示条必须说明需要电脑端授予，实际 ${JSON.stringify(textOf(note))}`,
+        );
+        expectEqual(
+          queryAll(container, '[data-action="create-session"]').length,
+          0,
+          "无创建权限时不得呈现任何目录级创建入口",
+        );
+        // 提示条不得顶掉目录项本身。
+        expectEqual(queryAll(container, "[data-directory-alias]").length, 2, "提示条不影响目录项");
+      });
+
+      // 有权限：不留提示条，且**每个**目录项各有一个创建入口（挂在卡片上，不是页面级的一个）。
+      await withScenario(baseScenario(), async (container) => {
+        await waitForDirectoryList(container);
+        expectThat(
+          query(container, "[data-create-permission-note]") === null,
+          "有创建权限时不得留提示条",
+        );
+        expectEqual(
+          queryAll(container, '[data-action="create-session"]').length,
+          2,
+          "有创建权限时每个目录项各有一个创建入口",
+        );
       });
     },
   },

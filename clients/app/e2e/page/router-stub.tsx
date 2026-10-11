@@ -17,9 +17,22 @@
  * 因此本目录能回答的是「页面在真实 DOM 里渲染成什么样、点了按钮发出什么字节」，
  * **不能**回答「真实 expo-router 的 URL 同步与历史栈行为」——那不在 TP4 的交付范围内，
  * 已在测试设计报告的「未验证项」里登记。
+ *
+ * ## 路由组件必须交给 React 当**子元素**渲染，不能直接调用
+ *
+ * `Stack` 早先写成 `return current.component()`：那是在 `Stack` 自己的 fiber 上**调用**路由
+ * 组件函数，于是路由组件的 hooks 与 `Stack` 的 `useSyncExternalStore` 共用同一批槽位。
+ * 一旦切到 hooks 序列不同的路由组件（目录页 ↔ 详情页），React 的更新分派器会拿上一轮的
+ * `deps` 去比对新一轮的 effect，抛
+ * `TypeError: Cannot read properties of undefined (reading 'length')` 并把整棵树卸载
+ * （实测：点击目录项后容器 `innerHTML` 变空、`[data-route]` 一个都不剩）。
+ * 因此这里 `createElement(current.component, { key: current.path })`：hooks 归路由组件自己，
+ * 槽位不会串；`key` 取路径则让**同类型**路由之间切换（`/dir/alpha` → `/dir/beta`）强制重挂，
+ * 上一屏的局部状态（页面上选中的 Agent）不会被带进下一屏——真实 expo-router 的栈里
+ * 每屏都是一个新实例。
  */
 
-import { useSyncExternalStore } from "react";
+import { createElement, useSyncExternalStore } from "react";
 import type { ReactElement, ReactNode } from "react";
 
 /** 一个路由条目：组件 + 该路由的参数。 */
@@ -51,8 +64,16 @@ function getVersion(): number {
   return version;
 }
 
-/** 注册可导航到的路由（`push` 按路径查表）。 */
+/**
+ * 注册本场景可导航到的路由（`push` 按路径查表）。
+ *
+ * **整表替换**而不是累加：`registry` 是模块级的，累加会让上一条用例注册过的路径在本条里
+ * 仍然可导航——那样「这条用例忘了给 `extraRoutes`」就不会红，而会静悄悄地点到一个本该
+ * 不可达的页面。每条用例都调一次本函数（`support.tsx` 的 `mountScenario`），因此这里的
+ * 替换语义就是「本场景能去哪些页」。
+ */
 export function registerRoutes(routes: readonly RouteEntry[]): void {
+  registry.clear();
   for (const route of routes) registry.set(route.path, route);
 }
 
@@ -60,7 +81,10 @@ export function registerRoutes(routes: readonly RouteEntry[]): void {
 export function mountRoute(route: RouteEntry): void {
   registry.set(route.path, route);
   current = route;
+  // 历史栈从初始路由起算：`navigate` 只把**目标**路径压栈，若这里留空，第一次 `goBack()`
+  // 弹完就无路可退（详情页的「返回目录」会变成一个没有反应的按钮）。
   history.length = 0;
+  history.push(route.path);
   emit();
 }
 
@@ -92,7 +116,8 @@ export function currentPath(): string | null {
 export function Stack(_props: { readonly screenOptions?: unknown; readonly children?: ReactNode }): ReactElement | null {
   useSyncExternalStore(subscribe, getVersion, getVersion);
   if (current === null) return null;
-  return current.component();
+  // 作为**元素**交给 React（见文件头）：`key` 取路径，同类型路由之间切换时强制重挂。
+  return createElement(current.component, { key: current.path });
 }
 
 /** `useRouter()`：只提供页面用到的方法。 */

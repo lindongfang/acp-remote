@@ -32,9 +32,10 @@ export interface EmptyStateProps {
  * 既没有 `paragraph` 这个 role、也没有 `aria-level` 这个键（RNW 比 RN 多认它们），因此这里
  * 显式声明一次、把这两个**运行时**属性原样透传：属性名与取值不得改名。
  *
- * 为什么必须保住这两个标签：R15 的浏览器用例在 `[data-empty-state]` 之下用 `h2`/`p` 读标题
- * 与指引（`e2e/page/checks/r15-directory.ts:174-175`），退化成 `div` 会让它读到空串，
- * 「两种空态可区分」这条负向断言的判别力随之消失。
+ * 为什么要保住这两个标签：语义标签本身是读屏与文档结构的依据；退化成 `div` 会把「这是一段
+ * 指引」这件事丢掉。另外每个 Text 各带一个显式锚点（`data-empty-state-title` /
+ * `data-empty-state-guidance`，见下面的 `dataSet`）：消费方按**属性**取这两段文字，
+ * 不必依赖 RNW 的标签映射，因此即使将来换渲染后端也不会读到空串。
  */
 const TITLE_PROPS = { role: "heading", "aria-level": 2 } as unknown as TextProps;
 const GUIDANCE_PROPS = { role: "paragraph" } as unknown as TextProps;
@@ -74,11 +75,11 @@ export function EmptyState({ kind, title, guidance }: EmptyStateProps): ReactEle
 
   return (
     <View style={styles.root} dataSet={{ emptyState: kind }}>
-      <Text {...TITLE_PROPS} style={styles.title}>
+      <Text {...TITLE_PROPS} style={styles.title} dataSet={{ emptyStateTitle: "true" }}>
         {title}
       </Text>
       {/* 指引单独成段：两种空态的指引必须不同，合并成一句即违反 R15。 */}
-      <Text {...GUIDANCE_PROPS} style={styles.guidance}>
+      <Text {...GUIDANCE_PROPS} style={styles.guidance} dataSet={{ emptyStateGuidance: "true" }}>
         {guidance}
       </Text>
     </View>

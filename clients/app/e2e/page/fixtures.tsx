@@ -148,6 +148,15 @@ export function sessionRoute(sessionId: string): RouteEntry {
 type RouteComponent = () => ReactElement;
 
 /**
+ * 两条夹具目录的详情路由：跨路由用例把它们放进 `ScenarioOptions.extraRoutes`。
+ *
+ * `navigate` 对**未注册**的路径静默忽略（真实 expo-router 会渲染未匹配路由，替身不需要），
+ * 因此漏给 `extraRoutes` 的红法是一个 10 秒的等待超时，而不是「路由没注册」这种一眼能看懂的
+ * 失败。`registerRoutes` 每条用例整表替换（不跨用例残留），所以这里必须显式给出。
+ */
+export const DIRECTORY_ROUTES: readonly RouteEntry[] = [dirRoute("alpha"), dirRoute("beta")];
+
+/**
  * 一条 `event` 消息原文。
  *
  * `globalSequence` 必须**严格递增且大于屏障**，否则会被去重账本判成回退/重复而丢弃——

@@ -129,7 +129,7 @@ function storeWith(resources: StagedResources): { store: ClientStore; gateway: R
 }
 
 describe("R15 目录项只含展示名与别名", () => {
-  it("带路径字段的快照资源也只投影出展示名、别名与三项汇总", () => {
+  it("带路径字段的快照资源也只投影出展示名、别名、三项汇总与最近活动时间", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES_WITH_PATHS, agents: [] },
       connection: "online",
@@ -139,7 +139,12 @@ describe("R15 目录项只含展示名与别名", () => {
     expect(model.kind).toBe("ready");
     if (model.kind !== "ready") return;
     // 反例：若模型把路径字段透传下来，这里会出现 `path`/`root` 键，断言变红。
-    expect(Object.keys(model.directories[0] ?? {}).sort()).toEqual(["alias", "counts", "displayName"]);
+    expect(Object.keys(model.directories[0] ?? {}).sort()).toEqual([
+      "alias",
+      "counts",
+      "displayName",
+      "latestActivityAt",
+    ]);
     expect(JSON.stringify(model)).not.toContain("D:\\\\work");
     expect(JSON.stringify(model)).not.toContain("/home/dev");
   });
@@ -176,22 +181,50 @@ describe("R15 目录项只含展示名与别名", () => {
 });
 
 describe("R15 两种空态可区分", () => {
-  it("一个目录都没有 → no_directories", () => {
+  it("一个目录都没有 → no_directories，且不携带任何目录项", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: [], agents: [] },
       connection: "online",
       lastSyncedAtMs: null,
     });
-    expect(model).toMatchObject({ kind: "empty", empty: "no_directories" });
+    expect(model).toMatchObject({ kind: "empty", empty: "no_directories", directories: [] });
   });
 
-  it("目录存在但都没有会话 → directories_without_sessions（与上一种不是同一态）", () => {
+  it("目录存在但都没有会话 → directories_without_sessions（与上一种不是同一态），且列出各目录的零汇总行", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
       connection: "online",
       lastSyncedAtMs: null,
     });
     expect(model).toMatchObject({ kind: "empty", empty: "directories_without_sessions" });
+    if (model.kind !== "empty") return;
+
+    // 反例（本次要关掉的死路）：空态不带目录项，于是指引里的「在下面选一个目录」指向不存在的列表。
+    expect(model.directories.map((row) => row.alias)).toEqual(["work-api", "personal-api", "notes"]);
+    for (const row of model.directories) {
+      // 零会话下每一项的汇总恒为零（这是 `directories_without_sessions` 的定义），活动时间不编造。
+      expect(row.counts).toEqual({ total: 0, active: 0, pending: 0 });
+      expect(row.latestActivityAt).toBeNull();
+    }
+    // 展示名与别名照常呈现：空态列表里的项仍要能区分同名目录。
+    expect(model.directories.map((row) => row.displayName)).toEqual(["api", "api", "notes"]);
+  });
+
+  it("空态列出的目录项同样只含展示名、别名、汇总与活动时间，不引入路径槽位", () => {
+    const model = buildDirectoryPageModel({
+      resources: { sessions: [], workspaces: WORKSPACES_WITH_PATHS, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
+
+    expect(model.directories).toHaveLength(3);
+    for (const row of model.directories) {
+      expect(Object.keys(row).sort()).toEqual(["alias", "counts", "displayName", "latestActivityAt"]);
+    }
+    // 反例：空态这一支新引入的目录项若顺手带上路径字段，这里会变红。
+    expect(JSON.stringify(model)).not.toContain("D:\\\\work");
+    expect(JSON.stringify(model)).not.toContain("/home/dev");
   });
 
   it("从未同步过 → loading，不冒充任何一种空态", () => {
@@ -277,6 +310,8 @@ describe("R15 目录详情", () => {
     expect(detail.directory.alias).toBe("work-api");
     expect(detail.directory.displayName).toBe("api");
     expect(detail.directory.counts).toEqual({ total: 0, active: 0, pending: 0 });
+    // 详情页的目录项与列表页空态列出的零汇总项口径一致：没有会话就没有活动时间，也不编造一个。
+    expect(detail.directory.latestActivityAt).toBeNull();
     expect(detail.sessions).toEqual([]);
 
     // 对照：修好上一条不能把失效别名也算成存在的目录——真正不存在的别名仍是第三种呈现。
