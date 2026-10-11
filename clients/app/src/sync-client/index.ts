@@ -21,7 +21,7 @@ export type IncomingEvent = EventMessage;
 export type WireMessage = SyncWireMessage;
 
 /**
- * 事件去重的键：稳定 `eventId`（`AGENTS.md` §3「客户端按稳定 `eventId` 去重」）。
+ * 事件去重的键：稳定 `eventId`（`AGENTS.md` §4「客户端按稳定 `eventId` 去重」）。
  * 单独命名以避免 WP6 用 `messageId` 或连接序号误作去重键。
  */
 export type EventDedupKey = EventMessage["body"]["eventId"];

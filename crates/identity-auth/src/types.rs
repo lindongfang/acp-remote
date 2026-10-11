@@ -251,7 +251,7 @@ impl PairingSecret {
 
     /// 摘要：`SHA-256(secret)` 的规范无填充 base64url 文本（唯一落库形态）。
     ///
-    /// 返回 `Result` 而不是在内部断言：`AGENTS.md` §7 要求**正常运行路径**不使用
+    /// 返回 `Result` 而不是在内部断言：`AGENTS.md` §8 要求**正常运行路径**不使用
     /// `unwrap`/`expect`，即使这里的不变式（32 字节 SHA-256 的 base64url 文本必然是规范
     /// `Digest` 形状）客观成立。理论上不可达的分支交回调用方按错误处理，不靠 panic 表达。
     pub fn digest(&self) -> Result<Digest, InvalidValue> {

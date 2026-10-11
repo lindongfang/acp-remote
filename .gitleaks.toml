@@ -1,6 +1,6 @@
 # gitleaks 配置：提交进仓库的密钥材料扫描。
 #
-# 判据来源：`AGENTS.md` §3「私钥和 token 不得写入日志、协议错误、测试快照或普通 SQLite 字段」，
+# 判据来源：`AGENTS.md` §4「私钥和 token 不得写入日志、协议错误、测试快照或普通 SQLite 字段」，
 # 以及 `docs/SECURITY_DESIGN.md` §16.2 的供应链要求；执行者是 CI 的 `secrets` job
 # （`gitleaks/gitleaks-action`，按 commit 固定，见 `docs/adr/0008-ci-supply-chain-tooling.md`）。
 #

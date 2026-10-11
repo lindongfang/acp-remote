@@ -239,7 +239,7 @@ export interface PromptContentBlock {
 
 /**
  * `$defs.rawAcp`：原文可用时携带 `rawJson` 与摘要；未下发时携带 `rawUnavailable`
- * 说明原因、字节长度与可空的 sha256。**两种情形都不允许先解析再覆盖原文**（`AGENTS.md` §3）。
+ * 说明原因、字节长度与可空的 sha256。**两种情形都不允许先解析再覆盖原文**（`AGENTS.md` §4）。
  */
 export type RawAcp =
   | {

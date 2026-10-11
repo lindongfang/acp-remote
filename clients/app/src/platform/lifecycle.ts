@@ -2,7 +2,7 @@
  * 生命周期端口的**声明**（`docs/FRONTEND_DESIGN.md` §3 的 Platform Ports）。
  *
  * 归属 WP5b。页面**不能**直接监听 `document`/`window` 的生命周期事件
- * （`AGENTS.md` §5「页面不能直接操作 … 平台生命周期」），因此这里把
+ * （`AGENTS.md` §6「页面不能直接操作 … 平台生命周期」），因此这里把
  * 「可见性变化 / 即将卸载 / 内存压力」收敛成端口，由 WP6 的状态机与 WP7 的页面消费。
  *
  * v1 只交付 Web（PWA）：`lifecycle.web.ts` 是唯一实现，**不写** `.native.ts`

@@ -24,7 +24,7 @@
 
 ## 2. 边界与所有权
 
-`[决定]` `identity-auth` 是**纯状态机**：不依赖任何平台 API、不写 `cfg` 平台分支、不做文件或网络 IO；所有密钥操作经 §7 的端口，所有时间经注入的 `Clock`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §2）。依赖方向只有 `identity-keystore -> identity-auth`，且除 `app` 外没有 crate 依赖 `identity-keystore`（`AGENTS.md` §4、[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md)）。
+`[决定]` `identity-auth` 是**纯状态机**：不依赖任何平台 API、不写 `cfg` 平台分支、不做文件或网络 IO；所有密钥操作经 §7 的端口，所有时间经注入的 `Clock`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §2）。依赖方向只有 `identity-keystore -> identity-auth`，且除 `app` 外没有 crate 依赖 `identity-keystore`（`AGENTS.md` §5、[adr/0006-identity-keystore-split.md](./adr/0006-identity-keystore-split.md)）。
 
 依赖矩阵（谁拥有什么，避免实现时按「方便」放错层）：
 
@@ -40,7 +40,7 @@
 | 单个配对的 proof 失败次数与失效 | `identity-auth` | §4.5；需要配对状态与原子回写 |
 | 撤销后的连接关闭 | 组合根（提交后） | [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.2 第 3 条 |
 
-`[决定]` `identity-auth` 的输出只有两类：**已验证的 fact**（`Actor` 与其凭据状态）和**明确的失败分类**。它**不得**向 core 传「已授权」标志，也不得代替 core 判定命令级 scope（`AGENTS.md` §3、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §6.5）。
+`[决定]` `identity-auth` 的输出只有两类：**已验证的 fact**（`Actor` 与其凭据状态）和**明确的失败分类**。它**不得**向 core 传「已授权」标志，也不得代替 core 判定命令级 scope（`AGENTS.md` §4、[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §6.5）。
 
 `[决定]` 本文引入的类型名归属（避免与 `core::model` 已有类型重复）：
 
@@ -360,7 +360,7 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 
 `[决定]`（2026-09-24 实现）**挑战缓存有硬上限**：`MAX_CHALLENGES = 1024`，签发时先用注入时钟清扫
 已过期条目，满时淘汰**最早过期**的一条再插入（`state.rs` 的 `put_challenge`）。依据是我们自己的
-资源限制要求（`AGENTS.md` §5 的数量/资源上限）：只会被 `verify_proof` 消费的挑战，在「完成 hello 但不发
+资源限制要求（`AGENTS.md` §6 的数量/资源上限）：只会被 `verify_proof` 消费的挑战，在「完成 hello 但不发
 proof」的连接上会永不消费，因此内存上界必须与真实并发连接数解耦。被淘汰/被清扫的客户端拿到统一的
 证明失败分类并重新握手——不泄露存在性，也不改变一次性消费语义。
 
@@ -372,7 +372,7 @@ proof」的连接上会永不消费，因此内存上界必须与真实并发连
 - 重放同一 proof（相同 challenge、相同 nonce）必须失败，并追加 `device.auth_failed` 审计。
 - 时间判定一律用注入的 `Clock`（便于测试注入过期、回拨），存储层与状态机都不得读系统时间。
 - `[open]` 是否容忍客户端与服务端的时钟偏移：v1 不做偏移容忍——挑战由服务端签发并自带 TTL，客户端时间不参与判定。将来若引入带时间戳的客户端语句，必须先在本节定义窗口。
-- `[决定]` 每个新 WSS 连接完整执行 challenge-response，不签发长期 bearer/session/refresh token（`AGENTS.md` §3）。
+- `[决定]` 每个新 WSS 连接完整执行 challenge-response，不签发长期 bearer/session/refresh token（`AGENTS.md` §4）。
 
 ## 6. 授权
 
@@ -470,13 +470,13 @@ pub enum EntropyError {
 
 ## 8. 失败关闭与不可协商的约束
 
-- `[决定]` 网络可达不等于应用授权；Tailscale 身份不能代替设备或节点身份（`AGENTS.md` §3）。
+- `[决定]` 网络可达不等于应用授权；Tailscale 身份不能代替设备或节点身份（`AGENTS.md` §4）。
 - `[决定]` 握手与配对失败一律不泄露「设备/节点是否存在」；错误消息不得包含 secret、cookie、token、完整公钥载荷或堆栈（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。
 - `[决定]` 本章的任何一个失败路径都必须有测试：配对过期、并发认领、重复认领、proof 重放、密钥变化、撤销后再认证、错误 scope、keystore 不可用、撤销提交成功但连接清理失败。缺一项即视为该功能未完成（与 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.4 同标准）。
 
 ## 9. 待确认与开放项
 
-- `[待确认]` `identity-keystore` 与 `agent-host` 的 **wrapper crate 选型**（DPAPI wrapper、Windows Job Object wrapper）：档位已定（§7 第 6 条、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20），但具体 crate 必须在实现切片里按 `AGENTS.md` §7 核验后选定，并把结论写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12；若候选的 MSRV 高于 `rust-version = 1.85`，先单独决定是否抬 MSRV。
+- `[待确认]` `identity-keystore` 与 `agent-host` 的 **wrapper crate 选型**（DPAPI wrapper、Windows Job Object wrapper）：档位已定（§7 第 6 条、[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §20），但具体 crate 必须在实现切片里按 `AGENTS.md` §8 核验后选定，并把结论写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12；若候选的 MSRV 高于 `rust-version = 1.85`，先单独决定是否抬 MSRV。
 - `[已裁定]`（2026-09-23）为实现管理写集而新增的 `ConflictKind` 取值 `AlreadyExists`/`IdentityMismatch`/`DuplicateOwnership` 与 `UnavailableKind` 取值 `KeystoreUnavailable`：见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6；枚举本体（含 `ALL`/`as_str`）已随实现落地（`crates/core/src/model/error.rs`），合同 §2 的取值表与之逐项一致。
 - `[open]` 客户端与服务端时钟偏移容忍（§5.2）。
 - `[open]` 组织级用户身份：第一阶段明确只有节点级信任，需要 Owner 直接认证操作人时必须新增独立协议，不能把 `localPrincipalRef` 升格为安全凭据（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8.3）。

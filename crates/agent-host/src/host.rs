@@ -722,7 +722,7 @@ impl SessionBackendFactory for AgentHost {
                 continue;
             };
             // 重开：同一个 core 会话换一个新的 endpoint 绑定。旧绑定必须先让出，避免同一会话同时
-            // 存在两个会派发 turn 的 endpoint（`AGENTS.md` §3「同一会话最多一个 active turn」）。
+            // 存在两个会派发 turn 的 endpoint（`AGENTS.md` §4「同一会话最多一个 active turn」）。
             runtime.remove_session(&previous);
             let rebound = Arc::new(previous.rebind(sink));
             runtime

@@ -209,7 +209,7 @@ impl Body {
 /// `link.ping` 的 body（`error.schema.json` 的 `linkPing`）：16 字节 nonce，`link.pong` 必须原样回填。
 ///
 /// 与 Sync 的 `control.ping`/`control.pong` 同形（`SYNC_PROTOCOL.md` §2.5），但两个协议 crate 互不
-/// 依赖（`AGENTS.md` §4），因此各持一份定义。
+/// 依赖（`AGENTS.md` §5），因此各持一份定义。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ping {

@@ -60,7 +60,7 @@ export interface TranscriptField {
  * transcript 结构错误。
  *
  * 与 Rust 侧 `TranscriptError` 同名同义，便于跨语言对照；**不**包含任何字段值，
- * 避免把可能敏感的材料带进错误与日志（`AGENTS.md` §3）。
+ * 避免把可能敏感的材料带进错误与日志（`AGENTS.md` §4）。
  */
 export class TranscriptError extends Error {
   readonly kind:

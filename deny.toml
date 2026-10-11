@@ -1,7 +1,7 @@
 # cargo-deny 配置：依赖 advisory、许可证、来源与重复版本策略的唯一机器定义。
 #
 # 判据来源：`docs/SECURITY_DESIGN.md` §16.2（供应链：固定工具链/action、锁定依赖、生成许可证清单）
-# 与 `AGENTS.md` §7（新增依赖前检查维护状态、许可证、平台支持与安全风险）。
+# 与 `AGENTS.md` §8（新增依赖前检查维护状态、许可证、平台支持与安全风险）。
 # CI 用 `EmbarkStudios/cargo-deny-action`（按 commit 固定，见 `docs/adr/0008-ci-supply-chain-tooling.md`）
 # 跑两个 job：`check bans licenses sources`（确定性，只随锁文件变化）与 `check advisories`（需要 advisory-db 网络）。
 #
@@ -47,7 +47,7 @@ wildcards = "deny"
 #
 # 这条豁免是**有条件**的，不是「关掉检查」：按 cargo-deny 0.20.2 的 cfg 文档，它只对 private crate 生效，
 # 「path/git dependencies in **public** crates will continue to produce warnings and errors」。
-# 因此某个 crate 一旦变成可发布，它的 path 依赖会被重新拦下来——这与 `AGENTS.md` §7「第一阶段默认
+# 因此某个 crate 一旦变成可发布，它的 path 依赖会被重新拦下来——这与 `AGENTS.md` §8「第一阶段默认
 # workspace-private」的约定一致。
 #
 # 本次实测：不开这条时 CI 的 `bans` 对 4 个 crate 报 `error[wildcard]`（`licenses ok, sources ok`），
@@ -74,7 +74,7 @@ unknown-git = "deny"
 #   3. wildcard：path 依赖不带 `version`，会在 `[bans] wildcards = "deny"` 下报 `error[wildcard]`；豁免来自
 #      `[bans] allow-wildcard-paths = true`，而该豁免只对 private 的**依赖方**（这里是 `server`，workspace 内全部
 #      crate 都是 `publish = false`）生效。
-# 诚实说明：`cargo-deny` 只在 CI 运行（`AGENTS.md` §8/§10），本节这些结论无法在本地复核；本地能复核的是上一条的
+# 诚实说明：`cargo-deny` 只在 CI 运行（`AGENTS.md` §9/§10），本节这些结论无法在本地复核；本地能复核的是上一条的
 # `workspace.exclude` 与 §5 矩阵口径。
 
 [licenses]

@@ -1,5 +1,5 @@
 /**
- * `clients/app` 的七层结构与**单向**依赖（`AGENTS.md` §5、`docs/FRONTEND_DESIGN.md` §3、`design.md` D8）。
+ * `clients/app` 的七层结构与**单向**依赖（`AGENTS.md` §6、`docs/FRONTEND_DESIGN.md` §3、`design.md` D8）。
  *
  * 这张表是分层约束的**单一**机器可读定义：测试 `src/layers.test.ts` 遍历 `src/` 下的
  * 全部 `.ts`/`.tsx` 文件，按此表核对每一处 import 的目标层级不小于发起层级的序号

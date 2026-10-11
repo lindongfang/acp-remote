@@ -624,7 +624,7 @@ fn node_link_challenge_requires_catalog_revision() {
 
 #[test]
 fn challenge_cache_is_bounded() {
-    // R30 的资源边界（`AGENTS.md` §5：数量与资源限制）：反复 hello 但不提交 proof 的连接
+    // R30 的资源边界（`AGENTS.md` §6：数量与资源限制）：反复 hello 但不提交 proof 的连接
     // 不得让内存单调增长。三条断言都必须在实现退化时失败：
     //   ① 缓存能被填满（否则说明条目没真正累积）；
     //   ② 填满后再签发不增长（淘汰分支真的执行）；

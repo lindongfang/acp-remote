@@ -1,7 +1,7 @@
 //! v1 信封与消息类型分派（`docs/SYNC_PROTOCOL.md` §4.1、`schemas/sync/v1/message.schema.json`）。
 //!
 //! `body` 以 `RawValue` **原样承载**：传输层只按 `type` 分派，不把 body 解析成通用 DTO 再重新
-//! 序列化（`AGENTS.md` §3 的保真要求）。家族 body 由调用方用 `auth`/`control`/`error` 的类型
+//! 序列化（`AGENTS.md` §4 的保真要求）。家族 body 由调用方用 `auth`/`control`/`error` 的类型
 //! 显式解析；尚未实现 body 的家族保持字节原样转发，不降级成文本、不丢弃。
 
 use std::fmt;

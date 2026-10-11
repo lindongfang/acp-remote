@@ -24,7 +24,7 @@ use node_link_protocol::handshake::NodeHello;
 /// 本切片实现的 Node Link feature（`features.json` 的 `node_link` 子集里 `delivery = mvp` 的五条）。
 ///
 /// `node-link.node-rotation.v1` 是 `post_mvp`（只登记 ID 与消息名），**不**选中：选中它等于虚报支持
-/// （`AGENTS.md` §3 的能力协商真实性）。
+/// （`AGENTS.md` §4 的能力协商真实性）。
 pub const SUPPORTED_FEATURES: [&str; 5] = [
     "node-link.core.v1",
     "node-link.raw-acp.v1",

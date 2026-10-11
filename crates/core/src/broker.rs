@@ -2503,7 +2503,7 @@ impl Broker {
     /// 「已放弃」——它后续到达的事件与终态不再提交。
     ///
     /// 可观测信号是这次提交里的两条持久事件（`turn.failed` + `command.uncertain`）：core 不含日志依赖
-    /// （`AGENTS.md` §7），而错误上抛会把「已经终结的 turn」报成调用方（往往是另一个命令）的失败，
+    /// （`AGENTS.md` §8），而错误上抛会把「已经终结的 turn」报成调用方（往往是另一个命令）的失败，
     /// 与终态批失败时的既有口径不一致，因此这里不传播 `Unavailable`。
     ///
     /// 已落盘的 delta 仍按 §6 第 14 条收尾成 `agent.message.completed`（缺的段落不伪造）；不压缩它们
@@ -2512,7 +2512,7 @@ impl Broker {
     /// **不让出会话槽**：放弃的 turn 继续占住 `running`（[`HeldTurn`]），直到它的终态被
     /// 端点观测到；此前 `dispatch_one` 不得提升下一个排队 turn。这也会把它迟到的 permission/
     /// elicitation 请求一并丢弃（不落交互行、不广播）——已经被终结为 `uncertain` 的 turn 不再接受
-    /// 交互，收敛该 turn 是端点的职责（`AGENTS.md` §3：一个状态只能有一个权威写入者）。
+    /// 交互，收敛该 turn 是端点的职责（`AGENTS.md` §4：一个状态只能有一个权威写入者）。
     async fn abandon_failed_turn(
         &self,
         slot: &Slot,

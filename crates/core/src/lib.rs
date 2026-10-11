@@ -3,7 +3,7 @@
 //!
 //! 唯一权威是 `docs/CORE_PORTS_AND_STORAGE.md`（编码前契约 v1）：§3 值对象、§4 用例面、§5 端口签名、
 //! §6 broker 顺序与事务契约。本 crate **不依赖** Tokio、Axum、SQLite、WebSocket、子进程、ACP DTO 或任何
-//! wire protocol（`AGENTS.md` §4、`docs/MODULE_ARCHITECTURE.md` §4.1）；端口用 `#[async_trait]`
+//! wire protocol（`AGENTS.md` §5、`docs/MODULE_ARCHITECTURE.md` §4.1）；端口用 `#[async_trait]`
 //! （纯 proc-macro，不引入 runtime），由组合根注入具体实现。
 //!
 //! `derive` 是 crate 内部的**纯函数投影层**（`file.changed` 的派生源与行级 diff、展示路径相对化、

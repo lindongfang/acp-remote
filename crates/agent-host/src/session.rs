@@ -194,7 +194,7 @@ impl AcpSession {
                 return Err(HostError::SessionClosed);
             }
             if inner.turn_running {
-                // 同一会话不能有两个 active turn（`AGENTS.md` §3）。
+                // 同一会话不能有两个 active turn（`AGENTS.md` §4）。
                 return Err(HostError::AgentRejected {
                     code: -32000,
                     message: "会话已有进行中的 turn".to_owned(),

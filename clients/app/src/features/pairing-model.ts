@@ -5,7 +5,7 @@
  *
  * `schemas/sync/v1/pairing.schema.json` 定义的是 `claim`/`status` 两个 HTTPS 端点。
  * 本模块因此只做**状态机与视图模型**，`PairingTransport` 端口由组合根用 `fetch` 实现；
- * feature 层自己不发起任何网络请求（`AGENTS.md` §5：平台能力只由组合根装配）。
+ * feature 层自己不发起任何网络请求（`AGENTS.md` §6：平台能力只由组合根装配）。
  *
  * ## 页面不得提供凭据输入
  *

@@ -12,7 +12,7 @@
 //! `SlidingWindowLimiter`，键是 `PeerInfo::client_ip`）与 status 60 次/分钟/`pairingId`（`pairing` 内部的
 //! `PairingIdWindow`，因为接入层限流器的键固定是 `IpAddr`，而 `pairingId` 不是地址）。超限一律 429。
 //!
-//! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §4/§5）：
+//! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §5/§6）：
 //!
 //! - 只调用 `core::use_cases`（配对通道以 `Actor::PairingClaimant`）与 `identity-auth` 的公开入口，
 //!   不查 SQLite、不调用 `node-link-client`，也不调用 `server::local_admin` 等平级 adapter；

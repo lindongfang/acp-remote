@@ -4,7 +4,7 @@
  * ## 为什么落在 `src/composition.ts`
  *
  * `src/layers.test.ts` 把 `src/platform/` 定为横切层——七层中的任何一层 import 它都是违规，
- * 平台能力**只能**由更外层的装配点接入（`AGENTS.md` §5）。七层都排除了，唯一能承接这件事的
+ * 平台能力**只能**由更外层的装配点接入（`AGENTS.md` §6）。七层都排除了，唯一能承接这件事的
  * 就是一个层级中立的文件：`layerOfSourcePath("src/composition.ts")` 返回 `null`，因此它在机检里
  * 不参与方向判定，同时**可以** import `src/platform/`、`src/sync-client/`、`src/state/` 与
  * `src/features/`——这正是装配点该有的样子。
