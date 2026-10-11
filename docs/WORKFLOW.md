@@ -232,16 +232,17 @@ npm run verify                      # 3. 在**主检出**跑仓库级检查
 git switch -c <branch>              # 1. 为这一批 patch 开一个分支
 git push -u origin <branch>         # 2. 推送分支；本地钩子已在 commit 时跑过
 gh pr create --fill                 # 3. 开 PR；标题必须是 Conventional Commits
-gh pr checks --watch                # 4. 等五个必需检查全绿
+gh pr checks --watch                # 4. 等六个必需检查全绿
 gh pr merge --squash                # 5. squash 合并，PR 标题即 main 上的提交信息
 ```
 
 六个必须知道的点：
 
-- **五个必需检查**是 ruleset 的 required status checks，名字必须是 check-run 的上报名：
-  **合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、**依赖安全公告**。
-  后三个只在 CI 跑，本地没有等价物——所以依赖判决、advisory 与密钥扫描是**合并门禁**，不是可选步骤；
-  直推 main 会整体跳过它们。
+- **六个必需检查**是 ruleset 的 required status checks，名字必须是 check-run 的上报名：
+  **合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、**依赖安全公告**、
+  **前端检查（clients/app）**。后三个（依赖判决、advisory、密钥扫描）只在 CI 跑，本地没有等价物——
+  所以它们是**合并门禁**，不是可选步骤，直推 main 会整体跳过；前端检查覆盖 `clients/app` 这个
+  独立 npm 工程（根检查链不覆盖它），原因见 §8 与 `README.md` 的「合同检查」。
 - `strict_required_status_checks_policy = true`：PR 落后于 main 最新提交时不能合并，先 rebase
   并让检查在新提交上重跑。
 - `required_approving_review_count = 0`：单人仓库不需要第二人批准，但批准不能替代检查。
