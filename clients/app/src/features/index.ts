@@ -42,6 +42,8 @@ export type {
   DirectoryContentOrigin,
   DirectoryCountsModel,
   DirectoryDetailModel,
+  DirectoryFilter,
+  DirectoryMonthModel,
   DirectoryPageModel,
   DirectoryRowModel,
   SessionRowModel,
@@ -51,6 +53,8 @@ export {
   DIRECTORY_EMPTY_COPY,
   buildDirectoryDetailModel,
   buildDirectoryPageModel,
+  buildSessionRowsByAlias,
+  monthKeyOf,
 } from "./directory-model";
 
 // ── R16 会话创建 ────────────────────────────────────────────────────────────

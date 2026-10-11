@@ -129,7 +129,11 @@ describe("R19 同名 Agent 以标识区分", () => {
     expect(html).toContain('data-agent-row="codex-a"');
     expect(html).toContain('data-agent-row="codex-b"');
     // 反例：若按展示名合并成一项，这里会只剩一行，断言变红。
-    expect(html.match(/<li data-agent-row=/g)).toHaveLength(2);
+    // 只数「带标识的行标记」，**不数标签名**：迁移到 RNW 原语后元素是 `<li>` 还是别的，
+    // 取决于 `role="listitem"` 被渲染器映射成什么（`design.md` D2 把机读证据从
+    // 「标签 + 属性」降为「属性」）。按 `<li ` 匹配会把这条断言绑在渲染器实现上，
+    // 而按标识计数匹配的是本用例真正要证伪的东西：「同名被合并」。
+    expect(html.match(/data-agent-row="codex-[ab]"/g)).toHaveLength(2);
   });
 
   it("覆盖层按标识索引：同名 Agent 的状态互不覆盖", () => {

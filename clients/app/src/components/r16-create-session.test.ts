@@ -48,6 +48,20 @@ function renderSheet(model: CreateSessionEntryModel, selectedAgentId: string | n
   );
 }
 
+/**
+ * 取出带指定 `data-action` 的那个控件的**开标签**。
+ *
+ * 为什么不写成 `/<tag data-action=…>…/`：迁移到 RNW 原语后标签名由渲染器决定
+ * （`role="button"` → `<button>`），标签不是本仓库的契约（`design.md` D2：机读证据
+ * 从「标签 + 属性」降为「属性」）。同时属性顺序也不该被断言绑住——RNW 先写
+ * `aria-disabled`/`disabled`，再写 `data-*`。因此在**同一个元素的开标签内**断言。
+ */
+function openingTagWithAction(html: string, action: string): string {
+  const tag = new RegExp(`<[^>]*\\sdata-action="${action}"[^>]*>`).exec(html);
+  if (tag === null) throw new Error(`渲染结果里找不到 data-action="${action}" 的控件`);
+  return tag[0];
+}
+
 /** 有权限 + 尚未提交时的弹层模型。 */
 function grantedModel(): CreateSessionEntryModel {
   const { store } = storeWith({ resources: resources({ agents: AGENTS }), scopes: ["session.list", "session.create"] });
@@ -169,6 +183,8 @@ describe("R16 无权限态不可用且说明原因", () => {
     expect(html).toContain('data-create-permission="granted"');
     expect(html).not.toContain(CREATE_DENIED_NOTE);
     expect(html).toContain('data-action="submit-create"');
+    // 与「创建中」那条成对：同一个控件在有权限且已选 Agent 时**不带**禁用态。
+    expect(openingTagWithAction(html, "submit-create")).not.toContain("disabled");
   });
 
   it("尚未认证时同样不可用，且理由与「没有权限」可区分", () => {
@@ -194,8 +210,14 @@ describe("R16 创建中与终态分别呈现", () => {
 
     expect(html).toContain('data-create-submission="creating"');
     expect(html).toContain("创建中");
-    // 反例：若创建中仍可重复提交，按钮不会带 disabled，断言变红。
-    expect(html).toMatch(/data-action="submit-create"[^>]*disabled/);
+    // 反例：若创建中仍可重复提交，按钮不会带禁用态，断言变红。
+    // RNW 对 `role="button"` 且 `disabled` 的可点控件同时渲染原生 `disabled` 与 `aria-disabled`，
+    // 两者都落在同一个开标签里（属性顺序由渲染器决定，因此断言不看顺序）。
+    const submit = openingTagWithAction(html, "submit-create");
+    expect(submit).toContain("aria-disabled=\"true\"");
+    // e2e 判定的是**原生**属性（`hasAttribute("disabled")`，见 `e2e/page/checks/r16-create.ts:74`），
+    // 所以单独钉住它：`\s` 前缀把 `aria-disabled` 排除在外。
+    expect(submit).toMatch(/\sdisabled\b/);
     expect(gateway.dispatches).toHaveLength(1);
   });
 

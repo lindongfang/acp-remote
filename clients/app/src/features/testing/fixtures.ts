@@ -39,6 +39,8 @@ export function session(input: {
   readonly alias?: string | null;
   readonly title?: string | null;
   readonly origin?: SessionSummary["origin"];
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
 }): SessionSummary {
   const alias = input.alias === undefined ? "work-api" : input.alias;
   return {
@@ -49,11 +51,32 @@ export function session(input: {
     origin: input.origin ?? { kind: "local" },
     currentMode: null,
     version: "1",
-    createdAt: "2026-10-01T00:00:00.000Z",
-    updatedAt: "2026-10-01T00:00:00.000Z",
+    createdAt: input.createdAt ?? "2026-10-01T00:00:00.000Z",
+    updatedAt: input.updatedAt ?? "2026-10-01T00:00:00.000Z",
     workspace: alias === null ? null : { alias, displayName: alias },
   };
 }
+
+/**
+ * 跨月夹具：两条 `work-api` 下的会话分属 2026-09 与 2026-10。
+ *
+ * 月份分档必须取材于**每个会话自身**的 `updatedAt`；若实现误用「当前时间」统一分档，
+ * 这两条会落进同一档，`directory-filter.test.ts` 的「两个月份档」断言随之变红。
+ */
+export const CROSS_MONTH_SESSIONS: readonly SessionSummary[] = [
+  session({
+    id: "eeeeeeee-0000-4000-8000-000000000001",
+    title: "九月的重构",
+    state: "idle",
+    updatedAt: "2026-09-30T23:00:00.000Z",
+  }),
+  session({
+    id: "eeeeeeee-0000-4000-8000-000000000002",
+    title: "十月的发布",
+    state: "running",
+    updatedAt: "2026-10-02T08:00:00.000Z",
+  }),
+];
 
 /** 默认快照资源：两个同名目录、两条会话、两个同名 Agent。 */
 export function resources(input: {

@@ -36,3 +36,14 @@ export type { PairingPanelProps } from "./PairingPanel";
 export { PairingPanel } from "./PairingPanel";
 export type { RuntimeUnavailableProps } from "./RuntimeUnavailable";
 export { RuntimeUnavailable } from "./RuntimeUnavailable";
+
+// 样式基座（design D1）：token 与 `useTheme()` 是这两个页面的公共样式面。
+// 三个新原语只吃消费方的扁平数据，交互一律回调上抛。
+export type { ColorToken, Palette, Theme } from "./theme";
+export { fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+export type { DirectoryCardProps } from "./DirectoryCard";
+export { DirectoryCard } from "./DirectoryCard";
+export type { SegmentControlProps } from "./SegmentControl";
+export { SegmentControl } from "./SegmentControl";
+export type { SessionRowProps } from "./SessionRow";
+export { SessionRow } from "./SessionRow";

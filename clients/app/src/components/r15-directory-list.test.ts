@@ -23,8 +23,8 @@ import { describe, expect, it } from "vitest";
 import { DirectoryDetail } from "./DirectoryDetail";
 import { DirectoryList } from "./DirectoryList";
 import { DIRECTORY_EMPTY_COPY, buildDirectoryPageModel } from "../features/directory-model";
-import type { DirectoryDetailModel, DirectoryPageModel } from "../features/directory-model";
-import { buildCreateSessionEntryModel } from "../features/create-session-model";
+import type { DirectoryDetailModel, DirectoryPageModel, SessionRowModel } from "../features/directory-model";
+import { CREATE_DENIED_NOTE, buildCreateSessionEntryModel } from "../features/create-session-model";
 import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session, storeWith } from "../features/testing/fixtures";
 
 const SESSIONS = [
@@ -33,12 +33,32 @@ const SESSIONS = [
   session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", alias: "personal-api" }),
 ];
 
-/** 渲染目录页。点击回调在渲染测试里不会被触发。 */
-function renderDirectoryList(model: DirectoryPageModel): string {
+/**
+ * 渲染目录页。点击回调在渲染测试里不会被触发。
+ *
+ * 新 props 都带上：搜索框与筛选段只有传了回调才呈现，缺省（不传）就是既有调用点的样子。
+ * `sessionsByAlias` 缺省不带这一键（`exactOptionalPropertyTypes` 不允许显式传 `undefined`），
+ * 等价于「不列内联会话行」。
+ */
+function renderDirectoryList(
+  model: DirectoryPageModel,
+  options: {
+    readonly sessionsByAlias?: ReadonlyMap<string, readonly SessionRowModel[]>;
+    readonly query?: string;
+    readonly createPermissionNote?: string | null;
+  } = {},
+): string {
   return renderToStaticMarkup(
     createElement(DirectoryList, {
       model,
       onOpenDirectory: () => undefined,
+      query: options.query ?? "",
+      onQueryChange: () => undefined,
+      filter: "all",
+      onFilterChange: () => undefined,
+      onOpenSession: () => undefined,
+      createPermissionNote: options.createPermissionNote ?? null,
+      ...(options.sessionsByAlias === undefined ? {} : { sessionsByAlias: options.sessionsByAlias }),
     }),
   );
 }
@@ -184,6 +204,161 @@ describe("R15 两种空态可区分", () => {
     // 反例：若无快照时渲染「本机没有任何目录」，这里会出现 data-empty-state，断言变红。
     expect(html).toContain('data-directory-state="loading"');
     expect(html).not.toContain("data-empty-state");
+  });
+});
+
+describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () => {
+  it("目录项内联该目录的会话行（标题 / Agent / 状态 / 时间），且不额外引入消歧依据", () => {
+    // 生产路径：模型与会话行都经 ClientStore 取（与页面同一条取数路径）。
+    const { store } = storeWith({ resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }) });
+    const html = renderDirectoryList(store.directoryPage(), {
+      sessionsByAlias: store.directoryPageSessions(),
+    });
+
+    // 空标题呈现为「未命名会话」由 `SessionRow` 的口径保证；这里断言四个可见字段都在。
+    expect(html).toContain('data-session-id="aaaaaaaa-0000-4000-8000-000000000001"');
+    expect(html).toContain('data-session-title="true"');
+    expect(html).toContain('data-session-agent="true"');
+    expect(html).toContain('data-session-state="running"');
+    expect(html).toContain('data-session-updated-at=');
+    // 反例：若内联行顺手带上了目录的展示名/别名（当作消歧依据），计数会大于目录项数。
+    expect(html.match(/data-directory-display-name="/g)).toHaveLength(2);
+    expect(html.match(/data-directory-alias-label/g)).toHaveLength(2);
+  });
+
+  it("内联行与详情页的查询词/月份互不影响，且搜索/筛选不发任何命令", () => {
+    const { store, gateway } = storeWith({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      scopes: ["session.list"],
+    });
+    const before = [...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id);
+
+    // 目录页的查询/筛选与详情页的查询/月份一起改（它们都是 store 的 UI 状态）。
+    store.setDirectoryQuery("work-api");
+    store.setDirectoryFilter("running");
+    store.setDirectoryDetailQuery("一条都不命中");
+    store.setDirectoryDetailMonth("2026-10");
+
+    // 反例：若目录页的内联行借道 `directoryDetail`，这里会被详情页的查询词/月份过滤掉。
+    expect([...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id)).toEqual(before);
+
+    // 对照：详情页确实吃到了那两个字段——否则上一条断言可能只是「什么都没发生」。
+    const detail = store.directoryDetail("work-api");
+    expect(detail.kind === "ready" ? detail.sessions.length : -1).toBe(0);
+
+    // spec「搜索与筛选不依赖在线查询」：这两个 UI 状态不派发任何命令。
+    expect(gateway.dispatches).toHaveLength(0);
+  });
+
+  it("搜索或筛选没有命中：呈现「没有匹配的结果」，且**不占用** data-empty-state", () => {
+    // 有快照、有目录，只是查询词一个都不命中 → `no_match`，不是任何一种空态。
+    const model = buildDirectoryPageModel({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      connection: "online",
+      lastSyncedAtMs: null,
+      query: "不存在的目录或会话",
+    });
+    expect(model.kind).toBe("no_match");
+
+    const html = renderDirectoryList(model, { query: "不存在的目录或会话" });
+
+    expect(html).toContain('data-directory-no-match="true"');
+    expect(html).toContain("没有匹配的结果");
+    // 反例：若把 no_match 当成空态渲染（例如复用 `EmptyState`），这里会出现 `data-empty-state`，
+    // 与 R15-4 的两种空态断言互相污染——本条就是防这个的。
+    expect(html).not.toContain("data-empty-state");
+    // 反例：若两种空态的词表被顺手复用，这里会出现它们的标题。
+    expect(html).not.toContain(DIRECTORY_EMPTY_COPY.no_directories.title);
+    expect(html).not.toContain(DIRECTORY_EMPTY_COPY.directories_without_sessions.title);
+    // 「搜索无结果」时必须留下工具条：否则用户没有把关键词/筛选改回去的入口。
+    expect(html).toContain('data-directory-search="true"');
+  });
+
+  it("会话数超过内联展示上限：出现「查看全部 N 个」入口，N 取全量会话数", () => {
+    const many = Array.from({ length: 7 }, (_, index) =>
+      session({
+        id: `bbbbbbbb-0000-4000-8000-00000000000${String(index)}`,
+        title: `会话 ${String(index)}`,
+      }),
+    );
+    const withMany = { resources: resources({ sessions: many, workspaces: WORKSPACES }) };
+    const model = buildDirectoryPageModel({ ...withMany, connection: "online", lastSyncedAtMs: null });
+    const html = renderDirectoryList(model, {
+      sessionsByAlias: storeWith(withMany).store.directoryPageSessions(),
+    });
+
+    // N 是全量口径（7 条），不是内联行数（上限 5）：反例是把 N 写成内联行数。
+    expect(html).toContain("查看全部 7 个");
+    // 反例：若内联不限条数地全列出来，这里会出现 7 条会话行。
+    expect(html.match(/data-session-id="/g)).toHaveLength(5);
+    // 超过上限时必须有进入详情页的入口，否则「更早的会话」无处可看。
+    expect(html).toContain('data-action="open-directory"');
+  });
+
+  it("对照：一个会话都没有的目录项不呈现「查看全部」入口", () => {
+    // 只给 `work-api` 一条会话：`personal-api` 的会话数是 0（列表仍非空 → 仍是 ready）。
+    const onlyWorkApi = [session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" })];
+    const model = buildDirectoryPageModel({
+      resources: resources({ sessions: onlyWorkApi, workspaces: WORKSPACES }),
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+
+    const html = renderDirectoryList(model);
+
+    // 反例：若无条件渲染入口，两个目录项会各出一个「查看全部 0 个」。
+    expect(html.match(/data-action="open-directory"/g)).toHaveLength(1);
+    expect(html).not.toContain("查看全部 0 个");
+  });
+
+  it("无创建会话权限：呈现提示条；有权限时不呈现（缺省不留痕）", () => {
+    // 权限只由 scopes 决定（与目录别名无关）——这里就按页面那条取数路径拿权限模型。
+    const deniedStore = storeWith({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      scopes: ["session.list"],
+    }).store;
+    const deniedEntry = deniedStore.createEntry("");
+    expect(deniedEntry.permission.kind).toBe("denied");
+
+    const denied = renderDirectoryList(deniedStore.directoryPage(), {
+      createPermissionNote: deniedEntry.permission.note,
+    });
+    expect(denied).toContain('data-create-permission-note="true"');
+    expect(denied).toContain(CREATE_DENIED_NOTE);
+
+    // 有权限时页面传 `null`（组件的缺省也是不留痕）。
+    const grantedEntry = storeWith({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      scopes: ["session.create"],
+    }).store.createEntry("");
+    expect(grantedEntry.permission.kind).toBe("granted");
+
+    const granted = renderDirectoryList(deniedStore.directoryPage());
+    expect(granted).not.toContain("data-create-permission-note");
+    expect(granted).not.toContain(CREATE_DENIED_NOTE);
+  });
+
+  it("断连且有上次同步时刻：来源旁给出同步时间；从未同步过时不编造时间", () => {
+    const offline = buildDirectoryPageModel({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      connection: "disconnected",
+      lastSyncedAtMs: 1_700_000_000_000,
+    });
+    const withClock = renderDirectoryList(offline);
+    expect(withClock).toContain('data-content-origin="last_sync"');
+    // 精确值经属性进 DOM；展示文本是 **UTC 固定切片**，因此可以逐字断言（不随机器时区漂移）。
+    expect(withClock).toContain('data-synced-at="1700000000000"');
+    expect(withClock).toContain("已同步 2023-11-14 22:13 UTC");
+
+    // 从未成功替换过快照：`lastSyncedAtMs` 为 null → 不得出现任何同步时间。
+    const never = buildDirectoryPageModel({
+      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
+      connection: "disconnected",
+      lastSyncedAtMs: null,
+    });
+    const withoutClock = renderDirectoryList(never);
+    expect(withoutClock).not.toContain("data-synced-at");
+    expect(withoutClock).not.toContain("已同步");
   });
 });
 
