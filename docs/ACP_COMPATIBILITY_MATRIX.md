@@ -190,7 +190,7 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 `session/resume` 不在上述 `post_mvp` 集合：`method.session_resume` 与 `cap.agent.session_resume` 的 `delivery` 为 `conditional_mvp`，启用条件就是 Agent 经 `initialize` 宣告 `agentCapabilities.sessionCapabilities.resume`（矩阵行的 `capability`，Rust 侧判定见 `crates/acp-protocol` 的 `supports_session_resume()`）。因此：
 
 - 宣告了能力时，Owner 侧的恢复路径按 ACP 原生语义发送 `session/resume`（required `sessionId` 与 `cwd`），请求与响应经类型化 DTO 编解码，未知字段与 `_meta` 仍逐字节保真；该路径属本次变更的计划交付范围。
-- 未宣告能力时必须**显式**返回不支持，不得发送 `session/resume`，也不得静默降级为新建会话（`AGENTS.md` §3 的「能力诚实」）；
+- 未宣告能力时必须**显式**返回不支持，不得发送 `session/resume`，也不得静默降级为新建会话（`AGENTS.md` §4 的「能力诚实」）；
 - 该行其余层的目标行为固定为 `acp=native`、`broker=project_and_preserve`（core 建公共领域视图并保留 ACP raw）、`sync=explicit_unsupported`、`pwa=explicit_unsupported`、`facade=not_advertised`：本次变更的计划交付范围只覆盖 Owner/Daemon 侧路径，Sync/PWA 入口与 `acp_facade` 的宣告不在本阶段范围内，因此 §6 不给它映射。
 
 `session/load` 保持 `post_mvp`：「已知但未实现、必须显式不支持」的既有语义不因 `session/resume` 的提升而改变。

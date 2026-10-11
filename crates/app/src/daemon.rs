@@ -1909,7 +1909,7 @@ mod tests {
         (dir, lock_path, record_path, lock)
     }
 
-    /// 取消超时不得留下 detached task（`AGENTS.md` §7）：被 detach 的任务会继续运行，并在
+    /// 取消超时不得留下 detached task（`AGENTS.md` §8）：被 detach 的任务会继续运行，并在
     /// `Composition::close` 之前一直持有端口克隆（每个端口都是同一个 `Arc<SqliteStore>` 的克隆），
     /// 让关闭序列随机报 `StoreStillShared`。
     #[tokio::test]

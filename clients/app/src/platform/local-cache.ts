@@ -38,7 +38,7 @@ export const IMPORTED_METADATA_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * 一条待缓存条目的来源。
  *
  * `imported` 是**判别式**而不是布尔：调用方无法用 `isLocal: true` 这类可同时成立的组合
- * 把 imported 正文混进本节点配额（`AGENTS.md` §5 的「不使用可能产生非法组合的一组布尔值」）。
+ * 把 imported 正文混进本节点配额（`AGENTS.md` §6 的「不使用可能产生非法组合的一组布尔值」）。
  */
 export type CacheOrigin = { readonly kind: "local" } | { readonly kind: "imported" };
 
@@ -49,7 +49,7 @@ export type CacheOrigin = { readonly kind: "local" } | { readonly kind: "importe
  * imported 条目只能是 `metadata`。这个形状本身就把「imported 正文落盘」变成不可能构造的值。
  *
  * `kind` 放在**顶层**而不是嵌进 `origin`：判别式联合要求判别字段位于被判别层，
- * 嵌套一层会让窄化失效（`AGENTS.md` §7 的「优先使用具体类型」同理）。
+ * 嵌套一层会让窄化失效（`AGENTS.md` §8 的「优先使用具体类型」同理）。
  */
 export type CacheEntry =
   | {

@@ -4,7 +4,7 @@
  * **归属 WP7**（`plan.md` 的 WP7 行）：R15–R19 的控制器、视图模型与状态仓库都在这一层。
  *
  * 该层可以消费 `src/domain/` 的视图模型与 `src/state/` 的状态类型，
- * 但 MUST NOT 直接触碰 WebSocket/IndexedDB/CryptoKey（`AGENTS.md` §5）——
+ * 但 MUST NOT 直接触碰 WebSocket/IndexedDB/CryptoKey（`AGENTS.md` §6）——
  * 它对同步客户端的依赖面被收窄成 `ports.ts` 的三个端口。
  */
 

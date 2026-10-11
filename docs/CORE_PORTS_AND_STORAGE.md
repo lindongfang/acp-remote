@@ -35,7 +35,7 @@
 
 ## 2. 依赖、运行时与错误类型
 
-- `core` 不依赖 Tokio、Axum、SQLite、WebSocket、子进程、ACP DTO、任何 wire protocol（`AGENTS.md` §4、`MODULE_ARCHITECTURE.md` §4.1）。
+- `core` 不依赖 Tokio、Axum、SQLite、WebSocket、子进程、ACP DTO、任何 wire protocol（`AGENTS.md` §5、`MODULE_ARCHITECTURE.md` §4.1）。
 - `[决定]` 端口用可 dyn 化的异步 trait：`#[async_trait]`（纯 proc-macro，不引入 runtime）＋ `Send + Sync + 'static`；组合根持有 `Arc<dyn Port>`。不用 async fn in trait（v1 的 rustc 不支持 trait object）。
 - `[决定]` 端口签名只使用 §3 定义的 `core::model` 类型。禁止出现 `sqlx`、`serde_json::Value`、HTTP、JSON-RPC、wire discriminator 或数据库列名。
 - `[决定]` 时间与 ID 由端口注入：所有持久化写方法与 `prune` 都接收 `at: Timestamp`（由调用方从 `Clock` 取），`storage-sqlite` 内部**不得**读系统时间。
@@ -204,7 +204,7 @@ pub enum UnavailableKind {
 
 ## 4. `core::use_cases` 用例面
 
-`[决定]` **每个**入口的第一个参数都是 `actor: &Actor`：授权只在 core 判定，`server` 不得传入“已授权”标志，也不得代替 core 判定（`AGENTS.md` §3/§4、`SECURITY_DESIGN.md` §8）。全部 mutation 只同步接受。
+`[决定]` **每个**入口的第一个参数都是 `actor: &Actor`：授权只在 core 判定，`server` 不得传入“已授权”标志，也不得代替 core 判定（`AGENTS.md` §4/§5、`SECURITY_DESIGN.md` §8）。全部 mutation 只同步接受。
 
 | 用例族 | 入口 | 调用方 |
 |---|---|---|
@@ -841,7 +841,7 @@ pub trait IdGenerator: Send + Sync {
         - 释放占位有两条路径：①该 turn 的终态事件到达（按上面丢弃，但视为「端点已观测到它结束」）；②兜底——占位消耗的驱动轮次达到 core 常量 `ABANDONED_TURN_HOLD_ROUNDS`（`1200` 轮；组合根按 `storage.flush_interval_ms` 驱动活动会话，默认 250 ms 一轮 ≈ 5 分钟）。core 不读时钟、不设定时器，因此兜底按轮次而不按墙钟计时：端点永不收敛时优先让会话继续可用。
         - 仍有排队 turn 时，这次放弃提交把会话状态写成 `queued`（而非 `failed`）：组合根的合并窗口只枚举 `queued`/`running`/`waiting_*` 的会话，写成 `failed` 会让该会话再也不被驱动，兜底轮次永远推不动。
         - 释放之后无归属事件回到「归给在跑的 turn」的既有规则（第 19 条/§10.3），因此兜底是最后手段：它只在端点确实不再收敛时触发。**它的代价要显式登记**：占位一旦释放，该被放弃 turn 若还有迟到事件（含它终态之后的尾巴），会按在跑的 turn 归属并照常提交——兜底把窗口收窄到有界轮次，不是消除它；这是「提前派发（每个被放弃的 turn 都会发作）」与「会话永久卡住」之间的取舍，彻底消除需要适配器为 `EndpointEvent` 给出权威 turn 标识（本切片不要求）。
-    - 该路径不压缩已落盘的 delta（第 15 条是可选动作），也不向调用方冒泡错误（与带终态的批次失败时的既有口径一致）：可观测信号就是上面两条持久事件（core 不含日志依赖，`AGENTS.md` §7）；失败批次没有在跑 turn 可归属时（例如会话级事件）仍然只有「不发布」这一个效果，没有命令可终结。
+    - 该路径不压缩已落盘的 delta（第 15 条是可选动作），也不向调用方冒泡错误（与带终态的批次失败时的既有口径一致）：可观测信号就是上面两条持久事件（core 不含日志依赖，`AGENTS.md` §8）；失败批次没有在跑 turn 可归属时（例如会话级事件）仍然只有「不发布」这一个效果，没有命令可终结。
 10. `[决定]` `storage.flush_interval_ms = 250` 允许把同一会话短窗口内的 delta 合并为一次 `commit`；合并不得改变顺序、不得跨 turn 边界、不得延迟终态事件。
 11. `[决定]` `OwnedCommit.events` 只接受 `StoredPolicy`；`Ephemeral` 由 broker 在组装前过滤（内存转发），`commit` 收到 `Ephemeral` 视为 `InvalidRequest`（类型上已不可表达）。
 12. `[决定]` 快照与重放必须来自 `SessionStore::read_view()` 返回的同一读视图，`sync.snapshot_begin`/`sync.snapshot_end` 与之后的事件游标都以该视图的 `head()` 为 barrier（`SYNC_PROTOCOL.md` §9.3/§9.4）。
@@ -1339,7 +1339,7 @@ CREATE TABLE imported_import_export (
 
 | 配置键 | 默认 | 落到 schema 的行为 |
 |---|---:|---|
-| `storage.transcript_retention_days` | 90 | 清理 `kind ∈ {final_message, structured, summary}` 的 `owned_event`；`kind='state'` 一并纳入该窗口（`AGENTS.md` §6 的「关键结构化事件与状态变化」以 90 天为默认承诺期）；`owned_interaction` 的终态行同期清理 |
+| `storage.transcript_retention_days` | 90 | 清理 `kind ∈ {final_message, structured, summary}` 的 `owned_event`；`kind='state'` 一并纳入该窗口（`AGENTS.md` §7 的「关键结构化事件与状态变化」以 90 天为默认承诺期）；`owned_interaction` 的终态行同期清理 |
 | `storage.sync_event_retention_days` | 7 | 清理 `kind='delta'` 的 `owned_event`；cursor 低于窗口下界 → `sync.reset_required`（`reason = cursor_expired`） |
 | `storage.max_total_size_bytes` | 2 GiB | 全库上限；度量 = `owned_*` 家族所有 `TEXT` 列的 `length()` 之和 + `owned_attachment.byte_length` 之和 + **`imported_*` 家族所有 `TEXT` 列的 `length()` 之和**（v1 用字符数而非字节数，作为有界增长的代理指标；同一口径同时用于提交前的容量检查与两侧 `prune`）。Access-only 节点上 `owned_*` 为空，因此没有 imported 分量时度量恒为 0、`prune` 永不回收 |
 | `storage.max_session_size_bytes` | 100 MiB | 单会话上限；度量同上并按 `session_id` 归集 |

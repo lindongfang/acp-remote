@@ -3,7 +3,7 @@
 //! 组合根持有 [`ShutdownHandle`] 并把它交给 [`crate::transport::net::NetListener::serve`]；信号触发后
 //! listener 停止 accept、排空在途连接（宽限由 `daemon.shutdown_grace_ms` 决定），并把同一信号交给每个
 //! 已升级的连接（[`crate::transport::net::PeerInfo::shutdown`]），使上层会话也能选择自己的取消路径。
-//! 所有异步任务因此都有所有者与取消路径，不遗留 detached task（`AGENTS.md` §7）。
+//! 所有异步任务因此都有所有者与取消路径，不遗留 detached task（`AGENTS.md` §8）。
 
 use tokio::sync::watch;
 

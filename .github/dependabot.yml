@@ -65,9 +65,10 @@ updates:
   # `commits` job 必失败（#49–#53）。显式声明后即可带上与根条目一致的 `commit-message.prefix`，
   # 标题不再含路径，同时沿用同一套冷却期与分组策略。
   #
-  # 注意前端工程的验证面：`clients/app` 的 `tsc` / `vitest` / Chromium / `e2e` **不在**
-  # CI 的五个必需检查内（它们只跑仓库根的门禁），因此这里的升级即使 CI 全绿，
-  # 合并前仍须在本地跑一遍 `clients/app` 的四道验证。
+  # 注意前端工程的验证面：`clients/app` 的 `tsc` / `vitest` / `expo export` 现在由 CI 的
+  # `前端检查（clients/app）` job 覆盖（2026-10-11 新增；`npm ci` 会连带断言锁文件与
+  # package.json 同步）。但**浏览器级 E2E**（`e2e/run-e2e.mjs`、`scripts/run-browser-check.mjs`）
+  # 仍不在任何 job 内，改动前端后仍须本地手动跑。
   - package-ecosystem: npm
     directory: "/clients/app"
     schedule:

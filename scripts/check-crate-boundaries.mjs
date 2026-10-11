@@ -167,7 +167,7 @@ if (coreDependencies) {
 /**
  * `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 的前半：core 的**普通依赖闭包**必须与冻结 allow-list 逐项相等。
  * 判据原文写的是「`cargo tree -p core --edges normal` 的输出逐行相等（黄金文件）」——这里比的是名字集合而不是
- * 版本号：版本随补丁升级变动，而「多出一个 crate」才是需要人做决定的事件（`AGENTS.md` §7）。新增依赖必须同时
+ * 版本号：版本随补丁升级变动，而「多出一个 crate」才是需要人做决定的事件（`AGENTS.md` §8）。新增依赖必须同时
  * 改这里与合同 §9 判据 13 —— 与「矩阵只有一处定义」同一原则。
  */
 const CORE_ALLOWED_CLOSURE = [
@@ -179,7 +179,7 @@ const CORE_ALLOWED_CLOSURE = [
   // 上面四者的 proc-macro 与曲线栈传递依赖（`p256` 只开 `arithmetic`：曲线点校验需要的
   // `sec1`/`elliptic-curve`/`primeorder`/`group`/`ff` 等；`sha2` 的 `digest`/`block-buffer`；
   // 以及它们共用的 `hybrid-array`/`subtle`/`zeroize`）。它们随上述依赖出现，
-  // 不是独立选择；新增任何一个都必须先按 AGENTS.md §7 审查。**签名与编码栈不在闭包内**：
+  // 不是独立选择；新增任何一个都必须先按 AGENTS.md §8 审查。**签名与编码栈不在闭包内**：
   // core 既不签名也不验签，因此 `ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8`/`spki`/`pem-rfc7468`/
   // `base64ct` 都不应出现在这里——出现即说明有人把 workspace 的默认 feature 又放开了（`sec1` 自带的
   // `base16ct` 十六进制解码仍在闭包内）。
@@ -240,7 +240,7 @@ if (workspaceEdges.has("core")) {
   }
   for (const name of closure) {
     if (!CORE_ALLOWED_CLOSURE.includes(name)) {
-      errors.push(`core：依赖闭包出现未登记成员 ${name}——新增依赖必须先按 AGENTS.md §7 审查并在 docs/CORE_PORTS_AND_STORAGE.md §9 判据 13 与本表登记`);
+      errors.push(`core：依赖闭包出现未登记成员 ${name}——新增依赖必须先按 AGENTS.md §8 审查并在 docs/CORE_PORTS_AND_STORAGE.md §9 判据 13 与本表登记`);
     }
   }
 }

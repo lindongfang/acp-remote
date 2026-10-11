@@ -84,11 +84,47 @@ jobs:
       - name: 安装合同校验脚本的依赖
         run: npm ci
 
-      - name: 合同门禁（npm run check，九个脚本）
+      - name: 合同门禁（npm run check，十个脚本）
         run: npm run check
 
       - name: 格式、静态检查与测试（npm run check:rust，与本地 npm run verify 同一入口）
         run: npm run check:rust
+
+  frontend:
+    name: 前端检查（clients/app）
+    runs-on: ubuntu-latest
+    # 为什么单独一个 job：`clients/app` 是**独立的 npm 工程**（自带 `package.json` 与
+    # `package-lock.json`），根目录的 `npm ci` 与 `npm run check` 都不覆盖它。这条缺口
+    # 实盘暴露过两次，两次在原来的五个 job 下**都是全绿**：
+    #   - #68：react-native 升到 0.87.1 后删掉了 `exports` 里的 `"./*"` 通配，而 expo 的
+    #     Metro 依赖 `react-native/rn-get-polyfills` 这个深路径，`expo export` 报
+    #     ERR_PACKAGE_PATH_NOT_EXPORTED；tsc 与 458 个单测全过，只有真的打包才会炸。
+    #   - #69：dependabot 生成的锁文件缺一条嵌套依赖（`react-native-worklets@0.10.4`），
+    #     `npm ci` 的同步断言直接失败。
+    # 因此这里跑两件事：`npm ci` 按锁文件严格安装（顺带断言 package.json 与 lock 同步），
+    # 再 `npm run check` = typecheck + vitest + `expo export --platform web`。
+    #
+    # 仍未覆盖：`clients/app` 的浏览器级 E2E（`e2e/run-e2e.mjs`，需要真实 Chromium 内核）
+    # 与 `scripts/run-browser-check.mjs`。它们目前仍需在本地手动跑；接入 CI 需要先决定
+    # 用哪种 Chromium 供给方式，不在本 job 的范围内。
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          # 缓存键必须指向 clients/app 的锁文件：根条目的 `cache: npm` 只认仓库根的
+          # `package-lock.json`，用错会让这里的缓存永远不命中（或命中错的依赖树）。
+          cache: npm
+          cache-dependency-path: clients/app/package-lock.json
+
+      - name: 安装前端依赖（严格按锁文件）
+        working-directory: clients/app
+        run: npm ci
+
+      - name: 前端检查（typecheck + vitest + expo export）
+        working-directory: clients/app
+        run: npm run check
 
   deps:
     name: 依赖许可证与来源

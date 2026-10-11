@@ -9,7 +9,7 @@
 
 `SECURITY_DESIGN.md` §16.2 要求「CI 使用固定 action/toolchain major 或 digest、锁定 Rust/npm 依赖并保存审核记录」，
 并要求生成依赖许可证清单以便定位受影响版本。在本次变更前，这些要求只有一半落地：依赖靠 `Cargo.lock` /
-`package-lock.json` 锁定，候选依赖的准入审查（`AGENTS.md` §7 的「必要性、维护状态、许可证、平台支持和安全风险」）
+`package-lock.json` 锁定，候选依赖的准入审查（`AGENTS.md` §8 的「必要性、维护状态、许可证、平台支持和安全风险」）
 **只有人工纪律，没有机器判据**；许可证清单、依赖安全公告与密钥扫描都不存在。
 
 `.github/workflows/ci.yml` 当时还写着一条更窄的约束：「只用 GitHub 官方 action 且固定 major；不引入第三方 toolchain
@@ -20,7 +20,7 @@ action」。这条约束在实践中有两个问题：
    `actions/setup-node@v4` 这类旧 major 不再是因为「稳定」而可用，而是会直接失败。固定 major 这条规则的含义
    必须收窄为「固定到仍受支持的 runtime 上的 major」。
 2. **依赖公告与密钥扫描没有官方 action**。硬守「只用官方」等于放弃这两类判定，而它们恰好是 §16.2 与
-   `AGENTS.md` §3（私钥与 token 不得进入日志、测试快照等）最需要机器判据的部分。
+   `AGENTS.md` §4（私钥与 token 不得进入日志、测试快照等）最需要机器判据的部分。
 
 备选方案：
 
@@ -83,7 +83,7 @@ action」。这条约束在实践中有两个问题：
    每条必须写理由与核对人；真实凭据的正确处置是轮换 + 清理历史 + 记录事件（`SECURITY_DESIGN.md` §17），
    不是加允许清单。
    当前没有任何允许清单条目。
-8. **文档引用进入 `npm run check`**（`check:docs`）：文档是本仓库的权威（`AGENTS.md` §1），相对链接、锚点与
+8. **文档引用进入 `npm run check`**（`check:docs`）：文档是本仓库的权威（`AGENTS.md` §2），相对链接、锚点与
    「指名了文档的 `§X.Y` 引用」失效必须被机器判据抓住。归属规则刻意保守（只认同一子句内紧邻指名的文档），
    因此它**不能**代替维护者在重编号后通读文档：无法归因的引用只统计、不判定。
 
@@ -117,7 +117,8 @@ action」。这条约束在实践中有两个问题：
      `deletion` + `non_fast_forward` + `required_status_checks`（`strict = true`，五个上报名）+
      `pull_request`（`required_approving_review_count = 0`），并**保留 `RepositoryRole admin` 的 bypass**
      作为紧急出口。因此默认路径变成 PR（三个只能在 CI 跑的判定因此成为先于落地的门禁），
-     但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `README.md` 的「分支保护」小节。
+     但直推在技术上仍可行——所以落地流程必须写在文档里才生效：见 `README.md` 的「分支保护」小节，
+     本地合入到 squash 的步骤见 `docs/WORKFLOW.md` §6.1–§6.2。
   4. `advisories` job 的失败可能来自与本次改动无关的上游 advisory，需要人工判断是升级依赖还是记录 `ignore`。
      同类的 npm 侧问题已具体化：`deps` job 的 npm 判定现由 `scripts/check-dependency-advisories.mjs` 承担
      （不再直接跑 `npm audit`）。原因是仓库有一条**上游无修复**的 advisory——`braces` 的
@@ -135,7 +136,7 @@ action」。这条约束在实践中有两个问题：
      `cargo install --locked cargo-deny@0.20.2` 未能完成，因此 `deny.toml` 的字段形状是对齐 cargo-deny 0.20.2
      自带模板（只保留能给出理由的键）写成的，**首次真实执行发生在 CI**。这条同样适用于 `.gitleaks.toml`。
   6. 门禁数量与 CI job 数量不再有单一数字定义：`README.md` 说明「顺序以 `package.json` 的
-     `check` 脚本为准」，新增门禁时必须同时更新 `package.json`、`AGENTS.md` §8、`README.md` 与 CI 注释。
+     `check` 脚本为准」，新增门禁时必须同时更新 `package.json`、`AGENTS.md` §9、`README.md` 与 CI 注释。
 - 与 `SECURITY_DESIGN.md` §16.2 的关系：本 ADR 是该节「固定 action/toolchain major 或 digest」的具体化，
   并补充两条该节原本没有的义务——「第三方 action 的许可证与向外发送的数据必须在 ADR 记录」、
   「官方 action 的 major 必须跟随 runtime 生命周期」。

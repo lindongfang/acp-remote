@@ -15,7 +15,7 @@
 
 这 11 项对应的 Rust 侧还包括跨协议共用的机制：`Nullable<T>`（`required` 且可 null 的键存在性语义）、
 `RawObject`/`ExtraFields`（开放扩展点的字节/值保真）、`Text`/`NonEmptyText`/`BoundedU64`、`ValueError`、
-`deserialize_optional_non_null`。`AGENTS.md` §4 规定协议 crate 彼此不直接依赖，平级模块共享的底层实现下沉为
+`deserialize_optional_non_null`。`AGENTS.md` §5 规定协议 crate 彼此不直接依赖，平级模块共享的底层实现下沉为
 叶子 crate；按该规则照字面做，就要在 `node-link-protocol` 里复制约 1000 行安全相关校验代码。
 
 ## 决策
@@ -43,8 +43,8 @@
   不会在两个协议之间漂移；`Nullable` 的"缺键即错"语义也只维护一处。
 - `sync-protocol` 的公开路径不变，既有夹具驱动与漂移门禁（56 条合法消息往返、33 个视图投影、错误码与 registry
   逐条相等）继续作为这次搬家的回归判据。
-- crate 数从 ADR-0006 的十二变为十三：`MODULE_ARCHITECTURE.md` §2/§3/§4/§5、`AGENTS.md` §4 与架构图需要同步；
+- crate 数从 ADR-0006 的十二变为十三：`MODULE_ARCHITECTURE.md` §2/§3/§4/§5、`AGENTS.md` §5 与架构图需要同步；
   架构图（`docs/diagrams/`）是生成产物，必须重新生成而不是手工改。
 - 新增依赖审查：`acpr-wire` 只依赖 `serde`、`serde_json`、`thiserror`、`base64` 与 `acpr-transcript`，全部纯
-  Rust、无平台依赖、Apache-2.0/MIT 许可，符合 `AGENTS.md` §7 的依赖准入。
+  Rust、无平台依赖、Apache-2.0/MIT 许可，符合 `AGENTS.md` §8 的依赖准入。
 - 后续：若 `acp-protocol` 出现同一批值对象，同样复用它；若某类型只有两个协议中的一个在用，不下沉。

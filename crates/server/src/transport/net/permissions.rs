@@ -3,7 +3,7 @@
 //! 判定被拆成**纯函数**（输入是合成的权限视图）以便在任一平台上单测；真实平台读取只在
 //! [`inspect_file_permissions`] 里发生。形状与既有 `storage-sqlite` 的判定同构
 //! （`docs/CORE_PORTS_AND_STORAGE.md` §7.1 的 `[决定]`、§9 判据 12）——这里不能复用那个实现，
-//! 因为 `server` 与 `storage-sqlite` 是平级适配器，互不依赖（`AGENTS.md` §4）。
+//! 因为 `server` 与 `storage-sqlite` 是平级适配器，互不依赖（`AGENTS.md` §5）。
 //!
 //! **Windows 的 ACL 读取**：workspace 以 forbid 级 lint 禁止不安全代码（根 `Cargo.toml` 的
 //! `[workspace.lints.rust]`），且没有 ACL 封装依赖，因此

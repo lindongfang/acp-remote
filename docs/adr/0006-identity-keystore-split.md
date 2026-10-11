@@ -22,6 +22,6 @@
 ## 结果
 
 - 状态机可在所有平台编译与单测，平台 keystore 的行为测试集中在一个 crate。
-- crate 数从 ADR-0005 的十一个变为十二个；`MODULE_ARCHITECTURE.md` §3/§4.8/§4.12/§5/§6/§11/§12、`AGENTS.md` §4 与架构图需要同步（已同步）。
+- crate 数从 ADR-0005 的十一个变为十二个；`MODULE_ARCHITECTURE.md` §3/§4.8/§4.12/§5/§6/§11/§12、`AGENTS.md` §5 与架构图需要同步（已同步）。
 - 「无桌面会话的 Linux 能不能用」从跨 crate 问题降为 `identity-keystore` 的局部问题：将来加降级实现不需要改动 `identity-auth`。
 - 代价：多一层 trait 边界与一次构造期注入；`identity-keystore` 不得把平台句柄或平台回调（例如 Windows 的证书选择 UI）暴露给调用方，需要时必须新增端口方法。

@@ -14,7 +14,7 @@
  * 3. 组合根与 feature 解耦：换原生端时 feature 的依赖面不变。
  *
  * **本层不触碰任何平台 API**：WebSocket、IndexedDB、WebCrypto 只存在于 `src/platform/` 与
- * `src/sync-client/`，由组合根装配后从这里进入（`AGENTS.md` §5）。
+ * `src/sync-client/`，由组合根装配后从这里进入（`AGENTS.md` §6）。
  */
 
 import type { CommandMessage } from "../protocol";

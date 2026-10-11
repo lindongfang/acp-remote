@@ -1,7 +1,7 @@
 /**
  * `src/platform/` 的公开入口：平台端口的**唯一**装配面。
  *
- * 归属 WP5b。`AGENTS.md` §5 与 `docs/FRONTEND_DESIGN.md` §3 要求页面与 feature 层
+ * 归属 WP5b。`AGENTS.md` §6 与 `docs/FRONTEND_DESIGN.md` §3 要求页面与 feature 层
  * 不直接触碰 WebSocket/IndexedDB/WebCrypto/生命周期；`src/layers.test.ts` 也把
  * `src/platform/` 定为「不得被内层依赖」的平台层。因此上层消费的**唯一**合法形状是
  * 这里导出的端口**接口**与它们的装配函数——端口形状与平台实现分离，

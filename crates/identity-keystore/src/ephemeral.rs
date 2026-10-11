@@ -33,7 +33,7 @@ pub struct EphemeralKeystore {
 }
 
 impl EphemeralKeystore {
-    /// 取条目表；锁中毒映射为端口错误而不是 panic（`AGENTS.md` §7：正常路径不用 `unwrap`/`expect`）。
+    /// 取条目表；锁中毒映射为端口错误而不是 panic（`AGENTS.md` §8：正常路径不用 `unwrap`/`expect`）。
     fn entries(&self) -> Result<std::sync::MutexGuard<'_, BTreeMap<String, Entry>>, KeystoreError> {
         self.entries.lock().map_err(|_| KeystoreError::Unavailable)
     }

@@ -2510,7 +2510,7 @@ async fn session_list_only_returns_sessions_of_visible_exports() {
 }
 
 /// 关闭序列触发终态观察循环立刻结束——它由组合根 spawn，必须随 `Shutdown` 退出，
-/// 不遗留 detached task（`AGENTS.md` §7）。
+/// 不遗留 detached task（`AGENTS.md` §8）。
 #[tokio::test]
 async fn the_terminal_watcher_stops_on_shutdown() {
     let fixture = Fixture::new().await;

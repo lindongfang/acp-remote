@@ -1,6 +1,6 @@
 //! 结构化内容：content block、tool call content、diff 与 terminal。
 //!
-//! 这些类型是「结构化内容不得被文本化」的落点（`AGENTS.md` §3、`docs/ACP_COMPATIBILITY_MATRIX.md`
+//! 这些类型是「结构化内容不得被文本化」的落点（`AGENTS.md` §4、`docs/ACP_COMPATIBILITY_MATRIX.md`
 //! §5 第 4 条）：tool call、diff、terminal 与 resource 都必须按结构化类型解码，不得合并成普通文本。
 //!
 //! 未知的 content block 类型**不是**解码失败，而是 [`ContentBlock::Unknown`]（可见降级）：原文在

@@ -24,7 +24,7 @@
 
 - 安全关键的编解码与按表校验只有一份实现（字段宽度不再随协议复制），六个 Node Link domain 与六个 Sync domain 的固定向量在两侧（Rust 与 WebCrypto）继续作为独立判据。
 - 协议升级互不牵连：改 Sync 的 domain/tag 表不影响 Node Link 的编译与发布节奏，反之亦然。
-- crate 数从 ADR-0003 的十个变为十一个，`MODULE_ARCHITECTURE.md` §3/§5、`AGENTS.md` §4 与架构图需要同步。
+- crate 数从 ADR-0003 的十个变为十一个，`MODULE_ARCHITECTURE.md` §3/§5、`AGENTS.md` §5 与架构图需要同步。
 - `identity-auth` 依赖三个 crate（codec + 两个协议的表）；这是"依赖传递"而非横向协作：它拿到的是数据与纯函数，不是任何适配器行为。
 - 不引入任何"万能 common/util" crate：`acpr-transcript` 的语义边界就是"ACP Remote 的签名 transcript 编码"，不是通用序列化工具。
 - 后续：[ADR-0006](./0006-identity-keystore-split.md) 把 `identity-auth` 的平台 keystore 也拆成独立 crate（`identity-keystore`，依赖 `identity-auth` 定义的端口），crate 总数为十二。

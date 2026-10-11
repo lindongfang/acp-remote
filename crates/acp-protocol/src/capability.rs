@@ -1,6 +1,6 @@
 //! capability 的 wire 形状与「宣告必须真实」的落点。
 //!
-//! 两条不变量（`docs/AGENTS.md` §3、`docs/ACP_COMPATIBILITY_MATRIX.md` §3.3/§5 第 6–7 条）：
+//! 两条不变量（`docs/AGENTS.md` §4、`docs/ACP_COMPATIBILITY_MATRIX.md` §3.3/§5 第 6–7 条）：
 //!
 //! 1. **保真**：解码时未识别的能力字段必须保留（`_meta` 与其它未知键都进 `extra`/`meta`）；
 //! 2. **真实**：本 crate 只能宣告自己确实具备的能力——[`ClientCapabilities::none`] 序列化出来是

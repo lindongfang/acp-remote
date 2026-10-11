@@ -1,0 +1,19 @@
+# E2E 覆盖层：`omp --config .omp/e2e.yml` 时生效，只影响这一次运行，不写入任何持久配置。
+#
+# 它承载的是 computer prelude 之外的**审批收紧**，不是 prelude 开关：prelude 已在
+# `.omp/config.yml` 日常启用（通道日常可用），这里只在真正跑桌面 E2E 时把审批从 `yolo`
+# 收紧到 `write`。收紧单独放一层，是因为平时 `write` 会让主检出的每次编辑都等人工确认，
+# 开发会话不可用；只有真实驱动桌面（真实鼠标、真实键盘）时才值得付这个确认成本。
+#
+# 判据与分层见 `docs/WORKFLOW.md` 的 E2E 一节。
+
+computer:
+  enabled: true
+  # 只捕获焦点窗口所在显示器，避免把整块多屏桌面送进模型上下文。
+  display: active
+
+# 桌面 E2E 会产生真实副作用，因此把审批模式从默认 yolo 收紧：
+# 只读检查（窗口枚举、截图、AX 读取、剪贴板读）自动通过，输入与变更类操作需要确认。
+# 全自动无人值守时改用 `--approval-mode yolo` 显式覆盖，并在运行记录里写明这是一次性授权。
+tools:
+  approvalMode: write
