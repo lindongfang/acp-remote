@@ -1,7 +1,7 @@
 /**
  * `fixtures/sync/v1/manifest.json` 的**严格**类型化读取。
  *
- * `AGENTS.md` §5 要求 Rust 与 TypeScript 消费同一 manifest；`plan.md` 的 PV3/AC3 判据是
+ * `AGENTS.md` §6 要求 Rust 与 TypeScript 消费同一 manifest；`plan.md` 的 PV3/AC3 判据是
  * 「读同一份 `fixtures/sync/v1/manifest.json` 与 `schemas/sync/v1/**`，不复制样例」。
  *
  * 因此这个模块只做两件事：

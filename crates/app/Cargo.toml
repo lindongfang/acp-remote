@@ -36,7 +36,7 @@ server = { path = "../server" }
 # `rt-multi-thread`/`macros`/`sync`/`time`/`net`/`io-util`/`signal` 由 workspace 基线开启：runtime 由本
 # crate 创建并持有（`docs/MODULE_ARCHITECTURE.md` §4.5/§4.7：适配器不自建 runtime），`signal` 驱动关闭序列。
 # `io-std` 是 `acp-stdio` 字节泵自己的消费面（`tokio::io::stdin/stdout`），因此只在本 manifest 增量开启，
-# 不替其他 crate 多开（`AGENTS.md` §12：feature 是加法的，基线只登记跨 crate 共用的部分）。
+# 不替其他 crate 多开（`AGENTS.md` §10：feature 是加法的，基线只登记跨 crate 共用的部分）。
 tokio = { workspace = true, features = ["io-std"] }
 # 单实例锁：OS advisory 文件锁。**必须全限定调用** `fs4::FileExt::try_lock`——固定工具链的
 # `std::fs::File::try_lock`（1.89 稳定）同名且方法解析优先级更高，用错等于把 MSRV 抬到 1.89

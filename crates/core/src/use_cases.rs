@@ -2009,7 +2009,7 @@ mod tests {
         lock(&fixture.world.state).sessions.len()
     }
 
-    /// [R6]/[R17] + design D2：`create_session` 在 `factory.create` 成功返回后**紧接着**提交一次两列
+    /// design D2：`create_session` 在 `factory.create` 成功返回后**紧接着**提交一次两列
     /// 写入（不是终态提交）：`agent_session_id` 来自 `SessionEndpoint::agent_session_id()`，
     /// `workspace_cwd` 来自 core **自己**已解析的 `ResolvedWorkspace::canonical_path()`。该提交使会话
     /// 的可见版本变为 2（创建提交 v1 + 两列提交 v2）。
@@ -2261,7 +2261,7 @@ mod tests {
         assert!(record.workspace_cwd.is_some(), "恢复输入仍只来自两列窄读取");
     }
 
-    /// [R7]/§3.6：`agent_session_id()` 为 `None`（未取得标识）时**两列都不写**，也不产生那次追加
+    /// §3.6：`agent_session_id()` 为 `None`（未取得标识）时**两列都不写**，也不产生那次追加
     /// 提交——该会话不被当作可恢复会话。
     #[test]
     fn create_session_writes_no_recovery_columns_without_an_agent_session_id() {
@@ -2313,7 +2313,7 @@ mod tests {
         crate::model::RequestId::new(&uuid_text(80 + n)).expect("request id")
     }
 
-    /// [R26]/[R27]/[R31]/§5.1：`resume_session` 的输入全部取自持久化记录（`agent`/`agent_session_id`/
+    /// §5.1：`resume_session` 的输入全部取自持久化记录（`agent`/`agent_session_id`/
     /// 持久化 cwd 原文），成功后写 `accepted` + 幂等行（`session` 指向目标会话）并只返回 `SessionId`。
     #[test]
     fn resume_session_uses_the_persisted_values_and_commits_an_accepted_row() {
@@ -2352,7 +2352,7 @@ mod tests {
         assert_eq!(record.session(), Some(&fixture.session));
     }
 
-    /// [R28]/§6 第 6 条：同键重试不重复派发——幂等行已存在时早退，不再调用后端。
+    /// §6 第 6 条：同键重试不重复派发——幂等行已存在时早退，不再调用后端。
     #[test]
     fn resume_session_replay_does_not_spawn_a_second_endpoint() {
         let (fixture, _workspace, _) = resume_fixture("resume-replay");
@@ -2373,7 +2373,7 @@ mod tests {
         );
     }
 
-    /// [R23]/[R24]/[R25]：cwd 复校验失败在**调用后端之前**发生，且是服务端不可用类；
+    /// cwd 复校验失败在**调用后端之前**发生，且是服务端不可用类；
     /// 持久化取值不被改写，也不回退到任何新解析结果。
     #[test]
     fn resume_session_revalidates_the_persisted_directory_before_calling_the_backend() {
@@ -2467,7 +2467,7 @@ mod tests {
         ));
     }
 
-    /// [R21-2]/[R37]/§3.6：两列为 `NULL`（没有可用恢复数据）时与「能力不支持」同一条路径——
+    /// §3.6：两列为 `NULL`（没有可用恢复数据）时与「能力不支持」同一条路径——
     /// `BackendUnsupported`、**不启动进程**、不降级为新建会话。
     #[test]
     fn resume_session_reports_missing_recovery_data_as_unsupported() {
@@ -2501,7 +2501,7 @@ mod tests {
         assert!(fixture.world.command(&request).is_none());
     }
 
-    /// [R31]/§5.1：授权先于一切本机读取——未授权时既不读会话行也不触碰文件系统，且与会话是否存在
+    /// §5.1：授权先于一切本机读取——未授权时既不读会话行也不触碰文件系统，且与会话是否存在
     /// 不可区分。
     #[test]
     fn resume_session_authorizes_before_reading_the_session_row() {
@@ -2539,7 +2539,7 @@ mod tests {
         );
     }
 
-    /// [R37]/§5.1：后端报告「不支持」（Agent 未宣告能力）时原样上抛，且 `accepted` 行仍在——
+    /// §5.1：后端报告「不支持」（Agent 未宣告能力）时原样上抛，且 `accepted` 行仍在——
     /// 由适配层结 `failed` 终态（`command.uncertain` 只留给「已 accepted、尚未确认副作用」的窗口）。
     #[test]
     fn resume_session_propagates_the_backend_unsupported_error() {
@@ -2586,7 +2586,7 @@ mod tests {
         );
     }
 
-    /// [R66]/§6 第 6 条与第 20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在
+    /// §6 第 6 条与第 20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在
     /// `owned_command` 里；同键重试回首次结果且不重复创建，同键不同语义是 `idempotency_conflict`。
     #[test]
     fn session_create_replay_does_not_create_a_second_session() {

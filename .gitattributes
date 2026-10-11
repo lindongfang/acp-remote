@@ -3,6 +3,7 @@
 # 因此这些树固定以 LF 检出。
 openspec/** text eol=lf
 .agents/** text eol=lf
+.omp/** text eol=lf
 
 # vendored 上游 ACP 快照由 compatibility/acp/v1/matrix.json 的 protocol.schemaSha256 逐字节 pin，
 # 而 scripts/check-acp-compatibility.mjs 直接哈希磁盘上的字节。

@@ -509,7 +509,7 @@ fn stop_is_accepted_first_and_requests_during_shutdown_are_unavailable() {
     assert!(restarted.stop().success());
 }
 
-/// R12/R13 + RV1-WP7-F2：`daemon.stop` 返回 accepted 之后，网络 listener 必须**已停止 accept**。
+/// R12/R13：`daemon.stop` 返回 accepted 之后，网络 listener 必须**已停止 accept**。
 ///
 /// 可观测的后果是「新连接不再被服务」：本地排空窗口内进程仍存活（下面用地一条本地长连接把它撞开），
 /// 而监听地址在这整个窗口里等不到任何 HTTP 响应。旧实现把触发推到了 `await` 点（本地排空之后），

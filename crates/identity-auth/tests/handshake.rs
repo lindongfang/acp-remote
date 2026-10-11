@@ -624,7 +624,7 @@ fn node_link_challenge_requires_catalog_revision() {
 
 #[test]
 fn challenge_cache_is_bounded() {
-    // R30 的资源边界（`AGENTS.md` §5：数量与资源限制）：反复 hello 但不提交 proof 的连接
+    // R30 的资源边界（`AGENTS.md` §6：数量与资源限制）：反复 hello 但不提交 proof 的连接
     // 不得让内存单调增长。三条断言都必须在实现退化时失败：
     //   ① 缓存能被填满（否则说明条目没真正累积）；
     //   ② 填满后再签发不增长（淘汰分支真的执行）；
@@ -656,7 +656,7 @@ fn challenge_cache_is_bounded() {
 
 #[test]
 fn cache_evicts_the_earliest_expiring_challenge() {
-    // 合同 §5.2 登记的淘汰语义（RV3-WP2-F3 的用例缺口）：满时淘汰**最早过期**的一条。
+    // 合同 §5.2 登记的淘汰语义（用例缺口）：满时淘汰**最早过期**的一条。
     //
     // 关键构造：让「最早过期」那一组**只有一条**（先签发第一条，再把时钟推进 1 秒后签发其余），
     // 否则同组的并列条目使「淘汰哪一条」不确定，断言也证明不了策略。

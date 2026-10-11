@@ -921,7 +921,7 @@ impl CommandRoute {
     }
 
     /// 恢复成功后组装 `SessionResumeResult`：与 [`Self::session_create_result`] **同源**的映射
-    /// （DR1-F41），因此两条路径的回包形状必然一致；`remoteSessionRef.exportId` 只有适配层有，
+    /// 因此两条路径的回包形状必然一致；`remoteSessionRef.exportId` 只有适配层有，
     /// core 的 `resume_session` 只返回 `SessionId`。
     async fn session_resume_result(
         &self,
@@ -1091,7 +1091,7 @@ impl CommandRoute {
                 Err(error) => {
                     // 会话确实已恢复：不能用 `failed` 撒谎（那会让 Access 以为没有恢复，而 Owner 侧
                     // 有一个已可交互却拿不到 `remoteSessionRef` 的会话），与 `session.create` 投影失败
-                    // 分支同判据（DR1-F41）。
+                    // 分支同判据。
                     warn!(
                         event = "node_link.session_resume_result_failed",
                         access_node_id = handle.node_id().as_str(),
@@ -1112,7 +1112,7 @@ impl CommandRoute {
                 );
             }
             Err(error) => {
-                // 恢复失败即**确定类**失败（DR1-F39）：能力未宣告、该会话无持久化恢复数据（两列 NULL）、
+                // 恢复失败即**确定类**失败：能力未宣告、该会话无持久化恢复数据（两列 NULL）、
                 // cwd 复校验失败、越权 —— 这几类 core 都已给出明确结论（`BackendUnsupported` 走
                 // `nodelink.command.unsupported`，复校验失败走服务端不可用类），一律结 `failed`。
                 // `uncertain` 只属于崩溃窗口（accepted 已落盘但本次没能结算），由启动恢复按
@@ -1732,7 +1732,7 @@ impl CommandRoute {
     /// 轮询所有待观察命令的持久化记录，把已经终结的那些推成 `command.terminal`。
     async fn poll_pending(&self) {
         // 先回收离开注册表的连接：整条状态（限流窗口 + 观察表）随连接消失，**不**依赖它是否还有
-        // pending——没有 in-flight 命令的连接否则会永远留下一条空状态（RV1-WP6-F2）。
+        // pending——没有 in-flight 命令的连接否则会永远留下一条空状态。
         self.forget_gone_connections();
         let mut done: Vec<(String, CoreRequestId)> = Vec::new();
         for (connection_id, node, pending) in self.pending_snapshot() {
@@ -2285,7 +2285,7 @@ fn node_revocation_reason() -> Text<512> {
 
 /// core 的错误码 → wire 的封闭错误码（词表之外的细分只进结构化日志，不冒充 wire 码）。
 ///
-/// 已知**永久**失败（RV1-WP6-F8）必须映射成语义最近的登记码，**不能**落到 `internal.unavailable`：
+/// 已知**永久**失败必须映射成语义最近的登记码，**不能**落到 `internal.unavailable`：
 /// 那个码在 registry 里是 `retryable = true`，会把「重试也不会变」的失败标成可重试，Access 于是按
 /// `retryable` 自动重试一条永远不会成功的命令。本表的两支都是永久失败：
 /// - `capability.unsupported_by_{client,broker,agent}`：能力协商失败，端到端不可用（Node Link 没有
@@ -2585,7 +2585,7 @@ fn core_payload(command: CommandName, submit: &CommandSubmit) -> Result<CorePayl
         WirePayload::SessionCreate(_) => {
             return Err("session.create is dispatched by its own handler");
         }
-        // 与 `session.create` 同形（DR1-F48 的 Path A）：`session.resume` 没有 core payload 变体，
+        // 与 `session.create` 同形（Path A）：`session.resume` 没有 core payload 变体，
         // 它的 `accepted` 行与幂等行由 core 的 `resume_session` 自建，因此本函数不映射它。
         WirePayload::SessionResume(_) => {
             return Err("session.resume is dispatched by its own handler");

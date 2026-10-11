@@ -3,7 +3,7 @@
  *
  * 归属 WP5b。本模块只声明接口、领域取值与错误类型，**不触碰任何平台 API**——
  * WebCrypto 与 IndexedDB 只出现在 `secure-storage.web.ts`。页面、组件、feature 与
- * 同步客户端都只从本接口取用（`AGENTS.md` §5「页面不能直接操作 WebSocket、浏览器数据库、
+ * 同步客户端都只从本接口取用（`AGENTS.md` §6「页面不能直接操作 WebSocket、浏览器数据库、
  * SecureStore、SQLite 或平台生命周期」）。
  *
  * 为什么接口与实现分成两个文件（`secure-storage.ts` / `secure-storage.web.ts`）：
@@ -43,7 +43,7 @@ export const DEVICE_IDENTITY_STORE = "acp-remote/device-identity/v1";
  * 安全存储错误。
  *
  * 只带分类与不含密钥材料的说明：错误会被记录、上报与显示，因此**不得**携带私钥字节、
- * 导出结果或堆栈里的密钥材料（`AGENTS.md` §3、`docs/IDENTITY_AND_AUTH_CONTRACT.md` §8）。
+ * 导出结果或堆栈里的密钥材料（`AGENTS.md` §4、`docs/IDENTITY_AND_AUTH_CONTRACT.md` §8）。
  */
 export class SecureStorageError extends Error {
   readonly kind: SecureStorageErrorKind;

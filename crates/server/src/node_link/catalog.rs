@@ -714,7 +714,7 @@ mod tests {
             .collect()
     }
 
-    /// [R51]/[R52]（F1）：路由级投影只含与该节点 grants 相交的 Export，且条目字段齐全。
+    /// （F1）：路由级投影只含与该节点 grants 相交的 Export，且条目字段齐全。
     #[tokio::test]
     async fn the_catalog_snapshot_carries_every_field_of_the_visible_export_only() {
         let mut fixture = Fixture::new(500);
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(entry["revoked"], false);
     }
 
-    /// [R51]/[R53]（F1）：协商批次=2、可见 3 条 → 恰好两帧，批次内与批次间都按 `exportId` 升序稳定。
+    /// （F1）：协商批次=2、可见 3 条 → 恰好两帧，批次内与批次间都按 `exportId` 升序稳定。
     #[tokio::test]
     async fn the_catalog_snapshot_is_batched_by_the_negotiated_size_in_a_stable_order() {
         let mut fixture = Fixture::new(2);
@@ -804,7 +804,7 @@ mod tests {
         );
     }
 
-    /// [R51]（F1）：空可见集仍回**一帧**空快照——对端需要知道「当前视图为空」，而不是等一个永不到来
+    /// （F1）：空可见集仍回**一帧**空快照——对端需要知道「当前视图为空」，而不是等一个永不到来
     /// 的批次。
     #[tokio::test]
     async fn an_empty_visible_set_yields_exactly_one_empty_snapshot() {

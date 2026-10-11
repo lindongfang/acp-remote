@@ -5,19 +5,32 @@
 
 ## Requirements
 
-### Requirement: claim 成功路径
+### Requirement: claim 的原子校验与成功响应
 
-`POST /node-link/v1/pairing/claim` SHALL 原子地依次检查：pairing 存在、未过期、仍为 `created`、请求 `endpoint` 的 host 与 Owner 配置一致、HMAC `proof`（`node-link-pairing-proof/v1` transcript，key 为 `pairingSecret`）正确。全部通过时 MUST 返回 201，body 含 `pairingRequestId`、`serverNonce`、`ownerProof`（Owner Node Identity Key 对 `node-link-pairing-owner-proof/v1` transcript 的 P1363 签名）、`status = "pending_confirmation"` 与 `expiresAt`，并将配对推进到 `claimed`/`pending_confirmation`；此后 MUST 不再接受第二个 claim。配对从 `pending_confirmation` 到建立信任记录、分配初始 `grant.*`，只能经本机用户的本地确认入口完成，HTTP 端点自身 MUST NOT 提供确认能力，且任何响应都不签发 bearer token。
+`POST /node-link/v1/pairing/claim` SHALL 原子地依次检查：pairing 存在、未过期、仍为 `created`、请求 `endpoint` 的 host 与 Owner 配置一致、HMAC `proof`（`node-link-pairing-proof/v1` transcript，key 为 `pairingSecret`）正确。全部通过时 MUST 返回 201，body 含 `pairingRequestId`、`serverNonce`、`ownerProof`（Owner Node Identity Key 对 `node-link-pairing-owner-proof/v1` transcript 的 P1363 签名）、`status = "pending_confirmation"` 与 `expiresAt`，并将配对推进到 `claimed`/`pending_confirmation`。
 
 #### Scenario: 合法 claim 进入待确认
 
 - **WHEN** Access 节点持有效二维码 payload，向未过期、未 claim 的配对提交字段齐全且 HMAC 正确的 claim 请求
 - **THEN** Owner 返回 201 与 `pending_confirmation`，响应中的 `ownerProof` 可用二维码内的 `ownerPublicKey` 验证通过，本地管理入口可查询到该待确认配对
 
+### Requirement: claim 的一次性
+
+配对被 claim 后 MUST 不再接受第二个 claim：配对已进入 `claimed`/`pending_confirmation`（或更后状态）时，对同一 `pairingId` 的再次 claim MUST 被拒绝。
+
 #### Scenario: 重复 claim 被拒绝
 
 - **WHEN** 配对已进入 `pending_confirmation`（或更后状态），另一 Access 节点（不同 `accessNodeId`/`clientNonce`）对同一 `pairingId` 提交 claim
 - **THEN** 返回 409，已有配对记录不受影响
+
+### Requirement: 本地确认入口与不签发凭据
+
+配对从 `pending_confirmation` 到建立信任记录、分配初始 `grant.*`，SHALL 只能经本机用户的本地确认入口完成；HTTP 端点自身 MUST NOT 提供确认能力，且任何响应都不签发 bearer token。
+
+#### Scenario: HTTP 端点无法完成确认且不签发凭据
+
+- **WHEN** 客户端在 claim 成功后尝试经 HTTP 端点确认该配对，或检查 claim 成功响应
+- **THEN** 配对保持 `pending_confirmation`，不建立信任记录、不分配 `grant.*`，且响应中不含 bearer token
 
 ### Requirement: claim 失败语义与幂等重试
 
@@ -38,9 +51,9 @@ claim 的失败 SHALL 严格按 §13.4 映射：JSON 或字段 schema 无效 →
 - **WHEN** 客户端对已超过 `expiresAt` 的配对提交 claim
 - **THEN** 返回 410，配对不产生任何状态推进
 
-### Requirement: status 查询语义
+### Requirement: status 的校验与一律 200 语义
 
-`POST /node-link/v1/pairing/status` SHALL 校验 `node-link-pairing-status/v1` 域的 HMAC `proof`（key 为 `pairingSecret`），proof 无效返回 401。校验通过后 MUST 一律返回 200，业务状态只由 body 的 `status` 表达：`pending_confirmation`/`approved`/`rejected`/`expired`/`consumed`；410 不得出现在该端点。`approved` 响应只返回该节点的非秘密元数据、`grant.*` 与 Owner identity（`grant.*` 取**已授予**集合），不签发任何凭据。每次轮询 SHALL 使用新 `requestNonce`；只有网络重试才复用原 nonce，此时 MUST 返回原响应。**secret 生命周期分支**（与「secret 最迟在 `expiresAt` 清除、`approved` 配对在首次 WSS 认证成功时提前清除」自洽）：本机已不持有该配对的 secret 时，终态配对（`rejected`/`expired`/`consumed`）MUST 仍按 200 报告其业务状态（终态判定不依赖对端输入），非终态配对 MUST 返回 401。
+`POST /node-link/v1/pairing/status` SHALL 校验 `node-link-pairing-status/v1` 域的 HMAC `proof`（key 为 `pairingSecret`），proof 无效返回 401。校验通过后 MUST 一律返回 200，业务状态只由 body 的 `status` 表达：`pending_confirmation`/`approved`/`rejected`/`expired`/`consumed`；410 不得出现在该端点。
 
 #### Scenario: 各业务状态都以 200 表达
 
@@ -52,15 +65,37 @@ claim 的失败 SHALL 严格按 §13.4 映射：JSON 或字段 schema 无效 →
 - **WHEN** 本机仍持有该配对的 secret，客户端以错误 `pairingSecret` 计算的 proof 查询状态
 - **THEN** 返回 401，不返回任何业务状态信息
 
-#### Scenario: secret 已清除后的终态查询
+### Requirement: approved 响应的元数据与凭据边界
 
-- **WHEN** 配对已到达终态（`rejected`/`expired`/`consumed`）且本机已按生命周期规则清除其 secret，客户端查询状态（无论 proof 如何）
-- **THEN** 返回 200 且 body 的 `status` 为该终态；非终态配对在 secret 缺失时一律返回 401
+`approved` 响应 SHALL 只返回该节点的非秘密元数据、`grant.*` 与 Owner identity（`grant.*` 取**已授予**集合），且 MUST NOT 签发任何凭据。
+
+#### Scenario: approved 只返回非秘密元数据
+
+- **WHEN** 配对处于 `approved`，Access 以有效 proof 查询状态
+- **THEN** 响应只含该节点的非秘密元数据、已授予集合的 `grant.*` 与 Owner identity，不含任何凭据
+
+### Requirement: status 轮询的 nonce 重试语义
+
+每次轮询 SHALL 使用新 `requestNonce`；只有网络重试才复用原 nonce，此时 MUST 返回原响应。
 
 #### Scenario: 网络重试复用 nonce 返回原响应
 
 - **WHEN** Access 的 status 响应丢失后以相同 `requestNonce` 重试
 - **THEN** 返回与原响应一致的结果；正常使用新 nonce 的轮询不受重试记录影响
+
+### Requirement: secret 已清除时的 status 分支
+
+**secret 生命周期分支**（与「secret 最迟在 `expiresAt` 清除、`approved` 配对在首次 WSS 认证成功时提前清除」自洽）：本机已不持有该配对的 secret 时，终态配对（`rejected`/`expired`/`consumed`）MUST 仍按 200 报告其业务状态（终态判定不依赖对端输入）；非终态配对 MUST 返回 401。
+
+#### Scenario: secret 已清除后的终态查询
+
+- **WHEN** 配对已到达终态（`rejected`/`expired`/`consumed`）且本机已按生命周期规则清除其 secret，客户端查询状态（无论 proof 如何）
+- **THEN** 返回 200 且 body 的 `status` 为该终态；非终态配对在 secret 缺失时一律返回 401
+
+#### Scenario: 非终态配对 secret 缺失返回 401
+
+- **WHEN** 配对仍处于非终态（`pending_confirmation`/`approved`）且本机已不持有其 secret，客户端查询状态
+- **THEN** 返回 401，不返回任何业务状态信息
 
 ### Requirement: 安全响应头与凭据边界
 

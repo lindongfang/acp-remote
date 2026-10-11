@@ -2,10 +2,28 @@
 
 本文件适用于整个仓库。它是后续使用 Codex、Oh My Pi 等编码 Agent 进行 vibe coding 时的长期执行约束。
 
-## 1. 开始工作前
+**§1 是最高优先级的回复行为规范**，与 §4「最高优先级不变量」同级；它的位置（正文第一章）即它的权重。
+
+## 1. 回复与沟通
+
+本节约束 Agent 对用户的**回复方式**，不改变任何产品、协议或技术决策。
+
+> 宿主侧另有一份本地定制（`~/.omp/agent/PERSONALITY.md`，不在版本控制内）。它不随本仓库分发，所以本节的条文必须自足——不要因为「人格文件里已经有了」就删减本节。
+
+- **默认用通俗易懂的中文解释**：先给结论，再给理由；不使用未解释的黑话、缩写或内部术语堆砌来“证明专业”。
+- **首次出现的术语必须就地解释**：如幂等、游标、backpressure、transcript 等，第一次提及时用一句大白话说明它是什么、和当前问题有什么关系；之后可以正常使用术语。
+- **面向人而不是面向文档**：引用文档/代码时，说清楚“所以对你意味着什么”，而不是只贴 §号和路径让用户自己去读。
+- **结构清晰**：分点、给例子；涉及取舍时用“选 A 会怎样 / 选 B 会怎样”对比，避免一段长文混着多个话题。
+- **不确定就说不知道**：不要把猜测包装成结论；需要用户确认时明确列出待确认的问题，而不是埋在大段文字里。
+- **回复长度与问题匹配**：简单问题一两句话回答，不要把每次回复都写成设计文档；复杂问题也先给一页能看懂的摘要，细节放后面。
+
+技术决策本身（协议语义、安全模型、端口签名等）不因追求通俗而简化或失真；通俗的是**表达方式**，不是内容。
+
+## 2. 开始工作前
 
 在修改代码或设计前，先阅读与任务相关的文档：
 
+- [docs/WORKFLOW.md](docs/WORKFLOW.md)：变更从需求走到代码的执行流程（OpenSpec `spec-driven` 项目覆写版 schema 的 proposal/specs/design/plan/tasks、omp 多 Agent 隔离实现、独立检视、串行合入、分层 E2E 与门禁）的唯一权威来源。它不定义产品行为或协议语义，只定义「谁在哪个工作区做什么、产物是什么、怎么合入怎么验」。
 - [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md)：产品目标、系统行为、安全与同步策略的权威来源。
 - [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md)：模块名称、职责、依赖方向和 crate 边界的唯一权威来源。
 - [docs/FRONTEND_DESIGN.md](docs/FRONTEND_DESIGN.md)：前端阶段、客户端行为、状态模型和平台适配边界的权威来源。
@@ -25,7 +43,7 @@
 
 如果实现需要改变产品边界、协议语义、安全模型或模块依赖，先明确指出影响并请求确认。普通的模块内部实现细节可以自主决定。
 
-## 2. 项目定位
+## 3. 项目定位
 
 ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
@@ -42,7 +60,7 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
 不要在没有明确需求的情况下引入账号中心、云数据库、遥测平台、第三方消息中继或厂商锁定的网络能力。
 
-## 3. 最高优先级不变量
+## 4. 最高优先级不变量
 
 ### ACP 兼容性不变量
 
@@ -81,7 +99,7 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 - 使用经过审查的密码学协议和实现，不自行设计加密算法。
 - Noise 不进入第一阶段；只有经单独 ADR 接受后才能新增为可选 Transport Profile。
 
-## 4. 模块与依赖规则
+## 5. 模块与依赖规则
 
 计划中的主要边界为：
 
@@ -127,7 +145,7 @@ core use_cases   -> core ports + core model
 - 禁止创建万能 `common`、`helpers` 或 `utils` 模块；代码应放到拥有其语义的模块中。
 - 不要为了复用几行代码破坏依赖方向。
 
-## 5. 协议实现规则
+## 6. 协议实现规则
 
 ### ACP 边界
 
@@ -145,7 +163,7 @@ core use_cases   -> core ports + core model
 - 所有输入都有长度、数量、频率和资源限制。
 - 慢客户端不能阻塞 Broker 或 Agent；断开后依靠 cursor 重放。
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
-- Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §8。
+- Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §9。
 - 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant/pack 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
 - transcript domain 与字段 tag 表由 `compatibility/transcripts/v1/transcripts.json` 机器登记；`fixtures/*/v1/transcripts/` 的固定向量必须能由该表从 `input` 重新编码得到，否则视为实现或表格错误。
 
@@ -171,7 +189,7 @@ core use_cases   -> core ports + core model
 - 后续原生客户端复用协议、Sync Client、状态机和 feature 层，通过平台 adapter 替换密钥、缓存、相机和生命周期能力。
 - 前端暂不支持的 ACP 能力必须明确降级，不得隐藏、曲解或静默文本化。
 
-## 6. 持久化规则
+## 7. 持久化规则
 
 - Owner Node 的 SQLite 是其本地 Agent/会话的权威事件日志。默认 `no-content-cache` 下，Access Node SQLite 只能保存 import、来源引用、cursor/ACK、幂等记录、命令终态引用和无正文交付索引；正文通过 Owner 重放获取，不把内存广播队列当作事实来源。
 - 需要原子性的状态变化和事件追加必须放在同一事务中。
@@ -180,7 +198,7 @@ core use_cases   -> core ports + core model
 - 流式 delta、终端噪声和大型附件使用 TTL、大小上限或压缩策略。
 - 清理原始噪声不能破坏仍在承诺期内的重放、审计和 ACP 语义保真。
 
-## 7. Rust 实现约定
+## 8. Rust 实现约定
 
 - 优先使用清晰的所有权和具体类型；不要用无边界的 `serde_json::Value` 代替领域建模，但 ACP 扩展容器除外。
 - ID 使用 newtype；不要在核心中到处传裸 `String`。
@@ -193,47 +211,38 @@ core use_cases   -> core ports + core model
 - 新增依赖前检查其必要性、维护状态、许可证、平台支持和安全风险。
 - 保持公开 API 最小；第一阶段默认 workspace-private。
 
-## 8. 文档维护
+## 9. 文档维护
 
 通用的文档维护时机与层级规则由仓库的变更流程定义；本节列出的是本仓库「变更类型 → 权威文档」的唯一映射，不重复通用流程正文。
 
 - 产品行为和产品级同步策略变化：更新 `docs/INITIAL_DESIGN.md`。
 - 威胁模型、信任边界、授权默认、数据保护或供应链要求变化：更新 `docs/SECURITY_DESIGN.md`；改变已接受密码学/传输决策时同时新增或更新 ADR。
-- Sync wire schema、消息状态或兼容语义变化：更新 `docs/SYNC_PROTOCOL.md`、`schemas/sync/v1/` 和 `fixtures/sync/v1/`。
+- Sync wire schema、消息状态或兼容语义变化：更新 `docs/SYNC_PROTOCOL.md`、`schemas/sync/v1/` 和 `fixtures/sync/v1/`，并运行 `npm run check`。
 - crate、模块职责或依赖方向变化：更新 `docs/MODULE_ARCHITECTURE.md`。
 - 前端阶段、客户端行为或平台边界变化：更新 `docs/FRONTEND_DESIGN.md`。
 - ACP 方法、通知、content、capability 或各层支持状态变化：更新 `docs/ACP_COMPATIBILITY_MATRIX.md`、机器矩阵和相应 fixture；运行 `npm run check`。
 - 节点角色、Export/Import、跨节点身份、授权、cursor 或命令语义变化：更新 `docs/NODE_LINK_PROTOCOL.md`，并同步安全、模块与协议测试资产。
 - Node Link wire/资产变更：更新 `docs/NODE_LINK_PROTOCOL.md` + `schemas/node-link/v1/` + `fixtures/node-link/v1/`，并运行 `npm run check`。
-- Sync wire/资产变更：更新 `docs/SYNC_PROTOCOL.md` + `schemas/sync/v1/` + `fixtures/sync/v1/`，并运行 `npm run check`。
 - feature ID 或 feature 词表变化：更新 `compatibility/features/v1/features.json`、`docs/SYNC_PROTOCOL.md` §5.2 与 `docs/NODE_LINK_PROTOCOL.md` §11.3 的表格、以及相应 fixture，并运行 `npm run check`。
 - core 端口签名、值对象、broker 事务顺序或 storage-sqlite 表结构/保留策略变化：更新 `docs/CORE_PORTS_AND_STORAGE.md`，并同步 `docs/MODULE_ARCHITECTURE.md` §4.1/§4.7 的职责描述；管理状态（配对/信任/Export/Import/本地配置）的形状已并入该文档 §3.5–§3.7/§5/§7，端口或 DDL 变化必须同时更新 §5/§7 并让合同漂移门禁通过（§11 只保留设计理由与索引）。
 - 设备/节点配对状态机、握手入口、授权展开、nonce/重放规则或 keystore 端口变化：更新 `docs/IDENTITY_AND_AUTH_CONTRACT.md`；涉及 wire 时同时更新对应协议的配对/认证章节与 fixture。
 - Agent 进程监督、ACP stdio 传输或 profile 来源的实现约束变化：更新 `docs/MODULE_ARCHITECTURE.md` §4.5 与 `docs/ACP_COMPATIBILITY_MATRIX.md`（若影响能力支持状态）。
 - 配置键名、默认值、部署开关变化：更新 `docs/CONFIG_REFERENCE.md`；协议层限额变化仍按 Sync/Node Link 各自的规则维护。监听/路由与部署形态（共用 listener、反代透传、`public_origin` 的权威性）也以该文件 §1 为准，涉及对外暴露方式的改动必须同步它。
 - CLI 与 Daemon 之间的管理方法、envelope、framing、错误码或 **CLI 子命令↔方法映射（`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）** 变化：更新 `docs/LOCAL_ADMIN_PROTOCOL.md`，并同步 `schemas/local-admin/v1/`、`fixtures/local-admin/v1/` 与 `compatibility/commands/v1/commands.json` 的 `localCapabilities`（方法集与本地错误码的机器定义在 `schemas/local-admin/v1/envelope.schema.json`，文档表格是它的说明），运行 `npm run check`。
+- 变更执行流程（OpenSpec schema、工作包派遣与隔离、patch 交付、合入顺序、分层 E2E、`check:openspec` 判据）变化：更新 `docs/WORKFLOW.md`，并同步 `openspec/schemas/spec-driven/`、`openspec/config.yaml` 的 `rules`/`operations` 与 `.omp/` 下的项目级配置与 agent 定义。
 - 两份文档出现重叠时，保留一个权威定义，另一处只写概要并链接过去。
 - 不要手工修改生成型架构图来代替源规范修改。
 - 代码尚未实现的设计必须继续使用“计划”“建议”或“待验证”等措辞，不能写成已经存在的能力。
 
-## 9. 工具链约定
+## 10. 工具链约定
 
-本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §8。
+本节只约束工具链与依赖登记，不承载产品、协议或安全规则；「变更类型 → 权威文档」的映射在 §9。
 
 - `core` 的普通依赖闭包必须等于 `docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13 冻结的 allow-list（`cargo tree -p core --edges normal` 的可执行 crate 名集合）；`core` 的**直接**依赖固定为 `async-trait`/`thiserror`/`p256`/`sha2`，其中 `p256` **只开 `arithmetic`**（core 只做曲线级点校验）——`ecdsa`/`rfc6979`/`hmac`/`signature`/`pkcs8` 与 `base64` 属协议与身份边界，**不得**进入 core 的闭包。由 `check:boundaries` 断言；新增 core 依赖必须同时改 allow-list、`docs/CORE_PORTS_AND_STORAGE.md` §9 判据 13（端口纯度）与本条。
 - `.gitattributes` 对 `schemas/acp/v1/upstream/schema.json` 固定 `eol=lf`：它由矩阵按 sha256 逐字节 pin，`check:acp` 直接哈希磁盘字节，Windows 开发机上一旦被行尾转换就会本机误报（CI 在 Linux 上不会）。已有工作区加上属性后需重签出该文件。
 - Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源：本地 rustup 与 CI 都读它，不要在 workflow、脚本或文档里另写一份版本号；`Cargo.toml` 的 `rust-version`（MSRV）是另一件事，不要合并。
 - `npm run check` 是本仓库合同门禁的唯一入口（Node ≥ 22.12，即 `commitlint` 21 的下限），其清单与判据见 `README.md` 的「合同检查」。改动合同资产或 crate 依赖后必须让它全绿。
-
-## 10. 回复与沟通
-
-本节约束 Agent 对用户的**回复方式**，不改变任何产品、协议或技术决策。
-
-- **默认用通俗易懂的中文解释**：先给结论，再给理由；不使用未解释的黑话、缩写或内部术语堆砌来“证明专业”。
-- **首次出现的术语必须就地解释**：如幂等、游标、backpressure、transcript 等，第一次提及时用一句大白话说明它是什么、和当前问题有什么关系；之后可以正常使用术语。
-- **面向人而不是面向文档**：引用文档/代码时，说清楚“所以对你意味着什么”，而不是只贴 §号和路径让用户自己去读。
-- **结构清晰**：分点、给例子；涉及取舍时用“选 A 会怎样 / 选 B 会怎样”对比，避免一段长文混着多个话题。
-- **不确定就说不知道**：不要把猜测包装成结论；需要用户确认时明确列出待确认的问题，而不是埋在大段文字里。
-- **回复长度与问题匹配**：简单问题一两句话回答，不要把每次回复都写成设计文档；复杂问题也先给一页能看懂的摘要，细节放后面。
-
-技术决策本身（协议语义、安全模型、端口签名等）不因追求通俗而简化或失真；通俗的是**表达方式**，不是内容。
+- 提交信息的 type/scope 词表以 `commitlint.config.mjs` 为唯一机器定义（`.husky/commit-msg` 与 CI 的 `commits` job 都按它判定），不要在任何地方再抄一份词表。**scope 表示模块与交付面边界，不是目录名**：`crates/storage-sqlite/` 用 `storage`、`crates/*-protocol/` 用去掉 `-protocol` 的短名、`identity-*` 用 `identity`、`acpr-*` 用 `transcript`/`wire`、`clients/` 用 `frontend`。
+- AI 提交信息生成器（Oh My Pi 的 `omp commit`、`omp git` 的「Generate message」）**不读** `commitlint.config.mjs`：它自带一份更宽的 type 词表，并按**文件路径目录名**推 scope，实测还会忽略 `AGENTS.md` 里的补充约束，因此常生成 `chore(storage-sqlite): …` 这类被钩子拒绝的消息。被拒时提交不落地、改动留在暂存区，按 `commitlint.config.mjs` 的词表改 scope/type 后重新提交即可。它只是本地便利工具，不参与门禁；直接手写提交信息同样合法。
+- `omp commit` 还有第二个副作用：**`--dry-run` 也会改动 git 索引**。实测两次 `omp commit --dry-run --no-changelog` 把 `.husky/commit-msg` 与 `.husky/pre-commit` 的执行位从索引里抹成 `100644`（内容哈希不变，但 Linux/CI 上钩子会因此无法执行），需 `git reset` 恢复。因此**不要在自动化流程或交付前的工作区里跑它**；合入路径见 `docs/WORKFLOW.md` §6，那里用的是命令行 `git apply`。
+- **宿主沟通人格是本地定制，不在版本控制内**。`~/.omp/agent/PERSONALITY.md` 覆盖了 Oh My Pi 自带的 `default` preset，内容依据 §1 写成。它是**用户级**的（omp 没有项目级 personality 机制），因此：新机器上不会自动恢复，要复刻就按 §1 重写；原 preset 原文备份在 `~/.omp/agent/PERSONALITY.md.backup-original`，`cp` 回去即还原宿主默认。子代理恒为 `personality: none`，实测既不继承该文件也不继承 `AGENTS.md`——要让子代理遵守 §1，必须在派发的 `context`/`task` 里显式带上相关条款。

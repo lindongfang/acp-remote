@@ -695,7 +695,7 @@ impl SessionBackendFactory for ScriptedBackends {
 ///
 /// 真实的 Agent 在 **accepted 回复之后**才陆续产出事件，命令的终态因此由终态观察循环推送；若脚本端点
 /// 在 `prompt` 里一次性把 delta 与 turn 终态塞进 sink，broker 会在 `submit_command` 内跑完整轮 turn，
-/// 回复就变成「直接回终态」——那条路径同样合法，但**覆盖不到**终态观察循环（RV1-WP6-F9/F4）。
+/// 回复就变成「直接回终态」——那条路径同样合法，但**覆盖不到**终态观察循环。
 /// 因此脚本端点先按 prompt 正文（marker）暂存，等用例显式 `release` 时才送进 sink。
 #[derive(Default)]
 struct Parked {

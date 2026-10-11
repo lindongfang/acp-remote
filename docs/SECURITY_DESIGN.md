@@ -603,7 +603,7 @@ manual pairing/revoke smoke test
 - Linux（没有可用的 D-Bus Secret Service，例如无桌面会话或容器）上是否提供经过审计的持久化 fallback，推迟到 Linux 平台开发阶段处理；当前优先交付 Windows，见 `INITIAL_DESIGN.md` §14。在决定前 Linux 正式模式仍失败关闭，不引入明文 fallback。该决定只影响 `identity-keystore`：`identity-auth` 的 keystore 端口必须允许非硬件保护的实现存在，但默认不启用（[ADR-0006](./adr/0006-identity-keystore-split.md) 决策 5）。
   - 2026-09-23 定案：**本阶段维持失败关闭**，不提供持久化 fallback；将来若要提供，必须新开 ADR 定 KDF、解锁来源与备份策略（§9.2），并同步 `CONFIG_REFERENCE.md` §8 与本节。
 - 是否以及何时把密钥存储提升到**硬件保护的不可导出档位**（Windows CNG/TPM、Linux 除 Secret Service 以外的系统 keystore）：需要单独 ADR，因为它会改变已接受的「非硬件保护实现允许存在、默认不启用」边界（ADR-0006 决策 5）。当前档位见 §9.2（Windows 用 DPAPI 包裹 + 进程内签名）。注意 `unsafe_code = "forbid"` 下交付该档位需要自写或引入 wrappable 的 FFI 封装，成本与风险必须在 ADR 里评估。
-- `identity-keystore` 与 `agent-host` 的平台包装 crate 选型（DPAPI wrapper、Windows Job Object wrapper 等）：候选必须按 `AGENTS.md` §7 核验维护状态、许可证、平台支持与安全风险，并确认不超出 `deny.toml` 的许可证 allow 列表与 `[graph] targets`；若候选的 **MSRV 高于 `Cargo.toml` 的 `rust-version`（1.85）**，必须先单独做一个「是否抬 MSRV」的决定（工具链版本 `rust-toolchain.toml` 是另一件事，不能代替 MSRV 决策）。选型结论必须写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12。
+- `identity-keystore` 与 `agent-host` 的平台包装 crate 选型（DPAPI wrapper、Windows Job Object wrapper 等）：候选必须按 `AGENTS.md` §8 核验维护状态、许可证、平台支持与安全风险，并确认不超出 `deny.toml` 的许可证 allow 列表与 `[graph] targets`；若候选的 **MSRV 高于 `Cargo.toml` 的 `rust-version`（1.85）**，必须先单独做一个「是否抬 MSRV」的决定（工具链版本 `rust-toolchain.toml` 是另一件事，不能代替 MSRV 决策）。选型结论必须写回 `MODULE_ARCHITECTURE.md` §4.5/§4.12。
 - npm provenance、checksum 签名和 SBOM 的发布工作流与格式仍待发布阶段确定。普通 CI 已接入 GitHub Actions（`.github/workflows/ci.yml`），执行合同门禁、Rust 检查、提交规范校验、依赖许可证与来源判定、依赖安全公告、密钥扫描及文档引用检查；已有普通 CI 不代表发布 provenance、签名或 SBOM 已实现。发布 job 继续按 §16.2 与普通 CI 分离。
 - release crash dump 的平台默认策略。
 - 是否以及何时通过 ADR 引入 SQLCipher、字段加密或 Noise Transport Profile。

@@ -1429,7 +1429,7 @@ async fn close(
     // 1) 停接入层：本地接受循环已在 `accept_loop` 退出时释放 endpoint（不再接受新连接）；这里**先以同步
     //    调用**触发网络关停——listener 立即停止 accept 并按 `daemon.shutdown_grace_ms` 排空在途连接
     //    （与本地连接的排空共用同一预算）。触发之后才记「已停止接受新连接」：合并成一个 `async fn`
-    //    会把触发推迟到 `await` 点，日志与实际时机就会对不上（RV1-WP7-F2）。
+    //    会把触发推迟到 `await` 点，日志与实际时机就会对不上。
     net_ingress.trigger_shutdown();
     tracing::info!(event = "daemon.ingress_stopped", "已停止接受新连接");
 
@@ -1909,7 +1909,7 @@ mod tests {
         (dir, lock_path, record_path, lock)
     }
 
-    /// 取消超时不得留下 detached task（`AGENTS.md` §7）：被 detach 的任务会继续运行，并在
+    /// 取消超时不得留下 detached task（`AGENTS.md` §8）：被 detach 的任务会继续运行，并在
     /// `Composition::close` 之前一直持有端口克隆（每个端口都是同一个 `Arc<SqliteStore>` 的克隆），
     /// 让关闭序列随机报 `StoreStillShared`。
     #[tokio::test]

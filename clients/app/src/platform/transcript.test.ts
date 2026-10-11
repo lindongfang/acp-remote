@@ -3,7 +3,7 @@
  *
  * 判据来自 `plan.md` 的 WP5b Contract Freeze：`fixtures/sync/v1/transcripts/device-proof.json@WP1`。
  * 本测试**从仓库根读取**该向量（经 `src/protocol/paths.ts` 的 `repoRoot` 解析），
- * **不复制**它——`AGENTS.md` §5「Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例」。
+ * **不复制**它——`AGENTS.md` §6「Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例」。
  *
  * 字段表同样不复制：从 `compatibility/transcripts/v1/transcripts.json` 读入并按 domain 查表，
  * 因此实现的 tag/宽度/顺序与**机器权威**逐项对应，而不是与测试里的手抄副本对应。

@@ -3,7 +3,7 @@
 //! 入口是**真实 stdio 子进程** `acpr-fake-acp-agent`（`CARGO_BIN_EXE_acpr-fake-acp-agent`，与真实 Agent
 //! 同一套 LF 分帧 JSON），不是替身。断言绑定四类可观察事实：
 //!
-//! - `--dump-request-params` 文件里的**每一行** `{"method":…,"params":…}`（CR5-F5 的闭合点：只有
+//! - `--dump-request-params` 文件里的**每一行** `{"method":…,"params":…}`（闭合点：只有
 //!   经**真实子进程**读行，才能证明 fake child `main` 里那句 `message.get("params")` 的接线没退化成
 //!   `params: null`——它没有单测覆盖，只有本文件的端到端读行能暴露）；
 //! - `--heartbeat-file` 是否还在增长（进程外可观察的「子进程是否被回收」）；
@@ -13,9 +13,9 @@
 //! **与既有 `tests/session.rs` 的关系**：WP5 已在 `session.rs` 覆盖 R7/R8/R9/R10/R11/R12/R26/R35 的
 //! **method 级**证据。本文件**不复制**那些断言，只补两个维度：
 //!
-//! 1. **线级取值**（`params.sessionId` / `params.cwd` / 键集合）——CR5-F1 指出 `--dump-requests` 只写
+//! 1. **线级取值**（`params.sessionId` / `params.cwd` / 键集合）——评审指出 `--dump-requests` 只写
 //!    method，没有通道能证明「发出去的 `cwd` 等于持久化值」，WP5 Round 2 已补 `--dump-request-params`；
-//! 2. **SR-R12-2 的正确前提**（CR5-F2 裁决）：`resume` 在进程仍存活时**复用同一个子进程**，因此用例前提
+//! 2. **SR-R12-2 的正确前提**（裁决）：`resume` 在进程仍存活时**复用同一个子进程**，因此用例前提
 //!    是「进程复用、单一心跳文件」，断言改为「恰好一个可派发端点 + `session/resume` 恰好一行 + 只有一个
 //!    进程」。**不改产品代码**。
 
@@ -103,7 +103,6 @@ fn contrast_workspace() -> String {
 ///
 /// 这条通道经**真实子进程**写出，因此它同时闭合了 fake child `main` 的 `params` 接线：若该接线被改成
 /// `dump_inbound(&args, method, None)`，这里的 `params` 会全变成 `null`，本文件的断言立即失败
-/// （CR5-F5）。
 fn dumped_requests(path: &std::path::Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -126,7 +125,7 @@ fn params_of<'a>(rows: &'a [Value], method: &str) -> &'a Value {
     let params = &matched[0]["params"];
     assert!(
         !params.is_null(),
-        "{method} 的 params 不得为 null（fake child 的 params 接线退化，CR5-F5）：{rows:?}"
+        "{method} 的 params 不得为 null（fake child 的 params 接线退化）：{rows:?}"
     );
     for row in matched {
         let mut keys: Vec<&str> = row
@@ -179,7 +178,7 @@ async fn assert_process_reclaimed(heartbeat: &std::path::Path, label: &str) {
     );
 }
 
-/// R8 + R26（**线级**，CR5-F1/F5 的闭合点）：恢复时真正发给 Agent 的 `session/resume` 的
+/// R8 + R26（**线级**，闭合点）：恢复时真正发给 Agent 的 `session/resume` 的
 /// `params.sessionId` 与 `params.cwd` 逐字等于持久化取值，键集合恰为两个，且**不按别名/新解析结果**改写。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_wire_level_resume_params_carry_the_persisted_values() {
@@ -311,7 +310,7 @@ async fn a_resumed_endpoint_dispatches_exactly_one_prompt_and_completes_the_turn
     host.shutdown_all().await;
 }
 
-/// R10（**修正后的规格措辞**，CR7-F1）：能力未宣告时——**不发送** `session/resume`、
+/// R10（**修正后的规格措辞**）：能力未宣告时——**不发送** `session/resume`、
 /// **在返回前回收本次拉起的子进程**、不留绑定、会话状态不变。
 ///
 /// 措辞来源：`specs/local-agent-host/spec.md` R10 已改为「MUST NOT 发送 `session/resume`，且 MUST 在
@@ -513,7 +512,7 @@ async fn an_agent_refusal_sends_one_resume_request_and_no_new_session() {
     host.shutdown_all().await;
 }
 
-/// R12-2（**修正后的前提**，CR5-F2 裁决）：进程仍存活时再次恢复 ⇒ **复用同一个子进程**，
+/// R12-2（**修正后的前提**，裁决）：进程仍存活时再次恢复 ⇒ **复用同一个子进程**，
 /// 因此断言是「恰好一个可派发端点 + `session/resume` 恰好一行 + 只有一个进程」。
 ///
 /// 本用例**不**假设会出现第二个进程或第二个心跳文件（`ensure_runtime_tracked` 会返回既有 runtime）。
@@ -580,7 +579,7 @@ async fn resuming_twice_reuses_one_process_and_leaves_one_dispatchable_endpoint(
 
     // ② 只有一个进程：第二次恢复**复用**了既有子进程，因此只协商过一次能力——若实现为第二次恢复
     //    **另拉一个子进程**，那条路径必然再发一次 `initialize`（能力只在 initialize 里协商）。
-    //    （注：CR5-F2 建议把断言写成「`session/resume` 恰好一行」。实测在基线 `95051f9` 上第二次
+    //    （注：建议把断言写成「`session/resume` 恰好一行」。实测在基线 `95051f9` 上第二次
     //    `resume` 会**再发一条** `session/resume` 给被复用的同一进程——`resume` 每次调用都执行一次
     //    「按持久化取值发送 session/resume」，R12 的规格保证只约束「可派发端点」而不约束消息条数。
     //    因此这里的判别式取「`initialize` 恰好一行」，它才是「没有第二个进程」的线级证据。）

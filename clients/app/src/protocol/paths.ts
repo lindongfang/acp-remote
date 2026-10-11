@@ -1,7 +1,7 @@
 /**
  * 仓库根协议资产的**唯一**解析入口。
  *
- * `AGENTS.md` §5 要求「Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例」，
+ * `AGENTS.md` §6 要求「Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例」，
  * 而 `design.md` D8 与 `plan.md` 的 WP5a 行把 `schemas/sync/v1/**@WP1` 与
  * `fixtures/sync/v1/manifest.json@WP1` 定为**数据**依赖（`contract:`），不是编译产物。
  *

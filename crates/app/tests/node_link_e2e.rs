@@ -14,8 +14,8 @@
 //! - **撤销端到端**：`export.revoke` 后受影响连接收到 `export.revoked` 且后续命令被拒；`node.revoke`
 //!   后连接收到 `node.trust.revoked` 并以 4410 关闭。
 //!
-//! 已知取舍（登记，不修）：① 扇出队列满即丢（`EVENT_QUEUE_CAPACITY`，RV1-WP5 残余①）；② 「会话阻塞在
-//! socket 写」路径（RV1-WP4 L5）；③ 预持久化失败可能留下无端点的会话行（RV2-WP6 残余⑤）。
+//! 已知取舍（登记，不修）：① 扇出队列满即丢（`EVENT_QUEUE_CAPACITY` 残余①）；② 「会话阻塞在
+//! socket 写」路径；③ 预持久化失败可能留下无端点的会话行（残余⑤）。
 
 mod support;
 
@@ -556,7 +556,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
             event["body"]["payload"].get("acp").is_none(),
             "view-only 事件不得伪造 ACP 原文：{event}"
         );
-        // 终态：turn 结束后由命令路由的终态观察循环推给提交方连接（RV1-WP6-F9/F4）。
+        // 终态：turn 结束后由命令路由的终态观察循环推给提交方连接。
         let terminal = client.expect("command.terminal").await;
         assert_eq!(terminal["body"]["requestId"], json!(prompt_request));
         assert_eq!(terminal["body"]["terminal"]["status"], json!("completed"));
@@ -586,7 +586,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         // ⑨ R61：broker 提交失败时连接上不出现对应的 `resource.event`（故障注入）。
         //
         // 注入点只让「带 marker 的那一批」失败（＝ agent.message.delta 那批），§6.9 规定失败批次一律不发布。
-        // 该批属于**在跑的** turn，因此 §6 第 9 条（RV1-WP7-F3）之后：同一个 turn 的终态批也不得照常
+        // 该批属于**在跑的** turn，因此 §6 第 9 条之后：同一个 turn 的终态批也不得照常
         // 落盘——broker 把该 turn 终结为 `turn.failed`、把命令置为 `uncertain`（正文缺块的 turn 不报完成），
         // 迟到的事件与终态被丢弃（而不是被记到下一个 turn 上）。
         let fault_marker = "marker-fault-9c11";

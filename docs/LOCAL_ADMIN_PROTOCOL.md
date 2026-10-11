@@ -115,7 +115,7 @@ u32be length | payload(length bytes)
 
 - CLI 进程退出或连接 EOF：facade 结束该 attachment 上的全部 ACP 会话绑定，并把本端发起的 pending 权限/elicitation 请求标记为「上游已断开」。
 - 上游断开**不得**代答权限请求，也不得按 Export grant 自动允许/拒绝（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）：Owner 侧的 `permission.requested` 保持 pending，直到新连接重新送达并得到真实答复。
-- 已经在运行的 turn **不因**上游断开而取消：它由 Owner/Agent 继续，事件照常先持久化再广播（`AGENTS.md` §3）。
+- 已经在运行的 turn **不因**上游断开而取消：它由 Owner/Agent 继续，事件照常先持久化再广播（`AGENTS.md` §4）。
 
 **重连与幂等**
 
@@ -217,7 +217,7 @@ links         { nodeId: UUID, state: "connected" | "connecting" | "offline", las
 
 - `params`：`{ graceMs: integer | null }`；`null` 表示使用 `daemon.shutdown_grace_ms`，非空时取值 `0`–`60000`。
 - `result`：`{ accepted: true }`，`accepted` 恒为 `true`；失败必须走 `error`，不得用 `false` 表达。
-- 响应在关闭序列开始时发出；CLI 随后等待锁释放与连接关闭。关闭顺序按 `SECURITY_DESIGN.md` §12.1 与 `AGENTS.md` §6。
+- 响应在关闭序列开始时发出；CLI 随后等待锁释放与连接关闭。关闭顺序按 `SECURITY_DESIGN.md` §12.1 与 `AGENTS.md` §7。
 
 #### `workspace.select`（`local.workspace.select`）
 
@@ -602,4 +602,4 @@ $ acp-remote device pair --request session.read --sas 481502 --fingerprint ab12�
 - `v` 是通道版本，v1 只接受 `1`。framing、endpoint 授权模型或信封字段语义的不兼容变更必须新增 `v` 值（或新增 ADR），不能在同一 `v` 内静默改变语义。
 - 兼容变更：新增方法（旧 Daemon 返回 `local.unsupported`，新 CLI 必须处理它）、新增可选 `params` 字段（实现方必须容忍缺失）、新增 `result` 字段（客户端忽略未知字段，§1.1）。
 - 不兼容变更示例：给已有方法增加必填 `params` 字段、改变已有字段含义、改变 `result` 中已有字段的类型。
-- 方法集、envelope、framing、endpoint 位置或授权规则变化时，必须更新本文；触发条件见 `AGENTS.md` §8。
+- 方法集、envelope、framing、endpoint 位置或授权规则变化时，必须更新本文；触发条件见 `AGENTS.md` §9。

@@ -7,7 +7,7 @@
  *   逐字段精确建模；
  * - **事件视图**（`event-views.schema.json`）是 open object（`additionalProperties: true`），
  *   每个 `$defs` 只约束该事件类型的**最低必填字段**。因此视图类型都带一个 `extra` 索引签名，
- *   未知字段按值保留——`AGENTS.md` §3 要求未知字段与扩展 payload 往返保真，协议层不得
+ *   未知字段按值保留——`AGENTS.md` §4 要求未知字段与扩展 payload 往返保真，协议层不得
  *   丢弃或改写它们。
  *
  * 未知事件类型**不得**导致整个会话渲染崩溃：`projectView` 返回一个明确的 `unknown` 分支。

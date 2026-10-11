@@ -206,7 +206,7 @@ fn assemble(
 /// `Timestamp`（`YYYY-MM-DDTHH:MM:SS.mmmZ`）→ Unix 秒。
 ///
 /// 协议把 `pairingExpiresAt` 定义为 u64be 秒数，而持久记录与 wire 载荷用 RFC 3339 文本，因此这里
-/// 需要一个确定性换算。算法是标准 civil-from-days 的逆运算，不引入日期库（`AGENTS.md` §7）。
+/// 需要一个确定性换算。算法是标准 civil-from-days 的逆运算，不引入日期库（`AGENTS.md` §8）。
 pub(crate) fn unix_seconds(timestamp: &Timestamp) -> Result<u64, TranscriptError> {
     let text = timestamp.as_str().as_bytes();
     if text.len() != 24 {

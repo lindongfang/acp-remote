@@ -648,7 +648,7 @@ resource.attach → resource.attached → resource.subscribe
 
 - `sessionId` 由 Owner 生成并写入自身事件日志；Access 不得改写、重编号或本地顶替。Access 用该 `remoteSessionRef` 发起 `resource.attach`（§12.4），成功后才提交该会话的其他命令。
 - `status = "failed"` 时 `terminal.error` 给出 `PublicError`（例如 `nodelink.export.not_granted`、`nodelink.command.unsupported_field`）；`status = "uncertain"` 表示崩溃窗口内无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
-- 注记（`node-link-owner` 的 WP6 修复轮次 RV2-WP6-F1）：幂等行落盘前失败（如 Owner 存储写失败）的 `session.create` **不是持久首次结果**——Owner 在那一轮仍会发一帧本地 `command.terminal`，但同 `requestId` 的 `command.status` 重查回 `nodelink.command.not_found`，重试也可以创建出另一个会话、得到与首次尝试不同的结果。因此 `failed` 只对同一 `requestId` 可复现的确定类失败（授权拒绝、本机 workspace 解析失败）成立；Access 不得把落盘失败类的 `failed` 当成可稳定重放的终止事实（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条）。
+- 注记（`node-link-owner` 的修复轮次）：幂等行落盘前失败（如 Owner 存储写失败）的 `session.create` **不是持久首次结果**——Owner 在那一轮仍会发一帧本地 `command.terminal`，但同 `requestId` 的 `command.status` 重查回 `nodelink.command.not_found`，重试也可以创建出另一个会话、得到与首次尝试不同的结果。因此 `failed` 只对同一 `requestId` 可复现的确定类失败（授权拒绝、本机 workspace 解析失败）成立；Access 不得把落盘失败类的 `failed` 当成可稳定重放的终止事实（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条）。
 
 `session.resume` 的硬约束：
 
@@ -663,7 +663,7 @@ resource.attach → resource.attached → resource.subscribe
 - 恢复是带副作用的 mutation（Owner 可能因此拉起一个 Agent 进程）：`status = "uncertain"` 表示崩溃窗口内无法确认副作用是否发生，Access **不得**自动重试 `session.resume`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
 - 创建时目录的复校验失败（目录被删、被改成文件、规范化结果与创建时不同）返回 `nodelink.internal.unavailable`；同一 `(ownerNodeId, accessNodeId, requestId)` 的重复提交仍返回首次结果，不做第二次恢复。
 - 幂等比对包含**会话身份**：`session.resume` 的 `payload` 恒为空对象，语义全部落在 `sessionRef` 上，因此除命令名、种类与 `payload` 指纹外还必须比对 `sessionRef` 指向的会话（§12.5）。同一 `(ownerNodeId, accessNodeId, requestId)` 改指另一个已授权会话时返回 `nodelink.command.idempotency_conflict`，不得回上一个会话的终态结果，也不得据此拉起第二个 Agent 进程。
-- 注记（`node-link-owner` 的 WP6 修复轮次 CR6-F3，与上文 `session.create` 的 RV2-WP6-F1 同形）：恢复成功但终态落盘失败（如 Owner 存储不可用）时，Owner 在那一轮仍会发一帧本地 `command.terminal`（`terminalEventId` 为 `null`），但持久记录仍是 `accepted`，同 `requestId` 的 `command.status` 重查回 `accepted`，并由启动恢复按 `CORE_PORTS_AND_STORAGE.md` §6 第 16 条改写为 `uncertain`。因此该帧不构成可稳定重放的首次结果：Access 不得把这一轮的成功帧当成终态事实，也不得以同一 `requestId` 重试（重试会命中幂等行而不产生第二次副作用）。相比 `session.create`，这条收窄的副作用更重——第一次尝试**可能已经拉起了 Agent 进程**。
+- 注记（`node-link-owner` 的修复轮次，与上文 `session.create` 的情形同形）：恢复成功但终态落盘失败（如 Owner 存储不可用）时，Owner 在那一轮仍会发一帧本地 `command.terminal`（`terminalEventId` 为 `null`），但持久记录仍是 `accepted`，同 `requestId` 的 `command.status` 重查回 `accepted`，并由启动恢复按 `CORE_PORTS_AND_STORAGE.md` §6 第 16 条改写为 `uncertain`。因此该帧不构成可稳定重放的首次结果：Access 不得把这一轮的成功帧当成终态事实，也不得以同一 `requestId` 重试（重试会命中幂等行而不产生第二次副作用）。相比 `session.create`，这条收窄的副作用更重——第一次尝试**可能已经拉起了 Agent 进程**。
 
 `node-link-owner` 切片的结果投影范围（已登记的实现期收窄，2026-09-26）：本切片的 Owner 只为 `session.list`、`session.create` 与 `session.resume` 投影 wire 结果，**`session.read`/`session.mode.list`/`session.config.list` 一律回 `nodelink.command.unsupported`**（`command.rejected`）。原因是它们的 `sessionReadResult`/`modeListResult`/`configListResult` 需要把会话正文、活体元数据与交互投影成 Sync 登记的视图，其中 `session.read` 的 `messages` 还要对事件正文做聚合——那条路径属 Access facade 的正文切片。Owner **不得**为避免该错误而返回被裁剪的结果或把结构化事件退化成文本（§15 的保真要求优先）；Access 在本切片遇到该错误码就应显式报「该命令在本版本不可用」，不要当成重试可恢复的失败。
 

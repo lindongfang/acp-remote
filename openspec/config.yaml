@@ -17,10 +17,54 @@ context: |
   - Local Checks / Project Verify：本地入口 `npm run verify`（= `npm run check` + `npm run check:rust`），合同门禁与 CI job 清单见 `README.md` 的「合同检查」，本节不复制命令清单。
 
   ## Engineering Constraints
-  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §3–§7；测试要求见 `docs/MODULE_ARCHITECTURE.md` §11。安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。
+  - 编码、兼容性、数据迁移及安全规则：`AGENTS.md` §5–§8；测试要求见 `docs/MODULE_ARCHITECTURE.md` §11。安全与供应链要求见 `docs/SECURITY_DESIGN.md`（§16.2 的具体化见 `docs/adr/0008-ci-supply-chain-tooling.md`）。协议合同变更必须同步 `schemas/`、`fixtures/`、`compatibility/` 与相应权威文档，并让 `npm run check` 全绿。依赖许可证、crate 来源、依赖 advisory 与密钥扫描只在 CI 运行（`deps` / `advisories` / `secrets` 三个 job），**本地没有等价物**，不得声称已在本地通过。
   - 子目录 AGENTS.md 或其他必须继续读取的项目规则：暂无子目录 `AGENTS.md`；改动前必须先读仓库根 `AGENTS.md` 及其列出的权威文档。
 
   ## Runtime Environment
   - 必要服务、平台、驱动及版本：Node ≥ 22.12（合同校验脚本）；Rust 工具链版本以仓库 `rust-toolchain.toml` 为唯一来源（本地 rustup 与 CI 读同一文件，不要在别处再写一份）。不需要外部数据库服务、容器或外部服务；测试使用可控的 fake ACP Agent，真实 Codex/OMP 属可选兼容套件。本机（Windows）到 crates.io index 的传输不稳定，`cargo install --locked cargo-deny` 未能完成，因此 `deny.toml` / `.gitleaks.toml` 的首次真实执行发生在 CI（见 ADR-0008 的残余风险第 5 条）。
   - 当前节点交付目标：Windows x64 优先，Linux 后续开发；平台顺序与验收边界见 `docs/INITIAL_DESIGN.md` §14 和 `docs/SECURITY_DESIGN.md` §18.2。现有 GitHub Actions 在 Linux 上检查共享代码，尚无 Windows 产品 E2E。
   - 数据库、端口、容器、账号、缓存等共享资源及隔离规则：暂无共享运行资源；`cargo test` 与 `npm run check` 共享 `target/`，并行分片必须隔离构建目录（`CARGO_TARGET_DIR`）。
+
+# Artifact 规则：追加到对应 artifact 的 instructions 上，不改模板正文。
+rules:
+  proposal:
+    - 必须保留用户原始要求、硬约束、非目标与成功判据；后续 artifacts 与最终归档都要能对照它们。
+    - Capabilities 列的每个能力路径必须与 specs 阶段实际创建的文件路径一致。
+  specs:
+    - 规范正文使用简体中文，但 SHALL/MUST 等英文规范关键词必须保留，并在其两侧留空格。
+    - 每个 `### Requirement:` 至少有一个 `#### Scenario:`，场景标题恰好四个井号。
+    - 规范只写可观察行为，不写内部类名、函数名、库选型或逐步实现细节。
+  design:
+    - design.md 是必产 artifact，不得因变更规模省略。
+    - 涉及部署、数据迁移或回滚时必须写 `## Migration Plan`；Open Questions 只记录可安全延后的未知项。
+  plan:
+    - 执行原语只能是本仓库的 Oh My Pi（omp）：batch `task` 派发、`task.isolation` patch 模式且 apply 关闭、`<id>.patch` + `agent://<id>` 交付、主 Agent 串行 `git apply`。不得引入外部调度器或第二套台账。
+    - 工作包写范围不得重叠；确实重叠的必须在本文件的 Merge Order 里串行并声明后合入者需重跑的检查。
+    - Project Verify 只写主检出可执行的命令：隔离工作区没有 `target/` 与 `node_modules/`。
+    - 每个工作包都必须有对应的检视行，且检视者不能是作者那次 spawn。
+  tasks:
+    - 每个 `- [ ] X.Y` 必须在同一行内写明完成判据（测试、命令、可观察行为或交付物）。
+    - 每个任务组必须自带它该有的测试与文档，不得把所有测试和文档堆到最后一组。
+    - plan.md 的每个工作包至少要有一个引用它的任务，且不得出现 plan 未覆盖的新工作。
+
+# 操作层指引：apply / archive 时作为 operationGuidance 下发（不写进任何 artifact 文件）。
+operations:
+  apply:
+    guidance:
+      - 派发前先确认 plan.md 已通过检视：写范围无静默重叠、合入顺序覆盖所有重叠、每个工作包都有可执行位置正确的 Verify。
+      - 用 `task` 工具的 batch 形状派发，共享背景放 `context`，逐包写 `task` 与 `solutionSpace`；不要串行逐个 spawn 本来可以并行的包。
+      - 每个工作包的 `isolated` 必须为 true，隔离配置来自项目 `.omp/config.yml`（patch 模式，apply 关闭）。不要让子 Agent 直接改主检出。
+      - 交付物是 `<id>.patch` + `agent://<id>` + `history://<id>`。子 Agent 结束后先 `git apply --check` 校验，再按 Merge Order 串行 `git apply`。
+      - 合入固定用命令行 `git apply`，不要改用 omp 原生 git。`omp git` 是交互 TUI 无法自动化；`omp commit` 按目录名推 scope 会被 commitlint 拒，且 `--dry-run` 也会抹掉索引里的执行位；`merge` 的 branch 模式未实测且绕开 `--check`。依据见 `docs/WORKFLOW.md` §6.1 与 §6.3。
+      - 提交信息按 `commitlint.config.mjs` 的 type/scope 词表手写（scope 是模块边界，不是目录名）。不要跑 `omp commit`，它生成的 scope 必被钩子拒绝且会改动 git 索引。
+      - 本地合入后按 `docs/WORKFLOW.md` §6.2 走远端落地：为这一批 patch 开分支、推远端、`gh pr create --fill`、`gh pr checks --watch` 等五个必需检查全绿后 `gh pr merge --squash`。PR 标题同样必须符合 `commitlint.config.mjs`（squash 用它当提交信息）；不要直推 main，那只会走 admin bypass 并跳过三个只在 CI 跑的判定（依赖/公告/密钥）。
+      - 仓库级检查（`npm run verify`、`cargo test`、`npm run check`）只在主检出、合入之后执行；不要要求隔离工作区跑它们。
+      - 检视必须是独立 spawn，读 patch 与 `agent://<id>`/`history://<id>`；作者自评不算检视证据。
+      - 检视返回 changes-requested 时派**新** spawn 修复：隔离 spawn 结束后无法再被唤起，所以不能让原 coder 继续；prompt 必须自带工作包目标、写范围、上一版 patch 与 findings 原文。复核用新 reviewer spawn，只修一部分就继续循环；同一工作包最多修 3 轮，超过说明该重新拆工作包。合入只应用最终通过的那一版 patch。
+      - 检视返回 blocked 时不是派修复，而是补齐缺失证据后重新检视。
+      - 派发前确认主检出工作区相对干净：隔离区的基线是**整个工作目录的副本**（含未提交改动），半成品改动会被带进工作包并隐含依赖。
+      - 只有 tracked task 且其完成判据有可读证据时才勾 `- [x]`；失败或受阻保持待办并说明。
+  archive:
+    guidance:
+      - 归档前确认 specs 增量已同步到 `openspec/specs/`，且 `npm run check` 全绿（含 `check:openspec`）。
+      - 归档只移动变更目录并合并增量规范，不得顺手改写被归档文件的历史内容。

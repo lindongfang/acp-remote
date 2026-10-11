@@ -16,10 +16,10 @@
 //! 1. **R22** 的恢复列字节不变（既有 `storage-sqlite` 用例在存储层证明，本文件证明它经真实 wire 管线
 //!    同样成立，成功与失败两条路径都不改写）；
 //! 2. **R23/R25/R26** 的目录复校验维度（别名改指向、首次即失败、持久化取值优先）；
-//! 3. **R32** 的**持久化读回**维度（CR7-F6）：关掉 broker 之后重开同一 `data_dir` 的真实存储，
+//! 3. **R32** 的**持久化读回**维度：关掉 broker 之后重开同一 `data_dir` 的真实存储，
 //!    `uncertain` 仍然能从持久行读回——证明不确定性不只在内存里。
 //!
-//! **CR3-F3**（来自 WP3 评审、裁决转给 TP2）：补 `Actor::Node` 的 R31 断言——观察型 Access 对
+//! （来自评审、裁决转给 TP2）：补 `Actor::Node` 的 R31 断言——观察型 Access 对
 //! 「存在但不覆盖 agent 的会话」与「不存在的会话」得到**同一响应**，且 `load_recovery` 计数为 0。
 
 mod support;
@@ -538,7 +538,7 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
     });
 }
 
-/// R31（**CR3-F3**：补充 `Actor::Node` 的「先于本机读取」证据）。
+/// R31（补充 `Actor::Node` 的「先于本机读取」证据）。
 ///
 /// 只持 `grant.observe` 的 Access 提交 `session.resume` 时：
 ///
@@ -702,7 +702,7 @@ fn an_unauthorized_resume_is_rejected_before_any_local_read() {
         // 两条都走 `command.rs::deny` 的 `CommandFault::NotGranted(None)` 分支（`RawObject::empty()`）。
         // 所以这是**结构性防泄露守卫**（若将来某条路径回 `NotGranted(Some(parameter))`，本断言会失败），
         // 而不是当前的判别点；真正的判别力在上一条 `code` 断言与「目录已被删除」这个前提上。
-        // 口径来源：CR8-S1 的实测。
+        // 口径来源：实测。
         assert_eq!(
             absent_denied["body"]["error"]["details"], denied["body"]["error"]["details"],
             "错误详情也不得泄露目标会话的存在性"
@@ -717,7 +717,7 @@ fn an_unauthorized_resume_is_rejected_before_any_local_read() {
     });
 }
 
-/// R37 + CR6 Round 2 口径：能力未宣告的终态必须是 **`failed`** + `nodelink.command.unsupported`
+/// R37 口径：能力未宣告的终态必须是 **`failed`** + `nodelink.command.unsupported`
 /// （`uncertain` 只属崩溃窗口 R32），且不创建新会话、不报告成功。
 ///
 /// 同时用另一种失败（Agent 明确拒绝恢复）证明**两类失败不是同一个漏斗**：错误码不同。
@@ -816,7 +816,7 @@ fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
     });
 }
 
-/// R32（崩溃窗口）+ **CR7-F6**（持久化读回维度）：终态提交失败后命令停在非终态；调用**组合根启动时
+/// R32（崩溃窗口，含持久化读回维度）：终态提交失败后命令停在非终态；调用**组合根启动时
 /// 调用的同一入口** `recover_unsettled` 之后，`command.status` 回 `uncertain`——并且该 `uncertain`
 /// 存在于**持久行**里：关掉 broker 之后重开同一 `data_dir` 的真实存储，仍然读回同一条 `uncertain`
 /// 记录（证明不确定性不只在进程内存里）。
@@ -913,7 +913,7 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
             "恢复必须写持久终态事件：{reread}"
         );
 
-        // ④ CR7-F6：重开同一 `data_dir` 的**真实存储**，从持久行读回同一条 `uncertain` 记录。
+        // ④ 重开同一 `data_dir` 的**真实存储**，从持久行读回同一条 `uncertain` 记录。
         let reopened = owner.reopen_store().await;
         // Node Link 的 actor 两个节点维度都是**对端**（§12.5 的幂等键维度），不是本机 node id。
         let access_node = NodeId::new(ACCESS_WORK).expect("node id");
@@ -954,7 +954,7 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
             .expect("列出会话");
         assert_eq!(listed.len(), 1, "崩溃窗口不得产生第二个会话");
 
-        // ⑥ 崩溃窗口里**那一轮**的本地终态帧：`docs/NODE_LINK_PROTOCOL.md` §12.7（WP6 的 CR6-F3 修复轮
+        // ⑥ 崩溃窗口里**那一轮**的本地终态帧：`docs/NODE_LINK_PROTOCOL.md` §12.7（修复轮
         //    注记）已把这条收窄写进合同——终态落盘失败时仍会发一帧本地 `command.terminal`，但
         //    `terminalEventId` 为 `null`，它**不**构成可稳定重放的首次结果。本用例因此断言的正是
         //    合同要求的两件事：
@@ -980,7 +980,7 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
     });
 }
 
-/// R24 + R25 + CR7-F2：目录复校验的两个失败变体，以及「能力不支持」的归类。
+/// R24 + R25：目录复校验的两个失败变体，以及「能力不支持」的归类。
 ///
 /// - 目录被删除 ⇒ `nodelink.internal.unavailable`（服务端不可用类），后端**不被调用**；
 /// - 持久化路径仍存在但 `canonicalize` 结果不同 ⇒ 同样是 `internal.unavailable`，且**持久化取值
@@ -993,7 +993,7 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
 /// `server/src/node_link/command/tests.rs::session_resume_without_persisted_recovery_data_fails_as_unsupported`
 /// 与 `crates/storage-sqlite/tests/resume_columns.rs`（`a_half_null_recovery_pair_is_still_no_recovery_data`
 /// / `upgraded_sessions_keep_their_bytes_and_report_no_recovery_data`）。规格要求这两者**同一条路径**
-/// （`nodelink.command.unsupported`，CR7-F2 裁决后的措辞），本用例负责的是「能力不支持」这一侧。
+/// （`nodelink.command.unsupported`，裁决后的措辞），本用例负责的是「能力不支持」这一侧。
 #[test]
 fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
     support::block_on(async {
@@ -1112,7 +1112,7 @@ fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
             "成功这一次才允许调用后端"
         );
 
-        // ③ 能力不支持与「目录不可用」是两个可区分的路径（CR7-F2 裁决后的规格措辞：两列为 `NULL`
+        // ③ 能力不支持与「目录不可用」是两个可区分的路径（裁决后的规格措辞：两列为 `NULL`
         //    与能力不支持同路径，其余校验失败仍是服务端不可用类）。
         //    本段只把**受控后端**切到 `BackendUnsupported`，**没有**造出两列 `NULL` 的会话；
         //    两列 `NULL` 侧由 `server/src/node_link/command/tests.rs::
@@ -1362,7 +1362,7 @@ fn a_persisted_cwd_whose_canonical_form_differs_is_refused_before_any_backend_ca
         assert_eq!(
             terminal["body"]["terminal"]["error"]["code"],
             json!("nodelink.internal.unavailable"),
-            "服务端不可用类（不是 unsupported，CR7-F2 口径）：{terminal}"
+            "服务端不可用类（不是 unsupported）：{terminal}"
         );
 
         // 「不使用新解析出的路径发送 session/resume」：后端**一次都没被调用**。
