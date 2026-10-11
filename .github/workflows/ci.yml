@@ -96,11 +96,15 @@ jobs:
     # 为什么单独一个 job：`clients/app` 是**独立的 npm 工程**（自带 `package.json` 与
     # `package-lock.json`），根目录的 `npm ci` 与 `npm run check` 都不覆盖它。这条缺口
     # 实盘暴露过两次，两次在原来的五个 job 下**都是全绿**：
-    #   - #68：react-native 升到 0.87.1 后删掉了 `exports` 里的 `"./*"` 通配，而 expo 的
-    #     Metro 依赖 `react-native/rn-get-polyfills` 这个深路径，`expo export` 报
-    #     ERR_PACKAGE_PATH_NOT_EXPORTED；tsc 与 458 个单测全过，只有真的打包才会炸。
-    #   - #69：dependabot 生成的锁文件缺一条嵌套依赖（`react-native-worklets@0.10.4`），
-    #     `npm ci` 的同步断言直接失败。
+    #   - #68：同时带两个**独立**缺陷，前一个把后一个遮蔽了——
+    #     (a) dependabot 生成的锁文件不自洽，缺一条嵌套依赖（`react-native-worklets@0.10.4`），
+    #         `npm ci` 的同步断言直接失败；
+    #     (b) react-native 升到 0.87.1 后删掉了 `exports` 里的 `"./*"` 通配，而 expo 的
+    #         Metro 依赖 `react-native/rn-get-polyfills` 这个深路径，`expo export` 报
+    #         ERR_PACKAGE_PATH_NOT_EXPORTED；tsc 与 458 个单测全过，只有真的打包才会炸。
+    #     因为 `npm ci` 先失败，只有补齐锁文件之后才会看到 (b)。
+    #   - #69：命中同一个生成器缺陷 (a)——它的锁文件同样缺那条嵌套条目、`npm ci` 一样失败，
+    #     补齐之后六个检查才全绿。也就是说 (a) 是两个 PR 共有的，只有 (b) 是 RN 0.87.1 特有的。
     # 因此这里跑两件事：`npm ci` 按锁文件严格安装（顺带断言 package.json 与 lock 同步），
     # 再 `npm run check` = typecheck + vitest + `expo export --platform web`。
     #
