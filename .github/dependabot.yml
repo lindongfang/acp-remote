@@ -88,10 +88,32 @@ updates:
     # 取值域注意：`ignore` 的 `update-types` 用 `version-update:semver-minor`，与 `groups` 的
     # `minor` 不是同一套词表，写错不会报错、只会静默失效。
     # 该字段只看**版本更新**、不看**安全更新**，所以 RN 的安全修复仍会照常开 PR。
-    # `react` / `expo` / `expo-router` 刻意不挡：实测它们的升级不影响判定面；而跨 SDK 的
-    # `expo`/`expo-router` 升级（57 → 58）是 major，本来就不进 minor/patch 分组，会单独成 PR 供审阅。
+    # expo 家族（`expo` / `expo-router` / `expo-constants` / `expo-status-bar`）刻意整族挡住 major：
+    # 这一族的**主版本号就是 SDK 号**（57/58/59…），跨 SDK 必须整族同批升级，而 Dependabot 看不出
+    # 这层关系。证据：`expo-router@58.0.0` 的对等依赖要求 `expo-constants@^58.0.0`，而本仓库顶层与
+    # `expo@57.0.27` 都要求 `expo-constants@~57.0.21`——同一个位置只能有一份，于是 `npm ci` 直接以
+    # `ERESOLVE` 退出，`tsc` 与单测根本没执行（#76 的失败形状）。
+    # `package.json` 里的范围号挡不住 Dependabot：默认 `versioning-strategy: auto` 允许它改写范围本身
+    # （`b34ad17` 中 dependabot[bot] 把 `"typescript": "~6.0.3"` 改成了 `"~7.0.2"`），所以这道边界
+    # 只能设在 `ignore` 里。`react` / `react-dom` 挡 minor 同理：SDK 57 的期望版本是 `19.2.3`，
+    # 而 `19.3.0` 是 minor，能过门禁却不在 SDK 57 的期望集合内。
+    # 维护责任：本清单不随依赖自动扩展——将来若把 expo 家族的包（如 `expo-linking`、
+    # `@expo/metro-runtime`）新增为 `clients/app/package.json` 的**直接依赖**，必须同步在上面补一条
+    # 它的 major 规则，否则跨 SDK 的提议会从新包重新出现。
     ignore:
       - dependency-name: "react-native"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-router"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-constants"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-status-bar"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "react-dom"
         update-types: ["version-update:semver-minor"]
     groups:
       # 与根条目同理：minor/patch 合并成一个 PR；major 不分组，需逐个读迁移说明。
