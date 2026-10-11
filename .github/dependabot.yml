@@ -80,6 +80,19 @@ updates:
     cooldown:
       default-days: 7
       semver-major-days: 30
+    # `react-native` 停在 `0.x`，按 SemVer 它的每次 `0.86 → 0.87` 都算 **minor**，但这类 minor
+    # 实际对应的是 Expo SDK 的 **major**（57 → 58）：RN 的升级必须与 SDK 同批进行，单独走 minor
+    # 分组只会稳定失败（实测只升 RN 到 0.87.1 时 `expo export` 报 `ERR_PACKAGE_PATH_NOT_EXPORTED`）。
+    # 因此只挡 `react-native` 的 minor 版本更新，不让它单独进下面的分组。
+    #
+    # 取值域注意：`ignore` 的 `update-types` 用 `version-update:semver-minor`，与 `groups` 的
+    # `minor` 不是同一套词表，写错不会报错、只会静默失效。
+    # 该字段只看**版本更新**、不看**安全更新**，所以 RN 的安全修复仍会照常开 PR。
+    # `react` / `expo` / `expo-router` 刻意不挡：实测它们的升级不影响判定面；而跨 SDK 的
+    # `expo`/`expo-router` 升级（57 → 58）是 major，本来就不进 minor/patch 分组，会单独成 PR 供审阅。
+    ignore:
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-minor"]
     groups:
       # 与根条目同理：minor/patch 合并成一个 PR；major 不分组，需逐个读迁移说明。
       # expo / react-native 的主版本升级会动构建配置，尤其需要单独审阅。
