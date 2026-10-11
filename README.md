@@ -92,15 +92,15 @@ CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.githu
 gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name' | sort -u
 ```
 
-本仓库当前必需的五个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
-**依赖安全公告**（最后一个是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：
-它的失败可能来自与本次改动无关的上游 advisory）。
+本仓库当前必需的六个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
+**依赖安全公告**、**前端检查（clients/app）**。其中**依赖安全公告**是否必需按
+[ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：它的失败可能来自与本次改动无关的
+上游 advisory。
 
-**待加入**：`前端检查（clients/app）`（2026-10-11 新增的 job）。`clients/app` 是独立 npm 工程，
-根目录的 `npm ci` 与 `npm run check` 都不覆盖它，所以这个 job 是前端唯一的机器判据——在它存在之前，
-`react-native` 大版本升级这类**必然打断 `expo export`** 的改动在 CI 上仍是全绿（两次实盘：#68、
-#69）。按下面「上线时踩到的两个坑」第 1 条，它必须先在某次 push/PR 上真实执行过一次，才会出现在
-`Add checks` 的下拉里。
+**前端检查（clients/app）** 是 2026-10-11 新增的 job。`clients/app` 是独立 npm 工程，根目录的
+`npm ci` 与 `npm run check` 都不覆盖它，所以这个 job 是前端唯一的机器判据——在它存在之前，
+`react-native` 大版本升级这类**必然打断 `expo export`** 的改动在 CI 上仍是全绿（两次实盘：#68、#69）。
+新增 required check 有一个前置条件，见下面「上线时踩到的两个坑」第 1 条。
 
 设置入口是仓库 Settings → Rules/Branches（`gh api -X PUT repos/<owner>/<repo>/branches/main/protection` 也适用，但 payload 形状取决于要开哪几条，建议先用界面）。核实当前状态与可用性：
 
