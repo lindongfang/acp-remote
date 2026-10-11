@@ -84,7 +84,7 @@ jobs:
       - name: 安装合同校验脚本的依赖
         run: npm ci
 
-      - name: 合同门禁（npm run check，九个脚本）
+      - name: 合同门禁（npm run check，十个脚本）
         run: npm run check
 
       - name: 格式、静态检查与测试（npm run check:rust，与本地 npm run verify 同一入口）

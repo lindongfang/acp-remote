@@ -43,6 +43,7 @@ Owner 侧的**会话恢复**（`session.resume` → ACP `session/resume`）已�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/WORKFLOW.md](docs/WORKFLOW.md) | 变更执行流程：OpenSpec schema、工作包隔离与 patch 交付、独立检视、串行合入、分层 E2E 与门禁 |
 | [docs/INITIAL_DESIGN.md](docs/INITIAL_DESIGN.md) | 产品目标、系统行为、阶段计划 |
 | [docs/MODULE_ARCHITECTURE.md](docs/MODULE_ARCHITECTURE.md) | crate / 模块职责与依赖方向 |
 | [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md) | 客户端同步协议（认证、cursor、命令、事件） |
@@ -67,7 +68,7 @@ npm ci          # 首次或依赖变动后
 npm run verify  # 合同门禁 + fmt / clippy / test，与 CI 的 checks job 同源
 ```
 
-`npm run check` 串行执行九项检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁；本地管理通道的 envelope 是第四棵资产树，但它没有 `message.schema.json`，因此不参与消息类型覆盖门禁）；② 命令目录与本仓库封闭词表的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格、`core::broker::required_grant` 这份 Rust 镜像（命令目录侧按 `transport` 判定 `pack`：不含 `sync` 的 Node Link-only 命令允许 `pack: null`，含 `sync` 的命令必须有 pack），以及本地管理的方法集与错误码（`LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`；`local.*` 能力 ↔ `commands.json` 的 `localCapabilities`）；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ 文档引用门禁（`check:docs` → `scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 命中目标文档的标题或显式锚点、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守，无法归因的只统计不判定）；⑧ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑨ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）。
+`npm run check` 串行执行十项检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁；本地管理通道的 envelope 是第四棵资产树，但它没有 `message.schema.json`，因此不参与消息类型覆盖门禁）；② 命令目录与本仓库封闭词表的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格、`core::broker::required_grant` 这份 Rust 镜像（命令目录侧按 `transport` 判定 `pack`：不含 `sync` 的 Node Link-only 命令允许 `pack: null`，含 `sync` 的命令必须有 pack），以及本地管理的方法集与错误码（`LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`；`local.*` 能力 ↔ `commands.json` 的 `localCapabilities`）；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ 文档引用门禁（`check:docs` → `scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 命中目标文档的标题或显式锚点、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守，无法归因的只统计不判定）；⑧ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑨ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）；⑩ OpenSpec 资产门禁（`check:openspec` → `scripts/check-openspec.mjs`：变更与规范的 `validate --all --strict`、项目本地 workflow schema 的结构校验、`openspec/config.yaml` 的 `schema` 是否可解析、覆写 schema 里自写 artifact 是否仍在且照搬模板与上游逐字节一致、`rules`/`operations.guidance` 的条目是否会被 YAML 静默丢弃；引擎的遥测与更新检查在此显式关闭）。
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑五个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `scripts/check-dependency-advisories.mjs`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
 

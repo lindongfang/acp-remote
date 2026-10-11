@@ -1,0 +1,19 @@
+# 项目级 omp 设置（本仓库工作流的执行原语）。
+#
+# 为什么写在这里而不是全局 `~/.omp/agent/config.yml`：本仓库的工作流要求工作包在隔离工作区里跑、
+# 产物以 patch 形式交回合入，这是仓库约定而不是个人偏好；写进项目层后，任何在本仓库启动的会话
+# 都按同一套原语执行，且不改变开发者在其他仓库的行为。
+#
+# 判据与理由见 `docs/WORKFLOW.md`。
+
+task:
+  isolation:
+    # 打开开关才会在 task item 上暴露 `isolated` 字段；只读 spawn（reviewer/scout）不传该字段，
+    # 因此不会为它们复制工作区。
+    enabled: true
+    # patch 模式：不产生 commit、不产生分支，产物是 <id>.patch。分支模式在本机未验证。
+    merge: patch
+    # 隔离工作区不自动改写主检出。合入由主 Agent 串行 `git apply` 显式完成，
+    # 这样每个工作包的改动都先过一次 `git apply --check`，并且不会与开发者的在途修改相撞。
+    # 本仓库不允许改成 true：它会把 patch 直接打进主检出工作区，跳过校验与串行合入。
+    apply: false

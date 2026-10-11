@@ -1,0 +1,18 @@
+# E2E 覆盖层：`omp --config .omp/e2e.yml` 时生效，只影响这一次运行，不写入任何持久配置。
+#
+# 为什么单独一层而不是写进 `.omp/config.yml`：computer prelude 会驱动真实桌面（移动真实鼠标、
+# 真实键盘输入），它是 eval 主机的桥调用，不经过 `tool_call` / `tool_result` 钩子，因此现有门禁拦不住它。
+# 默认关闭能让日常编码会话保持不可越权；只有显式 E2E 时才打开。
+#
+# 判据与分层见 `docs/WORKFLOW.md` 的 E2E 一节。
+
+computer:
+  enabled: true
+  # 只捕获焦点窗口所在显示器，避免把整块多屏桌面送进模型上下文。
+  display: active
+
+# 桌面 E2E 会产生真实副作用，因此把审批模式从默认 yolo 收紧：
+# 只读检查（窗口枚举、截图、AX 读取、剪贴板读）自动通过，输入与变更类操作需要确认。
+# 全自动无人值守时改用 `--approval-mode yolo` 显式覆盖，并在运行记录里写明这是一次性授权。
+tools:
+  approvalMode: write
