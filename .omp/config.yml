@@ -17,3 +17,13 @@ task:
     # 这样每个工作包的改动都先过一次 `git apply --check`，并且不会与开发者的在途修改相撞。
     # 本仓库不允许改成 true：它会把 patch 直接打进主检出工作区，跳过校验与串行合入。
     apply: false
+
+# 日常启用 computer prelude（驱动真实桌面的桥调用）。这里开的只是**通道**——桌面/原生 E2E
+# 因此不需要额外开关；跑桌面 E2E 时用 `--config .omp/e2e.yml` 叠一层审批收紧，两者分工见
+# `docs/WORKFLOW.md` §7。
+# 如实记录风险：computer prelude 是 eval 主机的桥调用，不经过 `tool_call` 钩子，隔离门禁（§10）
+# 拦不住它；审批收紧是它的配套缓解，不是替代品。
+computer:
+  enabled: true
+  # 只捕获焦点窗口所在显示器，避免把整块多屏桌面送进模型上下文。
+  display: active

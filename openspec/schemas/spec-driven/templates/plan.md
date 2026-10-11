@@ -74,8 +74,9 @@ basis: "" # not-applicable 时必填：判断依据
 alternative_checks: [] # not-applicable 时必填：覆盖风险的替代检查
 ```
 
-<!-- Web/PWA 层用 browser prelude（默认可开）；桌面/原生层用 computer prelude（需显式开启，
-     见 .omp/e2e.yml）。只启动成功、退出码为零、截图都不算通过，必须断言可观察行为。 -->
+<!-- Web/PWA 层用 browser prelude（默认可开）；桌面/原生层用 computer prelude（日常已启用，见 .omp/config.yml；
+     跑桌面 E2E 时用 `--config .omp/e2e.yml` 叠审批收紧）。只启动成功、退出码为零、截图都不算通过，
+     必须断言可观察行为。 -->
 
 ## Risks
 

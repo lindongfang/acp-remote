@@ -1,8 +1,9 @@
 # E2E 覆盖层：`omp --config .omp/e2e.yml` 时生效，只影响这一次运行，不写入任何持久配置。
 #
-# 为什么单独一层而不是写进 `.omp/config.yml`：computer prelude 会驱动真实桌面（移动真实鼠标、
-# 真实键盘输入），它是 eval 主机的桥调用，不经过 `tool_call` / `tool_result` 钩子，因此现有门禁拦不住它。
-# 默认关闭能让日常编码会话保持不可越权；只有显式 E2E 时才打开。
+# 它承载的是 computer prelude 之外的**审批收紧**，不是 prelude 开关：prelude 已在
+# `.omp/config.yml` 日常启用（通道日常可用），这里只在真正跑桌面 E2E 时把审批从 `yolo`
+# 收紧到 `write`。收紧单独放一层，是因为平时 `write` 会让主检出的每次编辑都等人工确认，
+# 开发会话不可用；只有真实驱动桌面（真实鼠标、真实键盘）时才值得付这个确认成本。
 #
 # 判据与分层见 `docs/WORKFLOW.md` 的 E2E 一节。
 

@@ -119,7 +119,8 @@ bypass list 保留 `RepositoryRole admin / always`。`branches/main/protection` 
 这一档（**PR 必需 + 保留 admin 紧急出口**）的实际含义：默认路径是 PR，因此三个只能在 CI 运行的判定
 （依赖许可证与来源、依赖安全公告、密钥扫描）是先于落地的门禁；bypass 让直推仍然可行，但那是紧急出口不是
 日常路径（直推会跳过这三个判定）。变更落地流程是：分支 → PR → `gh pr checks --watch` → squash 合并
-（`gh pr create --fill`；squash 合并用 PR 标题当提交信息，因此标题同样要合规）。
+（`gh pr create --fill`；squash 合并用 PR 标题当提交信息，因此标题同样要合规）。本地合入到开 PR
+之间的完整步骤（含五个必需检查与 up-to-date 要求）见 [`docs/WORKFLOW.md`](docs/WORKFLOW.md) §6.1–§6.2。
 
 没有再上「移除 bypass」的理由：对单人仓库它不是对你的安全边界（你本来就能改 ruleset），只是减速带；
 而它的代价是真实的一一某个 workflow 改动把必需检查弄红时，所有 PR 都进不来，你还得先去改设置。

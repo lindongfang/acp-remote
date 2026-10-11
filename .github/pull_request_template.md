@@ -4,7 +4,7 @@ PR 模板。判据来源是 AGENTS.md 的文档维护映射（§8）与 `README.
 不适用的小节删掉即可，但不要留空勾选。
 
 ⚠️ PR 标题必须是 Conventional Commits 格式（`<type>(<scope>): <主题>`）：合并会 squash，因此 PR 标题
-就是 main 上的提交信息，`commits` job 会校验它。落地流程见 `README.md` 的「分支保护」小节。
+就是 main 上的提交信息，`commits` job 会校验它。落地流程见 `docs/WORKFLOW.md` §6.2 与 `README.md` 的「分支保护」小节。
 -->
 
 ## 变更内容

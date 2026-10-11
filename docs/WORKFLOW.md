@@ -11,7 +11,7 @@
 | 2 执行规划 | 同上 | `plan.md`（工作包、写范围、合入顺序、验证策略） | 本文件 §3 |
 | 3 任务分解 | 同上 | `tasks.md`（可勾选任务） | 本文件 §4 |
 | 4 实现与检视 | Oh My Pi（omp）`task` 工具 | 每个工作包一份 `<id>.patch` + `agent://<id>` + 检视结论 | 本文件 §4–§6 |
-| 5 合入与 E2E | git + omp `browser` / `computer` | 主分支提交、E2E 观察证据 | 本文件 §6–§7 |
+| 5 合入与 E2E | git + omp `browser` / `computer` | 主检出串行合入 → 分支 → PR → squash 合并；E2E 观察证据 | 本文件 §6–§7 |
 
 流程入口是斜杠命令（`.omp/commands/opsx-*.md`，与 `.agents/skills/openspec-*/` 同源）：
 `/opsx-propose` → `/opsx-apply` → `/opsx-archive`，另有 `/opsx-update`、`/opsx-sync`、`/opsx-explore`。
@@ -200,14 +200,19 @@ WP1 coder (isolated) ──► WP1.patch ──► reviewer ──► changes-re
 
 ## 6. 合入层
 
-合入由主 Agent 串行执行，五个步骤：
+合入分两段：**本地合入**（在主检出应用 patch）与**远端落地**（分支 → PR → squash）。两段都由主
+Agent 串行执行，不交给子 Agent——子 Agent 的交付止于 `<id>.patch`。
+
+### 6.1 本地合入（主检出）
+
+五个步骤：
 
 ```bash
 git apply --check <patchPath>       # 1. 只校验，不改工作区；失败则退回该工作包
 git apply <patchPath>               # 2. 按 plan.md 的 Merge Order 顺序应用
 npm run verify                      # 3. 在**主检出**跑仓库级检查
 # 4. 检视者读应用后的真实 diff（不是 patch 文本）
-# 5. 提交
+# 5. 本地提交
 ```
 
 两个坑：
@@ -218,7 +223,35 @@ npm run verify                      # 3. 在**主检出**跑仓库级检查
   （例如 `chore(storage-sqlite):`），与本仓库的模块级词表（`storage`）不一致，会被 `.husky/commit-msg` 拒绝；
   被拒时提交不落地、改动留在暂存区，改 scope 重提即可。
 
-### 6.1 为什么不用 omp 原生的 git 能力
+### 6.2 远端落地：PR 是默认路径
+
+`main` 由 ruleset `main-protection` 保护（设置现状与判据见 `README.md`「分支保护」），只能经由 PR
+更新。因此本地合入之后必须走完这五步：
+
+```bash
+git switch -c <branch>              # 1. 为这一批 patch 开一个分支
+git push -u origin <branch>         # 2. 推送分支；本地钩子已在 commit 时跑过
+gh pr create --fill                 # 3. 开 PR；标题必须是 Conventional Commits
+gh pr checks --watch                # 4. 等五个必需检查全绿
+gh pr merge --squash                # 5. squash 合并，PR 标题即 main 上的提交信息
+```
+
+六个必须知道的点：
+
+- **五个必需检查**是 ruleset 的 required status checks，名字必须是 check-run 的上报名：
+  **合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、**依赖安全公告**。
+  后三个只在 CI 跑，本地没有等价物——所以依赖判决、advisory 与密钥扫描是**合并门禁**，不是可选步骤；
+  直推 main 会整体跳过它们。
+- `strict_required_status_checks_policy = true`：PR 落后于 main 最新提交时不能合并，先 rebase
+  并让检查在新提交上重跑。
+- `required_approving_review_count = 0`：单人仓库不需要第二人批准，但批准不能替代检查。
+- `Repository admin / always` bypass 是**紧急出口**，不是日常路径；日常一律走 PR。
+- **一批 patch 一个分支一个 PR**：不要把多个变更批攒在一个分支上，否则某个检查变红时分不清
+  是哪一批的回归，rebase 与 revert 也一起变贵。
+- PR 标题会被 squash 当成提交信息，因此同样要过 `commitlint.config.mjs`；分支上的本地提交也要过——
+  CI 的 `commits` job 校验本次推送/合并请求引入的提交范围，`--no-verify` 绕得过本地钩子但绕不过它。
+
+### 6.3 为什么不用 omp 原生的 git 能力
 
 omp 自带 `omp git`、`omp commit`、`omp worktree` 与 `task.isolation.merge: branch`，但**都承担不了这个合入环节**。
 下面每条都实测过，不要再重复评估：
@@ -234,8 +267,10 @@ omp 自带 `omp git`、`omp commit`、`omp worktree` 与 `task.isolation.merge: 
 `git apply --check` 先判断上下文能否干净应用，失败即退回该工作包，不污染工作区。
 `omp commit` 会污染索引，`omp git` 无法自动化，`merge: branch` 跳过预检——三者都在这个关键点上不合格。
 
-**GitHub 侧的远端能力另算**：`github` 工具（`pr_create` / `pr_checkout` / `pr_push` / `run_watch`）做的是
-PR 交付，与本地合入是两件事，各按 `README.md` 的「分支保护」小节执行。
+**§6.2 的工具选择**：远端落地用 `gh` CLI 写（与 `README.md`「分支保护」、`.github/pull_request_template.md`
+同一入口）；omp 的 `github` 工具（`pr_create` / `pr_checkout` / `pr_push` / `run_watch`）是等价能力，
+可以替换，步骤序列不变。PR 替代不了本地合入：required checks 校验的是分支上的提交，而 patch 校验
+必须在它进分支**之前**做。
 
 ## 7. E2E 层
 
@@ -244,13 +279,17 @@ PR 交付，与本地合入是两件事，各按 `README.md` 的「分支保护�
 | 被测面 | 工具 | 开关 |
 |---|---|---|
 | Web/PWA（真实浏览器、DOM/ARIA/CDP） | `browser` prelude | 默认开（`browser.enabled: true`） |
-| 桌面/原生（Zed、Daemon、Windows Job Object 进程树） | `computer` prelude | 默认关，用 `--config .omp/e2e.yml` 显式开 |
+| 桌面/原生（Zed、Daemon、Windows Job Object 进程树） | `computer` prelude | 日常开（`.omp/config.yml` 的 `computer.enabled: true`） |
 
-`.omp/e2e.yml` 是**一次性覆盖层**，只影响本次运行，不写入任何持久配置。它同时把 `tools.approvalMode`
-从默认 `yolo` 收紧到 `write`：只读检查自动通过，输入与变更类操作需要确认。
+`.omp/config.yml` 日常启用 computer prelude，因此桌面/原生 E2E 不需要额外开关。跑的时候传
+`--config .omp/e2e.yml` 叠一层**审批收紧**：`tools.approvalMode` 从默认 `yolo` 收到 `write`，
+只读检查（窗口枚举、截图、AX 读取、剪贴板读）自动通过，输入与变更类操作需要确认。桌面 E2E 会产生
+真实副作用（移动真实鼠标、真实键盘输入），这一层默认要求人在场；确需无人值守全自动时用
+`--approval-mode yolo` 显式覆盖，并在运行记录里写明这是一次性授权。`.omp/e2e.yml` 本身仍是
+一次性覆盖层，只影响当次运行，不写入持久配置。
 
-`computer` prelude 会驱动真实桌面（真实鼠标、真实键盘），并且是 eval 主机的桥调用——
-**不经过 `tool_call` / `tool_result` 钩子**，因此现有门禁拦不住它。这是它默认关、且必须显式开启的原因。
+`computer` prelude 是 eval 主机的桥调用，**不经过 `tool_call` / `tool_result` 钩子**，
+因此现有门禁（如 §10 的隔离门禁）拦不住它；上面那层审批收紧是它的配套缓解，不是替代品。
 
 E2E 通过的标准是**断言了可观察行为**；只启动成功、退出码为零、截图都不能算通过。
 Web 层可参考 `clients/app/e2e/run-e2e.mjs`（真实 Chromium + CDP 的既有入口）。
