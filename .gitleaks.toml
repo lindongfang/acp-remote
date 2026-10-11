@@ -18,9 +18,12 @@ useDefault = true
 #    拒绝整目录放行，也拒绝用正则放宽全局规则。
 # 3. 真实凭据被扫描到时的正确处置是**轮换凭据 + 清理历史 + 记录事件响应**
 #    （`SECURITY_DESIGN.md` §17），不是加允许清单。
-# 4. 目前**没有任何允许清单条目**：写这份配置时仓库还没有固定向量需要豁免（`check:assets` 重算的
-#    向量里只有公钥、nonce 与签名，没有私钥）。CI 首次全历史扫描的结果是这条判断的证据；
-#    若它命中 `fixtures/**`，先确认命中项确实是公开测试向量，再按第 1、2 条加最小范围的条目。
+# 4. 现有条目逐条登记在文件末尾的 `[[allowlists]]`。写这份配置时仓库还没有固定向量需要豁免
+#    （`check:assets` 重算的向量里只有公钥、nonce 与签名，没有私钥）；证据来源是 CI 每日 `schedule`
+#    的**全历史**扫描——它一旦命中 `fixtures/**` 或文档示例，先确认命中项确实是公开测试向量或
+#    明确的假阳性，再按第 1、2 条加最小范围的条目，并在同一次改动里登记到下面。
+#    注意 push / pull_request 只扫**本次范围**，因此这类历史命中在 PR 上一直是绿的，只有在全历史
+#    扫描里才会暴露；改动允许清单后要等下一次 `schedule` 才能端到端确认。
 
 # 自研 keystore 条目的**明文**形态（`identity-keystore`，`docs/MODULE_ARCHITECTURE.md` §4.12）。
 #
@@ -63,3 +66,41 @@ description = "RFC 6455 §1.3 公开示例的 Sec-WebSocket-Key（非凭据）�
 regexTarget = "line"
 regexes = ['''Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==''']
 paths = ['''crates/server/src/transport/net/test_client\.rs''']
+
+# 每日 `schedule` 的**全历史**扫描命中的固定向量与假阳性（2026-10-11 补登，共 10 处命中、4 条）。
+#
+# 为什么以前没发现：push / pull_request 只扫**本次范围**（实测日志形如「1 commits scanned」），
+# 而这些命中来自**历史提交**（引入提交见下），所以 PR 上一直是绿的；只有每日 `schedule` 的全历史
+# 扫描（实测「204 commits scanned」）才会暴露。
+#
+# 每一处命中值都核对过：A/B/C 三条里的值是**合成的计数序列**——解码后分别是 32 字节的
+# `00 01 02 … 1F`、可打印 ASCII 的连号（PQRSTUVWXYZ 起、到 no 止）、32 字节的 `A0 A1 … BF`——
+# 不是任何真实凭据，也没有对应的服务端秘密；D 那条是文档协议示例里的**节点标识**（UUID），
+# 默认规则集只因字段名含 `access` 而误判。
+#
+# 以下条目都只豁免「确切的值 + 确切的一个或几个文件」：不放行目录、不放宽全局规则。
+# 代价如实记录：以后新增合成向量或同类文档字段，这个 job 会再红一次，需要再补一条。
+
+[[allowlists]]
+description = "公开固定测试向量：配对 QR 载荷的合成 pairingSecret（base64url 解码为 00 01 … 1F 的 32 字节计数序列）。不是凭据，也没有对应的服务端秘密；fixtures/sync/v1/valid/pairing-qr-payload.json 与 clients/app 的单测共用同一向量。由主 Agent 于 2026-10-11 核对（依据：值解码后的计数序列 + 本地 gitleaks 8.30.1 全历史扫描）"
+regexTarget = "line"
+regexes = ['''"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"''']
+paths = ['''fixtures/sync/v1/valid/pairing-qr-payload\.json''', '''clients/app/src/composition\.test\.ts''']
+
+[[allowlists]]
+description = "公开固定测试向量：node-link 配对 transcript 三个 fixture 的合成 hmacKeyBase64url（base64url 解码为 32 字节可打印 ASCII 连号，PQRSTUVWXYZ 起、到 no 止）。不是凭据；由 compatibility/transcripts/v1/transcripts.json 的表驱动重算。由主 Agent 于 2026-10-11 核对"
+regexTarget = "line"
+regexes = ['''"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8"''']
+paths = ['''fixtures/node-link/v1/transcripts/pairing-(proof|status|sas)\.json''']
+
+[[allowlists]]
+description = "公开固定测试向量：sync 配对 transcript 三个 fixture 的合成 hmacKeyBase64url（base64url 解码为 A0 A1 … BF 的 32 字节计数序列）。不是凭据；同样由 compatibility/transcripts/v1/transcripts.json 的表驱动重算。由主 Agent 于 2026-10-11 核对"
+regexTarget = "line"
+regexes = ['''"oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8"''']
+paths = ['''fixtures/sync/v1/transcripts/pairing-(proof|sas|status)\.json''']
+
+[[allowlists]]
+description = "已记录的假阳性：docs/NODE_LINK_PROTOCOL.md 协议示例里 accessNodeId 的值是公开的节点标识（UUID），不是凭据；默认规则集 generic-api-key 因字段名含 access 而误判。只豁免该文档里这一类字段，不放行目录、不放宽全局规则。由主 Agent 于 2026-10-11 核对"
+regexTarget = "line"
+regexes = ['''"accessNodeId": "[0-9a-f-]{36}"''']
+paths = ['''docs/NODE_LINK_PROTOCOL\.md''']
