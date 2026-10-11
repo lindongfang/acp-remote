@@ -283,3 +283,36 @@ describe("R15 目录详情", () => {
     expect(store.directoryDetail("not-there").kind).toBe("unknown_directory");
   });
 });
+
+describe("R15 查询与筛选是纯 UI 状态", () => {
+  it("经 store 生效：改变模型但不派发命令、也不动连接机", () => {
+    const { store, gateway } = storeWith(RESOURCES);
+    const connection = store.state.connection;
+
+    store.setDirectoryQuery("personal-api");
+    store.setDirectoryFilter("all");
+    const page = store.directoryPage();
+    expect(page.kind).toBe("ready");
+    if (page.kind !== "ready") return;
+    expect(page.directories.map((item) => item.alias)).toEqual(["personal-api"]);
+
+    store.setDirectoryDetailQuery("会话");
+    store.setDirectoryDetailMonth("2026-10");
+    const detail = store.directoryDetail("work-api");
+    expect(detail.kind).toBe("ready");
+    if (detail.kind !== "ready") return;
+    // 两条 work-api 会话的 `updatedAt` 同在 2026-10：一条档、两行。
+    expect(detail.months).toEqual([{ key: "2026-10", count: 2 }]);
+    expect(detail.total).toBe(2);
+
+    // 两页的查询词互相独立：设置详情页查询词不得清空目录页的查询词。
+    const pageAgain = store.directoryPage();
+    expect(pageAgain.kind === "ready" ? pageAgain.directories.map((item) => item.alias) : []).toEqual([
+      "personal-api",
+    ]);
+
+    // 反例：若任一 setter 顺手派发 `session.list` 之类，或改动了连接状态机，这里会红。
+    expect(gateway.dispatches).toEqual([]);
+    expect(store.state.connection).toBe(connection);
+  });
+});

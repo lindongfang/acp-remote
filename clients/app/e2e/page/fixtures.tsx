@@ -47,24 +47,72 @@ export const SESSION_ALPHA = "aaaaaaaa-0000-4000-8000-00000000aa01";
 /** 目录 beta 下的会话（等待输入 → 计入待处理）。 */
 export const SESSION_BETA = "aaaaaaaa-0000-4000-8000-00000000bb01";
 
-/** 构造一条会话摘要。 */
+/**
+ * 构造一条会话摘要。
+ *
+ * `title` / `updatedAt` 是**可选**覆盖：缺省值与既有调用一字不差（`会话 <id 末两位>` +
+ * 固定的 2026-10-01），因此既有用例的期望不受影响。搜索用例需要能逐字断言的标题
+ * （目录页按会话标题匹配），月份档用例需要**会话自身**的时间（分档必须落在它上面），
+ * 两者都不能靠 id 末两位或当前时间凑出来。
+ */
 export function sessionSummary(input: {
   readonly id: string;
   readonly alias: string;
   readonly state: SessionSummary["state"];
+  /** 呈现标题；缺省 `会话 <id 末两位>`。 */
+  readonly title?: string;
+  /** 会话自身的时间（`createdAt`/`updatedAt` 同值）；缺省 2026-10-01T00:00:00.000Z。 */
+  readonly updatedAt?: string;
 }): SessionSummary {
+  const at = input.updatedAt ?? "2026-10-01T00:00:00.000Z";
   return {
     sessionId: input.id,
-    title: `会话 ${input.id.slice(-2)}`,
+    title: input.title ?? `会话 ${input.id.slice(-2)}`,
     agent: { agentId: "codex-a", name: "codex" },
     state: input.state,
     origin: { kind: "local" },
     currentMode: null,
     version: "1",
-    createdAt: "2026-10-01T00:00:00.000Z",
-    updatedAt: "2026-10-01T00:00:00.000Z",
+    createdAt: at,
+    updatedAt: at,
     workspace: { alias: input.alias, displayName: input.alias },
   };
+}
+
+/**
+ * 一个目录下的 `titles.length` 条会话：标题、时间与状态逐条给出。
+ *
+ * `idPrefix` 是 8 位十六进制（如 `aaaaaaaa`），序号补成 12 位，因此 id 是**可断言的确定值**
+ * （`seriesSessionId`），不必把 UUID 抄进用例。`at` 决定两件事：目录页内联会话行的顺序与
+ * 详情页的月份档——两条路径都按会话**自身**的时间排序/分档。
+ */
+export function sessionSeries(input: {
+  readonly alias: string;
+  readonly idPrefix: string;
+  readonly titles: readonly string[];
+  /** 与 `titles` 等长的 ISO 时间；应逐条递减（最新在前），与实际快照的顺序一致。 */
+  readonly at: readonly string[];
+  /** 与 `titles` 等长的状态；缺省全部 `idle`（既不计运行中也不计待处理）。 */
+  readonly states?: readonly SessionSummary["state"][];
+}): readonly SessionSummary[] {
+  if (input.titles.length !== input.at.length) throw new Error("sessionSeries：titles 与 at 必须等长");
+  if (input.states !== undefined && input.states.length !== input.titles.length) {
+    throw new Error("sessionSeries：states 与 titles 必须等长");
+  }
+  return input.titles.map((title, index) =>
+    sessionSummary({
+      id: seriesSessionId(input.idPrefix, index),
+      alias: input.alias,
+      title,
+      updatedAt: input.at[index] ?? "",
+      state: input.states?.[index] ?? "idle",
+    }),
+  );
+}
+
+/** `sessionSeries` 第 `index` 条的会话 id；用例据此逐字断言顺序与集合。 */
+export function seriesSessionId(idPrefix: string, index: number): string {
+  return `${idPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`;
 }
 
 /** 两条目录各一条会话：alpha 运行中（运行中 +1），beta 等待输入（待处理 +1）。 */

@@ -5,6 +5,7 @@
  */
 
 import { R15_CHECKS } from "./checks/r15-directory";
+import { R15_DETAIL_CHECKS } from "./checks/r15-directory-detail";
 import { R16_CHECKS } from "./checks/r16-create";
 import { R18_CHECKS } from "./checks/r18-degradation";
 import { COMPOSITION_CHECKS } from "./checks/composition-root";
@@ -16,8 +17,17 @@ import type { CheckResult } from "./support";
  *
  * 组合根在最前面还有一个实际好处：它失败时后面每一条都会失败，输出里一眼看得出
  * 「不是需求没实现，是运行时没起来」。
+ *
+ * R15 的目录页与目录详情页分成两个文件（各自一个检查集），共用同一套 `data-*` 口径与
+ * 夹具来源；两者之间没有顺序依赖，放在一起只是让同一需求的用例连成一段输出。
  */
-const ALL_CHECKS = [...COMPOSITION_CHECKS, ...R15_CHECKS, ...R16_CHECKS, ...R18_CHECKS];
+const ALL_CHECKS = [
+  ...COMPOSITION_CHECKS,
+  ...R15_CHECKS,
+  ...R15_DETAIL_CHECKS,
+  ...R16_CHECKS,
+  ...R18_CHECKS,
+];
 
 declare global {
   interface Window {

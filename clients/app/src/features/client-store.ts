@@ -55,8 +55,13 @@ import {
   buildCreateSessionCommand,
   buildCreateSessionEntryModel,
 } from "./create-session-model";
-import type { DirectoryDetailModel, DirectoryPageModel } from "./directory-model";
-import { buildDirectoryDetailModel, buildDirectoryPageModel } from "./directory-model";
+import type {
+  DirectoryDetailModel,
+  DirectoryFilter,
+  DirectoryPageModel,
+  SessionRowModel,
+} from "./directory-model";
+import { buildDirectoryDetailModel, buildDirectoryPageModel, buildSessionRowsByAlias } from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
 import type { PairingPageModel } from "./pairing-model";
@@ -103,6 +108,12 @@ export interface ClientState {
   readonly uncertainRequestIds: readonly Uuid[];
   readonly createSheetAlias: string | null;
   readonly diagnosticsEventId: string | null;
+  /** 目录页查询词；与详情页的查询词是**两个独立**状态（页面各有自己的搜索框）。 */
+  readonly directoryQuery: string;
+  readonly directoryFilter: DirectoryFilter;
+  readonly directoryDetailQuery: string;
+  /** 详情页当前月份档；`"all"` 表示呈现全部月份。 */
+  readonly directoryDetailMonth: string | "all";
   readonly pairing: PairingPageModel;
   readonly host: HostIdentityModel | null;
 }
@@ -123,6 +134,10 @@ export function initialClientState(): ClientState {
     uncertainRequestIds: [],
     createSheetAlias: null,
     diagnosticsEventId: null,
+    directoryQuery: "",
+    directoryFilter: "all",
+    directoryDetailQuery: "",
+    directoryDetailMonth: "all",
     pairing: initialPairingPageModel(),
     host: null,
   };
@@ -411,12 +426,14 @@ export class ClientStore {
 
   // ── 选择器 ────────────────────────────────────────────────────────────────
 
-  /** 目录页模型（R15）。数据只来自快照，不发任何命令。 */
+  /** 目录页模型（R15）。数据只来自快照，不发任何命令；查询与筛选只是纯渲染状态。 */
   directoryPage(): DirectoryPageModel {
     return buildDirectoryPageModel({
       resources: this.#state.resources,
       connection: this.#state.connection.state,
       lastSyncedAtMs: this.#state.lastSyncedAtMs,
+      query: this.#state.directoryQuery,
+      filter: this.#state.directoryFilter,
     });
   }
 
@@ -427,7 +444,20 @@ export class ClientStore {
       connection: this.#state.connection.state,
       alias,
       ownerLabelOf: this.#ownerLabelOf,
+      query: this.#state.directoryDetailQuery,
+      month: this.#state.directoryDetailMonth,
     });
+  }
+
+  /**
+   * 目录页的内联会话行：按目录别名分组、组内按时间倒序。
+   *
+   * 只依赖快照，**不读** `directoryDetailQuery`/`directoryDetailMonth`，也不派发任何命令——
+   * 因此详情页里敲过的关键词或选过的月份不会改变目录页看到的内容（spec「与目录页的查询词
+   * 互不影响」的反向）。
+   */
+  directoryPageSessions(): ReadonlyMap<string, readonly SessionRowModel[]> {
+    return buildSessionRowsByAlias({ resources: this.#state.resources, ownerLabelOf: this.#ownerLabelOf });
   }
 
   /** 本机已配置的 Agent 目录（快照 `agents` + 连接覆盖层，R19）。 */
@@ -527,6 +557,45 @@ export class ClientStore {
   /** 关闭诊断抽屉。 */
   closeDiagnostics(): void {
     this.#commit({ ...this.#state, diagnosticsEventId: null });
+  }
+
+  /**
+   * 更新目录页查询词。
+   *
+   * 与 `setDirectoryDetailQuery` 分开，是因为两页各有独立搜索框：进入详情页不得清空
+   * 目录页的查询词，返回时它仍在（spec「与目录页的查询词互不影响」）。
+   */
+  setDirectoryQuery(query: string): void {
+    this.#commit({ ...this.#state, directoryQuery: query });
+  }
+
+  /** 更新目录页状态筛选。 */
+  setDirectoryFilter(filter: DirectoryFilter): void {
+    this.#commit({ ...this.#state, directoryFilter: filter });
+  }
+
+  /** 更新目录详情页的目录内查询词。 */
+  setDirectoryDetailQuery(query: string): void {
+    this.#commit({ ...this.#state, directoryDetailQuery: query });
+  }
+
+  /** 更新目录详情页的月份档；`"all"` 表示呈现全部月份。 */
+  setDirectoryDetailMonth(month: string | "all"): void {
+    this.#commit({ ...this.#state, directoryDetailMonth: month });
+  }
+
+  /**
+   * 进入某个目录详情页时调用：目录内查询词与月份档都是**单份**状态，必须在新目录上复位。
+   *
+   * 两者都挂在 store 单例上、跨路由存活；不复位的话，在目录 A 选的月份档（或敲的查询词）
+   * 会带进目录 B，把 B 的内容整片挡掉——而控件上已经看不到那个档了。原型在进入目录与
+   * `hashchange` 时同样把 `A.month` 重置为 `all`。
+   *
+   * 一次 commit 改两处（形状同 {@link pairSucceeded}），避免出现「查询词已清、月份档还留着」
+   * 的中间态被渲染出来。
+   */
+  resetDirectoryDetailView(): void {
+    this.#commit({ ...this.#state, directoryDetailQuery: "", directoryDetailMonth: "all" });
   }
 
   /** 更新配对页状态。 */
