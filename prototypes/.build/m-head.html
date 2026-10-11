@@ -470,7 +470,21 @@
   };
   var FILE_ORDER = ["src/auth/session.ts","src/auth/config.ts","tests/auth.spec.ts"];
   var AGENT_PROFILES = [{id:"codex",name:"codex",def:true},{id:"omp",name:"omp",def:false}];
-  var MODELS = ["gpt-5","gpt-5-codex","o4-mini"], MODES = ["快速","深度","只读"];
+  /* 会话模式由 Agent 提供（ACP `SessionModeState.availableModes`，Sync 侧投影为 `ModeRef{modeId,displayName}`）：
+     客户端只按 `modeId` 选择、直接显示 Agent 给的名字，不自己造候选；Agent 给空列表时就是空列表。 */
+  var AGENT_MODES = {
+    codex: { currentModeId:"default", availableModes:[{ id:"default", name:"Default" }, { id:"plan", name:"Plan" }] },
+    omp:   { currentModeId:"build",   availableModes:[{ id:"build", name:"Build" }, { id:"plan", name:"Plan" }] }
+  };
+  /* 模型候选同理由 Agent 给出：`session.config.list` 里 `category=model` 的 select 项（`SessionConfigOptionView`）。
+     客户端只显示 Agent 给的 `name`、回传 `value`，不自己拼一份模型清单；Agent 没给就是「未提供」。 */
+  var AGENT_CONFIGS = {
+    codex: { model: { currentValue:"gpt-5", options:[
+      { value:"gpt-5", name:"gpt-5" }, { value:"gpt-5-codex", name:"gpt-5-codex" }, { value:"o4-mini", name:"o4-mini" } ] } },
+    omp:   { model: { currentValue:"claude-sonnet-4", options:[
+      { value:"claude-sonnet-4", name:"Claude Sonnet 4" },
+      { value:"claude-opus-4", name:"Claude Opus 4", description:"更深的推理" } ] } }
+  };
   var CTX = { low:{used:24000,size:200000}, mid:{used:96000,size:200000},
     high:{used:156000,size:200000}, near:{used:188000,size:200000} };
   var EVT = {
@@ -495,7 +509,7 @@
   var A = {
     conn:"online", chatScenario:"running", ctx:"mid", degradeDemo:true,
     session:"s1", tab:"chat", filter:"all", query:"", selFile:"src/auth/session.ts",
-    open:{}, keys:[], permSet:{}, model:"gpt-5", mode:"快速", openPick:null,
+    open:{}, keys:[], permSet:{}, modelSel:{}, modeSel:{}, openPick:null,
     pair:"S4", pairLeft:PAIR_TTL, clearArmed:false, creating:null, newAgent:"codex", newErr:null, seq:0,
     jumpTo:null, month:"all",
     agents:[{id:"codex",state:"running",desc:"当前 turn"}]
