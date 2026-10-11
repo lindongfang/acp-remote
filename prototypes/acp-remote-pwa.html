@@ -798,8 +798,21 @@
   };
   var FILE_ORDER = ["src/auth/session.ts","src/auth/config.ts","tests/auth.spec.ts"];
   var AGENT_PROFILES = [{ id:"codex", name:"codex", def:true }, { id:"omp", name:"omp", def:false }];
-  var MODELS = ["gpt-5","gpt-5-codex","o4-mini"];
-  var MODES  = ["快速","深度","只读"];
+  /* 会话模式由 Agent 提供（ACP `SessionModeState.availableModes`，Sync 侧投影为 `ModeRef{modeId,displayName}`）：
+     客户端只按 `modeId` 选择、直接显示 Agent 给的名字，不自己造候选；Agent 给空列表时就是空列表。 */
+  var AGENT_MODES = {
+    codex: { currentModeId:"default", availableModes:[{ id:"default", name:"Default" }, { id:"plan", name:"Plan" }] },
+    omp:   { currentModeId:"build",   availableModes:[{ id:"build", name:"Build" }, { id:"plan", name:"Plan" }] }
+  };
+  /* 模型候选同理由 Agent 给出：`session.config.list` 里 `category=model` 的 select 项（`SessionConfigOptionView`）。
+     客户端只显示 Agent 给的 `name`、回传 `value`，不自己拼一份模型清单；Agent 没给就是「未提供」。 */
+  var AGENT_CONFIGS = {
+    codex: { model: { currentValue:"gpt-5", options:[
+      { value:"gpt-5", name:"gpt-5" }, { value:"gpt-5-codex", name:"gpt-5-codex" }, { value:"o4-mini", name:"o4-mini" } ] } },
+    omp:   { model: { currentValue:"claude-sonnet-4", options:[
+      { value:"claude-sonnet-4", name:"Claude Sonnet 4" },
+      { value:"claude-opus-4", name:"Claude Opus 4", description:"更深的推理" } ] } }
+  };
   var CTX = {
     low:{used:24000,size:200000}, mid:{used:96000,size:200000}, high:{used:156000,size:200000},
     near:{used:188000,size:200000}, unknown:{used:null,size:null}
@@ -906,7 +919,7 @@
     filter:"all", query:"", month:"all",
     chatScenario:"running", ctx:"mid", permSet:{},
     session:"s1", shown:15, left:true, right:true, selFile:"src/auth/session.ts",
-    model:"gpt-5", mode:"快速", openPick:null, open:{}, keys:[],
+    modelSel:{}, modeSel:{}, openPick:null, open:{}, keys:[],
     agents:[{ id:"codex", state:"running", desc:"当前 turn：正在调整空闲超时" },
              { id:"omp",   state:"idle",    desc:"14:28 用于跑测试，之后断开" }],
     canCreate:true, creating:null, createResult:"ok", newAgent:"codex", newErr:null, seq:0,
@@ -1091,6 +1104,31 @@
 
   /* ==================== 会话内容（按会话 id 生成） ==================== */
   function cur(){ return SESSIONS.filter(function(x){ return x.id===A.session; })[0] || SESSIONS[0]; }
+  /* 当前会话的模式状态：候选列表来自该会话 Agent；当前值优先用本会话本地已选（等 `session.mode.changed` 回执前的乐观值），
+     否则是 Agent 的 `currentModeId`；两者都不在候选里就退回第一个候选，候选为空则是 null。 */
+  function modeState(){
+    var base = AGENT_MODES[cur().agent] || { currentModeId:null, availableModes:[] };
+    var list = base.availableModes;
+    var id = A.modeSel[A.session] || base.currentModeId;
+    if(id !== null && !list.some(function(m){ return m.id===id; })) id = list.length ? list[0].id : null;
+    return { currentModeId:id, availableModes:list };
+  }
+  function modeLabel(ms){
+    var hit = ms.availableModes.filter(function(m){ return m.id===ms.currentModeId; })[0];
+    return hit ? hit.name : null;
+  }
+  /* 当前会话的模型选择项：候选与当前值都来自该会话 Agent；本地已选（等 `session.config.changed` 回执前的乐观值）优先。 */
+  function modelState(){
+    var opt = (AGENT_CONFIGS[cur().agent] || { model:{ currentValue:null, options:[] } }).model;
+    var list = opt.options || [];
+    var value = A.modelSel[A.session] || opt.currentValue;
+    if(value !== null && !list.some(function(o){ return o.value===value; })) value = list.length ? list[0].value : null;
+    return { currentValue:value, options:list };
+  }
+  function modelLabel(ms){
+    var hit = ms.options.filter(function(o){ return o.value===ms.currentValue; })[0];
+    return hit ? hit.name : null;
+  }
   function turnState(){
     var s=cur();
     var st = (s.id==="s1") ? A.chatScenario : s.state;
@@ -1519,8 +1557,11 @@
       '<div class="leftfoot"><button class="linkbtn add" data-new="'+s.dir+'">⊕ 新建会话</button>' +
         '<span style="font-size:11.5px;color:var(--ink-3)">将在电脑上启动 Agent</span></div></aside>';
 
-    var modelPop = MODELS.map(function(m){ return '<button data-model="'+esc(m)+'" class="'+(A.model===m?"on":"")+'">'+esc(m)+'</button>'; }).join("");
-    var modePop  = MODES.map(function(m){ return '<button data-mode="'+esc(m)+'" class="'+(A.mode===m?"on":"")+'">'+esc(m)+'</button>'; }).join("");
+    var ms = modeState();
+    var msel = modelState();
+    var modelPop = msel.options.map(function(o){ return '<button data-model="'+esc(o.value)+'" class="'+(msel.currentValue===o.value?"on":"")+'"'+
+      (o.description ? ' title="'+esc(o.description)+'"' : '')+'>'+esc(o.name)+'</button>'; }).join("");
+    var modePop  = ms.availableModes.map(function(m){ return '<button data-mode="'+esc(m.id)+'" class="'+(ms.currentModeId===m.id?"on":"")+'">'+esc(m.name)+'</button>'; }).join("");
 
     var mid = '<section class="col" id="mid" style="background:var(--bg)">' +
       '<div class="convhead"><span class="ttl">'+esc(s.title||"未命名会话")+'</span>'+chip+
@@ -1531,10 +1572,10 @@
       '<div class="stream" id="stream"><div class="inner">'+streamHTML(s)+'</div></div>' +
       '<div class="composer"><div class="cbar">'+ctxWarn()+
         '<div class="modelbar">'+ctxChip()+
-          '<span class="pick'+(A.openPick==="mode"?" open":"")+'"><button data-pick="mode">模式 <b>'+esc(A.mode)+
-            '</b> ▾</button><span class="pop"><span class="grp">会话模式（下一轮生效）</span>'+modePop+'</span></span>' +
-          '<span class="pick'+(A.openPick==="model"?" open":"")+'"><button data-pick="model">模型 <b>'+esc(A.model)+
-            '</b> ▾</button><span class="pop"><span class="grp">选择模型（下一轮生效）</span>'+modelPop+'</span></span>' +
+          '<span class="pick'+(A.openPick==="mode"?" open":"")+'"><button data-pick="mode">模式 <b>'+esc(modeLabel(ms)||"未提供")+
+            '</b> ▾</button><span class="pop"><span class="grp">会话模式（由 Agent 提供，下一轮生效）</span>'+modePop+'</span></span>' +
+          '<span class="pick'+(A.openPick==="model"?" open":"")+'"><button data-pick="model">模型 <b>'+esc(modelLabel(msel)||"未提供")+
+            '</b> ▾</button><span class="pop"><span class="grp">模型（由 Agent 提供，下一轮生效）</span>'+modelPop+'</span></span>' +
         '</div>' +
         '<div class="inputrow"><textarea id="ta"'+(active()||isClosed()?' readonly':'')+' placeholder="'+
           (isClosed() ? "会话已关闭，不能继续发送"
@@ -1835,9 +1876,11 @@
       if(pk){ A.openPick=(A.openPick===pk.dataset.pick)?null:pk.dataset.pick; render(); return; }
       if(t.closest("[data-ctxchip]")){ A.openPick=(A.openPick==="ctx")?null:"ctx"; render(); return; }
       var mdl=t.closest("[data-model]");
-      if(mdl){ A.model=mdl.dataset.model; A.openPick=null; render(); toast("模型已切换，下一轮生效"); return; }
+      if(mdl){ A.modelSel[A.session]=mdl.dataset.model; A.openPick=null; render();
+        toast("模型已切换到「"+modelLabel(modelState())+"」，下一轮生效"); return; }
       var mde=t.closest("[data-mode]");
-      if(mde){ A.mode=mde.dataset.mode; A.openPick=null; render(); toast("模式已切换，下一轮生效"); return; }
+      if(mde){ A.modeSel[A.session]=mde.dataset.mode; A.openPick=null; render();
+        toast("模式已切换到「"+modeLabel(modeState())+"」，下一轮生效"); return; }
 
       if(t.closest("[data-copy]")){ toast("原型占位：复制代码"); return; }
       if(t.closest("[data-diag]")){ openDx(t.closest("[data-diag]").getAttribute("data-diag")||"tool"); return; }
