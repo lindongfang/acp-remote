@@ -27,6 +27,6 @@
 
 - [x] 4.1 主 Agent 按 plan 的 Merge Order 串行 `git apply --check` → `git apply` 三个工作包（WP1 → WP2 → WP3）（判据：三次 `--check` 均通过，主检出 `git status` 只显示预期的三个文件改动）
 - [x] 4.2 在主检出跑全量 Project Verify：PV1（`npm run check`）、PV2（`clients/app` 的 `npm ci` + `npm run check`）、PV3、PV4（判据：四项全部 exit 0）
-- [ ] 4.3 按 `commitlint.config.mjs` 的词表手写提交信息（scope 用 `deps` 或 `ci`；**不要**跑 `omp commit`，它按目录名推 scope 会被钩子拒绝且会改动 git 索引）（判据：本地 `.husky/commit-msg` 钩子通过，提交落地）
-- [ ] 4.4 为这批改动开分支、推送、`gh pr create --fill`，等待六个必需检查全绿后 `gh pr merge --squash`（判据：`gh pr checks --watch` 显示六个检查全部 pass，PR 标题符合 Conventional Commits）
-- [ ] 4.5 合入后关闭 PR #68，并观察 Dependabot 下一次运行：若它新开的 PR 只含 `vite`/`vitest` 则直接关闭（与本变更重复），若仍提 `react-native` 则说明 `ignore` 未生效，需复核配置（判据：在 PR 描述或 issue 中记录观察结果；这是 design「Open Questions」的收口）
+- [x] 4.3 按 `commitlint.config.mjs` 的词表手写提交信息（scope 用 `deps` 或 `ci`；**不要**跑 `omp commit`，它按目录名推 scope 会被钩子拒绝且会改动 git 索引）（判据：本地 `.husky/commit-msg` 钩子通过，提交落地）
+- [x] 4.4 为这批改动开分支、推送、`gh pr create --fill`，等待六个必需检查全绿后 `gh pr merge --squash`（判据：`gh pr checks --watch` 显示六个检查全部 pass，PR 标题符合 Conventional Commits）
+- [x] 4.5 合入后关闭 PR #68，并观察 Dependabot 下一次运行：若它新开的 PR 只含 `vite`/`vitest` 则直接关闭（与本变更重复），若仍提 `react-native` 则说明 `ignore` 未生效，需复核配置（判据：在 PR 描述或 issue 中记录观察结果；这是 design「Open Questions」的收口）
