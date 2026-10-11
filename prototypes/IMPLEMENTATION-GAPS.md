@@ -1,187 +1,171 @@
 # PWA 实现缺口清单
 
-> **这不是权威文档。** 它是从设计原型反推出的「要实现还差什么」，供后续写 openspec 变更提案时切分任务用。
+> **这不是权威文档。** 它是「对照设计原型，当前还差什么」的现状记录，供后续写 openspec 变更提案时切分任务用。
 > 产品行为、协议语义、安全模型仍以 `docs/` 下的权威文档为准；若本文件与权威文档冲突，以权威文档为准。
 >
-> 依据：分支 `feat/pwa-prototype` 上的两个原型（`acp-remote-pwa.html` 桌面端、`acp-remote-pwa-mobile.html` 移动端）
-> 与当前仓库源码实测。凡是「已确认不存在」的地方都给了文件与行号，便于复核。
+> 本轮更新：2026-10-11，依据当前分支实测（桌面原型 `prototypes/acp-remote-pwa.html`，
+> 已实现代码在 `clients/app/`）。上一版写于前端工程存在之前（「无 `clients/` 目录」），
+> 那部分已整体过时——**前端工程与逻辑层已落地，且 C1/C2/C3 合同也已经补齐**。
 
 ---
 
 ## 0. 结论速览
 
-| 层 | 状态 | 规模 | PWA v1 是否需要 |
-|---|---|---|---|
-| A 前端工程 | **完全不存在**（无 `clients/` 目录） | 大 | 需要 |
-| B `server::sync` | **完全不存在**，`/sync/v1*` 当前一律 404 | 最大 | 需要 |
-| C 合同缺口（目录字段 / Sync `session.create` / Agent 列表 / 路径下发） | 协议层没有对应能力 | 中～大 | C1 需要；C2/C3 属 v1.1 |
-| D 存储与身份基础 | **大部分已就位**（cursor、原文保全、配对状态机、Sync DTO） | — | — |
-| E 已设计但服务端未支撑 | 缺投影/命令实现 | 小～中 | 需要 |
-| G 流程（文档回写、提案、验收） | 未开始 | — | 需要 |
-
-**最重要的一条好消息**：`owned_event` 表已经具备 cursor / 重放 / ACP 原文保全所需的全部字段，
-`identity-auth` 的配对状态机与 challenge-response、`sync-protocol` 的 18 类消息与 33 类事件视图 DTO 也都已落地。
-所以最大的两块工作（B1、A1–A7）主要是**接线与前端落地**，不是从零建设。
-
----
-
-## 1. A 前端工程（100% 缺失）
-
-`clients/` 目录不存在；原型之外没有任何前端代码。目标结构见 `docs/FRONTEND_DESIGN.md §3`。
-
-| # | 缺什么 | 备注 |
+| 层 | 状态 | 证据 |
 |---|---|---|
-| A1 | 工程脚手架：TS + Expo/React Native 通用工程、Expo Router、`platform/` 适配层 | 首个交付只构建 Web/PWA |
-| A2 | **PWA 设备身份**：WebCrypto 生成**不可导出** P-256 `CryptoKey` + IndexedDB 持久化 | 配对与 `/sync/v1/pairing/claim` 的前提；`FRONTEND_DESIGN §4.5` |
-| A3 | **Sync Client**：连接、challenge-response 认证、`subscribe`、ACK、增量重放、快照暂存与原子替换、`eventId` 去重、`requestId` 幂等重试 | `SYNC_PROTOCOL §8–§11` |
-| A4 | 状态机：连接 9 态、命令 6 态 | 原型已实现这些判定逻辑，可直接对照迁移 |
-| A5 | 页面：配对 / 目录 / 目录详情 / 对话 / 变更文件 / 降级卡片 / 诊断抽屉 / 主机与连接面板 | 对应原型四条路由 + 浮层 |
-| A6 | 协议 DTO 层：消费 `schemas/sync/v1/**` 与 `fixtures/sync/v1/**`，与 Rust 共用同一份合同 | `AGENTS.md §9` 要求两端同源 |
-| A7 | 测试：fixture 契约测试、状态机、幂等重试、浏览器 E2E、敏感信息不落盘 | `FRONTEND_DESIGN §10` |
+| 合同（目录字段 / Sync `session.create` / Agent 目录 / 快照范围） | **已落地** | `openspec/specs/sync-workspace-catalog`、`sync-session-create`、`sync-snapshot-scope`；`compatibility/commands/v1/commands.json` 的 `session.create` 已含 `transport: ["sync"]`；`schemas/sync/v1/common.schema.json` 的 `sessionSummary` 已有 `workspace` |
+| 前端工程与逻辑层（配对状态机、连接 12 态、快照/重放、事件去重、命令幂等、目录模型、创建入口、对话读取与翻页、降级卡片与诊断、主机面板、imported 不落盘） | **已落地** | `clients/app/src/**`，含单测与浏览器 E2E（`clients/app/e2e/`） |
+| 前端**视觉与交互层** | **基本未落地** | 组件是无样式语义标记（全仓无 CSS / `StyleSheet`）；对话页只读 |
+| `server::sync` | **仍未落地** | `crates/server/src/transport/net/route.rs` 注释：未注册 path（含 `/sync/v1*`）一律 404 |
+| `/ui` 静态资源托管 | **仍未落地** | 无任何注册的静态路由 |
+
+一句话：**能算、能测的层都有了；用户能看见、能点的层基本还没有，且它连不上真机。**
 
 ---
 
-## 2. B 服务端缺失模块
+## 1. 已实现（不要重做）
 
-`crates/server/src/` 目前只有 `local_admin` / `node_link` / `transport`。**没有 `sync`，也没有 `acp_facade`。**
+以下都已存在且有测试，不要在实现 UI 时重写其语义：
 
-### B1 `server::sync`（PWA v1 的硬前置）
+- 七层目录与依赖方向约束（`clients/app/src/layers.ts` + `layers.test.ts`）、组合根（`src/composition.ts`）。
+- 设备身份：WebCrypto **不可导出** P-256 `CryptoKey` + IndexedDB（`src/platform/secure-storage.web.ts`）。
+- 连接状态机 12 态、命令 6 态、`requestId` 复用与「仅服务端确认才呈现 uncertain」（`src/state/`）。
+- Sync 客户端：握手、`subscribe`、ACK、增量重放、快照暂存与原子替换、`eventId` 去重（`src/sync-client/`）。
+- 协议 DTO：严格消费 `schemas/sync/v1/**` 与 `fixtures/sync/v1/**`（`src/protocol/`）。
+- 目录页与目录详情**数据模型**、两种空态、离线来源标注（`src/features/directory-model.ts`）。
+- 会话创建入口：精确两键载荷、无权限说明、创建中/终态/uncertain（`src/features/create-session-model.ts`）。
+- 对话页**只读**模型：消息文本、三态上下文条、翻页游标、降级事件、能力标记
+  （`src/features/conversation-model.ts`、`src/components/ConversationStream.tsx`）。
+- 降级卡片与诊断抽屉（原文不可用时不渲染占位、三类不支持可区分）。
+- 主机与连接面板模型（Agent 列表来自快照、覆盖层缺席 = 状态未知）。
+- 本地缓存边界：imported 不落盘、本节点摘要缓存 8 MiB / 30 天 / LRU（`src/platform/local-cache.web.ts`）。
 
-证据：`crates/server/src/transport/net/route.rs:5` 的模块注释明确写着
-「只有注册过的 path 有服务：未注册的 path（含 `/sync/v1*`，`server::sync` 尚未落地）一律 404」，
-对应测试见 `crates/server/src/transport/net/tests.rs:301`。
-
-| # | 子项 | 说明 |
-|---|---|---|
-| B1.1 | `/sync/v1` WebSocket 路由 + subprotocol `acp-remote.sync.v1.json` | 现只有 node-link 的路由 |
-| B1.2 | 认证四消息 `client_hello` / `server_challenge` / `client_proof` / `authenticated` | 15 秒超时、单设备单连接替换（4411）、`auth.*` 错误码 |
-| B1.3 | `subscribe` + 增量重放 + `caught_up` + `reset_required` | cursor 校验四种 `reason`；`META_SERVER_EPOCH` 已就位（`migrate.rs:30`） |
-| B1.4 | **快照组装**：6 类资源 + 分块 + `snapshotDigest` | 可参考 `crates/server/src/node_link/resource.rs` 的既有做法 |
-| B1.5 | **11 条命令**处理器 + 幂等记录 + `command.result` 终态 | `SYNC_PROTOCOL §11.5` |
-| B1.6 | **33 类事件投影**（`payload.view`）+ `acp.rawJson` 装配 + `rawUnavailable` | 存储字段已就位（见 §4） |
-| B1.7 | `limits` 下发（3 项可调）+ 认证前固定上限 + 限流与 4429 | `CONFIG_REFERENCE §2` |
-| B1.8 | 撤销传播（设备撤销 → 关连接）、授权拒绝 | `SECURITY_DESIGN §9.5` |
-| B1.9 | `/sync/v1/pairing/claim` 与 `/sync/v1/pairing/status` 的 HTTP 处理器 | `identity-auth` 状态机已有，缺 server 侧接线 |
-
-### B2 `/ui` 静态资源托管
-
-现在没有任何静态资源托管路由，也没有「前端构建版本 ↔ Daemon」的可检查关联（`FRONTEND_DESIGN §4.3` 要求）。
-
-### B3 / B4 本次不需要
-
-| # | 缺什么 | 为什么 PWA v1 不需要 |
-|---|---|---|
-| B3 | `server::acp_facade` | 属 Zed 闭环（切片 6），PWA 走 Sync |
-| B4 | `node-link-client` | PWA 直连单个 Owner Node，不经 Access 转发 |
+前端目前**只 dispatch 两条命令**：`session.create`、`session.read`。其余命令名只存在于协议类型与测试里。
 
 ---
 
-## 3. C 合同级缺口（先改合同，再写代码）
+## 2. 对照原型的 UI 缺口
 
-| # | 缺口 | 证据 | 阻断的原型功能 | 要动的文件 |
-|---|---|---|---|---|
-| **C1** | **会话不携带目录** | `crates/storage-sqlite/src/migrate.rs:53` 的 `owned_session` 无目录列；`crates/core/src/model/session.rs:307` 的 `SessionSummary` 九个字段无 workspace；`schemas/sync/v1/common.schema.json#/$defs/sessionSummary` 是 `additionalProperties: false` | 目录页、目录详情、新建会话、创建弹层 | ① `migrate.rs` 加列 + v2→v3 migration；② `CORE_PORTS_AND_STORAGE.md §7` 表结构（`check:drift` 逐字比对）+ `§9.6` 投影；③ `common.schema.json` 加可选字段；④ `SYNC_PROTOCOL.md §10.3` 值对象 + `§9.4` 快照 item；⑤ fixture |
-| **C2** | **Sync 侧没有 `session.create`** | `compatibility/commands/v1/commands.json` 中 `session.create` 的 `transport` 仅 `["node_link"]`；`SYNC_PROTOCOL §16.2` 要求新能力必须新 feature | 目录行 `⊕ 新建`、详情页新建 | ① 新 feature ID（`compatibility/features/v1/features.json` + 两份协议文档 + `check:features`）；② 命令目录加 `transport: ["sync"]`；③ 两个协议 schema 的命令枚举；④ `SYNC_PROTOCOL §11.5` 与 `SECURITY_DESIGN §10.2` 表格；⑤ `core::broker::required_grant` 镜像（`check:commands` 四处一致）；⑥ 新 scope/pack |
-| **C3** | **PWA 无从得知本机 Agent 列表** | 现有命令集无查询类 Agent 列表命令 | 新建会话的 Agent 选择器 | 同 C2 的四处一致链路 + 新 scope |
-| **C4** | **目录绝对路径是否下发，口径不一致** | 原型：详情页显示完整路径，目录页显示尾段；而 `SECURITY_DESIGN §12.3` 规定「路径与规范化结果**不得出现在对端可见的任何输出里**」，`CORE_PORTS_AND_STORAGE.md §5.1` 规定「`canonical_path` 只出现在该调用入参里」，同文 §11 结论为「原始路径……**不得经 wire 传输**」 | 目录详情页页头 | **产品决策**：要么改上述两份权威文档并加约束（仅本机 owned 会话、设备需独立授权），要么把详情页收回为尾段形态 |
-| C5 | v1 不协商 `resource.remote-origin.v1` | 协议已支持该 feature；不协商即拿不到远程资源 | PWA 直连 Owner，不存在远程会话 | 属**产品边界记录**：需写进 `FRONTEND_DESIGN §2.2`，无需改协议 |
+### 2.1 对话页（最大缺口）
 
----
+原型的对话页是「左栏会话 / 中间流 + 输入区 / 右栏变更文件」三栏，实现只有一个只读的单栏列表。
 
-## 4. D 已有基础（只需接线，不要重做）
-
-| 已具备 | 位置 |
+| 原型有 | 实现现状 |
 |---|---|
-| 事件序号、因果、原文保全、保留期、delta 压缩标记 | `crates/storage-sqlite/src/migrate.rs:79` `owned_event`：`global_sequence` / `session_sequence` / `origin_epoch` / `origin_sequence` / `event_id` / `kind` / `policy` / `causation` / `payload_json` / `payload_digest` / `acp_raw_json` / `acp_byte_length` / `acp_sha256` / `acp_raw_unavailable_reason` / `created_at` / `expires_at` / `compacted_into` |
-| cursor 的 epoch | `migrate.rs:30` `META_SERVER_EPOCH` |
-| 配对状态机、challenge-response、12 个 transcript domain、授权词表展开 | `crates/identity-auth/`（已落地） |
-| 会话/turn/事件/交互/命令 的存储与读视图、附件内容寻址 | `crates/storage-sqlite/`（`SessionStore` / `ReadView` / `RemoteDeliveryStore` / `AttachmentStore`） |
-| ACP wire DTO、`RawDocument` 原文承载、11 种 `session/update` 判别子 | `crates/acp-protocol/`（已落地） |
-| 本机 Agent 子进程、能力门控、权限/elicitation 转发、Windows Job Object | `crates/agent-host/`（已落地） |
-| Sync 18 类消息 + 33 类事件视图的类型化 DTO | `crates/sync-protocol/`（已落地） |
-| node-link 侧的资源快照/重放/ACK/命令管线（可作为 Sync 快照实现的参照） | `crates/server/src/node_link/resource.rs` |
-| 共享 listener、TLS、Host 边界、`/ui` 之外的静态路由框架 | `crates/server/src/transport/net/` |
+| 输入框 + 发送/停止按钮、`Enter` 发送 / `Shift+Enter` 换行、仅文本与附件不支持说明 | **完全没有**；`ConversationStream` 只输出 `data-can-send` 等标记，没有输入控件 |
+| 发送与取消命令（`session.prompt` / `session.cancel`） | 前端无 dispatch |
+| 权限请求卡（允许一次 / 始终允许 / 拒绝）、已被电脑处理的折叠块、`interaction.already_resolved` | 无（无 `interaction.*` dispatch） |
+| 结构化专用卡：思考、工具调用（含参数/输出/退出码）、终端输出、plan、usage 折叠块 | 无；非文本消息只标一个「含结构化内容」 |
+| 变更文件右栏 + diff 视图 + 与消息块双向联动 | 无 |
+| 模型 / 模式选择器（`session.config.list|set`、`session.mode.list|set` 及对应 `*changed` 投影） | 无 |
+| 上下文 chip 弹层 + ≥85% 警告条 | 只有 `ContextUsageBar` 的三态条 |
+| Agent chip popover（本会话涉及的 Agent） | 无 |
+| 左栏：同目录会话列表 + 目录内搜索 + 分页 + 新建入口 | 无 |
+| Markdown 渲染、语法高亮、代码复制、链接/图片安全降级 | 无；消息按纯文本 `<p>` 渲染 |
+| 「跳到你最近的输入」胶囊、待处理授权跳转条、连接状态条（正在追平 / 重连第 N 次） | 无 |
+
+### 2.2 目录页与目录详情
+
+- 搜索框（按目录名 / 会话标题）。
+- 状态筛选分段（全部 / 运行中 / 待处理）。
+- 每个目录内最多 3～5 条会话 + 「查看全部」+ 目录折叠。
+- 详情页按月分档 + 月份分段 + 「当前显示 N / M」。
+- 离线提示条与同步时间（「已同步 14:33」/「离线 · 2 分钟前同步」）。
+- 目录页顶部的「这台设备没有创建会话的权限」提示条（实现只在详情页按钮上表达）。
+
+### 2.3 顶栏 / 主机与连接
+
+- 顶部 logo 与 hostchip（点击打开主机面板）。
+- 开发模式横幅与「开发模式」徽标（`FRONTEND_DESIGN §4.4` 要求明文连接必须显著提示）。
+- 帮助抽屉（ⓘ）。
+- 主题切换（跟随系统 / 白天 / 黑夜）。
+- 主机面板内容：设备名与类型、设备 ID、当前 scope 标签列表、主机指纹（含「指纹 = SHA-256(主机公钥)」说明）、本版本边界说明、「立即重连」/「重新配对」/「清除数据」二次确认。
+
+### 2.4 配对页
+
+- 二维码扫描/粘贴入口与落地处理。
+- 6 位 SAS 人工核对、倒计时环、每 3 秒轮询提示。
+- 步骤条（已认领 → 电脑已批准 → 建立安全连接）。
+- 权限清单（本次申请的 scopes）、「接下来会发生什么」、防转发安全提示。
+- 原型的 18 个状态（S0 / S2a–d / S3a–e / S4 / S5 / S6 / S7 / S8a / S8b / S9 / S10）；
+  实现只覆盖 `idle / awaiting_qr / claiming / pending_confirmation / approved / rejected / expired / consumed / failed`。
+- 完成总结卡与「进入会话列表」。
+
+### 2.5 新建会话弹层
+
+- 「将在你的电脑上启动一个 X 进程，工作目录 Y」副作用提示。
+- 结构化失败原因（凭据缺失 / Agent 启动超时 + 脱敏摘要）。
+- 已具备：Agent 选择、默认标记、无权限说明、创建中 / 终态 / 结果不确定。
+
+### 2.6 全局
+
+- **无任何样式**：无 CSS、无 Tailwind、无 `StyleSheet`，组件没有任何 `style`/`className`。
+- 无 PWA `manifest.json`、service worker、安装引导、图标。
+- 无响应式断点（移动端原型已画出，实现未做）。
+- 无 i18n（原型为 zh-CN）。
 
 ---
 
-## 5. E 原型已画、服务端尚未支撑
+## 3. 服务端缺口（PWA 连不上真机的原因）
 
-| 缺什么 | 依赖 | 原型现状 |
-|---|---|---|
-| 终端输出卡（流式 + 截断标识） | B1.6 投影 + 单条容量策略 | 未画 |
-| **elicitation 动态表单**（按 schema 生成控件、submit/decline/cancel、schema 超限降级） | B1.5 `elicitation.respond` | 未画 |
-| plan 卡片、slash 命令插入、usage 呈现 | B1.6 三类事件投影 | 未画 |
-| **命令终态卡片**（completed / failed / **uncertain**） | B1.5 幂等 + 终态事件 | 未画（uncertain 必须显眼且不被自动消解） |
-| 队列策略入口（`sessions.queue_policy` 默认 `queue`） | 服务端已支持 | 原型用单按钮屏蔽了「运行中排队发送」 |
-| 「跳到你最近的输入」胶囊 | 纯前端 | 已画 |
+### 3.1 `server::sync`（整个不存在）
 
----
+`crates/server/src/` 只有 `local_admin` / `node_link` / `transport`。因此以下全部缺失：
 
-## 6. F 尚未设计
+- `/sync/v1` WebSocket 路由与 subprotocol `acp-remote.sync.v1.json`。
+- 认证四消息（`client_hello` / `server_challenge` / `client_proof` / `authenticated`）与 `auth.*` 错误码。
+- `subscribe` + 增量重放 + `caught_up` / `reset_required`。
+- 快照组装（`sessions` / `workspaces` / `agents` 三类资源 + 分块 + `snapshotDigest`）；
+  可参照 `crates/server/src/node_link/resource.rs`。
+- 12 条 Sync 命令处理器 + 幂等记录 + `command.result` 终态（`docs/SYNC_PROTOCOL.md` §11.5）。
+- 34 类事件视图投影（`payload.view`，`schemas/sync/v1/event-views.schema.json` 的 34 个 `$defs`）
+  + `acp.rawJson` 装配 + `rawUnavailable`。
+- `limits` 下发、限流与 4429、撤销传播、授权拒绝。
+- `/sync/v1/pairing/claim` 与 `/sync/v1/pairing/status` 的 HTTP 处理器
+  （`identity-auth` 状态机已有，缺 server 侧接线）。
 
-| # | 缺什么 | 说明 |
-|---|---|---|
-| F1 | 无权限设备的「不显示新建入口」态 | 桌面端有，移动端未补 |
-| F2 | PWA 安装引导、service worker 更新提示 | `FRONTEND_DESIGN §4.4` 要求可安装 |
-| F3 | 移动端原生能力适配（SecureStore / 相机扫码 / SQLite） | 延后到原生端 |
-| F4 | 手机后台挂起与恢复体验 | `INITIAL_DESIGN §16` 未验证项 5 |
+### 3.2 `/ui` 静态资源托管
 
----
+无静态路由，也没有「前端构建版本 ↔ Daemon」的可检查关联（`FRONTEND_DESIGN §4.3` 要求）。
 
-## 7. G 流程（必须做，但不是代码）
+### 3.3 本次不需要
 
-| # | 缺什么 | 依据 |
-|---|---|---|
-| G1 | **设计结论回写** `docs/FRONTEND_DESIGN.md` | 原型已定的数十个交互，目前一条都没进权威文档 |
-| G2 | **openspec 变更提案**（C1 / C2 / C3 各自涉及 core、storage、sync、compat 四处合同） | `AGENTS.md §9` |
-| G3 | 把 `FRONTEND_DESIGN §9` 的 10 条验收标准做成可执行检查 | `FRONTEND_DESIGN §9` |
+- `server::acp_facade`：属 Zed 闭环，PWA 走 Sync。
+- `node-link-client`：PWA 直连单个 Owner Node。
 
 ---
 
-## 8. 原型功能 → 依赖（提案时按这张表切分）
+## 4. 与原型不一致、但已按权威文档决策（不是缺口）
 
-| 原型位置 | 功能 | 依赖 |
-|---|---|---|
-| 配对页 | 二维码落地、SAS 比对、18 个状态 | B1.9、B1.2、A2 |
-| 目录页 | 目录分组、每目录 3～5 条、重名显示路径尾段 | **C1**、B1.4、B1.5（`session.list`） |
-| 目录页 | `⊕ 新建会话` → 选 Agent | **C2 + C3**、B1.5 |
-| 目录详情页 | 按月分档、搜索、筛选 | C1、B1.4 |
-| 对话页 | 消息流（Markdown/代码高亮） | B1.6、B1.3 |
-| 对话页 | 思考/工具/审批折叠块 | B1.6、B1.5（`permission.resolve`） |
-| 对话页 | 上下文占比 | B1.6（`session.usage.changed`） |
-| 对话页 | 模式选择：候选由 Agent 的 `availableModes` 提供（原型 `AGENT_MODES`） | B1.5（`session.mode.list` / `session.mode.set`）+ B1.6（`session.mode.changed` 投影）；两个命令在 `compatibility/commands/v1/commands.json` 都是 `conditional_mvp`，Agent 没给候选时前端显示「未提供」，不得编造候选 |
-| 对话页 | 模型选择：候选取自 Agent 的 `category=model` 配置项（原型 `AGENT_CONFIGS`），显示 Agent 的 `name`、回传 `value` | B1.5（`session.config.list` / `session.config.set`，同为 `conditional_mvp`）+ B1.6（`session.config.changed` 投影）；`FRONTEND_DESIGN` §4.1 还要求「切换中 / 不支持」两态 |
-| 对话页 | 变更文件 + 双向联动 | B1.6（`file.changed`） |
-| 对话页 | 降级卡片（未知事件/图片未获取/原文未同步） | 存储已具备 raw 字段；需 B1.6 装配 |
-| 对话页 | 诊断抽屉 | B1.6 + A3 |
-| 顶栏 | 主机与连接面板、9 态阻断 | B1.2/B1.3、`auth.*` |
-| 顶栏 | 主题切换 | 纯前端 |
+| 项 | 原型的做法 | 实现的做法 | 依据 |
+|---|---|---|---|
+| 目录路径 | 详情页显示完整路径、目录页显示尾段 | 只显示展示名与别名，路由参数里也没有路径 | `FRONTEND_DESIGN §2.2/§4.1`、`SECURITY_DESIGN §12.3`、`pwa-web-client` 的 R15。原型的完整路径是**待决策项**，实现是对的 |
+| 会话创建入口 | 原型 README 旧文案写「本版不提供创建会话入口」 | 已实现受限创建入口（v1 内） | `FRONTEND_DESIGN §2.2` 已改为受限入口，旧文案过时 |
+| 远程会话 | 原型不涉及 | v1 不协商 `resource.remote-origin.v1` | PWA 直连 Owner，属已记录的产品边界 |
+| 队列策略 | 原型用单按钮屏蔽了「运行中排队发送」 | 同样未暴露 | 两边一致，非缺口 |
 
 ---
 
-## 9. 建议的落地顺序
+## 5. 待决策 / 尚未设计
+
+- 主题是否做成产品内开关（原型顶栏有按钮，但按 PWA 规范应跟随系统）。
+- 移动端布局与响应式断点（移动原型已画，`FRONTEND_DESIGN §9` 列为验收项）。
+- PWA 安装引导与 service worker 更新提示（`FRONTEND_DESIGN §4.4` 要求可安装）。
+- 手机后台挂起与恢复体验（`INITIAL_DESIGN §16` 未验证项 5）。
+
+---
+
+## 6. 建议的落地顺序
 
 ```text
-① 合同 C1（目录字段）        ← 目录页一切的前提
-    ② server::sync 最小闭环   ← 认证 + session.list + 快照 + 事件 + prompt/cancel + permission
- （前端可用 fixtures 并行起步，不必等 ②）
-    ③ 前端工程 A1–A7 逐步对齐原型
-    ④ 合同 C2 + C3            ← v1.1，含安全评审（设备可远程启动本机进程）
-    ⑤ C4 路径口径决策         ← 改合同 或 收回完整路径
+① 视觉与响应式层：把无样式语义标记换成真实 UI（先目录页、对话页）  ← 用户能看见的前提
+② 对话页交互闭环：prompt / cancel / permission + 乐观状态与终态呈现
+③ 对话页富内容：Markdown 渲染、结构化折叠块、变更文件与 diff
+④ 模型 / 模式选择器 + Agent chip + 上下文弹层
+⑤ server::sync + /ui                      ← 真正连上 Daemon 的前提
+⑥ 配对页交互（扫码 / SAS / 倒计时 / 状态）与主机面板补全
+⑦ PWA 安装、主题、移动端布局
 ```
 
-依赖关系上的两点提醒：
-
-1. **C1 必须早于 B1.4**：快照的 `sessions` 资源与 `session.list` 结果都要带目录，否则前端第一版就得为「没有目录的会话」写一套兼容分支。
-2. **C2/C3 建议独立变更**：它们把 PWA 的能力边界从「查看与交互已有会话」扩大到「远程启动本机进程」，安全评审与实现应分开。
-
----
-
-## 10. 需要你先决策的四件事
-
-| # | 决策点 | 现状 | 影响 |
-|---|---|---|---|
-| 1 | C4：目录绝对路径下不下发 | 原型两处不一致 | 详情页形态 + 是否要改两份权威文档 |
-| 2 | C2：设备侧创建会话是否进 v1 | 原型已画出入口 | 决定要不要做安全评审与新 feature |
-| 3 | 队列策略是否保留入口 | 原型单按钮屏蔽了排队发送 | `sessions.queue_policy` 默认 `queue` 会暂时用不上 |
-| 4 | 主题是否做成产品内开关 | 原型顶栏有按钮，但按 PWA 规范应跟随系统 | 决定这行代码留不留 |
+说明：①②③ 可以先用 `clients/app/e2e/` 的 fake host 做视觉与交互验收，不必等 ⑤；
+但**端到端可用**必须等 ⑤。
