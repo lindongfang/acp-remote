@@ -1,7 +1,7 @@
 //! 测试共用辅助：定位仓库根、读取 fixture 与矩阵。
 //!
 //! fixture 与矩阵是**仓库级合同资产**，Rust 侧只读不复制：新增用例必须登记进
-//! `fixtures/acp/v1/manifest.json` 与 `compatibility/acp/v1/matrix.json`（`AGENTS.md` §10）。
+//! `fixtures/acp/v1/manifest.json` 与 `compatibility/acp/v1/matrix.json`（`AGENTS.md` §9）。
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
