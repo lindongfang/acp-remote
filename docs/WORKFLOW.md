@@ -314,6 +314,10 @@ Web 层可参考 `clients/app/e2e/run-e2e.mjs`（真实 Chromium + CDP 的既有
 通过 `check:openspec` 只等于"资产结构合法"，不等于需求描述正确，也不等于 specs 与代码一致：
 后者由其余九道合同门禁负责。
 
+CI 侧另有一道**前端门禁**：`前端检查（clients/app）`（`.github/workflows/ci.yml`）跑
+`npm ci` + `npm run check`。它存在的原因见 `README.md` 的「合同检查」——`clients/app` 是独立 npm 工程，
+根目录的检查链不覆盖它。job 清单与必需检查状态同样以 `README.md` 为准，本节不复制。
+
 ## 9. 与其它文档的关系
 
 - **选那个 schema / 那个命令**：本节 §2。`openspec/config.yaml` 的 `context` 是项目画像，随落地刷新。

@@ -70,7 +70,7 @@ npm run verify  # 合同门禁 + fmt / clippy / test，与 CI 的 checks job 同
 
 `npm run check` 串行执行十项检查：① schema 与 fixture（ajv, Draft 2020-12，含消息类型与事件视图的覆盖门禁；本地管理通道的 envelope 是第四棵资产树，但它没有 `message.schema.json`，因此不参与消息类型覆盖门禁）；② 命令目录与本仓库封闭词表的一致性——`commands.json`、两个协议 schema、SYNC §11.5 与 SECURITY §10.2 的表格、`core::broker::required_grant` 这份 Rust 镜像（命令目录侧按 `transport` 判定 `pack`：不含 `sync` 的 Node Link-only 命令允许 `pack: null`，含 `sync` 的命令必须有 pack），以及本地管理的方法集与错误码（`LOCAL_ADMIN_PROTOCOL.md` 的方法小节与 §6 表格 ↔ `schemas/local-admin/v1/envelope.schema.json`；`local.*` 能力 ↔ `commands.json` 的 `localCapabilities`）；③ 错误码 registry；④ feature ID 词表（registry、两份协议文档与 fixture 三方一致）；⑤ 需要真正计算的资产绑定（`$ref` 与 `$id`、`rawJson` 字节与摘要、事件 `payloadDigest` 的 ACPR-CJ1 重算、transcript 固定向量重编码与畸形输入负向量）；⑥ ACP 兼容矩阵与 vendored 上游快照；⑦ 文档引用门禁（`check:docs` → `scripts/check-doc-links.mjs`：相对链接的目标文件存在、`#anchor` 命中目标文档的标题或显式锚点、指名了文档的 `§X.Y` 引用能在该文档解析；引用归属刻意保守，无法归因的只统计不判定）；⑧ crate 依赖方向门禁（`MODULE_ARCHITECTURE.md` §5 的矩阵，外加 `core` 依赖闭包的冻结 allow-list）；⑨ 合同漂移门禁（§7 的表结构 ↔ `crates/storage-sqlite/src/migrate.rs`、§5 的端口 ↔ `crates/core/src/ports.rs`）；⑩ OpenSpec 资产门禁（`check:openspec` → `scripts/check-openspec.mjs`：变更与规范的 `validate --all --strict`、项目本地 workflow schema 的结构校验、`openspec/config.yaml` 的 `schema` 是否可解析、覆写 schema 里自写 artifact 是否仍在且照搬模板与上游逐字节一致、`rules`/`operations.guidance` 的条目是否会被 YAML 静默丢弃；引擎的遥测与更新检查在此显式关闭）。
 
-CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑五个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `scripts/check-dependency-advisories.mjs`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
+CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 push、PR 与每日定时任务上跑六个 job：`checks`（`npm run check` + `npm run check:rust`，与本地 `npm run verify` 同源）、`frontend`（`clients/app` 的 `npm ci` + `npm run check`：typecheck + vitest + `expo export --platform web`；根目录的检查链不覆盖这个独立工程，见「分支保护」一节的必需检查说明）、`commits`（提交范围规范）、`deps`（`cargo-deny` 的 bans/licenses/sources 与 `scripts/check-dependency-advisories.mjs`）、`advisories`（`cargo-deny` 的 advisory 判定）、`secrets`（`gitleaks` 密钥扫描：push/PR 扫本次范围，每日定时任务扫全历史）。Linux runner 会真正执行 `#[cfg(unix)]` 的权限路径（`0700`/`0600`/模式位判定），这些在 Windows 开发机上不会跑到。
 
 `deps` 的 npm 侧判定不直接跑 `npm audit`，而经 [`scripts/check-dependency-advisories.mjs`](scripts/check-dependency-advisories.mjs)：`npm audit` 没有 ignore 机制，而仓库有一条**上游无修复**的 advisory（`braces` 的 `GHSA-vfj7-8cjw-p6xm`，受影响范围是 `*`、3.x 线最新版即被通报版本，`fixAvailable` 为 false），直接跑会让该 job 永远红灯。该脚本**按 advisory ID 放行已登记项**，未登记项与任何 `critical` 一律失败；每条豁免的理由、适用范围与到期条件写在该脚本的 `ALLOWED` 数组里。
 
@@ -92,9 +92,15 @@ CI 的判定只有在分支保护要求它时才真的能拦住合并：[`.githu
 gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name' | sort -u
 ```
 
-本仓库的五个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
+本仓库当前必需的五个是：**合同门禁 + Rust 检查**、**提交信息规范**、**依赖许可证与来源**、**密钥扫描**、
 **依赖安全公告**（最后一个是否必需按 [ADR-0008](docs/adr/0008-ci-supply-chain-tooling.md) 决策 4 判断：
 它的失败可能来自与本次改动无关的上游 advisory）。
+
+**待加入**：`前端检查（clients/app）`（2026-10-11 新增的 job）。`clients/app` 是独立 npm 工程，
+根目录的 `npm ci` 与 `npm run check` 都不覆盖它，所以这个 job 是前端唯一的机器判据——在它存在之前，
+`react-native` 大版本升级这类**必然打断 `expo export`** 的改动在 CI 上仍是全绿（两次实盘：#68、
+#69）。按下面「上线时踩到的两个坑」第 1 条，它必须先在某次 push/PR 上真实执行过一次，才会出现在
+`Add checks` 的下拉里。
 
 设置入口是仓库 Settings → Rules/Branches（`gh api -X PUT repos/<owner>/<repo>/branches/main/protection` 也适用，但 payload 形状取决于要开哪几条，建议先用界面）。核实当前状态与可用性：
 
