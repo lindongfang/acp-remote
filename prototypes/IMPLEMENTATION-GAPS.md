@@ -149,6 +149,8 @@
 | 对话页 | 消息流（Markdown/代码高亮） | B1.6、B1.3 |
 | 对话页 | 思考/工具/审批折叠块 | B1.6、B1.5（`permission.resolve`） |
 | 对话页 | 上下文占比 | B1.6（`session.usage.changed`） |
+| 对话页 | 模式选择：候选由 Agent 的 `availableModes` 提供（原型 `AGENT_MODES`） | B1.5（`session.mode.list` / `session.mode.set`）+ B1.6（`session.mode.changed` 投影）；两个命令在 `compatibility/commands/v1/commands.json` 都是 `conditional_mvp`，Agent 没给候选时前端显示「未提供」，不得编造候选 |
+| 对话页 | 模型选择：候选取自 Agent 的 `category=model` 配置项（原型 `AGENT_CONFIGS`），显示 Agent 的 `name`、回传 `value` | B1.5（`session.config.list` / `session.config.set`，同为 `conditional_mvp`）+ B1.6（`session.config.changed` 投影）；`FRONTEND_DESIGN` §4.1 还要求「切换中 / 不支持」两态 |
 | 对话页 | 变更文件 + 双向联动 | B1.6（`file.changed`） |
 | 对话页 | 降级卡片（未知事件/图片未获取/原文未同步） | 存储已具备 raw 字段；需 B1.6 装配 |
 | 对话页 | 诊断抽屉 | B1.6 + A3 |

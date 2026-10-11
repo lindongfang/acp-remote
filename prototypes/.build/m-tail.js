@@ -6,6 +6,31 @@ var HL_KW = {function:1,const:1,let:1,var:1,return:1,if:1,else:1,for:1,while:1,n
   readonly:1,void:1,switch:1,case:1,break:1,continue:1,of:1,in:1,yield:1,static:1,enum:1};
 
 function cur(){ return SESSIONS.filter(function(x){ return x.id===A.session; })[0] || SESSIONS[0]; }
+/* 当前会话的模式状态：候选列表来自该会话 Agent；当前值优先用本会话本地已选（等 `session.mode.changed` 回执前的乐观值），
+   否则是 Agent 的 `currentModeId`；两者都不在候选里就退回第一个候选，候选为空则是 null。 */
+function modeState(){
+  var base = AGENT_MODES[cur().agent] || { currentModeId:null, availableModes:[] };
+  var list = base.availableModes;
+  var id = A.modeSel[A.session] || base.currentModeId;
+  if(id !== null && !list.some(function(m){ return m.id===id; })) id = list.length ? list[0].id : null;
+  return { currentModeId:id, availableModes:list };
+}
+function modeLabel(ms){
+  var hit = ms.availableModes.filter(function(m){ return m.id===ms.currentModeId; })[0];
+  return hit ? hit.name : null;
+}
+/* 当前会话的模型选择项：候选与当前值都来自该会话 Agent；本地已选（等 `session.config.changed` 回执前的乐观值）优先。 */
+function modelState(){
+  var opt = (AGENT_CONFIGS[cur().agent] || { model:{ currentValue:null, options:[] } }).model;
+  var list = opt.options || [];
+  var value = A.modelSel[A.session] || opt.currentValue;
+  if(value !== null && !list.some(function(o){ return o.value===value; })) value = list.length ? list[0].value : null;
+  return { currentValue:value, options:list };
+}
+function modelLabel(ms){
+  var hit = ms.options.filter(function(o){ return o.value===ms.currentValue; })[0];
+  return hit ? hit.name : null;
+}
 function turnState(){
   var s=cur();
   var st = (s.id==="s1") ? A.chatScenario : s.state;
@@ -216,8 +241,8 @@ function chatPane(s){
     '<button data-tab="files" class="'+(A.tab==="files"?"on":"")+'">变更文件 ('+FILE_ORDER.length+')</button></div>';
   var composer = '<div class="composer">' + ctxWarn() +
     '<div class="chips">' + connChip() +
-      '<button class="chip-pick" data-act="mode">模式 <b>'+esc(A.mode)+'</b> ▾</button>' +
-      '<button class="chip-pick" data-act="model">模型 <b>'+esc(A.model)+'</b> ▾</button>' +
+      '<button class="chip-pick" data-act="mode">模式 <b>'+esc(modeLabel(modeState())||"未提供")+'</b> ▾</button>' +
+      '<button class="chip-pick" data-act="model">模型 <b>'+esc(modelLabel(modelState())||"未提供")+'</b> ▾</button>' +
     '</div>' +
     '<div class="inputrow"><textarea id="ta"'+(active()||isClosed()?' readonly':'')+' placeholder="'+
       (isClosed()?"会话已关闭":(active()?"进行中，完成后可继续输入":"给 Agent 发消息"))+'"></textarea>' +
@@ -539,8 +564,8 @@ function handleAct(a){
   }
   if(a==="stop"){ if(cur().id==="s1"){ A.chatScenario="idle"; $("scenSel").value="idle"; } render();
     toast("已请求取消当前 turn（等待终态事件）"); return; }
-  if(a==="mode"){ pickList("会话模式", MODES, function(v){ A.mode=v; toast("模式已切换，下一轮生效"); }); return; }
-  if(a==="model"){ pickList("选择模型", MODELS, function(v){ A.model=v; toast("模型已切换，下一轮生效"); }); return; }
+  if(a==="mode"){ pickMode(); return; }
+  if(a==="model"){ pickModel(); return; }
   if(a==="ctx"){ openSheet("host"); return; }
   if(a==="repair"){ closeSheet(); location.hash="#/pair/S4"; return; }
   if(a==="clear"){ A.clearArmed=true; paintSheet(); return; }
@@ -568,18 +593,46 @@ function handleAct(a){
       function(){ toast("复制失败：浏览器要求 HTTPS 或 localhost"); });
   }
 }
-function pickList(title, items, cb){
-  var h = '<h2 style="margin-bottom:10px">'+title+'</h2>' + items.map(function(v){
-    return '<div class="agentopt" data-pick="'+esc(v)+'"><span class="radio"></span><span>'+esc(v)+'</span></div>';
-  }).join("");
+function openPickSheet(title, headHtml, bodyHtml, onPick){
   $("sheetTitle").textContent = title;
-  $("sheetBody").innerHTML = h;
+  $("sheetBody").innerHTML = headHtml + bodyHtml;
   $("sheetBody").onclick = function(ev){
     var p = ev.target.closest("[data-pick]"); if(!p) return;
-    cb(p.dataset.pick); closeSheet(); render();
+    onPick(p.dataset.pick); closeSheet(); render();
   };
   $("sheet").classList.add("open"); $("scrim").classList.add("open");
   $("sheetClose").textContent = "取消";
+}
+function pickRows(refs, currentId){
+  return refs.map(function(r){
+    return '<div class="agentopt'+(r.id===currentId?" on":"")+'" data-pick="'+esc(r.id)+'">'+
+      '<span class="radio"></span><span>'+esc(r.name)+
+      (r.description ? '<br><span style="font-size:11.5px;color:var(--ink-3)">'+esc(r.description)+'</span>' : '')+
+      '</span></div>';
+  }).join("");
+}
+/* 会话模式：候选由 Agent 给出（`session.mode.list` 的 `availableModes`），这里只把 Agent 给的名字显示出来、
+   把选中的 `modeId` 交回去；候选为空时不编造，直接说明这个 Agent 没提供会话模式。 */
+function pickMode(){
+  var ms = modeState();
+  if(!ms.availableModes.length){ toast("这个 Agent 没有提供会话模式"); return; }
+  openPickSheet("会话模式", pickHead("会话模式"),
+    pickRows(ms.availableModes.map(function(m){ return { id:m.id, name:m.name }; }), ms.currentModeId),
+    function(id){ A.modeSel[A.session] = id;
+      toast("模式已切换到「"+modeLabel(modeState())+"」，下一轮生效"); });
+}
+/* 模型同理：候选取自 Agent 的 `category=model` 配置项，显示 Agent 的 `name`、回传 `value`。 */
+function pickModel(){
+  var ms = modelState();
+  if(!ms.options.length){ toast("这个 Agent 没有提供模型选择项"); return; }
+  openPickSheet("选择模型", pickHead("选择模型"),
+    pickRows(ms.options.map(function(o){ return { id:o.value, name:o.name, description:o.description }; }), ms.currentValue),
+    function(value){ A.modelSel[A.session] = value;
+      toast("模型已切换到「"+modelLabel(modelState())+"」，下一轮生效"); });
+}
+function pickHead(title){
+  return '<h2 style="margin-bottom:10px">'+title+'</h2>'+
+    '<p style="margin:-4px 0 10px;color:var(--ink-3);font-size:12.5px">由 Agent 提供，下一轮生效</p>';
 }
 
 /* ============ 交互与控制台 ============ */
