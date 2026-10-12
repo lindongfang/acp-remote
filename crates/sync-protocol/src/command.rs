@@ -33,7 +33,8 @@ use crate::common::{
     ValueError, deserialize_optional_non_null,
 };
 use crate::sync::{
-    SnapshotItemCapability, SnapshotItemMessage, SnapshotItemPendingInteraction, SnapshotItemTurn,
+    SnapshotItemCapability, SnapshotItemHistory, SnapshotItemMessage,
+    SnapshotItemPendingInteraction, SnapshotItemTurn,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`
@@ -273,6 +274,9 @@ pub struct SessionCreate {
 }
 
 /// `session.read.payload.include` 的元素（schema 的 `items.enum`）。
+///
+/// 取值与 schema 的 `items.enum` 逐条同序；`History` 是 Sync 面独有的结构化历史条目资源
+/// （design D11：Node Link 面的同名命令不认这个取值，其形状不变）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IncludeResource {
     /// `messages`
@@ -285,16 +289,19 @@ pub enum IncludeResource {
     ConfigOptions,
     /// `capabilities`
     Capabilities,
+    /// `history`
+    History,
 }
 
 impl IncludeResource {
     /// schema 的 `items.enum`，顺序一致。
-    pub const ALL: [IncludeResource; 5] = [
+    pub const ALL: [IncludeResource; 6] = [
         IncludeResource::Messages,
         IncludeResource::Turns,
         IncludeResource::PendingInteractions,
         IncludeResource::ConfigOptions,
         IncludeResource::Capabilities,
+        IncludeResource::History,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -304,6 +311,7 @@ impl IncludeResource {
             IncludeResource::PendingInteractions => "pending_interactions",
             IncludeResource::ConfigOptions => "config_options",
             IncludeResource::Capabilities => "capabilities",
+            IncludeResource::History => "history",
         }
     }
 }
@@ -396,17 +404,26 @@ pub struct SessionReadBefore {
 }
 
 /// `sessionRead`（`command.schema.json#/$defs/sessionRead`）的 `payload`：
-/// `{ include, before?, limit? }`。
+/// `{ include, before?, beforeHistory?, limit? }`。
 ///
-/// `before` 与 `limit` 只在 Sync 传输面生效（design D3）：`node-link-protocol` 的同名命令载荷不含
-/// 这两个键，本 crate 不镜像它们。省略 `before` 表示取最新一页；`limit` 省略时服务端用配置默认页，
-/// 超过服务端上限时服务端收敛到自己的上限而不报错，因此 schema 侧没有 `maximum`。
+/// `before`/`beforeHistory` 与 `limit` 只在 Sync 传输面生效（design D3、D11）：`node-link-protocol`
+/// 的同名命令载荷不含这些键，本 crate 不镜像它们。两套游标互不影响：`before` 翻消息页（时间与消息
+/// 标识的复合游标），`beforeHistory` 翻结构化历史条目页（会话内事件序号，十进制字符串）。省略任一
+/// 游标表示该资源取最新一页；`limit` 省略时服务端用配置默认页，超过服务端上限时服务端收敛到自己的
+/// 上限而不报错，因此 schema 侧没有 `maximum`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionRead {
     pub include: IncludeList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<SessionReadBefore>,
+    #[serde(
+        rename = "beforeHistory",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub before_history: Option<DecimalString>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<UIntAtLeast<1>>,
 }
@@ -707,7 +724,7 @@ impl CommandPayload {
             .map(CommandPayload::SessionCreate),
             CommandName::SessionRead => parse_payload(
                 payload,
-                "{ include: 资源名数组, before?: { createdAt, messageId }, limit?: >=1 }（sessionRead 的 payload）",
+                "{ include: 资源名数组, before?: { createdAt, messageId }, beforeHistory?: decimalString, limit?: >=1 }（sessionRead 的 payload）",
             )
             .map(CommandPayload::SessionRead),
             CommandName::SessionPrompt => parse_payload(
@@ -923,6 +940,12 @@ pub struct SessionReadResources {
         skip_serializing_if = "Option::is_none"
     )]
     pub capabilities: Option<Vec<SnapshotItemCapability>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub history: Option<Vec<SnapshotItemHistory>>,
 }
 
 /// `sessionReadResult`（`command.schema.json#/$defs/sessionReadResult`）：`session.read` 的完成结果。
@@ -931,6 +954,10 @@ pub struct SessionReadResources {
 ///
 /// `has_earlier` 是必填布尔值：本次返回的这一页之前是否仍有更早内容。它为 `false` 时客户端必须停止
 /// 翻页，不得把「本页为空」当作「已到最早一条」之外的任何结论。
+///
+/// [`history_has_earlier`](Self::history_has_earlier) 是可选的、与 `has_earlier` **互相独立**的页标记：
+/// 它只描述 `resources.history` 这一页之前是否仍有更早条目（design D2 的序号游标口径），既不改变
+/// `has_earlier` 的消息语义，也不被 `has_earlier` 取代。缺席时表示本次未请求 `history`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionReadResult {
@@ -939,6 +966,13 @@ pub struct SessionReadResult {
     pub resources: SessionReadResources,
     #[serde(rename = "hasEarlier")]
     pub has_earlier: bool,
+    #[serde(
+        rename = "historyHasEarlier",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub history_has_earlier: Option<bool>,
 }
 
 /// `configListResult`（`command.schema.json#/$defs/configListResult`）：`session.config.list` 的
@@ -1471,5 +1505,122 @@ mod tests {
         // 必填：缺席时不得按默认值放行——客户端无法区分「没有更早内容」与「服务端没说」。
         let missing = result("true").replace(r#","hasEarlier":true"#, "");
         assert!(serde_json::from_str::<CommandResult>(&missing).is_err());
+    }
+
+    #[test]
+    fn session_read_history_include_and_cursor_follow_the_shared_vocabulary() {
+        assert_eq!(IncludeResource::ALL.len(), 6, "include 的取值集合");
+        assert_eq!(
+            IncludeResource::History.as_str(),
+            "history",
+            "共享词表：include 新增的取值逐字是 history"
+        );
+        assert_eq!(
+            IncludeResource::from_str("history"),
+            Ok(IncludeResource::History)
+        );
+
+        let payload = |payload: &str| {
+            serde_json::from_str::<Command>(&body(
+                "session.read",
+                &format!(r#""sessionId":"{SESSION}","#),
+                payload,
+            ))
+        };
+
+        let only_history =
+            payload(r#"{"include":["history"]}"#).expect("只请求 history 必须被接受");
+        let CommandPayload::SessionRead(read) = only_history.payload else {
+            panic!("payload 必须是 SessionRead");
+        };
+        assert_eq!(read.include.as_slice().to_vec(), [IncludeResource::History]);
+        assert_eq!(
+            read.before_history, None,
+            "省略 beforeHistory 即请求最新一页"
+        );
+        assert_eq!(read.before, None, "省略 before 仍是请求最新消息页");
+
+        let both = payload(
+            r#"{"include":["messages","history"],"before":{"createdAt":"2026-09-17T12:00:00.000Z","messageId":"7c1d4e6f-8a90-4b2c-9d3e-5f6a7b8c9d0e"},"beforeHistory":"105"}"#,
+        )
+        .expect("两套游标必须能同时出现在同一请求里");
+        let CommandPayload::SessionRead(read) = both.payload else {
+            panic!("payload 必须是 SessionRead");
+        };
+        assert_eq!(
+            read.before_history.as_ref().map(|cursor| cursor.as_str()),
+            Some("105"),
+            "beforeHistory 是十进制字符串形式的会话内事件序号"
+        );
+        assert!(
+            read.before.is_some(),
+            "历史游标不得挤掉消息游标：两者各翻各自的页"
+        );
+
+        for rejected in [
+            // 会话内事件序号是十进制字符串：事件标识不是它的替身（design D2）。
+            r#"{"include":["history"],"beforeHistory":"3c7e5a91-6b2d-4c88-bd0f-8a1e2f3c4d56"}"#,
+            // 结构性计数走十进制字符串规则（§3.3）：JSON 数字与 null 都不是合法游标。
+            r#"{"include":["history"],"beforeHistory":105}"#,
+            r#"{"include":["history"],"beforeHistory":null}"#,
+            // 未登记的 include 取值不得被静默忽略；去重规则同样适用。
+            r#"{"include":["histories"]}"#,
+            r#"{"include":["history","history"]}"#,
+        ] {
+            assert!(payload(rejected).is_err(), "payload 必须被拒：{rejected}");
+        }
+    }
+
+    #[test]
+    fn session_read_result_carries_history_entries_and_a_separate_page_marker() {
+        // `historyHasEarlier` 省略（None）与取 `null` 是两件事：前者表示本次没请求 history，
+        // 后者是形状错误（字段没有 null 分支）。
+        let result = |history_has_earlier: Option<&str>| {
+            let marker = match history_has_earlier {
+                Some(value) => format!(r#","historyHasEarlier":{value}"#),
+                None => String::new(),
+            };
+            format!(
+                r#"{{"requestId":"{REQUEST}","command":"session.read","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":null,"result":{{"sessionId":"{SESSION}","resources":{{"messages":[],"history":[{{"eventId":"9c1d7a45-2f68-4b03-8e19-4a7c5d2b6f80","eventType":"tool.call.completed","sessionSequence":"103","createdAt":"2026-09-17T11:57:40.000Z","view":{{}}}}]}},"hasEarlier":false{marker}}},"error":null}}"#
+            )
+        };
+
+        let history_of = |wire: &str| {
+            let parsed: CommandResult =
+                serde_json::from_str(wire).expect("带 history 的完成结果必须接受");
+            match parsed.result.as_ref() {
+                Some(CommandResultPayload::SessionRead(payload)) => (
+                    payload.resources.history.clone(),
+                    payload.history_has_earlier,
+                    payload.has_earlier,
+                ),
+                other => panic!("completed 的 result 必须是 sessionReadResult：{other:?}"),
+            }
+        };
+
+        for (wire, expected) in [("true", true), ("false", false)] {
+            let (history, page_marker, has_earlier) = history_of(&result(Some(wire)));
+            let history = history.expect("history 必须被解析成条目数组");
+            assert_eq!(history.len(), 1, "history 的元素数");
+            assert_eq!(history[0].session_sequence.as_str(), "103", "会话内序号");
+            assert_eq!(history[0].event_type.as_str(), "tool.call.completed");
+            assert_eq!(
+                history[0].acp, None,
+                "acp 可缺席（原文不可用时也不得改形状）"
+            );
+            assert_eq!(
+                page_marker,
+                Some(expected),
+                "historyHasEarlier 两态都必须逐字承载"
+            );
+            assert!(!has_earlier, "hasEarlier 仍只描述消息分页");
+        }
+
+        let (_, page_marker, _) = history_of(&result(None));
+        assert_eq!(page_marker, None, "缺席 historyHasEarlier 即未请求 history");
+        assert!(
+            serde_json::from_str::<CommandResult>(&result(Some("null"))).is_err(),
+            "historyHasEarlier 没有 null 分支：显式 null 必须被拒"
+        );
     }
 }

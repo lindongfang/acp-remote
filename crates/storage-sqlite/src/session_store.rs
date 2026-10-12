@@ -20,6 +20,7 @@ use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Row, SqliteConnection, Transaction};
 use tokio::sync::Mutex;
 
+use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
@@ -554,12 +555,12 @@ fn turn_from_row(row: &SqliteRow) -> Result<Turn, StorageError> {
     })
 }
 
-/// 事件行的定位信息。
+/// 事件行的定位信息（**不含** payload：`CommittedEvent` 是 §3.4 冻结的只带定位的值对象，重放
+/// （`ReplayBatch.events` 的 `CommittedDelivery::Owned`）也只用它）。
 ///
-/// `payload_json`/`payload_digest`/`acp_*` 在 v1 的端口面上是**只写**的：`CommittedEvent`（以及
-/// `HistoryPage.events`/`ReplayBatch.events` 里的 `CommittedDelivery::Owned`）只承载定位信息，不带
-/// payload，而 §5.2 没有暴露任何「按事件读 payload」的方法。因此本适配器负责按 §7.3 的列与 §9.9 的
-/// 摘要规则**写入**正文，读取端由后续增量补齐（见交付报告中的合同缺口）。
+/// 正文（`payload_json`/`payload_digest`/`acp_*`）由本适配器按 §7.3 的列与 §9.9 的摘要规则写入；读取
+/// 端有两条：按事件 id 的 `ReadView::event_payload`/`session_event_payload`，以及在**同一条行**里
+/// 一并取出的 [`owned_event_from_row`]（会话历史读与 Node Link 切片，因此不需要逐条回查）。
 fn event_from_row(row: &SqliteRow) -> Result<CommittedEvent, StorageError> {
     let event = CommittedEvent {
         event_type: decode(&text(row, "event_type")?, "owned_event.event_type")?,
@@ -619,6 +620,17 @@ fn payload_from_row(row: &SqliteRow) -> Result<EventPayload, PortError> {
         .validate()
         .map_err(|_| PortError::Corrupt("stored event payload is inconsistent"))?;
     Ok(payload)
+}
+
+/// `owned_event` 的一行 → 定位 + 正文（会话历史读与 Node Link 切片共用）。
+///
+/// 两个读路径都用 `EVENT_COLUMNS` 一次取行：`payload_json` 与 ACP 五列**已经在这条行里**，这里只把
+/// 内存里的两部分拼起来，因此不存在「先取信封、再按 id 逐条取正文」的 N+1（`design.md` D4）。
+fn owned_event_from_row(row: &SqliteRow) -> Result<OwnedEventRecord, PortError> {
+    Ok(OwnedEventRecord {
+        event: event_from_row(row)?,
+        payload: payload_from_row(row)?,
+    })
 }
 
 fn command_record_from_row(row: &SqliteRow) -> Result<CommandRecord, StorageError> {
@@ -2365,6 +2377,29 @@ impl SqlReadView {
     }
 }
 
+/// 历史页条目类型谓词：`event_type IN ('turn.queued',…)`。
+///
+/// 集合取自 [`acp_core::broker::HISTORY_ENTRY_EVENT_TYPES`]（`docs/SYNC_PROTOCOL.md` §10.2.1 的 17 类）
+/// ——core 与存储**共用同一个常量**，本文件不另写一份字面量，替身 `FakeReadView` 也因此与真实存储同口径。
+/// 取值都是 core 侧常量（只有 `[a-z]` 与 `.`），直接拼进 SQL 文本即可，不需要绑定参数。
+///
+/// 真正的约束是**谓词必须与 `limit`/页标记在同一条语句里生效**：事后过滤会让 `limit + 1` 的多取与
+/// `history_has_earlier` 按未过滤的行计数，客户端会拿到空页或短页却被页标记告知「更早还有条目」，
+/// 而它按「上一页最早条目的会话内序号」续读时又没有游标可用。
+fn history_entry_predicate() -> String {
+    let mut predicate = String::from("event_type IN (");
+    for (index, event_type) in HISTORY_ENTRY_EVENT_TYPES.iter().enumerate() {
+        if index > 0 {
+            predicate.push(',');
+        }
+        predicate.push('\'');
+        predicate.push_str(event_type);
+        predicate.push('\'');
+    }
+    predicate.push(')');
+    predicate
+}
+
 #[async_trait]
 impl ReadView for SqlReadView {
     async fn head(&self) -> Result<GlobalCursor, PortError> {
@@ -2487,11 +2522,7 @@ impl ReadView for SqlReadView {
         .db()?;
         let mut events = Vec::with_capacity(rows.len());
         for row in &rows {
-            let event = event_from_row(row)?;
-            events.push(OwnedEventRecord {
-                event,
-                payload: payload_from_row(row)?,
-            });
+            events.push(owned_event_from_row(row)?);
         }
         let head_sequence: Option<i64> = sqlx::query_scalar(
             "SELECT MAX(origin_sequence) FROM owned_event WHERE session_id = ?1",
@@ -2602,7 +2633,8 @@ impl ReadView for SqlReadView {
             .map_or(0, |cursor| cursor.global_sequence.get());
         let from = storable(from)?;
         let fetch = i64::from(query.limit.events()) + 1;
-        // `messages` 是历史页的正文开关（§11.5 的 `include`）；关掉时只返回非正文的事件元数据。
+        // `messages` 是 `messages` 面的原料开关（§11.5 的 `include`）：开启时给出该会话 `after` 之后的
+        // 一页事件**连同持久化正文**——正文与定位来自同一条行（`EVENT_COLUMNS`），不逐条回查。
         let events = if query.include.messages {
             let rows = sqlx::query(&format!(
                 "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
@@ -2620,11 +2652,83 @@ impl ReadView for SqlReadView {
                 if index as u32 >= query.limit.events() {
                     break;
                 }
-                events.push(event_from_row(row)?);
+                events.push(owned_event_from_row(row)?);
             }
             events
         } else {
             Vec::new()
+        };
+        // 结构化历史条目（§11.5 的 `history` 取值，`design.md` D2/D4）：**一条查询**按会话内序号取行，
+        // 同一行里一并取出视图与 ACP 两列，因此不存在逐条取正文的 N+1。
+        //
+        // 条目集合不是「该会话所有可读事件」：`SYNC_PROTOCOL.md` §10.2.1 的 17 类之外的事件（承载消息
+        // 正文的增量与收尾、摘要/仪表类、命令终态类、连接与审计类）都不产生条目。谓词因此写在**本条
+        // 语句内**——它与 `limit + 1` 的多取、页标记出自同一次计数，事后过滤会让客户端拿到空页或短页
+        // 却被告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。
+        //
+        // 分页走已有的唯一索引 `owned_event_session(session_id, session_sequence)`：降序取 `limit + 1`
+        // 条再翻回升序，于是「省略游标 = 最新一页」与「带游标 = 紧接该游标之前的一页」共用一条语句，
+        // 多取到的那一条即页标记。`session_sequence IS NOT NULL` 是**写入端不变量**的显式复述：会话级
+        // 提交总为 `session_sequence` 绑定 `Some`（§9 判据 17），缺列的行（外部改写）不能被编一个序号
+        // 当作条目——schema 层并未强制这一点（§7.3 的成对 CHECK 只约束非会话行，且 SQLite 的 UNIQUE
+        // 视 NULL 互不相等）。
+        let before = query.before_history.as_ref().map(|cursor| cursor.get());
+        let bound = before.map(storable).transpose()?;
+        let (history, history_has_earlier) = if query.include.history {
+            let entries = history_entry_predicate();
+            let rows = sqlx::query(&format!(
+                "SELECT {EVENT_COLUMNS} FROM owned_event WHERE session_id = ?1 \
+                 AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries} \
+                 AND (?2 IS NULL OR session_sequence < ?2) \
+                 ORDER BY session_sequence DESC LIMIT ?3"
+            ))
+            .bind(query.session.as_str())
+            .bind(bound)
+            .bind(fetch)
+            .fetch_all(&mut **guard)
+            .await
+            .db()?;
+            let has_earlier = rows.len() as u32 > query.limit.events();
+            let mut history = Vec::with_capacity(rows.len().min(query.limit.events() as usize));
+            for row in rows.iter().take(query.limit.events() as usize) {
+                history.push(owned_event_from_row(row)?);
+            }
+            history.reverse();
+            // 空页 + 游标：要么游标正好指向仍可读的最早一条（合法，页标记为假、不返回占位），要么它落在
+            // 已按保留策略压缩/清理的区间——后者必须显式报保留期类错误，不得静默返回空页让调用方误以为
+            // 已到最早一条（§11.5 的「保留窗口之前显式不可读」）。非空页已经证明游标高于该下界。下界也
+            // 只按条目集合算（游标只可能来自上一页的条目）：非条目事件在游标之下不构成「仍可读的条目」。
+            if let Some(before) = before
+                && !has_earlier
+                && history.is_empty()
+            {
+                let low: Option<i64> = sqlx::query_scalar(&format!(
+                    "SELECT MIN(session_sequence) FROM owned_event WHERE session_id = ?1 \
+                     AND compacted_into IS NULL AND session_sequence IS NOT NULL AND {entries}",
+                ))
+                .bind(query.session.as_str())
+                .fetch_one(&mut **guard)
+                .await
+                .db()?;
+                let expired = match low {
+                    Some(value) => {
+                        before
+                            < u64::try_from(value).map_err(|_| {
+                                StorageError::Corrupt("session_sequence window bound is negative")
+                            })?
+                    }
+                    // 可读窗口内一条都没有：任何游标都指向已不可读的区间。
+                    None => true,
+                };
+                if expired {
+                    return Err(PortError::InvalidRequest(
+                        "history cursor precedes the retained window",
+                    ));
+                }
+            }
+            (history, has_earlier)
+        } else {
+            (Vec::new(), false)
         };
         let turns = if query.include.turns {
             let rows = sqlx::query(&format!(
@@ -2678,10 +2782,10 @@ impl ReadView for SqlReadView {
         let next = if events.len() as u32 == query.limit.events()
             && let Some(last) = events.last()
         {
-            if last.global_sequence.get() < head.global_sequence.get() {
+            if last.event.global_sequence.get() < head.global_sequence.get() {
                 Some(GlobalCursor::new(
                     self.server_epoch.clone(),
-                    last.global_sequence,
+                    last.event.global_sequence,
                 ))
             } else {
                 None
@@ -2692,6 +2796,8 @@ impl ReadView for SqlReadView {
         Ok(HistoryPage {
             session: summary,
             events,
+            history,
+            history_has_earlier,
             turns,
             interactions,
             // 活体数据由用例层合并（`HistoryPage` 的文档注释）：持久层不保存 config/capabilities。

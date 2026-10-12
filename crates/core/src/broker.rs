@@ -146,6 +146,39 @@ pub fn required_grant(command: &str) -> Option<&'static str> {
 /// 组合根用 [`persistence_policy`] 在 sink 包装层做内存转发，broker 在组装前把它们过滤掉（§6.11）。
 pub const EPHEMERAL_EVENT_TYPES: &[&str] = &["device.typing", "session.presence"];
 
+/// 进入**会话结构化历史条目**的事件类型（`SYNC_PROTOCOL.md` §10.2.1 的「进入历史条目的 17 类」，
+/// 逐条照抄该表）。该表同时登记了不进入的 17 类：承载消息正文的（`*.message.delta` 与收尾正文
+/// `agent.message.completed`）、摘要/仪表类（`session.created`/`session.updated`/`session.info.changed`/
+/// `session.usage.changed`/`session.commands.changed`/`session.origin.online_changed`）、命令终态类
+/// （`command.completed`/`command.failed`/`command.uncertain`）、连接与审计类（`agent.connected`/
+/// `agent.disconnected`/`device.revoked`/`turn.delta_compacted`）。
+///
+/// §10.2.1 是唯一口径来源：该表变化时必须改这里，并由 `crates/storage-sqlite/tests/session_history.rs`
+/// 的用例把本表与文档的两张表逐条对齐（本表是机器可见的唯一定义，消费方**不得**另写一份字面量）。
+///
+/// 两个消费方必须同口径：`storage-sqlite` 的历史页 SELECT（谓词与 `limit`/页标记在**同一条语句**里
+/// 生效——事后过滤会让页标记按未过滤的行计数，客户端会拿到空页或短页却被告知「更早还有条目」，而它按
+/// 「上一页最早条目的会话内序号」续读时没有游标可用）与 `test_support` 的 `FakeReadView::read_session`。
+pub const HISTORY_ENTRY_EVENT_TYPES: &[&str] = &[
+    "turn.queued",
+    "turn.started",
+    "turn.completed",
+    "turn.cancelled",
+    "turn.failed",
+    "tool.call.started",
+    "tool.call.updated",
+    "tool.call.completed",
+    "permission.requested",
+    "permission.resolved",
+    "elicitation.requested",
+    "elicitation.resolved",
+    "terminal.output",
+    "file.changed",
+    "session.plan.changed",
+    "session.mode.changed",
+    "session.config.changed",
+];
+
 /// 事件类型的持久策略（`INITIAL_DESIGN.md` §10.1–§10.3）。未登记取值一律 `Durable`——
 /// `SYNC_PROTOCOL.md` §10.2 要求未登记事件降级处理而**不得静默丢弃**。
 pub fn persistence_policy(event_type: &EventType) -> PersistencePolicy {
@@ -2816,7 +2849,9 @@ impl Broker {
                         pending_interactions: false,
                         config_options: false,
                         capabilities: false,
+                        history: false,
                     },
+                    before_history: None,
                     after: None,
                     limit: ReplayLimit::new(512),
                 })
@@ -2851,7 +2886,7 @@ impl Broker {
                     workspace_alias: None,
                 }));
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
-                events.extend(self.backfill_completed(&*view, &page, turn.id()).await?);
+                events.extend(self.backfill_completed(&page, turn.id()).await?);
             }
             events.push(pending_event(
                 "command.uncertain",
@@ -2901,22 +2936,20 @@ impl Broker {
 
     /// §6 第 14/16 条：从库里重建该 turn 缺失的 `agent.message.completed`。
     ///
-    /// 只认 `agent.message.delta` 的事件类型（`agent.thought.delta` 不产生 completed），正文一律取自
-    /// `ReadView::event_payload`；已有 `completed` 的 messageId 不重复补写。
+    /// 只认 `agent.message.delta` 的事件类型（`agent.thought.delta` 不产生 completed），正文直接取自
+    /// 读视图返回的记录（`HistoryPage.events` 的元素自带持久化正文，不逐条回查）；已有 `completed` 的
+    /// messageId 不重复补写。
     async fn backfill_completed(
         &self,
-        view: &dyn ReadView,
         page: &HistoryPage,
         turn: &TurnId,
     ) -> Result<Vec<PendingEvent>, PortError> {
         let mut fragments: HashMap<String, Vec<DeltaFragment>> = HashMap::new();
         let mut completed: Vec<MessageId> = Vec::new();
-        for history in &page.events {
-            let payload = match view.event_payload(&history.id).await? {
-                Some(payload) => payload,
-                None => continue,
-            };
-            match history.event_type.as_str() {
+        for record in &page.events {
+            let event = &record.event;
+            let payload = &record.payload;
+            match event.event_type.as_str() {
                 "agent.message.delta" => {
                     if let Some(fragment) = delta_fragment(&payload.view) {
                         let belongs = json_members(payload.view.as_str())
@@ -3062,6 +3095,7 @@ impl Broker {
                 turns: true,
                 ..HistoryInclude::default()
             },
+            before_history: None,
             after: None,
             limit: ReplayLimit::new(64),
         };
@@ -3268,6 +3302,7 @@ impl Broker {
                 pending_interactions: true,
                 ..HistoryInclude::default()
             },
+            before_history: None,
             after: None,
             limit: ReplayLimit::new(64),
         };
@@ -5361,10 +5396,58 @@ pub(crate) mod test_support {
                     .events
                     .iter()
                     .filter(|event| event.session.as_ref() == Some(&query.session))
-                    .cloned()
+                    .filter_map(|event| {
+                        state
+                            .event_payloads
+                            .get(event.id.as_str())
+                            .cloned()
+                            .map(|payload| OwnedEventRecord {
+                                event: event.clone(),
+                                payload,
+                            })
+                    })
                     .collect()
             } else {
                 Vec::new()
+            };
+            // 结构化历史条目：与真实存储同口径——按会话内序号升序，缺省给最新一页，游标只取严格更早
+            // 的条目，页标记表示更早的条目是否仍在（关掉 include 时按真实存储一样一次都不查）。
+            // 条目集合取 [`HISTORY_ENTRY_EVENT_TYPES`]（`SYNC_PROTOCOL.md` §10.2.1 的 17 类，与真实存储
+            // 共用同一常量）：不进入条目的事件既不出现在页里，也不占页大小与页标记。
+            //
+            // 本替身是世界状态，没有保留期/压缩模型：因此不存在「游标早于仍可读下界」这一失败路径
+            // （§5.2/判据 33 ⑥ 由 `storage-sqlite` 的适配器与其用例固定），也不跳过任何行。
+            let (history, history_has_earlier) = if query.include.history {
+                let mut readable: Vec<CommittedEvent> = state
+                    .events
+                    .iter()
+                    .filter(|event| event.session.as_ref() == Some(&query.session))
+                    .filter(|event| event.session_sequence.is_some())
+                    .filter(|event| HISTORY_ENTRY_EVENT_TYPES.contains(&event.event_type.as_str()))
+                    .filter(|event| {
+                        let sequence = event.session_sequence;
+                        query.before_history.as_ref().is_none_or(|cursor| {
+                            sequence.is_some_and(|sequence| sequence < *cursor)
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                readable.sort_by_key(|event| event.session_sequence);
+                let keep = query.limit.events() as usize;
+                let start = readable.len().saturating_sub(keep);
+                let mut history = Vec::new();
+                for event in &readable[start..] {
+                    let Some(payload) = state.event_payloads.get(event.id.as_str()).cloned() else {
+                        continue;
+                    };
+                    history.push(OwnedEventRecord {
+                        event: event.clone(),
+                        payload,
+                    });
+                }
+                (history, start > 0)
+            } else {
+                (Vec::new(), false)
             };
             let turns = if query.include.turns {
                 state
@@ -5390,6 +5473,8 @@ pub(crate) mod test_support {
             Ok(HistoryPage {
                 session: session.summary(self.world.workspace_ref(&state, &query.session)),
                 events,
+                history,
+                history_has_earlier,
                 turns,
                 interactions,
                 config: Vec::new(),
@@ -7582,7 +7667,9 @@ mod tests {
                 pending_interactions: true,
                 config_options: false,
                 capabilities: false,
+                history: false,
             },
+            before_history: None,
             after: None,
             limit: ReplayLimit::default(),
         }))
@@ -7617,6 +7704,74 @@ mod tests {
         assert!(
             payload.view.as_str().contains(interaction.as_str()),
             "正文里的 interactionId 必须与交互行一致"
+        );
+    }
+
+    /// §5.2 + `SYNC_PROTOCOL.md` §10.2.1：`read_session` 的历史条目只取条目集合内的事件类型——替身与
+    /// 真实存储共用 [`HISTORY_ENTRY_EVENT_TYPES`]（本 crate 里**唯一**的定义），这里固定替身确实施加了
+    /// 该谓词：转写消息正文的 `agent.message.delta` 既不进条目也不占页，工具调用进。
+    #[test]
+    fn fake_history_page_drops_events_outside_the_entry_types() {
+        let harness = Harness::new(BrokerConfig::default());
+        let delta_view = format!(
+            r#"{{"messageId":"{}","deltaIndex":"0","text":"hi"}}"#,
+            uuid_text(700)
+        );
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(EventKind::Delta, "agent.message.delta", &delta_view),
+            endpoint_event(
+                EventKind::Structured,
+                "tool.call.started",
+                r#"{"toolCallId":"c1","title":"Run","state":"pending"}"#,
+            ),
+        ]));
+        assert!(matches!(
+            harness.submit_prompt(1, 'A'),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        let written: Vec<String> = harness
+            .world
+            .events(&harness.session)
+            .into_iter()
+            .map(|event| event.event_type.as_str().to_owned())
+            .collect();
+        assert!(
+            written.iter().any(|event| event == "agent.message.delta"),
+            "正文增量必须落盘（`messages` 面的原料）：{written:?}"
+        );
+        assert!(written.iter().any(|event| event == "tool.call.started"));
+
+        let read_view = block_on(harness.broker.read_view()).expect("read view");
+        let page = block_on(read_view.read_session(HistoryQuery {
+            session: harness.session.clone(),
+            include: HistoryInclude {
+                history: true,
+                ..HistoryInclude::default()
+            },
+            before_history: None,
+            after: None,
+            limit: ReplayLimit::new(64),
+        }))
+        .expect("read");
+        let entries: Vec<&str> = page
+            .history
+            .iter()
+            .map(|record| record.event.event_type.as_str())
+            .collect();
+        assert!(
+            entries
+                .iter()
+                .all(|event_type| HISTORY_ENTRY_EVENT_TYPES.contains(event_type)),
+            "条目只能来自 §10.2.1 的 17 类：{entries:?}"
+        );
+        assert!(
+            entries.contains(&"tool.call.started"),
+            "工具调用必须成为条目：{entries:?}"
+        );
+        assert!(
+            !entries.contains(&"agent.message.delta"),
+            "承载消息正文的增量不得成为条目：{entries:?}"
         );
     }
 

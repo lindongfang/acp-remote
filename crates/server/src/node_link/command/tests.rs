@@ -452,6 +452,8 @@ impl acp_core::ports::ReadView for CommandStore {
         Ok(HistoryPage {
             session: summary,
             events: Vec::new(),
+            history: Vec::new(),
+            history_has_earlier: false,
             turns: Vec::new(),
             interactions: Vec::new(),
             config: Vec::new(),

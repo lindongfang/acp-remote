@@ -186,8 +186,9 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `resource.remote-origin.v1` | imported 资源来源承载（§9.6：`ownerNodeId`/`exportId`/origin cursor/`online`） | mvp | 否 |
 | `core.local-catalog.v1` | 本机 workspace 目录与 Agent profile 随快照下发（§9.4 的 `workspaces`/`agents` 资源、§10.3 的 `workspaceRef`/`agentCatalogEntry`），以及 `SessionSummary` 的可选 `workspace` 字段；`session.create` 的选择器由它供数 | mvp | 否 |
 | `core.session-create.v1` | Sync 面 `session.create`（§11.5 的 `{ workspaceAlias, agentId }` payload 与 `completed { sessionId, session }` 终态结果） | mvp | 否 |
+| `core.session-history.v1` | Sync 面按会话读取结构化历史条目：§11.5 的 `include` 取值 `history`、`beforeHistory` 序号游标与结果里的 `history`/`historyHasEarlier`，条目类型集合见 §10.2、明细资源口径见 §9.4 | mvp | 否 |
 
-- 本表的七个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的八个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
@@ -780,7 +781,7 @@ workspaces
 agents
 ```
 
-五类 session-scoped 明细资源 `messages`、`turns`、`pending_interactions`、`config_options`、`capabilities` **MUST NOT 进入快照**，无论会话的 `origin.kind` 是 `local` 还是 `remote`——本节此前只对 imported 会话作此豁免，现已收窄为全部会话，口径与 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4「正文绝不入快照」一致。会话明细一律由 `session.read` 在线按复合游标分页取得（见第 11.5 节），快照因此只随会话**条数**增长，与消息总量无关。`resource` 取这五个值之一的 chunk 按 `protocol.schema_invalid` 拒绝。
+六类 session-scoped 明细资源 `messages`、`turns`、`pending_interactions`、`config_options`、`capabilities`、`history` **MUST NOT 进入快照**，无论会话的 `origin.kind` 是 `local` 还是 `remote`——本节此前只对 imported 会话作此豁免，现已收窄为全部会话，口径与 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4「正文绝不入快照」一致。会话明细一律由 `session.read` 在线按会话内序号或复合游标分页取得（见第 11.5 节），快照因此只随会话**条数**增长，与消息总量无关。`resource` 取这六个值之一的 chunk 按 `protocol.schema_invalid` 拒绝——它不在 `$defs/snapshotResource` 的封闭词表内，`sync.snapshot_chunk` 因此没有 `history` 这种资源可下发（结构化历史条目同样只在客户端按会话在线读取时下发）。
 
 设备无权读取的字段和资源不得进入 snapshot。
 
@@ -794,10 +795,11 @@ Snapshot item 的最低 schema：
 | `pending_interactions` | `interactionId`, `sessionId`, `kind`, `state`, `schema`, `createdAt`；**只经 `session.read` 返回，不进快照** |
 | `config_options` | `sessionId`, `configOptions`, `version`；**只经 `session.read` 返回，不进快照** |
 | `capabilities` | `sessionId`, `agentCapabilities`, `brokerAdditions`；**只经 `session.read` 返回，不进快照** |
+| `history` | `eventId`, `eventType`, `sessionSequence`, `createdAt`, `view`；`acp` 可选（`rawAcp` 的原文或不可用说明）；**只经 `session.read` 返回，不进快照** |
 | `workspaces` | `alias`, `displayName`；受 feature `core.local-catalog.v1` 门控 |
 | `agents` | `agentId`, `displayName`, `default`；受 feature `core.local-catalog.v1` 门控 |
 
-`agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。上表中标为「不进快照」的五类元素形状由 `session.read` 的结果直接复用（`command.schema.json#/$defs/sessionReadResult.resources` 引用同一批 `snapshotItem.*` 定义），因此会话明细只有一套值对象，不得为快照与回源发明两套语义。
+`agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。上表中标为「不进快照」的六类元素形状由 `session.read` 的结果直接复用（`command.schema.json#/$defs/sessionReadResult.resources` 引用同一批 `snapshotItem.*` 定义），因此会话明细只有一套值对象，不得为快照与回源发明两套语义。
 
 `workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。目录元素只含本表列出的字段——本机规范化路径（`canonicalPath` 及其任何分段）MUST NOT 出现在快照、摘要或任何对端可见输出中（见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 12.3 节）。已登记但没有任何会话的 workspace 仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。`workspaces`/`agents` 的读取归在既有 `session.list` scope（`pack.observe`）之下，与会话列表同一屏；本次不新增 scope。
 
@@ -997,6 +999,35 @@ device.revoked
 ```
 
 本节列表是 v1 登记的标准事件类型集合，与 [`schemas/sync/v1/event-views.schema.json`](../schemas/sync/v1/event-views.schema.json) 的 `$defs` 一一对应；每个类型的最低 `view` 字段见第 10.3 节。未登记的 ACP 判别子仍按第 10.3 节的映射与降级规则处理，不得静默丢弃。
+
+#### 10.2.1 哪些类型进入会话结构化历史条目
+
+`session.read` 的 `include: ["history"]`（第 11.5 节）返回的条目**复用事件的 `view` 形状**，因此这里登记的是「上面这 34 类里，哪些会产生条目」。这个集合是**时间线语义**的判断——服务器按它决定条目，不因某个客户端没有对应卡片而改变；「客户端有专用视图」的另一套集合由客户端自己维护（[FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) §6）。
+
+进入历史条目的 17 类：
+
+| 进入历史条目的事件类型（17 类） | 条目在时间线上承载什么 |
+|---|---|
+| `turn.queued` / `turn.started` / `turn.completed` / `turn.cancelled` / `turn.failed` | 一轮的生命周期与终态（失败时带终态错误） |
+| `tool.call.started` / `tool.call.updated` / `tool.call.completed` | 工具调用步骤；同一 `toolCallId` 的多条按会话内序号排列，归并留给消费方 |
+| `permission.requested` / `permission.resolved` | 权限请求与它的结果 |
+| `elicitation.requested` / `elicitation.resolved` | 提问与回答 |
+| `terminal.output` | 终端输出分片 |
+| `file.changed` | 文件变更统计与相对化路径（**不含**差异正文，第 10.3 节） |
+| `session.plan.changed` | 计划变化 |
+| `session.mode.changed` | 模式切换 |
+| `session.config.changed` | 配置项变化 |
+
+不进入的 17 类，按理由分四组：
+
+| 不进入历史条目的事件类型（17 类） | 为什么 |
+|---|---|
+| `user.message.delta` / `agent.message.delta` / `agent.thought.delta` / `agent.message.completed` | 承载消息正文：正文的权威只在 `messages`，同一段正文有两份来源会打架；`agent.message.completed` 是收尾正文，同样不产生条目 |
+| `session.created` / `session.updated` / `session.info.changed` / `session.usage.changed` / `session.commands.changed` / `session.origin.online_changed` | 摘要与仪表类：`SessionSummary`、`ModeState`、用量与可达性标注已有专门承载，条目里再来一份只是复制 |
+| `command.completed` / `command.failed` / `command.uncertain` | 命令终态：由 `command.result` 与 `command.status` 承担，条目里重复会让同一事实有两个来源 |
+| `agent.connected` / `agent.disconnected` / `device.revoked` / `turn.delta_compacted` | 连接与审计类：不是会话时间线上用户要读的内容 |
+
+**已按保留策略压缩的事件不产生条目**：`compacted_into IS NOT NULL` 的行既不进历史也不可读（与第 11.5 节的保留窗口口径一致）。因此 `agent.thought.delta` 没有收尾事件，压缩后即消失——**思考内容不承诺出现在历史里**，历史条目里的思考只有在该 delta 仍在保留期内且未被压缩时才可能作为条目出现。这是如实口径，不是实现可以补齐的缺口。
 
 ### 10.3 v1 Event View Contract
 
@@ -1283,7 +1314,7 @@ local.audit.export
 | Command | 类别 | `sessionId` | Payload | 成功结果/终态 |
 |---|---|---|---|---|
 | `session.list` | query | 禁止 | `{}` | `completed { sessions: SessionSummary[] }` |
-| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities`；Sync 面另接受可选 `before`（复合游标）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier`；imported 会话回源 Owner |
+| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；imported 会话回源 Owner |
 | `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
 | `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |
@@ -1302,7 +1333,7 @@ local.audit.export
 
 `session.create` 端到端能力由 feature `core.session-create.v1` 协商：未选中时服务端按 §4.2/§12.2 返回 `protocol.feature_required`，不得静默接受。`workspaceAlias` 与 `agentId` 的可选来源（目录页与 Agent 选择器）由 `core.local-catalog.v1` 的快照资源供数；两者都是**引用**，规范化路径、目录追加与凭据任何情况下都不得出现在 wire、缓存或错误 `details` 中。
 
-`session.read` 是会话明细的唯一入口（第 9.4 节：五类明细资源不进快照），因此它在 Sync 面带分页参数：
+`session.read` 是会话明细的唯一入口（第 9.4 节：六类明细资源不进快照），因此它在 Sync 面带分页参数：
 
 - **`before` 是由消息创建时间与消息标识复合而成的游标**，`{ createdAt, messageId }`，两个键都必需。服务端 MUST 按 `createdAt` 升序返回一页，并在同一 `createdAt` 的多条消息之间给出稳定且可重复的次序（以 `messageId` 作 tie-breaker），使相邻两页不重不漏。`createdAt` 是 Daemon 持久化时间（第 10.2 节），不是客户端时间。
 - **排序 MUST NOT 依赖 `messageId` 的数值或字典序**（第 3.3 节「排序不得依赖 UUID」）。`messageId` 只在同一创建时刻内部定序；消息标识的数值次序与创建时间次序不一致时，结果仍按创建时间给出。
@@ -1313,9 +1344,18 @@ local.audit.export
 - **到达最早一条时**结果给出 `hasEarlier: false`，且不返回空占位；客户端据此停止翻页。
 - **保留窗口之前的游标显式不可读**：请求的 `before` 早于该节点对与会话消息的保留窗口、且更早的消息已按保留策略清理时，服务端返回 `sync.cursor_invalid`（`details.reason = "cursor_expired"`），MUST NOT 静默返回更少的元素让客户端误以为已到最早一条。
 
-`SessionReadResult` 的 `resources` 每个键都可缺席，但 `hasEarlier` 是必填布尔值，指示本次返回的这一页之前是否仍有更早内容；它缺席即形状错误，客户端不得默认成 `false`。
+结构化历史条目（`include` 含 `history`）走**同一命令、独立的一套游标与页标记**（design D2），因此上面关于消息的规则都不因它而改变：
 
-**分页只作用于 Sync 面**（design D3）：`before` 与 `limit` 只在 `schemas/sync/v1/command.schema.json` 生效。`schemas/node-link/v1/command.schema.json` 与 `crates/node-link-protocol` 的同名命令 DTO 不含这两个键，行为与本变更前完全一致——按既有形状发起、不带任何分页参数的 Node Link 调用方照常返回该会话明细，MUST NOT 因缺少分页参数被拒绝。代价是同一个命令名在两个协议下的载荷形状不同：Node Link 侧的正文有 `no-content-cache` 硬约束（第 12.4 节），Access 侧根本不保留正文，不需要分页。
+- **`beforeHistory` 是会话内事件序号**（十进制字符串，提交时分配，天然单调唯一）。它与消息的 `{ createdAt, messageId }` 复合游标是两套字段：同一请求可以同时给出两者，各自翻各自的页，任一方都不改变另一方的页边界；`limit` 是本次请求里**每一页各自**的单页上限，不把两页合并计数。
+- **条目按会话内序号升序返回**，省略 `beforeHistory` 时返回最新一页；客户端用这一页最早一条的 `sessionSequence` 作为下一次的 `beforeHistory`，得到紧接在它之前的一页，不重不漏。**到达最早一条时** `historyHasEarlier: false`，且不返回空占位。
+- **游标不可由其它标识代替**：`beforeHistory` 只接受十进制序号，事件标识（`eventId`）不是它的替身，服务端 MUST NOT 猜测或补全。请求的游标早于该节点对结构化事件的保留窗口、且更早条目已按保留策略清理时，同样返回 `sync.cursor_invalid`（`details.reason = "cursor_expired"`），MUST NOT 静默返回更少的条目让客户端误以为已到最早一条。
+- **条目与实时事件同形**：每条携带 `eventId`、`eventType`、`sessionSequence`、`createdAt` 与结构化 `view`，以及按 `acp.raw-payload.v1` 协商结果出现的 `acp`（原文逐字节保真；因单条上限、保留期或存储原因不可用时按已登记原因标记为不可用，不得用占位内容冒充）。`view` 是开放对象：协议未定义的扩展字段原样下发。哪些事件类型产生条目见第 10.2 节。
+- **未协商 `core.session-history.v1` 时不下发**：客户端未通过 feature 协商该能力却请求了 `history` 时，服务端按第 4.2/12.2 节返回明确的不支持类错误，MUST NOT 静默忽略该 include 后返回看似完整的空结果。
+- **历史条目只包含结构化事件**：承载消息正文的事件（`user.message.delta`/`agent.message.delta`/`agent.thought.delta`/`agent.message.completed`）不作为条目下发——消息正文的权威只在 `messages`；已按保留策略压缩或清理的事件同样不产生条目，也不以空条目占位（完整清单见第 10.2 节）。
+
+`SessionReadResult` 的 `resources` 每个键都可缺席，但 `hasEarlier` 是必填布尔值，指示本次返回的这一页**消息**之前是否仍有更早内容；它缺席即形状错误，客户端不得默认成 `false`。只描述结构化历史条目那一页的同名结论由**可选**的 `historyHasEarlier` 承担：两者互相独立，`historyHasEarlier` 的缺席表示本次没有请求 `history`，它也不改变 `hasEarlier` 的消息语义。
+
+**分页只作用于 Sync 面**（design D3、D11）：`before`、`beforeHistory`、`history` 这个 include 取值与 `limit` 只在 `schemas/sync/v1/command.schema.json` 生效。`schemas/node-link/v1/command.schema.json` 与 `crates/node-link-protocol` 的同名命令 DTO 不含这些键与取值，行为与本变更前完全一致——按既有形状发起、不带任何分页参数的 Node Link 调用方照常返回该会话明细，MUST NOT 因缺少分页参数被拒绝，也 MUST NOT 因出现 Sync 面的取值或字段而改变形状或失败。代价是同一个命令名在两个协议下的载荷形状不同：Node Link 侧的正文有 `no-content-cache` 硬约束（第 12.4 节），Access 侧根本不保留正文，不需要分页，也不提供结构化历史条目。
 
 `ModeState` 是 ACP `SessionModeState` 的公开投影：`currentModeId` 可为 `null`，`availableModes` 的每一项是 `ModeRef { modeId, displayName }`。`SessionConfigOptionView` 定义见第 10.3 节，`session.config.set` 的 `value` 必须是该 option 当前 `type` 允许的取值（`select` 用 `string`，`boolean` 用 boolean）。
 

@@ -318,6 +318,53 @@ pub struct CommitOutcome {
     pub replayed: Option<IdempotentReplay>,
 }
 
+pub struct HistoryInclude {
+    pub messages: bool,
+    pub turns: bool,
+    pub pending_interactions: bool,
+    pub config_options: bool,
+    pub capabilities: bool,
+    /// 结构化历史条目（`SYNC_PROTOCOL.md` §11.5 的 `history` 取值）：开启时 `HistoryPage.history` 给出
+    /// 该会话的一页条目，关闭时它为空。空只由本开关决定，不代表「该会话没有历史」。
+    pub history: bool,
+}
+
+pub struct HistoryQuery {
+    pub session: SessionId,
+    pub include: HistoryInclude,
+    /// `messages` 面的分页起点：只返回该 cursor 之后的事件；`None` = 从头。
+    pub after: Option<GlobalCursor>,
+    /// 结构化历史条目的分页游标：**会话内**事件序号（§11.5 的 `beforeHistory`），只返回会话内序号
+    /// **严格小于**它的条目；`None` = 最新一页。取值只能来自上一页最早条目的 `session_sequence`；
+    /// 早于该会话仍可读条目的下界（行已被压缩/清理）时实现返回 `InvalidRequest`。
+    pub before_history: Option<Sequence>,
+    pub limit: ReplayLimit,
+}
+
+/// owned 事件 + 其持久化正文：定位与正文严格同源（同一条行 / 同一次读视图），调用方不需要逐条再取一次。
+pub struct OwnedEventRecord {
+    pub event: CommittedEvent,
+    pub payload: EventPayload,
+}
+
+pub struct HistoryPage {
+    pub session: SessionSummary,
+    /// `messages` 面的原料：`after` 之后的一页事件（**含持久化正文**），按 `global_sequence` 升序。
+    pub events: Vec<OwnedEventRecord>,
+    /// 结构化历史条目（**含持久化正文**），按 `session_sequence` 升序；`include.history` 为假时为空。
+    pub history: Vec<OwnedEventRecord>,
+    /// `history` 之前是否仍有更早条目（§11.5 的 `historyHasEarlier`）；关闭 `history` 时恒为假。
+    pub history_has_earlier: bool,
+    pub turns: Vec<Turn>,
+    pub interactions: Vec<PendingInteraction>,
+    pub config: Vec<ConfigOption>,
+    pub capabilities: Option<CapabilitySet>,
+    /// 本页数据对应的一致性视图 head（barrier）。
+    pub head: GlobalCursor,
+    /// 续读游标（只服务 `events`）；`None` = 已到 `head`。
+    pub next: Option<GlobalCursor>,
+}
+
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError>;
@@ -348,6 +395,11 @@ pub trait SessionStore: Send + Sync {
 pub trait ReadView: Send + Sync {
     async fn head(&self) -> Result<GlobalCursor, PortError>;
     async fn replay(&self, after: Option<GlobalCursor>, limit: ReplayLimit) -> Result<ReplayBatch, PortError>;
+    /// 会话的一页读（`session.read`）：`messages` 面的事件原料与结构化历史条目各自按 `include` 开关分页
+    /// （`after` 与 `before_history` 互不影响）。两个集合都必须**带持久化正文**、且正文与定位来自同一条
+    /// 行——实现一次取行（`payload_json` 与 ACP 列同批取出），MUST NOT 为逐条事件再取一次正文
+    /// （`design.md` D4）。结构化历史条目按**会话内序号**分页（省略游标 = 最新一页；只跳过已压缩的行；
+    /// 游标早于仍可读条目的下界时返回 `InvalidRequest`，不是更少的条目）。
     async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError>;
     /// 取回一条 owned 事件的持久化正文——重放、`sync.snapshot_*` 与 `PendingInteraction.options`
     /// 补全的唯一入口（复用 core 既有 `EventPayload`/`AcpRaw`，不新增类型）。
@@ -394,6 +446,7 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` **`StateChange::Update` 新增三个可空列**（§3.6 的 `agent_session_id`/`workspace_cwd` 与承载 §3.1 `WorkspaceRef` 的 `workspace_alias`）：`None` = 不改该列。它们只在 `create_session` 里、`SessionBackendFactory::create` 成功返回后**紧接着**的一次提交写入（§6 第 20 条）——`agent_session_id` 取 `SessionEndpoint::agent_session_id()`，`workspace_cwd` 取 core 自己已解析的 `ResolvedWorkspace::canonical_path()`，`workspace_alias` 取**同一次解析**用掉的别名原文 `ResolvedWorkspace::alias()`（三者都不依赖后端回报）；`agent_session_id()` 为 `None` 时三列都不写，该会话不被当作可恢复会话，目录归属也就是「未分组」。**不**等适配层的终态提交：终态提交会 bump 版本，会让回归给 Access 的 `sessionMeta.version` 与落盘值错开，且终态入口拿不到 core 解析的 cwd。写入之后这三列**只读**：恢复流程只经 `load_recovery` 读其中两列，MUST NOT 覆写，MUST NOT 读或写 `workspace_alias`（`design.md` D1 的归属来源 + D2 的契约订正）。**`title` 是两层可选**（`sync-scope-and-pwa-client` 变更 WP3 新增）：`Option<Option<String>>` —— `None` = 不改该列、`Some(None)` = **显式置空**（写入 `NULL`）、`Some(Some(text))` = 写入该标题（上限 512 字符）。上面「`None` = 不改该列」的单层口径**覆盖不了**置空这第三个状态，因此存储层的 `CASE WHEN ?x IS NULL` 之外必须再叠一条**哨兵参数**判定来表达「本次提交要置空」；置空与其余列共用**同一条** `UPDATE`，故版本递增（`version = version + 1`）与 `updated_at = commit.at` 对两条路径一致。该字段的语义、唯一来源（Agent 的 `session_info_update` 经 broker 投影出的 `session.info.changed`，**不存在**客户端重命名入口）与失败关闭口径见 §6 第 21 条。
 - `[决定]` **目录归属的投影来源只有持久化的别名**：`SessionStore::list`（以及 `ReadView` 中返回摘要的 `read_session`/`node_link_slice`）给出的 `SessionSummary.workspace` 必须由 `owned_session.workspace_alias` 关联 `owned_workspace` 的展示名得出——该 JOIN 留在同时拥有两张表的存储实现内部，不上浮到 core。MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，「不反查」才能保证同一别名重指向后老会话的归属不漂移、投影期不引入对别名解析表的隐式耦合（`design.md` D1/D6，`workspace-resolution` 的创建时持久化要求）。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
+- `[决定]`（`pwa-conversation-ui` D2/D4）**会话历史读的元素带持久化正文、按会话内序号分页**：`HistoryPage.events`（`messages` 面的原料，`after`/`next` 的全局 cursor 升序）与 `HistoryPage.history`（结构化历史条目，`before_history`/`history_has_earlier`）都由既有 `OwnedEventRecord` 承载——**正文与定位来自同一条行**，实现在一次取行里一并取出 `payload_json` 与 ACP 五列（`acp_media_type`/`acp_raw_json`/`acp_byte_length`/`acp_sha256`/`acp_raw_unavailable_reason`），MUST NOT 为逐条事件再调 `ReadView::event_payload`（N+1）。原文不可用时按行里的 `acp_raw_unavailable_reason` 还原为 `AcpRaw::Unavailable`（与 `event_payload` 同规则，摘要不因原文被清掉而丢失）。历史条目按 `owned_event.session_sequence` 取行，走的正是已有的唯一索引 `owned_event_session(session_id, session_sequence)`——**本次不新增索引、不改 §7**；省略游标 = 最新一页、带游标 = 严格更早的一页、只跳过 `compacted_into IS NOT NULL` 的行（已压缩事件不产生条目、也不占位），且**只取条目集合内的事件类型**——集合是 `SYNC_PROTOCOL.md` §10.2.1 的 17 类（该表同时登记了不进入的 17 类：消息正文与其收尾、摘要/仪表类、命令终态类、连接与审计类），由存储查询以 `event_type IN (...)` 与 `limit`/`history_has_earlier` 在**同一条语句**里施加：事后过滤会让页大小与页标记按未过滤的行计数，客户端会拿到空页或短页却被 `historyHasEarlier` 告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。集合只定义一次（`HISTORY_ENTRY_EVENT_TYPES`），`storage-sqlite` 与 core 的读视图替身共用它，不各写一份字面量。游标早于该会话仍可读**条目**的下界时返回 `InvalidRequest`（保留窗口之前显式不可读，MUST NOT 静默少返回让调用方误以为已到最早一条）。`HistoryInclude.history` 只决定该集合是否下发，两个集合在同一次请求里各自分页、互不影响（`SYNC_PROTOCOL.md` §11.5）。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
 
 ### 5.3 信任、Export、审计与附件
@@ -850,7 +903,7 @@ pub trait IdGenerator: Send + Sync {
     - 解析：走 `OwnedCommit.state.interaction`（`InteractionResolved { interaction, resolution, resolved_by }`）——**不是** `SessionStore` 的独立方法，因此「行更新 + `*.resolved` 事件 + 命令终态」仍在 `commit` 的单次事务边界内。`SessionEndpoint::resolve_interaction` 只负责把决定交给后端。
     - 仲裁顺序（不可交换）：先条件更新落盘仲裁 → 再派发后端 → 最后 flush 后端发出的 `*.resolved` 事件。受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` → `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
     - 崩溃窗口：上面三步之间崩溃会留下「交互行已终态、`*.resolved` 事件未落盘」。重试同一条命令返回 `AlreadyResolved` 且**不**二次派发；UI 以交互行（`HistoryInclude.pending_interactions`）恢复，不依赖事件流补齐。该窗口是本轮接受的取舍（消除它需要「解析意向」行或两阶段提交，见 §10）。
-    - `options` **不落库**（`owned_interaction` 无该列）：读视图里 `PendingInteraction.options` 恒为空。还原路径是事件流（`replay`/`read_session` 返回的 `CommittedEvent` 带 `id`），再用 `ReadView::event_payload(id)` 取那条 `interaction` 事件的正文并解析候选项（§5.2）；不要拿 `request_event`（它是 `global_sequence`）直接当 `event_payload` 的参数。
+    - `options` **不落库**（`owned_interaction` 无该列）：读视图里 `PendingInteraction.options` 恒为空。还原路径是事件流（`replay` 返回的 `CommittedEvent` 带 `id`；`read_session` 返回的 `events`/`history` 元素直接带持久化正文），再用 `ReadView::event_payload(id)` 取那条 `interaction` 事件的正文并解析候选项（§5.2）；不要拿 `request_event`（它是 `global_sequence`）直接当 `event_payload` 的参数。
 14. `[决定]` **助手消息的收尾正文**（`SYNC_PROTOCOL.md` §10.2 的 `agent.message.completed`）：turn 进入终态（`completed`/`cancelled`/`failed`）时，broker 必须为**该 turn 内出现过 `agent.message.delta` 的每个 `messageId`** 生成恰好一条 `agent.message.completed`，并与该 turn 的终态事件在**同一次 `commit`** 内提交（因此它对重放与快照恒可见）。规则：
     - `content` 由该消息的 delta **按 `deltaIndex` 升序**折叠而成：连续的文本 delta 合并为**一个** `{type:"text", text}` 块（文本按序拼接）；带 `block` 字段的 delta（非文本内容，由适配器投影，见 `SYNC_PROTOCOL.md` §10.2）按顺序插入对应块。
     - 正文**只来自 delta 的 view**：broker 不解析 ACP 原文（core 不依赖 ACP DTO，§2），非文本内容的投影是**生产端（适配器）**的义务；`block` 缺失时该 delta 只贡献文本，**不得**由 broker 猜测类型。
@@ -1223,6 +1276,7 @@ CREATE TABLE owned_provider_ref (
 - `[决定]` `compacted_into` 指向**替代它的 summary 事件**的 `global_sequence`（与 `request_event` 同一惯例）；`compacted_into IS NOT NULL` 的行是容量清理 ③ 的第一批候选，且重放里由 summary 事件替代（§6 第 15 条）。
 - `[决定]` `owned_attachment.attachment_id` 是写入时由 `AttachmentStore::put` 分配（实现可选随机 UUID，也可选由 sha256 派生的确定性 id）、持久化并随 `AttachmentRef.id` 返回的显式列；`get` 由该列 O(1) 命中，不再按 sha256 前缀重算后扫描。sha256 仍承担内容去重；`IdGenerator` 不参与（同一个 id 只能有一个来源）。
 - `[决定]` `acp_raw_unavailable_reason` 表达「保留期/容量清理掉原文但保留 view」的合法状态（`SYNC_PROTOCOL.md` §10.1 的 `rawUnavailable.reason`）。
+- `[决定]`（`pwa-conversation-ui` WP2）**会话历史读复用本节的 `owned_event_session` 唯一索引，本次不改 §7**：按 `session_sequence` 取一页条目走的就是这个索引（`session_id = ? AND session_sequence < ?` + 反向扫描即可），因此不需要新增索引、不需要 migration，本节 DDL 与本轮之前的字节完全相同。查询形状与「一次取行连正文」的要求见 §5.2 的对应 `[决定]`。
 - `[决定]` `payload_digest` 必须等于对 `payload_json` 施 **ACPR-CJ1**（`SYNC_PROTOCOL.md` §3.3）后的 SHA-256（§9 判据 9）。**前像不是库里那串字节**：`payload_json` 按 §9 判据 16 原样保留调用方字节（不重排键），因此摘要必须由写入方**先规范化再哈希**；唯一写入者是存储层，`payload_digest` 由存储层用共享实现 `acpr-wire` 的 ACPR-CJ1 从 `payload_json` 重算，**不接受调用方提供**（否则一个非法摘要会被落库，跨节点复算与 imported 去重都会失配）。`acpr-wire` 的实现必须与 `scripts/check-contract-assets.mjs` 的参考实现在同一批 fixture 上逐值一致。
 
 ### 7.4 `imported_*` 表（无正文）
@@ -1411,6 +1465,7 @@ CREATE TABLE imported_import_export (
 30. **管理记录的终态与单调性**（§11.1、§11.2 第 4/5 条、§5.2/§5.3 约束、§7.4）：① `put_export` 对已撤销的 Export 不得清除 `revoked_at`——传入未撤销记录 → `Conflict(AlreadyExists)` 且该行逐列不变，传入 `revoked_at` 非空记录 → `InvalidRequest` 且零写入（含零审计）；② 完整移除 Import 后，携带该 `(ownerNodeId, exportId)` 的 `upsert_session` 与 `commit_receipt` 都返回 `NotFound(Export)`，`imported_session`/`imported_delivery_index`/`imported_command_ref` 保持为空且不推进 `local_sequence`；③ `owned_peer_key`/`owned_pairing_peer`/`owned_device` 中任一行 `fingerprint` 与同行 `public_key` 的派生值不一致时，对应读取路径（设备记录含单读与列表读）返回 `PortError::Corrupt` 且不返回材料；④ `last_seen_at`/`last_connected_at` 在「旧值为空」「新值更早」「新值为空」三种边界下都不丢值、不倒退，且不使调用失败或丢弃同写集的其他字段。
 31. **§10.3 的 view 身份与版本**（§6 第 19 条）：① 适配器视图不含 `turnId` 时，落盘 view 与 `owned_event.turn_id` 都等于 core 的权威 turn，且该 view 除新增的**一个前置成员**外逐字节不变（含未知字段、嵌套结构；ACP 原文 `raw_json`/`sha256`/`byte_length` 不变）；② 会话级或无归属事件不出现 `turnId`；未列入 §10.3 的类型（如 `terminal.output`）不新增该字段；③ 视图已带 `turnId` 且取值一致 → 字节不变且只出现一次，取值不一致 → `InvalidRequest` 且该批零落盘、零发布、turn 状态不变；④ 含 `session.mode.changed`/`session.config.changed` 的提交：无 `StateChange` 时注入当前版本且不递增，含 `StateChange` 时注入递增后的版本，两者都必须等于存储层返回值；存储返回不一致 → 不发布且不报成功；⑤ 幂等重放的 view 与首次落盘逐字节相同且不二次注入；⑥ 适配器 `prompt` 返回任意值（含全零占位）都不产生第二个 turn 行，也不改变归属。
 32. **节点信任记录的 `exportIds` 清单**（本文件 §3.5、§7.2、§7.3、§11.6 第 4 条、§6 第 5 条，`LOCAL_ADMIN_PROTOCOL.md` §5.4，`NODE_LINK_PROTOCOL.md` §8.2）：① 清单校验在 `settle_pairing` 的**同一事务内**完成——`exportId` 不存在或已撤销 → `NotFound(EntityRef::Export)`，其 `scopes` 与本次 `granted_grants` 无交集 → `InvalidRequest`，空集合合法且不查任何 Export 行；任一类失败整事务回滚（零信任行、配对状态不推进、零审计）；② 节点行清单的读写在去重 + 字典序归一化后往返一致，空集合固定落盘为 `'[]'`（`owned_node.export_ids_json`）；③ 可见性要求三个条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`）**同时**成立；清单为空的节点看不到任何 Export，即使其 `scopes` 与 `grants` 相交；④ core 的 **Owner 侧授权判定**（§6 第 5 条）必须与可见性**同口径**：清单为空、或目标 Export 不在该节点 `exportIds` 清单内时，即使 `export.scopes ∩ grants ≠ ∅`，该 Export 的会话命令也**不可用**（拒绝或失败关闭，不得降级放行）——与 catalog 看不到它的结论一致；⑤ `export.revoke` **不**级联清理清单条目——条目原样保留，重新 `export.create` 得到的新 `exportId` 不因旧条目而可见。
+33. **会话历史读（带正文、按会话内序号分页）**（本文件 §5.2 的对应 `[决定]`、§7.3；`design.md` D2/D4，`SYNC_PROTOCOL.md` §11.5）：① `include.history` 打开时 `HistoryPage.history` 按 `session_sequence` **升序**给出一页条目，省略游标 = 最新一页、带游标 = 严格更早的一页：以上一页最早条目的序号为游标续读**不重不漏**（两页交集为空、并集连续），以仍可读的最早条目为游标时页标记 `historyHasEarlier` 为假且不返回空占位，同一游标 + 同一 `limit` 重复读结果**完全相同**；② `include.history` 关闭时该集合为空且页标记恒为假；`events` 仍只受 `include.messages` 与 `after` 控制，两者在同一请求里互不改变对方的返回内容；③ 条目**自带持久化正文**：`view` 与库内 `payload_json` 逐字节相同（不重新序列化）、ACP 可用时字节保真、不可用时按行内 `acp_raw_unavailable_reason` 与同行摘要还原；「只查一遍库」（页内每个元素的正文都来自同一次取行，逐条回查 `event_payload` 的实现不合格）由**调用路径检视**判定，行为用例固定的是正文与库内字节的逐字节相等；④ `compacted_into IS NOT NULL` 的行不出现在条目里（也不占位、不计入页标记）；⑤ 原文被清理过的行给出 `AcpRaw::Unavailable` 并带 `acp_raw_unavailable_reason` 已登记的原因与同行摘要；⑥ 游标早于该会话仍可读条目的下界时返回 `InvalidRequest`（`SYNC_PROTOCOL.md` §11.5 的「保留窗口之前显式不可读」），不得静默返回更少的条目。
 
 ## 10. 未决项
 
