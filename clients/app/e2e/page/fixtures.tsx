@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import type { SessionSummary, WorkspaceRef } from "../../src/protocol";
 import DirectoriesRoute from "../../app/index";
 import DirectoryDetailRoute from "../../app/dir/[alias]";
+import HostsRoute from "../../app/hosts";
 import SessionRoute from "../../app/session/[id]";
 import type { RouteEntry } from "./router-stub";
 import type { StagedResources } from "../../src/sync-client";
@@ -63,6 +64,14 @@ export function sessionSummary(input: {
   readonly title?: string;
   /** 会话自身的时间（`createdAt`/`updatedAt` 同值）；缺省 2026-10-01T00:00:00.000Z。 */
   readonly updatedAt?: string;
+  /**
+   * 会话来源；缺省本机自有（`{kind:"local"}`，与既有调用一字不差）。
+   *
+   * 来源为其它节点的会话用来断言「结构化历史在客户端显式降级」「草稿只在内存、输入不被标记为已发送」
+   * ——那两条判定都以 `origin.kind === "remote"` 为前提（`conversation-model.ts` 的
+   * `structuredHistoryAvailability` 与 `conversationCapabilities`）。
+   */
+  readonly origin?: SessionSummary["origin"];
 }): SessionSummary {
   const at = input.updatedAt ?? "2026-10-01T00:00:00.000Z";
   return {
@@ -70,7 +79,7 @@ export function sessionSummary(input: {
     title: input.title ?? `会话 ${input.id.slice(-2)}`,
     agent: { agentId: "codex-a", name: "codex" },
     state: input.state,
-    origin: { kind: "local" },
+    origin: input.origin ?? { kind: "local" },
     currentMode: null,
     version: "1",
     createdAt: at,
@@ -126,6 +135,15 @@ export function sessionsForBothDirectories(): readonly SessionSummary[] {
 /** 目录页路由。 */
 export const DIRS_ROUTE: RouteEntry = { path: "/", component: DirectoriesRoute as RouteComponent, params: {} };
 
+/**
+ * 主机与连接页路由（`app/hosts.tsx`）。
+ *
+ * 节点级降级事件（没有 `sessionId` 的 `device.revoked` 等）的唯一出口就在这一面的
+ * `data-node-degraded-entry` 列表上：不把这一页挂起来，「协议已知但客户端没有专用视图」的
+ * **节点级**事件有没有出口就无法被断言。
+ */
+export const HOSTS_ROUTE: RouteEntry = { path: "/hosts", component: HostsRoute as RouteComponent, params: {} };
+
 /** 目录详情路由。 */
 export function dirRoute(alias: string): RouteEntry {
   return {
@@ -161,14 +179,18 @@ export const DIRECTORY_ROUTES: readonly RouteEntry[] = [dirRoute("alpha"), dirRo
  *
  * `globalSequence` 必须**严格递增且大于屏障**，否则会被去重账本判成回退/重复而丢弃——
  * 那会让降级卡片凭空消失，用例变成「断言了一个从未投递的事件」。
+ *
+ * `sessionId` 为 `null` 表示**节点级**事件（如 `device.revoked`）：它们没有会话时间线可挂，
+ * 只能落在主机/连接面的节点级降级列表。`createdAt` 缺省与既有调用一字不差。
  */
 export function wireEvent(input: {
   readonly globalSequence: number;
   readonly eventId: string;
-  readonly sessionId: string;
+  readonly sessionId: string | null;
   readonly eventType: string;
   readonly view?: Record<string, unknown>;
   readonly acp?: Record<string, unknown>;
+  readonly createdAt?: string;
 }): Record<string, unknown> {
   const payload: { view: Record<string, unknown>; acp?: Record<string, unknown> } = {
     view: input.view ?? {},
@@ -188,7 +210,7 @@ export function wireEvent(input: {
       causationRequestId: null,
       origin: { kind: "agent", deviceId: null },
       remoteOrigin: null,
-      createdAt: "2026-10-01T00:00:02.000Z",
+      createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",
       payload,
     },
   };
@@ -197,4 +219,125 @@ export function wireEvent(input: {
 /** `session.read` 的空页应答（让会话页的线程有内容，避免把线程错误误当成降级问题）。 */
 export function emptyReadResult(sessionId: string): Record<string, unknown> {
   return { sessionId, resources: { messages: [] }, hasEarlier: false };
+}
+
+/** `session.read` 里的一条消息（wire 形状：`snapshotItem.messages`）。 */
+export function readMessage(input: {
+  readonly messageId: string;
+  readonly sessionId: string;
+  readonly role: "user" | "agent";
+  readonly text: string;
+  readonly createdAt: string;
+  readonly turnId?: string | null;
+}): Record<string, unknown> {
+  return {
+    messageId: input.messageId,
+    sessionId: input.sessionId,
+    role: input.role,
+    content: [{ type: "text", text: input.text }],
+    status: "completed",
+    createdAt: input.createdAt,
+    turnId: input.turnId ?? null,
+  };
+}
+
+/**
+ * 一条结构化历史条目（wire 形状：`snapshotItem.history`）。
+ *
+ * 与实时事件的 `body.payload` 同形（`view` 走同一个解析入口）：因此时间线上的「同一条目」
+ * 在实时与历史两条来源下真的只是同一份数据的两种来源。
+ */
+export function historyItem(input: {
+  readonly eventId: string;
+  readonly eventType: string;
+  readonly sessionSequence: number;
+  readonly createdAt: string;
+  readonly view: Record<string, unknown>;
+  readonly acp?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const item: Record<string, unknown> = {
+    eventId: input.eventId,
+    eventType: input.eventType,
+    sessionSequence: String(input.sessionSequence),
+    createdAt: input.createdAt,
+    view: input.view,
+  };
+  if (input.acp !== undefined) item.acp = input.acp;
+  return item;
+}
+
+/** 一个待处理交互（wire 形状：`snapshotItem.pending_interactions`）；它**没有**可选项。 */
+export function pendingInteraction(input: {
+  readonly interactionId: string;
+  readonly sessionId: string;
+  readonly kind: "permission" | "elicitation";
+  readonly createdAt: string;
+  readonly schema?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    interactionId: input.interactionId,
+    sessionId: input.sessionId,
+    kind: input.kind,
+    state: "pending",
+    schema: input.schema ?? {},
+    createdAt: input.createdAt,
+  };
+}
+
+/** 一个配置项（wire 形状：`configOptionView`）；`category: "model"` 的那一项即模型分节的来源。 */
+export function configOption(input: {
+  readonly id: string;
+  readonly name: string;
+  readonly currentValue: string;
+  readonly category?: string;
+  readonly choices?: readonly { readonly value: string; readonly name: string }[];
+}): Record<string, unknown> {
+  return {
+    id: input.id,
+    name: input.name,
+    description: null,
+    category: input.category ?? "model",
+    type: "select",
+    currentValue: input.currentValue,
+    ...(input.choices === undefined
+      ? {}
+      : { options: input.choices.map((choice) => ({ value: choice.value, name: choice.name, description: null })) }),
+  };
+}
+
+/**
+ * `session.read` 的一页应答（wire 形状：`sessionReadResult`）。
+ *
+ * 只写出用例用到的资源键：`resources.*` 的每个键都可缺席，缺席即「这次没要那一份」。
+ * `config_options` 是**数组**（`snapshotItem.config_options`），元素里再带 `configOptions`。
+ */
+export function readPage(input: {
+  readonly sessionId: string;
+  readonly messages?: readonly Record<string, unknown>[];
+  readonly history?: readonly Record<string, unknown>[];
+  readonly pendingInteractions?: readonly Record<string, unknown>[];
+  readonly configOptions?: readonly Record<string, unknown>[];
+  readonly configVersion?: string;
+  readonly hasEarlier?: boolean;
+  readonly historyHasEarlier?: boolean;
+}): Record<string, unknown> {
+  const resources: Record<string, unknown> = { messages: input.messages ?? [] };
+  if (input.history !== undefined) resources.history = input.history;
+  if (input.pendingInteractions !== undefined) resources.pending_interactions = input.pendingInteractions;
+  if (input.configOptions !== undefined) {
+    resources.config_options = [
+      {
+        sessionId: input.sessionId,
+        configOptions: input.configOptions,
+        version: input.configVersion ?? "1",
+      },
+    ];
+  }
+  const page: Record<string, unknown> = {
+    sessionId: input.sessionId,
+    resources,
+    hasEarlier: input.hasEarlier ?? false,
+  };
+  if (input.historyHasEarlier !== undefined) page.historyHasEarlier = input.historyHasEarlier;
+  return page;
 }

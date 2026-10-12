@@ -57,6 +57,26 @@ const HOST_CHALLENGE_TAG = {
 /** 客户端看到的连接标识；固定一条，便于断言出站命令的 `connectionId`。 */
 const CONNECTION_ID = "3c9f1b6e-6a41-4a2e-9a1c-2f0a5b7d9e13";
 
+/**
+ * 服务端在 `auth.server_challenge` 里**选中**的 feature。
+ *
+ * `core.event-ack.v1` 是既有取值（ACK 面的用例依赖它）；`core.session-history.v1` 是本次
+ * 变更新登记的非必需 feature，**必须**在这里选中才有意义：客户端只在服务端选中它时
+ * 才给 `session.read` 带上 `history` include（`client-store.ts` 的 `#includesFor`）。
+ * 只选 `core.event-ack.v1` 时每次读取都只取消息，结构化历史条目永远来不到页面，
+ * 「重开页面仍见历史条目」因此**不可能**被断言——那是 feature 门控的直接后果，不是用例写法问题。
+ *
+ * 选中它是安全的：transcript 与报文里的 `selectedFeatures` 都取自本常量，
+ * 客户端用**报文里**的那份重建 transcript 验签（`connection.ts` 的 `#onServerChallenge`）。
+ */
+const SERVER_SELECTED_FEATURES: readonly string[] = ["core.event-ack.v1", "core.session-history.v1"];
+
+/** 非 `session.read` 命令的缺省应答结果（与本次变更前的取值逐字一致）。 */
+const DEFAULT_COMMAND_RESULT: Record<string, unknown> = { sessionId: "dddddddd-0000-4000-8000-0000000000ff" };
+
+/** 假主机给每条命令的「服务端接受时刻」（`command.result.acceptedAt`，与本次变更前逐字一致）。 */
+const ACCEPTED_AT = "2026-10-01T00:00:01.000Z";
+
 /** 主机快照的固定 epoch：与 `src/sync-client/testing/harness.ts` 的夹具同口径。 */
 const SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
 
@@ -129,6 +149,15 @@ export interface FakeHostOptions {
   readonly events: readonly Record<string, unknown>[];
   /** `session.read` 的应答结果；缺省返回空页。 */
   readonly readResult: (sessionId: string) => Record<string, unknown>;
+  /**
+   * 要**扣住**不应答的命令名（用例据此观察「未收到终态」的呈现）。
+   *
+   * 缺省（未给或空数组）与既有行为完全一致：任何命令都立即回一条 `command.result`。
+   * 指定后这些命令的帧只登记不回答，由用例调 {@link FakeHost.completeHeldCommand} 决定终态——
+   * 「提交不等于完成」「取消以终态为准」这两条只有在能**不下发**终态时才谈得上被证伪
+   * （立即回 `completed` 的假主机让所有提交一发出就变「已完成」，两条 MUST NOT 都不可观测）。
+   */
+  readonly holdCommands?: readonly string[] | undefined;
 }
 
 /** 已配对主机记录（写进本地缓存的那一份，只含公开材料）。 */
@@ -199,6 +228,9 @@ export class FakeHost {
 
   #handlers: SocketHandlers | null = null;
   #closed = false;
+  /** 被扣住、尚未应答的命令帧（按发出次序；见 {@link FakeHostOptions.holdCommands}）。 */
+  #resultCounter = 0;
+  #held: CommandFrame[] = [];
 
   constructor(options: FakeHostOptions, identity: FakeHostIdentity) {
     this.options = options;
@@ -285,11 +317,18 @@ export class FakeHost {
 
     const command = bodyOf(message, "command");
     if (command !== null) {
-      this.#sendCommandResult({
+      const frame: CommandFrame = {
         requestId: requiredString(command, "requestId"),
         command: requiredString(command, "command"),
         sessionId: typeof command["sessionId"] === "string" ? command["sessionId"] : "",
-      });
+      };
+      // 扣住用例点名的命令：只登记不应答，终态交给 `completeHeldCommand`。
+      // `session.read` 永不扣——页面首帧就靠它，扣住只会让每条用例都超时，而不是断言到什么。
+      if (frame.command !== "session.read" && this.options.holdCommands?.includes(frame.command) === true) {
+        this.#held.push(frame);
+        return;
+      }
+      this.#sendCommandResult(frame);
       return;
     }
 
@@ -310,7 +349,7 @@ export class FakeHost {
 
   async #onClientHello(hello: { readonly deviceId: string; readonly clientNonce: string }): Promise<void> {
     const serverNonce = crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>;
-    const selectedFeatures = ["core.event-ack.v1"];
+    const selectedFeatures = SERVER_SELECTED_FEATURES;
     const transcript = encodeTranscript(HOST_CHALLENGE_DOMAIN, [
       { tag: HOST_CHALLENGE_TAG.protocolVersion, bytes: encodeU16be(1) },
       { tag: HOST_CHALLENGE_TAG.hostId, bytes: encodeUuid16(this.identity.hostId) },
@@ -452,25 +491,81 @@ export class FakeHost {
   }
 
   #sendCommandResult(command: CommandFrame): void {
-    const result =
-      command.command === "session.read"
-        ? this.options.readResult(command.sessionId)
-        : { sessionId: "dddddddd-0000-4000-8000-0000000000ff" };
+    this.#deliverResult(command, {
+      status: "completed",
+      result: command.command === "session.read" ? this.options.readResult(command.sessionId) : DEFAULT_COMMAND_RESULT,
+      acceptedAt: ACCEPTED_AT,
+      error: null,
+    });
+  }
+
+  /**
+   * 对最早一条被扣住的 `command` 下发 `command.result`（终态由用例决定）。
+   *
+   * 返回 `false` 表示没有该命令的待答帧：那时用例的断言应当已经失败，不是静默通过。
+   * 同一条命令可以先回 `accepted` 再回 `completed`——`accepted` 不是终态，
+   * 「未确认接受前不得显示已接受」因此可以用**同一 requestId** 的前后两步来断言。
+   */
+  completeHeldCommand(
+    command: string,
+    outcome: {
+      readonly status?: "accepted" | "completed" | "failed" | "rejected" | "uncertain";
+      readonly result?: Record<string, unknown>;
+      readonly error?: Record<string, unknown> | null;
+    } = {},
+  ): boolean {
+    const index = this.#held.findIndex((frame) => frame.command === command);
+    if (index < 0) return false;
+    const frame = this.#held[index];
+    if (frame === undefined) return false;
+    // `accepted` **不是**终态：同一 requestId 还会再收到回落。此时保留被扣的帧，
+    // 否则第二次 `completeHeldCommand` 找不到它、终态永远回不来（CP-4 的观测窗口就是这么塌的）。
+    const terminal = outcome.status !== undefined && outcome.status !== "accepted";
+    if (terminal) this.#held.splice(index, 1);
+    const status = outcome.status ?? "completed";
+    this.#deliverResult(frame, {
+      status,
+      result: outcome.result ?? DEFAULT_COMMAND_RESULT,
+      // `wire.ts` 要求非 `rejected` 的 `command.result` 必带 `acceptedAt` 时间戳；
+      // `rejected` 必须为 `null` 且带结构化 error。假主机不在这里制造协议违规。
+      acceptedAt: status === "rejected" ? null : ACCEPTED_AT,
+      error:
+        status === "rejected"
+          ? (outcome.error ?? { code: "capability.unsupported_by_agent", message: "假主机拒绝", retryable: false, details: {} })
+          : (outcome.error ?? null),
+    });
+    return true;
+  }
+
+  /** 投递一条 `command.result`（终态字段由调用方给出）。 */
+  #deliverResult(
+    command: CommandFrame,
+    fields: {
+      readonly status: string;
+      readonly result: Record<string, unknown>;
+      readonly acceptedAt: string | null;
+      readonly error: Record<string, unknown> | null;
+    },
+  ): void {
+    // 每条 `command.result` 是**独立**的一帧：`messageId` 必须唯一。
+    // 同一命令先回 `accepted` 再回 `completed` 时若复用同一个 `messageId`，
+    // 第二帧会被当作重复信封丢掉，「只有终态才算完成」就无从断言。
+    this.#resultCounter += 1;
     this.#deliver(
       JSON.stringify({
         protocolVersion: 1,
         type: "command.result",
-        messageId: "bbbbbbbb-1111-4111-8111-0000000000c1",
+        messageId: `bbbbbbbb-1111-4111-8111-${this.#resultCounter.toString().padStart(12, "0")}`,
         connectionId: CONNECTION_ID,
         connectionSequence: "1",
         body: {
           requestId: command.requestId,
           command: command.command,
-          status: "completed",
-          acceptedAt: "2026-10-01T00:00:01.000Z",
+          status: fields.status,
+          acceptedAt: fields.acceptedAt,
           terminalEventId: null,
-          result,
-          error: null,
+          result: fields.result,
+          error: fields.error,
         },
       }),
     );

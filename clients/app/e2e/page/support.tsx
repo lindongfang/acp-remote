@@ -33,8 +33,10 @@ const PAIRED_HOST_KEY_PREFIX = "paired-host/";
 /** 用例统一的规范化来源；`https` 形状满足 `$defs.canonicalOrigin`。 */
 export const CANONICAL_ORIGIN = "https://127.0.0.1:1";
 
-// 路由替身里的 `mountRoute` 由本模块转出：用例只需要一个入口去驱动页面。
-export { mountRoute } from "./router-stub";
+// 路由替身里的 `mountRoute` / `navigate` 由本模块转出：用例只需要一个入口去驱动页面。
+// `navigate` 与页面里的 `useRouter().push` 走同一条路径查找，因此「离开某一页再回来」
+// 不需要用例自己重挂组件树（那会换掉 store，验的不是同一件事）。
+export { mountRoute, navigate } from "./router-stub";
 
 /** 固定主机标识：断言「连接用的是预置的那把钥匙」时需要它。 */
 export const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
