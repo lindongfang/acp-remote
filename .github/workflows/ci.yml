@@ -151,11 +151,18 @@ jobs:
         # `npm audit` 只读 package-lock.json，不需要 `npm ci`；指定 Node 版本是因为
         # audit 的判定语义随 npm 版本变化，不想依赖 runner 当时的默认 npm。
         #
-        # `npm audit` 没有 ignore 机制，而仓库当前有一条**上游无修复**的 advisory
-        # （`braces` 的 GHSA-vfj7-8cjw-p6xm，受影响范围是 `*`，3.x 线最新版即被通报版本）。
+        # 判定范围是**两个** npm 工程：仓库根与 `clients/app`（后者是自带 `package.json` 与
+        # `package-lock.json` 的独立工程，根目录的 `npm ci` 与 `npm run check` 都不覆盖它）。
+        # 脚本对每个工程各跑一次 audit 再合并判定，失败输出标明是哪个工程出的问题。
+        # 这正是本次扩展范围的原因：只审仓库根时，`clients/app` 锁文件上的告警没有任何必需
+        # 检查能做机器判定，只能靠人偶然点开 security 页才会被发现。
+        #
+        # `npm audit` 没有 ignore 机制，而 `braces` 的 GHSA-vfj7-8cjw-p6xm **上游无修复**
+        # （受影响范围是 `*`，3.x 线最新版即被通报版本）且同时命中两个工程的锁文件。
         # 直接跑 audit 会让本 job 永远红灯、每次合并都走管理员 bypass——那比这条 DoS 更危险。
-        # `scripts/check-dependency-advisories.mjs` 按 **advisory ID** 放行已登记项，
-        # 未登记项与任何 critical 一律失败；豁免的理由与到期条件写在该脚本的 `ALLOWED`。
+        # `scripts/check-dependency-advisories.mjs` 按 **(advisory ID, 工程)** 双匹配放行已登记项，
+        # 因此一个工程登记的豁免不会顺带放行另一个工程的同号 advisory；未登记项与任何
+        # `critical` 一律失败，豁免的理由与到期条件逐条写在该脚本的 `ALLOWED`。
         run: node scripts/check-dependency-advisories.mjs
 
   advisories:

@@ -137,6 +137,36 @@ action」。这条约束在实践中有两个问题：
      自带模板（只保留能给出理由的键）写成的，**首次真实执行发生在 CI**。这条同样适用于 `.gitleaks.toml`。
   6. 门禁数量与 CI job 数量不再有单一数字定义：`README.md` 说明「顺序以 `package.json` 的
      `check` 脚本为准」，新增门禁时必须同时更新 `package.json`、`AGENTS.md` §9、`README.md` 与 CI 注释。
+  7. **`deps` 的 npm 侧判定原先只覆盖仓库根，`clients/app` 的告警没有机器判定**（2026-10-12 修正）。
+     `clients/app` 是独立 npm 工程（自带 `package.json` 与 `package-lock.json`），根目录的 `npm ci` 与
+     根检查链都不覆盖它，而 GitHub 上当时 4 条 open 告警**全部**挂在 `clients/app/package-lock.json`
+     （其中 2 条 high）。`scripts/check-dependency-advisories.mjs` 的判定范围因此扩到**两个** npm 工程
+     （仓库根 + `clients/app`），每个工程各跑一次 `npm audit` 后合并判定，失败输出标明工程路径；
+     豁免登记也从「按 advisory ID」改为「按 (advisory ID, 工程)」——`braces` 的同号 advisory 同时出现在
+     两个工程（根经 `@fission-ai/openspec` → `fast-glob` → `micromatch`；`clients/app` 经 `expo` →
+     `@expo/metro` → `metro-file-map` → `micromatch`），只按 ID 匹配会让一个工程的豁免静默放行另一个工程。
+     当前登记 4 条豁免，**两类性质不同，不能混为一谈**：
+     - **不可达**（构建期工具链，或漏洞前提在本仓库不成立）：`braces` 的 `GHSA-vfj7-8cjw-p6xm`（两个工程都命中，
+       上游无修复；嵌套 glob 模式来自 Expo 自身配置，非外部输入）、`node-forge` 的
+       `GHSA-86w9-cpqp-85rv`（仅 `clients/app`，上游无修复；位于 Expo Updates 的代码签名路径，
+       本项目只做 `expo export --platform web`，不产出 Updates 签名包）、`uuid` 的
+       `GHSA-w5hq-g745-h8pq`（仅 `clients/app`；调用方只走 `uuid.v4()` 且不传 `buf`，漏洞前提不成立）。
+     - **真实可达但延后**：`decode-uri-component` 的 `GHSA-vcc3-ghjq-m6fr`（仅 `clients/app`）——
+       对 `clients/app` 已导出的 web 产物做过字符级核对，该包的特征串命中，经 `expo-router` 的
+       `parseQueryParams` → `query-string.parse` 这条路径可达（打开带畸形 query 的链接即触发指数级解码 DoS）。
+       三条修复路径已实测：`overrides` 强压 `decode-uri-component@0.5.0` 会运行时崩溃（CJS 与浏览器打包
+       都是 `TypeError: decodeComponent is not a function`），强压 `query-string@9.5.1` 会让 `expo-router`
+       取到 `stringify === undefined`，只有升到 Expo SDK 58（`expo-router@58` 移除 `query-string`）才有效；
+       而 SDK 58 当前是 npm 的 `next` 标签（`latest` 仍是 57.x）、期望 RC 版 RN 且新增多个 peer。
+       因此本次不修，**到期条件 = Expo SDK 58 进入 npm `latest` 时升级并删除该条**。这是「有到期条件的
+       延后」，不是「判定为不可达」——把它写成不可达会让整份豁免清单失去可信度。`README.md` 的「合同检查」一节
+       留有同一处指回。
+     上面第 4 项那句「当前放行项的适用范围是：整条链位于 `devDependencies`（仓库根 `dependencies` 为空）…
+     不随产品分发」**只描述根工程的 `braces`，已被本项取代**：4 条豁免各自的工程、性质与到期条件一律以本项为准，
+     不能据此推断 `clients/app` 的告警不随产品分发（`decode-uri-component` 就是反例——该包进了 `clients/app`
+     已导出的 web 产物）。
+     扩范围**不改 job 集合、不改分支保护的必需检查**（`deps` = 「依赖许可证与来源」本来就是六个必需检查之一），
+     也**无需给 `deps` 加 `npm ci`**：实测 `npm audit` 只读锁文件、不需要 `node_modules`。
 - 与 `SECURITY_DESIGN.md` §16.2 的关系：本 ADR 是该节「固定 action/toolchain major 或 digest」的具体化，
   并补充两条该节原本没有的义务——「第三方 action 的许可证与向外发送的数据必须在 ADR 记录」、
   「官方 action 的 major 必须跟随 runtime 生命周期」。
