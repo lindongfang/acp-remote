@@ -59,7 +59,8 @@ use crate::node_link::conn::{
     AUTH_ATTEMPTS_PER_MINUTE, AUTH_WINDOW, HANDSHAKE_TIMEOUT, MAX_TRACKED_IPS, close,
 };
 use crate::transport::net::{
-    PeerInfo, RateLimit, SlidingWindowLimiter, WsConnection, WsError, WsHandler, WsMessage,
+    PeerInfo, RateLimit, RequestOrigin, SlidingWindowLimiter, WsConnection, WsError, WsHandler,
+    WsMessage,
 };
 
 /// 心跳静默上限（§2.5：连续 90 秒没有入站消息即关闭；固定常量、不可配置）。
@@ -213,7 +214,15 @@ impl WsEndpoint {
 
 #[async_trait::async_trait]
 impl WsHandler for WsEndpoint {
-    async fn handle(self: Arc<Self>, connection: WsConnection, peer: PeerInfo) {
+    /// Node Link 不依赖 HTTP 来源：`node.hello` 自报的 endpoint 与本机持久记录决定身份，绑定比较在
+    /// `identity-auth` 里完成（`NODE_LINK_PROTOCOL.md` §2/§12.2）。因此这里**如实接收即忽略**该参数，
+    /// 不因它的有无改变任何行为（接入层保证传入值已按 `SYNC_PROTOCOL.md` §3.2 归一化或为「无来源」）。
+    async fn handle(
+        self: Arc<Self>,
+        connection: WsConnection,
+        peer: PeerInfo,
+        _origin: RequestOrigin,
+    ) {
         Session::new(Arc::clone(&self.conn), connection, peer)
             .run()
             .await;

@@ -60,17 +60,28 @@ impl std::error::Error for WsError {}
 /// （[`crate::transport::net::NetListener::register_ws`]）。
 ///
 /// 实现者拥有连接的全部协议语义（握手、信封、心跳、发送队列）；本模块只保证连接已升级、已通过
-/// Host/代理头边界，并把 `max_message_bytes` 的上限与关闭信号一并交给它。处理器返回即会话结束。
+/// Host/代理头边界、已取到请求来源，并把 `max_message_bytes` 的上限与关闭信号一并交给它。处理器返回即
+/// 会话结束。
+///
+/// [`handle`](WsHandler::handle) 的 `origin` 是升级请求里**已取的来源**（`docs/SYNC_PROTOCOL.md` §3.2 的
+/// canonical origin，按其归一化口径取值）：本层只如实取得，**不**判定它与设备记录中的绑定是否一致
+/// （那是 `identity-auth` 绑定检查的职责），也不把来源与 [`crate::transport::net::PeerInfo`] 混在一起
+/// （后者的语义是对端网络地址与转发头的可信度）。不依赖来源的端点（如 Node Link）忽略该参数即可。
 ///
 /// 接收者是 `self: Arc<Self>` 而不是 `&self`：会话 future 必须能被接入选层放进 `'static` 的任务集
 /// （`axum` 的升级回调自身是 `tokio::spawn` 出来的），借用式接收者会让会话 future 绑在栈上。
 #[async_trait::async_trait]
 pub trait WsHandler: Send + Sync + 'static {
     /// 处理一条已升级的连接。
+    ///
+    /// `origin` 为 [`crate::transport::net::RequestOrigin::Absent`] 表示升级请求没有 `Origin` 头
+    /// （非浏览器原生客户端）：按 §3.2，transcript 的来源字段此时取**空字节串**，授权仍按设备与 `Host`
+    /// 身份判定，不得因此降级为无认证。
     async fn handle(
         self: Arc<Self>,
         connection: WsConnection,
         peer: crate::transport::net::PeerInfo,
+        origin: crate::transport::net::RequestOrigin,
     );
 }
 

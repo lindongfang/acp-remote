@@ -8,6 +8,11 @@
 //!   在未注册 path 上也返回 400，而不会先走 404。
 //! - **WebSocket 升级规则**：协商到 `permessage-deflate` 或未声明约定 subprotocol 的升级请求被拒绝；
 //!   非升级请求由 `axum` 的升级提取器按 400/405/426 拒绝；单条消息上限在升级响应上固定。
+//! - **来源（`Origin`）与升级一起取值**：升级请求带 `Origin` 头时，本模块按 `docs/SYNC_PROTOCOL.md`
+//!   §3.2 的口径归一化后交给处理器（见 [`crate::transport::net::origin`]）；头缺席也是合法形态（非浏览器
+//!   对端）；头存在但不可归一化则失败关闭（400，不降级成「无来源」）。这条判定对所有已注册的 WS path
+//!   一致（来源是请求头边界，与 path 无关；非浏览器客户端本来就按 §3.2 不带该头）。**与 `Host` 无关**：
+//!   `Host` 是虚拟主机概念，来源是协议层概念，两者各自判定、不互为替代。
 //! - **请求体上限**：配对端点的请求体超过 [`crate::transport::net::NetConfig::max_body_bytes`] 时返回
 //!   413（`NODE_LINK_PROTOCOL.md` §13.4），处理器不会被调用。
 //! - **每路径默认响应头**：`register_post` 可为一条 path 声明一组默认响应头，该 path 上的**所有**响应都会
@@ -48,6 +53,7 @@ use crate::transport::net::ProxyPolicy;
 use crate::transport::net::Shutdown;
 use crate::transport::net::http::HttpRequest;
 use crate::transport::net::http::HttpResponse;
+use crate::transport::net::origin::request_origin;
 use crate::transport::net::ws::WsConnection;
 use crate::transport::net::ws::WsHandler;
 
@@ -416,6 +422,21 @@ async fn upgrade_websocket(
         )
             .into_response();
     }
+    // 来源（HTTP `Origin`）是请求边界的一部分：只如实取得并归一化，比较留给上层（`origin` 模块文档）。
+    // 头存在但不可归一化时失败关闭，而不是降级成「无来源」——后者在协议里另有含义
+    // （`SYNC_PROTOCOL.md` §3.2 的「非浏览器对端」）。不回显收到的取值（与 Host 边界的处置一致）。
+    let Ok(origin) = request_origin(request.headers()) else {
+        tracing::debug!(
+            event = "net.origin_rejected",
+            path = %request.uri().path(),
+            "Origin 头存在但不可归一化：拒绝升级"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            "Origin 头不是可校验的来源（SYNC_PROTOCOL.md §3.2）",
+        )
+            .into_response();
+    };
     let (mut parts, _body) = request.into_parts();
     let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(upgrade) => upgrade,
@@ -432,7 +453,7 @@ async fn upgrade_websocket(
         .on_upgrade(move |socket| async move {
             let connection = WsConnection::new(socket, max_message_bytes);
             if sessions
-                .send(Arc::clone(&handler).handle(connection, peer))
+                .send(Arc::clone(&handler).handle(connection, peer, origin))
                 .await
                 .is_err()
             {

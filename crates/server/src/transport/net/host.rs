@@ -106,7 +106,10 @@ impl HostPolicy {
 /// 归一化 host 名：小写、去尾点、去掉端口与 `[]`（IPv6 字面量写成 `::1`）。
 ///
 /// 空白、逗号（多个 host 的拼接形态）与非 ASCII 都判为非法。
-fn normalize_host(raw: &str) -> Option<String> {
+///
+/// 与 [`crate::transport::net::origin`] 共用：`Host` 边界与来源（`Origin`）边界的 hostname 归一化必须是
+/// 同一套口径，否则同一台主机在两个边界上会得到不同的名字。
+pub(crate) fn normalize_host(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() || !raw.is_ascii() {
         return None;
