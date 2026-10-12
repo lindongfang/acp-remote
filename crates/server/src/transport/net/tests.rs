@@ -10,6 +10,7 @@
 //! | 非 loopback 监听告警 | `non_loopback_listen_warns_without_failing` |
 //! | 按 path 路由、Sync 明确不可用 | `unregistered_paths_return_404` |
 //! | Node Link 端点正常升级 | `ws_upgrade_with_the_required_subprotocol_succeeds` |
+//! | 升级来源（`Origin`）的取值与归一化（`SYNC_PROTOCOL.md` §3.2） | `ws_upgrade_reports_the_normalized_origin_to_the_handler`、`ws_upgrade_without_origin_reports_absent`、`ws_upgrade_with_a_malformed_origin_is_rejected` |
 //! | 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
 //! | Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
 //! | 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
@@ -79,7 +80,12 @@ struct EchoWsHandler {
 
 #[async_trait::async_trait]
 impl WsHandler for EchoWsHandler {
-    async fn handle(self: Arc<Self>, mut connection: WsConnection, _peer: PeerInfo) {
+    async fn handle(
+        self: Arc<Self>,
+        mut connection: WsConnection,
+        _peer: PeerInfo,
+        _origin: RequestOrigin,
+    ) {
         *self.subprotocol.lock().expect("锁可用") =
             connection.negotiated_subprotocol().map(str::to_owned);
         while let Some(message) = connection.recv().await {
@@ -115,7 +121,12 @@ struct CountingWsHandler {
 
 #[async_trait::async_trait]
 impl WsHandler for CountingWsHandler {
-    async fn handle(self: Arc<Self>, _connection: WsConnection, _peer: PeerInfo) {
+    async fn handle(
+        self: Arc<Self>,
+        _connection: WsConnection,
+        _peer: PeerInfo,
+        _origin: RequestOrigin,
+    ) {
         self.calls.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -130,7 +141,12 @@ impl Drop for SessionGuard {
 
 #[async_trait::async_trait]
 impl WsHandler for IdleWsHandler {
-    async fn handle(self: Arc<Self>, mut connection: WsConnection, _peer: PeerInfo) {
+    async fn handle(
+        self: Arc<Self>,
+        mut connection: WsConnection,
+        _peer: PeerInfo,
+        _origin: RequestOrigin,
+    ) {
         let _guard = SessionGuard(Arc::clone(&self.finished));
         while let Some(message) = connection.recv().await {
             if message.is_err() {
@@ -138,6 +154,53 @@ impl WsHandler for IdleWsHandler {
             }
         }
     }
+}
+
+/// 把接入选层交给处理器的**来源**逐条存档的 WS 处理器（`docs/SYNC_PROTOCOL.md` §3.2）。
+///
+/// 记录后保持连接直到对端关闭：处理器立刻返回会让「101 已发出」与「连接被关闭」竞争，用例就无法稳定地
+/// 断言升级结果。
+struct OriginWsHandler {
+    origins: Arc<std::sync::Mutex<Vec<RequestOrigin>>>,
+}
+
+#[async_trait::async_trait]
+impl WsHandler for OriginWsHandler {
+    async fn handle(
+        self: Arc<Self>,
+        mut connection: WsConnection,
+        _peer: PeerInfo,
+        origin: RequestOrigin,
+    ) {
+        self.origins.lock().expect("锁可用").push(origin);
+        while let Some(message) = connection.recv().await {
+            if message.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// 等待处理器至少记录了 `expected` 条来源，并返回当次快照。
+async fn recorded_origins(
+    origins: &Arc<std::sync::Mutex<Vec<RequestOrigin>>>,
+    expected: usize,
+) -> Vec<RequestOrigin> {
+    for _ in 0..300 {
+        let ready = {
+            let recorded = origins.lock().expect("锁可用");
+            if recorded.len() >= expected {
+                Some(recorded.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(recorded) = ready {
+            return recorded;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("等待 {expected} 条来源记录超时");
 }
 
 /// 只注册 WS 端点的配置（默认 loopback 随机端口）。
@@ -356,6 +419,176 @@ async fn ws_upgrade_with_the_required_subprotocol_succeeds() {
     assert_eq!(
         subprotocol.lock().expect("锁可用").as_deref(),
         Some(WS_SUBPROTOCOL)
+    );
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn ws_upgrade_reports_the_normalized_origin_to_the_handler() {
+    // 带 `Origin` 头的升级照常成功，处理器收到的是按 `docs/SYNC_PROTOCOL.md` §3.2 归一化后的
+    // canonical origin（小写 scheme、规范化 hostname、省略默认端口、不含 path/query/fragment）。
+    let origins = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = start_server(loopback_config(), |listener| {
+        listener
+            .register_ws(
+                WS_PATH,
+                WS_SUBPROTOCOL,
+                Arc::new(OriginWsHandler {
+                    origins: Arc::clone(&origins),
+                }),
+            )
+            .expect("注册 WS");
+    })
+    .await;
+    let host = host_of(server.addr);
+    for (index, (sent, expected)) in [
+        ("https://PC.Example.Test", "https://pc.example.test"),
+        ("HTTPS://pc.example.test:0443", "https://pc.example.test"),
+        ("http://127.0.0.1:80", "http://127.0.0.1"),
+        (
+            "https://pc.example.test:8443",
+            "https://pc.example.test:8443",
+        ),
+        ("https://[::1]:9443", "https://[::1]:9443"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut connection = connect(server.addr).await.expect("连接");
+        connection
+            .write_all(
+                ws_request_with_headers(
+                    WS_PATH,
+                    &host,
+                    &[("Sec-WebSocket-Protocol", WS_SUBPROTOCOL), ("Origin", sent)],
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("写升级请求");
+        assert_eq!(
+            connection.read_response().await.expect("读升级响应").status,
+            101,
+            "{sent} 必须升级成功"
+        );
+        // 逐条断言：等够 `index + 1` 条记录后，第 `index` 条必定是本次连接交给处理器的取值。
+        let recorded = recorded_origins(&origins, index + 1).await;
+        assert_eq!(
+            recorded[index],
+            RequestOrigin::Known(expected.to_owned()),
+            "{sent} 的归一化取值"
+        );
+        assert_eq!(recorded[index].as_str(), Some(expected));
+        drop(connection);
+    }
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn ws_upgrade_without_origin_reports_absent() {
+    // 非浏览器对端可以没有 `Origin` 头（§3.2）：升级照常成功，处理器收到「无来源」——这不是校验失败，
+    // 也不是某个占位 origin；transcript 的空字节串由上层按此形态生成。
+    let origins = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = start_server(loopback_config(), |listener| {
+        listener
+            .register_ws(
+                WS_PATH,
+                WS_SUBPROTOCOL,
+                Arc::new(OriginWsHandler {
+                    origins: Arc::clone(&origins),
+                }),
+            )
+            .expect("注册 WS");
+    })
+    .await;
+    let host = host_of(server.addr);
+    let mut connection = connect(server.addr).await.expect("连接");
+    connection
+        .write_all(ws_request(WS_PATH, &host, Some(WS_SUBPROTOCOL), None).as_bytes())
+        .await
+        .expect("写升级请求");
+    assert_eq!(
+        connection.read_response().await.expect("读升级响应").status,
+        101
+    );
+    let recorded = recorded_origins(&origins, 1).await;
+    assert_eq!(recorded, vec![RequestOrigin::Absent]);
+    assert_eq!(recorded[0].as_str(), None);
+    drop(connection);
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn ws_upgrade_with_a_malformed_origin_is_rejected() {
+    // `Origin` 头存在但不可归一化（含 `null`、非 http(s) scheme、带 path/userinfo、非法端口）→ 结构化
+    // 拒绝（400）：既不升级、也不调用处理器，更不降级成「无来源」（后者在协议里另有含义）。
+    let origins = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = start_server(loopback_config(), |listener| {
+        listener
+            .register_ws(
+                WS_PATH,
+                WS_SUBPROTOCOL,
+                Arc::new(OriginWsHandler {
+                    origins: Arc::clone(&origins),
+                }),
+            )
+            .expect("注册 WS");
+    })
+    .await;
+    let host = host_of(server.addr);
+    for sent in [
+        "null",
+        "https://pc.example.test/",
+        "https://pc.example.test/path",
+        "https://user@pc.example.test",
+        "ftp://pc.example.test",
+        "wss://pc.example.test",
+        "pc.example.test",
+        "https://pc.example.test:8443:99",
+        "https://pc.example.test:70000",
+    ] {
+        let mut connection = connect(server.addr).await.expect("连接");
+        connection
+            .write_all(
+                ws_request_with_headers(
+                    WS_PATH,
+                    &host,
+                    &[("Sec-WebSocket-Protocol", WS_SUBPROTOCOL), ("Origin", sent)],
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("写升级请求");
+        assert_eq!(
+            connection.read_response().await.expect("读响应").status,
+            400,
+            "{sent} 必须被拒绝"
+        );
+    }
+    // 重复的 `Origin` 头同样不合格（与 `Host` 边界同处置：不接受任何一个）。
+    let mut connection = connect(server.addr).await.expect("连接");
+    connection
+        .write_all(
+            ws_request_with_headers(
+                WS_PATH,
+                &host,
+                &[
+                    ("Sec-WebSocket-Protocol", WS_SUBPROTOCOL),
+                    ("Origin", "https://pc.example.test"),
+                    ("Origin", "https://evil.example.test"),
+                ],
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("写升级请求");
+    assert_eq!(
+        connection.read_response().await.expect("读响应").status,
+        400
+    );
+    assert!(
+        origins.lock().expect("锁可用").is_empty(),
+        "非法来源不得进入处理器"
     );
     server.stop().await.expect("关闭序列成功");
 }

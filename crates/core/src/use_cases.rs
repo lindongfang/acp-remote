@@ -28,19 +28,20 @@ use crate::model::{
     LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor,
     OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement,
     PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
-    ProviderRef, PublicError, RequestId, Resolution, ResolvedWorkspace, SeedState, Sequence,
-    SessionId, SessionReference, SessionSummary, Timestamp, UnavailableKind, Version,
-    WorkspaceAlias, WorkspaceRecord,
+    ProviderRef, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
+    ResourceOrigin, SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
+    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
     DeliveryIndexEntry, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
     ExportWrite, HistoryPage, HistoryQuery, IdGenerator, ImportRemoval, ImportWrite,
-    LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
-    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-    ProfileWrite, ProviderRefWrite, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    RetentionPolicy, RevokeReason, SeedWrite, SessionQuery, SessionStore, StoreHealth,
-    TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
+    ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore, NodeConnectedWrite,
+    NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
+    PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
+    PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
+    SeedWrite, SessionQuery, SessionStore, StoreHealth, TrustRecordRef, TrustStore, WorkspaceWrite,
+    WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -86,6 +87,48 @@ pub struct NodeLinkHandshakeView {
     pub head: GlobalCursor,
     /// 管理写集水位（`AuditStore::watermark()`）：`catalogRevision` 的唯一来源。
     pub catalog_revision: u64,
+}
+
+/// Sync 设备握手准入的只读视图（`design.md` D2；`IDENTITY_AND_AUTH_CONTRACT.md` §5.1 的 `PeerTrust` 与
+/// `ChallengeRequest` 所需的持久事实）。
+///
+/// 与 [`NodeLinkHandshakeView`] **同形但少一项**：Sync 设备握手不带 `catalogRevision`（`identity-auth`
+/// 的 `hello` 只对 Node Link 分支要求它），因此本视图也不读 `AuditStore::watermark()`。
+///
+/// 四个字段都是本次握手需要且只需要的持久事实：该设备的信任行（凭据状态与当前 scopes，即 `PeerTrust`
+/// 的 `credential`/`scopes` 的来源）、已绑定的验签公钥（`TrustStore::peer_key`，`verify_proof` 唯一接受
+/// 的密钥来源）、最近一次配对（登记方宣告的 `host_binding` 与是否待消费）、本机全局水位
+/// （`SessionStore::head()`，同时携带 `server_epoch` 与 `global_sequence`）。视图不包含任何秘密材料：
+/// pairing secret 只在身份状态机内存里。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncDeviceHandshakeView {
+    /// 该设备的信任行；未知设备为 `None`（未知设备照常签发挑战，见 §3.2/§8.5）。
+    pub device: Option<DeviceRecord>,
+    /// 已绑定的身份材料（验签公钥的唯一来源）；未知设备为 `None`。
+    pub public_key: Option<PeerPublicKey>,
+    /// 该设备最近一次配对；`None` = 该设备从未配对。
+    pub pairing: Option<PairingRecord>,
+    /// 本机全局水位（`SessionStore::head()`）：`serverEpoch`/`globalSequence` 的唯一来源。
+    pub head: GlobalCursor,
+}
+
+/// `sync_visible_sessions` 的入参（`SYNC_PROTOCOL.md` §9.6 的 `sessions` 资源；spec
+/// `sync-event-delivery`「设备可见的会话清单范围」）。
+///
+/// 三个字段各承载一件**调用方**的判定，core 不替它决定：两侧的分页/过滤条件按各自存储的既有语义透传，
+/// `include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（feature 协商在各协议边界，
+/// core 不读 feature 表、也不缓存它）。
+///
+/// `Default` = 两侧都不过滤 + **不**纳入已导入会话：未协商 feature 时一行 imported 摘要都不得出现，
+/// 因此保守取值就是 `false`。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncSessionQuery {
+    /// 自有会话的过滤/分页（与 [`UseCases::list_sessions`] 同款，原样透传给 `SessionStore::list`）。
+    pub owned: SessionQuery,
+    /// 已导入会话的过滤/分页（原样透传给 `RemoteDeliveryStore::list_sessions`）。
+    pub imported: ImportedSessionQuery,
+    /// 是否把已导入会话纳入结果（调用方传入的 `resource.remote-origin.v1` 协商结果）。
+    pub include_imported: bool,
 }
 
 /// Node Link 的 catalog 投影源（`design.md` D4；`NODE_LINK_PROTOCOL.md` §12.3）。
@@ -344,6 +387,71 @@ impl UseCases {
             .await
             .map_err(Denied::into_port_error)?;
         self.store.list(query).await
+    }
+
+    /// Sync 快照的 `sessions` 资源来源：**自有 + 已导入合并**后的设备可见清单
+    /// （`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」）。
+    ///
+    /// 为什么合并必须发生在 core（`design.md` D3）：可见性判定（`Broker::authorize`）在 core；若适配层
+    /// 分别调 `SessionStore::list` 与 `RemoteDeliveryStore::list_sessions` 再自行拼接，就会出现**第二条
+    /// 可见性判定路径**（`MODULE_ARCHITECTURE.md` §5 的单一判定点原则）。
+    ///
+    /// **为什么也不走 [`UseCases::require_local`]**：本入口服务的是入站设备的快照读取，它带 `actor`，可见性
+    /// 由 `Broker::authorize` 按设备 scope（`session.list`）判定；`require_local` 只服务本机 CLI 的管理读面，
+    /// 把设备读取塞进那条守卫既会放开本机管理面、又会让设备侧失去 scope 判定（§10.2 的命令级 scope）。
+    ///
+    /// 本入口因此：
+    ///
+    /// 1. 先按 `session.list` 走 `Broker::authorize`——与 [`UseCases::list_sessions`] **逐字同口径**
+    ///    （同一个命令名、同一个 broker 判定、同一个 `authorization.scope_denied`）：本层不写任何 scope
+    ///    判定。设备侧的会话可见性开关就是它（`session.list` 在设备 scope 面上），授权先于本层的任何读取，
+    ///    未授权时不读会话/索引存储、也不返回任何会话；
+    /// 2. 自有条目直接取 `SessionStore::list`：`workspace` 因此取自该会话行**持久化**的
+    ///    `workspace_alias`（§3.6 的决定原文，含「不得按 `workspace_cwd` 反查」）——本层不重算归属；
+    /// 3. `include_imported` 为真时才取 `RemoteDeliveryStore::list_sessions` 的行并投影成**同一形状**的
+    ///    `SessionSummary`（§9.6：imported 摘要不得另造字段）；为假时一行都不取——未协商
+    ///    `resource.remote-origin.v1` 的客户端 MUST NOT 看到任何 `origin.kind = remote` 的会话，连空占位
+    ///    条目也不得出现。
+    ///
+    /// 顺序是「自有在前、已导入在后」，两侧各自的顺序由存储层给出、本层不重排（`SessionSummary` 没有排序
+    /// 语义字段，快照是集合语义）：同一次读取的输入决定同一次读取的输出。`query` 两侧的过滤/分页同样只是
+    /// 调用方给出的确定性收窄，不构成第二个可见性判定点。
+    ///
+    /// `owner_reachable` 给出 imported 条目的 `origin.online`（Owner 可达性）：它是**运行时事实**，core
+    /// 不缓存（`MODULE_ARCHITECTURE.md` §4.1：可达性变化经 `EventPublisher` 的
+    /// `session.origin.online_changed` 暴露，「不在 core 里维护独立的在线状态缓存」），因此由调用方按自己
+    /// 的连接事实传入，本层只做投影、不判定也不记忆。刻意**不**取固定保守值：§9.6 规定 Owner 离线期间
+    /// 客户端不得把远程会话的输入标记为已发送，把一个确实可达的 Owner 一律标成 `false` 会让客户端错误地
+    /// 封禁可用会话——那比缺席更糟。
+    ///
+    /// 闭包要求 `Send + Sync`：适配器会把本调用放进可被 `spawn` 的 future。
+    pub async fn sync_visible_sessions(
+        &self,
+        actor: &Actor,
+        query: SyncSessionQuery,
+        owner_reachable: impl Fn(&RemoteSessionRef) -> bool + Send + Sync,
+    ) -> Result<Vec<SessionSummary>, PortError> {
+        let request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "session.list", None, &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        let SyncSessionQuery {
+            owned,
+            imported,
+            include_imported,
+        } = query;
+        let mut sessions = self.store.list(owned).await?;
+        if !include_imported {
+            return Ok(sessions);
+        }
+        let rows = self.deliveries.list_sessions(imported).await?;
+        for record in &rows {
+            if let Some(summary) = imported_summary(record, &owner_reachable)? {
+                sessions.push(summary);
+            }
+        }
+        Ok(sessions)
     }
 
     /// `session.read`：owned 走事件日志；`include` 里的活体数据（config/capabilities）由本层从
@@ -827,6 +935,43 @@ impl UseCases {
         })
     }
 
+    /// Sync 设备握手准入的**未认证**只读入口（`design.md` D2；`IDENTITY_AND_AUTH_CONTRACT.md` §5.1）。
+    ///
+    /// **为什么在 [`UseCases::require_local`] 之外**：`require_local` 保护的是「本机 CLI/桌面入口才能看的
+    /// 管理读面」（`devices`/`device`/`peer_key`/`profiles`/`workspaces`），而本入口服务的是**尚未认证**的
+    /// 入站连接——握手完成前不存在已验证主体，`sync.hello` 里的 `deviceId` 只是**待验证的自报身份**
+    /// （`SYNC_PROTOCOL.md` §8.1）。放宽 `require_local` 会连带打开一批本机管理读面，风险面远大于需求
+    /// （`design.md` D2 的否决理由），因此这里照 [`UseCases::node_link_handshake_view`] 的模式新增窄入口，
+    /// 把授权面收窄到「单个自报 device id」：
+    ///
+    /// - 只读该 id 自己的信任行、身份材料、最近一次配对与本机水位，不返回任何别的设备/节点/Export 的事实，
+    ///   也不返回秘密材料；
+    /// - 未知 id 返回**结构完整的空视图**（`device`/`public_key`/`pairing` 都是 `None`，`head` 照常给出）
+    ///   而不是错误：`SYNC_PROTOCOL.md` §3.2/§8.5 与 `identity-auth` 的既有口径一致——未知对端照常签发
+    ///   挑战，对端可见的失败映射发生在 proof 阶段。**不得**用错误类型区分设备是否存在，否则本入口就成了
+    ///   设备 id 预言机；
+    /// - 零写入、不产生审计；撤销由调用方按 `device.state()` 自行判定（`revoked` 是凭据状态而不是读取
+    ///   失败，由身份层映射）。
+    ///
+    /// 本入口不承担认证收尾：认证成功后的 `last_seen_at` 推进与 `device.authenticated` 留痕见
+    /// [`UseCases::record_device_connected`]。
+    pub async fn sync_device_handshake_view(
+        &self,
+        device_id: &DeviceId,
+    ) -> Result<SyncDeviceHandshakeView, PortError> {
+        let peer = PeerIdentity::Device(device_id.clone());
+        let device = self.trust.device(device_id).await?;
+        let public_key = self.trust.peer_key(&peer).await?;
+        let pairing = self.trust.pairing_for(&peer).await?;
+        let head = self.store.head().await?;
+        Ok(SyncDeviceHandshakeView {
+            device,
+            public_key,
+            pairing,
+            head,
+        })
+    }
+
     /// Node Link 的审计留痕（`SECURITY_DESIGN.md` §14.2 的 `node.authenticated`/`node.auth_failed`
     /// 与 `authorization.denied`）。
     ///
@@ -900,6 +1045,69 @@ impl UseCases {
             .record_node_connected(NodeConnectedWrite {
                 node: access_node.clone(),
                 kind: NodeKind::Access,
+                context: WriteContext { at, audit: audits },
+            })
+            .await
+    }
+
+    /// 设备认证成功的收尾写集（`SYNC_PROTOCOL.md` §8.4；`SECURITY_DESIGN.md` §14.2 的
+    /// `device.authenticated`）。
+    ///
+    /// 与 [`UseCases::record_node_connected`] 同形：把 `owned_device.last_seen_at` 推进到本次时间，并把
+    /// 该设备的 `device.authenticated` 成功行在**同一事务**提交（`WriteContext` 携带两者，§11.2 第 6 条）。
+    ///
+    /// **为什么在 [`UseCases::require_local`] 之外**：本入口服务的是**入站对端**的连接收尾——此刻设备已
+    /// 由握手证明持有该设备持久化的私钥（`identity-auth` 的 `verify_proof` 只用 `TrustStore::peer_key`
+    /// 的密钥验签），它的身份就是 `device_id` 本身，因此本入口与 `record_node_connected` 一样**没有
+    /// `actor` 参数**、归因由 id 唯一确定。`require_local` 保护的是本机 CLI 的**管理**读面
+    /// （`devices`/`device`/…），把它套在连接收尾上会迫使适配器伪造一个本机主体。
+    ///
+    /// **只前进语义不在本层实现**：`last_seen_at` 的三分支（旧值为空→写入新值、新值为空→保留旧值、两者
+    /// 非空取较大者）由存储层的 `put_device` 保证（`crates/storage-sqlite/src/admin/trust.rs` 的
+    /// `upsert_device`；其判据是 `storage-sqlite` 的 `timestamps_are_advanced_never_erased`）。因此本层
+    /// 只读出既有行、把 `last_seen_at` 置为 `Some(now)`、把**其余每一列原样写回**：它不复制也不替代那条
+    /// 规则，更不得用 `None` 抹掉已存值。撤销优先同样由存储层判定（`state = revoked` 的记录会被
+    /// `put_device` 拒绝，唯一复活路径是重新配对）：本层**不预先**判定撤销，也不把该行改成别的状态。
+    ///
+    /// 设备行不存在时返回 `NotFound(EntityRef::Device)` 且零写入：`DeviceWrite` 携带的是**整行**，行不存在
+    /// 就无法只推进一列（编造一行等于伪造信任），也没有任何状态变更需要留痕——与
+    /// [`UseCases::record_node_connected`] 的行缺失口径一致。
+    ///
+    /// 注意与配对消费的分工：`consume_pairing` 的写集只推进**节点**行的 `last_connected_at`，设备配对
+    /// 没有节点行、也不碰设备行（`storage-sqlite` 的 `consume_pairing`），因此 `owned_device.last_seen_at`
+    /// 的**唯一生产者是本入口**——首次认证（有待消费配对）也必须经它推进，否则 `lastSeenAt` 会一直为空。
+    pub async fn record_device_connected(&self, device_id: &DeviceId) -> Result<(), PortError> {
+        let existing = self
+            .trust
+            .device(device_id)
+            .await?
+            .ok_or_else(|| PortError::NotFound(k_device(device_id)))?;
+        let at = self.clock.now();
+        // 归因取**持久化** scopes（而不是调用方自报）：本入口没有 actor 参数，审计行的 actor 只能由
+        // 选中这一行的读取本身给出。
+        let actor = Actor::Device {
+            device: device_id.clone(),
+            scopes: existing.scopes().clone(),
+        };
+        let record = DeviceRecord::try_new(
+            existing.device_id().clone(),
+            existing.display_name(),
+            existing.public_key_fingerprint().clone(),
+            existing.scopes().clone(),
+            existing.state(),
+            existing.created_at().clone(),
+            Some(at.clone()),
+            existing.revoked_at().cloned(),
+        )
+        .map_err(PortError::from)?;
+        let audits = vec![self.pending_audit(
+            &actor,
+            AuditAction::DeviceAuthenticated,
+            k_device(device_id),
+        )];
+        self.trust
+            .put_device(DeviceWrite {
+                record,
                 context: WriteContext { at, audit: audits },
             })
             .await
@@ -1595,6 +1803,60 @@ fn owned_session(reference: &SessionReference) -> Result<SessionId, PortError> {
     }
 }
 
+/// [`ImportedSessionRecord`] → [`SessionSummary`] 投影（`SYNC_PROTOCOL.md` §9.6）。
+///
+/// 仓库里没有任何 `ImportedSessionRecord → SessionSummary` 的转换函数（`upsert_session` 目前只有测试
+/// 调用方，索引行的生产写入方是待落地的 `node-link-client`），本函数是它的**唯一**实现，供
+/// [`UseCases::sync_visible_sessions`] 使用。返回 `None` 表示该索引行**还不能**投影成摘要，调用方跳过它，
+/// 而不是替它编造字段：
+///
+/// - `origin_epoch`/`agent`/`state`/`version`/`created_at` 在 `imported_session` 表里可空，而
+///   `SessionSummary` 与 §9.4 的 `sessions` 资源都要求这几个字段有值。为 NULL 时恰好没有可投影的内容，
+///   而 §3.6 对 `NULL` 的既有口径是「不是错误，但也不得被推导或补齐」：该会话在 Owner 侧的元数据补齐前不
+///   出现在结果里，而不是以假值（例如把 `state` 说成 `idle`、把 `created_at` 说成 `updated_at`）出现。
+/// - `current_mode` 恒为 `None`：正文类字段不进 Access 的索引（§9.6 的 no-content-cache）。
+/// - `workspace` 恒为 `None`：`imported_session` **没有** `workspace_alias` 列（§7.4 的黄金列清单），而
+///   §9.6 明确 imported 会话的 `workspace` 固定为 `null`，直到 Owner 侧投影真的带来目录引用为止；Access
+///   MUST NOT 用 `owner_node_id`/`export_id`/本机路径或任何其它列推导归属。
+///
+/// `owner_reachable` 是调用方给出的 Owner 可达性事实（见 [`UseCases::sync_visible_sessions`]）。
+///
+/// 构造失败（例如索引行里的标题超过 512 字符）按**列值损坏**上抛：那不是「不完整」，而是存储里出现了不满足
+/// 值对象约束的数据，静默跳过会让损坏看不见。
+fn imported_summary(
+    record: &ImportedSessionRecord,
+    owner_reachable: &impl Fn(&RemoteSessionRef) -> bool,
+) -> Result<Option<SessionSummary>, PortError> {
+    let (Some(origin_epoch), Some(agent), Some(state), Some(version), Some(created_at)) = (
+        record.origin_epoch.clone(),
+        record.agent.clone(),
+        record.state,
+        record.version,
+        record.created_at.clone(),
+    ) else {
+        return Ok(None);
+    };
+    let summary = SessionSummary::try_new(
+        record.session.session_id.clone(),
+        record.title.clone(),
+        agent,
+        state,
+        ResourceOrigin::Remote {
+            owner_node_id: record.session.owner_node_id.clone(),
+            export_id: record.session.export_id.clone(),
+            origin_epoch,
+            online: owner_reachable(&record.session),
+        },
+        None,
+        version,
+        created_at,
+        record.updated_at.clone(),
+        None,
+    )
+    .map_err(PortError::from)?;
+    Ok(Some(summary))
+}
+
 /// 配对通道（claim/status）的访问判定（design D12）：本机入口恒可；`Actor::PairingClaimant` 只在绑定
 /// **同一**配对时可访问。
 ///
@@ -1675,8 +1937,8 @@ mod tests {
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
-        AgentId, AgentRef, AgentSessionId, CommandKind, CommandPayload, CommittedEvent, Nonce,
-        PairingState, ResourceOrigin, ScopeSet, ViewJson,
+        AgentId, AgentRef, AgentSessionId, CommandKind, CommandPayload, CommittedEvent,
+        DeviceState, Nonce, PairingState, ScopeSet, ViewJson,
     };
     use crate::ports::HistoryInclude;
 
@@ -1731,10 +1993,22 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        let world = FakeWorld::new();
+        fixture_with_trust(FakeWorld::new(), None)
+    }
+
+    /// [`fixture`] 的信任端口可替换版本：`broker::test_support::FakeTrust` 不读写设备行，而本工作包的两个
+    /// Sync 设备入口正是 `TrustStore::device`/`put_device` 的生产调用方（见 [`DeviceTrust`]）。
+    fn fixture_with_trust(world: Arc<FakeWorld>, trust: Option<Arc<dyn TrustStore>>) -> Fixture {
         let store = Arc::new(FakeStore {
             world: world.clone(),
         });
+        // 一个替身同时服务 broker 与用例层：`FakeTrust` 除 `world` 外没有状态，分成两个实例只是历史写法。
+        let trust_port: Arc<dyn TrustStore> = match trust {
+            Some(port) => port,
+            None => Arc::new(FakeTrust {
+                world: world.clone(),
+            }),
+        };
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: store.clone(),
@@ -1747,9 +2021,7 @@ mod tests {
                 exports: Arc::new(FakeExports {
                     world: world.clone(),
                 }),
-                trust: Arc::new(FakeTrust {
-                    world: world.clone(),
-                }),
+                trust: trust_port.clone(),
                 publisher: Arc::new(TestPublisher {
                     world: world.clone(),
                 }),
@@ -1793,9 +2065,7 @@ mod tests {
             exports: Arc::new(FakeExports {
                 world: world.clone(),
             }),
-            trust: Arc::new(FakeTrust {
-                world: world.clone(),
-            }),
+            trust: trust_port,
             audit: Arc::new(TestAudit {
                 world: world.clone(),
             }),
@@ -1816,6 +2086,141 @@ mod tests {
             use_cases,
             world,
             session,
+        }
+    }
+
+    /// 设备用例的装配：信任端口换成 [`DeviceTrust`]，并把替身交给调用方断言 core 产出的写集。
+    fn fixture_with_device_trust() -> (Fixture, Arc<DeviceTrust>) {
+        let world = FakeWorld::new();
+        let trust = Arc::new(DeviceTrust {
+            inner: FakeTrust {
+                world: world.clone(),
+            },
+            devices: std::sync::Mutex::new(Vec::new()),
+            writes: std::sync::Mutex::new(Vec::new()),
+        });
+        let dyn_trust: Arc<dyn TrustStore> = trust.clone();
+        let fixture = fixture_with_trust(world, Some(dyn_trust));
+        (fixture, trust)
+    }
+
+    /// 只补**设备行**读写的信任替身：`FakeTrust` 的 `device` 恒返回 `None`、`put_device` 无动作（它服务的
+    /// 切片不读写设备行）。其余方法逐条委托给 [`FakeTrust`]，因此行为与默认夹具逐字一致；替身不得比真实
+    /// 存储更宽容（同一取舍见 `FakeTrust::record_node_connected`）。
+    struct DeviceTrust {
+        inner: FakeTrust,
+        devices: std::sync::Mutex<Vec<DeviceRecord>>,
+        /// 逐次提交的写集：断言 core 产出的**整行**，而不是替身自己算出来的结果。
+        writes: std::sync::Mutex<Vec<DeviceWrite>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TrustStore for DeviceTrust {
+        async fn device(&self, id: &DeviceId) -> Result<Option<DeviceRecord>, PortError> {
+            Ok(lock(&self.devices)
+                .iter()
+                .find(|record| record.device_id() == id)
+                .cloned())
+        }
+
+        async fn devices(&self) -> Result<Vec<DeviceRecord>, PortError> {
+            Ok(lock(&self.devices).clone())
+        }
+
+        /// 与真实存储同款的两件事：记录本次写集，并复制「撤销优先」的拒绝（`state = revoked` 的记录只能
+        /// 经 `revoke_device` 写；复活路径是重新配对）。替身若在这里静默成功，就比真实存储更宽容。
+        async fn put_device(&self, write: DeviceWrite) -> Result<(), PortError> {
+            let revoked = write.record.state() == DeviceState::Revoked;
+            let record = write.record.clone();
+            lock(&self.devices).retain(|stored| stored.device_id() != record.device_id());
+            lock(&self.devices).push(record);
+            lock(&self.writes).push(write);
+            if revoked {
+                return Err(PortError::InvalidRequest(
+                    "use device.revoke to revoke a device",
+                ));
+            }
+            Ok(())
+        }
+
+        async fn node(&self, id: &NodeId, kind: NodeKind) -> Result<Option<NodeRecord>, PortError> {
+            self.inner.node(id, kind).await
+        }
+
+        async fn nodes(&self) -> Result<Vec<NodeRecord>, PortError> {
+            self.inner.nodes().await
+        }
+
+        async fn nodes_for(&self, id: &NodeId) -> Result<Vec<NodeRecord>, PortError> {
+            self.inner.nodes_for(id).await
+        }
+
+        async fn peer_key(&self, peer: &PeerIdentity) -> Result<Option<PeerPublicKey>, PortError> {
+            self.inner.peer_key(peer).await
+        }
+
+        async fn pairing(&self, id: &PairingId) -> Result<Option<PairingRecord>, PortError> {
+            self.inner.pairing(id).await
+        }
+
+        async fn pairing_peer(
+            &self,
+            id: &PairingId,
+        ) -> Result<Option<crate::model::PairingPeer>, PortError> {
+            self.inner.pairing_peer(id).await
+        }
+
+        async fn pairing_for(
+            &self,
+            peer: &PeerIdentity,
+        ) -> Result<Option<PairingRecord>, PortError> {
+            self.inner.pairing_for(peer).await
+        }
+
+        async fn put_node(&self, write: NodeWrite) -> Result<(), PortError> {
+            self.inner.put_node(write).await
+        }
+
+        async fn revoke_device(&self, write: DeviceRevocation) -> Result<(), PortError> {
+            self.inner.revoke_device(write).await
+        }
+
+        async fn revoke_node(&self, write: NodeRevocation) -> Result<(), PortError> {
+            self.inner.revoke_node(write).await
+        }
+
+        async fn create_pairing(&self, write: PairingWrite) -> Result<(), PortError> {
+            self.inner.create_pairing(write).await
+        }
+
+        async fn claim_pairing(
+            &self,
+            write: PairingClaimWrite,
+        ) -> Result<PairingClaimOutcome, PortError> {
+            self.inner.claim_pairing(write).await
+        }
+
+        async fn settle_pairing(
+            &self,
+            write: PairingSettlementWrite,
+        ) -> Result<TrustRecordRef, PortError> {
+            self.inner.settle_pairing(write).await
+        }
+
+        async fn expire_pairings(&self, write: ExpiryWrite) -> Result<u64, PortError> {
+            self.inner.expire_pairings(write).await
+        }
+
+        async fn consume_pairing(
+            &self,
+            write: PairingConsumption,
+        ) -> Result<PairingRecord, PortError> {
+            self.inner.consume_pairing(write).await
+        }
+
+        /// 与 `FakeTrust` 同一取舍：显式失败关闭而不是静默成功。
+        async fn record_node_connected(&self, _write: NodeConnectedWrite) -> Result<(), PortError> {
+            unreachable!("DeviceTrust 只补设备行的读写：Node Link 认证收尾不在本替身范围内")
         }
     }
 
@@ -1879,6 +2284,247 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].session_id(), &fixture.session);
         assert_eq!(summaries[0].state(), crate::model::SessionState::Idle);
+    }
+
+    /// 只播种一条 imported 索引行（§7.4 的 `imported_session`，无正文）；`None` 的字段就是表里的 NULL。
+    fn imported_session_record(
+        owner: &NodeId,
+        export: &ExportId,
+        session: &SessionId,
+        complete: bool,
+    ) -> ImportedSessionRecord {
+        // 半成品行对应真实表里确实可空的列（Owner 侧元数据还没到），不是替身漏填。
+        let (origin_epoch, title, agent, state, version, created_at, last_origin_sequence) =
+            if complete {
+                (
+                    Some(OriginEpoch::new(&uuid_text(777)).expect("epoch")),
+                    Some("Remote one".to_owned()),
+                    Some(
+                        AgentRef::try_new(AgentId::new("agent-2").expect("agent id"), "Agent Two")
+                            .expect("agent ref"),
+                    ),
+                    Some(crate::model::SessionState::Running),
+                    Some(Version::from(4)),
+                    Some(crate::broker::test_support::ts(10)),
+                    Some(Sequence::new(3).expect("sequence")),
+                )
+            } else {
+                (None, None, None, None, None, None, None)
+            };
+        ImportedSessionRecord {
+            session: RemoteSessionRef::new(owner.clone(), export.clone(), session.clone()),
+            origin_epoch,
+            title,
+            agent,
+            state,
+            version,
+            created_at,
+            last_origin_sequence,
+            acked: None,
+            attachment: None,
+            updated_at: crate::broker::test_support::ts(11),
+        }
+    }
+
+    /// Sync WP1（任务 1.3）：快照的 `sessions` 资源来源把**自有与已导入合并**后交给设备——自有条目排在
+    /// 前、`workspace` 取会话行持久化的别名；imported 条目按调用方传入的 feature 协商结果纳入、`workspace`
+    /// 恒为 `None`（表里没有该列，不得推导）、`online` 取调用方传入的可达性事实；无 `session.list` 的设备
+    /// 一行也拿不到。
+    #[test]
+    fn sync_visible_sessions_merges_owned_and_imported() {
+        let fixture = fixture();
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(241)).expect("device"),
+            scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+        };
+
+        // 第二条自有会话：带一条**持久化**的目录别名（`workspace` 的唯一来源）。
+        let owned = SessionId::new(&uuid_text(242)).expect("session id");
+        let agent = AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
+            .expect("agent ref");
+        fixture.world.seed_session(
+            crate::model::Session::try_new(
+                owned.clone(),
+                OwnedSessionRef::new(owned.clone()),
+                None,
+                agent,
+                crate::model::SessionState::Running,
+                ResourceOrigin::Local,
+                None,
+                Version::from(2),
+                crate::broker::test_support::ts(0),
+                crate::broker::test_support::ts(0),
+                None,
+            )
+            .expect("session"),
+        );
+        let alias = WorkspaceAlias::new("project").expect("alias");
+        lock(&fixture.world.state)
+            .workspace_aliases
+            .insert(owned.as_str().to_owned(), alias.clone());
+        fixture.world.workspaces.lock().expect("lock").push(
+            WorkspaceRecord::try_new(
+                alias.clone(),
+                "Project",
+                std::env::temp_dir().to_str().expect("temp dir is utf-8"),
+                crate::broker::test_support::ts(0),
+                crate::broker::test_support::ts(0),
+            )
+            .expect("workspace record"),
+        );
+
+        // imported 索引：一条完整行 + 一条缺 `agent`/`state`/… 的半成品行（表里这些列可空）。
+        let owner = NodeId::new(&uuid_text(243)).expect("owner node");
+        let export = ExportId::new("export-1").expect("export id");
+        let remote_session = SessionId::new(&uuid_text(244)).expect("session id");
+        let incomplete = SessionId::new(&uuid_text(245)).expect("session id");
+        let remote = RemoteSessionRef::new(owner.clone(), export.clone(), remote_session.clone());
+        lock(&fixture.world.imported_sessions).push(imported_session_record(
+            &owner,
+            &export,
+            &remote_session,
+            true,
+        ));
+        lock(&fixture.world.imported_sessions).push(imported_session_record(
+            &owner,
+            &export,
+            &incomplete,
+            false,
+        ));
+
+        let query = SyncSessionQuery {
+            include_imported: true,
+            ..SyncSessionQuery::default()
+        };
+        let sessions = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            query.clone(),
+            |reference| reference == &remote,
+        ))
+        .expect("merged list");
+
+        assert_eq!(
+            sessions.len(),
+            3,
+            "两条自有 + 一条可投影的 imported；半成品行不可投影（缺失字段不得被编造）"
+        );
+        assert_eq!(
+            sessions.last().map(SessionSummary::session_id),
+            Some(&remote_session),
+            "自有在前、已导入在后"
+        );
+        // 自有两条的顺序由存储层给出（`FakeStore` 用 HashMap，不保证顺序），因此按集合比较。
+        let mut owned_ids: Vec<&str> = sessions[..2]
+            .iter()
+            .map(|summary| summary.session_id().as_str())
+            .collect();
+        owned_ids.sort_unstable();
+        let mut expected_owned = vec![fixture.session.as_str(), owned.as_str()];
+        expected_owned.sort_unstable();
+        assert_eq!(owned_ids, expected_owned, "两条自有会话都在结果里");
+
+        let merged_owned = sessions
+            .iter()
+            .find(|summary| summary.session_id() == &owned)
+            .expect("自有条目");
+        assert_eq!(
+            merged_owned.workspace().map(|workspace| (
+                workspace.alias().clone(),
+                workspace.display_name().to_owned()
+            )),
+            Some((alias.clone(), "Project".to_owned())),
+            "workspace 取自会话行持久化的别名（展示名按别名关联目录记录）"
+        );
+        assert!(merged_owned.origin().is_local());
+
+        let merged_remote = sessions
+            .iter()
+            .find(|summary| summary.session_id() == &remote_session)
+            .expect("imported 条目");
+        let ResourceOrigin::Remote {
+            owner_node_id,
+            export_id,
+            origin_epoch,
+            online,
+        } = merged_remote.origin()
+        else {
+            unreachable!("本层投影的 imported 条目恒为 remote origin");
+        };
+        assert_eq!(owner_node_id, &owner);
+        assert_eq!(export_id, &export);
+        assert_eq!(
+            origin_epoch,
+            &OriginEpoch::new(&uuid_text(777)).expect("epoch"),
+            "来源 epoch 来自索引行"
+        );
+        assert!(*online, "可达性取调用方传入的运行时事实（core 不缓存它）");
+        assert_eq!(
+            merged_remote.state(),
+            crate::model::SessionState::Running,
+            "状态取自索引行的对应列"
+        );
+        assert_eq!(
+            merged_remote.version(),
+            Version::from(4),
+            "版本取自索引行的对应列"
+        );
+        assert_eq!(
+            merged_remote.agent().name(),
+            "Agent Two",
+            "Agent 引用取自索引行的 agent 列"
+        );
+        assert_eq!(
+            merged_remote.workspace(),
+            None,
+            "`imported_session` 没有 workspace_alias 列：不得由 owner/export 或本机路径推导归属"
+        );
+        assert_eq!(merged_remote.current_mode(), None, "索引不落正文类字段");
+
+        // 未协商 `resource.remote-origin.v1`：一行 imported 都不出现（连占位也没有）。
+        let gated = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            SyncSessionQuery {
+                include_imported: false,
+                ..query.clone()
+            },
+            |_| true,
+        ))
+        .expect("feature 未协商时照常返回自有会话");
+        assert_eq!(gated.len(), 2);
+        assert!(gated.iter().all(|summary| summary.origin().is_local()));
+
+        // 调用方给出的收窄照常生效（本层只透传，不构成第二个可见性判定点）。
+        let narrowed = block_on(fixture.use_cases.sync_visible_sessions(
+            &actor,
+            SyncSessionQuery {
+                owned: SessionQuery {
+                    only: Some(vec![owned.clone()]),
+                    ..SessionQuery::default()
+                },
+                include_imported: false,
+                ..query.clone()
+            },
+            |_| true,
+        ))
+        .expect("收窄");
+        assert_eq!(narrowed.len(), 1);
+        assert_eq!(narrowed[0].session_id(), &owned);
+
+        // 设备 scope 不含 `session.list`：整个入口失败关闭，一行也不返回。
+        let denied = Actor::Device {
+            device: DeviceId::new(&uuid_text(246)).expect("device"),
+            scopes: ScopeSet::empty(),
+        };
+        let error = block_on(
+            fixture
+                .use_cases
+                .sync_visible_sessions(&denied, query, |_| true),
+        )
+        .expect_err("无权设备不得读取任何会话");
+        assert!(
+            matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
+            "与 list_sessions 同一授权口径，得到 {error:?}"
+        );
     }
 
     /// §4：`session.read` 的活体字段（config/capabilities）由用例层从后端合并。
@@ -3334,6 +3980,215 @@ mod tests {
             fixture.world.write_audits.lock().expect("lock").is_empty()
                 && fixture.world.audits.lock().expect("lock").is_empty(),
             "握手准入读取零写入、无审计"
+        );
+    }
+
+    /// 设备行的测试夹具（§5.3）：`created_at` 取 `ts(30)`，与 `TestClock` 从 0 起的推进值不撞号。
+    fn device_record(
+        id: &DeviceId,
+        state: DeviceState,
+        last_seen_at: Option<Timestamp>,
+        revoked_at: Option<Timestamp>,
+    ) -> DeviceRecord {
+        DeviceRecord::try_new(
+            id.clone(),
+            "phone",
+            crate::model::Fingerprint::new(&"b".repeat(64)).expect("fingerprint"),
+            ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+            state,
+            crate::broker::test_support::ts(30),
+            last_seen_at,
+            revoked_at,
+        )
+        .expect("device record")
+    }
+
+    /// Sync WP1（任务 1.1）：设备握手准入的只读视图绑定到单个自报 `deviceId`——已知设备带回信任行、
+    /// 身份材料、最近一次配对与本机水位；未知设备得到**结构完整**的空视图（不是错误）；零写入。
+    #[test]
+    fn sync_device_handshake_view_is_bound_to_one_reported_device_id() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let device = DeviceId::new(&uuid_text(201)).expect("device");
+        let other = DeviceId::new(&uuid_text(202)).expect("device");
+        let pairing = PairingId::new(&uuid_text(203)).expect("pairing");
+        seed_pairing(
+            &fixture.world,
+            &pairing,
+            PairingTarget::Device,
+            PairingState::Approved,
+            peer(PeerIdentity::Device(device.clone())),
+        );
+        trust.devices.lock().expect("lock").push(device_record(
+            &device,
+            DeviceState::Active,
+            None,
+            None,
+        ));
+        let key = crate::model::test_peer_public_key();
+        fixture
+            .world
+            .keys
+            .lock()
+            .expect("lock")
+            .push((PeerIdentity::Device(device.clone()), key.clone()));
+
+        let view = block_on(fixture.use_cases.sync_device_handshake_view(&device))
+            .expect("handshake view");
+        assert_eq!(
+            view.device.as_ref().map(DeviceRecord::state),
+            Some(DeviceState::Active),
+            "信任行（凭据状态与 scopes 的来源）只能来自该设备自己的行"
+        );
+        assert_eq!(view.public_key, Some(key), "验签公钥只能来自持久化信任");
+        assert_eq!(
+            view.pairing.as_ref().map(PairingRecord::id),
+            Some(&pairing),
+            "host_binding 与待消费配对的来源是该设备最近一次配对"
+        );
+        assert_eq!(
+            view.head,
+            crate::broker::test_support::head_cursor(0),
+            "本机水位来自 store.head()，同时携带 serverEpoch"
+        );
+
+        // 未知设备：结构完整的空视图，不是错误（调用方照常签发挑战，失败映射在 proof 阶段）。
+        let unknown = DeviceId::new(&uuid_text(204)).expect("device");
+        let empty = block_on(fixture.use_cases.sync_device_handshake_view(&unknown))
+            .expect("未知设备不能报错");
+        assert!(
+            empty.device.is_none() && empty.public_key.is_none() && empty.pairing.is_none(),
+            "未知设备得到空视图"
+        );
+        assert_eq!(empty.head, view.head, "空视图照样带本机水位与 epoch");
+
+        // 另一个已有信任行的设备：只带回它自己的事实，不得漏出第一个设备的公钥/配对。
+        trust.devices.lock().expect("lock").push(device_record(
+            &other,
+            DeviceState::Pending,
+            None,
+            None,
+        ));
+        let other_view =
+            block_on(fixture.use_cases.sync_device_handshake_view(&other)).expect("view");
+        assert_eq!(
+            other_view.device.as_ref().map(DeviceRecord::device_id),
+            Some(&other)
+        );
+        assert!(
+            other_view.public_key.is_none() && other_view.pairing.is_none(),
+            "入口不返回任何其它设备的事实"
+        );
+
+        assert!(
+            fixture.world.write_audits.lock().expect("lock").is_empty()
+                && fixture.world.audits.lock().expect("lock").is_empty(),
+            "握手准入读取零写入、无审计"
+        );
+    }
+
+    /// Sync WP1（任务 1.2）：设备认证收尾把 `last_seen_at` 置为本次时间（**只前进**由存储层的
+    /// `CASE` 保证，本层既不改写该规则也不抹掉已存值）、其余每一列原样透传，并把
+    /// `device.authenticated` 与状态推进放进**同一个写集**。
+    #[test]
+    fn record_device_connected_advances_last_seen_and_audits() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let device = DeviceId::new(&uuid_text(211)).expect("device");
+        trust.devices.lock().expect("lock").push(device_record(
+            &device,
+            DeviceState::Active,
+            None,
+            None,
+        ));
+
+        block_on(fixture.use_cases.record_device_connected(&device)).expect("record connected");
+
+        let writes = trust.writes.lock().expect("lock").clone();
+        assert_eq!(writes.len(), 1, "一次认证收尾只提交一个写集");
+        let first = &writes[0];
+        let now = crate::broker::test_support::ts(0);
+        assert_eq!(
+            first.record.last_seen_at(),
+            Some(&now),
+            "旧值为空时写入本次时间（旧值→新值这一支由存储层落库）"
+        );
+        assert_eq!(&first.context.at, &now, "状态列与写集 at 同源");
+        // 除 `last_seen_at` 外的每一列都必须原样透传：本层不重造记录、不改状态、不碰撤销时间。
+        assert_eq!(first.record.display_name(), "phone");
+        assert_eq!(
+            first.record.scopes(),
+            &ScopeSet::try_from_iter(["session.list"]).expect("scopes")
+        );
+        assert_eq!(first.record.state(), DeviceState::Active);
+        assert_eq!(
+            first.record.created_at(),
+            &crate::broker::test_support::ts(30)
+        );
+        assert_eq!(first.record.revoked_at(), None);
+        // 审计：动作、目标与归因（actor 的 scopes 取**持久化**值）。
+        assert_eq!(first.context.audit.len(), 1, "收尾写集恰好一条审计");
+        let audit = &first.context.audit[0];
+        assert_eq!(audit.action, AuditAction::DeviceAuthenticated);
+        assert_eq!(audit.target, EntityRef::Device(device.clone()));
+        assert!(
+            matches!(&audit.actor, Actor::Device { device: id, scopes }
+                if id == &device && scopes == &ScopeSet::try_from_iter(["session.list"]).expect("scopes")),
+            "归因是该设备本身，scopes 取持久化值"
+        );
+
+        // 已有更早的 `last_seen_at`：本层照常提交 `Some(now)`（第二次调用拿 `ts(1)`），**不得**改用
+        // `None` 抹掉已存值、也不得回填已存值；「取较大者」由存储层判定（`storage-sqlite` 的
+        // `timestamps_are_advanced_never_erased` 覆盖三分支）。
+        trust.devices.lock().expect("lock")[0] = device_record(
+            &device,
+            DeviceState::Active,
+            Some(crate::broker::test_support::ts(9)),
+            None,
+        );
+        block_on(fixture.use_cases.record_device_connected(&device)).expect("record connected");
+        let writes = trust.writes.lock().expect("lock").clone();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(
+            writes[1].record.last_seen_at(),
+            Some(&crate::broker::test_support::ts(1)),
+            "每次认证都提交本次时间，是否前进由存储层取较大者"
+        );
+    }
+
+    /// Sync WP1（任务 1.2）：没有信任行、或该行已撤销时失败关闭——前者零写入（`DeviceWrite` 携带整行，
+    /// 行不存在无法只推进一列），后者把原状态原样交给存储层，由存储层的「撤销优先」拒绝，本层不预判。
+    #[test]
+    fn record_device_connected_fails_closed_without_a_writable_row() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let missing = DeviceId::new(&uuid_text(221)).expect("device");
+        let error = block_on(fixture.use_cases.record_device_connected(&missing))
+            .expect_err("没有信任行就不能静默成功");
+        assert!(
+            matches!(&error, PortError::NotFound(EntityRef::Device(id)) if id == &missing),
+            "得到 {error:?}"
+        );
+        assert!(
+            trust.writes.lock().expect("lock").is_empty(),
+            "零写入：没有可用整行、也没有状态变更需要留痕"
+        );
+
+        let revoked = DeviceId::new(&uuid_text(222)).expect("device");
+        trust.devices.lock().expect("lock").push(device_record(
+            &revoked,
+            DeviceState::Revoked,
+            None,
+            Some(crate::broker::test_support::ts(3)),
+        ));
+        let error = block_on(fixture.use_cases.record_device_connected(&revoked))
+            .expect_err("已撤销的设备行不得被推进");
+        assert!(
+            matches!(&error, PortError::InvalidRequest(code) if *code == "use device.revoke to revoke a device"),
+            "撤销优先由存储层判定，得到 {error:?}"
+        );
+        let writes = trust.writes.lock().expect("lock").clone();
+        assert_eq!(
+            writes.last().expect("写集已到达存储层").record.state(),
+            DeviceState::Revoked,
+            "本层原样透传撤销状态：不静默复活、也不把已撤销行说成 active"
         );
     }
 
