@@ -128,7 +128,18 @@ export type SyncClientEvent =
   /** socket 已建立，开始逐连接握手。 */
   | { readonly kind: "authenticating" }
   /** 认证成功：连接级信息（scopes、serverEpoch、限额）在此交付。 */
-  | { readonly kind: "authenticated"; readonly info: AuthenticatedInfo }
+  | {
+      readonly kind: "authenticated";
+      readonly info: AuthenticatedInfo;
+      /**
+       * 服务端在 `auth.server_challenge` 里选中的 feature 列表。
+       *
+       * 消费方据此决定**要不要**带某个可选 include（例如会话历史的 `history`）：未选中的
+       * feature 不能靠「发了再看反应」探测，旧服务端连取值都不认识。可选是为了不让既有
+       * 构造点（测试与组合根）被迫编一份列表——缺席等价于「什么都没协商出来」。
+       */
+      readonly selectedFeatures?: readonly string[];
+    }
   /** 已按最后确认游标发出 `subscribe`；此时处于重放追平。 */
   | { readonly kind: "replaying"; readonly cursor: Cursor | null }
   /** `sync.caught_up`：此后为实时事件。 */
@@ -164,12 +175,22 @@ export const SUPPORTED_FEATURES = [
   "core.event-ack.v1",
   "core.local-catalog.v1",
   "core.session-create.v1",
+  "core.session-history.v1",
   "core.snapshot.v1",
   "resource.remote-origin.v1",
 ] as const;
 
 /** 客户端必需 feature：ACK 与命令状态查询缺失则无法满足 R13/R14。 */
 export const REQUIRED_FEATURES = ["core.command-status.v1", "core.event-ack.v1"] as const;
+
+/**
+ * 结构化历史（`session.read` 的 `history` include）所需的 feature ID。
+ *
+ * 客户端只在**服务端选中**它时才带这个 include：未协商却请求它，服务端会回明确的
+ * 不支持类错误（`design.md` 的 Compatibility → feature 门控），而旧服务端连该取值都不认识，
+ * 客户端因此不能靠「发了再看反应」来探测。
+ */
+export const SESSION_HISTORY_FEATURE = "core.session-history.v1";
 
 /** 一条连接的构造输入（端口由组合根注入）。 */
 export interface SyncConnectionOptions {
@@ -233,6 +254,13 @@ export class SyncConnection {
   #outboundSequence = 0;
   /** 本连接的认证结果（scopes 与限额据此生效）。 */
   #authenticated: AuthenticatedInfo | null = null;
+  /**
+   * 服务端在 `auth.server_challenge` 里选中的 feature 列表。
+   *
+   * 它只属于**当前** WSS 连接（与认证状态同生命周期），随 `authenticated` 事件交付给消费方，
+   * 供其决定可选 include 的取舍（例如 `session.read` 的 `history`）。
+   */
+  #selectedFeatures: readonly string[] | null = null;
   /**
    * 去重账本。
    *
@@ -381,6 +409,7 @@ export class SyncConnection {
     }
     const serverNonce = decodeBase64Url(message.body.serverNonce, 32);
     this.#connectionId = message.body.connectionId;
+    this.#selectedFeatures = [...message.body.selectedFeatures];
 
     // §8.2：Host ID、两个 nonce、connection ID、版本与 features 全部要核对，
     // 且 hostProof 必须用**已配对**的 Host key 验证。
@@ -454,7 +483,11 @@ export class SyncConnection {
       this.#lastAcked = null;
     }
     this.#sendSubscribe();
-    this.#onEvent({ kind: "authenticated", info: message.body });
+    this.#onEvent({
+      kind: "authenticated",
+      info: message.body,
+      selectedFeatures: this.#selectedFeatures ?? [],
+    });
     this.#onEvent({ kind: "replaying", cursor: this.#acked });
   }
 

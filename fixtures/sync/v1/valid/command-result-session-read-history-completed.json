@@ -1,0 +1,75 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "5b8c1d47-9e26-4f30-a7b5-0c2d6e8f1a93",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "75",
+  "body": {
+    "requestId": "c8b4e2f1-3a76-4d09-8e25-7b1c4f6a9d30",
+    "command": "session.read",
+    "status": "completed",
+    "acceptedAt": "2026-09-17T12:14:00.000Z",
+    "terminalEventId": null,
+    "result": {
+      "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+      "resources": {
+        "messages": [
+          {
+            "messageId": "3b7c9e15-4a82-4d06-b9e3-1f5c8a2d7e40",
+            "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
+            "role": "user",
+            "content": [{ "type": "text", "text": "把失败的那条再跑一遍。" }],
+            "status": "completed",
+            "createdAt": "2026-09-17T11:57:30.000Z",
+            "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14"
+          }
+        ],
+        "history": [
+          {
+            "eventId": "9c1d7a45-2f68-4b03-8e19-4a7c5d2b6f80",
+            "eventType": "tool.call.completed",
+            "sessionSequence": "103",
+            "createdAt": "2026-09-17T11:57:40.000Z",
+            "view": {
+              "toolCallId": "9a3f2b41-7c58-4d06-9e1b-2f8a5c7d4e30",
+              "turnId": "6601828b-3eca-4cec-9a58-18ae1e0a3a14",
+              "title": "运行 cargo test",
+              "state": "completed",
+              "extension": { "agentSpecific": true }
+            },
+            "acp": {
+              "mediaType": "application/json",
+              "rawJson": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"9a3f2b41-7c58-4d06-9e1b-2f8a5c7d4e30\",\"status\":\"completed\",\"content\":[]}}",
+              "byteLength": "175",
+              "sha256": "a5ic_SSStakM1XumlLofdHg1Ymjvv5wmIY0NQo9td0o"
+            }
+          },
+          {
+            "eventId": "2e6b9c40-7d15-4a83-b6f2-8c0e3d5a9b71",
+            "eventType": "terminal.output",
+            "sessionSequence": "104",
+            "createdAt": "2026-09-17T11:57:50.000Z",
+            "view": {
+              "terminalId": "term-3f9c1a",
+              "chunkIndex": "0",
+              "stream": "stdout",
+              "text": "test result: ok. 41 passed; 0 failed",
+              "truncated": false
+            },
+            "acp": {
+              "mediaType": "application/json",
+              "rawUnavailable": {
+                "reason": "retention_expired",
+                "byteLength": "128",
+                "sha256": null
+              }
+            }
+          }
+        ]
+      },
+      "hasEarlier": true,
+      "historyHasEarlier": true
+    },
+    "error": null
+  }
+}

@@ -39,3 +39,44 @@ export type {
   MessageRole,
 } from "./conversation";
 export { buildSessionReadPageView, buildContextUsageView, contextUsageLabel } from "./conversation";
+
+export type {
+  InteractionAnswer,
+  InteractionAvailability,
+  InteractionKind,
+  InteractionResolution,
+  InteractionUnavailableReason,
+  InteractionView,
+} from "./interaction";
+export { ELICITATION_ANSWERS, INTERACTION_UNAVAILABLE_LABELS, buildInteractionAvailability } from "./interaction";
+
+export type {
+  ConfigChangedTimelineCard,
+  ElicitationRequestedTimelineCard,
+  ElicitationResolvedTimelineCard,
+  FileChangedTimelineCard,
+  ModeChangedTimelineCard,
+  PermissionRequestedTimelineCard,
+  PermissionResolvedTimelineCard,
+  PlanEntryView,
+  PlanTimelineCard,
+  RecordGroup,
+  StructuredRecord,
+  StructuredSource,
+  TerminalOutputTimelineCard,
+  TimelineCard,
+  TimelinePosition,
+  ToolCallTimelineCard,
+  TurnTimelineCard,
+} from "./timeline";
+export {
+  buildTimelineCard,
+  compareTimelinePosition,
+  groupStructuredRecords,
+  mergeStructuredRecords,
+  positionOf,
+  recordFromEvent,
+  recordFromHistoryItem,
+  recordGroupOf,
+  viewText,
+} from "./timeline";

@@ -22,9 +22,9 @@ use sync_protocol::sync;
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
-const EXPECTED_VALID_MESSAGE_CASES: usize = 89;
+const EXPECTED_VALID_MESSAGE_CASES: usize = 91;
 const EXPECTED_ENVELOPE_REJECTED: usize = 2;
-const EXPECTED_BODY_REJECTED: usize = 21;
+const EXPECTED_BODY_REJECTED: usize = 22;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 const EXPECTED_SKIPPED_PAIRING: usize = 5;
 /// 只针对某个 **子模式**（`schemaPointer`）的载荷用例：它们不是一条完整的 WSS 消息，因此不经过

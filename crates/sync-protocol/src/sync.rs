@@ -13,9 +13,10 @@ use serde_json::value::RawValue;
 
 use crate::common::{
     AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, Cursor, DecimalString,
-    NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawObject, SessionSummary, Timestamp,
-    Uuid, ValueError, WorkspaceRef,
+    NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawAcp, RawObject, SessionSummary,
+    Timestamp, Uuid, ValueError, WorkspaceRef, deserialize_optional_non_null,
 };
+use crate::event::EventType;
 
 /// `sync.resetRequired.reason` / `sync.snapshotRequest.reason` 的取值（`sync.schema.json` 的两处 `enum`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,10 +80,11 @@ impl<'de> Deserialize<'de> for ResetReason {
 
 /// `sync.snapshotChunk.resource`：`sync.schema.json#/$defs/snapshotResource` 的封闭词表镜像。
 ///
-/// 快照只承载 `sessions`/`workspaces`/`agents` 三类清单资源。五类 session-scoped 明细资源
-/// `messages`/`turns`/`pending_interactions`/`config_options`/`capabilities` **不进快照**，无论会话的
+/// 快照只承载 `sessions`/`workspaces`/`agents` 三类清单资源。六类 session-scoped 明细资源
+/// `messages`/`turns`/`pending_interactions`/`config_options`/`capabilities`/`history` **不进快照**，无论会话的
 /// `origin.kind` 是 `local` 还是 `remote`（`docs/SYNC_PROTOCOL.md` §9.4，design D1）；会话明细一律由
-/// `session.read` 在线按复合游标分页取得，其元素形状仍由本模块的 [`SnapshotItemMessage`] 等类型承载。
+/// `session.read` 在线按会话内序号或复合游标分页取得，其元素形状仍由本模块的 [`SnapshotItemMessage`]
+/// 等类型承载。
 ///
 /// 取值集合与顺序由 `tests/schema_drift.rs::snapshot_resources_match_schema_enum` 与 schema 双向门禁。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -365,6 +367,33 @@ pub struct SnapshotItemCapability {
     pub broker_additions: RawObject,
 }
 
+/// `sync.snapshotItem.history` 的单个元素：`session.read` 的 `resources.history` 的一条历史条目。
+///
+/// 与 `event.schema.json` 的 `body.payload` 同形：[`event_id`](Self::event_id)/[`event_type`](Self::event_type)/
+/// [`session_sequence`](Self::session_sequence)/[`created_at`](Self::created_at) 定位事件，`view` 是与
+/// 实时事件同一套解析入口的结构化视图（schema 的 `{"type": "object"}`，用 [`RawObject`] 原样保留
+/// 字节；每个事件类型的最低字段见 [`crate::views`]），`acp` 是可选的原文或其不可用说明
+/// （`common.schema.json#/$defs/rawAcp` 的两个分支，没有 `null` 分支）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotItemHistory {
+    #[serde(rename = "eventId")]
+    pub event_id: Uuid,
+    #[serde(rename = "eventType")]
+    pub event_type: EventType,
+    #[serde(rename = "sessionSequence")]
+    pub session_sequence: DecimalString,
+    #[serde(rename = "createdAt")]
+    pub created_at: Timestamp,
+    pub view: RawObject,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub acp: Option<RawAcp>,
+}
+
 /// `sync.snapshotItem.workspaces` 的单个元素。
 ///
 /// `snapshotItem.workspaces` 在 schema 里是 `common.schema.json#/$defs/workspaceRef` 的 `$ref`，
@@ -632,13 +661,14 @@ mod tests {
         for resource in ["sessions", "workspaces", "agents"] {
             assert!(chunk(resource).is_ok(), "清单类资源必须可下发：{resource}");
         }
-        // 五类会话明细资源不进快照，对本地会话同样如此（§9.4 / design D1）。
+        // 六类会话明细资源不进快照，对本地会话同样如此（§9.4 / design D1）。
         for resource in [
             "messages",
             "turns",
             "pending_interactions",
             "config_options",
             "capabilities",
+            "history",
         ] {
             assert!(
                 chunk(resource).is_err(),

@@ -2,8 +2,8 @@
  * `schemas/sync/v1/sync.schema.json` 的严格 TypeScript 镜像：订阅、快照与 ACK。
  *
  * 快照资源词表按 `design.md` D1 收窄为 `sessions`/`workspaces`/`agents` 三类**清单**资源；
- * 五类会话明细资源（`messages`/`turns`/`pending_interactions`/`config_options`/`capabilities`）
- * **不进快照**，其元素形状仍由下面的 `SnapshotItem*` 定义供 `session.read` 结果复用。
+ * 六类会话明细资源（`messages`/`turns`/`pending_interactions`/`config_options`/`capabilities`/
+ * `history`）**不进快照**，其元素形状仍由下面的 `SnapshotItem*` 定义供 `session.read` 结果复用。
  */
 
 import type {
@@ -13,6 +13,7 @@ import type {
   Cursor,
   DecimalString,
   PublicError,
+  RawAcp,
   SessionSummary,
   Timestamp,
   Uuid,
@@ -121,7 +122,27 @@ export interface SnapshotItemConfigOptions {
 }
 
 /**
- * `$defs/snapshotItem.capabilities`：`agentCapabilities` 与 `brokerAdditions` 是 schema 里的
+ * `$defs.snapshotItem.history`：会话的**结构化历史条目**（`session.read` 的 `resources.history`）。
+ *
+ * 它与 `event.schema.json` 的 `body.payload` 同形——`view` 是与实时事件**同一套**解析入口
+ * （`projectView`）的结构化视图，`acp` 按 `acp.raw-payload.v1` 的协商结果出现（缺席或
+ * `rawUnavailable` 都表示原文不可用，服务端 MUST NOT 用占位内容冒充）。因此客户端只需
+ * 一套卡片与一套降级判定，实时与历史只剩**数据来源**的差异（`design.md` D1）。
+ *
+ * 两处与事件信封的差异是刻意的：历史条目没有 `origin`/`globalSequence`（它们不是本次连接的
+ * 投递记录），只有**会话内序号** `sessionSequence`——分页游标 `beforeHistory` 就是它（D2）。
+ */
+export interface SnapshotItemHistory {
+  readonly eventId: Uuid;
+  readonly eventType: string;
+  readonly sessionSequence: DecimalString;
+  readonly createdAt: Timestamp;
+  readonly view: Record<string, unknown>;
+  readonly acp?: RawAcp;
+}
+
+/**
+ * `$defs.snapshotItem.capabilities`：`agentCapabilities` 与 `brokerAdditions` 是 schema 里的
  * 开放对象（`{"type":"object"}`），因此保留 `Record<string, unknown>`。
  */
 export interface SnapshotItemCapabilities {

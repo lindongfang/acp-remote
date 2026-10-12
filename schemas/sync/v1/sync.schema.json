@@ -232,7 +232,7 @@
       "unevaluatedProperties": false
     },
     "snapshotResource": {
-      "description": "sync.snapshot_chunk.resource 的封闭词表：快照只承载 sessions/workspaces/agents 三类清单资源。五类 session-scoped 明细资源 messages/turns/pending_interactions/config_options/capabilities 一律不进快照，无论会话的 origin.kind 是 local 还是 remote（docs/SYNC_PROTOCOL.md §9.4，design D1）；它们的元素形状仍由下面的 snapshotItem.* 定义，供 session.read 的结果复用（command.schema.json#/$defs/sessionReadResult.resources）。本枚举的取值与 crates/sync-protocol 的 sync::SnapshotResource::ALL 逐条同序，由 tests/schema_drift.rs::snapshot_resources_match_schema_enum 双向门禁。",
+      "description": "sync.snapshot_chunk.resource 的封闭词表：快照只承载 sessions/workspaces/agents 三类清单资源。六类 session-scoped 明细资源 messages/turns/pending_interactions/config_options/capabilities/history 一律不进快照，无论会话的 origin.kind 是 local 还是 remote（docs/SYNC_PROTOCOL.md §9.4，design D1）；它们的元素形状仍由下面的 snapshotItem.* 定义，供 session.read 的结果复用（command.schema.json#/$defs/sessionReadResult.resources）。本枚举的取值与 crates/sync-protocol 的 sync::SnapshotResource::ALL 逐条同序，由 tests/schema_drift.rs::snapshot_resources_match_schema_enum 双向门禁。",
       "enum": ["sessions", "workspaces", "agents"]
     },
     "snapshotItem.sessions": { "$ref": "common.schema.json#/$defs/sessionSummary" },
@@ -309,6 +309,23 @@
         "sessionId": { "$ref": "common.schema.json#/$defs/uuid" },
         "agentCapabilities": { "type": "object" },
         "brokerAdditions": { "type": "object" }
+      }
+    },
+    "snapshotItem.history": {
+      "description": "会话的结构化历史条目的单个元素（session.read 的 resources.history），与 event.schema.json 的 body.payload 同形：eventId/eventType/sessionSequence/createdAt 定位事件，view 是与实时事件同一套解析入口的结构化视图，acp 按 acp.raw-payload.v1 的协商结果出现。view 是开放对象——每个事件类型的最低字段见 event-views.schema.json，这里不展开；acp 缺席或 rawUnavailable 都表示原文不可用，服务端 MUST NOT 用占位内容冒充原文。本元素与其余 snapshotItem.* 一样只经 session.read 返回，MUST NOT 进入快照（docs/SYNC_PROTOCOL.md §9.4、§10.2、§11.5）。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "eventType", "sessionSequence", "createdAt", "view"],
+      "properties": {
+        "eventId": { "$ref": "common.schema.json#/$defs/uuid" },
+        "eventType": {
+          "type": "string",
+          "pattern": "^[a-z0-9_.-]{1,128}$"
+        },
+        "sessionSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
+        "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "view": { "type": "object" },
+        "acp": { "$ref": "common.schema.json#/$defs/rawAcp" }
       }
     },
     "snapshotItem.workspaces": { "$ref": "common.schema.json#/$defs/workspaceRef" },

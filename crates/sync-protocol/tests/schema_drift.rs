@@ -13,6 +13,7 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use sync_protocol::command::IncludeResource;
 use sync_protocol::envelope::MessageType;
 use sync_protocol::error::ErrorCode;
 use sync_protocol::sync::SnapshotResource;
@@ -380,6 +381,36 @@ fn snapshot_resources_match_schema_enum() {
         SnapshotResource::ALL.map(|value| value.as_str()).to_vec(),
         declared,
         "$defs.snapshotResource.enum 与 SnapshotResource::ALL 不一致"
+    );
+}
+
+/// `session.read.payload.include` 封闭词表的镜像门禁：`command::IncludeResource::ALL` 与
+/// `command.schema.json#/$defs/sessionRead.payload.properties.include.items.enum` 双向相等（逐条且同序）。
+///
+/// 根因与 `snapshot_resources_match_schema_enum` 同源：同一个 `include` 取值集合在 schema 与 Rust 各有一
+/// 份，只在一侧新增取值时其它夹具门禁仍可能全绿（典型是把新取值拼成另一个合法标识符——客户端按
+/// schema 校验、服务端消费 Rust 枚举，两侧从此各说各话）。同序一并断言，因为两端都按该顺序列举取值：
+/// 新增 `history` 这类取值时两边都必须落在同一位置。
+#[test]
+fn session_read_include_values_match_schema_enum() {
+    let set = SchemaSet::load(&support::repo_path("schemas/sync/v1"));
+    let document = set.document("command.schema.json");
+
+    let declared: Vec<&str> =
+        document["$defs"]["sessionRead"]["properties"]["payload"]["properties"]["include"]["items"]
+            ["enum"]
+            .as_array()
+            .unwrap_or_else(|| {
+                panic!("command.schema.json 的 sessionRead.payload.include.items 不是 closed enum")
+            })
+            .iter()
+            .map(|value| value.as_str().expect("enum 取值必须是字符串"))
+            .collect();
+
+    assert_eq!(
+        IncludeResource::ALL.map(|value| value.as_str()).to_vec(),
+        declared,
+        "$defs.sessionRead.payload.include.items.enum 与 IncludeResource::ALL 不一致"
     );
 }
 

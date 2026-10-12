@@ -97,8 +97,12 @@
       "type": "integer",
       "minimum": 1
     },
+    "sessionReadBeforeHistory": {
+      "description": "session.read 的历史条目游标：会话内事件序号（十进制字符串，design D2）。它与消息分页的 before（createdAt 与 messageId 的复合游标）是两套独立游标：同一请求可同时给出两者，各自翻各自的页，任一方都不改变另一方的页边界（docs/SYNC_PROTOCOL.md §11.5）。省略即请求最新一页；服务端 MUST NOT 用其它标识（例如事件标识）代替该序号，也不为它猜测或补全任何排序分量。",
+      "$ref": "common.schema.json#/$defs/decimalString"
+    },
     "sessionRead": {
-      "description": "Sync 面的 session.read：before 与 limit 只在本传输面生效（design D3）。Node Link 面的同名命令载荷不含这两个键，其行为与本变更前一致（docs/NODE_LINK_PROTOCOL.md §12.7）。",
+      "description": "Sync 面的 session.read：include 里的 history、游标 before/beforeHistory 与 limit 只在本传输面生效（design D3、D11）。Node Link 面的同名命令载荷不含这些键，其行为与本变更前一致（docs/NODE_LINK_PROTOCOL.md §12.7）。",
       "type": "object",
       "additionalProperties": false,
       "required": ["requestId", "command", "sessionId", "payload"],
@@ -114,9 +118,10 @@
             "include": {
               "type": "array",
               "uniqueItems": true,
-              "items": { "enum": ["messages", "turns", "pending_interactions", "config_options", "capabilities"] }
+              "items": { "enum": ["messages", "turns", "pending_interactions", "config_options", "capabilities", "history"] }
             },
             "before": { "$ref": "#/$defs/sessionReadBefore" },
+            "beforeHistory": { "$ref": "#/$defs/sessionReadBeforeHistory" },
             "limit": { "$ref": "#/$defs/sessionReadLimit" }
           }
         }
@@ -310,7 +315,7 @@
       }
     },
     "sessionReadResult": {
-      "description": "session.read 的完成结果。resources 的每个键都可缺席；hasEarlier 是必填布尔值，指示本次返回的这一页之前是否仍有更早内容，客户端据此决定是否继续用最早一条的 (createdAt, messageId) 构造 before 翻页。",
+      "description": "session.read 的完成结果。resources 的每个键都可缺席；hasEarlier 是必填布尔值，指示本次返回的这一页消息之前是否仍有更早内容，客户端据此决定是否继续用最早一条的 (createdAt, messageId) 构造 before 翻页；historyHasEarlier 是可选布尔值，只描述 resources.history 这一页之前是否仍有更早条目，客户端据此用最早一条的 sessionSequence 构造 beforeHistory 翻页。两者各自分页，互不影响（docs/SYNC_PROTOCOL.md §11.5）。",
       "type": "object",
       "additionalProperties": false,
       "required": ["sessionId", "resources", "hasEarlier"],
@@ -339,10 +344,15 @@
             "capabilities": {
               "type": "array",
               "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.capabilities" }
+            },
+            "history": {
+              "type": "array",
+              "items": { "$ref": "sync.schema.json#/$defs/snapshotItem.history" }
             }
           }
         },
-        "hasEarlier": { "type": "boolean" }
+        "hasEarlier": { "type": "boolean" },
+        "historyHasEarlier": { "type": "boolean" }
       }
     },
     "configListResult": {

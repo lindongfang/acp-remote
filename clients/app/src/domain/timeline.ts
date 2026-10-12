@@ -1,0 +1,530 @@
+/**
+ * 时间线的**结构化条目**：把「实时事件」与「按会话读取的历史条目」归一成同一种记录，
+ * 再投影成同一套卡片（`design.md` D1、D2；spec「对话页按时间线呈现消息与结构化条目」）。
+ *
+ * ## 为什么只有一套记录与一套卡片
+ *
+ * `snapshotItem.history` 与 `event.payload` 同形（`view` 走同一个 `projectView`）。若历史另造
+ * 形状，就等于两套解析、两套降级、两套测试——而它们描述的是同一批事件。因此这里先把两种来源
+ * 归一成 {@link StructuredRecord}，之后「实时 vs 历史」只剩 `source` 这一个字段的差别，卡片
+ * 与降级判定都**不知道**自己面对的是哪种来源。
+ *
+ * ## 归并（同一标识只呈现一处）
+ *
+ * 1. **去重键是 `eventId`**（`mergeStructuredRecords`）：主键来自 `event.schema.json` 的稳定
+ *    事件标识，实时与历史都带它；同一条事件从两条来源进来时只保留一处。实时记录优先——
+ *    它带 `globalSequence` 与 ACP 原文的可用性（历史条目的 `acp` 可能被保留策略裁掉）。
+ * 2. **归并成一张卡片**（{@link groupStructuredRecords}）：`tool.call.{started,updated,completed}`
+ *    按 `toolCallId`、`turn.{queued,started,completed,cancelled,failed}` 按 `turnId`。它们是同
+ *    一个对象的生命周期，逐条画成一串卡片只会把时间线塞满（D1 的备选就这么否决的）。
+ *
+ * ## 时间顺序
+ *
+ * 以 `createdAt` 为主键；同一时刻退到**会话内序号**（历史与实时都有它，`beforeHistory` 用的是
+ * 同一口径），再退到全局投递序号，最后按构造次序（`Array.prototype.sort` 稳定）。序号比较用
+ * `BigInt`：它是十进制字符串，位数不同时字典序会给错答案。
+ */
+
+import type { ConfigOptionChoice, ConfigOptionView, PublicError, RawAcp } from "../protocol/common";
+import type { EventMessage, PlanPriority, PlanStatus, TerminalStream } from "../protocol/event";
+import type { SnapshotItemHistory } from "../protocol/sync";
+import type { InteractionAvailability } from "./interaction";
+
+/** 结构化来源：本连接的实时事件，或按会话读取的历史条目。 */
+export type StructuredSource = "realtime" | "history";
+
+/** 归一后的结构化记录：两种来源在卡片/降级判定眼里完全同形。 */
+export interface StructuredRecord {
+  readonly source: StructuredSource;
+  readonly eventId: string;
+  readonly eventType: string;
+  readonly sessionId: string | null;
+  readonly createdAt: string;
+  /** 会话内序号：实时事件的 `body.sessionSequence`，历史条目**必有**。 */
+  readonly sessionSequence: string | null;
+  /** 全局投递序号：只有实时事件有（历史条目不是本次连接的投递记录）。 */
+  readonly globalSequence: string | null;
+  /** 事件来源种类（`body.origin.kind`）；历史条目没有 origin，为 `null`。 */
+  readonly originKind: string | null;
+  readonly view: Readonly<Record<string, unknown>>;
+  readonly acp?: RawAcp;
+}
+
+/** 实时事件 → 结构化记录。 */
+export function recordFromEvent(event: EventMessage): StructuredRecord {
+  return {
+    source: "realtime",
+    eventId: event.body.eventId,
+    eventType: event.body.eventType,
+    sessionId: event.body.sessionId,
+    createdAt: event.body.createdAt,
+    sessionSequence: event.body.sessionSequence,
+    globalSequence: event.body.globalSequence,
+    originKind: event.body.origin.kind,
+    view: event.body.payload.view,
+    ...(event.body.payload.acp === undefined ? {} : { acp: event.body.payload.acp }),
+  };
+}
+
+/**
+ * 历史条目 → 结构化记录。
+ *
+ * `sessionId` 由调用方从**结果**给出：`snapshotItem.history` 自己没有这个字段（整页都属于同
+ * 一次 `session.read`），因此它不是「缺失」，而是「页级信息」。
+ */
+export function recordFromHistoryItem(item: SnapshotItemHistory, sessionId: string): StructuredRecord {
+  return {
+    source: "history",
+    eventId: item.eventId,
+    eventType: item.eventType,
+    sessionId,
+    createdAt: item.createdAt,
+    sessionSequence: item.sessionSequence,
+    globalSequence: null,
+    originKind: null,
+    view: item.view,
+    ...(item.acp === undefined ? {} : { acp: item.acp }),
+  };
+}
+
+/** 一条记录在时间线上的位置（`createdAt` + 次序分量）。 */
+export interface TimelinePosition {
+  readonly createdAt: string;
+  readonly sequence: string | null;
+}
+
+/** 记录的位置：次序分量优先取会话内序号，其次全局序号。 */
+export function positionOf(record: StructuredRecord): TimelinePosition {
+  return { createdAt: record.createdAt, sequence: record.sessionSequence ?? record.globalSequence };
+}
+
+/**
+ * 位置比较。
+ *
+ * 时间走 `Date.parse`（`createdAt` 是固定形状的 UTC 毫秒时间戳）；同一时刻按次序分量升序，
+ * 分量缺席（`null`）排在有值的**前面**（它没有可比信息，保持「先构造先出现」更不容易制造错觉）。
+ */
+export function compareTimelinePosition(a: TimelinePosition, b: TimelinePosition): number {
+  const delta = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  if (delta !== 0) return delta;
+  if (a.sequence === b.sequence) return 0;
+  if (a.sequence === null) return -1;
+  if (b.sequence === null) return 1;
+  return BigInt(a.sequence) < BigInt(b.sequence) ? -1 : 1;
+}
+
+/**
+ * 去重：同一 `eventId` 只保留一处，实时来源优先。
+ *
+ * 实时优先的理由是**信息更全**而不是「更新」：它带 `globalSequence`，且 `acp` 是本次投递
+ * 携带的（历史条目的原文可能按保留策略裁掉）。两条记录的 `view` 描述同一件事，因此用哪条都
+ * 不会呈现成不同内容——但把两条都留下就会在时间线上显示两次，spec MUST NOT。
+ */
+export function mergeStructuredRecords(
+  realtime: readonly StructuredRecord[],
+  history: readonly StructuredRecord[],
+): readonly StructuredRecord[] {
+  const byId = new Map<string, StructuredRecord>();
+  for (const record of realtime) {
+    if (!byId.has(record.eventId)) byId.set(record.eventId, record);
+  }
+  for (const record of history) {
+    if (!byId.has(record.eventId)) byId.set(record.eventId, record);
+  }
+  return [...byId.values()];
+}
+
+/** 一个时间线条目对应的记录组：分组类型有多条（生命周期），其余只有一条。 */
+export interface RecordGroup {
+  /** 条目标识：分组类型为 `<家族>:<标识>`，其余为 `event:<eventId>`。 */
+  readonly key: string;
+  readonly records: readonly StructuredRecord[];
+  /** 最早一条（决定条目在时间线上的位置）。 */
+  readonly earliest: StructuredRecord;
+  /** 最新一条（决定卡片呈现的状态）。 */
+  readonly latest: StructuredRecord;
+}
+
+/** 分组家族：生命周期事件按对象标识合并，其余一事件一条目。 */
+const GROUPED_EVENT_TYPES: Readonly<Record<string, { readonly family: string; readonly idField: string }>> = {
+  "turn.queued": { family: "turn", idField: "turnId" },
+  "turn.started": { family: "turn", idField: "turnId" },
+  "turn.completed": { family: "turn", idField: "turnId" },
+  "turn.cancelled": { family: "turn", idField: "turnId" },
+  "turn.failed": { family: "turn", idField: "turnId" },
+  "tool.call.started": { family: "tool_call", idField: "toolCallId" },
+  "tool.call.updated": { family: "tool_call", idField: "toolCallId" },
+  "tool.call.completed": { family: "tool_call", idField: "toolCallId" },
+};
+
+/** 读一个字符串字段（视图是开放对象，字段可能是任意东西，因此须在运行期确认）。 */
+export function viewText(view: Readonly<Record<string, unknown>>, key: string): string | null {
+  const value = view[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** 读结构化公开错误（`turn.failed.error`）；形状不对时返回 `null`，不编造码与消息。 */
+function errorField(view: Readonly<Record<string, unknown>>): PublicError | null {
+  const value = view["error"];
+  if (typeof value !== "object" || value === null) return null;
+  const code = (value as Readonly<Record<string, unknown>>)["code"];
+  const message = (value as Readonly<Record<string, unknown>>)["message"];
+  if (typeof code !== "string" || typeof message !== "string") return null;
+  const retryable = (value as Readonly<Record<string, unknown>>)["retryable"];
+  const details = (value as Readonly<Record<string, unknown>>)["details"];
+  return {
+    code: code as PublicError["code"],
+    message,
+    retryable: retryable === true,
+    details: typeof details === "object" && details !== null ? (details as Record<string, unknown>) : {},
+  };
+}
+
+/** 计划条目（`session.plan.changed.entries`）。 */
+export interface PlanEntryView {
+  readonly content: string;
+  readonly priority: PlanPriority;
+  readonly status: PlanStatus;
+}
+
+const PLAN_PRIORITIES: Readonly<Record<string, PlanPriority>> = { high: "high", medium: "medium", low: "low" };
+const PLAN_STATUSES: Readonly<Record<string, PlanStatus>> = { pending: "pending", in_progress: "in_progress", completed: "completed" };
+
+/** 读计划条目数组；任何一条缺必填字段即返回 `null`（宁可不画卡片，也不画一条残缺的计划）。 */
+function planEntriesField(view: Readonly<Record<string, unknown>>): readonly PlanEntryView[] | null {
+  const value = view["entries"];
+  if (!Array.isArray(value)) return null;
+  const entries: PlanEntryView[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return null;
+    const record = item as Readonly<Record<string, unknown>>;
+    const content = record["content"];
+    const priority = typeof record["priority"] === "string" ? PLAN_PRIORITIES[record["priority"]] : undefined;
+    const status = typeof record["status"] === "string" ? PLAN_STATUSES[record["status"]] : undefined;
+    if (typeof content !== "string" || priority === undefined || status === undefined) return null;
+    entries.push({ content, priority, status });
+  }
+  return entries;
+}
+
+/** 读一个配置项的可选项数组（`configOptionView.options`）；形状不完整即返回 `null`。 */
+function configChoicesField(value: unknown): readonly ConfigOptionChoice[] | null {
+  if (!Array.isArray(value)) return null;
+  const choices: ConfigOptionChoice[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return null;
+    const record = item as Readonly<Record<string, unknown>>;
+    const choiceValue = record["value"];
+    const name = record["name"];
+    if (typeof choiceValue !== "string" || typeof name !== "string") return null;
+    const description = record["description"];
+    choices.push({ value: choiceValue, name, description: typeof description === "string" ? description : null });
+  }
+  return choices;
+}
+
+/** 读配置项数组（`session.config.changed.configOptions`）；形状不完整即返回 `null`。 */
+function configOptionsField(view: Readonly<Record<string, unknown>>): readonly ConfigOptionView[] | null {
+  const value = view["configOptions"];
+  if (!Array.isArray(value)) return null;
+  const options: ConfigOptionView[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return null;
+    const record = item as Readonly<Record<string, unknown>>;
+    const id = record["id"];
+    const name = record["name"];
+    const type = record["type"];
+    const currentValue = record["currentValue"];
+    if (typeof id !== "string" || typeof name !== "string" || typeof type !== "string") return null;
+    if (type !== "select" && type !== "boolean") return null;
+    if (typeof currentValue !== "string" && typeof currentValue !== "boolean") return null;
+    const description = record["description"];
+    const category = record["category"];
+    // 可选项必须带出来：模型/模式分节的「可选项」就是它——丢掉它会让「模型」永远显示「未提供」。
+    const choices = record["options"] === undefined ? undefined : configChoicesField(record["options"]);
+    if (choices === null) return null;
+    options.push({
+      id,
+      name,
+      description: typeof description === "string" ? description : null,
+      category: typeof category === "string" ? category : null,
+      type,
+      currentValue,
+      ...(choices === undefined ? {} : { options: choices }),
+    });
+  }
+  return options;
+}
+
+/** 时间线上的结构化卡片（`kind` 与消息/降级互不重叠，可直接作为条目的判别键）。 */
+export type TimelineCard =
+  | TurnTimelineCard
+  | ToolCallTimelineCard
+  | TerminalOutputTimelineCard
+  | PlanTimelineCard
+  | FileChangedTimelineCard
+  | ModeChangedTimelineCard
+  | ConfigChangedTimelineCard
+  | PermissionRequestedTimelineCard
+  | ElicitationRequestedTimelineCard
+  | PermissionResolvedTimelineCard
+  | ElicitationResolvedTimelineCard;
+
+/** 轮次生命周期卡片（同一 `turnId` 的多条事件合并成一张，状态取最新一条）。 */
+export interface TurnTimelineCard {
+  readonly kind: "turn";
+  readonly turnId: string;
+  readonly state: string;
+  readonly error: PublicError | null;
+}
+
+/** 工具调用卡片（同一 `toolCallId` 的多条事件合并成一张）。 */
+export interface ToolCallTimelineCard {
+  readonly kind: "tool_call";
+  readonly toolCallId: string;
+  readonly turnId: string | null;
+  readonly title: string;
+  readonly state: string;
+}
+
+/** 终端输出卡片（按 `chunkIndex` 逐块呈现，不合并）。 */
+export interface TerminalOutputTimelineCard {
+  readonly kind: "terminal_output";
+  readonly terminalId: string;
+  readonly chunkIndex: string;
+  readonly stream: TerminalStream;
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/** 计划变更卡片。 */
+export interface PlanTimelineCard {
+  readonly kind: "plan";
+  readonly entries: readonly PlanEntryView[];
+}
+
+/**
+ * 文件改动卡片：**只有**结构化统计与相对化路径（D8）。
+ *
+ * `addedLines`/`deletedLines`/`outsideWorkspace` 在视图里是可选的——「判定不出时省略而不是
+ * 填零」，因此这里是 `string | null` 而不是 `0`。客户端 MUST NOT 为了填满这里去解析 ACP 原文。
+ */
+export interface FileChangedTimelineCard {
+  readonly kind: "file_changed";
+  readonly changeId: string;
+  readonly changeKind: string;
+  /** core 已相对化的展示路径；客户端不自己相对化（它没有路径规范化的知识）。 */
+  readonly displayPath: string;
+  readonly summary: string;
+  readonly addedLines: string | null;
+  readonly deletedLines: string | null;
+  readonly outsideWorkspace: boolean;
+}
+
+/** 模式变更卡片。 */
+export interface ModeChangedTimelineCard {
+  readonly kind: "mode_changed";
+  readonly currentModeId: string | null;
+  readonly version: string;
+}
+
+/** 配置（含模型）变更卡片。 */
+export interface ConfigChangedTimelineCard {
+  readonly kind: "config_changed";
+  readonly configOptions: readonly ConfigOptionView[];
+  readonly version: string;
+}
+
+/** 授权请求卡片：可应答性由 `domain/interaction.ts` 的判定注入（历史来源没有可选项）。 */
+export interface PermissionRequestedTimelineCard {
+  readonly kind: "permission_requested";
+  readonly interactionId: string;
+  readonly turnId: string | null;
+  readonly title: string;
+  readonly description: string | null;
+  readonly availability: InteractionAvailability;
+}
+
+/** 提问请求卡片（`schema` 是开放对象，原样带出，由组件按不可信输入处理）。 */
+export interface ElicitationRequestedTimelineCard {
+  readonly kind: "elicitation_requested";
+  readonly interactionId: string;
+  readonly turnId: string | null;
+  readonly title: string;
+  readonly schema: Readonly<Record<string, unknown>>;
+  readonly availability: InteractionAvailability;
+}
+
+/** 授权已处理卡片。 */
+export interface PermissionResolvedTimelineCard {
+  readonly kind: "permission_resolved";
+  readonly interactionId: string;
+  readonly resolution: string;
+  readonly resolvedByDeviceId: string | null;
+}
+
+/** 提问已处理卡片。 */
+export interface ElicitationResolvedTimelineCard {
+  readonly kind: "elicitation_resolved";
+  readonly interactionId: string;
+  readonly action: string;
+  readonly resolvedByDeviceId: string | null;
+}
+
+/**
+ * 记录组 → 卡片。
+ *
+ * 返回 `null` 表示「这条事件的内容不足以画出卡片」（视图缺呈现所需的必填字段）。调用方**只**
+ * 在覆盖表说是时间线卡片时才调用本函数，因此 `null` 只会来自形状违规，而不是「没有视图」。
+ *
+ * 授权/提问两类卡片刻意**不**在这里查表取可选项，而是通过 `availabilityFor` 回调向外取
+ * 可用性判定：可选项是否存在、是否已处理、会话是否开放都取决于交互状态（本设备是否亲历、
+ * 其它设备是否已处理），那属于 `features/interaction-model.ts` 的职责，domain 层不该猜。
+ */
+export function buildTimelineCard(
+  group: RecordGroup,
+  availabilityFor: (interactionId: string) => InteractionAvailability | null,
+): TimelineCard | null {
+  const latest = group.latest;
+  const view = latest.view;
+  switch (latest.eventType) {
+    case "turn.queued":
+    case "turn.started":
+    case "turn.completed":
+    case "turn.cancelled":
+    case "turn.failed": {
+      const turnId = viewText(group.earliest.view, "turnId");
+      const state = viewText(view, "state");
+      if (turnId === null || state === null) return null;
+      return { kind: "turn", turnId, state, error: errorField(view) };
+    }
+    case "tool.call.started":
+    case "tool.call.updated":
+    case "tool.call.completed": {
+      const toolCallId = viewText(group.earliest.view, "toolCallId");
+      const title = viewText(view, "title");
+      const state = viewText(view, "state");
+      if (toolCallId === null || title === null || state === null) return null;
+      return { kind: "tool_call", toolCallId, turnId: viewText(view, "turnId"), title, state };
+    }
+    case "terminal.output": {
+      const terminalId = viewText(view, "terminalId");
+      const chunkIndex = viewText(view, "chunkIndex");
+      const stream = view["stream"];
+      const text = viewText(view, "text");
+      if (terminalId === null || chunkIndex === null || text === null) return null;
+      if (stream !== "stdout" && stream !== "stderr") return null;
+      return { kind: "terminal_output", terminalId, chunkIndex, stream, text, truncated: view["truncated"] === true };
+    }
+    case "session.plan.changed": {
+      const entries = planEntriesField(view);
+      if (entries === null) return null;
+      return { kind: "plan", entries };
+    }
+    case "file.changed": {
+      const changeId = viewText(view, "changeId");
+      const changeKind = viewText(view, "kind");
+      const displayPath = viewText(view, "displayPath");
+      const summary = viewText(view, "summary");
+      if (changeId === null || changeKind === null || displayPath === null || summary === null) return null;
+      return {
+        kind: "file_changed",
+        changeId,
+        changeKind,
+        displayPath,
+        summary,
+        addedLines: viewText(view, "addedLines"),
+        deletedLines: viewText(view, "deletedLines"),
+        outsideWorkspace: view["outsideWorkspace"] === true,
+      };
+    }
+    case "session.mode.changed": {
+      const currentModeId = viewText(view, "currentModeId");
+      const version = viewText(view, "version");
+      if (version === null) return null;
+      return { kind: "mode_changed", currentModeId, version };
+    }
+    case "session.config.changed": {
+      const configOptions = configOptionsField(view);
+      const version = viewText(view, "version");
+      if (configOptions === null || version === null) return null;
+      return { kind: "config_changed", configOptions, version };
+    }
+    case "permission.requested": {
+      const interactionId = viewText(view, "interactionId");
+      const title = viewText(view, "title");
+      const availability = interactionId === null ? null : availabilityFor(interactionId);
+      if (interactionId === null || title === null || availability === null) return null;
+      return {
+        kind: "permission_requested",
+        interactionId,
+        turnId: viewText(view, "turnId"),
+        title,
+        description: viewText(view, "description"),
+        availability,
+      };
+    }
+    case "elicitation.requested": {
+      const interactionId = viewText(view, "interactionId");
+      const title = viewText(view, "title");
+      const schema = view["schema"];
+      const availability = interactionId === null ? null : availabilityFor(interactionId);
+      if (interactionId === null || title === null || availability === null) return null;
+      if (typeof schema !== "object" || schema === null) return null;
+      return {
+        kind: "elicitation_requested",
+        interactionId,
+        turnId: viewText(view, "turnId"),
+        title,
+        schema: schema as Readonly<Record<string, unknown>>,
+        availability,
+      };
+    }
+    case "permission.resolved": {
+      const interactionId = viewText(view, "interactionId");
+      const resolution = viewText(view, "resolution");
+      if (interactionId === null || resolution === null) return null;
+      return { kind: "permission_resolved", interactionId, resolution, resolvedByDeviceId: viewText(view, "resolvedByDeviceId") };
+    }
+    case "elicitation.resolved": {
+      const interactionId = viewText(view, "interactionId");
+      const action = viewText(view, "action");
+      if (interactionId === null || action === null) return null;
+      return { kind: "elicitation_resolved", interactionId, action, resolvedByDeviceId: viewText(view, "resolvedByDeviceId") };
+    }
+    default:
+      // 覆盖表之外的类型没有卡片；这里返回 `null` 只是二次防线（调用方本不该走到）。
+      return null;
+  }
+}
+
+/** 单条记录构成的记录组（不参与生命周期归并的调用方用它复用同一套卡片构造）。 */
+export function recordGroupOf(record: StructuredRecord): RecordGroup {
+  return { key: `event:${record.eventId}`, records: [record], earliest: record, latest: record };
+}
+
+/**
+ * 记录 → 记录组（去重之后调用）。
+ *
+ * 分组键带对象标识：`tool_call:<toolCallId>` / `turn:<turnId>`；标识取不到时退化成
+ * `event:<eventId>`（宁可多一张卡片，也不把无关的两条事件并成一张）。
+ */
+export function groupStructuredRecords(records: readonly StructuredRecord[]): readonly RecordGroup[] {
+  const groups = new Map<string, { records: StructuredRecord[]; earliest: StructuredRecord; latest: StructuredRecord }>();
+  for (const record of records) {
+    const grouping = GROUPED_EVENT_TYPES[record.eventType];
+    const id = grouping === undefined ? null : viewText(record.view, grouping.idField);
+    const key = grouping === undefined || id === null ? `event:${record.eventId}` : `${grouping.family}:${id}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, { records: [record], earliest: record, latest: record });
+      continue;
+    }
+    existing.records.push(record);
+    if (compareTimelinePosition(positionOf(record), positionOf(existing.latest)) > 0) existing.latest = record;
+    if (compareTimelinePosition(positionOf(record), positionOf(existing.earliest)) < 0) existing.earliest = record;
+  }
+  return [...groups.entries()]
+    .map(([key, value]) => ({ key, records: value.records, earliest: value.earliest, latest: value.latest }))
+    .sort((a, b) => compareTimelinePosition(positionOf(a.earliest), positionOf(b.earliest)));
+}

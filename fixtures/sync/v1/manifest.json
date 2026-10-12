@@ -580,6 +580,16 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-session-read-history-page.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-session-read-history-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "invalid/command-session-read-before-missing-message-id.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
@@ -605,6 +615,12 @@
     },
     {
       "fixture": "invalid/snapshot-chunk-detail-resource-capabilities.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/snapshot-chunk-detail-resource-history.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "enum"

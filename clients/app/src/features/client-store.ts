@@ -7,31 +7,52 @@
  * **不做**：不持有 socket、不碰 IndexedDB/WebCrypto、不自己判定该不该重连——重连与阻断
  * 由 `src/state/` 的连接状态机决定（`shouldAutoReconnect`），本页只读它的结论。
  *
- * ## 明细一律现取（`design.md` D8）
+ * ## 呈现覆盖由客户端自持（`design.md` D5）
  *
- * 会话正文**只**来自 `session.read`：事件侧不拼接正文、不做增量合并。因此事件面只消费四类
- * 与正文无关的信息——会话摘要（目录汇总）、用量（R17 上下文条）、Agent 连接覆盖层（R19）、
- * 降级事件（R18）。这样就不存在「快照里的明细」与「读回来的明细」两套数据需要合并。
+ * 每条事件先归一成 `StructuredRecord`（实时事件与按会话读取的历史条目**同形**），再按
+ * `presentation-coverage.ts` 的覆盖表分流：命中 → 走它自己的通道；未命中 → 降级卡片。
+ * 判定**不**看协议词表，因此「协议已知但客户端还没有卡片」的事件同样有降级卡片，不会被静默丢掉。
+ *
+ * ## 正文只来自 session.read（D6/D8）
+ *
+ * 事件侧不拼接正式正文：消息增量只进**易失**叠加层（按 `messageId` 累加），`session.read`
+ * 返回同 id 的完整正文后以读取结果为准（叠加层里同 id 的条目随即不再呈现）；
+ * `turn.delta_compacted` 作废该轮次的累加。这样不存在「快照里的明细」与「读回来的明细」
+ * 两套权威需要合并。
  *
  * ## 命令出口只有一个
  *
- * 用户意图（创建会话、读取明细、加载更早）都经 `#dispatchCommand`，它用**稳定 `requestId`**
- * 并把记录写进 `commands`；终态由 `command_result` 回填（R13）。
+ * 用户意图（创建会话、读取明细、翻页、提交提示、取消轮次、应答交互、切换模型/模式）都经
+ * `#dispatchIntent`，它用**稳定 `requestId`** 并把记录以 `submitting` 写进 `commands`；
+ * 终态由 `command_result` 回填（R13）。终态之前，一切呈现只能是「待确认」。
  */
 
 import type {
-  CommandMessage,
+  CommandBody,
   CommandResultMessage,
   CommandResultValue,
+  ConfigOptionView,
+  ElicitationResolutionAction,
+  ElicitationRespondPayload,
   EventMessage,
+  ModeState,
   SessionReadInclude,
   SessionReadResult,
   SessionSummary,
+  SnapshotItemHistory,
   SnapshotItemMessages,
+  SnapshotItemPendingInteractions,
   Uuid,
 } from "../protocol";
-import type { StagedResources, SyncClientEvent } from "../sync-client";
-import { AgentConnectionOverlayStore, assertPagesDoNotOverlap, toLoadedPage } from "../sync-client";
+import type { ReadCursor, StagedResources, SyncClientEvent } from "../sync-client";
+import {
+  AgentConnectionOverlayStore,
+  SESSION_HISTORY_FEATURE,
+  assertHistoryPagesDoNotOverlap,
+  assertPagesDoNotOverlap,
+  toLoadedHistoryPage,
+  toLoadedPage,
+} from "../sync-client";
 import type { CommandRecord, ConnectionEvent, ConnectionMachineState } from "../state";
 import {
   IllegalConnectionTransition,
@@ -39,16 +60,47 @@ import {
   createCommand,
   initialConnectionState,
   isBlockingState,
+  markSubmitting,
   transition,
 } from "../state";
-import type { AgentCatalogEntryView, SessionReadPageView } from "../domain";
-import { buildAgentCatalogView, buildSessionReadPageView } from "../domain";
+import type {
+  AgentCatalogEntryView,
+  InteractionView,
+  ModeChangedTimelineCard,
+  SessionReadPageView,
+  StructuredRecord,
+} from "../domain";
+import {
+  INTERACTION_UNAVAILABLE_LABELS,
+  buildAgentCatalogView,
+  buildSessionReadPageView,
+  buildTimelineCard,
+  compareTimelinePosition,
+  mergeStructuredRecords,
+  positionOf,
+  recordFromEvent,
+  recordFromHistoryItem,
+  recordGroupOf,
+  viewText,
+} from "../domain";
 import type { AgentConnectionOverlay } from "../domain/agent-catalog";
 import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./ports";
 import type { ConversationHeaderModel, ConversationPageModel, UsageReading } from "./conversation-model";
-import { buildConversationModel, conversationCapabilities } from "./conversation-model";
+import { buildConversationModel, conversationCapabilities, structuredHistoryAvailability } from "./conversation-model";
+import type { ConversationInputModel } from "./conversation-input-model";
+import { buildConversationInputModel } from "./conversation-input-model";
+import type { ConversationSettingsModel } from "./conversation-settings-model";
+import { buildConversationSettingsModel } from "./conversation-settings-model";
+import type { VolatileMessageState } from "./conversation-timeline";
+import {
+  appendDelta,
+  buildFileChangeViews,
+  buildTimeline,
+  deltaChannelOf,
+} from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
-import { buildDegradedEventModel, isDegradedEvent } from "./degradation-model";
+import { buildDegradedRecordModel, isDegradedRecord } from "./degradation-model";
+import { buildInteractionViews } from "./interaction-model";
 import type { CreateSessionEntryModel, CreateSessionRefs } from "./create-session-model";
 import {
   assertCreateSessionRefs,
@@ -67,20 +119,39 @@ import { buildHostPanelModel } from "./host-panel-model";
 import type { PairingPageModel } from "./pairing-model";
 import { initialPairingPageModel } from "./pairing-model";
 
-/** v1 对话页只请求 `messages`：明细一律现取，不预取能力/配置/交互等资源（D8）。 */
-const READ_MESSAGES: readonly SessionReadInclude[] = ["messages"];
+/**
+ * 对话页首屏请求的明细资源。
+ *
+ * 正文（`messages`）之外还要两样：配置项（模型/模式的可选项，D5 的配置面）与待处理交互
+ * （`pending_interactions`：历史读回的待处理项要呈现为「不可操作并说明原因」）。
+ * 结构化历史（`history`）不在这里——它只在服务端协商到 `core.session-history.v1` 时才带上
+ * （未协商却请求它会得到明确的不支持类错误，`design.md` 的 Compatibility）。
+ */
+const CONVERSATION_INCLUDES: readonly SessionReadInclude[] = ["messages", "config_options", "pending_interactions"];
+
+/** 一次 `session.read` 取回的明细资源（v1 对话页需要的两样）。 */
+interface StagedReadResources {
+  readonly pendingInteractions: readonly SnapshotItemPendingInteractions[];
+  readonly configOptions: readonly ConfigOptionView[];
+  readonly configVersion: string | null;
+}
 
 /** 一个会话的明细线程（分页现取的结果）。 */
 export interface ConversationThreadState {
   readonly page: SessionReadPageView | null;
   /** 已读到的原始消息项（`session.read` 的元素形状）：向上翻页的不重不漏校验以它为准。 */
   readonly items: readonly SnapshotItemMessages[];
+  /** 结构化历史那一页是否还有更早条目（`historyHasEarlier`，与消息分页互不影响）。 */
+  readonly historyHasEarlier: boolean;
+  /** 历史条的续取游标（会话内事件序号）。 */
+  readonly nextBeforeHistory: string | null;
   readonly loadingEarlier: boolean;
+  readonly loadingHistory: boolean;
   readonly pagingError: string | null;
 }
 
-/** 一次 `session.read` 的用途：首屏还是向上翻页。二者的结果合并方式不同。 */
-type ReadIntent = "first" | "earlier";
+/** 一次 `session.read` 的用途：首屏、向上翻消息、向上翻历史。三者合并结果的方式不同。 */
+type ReadIntent = "first" | "earlier" | "earlier_history";
 
 /** 待完成的读取请求。 */
 interface PendingRead {
@@ -88,19 +159,58 @@ interface PendingRead {
   readonly intent: ReadIntent;
 }
 
+/** 本设备提交的切换意图（模型/模式各一条），用于「切换中」的呈现。 */
+interface SwitchIntent {
+  readonly requestId: Uuid;
+  readonly kind: "model" | "mode";
+}
+
 /** 客户端状态（不可变快照）。 */
 export interface ClientState {
   readonly connection: ConnectionMachineState;
   /** 本次认证授予的 scopes；未认证为 `null`（创建入口据此判定不可用）。 */
   readonly scopes: readonly string[] | null;
+  /** 本设备标识（`auth.authenticated.deviceId`）；未认证为 `null`。 */
+  readonly deviceId: string | null;
+  /** 服务端本次协商选中的 feature（决定 `history` include 要不要带）。 */
+  readonly selectedFeatures: readonly string[];
   /** 最后一次**验证通过并完成替换**的快照资源；断连时仍是目录页的唯一数据来源。 */
   readonly resources: StagedResources | null;
   readonly lastSyncedAtMs: number | null;
   readonly overlay: readonly AgentConnectionOverlay[];
-  readonly degraded: readonly DegradedEventModel[];
+  /** 实时事件归一后的结构化记录（按 `eventId`，先到先留）。 */
+  readonly structured: ReadonlyMap<string, StructuredRecord>;
+  /** 按会话读取的历史条目（按 `eventId`）。与 `structured` 去重后合并呈现。 */
+  readonly history: ReadonlyMap<string, StructuredRecord>;
+  /** 易失叠加层：按 `messageId` 累加的流式正文（正文权威仍是 `session.read`）。 */
+  readonly volatile: ReadonlyMap<string, VolatileMessageState>;
+  /**
+   * 已作废的轮次（`<sessionId>|<turnId>`）：`turn.delta_compacted` 之后该轮次的累加内容
+   * 不再呈现，迟到的增量也不再累加。
+   */
+  readonly discardedTurns: ReadonlySet<string>;
+  /** 会话的文本草稿（只在内存；`no-content-cache` 边界，D10）。 */
+  readonly drafts: ReadonlyMap<Uuid, string>;
   /** 每个会话最近一次用量事件。键**不存在**即「从未收到用量事件」（R17 第一态）。 */
   readonly usage: ReadonlyMap<Uuid, UsageReading>;
   readonly threads: ReadonlyMap<Uuid, ConversationThreadState>;
+  /** 本次读回的明细资源（待处理交互、配置项）。 */
+  readonly readResources: ReadonlyMap<Uuid, StagedReadResources>;
+  /**
+   * `session.mode.list` 的结果（可选项 + 清单时刻的当前值与版本）。
+   *
+   * 它**不**随 `session.mode.changed` 更新：那是另一份信号，由 `#modeChangeOf` 读出来与它合并
+   * （当前值的回落顺序见 `conversation-settings-model.ts`）。
+   */
+  readonly modeStates: ReadonlyMap<Uuid, ModeState>;
+  /** 本设备提交的应答：`interactionId → requestId`。 */
+  readonly responseRequestIds: ReadonlyMap<string, Uuid>;
+  /** 本设备提交的提示：`sessionId → requestId`。 */
+  readonly promptRequestIds: ReadonlyMap<Uuid, Uuid>;
+  /** 本设备提交的取消：`turnId → requestId`。 */
+  readonly cancelRequestIds: ReadonlyMap<string, Uuid>;
+  /** 本设备提交的模型/模式切换：`sessionId → 意图`。 */
+  readonly switchIntents: ReadonlyMap<Uuid, SwitchIntent>;
   readonly commands: ReadonlyMap<Uuid, CommandRecord>;
   /** 每个目录当前那次创建会话的 `requestId`；未提交过的目录没有键。 */
   readonly createRequestIds: ReadonlyMap<string, Uuid>;
@@ -123,12 +233,24 @@ export function initialClientState(): ClientState {
   return {
     connection: initialConnectionState(),
     scopes: null,
+    deviceId: null,
+    selectedFeatures: [],
     resources: null,
     lastSyncedAtMs: null,
     overlay: [],
-    degraded: [],
+    structured: new Map(),
+    history: new Map(),
+    volatile: new Map(),
+    discardedTurns: new Set(),
+    drafts: new Map(),
     usage: new Map(),
     threads: new Map(),
+    readResources: new Map(),
+    modeStates: new Map(),
+    responseRequestIds: new Map(),
+    promptRequestIds: new Map(),
+    cancelRequestIds: new Map(),
+    switchIntents: new Map(),
     commands: new Map(),
     createRequestIds: new Map(),
     uncertainRequestIds: [],
@@ -186,15 +308,39 @@ function usageIn(event: EventMessage): UsageReading | null {
 }
 
 /**
- * 事件是否需要降级卡片（R18）：未识别、原文未下发、显式不支持、引用未下发的二进制内容。
+ * `session.origin.online_changed` 视图里的来源可达性（D5 顺带口径）。
  *
- * 判定经 {@link isDegradedEvent}，它按 `payload.acp` 得出原文可用性。早先这里硬编码
- * `raw: {kind:"absent"}`，使「事件类型已知 + 原文未下发」这一组合永远判不出降级，
- * 生产路径上 `raw_not_synced` 分支不可达——用户看到的是静默丢失（R18 MUST 禁止）。
+ * 该事件**只**改可达性这一条标注：`ownerNodeId`/`exportId`/`originEpoch` 是同一来源的坐标，
+ * 事件带的是它们的副本，用它去重写摘要会让「来源」在两个地方各有一份权威。因此这里只取
+ * `online`，其余字段由 {@link withOriginOnline} 逐字段保持原样。
  */
-function degradedModelFor(event: EventMessage): DegradedEventModel | null {
-  if (!isDegradedEvent(event)) return null;
-  return buildDegradedEventModel({ event });
+function originOnlineIn(event: EventMessage): boolean | null {
+  if (event.body.eventType !== "session.origin.online_changed") return null;
+  const online = event.body.payload.view["online"];
+  return typeof online === "boolean" ? online : null;
+}
+
+/**
+ * 只改 `origin.online`，摘要其余字段**逐字段保持**（同一个值、同一个引用）。
+ *
+ * 本节点自有的会话没有可标注的来源（`origin.kind === "local"`）——那时返回原对象，
+ * 不把 `local` 改写成 `remote`（那会凭空给会话安一个来源节点）。
+ */
+export function withOriginOnline(
+  resources: StagedResources | null,
+  sessionId: Uuid,
+  online: boolean,
+): StagedResources | null {
+  if (resources === null) return resources;
+  const target = resources.sessions.find((summary) => summary.sessionId === sessionId);
+  if (target === undefined || target.origin.kind !== "remote") return resources;
+  if (target.origin.online === online) return resources;
+  const sessions = resources.sessions.map((summary) =>
+    summary.sessionId === sessionId
+      ? { ...summary, origin: { ...summary.origin, online } }
+      : summary,
+  );
+  return { ...resources, sessions };
 }
 
 /** `CommandResultValue` → 可展开成键值对象的结果；非对象结果（如 `modeList`）取 `null`。 */
@@ -225,6 +371,132 @@ function describeCommandFailure(result: CommandResultMessage): string {
   return error.retryable ? `${error.code}：${error.message}（可重试）` : `${error.code}：${error.message}`;
 }
 
+/**
+ * 历史条目并入状态（按 `eventId` 去重）。
+ *
+ * 去重的两道口子都在这里：实时已收到的事件不因历史再收一遍而多出一条（首次呈现的
+ * 那份记录更全——它带 `globalSequence` 与本次投递的原文字节）；同一历史页重复读取也不重复。
+ */
+function withHistory(state: ClientState, sessionId: Uuid, items: readonly SnapshotItemHistory[]): ClientState {
+  const history = new Map(state.history);
+  for (const item of items) {
+    if (state.structured.has(item.eventId) || history.has(item.eventId)) continue;
+    history.set(item.eventId, recordFromHistoryItem(item, sessionId));
+  }
+  return { ...state, history };
+}
+
+/** 首屏读回的明细资源落到会话上（待处理交互 + 配置项，D7 与 D5 的配置面）。 */
+function withReadResources(state: ClientState, sessionId: Uuid, read: SessionReadResult): ClientState {
+  const item = read.resources.config_options?.[0];
+  const readResources = new Map(state.readResources);
+  readResources.set(sessionId, {
+    pendingInteractions: read.resources.pending_interactions ?? [],
+    configOptions: item?.configOptions ?? [],
+    configVersion: item?.version ?? null,
+  });
+  return { ...state, readResources };
+}
+
+/** 一次用户意图的提交结果：成功给出 `requestId`；失败给出原因且**没有派发任何命令**。 */
+export type CommandOutcome =
+  | { readonly ok: true; readonly requestId: Uuid }
+  | { readonly ok: false; readonly reason: string };
+
+/** 创建会话的提交结果（与 {@link CommandOutcome} 同一形状的历史名）。 */
+export type CreateOutcome = CommandOutcome;
+
+/** 未建立已认证连接时的统一拒绝理由（命令信封需要 `connectionId`）。 */
+const NOT_CONNECTED: CommandOutcome = { ok: false, reason: "尚未建立已认证连接，无法提交命令" };
+
+/** 空线程（首次读取前）。 */
+const EMPTY_THREAD: ConversationThreadState = {
+  page: null,
+  items: [],
+  historyHasEarlier: false,
+  nextBeforeHistory: null,
+  loadingEarlier: false,
+  loadingHistory: false,
+  pagingError: null,
+};
+
+/** 轮次生命周期的五个事件类型（分组与「进行中」判定都只看它们）。 */
+const TURN_EVENT_TYPES: Readonly<Record<string, true>> = {
+  "turn.queued": true,
+  "turn.started": true,
+  "turn.completed": true,
+  "turn.cancelled": true,
+  "turn.failed": true,
+};
+
+/** 轮次的终态：这三个状态之外都算「进行中」（可取消）。 */
+const TERMINAL_TURN_STATES: Readonly<Record<string, true>> = {
+  completed: true,
+  cancelled: true,
+  failed: true,
+};
+
+/** 不可变地写入一个键。 */
+function withEntry<K, V>(map: ReadonlyMap<K, V>, key: K, value: V): ReadonlyMap<K, V> {
+  const next = new Map(map);
+  next.set(key, value);
+  return next;
+}
+
+/** 不可变地删除一个键（键不存在时返回原映射）。 */
+function withoutEntry<K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
+}
+
+/** 按时间位置取最新的一条记录；无记录时为 `null`。 */
+function newestRecordOf(records: readonly StructuredRecord[]): StructuredRecord | null {
+  let newest: StructuredRecord | null = null;
+  for (const record of records) {
+    if (newest === null || compareTimelinePosition(positionOf(record), positionOf(newest)) > 0) newest = record;
+  }
+  return newest;
+}
+
+/**
+ * 当前进行中的轮次（`turn.*` 里最新一条的状态不在终态集合里）。
+ *
+ * 取「最新一条」而不是「有没有 `turn.started`」：轮次的终态可能由 `turn.completed`/
+ * `turn.cancelled`/`turn.failed` 中的任意一条给出，只有最新状态才是当前的。
+ */
+function activeTurnOf(records: readonly StructuredRecord[]): { readonly turnId: string } | null {
+  const latest = newestRecordOf(records.filter((record) => TURN_EVENT_TYPES[record.eventType] === true));
+  if (latest === null) return null;
+  const state = viewText(latest.view, "state");
+  const turnId = viewText(latest.view, "turnId");
+  if (state === null || turnId === null) return null;
+  return TERMINAL_TURN_STATES[state] === true ? null : { turnId };
+}
+
+/**
+ * 应答前的闸门：只有 `answerable` 允许提交，其余边界各自给出**明确**原因（D7）。
+ *
+ * 每种原因都对应 spec 的一条场景：仅历史读到、已被其它设备处理、已提交待确认、本设备已处理。
+ */
+function responseGate(interaction: InteractionView | null): CommandOutcome | null {
+  if (interaction === null) return { ok: false, reason: "这条待处理交互不在本设备的状态里" };
+  const availability = interaction.availability;
+  switch (availability.kind) {
+    case "answerable":
+      return null;
+    case "submitting":
+      return { ok: false, reason: "这条交互的应答已经提交，正在等待服务端终态" };
+    case "handled_here":
+      return { ok: false, reason: `这条交互已由本设备处理（${availability.resolution}）` };
+    case "handled_elsewhere":
+      return { ok: false, reason: `这条交互已被其它设备处理（${availability.resolution}）` };
+    case "not_answerable":
+      return { ok: false, reason: INTERACTION_UNAVAILABLE_LABELS[availability.reason] };
+  }
+}
+
 /** `ClientStore` 的构造输入。 */
 export interface ClientStoreOptions {
   readonly sync: SyncGateway;
@@ -237,11 +509,6 @@ export interface ClientStoreOptions {
 }
 
 type Listener = () => void;
-
-/** 提交结果：一个 `requestId`，或拒绝原因（此时**没有**派发任何命令）。 */
-export type CreateOutcome =
-  | { readonly ok: true; readonly requestId: Uuid }
-  | { readonly ok: false; readonly reason: string };
 
 /**
  * 客户端状态仓库。
@@ -296,7 +563,12 @@ export class ClientStore {
   #reduce(event: SyncClientEvent): ClientState {
     switch (event.kind) {
       case "authenticated":
-        return { ...this.#state, scopes: [...event.info.scopes] };
+        return {
+          ...this.#state,
+          scopes: [...event.info.scopes],
+          deviceId: event.info.deviceId,
+          selectedFeatures: [...(event.selectedFeatures ?? [])],
+        };
       case "authenticating": {
         // 一条事件对应连接机的两步：开始一次连接尝试（connecting），随后 socket 打开进入认证（authenticating）。
         const started = applyConnectionEvent(this.#state.connection, {
@@ -328,13 +600,34 @@ export class ClientStore {
     return { ...this.#state, connection: applyConnectionEvent(this.#state.connection, event) };
   }
 
-  /** 一条事件的状态归并：会话摘要、用量、Agent 覆盖层、降级卡片。 */
+  /**
+   * 一条事件的状态归并。
+   *
+   * 顺序即优先级：先归一成结构化记录（永不丢事件——降级卡片与诊断都从它派生），再按事件类型
+   * 更新它自己的通道（摘要/用量/覆盖层/易失叠加层）。**不存在**「既不呈现也不降级」的分支。
+   */
   #withEvent(event: EventMessage): ClientState {
     let next = this.#state;
 
+    // 1) 归一记录：实时事件按 `eventId` 先到先留（重投不产生第二条）。
+    const record = recordFromEvent(event);
+    if (!next.structured.has(record.eventId)) {
+      const structured = new Map(next.structured);
+      structured.set(record.eventId, record);
+      next = { ...next, structured };
+    }
+
+    // 2) 会话摘要（`session.created`/`session.updated`）。
     const summary = sessionSummaryIn(event);
     if (summary !== null) next = { ...next, resources: withSessionSummary(next.resources, summary) };
 
+    // 3) 来源可达性：只改 `origin.online` 这一条标注（摘要其余字段逐字段保持）。
+    const online = originOnlineIn(event);
+    if (online !== null && event.body.sessionId !== null) {
+      next = { ...next, resources: withOriginOnline(next.resources, event.body.sessionId, online) };
+    }
+
+    // 4) 用量（R17 上下文条）。
     const usage = usageIn(event);
     const sessionId = event.body.sessionId;
     if (usage !== null && sessionId !== null) {
@@ -343,18 +636,79 @@ export class ClientStore {
       next = { ...next, usage: usageMap };
     }
 
-    // R19：连接事件只进**覆盖层**；列表本体始终来自快照。
+    // 5) R19：连接事件只进**覆盖层**；列表本体始终来自快照。
     if (this.#overlayStore.ingest(event) !== null) {
       next = { ...next, overlay: this.#overlayStore.entries() };
     }
 
-    const degraded = degradedModelFor(event);
-    if (degraded !== null) next = { ...next, degraded: [...next.degraded, degraded] };
+    // 6) 消息通道：流式增量累加成**易失**正文，完成标记只改「增量流结束」，压缩事件作废轮次。
+    next = this.#withMessageLane(next, record);
 
     return next;
   }
 
-  /** 命令结果归并：终态回填 + `session.read` 结果并入线程 + 结果不确定登记。 */
+  /**
+   * 消息通道的归并（D6）。
+   *
+   * 只有三类增量事件会累加；`agent.message.completed` **不**贡献正文（正文权威是
+   * `session.read`，D3 也因此把消息类事件排除在历史条目之外），它只把该条消息标为
+   * 「增量流结束」。`turn.delta_compacted` 作废该轮次的累加内容，并让迟到的增量不再累加。
+   */
+  #withMessageLane(state: ClientState, record: StructuredRecord): ClientState {
+    const channel = deltaChannelOf(record.eventType);
+    const sessionId = record.sessionId;
+    if (channel !== null) {
+      const messageId = viewText(record.view, "messageId");
+      const deltaIndex = viewText(record.view, "deltaIndex");
+      const text = viewText(record.view, "text");
+      if (messageId === null || deltaIndex === null || text === null) return state;
+      const turnId = viewText(record.view, "turnId");
+      // 被压缩过的轮次：迟到的增量不再累加（作废的内容 MUST NOT 重新出现）。
+      if (turnId !== null && sessionId !== null && state.discardedTurns.has(`${sessionId}|${turnId}`)) {
+        return state;
+      }
+      const volatile = new Map(state.volatile);
+      volatile.set(
+        messageId,
+        appendDelta(volatile.get(messageId), {
+          messageId,
+          sessionId,
+          channel,
+          turnId,
+          deltaIndex,
+          text,
+          createdAt: record.createdAt,
+        }),
+      );
+      return { ...state, volatile };
+    }
+
+    if (record.eventType === "agent.message.completed") {
+      const messageId = viewText(record.view, "messageId");
+      if (messageId === null) return state;
+      const existing = state.volatile.get(messageId);
+      if (existing === undefined || existing.completed) return state;
+      const volatile = new Map(state.volatile);
+      volatile.set(messageId, { ...existing, completed: true });
+      return { ...state, volatile };
+    }
+
+    if (record.eventType === "turn.delta_compacted") {
+      const turnId = viewText(record.view, "turnId");
+      if (turnId === null || sessionId === null) return state;
+      const discardedTurns = new Set(state.discardedTurns);
+      discardedTurns.add(`${sessionId}|${turnId}`);
+      const volatile = new Map(state.volatile);
+      for (const [messageId, tail] of volatile) {
+        if (tail.turnId === turnId && tail.sessionId === sessionId) volatile.delete(messageId);
+      }
+      return { ...state, discardedTurns, volatile };
+    }
+
+    return state;
+  }
+
+  /** 命令结果归并：终态回填 + `session.read`/`session.mode.list` 结果并入 + 结果不确定登记。 */
   #withCommandResult(result: CommandResultMessage): ClientState {
     const record =
       this.#state.commands.get(result.body.requestId) ??
@@ -376,37 +730,108 @@ export class ClientStore {
       // 结果不确定**只**在服务端确认后登记，且没有任何自动清除路径（R16 场景 4）。
       next = { ...next, uncertainRequestIds: [...next.uncertainRequestIds, updated.requestId] };
     }
+    next = this.#withModeListResult(next, updated, result);
     return this.#applyReadResult(next, result);
   }
 
-  /** `session.read` 结果并入线程：首屏替换，向上翻页前置并校验不重不漏。 */
+  /** `session.mode.list` 的完成结果 → 模式清单（模型/模式分节的「可选项」来源）。 */
+  #withModeListResult(state: ClientState, record: CommandRecord, result: CommandResultMessage): ClientState {
+    if (record.command !== "session.mode.list" || result.body.status !== "completed") return state;
+    const sessionId = record.sessionId;
+    const value = result.body.result;
+    if (sessionId === null || typeof value !== "object" || value === null || Array.isArray(value)) return state;
+    const currentModeId = (value as Readonly<Record<string, unknown>>)["currentModeId"];
+    const version = (value as Readonly<Record<string, unknown>>)["version"];
+    const availableModes = (value as Readonly<Record<string, unknown>>)["availableModes"];
+    if (typeof version !== "string" || !Array.isArray(availableModes)) return state;
+    if (currentModeId !== null && typeof currentModeId !== "string") return state;
+    const modes = availableModes.filter(
+      (mode): mode is { readonly modeId: string; readonly displayName: string } =>
+        typeof mode === "object" &&
+        mode !== null &&
+        typeof (mode as Readonly<Record<string, unknown>>)["modeId"] === "string" &&
+        typeof (mode as Readonly<Record<string, unknown>>)["displayName"] === "string",
+    );
+    const modeStates = new Map(state.modeStates);
+    modeStates.set(sessionId, { currentModeId, availableModes: modes, version });
+    return { ...state, modeStates };
+  }
+
+  /**
+   * `session.read` 结果并入状态。
+   *
+   * 三种用途各自合并自己那一份资源（D2）：
+   *
+   * - `first`：整页替换消息、记下读回的明细资源（待处理交互/配置项）、记录历史页标记；
+   *   并把读取结果里出现的 `messageId` 从易失叠加层里清掉——**读取结果为准**（D6）。
+   * - `earlier`：消息向上翻页（不重不漏由 `assertPagesDoNotOverlap` 把关）。
+   * - `earlier_history`：历史条目向上翻页（`assertHistoryPagesDoNotOverlap`）；
+   *   它**不**动消息页，消息分页也**不**动历史页——两套游标互不影响。
+   */
   #applyReadResult(state: ClientState, result: CommandResultMessage): ClientState {
     const pending = this.#pendingReads.get(result.body.requestId);
     if (pending === undefined) return state;
     this.#pendingReads.delete(result.body.requestId);
     const threads = new Map(state.threads);
-    const existing = threads.get(pending.sessionId) ?? {
+    const sessionId = pending.sessionId;
+    const existing = threads.get(sessionId) ?? {
       page: null,
-      items: [],
+      items: [] as readonly SnapshotItemMessages[],
+      historyHasEarlier: false,
+      nextBeforeHistory: null,
       loadingEarlier: false,
+      loadingHistory: false,
       pagingError: null,
     };
 
     if (result.body.command !== "session.read" || result.body.status !== "completed") {
-      threads.set(pending.sessionId, { ...existing, loadingEarlier: false, pagingError: describeCommandFailure(result) });
+      threads.set(sessionId, {
+        ...existing,
+        loadingEarlier: false,
+        loadingHistory: false,
+        pagingError: describeCommandFailure(result),
+      });
       return { ...state, threads };
     }
 
-    const loaded = toLoadedPage(result.body.result as SessionReadResult);
-    const sessionId = pending.sessionId;
+    const read = result.body.result as SessionReadResult;
+    if (pending.intent === "earlier_history") {
+      const loaded = toLoadedHistoryPage(read);
+      // 不重：新页不得与已有历史条目重叠（同一 `eventId` 出现两次说明游标算错）。
+      assertHistoryPagesDoNotOverlap(loaded.items, [...state.history.values()]);
+      threads.set(sessionId, {
+        ...existing,
+        historyHasEarlier: loaded.hasEarlier,
+        nextBeforeHistory: loaded.nextBeforeHistory,
+        loadingHistory: false,
+        pagingError: null,
+      });
+      return { ...withHistory(state, sessionId, loaded.items), threads };
+    }
+
+    const loaded = toLoadedPage(read);
+    // 读取结果胜出：同 id 的易失累加内容不再呈现（MUST NOT 叠加成重复文本）。
+    const volatileAfterRead = new Map(state.volatile);
+    for (const message of loaded.messages) volatileAfterRead.delete(message.messageId);
+    // 首屏同时把历史条目与明细资源（待处理交互、配置项）落进来；翻页请求只并入自己那一份。
+    const staged =
+      pending.intent === "first"
+        ? withReadResources(withHistory(state, sessionId, read.resources.history ?? []), sessionId, read)
+        : state;
+
     if (pending.intent === "first" || existing.page === null) {
+      // 首屏同时拿到历史那一页的页标记与续取游标；消息翻页请求不动它们（两套游标独立）。
+      const historyPage = pending.intent === "first" ? toLoadedHistoryPage(read) : null;
       threads.set(sessionId, {
         page: buildSessionReadPageView(loaded.result),
         items: loaded.messages,
+        historyHasEarlier: historyPage?.hasEarlier ?? existing.historyHasEarlier,
+        nextBeforeHistory: historyPage?.nextBeforeHistory ?? existing.nextBeforeHistory,
         loadingEarlier: false,
+        loadingHistory: false,
         pagingError: null,
       });
-      return { ...state, threads };
+      return { ...staged, threads, volatile: volatileAfterRead };
     }
 
     // 向上翻页：不重不漏由 `assertPagesDoNotOverlap` 把关，违反即抛而不是静默拼接。
@@ -418,10 +843,13 @@ export class ClientStore {
         hasEarlier: loaded.hasEarlier,
       }),
       items: [...loaded.messages, ...existing.items],
+      historyHasEarlier: existing.historyHasEarlier,
+      nextBeforeHistory: existing.nextBeforeHistory,
       loadingEarlier: false,
+      loadingHistory: false,
       pagingError: null,
     });
-    return { ...state, threads };
+    return { ...staged, threads, volatile: volatileAfterRead };
   }
 
   // ── 选择器 ────────────────────────────────────────────────────────────────
@@ -477,7 +905,13 @@ export class ClientStore {
     });
   }
 
-  /** 对话页模型（R17 + R18 + 翻页）。会话既不在快照里也没有线程时为 `null`。 */
+  /**
+   * 对话页模型（R17 + R18 + 时间线 + 输入/交互/设置 + 两套分页）。
+   *
+   * 会话既不在快照里也没有线程时为 `null`（没有任何可呈现的东西）。判定全部在这里与
+   * `conversation-model.ts` / `conversation-timeline.ts` / `interaction-model.ts` 里完成，
+   * 组件只消费结果。
+   */
   conversationPage(sessionId: Uuid): ConversationPageModel | null {
     const thread = this.#state.threads.get(sessionId);
     const summary = this.#findSession(sessionId);
@@ -493,16 +927,75 @@ export class ClientStore {
     };
     const origin: "local" | { readonly kind: "remote"; readonly online: boolean } =
       summary?.origin.kind === "remote" ? { kind: "remote", online: summary.origin.online } : "local";
+    const sessionOpen = (summary?.state ?? "idle") !== "closed";
+    const connectionOnline = this.#state.connection.state === "online";
+
+    // 结构化记录：实时与历史按 `eventId` 去重（实时优先），再筛出本会话。
+    const records = this.#recordsOf(sessionId);
+    const interactions = buildInteractionViews({
+      records,
+      pending: this.#state.readResources.get(sessionId)?.pendingInteractions ?? [],
+      responseRequestIds: this.#state.responseRequestIds,
+      commands: this.#state.commands,
+      deviceId: this.#state.deviceId,
+      sessionOpen,
+    });
+    const entries = buildTimeline({
+      messages: thread?.page?.messages ?? [],
+      records,
+      volatile: [...this.#state.volatile.values()].filter((tail) => tail.sessionId === sessionId),
+      interactions,
+    });
+    // 降级条目与时间线**同源**：扁平列表是时间线上 `kind === "degraded"` 的投影，
+    // 因此不可能出现「时间线没有降级卡而诊断列表有」这类不一致。
+    const degraded = entries.flatMap((entry) => (entry.kind === "degraded" ? [entry.degraded] : []));
+
+    const configSource = this.#configSourceOf(sessionId);
+    const mode = this.#state.modeStates.get(sessionId) ?? null;
+    const settings: ConversationSettingsModel = buildConversationSettingsModel({
+      configOptions: configSource.options,
+      mode,
+      modeChange: this.#modeChangeOf(sessionId),
+      summaryMode: summary?.currentMode ?? null,
+      modelSwitchCommand: this.#switchCommandOf(sessionId, "model"),
+      modeSwitchCommand: this.#switchCommandOf(sessionId, "mode"),
+    });
+    const activeTurn = activeTurnOf(records);
+    const input: ConversationInputModel = buildConversationInputModel({
+      sessionOpen,
+      connectionOnline,
+      originLocal: origin === "local",
+      turnInProgress: activeTurn !== null,
+      canCancel: sessionOpen && activeTurn !== null,
+      promptCommand: this.#lastCommandOf(this.#state.promptRequestIds.get(sessionId)),
+      cancelCommand:
+        activeTurn === null ? null : this.#lastCommandOf(this.#state.cancelRequestIds.get(activeTurn.turnId)),
+      draft: this.#state.drafts.get(sessionId) ?? "",
+    });
 
     return buildConversationModel({
       header,
       page: thread?.page ?? null,
       usage: this.#state.usage.get(sessionId) ?? null,
-      degraded: this.#state.degraded.filter((item) => item.sessionId === sessionId),
+      degraded,
+      timeline: {
+        entries,
+        structuredHistory: structuredHistoryAvailability({
+          origin,
+          historyFeatureNegotiated: this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE),
+        }),
+      },
       loadingEarlier: thread?.loadingEarlier ?? false,
       pagingError: thread?.pagingError ?? null,
+      historyHasEarlier: thread?.historyHasEarlier ?? false,
+      loadingHistory: thread?.loadingHistory ?? false,
+      nextBeforeHistory: thread?.nextBeforeHistory ?? null,
+      input,
+      interactions,
+      settings,
+      fileChanges: buildFileChangeViews(records),
       capabilities: conversationCapabilities({
-        connectionOnline: this.#state.connection.state === "online",
+        connectionOnline,
         sessionState: summary?.state ?? "idle",
         origin,
       }),
@@ -517,7 +1010,26 @@ export class ClientStore {
       connection: this.#state.connection.state,
       blocking: this.#state.connection.blocking,
       host: this.#state.host,
+      // 节点级降级事件（没有会话可挂的）挂在这一面：它们的出口只有这里（D5/R18）。
+      nodeDegraded: this.nodeDegraded(),
     });
+  }
+
+  /**
+   * 节点级降级条目：**没有会话**的事件（如 `device.revoked`）的降级呈现。
+   *
+   * `conversationPage()` 只呈现本会话的记录，节点级事件没有会话时间线可挂；只把它登记进
+   * `UNCOVERED_EVENT_TYPES` 而不给出口，就是「被消费却既不呈现也不降级」——D5/R18 明令禁止的
+   * 第三种结果。它们按时间位置升序交出去，由主机/连接面承载（`HostPanelModel.nodeDegraded`），
+   * 诊断抽屉照旧按 `eventId` 打开（`openDiagnostics`）。
+   */
+  nodeDegraded(): readonly DegradedEventModel[] {
+    const records = [...this.#state.structured.values()].filter(
+      (record) => record.sessionId === null && isDegradedRecord(record),
+    );
+    // 到达顺序不等于时间顺序（重投、批次交错），按时间位置排序让这一面的内容可复现。
+    records.sort((left, right) => compareTimelinePosition(positionOf(left), positionOf(right)));
+    return records.map((record) => buildDegradedRecordModel(record));
   }
 
   /** 配对页模型。 */
@@ -525,11 +1037,69 @@ export class ClientStore {
     return this.#state.pairing;
   }
 
-  /** 诊断抽屉模型：选中降级事件的原文与元数据（R18）。 */
+  /**
+   * 诊断抽屉模型：选中**降级条目**的原文与元数据（R18）。
+   *
+   * 记录从结构化记录里按 `eventId` 取（实时与历史都在内），因此历史条目的降级同样可诊断。
+   * 内容齐备、走专用视图的记录**不**在这里返回模型：它没有降级原因可讲，硬造一个会让抽屉
+   * 谎报归因。要看待呈现记录的原文，用它的视图模型自带的诊断数据
+   * （例如 `FileChangeView.diagnostics`）。
+   */
   diagnostics(): DegradedEventModel | null {
     const id = this.#state.diagnosticsEventId;
     if (id === null) return null;
-    return this.#state.degraded.find((item) => item.eventId === id) ?? null;
+    const record = this.#state.structured.get(id) ?? this.#state.history.get(id);
+    if (record === undefined || !isDegradedRecord(record)) return null;
+    return buildDegradedRecordModel(record);
+  }
+
+  /** 该会话最新的配置项来源：配置事件优先，其次是首屏读回的 `config_options`。 */
+  #configSourceOf(sessionId: Uuid): { readonly options: readonly ConfigOptionView[]; readonly version: string | null } {
+    const latest = newestRecordOf(
+      [...this.#state.structured.values(), ...this.#state.history.values()].filter(
+        (record) => record.sessionId === sessionId && record.eventType === "session.config.changed",
+      ),
+    );
+    if (latest !== null) {
+      const card = buildTimelineCard(recordGroupOf(latest), () => null);
+      if (card !== null && card.kind === "config_changed") {
+        return { options: card.configOptions, version: card.version };
+      }
+    }
+    const staged = this.#state.readResources.get(sessionId);
+    return staged === undefined ? { options: [], version: null } : { options: staged.configOptions, version: staged.configVersion };
+  }
+
+  /**
+   * 该会话最新的模式变更来源（`session.mode.changed`）。
+   *
+   * 与 `#configSourceOf` 对称：实时事件与历史条目合并后取时间位置最新的一条（重开对话页时
+   * 历史里的变更同样是「当前模式」的来源）。服务端不为模式变更产出 `session.updated`，因此
+   * 这份事件是当前模式与并发版本的**唯一**活动信号：`session.mode.set` 的 `expectedVersion`
+   * 也从这里取，否则服务端确认过的变更会让版本停在旧值上、切换被版本冲突直接拒掉。
+   */
+  #modeChangeOf(sessionId: Uuid): ModeChangedTimelineCard | null {
+    const latest = newestRecordOf(
+      [...this.#state.structured.values(), ...this.#state.history.values()].filter(
+        (record) => record.sessionId === sessionId && record.eventType === "session.mode.changed",
+      ),
+    );
+    if (latest === null) return null;
+    const card = buildTimelineCard(recordGroupOf(latest), () => null);
+    return card !== null && card.kind === "mode_changed" ? card : null;
+  }
+
+  /** 最近一次模型/模式切换命令（只在意图是对应的那一类时返回）。 */
+  #switchCommandOf(sessionId: Uuid, kind: "model" | "mode"): CommandRecord | null {
+    const intent = this.#state.switchIntents.get(sessionId);
+    if (intent === undefined || intent.kind !== kind) return null;
+    return this.#lastCommandOf(intent.requestId);
+  }
+
+  /** 按 `requestId` 取命令记录（`undefined` 即没有提交过）。 */
+  #lastCommandOf(requestId: Uuid | undefined): CommandRecord | null {
+    if (requestId === undefined) return null;
+    return this.#state.commands.get(requestId) ?? null;
   }
 
   /** 是否处于阻断态（页面据此停止一切主动动作）。 */
@@ -672,53 +1242,301 @@ export class ClientStore {
     return { ok: true, requestId };
   }
 
-  /** 首次读取会话明细（明细分页，默认只取 messages）。 */
+  /**
+   * 首次读取会话明细（正文 + 配置项 + 待处理交互，协商到 feature 时含结构化历史）。
+   *
+   * 一次只允许一个在途读取：两页并发返回时无法判断谁该前置谁。
+   */
   loadSession(sessionId: Uuid): void {
     if (this.#pendingReads.size > 0) return;
     this.#requestPage(sessionId, "first");
   }
 
-  /** 向上翻页：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
+  /** 向上翻页（消息）：续取游标取上一页最早一条的 `(createdAt, messageId)`。 */
   loadEarlier(sessionId: Uuid): void {
     const before = this.#state.threads.get(sessionId)?.page?.earliestCursor ?? null;
     if (before === null) return;
-    this.#requestPage(sessionId, "earlier", before);
+    this.#requestPage(sessionId, "earlier", { before });
   }
 
-  #requestPage(sessionId: Uuid, intent: ReadIntent, before?: { createdAt: string; messageId: Uuid }): void {
+  /**
+   * 向上翻页（结构化历史）：续取游标是上一页最早一条的**会话内序号**。
+   *
+   * 与消息翻页是两套独立游标：它不动消息页（D2）。未协商到 `core.session-history.v1`
+   * 时不发请求——未协商却请求该 include 会得到明确的不支持类错误，而不是空结果。
+   */
+  loadEarlierHistory(sessionId: Uuid): void {
+    if (!this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE)) return;
+    const beforeHistory = this.#state.threads.get(sessionId)?.nextBeforeHistory ?? null;
+    if (beforeHistory === null || this.#pendingReads.size > 0) return;
+    this.#requestPage(sessionId, "earlier_history", { beforeHistory });
+  }
+
+  /** 加载模式清单（`session.mode.list`）：模型/模式分节的「可选项」来源。 */
+  loadModes(sessionId: Uuid): CommandOutcome {
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({ requestId: id, command: "session.mode.list", sessionId, payload: {} }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /**
+   * 取消当前轮次。
+   *
+   * 取消的呈现以服务端终态为准：这里只登记 `requestId` 并派发命令，`confirmed` 只能由终态产生
+   * （`conversation-input-model.ts` 的 `cancelOf`）。没有进行中的轮次时**不发命令**。
+   */
+  cancelTurn(sessionId: Uuid): CommandOutcome {
+    const active = activeTurnOf(this.#recordsOf(sessionId));
+    if (active === null) return { ok: false, reason: "当前没有进行中的轮次，不能取消" };
+    const turnId = active.turnId;
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({ requestId: id, command: "session.cancel", sessionId, payload: { turnId } }),
+      patch: (id) => ({ cancelRequestIds: withEntry(this.#state.cancelRequestIds, turnId, id) }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /**
+   * 应答授权请求（D7）。
+   *
+   * 只有 `answerable`（本设备亲历、会话未关闭、请求下发了可选项）才派发命令；其余边界各自给出
+   * 明确原因，因此「已被其它设备处理」不可能被重复提交、「仅历史读到」不可能有可点的按钮。
+   * 提交之后呈现为**待确认**，直到服务端终态（`submitting` → `handled_here`）。
+   */
+  resolvePermission(sessionId: Uuid, interactionId: string, optionId: string): CommandOutcome {
+    const interaction = this.#interactionOf(sessionId, interactionId);
+    const blocked = responseGate(interaction);
+    if (blocked !== null) return blocked;
+    const answers = interaction?.availability.kind === "answerable" ? interaction.availability.answers : [];
+    if (!answers.some((answer) => answer.via === "option" && answer.optionId === optionId)) {
+      return { ok: false, reason: "这次请求没有下发该可选项，不能提交" };
+    }
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({
+        requestId: id,
+        command: "permission.resolve",
+        sessionId,
+        payload: { interactionId, optionId },
+      }),
+      patch: (id) => ({ responseRequestIds: withEntry(this.#state.responseRequestIds, interactionId, id) }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /** 应答提问请求（`elicitation.respond`；`submit` 才带表单值，其余两支的 `values` 固定为 `null`）。 */
+  respondToElicitation(
+    sessionId: Uuid,
+    interactionId: string,
+    action: ElicitationResolutionAction,
+    values: Record<string, unknown> | null,
+  ): CommandOutcome {
+    const interaction = this.#interactionOf(sessionId, interactionId);
+    const blocked = responseGate(interaction);
+    if (blocked !== null) return blocked;
+    const answers = interaction?.availability.kind === "answerable" ? interaction.availability.answers : [];
+    if (!answers.some((answer) => answer.via === "action" && answer.action === action)) {
+      return { ok: false, reason: "这次请求不支持该动作，不能提交" };
+    }
+    const payload: ElicitationRespondPayload =
+      action === "submit" ? { interactionId, action, values } : { interactionId, action, values: null };
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({ requestId: id, command: "elicitation.respond", sessionId, payload }),
+      patch: (id) => ({ responseRequestIds: withEntry(this.#state.responseRequestIds, interactionId, id) }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /**
+   * 切换模型取值（`session.config.set`）。
+   *
+   * 乐观并发由 `expectedVersion` 承担：版本还没取到时**不发命令**（编一个版本号会让服务端把
+   * 它当成真实的并发基线）。切换的呈现是 `switching`，直到服务端确认。
+   */
+  setConfigValue(sessionId: Uuid, configId: string, value: string | boolean): CommandOutcome {
+    const version = this.#configSourceOf(sessionId).version;
+    if (version === null) return { ok: false, reason: "尚未取到配置版本，无法提交切换" };
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({
+        requestId: id,
+        command: "session.config.set",
+        sessionId,
+        expectedVersion: version,
+        payload: { configId, value },
+      }),
+      patch: (id) => ({ switchIntents: withEntry(this.#state.switchIntents, sessionId, { requestId: id, kind: "model" }) }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /**
+   * 切换模式（`session.mode.set`）；版本与当前值同源：最新的 `session.mode.changed` 优先于
+   * `session.mode.list` 的结果（模式清单未加载即不发命令——没有可选项的切换不是切换）。
+   */
+  setMode(sessionId: Uuid, modeId: string): CommandOutcome {
+    const mode = this.#state.modeStates.get(sessionId);
+    if (mode === undefined) return { ok: false, reason: "尚未取到模式清单，无法提交切换" };
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({
+        requestId: id,
+        command: "session.mode.set",
+        sessionId,
+        expectedVersion: this.#modeChangeOf(sessionId)?.version ?? mode.version,
+        payload: { modeId },
+      }),
+      patch: (id) => ({ switchIntents: withEntry(this.#state.switchIntents, sessionId, { requestId: id, kind: "mode" }) }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  /** 更新草稿（只在内存：`no-content-cache` 边界，D10）。空串即清空。 */
+  setDraft(sessionId: Uuid, text: string): void {
+    const drafts = new Map(this.#state.drafts);
+    if (text.length === 0) drafts.delete(sessionId);
+    else drafts.set(sessionId, text);
+    this.#commit({ ...this.#state, drafts });
+  }
+
+  /** 当前草稿；未输入过为空串。 */
+  draftOf(sessionId: Uuid): string {
+    return this.#state.drafts.get(sessionId) ?? "";
+  }
+
+  /**
+   * 提交一条**文本**提示。
+   *
+   * 闸门（任一不过即**不发命令**）：会话存在且可提交（关闭/离线/imported 来源都会给出原因）、
+   * 文本去除首尾空白后非空。附件不在签名里——v1 只支持文本，附件 MUST NOT 被静默丢弃后提交
+   * 剩余文本（因此本方法根本不接受附件参数）。
+   */
+  submitPrompt(sessionId: Uuid, text: string): CommandOutcome {
+    const page = this.conversationPage(sessionId);
+    if (page === null) return { ok: false, reason: "会话不在本设备的状态里" };
+    if (!page.input.canSubmit) return { ok: false, reason: page.input.disabledReason ?? "当前不能提交" };
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return { ok: false, reason: "不能提交空文本" };
+    const requestId = this.#dispatchIntent({
+      sessionId,
+      build: (id) => ({
+        requestId: id,
+        command: "session.prompt",
+        sessionId,
+        payload: { content: [{ type: "text", text: trimmed }] },
+      }),
+      patch: (id) => ({
+        promptRequestIds: withEntry(this.#state.promptRequestIds, sessionId, id),
+        drafts: withoutEntry(this.#state.drafts, sessionId),
+      }),
+    });
+    return requestId === null ? NOT_CONNECTED : { ok: true, requestId };
+  }
+
+  #requestPage(
+    sessionId: Uuid,
+    intent: ReadIntent,
+    cursors: { readonly before?: ReadCursor; readonly beforeHistory?: string } = {},
+  ): void {
+    this.#dispatchIntent({
+      sessionId,
+      build: (requestId) => {
+        this.#pendingReads.set(requestId, { sessionId, intent });
+        // 与 `paging.ts` 的 `buildReadPayload` 同一形状；这里就地构造是为了让 `include`
+        // 保持 `SessionReadInclude[]`（协议类型），而 `PageRequest` 声明的是更宽的 `string[]`。
+        const payload: { include: readonly SessionReadInclude[]; before?: ReadCursor; beforeHistory?: string } = {
+          include: this.#includesFor(intent),
+        };
+        if (cursors.before !== undefined) payload.before = cursors.before;
+        if (cursors.beforeHistory !== undefined) payload.beforeHistory = cursors.beforeHistory;
+        return { requestId, command: "session.read", sessionId, payload };
+      },
+      patch: () => {
+        const threads = new Map(this.#state.threads);
+        const existing = threads.get(sessionId) ?? EMPTY_THREAD;
+        threads.set(sessionId, {
+          ...existing,
+          loadingEarlier: intent === "earlier",
+          loadingHistory: intent === "earlier_history",
+          pagingError: null,
+        });
+        return { threads };
+      },
+    });
+  }
+
+  /**
+   * 本次读取要带哪些 include。
+   *
+   * 结构化历史只在服务端**选中**了 `core.session-history.v1` 时才要（`loadSession` 与
+   * `loadEarlierHistory` 都先查这一点）：未协商却请求它时服务端会回明确的不支持类错误，
+   * 而旧服务端连该取值都不认识。翻页请求只要自己那一份资源，两套分页因此互不影响（D2）。
+   */
+  #includesFor(intent: ReadIntent): readonly SessionReadInclude[] {
+    const historyNegotiated = this.#state.selectedFeatures.includes(SESSION_HISTORY_FEATURE);
+    switch (intent) {
+      case "earlier":
+        return ["messages"];
+      case "earlier_history":
+        return ["history"];
+      case "first":
+        return historyNegotiated ? [...CONVERSATION_INCLUDES, "history"] : CONVERSATION_INCLUDES;
+    }
+  }
+
+  /**
+   * 唯一派发出口：分配稳定 `requestId`、把命令记成 `submitting`、再发出去。
+   *
+   * 没有已认证连接时返回 `null` 且**什么都不做**（不派发、不登记状态、不调 `build`）。
+   * `patch` 在派发前应用，因此调用方登记的 `pendingReads`/`submitting` 状态与出站命令同批提交。
+   */
+  #dispatchIntent(input: {
+    readonly sessionId: Uuid | null;
+    readonly build: (requestId: Uuid) => CommandBody;
+    readonly patch?: (requestId: Uuid) => Partial<ClientState>;
+  }): Uuid | null {
     const connectionId = this.#identity.connectionId;
-    if (connectionId === null) return;
+    if (connectionId === null) return null;
 
     const requestId = this.#ids.uuid();
-    this.#pendingReads.set(requestId, { sessionId, intent });
-    const threads = new Map(this.#state.threads);
-    const existing = threads.get(sessionId) ?? {
-      page: null,
-      items: [] as readonly SnapshotItemMessages[],
-      loadingEarlier: false,
-      pagingError: null,
-    };
-    threads.set(sessionId, { ...existing, loadingEarlier: intent === "earlier", pagingError: null });
-    this.#commit({ ...this.#state, threads });
+    const body = input.build(requestId);
+    const commands = new Map(this.#state.commands);
+    // `markSubmitting`：未确认接受前不得显示已接受（R13 的第二条规则）。
+    commands.set(
+      requestId,
+      markSubmitting(createCommand({ requestId, command: body.command, sessionId: input.sessionId })),
+    );
+    const extra = input.patch === undefined ? {} : input.patch(requestId);
+    this.#commit({ ...this.#state, commands, ...extra });
 
-    const command: CommandMessage = {
+    this.#sync.dispatch({
       protocolVersion: 1,
       type: "command",
       messageId: this.#ids.uuid(),
       connectionId,
       // 占位：真正的出站序号由 `SyncConnection.sendCommand` 覆盖（§4.1）。
       connectionSequence: "0",
-      body: {
-        requestId,
-        command: "session.read",
-        sessionId,
-        // 与 `paging.ts` 的 `buildReadPayload` 同一形状；这里就地构造是为了让
-        // `include` 保持 `SessionReadInclude[]`（协议类型），而 `PageRequest` 声明的是
-        // 更宽的 `string[]`。`before` 是复合游标，两键都由上一页最早一条给出。
-        payload: before === undefined ? { include: READ_MESSAGES } : { include: READ_MESSAGES, before },
-      },
-    };
-    this.#sync.dispatch(command);
+      body,
+    });
+    return requestId;
+  }
+
+  /** 本会话的结构化记录（实时与历史按 `eventId` 去重，实时优先）。 */
+  #recordsOf(sessionId: Uuid): readonly StructuredRecord[] {
+    return mergeStructuredRecords([...this.#state.structured.values()], [...this.#state.history.values()]).filter(
+      (record) => record.sessionId === sessionId,
+    );
+  }
+
+  /** 一条交互的呈现模型（可应答性的唯一判定入口）。 */
+  #interactionOf(sessionId: Uuid, interactionId: string): InteractionView | null {
+    const page = this.conversationPage(sessionId);
+    if (page === null) return null;
+    return page.interactions.find((item) => item.interactionId === interactionId) ?? null;
   }
 
   #findSession(sessionId: Uuid): SessionSummary | undefined {

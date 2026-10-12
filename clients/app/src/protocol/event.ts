@@ -11,6 +11,10 @@
  *   丢弃或改写它们。
  *
  * 未知事件类型**不得**导致整个会话渲染崩溃：`projectView` 返回一个明确的 `unknown` 分支。
+ *
+ * `KNOWN_EVENT_TYPES` 是**协议**侧的封闭词表，它只回答「这条事件能不能按已知视图形状解析」。
+ * 「客户端有没有它的专用呈现」是另一件事，由 `src/features/presentation-coverage.ts` 的
+ * 覆盖表回答——两份判定 MUST NOT 相互代替（`pwa-web-client` 的「呈现覆盖由客户端自持」）。
  */
 
 import type {
@@ -399,7 +403,7 @@ export function projectView(
 }
 
 /** `EventViewByType` 的键集合，运行期用作 eventType 的封闭判别。 */
-const KNOWN_EVENT_TYPES: readonly EventType[] = [
+export const KNOWN_EVENT_TYPES: readonly EventType[] = [
   "session.created",
   "session.updated",
   "session.info.changed",

@@ -1,9 +1,10 @@
 /**
  * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：11 条 Sync 面命令与结果。
  *
- * `session.read` 的 `before`/`limit` **只**在 Sync 传输面生效（`design.md` D3）；Node Link 面的
- * 同名命令不含这两个键。`session.create` 的 `payload` **只**允许 `workspaceAlias` 与 `agentId`
- * 两个引用（`design.md` D8 / `pwa-web-client` 的「会话创建是受限入口」）。
+ * `session.read` 的 `before`/`limit`/`beforeHistory`/`include` 里的 `history` **只**在 Sync
+ * 传输面生效（`design.md` D3、D11）；Node Link 面的同名命令不含这些键。`session.create` 的
+ * `payload` **只**允许 `workspaceAlias` 与 `agentId` 两个引用（`design.md` D8 /
+ * `pwa-web-client` 的「会话创建是受限入口」）。
  *
  * `session.resume` 只经 Node Link 接受，因此不在本镜像的 `CommandName` 里。
  */
@@ -20,6 +21,7 @@ import type {
 import type {
   SnapshotItemCapabilities,
   SnapshotItemConfigOptions,
+  SnapshotItemHistory,
   SnapshotItemMessages,
   SnapshotItemPendingInteractions,
   SnapshotItemTurns,
@@ -85,13 +87,23 @@ export interface SessionReadBefore {
 /** `$defs.sessionReadLimit`：结构性计数；省略时服务端用配置默认页，无 `maximum`。 */
 export type SessionReadLimit = number;
 
+/**
+ * `$defs.sessionReadBeforeHistory`：历史条目的游标——**会话内事件序号**（十进制字符串，D2）。
+ *
+ * 它与消息的 `before`（`(createdAt, messageId)` 复合游标）是两套**独立**游标：同一请求可
+ * 同时给出两者，各自翻各自的页，任一方都不改变另一方的页边界。序号在提交时分配、天然单调
+ * 唯一，因此不需要并列次序规则。服务端 MUST NOT 用事件标识代替它。
+ */
+export type SessionReadBeforeHistory = DecimalString;
+
 /** `session.read` 可请求的明细资源名（`payload.include` 的取值域）。 */
 export type SessionReadInclude =
   | "messages"
   | "turns"
   | "pending_interactions"
   | "config_options"
-  | "capabilities";
+  | "capabilities"
+  | "history";
 
 /** `$defs.sessionRead`。 */
 export interface SessionReadCommand extends CommandEnvelope {
@@ -102,6 +114,8 @@ export interface SessionReadCommand extends CommandEnvelope {
     readonly payload: {
       readonly include: readonly SessionReadInclude[];
       readonly before?: SessionReadBefore;
+      /** 历史条目的续取游标；与 `before` 互不影响（两套独立分页，D2）。 */
+      readonly beforeHistory?: SessionReadBeforeHistory;
       readonly limit?: SessionReadLimit;
     };
   };
@@ -252,6 +266,9 @@ export interface SessionListResult {
 /**
  * `$defs.sessionReadResult`：`resources` 的每个键都可缺席；`hasEarlier` 是必填布尔值，
  * 客户端据此决定是否继续用最早一条的 `(createdAt, messageId)` 构造 `before` 翻页。
+ *
+ * `historyHasEarlier` 是可选布尔值，**只**描述 `resources.history` 这一页之前是否仍有更早
+ * 条目（对应的续取游标是最早一条的 `sessionSequence`）。两者各自分页、互不影响（D2）。
  */
 export interface SessionReadResult {
   readonly sessionId: Uuid;
@@ -261,8 +278,11 @@ export interface SessionReadResult {
     readonly pending_interactions?: readonly SnapshotItemPendingInteractions[];
     readonly config_options?: readonly SnapshotItemConfigOptions[];
     readonly capabilities?: readonly SnapshotItemCapabilities[];
+    /** 结构化历史条目：与实时事件同形的 `view`，见 `sync.ts` 的 `SnapshotItemHistory`。 */
+    readonly history?: readonly SnapshotItemHistory[];
   };
   readonly hasEarlier: boolean;
+  readonly historyHasEarlier?: boolean;
 }
 
 /** `$defs.configListResult`。 */

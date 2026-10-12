@@ -183,7 +183,9 @@ async fn interaction_creation_links_the_request_event() {
                 pending_interactions: true,
                 config_options: false,
                 capabilities: false,
+                history: false,
             },
+            before_history: None,
             after: None,
             limit: ReplayLimit::default(),
         })

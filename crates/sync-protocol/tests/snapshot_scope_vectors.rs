@@ -3,36 +3,43 @@
 //! 本文件只钉**协议形状**，不钉任何生产端行为：快照由谁组装、分页由谁实现、客户端如何翻页
 //! 分别属于 WP3（core 生产者）与 WP5–WP7（前端），这里一概不触碰。
 //!
-//! 断言分三组，对应 `specs/sync-snapshot-scope/spec.md` 的三组要求：
+//! 断言分四组，前三组对应 `specs/sync-snapshot-scope/spec.md` 的三组要求，第四组对应
+//! `specs/sync-session-history/spec.md` 的「会话结构化历史按会话分页读取」与「历史条目携带事件
+//! 视图与可缺席的 ACP 原文」：
 //!
-//! 1. 「快照只承载清单类资源」——五类会话明细资源 `messages`/`turns`/`pending_interactions`/
-//!    `config_options`/`capabilities` 逐条不得出现在 `sync.snapshot_chunk.resource` 的封闭词表内，
-//!    且逐条都有登记为 `invalid` 的 chunk 负例。逐条登记（而不是只断言词表长度）是为了让
+//! 1. 「快照只承载清单类资源」——六类会话明细资源 `messages`/`turns`/`pending_interactions`/
+//!    `config_options`/`capabilities`/`history` 逐条不得出现在 `sync.snapshot_chunk.resource` 的封闭
+//!    词表内，且逐条都有登记为 `invalid` 的 chunk 负例。逐条登记（而不是只断言词表长度）是为了让
 //!    「把某个取值偷偷放回枚举」这类回归在**该取值自己那条负例**上立刻变红。
 //! 2. 「会话明细经分页读取」与「游标由时间与标识复合构成」——默认页、复合游标、`hasEarlier`
 //!    真假两态、单字段游标、缺 `hasEarlier` 的结果，全部按 wire 形状固定。
 //! 3. 相邻两页的拼接性质：游标等于上一页最早一条的 `(createdAt, messageId)`，下一页整体严格
 //!    更早且与上一页无交集——「不重不漏」在形状层面可判定的部分。
+//! 4. 结构化历史条目：`include` 的 `history` 取值与 `beforeHistory` 序号游标（与消息游标互不影响）、
+//!    条目按会话内序号升序、条目复用事件 payload 的形状（`view` 开放 + 可缺席的 `acp` 两个分支）。
 
 mod support;
 
 use std::collections::BTreeSet;
 
 use sync_protocol::command::{
-    Command, CommandPayload, CommandResult, CommandResultPayload, SessionRead, SessionReadResult,
+    Command, CommandPayload, CommandResult, CommandResultPayload, IncludeResource, SessionRead,
+    SessionReadResult,
 };
-use sync_protocol::common::ValueError;
+use sync_protocol::common::{RawAcp, RawAcpUnavailableReason, ValueError};
 use sync_protocol::sync::{SnapshotChunk, SnapshotResource};
 
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 
-/// 快照里禁止出现的五类会话明细资源，各带一条登记为 `invalid` 的 chunk 负例。
+/// 快照里禁止出现的六类会话明细资源，各带一条登记为 `invalid` 的 chunk 负例。
 ///
 /// `messages` 与 `config_options` 的负例由 WP1 交付，本表把它们纳入同一判据——否则那两条会随
-/// WP1 的文件一起漂移；而 `turns`/`pending_interactions`/`capabilities` 三条由本 TP 新增。四条
-/// 分属不同 worktree、五条合成一个封闭词表的完整否证，缺任何一条覆盖都是残缺的。
-const FORBIDDEN_IN_SNAPSHOT: [(&str, &str); 5] = [
+/// WP1 的文件一起漂移；`turns`/`pending_interactions`/`capabilities` 三条由本 TP 新增；
+/// `history` 一条由后续变更（`pwa-conversation-ui` 的 WP1）新增，同样登记于此——否则「六类明细
+/// 资源不进快照」这条口径就缺一条覆盖。六条分属不同 worktree、合成一个封闭词表的完整否证，
+/// 缺任何一条覆盖都是残缺的。
+const FORBIDDEN_IN_SNAPSHOT: [(&str, &str); 6] = [
     (
         "messages",
         "invalid/snapshot-chunk-detail-resource-messages.json",
@@ -50,13 +57,18 @@ const FORBIDDEN_IN_SNAPSHOT: [(&str, &str); 5] = [
         "capabilities",
         "invalid/snapshot-chunk-detail-resource-capabilities.json",
     ),
+    (
+        "history",
+        "invalid/snapshot-chunk-detail-resource-history.json",
+    ),
 ];
 
-/// 本 TP 新增的三条 chunk 负例：`items` 是**非空**且逐字段合法的元素数组。
+/// `items` 是**非空**且逐字段合法的元素数组的负例：它们唯一的失败原因是 `resource` 不在封闭词表内。
 ///
-/// 因此它们唯一的失败原因是 `resource` 不在封闭词表内；一旦有人把该取值放回枚举（并补回对应的
-/// `if`/`then`），这三条会立刻变成合法样例，`check-schema-fixtures` 与本文件同时变红。
-const POPULATED_NEGATIVES: [&str; 3] = ["turns", "pending_interactions", "capabilities"];
+/// 因此一旦有人把该取值放回枚举（并补回对应的 `if`/`then`），这几条会立刻变成合法样例，
+/// `check-schema-fixtures` 与本文件同时变红。`turns`/`pending_interactions`/`capabilities` 由本 TP
+/// 新增；`history` 由后续变更（`pwa-conversation-ui` 的 WP1）新增，同属本判据。
+const POPULATED_NEGATIVES: [&str; 4] = ["turns", "pending_interactions", "capabilities", "history"];
 
 /// 三类清单资源的封闭词表：少一条是回归，多一条同样是回归。
 const CATALOG_RESOURCES: [&str; 3] = ["sessions", "workspaces", "agents"];
@@ -74,6 +86,15 @@ const SESSION: &str = "5d73cd10-a465-43cd-b3f1-704e2d49e99e";
 /// 第二页游标指向的那条消息（第一页最早一条）的标识。
 const CURSOR_MESSAGE: &str = "c47a90b2-6e35-4d18-8f26-9b0d3e7a5c14";
 const CURSOR_CREATED_AT: &str = "2026-09-17T11:58:00.000Z";
+
+/// 结构化历史条目的分页向量（`pwa-conversation-ui`）：请求、结果、序号游标，以及条目里的 ACP 原文。
+const HISTORY_PAGE_REQUEST: &str = "valid/command-session-read-history-page.json";
+const HISTORY_PAGE_RESULT: &str = "valid/command-result-session-read-history-completed.json";
+const HISTORY_CURSOR: &str = "105";
+const HISTORY_RAW_ACP: &str = concat!(
+    r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionUpdate":"tool_call_update","#,
+    r#""toolCallId":"9a3f2b41-7c58-4d06-9e1b-2f8a5c7d4e30","status":"completed","content":[]}}"#
+);
 
 fn read_case(relative: &str) -> String {
     support::read_text(&support::repo_path(&format!("{FIXTURE_ROOT}{relative}")))
@@ -135,7 +156,7 @@ fn message_times(result: &SessionReadResult) -> Vec<String> {
         .collect()
 }
 
-/// 快照的封闭词表只含三类清单资源，五类会话明细资源逐条不在其中。
+/// 快照的封闭词表只含三类清单资源，六类会话明细资源逐条不在其中。
 #[test]
 fn snapshot_resource_enum_excludes_every_session_detail_resource() {
     let declared: Vec<&str> = SnapshotResource::ALL
@@ -164,7 +185,7 @@ fn snapshot_resource_enum_excludes_every_session_detail_resource() {
     }
 }
 
-/// 五类会话明细资源各有一条**已登记**的 chunk 负例，且每条都因 `resource` 而失败。
+/// 六类会话明细资源各有一条**已登记**的 chunk 负例，且每条都因 `resource` 而失败。
 ///
 /// 三重判据：manifest 声明 `valid: false` + `expectedKeyword: "enum"`（ajv 层）、类型化层解码
 /// 必须失败（Rust 层）、`resource` 键本身的取值必须解析不出（失败原因）。缺任一条，这条负例就
@@ -191,7 +212,7 @@ fn every_forbidden_detail_resource_has_a_registered_negative_chunk_fixture() {
         );
         assert!(
             serde_json::from_str::<SnapshotChunk>(&body.to_string()).is_err(),
-            "{fixture}：五类会话明细资源的 chunk 必须在类型化层被拒"
+            "{fixture}：六类会话明细资源的 chunk 必须在类型化层被拒"
         );
         assert!(
             body["resource"]
@@ -439,6 +460,122 @@ fn adjacent_pages_join_without_gaps_or_overlap() {
         tied, lexicographic,
         "同刻次序恰好等于字典序，这条向量就不再证明「排序不依赖标识」——请换一组 messageId"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 结构化历史条目：会话内序号分页与事件 payload 形状的复用（specs/sync-session-history）
+// ---------------------------------------------------------------------------------------------
+
+/// `session.read` 的两套游标互不影响：消息分页字段与历史条目分页字段可以同时出现。
+///
+/// 判据的另一半是「游标不可由其它标识代替」：`beforeHistory` 只能是会话内事件序号，事件标识
+/// （uuid）必须被拒——服务端因此没有可以「猜」的余地。
+#[test]
+fn history_cursor_is_independent_from_the_message_cursor() {
+    let read = session_read(&read_case(HISTORY_PAGE_REQUEST));
+    assert_eq!(
+        read.include.as_slice().to_vec(),
+        [IncludeResource::Messages, IncludeResource::History],
+        "include 的 history 取值（共享词表：逐字 history）与消息资源可以同时请求"
+    );
+
+    let before = read.before.as_ref().expect("消息游标必须仍在请求里");
+    assert_eq!(before.message_id.as_str(), CURSOR_MESSAGE);
+    assert_eq!(before.created_at.as_str(), CURSOR_CREATED_AT);
+    assert_eq!(
+        read.before_history.as_ref().map(|cursor| cursor.as_str()),
+        Some(HISTORY_CURSOR),
+        "beforeHistory 是会话内事件序号，不是 (createdAt, messageId) 复合游标"
+    );
+    assert_eq!(
+        read.limit.map(|limit| limit.get()),
+        Some(20),
+        "同一个 limit 是本次请求的单页上限（省略或超过服务端上限时用服务端上限，不报错）"
+    );
+
+    let with_event_id = read_case(HISTORY_PAGE_REQUEST)
+        .replace(r#""105""#, r#""9c1d7a45-2f68-4b03-8e19-4a7c5d2b6f80""#);
+    assert_ne!(
+        with_event_id,
+        read_case(HISTORY_PAGE_REQUEST),
+        "替换必须真的改到 fixture，否则下一条断言会空转"
+    );
+    assert!(
+        serde_json::from_str::<Command>(support::body_slice(&with_event_id)).is_err(),
+        "beforeHistory 只能是十进制序号：事件标识必须被拒，不得被猜测或补全"
+    );
+}
+
+/// 历史条目复用事件 payload 的形状：会话内序号升序、原文按 `rawAcp` 的两个分支承载、`view` 开放且保真。
+#[test]
+fn history_entries_reuse_the_event_payload_shape() {
+    let text = read_case(HISTORY_PAGE_RESULT);
+    let result = session_read_result(&text);
+
+    assert!(result.has_earlier, "hasEarlier 仍然只描述消息分页");
+    assert_eq!(
+        result.history_has_earlier,
+        Some(true),
+        "historyHasEarlier 是与 hasEarlier 互相独立的页标记，只描述历史条目这一页"
+    );
+
+    let history = result.resources.history.as_ref().expect("本向量带 history");
+    let sequences: Vec<&str> = history
+        .iter()
+        .map(|entry| entry.session_sequence.as_str())
+        .collect();
+    assert_eq!(sequences, ["103", "104"], "条目按会话内序号升序返回");
+    assert!(
+        sequences.iter().all(|sequence| *sequence < HISTORY_CURSOR),
+        "这一页必须整体早于 beforeHistory 游标：{sequences:?} vs {HISTORY_CURSOR}"
+    );
+
+    let completed = &history[0];
+    assert_eq!(
+        completed.event_id.as_str(),
+        "9c1d7a45-2f68-4b03-8e19-4a7c5d2b6f80"
+    );
+    assert_eq!(completed.event_type.as_str(), "tool.call.completed");
+    match completed.acp.as_ref().expect("第一条必须带原文") {
+        RawAcp::Complete {
+            raw_json,
+            byte_length,
+            ..
+        } => {
+            // `rawJson` 在 wire 上是 JSON string，`RawValue` 保留的是**字面量 token**（带引号与转义），
+            // 不是已解析的正文——这正是「不解析后重新序列化」的判据：拿回来的字节必须等于原文的
+            // JSON 编码，而不是重新编码出来的一份等价物。
+            assert_eq!(
+                raw_json.get(),
+                serde_json::to_string(HISTORY_RAW_ACP).expect("原文是 JSON string"),
+                "原文必须逐字节保真（不得解析后重新序列化）"
+            );
+            assert_eq!(
+                byte_length.as_str(),
+                "175",
+                "byteLength 是原文（解码后的 ACP 文档）的 UTF-8 字节数"
+            );
+        }
+        other => panic!("第一条必须是 complete 分支：{other:?}"),
+    }
+    assert!(
+        text.contains(completed.view.get()),
+        "view 必须原样保留字节（含协议未定义的扩展字段）：{}",
+        completed.view.get()
+    );
+
+    let unavailable = &history[1];
+    assert_eq!(unavailable.event_type.as_str(), "terminal.output");
+    match unavailable.acp.as_ref().expect("第二条必须带不可用说明") {
+        RawAcp::Unavailable { reason, sha256, .. } => {
+            assert_eq!(*reason, RawAcpUnavailableReason::RetentionExpired);
+            assert!(
+                sha256.as_ref().is_none(),
+                "原文不可用时 sha256 允许为 null，但不得用占位内容冒充原文"
+            );
+        }
+        other => panic!("第二条必须是 unavailable 分支：{other:?}"),
+    }
 }
 
 /// 「分页只作用于客户端同步面」：Node Link 面的 `session.read` 载荷形状不受 Sync 新增分页参数影响。

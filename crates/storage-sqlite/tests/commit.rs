@@ -1287,7 +1287,9 @@ async fn session_update_keeps_state_when_absent_and_bumps_version() {
                 pending_interactions: true,
                 config_options: true,
                 capabilities: true,
+                history: true,
             },
+            before_history: None,
             after: None,
             limit: ReplayLimit::default(),
         })

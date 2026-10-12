@@ -3,9 +3,12 @@
  *
  * ## 四类降级原因（每类都有 MUST，对应 spec 的三条场景）
  *
- * 1. `no_dedicated_view`：事件类型不在 `event-views.schema.json` 的 34 个 `$defs` 里。
- *    MUST 呈现降级卡片并保留原文与元数据；MUST NOT 静默隐藏，也 MUST NOT 把它降级成普通文本
- *    （因此本模型**不**提供 `text` 字段——没有专用视图时根本没有可渲染的正文）。
+ * 1. `no_dedicated_view`：**客户端**没有该事件类型的专用呈现——判定来自
+ *    `presentation-coverage.ts` 的覆盖表，**不是**协议词表。事件类型在协议里存在但客户端还没为它
+ *    实现卡片时，同样走这一类（早先这里用 `isKnownEventType` 当覆盖判定，于是这类事件既不走卡片
+ *    也不降级、被静默丢掉，正是 R18 禁止的第三种结果）。MUST 呈现降级卡片并保留原文与元数据；
+ *    MUST NOT 静默隐藏，也 MUST NOT 把它降级成普通文本（因此本模型**不**提供 `text` 字段——
+ *    没有可用视图时根本没有可渲染的正文）。
  * 2. `unsupported`：能力因**客户端 / 服务端 / Agent** 之一不可用。三类原因必须可区分，
  *    因此它们是三个不同的取值而不是一句笼统的「不可用」。
  * 3. `raw_not_synced`：原文因单条上限/保留期/存储失败未随事件下发。
@@ -14,15 +17,24 @@
  * 4. `binary_not_delivered`：结构化事件已收到、但引用的二进制内容没有下发。
  *    MUST 说明「事件到了、内容没到」这一区别，而不是显示成图片/资源本身。
  *
+ * 内容缺失（2/3/4）优先于覆盖命中：那时客户端**有**视图，缺的是内容，用户必须看到明确说明。
+ *
  * ## 为什么降级信息不进消息正文
  *
  * `src/domain/conversation.ts` 的 `MessageView` 只有纯文本与 `hasStructuredContent` 标记：
  * 结构化块的原文与元数据由本模型承载。这样「未识别事件」不会伪装成一条普通消息，
  * 整个会话的渲染也不会因某一条未知事件而失败。
+ *
+ * ## 实时与历史同一入口
+ *
+ * 判定与构造都接受 `StructuredRecord`（`src/domain/timeline.ts`）：实时事件与按会话读取的历史
+ * 条目归一后同形，因此两者走的是**同一套**降级判定，不存在「历史条目不被降级」的盲区。
  */
 
 import type { ErrorCode, EventMessage, PublicError, RawAcp } from "../protocol";
-import { isKnownEventType } from "../protocol";
+import type { StructuredRecord } from "../domain/timeline";
+import { recordFromEvent } from "../domain/timeline";
+import { hasDedicatedView } from "./presentation-coverage";
 
 /** 不支持的三类原因（R18 MUST 可区分）。 */
 export type UnsupportedBy = "client" | "broker" | "agent";
@@ -69,15 +81,19 @@ export type DegradedReason =
   | { readonly kind: "raw_not_synced"; readonly reason: RawNotSyncedReason }
   | { readonly kind: "binary_not_delivered"; readonly mimeType: string | null; readonly uri: string | null };
 
-/** 一条降级事件的视图模型。 */
+/** 一条降级事件的视图模型（也是诊断抽屉的数据来源）。 */
 export interface DegradedEventModel {
   readonly eventId: string;
   /** 原样保留的事件类型：未识别的事件也照实显示，不替换成占位名称。 */
   readonly eventType: string;
-  readonly globalSequence: string;
+  /** 全局投递序号；历史条目没有它（历史只有会话内序号）——`null` 表示不适用。 */
+  readonly globalSequence: string | null;
+  /** 会话内序号；实时事件可能为 `null`（非会话事件），历史条目必有。 */
+  readonly sessionSequence: string | null;
   readonly createdAt: string;
   readonly sessionId: string | null;
-  readonly originKind: string;
+  /** 事件来源种类（`body.origin.kind`）；历史条目没有 origin，为 `null`。 */
+  readonly originKind: string | null;
   readonly reason: DegradedReason;
   readonly raw: RawAvailability;
   /** 原始 `view`；只在诊断抽屉里以 JSON 呈现，**不**进消息正文。 */
@@ -141,8 +157,11 @@ function binaryReference(view: Readonly<Record<string, unknown>>): { mimeType: s
 /**
  * 判定一条事件/结果是否需要降级呈现。
  *
- * 四条判定互不覆盖：未识别事件、原文未下发、结构化引用无内容、显式不支持。
+ * 四条判定互不覆盖：客户端没有专用视图、原文未下发、结构化引用无内容、显式不支持。
  * 任何一条成立即需要降级卡片——MUST NOT 因为「还有其它可用信息」而静默隐藏。
+ *
+ * **覆盖判定不来自协议词表**：`hasDedicatedView` 读的是客户端自己的覆盖表，因此「协议已知
+ * 但客户端没有视图」与「协议不认识」都会落到 `no_dedicated_view`，而不是被静默丢掉。
  */
 export function isDegraded(input: {
   readonly eventType: string;
@@ -150,26 +169,31 @@ export function isDegraded(input: {
   readonly raw: RawAvailability;
   readonly error?: PublicError | null;
 }): boolean {
-  if (!isKnownEventType(input.eventType)) return true;
+  if (!hasDedicatedView(input.eventType)) return true;
   if (input.raw.kind === "not_synced") return true;
   if (unsupportedByFromErrorCode(input.error?.code) !== null) return true;
   if (unsupportedByFromErrorCode(errorCodeInView(input.view)) !== null) return true;
   return referencesUndeliveredBinary(input.view);
 }
 
+/** `StructuredRecord` 的原文可用性（历史条目与实时事件同一口径）。 */
+export function rawAvailabilityOf(record: StructuredRecord): RawAvailability {
+  return rawAvailability(record.acp);
+}
+
 /**
- * 一条**事件消息**是否需要降级呈现（生产管线的唯一入口）。
+ * 一条**归一记录**是否需要降级呈现（生产管线的唯一入口）。
  *
  * 与 {@link isDegraded} 的差别只有一处，但这一处是必须的：调用方不再自己拼 `raw`。
- * 原文可用性必须由 `event.body.payload.acp` 得出——把它写死成 `{kind:"absent"}` 会让
+ * 原文可用性必须由记录携带的 `acp` 得出——把它写死成 `{kind:"absent"}` 会让
  * 「事件类型已知 + 原文因单条上限/保留期未下发」这一组合永远判不出降级，用户因此看到
  * **静默丢失**，而 R18 要求这类原文必须呈现明确的未同步说明。
  */
-export function isDegradedEvent(event: EventMessage): boolean {
+export function isDegradedRecord(record: StructuredRecord): boolean {
   return isDegraded({
-    eventType: event.body.eventType,
-    view: event.body.payload.view,
-    raw: rawAvailability(event.body.payload.acp),
+    eventType: record.eventType,
+    view: record.view,
+    raw: rawAvailabilityOf(record),
   });
 }
 
@@ -185,7 +209,52 @@ function unsupportedDetail(input: {
 }
 
 /**
- * 构造降级事件模型。
+ * 构造降级模型（实时事件与历史条目共用的唯一构造器）。
+ *
+ * 调用方只在 {@link isDegradedRecord} 为真、或卡片构造失败时调用：有专用视图且内容齐备时
+ * 不产生降级卡片。
+ *
+ * @param options.error 关联的结构化错误（例如命令结果里的 `capability.unsupported_by_agent`）。
+ * @param options.unusableView 覆盖命中、但视图缺呈现所需字段时置真：此时客户端**确实**没有
+ *   可用的视图，因此归到 `no_dedicated_view` 而不是冒充内容缺失。
+ */
+export function buildDegradedRecordModel(
+  record: StructuredRecord,
+  options?: { readonly error?: PublicError | null; readonly unusableView?: boolean },
+): DegradedEventModel {
+  const view = record.view;
+  const raw = rawAvailabilityOf(record);
+  const error = options?.error ?? null;
+
+  const unsupported = unsupportedByFromErrorCode(error?.code) ?? unsupportedByFromErrorCode(errorCodeInView(view));
+  let reason: DegradedReason;
+  if (unsupported !== null) {
+    reason = { kind: "unsupported", by: unsupported, detail: unsupportedDetail({ view, error }) };
+  } else if (raw.kind === "not_synced") {
+    reason = { kind: "raw_not_synced", reason: raw.reason };
+  } else if (!hasDedicatedView(record.eventType) || options?.unusableView === true) {
+    reason = { kind: "no_dedicated_view" };
+  } else {
+    // 覆盖命中、原文可用、视图可构造：唯一剩下的降级理由是引用了未下发的二进制内容。
+    reason = { kind: "binary_not_delivered", ...binaryReference(view) };
+  }
+
+  return {
+    eventId: record.eventId,
+    eventType: record.eventType,
+    globalSequence: record.globalSequence,
+    sessionSequence: record.sessionSequence,
+    createdAt: record.createdAt,
+    sessionId: record.sessionId,
+    originKind: record.originKind,
+    reason,
+    raw,
+    view,
+  };
+}
+
+/**
+ * 构造降级模型（实时事件信封的便捷入口；与 {@link buildDegradedRecordModel} 同一实现）。
  *
  * 调用方只在 `isDegraded` 为真时调用：事件有专用视图时不产生降级卡片。
  */
@@ -194,33 +263,5 @@ export function buildDegradedEventModel(input: {
   /** 关联的结构化错误（例如命令结果里的 `capability.unsupported_by_agent`）。 */
   readonly error?: PublicError | null;
 }): DegradedEventModel {
-  const view = input.event.body.payload.view;
-  const raw = rawAvailability(input.event.body.payload.acp);
-
-  const unsupported =
-    unsupportedByFromErrorCode(input.error?.code) ?? unsupportedByFromErrorCode(errorCodeInView(view));
-  let reason: DegradedReason;
-  if (unsupported !== null) {
-    reason = { kind: "unsupported", by: unsupported, detail: unsupportedDetail({ view, error: input.error ?? null }) };
-
-  } else if (raw.kind === "not_synced") {
-    reason = { kind: "raw_not_synced", reason: raw.reason };
-  } else if (!isKnownEventType(input.event.body.eventType)) {
-    reason = { kind: "no_dedicated_view" };
-  } else {
-    // 已知事件类型且原文可用：唯一剩下的降级理由是引用了未下发的二进制内容。
-    reason = { kind: "binary_not_delivered", ...binaryReference(view) };
-  }
-
-  return {
-    eventId: input.event.body.eventId,
-    eventType: input.event.body.eventType,
-    globalSequence: input.event.body.globalSequence,
-    createdAt: input.event.body.createdAt,
-    sessionId: input.event.body.sessionId,
-    originKind: input.event.body.origin.kind,
-    reason,
-    raw,
-    view,
-  };
+  return buildDegradedRecordModel(recordFromEvent(input.event), { error: input.error ?? null });
 }

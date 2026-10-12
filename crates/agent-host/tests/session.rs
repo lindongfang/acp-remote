@@ -577,6 +577,7 @@ async fn capabilities_are_negotiated_truthfully_and_gate_unsupported_calls() {
         .read_history(acp_core::ports::HistoryQuery {
             session: session_id(SESSION),
             include: Default::default(),
+            before_history: None,
             after: None,
             limit: acp_core::ports::ReplayLimit::new(10),
         })

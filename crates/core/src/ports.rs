@@ -345,6 +345,9 @@ pub struct HistoryInclude {
     pub pending_interactions: bool,
     pub config_options: bool,
     pub capabilities: bool,
+    /// 结构化历史条目（`SYNC_PROTOCOL.md` §11.5 的 `history` 取值）：开启时 [`HistoryPage::history`]
+    /// 给出该会话的一页条目，关闭时它为空。空**只**由本开关决定，不代表「该会话没有历史」。
+    pub history: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,11 +356,23 @@ pub struct HistoryQuery {
     pub include: HistoryInclude,
     /// 分页起点：只返回该 cursor 之后的事件；`None` = 从头。cursor 的合法性由用例层判定。
     pub after: Option<GlobalCursor>,
+    /// 结构化历史条目的分页游标：**会话内**事件序号（`SYNC_PROTOCOL.md` §11.5 的 `beforeHistory`），
+    /// 只返回会话内序号**严格小于**它的条目；`None` = 该会话的最新一页。
+    ///
+    /// 它只作用于 [`HistoryPage::history`]，与作用于 `events` 的 `after`（全局 cursor）各自独立分页，
+    /// 一次请求里互不改变对方的返回内容与页边界。取值只能来自上一页最早条目的
+    /// `CommittedEvent.session_sequence`：用事件 id、全局序号或其它标识代替**不是**本字段的语义，实现
+    /// 不得据此猜测或补全游标。
+    ///
+    /// 游标早于该会话仍可读条目的下界（更早的行已被保留策略压缩或清理）时，实现 MUST 返回
+    /// [`PortError::InvalidRequest`]，MUST NOT 静默返回更少的条目让调用方误以为已到最早一条；游标正好
+    /// 等于该下界时是合法的一页边界（空页 + 无更早条目，不是错误）。
+    pub before_history: Option<Sequence>,
     pub limit: ReplayLimit,
 }
 
-/// owned 事件 + 其持久化正文（Node Link 的 origin 重放与事件扇出共用；定位与正文严格同源，
-/// 都来自同一次读视图）。
+/// owned 事件 + 其持久化正文（Node Link 的 origin 重放、会话历史读与事件扇出共用；定位与正文严格
+/// 同源——都来自**同一条行**/同一次读视图，因此调用方不需要逐条再取一次正文）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnedEventRecord {
     pub event: CommittedEvent,
@@ -389,10 +404,23 @@ pub struct NodeLinkSlice {
 
 /// 历史页面。`config`/`capabilities` 是**用例层**按 `include` 合并的活体数据（来自
 /// `SessionEndpoint`/`AgentCatalog`）；存储层实现必须让它们保持空值——持久层不保存活体能力。
+///
+/// 两个事件集合各自分页、**各自带持久化正文**（都复用 [`OwnedEventRecord`]，不新增值对象）：
+/// `events` 是 `messages` 面的原料（`after`/`next` 的全局 cursor 升序一页），`history` 是结构化历史
+/// 条目（`before_history`/`history_has_earlier` 的会话内序号一页）。同一请求里两者互不影响。
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoryPage {
     pub session: SessionSummary,
-    pub events: Vec<CommittedEvent>,
+    /// `messages` 面的原料：`after` 之后的一页事件（含持久化正文），按 `global_sequence` 升序；
+    /// `include.messages` 为假时为空。
+    pub events: Vec<OwnedEventRecord>,
+    /// 结构化历史条目，按 `session_sequence` **升序**；`include.history` 为假时为空。
+    ///
+    /// 每个元素的 `event.session_sequence` 必然为 `Some`（条目由会话内序号定位）且互不相同。
+    pub history: Vec<OwnedEventRecord>,
+    /// [`HistoryPage::history`] 之前是否仍有更早条目（`SYNC_PROTOCOL.md` §11.5 的 `historyHasEarlier`）；
+    /// `include.history` 为假时恒为假。为假只表示已到该会话**仍可读**的最早一条。
+    pub history_has_earlier: bool,
     pub turns: Vec<Turn>,
     pub interactions: Vec<PendingInteraction>,
     pub config: Vec<ConfigOption>,
@@ -467,6 +495,15 @@ pub trait ReadView: Send + Sync {
         limit: ReplayLimit,
     ) -> Result<ReplayBatch, PortError>;
 
+    /// 会话的一页读（`session.read`）：`messages` 面的事件原料与结构化历史条目各自按 `include`
+    /// 开关**分页**（`HistoryQuery::after` 与 `HistoryQuery::before_history` 互不影响）。
+    ///
+    /// 两个集合都必须**带持久化正文**、且正文与定位来自同一条行：实现必须一次取行（`payload_json`
+    /// 与 ACP 列同批取出），MUST NOT 为逐条事件再取一次正文（`design.md` D4）。
+    ///
+    /// 结构化历史条目按**会话内序号**分页：省略游标时给最新一页；带游标时给紧接该游标之前的一页；
+    /// 分页只跳过已按保留策略压缩的行（`compacted_into IS NOT NULL`），游标早于仍可读条目的下界时返回
+    /// [`PortError::InvalidRequest`] 而不是更少条目。
     async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError>;
 
     /// 取回一条 owned 事件的持久化正文——重放、`sync.snapshot_*` 与 `PendingInteraction.options`

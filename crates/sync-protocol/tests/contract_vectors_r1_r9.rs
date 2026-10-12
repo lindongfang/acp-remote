@@ -205,7 +205,7 @@ fn sessions_only_snapshot_uses_single_catalog_chunk() {
     }
 }
 
-/// 五类会话明细资源在**任何**快照中都不出现：跨终态与单类两组快照的 `resource` 取值的并集
+/// 六类会话明细资源在**任何**快照中都不出现：跨终态与单类两组快照的 `resource` 取值的并集
 /// 必须恰好是三类清单资源。
 #[test]
 fn no_snapshot_vector_carries_a_session_detail_resource() {

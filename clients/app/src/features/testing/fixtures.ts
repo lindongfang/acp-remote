@@ -10,13 +10,19 @@
 
 import type {
   CommandMessage,
+  CommandResultMessage,
   EventMessage,
   RawAcp,
   SessionSummary,
+  SnapshotItemConfigOptions,
+  SnapshotItemHistory,
   SnapshotItemMessages,
+  SnapshotItemPendingInteractions,
   WorkspaceRef,
 } from "../../protocol";
 import type { CompletedSnapshot, StagedResources } from "../../sync-client";
+import { SESSION_HISTORY_FEATURE } from "../../sync-client";
+import type { InteractionView } from "../../domain/interaction";
 import { ClientStore } from "../client-store";
 import type { SyncGateway } from "../ports";
 
@@ -39,6 +45,8 @@ export function session(input: {
   readonly alias?: string | null;
   readonly title?: string | null;
   readonly origin?: SessionSummary["origin"];
+  /** 摘要里的当前模式；只在清单与 `session.mode.changed` 都缺席时才轮到它（回落链最末）。 */
+  readonly currentMode?: SessionSummary["currentMode"];
   readonly createdAt?: string;
   readonly updatedAt?: string;
 }): SessionSummary {
@@ -49,7 +57,7 @@ export function session(input: {
     agent: { agentId: "claude", name: "Claude" },
     state: input.state ?? "idle",
     origin: input.origin ?? { kind: "local" },
-    currentMode: null,
+    currentMode: input.currentMode ?? null,
     version: "1",
     createdAt: input.createdAt ?? "2026-10-01T00:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-10-01T00:00:00.000Z",
@@ -180,12 +188,18 @@ export function recordingGateway(input: {
   };
 }
 
+/** 一个已喂入数据的仓库与它的记账网关。 */
+export interface StoreFixture {
+  readonly store: ClientStore;
+  readonly gateway: RecordingGateway;
+}
+
 /** 建一个已喂入快照（必要时还有认证结果）的仓库。 */
 export function storeWith(input: {
   readonly resources: StagedResources | null;
   readonly scopes?: readonly string[] | null;
   readonly connectionId?: string | null;
-}): { store: ClientStore; gateway: RecordingGateway } {
+}): StoreFixture {
   const gateway = recordingGateway(input);
   let counter = 0;
   const store = new ClientStore({
@@ -270,4 +284,137 @@ export function messageItem(input: {
     createdAt: input.createdAt,
     turnId: null,
   };
+}
+
+/** 测试用的设备标识（`auth.authenticated.deviceId`）：决定「本设备处理」的判定。 */
+export const TEST_DEVICE_ID = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
+
+/** 测试用的服务端 epoch。 */
+export const TEST_SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
+
+/**
+ * 已认证、已在线、并（可选）协商到若干 feature 的仓库。
+ *
+ * 结构化历史的 `history` include 只在**服务端选中**对应 feature 时才带，因此要测历史读取的
+ * 用例必须走这一条路；`storeWith` 不带 `selectedFeatures`（等价于什么都没协商出来）。
+ */
+export function onlineStore(input: {
+  readonly resources?: StagedResources;
+  readonly scopes?: readonly string[];
+  readonly features?: readonly string[];
+}): StoreFixture {
+  const scopes = input.scopes ?? ["session.read", "session.prompt"];
+  const { store, gateway } = storeWith({ resources: input.resources ?? resources({}), scopes });
+  // 再发一次认证结果，这一次带上服务端在 `auth.server_challenge` 里选中的 feature。
+  store.apply({
+    kind: "authenticated",
+    info: {
+      deviceId: TEST_DEVICE_ID,
+      scopes: [...scopes],
+      serverEpoch: TEST_SERVER_EPOCH,
+      headGlobalSequence: "10",
+      heartbeatIntervalMs: 30000,
+      limits: { maxMessageBytes: 1048576, maxPromptBytes: 262144, maxReplayEventsPerBatch: 500 },
+    },
+    selectedFeatures: [...(input.features ?? [])],
+  });
+  // 走完整条连接路径（单独发 `online` 会被迁移表拒绝，能力判定随之失真）。
+  store.pairSucceeded();
+  store.apply({ kind: "authenticating" });
+  store.apply({ kind: "replaying", cursor: null });
+  store.apply({ kind: "online", cursor: { serverEpoch: TEST_SERVER_EPOCH, globalSequence: "10" } });
+  return { store, gateway };
+}
+
+/** `session.read` 的一条结构化历史条目（`snapshotItem.history`）。 */
+export function historyItem(input: {
+  readonly eventId: string;
+  readonly eventType: string;
+  readonly sessionSequence?: string;
+  readonly createdAt?: string;
+  readonly view?: Record<string, unknown>;
+  readonly acp?: RawAcp;
+}): SnapshotItemHistory {
+  return {
+    eventId: input.eventId,
+    eventType: input.eventType,
+    sessionSequence: input.sessionSequence ?? "1",
+    createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",
+    view: input.view ?? {},
+    ...(input.acp === undefined ? {} : { acp: input.acp }),
+  };
+}
+
+/** `session.read` 的 completed 结果。 */
+export function readResult(input: {
+  readonly requestId: string;
+  readonly sessionId?: string;
+  readonly messages?: readonly SnapshotItemMessages[];
+  readonly history?: readonly SnapshotItemHistory[];
+  readonly pending?: readonly SnapshotItemPendingInteractions[];
+  readonly configOptions?: readonly SnapshotItemConfigOptions[];
+  readonly hasEarlier?: boolean;
+  readonly historyHasEarlier?: boolean;
+}): CommandResultMessage {
+  return {
+    protocolVersion: 1,
+    type: "command.result",
+    messageId: "bbbbbbbb-1111-4111-8111-0000000000ff",
+    connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    connectionSequence: "1",
+    body: {
+      requestId: input.requestId,
+      command: "session.read",
+      status: "completed",
+      acceptedAt: "2026-10-01T00:00:01.000Z",
+      terminalEventId: null,
+      result: {
+        sessionId: input.sessionId ?? "aaaaaaaa-0000-4000-8000-000000000001",
+        resources: {
+          ...(input.messages === undefined ? {} : { messages: input.messages }),
+          ...(input.history === undefined ? {} : { history: input.history }),
+          ...(input.pending === undefined ? {} : { pending_interactions: input.pending }),
+          ...(input.configOptions === undefined ? {} : { config_options: input.configOptions }),
+        },
+        hasEarlier: input.hasEarlier ?? false,
+        ...(input.historyHasEarlier === undefined ? {} : { historyHasEarlier: input.historyHasEarlier }),
+      },
+      error: null,
+    },
+  };
+}
+
+/** 取最后一条派发的命令（便于断言出站载荷）。 */
+export function lastDispatch(gateway: RecordingGateway): CommandMessage {
+  const command = gateway.dispatches[gateway.dispatches.length - 1];
+  if (command === undefined) throw new Error("没有任何派发记录");
+  return command;
+}
+
+/** 交互与输入用例共用的会话标识：快照里它处于 `running`，因此有进行中的轮次。 */
+export const ONLINE_SESSION_ID = "aaaaaaaa-0000-4000-8000-000000000001";
+
+/**
+ * 没有已认证连接的仓库（`connectionId === null`）。
+ *
+ * 命令信封需要 `connectionId`，因此任何「要发命令」的意图都必须在这里闸住——用例据此断言
+ * 「未连接时**没有**任何派发记录」。
+ */
+export function storeWithNoConnection(): StoreFixture {
+  return storeWith({ resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "running" })] }), connectionId: null });
+}
+
+/** 一个已在线、协商到结构化历史、快照里有 `running` 会话的仓库（交互与输入用例的起点）。 */
+export function interactionStore(): StoreFixture {
+  return onlineStore({
+    resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, state: "running" })] }),
+    features: [SESSION_HISTORY_FEATURE],
+  });
+}
+
+/** 取一条交互的呈现模型（不在本会话的交互里即 `null`）。 */
+export function interactionViewOf(store: ClientStore, interactionId: string): InteractionView | null {
+  return (
+    store.conversationPage(ONLINE_SESSION_ID)?.interactions.find((item) => item.interactionId === interactionId) ?? null
+  );
 }
