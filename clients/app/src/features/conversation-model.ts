@@ -135,8 +135,8 @@ const ABSENT_INPUT: ConversationInputModel = {
 };
 
 const ABSENT_SETTINGS: ConversationSettingsModel = {
-  model: { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "本页模型未提供模型可选项。" },
-  mode: { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "本页模型未提供模式可选项。" },
+  model: { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "本页模型未提供模型可选项。", configId: null },
+  mode: { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "本页模型未提供模式可选项。", configId: null },
 };
 
 /** 对话页模型。 */

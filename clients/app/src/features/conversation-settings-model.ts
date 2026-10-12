@@ -41,6 +41,17 @@ export interface SettingsSectionModel {
   readonly currentName: string | null;
   readonly choices: readonly SettingsChoice[];
   readonly notice: string | null;
+  /**
+   * 该分节切换时要写的**配置项 id**（`ConfigOptionView.id`，线路上如 `"model"`）。
+   *
+   * 它是页面调 `ClientStore.setConfigValue(sessionId, configId, value)` 的第二个参数，因此与
+   * `choices[].id`（那是可选项**取值**，即 `value`）是两件事：同一个分节里两者并存，键名必须各自
+   * 明确——拿 `choices[].id` 当 configId 会把 `session.config.set` 指到不存在的配置项上。
+   *
+   * 模式切换走 `setMode`（按 `modeId`），用不到配置项，故模式分节恒为 `null`；模型配置项
+   * 未加载/未提供时也是 `null`（**不**编造一个 id）。
+   */
+  readonly configId: string | null;
 }
 
 /** 对话页的设置模型。 */
@@ -69,6 +80,8 @@ function modelSection(input: {
       currentName: null,
       choices: [],
       notice: switching ? "已提交切换，等待服务端确认；变更在下一轮生效。" : "该会话的 Agent 未提供模型可选项。",
+      // 配置项未提供：没有可写的 configId，不能拿别的东西顶上。
+      configId: null,
     };
   }
   const currentValue = String(option.currentValue);
@@ -91,6 +104,8 @@ function modelSection(input: {
         : confirmed
           ? "已切换；变更在下一轮生效。"
           : null,
+    // 配置项本身的 id（不是当前取值、也不是可选项取值）：切换时它被原样当作 `configId` 写回。
+    configId: option.id,
   };
 }
 
@@ -123,6 +138,8 @@ function modeSection(input: {
       currentName: current?.name ?? summaryName,
       choices,
       notice: switching ? "已提交切换，等待服务端确认；变更在下一轮生效。" : "模式清单尚未加载。",
+      // 模式切换走 `setMode`（按 `modeId`）：没有配置项可写，恒为 `null`。
+      configId: null,
     };
   }
   return {
@@ -137,6 +154,8 @@ function modeSection(input: {
         : confirmed
           ? "已切换；变更在下一轮生效。"
           : null,
+    // 同上：模式分节不承载配置项 id。
+    configId: null,
   };
 }
 

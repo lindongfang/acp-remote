@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { ConversationStream, DiagnosticsDrawer } from "./index";
 import { buildConversationModel } from "../features/conversation-model";
 import type { ConversationPageModel } from "../features/conversation-model";
+import type { MessageView } from "../domain/conversation";
 import { buildDegradedEventModel } from "../features/degradation-model";
 import type { DegradedEventModel } from "../features/degradation-model";
 import { RAW_NOT_SYNCED_LABELS, UNSUPPORTED_LABELS } from "../features/degradation-model";
@@ -33,6 +34,14 @@ function renderDrawer(model: DegradedEventModel | null): string {
 
 /** 渲染会话流（含降级卡片）。 */
 function renderStream(degraded: readonly DegradedEventModel[]): string {
+  const message: MessageView = {
+    id: "m-1",
+    role: "user",
+    text: "开始",
+    hasStructuredContent: false,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    turnId: null,
+  };
   const model: ConversationPageModel = buildConversationModel({
     header: {
       sessionId: "s-1",
@@ -46,12 +55,34 @@ function renderStream(degraded: readonly DegradedEventModel[]): string {
       sessionId: "s-1",
       hasEarlier: false,
       earliestCursor: null,
-      messages: [
-        { id: "m-1", role: "user", text: "开始", hasStructuredContent: false, createdAt: "2026-10-01T00:00:00.000Z", turnId: null },
-      ],
+      messages: [message],
     },
     usage: null,
     degraded,
+    // 时间线是**唯一**渲染列表（`timeline.entries`）：手工拼页模型时也必须把它拼出来，
+    // 生产路径由 `ClientStore.conversationPage()` 的 `buildTimeline` 给出。
+    timeline: {
+      entries: [
+        {
+          kind: "message",
+          key: "message:m-1",
+          createdAt: message.createdAt,
+          sequence: null,
+          channel: "user",
+          message,
+          volatile: false,
+          streamComplete: true,
+        },
+        ...degraded.map((item) => ({
+          kind: "degraded" as const,
+          key: `event:${item.eventId}`,
+          createdAt: item.createdAt,
+          sequence: item.sessionSequence,
+          degraded: item,
+        })),
+      ],
+      structuredHistory: { state: "unavailable", notice: null },
+    },
     loadingEarlier: false,
     pagingError: null,
     capabilities: { canSend: true, canCancel: false, canViewHistory: true },
