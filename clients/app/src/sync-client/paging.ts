@@ -21,7 +21,8 @@
  * 客户端把该页最早一条的 `messageId` 原样带上即可续取。
  */
 
-import type { SessionReadResult, SnapshotItemMessages, Uuid } from "../protocol";
+import type { SessionReadResult, SnapshotItemHistory, SnapshotItemMessages, Uuid } from "../protocol";
+import { isDecimalString } from "./wire";
 
 /** 复合游标（`$defs.sessionReadBefore`）。 */
 export interface ReadCursor {
@@ -93,21 +94,27 @@ export interface PageRequest {
   readonly include: readonly string[];
   /** 省略即取最新一页（§9.2 / spec 场景「省略游标时返回最新一页」）。 */
   readonly before?: ReadCursor;
+  /** 历史条目的续取游标（会话内事件序号）；与 `before` 互不影响（D2）。 */
+  readonly beforeHistory?: HistoryCursor;
   /** 省略时由服务端用配置默认页（spec 场景「同步面未提供参数时使用默认页」）。 */
   readonly limit?: number;
 }
 
-/** 构造 `session.read` 的 payload；`before`/`limit` 只在提供时出现。 */
+/** 构造 `session.read` 的 payload；三个游标键都只在提供时出现。 */
 export function buildReadPayload(request: PageRequest): {
   readonly include: readonly string[];
   readonly before?: ReadCursor;
+  readonly beforeHistory?: HistoryCursor;
   readonly limit?: number;
 } {
   const base = { include: request.include };
-  if (request.before === undefined && request.limit === undefined) return base;
+  if (request.before === undefined && request.beforeHistory === undefined && request.limit === undefined) {
+    return base;
+  }
   return {
     ...base,
     ...(request.before === undefined ? {} : { before: request.before }),
+    ...(request.beforeHistory === undefined ? {} : { beforeHistory: request.beforeHistory }),
     ...(request.limit === undefined ? {} : { limit: request.limit }),
   };
 }
@@ -169,5 +176,92 @@ export function assertPagesDoNotOverlap(
   const oldestNewer = newer.reduce((min, message) => Math.min(min, Date.parse(message.createdAt)), Number.POSITIVE_INFINITY);
   if (newestOlder > oldestNewer) {
     throw new Error(`相邻两页漏读：较早页含有比最新页最早一条更新的消息（${newestOlder} > ${oldestNewer}）`);
+  }
+}
+// ── 结构化历史的分页（D2：会话内序号游标，与消息分页完全分离）────────────────────
+
+/**
+ * 历史条目的续取游标（`$defs.sessionReadBeforeHistory`）：**会话内事件序号**。
+ *
+ * 它与 {@link ReadCursor} 是两种东西，刻意不共用一个类型：序号在提交时分配、天然单调唯一，
+ * 因此**不需要**并列次序规则，也不能被 `(createdAt, eventId)` 之类的复合游标替代
+ * （服务端 MUST NOT 用其它标识代替它）。
+ */
+export type HistoryCursor = string;
+
+/** 从一条历史条目取会话内序号；缺失或形状非法即抛错（不得猜测或补全）。 */
+export function historyCursorOf(item: SnapshotItemHistory): HistoryCursor {
+  const sequence = item.sessionSequence;
+  if (typeof sequence !== "string" || !isDecimalString(sequence)) {
+    throw new IncompleteReadCursorError("sessionSequence");
+  }
+  return sequence;
+}
+
+/**
+ * 取一页历史条目里**最早**一条的会话内序号；无条目返回 `null`。
+ *
+ * 按数值（`BigInt`）比较而不是字典序：序号是十进制字符串，位数不同时字典序会给出错答案
+ * （`"10" < "9"`）。
+ */
+export function earliestHistoryCursor(items: readonly SnapshotItemHistory[]): HistoryCursor | null {
+  let earliest: HistoryCursor | null = null;
+  for (const item of items) {
+    const sequence = historyCursorOf(item);
+    if (earliest === null || BigInt(sequence) < BigInt(earliest)) earliest = sequence;
+  }
+  return earliest;
+}
+
+/** 一页历史条目与其页标记。 */
+export interface LoadedHistoryPage {
+  readonly result: SessionReadResult;
+  readonly items: readonly SnapshotItemHistory[];
+  /** `historyHasEarlier` 为真才说明还有更早条目；该键缺席时**不**推断（只说明本次无关）。 */
+  readonly hasEarlier: boolean;
+  /** 下一页的续取游标；`hasEarlier` 为假或本页无条目时为 `null`。 */
+  readonly nextBeforeHistory: HistoryCursor | null;
+}
+
+/**
+ * 把 `SessionReadResult` 的 `resources.history` 投影成一页。
+ *
+ * 与 {@link toLoadedPage} 的关键差别：这里的页标记是**可选**的 `historyHasEarlier`
+ * （缺席表示这次请求没要历史，不能当成「没有更早条目」的断言之外的东西）。`historyHasEarlier`
+ * 为真但一条都没返回同样是**自相矛盾**的结果——无法构造续取游标，必须抛错。
+ */
+export function toLoadedHistoryPage(result: SessionReadResult): LoadedHistoryPage {
+  const items = result.resources.history ?? [];
+  const marker = result.historyHasEarlier;
+  if (marker !== undefined && typeof marker !== "boolean") {
+    throw new Error("session.read 结果的 historyHasEarlier 既非布尔也非缺席");
+  }
+  const hasEarlier = marker === true;
+  if (hasEarlier && items.length === 0) {
+    throw new Error("session.read 结果称历史仍有更早条目但未返回任何条目");
+  }
+  return {
+    result,
+    items,
+    hasEarlier,
+    nextBeforeHistory: hasEarlier ? earliestHistoryCursor(items) : null,
+  };
+}
+
+/**
+ * 相邻两页历史条目的唯一校验：**不重**（同一 `eventId` 出现两次）。
+ *
+ * 消息分页还需要一条「不漏」的时间边界检查，历史这里不需要——序号单调唯一，
+ * 页边界漂移在序号上直接可见（较早页的序号必然更小），不存在「同一时刻并列」的边界。
+ */
+export function assertHistoryPagesDoNotOverlap(
+  newer: readonly { readonly eventId: string }[],
+  older: readonly { readonly eventId: string }[],
+): void {
+  const olderIds = new Set(older.map((item) => item.eventId));
+  for (const item of newer) {
+    if (olderIds.has(item.eventId)) {
+      throw new Error(`相邻两页历史条目重叠：eventId ${item.eventId} 同时出现`);
+    }
   }
 }

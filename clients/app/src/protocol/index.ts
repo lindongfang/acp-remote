@@ -28,7 +28,7 @@ export type * from "./error";
 export type * from "./pairing";
 
 // 纯计算 + 编译期常量：无 Node 依赖，浏览器与 `src/domain/` 都可安全消费。
-export { projectView, isKnownEventType, KNOWN_EVENT_TYPE_COUNT } from "./event";
+export { projectView, isKnownEventType, KNOWN_EVENT_TYPES, KNOWN_EVENT_TYPE_COUNT } from "./event";
 export type { FixtureCase, FixtureManifest, ResolvedFixtureCase } from "./manifest";
 
 import type { AuthMessage } from "./auth";

@@ -22,6 +22,12 @@
  * ## 同名 Agent 以标识区分
  *
  * 列表按 `agentId` 索引，展示名可以重复；每行都渲染标识，因此两个同名条目不会合并成一项。
+ *
+ * ## 节点级降级事件也挂在这一面
+ *
+ * `nodeDegraded` 是**没有会话**的降级条目（`device.revoked` 这类节点级事件）。会话级降级在
+ * 对话页时间线上；节点级的没有会话可挂，若这一面也不给出口，它就是「被消费却既不呈现也不
+ * 降级」——D5/R18 明令禁止的第三种结果。
  */
 
 import type { AgentConnectionState, AgentCatalogView } from "../domain";
@@ -29,6 +35,7 @@ import { UNKNOWN_CONNECTION_LABEL, buildAgentCatalogView } from "../domain";
 import type { StagedResources } from "../sync-client";
 import type { BlockingDetail, ConnectionStateName } from "../state";
 import type { AgentConnectionOverlay } from "../domain/agent-catalog";
+import type { DegradedEventModel } from "./degradation-model";
 
 /** 连接状态的展示文案。`unknown` 的措辞与 `disconnected` 明确不同。 */
 export const CONNECTION_STATE_LABELS: Readonly<Record<ConnectionStateName, string>> = {
@@ -77,6 +84,14 @@ export interface HostPanelModel {
   /** 覆盖层缺席时的说明（`null` 表示覆盖层在场）。 */
   readonly unknownStateNote: string | null;
   readonly host: HostIdentityModel | null;
+  /**
+   * 节点级降级条目：**没有会话**的事件（如 `device.revoked`）的降级呈现，按时间位置升序。
+   *
+   * 会话级降级在对话页时间线（`ConversationPageModel.degraded`）；节点级的没有会话时间线可挂，
+   * 因此出口在这一面。被消费的事件必须有**可到达**的降级呈现（D5/R18），否则吊销事件
+   * 就是「既不呈现也不降级」的第三种结果。诊断抽屉按每条的 `eventId` 打开（`openDiagnostics`）。
+   */
+  readonly nodeDegraded: readonly DegradedEventModel[];
 }
 
 /** 覆盖层缺席时的固定说明：状态未知 ≠ 已断开，且不得据此把条目移除。 */
@@ -95,6 +110,9 @@ const CONNECTION_LABEL_BY_AGENT_STATE: Readonly<Record<AgentConnectionState, str
  * @param overlay 连接事件覆盖层；缺席（空数组）即「状态未知」。
  * @param connection 连接状态机的当前状态。
  * @param host 主机身份；未配对时传 `null`。
+ * @param nodeDegraded 节点级降级条目（没有会话的事件）；生产路径一律传
+ *   `ClientStore.nodeDegraded()`——缺省空数组只服务于「手工拼一份面板模型」的构造点
+ *   （那里本来就没有节点级事件可交）。
  */
 export function buildHostPanelModel(input: {
   readonly resources: StagedResources | null;
@@ -102,6 +120,7 @@ export function buildHostPanelModel(input: {
   readonly connection: ConnectionStateName;
   readonly blocking: BlockingDetail | null;
   readonly host: HostIdentityModel | null;
+  readonly nodeDegraded?: readonly DegradedEventModel[];
 }): HostPanelModel {
   const agents = input.resources?.agents ?? [];
   const catalog: AgentCatalogView = buildAgentCatalogView(agents, input.overlay);
@@ -124,5 +143,6 @@ export function buildHostPanelModel(input: {
     overlayPresent: catalog.overlayPresent,
     unknownStateNote: catalog.overlayPresent ? null : UNKNOWN_STATE_NOTE,
     host: input.host,
+    nodeDegraded: input.nodeDegraded ?? [],
   };
 }

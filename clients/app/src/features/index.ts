@@ -33,9 +33,59 @@ export interface FeatureViewModels {
 export type { CommandGateway, ConnectionIdentity, IdentifierSource, SnapshotGateway, SyncGateway } from "./ports";
 
 // ── 状态仓库 ────────────────────────────────────────────────────────────────
-export type { ClientState, ClientStoreOptions, ConversationThreadState, CreateOutcome } from "./client-store";
+export type {
+  ClientState,
+  ClientStoreOptions,
+  CommandOutcome,
+  ConversationThreadState,
+  CreateOutcome,
+} from "./client-store";
 export { ClientStore, initialClientState } from "./client-store";
 export { ClientStoreProvider, useClientState, useClientStore } from "./runtime";
+
+// ── 呈现覆盖（D5：由客户端自持）─────────────────────────────────────────────
+export type { PresentationRoute } from "./presentation-coverage";
+export {
+  PRESENTATION_COVERAGE,
+  TIMELINE_CARD_EVENT_TYPES,
+  UNCOVERED_EVENT_TYPES,
+  hasDedicatedView,
+  presentationRouteFor,
+} from "./presentation-coverage";
+
+// ── 时间线与易失叠加层（D1/D2/D6）──────────────────────────────────────────
+export type {
+  CardTimelineEntry,
+  DegradedTimelineEntry,
+  FileChangeDiagnostics,
+  FileChangeView,
+  MessageChannel,
+  MessageTimelineEntry,
+  TimelineEntry,
+  TimelineEntryBase,
+  VolatileMessageState,
+} from "./conversation-timeline";
+export {
+  appendDelta,
+  buildFileChangeViews,
+  buildTimeline,
+  deltaChannelOf,
+  volatileText,
+} from "./conversation-timeline";
+
+// ── 交互应答（D7）──────────────────────────────────────────────────────────
+export { buildInteractionViews } from "./interaction-model";
+
+// ── 输入/取消与设置（D5/D6）────────────────────────────────────────────────
+export type {
+  CancelPresentation,
+  ConversationInputModel,
+  ConversationInputState,
+  SubmissionPresentation,
+} from "./conversation-input-model";
+export { buildConversationInputModel } from "./conversation-input-model";
+export type { ConversationSettingsModel, SettingsChoice, SettingsSectionModel } from "./conversation-settings-model";
+export { buildConversationSettingsModel, modelConfigOption } from "./conversation-settings-model";
 
 // ── R15 目录 ────────────────────────────────────────────────────────────────
 export type {
@@ -79,16 +129,24 @@ export type {
   ConversationMessageModel,
   ConversationPageModel,
   ConversationPagingModel,
+  ConversationTimelineModel,
   UsageReading,
 } from "./conversation-model";
-export { buildConversationModel, conversationCapabilities, nextBeforeCursor } from "./conversation-model";
+export {
+  buildConversationModel,
+  conversationCapabilities,
+  nextBeforeCursor,
+  structuredHistoryAvailability,
+} from "./conversation-model";
 export type { DegradedEventModel, DegradedReason, RawAvailability, RawNotSyncedReason, UnsupportedBy } from "./degradation-model";
 export {
   RAW_NOT_SYNCED_LABELS,
   UNSUPPORTED_LABELS,
   buildDegradedEventModel,
+  buildDegradedRecordModel,
   isDegraded,
-  isDegradedEvent,
+  isDegradedRecord,
+  rawAvailabilityOf,
 } from "./degradation-model";
 
 // ── R19 主机与连接 ──────────────────────────────────────────────────────────

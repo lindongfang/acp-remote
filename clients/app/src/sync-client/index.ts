@@ -49,6 +49,7 @@ export type {
 export type { AuthenticatedInfo, ClientBlockCause, SyncClientEvent, SyncConnectionOptions } from "./connection";
 export {
   REQUIRED_FEATURES,
+  SESSION_HISTORY_FEATURE,
   SUPPORTED_FEATURES,
   SyncConnection,
   blockCauseForCloseCode,
@@ -72,13 +73,17 @@ export { SnapshotStaging, SnapshotValidationError } from "./snapshot";
 export type { SnapshotDiscardReason, StagedResources, StagedSnapshot, VerifiedSnapshot } from "./snapshot";
 export {
   IncompleteReadCursorError,
+  assertHistoryPagesDoNotOverlap,
   assertPagesDoNotOverlap,
   buildReadPayload,
   cursorOf,
   earliestCursor,
+  earliestHistoryCursor,
+  historyCursorOf,
+  toLoadedHistoryPage,
   toLoadedPage,
 } from "./paging";
-export type { LoadedPage, PageRequest, ReadCursor } from "./paging";
+export type { HistoryCursor, LoadedHistoryPage, LoadedPage, PageRequest, ReadCursor } from "./paging";
 
 // ── Agent 覆盖层与 imported 落盘分流 ────────────────────────────────────────
 export { AgentConnectionOverlayStore, overlayFromEvent } from "./agent-overlay";

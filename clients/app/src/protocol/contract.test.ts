@@ -27,6 +27,33 @@ import {
 } from "./manifest";
 import { repoRoot, syncFixtureDir, syncSchemaDir, syncManifestPath, SYNC_SCHEMA_FILES } from "./paths";
 import { KNOWN_EVENT_TYPE_COUNT, isKnownEventType, projectView } from "./event";
+import type { SessionReadInclude } from "./command";
+import type { SnapshotItemHistory } from "./sync";
+
+/**
+ * include 词表的**编译期**镜像：`SessionReadInclude` 的每个取值都必须在这里登记。
+ *
+ * 多一个取值（镜像没跟上）或少一个取值（词表删了但镜像还留着）都会让本文件编译失败，
+ * 因此运行期那句 `toEqual` 比对的是「同一份词表」，而不是抄来的常量。
+ */
+const INCLUDE_MIRROR: Record<SessionReadInclude, true> = {
+  messages: true,
+  turns: true,
+  pending_interactions: true,
+  config_options: true,
+  capabilities: true,
+  history: true,
+};
+
+/** `SnapshotItemHistory` 的字段集合（`acp` 是唯一可选键）的编译期镜像。 */
+const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
+  eventId: true,
+  eventType: true,
+  sessionSequence: true,
+  createdAt: true,
+  view: true,
+  acp: true,
+};
 
 /** 读取 `schemas/sync/v1/<file>` 并解析。 */
 function readSchema(file: string): Record<string, unknown> {
@@ -237,13 +264,71 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(chunkCount.maximum).toBe(resource.enum.length);
   });
 
-  it("sessionRead 的 before 是 (createdAt, messageId) 复合游标", () => {
+  it("sessionRead 的 before 仍是 (createdAt, messageId) 复合游标，beforeHistory 是新增的会话内序号游标", () => {
     const schema = readSchema("command.schema.json");
+    // 消息分页的复合游标语义一字未改：两键都必需，单字段游标仍按协议拒绝。
     const before = defs(schema)["sessionReadBefore"] as { required: string[] };
     expect(before.required).toEqual(["createdAt", "messageId"]);
-    const read = defs(schema)["sessionRead"] as { properties: { payload: { properties: Record<string, unknown> } } };
-    const payloadKeys = Object.keys(read.properties.payload.properties).sort();
-    expect(payloadKeys).toEqual(["before", "include", "limit"]);
+    // 历史分页是另一套游标：会话内事件序号（decimalString），不是复合游标。
+    const beforeHistory = defs(schema)["sessionReadBeforeHistory"] as { $ref?: string };
+    expect(beforeHistory.$ref).toBe("common.schema.json#/$defs/decimalString");
+
+    const read = defs(schema)["sessionRead"] as {
+      properties: {
+        payload: {
+          required: string[];
+          properties: {
+            include: { items: { enum: string[] } };
+            before?: { $ref?: string };
+            beforeHistory?: { $ref?: string };
+          };
+        };
+      };
+    };
+    const payload = read.properties.payload;
+    // 反例：三个键里少一个（例如漏掉新加的 beforeHistory）这里就会变红。
+    expect(Object.keys(payload.properties).sort()).toEqual(["before", "beforeHistory", "include", "limit"]);
+    // 两个游标都是**可选**的：必填集合仍只有 include（既有客户端不受影响）。
+    expect(payload.required).toEqual(["include"]);
+    expect(payload.properties.before?.$ref).toBe("#/$defs/sessionReadBefore");
+    expect(payload.properties.beforeHistory?.$ref).toBe("#/$defs/sessionReadBeforeHistory");
+    // include 的新取值 history 与镜像的联合逐项相等（编译期由 INCLUDE_MIRROR 钉住）。
+    expect(payload.properties.include.items.enum).toEqual([
+      "messages",
+      "turns",
+      "pending_interactions",
+      "config_options",
+      "capabilities",
+      "history",
+    ]);
+    expect(Object.keys(INCLUDE_MIRROR).sort()).toEqual([...payload.properties.include.items.enum].sort());
+  });
+
+  it("sessionReadResult 新增 history/historyHasEarlier，既有 hasEarlier 的必填语义不变", () => {
+    const schema = readSchema("command.schema.json");
+    const result = defs(schema)["sessionReadResult"] as {
+      required: string[];
+      properties: {
+        historyHasEarlier?: { type?: string };
+        resources: { properties: Record<string, unknown> };
+      };
+    };
+    // 反例：若把 hasEarlier 挪进资源对象（v1 破坏性变更），这里会变红。
+    expect(result.required).toEqual(["sessionId", "resources", "hasEarlier"]);
+    expect(result.properties.historyHasEarlier).toEqual({ type: "boolean" });
+    expect(result.properties.resources.properties["history"]).toEqual({
+      type: "array",
+      items: { $ref: "sync.schema.json#/$defs/snapshotItem.history" },
+    });
+  });
+
+  it("snapshotItem.history 的必填与可选集合与镜像一致", () => {
+    const schema = readSchema("sync.schema.json");
+    const history = defs(schema)["snapshotItem.history"] as { required: string[]; properties: Record<string, unknown> };
+    expect(history.required).toEqual(["eventId", "eventType", "sessionSequence", "createdAt", "view"]);
+    // `keyof SnapshotItemHistory`：编译期钉住镜像的字段集合（`acp` 是唯一可选的）。
+    expect(Object.keys(history.properties).sort()).toEqual(Object.keys(HISTORY_KEY_MIRROR).sort());
+    expect(history.properties["acp"]).toEqual({ $ref: "common.schema.json#/$defs/rawAcp" });
   });
 
   it("sessionReadResult 必填 hasEarlier", () => {
