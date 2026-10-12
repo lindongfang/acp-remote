@@ -2,6 +2,7 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。节点侧状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）尚未实现。  
 > 版本：1.0  
+> 修订记录（2026-10-12，文档登记，无 wire 变更，`pwa-conversation-ui` 变更）：§12.7 与 §17 登记「Node Link 面无结构化历史」这一**尚未实现**的已知缺口——本次变更将在 Sync 面新增历史条目读取（`session.read` 的 `history` include 与 `beforeHistory` 游标，与它同批落地），该读取只在 Sync 面生效，本面不登记对应的 feature，经本面展示的 imported 会话在客户端侧对结构化历史显式降级。wire schema、消息族、错误码登记、§11.3 feature 表与 `fixtures/node-link/v1/` 均不变。  
 > 修订记录（2026-09-27，v1 内合同修订，未实现未发布，`node-trust-export-ids` 变更）：§8.2 的信任记录新增 `exportIds`（按节点收窄可见 Export 的白名单）——可见性三条件、清单只能收窄、`export.revoke` 不级联清理清单条目、只在配对确认时填报（无配对后修改入口，属已知限制）、v3 及更早的库升级到 v4 后既有节点行清单为空（不得默认放权）。Node Link wire 与 fixture 不变：`exportIds` 不进握手/catalog/resource/command，消息形状与错误码登记均未动；并写明重新配对（同一 `nodeId` 再次经 `node.pair.begin`/claim/`node.pair.confirm` 落定，含密钥变化后的重新配对）在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效；并明确该关闭与 `node.revoke` 的**语义与关闭码不同**：重新配对**不**推送 `node.trust.revoked`、以 `1000`（正常关闭）关闭并给出说明「信任已重新确认、请重连以重取 catalog」的 close reason，因此 §15 的「撤销即停」不适用、该节点仍按 §15 自动重连；只有 `node.revoke` 才推送 `node.trust.revoked` 并以 `4410` 关闭、停止重连。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布）：`node.challenge` 增加必需字段 `catalogRevision`(decimal string)——§9.3/§9.4 的两个连接 transcript domain 都含 tag 6 `catalogRevision`，而此前的握手消息不带该字段，Access 无法在首次连接上验证 `nodeProof` 或构造自己的 proof（design.md D13 的用户裁决 A）；§8.2 明确首阶段 Export 可见性只取「未撤销且 `export.scopes ∩` 信任记录 `grants ≠ ∅`」，`exportIds` 维度推后（用户裁决 (b)，与 `node-link-owner` 的 R51/R52 一致）（其中 `exportIds` 推后一条已被 2026-09-27 的修订取代，见上一条）。  
@@ -624,6 +625,8 @@ resource.attach → resource.attached → resource.subscribe
 
 `session.read` 在两个传输面同名但载荷不同：Sync 侧的 payload 另有可选的 `before`（`(createdAt, messageId)` 复合游标）与 `limit`，本面一律没有这两个键。Node Link 侧不提供分页不是遗漏，而是本协议的有意边界——本面的会话正文受 §12.4 的 `no-content-cache` 硬约束，Access 侧根本不保留正文，没有可翻页的副本。代价与理由见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5。
 
+> **已知缺口：Node Link 面无结构化历史**（当前版本**尚未实现**，待后续变更）。本面没有按会话读取「结构化历史条目」的能力：本次变更将在 Sync 面新增历史条目 include（`history`）与游标（`beforeHistory`），与它同批落地；这两者一旦落地也只存在于 Sync 面（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5），本面的 `session.read` payload 与结果形状不因此改变，本面也不登记对应的 feature；这条读路径要回源 Owner 取事件正文，而 Access 侧的无正文索引不保留正文（§6）、回源依赖的 `node-link-client` 尚未落地，本切片连 `session.read` 的结果投影都还没有（见本节末的收窄注记）。因此经 Node Link 展示的 imported 会话在客户端侧对结构化历史**显式降级**为「该会话的结构化历史在本版本不可用」的说明，而不是呈现为「该会话没有结构化内容」；本面的这条读路径与 feature 登记待后续变更补齐。
+
 `session.create` 的硬约束：
 
 - 只允许上述四个键；`payload` 出现 `cwd`、`mcpServers`、任何绝对路径、任何凭据字段（例如 `apiKey`、`token`、`env`、`credential`）时，Owner **必须**以 `command.rejected` 回复，`error.code = "nodelink.command.unsupported_field"`，`details.field` 必须给出被拒的字段名，且不得创建会话或部分应用参数。
@@ -978,6 +981,8 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 9. Owner 以 Access Node 为授权 principal，最终用户引用只用于审计（§8.3）。
 
 首切片不实现的消息：`catalog.changed`、`resource.detach`、`node.rotate-key.request`/`node.rotate-key.result`、`link.backpressure`（§12.1 的 `post_mvp` 行）；收到时显式返回 `nodelink.protocol.type_unsupported`，不静默忽略。
+
+本面也**尚未实现**按会话读取结构化历史条目的能力：本次变更将在 Sync 面新增的 `history` include 与 `beforeHistory` 游标（与它同批落地）只在 Sync 面生效，本面不登记对应的 feature（登记见 §12.7 的已知缺口）；因此经本面展示的 imported 会话在客户端侧对结构化历史显式降级。
 
 ## 18. 必测场景
 
