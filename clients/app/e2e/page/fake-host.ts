@@ -228,8 +228,9 @@ export class FakeHost {
 
   #handlers: SocketHandlers | null = null;
   #closed = false;
-  /** 被扣住、尚未应答的命令帧（按发出次序；见 {@link FakeHostOptions.holdCommands}）。 */
+  /** `command.result` 的 `messageId` 计数（每条结果一帧；见 `#deliverResult`）。 */
   #resultCounter = 0;
+  /** 被扣住、尚未应答的命令帧（按发出次序；见 {@link FakeHostOptions.holdCommands}）。 */
   #held: CommandFrame[] = [];
 
   constructor(options: FakeHostOptions, identity: FakeHostIdentity) {
@@ -518,11 +519,11 @@ export class FakeHost {
     if (index < 0) return false;
     const frame = this.#held[index];
     if (frame === undefined) return false;
+    const status = outcome.status ?? "completed";
     // `accepted` **不是**终态：同一 requestId 还会再收到回落。此时保留被扣的帧，
     // 否则第二次 `completeHeldCommand` 找不到它、终态永远回不来（CP-4 的观测窗口就是这么塌的）。
-    const terminal = outcome.status !== undefined && outcome.status !== "accepted";
-    if (terminal) this.#held.splice(index, 1);
-    const status = outcome.status ?? "completed";
+    // 判据用**解析后**的状态：缺省参数解析出的 `completed` 也是终态。
+    if (status !== "accepted") this.#held.splice(index, 1);
     this.#deliverResult(frame, {
       status,
       result: outcome.result ?? DEFAULT_COMMAND_RESULT,
@@ -547,9 +548,9 @@ export class FakeHost {
       readonly error: Record<string, unknown> | null;
     },
   ): void {
-    // 每条 `command.result` 是**独立**的一帧：`messageId` 必须唯一。
-    // 同一命令先回 `accepted` 再回 `completed` 时若复用同一个 `messageId`，
-    // 第二帧会被当作重复信封丢掉，「只有终态才算完成」就无从断言。
+    // 每条 `command.result` 是**独立**的一帧：`messageId` 必须唯一（`docs/SYNC_PROTOCOL.md`：
+    // 每条发送消息的 `messageId` 唯一）。重复的 `messageId` **不**会被客户端丢弃（同处
+    // 「`messageId` 重复不自动重放业务结果，命令幂等只看 `requestId`」），这里自增是为了合协议。
     this.#resultCounter += 1;
     this.#deliver(
       JSON.stringify({
