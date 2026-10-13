@@ -60,7 +60,7 @@ pub struct NetConfig {
     pub allow_plaintext_dev: bool,
     /// 单条 WebSocket message 上限（默认 [`DEFAULT_MAX_MESSAGE_BYTES`]，`NODE_LINK_PROTOCOL.md` §2.5）。
     pub max_message_bytes: usize,
-    /// 配对 HTTP 请求体上限（默认 [`DEFAULT_MAX_BODY_BYTES`]，§13.4 的 413）。
+    /// 配对 HTTP 请求体上限（默认 [`DEFAULT_MAX_BODY_BYTES`] = 16 KiB，Node Link §13.4 与 Sync §14 的 413）。
     pub max_body_bytes: usize,
     /// 关闭时排空在途连接的上限（对应 `daemon.shutdown_grace_ms`）。
     pub drain_grace: Duration,

@@ -46,6 +46,7 @@ use server::local_admin::{
     LocalAdminHandler, LocalAdminRouter, Method, PairingSessions, decode_request,
 };
 use server::node_link::{CommandRoute, NodeLinkConfig};
+use server::sync::conn::ConnectionRegistry as SyncConnectionRegistry;
 use server::transport::net::{NetListener, Shutdown};
 use sqlx::Connection as _;
 use storage_sqlite::session_store::SqliteStore;
@@ -255,9 +256,12 @@ impl OwnerNode {
             pairing: Arc::new(PairingSessions::new(
                 Arc::clone(&authority),
                 config.public_origin.clone(),
-                Arc::new(app::compose::NodeLinkCloser::new(Arc::clone(
-                    ingress.command(),
-                ))),
+                // 本 harness 只注册 Node Link 的 path（Sync 的 path 由 `register_sync_paths` 注册），
+                // 因此设备侧的 Sync 连接表恒空——`device.revoke` 的关闭数因此恒为 0。
+                Arc::new(app::compose::NodeLinkCloser::new(
+                    Arc::clone(ingress.command()),
+                    SyncConnectionRegistry::new(),
+                )),
             )),
         }));
 

@@ -9,8 +9,8 @@
 //! 3. 首次种子导入（`seed_state`/`mark_seeded` 单事务）；
 //! 4. 启动恢复（`recover_unsettled`，§6 第 16 条：在取锁与开始监听**之前**）；
 //! 5. 单实例锁 + `instanceId`（`fs4`，见 `crate::lock`）；
-//! 6. 构建 Node Link 接入面并绑定 `daemon.listen`（TLS `direct` 的 PEM 在绑定前加载，两者失败都拒绝
-//!    启动：`design.md` D10/D11）；
+//! 6. 构建 Node Link 与 Sync 接入面并绑定 `daemon.listen`（TLS `direct` 的 PEM 在绑定前加载，两者失败都
+//!    拒绝启动：`design.md` D10/D11）；
 //! 7. 本地管理 endpoint（`LocalEndpoint::bind`，`runtime_dir = None` 表示按 §2.1 读 `XDG_RUNTIME_DIR`）；
 //! 8. 发布锁记录（含 endpoint 定位串）→ 开放网络接入与本地通道的接受循环。
 //!
@@ -46,6 +46,14 @@ use server::node_link::{
     PairingHttpConfig, ResourceRoute, Routes, STATUS_PATH, WS_PATH, WS_SUBPROTOCOL, WsEndpoint,
     conn::ConnectionRegistry,
 };
+use server::sync::conn::{
+    ConnectionRegistry as SyncConnectionRegistry, SyncConfig, SyncConn, WS_PATH as SYNC_WS_PATH,
+    WS_SUBPROTOCOL as SYNC_WS_SUBPROTOCOL, WsEndpoint as SyncWsEndpoint,
+};
+use server::sync::pairing::{
+    CLAIM_PATH as SYNC_CLAIM_PATH, PairingHttp as SyncPairingHttp, STATUS_PATH as SYNC_STATUS_PATH,
+};
+use server::sync::subscribe::{OwnerReachability, SubscribeRoute};
 use server::transport::local::{
     AuditHook, EndpointError, InstanceId, LocalConnectionHandlers, LocalEndpoint,
     LocalEndpointConfig, LocalStream, serve_connection,
@@ -54,11 +62,16 @@ use server::transport::net::{NetConfig, NetError, NetListener, RouteError, Shutd
 use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::compose::{AuditWriter, ComposeError, Composition, NodeLinkCloser, forked_publisher};
+use crate::compose::{
+    AuditWriter, ComposeError, Composition, NodeLinkCloser, NodeLinkReachability, forked_publisher,
+};
 use crate::config::Config;
 use crate::config::Loaded;
 use crate::lock::{DaemonLock, LockError, LockRecord};
 use storage_sqlite::session_store::SqliteStore;
+
+#[cfg(test)]
+mod sync_ingress_tests;
 
 /// 周期清理的间隔（`daemon-lifecycle` 规格：每 60 s 的 prune/expire_pairings/sweep_orphans）。
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
@@ -857,6 +870,15 @@ pub fn net_config(config: &Config) -> NetConfig {
     }
 }
 
+/// `app::config` → `server::sync::conn::SyncConfig`（`sync.*` 三个键的**唯一消费点**）。
+///
+/// 「只下调」在配置解析期就已收敛（[`crate::config`]：高于 §14 默认值的取值一律取默认值），因此这里是一对
+/// 一映射、不再夹取。协议层 `SessionLimits::negotiate` 仍会再夹一次 `[wire 下限, §14 默认值]`——那是
+/// 「任何路径都不得放宽」的构造期不变量，与本函数不重复。
+pub fn sync_config(config: &Config) -> SyncConfig {
+    config.sync.clone()
+}
+
 /// Node Link 入站面的装配件：连接注册表与三个路由（catalog/resource/command）。
 ///
 /// 路由的 node id **必须**是本机（Owner）node id（`Authority::local_node`）：它是
@@ -960,6 +982,78 @@ pub fn register_node_link_paths(
     Ok(ingress)
 }
 
+/// Sync 入站面的装配件：活跃连接注册表（撤销钩子与后续事件扇出共用同一个句柄）。
+///
+/// 连接面本身（[`SyncConn`]）不在这里持有：它由注册给 listener 的 WS handler 拥有，与 listener 同生命周期。
+pub struct SyncIngress {
+    registry: Arc<SyncConnectionRegistry>,
+}
+
+impl SyncIngress {
+    /// Sync 的活跃连接注册表（键是 `(hostId, deviceId)`；设备撤销钩子在这里请求关闭）。
+    pub fn registry(&self) -> &Arc<SyncConnectionRegistry> {
+        &self.registry
+    }
+}
+
+/// 把 Sync 的全部 path 注册到共享 listener（WSS + 配对 claim/status）并返回连接注册表句柄。
+///
+/// 这是**唯一的 Sync 接线点**：组合根（[`NetIngress::start`]）与受控路径集成测试都调它，因此
+/// 「subprotocol 常量」「认证后消息的路由组合」「配对端点的安全响应头」不会在两处漂移。
+///
+/// 配对端点的四个安全响应头经 `SyncPairingHttp::default_response_headers` **同时**声明给接入层
+/// （`register_post` 的每路径默认响应头）：否则接入层在调用处理器前产生的 413/Host 400 不带这些头。
+///
+/// `owner` 是 Owner 可达性（`sync.subscribe`/快照的运行时输入）：`server::sync` 不得调用平级的
+/// `server::node_link`，因此这条事实只能由组合根注入（见 [`NodeLinkReachability`]）。
+pub fn register_sync_paths(
+    listener: &mut NetListener,
+    core: &Arc<UseCases>,
+    authority: &Arc<Authority>,
+    broker: &Arc<Broker>,
+    config: &SyncConfig,
+    owner: Arc<dyn OwnerReachability>,
+) -> Result<SyncIngress, NetworkError> {
+    let registry = SyncConnectionRegistry::new();
+    // 认证后消息路由：本切片只有订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）。它的
+    // 事件投递腿是显式失败关闭（见 `server::sync::subscribe` 的模块文档），因此这里接的是**已落地的**
+    // 判定与快照链路，不是占位实现。
+    let route = Arc::new(SubscribeRoute::new(
+        Arc::clone(core),
+        Arc::clone(broker),
+        Arc::clone(&registry),
+        owner,
+    ));
+    let conn = Arc::new(
+        SyncConn::new(
+            Arc::clone(core),
+            Arc::clone(authority),
+            config.clone(),
+            Arc::clone(&registry),
+        )
+        .with_route(route),
+    );
+    listener
+        .register_ws(
+            SYNC_WS_PATH,
+            SYNC_WS_SUBPROTOCOL,
+            SyncWsEndpoint::handler(conn),
+        )
+        .map_err(NetworkError::Route)?;
+    let pairing = Arc::new(SyncPairingHttp::new(
+        Arc::clone(core),
+        Arc::clone(authority),
+    ));
+    let default_headers = pairing.default_response_headers();
+    listener
+        .register_post(SYNC_CLAIM_PATH, pairing.claim_handler(), default_headers)
+        .map_err(NetworkError::Route)?;
+    listener
+        .register_post(SYNC_STATUS_PATH, pairing.status_handler(), default_headers)
+        .map_err(NetworkError::Route)?;
+    Ok(SyncIngress { registry })
+}
+
 /// 网络接入面的所有者句柄：listener、事件扇出与命令终态观察共用同一个关闭信号（`design.md` D11）。
 ///
 /// 三个任务都由本结构持有；「停接入层」就是触发该信号并等它们结束（超时 abort），因此在关闭路径上
@@ -971,11 +1065,14 @@ pub struct NetIngress {
     listen: Vec<String>,
     command: Arc<CommandRoute>,
     registry: Arc<ConnectionRegistry>,
+    /// Sync 的活跃连接注册表（设备撤销钩子的关闭对象）。
+    sync_registry: Arc<SyncConnectionRegistry>,
     tasks: Vec<(&'static str, JoinHandle<()>)>,
 }
 
 impl NetIngress {
-    /// 装配并启动网络接入面：绑定 `daemon.listen`（含 TLS 加载）→ 注册全部 path → spawn 三个任务。
+    /// 装配并启动网络接入面：绑定 `daemon.listen`（含 TLS 加载）→ 注册 Node Link 与 Sync 的全部 path
+    /// → spawn 三个任务。
     ///
     /// 绑定或注册失败时返回 `Err`：调用方必须拒绝启动（**不**降级为「无网络接入」），且此时还没有任何
     /// 任务被 spawn（listener 在出错路径上随 `listener` 一起 drop，端口立即释放）。
@@ -1001,6 +1098,15 @@ impl NetIngress {
                 public_origin: composition.config().public_origin.clone(),
                 ..NodeLinkConfig::default()
             },
+        )?;
+        // Sync 面：Owner 可达性只从 Node Link 的连接注册表读（两个适配器不互相调用，组合根是唯一的缝合点）。
+        let sync = register_sync_paths(
+            &mut listener,
+            &core,
+            &authority,
+            composition.broker(),
+            &sync_config(composition.config()),
+            Arc::new(NodeLinkReachability::new(Arc::clone(ingress.registry()))),
         )?;
         let listen = listener
             .local_addrs()
@@ -1041,13 +1147,14 @@ impl NetIngress {
         tracing::info!(
             event = "daemon.ingress_ready",
             listen = ?listen,
-            "网络接入面已就绪：Node Link 的 WSS 与配对 HTTP 开始接受连接"
+            "网络接入面已就绪：Node Link 与 Sync 的 WSS 与配对 HTTP 开始接受连接"
         );
         Ok(Self {
             shutdown,
             listen,
             command: ingress.command,
             registry: ingress.registry,
+            sync_registry: Arc::clone(sync.registry()),
             tasks,
         })
     }
@@ -1057,7 +1164,7 @@ impl NetIngress {
         self.listen.clone()
     }
 
-    /// 命令路由句柄（撤销通知缝 `NodeLinkCloser` 装配用）。
+    /// 命令路由句柄（撤销通知缝 [`NetIngress::connection_closer`] 的内部来源）。
     pub fn command(&self) -> &Arc<CommandRoute> {
         &self.command
     }
@@ -1065,6 +1172,20 @@ impl NetIngress {
     /// 连接注册表句柄（撤销传播的观察面；目前只由测试与 `CommandRoute` 使用）。
     pub fn registry(&self) -> &Arc<ConnectionRegistry> {
         &self.registry
+    }
+
+    /// Sync 的连接注册表句柄（设备撤销钩子 `NodeLinkCloser` 装配用：`device.revoke` 提交后关的就是它）。
+    pub fn sync_registry(&self) -> &Arc<SyncConnectionRegistry> {
+        &self.sync_registry
+    }
+
+    /// 撤销通知缝的装配：Node Link 的命令管线（节点撤销/重新配对的连接作废与 Export 通知）**加上**
+    /// Sync 的连接注册表（设备撤销关闭的活动连接）。
+    ///
+    /// 这是**唯一**的撤销缝接线点——组合根（[`run`]）与受控路径用例都调它，因此「设备撤销关的是哪张
+    /// 连接表」不会在两处漂移（此前 `close_device` 恒报「没有可关闭的连接」正是因为这里没有第二张表）。
+    pub fn connection_closer(&self) -> NodeLinkCloser {
+        NodeLinkCloser::new(Arc::clone(&self.command), Arc::clone(&self.sync_registry))
     }
 
     /// 停接入层的**第一步（同步）**：触发关闭信号。触发后 listener 停止 accept（并按
@@ -1257,8 +1378,8 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             Arc::clone(composition.authority()),
             composition.config().public_origin.clone(),
             // `node.revoke`/`export.revoke` 持久提交后的通知缝：真实实现（推送 + 4410 关闭），
-            // 不再是「只记日志」的桩（`design.md` D7）。
-            Arc::new(NodeLinkCloser::new(Arc::clone(net_ingress.command()))),
+            // 不再是「只记日志」的桩（`design.md` D7）。`device.revoke` 关的是 Sync 的连接注册表。
+            Arc::new(net_ingress.connection_closer()),
         )),
     });
     let handlers = Arc::new(LocalConnectionHandlers::new(Arc::new(ShuttingDownGate {

@@ -4,8 +4,8 @@
 //!
 //! - **只读**：本模块不回写配置文件（因此 workspace 不引入 `toml_edit`），管理状态的权威是 SQLite。
 //! - **不新增配置键**：键名、类型与默认值逐条来自 `CONFIG_REFERENCE.md`；本切片消费
-//!   `daemon.*`/`storage.*`/`agents.*`（种子）/`identity.*`/`logging.*`/`dev_mode.*`，其余段落解析后
-//!   保留为「已知但未接线」并在启动日志里注明（`app::daemon` 记 debug 级），既不报错也不生效。
+//!   `daemon.*`/`storage.*`/`agents.*`（种子）/`identity.*`/`logging.*`/`dev_mode.*`/`sync.*`，其余段落
+//!   解析后保留为「已知但未接线」并在启动日志里注明（`app::daemon` 记 debug 级），既不报错也不生效。
 //! - **明确 schema**：未知键一律拒绝（`SECURITY_DESIGN.md` §12.1）；启动配置里出现 `imports`/`exports`
 //!   必须明确拒绝并指向本地管理命令（`CONFIG_REFERENCE.md` 的「配置与管理状态的权威」）。
 //! - **失败关闭**：解析或校验失败即拒绝启动，不「猜一个默认值继续跑」。
@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 
 use acp_core::model::{AgentId, AgentProfile, ProviderEnvBinding};
 use serde::Deserialize;
+use server::sync::conn::SyncConfig;
+use server::sync::conn::limits::{
+    DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_MAX_PROMPT_BYTES, DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH,
+};
 use server::transport::net::{DEFAULT_LISTEN, TlsMode};
 use storage_sqlite::migrate::StorageConfig as SqliteStorageConfig;
 
@@ -195,6 +199,8 @@ pub struct Config {
     pub logging: LoggingConfig,
     /// `dev_mode.*`。
     pub dev_mode: DevMode,
+    /// `sync.*` 三个可下调的 Sync 限额（`CONFIG_REFERENCE.md` §2；取值已按「只下调」收敛）。
+    pub sync: SyncConfig,
     /// 「已知但未接线」的键。
     pub unwired: Vec<String>,
 }
@@ -319,13 +325,6 @@ impl Config {
             }
         }
         for key in raw
-            .sync
-            .as_ref()
-            .map_or_else(Vec::new, RawSync::present_keys)
-        {
-            unwired.push(key.to_owned());
-        }
-        for key in raw
             .node_link
             .as_ref()
             .map_or_else(Vec::new, RawNodeLink::present_keys)
@@ -392,6 +391,21 @@ impl Config {
             .logging
             .map_or_else(|| Ok(LoggingConfig::default()), RawLogging::into_config)?;
 
+        // `sync.*` 三个键**已接线**（`CONFIG_REFERENCE.md` §2）：它们只允许把 §14 的默认值往**下**调，
+        // 因此高于默认值的取值在这里就收敛成默认值——写得更大不会放宽对端可见的 `limits`，也不像
+        // 「未接线」那样被静默忽略。取值随 `SyncConfig` 一路进 `server::sync::conn`（组合根
+        // `daemon::sync_config` 是唯一映射点），协议层 `SessionLimits::negotiate` 再按
+        // `[wire 下限, §14 默认值]` 夹一次（「任何路径都不得放宽」的构造期不变量）。
+        let sync_section = raw.sync.unwrap_or_default();
+        let sync = SyncConfig {
+            max_message_bytes: lower_of(sync_section.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES),
+            max_prompt_bytes: lower_of(sync_section.max_prompt_bytes, DEFAULT_MAX_PROMPT_BYTES),
+            max_replay_events_per_batch: lower_of(
+                sync_section.max_replay_events_per_batch,
+                DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH,
+            ),
+        };
+
         Ok(Self {
             data_dir,
             public_origin,
@@ -407,6 +421,7 @@ impl Config {
             fail_closed_on_missing_keystore,
             logging,
             dev_mode,
+            sync,
             unwired,
         })
     }
@@ -589,6 +604,9 @@ fn resolve_tls(raw: Option<&RawTls>) -> Result<TlsMode, ConfigError> {
     }
 }
 
+/// `[sync]` 段：三个**可下调**的 Sync 限额（`CONFIG_REFERENCE.md` §2）。
+///
+/// 三个键都已接线，因此这里没有 `present_keys`：不再有任何一个是「已知但未接线」。
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSync {
@@ -597,20 +615,14 @@ struct RawSync {
     max_replay_events_per_batch: Option<u64>,
 }
 
-impl RawSync {
-    fn present_keys(&self) -> Vec<&'static str> {
-        let mut keys = Vec::new();
-        if self.max_message_bytes.is_some() {
-            keys.push("sync.max_message_bytes");
-        }
-        if self.max_prompt_bytes.is_some() {
-            keys.push("sync.max_prompt_bytes");
-        }
-        if self.max_replay_events_per_batch.is_some() {
-            keys.push("sync.max_replay_events_per_batch");
-        }
-        keys
-    }
+/// 「只下调」：未配置取协议默认值，配置高于默认值时**也**取默认值（`SYNC_PROTOCOL.md` §14 的默认值
+/// 同时是上界；`CONFIG_REFERENCE.md` §2 的取值口径）。
+///
+/// 低于协议默认值是合法的（收紧本机限额），再往下的 wire 下限由协议层
+/// `SessionLimits::negotiate` 兜住——它把值夹在 `[wire 下限, 默认值]` 内，因此无论配置写多小都不会
+/// 得到对端无法接受的 `limits`。
+fn lower_of(configured: Option<u64>, protocol_default: u64) -> u64 {
+    configured.unwrap_or(protocol_default).min(protocol_default)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -910,6 +922,8 @@ impl RawLogging {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 协议层的协商结果（对端可见的 `limits`）是「真正被消费」的判据，因此用例直接经它断言。
+    use server::sync::conn::SessionLimits;
 
     fn parse(text: &str) -> Result<Config, ConfigError> {
         Config::from_toml(text)
@@ -948,6 +962,15 @@ mod tests {
         assert_eq!(config.logging, LoggingConfig::default());
         assert_eq!(config.dev_mode, DevMode::default());
         assert!(config.seeds.is_empty());
+        // `sync.*` 三个键已接线：默认值来自 `CONFIG_REFERENCE.md` §2（与协议层的 §14 默认值同源，不在这
+        // 里另写一份字面量），因此空配置下它们既生效、也不进「已知但未接线」清单。
+        assert_eq!(config.sync, SyncConfig::default());
+        assert_eq!(config.sync.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES);
+        assert_eq!(config.sync.max_prompt_bytes, DEFAULT_MAX_PROMPT_BYTES);
+        assert_eq!(
+            config.sync.max_replay_events_per_batch,
+            DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH
+        );
         assert!(config.unwired.is_empty(), "{:?}", config.unwired);
     }
 
@@ -1046,9 +1069,6 @@ name = "OPENAI_API_KEY"
 [daemon]
 instance_lock = "ipc"
 
-[sync]
-max_message_bytes = 1048576
-
 [node_link]
 heartbeat_interval_ms = 30000
 
@@ -1062,7 +1082,6 @@ keep_head_bytes = 1024
         .expect("未接线段落必须被接受");
         for key in [
             "daemon.instance_lock(ipc)",
-            "sync.max_message_bytes",
             "node_link.heartbeat_interval_ms",
             "sessions.idle_timeout_ms",
             "terminal.keep_head_bytes",
@@ -1082,12 +1101,70 @@ keep_head_bytes = 1024
             "daemon.tls.cert_path",
             "daemon.tls.key_path",
             "dev_mode.allow_plaintext",
+            "sync.max_message_bytes",
+            "sync.max_prompt_bytes",
+            "sync.max_replay_events_per_batch",
         ] {
             assert!(
                 !config.unwired.iter().any(|key_name| key_name == key),
                 "`{key}` 已接线，不得再报未接线",
             );
         }
+    }
+
+    /// `sync.*` 三个键**已接线**（`CONFIG_REFERENCE.md` §2）：写下的值一路进 `SyncConfig` →
+    /// `SessionLimits`（对端可见的 `auth.authenticated.limits`），且方向只允许**下调**。
+    ///
+    /// 「上调被忽略」与「下调生效」都必须真的走到协议层协商结果上——只断言 `config.sync` 会漏掉
+    /// 「解析到但没接进协议层」这一整类回归。
+    #[test]
+    fn the_sync_limits_are_wired_and_can_only_be_lowered() {
+        let lowered = parse(
+            r#"
+[sync]
+max_message_bytes = 65536
+max_prompt_bytes = 1024
+max_replay_events_per_batch = 1
+"#,
+        )
+        .expect("三个键必须被接受并生效");
+        assert_eq!(lowered.sync.max_message_bytes, 65_536);
+        assert_eq!(lowered.sync.max_prompt_bytes, 1_024);
+        assert_eq!(lowered.sync.max_replay_events_per_batch, 1);
+        assert!(lowered.unwired.is_empty(), "{:?}", lowered.unwired);
+        let limits = SessionLimits::negotiate(&crate::daemon::sync_config(&lowered));
+        assert_eq!(limits.max_message_bytes(), 65_536);
+        assert_eq!(limits.max_prompt_bytes(), 1_024);
+        assert_eq!(limits.max_replay_events_per_batch(), 1);
+
+        let raised = parse(
+            r#"
+[sync]
+max_message_bytes = 8388608
+max_prompt_bytes = 4194304
+max_replay_events_per_batch = 5000
+"#,
+        )
+        .expect("高于 §14 默认值的配置必须被接受（只是不生效）");
+        assert_eq!(
+            raised.sync,
+            SyncConfig::default(),
+            "高于协议默认值的取值必须收敛为默认值"
+        );
+        let limits = SessionLimits::negotiate(&crate::daemon::sync_config(&raised));
+        assert_eq!(limits.max_message_bytes(), DEFAULT_MAX_MESSAGE_BYTES);
+        assert_eq!(limits.max_prompt_bytes(), DEFAULT_MAX_PROMPT_BYTES);
+        assert_eq!(
+            limits.max_replay_events_per_batch(),
+            u32::try_from(DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH).expect("默认值在 u32 内")
+        );
+
+        // 未配置 = 同默认值（不是「关掉」），且与省略 `[sync]` 整段等价。
+        assert_eq!(parse("").expect("空配置").sync, SyncConfig::default());
+        assert_eq!(
+            parse("[sync]\n").expect("空段落").sync,
+            SyncConfig::default()
+        );
     }
 
     /// 网络接入面的四个键 + `dev_mode.allow_plaintext` 从 TOML 取到值（接线后的解析面）。
