@@ -1408,8 +1408,14 @@ async fn an_envelope_version_other_than_v1_is_closed_with_4406() {
 #[tokio::test]
 async fn a_handshake_that_never_gets_a_hello_is_closed_with_4408() {
     let harness = Harness::new().await;
-    let mut client = Client::connect_with_timeout(harness.addr, TIMEOUT_WINDOW_IO).await;
+    // 计时起点必须在**连接之前**：服务端的 15 秒窗口从会话任务开始起算（即 WS 升级完成之后由
+    // `handshake_phase` 取 `now + HANDSHAKE_TIMEOUT`，见 `node_link/conn/session.rs:348`），
+    // 而 `connect_with_timeout` 还要完成 TCP 连接、WS 升级并读到 101 响应才返回。若起点在它之后，
+    // 本断言的余量恰好等于这段偏移（负载下可达毫秒级），于是「窗口必须满 15 秒」会随机差几毫秒
+    // 而失败（CI 实测 14.998687621s，差 1.3ms）。起点提前后 `elapsed >= HANDSHAKE_TIMEOUT`
+    // 才真正表达「服务端等满了窗口」。
     let started = Instant::now();
+    let mut client = Client::connect_with_timeout(harness.addr, TIMEOUT_WINDOW_IO).await;
     assert_eq!(client.expect_close().await, 4408, "握手超时以 4408 关闭");
     assert!(
         started.elapsed() >= HANDSHAKE_TIMEOUT,
