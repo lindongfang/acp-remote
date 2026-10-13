@@ -1164,6 +1164,97 @@ fn node_link_status_proof_requires_the_in_memory_secret() {
     );
 }
 
+// ---------------------------------------------------------------------------------------------
+// Sync 配对通道的状态查询证明入口（`SYNC_PROTOCOL.md` §7.3）
+// ---------------------------------------------------------------------------------------------
+
+/// 状态查询证明的输入（设备侧用二维码里的 secret 计算 proof）。
+fn sync_status_input(request_nonce_hex: &str) -> identity_auth::SyncPairingStatus {
+    identity_auth::SyncPairingStatus {
+        host_id: node(HOST),
+        device_id: device(DEVICE),
+        pairing_id: pairing(PAIRING),
+        pairing_request_id: request_id("b2f3fbfa-c2c6-4f49-9e0c-643d152de18d"),
+        request_nonce: nonce_from_hex(request_nonce_hex),
+    }
+}
+
+#[test]
+fn sync_status_proof_round_trips_with_the_pairing_secret() {
+    // §7.3：有效 proof 通过；同一输入换一把 secret 计算的 proof 不通过（HMAC 失败，不区分原因）。
+    let created = create_device_pairing();
+    let input = sync_status_input("aa");
+    let proof = input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    assert_eq!(
+        created.authority.verify_sync_pairing_status(&input, &proof),
+        Ok(())
+    );
+
+    let mut other_input = input.clone();
+    other_input.request_nonce = nonce_from_hex("bb");
+    let other_proof = other_input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    assert_eq!(
+        created
+            .authority
+            .verify_sync_pairing_status(&input, &other_proof),
+        Err(PairingError::Proof(identity_auth::ProofError::Hmac)),
+        "nonce 不同的 transcript 不能通过"
+    );
+
+    // 换一把 pairing 的 secret（另一条配对的材料）同样不通过：密钥只取本次输入的 pairing id。
+    let mut other_pairing = input.clone();
+    other_pairing.pairing_id = pairing(OTHER_DEVICE);
+    assert_eq!(
+        created
+            .authority
+            .verify_sync_pairing_status(&other_pairing, &proof),
+        Err(PairingError::SecretUnavailable),
+        "本机没有该配对的 secret，无法校验"
+    );
+}
+
+#[test]
+fn sync_status_proof_rejects_a_foreign_host() {
+    // §7.3 的 hostId 必须就是本节点：本入口不为别的 host 装配 transcript。
+    let created = create_device_pairing();
+    let input = sync_status_input("aa");
+    let proof = input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    let mut foreign = input.clone();
+    foreign.host_id = node(OTHER_NODE);
+    assert_eq!(
+        created
+            .authority
+            .verify_sync_pairing_status(&foreign, &proof),
+        Err(PairingError::ClaimMismatch)
+    );
+}
+
+#[test]
+fn sync_status_proof_requires_the_in_memory_secret() {
+    // §7.3 + §4.3：批准后的配对在首次认证成功时提前清除 secret，重启则全部清除；两种情况都无法再
+    // 校验任何 proof（终态配对仍可按 200 回应，那是 adapter 的判定，不是本入口的成功）。
+    let created = create_device_pairing();
+    let input = sync_status_input("aa");
+    let proof = input
+        .hmac(&created.draft.secret)
+        .expect("状态查询证明必须可计算");
+    assert_eq!(
+        created.authority.reset_memory().0,
+        1,
+        "重启清理 1 条内存材料"
+    );
+    assert_eq!(
+        created.authority.verify_sync_pairing_status(&input, &proof),
+        Err(PairingError::SecretUnavailable)
+    );
+}
+
 #[test]
 fn pairing_request_material_is_readable_until_the_secret_is_cleared() {
     // claim 响应与 Owner 证明需要的两个非秘密值：与 secret 同生同灭，且不属于秘密材料。

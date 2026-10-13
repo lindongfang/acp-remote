@@ -31,5 +31,6 @@
 //! `openspec/changes/sync-server-connection/specs/sync-device-auth/spec.md` 为准。
 
 pub mod conn;
+pub mod pairing;
 pub mod snapshot;
 pub mod subscribe;

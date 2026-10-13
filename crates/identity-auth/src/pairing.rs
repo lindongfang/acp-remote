@@ -14,7 +14,7 @@ use crate::error::PairingError;
 use crate::state::PairingMaterial;
 use crate::transcript::{
     NodeLinkPairingProof, NodeLinkPairingSas, NodeLinkPairingStatus, SyncPairingProof,
-    SyncPairingSas,
+    SyncPairingSas, SyncPairingStatus,
 };
 use crate::types::{
     CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
@@ -437,6 +437,30 @@ impl Authority {
         proof: &PairingProof,
     ) -> Result<(), PairingError> {
         if &input.owner_node_id != self.local_node() {
+            return Err(PairingError::ClaimMismatch);
+        }
+        let Some(secret) = self.state().secret(&input.pairing_id) else {
+            return Err(PairingError::SecretUnavailable);
+        };
+        input.verify(&secret, proof).map_err(PairingError::from)
+    }
+
+    /// Sync 配对状态查询证明（`acp-remote/pairing-status/v1`，`SYNC_PROTOCOL.md` §7.3）。
+    ///
+    /// 与 [`Authority::verify_node_link_pairing_status`] **同形**（同一套三条守卫，domain 与字段集合
+    /// 不同）：密钥是本机内存里该配对的 pairing secret（§4.3）；`input.host_id` 必须等于本节点：本入口只
+    /// 服务本节点登记的配对，不替别的 host 装配 transcript；secret 缺失（未创建、已被清除——过期扫描、
+    /// 重启、首次认证成功）与 HMAC 不匹配都是具名失败（`SecretUnavailable`/`Proof(Hmac)`），**adapter
+    /// 必须把两者收敛为同一个对端可见的失败**（§4.5：不泄露校验差异）。
+    ///
+    /// `SyncPairingStatus` 的 `hmac`/`verify` 是本入口的唯一密码学依赖（§7.3 的
+    /// `pairing-status` 域，`transcript.rs`）；本入口不读存储、不读系统时间。
+    pub fn verify_sync_pairing_status(
+        &self,
+        input: &SyncPairingStatus,
+        proof: &PairingProof,
+    ) -> Result<(), PairingError> {
+        if &input.host_id != self.local_node() {
             return Err(PairingError::ClaimMismatch);
         }
         let Some(secret) = self.state().secret(&input.pairing_id) else {
