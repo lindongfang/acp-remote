@@ -144,3 +144,17 @@ cursor 有效且仍在保留窗口内时，服务端 SHALL 从该 cursor 之后�
 
 - **WHEN** 某设备此前 ACK 过一个较新的游标，随后以一条更旧的 cursor 重新订阅
 - **THEN** 服务端从该 cursor 之后投递事件，MUST NOT 以服务端保存的最大 ACK 跳过这段区间
+
+### Requirement: 事件帧的来源身份字段经 feature 协商启用
+
+`origin` 的身份字段与来源取值经 feature `core.event-origin.v1` 协商启用。协商了该 feature 的客户端 SHALL 收到含 `nodeId` 键的 `origin`，且 `kind` 取 `device` 时 `deviceId` SHALL 非空、取 `node` 时 `nodeId` SHALL 非空、其余取值时两者 SHALL 为 `null`。未协商该 feature 的客户端 MUST NOT 收到 `nodeId` 键、MUST NOT 收到 `kind` 为 `node` 的事件，其 `origin` 形状 SHALL 与本 feature 引入前完全一致。服务端 MUST NOT 因客户端版本而伪造或降级 `kind`。
+
+#### Scenario: 协商后收到带身份字段的来源
+
+- **WHEN** 客户端协商了 `core.event-origin.v1`
+- **THEN** 它收到的每条 `event` 帧的 `origin` 都含 `nodeId` 键，且由另一个节点经 Node Link 命令产生的事件其 `kind` 为 `node`、`nodeId` 非空、`deviceId` 为 `null`
+
+#### Scenario: 未协商时形状不变且不投递节点来源事件
+
+- **WHEN** 客户端未协商 `core.event-origin.v1`，而事件库中存在由另一个节点命令产生的事件
+- **THEN** 服务端 MUST NOT 投递该事件、MUST NOT 在该连接的 `origin` 里出现 `nodeId` 键，其余事件的 `origin` 形状与本 feature 引入前一致
