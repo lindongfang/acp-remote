@@ -11,7 +11,7 @@
 //! - 版本：信封 `protocolVersion != 1` → `protocol.version_unsupported` + 4406（§4.1 的 `const 1`；
 //!   版本交集为空由 `conn::handshake` 在 hello 解码后判定，同样回该码与 4406，§5.1）；
 //! - 序号：`connectionId` 不匹配、重复、回退、跳号 → `protocol.sequence_invalid`；序号超过 v1 上界
-//!   （`2^63-1`）是 schema 错误（§3.2「接收方不得截断、回绕或钳制」）；
+//!   （`2^63-1`）是 schema 错误（§3.3「接收方不得截断、回绕或钳制」）；
 //! - type：未知 `type` → `protocol.type_unsupported`（词表外的取值经 serde 折叠进 `Malformed`，因此这条
 //!   判定在**失败路径**上重读帧的形状得出，见 [`malformed_inbound`]）；认证前收到只许认证后出现的消息是 4401 关闭
 //!   而不是「schema 错误」（连接阶段本身就不对，只回一条可恢复的错误会让业务消息看起来「被接受但
@@ -28,7 +28,7 @@ use sync_protocol::common::{DecimalString, RawObject, Uuid};
 use sync_protocol::envelope::{AuthState, Envelope, EnvelopeError, MessageType, Phase};
 use sync_protocol::error::{Body, ErrorCode};
 
-/// v1 的序号上界（§3.2）。超出即 `schema_invalid`。
+/// v1 的序号上界（§3.3）。超出即 `schema_invalid`。
 pub(crate) const MAX_SEQUENCE: u64 = i64::MAX as u64;
 
 /// 入站帧的判定结果。

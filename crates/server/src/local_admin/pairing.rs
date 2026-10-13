@@ -66,7 +66,7 @@ pub trait ConnectionCloser: Send + Sync {
     async fn export_revoked(&self, export: &ExportId);
 }
 
-/// 没有连接表时的 no-op 实现（本切片的网络 listener 与 Node Link 重连都尚未落地）。
+/// 没有连接表时的 no-op 实现（测试替身与未装配连接表时的默认值；生产装配在组合根给出真实实现）。
 pub struct NoConnections;
 
 #[async_trait::async_trait]

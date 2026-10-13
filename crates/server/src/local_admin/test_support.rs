@@ -1482,7 +1482,8 @@ impl TrustStore for FakeTrust {
     }
 
     /// 与存储层同款：原子检查「未过期、仍为 `created`、绑定一致、集合不超出登记值」，写 peer 行并推进到
-    /// `pending_confirmation`。HMAC/证明校验属 HTTPS claim 路径（本切片未落地），不在本替身内。
+    /// `pending_confirmation`。HMAC/证明校验属 HTTPS claim 路径（由入站适配器的配对端点承担），
+    /// 不在本替身内。
     async fn claim_pairing(
         &self,
         write: PairingClaimWrite,

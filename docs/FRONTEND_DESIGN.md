@@ -147,10 +147,10 @@ static assets
       ↓
 ACP Remote Daemon /ui
       ↓
-Browser + same-origin WebSocket /sync
+Browser + same-origin WebSocket /sync/v1
 ```
 
-优先使用相对 URL 和同源 WebSocket，避免额外的 CORS、endpoint 注入和版本漂移。前端构建版本必须与 Daemon 可检查地关联，协议握手仍需独立执行版本与 feature negotiation。
+优先使用相对 URL 和同源 WebSocket，避免额外的 CORS、endpoint 注入和版本漂移。同源 WebSocket 的**路径以 wire 权威为准**（`SYNC_PROTOCOL.md` §3.1 冻结为同源 `/sync/v1`；本节的图示按该口径书写）。前端构建版本必须与 Daemon 可检查地关联，协议握手仍需独立执行版本与 feature negotiation。
 
 PWA 不需要独立云服务器。静态资源可以嵌入 Rust 二进制，也可以作为 npm 平台包中的只读资源随二进制安装；最终方式在验证二进制大小和升级策略后确定。
 

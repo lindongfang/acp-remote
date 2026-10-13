@@ -145,7 +145,7 @@ async fn cursor_faults_are_distinguishable_and_never_clamped() {
     );
 }
 
-/// 序号域的分层（§3.2/§9.2）：**可表示**但大于 head 才是 `beyond_head`，超出 v1 上界是协议错误。
+/// 序号域的分层（§3.3/§9.2）：**可表示**但大于 head 才是 `beyond_head`，超出 v1 上界是协议错误。
 ///
 /// 这是 finding「把"无法表示"折叠进 `beyond_head`」的回归闸门：把 `decide` 的域校验退回
 /// `Rejected{BeyondHead}`（或让 `parse_sequence` 的 `None` 仍按 `beyond_head` 处置）时，这里的断言变红。
@@ -211,7 +211,7 @@ fn the_sequence_domain_is_judged_before_the_head_comparison() {
     );
 }
 
-/// 序号超出 v1 上界是**协议错误**（`protocol.schema_invalid`，§3.2），不是 `sync.cursor_invalid`。
+/// 序号超出 v1 上界是**协议错误**（`protocol.schema_invalid`，§3.3），不是 `sync.cursor_invalid`。
 ///
 /// 两条路径（`sync.subscribe` 的 cursor 判定与 `sync.ack`）必须同口径；同时保留"可表示但大于水位 →
 /// `beyond_head`"的既有口径，把两者分开。

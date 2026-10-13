@@ -15,7 +15,7 @@
 //!   承担，失败一律 `schema_invalid`；
 //! - 版本：`protocolVersion != 1` 或版本交集为空 → `nodelink.protocol.version_unsupported` + 4406；
 //! - 序号：`connectionId` 不匹配、重复、回退、跳号 → `nodelink.protocol.sequence_invalid`；
-//!   序号超过 v1 上界（`2^63-1`）是 schema 错误（§3.2「接收方不得截断、回绕或钳制」）；
+//!   序号超过 v1 上界（`2^63-1`）是 schema 错误（§3.3「接收方不得截断、回绕或钳制」）；
 //! - type：未知 `type` 与 v1 首切片的 post_mvp 消息族 → `nodelink.protocol.type_unsupported`；
 //!   认证前收到只许认证后出现的业务消息（R38）也是 4401 关闭而不是「schema 错误」：连接阶段本身就不对，
 //!   只回一条可恢复的错误会让业务消息看起来「被接受但没生效」。
@@ -42,7 +42,7 @@ use node_link_protocol::common::{DecimalString, Nullable, RawObject, Uuid};
 use node_link_protocol::envelope::{AuthState, Envelope, EnvelopeError, MessageType, Phase};
 use node_link_protocol::error::{Body, ErrorCode};
 
-/// v1 的序号上界（`SYNC_PROTOCOL.md` §3.2 沿用同一上界）。超出即 `schema_invalid`。
+/// v1 的序号上界（`SYNC_PROTOCOL.md` §3.3 沿用同一上界）。超出即 `schema_invalid`。
 pub(crate) const MAX_SEQUENCE: u64 = i64::MAX as u64;
 
 /// post_mvp 消息族（`NODE_LINK_PROTOCOL.md` §12.1）：v1 首切片显式拒绝，绝不静默忽略。

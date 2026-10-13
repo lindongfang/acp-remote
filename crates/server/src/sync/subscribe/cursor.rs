@@ -12,7 +12,7 @@
 //!   `serverEpoch` 与当前不匹配 → `epoch_mismatch`；序号**可表示**且大于当前 head → `beyond_head`；
 //!   序号早于保留窗口下界 → `cursor_expired`。四者 MUST NOT 混用同一取值，也 MUST NOT 用别的错误码代替。
 //! - **超出 v1 序号域不是 cursor 判定**：`globalSequence` 超过 `2^63-1`（`u64` 也无法承载的取值同属
-//!   此类）是协议错误 `protocol.schema_invalid`（§3.2），不是 `sync.cursor_invalid`——§9.2 的那张词表
+//!   此类）是协议错误 `protocol.schema_invalid`（§3.3），不是 `sync.cursor_invalid`——§9.2 的那张词表
 //!   表达不了"取值根本无法表示"。它是 [`CursorDecision::SequenceOutOfRange`]，由调用方回 schema 错误码
 //!   （与 `conn::wire` 对信封 `connectionSequence` 先判上界再比期望值同一口径）。
 //! - **不得把越界 cursor 钳制到 head**（§9.2）：`beyond_head` / `cursor_expired` / `epoch_mismatch` /
@@ -29,7 +29,7 @@ use acp_core::ports::ResetReason as CoreResetReason;
 use sync_protocol::common::Cursor;
 use sync_protocol::sync::ResetReason as WireResetReason;
 
-/// v1 的序号上界（§3.2：`connectionSequence` 不得超过 `2^63-1`；cursor 的 `globalSequence` 同域）。
+/// v1 的序号上界（§3.3：`connectionSequence` 不得超过 `2^63-1`；cursor 的 `globalSequence` 同域）。
 /// 超出它的取值**不是** cursor 判定能表达的错误：它是协议级 schema 错误（`protocol.schema_invalid`），
 /// 接收方不得截断、回绕或钳制到边界。
 pub const MAX_SEQUENCE: u64 = i64::MAX as u64;
@@ -104,7 +104,7 @@ pub enum CursorDecision {
     FirstSync,
     /// 游标有效：调用方从该游标之后续传。
     Resume(GlobalCursor),
-    /// 序号超出 v1 序号域（§3.2：`2^63-1`；`u64` 溢出同属此类）：**协议错误**
+    /// 序号超出 v1 序号域（§3.3：`2^63-1`；`u64` 溢出同属此类）：**协议错误**
     /// （`protocol.schema_invalid`），不是 cursor 判定。调用方据此回 schema 错误码，且不建立任何
     /// 可投递状态（也不是 `beyond_head`——那个取值只表达"可表示但比当前 head 更靠前"）。
     SequenceOutOfRange,
@@ -119,7 +119,7 @@ pub enum CursorDecision {
 /// 按当前水位判定一条**已提交**的 cursor（§9.2）。
 ///
 /// 判定顺序照抄 `storage-sqlite` 的 `resolve_cursor` 的层次，只是把域校验提到最前：形状（解码期已定案）
-/// → 序号域（§3.2 的上界）→ epoch → 与 head 比较，最后留给存储层判保留窗口。本地先判这些不只是省一次
+/// → 序号域（§3.3 的上界）→ epoch → 与 head 比较，最后留给存储层判保留窗口。本地先判这些不只是省一次
 /// 查询——它保证被拒的游标**不会**落进存储层"从窗口下界开始读"的那条分支（那正是被禁止的钳制）。
 pub fn decide(submitted: &SubmittedCursor, head: &GlobalCursor) -> CursorDecision {
     let cursor = match submitted {
@@ -132,7 +132,7 @@ pub fn decide(submitted: &SubmittedCursor, head: &GlobalCursor) -> CursorDecisio
         SubmittedCursor::Null => return CursorDecision::FirstSync,
         SubmittedCursor::Value(cursor) => cursor,
     };
-    // §3.2 的序号域校验先于任何语义比较（`conn::wire` 对信封 `connectionSequence` 也是先判上界再比
+    // §3.3 的序号域校验先于任何语义比较（`conn::wire` 对信封 `connectionSequence` 也是先判上界再比
     // 期望值）：超出 v1 上界（含 `u64` 溢出）是协议错误，不能退化成 `sync.cursor_invalid` 的任一取值。
     let Some(sequence) = parse_sequence(cursor.global_sequence.as_str()) else {
         return CursorDecision::SequenceOutOfRange;
@@ -203,7 +203,7 @@ pub fn fault_for(decision: &CursorDecision) -> Option<CursorFault> {
     }
 }
 
-/// `cursor.globalSequence` 是否超出 v1 序号域（§3.2：`2^63-1`；`u64` 溢出同属此类）。
+/// `cursor.globalSequence` 是否超出 v1 序号域（§3.3：`2^63-1`；`u64` 溢出同属此类）。
 ///
 /// 形状合法的 `Cursor` 里该字段是规范十进制串（`DecimalString` 已挡掉前导零、非数字与空串），因此本判定
 /// 为真只可能是"取值大得无法用 v1 的序号域承载"——那是协议错误 `protocol.schema_invalid`，不是 §9.2 的
@@ -230,7 +230,7 @@ pub fn to_core_cursor(cursor: &Cursor) -> Option<GlobalCursor> {
 ///
 /// `None` 只可能是"无法用 v1 序号域承载"：形状合法的 `Cursor` 里 `globalSequence` 已由 `DecimalString`
 /// 挡掉非规范十进制串，不存在"格式非法"这一支。因此调用方 MUST 把 `None` 当协议错误
-/// （`protocol.schema_invalid`，§3.2）处置，而不是 cursor 判定（[`sequence_out_of_range`] 与 [`decide`]
+/// （`protocol.schema_invalid`，§3.3）处置，而不是 cursor 判定（[`sequence_out_of_range`] 与 [`decide`]
 /// 就是这么用的）。
 fn parse_sequence(text: &str) -> Option<Sequence> {
     let value = text.parse::<u64>().ok()?;

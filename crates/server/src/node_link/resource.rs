@@ -1267,7 +1267,7 @@ fn message_id(core: &UseCases) -> Option<Uuid> {
     Uuid::parse(core.ids().message_id().as_str()).ok()
 }
 
-/// 无填充 base64url 编码（wire 的二进制字段形式，`SYNC_PROTOCOL.md` §3.2）。
+/// 无填充 base64url 编码（wire 的二进制字段形式，`SYNC_PROTOCOL.md` §3.3）。
 fn base64url(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
