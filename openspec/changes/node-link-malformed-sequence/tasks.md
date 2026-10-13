@@ -1,0 +1,14 @@
+# Tasks
+
+## 1. 形状类拒绝也推进入站期望序号（单工作包）
+
+写范围：`crates/server/src/node_link/conn/wire.rs`（判定与序号推进）、`crates/server/src/node_link/conn/tests.rs`（用例⑤的期望值 + 新回归用例）。**非目标**：`crates/server/src/sync/**`（已修对，是本次对照）、`crates/node-link-protocol/**`（错误类别已够用，除非你证明必须改 —— 那就先报 blocked 说明）、`crates/core/**`、`schemas/**`、`fixtures/**`。
+
+- [ ] 1.1 让形状类拒绝与连接字段禁用类拒绝在拒绝时**照常推进**入站期望序号（照 `crates/server/src/sync/conn/wire.rs` 的 `malformed_inbound` / `sequence_after_rejection` 口径）。保留「连序号本身都读不出来时不推进」这一支，并在文档注释里写明两类怎么区分。
+- [ ] 1.2 **改掉 `crates/server/src/node_link/conn/tests.rs` 用例⑤的期望值**：它把「形状错误不推进序号」写成了期望，那是错误行为；改成正确口径并保留它对「不关连接」的断言。完成判据：该用例在修法回退时变红。
+- [ ] 1.3 新增回归用例：形状错误（至少覆盖「未登记信封字段」与「缺 `messageId`」两者）之后，一条序号正常递增的合法消息**不得**被判 `sequence_invalid`，且能得到正常处理。完成判据：把 1.1 的修法回退时该用例变红，贴出双方输出。
+- [ ] 1.4 同步实现文档注释（`wire.rs` 模块文档写明「每一条消息级拒绝都推进」及其例外）；若发现 `docs/NODE_LINK_PROTOCOL.md` 的对应条文缺失或与实现不符，**如实登记**而不是顺手改。
+
+## 2. 规格落地（本变更已完成，供对照）
+
+- [x] 2.1 `specs/node-link-owner-server/spec.md` **新增**「每次消息级拒绝都推进入站期望序号」要求（两个场景）。**背景**：node_link 侧此前没有这条要求，而 sync 侧有（`sync-device-auth` 的同名要求）；这条要求的缺失正是「用例⑤把错误行为写成期望」能长期存活的原因。
