@@ -122,6 +122,19 @@ impl SessionWindows {
 pub trait MessageRoute: Send + Sync + 'static {
     /// 处理一条认证后消息。返回 [`RouteOutcome::Claimed`] 表示本路由认领该 type。
     async fn route(&self, session: &ConnectionHandle, message: &Envelope) -> RouteOutcome;
+
+    /// 认证完成时的**连接上下文交接**：本次协商出的 feature 列表（§5.2 的 `selectedFeatures` 同值，
+    /// 排序去重）。
+    ///
+    /// 默认实现为空操作——不需要连接上下文的路由不必实现它。需要它的理由：快照的目录资源
+    /// （`workspaces`/`agents`）与已导入会话分别受 `core.local-catalog.v1`、`resource.remote-origin.v1`
+    /// 门控，而这两个判定只认**当次握手**的协商结果，wire 上没有第二个承载它的字段（§9.4/§9.6）；
+    /// 连接句柄本身只承载连接级事实（`connectionId`/`deviceId`/限额/出站账本），因此协商结果经本方法
+    /// 一次性交接，而不是塞进句柄（那会让"连接级事实"与"协议状态"混在一处）。
+    ///
+    /// 调用时机：认证成功、连接已登记之后，业务阶段开始之前——路由在收到 `sync.subscribe` 时必定已经
+    /// 拿到本连接的门控输入。
+    fn on_authenticated(&self, _session: &ConnectionHandle, _features: &[String]) {}
 }
 
 /// 路由的处理结果。
@@ -273,6 +286,9 @@ struct HandshakeState {
     client_nonce: Option<Nonce>,
     view: Option<SyncDeviceHandshakeView>,
     device: Option<DeviceId>,
+    /// 本次协商出的 feature（`auth.server_challenge.selectedFeatures` 的同值）：认证成功后经
+    /// [`MessageRoute::on_authenticated`] 交接给路由，供 §9.4/§9.6 的两处门控使用。
+    features: Vec<String>,
 }
 
 impl HandshakeState {
@@ -744,6 +760,8 @@ impl Session {
         self.handshake.client_nonce = Some(client_nonce);
         self.handshake.view = Some(view);
         self.handshake.device = Some(device_id);
+        // 协商结果在**这里**落定（挑战已按它签发）：认证成功后原样交接给路由（§9.4/§9.6 的门控输入）。
+        self.handshake.features = selected;
         Flow::Continue
     }
 
@@ -952,6 +970,11 @@ impl Session {
                 "a new connection replaced the previous one for this device"
             );
             displaced.request_close(close::REPLACED, "a new connection replaced this one");
+        }
+        // 连接上下文交接（认证成功、已登记之后）：把本次协商出的 feature 交给路由，供 §9.4 的目录资源
+        // 与 §9.6 的已导入会话门控使用。放在登记之后是因为路由的状态表以注册表为连接活跃判据。
+        if let Some(route) = self.conn.route.as_ref() {
+            route.on_authenticated(&handle, &self.handshake.features);
         }
         info!(
             event = "sync.authenticated",

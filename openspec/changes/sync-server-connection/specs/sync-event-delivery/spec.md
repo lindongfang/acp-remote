@@ -26,6 +26,16 @@
 - **WHEN** 客户端提交的 cursor 序号大于当前 head，或该序号对应的事件已被保留策略清理
 - **THEN** 两次分别返回 `details.reason` 为 `beyond_head` 与 `cursor_expired` 的 `sync.cursor_invalid`，两者 MUST NOT 混用同一取值
 
+### Requirement: 游标序号的域上限是协议错误
+
+序号超出 v1 上界（`2^63-1`）或超出 64 位承载范围的 cursor 是**协议错误**，MUST 返回 `protocol.schema_invalid`（`SYNC_PROTOCOL.md` §3.3），MUST NOT 折叠为 `sync.cursor_invalid` 的任一 `reason`；「无法表示」与「大于 head」是两类不同条件，`sync.ack` 路径同样适用。
+
+#### Scenario: 超出 v1 上界的序号是协议错误而非游标判定
+
+- **WHEN** 客户端提交的 cursor 序号超出 v1 上界 `2^63-1`（含超出 64 位承载范围的取值，例如 `"99999999999999999999999"`）
+- **THEN** 服务端返回 `protocol.schema_invalid`，MUST NOT 返回 `sync.cursor_invalid`（含 `details.reason = "beyond_head"`），`sync.ack` 路径同样按协议错误处理
+- **AND** 序号**可表示**但大于当前 head 时仍回 `details.reason = "beyond_head"`，两类条件 MUST NOT 混用
+
 ### Requirement: 增量重放与实时投递的无缝衔接
 
 cursor 有效且仍在保留窗口内时，服务端 SHALL 从该 cursor 之后读取对该设备可见的事件，按全局序号升序投递 `event`，随后发送 `sync.caught_up` 携带屏障游标。重放期间到达的实时事件 MUST 排在屏障之后投递，MUST NOT 越过序号更早的已持久化事件。投递 MUST 只包含该设备 scope 允许可见的事件；因权限过滤造成的序号空洞 SHALL 是合法的，客户端可对 `sync.caught_up` 的屏障游标发 ACK。
