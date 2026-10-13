@@ -22,6 +22,7 @@
  */
 
 import { AGENTS, DIRS_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories } from "../fixtures";
+import { SYNC_WS_PATH } from "../../../src/sync-client";
 import {
   CANONICAL_ORIGIN,
   expectEqual,
@@ -113,8 +114,13 @@ const checks: readonly Check[] = [
           (mounted.host?.deviceProofs[0] ?? "").length > 40,
           "设备证明应是一条真实签名（base64url 文本）",
         );
-        // 连接 URL 由 `syncUrlFor` 从规范化来源推导。
-        expectEqual(mounted.host?.socketUrls[0] ?? null, "wss://127.0.0.1:1/sync", "出站连接 URL");
+        // 连接 URL 由 `syncUrlFor` 从规范化来源推导；路径取自唯一出处 `SYNC_WS_PATH`
+        // （权威值见 `docs/SYNC_PROTOCOL.md` §3.1 与 `crates/server/src/sync/conn/mod.rs` 的 `WS_PATH`）。
+        expectEqual(
+          mounted.host?.socketUrls[0] ?? null,
+          `wss://127.0.0.1:1${SYNC_WS_PATH}`,
+          "出站连接 URL",
+        );
 
         // 快照经真实两级摘要校验后才允许提交。
         expectThat(state?.resources !== null, "快照应已验证并进入 ClientStore");

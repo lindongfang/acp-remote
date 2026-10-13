@@ -39,6 +39,7 @@ import {
   decodeBase64Url,
   openWebSocket,
   sortedFeatures,
+  SYNC_WS_PATH,
   SyncClient,
 } from "./sync-client";
 import type {
@@ -755,7 +756,11 @@ const defaultFetch: FetchLike = async (url, init) => {
   };
 };
 
-/** `https://host[:port]` → `wss://host[:port]/sync`（§8：正式连接只允许 `wss://`）。 */
+/**
+ * `https://host[:port]` → `wss://host[:port]/sync/v1`（§8：正式连接只允许 `wss://`）。
+ *
+ * 路径来自 `SYNC_WS_PATH`（唯一出处见该常量的说明）；这里不重写 `/sync/v1` 字面量。
+ */
 function syncUrlFor(canonicalOrigin: string): string {
-  return `${canonicalOrigin.replace(/^https:\/\//, "wss://")}/sync`;
+  return `${canonicalOrigin.replace(/^https:\/\//, "wss://")}${SYNC_WS_PATH}`;
 }
