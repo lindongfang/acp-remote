@@ -1414,6 +1414,8 @@ async fn a_duplicate_hello_is_closed_with_4401() {
 async fn the_first_message_window_is_five_seconds_not_the_whole_fifteen() {
     let harness = Harness::new().await;
     let _ = harness.approved_device_pairing(&["session.read"]).await;
+    // 计时起点在连接之前：服务端窗口从会话任务开始（WS 升级完成后）起算，客户端起点晚于它就会吃掉余量。
+    let started = Instant::now();
     let mut client = Client::try_connect(
         harness.addr,
         Some(DEVICE_ORIGIN),
@@ -1422,7 +1424,6 @@ async fn the_first_message_window_is_five_seconds_not_the_whole_fifteen() {
     )
     .await
     .expect("升级必须成功");
-    let started = Instant::now();
     assert_eq!(client.expect_close().await, 4408, "首条消息超时必须 4408");
     assert!(
         started.elapsed() >= FIRST_MESSAGE_TIMEOUT,
@@ -1445,6 +1446,8 @@ async fn the_first_message_window_is_five_seconds_not_the_whole_fifteen() {
 async fn the_handshake_still_has_fifteen_seconds_after_the_hello() {
     let harness = Harness::new().await;
     let _ = harness.approved_device_pairing(&["session.read"]).await;
+    // 计时起点在连接之前（与 `the_first_message_window...` 同一理由：窗口从服务端会话任务开始起算）。
+    let started = Instant::now();
     let mut client = Client::try_connect(
         harness.addr,
         Some(DEVICE_ORIGIN),
@@ -1453,7 +1456,6 @@ async fn the_handshake_still_has_fifteen_seconds_after_the_hello() {
     )
     .await
     .expect("升级必须成功");
-    let started = Instant::now();
     // hello 在 5 秒窗口内到达：挑战已签发，5 秒窗口到此结束。
     let _ = prepare_challenge(&mut client, DEVICE_ID).await;
     assert!(
