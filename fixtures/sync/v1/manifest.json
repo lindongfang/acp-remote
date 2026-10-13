@@ -200,6 +200,20 @@
       "valid": true
     },
     {
+      "fixture": "valid/event-node-origin.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.created",
+      "valid": true
+    },
+    {
+      "fixture": "valid/event-origin-legacy-shape.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/session.created",
+      "valid": true
+    },
+    {
       "fixture": "valid/view-agent-message-delta-block.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
@@ -262,6 +276,18 @@
     },
     {
       "fixture": "invalid/remote-event-without-origin.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/event-origin-node-without-node-id.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/event-origin-node-missing-node-id.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "required"

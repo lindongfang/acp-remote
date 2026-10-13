@@ -13,7 +13,8 @@
     "causationRequestId": null,
     "origin": {
       "kind": "daemon",
-      "deviceId": null
+      "deviceId": null,
+      "nodeId": null
     },
     "remoteOrigin": null,
     "createdAt": "2026-09-17T12:12:00.000Z",

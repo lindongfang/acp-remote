@@ -1,0 +1,41 @@
+{
+  "protocolVersion": 1,
+  "type": "event",
+  "messageId": "3b8c1f42-7a05-4e28-9d31-6f2a5c8e0b47",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "81",
+  "body": {
+    "globalSequence": "2374",
+    "sessionSequence": "205",
+    "eventId": "5d1f0a73-8c42-4b19-a8e5-3f6d7c209183",
+    "sessionId": "7b3f9c22-4d18-4a6b-9e2f-0c5d6e7f8091",
+    "eventType": "session.created",
+    "causationRequestId": "9e2b6d54-1f83-4a7c-b05d-2c8e4f6a9102",
+    "origin": { "kind": "device", "deviceId": null },
+    "remoteOrigin": null,
+    "createdAt": "2026-10-14T08:05:00.000Z",
+    "payload": {
+      "view": {
+        "session": {
+          "sessionId": "7b3f9c22-4d18-4a6b-9e2f-0c5d6e7f8091",
+          "title": "未协商 core.event-origin.v1 时的事件帧形状",
+          "agent": {
+            "agentId": "company-agent",
+            "name": "Company Agent"
+          },
+          "state": "idle",
+          "origin": {
+            "kind": "local"
+          },
+          "currentMode": {
+            "modeId": "default",
+            "displayName": "Default"
+          },
+          "version": "1",
+          "createdAt": "2026-10-14T08:05:00.000Z",
+          "updatedAt": "2026-10-14T08:05:00.000Z"
+        }
+      }
+    }
+  }
+}

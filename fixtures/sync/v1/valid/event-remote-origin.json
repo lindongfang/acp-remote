@@ -11,7 +11,7 @@
     "sessionId": "6e84de21-b576-44de-a4c2-815e3e5faa77",
     "eventType": "agent.message.delta",
     "causationRequestId": null,
-    "origin": { "kind": "agent", "deviceId": null },
+    "origin": { "kind": "agent", "deviceId": null, "nodeId": null },
     "remoteOrigin": {
       "ownerNodeId": "1f0d5c4b-3a29-4877-9615-0e1d2c3b4a59",
       "exportId": "export-laptop-zed",

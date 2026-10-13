@@ -4,7 +4,8 @@
 > 协议版本：1  
 > 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 修订记录（2026-10-02）：`session.create` 经 Sync 暴露（feature `core.session-create.v1`）——§11.3 把它移入可授予集合并写明双层授权与设备级判定，§11.5 给出 Sync 面的 `{ workspaceAlias, agentId }` payload、`accepted`/`completed` 终态与失败分类，§16.2 说明它是可选 feature 引入而非 major version；§5.2 新增 `core.session-create.v1` 与 `core.local-catalog.v1` 两条 feature。本次不新增任何错误码（映射见 §11.5）。
-> 日期：2026-10-02（2026-09-18 基线；同日追加 `session.create` 与本机目录 feature）
+> 修订记录（2026-10-14）：`event.body.origin` 增加第五个产生者类型 `kind = "node"`（由另一个节点经 Node Link 下发命令、在**本机**事件库落库的事件）与身份字段 `nodeId`，两者由 feature `core.event-origin.v1` 协商启用——§10.1 给出 `origin` 的两种形状（未协商时仍是冻结的 `{kind, deviceId}` 两个键）、`kind` 取值表的新行、唯一一条配对规则（`node` 必须带非空 `nodeId` 且 `deviceId` 为 `null`）与"经 feature 协商启用、不是加性变更"的理由；§9.6 同步 kind 枚举，§5.2 登记 `core.event-origin.v1`，§16.1/§16.2 把这次扩展归入 feature 协商并说明它为什么不需要 major version。机器资产同步：`schemas/sync/v1/event.schema.json` 的 enum、可选字段与 `if`/`then`（`origin.required` 保持 `kind`/`deviceId`），`compatibility/features/v1/features.json`，`fixtures/sync/v1/` 的固定向量（既有事件夹具补 `"nodeId": null`，新增 `kind = "node"` 的正例、两条 `node` 形状反例与一条未协商形状 `{kind, deviceId}` 的正例）。
+> 日期：2026-10-14（2026-09-18 基线；2026-10-02 追加 `session.create` 与本机目录 feature；2026-10-14 追加 `origin` 的 `node` 与 `nodeId`，feature `core.event-origin.v1`）
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
 ## 1. 文档职责
@@ -187,8 +188,9 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.local-catalog.v1` | 本机 workspace 目录与 Agent profile 随快照下发（§9.4 的 `workspaces`/`agents` 资源、§10.3 的 `workspaceRef`/`agentCatalogEntry`），以及 `SessionSummary` 的可选 `workspace` 字段；`session.create` 的选择器由它供数 | mvp | 否 |
 | `core.session-create.v1` | Sync 面 `session.create`（§11.5 的 `{ workspaceAlias, agentId }` payload 与 `completed { sessionId, session }` 终态结果） | mvp | 否 |
 | `core.session-history.v1` | Sync 面按会话读取结构化历史条目：§11.5 的 `include` 取值 `history`、`beforeHistory` 序号游标与结果里的 `history`/`historyHasEarlier`，条目类型集合见 §10.2、明细资源口径见 §9.4 | mvp | 否 |
+| `core.event-origin.v1` | 事件帧 `origin` 的身份字段 `nodeId` 与产生者类型 `node`（§10.1） | mvp | 否 |
 
-- 本表的八个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的九个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
@@ -860,7 +862,7 @@ remoteOrigin = {
 
 - imported 事件的 `eventId` 必须等于 `remoteOrigin.originEventId`；`eventId` 跨跳不变，客户端因此可以跨 Access 与 Owner 去重同一条事件。
 - imported 事件的 `globalSequence` 与 `sessionSequence` 是 Access 本地 sequence，只用于本连接的排序与 ACK；跨节点排序一律以 `(originEpoch, originSequence)` 为准。
-- `origin.kind` 仍描述产生事件的来源类型（`agent`/`device`/`daemon`/`local_cli`）；远程跳数只由 `remoteOrigin` 表达，不放进 `origin.kind`。
+- `origin.kind` 仍描述产生事件的来源类型（`agent`/`device`/`daemon`/`local_cli`/`node`，其中 `node` 与身份字段 `nodeId` 由 feature `core.event-origin.v1` 门控，见第 10.1 节）；远程跳数只由 `remoteOrigin` 表达，不放进 `origin.kind`。
 - 不得为本地事件伪造 `remoteOrigin`；`originEventId` 必须来自 `remoteOrigin.ownerNodeId` 的事件日志。
 
 交付与缓存规则：
@@ -898,7 +900,8 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
     "causationRequestId": "4c4dafda-dd98-442e-8d55-252b75bac72d",
     "origin": {
       "kind": "agent",
-      "deviceId": null
+      "deviceId": null,
+      "nodeId": null
     },
     "remoteOrigin": null,
     "createdAt": "2026-09-17T12:10:00.123Z",
@@ -920,16 +923,32 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - 非会话级事件的 `sessionId` 和 `sessionSequence` 为 `null`。
 - 没有客户端命令直接导致的事件，其 `causationRequestId` 为 `null`；由命令产生的所有领域事件必须携带对应 `requestId`。
 - `eventType` 匹配 `^[a-z0-9_.-]{1,128}$`，只允许小写 ASCII 字母、数字、`_`、`.` 和 `-`；未登记取值按未知事件处理，不因字符集合法而获得额外语义。
-- `origin.kind` 取值固定为 `agent`、`device`、`daemon`、`local_cli`，含义如下：
+- `origin` 的形状由 feature `core.event-origin.v1` 门控，`kind` 是判别标签：
+
+  ```text
+  origin = { kind: OriginKind, deviceId: UUID | null }                        # 未协商该 feature
+         | { kind: OriginKind, deviceId: UUID | null, nodeId: UUID | null }   # 已协商该 feature
+  ```
+
+  `kind` 取值固定为 `agent`、`device`、`daemon`、`local_cli`、`node`，含义如下：
 
   | `origin.kind` | 含义 |
   |---|---|
   | `agent` | 由本地或已导入 Agent 的 ACP 输出产生 |
-  | `device` | 由已授权 Sync 设备经命令产生；必须包含 `deviceId` |
+  | `device` | 由已授权 Sync 设备经命令产生；语义上要求带非空 `deviceId`（见下面的配对规则） |
   | `daemon` | 由本节点 Broker、调度器或存储维护任务产生 |
   | `local_cli` | 由本机 CLI/桌面客户端经本地 IPC 发起，不经过远程设备身份 |
+  | `node` | 由另一个节点经 Node Link 下发命令、在**本机**事件库落库的事件；必须包含非空 `nodeId` |
 
-  远程节点不作为 `origin.kind` 取值：imported 事件的来源写在 `remoteOrigin` 里（见第 9.6 节），`kind` 仍描述产生该事件的来源类型。
+  配对规则只有一条，schema 与 Rust DTO 都按它强制：`kind` 为 `node` 时 `nodeId` 必须存在且为非空 UUID，且 `deviceId` 必须为 `null`。其余取值**不做**身份字段配对校验——冻结的 v1 形状里只有 `{kind, deviceId}` 两个键（`deviceId` 的类型是 `UUID | null`），`{kind: "device", deviceId: null}` 这类组合按 schema 本来就合法。`device` 的含义仍要求事件来自已授权设备（原 v1 的"必须包含 `deviceId`"是**发送方**的语义要求）：发出方 MUST NOT 产生 `{kind: "device", deviceId: null}`，但 schema 与接收方不得因此拒绝它——把必填性收紧上去是第 16.2 条列出的破坏性变更，不能借这次扩展顺手加。
+
+  `node` 描述的是**产生者**是另一个节点，和 imported 事件是两回事：前者的事件在本机落库、`remoteOrigin` 为 `null`，后者的跳数与来源写在 `remoteOrigin` 里（见第 9.6 节）。`origin.kind` 里没有 `remote`——远程跳数不放进 `kind`。
+- `origin.kind` 取值 `node` 与身份字段 `nodeId` 由 feature `core.event-origin.v1` 引入，不是加性变更（第 9.6 节 `resource.remote-origin.v1` 同口径）：`origin` 是 `additionalProperties: false` 的封闭对象，多出 `nodeId` 键会让未协商的旧客户端按 `protocol.schema_invalid` 拒绝整条事件。因此：
+
+  - 协商了该 feature：`origin` 含 `nodeId` 键，并满足上面那条配对规则；
+  - 未协商：`origin` 的形状与引入该 feature 之前**完全一致**（只有 `kind` 与 `deviceId` 两个键，`nodeId` 既不出现也不能被要求），且服务端 MUST NOT 投递 `kind = "node"` 的事件——服务端 MUST NOT 因客户端版本伪造或降级 `kind`（尤其不得把 `node` 写成 `device`）。
+
+  协商与未协商两种形状都在 v1 内合法（schema 只要求 `kind`/`deviceId`），客户端按自身协商结果解释 `origin`。
 - `remoteOrigin` 是必填字段；本地事件为 `null`，imported 事件必须为带 `ownerNodeId`、`exportId`、`originEpoch`、`originEventId`、`originSequence` 的对象，且 `eventId` 等于 `originEventId`。
 - `createdAt` 是 Daemon 持久化时间，不使用客户端时间决定顺序。
 - `payload.view` 是公共结构化视图。
@@ -1563,6 +1582,7 @@ v1 默认上限：
 
 - 在既有开放扩展点增加字段，或通过已协商 feature 增加仅发送给支持方的可选字段，并同步更新 schema。
 - 增加新 event type、error code、command 或 feature ID。
+- 在既有封闭词表里增加取值（例如新的 event type）：这是加性变化，不需要 major version，前提是新取值只出现在客户端本来就按「未知/不支持」降级的开放位置（事件类型、`details`）；取值位于**封闭对象**内、或与新增键配对时（第 10.1 节 `origin.kind` 的 `node` 与身份字段 `nodeId`），改用 feature 协商引入（见第 16.2 节）。
 - 增加客户端可忽略的 `details` 字段。
 - 下调运行时 limits，但不得低于实现文档声明的可工作最小值。
 
@@ -1572,7 +1592,7 @@ v1 默认上限：
 - 改变排序、ACK、cursor 或幂等语义。
 - 改变 transcript codec、算法、domain 或 field tag。
 - 引入 binary framing、压缩、附件传输或不同 Transport Profile。
-- 增加 `session.create`、imported resource origin（feature `resource.remote-origin.v1`，见第 9.6 节）、本机 workspace/Agent 目录（feature `core.local-catalog.v1`）等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。`session.create` 与本机目录已按此条以**可选 feature** 引入（`core.session-create.v1`、`core.local-catalog.v1`，见第 5.2 节）：未协商的客户端行为与引入前完全一致，既有字段含义、排序与幂等语义都没有变化，因此不需要 major version。
+- 增加 `session.create`、imported resource origin（feature `resource.remote-origin.v1`，见第 9.6 节）、本机 workspace/Agent 目录（feature `core.local-catalog.v1`）、事件 `origin` 的身份字段与产生者类型（feature `core.event-origin.v1`，见第 10.1 节）等能力需要新 feature/schema；授权由 scope 和 Owner Export Policy 决定，不能再按手机/电脑形态硬编码。`session.create`、本机目录与 `origin` 的两项扩展都已按此条以**可选 feature** 引入（`core.session-create.v1`、`core.local-catalog.v1`、`core.event-origin.v1`，见第 5.2 节）：未协商的客户端行为与引入前完全一致（`origin` 仍是 `{kind, deviceId}` 两个键、也收不到 `kind = "node"` 的事件），既有字段含义、排序与幂等语义都没有变化，因此不需要 major version。
 
 ### 16.3 数据迁移
 

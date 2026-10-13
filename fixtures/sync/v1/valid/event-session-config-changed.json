@@ -11,7 +11,7 @@
     "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e",
     "eventType": "session.config.changed",
     "causationRequestId": "9f1a2b3c-4d5e-4f60-8123-456789abcdef",
-    "origin": { "kind": "device", "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49" },
+    "origin": { "kind": "device", "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49", "nodeId": null },
     "remoteOrigin": null,
     "createdAt": "2026-09-17T12:11:01.000Z",
     "payload": {
