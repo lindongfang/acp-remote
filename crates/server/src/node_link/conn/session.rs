@@ -18,6 +18,14 @@
 //! 4. **业务**：认证后的消息逐条判定阶段、信封、序号与 type，再交给 [`MessageRoute`]；
 //!    连接的心跳、静默超时与慢消费者看门狗在同一 `select!` 里推进。
 //!
+//! **看门狗 tick 的调度口径**：业务阶段的 `select!` 用 `biased` 固定分支优先级，tick 分支**排在出站
+//! 投递之前**，且它的 deadline（`next_tick`）**跨轮次保留**（`sleep_until`，不在每轮循环里重建）。
+//! 两条缺一不可：只把 tick 提前而每轮重建 deadline，持续的出站流量会让它「每轮被唤醒都重新睡满一个
+//! 周期」，永远凑不满一个周期；只保留 deadline 而把它排在出站之后，只要出站队列每轮都就绪，它连被
+//! 轮询的机会都没有。合起来才保证心跳（`link.ping`）、90 秒静默判定与慢消费者看门狗在连接繁忙时仍
+//! 按固定节拍被检查——否则「待发送队列持续处于高水位」这条判据永远等不到检查它的时刻，慢消费者断开
+//! 就成了死代码。`sync/conn/session.rs` 的同构实现是同一口径（那里已先行改正，本模块此前是旧形态）。
+//!
 //! **认证限流的接线口径**：接入层（`transport::net`）在 WS upgrade 之前没有每路径的准入钩子
 //! （WP2 冻结形状只提供 `WsHandler`），因此本层把闸门放在**会话的第一步**：任何帧（包括
 //! `node.hello`）都不再被处理，连接以 4429 关闭。效果等价——未认证的连接无法产生任何业务副作用。
@@ -803,6 +811,12 @@ impl Session {
         let windows = self.conn.windows;
         let mut next_ping = Instant::now() + heartbeat;
         let mut last_ping: Option<Base64Url<16>> = None;
+        // 看门狗 tick 的两条要求（见模块文档「看门狗 tick 的调度口径」）：**固定节拍**（deadline
+        // 跨轮次保留，不在每轮重建，否则持续的出站流量会让它「每轮被唤醒都重新睡满一个周期」，
+        // 永远凑不满一个周期）与**优先于出站投递**（`biased` 里排在 `outbound` 之前，否则只要出站
+        // 队列每轮都就绪，它连被轮询的机会都没有）。两者合起来才保证心跳、静默超时与慢消费者
+        // 看门狗在连接繁忙时仍按固定节奏被检查。
+        let mut next_tick = TokioInstant::now() + SESSION_TICK;
         let ending = loop {
             // 关闭请求（撤销传播等）：先排空已入队消息，再发 close 帧。
             if let Some((code, reason)) = handle.close_request() {
@@ -815,14 +829,14 @@ impl Session {
                 };
                 let requested = handle.close_signal.notified();
                 let outbound = receiver.recv();
-                let tick = tokio::time::sleep(SESSION_TICK);
+                let tick = tokio::time::sleep_until(next_tick);
                 tokio::select! {
                     biased;
                     () = requested => Event::CloseRequested,
                     () = shutdown.wait() => Event::Shutdown,
+                    () = tick => Event::Tick,
                     Some(outbound) = outbound => Event::Outbound(outbound),
                     frame = connection.recv() => Event::Frame(frame),
-                    () = tick => Event::Tick,
                 }
             };
             match event {
@@ -880,6 +894,9 @@ impl Session {
                     }
                 },
                 Event::Tick => {
+                    // 下一拍的 deadline 从**本次 tick 的时刻**起算（而不是从这轮 select 构造起算）：
+                    // 这样即便这一拍被别的就绪分支挤晚了一点，节拍也不会漂移。
+                    next_tick = TokioInstant::now() + SESSION_TICK;
                     let now = Instant::now();
                     if now.duration_since(self.last_inbound) >= windows.silence {
                         warn!(
