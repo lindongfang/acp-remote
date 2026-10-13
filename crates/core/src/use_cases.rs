@@ -1113,6 +1113,71 @@ impl UseCases {
             .await
     }
 
+    /// 设备**认证失败**的审计留痕（`SECURITY_DESIGN.md` §14.2 的 `device.auth_failed`；
+    /// `SYNC_PROTOCOL.md` §8 的握手失败路径）。
+    ///
+    /// `identity-auth` 的握手失败分类自带审计动作要求（`HandshakeFailure::audit()` 对
+    /// `ConnectionKind::SyncDevice` 返回 `AuditAction::DeviceAuthFailed`），但它的返回值只是**动作**而不是
+    /// 审计行：行由调用方按本次连接的对端身份组装（见 `IDENTITY_AND_AUTH_CONTRACT.md` 关于 `audit()` 的
+    /// 条款）。Node Link 侧由 [`UseCases::record_node_link_auth`] 承接那三个 node 动作，本入口是设备侧的
+    /// 对应物：动作**恒为** `AuditAction::DeviceAuthFailed`（不接受动作参数，因此结构上不可能经本入口写
+    /// 出别的动作，比那个入口更窄）、目标恒为 `Device(device_id)`、结果恒为失败
+    /// （`AuditOutcome::Failed`）。`via_node` 为 `None`（那是 Node Link 路径的列）、
+    /// `local_principal_ref` 为 `None`、`detail_digest` 为空：细分失败原因只进结构化日志，不进审计行
+    /// （`SECURITY_DESIGN.md` §14.1/§14.2 的 no-content 取舍）。
+    ///
+    /// **为什么在 [`UseCases::require_local`] 之外、也不带 `actor` 参数**：本入口服务的是**尚未认证**的
+    /// 入站连接——失败恰恰意味着本次连接没有取得已验证主体，`sync.hello` 里的 `deviceId` 只是**待验证的
+    /// 自报身份**（`SYNC_PROTOCOL.md` §8.1）。套上 `require_local` 会迫使适配器伪造一个本机主体；而把
+    /// `actor` 收成参数就等于把审计归因交给握手消息自报的取值。两者都与「归因取持久化身份」相悖，因此本
+    /// 入口与 [`UseCases::sync_device_handshake_view`] 同一模式：只收 `device_id`，归因只能由 core 从
+    /// **持久化**记录读出。`require_local` 保护的是本机 CLI 的**管理读面**（`devices`/`device`/…），这里
+    /// 不需要它、也不得为它放宽它。
+    ///
+    /// **已知设备**：读出该设备的信任行，归因取 `Actor::Device { device: 该行 id, scopes: 该行持久化的
+    /// scopes }`——scopes 一律取持久化值，**不得**取握手自报值（`sync-device-auth`「认证失败的审计留痕」
+    /// 要求 actor 归因取持久化身份）。除该行外零读取，且**零写入**：留痕不推进 `last_seen_at`、不改状态，
+    /// 该行原样留在存储里。
+    ///
+    /// **未知设备**：**同样写出这一行**，归因取 `Actor::Device { device: device_id.clone(), scopes:
+    /// ScopeSet::empty() }`。空集是这里唯一可用且**不来自握手自报值**的取值：没有持久行可读，编造任何
+    /// scopes 都等于把对端自报的能力写进审计。**设备未知时不得返回 `NotFound`**（这一点与
+    /// [`UseCases::record_device_connected`] 刻意不同，那个入口的整行写集要求行存在）：未配对设备发起握手
+    /// 并失败是最常见的失败场景，正是本入口存在的主要理由；返回 `NotFound` 会让调用方无处留痕，而
+    /// 「未知 → 错误 / 已知 → 成功」的响应差异还会变成一个**设备存在性预言机**（`sync-device-auth`「未知
+    /// 与已撤销设备的可见行为」与「认证失败的审计留痕」都要求不得用错误类别区分设备是否存在）。因此两种
+    /// 情形都返回 `Ok(())`，且都恰好写出一行形状相同的审计，响应里没有任何存在性信号。
+    ///
+    /// 不新增端口方法：本入口没有关联的状态变更（`CORE_PORTS_AND_STORAGE.md` §11.2 第 6 条的后半句），
+    /// 直接用 `AuditStore::append` 追加即可。成功路径的 `device.authenticated` 由
+    /// [`UseCases::record_device_connected`] 的收尾写集承担，两者**不得互相替代**。
+    pub async fn record_device_auth_failure(&self, device_id: &DeviceId) -> Result<(), PortError> {
+        // 归因取**持久化**身份：能读到设备行就用该行的 scopes；读不到也不回退到任何自报值，而是用空集。
+        let actor = match self.trust.device(device_id).await? {
+            Some(row) => Actor::Device {
+                device: device_id.clone(),
+                scopes: row.scopes().clone(),
+            },
+            None => Actor::Device {
+                device: device_id.clone(),
+                scopes: crate::model::ScopeSet::empty(),
+            },
+        };
+        let at = self.clock.now();
+        let record = AuditRecord::try_new(
+            at,
+            AuditAction::DeviceAuthFailed,
+            actor,
+            None,
+            None,
+            k_device(device_id),
+            AuditOutcome::Failed,
+            None,
+        )
+        .map_err(PortError::from)?;
+        self.audit.append(record).await
+    }
+
     // ---------------------------------------------------------------------------------------
     // Node Link 资源读面（WP5 的窄 seam；design D6）
     // ---------------------------------------------------------------------------------------
@@ -4189,6 +4254,97 @@ mod tests {
             writes.last().expect("写集已到达存储层").record.state(),
             DeviceState::Revoked,
             "本层原样透传撤销状态：不静默复活、也不把已撤销行说成 active"
+        );
+    }
+
+    /// Sync WP1（任务 1.5）：**已知**设备认证失败写出 `device.auth_failed`——动作/目标/结果正确，归因取
+    /// **持久化**的设备行（id + scopes），且这条留痕零写入（不推进 `last_seen_at`、不改状态）。
+    ///
+    /// 该行刻意取一组比 `hello` 可能自报的取值更**具体**的 scopes：本入口根本没有 scopes 入参，这个值只能
+    /// 来自持久化行——归因若取自握手自报值就不可能逐字等于它（同款字段见 [`device_record`]）。
+    #[test]
+    fn record_device_auth_failure_attributes_a_known_device_from_persistence() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let device = DeviceId::new(&uuid_text(231)).expect("device");
+        let persisted = ScopeSet::try_from_iter(["session.list", "session.read"]).expect("scopes");
+        trust.devices.lock().expect("lock").push(
+            DeviceRecord::try_new(
+                device.clone(),
+                "phone",
+                crate::model::Fingerprint::new(&"b".repeat(64)).expect("fingerprint"),
+                persisted.clone(),
+                DeviceState::Active,
+                crate::broker::test_support::ts(30),
+                None,
+                None,
+            )
+            .expect("device record"),
+        );
+
+        block_on(fixture.use_cases.record_device_auth_failure(&device)).expect("留痕");
+
+        let written = fixture.world.audits.lock().expect("lock").clone();
+        assert_eq!(written.len(), 1, "一次失败恰好一条审计");
+        let record = &written[0];
+        assert_eq!(record.action(), AuditAction::DeviceAuthFailed);
+        assert_eq!(*record.target(), EntityRef::Device(device.clone()));
+        assert_eq!(record.outcome(), AuditOutcome::Failed);
+        assert_eq!(record.via_node(), None, "via_node 是 Node Link 路径的列");
+        assert_eq!(record.local_principal_ref(), None);
+        assert_eq!(record.detail_digest(), None, "细分失败原因不进审计行");
+        assert!(
+            matches!(record.actor(), Actor::Device { device: id, scopes }
+                if id == &device && scopes == &persisted),
+            "归因取持久化 id 与 scopes，得到 {:?}",
+            record.actor()
+        );
+        assert!(
+            trust.writes.lock().expect("lock").is_empty(),
+            "留痕没有关联状态变更：不写设备行"
+        );
+    }
+
+    /// Sync WP1（任务 1.5）：**未知**设备的认证失败同样留痕——不是 `NotFound`、不是零写入；归因只按自报的
+    /// `deviceId`、scopes 取空集（不取自握手的任何自报值）。它与已知设备返回**同一个** `Ok`、写出形状相同
+    /// 的一行，因此响应里没有可用于探测设备是否存在的差异；这是本入口与 [`UseCases::record_device_connected`]
+    /// 「行不存在即 `NotFound`」的刻意差异（那个入口要写整行，本入口只追加一行审计）。
+    #[test]
+    fn record_device_auth_failure_records_an_unknown_device_without_self_reported_values() {
+        let (fixture, trust) = fixture_with_device_trust();
+        let known = DeviceId::new(&uuid_text(232)).expect("device");
+        trust.devices.lock().expect("lock").push(device_record(
+            &known,
+            DeviceState::Active,
+            None,
+            None,
+        ));
+        let unknown = DeviceId::new(&uuid_text(233)).expect("device");
+
+        let known_result = block_on(fixture.use_cases.record_device_auth_failure(&known));
+        let unknown_result = block_on(fixture.use_cases.record_device_auth_failure(&unknown));
+        assert!(
+            known_result.is_ok() && unknown_result.is_ok(),
+            "两种情形都必须返回 Ok：未知设备不得以 NotFound 收场（那会让调用方无处留痕），也不得给出可探测存在性的差异"
+        );
+
+        let written = fixture.world.audits.lock().expect("lock").clone();
+        assert_eq!(written.len(), 2, "未知设备同样留痕，而不是零写入");
+        let record = &written[1];
+        assert_eq!(record.action(), AuditAction::DeviceAuthFailed);
+        assert_eq!(*record.target(), EntityRef::Device(unknown.clone()));
+        assert_eq!(record.outcome(), AuditOutcome::Failed);
+        assert_eq!(record.via_node(), None);
+        assert_eq!(record.local_principal_ref(), None);
+        assert_eq!(record.detail_digest(), None);
+        assert!(
+            matches!(record.actor(), Actor::Device { device: id, scopes }
+                if id == &unknown && scopes.is_empty()),
+            "未知设备只能按自报 id 归因、scopes 取空集而不是任何自报能力，得到 {:?}",
+            record.actor()
+        );
+        assert!(
+            trust.writes.lock().expect("lock").is_empty(),
+            "留痕没有关联状态变更：不写设备行"
         );
     }
 
