@@ -140,3 +140,55 @@ listener SHALL 在 `/sync/v1` 接受 WebSocket 升级，且该端点要求的 su
 
 - **WHEN** 配置文件中显式设置上述三个键并启动 Daemon
 - **THEN** 它们不再出现在「已知但未接线」的键清单中，且其取值确实被 Sync 连接消费
+
+### Requirement: 认证前的固定上限
+
+认证前 SHALL 施加协议规定的固定上限，且它们 MUST NOT 由配置放宽或收窄：连接建立后第一条消息 MUST 是 `auth.client_hello` 且 MUST 在 **5 秒**内完整到达，超时以 `4408` 关闭；首条 `auth.client_hello` 的消息体上限为 **32 KiB**，超限 MUST 被拒绝；单个节点的**并发 WSS 连接数**上限为 **256**，超限的新连接 MUST 被拒绝而不是排队或静默丢弃；同一来源地址的**在途认证**上限为 5 条、**新认证尝试**上限为每分钟 10 次。
+
+#### Scenario: 首条消息超时
+
+- **WHEN** 连接建立后 5 秒内未收到完整的 `auth.client_hello`
+- **THEN** 连接以 `4408` 关闭，MUST NOT 一直等待到 15 秒整窗结束
+
+#### Scenario: 超大 client_hello 被拒绝
+
+- **WHEN** 首条 `auth.client_hello` 的消息体超过 32 KiB
+- **THEN** 该消息被拒绝，不进入握手状态机，也不因它而建立任何认证状态
+
+#### Scenario: 超出并发连接上限的新连接被拒绝
+
+- **WHEN** 某节点已有 256 条并发 WSS 连接，此时又有一条新连接建立
+- **THEN** 新连接被拒绝，MUST NOT 被排队等待、MUST NOT 静默丢弃，也 MUST NOT 挤掉既有连接
+
+#### Scenario: 同一来源的在途认证与尝试速率受限
+
+- **WHEN** 同一来源地址已有 5 条在途认证，或一分钟内发起超过 10 次新认证尝试
+- **THEN** 超出的连接以限流语义被拒绝，连续超限时按 `4429` 关闭
+
+### Requirement: 协议错误码与入站序号推进
+
+协议错误的下发 SHALL 与**入站序号推进**解耦：`connectionSequence` 描述的是对端**已经发出**的消息，本机是否接受其类型或载荷不影响该序号已被消耗这一事实。收到词表之外的 `type` 时 MUST 返回 `protocol.type_unsupported`，MUST NOT 返回 `protocol.schema_invalid`。一次协议错误 MUST NOT 让后续入站消息永久被判序号错误——那会把连接变成只出不进的哑管道。
+
+#### Scenario: 未知类型回可区分的错误码
+
+- **WHEN** 已认证连接收到一条 `type` 不在协议词表内的消息
+- **THEN** 回 `protocol.type_unsupported`（MUST NOT 是 `protocol.schema_invalid`），且连接保持可用
+
+#### Scenario: 一次协议错误不让连接变成哑管道
+
+- **WHEN** 已认证连接先收到一条未知 `type` 的消息，随后收到一条类型合法、序号按对端计数器正常递增的消息
+- **THEN** 后一条 MUST NOT 被判为序号错误，它 MUST 按其自身内容被正常处理或被拒绝；连接 MUST NOT 因此退化为只出不进
+
+### Requirement: 认证失败的审计留痕
+
+认证失败 SHALL 留一条审计记录，动作取协议登记的认证失败动作、目标为该设备、结果取失败；该记录 MUST 在**认证未成功**时写出（成功路径的 `device.authenticated` 由收尾写集承担，两者不得互相替代）。审计的 actor 归因 MUST 取持久化的该设备身份，MUST NOT 取握手消息自报的取值；MUST NOT 因设备未知而跳过留痕。
+
+#### Scenario: 证明校验失败留痕
+
+- **WHEN** 某设备提交的 proof 验签失败、挑战过期或被重放
+- **THEN** 写出一条认证失败的审计记录，其动作为协议登记的认证失败动作、目标为该设备
+
+#### Scenario: 未知设备的失败同样留痕
+
+- **WHEN** 一个不在持久化信任中的 deviceId 提交握手且 proof 阶段失败
+- **THEN** 同样写出认证失败审计，MUST NOT 因该设备未知而不留痕，也 MUST NOT 借此在响应中泄露该设备是否存在

@@ -26,4 +26,5 @@
 
 pub mod local_admin;
 pub mod node_link;
+pub mod sync;
 pub mod transport;
