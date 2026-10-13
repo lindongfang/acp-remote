@@ -91,7 +91,7 @@ const ORPHAN_SWEEP_LIMIT: u32 = 256;
 /// 写回。`graceMs = 0` 会把「不等待任何在途工作」与「已接受的请求仍要落地」压到同一拍上，因此这里保留
 /// 一个很小的下限：关闭请求自身那条连接虽然有写出后自行结束的保证（[`ConnectionShutdown`]），它在结束
 /// 前仍属于排空集合，这个下限就是给「它以及同一预算内的网络接入面收尾」留出的余地。其余在途工作仍按
-/// `graceMs` 处理。实际窗口记在日志里（`event = "daemon.drain"`），不静默。
+/// `graceMs` 处理。实际窗口记在日志里（`event = "daemon.drain"` 的 `window_ms`），不静默。
 const MIN_DRAIN_MS: u64 = 200;
 
 /// `accept` 连续失败时的退避（避免在 endpoint 暂时不可用时热循环；F3 修正后失败可重试）。
@@ -1588,16 +1588,23 @@ async fn close(
 
     // 排空在途连接：`daemon.stop` 的响应此刻仍在写出路径上（发出该请求的那条连接写出后即自行结束，
     // 因此不为它等待对端）；其余在途连接必须在宽限内结束，否则被中止并记 `daemon.drain_timeout`。
-    let drain_ms = deadline
-        .saturating_duration_since(Instant::now())
+    //
+    // 两个字段必须分开报，不能互相顶替：`drain_ms` 是**本次排空实际等了多久**（`daemon-lifecycle` 规格
+    // 「关闭时的连接排空」的判据：无其它在途连接时它远小于宽限），`window_ms` 是**本轮最多能等多久**
+    // ——它由 `grace_ms` 与 `MIN_DRAIN_MS` 的下限共同决定，正常时总 ≈ 宽限，不代表排空真等了这么久。
+    let drain_started = Instant::now();
+    let window_ms = deadline
+        .saturating_duration_since(drain_started)
         .as_millis();
+    drain_connections(&mut connections, deadline).await;
+    let drain_ms = drain_started.elapsed().as_millis();
     tracing::info!(
         event = "daemon.drain",
         grace_ms,
+        window_ms = u64::try_from(window_ms).unwrap_or(u64::MAX),
         drain_ms = u64::try_from(drain_ms).unwrap_or(u64::MAX),
-        "等待在途连接结束"
+        "在途连接排空结束"
     );
-    drain_connections(&mut connections, deadline).await;
     // 第二步：等三个网络接入任务结束（超时 abort）——它们全部结束时 accept 已停。
     net_ingress.wait_stopped(deadline).await;
 
