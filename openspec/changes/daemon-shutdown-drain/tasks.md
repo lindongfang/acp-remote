@@ -10,8 +10,9 @@
 ## 3. 相邻项的登记（本包如实上报，未在包内修改）
 
 - [ ] 3.1 `crates/app/src/cli.rs` 的 `release_runtime` 文档与 `daemon_stop` 的注释仍称「不释放 runtime 的话，Daemon 的排空窗口只能等满宽限」—— 该说法**已不成立**：Daemon 现在会主动结束发出 `daemon.stop` 的那条连接。完成判据：改成如实措辞；并判定 `release_runtime()` 本身是否已冗余（若冗余，**说明而不删** —— 它无害，删它需要另一次行为验证）。
-- [ ] 3.2 `docs/LOCAL_ADMIN_PROTOCOL.md` §5.8 补上本次行为变化：`daemon.stop` 的响应写回后**由服务端结束该连接**，因此该连接上不会再有任何请求得到响应。完成判据：把「关闭期间新请求以 `local.unavailable` 失败关闭」（既有要求）与「关闭请求自身的连接会被服务端关闭」这两件事的区别写清，避免读者以为前者覆盖后者；`npm run check:docs`。
+- [ ] 3.2 `docs/LOCAL_ADMIN_PROTOCOL.md` **§5.2**（`daemon.stop` 的契约所在；§5.8 只是 CLI 子命令↔方法映射表）补上本次行为变化：`daemon.stop` 的响应写回后**由服务端结束该连接**，因此该连接上不会再有任何请求得到响应。完成判据：把「关闭期间新请求以 `local.unavailable` 失败关闭」（既有要求）与「关闭请求自身的连接会被服务端关闭」这两件事的区别写清，避免读者以为前者覆盖后者；`npm run check:docs`。
 - [ ] 3.3 **（另案登记，非本变更引入）** 第三条时序敏感用例：`crates/app/tests/daemon_lifecycle.rs` 的 `the_periodic_task_runs_again_after_one_full_cycle` 开头的 startup-tick 日志断言与首次调度存在竞态（本包在连跑与全量运行时各观察到一次）。完成判据：判定它是「用例应等首次调度完成后才断言」还是实现问题，并把修法与证据写清。
+- [ ] 3.4 **（规格场景的覆盖缺口，由本 Agent 核查发现）** 规格新增的三个场景里，前两个与第三个的「继续推进而非永久等待」都有既有用例覆盖（`stop_cleans_up_even_when_the_drain_budget_is_spent` 用 `shutdown_grace_ms = 0` + 持有连接把预算用满，断言记录删除 / 锁释放 / 进程正常退出），但**第三个场景的「留下 `daemon.drain_timeout` 的可观察记录」这一句没有任何断言**：全仓 `drain_timeout` 只出现在两处 `is_empty()`（否定）断言与注释里。完成判据：补一条断言「在途连接确实未在宽限内结束时，日志里出现 `daemon.drain_timeout`」（可用 `shutdown_grace_ms = 0` + 持有连接那个既有用例顺带断言，注意它现在只断言外部不变量）。
 
 ## 2. 规格落地（本变更已完成，供对照）
 
