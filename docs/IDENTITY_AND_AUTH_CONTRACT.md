@@ -211,7 +211,7 @@ impl ClaimedPairing {
 
 ### 4.5 失败计数
 
-`[决定]` 单个配对的 proof 失败计数归 `identity-auth`（第 5 次失败后使该 pairing 失效，[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14）；按 IP/连接的认证尝试限流归 `server::transport`。失败一律返回 `401`，响应不得泄露具体校验差异，也不得暴露设备或配对是否存在。
+`[决定]` 单个配对的 proof 失败计数归 `identity-auth`（第 5 次失败后使该 pairing 失效，[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14）；按 IP/连接的认证尝试限流归 `server::transport`。失败一律返回 `401`，响应不得泄露具体校验差异，也不得暴露设备或配对是否存在。失效的**落库**（`ClaimRejection::TooManyFailures` 的说明要求调用方提交一次拒绝落定）需要本机主体，配对 HTTP 面不伪造本机主体，因此那里只做内存失效并从 `failure_count` 把同一事实投影到 status 的终态 `rejected`（§5.1 的登记）；落库修正随「配对通道的本机终态写面」另议。
 
 ## 5. 握手契约
 
@@ -328,7 +328,18 @@ pub struct PeerTrust {
   不匹配分别是 `SecretUnavailable`/`Proof(Hmac)`，adapter 必须把两者收敛为同一个 401；`owner_node_id`
   必须等于本节点）与 `pairing_request_material(&PairingId) -> Option<PairingRequestMaterial>`
   （返回 claim 响应与 Owner 证明需要的 `serverNonce`/`pairingRequestId`，与 secret 同生同灭，见 §4.3）。
-  Sync 侧的设备配对状态查询入口在同一定型下后续补上（同一形状，domain 不同）。
+- `[决定]`（2026-10-13，Sync 配对通道）Sync 侧的设备配对状态查询入口按上条同一定型补上（同一形状、
+  domain 不同，不返回秘密材料）：`verify_sync_pairing_status(&SyncPairingStatus, &PairingProof) ->
+  Result<(), PairingError>`——用本机内存里该配对的 pairing secret 校验 `acp-remote/pairing-status/v1` 的
+  HMAC（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.3）；`input.host_id` 必须等于本节点，secret 缺失与
+  HMAC 不匹配分别是 `SecretUnavailable`/`Proof(Hmac)`，**adapter 必须把两者收敛为同一个对端可见的 401**
+  （§4.5：不泄露校验差异）。
+- `[决定]`（2026-10-13）上列诊断入口的两处**生产**用途由 `server::sync::pairing` 落地并在本节登记（其余
+  用途不变，仍只供回归测试与本地诊断）：`has_secret` 用于 status 端点的 secret 生命周期分支（本机已不
+  持有其 secret 时终态配对回 200、非终态回 401，见 §13.3 的同款口径）；`failure_count` 用于把「第 5 次
+  proof 失败后配对失效」（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14、§4.5）这一内存事实投影到 status
+  的终态 `rejected`（v1 的五值词表没有「失效」取值，而 §4.5 要求把失效当作一次拒绝），使客户端立即停止
+  轮询。两处都只读计数与布尔值，不返回任何秘密材料。
 - `[决定]` **transcript 由 `identity-auth` 自己编码**：它依赖 `sync-protocol`/`node-link-protocol` 的 domain/字段 tag 表与 `acpr-transcript` 的 codec（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §5），因此入口只接收结构化字段，**不**接收调用方拼好的 transcript 字节——否则调用方可以自己选 domain，域分离失效。它也不得使用那些协议 crate 的业务类型或业务规则。
 - `[决定]` 验签用的公钥**只能**来自持久化信任（`owned_peer_key`，[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.7），不得取握手消息里自带的公钥——否则任何持有配对 ID 的对端都能用自选密钥通过握手。握手载荷里对端公钥只用于在配对时建立绑定，重连时不参与验证。该快照由调用方在每次握手时从 `TrustStore` 读出并作为 `PeerTrust` 传入（§5.1），状态机自身不访问存储，因此「同一次调用的输入决定同一次调用的结果」可被直接测试，且授权依据始终是当次持久记录。
 - `[决定]` 三个入口都不读系统时间、不碰 SQLite：持久化事实由返回值带着交给调用方，由写集端口落库（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.6）。
@@ -353,7 +364,7 @@ pub enum CredentialStatus { Active, ScopeReduced, Revoked, Unknown }
 
 - `[决定]` core 的 `Actor` 只能由本节的验证输出构造（`Actor::Device`/`Actor::Node`）。`Actor::LocalCli` 只能由本地通道适配器在 OS 用户边界校验后构造（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §2.2）；`localPrincipalRef` 只进审计，**不是** Owner 认证的最终用户身份（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §8.3）。
 - `[决定]`（2026-09-26）`Actor::PairingClaimant { pairing }` 只能由**配对 HTTP 端点**在 claim/status 的证明校验路径上构造，且**绑定该配对**（绑定该配对的只读可在校验前，写集只在通过后）：用例面只在 `actor.pairing` 等于本次调用的目标配对时才受理，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绍形状，不让错误变成配对 id 预言机）。它既不是设备也不是节点，永不被 broker 授予任何命令，只用于配对通道与审计归因（`CORE_PORTS_AND_STORAGE.md` §3.5/§4 与 `SECURITY_DESIGN.md` §14.2）。
-- `[决定]`（2026-09-26，seam 补全）claim 路径的**读取顺序与写入口径**：端点在 `verify_claim` **之前**可以先用绑定该配对的 claimant 只读它自己那个配对的记录/对端行/已批准后的授权集（`core::use_cases::pairing_channel_view`）——因为 HMAC 校验必须先拿到配对记录；这次读取**零写入**、不产生审计，也不向对端泄露任何东西。状态推进仍只能经 `claim_pairing` 的写集，且只在 `verify_claim` 通过后提交；status 路径同样先以绑定该配对的 claimant 只读该配对（零写入），再验 proof（`verify_node_link_pairing_status`），proof 失败只回 401。所有 proof/绑定失败在对端一律收敛为同一类失败（§4.5），401 不泄露具体校验差异。
+- `[决定]`（2026-09-26，seam 补全）claim 路径的**读取顺序与写入口径**：端点在 `verify_claim` **之前**可以先用绑定该配对的 claimant 只读它自己那个配对的记录/对端行/已批准后的授权集（`core::use_cases::pairing_channel_view`）——因为 HMAC 校验必须先拿到配对记录；这次读取**零写入**、不产生审计，也不向对端泄露任何东西。状态推进仍只能经 `claim_pairing` 的写集，且只在 `verify_claim` 通过后提交；status 路径同样先以绑定该配对的 claimant 只读该配对（零写入），再验 proof（Node Link 为 `verify_node_link_pairing_status`，Sync 为 `verify_sync_pairing_status`），proof 失败只回 401。所有 proof/绑定失败在对端一律收敛为同一类失败（§4.5），401 不泄露具体校验差异。
 - `[决定]` `Revoked`/`Unknown` 必须映射为 `auth.device_revoked`/`auth.device_unknown`（节点侧为 Node Link 的对应码），不得降级为 `authorization.scope_denied`——两类的可重试性与客户端行为不同。
 
 ### 5.2 nonce、重放与时钟

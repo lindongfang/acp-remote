@@ -294,9 +294,12 @@ pub struct HostBlock {
 /// 反序列化都经 [`RawStatusResponse`] 做一次跨字段校验：approved 必须两者都有，其余状态必须都没有。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StatusResponse {
+    #[serde(rename = "protocolVersion")]
     pub protocol_version: ProtocolVersionV1,
+    #[serde(rename = "pairingRequestId")]
     pub pairing_request_id: Uuid,
     pub status: PairingStatus,
+    #[serde(rename = "expiresAt")]
     pub expires_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceBlock>,
