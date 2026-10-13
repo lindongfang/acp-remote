@@ -13,7 +13,8 @@
 //! | `EntropySource` / `IdentityKeystore` | `identity_keystore::{OsEntropy, FileKeystore, EphemeralKeystore}` |
 //! | `identity_auth::Authority` | 组合根持有的共享状态机 |
 //! | `AuditHook`（连接级拒绝） | [`AuditSink`]（有界通道 + 由组合根持有的写任务） |
-//! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知与重新配对的连接作废接到 Node Link 的连接注册表与命令管线） |
+//! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知与重新配对的连接作废接到 Node Link 的连接注册表与命令管线，把设备撤销接到 Sync 的连接注册表） |
+//! | `sync::subscribe::OwnerReachability` | [`NodeLinkReachability`]（Owner 可达 = 存在来自该 node 的活跃 Node Link 连接） |
 //! | `DaemonControl` | `crate::daemon::AppDaemonControl` |
 //!
 //! 关闭期的资源释放由 [`Composition::close`] 负责：它逐一释放共享句柄，再执行 `storage-sqlite` 的
@@ -41,7 +42,10 @@ use identity_auth::{Authority, EntropySource, IdentityKeystore, PeerPublicKey, S
 use identity_keystore::{EphemeralKeystore, FileKeystore, OsEntropy};
 use server::local_admin::ConnectionCloser;
 use server::node_link::CommandRoute;
+use server::node_link::conn::ConnectionRegistry as NodeLinkConnectionRegistry;
 use server::node_link::resource::NodeLinkPublisher;
+use server::sync::conn::{ConnectionRegistry as SyncConnectionRegistry, close as sync_close};
+use server::sync::subscribe::OwnerReachability;
 use server::transport::local::{AuditHook, AuthorizationDenied};
 use storage_sqlite::error::StorageError;
 use storage_sqlite::session_store::SqliteStore;
@@ -841,32 +845,41 @@ impl AuditHook for AuditSink {
 /// 推送/关闭失败只记日志，不回滚已提交的授权变化。授权判定不依赖推送——`node_link` 在处理 `resource.attach`、
 /// `command.submit` 与 catalog 订阅时按当次持久化记录复核（D7）。
 ///
-/// `close_device` 目前没有可关闭的连接：`server::sync` 未落地（设备连接属切片 7），本实现记录一条结构化
-/// 事件并明确「本次没有可关闭的连接」，不假装成功。
+/// `close_device` 关的是 **Sync 的**连接表（`server::sync::conn::ConnectionRegistry`，键是
+/// `(hostId, deviceId)`）：设备只经 Sync 面连接本机，因此撤销设备只需要那一个注册表。关闭是「请求关闭」
+/// 语义（先排空已入队消息再发 close 帧，`4410`），返回被请求关闭的连接数——注册表不是事实来源，
+/// 因此关闭失败与「没有连接」都不回滚已提交的撤销。
 ///
 /// `close_node` 与 `close_node_after_reauth` 走**两条不同**的 node_link 路径：前者是撤销（推
 /// `node.trust.revoked` + 4410），后者是重新配对收窄授权（不推消息 + 1000），不能互换。
 #[derive(Debug)]
 pub struct NodeLinkCloser {
     command: Arc<CommandRoute>,
+    /// Sync 的活跃连接表（登记者是 `server::sync` 的会话；组合根在 [`crate::daemon`] 里交给本实现）。
+    sync: Arc<SyncConnectionRegistry>,
 }
 
 impl NodeLinkCloser {
-    /// 装配：`command` 是本机（Owner）的命令管线，它内部持有连接注册表与 resource 路由。
-    pub fn new(command: Arc<CommandRoute>) -> Self {
-        Self { command }
+    /// 装配：`command` 是本机（Owner）的命令管线，它内部持有连接注册表与 resource 路由；`sync` 是
+    /// Sync 入站面的连接注册表（设备连接只登记在那里）。
+    pub fn new(command: Arc<CommandRoute>, sync: Arc<SyncConnectionRegistry>) -> Self {
+        Self { command, sync }
     }
 }
 
 #[async_trait::async_trait]
 impl ConnectionCloser for NodeLinkCloser {
     async fn close_device(&self, device: &DeviceId) {
+        // `4410` 是 §12.3 的「设备已撤销」；reason 是固定短文本（进 close 帧，不插值请求内容）。
+        let closed = self
+            .sync
+            .close_device(device, sync_close::REVOKED, "the device was revoked");
         tracing::info!(
             event = "daemon.revocation_connection_sweep",
             target_kind = "device",
             target_id = %device.as_str(),
-            closed_connections = 0u64,
-            "撤销已提交：本切片没有按设备持有的连接表（server::sync 未落地，设备连接属切片 7）"
+            closed_connections = u64::try_from(closed).unwrap_or(u64::MAX),
+            "撤销已提交：已请求以 4410 关闭该设备的全部 Sync 连接"
         );
     }
 
@@ -901,6 +914,29 @@ impl ConnectionCloser for NodeLinkCloser {
             notified_connections = u64::try_from(notified).unwrap_or(u64::MAX),
             "撤销已提交：已向持有该 Export 的活跃连接推送 export.revoked"
         );
+    }
+}
+
+/// `OwnerReachability`：Sync 面的 Owner 可达性（`sync_visible_sessions` 与快照里 `origin.online` 的输入）。
+///
+/// 组合根是唯一同时看得见两边连接表的地方，因此这条运行时事实在这里注入：某 node 可达 ⇔ 本机有一条来自
+/// 该 node id 的**活跃** Node Link 连接（那份注册表就是该事实的拥有者，见 `server::node_link::conn`）。
+/// 两侧互不调用（`AGENTS.md` §5 的平级约束），本实现只做一次只读查询、不建第二份在线缓存：Node Link
+/// 连接结束时它的句柄从注册表移除，下一次查询即为不可达。
+pub struct NodeLinkReachability {
+    connections: Arc<NodeLinkConnectionRegistry>,
+}
+
+impl NodeLinkReachability {
+    /// 装配：`connections` 是 Node Link 入站面的连接注册表（组合根从 `NodeLinkIngress` 取得）。
+    pub fn new(connections: Arc<NodeLinkConnectionRegistry>) -> Self {
+        Self { connections }
+    }
+}
+
+impl OwnerReachability for NodeLinkReachability {
+    fn reachable(&self, owner: &NodeId) -> bool {
+        !self.connections.handles_for_node(owner).is_empty()
     }
 }
 

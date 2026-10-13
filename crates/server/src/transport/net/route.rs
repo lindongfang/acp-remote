@@ -2,8 +2,8 @@
 //!
 //! 规则：
 //!
-//! - **只有注册过的 path 有服务**：未注册的 path（含 `/sync/v1*`，`server::sync` 尚未落地）一律 404，
-//!   不会进入任何处理器。路由表由 `server::node_link` 在 `app` 组合根里注册，本模块不写死协议路径。
+//! - **只有注册过的 path 有服务**：未注册的 path 一律 404，不会进入任何处理器。路由表由
+//!   `server::node_link` 与 `server::sync` 各自的注册函数在 `app` 组合根里填入，本模块不写死协议路径。
 //! - **Host/代理头边界在路由之前**：`axum::Router::layer` 同时覆盖 fallback，因此 Host 不匹配的请求
 //!   在未注册 path 上也返回 400，而不会先走 404。
 //! - **WebSocket 升级规则**：协商到 `permessage-deflate` 或未声明约定 subprotocol 的升级请求被拒绝；
@@ -14,7 +14,8 @@
 //!   一致（来源是请求头边界，与 path 无关；非浏览器客户端本来就按 §3.2 不带该头）。**与 `Host` 无关**：
 //!   `Host` 是虚拟主机概念，来源是协议层概念，两者各自判定、不互为替代。
 //! - **请求体上限**：配对端点的请求体超过 [`crate::transport::net::NetConfig::max_body_bytes`] 时返回
-//!   413（`NODE_LINK_PROTOCOL.md` §13.4），处理器不会被调用。
+//!   413（`NODE_LINK_PROTOCOL.md` §13.4、`SYNC_PROTOCOL.md` §14），处理器不会被调用。上限是**每 listener
+//!   一个值**（不是每 path），因此两面共用同一个 16 KiB 默认值（见 `DEFAULT_MAX_BODY_BYTES` 的注记）。
 //! - **每路径默认响应头**：`register_post` 可为一条 path 声明一组默认响应头，该 path 上的**所有**响应都会
 //!   补齐它们——处理器产生的响应、接入层在调用处理器前产生的 413/405，以及 Host 边界在这个 path 上的 400。
 //!   响应已带同名头时保留响应自己的值（默认头是补齐语义，不会变成重复头）：配对端点因此能声明
@@ -253,7 +254,7 @@ impl RouteTable {
     }
 }
 
-/// 未注册 path 的响应（`/sync/v1*` 与其余未知 path）。
+/// 未注册 path 的响应（未知 path 与未被任何适配器注册的协议路径）。
 async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }

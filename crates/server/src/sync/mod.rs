@@ -7,11 +7,13 @@
 //! - [`subscribe`]：订阅面——`sync.subscribe` 的 cursor 判定与 `sync.reset_required`、
 //!   `sync.snapshot_request`、`sync.ack`（累积、单调不减、不得越过已发送游标）；
 //! - [`snapshot`]：[`snapshot::plan`] 组装三类清单资源与分块，[`snapshot::send`] 下发并计算
-//!   `snapshotDigest`（§9.4）。
+//!   `snapshotDigest`（§9.4）；
+//! - [`pairing`]：两条配对 HTTP 端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`）的
+//!   判定、四个安全响应头与按来源/`pairingId` 的固定限流（§7.1–§7.4、§14）。
 //!
-//! 尚未落地（与本变更的其他工作包对应）：设备配对的 HTTP 端点（`pairing` 子模块），以及事件投递腿
-//! （`event` 帧的装配与实时扇出）——后者需要一个能给出 `origin`/`causationRequestId` 的 core 事件
-//! 读面（见 [`subscribe`] 的模块文档）。本模块**只**声明已经存在的子模块，不由占位符预支。
+//! 尚未落地（与本变更的其他工作包对应）：事件投递腿（`event` 帧的装配与实时扇出）——它需要一个能给出
+//! `origin`/`causationRequestId` 的 core 事件读面（见 [`subscribe`] 的模块文档）。本模块**只**声明已经
+//! 存在的子模块，不由占位符预支。
 //!
 //! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §5）：本模块是入站适配器，调用面是
 //! `core` 的公开面 + `sync-protocol`/`identity-auth` 的公开面。**当前的过渡形态**：[`subscribe`]

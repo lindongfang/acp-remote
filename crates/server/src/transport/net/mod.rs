@@ -20,7 +20,7 @@
 //! 的字段直接使用 `http`/`bytes` 的值类型（`Method`/`HeaderMap`/`StatusCode`/`Bytes` 等，经 `axum` 再导出），
 //! 含义不因经过本层而改变，上层按 `axum` 的公开路径引用它们即可（本模块不重复导出这批值类型）。因此协议
 //! 语义（帧类型拒绝、握手状态机、错误码、close code、来源与设备绑定的比较）留在上层
-//! （`server::node_link`，以及本变更后续落地的 `server::sync`）。
+//! （`server::node_link` 与 `server::sync`）。
 //!
 //! 唯一权威：`docs/CONFIG_REFERENCE.md` §1/§10（配置键与三形态表）、`docs/NODE_LINK_PROTOCOL.md`
 //! §2.1/§2.5/§13.4（端点、subprotocol、压缩拒绝、上限）、`docs/SECURITY_DESIGN.md` §7.1/§7.3/§13.2
@@ -76,11 +76,18 @@ pub const DEFAULT_LISTEN: &str = "127.0.0.1:8765";
 /// 传递到本模块的 [`NetConfig::max_message_bytes`]；超限在分配大缓冲前以 `1009` 关闭。
 pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
-/// 配对 HTTP 请求体的默认上限（`NODE_LINK_PROTOCOL.md` §13.4：超限返回 413）。
+/// 配对 HTTP 请求体的默认上限（`NODE_LINK_PROTOCOL.md` §13.4 与 `SYNC_PROTOCOL.md` §14：超限返回 413）。
 ///
-/// §13.4 只要求「有上限」，未冻结数值；claim/status 请求是小型 JSON，因此默认取 64 KiB，
-/// 由 [`NetConfig::max_body_bytes`] 决定（`CONFIG_REFERENCE.md` §3 目前没有对应配置键）。
-pub const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024;
+/// **取 16 KiB 的理由（`sync-server-connection` 任务 6.1 的决定）**：两条配对面共用本模块**唯一**的
+/// 每 path 请求体上限（[`NetConfig::max_body_bytes`]；`route::serve_post` 在调用处理器**之前**按它判
+/// 413），而 `SYNC_PROTOCOL.md` §14 把 Sync 配对 HTTP 的 body 冻结为 16 KiB。取更大的值会让 16–64 KiB
+/// 区间在 Sync 面上**不**按 §14 返回 413（偏差被 80 KiB 级别的用例掩盖）；取 16 KiB 对 Node Link 面
+/// 同样合规——§13.4 只要求「有上限」，未冻结数值，且 claim/status 都是小型 JSON。
+/// 为 route 层新增 per-route 上限能力是另一条路（改动更大、且收益只是让两面取不同数值），未采纳。
+///
+/// 该值不随配置变化（`CONFIG_REFERENCE.md` §2/§3 没有对应配置键）；调低它只会让更大的请求更早被拒，
+/// 不会放宽任何一面。
+pub const DEFAULT_MAX_BODY_BYTES: usize = 16 * 1024;
 
 /// 默认的关闭排空宽限（对应 `daemon.shutdown_grace_ms` 的默认值 10000）。
 pub const DEFAULT_DRAIN_GRACE_MS: u64 = 10_000;
