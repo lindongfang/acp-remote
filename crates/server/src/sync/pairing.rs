@@ -1165,6 +1165,7 @@ mod tests {
     use tracing::field::{Field, Visit};
     use tracing::level_filters::LevelFilter;
     use tracing::span::{Attributes, Id as SpanId, Record as SpanRecord};
+    use tracing::subscriber::Interest;
     use tracing::{Event, Metadata, Subscriber};
 
     use crate::local_admin::envelope::{AdminOutcome, AdminRequest, AdminResponse, decode_request};
@@ -1284,6 +1285,11 @@ mod tests {
         }
 
         /// 同上，但可指定 `expiresInMs`（过期路径用例用极短窗口）。
+        ///
+        /// **下限是 1000，不是参数校验层允许的 1**：`identity-auth` 的
+        /// `Authority::begin_pairing` 把两侧时间戳折算成整秒（`transcript::unix_seconds` 只取到秒）后要求
+        /// `expires > created` 且差值不超过 `PAIRING_MAX_SECONDS`，因此亚秒窗口会被判 `InvalidWindow`，
+        /// 经 `map_pairing_error` 变成 `local.invalid_params`。传 1 会让 `device.pair.begin` 直接失败。
         async fn begin_with_window(&self, expires_in_ms: Value) -> Pairing {
             let response = self
                 .world
@@ -1975,8 +1981,8 @@ mod tests {
     #[tokio::test]
     async fn expired_pairing_is_rejected_with_410_and_writes_nothing() {
         let harness = Harness::new().await;
-        // 极短窗口（1 毫秒）+ 推进注入时钟：过期判定以本机时钟为权威（§7.0）。
-        let pairing = harness.begin_with_window(json!(1)).await;
+        // 极短窗口（1 秒，本包的下限，见 `begin_with_window`）+ 推进注入时钟：过期判定以本机时钟为权威（§7.0）。
+        let pairing = harness.begin_with_window(json!(1000)).await;
         harness.world.clock.set("2026-09-18T09:14:00.000Z");
         let expired = harness.record(&pairing);
         assert_eq!(expired.state(), PairingState::Created);
@@ -2457,7 +2463,7 @@ mod tests {
         assert_eq!(conflict.status, 409);
 
         // 410：过期的配对（极短窗口 + 推进注入时钟）。
-        let expired_pairing = harness.begin_with_window(json!(1)).await;
+        let expired_pairing = harness.begin_with_window(json!(1000)).await;
         harness.world.clock.set("2026-09-18T09:16:00.000Z");
         let gone = harness
             .claim(&expired_pairing, &claim_body(&expired_pairing, 0x55))
@@ -2696,6 +2702,7 @@ mod tests {
         let secret_text = encode_base64url(pairing.secret.as_bytes());
 
         let captured = Arc::new(StdMutex::new(String::new()));
+        install_interest_gate();
         let guard = tracing::subscriber::set_default(Capturing {
             level: LevelFilter::TRACE,
             lines: Arc::clone(&captured),
@@ -2775,6 +2782,52 @@ mod tests {
             "失败路径必须留下结构化日志：{logs}"
         );
         harness.stop().await;
+    }
+
+    /// 进程级的「总是感兴趣」订阅器：让 tracing 的 callsite interest 缓存停在 `always`。
+    ///
+    /// 为什么需要它：interest 缓存是**进程级**的（`tracing_core::callsite::DefaultCallsite` 把 interest 存在
+    /// 一个 `AtomicU8` 里，只有「新注册一个 `Dispatch`」或「callsite 首次注册」时才会重算）。`server::sync::pairing`
+    /// 这批 callsite 是多条用例共用的：只要有**任一**线程在没有订阅器的上下文里先把它注册掉，interest 就被缓存成
+    /// `never`；此后即使在当前线程装了作用域订阅器，事件也会在 `tracing::debug!` 宏里被 `interest.is_never()`
+    /// 直接短路，**连 [`Capturing::enabled`] 都不会被调用**——断言于是变成「捕不到日志」的假失败（并行跑测试时
+    /// 必然偶发，`--test-threads=1` 才稳定）。
+    ///
+    /// 装一个全局订阅器把这条重算路径固定为 `always`：作用域订阅器仍优先（`set_default` 的线程本地默认值优先于
+    /// 全局默认值），所以捕获本身仍由 [`Capturing`] 完成，本结构只在没有作用域订阅器的线程上兜底丢弃事件。
+    struct InterestGate;
+
+    impl Subscriber for InterestGate {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+            Interest::always()
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
+            SpanId::from_u64(1)
+        }
+
+        fn record(&self, _span: &SpanId, _values: &SpanRecord<'_>) {}
+
+        fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
+
+        fn enter(&self, _span: &SpanId) {}
+
+        fn exit(&self, _span: &SpanId) {}
+
+        fn event(&self, _event: &Event<'_>) {}
+    }
+
+    /// 装一次进程级订阅器（`set_global_default` 每进程只成功一次；并发调用时后到的忽略错误即可——
+    /// 先到的那个已经完成了「让 interest 缓存保持 `always`」这件事）。
+    fn install_interest_gate() {
+        static GATE: std::sync::Once = std::sync::Once::new();
+        GATE.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(InterestGate);
+        });
     }
 
     /// 捕获结构化日志的最小订阅器（测试专用；与 `app::logging` 同款的最小实现，不引入新依赖）。

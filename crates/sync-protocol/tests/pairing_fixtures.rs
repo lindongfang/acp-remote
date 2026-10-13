@@ -172,6 +172,25 @@ fn claim_response_status_is_pinned_to_pending_confirmation() {
     );
 }
 
+/// 序列化往返：夹具 → `StatusResponse` → 再序列化，键名与值都必须与夹具逐字一致。
+///
+/// 本条补的是一个**真实漏检**：本文件的既有用例只做反序列化（走 `RawStatusResponse` 那侧的
+/// `#[serde(rename)]`），因此 `StatusResponse` 的序列化侧曾长期漏掉 `rename`——它把
+/// `protocolVersion` / `pairingRequestId` / `expiresAt` 写成 snake_case，而
+/// `schemas/sync/v1/pairing.schema.json` 的 `statusResponse.required` 正是那三个 camelCase 名。
+/// 缺了本条，两侧可以长期不一致而无人发现（配对状态响应是 HTTPS 载荷，不走信封夹具那条路）。
+#[test]
+fn status_response_round_trips_through_the_wire_shape() {
+    let fixture = approved_status_response();
+    let parsed: StatusResponse =
+        serde_json::from_value(fixture.clone()).expect("approved 夹具必须可解析");
+    let serialized = serde_json::to_value(&parsed).expect("必须可序列化");
+    assert_eq!(
+        serialized, fixture,
+        "StatusResponse 的序列化形状必须与夹具逐字一致（wire 字段名是 camelCase）"
+    );
+}
+
 #[test]
 fn status_response_device_and_host_follow_the_status() {
     let parsed: StatusResponse =
