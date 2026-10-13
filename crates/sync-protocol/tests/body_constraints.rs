@@ -15,6 +15,7 @@ use sync_protocol::views;
 
 const MESSAGE_ID: &str = "1728394a-5c6d-4e7f-88a9-b0c1d2e3f405";
 const CONNECTION_ID: &str = "2de54db7-74ae-4c21-88e3-05df0dc2e637";
+const DEVICE_ID: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
 const SESSION_ID: &str = "9aa8bf8c-5cba-4c58-9e27-b7f4d1a2c3d4";
 const EVENT_ID: &str = "3a4b5c6d-7e80-4192-a3b4-c5d6e7f8091a";
 const SERVER_EPOCH: &str = "00384a03-bc90-4095-b65d-82fb8cc47e13";
@@ -266,22 +267,24 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
     // `origin.kind` 只描述产生事件的来源类型（docs §10.1）：远程不作为取值，跳数由 remoteOrigin 表达。
     let agent_ok: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"agent\",\"deviceId\":null}", "null", "{}"),
+        &event_body(
+            "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+            "null",
+            "{}",
+        ),
     );
     assert!(
         agent_ok.is_ok(),
         "本地事件的 remoteOrigin 必须是 null：{agent_ok:?}"
     );
 
-    let device_ok: Result<EventBody, String> = decode(
-        "event",
-        &event_body("{\"kind\":\"device\",\"deviceId\":null}", "null", "{}"),
-    );
-    assert!(device_ok.is_ok(), "device 是合法 kind：{device_ok:?}");
-
     let remote_kind: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"remote\",\"deviceId\":null}", "null", "{}"),
+        &event_body(
+            "{\"kind\":\"remote\",\"deviceId\":null,\"nodeId\":null}",
+            "null",
+            "{}",
+        ),
     );
     assert!(
         remote_kind.is_err(),
@@ -292,8 +295,12 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
     // （对应 invalid/remote-event-without-origin.json，expectedKeyword = required）。
     let key_missing: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"agent\",\"deviceId\":null}", "null", "{}")
-            .replace(",\"remoteOrigin\":null", ""),
+        &event_body(
+            "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+            "null",
+            "{}",
+        )
+        .replace(",\"remoteOrigin\":null", ""),
     );
     assert!(
         key_missing.is_err(),
@@ -306,7 +313,11 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
     );
     let imported_ok: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"agent\",\"deviceId\":null}", &matching, "{}"),
+        &event_body(
+            "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+            &matching,
+            "{}",
+        ),
     );
     assert!(
         imported_ok.is_ok(),
@@ -316,7 +327,11 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
     let mismatched = matching.replace(EVENT_ID, TURN_ID);
     let mismatch: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"agent\",\"deviceId\":null}", &mismatched, "{}"),
+        &event_body(
+            "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+            &mismatched,
+            "{}",
+        ),
     );
     assert!(
         mismatch.is_err(),
@@ -327,7 +342,11 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
     assert!(
         decode::<EventBody>(
             "event",
-            &event_body("{\"kind\":\"agent\",\"deviceId\":null}", incomplete, "{}")
+            &event_body(
+                "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+                incomplete,
+                "{}"
+            )
         )
         .is_err(),
         "remoteOrigin 缺 originEpoch 必须被拒"
@@ -335,8 +354,12 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
 
     let bad_event_type: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"agent\",\"deviceId\":null}", "null", "{}")
-            .replace("session.created", "Session.Created"),
+        &event_body(
+            "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+            "null",
+            "{}",
+        )
+        .replace("session.created", "Session.Created"),
     );
     assert!(
         bad_event_type.is_err(),
@@ -345,9 +368,117 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
 
     let view_not_object: Result<EventBody, String> = decode(
         "event",
-        &event_body("{\"kind\":\"agent\",\"deviceId\":null}", "null", "[]"),
+        &event_body(
+            "{\"kind\":\"agent\",\"deviceId\":null,\"nodeId\":null}",
+            "null",
+            "[]",
+        ),
     );
     assert!(view_not_object.is_err(), "payload.view 必须是 object");
+}
+
+/// `origin` 的配对规则与旧形状兼容性（`docs/SYNC_PROTOCOL.md` §10.1，schema 的 `if`/`then`）。
+///
+/// 只有 `kind = "node"` 有强制配对（必须带非空 `nodeId`、`deviceId` 为 `null`）；`nodeId` 本身
+/// 是 feature `core.event-origin.v1` 下才出现的**可选**键，未协商时 `origin` 只有
+/// `{kind, deviceId}` 两个键。其余 kind 不做身份字段配对校验：冻结的 v1 schema 里
+/// `{kind:"device",deviceId:null}` 一类组合本来就合法，收紧必填性属于 §16.2 的破坏性变更。
+///
+/// `node` 说的是**产生者**是另一个节点（本机经 Node Link 收到它下发的命令后在本机落库），
+/// 与 imported 事件无关：后者才带 `remoteOrigin`，本用例里 `remoteOrigin` 一直是 `null`。
+#[test]
+fn event_origin_pairing_rule_is_node_only_and_legacy_shapes_stay_legal() {
+    let parse = |origin: &str| -> Result<EventBody, String> {
+        decode("event", &event_body(origin, "null", "{}"))
+    };
+
+    let node_origin = format!("{{\"kind\":\"node\",\"deviceId\":null,\"nodeId\":\"{TURN_ID}\"}}");
+    let node = parse(&node_origin);
+    assert!(node.is_ok(), "node 必须带 nodeId：{node:?}");
+
+    // 往返保真：三个键的值一个都不能在序列化→反序列化时丢失或被压成 `null`。
+    let decoded = node.expect("上一条已断言合法");
+    let reserialized = serde_json::to_value(&decoded).expect("已解码的 body 可序列化");
+    assert_eq!(
+        reserialized["origin"],
+        serde_json::json!({ "kind": "node", "deviceId": null, "nodeId": TURN_ID }),
+        "origin 的往返必须保真"
+    );
+
+    // node 的三条强制配对：nodeId 为 null、nodeId 键缺席、deviceId 非 null 都必须被拒。
+    let node_without_id: Result<EventBody, String> = decode(
+        "event",
+        &event_body(
+            "{\"kind\":\"node\",\"deviceId\":null,\"nodeId\":null}",
+            "null",
+            "{}",
+        ),
+    );
+    assert!(node_without_id.is_err(), "node 的 nodeId 为 null 必须被拒");
+
+    let node_missing_key: Result<EventBody, String> = decode(
+        "event",
+        &event_body("{\"kind\":\"node\",\"deviceId\":null}", "null", "{}"),
+    );
+    assert!(node_missing_key.is_err(), "node 的 nodeId 键缺席必须被拒");
+
+    let node_with_device =
+        format!("{{\"kind\":\"node\",\"deviceId\":\"{DEVICE_ID}\",\"nodeId\":\"{TURN_ID}\"}}");
+    assert!(parse(&node_with_device).is_err(), "node 不得带 deviceId");
+
+    // 旧形状（未协商 `core.event-origin.v1`）：只有 `{kind, deviceId}` 两个键，且任何组合都合法。
+    // 往返必须保住"没有 nodeId 键"这件事——补一个 `"nodeId": null` 会让未协商的旧客户端在
+    // `additionalProperties: false` 上拒绝整条事件。
+    let legacy_shapes = [
+        (
+            "device + null",
+            "{\"kind\":\"device\",\"deviceId\":null}".to_owned(),
+        ),
+        (
+            "device + deviceId",
+            format!("{{\"kind\":\"device\",\"deviceId\":\"{DEVICE_ID}\"}}"),
+        ),
+        (
+            "agent + null",
+            "{\"kind\":\"agent\",\"deviceId\":null}".to_owned(),
+        ),
+        (
+            "agent + deviceId",
+            format!("{{\"kind\":\"agent\",\"deviceId\":\"{DEVICE_ID}\"}}"),
+        ),
+        (
+            "daemon + null",
+            "{\"kind\":\"daemon\",\"deviceId\":null}".to_owned(),
+        ),
+        (
+            "local_cli + null",
+            "{\"kind\":\"local_cli\",\"deviceId\":null}".to_owned(),
+        ),
+    ];
+    for (label, legacy) in &legacy_shapes {
+        let decoded = parse(legacy).unwrap_or_else(|error| {
+            panic!("旧形状 {label} 必须被接受（§16.2：不得在 v1 内收紧必填性）：{error}")
+        });
+        let reserialized = serde_json::to_value(&decoded).expect("已解码的 body 可序列化");
+        assert_eq!(
+            reserialized["origin"],
+            serde_json::from_str::<serde_json::Value>(legacy).expect("用例本身是 JSON"),
+            "旧形状 {label} 的往返必须逐键保真（尤其不得补出 nodeId 键）"
+        );
+    }
+
+    // 协商后的形状：三个键都在，`nodeId` 为 `null` 表示该事件不是节点产生的。
+    let device_negotiated =
+        format!("{{\"kind\":\"device\",\"deviceId\":\"{DEVICE_ID}\",\"nodeId\":null}}");
+    assert!(
+        parse(&device_negotiated).is_ok(),
+        "协商后 device 事件的 nodeId 为 null"
+    );
+
+    for kind in ["agent", "daemon", "local_cli"] {
+        let origin = format!("{{\"kind\":\"{kind}\",\"deviceId\":null,\"nodeId\":null}}");
+        assert!(parse(&origin).is_ok(), "{kind} 的 nodeId 为 null 必须合法");
+    }
 }
 
 #[test]

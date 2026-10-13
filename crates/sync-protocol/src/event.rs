@@ -2,11 +2,21 @@
 //!
 //! 本模块只做 wire 形状与取值域校验；`payload.view` 按 `eventType` 的类型化投影在 [`crate::views`]。
 //!
-//! 关于 `remoteOrigin` 的一致性：schema 用 `required` + `oneOf` 表达"键必须存在、值可为 `null`"，
-//! **没有** `if/then`，且 `origin.kind` 的取值域里不存在 `remote`（`docs/SYNC_PROTOCOL.md` §10.1
-//! 明确写着"远程节点不作为 `origin.kind` 取值"，imported 事件的来源只写在 `remoteOrigin` 里）。
-//! 因此这里校验文档里**可判定**的那条一致性要求：`remoteOrigin` 非 `null` 时
-//! `eventId` 必须等于 `remoteOrigin.originEventId`（§9.6 与 §10.1 各写了一遍）。
+//! 两组跨字段约束都在这条 wire 边界上校验，schema 与实现各表一遍：
+//!
+//! - `remoteOrigin` 用 `required` + `oneOf` 表达"键必须存在、值可为 `null`"，但
+//!   "`remoteOrigin` 非 `null` 时 `eventId` 必须等于 `remoteOrigin.originEventId`"（§9.6 与 §10.1
+//!   各写了一遍）是 schema 表达不了的，由 [`RawBody`] 反序列化后的 [`TryFrom`] 完成；
+//! - `origin` 唯一的一条配对规则（`kind = node` 必须带非空 `nodeId`、`deviceId` 必须为 `null`）
+//!   由 schema 的 `if`/`then` 与 [`EventOrigin`] 的 [`TryFrom`] 各表一遍。
+//!
+//! `origin` 的键集合由 feature `core.event-origin.v1` 门控：未协商该 feature 的旧形状只有
+//! `{kind, deviceId}` 两个键，协商后总是带可 `null` 的 `nodeId`（§10.1）。因此 `nodeId` 在
+//! schema 里保持**可选**，实现也不能把它当必填——把必填性收紧到冻结的 v1 形状上属于 §16.2 的
+//! 破坏性变更。
+//!
+//! `origin.kind` 里没有 `remote`：远程**跳数**只写在 `remoteOrigin` 里；`node` 描述的是产生者
+//! 是另一个节点（本机经 Node Link 收到它的命令后在本机落库的事件），不是"本事件来自远端"。
 
 use std::fmt;
 use std::str::FromStr;
@@ -65,23 +75,27 @@ impl<'de> Deserialize<'de> for EventType {
     }
 }
 
-/// `body.origin.kind`：`docs/SYNC_PROTOCOL.md` §10.1 的四个产生来源。
+/// `body.origin.kind`：`docs/SYNC_PROTOCOL.md` §10.1 的五个产生来源。
 ///
-/// 没有 `remote`：远程跳数只由 `remoteOrigin` 表达，不放进 `kind`。
+/// `node` 指的是**产生者**是另一个节点——本机经 Node Link 收到它下发的命令、在本机事件库
+/// 落库的事件——因此它必须带 `nodeId`。远程跳数与产生者类型是两回事：imported 事件的跳数
+/// 只由 `remoteOrigin` 表达，`kind` 里没有 `remote`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventOriginKind {
     Agent,
     Device,
     Daemon,
     LocalCli,
+    Node,
 }
 
 impl EventOriginKind {
-    pub const ALL: [EventOriginKind; 4] = [
+    pub const ALL: [EventOriginKind; 5] = [
         EventOriginKind::Agent,
         EventOriginKind::Device,
         EventOriginKind::Daemon,
         EventOriginKind::LocalCli,
+        EventOriginKind::Node,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -90,6 +104,7 @@ impl EventOriginKind {
             EventOriginKind::Device => "device",
             EventOriginKind::Daemon => "daemon",
             EventOriginKind::LocalCli => "local_cli",
+            EventOriginKind::Node => "node",
         }
     }
 }
@@ -127,13 +142,78 @@ impl<'de> Deserialize<'de> for EventOriginKind {
     }
 }
 
-/// `body.origin`：形状是关闭的（`additionalProperties: false`），两个键都必需，`deviceId` 可为 `null`。
+/// `body.origin`：形状是关闭的（`additionalProperties: false`）。`kind` 与 `deviceId`（可为
+/// `null`）是冻结的 v1 必填键；`nodeId` 是 feature `core.event-origin.v1` 下才出现的**可选**键。
+///
+/// `nodeId` 用三态表达（`Option<Nullable<Uuid>>`），因为线上有两种不同的合法缺席语义：未协商该
+/// feature 的旧形状只有 `{kind, deviceId}` 两个键（`None`，序列化时整键跳过），协商后总是带
+/// `nodeId`，没有节点产生者时是 `Some(Nullable::null())`。
+///
+/// 配对规则（§10.1）在 [`TryFrom<RawEventOrigin>`] 里校验，schema 用 `if`/`then` 表达同一条：
+/// `kind = "node"` 时必须带非空 `nodeId`、且 `deviceId` 为 `null`。**只有这一条**——旧形状里
+/// `{kind: "device", deviceId: null}` 本来就是合法的（冻结的 v1 schema 没有身份配对规则），
+/// 把必填性收紧上去属于 `docs/SYNC_PROTOCOL.md` §16.2 的破坏性变更，不能借这次扩展顺手加。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawEventOrigin")]
 pub struct EventOrigin {
     pub kind: EventOriginKind,
     #[serde(rename = "deviceId")]
     pub device_id: Nullable<Uuid>,
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<Nullable<Uuid>>,
+}
+
+/// [`EventOrigin`] 的线形状：`kind`/`deviceId` 的缺键在这里被拒（schema 的 `required`），
+/// `nodeId` 由 `#[serde(default)]` 表示"键可以缺席"，配对规则在 [`TryFrom`] 里。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEventOrigin {
+    kind: EventOriginKind,
+    #[serde(rename = "deviceId")]
+    device_id: Nullable<Uuid>,
+    #[serde(
+        rename = "nodeId",
+        default,
+        deserialize_with = "crate::common::deserialize_optional_nullable"
+    )]
+    node_id: Option<Nullable<Uuid>>,
+}
+
+impl TryFrom<RawEventOrigin> for EventOrigin {
+    type Error = ValueError;
+
+    /// `docs/SYNC_PROTOCOL.md` §10.1 唯一的一条配对规则：`kind = node` 时必须带非空 `nodeId`，
+    /// 且 `deviceId` 为 `null`。其余 kind 不做身份字段配对校验。
+    fn try_from(raw: RawEventOrigin) -> Result<Self, Self::Error> {
+        let shape = |expected: &'static str| ValueError::Shape {
+            field: "origin",
+            expected,
+        };
+
+        if raw.kind == EventOriginKind::Node {
+            let has_node_id = raw
+                .node_id
+                .as_ref()
+                .map(|node_id| !node_id.is_null())
+                .unwrap_or(false);
+            if !has_node_id {
+                return Err(shape(
+                    "kind = node 时 nodeId 必须存在且非空（SYNC_PROTOCOL §10.1）",
+                ));
+            }
+            if !raw.device_id.is_null() {
+                return Err(shape(
+                    "kind = node 时 deviceId 必须为 null（SYNC_PROTOCOL §10.1）",
+                ));
+            }
+        }
+
+        Ok(Self {
+            kind: raw.kind,
+            device_id: raw.device_id,
+            node_id: raw.node_id,
+        })
+    }
 }
 
 /// `body.payload`：形状是关闭的，`view` 必需、`acp` 可选且没有 `null` 分支。

@@ -12,7 +12,7 @@
 //!   `CredentialStatus::Unknown`，`auth.server_challenge` 照常签发；对端可见的失败推迟到 proof 阶段
 //!   并统一为 `auth.proof_invalid`（§8.5）；
 //! - **feature 词表只有一个来源**：`compatibility/features/v1/features.json` 的 `sync` 子集中
-//!   `delivery = mvp` 的八条（§5.2 的 v1 baseline），逐条常量在此登记并有契约测试比对。
+//!   `delivery = mvp` 的九条（§5.2 的 v1 baseline），逐条常量在此登记并有契约测试比对。
 
 use acp_core::model::{
     DeviceId, DeviceRecord, DeviceState, PairingRecord, PairingState, PeerIdentity,
@@ -22,11 +22,11 @@ use identity_auth::{CanonicalOrigin, ConnectionBinding, CredentialStatus, Featur
 use sync_protocol::auth::ClientHello;
 use sync_protocol::common::{FeatureId, FeatureList as WireFeatureList};
 
-/// 本切片实现的 Sync feature（`features.json` 的 `sync` 子集里 `delivery = mvp` 的八条，§5.2）。
+/// 本切片实现的 Sync feature（`features.json` 的 `sync` 子集里 `delivery = mvp` 的九条，§5.2）。
 ///
-/// 八条全部 `required: false`：Sync v1 没有「协议要求每次协商都必须选中」的 feature（必需性由客户端按
+/// 九条全部 `required: false`：Sync v1 没有「协议要求每次协商都必须选中」的 feature（必需性由客户端按
 /// 自身需要声明），因此本模块的必需集合只来自对端。
-pub const SUPPORTED_FEATURES: [&str; 8] = [
+pub const SUPPORTED_FEATURES: [&str; 9] = [
     "core.snapshot.v1",
     "core.command-status.v1",
     "core.event-ack.v1",
@@ -35,6 +35,7 @@ pub const SUPPORTED_FEATURES: [&str; 8] = [
     "core.local-catalog.v1",
     "core.session-create.v1",
     "core.session-history.v1",
+    "core.event-origin.v1",
 ];
 
 /// v1 唯一的协议版本（§5.1 的版本交集与 `auth.server_challenge.selectedProtocolVersion`）。
@@ -65,7 +66,7 @@ pub fn negotiated_version(hello: &ClientHello) -> Result<u64, NegotiationFault> 
 /// feature 协商：`selected = 客户端 supportedFeatures ∩ 服务端支持集合`（排序去重），
 /// 然后核对客户端必需 feature 是否全部被选中（§5.2）。
 ///
-/// 必需集合只来自对端（八条 baseline 全部 `required: false`）。未被选中的必需 feature 按 UTF-8 字节
+/// 必需集合只来自对端（九条 baseline 全部 `required: false`）。未被选中的必需 feature 按 UTF-8 字节
 /// 升序、去重后返回。返回值是协商结果的 feature ID 文本（排序去重）。
 pub fn negotiate_features(hello: &ClientHello) -> Result<Vec<String>, NegotiationFault> {
     let declared: Vec<&str> = hello

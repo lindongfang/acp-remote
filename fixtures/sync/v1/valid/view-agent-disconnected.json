@@ -13,7 +13,8 @@
     "causationRequestId": null,
     "origin": {
       "kind": "device",
-      "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49"
+      "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
+      "nodeId": null
     },
     "remoteOrigin": null,
     "createdAt": "2026-09-17T12:12:00.000Z",

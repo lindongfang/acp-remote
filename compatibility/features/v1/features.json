@@ -53,6 +53,12 @@
           "description": "Sync 面按会话读取结构化历史条目（§11.5 的 `session.read` 新 include 取值 `history`、`beforeHistory` 序号游标、结果里的 `history`/`historyHasEarlier` 与 §9.4/§10.2 的条目类型集合）",
           "delivery": "mvp",
           "required": false
+        },
+        {
+          "id": "core.event-origin.v1",
+          "description": "事件帧 `origin` 的身份字段（`nodeId`）与 `node` 取值",
+          "delivery": "mvp",
+          "required": false
         }
       ]
     },

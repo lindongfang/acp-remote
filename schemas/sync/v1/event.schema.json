@@ -36,9 +36,23 @@
           "additionalProperties": false,
           "required": ["kind", "deviceId"],
           "properties": {
-            "kind": { "enum": ["agent", "device", "daemon", "local_cli"] },
+            "kind": { "enum": ["agent", "device", "daemon", "local_cli", "node"] },
             "deviceId": {
               "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+            },
+            "nodeId": {
+              "oneOf": [{ "$ref": "common.schema.json#/$defs/uuid" }, { "type": "null" }]
+            }
+          },
+          "if": {
+            "properties": { "kind": { "const": "node" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["nodeId"],
+            "properties": {
+              "deviceId": { "type": "null" },
+              "nodeId": { "$ref": "common.schema.json#/$defs/uuid" }
             }
           }
         },

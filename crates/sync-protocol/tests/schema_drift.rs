@@ -16,6 +16,7 @@ use std::path::Path;
 use sync_protocol::command::IncludeResource;
 use sync_protocol::envelope::MessageType;
 use sync_protocol::error::ErrorCode;
+use sync_protocol::event::EventOriginKind;
 use sync_protocol::sync::SnapshotResource;
 use sync_protocol::views::{self, VIEW_TYPES};
 
@@ -381,6 +382,34 @@ fn snapshot_resources_match_schema_enum() {
         SnapshotResource::ALL.map(|value| value.as_str()).to_vec(),
         declared,
         "$defs.snapshotResource.enum 与 SnapshotResource::ALL 不一致"
+    );
+}
+
+/// `body.origin.kind` 封闭词表的镜像门禁：`event::EventOriginKind::ALL` 与
+/// `event.schema.json` 的 `body.properties.origin.properties.kind.enum` 相等（逐条且同序）。
+///
+/// 根因与 `snapshot_resources_match_schema_enum` 同源：这个取值集合在 schema、Rust 枚举与
+/// `docs/SYNC_PROTOCOL.md` §10.1 的表格各有一份。只在一侧新增取值（例如本次的 `node`）时，
+/// 客户端按 schema 校验、服务端消费 Rust 枚举，两侧会各说各话；同序断言是因为两边都按该顺序
+/// 列举取值，新增取值必须落在同一位置。
+#[test]
+fn event_origin_kinds_match_schema_enum() {
+    let set = SchemaSet::load(&support::repo_path("schemas/sync/v1"));
+    let document = set.document("event.schema.json");
+
+    let origin = lookup_pointer(document, "/properties/body/properties/origin")
+        .unwrap_or_else(|| panic!("event.schema.json 的 body.properties.origin 不存在"));
+    let declared: Vec<&str> = origin["properties"]["kind"]["enum"]
+        .as_array()
+        .unwrap_or_else(|| panic!("event.schema.json 的 origin.kind 不是 closed enum"))
+        .iter()
+        .map(|value| value.as_str().expect("enum 取值必须是字符串"))
+        .collect();
+
+    assert_eq!(
+        EventOriginKind::ALL.map(|kind| kind.as_str()).to_vec(),
+        declared,
+        "origin.kind 的 enum 与 EventOriginKind::ALL 不一致"
     );
 }
 

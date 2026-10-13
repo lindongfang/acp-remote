@@ -21,7 +21,10 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
 /// 声明了 `viewDef` 的夹具数（`event-remote-origin.json` 与三条事件夹具复用同一批 event 类型）。
 /// MU1b 的 TP1 追加了两条 `file.changed` 合法视图夹具（统计省略、工作区外），因此由 36 增至 38。
-const EXPECTED_VIEW_CASES: usize = 38;
+/// `event-node-origin.json`（`origin.kind = "node"`）又追加一条 `session.created` 视图夹具，故为 39。
+/// `event-origin-legacy-shape.json`（未协商 `core.event-origin.v1` 的 `{kind, deviceId}` 形状）
+/// 再追加一条 `session.created` 视图夹具，故为 40。
+const EXPECTED_VIEW_CASES: usize = 40;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
 const EXPECTED_DISTINCT_VIEWS: usize = 34;
 
