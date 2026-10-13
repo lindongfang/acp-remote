@@ -30,6 +30,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
@@ -121,7 +122,20 @@ async function bundlePage() {
  * （脚本数据状态对 `<` 有专门的处理规则），当独立文件加载更接近真实页面的加载路径。
  */
 function startServer(html, bundle) {
+  // 本轮**最后一次** WebSocket 升级请求里 `Sec-WebSocket-Protocol` 的原始值。
+  //
+  // 这是「升级请求确实声明了权威 subprotocol」唯一能被观察到的地方：升级是浏览器
+  // 内核发出的 HTTP 请求，页面里看不到自己的出站头（`WebSocket.protocol` 只在
+  // 服务端**选择**了某个 subprotocol 之后才非空，缺失该头时两边都不留痕）。
+  // 于是由 Node 侧的服务端记录原始请求头，页面侧再取回来断言。
+  let observedSubprotocol = null;
+  const upgradedSockets = new Set();
   const server = createServer((request, response) => {
+    if ((request.url ?? "").startsWith("/observed-upgrade-headers")) {
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ subprotocol: observedSubprotocol }));
+      return;
+    }
     if ((request.url ?? "").startsWith("/bundle.js")) {
       response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
       response.end(bundle);
@@ -130,9 +144,43 @@ function startServer(html, bundle) {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(html);
   });
+  // 极简 RFC 6455 握手：只为把**出站请求头**记录下来。校验 `Sec-WebSocket-Accept`
+  // 的算式与浏览器内核相同，因此页面里那条真实 `WebSocket` 会正常 open。
+  server.on("upgrade", (request, socket, head) => {
+    void head;
+    const requested = request.headers["sec-websocket-protocol"];
+    observedSubprotocol = typeof requested === "string" ? requested : null;
+    const key = request.headers["sec-websocket-key"];
+    if (typeof key !== "string") {
+      socket.destroy();
+      return;
+    }
+    const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    const lines = [
+      "HTTP/1.1 101 Switching Protocols",
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      `Sec-WebSocket-Accept: ${accept}`,
+    ];
+    // 回显请求里的 subprotocol（客户端只声明一个；回显非请求值会让内核主动断开）。
+    const first = typeof requested === "string" ? requested.split(",")[0].trim() : "";
+    if (first.length > 0) lines.push(`Sec-WebSocket-Protocol: ${first}`);
+    socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+    upgradedSockets.add(socket);
+    socket.on("close", () => upgradedSockets.delete(socket));
+    // 断言只依赖上面记录的头，因此升级完成后立刻收线，避免残留 socket 拖住进程退出。
+    setTimeout(() => socket.destroy(), 250);
+  });
   return new Promise((resolveServer) => {
     server.listen(0, "127.0.0.1", () => {
-      resolveServer({ server, port: server.address().port });
+      resolveServer({
+        server,
+        port: server.address().port,
+        closeSockets: () => {
+          for (const socket of upgradedSockets) socket.destroy();
+          upgradedSockets.clear();
+        },
+      });
     });
   });
 }
@@ -221,7 +269,7 @@ async function main() {
   writeFileSync(join(WORK_DIR, "index.html"), html, "utf8");
   writeFileSync(join(WORK_DIR, "bundle.js"), bundle, "utf8");
 
-  const { server, port } = await startServer(html, bundle);
+  const { server, port, closeSockets } = await startServer(html, bundle);
   const pageUrl = `http://127.0.0.1:${port}/index.html`;
   const profileDir = mkdtempSync(join(tmpdir(), "tp4-e2e-profile-"));
   const debugPort = 9733 + Math.floor(Math.random() * 200);
@@ -246,6 +294,7 @@ async function main() {
     } catch {
       // 已退出。
     }
+    closeSockets();
     server.close();
   };
 

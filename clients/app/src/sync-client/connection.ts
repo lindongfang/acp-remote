@@ -63,6 +63,20 @@ const PROTOCOL_VERSION = 1;
  */
 export const SYNC_WS_PATH = "/sync/v1";
 
+/**
+ * Sync 的 WebSocket subprotocol（`docs/SYNC_PROTOCOL.md` §3.1）。
+ *
+ * 权威值有两处同源出处：`docs/SYNC_PROTOCOL.md` 「客户端必须请求 WebSocket subprotocol
+ * `acp-remote.sync.v1.json`；服务端必须选择该 subprotocol，否则客户端终止连接」，与
+ * `crates/server/src/sync/conn/mod.rs` 的 `pub const WS_SUBPROTOCOL: &str = "acp-remote.sync.v1.json";`
+ * （接入层按它做 upgrade 白名单：`crates/server/src/transport/net/route.rs` 的
+ * `register_ws(path, required_subprotocol, handler)`，未声明该 subprotocol 的升级请求被拒绝）。
+ *
+ * 客户端只在**这里**写一次：唯一的升级点 `socket.web.ts` 的 `new WebSocket(url, ...)` 引用它。
+ * 抄成第二份字面量就会出现「一处改了、另一处没改」的静默失败——服务端会直接拒掉升级。
+ */
+export const SYNC_WS_SUBPROTOCOL = "acp-remote.sync.v1.json";
+
 /** Device proof 的 domain tag（§6.3；Host challenge 的校验在 `HostIdentityPort` 实现侧）。 */
 const DEVICE_PROOF_DOMAIN = "acp-remote/device-proof/v1";
 

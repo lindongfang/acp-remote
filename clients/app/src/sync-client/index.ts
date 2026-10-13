@@ -52,6 +52,7 @@ export {
   SESSION_HISTORY_FEATURE,
   SUPPORTED_FEATURES,
   SYNC_WS_PATH,
+  SYNC_WS_SUBPROTOCOL,
   SyncConnection,
   blockCauseForCloseCode,
   compareCursors,

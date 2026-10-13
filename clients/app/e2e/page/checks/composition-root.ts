@@ -22,7 +22,7 @@
  */
 
 import { AGENTS, DIRS_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories } from "../fixtures";
-import { SYNC_WS_PATH } from "../../../src/sync-client";
+import { SYNC_WS_PATH, SYNC_WS_SUBPROTOCOL, openWebSocket } from "../../../src/sync-client";
 import {
   CANONICAL_ORIGIN,
   expectEqual,
@@ -52,6 +52,19 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     route: DIRS_ROUTE,
     ...overrides,
   };
+}
+
+/**
+ * 读回服务端记录的最后一次升级请求声明。
+ *
+ * 服务端侧（`e2e/run-e2e.mjs` 的 `upgrade` 处理器）记录的是浏览器内核实际发出的
+ * `Sec-WebSocket-Protocol` 原始头；缺头时为 `null`。守卫脚本之外的 e2e 环境（例如
+ * 页面直接由文件打开）没有这个端点，此时读取失败即为「观察不到」，断言如实变红。
+ */
+async function readObservedSubprotocol(url: URL): Promise<string | null> {
+  const response = await fetch(url);
+  const body = (await response.json()) as { readonly subprotocol: string | null };
+  return body.subprotocol;
 }
 
 const checks: readonly Check[] = [
@@ -213,6 +226,39 @@ const checks: readonly Check[] = [
         );
       } finally {
         await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "CR-5 真实 WebSocket 升级请求必须声明权威 subprotocol（§3.1）",
+    async run() {
+      // `docs/SYNC_PROTOCOL.md` §3.1 要求客户端必须请求该 subprotocol，服务端按它做
+      // upgrade 白名单（`crates/server/src/transport/net/route.rs` 的 `register_ws`
+      // 只放行声明了它的升级请求）。这条断言必须落在**真实浏览器发出的升级请求**上：
+      // 页内假主机拿到的是已经建好的 `SocketPort`，看不到出站请求头。
+      const observedUrl = new URL("/observed-upgrade-headers", location.href);
+      // 断言要看到**本次**升级带来的变化，因此先取一次基线（缺头时服务端记 `null`）。
+      const baseline = await readObservedSubprotocol(observedUrl);
+      const socket = openWebSocket({
+        url: `ws://127.0.0.1:${location.port}${SYNC_WS_PATH}`,
+        handlers: { onOpen() {}, onMessage() {}, onClose() {}, onError() {} },
+      });
+      try {
+        let observed = baseline;
+        const deadline = Date.now() + 5_000;
+        while (observed === baseline && Date.now() < deadline) {
+          const { promise, resolve } = Promise.withResolvers<void>();
+          setTimeout(resolve, 25);
+          await promise;
+          observed = await readObservedSubprotocol(observedUrl);
+        }
+        expectEqual(
+          observed ?? null,
+          SYNC_WS_SUBPROTOCOL,
+          "升级请求里 `Sec-WebSocket-Protocol` 声明的 subprotocol",
+        );
+      } finally {
+        socket.close(1000, "");
       }
     },
   },
