@@ -325,6 +325,22 @@ fn status_counts_follow_persisted_records() {
     assert!(daemon.stop().success());
 }
 
+/// 取 `daemon.drain` 事件里的 `drain_ms`（**排空阶段**的耗时）。
+///
+/// 断言必须落在排空阶段而不是整个关闭序列：后者还含与排空无关的阶段（WAL checkpoint、存储刷新），
+/// 在负载高的机器上可达秒级。回退形态下（把关闭请求者计入排空）该值会等于宽限，实测 2999。
+fn drain_ms_of(daemon: &Daemon) -> u64 {
+    let events = daemon.log_events("daemon.drain");
+    assert!(
+        !events.is_empty(),
+        "必须留下 daemon.drain 日志以判定排空耗时：{}",
+        daemon.log()
+    );
+    events[0]["drain_ms"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("daemon.drain 必须带 drain_ms：{:?}", events[0]))
+}
+
 /// R13 的补充（task 2.26；`daemon-shutdown-drain` 1.2）：**没有其他客户端在途**时，`daemon stop` 不必等满宽限。
 ///
 /// 钉住的是本机实测到的真实缺口：CLI 发出 `daemon.stop` 后就 `drop(client)` 并进入等锁循环，但
@@ -339,8 +355,11 @@ fn status_counts_follow_persisted_records() {
 /// 的结束原因是「关闭请求自身的连接」（`reason = "shutdown_requested"`）——它被**识别**出来，而不是按
 /// 「谁先关/谁最后关」猜出来的。
 ///
-/// 阈值取宽限的 2/3：本机实测停止耗时 < 200 ms，而「等满宽限」是 3000 ms，两者相差一个数量级，
-/// 1 s 的低限同时保证断言在慢机器上不抖动。
+/// **阈值取宽限的 2/3，且断言落在「排空阶段」而不是整个关闭序列**：排空才是本次的契约，而关闭序列
+/// 还包含 `wal_checkpoint(TRUNCATE)` 等与排空无关的阶段 —— 在负载高的机器上那些阶段可达秒级，用
+/// 「整个关闭耗时 < 2/3 宽限」当阈值会把不相干的慢也算进来（CI 上实测过一次 `elapsed_ms=2002` vs
+/// `threshold_ms=2000` 的误报）。判据取日志里的 `daemon.drain.drain_ms`：回退形态下它会等于宽限
+/// （实测 2999），正确形态下只有几十毫秒，两者相差一个数量级。
 #[test]
 fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
     const GRACE_MS: u64 = 3000;
@@ -352,14 +371,12 @@ fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
     let lock_path = daemon.data_dir().join(app::lock::LOCK_FILE_NAME);
     let grace_arg = GRACE_MS.to_string();
 
-    let started = Instant::now();
     let run = run_cli(
         "daemon-stop-drain",
         Some(daemon.config_path()),
         &["daemon", "stop", "--grace-ms", grace_arg.as_str()],
         Stdin::Null,
     );
-    let elapsed = started.elapsed();
     run.assert_success();
     assert!(run.stdout.contains("已停止"), "{}", run.stdout);
 
@@ -376,9 +393,9 @@ fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
         daemon.log()
     );
     assert!(
-        elapsed < threshold,
-        "无其他客户端在途时 `daemon stop` 必须明显早于宽限完成：elapsed_ms={} grace_ms={GRACE_MS} 日志={}",
-        elapsed.as_millis(),
+        drain_ms_of(&daemon) < threshold.as_millis() as u64,
+        "无其他客户端在途时排空必须明显早于宽限完成：drain_ms={} grace_ms={GRACE_MS} 日志={}",
+        drain_ms_of(&daemon),
         daemon.log()
     );
 
@@ -408,11 +425,12 @@ fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
     {
         std::thread::sleep(Duration::from_millis(10));
     }
-    let elapsed = started.elapsed();
+    // 连接始终没有被本用例关闭：排空必须**识别**它是关闭请求者而不等它（同①：断言落在排空阶段，
+    // 因为整个关闭序列还包含与排空无关的阶段）。回退形态下排空会等满宽限（drain_ms ≈ grace）。
     assert!(
-        elapsed < threshold,
-        "关闭请求者拖延关闭连接时，关闭序列必须明显早于宽限完成：elapsed_ms={} threshold_ms={} 日志={}",
-        elapsed.as_millis(),
+        drain_ms_of(&delayed) < threshold.as_millis() as u64,
+        "关闭请求者拖延关闭连接时，排空必须明显早于宽限完成：drain_ms={} threshold_ms={} 日志={}",
+        drain_ms_of(&delayed),
         threshold.as_millis(),
         delayed.log()
     );

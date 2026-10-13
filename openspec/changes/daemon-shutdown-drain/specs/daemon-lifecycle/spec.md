@@ -10,7 +10,7 @@
 #### Scenario: 关闭请求自身的连接不进入排空
 
 - **WHEN** 唯一的活动客户端连接就是发出 `daemon.stop` 的那条，且该客户端在收到 `accepted` 之后迟迟不关闭连接（例如进程被延迟调度）
-- **THEN** 排空不等待它、也不因此等到宽限耗尽；关闭序列在远小于 `graceMs` 的时间内继续推进，且不出现 `daemon.drain_timeout`
+- **THEN** 排空不等待它、也不因此等到宽限耗尽：**排空阶段**在远小于 `graceMs` 的时间内结束，且不出现 `daemon.drain_timeout`（判据取日志里 `daemon.drain` 的 `drain_ms`；整个关闭序列还含与排空无关的阶段，不属本契约）
 
 #### Scenario: 其它在途连接仍被等待
 
