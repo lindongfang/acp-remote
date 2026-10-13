@@ -32,22 +32,26 @@
 //! | post_mvp 消息显式拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing`（`catalog.changed`/`link.backpressure`） |
 //! | 未知字段被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
 //! | 首次认证清除已批准配对 | `handshake_completes_and_enters_the_business_phase` |
-//! | 心跳与 90 秒静默 | `heartbeat_round_trip_keeps_the_connection_alive`、`silence_beyond_the_window_is_closed_with_4408` |
-//! | 慢连接不影响其他连接 | `a_saturated_connection_is_disconnected_without_affecting_its_peer` |
+//! | 心跳与 90 秒静默 | `heartbeat_round_trip_keeps_the_connection_alive`、`silence_beyond_the_window_is_closed_with_4408`、`a_busy_outbound_queue_does_not_starve_the_heartbeat`、`inbound_silence_still_closes_a_connection_with_a_busy_outbound_queue` |
+//! | 慢连接不影响其他连接 | `a_saturated_connection_is_disconnected_without_affecting_its_peer`、`a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` |
 //! | 审计与日志边界 | `handshake_completes_and_enters_the_business_phase`、`an_invalid_proof_is_closed_with_4401_and_audited` |
 //! | 验收「schema/fixture 漂移」 | `fixtures_are_consumed_by_the_handshake_and_error_layers` |
 //!
-//! 两处**刻意的测试手法**（都在用例里就地说明）：
+//! 三处**刻意的测试手法**（都在用例里就地说明）：
 //!
 //! - `node-link-proof/v1` 的 `catalogRevision`：用例只从 `node.challenge` 的 body 取该字段（Access 该走的路），
 //!   不再带外取值——2026-09-26 的 v1 内合同修订把字段补进了握手消息（`NODE_LINK_PROTOCOL.md` §12.2 的修订记录，
 //!   design D13）；`the_challenge_catalog_revision_is_the_proof_transcript_source` 进一步锁定
 //!   「取错值必然验签失败」，证明该字段真的进了验签输入；
 //! - 90 秒静默与 30 秒慢消费者宽限：用 [`NodeLinkConn::with_test_windows`] 调短窗口（常量取值由
-//!   `protocol_constants_are_not_configurable` 与静默边界断言锁定，机制由真实连接覆盖）。
+//!   `protocol_constants_are_not_configurable` 与静默边界断言锁定，机制由真实连接覆盖）；
+//! - 「出站队列持续非空 / 持续饱和」的压力：用独立 OS 线程当生产者（[`OutboundPressure`]），而不是
+//!   tokio 任务——只有与运行时**并行**的生产者才能保证 `select!` 的每一轮都有出站消息就绪，从而真的
+//!   复现「tick 被出站分支饿死」这一缺陷条件（理由见该结构的文档注释）。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
@@ -84,7 +88,7 @@ use crate::node_link::conn::session::HEARTBEAT_SILENCE_TIMEOUT;
 use crate::node_link::conn::{
     AUTH_ATTEMPTS_PER_MINUTE, ConnectionHandle, ConnectionRegistry, HANDSHAKE_TIMEOUT,
     MAX_IN_FLIGHT_HANDSHAKES_PER_IP, NodeLinkConn, SendFault, SessionLimits, WS_PATH,
-    WS_SUBPROTOCOL, WsEndpoint,
+    WS_SUBPROTOCOL, WsEndpoint, close,
 };
 use crate::transport::net::{NetConfig, NetError, NetListener, Shutdown, ShutdownHandle};
 
@@ -733,6 +737,45 @@ impl Client {
         assert_eq!(pong["body"]["nonce"], json!(nonce), "pong 必须原样回填");
         self.advance_after_accepted();
         pong
+    }
+
+    /// 在 `budget` 内读到一条指定 `type` 的认证后消息：沿途其他类型的消息被逐条消费（并按序号校验）。
+    ///
+    /// 用于「对端持续推流」的用例——那里不能假定下一条消息就是目标类型。预算用尽即失败；连接提前
+    /// 结束由 `take_message` 自己报错。
+    async fn expect_type_eventually(&mut self, message_type: &str, budget: Duration) -> Value {
+        let deadline = Instant::now() + budget;
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "在 {budget:?} 内没有读到 {message_type}（步骤「{}」）",
+                self.step
+            );
+            let message = self.take_message().await;
+            if message["type"] == json!(message_type) {
+                return message;
+            }
+        }
+    }
+
+    /// 在 `budget` 内读到 close 帧；中途的文本帧**直接丢弃**（不保留在 `pending` 里）。
+    ///
+    /// 预算是必需的而不是「反正读超时会兜底」：对端持续推流时 `read_timeout` 永远不会触发（帧一直在
+    /// 到达），没有预算的话「对端根本不断开」会表现为用例挂住而不是失败。
+    async fn expect_close_within(&mut self, budget: Duration) -> u16 {
+        let deadline = Instant::now() + budget;
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "在 {budget:?} 内没有等到 close 帧（步骤「{}」）",
+                self.step
+            );
+            match self.next_frame().await {
+                None => panic!("对端在没有 close 帧的情况下结束了连接"),
+                Some(Frame::Close(code, _reason)) => return code,
+                Some(Frame::Binary | Frame::Ping | Frame::Pong | Frame::Text(_)) => {}
+            }
+        }
     }
 }
 
@@ -2267,6 +2310,279 @@ async fn a_saturated_connection_is_disconnected_without_affecting_its_peer() {
         "留下的必须是快连接"
     );
     healthy.ping_round_trip(0x82).await;
+    harness.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// R79/R81：持续非空的出站队列不得饿死 tick（回归）
+// ---------------------------------------------------------------------------------------------
+
+/// 起一个只挂 `/node-link/v1` 的接入层，装配件由调用方给出（窗口/限额已在调用方定好）。
+///
+/// 与 [`Harness::start`] 的唯一区别是 Node Link 装配件的构造方式：需要用
+/// [`NodeLinkConn::with_test_windows`] 调短窗口的用例没法走默认配置。
+async fn harness_with_conn(world: TestWorld, conn: Arc<NodeLinkConn>) -> Harness {
+    let mut listener = NetListener::bind(NetConfig {
+        listen: "127.0.0.1:0".to_owned(),
+        ..NetConfig::default()
+    })
+    .await
+    .expect("绑定 loopback listener");
+    listener
+        .register_ws(
+            WS_PATH,
+            WS_SUBPROTOCOL,
+            WsEndpoint::handler(Arc::clone(&conn)),
+        )
+        .expect("注册 Node Link 端点");
+    let addr = listener.local_addrs()[0];
+    let (shutdown, signal) = Shutdown::channel();
+    let join = tokio::spawn(async move { listener.serve(signal).await });
+    Harness {
+        world,
+        addr,
+        conn,
+        shutdown,
+        join,
+    }
+}
+
+/// 「持续非空但**不**饱和」压力源的水位（条）。
+///
+/// 上界：必须低于 2,000 条的默认高水位，否则投递会被拒（`mark_saturated`），tick 就走到慢消费者判定
+/// 而不是心跳判定；下界：必须远大于一次 socket 写入突发能排空的量——会话在一次客户端读取（最多
+/// 16 KiB）之后能连续写出约百条消息，取 1,800 让这个突发不足以把队列排空。队列排空会让 `select!`
+/// 出现「出站分支不就绪」的窗口，缺陷里的 tick 就有机会被轮询到（用例于是漏报）。
+const BUSY_QUEUE_TARGET: u64 = 1_800;
+
+/// 「对端持续推流」的用例里等 close 帧的预算：慢消费者宽限（用例里 1.5 秒）+ 关闭前排空已入队消息的
+/// 预算（2 秒）+ 余量。没有它的话「对端根本不断开」会表现为用例挂住（帧一直在到达，读超时不会触发）。
+const CLOSE_WAIT_BUDGET: Duration = Duration::from_secs(8);
+
+/// 「出站队列持续非空」的压力源：一个**独立 OS 线程**不停往会话的待发送队列投递填充消息。
+///
+/// 为什么是线程而不是 tokio 任务：tokio 任务只在会话让出执行权时才能运行，而本用例要压的恰恰是
+/// 「会话因为出站队列每轮都就绪而几乎不让出执行权」这一形态。线程与运行时并行执行，队列在会话排空
+/// 一条之后立刻被补上，`receiver.recv()` 因此在每个 `select!` 轮次上都就绪——这正是缺陷里 tick
+/// 被饿死的条件。若换成 tokio 任务，队列会出现「已被排空、生产者还没补上」的空窗，而空窗里
+/// `select!` 会把 tick 轮询到，用例就会漏报（这正是既有
+/// [`a_saturated_connection_is_disconnected_without_affecting_its_peer`] 在缺陷版本下仍然通过的原因：
+/// 它只灌一次队列，之后队列被排空，tick 就有了被轮询的机会）。
+///
+/// - `target = Some(n)`：只在队列少于 `n` 条时投递，**从不触发高水位**（`saturated_for()` 保持
+///   `None`，tick 于是会走到心跳判定）；
+/// - `target = None`：一直投递到高水位，队列持续饱和（tick 走到慢消费者判定）。
+struct OutboundPressure {
+    sent: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OutboundPressure {
+    fn spawn(handle: Arc<ConnectionHandle>, target: Option<u64>) -> Self {
+        let sent = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let counter = Arc::clone(&sent);
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let filler = json!({ "padding": "busy" });
+            while !flag.load(Ordering::Relaxed) {
+                let has_room = match target {
+                    Some(target) => handle.pending().messages < target,
+                    None => true,
+                };
+                if has_room {
+                    match handle.send(MessageType::LinkError, &filler) {
+                        Ok(()) => {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        // 会话已结束（接收端被丢弃）：队列再没人消费，压力源收工。
+                        Err(SendFault::Closed) => break,
+                        // 高水位（`target = None` 时的常态）：让出 CPU 后立刻重试。
+                        Err(_) => {}
+                    }
+                }
+                std::thread::yield_now();
+            }
+        });
+        Self {
+            sent,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// 压力源已成功入队的填充消息数（用例据此断言队列确实被持续撑住，而不是只灌了一次）。
+    fn sent(&self) -> u64 {
+        self.sent.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for OutboundPressure {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// 出站队列持续非空时，心跳仍按 `heartbeatIntervalMs` 的节奏发出。
+///
+/// 缺陷版本把 tick 排在出站分支之后、且每轮重建 `sleep(500ms)`：只要出站队列每轮都就绪，tick 永远
+/// 不被轮询，`link.ping` 一条都发不出去——恰恰在最需要保活的时候保活停摆。压力源把队列撑在
+/// [`BUSY_QUEUE_TARGET`] 条（低于 2,000 条的默认高水位），投递因此从**不**被拒绝，`saturated_for()`
+/// 保持 `None`，tick 会走到心跳判定而不是慢消费者判定。
+#[tokio::test]
+async fn a_busy_outbound_queue_does_not_starve_the_heartbeat() {
+    let harness = Harness::start(
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
+        NodeLinkConfig {
+            public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+            heartbeat_interval_ms: 1_000,
+            ..NodeLinkConfig::default()
+        },
+    )
+    .await;
+    let _ = harness.approved_pairing().await;
+    let mut client = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
+    let handle = harness.conn.registry().handles()[0].clone();
+
+    // 认证刚完成就挂上压力源：从现在起队列一直留着消息。
+    let pressure = OutboundPressure::spawn(Arc::clone(&handle), Some(BUSY_QUEUE_TARGET));
+    let heartbeat = Duration::from_millis(1_000);
+
+    client.step("出站队列持续非空时的心跳");
+    let first = client
+        .expect_type_eventually("link.ping", heartbeat * 5)
+        .await;
+    let first_at = Instant::now();
+    let second = client
+        .expect_type_eventually("link.ping", heartbeat * 5)
+        .await;
+    let interval = first_at.elapsed();
+    assert_ne!(
+        first["body"]["nonce"], second["body"]["nonce"],
+        "每次心跳的 nonce 必须不同"
+    );
+    assert!(
+        interval >= heartbeat * 9 / 10 && interval <= heartbeat * 3,
+        "心跳必须按 heartbeatIntervalMs（1 秒）的节奏持续发送，实测相邻间隔 {interval:?}"
+    );
+    assert!(
+        pressure.sent() >= 10,
+        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
+        pressure.sent()
+    );
+    harness.stop().await;
+}
+
+/// 出站队列持续非空时，入站静默判定仍会推进到 4408 关闭。
+///
+/// 同一缺陷的另一条可见后果：缺陷版本下 tick 不被轮询，「连续 90 秒无入站消息即关闭」这条判据永远
+/// 等不到检查它的时刻。窗口用 [`NodeLinkConn::with_test_windows`] 调成 2 秒（真实 90 秒在用例里不可
+/// 接受；固定常量的取值由 [`protocol_constants_are_not_configurable`] 锁定，本用例证明的是
+/// 「静默判定 → 4408」这条机制）。
+#[tokio::test]
+async fn inbound_silence_still_closes_a_connection_with_a_busy_outbound_queue() {
+    let world = TestWorld::with_store(Arc::new(FixedStore::new(
+        TEST_SERVER_EPOCH,
+        STORE_HEAD_SEQUENCE,
+    )));
+    let registry = ConnectionRegistry::new();
+    let conn = Arc::new(
+        NodeLinkConn::new(
+            world.core.clone(),
+            world.authority.clone(),
+            NodeLinkConfig {
+                public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+                // 心跳间隔取 schema 上限：本用例要验的是静默判定，不让 ping 混进观察窗口。
+                heartbeat_interval_ms: 300_000,
+                ..NodeLinkConfig::default()
+            },
+            Arc::clone(&registry),
+        )
+        .with_test_windows(Duration::from_secs(2), Duration::from_secs(30)),
+    );
+    let harness = harness_with_conn(world, conn).await;
+    let _ = harness.approved_pairing().await;
+    let mut client = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
+    let handle = harness.conn.registry().handles()[0].clone();
+    let pressure = OutboundPressure::spawn(Arc::clone(&handle), Some(BUSY_QUEUE_TARGET));
+
+    let started = Instant::now();
+    client.step("出站队列持续非空时的静默超时");
+    assert_eq!(
+        client.expect_close_within(CLOSE_WAIT_BUDGET).await,
+        4408,
+        "入站静默超时必须仍然以 4408 关闭"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "关闭必须发生在静默窗口之后"
+    );
+    assert!(
+        pressure.sent() >= 10,
+        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
+        pressure.sent()
+    );
+    harness.stop().await;
+}
+
+/// 出站队列**持续处于高水位**时，慢消费者看门狗仍会断开连接。
+///
+/// 与「持续非空」那两条不同，这里压力源一直投递到高水位（队列从不回到上限之下），
+/// `saturated_for()` 因此持续为 `Some`：断开与否完全取决于 tick 有没有被轮询到。队列上限保持默认的
+/// 2,000 条（只用 4 条这类小上限的话，会话一次突发就能把队列排空，tick 又会获得被轮询的机会），
+/// 宽限用 [`NodeLinkConn::with_test_windows`] 调成 1.5 秒（同上的理由）。
+#[tokio::test]
+async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog() {
+    let world = TestWorld::with_store(Arc::new(FixedStore::new(
+        TEST_SERVER_EPOCH,
+        STORE_HEAD_SEQUENCE,
+    )));
+    let registry = ConnectionRegistry::new();
+    let conn = Arc::new(
+        NodeLinkConn::new(
+            world.core.clone(),
+            world.authority.clone(),
+            NodeLinkConfig {
+                public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+                heartbeat_interval_ms: 300_000,
+                ..NodeLinkConfig::default()
+            },
+            Arc::clone(&registry),
+        )
+        .with_test_windows(Duration::from_secs(90), Duration::from_millis(1_500)),
+    );
+    let harness = harness_with_conn(world, conn).await;
+    let _ = harness.approved_pairing().await;
+    let mut client = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
+    let handle = harness.conn.registry().handles()[0].clone();
+    let pressure = OutboundPressure::spawn(Arc::clone(&handle), None);
+
+    client.step("出站队列持续饱和时的慢消费者看门狗");
+    assert_eq!(
+        client.expect_close_within(CLOSE_WAIT_BUDGET).await,
+        close::NORMAL,
+        "持续高水位必须在慢消费者宽限后断开"
+    );
+    assert!(
+        handle.saturated(),
+        "压力源必须让队列一直处于高水位（`saturated_for()` 持续为 Some）"
+    );
+    assert!(
+        pressure.sent() >= 10,
+        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
+        pressure.sent()
+    );
     harness.stop().await;
 }
 
