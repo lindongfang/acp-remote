@@ -325,7 +325,7 @@ fn status_counts_follow_persisted_records() {
     assert!(daemon.stop().success());
 }
 
-/// R13 的补充（task 2.26）：**没有其他客户端在途**时，`daemon stop` 不必等满宽限。
+/// R13 的补充（task 2.26；`daemon-shutdown-drain` 1.2）：**没有其他客户端在途**时，`daemon stop` 不必等满宽限。
 ///
 /// 钉住的是本机实测到的真实缺口：CLI 发出 `daemon.stop` 后就 `drop(client)` 并进入等锁循环，但
 /// Windows 上 Named Pipe 句柄由挂起的 overlapped 读持有，句柄只在**驱动它的 Tokio runtime** 被驱动或销毁时
@@ -333,11 +333,20 @@ fn status_counts_follow_persisted_records() {
 /// 于是句柄一直开到 CLI 进程退出——在那之前 Daemon 的 `drain_connections` 看不到对端 EOF，只能等满
 /// `shutdown_grace_ms`（实测 `drain_timeout{remaining:1}` 与 `elapsed_ms ≈ grace_ms`）。
 ///
+/// 用例因此**不依赖「客户端进程何时被调度」**：②里关闭请求者由用例自己持有，收到 `accepted` 之后故意拖延
+/// 关闭连接——本用例直到断言结束都不关它（回退形态下它会一直被保持到宽限，Daemon 只能等满宽限再中止它），
+/// 而正确形态下关闭序列仍必须在远小于 `graceMs` 内推进到结束、不出现 `daemon.drain_timeout`，并且那条连接
+/// 的结束原因是「关闭请求自身的连接」（`reason = "shutdown_requested"`）——它被**识别**出来，而不是按
+/// 「谁先关/谁最后关」猜出来的。
+///
 /// 阈值取宽限的 2/3：本机实测停止耗时 < 200 ms，而「等满宽限」是 3000 ms，两者相差一个数量级，
 /// 1 s 的低限同时保证断言在慢机器上不抖动。
 #[test]
 fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
-    const GRACE_MS: u128 = 3000;
+    const GRACE_MS: u64 = 3000;
+    let threshold = Duration::from_millis(GRACE_MS * 2 / 3);
+
+    // ① CLI 路径：`daemon stop` 的客户端进程就是关闭请求者，CLI 自己的耗时同样不得接近宽限。
     let mut daemon = Daemon::configure("stop-drain", "");
     daemon.start();
     let lock_path = daemon.data_dir().join(app::lock::LOCK_FILE_NAME);
@@ -360,18 +369,79 @@ fn stop_does_not_wait_for_the_full_grace_without_other_clients() {
     let status = daemon.wait_exit();
     assert!(status.success(), "关闭序列完成后必须正常退出：{status}");
 
-    // 排空窗口**没有**走到超时分支：Daemon 在宽限内看到 CLI 那条连接结束。
+    // 排空窗口**没有**走到超时分支：Daemon 不问「发出关闭请求的那条连接」要 EOF。
     assert!(
         daemon.log_events("daemon.drain_timeout").is_empty(),
         "无其他客户端在途时不得出现排空超时：日志={}",
         daemon.log()
     );
     assert!(
-        elapsed < Duration::from_millis(u64::try_from(GRACE_MS * 2 / 3).expect("阈值")),
+        elapsed < threshold,
         "无其他客户端在途时 `daemon stop` 必须明显早于宽限完成：elapsed_ms={} grace_ms={GRACE_MS} 日志={}",
         elapsed.as_millis(),
         daemon.log()
     );
+
+    // ② 确定性探针：关闭请求者收到 `accepted` 之后**故意拖延关闭连接**（本用例直到断言结束都不关它）。
+    //    关闭序列若把它当在途连接排空，耗时就会跟着本进程的调度走——那正是 CI 上掷硬币的那条路径。
+    let mut delayed = daemon.configure_in("stop-drain-held", "");
+    delayed.start();
+    let mut requester = delayed.open_connection();
+    let started = Instant::now();
+    let response = requester.call(
+        Method::DaemonStop,
+        params_of(json!({ "graceMs": GRACE_MS })),
+    );
+    match outcome_of(&response) {
+        ClientOutcome::Success(result) => {
+            assert_eq!(result.get("accepted"), Some(&Value::Bool(true)))
+        }
+        ClientOutcome::Failure { code, message } => {
+            panic!("daemon.stop 必须成功，实际 {code}：{message}")
+        }
+    }
+    // 连接保持打开：关闭序列必须在阈值内走完（进程退出也算「已走完」——日志可能随进程收尾才落盘）。
+    let deadline = started + threshold;
+    while Instant::now() < deadline
+        && delayed.is_running()
+        && delayed.log_events("daemon.stopped").is_empty()
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < threshold,
+        "关闭请求者拖延关闭连接时，关闭序列必须明显早于宽限完成：elapsed_ms={} threshold_ms={} 日志={}",
+        elapsed.as_millis(),
+        threshold.as_millis(),
+        delayed.log()
+    );
+    // 连接始终没有被本用例关闭：进程退出与锁释放都不依赖对端结束。
+    assert!(
+        delayed.wait_exit().success(),
+        "关闭序列完成后必须正常退出：日志={}",
+        delayed.log()
+    );
+    assert_eq!(
+        delayed.log_events("daemon.stopped").len(),
+        1,
+        "关闭序列必须已经走完：日志={}",
+        delayed.log()
+    );
+    assert!(
+        delayed.log_events("daemon.drain_timeout").is_empty(),
+        "关闭请求者不得进入排空等待：日志={}",
+        delayed.log()
+    );
+    assert!(
+        delayed
+            .log_events("local_admin.connection_closed")
+            .iter()
+            .any(|event| event["reason"] == "shutdown_requested"),
+        "关闭请求自身的连接必须被识别并在写回响应后自行结束（而不是等对端 EOF）：日志={}",
+        delayed.log()
+    );
+    requester.close();
 }
 
 /// R12/R13/R14：`daemon.stop` 先回答 `accepted`，随后按顺序关闭；关闭期间的在途连接得到

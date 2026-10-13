@@ -27,7 +27,9 @@ pub mod platform;
 
 pub use attachment::{FacadeAttachmentId, FacadeAttachmentRegistry};
 pub use audit::{AuditHook, AuthorizationDenied, DeniedReason, LoggingAuditHook};
-pub use connection::{CloseReason, LocalConnectionHandlers, TransportError, serve_connection};
+pub use connection::{
+    CloseReason, ConnectionShutdown, LocalConnectionHandlers, TransportError, serve_connection,
+};
 pub use endpoint::{
     EndpointError, InstanceId, InvalidInstanceId, LocalEndpointConfig, UnsafePathKind,
     named_pipe_path, unix_endpoint_directory, unix_socket_path, user_identity_hash,

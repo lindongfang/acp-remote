@@ -19,6 +19,12 @@
 //! 克隆还在时 `Arc::try_unwrap` 会失败，`Composition::close` 会报 `StoreStillShared`）→ 停止 Agent →
 //! 刷新存储（`wal_checkpoint(TRUNCATE)`）→ 清理 endpoint 残留与运行记录 → 释放单实例锁。
 //!
+//! 排空**不计发出该 `daemon.stop` 的那条连接**：它的语义是「请求关闭」而不是「正在进行业务」。识别点是
+//! [`ShuttingDownGate`]——它按方法判定「这是关闭请求」，并把标记写进该连接自己的 [`ConnectionShutdown`]；
+//! 连接因此在写回 `accepted` 响应后自行结束，排空不为它等待对端。其余在途连接仍照旧按宽限等待（宽限耗尽
+//! 仍未结束者被中止并留下 `daemon.drain_timeout`）。否则排空时长会取决于该客户端进程何时被调度，而不是
+//! 取决于服务端有多少在途工作。
+//!
 //! 收尾由 [`ShutdownCleanup`] 持有：**无论前面的步骤成功、失败还是提前返回**，清理都会执行，且单实例锁
 //! 一定在记录删除之后才释放（否则外部会看到「锁可获取但运行记录仍在」的陈旧记录窗口）。`daemon.stop`
 //! 在本序列**开始**时返回 `{accepted: true}`，因此序列的第一步保留了在途连接的排空窗口（见
@@ -37,9 +43,9 @@ use acp_core::ports::{AttachmentStore as _, SessionQuery};
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
 use server::local_admin::{
-    AdminError, AdminRequest, AdminResponse, DaemonAgent, DaemonControl, DaemonCounts,
-    DaemonStatus, LocalAdminDeps, LocalAdminHandler, LocalAdminRouter, LocalErrorCode,
-    PairingSessions,
+    AdminError, AdminOutcome, AdminRequest, AdminResponse, DaemonAgent, DaemonControl,
+    DaemonCounts, DaemonStatus, LocalAdminDeps, LocalAdminHandler, LocalAdminRouter,
+    LocalErrorCode, Method, PairingSessions,
 };
 use server::node_link::{
     CLAIM_PATH, CatalogRoute, CommandRoute, NodeLinkConfig, NodeLinkConn, PairingHttp,
@@ -55,8 +61,8 @@ use server::sync::pairing::{
 };
 use server::sync::subscribe::{OwnerReachability, SubscribeRoute};
 use server::transport::local::{
-    AuditHook, EndpointError, InstanceId, LocalConnectionHandlers, LocalEndpoint,
-    LocalEndpointConfig, LocalStream, serve_connection,
+    AuditHook, ConnectionShutdown, EndpointError, InstanceId, LocalConnectionHandlers,
+    LocalEndpoint, LocalEndpointConfig, LocalStream, serve_connection,
 };
 use server::transport::net::{NetConfig, NetError, NetListener, RouteError, Shutdown};
 use tokio::sync::{Notify, mpsc};
@@ -82,9 +88,10 @@ const ORPHAN_SWEEP_LIMIT: u32 = 256;
 /// 关闭序列里排空在途连接的最小窗口（毫秒）。
 ///
 /// 规格要求 `daemon.stop` **先**返回 `{accepted: true}`（§5.2），而响应由连接任务在 `stop` 返回之后才
-/// 写回。`graceMs = 0` 会让「不等待任何在途工作」与「先回响应」互相冲突，因此这里保留一个很小的下限，
-/// 只用于把已经进入响应写出路径的那一条连接放完；其余在途工作仍按 `graceMs` 处理。实际窗口记在日志里
-/// （`event = "daemon.drain"`），不静默。
+/// 写回。`graceMs = 0` 会把「不等待任何在途工作」与「已接受的请求仍要落地」压到同一拍上，因此这里保留
+/// 一个很小的下限：关闭请求自身那条连接虽然有写出后自行结束的保证（[`ConnectionShutdown`]），它在结束
+/// 前仍属于排空集合，这个下限就是给「它以及同一预算内的网络接入面收尾」留出的余地。其余在途工作仍按
+/// `graceMs` 处理。实际窗口记在日志里（`event = "daemon.drain"`），不静默。
 const MIN_DRAIN_MS: u64 = 200;
 
 /// `accept` 连续失败时的退避（避免在 endpoint 暂时不可用时热循环；F3 修正后失败可重试）。
@@ -330,9 +337,16 @@ impl Default for ShutdownSignal {
 /// 关闭期门闸：关闭序列开始后，任何**新**请求都以 `local.unavailable` 失败且不产生状态变更（R14）。
 ///
 /// 已建立的连接在排空窗口内仍被服务（`daemon.stop` 的响应要写回），但它们的后续请求都会被这里拦下。
+///
+/// 它同时是**关闭请求者的识别点**：「哪条连接发出了 `daemon.stop`」在这里判定，判定的结果写进本连接的
+/// 标记（[`ConnectionShutdown`]），连接据此在写回 `accepted` 响应后自行结束。关闭序列因此不必（也不能）
+/// 按「谁先关/谁最后关」猜：发出关闭请求的那条连接不进入排空集合，排空时长不再取决于该客户端进程何时
+/// 被调度（`daemon-lifecycle` 规格的「关闭时的连接排空」）。
 struct ShuttingDownGate {
     inner: Arc<dyn LocalAdminHandler>,
     shutdown: Arc<ShutdownSignal>,
+    /// 本连接的关闭请求标记（每条连接一份，与 `serve_connection` 看到的是同一个）。
+    connection: Arc<ConnectionShutdown>,
 }
 
 #[async_trait::async_trait]
@@ -348,7 +362,15 @@ impl LocalAdminHandler for ShuttingDownGate {
                 AdminError::new(LocalErrorCode::Unavailable, "daemon is shutting down"),
             );
         }
-        self.inner.handle(request).await
+        let closing = request.method() == Method::DaemonStop;
+        let response = self.inner.handle(request).await;
+        // 只有**被接受**的关闭请求才标记本连接（`accepted: true`）：参数非法等失败不启动关闭序列，那条
+        // 连接照旧是一条普通的管理连接。置位与响应写回同属一条连接任务的先后两步——置位必然发生在
+        // `serve_connection` 看到标记之前，因此不构成竞态。
+        if closing && matches!(response.outcome(), AdminOutcome::Success { .. }) {
+            self.connection.request();
+        }
+        response
     }
 }
 
@@ -1382,10 +1404,9 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
             Arc::new(net_ingress.connection_closer()),
         )),
     });
-    let handlers = Arc::new(LocalConnectionHandlers::new(Arc::new(ShuttingDownGate {
-        inner: Arc::new(router),
-        shutdown: Arc::clone(&shutdown),
-    })));
+    // 共享的管理处理器（router）。**每条连接**的处理器由 `accept_loop` 按连接装配：关闭请求标记
+    // （[`ConnectionShutdown`]）必须与 `serve_connection` 看到的是同一个，因此它不能在这里跨连接复用。
+    let admin: Arc<dyn LocalAdminHandler> = Arc::new(router);
 
     let mut tasks = OwnedTasks::new();
     spawn_maintenance(&mut tasks, &composition, Arc::clone(&shutdown));
@@ -1411,10 +1432,10 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
         "Daemon 已就绪：本地管理通道与网络接入面开始接受连接"
     );
 
-    let outcome = accept_loop(endpoint, Arc::clone(&handlers), &shutdown).await;
+    let outcome = accept_loop(endpoint, admin, &shutdown).await;
     // 连接处理器持有 router（含 `Arc<UseCases>` 与审计端口）：必须在 `Composition::close` 之前释放，
-    // 否则存储仍被共享，检查点会被上报为 `StoreStillShared` 而不是静默跳过。
-    drop(handlers);
+    // 否则存储仍被共享，检查点会被上报为 `StoreStillShared` 而不是静默跳过。`accept_loop` 返回时已释放
+    // 它持有的处理器引用，各连接任务在排空（或中止）时释放各自的。
     let grace_ms = shutdown
         .grace_ms()
         .unwrap_or(composition.config().shutdown_grace_ms);
@@ -1441,7 +1462,8 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
 
 /// 接受循环的产物。
 struct AcceptOutcome {
-    /// 已建立的连接任务（由关闭序列排空）。
+    /// 已建立的连接任务（由关闭序列排空）。发出关闭请求的那条连接写出响应后即自行结束，因此它不会让
+    /// 排空等在对端上。
     connections: JoinSet<()>,
 }
 
@@ -1456,7 +1478,7 @@ struct AcceptOutcome {
 /// 补建/失败语义仍由循环决定（它在接受任务之外），因此退避、计数与日志不会因为这条通道而变。
 async fn accept_loop(
     endpoint: LocalEndpoint,
-    handlers: Arc<LocalConnectionHandlers>,
+    admin: Arc<dyn LocalAdminHandler>,
     shutdown: &Arc<ShutdownSignal>,
 ) -> AcceptOutcome {
     let mut connections: JoinSet<()> = JoinSet::new();
@@ -1488,7 +1510,17 @@ async fn accept_loop(
                 None => break,
                 Some(Ok(stream)) => {
                     consecutive_failures = 0;
-                    let handlers = Arc::clone(&handlers);
+                    // 每条连接一份处理器：关闭请求标记（`ConnectionShutdown`）由管理面置位、由
+                    // `serve_connection` 读取，两者必须看到同一个，因此在这里成对创建。
+                    let connection = Arc::new(ConnectionShutdown::new());
+                    let handlers = Arc::new(LocalConnectionHandlers::with_shutdown(
+                        Arc::new(ShuttingDownGate {
+                            inner: Arc::clone(&admin),
+                            shutdown: Arc::clone(shutdown),
+                            connection: Arc::clone(&connection),
+                        }),
+                        connection,
+                    ));
                     connections.spawn(async move {
                         match serve_connection(stream, handlers).await {
                             Ok(close) => tracing::debug!(
@@ -1554,7 +1586,8 @@ async fn close(
     net_ingress.trigger_shutdown();
     tracing::info!(event = "daemon.ingress_stopped", "已停止接受新连接");
 
-    // 排空在途连接：`daemon.stop` 的响应此刻仍在写出路径上，必须给它机会落地。
+    // 排空在途连接：`daemon.stop` 的响应此刻仍在写出路径上（发出该请求的那条连接写出后即自行结束，
+    // 因此不为它等待对端）；其余在途连接必须在宽限内结束，否则被中止并记 `daemon.drain_timeout`。
     let drain_ms = deadline
         .saturating_duration_since(Instant::now())
         .as_millis();
@@ -1663,6 +1696,9 @@ impl Drop for ShutdownCleanup {
 }
 
 /// 排空在途连接：到 `deadline` 仍未结束的连接被中止（响应已无法送达，也不允许在连接之外继续持有语义）。
+///
+/// 发出该 `daemon.stop` 的那条连接不在这里被等待：它由 `serve_connection` 在写回响应后自行结束
+/// （[`ConnectionShutdown`]），因此不占用排空预算——否则排空时长会取决于该客户端进程何时被调度。
 async fn drain_connections(connections: &mut JoinSet<()>, deadline: Instant) {
     if connections.is_empty() {
         return;
@@ -1748,6 +1784,7 @@ mod tests {
         let gate = ShuttingDownGate {
             inner: Arc::new(PanicHandler),
             shutdown: Arc::clone(&shutdown),
+            connection: Arc::new(ConnectionShutdown::new()),
         };
         shutdown.request(None);
         let payload = serde_json::to_vec(&serde_json::json!({
