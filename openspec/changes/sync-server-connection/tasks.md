@@ -54,6 +54,8 @@
 - [ ] 5.5 实现请求边界与限流：只接受同源 `application/json`、请求体有上限、不用 Cookie/Basic Auth/query 承载凭据；claim 每 IP 10 次/分钟、status 每 pairingId 60 次/分钟，超限 429；计数以真实连接地址为准（不可信转发头不生效）；证明校验失败累计 5 次使配对失效。完成判据：单元测试覆盖「超限 429」「伪造转发头不绕过限流」「5 次失败后配对失效且不可认领」。
 - [ ] 5.6 敏感信息边界：确认 pairing secret、HMAC 输入与完整认证载荷不出现在日志、错误消息与测试快照中。完成判据：单元测试以固定 secret 驱动失败路径，断言生成的结构化日志与错误消息文本不含该 secret 的任何字面量。
 
+- [ ] 5.7 **（修复轮发现的既有口径差异，待裁决）** `expiresInMs` 的**参数校验层**允许 `1..=PAIRING_WINDOW_MS`（`crates/server/src/local_admin/params.rs:872-884`），而 `identity_auth::Authority::begin_pairing`（`crates/identity-auth/src/pairing.rs:38-47`）把两侧时间戳经 `transcript::unix_seconds`（`crates/identity-auth/src/transcript.rs:210-241`）**截断到整秒**后再要求 `expires > created && expires - created <= 300`。后果有两条：`expiresInMs=1` 稳定得到 `local.invalid_params`（两层口径不一致，客户端拿到的是「参数越界」而不是「窗口太小」）；`expiresInMs=1500` 会被**静默截成 1 秒窗口**（客户端要的比拿到的长）。完成判据：二选一 —— 或在参数校验层收窄到 `>= 1000` 并同步文档，或让状态机按毫秒比较（改动更大，涉及 transcript 的秒级口径）；两者都要有用例钉住所选口径，并说明「为什么亚秒窗口没有意义」。**背景**：由 WP5 的修复轮发现并上报 —— 它按纪律**没有**自行放宽生产校验，只把脚手架调到合法值。
+
 ## 6. 组合根接线（WP6）
 
 - [ ] 6.1 在 `crates/app/src/daemon.rs` 注册 `/sync/v1`（WS，subprotocol 常量）与两条 pairing POST（带默认安全响应头），并在 `crates/app/src/compose.rs` 装配 `server::sync` 所需的依赖。完成判据：`cargo test -p app` 中的监听级用例断言「`/sync/v1` 带 Sync subprotocol 升级成功」「带 Node Link subprotocol 升级被拒」「两条 pairing path 进入 Sync 逻辑，不再返回 404」。
