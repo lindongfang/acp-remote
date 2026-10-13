@@ -24,6 +24,7 @@
 //! | limits 只下调 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them` |
 //! | 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable`、`json_structure_limits_are_enforced_on_the_wire` |
 //! | 信封与 connectionSequence 校验 | `envelope_and_sequence_violations_are_rejected_without_closing`、`a_binary_frame_is_closed_with_4400` |
+//! | 每次消息级拒绝都推进入站期望序号 | `envelope_and_sequence_violations_are_rejected_without_closing`（未知 type / post_mvp / 形状错误）、`a_shape_invalid_envelope_that_consumed_the_sequence_does_not_strand_the_connection` |
 //! | 出站序号只在投递确认时消耗（`connectionSequence` 不得留缺口） | `a_rejected_delivery_does_not_consume_the_outbound_sequence` |
 //! | 认证收尾推进 `owned_node.last_connected_at`（§11.6 第 9 条） | `authentication_advances_the_node_last_connected_time` |
 //! | §2.5 准入闸门（10 次/分钟、同源在途握手配额） | `the_eleventh_authentication_attempt_from_one_address_is_rate_limited`、`the_fifth_in_flight_handshake_from_one_address_is_refused`、`authenticated_connections_do_not_hold_the_in_flight_handshake_quota` |
@@ -1780,8 +1781,10 @@ fn array_details(count: usize) -> Value {
 
 /// 已认证连接上的信封/序号/type 违规判定。
 ///
-/// 断言的两件事同等重要：（1）错误码与信封形状符合 §2.2/§14.1；（2）消息级拒绝**不关闭**连接——
-/// 每次拒绝后都跑一次 `link.ping`/`link.pong` 往返，且被拒绝的消息不推进入站序号。
+/// 断言的三件事同等重要：（1）错误码与信封形状符合 §2.2/§14.1；（2）消息级拒绝**不关闭**连接——
+/// 每次拒绝后都跑一次 `link.ping`/`link.pong` 往返；（3）入站序号记账只看「帧文本能不能读出本连接的
+/// 下一个序号」：读得出（形状错误、未知 type、post_mvp）就推进，读不出（非 JSON、连接字段不成对）就
+/// 不推进。因此每个段落之后的那次往返必须与「推不推进」一致——这正是回退修法时会变红的地方。
 #[tokio::test]
 async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     let harness = Harness::new().await;
@@ -1820,7 +1823,8 @@ async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     client.ping_round_trip(0x56).await;
 
     client.step("④ 只给 connectionId");
-    // ④ 只给 connectionId、不给 connectionSequence → schema_invalid（信封形状错）。
+    // ④ 只给 connectionId、不给 connectionSequence → schema_invalid（信封形状错）。成对的连接字段读不
+    //    出来，因此这条拒绝**不**推进序号：随后那条合法消息仍用同一个序号（对端没有为它消耗下一个）。
     let envelope = json!({
         "protocolVersion": 1,
         "type": "link.ping",
@@ -1835,13 +1839,16 @@ async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     client.ping_round_trip(0x58).await;
 
     client.step("⑤ 未知信封字段");
-    // ⑤ 未知信封字段 → schema_invalid（控制信封是 closed object）。
+    // ⑤ 未知信封字段 → schema_invalid（控制信封是 closed object）。信封里其余字段都合法，连接字段与序号
+    //    都读得出，因此这条拒绝照常推进入站期望序号（§2.2 的序号属于「对端发出的消息」，形状是否被接受
+    //    不影响它已被消耗）。与 ④ 的差别只在「读不读得出序号」：④ 缺 connectionSequence，这一条不缺。
     let mut envelope = client.envelope("link.ping", json!({"nonce": ping_nonce(0x59)}));
     envelope["surprise"] = json!(1);
     client.send_raw(envelope).await;
     client
         .expect_error("nodelink.protocol.schema_invalid")
         .await;
+    client.advance_after_accepted();
     client.ping_round_trip(0x5a).await;
 
     client.step("⑥ 未知 body 字段");
@@ -1906,6 +1913,81 @@ async fn envelope_and_sequence_violations_are_rejected_without_closing() {
     client.advance_after_accepted();
     client.ping_round_trip(0x7f).await;
 
+    harness.stop().await;
+}
+
+/// §2.2：**已知 `type` 但帧另有形状类错误**同样是消息级拒绝，那一次拒绝也照常推进入站期望序号——不推进
+/// 会让对端此后每条消息都被判 `nodelink.protocol.sequence_invalid`，连接退化成只出不进（收到 90 秒静默
+/// 超时为止）。三个段落各覆盖一类：未登记的信封字段（closed object）、缺 `messageId`（必需字段）、§2.5 的
+/// JSON 结构超限（判定在解析之前，但同样已经在 wire 上占用了对端的下一个序号）。
+///
+/// 与词表外 `type` 的段落（上面那个大用例的 ⑧）不同，这几条帧的 `type` 都在词表里，`Envelope::decode`
+/// 因 `deny_unknown_fields`/缺必需字段/结构超限失败，落在 `judge` 里 `Malformed` 一族与 `Structure` 的
+/// 兜底分支上，因此序号记账必须在那些分支也成立。必要性由每段末尾的合法消息证明：只回退对应分支的序号
+/// 推进时，它会被判 `sequence_invalid`（而不是 `link.pong`）而变红。
+#[tokio::test]
+async fn a_shape_invalid_envelope_that_consumed_the_sequence_does_not_strand_the_connection() {
+    let harness = Harness::new().await;
+    let _ = harness.approved_pairing().await;
+    let mut client = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
+
+    // ① 未登记的信封字段：连接字段与序号都正好是下一个，但信封是 closed object → schema_invalid。
+    client.step("信封多一个未登记字段");
+    let mut extra = client.envelope("link.ping", json!({"nonce": ping_nonce(0x61)}));
+    extra["unregisteredEnvelopeField"] = json!(true);
+    client.send_raw(extra).await;
+    client
+        .expect_error("nodelink.protocol.schema_invalid")
+        .await;
+
+    // ② 紧接着一条序号按对端计数器正常递增的合法消息：不得被判序号错误，且必须被正常处理
+    //    （`link.pong` 回填同一 nonce，由 `ping_round_trip` 自己断言）。
+    client.step("未登记字段之后序号正常递增的合法消息");
+    client.advance_after_accepted();
+    let _ = client.ping_round_trip(0x62).await;
+
+    // ③ 缺 `messageId`（§2.2 的必需字段）：同样是信封形状错误、同样不关连接。
+    client.step("缺 messageId");
+    let mut missing = client.envelope("link.ping", json!({"nonce": ping_nonce(0x63)}));
+    missing
+        .as_object_mut()
+        .expect("信封是 object")
+        .remove("messageId");
+    client.send_raw(missing).await;
+    client
+        .expect_error("nodelink.protocol.schema_invalid")
+        .await;
+
+    // ④ 同样紧接着一条序号正常递增的合法消息。
+    client.step("缺 messageId 之后序号正常递增的合法消息");
+    client.advance_after_accepted();
+    let _ = client.ping_round_trip(0x64).await;
+
+    // ⑤ §2.5 的结构超限也是同一族的消息级拒绝（`schema_invalid`、不关连接）。帧的其余部分全部合法：用
+    //    `link.error` 的开放 `details` 承载越界结构（与 `json_structure_limits_are_enforced_on_the_wire`
+    //    同口径），因此这条拒绝只可能来自结构上限——深度若不到 65，这帧会被正常受理、根本不会回
+    //    `link.error`。判定先于解析并不改变「这帧占用了对端的下一个序号」，因此同样推进。
+    client.step("JSON 嵌套深度 65");
+    let mut deep = client.envelope("link.error", json!({}));
+    deep["body"] = json!({
+        "code": "nodelink.protocol.invalid_json",
+        "message": "x",
+        "retryable": false,
+        "correlationId": null,
+        "details": nested_details(MAX_NESTING_DEPTH - DEPTH_OUTSIDE_DETAILS + 1),
+    });
+    client.send_raw(deep).await;
+    client
+        .expect_error("nodelink.protocol.schema_invalid")
+        .await;
+
+    // ⑥ 同样紧接着一条序号正常递增的合法消息。
+    client.step("结构超限之后序号正常递增的合法消息");
+    client.advance_after_accepted();
+    let _ = client.ping_round_trip(0x66).await;
+
+    assert_eq!(harness.conn.registry().active(), 1, "连接必须保持可用");
     harness.stop().await;
 }
 

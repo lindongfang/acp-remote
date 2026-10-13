@@ -20,10 +20,19 @@
 //!   认证前收到只许认证后出现的业务消息（R38）也是 4401 关闭而不是「schema 错误」：连接阶段本身就不对，
 //!   只回一条可恢复的错误会让业务消息看起来「被接受但没生效」。
 //!
-//! 序号记账与 type 无关（§2.2）：`connectionSequence` 属于**对端发出的消息**，本机接不接受它的
-//! type/body 不影响对端已经用掉的序号。因此「信封结构、JSON、连接字段都合法且序号正好是下一个」时，
-//! 无论 type 是 post_mvp 族还是完全未知，**两条路径都推进期望序号**（统一口径：
-//! 一个显式拒绝不得让连接之后全部错位）。
+//! 序号记账与 type/形状无关（§2.2）：`connectionSequence` 属于**对端发出的消息**，本机接不接受它的
+//! type/body/信封形状都不影响对端已经用掉的序号。因此只要帧文本能读出「与本连接相同的 `connectionId`」
+//! 与「规范十进制、不超过 v1 上界、正好等于期望值的 `connectionSequence`」，**每一条消息级拒绝都推进
+//! 期望序号**（[`sequence_after_rejection`]）：无论拒绝码是 `type_unsupported`、`schema_invalid` 还是
+//! `invalid_json`，一个显式拒绝不得让连接之后全部错位——否则对端其后每条消息都被判
+//! `nodelink.protocol.sequence_invalid` 且永不推进，连接退化成只出不进的哑管道
+//! （`openspec/changes/node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的
+//! 「每次消息级拒绝都推进入站期望序号」）。
+//!
+//! 不记账的只有**读不出该序号**的帧：文本不是合法 JSON、连接字段不成对或缺席、`connectionId` 属于别的
+//! 连接、序号不是规范十进制/超过 v1 上界/不等于期望值——这些帧不能证明对端消耗了它的下一个序号。
+//! 「读得出」由 [`sequence_after_rejection`] 自己判定，因此两个分支（形状错误与词表外 `type`）的记账口径
+//! 逐条一致；关闭连接的判定（版本不符等）不参与记账——连接不会再有后续消息。
 
 use node_link_protocol::common::{DecimalString, Nullable, RawObject, Uuid};
 use node_link_protocol::envelope::{AuthState, Envelope, EnvelopeError, MessageType, Phase};
@@ -76,13 +85,15 @@ pub(crate) fn judge(
     let envelope = match Envelope::decode(text) {
         Ok(envelope) => envelope,
         // §2.5 的三个固定 JSON 结构上限：与信封形状失败同类，消息级拒绝（不属于改 type 的语义错误）。
+        // 序号记账与信封形状失败同口径：结构超限的帧同样可能带着「本连接的下一个序号」到达 wire，
+        // 判定先于解析并不改变那个序号已被对端用掉的事实；读不出序号时该函数自己返回 `None`。
         Err(EnvelopeError::Structure(_)) => {
             return (
                 Inbound::Rejected {
                     code: ErrorCode::ProtocolSchemaInvalid,
                     message: STRUCTURE_MESSAGE,
                 },
-                None,
+                sequence_after_rejection(text, phase, expected_sequence, connection_id),
             );
         }
         Err(EnvelopeError::UnsupportedVersion { .. }) => {
@@ -97,22 +108,26 @@ pub(crate) fn judge(
         }
         // 未知 type 与被篡改的 type 都收敛到同一类（不泄露「存在但未实现」与「完全未知」的差异）。
         Err(EnvelopeError::UnknownType { .. }) => {
-            // 序号记账与 post_mvp 同口径：信封（含连接字段）能解析、序号正好是下一个时推期望序号。
+            // 序号记账与形状错误同口径：帧文本能读出「本连接的 connectionId + 正好是下一个的序号」时推
+            // 期望序号（词表外取值经 `MessageType::from_str` 折成 `UnknownType`，与 Sync 侧走 serde 的
+            // `Malformed` 是同一判定的两个入口）。
             return (
                 Inbound::Rejected {
                     code: ErrorCode::ProtocolTypeUnsupported,
                     message: TYPE_MESSAGE,
                 },
-                unknown_type_next_sequence(text, phase, expected_sequence, connection_id),
+                sequence_after_rejection(text, phase, expected_sequence, connection_id),
             );
         }
+        // `Envelope::decode` 不产出这一支（`Wire.body` 是 `RawValue`，body 非 JSON 时整帧 serde 直接报
+        // `Malformed`）；`BodyNotJson` 只来自 `encode_body` 的装配。两条入口同口径记账，以免它们分叉。
         Err(EnvelopeError::BodyNotJson(_)) => {
             return (
                 Inbound::Rejected {
                     code: ErrorCode::ProtocolInvalidJson,
                     message: "the message body is not valid JSON",
                 },
-                None,
+                sequence_after_rejection(text, phase, expected_sequence, connection_id),
             );
         }
         Err(
@@ -132,7 +147,16 @@ pub(crate) fn judge(
             } else {
                 (ErrorCode::ProtocolSchemaInvalid, SCHEMA_MESSAGE)
             };
-            return (Inbound::Rejected { code, message }, None);
+            // 序号记账对这一族逐条一致：`ConnectionFieldsForbidden`（帧自称「只许认证前出现」的 type，
+            // 却带着连接字段）与「已知 type、信封另有形状错误」（未登记的信封字段、缺 `messageId`/`body`
+            // 等）的连接字段都可读，序号正好是期望值时照常推进——那一帧已经在 wire 上占用了对端的下一个
+            // 序号（§2.2 的序号属于对端已发出的消息），不推进会让连接退化成只出不进。`Mismatch`/`Required`
+            // （连接字段不成对或缺席）与文本解不出 JSON 的情形，[`sequence_after_rejection`] 自己返回
+            // `None`——那些帧读不出该序号。
+            return (
+                Inbound::Rejected { code, message },
+                sequence_after_rejection(text, phase, expected_sequence, connection_id),
+            );
         }
     };
 
@@ -246,14 +270,22 @@ pub(crate) fn judge(
     }
 }
 
-/// `judge` 在未知 `type` 时的序号记账（§2.2 的「序号属于对端发出的消息」）。
+/// [`judge`] 在**解码失败**的消息级拒绝路径上的序号记账（§2.2 的「序号属于对端发出的消息」）。
 ///
-/// `Envelope::decode` 报 `UnknownType` 时已经验证了：§2.5 的结构上限、JSON 语法、信封字段形状
-/// （`protocolVersion`/`messageId`/`body`）全部成立，只有 `type` 不在词表里；因此这里可以再读一次帧，
-/// 按信封形状取连接字段。记账条件与已知 type 的路径逐条一致（认证后、`connectionId` 与本次连接相同、
-/// `connectionSequence` 是规范十进制串、不超过 v1 上界、正好是期望值）：任一不满足就不记账——对端
-/// 没有为这条消息消耗它的下一个序号。
-fn unknown_type_next_sequence(
+/// 这里**没有**「信封形状已经验证过」这个前提：`Envelope::decode` 的失败分支覆盖 `Structure`、
+/// `UnknownType`、`BodyNotJson`、`Malformed` 一族与连接字段三类，失败路径上拿不到已解析的信封，因此帧
+/// 文本必须重新解析。记账只看四件事：阶段是认证后、`connectionId` 与本次连接相同、`connectionSequence`
+/// 是规范十进制串且不超过 v1 上界、正好等于期望值。任一不满足就不记账——文本不是合法 JSON、连接字段不
+/// 成对或缺席、`connectionId` 属于别的连接、序号不是规范十进制/超过 v1 上界/不等于期望值都落在这一类：
+/// 对端没有为这条消息消耗它的下一个序号。
+///
+/// 条件命中时，无论拒绝码是 `type_unsupported`、`schema_invalid` 还是 `invalid_json`，都必须推进：帧已经
+/// 在 wire 上占用了对端的下一个序号
+/// （`openspec/changes/node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的
+/// 「每次消息级拒绝都推进入站期望序号」），不推进会让对端其后每条消息都被判
+/// `nodelink.protocol.sequence_invalid` 且永不推进，连接退化成只出不进的哑管道。已知 type 的路径
+/// （`POST_MVP` 与路由拒绝）用同一口径，只是那时序号已经由 `Envelope` 解出、不需要重读帧。
+fn sequence_after_rejection(
     text: &str,
     phase: Phase,
     expected_sequence: Option<u64>,
