@@ -14,12 +14,12 @@ use sqlx::{Executor, Sqlite};
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v6：`owned_session` 末尾新增目录归属列
-/// `workspace_alias`；v5 追加的 `agent_session_id`/`workspace_cwd` 保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 6;
-/// §7.2：`meta.owned_schema_version` 的已知版本。
-pub const OWNED_SCHEMA_VERSION: i64 = 6;
-/// §7.2：`meta.imported_schema_version` 的已知版本（v5/v6 都只动 owned 家族的 `owned_session`）。
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v7：`owned_event.origin_kind` 的 CHECK 从四值扩到五值
+/// ——新增 `node`；v6 追加的目录归属列 `workspace_alias` 与 v5 的两列保持不变）。
+pub const FILE_FORMAT_VERSION: i64 = 7;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v7 只动 `owned_event` 的 CHECK）。
+pub const OWNED_SCHEMA_VERSION: i64 = 7;
+/// §7.2：`meta.imported_schema_version` 的已知版本（v5/v6/v7 都只动 owned 家族）。
 pub const IMPORTED_SCHEMA_VERSION: i64 = 3;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS owned_event (
   event_type       TEXT NOT NULL,
   kind             TEXT NOT NULL CHECK (kind IN ('state','delta','final_message','structured','interaction','summary')),
   policy           TEXT NOT NULL CHECK (policy IN ('durable','short_term')),
-  origin_kind      TEXT NOT NULL CHECK (origin_kind IN ('agent','device','daemon','local_cli')),
+  origin_kind      TEXT NOT NULL CHECK (origin_kind IN ('agent','device','daemon','local_cli','node')),
   causation        TEXT,
   payload_json     TEXT NOT NULL,
   payload_digest   TEXT NOT NULL,
@@ -653,6 +653,103 @@ const V6_UPGRADE_OWNED: &str = r#"
 ALTER TABLE owned_session ADD COLUMN workspace_alias TEXT;
 "#;
 
+/// §7.2 的 v6 → v7 升级：`owned_event.origin_kind` 的 CHECK 从四值扩到五值（新增 `node`）。
+///
+/// SQLite 不能修改既有 CHECK，因此本段走 §11.8 第 7 条的 **12-step 表重建**（新建表 → 按列拷贝**全部
+/// 行（含 `global_sequence`）** → `DROP` 旧表 → `RENAME` → 重建索引）。列集合与列顺序**逐字不变**，
+/// 只有 `origin_kind` 的 CHECK 多一个 `'node'`。
+///
+/// **为什么要重建子表**：`owned_interaction.request_event` 是 `owned_event` 的子外键（`NO ACTION`），
+/// 而 `foreign_keys = ON` 时 `DROP TABLE` 会先做隐式 DELETE 并检查该外键——子表有行就直接报
+/// `FOREIGN KEY constraint failed`（实测）。官方 12-step 流程为此要求先关外键，但 `PRAGMA foreign_keys`
+/// 在事务内是 no-op，而本迁移是**单事务、失败整体回滚**（§7.2）。因此按 v2 的 `imported_import` 同款手法
+/// 把冲突挪开：先把子表行搬进一张**无外键**的过渡表并 `DROP` 子表（它是叶子，删除永远安全），再重建父表，
+/// 最后把子表按**规范 DDL** 建回并回填行。过渡表在父表重建期间充当子表，因此两端都不会看到悬空引用；
+/// `owned_interaction` 建回时用的就是 §7.3 的规范文本（含全部 CHECK 与那条外键），升级库与新建库因此
+/// 逐列同形。
+///
+/// 事件表的 `AUTOINCREMENT` 序列（`sqlite_sequence` 的 `owned_event` 行）由 `migrate()` 在重建前后单独
+/// 回填——`DROP TABLE` 会带走那一行，而只按现存行的 `max(global_sequence)` 回填会让「尾部行已被保留期
+/// 清理」的库把 `global_sequence` 压回去（§7.2 的「不得重新编号」）。
+const V7_UPGRADE_OWNED: &str = r#"
+CREATE TABLE owned_event_v7 (
+  global_sequence  INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id       TEXT REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  session_sequence INTEGER,
+  origin_epoch     TEXT,
+  origin_sequence  INTEGER,
+  event_id         TEXT NOT NULL UNIQUE,
+  turn_id          TEXT REFERENCES owned_turn(turn_id),
+  event_type       TEXT NOT NULL,
+  kind             TEXT NOT NULL CHECK (kind IN ('state','delta','final_message','structured','interaction','summary')),
+  policy           TEXT NOT NULL CHECK (policy IN ('durable','short_term')),
+  origin_kind      TEXT NOT NULL CHECK (origin_kind IN ('agent','device','daemon','local_cli','node')),
+  causation        TEXT,
+  payload_json     TEXT NOT NULL,
+  payload_digest   TEXT NOT NULL,
+  acp_media_type   TEXT,
+  acp_raw_json     TEXT,
+  acp_byte_length  INTEGER,
+  acp_sha256       TEXT,
+  acp_raw_unavailable_reason TEXT CHECK (acp_raw_unavailable_reason IN ('size_limit','retention_expired','storage_failure')),
+  created_at       TEXT NOT NULL,
+  expires_at       TEXT,
+  compacted_into   INTEGER,
+  CHECK (session_id IS NOT NULL OR session_sequence IS NULL),
+  CHECK ((session_id IS NULL) = (origin_epoch IS NULL)),
+  CHECK ((session_id IS NULL) = (origin_sequence IS NULL)),
+  CHECK (acp_raw_unavailable_reason IS NOT NULL
+         OR (acp_raw_json IS NULL) = (acp_sha256 IS NULL)),
+  CHECK (acp_raw_unavailable_reason IS NULL OR acp_raw_json IS NULL),
+  CHECK (acp_raw_json IS NOT NULL OR acp_raw_unavailable_reason IS NOT NULL OR acp_sha256 IS NULL)
+) STRICT;
+
+INSERT INTO owned_event_v7 (global_sequence, session_id, session_sequence, origin_epoch, origin_sequence,
+                            event_id, turn_id, event_type, kind, policy, origin_kind, causation,
+                            payload_json, payload_digest, acp_media_type, acp_raw_json, acp_byte_length,
+                            acp_sha256, acp_raw_unavailable_reason, created_at, expires_at, compacted_into)
+  SELECT global_sequence, session_id, session_sequence, origin_epoch, origin_sequence,
+         event_id, turn_id, event_type, kind, policy, origin_kind, causation,
+         payload_json, payload_digest, acp_media_type, acp_raw_json, acp_byte_length,
+         acp_sha256, acp_raw_unavailable_reason, created_at, expires_at, compacted_into
+  FROM owned_event;
+
+CREATE TABLE owned_interaction_stage AS SELECT * FROM owned_interaction;
+DROP TABLE owned_interaction;
+
+DROP TABLE owned_event;
+ALTER TABLE owned_event_v7 RENAME TO owned_event;
+CREATE UNIQUE INDEX IF NOT EXISTS owned_event_session ON owned_event(session_id, session_sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS owned_event_origin ON owned_event(session_id, origin_epoch, origin_sequence) WHERE session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS owned_event_expiry ON owned_event(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS owned_event_turn ON owned_event(session_id, turn_id, kind);
+
+CREATE TABLE IF NOT EXISTS owned_interaction (
+  interaction_id  TEXT PRIMARY KEY,
+  session_id      TEXT NOT NULL REFERENCES owned_session(session_id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL CHECK (kind IN ('permission','elicitation')),
+  request_event   INTEGER REFERENCES owned_event(global_sequence),
+  state           TEXT NOT NULL CHECK (state IN ('pending','resolved','expired')),
+  created_at      TEXT NOT NULL,
+  resolved_at     TEXT,
+  decision_option_id TEXT,
+  decision_kind   TEXT CHECK (decision_kind IN ('allow_once','allow_always','reject_once','reject_always')),
+  elicitation_action TEXT CHECK (elicitation_action IN ('submit','decline','cancel')),
+  elicitation_values_json TEXT,
+  resolved_by_kind TEXT, resolved_by_id TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS owned_interaction_pending ON owned_interaction(session_id, state) WHERE state = 'pending';
+
+INSERT INTO owned_interaction (interaction_id, session_id, kind, request_event, state, created_at,
+                               resolved_at, decision_option_id, decision_kind, elicitation_action,
+                               elicitation_values_json, resolved_by_kind, resolved_by_id)
+  SELECT interaction_id, session_id, kind, request_event, state, created_at,
+         resolved_at, decision_option_id, decision_kind, elicitation_action,
+         elicitation_values_json, resolved_by_kind, resolved_by_id
+  FROM owned_interaction_stage;
+DROP TABLE owned_interaction_stage;
+"#;
+
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
 ///
 /// 配置加载属 `app`；本结构只承载 `storage-sqlite` 需要知道的部分（`storage.flush_interval_ms` 不在
@@ -962,8 +1059,8 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 ///
 /// 事务内每段升级另有自己的版本守卫（`file_version < N`，见函数体），因此老库连续升级、而「已经比某段
 /// 新」的库不会重跑那一段的 12-step 重建。v4 段另外只作用于**升级前就存在**的 `owned_node`（v1 库没有
-/// 这张表，它由 DDL 常量直接建成当前形状）；v5/v6 两段的追加对象 `owned_session` 是「升级库 vs 新建库」的
-/// 判据本身，走升级分支即必然已存在。
+/// 这张表，它由 DDL 常量直接建成当前形状）；v5/v6 两段的追加对象 `owned_session` 与 v7 段的重建对象
+/// `owned_event` 是「升级库 vs 新建库」的判据本身，走升级分支即必然已存在（v1 起每代都有这两张表）。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
     let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
 
@@ -1004,11 +1101,11 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
     }
 
     if !new_database && file_version < FILE_FORMAT_VERSION {
-        // v1 → v2 → v3 → v4 → v5 → v6（§7.2 的连续升级）：两张审计表的 CHECK 扩宽与 `imported_import` 的
-        // 拆分必须在同一个事务里完成，否则会留下「新建库可写新审计动作、升级库不可写」的不一致状态
-        // （§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此 v2/v3 两段都是 12-step 表重建，且把
-        // 全部行（含 `audit_id`）一起搬过去；v4 段只往 `owned_node` 加列、v5/v6 两段只往
-        // `owned_session` 加列（都不重建）。
+        // v1 → v2 → v3 → v4 → v5 → v6 → v7（§7.2 的连续升级）：两张审计表的 CHECK 扩宽、`imported_import`
+        // 的拆分与 `owned_event.origin_kind` 的扩宽必须在同一个事务里完成，否则会留下「新建库可写新取值、
+        // 升级库不可写」的不一致状态（§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此 v2/v3 两段与 v7 段
+        // 都是 12-step 表重建，且把全部行（含 `audit_id`/`global_sequence`）一起搬过去；v4 段只往
+        // `owned_node` 加列、v5/v6 两段只往 `owned_session` 加列（都不重建）。
         //
         // 每段都有自己的版本守卫（`file_version < N`）：升级判据是 `file_version < FILE_FORMAT_VERSION`，
         // 不守卫的段会在「文件格式已经比该段新、但仍低于最新版」时重复执行那些 12-step 重建——例如
@@ -1016,7 +1113,7 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         //
         // 序列在**全部**重建之前取一次、之后回填一次：每段重建的 `DROP TABLE` 都会带走
         // `sqlite_sequence` 里的那一行，分段回填会让前一段的回填结果被后一段再次丢掉。
-        let sequences = audit_sequences(&mut *tx).await?;
+        let sequences = autoincrement_sequences(&mut *tx).await?;
         if file_version < 2 {
             sqlx::raw_sql(V2_UPGRADE_OWNED).execute(&mut *tx).await?;
             sqlx::raw_sql(V2_UPGRADE_IMPORTED).execute(&mut *tx).await?;
@@ -1034,7 +1131,10 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         if file_version < 6 {
             sqlx::raw_sql(V6_UPGRADE_OWNED).execute(&mut *tx).await?;
         }
-        restore_audit_sequences(&mut tx, &sequences).await?;
+        if file_version < 7 {
+            sqlx::raw_sql(V7_UPGRADE_OWNED).execute(&mut *tx).await?;
+        }
+        restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;
     }
 
@@ -1102,17 +1202,20 @@ where
     Ok(count > 0)
 }
 
-/// §7.2：两张审计表的 `sqlite_sequence` 现值（`(表名, seq)`）。
+/// §7.2：重建前需要保留的 `sqlite_sequence` 现值（`(表名, seq)`）。
 ///
-/// 重建会把那一行随 `DROP TABLE` 一起删掉；只按现存行的 `max(audit_id)` 回填会让「尾部行已被保留期
-/// 清理」的库序列回退——审计有 365 天 TTL，这个场景是常态。两张审计表在 v1/v2 都是
-/// `AUTOINCREMENT`，因此 `sqlite_sequence` 一定存在。
-async fn audit_sequences<'e, E>(executor: E) -> Result<Vec<(String, i64)>, StorageError>
+/// 重建会把那一行随 `DROP TABLE` 一起删掉；只按现存行的 `max(…)` 回填会让「尾部行已被保留期清理」的库
+/// 序列回退——审计有 365 天 TTL、事件也有保留窗口（§7.5），这个场景是常态。三张表都是
+/// `AUTOINCREMENT`（`owned_audit`/`imported_audit` 的 `audit_id`、`owned_event` 的 `global_sequence`），
+/// 因此 `sqlite_sequence` 一定存在，且**都**必须原样保留：`global_sequence` 是跨节点排序与 cursor 的
+/// 基准（`NODE_LINK_PROTOCOL.md` §7），回退等于重复编号。
+async fn autoincrement_sequences<'e, E>(executor: E) -> Result<Vec<(String, i64)>, StorageError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
     let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT name, seq FROM sqlite_sequence WHERE name IN ('owned_audit','imported_audit')",
+        "SELECT name, seq FROM sqlite_sequence \
+         WHERE name IN ('owned_audit','imported_audit','owned_event')",
     )
     .fetch_all(executor)
     .await?;
@@ -1123,7 +1226,7 @@ where
 ///
 /// `sqlite_sequence` 上没有唯一索引，因此不能用 `ON CONFLICT`：先按值更新既有的更小行，再在缺行
 /// （重建后表为空）时插入。
-async fn restore_audit_sequences(
+async fn restore_sequences(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     sequences: &[(String, i64)],
 ) -> Result<(), StorageError> {
