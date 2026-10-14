@@ -142,6 +142,10 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check bans licenses sources
+          # 同 `advisories` job：不传这个入参时 action 会读 `rust-toolchain.toml`（1.98.1）而容器只有
+          # 1.85.0，报 `override toolchain ... is not installed`。这三项只解析 `Cargo.lock`，
+          # 与工具链版本无关；单一版本来源仍是 `rust-toolchain.toml`。
+          rust-version: "1.85.0"
 
       - uses: actions/setup-node@v7
         with:
@@ -175,6 +179,12 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories
+          # 显式指定容器内的工具链，**不是**第二份版本来源：action 的镜像只预装 1.85.0，
+          # 而不传这个入参时它会去读仓库的 `rust-toolchain.toml`（当前 1.98.1）并报
+          # `override toolchain ... is not installed`。判 advisory 只解析 `Cargo.lock`
+          # 与 advisory-db，与编译工具链版本无关，因此这里取镜像已有版本即可。
+          # 真正的单一版本来源仍是 `rust-toolchain.toml`（`AGENTS.md` §10）。
+          rust-version: "1.85.0"
 
   secrets:
     name: 密钥扫描

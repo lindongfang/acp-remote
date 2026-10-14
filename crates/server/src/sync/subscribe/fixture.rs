@@ -24,14 +24,15 @@ use std::sync::{Arc, Mutex};
 
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
-    AgentProfile, CommittedEvent, DeviceRecord, DeviceState, EventId, EventPayload, EventType,
-    GlobalCursor, LocalCursor, PortError, RemoteSessionRef, Sequence, ServerEpoch, SessionId,
-    SessionRecoveryRecord, SessionSummary, Timestamp, Version,
+    AgentProfile, CommittedEvent, DeviceRecord, DeviceState, EventId,
+    EventOrigin as CoreEventOrigin, EventPayload, EventType, GlobalCursor, LocalCursor, PortError,
+    RemoteSessionRef, Sequence, ServerEpoch, SessionId, SessionRecoveryRecord, SessionSummary,
+    Timestamp, Version,
 };
 use acp_core::ports::{
     CommitOutcome, DeliveryIndexEntry, DropReport, ImportedSessionQuery, ImportedSessionRecord,
     OwnedCommit, ReadView, RemoteCommandRef, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    ResetReason, SessionQuery, SessionStore, StoreHealth,
+    ResetReason, SessionQuery, SessionStore, StoreHealth, SyncEventRecord,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use sync_protocol::common::Uuid;
@@ -133,6 +134,50 @@ pub(crate) fn committed_event(
     }
 }
 
+/// 按序号给一条合法 UUID 的 Sync 事件读面素材（`agent` 来源、无 causation）。
+///
+/// 事件 id 由序号派生（末段两位十进制，`…-a7744dfedbANN`，36 字符整），因此用例无需手写一叠 id
+/// 字面量；序号上限 99 由末段宽度决定。
+pub(crate) fn agent_event(index: u64) -> SyncEventRecord {
+    assert!(index < 100, "测试素材序号上限 99（UUID 末段宽度）");
+    sync_event(
+        &format!("da702ba1-f49f-4e16-a677-a7744dfedb{index:02}"),
+        index,
+        CoreEventOrigin::Agent,
+        None,
+        None,
+        None,
+    )
+}
+
+/// 一条 Sync 事件读面的素材：定位 + 正文 + `origin` 三个来源字段（`event` 帧的全部输入）。
+///
+/// 默认 `origin = agent`、无 causation、正文是一个单键 `view`（便于断言"发的是它自己那条"）。
+pub(crate) fn sync_event(
+    id: &str,
+    global: u64,
+    origin: CoreEventOrigin,
+    device_id: Option<&str>,
+    node_id: Option<&str>,
+    causation: Option<&str>,
+) -> SyncEventRecord {
+    SyncEventRecord {
+        event: committed_event(id, "turn.started", global, global),
+        payload: EventPayload::new(
+            acp_core::model::ViewJson::new(&format!(r#"{{"global":{global}}}"#))
+                .expect("测试 view 合法"),
+            None,
+        ),
+        origin_kind: origin,
+        origin_device_id: device_id
+            .map(|value| acp_core::model::DeviceId::new(value).expect("测试 device id")),
+        origin_node_id: node_id
+            .map(|value| acp_core::model::NodeId::new(value).expect("测试 node id")),
+        causation: causation
+            .map(|value| acp_core::model::RequestId::new(value).expect("测试 request id")),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // 存储替身
 // ---------------------------------------------------------------------------------------------
@@ -147,6 +192,13 @@ struct StoreState {
     window_low: Option<u64>,
     /// 每次 `replay` 的 `after` 实参（观测口）。
     replay_calls: Vec<Option<GlobalCursor>>,
+    /// Sync 事件读面的条目素材（`push_sync_event`）：与 `events` 分开存，因为 `sync_replay` 还要带
+    /// `origin_kind`/`origin_device_id`/`origin_node_id`/`causation` 四个 `owned_event` 列。
+    sync_events: Vec<SyncEventRecord>,
+    /// 每条 `sync_replay` 的 `after` 实参（观测口：逐页续读位置可断言）。
+    sync_replay_calls: Vec<GlobalCursor>,
+    /// `sync_replay` 的整批失败注入（历史行无法归因的 `Corrupt`）。
+    sync_replay_failure: Option<PortError>,
 }
 
 /// 「会话列表 + 水位 + 一致性读视图」的存储替身。
@@ -164,8 +216,19 @@ impl SyncStore {
         self.lock().sessions.push(summary);
     }
 
-    pub(crate) fn push_event(&self, event: CommittedEvent) {
-        self.lock().events.push(event);
+    /// 预置一条 Sync 事件读面的素材（`event` 帧的全部来源字段）。
+    pub(crate) fn push_sync_event(&self, record: SyncEventRecord) {
+        self.lock().sync_events.push(record);
+    }
+
+    /// 让 `sync_replay` 整批失败关闭（历史行无法归因的注入点）。
+    pub(crate) fn fail_sync_replay(&self, error: PortError) {
+        self.lock().sync_replay_failure = Some(error);
+    }
+
+    /// 每次 `ReadView::sync_replay` 的 `after` 实参（顺序即调用顺序；`None` 未被本工作包使用）。
+    pub(crate) fn sync_replay_calls(&self) -> Vec<GlobalCursor> {
+        self.lock().sync_replay_calls.clone()
     }
 
     /// 设保留窗口下界（`MIN(global_sequence)`）。
@@ -262,6 +325,38 @@ impl ReadView for SyncReadView {
     async fn head(&self) -> Result<GlobalCursor, PortError> {
         let state = self.state.lock().expect("存储替身锁");
         Ok(state.head.clone().unwrap_or_else(|| cursor(EPOCH, 0)))
+    }
+
+    /// Sync 事件读面（`SYNC_PROTOCOL.md` §10.1）：`after` 之后的一页事件 + 这批数据的 head。
+    ///
+    /// 语义照抄 `storage-sqlite` 的 `SqlReadView::sync_replay`：`global_sequence > after` 严格升序、
+    /// `LIMIT limit`、head 与本批同一次读；`sync_replay_failure` 是历史行无法归因的注入点（真实存储
+    /// 在那里返回 `Corrupt`，见 `session_store.rs` 的同名方法）。
+    async fn sync_replay(
+        &self,
+        after: Option<GlobalCursor>,
+        limit: ReplayLimit,
+    ) -> Result<acp_core::ports::SyncReplaySlice, PortError> {
+        let mut state = self.state.lock().expect("存储替身锁");
+        let head = state.head.clone().unwrap_or_else(|| cursor(EPOCH, 0));
+        if let Some(after) = after.as_ref() {
+            state.sync_replay_calls.push(after.clone());
+        }
+        if let Some(error) = state.sync_replay_failure.take() {
+            return Err(error);
+        }
+        let from = after
+            .as_ref()
+            .map_or(0, |cursor| cursor.global_sequence.get());
+        let mut events: Vec<SyncEventRecord> = state
+            .sync_events
+            .iter()
+            .filter(|record| record.event.global_sequence.get() > from)
+            .take(limit.events() as usize)
+            .cloned()
+            .collect();
+        events.sort_by_key(|record| record.event.global_sequence);
+        Ok(acp_core::ports::SyncReplaySlice { events, head })
     }
 
     async fn replay(
@@ -646,12 +741,21 @@ pub(crate) fn connection_with(
     device: &str,
     connection_id: &str,
 ) -> (Arc<ConnectionHandle>, tokio::sync::mpsc::Receiver<Outbound>) {
+    connection_with_limits(device, connection_id, &SyncConfig::default())
+}
+
+/// 指定连接限额的句柄（分批投递的用例用它压小 `maxReplayEventsPerBatch`）。
+pub(crate) fn connection_with_limits(
+    device: &str,
+    connection_id: &str,
+    config: &SyncConfig,
+) -> (Arc<ConnectionHandle>, tokio::sync::mpsc::Receiver<Outbound>) {
     ConnectionHandle::new(
         Uuid::parse(connection_id).expect("connection id"),
         acp_core::model::NodeId::new(HOST).expect("host id"),
         acp_core::model::DeviceId::new(device).expect("device id"),
         IpAddr::from(Ipv4Addr::LOCALHOST),
-        SessionLimits::negotiate(&SyncConfig::default()),
+        SessionLimits::negotiate(config),
         Arc::new(FakeIds::default()),
     )
 }

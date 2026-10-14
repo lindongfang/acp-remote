@@ -59,6 +59,7 @@ use server::sync::conn::{
 use server::sync::pairing::{
     CLAIM_PATH as SYNC_CLAIM_PATH, PairingHttp as SyncPairingHttp, STATUS_PATH as SYNC_STATUS_PATH,
 };
+use server::sync::subscribe::fanout::SyncPublisher;
 use server::sync::subscribe::{OwnerReachability, SubscribeRoute};
 use server::transport::local::{
     AuditHook, ConnectionShutdown, EndpointError, InstanceId, LocalConnectionHandlers,
@@ -69,7 +70,8 @@ use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::compose::{
-    AuditWriter, ComposeError, Composition, NodeLinkCloser, NodeLinkReachability, forked_publisher,
+    AuditWriter, ComposeError, Composition, NodeLinkCloser, NodeLinkReachability,
+    forked_publisher_with_sync,
 };
 use crate::config::Config;
 use crate::config::Loaded;
@@ -1009,12 +1011,28 @@ pub fn register_node_link_paths(
 /// 连接面本身（[`SyncConn`]）不在这里持有：它由注册给 listener 的 WS handler 拥有，与 listener 同生命周期。
 pub struct SyncIngress {
     registry: Arc<SyncConnectionRegistry>,
+    /// 实时事件扇出的接收端（`NetIngress::start` spawn 分发循环；发布端由组合根的
+    /// `EventPublisher` 分叉持有，见 `compose::forked_publisher`）。
+    event_queue: tokio::sync::mpsc::Receiver<CommittedEvent>,
+    /// 订阅面路由（分发循环按它的屏障状态找实时目标）。
+    route: Arc<SubscribeRoute>,
 }
 
 impl SyncIngress {
     /// Sync 的活跃连接注册表（键是 `(hostId, deviceId)`；设备撤销钩子在这里请求关闭）。
     pub fn registry(&self) -> &Arc<SyncConnectionRegistry> {
         &self.registry
+    }
+
+    /// 拆出实时扇出的三个零件（路由 + 注册表 + 队列），交给组合根 spawn 分发循环。
+    pub fn into_fanout(
+        self,
+    ) -> (
+        Arc<SubscribeRoute>,
+        Arc<SyncConnectionRegistry>,
+        tokio::sync::mpsc::Receiver<CommittedEvent>,
+    ) {
+        (self.route, self.registry, self.event_queue)
     }
 }
 
@@ -1035,17 +1053,29 @@ pub fn register_sync_paths(
     broker: &Arc<Broker>,
     config: &SyncConfig,
     owner: Arc<dyn OwnerReachability>,
+    event_queue: Option<tokio::sync::mpsc::Receiver<CommittedEvent>>,
 ) -> Result<SyncIngress, NetworkError> {
     let registry = SyncConnectionRegistry::new();
-    // 认证后消息路由：本切片只有订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）。它的
-    // 事件投递腿是显式失败关闭（见 `server::sync::subscribe` 的模块文档），因此这里接的是**已落地的**
-    // 判定与快照链路，不是占位实现。
+    // 认证后消息路由：订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）与它的事件投递腿
+    // （增量重放 + 实时扇出，见 `server::sync::subscribe` 的模块文档）。
     let route = Arc::new(SubscribeRoute::new(
         Arc::clone(core),
         Arc::clone(broker),
         Arc::clone(&registry),
         owner,
     ));
+    // 实时扇出的接收端由组合根经 `sync_publisher.take_receiver()` 取出后交进来：发布端先装进组合根的
+    // `EventPublisher` 分叉（两侧生命周期必然错开）。`None` = 取过了，这条进线上不会有实时投递——
+    // 接线错误，日志如实记下（快照与重放腿不受影响，客户端断线重连后仍能补齐）。
+    let Some(event_queue) = event_queue else {
+        tracing::error!(
+            event = "daemon.sync_fanout_receiver_missing",
+            "Sync 实时事件接收端已被取走：实时投递不会发生（重放腿不受影响）"
+        );
+        return Err(NetworkError::Route(RouteError::InvalidPath {
+            path: "/sync/v1".to_owned(),
+        }));
+    };
     let conn = Arc::new(
         SyncConn::new(
             Arc::clone(core),
@@ -1053,7 +1083,7 @@ pub fn register_sync_paths(
             config.clone(),
             Arc::clone(&registry),
         )
-        .with_route(route),
+        .with_route(Arc::clone(&route) as Arc<dyn server::sync::conn::MessageRoute>),
     );
     listener
         .register_ws(
@@ -1073,7 +1103,11 @@ pub fn register_sync_paths(
     listener
         .register_post(SYNC_STATUS_PATH, pairing.status_handler(), default_headers)
         .map_err(NetworkError::Route)?;
-    Ok(SyncIngress { registry })
+    Ok(SyncIngress {
+        registry,
+        event_queue,
+        route,
+    })
 }
 
 /// 网络接入面的所有者句柄：listener、事件扇出与命令终态观察共用同一个关闭信号（`design.md` D11）。
@@ -1101,6 +1135,7 @@ impl NetIngress {
     pub async fn start(
         composition: &Composition,
         event_queue: mpsc::Receiver<CommittedEvent>,
+        sync_events: Option<mpsc::Receiver<CommittedEvent>>,
     ) -> Result<Self, NetworkError> {
         let mut listener = NetListener::bind(net_config(composition.config()))
             .await
@@ -1129,6 +1164,7 @@ impl NetIngress {
             composition.broker(),
             &sync_config(composition.config()),
             Arc::new(NodeLinkReachability::new(Arc::clone(ingress.registry()))),
+            sync_events,
         )?;
         let listen = listener
             .local_addrs()
@@ -1166,6 +1202,24 @@ impl NetIngress {
                 async move { command.dispatch(signal).await }
             }),
         ));
+        // Sync 的实时事件扇出（`event` 帧的实时腿；重放腿在订阅面的 `advance` 里）。
+        // 停读信号（§14 的高水位）由每连接的出站账本负责、在分发侧消费；`shutdown` 触发即退出。
+        let sync_registry = Arc::clone(sync.registry());
+        let (sync_route, fanout_registry, sync_events) = sync.into_fanout();
+        let sync_reader = sync_route.reader();
+        tasks.push((
+            "sync_fanout",
+            tokio::spawn(async move {
+                server::sync::subscribe::fanout::dispatch(
+                    fanout_registry,
+                    sync_route,
+                    sync_reader,
+                    sync_events,
+                    signal,
+                )
+                .await
+            }),
+        ));
         tracing::info!(
             event = "daemon.ingress_ready",
             listen = ?listen,
@@ -1176,7 +1230,7 @@ impl NetIngress {
             listen,
             command: ingress.command,
             registry: ingress.registry,
-            sync_registry: Arc::clone(sync.registry()),
+            sync_registry,
             tasks,
         })
     }
@@ -1295,7 +1349,13 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
     let flush_interval = Duration::from_millis(config.flush_interval_ms);
     // 事件扇出的分叉在装配 broker 之前建立：发布端口注入 `Composition`，队列交给网络接入面的分发循环
     // （`design.md` D6）。两者必须同时存在，否则已提交事件会在消费者出现前被丢弃。
-    let (publisher, event_queue) = forked_publisher();
+    //
+    // Sync 的实时腿（`event` 帧）挂在同一个分叉上：发布端先进 `Composition`，接收端由
+    // `NetIngress::start` 从 `SyncPublisher` 上取走。`server::sync` 不得调用平级的
+    // `server::node_link`，因此这条缝合只能发生在 app 侧。
+    let mut sync_publisher = SyncPublisher::channel();
+    let sync_events = sync_publisher.take_receiver();
+    let (publisher, event_queue) = forked_publisher_with_sync(Some(sync_publisher));
 
     let composition = Composition::assemble(config, publisher)
         .await
@@ -1341,7 +1401,7 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
     // Node Link 接入面：恢复、种子导入与启动恢复都已完成，而本地通道尚未开放（`design.md` D11）。
     // 绑定失败（地址非法、端口被占用、TLS `direct` 的 PEM 不可用、明文开发模式与非 loopback 冲突）
     // 一律拒绝启动，不降级为「无网络接入」运行。
-    let net_ingress = NetIngress::start(&composition, event_queue)
+    let net_ingress = NetIngress::start(&composition, event_queue, sync_events)
         .await
         .map_err(DaemonError::Network)?;
 
@@ -1586,6 +1646,12 @@ async fn close(
     net_ingress.trigger_shutdown();
     tracing::info!(event = "daemon.ingress_stopped", "已停止接受新连接");
 
+    // 接入任务必须先真正结束（accept 已停）才进入排空：`trigger_shutdown` 只是发出取消信号，接受循环
+    // 此刻可能仍在 accept（内核 backlog 也会照常完成握手）。规格 §daemon-lifecycle 的顺序是
+    // 「停接入层（不再接受新连接）→ 取消后台周期任务」，排空在途连接夹在中间会让「停接入层」退化成
+    // 一个信号而非事实。`wait_stopped` 之后 `daemon.task_stopped` 已记录，那才是 accept 已停的观测点。
+    net_ingress.wait_stopped(deadline).await;
+
     // 排空在途连接：`daemon.stop` 的响应此刻仍在写出路径上（发出该请求的那条连接写出后即自行结束，
     // 因此不为它等待对端）；其余在途连接必须在宽限内结束，否则被中止并记 `daemon.drain_timeout`。
     //
@@ -1605,8 +1671,6 @@ async fn close(
         drain_ms = u64::try_from(drain_ms).unwrap_or(u64::MAX),
         "在途连接排空结束"
     );
-    // 第二步：等三个网络接入任务结束（超时 abort）——它们全部结束时 accept 已停。
-    net_ingress.wait_stopped(deadline).await;
 
     // 2) 取消后台周期任务与信号监听（先于停止 Agent）。
     tasks

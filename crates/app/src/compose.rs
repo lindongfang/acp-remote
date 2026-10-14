@@ -46,6 +46,7 @@ use server::node_link::conn::ConnectionRegistry as NodeLinkConnectionRegistry;
 use server::node_link::resource::NodeLinkPublisher;
 use server::sync::conn::{ConnectionRegistry as SyncConnectionRegistry, close as sync_close};
 use server::sync::subscribe::OwnerReachability;
+use server::sync::subscribe::fanout::SyncPublisher;
 use server::transport::local::{AuditHook, AuthorizationDenied};
 use storage_sqlite::error::StorageError;
 use storage_sqlite::session_store::SqliteStore;
@@ -941,19 +942,24 @@ impl OwnerReachability for NodeLinkReachability {
 }
 
 /// `EventPublisher` 分叉（`design.md` D6）：一路保留组合根的结构化日志（[`LoggingPublisher`] 的既有语义），
-/// 一路把同一个已提交投递转发给 `server::node_link` 的事件扇出。
+/// 一路把同一个已提交投递转发给 `server::node_link` 的事件扇出，一路转发给 `server::sync` 的实时扇出
+/// （`sync.subscribe` 的 `event` 帧实时腿；重放腿在订阅面的 `advance` 里，由客户端消息驱动）。
 ///
-/// 分叉点在 `app`（组合根）而不在 `server`：`server::node_link` 不需要知道其他消费方。`publish` 仍是同步
-/// 且非阻塞的（扇出侧队列满只丢这一条并记日志，已提交的事务不回滚，见 D6 的既定取舍）。
+/// 分叉点在 `app`（组合根）而不在 `server`：两个入站适配器都不需要知道其他消费方。`publish` 仍是同步
+/// 且非阻塞的（各扇出侧队列满只丢这一条并记日志，已提交的事务不回滚，见 D6 的既定取舍）。
 struct ForkedPublisher {
     node_link: NodeLinkPublisher,
+    sync: Option<SyncPublisher>,
 }
 
 impl EventPublisher for ForkedPublisher {
     fn publish(&self, delivery: CommittedDelivery) {
         LoggingPublisher.publish(delivery.clone());
         // 只有 `CommittedDelivery::Owned` 会变成 `resource.event`（imported 投递不跨节点再导出，§4）。
-        self.node_link.publish(delivery);
+        self.node_link.publish(delivery.clone());
+        if let Some(sync) = self.sync.as_ref() {
+            sync.publish(delivery);
+        }
     }
 }
 
@@ -1011,20 +1017,105 @@ fn node_event_sink(
 /// 装配 broker 的发布端口与它的事件队列（组合根在 [`Composition::assemble`] 之前调用）。
 ///
 /// 返回的接收端交给 `server::node_link::ResourceRoute::dispatch`（由 `crate::daemon` spawn 并纳入关闭
-/// 序列）；两者必须同时存在，否则事件会在扇出消费者出现之前被丢弃。
+/// 序列）；Sync 的发布端经 [`forked_publisher_with_sync`] 安装。两者必须同时存在，否则事件会在扇出
+/// 消费者出现之前被丢弃。
 pub fn forked_publisher() -> (Arc<dyn EventPublisher>, mpsc::Receiver<CommittedEvent>) {
+    forked_publisher_with_sync(None)
+}
+
+/// 同 [`forked_publisher`]，但把 Sync 的发布端一并装进分叉。
+///
+/// 组合根（[`crate::daemon::NetIngress::start`] 的调用方）必须先建好 Sync 的通道，再把发布端交进来：
+/// `server::sync` 不得调用平级的 `server::node_link`，因此这条缝合只能发生在 app 侧。
+///
+/// 返回的仍是 [`EventPublisher`] 端口而不是分叉结构本身：调用方只需要「发布 + 队列」这一对口，
+/// 分叉的内部形状留在本模块（结构体因此保持私有）。
+pub fn forked_publisher_with_sync(
+    sync: Option<SyncPublisher>,
+) -> (Arc<dyn EventPublisher>, mpsc::Receiver<CommittedEvent>) {
     let (node_link, queue) = NodeLinkPublisher::channel();
-    (Arc::new(ForkedPublisher { node_link }), queue)
+    (Arc::new(ForkedPublisher { node_link, sync }), queue)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_core::model::{AgentId, ProviderEnvBinding, ProviderRefKind};
+    use acp_core::model::{
+        AgentId, EventId, EventType, ProviderEnvBinding, ProviderRefKind, Sequence, SessionId,
+    };
     use server::local_admin::{
         AdminOutcome, DaemonControl, DaemonStatus, LocalAdminDeps, LocalAdminHandler,
         LocalAdminRouter, NoConnections, PairingSessions, decode_request,
     };
+
+    /// 固定的 canonical 时间戳（扇出分叉不读它，只为满足记录形状）。
+    fn timestamp(text: &str) -> Timestamp {
+        Timestamp::new(text).expect("canonical timestamp")
+    }
+
+    /// 已提交投递的最小构造（只填扇出分叉会读到的字段）。
+    fn owned_delivery(sequence: u64) -> CommittedDelivery {
+        CommittedDelivery::Owned(CommittedEvent {
+            id: EventId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622b").expect("event id"),
+            event_type: EventType::new("turn.queued").expect("event type"),
+            session: Some(
+                SessionId::new("04dbad03-8869-4c5a-94fa-2f3af2fb622c").expect("session id"),
+            ),
+            session_sequence: Some(Sequence::new(1).expect("session sequence")),
+            global_sequence: Sequence::new(sequence).expect("global sequence"),
+            origin_epoch: None,
+            origin_sequence: None,
+            created_at: timestamp("2026-09-17T12:10:00.123Z"),
+        })
+    }
+
+    /// `ForkedPublisher` 必须把同一条已提交投递**同时**分叉给 Node Link 与 Sync 两路。
+    ///
+    /// 分叉点是组合根而不是 `server`（D6）：两路都拿到事件才可能各自投递。判据来自任务 6.2
+    /// 「`EventPublisher` 增加 Sync 扇出分支」——只接一路会让另一路的实时腿静默失效。
+    #[test]
+    fn forked_publisher_delivers_the_same_event_to_both_ingress_adapters() {
+        let mut sync_publisher = SyncPublisher::channel();
+        let mut sync_queue = sync_publisher
+            .take_receiver()
+            .expect("新建发布端必然还有接收端");
+        let (node_link, mut node_link_queue) = NodeLinkPublisher::channel();
+        let forked = ForkedPublisher {
+            node_link,
+            sync: Some(sync_publisher),
+        };
+
+        let delivery = owned_delivery(7);
+        forked.publish(delivery.clone());
+
+        assert!(
+            node_link_queue.try_recv().is_ok(),
+            "Node Link 的实时腿必须收到同一条已提交投递"
+        );
+        assert!(
+            sync_queue.try_recv().is_ok(),
+            "Sync 的实时腿必须收到同一条已提交投递（6.2 的新增分支）"
+        );
+    }
+
+    /// 两路**都没有**接入时（`sync: None`），分叉不得 panic 也不得阻塞调用方。
+    ///
+    /// 这是组合根装配尚未提供 Sync 通道时的中间态：Node Link 侧必须照常工作，而 `publish` 仍同步返回。
+    #[test]
+    fn forked_publisher_without_a_sync_branch_keeps_the_node_link_leg() {
+        let (node_link, mut node_link_queue) = NodeLinkPublisher::channel();
+        let forked = ForkedPublisher {
+            node_link,
+            sync: None,
+        };
+
+        forked.publish(owned_delivery(8));
+
+        assert!(
+            node_link_queue.try_recv().is_ok(),
+            "没有 Sync 分支时 Node Link 的实时腿必须不受影响"
+        );
+    }
 
     /// 每个用例一个独立临时目录（用例结束即删）。
     struct TempDir {

@@ -4247,11 +4247,11 @@ pub(crate) mod test_support {
 
     use super::*;
     use crate::model::{
-        AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId, AttachmentGeneration,
-        AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId, DeviceRecord, EventId,
-        ExportId, ExportRecord, ImportId, ImportRecord, ModeState, NodeId, NodeKind, NodeRecord,
-        OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
-        PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
+        ActorKind, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId,
+        AttachmentGeneration, AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId,
+        DeviceRecord, EventId, ExportId, ExportRecord, ImportId, ImportRecord, ModeState, NodeId,
+        NodeKind, NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord,
+        PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
         ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
         WorkspaceAlias, WorkspaceRecord, WorkspaceRef,
     };
@@ -4262,8 +4262,8 @@ pub(crate) mod test_support {
         NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite, OwnedEventRecord,
         PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
         PairingWrite, PendingInteractionOrigin, ProfileWrite, ProviderRefWrite, PruneReport,
-        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, TrustRecordRef,
-        TrustStore, TurnAccepted, WorkspaceWrite,
+        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, SyncEventRecord,
+        SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted, WorkspaceWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -4481,7 +4481,9 @@ pub(crate) mod test_support {
         pub(crate) event_payloads: HashMap<String, EventPayload>,
         /// 事件 id → `origin.kind`（fake 记录 broker 写入的 origin，供 §10.1 断言）。
         pub(crate) event_origins: HashMap<String, EventOrigin>,
-        /// 事件 id → `causation`（诱发命令的 requestId；fake 记录 broker 写入的因果，供 §10.1 断言）。
+        /// 事件 id → `owned_event.causation`（fake 记录 broker 写入的因果；`sync_replay` 的
+        /// `causationRequestId` 与 `origin.deviceId`/`origin_node_id` 回查都从它读——真实存储读的
+        /// 是同一个列）。
         pub(crate) event_causations: HashMap<String, Option<RequestId>>,
         /// 事件 id → 落盘的 turn 归属（供 §10.3 「view 与 turn_id 一致」断言）。
         pub(crate) event_turns: HashMap<String, Option<TurnId>>,
@@ -4504,6 +4506,36 @@ pub(crate) mod test_support {
         /// 创建该交互的 origin 事件 id（`node_link_slice` 的 `pending_interactions` 需要它；
         /// 真实存储用 `owned_interaction.request_event` 回查）。
         pub(crate) origin_event: EventId,
+    }
+
+    impl WorldState {
+        /// `causation`（= 诱发命令的 `requestId`）+ actor 类别 → `owned_command.actor_id`
+        /// （`SYNC_PROTOCOL.md` §10.1 的 `origin.deviceId`/`origin.nodeId`）。
+        ///
+        /// 与真实存储（`storage-sqlite` 的 `command_origins` + `identity_origin_for`）同一口径：只认
+        /// **本类别** actor 的命令行（device 事件看 `Actor::Device`、node 事件看 `Actor::Node`，两类
+        /// 身份不可互换）；`causation` 为空、找不到命令行、或同一 requestId 在同一类别下命中多个不同
+        /// actor 时返回 `None`——调用方（`FakeReadView::sync_replay`）据此失败关闭，**不**编造 id。
+        pub(crate) fn identity_origin(
+            &self,
+            causation: Option<&RequestId>,
+            kind: ActorKind,
+        ) -> Option<String> {
+            let causation = causation?;
+            let mut found: Option<String> = None;
+            for record in self.commands.values() {
+                if record.request() != causation || record.actor().kind() != kind {
+                    continue;
+                }
+                let actor_id = record.actor().id_text();
+                if found.is_some_and(|known| known != actor_id) {
+                    // 同一 requestId 在同一 actor 类别下命中多个 actor：没有唯一答案。
+                    return None;
+                }
+                found = Some(actor_id);
+            }
+            found
+        }
     }
 
     /// 一次提交里的事件类型序列（§6.10 的合批断言）。
@@ -5622,6 +5654,97 @@ pub(crate) mod test_support {
                 return Ok(None);
             }
             Ok(state.event_payloads.get(event.as_str()).cloned())
+        }
+
+        /// Sync 事件读面：`FakeStore` 记录的行按 `global_sequence` 升序一页 + head。
+        ///
+        /// 与真实存储同一口径的四点：已压缩的 delta 不出现（`compacted_into` 有记录的行跳过）；
+        /// `origin_kind` 取 fake 记录的 `event_origins`、`causation` 取 `event_causations`（都是 broker
+        /// 提交时真实写入的取值）；`origin.deviceId`/`origin.nodeId` 按对应 kind 回查**同类别 actor**
+        /// 的命令行且必须唯一（见 [`WorldState::identity_origin`]）；得不出唯一取值时**失败关闭**
+        /// （`Corrupt`）而不是给 `None`——与真实存储的 `identity_origin_for` 同口径（§10.1 的配对
+        /// 规则要求这两类事件带非空身份字段）。
+        ///
+        /// 本替身没有「列值损坏」这一失败路径（`origin_kind` 就是 `EventOrigin` 值，不经过文本解码）：
+        /// 词表外的取值只可能出现在 `storage-sqlite`，由它的适配器用例固定。
+        async fn sync_replay(
+            &self,
+            after: Option<GlobalCursor>,
+            limit: ReplayLimit,
+        ) -> Result<SyncReplaySlice, PortError> {
+            let state = lock(&self.world.state);
+            let from = after
+                .as_ref()
+                .map(|cursor| cursor.global_sequence.get())
+                .unwrap_or(0);
+            let head = head_cursor(state.head);
+            let mut events = Vec::new();
+            for event in &state.events {
+                if event.global_sequence.get() <= from {
+                    continue;
+                }
+                if state
+                    .compacted_into
+                    .contains_key(&event.global_sequence.get())
+                {
+                    continue;
+                }
+                if events.len() as u32 >= limit.events() {
+                    break;
+                }
+                let Some(payload) = state.event_payloads.get(event.id.as_str()).cloned() else {
+                    continue;
+                };
+                let origin_kind = state
+                    .event_origins
+                    .get(event.id.as_str())
+                    .copied()
+                    .ok_or(PortError::Corrupt("事件缺少 origin 记录"))?;
+                let causation = state
+                    .event_causations
+                    .get(event.id.as_str())
+                    .cloned()
+                    .flatten();
+                let origin_device_id = match origin_kind {
+                    EventOrigin::Device => Some(
+                        DeviceId::new(
+                            &state
+                                .identity_origin(causation.as_ref(), ActorKind::Device)
+                                .ok_or(PortError::Corrupt(
+                                    "device event cannot be attributed to a unique device command",
+                                ))?,
+                        )
+                        .map_err(|_| {
+                            PortError::Corrupt("owned_command.actor_id is not a device id")
+                        })?,
+                    ),
+                    _ => None,
+                };
+                let origin_node_id = match origin_kind {
+                    EventOrigin::Node => Some(
+                        state
+                            .identity_origin(causation.as_ref(), ActorKind::Node)
+                            .ok_or(PortError::Corrupt(
+                                "node event cannot be attributed to a unique node command",
+                            ))?
+                            .split_once('/')
+                            .and_then(|(node, _)| NodeId::new(node).ok())
+                            .ok_or(PortError::Corrupt(
+                                "owned_command.actor_id is not a node id",
+                            ))?,
+                    ),
+                    _ => None,
+                };
+                events.push(SyncEventRecord {
+                    event: event.clone(),
+                    payload,
+                    origin_kind,
+                    origin_device_id,
+                    origin_node_id,
+                    causation,
+                });
+            }
+            Ok(SyncReplaySlice { events, head })
         }
 
         async fn read_session(&self, query: HistoryQuery) -> Result<HistoryPage, PortError> {

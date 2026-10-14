@@ -27,7 +27,7 @@
 
 > 版本：0.18（2026-10-04，`sync-scope-and-pwa-client` 变更 WP3：core 派生事件的生产者与两种写入形状——§5.2 的 `StateChange::Update` 增**两层可选**标题字段（`Option<Option<String>>`：`None` = 不改该列、`Some(None)` = 显式置空、`Some(Some(text))` = 写入；唯一来源是 Agent 的 `session_info_update` 经 broker 投影的 `session.info.changed`，**不存在**客户端重命名入口），§5.4 增**节点级**事件通道 `NodeEventSink`（与 `EventSink` 同形的包装类型，但语义是「不属于任何会话的事件」，使「节点级事件不得进入会话槽位」在类型上可见），§6 新增第 21 条（`file.changed` 的派生源与行级差异统计、展示路径的规范化前缀相对化、节点级 `agent.*` 事件的产生与落库、会话标题的单向更新与 `updatedAt` 取 Daemon 持久化时间）。**§7 的 SQL 块与 DDL 未变**（节点级事件的 `owned_event` 三列 CHECK 已就位，不新增 migration；标题列 `owned_session.title` 早已存在），漂移门禁继续逐条成立）
 
-> 版本：0.19（2026-10-14，`sync-server-connection` 变更的任务 1.7/1.6 前置：事件的**来源**与**因果**——§3.4 的 `EventOrigin` 增第五个取值 `node`（另一个节点经 Node Link 的命令；跨节点跳数仍由 `remoteOrigin` 表达），`PendingEvent.origin`/`causation` 的填法改为「命令类事件按**诱发命令的执行者**分类、`causation` 取诱发命令的 `requestId`」，**没有诱发命令时记 `daemon`**（原文的「缺 actor 时按 `device` 记账」删除——那会把 CLI 驱动的命令类事件误记成设备、并让 `causation` 恒为 `NULL`，违反 `SYNC_PROTOCOL.md` §10.1）。§7 升级到 **v7**：`owned_event.origin_kind` 的 CHECK 扩到五值（12-step 表重建 + `owned_interaction` 的过渡表协同，见 §7.2 的 v6 → v7 段），§7.2 版本常量改 7/7/3、§7.3 的 DDL 与 §9 判据 1/28 的版本链同步。**§5 的 rust 块与端口签名未变**，漂移门禁继续逐条成立）
+> 版本：0.19（2026-10-14，`sync-server-connection` 变更的任务 **1.7 + 1.6**：事件的**来源**与**因果**如实落库，并把它们读回 Sync 读面。先说 1.7 的前置——§3.4 的 `EventOrigin` 增第五个取值 `node`（另一个节点经 Node Link 的命令；跨节点跳数仍由 `remoteOrigin` 表达），`PendingEvent.origin`/`causation` 的填法改为「命令类事件按**诱发命令的执行者**分类、`causation` 取诱发命令的 `requestId`」，**没有诱发命令时记 `daemon`**（原文「缺 actor 时按 `device` 记账」删除——那会把 CLI 驱动的命令类事件误记成设备、并让 `causation` 恒为 `NULL`，违反 `SYNC_PROTOCOL.md` §10.1）；§7 因此升级到 **v7**（`owned_event.origin_kind` 的 CHECK 从四值扩到五值，12-step 表重建 + `owned_interaction` 的过渡表协同，见 §7.2 的 v6 → v7 段；§7.2 版本常量改 7/7/3，§9 判据 1/28 的版本链同步）。再说 1.6 的读缝——§10.1 的 `event` 帧把 `origin.kind`/`origin.deviceId`/`causationRequestId` 列为必需，而这三者只存在于 `owned_event` 的 `origin_kind`/`causation` 两列（§7.3 早已就位、`EVENT_COLUMNS` 早已 SELECT），`CommittedEvent`/`EventPayload`/`OwnedEventRecord` 都不承载——于是 §5.2 新增 `ReadView::sync_replay` 与条目类型 `SyncEventRecord`/`SyncReplaySlice`（形如 `node_link_slice` 的既有做法：条目带持久化正文 + `after`/`limit` + 同一次只读事务），条目另带 `origin_node_id`（`node` 类的 `nodeId`，与 `deviceId` 同源回查）；§4 登记用例入口 `UseCases::sync_replay`（设备 scope `session.list`，授权先于任何读取）。**未新增表列、未改 `CommittedEvent`/`OwnedEventRecord` 的形状**；§7 的 SQL 块只有 v6 → v7 那一段是新增的，漂移门禁逐条成立（§5 的 rust 块已同批更新）
 
 ## 1. 范围与非目标
 
@@ -215,7 +215,7 @@ pub enum UnavailableKind {
 | `SessionQueries` | `list_sessions(actor, SessionQuery) -> Vec<SessionSummary>`、`read_session(actor, ReadQuery) -> HistoryPage` | 同上 |
 | `ConfigCommands` | `set_mode(actor, SessionReference, ModeId) -> Version`、`set_config(actor, SessionReference, ConfigOptionId, ConfigValue) -> Version` | 同上 |
 | `PermissionCommands` | `resolve_interaction(actor, SessionReference, InteractionId, InteractionResolution) -> Resolution` | 同上 |
-| `SubscriptionQueries` | `replay(actor, SessionReference, Option<GlobalCursor>, ReplayLimit) -> ReplayBatch`、`retention_window(actor, SessionId) -> Option<(Sequence, Sequence)>` | `server::sync`、`server::node_link` |
+| `SubscriptionQueries` | `replay(actor, SessionReference, Option<GlobalCursor>, ReplayLimit) -> ReplayBatch`、`retention_window(actor, SessionId) -> Option<(Sequence, Sequence)>`、`sync_replay(actor, Option<GlobalCursor>, ReplayLimit) -> SyncReplaySlice`（设备 scope `session.list`；§5.2 的 Sync 事件读面） | `server::sync`、`server::node_link` |
 | `DeviceManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的 `device.*`/`node.*` | `server::local_admin`、`app::cli` |
 | `ExportManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 的 `export.*`/`import.*` 写方法 | 同上 |
 | `RemoteCatalogQueries` | 见 §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
@@ -359,6 +359,39 @@ pub struct OwnedEventRecord {
     pub payload: EventPayload,
 }
 
+/// Sync 事件读面的条目（`SYNC_PROTOCOL.md` §10.1 的 `event` 帧）：定位 + 持久化正文 + 三个**只有存储
+/// 行能回答**的来源字段。`OwnedEventRecord`/`CommittedEvent` 的形状不变（它们有大量现存调用方），
+/// `origin_kind`/`origin_device_id`/`origin_node_id`/`causation` 由本条目承载。
+///
+/// `remoteOrigin`（同属 §10.1 的 required 清单）没有载体：本读面只读 `owned_event`，imported 事件的
+/// 跳数与来源由投递层的 imported 路径另行投影，因此调用方按「本读面返回的都是 owned 事件 ⇒
+/// `remoteOrigin` 恒为 `null`」投影（§9.6）。
+pub struct SyncEventRecord {
+    pub event: CommittedEvent,
+    pub payload: EventPayload,
+    /// `origin.kind`：取 `owned_event.origin_kind`，**五个**取值（`agent`/`device`/`daemon`/
+    /// `local_cli`/`node`）原样往返；词表外取值是列值损坏 → `Corrupt`。**不**得按「这条事件有没有
+    /// `session_id`」推断来源。
+    pub origin_kind: EventOrigin,
+    /// `origin.deviceId`：**仅** `origin_kind = device` 时非空。取值来自 `owned_event.causation`
+    /// （= 诱发命令的 requestId）到 `owned_command.actor_id`（`actor_kind = 'device'`）的回查；
+    /// 得不出唯一取值时**整批读失败关闭**（`Corrupt`），见下面 §5.2 的 `[决定]`。
+    pub origin_device_id: Option<DeviceId>,
+    /// `origin.nodeId`（feature `core.event-origin.v1`）：**仅** `origin_kind = node` 时非空。与
+    /// `origin_device_id` 同源同口径，只是回查 `actor_kind = 'node'` 且取复合键
+    /// `"{ownerNodeId}/{accessNodeId}"` 里的主 principal `ownerNodeId`。
+    pub origin_node_id: Option<NodeId>,
+    /// `causationRequestId`：`owned_event.causation` 原样；没有命令直接导致的事件为 `None`。
+    pub causation: Option<RequestId>,
+}
+
+/// Sync 事件读面的一个批次（`ReadView::sync_replay` 的返回值）：`after` 之后的一页事件 + 生成这批数据
+/// 时的一致性视图 head（`sync.caught_up` 的屏障游标），同一次只读事务内取得。
+pub struct SyncReplaySlice {
+    pub events: Vec<SyncEventRecord>,
+    pub head: GlobalCursor,
+}
+
 pub struct HistoryPage {
     pub session: SessionSummary,
     /// `messages` 面的原料：`after` 之后的一页事件（**含持久化正文**），按 `global_sequence` 升序。
@@ -407,6 +440,11 @@ pub trait SessionStore: Send + Sync {
 pub trait ReadView: Send + Sync {
     async fn head(&self) -> Result<GlobalCursor, PortError>;
     async fn replay(&self, after: Option<GlobalCursor>, limit: ReplayLimit) -> Result<ReplayBatch, PortError>;
+    /// Sync 增量重放的事件来源（§10.1 的 `event` 帧）：`after` 之后的 owned 事件（定位 + 持久化正文 +
+    /// 三个来源字段），按 `global_sequence` 升序，并给出这批数据的 head。与 `replay` 的分工见 §5.2 的
+    /// `[决定]`：`replay` 服务本机客户端的全局重放，本方法只服务入站设备，且不做 cursor 解释；identity
+    /// 类事件得不出唯一身份时失败关闭（历史行处置，见 §5.2 `[决定]` 的对应条目）。
+    async fn sync_replay(&self, after: Option<GlobalCursor>, limit: ReplayLimit) -> Result<SyncReplaySlice, PortError>;
     /// 会话的一页读（`session.read`）：`messages` 面的事件原料与结构化历史条目各自按 `include` 开关分页
     /// （`after` 与 `before_history` 互不影响）。两个集合都必须**带持久化正文**、且正文与定位来自同一条
     /// 行——实现一次取行（`payload_json` 与 ACP 列同批取出），MUST NOT 为逐条事件再取一次正文
@@ -459,6 +497,14 @@ pub trait RemoteDeliveryStore: Send + Sync {
 - `[决定]` **目录归属的投影来源只有持久化的别名**：`SessionStore::list`（以及 `ReadView` 中返回摘要的 `read_session`/`node_link_slice`）给出的 `SessionSummary.workspace` 必须由 `owned_session.workspace_alias` 关联 `owned_workspace` 的展示名得出——该 JOIN 留在同时拥有两张表的存储实现内部，不上浮到 core。MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，「不反查」才能保证同一别名重指向后老会话的归属不漂移、投影期不引入对别名解析表的隐式耦合（`design.md` D1/D6，`workspace-resolution` 的创建时持久化要求）。
 - `[决定]` 交互的创建与解析规则见 §6 第 13 条。`SessionStore` **没有** `resolve_interaction` 方法：解析是 `OwnedCommit.state.interaction` 的一部分；`SessionEndpoint::resolve_interaction` 是后端（Agent）侧入口，不落盘。
 - `[决定]`（`pwa-conversation-ui` D2/D4）**会话历史读的元素带持久化正文、按会话内序号分页**：`HistoryPage.events`（`messages` 面的原料，`after`/`next` 的全局 cursor 升序）与 `HistoryPage.history`（结构化历史条目，`before_history`/`history_has_earlier`）都由既有 `OwnedEventRecord` 承载——**正文与定位来自同一条行**，实现在一次取行里一并取出 `payload_json` 与 ACP 五列（`acp_media_type`/`acp_raw_json`/`acp_byte_length`/`acp_sha256`/`acp_raw_unavailable_reason`），MUST NOT 为逐条事件再调 `ReadView::event_payload`（N+1）。原文不可用时按行里的 `acp_raw_unavailable_reason` 还原为 `AcpRaw::Unavailable`（与 `event_payload` 同规则，摘要不因原文被清掉而丢失）。历史条目按 `owned_event.session_sequence` 取行，走的正是已有的唯一索引 `owned_event_session(session_id, session_sequence)`——**本次不新增索引、不改 §7**；省略游标 = 最新一页、带游标 = 严格更早的一页、只跳过 `compacted_into IS NOT NULL` 的行（已压缩事件不产生条目、也不占位），且**只取条目集合内的事件类型**——集合是 `SYNC_PROTOCOL.md` §10.2.1 的 17 类（该表同时登记了不进入的 17 类：消息正文与其收尾、摘要/仪表类、命令终态类、连接与审计类），由存储查询以 `event_type IN (...)` 与 `limit`/`history_has_earlier` 在**同一条语句**里施加：事后过滤会让页大小与页标记按未过滤的行计数，客户端会拿到空页或短页却被 `historyHasEarlier` 告知「更早还有条目」，而它按「上一页最早条目的会话内序号」续读时没有游标可用。集合只定义一次（`HISTORY_ENTRY_EVENT_TYPES`），`storage-sqlite` 与 core 的读视图替身共用它，不各写一份字面量。游标早于该会话仍可读**条目**的下界时返回 `InvalidRequest`（保留窗口之前显式不可读，MUST NOT 静默少返回让调用方误以为已到最早一条）。`HistoryInclude.history` 只决定该集合是否下发，两个集合在同一次请求里各自分页、互不影响（`SYNC_PROTOCOL.md` §11.5）。
+- `[决定]`（`sync-server-connection` 变更 WP1 的 1.6，2026-10-14）**Sync 事件读面（`ReadView::sync_replay` + `SyncEventRecord`/`SyncReplaySlice` + 用例入口 `UseCases::sync_replay`）**：`SYNC_PROTOCOL.md` §10.1 的 `event` 帧把 `origin.kind`/`origin.deviceId`、`origin.nodeId` 与 `causationRequestId` 列为必需字段，而这几项只存在于 `owned_event` 的两个列（`origin_kind`/`causation`，§7.3），`CommittedEvent` 与 `EventPayload` 都不承载——因此新条目类型承载它们，**不**改 `CommittedEvent`/`OwnedEventRecord` 的形状（两者有大量现存调用方）。口径逐条如下：
+  - **来源的取值只有一处**：`origin.kind` 取 `owned_event.origin_kind`，**五个**取值（`agent`/`device`/`daemon`/`local_cli`/`node`）原样往返（§7.3 的 CHECK 与 wire 词表同集，`node` 由 1.7 的前置补入）；词表外取值是**列值损坏**（实现返回 `Corrupt`），不得静默降级或挑近义取值。MUST NOT 用「这条事件有没有 `session_id`」推断来源（与 §5.2 关于 `PendingEvent.origin` 的条款同口径）。
+  - **两个身份字段都不是第三处事实来源**：`origin.deviceId`/`origin.nodeId` 只能由 `owned_event.causation`（= 诱发该事件的命令 `requestId`）回查 `owned_command` 的 `actor_id` 得到，且**仅**在同类 `origin_kind`（`device`/`node`）时可能出现；前者要求 `actor_kind = 'device'`，后者要求 `actor_kind = 'node'` 并取复合键 `"{ownerNodeId}/{accessNodeId}"` 里的主 principal `ownerNodeId`（§6 第 6 条的幂等键；§10.1 的 `nodeId` 要的是产生该事件的另一个节点）。回查与事件读 MUST 在同一次只读事务内完成，且 MUST NOT 逐条事件各查一次（一条批量 `IN (…)` 查询覆写两类 actor），device 事件只认设备行、node 事件只认节点行，两类身份因此不可互换。
+  - **identity 类事件得不出唯一身份 ⇒ 整批读失败关闭（`Corrupt`），MUST NOT 以 `None` 交差**：`origin.kind = device` 的语义要求是「事件来自已授权 Sync 设备经命令产生 ⇒ 带非空 `deviceId`」（§10.1 的 kind 表），`kind = node` 则被 schema 与 DTO 的配对规则强制要求非空 `nodeId`；而 schema 侧的 `{kind:"device", deviceId:null}` 又**合法**（frozen v1 形状只有 `{kind, deviceId}` 两个键，§16.2 不允许借扩展收紧必填性）——于是**发送方** MUST NOT 产生那种帧，读面也就不得把它登记成合法取值：给 `None` 等于把「投递层无法组装合法帧」伪装成一条合法数据，逼它静默违反 §10.1。四类得不出唯一取值的情形（前三类是**升级前写入的历史行**，正是变更 4.8 要求显式处置的对象）：**① `causation` 为空**——1.7 之前 agent-host 产出的每条 `EndpointEvent` 都不带 `causation`（适配器唯一的生产构造点固定 `None`）、broker 又原样落盘，设备驱动事件因此**全部**落在这一类，这是主流历史形态；**② 对应命令行不在本机**——`owned_event` 与 `owned_command` 的写入本来就允许「事件在本节点、命令由别处发起」（跨节点重放同一 requestId），保留期清理/不在本机历史窗口同样导致回查不到；**③ 命令行的 `actor_kind` 与本事件的 `origin.kind` 不符**——同一 requestId 上先由本机 CLI（或另一节点）发起、后被设备重发（`owned_command` 的唯一键是 `(actor_kind, actor_id, request_id)`，跨 actor 复用同一 requestId 在 DDL 上合法），或 1.7 之前 `event_origin` 按 actor 瞬时状态分类留下的错配行；**④ 同一 requestId 在同一 actor 类别下命中多行**（跨设备/跨节点复用，唯一键允许）。MUST NOT 从旁路（会话归属、actor 瞬时状态……）推断 id：编造 id 比失败关闭更糟——它把归属判错给另一台设备并让调用方无法察觉。
+  - **列值损坏一律 `Corrupt`**：词表外的 `origin_kind`、`actor_kind = 'device'` 行上不是 canonical UUID 的 `actor_id`、`actor_kind = 'node'` 行上不是 `node/access-node` 复合键的 `actor_id`，都与 `find_request`/`command_record_from_row` 对同一列的既有口径一致（同列、同为 fail-closed），**不**降级成「没有身份 id」（那会把列值损坏藏起来）。这几条在生产上不可达（DDL 与写入侧都钉死了形状），属读取侧纵深防御。
+  - **窗口**：严格在 `after` 之后（`None` = 从头）、按 `global_sequence` 升序、最多 `limit` 条；已压缩的 delta 不出现（与 `replay` 同口径，§6 第 15 条）。`after.server_epoch` 与当前 epoch 是否一致、以及四类 `sync.cursor_invalid` 原因与 `sync.reset_required`（§9.2）**不在本方法的判定范围内**：那是投递层的判定，本方法只按 `global_sequence > after` 取行、并给出这条快照的 head（`sync.caught_up` 的屏障游标）。
+  - **授权与投影**：用例入口 `UseCases::sync_replay(actor, after, limit)` 先按设备 scope `session.list` 走 `Broker::authorize`（与 `list_sessions`/`sync_visible_sessions` 逐字同口径），授权**先于**任何读取——未授权时不打开读视图、一条事件也读不出；它也不在 `require_local` 之外另设守卫（入口自带「为什么在 `require_local` 之外」的理由注释，与 `sync_visible_sessions` 同源）。core 不投影，owned 事件的字段由条目承载（`MODULE_ARCHITECTURE.md` §8），`remoteOrigin` 按 §9.6 恒为 `null`（本读面只返回 owned 事件，imported 的跳数由投递层的 imported 路径另行投影）；按 scope 过滤事件与由此产生的合法序号空洞是投递层的事。
+  - **本条不新增表列、不改 §7**：`owned_event.origin_kind`/`causation` 与 `owned_command` 的 `actor_kind`/`actor_id` 早已就位，本次只是把它们读出（`EVENT_COLUMNS` 一直在 SELECT 它们，缺的只是组装 §10.1 形状的读面）。
 - `[决定]` `retention_window` 返回该会话仍可重放的 `session_sequence` 下界/上界；broker 据此决定 `sync.reset_required`（`reason` 枚举 `initial_sync|epoch_mismatch|cursor_expired|cache_incompatible`，`SYNC_PROTOCOL.md` §9.4）；cursor 的四种拒绝原因：格式非法 → `malformed`（协议层）、`serverEpoch` 与 `meta.server_epoch` 不符 → `epoch_mismatch`、超出 `head()` → `beyond_head`、低于窗口下界 → `cursor_expired`（`SYNC_PROTOCOL.md` §9.2）。
 
 ### 5.3 信任、Export、审计与附件

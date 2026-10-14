@@ -143,7 +143,7 @@ use acp_core::model::{
 use acp_core::ports::{
     CommitOutcome, HistoryPage, HistoryQuery, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
     PendingInteractionOrigin, PruneReport, ReadView, ReplayBatch, RetentionPolicy, SessionQuery,
-    SessionStore, StoreHealth,
+    SessionStore, StoreHealth, SyncReplaySlice,
 };
 use node_link_protocol::envelope::ConnectionFields;
 use serde_json::{Value, json};
@@ -350,6 +350,15 @@ impl ReadView for SliceStore {
 
     async fn read_session(&self, _query: HistoryQuery) -> Result<HistoryPage, PortError> {
         unreachable!("WP5 路由用例不读历史面")
+    }
+
+    /// Sync 事件读面不在本替身的范围内：Node Link 路由用例只驱动 `node_link_slice`。
+    async fn sync_replay(
+        &self,
+        _after: Option<GlobalCursor>,
+        _limit: ReplayLimit,
+    ) -> Result<SyncReplaySlice, PortError> {
+        unreachable!("WP5 路由用例不读 Sync 事件重放面")
     }
 
     async fn event_payload(&self, _event: &EventId) -> Result<Option<EventPayload>, PortError> {
