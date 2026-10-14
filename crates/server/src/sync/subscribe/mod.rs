@@ -15,35 +15,51 @@
 //! 3. **屏障与恢复位置**：`sync.subscribe` 提交的 cursor 是**唯一**的恢复位置（§9.5：服务端保存的
 //!    设备 ACK 最大值不得决定新连接的恢复点）。本层保存的 ACK 只用于诊断与保留策略，**不参与投递**。
 //!
-//! ## 事件投递腿：本切片的**显式边界**（未落地）
+//! ## 事件投递腿（任务 4.3/4.8）
 //!
-//! 重放与实时投递都要发 `event` 帧，而 §10.1 的 `event` body 里 `origin`（`kind` 必填，取值
-//! `agent|device|daemon|local_cli`）与 `causationRequestId` 是 **required** 字段
+//! 重放与实时投递都发 `event` 帧，而 §10.1 的 `event` body 里 `origin`（`kind` 必填，取值
+//! `agent|device|daemon|local_cli|node`）与 `causationRequestId` 是 **required** 字段
 //! （`schemas/sync/v1/event.schema.json`）。这两项在 `owned_event` 里是 `origin_kind`/`causation`
-//! 两列（`storage-sqlite` 的 `EVENT_COLUMNS` 选中它们、`event_from_row` 读出行），但 core 的读面
-//! （`CommittedEvent`/`EventPayload`/`OwnedEventRecord`）**都不承载**它们，`origin.deviceId` 还需要经
-//! 诱发命令回查设备身份（`owned_command`），因此当前没有任何用例入口能给出这三个字段。
+//! 两列（`storage-sqlite` 的 `EVENT_COLUMNS` 选中它们、`event_from_row` 读出行），core 的读面
+//! `ReadView::sync_replay` 一次给出定位 + 持久化正文 + 两个身份字段（`origin.deviceId` 只对
+//! `kind = device` 非空、`origin.nodeId` 只对 `kind = node` 非空，都经 `causation` 回查
+//! `owned_command.actor_id`；`docs/CORE_PORTS_AND_STORAGE.md` §5.2 的 1.6 条目）。**无法归因的
+//! 历史行由该读面失败关闭**（`Corrupt`），因此投递层不会收到 `{kind:"device", deviceId:null}`
+//! 这种 §10.1 禁止发送方产生的帧；协商了 `core.event-origin.v1` 的连接还额外收到 `nodeId` 键。
 //!
-//! 本层因此**不伪造**它们：`event` 帧的装配与实时扇出需要 core 增加一个 Sync 事件读面（形如
-//! `sync_replay(actor, after, limit) -> 带 origin/causation 的事件条目`），属本工作包写范围之外（`core`
-//! 不可改）。在此之前，[`SubscribeRoute::advance`] 只做两件事：
+//! `origin.deviceId`/`origin.nodeId` 的另外一个约束是**不得由「有没有会话」推断**：core 的读面只取
+//! 列值与回查结果，投递层也不得自己拼——本层只做 core → wire 的逐字段映射（[`event::event_body`]）。
 //!
-//! - 待投递的可见事件**确实为空**时发 `sync.caught_up`（屏障是真的：它之后没有事件）；
-//! - 一旦有待投递事件，回 `internal.unavailable`（retryable）并记 `sync.event_delivery_unavailable`
-//!   诊断——**绝不**在没有投递事件的情况下发 `sync.caught_up` 谎报屏障。
+//! 因此 [`SubscribeRoute::advance`] 的真实形状是：
 //!
-//! 快照链路本身（`sync.reset_required` → `sync.snapshot_request` → `begin`/`chunk`/`end` 与摘要）不受
-//! 该缺口影响，已完整落地（[`crate::sync::snapshot`]）。
+//! - 保留窗口判定（`cursor_expired` 的唯一来源）→ 逐页重放（`UseCases::sync_replay`，页长取本连接
+//!   协商的 `maxReplayEventsPerBatch`）→ 按 `globalSequence` 升序的 `event` 帧 → `sync.caught_up`；
+//! - 屏障建立之后才允许实时事件进队（[`crate::sync::fanout`] 以「屏障已建立」为闸），因此重放期间
+//!   到达的事件**排在屏障之后**、绝不越过序号更早的已持久化事件；
+//! - 权限过滤（设备 scope 判定在 core 的 `Broker::authorize`）造成的序号空洞合法且不报错，屏障游标
+//!   高于该段即可由客户端 ACK（§9.5）；
+//! - 读面失败（含 [`PortError::Corrupt`]）与该帧组装不出来时**显式失败关闭**：`internal.unavailable`
+//!   （retryable）+ 可见诊断，绝不伪造 `kind`/`deviceId`/`nodeId`、也绝不静默跳过；
+//! - 高水位停读由出站账本负责（[`ConnectionHandle::saturated`]）：停读信号传到本层即中断本批重放，
+//!   客户端按最后收到的 `event` 序号重连续投（§14）。
+//!
+//! 快照链路（`sync.reset_required` → `sync.snapshot_request` → `begin`/`chunk`/`end` 与摘要）与重放共用
+//! 同一道推进（快照 `end` 之后同样走 [`SubscribeRoute::advance`]），已完整落地（[`crate::sync::snapshot`]）。
 //!
 //! ## 依赖
 //!
-//! 本模块调用 `core::use_cases` 与 `core::broker` 的公开面（`Broker::authorize`/`Broker::replay`）以及
+//! 本模块调用 `core::use_cases`（`sync_device_handshake_view`/`sync_replay`/`sync_visible_sessions`/
+//! `workspaces`/`profiles`/`ids`）与 `core::broker` 的公开面（`Broker::authorize`/`Broker::replay`）以及
 //! `sync-protocol` 的 DTO；不 import `storage-sqlite`、不调用 `server::node_link`、不依赖 `app`
-//! （`AGENTS.md` §5、`docs/MODULE_ARCHITECTURE.md` §4.9）。其中 **`Broker::replay` 的直连是过渡形态**：
-//! 按 §4.9 adapter 只应调用 `core::use_cases`，事件重放读面待 core 提供
-//! `UseCases::sync_replay`（任务 1.6，在途）后收拢到用例面，那条直连届时移除。
+//! （`AGENTS.md` §5、`docs/MODULE_ARCHITECTURE.md` §4.9）。**事件投递只走 `UseCases::sync_replay`**
+//! （任务 1.6 落地后收拢）：`Broker::replay` 的直连只剩保留窗口探测一处（`reset_required` 的唯一来源，
+//! 该结论不在 `sync_replay` 的判定范围内，见 `ReadView::sync_replay` 的口径注释）。
 
 pub mod cursor;
+pub mod event;
+pub mod fanout;
+#[cfg(test)]
+mod fanout_tests;
 
 #[cfg(test)]
 pub(crate) mod fixture;
@@ -54,7 +70,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acp_core::broker::{Broker, Denied};
-use acp_core::model::{Actor, GlobalCursor, NodeId, PortError, RemoteSessionRef};
+use acp_core::model::{
+    Actor, CommittedEvent, DeviceId, EventOrigin as CoreEventOrigin, GlobalCursor, NodeId,
+    PortError, RemoteSessionRef, Sequence,
+};
 use acp_core::ports::ReplayLimit;
 use acp_core::use_cases::UseCases;
 use serde::de::DeserializeOwned;
@@ -64,7 +83,7 @@ use sync_protocol::error::{Body, ErrorCode};
 use sync_protocol::sync::{Ack, CaughtUp, ResetReason, ResetRequired, SnapshotRequest, Subscribe};
 use tracing::{debug, info, warn};
 
-use crate::sync::conn::registry::ConnectionRegistry;
+use crate::sync::conn::registry::{ConnectionRegistry, SendFault};
 use crate::sync::conn::{ConnectionHandle, MessageRoute, RouteOutcome};
 use crate::sync::snapshot::{self, SnapshotInputs};
 use crate::sync::subscribe::cursor::{CursorDecision, CursorFault, SubmittedCursor};
@@ -110,6 +129,12 @@ pub trait OwnerReachability: Send + Sync + 'static {
 struct ConnectionState {
     /// 协商出的 feature（认证完成时交接）。
     features: NegotiatedFeatures,
+    /// 该连接的设备 actor（`sync_replay` 的授权入参；屏障建立时一并记下，实时扇出复用同一份）。
+    ///
+    /// **必须是同一个 actor**：实时与重放走同一个 `session.list` 授权判定，两处各建一个 actor 会让
+    /// "同一设备在两条路径上可见性不同"成为可能（scope 在连接期内可能被撤销，见 `put_device`）。
+    device: Option<acp_core::model::DeviceId>,
+    scopes: acp_core::model::ScopeSet,
     /// 已发给对端的最高游标（`sync.caught_up` 的屏障）：`sync.ack` 的上限（§9.5）。
     barrier: Option<GlobalCursor>,
     /// 本连接的设备 ACK 最大值（单调不减；只服务诊断与保留策略，**不**决定恢复位置）。
@@ -159,6 +184,110 @@ impl SubscribeRoute {
     pub(crate) fn tracked(&self) -> usize {
         lock(&self.states).len()
     }
+
+    // -----------------------------------------------------------------------------------------
+    // 实时扇出的观测口（`fanout` 模块用；本模块仍是这些状态的唯一写方）
+    // -----------------------------------------------------------------------------------------
+
+    /// 已建立屏障的连接（实时投递的唯一目标集；顺序按 `(hostId, deviceId)` 稳定）。
+    ///
+    /// **屏障是实时投递的闸**：没有屏障 = 该连接还在重放/快照中，或已被拒绝——两种情况都由路由线程
+    /// 自己推进，实时循环碰它会 interleaving 出"实时事件越过序号更早的已持久化事件"的帧序
+    /// （4.3/4.8 的判据）。句柄不在注册表里的条目一并跳过（连接已结束）。
+    ///
+    /// 每项带该连接的设备 actor：`sync_replay` 的授权入参（与重放路径同一个 actor、同一道
+    /// `session.list` 授权，因此实时与重放的可见性判定不可能给出两种结论）。
+    pub fn live_targets(
+        &self,
+        registry: &ConnectionRegistry,
+    ) -> Vec<(Arc<ConnectionHandle>, Actor)> {
+        let states = lock(&self.states);
+        registry
+            .handles()
+            .into_iter()
+            .filter_map(|handle| {
+                let state = states.get(handle.connection_id().as_str())?;
+                let device = state.device.as_ref()?;
+                state.barrier.as_ref()?;
+                Some((
+                    handle,
+                    Actor::Device {
+                        device: device.clone(),
+                        scopes: state.scopes.clone(),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// 该连接是否协商了 `core.event-origin.v1`（`origin` 身份字段的唯一门控；扇出侧按连接判）。
+    pub fn origin_feature_of(&self, session: &ConnectionHandle) -> bool {
+        self.features(session).contains(event::EVENT_ORIGIN_FEATURE)
+    }
+
+    /// 事件行 → `event` 帧素材的读面（重放与实时扇出共用同一个实现，字段装配因此不可能漂移）。
+    pub fn reader(&self) -> Arc<CoreEventReader> {
+        Arc::new(CoreEventReader {
+            core: Arc::clone(&self.core),
+        })
+    }
+}
+
+/// 事件行 → [`acp_core::ports::SyncEventRecord`] 的读面（实时扇出与增量重放的**唯一**字段来源）。
+///
+/// 用 trait 而不是直接传 `&UseCases`：扇出循环跑在自己的任务里，替身因此能在用例中替换真实读面
+/// （不需要起 SQLite 就能断言实时帧的每个字段）。
+#[async_trait::async_trait]
+pub trait EventReader: Send + Sync {
+    /// 取回这条事件的 `event` 帧素材；`Ok(None)` = 库里读不到这一行（降级为"客户端按 cursor 重放"）。
+    async fn read(
+        &self,
+        event: &CommittedEvent,
+        actor: &Actor,
+    ) -> Result<Option<acp_core::ports::SyncEventRecord>, PortError>;
+}
+
+/// 生产读面：一次 `sync_replay` 读，从这一行自身取回全部来源字段（与重放逐字节同源）。
+pub struct CoreEventReader {
+    core: Arc<UseCases>,
+}
+
+#[async_trait::async_trait]
+impl EventReader for CoreEventReader {
+    async fn read(
+        &self,
+        event: &CommittedEvent,
+        actor: &Actor,
+    ) -> Result<Option<acp_core::ports::SyncEventRecord>, PortError> {
+        // `after` 停在这一行的前一位：窗口读因此必然含这一行（除非库被并发清理 → 空窗口 → `None`）。
+        // epoch 取本机事件库 epoch（`CommittedEvent.origin_epoch` 是**会话级** origin epoch，与事件库
+        // epoch 不同源，不能拿来当 `serverEpoch`）；读 head 用 `sync_device_handshake_view`——它是 core
+        // 已登记的"本机水位与 epoch"读面，未知 deviceId 的视图同样结构完整。
+        let head = self
+            .core
+            .sync_device_handshake_view(&unknown_device())
+            .await
+            .map_err(|_| PortError::Corrupt("server epoch"))?
+            .head;
+        let previous = event.global_sequence.get().saturating_sub(1);
+        let cursor = GlobalCursor::new(
+            head.server_epoch,
+            Sequence::new(previous).map_err(|_| PortError::Corrupt("global sequence"))?,
+        );
+        let page = self
+            .core
+            .sync_replay(actor, Some(cursor), ReplayLimit::new(1))
+            .await?;
+        Ok(page
+            .events
+            .into_iter()
+            .find(|record| record.event.id == event.id))
+    }
+}
+
+/// 一个必然不存在于信任库的 deviceId（只为读 head 与 epoch；未知 deviceId 的视图同样结构完整）。
+fn unknown_device() -> DeviceId {
+    DeviceId::new("00000000-0000-7000-8000-000000000000").expect("占位 device id 形状合法")
 }
 
 #[async_trait::async_trait]
@@ -219,7 +348,7 @@ impl SubscribeRoute {
                 .await;
         }
         let decision = cursor::decide(&submitted, &head);
-        self.apply_cursor_decision(session, message, decision, &head)
+        self.apply_cursor_decision(session, message, decision, &head, &actor)
             .await
     }
 
@@ -234,6 +363,7 @@ impl SubscribeRoute {
         message: &Envelope,
         decision: CursorDecision,
         head: &GlobalCursor,
+        actor: &Actor,
     ) -> RouteOutcome {
         if let Some(fault) = cursor::fault_for(&decision) {
             self.cursor_invalid(session, message, fault, cursor::reset_for(&decision))
@@ -255,7 +385,9 @@ impl SubscribeRoute {
                 RouteOutcome::Claimed
             }
             CursorDecision::Resume(cursor) => {
-                self.set_barrier(session, cursor.clone());
+                // 只登记 actor：屏障必须等重放真正走到空页才闭合（§9.3 的顺序不变量 ——
+                // 否则整个重放窗口内该连接都是实时目标，实时帧会与重放帧在出站队列里交错）。
+                self.note_connection_actor(session, Some(actor));
                 self.advance(session, message, &cursor).await;
                 RouteOutcome::Claimed
             }
@@ -340,8 +472,10 @@ impl SubscribeRoute {
                     chunks = sent.chunk_count,
                     "the sync snapshot was queued"
                 );
+                // 只登记 actor：快照的头就是即将开始的投递起点，但屏障仍要等 advance 读到空页才闭合
+                // （§9.3：重放期间到达的实时事件必须排在屏障之后）。
                 let barrier = GlobalCursor::new(head.server_epoch.clone(), head.global_sequence);
-                self.set_barrier(session, barrier.clone());
+                self.note_connection_actor(session, Some(&actor));
                 self.advance(session, message, &barrier).await;
             }
             Err(snapshot::SnapshotFault::Local) => {
@@ -470,18 +604,34 @@ impl SubscribeRoute {
     }
 
     // -----------------------------------------------------------------------------------------
-    // 投递推进（本切片的显式边界，见模块文档）
+    // 投递推进（增量重放 + barrier，见模块文档）
     // -----------------------------------------------------------------------------------------
 
-    /// 屏障之后的推进：`from` 之后若还有待投递的可见事件，本切片**不投递**（缺少 `event` 帧必需的
-    /// `origin`/`causationRequestId`，见模块文档），只在**确实为空**时发 `sync.caught_up`。
+    /// 屏障之后的推进（任务 4.3/4.8 的落点）：重放批次 → 按 `globalSequence` 升序的 `event` 帧 →
+    /// `sync.caught_up` → 之后由实时扇出继续投递（`sync.fanout`）。
     ///
-    /// 判据只花一次 `limit = 1` 的重放读，但它同时是 `cursor_expired` 的**唯一**来源：保留窗口的下界只在
-    /// 存储层可见（§9.2 的"已早于保留窗口"），因此存储层给出的 `reset_required` 在这里翻译成
-    /// `sync.cursor_invalid`（`details.reason` 取同一词表的对应值）与主动的 `sync.reset_required`。
-    /// 非空读（或读面失败）时回 `internal.unavailable`（retryable）并记
-    /// `sync.event_delivery_unavailable`——既不谎报屏障，也不静默丢弃。
+    /// 三段判据各自不可省：
+    ///
+    /// 1. **`cursor_expired` 的唯一来源是存储层的保留窗口判定**：窗口下界只在存储层可见（§9.2 的
+    ///    "已早于保留窗口"），因此读视图给出的 `reset_required` 在这里翻译成 `sync.cursor_invalid`
+    ///    （`details.reason` 取同一词表的对应值）与主动的 `sync.reset_required`。这一步**先于**任何
+    ///    事件读取——被拒的游标绝不进入"从下界开始读"那条钳制分支。
+    /// 2. **读到的每一页都按 `globalSequence` 升序投递**：同一批内存储层已排序，跨批由 `next` 续读游标
+    ///    保证单调（每批的 `next` 停在本批最后一条）。权限过滤（`Broker::authorize` 的设备 scope 判定）
+    ///    造成的序号空洞**合法且不报错**（§9.1/§10.1 的 spec）：跳过的序号不进 `event` 帧、不回错误，
+    ///    屏障游标高于该段即可由客户端 ACK。
+    /// 3. **空读才是屏障**：读不出更多事件时把本批的 `head` 记为屏障并发 `sync.caught_up`。屏障**之后**
+    ///    才允许实时事件进队（实时扇出以"屏障已建立"为闸，见 [`crate::sync::fanout`]），因此重放期间
+    ///    到达的事件排在屏障之后、不会越过序号更早的已持久化事件。
+    ///
+    /// 读面失败（含历史行无法归因的 [`PortError::Corrupt`]）一律显式失败关闭：回
+    /// `internal.unavailable`（retryable）并记**可见**诊断，绝不伪造 `kind`/`deviceId`/`nodeId`、
+    /// 也绝不静默跳过那一批。
     async fn advance(&self, session: &ConnectionHandle, message: &Envelope, from: &GlobalCursor) {
+        let Some(actor) = self.connection_actor(session).await else {
+            return;
+        };
+        // ① 保留窗口判定（`limit = 1` 的探测读：结论只取决于游标位置，与页大小无关）。
         match self
             .broker
             .replay(Some(from.clone()), ReplayLimit::new(1))
@@ -508,22 +658,7 @@ impl SubscribeRoute {
                             .await;
                     }
                 }
-            }
-            Ok(batch) if batch.events.is_empty() => {
-                let barrier = batch.head.clone();
-                self.set_barrier(session, barrier.clone());
-                self.send_caught_up(session, &barrier);
-            }
-            Ok(batch) => {
-                warn!(
-                    event = "sync.event_delivery_unavailable",
-                    device_id = session.device_id().as_str(),
-                    pending = batch.events.len(),
-                    head = batch.head.global_sequence.get(),
-                    "the event delivery leg is not implemented (the core event read surface does not carry origin/causation); the connection is not told it is caught up"
-                );
-                self.clear_barrier(session);
-                self.refuse_for_now(session, message);
+                return;
             }
             Err(error) => {
                 warn!(
@@ -536,8 +671,154 @@ impl SubscribeRoute {
                 let _ = self
                     .internal(session, message, "the replay window cannot be read")
                     .await;
+                return;
+            }
+            Ok(_) => {}
+        }
+        // ② 逐页投递。页长取**本连接协商**的 `maxReplayEventsPerBatch`（§14 的三项可下调值之一：
+        //    下发给对端一套、自己按另一套判定会变成两套口径）。
+        let limit = ReplayLimit::new(session.limits().max_replay_events_per_batch());
+        let mut cursor = from.clone();
+        loop {
+            if session.saturated() {
+                // 高水位停读（§14）：出站账本已经收不下更多帧。已发出的部分留在队列里，客户端按
+                // 最后收到的 `event` 序号 ACK；重连后从该 cursor 续投，不丢不重。
+                debug!(
+                    event = "sync.delivery_paused",
+                    device_id = session.device_id().as_str(),
+                    global_sequence = cursor.global_sequence.get(),
+                    fault = ?SendFault::HighWater,
+                    "the outbound ledger stopped the replay; the client resumes from the last event"
+                );
+                self.clear_barrier(session);
+                return;
+            }
+            match self
+                .core
+                .sync_replay(&actor, Some(cursor.clone()), limit)
+                .await
+            {
+                Ok(page) => {
+                    for record in &page.events {
+                        // 未协商 `core.event-origin.v1`：`kind = node` 的事件整条不投递（§10.1：
+                        // MUST NOT 因客户端版本伪造或降级 kind），其余照发（旧形状只有两个键）。
+                        if record.origin_kind == CoreEventOrigin::Node
+                            && !self.origin_feature(session)
+                        {
+                            debug!(
+                                event = "sync.event_skipped_node_origin",
+                                device_id = session.device_id().as_str(),
+                                event_id = record.event.id.as_str(),
+                                global_sequence = record.event.global_sequence.get(),
+                                "the connection did not negotiate core.event-origin.v1; the node-origin event is not delivered"
+                            );
+                            continue;
+                        }
+                        match event::event_body(record, self.origin_feature(session)) {
+                            Ok(body) => {
+                                if let Err(fault) = session.send(MessageType::Event, &body) {
+                                    debug!(
+                                        event = "sync.event_not_sent",
+                                        device_id = session.device_id().as_str(),
+                                        event_id = record.event.id.as_str(),
+                                        fault = ?fault,
+                                        "the outbound ledger refused the event; the client resumes from it"
+                                    );
+                                    self.clear_barrier(session);
+                                    return;
+                                }
+                            }
+                            Err(fault) => {
+                                // 组装不出合法帧（含身份字段形状不符）：显式失败关闭。
+                                // 这里绝不伪造 kind/deviceId、也不跳过该条假装没看见。
+                                warn!(
+                                    event = "sync.event_unassemblable",
+                                    device_id = session.device_id().as_str(),
+                                    event_id = record.event.id.as_str(),
+                                    global_sequence = record.event.global_sequence.get(),
+                                    fault = %fault,
+                                    "the persisted event cannot be mapped to a v1 event frame"
+                                );
+                                self.clear_barrier(session);
+                                self.refuse_for_now(session, message);
+                                return;
+                            }
+                        }
+                    }
+                    if let Some(last) = page.events.last() {
+                        cursor = GlobalCursor::new(
+                            page.head.server_epoch.clone(),
+                            last.event.global_sequence,
+                        );
+                    }
+                    // 空页 = 到 head 了：记屏障并发 `sync.caught_up`。屏障游标取**本批读视图的 head**
+                    // （同一只读事务内的一致性水位），它高于任何被过滤/跳过的序号段。
+                    if page.events.is_empty() {
+                        let barrier = page.head.clone();
+                        self.set_barrier(session, barrier.clone());
+                        debug!(
+                            event = "sync.caught_up_sent",
+                            device_id = session.device_id().as_str(),
+                            global_sequence = barrier.global_sequence.get(),
+                            "the replay reached the head; the barrier is now open for live events"
+                        );
+                        self.send_caught_up(session, &barrier);
+                        return;
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        event = "sync.event_read_failed",
+                        device_id = session.device_id().as_str(),
+                        global_sequence = cursor.global_sequence.get(),
+                        error = ?error,
+                        "the sync event read surface failed; the delivery is closed down"
+                    );
+                    self.clear_barrier(session);
+                    let _ = self
+                        .internal(session, message, "the replay window cannot be read")
+                        .await;
+                    return;
+                }
             }
         }
+    }
+
+    /// 本连接的设备 actor（`sync_replay` 的授权入参；持久化信任行缺失时失败关闭）。
+    async fn connection_actor(&self, session: &ConnectionHandle) -> Option<Actor> {
+        let view = match self
+            .core
+            .sync_device_handshake_view(session.device_id())
+            .await
+        {
+            Ok(view) => view,
+            Err(error) => {
+                warn!(
+                    event = "sync.device_view_failed",
+                    device_id = session.device_id().as_str(),
+                    error = ?error,
+                    "the persisted device snapshot cannot be read"
+                );
+                return None;
+            }
+        };
+        let Some(device) = view.device.as_ref() else {
+            warn!(
+                event = "sync.device_missing",
+                device_id = session.device_id().as_str(),
+                "the authenticated device has no persisted trust row"
+            );
+            return None;
+        };
+        Some(Actor::Device {
+            device: session.device_id().clone(),
+            scopes: device.scopes().clone(),
+        })
+    }
+
+    /// 本连接是否协商了 `core.event-origin.v1`（`origin` 身份字段的唯一门控）。
+    fn origin_feature(&self, session: &ConnectionHandle) -> bool {
+        self.features(session).contains(event::EVENT_ORIGIN_FEATURE)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -606,16 +887,39 @@ impl SubscribeRoute {
             .unwrap_or_default()
     }
 
-    /// 记下屏障（已发给对端的最高游标）。
+    /// 闭合屏障：把「已发给对端的最高游标」记下来，实时扇出从此可以投这条连接。
+    ///
+    /// **只在重放真正读到 head（空页）时调用**。提前闭合（例如订阅刚到达、或快照刚发完）会让整个
+    /// 重放窗口内的这条连接都成为实时目标，实时帧于是与重放帧在出站队列里交错，破坏 §9.3 的
+    /// 「重放期间到达的事件排在屏障之后」这一顺序不变量。
+    ///
+    /// 设备的 actor 不在这里落：它在连接进入订阅时就已确定，且生命周期与杠杆点不同，见
+    /// [`Self::note_connection_actor`]。
     fn set_barrier(&self, session: &ConnectionHandle, cursor: GlobalCursor) {
         let mut states = lock(&self.states);
-        states
+        let state = states
             .entry(session.connection_id().as_str().to_owned())
-            .or_default()
-            .barrier = Some(cursor);
+            .or_default();
+        state.barrier = Some(cursor);
     }
 
-    /// 清除屏障：本连接没有任何已发送的游标（拒绝、快照未发完整条、或投递腿不可用）。
+    /// 记下该连接的设备 actor（`live_targets` 的授权入参），**不与屏障闭合混为一谈**。
+    ///
+    /// `sync_replay` 的授权判定用同一个 actor、同一道 `session.list`，因此实时与重放的可见性判定
+    /// 不可能给出两种结论。actor 在连接刚进入订阅时就已确定；屏障则必须等重放真正读到 head 才闭合
+    /// （§9.3 的顺序不变量），两者生命周期不同，故分开记账。
+    fn note_connection_actor(&self, session: &ConnectionHandle, actor: Option<&Actor>) {
+        if let Some(Actor::Device { device, scopes }) = actor {
+            let mut states = lock(&self.states);
+            let state = states
+                .entry(session.connection_id().as_str().to_owned())
+                .or_default();
+            state.device = Some(device.clone());
+            state.scopes = scopes.clone();
+        }
+    }
+
+    /// 清除屏障：本连接没有任何已发送的游标（拒绝、快照未发完整条、或投递失败关闭）。
     fn clear_barrier(&self, session: &ConnectionHandle) {
         let mut states = lock(&self.states);
         if let Some(state) = states.get_mut(session.connection_id().as_str()) {
@@ -756,7 +1060,8 @@ impl SubscribeRoute {
         RouteOutcome::Claimed
     }
 
-    /// 投递腿不可用（见模块文档）：显式告诉对端"现在拿不到事件流"，不谎报屏障。
+    /// 该次投递失败关闭（历史行无法归因 / 帧组装不出来）：显式告诉对端"这回拿不到事件流"，
+    /// 不谎报屏障、也不静默丢一批。`retryable` 由错误码登记值决定（`internal.unavailable` = true）。
     fn refuse_for_now(&self, session: &ConnectionHandle, message: &Envelope) {
         let body = error_body(
             ErrorCode::InternalUnavailable,
@@ -764,7 +1069,7 @@ impl SubscribeRoute {
             RawObject::empty(),
             Some(message.message_id().clone()),
         );
-        self.send_error(session, body, "event_delivery_unavailable");
+        self.send_error(session, body, "event_delivery_failed");
     }
 
     /// 快照投影失败：按内部不可用失败关闭（不静默少发资源）。

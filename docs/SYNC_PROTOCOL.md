@@ -1,11 +1,12 @@
 # ACP Remote Sync Protocol
 
-> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。会话状态机、保留窗口、命令终态与授权判定尚未实现。  
+> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：§11 的业务命令面与终态投递、`server::acp_facade`、§9.6 的 imported 事件回源投递（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。  
 > 协议版本：1  
 > 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 修订记录（2026-10-02）：`session.create` 经 Sync 暴露（feature `core.session-create.v1`）——§11.3 把它移入可授予集合并写明双层授权与设备级判定，§11.5 给出 Sync 面的 `{ workspaceAlias, agentId }` payload、`accepted`/`completed` 终态与失败分类，§16.2 说明它是可选 feature 引入而非 major version；§5.2 新增 `core.session-create.v1` 与 `core.local-catalog.v1` 两条 feature。本次不新增任何错误码（映射见 §11.5）。
 > 修订记录（2026-10-14）：`event.body.origin` 增加第五个产生者类型 `kind = "node"`（由另一个节点经 Node Link 下发命令、在**本机**事件库落库的事件）与身份字段 `nodeId`，两者由 feature `core.event-origin.v1` 协商启用——§10.1 给出 `origin` 的两种形状（未协商时仍是冻结的 `{kind, deviceId}` 两个键）、`kind` 取值表的新行、唯一一条配对规则（`node` 必须带非空 `nodeId` 且 `deviceId` 为 `null`）与"经 feature 协商启用、不是加性变更"的理由；§9.6 同步 kind 枚举，§5.2 登记 `core.event-origin.v1`，§16.1/§16.2 把这次扩展归入 feature 协商并说明它为什么不需要 major version。机器资产同步：`schemas/sync/v1/event.schema.json` 的 enum、可选字段与 `if`/`then`（`origin.required` 保持 `kind`/`deviceId`），`compatibility/features/v1/features.json`，`fixtures/sync/v1/` 的固定向量（既有事件夹具补 `"nodeId": null`，新增 `kind = "node"` 的正例、两条 `node` 形状反例与一条未协商形状 `{kind, deviceId}` 的正例）。
-> 日期：2026-10-14（2026-09-18 基线；2026-10-02 追加 `session.create` 与本机目录 feature；2026-10-14 追加 `origin` 的 `node` 与 `nodeId`，feature `core.event-origin.v1`）
+> 修订记录（2026-10-14，`sync-server-connection` WP7 文档写回，无 wire 变更）：按 Daemon 侧实绩写入四节实现状态注记——§3.1（端点与 subprotocol 已可用、来源三形态的传递、binary 帧关闭）、§7.4（配对 HTTP 五项原子校验/幂等/status 一律 200/四个安全响应头/固定限流，并如实登记「证明失败 5 次失效只在内存」与本地确认入口在本机管理通道两项未落地）、§8.5（四消息握手、来源绑定、认证前固定上限、单设备替换与撤销传播、心跳与静默超时、出站账本双上限、close code 映射，并如实登记业务命令面未接线）、§9.6 末与 §9 末（cursor 判定、增量重放与 barrier、快照与摘要、ACK 已落地，§9.6 末条的 imported 回源投递**仍是计划**并注明缺口的接缝）。wire 形状、schema 与 fixture 均未变。
+> 日期：2026-10-14（2026-09-18 基线；2026-10-02 追加 `session.create` 与本机目录 feature；2026-10-14 追加 `origin` 的 `node` 与 `nodeId`，feature `core.event-origin.v1`；同日按 `sync-server-connection` 的 Daemon 侧实绩写回四节实现状态注记）
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
 ## 1. 文档职责
@@ -86,6 +87,8 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 - 一个完整 JSON 文档对应一个 WebSocket message；WebSocket frame 分片由实现层重组，不暴露给协议层。
 
 原生客户端可以连接已配置的多个 endpoint，但每个 endpoint 都必须证明同一个已配对 Host identity。PWA 身份只绑定一个 canonical origin。
+
+实现状态（`openspec/changes/sync-server-connection`，截至本修订）：本节所定义的传输面**已在 Daemon 侧落地**——`/sync/v1` 与 subprotocol 常量的唯一来源是 `crates/server/src/sync/conn/mod.rs`（`WS_PATH`/`WS_SUBPROTOCOL`，后者与 `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol` 同源），路由注册与绑定 listener 在组合根 `crates/app/src/daemon.rs` 的 `register_sync_paths`（`register_ws`）。接入层按 §3.2 归一化请求来源并把三形态（`Known`/`Absent`/不可归一化）传给连接面；binary 帧关闭连接、不进入协议逻辑（`crates/server/src/sync/conn/session.rs`）。§3.2 的「非浏览器原生客户端可以没有 HTTP `Origin`，此时 transcript 中使用空字节串」一条**在 Sync 面未被采用**：`identity-auth` 对 `SyncDevice` 强制要求 `canonical_origin` 为 `Some`，因此无来源（`Absent`）与非 `https://` 来源一律走拒绝路径，不以空字节串放行（详见 §8.1 的实现状态注记）。
 
 ### 3.2 Origin 与 Host 检查
 
@@ -502,6 +505,14 @@ consumed
 
 错误 body 使用与第 12 节一致的 `code/message/retryable/correlationId/details` 结构。网络响应丢失后，客户端可以使用相同 claim 内容重试；如果服务端已接受同一 device/client nonce，应返回原 pairing request，而不是创建第二条记录。不同 claim 内容则返回 `409 pairing.already_claimed`。
 
+实现状态（`openspec/changes/sync-server-connection`，截至本修订）：§7.0–§7.4 的 HTTP 面**已落地**，实现与唯一入口在 `crates/server/src/sync/pairing.rs`（`CLAIM_PATH`/`STATUS_PATH` 与四个安全响应头常量同源，由组合根 `crates/app/src/daemon.rs` 的 `register_sync_paths` 注册到共享 listener）。已覆盖的实绩：claim 的五项原子校验与「先校验、后提交」的写入时序（失败时配对状态、对端行与信任记录一个字节都不改）、同内容重复 claim 幂等返回原结果而不同内容返回 `409`、`status` 的 proof 校验与一律 200、四个安全响应头同时出现在处理器自身与接入层预处理响应（413/405/Host 400）上、claim 按来源真实连接地址 10 次/分钟与 status 按 `pairingId` 60 次/分钟的固定限流（不可信转发头不参与计数）。
+
+仍**未实现**或已知偏差（如实登记，不得当作已落地）：
+
+- **证明失败 5 次使配对失效只在内存**（`crates/identity-auth/src/state.rs`）：失效没有持久记录，DB 行保持 `created` 直到过期扫描改写成 `expired`。已判定可接受：HTTP 面不伪造 `Actor::LocalCli`，而重启会一并清空 secret、只会更严；持久落账等「本机终态写面」提供不需伪造主体的结算入口后接上（`tasks.md` WP5 任务 5.8）。
+- **本地确认入口仍在本机管理通道**：`device.pair.begin/status/confirm/reject` 经 `server::local_admin` 完成（§7.0 的「本地 CLI、loopback UI 或其他已授权电脑入口」），未提供未认证的远程确认路径。
+- 配对有效期的时间戳口径按整秒截断（`transcript::unix_seconds`），与参数校验层的毫秒窗口存在已登记的亚秒取值差异（`tasks.md` WP5 任务 5.7）；`expiresInMs` 的语义本文不做放宽。
+
 ## 8. WSS 认证
 
 认证阶段只允许本节消息。认证完成前收到业务消息，服务端以 `4401` 关闭。
@@ -618,6 +629,17 @@ v1 对每个 `(hostId, deviceId)` 只保留一条 active WSS：
 每个原生安装和每个 PWA origin profile 应拥有独立 `deviceId`。不得通过共享一个 device identity 来模拟多个独立客户端。
 
 ACK 首先属于连接；服务端可以保存设备 ACK 的最大值用于保留策略和诊断，但新连接恢复位置以客户端在 `sync.subscribe` 明确提交的本地 durable cursor 为准，不能由服务端最大 ACK 擅自推进。
+
+实现状态（`openspec/changes/sync-server-connection`，截至本修订）：§8.1–§8.5 的认证面**已落地**，实现集中在 `crates/server/src/sync/conn/`（`mod.rs` 的常量、`handshake.rs` 的纯函数、`session.rs` 的会话驱动、`registry.rs` 的连接注册表与出站账本）。已覆盖的实绩：
+
+- 四消息握手经 `identity-auth` 的 `SyncDevice` 入口完成双向 challenge-response；**未知设备照常签发结构完整的挑战**，失败推迟到 proof 阶段并统一为 `auth.proof_invalid`（不用错误类别区分设备是否存在）。
+- 来源绑定：来源与设备记录的 canonical origin **逐字**比较；不一致、无来源（`Absent`）、非 `https://` 来源一律拒绝（`auth.origin_mismatch`）；transcript 的 `canonicalOrigin` 取服务端判定值，不取 body 自报值。
+- 认证完成前只接受 `hello` 与 `proof` 各一次，收到业务消息以 `4401` 关闭；整个认证在 15 秒内完成（超时 `4408`），首条 `hello` 5 秒窗口与 32 KiB 体上限、单节点并发 WSS 连接 256 均为 §14 的认证前固定值。
+- 单设备替换（`4411 connection_replaced`：新连接认证成功后关旧连接、旧连接关闭不撤销设备）与撤销传播（提交后按 `deviceId` 关闭全部活动连接 `4410` 并拒绝后续认证）均已落地；设备撤销钩子由组合根接到真实连接注册表（`crates/app/src/daemon.rs`）。
+- 心跳（`control.ping` 30 秒、`control.pong` nonce 回填）与连续 90 秒静默超时；出站账本双上限 8 MiB / 2,000 条，序号分配与入队同一临界区，被高水位拒绝的投递不消耗序号。
+- §12.3 的 close code 表（`4400`/`4401`/`4403`/`4406`/`4408`/`4409`/`4410`/`4411`/`4429`/`4500`）与错误 body 的 `code/message/retryable/correlationId/details` 结构按 `compatibility/errors/v1/errors.json` 逐条映射；认证失败留痕（未知设备同样留痕、归因只取持久化身份）由 `core::use_cases` 的认证失败审计入口落库。
+
+业务命令面（§11）与 `server::acp_facade` 仍**未落地**：认证后的消息目前只由订阅面认领 `sync.subscribe`/`sync.snapshot_request`/`sync.ack`，其余 type 以 `protocol.type_unsupported` 显式拒绝（`crates/server/src/sync/subscribe/mod.rs` 的 `MessageRoute` 实现；没有路由认领时 `conn` 给同一错误码）。
 
 ## 9. Cursor、订阅与快照
 
@@ -874,11 +896,21 @@ remoteOrigin = {
 - Owner 不可达时 `session.read` 返回 `resource.remote_unavailable`，同时把该会话的 `origin.online` 置为 `false` 并广播一次 `session.origin.online_changed`；恢复可达后同样以该事件把 `online` 置回 `true`。
 - Owner 离线期间客户端不得把远程会话的输入标记为已发送或已接受；本地 draft 可以保留，但必须显式标记为未提交。
 - `session.list` 只返回该设备有权查看的本地会话与 imported 摘要，两者使用同一 `SessionSummary` 形状；不得为远程会话发明第二套字段。
-- imported 事件没有可回放的本地正文：`sync.subscribe` 从 cursor 增量重放时，Access 必须按 origin cursor 向 Owner 重新获取对应事件后再交付；无法回源的区间（例如已超出 Owner 的保留窗口或 Owner 离线）必须以 `sync.reset_required`（`reason` 取 `cursor_expired` 或 `epoch_mismatch`）让客户端重建会话视图，不得发送只有 `sha256`/digest 而没有内容的伪事件，也不得把内存中的临时投递当作可重放历史。
+- **（计划条款，尚未实现）** imported 事件没有可回放的本地正文：`sync.subscribe` 从 cursor 增量重放时，Access 必须按 origin cursor 向 Owner 重新获取对应事件后再交付；无法回源的区间（例如已超出 Owner 的保留窗口或 Owner 离线）必须以 `sync.reset_required`（`reason` 取 `cursor_expired` 或 `epoch_mismatch`）让客户端重建会话视图，不得发送只有 `sha256`/digest 而没有内容的伪事件，也不得把内存中的临时投递当作可重放历史。**实现现状**：本条的**回源投递**尚未落地——它需要 `node_link` 边界的回源端口（`server::sync` 按 `MODULE_ARCHITECTURE.md` §4.9 不得调用平级的 `server::node_link`），而 imported 的 `local_sequence` 与 `owned_event.global_sequence` 是两个序号空间、还需要一处统一的「连接内排序与 ACK」分配器，两者都不在本交付范围内（`tasks.md` WP4 任务 4.9 已登记该缺口与所需接缝）。已落地的是 §9.6 的**清单与门控**部分：`sessions` chunk 与设备可见会话清单会合并自有与已导入会话、未协商该 feature 时一律不含 imported 条目且不携带来源信息（`crates/server/src/sync/snapshot/mod.rs`、`core::use_cases::sync_visible_sessions`）。
 
 未协商该 feature 时，Access 不得返回任何 `origin.kind = "remote"` 的会话，也不得发送带非空 `remoteOrigin` 的事件。
 
 imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner 侧投影携带目录引用为止。Access Node MUST NOT 用自己的 workspace 集合为 imported 会话猜测归属，也不得按本机规范化路径反查。
+
+实现状态（`openspec/changes/sync-server-connection`，截至本修订）：§9.1–§9.5 的订阅、重放、快照与 ACK 面**已落地**，`crates/server/src/sync/subscribe/`（cursor 判定、`MessageRoute` 分派、`event` 帧装配与实时扇出）与 `crates/server/src/sync/snapshot/`（清单资源组装、分块下发与 `snapshotDigest`）。已覆盖的实绩：
+
+- cursor 判定（§9.2）：`null` 走首次同步；格式非法、`epoch_mismatch`、`beyond_head`、`cursor_expired` 四种 `sync.cursor_invalid` 的 `details.reason` 可区分且互不混用；**不得钳制到 head**（越界 cursor 不按 head 续投）。超出 §3.3 序号上界（`2^63−1`）或 64 位承载范围的取值是**协议错误**（`protocol.schema_invalid`），不折叠为任一 `reason`。
+- 增量重放（§9.3）：从 cursor 之后按 `globalSequence` 升序投递 `event` 帧，随后 `sync.caught_up`；重放期间到达的实时事件排在屏障之后，绝不越过序号更早的已持久化事件；权限过滤造成的序号空洞合法且不报错，屏障游标高于该段即可 ACK。事件正文经 `core::use_cases::sync_replay`（`session.list` 授权）读出并原样顺带 `origin_kind`/身份字段与 `causation`——`deviceId` 仅在 `device` 类事件非空，取值经 `causation` 回查诱发命令的 actor，不得由「有没有会话」推断。
+- 无法归因的历史事件**显式失败关闭**：升级前写入、`causation` 缺失或无法归因的事件不伪造 `kind`/`deviceId`，由投递层记诊断并让该次订阅返回 `internal.unavailable`（retryable）；协商 `core.event-origin.v1` 的连接不会收到 `deviceId` 为 `null` 的 `kind = device` 事件。
+- 快照（§9.4）：`sessions` chunk 恒发一个（空会话也发空数组），`workspaces`/`agents` 受 `core.local-catalog.v1` 门控（未协商不下发、不以空数组占位），`chunkCount` 与实际块数一致且取值 `1..=3`；六类会话明细资源不进快照；`snapshotDigest` 按每个 chunk 的**原始 UTF-8 文本字节**分别求 SHA-256、按 `chunkIndex` 顺序连接后再求一次 SHA-256，结果取无填充 base64url。
+- ACK（§9.5）：只前进，回退被忽略并记诊断；超过本连接已发送最高游标时回 `sync.cursor_invalid`；ACK 不推进事件库 head，服务端保存的设备 ACK 最大值不决定新连接的恢复位置。
+
+**仍未落地**（与本小节相邻）：业务命令面（§11）尚未接线（§11 的命令、终态投递与授权后的执行路径都未实现；其余 type 以 `protocol.type_unsupported` 拒绝）；imported 事件的回源投递见 §9.6 末条的计划标注。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
 ## 10. Event
 

@@ -23,15 +23,15 @@ use crate::model::{
     AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
     CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
     ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, EndpointEvent, EntityRef, EventId, EventPayload, EventType, ExportId, ExportRecord,
-    GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution, LocalCursor,
-    MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
-    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
-    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
-    ProviderRef, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, SecretValue,
-    SeedState, Sequence, ServerEpoch, SessionId, SessionRecoveryRecord, SessionReference,
-    SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
-    WorkspaceAlias, WorkspaceRecord,
+    Digest, EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType, ExportId,
+    ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
+    LocalCursor, MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
+    OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
+    PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
+    PromptRequest, ProviderRef, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest,
+    SecretValue, SeedState, Sequence, ServerEpoch, SessionId, SessionRecoveryRecord,
+    SessionReference, SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId,
+    TurnState, Version, WorkspaceAlias, WorkspaceRecord,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -402,6 +402,73 @@ pub struct NodeLinkSlice {
     pub events: Vec<OwnedEventRecord>,
 }
 
+/// Sync 事件读面的条目（`SYNC_PROTOCOL.md` §10.1 的 `event` 帧）：定位 + 持久化正文 + 三个**只有存储
+/// 行能回答**的来源字段。
+///
+/// 为什么不复用 [`OwnedEventRecord`]：`origin_kind` 与 `causation` 是 `owned_event` 的两个列（§7.3），
+/// 而 `CommittedEvent` 是 §3.4 冻结的**只带定位**的值对象、`EventPayload` 是正文，两者都不承载它们；
+/// 于是 `schemas/sync/v1/event.schema.json` 列为 required 的 `origin`/`causationRequestId` 在既有读面上
+/// **无法组装**。本条目是它们的载体，`OwnedEventRecord`/`CommittedEvent` 的形状因此不变（它们有大量
+/// 现存调用方）。
+///
+/// `remoteOrigin`（同属 §10.1 的 required 清单）**没有**载体：本读面只读 `owned_event`，而 imported
+/// 事件的正文与 `remoteOrigin` 属另一套读路径（imported 家族无正文，§7.4），因此调用方按「本读面返回的
+/// 都是 owned 事件 ⇒ `remoteOrigin` 恒为 `null`」投影（§9.6）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncEventRecord {
+    /// 定位；与 [`OwnedEventRecord::event`] 同源（同一条行、同一次取行）。
+    pub event: CommittedEvent,
+    /// 持久化正文；与 [`OwnedEventRecord::payload`] 同源（同一条行，不逐条回查）。
+    pub payload: EventPayload,
+    /// `SYNC_PROTOCOL.md` §10.1 的 `origin.kind`：取 `owned_event.origin_kind`。
+    ///
+    /// 取值**只能**来自该列——按「这条事件有没有 `session_id`」推断来源不是本字段的语义，实现不得据此
+    /// 猜测或补全（§5.2 关于 `PendingEvent.origin` 的条款同口径）。**五个**取值
+    /// （`agent`/`device`/`daemon`/`local_cli`/`node`）原样往返（§7.3 的 CHECK 与 wire 词表同集）；
+    /// 词表外取值是列值损坏：实现**必须**返回 [`PortError::Corrupt`]，不得静默降级或挑一个近义取值。
+    pub origin_kind: EventOrigin,
+    /// `SYNC_PROTOCOL.md` §10.1 的 `origin.deviceId`：**仅** `origin_kind = device` 时非空，其余
+    /// 恒为 `None`。
+    ///
+    /// 取值来自 `owned_event.causation`（= 诱发该事件的命令 `requestId`）到 `owned_command.actor_id` 的
+    /// 回查（要求 `actor_kind = 'device'`）。§10.1 对 `kind = device` 的语义要求是「事件来自已授权
+    /// Sync 设备经命令产生 ⇒ 带非空 `deviceId`」，而 schema 侧的 `{kind:"device", deviceId:null}` 又
+    /// 合法（见 `SYNC_PROTOCOL.md` §10.1 的配对规则与 §16.2）——因此**发送方** MUST NOT 产生那种
+    /// 帧。本读面据此**失败关闭**：`origin_kind = device` 而设备 id 得不出唯一取值时，实现 MUST 返回
+    /// [`PortError::Corrupt`]，MUST NOT 以 `None` 交差了事（那等于把「投递层无法组装合法帧」改写
+    /// 成一条合法取值，逼它静默发出 §10.1 禁止的形状），也 MUST NOT 从旁路（会话归属、actor 瞬时
+    /// 状态……）推断一个 id。
+    ///
+    /// 得不出唯一取值的三类情形（真实库里的产生路径见 §5.2 的 `[决定]`）：`causation` 为空、
+    /// 回查不到对应命令行（该 requestId 不在本机 `owned_command` 里）、命令行的 `actor_kind`
+    /// 不是 `device`（`node`/`cli`）。第四类是库被外部改写：同一 `requestId` 命中**多台**设备
+    /// （`owned_command` 的唯一键是 `(actor_kind, actor_id, request_id)`，跨设备复用同一 requestId
+    /// 在 DDL 上合法）——那同样没有唯一答案，同样失败关闭。
+    pub origin_device_id: Option<DeviceId>,
+    /// `SYNC_PROTOCOL.md` §10.1 的 `origin.nodeId`（feature `core.event-origin.v1`）：**仅**
+    /// `origin_kind = node` 时非空，其余恒为 `None`。
+    ///
+    /// 与 [`SyncEventRecord::origin_device_id`] 同源同口径，只是回查要求 `actor_kind = 'node'`，
+    /// 取回的 `actor_id` 是该命令的 `"{ownerNodeId}/{accessNodeId}"` 复合键（§7.3），本字段取其中的
+    /// **主 principal** `ownerNodeId`（§10.1 的 `nodeId` 就是产生该事件的另一个节点；access 端点
+    /// 只经命令幂等键存在）。§10.1 的配对规则「`kind = node` ⇒ `nodeId` 非空且 `deviceId` 为
+    /// `null`」由本条与上一条的分工保证：两者互斥、且都得不出唯一取值时失败关闭。
+    pub origin_node_id: Option<NodeId>,
+    /// `SYNC_PROTOCOL.md` §10.1 的 `causationRequestId`，取 `owned_event.causation` 原样：没有命令直接
+    /// 导致的事件为 `None`（§10.1 的规则原文）。
+    pub causation: Option<RequestId>,
+}
+
+/// Sync 事件读面的一个批次（[`ReadView::sync_replay`] 的返回值）：`after` 之后的一页事件 + 生成这批
+/// 数据时的一致性视图 head（`sync.caught_up` 的屏障游标），同一次只读事务内取得。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyncReplaySlice {
+    /// `after` 之后的事件，按 `global_sequence` 升序，最多 `limit` 条。
+    pub events: Vec<SyncEventRecord>,
+    /// 本批数据对应的一致性视图 head（barrier）。
+    pub head: GlobalCursor,
+}
+
 /// 历史页面。`config`/`capabilities` 是**用例层**按 `include` 合并的活体数据（来自
 /// `SessionEndpoint`/`AgentCatalog`）；存储层实现必须让它们保持空值——持久层不保存活体能力。
 ///
@@ -494,6 +561,31 @@ pub trait ReadView: Send + Sync {
         after: Option<GlobalCursor>,
         limit: ReplayLimit,
     ) -> Result<ReplayBatch, PortError>;
+
+    /// Sync 增量重放的事件来源（`SYNC_PROTOCOL.md` §10.1 的 `event` 帧）：`after` 之后的 owned 事件
+    /// （定位 + 持久化正文 + [`SyncEventRecord`] 的三个来源字段），按 `global_sequence` 升序，并给出
+    /// 生成这批数据时的 head（`sync.caught_up` 的屏障游标）。
+    ///
+    /// 与本 trait 的 [`ReadView::replay`] 的分工：`replay` 服务**本机**客户端的全局重放（owned 与
+    /// imported 合并成 `CommittedDelivery`，并给出 `reset_required`/`next`）；本方法只服务入站设备的
+    /// `event` 帧，回传 §10.1 要求的来源字段，且不做任何 cursor 解释。
+    ///
+    /// - 窗口：严格在 `after` 之后（`None` = 从头）、升序、最多 `limit` 条；已压缩的 delta 不出现
+    ///   （与 [`ReadView::replay`] 同口径，§6 第 15 条的「被压行由 summary 事件替代」）。
+    /// - `after.server_epoch` 与当前 epoch 是否一致**不由本方法判定**：四类 cursor 拒绝原因
+    ///   （`SYNC_PROTOCOL.md` §9.2）与 `sync.reset_required` 是投递层的判定，本方法只按
+    ///   `global_sequence > after` 取行。
+    /// - `origin_device_id`/`origin_node_id` 的回查必须与事件读在**同一次只读事务**内完成，且不得
+    ///   逐条回查（见 [`SyncEventRecord::origin_device_id`] 的取值规则）。
+    /// - **历史行失败关闭**：`origin_kind = device`（`node`）而设备（节点）id 得不出唯一取值时，实现
+    ///   MUST 返回 [`PortError::Corrupt`] 而不是给 `None`——升级前写入的行在 `causation`/actor 分类上
+    ///   本来就可能不可归因，交付层因此拿不到可组装的合法帧；读面必须把这个状态显式暴露出来，而不是
+    ///   伪装成合法取值（`SYNC_PROTOCOL.md` §10.1）。
+    async fn sync_replay(
+        &self,
+        after: Option<GlobalCursor>,
+        limit: ReplayLimit,
+    ) -> Result<SyncReplaySlice, PortError>;
 
     /// 会话的一页读（`session.read`）：`messages` 面的事件原料与结构化历史条目各自按 `include`
     /// 开关**分页**（`HistoryQuery::after` 与 `HistoryQuery::before_history` 互不影响）。

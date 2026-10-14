@@ -1,8 +1,8 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.6
-> 日期：2026-09-18
+> 版本：0.10
+> 日期：2026-10-14
 > 修订记录（2026-09-18）：补充 `daemon.tls.*`、`daemon.local_admin.endpoint`、`logging.*` 与 Owner 侧 `[[exports]]`（原先只有 Access 侧 `[[imports]]`）；明确限流与协议上限是固定 v1 常量而非配置键。
 > 修订记录（2026-09-18，0.3）：`[[exports]].grants` 更名为 `scopes`，与 Node Link Export 模型及本地通道 `ExportView` 同名同义（Access 侧 `[[imports]].grants` 是另一概念，不变）。
 > 修订记录（2026-09-18，0.4）：新增 `storage.audit_retention_days`（默认 365），审计清理排在容量顺序最后。
@@ -11,6 +11,7 @@
 > 修订记录（2026-09-23，0.7）：管理 store 的落盘实现已落地（`crates/storage-sqlite/src/admin/`），标题与「待实现」标记随之去掉；配置键名、默认值与 seed 语义**未变**（仍以本节为唯一权威）。
 > 修订记录（2026-09-26，0.8）：按 `node-link-owner`（切片 5）的实绩写回三处——§1 的 `daemon.allowed_hosts` 行补「`public_origin` 与 `allowed_hosts` 都为空（默认配置）时只接受 loopback 形态 `Host`」这一分支（原先只写了「为空时按 `public_origin` 推导」）并在 §1 末尾补 `public_origin` 的 canonical origin 口径与实现现状；§2/§3 加「本交付版本只解析、不消费」注记（`sync.*` 与 `node_link.*` 均被登记为未接线）。键名、类型、默认值**未变**（仍以本节为唯一权威）。
 > 修订记录（2026-10-13，0.9）：§2 撤下「三个 `sync.*` 键只解析、不消费」的注记——它们已接线，并写明「只下调」的生效路径与不再进 `Config::unwired`；§2 补记配对 HTTP 的请求体上限固定 16 KiB（非配置键，两面共用）。键名、类型与默认值**未变**（仍以本节为唯一权威）。
+> 修订记录（2026-10-14，0.10，`sync-server-connection` WP7）：§2 的「已接线」注记补上代码落点（`lower_of`/`sync_config`/`SyncConfig`/`SessionLimits::negotiate` 与「下调生效、上调被忽略」的自检用例），并如实登记 wire 下限造成的「过小值被协议层夹取而非失败关闭」缺口。键名、类型、默认值与「只下调」口径**均未变**（仍以本节为唯一权威）。
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 
 本文是 Daemon 运行时配置键名、类型、默认值与可否调整的**唯一权威来源**。协议层限额不在此重复定义：
@@ -77,10 +78,10 @@
 
 上表三项是 v1 中唯一允许按部署下调的 Sync 限额；§14 的其余上限是固定常量，不得通过配置放宽或收窄。
 
-**已接线（`sync-server-connection` 任务 6.3）**：三个键从「只解析」变为**真正消费**，取值口径是「只下调」——配置值高于上表默认值时**忽略配置、取默认值**（默认值同时是上界，来自 `SYNC_PROTOCOL.md` §14），低于默认值时生效并把该值下发到 `auth.authenticated.limits`。生效路径：`app::config` 在解析期收敛 → `daemon::sync_config` 映射 → `server::sync::conn::SyncConfig` → 协议层 `SessionLimits::negotiate` 再按 `[wire 下限, §14 默认值]` 夹一次。因此这三个键不再出现在 `Config::unwired`（启动日志不再逐键报 `daemon.config_unwired`）。
+**已接线（`sync-server-connection` 任务 6.3）**：三个键从「只解析」变为**真正消费**，取值口径是「只下调」——配置值高于上表默认值时**忽略配置、取默认值**（默认值同时是上界，来自 `SYNC_PROTOCOL.md` §14），低于默认值时生效并把该值下发到 `auth.authenticated.limits`。生效路径：`app::config` 在解析期收敛（`crates/app/src/config.rs` 的 `lower_of`，三项各与协议默认值取小）→ `daemon::sync_config` 映射（`crates/app/src/daemon.rs`，`sync.*` 的唯一消费点）→ `server::sync::conn::SyncConfig` → 协议层 `SessionLimits::negotiate`（`crates/server/src/sync/conn/limits.rs`）再按 `[wire 下限, §14 默认值]` 夹一次。因此这三个键不再出现在 `Config::unwired`（启动日志不再逐键报 `daemon.config_unwired`；`crates/app/src/config.rs` 的自检用例同时断言「下调生效」与「上调被忽略」两条都走到协议层协商结果上）。
 
-- 低于协议默认值是合法用法（收紧本机限额）；再往下的 wire 下限由协议层兜住，不会下发对端无法接受的 `limits`。
-- **配对 HTTP 的请求体上限固定 16 KiB**（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`；`SYNC_PROTOCOL.md` §14 冻结的数值）：它不是配置键，也不能按部署放宽；超限由接入层在调用处理器前返回 413，且该响应同样带 §7.1 的四个安全头。接入层的请求体上限是**每 listener 一个值**，Node Link 的配对端点共用同一个 16 KiB（`NODE_LINK_PROTOCOL.md` §13.4 只要求「有上限」，未冻结数值，因此对两面都合规）。
+- 低于协议默认值是合法用法（收紧本机限额）；再往下的 wire 下限由协议层兜住，不会下发对端无法接受的 `limits`。**已知缺口（已登记，未修）**：wire 下限（1024 / 1 / 1）是协议层的私有常量，组合根取不到，因此过小的值由协议层夹到下限而不是失败关闭式拒绝（`tasks.md` WP6 任务 6.3 记下的二选一补救）。
+- **配对 HTTP 的请求体上限固定 16 KiB**（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`；`SYNC_PROTOCOL.md` §14 冻结的数值）：它不是配置键，也不能按部署放宽；超限由接入层在调用处理器前返回 413，且该响应同样带 `SYNC_PROTOCOL.md` §7.1 的四个安全头（实现见 `crates/server/src/sync/pairing.rs` 的 `SECURITY_HEADERS`/`default_response_headers`，并经 `crates/app/src/daemon.rs` 的 `register_post` 传给接入层）。接入层的请求体上限是**每 listener 一个值**（`crates/server/src/transport/net/mod.rs` 的 `DEFAULT_MAX_BODY_BYTES`），Node Link 的配对端点共用同一个 16 KiB（`NODE_LINK_PROTOCOL.md` §13.4 只要求「有上限」，未冻结数值，因此对两面都合规）。
 
 ## 3. `node_link`
 

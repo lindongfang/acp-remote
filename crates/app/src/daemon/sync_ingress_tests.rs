@@ -24,6 +24,9 @@ use acp_core::model::{
 use acp_core::ports::TrustRecordRef;
 use acp_core::use_cases::UseCases;
 use base64::Engine as _;
+use server::sync::subscribe::fanout::SyncPublisher;
+
+use crate::compose::forked_publisher_with_sync;
 use identity_auth::{
     Authority, CanonicalOrigin, ChallengeId, ClaimFields, ClaimKindFields, ClaimOutcome,
     ClientKind, FeatureList, P1363Signature, PairingDecision, PairingProof, PairingSpec,
@@ -42,7 +45,7 @@ use server::sync::conn::{
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 
-use crate::compose::{Composition, forked_publisher};
+use crate::compose::Composition;
 use crate::config::Config;
 use crate::daemon::NetIngress;
 
@@ -155,11 +158,13 @@ impl Harness {
             dir = data_dir.display()
         ))
         .expect("测试配置必须合法");
-        let (publisher, event_queue) = forked_publisher();
+        let mut sync_publisher = SyncPublisher::channel();
+        let sync_events = sync_publisher.take_receiver();
+        let (publisher, event_queue) = forked_publisher_with_sync(Some(sync_publisher));
         let composition = Composition::assemble(config, publisher)
             .await
             .expect("组合根装配");
-        let ingress = NetIngress::start(&composition, event_queue)
+        let ingress = NetIngress::start(&composition, event_queue, sync_events)
             .await
             .expect("网络接入面必须启动");
         let addr = ingress

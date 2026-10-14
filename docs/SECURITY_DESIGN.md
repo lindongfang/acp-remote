@@ -1,8 +1,9 @@
 # ACP Remote 安全设计
 
 > 状态：编码前安全基线（Draft）  
-> 版本：0.4
-> 日期：2026-10-02  
+> 版本：0.5
+> 日期：2026-10-14  
+> 修订记录（2026-10-14，`sync-server-connection` WP7）：§9.4 与 §9.5 各加一段 `[实现现状]`——§9.4 写回 Sync 连接面的 Origin 校验实绩（来源三形态不折叠、逐字比较、`Absent` 与非 `https` 一律拒绝、`HostPolicy` 的已知偏差）与配对/认证只覆盖到「认证完成」的边界（业务命令级授权未接线）；§9.5 写回设备撤销传播实绩（`4410` 持久提交后经组合根 `ConnectionCloser` 关闭真实连接注册表、拒绝后续认证）与仍未落地项（Access 出站重连、设备侧 scope 缩减关连接）。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-02）：§9.4 新增「配对授予的 scope 是设备级而非资源快照」的显式规则，并写出 `session.create` 的设备级副作用；§10.2 把 `session.create` 归入新设备授权包 `pack.create-session`（不进任何预设），声明 Sync 面已暴露该入口与其 `{ workspaceAlias, agentId }` payload；§10.3 区分两个传输面的 workspace 引用边界；§11.2 把目录展示名列为按不可信内容渲染。  
 > 修订记录（2026-09-18）：§13.4 的可持久化元数据白名单显式加入「不含内容的审计元数据」，消除与 §11.5「保留审计记录」的矛盾。
 > 适用范围：Owner/Access Node、Node Link、Daemon、CLI、PWA、后续原生客户端、ACP Agent 子进程及 npm 发布链路
@@ -241,6 +242,16 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 - 每个新 WSS 完整认证，不签发长期 bearer session/refresh token。
 - Node identity 变化进入 `identity_changed`，不能自动接受。
 
+`[实现现状]`（2026-10-14，`sync-server-connection` 的同步面已落地）配对与设备认证在 Sync 面的落地边界：两条配对 HTTP 端点（`POST /sync/v1/pairing/claim`、`/status`）与四消息 WSS 握手均已实现，但**只覆盖到认证完成**——即「谁在连接、来自哪个 canonical origin、持有哪些 scope」这一段事实已经由 `identity-auth` 的状态机与 `core` 的持久判定给出（未知设备同样拿到结构完整的挑战、失败统一收敛为 `auth.proof_invalid`；认证失败无论设备是否已知都留审计且归因只取持久化身份）。业务命令的逐条授权（§10.1/§10.2）在 Sync 面**尚未接线**：命令路由与执行路径未落地，因此「撤销该 scope 或撤销设备立即使后续命令被拒」这条在 Sync 侧当前只由**设备撤销传播**（关闭活动连接 + 拒绝后续认证）与连接级的 `session.list` 观察授权体现，命令级拒绝要等 §11 业务命令面接线后才是端到端事实。设备**撤销**的实绩见 §9.5 的 `[实现现状]`。
+
+`[实现现状]`（2026-10-14）**Origin 校验**在 Sync 连接面已落地，口径是「失败关闭」而非「可选的加固项」：
+
+- 来源取自升级请求的 HTTP `Origin` 头，经接入层归一化（小写 scheme、规范化 hostname、显式有效 port、省略默认端口、不含 path/query/fragment 与尾部 `/`），并以三形态传入连接面（`Known` / 头缺席的 `Absent` / 头存在但不可归一化），**不折叠成同一个 `None`**——因此「没有来源」与「来源不可归一化」在对端可见行为上不可混用（`crates/server/src/transport/net/` 的 `WsHandler::handle` 参数与 `crates/server/src/sync/conn/handshake.rs` 的来源判定）。
+- 来源与设备记录绑定的 canonical origin **逐字**比较，不一致以 `auth.origin_mismatch` 拒绝；transcript 的 `canonicalOrigin` 取服务端判定值，**不取**客户端 body 自报值（对应 `SYNC_PROTOCOL.md` §8.1）。
+- **无来源（`Absent`）与非 `https://` 来源一律拒绝**，不以空字节串放行：`identity-auth` 对 `SyncDevice` 强制要求 `canonical_origin` 为 `Some`，且 `CanonicalOrigin::parse` 只接受 `https://` 前缀。因此 `SYNC_PROTOCOL.md` §3.2 的「非浏览器原生客户端可以没有 HTTP `Origin`」在 v1 未被采纳（节点间另有 Node Link 面，不依赖 Origin）。
+- 配对 HTTP 的 `Origin` 同样必须先存在、可归一化，并与该配对登记的 canonical origin 逐字相等；`Host` 边界由接入层在调用处理器前按 `daemon.allowed_hosts`/`daemon.public_origin` 判完（`crates/server/src/sync/pairing.rs`）。
+- **已知偏差（未收紧，已登记）**：接入层 `HostPolicy` 只要求 `daemon.public_origin` 能解析成 `http`/`https` 的 origin，因此 `http://` 字面量能过 Host 边界、却会在配对 URL 派生处失败关闭；收紧时两处必须同时改（见 `CONFIG_REFERENCE.md` §1 末的「实现现状」）。
+
 ### 9.5 撤销与轮换
 
 - 撤销设备必须提交持久状态后立即关闭其 active connection。
@@ -248,6 +259,8 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 - 怀疑 Device key 泄露时撤销该设备并重新配对。
 - 怀疑 Node key 泄露时生成新 Node identity、撤销所有设备/节点信任并重新配对；不能用普通 endpoint 更新掩盖 key 变化。
 - TLS 证书轮换不改变 Node identity；Node key 轮换不应由 TLS 证书更新自动触发。
+
+`[实现现状]`（2026-10-14，`sync-server-connection`）**撤销传播**在 Sync 面已落地，且接线点唯一：持久提交（`core` 的撤销写集，含审计）之后，由组合根的 `ConnectionCloser` 调用 Sync 连接注册表按 `deviceId` 关闭其全部活动连接——close code `4410 device_revoked`，语义是「先排空已入队消息，再发 close 帧」，随后拒绝该设备的后续认证（未知/已撤销设备在 proof 阶段统一失败）。设备撤销钩子此前恒报「没有可关闭的连接」，现已接到真实注册表（`crates/app/src/daemon.rs` 的撤销缝与 `crates/server/src/sync/conn/registry.rs`）。撤销**不**撤销配对本身，也不影响同设备的新配对流程；撤销后重新认证被拒是设备级事实，不依赖连接表是否已排空。**仍未落地**：Node Link 侧的 Access 出站重连管理器（属切片 6 的 `node-link-client`），因此 `daemon.status.links` 恒为空；scope 缩减的主动关连接当前只对 Node 重配对路径成立（`close_node_after_reauth`），设备侧 scope 缩减关连接要等 §11 业务命令面接线后才有意义。
 
 ### 9.6 Node Link 信任约束
 
@@ -559,6 +572,8 @@ storage.integrity_failed
   规则写在 `.gitleaks.toml`（CI 的 `secrets` job 与本地 pre-commit 共用），本地执行器扫**暂存内容**；
   自研格式的规则等密钥格式定稿时与格式定义同改（残余风险与实现细节见 ADR-0008）。
 - npm 平台选择、checksum、版本错配和禁止运行时下载。
+
+`[实现现状]`（2026-10-14，`sync-server-connection` 的同步面已落地）上述清单中与 Sync 连接/投递面相关、且**已有 Rust 测试覆盖**的条目：Origin 不一致/缺席/非 `https` 三种拒绝、未知设备的行为一致性、错误设备、撤销（活动连接 `4410` 与后续认证被拒）、同设备连接替换、sequence 回退与未知 type 的拒绝、snapshot barrier、ACK 越界、慢客户端隔离与恢复、配对并发/重复 claim/过期/拒绝/secret 清理、pairing/认证载体里不出现 secret 字面量。这些用例的位置在 `crates/server/src/sync/`（`conn/tests.rs`、`subscribe/tests.rs`、`snapshot/tests.rs`、`subscribe/fanout_tests.rs`、`pairing.rs`）与 `crates/app/src/daemon/sync_ingress_tests.rs`（组合根接线级：subprotocol 升级、两条配对 path 不再 404、安全头）。**尚未有覆盖**：真实 WSS 端到端用例（脚本化 fake 客户端经真实 loopback listener 的完整链路，属 OpenSpec 变更 §WP8）；浏览器侧（WebCrypto/IndexedDB/Origin）与平台验收仍在 §18.2 的 PWA 阶段；§11 业务命令面的授权与幂等要等命令面接线。
 
 ### 18.2 平台验收
 

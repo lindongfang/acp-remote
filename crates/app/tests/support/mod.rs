@@ -20,7 +20,10 @@
 // 受控路径全链路集成测试的 Owner 侧与 Access 侧（`node_link_e2e`）：生产接线 + 真实 loopback
 // listener + 脚本化 fake Access 客户端。其余用例文件不使用这两个模块。
 pub mod nodelink;
+// Sync 协议级端到端验收的设备侧（`sync_e2e`）：真实 loopback listener 上的 fake Sync 客户端
+// （握手 / 订阅 / 快照摘要复算 / ACK）。`node_link_e2e` 不使用它。
 pub mod owner;
+pub mod sync;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};

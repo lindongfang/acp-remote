@@ -40,8 +40,8 @@ use crate::ports::{
     NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
     PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
     PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
-    SeedWrite, SessionQuery, SessionStore, StoreHealth, TrustRecordRef, TrustStore, WorkspaceWrite,
-    WriteContext,
+    SeedWrite, SessionQuery, SessionStore, StoreHealth, SyncReplaySlice, TrustRecordRef,
+    TrustStore, WorkspaceWrite, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -453,6 +453,46 @@ impl UseCases {
             }
         }
         Ok(sessions)
+    }
+
+    /// Sync 增量重放的事件来源（`SYNC_PROTOCOL.md` §10.1 的 `event` 帧；spec `sync-event-delivery`
+    /// 「增量重放与实时投递的无缝衔接」）：`after` 之后的 owned 事件，每条带 §10.1 要求的来源字段，外加
+    /// 这批数据的一致性 head（`sync.caught_up` 的屏障游标）。
+    ///
+    /// **守卫与 [`UseCases::sync_visible_sessions`] 逐字同口径**：先按 `session.list` 走
+    /// `Broker::authorize`（同一个命令名、同一个 broker 判定、同一个 `authorization.scope_denied`——本层
+    /// 不写任何 scope 判定）。授权**先于**本层的任何读取，因此无权设备连一次只读视图都不会开，一条事件
+    /// 也读不出（不是「读出来再丢掉」）。**为什么在 [`UseCases::require_local`] 之外**：与
+    /// `sync_visible_sessions` 同一条理由——本入口服务的是**入站设备**的读取，可见性只能是设备 scope
+    /// （`require_local` 保护的是本机 CLI/桌面入口的管理读面，放宽它会连带打开 `devices`/
+    /// `profiles`/`workspaces` 那一批，风险面远大于需求）。
+    ///
+    /// 本层**不**投影：`event` 帧的每个字段都由 [`SyncReplaySlice`] 的条目承载（core 不做 JSON
+    /// 序列化，`MODULE_ARCHITECTURE.md` §8），因此不另立用例级类型；`remoteOrigin` 是唯一例外——本读面
+    /// 只返回 owned 事件，按 §9.6 它恒为 `null`（imported 事件的跳数与来源由投递层的 imported 路径另行
+    /// 投影）。按 scope 过滤事件（以及由此产生的合法序号空洞）与四类 cursor 判定都是投递层的事：
+    /// `server::sync` 的投递面负责把本层给出的这一页变成「可见事件 + `sync.caught_up`」，本层只如实给出
+    /// 存储上按 `global_sequence` 升序的一页。
+    ///
+    /// **返回错误即要求投递层显式失败关闭**：存储行得不出唯一设备/节点 id 时（见
+    /// [`SyncEventRecord::origin_device_id`]）读面返回 [`PortError::Corrupt`]；投递层必须记诊断并让该次
+    /// 订阅失败关闭，MUST NOT 伪造 `kind`/`deviceId`/`nodeId`。
+    pub async fn sync_replay(
+        &self,
+        actor: &Actor,
+        after: Option<GlobalCursor>,
+        limit: ReplayLimit,
+    ) -> Result<SyncReplaySlice, PortError> {
+        let request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "session.list", None, &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        self.store
+            .read_view()
+            .await?
+            .sync_replay(after, limit)
+            .await
     }
 
     /// `session.read`：owned 走事件日志；`include` 里的活体数据（config/capabilities）由本层从
@@ -2000,14 +2040,15 @@ mod tests {
     use crate::broker::test_support::{
         FakeAttachments, FakeDeliveries, FakeExports, FakeLocalConfig, FakeStore, FakeTrust,
         FakeWorld, TestAudit, TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest,
-        lock, prompt_command, uuid_text,
+        lock, prompt_command, ts, uuid_text,
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
         AgentId, AgentRef, AgentSessionId, CommandKind, CommandPayload, CommittedEvent,
-        DeviceState, Nonce, PairingState, ScopeSet, ViewJson,
+        DeviceState, EventKind, EventOrigin, NodeId, Nonce, PairingState, PendingEvent, ScopeSet,
+        StoredPolicy, ViewJson,
     };
-    use crate::ports::HistoryInclude;
+    use crate::ports::{HistoryInclude, IdempotencyRecord, OwnedCommit};
 
     /// 用例自建临时目录的守卫：析构时尽力删除（正常结束与 panic 展开两条路径都生效）。
     ///
@@ -2592,6 +2633,341 @@ mod tests {
             matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
             "与 list_sessions 同一授权口径，得到 {error:?}"
         );
+    }
+
+    /// 1.6（Sync 事件读面）：`SYNC_PROTOCOL.md` §10.1 的 `event` 帧所需的字段由
+    /// [`UseCases::sync_replay`] 如实带回——**五个** `origin.kind` 原样往返、`origin.deviceId` 只经
+    /// `causation` 回查**设备命令行**得到、`origin.nodeId` 只经同一条 `causation` 回查**节点命令行**
+    /// 得到（两者互斥，其余来源即便带同一个 causation 也不回填）、`causationRequestId` 原样（含
+    /// `None`）；窗口按 `global_sequence` 升序、严格在 `after` 之后、受 `limit` 限制；无 `session.list`
+    /// 授权时失败关闭且**一次读都不发生**。
+    #[test]
+    fn sync_replay_roundtrips_origin_and_requires_session_list_scope() {
+        let fixture = fixture();
+        let device = DeviceId::new(&uuid_text(301)).expect("device");
+        let request = RequestId::new(&uuid_text(302)).expect("request");
+        let node = NodeId::new(&uuid_text(304)).expect("node");
+        let access = NodeId::new(&uuid_text(305)).expect("access node");
+        let node_request = RequestId::new(&uuid_text(306)).expect("node request");
+        let store = FakeStore {
+            world: fixture.world.clone(),
+        };
+        // 五条事件覆盖五种 `origin.kind`：device 那条由设备命令引起（`causation` = 该命令的
+        // requestId）、node 那条由节点命令引起（另一条 requestId）；local_cli 那条**故意**带与 device
+        // 相同的 causation，用来固定「非本类不回填身份 id」。
+        let events = vec![
+            sync_event("agent.message.delta", EventOrigin::Agent, None),
+            sync_event("turn.completed", EventOrigin::Device, Some(request.clone())),
+            sync_event("storage.integrity_failed", EventOrigin::Daemon, None),
+            sync_event(
+                "session.mode.changed",
+                EventOrigin::LocalCli,
+                Some(request.clone()),
+            ),
+            sync_event(
+                "session.created",
+                EventOrigin::Node,
+                Some(node_request.clone()),
+            ),
+        ];
+        block_on(store.commit(OwnedCommit {
+            session: Some(fixture.session.clone()),
+            at: ts(1),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events,
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            // 命令行的唯一落盘入口（`owned_command` 的 actor 就是两个身份字段的来源）：一次提交只带
+            // 一条幂等行，因此 node 命令行分第二次提交写入。
+            idempotency: Some(IdempotencyRecord {
+                actor: Actor::Device {
+                    device: device.clone(),
+                    scopes: ScopeSet::empty(),
+                },
+                request: request.clone(),
+                command: "session.prompt".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(fixture.session.clone()),
+                expected_version: None,
+                request_fingerprint: digest('a'),
+                accepted_at: ts(1),
+            }),
+            command_terminal: None,
+            origin_epoch: Some(OriginEpoch::new(&uuid_text(303)).expect("origin epoch")),
+        }))
+        .expect("五条事件 + 一条设备命令行");
+        block_on(store.commit(OwnedCommit {
+            session: Some(fixture.session.clone()),
+            at: ts(2),
+            expected_version: None,
+            state: None,
+            turns: Vec::new(),
+            events: Vec::new(),
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            idempotency: Some(IdempotencyRecord {
+                actor: Actor::Node {
+                    node: node.clone(),
+                    access_node: access.clone(),
+                },
+                request: node_request.clone(),
+                command: "session.create".to_owned(),
+                kind: CommandKind::Mutation,
+                session: Some(fixture.session.clone()),
+                expected_version: None,
+                request_fingerprint: digest('b'),
+                accepted_at: ts(2),
+            }),
+            command_terminal: None,
+            origin_epoch: Some(OriginEpoch::new(&uuid_text(303)).expect("origin epoch")),
+        }))
+        .expect("一条节点命令行");
+
+        let actor = Actor::Device {
+            device: DeviceId::new(&uuid_text(311)).expect("device"),
+            scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+        };
+        let slice = block_on(
+            fixture
+                .use_cases
+                .sync_replay(&actor, None, ReplayLimit::new(10)),
+        )
+        .expect("Sync 事件读面");
+        assert_eq!(slice.events.len(), 5, "五条事件都在一页里");
+        assert_eq!(
+            slice
+                .events
+                .iter()
+                .map(|record| record.origin_kind)
+                .collect::<Vec<_>>(),
+            vec![
+                EventOrigin::Agent,
+                EventOrigin::Device,
+                EventOrigin::Daemon,
+                EventOrigin::LocalCli,
+                EventOrigin::Node,
+            ],
+            "五个 origin.kind 原样往返（顺序即 global_sequence 升序）"
+        );
+        assert_eq!(
+            slice.events[1].origin_device_id.as_ref(),
+            Some(&device),
+            "device 类事件的 origin.deviceId 等于诱发该事件的命令的 actor_id"
+        );
+        assert_eq!(
+            slice.events[4].origin_node_id.as_ref(),
+            Some(&node),
+            "node 类事件的 origin.nodeId 等于诱发该事件的命令的主 principal（ownerNodeId）"
+        );
+        assert!(
+            slice.events[4].origin_device_id.is_none() && slice.events[1].origin_node_id.is_none(),
+            "两个身份字段互斥（§10.1 的配对规则）"
+        );
+        assert!(
+            slice.events.iter().enumerate().all(|(index, record)| {
+                match record.origin_kind {
+                    EventOrigin::Device => {
+                        record.origin_device_id.is_some()
+                            && record.origin_node_id.is_none()
+                            && index == 1
+                    }
+                    EventOrigin::Node => {
+                        record.origin_node_id.is_some()
+                            && record.origin_device_id.is_none()
+                            && index == 4
+                    }
+                    _ => record.origin_device_id.is_none() && record.origin_node_id.is_none(),
+                }
+            }),
+            "两个身份字段只在对应 kind 上非空；其余来源（含带同一 causation 的 local_cli）恒为 None"
+        );
+        assert_eq!(
+            slice.events[0].causation, None,
+            "没有命令直接导致的事件 causationRequestId 为 null"
+        );
+        assert_eq!(
+            slice.events[1].causation.as_ref(),
+            Some(&request),
+            "causation 原样回传"
+        );
+        assert_eq!(
+            slice.events[0].payload.view.as_str(),
+            "{\"probe\":\"agent.message.delta\"}",
+            "条目同时带该事件的持久化正文"
+        );
+        assert_eq!(
+            slice.head.global_sequence,
+            Sequence::new(5).expect("sequence"),
+            "head 是这批数据的水位（sync.caught_up 的屏障游标）"
+        );
+
+        // 窗口：严格在 `after` 之后、升序、受 `limit` 限制。
+        let resumed = block_on(fixture.use_cases.sync_replay(
+            &actor,
+            Some(GlobalCursor::new(
+                slice.head.server_epoch.clone(),
+                Sequence::new(2).expect("sequence"),
+            )),
+            ReplayLimit::new(10),
+        ))
+        .expect("续读");
+        assert_eq!(
+            resumed
+                .events
+                .iter()
+                .map(|record| record.event.global_sequence.get())
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5],
+            "after 之后的三条，升序"
+        );
+        let limited = block_on(
+            fixture
+                .use_cases
+                .sync_replay(&actor, None, ReplayLimit::new(2)),
+        )
+        .expect("限长");
+        assert_eq!(limited.events.len(), 2, "limit 生效");
+        assert_eq!(
+            limited.events[1].event.global_sequence.get(),
+            2,
+            "一页取满 limit 条即停，续读由调用方按最后一条的 globalSequence 发起"
+        );
+
+        // 设备 scope 不含 `session.list`：失败关闭，且**连读视图都不开**（不是「读出来再丢掉」）。
+        let reads = fixture
+            .world
+            .read_views
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let denied = Actor::Device {
+            device: DeviceId::new(&uuid_text(312)).expect("device"),
+            scopes: ScopeSet::empty(),
+        };
+        let error = block_on(
+            fixture
+                .use_cases
+                .sync_replay(&denied, None, ReplayLimit::new(10)),
+        )
+        .expect_err("无 session.list 授权的设备不得读取任何事件");
+        assert!(
+            matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
+            "与 sync_visible_sessions/list_sessions 同一授权口径，得到 {error:?}"
+        );
+        assert_eq!(
+            fixture
+                .world
+                .read_views
+                .load(std::sync::atomic::Ordering::SeqCst),
+            reads,
+            "未授权时不开读视图：一条事件也没读出"
+        );
+    }
+
+    /// 1.6 的**历史行失败关闭**（`SYNC_PROTOCOL.md` §10.1 的配对规则 + 4.8 的处置要求）：设备/节点类
+    /// 事件得不出**唯一**身份时读面返回 `Corrupt`，而不是给 `None`——`{kind:"device", deviceId:null}`
+    /// 是 §10.1 禁止发送方产生的形状，`None` 会让投递层无声地违反它。
+    ///
+    /// 三类「无法归因」各有一条：`causation` 为空、回查不到对应命令行、命令行的 actor 类别不对
+    /// （设备事件带的是 CLI 命令）。它们**不是**假想的边角——1.7 之前 agent-host 产出的每条
+    /// `EndpointEvent` 都不带 `causation`，broker 又原样落盘，于是升级前写入的设备驱动事件全部落在
+    /// 第一类；改写/复用同一 requestId 的事件与命令落在第二、三类。
+    #[test]
+    fn sync_replay_fails_closed_when_an_identity_event_cannot_be_attributed() {
+        /// 一条会话内事件 + 可选的命令行（`None` = 这次提交不带 `owned_command` 行）。
+        fn seed(fixture: &Fixture, causation: Option<RequestId>, command: Option<Actor>) {
+            block_on(
+                FakeStore {
+                    world: fixture.world.clone(),
+                }
+                .commit(OwnedCommit {
+                    session: Some(fixture.session.clone()),
+                    at: ts(1),
+                    expected_version: None,
+                    state: None,
+                    turns: Vec::new(),
+                    events: vec![sync_event("turn.completed", EventOrigin::Device, causation)],
+                    interactions: Vec::new(),
+                    compacted: Vec::new(),
+                    idempotency: command.map(|actor| IdempotencyRecord {
+                        actor,
+                        request: RequestId::new(&uuid_text(330)).expect("request"),
+                        command: "session.prompt".to_owned(),
+                        kind: CommandKind::Mutation,
+                        session: Some(fixture.session.clone()),
+                        expected_version: None,
+                        request_fingerprint: digest('a'),
+                        accepted_at: ts(1),
+                    }),
+                    command_terminal: None,
+                    origin_epoch: Some(OriginEpoch::new(&uuid_text(321)).expect("origin epoch")),
+                }),
+            )
+            .expect("一条设备事件");
+        }
+
+        let authorized = Actor::Device {
+            device: DeviceId::new(&uuid_text(324)).expect("device"),
+            scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+        };
+
+        // ① `causation` 为空：连回查的键都没有。
+        let missing_causation = fixture();
+        seed(&missing_causation, None, None);
+
+        // ② 命令行不存在：该 requestId 没有对应命令（不在本机历史窗口内，或该命令由别的入口发起）。
+        let missing_command = fixture();
+        seed(
+            &missing_command,
+            Some(RequestId::new(&uuid_text(322)).expect("request")),
+            None,
+        );
+
+        // ③ 命令行存在但 actor 类别不对：设备事件带的是本机 CLI 命令。
+        let wrong_actor = fixture();
+        seed(
+            &wrong_actor,
+            Some(RequestId::new(&uuid_text(322)).expect("request")),
+            Some(Actor::LocalCli),
+        );
+
+        for (label, fixture) in [
+            ("causation 为空", missing_causation),
+            ("命令不在本机", missing_command),
+            ("命令行 actor 类别不对", wrong_actor),
+        ] {
+            let error = block_on(fixture.use_cases.sync_replay(
+                &authorized,
+                None,
+                ReplayLimit::new(10),
+            ))
+            .expect_err("无法归因的设备事件必须失败关闭");
+            assert!(
+                matches!(&error, PortError::Corrupt(_)),
+                "{label}：得到 {error:?}（不得给 None 让投递层发出 kind=device/deviceId=null 的帧）"
+            );
+        }
+    }
+
+    /// [`sync_replay_roundtrips_origin_and_requires_session_list_scope`] 的事件素材：正文的 `view` 文本
+    /// 带上事件类型，便于断言「条目带的是它自己那条的正文」。
+    fn sync_event(
+        event_type: &str,
+        origin: EventOrigin,
+        causation: Option<RequestId>,
+    ) -> PendingEvent {
+        PendingEvent::new(
+            EventKind::State,
+            EventType::new(event_type).expect("event type"),
+            StoredPolicy::Durable,
+            EventPayload::new(
+                ViewJson::new(&format!("{{\"probe\":\"{event_type}\"}}")).expect("view json"),
+                None,
+            ),
+            origin,
+            None,
+            causation,
+        )
     }
 
     /// §4：`session.read` 的活体字段（config/capabilities）由用例层从后端合并。

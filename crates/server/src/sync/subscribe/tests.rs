@@ -1,20 +1,20 @@
-//! `server::sync::subscribe` 的行为用例（变更 `sync-server-connection` 的任务 4.1/4.2/4.7 与 4.3 的
-//! 可判定部分）。
+//! `server::sync::subscribe` 的行为用例（变更 `sync-server-connection` 的任务 4.1/4.2/4.7 与 4.3/4.8
+//! 的投递腿）。
 //!
 //! 驱动方式是**真实出站队列**：`MessageRoute::route` 处理真实信封，用例只看对端真的收到的帧。
-//!
-//! 本切片**未落地事件投递腿**（见模块文档：`event` 帧必需的 `origin`/`causationRequestId` 没有任何 core
-//! 读面能给出）。因此用例对投递腿的断言是**否定的**：绝不谎报 `sync.caught_up`、恢复位置一律取客户端提交
-//! 的 cursor（`fixture::World::replay_calls` 是它的观测口）。
+//! 投递腿的观测口是 `fixture::World::store` 的 `sync_replay_calls`（每批的 `after`）与出站帧序列。
 
 use std::sync::Arc;
 
 use acp_core::ports::SessionStore as _;
 
+use super::event::EVENT_ORIGIN_FEATURE;
 use super::*;
 use crate::sync::conn::MessageRoute;
+use crate::sync::conn::SyncConfig;
+use crate::sync::conn::limits::DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH;
 use crate::sync::subscribe::fixture::{
-    self, DEVICE, EPOCH, Frame, OTHER_EPOCH, Reachability, SESSION, World,
+    self, DEVICE, EPOCH, Frame, OTHER_EPOCH, OWNER, Reachability, SESSION, World,
 };
 
 /// 路由 + 连接 + 出站队列的固定装配。
@@ -27,8 +27,20 @@ struct Harness {
 
 impl Harness {
     fn new(world: &World, features: &[&str]) -> Self {
+        Self::with_limit(world, features, None)
+    }
+
+    /// 带单批事件数上限的装配（`None` = 用 §14 的默认上限）。
+    fn with_limit(world: &World, features: &[&str], events: Option<u32>) -> Self {
         let route = Arc::new(world.route(Arc::new(Reachability(true))));
-        let (handle, receiver) = fixture::connection(DEVICE);
+        let config = SyncConfig {
+            max_replay_events_per_batch: u64::from(events.unwrap_or(
+                u32::try_from(DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH).expect("默认值在 u32 内"),
+            )),
+            ..SyncConfig::default()
+        };
+        let (handle, receiver) =
+            fixture::connection_with_limits(DEVICE, fixture::CONNECTION, &config);
         let selected: Vec<String> = features.iter().map(|f| (*f).to_owned()).collect();
         route.on_authenticated(&handle, &selected);
         Self {
@@ -38,7 +50,6 @@ impl Harness {
             sequence: 0,
         }
     }
-
     /// 发一条消息并把新产生的帧取回。
     async fn send(&mut self, kind: &str, body: serde_json::Value) -> Vec<Frame> {
         self.sequence += 1;
@@ -453,16 +464,20 @@ async fn ack_is_monotonic_and_bounded_by_the_sent_barrier() {
 }
 
 /// 恢复位置一律取客户端提交的 cursor，而不是服务端保存的最大 ACK（§9.5；任务 4.7）。
+///
+/// 投递腿落地后这条用例**同时**是重放路径的观测口：Sync 事件读面每次收到的 `after` 都能断言。
 #[tokio::test]
 async fn resubscribe_starts_from_the_submitted_cursor_not_the_stored_ack() {
     let world = World::new();
     world.seed_device(DEVICE, &["session.list"]);
     world.store.set_head(fixture::cursor(EPOCH, 7));
-    world.store.push_event(fixture::committed_event(
+    world.store.push_sync_event(fixture::sync_event(
         "da702ba1-f49f-4e16-a677-a7744dfedba6",
-        "turn.started",
         6,
-        1,
+        acp_core::model::EventOrigin::Agent,
+        None,
+        None,
+        None,
     ));
     let mut harness = Harness::new(&world, &[]);
 
@@ -482,56 +497,107 @@ async fn resubscribe_starts_from_the_submitted_cursor_not_the_stored_ack() {
     let frames = harness
         .send("sync.subscribe", subscribe_body(at(EPOCH, 5)))
         .await;
+    let calls = world.store.sync_replay_calls();
     assert_eq!(
-        world.store.replay_calls().last().cloned(),
-        Some(Some(fixture::cursor(EPOCH, 5))),
-        "恢复位置必须取客户端提交的 cursor"
+        calls.get(1).cloned(),
+        Some(fixture::cursor(EPOCH, 5)),
+        "第二次订阅的第一批必须从客户端提交的 5 之后读（calls = {calls:?}）"
+    );
+    // 6 那条事件因此真的被投出来（而不是被最大 ACK 跳过），其后照常收到屏障 7。
+    let events = fixture::bodies(&frames, "event");
+    assert_eq!(events.len(), 1, "5 之后只有序号 6 一条可见事件");
+    assert_eq!(events[0]["globalSequence"], "6");
+    assert_eq!(
+        fixture::bodies(&frames, "sync.caught_up")[0]["cursor"]["globalSequence"],
+        "7"
     );
     assert!(
-        fixture::bodies(&frames, "sync.caught_up").is_empty(),
-        "5 之后仍有事件：不得谎报屏障（本切片不投递事件，见模块文档）"
+        fixture::bodies(&frames, "error").is_empty(),
+        "正常投递不回错误（失败关闭路径不再出现）"
     );
-    assert_eq!(frames[0].code(), Some("internal.unavailable"));
 }
 
-/// 有待投递事件时**不谎报** `caught_up`（本切片未落地事件投递腿的失败关闭口径）。
+/// 有效 cursor + 若干可见事件 → 按序 `event` 帧 + `caught_up`，且**失败关闭路径不再出现**
+/// （任务 4.3/4.8 的主判据）。
 #[tokio::test]
-async fn pending_events_are_refused_instead_of_a_false_barrier() {
+async fn a_valid_cursor_replays_events_then_announces_the_barrier() {
     let world = World::new();
     world.seed_device(DEVICE, &["session.list"]);
     world.store.set_head(fixture::cursor(EPOCH, 7));
-    world.store.push_event(fixture::committed_event(
-        "da702ba1-f49f-4e16-a677-a7744dfedba6",
-        "turn.started",
-        6,
-        1,
-    ));
+    // 序号 6、7 两条在游标 5 之后可见的事件（`agent` 来源：不带身份字段）。
+    for (id, sequence) in [
+        ("da702ba1-f49f-4e16-a677-a7744dfedba6", 6),
+        ("da702ba1-f49f-4e16-a677-a7744dfedba7", 7),
+    ] {
+        world.store.push_sync_event(fixture::sync_event(
+            id,
+            sequence,
+            acp_core::model::EventOrigin::Agent,
+            None,
+            None,
+            None,
+        ));
+    }
     let mut harness = Harness::new(&world, &[]);
 
     let frames = harness
         .send("sync.subscribe", subscribe_body(at(EPOCH, 5)))
         .await;
-    assert!(
-        fixture::bodies(&frames, "sync.caught_up").is_empty(),
-        "屏障之后还有事件时不得声明已追平"
-    );
-    let errors = fixture::bodies(&frames, "error");
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0]["code"], "internal.unavailable");
-    assert_eq!(errors[0]["retryable"], true);
+    let events = fixture::bodies(&frames, "event");
+    assert_eq!(events.len(), 2, "5 之后两条可见事件都投出来");
+    assert_eq!(events[0]["globalSequence"], "6");
+    assert_eq!(events[1]["globalSequence"], "7", "按 globalSequence 升序");
+    // §10.1 的必填字段逐项到场（这一条同时钉住 `event` 帧的形状）。
+    assert_eq!(events[0]["origin"]["kind"], "agent");
+    assert_eq!(events[0]["origin"]["deviceId"], serde_json::Value::Null);
+    assert_eq!(events[0]["causationRequestId"], serde_json::Value::Null);
+    assert_eq!(events[0]["remoteOrigin"], serde_json::Value::Null);
     assert_eq!(
-        errors[0]["correlationId"], "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
-        "可关联到触发它的入站消息"
+        events[0]["payload"]["view"],
+        serde_json::json!({"global": 6})
+    );
+    assert!(
+        !events[0].get("origin").unwrap().get("nodeId").is_some(),
+        "未协商 core.event-origin.v1：origin 不带 nodeId 键"
     );
 
-    // 快照链路同样不得越过这一条：快照游标是快照开始时的水位（7），而**水位之后**又提交了一条事件
-    // （序号 8，模拟与快照的 head 读竞争的那次提交）——快照 `end` 已发，但 `caught_up` 不发。
-    world.store.push_event(fixture::committed_event(
-        "da702ba1-f49f-4e16-a677-a7744dfedba7",
-        "turn.completed",
-        8,
-        2,
-    ));
+    let barriers = fixture::bodies(&frames, "sync.caught_up");
+    assert_eq!(barriers.len(), 1, "投完必须发屏障");
+    assert_eq!(barriers[0]["cursor"]["globalSequence"], "7");
+
+    // 失败关闭路径在正常有事件时**不再出现**（4.8 的显式判据）。
+    let errors = fixture::bodies(&frames, "error");
+    assert!(errors.is_empty(), "正常投递不回 error，得到 {errors:?}");
+
+    // 屏障可被 ACK（§9.5：ACK 上限就是本连接已发送的最高游标）。
+    let frames = harness
+        .send("sync.ack", serde_json::json!({ "cursor": at(EPOCH, 7) }))
+        .await;
+    assert!(frames.is_empty(), "合法 ACK 不产生任何对端可见消息");
+}
+
+/// 快照链路与重放共用同一道推进：快照 `end` 之后若有 cursor 之后的事件，按序补投并补齐屏障。
+///
+/// 快照游标取**开始组装时**的水位（7），而水位之后（序号 8）又提交了一条事件（模拟与 head 读竞争的
+/// 那次提交）——这条事件绝不能被漏掉（§9.4 的 `event where globalSequence > 快照 cursor`）。
+#[tokio::test]
+async fn an_event_committed_after_the_snapshot_head_is_still_delivered() {
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 7));
+    world
+        .store
+        .push_session(fixture::core_session(SESSION, "本地会话", None));
+    let mut harness = Harness::new(&world, &[]);
+
+    // 首次同步走快照：序号 7 那条在快照 cursor 上，不在"之后"，因此快照后不重投它。
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(serde_json::Value::Null))
+        .await;
+    assert_eq!(
+        fixture::bodies(&frames, "sync.reset_required")[0]["reason"],
+        "initial_sync"
+    );
     let frames = harness
         .send(
             "sync.snapshot_request",
@@ -544,10 +610,324 @@ async fn pending_events_are_refused_instead_of_a_false_barrier() {
         "7",
         "快照游标是开始组装时的水位"
     );
-    assert!(fixture::bodies(&frames, "sync.caught_up").is_empty());
     assert_eq!(
-        fixture::bodies(&frames, "error")[0]["code"],
-        "internal.unavailable"
+        fixture::bodies(&frames, "sync.caught_up")[0]["cursor"]["globalSequence"],
+        "7",
+        "快照 cursor 之后没有事件：屏障就是它"
+    );
+
+    // 水位之后又提交一条事件（序号 8）：重新订阅时它必须按序补投，然后补齐新屏障 8。
+    world.store.push_sync_event(fixture::sync_event(
+        "da702ba1-f49f-4e16-a677-a7744dfedba6",
+        7,
+        acp_core::model::EventOrigin::Agent,
+        None,
+        None,
+        None,
+    ));
+    world.store.push_sync_event(fixture::sync_event(
+        "da702ba1-f49f-4e16-a677-a7744dfedba7",
+        8,
+        acp_core::model::EventOrigin::Agent,
+        None,
+        None,
+        None,
+    ));
+    world.store.set_head(fixture::cursor(EPOCH, 8));
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(at(EPOCH, 6)))
+        .await;
+    let sequences: Vec<&str> = fixture::bodies(&frames, "event")
+        .iter()
+        .map(|body| body["globalSequence"].as_str().expect("序号是字符串"))
+        .collect();
+    assert_eq!(
+        sequences,
+        ["7", "8"],
+        "cursor 之后的事件按 globalSequence 升序补投"
+    );
+    assert_eq!(
+        fixture::bodies(&frames, "sync.caught_up")[0]["cursor"]["globalSequence"],
+        "8",
+        "屏障取本批读视图的 head（含序号 8）"
+    );
+    assert!(
+        fixture::bodies(&frames, "error").is_empty(),
+        "正常投递不回错误"
+    );
+}
+
+/// 分批投递：页长小于可见事件数时，跨批仍按 `globalSequence` 升序，屏障取最后一批的 head。
+///
+/// 观测口是 `sync_replay_calls`：每批的 `after` 必须停在上一批最后一条（推进屏障游标），而不是原地打转。
+#[tokio::test]
+async fn a_large_window_is_delivered_in_batches_without_repeating_or_reordering() {
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 4));
+    for sequence in 1..=4u64 {
+        world.store.push_sync_event(fixture::agent_event(sequence));
+    }
+    let mut harness = Harness::with_limit(&world, &[], Some(2));
+    // 单批两条（`maxReplayEventsPerBatch` 的下限）：四 events 因此分两批。
+
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(at(EPOCH, 0)))
+        .await;
+    let sequences: Vec<&str> = fixture::bodies(&frames, "event")
+        .iter()
+        .map(|body| body["globalSequence"].as_str().expect("序号是字符串"))
+        .collect();
+    assert_eq!(
+        sequences,
+        ["1", "2", "3", "4"],
+        "跨批仍按全局序号升序、无重复"
+    );
+    let calls = world.store.sync_replay_calls();
+    assert_eq!(calls.len(), 3, "两批满页 + 一页空页（屏障）");
+    assert_eq!(
+        calls,
+        vec![
+            fixture::cursor(EPOCH, 0),
+            fixture::cursor(EPOCH, 2),
+            fixture::cursor(EPOCH, 4)
+        ],
+        "屏障游标在批与批之间必须前进"
+    );
+    assert_eq!(
+        fixture::bodies(&frames, "sync.caught_up")[0]["cursor"]["globalSequence"],
+        "4"
+    );
+    assert!(fixture::bodies(&frames, "error").is_empty());
+}
+
+/// 重放期间到达的实时事件**不出现在屏障之前**（任务 4.3/4.8 的 barrier 判据）。
+///
+/// `sync.caught_up` 就是那条屏障：实时事件由 [`crate::sync::subscribe::fanout`] 投递，而它只投
+/// **已建立屏障**的连接（[`SubscribeRoute::live_targets`]）——重放中的连接（还没有屏障）绝不进实时
+/// 目标集，因此帧序上不可能出现"实时事件越过序号更早的已持久化事件"。本用例把这条闸门做成可断言的
+/// 事实：订阅前不在实时目标集里、屏障建立之后才在。
+#[tokio::test]
+async fn a_live_event_arriving_mid_replay_is_not_delivered_before_the_barrier() {
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 4));
+    for sequence in 1..=4u64 {
+        world.store.push_sync_event(fixture::agent_event(sequence));
+    }
+    let mut harness = Harness::new(&world, &[]);
+    world.registry.register(Arc::clone(&harness.handle));
+    // 连接刚认证、尚未订阅：不在实时目标集里（barrier 未建立）。
+    assert!(
+        harness.route.live_targets(&world.registry).is_empty(),
+        "未建立屏障的连接绝不进实时目标集"
+    );
+
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(at(EPOCH, 0)))
+        .await;
+    let sequences: Vec<&str> = fixture::bodies(&frames, "event")
+        .iter()
+        .map(|body| body["globalSequence"].as_str().expect("序号是字符串"))
+        .collect();
+    assert_eq!(sequences, ["1", "2", "3", "4"], "重放按全局序号升序");
+    assert_eq!(
+        fixture::bodies(&frames, "sync.caught_up")[0]["cursor"]["globalSequence"],
+        "4",
+        "屏障游标到达 head"
+    );
+    // 屏障建立之后该连接才进入实时目标集：实时事件因此只能排在屏障之后。
+    assert_eq!(
+        harness.route.live_targets(&world.registry).len(),
+        1,
+        "屏障建立后实时扇出才看得见这条连接"
+    );
+}
+
+/// 重放**尚未走到 head** 时，闸门绝不打开。
+///
+/// 上面的用例只在订阅前后各取一次样，看不到重放进行中的闸门状态 —— 那正是「闸门何时打开」这一维度
+/// 的盲区：若把 `live_targets` 的 barrier 判据去掉、或在订阅到达时提前闭合杠杆点，那条用例仍然全绿。
+///
+/// 本用例的做法：页长 1（重放因此分多批推进），并在**数据页**上注入读失败 —— 失败路径会
+/// `clear_barrier` 并拒绝，因此断言「此刻仍不在实时目标集」就直接证明了「闸门不在读到 head 之前打开」。
+/// 断言用的 `live_targets` 与生产实时扇出是同一道闸（同一个方法、同一份 `states`），不是替身自证。
+#[tokio::test]
+async fn a_connection_is_not_a_live_target_while_the_replay_is_still_running() {
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 4));
+    for sequence in 1..=4u64 {
+        world.store.push_sync_event(fixture::agent_event(sequence));
+    }
+    // 页长 1：重放必须分批推进，「已投若干帧、尚未到 head」这个中间态因此真实存在。
+    let mut harness = Harness::with_limit(&world, &[], Some(1));
+    world.registry.register(Arc::clone(&harness.handle));
+    // 数据页读到一半即失败：失败路径清杠杆点并拒绝，绝不谎报屏障。
+    world
+        .store
+        .fail_sync_replay(acp_core::model::PortError::Corrupt("探针"));
+
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(at(EPOCH, 0)))
+        .await;
+    // 闸门未开 ⇒ 这条连接不是实时目标（重放尚未走到 head）。
+    assert!(
+        harness.route.live_targets(&world.registry).is_empty(),
+        "重放未走到 head 时，连接绝不进实时目标集"
+    );
+    // 失败必须以显式拒绝收场，且不得发出 `caught_up`（那是"已到 head"的断言）。
+    assert!(
+        !fixture::bodies(&frames, "sync.caught_up").is_empty()
+            || !fixture::bodies(&frames, "error").is_empty(),
+        "失败必须以拒绝收场（而非静默）"
+    );
+    assert!(
+        fixture::bodies(&frames, "sync.caught_up").is_empty(),
+        "没有读到 head 就不得发 catch_up"
+    );
+}
+
+/// 权限过滤造成的序号空洞合法且不报错，屏障游标高于该段（任务 4.3）。
+///
+/// 构造方式：设备**没有** `session.list` 之外的可见性问题时，这里的"过滤"由 core 读面给出——注入一条
+/// `origin_kind` 词表外的行会让**整批**读失败关闭（那是历史行处置，另有用例）；本用例的过滤语义按
+/// §9.5 的场景表达：被跳过的序号不出现在 `event` 帧里、不回错误、且屏障高于它。
+#[tokio::test]
+async fn filtered_gaps_are_legal_and_the_barrier_advances_past_them() {
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 9));
+    // 序号 2、5、9 三条可见；3/4、6/7/8 对该设备不可见（模拟权限过滤造成的空洞）。
+    for sequence in [2u64, 5, 9] {
+        world.store.push_sync_event(fixture::agent_event(sequence));
+    }
+    let mut harness = Harness::new(&world, &[]);
+
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(at(EPOCH, 1)))
+        .await;
+    let sequences: Vec<&str> = fixture::bodies(&frames, "event")
+        .iter()
+        .map(|body| body["globalSequence"].as_str().expect("序号是字符串"))
+        .collect();
+    assert_eq!(sequences, ["2", "5", "9"], "不可见序号不出现（空洞）");
+    assert!(
+        fixture::bodies(&frames, "error").is_empty(),
+        "空洞不报错（§9.5）"
+    );
+    assert_eq!(
+        fixture::bodies(&frames, "sync.caught_up")[0]["cursor"]["globalSequence"],
+        "9",
+        "屏障游标高于被过滤的整段"
+    );
+    // 客户端据此 ACK 而不被判为缺口（§9.5）。
+    let frames = harness
+        .send("sync.ack", serde_json::json!({ "cursor": at(EPOCH, 9) }))
+        .await;
+    assert!(frames.is_empty(), "屏障 ACK 被接受");
+}
+
+/// `origin` 的身份字段按 feature `core.event-origin.v1` 协商决定：协商带 `nodeId` 键（无节点产生者
+/// 取 `null`），未协商整键缺席；`kind`/`deviceId` 两种情况逐字节相同（绝不因客户端版本降级 `kind`）。
+#[tokio::test]
+async fn the_origin_shape_follows_the_negotiated_event_origin_feature() {
+    /// 协商与未协商各跑一次订阅，取回全部 `event` 帧的 `origin`。
+    async fn origins(world: &World, features: &[&str]) -> Vec<serde_json::Value> {
+        let mut harness = Harness::new(world, features);
+        let frames = harness
+            .send("sync.subscribe", subscribe_body(at(EPOCH, 0)))
+            .await;
+        fixture::bodies(&frames, "event")
+            .into_iter()
+            .map(|body| body["origin"].clone())
+            .collect()
+    }
+
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 2));
+    // 序号 1：`device` 来源（带非空 `deviceId`、`nodeId` 恒为 `null`）。
+    world.store.push_sync_event(fixture::sync_event(
+        "da702ba1-f49f-4e16-a677-a7744dfedb01",
+        1,
+        acp_core::model::EventOrigin::Device,
+        Some(DEVICE),
+        None,
+        Some("4c4dafda-dd98-442e-8d55-252b75bac72d"),
+    ));
+    // 序号 2：`node` 来源（另一个节点经 Node Link 命令产生）。
+    world.store.push_sync_event(fixture::sync_event(
+        "da702ba1-f49f-4e16-a677-a7744dfedb02",
+        2,
+        acp_core::model::EventOrigin::Node,
+        None,
+        Some(OWNER),
+        Some("4c4dafda-dd98-442e-8d55-252b75bac73e"),
+    ));
+
+    // 协商了 `core.event-origin.v1`：`origin` 恒带 `nodeId` 键。
+    let negotiated = origins(&world, &[EVENT_ORIGIN_FEATURE]).await;
+    assert_eq!(negotiated.len(), 2);
+    assert_eq!(negotiated[0]["kind"], "device");
+    assert_eq!(negotiated[0]["deviceId"], DEVICE);
+    assert_eq!(
+        negotiated[0]["nodeId"],
+        serde_json::Value::Null,
+        "device 来源没有节点产生者：nodeId 键在场且取 null"
+    );
+    assert_eq!(negotiated[1]["kind"], "node");
+    assert_eq!(
+        negotiated[1]["nodeId"], OWNER,
+        "node 来源必须带非空 nodeId（§10.1 的配对规则）"
+    );
+    assert_eq!(negotiated[1]["deviceId"], serde_json::Value::Null);
+
+    // 未协商：`origin` 只有 `kind`/`deviceId` 两个键，且 `kind = node` 的事件**整条不投递**
+    // （服务端 MUST NOT 因客户端版本伪造或降级 kind）。
+    let legacy = origins(&world, &[]).await;
+    assert_eq!(legacy.len(), 1, "node 来源事件对未协商连接不投递");
+    assert_eq!(legacy[0]["kind"], "device");
+    assert_eq!(legacy[0]["deviceId"], DEVICE);
+    assert!(
+        legacy[0].get("nodeId").is_none(),
+        "未协商时 origin 不得出现 nodeId 键（旧客户端会按 schema 拒绝整条事件）"
+    );
+}
+
+/// 无法归因的历史事件（读面 `Corrupt`）：投递层显式失败关闭，且**不伪造** `kind`/`deviceId`。
+///
+/// 完成判据（任务 4.8 的历史行处置）：协商了该 feature 的连接 MUST NOT 收到 `deviceId` 为 `null` 的
+/// `kind = device` 事件；这里注入一条 `Corrupt`，断言回 `internal.unavailable`、不发 `caught_up`、
+/// 不发任何 `event` 帧。
+#[tokio::test]
+async fn an_unattributable_history_row_fails_closed_instead_of_forging_an_identity() {
+    let world = World::new();
+    world.seed_device(DEVICE, &["session.list"]);
+    world.store.set_head(fixture::cursor(EPOCH, 7));
+    world
+        .store
+        .fail_sync_replay(acp_core::model::PortError::Corrupt("origin"));
+    let mut harness = Harness::new(&world, &[EVENT_ORIGIN_FEATURE]);
+
+    let frames = harness
+        .send("sync.subscribe", subscribe_body(at(EPOCH, 5)))
+        .await;
+    assert!(
+        fixture::bodies(&frames, "event").is_empty(),
+        "MUST NOT 伪造 origin 字段发一条非法帧"
+    );
+    assert!(
+        fixture::bodies(&frames, "sync.caught_up").is_empty(),
+        "MUST NOT 谎报屏障"
+    );
+    let errors = fixture::bodies(&frames, "error");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["code"], "internal.unavailable");
+    assert_eq!(errors[0]["retryable"], true);
+    assert_eq!(
+        errors[0]["correlationId"], "04dbad03-8869-4c5a-94fa-2f3af2fb622b",
+        "可关联到触发它的入站消息"
     );
 }
 

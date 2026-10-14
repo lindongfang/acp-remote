@@ -12,6 +12,8 @@
 //! 读列一律用显式列名（`row.try_get("列名")`），因此 Rust 侧字段顺序与表结构解耦；不用
 //! `sqlx::FromRow` 派生是因为 workspace 的 `sqlx` features 没有 `macros`（不为此改依赖）。
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -24,12 +26,13 @@ use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
-    ConflictKind, Digest, EntityRef, EventId, EventKind, EventPayload, GlobalCursor, ImportId,
-    InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef, OriginCursor,
-    OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError, RawUnavailableReason,
-    RemoteSessionRef, RequestId, ResourceOrigin, ScopeSet, Sequence, ServerEpoch, Session,
-    SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary, StoredPolicy,
-    Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceAlias, WorkspaceRef,
+    ConflictKind, DeviceId, Digest, EntityRef, EventId, EventKind, EventOrigin, EventPayload,
+    GlobalCursor, ImportId, InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef,
+    NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError,
+    RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, ScopeSet, Sequence,
+    ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState,
+    SessionSummary, StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
+    WorkspaceAlias, WorkspaceRef,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
@@ -37,7 +40,8 @@ use acp_core::ports::{
     ImportedSessionRecord, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
     PendingInteractionOrigin, PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef,
     RemoteDeliveryStore, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment,
-    SessionQuery, SessionStore, StateChange, StoreHealth, TurnChange, TurnUpdate,
+    SessionQuery, SessionStore, StateChange, StoreHealth, SyncEventRecord, SyncReplaySlice,
+    TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -631,6 +635,173 @@ fn owned_event_from_row(row: &SqliteRow) -> Result<OwnedEventRecord, PortError> 
         event: event_from_row(row)?,
         payload: payload_from_row(row)?,
     })
+}
+
+/// `owned_event.origin_kind` 的解码（`SYNC_PROTOCOL.md` §10.1 的 `origin.kind`）。
+///
+/// **五个**取值（`agent`/`device`/`daemon`/`local_cli`/`node`，§7.3 的 CHECK 与 wire 词表同集）原样往返；
+/// 词表外取值是**列值损坏**，不是「未知来源」——静默降级会让一条事件被当成别的来源交付，因此这里失败
+/// 关闭。§7.3 的 CHECK 已经把该列钉在词表里，所以本分支只可能来自绕过 CHECK 的直接写入（读取侧的纵深
+/// 防御）。
+fn origin_kind_from_row(row: &SqliteRow) -> Result<EventOrigin, PortError> {
+    decode(&text(row, "origin_kind")?, "owned_event.origin_kind")
+        .map_err(|_| PortError::Corrupt("stored origin_kind is not a known event origin"))
+}
+
+/// `owned_command.actor_id` 上**节点**行的 actor id（`"{ownerNodeId}/{accessNodeId}"`，§7.3）→ 主
+/// principal `ownerNodeId`。
+///
+/// Node Link 的幂等键是 `(ownerNodeId, accessNodeId, requestId)`（§6 第 6 条 / `Actor::id_text`），
+/// §10.1 的 `origin.nodeId` 要的是产生该事件的另一个节点，即主 principal。复合键拆不开、或任一半不是
+/// canonical UUID 时按列值损坏失败关闭（与设备行同款口径）。
+fn node_id_from_composite_key(composite: &str) -> Result<NodeId, PortError> {
+    let (node, _access_node) = composite.split_once('/').ok_or_else(|| {
+        PortError::Corrupt("owned_command.actor_id is not a node/access-node pair")
+    })?;
+    NodeId::new(node).map_err(|_| PortError::Corrupt("owned_command.actor_id is not a node id"))
+}
+
+/// `owned_event` 的一行 → Sync 事件读面的条目（[`ReadView::sync_replay`]）。`origins` 见
+/// [`command_origins`]。
+fn sync_event_from_row(
+    row: &SqliteRow,
+    origins: &HashMap<(String, RequestId), Option<String>>,
+) -> Result<SyncEventRecord, PortError> {
+    let origin_kind = origin_kind_from_row(row)?;
+    let causation: Option<RequestId> =
+        decode_opt(opt_text(row, "causation")?, "owned_event.causation")?;
+    // §10.1：`deviceId`/`nodeId` 只在对应 `origin.kind` 上出现；其余来源即便带同一个 causation 也
+    // 不得回填，否则一条 CLI/Agent 事件会被交付成设备或节点产生的。得不出唯一 id 时失败关闭——§10.1
+    // 的配对规则「`device` 语义上要求非空 deviceId」「`node` 必须带非空 nodeId」在本读面上只有这一
+    // 条出路（见 [`identity_origin_for`]）。
+    let origin_device_id = match origin_kind {
+        EventOrigin::Device => {
+            identity_origin_for(origins, "device", causation.as_ref(), "device")?
+                .map(|actor_id| {
+                    DeviceId::new(&actor_id).map_err(|_| {
+                        PortError::Corrupt("owned_command.actor_id is not a device id")
+                    })
+                })
+                .transpose()?
+        }
+        EventOrigin::Agent | EventOrigin::Daemon | EventOrigin::LocalCli | EventOrigin::Node => {
+            None
+        }
+    };
+    let origin_node_id = match origin_kind {
+        EventOrigin::Node => identity_origin_for(origins, "node", causation.as_ref(), "node")?
+            .as_deref()
+            .map(node_id_from_composite_key)
+            .transpose()?,
+        EventOrigin::Agent | EventOrigin::Daemon | EventOrigin::LocalCli | EventOrigin::Device => {
+            None
+        }
+    };
+    Ok(SyncEventRecord {
+        event: event_from_row(row)?,
+        payload: payload_from_row(row)?,
+        origin_kind,
+        origin_device_id,
+        origin_node_id,
+        causation,
+    })
+}
+
+/// 本批 identity 类事件（`origin_kind ∈ {'device','node'}`）的 `causation`（= 诱发命令的
+/// `requestId`）→ `owned_command.actor_id`（§10.1 的 `origin.deviceId`/`origin.nodeId`）。
+///
+/// 一次批量查询覆写 `actor_kind = 'device'` 与 `'node'` 两类 actor（一条 `IN (…)`，不是逐条事件查
+/// 一次），与事件读共用调用方持有的同一个只读事务，因此「事件行 + 回查结果」来自同一快照。返回的键带
+/// `actor_kind`：读条目时 device 事件只许看设备行、node 事件只许看节点行，两类身份因此不可能互换。
+///
+/// 同一 `requestId` 在同一 actor 类别下命中**多行**时值置 `None`：`owned_command` 的唯一键是
+/// `(actor_kind, actor_id, request_id)`（§7.3），跨设备/跨节点复用同一 requestId 在 DDL 上合法，此时
+/// 没有唯一答案。
+async fn command_origins(
+    ex: &mut SqliteConnection,
+    rows: &[SqliteRow],
+) -> Result<HashMap<(String, RequestId), Option<String>>, PortError> {
+    let mut wanted: Vec<String> = Vec::new();
+    for row in rows {
+        if !matches!(
+            origin_kind_from_row(row)?,
+            EventOrigin::Device | EventOrigin::Node
+        ) {
+            continue;
+        }
+        if let Some(request) = opt_text(row, "causation")?
+            && !wanted.iter().any(|known| known == &request)
+        {
+            wanted.push(request);
+        }
+    }
+    let mut origins: HashMap<(String, RequestId), Option<String>> =
+        HashMap::with_capacity(wanted.len());
+    if wanted.is_empty() {
+        return Ok(origins);
+    }
+    let actor_kinds = placeholders(2);
+    let requests = placeholders(wanted.len());
+    let sql = format!(
+        "SELECT actor_kind, actor_id, request_id FROM owned_command \
+         WHERE actor_kind IN ({actor_kinds}) AND request_id IN ({requests})"
+    );
+    let mut statement = sqlx::query(&sql).bind("device").bind("node");
+    for request in &wanted {
+        statement = statement.bind(request.as_str());
+    }
+    let rows = statement.fetch_all(&mut *ex).await.db()?;
+    for row in &rows {
+        let kind = text(row, "actor_kind")?;
+        let request: RequestId = decode(&text(row, "request_id")?, "owned_command.request_id")?;
+        let actor_id = text(row, "actor_id")?;
+        match origins.entry((kind, request)) {
+            Entry::Vacant(slot) => {
+                slot.insert(Some(actor_id));
+            }
+            // 与已登记的那个不同 = 同一 requestId 在同一 actor 类别下命中多行：唯一键允许这种形状
+            // （§7.3），此时没有唯一答案。
+            Entry::Occupied(mut slot) if slot.get().as_ref() != Some(&actor_id) => {
+                slot.insert(None);
+            }
+            Entry::Occupied(_) => {}
+        }
+    }
+    Ok(origins)
+}
+
+/// `origin.deviceId`/`origin.nodeId` 的回查结果：得不出**唯一**取值时失败关闭
+/// （[`PortError::Corrupt`]）。
+///
+/// 三类「无法归因」在**升级前写入的行**上都会真实出现（它们正是 4.8 要求显式处置的历史行）：
+/// ① `causation` 为空——1.7 之前 agent-host 产出的每条 `EndpointEvent` 都不带 `causation`
+///   （`mapper.rs` 的唯一生产构造点固定 `None`）、broker 又原样落盘，这类行连回查的键都没有；
+/// ② 该 requestId 在本机 `owned_command` 里没有对应行——命令不在本机历史窗口内（全仓没有任何
+///   `owned_command` 清理路径，但事件与命令**本来就可能不在同一节点上产生**），或该事件由另一条
+///   命令路径产生；
+/// ③ 命令行存在但 `actor_kind` 不是本事件要求的类别——诱发命令来自本机 CLI（`cli`）或另一个节点
+///   （`node`）而事件仍被标成另一类。
+///
+/// 这些情形一律不得从旁路（会话归属、actor 瞬时状态……）推断一个 id：编造 id 比失败关闭更糟——它会把
+/// 归属判错给另一台设备/另一个节点，而调用方无法察觉。
+fn identity_origin_for(
+    origins: &HashMap<(String, RequestId), Option<String>>,
+    actor_kind: &str,
+    causation: Option<&RequestId>,
+    kind: &str,
+) -> Result<Option<String>, PortError> {
+    let reason = match kind {
+        "device" => "device event cannot be attributed to a unique device command",
+        _ => "node event cannot be attributed to a unique node command",
+    };
+    match causation.map(|request| origins.get(&(actor_kind.to_owned(), request.clone()))) {
+        // `causation` 为空、或该 key 没有行（命令行不在本机/不是本类别 actor）⇒ 无法归因。
+        None | Some(None) => Err(PortError::Corrupt(reason)),
+        // 有条目但值为 `None` = 同一 requestId 在同一 actor 类别下命中多行（`command_origins`）⇒
+        // 同样没有唯一答案。
+        Some(Some(None)) => Err(PortError::Corrupt(reason)),
+        Some(Some(Some(actor_id))) => Ok(Some(actor_id.clone())),
+    }
 }
 
 fn command_record_from_row(row: &SqliteRow) -> Result<CommandRecord, StorageError> {
@@ -2458,6 +2629,52 @@ impl ReadView for SqlReadView {
             next,
             reset_required,
         })
+    }
+
+    /// Sync 事件读面（`SYNC_PROTOCOL.md` §10.1 的 `event` 帧）：`after` 之后的一页事件 + 这批数据的
+    /// head（`sync.caught_up` 的屏障游标），三个查询都在**同一次只读事务**（本视图持有的快照）内完成。
+    ///
+    /// 三个要点：
+    ///
+    /// - **窗口**：`global_sequence > after` 严格升序、`LIMIT limit`；已压缩的 delta 不出现（与
+    ///   `replay` 同口径，§6 第 15 条：被压行由 summary 事件替代）。cursor 的 epoch/窗口解释权不在
+    ///   本层（`replay` 的四种拒绝原因由投递层判定）。
+    /// - **来源列**：`origin_kind` 与 `causation` 都取事件行自己的列（`EVENT_COLUMNS` 已选中）。
+    ///   **五个**取值原样往返；词表外的 `origin_kind` 是列值损坏 → `Corrupt`（不降级、不猜测；DDL 的
+    ///   CHECK 让它在正常写入路径上不可达，这里是读取侧的失败关闭）。**不**用「这条事件有没有
+    ///   `session_id`」推断来源。
+    /// - **`origin.deviceId`/`origin.nodeId`**：一条批量查询一次回查 device 与 node 两类 actor
+    ///   （不是逐条），读条目时 device 事件只认设备行、node 事件只认节点行。得不出唯一取值时**整批
+    ///   读失败关闭**（`Corrupt`）：§10.1 的配对规则要求这两类事件带非空身份字段，而升级前写入的历史
+    ///   行在 `causation`/actor 分类上可能本来就不可归因——读面必须把这一点显式暴露给投递层，而不是
+    ///   给一个 `None` 让它静默发出违反 §10.1 的帧。
+    async fn sync_replay(
+        &self,
+        after: Option<GlobalCursor>,
+        limit: ReplayLimit,
+    ) -> Result<SyncReplaySlice, PortError> {
+        let mut guard = self.tx.lock().await;
+        let head = head_of(&mut guard).await?;
+        let from = storable(
+            after
+                .as_ref()
+                .map_or(0, |cursor| cursor.global_sequence.get()),
+        )?;
+        let rows = sqlx::query(&format!(
+            "SELECT {EVENT_COLUMNS} FROM owned_event WHERE global_sequence > ?1 \
+             AND compacted_into IS NULL ORDER BY global_sequence ASC LIMIT ?2"
+        ))
+        .bind(from)
+        .bind(i64::from(limit.events()))
+        .fetch_all(&mut **guard)
+        .await
+        .db()?;
+        let origins = command_origins(&mut guard, &rows).await?;
+        let mut events = Vec::with_capacity(rows.len());
+        for row in &rows {
+            events.push(sync_event_from_row(row, &origins)?);
+        }
+        Ok(SyncReplaySlice { events, head })
     }
 
     /// §9.16：按事件 id 还原正文。

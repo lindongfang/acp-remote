@@ -467,6 +467,15 @@ impl acp_core::ports::ReadView for CommandStore {
         unreachable!("WP6 路由用例不按事件 id 取正文")
     }
 
+    /// Sync 事件读面不在本替身的范围内：Node Link 路由用例只驱动 `node_link_slice`。
+    async fn sync_replay(
+        &self,
+        _after: Option<GlobalCursor>,
+        _limit: ReplayLimit,
+    ) -> Result<acp_core::ports::SyncReplaySlice, PortError> {
+        unreachable!("WP6 路由用例不读 Sync 事件重放面")
+    }
+
     /// 快照元数据（`session.create` 的结果与 `resource.attach` 都经它）。
     async fn node_link_slice(
         &self,
