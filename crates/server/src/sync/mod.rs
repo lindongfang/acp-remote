@@ -32,6 +32,7 @@
 //! §13 心跳、§14 限额、§15 安全）。行为范围以
 //! `openspec/changes/sync-server-connection/specs/sync-device-auth/spec.md` 为准。
 
+pub mod command;
 pub mod conn;
 pub mod event;
 pub mod pairing;

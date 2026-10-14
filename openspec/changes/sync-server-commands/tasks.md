@@ -2,12 +2,12 @@
 
 ## 1. 事件视图与原文装配（WP1）
 
-- [ ] 1.1 新建 `crates/server/src/sync/event/`，在 `crates/server/src/sync/mod.rs` 追加模块声明；模块文档写明它只调用 `core::use_cases` 与 `sync-protocol` 的公开面，不 import `storage-sqlite`、不调用 `server::node_link`（算法口径相同但类型各自定义）。完成判据：`npm run check:boundaries` 通过。
-- [ ] 1.2 实现视图投影：从持久化事件取 `payload_json` 的**原样文本**作为 `view`，调 `sync-protocol::views::project` 做形状判定；判定失败时记一条含 `event_type` 与缺失字段的结构化日志，但仍按原样下发该 `view`（不得丢弃事件、不得造序号空洞）。完成判据：单元测试覆盖「形状正确时按类型投影」「形状缺失时事件仍下发且日志可见」两条路径。
-- [ ] 1.3 实现 `payload.acp` 装配：按 `acp.raw-payload.v1` 协商结果决定是否携带；`rawJson` 解码后的字节 MUST 与原始文档逐字节一致（**不得先解析再重新序列化**）；不可用时按已登记原因标记并给出字节长度。完成判据：单元测试用含超 64 位整数字面量与未识别字段的原文驱动，断言下发文本与输入逐字节相同。
-- [ ] 1.4 实现不可用标记的三种原因与内嵌上限：超过 256 KiB 或 media type 非 `application/json` 时降级为不可用（原因区分 `size_limit` 与 `storage_failure`），保留期原因对应 `retention_expired`；未协商能力时不下发原文容器。完成判据：单元测试逐条覆盖三种原因与「未协商时不携带容器」，且断言未发生截断。
-- [ ] 1.5 实现未登记内容的降级路径：权威协议未登记的事件类型与 ACP 判别子仍下发并保留原文或不可用标记，MUST NOT 静默丢弃、MUST NOT 降级为普通文本、MUST NOT 阻断同会话后续事件。完成判据：单元测试覆盖「未登记判别子仍有事件」「同会话后续事件投递不受影响」。
-- [ ] 1.6 事件轨道与投递队列衔接：把投影后的事件交给前置变更实现的有界出站队列（按其水位处理），**不另建第二条队列**。完成判据：单元测试断言事件经由既有队列路径入队，且水位触发时投递层被告知停止读取重放批次。
+- [x] 1.1 新建 `crates/server/src/sync/event/`，在 `crates/server/src/sync/mod.rs` 追加模块声明；模块文档写明它只调用 `core::use_cases` 与 `sync-protocol` 的公开面，不 import `storage-sqlite`、不调用 `server::node_link`（算法口径相同但类型各自定义）。完成判据：`npm run check:boundaries` 通过。
+- [x] 1.2 实现视图投影：从持久化事件取 `payload_json` 的**原样文本**作为 `view`，调 `sync-protocol::views::project` 做形状判定；判定失败时记一条含 `event_type` 与缺失字段的结构化日志，但仍按原样下发该 `view`（不得丢弃事件、不得造序号空洞）。完成判据：单元测试覆盖「形状正确时按类型投影」「形状缺失时事件仍下发且日志可见」两条路径。
+- [x] 1.3 实现 `payload.acp` 装配：按 `acp.raw-payload.v1` 协商结果决定是否携带；`rawJson` 解码后的字节 MUST 与原始文档逐字节一致（**不得先解析再重新序列化**）；不可用时按已登记原因标记并给出字节长度。完成判据：单元测试用含超 64 位整数字面量与未识别字段的原文驱动，断言下发文本与输入逐字节相同。
+- [x] 1.4 实现不可用标记的三种原因与内嵌上限：超过 256 KiB 或 media type 非 `application/json` 时降级为不可用（原因区分 `size_limit` 与 `storage_failure`），保留期原因对应 `retention_expired`；未协商能力时不下发原文容器。完成判据：单元测试逐条覆盖三种原因与「未协商时不携带容器」，且断言未发生截断。
+- [x] 1.5 实现未登记内容的降级路径：权威协议未登记的事件类型与 ACP 判别子仍下发并保留原文或不可用标记，MUST NOT 静默丢弃、MUST NOT 降级为普通文本、MUST NOT 阻断同会话后续事件。完成判据：单元测试覆盖「未登记判别子仍有事件」「同会话后续事件投递不受影响」。
+- [x] 1.6 事件轨道与投递队列衔接：把投影后的事件交给前置变更实现的有界出站队列（按其水位处理），**不另建第二条队列**。完成判据：单元测试断言事件经由既有队列路径入队，且水位触发时投递层被告知停止读取重放批次。
 
 ## 2. 命令管线与查询命令（WP2）
 
@@ -39,3 +39,14 @@
 - [ ] 5.3 覆盖边界：未持 scope 的设备派发 mutation 得 `authorization.scope_denied` 且零副作用（用存储查询证明未写入事件、未启动进程）；同 `requestId` 重发只产生一个副作用；`session.resume` 在 Sync 面得 `command.unsupported`。完成判据：三条各有独立断言，且每条都能在实现错误时变红。
 - [ ] 5.4 覆盖限流与原文保真：超限得到 `resource.rate_limited`（含 `retryAfterMs`）且被拒命令无副作用；一条含未识别字段的 ACP 原文经事件下发后逐字节可比。完成判据：两条各有独立断言。
 - [ ] 5.5 在报告里如实登记隔离区限制：交付的是用例代码，真实运行由主 Agent 在合入后按 PV5 执行；不得声称已在隔离区通过。完成判据：`agent://<id>` 的报告含该说明。
+
+## 6. 执行中发现、必须登记的缺口
+
+- [ ] 6.1 **（路由接线，plan 未覆盖）** `CommandRoute` 已实现并导出，但**尚未注册进组合根**：`crates/app/src/daemon.rs` 的 `/sync/v1` 端点只接受**一条** `MessageRoute`（`SyncConn::with_route`），当前注册的仍是 `SubscribeRoute`。**需要**：在 `server::sync` 里加一个组合路由（按 `RouteOutcome::Unclaimed` 链式委托 `SubscribeRoute` 与 `CommandRoute`，并把 `on_authenticated` 的连接上下文交接转发给两者），再由组合根注册该组合。完成判据：一条真实 `command.status` 经 `/sync/v1` 得到 `completed`（由 5.1 端到端用例覆盖）。**背景**：由 WP2 的作者在执行中发现并如实上报；它超出该包写范围（`plan.md` 的四个 WP 没有一个覆盖 `crates/app/src/**` 或 `server::sync` 的路由组合），故登记为缺口。
+
+- [ ] 6.2 **（core 读面缺口：`session.read` 的三类明细资源无法表达）** 协议（`docs/SYNC_PROTOCOL.md` §9.4 的资源表与 §11.5 的 `session.read` 行）登记了六类明细资源，其中三类在当前 core 读面上**给不出协议要求的字段**：
+  - `turns`：`core::model::Turn`（`crates/core/src/model/session.rs:423`）有 `id/session/state/queue_index/causation/started_at/ended_at`，**没有协议必填的 `createdAt`**，也没有可选的 `terminalError`；
+  - `capabilities`：`CapabilitySet`（`crates/core/src/model/backend.rs:71`）是一个 `BTreeSet<Capability>`，给不出协议要求的 `agentCapabilities` 与 `brokerAdditions` 两个字段；
+  - `pending_interactions`：`PendingInteraction` 没有协议要求的 `schema` 对象。
+
+  当前处置（WP2）：请求这三者一律显式回 `capability.unsupported_by_broker`（已登记的错误码），**不静默省略、不伪造字段** —— 符合 `AGENTS.md` §4「无法安全处理的能力必须明确返回不支持」。完成判据：二选一 —— 要么在 core 读面补齐这三类形状（属独立变更：动 `core::model`、wire 值对象与 `schemas/`），要么在产品层面确认「PWA 本期不展示 turns/interactions/capabilities」并在 `docs/SYNC_PROTOCOL.md` 与前端设计文档写清该降级。**背景**：由 WP2 的作者在执行中核实并上报（主代理已独立复核 `Turn` 与 `CapabilitySet` 的字段）。

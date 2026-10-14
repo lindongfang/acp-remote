@@ -1,0 +1,830 @@
+//! Sync 命令面：`command` 帧的解码分派、**授权前置**、五条查询命令的同步完成、结果超限的显式失败、
+//! 按（设备，命令族）计数的命令限流与查询类命令的连接期去重
+//! （`docs/SYNC_PROTOCOL.md` §11/§12.2/§14；变更 `sync-server-commands` 的任务 2.1–2.6，
+//! 行为范围以 `openspec/changes/sync-server-commands/specs/sync-command-handling/spec.md` 为准）。
+//!
+//! ## 管线顺序（§11.2 的「命令处理建议顺序」）
+//!
+//! ```text
+//! schema(解码/封闭词表) → 连接期去重 → 限流(设备×命令族) → 已认证设备 → scope 授权
+//!   → 状态/版本 → …（幂等预留、持久接受、会话 actor、Agent、持久事件、广播属 WP3 的 mutation 路径）
+//! ```
+//!
+//! 本工作包（WP2）落地的是**查询命令**那一半：`session.list`、`session.read`、`command.status`、
+//! `session.mode.list`、`session.config.list` 同步返回**一次** `completed` 或 `rejected`，MUST NOT 先回
+//! `accepted`（§11.2「查询命令不进入异步队列」）。mutation 的接受路径、幂等与终态观察者是同一个模块目录
+//! 的下一个工作包（WP3）——本包在 [`CommandRoute::on_mutation`] 处**显式失败关闭**，绝不伪造
+//! `accepted`、绝不静默成功，也绝不把 mutation 当作已实现。
+//!
+//! ## 五条硬规则
+//!
+//! 1. **授权先于读取**（[`CommandRoute::authorize`]）：每条业务命令在读会话行、触碰文件系统、启动进程
+//!    **之前**按设备 scope 判定。被拒时回 `authorization.scope_denied` 且零副作用；判定只取决于
+//!    **设备行 + 命令名**，因此「未授权设备对不存在的会话派发命令」得到的仍是授权拒绝——错误类型不
+//!    随会话是否存在而变，否则该错误码就成了会话是否存在的预言机。授权点是
+//!    [`acp_core::broker::Broker::authorize`] 这**唯一**一处（`Actor::Device` 分支即
+//!    `scopes.contains(command)`），本层不自己写 scope 判定，用例内部还会再授权一次（同一次调用、
+//!    同一判定，成功路径不产生审计行）。
+//! 2. **结果超限显式失败**（[`CommandRoute::too_large`]）：查询结果在**入队前**按编码后字节数判定，
+//!    超过本连接的单条消息上限时回 `resource.result_too_large`。**绝不**截断后当完整结果返回
+//!    （§11.5 末段）。
+//! 3. **限流按设备与命令族**（[`limits`]）：默认 120/分钟，键是 `(deviceId, 命令族)`，**不**以连接或
+//!    网络来源身份计数（§14「网络身份不能替代设备授权」）；单次超限回可重试的 `resource.rate_limited`
+//!    （带 `details.retryAfterMs`），**连续**超限达阈值才以 `4429` 关闭该连接。
+//! 4. **封闭词表外一律 `command.unsupported` 且不在本机执行任何操作**（[`decode`]）：
+//!    `session.resume` 只经 Node Link 接受，Sync v1 收到时同样按 `command.unsupported` 拒绝
+//!    （§11.5 该行）。
+//! 5. **连接期去重不落盘**（[`ConnectionState::answered`]）：查询类命令的重复提交只在本连接内去重
+//!    （§11.2「查询类命令可以只在连接期去重」），同一连接内重复 `messageId` 不产生第二次业务读取；
+//!    不同连接各自独立。
+//!
+//! ## 依赖纪律（`AGENTS.md` §5、`docs/MODULE_ARCHITECTURE.md` §4.9）
+//!
+//! 只调用 `core` 的公开面 + `sync-protocol`/`identity-auth` 的公开面 + 本 crate 内 `sync::conn` 的连接面。
+//! **不 import `storage-sqlite`、不调用 `server::node_link`**。与 [`crate::sync::subscribe`] 同款地，
+//! 本模块今天还**直连** `core::broker` 两处：`Broker::authorize` 是观察授权的唯一判定点，
+//! `Broker::session_version` 是 `session.config.list` 结果里 `version` 的唯一来源（`session.mode.list`
+//! 的同款数值由 `UseCases::mode_list` 一并给出）。两者都收窄到「已按同一命令名授权之后」的读，不构成
+//! 第二条可见性判定路径。
+
+pub mod decode;
+pub mod limits;
+mod query;
+
+#[cfg(test)]
+mod tests;
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use acp_core::broker::Broker;
+use acp_core::model::{
+    Actor, PortError, PublicError as CorePublicError, RequestId as CoreRequestId,
+};
+use acp_core::use_cases::UseCases;
+use identity_auth::Authority;
+use sync_protocol::command::{Command, CommandName, CommandPayload, CommandResult, CommandState};
+use sync_protocol::common::{Nullable, PublicError, RawObject, Text, Timestamp, Uuid};
+use sync_protocol::envelope::{Envelope, MessageType, encode_body};
+use sync_protocol::error::{Body, ErrorCode};
+use tracing::{debug, warn};
+
+use crate::sync::conn::registry::SendFault;
+use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
+use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
+
+use self::limits::{CommandFamily, CommandRateLimiter};
+use self::query::Rejection;
+
+/// 单条命令结果的**信封**开销上界（字节）。
+///
+/// `ConnectionHandle::send` 把 body 包进完整信封后才写出，因此「结果超过单条消息上限」必须在**入队前**
+/// 判定，而判定要拿「将要发出的那份字节」比，不能只比 body。信封的固定部分逐字为
+/// `{"protocolVersion":1,"type":"command.result","messageId":"<36>","connectionId":"<36>",`
+/// `"connectionSequence":"<≤20>","body":<body>}`：固定分隔与键名 180 字节 + 两个 UUID 的 72 字节 +
+/// 序号的最多 20 位 = 272 字节；取 320 作为上界留出余量（上限 1 MiB，这点余量不会把合法结果误判成超限）。
+/// `connectionSequence` 是 u64 的十进制串，最多 20 位，因此这个上界在任何序号下都成立。
+const ENVELOPE_OVERHEAD_BYTES: u64 = 320;
+
+/// 一条连接的命令面状态。
+#[derive(Debug, Default)]
+struct ConnectionState {
+    /// 本次协商出的 feature（`core.session-history.v1` 与 `resource.remote-origin.v1` 的门控）。
+    features: NegotiatedFeatures,
+    /// 连续被限流的次数：达 [`limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS`] 即以 `4429` 关闭连接。
+    consecutive_rate_limited: u32,
+    /// 查询类命令的连接期去重表（**不落盘**，§11.2）。键是 `(messageId, requestId)`：同一连接内重复的
+    /// **同一帧**因此不再产生第二次业务读取；不同连接各自独立。
+    answered: Vec<((Uuid, Uuid), CommandResult)>,
+}
+
+/// Sync 命令面的路由（`conn` 的 [`MessageRoute`] 实现之一，组合根注册）。
+pub struct CommandRoute {
+    core: Arc<UseCases>,
+    /// 授权与 `session.config.list` 的版本读取（见模块文档的依赖纪律）。
+    broker: Arc<Broker>,
+    /// 命令结果 `acceptedAt` 的时间来源（与身份状态机同一个注入时钟；本层不读系统时间）。
+    authority: Arc<Authority>,
+    /// 连接存活判据：连接期状态随连接离开注册表回收（不遗留无主状态）。
+    registry: Arc<ConnectionRegistry>,
+    /// Owner 可达性（`session.list` 的 `origin.online`）：本适配器没有 Owner 连接面
+    /// （不得调用 `server::node_link`），因此这条运行时事实由组合根注入，与
+    /// [`crate::sync::subscribe`] 的订阅面共用同一个来源。
+    owner: Arc<dyn OwnerReachability>,
+    rate: CommandRateLimiter,
+    /// 连续超限多少次即以 `4429` 关闭连接（生产路径恒为
+    /// [`limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS`]，用例把它压小）。
+    consecutive_limit: u32,
+    states: Mutex<BTreeMap<String, ConnectionState>>,
+}
+
+impl std::fmt::Debug for CommandRoute {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CommandRoute")
+            .field("connections", &lock(&self.states).len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CommandRoute {
+    /// 装配。`owner` 与 [`crate::sync::subscribe::SubscribeRoute`] 拿到的是同一个来源。
+    pub fn new(
+        core: Arc<UseCases>,
+        broker: Arc<Broker>,
+        authority: Arc<Authority>,
+        registry: Arc<ConnectionRegistry>,
+        owner: Arc<dyn OwnerReachability>,
+    ) -> Self {
+        Self {
+            core,
+            broker,
+            authority,
+            registry,
+            owner,
+            rate: CommandRateLimiter::new(limits::COMMANDS_PER_MINUTE, limits::COMMAND_WINDOW),
+            consecutive_limit: limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS,
+            states: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// 测试专用：换掉限流额度、窗口与连续超限阈值（§14 的三个数值在生产路径上只有固定常量一个
+    /// 来源；120 次/分钟的真实等待在用例里不可接受）。
+    #[cfg(test)]
+    pub(crate) fn with_test_rate_limit(
+        mut self,
+        limit: u32,
+        window: std::time::Duration,
+        consecutive: u32,
+    ) -> Self {
+        self.rate = CommandRateLimiter::new(limit, window);
+        self.consecutive_limit = consecutive;
+        self
+    }
+
+    /// 当前被登记状态的连接数（观测口：状态必须随连接结束回收）。
+    #[cfg(test)]
+    pub(crate) fn tracked(&self) -> usize {
+        lock(&self.states).len()
+    }
+
+    /// 命令限流（§14：单设备业务命令 120/分钟，按 `deviceId` 与命令族分别统计）。
+    ///
+    /// 返回 `true` 表示本次命令**已被拒绝并已回复**，调用方不得继续处理。单次超限只回可重试的
+    /// `resource.rate_limited`；连续超限达阈值时额外以 `4429` 请求关闭该连接（被拒命令零副作用）。
+    fn admit_rate(
+        &self,
+        handle: &ConnectionHandle,
+        command: CommandName,
+        message_id: &Uuid,
+    ) -> bool {
+        let family = CommandFamily::of(command);
+        let device = handle.device_id().as_str().to_owned();
+        let outcome = self.rate.check(&device, family);
+        let mut states = lock(&self.states);
+        let state = states
+            .entry(handle.connection_id().as_str().to_owned())
+            .or_default();
+        match outcome {
+            limits::RateOutcome::Allowed => {
+                state.consecutive_rate_limited = 0;
+                false
+            }
+            limits::RateOutcome::Denied { retry_after } => {
+                state.consecutive_rate_limited += 1;
+                let close_now = state.consecutive_rate_limited >= self.consecutive_limit;
+                drop(states);
+                warn!(
+                    event = "sync.command_rate_limited",
+                    device_id = device.as_str(),
+                    family = family.as_str(),
+                    retry_after_ms = retry_after.as_millis() as u64,
+                    close = close_now,
+                    "the device exceeded its command rate"
+                );
+                let details = retry_after_details(retry_after);
+                self.send_error_with_correlation(
+                    handle,
+                    ErrorCode::ResourceRateLimited,
+                    "the command rate limit was exceeded",
+                    details,
+                    Some(message_id),
+                );
+                if close_now {
+                    handle.request_close(close::RATE_LIMITED, "command rate limit exceeded");
+                }
+                true
+            }
+        }
+    }
+
+    /// 本连接的 feature 协商结果（未登记时取空集：两个门控都关闭，失败关闭的取值）。
+    fn features(&self, handle: &ConnectionHandle) -> NegotiatedFeatures {
+        lock(&self.states)
+            .get(handle.connection_id().as_str())
+            .map(|state| state.features.clone())
+            .unwrap_or_default()
+    }
+
+    /// **授权**：本连接设备当前的持久化信任行 → `Actor::Device` → [`Broker::authorize`]。
+    ///
+    /// 这是「授权先于读取」的落地点：本函数之上没有任何会话行读取、文件系统访问或进程启动，因此被拒的
+    /// 命令**零副作用**；而判定输入只有设备行与命令名，会话是否存在完全不参与判定（错误类型不泄露会话
+    /// 是否存在）。设备行读不到（认证后被删除、接线错误）一律失败关闭为授权拒绝，不凭握手自报值继续。
+    ///
+    /// 授权拒绝在**适配层**发生（先于任何业务用例调用），mutation 路径（WP3）因此与查询路径共用同一条
+    /// 前置判定。代价是成功路径上 `Broker::authorize` 会被调用两次（一次这里、一次在用例内）：`Device`
+    /// 分支是纯判定、不写审计，因此这只是一次廉价的重复判定，换来的是「适配层不必信任每个用例内部的
+    /// 顺序」这一条可审计性质。
+    async fn authorize(&self, handle: &ConnectionHandle, command: &Command) -> Option<Actor> {
+        let view = match self
+            .core
+            .sync_device_handshake_view(handle.device_id())
+            .await
+        {
+            Ok(view) => view,
+            Err(error) => {
+                warn!(
+                    event = "sync.command_device_view_failed",
+                    device_id = handle.device_id().as_str(),
+                    error = ?error,
+                    "the persisted device snapshot cannot be read"
+                );
+                self.deny(
+                    handle,
+                    command,
+                    "the device state cannot be read",
+                    ErrorCode::AuthorizationScopeDenied,
+                );
+                return None;
+            }
+        };
+        let Some(device) = view.device.as_ref() else {
+            warn!(
+                event = "sync.command_device_missing",
+                device_id = handle.device_id().as_str(),
+                "the authenticated device has no persisted trust row"
+            );
+            self.deny(
+                handle,
+                command,
+                "the device is not allowed to send commands",
+                ErrorCode::AuthorizationScopeDenied,
+            );
+            return None;
+        };
+        let actor = Actor::Device {
+            device: handle.device_id().clone(),
+            scopes: device.scopes().clone(),
+        };
+        if let Err(error) = self.authorize_actor(&actor, command).await {
+            debug!(
+                event = "sync.command_denied",
+                device_id = handle.device_id().as_str(),
+                command = command.command.as_str(),
+                error = ?error,
+                "the device is not allowed to send this command"
+            );
+            self.deny(
+                handle,
+                command,
+                "the device is not allowed to send this command",
+                ErrorCode::AuthorizationScopeDenied,
+            );
+            return None;
+        }
+        Some(actor)
+    }
+
+    /// `Broker::authorize` 的适配层调用（命令名、会话 id 与 requestId 的形状转换都在这里）。
+    async fn authorize_actor(
+        &self,
+        actor: &Actor,
+        command: &Command,
+    ) -> Result<(), acp_core::broker::Denied> {
+        let Some(request) = core_request_id(&command.request_id) else {
+            // wire 的 `requestId` 已是 uuid，转换失败只可能是接线错误；失败关闭。
+            return Err(acp_core::broker::Denied::scope_denied());
+        };
+        let session = command
+            .session_id
+            .as_ref()
+            .and_then(|id| acp_core::model::SessionId::new(id.as_str()).ok());
+        self.broker
+            .authorize(actor, command.command.as_str(), session.as_ref(), &request)
+            .await
+    }
+
+    /// 回一条 `rejected` 的 `command.result`（`acceptedAt` 为 `null`、`result` 为 `null`、`error` 非空）。
+    fn deny(&self, handle: &ConnectionHandle, command: &Command, message: &str, code: ErrorCode) {
+        let Some(error) = public_error(code, message, RawObject::empty()) else {
+            return;
+        };
+        let result = CommandResult {
+            request_id: command.request_id.clone(),
+            command: command.command,
+            status: CommandState::Rejected,
+            accepted_at: Nullable::null(),
+            terminal_event_id: Nullable::null(),
+            result: Nullable::null(),
+            error: Nullable::value(error),
+        };
+        self.send_result(handle, &result, "rejected");
+    }
+
+    /// 回一条 `command.result`（入队失败只记诊断：连接正在结束，调用方不需要额外分支）。
+    fn send_result(&self, handle: &ConnectionHandle, result: &CommandResult, reason: &'static str) {
+        match handle.send(MessageType::CommandResult, result) {
+            Ok(()) => {}
+            Err(SendFault::HighWater) | Err(SendFault::Closed) => debug!(
+                event = "sync.command_result_not_queued",
+                connection_id = handle.connection_id().as_str(),
+                request_id = result.request_id.as_str(),
+                reason,
+                "the command result could not be queued"
+            ),
+            Err(SendFault::Encoding) => warn!(
+                event = "sync.command_result_encoding_failed",
+                connection_id = handle.connection_id().as_str(),
+                request_id = result.request_id.as_str(),
+                reason,
+                "the command result could not be encoded"
+            ),
+        }
+    }
+
+    /// 回一条 `error` 消息（消息级拒绝：连接保持可用）。
+    ///
+    /// 用于**无法组装 `command.result`** 的拒绝：`command.unsupported`（命令名不在 Sync 的封闭词表里，
+    /// 拿不到合法的 `command` 取值来填结果体）与 schema 类错误。`correlationId` 是该命令帧的
+    /// `messageId`，因此客户端能把它和原请求对上。
+    fn send_error(
+        &self,
+        handle: &ConnectionHandle,
+        code: ErrorCode,
+        message: &str,
+        details: RawObject,
+    ) {
+        self.send_error_with_correlation(handle, code, message, details, None);
+    }
+
+    /// 与 [`Self::send_error`] 相同，但显式给出 `correlationId`（命令级拒绝一律填该命令帧的
+    /// `messageId`，客户端据此把拒绝对回原请求）。
+    fn send_error_with_correlation(
+        &self,
+        handle: &ConnectionHandle,
+        code: ErrorCode,
+        message: &str,
+        details: RawObject,
+        correlation: Option<&Uuid>,
+    ) {
+        let Some(body) = error_body(code, message, details, correlation) else {
+            warn!(
+                event = "sync.command_error_body_failed",
+                connection_id = handle.connection_id().as_str(),
+                "the command error body could not be assembled"
+            );
+            return;
+        };
+        if let Err(fault) = handle.send(MessageType::Error, &body) {
+            debug!(
+                event = "sync.command_error_not_queued",
+                connection_id = handle.connection_id().as_str(),
+                fault = ?fault,
+                "the command error could not be queued"
+            );
+        }
+    }
+
+    /// 结果超限判定（§11.5：查询结果超过单条消息上限时返回 `resource.result_too_large`）。
+    ///
+    /// 判定点是**入队之前**：先按 `sync-protocol` 的信封编码算出将要发出的那份 body 的字节数，加上
+    /// [`ENVELOPE_OVERHEAD_BYTES`] 后与本连接的 `maxMessageBytes` 比较。**不**截断、**不**分批、
+    /// **不**把超限结果写成"看起来完整"的短结果——超限即显式失败，让客户端改用快照/事件视图。
+    fn too_large(&self, handle: &ConnectionHandle, result: &CommandResult) -> bool {
+        let Ok(body) = encode_body(result) else {
+            return false; // 编码失败由 send_result 的 Encoding 分支诊断，不谎报超限。
+        };
+        let bytes = body.get().len() as u64 + ENVELOPE_OVERHEAD_BYTES;
+        bytes > handle.limits().max_message_bytes()
+    }
+
+    /// 记录一次已答复的查询（连接期去重表，有界）。键是 `(messageId, requestId)`：同一连接内**同一帧**
+    /// 的重发因此命中缓存，不再产生第二次业务读取；换了 `messageId` 的同 `requestId` 重发是合法重试，
+    /// 走正常路径（§11.1 只要求 `requestId` 复用，查询类的去重是连接期的许可而非义务）。
+    fn remember(&self, handle: &ConnectionHandle, message_id: &Uuid, result: CommandResult) {
+        let mut states = lock(&self.states);
+        let state = states
+            .entry(handle.connection_id().as_str().to_owned())
+            .or_default();
+        while state.answered.len() >= limits::MAX_DEDUP_ENTRIES {
+            state.answered.remove(0);
+        }
+        state
+            .answered
+            .push(((message_id.clone(), result.request_id.clone()), result));
+    }
+
+    /// 连接期去重命中（同一连接内重复的 `(messageId, requestId)` 不再产生第二次业务读取）。
+    fn answered(
+        &self,
+        handle: &ConnectionHandle,
+        message_id: &Uuid,
+        request_id: &Uuid,
+    ) -> Option<CommandResult> {
+        let states = lock(&self.states);
+        states
+            .get(handle.connection_id().as_str())
+            .and_then(|state| {
+                state
+                    .answered
+                    .iter()
+                    .find(|(key, _)| key.0 == *message_id && key.1 == *request_id)
+                    .map(|(_, result)| result.clone())
+            })
+    }
+
+    /// 回收「不在存活连接集合里」的连接期状态（限流窗口与去重表随之消失）。
+    fn reclaim(&self, current: &str) {
+        let alive: Vec<String> = self
+            .registry
+            .handles()
+            .iter()
+            .map(|handle| handle.connection_id().as_str().to_owned())
+            .collect();
+        lock(&self.states).retain(|key, _| key == current || alive.contains(key));
+    }
+
+    /// 认证完成：记下本次协商结果（feature 门控的唯一来源）。
+    fn note_features(&self, handle: &ConnectionHandle, features: &[String]) {
+        let mut states = lock(&self.states);
+        states
+            .entry(handle.connection_id().as_str().to_owned())
+            .or_default()
+            .features = NegotiatedFeatures::new(features.to_vec());
+    }
+
+    /// 一条 `command` 帧的处理：解码 → 去重 → 限流 → 授权 → 查询/mutation。
+    async fn on_command(&self, handle: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
+        self.reclaim(handle.connection_id().as_str());
+        let command = match decode::decode_command(message) {
+            Ok(command) => command,
+            Err(fault) => {
+                debug!(
+                    event = "sync.command_rejected",
+                    device_id = handle.device_id().as_str(),
+                    message_id = message.message_id().as_str(),
+                    fault = fault.as_str(),
+                    "the command frame was rejected before any local read"
+                );
+                self.reject_decode(handle, message, fault);
+                return RouteOutcome::Claimed;
+            }
+        };
+        // 连接期去重：同一连接内重复的同一帧不再产生第二次业务读取（§11.2 的查询类去重）。
+        if let Some(result) = self.answered(handle, message.message_id(), &command.request_id) {
+            debug!(
+                event = "sync.command_duplicate",
+                connection_id = handle.connection_id().as_str(),
+                request_id = command.request_id.as_str(),
+                "the same frame was already answered on this connection"
+            );
+            self.send_result(handle, &result, "duplicate");
+            return RouteOutcome::Claimed;
+        }
+        if self.admit_rate(handle, command.command, message.message_id()) {
+            return RouteOutcome::Claimed;
+        }
+        let Some(actor) = self.authorize(handle, &command).await else {
+            return RouteOutcome::Claimed;
+        };
+        if command.command.is_query() {
+            self.on_query(handle, message, command, &actor).await
+        } else {
+            self.on_mutation(handle, command).await
+        }
+    }
+
+    /// 查询命令：同步返回**一次** `completed` 或 `rejected`（绝不先回 `accepted`）。
+    async fn on_query(
+        &self,
+        handle: &ConnectionHandle,
+        message: &Envelope,
+        command: Command,
+        actor: &Actor,
+    ) -> RouteOutcome {
+        let features = self.features(handle);
+        let outcome = match command.payload.clone() {
+            CommandPayload::SessionList(_) => {
+                query::session_list(&self.core, &self.owner, actor, &features).await
+            }
+            CommandPayload::SessionRead(payload) => {
+                query::session_read(&self.core, actor, &command, payload, &features).await
+            }
+            CommandPayload::CommandStatus(payload) => {
+                query::command_status(&self.core, actor, payload).await
+            }
+            CommandPayload::ModeList(_) => query::mode_list(&self.core, actor, &command).await,
+            CommandPayload::ConfigList(_) => {
+                query::config_list(&self.core, &self.broker, actor, &command).await
+            }
+            // 由 `CommandName::is_query` 与 `CommandPayload` 的判别一致性保证不可达；保留臂只为让判定
+            // 穷尽，不 panic。
+            _ => Err(Rejection::Schema(
+                "the query payload does not match its command",
+            )),
+        };
+        let result = match outcome {
+            Ok(payload) => {
+                let Some(accepted_at) = wire_timestamp(self.authority.now().as_str()) else {
+                    return self.encoding_fault(handle);
+                };
+                CommandResult {
+                    request_id: command.request_id.clone(),
+                    command: command.command,
+                    status: CommandState::Completed,
+                    accepted_at: Nullable::value(accepted_at),
+                    // 查询命令的 `terminalEventId` 固定为 `null`（§11.2 的 allOf）。
+                    terminal_event_id: Nullable::null(),
+                    result: Nullable::value(payload),
+                    error: Nullable::null(),
+                }
+            }
+            Err(rejection) => {
+                let (code, text) = rejection.into_parts();
+                let Some(error) = public_error(code, text, rejection_details(code)) else {
+                    return self.encoding_fault(handle);
+                };
+                debug!(
+                    event = "sync.command_rejected",
+                    device_id = handle.device_id().as_str(),
+                    command = command.command.as_str(),
+                    code = code.as_str(),
+                    "the query command was rejected"
+                );
+                CommandResult {
+                    request_id: command.request_id.clone(),
+                    command: command.command,
+                    status: CommandState::Rejected,
+                    accepted_at: Nullable::null(),
+                    terminal_event_id: Nullable::null(),
+                    result: Nullable::null(),
+                    error: Nullable::value(error),
+                }
+            }
+        };
+        // 结果超限：入队前按编码后字节数判定，超限即换成显式失败的终态（绝不截断后当完整结果返回）。
+        let result = if result.status == CommandState::Completed && self.too_large(handle, &result)
+        {
+            warn!(
+                event = "sync.command_result_too_large",
+                connection_id = handle.connection_id().as_str(),
+                request_id = result.request_id.as_str(),
+                command = result.command.as_str(),
+                "the query result exceeds the single message limit"
+            );
+            let Some(error) = public_error(
+                ErrorCode::ResourceResultTooLarge,
+                "the query result exceeds the single message limit",
+                RawObject::empty(),
+            ) else {
+                return self.encoding_fault(handle);
+            };
+            CommandResult {
+                request_id: command.request_id.clone(),
+                command: command.command,
+                status: CommandState::Rejected,
+                accepted_at: Nullable::null(),
+                terminal_event_id: Nullable::null(),
+                result: Nullable::null(),
+                error: Nullable::value(error),
+            }
+        } else {
+            result
+        };
+        self.remember(handle, message.message_id(), result.clone());
+        self.send_result(handle, &result, "query");
+        RouteOutcome::Claimed
+    }
+
+    /// mutation：**WP3 的接缝**。
+    ///
+    /// 本工作包（WP2）只交付查询那一半管线；mutation 的持久接受、`(deviceId, requestId)` 幂等与终态
+    /// 观察者在同一模块目录的下一个工作包实现。这里**显式失败关闭**：既不伪造 `accepted`（那会让客户端
+    /// 把一条从未被接受的命令标成已接受），也不静默丢弃（那会让对端一直等一条永不到来的结果）。
+    /// 用例面当前不可用是服务端侧的限制，因此回 `internal.unavailable`，不是对命令本身的支持性判定。
+    async fn on_mutation(&self, handle: &ConnectionHandle, command: Command) -> RouteOutcome {
+        warn!(
+            event = "sync.command_mutation_not_implemented",
+            device_id = handle.device_id().as_str(),
+            command = command.command.as_str(),
+            request_id = command.request_id.as_str(),
+            "the mutation accept path is not part of this work package"
+        );
+        self.deny(
+            handle,
+            &command,
+            "the mutation accept path is not available",
+            ErrorCode::InternalUnavailable,
+        );
+        RouteOutcome::Claimed
+    }
+
+    /// 本机装配失败（时间戳/错误体构造不出来）：这是接线缺陷，按 `internal.unavailable` 显式失败，
+    /// 不发一条半成品结果。
+    fn encoding_fault(&self, handle: &ConnectionHandle) -> RouteOutcome {
+        warn!(
+            event = "sync.command_encoding_failed",
+            connection_id = handle.connection_id().as_str(),
+            "the command result could not be assembled"
+        );
+        // 绝不静默丢弃：对端要么拿到结果，要么拿到显式的失败，不会一直等一条永不到来的响应。
+        self.send_error(
+            handle,
+            ErrorCode::InternalUnavailable,
+            "the command result could not be assembled",
+            RawObject::empty(),
+        );
+        RouteOutcome::Claimed
+    }
+
+    /// 解码阶段的拒绝：封闭词表外 → `command.unsupported`，形状不符 → `protocol.schema_invalid`。
+    ///
+    /// 两者都用 `error` 消息：命令名不在 Sync 的封闭词表里时**拿不到**合法的 `command` 取值，
+    /// 组不出一条合规的 `command.result`（§11.5 对 `session.resume` 的要求正是这个码）。
+    fn reject_decode(&self, handle: &ConnectionHandle, message: &Envelope, fault: decode::Fault) {
+        let (code, text) = match fault {
+            decode::Fault::Unsupported => (
+                ErrorCode::CommandUnsupported,
+                "the command is not part of the sync command set",
+            ),
+            decode::Fault::Schema => (
+                ErrorCode::ProtocolSchemaInvalid,
+                "the command does not match the v1 schema",
+            ),
+        };
+        let Some(body) = error_body(code, text, RawObject::empty(), Some(message.message_id()))
+        else {
+            warn!(
+                event = "sync.command_error_body_failed",
+                connection_id = handle.connection_id().as_str(),
+                "the decode rejection body could not be assembled"
+            );
+            return;
+        };
+        if let Err(fault) = handle.send(MessageType::Error, &body) {
+            debug!(
+                event = "sync.command_error_not_queued",
+                connection_id = handle.connection_id().as_str(),
+                fault = ?fault,
+                "the decode rejection could not be queued"
+            );
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MessageRoute for CommandRoute {
+    async fn route(&self, session: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
+        match message.message_type() {
+            MessageType::Command => self.on_command(session, message).await,
+            _ => RouteOutcome::Unclaimed,
+        }
+    }
+
+    fn on_authenticated(&self, session: &ConnectionHandle, features: &[String]) {
+        self.note_features(session, features);
+    }
+}
+
+/// `details.retryAfterMs`（`resource.rate_limited` 的唯一登记字段，§12.2）。
+fn retry_after_details(retry_after: std::time::Duration) -> RawObject {
+    details_object(&serde_json::json!({
+        "retryAfterMs": retry_after.as_millis() as u64
+    }))
+}
+
+/// `Rejection` 的登记 `details`（只有 `protocol.feature_required` 带字段，其余一律 `{}`）。
+fn rejection_details(code: ErrorCode) -> RawObject {
+    match code {
+        ErrorCode::ProtocolFeatureRequired => details_object(&serde_json::json!({
+            "features": [query::SESSION_HISTORY_FEATURE]
+        })),
+        _ => RawObject::empty(),
+    }
+}
+
+/// 一个开放对象 `details`（构造失败时退化为 `{}`：登记的 details 是可选扩展点，绝不因它 panic）。
+fn details_object(value: &serde_json::Value) -> RawObject {
+    RawObject::parse(&value.to_string()).unwrap_or_else(|_| RawObject::empty())
+}
+
+/// wire 的 `PublicError`（`retryable` 取封闭错误码的登记值，不自行发明）。
+fn public_error(code: ErrorCode, message: &str, details: RawObject) -> Option<PublicError> {
+    Some(PublicError {
+        code,
+        message: Text::<1024>::parse(message).ok()?,
+        retryable: code.default_retryable(),
+        details,
+    })
+}
+
+/// `error` 消息的 body（与 `sync/conn` 的同名装配同口径：`retryable` 取登记的默认值）。
+fn error_body(
+    code: ErrorCode,
+    message: &str,
+    details: RawObject,
+    correlation: Option<&Uuid>,
+) -> Option<Body> {
+    let retryable = code.default_retryable();
+    let mut body = Body::new(code, message, retryable)
+        .or_else(|_| Body::new(code, code.as_str(), retryable))
+        .ok()?;
+    body.correlation_id = Nullable::from_option(correlation.cloned());
+    body.details = details;
+    Some(body)
+}
+
+/// core 的 `PublicError` → wire 的 `PublicError`。
+///
+/// core 的错误码是开放字符串（它的词表比 Sync 的 34 个更宽，且能携带 `nodelink.*` 之类的细分），wire 的
+/// 是封闭枚举：**认不出的码一律落到 `internal.unavailable`**——保守地按可重试处理，而不是谎报一个语义
+/// 更窄的码。`details` 逐字节保留（`ViewJson` 是库里/核心给出的原文）。
+pub(crate) fn wire_public_error(error: &CorePublicError) -> Option<PublicError> {
+    let code = wire_error_code(error.code());
+    Some(PublicError {
+        code,
+        message: Text::<1024>::parse(error.message()).ok()?,
+        retryable: error.retryable() && code.default_retryable(),
+        details: RawObject::parse(error.details().as_str()).unwrap_or_else(|_| RawObject::empty()),
+    })
+}
+
+/// core 的错误码 → wire 的封闭错误码（只有确实同义的那些直接对应，其余保守落到 `internal.unavailable`）。
+fn wire_error_code(core_code: &str) -> ErrorCode {
+    match core_code {
+        "authorization.scope_denied" => ErrorCode::AuthorizationScopeDenied,
+        "command.unsupported" => ErrorCode::CommandUnsupported,
+        "command.not_found" => ErrorCode::CommandNotFound,
+        "command.idempotency_conflict" => ErrorCode::CommandIdempotencyConflict,
+        "command.uncertain" => ErrorCode::CommandUncertain,
+        "state.version_conflict" => ErrorCode::StateVersionConflict,
+        "session.not_found" => ErrorCode::SessionNotFound,
+        "session.busy" => ErrorCode::SessionBusy,
+        "interaction.already_resolved" => ErrorCode::InteractionAlreadyResolved,
+        "capability.unsupported_by_client" => ErrorCode::CapabilityUnsupportedByClient,
+        "capability.unsupported_by_broker" => ErrorCode::CapabilityUnsupportedByBroker,
+        "capability.unsupported_by_agent" => ErrorCode::CapabilityUnsupportedByAgent,
+        _ => ErrorCode::InternalUnavailable,
+    }
+}
+
+/// wire 的 `Timestamp`（core 与 wire 的时间戳形状相同：UTC、毫秒、`Z`）。
+pub(crate) fn wire_timestamp(text: &str) -> Option<Timestamp> {
+    Timestamp::parse(text).ok()
+}
+
+/// wire 的 uuid → core 的 `RequestId`（两侧都是 canonical 小写 UUID 文本）。
+pub(crate) fn core_request_id(id: &Uuid) -> Option<CoreRequestId> {
+    CoreRequestId::new(id.as_str()).ok()
+}
+
+/// 端口错误 → 拒绝。
+///
+/// `Broker::authorize` 的拒绝经 `Denied::into_port_error()` 变成
+/// `PortError::InvalidRequest("authorization.scope_denied")`（core 的 `PortError` 没有"禁止"变体），
+/// 因此这条**必须先判**：把它映射成 `protocol.schema_invalid` 会让一台未授权设备把授权拒绝看成形状
+/// 错误，正是 2.2 要避免的错误类型漂移。
+pub(crate) fn port_rejection(error: &PortError) -> Rejection {
+    match error {
+        PortError::InvalidRequest("authorization.scope_denied") => Rejection::Code(
+            ErrorCode::AuthorizationScopeDenied,
+            "the device is not allowed to send this command",
+        ),
+        PortError::InvalidRequest("sync.cursor_invalid") => {
+            Rejection::Code(ErrorCode::SyncCursorInvalid, "the cursor cannot be used")
+        }
+        PortError::InvalidRequest(reason) => Rejection::Schema(schema_hint(reason)),
+        PortError::NotFound(_) => Rejection::Code(
+            ErrorCode::SessionNotFound,
+            "the referenced session is not available",
+        ),
+        _ => Rejection::Code(
+            ErrorCode::InternalUnavailable,
+            "the command cannot be served",
+        ),
+    }
+}
+
+/// `PortError::InvalidRequest` 的静态文本 → schema 类拒绝的说明（未知细分取通用说明）。
+fn schema_hint(reason: &str) -> &'static str {
+    match reason {
+        "cursor" => "the cursor is not valid for this session",
+        _ => "the request does not match the v1 schema",
+    }
+}
+
+/// 锁中毒时取回内层数据而不是 panic：命令面在任何 panic 之后仍要能继续拒绝后续命令。
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
