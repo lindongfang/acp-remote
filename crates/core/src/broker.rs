@@ -435,6 +435,25 @@ struct QueuedTurn {
     actor: Actor,
 }
 
+/// **诱发当前提交事件的命令**：`request` 写进 `PendingEvent.causation`（§10.1 的 `causationRequestId`），
+/// `actor` 决定命令类事件的 `origin.kind`（谁产生的）。
+///
+/// 两个来源：
+/// - **在跑的 turn**（[`Slot::running_command`]）：`request` 就是 `owned_turn.causation`（§7.3 已持久化），
+///   `actor` 在 [`Broker::dispatch_one`] 提升该 turn 时随 `QueuedTurn.actor` 记入；
+/// - **会话在作用域的命令**（[`Slot::command_scope`]）：**响应类**事件
+///   （`session.mode.changed`、`session.config.changed`、`permission.resolved`、`elicitation.resolved`）
+///   由提交路径在把命令派发给后端**之前**登记，且**优先于**在跑的 turn——权限/elicitation 的解析按定义
+///   发生在 prompt turn 的 `WaitingPermission` 期间，取在跑 turn 的命令会把解析记到 prompt 头上。
+///
+/// `causation` 与 `origin.kind` 是两件事：turn 内由 Agent 产出的消息/delta 带 command 的 `causation`，
+/// 但 `origin.kind` 仍是 `agent`——**不得**用其中一个替另一个（§10.1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandScope {
+    request: RequestId,
+    actor: Actor,
+}
+
 #[derive(Default)]
 struct TurnQueue {
     running: Option<TurnId>,
@@ -486,6 +505,17 @@ struct Slot {
     ///
     /// 只登记**已提交**的键（提交成功后才插入）：落盘失败的批次不得吃掉下一次重试的派生。
     file_changes: Mutex<Vec<String>>,
+    /// **该会话最近一次派发到后端的命令**（[`CommandScope`]）。
+    ///
+    /// 为什么需要：`session.mode.changed`/`session.config.changed`/`permission.resolved`/
+    /// `elicitation.resolved`（[`RESPONSE_EVENT_TYPES`]）由后端在**收到命令之后**产出，而 `agent-host`
+    /// 产出的 `EndpointEvent` 不携带 `causation`（那属适配器边界，core 不改），因此提交时（`commit_chunk`）
+    /// 只能从会话作用域取诱发命令。这条命令**优先于**在跑的 turn：解析权限的命令按定义不是那条驱动 turn
+    /// 的 prompt。没有它，这些事件只能按「有没有 actor」猜 `origin`——正是 §7.3 明令禁止的。
+    ///
+    /// 边界：**有界**（每会话一条记录）、随会话生命周期（会话槽位是它的唯一持有者），新命令直接覆盖旧值；
+    /// 它不参与任何授权或幂等判定，只影响 `origin_kind`/`causation` 两个字段的取值。
+    command_scope: Mutex<Option<CommandScope>>,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -507,13 +537,31 @@ impl Slot {
         lock(&self.queue).running.clone()
     }
 
-    fn running_request(&self) -> Option<RequestId> {
-        lock(&self.queue).running_request.clone()
+    /// 在跑的 turn 的诱发命令（`request` = `owned_turn.causation`、`actor` = 触发者）。
+    ///
+    /// 两者总是成对写入/清空（[`Broker::dispatch_one`] 与 [`Slot::finish_turn`]），因此只有一个到位时按
+    /// 「没有诱发命令」处理（不猜、不混搭）。
+    fn running_command(&self) -> Option<CommandScope> {
+        let queue = lock(&self.queue);
+        match (&queue.running_request, &queue.running_actor) {
+            (Some(request), Some(actor)) => Some(CommandScope {
+                request: request.clone(),
+                actor: actor.clone(),
+            }),
+            _ => None,
+        }
     }
 
-    /// 当前 active turn 的触发者（用于事件 origin 判定）。
-    fn running_actor(&self) -> Option<Actor> {
-        lock(&self.queue).running_actor.clone()
+    /// 该会话最近一次派发到后端的命令（[`Slot::command_scope`]）。
+    fn command_scope(&self) -> Option<CommandScope> {
+        lock(&self.command_scope).clone()
+    }
+
+    /// 登记「该命令已派发到后端」——由提交路径在调后端**之前**调用，供后端随后产出的**响应类**事件
+    /// （[`RESPONSE_EVENT_TYPES`]）在提交时取到诱发命令；它**优先于**在跑的 turn（见 [`CommandScope`]
+    /// 与 [`Slot::command_scope`]）。
+    fn set_command_scope(&self, scope: CommandScope) {
+        *lock(&self.command_scope) = Some(scope);
     }
 
     /// 终态落盘后清空 active turn（`turn.queued` 之外的排队 turn 保留）。
@@ -636,6 +684,7 @@ impl Broker {
                     turn_deltas: Mutex::new(HashMap::new()),
                     abandoned: Mutex::new(Vec::new()),
                     file_changes: Mutex::new(Vec::new()),
+                    command_scope: Mutex::new(None),
                 })
             })
             .clone()
@@ -1112,6 +1161,12 @@ impl Broker {
         }
         let target = turn.clone().or_else(|| slot.running_turn());
         let endpoint = self.endpoint(&slot, &session).await?;
+        // 取消命令进入作用域：后端随后的 `turn.cancelled` 属于本 turn（走 turn 自身的 causation），
+        // 但同批可能出现的非 turn 命令类事件也按这条命令归因，而不是按「有没有 actor」猜。
+        slot.set_command_scope(CommandScope {
+            request: command.request.clone(),
+            actor: actor.clone(),
+        });
         let dispatched = endpoint.cancel(target.clone()).await;
         // 后端会经 sink 发 `turn.cancelled`；它由本调用驱动落盘（含 prompt 命令的终态，§11.2）。
         self.flush_locked(&slot, &session).await?;
@@ -1171,6 +1226,12 @@ impl Broker {
             Accept::Committed => {}
         }
         let endpoint = self.endpoint(&slot, &session).await?;
+        // 命令在作用域里登记：后端随后产出的 `session.mode.changed` 不含 causation（适配器边界），
+        // 提交时按这条命令判 `origin.kind` 与 `causation`（§10.1）。
+        slot.set_command_scope(CommandScope {
+            request: command.request.clone(),
+            actor: actor.clone(),
+        });
         match endpoint.set_mode(mode).await {
             Ok(()) => {
                 // 后端的 `session.mode.changed` 先落盘（§11.5：先发状态事件、再发 command.completed）。
@@ -1241,6 +1302,11 @@ impl Broker {
             Accept::Committed => {}
         }
         let endpoint = self.endpoint(&slot, &session).await?;
+        // 同 `set_mode`：`session.config.changed` 的 `origin.kind`/`causation` 取自这条命令。
+        slot.set_command_scope(CommandScope {
+            request: command.request.clone(),
+            actor: actor.clone(),
+        });
         match endpoint.set_config(id, value).await {
             Ok(()) => {
                 self.flush_locked(&slot, &session).await?;
@@ -1311,7 +1377,14 @@ impl Broker {
             Accept::Committed => {}
         }
         let outcome = self
-            .resolve_locked(actor, &slot, &session, interaction, resolution)
+            .resolve_locked(
+                actor,
+                &command.request,
+                &slot,
+                &session,
+                interaction,
+                resolution,
+            )
             .await?;
         let at = self.now();
         let status = match outcome {
@@ -1371,7 +1444,14 @@ impl Broker {
             Accept::Committed => {}
         }
         let outcome = self
-            .resolve_locked(actor, &slot, &session, interaction, resolution)
+            .resolve_locked(
+                actor,
+                &command.request,
+                &slot,
+                &session,
+                interaction,
+                resolution,
+            )
             .await?;
         let at = self.now();
         let (status, error) = match outcome {
@@ -1426,7 +1506,7 @@ impl Broker {
         if resolution.validate().is_err() {
             return Err(PortError::InvalidRequest("交互解析不满足 schema"));
         }
-        self.resolve_locked(actor, &slot, &session, interaction, resolution)
+        self.resolve_locked(actor, &request, &slot, &session, interaction, resolution)
             .await
     }
 
@@ -1435,6 +1515,7 @@ impl Broker {
     async fn resolve_locked(
         &self,
         actor: &Actor,
+        request: &RequestId,
         slot: &Slot,
         session: &SessionId,
         interaction: &InteractionId,
@@ -1475,6 +1556,12 @@ impl Broker {
             Err(error) => return Err(error),
         }
         let endpoint = self.endpoint(slot, session).await?;
+        // 解析命令进入作用域：后端随后的 `permission.resolved`/`elicitation.resolved` 按这条命令归因
+        // （它们不带 causation，见适配器边界）。
+        slot.set_command_scope(CommandScope {
+            request: request.clone(),
+            actor: actor.clone(),
+        });
         endpoint
             .resolve_interaction(interaction, resolution)
             .await?;
@@ -2053,8 +2140,19 @@ impl Broker {
     ) -> Result<(), PortError> {
         let at = self.now();
         let running = slot.running_turn();
-        let running_request = slot.running_request();
-        let running_actor = slot.running_actor();
+        // 在跑的 turn 的诱发命令（`owned_turn.causation` + 触发者）从**同一次**读取取得，避免两个字段
+        // 分两次加锁后出现「有 causation 没 actor」的错配（两者总是成对写入/清空）。
+        let running_command = slot.running_command();
+        let running_request = running_command.as_ref().map(|scope| scope.request.clone());
+        let running_actor = running_command.as_ref().map(|scope| scope.actor.clone());
+        // 后端产出的 `EndpointEvent` 不携带 `causation`（适配器边界，core 不改），因此**响应类**事件
+        // （`session.mode.changed`/`session.config.changed`/`permission.resolved`/`elicitation.resolved`）
+        // 只能从会话在作用域的命令取诱发者与 causation——**即使它们落在某个正在跑的 turn 里**：权限与
+        // elicitation 的解析按定义就发生在 prompt turn 的 `WaitingPermission` 期间，而适配器产出的
+        // `EndpointEvent.turn` 恒为 `None`、`commit_chunk` 又会把无 turn 的事件兜底归给在跑的 turn，
+        // 按归属取命令会把解析记到 prompt 那条命令上（见 [`RESPONSE_EVENT_TYPES`] 与下面每个事件处的
+        // `inducing`）。这里先取一次会话作用域。
+        let scoped_command = slot.command_scope();
         let mut events: Vec<PendingEvent> = Vec::new();
         let mut turn_change: Option<TurnChange> = None;
         let mut session_state: Option<SessionState> = None;
@@ -2106,6 +2204,30 @@ impl Broker {
             if turn.is_some() && turn == running {
                 running_in_chunk = true;
             }
+            // **诱发该事件的命令**（§10.1 的 `causationRequestId`，并决定命令类事件的 `origin.kind`）。
+            // 按**事件类型**分流，不按「事件归属在不在跑的 turn」：
+            // - **响应类事件**（[`RESPONSE_EVENT_TYPES`]）取**提交时在会话作用域的那条命令**——它们是后端
+            //   对 `session.mode.set`/`session.config.set`/`permission.resolve`/`elicitation.respond` 的
+            //   响应，即使落在某个正在跑的 turn 里也**不是**该 turn 的命令（权限解析就发生在 prompt turn
+            //   的 `WaitingPermission` 期间）；作用域里没有命令时退回该 turn 的命令，不猜；
+            // - **turn 生命周期事件**与 turn 内由 Agent 产出的事件：`causation` 取该 turn 的命令
+            //   （`owned_turn.causation` 已持久化，§7.3），`origin.kind` 仍由 `event_origin` 按类型判定
+            //   （Agent 产出恒为 `agent`——`causation` 与 `origin` 表达不同的事实，不得互相替代）；
+            // - 其余事件（不属于任何 turn 的 Agent 产出）没有命令直接导致它，`causation` 保持 `null`；
+            //   命令类事件（`command.*`）即使没有 turn 归属也取会话作用域命令，它们只由命令路径产生。
+            let inducing = if is_response_event_type(event.event_type.as_str()) {
+                scoped_command.clone().or_else(|| running_command.clone())
+            } else if turn.is_some() {
+                running_command.clone()
+            } else if is_command_event_type(event.event_type.as_str()) {
+                scoped_command.clone()
+            } else {
+                None
+            };
+            // 命令类事件的 `origin.kind` 按诱发命令的执行者分类；非命令类事件一律 `agent`（`causation`
+            // 与 `origin` 表达不同的事实，不得互相替代）。
+            let inducing_actor = inducing.as_ref().map(|scope| &scope.actor);
+            let inducing_request = inducing.as_ref().map(|scope| scope.request.clone());
             let policy = persistence_policy(&event.event_type);
             // §6 第 14 条：登记本批里的 delta 片段（提交成功后才并入累积）。
             if is_agent_message_delta(&event.event_type) {
@@ -2128,8 +2250,10 @@ impl Broker {
                     terminal_request = event.causation.clone().or_else(|| running_request.clone());
                     last_view = Some(event.payload.view.clone());
                     // §6 第 14 条：该 turn 内出现过 delta 的每个 messageId 各发恰好一条 completed，
-                    // 与终态事件同批提交；没有 delta 的消息不发。
-                    completed_events = self.completed_events_for(slot, &turn_id)?;
+                    // 与终态事件同批提交；没有 delta 的消息不发。它们与终态事件同属该 turn，因此带上同一
+                    // 个诱发命令的 `causation`（`origin.kind` 仍是 `agent`——Agent 产出的）。
+                    completed_events =
+                        self.completed_events_for(slot, &turn_id, terminal_request.as_ref())?;
                     let count = lock(&slot.deltas)
                         .get(turn_id.as_str())
                         .map(|fragments| fragments.len())
@@ -2172,9 +2296,9 @@ impl Broker {
                             EventKind::Structured,
                             view,
                             turn.clone(),
-                            event.causation.clone(),
+                            inducing_request.clone(),
                             StoredPolicy::Durable,
-                            running_actor.as_ref(),
+                            inducing_actor,
                         )?);
                     }
                 }
@@ -2206,9 +2330,9 @@ impl Broker {
                 event.event_type.clone(),
                 policy,
                 event.payload,
-                event_origin(&event.event_type, running_actor.as_ref()),
+                event_origin(&event.event_type, inducing_actor),
                 turn,
-                event.causation,
+                event.causation.or(inducing_request),
             ) {
                 events.push(pending);
             }
@@ -2356,6 +2480,7 @@ impl Broker {
                         session,
                         &request,
                         "事件落盘失败，无法确认已投递给客户端",
+                        running_actor.as_ref(),
                     )
                     .await;
                     return Ok(());
@@ -2400,6 +2525,14 @@ impl Broker {
                 None => return Ok(false),
             }
         };
+        // 该 turn 的命令现在起在会话作用域里：后端随后产出的响应类事件若还没有被别的命令接管
+        // （`permission.resolve`/`elicitation.respond`/`session.mode.set`/`session.config.set` 各自会在
+        // 派发前覆盖它），就按这条命令归因——此时它与在跑的 turn 的命令是同一条。turn 生命周期事件与
+        // turn 内由 Agent 产出的事件仍以 turn 自身的 `causation`/触发者为准（见 `commit_chunk`）。
+        slot.set_command_scope(CommandScope {
+            request: next.request.clone(),
+            actor: next.actor.clone(),
+        });
         let at = self.now();
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -2558,7 +2691,7 @@ impl Broker {
             return Ok(());
         };
         lock(&slot.abandoned).push(turn.clone());
-        let completed = self.completed_events_for(slot, turn)?;
+        let completed = self.completed_events_for(slot, turn, request)?;
         lock(&slot.deltas).remove(turn.as_str());
         lock(&slot.turn_deltas).remove(turn.as_str());
         slot.hold_abandoned_turn(turn);
@@ -2640,7 +2773,18 @@ impl Broker {
         }
     }
 
-    async fn record_uncertain(&self, session: &SessionId, request: &RequestId, reason: &str) {
+    /// §6.9 的兜底终态：终态事件落盘失败时，把该命令终结为 `uncertain`。
+    ///
+    /// `inducing_actor` 是诱发该命令的执行者（调用方在作用域里就有），用于 `command.uncertain` 的
+    /// `origin.kind`——**不得**因为这里拿不到 actor 就默认记 `device`。确实没有诱发命令时由
+    /// [`event_origin`] 记 `daemon`。
+    async fn record_uncertain(
+        &self,
+        session: &SessionId,
+        request: &RequestId,
+        reason: &str,
+        inducing_actor: Option<&Actor>,
+    ) {
         let Ok(error) = PublicError::coded("command.uncertain", reason, false) else {
             return;
         };
@@ -2656,7 +2800,6 @@ impl Broker {
         ) else {
             return;
         };
-        // `command.uncertain` 由设备命令引起；这里没有 actor 在作用域里，`event_origin` 按 `Device` 记账。
         let Ok(event) = pending_event(
             "command.uncertain",
             EventKind::Structured,
@@ -2664,7 +2807,7 @@ impl Broker {
             None,
             Some(request.clone()),
             StoredPolicy::Durable,
-            None,
+            inducing_actor,
         ) else {
             return;
         };
@@ -2689,10 +2832,14 @@ impl Broker {
     /// §6 第 14 条：该 turn 内出现过 delta 的每个 `messageId` 各生成恰好一条 `agent.message.completed`。
     ///
     /// 排序保证确定性（按首个 `deltaIndex`、再按 messageId）；没有 delta 的 turn 返回空。
+    ///
+    /// `causation` 是该 turn 的诱发命令（§10.1：turn 内由 Agent 产出的领域事件照样带诱发命令的
+    /// `requestId`）；`origin.kind` 仍是 `agent`，两者不得互相替代。
     fn completed_events_for(
         &self,
         slot: &Slot,
         turn: &TurnId,
+        causation: Option<&RequestId>,
     ) -> Result<Vec<PendingEvent>, PortError> {
         let fragments: Vec<DeltaFragment> = lock(&slot.deltas)
             .get(turn.as_str())
@@ -2731,9 +2878,11 @@ impl Broker {
                 EventKind::FinalMessage,
                 view,
                 Some(turn.clone()),
-                None,
+                causation.cloned(),
                 StoredPolicy::Durable,
-                Some(&Actor::LocalCli),
+                // `agent.message.completed` 由 Agent 产出（非命令类事件），`origin.kind` 与 actor 无关；
+                // 传 `None` 如实表达「这条不是命令产生的产物」。
+                None,
             )?);
         }
         Ok(events)
@@ -2886,7 +3035,10 @@ impl Broker {
                     workspace_alias: None,
                 }));
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
-                events.extend(self.backfill_completed(&page, turn.id()).await?);
+                events.extend(
+                    self.backfill_completed(&page, turn.id(), turn.causation())
+                        .await?,
+                );
             }
             events.push(pending_event(
                 "command.uncertain",
@@ -2939,10 +3091,14 @@ impl Broker {
     /// 只认 `agent.message.delta` 的事件类型（`agent.thought.delta` 不产生 completed），正文直接取自
     /// 读视图返回的记录（`HistoryPage.events` 的元素自带持久化正文，不逐条回查）；已有 `completed` 的
     /// messageId 不重复补写。
+    ///
+    /// `causation` 是该 turn 的诱发命令（与 [`Broker::completed_events_for`] 同口径：turn 内由 Agent
+    /// 产出的领域事件照样带诱发命令的 `requestId`）。
     async fn backfill_completed(
         &self,
         page: &HistoryPage,
         turn: &TurnId,
+        causation: Option<&RequestId>,
     ) -> Result<Vec<PendingEvent>, PortError> {
         let mut fragments: HashMap<String, Vec<DeltaFragment>> = HashMap::new();
         let mut completed: Vec<MessageId> = Vec::new();
@@ -2991,7 +3147,7 @@ impl Broker {
                 EventKind::FinalMessage,
                 view_message_completed(&message, turn, &content)?,
                 Some(turn.clone()),
-                None,
+                causation.cloned(),
                 StoredPolicy::Durable,
                 None,
             )?);
@@ -3280,7 +3436,7 @@ impl Broker {
                 Ok(())
             }
             Err(PortError::Unavailable(_)) => {
-                self.record_uncertain(session, request, "终态落盘失败")
+                self.record_uncertain(session, request, "终态落盘失败", Some(&command.actor))
                     .await;
                 Ok(())
             }
@@ -3660,36 +3816,92 @@ fn permission_kind(kind: &str) -> Option<PermissionDecisionKind> {
     }
 }
 
+/// Daemon/Broker 自身产出的事件类型（没有诱发命令，`origin.kind = daemon`）。
+const DAEMON_EVENT_TYPES: &[&str] = &[
+    "device.revoked",
+    "session.origin.online_changed",
+    "storage.integrity_failed",
+];
+
+/// 由命令路径产生的领域事件类型。这一组**只**由命令诱发（`turn.*`/`command.*` 由提交路径组装，
+/// `permission.resolved`/`elicitation.resolved`/`session.mode.changed`/`session.config.changed` 是后端
+/// 对命令的响应），因此它们的 `origin.kind` 取**诱发命令的执行者**、`causation` 取该命令的 `requestId`；
+/// 其余类型由 Agent 产出（`origin.kind = agent`），只在属于某个 turn 时带该 turn 的 `causation`。
+///
+/// 该清单与 `broker::event_origin` 是 `origin.kind` 分类的**唯一**来源，不散在提交点里。它只回答
+/// 「`origin.kind` 按不按诱发命令分类」；**哪条**命令是诱发命令是另一件事，由 [`commit_chunk`] 按事件
+/// 类型分流（见 [`RESPONSE_EVENT_TYPES`]）。
+///
+/// [`commit_chunk`]: Broker::commit_chunk
+const COMMAND_EVENT_TYPES: &[&str] = &[
+    "permission.resolved",
+    "elicitation.resolved",
+    "turn.queued",
+    "turn.started",
+    "turn.completed",
+    "turn.cancelled",
+    "turn.failed",
+    "command.completed",
+    "command.failed",
+    "command.uncertain",
+    "session.mode.changed",
+    "session.config.changed",
+];
+
+/// 该事件类型是否由命令路径产生（见 [`COMMAND_EVENT_TYPES`]）。
+fn is_command_event_type(event_type: &str) -> bool {
+    COMMAND_EVENT_TYPES.contains(&event_type)
+}
+
+/// 四类**响应类**事件：后端对一条**会话作用域命令**的响应（`session.mode.set`/`session.config.set`/
+/// `permission.resolve`/`elicitation.respond`）。
+///
+/// 它们与 turn 事件分属**两套**诱发来源，这是 [`Broker::commit_chunk`] 按事件类型而不是按事件归属挑诱发
+/// 命令的原因：turn 事件的诱发命令是**该 turn 自己的命令**，响应类事件的诱发命令是**提交时在会话作用域
+/// 的那条命令**——两者在「有 turn 正在跑」时常常不是同一条（权限与 elicitation 的解析按定义就发生在
+/// prompt turn 的 `WaitingPermission` 期间）。`agent-host` 产出的 `EndpointEvent` 恒不带 turn（那属
+/// 适配器边界），而 `commit_chunk` 会把无 turn 的事件兜底归给在跑的 turn，因此**不得**按事件归属的 turn
+/// 取响应类事件的诱发命令：那会把「设备 B 解析设备 A 的 turn 的权限」记成 A 的那条 prompt 命令，
+/// 让 `causation → owned_command.actor_id` 的回查把归属判给 A。
+const RESPONSE_EVENT_TYPES: &[&str] = &[
+    "permission.resolved",
+    "elicitation.resolved",
+    "session.mode.changed",
+    "session.config.changed",
+];
+
+/// 该事件类型是否是后端对会话作用域命令的响应（见 [`RESPONSE_EVENT_TYPES`]）。
+fn is_response_event_type(event_type: &str) -> bool {
+    RESPONSE_EVENT_TYPES.contains(&event_type)
+}
+
 /// 事件产生者判定（`SYNC_PROTOCOL.md` §10.1 的 `origin.kind`）——**唯一实现**：broker 组装每条事件时都用它，
-/// 不按「有没有会话」猜，也不散在提交点里。
+/// 不按「有没有会话」猜（那是 §7.3 明令禁止的推断），也不散在提交点里。
 ///
 /// - 后端 / Agent 产生（增量、工具、交互请求、计划/命令目录/用量/连接状态…）→ [`EventOrigin::Agent`]；
-/// - 由设备命令引起（`permission.resolved`、`elicitation.resolved`、`turn.*`、`command.*`、模式/配置变更）
-///   → [`EventOrigin::Device`]；`Actor::LocalCli` 引起时 → [`EventOrigin::LocalCli`]。
-///   这些类型在 core 里**只**由命令路径产生，因此 actor 缺失时按 `Device` 记账；
-/// - daemon 自身事件（没有请求 actor 的 `device.revoked`、`session.origin.online_changed`、
-///   `storage.integrity_failed`）→ [`EventOrigin::Daemon`]。
-fn event_origin(event_type: &EventType, actor: Option<&Actor>) -> EventOrigin {
-    match event_type.as_str() {
-        "device.revoked" | "session.origin.online_changed" | "storage.integrity_failed" => {
-            EventOrigin::Daemon
-        }
-        "permission.resolved"
-        | "elicitation.resolved"
-        | "turn.queued"
-        | "turn.started"
-        | "turn.completed"
-        | "turn.cancelled"
-        | "turn.failed"
-        | "command.completed"
-        | "command.failed"
-        | "command.uncertain"
-        | "session.mode.changed"
-        | "session.config.changed" => match actor {
-            Some(Actor::LocalCli) => EventOrigin::LocalCli,
-            Some(_) | None => EventOrigin::Device,
-        },
-        _ => EventOrigin::Agent,
+/// - 命令类事件（[`COMMAND_EVENT_TYPES`]）按**诱发命令的执行者**分类：本机 CLI → [`EventOrigin::LocalCli`]、
+///   本机已授权 Sync 设备 → [`EventOrigin::Device`]、另一个节点经 Node Link 的命令 → [`EventOrigin::Node`]。
+///   缺诱发命令时**不猜**：记 [`EventOrigin::Daemon`]（见下）；
+/// - daemon 自身事件（[`DAEMON_EVENT_TYPES`]）→ [`EventOrigin::Daemon`]。
+///
+/// `inducing_actor = None` 的处置：命令类事件在 core 里只由命令路径产生，没有诱发命令说明它不是任何命令的
+/// 产物，而是 Daemon/Broker 自身的写入（启动恢复的 `command.uncertain`、维护类提交等）——因此记
+/// `daemon`。**不得**默认记 `device`（那会把无从归因的事件谎报成某个设备发起的），也**不得**按
+/// 「有没有会话或 actor」反推产出者。配对认领方（[`Actor::PairingClaimant`]）永不可提交命令
+/// （授权一律拒绝），走到这里说明接线错误，与「没有诱发命令」同一处置。
+fn event_origin(event_type: &EventType, inducing_actor: Option<&Actor>) -> EventOrigin {
+    let text = event_type.as_str();
+    if DAEMON_EVENT_TYPES.contains(&text) {
+        return EventOrigin::Daemon;
+    }
+    if !is_command_event_type(text) {
+        return EventOrigin::Agent;
+    }
+    match inducing_actor {
+        Some(Actor::LocalCli) => EventOrigin::LocalCli,
+        Some(Actor::Device { .. }) => EventOrigin::Device,
+        Some(Actor::Node { .. }) => EventOrigin::Node,
+        Some(Actor::PairingClaimant { .. }) | None => EventOrigin::Daemon,
     }
 }
 
@@ -4269,6 +4481,8 @@ pub(crate) mod test_support {
         pub(crate) event_payloads: HashMap<String, EventPayload>,
         /// 事件 id → `origin.kind`（fake 记录 broker 写入的 origin，供 §10.1 断言）。
         pub(crate) event_origins: HashMap<String, EventOrigin>,
+        /// 事件 id → `causation`（诱发命令的 requestId；fake 记录 broker 写入的因果，供 §10.1 断言）。
+        pub(crate) event_causations: HashMap<String, Option<RequestId>>,
         /// 事件 id → 落盘的 turn 归属（供 §10.3 「view 与 turn_id 一致」断言）。
         pub(crate) event_turns: HashMap<String, Option<TurnId>>,
         /// `global_sequence` → 事件类别（§6 第 15 条的 delta 判定）。
@@ -4460,6 +4674,29 @@ pub(crate) mod test_support {
         /// 某条事件落库时的 `origin.kind`（§10.1）。
         pub(crate) fn event_origin(&self, id: &EventId) -> Option<EventOrigin> {
             lock(&self.state).event_origins.get(id.as_str()).copied()
+        }
+
+        /// 某条事件落库时的 `causation`（§10.1：诱发命令的 requestId；`None` = 没有命令直接导致它）。
+        pub(crate) fn event_causation(&self, id: &EventId) -> Option<Option<RequestId>> {
+            lock(&self.state).event_causations.get(id.as_str()).cloned()
+        }
+
+        /// 某条事件落库时的 `(origin.kind, causation)` 投影（§10.1 断言用）。
+        pub(crate) fn provenance_of(
+            &self,
+            session: &SessionId,
+            event_type: &str,
+        ) -> Vec<(EventOrigin, Option<RequestId>)> {
+            self.events(session)
+                .into_iter()
+                .filter(|event| event.event_type.as_str() == event_type)
+                .map(|event| {
+                    (
+                        self.event_origin(&event.id).expect("origin recorded"),
+                        self.event_causation(&event.id).expect("causation recorded"),
+                    )
+                })
+                .collect()
         }
 
         /// 某条事件落库时的 turn 归属（§10.3：view 的 `turnId` 必须与它一致）。
@@ -4882,6 +5119,9 @@ pub(crate) mod test_support {
                 state
                     .event_origins
                     .insert(id.as_str().to_owned(), event.origin);
+                state
+                    .event_causations
+                    .insert(id.as_str().to_owned(), event.causation.clone());
                 state
                     .event_turns
                     .insert(id.as_str().to_owned(), event.turn.clone());
@@ -6313,14 +6553,28 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use crate::model::{
-        AcpRaw, AgentId, AgentRef, AgentSessionId, DeviceId, EventId, ExportId, InteractionKind,
-        InteractionOption, ModeState, PendingInteraction, ResourceOrigin, ScopeSet,
+        AcpRaw, AgentId, AgentRef, AgentSessionId, CachePolicy, DeviceId, EventId, ExportId,
+        ExportRecord, ExportTemplate, Fingerprint, GrantSet, InteractionKind, InteractionOption,
+        ModeState, NodeRecord, PairingId, PendingInteraction, ResourceOrigin, ScopeSet, TemplateId,
+        WorkspaceAlias, WorkspaceAliasEntry,
     };
 
     fn device_without_scopes() -> Actor {
         Actor::Device {
             device: DeviceId::new(&uuid_text(40)).expect("uuid"),
             scopes: ScopeSet::empty(),
+        }
+    }
+
+    /// 一个已授权某条命令范围的设备（用于 §10.1 的「按诱发命令的执行者分类」断言）。
+    fn device_actor(scope: &str) -> Actor {
+        Actor::Device {
+            device: DeviceId::new(&uuid_text(43)).expect("uuid"),
+            scopes: {
+                let mut scopes = ScopeSet::empty();
+                scopes.insert(scope).expect("insert scope");
+                scopes
+            },
         }
     }
 
@@ -7906,26 +8160,108 @@ mod tests {
         );
     }
 
-    /// §10.1：四类产生者各至少一条断言——Agent（后端事件）、Device（设备命令引起）、LocalCli（本地
-    /// CLI 命令引起）、Daemon（daemon 自身事件）。
+    /// §10.1：`origin.kind` 的**纯映射层**断言——命令类事件按诱发命令的执行者分类；缺诱发命令时记
+    /// `daemon` 而**不是** `device`；daemon 自身事件恒为 `daemon`；其余（Agent 产出）恒为 `agent`。
     #[test]
-    fn event_origin_follows_the_producer() {
-        // 纯映射层：同一事件类型在不同 actor 下得到不同的 origin。
+    fn event_origin_classifies_command_events_by_the_inducing_actor() {
         let delta = EventType::new("agent.message.delta").expect("event type");
-        assert_eq!(event_origin(&delta, None), EventOrigin::Agent);
+        let mode = EventType::new("session.mode.changed").expect("event type");
         let completed = EventType::new("command.completed").expect("event type");
-        assert_eq!(event_origin(&completed, None), EventOrigin::Device);
-        assert_eq!(
-            event_origin(&completed, Some(&Actor::LocalCli)),
-            EventOrigin::LocalCli
-        );
         let revoked = EventType::new("device.revoked").expect("event type");
+        let device = device_actor("session.prompt");
+        let node = Actor::Node {
+            node: NodeId::new(&uuid_text(44)).expect("node"),
+            access_node: NodeId::new(&uuid_text(45)).expect("access node"),
+        };
+        let claimant = Actor::PairingClaimant {
+            pairing: PairingId::new(&uuid_text(46)).expect("pairing"),
+        };
+
+        // 每个执行者取值在**任一**命令类事件上给出同一个分类（清单只决定「是不是命令类」）。
+        for event in [&mode, &completed] {
+            assert_eq!(
+                event_origin(event, None),
+                EventOrigin::Daemon,
+                "缺诱发命令不得默认记为 device"
+            );
+            assert_eq!(
+                event_origin(event, Some(&Actor::LocalCli)),
+                EventOrigin::LocalCli
+            );
+            assert_eq!(event_origin(event, Some(&device)), EventOrigin::Device);
+            assert_eq!(event_origin(event, Some(&node)), EventOrigin::Node);
+            assert_eq!(
+                event_origin(event, Some(&claimant)),
+                EventOrigin::Daemon,
+                "认领方永不可提交命令；不得拿它拼出一个来源"
+            );
+        }
+        // Agent 产出的事件与 actor 无关。
+        for actor in [None, Some(&Actor::LocalCli), Some(&device), Some(&node)] {
+            assert_eq!(event_origin(&delta, actor), EventOrigin::Agent);
+        }
+        // Daemon 自身事件与 actor 无关。
+        assert_eq!(event_origin(&revoked, None), EventOrigin::Daemon);
         assert_eq!(
             event_origin(&revoked, Some(&Actor::LocalCli)),
             EventOrigin::Daemon
         );
+        // 新增的第五个取值：wire/db token 都是 `node`。
+        assert_eq!(EventOrigin::Node.as_str(), "node");
+        assert_eq!(EventOrigin::ALL.len(), 5, "§7.3 的 CHECK 是五值");
+    }
 
-        // 端到端：同一条 prompt 提交里，Agent 事件与命令事件的 origin 不同。
+    /// 一套能让 `Actor::Node` 通过 Owner 侧授权（§6.5）的最小 Export + 信任记录：信任行 grants 含
+    /// `grant.interact`（`session.prompt` 所需）且点名该 Export；Export 未撤销、scopes 与信任行相交并
+    /// 覆盖该会话的 agent。
+    fn seed_node_owner_grant(harness: &Harness, node: &NodeId, agent: &AgentId) {
+        let export_id = ExportId::new("export-node").expect("export id");
+        let alias = WorkspaceAlias::new("project").expect("alias");
+        let export = ExportRecord::try_new(
+            export_id.clone(),
+            "team export",
+            vec![agent.clone()],
+            vec![WorkspaceAliasEntry::try_new(alias.clone(), "Project").expect("alias entry")],
+            alias.clone(),
+            vec![
+                ExportTemplate::try_new(
+                    TemplateId::new("coding").expect("template id"),
+                    "Coding",
+                    alias.clone(),
+                    Vec::new(),
+                )
+                .expect("template"),
+            ],
+            TemplateId::new("coding").expect("template id"),
+            GrantSet::try_from_iter(["grant.interact"]).expect("grants"),
+            CachePolicy::NoContentCache,
+            ts(0),
+            None,
+        )
+        .expect("export record");
+        let trust = NodeRecord::try_new(
+            node.clone(),
+            "office access",
+            NodeKind::Access,
+            Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
+            GrantSet::try_from_iter(["grant.interact"]).expect("grants"),
+            vec![export_id],
+            NodeState::Paired,
+            None,
+            ts(0),
+            None,
+            None,
+        )
+        .expect("node record");
+        harness.world.exports.lock().expect("exports").push(export);
+        harness.world.nodes.lock().expect("nodes").push(trust);
+    }
+
+    /// §10.1 的验收口径（**设备驱动**）：turn 生命周期事件记 `origin_kind='device'` **且** `causation`
+    /// 等于该 prompt 的 requestId；turn 内由 Agent 产出的增量仍是 `agent`，但**照样带**该 causation
+    /// （两者表达不同的事实，不得互相替代）。
+    #[test]
+    fn device_prompt_records_device_origin_and_the_prompt_causation() {
         let harness = Harness::new(BrokerConfig::default());
         harness.world.push_script(Script::new(vec![
             endpoint_event(
@@ -7935,62 +8271,57 @@ mod tests {
             ),
             endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
         ]));
-        let device = Actor::Device {
-            device: DeviceId::new(&uuid_text(43)).expect("uuid"),
-            scopes: {
-                let mut scopes = ScopeSet::empty();
-                scopes.insert("session.prompt").expect("insert scope");
-                scopes
-            },
-        };
-        let command = prompt_command(&device, &harness.session, &harness.request(1), 'A');
+        let device = device_actor("session.prompt");
+        let request = harness.request(1);
+        let command = prompt_command(&device, &harness.session, &request, 'A');
         assert!(matches!(
             block_on(harness.broker.submit_mutation(&device, &command)).expect("submit"),
             CommandReceipt::Accepted { .. }
         ));
-        let origins: Vec<(EventOrigin, String)> = harness
-            .world
-            .events(&harness.session)
-            .into_iter()
-            .map(|event| {
-                (
-                    harness
-                        .world
-                        .event_origin(&event.id)
-                        .expect("origin recorded"),
-                    event.id.as_str().to_owned(),
-                )
-            })
-            .collect();
-        let by_origin = |origin: EventOrigin| {
-            origins
-                .iter()
-                .filter(|(stored, _)| *stored == origin)
-                .count()
-        };
-        assert_eq!(by_origin(EventOrigin::Agent), 1, "后端 delta 属于 Agent");
-        assert!(
-            by_origin(EventOrigin::Device) >= 3,
-            "turn.queued/turn.started/command.completed 由设备命令引起"
-        );
-        assert_eq!(
-            by_origin(EventOrigin::LocalCli),
-            0,
-            "该命令来自设备而不是本地 CLI"
-        );
-        assert_eq!(by_origin(EventOrigin::Daemon), 0);
 
-        // 本地 CLI 的同一路径 → LocalCli。
+        for event_type in [
+            "turn.queued",
+            "turn.started",
+            "turn.completed",
+            "command.completed",
+        ] {
+            assert_eq!(
+                harness.world.provenance_of(&harness.session, event_type),
+                vec![(EventOrigin::Device, Some(request.clone()))],
+                "{event_type} 必须按诱发命令记 device，且 causation = 该 prompt 的 requestId"
+            );
+        }
+        assert_eq!(
+            harness
+                .world
+                .provenance_of(&harness.session, "agent.message.delta"),
+            vec![(EventOrigin::Agent, Some(request.clone()))],
+            "turn 内由 Agent 产出的增量仍是 agent，但照样带该 prompt 的 causation"
+        );
+    }
+
+    /// §10.1：**本地 CLI 驱动**的同一路径记 `local_cli`——今天这条路径上的非 turn 命令类事件被误记为
+    /// `device`（缺 actor 时的旧默认），改后不得再出现 `device`。
+    #[test]
+    fn cli_prompt_records_local_cli_not_device() {
         let harness = Harness::new(BrokerConfig::default());
         harness.world.push_script(Script::new(vec![endpoint_event(
             EventKind::State,
             "turn.completed",
             &turn_view("completed"),
         )]));
+        let request = harness.request(1);
         assert!(matches!(
             harness.submit_prompt(1, 'A'),
             CommandReceipt::Accepted { .. }
         ));
+        for event_type in ["turn.queued", "turn.started", "turn.completed"] {
+            assert_eq!(
+                harness.world.provenance_of(&harness.session, event_type),
+                vec![(EventOrigin::LocalCli, Some(request.clone()))],
+                "{event_type} 的诱发命令来自本地 CLI"
+            );
+        }
         let origins: Vec<EventOrigin> = harness
             .world
             .events(&harness.session)
@@ -7998,12 +8329,202 @@ mod tests {
             .filter_map(|event| harness.world.event_origin(&event.id))
             .collect();
         assert!(
-            origins
-                .iter()
-                .filter(|origin| **origin == EventOrigin::LocalCli)
-                .count()
-                >= 3,
-            "本地 CLI 引起的 turn/command 事件记 LocalCli：{origins:?}"
+            !origins.contains(&EventOrigin::Device),
+            "CLI 驱动的命令类事件不得记 device：{origins:?}"
+        );
+
+        // 非 turn 的命令类事件（`session.mode.set` 诱发的 `session.mode.changed`）同样记 `local_cli`。
+        let request = harness.request(2);
+        let actor = harness.actor();
+        let command = mode_command(&actor, &harness.session, &request, Version::from(1));
+        assert!(matches!(
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit"),
+            CommandReceipt::Accepted { .. }
+        ));
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::State,
+            "session.mode.changed",
+            r#"{"currentModeId":"code"}"#,
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        assert_eq!(
+            harness
+                .world
+                .provenance_of(&harness.session, "session.mode.changed"),
+            vec![(EventOrigin::LocalCli, Some(request.clone()))],
+            "非 turn 的命令类事件取提交时在作用域的命令（其 actor 是 CLI）"
+        );
+        let completed = harness
+            .world
+            .provenance_of(&harness.session, "command.completed");
+        assert_eq!(
+            completed.last(),
+            Some(&(EventOrigin::LocalCli, Some(request))),
+            "模式切换的终态事件也带该命令的 requestId：{completed:?}"
+        );
+    }
+
+    /// §10.1：**节点经 Node Link 的命令**驱动的 turn 记新增的 `node` 取值（不得记 `device`）。
+    #[test]
+    fn node_command_records_the_node_origin() {
+        let harness = Harness::new(BrokerConfig::default());
+        let node = NodeId::new(&uuid_text(120)).expect("node");
+        let agent = AgentId::new("agent-1").expect("agent id");
+        seed_node_owner_grant(&harness, &node, &agent);
+        let actor = Actor::Node {
+            node: node.clone(),
+            access_node: NodeId::new(&uuid_text(121)).expect("access node"),
+        };
+        harness.world.push_script(Script::new(vec![
+            endpoint_event(
+                EventKind::Delta,
+                "agent.message.delta",
+                &turn_view("running"),
+            ),
+            endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
+        ]));
+        let request = harness.request(1);
+        let command = prompt_command(&actor, &harness.session, &request, 'A');
+        assert!(matches!(
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit"),
+            CommandReceipt::Accepted { .. }
+        ));
+        for event_type in [
+            "turn.queued",
+            "turn.started",
+            "turn.completed",
+            "command.completed",
+        ] {
+            assert_eq!(
+                harness.world.provenance_of(&harness.session, event_type),
+                vec![(EventOrigin::Node, Some(request.clone()))],
+                "{event_type} 由节点命令诱发，必须记 node"
+            );
+        }
+        assert_eq!(
+            harness
+                .world
+                .provenance_of(&harness.session, "agent.message.delta"),
+            vec![(EventOrigin::Agent, Some(request))],
+            "turn 内的 Agent 产出仍是 agent"
+        );
+    }
+
+    /// §10.1：**turn 运行期间由另一条命令解析权限**——`permission.resolved` 的 `causation` 与
+    /// `origin.kind` 取**那条解析命令**，而不是仍在跑的 turn 的那条 prompt 命令。
+    ///
+    /// 这是主用例而不是边缘情形：权限/elicitation 的解析按定义就发生在 prompt turn 的
+    /// `WaitingPermission` 期间，而 `agent-host` 产出的 `EndpointEvent` 恒不带 turn、`commit_chunk`
+    /// 又会把无 turn 的事件兜底归给在跑的 turn——按事件归属取诱发命令会把「设备 B 解析设备 A 的 turn
+    /// 的权限」记成 A 的 prompt（任务 1.6 的 `causation → owned_command.actor_id` 回查因此判给 A）。
+    #[test]
+    fn permission_resolved_during_a_running_turn_takes_the_resolving_command() {
+        let harness = Harness::new(BrokerConfig::default());
+        let interaction = InteractionId::new(&uuid_text(300)).expect("interaction");
+        harness.world.seed_interaction(
+            PendingInteraction::try_new(
+                interaction.clone(),
+                InteractionKind::Permission,
+                harness.session.clone(),
+                ts(0),
+                vec![
+                    InteractionOption::try_new("allow-once", "Allow once", "allow_once")
+                        .expect("option"),
+                ],
+            )
+            .expect("pending"),
+        );
+        // 设备 A 的 prompt 打开一个 turn：脚本只发一条增量、不发终态 ⇒ 提交后该 turn 仍在跑。
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        let device_a = device_actor("session.prompt");
+        let prompt_request = harness.request(1);
+        let prompt = prompt_command(&device_a, &harness.session, &prompt_request, 'A');
+        assert!(matches!(
+            block_on(harness.broker.submit_mutation(&device_a, &prompt)).expect("submit"),
+            CommandReceipt::Accepted { .. }
+        ));
+        assert_eq!(
+            harness
+                .world
+                .session(&harness.session)
+                .expect("session")
+                .state(),
+            SessionState::Running,
+            "本用例的前提是 turn 仍在跑（解析发生在 WaitingPermission 期间）"
+        );
+
+        // 后端在 `resolve_interaction` 期间产出 `permission.resolved`（适配器边界，core 只从 sink 收）：
+        // 这里先入队，由 `resolve_locked` 在把命令派发给后端之后的那次 flush 落盘。view 按
+        // `schemas/sync/v1/event-views.schema.json#/permission.resolved` 的形状给（本机 CLI 解析 ⇒
+        // `resolvedByDeviceId` 为 `null`）。
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Structured,
+            "permission.resolved",
+            &format!(
+                r#"{{"interactionId":"{}","resolution":"allow-once","resolvedByDeviceId":null}}"#,
+                interaction.as_str()
+            ),
+        ));
+        // 解析来自**另一条命令**（本机 CLI），与驱动该 turn 的设备 A 不是同一条。
+        let actor = harness.actor();
+        let resolve_request = harness.request(2);
+        let command = ClientCommand {
+            actor: actor.clone(),
+            request: resolve_request.clone(),
+            command: "permission.resolve".to_owned(),
+            kind: CommandKind::Mutation,
+            session: Some(harness.session.clone()),
+            expected_version: None,
+            request_fingerprint: digest('D'),
+            payload: CommandPayload::PermissionResolve {
+                interaction: interaction.clone(),
+                option_id: "allow-once".to_owned(),
+            },
+        };
+        assert!(matches!(
+            block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit"),
+            CommandReceipt::Accepted { .. }
+        ));
+
+        assert_eq!(
+            harness
+                .world
+                .provenance_of(&harness.session, "permission.resolved"),
+            vec![(EventOrigin::LocalCli, Some(resolve_request))],
+            "响应类事件必须取**解析命令**：它不是驱动在跑 turn 的那条 prompt，也不是设备 A 的命令"
+        );
+        // 同一会话里 turn 内由 Agent 产出的事件仍带它自己那条 prompt 的 `causation`、`origin` 仍是
+        // `agent`——两套诱发来源不得互相污染。
+        assert_eq!(
+            harness
+                .world
+                .provenance_of(&harness.session, "agent.message.delta"),
+            vec![(EventOrigin::Agent, Some(prompt_request))],
+            "turn 内 Agent 产出的 causation 仍是它自己那条 prompt"
+        );
+    }
+
+    /// §10.1：**没有任何命令在作用域**时，Agent 产出的事件 `causation` 为 `null`（且 `origin` 仍是
+    /// `agent`）——不能把「会话里曾经有过命令」当成因果。
+    #[test]
+    fn agent_event_without_any_command_has_null_causation() {
+        let harness = Harness::new(BrokerConfig::default());
+        harness.broker.sink(&harness.session).send(endpoint_event(
+            EventKind::Delta,
+            "agent.thought.delta",
+            &turn_view("running"),
+        ));
+        block_on(harness.broker.flush(&harness.session)).expect("flush");
+        assert_eq!(
+            harness
+                .world
+                .provenance_of(&harness.session, "agent.thought.delta"),
+            vec![(EventOrigin::Agent, None)],
+            "没有命令直接导致的事件其 causation 必须是 null"
         );
     }
 

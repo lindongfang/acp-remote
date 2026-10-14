@@ -1410,6 +1410,16 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
     );
     endpoint.validate().expect("endpoint event");
     assert_eq!(EventOrigin::LocalCli.as_str(), "local_cli");
+    // §7.3 的 CHECK 是五值：`node` 是 Node Link 命令的执行者身份（不是 imported 的跳数，那由
+    // `remoteOrigin` 表达）。
+    assert_eq!(EventOrigin::Node.as_str(), "node");
+    assert_eq!(
+        EventOrigin::ALL
+            .iter()
+            .map(|origin| origin.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agent", "device", "daemon", "local_cli", "node"]
+    );
 }
 
 // ---------------------------------------------------------------- §3.5 身份/信任/审计

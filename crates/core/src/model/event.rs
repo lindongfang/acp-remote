@@ -49,12 +49,19 @@ token_enum!(
 );
 
 token_enum!(
-    /// 事件来源（`SYNC_PROTOCOL.md` §10.1；远程节点**不是**取值，imported 来源写在 `origin` 引用里）。
+    /// 事件来源（`SYNC_PROTOCOL.md` §10.1）：描述**产出该事件的主体**，由 broker 按诱发命令的执行者判定
+    /// （`broker::event_origin`），存储层只原样写 `owned_event.origin_kind`。
+    ///
+    /// 取值与 §7.3 的 `owned_event.origin_kind` CHECK 逐值一致：`agent` 为 ACP 侧 Agent 产出、`device`
+    /// 为本机已授权 Sync 设备经命令产出、`local_cli` 为本机 CLI 经本地通道产出、`daemon` 为 Daemon/Broker
+    /// 自身产出、`node` 为**另一个节点经 Node Link 命令**产出。跨节点的跳数另由 `remoteOrigin` 表达
+    /// （§9.6），两者**不得**互相替代；本取值也不是「远程节点」本身——`node` 说的是命令的执行者身份。
     EventOrigin {
         Agent => "agent",
         Device => "device",
         Daemon => "daemon",
         LocalCli => "local_cli",
+        Node => "node",
     }
 );
 
@@ -240,10 +247,16 @@ pub struct PendingEvent {
     pub event_type: EventType,
     pub policy: StoredPolicy,
     pub payload: EventPayload,
-    /// 事件产生者（`SYNC_PROTOCOL.md` §10.1 的 `origin.kind`）：由 broker 按「谁产生」判定，存储层原样写
-    /// `owned_event.origin_kind`，**不得**按有没有会话猜。
+    /// 事件产生者（`SYNC_PROTOCOL.md` §10.1 的 `origin.kind`）：由 broker 按「谁产生」判定（命令类事件
+    /// 取诱发命令的执行者，见 `broker::event_origin`），存储层原样写 `owned_event.origin_kind`，**不得**
+    /// 按有没有会话（或有没有 actor）猜。
     pub origin: EventOrigin,
     pub turn: Option<TurnId>,
+    /// **诱发这条事件的命令**（`SYNC_PROTOCOL.md` §10.1 的 `causationRequestId`）：由 broker 在提交时
+    /// 从诱发命令取（turn 类取该 turn 的 `causation`、其余命令类事件取会话在作用域的命令），没有命令直接
+    /// 导致的事件为 `None`。它与 `origin` 表达不同的事实——`origin` 回答「谁产生的」、`causation` 回答
+    /// 「哪条命令导致的」——**不得**互相替代（turn 内由 Agent 产出的事件 `origin = agent`，但照样带该
+    /// 命令的 `causation`）。
     pub causation: Option<RequestId>,
 }
 

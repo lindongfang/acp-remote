@@ -131,6 +131,33 @@ async fn table_ddl(pool: &sqlx::SqlitePool, table: &str) -> String {
     .unwrap_or_default()
 }
 
+/// v7 段（§7.2）把 `owned_event.origin_kind` 的 CHECK 从四值扩到五值。重建过的表由 `RENAME` 建出，
+/// SQLite 存的是带引号的名字（`CREATE TABLE "owned_event" …`），因此判据只能看 CHECK 的取值集合，
+/// 不能逐字节比文本（文本比较只对**未重建**的表成立，见 `rebuild_text_differs_from_the_fresh_text`）。
+fn assert_event_check_widened(after: &str) {
+    assert!(
+        after.contains("'node'"),
+        "owned_event.origin_kind 的 CHECK 必须扩到五值：{after}"
+    );
+    for token in ["'agent'", "'device'", "'daemon'", "'local_cli'"] {
+        assert!(
+            after.contains(token),
+            "扩宽不得丢掉既有取值 {token}：{after}"
+        );
+    }
+}
+
+/// v7 段重建父表时子表也要重建，判据是那条外键仍然指向父表的 `global_sequence`（重建过程中它一度被
+/// 挪到过渡表上，最终必须回到规范形状）。
+fn assert_interaction_still_references_events(after: &str) {
+    assert!(
+        after.contains("REFERENCES owned_event(global_sequence)")
+            || after.contains("REFERENCES \"owned_event\"(global_sequence)")
+            || after.contains("REFERENCES \"owned_event\" (global_sequence)"),
+        "owned_interaction.request_event 必须仍引用 owned_event(global_sequence)：{after}"
+    );
+}
+
 /// `meta` 里一个版本键的值（缺失时为 `None`）。
 async fn meta_version(pool: &sqlx::SqlitePool, key: &str) -> Option<String> {
     meta_rows(pool)
@@ -210,7 +237,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 6);
+        assert_eq!(store.metadata().owned_schema_version, 7);
         assert_eq!(store.metadata().imported_schema_version, 3);
         store.close().await;
 
@@ -397,7 +424,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 6);
+    assert_eq!(store.metadata().owned_schema_version, 7);
     assert_eq!(store.metadata().imported_schema_version, 3);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
@@ -461,6 +488,32 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
             "meta.{key} must be advanced to the current version"
         );
     }
+
+    // v7 段（§7.2）：`owned_event` 的 12-step 重建必须装上五值的 CHECK，既有行逐行保留（上面已断言
+    // 序号/正文逐行不变），且新取值在升级库上可写——「旧库升级」与「新值可写入」是同一条判据的两半。
+    assert_event_check_widened(&table_ddl(&pool, "owned_event").await);
+    let origins_before = texts(
+        &pool,
+        "SELECT origin_kind FROM owned_event ORDER BY global_sequence",
+    )
+    .await;
+    sqlx::query("UPDATE owned_event SET origin_kind = 'node' WHERE global_sequence = 3")
+        .execute(&pool)
+        .await
+        .expect("升级后的 CHECK 必须接受 node");
+    let mut expected = origins_before.clone();
+    if let Some(last) = expected.last_mut() {
+        *last = "node".to_owned();
+    }
+    assert_eq!(
+        texts(
+            &pool,
+            "SELECT origin_kind FROM owned_event ORDER BY global_sequence"
+        )
+        .await,
+        expected,
+        "只有被更新的那一行换取值，其余行逐字不变"
+    );
 
     // 事件：序号、会话内序号与 origin cursor 都不重新编号。
     assert_eq!(
@@ -653,6 +706,123 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     pool.close().await;
 }
 
+/// §7.2/§9 判据 28 的**覆盖缺口**：夹具 `from-v1.sqlite3` 的 `owned_interaction` 是 0 行、其
+/// `owned_event` 的 AUTOINCREMENT 序列恰等于 `max(global_sequence) = 3`，因此 v7 段里两条最危险的路径
+/// 在既有升级用例里从未真正执行过：
+///
+/// 1. **子表行的搬迁与回填**——子表为空时 `DROP TABLE owned_event` 的隐式 DELETE 碰不到任何引用
+///    （`foreign_keys = ON` 下的 `NO ACTION` 只在**有**子表行时才报错），把「先搬走子表、再重建父表、
+///    最后建回并回填」写成「直接 DROP 父表」或「建回但忘了回填」也全绿；
+/// 2. **`owned_event` 序列的保留**——重建后的隐式 `sqlite_sequence` 恰等于现存行的 `max`，只按现存行取值
+///    与「保留重建前的值」结果相同，`restore_sequences` 写错也全绿。
+///
+/// 本用例在升级前人工插子表行、并把序列抬到远高于现存行的值，再走同一条 v1 → v7 升级。
+#[tokio::test]
+async fn v7_upgrade_carries_interaction_rows_and_a_leading_event_sequence() {
+    /// 两条子表行：一条 `resolved` 的权限（decision 三列 + 解析者），一条 `pending` 的 elicitation
+    /// （decision 列全为 `NULL`）——两行合起来覆盖 13 列的两种取值形态。
+    const RESOLVED_PERMISSION: &str = "1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a";
+    const PENDING_ELICITATION: &str = "2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b";
+    /// 升级前的 `owned_event` 序列：远高于 `max(global_sequence) = 3`（= 尾部行已被保留期清理的库）。
+    const LEADING_SEQUENCE: i64 = 11;
+
+    let dir = temp_dir("migrate-v7-interaction-and-sequence");
+    let path = copy_fixture("from-v1.sqlite3", &dir);
+
+    let pool = raw_write_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        1,
+        "夹具必须仍是 v1 形状（升级段全部要跑）"
+    );
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_interaction").await,
+        0,
+        "夹具本身没有子表行——这正是本用例补的覆盖"
+    );
+    sqlx::query(
+        "INSERT INTO owned_interaction (interaction_id, session_id, kind, request_event, state, \
+         created_at, resolved_at, decision_option_id, decision_kind, elicitation_action, \
+         elicitation_values_json, resolved_by_kind, resolved_by_id) \
+         VALUES (?1, ?2, 'permission', 1, 'resolved', ?3, ?3, 'allow-once', 'allow_once', NULL, NULL, \
+                 'device', ?4)",
+    )
+    .bind(RESOLVED_PERMISSION)
+    .bind(FIXTURE_SESSION)
+    .bind(AT)
+    .bind(FIXTURE_NODE)
+    .execute(&pool)
+    .await
+    .expect("seed a resolved permission row");
+    sqlx::query(
+        "INSERT INTO owned_interaction (interaction_id, session_id, kind, request_event, state, \
+         created_at, resolved_at, decision_option_id, decision_kind, elicitation_action, \
+         elicitation_values_json, resolved_by_kind, resolved_by_id) \
+         VALUES (?1, ?2, 'elicitation', 2, 'pending', ?3, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+    )
+    .bind(PENDING_ELICITATION)
+    .bind(FIXTURE_SESSION)
+    .bind(AT)
+    .execute(&pool)
+    .await
+    .expect("seed a pending elicitation row");
+    sqlx::query("UPDATE sqlite_sequence SET seq = ?1 WHERE name = 'owned_event'")
+        .bind(LEADING_SEQUENCE)
+        .execute(&pool)
+        .await
+        .expect("raise the event AUTOINCREMENT sequence");
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .expect("checkpoint");
+    pool.close().await;
+
+    let store = SqliteStore::open(StorageConfig::new(&dir), &at())
+        .await
+        .expect("a v1 database with interaction rows must upgrade to the current version");
+    assert_eq!(store.metadata().owned_schema_version, 7);
+    store.close().await;
+
+    let pool = raw_write_pool(&path).await;
+    // ① 子表行**逐列**读回：搬进过渡表 → 重建父表 → 按规范 DDL 建回 → 回填，13 列一列都不许丢或串位。
+    assert_eq!(
+        texts(
+            &pool,
+            "SELECT interaction_id || '|' || session_id || '|' || kind || '|' || request_event \
+             || '|' || state || '|' || created_at || '|' || COALESCE(resolved_at, '-') \
+             || '|' || COALESCE(decision_option_id, '-') || '|' || COALESCE(decision_kind, '-') \
+             || '|' || COALESCE(elicitation_action, '-') \
+             || '|' || COALESCE(elicitation_values_json, '-') \
+             || '|' || COALESCE(resolved_by_kind, '-') || '|' || COALESCE(resolved_by_id, '-') \
+             FROM owned_interaction ORDER BY request_event"
+        )
+        .await,
+        vec![
+            format!(
+                "{RESOLVED_PERMISSION}|{FIXTURE_SESSION}|permission|1|resolved|{AT}|{AT}|\
+                 allow-once|allow_once|-|-|device|{FIXTURE_NODE}"
+            ),
+            format!(
+                "{PENDING_ELICITATION}|{FIXTURE_SESSION}|elicitation|2|pending|{AT}|-|-|-|-|-|-|-"
+            ),
+        ],
+        "升级后子表行必须逐列读回"
+    );
+    // ② 序列等于**升级前**的值：只按现存行回填会把 11 压回 3，因此这条断言只有真的保留了重建前的值才成立。
+    assert_eq!(
+        scalar_i64(
+            &pool,
+            "SELECT seq FROM sqlite_sequence WHERE name = 'owned_event'"
+        )
+        .await,
+        LEADING_SEQUENCE,
+        "重建不得把 global_sequence 的 AUTOINCREMENT 序列压回现存行的 max"
+    );
+    // ③ 建回的必须是规范形状的子表：那条外键回到父表，而不是留在过渡表上。
+    assert_interaction_still_references_events(&table_ddl(&pool, "owned_interaction").await);
+    pool.close().await;
+}
+
 /// §7.2/§9.28：**v2 → v3** 只扩宽两张审计表的 `actor_kind`/`action` CHECK——行、`audit_id` 与
 /// `AUTOINCREMENT` 序列都不动，`owned_command` 的 `actor_kind` 仍是三值（认领方永不提交命令）。
 #[tokio::test]
@@ -725,7 +895,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 6);
+    assert_eq!(store.metadata().owned_schema_version, 7);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -885,7 +1055,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 6);
+    assert_eq!(store.metadata().owned_schema_version, 7);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -991,8 +1161,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     );
     fresh_pool.close().await;
 
-    // ③ 除 owned_node（v4 段）与 owned_session（v5/v6 两段）外每条表的 DDL 逐字节不变
-    // （v3 库不得重跑 12-step 重建）。
+    // ③ 除 owned_node（v4 段）、owned_session（v5/v6 两段）与 v7 段重建的两张事件表外每条表的 DDL
+    // 逐字节不变（v3 库不得重跑 v2/v3 那两段 12-step 重建）。
     for (table, ddl) in ddl_before {
         let after = table_ddl(&pool, table).await;
         match table {
@@ -1008,6 +1178,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
                     );
                 }
             }
+            "owned_event" => assert_event_check_widened(&after),
+            "owned_interaction" => assert_interaction_still_references_events(&after),
             _ => assert_eq!(
                 after, ddl,
                 "升级不得重写 {table} 的 DDL（那意味着重跑了重建段）"
@@ -1089,7 +1261,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 6);
+    assert_eq!(store.metadata().owned_schema_version, 7);
     assert_eq!(store.metadata().imported_schema_version, 3);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
@@ -1178,22 +1350,26 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     }
     fresh_pool.close().await;
 
-    // ③ 除 owned_session 外每条表的 DDL 逐字节不变（v4 库不得重跑任何重建段）。
+    // ③ 除 owned_session（v5/v6 两段）与 v7 段重建的两张事件表外每条表的 DDL 逐字节不变
+    // （v4 库不得重跑 v2/v3 那两段 12-step 重建）。
     for (table, ddl) in ddl_before {
         let after = table_ddl(&pool, table).await;
-        if table == "owned_session" {
-            for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
-                assert!(
-                    after.contains(column),
-                    "owned_session 必须带上追加列 {column}：{after}"
-                );
+        match table {
+            "owned_session" => {
+                for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+                    assert!(
+                        after.contains(column),
+                        "owned_session 必须带上追加列 {column}：{after}"
+                    );
+                }
             }
-            continue;
+            "owned_event" => assert_event_check_widened(&after),
+            "owned_interaction" => assert_interaction_still_references_events(&after),
+            _ => assert_eq!(
+                after, ddl,
+                "升级不得重写 {table} 的 DDL（那意味着重跑了重建段）"
+            ),
         }
-        assert_eq!(
-            after, ddl,
-            "升级不得重写 {table} 的 DDL（那意味着重跑了重建段）"
-        );
     }
     pool.close().await;
 }
@@ -1473,7 +1649,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 6);
+    assert_eq!(store.metadata().owned_schema_version, 7);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 }
