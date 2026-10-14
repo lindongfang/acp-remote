@@ -13,11 +13,16 @@
  */
 
 import type { SocketHandlers, SocketPort } from "./ports";
+import { SYNC_WS_SUBPROTOCOL } from "./connection";
 
 /** 建立一条 WebSocket 连接。 */
 export function openWebSocket(input: { readonly url: string; readonly handlers: SocketHandlers }): SocketPort {
   // 函数体内引用全局：模块求值期不触碰它。
-  const socket = new WebSocket(input.url);
+  //
+  // subprotocol 是升级请求的一部分（`docs/SYNC_PROTOCOL.md` §3.1「客户端必须请求 WebSocket
+  // subprotocol `acp-remote.sync.v1.json`」，服务端按它做 upgrade 白名单）：漏传时服务端直接
+  // 拒绝升级，连接永远起不来。字面量只有 `connection.ts` 的 `SYNC_WS_SUBPROTOCOL` 一处。
+  const socket = new WebSocket(input.url, SYNC_WS_SUBPROTOCOL);
   const handlers = input.handlers;
 
   socket.addEventListener("open", () => {
