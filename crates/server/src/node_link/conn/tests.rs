@@ -2314,7 +2314,11 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
         ))),
         NodeLinkConfig {
             public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
-            max_pending_queue_messages: 64,
+            // 上限取 §2.5 的默认值 2,000 条 ⇒ 低水位 1,000 条。会话的 `send_text` 只把数据交给内核，
+            // 而 loopback 上内核缓冲能吸收的量远大于几十条：用小上限（旧形状用 64 ⇒ 低水位 32）时队列
+            // 会被排空到低水位之下，那是【平台相关的量】，Linux runner 上尤甚。低水位 1,000 让
+            // 「占用始终在低水位之上」与平台无关。
+            max_pending_queue_messages: 2_000,
             // 心跳取 schema 上限：本用例只看饱和判定，不让 ping 混进队列水位。
             heartbeat_interval_ms: 300_000,
             ..NodeLinkConfig::default()
