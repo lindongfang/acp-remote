@@ -89,7 +89,7 @@ config_option_update, session_info_update, usage_update
 
 - **前置条件**：被看的会话必须是**经 acp-remote 创建**的。终端里直接跑 Agent 产生的原生历史，acp-remote 没有任何代码去读。**已定：不提供这个能力**（见 §12.1 决策 4）。
 - **前置条件**：该 Agent 必须属于某个 Export，Access 节点已配对且持有 `grant.observe`（[NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §10）。
-- **实现缺口**：Access 侧 `node-link-client` 未落地；`server::sync` 未落地。因此目前**没有可用客户端**能真正发起这些请求。
+- **实现缺口**：Access 侧 `node-link-client` 未落地（`AGENTS.md` §5 待落地）；`server::sync` 的入站面已落地，但组合根尚未注册 `/sync/v1`、事件投递腿仍是失败关闭（`openspec/changes/sync-server-connection/` 的 WP6 与 WP4）。因此目前**没有可用客户端**能真正发起这些请求。
 
 **结论**：A 不需要新设计，是「把已落地的能力接上客户端」。
 

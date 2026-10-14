@@ -215,7 +215,7 @@ fn check_config_option_id(text: &str) -> Result<(), InvalidValue> {
 // ---------------------------------------------------------------- newtype 骨架
 
 newtype!(
-    /// 节点标识（canonical 小写 UUID 文本，`SYNC_PROTOCOL.md` §3.2）。
+    /// 节点标识（canonical 小写 UUID 文本，`SYNC_PROTOCOL.md` §3.3）。
     NodeId,
     check_uuid
 );

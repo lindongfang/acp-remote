@@ -11,7 +11,7 @@
 //!    拒绝一律回 `authorization.scope_denied`（消息级，连接保持可用）——与 `sync_visible_sessions` 的
 //!    授权口径逐字相同，因此"设备无权读会话"与"设备无权同步"不会给出两种不同的结论。
 //! 2. **cursor 判定**（[`cursor`]）：四种拒绝原因可区分、绝不钳制到 head；序号超出 v1 序号域时不落进
-//!    这四种里任何一种，而按协议错误（`protocol.schema_invalid`，§3.2）拒绝。
+//!    这四种里任何一种，而按协议错误（`protocol.schema_invalid`，§3.3）拒绝。
 //! 3. **屏障与恢复位置**：`sync.subscribe` 提交的 cursor 是**唯一**的恢复位置（§9.5：服务端保存的
 //!    设备 ACK 最大值不得决定新连接的恢复点）。本层保存的 ACK 只用于诊断与保留策略，**不参与投递**。
 //!
@@ -226,7 +226,7 @@ impl SubscribeRoute {
     /// cursor 判定的落地：回 `sync.cursor_invalid`（需要时）→ 主动下发 `sync.reset_required`（需要时）→
     /// 首次同步等待客户端的 `sync.snapshot_request`，有效游标进增量续传。
     ///
-    /// [`CursorDecision::SequenceOutOfRange`] 走的是 `protocol.schema_invalid`（§3.2），因此它**不是**
+    /// [`CursorDecision::SequenceOutOfRange`] 走的是 `protocol.schema_invalid`（§3.3），因此它**不是**
     /// `sync.cursor_invalid` 的一种：`cursor::fault_for` 对它返回 `None`，由下面的专属臂定案。
     async fn apply_cursor_decision(
         &self,
@@ -260,7 +260,7 @@ impl SubscribeRoute {
                 RouteOutcome::Claimed
             }
             CursorDecision::SequenceOutOfRange => {
-                // §3.2：超出 v1 上界的序号是协议错误（`protocol.schema_invalid`），不是 cursor 判定
+                // §3.3：超出 v1 上界的序号是协议错误（`protocol.schema_invalid`），不是 cursor 判定
                 // ——§9.2 的四种 `reason` 表达不了"取值根本无法表示"。与其它拒绝一样不建立任何状态。
                 self.clear_barrier(session);
                 self.schema_invalid(session, message).await
@@ -378,7 +378,7 @@ impl SubscribeRoute {
     ///
     /// 四种判定各自的对端可见后果：
     ///
-    /// - 序号超出 v1 序号域（§3.2 的上界）→ `protocol.schema_invalid`（协议错误，不是 cursor 判定；
+    /// - 序号超出 v1 序号域（§3.3 的上界）→ `protocol.schema_invalid`（协议错误，不是 cursor 判定；
     ///   与 `sync.subscribe` 共用同一判定，见 [`cursor::sequence_out_of_range`]）；
     /// - epoch 与当前事件库不符 → `sync.cursor_invalid{epoch_mismatch}`（序号不可比，接受它没有意义）；
     /// - 序号**可表示**且超过本连接已发送的最高游标（含"本连接什么都没发过"）→
@@ -394,7 +394,7 @@ impl SubscribeRoute {
         let Some((_actor, head)) = self.device_context(session, message).await else {
             return RouteOutcome::Claimed;
         };
-        // §3.2：序号域校验先于任何语义比较（与 `sync.subscribe` 的 `cursor::decide` 同一口径）。
+        // §3.3：序号域校验先于任何语义比较（与 `sync.subscribe` 的 `cursor::decide` 同一口径）。
         if cursor::sequence_out_of_range(&request.cursor) {
             return self.schema_invalid(session, message).await;
         }

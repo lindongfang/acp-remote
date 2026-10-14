@@ -227,13 +227,13 @@ Tailscale Serve/反向代理 -> 127.0.0.1:8765
   "hostId": "host-uuid",
   "hostPublicKey": "base64...",
   "endpoints": [
-    "wss://work-pc.example.ts.net/sync",
-    "wss://work-pc.home.arpa/sync"
+    "wss://work-pc.example.ts.net/sync/v1",
+    "wss://work-pc.home.arpa/sync/v1"
   ]
 }
 ```
 
-原生客户端或 Access Node 的 IP/endpoint 变化只需要重新发现地址，不需要重新配对。任何 endpoint 都必须证明持有同一个 Node 私钥。
+endpoint 的 path **以 wire 权威为准**（`SYNC_PROTOCOL.md` §3.1：WebSocket endpoint 为同源 `/sync/v1`；本节示例按该口径书写）。原生客户端或 Access Node 的 IP/endpoint 变化只需要重新发现地址，不需要重新配对。任何 endpoint 都必须证明持有同一个 Node 私钥。
 
 PWA 是例外：浏览器密钥和 IndexedDB 按 Origin 隔离，一个 PWA 设备身份只绑定一个 `scheme + hostname + port` canonical origin。更换 Origin 必须作为新设备重新配对，第一阶段不支持 PWA 跨 Origin 自动切换；同一 Origin 内的路径变化不受影响。详见 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)。
 

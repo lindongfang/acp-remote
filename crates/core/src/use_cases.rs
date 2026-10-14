@@ -102,7 +102,8 @@ pub struct NodeLinkHandshakeView {
 /// pairing secret 只在身份状态机内存里。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyncDeviceHandshakeView {
-    /// 该设备的信任行；未知设备为 `None`（未知设备照常签发挑战，见 §3.2/§8.5）。
+    /// 该设备的信任行；未知设备为 `None`（未知设备照常签发挑战，见 §8.2/§8.3：挑战照常签发、
+    /// 存在性判定推迟到 proof 阶段）。
     pub device: Option<DeviceRecord>,
     /// 已绑定的身份材料（验签公钥的唯一来源）；未知设备为 `None`。
     pub public_key: Option<PeerPublicKey>,
@@ -947,9 +948,10 @@ impl UseCases {
     /// - 只读该 id 自己的信任行、身份材料、最近一次配对与本机水位，不返回任何别的设备/节点/Export 的事实，
     ///   也不返回秘密材料；
     /// - 未知 id 返回**结构完整的空视图**（`device`/`public_key`/`pairing` 都是 `None`，`head` 照常给出）
-    ///   而不是错误：`SYNC_PROTOCOL.md` §3.2/§8.5 与 `identity-auth` 的既有口径一致——未知对端照常签发
-    ///   挑战，对端可见的失败映射发生在 proof 阶段。**不得**用错误类型区分设备是否存在，否则本入口就成了
-    ///   设备 id 预言机；
+    ///   而不是错误：`SYNC_PROTOCOL.md` §8.2/§8.3 与 `identity-auth` 的既有口径一致
+    ///   （`IDENTITY_AND_AUTH_CONTRACT.md` §5.1：未知 id 也必须生成挑战，不得用错误区分设备是否存在）
+    ///   ——未知对端照常签发挑战，对端可见的失败映射发生在 proof 阶段。**不得**用错误类型区分设备
+    ///   是否存在，否则本入口就成了设备 id 预言机；
     /// - 零写入、不产生审计；撤销由调用方按 `device.state()` 自行判定（`revoked` 是凭据状态而不是读取
     ///   失败，由身份层映射）。
     ///

@@ -92,8 +92,8 @@ pub struct DaemonLink {
 
 /// `daemon.status` 的 result（§5.2 的字段集合）。
 ///
-/// 本切片的两个字段恒为空数组，原因写在字段注释里（不是「暂时没填」而是本切片的既定形状）：
-/// 网络 listener（`server::sync`／`server::node_link`）尚未落地，Node Link 重连任务也尚未落地。
+/// 各字段的取值来源写在字段注释里：`listen` 由组合根填实际绑定的监听地址；`links` 恒为空数组——
+/// Node Link 的**出站**重连管理器（`node-link-client`，`AGENTS.md` §5 标为待落地）尚未落地。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonStatus {
     /// `acp-remote` 包版本。
@@ -110,7 +110,7 @@ pub struct DaemonStatus {
     pub uptime_ms: u64,
     /// `daemon.data_dir`（绝对路径）。
     pub data_dir: String,
-    /// 实际监听地址。本切片恒空数组（无网络 listener）。
+    /// 实际监听地址（`NetListener::local_addrs` 的文本形式，由组合根填入）。
     pub listen: Vec<String>,
     /// 对外 `publicOrigin`；未配置时为 `None`。
     pub public_origin: Option<String>,
@@ -118,7 +118,7 @@ pub struct DaemonStatus {
     pub counts: DaemonCounts,
     /// 本地 Agent 目录。
     pub agents: Vec<DaemonAgent>,
-    /// Node Link 连接的运行时状态。本切片恒空数组（重连任务未落地，`import.add` 因此返回
+    /// Node Link 连接的运行时状态。恒为空数组（出站重连管理器未落地，`import.add` 因此返回
     /// `local.unavailable`，§5.2 的该字段注释）。
     pub links: Vec<DaemonLink>,
 }

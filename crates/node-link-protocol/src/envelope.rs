@@ -2,7 +2,8 @@
 //!
 //! `body` 以 `RawValue` **原样承载**：传输层只按 `type` 分派，不把 body 解析成通用 DTO 再重新
 //! 序列化（`AGENTS.md` §4 的保真要求）。家族 body 由调用方用 `handshake`/`catalog`/`error`/
-//! `resource`/`command` 的类型显式解析；尚未实现 body 的家族保持字节原样转发，不降级成文本、不丢弃。
+//! `resource`/`command` 的类型显式解析（v1 的 29 个消息类型的 body 都已类型化）；信封层自身不做
+//! 任何 body 解释，也不把无法解释的 body 降级成文本或丢弃。
 //!
 //! 本模块不依赖任何家族 body 类型：`MessageType` 只是 `type` 的封闭词表，body 的解释权在调用方。
 

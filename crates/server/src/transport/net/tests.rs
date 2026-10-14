@@ -325,7 +325,7 @@ async fn plaintext_proxy_non_loopback_warns() {
 
 #[tokio::test]
 async fn unregistered_paths_return_404() {
-    // 只有注册过的 path 有服务；`/sync/v1*` 与未知 path 一律 404，不进任何处理器。
+    // 只有注册过的 path 有服务；本用例的 listener 未注册 `/sync/v1*`，它与未知 path 一律 404，不进任何处理器。
     let server = start_server(loopback_config(), |listener| {
         listener
             .register_ws(

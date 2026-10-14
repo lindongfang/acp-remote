@@ -75,7 +75,7 @@ pub enum UnavailableKind {
 
 | 类型 | 形状 / 不变量 | 出处 |
 |---|---|---|
-| `NodeId` / `DeviceId` / `SessionId` / `EventId` / `RequestId` / `TurnId` / `InteractionId` / `PairingId` / `AttachmentId` / `MessageId` | newtype over canonical 小写 UUID 文本（`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`） | `SYNC_PROTOCOL.md` §3.2 |
+| `NodeId` / `DeviceId` / `SessionId` / `EventId` / `RequestId` / `TurnId` / `InteractionId` / `PairingId` / `AttachmentId` / `MessageId` | newtype over canonical 小写 UUID 文本（`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`） | `SYNC_PROTOCOL.md` §3.3 |
 | `ExportId` | newtype over `^[A-Za-z0-9._-]{1,128}$` 的字符串，**不是 UUID**；`ExportId` 与 `workspaceAlias` 是不同字段、不同模式 | `NODE_LINK_PROTOCOL.md` §12.3；`schemas/node-link/v1/common.schema.json#/$defs/exportId` |
 | `ImportId` | newtype over `^[A-Za-z0-9._-]{1,128}$`，Access 本地为主键 | `LOCAL_ADMIN_PROTOCOL.md` §5.5 |
 | `WorkspaceAlias` | `^[a-z0-9][a-z0-9._-]{0,63}$` | `NODE_LINK_PROTOCOL.md` §12.3 |
@@ -94,7 +94,7 @@ pub enum UnavailableKind {
 
 | 类型 | 形状 / 不变量 | 出处 |
 |---|---|---|
-| `Sequence` | newtype over `u64`；线上为无前导零十进制字符串；`[决定]` v1 上界 `2^63−1`，超出即协议错误（见 §7.3 存储规则） | `SYNC_PROTOCOL.md` §3.2 |
+| `Sequence` | newtype over `u64`；线上为无前导零十进制字符串；`[决定]` v1 上界 `2^63−1`，超出即协议错误（见 §7.3 存储规则） | `SYNC_PROTOCOL.md` §3.3 |
 | `Version` | newtype over `u64`，会话乐观并发版本 | `MODULE_ARCHITECTURE.md` §4.1 |
 | `AttachmentGeneration` | newtype over `u64` | `NODE_LINK_PROTOCOL.md` §7 |
 | `ServerEpoch` | newtype over UUID；事件库首次创建时生成，普通升级与重启保持不变 | `SYNC_PROTOCOL.md` §9.1 |
@@ -102,7 +102,7 @@ pub enum UnavailableKind {
 | `GlobalCursor` | `{ serverEpoch, globalSequence }` | `SYNC_PROTOCOL.md` §9.1 |
 | `OriginCursor` | `{ originEpoch, originSequence }` | `NODE_LINK_PROTOCOL.md` §6/§15 |
 | `LocalCursor` | newtype over `u64`（Access 本地投递序号，只服务本节点客户端） | `NODE_LINK_PROTOCOL.md` §6 |
-| `Timestamp` | newtype over 文本，固定 `%Y-%m-%dT%H:%M:%S%.3fZ`（UTC、毫秒、`Z`）；TEXT 排序即时间序，因此该宽度是硬约束 | `SYNC_PROTOCOL.md` §3.2 |
+| `Timestamp` | newtype over 文本，固定 `%Y-%m-%dT%H:%M:%S%.3fZ`（UTC、毫秒、`Z`）；TEXT 排序即时间序，因此该宽度是硬约束 | `SYNC_PROTOCOL.md` §3.3 |
 | `Digest` | newtype over base64url 32 字节（SHA-256） | `schemas/sync/v1/common.schema.json#/$defs/base64url32` |
 
 ### 3.3 会话、turn、命令与交互
@@ -221,6 +221,8 @@ pub enum UnavailableKind {
 | `RemoteCatalogQueries` | 见 §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
 | `PairingChannel` | `claim_pairing(actor, PairingClaim) -> PairingClaimOutcome`、`pairing(actor, PairingId) -> Option<PairingRecord>`、`pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`、`consume_pairing(actor, PairingId) -> PairingRecord` | `server::node_link`（及未来 `server::sync`）；前两项另由 `server::local_admin` 以 `Actor::LocalCli` 调用 |
 | `NodeLinkHandshake` | `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`、`record_node_link_auth(accessNodeId, AuditAction, AuditOutcome) -> ()`、`record_node_connected(accessNodeId) -> ()` | `server::node_link`（及未来 `server::sync` 的同形入口） |
+| `SyncDeviceHandshake` | `sync_device_handshake_view(deviceId) -> SyncDeviceHandshakeView`、`record_device_connected(deviceId) -> ()`、`record_device_auth_failure(deviceId) -> ()` | `server::sync` |
+| `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>` | `server::sync`（快照的 `sessions` 资源） |
 
 `[决定]` 配对通道的 actor 规则（design D12）：`claim_pairing`/`pairing`/`pairing_channel_view` 在 `Actor::LocalCli` 之外**只**接受 `Actor::PairingClaimant`，且 `actor.pairing` 必须等于本次调用的目标配对，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绝形状，不区分「不是本机入口」与「绑定了别的配对」）；`consume_pairing` **只**接受与该配对已批准对端一致的 `Actor::Node`/`Actor::Device`，把 `approved` 推进到 `consumed`（`terminal_at` + 审计同一写集），已是 `consumed` 且对端一致时幂等成功（不覆盖首次 `terminal_at`，也不重复写审计）。
 
@@ -228,7 +230,7 @@ pub enum UnavailableKind {
 
 `[决定]`（2026-09-26，WSS 握手 seam 补全；同一方向的第二次补全）`NodeLinkHandshake` 是 WSS 握手准入的三条窄入口，服务 `design.md` D3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1：
 
-- `node_link_handshake_view(access_node)`：用例面**唯一**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor, catalog_revision: u64 }`：五项都是握手本次调用需要且只需要的持久事实；`head` 是 `serverEpoch` 的来源，`catalog_revision` 是 `node.challenge.catalogRevision` / `node.ready.catalogRevision` 的来源。
+- `node_link_handshake_view(access_node)`：用例面**第一条**没有 `actor` 的入口——握手完成前不存在已验证主体，`node.hello` 里的 `accessNodeId` 只是待验证的自报身份。授权面因此收窄到「单个自报 node id」：只读该 id 自己的 `access` 信任行、已绑定验签公钥、最近一次配对（`TrustStore::pairing_for`）与本机全局水位 `store.head()`；未知 id 返回**空视图**而不是错误（`NODE_LINK_PROTOCOL.md` §12.2：不得用错误区分节点是否存在），零写入、零审计、不含秘密材料。`Revoked`/`Unknown` 由调用方按信任行状态映射为凭据状态（§5.1：不是握手失败）。视图形状 `NodeLinkHandshakeView { node: Option<NodeRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor, catalog_revision: u64 }`：五项都是握手本次调用需要且只需要的持久事实；`head` 是 `serverEpoch` 的来源，`catalog_revision` 是 `node.challenge.catalogRevision` / `node.ready.catalogRevision` 的来源。
 - `record_node_link_auth(access_node, action, outcome)`：只接受 `node.authenticated`/`node.auth_failed`/`authorization.denied`（其余 → `authorization.scope_denied`），归因 `actor`/`via_node` 都是该对端 id、`target = Node(对端)`、`localPrincipalRef` 为 `None`（§8.3 节点级信任）。首次认证成功（已批准配对 → `consumed`）的那条 `node.authenticated` 由 `consume_pairing` 的写集提交，适配器不得再补一条。`authorization.denied` 服务命令管线：`server::node_link` 的可见性/授权交集比 `Broker::authorize` 的 Owner 侧判定更严，被它拒的命令不会到达 broker，拒绝留痕只能经本入口（`design.md` D8 第 2 步）。
 - `record_node_connected(access_node)`：**重复认证**（没有待消费配对）的收尾写集（§11.6 第 9 条）——把 `(access_node, access)` 行的 `last_connected_at` 推进到本次时间（只前进不倒退）并把 `node.authenticated` 在同一事务提交；归因与上一条逐字一致。首次认证的同一职责由 `consume_pairing` 的写集承担，两者不得互相替代（否则 `lastConnectedAt` 会停在首次认证的时刻）。
 
@@ -237,6 +239,14 @@ pub enum UnavailableKind {
 `[决定]`（2026-09-26，同一变更）**Node Link 资源读面的三条端口 seam（`ReadView::node_link_slice`/`ReadView::session_event_payload`/`AuditStore::watermark`）与它们的四个用例入口（`node_link_catalog_view`/`node_link_session_view`/`node_link_replay`/`node_link_event_payload`）**（见 `server::node_link` 的 catalog/resource 模块）：与 `NodeLinkHandshake` 同一模式——无 `actor`、按已认证 `accessNodeId` 绑定、零写入、零审计；会话级读必须同时给出 `(access_node, exportId, session)`，由 core 硬校验「对端是已配对的 `access` 行 + Export 存在且未撤销 + 会话的 Agent 属于该 Export」，**不得**复用 `Broker::authorize` 的 `Actor::Node` 分支（那是 Access 侧本地客户端的语义）。「这个 Export 是否对该节点可见」是适配器的**单点可见性策略**（`D14`；2026-09-27 起为三条件：未撤销 ∧ `export.scopes ∩ 节点 grants ≠ ∅` ∧ `exportId ∈ 节点信任记录的 exportIds`，权威定义见 `NODE_LINK_PROTOCOL.md` §8.2 与本文件 §3.5），不在 core 重复实现；core 的 Owner 侧授权判定（§6 第 5 条）必须与它同口径。
 
 四个用例入口都不放宽既有 `LocalCli` 路径的行为，也不新增任何对端可见的能力。
+
+`[决定]`（2026-10-14，`sync-server-connection` 变更 WP1）`SyncDeviceHandshake` 是 **Sync** 侧 WSS 握手准入与认证收尾的三条窄入口，与 `NodeLinkHandshake` 逐条同形（`design.md` D2；`IDENTITY_AND_AUTH_CONTRACT.md` §5.1）：
+
+- `sync_device_handshake_view(device_id)`：**未认证**的只读入口，与 `node_link_handshake_view` 同一模式（不带 `actor`）——`sync.hello` 里的 `deviceId` 只是待验证的自报身份，授权面收窄到「单个自报 device id」：只读该 id 自己的设备信任行（`TrustStore::device`）、已绑定验签公钥（`TrustStore::peer_key`，`verify_proof` 唯一接受的密钥来源）、最近一次配对（`TrustStore::pairing_for`）与本机全局水位（`SessionStore::head()`，`serverEpoch`/`globalSequence` 的来源）。**未知 id 返回结构完整的空视图**（`device`/`public_key`/`pairing` 都是 `None`，`head` 照常给出）而不是错误：`SYNC_PROTOCOL.md` §8.2/§8.3 与 `IDENTITY_AND_AUTH_CONTRACT.md` §5.1 都要求未知对端照常签发挑战、对端可见的失败映射推迟到 proof 阶段，用错误区分设备是否存在会把它变成设备 id 预言机。零写入、零审计、不含秘密材料；视图形状 `SyncDeviceHandshakeView { device: Option<DeviceRecord>, public_key: Option<PeerPublicKey>, pairing: Option<PairingRecord>, head: GlobalCursor }`——比 `NodeLinkHandshakeView` 少一项 `catalog_revision`（那是 Node Link 的目录投影源，设备握手不用它）。`revoked` 由调用方按 `device.state()` 映射为凭据状态，不是读取失败；认证收尾不在本入口（见下一条）。
+- `record_device_connected(device_id)`：认证**成功**的收尾写集（`SYNC_PROTOCOL.md` §8.4；`SECURITY_DESIGN.md` §14.2 的 `device.authenticated`）——把该设备的 `last_seen_at` 推进到本次时间，并把该设备的 `device.authenticated` 成功行在**同一事务**提交（`WriteContext` 同时携带两者，§11.2 第 6 条）。本入口没有 `actor` 参数：归因由 `device_id` 唯一确定，审计行的 actor 取 `Actor::Device { device: 该 id, scopes: 该行**持久化**的 scopes }`（不得取对端自报值）。`last_seen_at` 的**只前进**三分支（旧值为空 → 写入新值、新值为空 → 保留旧值、两者非空取较大者）与「`revoked` 记录不得复活」都由存储层的 `put_device`/`upsert_device` 判定，本层只读出既有行、置 `Some(now)` 并把**其余每一列原样写回**（不得用 `None` 抹掉已存值），也不预先判定撤销。**设备行不存在 → `NotFound(EntityRef::Device)` 且零写入**（`DeviceWrite` 携带的是整行，编造一行等于伪造信任）。`owned_device.last_seen_at` 的**唯一生产者是本入口**——首次认证（有待消费配对）也必须经它推进。
+- `record_device_auth_failure(device_id)`：认证**失败**的留痕（`SECURITY_DESIGN.md` §14.2 的 `device.auth_failed`；`SYNC_PROTOCOL.md` §8 的握手失败路径）。动作**恒为** `AuditAction::DeviceAuthFailed`（不接受动作参数，因此结构上写不出别的动作）、目标恒为 `Device(device_id)`、结果恒为 `AuditOutcome::Failed`，`via_node`/`local_principal_ref`/`detail_digest` 均为空（细分失败原因只进结构化日志，§14.1/§14.2 的 no-content 取舍）。**已知设备**：归因取该行**持久化** scopes；**未知设备**：**同样写出这一行**，scopes 取 `ScopeSet::empty()`（空集是这里唯一不来自握手自报值的取值），**不得返回 `NotFound`**——未配对设备发起握手并失败是最常见的失败场景，正是本入口存在的主要理由，而「未知 → 错误 / 已知 → 成功」的响应差异会变成设备存在性预言机（这条与 `record_device_connected` 刻意不同：那个入口的整行写集要求行存在）。两种情形都返回 `Ok(())` 且各写一行形状相同的审计。本入口没有关联状态变更，故直接用 `AuditStore::append` 追加、不新增端口方法（§11.2 第 6 条的后半句）；成功路径的 `device.authenticated` 由 `record_device_connected` 承担，两者**不得互相替代**。
+
+`[决定]`（2026-10-14，同一变更）`SyncSnapshotQueries` 只有 `sync_visible_sessions(actor, query, owner_reachable)` 一处：Sync 快照 `sessions` 资源的来源（`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」）。它先按 `session.list` 走 `Broker::authorize`——与 `list_sessions` **逐字同口径**（同一命令名、同一 broker 判定、同一 `authorization.scope_denied`；未授权时不读会话/索引存储、也不返回任何会话）；通过后取自有会话（`SessionStore::list`，条目的 `workspace` 取自该行**持久化**的 `workspace_alias`，不得按 `workspace_cwd` 反查），并在 `include_imported` 为真时追加已导入行（`RemoteDeliveryStore::list_sessions`，投影成**同一形状**的 `SessionSummary`，不得另造字段）。`SyncSessionQuery` 的三个字段各承载一件**调用方**的判定：`owned`/`imported` 是两侧各自的过滤/分页（按各自存储的既有语义原样透传），`include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（core 不读 feature 表、也不缓存它）——为假时一行 imported 摘要都不得出现，连空占位也不给（`Default` 因此取 `false`）。顺序是自有在前、已导入在后，本层不重排（`SessionSummary` 没有排序语义字段）。`owner_reachable` 是调用方给出的 Owner 可达性**运行时事实**（投影 imported 条目的 `origin.online`），core 不缓存也不推断该状态（`MODULE_ARCHITECTURE.md` §4.1：可达性变化经 `EventPublisher` 暴露），闭包要求 `Send + Sync`。合并必须发生在 core：授权只在 core 判定、`server` 不得代替 core 判定（本节开头的 `[决定]`），适配层分别取行再自行拼接会形成第二条可见性判定路径。
 
 ## 5. `core::ports` 出站端口
 
@@ -1474,7 +1484,7 @@ CREATE TABLE imported_import_export (
 
 - `[已裁定]` `ElicitationValues` 的形状：见 §3.3——值域为 ACP `ElicitationContentValue` 的五种线格式（`Text`/`Integer(i64)`/`Number(f64)`/`Boolean`/`TextArray`）**加**一个「未知形状原样保留」变体；边界 ≤64 KiB、深度 ≤16；`Submit` 的空映射与 `None` 可区分（分别对应 ACP `content: {}` 与 `content: null`）；`Decline`/`Cancel` 必须为 `None`。同时补齐 ACP 已有而我们 v1 原先缺失的 `decline` 动作（已同步 `SYNC_PROTOCOL.md` §11.5/§10.2 与 `NODE_LINK_PROTOCOL.md` §12.7）。
 - `[已裁定]` Sync 与 Node Link 对 `completed` 的 `result` 要求不同（Sync 允许 `null`，Node Link 要求非空对象）：**认定差异是有意的**——Sync 的 mutation 完成后可能没有可返回的数据，Node Link 必须让 `session.create` 回传 `SessionCreateResult`（§12.7）。core 保持 `Option<CommandResult>`，「非空」是 `server::node_link` 的映射期义务并带契约测试；两侧协议文档各加一句说明（`SYNC_PROTOCOL.md` §11.2、`NODE_LINK_PROTOCOL.md` §12.5）。
-- `[确认]` 序号上界 `2^63−1`（已批准）：随本次改动写入 `SYNC_PROTOCOL.md` §3.2。
+- `[确认]` 序号上界 `2^63−1`（已批准）：随本次改动写入 `SYNC_PROTOCOL.md` §3.3。
 - `[已裁定]` `PairingRecord`/`PairingState`/`PeerIdentity`/`PairingPeer`/`PairingClaim`/`PairingSettlement` 的记录级字段**已冻结**（§3.5）：首实现（`crates/core/src/model/identity.rs`）在合同标 `[open]` 期间落地了形状与构造校验，本轮把它们**采纳为合同形状**（未发布、未实现发布语义，采纳不影响任何已交付行为），`[open]` 据此关闭。
 - `[已裁定]` **`session.mode.list` 的候选来源**：新增 `SessionEndpoint::modes()`（§5.1）；用例层只补 `version`，不得编造候选（§6 第 17 条）。
 - `[已裁定]` **`agent.message.completed` 的生成**归 **broker**（与该 turn 的终态事件同一次提交），正文只从 delta 的 view 折叠；非文本内容的投影归生产端适配器（`agent.message.delta` 增加可选 `block` 字段），core 不解析 ACP 原文。思考流不产生收尾事件（登记在案的短保留期降级）。

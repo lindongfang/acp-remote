@@ -8,10 +8,12 @@
 //!   TLS `proxy`/`direct` 两种模式与连接级上限（`node-link-owner` 变更的 WP2）；
 //! - [`local_admin`]：管理信封（channel `0x01`）的值对象与编解码、`local.*` 错误码、方法分发表，
 //!   以及方法路由（本地配置族、`daemon.*`、Export/Import、`audit.export`）；
-//! - [`node_link`]：Node Link 的配对 HTTP（claim/status 端点、安全头、limit）——`node-link-owner`
-//!   变更的 WP3；握手/连接、catalog、resource、command 属同一变更的后续 WP。
+//! - [`node_link`]：Node Link 的入站面——配对 HTTP（claim/status 端点、安全头、limit）、握手与连接、
+//!   catalog、resource、command 与撤销传播；
+//! - [`sync`]：Sync 的入站面——`/sync/v1` 的 WSS 会话（四消息握手与来源绑定、单设备替换、撤销传播、
+//!   心跳）、订阅与 cursor 判定、快照组装，以及两条配对 HTTP 端点。
 //!
-//! `server::sync` 与 `server::acp_facade` 尚未落地：`transport::net` 只提供连接与字节/帧规则，
+//! `server::acp_facade` 尚未落地：`transport::net` 只提供连接与字节/帧规则，
 //! Node Link 与 Sync 的协议语义由各自的入站适配器实现，三者不共享 DTO。
 //!
 //! 唯一权威：`docs/LOCAL_ADMIN_PROTOCOL.md`（endpoint、访问控制、framing、信封、方法集、错误码、生命周期）
