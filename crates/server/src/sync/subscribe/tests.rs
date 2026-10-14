@@ -985,3 +985,59 @@ async fn connection_state_is_reclaimed_when_the_connection_ends() {
     let _ = fixture::frames(&mut second_receiver);
     assert_eq!(route.tracked(), 1);
 }
+
+/// 「未协商 `acp.raw-payload.v1` 时不下发原文容器」必须在**真实重放路径**上成立。
+///
+/// WP1 新增的门控在 `sync::event::frame` 里；若它没有被 [`SubscribeRoute::advance`] 接进来，
+/// 本条会红 —— 这是「模块被孤立测试、从未接线」的回归保护（`advance` 曾直接调
+/// `subscribe::event::event_body`，那时门控在任何真实连接上都不生效）。
+#[tokio::test]
+async fn the_raw_payload_gate_applies_on_the_replay_path() {
+    /// 一条带 ACP 原文容器（不可用分支，免去摘要计算）的事件。
+    fn event_with_raw_payload() -> acp_core::ports::SyncEventRecord {
+        let mut record = fixture::sync_event(
+            "da702ba1-f49f-4e16-a677-a7744dfedbc1",
+            6,
+            acp_core::model::EventOrigin::Agent,
+            None,
+            None,
+            None,
+        );
+        record.payload = acp_core::model::EventPayload::new(
+            acp_core::model::ViewJson::new(
+                r#"{"turnId":"7f3e9a10-5c2b-4d8e-9f01-3a6b5c7d8e9f","state":"running"}"#,
+            )
+            .expect("view"),
+            Some(acp_core::model::AcpRaw::Unavailable {
+                reason: acp_core::model::RawUnavailableReason::RetentionExpired,
+                byte_length: 7,
+                sha256: None,
+            }),
+        );
+        record
+    }
+
+    for (features, expect_container) in [(&[][..], false), (&["acp.raw-payload.v1"][..], true)] {
+        let world = World::new();
+        world.seed_device(DEVICE, &["session.list"]);
+        world.store.set_head(fixture::cursor(EPOCH, 6));
+        world.store.push_sync_event(event_with_raw_payload());
+        let mut harness = Harness::new(&world, features);
+
+        let frames = harness
+            .send("sync.subscribe", subscribe_body(at(EPOCH, 5)))
+            .await;
+        let events = fixture::bodies(&frames, "event");
+        assert_eq!(events.len(), 1, "事件必须照常投出（门控不改这一条）");
+        let payload = &events[0]["payload"];
+        assert_eq!(
+            payload.get("acp").is_some(),
+            expect_container,
+            "协商集合 {features:?} 下 acp 容器是否携带不符；实际 payload={payload}"
+        );
+        assert!(
+            payload.get("view").is_some(),
+            "无论是否协商，view 都必须下发"
+        );
+    }
+}

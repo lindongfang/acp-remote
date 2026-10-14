@@ -28,7 +28,8 @@
 //! 这种 §10.1 禁止发送方产生的帧；协商了 `core.event-origin.v1` 的连接还额外收到 `nodeId` 键。
 //!
 //! `origin.deviceId`/`origin.nodeId` 的另外一个约束是**不得由「有没有会话」推断**：core 的读面只取
-//! 列值与回查结果，投递层也不得自己拼——本层只做 core → wire 的逐字段映射（[`event::event_body`]）。
+//! 列值与回查结果，投递层也不得自己拼——本层只做 core → wire 的逐字段映射
+//! （[`crate::sync::event::frame`]，它在 `event_body` 之上追加 `acp.raw-payload.v1` 门控）。
 //!
 //! 因此 [`SubscribeRoute::advance`] 的真实形状是：
 //!
@@ -714,7 +715,7 @@ impl SubscribeRoute {
                             );
                             continue;
                         }
-                        match event::event_body(record, self.origin_feature(session)) {
+                        match crate::sync::event::frame(record, &self.features(session)) {
                             Ok(body) => {
                                 if let Err(fault) = session.send(MessageType::Event, &body) {
                                     debug!(

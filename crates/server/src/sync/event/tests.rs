@@ -36,8 +36,14 @@ use crate::sync::conn::registry::Outbound;
 use crate::sync::subscribe::fixture::{self, DEVICE, Frame};
 
 /// 已协商原文能力的连接（`acp.raw-payload.v1`）。
+///
+/// **同时含 `core.event-origin.v1`**：两条协商集合必须只差那一个 feature，否则「协商与未协商的
+/// 其余字段一致」这类比对会掺进 `origin` 形状的差异（`nodeId` 在场与否），变成比苹果和橘子。
 fn with_raw_payload() -> NegotiatedFeatures {
-    NegotiatedFeatures::new(vec![RAW_PAYLOAD_FEATURE.to_owned()])
+    NegotiatedFeatures::new(vec![
+        EVENT_ORIGIN_FEATURE.to_owned(),
+        RAW_PAYLOAD_FEATURE.to_owned(),
+    ])
 }
 
 /// 未协商原文能力的连接（协商集合里只有 `core.event-origin.v1`）。
@@ -110,6 +116,14 @@ fn turn_started_without_state(sequence: u64) -> SyncEventRecord {
 ///
 /// 空白、键顺序、转义与数字文本形式都是判据：任何「解析后重新序列化」的实现都会在这里被抓住。
 const ADVERSARIAL_RAW: &str = r#"{ "id" : 18446744073709551617 ,"extra":{ "note":"未识别字段" }, "text":"制表符\t与引号\"与反斜杠\\" }"#;
+
+/// 一个**字段齐全但字节不规整**的 `turn.started` view：空白不对称、键序与规范序相反。
+///
+/// 判定为 `Complete`（`turnId` 是 canonical UUID、`state` 是非空文本），因此它同时是
+/// 「形状完整时仍逐字节下发原文」的素材 —— 任何「解析后重新序列化」都会把它规整成
+/// `{"state":"running","turnId":"…"}`（键序与空白都变），从而被帧文本断言抓住。
+const ADVERSARIAL_VIEW: &str =
+    r#"{ "state" : "running" ,  "turnId":"7f3e9a10-5c2b-4d8e-9f01-3a6b5c7d8e9f" }"#;
 
 /// 投递一条事件并排空出站队列，返回对端收到的帧。
 fn deliver_once(
@@ -350,8 +364,9 @@ fn raw_json_survives_an_adversarial_document() {
         10,
         "turn.started",
         CoreEventPayload::new(
-            ViewJson::new(r#"{"turnId":"7f3e9a10-5c2b-4d8e-9f01-3a6b5c7d8e9f","state":"running"}"#)
-                .expect("view"),
+            // view 也用对抗素材：空白不对称、键序与规范序相反（但字段齐全 ⇒ 判定为 `Complete`）。
+            // 断言打在**帧文本**上而不是解析后的值上——解析值挡不住键序/空白被改写。
+            ViewJson::new(ADVERSARIAL_VIEW).expect("view"),
             Some(
                 acp_core::model::AcpRaw::available(
                     "application/json",
@@ -376,6 +391,14 @@ fn raw_json_survives_an_adversarial_document() {
         acp["byteLength"].as_str(),
         Some(ADVERSARIAL_RAW.len().to_string().as_str()),
         "byteLength 必须是原始 UTF-8 字节数"
+    );
+    // `Frame.text` 是**未解析**的帧文本：view 的原文必须逐字节出现在里面。
+    // 把 `payload.view` 改成「先解析再序列化」会让键序与空白被改写，这条断言因此变红
+    // （解析后的值比对做不到这一点——两者在解析后相等）。
+    assert!(
+        frames[0].text.contains(ADVERSARIAL_VIEW),
+        "payload.view 必须逐字节出现在帧文本里（不得重新序列化）；实际帧文本：{}",
+        frames[0].text
     );
 }
 
@@ -493,6 +516,9 @@ fn every_persisted_unavailability_reason_reaches_the_client_unchanged() {
 
 /// 未协商 `acp.raw-payload.v1` 时容器**整个缺席**（不是 `null`）—— schema 的
 /// `additionalProperties: false` 不接受一个 `"acp": null`。
+///
+/// 规格场景还要求「其余字段与协商时**一致**」：本用例对同一条记录分别用协商/未协商两次投递，
+/// 逐字段比对两份 body，因此「未协商分支顺手改坏了别的字段」也会被抓住。
 #[test]
 fn an_unnegotiated_raw_payload_feature_omits_the_container_entirely() {
     let record = record(
@@ -511,18 +537,47 @@ fn an_unnegotiated_raw_payload_feature_omits_the_container_entirely() {
             ),
         ),
     );
-    let (handle, mut receiver) = connection();
 
-    let (_, frames) = deliver_once(&handle, &record, &without_raw_payload(), &mut receiver);
-    let payload = payload_of(&frames[0].body);
+    let (negotiated_handle, mut negotiated_receiver) = connection();
+    let (_, negotiated_frames) = deliver_once(
+        &negotiated_handle,
+        &record,
+        &with_raw_payload(),
+        &mut negotiated_receiver,
+    );
+    let (plain_handle, mut plain_receiver) = connection();
+    let (_, plain_frames) = deliver_once(
+        &plain_handle,
+        &record,
+        &without_raw_payload(),
+        &mut plain_receiver,
+    );
+
+    let negotiated = payload_of(&negotiated_frames[0].body);
+    let plain = payload_of(&plain_frames[0].body);
     assert!(
-        payload.get("acp").is_none(),
-        "未协商时 acp 键必须整个缺席（不得是 null），实际 {}",
-        payload
+        plain.get("acp").is_none(),
+        "未协商时 acp 键必须整个缺席（不得是 null），实际 {plain}"
     );
     assert!(
-        payload.get("view").is_some(),
-        "未协商原文不影响 view 的下发"
+        negotiated.get("acp").is_some(),
+        "协商时 acp 键必须在场（否则本用例证明不了门控）"
+    );
+    assert_eq!(
+        negotiated.get("view"),
+        plain.get("view"),
+        "无论是否协商原文，view 必须完全一致"
+    );
+    // 除 `payload.acp` 外，整条 body 必须逐字段相同。
+    let mut negotiated_body = negotiated_frames[0].body.clone();
+    let plain_body = plain_frames[0].body.clone();
+    negotiated_body["payload"]
+        .as_object_mut()
+        .expect("payload 是 object")
+        .remove("acp");
+    assert_eq!(
+        negotiated_body, plain_body,
+        "未协商原文只能影响 payload.acp 这一个键，其余字段必须与协商时逐字段相同"
     );
 }
 
@@ -630,5 +685,18 @@ fn a_full_ledger_reports_high_water_to_the_caller() {
         deliver(&handle, &record, &with_raw_payload()),
         EventDelivery::Queued,
         "排空之后必须恢复入队（高水位是背压，不是永久关闭）"
+    );
+}
+
+/// `RAW_PAYLOAD_FEATURE` 必须真的是协商词表里的一项。
+///
+/// 否则门控会**静默永不命中**：`with_raw_payload()` 用同一个常量拼协商集合，两边同源，写错也全绿。
+/// 词表的机器定义在 `compatibility/features/v1/features.json`，`handshake` 的 `SUPPORTED_FEATURES`
+/// 已由它自己的用例逐条比对；这里把本模块的常量绑到那张表上。
+#[test]
+fn the_raw_payload_feature_id_is_in_the_negotiated_vocabulary() {
+    assert!(
+        crate::sync::conn::handshake::SUPPORTED_FEATURES.contains(&RAW_PAYLOAD_FEATURE),
+        "{RAW_PAYLOAD_FEATURE} 不在 SUPPORTED_FEATURES 里 —— 门控会永不命中"
     );
 }

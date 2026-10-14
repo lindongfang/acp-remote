@@ -2,7 +2,7 @@
 //!
 //! ## 为什么单独一个模块
 //!
-//! 实时投递与重放共用同一副"持久化行 → `event` 帧"的装配（[`event::event_body`]），但两者的**触发点**
+//! 实时投递与重放共用同一副"持久化行 → `event` 帧"的装配（[`crate::sync::event::frame`]），但两者的**触发点**
 //! 不同：重放由客户端消息驱动（`sync.subscribe`/`sync.snapshot_request` 在路由线程里同步推进），实时
 //! 投递由 broker 的提交后发布驱动（`EventPublisher::publish` 在提交路径上被**同步**调用）。把后者塞进
 //! 重放路径会让"一条连接一份订阅状态"与"broker 的提交路径"耦合，且 `publish` 不得阻塞 broker——
@@ -29,7 +29,6 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::sync::conn::registry::ConnectionRegistry;
-use crate::sync::subscribe::event;
 use crate::sync::subscribe::{EventReader, SubscribeRoute};
 use crate::transport::net::Shutdown;
 
@@ -158,7 +157,7 @@ async fn deliver<E: EventReader>(
             // 且服务端 MUST NOT 因客户端版本伪造或降级 `kind`。
             continue;
         }
-        match event::event_body(&record, negotiated) {
+        match crate::sync::event::frame(&record, &subscribe.features(target)) {
             Ok(body) => {
                 if target.send(MessageType::Event, &body).is_err() {
                     // 高水位或连接已结束：事件已持久化，客户端重连后凭 cursor 重放补齐（§14）。

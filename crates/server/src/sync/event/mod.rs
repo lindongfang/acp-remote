@@ -35,8 +35,11 @@
 //!
 //! 只调用 `core` 的公开面（`acp_core::model` 的值对象与 [`acp_core::ports::SyncEventRecord`]）、
 //! `sync-protocol` 的公开面（`event`/`views`/`common`）与本 crate 内 `sync::conn` 的连接面。
-//! **不 import `storage-sqlite`、不调用 `server::node_link`**——平级入站适配器互不调用，
-//! `npm run check:boundaries` 逐 crate 断言这条方向。
+//! **不 import `storage-sqlite`、不调用 `server::node_link`**——平级入站适配器互不调用。
+//!
+//! 这条纪律目前靠**约定与检视**守：`npm run check:boundaries` 只比对 crate 级依赖边与 core 的
+//! 普通依赖闭包，而 `crate::node_link` 是同一 crate 内的模块、不产生任何边，因此它**不覆盖**
+//! 本模块这一条（`docs/MODULE_ARCHITECTURE.md` §5 的矩阵是 crate 粒度的）。
 
 use acp_core::ports::SyncEventRecord;
 use sync_protocol::common::ValueError;
