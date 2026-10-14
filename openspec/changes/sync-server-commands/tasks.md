@@ -50,3 +50,5 @@
   - `pending_interactions`：`PendingInteraction` 没有协议要求的 `schema` 对象。
 
   当前处置（WP2）：请求这三者一律显式回 `capability.unsupported_by_broker`（已登记的错误码），**不静默省略、不伪造字段** —— 符合 `AGENTS.md` §4「无法安全处理的能力必须明确返回不支持」。完成判据：二选一 —— 要么在 core 读面补齐这三类形状（属独立变更：动 `core::model`、wire 值对象与 `schemas/`），要么在产品层面确认「PWA 本期不展示 turns/interactions/capabilities」并在 `docs/SYNC_PROTOCOL.md` 与前端设计文档写清该降级。**背景**：由 WP2 的作者在执行中核实并上报（主代理已独立复核 `Turn` 与 `CapabilitySet` 的字段）。
+
+- [ ] 6.3 **（WP2 检视指出的第三处缺口：imported 会话的明细资源未回源）** `docs/SYNC_PROTOCOL.md:1368` 规定 imported 会话的明细资源应**回源 Owner**，而当前实现（`crates/server/src/sync/command/query.rs:408-412`）对非自有引用一律回 `capability.unsupported_by_broker`。与 6.2 不同的是：6.2 是 core 给不出形状，本条是**回源通道缺失**（需要 `node_link` 的出站客户端，而 `node-link-client` 尚未落地，`server::sync` 也不得调用 `server::node_link`）。完成判据：与 4.9 同口径登记 —— 要么在出站客户端落地后接通，要么在产品层面确认本期 PWA 不展示 imported 会话明细并在文档写明。**背景**：由 WP2 的独立检视发现（主代理确认它未进 §6 原有清单）。

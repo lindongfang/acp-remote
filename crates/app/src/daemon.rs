@@ -52,6 +52,8 @@ use server::node_link::{
     PairingHttpConfig, ResourceRoute, Routes, STATUS_PATH, WS_PATH, WS_SUBPROTOCOL, WsEndpoint,
     conn::ConnectionRegistry,
 };
+use server::sync::command::CommandRoute as SyncCommandRoute;
+use server::sync::conn::MessageRoute as SyncMessageRoute;
 use server::sync::conn::{
     ConnectionRegistry as SyncConnectionRegistry, SyncConfig, SyncConn, WS_PATH as SYNC_WS_PATH,
     WS_SUBPROTOCOL as SYNC_WS_SUBPROTOCOL, WsEndpoint as SyncWsEndpoint,
@@ -59,6 +61,7 @@ use server::sync::conn::{
 use server::sync::pairing::{
     CLAIM_PATH as SYNC_CLAIM_PATH, PairingHttp as SyncPairingHttp, STATUS_PATH as SYNC_STATUS_PATH,
 };
+use server::sync::router::SyncRoutes;
 use server::sync::subscribe::fanout::SyncPublisher;
 use server::sync::subscribe::{OwnerReachability, SubscribeRoute};
 use server::transport::local::{
@@ -1014,8 +1017,9 @@ pub struct SyncIngress {
     /// 实时事件扇出的接收端（`NetIngress::start` spawn 分发循环；发布端由组合根的
     /// `EventPublisher` 分叉持有，见 `compose::forked_publisher`）。
     event_queue: tokio::sync::mpsc::Receiver<CommittedEvent>,
-    /// 订阅面路由（分发循环按它的屏障状态找实时目标）。
-    route: Arc<SubscribeRoute>,
+    /// 订阅面路由。它同时是注册给 `/sync/v1` 的 [`SyncRoutes`] 的一个子路由：分发循环按它的屏障状态找
+    /// 实时目标，因此这里必须持有**同一个**实例（另一份克隆会让扇出看不到路由线程建立的屏障）。
+    subscribe: Arc<SubscribeRoute>,
 }
 
 impl SyncIngress {
@@ -1032,14 +1036,15 @@ impl SyncIngress {
         Arc<SyncConnectionRegistry>,
         tokio::sync::mpsc::Receiver<CommittedEvent>,
     ) {
-        (self.route, self.registry, self.event_queue)
+        (self.subscribe, self.registry, self.event_queue)
     }
 }
 
 /// 把 Sync 的全部 path 注册到共享 listener（WSS + 配对 claim/status）并返回连接注册表句柄。
 ///
 /// 这是**唯一的 Sync 接线点**：组合根（[`NetIngress::start`]）与受控路径集成测试都调它，因此
-/// 「subprotocol 常量」「认证后消息的路由组合」「配对端点的安全响应头」不会在两处漂移。
+/// 「subprotocol 常量」「认证后消息的路由组合」「配对端点的安全响应头」不会在两处漂移：认证后的消息由
+/// [`SyncRoutes`]（订阅面 → 命令面）承接，`sync.*` 走 `SubscribeRoute`、`command` 走 `SyncCommandRoute`。
 ///
 /// 配对端点的四个安全响应头经 `SyncPairingHttp::default_response_headers` **同时**声明给接入层
 /// （`register_post` 的每路径默认响应头）：否则接入层在调用处理器前产生的 413/Host 400 不带这些头。
@@ -1058,12 +1063,25 @@ pub fn register_sync_paths(
     let registry = SyncConnectionRegistry::new();
     // 认证后消息路由：订阅面（`sync.subscribe`/`sync.snapshot_request`/`sync.ack`）与它的事件投递腿
     // （增量重放 + 实时扇出，见 `server::sync::subscribe` 的模块文档）。
-    let route = Arc::new(SubscribeRoute::new(
+    let subscribe = Arc::new(SubscribeRoute::new(
         Arc::clone(core),
         Arc::clone(broker),
         Arc::clone(&registry),
+        Arc::clone(&owner),
+    ));
+    // 命令面（`command`）：`SyncConn` 只有一个路由槽，因此两者由 `SyncRoutes` 按序组合（订阅面在前）；
+    // `on_authenticated` 由组合件转发给两者，本次协商出的 feature 因此同时到达订阅面与命令面的门控。
+    let command = Arc::new(SyncCommandRoute::new(
+        Arc::clone(core),
+        Arc::clone(broker),
+        Arc::clone(authority),
+        Arc::clone(&registry),
         owner,
     ));
+    let route = Arc::new(SyncRoutes::new(vec![
+        Arc::clone(&subscribe) as Arc<dyn SyncMessageRoute>,
+        Arc::clone(&command) as Arc<dyn SyncMessageRoute>,
+    ]));
     // 实时扇出的接收端由组合根经 `sync_publisher.take_receiver()` 取出后交进来：发布端先装进组合根的
     // `EventPublisher` 分叉（两侧生命周期必然错开）。`None` = 取过了，这条进线上不会有实时投递——
     // 接线错误，日志如实记下（快照与重放腿不受影响，客户端断线重连后仍能补齐）。
@@ -1083,7 +1101,7 @@ pub fn register_sync_paths(
             config.clone(),
             Arc::clone(&registry),
         )
-        .with_route(Arc::clone(&route) as Arc<dyn server::sync::conn::MessageRoute>),
+        .with_route(route),
     );
     listener
         .register_ws(
@@ -1106,7 +1124,7 @@ pub fn register_sync_paths(
     Ok(SyncIngress {
         registry,
         event_queue,
-        route,
+        subscribe,
     })
 }
 
