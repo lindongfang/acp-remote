@@ -2290,15 +2290,20 @@ async fn a_transient_burst_that_drains_does_not_disconnect_the_connection() {
 
 /// 持续饱和的连接**不得**拖住同 Owner 上的其他连接；该连接的饱和段必须一直成立。
 ///
-/// 饱和形状取真实的一种：队列被一批大消息顶满（第 N+1 条被拒 → 饱和段建立），客户端的读从此停摆——
-/// socket 缓冲填满后会话卡在写路径上，队列因此不会降到低水位之下。用例在一个宽限窗口内反复断言
-/// 「占用仍在低水位之上 + 饱和段仍在累计」，同时对照组一直在正常往来（R81 的另一半）。
+/// 饱和形状取**可持续**的一种：一个独立 OS 线程压力源（[`OutboundPressure`]，`target = None`）不停往
+/// 待发送队列投递，被高水位拒了就立刻重试——队列因此从不回落到低水位之下，饱和段一直累计。用例在一个
+/// 宽限窗口内反复断言「占用仍在低水位之上 + 饱和段仍在累计」，同时对照组一直在正常往来（R81 的另一半）。
 ///
-/// 这里**不**断言「该连接被断开」：对端一个字节都不读，socket 缓冲填满后会话阻塞在 `send_text`
-/// （`transport/net/ws.rs` 没有写期限），整个 `select!`（含 tick）都得不到轮询——这是**写路径**的缺口，
-/// 与 tick 的调度口气无关。断开判定因此由「队列持续饱和、写路径没卡住」的
+/// **为什么不用「灌一次大消息、赌 socket 缓冲吸收不完」这个旧形状**：那让断言依赖内核 TCP 缓冲恰好吸收
+/// 不完那批消息（上限 64 条 × 64 KiB ≈ 4 MiB，而 loopback 上内核缓冲的吸收量远超于此）。缓冲吸收得够多
+/// 时（CI 的 Linux runner 如此），【会话的 `send_text` 会持续完成】（`transport/net/ws.rs` 没有写期限，
+/// 写入只是把数据交给内核），队列被排空到低水位之下，迟滞判定**正确地**清除饱和段——旧断言「占用必须一直在
+/// 低水位之上」于是红掉。那不是缺陷被修坏了，而是用例把「平台相关的缓冲容量」当成了常量。换成压力源后判据
+/// 与平台无关：补货速率远快于排空速率，队列永远回不到低水位之下。
+///
+/// 这里**不**断言「该连接被断开」：断开判定由「队列持续饱和、写路径没卡住」的
 /// `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 与句柄级的
-/// `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment` 覆盖，不在真实连接上伪造。
+/// `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment` 覆盖，本用例只看「不拖住对端」。
 #[tokio::test]
 async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
     const GRACE: Duration = Duration::from_millis(1_500);
@@ -2324,19 +2329,27 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
     let mut healthy = Client::connect(harness.addr).await;
     let _ = authenticated(&mut healthy, ACCESS_NODE, false).await;
 
-    // ② 慢连接：握手后一个字节都不再读（会话写满 socket 缓冲后卡在写路径上）。
+    // ② 慢连接：握手后一个字节都不再读；压力源持续投递，队列永不回落到低水位之下。
     let mut slow = Client::connect(harness.addr).await;
     let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
     let slow_handle = other_handle(&harness, &healthy);
-    assert_eq!(
-        saturate_with(&slow_handle, 64 * 1024),
-        1,
-        "大消息突发必须真的顶到高水位，否则本用例退化成瞬时突发"
+    let pressure = OutboundPressure::spawn(Arc::clone(&slow_handle), None);
+    // 先等饱和真正建立（压力源是独立 OS 线程，起步时隙在用例之外，不能假定它已开跑）。
+    assert_eventually(
+        || slow_handle.saturated(),
+        "压力源挂上后队列必须达到高水位（否则本用例什么都没证明）",
+    )
+    .await;
+    assert!(
+        pressure.sent() >= 1,
+        "压力源必须真的投过消息，实际 {} 条",
+        pressure.sent()
     );
 
     // ③ 宽限窗口内：饱和段连续累计，占用从不降到低水位之下。
     let deadline = Instant::now() + 2 * GRACE;
     let mut saturated;
+    let mut rounds = 0u32;
     loop {
         saturated = slow_handle.saturated_for();
         assert!(
@@ -2348,6 +2361,7 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
             "占用必须始终在低水位之上（实际 {} 条）",
             slow_handle.pending().messages
         );
+        rounds += 1;
         if Instant::now() >= deadline {
             break;
         }
@@ -2355,17 +2369,27 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
         healthy.ping_round_trip(0xa1).await;
     }
     assert!(
+        pressure.sent() >= 10,
+        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
+        pressure.sent()
+    );
+    assert!(
+        rounds >= 2,
+        "窗口内必须反复观察过饱和判定，实际只观察了 {rounds} 次"
+    );
+    assert!(
         saturated.expect("饱和段必须连续存在") >= GRACE,
         "宽限窗口内饱和段必须累计到宽限之上"
     );
     assert_eq!(
         harness.conn.registry().active(),
         2,
-        "两条连接都必须还在（慢连接仍在写路径上，未结束）"
+        "两条连接都必须还在（慢连接从未被判定为拖住对端）"
     );
     healthy.ping_round_trip(0xa2).await;
 
-    // 关掉慢连接的对端：会话从写路径上退出，接入层随之收尾。
+    // 关掉慢连接的对端并停掉压力源：会话从写路径上退出，接入层随之收尾。
+    drop(pressure);
     drop(slow);
     harness.stop().await;
 }
