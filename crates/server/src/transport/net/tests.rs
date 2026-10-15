@@ -16,7 +16,7 @@
 //! | 静态面：非读取方法明确拒绝（`ui-asset-hosting`「请求方法不匹配」） | `non_read_methods_on_static_paths_are_explicitly_rejected` |
 //! | Node Link 端点正常升级 | `ws_upgrade_with_the_required_subprotocol_succeeds` |
 //! | 升级来源（`Origin`）的取值与归一化（`SYNC_PROTOCOL.md` §3.2） | `ws_upgrade_reports_the_normalized_origin_to_the_handler`、`ws_upgrade_without_origin_reports_absent`、`ws_upgrade_with_a_malformed_origin_is_rejected` |
-//! | 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
+//! | 错误 subprotocol 被拒绝、提出压缩照常接受（不协商） | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_offering_compression_is_accepted_without_negotiating_it`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
 //! | Host 与代理头边界 | `host_policy_*`（`host` 模块）、`wrong_host_is_rejected_before_routing`、`wrong_host_is_rejected_on_the_ws_upgrade_path`、`allowed_hosts_whitelist_is_used_when_configured`、`default_configuration_accepts_loopback_host_only` |
 //! | 不可信来源的转发头被忽略 | `forwarded_headers_are_ignored_from_untrusted_peers`、`forwarded_headers_are_honored_from_trusted_proxies` |
 //! | TLS 两种模式 | `direct_mode_terminates_tls_and_rejects_plaintext`、`direct_mode_does_not_warn_about_plaintext`、`idle_tcp_connections_do_not_block_new_connections`（回归）、`saturated_handshake_pool_waits_for_a_slot_instead_of_dropping_new_connections`（回归） |
@@ -997,17 +997,22 @@ async fn ws_upgrade_without_the_subprotocol_is_rejected() {
 }
 
 #[tokio::test]
-async fn ws_upgrade_with_compression_is_rejected() {
-    // 协商到 permessage-deflate 的升级必须被拒绝（`NODE_LINK_PROTOCOL.md` §2.1）。
+async fn ws_upgrade_offering_compression_is_accepted_without_negotiating_it() {
+    // 提出 `permessage-deflate` 的升级**照常接受**：RFC 7692 的 `Sec-WebSocket-Extensions` 是**协商**
+    // 请求，服务端不选择任何扩展就等于「不协商压缩」（`NODE_LINK_PROTOCOL.md` §2.1 与
+    // `SYNC_PROTOCOL.md` §3.1 都是「不协商」口径，没有「提出即拒绝」这条）。Chromium/Firefox 的
+    // `WebSocket` 构造函数**一律**带这个头、页面侧无法关闭，按「提出即拒绝」会让任何浏览器客户端都
+    // 连不上（实测 400：本端点不接受 permessage-deflate）。
+    let messages = Arc::new(AtomicUsize::new(0));
+    let subprotocol = Arc::new(std::sync::Mutex::new(None));
+    let handler = Arc::new(EchoWsHandler {
+        messages: Arc::clone(&messages),
+        last_binary: Arc::new(std::sync::Mutex::new(None)),
+        subprotocol: Arc::clone(&subprotocol),
+    });
     let server = start_server(loopback_config(), |listener| {
         listener
-            .register_ws(
-                WS_PATH,
-                WS_SUBPROTOCOL,
-                Arc::new(IdleWsHandler {
-                    finished: Arc::new(AtomicUsize::new(0)),
-                }),
-            )
+            .register_ws(WS_PATH, WS_SUBPROTOCOL, handler)
             .expect("注册 WS");
     })
     .await;
@@ -1025,10 +1030,22 @@ async fn ws_upgrade_with_compression_is_rejected() {
         )
         .await
         .expect("写升级请求");
+    let response = connection.read_response().await.expect("读升级响应");
+    assert_eq!(response.status, 101, "提出压缩的升级必须照常接受");
     assert_eq!(
-        connection.read_response().await.expect("读响应").status,
-        400
+        response.header("sec-websocket-protocol"),
+        Some(WS_SUBPROTOCOL)
     );
+    assert_eq!(
+        response.header("sec-websocket-extensions"),
+        None,
+        "服务端不得选择任何扩展：不回显 `Sec-WebSocket-Extensions` 就是「不协商压缩」"
+    );
+    // 升级真的完成了（不是只回一个 101）：发一帧，收到原样回声。
+    connection.send_text("plain").await.expect("发 text");
+    let frame = connection.read_frame().await.expect("收帧");
+    assert_eq!(frame.text().as_deref(), Some("plain"));
+    wait_for_counter(&messages, 1).await;
     server.stop().await.expect("关闭序列成功");
 }
 
