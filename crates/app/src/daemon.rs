@@ -73,7 +73,7 @@ use server::transport::local::{
 // 「错误变体」在读代码时不会互相顶替（变体携带的就是这个类型）。
 use server::transport::net::{
     EmbeddedUi, MissingFrontendBuild as MissingFrontendBuildError, NetConfig, NetError,
-    NetListener, RouteError, Shutdown, UiAssetSource, check_release_build,
+    NetListener, RouteError, Shutdown, check_release_build,
 };
 use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
@@ -1272,12 +1272,12 @@ impl NetIngress {
         // 版本必须在把 `ui` 交给静态面**之前**从同一个实例读：`daemon.status` 回答的版本与浏览器拿到的
         // 资源因此同属一份资源表，不可能分属两次构建。
         let ui_build_version = ui.build_version();
-        // `Arc<EmbeddedUi>` → `Arc<dyn UiAssetSource>` 是 unsize 强转，只在**强转点**发生：带显式类型的
-        // `let` 是一个强转点，而把它作为实参传给 `register_static`、或写成 `Arc::clone(&ui)`（返回类型由
-        // 注解反向推定成 `Arc<dyn …>`，参数却不匹配）都不是。
-        let static_source: Arc<dyn UiAssetSource> = ui;
+        // `Arc<EmbeddedUi>` → `Arc<dyn UiAssetSource>` 的 unsize 强转由**实参位置**完成（函数调用的实参
+        // 是强转点，与本文件 `owner: Arc<dyn OwnerReachability>` 的接线同款）。不要改写成
+        // `Arc::clone(&ui)`：那会让 `Arc::clone` 的返回类型被实参的期望类型反推成 `Arc<dyn …>`，它的参数
+        // `&Arc<EmbeddedUi>` 于是不匹配（E0308）。
         listener
-            .register_static(STATIC_UI_PATH, static_source)
+            .register_static(STATIC_UI_PATH, ui)
             .map_err(NetworkError::Route)?;
         let listen = listener
             .local_addrs()

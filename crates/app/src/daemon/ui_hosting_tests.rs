@@ -82,9 +82,10 @@ async fn the_root_path_serves_the_embedded_entry_document() {
 /// 3.1：静态面注册在协议端点**之后**，协议端点的行为因此一字不变。
 ///
 /// 判据的**区分力**分布要写清楚：真正能抓住「静态面接管协议 path」的是**升级断言**——静态面只装在
-/// `router.fallback` 上，一旦协议 path 不再被精确路由命中，升级就升不起来。后面那三条钉的是协议面拒绝
-/// 响应的**形状**（明确 4xx、响应体不是入口文档、不带静态面的 CSP）；它们在「被接管」的形态下也会成立
-/// （静态面对协议族保留前缀返回 404 且不加静态头），因此是形状断言，不是那条走样的判据。
+/// `router.fallback` 上，协议 path 一旦不再被精确路由命中，升级就升不起来（静态面对 GET 只会给 200 或
+/// 404/405，永远不会是 101）。后面那三条钉的是协议面拒绝响应的**形状**（明确 4xx、响应体不是入口文档、
+/// 不带静态面的 CSP），因此不能把「形状断言通过」当作「协议面没被接管」的判据：在「协议 path 仍在路由表
+/// 里、只是没被装成精确路由」这种走样下它们同样成立（保留前缀正是从**已注册**的协议 path 派生的）。
 #[tokio::test]
 async fn registering_the_static_endpoint_leaves_the_protocol_endpoints_intact() {
     let harness = Harness::start("ui-protocol").await;
@@ -129,9 +130,10 @@ async fn registering_the_static_endpoint_leaves_the_protocol_endpoints_intact() 
 ///
 /// 「不新增方法」不在这里断言：方法集是机器合同，真正会因新增方法变红的是
 /// `crates/server/tests/local_admin_schema_drift.rs`（`Method::ALL` ↔ schema 的 `methodName` enum）与
-/// `crates/server/src/local_admin/method.rs` 的 `Method::ALL.len()` 计数断言；`npm run check:commands`
-/// 只覆盖文档 §5.1 与词表（`localCapabilities`）之间的一致性（本变更只往既有 `result` 里加字段，
-/// 见 `design.md` D5）。
+/// `crates/server/src/local_admin/method.rs` 的 `Method::ALL.len()` 计数断言。`npm run check:commands`
+/// 只做**文档 ↔ schema/词表**一侧的一致性（§5 方法小节 ↔ `methodName.enum`、§5.1 能力名 ↔
+/// `localCapabilities`、§6 错误码 ↔ `errorCode.enum` 与 framing 常量），不比对 Rust 的 `Method::ALL`
+/// （本变更只往既有 `result` 里加字段，见 `design.md` D5）。
 #[tokio::test]
 async fn daemon_status_reports_the_version_of_the_hosted_embedded_table() {
     let harness = Harness::start("ui-version").await;
@@ -150,8 +152,9 @@ async fn daemon_status_reports_the_version_of_the_hosted_embedded_table() {
         EmbeddedUi::new().build_version(),
         "版本必须来自嵌入资源表（同源：`NetIngress::start` 从注册为静态面的那份表读）"
     );
-    // 键**存在**必须单独断言：`serde_json` 对缺失键的索引返回 `Null`，而版本缺失（占位入口，CI 所处
-    // 形态）时期望值同样是 `Null`，只看下面那条 `assert_eq!` 会在「键名写错/丢了字段」时恒过。
+    // 键**存在性**单独断言：失败信息直接指向字段名（`to_json()` 返回的是 `Map<String, Value>`，它索引
+    // 缺失键是 panic，`Value` 才有返回 `null` 的语义），因此这条与下面那条一起把「键名」与「取值/缺失
+    // 语义」两件事分开报告。
     assert!(
         status.to_json().contains_key("uiBuildVersion"),
         "`uiBuildVersion` 必须是响应里的一个键（camelCase，见 §5.2）"
