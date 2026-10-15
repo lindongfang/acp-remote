@@ -55,11 +55,12 @@
 //!   复现「tick 被出站分支饿死」这一缺陷条件（理由见该结构的文档注释）；
 //! - 饱和的判定分两层锁定：**瞬时突发后回落**、**持续饱和 → 断开**、**持续饱和不拖住其他连接**与
 //!   **恢复后重新读取批次**都走真实连接 / 真实路由（分别在宽限之后断言连接仍在、宽限之后断言以
-//!   `close::NORMAL` 断开、宽限窗口内断言占用始终在低水位之上且对照组持续可用、以及断言两批 catalog
-//!   快照 + 完整 resource 快照 + 扇出事件都重新到达）；**饱和期心跳不被短路**与**「持续饱和」判据本身**
-//!   在句柄口径与两个纯函数（[`tick_action`]、[`heartbeat_outcome`]）上锁定——饱和时队列本就顶满，
-//!   `link.ping` 只能被推迟（一级处置），端到端观察不到「饱和期间真的收到 ping」；「队列持续非空（未
-//!   饱和）时心跳照发」由 `a_busy_outbound_queue_does_not_starve_the_heartbeat` 在真实连接上覆盖。
+//!   `close::NORMAL` 断开、宽限窗口内断言饱和段连续累计到宽限之上且对照组持续可用、以及断言两批
+//!   catalog 快照 + 完整 resource 快照 + 扇出事件都重新到达）；**饱和期心跳不被短路**与**「持续饱和」
+//!   判据本身**在句柄口径与两个纯函数（[`tick_action`]、[`heartbeat_outcome`]）上锁定——饱和时队列
+//!   本就顶满，`link.ping` 只能被推迟（一级处置），端到端观察不到「饱和期间真的收到 ping」；「队列
+//!   持续非空（未饱和）时心跳照发」由 `a_busy_outbound_queue_does_not_starve_the_heartbeat` 在真实
+//!   连接上覆盖。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -2294,13 +2295,28 @@ async fn a_transient_burst_that_drains_does_not_disconnect_the_connection() {
 /// （`session.rs` 的 `tick_action`）——「当前饱和段已持续的时长」。因此本用例断言「观测到一个
 /// 饱和段连续累计到宽限之上」，同时对照组一直在正常往来（R81 的另一半）。它**不断言**每一轮
 /// 占用都在低水位之上：会话的 `send_text` 只把数据交给内核（`transport/net/ws.rs` 没有写期限），
-/// 压力源补货与它赛跑，占用可能某一刻掉到低水位之下、判定断一次再重建；那不影响看门狗，因为
-/// 断开用的是「单段连续时长」。
+/// 只要内核还吸得下、占用就会往下走，把「内核吸收了多少」当成常量正是下面那条记录的共同病根。
 ///
-/// **两版失败的修法（都记下来，避免再走）**：曾断言「占用必须始终在低水位之上」——那把「内核
-/// 吸收了多少」当成常量，是平台相关的量（CI 的 Linux runner 吸收得更多）。于是先把形状换成压力源
-/// 持续补货，又把上限抬到 schema 默认的 2,000 条（低水位 1,000）——两者都只是在降概率，没有消除
-/// 竞态，仍在该 runner 上失败。最终按规格改成只看「单段连续时长」。
+/// **四次失败的口径（都记下来，避免再走）**：①断言「占用必须始终在低水位之上」；②把形状换成压力源
+/// 持续补货、并把上限抬到 schema 默认的 2,000 条（低水位 1,000 条）；③改成只看「单段连续时长」。
+/// 三次都栽在同一个量上：填充载荷只有几个字节，**队列的字节上限（8 MiB）从不参与判定**，于是「有没有
+/// 脱离饱和」只取决于内核替对端吸走了多少条——而那是平台相关的量（CI 的 Linux runner 吸得更多；本机
+/// loopback 实测 163,800 B ≈ 546 条，已经与整个队列同量级）。③在 CI 上把同一个竞态的**两端**都演了
+/// 一遍：内核吸走得多就够把段清零（失败在 `longest`：只到 1.216 s——退出判定在采样之后，所以它没到
+/// 宽限只可能是段被清零过）；吸得慢则队列一直顶满、看门狗照常按宽限断开（失败在 `active() == 1`）。
+/// 两次的同一提交另一次运行都通过。
+///
+/// 本版（④）把**字节**变成绑定维度，两个方向一起堵。填充串取
+/// [`PRESSURE_FILLER_SATURATION_BYTES`]（32 KiB）：①队列常驻 8 MiB（≈254 条，远不到 1,000 条的条数
+/// 低水位），内核吸走几百 KB～几 MB 也压不到 4 MiB 的字节低水位之下，段不会被清零；②填满 socket 只需
+/// 约 10～30 次 32 KiB 写（旧形状要约 1,850 次 4 字节写），写路径在毫秒量级就停住、远早于宽限（窗口内
+/// 实测占用恒为 254 条 / 8,372,508 B、一次都没往下走，就是「写路径已停」的直接证据）。判定因此只
+/// 描述队列状态，不描述内核缓冲大小。
+///
+/// 「段 ≥ 宽限」与「连接还在」为什么能同时成立：对端不读、socket 缓冲吸满之后，会话停在
+/// `send_text` 上，`select!` 里的 tick 同样得不到轮询，宽限判定根本没机会执行（`transport/net/ws.rs`
+/// 没有写期限，这个缺口记在 `conn::session` 的模块文档里）。④ 的填充串让「吸满」在毫秒内完成，
+/// 所以这个状态在窗口内是稳定的，而不是靠运气。本用例只看「不拖住对端」。
 ///
 /// 这里**不**断言「该连接被断开」：断开判定由「队列持续饱和、写路径没卡住」的
 /// `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 与句柄级的
@@ -2315,10 +2331,10 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
         ))),
         NodeLinkConfig {
             public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
-            // 上限取 §2.5 的默认值 2,000 条 ⇒ 低水位 1,000 条。会话的 `send_text` 只把数据交给内核，
-            // 而 loopback 上内核缓冲能吸收的量远大于几十条：用小上限（旧形状用 64 ⇒ 低水位 32）时队列
-            // 会被排空到低水位之下，那是【平台相关的量】，Linux runner 上尤甚。低水位 1,000 让
-            // 「占用始终在低水位之上」与平台无关。
+            // 条数上限取 §2.5 的默认值 2,000（低水位 1,000 条），字节上限同样取默认的 8 MiB（低水位
+            // 4 MiB）。**让字节成为绑定维度**是本用例成立的前提：填充串取
+            // [`PRESSURE_FILLER_SATURATION_BYTES`]，队列因此常驻 8 MiB（≈254 条，远不到 1,000 条的条数
+            // 低水位），内核替对端吸走的那几百 KB～几 MB 压不到 4 MiB 的字节低水位之下。
             max_pending_queue_messages: 2_000,
             // 心跳取 schema 上限：本用例只看饱和判定，不让 ping 混进队列水位。
             heartbeat_interval_ms: 300_000,
@@ -2334,11 +2350,16 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
     let mut healthy = Client::connect(harness.addr).await;
     let _ = authenticated(&mut healthy, ACCESS_NODE, false).await;
 
-    // ② 慢连接：握手后一个字节都不再读；压力源持续投递，队列永不回落到低水位之下。
+    // ② 慢连接：握手后一个字节都不再读；压力源持续投递，队列被顶在字节高水位上（填充串给足，
+    // 见 [`PRESSURE_FILLER_SATURATION_BYTES`]——这是本用例不再是竞态的关键）。
     let mut slow = Client::connect(harness.addr).await;
     let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
     let slow_handle = other_handle(&harness, &healthy);
-    let pressure = OutboundPressure::spawn(Arc::clone(&slow_handle), None);
+    let pressure = OutboundPressure::spawn_with_filler(
+        Arc::clone(&slow_handle),
+        None,
+        json!({ "padding": "x".repeat(PRESSURE_FILLER_SATURATION_BYTES) }),
+    );
     // 先等饱和真正建立（压力源是独立 OS 线程，起步时隙在用例之外，不能假定它已开跑）。
     assert_eventually(
         || slow_handle.saturated(),
@@ -2440,6 +2461,31 @@ async fn harness_with_conn(world: TestWorld, conn: Arc<NodeLinkConn>) -> Harness
 /// 出现「出站分支不就绪」的窗口，缺陷里的 tick 就有机会被轮询到（用例于是漏报）。
 const BUSY_QUEUE_TARGET: u64 = 1_800;
 
+/// 压力源默认填充串的字节数（只够让消息成型，内容不参与任何断言）。
+///
+/// 「持续非空」那组用例压的是**条数**维度，不需要字节维度参与；要压字节维度的用例显式传
+/// [`PRESSURE_FILLER_SATURATION_BYTES`] 长的填充串。
+const PRESSURE_FILLER_DEFAULT_BYTES: usize = 4;
+
+/// 「持续饱和」用例的填充串字节数：32 KiB。
+///
+/// **必须给足**，否则判定落到调度竞态上。队列判定是**条数 + 字节**双维度（`conn::registry` 的
+/// `consumed`）：进入是「条数 ≥ 2,000 或字节 ≥ 8 MiB」，退出是「条数 < 1,000 **且** 字节 < 4 MiB」。
+/// 默认的 4 字节填充让字节维度只有 0.6 MB 量级、永不参与判定，于是「有没有脱离饱和」完全取决于
+/// **内核能替对端吸走多少条**：对端一个字节都不读时，内核仍会先把 socket 缓冲吸满——本机 loopback
+/// 实测 163,800 B ≈ 546 条（Linux runner 更大，见用例文档里记的两次失败）。吸走量与整个队列同量级
+/// ⇒ 用例结果由调度决定：CI 上同一个竞态的两个方向各失败过一次——吸走得多就把饱和段清零（最长
+/// 1.216 s < 宽限 1.5 s），吸得慢则队列一直顶满、连接被看门狗按宽限断开（`active() == 1`）；两次的
+/// 同一提交另一次运行都通过。
+///
+/// 32 KiB 之后**字节**成为唯一绑定维度：队列顶到 8 MiB（≈254 条，远不到 1,000 条的低水位），内核
+/// 即使把 socket 缓冲吸满也只带走几百 KB～几 MB，占用不会掉到 4 MiB 之下 ⇒ 饱和段连续累计，判定只
+/// 描述队列状态、不描述内核缓冲大小。顺带把「顶满反而被看门狗断开」那个方向也堵住：填满 socket 只需
+/// 约 10～30 次这种大小的写，写路径在毫秒量级就停在 `send_text` 上、远早于宽限（详见用例文档）。
+/// `saturate_with` 的旧注释里那句「需要足够大的消息把 socket 缓冲填满」说的就是这个量，但它当时只用
+/// 在句柄口径的 helper 上，没有接到本用例的压力源上。
+const PRESSURE_FILLER_SATURATION_BYTES: usize = 32 * 1024;
+
 /// 「对端持续推流」的用例里等 close 帧的预算：慢消费者宽限（用例里 1.5 秒）+ 关闭前排空已入队消息的
 /// 预算（2 秒）+ 余量。没有它的话「对端根本不断开」会表现为用例挂住（帧一直在到达，读超时不会触发）。
 const CLOSE_WAIT_BUDGET: Duration = Duration::from_secs(8);
@@ -2457,6 +2503,10 @@ const CLOSE_WAIT_BUDGET: Duration = Duration::from_secs(8);
 /// - `target = Some(n)`：只在队列少于 `n` 条时投递，**从不触发高水位**（`saturated_for()` 保持
 ///   `None`，tick 于是会走到心跳判定）；
 /// - `target = None`：一直投递到高水位，队列持续饱和（tick 走到慢消费者判定）。
+///
+/// 填充消息的载荷长度由调用方给（[`OutboundPressure::spawn_with_filler`]）：「持续非空」那组用例压的是
+/// **条数**维度，用默认量即可；「持续饱和」用例必须压**字节**维度，理由见
+/// [`PRESSURE_FILLER_SATURATION_BYTES`]。
 struct OutboundPressure {
     sent: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
@@ -2464,13 +2514,23 @@ struct OutboundPressure {
 }
 
 impl OutboundPressure {
+    /// 默认填充载荷的压力源（[`PRESSURE_FILLER_DEFAULT_BYTES`] 字节的填充串）。
     fn spawn(handle: Arc<ConnectionHandle>, target: Option<u64>) -> Self {
+        let filler = json!({ "padding": "x".repeat(PRESSURE_FILLER_DEFAULT_BYTES) });
+        Self::spawn_with_filler(handle, target, filler)
+    }
+
+    /// 同 [`OutboundPressure::spawn`]，但由调用方给出填充消息的 body（内容只编码一次，线程里复用）。
+    fn spawn_with_filler(
+        handle: Arc<ConnectionHandle>,
+        target: Option<u64>,
+        filler: Value,
+    ) -> Self {
         let sent = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let counter = Arc::clone(&sent);
         let flag = Arc::clone(&stop);
         let thread = std::thread::spawn(move || {
-            let filler = json!({ "padding": "busy" });
             while !flag.load(Ordering::Relaxed) {
                 let has_room = match target {
                     Some(target) => handle.pending().messages < target,
@@ -2774,8 +2834,10 @@ fn saturate(handle: &ConnectionHandle) -> u64 {
     saturate_with(handle, 64)
 }
 
-/// 同 [`saturate`]，但由调用方给出每条 filler 的字节数（`a_continuously_saturated_connection_does_not_stall_its_peer`
-/// 需要足够大的消息把 socket 缓冲填满，队列才会真的停在低水位之上）。
+/// 同 [`saturate`]，但由调用方给出每条 filler 的字节数。
+///
+/// 「持续饱和」的**端到端**用例需要足够的水量（理由见 [`PRESSURE_FILLER_SATURATION_BYTES`]），但它走
+/// 的是真实连接与 [`OutboundPressure`]；本 helper 只被 [`saturate`] 用在句柄口径上。
 fn saturate_with(handle: &ConnectionHandle, payload_len: usize) -> u64 {
     let payload = "x".repeat(payload_len);
     let mut rejected = 0;
