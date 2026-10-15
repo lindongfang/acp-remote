@@ -59,12 +59,22 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acp_core::broker::Broker;
 use acp_core::model::{
-    Actor, PortError, PublicError as CorePublicError, RequestId as CoreRequestId,
+    Actor, ClientCommand, CommandKind, CommandPayload as CorePayload, CommandReceipt,
+    ConfigOptionId, ConfigValue as CoreConfigValue, ElicitationAction as CoreElicitationAction,
+    ElicitationValues, InteractionId, ModeId, PortError, PromptContentBlock,
+    PublicError as CorePublicError, ReadInclude as CoreReadInclude, RequestId as CoreRequestId,
+    TurnId, Version,
 };
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
-use sync_protocol::command::{Command, CommandName, CommandPayload, CommandResult, CommandState};
-use sync_protocol::common::{Nullable, PublicError, RawObject, Text, Timestamp, Uuid};
+use sha2::Digest as _;
+use sync_protocol::command::{
+    Command, CommandName, CommandPayload, CommandResult, CommandState,
+    ElicitationAction as WireElicitationAction, IncludeResource as WireReadInclude,
+};
+use sync_protocol::common::{
+    ConfigOptionValue as WireConfigValue, Nullable, PublicError, RawObject, Text, Timestamp, Uuid,
+};
 use sync_protocol::envelope::{Envelope, MessageType, encode_body};
 use sync_protocol::error::{Body, ErrorCode};
 use tracing::{debug, warn};
@@ -616,27 +626,147 @@ impl CommandRoute {
         RouteOutcome::Claimed
     }
 
-    /// mutation：**WP3 的接缝**。
+    /// mutation 的接受路径（WP3 的 3.1）：**先持久接受、回 `accepted`，绝不在同一响应里给业务结果**。
     ///
-    /// 本工作包（WP2）只交付查询那一半管线；mutation 的持久接受、`(deviceId, requestId)` 幂等与终态
-    /// 观察者在同一模块目录的下一个工作包实现。这里**显式失败关闭**：既不伪造 `accepted`（那会让客户端
-    /// 把一条从未被接受的命令标成已接受），也不静默丢弃（那会让对端一直等一条永不到来的结果）。
-    /// 用例面当前不可用是服务端侧的限制，因此回 `internal.unavailable`，不是对命令本身的支持性判定。
+    /// 顺序与查询面同一套骨架（`on_command` → `authorize` → 业务），差别只在：
+    ///
+    /// - [`Self::authorize`] 已经做过一次授权，这里不重复；拒绝路径与该函数统一；
+    /// - `(deviceId, requestId)` 的幂等由 **core 的持久记录**承担（`Broker::submit_mutation` 的幂等键），
+    ///   本层只把 `request_fingerprint`（解码后 payload 的 ACPR-CJ1 摘要）交上去 —— 不另建内存幂等表，
+    ///   否则重启后同一 `requestId` 会被当成新命令再派发一次；
+    /// - 首次提交返回 core 的收据：已终结即回终态（同键重试的回复因此与首次同形），否则回 `accepted`
+    ///   并挂终态观察（`terminal_event_id` 恒 `null`，终态只经持久 `command.*` 事件表达）。
+    ///
+    /// `session.create` **不在本路径**：core 有独立入口（`UseCases::create_session`），它的 workspace 别名
+    /// 解析与 `remoteSessionRef` 生成不经过 `ClientCommand`。WP3 的后续迭代再接；当前按显式拒绝处理，
+    /// 不伪装成已受理。
     async fn on_mutation(&self, handle: &ConnectionHandle, command: Command) -> RouteOutcome {
-        warn!(
-            event = "sync.command_mutation_not_implemented",
+        let Some(actor) = self.authorize(handle, &command).await else {
+            return RouteOutcome::Claimed;
+        };
+        if command.command == CommandName::SessionCreate {
+            warn!(
+                event = "sync.command_session_create_deferred",
+                device_id = handle.device_id().as_str(),
+                request_id = command.request_id.as_str(),
+                "session.create has a dedicated core entry; it is not wired in this package"
+            );
+            self.deny(
+                handle,
+                &command,
+                "the mutation is not available on this command",
+                ErrorCode::InternalUnavailable,
+            );
+            return RouteOutcome::Claimed;
+        }
+        let Some(payload) = core_payload(&command.payload).ok() else {
+            self.deny(
+                handle,
+                &command,
+                "the payload does not match the command",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Some(fingerprint) = payload_fingerprint(&command.payload) else {
+            return self.encoding_fault(handle);
+        };
+        let client_command = ClientCommand {
+            actor: actor.clone(),
+            request: match core_request_id(&command.request_id) {
+                Some(request) => request,
+                None => return self.encoding_fault(handle),
+            },
+            command: command.command.as_str().to_owned(),
+            kind: CommandKind::Mutation,
+            session: command
+                .session_id
+                .as_ref()
+                .and_then(|session| acp_core::model::SessionId::new(session.as_str()).ok()),
+            expected_version: command
+                .expected_version
+                .as_ref()
+                .and_then(|version| version.as_str().parse::<u64>().ok())
+                .map(Version::new),
+            request_fingerprint: fingerprint,
+            payload,
+        };
+        let receipt = match self.core.submit_command(&actor, client_command).await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let (code, text, details) = port_rejection(&error).into_parts();
+                let Some(error) = public_error(code, text, details) else {
+                    return self.encoding_fault(handle);
+                };
+                self.send_result(
+                    handle,
+                    &CommandResult {
+                        request_id: command.request_id.clone(),
+                        command: command.command,
+                        status: CommandState::Rejected,
+                        accepted_at: Nullable::null(),
+                        terminal_event_id: Nullable::null(),
+                        result: Nullable::null(),
+                        error: Nullable::value(error),
+                    },
+                    "mutation",
+                );
+                return RouteOutcome::Claimed;
+            }
+        };
+        let turn = match receipt {
+            CommandReceipt::Rejected { error } => {
+                // core 的 `PublicError`：转成 wire 的同形错误体（消息与 details 原样）。
+                let Some(error) = wire_public_error(&error) else {
+                    return self.encoding_fault(handle);
+                };
+                self.send_result(
+                    handle,
+                    &CommandResult {
+                        request_id: command.request_id.clone(),
+                        command: command.command,
+                        status: CommandState::Rejected,
+                        accepted_at: Nullable::null(),
+                        terminal_event_id: Nullable::null(),
+                        result: Nullable::null(),
+                        error: Nullable::value(error),
+                    },
+                    "mutation",
+                );
+                return RouteOutcome::Claimed;
+            }
+            CommandReceipt::Accepted { turn, .. } => turn,
+        };
+        self.send_accepted(handle, &command, turn);
+        RouteOutcome::Claimed
+    }
+
+    /// 回一条 `accepted` 的 `command.result`：`result` 与 `terminalEventId` 均为 `null`。
+    ///
+    /// **MUST NOT** 在这里塞业务结果：终态只经持久化的 `command.*` 事件表达，由终态观察者推给提交方
+    /// （WP3 后续迭代）。本包只负责「先接受」这一半。
+    fn send_accepted(&self, handle: &ConnectionHandle, command: &Command, turn: Option<TurnId>) {
+        debug!(
+            event = "sync.command_accepted",
             device_id = handle.device_id().as_str(),
             command = command.command.as_str(),
             request_id = command.request_id.as_str(),
-            "the mutation accept path is not part of this work package"
+            turn = ?turn.as_ref().map(|turn| turn.as_str()),
+            "the mutation is accepted; the terminal state follows as a persisted event"
         );
-        self.deny(
+        self.send_result(
             handle,
-            &command,
-            "the mutation accept path is not available",
-            ErrorCode::InternalUnavailable,
+            &CommandResult {
+                request_id: command.request_id.clone(),
+                command: command.command,
+                status: CommandState::Accepted,
+                accepted_at: Nullable::null(),
+                terminal_event_id: Nullable::null(),
+                result: Nullable::null(),
+                error: Nullable::null(),
+            },
+            "mutation",
         );
-        RouteOutcome::Claimed
     }
 
     /// 本机装配失败（时间戳/错误体构造不出来）：这是接线缺陷，按 `internal.unavailable` 显式失败，
@@ -832,4 +962,118 @@ fn schema_hint(reason: &str) -> &'static str {
 /// 锁中毒时取回内层数据而不是 panic：命令面在任何 panic 之后仍要能继续拒绝后续命令。
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// wire 的命令 payload → core 的 [`acp_core::model::CommandPayload`]（WP3 的 3.1）。
+///
+/// **不复制第二份映射**：`crates/server/src/node_link/command.rs` 有一份同款 `core_payload`（同族的
+/// Node Link 侧），两份的差别只在 wire DTO 的类型来自各自协议 crate —— 这是 `AGENTS.md` §6「Node Link
+/// 与 Sync 不得共享 wire DTO」的必然结果，不是重复约定。
+///
+/// `session.create` **不在这里**：core 没有 `CommandPayload::SessionCreate`，它走独立入口
+/// `UseCases::create_session`（Node Link 侧同款分流，见 `node_link/command.rs` 的 query/mutation 分流）。
+fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
+    Ok(match payload {
+        CommandPayload::SessionList(_) => CorePayload::SessionList {},
+        CommandPayload::SessionRead(read) => {
+            if read
+                .include
+                .as_slice()
+                .iter()
+                .any(|item| matches!(item, WireReadInclude::History))
+            {
+                // `history` 是 §6.2 已裁定的本期降级项（core 的 `ReadInclude` 无此变体）：
+                // 显式拒绝而不是静默丢掉它 —— 否则客户端以为请求被满足，拿到的却是残缺结果。
+                return Err("the history resource is deferred");
+            }
+            CorePayload::SessionRead {
+                include: read
+                    .include
+                    .as_slice()
+                    .iter()
+                    .map(|item| match item {
+                        WireReadInclude::Messages => CoreReadInclude::Messages,
+                        WireReadInclude::Turns => CoreReadInclude::Turns,
+                        WireReadInclude::PendingInteractions => {
+                            CoreReadInclude::PendingInteractions
+                        }
+                        WireReadInclude::ConfigOptions => CoreReadInclude::ConfigOptions,
+                        WireReadInclude::Capabilities => CoreReadInclude::Capabilities,
+                        WireReadInclude::History => unreachable!("上一条已整体拒绝"),
+                    })
+                    .collect(),
+            }
+        }
+        CommandPayload::CommandStatus(status) => CorePayload::CommandStatus {
+            target_request: core_request_id(&status.target_request_id)
+                .ok_or("the targetRequestId is not a uuid")?,
+        },
+        CommandPayload::ModeList(_) => CorePayload::ModeList {},
+        CommandPayload::ConfigList(_) => CorePayload::ConfigList {},
+        CommandPayload::SessionPrompt(prompt) => {
+            let mut content = Vec::with_capacity(prompt.content.as_slice().len());
+            for block in prompt.content.as_slice() {
+                // 内容块按原文交给 core（core 只做不透明载体），不重新构造字段。
+                let text = serde_json::to_string(block)
+                    .map_err(|_| "the prompt block cannot be re-encoded")?;
+                content.push(
+                    PromptContentBlock::from_json_text(&text)
+                        .map_err(|_| "the prompt block is not a valid content block")?,
+                );
+            }
+            CorePayload::Prompt { content }
+        }
+        CommandPayload::SessionCancel(cancel) => CorePayload::Cancel {
+            turn: Some(
+                TurnId::new(cancel.turn_id.as_str()).map_err(|_| "the turnId is not a uuid")?,
+            ),
+        },
+        CommandPayload::ModeSet(set) => CorePayload::ModeSet {
+            mode: ModeId::new(set.mode_id.as_str())
+                .map_err(|_| "the modeId is not a valid mode id")?,
+        },
+        CommandPayload::ConfigSet(set) => CorePayload::ConfigSet {
+            id: ConfigOptionId::new(set.config_id.as_str())
+                .map_err(|_| "the configId is out of range")?,
+            value: match &set.value {
+                WireConfigValue::Text(text) => CoreConfigValue::text(text.as_str())
+                    .map_err(|_| "the config value is out of range")?,
+                WireConfigValue::Boolean(flag) => CoreConfigValue::Boolean(*flag),
+            },
+        },
+        CommandPayload::PermissionResolve(resolve) => CorePayload::PermissionResolve {
+            interaction: InteractionId::new(resolve.interaction_id.as_str())
+                .map_err(|_| "the interactionId is not a uuid")?,
+            option_id: resolve.option_id.as_str().to_owned(),
+        },
+        CommandPayload::ElicitationRespond(respond) => CorePayload::ElicitationRespond {
+            interaction: InteractionId::new(respond.interaction_id.as_str())
+                .map_err(|_| "the interactionId is not a uuid")?,
+            action: match respond.action {
+                WireElicitationAction::Submit => CoreElicitationAction::Submit,
+                WireElicitationAction::Decline => CoreElicitationAction::Decline,
+                WireElicitationAction::Cancel => CoreElicitationAction::Cancel,
+            },
+            values: match respond.values.as_ref() {
+                Some(values) => ElicitationValues::parse_json(values.get())
+                    .map_err(|_| "the values are not valid elicitation values")?,
+                None => ElicitationValues::null(),
+            },
+        },
+        CommandPayload::SessionCreate(_) => {
+            return Err("session.create does not use CommandPayload");
+        }
+    })
+}
+
+/// 载荷指纹（ACPR-CJ1 之后的 SHA-256，§6 第 6 条）——幂等冲突判定的唯一依据。
+///
+/// 与 `node_link` 的同名助手同一算法；协议无关，但各自持有本协议的 DTO，因此不复用一个函数。
+fn payload_fingerprint(payload: &CommandPayload) -> Option<acp_core::model::Digest> {
+    use base64::Engine as _;
+    let text = serde_json::to_string(payload).ok()?;
+    let canonical = acpr_wire::cj1::canonicalize(&text).ok()?;
+    let bytes = sha2::Sha256::digest(canonical.as_bytes());
+    acp_core::model::Digest::new(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+        .ok()
 }

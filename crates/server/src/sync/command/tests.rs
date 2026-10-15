@@ -17,8 +17,9 @@ use acp_core::model::{
     ConfigOption as CoreConfigOption, ConfigOptionEntry as CoreConfigOptionEntry, ConfigOptionId,
     ConfigOptionKind, ConfigValue, DeviceId, Digest, EventId, EventPayload, EventType,
     GlobalCursor, ModeId, ModeRef as CoreModeRef, ModeState as CoreModeState, OriginEpoch,
-    PortError, PromptRequest, RequestId, ResumeSessionRequest, SelectValue, Sequence, ServerEpoch,
-    SessionRecoveryRecord, SessionSummary, Timestamp, ViewJson,
+    OwnedSessionRef, PortError, PromptRequest, RequestId, ResumeSessionRequest, SelectValue,
+    Sequence, ServerEpoch, SessionRecoveryRecord, SessionSnapshot, SessionSummary, Timestamp,
+    ViewJson,
 };
 use acp_core::ports::{
     Clock, CommitOutcome, EventSink, HistoryPage, HistoryQuery, OwnedCommit, OwnedEventRecord,
@@ -75,6 +76,11 @@ struct StoreState {
     window: BTreeMap<String, u64>,
     /// `owned_command` 行的替身（`command.status` 的唯一读面）。
     commands: Vec<CommandRecord>,
+    /// 逐会话的**持久快照**（`SessionStore::load` 的唯一读面；mutation 的提交前置读它）。
+    ///
+    /// 默认空：查询面零副作用用例因此仍然看不到任何会话（那正是它们要的）。
+    /// mutation 的用例经 `push_session` 一并登记，于是 `submit_prompt` 的 `load` 前置能过。
+    snapshots: BTreeMap<String, SessionSnapshot>,
 }
 
 /// 「会话列表 + 事件分页 + 命令记录」的存储替身，带逐次计数。
@@ -90,7 +96,37 @@ impl CommandStore {
     }
 
     fn push_session(&self, summary: SessionSummary) {
-        self.lock().sessions.push(summary);
+        // 摘要与快照一并登记：`session.list` 读前者，`submit_prompt` 的 `load` 前置读后者。
+        // 快照的状态取摘要自己的状态、版本固定 1（3.2 的版本冲突用例另用 `push_command` 等素材构造）。
+        let id = summary.session_id().as_str().to_owned();
+        let snapshot = SessionSnapshot {
+            session: acp_core::model::Session::try_new(
+                acp_core::model::SessionId::new(&id).expect("session id"),
+                OwnedSessionRef::new(acp_core::model::SessionId::new(&id).expect("session id")),
+                None,
+                acp_core::model::AgentRef::try_new(
+                    acp_core::model::AgentId::new("codex").expect("agent id"),
+                    "Codex",
+                )
+                .expect("agent ref"),
+                summary.state(),
+                acp_core::model::ResourceOrigin::Local,
+                None,
+                acp_core::model::Version::new(0),
+                acp_core::model::Timestamp::new("2026-09-17T12:10:00.123Z").expect("timestamp"),
+                acp_core::model::Timestamp::new("2026-09-17T12:10:00.123Z").expect("timestamp"),
+                None,
+            )
+            .expect("会话行合法"),
+            origin_epoch: acp_core::model::OriginEpoch::new(EPOCH).expect("origin epoch"),
+            head: GlobalCursor::new(
+                acp_core::model::ServerEpoch::new(EPOCH).expect("server epoch"),
+                acp_core::model::Sequence::new(1).expect("sequence"),
+            ),
+        };
+        let mut state = self.lock();
+        state.snapshots.insert(id, snapshot);
+        state.sessions.push(summary);
     }
 
     fn push_event(&self, session: &str, record: OwnedEventRecord) {
@@ -167,10 +203,16 @@ impl SessionStore for CommandStore {
     /// 会话行的窄读取（`session_version` 的唯一来源）。替身没有会话行，因此恒为 `None`（版本 0）。
     async fn load(
         &self,
-        _session: &acp_core::model::SessionId,
+        session: &acp_core::model::SessionId,
     ) -> Result<Option<acp_core::model::SessionSnapshot>, PortError> {
         self.counters.load.fetch_add(1, Ordering::SeqCst);
-        Ok(None)
+        Ok(self
+            .state
+            .lock()
+            .expect("存储替身锁")
+            .snapshots
+            .get(session.as_str())
+            .cloned())
     }
 
     /// 命令面不该有任何写入：「零副作用」判据由用例的 `commits() == 0` 断言承担。
@@ -459,7 +501,11 @@ impl SessionEndpoint for ConfigEndpoint {
         _request: PromptRequest,
         _at: Timestamp,
     ) -> Result<TurnAccepted, PortError> {
-        panic!("命令面未触及")
+        // mutation 的接受链路真的会派发到后端：回一个确定的新 turn，让「已接受 + 带 turn」可断言。
+        // 这不是"未触及"—— prompt 路径的终点就在这里，WP3 的 3.1 要的正是这一跳。
+        Ok(TurnAccepted {
+            turn: acp_core::model::TurnId::new(TEST_PROMPT_TURN).expect("turn id"),
+        })
     }
 
     async fn cancel(&self, _turn: Option<acp_core::model::TurnId>) -> Result<(), PortError> {
@@ -770,6 +816,8 @@ const TURN: &str = "6601828b-3eca-4cec-9a58-18ae1e0a3a14";
 const REQUEST: &str = "4c4dafda-dd98-442e-8d55-252b75bac72d";
 /// 另一个 `requestId`（连接期去重的键含 `requestId`：换它是一条新命令）。
 const OTHER_REQUEST: &str = "4c4dafda-dd98-442e-8d55-252b75bac72e";
+/// 后端派发返回的固定 turn id（替身 prompt 的产物）。
+const TEST_PROMPT_TURN: &str = "9f4c2d10-6b1e-4a3f-8c7d-2e5b9a1c4f60";
 const CONNECTION_A: &str = "2de54db7-74ae-4c21-88e3-05df0dc2e637";
 const CONNECTION_B: &str = "3de54db7-74ae-4c21-88e3-05df0dc2e638";
 /// 第三条连接（限流按设备计数：它属于另一台设备）。
@@ -2260,13 +2308,16 @@ async fn different_command_families_do_not_share_the_quota() {
         bodies(&other, "error").is_empty(),
         "interact 族不得因 observe 族用尽而被限流"
     );
-    assert_eq!(
-        bodies(&other, "command.result")[0]
-            .get("error")
-            .and_then(|error| error.get("code"))
-            .and_then(|code| code.as_str()),
-        Some(ErrorCode::InternalUnavailable.as_str()),
-        "mutation 的接受路径不在本工作包内（显式失败关闭，不是限流）"
+    // 只断言「不是限流」——不绑死具体是哪种业务拒绝（3.1 落地后 prompt 会走真实链路，
+    // 在替身环境下回 `session.not_found`）。绑死实现细节的断言在实现推进时必然碎。
+    let code = bodies(&other, "command.result")[0]
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(|code| code.as_str());
+    assert_ne!(
+        code,
+        Some(ErrorCode::ResourceRateLimited.as_str()),
+        "两族额度互不挤占；被拒也不能是限流"
     );
 }
 
@@ -2487,4 +2538,43 @@ async fn the_same_query_on_another_connection_reads_again() {
         1,
         "离开注册表的连接的限流窗口与去重表必须被回收，只留下正在派发的这一条"
     );
+}
+
+/// **WP3 的硬门槛**：mutation 的首响应必须是 `accepted`，且 `result`/`terminalEventId` 均为 `null`。
+///
+/// 这条用例的存在本身就是教训：上一次交付（`SyncCmdWP3b`）实现了 30 条 mutation 相关用例，
+/// 却**没有一条**断言过 `accepted` —— 接受路径一次都没被真正走过。因此本用例是本包的验收门槛，
+/// 不是普通覆盖。
+#[tokio::test]
+async fn a_prompt_mutation_is_accepted_without_any_business_result() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.prompt"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let out = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        MESSAGE_ID,
+        1,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            serde_json::json!({ "content": [{ "type": "text", "text": "你好" }] }),
+        ),
+    )
+    .await;
+
+    let result = &bodies(&out, "command.result")[0];
+    assert_eq!(
+        result["status"], "accepted",
+        "mutation 首响应必须是 accepted，实际 {result}"
+    );
+    // 3.1 的要求：业务结果与终态都不在首响应里。
+    assert_eq!(result["result"], serde_json::Value::Null);
+    assert_eq!(result["terminalEventId"], serde_json::Value::Null);
+    assert_eq!(result["error"], serde_json::Value::Null);
 }
