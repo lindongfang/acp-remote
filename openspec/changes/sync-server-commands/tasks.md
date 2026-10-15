@@ -29,8 +29,8 @@
 
 ## 4. 文档同步（本变更自带）
 
-- [ ] 4.1 更新 `docs/SYNC_PROTOCOL.md` §10.3/§11 的实绩写回（命令面与事件面已落地），保持「计划」类措辞只用于仍未实现的部分。完成判据：`npm run check:docs`。
-- [ ] 4.2 更新 `docs/MODULE_ARCHITECTURE.md` §3/§4.9 的 `[现状]` 与 `README.md` 的「仓库当前状态」与 `server` 行。完成判据：`npm run check:docs`。
+- [ ] 4.1 更新 `docs/SYNC_PROTOCOL.md` §10.3/§11 的实绩写回（命令面与事件面已落地），保持「计划」类措辞只用于仍未实现的部分。**并包含 §6.2 与 §6.3 的降级口径**（已裁决：本期不补 core 读面）：§9.4 的资源表与 §11.5 的 `session.read` 行要写明 —— 本期服务端对 `turns`/`pending_interactions`/`capabilities` 与 imported 会话的明细资源一律回 `capability.unsupported_by_broker`，客户端 MUST NOT 把该拒绝当成「会话无内容」或「已到最早一条」。完成判据：`npm run check:docs`。
+- [ ] 4.2 更新 `docs/MODULE_ARCHITECTURE.md` §3/§4.9 的 `[现状]` 与 `README.md` 的「仓库当前状态」与 `server` 行。**并更新 `docs/FRONTEND_DESIGN.md`**：写明 PWA 本期**不展示** `turns`/`pending_interactions`/`capabilities` 三类明细资源与 imported 会话明细（§6.2/§6.3 的已裁决降级），并说明它不影响其余三类明细（`messages`/`config_options`/`history`）。完成判据：`npm run check:docs`。
 
 ## 5. 协议级端到端验收（WP4）
 
@@ -49,6 +49,13 @@
   - `capabilities`：`CapabilitySet`（`crates/core/src/model/backend.rs:71`）是一个 `BTreeSet<Capability>`，给不出协议要求的 `agentCapabilities` 与 `brokerAdditions` 两个字段；
   - `pending_interactions`：`PendingInteraction` 没有协议要求的 `schema` 对象。
 
-  当前处置（WP2）：请求这三者一律显式回 `capability.unsupported_by_broker`（已登记的错误码），**不静默省略、不伪造字段** —— 符合 `AGENTS.md` §4「无法安全处理的能力必须明确返回不支持」。完成判据：二选一 —— 要么在 core 读面补齐这三类形状（属独立变更：动 `core::model`、wire 值对象与 `schemas/`），要么在产品层面确认「PWA 本期不展示 turns/interactions/capabilities」并在 `docs/SYNC_PROTOCOL.md` 与前端设计文档写清该降级。**背景**：由 WP2 的作者在执行中核实并上报（主代理已独立复核 `Turn` 与 `CapabilitySet` 的字段）。
+  当前处置（WP2）：请求这三者一律显式回 `capability.unsupported_by_broker`（已登记的错误码），**不静默省略、不伪造字段** —— 符合 `AGENTS.md` §4「无法安全处理的能力必须明确返回不支持」。**背景**：由 WP2 的作者在执行中核实并上报（主代理已独立复核 `Turn` 与 `CapabilitySet` 的字段）。
+
+  **已裁决（2026-10-15，用户确认走 (b)）**：本期**不**补齐 core 读面 —— 确认「PWA 本期不展示 `turns`/`pending_interactions`/`capabilities`」，由文档如实写明该降级；「补齐 core 读面」作为后续输入登记（见下）。理由：补齐 `Turn.createdAt` 不只是加字段，而是要先决定它的产品语义（turn 的 `createdAt` 取什么时刻），且会把变更② 的范围从「命令面」扩到 core 模型与 wire 值对象。
+
+  因此本条的**完成判据改为**（由 §4.1 的文档包执行，不再是「二选一」）：
+  - `docs/SYNC_PROTOCOL.md` 在 §9.4 的资源表与 §11.5 的 `session.read` 行写明：本期服务端对 `turns`/`pending_interactions`/`capabilities` 一律回 `capability.unsupported_by_broker`，客户端 MUST NOT 把该拒绝当成会话无内容；
+  - `docs/FRONTEND_DESIGN.md` 写明 PWA 本期不展示这三类资源（以及 imported 会话明细，见 6.3），并说明它不影响其余五类；
+  - 后续输入登记：新增 core 读面（`Turn.createdAt` 的产品语义、`CapabilitySet` 的 `agentCapabilities`/`brokerAdditions` 拆分、`PendingInteraction.schema`）属**独立变更**，需先定语义再动模型。
 
 - [ ] 6.3 **（WP2 检视指出的第三处缺口：imported 会话的明细资源未回源）** `docs/SYNC_PROTOCOL.md:1368` 规定 imported 会话的明细资源应**回源 Owner**，而当前实现（`crates/server/src/sync/command/query.rs:408-412`）对非自有引用一律回 `capability.unsupported_by_broker`。与 6.2 不同的是：6.2 是 core 给不出形状，本条是**回源通道缺失**（需要 `node_link` 的出站客户端，而 `node-link-client` 尚未落地，`server::sync` 也不得调用 `server::node_link`）。完成判据：与 4.9 同口径登记 —— 要么在出站客户端落地后接通，要么在产品层面确认本期 PWA 不展示 imported 会话明细并在文档写明。**背景**：由 WP2 的独立检视发现（主代理确认它未进 §6 原有清单）。

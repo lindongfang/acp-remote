@@ -21,6 +21,7 @@
 | WP2 | 命令管线骨架与查询类命令（覆盖 `sync-command-handling`「查询命令同步完成」「逐命令的 scope 授权与零副作用拒绝」「命令速率限流与超限关闭」）：命令解码分派、授权先于读取、5 条查询命令、结果超限显式失败、限流计数与 `4429` | code:WP1（事件轨道提供诊断日志口径） | wp-coder | `crates/server/src/sync/command/`, `crates/server/src/sync/mod.rs`（仅追加模块声明行） | patch + 「管线顺序与 §11.2 的逐条对应、授权先于读取的证据、限流按设备与命令族计数的实现、结果超限的判定点」 | 主检出 `cargo test -p server`；`cargo clippy … -D warnings` |
 | WP3 | mutation 的接受/幂等/终态（覆盖 `sync-command-handling`「mutation 先接受后终态」「命令幂等与冲突判定」「乐观并发控制的版本冲突」「终态观察者随连接生存」）：7 条 mutation 的接受路径、`(deviceId, requestId)` 幂等与冲突判定（用 ACPR-CJ1 比较语义）、`expectedVersion` 冲突、终态观察者与断开取消 | code:WP2（命令管线骨架） | wp-coder | `crates/server/src/sync/command/`（同一模块目录，见 Merge Order） | patch + 「幂等键的落点、冲突判定的比较方式、观察者的所有者与取消路径、与既有 `owned_command` 的衔接」 | 主检出 `cargo test -p server`；`cargo clippy … -D warnings` |
 | WP4 | 端到端验收：脚本化客户端对真实 Daemon 派发命令并观察终态（覆盖两个能力的跨命令面：`accepted` → 领域事件 → 终态、未授权零副作用、幂等重发、限流、事件视图字段与原文保真） | code:WP3 | wp-tester | `crates/app/tests/sync_commands_e2e.rs`, `crates/app/tests/support/sync.rs`（前置变更已建该文件，本变更追加命令相关方法） | patch + 断言清单与实测输出 | 主检出 `cargo test -p app --test sync_commands_e2e` |
+| WP5 | 文档同步（任务 4.1/4.2）：按实绩写回协议与模块文档，**并写明 §6.2/§6.3 的已裁决降级**（本期不展示 `turns`/`pending_interactions`/`capabilities` 与 imported 会话明细） | none（与实现无代码依赖；但**必须最后合入**，否则写回的“实绩”早于事实） | wp-coder | `docs/SYNC_PROTOCOL.md`, `docs/MODULE_ARCHITECTURE.md`, `docs/FRONTEND_DESIGN.md`, `README.md` | patch + 「每处『已落地』断言的证据文件:行」+「刻意保留为『尚未实现』的清单」 | 主检出 `npm run check:docs` 与 `npm run check:drift` |
 
 ## Merge Order
 
@@ -30,6 +31,7 @@
 | 2 | WP2 | 与 WP1 在 `sync/mod.rs` 重叠（各追加模块声明行） | 重跑 `cargo test -p server`（WP1 已改该文件） |
 | 3 | WP3 | 与 WP2 写范围重叠（同一 `sync/command/` 目录：WP2 建骨架与查询命令，WP3 加 mutation） | 重跑 `cargo test -p server`（WP2 已改该目录） |
 | 4 | WP4 | 依赖 WP3 的公开面；写范围仅 `crates/app/tests/`，与前三者不重叠 | `cargo test -p app --test sync_commands_e2e` |
+| 5 | WP5 | 写范围仅 `docs/` 与 `README.md`，与实现包不重叠；但**必须最后合入** —— 它写回的是「实绩」，早于实现合入就会把计划写成事实 | `npm run check:docs` 与 `npm run check:drift` |
 
 说明：WP2 与 WP3 在同一模块目录内，必须串行（WP2 先建命令管线的分发与查询路径，WP3 在此基础上加 mutation 与幂等）。这是**同一模块的两半**，不是可以拆开并行的两块。
 
@@ -51,6 +53,7 @@
 | WP2 | reviewer | 授权是否真在读取之前；查询命令是否可能返回 `accepted`；结果超限是否可能截断后当完整结果返回；限流是否按设备与命令族计数、连续超限是否才关连接；是否存在 `unwrap()` | 同上 |
 | WP3 | reviewer | 幂等是否跨重连存活且不被提前清理；冲突判定是否用语义比较（键顺序不同不得判冲突）；`expectedVersion` 冲突是否零副作用；观察者是否在断开时取消、不留 detached task；`uncertain` 是否不被自动重派 | 同上 |
 | WP4 | reviewer | 是否绕过真实路径；是否存在只证明「没抛错」的断言；未授权零副作用与幂等重发是否有独立反例；限流断言是否会在实现漏掉计数时仍通过；测试是否夹带了实现代码 | 同上 |
+| WP5 | reviewer | 每处「已落地」断言是否都有代码或已合入 PR 作证（不得把计划写成事实）；**§6.2/§6.3 的降级是否被如实写明**（不得写成「已支持」也不得省略）；「尚未实现」清单是否与代码一致；是否把未实现项写成与 `docs/` 其他章节冲突的口径 | 同上 |
 
 ## Main E2E
 
