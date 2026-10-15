@@ -122,18 +122,18 @@ async function bundlePage() {
  * （脚本数据状态对 `<` 有专门的处理规则），当独立文件加载更接近真实页面的加载路径。
  */
 function startServer(html, bundle) {
-  // 本轮**最后一次** WebSocket 升级请求里 `Sec-WebSocket-Protocol` 的原始值。
+  // 本轮**最后一次** WebSocket 升级请求里的两件事：请求行里的路径与 `Sec-WebSocket-Protocol`
+  // 的原始值。
   //
-  // 这是「升级请求确实声明了权威 subprotocol」唯一能被观察到的地方：升级是浏览器
-  // 内核发出的 HTTP 请求，页面里看不到自己的出站头（`WebSocket.protocol` 只在
-  // 服务端**选择**了某个 subprotocol 之后才非空，缺失该头时两边都不留痕）。
-  // 于是由 Node 侧的服务端记录原始请求头，页面侧再取回来断言。
-  let observedSubprotocol = null;
+  // 这是这两件事唯一能被观察到的地方：升级是浏览器内核发出的 HTTP 请求，页面里看不到自己的
+  // 出站头与请求行（`WebSocket.protocol` 只在服务端**选择**了某个 subprotocol 之后才非空，
+  // 缺失该头时两边都不留痕）。于是由 Node 侧的服务端记录原始请求，页面侧再取回来断言。
+  let observedUpgrade = { path: null, subprotocol: null };
   const upgradedSockets = new Set();
   const server = createServer((request, response) => {
     if ((request.url ?? "").startsWith("/observed-upgrade-headers")) {
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({ subprotocol: observedSubprotocol }));
+      response.end(JSON.stringify(observedUpgrade));
       return;
     }
     if ((request.url ?? "").startsWith("/bundle.js")) {
@@ -149,7 +149,12 @@ function startServer(html, bundle) {
   server.on("upgrade", (request, socket, head) => {
     void head;
     const requested = request.headers["sec-websocket-protocol"];
-    observedSubprotocol = typeof requested === "string" ? requested : null;
+    observedUpgrade = {
+      // 请求行里的路径（`GET /sync/v1 HTTP/1.1`）：让「出站地址的权威端点」能从**真实连接**
+      // 上被断言，而不是只断言源码里的常量。
+      path: typeof request.url === "string" ? request.url : null,
+      subprotocol: typeof requested === "string" ? requested : null,
+    };
     const key = request.headers["sec-websocket-key"];
     if (typeof key !== "string") {
       socket.destroy();

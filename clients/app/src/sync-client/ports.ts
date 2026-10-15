@@ -166,7 +166,35 @@ export interface SocketPort {
   /** 发送一条 JSON 文本。 */
   send(text: string): void;
   close(code: number, reason: string): void;
+  /**
+   * 服务端在升级握手里**实际选中**的子协议；`open` 之前（或服务端未选中）是空串。
+   *
+   * 为什么协商结果必须经端口读出来：`WebSocket.protocol` 是浏览器暴露这一事实的**唯一**位置——
+   * 服务端不选 subprotocol 时升级仍然成功，既没有 error 事件也没有非 1000 的关闭码，因此
+   * 「未选中」与「网络断开」在 socket 层完全同形。判定留给连接层（`SyncConnection.#onOpen`
+   * 拿它与自己声明的列表比对，见 `docs/SYNC_PROTOCOL.md` §3.1「服务端必须选择该 subprotocol，
+   * 否则客户端终止连接」），假 socket 因此可以把它设成任意值来证伪这条判定。
+   */
+  negotiatedSubprotocol(): string;
+}
+
+/**
+ * 建立一条 socket 的输入。
+ *
+ * `protocols` 是**本客户端在升级请求里声明的子协议列表**（§3.1：声明端点约定的 subprotocol，
+ * 服务端按它做 upgrade 白名单）。它作为端口入参而不是让实现自己取常量，是为了让「这一次连接
+ * 到底声明了什么」成为**可断言**的事实：假 socket 记录它收到的入参，于是「漏声明」与
+ * 「声明了别的」都能在测试里变红——只记 `url` 时两者都看不出来。
+ *
+ * 可选：§3.1 的 v1 只约定**一条**子协议，「不声明」不是合法取值，因此缺席时实现按约定声明
+ * （见 `openWebSocket`），不会出现一条没有声明的连接。生产路径由组合根显式给出
+ * （`SyncClientOptions.subprotocols` 是必填字段，组合根不能忘）。
+ */
+export interface SocketOpenInput {
+  readonly url: string;
+  readonly protocols?: readonly string[];
+  readonly handlers: SocketHandlers;
 }
 
 /** 连接工厂：由组合根注入（Web 实现见 `socket.web.ts`，测试注入假 socket）。 */
-export type SocketFactory = (input: { readonly url: string; readonly handlers: SocketHandlers }) => SocketPort;
+export type SocketFactory = (input: SocketOpenInput) => SocketPort;

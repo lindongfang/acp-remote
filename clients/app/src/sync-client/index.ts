@@ -40,14 +40,22 @@ export type {
   RandomPort,
   SocketFactory,
   SocketHandlers,
+  SocketOpenInput,
   SocketPort,
   TranscriptCodec,
   TranscriptField,
 } from "./ports";
 
 // ── 连接与握手 ─────────────────────────────────────────────────────────────
-export type { AuthenticatedInfo, ClientBlockCause, SyncClientEvent, SyncConnectionOptions } from "./connection";
+export type {
+  AuthenticatedInfo,
+  ClientBlockCause,
+  IncompatibleReason,
+  SyncClientEvent,
+  SyncConnectionOptions,
+} from "./connection";
 export {
+  DECLARED_SUBPROTOCOLS,
   REQUIRED_FEATURES,
   SESSION_HISTORY_FEATURE,
   SUPPORTED_FEATURES,
@@ -58,6 +66,7 @@ export {
   compareCursors,
   isRetryableCloseCode,
   sortedFeatures,
+  syncSocketUrl,
 } from "./connection";
 export { SyncClient, SnapshotRepository } from "./client";
 export type { CompletedSnapshot, DispatchRecord, SyncClientOptions } from "./client";

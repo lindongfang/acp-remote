@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SyncClient } from "./client";
+import { DECLARED_SUBPROTOCOLS } from "./connection";
 import type { SyncClientEvent } from "./connection";
 import type { CommandMessage, Cursor, Uuid } from "../protocol";
 import {
@@ -81,6 +82,7 @@ function buildClient(input: { readonly resumeCursor?: Cursor | null; readonly om
     transcript: new FakeTranscript(),
     digest: fakeDigest(),
     openSocket: sockets.open,
+    subprotocols: DECLARED_SUBPROTOCOLS,
     resumeCursor: input.resumeCursor ?? null,
     clock,
     onEvent: (event) => {
@@ -209,6 +211,25 @@ describe("R12：阻断后拒绝自动重连", () => {
     expect(context.client.blocked).toBeNull();
     context.client.connect();
     expect(context.sockets.sockets).toHaveLength(2);
+  });
+
+  it("子协议未被接受时门面同样置位阻断并拒绝再连接（不落回普通重连）", async () => {
+    const context = buildClient();
+    context.client.connect();
+    // 服务端没有选中约定的子协议：升级成功、没有 error 事件、也没有非 1000 的关闭码，
+    // 客户端只能自己在 `open` 后核对（§3.1）。
+    context.sockets.latest.negotiated = "";
+    context.sockets.latest.open();
+    await waitUntil(() => context.client.blocked !== null, "门面进入阻断态");
+
+    // 反例：若把这件事当普通断网，门面会停在「可重连」并让状态层安排退避重连 → 断言变红。
+    expect(context.client.blocked).toBe("version_incompatible");
+    expect(context.events.find((event) => event.kind === "blocked")).toMatchObject({
+      cause: "version_incompatible",
+      reason: "subprotocol_not_selected",
+    });
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+    expect(() => context.client.connect()).toThrow(/阻断/);
   });
 });
 

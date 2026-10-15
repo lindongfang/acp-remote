@@ -20,6 +20,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SyncClient } from "./client";
+import { DECLARED_SUBPROTOCOLS } from "./connection";
 import type { TranscriptCodec } from "./ports";
 import type { SessionPromptCommand } from "../protocol";
 import {
@@ -93,6 +94,7 @@ function setup(): Harness {
     transcript: TRANSCRIPT,
     digest: fakeDigest(),
     openSocket: sockets.open,
+    subprotocols: DECLARED_SUBPROTOCOLS,
     resumeCursor: null,
     clock: new FakeClock(1_700_000_000_000),
     onEvent: () => undefined,

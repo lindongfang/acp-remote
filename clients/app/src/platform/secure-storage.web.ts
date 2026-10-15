@@ -20,13 +20,17 @@
  * v1 只交付 Web：本文件是唯一的身份实现，**不写** `.native.ts`（`tasks.md` 2.6）。
  */
 
+import type { ByteArray } from "./transcript";
 import {
   DEVICE_IDENTITY_STORE,
   SecureStorageError,
   type DeviceIdentity,
   type DeviceIdentityPort,
-} from "./secure-storage";
-import type { ByteArray } from "./transcript";
+} from "./secure-storage.shared";
+
+// 转出共享声明：`platform/index.ts` 在 Web 平台从 `./secure-storage` 取到的就是本文件，
+// 因此这些符号必须在这里可见（见 `secure-storage.shared.ts` 的说明）。
+export * from "./secure-storage.shared";
 
 /** IndexedDB 数据库名（本应用只用一个库，便于整体清除）。 */
 const DATABASE_NAME = "acp-remote-secure-v1";

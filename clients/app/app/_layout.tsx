@@ -15,6 +15,12 @@
  *
  * `store` 在设备身份或配对记录缺失时**不是** `null`，而是状态机停在 `unpaired` 的一个真实
  * store：页面据此呈现「尚未配对」，而不是伪造空目录（那会与 R15 的第一种空态混淆）。
+ *
+ * ## 路由形态
+ *
+ * 下方的 `Stack` 是 Expo Router 默认的 Web 链接：路由按文件约定走**正常路径**
+ * （`/`、`/pair`、`/hosts`、`/dir/<alias>`、`/session/<id>`），地址里的片段不参与路由命中，
+ * 只承载配对二维码的内容（design D4）。核实方式与产物证据见 `src/routing.test.ts` 的文件头。
  */
 
 import { Stack } from "expo-router";

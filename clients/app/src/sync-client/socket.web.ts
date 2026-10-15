@@ -12,17 +12,20 @@
  * 实现在本文件（唯一触碰 `WebSocket` 的地方）。
  */
 
-import type { SocketHandlers, SocketPort } from "./ports";
-import { SYNC_WS_SUBPROTOCOL } from "./connection";
+import type { SocketOpenInput, SocketPort } from "./ports";
+import { DECLARED_SUBPROTOCOLS } from "./connection";
 
 /** 建立一条 WebSocket 连接。 */
-export function openWebSocket(input: { readonly url: string; readonly handlers: SocketHandlers }): SocketPort {
+export function openWebSocket(input: SocketOpenInput): SocketPort {
   // 函数体内引用全局：模块求值期不触碰它。
   //
   // subprotocol 是升级请求的一部分（`docs/SYNC_PROTOCOL.md` §3.1「客户端必须请求 WebSocket
   // subprotocol `acp-remote.sync.v1.json`」，服务端按它做 upgrade 白名单）：漏传时服务端直接
-  // 拒绝升级，连接永远起不来。字面量只有 `connection.ts` 的 `SYNC_WS_SUBPROTOCOL` 一处。
-  const socket = new WebSocket(input.url, SYNC_WS_SUBPROTOCOL);
+  // 拒绝升级，连接永远起不来。取值只有 `connection.ts` 的 `SYNC_WS_SUBPROTOCOL` /
+  // `DECLARED_SUBPROTOCOLS` 一处；调用方没给出声明时按约定声明（v1 只约定这一条），
+  // 而不是建立一条没有声明的连接。
+  const protocols = input.protocols ?? DECLARED_SUBPROTOCOLS;
+  const socket = new WebSocket(input.url, [...protocols]);
   const handlers = input.handlers;
 
   socket.addEventListener("open", () => {
@@ -49,6 +52,10 @@ export function openWebSocket(input: { readonly url: string; readonly handlers: 
     },
     close(code: number, reason: string): void {
       socket.close(code, reason);
+    },
+    // 原样转发内核的协商结果：未选中（或尚未 open）时是空串。判定在连接层，本层不做判断。
+    negotiatedSubprotocol(): string {
+      return socket.protocol;
     },
   };
 }

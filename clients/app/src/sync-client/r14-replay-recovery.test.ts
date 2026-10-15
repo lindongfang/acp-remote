@@ -29,6 +29,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SyncConnection } from "./connection";
+import { DECLARED_SUBPROTOCOLS } from "./connection";
 import type { SyncClientEvent } from "./connection";
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
@@ -185,6 +186,7 @@ function setup(): Harness {
         nulJoinedUtf8: () => new Uint8Array(1),
       },
       openSocket: sockets.open,
+      subprotocols: DECLARED_SUBPROTOCOLS,
       resumeCursor: null,
       clock,
       ledgerFor: () => ledger,

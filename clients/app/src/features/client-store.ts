@@ -36,6 +36,8 @@ import type {
   ElicitationRespondPayload,
   EventMessage,
   ModeState,
+  PairingQrPayload,
+  PublicError,
   SessionReadInclude,
   SessionReadResult,
   SessionSummary,
@@ -53,7 +55,7 @@ import {
   toLoadedHistoryPage,
   toLoadedPage,
 } from "../sync-client";
-import type { CommandRecord, ConnectionEvent, ConnectionMachineState } from "../state";
+import type { BlockingCause, CommandRecord, ConnectionEvent, ConnectionMachineState } from "../state";
 import {
   IllegalConnectionTransition,
   applyCommandResult,
@@ -116,8 +118,21 @@ import type {
 import { buildDirectoryDetailModel, buildDirectoryPageModel, buildSessionRowsByAlias } from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
-import type { PairingPageModel } from "./pairing-model";
-import { initialPairingPageModel } from "./pairing-model";
+import type { PairingPageModel, PairingPollResult, PairingWiring } from "./pairing-model";
+import {
+  PAIRING_POLL_INTERVAL_MS,
+  applyClaiming,
+  applyPairingCloseoutFailure,
+  applyPairingFailure,
+  applyPollResult,
+  applyScannedQr,
+  initialPairingPageModel,
+  pairedHostRecordFor,
+  pairedHostWriteFailure,
+  publicErrorForCloseoutFailure,
+  publicErrorForQrInput,
+  publicErrorForTransportFailure,
+} from "./pairing-model";
 
 /**
  * 对话页首屏请求的明细资源。
@@ -506,6 +521,25 @@ export interface ClientStoreOptions {
   readonly identity: ConnectionIdentity;
   /** imported 会话来源节点的展示名。 */
   readonly ownerLabelOf?: (ownerNodeId: string) => string;
+  /**
+   * 配对链路（组合根注入）。
+   *
+   * 未装配时配对用例**明确失败**而不是静默无操作：没有传输就没有配对，让页面停在
+   * 「正在配对」比当场说清楚更糟。测试替身注入它即可完整驱动配对流程（含 claim 与轮询）。
+   */
+  readonly pairing?: PairingWiring | undefined;
+}
+
+/**
+ * 正在进行的一次配对。
+ *
+ * **不进 `ClientState`**：二维码载荷含 `pairingSecret`，而 `ClientState` 是可导出、可快照的
+ * 公开状态（诊断与导出配置都会读它）。载荷只活在仓库的私有字段里，并在已批准或终态时立即
+ * 丢掉（§7.3：成功或终态后清除二维码 payload 与内存中的 secret）。
+ */
+interface PairingSession {
+  readonly qr: PairingQrPayload;
+  cancel: (() => void) | null;
 }
 
 type Listener = () => void;
@@ -522,9 +556,11 @@ export class ClientStore {
   readonly #now: () => number;
   readonly #identity: ConnectionIdentity;
   readonly #ownerLabelOf: (ownerNodeId: string) => string;
+  readonly #pairing: PairingWiring | null;
   readonly #overlayStore = new AgentConnectionOverlayStore();
   readonly #pendingReads = new Map<Uuid, PendingRead>();
   readonly #listeners = new Set<Listener>();
+  #pairingSession: PairingSession | null = null;
   #state: ClientState = initialClientState();
 
   constructor(options: ClientStoreOptions) {
@@ -533,6 +569,7 @@ export class ClientStore {
     this.#now = options.now;
     this.#identity = options.identity;
     this.#ownerLabelOf = options.ownerLabelOf ?? ((ownerNodeId: string) => ownerNodeId);
+    this.#pairing = options.pairing ?? null;
   }
 
   /** 当前状态。 */
@@ -1174,6 +1211,203 @@ export class ClientStore {
   }
 
   /**
+   * 配对页的主用例（页面进页时调用一次）：地址片段里有配对内容就读取并**立即清除**该片段，
+   * 然后进入认领流程；没有内容时不动状态——页面停在输入入口等用户粘贴。
+   *
+   * 片段读取与清除都在组合根（地址栏是平台能力，`AGENTS.md` §6），本方法只消费它的结果。
+   */
+  async startPairingFromAddress(): Promise<void> {
+    const text = this.#pairing?.takeQrTextFromFragment() ?? null;
+    if (text === null) return;
+    await this.#beginPairing(text);
+  }
+
+  /**
+   * 粘贴入口：一段二维码内容（地址 / 片段 / 载荷）→ 结构校验 → 认领 → 轮询 → 已配对。
+   *
+   * 结构校验不过时**明确失败且不发任何请求**（不尽力解析）；配对进行中重复提交被忽略，
+   * 否则会出现两条并行的 claim 与轮询。
+   */
+  async submitPairingQrText(text: string): Promise<void> {
+    if (this.#pairing === null) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, {
+          code: "internal.unavailable",
+          message: "配对链路未装配：本页面拿不到配对传输。",
+          retryable: true,
+          details: {},
+        }),
+      });
+      return;
+    }
+    if (this.#pairingSession !== null) return;
+    await this.#beginPairing(text);
+  }
+
+  /** 结构校验 → claim → 首次轮询。校验不过时在这里收口，绝不发请求。 */
+  async #beginPairing(text: string): Promise<void> {
+    const wiring = this.#pairing;
+    if (wiring === null) return;
+
+    let qr: PairingQrPayload;
+    try {
+      qr = wiring.transport.readQrPayload(text);
+    } catch (error) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, publicErrorForQrInput(error)),
+      });
+      return;
+    }
+
+    // 载荷从这一刻起由私有字段持有；`applyScannedQr` 只把**公开**的主机出示信息写进状态。
+    this.#pairingSession = { qr, cancel: null };
+    this.#commit({ ...this.#state, pairing: applyClaiming(applyScannedQr(this.#state.pairing, qr)) });
+
+    // 传输层的两次 await 都必须在本方法里收口：端口约定用返回值表达业务失败，但**抛出**
+    // （网络不可达、响应不是 JSON、设备身份绑在另一个来源）同样是真实结果。让它冒泡会留下
+    // 一个非 null 的 `#pairingSession`：`isPairingInFlight` 恒真 → 输入框一直禁用、重复提交被
+    // 提前 return、`canRestart` 为 false、被取消的定时器也不会重排——页面里没有任何恢复路径。
+    let claimError: PublicError | null;
+    try {
+      claimError = await wiring.transport.claim({ qr, canonicalOrigin: qr.canonicalOrigin });
+    } catch (error) {
+      this.#endPairing();
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, publicErrorForTransportFailure(error)),
+      });
+      return;
+    }
+    if (this.#pairingSession === null) return;
+    if (claimError !== null) {
+      this.#endPairing();
+      this.#commit({ ...this.#state, pairing: applyPairingFailure(this.#state.pairing, claimError) });
+      return;
+    }
+    this.#schedulePoll(qr);
+  }
+
+  /** 安排下一次状态轮询；会话已被取代时不再安排。 */
+  #schedulePoll(qr: PairingQrPayload): void {
+    const wiring = this.#pairing;
+    const session = this.#pairingSession;
+    if (wiring === null || session === null || session.qr.pairingId !== qr.pairingId) return;
+    session.cancel = wiring.schedule(PAIRING_POLL_INTERVAL_MS, () => {
+      void this.#pollOnce(qr);
+    });
+  }
+
+  /**
+   * 一次状态轮询：`pending_confirmation` 继续等，`approved` 收口成已配对，终态与错误停止轮询。
+   *
+   * `requestNonce` 每次轮询换新（§7.3）：随机源由组合根给出，feature 层不持有 CSPRNG。
+   */
+  async #pollOnce(qr: PairingQrPayload): Promise<void> {
+    const wiring = this.#pairing;
+    const session = this.#pairingSession;
+    if (wiring === null || session === null || session.qr.pairingId !== qr.pairingId) return;
+    session.cancel = null;
+
+    // 与 `claim` 同样必须收口：轮询抛出时留下「进行中」的状态会让输入框一直禁用、
+    // 也不会有下一次轮询。策略与 claim 一致——**失败即结束**（见 `#endPairing` 的注释）：
+    // 页面因此拿到可读、可重试的 `failed`（输入框解禁、出现「重新扫码」），
+    // 而不是把含秘密的载荷无限期留在内存里等一个可能永远不会好的网络。
+    let result: PairingPollResult;
+    try {
+      result = await wiring.transport.poll({ qr, requestNonce: wiring.nextRequestNonce() });
+    } catch (error) {
+      if (this.#pairingSession === null || this.#pairingSession.qr.pairingId !== qr.pairingId) return;
+      this.#endPairing();
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, publicErrorForTransportFailure(error)),
+      });
+      return;
+    }
+    if (this.#pairingSession === null || this.#pairingSession.qr.pairingId !== qr.pairingId) return;
+
+    if (result.kind === "pending_confirmation") {
+      this.#commit({ ...this.#state, pairing: applyPollResult(this.#state.pairing, result) });
+      this.#schedulePoll(qr);
+      return;
+    }
+    if (result.kind === "approved") {
+      await this.#completePairing(qr, result);
+      return;
+    }
+    // `terminal` / `error`：停止轮询并丢掉载荷——终态之后 secret 不再有用途（§7.3）。
+    this.#endPairing();
+    this.#commit({ ...this.#state, pairing: applyPollResult(this.#state.pairing, result) });
+  }
+
+  /**
+   * 已批准 → 写入已配对主机记录 → 连接机推进为已配对 → 交给组合根装配并触发连接。
+   *
+   * 顺序是**先落盘再算已配对**：记录写不进去就没有可验证的主机信任根，此时留在 `failed`
+   * 并说明原因，比「已配对但此后每次连接都进身份变化阻断态」可诊断得多（design D2）。
+   * 主机身份与配对模型在同一次 commit 里写，避免渲染出「已配对但主机面板说未配对」的中间帧。
+   */
+  async #completePairing(
+    qr: PairingQrPayload,
+    approved: Extract<PairingPollResult, { readonly kind: "approved" }>,
+  ): Promise<void> {
+    const wiring = this.#pairing;
+    if (wiring === null) return;
+    const record = pairedHostRecordFor(approved, qr.canonicalOrigin);
+    try {
+      await wiring.rememberPairedHost(record);
+    } catch (error) {
+      this.#endPairing();
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, pairedHostWriteFailure(error)),
+      });
+      return;
+    }
+
+    this.#endPairing();
+    this.#commit({
+      ...this.#state,
+      pairing: applyPollResult(this.#state.pairing, approved),
+      host: { address: qr.canonicalOrigin, hostId: approved.hostId, deviceId: approved.deviceId },
+    });
+    // 连接机要求 `unpaired --pair_started--> pairing --pair_succeeded--> disconnected`，
+    // 之后组合根才被允许发起连接：跳过这两步，页面会一直停在「未配对」。
+    this.pairSucceeded();
+    // 收口交给组合根：装配连接并触发一次连接（MUST NOT 停在等待扫码）。
+    try {
+      await wiring.onPaired(record);
+    } catch (error) {
+      // 记录已落盘、连接机已推进、页面已显示「已配对」——收口失败只意味着这条连接没起来，
+      // 因此**不**回退配对结果（那会与主机面板刚显示的主机身份自相矛盾），只把可读原因补上；
+      // 异常也不冒泡成未处理拒绝（这里的调用方是 `void store.submitPairingQrText(...)`）。
+      // 原因走**收口专用**的映射，而不是 `claim` / `poll` 用的通用文案：这一页的阶段仍是
+      // `approved`，引导语说着「配对已完成」，通用文案的「配对请求未能完成」会与它正面对撞。
+      // 恢复路径仍在：连接机此刻是 `disconnected`，组合根的退避重连会再试一次。
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingCloseoutFailure(this.#state.pairing, publicErrorForCloseoutFailure(error)),
+      });
+    }
+  }
+
+  /**
+   * 结束这次配对：取消在途轮询并丢掉含秘密的载荷（§7.3）。
+   *
+   * 传输层**拒绝**（`claim` / `poll` 抛出）时选择「失败即结束」而不是「重排一次轮询」：
+   * 端口用返回值区分业务失败，抛出只说明「这次请求没能完成」，仓库据此分不出「偶发断网」
+   * 与「确定性拒绝」；重排还要求一份重试预算，且会把含 `pairingSecret` 的载荷无限期留在
+   * 内存里。结束会话反而保证页面立刻拿到可读、可重试的 `failed`（输入框解禁、有重新扫码
+   * 入口），而重试一次配对的成本只是一次粘贴。
+   */
+  #endPairing(): void {
+    this.#pairingSession?.cancel?.();
+    this.#pairingSession = null;
+  }
+
+  /**
    * 记录已配对的主机身份。
    *
    * 它是**状态**而不是构造参数：组合根先装配 store、再异步读 IndexedDB 里的设备身份与配对
@@ -1185,15 +1419,30 @@ export class ClientStore {
   }
 
   /**
-   * 配对完成（由配对页在收到 `approved` 后调用）。
+   * 配对完成（由配对用例在写入已配对主机记录后调用）。
    *
    * 连接机要求 `unpaired --pair_started--> pairing --pair_succeeded--> disconnected`，
    * 之后才允许发起连接；跳过这两步的话，后续的 `connect_started` 会被迁移表拒绝，
-   * 页面就会一直停在「未配对」。
+   * 页面就会一直停在「未配对」。阻断态（被撤销 / 身份变化 / 版本不兼容）也接受
+   * `pair_started`，因此重新配对能从这些状态里出来。
    */
   pairSucceeded(): void {
     const pairing = applyConnectionEvent(this.#state.connection, { kind: "pair_started" });
     this.#commit({ ...this.#state, connection: applyConnectionEvent(pairing, { kind: "pair_succeeded" }) });
+  }
+
+  /**
+   * 记录一次「门面拒绝连接」的阻断：组合根尝试连接但 `SyncClient.connect()` 抛出时调用。
+   *
+   * 与 {@link apply} 分开：`apply` 消费的是连接层的**事件流**（每条 `blocked` 都带关闭码），
+   * 而组合根从 `SyncClient.blocked` 拿到的只有**原因**——它不该编一个关闭码来凑形状。
+   * 参数就是连接机的 `BlockingCause`，阻断说明（原因 + 下一步）由连接机唯一给出。
+   *
+   * 适用范围与连接机一致：这条事件只接得住「允许发起连接」的 `disconnected` / `reconnecting`
+   * （`shouldConnect` 的白名单），其余状态由迁移表拒绝、状态保持不变（与其它迟到事件同一口径）。
+   */
+  noteConnectionBlocked(cause: BlockingCause): void {
+    this.#commit(this.#withConnection({ kind: "blocked", cause }));
   }
 
   /** 用户主动处理结果不确定——**唯一**能把它移出列表的动作。 */
