@@ -10,7 +10,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start --web",
-    "export:web": "expo export --platform web",
+    "export:web": "expo export --platform web && node scripts/write-build-version.mjs",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "service": "vite preview",

@@ -10,7 +10,10 @@
 //! - [`route`]：path → 处理器注册表与请求边界中间件（ws/post 端点 + 显式注册的静态面；未注册且不在
 //!   静态面内的 path 一律 404）；
 //! - [`static_ui`]：第三类端点「静态 GET」——前端入口文档、单页回退、内容类型映射与安全响应头
-//!   （资源源经 [`UiAssetSource`] 注入，本层不读磁盘也不嵌入产物）；
+//!   （资源源经 [`UiAssetSource`] 注入；嵌入实现在 [`ui`]，`static_ui` 自身既不读磁盘也不嵌入产物）；
+//! - [`ui`]：前端构建产物的**嵌入资源表**——入口文档、按路径查资源、枚举资源与构建版本，以及发布构建
+//!   检测到占位入口时的失败关闭（`design.md` D2/D3）。资源在**构建期**由 `build.rs` 选定并编入二进制
+//!   （真实产物或树内占位入口），运行期不读磁盘；
 //! - [`host`]、[`proxy`]：`Host` 白名单/`public_origin` 校验与可信代理后的真实对端地址；
 //! - [`origin`]：升级请求的**来源**（HTTP `Origin`）——只如实取得并归一化，不判定它是否与设备绑定一致；
 //! - [`ws`]、[`http`]：上层（`server::node_link`）实现的处理器 trait 与帧/请求值对象；
@@ -50,6 +53,7 @@ pub mod route;
 pub mod shutdown;
 pub mod static_ui;
 pub mod tls;
+pub mod ui;
 pub mod ws;
 
 #[cfg(test)]
@@ -68,6 +72,7 @@ pub use route::{HttpHandler, RouteError};
 pub use shutdown::{Shutdown, ShutdownHandle};
 pub use static_ui::UiAssetSource;
 pub use tls::TlsFile;
+pub use ui::{EmbeddedUi, MissingFrontendBuild, check_release_build};
 pub use ws::{WsConnection, WsError, WsHandler, WsMessage};
 
 /// `daemon.listen` 的内置默认值（`CONFIG_REFERENCE.md` §1）。

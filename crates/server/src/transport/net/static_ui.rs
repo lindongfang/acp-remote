@@ -131,9 +131,9 @@ pub(crate) fn content_type_for_path(path: &str) -> &'static str {
 
 /// 前端构建产物的来源。
 ///
-/// 为什么留这条缝：本工作包不引入嵌入依赖，也不能在编译期假设 `clients/app/dist` 存在（产物不入库，
+/// 为什么留这条缝：处理器不引入嵌入依赖，也不能在编译期假设 `clients/app/dist` 存在（产物不入库，
 /// 根 `.gitignore` 的 `dist/`），因此处理器只依赖这个 trait——单元测试用内存替身实现它，真实实现
-/// （嵌入资源表 + 缺失产物时的占位入口）由后续工作包提供。
+/// （嵌入资源表 + 缺失产物时的占位入口）在 [`crate::transport::net::ui::EmbeddedUi`]。
 ///
 /// 实现必须 `Send + Sync + 'static`：处理器由 router 的 fallback 跨任务共享。
 ///
