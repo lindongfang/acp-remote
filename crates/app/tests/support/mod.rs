@@ -382,6 +382,23 @@ file = "{log}"
         })
     }
 
+    /// 在 `budget` 内等 `event` 至少出现一次，返回它当时的全部条目（超时返回空）。
+    ///
+    /// 为什么需要它：日志经文件落盘读取，而若干事件由**异步 spawn 的任务**产生（例如启动时的首轮
+    /// 清理）。「动作返回后立即读日志」会把任务调度与文件刷新的延迟当成「事件没发生」——在负载高的
+    /// runner 上偶发，在单跑该用例时稳定复现。等待预算本身仍是有判别力的判据：预算必须**远小于**被
+    /// 断言的周期（60s），否则等待就掩盖了「根本没在启动时跑」。
+    pub fn wait_for_event(&self, event: &str, budget: std::time::Duration) -> Vec<Value> {
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            let found = self.log_events(event);
+            if !found.is_empty() || std::time::Instant::now() >= deadline {
+                return found;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     /// 子进程 stderr 内容。
     pub fn stderr(&self) -> String {
         let mut text = String::new();
