@@ -763,6 +763,13 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
 
   // 未配对时不编造主机身份：`hostId` 与 `url` 要等 `start()` 读到配对记录才有意义。
   let sync: SyncClient | null = null;
+  /**
+   * 装配 `sync` 时用的那台主机（标识 + 规范化来源）。
+   *
+   * `SyncClient` 把 `hostId` 与出站 URL 在**构造期**定格，而 `hostId` 会被写进每一次
+   * `auth.client_hello`；因此「能不能复用既有实例」必须按这两个值判定，不能只看实例是否存在。
+   */
+  let assembledHost: { readonly hostId: string; readonly canonicalOrigin: string } | null = null;
 
   const identity: ConnectionIdentity = {
     // 只读转发：连接不存在或未认证时是 `null`，组合根**不**缓存也不编造标识。
@@ -841,13 +848,20 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     });
   }
 
-  /** 只在状态机允许时连接；阻断态下 `connect()` 抛错，此时不再安排下一次。 */
+  /**
+   * 只在状态机允许时连接。
+   *
+   * `sync.connect()` 在门面仍处阻断态时**抛错**（`SyncClient.blocked` 非空）。这不是可以
+   * 静默丢掉的：把异常吞掉会留下「已配对、状态机也说可以连，却一条连接都不建、也没有任何
+   * 原因可见」的不可诊断态。这里把阻断原因交回连接机——它是阻断说明的唯一权威来源。
+   */
   function connectOnce(): void {
     if (!shouldConnect()) return;
     try {
       sync?.connect();
     } catch {
-      return;
+      const cause = sync?.blocked ?? null;
+      if (cause !== null) store.noteConnectionBlocked(cause);
     }
   }
 
@@ -891,18 +905,45 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     // 来源不符即不接上：设备身份绑定在 `canonicalOrigin` 上，身份不得跨来源迁移（§4.5）。
     if (deviceIdentity === null || deviceIdentity.canonicalOrigin !== record.canonicalOrigin) return;
     adoptPairedHost(record, deviceIdentity.canonicalOrigin);
+    // 重新配对是**唯一**的阻断态恢复路径（design D2）：连接机的阻断态已由 `ClientStore` 的
+    // `pairSucceeded()` 解除，门面那一份必须在这里同步解除——`SyncClient.connect()` 在
+    // `blocked` 非空时抛错，而全仓库没有别处调用 `clearBlocking()`。漏掉这一句，
+    // 「配对已完成」之后一条连接都不会建立（`connectOnce` 的异常会把它落成阻断可见）。
+    sync?.clearBlocking();
     connectOnce();
   }
 
   /**
    * 已配对起点齐备 → 装配 `SyncClient` 与两条订阅。
    *
-   * 只在**没有**连接对象时装配：`SyncClient` 每次验签都从已配对记录里读主机公钥
-   * （`PairedHostIdentity`），因此重新配对写入的新公钥对既有连接对象立即可见，
-   * 重建只会丢掉在途连接与恢复点。
+   * **同一台主机的同一来源**上复用既有实例：`SyncClient` 每次验签都从已配对记录里读主机公钥
+   * （`PairedHostIdentity`），因此重新配对写入的新公钥对既有连接对象立即可见，重建只会丢掉
+   * 在途连接与恢复点。
+   *
+   * 主机标识或来源变了就必须重建：`hostId` 与出站 URL 都是构造期定格的，而 `hostId` 会被写进
+   * `auth.client_hello`——沿用旧实例会让 hello 自报旧主机，服务端以 `auth.host_mismatch` 拒绝，
+   * 客户端又映射回身份变化阻断态，同一次页面会话里再出不去。重建时旧订阅、在途退避与旧连接
+   * 一并作废，否则一条状态变化会触发两次重连。
    */
   function adoptPairedHost(record: PairedHostRecord, canonicalOrigin: string): void {
-    if (sync !== null) return;
+    if (
+      sync !== null &&
+      assembledHost?.hostId === record.hostId &&
+      assembledHost.canonicalOrigin === canonicalOrigin
+    ) {
+      return;
+    }
+    if (sync !== null) {
+      unsubscribeStore?.();
+      unsubscribeStore = null;
+      unsubscribeLifecycle?.();
+      unsubscribeLifecycle = null;
+      reconnectCancel?.();
+      reconnectCancel = null;
+      reconnectAttempts = 0;
+      sync.disconnect();
+      sync = null;
+    }
 
     sync = new SyncClient({
       hostId: record.hostId,
@@ -933,6 +974,7 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接。
       if (event.kind === "pagehide") sync?.disconnect();
     });
+    assembledHost = { hostId: record.hostId, canonicalOrigin };
   }
 
   function dispose(): void {
@@ -945,6 +987,7 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     unsubscribeLifecycle = null;
     sync?.disconnect();
     sync = null;
+    assembledHost = null;
   }
 
   return { store, pairing, rememberPairedHost, start, dispose };

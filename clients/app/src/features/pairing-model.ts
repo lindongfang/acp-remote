@@ -228,6 +228,17 @@ export function applyPairingFailure(current: PairingPageModel, error: PublicErro
   return modelFor("failed", { ...current, error });
 }
 
+/**
+ * **收口**失败：已配对记录已落盘、连接机已推进到「已配对」，但组合根没能把连接带起来。
+ *
+ * 与 {@link applyPairingFailure} 刻意分开：这里**不**把阶段退回 `failed`——配对本身已经成功，
+ * 已配对记录也已经写好，声称「配对未完成」会与主机面板已经显示的主机身份自相矛盾；
+ * 失败的只是「把同步连接装配起来」这一步。因此只补上可读原因，阶段与可重来性都保持不变。
+ */
+export function applyPairingCloseoutFailure(current: PairingPageModel, error: PublicError): PairingPageModel {
+  return modelFor(current.phase, { ...current, error });
+}
+
 /** 配对失败的可读原因：`details` 一律留空，避免任何来源的内容经它外溢。 */
 export function publicErrorForQrInput(error: unknown): PublicError {
   if (error instanceof PairingQrInvalidError) {
@@ -237,6 +248,62 @@ export function publicErrorForQrInput(error: unknown): PublicError {
     code: "protocol.schema_invalid",
     message: "内容不是合法的配对二维码载荷。",
     retryable: false,
+    details: {},
+  };
+}
+
+/**
+ * 传输层**拒绝**（`claim` / `poll` 的 promise 抛出，而不是按端口约定返回 `PublicError`）→ 可读原因。
+ *
+ * 与 {@link publicErrorForQrInput} 并列：那是「内容不合法」，这里是「这次请求没能完成」——
+ * 网络不可达、`fetch` 失败、响应不是 JSON、本地存储不可用都会走到这里。
+ *
+ * 设备身份已经绑在**另一个来源**上时（`SecureStorageError.kind === "origin_mismatch"`，
+ * R11 场景 3：身份不得跨来源迁移）给出专门的码与文案：那不是偶发故障，重扫同一个二维码
+ * 也不会好。其余一律落到**可重试**的 `internal.unavailable`——上面这些原因下一次的结果可能不同。
+ *
+ * 平台层的错误只按**结构化形状**识别（`kind` 字段），因此 feature 层不 import `src/platform/`：
+ * 那是被分层测试判死的反向依赖（`src/layers.ts`），而这里需要的只是「来源不符」这一个事实。
+ * `details` 一律留空（同 `publicErrorForQrInput`）：底层错误文本可能带着请求上下文，不能外溢。
+ */
+export function publicErrorForTransportFailure(error: unknown): PublicError {
+  // 「设备身份已绑在另一个来源」只按**结构化形状**识别（`SecureStorageError` 的 `kind` 字段）：
+  // `in` 收窄把 `kind` 读成 `unknown`，因此这里只做一次字符串比较，不假设任何其它形状。
+  const originMismatch =
+    typeof error === "object" && error !== null && "kind" in error && error.kind === "origin_mismatch";
+  if (originMismatch) {
+    return {
+      code: "auth.origin_mismatch",
+      message: PAIRING_ERROR_HINTS["auth.origin_mismatch"] ?? "这个二维码来自另一个地址：请确认扫码对象。",
+      retryable: false,
+      details: {},
+    };
+  }
+  return {
+    code: "internal.unavailable",
+    message: "配对请求未能完成（网络或本地存储不可用）：请重试。",
+    retryable: true,
+    details: {},
+  };
+}
+
+/**
+ * **收口**失败（组合根的 `onPaired` 抛出）→ 可读原因。
+ *
+ * 与 {@link publicErrorForTransportFailure} 刻意分开，尽管码、可重试性与 `details` 三者完全一致：
+ * 走到这条路径时配对**已经完成**——已配对记录已落盘、连接机已推进到「已配对」、页面正在显示
+ * `approved` 阶段的引导语「配对已完成，正在建立同步连接。」。通用文案「配对请求未能完成」在那一刻
+ * 既与事实不符（记录写好了、主机身份也要显示了），又与同页的引导语正面对撞；因此这里只换 `message`，
+ * 说清「配对成了、只有这条同步连接没起来」。
+ *
+ * `_error` 刻意不读取：收口失败的原因（装配连接、读设备身份、本地存储不可用）一律不外溢平台原文，
+ * `details` 因此保持为空对象（同 {@link publicErrorForQrInput}）。
+ */
+export function publicErrorForCloseoutFailure(_error: unknown): PublicError {
+  return {
+    code: "internal.unavailable",
+    message: "配对已完成，但同步连接未能建立（网络或本地存储不可用）：请重试。",
+    retryable: true,
     details: {},
   };
 }

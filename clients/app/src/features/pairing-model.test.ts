@@ -26,12 +26,15 @@ import type { PairingPollResult, PairingTransport, PairingWiring } from "./pairi
 import {
   PAIRING_POLL_INTERVAL_MS,
   PairingQrInvalidError,
+  applyPairingCloseoutFailure,
   applyPairingFailure,
   applyPollResult,
   initialPairingPageModel,
   isPairingInFlight,
   pairedHostRecordFor,
+  publicErrorForCloseoutFailure,
   publicErrorForQrInput,
+  publicErrorForTransportFailure,
 } from "./pairing-model";
 import type { PairedHostRecord } from "../sync-client";
 import type { PairingQrPayload, PublicError } from "../protocol";
@@ -66,6 +69,22 @@ const APPROVED: PairingPollResult = {
   hostPublicKey: APPROVED_HOST_PUBLIC_KEY,
 };
 
+/**
+ * 平台层的「来源不符」错误（`SecureStorageError` 的结构化形状，`kind: "origin_mismatch"`）。
+ *
+ * 这里不 import `src/platform/`：feature 层依赖平台层是分层测试判死的反向依赖
+ * （`src/layers.ts` / `src/layers.test.ts`）。被测的只是「按 `kind` 识别来源不符」这一条形状约定，
+ * 而**真实**的 `SecureStorageError` 走的是 `composition.test.ts` 里那条端到端用例。
+ */
+class OriginMismatchError extends Error {
+  readonly kind = "origin_mismatch";
+
+  constructor() {
+    super("已绑定的规范化来源与本次来源不符");
+    this.name = "SecureStorageError";
+  }
+}
+
 /** 配对接线替身：每一次调用都记账，并按脚本返回 claim / poll 的结果。 */
 class RecordingPairingWiring implements PairingWiring {
   readonly claims: PairingQrPayload[] = [];
@@ -82,8 +101,14 @@ class RecordingPairingWiring implements PairingWiring {
   readText: string | null = null;
   readError: unknown = null;
   claimError: PublicError | null = null;
+  /** `claim` **抛出**（而不是返回 `PublicError`）：网络不可达、来源不符等都走这一支。 */
+  claimThrows: unknown = null;
   results: PairingPollResult[] = [];
+  /** `poll` **抛出**：同上，用来覆盖「请求本身没能完成」的收口。 */
+  pollThrows: unknown = null;
   writeError: unknown = null;
+  /** 组合根的收口（装配连接并触发一次连接）失败：`onPaired` 抛出。 */
+  onPairedError: unknown = null;
   #nonceCounter = 0;
 
   readonly transport: PairingTransport = {
@@ -95,11 +120,13 @@ class RecordingPairingWiring implements PairingWiring {
     claim: async (input: { readonly qr: PairingQrPayload; readonly canonicalOrigin: string }) => {
       this.order.push("claim");
       this.claims.push(input.qr);
+      if (this.claimThrows !== null) throw this.claimThrows;
       return this.claimError;
     },
     poll: async (input: { readonly qr: PairingQrPayload; readonly requestNonce: string }) => {
       this.order.push("poll");
       this.polls.push({ pairingId: input.qr.pairingId, nonce: input.requestNonce });
+      if (this.pollThrows !== null) throw this.pollThrows;
       const index = Math.min(this.polls.length - 1, this.results.length - 1);
       return (
         this.results[index] ?? {
@@ -125,6 +152,7 @@ class RecordingPairingWiring implements PairingWiring {
 
   async onPaired(record: PairedHostRecord): Promise<void> {
     this.order.push("onPaired");
+    if (this.onPairedError !== null) throw this.onPairedError;
     this.onPairedRecords.push(record);
   }
 
@@ -193,8 +221,8 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     await wiring.runScheduledPoll();
 
     // 2.2 记录三字段：主机标识、主机公钥（取自**已批准响应**）、规范化来源。
-    // 反例：抄二维码里的公钥、或只写 `deviceId` 的旧口径 → 这条断言变红。
-    expect(QR.hostPublicKey).not.toBe(APPROVED_HOST_PUBLIC_KEY);
+    // 反例：抄二维码里的公钥（`QR.hostPublicKey` 与下面那条断言里的 `APPROVED_HOST_PUBLIC_KEY`
+    // 刻意不同）、或只写 `deviceId` 的旧口径 → 这条断言变红。
     expect(wiring.written).toEqual([
       { hostId: HOST_ID, publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY, canonicalOrigin: ORIGIN },
     ]);
@@ -259,6 +287,60 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     expect(wiring.written).toHaveLength(0);
   });
 
+  it("claim **抛出**（设备身份绑在别的来源上）：会话结束、落到可读的失败态，且能立刻重试", async () => {
+    const wiring = new RecordingPairingWiring();
+    // 平台层的来源不符：`ensureIdentity` 抛 `origin_mismatch`（R11 场景 3，身份不得跨来源迁移）。
+    wiring.claimThrows = new OriginMismatchError();
+    const store = storeWithPairing(wiring);
+
+    await store.submitPairingQrText(JSON.stringify(QR));
+
+    const page = store.pairingPage();
+    // 反例：若 `claim` 的拒绝直接冒泡（没有收口），阶段会停在 `claiming` → 断言变红。
+    expect(page.phase).toBe("failed");
+    // 反例：若把抛出也当通用故障，这里会拿到 `internal.unavailable` → 断言变红。
+    expect(page.error?.code).toBe("auth.origin_mismatch");
+    expect(page.error?.retryable).toBe(false);
+    // 平台错误的原文（可能带请求上下文）不透传进页面。
+    expect(page.error?.message).not.toContain("已绑定的规范化来源");
+    // 「进行中」必须结束：输入框据此解除禁用，页面出现「重新扫码」入口。
+    // 反例：若会话没结束（`#pairingSession` 仍非 null），两个都会是 false → 断言变红。
+    expect(isPairingInFlight(page)).toBe(false);
+    expect(page.canRestart).toBe(true);
+    expect(wiring.scheduled).toHaveLength(0);
+    expect(wiring.written).toHaveLength(0);
+    expect(store.state.connection.state).toBe("unpaired");
+
+    // 会话真的结束了：同一次页面会话里可以立刻重试（否则这次提交会被提前 return）。
+    await store.submitPairingQrText(JSON.stringify(QR));
+    expect(wiring.claims).toHaveLength(2);
+  });
+
+  it("poll **抛出**（网络中断）：同样结束会话并落到可重试的失败态", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.pollThrows = new Error("Failed to fetch");
+    const store = storeWithPairing(wiring);
+
+    await store.submitPairingQrText(JSON.stringify(QR));
+    await wiring.runScheduledPoll();
+
+    const page = store.pairingPage();
+    // 反例：若 `poll` 的拒绝冒泡，阶段会停在 `pending_confirmation`（「进行中」恒真、
+    // 输入框一直禁用、也没有任何重排）→ 断言变红。
+    expect(page.phase).toBe("failed");
+    expect(page.error?.code).toBe("internal.unavailable");
+    expect(page.error?.retryable).toBe(true);
+    expect(page.error?.message).not.toContain("Failed to fetch");
+    expect(isPairingInFlight(page)).toBe(false);
+    expect(page.canRestart).toBe(true);
+    // 没有残留的定时器等待，也没有落盘任何记录。
+    expect(wiring.scheduled).toHaveLength(0);
+    expect(wiring.written).toHaveLength(0);
+
+    await store.submitPairingQrText(JSON.stringify(QR));
+    expect(wiring.claims).toHaveLength(2);
+  });
+
   it("已配对记录写不进去：明确失败且不触发连接（绝不伪造「已配对」）", async () => {
     const wiring = new RecordingPairingWiring();
     wiring.results = [APPROVED];
@@ -273,6 +355,39 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     expect(store.pairingPage().error?.message).toContain("QuotaExceededError");
     expect(wiring.onPairedRecords).toHaveLength(0);
     expect(store.state.connection.state).toBe("unpaired");
+  });
+
+  it("组合根收口时抛出（连接没起来）：记录仍算已配对，原因落到页面而不是未处理拒绝", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.results = [APPROVED];
+    wiring.onPairedError = new Error("Failed to fetch");
+    const store = storeWithPairing(wiring);
+
+    // 反例：若 `onPaired` 的拒绝直接冒泡，这一句 await 会抛出（未处理拒绝）→ 用例变红。
+    await store.submitPairingQrText(JSON.stringify(QR));
+    await wiring.runScheduledPoll();
+
+    // 已配对记录已经落盘、连接机已经推进——收口失败不回退这些结果。
+    expect(wiring.written).toEqual([
+      { hostId: HOST_ID, publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY, canonicalOrigin: ORIGIN },
+    ]);
+    expect(store.state.connection.state).toBe("disconnected");
+    const page = store.pairingPage();
+    // 反例：若收口失败按 `applyPairingFailure` 处理，阶段会变成 `failed`（与已写入的记录、
+    // 主机面板将显示的身份自相矛盾）→ 这条与下一条都会变红。
+    expect(page.phase).toBe("approved");
+    expect(page.error?.code).toBe("internal.unavailable");
+    expect(page.error?.retryable).toBe(true);
+    expect(page.error?.details).toEqual({});
+    // 反例：若收口路径复用通用文案，阶段是 `approved` 的这一页会同时出现引导语的
+    // 「配对已完成，正在建立同步连接。」与原因句的「配对请求未能完成」——两句互相否定。
+    expect(page.error?.message).toContain("配对已完成");
+    expect(page.error?.message).toContain("同步连接未能建立");
+    expect(page.error?.message).not.toContain("配对请求未能完成");
+    expect(page.guidance).toContain("配对已完成");
+    // 平台错误原文（这里注入的 `Failed to fetch`）不进文案，也不进 `details`。
+    expect(page.error?.message).not.toContain("Failed to fetch");
+    expect(JSON.stringify(page.error)).not.toContain("Failed to fetch");
   });
 });
 
@@ -419,5 +534,62 @@ describe("配对页状态机（纯函数）", () => {
       publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY,
       canonicalOrigin: ORIGIN,
     });
+  });
+
+  it("传输层失败映射：来源不符是可读的专用码，其余落到可重试的通用码", () => {
+    const mismatch = publicErrorForTransportFailure(new OriginMismatchError());
+    // 反例：若把 `origin_mismatch` 也归到通用分支，这条与下一条都会变红。
+    expect(mismatch.code).toBe("auth.origin_mismatch");
+    expect(mismatch.retryable).toBe(false);
+    // 文案与错误码词表的建议动作同源（不是平台错误原文）。
+    expect(mismatch.message).toContain("另一个地址");
+    expect(mismatch.message).not.toContain("已绑定的规范化来源");
+    expect(mismatch.details).toEqual({});
+
+    // 反例：若把任意异常都当来源不符，这两条会变红（重试一次可能就好了，必须可重试）。
+    const generic = publicErrorForTransportFailure(new Error("Failed to fetch"));
+    expect(generic.code).toBe("internal.unavailable");
+    expect(generic.retryable).toBe(true);
+    expect(generic.details).toEqual({});
+    // 非对象、null 等形状同样落通用分支，而不是抛错。
+    expect(publicErrorForTransportFailure(null).code).toBe("internal.unavailable");
+    expect(publicErrorForTransportFailure("boom").code).toBe("internal.unavailable");
+  });
+
+  it("收口失败只补原因，不把已经成功的配对退回失败", () => {
+    const approved = applyPollResult(initialPairingPageModel(), APPROVED);
+    const withNotice = applyPairingCloseoutFailure(approved, publicErrorForCloseoutFailure(new Error("boom")));
+
+    // 反例：若收口失败走 `applyPairingFailure`，阶段会变成 `failed`（与已落盘的记录矛盾）→ 变红。
+    expect(withNotice.phase).toBe("approved");
+    expect(withNotice.deviceId).toBe(DEVICE_ID);
+    expect(withNotice.error?.code).toBe("internal.unavailable");
+    // 码 / 可重试性 / `details` 与通用分支一致，变的是措辞。
+    expect(withNotice.error?.retryable).toBe(true);
+    expect(withNotice.error?.details).toEqual({});
+    // 反例：若收口路径继续用 `publicErrorForTransportFailure`，这句会变成「配对请求未能完成」→ 变红。
+    expect(withNotice.error?.message).toContain("配对已完成");
+    expect(withNotice.error?.message).not.toContain("配对请求未能完成");
+    // 同一页的引导语（`approved`）与原因句现在说的是同一件事，不再互相否定。
+    expect(withNotice.guidance).toContain("配对已完成");
+  });
+
+  it("收口失败的文案与传输层通用文案分开，且不外溢平台错误原文", () => {
+    const platformFailure = new Error("Failed to fetch");
+    const closeout = publicErrorForCloseoutFailure(platformFailure);
+    const generic = publicErrorForTransportFailure(platformFailure);
+
+    // 反例：若收口映射直接返回通用分支的那条文案，前三条断言都会变红。
+    expect(closeout.message).not.toBe(generic.message);
+    expect(closeout.message).not.toContain("配对请求未能完成");
+    expect(closeout.message).toContain("配对已完成");
+    expect(closeout.message).toContain("同步连接未能建立");
+    // 平台错误原文一律不进入文案（`details` 也留空）：底层文本可能带着请求上下文。
+    expect(closeout.message).not.toContain("Failed to fetch");
+    expect(closeout.details).toEqual({});
+    // 反例：若照 `publicErrorForTransportFailure` 的形状分类（来源不符 → 不可重试的专用码），
+    // 这两条会变红——收口失败与「这次请求没能完成」同类，重试是有效的下一步。
+    expect(closeout.code).toBe("internal.unavailable");
+    expect(closeout.retryable).toBe(true);
   });
 });

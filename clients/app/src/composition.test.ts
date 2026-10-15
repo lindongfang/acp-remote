@@ -23,11 +23,14 @@
  *   因此「无条件立刻重连」与「永不重连」两种实现都会红。
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
 
+import { PairingPanel } from "./components";
 import { createComposition } from "./composition";
 import type { Composition, CompositionPorts, FetchLike, PairingHttpResponse } from "./composition";
-import { PAIRING_POLL_INTERVAL_MS } from "./features/pairing-model";
+import { PAIRING_POLL_INTERVAL_MS, isPairingInFlight } from "./features/pairing-model";
 import { encodeBase64Url } from "./sync-client";
 import {
   FakeClock,
@@ -196,7 +199,17 @@ interface Harness {
   readonly fetches: { url: string; method: string; body: string }[];
 }
 
-function setup(input: { readonly fetch?: FetchLike; readonly realHostIdentity?: boolean } = {}): Harness {
+function setup(
+  input: {
+    readonly fetch?: FetchLike;
+    readonly realHostIdentity?: boolean;
+    /**
+     * 设备身份替身：只给需要「读到身份这一步**本身**失败」的用例替换（收口失败的文案）。
+     * 缺省仍是有身份的真实形状替身。
+     */
+    readonly deviceIdentity?: DeviceIdentityPort;
+  } = {},
+): Harness {
   const sockets = new FakeSocketFactory();
   const cache = new MemoryLocalCache();
   const lifecycle = new FakeLifecycle();
@@ -220,7 +233,7 @@ function setup(input: { readonly fetch?: FetchLike; readonly realHostIdentity?: 
     }));
   const composition = createComposition({
     platform: {
-      deviceIdentity: fakeDeviceIdentity(true),
+      deviceIdentity: input.deviceIdentity ?? fakeDeviceIdentity(true),
       localCache: cache,
       importedContent: createVolatileImportedContent(),
       lifecycle,
@@ -408,6 +421,25 @@ describe("组合根：重连由状态机结论驱动，且退避有界", () => {
     context.clock.advanceBy(RECONNECT_MAX_WINDOW_MS);
     // 反例：若组合根不看状态机结论就重连，这里会 ≥3 条 → 断言变红。
     expect(context.sockets.sockets).toHaveLength(2);
+    context.composition.dispose();
+  });
+
+  it("连接机说可以连、门面却仍在阻断态：把拒绝原因交回 store，而不是静默停在「已断开」", async () => {
+    const context = setup({ realHostIdentity: true });
+    await startBlockedOnMissingHostKey(context);
+    expect(context.composition.store.state.connection.state).toBe("identity_changed");
+
+    // 只推进连接机（`pairSucceeded` 就是 `ClientStore` 自己的配对收口动作）：状态回到
+    // `disconnected`，于是退避重连会去调 `sync.connect()`——而门面的阻断还没有人解除。
+    context.composition.store.pairSucceeded();
+    expect(context.composition.store.state.connection.state).toBe("disconnected");
+
+    context.clock.advanceBy(RECONNECT_BASE_DELAY_MS);
+    // 反例：若 `connectOnce` 把 `connect()` 的异常吞掉（`catch { return; }`），这里会停在
+    // `disconnected`（既没连接、也看不到任何原因）→ 两条断言都变红。
+    expect(context.composition.store.state.connection.state).toBe("identity_changed");
+    expect(context.composition.store.state.connection.blocking?.cause).toBe("host_identity_changed");
+    expect(context.sockets.sockets).toHaveLength(1);
     context.composition.dispose();
   });
 });
@@ -729,8 +761,9 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
 
     // 2.2 三个字段：主机标识与主机公钥取自**状态响应**，规范化来源是缓存键的一部分
     // （取二维码里的那份、或只写 deviceId 都会让这条断言变红）。
+    // 写入只落在「规范化来源派生出的那一个键」上：键取错（或另写了一份额外记录）→ 变红。
+    expect([...context.cache.entries.keys()]).toEqual([`paired-host/${ORIGIN}`]);
     const entry = context.cache.entries.get(`paired-host/${ORIGIN}`);
-    expect(entry?.key).toBe(`paired-host/${ORIGIN}`);
     expect(entry?.kind === "local" ? entry.summary : null).toBe(
       JSON.stringify({ hostId: HOST_ID, publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY }),
     );
@@ -777,25 +810,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     context.composition.dispose();
   });
 
-  it("地址片段里的配对秘密：读取后立即清除，且不进日志、localStorage、缓存与状态快照", async () => {
-    const logs: unknown[][] = [];
-    const consoleSpies = (["log", "info", "warn", "error", "debug"] as const).map((method) =>
-      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
-        logs.push(args);
-      }),
-    );
-    const storageWrites: string[] = [];
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: {
-        setItem: (key: string, value: string) => {
-          storageWrites.push(`${key}=${value}`);
-        },
-        getItem: () => null,
-        removeItem: () => undefined,
-        clear: () => undefined,
-      },
-    });
+  it("地址片段里的配对秘密：读取后立即清除，且不进缓存摘要、出站 URL 与可导出状态快照", async () => {
     const fragment = pairingUrl().replace(`${ORIGIN}/pair#`, "#");
     const addressBar = stubAddressBar(fragment);
     const context = setup({ fetch: successfulPairingFetch() });
@@ -816,9 +831,12 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
       context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
       await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
 
-      // 秘密不进入四条旁路：日志、本地明文存储（localStorage）、本地缓存摘要、可导出的状态快照。
-      expect(JSON.stringify(logs)).not.toContain(PAIRING_SECRET);
-      expect(storageWrites.join("\n")).not.toContain(PAIRING_SECRET);
+      // 秘密不进入两条**真实存在**的旁路：本地缓存摘要（IndexedDB 上是唯一的持久面）与
+      // 可导出的状态快照。
+      //
+      // 「不进日志 / 不进 localStorage」不在这里断言：生产源码没有任何 `console.*` 调用，
+      // 也从不使用 localStorage，那两条 `not.toContain` 只是对空集合断言——实现再怎么改
+      // 都不会变红，没有判别力。将来真的引入日志器（或前端存储）时，再在那一处补断言。
       expect(JSON.stringify([...context.cache.entries])).not.toContain(PAIRING_SECRET);
       expect(JSON.stringify(context.composition.store.state)).not.toContain(PAIRING_SECRET);
       // 出站请求也不把秘密放进 URL（它只走 body 里的 HMAC proof）。
@@ -829,11 +847,219 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
         JSON.stringify({ hostId: HOST_ID, publicKeyBase64Url: APPROVED_HOST_PUBLIC_KEY }),
       );
     } finally {
-      for (const spy of consoleSpies) spy.mockRestore();
-      Reflect.deleteProperty(globalThis, "localStorage");
       addressBar.restore();
       context.composition.dispose();
     }
+  });
+});
+
+/**
+ * 收口失败（组合根的 `pairingCompleted` 抛出）时的**页面**：配对确实完成了，只有这条同步连接没起来。
+ *
+ * 判别力集中在**同一屏上的两句话**：`approved` 阶段的引导语说「配对已完成，正在建立同步连接。」，
+ * 原因句因此不能再是 claim / poll 那条「配对请求未能完成」。断言落在真实 `PairingPanel` 的渲染
+ * 结果上，而不是只看模型字段——矛盾本来就是在页面上出现的。
+ */
+describe("组合根：配对成功但收口失败（连接没起来）的页面文案", () => {
+  it("原因句承认配对已完成，且同屏不再出现「配对请求未能完成」", async () => {
+    const PLATFORM_FAILURE = "PlatformStorageError: identity 读取失败";
+    const respond = successfulPairingFetch();
+    // 收口（`pairingCompleted` 读设备身份）在**已批准**响应之后才失败：翻转开关放在 `fetch` 里，
+    // 而轮询自己的 `loadIdentity` 发生在 `fetch` **之前**，因此受影响的只可能是收口那一次读取。
+    let closeoutReadFails = false;
+    const identity = fakeDeviceIdentity(true);
+    const context = setup({
+      deviceIdentity: {
+        ...identity,
+        async loadIdentity(): Promise<DeviceIdentity | null> {
+          if (closeoutReadFails) throw new Error(PLATFORM_FAILURE);
+          return identity.loadIdentity();
+        },
+      },
+      fetch: async (url, init): Promise<PairingHttpResponse> => {
+        const response = await respond(url, init);
+        const body: unknown = await response.json();
+        // `status` 只按 `in` 收窄后做一次字符串比较（同 `pairing-model.ts` 收窄平台错误的写法）：
+        // 这是替身自己的一次记账，因此不对响应正文做任何形状假设。
+        if (typeof body === "object" && body !== null && "status" in body && body.status === "approved") {
+          closeoutReadFails = true;
+        }
+        return response;
+      },
+    });
+
+    await context.composition.store.submitPairingQrText(pairingUrl());
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    await waitForEventLoopTurn(
+      () => context.composition.store.pairingPage().phase === "pending_confirmation",
+      "等待本机确认",
+    );
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    // 直接等「原因已落到页面」：收口失败本身就是这条用例的被测对象，等它比等中间的 `approved` 稳。
+    await waitForEventLoopTurn(
+      () => context.composition.store.pairingPage().error !== null,
+      "收口失败的原因落到页面",
+    );
+
+    // 配对本身成功了：记录已落盘、连接机已推进到「已配对」——原因句必须承认这一点。
+    expect(context.cache.entries.has(`paired-host/${ORIGIN}`)).toBe(true);
+    const page = context.composition.store.pairingPage();
+    expect(page.phase).toBe("approved");
+    expect(context.composition.store.state.connection.state).toBe("disconnected");
+    const notice = page.error?.message ?? "";
+    expect(notice).toContain("配对已完成");
+    expect(notice).not.toContain(PLATFORM_FAILURE);
+
+    const markup = renderToStaticMarkup(
+      createElement(PairingPanel, { model: page, onSubmit: () => {}, onRestart: () => {} }),
+    );
+    // 引导语就是 `approved` 的那一条，且与原因句同屏：两句说的都是「配对成了」。
+    expect(page.guidance).toContain("配对已完成");
+    expect(markup).toContain(page.guidance);
+    expect(markup).toContain(notice);
+    expect(markup).toContain('data-pairing-error="internal.unavailable"');
+    // 反例：若收口路径继续复用通用文案，同一屏上会同时出现引导语「配对已完成…」与原因句
+    // 「配对请求未能完成」两句互相否定的话 → 下面这两条变红。
+    expect(markup).not.toContain("配对请求未能完成");
+    expect(markup).not.toContain(PLATFORM_FAILURE);
+    context.composition.dispose();
+  });
+});
+
+describe("组合根：配对请求被拒绝时收口（不把状态留在「进行中」）", () => {
+  it("claim 的 `fetch` 抛出（断网）：落到可重试的失败态，输入解禁，且能立刻重试成功", async () => {
+    let claims = 0;
+    const context = setup({
+      fetch: async (_url, init): Promise<PairingHttpResponse> => {
+        if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
+          claims += 1;
+          // 第一次断网：`fetch` 直接拒绝（真实实现里没有第二层 catch，异常从 claim 冒泡上来）。
+          if (claims === 1) throw new Error("Failed to fetch");
+          return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+        }
+        return { ok: true, status: 200, json: () => Promise.resolve({ status: "pending_confirmation" }) };
+      },
+    });
+    await context.composition.start();
+
+    await context.composition.store.submitPairingQrText(pairingUrl());
+
+    const failed = context.composition.store.pairingPage();
+    // 反例：若 `claim` 的拒绝直接冒泡（没有收口），阶段会停在 `claiming` → 断言变红。
+    expect(failed.phase).toBe("failed");
+    expect(failed.error?.code).toBe("internal.unavailable");
+    expect(failed.error?.retryable).toBe(true);
+    // 这两条就是 `PairingPanel` 的「输入框解禁 + 显示重新扫码入口」判据。
+    expect(isPairingInFlight(failed)).toBe(false);
+    expect(failed.canRestart).toBe(true);
+    // 没有连接被建立，也没有任何已配对记录被写入。
+    expect(context.sockets.sockets).toHaveLength(0);
+    expect([...context.cache.entries.keys()]).toEqual([]);
+
+    // 会话真的结束了：同一次页面会话里可以立刻重试，且这次走到了轮询。
+    await context.composition.store.submitPairingQrText(pairingUrl());
+    expect(context.composition.store.pairingPage().phase).toBe("claiming");
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    await waitForEventLoopTurn(
+      () => context.composition.store.pairingPage().phase === "pending_confirmation",
+      "重试后进入等待确认",
+    );
+    context.composition.dispose();
+  });
+});
+
+/**
+ * 让组合根进入「主机身份变化」阻断态：旧口径的已配对记录只有主机标识、没有公钥。
+ *
+ * 起点与下面「记录缺主机公钥」一组用例一致——`start()` 照常建立连接，服务端下发 challenge 后
+ * 验签失败，连接层阻断（`identity_changed`）并停止自动重连。重新配对是从这里出来的唯一路径
+ * （design D2），因此这两条用例都从同一个起点出发。
+ */
+async function startBlockedOnMissingHostKey(context: Harness): Promise<void> {
+  await context.cache.putLocalSummary({
+    key: `paired-host/${ORIGIN}`,
+    summary: JSON.stringify({ hostId: HOST_ID }),
+    nowMs: 0,
+  });
+  await context.composition.start();
+  const socket = context.sockets.latest;
+  socket.open();
+  await waitUntil(() => socket.types().includes("auth.client_hello"), "发出 clientHello");
+  socket.deliver(makeChallenge({ connectionId: CONNECTION_ID }));
+  await waitForEventLoopTurn(
+    () => context.composition.store.state.connection.state === "identity_changed",
+    "进入身份变化阻断态",
+  );
+}
+
+describe("组合根：从阻断态重新配对后真的建立连接（design D2 的恢复路径）", () => {
+  it("同一台主机重新配对成功：解除门面阻断并新建连接（socket 1→2、离开阻断态）", async () => {
+    const context = setup({ realHostIdentity: true, fetch: successfulPairingFetch() });
+    await startBlockedOnMissingHostKey(context);
+    expect(context.composition.store.blocked).toBe(true);
+
+    // 起点：阻断态不自动重连，推进整个退避窗口也不会有第二条连接。
+    context.clock.advanceBy(RECONNECT_MAX_WINDOW_MS);
+    expect(context.sockets.sockets).toHaveLength(1);
+
+    await context.composition.store.submitPairingQrText(pairingUrl());
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "pending_confirmation", "等待本机确认");
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
+
+    // 反例：若 `pairingCompleted` 不解除门面的阻断（`SyncClient.connect()` 抛错后又被吞掉），
+    // 这里仍是 1 条 socket、状态仍停在 `identity_changed` → 两条断言都变红。
+    expect(context.sockets.sockets).toHaveLength(2);
+    expect(context.composition.store.state.connection.state).toBe("authenticating");
+    expect(context.composition.store.blocked).toBe(false);
+    context.composition.dispose();
+  });
+
+  it("换了一台主机重新配对：按新记录重建门面，`client_hello` 自报新的 hostId", async () => {
+    const NEW_HOST_ID = "3b1e6b1d-3c0a-4a6f-9f4e-2c1a5b7d8e90";
+    let statusPolls = 0;
+    const context = setup({
+      realHostIdentity: true,
+      fetch: async (_url, init): Promise<PairingHttpResponse> => {
+        if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
+          return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+        }
+        statusPolls += 1;
+        const body =
+          statusPolls === 1
+            ? { status: "pending_confirmation" }
+            : {
+                status: "approved",
+                device: { deviceId: DEVICE_ID },
+                host: { hostId: NEW_HOST_ID, hostPublicKey: APPROVED_HOST_PUBLIC_KEY },
+              };
+        return { ok: true, status: 200, json: () => Promise.resolve(body) };
+      },
+    });
+    await startBlockedOnMissingHostKey(context);
+
+    await context.composition.store.submitPairingQrText(pairingUrl({ hostId: NEW_HOST_ID }));
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "pending_confirmation", "等待本机确认");
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
+
+    expect(context.sockets.sockets).toHaveLength(2);
+    const rebuilt = context.sockets.latest;
+    rebuilt.open();
+    await waitUntil(() => rebuilt.types().includes("auth.client_hello"), "新门面发出 clientHello");
+    const helloBody = rebuilt.last("auth.client_hello")?.["body"];
+    const sentHostId =
+      typeof helloBody === "object" && helloBody !== null && "hostId" in helloBody ? helloBody.hostId : null;
+
+    // 反例：若 `adoptPairedHost` 仍在 `sync !== null` 时直接返回（复用旧实例），这条 hello 会
+    // 自报**旧** hostId → 断言变红（服务端随后会以 `auth.host_mismatch` 把它打回阻断态，
+    // 同一次页面会话里再也出不去）。
+    expect(sentHostId).toBe(NEW_HOST_ID);
+    expect(context.composition.store.state.connection.state).toBe("authenticating");
+    expect(context.composition.store.blocked).toBe(false);
+    context.composition.dispose();
   });
 });
 
