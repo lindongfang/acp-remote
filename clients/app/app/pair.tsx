@@ -1,5 +1,14 @@
 /**
- * 配对页（路由 `#/pair`，`data-route="pair"`）。
+ * 配对页（路由 `/pair`，`data-route="pair"`）。
+ *
+ * ## 路由走正常路径，片段只承载配对内容（design D4）
+ *
+ * 配对二维码是 `<origin>/pair#data=<base64url-json>`：秘密**必须**在片段里
+ * （`SYNC_PROTOCOL.md` §7.1），而 Expo Router 的路由匹配只看 `pathname`（片段与查询都不进
+ * 路径），因此两者不争用同一个位置。本页因此不把片段当路由：原型把路由写在片段里
+ * （`prototypes/README.md`），照抄那套口径的注释与这里的实际行为矛盾，已改为正常路径。
+ * 核实方式与产物证据见 `src/routing.test.ts` 的文件头（构建产物、类型化路由与路由器的
+ * 链接实现三处一致）。
  *
  * 配对是 HTTPS 面（`schemas/sync/v1/pairing.schema.json`）：传输端口由组合根用 `fetch`
  * 实现，本页只呈现状态机产出的模型。设备私钥由 `src/platform/` 生成且不可导出，
@@ -12,7 +21,7 @@
  *
  * 结构校验、claim、轮询、落盘与「已配对后触发连接」都在 `ClientStore` 与组合根里
  * （`store.submitPairingQrText` / `store.startPairingFromAddress`）：本页不碰 `fetch`、
- * 不读 `location`、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。
+ * 不读地址栏、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。
  */
 
 import { useRouter } from "expo-router";
