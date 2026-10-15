@@ -26,7 +26,11 @@ import {
   assertPersistableForOrigin,
   estimateEntryBytes,
   evictToFit,
-} from "./local-cache";
+} from "./local-cache.shared";
+
+// 转出共享声明与纯策略：`platform/index.ts` 在 Web 平台从 `./local-cache` 取到的就是本文件，
+// 因此这些符号必须在这里可见（否则会取到 `undefined`，见 `local-cache.shared.ts` 的说明）。
+export * from "./local-cache.shared";
 
 /** IndexedDB 数据库名。 */
 const DATABASE_NAME = "acp-remote-cache-v1";

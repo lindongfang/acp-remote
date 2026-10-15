@@ -73,6 +73,25 @@ alternative_checks: []
 6. 断开与重连：断开后按已确认游标恢复，不重复呈现已呈现过的内容。
 7. **内联样式与 CSP 冲突**：若样式异常，必须把现象与处理方式写进报告；不得在 Rust 侧放宽 CSP 掩盖。
 
+### 真机验收记录（2026-10-16，本机 Windows x64；验收已完成，逐条给实测输出）
+
+环境：`acp-remote daemon start`（dev 模式、`daemon.tls.mode = direct` + 临时自签证书、`public_origin = https://127.0.0.1:18765`、`uiBuildVersion = 0.0.0+32007be-dirty`）；系统 Chromium（Edge）+ CDP 驱动；配对与确认走本地管理通道（`device.pair.begin`/`status`/`confirm`，最小自实现客户端）。
+
+| 验收项 | 结果 | 实测输出 |
+| --- | --- | --- |
+| 1 从 Daemon 托管来源加载页面 | ✅ | `GET /` → 200；`GET /_expo/static/js/web/entry-18fe5482….js` 与本地 `clients/app/dist` 同文件（`cmp` 一致，证明托管的就是本分支构建） |
+| 2 真实配对：输入 → 认领 → 已批准 | ✅ | 页面读入片段后**立即清掉**（URL 变 `/pair`）；`POST /sync/v1/pairing/claim → 201`；主机侧 `state = claimed`（SAS `915719`、设备指纹已取得）；`device.pair.confirm` → 设备 `active` |
+| 3 已配对主机记录含主机标识与公钥 | ✅ | 记录写入成功即页面推进 `approved`；「在线」只能在主机验签通过后达成（公钥取错来源会进 `host_identity_changed`）。**这条路径正是本批修掉的生产构建缺陷（`assertPersistableForOrigin is not a function`）所在处**——修之前它必然失败 |
+| 4 出站路径与声明的子协议（从实际连接观察） | ✅ | 浏览器内 `new WebSocket('wss://127.0.0.1:18765/sync/v1','acp-remote.sync.v1.json')` → `open` 且 `negotiated = "acp-remote.sync.v1.json"`；主机侧该设备 `lastSeenAt = 2026-10-15T22:39:22Z`（只有走完 WSS 握手与设备签名认证才会写） |
+| 5 在线 + 首次同步后目录页呈现 | ✅ | 页面 `data-connection-state = **online**`、「内容来自本次同步 已同步 2026-10-15 22:39 UTC」、目录 `Demo Workspace / demo-ws`（会话 0 / 运行中 0）+ `Demo Agent / demo-agent 默认` |
+| 6 断开与重连 | ✅ | 整页重载后仍 `online`，快照复用（内容时间戳不变），主机侧 `lastSeenAt` 刷新到重连时刻 |
+| 7 内联样式与 CSP 冲突 | ⚠️ **如实登记，未掩盖** | CSP = `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`（**没有** `style-src 'unsafe-inline'`），而页面用内联样式：`document.querySelectorAll('style')` 两条，其中 379 字符那条 `sheet === null` ⇒ **内联样式表被 CSP 拦下**，UI 在真实 Daemon 托管下无样式。按本文件要求「不得在 Rust 侧放宽 CSP 掩盖」，本变更不改 CSP，登记为待裁决项 |
+
+**验收过程中发现并已在同批修掉的两个缺陷**（都只在真机链路里才暴露）：
+
+1. **任何浏览器都连不上 WSS**（最重的一条）：接入层把「客户端**提出** `Sec-WebSocket-Extensions: permessage-deflate`」当成「**已协商**压缩」直接回 400，而 Chromium/Firefox 的 `WebSocket` 构造函数一律带这个头且页面侧无法关闭。已修（`crates/server/src/transport/net/route.rs`，独立 PR）：提出扩展的升级照常接受，服务端不选择任何扩展（101 不回显该头）即「不协商压缩」——与 `NODE_LINK_PROTOCOL.md` §2.1、`SYNC_PROTOCOL.md` §3.1 的既有口径一致；回归用例断言 101 + 不协商 + 连接仍可用。
+2. **生产构建里共享策略符号是 `undefined`**：`*.web.ts` 里 `from "./<基名>"` 在 Web 平台解析到 **Web 实现自身**（平台扩展名优先），`local-cache` / `secure-storage` 两组共享声明因此在 `expo export` 产物里全部取不到（`npm run check` 的单测与假主机 e2e 走另一套解析，抓不到）。已修：声明移进无平台变体的 `local-cache.shared.ts` / `secure-storage.shared.ts`，两个实现各自从它转出。
+
 ## Risks
 
 - **[WP1/WP2/WP3 同文件串行]** 三者都改 `composition.ts` → 已串行并登记重跑；`git apply --check` 失败时用后合入者的 patch 重建，不手工改代码。
