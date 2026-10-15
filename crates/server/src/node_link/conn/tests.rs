@@ -35,7 +35,7 @@
 //! | 心跳与 90 秒静默 | `heartbeat_round_trip_keeps_the_connection_alive`、`silence_beyond_the_window_is_closed_with_4408`、`a_busy_outbound_queue_does_not_starve_the_heartbeat`、`inbound_silence_still_closes_a_connection_with_a_busy_outbound_queue` |
 //! | 饱和可恢复（高水位进入 / 低水位迟滞退出） | `a_saturated_queue_clears_only_below_the_low_water_mark` |
 //! | 瞬时突发后回落不得断开、不影响其他连接 | `a_transient_burst_that_drains_does_not_disconnect_the_connection` |
-//! | 持续饱和的判定必须成立、且不拖住其他连接 | `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment`、`a_continuously_saturated_connection_does_not_stall_its_peer` |
+//! | 持续饱和的判定必须成立、且不拖住其他连接 | `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment`、`a_continuously_saturated_connection_does_not_stall_its_peer`、`a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog`（Scenario「真正持续过慢仍被断开」的两点：既被断开、其他连接不受影响） |
 //! | 持续饱和的连接仍会被断开 | `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` |
 //! | 饱和期间心跳不停（不得因心跳停摆走静默关闭） | `the_tick_keeps_the_heartbeat_while_the_connection_is_saturated`、`a_heartbeat_deferred_by_the_high_water_mark_is_not_fatal` |
 //! | 饱和恢复后重新读取快照与事件批次 | `a_recovered_connection_resumes_catalog_batches_and_event_delivery` |
@@ -2752,6 +2752,10 @@ async fn inbound_silence_still_closes_a_connection_with_a_busy_outbound_queue() 
 /// `saturated_for()` 因此持续为 `Some`：断开与否完全取决于 tick 有没有被轮询到。队列上限保持默认的
 /// 2,000 条（只用 4 条这类小上限的话，会话一次突发就能把队列排空，tick 又会获得被轮询的机会），
 /// 宽限用 [`NodeLinkConn::with_test_windows`] 调成 1.5 秒（同上的理由）。
+///
+/// 本用例同时覆盖 delta spec 的 Scenario「真正持续过慢仍被断开」写下的两点（原用例只覆盖了第一点）：
+/// ①真正持续过慢的连接仍会被慢消费者看门狗以 `close::NORMAL` 断开；②同一 Owner 上其他连接不受
+/// 影响——对照组连接全程正常往来，被测连接被摘除后注册表里只剩它。
 #[tokio::test]
 async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog() {
     let world = TestWorld::with_store(Arc::new(FixedStore::new(
@@ -2774,9 +2778,18 @@ async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog(
     );
     let harness = harness_with_conn(world, conn).await;
     let _ = harness.approved_pairing().await;
+
+    // ① 对照组（快连接）：全程正常往来，证明一条连接的持续饱和不影响同 Owner 上的其他连接。
+    let mut healthy = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut healthy, ACCESS_NODE, false).await;
+
+    // ② 被测连接：压力源把它压到高水位。
     let mut client = Client::connect(harness.addr).await;
     let _ = authenticated(&mut client, ACCESS_NODE, false).await;
-    let handle = harness.conn.registry().handles()[0].clone();
+    // 用 `other_handle` 而不是 `handles()[0]`：`handles()` 的顺序按 `connectionId`（稳定但与本用例的
+    // 连接顺序无关），两条连接同时登记后靠索引取到的可能是对照组——压力源就会压错对象，本用例随
+    // 压力源一起失效（对照组被断开、被测连接毫发无损，且没有任何断言能看出这一点）。
+    let handle = other_handle(&harness, &healthy);
     let pressure = OutboundPressure::spawn(Arc::clone(&handle), None);
 
     client.step("出站队列持续饱和时的慢消费者看门狗");
@@ -2794,6 +2807,17 @@ async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog(
         "压力源必须真的持续往队列里投递，实际只投了 {} 条",
         pressure.sent()
     );
+
+    // ③ 对照组不受影响：同 Owner 上的另一条连接仍在正常往来（Scenario 的后半句）。
+    healthy.ping_round_trip(0xa3).await;
+
+    // ④ 断开一条不能拖垮其他连接：注册表里只剩对照组那条。摘除与会话收尾之间有一拍延迟，用现有轮询
+    // 收敛（`handles()` 的顺序无关紧要，这里只看条数）。
+    assert_eventually(
+        || harness.conn.registry().active() == 1,
+        "断开一条不能拖垮其他连接：注册表必须只剩对照组那条",
+    )
+    .await;
     harness.stop().await;
 }
 
