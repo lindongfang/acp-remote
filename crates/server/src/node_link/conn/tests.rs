@@ -24,7 +24,7 @@
 //! | limits 只下调 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them` |
 //! | 固定常量不可协商 | `node_ready_echoes_the_negotiated_limits_and_never_raises_them`、`protocol_constants_are_not_configurable`、`json_structure_limits_are_enforced_on_the_wire` |
 //! | 信封与 connectionSequence 校验 | `envelope_and_sequence_violations_are_rejected_without_closing`、`a_binary_frame_is_closed_with_4400` |
-//! | 每次消息级拒绝都推进入站期望序号 | `envelope_and_sequence_violations_are_rejected_without_closing`（未知 type / post_mvp / 形状错误）、`a_shape_invalid_envelope_that_consumed_the_sequence_does_not_strand_the_connection` |
+//! | 每次消息级拒绝都推进入站期望序号 | `envelope_and_sequence_violations_are_rejected_without_closing`（未知 type / post_mvp / 形状错误）、`a_shape_invalid_envelope_that_consumed_the_sequence_does_not_strand_the_connection`、`nesting_beyond_the_parser_recursion_limit_cannot_advance_the_sequence`（已知残留的解析边界：深度 127 推进、128 不推进） |
 //! | 出站序号只在投递确认时消耗（`connectionSequence` 不得留缺口） | `a_rejected_delivery_does_not_consume_the_outbound_sequence` |
 //! | 认证收尾推进 `owned_node.last_connected_at`（§11.6 第 9 条） | `authentication_advances_the_node_last_connected_time` |
 //! | §2.5 准入闸门（10 次/分钟、同源在途握手配额） | `the_eleventh_authentication_attempt_from_one_address_is_rate_limited`、`the_fifth_in_flight_handshake_from_one_address_is_refused`、`authenticated_connections_do_not_hold_the_in_flight_handshake_quota` |
@@ -2082,6 +2082,72 @@ async fn a_shape_invalid_envelope_that_consumed_the_sequence_does_not_strand_the
     client.step("结构超限之后序号正常递增的合法消息");
     client.advance_after_accepted();
     let _ = client.ping_round_trip(0x66).await;
+
+    assert_eq!(harness.conn.registry().active(), 1, "连接必须保持可用");
+    harness.stop().await;
+}
+
+/// **已知限制**（不是期望行为）：嵌套深度超过 `serde_json` 实际可解析边界的合法 JSON 帧读不出序号，
+/// 因而不推进入站期望序号（对应变更任务 1.5）。
+///
+/// §2.5 的嵌套上限是 64，但 `wire::sequence_after_rejection` 靠 `serde_json` 重新解析帧文本来读序号，
+/// 而 `serde_json` 的递归上限是 128、检查又在**进入容器时先自减再判零**，因此实际只能解析嵌套 127 层
+/// 的帧——深度 65..=127 的帧可解析（推进），深度 ≥128 的帧即便文本是合法 JSON 也解析不出序号（不推进）。
+/// 规格的例外条款把它登记为**已知残留**：
+/// `openspec/changes/node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的「只有读不出
+/// 「本连接的下一个序号」的帧才不推进：文本不是合法 JSON、连接字段不成对或缺席、`connectionId` 属于别的
+/// 连接、序号非规范十进制 / 超 `2^63-1` / 不等于期望值，**以及嵌套深度超过解析器递归上限**（按文本重解析
+/// 读不出序号）。最后一种是**已知残留**」。
+///
+/// 因此本用例钉的是**解析能力的边界，不是策略**：若将来改用不经完整解析的方式读序号（例如直接扫描文本），
+/// 第二段的期望必须随之改成「推进」。第一段（深度 127）本身是正确行为——两条消息级拒绝都应推进，只有
+/// 深度 128 这一条因读不出序号而做不到。
+#[tokio::test]
+async fn nesting_beyond_the_parser_recursion_limit_cannot_advance_the_sequence() {
+    let harness = Harness::new().await;
+    let _ = harness.approved_pairing().await;
+    let mut client = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut client, ACCESS_NODE, false).await;
+
+    // ① 深度 127（= `DEPTH_OUTSIDE_DETAILS` + 124）：帧文本仍可被 `serde_json` 解析出序号，因此这条
+    //    结构类拒绝与其它消息级拒绝同口径，照常推进入站期望序号。
+    client.step("JSON 嵌套深度 127 的结构超限");
+    let mut deep_127 = client.envelope("link.error", json!({}));
+    deep_127["body"] = json!({
+        "code": "nodelink.protocol.invalid_json",
+        "message": "x",
+        "retryable": false,
+        "correlationId": null,
+        "details": nested_details(127 - DEPTH_OUTSIDE_DETAILS),
+    });
+    client.send_raw(deep_127).await;
+    client
+        .expect_error("nodelink.protocol.schema_invalid")
+        .await;
+
+    //    序号确已被消耗：推进本地计数后，序号正常递增的合法消息必须被正常处理并回填 nonce。
+    client.step("深度 127 之后序号正常递增的合法消息");
+    client.advance_after_accepted();
+    let _ = client.ping_round_trip(0x67).await;
+
+    // ② 深度 128：超出解析器递归上限 ⇒ 读不出序号 ⇒ 不推进。这条**不**推进本地计数，紧接的往返因此
+    //    用与刚才深帧完全相同的那一个序号——它仍被受理，正是「不推进」的证据。
+    client.step("JSON 嵌套深度 128 的结构超限");
+    let mut deep_128 = client.envelope("link.error", json!({}));
+    deep_128["body"] = json!({
+        "code": "nodelink.protocol.invalid_json",
+        "message": "x",
+        "retryable": false,
+        "correlationId": null,
+        "details": nested_details(128 - DEPTH_OUTSIDE_DETAILS),
+    });
+    client.send_raw(deep_128).await;
+    client
+        .expect_error("nodelink.protocol.schema_invalid")
+        .await;
+
+    client.step("深度 128 之后沿用同一序号的合法消息");
+    let _ = client.ping_round_trip(0x68).await;
 
     assert_eq!(harness.conn.registry().active(), 1, "连接必须保持可用");
     harness.stop().await;
