@@ -28,6 +28,7 @@ import {
 import { repoRoot, syncFixtureDir, syncSchemaDir, syncManifestPath, SYNC_SCHEMA_FILES } from "./paths";
 import { KNOWN_EVENT_TYPE_COUNT, isKnownEventType, projectView } from "./event";
 import type { SessionReadInclude } from "./command";
+import type { EventOriginKind } from "./event";
 import type { SnapshotItemHistory } from "./sync";
 
 /**
@@ -53,6 +54,23 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
   createdAt: true,
   view: true,
   acp: true,
+};
+
+/**
+ * `origin.kind` 封闭词表（**五值**）的编译期镜像。
+ *
+ * 与 `INCLUDE_MIRROR` 同理：`EventOriginKind` 多一个取值或少一个取值都会让本文件编译失败，
+ * 因此运行期那句比对的是「TS 联合 ↔ schema enum」这一对，而不是抄来的常量。
+ *
+ * `node` 值随 `sync-server-connection` 的 1.6 进 wire（配套 `origin.nodeId`）；此前这里的 TS
+ * 联合是四值，`kind: "node"` 的事件无法在类型上表达 —— 这正是本次补齐的缺口。
+ */
+const ORIGIN_KIND_MIRROR: Record<EventOriginKind, true> = {
+  agent: true,
+  device: true,
+  daemon: true,
+  local_cli: true,
+  node: true,
 };
 
 /** 读取 `schemas/sync/v1/<file>` 并解析。 */
@@ -302,6 +320,46 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
       "history",
     ]);
     expect(Object.keys(INCLUDE_MIRROR).sort()).toEqual([...payload.properties.include.items.enum].sort());
+  });
+
+  it("origin.kind 的五值词表与 TS 镜像逐项相等（含 1.6 新增的 node）", () => {
+    // `event.schema.json` 的 body 是**内联**的（无 $defs），路径是
+    // `properties.body.properties.origin`。逐层取、每层先验证存在，不用内联转型取成员
+    // ——那会伪造一个未经检查的形状。
+    const schema = readSchema("event.schema.json");
+    expect(schema["properties"]).toBeDefined();
+    const root = schema["properties"] as Record<string, unknown>;
+    expect(root["body"]).toBeDefined();
+    const body = root["body"] as Record<string, unknown>;
+    expect(body["properties"]).toBeDefined();
+    const bodyProps = body["properties"] as Record<string, unknown>;
+    expect(bodyProps["origin"]).toBeDefined();
+    const origin = bodyProps["origin"] as Record<string, unknown>;
+    const originProps = origin["properties"] as Record<string, unknown>;
+    const kind = originProps["kind"] as { enum: string[] };
+    const nodeId = originProps["nodeId"] as { oneOf: unknown[] };
+
+    expect(Object.keys(ORIGIN_KIND_MIRROR).sort()).toEqual([...kind.enum].sort());
+    // `node` 那一档必须有配套的 nodeId，且 if/then 把它钉成必填（否则五值就成了半成品）。
+    expect(kind.enum).toContain("node");
+    expect(nodeId.oneOf).toEqual([
+      { $ref: "common.schema.json#/$defs/uuid" },
+      { type: "null" },
+    ]);
+    expect(origin["if"]).toEqual({
+      properties: { kind: { const: "node" } },
+      required: ["kind"],
+    });
+    // `then` 把两个身份字段一起钉住：nodeId 必须是 canonical UUID、deviceId 必须是 null。
+    expect(origin["then"]).toEqual({
+      required: ["nodeId"],
+      properties: {
+        deviceId: { type: "null" },
+        nodeId: { $ref: "common.schema.json#/$defs/uuid" },
+      },
+    });
+    // 反向同样重要：required 里 kind/deviceId 恒在，nodeId 不在（未协商的连接不带这个键）。
+    expect(origin["required"]).toEqual(["kind", "deviceId"]);
   });
 
   it("sessionReadResult 新增 history/historyHasEarlier，既有 hasEarlier 的必填语义不变", () => {
