@@ -375,7 +375,9 @@ Owner SHALL 只在事件与命令终态持久化提交成功后才向 Node Link 
 
 ### Requirement: 心跳、超时与慢连接隔离
 
-Owner SHALL 按协商的 `heartbeatIntervalMs`（默认 30 秒）发送 `link.ping`，`link.pong` MUST 原样回填 nonce；连续 90 秒无任何入站消息或 `link.pong` 时 MUST 以 4408 关闭连接。每连接的待发送队列 SHALL 有界（默认 8 MiB 或 2000 条，可经 limits 下调）：达到高水位后先停止读取新的快照批次；持续过慢时断开连接，由 origin cursor 重放补回，MUST NOT 丢弃 Owner 事件或阻塞其他连接，v1 不发送 `link.backpressure`。
+Owner SHALL 按协商的 `heartbeatIntervalMs`（默认 30 秒）发送 `link.ping`，`link.pong` MUST 原样回填 nonce；连续 90 秒无任何入站消息或 `link.pong` 时 MUST 以 4408 关闭连接。待发送队列 SHALL 有界（默认 8 MiB 或 2000 条，可经 limits 下调）：达到高水位后先停读新的快照批次；**持续**过慢时断开连接，由 origin cursor 重放补回，MUST NOT 丢弃 Owner 事件或阻塞其他连接，v1 不发送 `link.backpressure`。
+
+「持续过慢」的判定 SHALL 可恢复：队列被消费到低水位以下时饱和状态 MUST 被清除。**饱和 MUST NOT 短路心跳判定**：饱和段未超宽限时每周期照常判定；`link.ping` 因队列顶满被拒 SHALL 按一级处置推迟并在下一拍重试，MUST NOT 结束连接，也 MUST NOT 因此走进 90 秒静默关闭。高/低水位 SHALL 有明确常量并登记（低水位是迟滞阈值，不得等于高水位）。
 
 #### Scenario: 心跳超时关闭
 
@@ -386,6 +388,21 @@ Owner SHALL 按协商的 `heartbeatIntervalMs`（默认 30 秒）发送 `link.pi
 
 - **WHEN** 某 Access 连接消费缓慢、待发送队列达到高水位
 - **THEN** Owner 先暂停向该连接读取新快照批次，持续过慢时断开该连接；同一 Owner 上其他 Access 连接的事件投递不受影响，断开的连接可凭 cursor 重放补齐
+
+#### Scenario: 饱和后恢复的连接不被断开
+
+- **WHEN** 某连接的待发送队列曾达到高水位，随后被消费到低水位以下
+- **THEN** 该连接 MUST NOT 因那次饱和而被断开，且新快照批次与事件批次的读取恢复正常
+
+#### Scenario: 饱和期间心跳判定不被短路
+
+- **WHEN** 某连接处于饱和状态，且其饱和段尚未超过慢消费者宽限
+- **THEN** 每个心跳周期 SHALL 照常判定是否该发 `link.ping`；`link.ping` 若因队列顶满而被拒，SHALL 按一级处置推迟并在下一拍重试，MUST NOT 结束连接，也 MUST NOT 让连接因「心跳未发出」而走进 90 秒静默关闭路径；是否断开只由慢消费者看门狗按宽限判定
+
+#### Scenario: 真正持续过慢仍被断开
+
+- **WHEN** 某连接在整个观察窗口内始终未把队列消费到低水位以下
+- **THEN** Owner 断开该连接，同一 Owner 上其他连接不受影响，断开的连接可凭 origin cursor 重放补齐
 
 ### Requirement: 审计与日志边界
 
@@ -418,3 +435,19 @@ Owner SHALL 按协商的 `heartbeatIntervalMs`（默认 30 秒）发送 `link.pi
 
 - **WHEN** 目标 Agent 未宣告 `sessionCapabilities.resume`
 - **THEN** `session.resume` 以 `command.terminal`（`status = "failed"` 或 `uncertain`）与 `nodelink.command.unsupported` 结束，不创建新会话、不报告成功
+
+### Requirement: 每次消息级拒绝都推进入站期望序号
+
+入站期望序号描述**对端已发出的消息**，本机是否接受它不影响它已被消耗。因此对**形状类**拒绝 —— 未登记的信封字段、缺 `messageId`、body 不是 JSON、**整帧超过 §2.5 的三个固定 JSON 结构上限（嵌套深度 64、单对象字段数 1024、单数组元素数 10000）** —— 与连接字段禁用类拒绝，服务端 MUST 照常推进期望序号；MUST NOT 让后续序号正常递增的合法消息被判 `sequence_invalid`，也 MUST NOT 以「静默丢弃后续消息直到静默超时」代替推进。
+
+只有**读不出「本连接的下一个序号」**的帧才不推进：文本不是合法 JSON、连接字段不成对或缺席、`connectionId` 属于别的连接、序号非规范十进制 / 超 `2^63-1` / 不等于期望值，**以及嵌套深度超过解析器递归上限**（按文本重解析读不出序号）。最后一种是**已知残留**：实现 MUST 在其文档里如实登记「结构类超限的退化只被收窄、未被完全消除」，MUST NOT 声称已完全消除。
+
+#### Scenario: 形状错误之后的一条合法消息
+
+- **WHEN** 一条形状不合法的帧被拒绝（未登记信封字段 / 缺 `messageId` / body 非 JSON / 整帧超过 §2.5 的固定结构上限之一）
+- **THEN** 其后一条序号正常递增的合法消息 MUST NOT 被判 `sequence_invalid`，并能得到正常处理
+
+#### Scenario: 未知 type 与形状错误同口径
+
+- **WHEN** 先后收到「词表外 `type`」与「形状不合法」两类被拒帧
+- **THEN** 两类都必须推进期望序号，MUST NOT 出现「一类推进、另一类不推进」的差异
