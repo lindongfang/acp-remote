@@ -20,12 +20,14 @@
  *
  * ## 假的是哪一层
  *
- * 只有传输：`SocketPort` 的 `send` / `close` 与服务端的消息时序。
+ * 只有传输：`SocketPort` 的 `send` / `close` / `negotiatedSubprotocol` 与服务端的消息时序。
  * 帧**原文**（JSON 文本）逐字记录——`R16` 要断言的「实际发出的字节」就是这些原文。
+ * 升级请求声明的子协议列表（`SocketOpenInput.protocols`）同样逐次记录：只记 `url` 时
+ * 「到底声明了什么」在页内不可见，「未声明」也就无法被证伪。
  */
 
-import type { SocketHandlers, SocketPort } from "../../src/sync-client";
-import { encodeBase64Url, sortedFeatures } from "../../src/sync-client";
+import type { SocketHandlers, SocketOpenInput, SocketPort } from "../../src/sync-client";
+import { encodeBase64Url, REQUIRED_FEATURES, SESSION_HISTORY_FEATURE, sortedFeatures } from "../../src/sync-client";
 import {
   encodeNulJoinedUtf8,
   encodeTranscript,
@@ -60,16 +62,19 @@ const CONNECTION_ID = "3c9f1b6e-6a41-4a2e-9a1c-2f0a5b7d9e13";
 /**
  * 服务端在 `auth.server_challenge` 里**选中**的 feature。
  *
- * `core.event-ack.v1` 是既有取值（ACK 面的用例依赖它）；`core.session-history.v1` 是本次
- * 变更新登记的非必需 feature，**必须**在这里选中才有意义：客户端只在服务端选中它时
- * 才给 `session.read` 带上 `history` include（`client-store.ts` 的 `#includesFor`）。
- * 只选 `core.event-ack.v1` 时每次读取都只取消息，结构化历史条目永远来不到页面，
+ * 两条必需 feature（`core.command-status.v1`、`core.event-ack.v1`）从 `REQUIRED_FEATURES`
+ * 派生：客户端在 `#onServerChallenge` 里比对必需集合（§5.2），漏选一条就进阻断态，
+ * 于是所有「握手能走完」的用例都会变成阻断用例——缺省值必须与客户端声明对齐。
+ *
+ * `core.session-history.v1` 是**非必需**的既有取值，选中它才有意义：客户端只在服务端选中它
+ * 时才给 `session.read` 带上 `history` include（`client-store.ts` 的 `#includesFor`）。
+ * 只选必需两条时每次读取都只取消息，结构化历史条目永远来不到页面，
  * 「重开页面仍见历史条目」因此**不可能**被断言——那是 feature 门控的直接后果，不是用例写法问题。
  *
  * 选中它是安全的：transcript 与报文里的 `selectedFeatures` 都取自本常量，
  * 客户端用**报文里**的那份重建 transcript 验签（`connection.ts` 的 `#onServerChallenge`）。
  */
-const SERVER_SELECTED_FEATURES: readonly string[] = ["core.event-ack.v1", "core.session-history.v1"];
+const SERVER_SELECTED_FEATURES: readonly string[] = [...REQUIRED_FEATURES, SESSION_HISTORY_FEATURE];
 
 /** 非 `session.read` 命令的缺省应答结果（与本次变更前的取值逐字一致）。 */
 const DEFAULT_COMMAND_RESULT: Record<string, unknown> = { sessionId: "dddddddd-0000-4000-8000-0000000000ff" };
@@ -224,9 +229,18 @@ export class FakeHost {
   /** 客户端发出的每条消息解析后的形状，便于按 `type` 检索。 */
   readonly received: Readonly<Record<string, unknown>>[] = [];
   readonly socketUrls: string[] = [];
+  /**
+   * 每次升级尝试里客户端声明的子协议列表（原样记录，未传即 `undefined`）。
+   *
+   * 与 `socketUrls` 一起构成「这次连接到底请求了什么」的完整留痕：§3.1 要求升级请求声明
+   * 约定 subprotocol，只记 URL 时「没声明」与「声明了别的」都看不出来。
+   */
+  readonly socketProtocols: (readonly string[] | undefined)[] = [];
   readonly deviceProofs: string[] = [];
 
   #handlers: SocketHandlers | null = null;
+  /** 本假主机为最近一条连接「选中」的子协议（合规服务端会选中客户端声明的第一条）。 */
+  #negotiated = "";
   #closed = false;
   /** `command.result` 的 `messageId` 计数（每条结果一帧；见 `#deliverResult`）。 */
   #resultCounter = 0;
@@ -239,8 +253,12 @@ export class FakeHost {
   }
 
   /** 注入给 `createComposition({ openSocket })` 的连接工厂。 */
-  readonly openSocket = (input: { readonly url: string; readonly handlers: SocketHandlers }): SocketPort => {
+  readonly openSocket = (input: SocketOpenInput): SocketPort => {
     this.socketUrls.push(input.url);
+    this.socketProtocols.push(input.protocols);
+    // 合规服务端选中客户端声明的第一条（§3.1 的 v1 只声明一条）；没声明就什么都不选，
+    // 与真实服务端一致：连接层随后必须据此进阻断态（`connection.ts` 的 `#onOpen`）。
+    this.#negotiated = input.protocols?.[0] ?? "";
     this.#handlers = input.handlers;
     this.#closed = false;
     // 真实 socket 的 `open` 事件是异步的；同步调用会让客户端在构造完成前就收到帧。
@@ -255,6 +273,7 @@ export class FakeHost {
       close: (code: number, reason: string): void => {
         this.drop(code, reason);
       },
+      negotiatedSubprotocol: (): string => this.#negotiated,
     };
   };
 

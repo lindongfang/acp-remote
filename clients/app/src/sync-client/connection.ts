@@ -10,9 +10,13 @@
  *
  * ## 阻断态在这里判定
  *
- * 四个阻断态的触发源各不相同，但都收敛到 `SyncClientEvent.blocked`：
+ * 每个阻断态的触发源各不相同，但都收敛到 `SyncClientEvent.blocked`：
  * close code 4411（被顶替）、4410（撤销）、4406（版本不兼容）、`hostProof` 校验失败
- * 或 host key 与配对记录不一致（身份变化）。判定完成后 `SyncClient` 停止自动重连。
+ * 或 host key 与配对记录不一致（身份变化），以及**服务端没有选中约定的子协议**
+ * （§3.1，在 `#onOpen` 之后核 `SocketPort.negotiatedSubprotocol()`）与**必需 feature 未被选中**
+ * （§5.2，在 `#onServerChallenge` 里比对 `REQUIRED_FEATURES`）。后两种与版本不兼容落到同一个
+ * 阻断态，成因由事件的 `reason` 分开（见 `IncompatibleReason`）。判定完成后 `SyncClient`
+ * 停止自动重连。
  */
 
 import type {
@@ -44,7 +48,7 @@ import type {
   DeviceIdentityMaterial,
   HostIdentityPort,
   RandomPort,
-  SocketHandlers,
+  SocketFactory,
   SocketPort,
   TranscriptCodec,
 } from "./ports";
@@ -58,7 +62,7 @@ const PROTOCOL_VERSION = 1;
  *
  * 权威值有两处同源出处：`docs/SYNC_PROTOCOL.md` 「WebSocket endpoint 为同源 `/sync/v1`」，
  * 与 `crates/server/src/sync/conn/mod.rs` 的 `pub const WS_PATH: &str = "/sync/v1";`。
- * 客户端只在**这里**写一次：组合根用它拼连接 URL（`src/composition.ts` 的 `syncUrlFor`），
+ * 客户端只在**这里**写一次：出站地址的唯一构造点是下面的 `syncSocketUrl`（组合根调它），
  * e2e 检查用它写期望值——两边各自抄一个字面量就会各改各的、漏一处。
  */
 export const SYNC_WS_PATH = "/sync/v1";
@@ -72,10 +76,34 @@ export const SYNC_WS_PATH = "/sync/v1";
  * （接入层按它做 upgrade 白名单：`crates/server/src/transport/net/route.rs` 的
  * `register_ws(path, required_subprotocol, handler)`，未声明该 subprotocol 的升级请求被拒绝）。
  *
- * 客户端只在**这里**写一次：唯一的升级点 `socket.web.ts` 的 `new WebSocket(url, ...)` 引用它。
+ * 客户端只在**这里**写一次（并以本常量作为 `DECLARED_SUBPROTOCOLS` 的唯一成员）：
+ * 唯一的升级点 `socket.web.ts` 的 `new WebSocket(url, protocols)` 声明它，`endpoint-contract.test.ts`
+ * 断言它与机器登记（`compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol`）逐字相等。
  * 抄成第二份字面量就会出现「一处改了、另一处没改」的静默失败——服务端会直接拒掉升级。
  */
 export const SYNC_WS_SUBPROTOCOL = "acp-remote.sync.v1.json";
+
+/**
+ * 本客户端在升级请求里声明的子协议列表（§3.1 的 v1 只约定一条）。
+ *
+ * 它是端口的**入参**（`SocketFactory` 的 `protocols`）：声明了什么必须可被注入、可被断言，
+ * 因此这里给出唯一一份默认值，既由组合根显式传给连接（`SyncClientOptions.subprotocols`
+ * 是必填字段），也作为 Web 实现在调用方未给声明时的兜底——两条路径取同一个常量，
+ * 不会各自抄一份。
+ */
+export const DECLARED_SUBPROTOCOLS: readonly string[] = [SYNC_WS_SUBPROTOCOL];
+
+/**
+ * 规范化来源 → 同步连接地址（`https://host[:port]` → `wss://host[:port]/sync/v1`，§3.1/§8）。
+ *
+ * 只替换 scheme，其余原样保留：规范化来源不含 path/query/fragment（§3.2 的 `$defs.canonicalOrigin`），
+ * 因此拼接不会丢掉任何来源信息。路径取自 `SYNC_WS_PATH`（唯一出处见该常量的说明），
+ * 这里不重写 `/sync/v1` 字面量；调用方（组合根）也不自己拼——出站地址只有这一个构造点，
+ * 断言因此可以落在**构造结果**上（`endpoint-contract.test.ts`）。
+ */
+export function syncSocketUrl(canonicalOrigin: string): string {
+  return `${canonicalOrigin.replace(/^https:\/\//, "wss://")}${SYNC_WS_PATH}`;
+}
 
 /** Device proof 的 domain tag（§6.3；Host challenge 的校验在 `HostIdentityPort` 实现侧）。 */
 const DEVICE_PROOF_DOMAIN = "acp-remote/device-proof/v1";
@@ -147,6 +175,25 @@ export type ClientBlockCause =
   | "host_identity_changed"
   | "replaced_by_other_connection";
 
+/**
+ * `version_incompatible` 之下**具体是哪一步谈不拢**（`blocked` 事件的 `reason`）：封闭词表。
+ *
+ * 为什么粗粒度原因不够：`version_incompatible` 同时覆盖三种**恢复路径不同**的情形——
+ * 服务端没接受约定的子协议（要对准两端的部署与来源）、协议版本不兼容（要升级客户端或主机）、
+ * 必需 feature 未被选中（要在主机侧升级）。三者落到同一个 `cause` 就再也分不出来，
+ * 用户与诊断只能看到「协议或能力不兼容」这一句笼统的说明。
+ *
+ * 词表只登记这一族的细化：其余阻断原因（撤销、身份变化、被顶替）本身已经足够具体，
+ * 没有进一步可分的取值，事件里因此不带 `reason`。
+ */
+export type IncompatibleReason =
+  /** 服务端没有选中约定的子协议（§3.1；`#onOpen` 比对 `SocketPort.negotiatedSubprotocol()`）。 */
+  | "subprotocol_not_selected"
+  /** 协议版本不兼容（close 4406 / `protocol.version_unsupported` / 选中的版本不等于本实现）。 */
+  | "protocol_version_unsupported"
+  /** 服务端选中的 feature 未覆盖 `REQUIRED_FEATURES`（§5.2；握手校验或 `protocol.feature_required`）。 */
+  | "required_features_missing";
+
 /** 客户端向消费方（`src/state/` 与 WP7 的 feature 层）发出的事件。 */
 export type SyncClientEvent =
   /** socket 已建立，开始逐连接握手。 */
@@ -188,7 +235,18 @@ export type SyncClientEvent =
   /** 连接关闭。`retryable` 为假时不自动重连。 */
   | { readonly kind: "closed"; readonly code: number; readonly retryable: boolean; readonly detail?: string }
   /** 进入阻断态：必须停止自动重连。 */
-  | { readonly kind: "blocked"; readonly cause: ClientBlockCause; readonly code: number }
+  | {
+      readonly kind: "blocked";
+      readonly cause: ClientBlockCause;
+      readonly code: number;
+      /**
+       * 细化成因，仅在 `cause === "version_incompatible"` 时给出（见 `IncompatibleReason`）。
+       *
+       * 它随事件一起交付，而不是等消费方从 `code` 反推：`4406` 与握手期的 feature 缺失
+       * 落到同一个关闭码与同一个阻断态，只有这里能分辨是「子协议 / 版本」还是「必需 feature」。
+       */
+      readonly reason?: IncompatibleReason;
+    }
   /** 消息被解码拒绝（诊断用；不进入阻断态，除非调用方据此升级）。 */
   | { readonly kind: "rejected"; readonly reason: string; readonly detail: string };
 
@@ -220,12 +278,21 @@ export const SESSION_HISTORY_FEATURE = "core.session-history.v1";
 export interface SyncConnectionOptions {
   readonly hostId: Uuid;
   readonly url: string;
+  /**
+   * 本连接在升级请求里声明的子协议列表（由组合根给出，见 `DECLARED_SUBPROTOCOLS`）。
+   *
+   * 它有两处用途，缺一都不可：交给 socket 端口作为升级请求的声明（§3.1），
+   * 以及核对服务端**实际选中**的那一条（未选中即终止连接，见 `#onOpen`）。
+   * 必填而不是给缺省值：声明错一条与不声明都表现为「连接被拒」，只有让组合根显式给出，
+   * 这两件事才不会在装配处被悄悄省略。
+   */
+  readonly subprotocols: readonly string[];
   readonly identity: DeviceIdentityLike;
   readonly host: HostIdentityPort;
   readonly random: RandomPort;
   readonly transcript: TranscriptCodec;
   /** 建立 socket 的工厂；Web 实现见 `socket.web.ts`。 */
-  readonly openSocket: (input: { readonly url: string; readonly handlers: SocketHandlers }) => SocketPort;
+  readonly openSocket: SocketFactory;
   /** 上一次已确认的持久游标；首次为 `null`（§9.2）。 */
   readonly resumeCursor: Cursor | null;
   /**
@@ -323,6 +390,7 @@ export class SyncConnection {
     this.#lastAcked = options.resumeCursor;
     this.#socket = options.openSocket({
       url: options.url,
+      protocols: options.subprotocols,
       handlers: {
         onOpen: () => {
           void this.#onOpen();
@@ -397,6 +465,18 @@ export class SyncConnection {
 
   // ── 握手 ────────────────────────────────────────────────────────────────
   async #onOpen(): Promise<void> {
+    // §3.1 的最后一句：「服务端必须选择该 subprotocol，否则客户端终止连接」。
+    //
+    // 这一步不能省：服务端不选 subprotocol 时升级**仍然成功**，内核只在 `WebSocket.protocol`
+    // 上留一个空串——没有 error 事件、没有非 1000 的关闭码，于是「未选中」与「网络断开」在
+    // socket 层完全同形。不在 open 之后核一次，客户端就会在一条没有协商过的连接上开始握手，
+    // 失败后按普通断网退避重连（重连会得到同样的升级结果，只会把配置问题刷成无限重试）。
+    const negotiated = this.#socket.negotiatedSubprotocol();
+    if (!this.#options.subprotocols.includes(negotiated)) {
+      this.#onEvent({ kind: "rejected", reason: "subprotocol_not_selected", detail: negotiated });
+      this.#block("version_incompatible", CLOSE.versionIncompatible, "subprotocol_not_selected");
+      return;
+    }
     const identity = await this.#loadIdentityMaterial();
     if (identity === null) {
       this.close(CLOSE.authRequired, "identity_missing");
@@ -443,7 +523,21 @@ export class SyncConnection {
       return;
     }
     if (message.body.selectedProtocolVersion !== PROTOCOL_VERSION) {
-      this.#block("version_incompatible", CLOSE.versionIncompatible);
+      this.#block("version_incompatible", CLOSE.versionIncompatible, "protocol_version_unsupported");
+      return;
+    }
+    // §5.2：hello 里声明的 `requiredFeatures` 服务端**必须**全选中，否则这条连接缺少客户端
+    // 赖以成立的能力（ACK 与命令状态查询）。校验放在验签**之前**：这条连接已经要被拒，
+    // 没必要为它做一次主机验签——也绝不在这条连接上签设备证明（`client_proof` 只发一次，
+    // 下面那段就是它唯一的发出点）。
+    //
+    // 为什么不「照常使用这条缺能力的连接」：缺 `core.event-ack.v1` 时 ACK 发不出去，
+    // 缺 `core.command-status.v1` 时命令状态查询不可用，两者都会让上层在**看起来已认证**的
+    // 连接上静默丢失 R13/R14 的保证。
+    const missing = REQUIRED_FEATURES.filter((feature) => !message.body.selectedFeatures.includes(feature));
+    if (missing.length > 0) {
+      this.#onEvent({ kind: "rejected", reason: "required_features_missing", detail: missing.join(",") });
+      this.#block("version_incompatible", CLOSE.versionIncompatible, "required_features_missing");
       return;
     }
     const verified = await this.#host.verifyHostChallenge({
@@ -795,8 +889,12 @@ export class SyncConnection {
         this.#block("device_revoked", CLOSE.deviceRevoked);
         return;
       case "protocol.version_unsupported":
+        this.#block("version_incompatible", CLOSE.versionIncompatible, "protocol_version_unsupported");
+        return;
       case "protocol.feature_required":
-        this.#block("version_incompatible", CLOSE.versionIncompatible);
+        // 服务端在握手期明确回「缺必需 feature」（§5.2）：与「版本不兼容」落到同一个阻断态
+        // （两者都要换一端），但成因不同，`reason` 必须区分开。
+        this.#block("version_incompatible", CLOSE.versionIncompatible, "required_features_missing");
         return;
       case "auth.origin_mismatch":
       case "auth.host_mismatch":
@@ -825,19 +923,37 @@ export class SyncConnection {
     this.discardStaging("connection_closed");
     const blocked = blockCauseForCloseCode(code);
     if (blocked !== null) {
-      this.#onEvent({ kind: "blocked", cause: blocked, code });
+      // 这里**不**经 `#block`：socket 已经关了，再调一次 `close()` 只会对一条死连接发关闭帧。
+      // §12.3 的 `4406` 就是「协议版本不兼容」本身，因此这一条带细化原因；其余阻断关闭码
+      // （4410/4409/4411）没有可再分的取值。
+      const reason = blocked === "version_incompatible" ? "protocol_version_unsupported" : null;
+      if (reason === null) {
+        this.#onEvent({ kind: "blocked", cause: blocked, code });
+      } else {
+        this.#onEvent({ kind: "blocked", cause: blocked, code, reason });
+      }
       return;
     }
     // 1000/4500 等可重试；4400/4401/4408/4429 视为本次连接失败但可退避重试。
     this.#onEvent({ kind: "closed", code, retryable: isRetryableCloseCode(code), detail: reason });
   }
 
-  #block(cause: ClientBlockCause, code: number): void {
+  /**
+   * 进入阻断态。
+   *
+   * `reason` 是 `version_incompatible` 一族下的细化成因，随事件一起交付（其余原因没有可再分的
+   * 取值，省略它）。阻断的语义不变：停止补发、丢弃未完成快照、并**终止**这条 socket。
+   */
+  #block(cause: ClientBlockCause, code: number, reason?: IncompatibleReason): void {
     this.#closed = true;
     // 阻断态下不再补发任何东西：重订阅定时器必须随阻断一起撤销。
     this.#cancelGapResubscribe();
     this.#staging.discard("connection_blocked");
-    this.#onEvent({ kind: "blocked", cause, code });
+    if (reason === undefined) {
+      this.#onEvent({ kind: "blocked", cause, code });
+    } else {
+      this.#onEvent({ kind: "blocked", cause, code, reason });
+    }
     this.#socket.close(code, cause);
   }
 

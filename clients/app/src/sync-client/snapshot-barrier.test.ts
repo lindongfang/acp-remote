@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 
 import { SyncClient } from "./client";
 import { SyncConnection } from "./connection";
+import { DECLARED_SUBPROTOCOLS } from "./connection";
 import type { SyncClientEvent } from "./connection";
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
@@ -140,6 +141,7 @@ function setupConnection(resumeCursor: Cursor | null): {
       random: new FakeRandom(),
       transcript: new FakeTranscript(),
       openSocket: sockets.open,
+      subprotocols: DECLARED_SUBPROTOCOLS,
       resumeCursor,
       clock: new FakeClock(),
       ledgerFor: () => ledger,
@@ -169,6 +171,7 @@ function setupClient(input: { readonly resumeCursor?: Cursor | null } = {}): {
     transcript: new FakeTranscript(),
     digest: fakeDigest(),
     openSocket: sockets.open,
+    subprotocols: DECLARED_SUBPROTOCOLS,
     resumeCursor: input.resumeCursor ?? null,
     clock: new FakeClock(),
     nowMs: () => 1_700_000_000_000,

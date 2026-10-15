@@ -35,12 +35,13 @@
  */
 
 import {
+  DECLARED_SUBPROTOCOLS,
   encodeBase64Url,
   decodeBase64Url,
   openWebSocket,
   sortedFeatures,
-  SYNC_WS_PATH,
   SyncClient,
+  syncSocketUrl,
 } from "./sync-client";
 import type {
   ByteArray,
@@ -701,7 +702,10 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
 
     sync = new SyncClient({
       hostId: record.hostId,
-      url: syncUrlFor(deviceIdentity.canonicalOrigin),
+      // 出站地址与声明的子协议都由连接层给出唯一来源（`syncSocketUrl` / `DECLARED_SUBPROTOCOLS`）：
+      // 组合根只负责在装配时把它们**显式**交出去，绝不在自己这里拼 URL 或抄子协议字面量。
+      url: syncSocketUrl(deviceIdentity.canonicalOrigin),
+      subprotocols: DECLARED_SUBPROTOCOLS,
       identity: platform.deviceIdentity,
       host: pairedHost,
       random,
@@ -755,12 +759,3 @@ const defaultFetch: FetchLike = async (url, init) => {
     json: () => response.json() as Promise<unknown>,
   };
 };
-
-/**
- * `https://host[:port]` → `wss://host[:port]/sync/v1`（§8：正式连接只允许 `wss://`）。
- *
- * 路径来自 `SYNC_WS_PATH`（唯一出处见该常量的说明）；这里不重写 `/sync/v1` 字面量。
- */
-function syncUrlFor(canonicalOrigin: string): string {
-  return `${canonicalOrigin.replace(/^https:\/\//, "wss://")}${SYNC_WS_PATH}`;
-}

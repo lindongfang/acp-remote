@@ -18,7 +18,7 @@ import type {
 } from "../../protocol";
 import { encodeBase64Url } from "../base64url";
 import type { SyncClientEvent } from "../connection";
-import { SyncConnection } from "../connection";
+import { REQUIRED_FEATURES, SyncConnection } from "../connection";
 import { EventLedger } from "../dedupe";
 import type {
   ByteArray,
@@ -29,6 +29,7 @@ import type {
   HostIdentityPort,
   RandomPort,
   SocketHandlers,
+  SocketOpenInput,
   SocketPort,
   TranscriptCodec,
   TranscriptField,
@@ -44,10 +45,19 @@ export interface SentMessage {
 export class FakeSocket implements SocketPort {
   readonly sent: SentMessage[] = [];
   closedWith: { readonly code: number; readonly reason: string } | null = null;
+  /**
+   * 服务端在升级握手里选中的子协议：缺省取客户端声明的第一条（合规服务端的行为）。
+   *
+   * 它是**可写的**，因为「服务端没选中」正是要证伪的情形：测试把它设成 `""`（或别的值），
+   * 触发 `open()`，连接层就必须进阻断态而不是照常握手。真实 Web 实现里这个值来自
+   * `WebSocket.protocol`（内核不提供任何其他观察点），假 socket 因此必须能被设成同一形状。
+   */
+  negotiated: string;
   readonly #handlers: SocketHandlers;
 
-  constructor(handlers: SocketHandlers) {
+  constructor(handlers: SocketHandlers, negotiated = "") {
     this.#handlers = handlers;
+    this.negotiated = negotiated;
   }
 
   send(text: string): void {
@@ -56,6 +66,10 @@ export class FakeSocket implements SocketPort {
 
   close(code: number, reason: string): void {
     this.closedWith = { code, reason };
+  }
+
+  negotiatedSubprotocol(): string {
+    return this.negotiated;
   }
 
   /** socket 打开：触发被测代码的 `onOpen`。 */
@@ -88,10 +102,20 @@ export class FakeSocket implements SocketPort {
 export class FakeSocketFactory {
   readonly sockets: FakeSocket[] = [];
   readonly urls: string[] = [];
+  /**
+   * 每次 `openSocket` 收到的**声明子协议列表**（原样记录，缺席即 `undefined`）。
+   *
+   * 与 `urls` 并列而不并入 `FakeSocket`：它是**入参**而非连接状态，断言的对象是
+   * 「客户端到底声明了什么」。原样记录（而不是替成 `[]`）才能让「端点漏把声明传下来」
+   * 与「传了一个空列表」都表现为可见的失败。
+   */
+  readonly protocols: (readonly string[] | undefined)[] = [];
 
-  readonly open = (input: { readonly url: string; readonly handlers: SocketHandlers }): SocketPort => {
+  readonly open = (input: SocketOpenInput): SocketPort => {
     this.urls.push(input.url);
-    const socket = new FakeSocket(input.handlers);
+    this.protocols.push(input.protocols);
+    // 合规服务端会选中客户端声明的第一条（§3.1 的 v1 只声明一条）；测试可改写它。
+    const socket = new FakeSocket(input.handlers, input.protocols?.[0] ?? "");
     this.sockets.push(socket);
     return socket;
   };
@@ -289,6 +313,14 @@ export function makeChallenge(input: {
   readonly hostId?: Uuid;
   readonly selectedProtocolVersion?: number;
   readonly serverNonce?: string;
+  /**
+   * 服务端选中的 feature 列表。
+   *
+   * 缺省值**必须覆盖** `REQUIRED_FEATURES`：客户端在 `#onServerChallenge` 里比对必需集合
+   * （§5.2），缺一条就进阻断态，于是所有「握手能走完」的用例都会变成阻断用例。
+   * 这里从 `REQUIRED_FEATURES` 派生（而不是抄一份字面量），改必需集合时缺省值跟着走。
+   */
+  readonly selectedFeatures?: readonly string[];
 }): Record<string, unknown> {
   return {
     protocolVersion: 1,
@@ -299,7 +331,7 @@ export function makeChallenge(input: {
       hostId: input.hostId ?? "bdb2ec20-f98c-4d87-b789-e540d527ef87",
       connectionId: input.connectionId,
       serverNonce: input.serverNonce ?? "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-      selectedFeatures: ["core.event-ack.v1"],
+      selectedFeatures: [...(input.selectedFeatures ?? REQUIRED_FEATURES)],
       hostProof: "AQID",
     },
   };

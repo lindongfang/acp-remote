@@ -10,7 +10,15 @@
 
 import { describe, expect, it } from "vitest";
 
-import { SyncConnection, blockCauseForCloseCode, compareCursors, sortedFeatures } from "./connection";
+import {
+  DECLARED_SUBPROTOCOLS,
+  REQUIRED_FEATURES,
+  SYNC_WS_SUBPROTOCOL,
+  SyncConnection,
+  blockCauseForCloseCode,
+  compareCursors,
+  sortedFeatures,
+} from "./connection";
 import type { ClientBlockCause, SyncClientEvent } from "./connection";
 import type { Cursor } from "../protocol";
 import { EventLedger } from "./dedupe";
@@ -44,6 +52,8 @@ function setup(
     readonly resumeCursor?: Cursor | null;
     readonly shared?: { readonly random: FakeRandom };
     readonly sharedClock?: FakeClock;
+    /** 覆盖升级请求声明的子协议列表（缺省即组合根传的那一份）。 */
+    readonly subprotocols?: readonly string[];
   } = {},
 ): Harness {
   const sockets = new FakeSocketFactory();
@@ -59,7 +69,8 @@ function setup(
   const connection = new SyncConnection(
     {
       hostId: "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-      url: "wss://host.example:8443/sync",
+      url: "wss://host.example:8443/sync/v1",
+      subprotocols: input.subprotocols ?? DECLARED_SUBPROTOCOLS,
       identity,
       host,
       random,
@@ -623,7 +634,8 @@ describe("R14：跨连接去重", () => {
       new SyncConnection(
         {
           hostId: "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-          url: "wss://host.example:8443/sync",
+          url: "wss://host.example:8443/sync/v1",
+          subprotocols: DECLARED_SUBPROTOCOLS,
           identity: new FakeIdentity(),
           host: new FakeHostIdentity(),
           random: new FakeRandom(),
@@ -682,5 +694,145 @@ describe("纯函数判定", () => {
     expect(
       compareCursors({ serverEpoch: SERVER_EPOCH, globalSequence: "3" }, { serverEpoch: SERVER_EPOCH, globalSequence: "3" }),
     ).toBe(0);
+  });
+});
+
+describe("连接契约：升级请求声明的子协议（§3.1）", () => {
+  it("建立 socket 时把声明的子协议列表交给端口（非空且含约定子协议）", () => {
+    const context = setup();
+
+    // 断言的是**端口实际收到的入参**：漏传时这里是 `undefined`、传空列表时这里是 `[]`，
+    // 两种写法都会让下面两条断言变红（只看 URL 的断言对它们完全无感）。
+    const declared = context.sockets.protocols[0];
+    expect(declared).toBeDefined();
+    expect(declared?.length ?? 0).toBeGreaterThan(0);
+    expect(declared).toContain(SYNC_WS_SUBPROTOCOL);
+    expect(declared).toEqual(DECLARED_SUBPROTOCOLS);
+  });
+
+  it("声明列表由构造方给出（端口是接缝，不是常量读取处）", () => {
+    // 注入一份**别**的声明：端口必须原样交出去，而不是把它替换成模块内的缺省常量。
+    const context = setup({ subprotocols: ["acp-remote.sync.v999.json"] });
+
+    expect(context.sockets.protocols).toEqual([["acp-remote.sync.v999.json"]]);
+  });
+
+  it("服务端未选中约定子协议：进阻断态、终止连接，不落回普通重连", async () => {
+    const context = setup();
+    // 真实内核只在 `WebSocket.protocol` 上暴露协商结果：服务端不选 subprotocol 时升级仍然
+    // 成功、没有 error 事件、也没有非 1000 的关闭码，因此这件事只能由客户端自己核对。
+    context.sockets.latest.negotiated = "";
+    context.connection.start();
+    context.sockets.latest.open();
+    await waitUntil(() => context.events.some((event) => event.kind === "blocked"), "进入阻断态");
+
+    // 反例：不核对协商结果时，这条连接会照常发出 client_hello，并在服务端关闭后落回
+    // `closed`（普通重连路径）→ 下面每条断言都会变红。
+    expect(context.sockets.latest.sent).toEqual([]);
+    expect(context.events.some((event) => event.kind === "closed")).toBe(false);
+    expect(context.events.find((event) => event.kind === "blocked")).toMatchObject({
+      kind: "blocked",
+      cause: "version_incompatible",
+      code: 4406,
+      reason: "subprotocol_not_selected",
+    });
+    // 客户端主动终止这条连接（§3.1），而不是把它当成「网络不好」再试一次。
+    expect(context.sockets.latest.closedWith).toEqual({ code: 4406, reason: "version_incompatible" });
+  });
+
+  it("负向对照：网络断开走可区分的事件（`closed`，不是 `blocked`）", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.sockets.latest.serverClose(1006, "connection reset by peer");
+
+    // 「子协议/版本不符」与「网络断开」必须能分开：前者是阻断态（停止自动重连），
+    // 后者是普通断开（状态层级按退避重连）。若实现把两者合成一条路径，本用例会变红。
+    expect(context.events.some((event) => event.kind === "blocked")).toBe(false);
+    expect(context.events.find((event) => event.kind === "closed")).toMatchObject({ code: 1006 });
+  });
+});
+
+describe("连接契约：必需 feature 的覆盖判定（§5.2）", () => {
+  it("服务端选中的 feature 覆盖必需集合时握手继续", async () => {
+    const context = setup();
+    context.connection.start();
+    context.sockets.latest.open();
+    await waitUntil(() => context.sockets.latest.types().includes("auth.client_hello"), "发出 clientHello");
+    context.sockets.latest.deliver(
+      makeChallenge({ connectionId: CONNECTION_ID, selectedFeatures: [...REQUIRED_FEATURES] }),
+    );
+    await waitUntil(() => context.sockets.latest.types().includes("auth.client_proof"), "发出 clientProof");
+
+    expect(context.events.some((event) => event.kind === "blocked")).toBe(false);
+  });
+
+  it("服务端漏选一条必需 feature：阻断且不发设备证明", async () => {
+    const context = setup();
+    context.connection.start();
+    context.sockets.latest.open();
+    await waitUntil(() => context.sockets.latest.types().includes("auth.client_hello"), "发出 clientHello");
+    // ACK 面仍在，缺的是命令状态查询（`core.command-status.v1`）——客户端必须在签设备证明
+    // **之前**发现这件事：缺能力的连接一旦被当成正常连接，R13/R14 的保证会静默失效。
+    context.sockets.latest.deliver(makeChallenge({ connectionId: CONNECTION_ID, selectedFeatures: ["core.event-ack.v1"] }));
+    await waitUntil(() => context.events.some((event) => event.kind === "blocked"), "进入阻断态");
+
+    // 反例：若握手处不做集合包含判定，这条连接会发出 client_proof 并继续 subscribe → 断言变红。
+    expect(context.sockets.latest.types()).not.toContain("auth.client_proof");
+    expect(context.events.find((event) => event.kind === "blocked")).toMatchObject({
+      kind: "blocked",
+      cause: "version_incompatible",
+      reason: "required_features_missing",
+    });
+    // 原因与「协议版本不兼容」「子协议未被接受」是三个不同取值：同一句「不兼容」文案下
+    // 三者恢复路径不同，事件里必须能分开。
+    expect(context.events.find((event) => event.kind === "rejected")).toMatchObject({
+      reason: "required_features_missing",
+      detail: "core.command-status.v1",
+    });
+  });
+
+  it("协议版本不符的成因与必需 feature 缺失可区分", async () => {
+    const context = setup();
+    context.connection.start();
+    context.sockets.latest.open();
+    await waitUntil(() => context.sockets.latest.types().includes("auth.client_hello"), "发出 clientHello");
+    context.sockets.latest.deliver(makeChallenge({ connectionId: CONNECTION_ID, selectedProtocolVersion: 2 }));
+    // 版本判定在 `loadPairedHost(...)` 的 await 之后（connection.ts:520 → :525）：阻断是异步产生的，
+    // 必须先等事件落地再断言，否则读到的是尚未推进的状态。
+    await waitUntil(() => context.events.some((event) => event.kind === "blocked"), "进入阻断态");
+
+    // 反例：若版本判定被删掉，这条连接会继续走到验签并发出 client_proof → 两条断言都变红。
+    expect(context.sockets.latest.types()).not.toContain("auth.client_proof");
+    expect(context.events.find((event) => event.kind === "blocked")).toMatchObject({
+      kind: "blocked",
+      cause: "version_incompatible",
+      reason: "protocol_version_unsupported",
+    });
+  });
+
+  it("服务端回 protocol.feature_required 时同样进阻断态，原因仍是必需 feature", async () => {
+    const context = setup();
+    await completeHandshake(context);
+    context.sockets.latest.deliver({
+      protocolVersion: 1,
+      type: "error",
+      messageId: "dddddddd-1111-4111-8111-000000000002",
+      connectionId: CONNECTION_ID,
+      connectionSequence: "1",
+      body: {
+        code: "protocol.feature_required",
+        message: "服务端未启用必需能力",
+        retryable: false,
+        correlationId: null,
+        details: { features: ["core.command-status.v1"] },
+      },
+    });
+
+    expect(context.events.find((event) => event.kind === "blocked")).toMatchObject({
+      kind: "blocked",
+      cause: "version_incompatible",
+      code: 4406,
+      reason: "required_features_missing",
+    });
   });
 });

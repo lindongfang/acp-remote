@@ -24,7 +24,7 @@ import { compareCursors } from "./connection";
 import { EventLedger } from "./dedupe";
 import { SnapshotStaging } from "./snapshot";
 import type { VerifiedSnapshot } from "./snapshot";
-import type { ClockPort, DigestPort, RandomPort, SocketHandlers, SocketPort, TranscriptCodec, DeviceIdentityLike, HostIdentityPort } from "./ports";
+import type { ClockPort, DigestPort, RandomPort, SocketFactory, TranscriptCodec, DeviceIdentityLike, HostIdentityPort } from "./ports";
 
 /** 已完成（可离线渲染）的快照状态。 */
 export interface CompletedSnapshot {
@@ -72,12 +72,15 @@ export interface DispatchRecord {
 export interface SyncClientOptions {
   readonly hostId: Uuid;
   readonly url: string;
+  /** 升级请求里声明的子协议列表（由组合根给出，见 `DECLARED_SUBPROTOCOLS`）。 */
+  readonly subprotocols: readonly string[];
   readonly identity: DeviceIdentityLike;
   readonly host: HostIdentityPort;
   readonly random: RandomPort;
   readonly transcript: TranscriptCodec;
   readonly digest: DigestPort;
-  readonly openSocket: (input: { readonly url: string; readonly handlers: SocketHandlers }) => SocketPort;
+  /** 建立 socket 的工厂（Web 实现见 `socket.web.ts`；端口形状见 `SocketFactory`）。 */
+  readonly openSocket: SocketFactory;
   /** 最后一次持久 ACK 的游标；首次同步为 `null`。 */
   readonly resumeCursor: Cursor | null;
   /** 事件的唯一消费者（`src/state/` 的连接机与后续的 feature 层）。 */
@@ -181,6 +184,7 @@ export class SyncClient {
       {
         hostId: this.#options.hostId,
         url: this.#options.url,
+        subprotocols: this.#options.subprotocols,
         identity: this.#options.identity,
         host: this.#options.host,
         random: this.#options.random,

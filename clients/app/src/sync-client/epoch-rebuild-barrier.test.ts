@@ -32,6 +32,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SyncClient } from "./client";
+import { DECLARED_SUBPROTOCOLS } from "./connection";
 import type { SyncClientEvent } from "./connection";
 import type { Cursor, Uuid } from "../protocol";
 import {
@@ -103,6 +104,7 @@ function setupClient(): ClientHarness {
     transcript: new FakeTranscript(),
     digest: fakeDigest(),
     openSocket: sockets.open,
+    subprotocols: DECLARED_SUBPROTOCOLS,
     resumeCursor: null,
     clock: new FakeClock(),
     nowMs: () => 1_700_000_000_000,
