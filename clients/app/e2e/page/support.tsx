@@ -1,16 +1,33 @@
 /**
  * 用例运行骨架：断言、场景装配与身份预置。
  *
- * ## 预置而不是端到端配对（必须在报告里如实登记的取舍）
+ * ## 起点：多数用例预置「已配对」，配对链路本身另有专门用例
  *
- * 真实配对在运行时**不可达**：`app/pair.tsx` 没有任何二维码扫描入口，
- * `src/composition.ts` 的 `rememberPairedHost` 与 `HttpPairingTransport` 没有生产调用方，
- * 连接机的 `poll` 在 `approved` 分支也不返回主机公钥。因此本目录**不走配对流程**：
- * 它直接用真实平台端口（`openPlatform()` 的真实 IndexedDB 写入口）写入
- * `paired-host/<origin>` 记录，再让**真实**的 `createComposition().start()` 读到它。
+ * 真实配对**在运行时可达**（本登记此前写作「不可达」，已按当前事实改写）：
  *
- * 预置的是「已配对」这个**起点**，其后的握手、验签、快照、命令全部走生产代码。
- * 被绕过的是配对页与 HTTPS 轮询面——那部分登记为未验证项。
+ * - 配对页有粘贴入口（`app/pair.tsx` → `src/components/PairingPanel.tsx` 的
+ *   `[data-pairing-entry]` / `[data-pairing-input]`），提交一段二维码内容即进入认领；
+ * - 认领与轮询由 `ClientStore` 的 `submitPairingQrText` / `startPairingFromAddress` 驱动，
+ *   网络面是 `src/composition.ts` 的 `HttpPairingTransport`（`POST /sync/v1/pairing/claim`
+ *   与 `/sync/v1/pairing/status`）——两者都有生产调用方；
+ * - 已批准时 `poll` 的 `approved` 分支返回主机标识与主机公钥，`rememberPairedHost` 把它写进
+ *   `paired-host/<origin>`（`src/composition.ts` 的 `PAIRED_HOST_KEY_PREFIX`），随后
+ *   `onPaired` 装配连接并触发一次连接。
+ *
+ * 这条链路的浏览器级证据是 `checks/pairing-first-run.ts` 的 PW-1：它从**未配对**出发，
+ * 在真实 DOM 上点输入与提交，走完认领 → 等待本机确认 → 已批准 → 落盘 → 连接在线。
+ *
+ * ## 那为什么多数用例仍然预置「已配对」
+ *
+ * 因为它们的被测面是**已配对之后**的行为（握手、验签、快照、命令、各页面的呈现），
+ * 配对只是一次性的前置动作：让每条用例都从零配对会把「等待本机确认」的 2 秒轮询与一次
+ * IndexedDB 写入乘上用例数，并把「页面用法」与「配对链路」两件事混进同一条断言——
+ * 配对链路坏掉时本该只红 PW-1，却会让整个检查集变红而丢掉定位。
+ *
+ * 预置写的是**真实**平台端口（`openPlatform()` 的真实 IndexedDB）里的同一份记录，
+ * 读取它的也是**真实**的 `createComposition().start()`：被跳过的只有配对页与 HTTPS 轮询面，
+ * 其后的握手、验签、快照、命令全部走生产代码。需要「未配对」起点的用例用
+ * `ScenarioOptions.seedPaired: false`（PW-1 / PW-2 就是）。
  */
 
 import { createElement, useEffect, useState } from "react";
@@ -18,8 +35,9 @@ import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { createComposition } from "../../src/composition";
-import type { Composition } from "../../src/composition";
+import type { Composition, FetchLike } from "../../src/composition";
 import { openPlatform } from "../../src/platform";
+import type { DeviceIdentity } from "../../src/platform";
 import { ClientStoreProvider } from "../../src/features/runtime";
 import RootLayout from "../../app/_layout";
 import { Stack, mountRoute, registerRoutes } from "./router-stub";
@@ -27,7 +45,7 @@ import type { RouteEntry } from "./router-stub";
 import { createFakeHostIdentity, FakeHost } from "./fake-host";
 import type { FakeHostIdentity, FakeHostOptions } from "./fake-host";
 
-/** 已配对主机记录在本地缓存里的键前缀（`src/composition.ts:112`）。 */
+/** 已配对主机记录在本地缓存里的键前缀（`src/composition.ts` 的 `PAIRED_HOST_KEY_PREFIX`）。 */
 const PAIRED_HOST_KEY_PREFIX = "paired-host/";
 
 /** 用例统一的规范化来源；`https` 形状满足 `$defs.canonicalOrigin`。 */
@@ -210,15 +228,33 @@ export async function waitFor(predicate: () => boolean, label: string, timeoutMs
 
 // ── 身份预置 ────────────────────────────────────────────────────────────────
 
+/**
+ * 预置的设备标识（`src/platform/` 的 `DeviceIdentity.deviceId`）。
+ *
+ * 固定值而不是随机：配对用例要逐字断言「认领正文里的 `deviceId` 是平台身份的那一个」，
+ * 随机值会让这条断言退化成「两边都从同一个变量取」的复述。同一来源下 `ensureIdentity`
+ * 是幂等的（返回既有身份），因此 `seedDeviceIdentity` 与 `seedPairedHost` 谁先谁后都拿到同一份。
+ */
+export const DEVICE_ID = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
+
+/**
+ * 只预置设备身份（不写已配对主机记录）——「未配对」这个起点的前置。
+ *
+ * 与 `seedPairedHost` 分开：**设备身份**与**已配对记录**是两件事，真实运行时前者在首次
+ * 配对时就存在（`claim` 调 `ensureIdentity`），后者要等主机批准才写入。同来源下幂等。
+ */
+export async function seedDeviceIdentity(): Promise<DeviceIdentity> {
+  return openPlatform().deviceIdentity.ensureIdentity({
+    deviceId: DEVICE_ID,
+    canonicalOrigin: CANONICAL_ORIGIN,
+  });
+}
+
 /** 预置设备身份 + 已配对主机记录。返回主机身份（用例可核对公钥真的被用上了）。 */
 export async function seedPairedHost(): Promise<FakeHostIdentity> {
   const identity = await createFakeHostIdentity(HOST_ID);
-  const platform = openPlatform();
-  await platform.deviceIdentity.ensureIdentity({
-    deviceId: "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
-    canonicalOrigin: CANONICAL_ORIGIN,
-  });
-  await platform.localCache.putLocalSummary({
+  await seedDeviceIdentity();
+  await openPlatform().localCache.putLocalSummary({
     key: `${PAIRED_HOST_KEY_PREFIX}${CANONICAL_ORIGIN}`,
     summary: JSON.stringify({ hostId: identity.hostId, publicKeyBase64Url: identity.publicKeyBase64Url }),
     nowMs: Date.now(),
@@ -235,6 +271,23 @@ export type ScenarioOptions = FakeHostOptions & {
   readonly corruptPairedHostRecord?: boolean;
   /** 额外注册可导航到的路由（点击目录行进入详情页时用得上）。 */
   readonly extraRoutes?: readonly RouteEntry[];
+  /**
+   * 是否预置「已配对」记录；缺省 `true`（多数用例的起点，见文件头）。
+   *
+   * `false` = 从**未配对**出发：只预置设备身份，`start()` 因此停在 `unpaired`，
+   * 后面的「已配对」只能由真实配对链路（认领 → 批准 → 落盘）挣来——PW-1 / PW-2 用它。
+   */
+  readonly seedPaired?: boolean;
+  /** 预置的主机身份；缺省新建一把。未配对起点用它把「已批准」响应的公钥与宿主钥对上。 */
+  readonly identity?: FakeHostIdentity;
+  /**
+   * 配对 HTTPS 面的替身（`claim` / `status`）；缺省用生产 `fetch`。
+   *
+   * 真实网络面在 e2e 环境里不可达（`canonicalOrigin` 是 `https://` 而页面由 http 提供），
+   * 因此配对用例必须注入它；注入的替身只替换**网络**，配对状态机、落盘与之后的连接
+   * 仍是生产代码。
+   */
+  readonly fetch?: FetchLike;
 };
 
 /**
@@ -277,7 +330,18 @@ function HarnessLayout({ composition }: { readonly composition: Composition }): 
  * 这些是「接线通了」的正面证据，而不是「页面没崩」。
  */
 export async function mountScenario(options: ScenarioOptions): Promise<Mounted> {
-  const identity = await seedPairedHost();
+  // 未配对的起点：设备身份要有（`claim` 拿它出证），已配对记录**不**写——`start()` 因此
+  // 停在 `unpaired`，页面呈现的配对页才有事可做。
+  //
+  // 还要先**清掉本地缓存**：同一个浏览器 profile 在同一次 e2e 运行里被所有用例共用，
+  // 上一条用例（`seedPairedHost`）留下的 `paired-host/<origin>` 会让本起点一挂起来就是
+  // 「已配对」，后面的断言会在一条预置记录上走捷径。设备身份另有存储面，不受这次清除影响。
+  const unpairedStart = options.seedPaired === false;
+  if (unpairedStart) await openPlatform().localCache.clear();
+  const identity = unpairedStart
+    ? (options.identity ?? (await createFakeHostIdentity(HOST_ID)))
+    : await seedPairedHost();
+  if (unpairedStart) await seedDeviceIdentity();
   // 「预置记录被改坏」的场景：写入一条形状非法的摘要。`parseStoredPairedHost`
   // 把它判成「从未配对」而不是抛错——验签因此绝不会被放行。
   if (options.corruptPairedHostRecord) {
@@ -293,7 +357,14 @@ export async function mountScenario(options: ScenarioOptions): Promise<Mounted> 
   registerRoutes([...(options.extraRoutes ?? []), options.route]);
   mountRoute(options.route);
 
-  const composition = createComposition({ openSocket: host.openSocket });
+  // 配对 HTTPS 面：用例给了替身就用它，否则回到生产 `fetch`（组合根的缺省）。
+  // 分两支构造而不是写 `fetch: options.fetch`：`exactOptionalPropertyTypes` 下显式传
+  // `undefined` 与「不传」不是一回事，混在一支里会让「缺省即生产实现」变成类型错误。
+  const composition = createComposition(
+    options.fetch === undefined
+      ? { openSocket: host.openSocket }
+      : { openSocket: host.openSocket, fetch: options.fetch },
+  );
   const root = createRoot(container);
   root.render(createElement(HarnessLayout, { composition }));
 

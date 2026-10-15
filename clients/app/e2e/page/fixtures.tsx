@@ -15,6 +15,7 @@ import type { SessionSummary, WorkspaceRef } from "../../src/protocol";
 import DirectoriesRoute from "../../app/index";
 import DirectoryDetailRoute from "../../app/dir/[alias]";
 import HostsRoute from "../../app/hosts";
+import PairRoute from "../../app/pair";
 import SessionRoute from "../../app/session/[id]";
 import type { RouteEntry } from "./router-stub";
 import type { StagedResources } from "../../src/sync-client";
@@ -134,6 +135,14 @@ export function sessionsForBothDirectories(): readonly SessionSummary[] {
 
 /** 目录页路由。 */
 export const DIRS_ROUTE: RouteEntry = { path: "/", component: DirectoriesRoute as RouteComponent, params: {} };
+
+/**
+ * 配对页路由（`app/pair.tsx`，`data-route="pair"`）。
+ *
+ * 与其它路由一样走**正常路径**（design D4）：配对内容留在片段里，不参与路由命中。
+ * 「未配对」起点的用例（`checks/pairing-first-run.ts`）从这一页走真实配对链路。
+ */
+export const PAIR_ROUTE: RouteEntry = { path: "/pair", component: PairRoute as RouteComponent, params: {} };
 
 /**
  * 主机与连接页路由（`app/hosts.tsx`）。

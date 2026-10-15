@@ -22,7 +22,7 @@
  */
 
 import { AGENTS, DIRS_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories } from "../fixtures";
-import { SYNC_WS_PATH, SYNC_WS_SUBPROTOCOL, openWebSocket } from "../../../src/sync-client";
+import { SYNC_WS_PATH, openWebSocket } from "../../../src/sync-client";
 import {
   CANONICAL_ORIGIN,
   expectEqual,
@@ -55,16 +55,19 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
 }
 
 /**
- * 读回服务端记录的最后一次升级请求声明。
+ * 读回服务端记录的**上一次升级请求**：请求行里的路径与 `Sec-WebSocket-Protocol` 原始值。
  *
- * 服务端侧（`e2e/run-e2e.mjs` 的 `upgrade` 处理器）记录的是浏览器内核实际发出的
- * `Sec-WebSocket-Protocol` 原始头；缺头时为 `null`。守卫脚本之外的 e2e 环境（例如
- * 页面直接由文件打开）没有这个端点，此时读取失败即为「观察不到」，断言如实变红。
+ * 服务端侧（`e2e/run-e2e.mjs` 的 `upgrade` 处理器）记录的是浏览器内核实际发出的请求；
+ * 缺头时为 `null`。守卫脚本之外的 e2e 环境（例如页面直接由文件打开）没有这个端点，
+ * 此时读取失败即为「观察不到」，断言如实变红。
  */
-async function readObservedSubprotocol(url: URL): Promise<string | null> {
+async function readObservedUpgrade(url: URL): Promise<{ readonly path: string | null; readonly subprotocol: string | null }> {
   const response = await fetch(url);
-  const body = (await response.json()) as { readonly subprotocol: string | null };
-  return body.subprotocol;
+  const body = (await response.json()) as { readonly path?: unknown; readonly subprotocol?: unknown };
+  return {
+    path: typeof body.path === "string" ? body.path : null,
+    subprotocol: typeof body.subprotocol === "string" ? body.subprotocol : null,
+  };
 }
 
 const checks: readonly Check[] = [
@@ -127,11 +130,11 @@ const checks: readonly Check[] = [
           (mounted.host?.deviceProofs[0] ?? "").length > 40,
           "设备证明应是一条真实签名（base64url 文本）",
         );
-        // 连接 URL 由 `syncUrlFor` 从规范化来源推导；路径取自唯一出处 `SYNC_WS_PATH`
-        // （权威值见 `docs/SYNC_PROTOCOL.md` §3.1 与 `crates/server/src/sync/conn/mod.rs` 的 `WS_PATH`）。
+        // 连接 URL 由 `syncSocketUrl` 从规范化来源推导；期望值是**字面量**（理由同 CR-5：
+        // 拿 `SYNC_WS_PATH` 当期望值时，常量被改回 `/sync` 会让两边一起变、断言永远为真）。
         expectEqual(
           mounted.host?.socketUrls[0] ?? null,
-          `wss://127.0.0.1:1${SYNC_WS_PATH}`,
+          "wss://127.0.0.1:1/sync/v1",
           "出站连接 URL",
         );
 
@@ -230,15 +233,21 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "CR-5 真实 WebSocket 升级请求必须声明权威 subprotocol（§3.1）",
+    name: "CR-5 真实 WebSocket 升级请求：请求路径为 /sync/v1 且声明权威 subprotocol（§3.1）",
     async run() {
-      // `docs/SYNC_PROTOCOL.md` §3.1 要求客户端必须请求该 subprotocol，服务端按它做
-      // upgrade 白名单（`crates/server/src/transport/net/route.rs` 的 `register_ws`
-      // 只放行声明了它的升级请求）。这条断言必须落在**真实浏览器发出的升级请求**上：
-      // 页内假主机拿到的是已经建好的 `SocketPort`，看不到出站请求头。
+      // `docs/SYNC_PROTOCOL.md` §3.1 要求客户端必须请求权威 subprotocol、并连到权威端点，
+      // 服务端按它们做 upgrade 白名单（`crates/server/src/transport/net/route.rs` 的
+      // `register_ws` 只放行声明了该 subprotocol 的升级请求）。这两条断言必须落在
+      // **真实浏览器发出的升级请求**上：页内假主机拿到的是已经建好的 `SocketPort`，
+      // 看不到出站请求头，也看不到请求行。
+      //
+      // 期望值刻意是**字面量**而不是被测方的常量（`SYNC_WS_PATH` / `SYNC_WS_SUBPROTOCOL`）：
+      // 拿常量当期望值时，常量本身被改回旧值（例如路径改成 `/sync`）会让两边一起变、
+      // 断言永远为真。字面量钉住的是线上可见的契约值，常量与机器登记的逐字一致由
+      // `src/sync-client/endpoint-contract.test.ts` 单独把关。
       const observedUrl = new URL("/observed-upgrade-headers", location.href);
       // 断言要看到**本次**升级带来的变化，因此先取一次基线（缺头时服务端记 `null`）。
-      const baseline = await readObservedSubprotocol(observedUrl);
+      const baseline = await readObservedUpgrade(observedUrl);
       const socket = openWebSocket({
         url: `ws://127.0.0.1:${location.port}${SYNC_WS_PATH}`,
         handlers: { onOpen() {}, onMessage() {}, onClose() {}, onError() {} },
@@ -246,15 +255,21 @@ const checks: readonly Check[] = [
       try {
         let observed = baseline;
         const deadline = Date.now() + 5_000;
-        while (observed === baseline && Date.now() < deadline) {
+        // 本轮**最后一次**升级请求仍与基线相同 ⇒ 还没观察到本次连接，继续等。
+        while (
+          observed.path === baseline.path &&
+          observed.subprotocol === baseline.subprotocol &&
+          Date.now() < deadline
+        ) {
           const { promise, resolve } = Promise.withResolvers<void>();
           setTimeout(resolve, 25);
           await promise;
-          observed = await readObservedSubprotocol(observedUrl);
+          observed = await readObservedUpgrade(observedUrl);
         }
+        expectEqual(observed.path, "/sync/v1", "升级请求行里的路径（出站地址的权威端点）");
         expectEqual(
-          observed ?? null,
-          SYNC_WS_SUBPROTOCOL,
+          observed.subprotocol,
+          "acp-remote.sync.v1.json",
           "升级请求里 `Sec-WebSocket-Protocol` 声明的 subprotocol",
         );
       } finally {

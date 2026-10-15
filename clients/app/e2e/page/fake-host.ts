@@ -12,7 +12,7 @@
  *
  * ## 判别力：假主机不是橡皮图章
  *
- * - transcript 的 domain 与字段 tag 由 `src/composition.ts:231-240` 逐字复制。**抄错就会验签失败**、
+ * - transcript 的 domain 与字段 tag 由 `src/composition.ts:254-263` 逐字复制。**抄错就会验签失败**、
  *   连接被阻断、全部用例变红，因此这里不存在「怎么签都能过」的可能。
  * - `tamperHostProof` 开关故意签错一条，检查据此断言阻断态——证明校验真的在跑。
  * - 快照 digest 用**真实 SHA-256** 两级哈希（每 chunk 一次再对连接结果一次，§9.4），
@@ -36,13 +36,13 @@ import {
   encodeUtf8,
 } from "../../src/platform/transcript";
 
-/** transcript domain（`src/composition.ts:92` 的 `DOMAIN.hostChallenge`）。 */
+/** transcript domain（`src/composition.ts:96-100` 的 `DOMAIN.hostChallenge`）。 */
 const HOST_CHALLENGE_DOMAIN = "acp-remote/host-challenge/v1";
 
 /**
- * Host challenge transcript 的字段 tag（`src/composition.ts:71-86` 的 `TAG`）。
+ * Host challenge transcript 的字段 tag（`src/composition.ts:78-93` 的 `TAG`）。
  *
- * 第 12 号 tag 是 features：`composition.ts:239` 把它写成**字面量 12**，
+ * 第 12 号 tag 是 features：`composition.ts:262` 把它写成**字面量 12**，
  * 因此这里同样是字面量而不是 `TAG.negotiatedFeatures`（那个键根本不存在）。
  */
 const HOST_CHALLENGE_TAG = {
