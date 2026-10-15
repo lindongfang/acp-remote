@@ -687,7 +687,10 @@ fn the_periodic_task_runs_at_least_once_and_is_cancelled_at_shutdown() {
     daemon.start();
 
     // R15：首轮清理在启动时立即执行（`reason = "startup"`），不是等到 60s 后。
-    let ticks = daemon.log_events("daemon.maintenance");
+    //
+    // 等待预算取 5s：它**远小于** 60s 的维护周期，因此「等到下一轮」不可能通过这条断言；而它足以
+    // 吸收「异步任务被调度 + 日志落盘」的延迟（零预算会把该延迟误判成「没跑」）。
+    let ticks = daemon.wait_for_event("daemon.maintenance", std::time::Duration::from_secs(5));
     assert!(
         !ticks.is_empty(),
         "启动后必须已经跑过一轮清理：{}",
@@ -733,12 +736,10 @@ fn the_periodic_task_runs_at_least_once_and_is_cancelled_at_shutdown() {
 fn the_periodic_task_runs_again_after_one_full_cycle() {
     let mut daemon = Daemon::configure("maintenance-period", &seed_profile("codex", true));
     daemon.start();
-    assert_eq!(
-        daemon.log_events("daemon.maintenance").len(),
-        1,
-        "启动初清理恰好一轮：{}",
-        daemon.log()
-    );
+    // 同上一个用例：首轮由异步任务产生且经日志落盘，零预算断言会把调度延迟误判成「没跑」。
+    // 预算 5s 远小于 60s 周期，因此「等到下一轮」不可能让下面的计数变成 1。
+    let startup = daemon.wait_for_event("daemon.maintenance", std::time::Duration::from_secs(5));
+    assert_eq!(startup.len(), 1, "启动初清理恰好一轮：{}", daemon.log());
 
     // 周期不是自旋：5s 内不得出现第二轮。
     std::thread::sleep(std::time::Duration::from_secs(5));
