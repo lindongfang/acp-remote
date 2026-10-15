@@ -105,6 +105,11 @@ pub enum Rejection {
     FeatureRequired,
     /// 请求了用例面无法表达的资源（`capability.unsupported_by_broker`）。
     UnsupportedResource(&'static str),
+    /// `expectedVersion` 与当前会话版本不一致（`state.version_conflict`）。
+    ///
+    /// registry 为这个码登记的必需 `details.currentVersion` 就在这里给出：它是**读到的当前版本**，
+    /// 不是客户端给的那个，否则客户端无法据此重试。
+    VersionConflict(u64),
 }
 
 impl Rejection {
@@ -127,6 +132,11 @@ impl Rejection {
                 details_object(&serde_json::json!({
                     "features": [SESSION_HISTORY_FEATURE]
                 })),
+            ),
+            Rejection::VersionConflict(current) => (
+                ErrorCode::StateVersionConflict,
+                "the expected version does not match the current session version",
+                details_object(&serde_json::json!({ "currentVersion": current.to_string() })),
             ),
             Rejection::UnsupportedResource(resource) => {
                 debug!(
@@ -539,7 +549,7 @@ fn decimal(text: &str) -> Option<DecimalString> {
 /// 拿不到它的私有函数，因为它只在快照模块内可见）。`catalog`（`core.local-catalog.v1` 的协商结果）决定
 /// `workspace` 键的三态：未协商时**缺席**（schema 是 `additionalProperties: false`，发 `null` 会让未协商
 /// 的客户端拒绝整条摘要）；协商时键在场，`null` = 未分组。
-fn wire_session(
+pub(super) fn wire_session(
     summary: &acp_core::model::SessionSummary,
     catalog: bool,
 ) -> Option<WireSessionSummary> {

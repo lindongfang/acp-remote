@@ -1020,12 +1020,20 @@ pub struct SyncIngress {
     /// 订阅面路由。它同时是注册给 `/sync/v1` 的 [`SyncRoutes`] 的一个子路由：分发循环按它的屏障状态找
     /// 实时目标，因此这里必须持有**同一个**实例（另一份克隆会让扇出看不到路由线程建立的屏障）。
     subscribe: Arc<SubscribeRoute>,
+    /// 命令面路由。组合根必须持有**同一个**实例来 spawn 它的终态观察者（`CommandRoute::dispatch`），
+    /// 否则 `accepted` 之后的 mutation 终态永远没人推。
+    command: Arc<SyncCommandRoute>,
 }
 
 impl SyncIngress {
     /// Sync 的活跃连接注册表（键是 `(hostId, deviceId)`；设备撤销钩子在这里请求关闭）。
     pub fn registry(&self) -> &Arc<SyncConnectionRegistry> {
         &self.registry
+    }
+
+    /// 命令面路由（终态观察者的 spawn 来源）。
+    pub fn command(&self) -> &Arc<SyncCommandRoute> {
+        &self.command
     }
 
     /// 拆出实时扇出的三个零件（路由 + 注册表 + 队列），交给组合根 spawn 分发循环。
@@ -1125,6 +1133,7 @@ pub fn register_sync_paths(
         registry,
         event_queue,
         subscribe,
+        command,
     })
 }
 
@@ -1223,6 +1232,15 @@ impl NetIngress {
         // Sync 的实时事件扇出（`event` 帧的实时腿；重放腿在订阅面的 `advance` 里）。
         // 停读信号（§14 的高水位）由每连接的出站账本负责、在分发侧消费；`shutdown` 触发即退出。
         let sync_registry = Arc::clone(sync.registry());
+        // Sync 命令面的终态观察者：mutation 的 `accepted` 之后，终态由它轮询持久记录后推回提交方。
+        let sync_command = Arc::clone(sync.command());
+        tasks.push((
+            "sync_commands",
+            tokio::spawn({
+                let signal = signal.clone();
+                async move { sync_command.dispatch(signal).await }
+            }),
+        ));
         let (sync_route, fanout_registry, sync_events) = sync.into_fanout();
         let sync_reader = sync_route.reader();
         tasks.push((

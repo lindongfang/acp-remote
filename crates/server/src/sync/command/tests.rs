@@ -141,6 +141,43 @@ impl CommandStore {
         self.lock().commands.push(record);
     }
 
+    /// 把某条已落盘的命令推进到终态（替身：换掉那条记录，模拟 `settle_*` 与启动恢复写下的终态）。
+    ///
+    /// 只替换、不追加：`find_request` 按 requestId 找第一条，追加会读到旧的 `accepted` 行。
+    fn settle_command(
+        &self,
+        request: &str,
+        status: CommandStatus,
+        terminal_event: &str,
+        error: Option<acp_core::model::PublicError>,
+    ) {
+        let mut state = self.lock();
+        for record in state.commands.iter_mut() {
+            if record.request().as_str() != request {
+                continue;
+            }
+            let next = CommandRecord::try_new(
+                record.session().cloned(),
+                record.request().clone(),
+                record.command(),
+                record.kind(),
+                record.actor().clone(),
+                record.accepted_at().cloned(),
+                status,
+                Some(timestamp("2026-09-18T09:12:04.000Z")),
+                Some(EventId::new(terminal_event).expect("terminal event id")),
+                None,
+                error,
+                record.expected_version(),
+                record.request_fingerprint().clone(),
+            )
+            .expect("终态记录合法");
+            *record = next;
+            return;
+        }
+        panic!("没有可推进的记录：{request}");
+    }
+
     /// 把某会话的可读窗口下界设到 `lowest`：低于它的行**在存储里已不存在**（§9.7 的前缀清理），
     /// `read_session` 的三种面（messages/history/正文）都看不到它们。用例据此构造「保留窗口之前的游标」。
     fn prune_below(&self, session: &str, lowest: u64) {
@@ -215,14 +252,45 @@ impl SessionStore for CommandStore {
             .cloned())
     }
 
-    /// 命令面不该有任何写入：「零副作用」判据由用例的 `commits() == 0` 断言承担。
+    /// 命令面在**提交成功**时把幂等行落成一条 `accepted` 的 `owned_command` 记录。
     ///
-    /// 这里**计数后返回平凡的成功**，而不是 panic：panic 会让断言永远到不了（检视指出的「不可证伪」），
-    /// 误写它的路径现在会继续跑到用例的断言处，断言因此真的能失败。
-    async fn commit(&self, _commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+    /// 这是 mutation 接受路径的**持久事实**（§11.2 的 `accepted` 行）：命令面提交后按
+    /// `(actor, requestId)` 读回它来生成回复，幂等重放与冲突判定也都以它为准。计数照旧，因此
+    /// 「查询命令零副作用」的 `commits() == 0` 判据不受影响。
+    async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
         self.counters.commit.fetch_add(1, Ordering::SeqCst);
+        let mut session_id = None;
+        if let Some(record) = commit.idempotency.clone() {
+            let created = match &commit.state {
+                Some(acp_core::ports::StateChange::Create(_)) => Some(
+                    acp_core::model::SessionId::new(record.request.as_str())
+                        .expect("会话行 id 取自 requestId"),
+                ),
+                _ => None,
+            };
+            if let Some(session) = created.clone() {
+                session_id = Some(session);
+            }
+            let stored = acp_core::model::CommandRecord::try_new(
+                record.session.clone(),
+                record.request.clone(),
+                &record.command,
+                record.kind,
+                record.actor.clone(),
+                Some(record.accepted_at.clone()),
+                acp_core::model::CommandStatus::Accepted,
+                None,
+                None,
+                None,
+                None,
+                record.expected_version,
+                record.request_fingerprint.clone(),
+            )
+            .expect("幂等行合法");
+            self.lock().commands.push(stored);
+        }
         Ok(CommitOutcome {
-            session_id: None,
+            session_id,
             origin_epoch: None,
             version: acp_core::model::Version::from(0),
             appended: Vec::new(),
@@ -474,6 +542,8 @@ fn page(
 struct ConfigEndpoint {
     options: Vec<CoreConfigOption>,
     modes: CoreModeState,
+    /// `prompt` 被调用几次：幂等用例的判据是「同一 requestId 只派发一次」。
+    prompt_calls: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[async_trait::async_trait]
@@ -503,6 +573,7 @@ impl SessionEndpoint for ConfigEndpoint {
     ) -> Result<TurnAccepted, PortError> {
         // mutation 的接受链路真的会派发到后端：回一个确定的新 turn，让「已接受 + 带 turn」可断言。
         // 这不是"未触及"—— prompt 路径的终点就在这里，WP3 的 3.1 要的正是这一跳。
+        self.prompt_calls.fetch_add(1, Ordering::SeqCst);
         Ok(TurnAccepted {
             turn: acp_core::model::TurnId::new(TEST_PROMPT_TURN).expect("turn id"),
         })
@@ -587,6 +658,7 @@ impl acp_core::ports::SessionBackendFactory for ConfigBackend {
         Ok(Box::new(ConfigEndpoint {
             options: self.endpoint.options.clone(),
             modes: self.endpoint.modes.clone(),
+            prompt_calls: Arc::clone(&self.endpoint.prompt_calls),
         }))
     }
 
@@ -614,6 +686,8 @@ struct CommandWorld {
     trust: FakeTrust,
     /// 已登记会话名（[`ConfigBackend`] 的可见性输入，与真实后端的 `owned_session` 行同口径）。
     sessions: Arc<Mutex<Vec<String>>>,
+    /// 后端 `prompt` 的调用计数（与 `ConfigEndpoint` 共享）。
+    prompt_calls: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl CommandWorld {
@@ -624,10 +698,12 @@ impl CommandWorld {
                 current_mode: Some(mode_ref("code")),
                 available: vec![mode_ref("code"), mode_ref("plan")],
             },
+            prompt_calls: Arc::default(),
         })
     }
 
     fn with(endpoint: ConfigEndpoint) -> Self {
+        let prompt_calls = Arc::clone(&endpoint.prompt_calls);
         let clock = FakeClock::new();
         let trust = FakeTrust::default();
         let exports = FakeExports::default().with_clock(clock.clone());
@@ -689,7 +765,13 @@ impl CommandWorld {
             store,
             trust,
             sessions,
+            prompt_calls,
         }
+    }
+
+    /// 后端 `prompt` 被派发几次（幂等用例的判据：同一 requestId 只一次）。
+    fn prompt_calls(&self) -> u64 {
+        self.prompt_calls.load(Ordering::SeqCst)
     }
 
     /// 预置一条会话：存储替身与后端替身一起登记（后者的可见性口径与真实后端的 `owned_session` 行一致）。
@@ -2578,3 +2660,359 @@ async fn a_prompt_mutation_is_accepted_without_any_business_result() {
     assert_eq!(result["terminalEventId"], serde_json::Value::Null);
     assert_eq!(result["error"], serde_json::Value::Null);
 }
+
+// -----------------------------------------------------------------------------------------------
+// WP3：幂等与冲突（3.2/3.3）、版本冲突（3.4）、终态观察者（3.5）、uncertain（3.6）
+// -----------------------------------------------------------------------------------------------
+
+/// mutation 的 `accepted` 必须带非空 `acceptedAt`（§11.2：只有 `rejected` 才允许 `null`）。
+#[tokio::test]
+async fn an_accepted_mutation_carries_the_acceptance_time() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.prompt"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let out = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("你好"),
+        ),
+    )
+    .await;
+
+    let result = &bodies(&out, "command.result")[0];
+    assert_eq!(result["status"], "accepted");
+    assert!(
+        result["acceptedAt"].is_string(),
+        "accepted 必须带接受时间：{result}"
+    );
+}
+
+/// 3.2 的硬判据：同一 `requestId` 重发只产生**一个**业务副作用，且该性质跨「重新打开存储」成立。
+#[tokio::test]
+async fn the_same_request_id_dispatches_only_once_even_after_a_reopen() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.prompt"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    let payload = prompt_payload("你好");
+
+    let first = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        command_body(REQUEST, "session.prompt", Some(SESSION), payload.clone()),
+    )
+    .await;
+    assert_eq!(bodies(&first, "command.result")[0]["status"], "accepted");
+    assert_eq!(world.prompt_calls(), 1, "首次提交派发一次");
+
+    // 同一 requestId、同一语义，但换一条 messageId（连接期去重按**帧**，要打到的正是持久幂等）。
+    let again = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(2),
+        2,
+        command_body(REQUEST, "session.prompt", Some(SESSION), payload.clone()),
+    )
+    .await;
+    assert_eq!(
+        bodies(&again, "command.result")[0]["status"],
+        "accepted",
+        "重放应回首次的已知接受"
+    );
+    assert_eq!(world.prompt_calls(), 1, "同一 requestId 不得二次派发");
+
+    // 「重新打开存储」：同一份持久存储之上起一条新路由（进程重启视角）。
+    let reopened = world.route();
+    let (handle2, mut receiver2) = connect(&world, CONNECTION_B, &SyncConfig::default());
+    let third = dispatch(
+        &reopened,
+        &handle2,
+        &mut receiver2,
+        &message_id(3),
+        3,
+        command_body(REQUEST, "session.prompt", Some(SESSION), payload),
+    )
+    .await;
+    assert_eq!(bodies(&third, "command.result")[0]["status"], "accepted");
+    assert_eq!(
+        world.prompt_calls(),
+        1,
+        "重开存储后同一 requestId 仍不得二次派发（幂等由持久记录承担）"
+    );
+}
+
+/// 3.3：冲突判据是**解码后 payload 的语义**，不是 JSON 键顺序。
+///
+/// 语义比较的机制是 `payload_fingerprint` 里的 ACPR-CJ1 规范化（先把原文规范成唯一的键序再取
+/// SHA-256）。这里直接断言该机制：两条键顺序不同、语义相同的原文必须规范成同一份字节。
+#[test]
+fn the_payload_fingerprint_ignores_key_order() {
+    let ordered = acpr_wire::cj1::canonicalize(r#"{"content":[{"type":"text","text":"你好"}]}"#)
+        .expect("规范化");
+    let reordered = acpr_wire::cj1::canonicalize(r#"{"content":[{"text":"你好","type":"text"}]}"#)
+        .expect("规范化");
+
+    assert_eq!(
+        ordered, reordered,
+        "键顺序不同、语义相同的原文必须规范成同一份字节（指纹因此相同）"
+    );
+}
+
+/// 3.3：同一 `requestId` 携带不同语义 → `command.idempotency_conflict`，且**零副作用**。
+#[tokio::test]
+async fn the_same_request_id_with_a_different_payload_is_a_conflict() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.prompt"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let first = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("你好"),
+        ),
+    )
+    .await;
+    assert_eq!(bodies(&first, "command.result")[0]["status"], "accepted");
+
+    let conflict = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(2),
+        2,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("换了内容"),
+        ),
+    )
+    .await;
+    let result = &bodies(&conflict, "command.result")[0];
+    assert_eq!(
+        result["error"]["code"], "command.idempotency_conflict",
+        "键相同值不同必须判冲突：{result}"
+    );
+    assert_eq!(world.prompt_calls(), 1, "冲突不得派发第二次");
+}
+
+/// 3.4：`session.mode.set` 带着过期版本 → `state.version_conflict`，且给出**当前真实版本**、零副作用。
+#[tokio::test]
+async fn a_stale_expected_version_is_rejected_with_the_current_version() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.mode.set"]);
+    let before = world.store.commits();
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let mut body = command_body(
+        REQUEST,
+        "session.mode.set",
+        Some(SESSION),
+        serde_json::json!({ "modeId": "plan" }),
+    );
+    body["expectedVersion"] = serde_json::Value::String("999".to_owned());
+
+    let out = dispatch(&route, &handle, &mut receiver, &message_id(1), 1, body).await;
+    let result = &bodies(&out, "command.result")[0];
+    assert_eq!(
+        result["error"]["code"], "state.version_conflict",
+        "过期版本必须回版本冲突：{result}"
+    );
+    assert_eq!(
+        result["error"]["details"]["currentVersion"], "0",
+        "必须给出当前真实版本（替身的会话版本固定 0）"
+    );
+    assert_eq!(world.store.commits(), before, "版本冲突必须零副作用");
+}
+
+/// 3.5：提交方在命令到达终态时收到一条终态 `command.result`，且之后观察表不再持有它。
+#[tokio::test]
+async fn the_submitter_receives_its_own_terminal_state() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.prompt"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let out = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("你好"),
+        ),
+    )
+    .await;
+    assert_eq!(bodies(&out, "command.result")[0]["status"], "accepted");
+
+    // 命令到达终态（真实路径由外部 Agent 的 turn 结束写下；这里直接把持久记录推进去）。
+    world
+        .store
+        .settle_command(REQUEST, CommandStatus::Completed, TERMINAL_EVENT, None);
+    route.poll_terminal_for_test().await;
+
+    let first_frames = frames(&mut receiver);
+    let terminal = bodies(&first_frames, "command.result");
+    assert_eq!(terminal.len(), 1, "提交方应收到一条终态回复");
+    assert_eq!(terminal[0]["status"], "completed");
+    assert_eq!(
+        terminal[0]["terminalEventId"], TERMINAL_EVENT,
+        "终态必须带原 terminal event id"
+    );
+
+    // 已终结的观察项必须从表里移除（否则每一轮都会重复推）。
+    route.poll_terminal_for_test().await;
+    assert!(
+        bodies(&frames(&mut receiver), "command.result").is_empty(),
+        "终态只推一次"
+    );
+}
+
+/// 3.5：连接断开后观察项被回收（观察表是连接期状态，不留无主条目）。
+#[tokio::test]
+async fn a_disconnected_submitter_leaves_no_watcher_behind() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE, &["session.prompt"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let out = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("你好"),
+        ),
+    )
+    .await;
+    assert_eq!(bodies(&out, "command.result")[0]["status"], "accepted");
+    assert_eq!(route.watchers_for_test(), 1, "观察项已登记");
+
+    // 连接离开注册表（真实的断开路径：句柄从注册表移除）。
+    world.registry.unregister(&handle);
+    route.poll_terminal_for_test().await;
+    assert_eq!(route.watchers_for_test(), 0, "断开后不得留下观察项");
+}
+
+/// 3.6：`uncertain` 是终态——再查一次不会再派发，且 `command.status` 给出原终态标识。
+#[tokio::test]
+async fn an_uncertain_command_is_never_dispatched_again() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    // `command.status` 需要 `grant.observe` 覆盖的那条 scope：本用例要同时走提交流与重查流。
+    world.seed_device(DEVICE, &["session.prompt", "command.status"]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+
+    let first = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("你好"),
+        ),
+    )
+    .await;
+    assert_eq!(bodies(&first, "command.result")[0]["status"], "accepted");
+    assert_eq!(world.prompt_calls(), 1);
+
+    // 崩溃恢复把它终结成 `uncertain`（§11.2：先持久化再广播，不自动重派）。
+    world
+        .store
+        .settle_command(REQUEST, CommandStatus::Uncertain, TERMINAL_EVENT, None);
+
+    // 重放同一 requestId：回的是那条终结态，不是第二次派发。
+    let replay = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(2),
+        2,
+        command_body(
+            REQUEST,
+            "session.prompt",
+            Some(SESSION),
+            prompt_payload("你好"),
+        ),
+    )
+    .await;
+    let result = &bodies(&replay, "command.result")[0];
+    assert_eq!(
+        result["status"], "uncertain",
+        "重放必须回已终结的终态：{result}"
+    );
+    assert_eq!(result["terminalEventId"], TERMINAL_EVENT);
+    assert_eq!(world.prompt_calls(), 1, "uncertain 不得触发第二次派发");
+
+    // `command.status` 给出同一终态与原 terminal event id。
+    let status = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(3),
+        3,
+        command_body(
+            STATUS_REQUEST,
+            "command.status",
+            None,
+            serde_json::json!({ "targetRequestId": REQUEST }),
+        ),
+    )
+    .await;
+    let record = &bodies(&status, "command.result")[0];
+    assert_eq!(record["status"], "completed");
+    assert_eq!(record["result"]["state"], "uncertain");
+    assert_eq!(record["result"]["terminalEventId"], TERMINAL_EVENT);
+}
+
+/// `session.prompt` 的 payload（与既有用例同形）。
+fn prompt_payload(text: &str) -> serde_json::Value {
+    serde_json::json!({ "content": [{ "type": "text", "text": text }] })
+}
+
+/// 终态记录里的 command terminal event id（终态回复必须原样带出它）。
+const TERMINAL_EVENT: &str = "7b3f9c21-4d5e-4a6b-9c8d-1e2f3a4b5c6d";
+/// `command.status` 查询用的 requestId（与 mutation 的 requestId 不同）。
+const STATUS_REQUEST: &str = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";

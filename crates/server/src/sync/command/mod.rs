@@ -55,25 +55,29 @@ mod query;
 mod tests;
 
 use std::collections::BTreeMap;
+use std::str::FromStr as _;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, ClientCommand, CommandKind, CommandPayload as CorePayload, CommandReceipt,
-    ConfigOptionId, ConfigValue as CoreConfigValue, ElicitationAction as CoreElicitationAction,
-    ElicitationValues, InteractionId, ModeId, PortError, PromptContentBlock,
-    PublicError as CorePublicError, ReadInclude as CoreReadInclude, RequestId as CoreRequestId,
-    TurnId, Version,
+    ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind,
+    ElicitationAction as CoreElicitationAction, ElicitationValues, InteractionId, ModeId,
+    PortError, PromptContentBlock, PublicError as CorePublicError, ReadInclude as CoreReadInclude,
+    RequestId as CoreRequestId, Timestamp as CoreTimestamp, TurnId, Version,
 };
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
 use sha2::Digest as _;
 use sync_protocol::command::{
-    Command, CommandName, CommandPayload, CommandResult, CommandState,
+    Command, CommandName, CommandPayload, CommandResult, CommandResultPayload, CommandState,
     ElicitationAction as WireElicitationAction, IncludeResource as WireReadInclude,
+    SessionCreateResult,
 };
 use sync_protocol::common::{
-    ConfigOptionValue as WireConfigValue, Nullable, PublicError, RawObject, Text, Timestamp, Uuid,
+    ConfigOptionValue as WireConfigValue, Nullable, PublicError, RawObject,
+    SessionSummary as WireSessionSummary, Text, Timestamp, Uuid,
 };
 use sync_protocol::envelope::{Envelope, MessageType, encode_body};
 use sync_protocol::error::{Body, ErrorCode};
@@ -81,11 +85,18 @@ use tracing::{debug, warn};
 
 use crate::sync::conn::registry::SendFault;
 use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
+use crate::sync::snapshot::LOCAL_CATALOG_FEATURE;
 use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
+use crate::transport::net::Shutdown;
 
 use self::limits::{CommandFamily, CommandRateLimiter};
 use self::query::Rejection;
+
+/// `core.session-create.v1`：Sync 面 `session.create` 的 feature 门控（§11.5）。
+///
+/// 未协商时服务端 MUST NOT 静默接受（回 `protocol.feature_required` 并给出缺的那个）。
+pub const SESSION_CREATE_FEATURE: &str = "core.session-create.v1";
 
 /// 单条命令结果的**信封**开销上界（字节）。
 ///
@@ -115,6 +126,44 @@ struct ConnectionState {
     /// 查询类命令的连接期去重表（**不落盘**，§11.2）。键是 `(messageId, requestId)`：同一连接内重复的
     /// **同一帧**因此不再产生第二次业务读取；不同连接各自独立。
     answered: Vec<((Uuid, Uuid), CommandResult)>,
+    /// 3.5：待观察终态的 mutation。连接断开即整表丢弃（观察者是连接期状态，不留 detached task）。
+    watching: Vec<WatchedCommand>,
+}
+
+/// 3.5 的终态观察项：提交方按 `(deviceId, requestId)` 等自己的终态。
+///
+/// 存的是**提交时那份 `Actor`**：`find_request(request, actor)` 按 actor 收窄幂等键，用别的形状
+/// 去读会读不到自己刚提交的记录。
+#[derive(Debug, Clone)]
+struct WatchedCommand {
+    request_id: Uuid,
+    device_id: acp_core::model::DeviceId,
+    actor: Actor,
+    /// 登记时刻：观察有界（超过 [`WATCH_MAX_AGE`] 即放弃，对端仍可凭 `command.status` 重查）。
+    since: Instant,
+}
+
+/// 终态观察的轮询间隔（与 Node Link 的观察者同值）。
+///
+/// v1 只能轮询：broker 的扇出信号（`CommittedEvent`）不携带 `causation`，无法把一条终态定位回
+/// `requestId` 与连接（该结论由 Node Link 的实现期得出，本适配器沿用同一手段）。
+pub const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// 一条终态观察的最长生存时间。超龄即放弃该观察项（记录仍在，对端可凭 `command.status` 重查）。
+pub const WATCH_MAX_AGE: Duration = Duration::from_secs(600);
+
+/// core 的 `CommandStatus`（token enum，`as_str`）+ Sync wire 的 `CommandState`。
+///
+/// 两个词表取值相同但类型不同源，因此显式映射：**不**依赖字符串相等（拼写漂移会在编译期沉默）。
+/// 未知取值走 `Failed`：终态必须是四者之一，钉一个假 `uncertain` 会让对端以为不可重试。
+fn wire_command_state(status: acp_core::model::CommandStatus) -> CommandState {
+    use acp_core::model::CommandStatus;
+    match status {
+        CommandStatus::Completed => CommandState::Completed,
+        CommandStatus::Failed => CommandState::Failed,
+        CommandStatus::Uncertain => CommandState::Uncertain,
+        CommandStatus::Rejected | CommandStatus::Accepted => CommandState::Rejected,
+    }
 }
 
 /// Sync 命令面的路由（`conn` 的 [`MessageRoute`] 实现之一，组合根注册）。
@@ -135,6 +184,8 @@ pub struct CommandRoute {
     /// [`limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS`]，用例把它压小）。
     consecutive_limit: u32,
     states: Mutex<BTreeMap<String, ConnectionState>>,
+    /// 新的终态观察登记时唤醒 [`Self::dispatch`]，避免只有 250ms 轮询才发现它。
+    wake: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for CommandRoute {
@@ -164,6 +215,7 @@ impl CommandRoute {
             rate: CommandRateLimiter::new(limits::COMMANDS_PER_MINUTE, limits::COMMAND_WINDOW),
             consecutive_limit: limits::MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS,
             states: Mutex::new(BTreeMap::new()),
+            wake: tokio::sync::Notify::new(),
         }
     }
 
@@ -520,7 +572,7 @@ impl CommandRoute {
         if command.command.is_query() {
             self.on_query(handle, message, command, &actor).await
         } else {
-            self.on_mutation(handle, command).await
+            self.on_mutation(handle, command, actor).await
         }
     }
 
@@ -640,24 +692,16 @@ impl CommandRoute {
     /// `session.create` **不在本路径**：core 有独立入口（`UseCases::create_session`），它的 workspace 别名
     /// 解析与 `remoteSessionRef` 生成不经过 `ClientCommand`。WP3 的后续迭代再接；当前按显式拒绝处理，
     /// 不伪装成已受理。
-    async fn on_mutation(&self, handle: &ConnectionHandle, command: Command) -> RouteOutcome {
-        let Some(actor) = self.authorize(handle, &command).await else {
-            return RouteOutcome::Claimed;
-        };
+    async fn on_mutation(
+        &self,
+        handle: &ConnectionHandle,
+        command: Command,
+        actor: Actor,
+    ) -> RouteOutcome {
+        // 授权已在 `on_command` 完成（查询与 mutation 走同一次判定），这里不重复判一次、不重复写审计。
+        // `session.create` 有独立的 core 入口（`UseCases::create_session`）：它不吃 `ClientCommand`。
         if command.command == CommandName::SessionCreate {
-            warn!(
-                event = "sync.command_session_create_deferred",
-                device_id = handle.device_id().as_str(),
-                request_id = command.request_id.as_str(),
-                "session.create has a dedicated core entry; it is not wired in this package"
-            );
-            self.deny(
-                handle,
-                &command,
-                "the mutation is not available on this command",
-                ErrorCode::InternalUnavailable,
-            );
-            return RouteOutcome::Claimed;
+            return self.on_session_create(handle, &actor, command).await;
         }
         let Some(payload) = core_payload(&command.payload).ok() else {
             self.deny(
@@ -671,46 +715,51 @@ impl CommandRoute {
         let Some(fingerprint) = payload_fingerprint(&command.payload) else {
             return self.encoding_fault(handle);
         };
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            return self.encoding_fault(handle);
+        };
+        let target_session = command
+            .session_id
+            .as_ref()
+            .and_then(|session| acp_core::model::SessionId::new(session.as_str()).ok());
         let client_command = ClientCommand {
             actor: actor.clone(),
-            request: match core_request_id(&command.request_id) {
-                Some(request) => request,
-                None => return self.encoding_fault(handle),
-            },
+            request: request_id.clone(),
             command: command.command.as_str().to_owned(),
             kind: CommandKind::Mutation,
-            session: command
-                .session_id
-                .as_ref()
-                .and_then(|session| acp_core::model::SessionId::new(session.as_str()).ok()),
+            session: target_session.clone(),
             expected_version: command
                 .expected_version
                 .as_ref()
                 .and_then(|version| version.as_str().parse::<u64>().ok())
                 .map(Version::new),
-            request_fingerprint: fingerprint,
+            request_fingerprint: fingerprint.clone(),
             payload,
         };
+        // 3.2/3.3：幂等键 `(actor, requestId)` 的持久事实与冲突判定都在 core（`Broker::idempotency`
+        // 读 `owned_command`、比命令名/kind/session/expectedVersion/ACPR-CJ1 指纹）。服务端**不**在
+        // 提交前另查一次 `command.status`：那需要 `grant.observe`，会把只持 `grant.interact` 的
+        // 设备误拒——而「重放自己的命令」只应凭当初提交它的那份授权。
         let receipt = match self.core.submit_command(&actor, client_command).await {
             Ok(receipt) => receipt,
             Err(error) => {
-                let (code, text, details) = port_rejection(&error).into_parts();
+                // 「带了版本但版本不对」必须回 `state.version_conflict` 并给**当前真实版本**（§11.5 的
+                // `session.mode.set`/`session.config.set`）：这条细节 `PortError` 不携带，因此在这里
+                // 按会话读一次（`Broker::session_version` 不再授权，命令本身已授权过）。
+                let rejection = match (&error, target_session.as_ref()) {
+                    (PortError::Conflict(ConflictKind::VersionMismatch), Some(session)) => {
+                        match self.broker.session_version(session).await {
+                            Ok(current) => Rejection::VersionConflict(current.get()),
+                            Err(_) => port_rejection(&error),
+                        }
+                    }
+                    _ => port_rejection(&error),
+                };
+                let (code, text, details) = rejection.into_parts();
                 let Some(error) = public_error(code, text, details) else {
                     return self.encoding_fault(handle);
                 };
-                self.send_result(
-                    handle,
-                    &CommandResult {
-                        request_id: command.request_id.clone(),
-                        command: command.command,
-                        status: CommandState::Rejected,
-                        accepted_at: Nullable::null(),
-                        terminal_event_id: Nullable::null(),
-                        result: Nullable::null(),
-                        error: Nullable::value(error),
-                    },
-                    "mutation",
-                );
+                self.send_rejected(handle, &command, error);
                 return RouteOutcome::Claimed;
             }
         };
@@ -720,32 +769,229 @@ impl CommandRoute {
                 let Some(error) = wire_public_error(&error) else {
                     return self.encoding_fault(handle);
                 };
-                self.send_result(
-                    handle,
-                    &CommandResult {
-                        request_id: command.request_id.clone(),
-                        command: command.command,
-                        status: CommandState::Rejected,
-                        accepted_at: Nullable::null(),
-                        terminal_event_id: Nullable::null(),
-                        result: Nullable::null(),
-                        error: Nullable::value(error),
-                    },
-                    "mutation",
-                );
+                self.send_rejected(handle, &command, error);
                 return RouteOutcome::Claimed;
             }
             CommandReceipt::Accepted { turn, .. } => turn,
         };
-        self.send_accepted(handle, &command, turn);
+        // 提交后按 `(actor, requestId)` 读回持久记录：幂等重放一条**已终结**的命令时，
+        // §11.2 要求 `command.result` 回当前终态与原 `terminalEventId`（不重新派发）。首次提交时
+        // 记录刚写成 `accepted`，走的也是同一分支——因此两种情形共用一条回复路径。
+        match self.broker.command_status(&actor, &request_id).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+            }
+            Ok(Some(record)) => {
+                self.send_accepted(handle, &command, turn, record.accepted_at());
+                self.watch_terminal(handle, &command, &actor);
+            }
+            // 提交成功却不留记录：存储与用例不一致，按接线缺陷显式失败（不发半成品回复）。
+            Ok(None) | Err(_) => {
+                self.encoding_fault(handle);
+            }
+        }
         RouteOutcome::Claimed
     }
 
-    /// 回一条 `accepted` 的 `command.result`：`result` 与 `terminalEventId` 均为 `null`。
+    /// `session.create`（§11.5 的 Sync 面形状：payload 只有 `{ workspaceAlias, agentId }`）。
     ///
-    /// **MUST NOT** 在这里塞业务结果：终态只经持久化的 `command.*` 事件表达，由终态观察者推给提交方
-    /// （WP3 后续迭代）。本包只负责「先接受」这一半。
-    fn send_accepted(&self, handle: &ConnectionHandle, command: &Command, turn: Option<TurnId>) {
+    /// 与其余 mutation 的差别只在入口：core 用独立用例（[`UseCases::create_session`]）而不是
+    /// `ClientCommand`（别名解析与 owned 会话行由它负责）。**接受与终态语义完全相同**。
+    ///
+    /// 顺序上有一处**与其余 mutation 相反**、且是刻意的：这里先创建、再回 `accepted`。原因是 §11.5
+    /// 要求三种失败（未持 scope、别名/Agent 未登记、本机解析失败）以 `authorization.scope_denied` /
+    /// `internal.unavailable` **拒绝**而不是 `accepted` 后转 `failed`——而「已接受」对
+    /// `session.create` 的语义就是「会话已创建」（创建与幂等行在同一次提交里落盘）。先回
+    /// `accepted` 再失败会留下一条撒谎的接受记录。
+    async fn on_session_create(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: Command,
+    ) -> RouteOutcome {
+        // feature 门控（§11.5）：未协商 `core.session-create.v1` 时不静默接受。
+        if !self.features(handle).contains(SESSION_CREATE_FEATURE) {
+            let Some(error) = public_error(
+                ErrorCode::ProtocolFeatureRequired,
+                "the client did not negotiate the session-create feature",
+                details_object(&serde_json::json!({ "features": [SESSION_CREATE_FEATURE] })),
+            ) else {
+                return self.encoding_fault(handle);
+            };
+            self.send_rejected(handle, &command, error);
+            return RouteOutcome::Claimed;
+        }
+        let CommandPayload::SessionCreate(create) = &command.payload else {
+            self.deny(
+                handle,
+                &command,
+                "the payload does not match the command",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Some(fingerprint) = payload_fingerprint(&command.payload) else {
+            return self.encoding_fault(handle);
+        };
+        let Some(request_id) = core_request_id(&command.request_id) else {
+            return self.encoding_fault(handle);
+        };
+        let Ok(agent_id) = acp_core::model::AgentId::new(create.agent_id.as_str()) else {
+            self.deny(
+                handle,
+                &command,
+                "the agentId is out of range",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Ok(agent) = acp_core::model::AgentRef::try_new(agent_id, create.agent_id.as_str())
+        else {
+            self.deny(
+                handle,
+                &command,
+                "the agentId is out of range",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let Ok(alias) = acp_core::model::WorkspaceAlias::new(create.workspace_alias.as_str())
+        else {
+            self.deny(
+                handle,
+                &command,
+                "the workspaceAlias is not a symbol name",
+                ErrorCode::ProtocolSchemaInvalid,
+            );
+            return RouteOutcome::Claimed;
+        };
+        let request = acp_core::model::CreateSessionRequest::new(
+            agent,
+            None,
+            None,
+            acp_core::model::ResourceOrigin::Local,
+        );
+        let session = match self
+            .core
+            .create_session(actor, request_id.clone(), fingerprint, request, Some(alias))
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                // 别名未登记与「未持 scope」在协议里是**同一个**拒绝（§11.5）：两者都以
+                // `authorization.scope_denied` 回复，否则调用方能借「别名不存在」与「无权限」的差异
+                // 探测本机登记状态（core 的 `create_session` 文档把这条写成明确的对齐要求）。
+                let rejection = match &error {
+                    PortError::InvalidRequest(reason)
+                        if *reason == "workspace alias is not registered on this node" =>
+                    {
+                        Rejection::Code(
+                            ErrorCode::AuthorizationScopeDenied,
+                            "the workspace alias is not available to this device",
+                        )
+                    }
+                    other => port_rejection(other),
+                };
+                let (code, text, details) = rejection.into_parts();
+                let Some(error) = public_error(code, text, details) else {
+                    return self.encoding_fault(handle);
+                };
+                self.send_rejected(handle, &command, error);
+                return RouteOutcome::Claimed;
+            }
+        };
+        // 创建已落盘（含幂等行）：现在回 `accepted` 才是如实的。
+        self.send_accepted(handle, &command, None, None);
+        // 终态：把持久记录推进到 `completed { sessionId, session }`。摘要与 `session.list` **同源**
+        // （同一个 `wire_session` 投影），因此两侧形状必然一致。
+        let catalog = self.features(handle).contains(LOCAL_CATALOG_FEATURE);
+        let settled = match self.session_summary(actor, &session, catalog).await {
+            Some(summary) => {
+                match Uuid::parse(session.as_str())
+                    .ok()
+                    .map(|session_id| SessionCreateResult {
+                        session_id,
+                        session: summary,
+                    })
+                    .and_then(|result| serde_json::to_string(&result).ok())
+                    .and_then(|text| acp_core::model::CommandResult::from_json_text(&text).ok())
+                {
+                    Some(result) => {
+                        self.core
+                            .settle_session_create(
+                                actor,
+                                &request_id,
+                                acp_core::model::CommandStatus::Completed,
+                                Some(result),
+                                None,
+                            )
+                            .await
+                    }
+                    None => Ok(false),
+                }
+            }
+            None => Ok(false),
+        };
+        if !matches!(settled, Ok(true)) {
+            // 会话已创建，但摘要投影不出来：**不得**回 `failed`（那会让客户端以为没有会话）。
+            // §11.5 对这一档的定论是 `uncertain`。
+            warn!(
+                event = "sync.session_create_terminal_unsettled",
+                connection_id = handle.connection_id().as_str(),
+                request_id = request_id.as_str(),
+                error = ?settled.err(),
+                "the created session cannot be projected into the terminal result"
+            );
+            let Some(error) = acp_core::model::PublicError::coded(
+                "internal.unavailable",
+                "the created session cannot be projected into the terminal result",
+                false,
+            )
+            .ok() else {
+                return self.encoding_fault(handle);
+            };
+            let _ = self
+                .core
+                .settle_session_create(
+                    actor,
+                    &request_id,
+                    acp_core::model::CommandStatus::Uncertain,
+                    None,
+                    Some(error),
+                )
+                .await;
+        }
+        self.watch_terminal(handle, &command, actor);
+        RouteOutcome::Claimed
+    }
+
+    /// 一条 owned 会话的 wire 摘要（与 `session.list` 同一条可见性与投影口径）。
+    ///
+    /// 读的是 `session.list` scope：`session.create` 的结果形状要求 `session`，而摘要的唯一来源就是
+    /// 会话读面。持 `grant.remote-work` 而不持 `grant.observe` 的设备因此只能拿到终态前的 `accepted`
+    /// —— 这条降级由 §11.5 的 `uncertain` 收口，不伪造摘要。
+    async fn session_summary(
+        &self,
+        actor: &Actor,
+        session: &acp_core::model::SessionId,
+        catalog: bool,
+    ) -> Option<WireSessionSummary> {
+        let query = acp_core::ports::SessionQuery::default();
+        let sessions = self.core.list_sessions(actor, query).await.ok()?;
+        sessions
+            .iter()
+            .find(|summary| summary.session_id() == session)
+            .and_then(|summary| self::query::wire_session(summary, catalog))
+    }
+
+    /// 回一条 `accepted` 的 `command.result`：`result` 与 `terminalEventId` 均为 `null`。
+    fn send_accepted(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        turn: Option<TurnId>,
+        accepted_at: Option<&CoreTimestamp>,
+    ) {
         debug!(
             event = "sync.command_accepted",
             device_id = handle.device_id().as_str(),
@@ -754,19 +1000,304 @@ impl CommandRoute {
             turn = ?turn.as_ref().map(|turn| turn.as_str()),
             "the mutation is accepted; the terminal state follows as a persisted event"
         );
+        // 首见提交用本机时钟；幂等重放用首次落盘的那个 acceptedAt（不得换成现在）。
+        // 两个时钟类型不同源（`Authority` 与 core 各自持有），因此以 ISO 文本为公共面。
+        let stamp = match accepted_at {
+            Some(stamp) => stamp.as_str().to_owned(),
+            None => self.authority.now().as_str().to_owned(),
+        };
+        let Some(accepted_at) = wire_timestamp(&stamp) else {
+            self.encoding_fault(handle);
+            return;
+        };
         self.send_result(
             handle,
             &CommandResult {
                 request_id: command.request_id.clone(),
                 command: command.command,
                 status: CommandState::Accepted,
-                accepted_at: Nullable::null(),
+                accepted_at: Nullable::value(accepted_at),
                 terminal_event_id: Nullable::null(),
                 result: Nullable::null(),
                 error: Nullable::null(),
             },
             "mutation",
         );
+    }
+
+    /// 一条**已终结**的持久记录（或幂等重放）→ `command.result`（§11.2）。
+    ///
+    /// 三处不能省：`status` 是终态本身；`acceptedAt` 必须是**首次**落盘的接受时间（只有 `rejected`
+    /// 才允许 `null`）；重复查询一个已终结的 mutation 时 `terminalEventId` **必填** —— 它就是该
+    /// request 唯一的 command terminal event 的 `eventId`。`result` 从记录原文还原（`session.create`
+    /// 的 `completed` 因此能给出首次的 `{sessionId, session}`，而不是重新推导）。
+    fn send_record_terminal(
+        &self,
+        handle: &ConnectionHandle,
+        request_id: &Uuid,
+        name: CommandName,
+        record: &acp_core::model::CommandRecord,
+    ) {
+        let status = wire_command_state(record.status());
+        let accepted_at = match record.accepted_at() {
+            Some(at) => match wire_timestamp(at.as_str()) {
+                Some(at) => Nullable::value(at),
+                None => {
+                    self.encoding_fault(handle);
+                    return;
+                }
+            },
+            // `rejected` 之外的记录都该有接受时间；缺了说明记录不完整，按接线缺陷显式失败。
+            None if status == CommandState::Rejected => Nullable::null(),
+            None => {
+                self.encoding_fault(handle);
+                return;
+            }
+        };
+        let terminal_event_id = match record.terminal_event() {
+            Some(event) => match Uuid::parse(event.as_str()) {
+                Ok(event) => Nullable::value(event),
+                Err(_) => {
+                    self.encoding_fault(handle);
+                    return;
+                }
+            },
+            None => Nullable::null(),
+        };
+        let error = match record.error() {
+            Some(error) => match wire_public_error(error) {
+                Some(error) => Nullable::value(error),
+                None => {
+                    self.encoding_fault(handle);
+                    return;
+                }
+            },
+            None => Nullable::null(),
+        };
+        // 记录里的 `result` 原文 → wire 结果：`session.create` 的 `completed` 有具名形状，其余按
+        // 开放对象承载（§11.5 的表：只有查询命令与 `session.create` 规定具名结果）。
+        let result = match record.result() {
+            Some(result) if name == CommandName::SessionCreate => {
+                match serde_json::from_str::<SessionCreateResult>(result.as_str()) {
+                    Ok(value) => {
+                        Nullable::value(CommandResultPayload::SessionCreate(Box::new(value)))
+                    }
+                    Err(_) => {
+                        self.encoding_fault(handle);
+                        return;
+                    }
+                }
+            }
+            Some(result) => match RawObject::parse(result.as_str()) {
+                Ok(value) => Nullable::value(CommandResultPayload::Object(value)),
+                Err(_) => {
+                    self.encoding_fault(handle);
+                    return;
+                }
+            },
+            None => Nullable::null(),
+        };
+        self.send_result(
+            handle,
+            &CommandResult {
+                request_id: request_id.clone(),
+                command: name,
+                status,
+                accepted_at,
+                terminal_event_id,
+                result,
+                error,
+            },
+            "mutation",
+        );
+    }
+
+    /// 一条 `rejected` 的 `command.result`：`acceptedAt`/`terminalEventId`/`result` 均为 `null`，
+    /// `error` 携带结构化原因（§11.2 对 `rejected` 的取值约束）。
+    fn send_rejected(&self, handle: &ConnectionHandle, command: &Command, error: PublicError) {
+        debug!(
+            event = "sync.command_rejected",
+            device_id = handle.device_id().as_str(),
+            command = command.command.as_str(),
+            request_id = command.request_id.as_str(),
+            code = error.code.as_str(),
+            "the mutation was rejected without any side effect"
+        );
+        self.send_result(
+            handle,
+            &CommandResult {
+                request_id: command.request_id.clone(),
+                command: command.command,
+                status: CommandState::Rejected,
+                accepted_at: Nullable::null(),
+                terminal_event_id: Nullable::null(),
+                result: Nullable::null(),
+                error: Nullable::value(error),
+            },
+            "mutation",
+        );
+    }
+
+    /// 3.5：把该命令挂上终态观察者（提交方在它到达终态时收到一条 `command.terminal`）。
+    fn watch_terminal(&self, handle: &ConnectionHandle, command: &Command, actor: &Actor) {
+        {
+            let mut states = lock(&self.states);
+            let state = states
+                .entry(handle.connection_id().as_str().to_owned())
+                .or_default();
+            // 同一 requestId 不重复登记（幂等重放会再次走到这里）。
+            if state
+                .watching
+                .iter()
+                .any(|watched| watched.request_id == command.request_id)
+            {
+                return;
+            }
+            state.watching.push(WatchedCommand {
+                request_id: command.request_id.clone(),
+                device_id: handle.device_id().clone(),
+                actor: actor.clone(),
+                since: Instant::now(),
+            });
+        }
+        self.wake.notify_one();
+    }
+
+    /// 终态观察者的循环：有界轮询每条待观察命令的持久记录，把已终结的那些推成 `command.result`。
+    ///
+    /// 由组合根 spawn，`Shutdown` 触发即返回（**不**留下 detached task）。观察项的取消路径有三条：
+    /// 连接离开注册表、命令到达终态、超过 [`WATCH_MAX_AGE`]。
+    pub async fn dispatch(self: Arc<Self>, shutdown: Shutdown) {
+        loop {
+            let tick = tokio::time::sleep(TERMINAL_POLL_INTERVAL);
+            tokio::select! {
+                biased;
+                () = shutdown.clone().wait() => {
+                    debug!(
+                        event = "sync.command_dispatch_shutdown",
+                        "the command terminal watcher stops"
+                    );
+                    return;
+                }
+                () = self.wake.notified() => {}
+                () = tick => {}
+            }
+            self.poll_pending().await;
+        }
+    }
+
+    /// 轮询所有待观察命令：已终结的推终态并从观察表移除；连接消失的整条状态一起回收。
+    async fn poll_pending(&self) {
+        // 先回收离开注册表的连接：观察表是连接期状态，`MUST NOT` 留成无主表项。
+        self.reclaim("\u{0}");
+        let mut done: Vec<(String, Uuid)> = Vec::new();
+        for (connection_id, device_id, watched) in self.watching_snapshot() {
+            let Some(handle) = self.handle_of(&connection_id) else {
+                self.forget_connection(&connection_id);
+                continue;
+            };
+            if watched.since.elapsed() >= WATCH_MAX_AGE {
+                // 有界观察：超龄即放弃，避免一条永不终结的记录把表撑住；对端仍可凭 `command.status` 重查。
+                done.push((connection_id.clone(), watched.request_id.clone()));
+                warn!(
+                    event = "sync.command_terminal_abandoned",
+                    connection_id = connection_id.as_str(),
+                    request_id = watched.request_id.as_str(),
+                    "the command terminal was not observed within the watch budget"
+                );
+                continue;
+            }
+            let Some(request) = core_request_id(&watched.request_id) else {
+                done.push((connection_id.clone(), watched.request_id));
+                continue;
+            };
+            match self.broker.command_status(&watched.actor, &request).await {
+                Ok(Some(record)) if record.status().is_terminal() => {
+                    done.push((connection_id.clone(), watched.request_id.clone()));
+                    // 命令名取自持久记录本身（观察项只记 requestId；重放的回包必须与首次同形）。
+                    match CommandName::from_str(record.command()) {
+                        Ok(name) => {
+                            self.send_record_terminal(&handle, &watched.request_id, name, &record)
+                        }
+                        Err(_) => warn!(
+                            event = "sync.command_terminal_name_unknown",
+                            request_id = watched.request_id.as_str(),
+                            command = record.command(),
+                            "the persisted command name is not part of the v1 command set"
+                        ),
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(
+                        event = "sync.command_status_failed",
+                        device_id = device_id.as_str(),
+                        request_id = watched.request_id.as_str(),
+                        error = ?error,
+                        "the command terminal could not be read; the watcher retries on the next tick"
+                    );
+                }
+            }
+        }
+        for (connection_id, request_id) in done {
+            self.forget_watch(&connection_id, &request_id);
+        }
+    }
+
+    /// 观察表的快照（含所属设备），避免在持锁期间 `await`。
+    fn watching_snapshot(&self) -> Vec<(String, acp_core::model::DeviceId, WatchedCommand)> {
+        lock(&self.states)
+            .iter()
+            .flat_map(|(connection_id, state)| {
+                state
+                    .watching
+                    .iter()
+                    .map(move |watched| {
+                        (
+                            connection_id.clone(),
+                            watched.device_id.clone(),
+                            watched.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn handle_of(&self, connection_id: &str) -> Option<Arc<ConnectionHandle>> {
+        self.registry
+            .handles()
+            .into_iter()
+            .find(|handle| handle.connection_id().as_str() == connection_id)
+    }
+
+    fn forget_watch(&self, connection_id: &str, request_id: &Uuid) {
+        let mut states = lock(&self.states);
+        let Some(state) = states.get_mut(connection_id) else {
+            return;
+        };
+        state
+            .watching
+            .retain(|watched| watched.request_id != *request_id);
+    }
+
+    fn forget_connection(&self, connection_id: &str) {
+        lock(&self.states).remove(connection_id);
+    }
+
+    /// 测试专用：跑一轮终态观察（`dispatch` 的循环体，免去用例自己起定时器）。
+    #[cfg(test)]
+    pub(crate) async fn poll_terminal_for_test(&self) {
+        self.poll_pending().await;
+    }
+
+    /// 测试专用：当前登记的终态观察项数量（断言「断开后不留观察项」）。
+    #[cfg(test)]
+    pub(crate) fn watchers_for_test(&self) -> usize {
+        lock(&self.states)
+            .values()
+            .map(|state| state.watching.len())
+            .sum()
     }
 
     /// 本机装配失败（时间戳/错误体构造不出来）：这是接线缺陷，按 `internal.unavailable` 显式失败，
