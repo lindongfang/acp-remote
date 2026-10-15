@@ -2,11 +2,12 @@
 
 > 状态：编码前客户端约束  
 > 版本：0.5
+> 修订记录（2026-10-16，`frontend-sync-wiring`）：§4.1 写回「主机连接与首次配对」的实绩与两处未闭合边界；§4.5 写回配对秘密的清理口径与尚未实现的来源校验；§5 补阻断态的封闭成因词表与「与普通断网可分、阻断后结构性停止自动重连」；§9 写回前端级验收证据，并如实登记尚未执行的真实 Daemon 浏览器级端到端验收。  
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4）：§4.3 把分发图示的托管位置由 `/ui` 改为**根目录**，写回「静态资源嵌入二进制」的裁定、理由与代价（含发布构建缺产物即拒绝启动）；§11 的「静态资源嵌入二进制还是作为旁路资源安装」待决项按该节的结项规则结项，其余条目不变。  
 > 修订记录（2026-10-12）：§4.1 补对话页口径（时间线与结构化卡片、输入与提交、取消、授权与提问应答的可用边界、模型与模式、变更文件右栏边界、宽窄两形态）；§6 明确「呈现覆盖由客户端自持」——协议的事件类型词表只决定解析，客户端自己的覆盖集合决定呈现，未被覆盖的已知事件一律走降级卡片，没有第三种结果。  
 > 修订记录（2026-10-02）：§2.2 与 §9 第 1 条把「PWA 不展示会话创建」改为受限的目录内创建入口（feature `core.session-create.v1`），并记录原型来源；§4.1 新增目录浏览与目录内创建会话；§7 把 workspace/Agent 目录引用纳入可缓存的最小数据（只存引用）。  
 > 修订记录（2026-09-18）：明确 PWA 本地缓存为固定常量（摘要缓存 8 MiB、TTL 30 天、LRU），imported 正文不占用配额。  
-> 日期：2026-10-15（2026-09-18 基线）
+> 日期：2026-10-16（2026-09-18 基线）
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 后端模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)
 
@@ -104,6 +105,17 @@ clients/
 ### 4.1 必须实现
 
 - 主机连接与首次配对。
+
+  `[实现现状]`（2026-10-16，`frontend-sync-wiring`）连接与首次配对已按本变更接线闭合，实测来自 `clients/app` 的独立门禁（`cd clients/app && npm run check` = 59 files / 725 passed + `expo export` 成功）与假主机 e2e（`node e2e/run-e2e.mjs` = 51/51，既有 49 条 + PW-1、PW-2）：
+
+  - 出站地址由组合根 `syncSocketUrl` **唯一**构造，路径为权威端点 `/sync/v1`（`src/sync-client/endpoint-contract.test.ts` 用字面量断言 `new URL(...).pathname === "/sync/v1"`）；socket 端口签名容纳「声明的子协议列表」，Web 实现把它作为 `new WebSocket(url, protocols)` 的第二个参数（`src/sync-client/socket.web.ts`）。
+  - 子协议标识取自机器登记的同一来源：合同测试读仓库根 `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol`，与前端常量逐字比对；前端不硬编码第二份字面量。
+  - 握手处比对服务端**选中的** feature 是否覆盖客户端必需集合（`core.command-status.v1`、`core.event-ack.v1`）；未覆盖即阻断（成因见 §5）。
+  - 配对链路闭合：状态查询的已批准结果携带主机标识与主机公钥（缺材料是可区分的失败，而非「已批准」）；已批准后写入 `paired-host/<canonicalOrigin>` 记录（公钥取自状态响应），随后进入已配对并触发连接；从阻断态重新配对也会解除阻断并按新记录重建装配。配对页提供二维码内容**粘贴**入口与结构校验（design D3：v1 用粘贴，扫码属可选增强），非法输入明确失败且不发请求。
+  - 路由走**正常路径**（`/`、`/pair`、`/hosts`、`/dir/<alias>`、`/session/<id>`），地址片段只承载配对内容、不参与路由命中（`src/routing.test.ts`；核实方式与产物证据见该文件头）。
+
+  **未闭合的边界（如实登记，不写作已实现）**：① 服务端为本机 node-link 能力生成的配对二维码指向 `/node-link/pair`，而前端没有该路由（协议保留前缀只到 `/node-link/v1`），属 node-link 能力的前端缺口，不在本变更范围；② 真实 Daemon 的浏览器级端到端验收尚未执行（见 §9）。
+
 - 主机身份显示、连接状态和重新配对入口。
 - 已有会话列表与会话详情。
 - workspace 目录浏览：目录列表（以目录为主角）、目录内会话列表、目录搜索、空目录与"没有任何目录"两种空态；目录项只显示展示名与别名，不显示或不可编辑规范化路径。目录数据随快照下发（`core.local-catalog.v1`），因此离线时目录页仍可渲染。
@@ -184,6 +196,8 @@ PWA 不需要独立云服务器。`[决定]`（2026-10-15，`sync-ui-hosting`）
 - 浏览器清理站点数据、切换浏览器 profile 或不支持所需密码学能力时，视为设备密钥丢失，需要重新配对。
 - PWA 的设备身份强度不得描述为等同于 iOS Keychain 或 Android Keystore。
 
+`[实现现状]`（2026-10-16，`frontend-sync-wiring`）配对秘密的清理口径落在组合根与 store 上（`clients/app/src/composition.ts`、`src/features/pairing-model.ts`、`src/features/client-store.ts`）：秘密经二维码内容进入（配对页粘贴的整段内容，或经地址片段自动读入），组合根 `takePairingFragment` **先读后清**——只对 `data=` 形态调 `history.replaceState`，且新地址保留 pathname 与 search（其余形态的片段既不解析也不清除，避免清掉别人的语义），因此秘密不留在地址历史里；读到的载荷只活在 `ClientStore` 的**私有**会话字段里，已批准或进入终态时立即丢弃。`ClientState` 是可导出、可快照的公开状态，其中没有承载秘密的槽位，秘密因此不进缓存摘要、可导出状态与出站 URL。**未实现（相邻项）**：[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1 还要求 PWA 校验「当前 origin 与 secure context」，本变更只校验了过期时间与字段长度，来源与 secure context 校验尚未实现。
+
 完整决策和信任边界见 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)。Noise 不进入第一阶段，仅保留为未来不可信中继场景的可选 Transport Profile。
 
 第一阶段浏览器验收覆盖 Android Chrome、iOS Safari 和桌面 Chrome/Edge。HTTPS Provider 必须同时通过 Tailscale Serve 和至少一种非 Tailscale 同机方案。
@@ -213,6 +227,8 @@ unpaired
   -> revoked | incompatible | identity_changed | replaced
 ```
 
+四类阻断态（`revoked` / `incompatible` / `identity_changed` / `replaced`）各有独立的恢复路径。其中 `incompatible` 同时覆盖三种恢复路径不同的情形，其成因因此进一步细分为**封闭词表**：`subprotocol_not_selected`（服务端未接受约定的子协议）、`protocol_version_unsupported`（协议版本无法形成交集）、`required_features_missing`（服务端未选中客户端的必需 feature）。细化成因随事件一并交付，不由关闭码反推——未选中子协议与握手期的必需 feature 缺失落到同一个关闭码。阻断态必须与「普通网络断开」可区分：后者进入 `reconnecting` 并按退避重连，阻断态则**结构性**停止自动重连，直到用户显式恢复（例如重新配对）。
+
 最低要求：
 
 - 只有进入 `online` 后，客户端才能把命令显示为已被服务器接受。
@@ -232,6 +248,8 @@ draft -> submitting -> accepted -> completed | failed | rejected | uncertain
 连接在确认前中断时，客户端先使用同一 `requestId` 重试或执行 `command.status`；只有服务端确认进入 `uncertain` 才显示该终态，不能仅根据网络断开自行断定，也不能生成新 ID 导致重复执行。
 
 第一阶段同一 PWA 设备只允许一条 active WSS。多标签页应协调连接；服务端以新认证连接替换旧连接时，旧页面进入 `replaced` 并停止自动重连，避免标签页互相抢占。切换窗口中的事件仍按 `eventId` 去重。
+
+`[实现现状]`（2026-10-16，`frontend-sync-wiring`）12 个状态的封闭清单与四类阻断态在 `clients/app/src/state/connection-machine.ts`（`CONNECTION_STATES` / `BLOCKING_STATES`），细化成因词表在 `src/sync-client/connection.ts` 的 `IncompatibleReason`。三条成因各有单测：未选中子协议时**一个出站帧都不发**、以 `4406` 终止并落 `blocked`（而非 `closed`）；协议版本不兼容与必需 feature 缺失各落对应的 `reason`；真断网（`1006`）落 `closed` 且无 `blocked`。门面级断言阻断后 `connect()` 抛错，即**结构性**停止自动重连（而非依赖某一层「忘了重连」）。
 
 ## 6. ACP 能力的前端呈现
 
@@ -314,6 +332,8 @@ PWA MVP 至少满足：
 8. 浏览器数据清理后不会继续冒充原设备，而是要求重新配对。
 9. Owner 离线时 imported 会话只显示元数据与 `origin.online=false`；正文请求返回 `resource.remote_unavailable`；输入不得标记为已发送。
 10. PWA 构建可以由 Daemon 本地托管，不需要应用级云服务器。
+
+`[实现现状]`（2026-10-16，`frontend-sync-wiring`）上述条目里属于前端接线的部分（第 2 条的配对链路与连接握手，即 §4.1 记的那组实绩）已有可执行证据，但**只到前端门禁与假主机 e2e 这一层**：`cd clients/app && npm run check` = 59 files / 725 passed + `expo export` 成功；`node e2e/run-e2e.mjs` = 51/51（既有 49 条 + PW-1、PW-2；真实 Chromium + 假主机，含出站 URL 路径、升级请求声明的子协议、已批准后落盘的主机公钥、配对入口存在与可用这四条可证伪断言）。**未执行**：第 2 条所依赖的「真实浏览器 + 真实 Daemon（同源托管）」端到端验收（完整配对、已认证连接、目录与会话快照、断开按游标恢复）**尚未执行**——按 [WORKFLOW.md](./WORKFLOW.md) 的 E2E 口径不得以假主机用例代替，它属本变更尚未收口的验收项，因此第 2 条暂不声称已在真实 Daemon 上验过。
 
 ## 10. 测试边界
 
