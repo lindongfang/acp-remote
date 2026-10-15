@@ -2288,18 +2288,19 @@ async fn a_transient_burst_that_drains_does_not_disconnect_the_connection() {
     harness.stop().await;
 }
 
-/// 持续饱和的连接**不得**拖住同 Owner 上的其他连接；该连接的饱和段必须一直成立。
+/// 持续饱和的连接**不得**拖住同 Owner 上的其他连接；该连接的饱和段必须连续累计到宽限之上。
 ///
-/// 饱和形状取**可持续**的一种：一个独立 OS 线程压力源（[`OutboundPressure`]，`target = None`）不停往
-/// 待发送队列投递，被高水位拒了就立刻重试——队列因此从不回落到低水位之下，饱和段一直累计。用例在一个
-/// 宽限窗口内反复断言「占用仍在低水位之上 + 饱和段仍在累计」，同时对照组一直在正常往来（R81 的另一半）。
+/// **判据取规格实际用的那个量**：慢消费者看门狗的唯一判据是 `saturated_for() >= slow_consumer`
+/// （`session.rs` 的 `tick_action`）——「当前饱和段已持续的时长」。因此本用例断言「观测到一个
+/// 饱和段连续累计到宽限之上」，同时对照组一直在正常往来（R81 的另一半）。它**不断言**每一轮
+/// 占用都在低水位之上：会话的 `send_text` 只把数据交给内核（`transport/net/ws.rs` 没有写期限），
+/// 压力源补货与它赛跑，占用可能某一刻掉到低水位之下、判定断一次再重建；那不影响看门狗，因为
+/// 断开用的是「单段连续时长」。
 ///
-/// **为什么不用「灌一次大消息、赌 socket 缓冲吸收不完」这个旧形状**：那让断言依赖内核 TCP 缓冲恰好吸收
-/// 不完那批消息（上限 64 条 × 64 KiB ≈ 4 MiB，而 loopback 上内核缓冲的吸收量远超于此）。缓冲吸收得够多
-/// 时（CI 的 Linux runner 如此），【会话的 `send_text` 会持续完成】（`transport/net/ws.rs` 没有写期限，
-/// 写入只是把数据交给内核），队列被排空到低水位之下，迟滞判定**正确地**清除饱和段——旧断言「占用必须一直在
-/// 低水位之上」于是红掉。那不是缺陷被修坏了，而是用例把「平台相关的缓冲容量」当成了常量。换成压力源后判据
-/// 与平台无关：补货速率远快于排空速率，队列永远回不到低水位之下。
+/// **两版失败的修法（都记下来，避免再走）**：曾断言「占用必须始终在低水位之上」——那把「内核
+/// 吸收了多少」当成常量，是平台相关的量（CI 的 Linux runner 吸收得更多）。于是先把形状换成压力源
+/// 持续补货，又把上限抬到 schema 默认的 2,000 条（低水位 1,000）——两者都只是在降概率，没有消除
+/// 竞态，仍在该 runner 上失败。最终按规格改成只看「单段连续时长」。
 ///
 /// 这里**不**断言「该连接被断开」：断开判定由「队列持续饱和、写路径没卡住」的
 /// `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 与句柄级的
@@ -2350,22 +2351,20 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
         pressure.sent()
     );
 
-    // ③ 宽限窗口内：饱和段连续累计，占用从不降到低水位之下。
+    // ③ 宽限窗口内观测饱和段。判据取**规格实际用的那个量**：慢消费者看门狗的唯一判据是
+    // `saturated_for() >= slow_consumer`（`session.rs` 的 `tick_action`），即「当前饱和段已持续的
+    // 时长」。因此这里断言「观测到一个饱和段连续累计到宽限之上」，而**不断言**每一轮占用都在
+    // 低水位之上——后者把「内核吸收了多少」当成常量，是平台相关的量（前两版修法在 Linux CI 上
+    // 反复失败正是如此）。会话的 `send_text` 只把数据交给内核：只要某一刻压力源没补上、占用掉到
+    // 低水位之下，判定就会断一次，随后重新建立；那不影响看门狗，因为断开用的是「单段连续时长」。
     let deadline = Instant::now() + 2 * GRACE;
-    let mut saturated;
-    let mut rounds = 0u32;
+    let mut longest: std::time::Duration = std::time::Duration::ZERO;
+    let mut observed_saturated = false;
     loop {
-        saturated = slow_handle.saturated_for();
-        assert!(
-            slow_handle.saturated(),
-            "持续饱和的判定必须一直成立（否则本用例退化成瞬时突发）"
-        );
-        assert!(
-            slow_handle.pending().messages as u64 >= slow_handle.low_water_messages(),
-            "占用必须始终在低水位之上（实际 {} 条）",
-            slow_handle.pending().messages
-        );
-        rounds += 1;
+        if let Some(since) = slow_handle.saturated_for() {
+            observed_saturated = true;
+            longest = longest.max(since);
+        }
         if Instant::now() >= deadline {
             break;
         }
@@ -2378,12 +2377,13 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
         pressure.sent()
     );
     assert!(
-        rounds >= 2,
-        "窗口内必须反复观察过饱和判定，实际只观察了 {rounds} 次"
+        observed_saturated,
+        "窗口内必须至少一次观测到饱和（否则本用例什么都没证明）"
     );
     assert!(
-        saturated.expect("饱和段必须连续存在") >= GRACE,
-        "宽限窗口内饱和段必须累计到宽限之上"
+        longest >= GRACE,
+        "必须观测到一个饱和段连续累计到宽限之上（实际 {:?}）——看门狗的判据正是这个量",
+        longest
     );
     assert_eq!(
         harness.conn.registry().active(),
