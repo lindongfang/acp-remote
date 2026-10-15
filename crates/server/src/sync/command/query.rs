@@ -49,15 +49,25 @@ use tracing::debug;
 
 use crate::sync::event::RAW_PAYLOAD_FEATURE;
 use crate::sync::snapshot::{LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE};
+use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
 
-use super::{core_request_id, port_rejection, wire_public_error, wire_timestamp};
+use super::{core_request_id, details_object, port_rejection, wire_public_error, wire_timestamp};
 
 /// `core.session-history.v1`：`session.read` 的 `include: ["history"]` 需要协商该 feature（§11.5）。
 ///
 /// 未协商却请求了它时**显式**回 `protocol.feature_required`（`details.features` 给出缺的那个），
 /// MUST NOT 静默忽略该 include 后返回一份看似完整的空结果。
 pub const SESSION_HISTORY_FEATURE: &str = "core.session-history.v1";
+
+/// core 表达「游标早于仍可读的下界」的那条静态文本（`storage-sqlite` 的 `read_session`：
+/// `PortError::InvalidRequest("history cursor precedes the retained window")`）。
+///
+/// 这里给出本 crate 内的唯一一份取值，让 [`super::port_rejection`] 与 `session.read` 自己的消息游标判定
+/// （见 [`session_read`]）收敛到同一个 [`Rejection::CursorInvalid`]：§11.5 要求对端看到
+/// `sync.cursor_invalid` + `details.reason = "cursor_expired"`，落进通配臂则变成
+/// `protocol.schema_invalid`——另一类事实（形状错误），会让客户端以为是自己发的帧不合法。
+pub const RETAINED_WINDOW_EXCEEDED: &str = "history cursor precedes the retained window";
 
 /// `session.read` 单页消息数的服务端上限（客户端给的 `limit` 收敛到它；§11.5「超过服务端为该会话配置的
 /// 明细条数上限时，服务端收敛到自己的上限并照常返回」）。
@@ -83,24 +93,40 @@ const MAX_TEXT_CHARS: usize = 262_144;
 pub enum Rejection {
     /// 已登记的错误码 + 固定说明文本。
     Code(ErrorCode, &'static str),
+    /// 游标不可用（`sync.cursor_invalid` + `details.reason`）。
+    ///
+    /// `reason` 是 registry 为这个码登记的**必需**字段（`compatibility/errors/v1/errors.json`），取值域
+    /// 固定为 [`CursorFault`] 的四种原因。`session.read` 的两套游标——消息的 `before` 与历史条目的
+    /// `beforeHistory`——早于保留窗口时都走这里（§11.5「保留窗口之前的游标显式不可读」）。
+    CursorInvalid(CursorFault),
     /// body 形状不符（`protocol.schema_invalid`）。
     Schema(&'static str),
-    /// 请求了未协商的 feature（`protocol.feature_required`，`details.features` 在
-    /// [`super::rejection_details`] 里给出）。
+    /// 请求了未协商的 feature（`protocol.feature_required`，`details.features` 给出缺的那个）。
     FeatureRequired,
     /// 请求了用例面无法表达的资源（`capability.unsupported_by_broker`）。
     UnsupportedResource(&'static str),
 }
 
 impl Rejection {
-    /// 对端可见的错误码与其固定说明（文本不含请求内容）。
-    pub fn into_parts(self) -> (ErrorCode, &'static str) {
+    /// 对端可见的错误码、它的固定说明（文本不含请求内容）与**已登记**的 `details`。
+    ///
+    /// `details` 与错误码在这里一起给出：登记的必需字段（`sync.cursor_invalid.reason`、
+    /// `protocol.feature_required.features`）因此不可能与码本身漂移；未登记 `details` 的码一律 `{}`。
+    pub fn into_parts(self) -> (ErrorCode, &'static str, RawObject) {
         match self {
-            Rejection::Code(code, text) => (code, text),
-            Rejection::Schema(text) => (ErrorCode::ProtocolSchemaInvalid, text),
+            Rejection::Code(code, text) => (code, text, RawObject::empty()),
+            Rejection::CursorInvalid(fault) => (
+                ErrorCode::SyncCursorInvalid,
+                "the cursor cannot be used",
+                cursor_details(fault),
+            ),
+            Rejection::Schema(text) => (ErrorCode::ProtocolSchemaInvalid, text, RawObject::empty()),
             Rejection::FeatureRequired => (
                 ErrorCode::ProtocolFeatureRequired,
                 "the client did not negotiate a feature this resource requires",
+                details_object(&serde_json::json!({
+                    "features": [SESSION_HISTORY_FEATURE]
+                })),
             ),
             Rejection::UnsupportedResource(resource) => {
                 debug!(
@@ -110,10 +136,16 @@ impl Rejection {
                 (
                     ErrorCode::CapabilityUnsupportedByBroker,
                     "the broker cannot express this resource",
+                    RawObject::empty(),
                 )
             }
         }
     }
+}
+
+/// `sync.cursor_invalid.details`（唯一登记字段 `reason`，四种取值见 [`CursorFault`]）。
+fn cursor_details(fault: CursorFault) -> RawObject {
+    details_object(&serde_json::json!({ "reason": fault.as_str() }))
 }
 
 /// `session.list`：设备可见的会话摘要集合。
@@ -160,7 +192,12 @@ pub async fn session_list(
 /// - `limit` 既是 `history` 一页的上限，也是本次要返回的**消息页**上限（§11.5「每一页各自的单页上限」）；
 /// - 消息页按 `before`（`{createdAt, messageId}` 复合游标）取**紧接其之前**的一页，省略游标时取最新一页，
 ///   排序按 `createdAt` 升序、同一时刻以 `messageId` 稳定定序（§11.5 的排序规则）；
-/// - 页标记 `hasEarlier` 只描述这一页**消息**之前是否仍有更早内容。
+/// - 页标记 `hasEarlier` 只描述这一页**消息**之前是否仍有更早内容；
+/// - **保留窗口之前的游标显式不可读**（§11.5）：`before` 早于本次读到的**最早一条可读消息**、且这一页
+///   因此为空、页标记也说没有更早内容时，回 `sync.cursor_invalid`
+///   （`details.reason = "cursor_expired"`）——绝不静默返回空页让客户端误以为已到最早一条。判定是
+///   **严格**比较，因此「游标恰好是最早一条可读消息」（客户端翻到最早一条后再问一页的合法空页）不会
+///   被误报。
 ///
 /// 事件窗口必须覆盖该会话可读事件的全量，才能给出「最新一页」：本函数按 `next` 升序分批读到 head，
 /// 超过 [`MAX_SCAN_EVENTS`] 仍未读完时以 `resource.result_too_large` 显式失败——宁可不给，也不给一页
@@ -197,7 +234,12 @@ pub async fn session_read(
     let page_limit = payload
         .limit
         .as_ref()
-        .map_or(DEFAULT_PAGE_MESSAGES, |limit| limit.get() as u32)
+        .map_or(DEFAULT_PAGE_MESSAGES, |limit| {
+            // `limit` 是 `UIntAtLeast<1>`（u64）而页大小是 `u32`：转换必须**饱和**——`as u32` 会让
+            // ≥ 2^32 的取值回绕（2^32 → 0，再被下面的 clamp 抬到 1），把 §11.5 的「超过服务端上限时
+            // 收敛到上限并照常返回」变成「只给一条」。
+            u32::try_from(limit.get()).unwrap_or(MAX_PAGE_MESSAGES)
+        })
         .clamp(1, MAX_PAGE_MESSAGES);
     let before_history = match payload.before_history.as_ref() {
         Some(value) => Some(parse_sequence(value.as_str())?),
@@ -279,6 +321,16 @@ pub async fn session_read(
         ));
     }
     let page = merger.finish(page_limit);
+    // 消息游标早于保留窗口：显式拒绝，不静默返回一页「看起来已到最早一条」的空页（§11.5）。只在请求了
+    // `messages` 时判定——没请求消息就没有消息游标可谈（那时 `before` 不描述任何返回的页）。
+    if include.messages && page.cursor_expired {
+        debug!(
+            event = "sync.session_read_cursor_expired",
+            session_id = session_id.as_str(),
+            "the message cursor precedes the readable window"
+        );
+        return Err(Rejection::CursorInvalid(CursorFault::CursorExpired));
+    }
     let messages = if include.messages {
         Some(
             page.messages
@@ -795,10 +847,11 @@ struct UserMessage {
     parts: Vec<(u64, String)>,
 }
 
-/// 一页消息 + 页标记。
+/// 一页消息 + 页标记（`cursor_expired` 见 [`MessageMerger::finish`]）。
 struct MessagePage {
     messages: Vec<Message>,
     has_earlier: bool,
+    cursor_expired: bool,
 }
 
 impl MessageMerger {
@@ -862,6 +915,16 @@ impl MessageMerger {
 
     /// 折叠出一页：按 `createdAt` 升序（同一时刻以 `messageId` 稳定定序）、只保留游标之前的消息，再取
     /// **最新**一页（页里最多 `limit` 条用户输入，与 §11.5 的默认页口径一致）。
+    ///
+    /// 同时给出 `cursor_expired`：游标在场、这一页为空、页标记也说没有更早内容、且游标**严格早于**本次
+    /// 读到的**最早一条可读消息**（或本次一条可读消息都没有）时，唯一能解释「游标指向的东西不在这份读
+    /// 口里」的物理事实就是它已被保留策略清理（更早的行按 §9.7 前缀清理/压缩后不再可读）。比较必须是
+    /// 严格的：游标恰好等于最早一条可读消息是**合法**的（客户端翻到最早一条后再问一页，得到的空页正是
+    /// 「确实没有更早的」），不得报过期。
+    ///
+    /// 这份读口能给出的下界就是「最早一条可读消息」：`before` 只可能来自上一页返回的消息，而消息页是
+    /// 单调前缀清理的，游标低于该下界即意味着它指向的行已不可读。窗口**内部**的空洞（例如窗口没前移、
+    /// 但某条消息的 delta 被压缩掉）从这一份读口看不出来，不在本判定的覆盖范围内。
     fn finish(self, limit: u32) -> MessagePage {
         let MessageMerger {
             cursor,
@@ -884,18 +947,25 @@ impl MessageMerger {
                 })
             })
             .chain(agents)
-            .filter(|message| match &cursor {
-                Some((created_at, message_id)) => {
-                    (message.created_at.as_str(), &message.message_id)
-                        < (created_at.as_str(), message_id)
-                }
-                None => true,
-            })
             .collect();
         // `createdAt` 定宽（UTC 毫秒），字典序即时间序；同一时刻以 `messageId` 作稳定 tie-breaker。
         messages.sort_by(|left, right| {
             (left.created_at.as_str(), &left.message_id)
                 .cmp(&(right.created_at.as_str(), &right.message_id))
+        });
+        // 可读窗口的下界（本次读口内最早的一条消息），必须在按游标收窄**之前**取。
+        let earliest = messages.first().map(|message| {
+            (
+                message.created_at.as_str().to_owned(),
+                message.message_id.clone(),
+            )
+        });
+        messages.retain(|message| match &cursor {
+            Some((created_at, message_id)) => {
+                (message.created_at.as_str(), &message.message_id)
+                    < (created_at.as_str(), message_id)
+            }
+            None => true,
         });
         // 最新一页：从尾部往前收，直到这一页已含 `limit` 条用户输入；页首之前的 Agent 消息留在页内
         // （它们属于这一页的 turn）。
@@ -914,9 +984,21 @@ impl MessageMerger {
         }
         let has_earlier = start > 0;
         messages.drain(..start);
+        let cursor_expired = match (&cursor, &earliest) {
+            // 游标早于最早一条可读消息：它指向的行已不在读口内。
+            (Some(cursor), Some(earliest)) => {
+                messages.is_empty()
+                    && !has_earlier
+                    && (cursor.0.as_str(), &cursor.1) < (earliest.0.as_str(), &earliest.1)
+            }
+            // 一条可读消息都没有：任何游标都指向读口之外的区间。
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
         MessagePage {
             messages,
             has_earlier,
+            cursor_expired,
         }
     }
 }

@@ -71,6 +71,7 @@ use tracing::{debug, warn};
 
 use crate::sync::conn::registry::SendFault;
 use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
+use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
 
 use self::limits::{CommandFamily, CommandRateLimiter};
@@ -81,10 +82,18 @@ use self::query::Rejection;
 /// `ConnectionHandle::send` 把 body 包进完整信封后才写出，因此「结果超过单条消息上限」必须在**入队前**
 /// 判定，而判定要拿「将要发出的那份字节」比，不能只比 body。信封的固定部分逐字为
 /// `{"protocolVersion":1,"type":"command.result","messageId":"<36>","connectionId":"<36>",`
-/// `"connectionSequence":"<≤20>","body":<body>}`：固定分隔与键名 180 字节 + 两个 UUID 的 72 字节 +
-/// 序号的最多 20 位 = 272 字节；取 320 作为上界留出余量（上限 1 MiB，这点余量不会把合法结果误判成超限）。
-/// `connectionSequence` 是 u64 的十进制串，最多 20 位，因此这个上界在任何序号下都成立。
-const ENVELOPE_OVERHEAD_BYTES: u64 = 320;
+/// `"connectionSequence":"<≤20>","body":<body>}`：固定分隔与键名 110 字节 + 两个 UUID 的 72 字节 +
+/// `connectionSequence` 的最多 20 位 = **202** 字节。`connectionSequence` 是 u64 的十进制串，最多 20 位；
+/// `messageId` 与 `connectionId` 都经 `Uuid::parse`（canonical 带连字符，恒为 36 字符），因此 202 在
+/// 任何序号与标识下都是上界，且取到该上界的唯一前提是序号恰好有 20 位。
+///
+/// 这个数字是**测出来的**而不是估出来的：`the_envelope_overhead_is_the_measured_worst_case` 用出站同一
+/// 条装配路径（`sync_protocol` 的信封 + `encode_body`）装配一帧并与本常量逐字节比对；`an_almost_full_query_result_still_fits`
+/// 再把真实出站帧的长度当作上限，证明这条判定不会把装得下的结果误判成超限。
+///
+/// **不得**放大取值「留余量」：与上限比较的是加法，常量每虚高 1 字节，就会把 body 落在
+/// `[max - 常量, max - 真实开销]` 区间里**装得下**的结果误判成 `resource.result_too_large`。
+const ENVELOPE_OVERHEAD_BYTES: u64 = 202;
 
 /// 一条连接的命令面状态。
 #[derive(Debug, Default)]
@@ -551,8 +560,8 @@ impl CommandRoute {
                 }
             }
             Err(rejection) => {
-                let (code, text) = rejection.into_parts();
-                let Some(error) = public_error(code, text, rejection_details(code)) else {
+                let (code, text, details) = rejection.into_parts();
+                let Some(error) = public_error(code, text, details) else {
                     return self.encoding_fault(handle);
                 };
                 debug!(
@@ -704,16 +713,6 @@ fn retry_after_details(retry_after: std::time::Duration) -> RawObject {
     }))
 }
 
-/// `Rejection` 的登记 `details`（只有 `protocol.feature_required` 带字段，其余一律 `{}`）。
-fn rejection_details(code: ErrorCode) -> RawObject {
-    match code {
-        ErrorCode::ProtocolFeatureRequired => details_object(&serde_json::json!({
-            "features": [query::SESSION_HISTORY_FEATURE]
-        })),
-        _ => RawObject::empty(),
-    }
-}
-
 /// 一个开放对象 `details`（构造失败时退化为 `{}`：登记的 details 是可选扩展点，绝不因它 panic）。
 fn details_object(value: &serde_json::Value) -> RawObject {
     RawObject::parse(&value.to_string()).unwrap_or_else(|_| RawObject::empty())
@@ -795,14 +794,20 @@ pub(crate) fn core_request_id(id: &Uuid) -> Option<CoreRequestId> {
 /// `PortError::InvalidRequest("authorization.scope_denied")`（core 的 `PortError` 没有"禁止"变体），
 /// 因此这条**必须先判**：把它映射成 `protocol.schema_invalid` 会让一台未授权设备把授权拒绝看成形状
 /// 错误，正是 2.2 要避免的错误类型漂移。
+///
+/// 保留窗口之前的游标同理必须先判：core 用 `InvalidRequest("history cursor precedes the retained
+/// window")` 表达「该游标早于仍可读的下界」（`storage-sqlite` 的 `read_session`），而 §11.5 要求对端看到
+/// `sync.cursor_invalid` + `details.reason = "cursor_expired"`。落进通配臂会变成
+/// `protocol.schema_invalid`——那是**另一类**事实（形状错误），客户端据此会以为是自己发的帧不合法，
+/// 而不是「该翻页位置已被清理」。
 pub(crate) fn port_rejection(error: &PortError) -> Rejection {
     match error {
         PortError::InvalidRequest("authorization.scope_denied") => Rejection::Code(
             ErrorCode::AuthorizationScopeDenied,
             "the device is not allowed to send this command",
         ),
-        PortError::InvalidRequest("sync.cursor_invalid") => {
-            Rejection::Code(ErrorCode::SyncCursorInvalid, "the cursor cannot be used")
+        PortError::InvalidRequest(query::RETAINED_WINDOW_EXCEEDED) => {
+            Rejection::CursorInvalid(CursorFault::CursorExpired)
         }
         PortError::InvalidRequest(reason) => Rejection::Schema(schema_hint(reason)),
         PortError::NotFound(_) => Rejection::Code(
