@@ -32,6 +32,10 @@
  * - `onEvent` 单向流向 `store.apply`；**何时**重连由 `shouldAutoReconnect` 判定，
  *   组合根只执行结论，不自己判断。
  * - `pagehide` 时断开连接，未完成的暂存快照随之丢弃（§9.4）。
+ * - 配对链路：`ClientStore` 的配对用例（`submitPairingQrText` / `startPairingFromAddress`）经
+ *   这里的接线拿到网络（`HttpPairingTransport`）、地址栏（读片段并**立即**清除）、本地存储
+ *   （已配对主机记录）与时钟（轮询节奏）。页面与组件因此不碰这些能力；
+ *   配对完成后同一条装配路径（`adoptPairedHost`）把连接建起来，不会出现第二份连接装配。
  */
 
 import {
@@ -57,7 +61,8 @@ import type {
 } from "./sync-client";
 import { ClientStore } from "./features/client-store";
 import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./features/ports";
-import type { PairingPollResult, PairingTransport } from "./features/pairing-model";
+import type { PairingPollResult, PairingTransport, PairingWiring } from "./features/pairing-model";
+import { PairingQrInvalidError } from "./features/pairing-model";
 import type { ErrorCode, PairingQrPayload, PublicError } from "./protocol";
 import { openPlatform } from "./platform";
 import type { LifecycleEvent, PlatformPorts } from "./platform";
@@ -97,6 +102,20 @@ const DOMAIN = {
 /** `$defs.canonicalOrigin`：`^https://[^/?#]+$`。 */
 const CANONICAL_ORIGIN_PATTERN = /^https:\/\/[^/?#]+$/;
 
+/**
+ * 二维码地址里承载载荷的片段标记（协议 §7.1：`https://<origin>/pair#data=<base64url-json>`）。
+ *
+ * 秘密**必须**在 fragment 而不是 query：query 会进服务器日志、Referer 与浏览器历史。
+ */
+const QR_DATA_MARKER = "data=";
+
+/** 裸载荷的字符集：无填充 base64url。命中它才当成「只给了载荷」。 */
+const QR_BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/** 二维码里两条 base64url 字段的字节长度（§7.1 要求 PWA 校验字段长度；wire 形状是 32 / 65）。 */
+const QR_SECRET_BYTES = 32;
+const QR_HOST_PUBLIC_KEY_BYTES = 65;
+
 /** P-256 SPKI 的 DER 前缀：后接 65 字节 SEC1 未压缩点即可被 `importKey("spki")` 接受。 */
 const P256_SPKI_PREFIX = new Uint8Array([
   0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86,
@@ -127,6 +146,8 @@ interface PairingStatusBody {
   readonly status?: unknown;
   readonly pairingRequestId?: unknown;
   readonly device?: { readonly deviceId?: unknown } | undefined;
+  /** 已批准时的主机身份材料（§7.3：`approved` 响应返回 Host identity）。 */
+  readonly host?: { readonly hostId?: unknown; readonly hostPublicKey?: unknown } | undefined;
   readonly code?: unknown;
   readonly message?: unknown;
   readonly retryable?: unknown;
@@ -259,7 +280,16 @@ interface StoredPairedHost {
   readonly publicKeyBase64Url: string;
 }
 
-/** 本地摘要文本 → 已配对主机记录；形状不符返回 `null`（而不是抛错或部分取值）。 */
+/**
+ * 本地摘要文本 → 已配对主机记录。
+ *
+ * - 摘要不是对象 / 缺 `hostId`：返回 `null`——**从不是**一次配对（记录被清或被改坏），
+ *   按未配对处理，页面引导重新配对；验签因此不会被放行（e2e 的 CR-4 就钉这一条）。
+ * - `hostId` 在、公钥缺失：返回**公钥为空**的记录，而不是 `null`。依据 design D2 的迁移口径
+ *   （旧路径写入的记录没有主机公钥，其表现必须是「连接时进入主机身份变化阻断态」）：
+ *   空公钥在 `verifyHostChallenge` 里解不出 `CryptoKey`，因此必然进阻断态而不是被放行，
+ *   而「按未配对处理」会让用户看到的表象与真实原因不符，且静默不连接无从诊断。
+ */
 function parseStoredPairedHost(summary: string): StoredPairedHost | null {
   let parsed: unknown;
   try {
@@ -271,8 +301,8 @@ function parseStoredPairedHost(summary: string): StoredPairedHost | null {
   const record = parsed as Record<string, unknown>;
   const hostId = record["hostId"];
   const publicKeyBase64Url = record["publicKeyBase64Url"];
-  if (typeof hostId !== "string" || typeof publicKeyBase64Url !== "string") return null;
-  return { hostId, publicKeyBase64Url };
+  if (typeof hostId !== "string" || hostId.length === 0) return null;
+  return { hostId, publicKeyBase64Url: typeof publicKeyBase64Url === "string" ? publicKeyBase64Url : "" };
 }
 
 /** 65 字节 SEC1 未压缩点 + P-256 SPKI 前缀 → 可验签的 `CryptoKey`；形状不符返回 `null`。 */
@@ -390,19 +420,48 @@ class HttpPairingTransport implements PairingTransport {
     this.#random = random;
   }
 
-  /** 二维码内容 → `pairing.qr` 载荷。形状不符即抛错，绝不「尽力解析」。 */
+  /**
+   * 二维码内容 → `pairing.qr` 载荷。
+   *
+   * ## 接受三种**容器**形态，载荷校验只有一套
+   *
+   * 用户能拿到的文本有三种：二维码里的完整地址（`https://<origin>/pair#data=<base64url-json>`，
+   * §7.1）、地址里的片段本身（页面自己读片段时给的就是它）、以及裸 base64url 载荷。
+   * 容器的宽松**不**等于载荷的宽松：无论从哪一种容器取出 JSON 文本，字段校验都逐项照旧
+   * （协议版本、字段齐全、来源形状、字段长度、过期时间），不符即抛 `PairingQrInvalidError`，
+   * **绝不**尽力解析（补缺失字段、放过版本不符、把乱码当文本）。
+   */
   readQrPayload(text: string): PairingQrPayload {
-    const payload = parseJsonObject(text);
-    if (payload === null) throw new Error("二维码内容不是 JSON 对象");
+    const payload = parseJsonObject(qrPayloadJsonOf(text));
+    if (payload === null) {
+      throw new PairingQrInvalidError("protocol.invalid_json", "二维码内容不是 JSON 对象");
+    }
     const qr = payload as unknown as PairingQrPayload;
     for (const key of ["hostId", "hostPublicKey", "canonicalOrigin", "pairingId", "pairingSecret", "expiresAt"] as const) {
-      if (typeof qr[key] !== "string" || qr[key].length === 0) throw new Error(`二维码缺少字段 ${key}`);
+      if (typeof qr[key] !== "string" || qr[key].length === 0) {
+        throw new PairingQrInvalidError("protocol.schema_invalid", `二维码缺少字段 ${key}`);
+      }
     }
-    if (qr.pairingProtocol !== "acp-remote-pairing-v1") throw new Error("二维码协议版本不匹配");
-    if (!CANONICAL_ORIGIN_PATTERN.test(qr.canonicalOrigin)) throw new Error("二维码来源形状非法");
+    if (qr.pairingProtocol !== "acp-remote-pairing-v1") {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码协议版本不匹配");
+    }
+    if (!CANONICAL_ORIGIN_PATTERN.test(qr.canonicalOrigin)) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码来源形状非法");
+    }
+    // §7.1 要求校验字段长度：两条 base64url 字段必须与 wire 形状同长（32 / 65 字节）。
+    if (!isBase64UrlLength(qr.pairingSecret, QR_SECRET_BYTES)) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 pairingSecret 长度不符");
+    }
+    if (!isBase64UrlLength(qr.hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 hostPublicKey 长度不符");
+    }
     const expiresAt = Date.parse(qr.expiresAt);
-    if (Number.isNaN(expiresAt)) throw new Error("二维码过期时间不是时间戳");
-    if (expiresAt <= this.#now()) throw new Error("二维码已过期");
+    if (Number.isNaN(expiresAt)) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
+    }
+    if (expiresAt <= this.#now()) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码已过期");
+    }
     return qr;
   }
 
@@ -498,8 +557,38 @@ class HttpPairingTransport implements PairingTransport {
 
     if (body.status === "pending_confirmation") return { kind: "pending_confirmation" };
     if (body.status === "approved") {
+      // §7.3：`approved` 响应必须同时给出设备元数据与 Host identity；两者缺一就不算已批准
+      // （design D2：已配对记录缺公钥会让此后**每次**连接都进「主机身份变化」阻断态，
+      // 且公钥补不出来——只能重配对，因此宁可在配对当场明确失败）。
       const deviceId = body.device?.deviceId;
-      return { kind: "approved", deviceId: typeof deviceId === "string" ? deviceId : identity.deviceId };
+      const hostId = body.host?.hostId;
+      const hostPublicKey = body.host?.hostPublicKey;
+      const missing = [
+        typeof deviceId === "string" ? null : "device.deviceId",
+        typeof hostId === "string" ? null : "host.hostId",
+        typeof hostPublicKey === "string" && isBase64UrlLength(hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)
+          ? null
+          : "host.hostPublicKey",
+        // 主机标识必须与二维码里的是同一台：否则「已批准」指的是另一台主机，落盘的记录会张冠李戴。
+        typeof hostId === "string" && hostId !== input.qr.hostId ? `host.hostId != ${input.qr.hostId}` : null,
+      ].filter((field): field is string => field !== null);
+      if (
+        missing.length > 0 ||
+        typeof deviceId !== "string" ||
+        typeof hostId !== "string" ||
+        typeof hostPublicKey !== "string"
+      ) {
+        return {
+          kind: "error",
+          error: {
+            code: "protocol.schema_invalid",
+            message: `已批准响应缺少可用的主机身份材料（${missing.join("、")}）：该设备不会被当作已配对。`,
+            retryable: false,
+            details: {},
+          },
+        };
+      }
+      return { kind: "approved", deviceId, hostId, hostPublicKey };
     }
     if (body.status === "rejected" || body.status === "expired" || body.status === "consumed") {
       const status: PairingTerminalStatus = body.status;
@@ -538,6 +627,75 @@ function encodeUnixSeconds(timestamp: string): ByteArray {
     remaining >>= 8n;
   }
   return out;
+}
+
+// ── 二维码内容与地址片段 ────────────────────────────────────────────────────
+
+/**
+ * 用户给的文本 → 待校验的 JSON 文本（只解**容器**，不做任何载荷级放宽）。
+ *
+ * 依次判定三种容器：JSON 文本本身、地址（或片段）里的 `data=`、裸 base64url 载荷。
+ * 三者都不匹配即抛错——不猜、不截断、不把任意文本当 JSON 试。
+ */
+function qrPayloadJsonOf(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) return trimmed;
+  const marker = trimmed.indexOf(QR_DATA_MARKER);
+  if (marker >= 0) {
+    const data = (trimmed.slice(marker + QR_DATA_MARKER.length).split("&")[0] ?? "").trim();
+    return decodeQrPayloadBase64Url(data);
+  }
+  if (QR_BASE64URL_PATTERN.test(trimmed)) return decodeQrPayloadBase64Url(trimmed);
+  throw new PairingQrInvalidError("protocol.schema_invalid", "不是配对二维码内容");
+}
+
+/** base64url 载荷 → UTF-8 文本；不是 base64url、或解出的字节不是 UTF-8 即抛错。 */
+function decodeQrPayloadBase64Url(data: string): string {
+  let bytes: ByteArray;
+  try {
+    bytes = decodeBase64Url(data);
+  } catch {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码载荷不是 base64url");
+  }
+  try {
+    // `fatal: true`：非法字节序列直接抛错，而不是替换成 U+FFFD 后继续——后者会让乱码看起来像合法 JSON。
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码载荷不是 UTF-8 文本");
+  }
+}
+
+/** 文本是否恰好是 `bytes` 字节的 base64url（§7.1：PWA 必须校验字段长度）。 */
+function isBase64UrlLength(value: string, bytes: number): boolean {
+  try {
+    decodeBase64Url(value, bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 读取地址片段里的配对内容，并**立即**清除该片段（§7.1：读取后立即 `history.replaceState`）。
+ *
+ * 只把 `data=` 形态的片段当作配对内容：其余片段既不被解析、也不被清除——清除别人的片段
+ * 可能破坏它承载的语义。返回值含秘密，因此调用方**只**把它交给 `readQrPayload`，
+ * 不得落到日志或状态里。没有地址栏（非浏览器环境）或没有配对片段时返回 `null`。
+ */
+function takePairingFragment(): string | null {
+  if (typeof globalThis.location === "undefined") return null;
+  const hash = globalThis.location.hash;
+  const fragment = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!fragment.startsWith(QR_DATA_MARKER)) return null;
+  if (typeof globalThis.history !== "undefined") {
+    // `replaceState` 不触发导航，因此页面不会被带离当前路由；片段之外的路径与查询原样保留。
+    globalThis.history.replaceState(
+      null,
+      "",
+      `${globalThis.location.pathname}${globalThis.location.search}`,
+    );
+  }
+  return fragment;
 }
 
 // ── 运行时 ────────────────────────────────────────────────────────────────
@@ -625,11 +783,27 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     },
   };
 
+  /**
+   * 配对链路：把「配对状态机与用例」（`ClientStore`）接到网络、地址栏、本地存储与时钟上。
+   *
+   * 页面因此只调 store 的用例，不碰 `fetch`、`location` 或任何存储 API（`AGENTS.md` §6）。
+   */
+  const pairingWiring: PairingWiring = {
+    transport: pairing,
+    takeQrTextFromFragment: takePairingFragment,
+    rememberPairedHost,
+    onPaired: pairingCompleted,
+    schedule: (delayMs, task) => clock.schedule(delayMs, task),
+    // 每次轮询换新的 nonce（§7.3）：随机源只由组合根持有（CSPRNG 端口）。
+    nextRequestNonce: () => encodeBase64Url(random.bytes(32)),
+  };
+
   const store = new ClientStore({
     sync: syncGateway,
     ids,
     now: () => clock.now(),
     identity,
+    pairing: pairingWiring,
   });
 
   let unsubscribeStore: (() => void) | null = null;
@@ -699,12 +873,42 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       hostId: record.hostId,
       deviceId: deviceIdentity.deviceId,
     });
+    adoptPairedHost(record, deviceIdentity.canonicalOrigin);
+    // 连接机要求 `unpaired → pair_started → pair_succeeded → disconnected` 才允许发起连接。
+    store.pairSucceeded();
+    connectOnce();
+  }
+
+  /**
+   * 配对完成后的收口（由 `ClientStore` 在写入已配对记录后调用）：装配连接并**触发一次连接**。
+   *
+   * 与 `start()` 共用 `adoptPairedHost`，因此不存在第二份连接装配。这里**不**再驱动连接机的
+   * 配对迁移——`ClientStore` 已经把它推到「已配对」（含从阻断态重新配对的情形）。
+   */
+  async function pairingCompleted(record: PairedHostRecord): Promise<void> {
+    if (disposed) return;
+    const deviceIdentity = await platform.deviceIdentity.loadIdentity();
+    // 来源不符即不接上：设备身份绑定在 `canonicalOrigin` 上，身份不得跨来源迁移（§4.5）。
+    if (deviceIdentity === null || deviceIdentity.canonicalOrigin !== record.canonicalOrigin) return;
+    adoptPairedHost(record, deviceIdentity.canonicalOrigin);
+    connectOnce();
+  }
+
+  /**
+   * 已配对起点齐备 → 装配 `SyncClient` 与两条订阅。
+   *
+   * 只在**没有**连接对象时装配：`SyncClient` 每次验签都从已配对记录里读主机公钥
+   * （`PairedHostIdentity`），因此重新配对写入的新公钥对既有连接对象立即可见，
+   * 重建只会丢掉在途连接与恢复点。
+   */
+  function adoptPairedHost(record: PairedHostRecord, canonicalOrigin: string): void {
+    if (sync !== null) return;
 
     sync = new SyncClient({
       hostId: record.hostId,
       // 出站地址与声明的子协议都由连接层给出唯一来源（`syncSocketUrl` / `DECLARED_SUBPROTOCOLS`）：
       // 组合根只负责在装配时把它们**显式**交出去，绝不在自己这里拼 URL 或抄子协议字面量。
-      url: syncSocketUrl(deviceIdentity.canonicalOrigin),
+      url: syncSocketUrl(canonicalOrigin),
       subprotocols: DECLARED_SUBPROTOCOLS,
       identity: platform.deviceIdentity,
       host: pairedHost,
@@ -729,10 +933,6 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
       // `pagehide` 断开连接：未完成的暂存快照随之丢弃（§9.4），恢复路径交给下次连接。
       if (event.kind === "pagehide") sync?.disconnect();
     });
-
-    // 连接机要求 `unpaired → pair_started → pair_succeeded → disconnected` 才允许发起连接。
-    store.pairSucceeded();
-    connectOnce();
   }
 
   function dispose(): void {
