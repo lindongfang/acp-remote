@@ -102,9 +102,9 @@ const ORPHAN_SWEEP_LIMIT: u32 = 256;
 ///
 /// 规格要求 `daemon.stop` **先**返回 `{accepted: true}`（§5.2），而响应由连接任务在 `stop` 返回之后才
 /// 写回。`graceMs = 0` 会把「不等待任何在途工作」与「已接受的请求仍要落地」压到同一拍上，因此这里保留
-/// 一个很小的下限：关闭请求自身那条连接虽然有写出后自行结束的保证（[`ConnectionShutdown`]），它在结束
-/// 前仍属于排空集合，这个下限就是给「它以及同一预算内的网络接入面收尾」留出的余地。其余在途工作仍按
-/// `graceMs` 处理。实际窗口记在日志里（`event = "daemon.drain"` 的 `window_ms`），不静默。
+/// 一个很小的下限：关闭请求自身那条连接不被排空等待，它由 `serve_connection` 在写回响应后自行结束
+/// （[`ConnectionShutdown`]），因此不占用排空预算；这个下限是给「它写完这条响应，以及同一预算内的网络
+/// 接入面收尾」留出的余地。其余在途工作仍按 `graceMs` 处理。实际窗口记在日志里（`event = "daemon.drain"` 的 `window_ms`），不静默。
 const MIN_DRAIN_MS: u64 = 200;
 
 /// `accept` 连续失败时的退避（避免在 endpoint 暂时不可用时热循环；F3 修正后失败可重试）。
@@ -366,8 +366,8 @@ impl Default for ShutdownSignal {
 ///
 /// 它同时是**关闭请求者的识别点**：「哪条连接发出了 `daemon.stop`」在这里判定，判定的结果写进本连接的
 /// 标记（[`ConnectionShutdown`]），连接据此在写回 `accepted` 响应后自行结束。关闭序列因此不必（也不能）
-/// 按「谁先关/谁最后关」猜：发出关闭请求的那条连接不进入排空集合，排空时长不再取决于该客户端进程何时
-/// 被调度（`daemon-lifecycle` 规格的「关闭时的连接排空」）。
+/// 按「谁先关/谁最后关」猜：发出关闭请求的那条连接不被排空等待（它会自行结束，因此不占用排空预算），
+/// 排空时长不再取决于该客户端进程何时被调度（`daemon-lifecycle` 规格的「关闭时的连接排空」）。
 struct ShuttingDownGate {
     inner: Arc<dyn LocalAdminHandler>,
     shutdown: Arc<ShutdownSignal>,

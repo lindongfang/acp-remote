@@ -873,5 +873,25 @@ fn stop_cleans_up_even_when_the_drain_budget_is_spent() {
         "存储必须被真正刷新：日志={}",
         daemon.log()
     );
+    // 规格「关闭时的连接排空」的**第三个场景**（宽限耗尽仍关闭剩余连接）：`held` 是本用例持有的
+    // 非请求者长连接，它直到宽限结束都不结束，因此排空必须留下 `daemon.drain_timeout` 这一可观察记录。
+    // 这是**正向**判据——只有排空真的走到超时分支（在途连接直到 deadline 仍未结束）时才会成立：
+    // 若 `held` 在预算内结束，或排空不再等待就返回，该记录不会出现。「关闭请求者不计入排空」的方向由
+    // `stop_does_not_wait_for_the_full_grace_without_other_clients` 的两条空断言判定（本用例另有 `held`，
+    // 故对请求者是否计入并不敏感）。
+    let drain_timeout = daemon.log_events("daemon.drain_timeout");
+    assert_eq!(
+        drain_timeout.len(),
+        1,
+        "宽限耗尽仍关闭剩余连接必须留下恰好一条排空超时记录：日志={}",
+        daemon.log()
+    );
+    assert!(
+        drain_timeout[0]["remaining"]
+            .as_u64()
+            .is_some_and(|remaining| remaining >= 1),
+        "排空超时记录必须报告被中止的剩余连接数（>=1）：日志={}",
+        daemon.log()
+    );
     held.close();
 }

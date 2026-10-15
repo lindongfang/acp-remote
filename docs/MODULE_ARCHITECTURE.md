@@ -407,7 +407,7 @@ Node Link 和 Sync attachment 必须具有 connection generation 或 attachment 
 - 启动初清理 + 每 60 s 周期的 `prune`/`expire_pairings`/`sweep_orphans`（`CORE_PORTS_AND_STORAGE.md` §7.5）；
 - 启动时对已配对 Owner 节点的 Node Link 连接与断线指数退避重连（`NODE_LINK_PROTOCOL.md` §15）；
 - broker 的 delta 合并窗口（`storage.flush_interval_ms`；由组合根定时器枚举非终态会话并逐个驱动 `Broker::pump`，`CORE_PORTS_AND_STORAGE.md` §6 第 10 条）；
-- 关闭顺序：停接入层（排空在途连接至宽限上限）→ 取消周期任务与信号监听 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 清理 endpoint/释放锁（与 `CORE_PORTS_AND_STORAGE.md` §7.5 第 4 条、`SECURITY_DESIGN.md` §12.1 一致）。
+- 关闭顺序：停接入层（排空**其余**在途连接，最坏仍受宽限上限约束；发出该 `daemon.stop` 的那条连接不计入——服务端在写回响应后自行结束它）→ 取消周期任务与信号监听 → 停 Agent → `wal_checkpoint(TRUNCATE)` → 清理 endpoint/释放锁（与 `CORE_PORTS_AND_STORAGE.md` §7.5 第 4 条、`SECURITY_DESIGN.md` §12.1 一致）。
 
 CLI 子命令（名字的唯一来源是 `LOCAL_ADMIN_PROTOCOL.md` §5.8 的映射表；本文只列名字，不重复规则）：
 
