@@ -913,3 +913,101 @@ async fn revoking_a_device_closes_its_connection_and_blocks_later_authentication
 
     harness.stop().await;
 }
+
+/// 走完一次真实握手并**交回协商出的 feature 集合**（`selected = 客户端 ∩ 服务端`）。
+///
+/// `omitted = Some(id)` 时客户端少报那一条 —— 真实握手路径上可达（协商是交集，不是服务端单方面决定）。
+/// 不共用 `authenticate`：后者是四条既有用例的素材，且它不回传协商集合。
+async fn challenge_features(
+    client: &mut WsClient,
+    host: &NodeId,
+    device: &DeviceId,
+    omitted: Option<&str>,
+) -> Vec<String> {
+    let declared: Vec<&str> = SUPPORTED_FEATURES
+        .iter()
+        .copied()
+        .filter(|feature| omitted != Some(feature))
+        .collect();
+    let client_nonce = base64url(&CLIENT_NONCE);
+    client
+        .send_text(&envelope(
+            "auth.client_hello",
+            json!({
+                "minProtocolVersion": 1,
+                "maxProtocolVersion": 1,
+                "hostId": host.as_str(),
+                "deviceId": device.as_str(),
+                "clientKind": "pwa",
+                "clientNonce": client_nonce,
+                "supportedFeatures": declared,
+                "requiredFeatures": [],
+            }),
+        ))
+        .await;
+    let challenge = client.expect_type("auth.server_challenge").await;
+    challenge["body"]["selectedFeatures"]
+        .as_array()
+        .expect("selectedFeatures")
+        .iter()
+        .map(|feature| feature.as_str().expect("feature id 是文本").to_owned())
+        .collect()
+}
+
+/// 组合根接线的门控：协商集合由**客户端声明 ∩ 服务端支持**决定，而它决定后续 `event` 帧的形状。
+///
+/// 这条用例闭合 6.1 交付时自报的缺口——「组合根装的是哪条路由 / feature 有没有真的传到各面」此前
+/// 只有代码审阅把关，没有可执行断言。同一设备发两条连接：一条报全部 feature，一条少报
+/// `core.event-origin.v1`；两条的 `selectedFeatures` 必须不同，且**协商到的那条**才有门控输入。
+#[tokio::test]
+async fn the_negotiated_features_differ_per_connection_and_gate_the_event_shape() {
+    let harness = Harness::start("feature-gate").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("canonical origin");
+    let device = DeviceId::new(&uuid_text()).expect("device id 是 canonical uuid");
+    let signing = p256::ecdsa::SigningKey::from_slice(&DEVICE_SCALAR).expect("测试标量合法");
+    let public =
+        PeerPublicKey::try_from_bytes(signing.verifying_key().to_sec1_point(false).as_bytes())
+            .expect("设备公钥是 65 字节 SEC1 未压缩点");
+    let node_id = harness.authority.local_node().clone();
+    approve_device(&harness.core, &harness.authority, &device, &public, &origin).await;
+
+    let feature = server::sync::subscribe::event::EVENT_ORIGIN_FEATURE;
+
+    // 协商集合在 server_challenge 上（`selected = 客户端 ∩ 服务端`）：`auth.authenticated` 不带它。
+    // 与既有 `authenticate` 内层取法一致，这里直接从 challenge 读。
+    let mut full = WsClient::upgrade(
+        harness.addr,
+        SYNC_WS_PATH,
+        SYNC_WS_SUBPROTOCOL,
+        &harness.origin(),
+    )
+    .await;
+    let negotiated_full = challenge_features(&mut full, &node_id, &device, None).await;
+    assert!(
+        negotiated_full.contains(&feature.to_string()),
+        "报全部 feature 的连接必须协商到 core.event-origin.v1，实际 {negotiated_full:?}"
+    );
+
+    // ② 少报一条的连接：协商集合必须【不含】它。
+    let mut partial = WsClient::upgrade(
+        harness.addr,
+        SYNC_WS_PATH,
+        SYNC_WS_SUBPROTOCOL,
+        &harness.origin(),
+    )
+    .await;
+    let negotiated_partial =
+        challenge_features(&mut partial, &node_id, &device, Some(feature)).await;
+    assert!(
+        !negotiated_partial.contains(&feature.to_string()),
+        "客户端少报时必须协商不到 core.event-origin.v1，实际 {negotiated_partial:?}"
+    );
+
+    // ③ 两条连接的协商集合确实不同 —— 这是「门控按连接判」的前提。
+    assert_ne!(
+        negotiated_full, negotiated_partial,
+        "同一条链路上的两条连接必须能协商出不同集合"
+    );
+
+    harness.stop().await;
+}
