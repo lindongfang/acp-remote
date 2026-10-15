@@ -24,9 +24,9 @@
 
 ## 4. 文档同步与浏览器验收（WP4）
 
-- [ ] 4.1 更新 `docs/FRONTEND_DESIGN.md`：§4.3 的分发流程图从 `Daemon /ui` 改为根目录，写回「嵌入二进制」的裁定与理由；§11 的「嵌入还是旁路」待决项结项。完成判据：`npm run check:docs`。
-- [ ] 4.2 更新 `docs/CONFIG_REFERENCE.md` §1 的 listener 路由清单：补上根目录静态托管，并说明它与协议 path 的优先级关系。完成判据：`npm run check:docs`。
-- [ ] 4.3 更新 `docs/SECURITY_DESIGN.md`（CSP 由响应头下发的实绩、静态资源同包发布与构建版本可检查的实绩）与 `docs/MODULE_ARCHITECTURE.md` §4.9 `[现状]`、`README.md` 的现状表。完成判据：`npm run check:docs`、`npm run check:drift`。
-- [ ] 4.4 用 browser prelude 实测并给出证据：入口可加载、资源可加载（无 404/类型错误）、前端路由深链返回入口、协议端点行为不变、非读取方法被拒、CSP 响应头不宽于基线。完成判据：实测输出逐条附在报告中（只启动成功不算通过）。
-- [ ] 4.5 如实登记已知冲突：若内联样式被 CSP 拒绝导致样式异常，把现象与「交由 `frontend-sync-wiring` 处理」写进报告；同时登记配对二维码井号位置与前端路由井号用法的潜在争用。完成判据：报告含这两条登记，且未通过放宽 CSP 掩盖第一条。
-- [ ] 4.6 补齐两处由本变更引入、原任务清单未覆盖的权威文档义务（`AGENTS.md` §9 的映射要求）：① `docs/MODULE_ARCHITECTURE.md` §3.1 登记嵌入依赖的选型核验（crate、依赖或依赖方向变化；证据取自根 `Cargo.toml` 的 `rust-embed` 声明注记）；② `docs/LOCAL_ADMIN_PROTOCOL.md` §5.2 的 `daemon.status` `result` 字段清单补上前端构建版本字段（WP3 新增；该节的方法集与本地错误码机器定义在 `schemas/local-admin/v1/envelope.schema.json`，字段清单本身只是 §5.2 的文本块）。完成判据：`npm run check:docs` 与 `npm run check` 全绿，且两处文档与实现逐条一致。
+- [x] 4.1 更新 `docs/FRONTEND_DESIGN.md`：§4.3 的分发流程图从 `Daemon /ui` 改为根目录，写回「嵌入二进制」的裁定与理由；§11 的「嵌入还是旁路」待决项结项。完成判据：`npm run check:docs`。
+- [x] 4.2 更新 `docs/CONFIG_REFERENCE.md` §1 的 listener 路由清单：补上根目录静态托管，并说明它与协议 path 的优先级关系。完成判据：`npm run check:docs`。
+- [x] 4.3 更新 `docs/SECURITY_DESIGN.md`（CSP 由响应头下发的实绩、静态资源同包发布与构建版本可检查的实绩）与 `docs/MODULE_ARCHITECTURE.md` §4.9 `[现状]`、`README.md` 的现状表。完成判据：`npm run check:docs`、`npm run check:drift`。
+- [x] 4.4 用 browser prelude 实测并给出证据：入口可加载、资源可加载（无 404/类型错误）、前端路由深链返回入口、协议端点行为不变、非读取方法被拒、CSP 响应头不宽于基线。完成判据：实测输出逐条附在报告中（只启动成功不算通过）。
+- [x] 4.5 如实登记已知冲突：若内联样式被 CSP 拒绝导致样式异常，把现象与「交由 `frontend-sync-wiring` 处理」写进报告；同时登记配对二维码井号位置与前端路由井号用法的潜在争用。完成判据：报告含这两条登记，且未通过放宽 CSP 掩盖第一条。
+- [x] 4.6 补齐两处由本变更引入、原任务清单未覆盖的权威文档义务（`AGENTS.md` §9 的映射要求）：① `docs/MODULE_ARCHITECTURE.md` §3.1 登记嵌入依赖的选型核验（crate、依赖或依赖方向变化；证据取自根 `Cargo.toml` 的 `rust-embed` 声明注记）；② `docs/LOCAL_ADMIN_PROTOCOL.md` §5.2 的 `daemon.status` `result` 字段清单补上前端构建版本字段（WP3 新增；该节的方法集与本地错误码机器定义在 `schemas/local-admin/v1/envelope.schema.json`，字段清单本身只是 §5.2 的文本块）。完成判据：`npm run check:docs` 与 `npm run check` 全绿，且两处文档与实现逐条一致。

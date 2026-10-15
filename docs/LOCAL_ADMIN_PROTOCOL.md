@@ -1,6 +1,7 @@
 # ACP Remote 本地管理通道
 
 > 状态：编码前契约；切片 4（`daemon-cli-and-local-admin`）的**本地通道部分已落地**（`server::transport::local` + `server::local_admin` + `app`），`server::acp_facade` 待切片 6——实现期差异只允许出现在 §3.1 末尾的实现状态注记里，不改本契约的任何语义  
+> 版本：1.5（2026-10-15，`sync-ui-hosting` WP4：`daemon.status` 的 `result` 增加 `uiBuildVersion`（`string | null`，`null` = 版本缺失），取自本次二进制嵌入并托管的前端资源；按 §8 属**兼容变更**（新增 `result` 字段），方法集与 §6 的本地错误码集合**不变**）  
 > 版本：1.4（2026-09-27，v1 内合同修订，未实现未发布：`node.pair.confirm` 的 `params` 增加**必填** `exportIds`（可为空数组）、`result` 回显它，`NodeRecord`（因而 `node.list`）增加 `exportIds`；按 §8 属不兼容变更，因 v1 未发布、CLI 与 Daemon 同版本发布，按 v1 内合同修订处理，先例为 `node.challenge.catalogRevision`；并同步「改清单 = 重新配对（落定后关闭活动连接，收窄自下一次握手生效）」）  
 > 版本：1.3（2026-09-25：方法名允许段内连字符；`node.rotate-key.begin` 进入 v1 方法词表，修正 §5.7 与机器词表的不一致）  
 > 版本：1.2（2026-09-25：新增 §3.1 实现状态注记——`server::acp_facade` 落地前，Daemon 对 `0x02` 连接在 framing 校验后即连即关；`daemon-cli-and-local-admin` 变更的 design.md 决策 5）  
@@ -186,7 +187,7 @@ u32be length | payload(length bytes)
 
 ### 5.2 Daemon 生命周期与本地配置
 
-管理配置的持久化权威、首次 profile 导入、重启恢复与生效时机以 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) 的“配置与管理状态的权威”为准；本节只定义请求与响应。下列方法仍是待实现合同，不表示已存在 Daemon 或本地 IPC。
+管理配置的持久化权威、首次 profile 导入、重启恢复与生效时机以 [CONFIG_REFERENCE.md](./CONFIG_REFERENCE.md) 的“配置与管理状态的权威”为准；本节只定义请求与响应。本节方法是 v1 合同，其**本地通道部分已按状态行落地**（`server::transport::local` + `server::local_admin` + `app`）；`server::acp_facade` 相关语义待切片 6，实现期差异见 §3.1 末尾的实现状态注记。
 
 #### `daemon.status`
 
@@ -206,7 +207,10 @@ publicOrigin  string | null
 counts        { devices: integer, nodes: integer, exports: integer, imports: integer }
 agents        { agentId: string, available: boolean }[]
 links         { nodeId: UUID, state: "connected" | "connecting" | "offline", lastConnectedAt: timestamp | null, nextRetryAt: timestamp | null }[]
+uiBuildVersion string | null         # 本次二进制嵌入并托管的前端构建版本
 ```
+
+- `uiBuildVersion` 是本次二进制**嵌入并被托管**的前端构建版本（`FRONTEND_DESIGN.md` §4.3 的「版本可检查地关联」）：取值与浏览器拿到的静态资源出自**同一份**嵌入资源表（前端构建钩子写入产物的 `build-version.json`，见 `clients/app/scripts/write-build-version.mjs`），不是 Daemon 自己算的产物哈希。`null` 表示**版本缺失**（占位入口，或产物没有可识别的版本文件），是显式缺失语义而不是「未知」或空串——不编造版本。它是 `result` 里的一个**字段**，**不改变**本文件的方法集与 §6 的本地错误码集合。
 
 - `links` 是组合根持有的运行时状态（`NODE_LINK_PROTOCOL.md` §15 的连接策略），**不是**持久记录；它解释 `import.add`/`session.create` 为何返回 `local.unavailable`。未配对或已撤销的节点不出现在 `links` 里。
 
