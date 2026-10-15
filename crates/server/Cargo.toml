@@ -55,6 +55,14 @@ tokio-rustls.workspace = true
 # `direct` 模式的证书/私钥 PEM 解析（`rustls_pki_types::pem::PemObject`）。
 rustls-pki-types.workspace = true
 
+# --- 前端产物嵌入（`sync-ui-hosting` 变更 WP2，design.md D2/D3）---
+# 静态面的资源来自**编译期嵌入**：`transport::net::ui` 用它把 `clients/app/dist`（或产物缺失时的树内
+# 占位入口）编入二进制。版本口径、选型理由（必要性/维护状态/许可证/平台支持/安全风险）、落选候选
+# （`include_dir`、`tower-http` 的 `ServeDir`、手写 build script 生成 `include_bytes!` 表）与许可证核对
+# 结论都只写在根 `Cargo.toml` 的 `[workspace.dependencies]`，这里不重复一份。
+# 编译期二选一由本 crate 的 `build.rs`（`cargo::rustc-cfg`）决定；`debug-embed` 也在根里固定开启。
+rust-embed.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 # WP2 冻结的 safe API（SDDL 创建首个 pipe 实例、当前用户 SID、已连接对端的 SID）；非 Windows 上该 crate
 # 编译为空 crate，因此调用点必须 cfg 门控（本 crate 的平台代码只在 platform/windows.rs 里出现）。

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>占位入口：ACP Remote 前端产物缺失</title>
+  </head>
+  <body>
+    <h1>这是占位入口，不是真实前端</h1>
+    <p>
+      本二进制在<strong>构建时</strong>没有找到真实前端产物（<code>clients/app/dist/index.html</code>），
+      因此嵌入的是这份<strong>占位页面</strong>。它的作用是让没有前端产物的环境（CI 的 Rust 作业、
+      尚未构建前端的开发机）也能编译并运行 <code>cargo test</code>。
+    </p>
+    <p>
+      <strong>发布构建不会提供这个页面</strong>：Daemon 在发布构建（<code>daemon start</code>）里检测到占位
+      入口时会失败关闭，并提示先构建前端。因此看到这个页面说明当前是 debug 构建。
+    </p>
+    <p>
+      要拿到真实页面：在 <code>clients/app</code> 运行 <code>npm run export:web</code> 产出
+      <code>dist/</code>，再重新构建 Daemon（构建脚本会在下一次构建时改选真实产物）。
+    </p>
+    <hr />
+    <p>
+      占位判定不依赖这段文字：嵌入资源表在编译期由 <code>crates/server/build.rs</code> 打上标记，
+      Daemon 读的是那个标记。
+    </p>
+  </body>
+</html>

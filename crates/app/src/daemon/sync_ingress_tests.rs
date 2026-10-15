@@ -50,10 +50,13 @@ use crate::config::Config;
 use crate::daemon::NetIngress;
 
 /// listener 的 host 名（`daemon.public_origin` 的 authority，同时也是设备配对的绑定与请求的 `Host`）。
-const HOST: &str = "sync-ingress.example";
+///
+/// `pub(super)`：同级的 `ui_hosting_tests`（静态面用例）复用同一个 host 与同一套 HTTP 助手，因此
+/// 「请求怎么发」只有一处实现。
+pub(super) const HOST: &str = "sync-ingress.example";
 
 /// 一次读写的预算（真实 loopback 上远小于它；超时即失败而不是挂住）。
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 设备密钥的标量（**只用于测试**：仓库不提交任何私钥材料，签名原语仍取自 `p256`）。
 const DEVICE_SCALAR: [u8; 32] = [
@@ -134,8 +137,11 @@ fn create_owner_only_dir(path: &Path) {
 /// 真实组合根 + 真实 loopback listener。
 ///
 /// 字段的**声明顺序即析构顺序**：持有存储的 `composition` 先释放，临时目录最后删除。
-struct Harness {
-    addr: SocketAddr,
+///
+/// `pub(super)`：同级的 `ui_hosting_tests` 经它复用**同一个装配点**（`NetIngress::start`）——静态面与
+/// 协议面因此在生产路径与用例里不会分叉。
+pub(super) struct Harness {
+    pub(super) addr: SocketAddr,
     authority: Arc<Authority>,
     core: Arc<UseCases>,
     router: Arc<LocalAdminRouter>,
@@ -146,7 +152,7 @@ struct Harness {
 }
 
 impl Harness {
-    async fn start(label: &str) -> Self {
+    pub(super) async fn start(label: &str) -> Self {
         let temp = TempDir::new(label);
         let data_dir = temp.0.join("data");
         create_owner_only_dir(&data_dir);
@@ -203,6 +209,16 @@ impl Harness {
         format!("https://{HOST}")
     }
 
+    /// 组合根持有者：`AppDaemonControl::new` 需要它（静态面用例断言 `daemon.status` 的字段来源）。
+    pub(super) fn composition(&self) -> &Composition {
+        &self._composition
+    }
+
+    /// 接入面句柄（`NetIngress::ui_build_version`/`listen` 的读取点）。
+    pub(super) fn ingress(&self) -> &NetIngress {
+        self.ingress.as_ref().expect("接入面仍在")
+    }
+
     /// Sync 的活动连接数（撤销断言用它，避免只看对端可见的 close 帧）。
     fn active_sync_connections(&self) -> usize {
         self.ingress
@@ -212,7 +228,7 @@ impl Harness {
             .active()
     }
 
-    async fn stop(mut self) {
+    pub(super) async fn stop(mut self) {
         if let Some(ingress) = self.ingress.take() {
             ingress.trigger_shutdown();
             ingress
@@ -241,14 +257,14 @@ impl DaemonControl for UnusedDaemonControl {
 // ---------------------------------------------------------------------------------------------
 
 /// 一条已读全的 HTTP 响应（状态码、头、body 文本）。
-struct RawResponse {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: String,
+pub(super) struct RawResponse {
+    pub(super) status: u16,
+    pub(super) headers: Vec<(String, String)>,
+    pub(super) body: String,
 }
 
 impl RawResponse {
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(super) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
@@ -307,7 +323,7 @@ async fn post(
     parse_response(&raw)
 }
 
-fn parse_response(raw: &[u8]) -> RawResponse {
+pub(super) fn parse_response(raw: &[u8]) -> RawResponse {
     let text = String::from_utf8_lossy(raw).into_owned();
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((text.as_str(), ""));
     let mut lines = head.split("\r\n");
@@ -335,14 +351,14 @@ fn parse_response(raw: &[u8]) -> RawResponse {
 // ---------------------------------------------------------------------------------------------
 
 /// 极简 WebSocket 客户端：升级 + 文本帧 + close 帧（不做扩展与分片）。
-struct WsClient {
+pub(super) struct WsClient {
     stream: TcpStream,
     buffer: Vec<u8>,
 }
 
 impl WsClient {
     /// 尝试升级：`Err(升级响应头)` 表示被接入层拒绝（非 101）。
-    async fn try_upgrade(
+    pub(super) async fn try_upgrade(
         addr: SocketAddr,
         path: &str,
         subprotocol: &str,
