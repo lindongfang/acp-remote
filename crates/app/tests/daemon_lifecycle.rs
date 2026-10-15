@@ -778,7 +778,8 @@ fn the_periodic_task_runs_again_after_one_full_cycle() {
     );
 }
 
-/// 交叉检查：`daemon.status` 的 `result` 是开放容器，但 CLI 只依赖这几个字段（§5.2）。
+/// 交叉检查：`daemon.status` 的 `result` 是开放容器，但字段集合由 §5.2 冻结。CLI 只消费其中几个字段；
+/// `uiBuildVersion`（`sync-ui-hosting` 的 D3）不在 CLI 的消费面上，但同属这份字段集合，因此一并钉住。
 #[test]
 fn the_status_result_keeps_the_documented_field_set() {
     let mut daemon = Daemon::configure("status-fields", &seed_profile("codex", true));
@@ -804,6 +805,7 @@ fn the_status_result_keeps_the_documented_field_set() {
             "nodePublicKey",
             "publicOrigin",
             "startedAt",
+            "uiBuildVersion",
             "uptimeMs",
             "version",
         ]

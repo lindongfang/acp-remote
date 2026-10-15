@@ -9,8 +9,9 @@
 //! 3. 首次种子导入（`seed_state`/`mark_seeded` 单事务）；
 //! 4. 启动恢复（`recover_unsettled`，§6 第 16 条：在取锁与开始监听**之前**）；
 //! 5. 单实例锁 + `instanceId`（`fs4`，见 `crate::lock`）；
-//! 6. 构建 Node Link 与 Sync 接入面并绑定 `daemon.listen`（TLS `direct` 的 PEM 在绑定前加载，两者失败都
-//!    拒绝启动：`design.md` D10/D11）；
+//! 6. 构建 Node Link 与 Sync 接入面、注册静态面并绑定 `daemon.listen`（TLS `direct` 的 PEM 在绑定前加载，
+//!    任一失败都拒绝启动：`design.md` D10/D11；静态面的注册在协议端点之后，**发布构建**携带占位入口
+//!    同样拒绝启动：`sync-ui-hosting` 的 D1/D2）；
 //! 7. 本地管理 endpoint（`LocalEndpoint::bind`，`runtime_dir = None` 表示按 §2.1 读 `XDG_RUNTIME_DIR`）；
 //! 8. 发布锁记录（含 endpoint 定位串）→ 开放网络接入与本地通道的接受循环。
 //!
@@ -68,7 +69,12 @@ use server::transport::local::{
     AuditHook, ConnectionShutdown, EndpointError, InstanceId, LocalConnectionHandlers,
     LocalEndpoint, LocalEndpointConfig, LocalStream, serve_connection,
 };
-use server::transport::net::{NetConfig, NetError, NetListener, RouteError, Shutdown};
+// `MissingFrontendBuild` 以别名导入：本模块的 `NetworkError` 有一个同名变体，别名让「错误类型」与
+// 「错误变体」在读代码时不会互相顶替（变体携带的就是这个类型）。
+use server::transport::net::{
+    EmbeddedUi, MissingFrontendBuild as MissingFrontendBuildError, NetConfig, NetError,
+    NetListener, RouteError, Shutdown, UiAssetSource, check_release_build,
+};
 use tokio::sync::{Notify, mpsc};
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -83,6 +89,8 @@ use storage_sqlite::session_store::SqliteStore;
 
 #[cfg(test)]
 mod sync_ingress_tests;
+#[cfg(test)]
+mod ui_hosting_tests;
 
 /// 周期清理的间隔（`daemon-lifecycle` 规格：每 60 s 的 prune/expire_pairings/sweep_orphans）。
 const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
@@ -105,6 +113,10 @@ const ACCEPT_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// 关闭序列里等待后台任务自行退出的时间上限。
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 静态面的注册路径（`openspec/changes/sync-ui-hosting/design.md` D1）：根路径。它同时是「未命中嵌入资源
+/// 且不属于协议族」的请求的单页回退落点，因此这里只有这一个字面量。
+const STATIC_UI_PATH: &str = "/";
+
 /// 网络接入面（`daemon.listen`/`daemon.tls.*`）的启动失败：绑定、TLS 配置或路由注册。
 ///
 /// 三者都是失败关闭：任何一项失败都不得降级为「无网络接入」继续运行（`specs/node-link-listener` 的
@@ -117,6 +129,12 @@ pub enum NetworkError {
     /// 路由注册失败（path 重复或形态非法）：属配置/装配错误，不得静默跳过该端点。
     #[error("注册接入面路由失败")]
     Route(#[source] RouteError),
+    /// 发布构建携带的是**占位入口**（构建时没有真实前端产物）。
+    ///
+    /// 与绑定/注册失败同级：必须拒绝启动，**不**降级为「没有静态面」——那样会把「页面打不开」变成
+    /// 「根路径 404」，把构建期缺陷伪装成一个运行期现象（`design.md` D2 的失败关闭）。
+    #[error("发布构建缺少前端产物：{0}")]
+    MissingFrontendBuild(#[source] MissingFrontendBuildError),
 }
 
 impl NetworkError {
@@ -164,6 +182,9 @@ impl NetworkError {
                 "the listener failed while serving".to_owned()
             }
             Self::Route(_) => "the ingress route cannot be registered".to_owned(),
+            // 逐字给出 `MissingFrontendBuild` 的说明：它写明了下一步（先在 `clients/app` 构建前端），
+            // 把它归约成一句「分类」就等于让运维拿到一个查不到动作的错误码。
+            Self::MissingFrontendBuild(error) => error.to_string(),
         }
     }
 }
@@ -392,6 +413,12 @@ struct AppDaemonControl {
     node_id: NodeId,
     node_public_key: PeerPublicKey,
     core: Arc<acp_core::use_cases::UseCases>,
+    /// `daemon.status.uiBuildVersion`：本次二进制**嵌入并被托管**的前端构建版本（`design.md` D3）。
+    ///
+    /// 取值来自注册为静态面的那份嵌入资源表（[`NetIngress::ui_build_version`]，即 [`EmbeddedUi::build_version`]
+    /// 的结果），因此版本与浏览器拿到的资源必然出自同一次构建。`None` = 版本缺失（占位入口，或产物里
+    /// 没有可解析的版本文件），是**显式**的缺失语义：不编造、也不拿资源哈希顶替。
+    ui_build_version: Option<String>,
     shutdown: Arc<ShutdownSignal>,
 }
 
@@ -401,6 +428,7 @@ impl DaemonControl for AppDaemonControl {
         // `links` 恒空：Node Link 的**出站**重连管理器属切片 6（入站连接由 `server::node_link` 的
         // 连接注册表管理，不进 `daemon.status`，§5.2 的字段注记）。
         DaemonStatus {
+            ui_build_version: self.ui_build_version.clone(),
             version: self.version.clone(),
             instance_id: self.instance_id.clone(),
             node_id: self.node_id.clone(),
@@ -436,6 +464,34 @@ impl DaemonControl for AppDaemonControl {
 }
 
 impl AppDaemonControl {
+    /// 组装期状态的**唯一**注入点：`run` 与用例共用它，因此「`daemon.status` 的每个字段从哪来」不会在
+    /// 生产路径与测试之间分叉。
+    ///
+    /// `ingress` 是网络接入面的所有者句柄（[`NetIngress`]）：`listen` 与 `ui_build_version` 都从它取，
+    /// 而**前端构建版本**取的正是注册为静态面的那份嵌入资源表——`daemon.status` 回答的版本与浏览器拿到
+    /// 的资源因此是同一份（`design.md` D3 的「同源」由这条接线保证，而不是靠两处各自读一次编译期常量）。
+    fn new(
+        composition: &Composition,
+        instance_id: &InstanceId,
+        ingress: &NetIngress,
+        shutdown: Arc<ShutdownSignal>,
+    ) -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            instance_id: instance_id.as_str().to_owned(),
+            data_dir: composition.config().data_dir.display().to_string(),
+            public_origin: composition.config().public_origin.clone(),
+            listen: ingress.listen(),
+            started_at: composition.started_at().clone(),
+            started_instant: composition.started_instant(),
+            node_id: composition.identity().node_id().clone(),
+            node_public_key: composition.node_public_key().clone(),
+            core: Arc::clone(composition.use_cases()),
+            ui_build_version: ingress.ui_build_version(),
+            shutdown,
+        }
+    }
+
     /// `counts`：由 core 查询聚合（与持久记录一致）。
     async fn counts(&self) -> DaemonCounts {
         let actor = Actor::LocalCli;
@@ -1150,6 +1206,11 @@ pub struct NetIngress {
     registry: Arc<ConnectionRegistry>,
     /// Sync 的活跃连接注册表（设备撤销钩子的关闭对象）。
     sync_registry: Arc<SyncConnectionRegistry>,
+    /// 装配期读到的前端构建版本（`EmbeddedUi::build_version`）；`None` = 版本缺失。
+    ///
+    /// 在 [`NetIngress::start`] 里从**注册为静态面的那份资源表**读一次并留在这里：`daemon.status` 的回答
+    /// 因此与浏览器拿到的资源同源，且不在每次 `daemon.status` 时重复解析版本文件。
+    ui_build_version: Option<String>,
     tasks: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -1193,6 +1254,31 @@ impl NetIngress {
             Arc::new(NodeLinkReachability::new(Arc::clone(ingress.registry()))),
             sync_events,
         )?;
+        // 静态面（`design.md` D1/D2/D3）：第三类端点，注册在**全部协议端点之后**（`tasks.md` 3.1 的装配
+        // 要求）。注意「协议端点优先」**不**由这个顺序保证，而是由 `server` 侧的结构保证：协议端点是精确
+        // 路由，静态面只是 `router.fallback(static_ui::serve)`，因此命中的请求根本到不了静态面。注册顺序
+        // 也不是靠冲突检查兜住的——`RouteTable` 的重复 path 检查只对**同一 path**（以及第二条静态端点）
+        // 报错，而静态面的 path 是 `/`、协议 path 是 `/sync/v1`、`/node-link/v1` 及各自的 pairing 子路径，
+        // 所以「先注册静态面」会被静默接受。顺序仍然照 3.1 写，是因为它是被审阅过的装配形态，不是因为它
+        // 会被检查出来。
+        //
+        // 资源表在 `server` 侧是编译期二选一：真实产物或树内占位入口。**发布构建**携带占位入口即拒绝
+        // 启动（失败关闭，不降级为「根路径 404」）；`release_build` 由组合根判定，不写死在
+        // `check_release_build` 里，这样两条分支都各自可测（`!cfg!(debug_assertions)`：产物不入库，
+        // CI 的 Rust 作业永远面对占位入口，无条件失败关闭会把整片 `cargo test --workspace` 弄红）。
+        let ui = Arc::new(EmbeddedUi::new());
+        check_release_build(ui.is_placeholder(), !cfg!(debug_assertions))
+            .map_err(NetworkError::MissingFrontendBuild)?;
+        // 版本必须在把 `ui` 交给静态面**之前**从同一个实例读：`daemon.status` 回答的版本与浏览器拿到的
+        // 资源因此同属一份资源表，不可能分属两次构建。
+        let ui_build_version = ui.build_version();
+        // `Arc<EmbeddedUi>` → `Arc<dyn UiAssetSource>` 是 unsize 强转，只在**强转点**发生：带显式类型的
+        // `let` 是一个强转点，而把它作为实参传给 `register_static`、或写成 `Arc::clone(&ui)`（返回类型由
+        // 注解反向推定成 `Arc<dyn …>`，参数却不匹配）都不是。
+        let static_source: Arc<dyn UiAssetSource> = ui;
+        listener
+            .register_static(STATIC_UI_PATH, static_source)
+            .map_err(NetworkError::Route)?;
         let listen = listener
             .local_addrs()
             .iter()
@@ -1259,7 +1345,10 @@ impl NetIngress {
         tracing::info!(
             event = "daemon.ingress_ready",
             listen = ?listen,
-            "网络接入面已就绪：Node Link 与 Sync 的 WSS 与配对 HTTP 开始接受连接"
+            // 版本进日志是 D3 的诊断入口之一（「刷新后仍拿到旧 JS 去连新 Daemon」）：`None` = 缺失语义，
+            // 不静默当成「版本未知」。
+            ui_build_version = ?ui_build_version,
+            "网络接入面已就绪：Node Link 与 Sync 的 WSS 与配对 HTTP 开始接受连接，根路径由前端静态面接管"
         );
         Ok(Self {
             shutdown,
@@ -1267,6 +1356,7 @@ impl NetIngress {
             command: ingress.command,
             registry: ingress.registry,
             sync_registry,
+            ui_build_version,
             tasks,
         })
     }
@@ -1274,6 +1364,14 @@ impl NetIngress {
     /// 实际绑定的监听地址（`daemon.status.listen` 的来源）。
     pub fn listen(&self) -> Vec<String> {
         self.listen.clone()
+    }
+
+    /// 本次二进制嵌入并被托管的前端构建版本（`daemon.status.uiBuildVersion` 的来源）。
+    ///
+    /// 由 [`NetIngress::start`] 从注册为静态面的那份资源表读出（`design.md` D3）；`None` 表示版本缺失
+    /// （占位入口或产物里没有可解析的版本文件），是显式的缺失语义。
+    pub fn ui_build_version(&self) -> Option<String> {
+        self.ui_build_version.clone()
     }
 
     /// 命令路由句柄（撤销通知缝 [`NetIngress::connection_closer`] 的内部来源）。
@@ -1472,19 +1570,12 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
     .map_err(DaemonError::Lock)?;
 
     let shutdown = Arc::new(ShutdownSignal::new());
-    let control: Arc<dyn DaemonControl> = Arc::new(AppDaemonControl {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        instance_id: instance_id.as_str().to_owned(),
-        data_dir: composition.config().data_dir.display().to_string(),
-        public_origin: composition.config().public_origin.clone(),
-        listen: net_ingress.listen(),
-        started_at: composition.started_at().clone(),
-        started_instant: composition.started_instant(),
-        node_id: composition.identity().node_id().clone(),
-        node_public_key: composition.node_public_key().clone(),
-        core: Arc::clone(composition.use_cases()),
-        shutdown: Arc::clone(&shutdown),
-    });
+    let control: Arc<dyn DaemonControl> = Arc::new(AppDaemonControl::new(
+        &composition,
+        &instance_id,
+        &net_ingress,
+        Arc::clone(&shutdown),
+    ));
     let router = LocalAdminRouter::new(LocalAdminDeps {
         // 移入（而非再克隆）：`run` 不得在关闭序列前多持有一个 `Arc<UseCases>` 句柄。
         daemon: control,
