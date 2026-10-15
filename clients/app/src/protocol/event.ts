@@ -30,13 +30,25 @@ import type {
   Uuid,
 } from "./common";
 
-/** `event.schema.json` 的 `body.origin.kind` 封闭词表。 */
-export type EventOriginKind = "agent" | "device" | "daemon" | "local_cli";
+/**
+ * `event.schema.json` 的 `body.origin.kind` 封闭词表（**五值**）。
+ *
+ * `node` 由 `sync-server-connection` 的 1.6 随 `origin.nodeId` 一起落进 wire；此前这里是四值，
+ * 会把 `kind: "node"` 的事件判成词表外（TS 侧无法构造合法 `EventOrigin`）。
+ */
+export type EventOriginKind = "agent" | "device" | "daemon" | "local_cli" | "node";
 
 /** `body.origin`（内嵌对象）。 */
 export interface EventOrigin {
   readonly kind: EventOriginKind;
   readonly deviceId: Uuid | null;
+  /**
+   * `nodeId`：仅 `kind: "node"` 时非空（schema 的 `if/then` 把它钉成必填）。
+   *
+   * 其余四种 kind 下 schema 允许它缺席，因此这里用可选属性而不是 `| null` —— 缺席与显式 null
+   * 不是一回事（未协商 `core.event-origin.v1` 的连接收到的 `origin` 根本不带这个键）。
+   */
+  readonly nodeId?: Uuid;
 }
 
 /** `body.payload`：`view` 是开放对象，`acp` 是可缺席的 ACP 原文。 */
