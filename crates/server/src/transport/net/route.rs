@@ -2,8 +2,12 @@
 //!
 //! 规则：
 //!
-//! - **只有注册过的 path 有服务**：未注册的 path 一律 404，不会进入任何处理器。路由表由
-//!   `server::node_link` 与 `server::sync` 各自的注册函数在 `app` 组合根里填入，本模块不写死协议路径。
+//! - **只有注册过的 path 有服务，另加一条显式注册的静态回退**：未注册的 path 默认 404，不会进入任何
+//!   处理器。注册了静态端点（[`RouteTable::insert_static`]）后，未被协议端点命中的请求由静态面接住——
+//!   协议族保留前缀（每条已注册 path 的前两段）之下的路径仍 404，其余读取方法回退到前端入口文档、
+//!   非读取方法 405（解析顺序见 `static_ui` 模块文档）。静态面是**显式**注册的，不是无条件的通配：
+//!   没注册它时 `/` 依旧 404。路由表由 `server::node_link` 与 `server::sync` 各自的注册函数在 `app`
+//!   组合根里填入，本模块不写死协议路径。
 //! - **Host/代理头边界在路由之前**：`axum::Router::layer` 同时覆盖 fallback，因此 Host 不匹配的请求
 //!   在未注册 path 上也返回 400，而不会先走 404。
 //! - **WebSocket 升级规则**：协商到 `permessage-deflate` 或未声明约定 subprotocol 的升级请求被拒绝；
@@ -19,9 +23,12 @@
 //! - **每路径默认响应头**：`register_post` 可为一条 path 声明一组默认响应头，该 path 上的**所有**响应都会
 //!   补齐它们——处理器产生的响应、接入层在调用处理器前产生的 413/405，以及 Host 边界在这个 path 上的 400。
 //!   响应已带同名头时保留响应自己的值（默认头是补齐语义，不会变成重复头）：配对端点因此能声明
-//!   「无论成功或失败都带四个安全头」（`NODE_LINK_PROTOCOL.md` §13.1）。
+//!   「无论成功或失败都带四个安全头」（`NODE_LINK_PROTOCOL.md` §13.1）。静态端点走**同一条缝**，
+//!   声明自己那份（CSP 与四个安全头，取值理由见 `static_ui`），因此 Host 边界在静态 path 上的 400
+//!   也带它们。
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -55,6 +62,9 @@ use crate::transport::net::Shutdown;
 use crate::transport::net::http::HttpRequest;
 use crate::transport::net::http::HttpResponse;
 use crate::transport::net::origin::request_origin;
+use crate::transport::net::static_ui;
+use crate::transport::net::static_ui::StaticEndpoint;
+use crate::transport::net::static_ui::UiAssetSource;
 use crate::transport::net::ws::WsConnection;
 use crate::transport::net::ws::WsHandler;
 
@@ -73,8 +83,8 @@ pub(crate) struct NetState {
     pub(crate) tls_terminated: bool,
     pub(crate) shutdown: Shutdown,
     pub(crate) sessions: mpsc::Sender<SessionJob>,
-    /// 已注册 POST path 的默认响应头（Host 边界在路由之前拒绝时按 path 补齐）。
-    pub(crate) post_default_headers: BTreeMap<String, PathDefaultHeaders>,
+    /// 已注册 path 的默认响应头（POST 与静态端点；Host 边界在路由之前拒绝时按 path 补齐）。
+    pub(crate) path_default_headers: BTreeMap<String, PathDefaultHeaders>,
 }
 
 /// 把一条 POST path 的默认头补齐到响应上。
@@ -125,6 +135,9 @@ pub enum RouteError {
         /// 被拒绝的头值。
         value: String,
     },
+    /// 静态端点已经注册过。
+    #[error("静态端点已注册：至多一条（它服务根路径，并作为未命中路径的回退）")]
+    StaticEndpointAlreadyRegistered,
 }
 
 /// 一个 WebSocket 端点的注册项。
@@ -139,11 +152,21 @@ struct PostRoute {
     default_headers: PathDefaultHeaders,
 }
 
+/// 一个静态端点的注册项（路由表的第三类端点，见 `static_ui`）。
+///
+/// 至多一条：它服务注册的 path（生产形态是根路径），并作为未被协议端点命中的路径的回退。
+struct StaticRoute {
+    path: String,
+    source: Arc<dyn UiAssetSource>,
+    default_headers: PathDefaultHeaders,
+}
+
 /// path → 处理器的注册表。
 #[derive(Default)]
 pub(crate) struct RouteTable {
     ws: BTreeMap<String, WsRoute>,
     post: BTreeMap<String, PostRoute>,
+    static_route: Option<StaticRoute>,
 }
 
 impl RouteTable {
@@ -156,7 +179,7 @@ impl RouteTable {
     ) -> Result<(), RouteError> {
         validate_path(path)?;
         validate_subprotocol(required_subprotocol)?;
-        if self.ws.contains_key(path) || self.post.contains_key(path) {
+        if self.is_registered(path) {
             return Err(RouteError::DuplicatePath {
                 path: path.to_owned(),
             });
@@ -180,7 +203,7 @@ impl RouteTable {
     ) -> Result<(), RouteError> {
         validate_path(path)?;
         let default_headers = parse_default_headers(default_headers)?;
-        if self.ws.contains_key(path) || self.post.contains_key(path) {
+        if self.is_registered(path) {
             return Err(RouteError::DuplicatePath {
                 path: path.to_owned(),
             });
@@ -195,18 +218,87 @@ impl RouteTable {
         Ok(())
     }
 
-    /// 已注册 POST path 的默认响应头（由 [`NetState`] 持有，供 Host 边界按 path 补齐）。
-    pub(crate) fn post_default_headers(&self) -> BTreeMap<String, PathDefaultHeaders> {
-        self.post
-            .iter()
-            .map(|(path, route)| (path.clone(), route.default_headers.clone()))
-            .collect()
+    /// 注册静态面：构建产物交给浏览器，未被协议端点命中的路径回退到入口文档（`static_ui`）。
+    ///
+    /// 默认响应头由静态模块自己声明（CSP 基线与四个安全头属于这一面，不交给调用方决定），声明在当前
+    /// path 上，因此接入层在调用处理器前产生的响应（Host 边界的 400）也带它们。
+    pub(crate) fn insert_static(
+        &mut self,
+        path: &str,
+        source: Arc<dyn UiAssetSource>,
+    ) -> Result<(), RouteError> {
+        validate_path(path)?;
+        if self.is_registered(path) {
+            return Err(RouteError::DuplicatePath {
+                path: path.to_owned(),
+            });
+        }
+        if self.static_route.is_some() {
+            // 只有一条静态端点：它是 fallback 的唯一承担者，「哪条 path 是根」在多条时会变成隐式约定。
+            return Err(RouteError::StaticEndpointAlreadyRegistered);
+        }
+        self.static_route = Some(StaticRoute {
+            path: path.to_owned(),
+            source,
+            default_headers: parse_default_headers(&static_ui::STATIC_HEADERS)?,
+        });
+        Ok(())
     }
 
-    /// 组装 `axum` 路由：注册 path 按种类分派，其余 path 一律 404；边界中间件覆盖含 fallback 的全部请求。
+    /// path 是否已被任一类别注册（三类端点共用同一个 path 命名空间）。
+    fn is_registered(&self, path: &str) -> bool {
+        self.ws.contains_key(path)
+            || self.post.contains_key(path)
+            || self
+                .static_route
+                .as_ref()
+                .is_some_and(|route| route.path == path)
+    }
+
+    /// 已注册 path 的默认响应头（由 [`NetState`] 持有，供 Host 边界按 path 补齐）。
+    ///
+    /// 两类 path 都收：配对 POST 端点声明的四个安全头，以及静态端点自己那份（CSP 与四个安全头）——
+    /// Host 边界在路由之前拒绝时也要带它们。
+    pub(crate) fn path_default_headers(&self) -> BTreeMap<String, PathDefaultHeaders> {
+        let mut defaults: BTreeMap<String, PathDefaultHeaders> = self
+            .post
+            .iter()
+            .map(|(path, route)| (path.clone(), route.default_headers.clone()))
+            .collect();
+        if let Some(route) = &self.static_route {
+            defaults.insert(route.path.clone(), route.default_headers.clone());
+        }
+        defaults
+    }
+
+    /// 组装 `axum` 路由：注册 path 按种类分派，其余 path 交给静态面（未注册静态端点时一律 404）；
+    /// 边界中间件覆盖含 fallback 的全部请求。
     pub(crate) fn into_router(self, state: Arc<NetState>) -> Router {
+        // 绑定名**不能**叫 `ws`/`post`：那会遮蔽文件顶部的 `use axum::routing::{get, post};`，让下面的
+        // 循环把 `post(...)` 解析成 `BTreeMap` 值而不是路由构造函数（本函数与 `get` 的用法保持对称）。
+        let RouteTable {
+            ws: ws_routes,
+            post: post_routes,
+            static_route,
+        } = self;
+        // 静态回退必须拒绝协议族下未注册的子路径（`static_ui` 模块文档），因此保留前缀从**已注册的协议
+        // path** 派生：注册是唯一来源，本模块不写死 `/sync`/`/node-link`。
+        let reserved_prefixes: BTreeSet<String> = ws_routes
+            .keys()
+            .chain(post_routes.keys())
+            .map(|path| static_ui::protocol_prefix(path))
+            .collect();
+        // 静态面是 fallback 的唯一承担者，因此这里只可能有一条。
+        let static_endpoint = static_route.map(|route| {
+            Arc::new(StaticEndpoint::new(
+                route.path,
+                route.source,
+                reserved_prefixes,
+                route.default_headers,
+            ))
+        });
         let mut router = Router::new();
-        for (path, route) in self.ws {
+        for (path, route) in ws_routes {
             let state = Arc::clone(&state);
             let handler = route.handler;
             let required_subprotocol = route.required_subprotocol;
@@ -223,7 +315,7 @@ impl RouteTable {
                     }),
                 );
         }
-        for (path, route) in self.post {
+        for (path, route) in post_routes {
             let state = Arc::clone(&state);
             let handler = route.handler;
             let mut method_router = post(move |request: Request| {
@@ -247,14 +339,25 @@ impl RouteTable {
             }
             router = router.route(&path, method_router);
         }
+        // 静态面接管 fallback：未命中任何协议端点的请求由 `static_ui` 的解析顺序判定。协议端点仍由
+        // 精确路由优先命中，因此「协议端点优先」不依赖这里的任何判断。
+        let router = match static_endpoint {
+            Some(endpoint) => router.fallback(move |request: Request| {
+                let endpoint = Arc::clone(&endpoint);
+                async move { static_ui::serve(endpoint, request) }
+            }),
+            // 未注册静态面时保持既有语义：任何未注册 path 一律 404。
+            None => router.fallback(not_found),
+        };
         // 路由表为空时也要经过边界中间件（未注册 path 的 404 因此与已注册 path 同一条路径）。
-        router
-            .fallback(not_found)
-            .layer(from_fn_with_state(state, boundary))
+        router.layer(from_fn_with_state(state, boundary))
     }
 }
 
 /// 未注册 path 的响应（未知 path 与未被任何适配器注册的协议路径）。
+///
+/// 只在**未注册静态端点**时充当 fallback；注册了静态面时 fallback 换成 `static_ui::serve`，它自带
+/// 协议族保留前缀的 404 与静态面的解析顺序。
 async fn not_found() -> StatusCode {
     StatusCode::NOT_FOUND
 }
@@ -340,7 +443,8 @@ async fn boundary(
         );
         let mut response = host_rejected();
         // 该拒绝发生在路由之前，因此按 path 补齐已注册端点的默认头（未注册 path 没有默认头）。
-        if let Some(defaults) = state.post_default_headers.get(request.uri().path()) {
+        // 静态端点的 path 也在表里，所以根路径上的 Host 400 同样带静态面的安全头。
+        if let Some(defaults) = state.path_default_headers.get(request.uri().path()) {
             apply_default_headers(response.headers_mut(), defaults);
         }
         return response;
@@ -602,5 +706,62 @@ mod tests {
             "x-webkit-deflate-frame"
         )])));
         assert!(!offers_permessage_deflate(&HeaderMap::new()));
+    }
+
+    /// 只回固定入口文档的资源源（注册表用例不关心资源内容）。
+    struct StubAssets;
+
+    impl UiAssetSource for StubAssets {
+        fn entry_document(&self) -> Bytes {
+            Bytes::from_static(b"<html></html>")
+        }
+
+        fn asset(&self, _path: &str) -> Option<Bytes> {
+            None
+        }
+    }
+
+    /// 固定回 200 的 POST 处理器（只为占住一条 path）。
+    struct StubHandler;
+
+    #[async_trait::async_trait]
+    impl HttpHandler for StubHandler {
+        async fn handle(&self, _request: HttpRequest) -> HttpResponse {
+            HttpResponse::new(StatusCode::OK)
+        }
+    }
+
+    #[test]
+    fn static_registration_is_exclusive_and_shares_the_path_namespace() {
+        let mut table = RouteTable::default();
+        table
+            .insert_static("/", Arc::new(StubAssets))
+            .expect("第一次注册成功");
+        // 三类端点共用同一个 path 命名空间：静态面占住的 path 不能再被 POST 注册。
+        assert_eq!(
+            table
+                .insert_post("/", Arc::new(StubHandler), &[])
+                .unwrap_err(),
+            RouteError::DuplicatePath {
+                path: "/".to_owned()
+            }
+        );
+        // 至多一条静态端点：它是 fallback 的唯一承担者。
+        assert_eq!(
+            table
+                .insert_static("/ui", Arc::new(StubAssets))
+                .unwrap_err(),
+            RouteError::StaticEndpointAlreadyRegistered
+        );
+        // 静态端点自带默认响应头（CSP 与四个安全头），Host 边界在根路径上拒绝时也带它们。
+        let defaults = table.path_default_headers();
+        let static_defaults = defaults.get("/").expect("根路径必须在表里");
+        assert!(static_defaults.iter().any(|(name, value)| {
+            name.as_str() == "content-security-policy"
+                && value
+                    .to_str()
+                    .is_ok_and(|value| value == static_ui::CONTENT_SECURITY_POLICY)
+        }));
+        assert_eq!(static_defaults.len(), static_ui::STATIC_HEADERS.len());
     }
 }

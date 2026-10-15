@@ -43,6 +43,7 @@ use crate::transport::net::route::NetState;
 use crate::transport::net::route::RouteError;
 use crate::transport::net::route::RouteTable;
 use crate::transport::net::route::SessionJob;
+use crate::transport::net::static_ui::UiAssetSource;
 use crate::transport::net::tls::load_server_config;
 use crate::transport::net::ws::WsHandler;
 
@@ -349,15 +350,31 @@ impl NetListener {
         self.routes.insert_post(path, handler, default_headers)
     }
 
+    /// 注册静态面：把前端构建产物交给浏览器（`specs/ui-asset-hosting/spec.md`，`design.md` D1）。
+    ///
+    /// 与 `register_ws`/`register_post` 平级，是第三类端点：该 path 返回入口文档，构建产物中存在的其它
+    /// path 原样返回，其余非协议路径在单页回退语义下返回入口文档（解析顺序见
+    /// [`crate::transport::net::static_ui`]）。至多注册一条——它服务根路径，并作为未命中路径的回退。
+    ///
+    /// 没有 `default_headers` 参数：CSP 基线与四个安全头是这个面自己的属性，由静态模块声明
+    /// （调用方漏传就会静默丢掉 CSP，不该留下这种可能）。资源源由组合根提供，本模块不读磁盘也不嵌入产物。
+    pub fn register_static(
+        &mut self,
+        path: &str,
+        source: Arc<dyn UiAssetSource>,
+    ) -> Result<(), RouteError> {
+        self.routes.insert_static(path, source)
+    }
+
     /// 服务接入面直到收到关闭信号，并按 [`NetConfig::drain_grace`] 排空在途连接。
     ///
     /// 返回即表示接入层已停止：TCP listener 已关闭、在途 HTTP 请求与会话都已结束或已被强制取消。
     pub async fn serve(mut self, shutdown: Shutdown) -> Result<(), NetError> {
         let (sessions_tx, sessions_rx) = mpsc::channel::<SessionJob>(SESSION_QUEUE_CAPACITY);
         let mut supervisor = tokio::spawn(supervise_sessions(sessions_rx));
-        // 路由表在组装 router 前先取出 POST path 的默认响应头：Host 边界中间件（在路由之前）也要按 path 补齐。
+        // 路由表在组装 router 前先取出已注册 path 的默认响应头：Host 边界中间件（在路由之前）也要按 path 补齐。
         let routes = std::mem::take(&mut self.routes);
-        let post_default_headers = routes.post_default_headers();
+        let path_default_headers = routes.path_default_headers();
         let state = Arc::new(NetState {
             host_policy: self.host_policy,
             proxy_policy: self.proxy_policy,
@@ -366,7 +383,7 @@ impl NetListener {
             tls_terminated: self.tls.is_some(),
             shutdown: shutdown.clone(),
             sessions: sessions_tx.clone(),
-            post_default_headers,
+            path_default_headers,
         });
         let router = routes.into_router(Arc::clone(&state));
         let app = router.into_make_service_with_connect_info::<SocketAddr>();
