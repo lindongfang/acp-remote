@@ -2,7 +2,8 @@
 
 > 状态：编码前安全基线（Draft）  
 > 版本：0.5
-> 日期：2026-10-14  
+> 日期：2026-10-15  
+> 修订记录（2026-10-15，`sync-ui-hosting` WP4）：§11.1 加 `[实现现状]`——静态面的 CSP **由响应头下发**（取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线）并带四个与配对端点同取值的头，基线未被放宽（产物里的内联样式仍被拒）；§13.4 登记同包发布的静态资源属 `public-artifact` 类别（静态面只交付公开构建产物）；§16.3 写回「嵌入二进制 + 同包发布 + `daemon.status.uiBuildVersion` 可检查」与发布构建缺产物即拒绝启动。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-14，`sync-server-connection` WP7）：§9.4 与 §9.5 各加一段 `[实现现状]`——§9.4 写回 Sync 连接面的 Origin 校验实绩（来源三形态不折叠、逐字比较、`Absent` 与非 `https` 一律拒绝、`HostPolicy` 的已知偏差）与配对/认证只覆盖到「认证完成」的边界（业务命令级授权未接线）；§9.5 写回设备撤销传播实绩（`4410` 持久提交后经组合根 `ConnectionCloser` 关闭真实连接注册表、拒绝后续认证）与仍未落地项（Access 出站重连、设备侧 scope 缩减关连接）。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-02）：§9.4 新增「配对授予的 scope 是设备级而非资源快照」的显式规则，并写出 `session.create` 的设备级副作用；§10.2 把 `session.create` 归入新设备授权包 `pack.create-session`（不进任何预设），声明 Sync 面已暴露该入口与其 `{ workspaceAlias, agentId }` payload；§10.3 区分两个传输面的 workspace 引用边界；§11.2 把目录展示名列为按不可信内容渲染。  
 > 修订记录（2026-09-18）：§13.4 的可持久化元数据白名单显式加入「不含内容的审计元数据」，消除与 §11.5「保留审计记录」的矛盾。
@@ -343,6 +344,8 @@ local.audit.export         本地审计导出（不含会话正文）
 - 可用时启用 Trusted Types；不支持的平台仍必须通过安全组件和 sanitizer 保证相同内容边界。
 - production source map 不得公开包含本地路径、secret 或未发布源信息；是否发布独立调试符号由发布流程决定。
 
+`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的内联 `<style id="expo-reset">` 会落到 `default-src 'self'` 而被拒（页面样式可能异常），该冲突交 `frontend-sync-wiring` 在前端侧解决（外置样式或显式放行）。
+
 ### 11.2 不可信内容渲染
 
 - Markdown 默认禁用原始 HTML；链接只允许明确 scheme allowlist。
@@ -446,6 +449,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 撤销设备或 Export 后 Owner 不再提供数据，Access 删除上述索引并清空内存内容。
 - 客户端收到自己被撤销或用户执行“清除此设备”时，应删除缓存和 device key；浏览器能力不足时明确说明残留风险。
 - 未来启用加密离线正文缓存时，必须新增协商 feature、Owner 明示授权、容量/TTL/撤销提示和独立 ADR；Owner 仍不得声称能远程可靠擦除已有副本。
+- 与 Daemon 同包发布的 PWA 静态资源属 §3 的 `public-artifact` 类别：根路径静态面只交付这些公开构建产物（入口文档与前端资源），不交付任何会话内容、凭据或用户数据，因此未认证的请求也能取到它。同包发布、构建版本可检查与发布构建缺产物即拒绝启动见 §16.3。
 
 ## 14. 日志、审计与崩溃信息
 
@@ -530,7 +534,7 @@ storage.integrity_failed
 ### 16.3 运行时更新
 
 - 第一阶段不实现 Daemon 自更新器，不在运行时下载并执行远程 binary。
-- PWA 静态资源与 Daemon 同包发布，构建版本可检查。
+- PWA 静态资源与 Daemon 同包发布，构建版本可检查。`[实现现状]`（2026-10-15，`sync-ui-hosting`）静态资源**嵌入 Daemon 二进制**、随二进制一起发布，不经运行期磁盘目录、也不从远程下载；构建版本由前端构建钩子写进产物的 `build-version.json`（`clients/app/scripts/write-build-version.mjs`），Daemon 从**同一份**嵌入资源读出并经 `daemon.status` 的 `uiBuildVersion` 暴露（`string | null`，因此版本与所托管资源必然出自同一次构建；`null` = 版本缺失的显式语义，不编造版本）。发布构建在构建时没有可用前端产物（`clients/app/dist` 不含入口文档）即**拒绝启动**，不静默提供空页面（`FRONTEND_DESIGN.md` §4.3）。
 - 协议不兼容时明确失败，不能通过关闭认证或加载远程旧脚本解决。
 
 ## 17. 安全事件处理

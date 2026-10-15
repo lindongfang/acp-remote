@@ -121,6 +121,16 @@ pub struct DaemonStatus {
     /// Node Link 连接的运行时状态。恒为空数组（出站重连管理器未落地，`import.add` 因此返回
     /// `local.unavailable`，§5.2 的该字段注释）。
     pub links: Vec<DaemonLink>,
+    /// 本次二进制嵌入并被托管的前端构建版本（`sync-ui-hosting` 的 `design.md` D3；§5.2 的
+    /// `uiBuildVersion`）。
+    ///
+    /// 取值由组合根从静态面用的那份嵌入资源表读出（`app::daemon` 的 `NetIngress::ui_build_version`），
+    /// 因此它与浏览器拿到的资源出自同一次构建。`None` = 版本缺失（占位入口，或产物里没有可解析的版本
+    /// 文件）：这是**显式**语义，序列化为 `null`——不得编造版本，也不用产物哈希顶替。
+    ///
+    /// 该字段是对 §5.2 `result` 的**增量**：本地管理通道的方法集与错误码集合不变，因此机器合同
+    /// （`schemas/local-admin/v1` 的 `localCapabilities`）不漂移（D5：不为此新增方法）。
+    pub ui_build_version: Option<String>,
 }
 
 impl DaemonStatus {
@@ -195,6 +205,14 @@ impl DaemonStatus {
                         .collect(),
                 ),
             ),
+            (
+                // `null` = 版本缺失（占位入口或产物没有版本文件），不是「未知」：见字段注释。
+                "uiBuildVersion",
+                match &self.ui_build_version {
+                    Some(version) => text(version),
+                    None => Value::Null,
+                },
+            ),
         ])
     }
 }
@@ -261,6 +279,7 @@ mod tests {
                 last_connected_at: None,
                 next_retry_at: Some(Timestamp::new("2026-09-18T09:13:03.412Z").expect("timestamp")),
             }],
+            ui_build_version: Some("2026.09.18+abc1234".to_owned()),
         }
     }
 
@@ -287,7 +306,24 @@ mod tests {
             json["links"][0]["nextRetryAt"],
             Value::from("2026-09-18T09:13:03.412Z")
         );
-        assert_eq!(json.len(), 12, "字段集合与 §5.2 逐项一致");
+        assert_eq!(
+            json["uiBuildVersion"],
+            Value::from("2026.09.18+abc1234"),
+            "前端构建版本按 D3 直接出现在既有响应里（不新增方法）"
+        );
+        assert_eq!(
+            json.len(),
+            13,
+            "字段集合 13 个：本变更新增 `uiBuildVersion`（§5.2 的文本清单同步见 tasks.md 4.6），其余 12 个与 §5.2 逐项一致"
+        );
+    }
+
+    /// 版本缺失是 `null`（**显式**缺失语义）：占位入口不得变成编造的版本串。
+    #[test]
+    fn a_missing_ui_build_version_serializes_as_null() {
+        let mut status = status();
+        status.ui_build_version = None;
+        assert_eq!(status.to_json()["uiBuildVersion"], Value::Null);
     }
 
     #[test]

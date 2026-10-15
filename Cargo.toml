@@ -125,6 +125,40 @@ rustls-pki-types = { version = "1", features = ["std"] }
 # 新增，而是 base 锁既有版本，这里由 `pem` 与 axum 的 `ws` 复用、与既有 0.23 并存（`[bans] multiple-versions = "warn"` 只提示）。MSRV 与版本选择依据见 §3.1 的 `[决定]`。
 rcgen = "0.14"
 
+# `server` 的前端产物嵌入（`sync-ui-hosting` 变更 WP2；决策见 design.md D2，消费方是
+# `transport::net::ui`）：把构建产物目录的内容以 `include_bytes!` 编入二进制，运行期零 IO、零路径解析——
+# 表里没有的路径根本查不到，静态面因此不存在路径穿越面；MIME 与回退仍由 `transport::net::static_ui` 持有。
+# `AGENTS.md` §8 的五项判据：
+# - 必要性：PWA 必须与 Daemon **同源**加载（前端从 canonical origin 反推 WebSocket 地址，没有 endpoint
+#   配置项），产物因此要随二进制发布，不能要求部署时另放一份磁盘目录；
+# - 维护状态：`pyrossh/rust-embed` 8.13.0，上游自述 `passively-maintained`（低频但持续发版），
+#   `rust-version = 1.80` ≤ 本仓库 MSRV；
+# - 许可证：本 crate 与 `rust-embed-impl`/`rust-embed-utils`/`mime_guess` 都是 MIT；
+#   `unicase` 是 `MIT OR Apache-2.0`、`walkdir`/`same-file` 是 `Unlicense/MIT`、`winapi-util` 是
+#   `Unlicense OR MIT`——四者都靠 **MIT 分支**落在 `deny.toml` 的 `[licenses] allow` 里（白名单没有
+#   Unlicense 条目，但 OR 表达式有一个分支被允许即通过）；
+# - 平台支持：纯 Rust、无原生构建步骤；`walkdir` 家族在 Windows 上经 `winapi-util`（依赖
+#   `windows-sys >=0.48, <=0.61`，由锁里既有的 0.61.2 满足，不新增节点），与本仓库两个交付目标
+#   （Windows x64、Linux x86_64）一致；
+# - 安全风险：读目录发生在编译期，运行期只查编译期生成的键表；`deny.toml` 的 `all-features = true`
+#   下可选特性均未启用（`compression`/`include-exclude`/`mime-guess` 全关）。
+# 落选候选（design.md D2 已做过一轮对比，这里补许可证核对结论）：`include_dir` 同样合格，但需要自己
+# 拼内容类型映射与回退逻辑，而本仓库的内容类型映射唯一一份在 `static_ui`，不该有第二处；
+# `tower-http` 的 `ServeDir`/`ServeFile` 服务磁盘目录，与「嵌入二进制」的裁定冲突；手写 build script
+# 生成 `include_bytes!` 表等于把 `rust-embed` 的活再写一遍。
+# 版本口径与漂移防护：下面的闭包、许可证与「无默认 feature」结论都是对 **8.13.0** 实测的，而 `8.13`
+# （caret 语义 = `>=8.13.0, <9.0.0`）本身**挡不住**小版本漂移——真正冻结这份闭包的是入库的
+# `Cargo.lock` 与门禁里的 `--locked`。因此**升级小版本时必须按上面的清单重核**：新版本可能重新引入
+# 默认 feature，那会静默改变依赖图与许可证判定。
+# `debug-embed` 必须开：否则 debug 构建会运行期读磁盘（行为随磁盘状态漂移，产物被删后还返回空）。
+# 三个**不要开**的特性：`interpolate-folder-path`（经 `shellexpand → dirs → dirs-sys → option-ext`
+# 引入 MPL-2.0，不在白名单里）；`mime-guess`（内容类型不是本 crate 的事，映射表不得有第二份）；
+# `compression`（产物已由前端构建压缩，多一层解压换不来收益）。
+# 依赖选型的核验证据按 `AGENTS.md` §9 的映射由 `docs/MODULE_ARCHITECTURE.md` §3.1 承接（该节对每一批
+# 新增依赖都有 `[决定]` 条目）：本节给的是可自足的判据，§3.1 的条目作为 `sync-ui-hosting` 变更的落地项
+# 写在 `openspec/changes/sync-ui-hosting/tasks.md` 的 4.6。
+rust-embed = { version = "8.13", features = ["debug-embed"] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

@@ -8,7 +8,12 @@
 //! | 默认 loopback 启动 | `default_config_binds_only_loopback`（默认值的权威断言在 `config` 模块；真实 8765 端口的端到端绑定由 WP7 的 `[PV4]` 覆盖） |
 //! | 绑定失败即拒绝启动 | `bind_fails_closed_when_the_address_is_taken` |
 //! | 非 loopback 监听告警 | `non_loopback_listen_warns_without_failing` |
-//! | 按 path 路由、Sync 明确不可用 | `unregistered_paths_return_404` |
+//! | 按 path 路由：协议 path 与协议族子路径明确拒绝 | `production_shaped_listener_keeps_protocol_rejections_and_serves_static_paths` |
+//! | 静态面：协议端点优先于静态回退（`ui-asset-hosting`「协议端点优先于静态回退」） | `protocol_endpoints_win_over_the_static_fallback`、`unregistered_protocol_subpaths_stay_rejected_under_the_static_fallback` |
+//! | 静态面：根路径入口与单页回退 | `root_path_serves_the_entry_document`、`frontend_deep_links_fall_back_to_the_entry_document` |
+//! | 静态面：构建产物的内容类型（`ui-asset-hosting`「内容类型与安全响应头」） | `built_assets_are_served_with_matching_content_types` |
+//! | 静态面：CSP 与接入层安全响应头 | `static_responses_carry_the_csp_baseline_and_the_access_layer_security_headers` |
+//! | 静态面：非读取方法明确拒绝（`ui-asset-hosting`「请求方法不匹配」） | `non_read_methods_on_static_paths_are_explicitly_rejected` |
 //! | Node Link 端点正常升级 | `ws_upgrade_with_the_required_subprotocol_succeeds` |
 //! | 升级来源（`Origin`）的取值与归一化（`SYNC_PROTOCOL.md` §3.2） | `ws_upgrade_reports_the_normalized_origin_to_the_handler`、`ws_upgrade_without_origin_reports_absent`、`ws_upgrade_with_a_malformed_origin_is_rejected` |
 //! | 压缩/错误 subprotocol 被拒绝 | `ws_upgrade_without_the_subprotocol_is_rejected`、`ws_upgrade_with_compression_is_rejected`、`plain_get_on_the_ws_path_is_rejected`、`repeated_subprotocol_headers_follow_the_token_rule` |
@@ -22,6 +27,7 @@
 //! | 超大 WebSocket 消息被拒绝 | `oversize_ws_message_closes_with_1009` |
 //! | 关闭排空（D11） | `shutdown_drains_and_releases_the_listener`、`binary_frames_are_passed_to_the_handler` |
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -54,6 +60,14 @@ const WS_SUBPROTOCOL: &str = "acp-remote.nodelink.v1.json";
 const CLAIM_PATH: &str = "/node-link/v1/pairing/claim";
 /// 配对 status 端点（`NODE_LINK_PROTOCOL.md` §13.3）。
 const STATUS_PATH: &str = "/node-link/v1/pairing/status";
+/// Sync 协议族冻结的 WSS path 与 subprotocol（`SYNC_PROTOCOL.md` §3）；同上，本模块只作为参数接收它们。
+const SYNC_WS_PATH: &str = "/sync/v1";
+/// 同上。
+const SYNC_WS_SUBPROTOCOL: &str = "acp-remote.sync.v1.json";
+/// Sync 配对 claim 端点（`SYNC_PROTOCOL.md` §7）。
+const SYNC_CLAIM_PATH: &str = "/sync/v1/pairing/claim";
+/// Sync 配对 status 端点（`SYNC_PROTOCOL.md` §7）。
+const SYNC_STATUS_PATH: &str = "/sync/v1/pairing/status";
 
 /// 记录调用次数与最后一次请求的处理器（用例断言「没有调用处理器」/「看到的是真实对端地址」）。
 struct RecordingHttpHandler {
@@ -233,6 +247,101 @@ async fn wait_for_counter(counter: &Arc<AtomicUsize>, expected: usize) {
     );
 }
 
+/// 前端入口文档：静态面用例的替身产物（真实构建由前端工程产出）。
+const ENTRY_DOCUMENT: &str = "<!doctype html><html><body>acp-remote</body></html>";
+
+/// 静态面用例的内存资源源：WP1 的替身（WP2 用嵌入资源表实现同一个 trait）。
+///
+/// 键是构建产物里的**根相对绝对路径**（与 [`UiAssetSource`] 的口径一致），只放用例要断言的几类文件。
+struct MemoryAssets {
+    assets: BTreeMap<String, &'static str>,
+}
+
+impl MemoryAssets {
+    /// 与生产产物同形的清单：脚本（含 source map）、样式、图片、字体、PWA 清单、未知扩展名各一份。
+    fn fixture() -> Self {
+        let mut assets = BTreeMap::new();
+        for (path, body) in [
+            ("/_expo/static/js/web/entry-abc.js", "console.log('entry');"),
+            ("/_expo/static/js/web/entry-abc.js.map", "{\"version\":3}"),
+            ("/assets/app.css", "body{margin:0}"),
+            ("/assets/logo.svg", "<svg/>"),
+            ("/assets/icon.png", "PNGDATA"),
+            ("/assets/font.woff2", "WOFF2"),
+            ("/manifest.webmanifest", "{\"name\":\"acp-remote\"}"),
+            ("/assets/blob.dat", "RAW"),
+        ] {
+            assets.insert(path.to_owned(), body);
+        }
+        Self { assets }
+    }
+}
+
+impl UiAssetSource for MemoryAssets {
+    fn entry_document(&self) -> Bytes {
+        Bytes::from_static(ENTRY_DOCUMENT.as_bytes())
+    }
+
+    fn asset(&self, path: &str) -> Option<Bytes> {
+        self.assets
+            .get(path)
+            .map(|body| Bytes::from_static(body.as_bytes()))
+    }
+}
+
+/// 回一个可识别正文的 HTTP 处理器：用来证明请求真的交给了协议处理器，而不是被静态回退接管。
+struct MarkerHttpHandler {
+    marker: &'static str,
+}
+
+#[async_trait::async_trait]
+impl HttpHandler for MarkerHttpHandler {
+    async fn handle(&self, _request: HttpRequest) -> HttpResponse {
+        HttpResponse::new(StatusCode::OK).with_body(Bytes::from_static(self.marker.as_bytes()))
+    }
+}
+
+/// 与生产组合根同形的注册：两个协议族的 WS 端点与配对 POST，再加上根路径的静态面。
+///
+/// 静态面是**显式注册**的（`register_static`），因此「协议端点优先」与「未注册协议子路径仍被拒绝」
+/// 这两条都在真实形态下被验证，而不是在一个「没有静态面」的旧形态下被验证。
+fn register_production_shape(listener: &mut NetListener) {
+    for (path, subprotocol) in [
+        (WS_PATH, WS_SUBPROTOCOL),
+        (SYNC_WS_PATH, SYNC_WS_SUBPROTOCOL),
+    ] {
+        listener
+            .register_ws(
+                path,
+                subprotocol,
+                Arc::new(IdleWsHandler {
+                    finished: Arc::new(AtomicUsize::new(0)),
+                }),
+            )
+            .expect("注册 WS");
+    }
+    for (path, marker) in [
+        (CLAIM_PATH, "claim"),
+        (STATUS_PATH, "status"),
+        (SYNC_CLAIM_PATH, "sync-claim"),
+        (SYNC_STATUS_PATH, "sync-status"),
+    ] {
+        listener
+            .register_post(path, Arc::new(MarkerHttpHandler { marker }), &[])
+            .expect("注册配对 POST");
+    }
+    listener
+        .register_static("/", Arc::new(MemoryAssets::fixture()))
+        .expect("注册静态面");
+}
+
+/// 只注册静态面（协议端点一律不注册）：验证「协议面缺席时静态面自己也不会越界」。
+fn register_static_only(listener: &mut NetListener) {
+    listener
+        .register_static("/", Arc::new(MemoryAssets::fixture()))
+        .expect("注册静态面");
+}
+
 #[tokio::test]
 async fn local_addrs_reports_the_real_bound_address() {
     // 绑定随机 loopback 端口后，`daemon.status.listen` 的来源就是实际地址（不是配置里的 0）。
@@ -324,62 +433,324 @@ async fn plaintext_proxy_non_loopback_warns() {
 }
 
 #[tokio::test]
-async fn unregistered_paths_return_404() {
-    // 只有注册过的 path 有服务；本用例的 listener 未注册 `/sync/v1*`，它与未知 path 一律 404，不进任何处理器。
-    let server = start_server(loopback_config(), |listener| {
-        listener
-            .register_ws(
-                WS_PATH,
-                WS_SUBPROTOCOL,
-                Arc::new(IdleWsHandler {
-                    finished: Arc::new(AtomicUsize::new(0)),
-                }),
-            )
-            .expect("注册 WS");
-        listener
-            .register_post(
-                CLAIM_PATH,
-                Arc::new(RecordingHttpHandler {
-                    calls: Arc::new(AtomicUsize::new(0)),
-                    last_client_ip: Arc::new(std::sync::Mutex::new(None)),
-                    status: StatusCode::OK,
-                }),
-                &[],
-            )
-            .expect("注册 claim");
-        listener
-            .register_post(
-                STATUS_PATH,
-                Arc::new(RecordingHttpHandler {
-                    calls: Arc::new(AtomicUsize::new(0)),
-                    last_client_ip: Arc::new(std::sync::Mutex::new(None)),
-                    status: StatusCode::OK,
-                }),
-                &[],
-            )
-            .expect("注册 status");
-    })
-    .await;
+async fn production_shaped_listener_keeps_protocol_rejections_and_serves_static_paths() {
+    // **本用例是 `unregistered_paths_return_404` 的改写。** 旧断言（`/` 与 `/unknown` 必须 404）描述的是
+    // **静态面缺席期**的行为：当时 `transport::net` 只有 ws/post 两类端点（`server::sync` 也没有在这个
+    // listener 上注册），任何未注册 path 都只有 404 一条出路。`sync-ui-hosting` 落地第三类端点
+    // （`register_static`）后 `/` 由入口文档接管、`/unknown` 由单页回退接管，因此这里让 listener 与生产
+    // 同形（两个协议族的端点 + 根路径静态面）并把每个 path 的期望**显式重新判定**，而不是沿用旧结论：
+    //
+    // - 协议 path 与协议族下未注册的子路径 → 仍 404（接入层既有语义，未被静态回退接管）；
+    // - `/`、前端深链、`/unknown`（不属于协议族）→ 入口文档（单页回退）；
+    // - 构建产物中存在的资源 → 按路径返回该资源本身；
+    // - 静态语义下的非读取方法 → 明确 405（不是 200 入口文档）。
+    let server = start_server(loopback_config(), register_production_shape).await;
     let host = host_of(server.addr);
-    for path in ["/sync/v1", "/sync/v1/pairing/claim", "/", "/unknown"] {
+
+    // ① 协议 path 与协议族下未注册的子路径：仍 404，且不返回入口文档。这里同时覆盖非读取方法——
+    //    保留前缀下的 POST 仍是**协议面**的 404，而不是静态面的 405。
+    for path in [
+        "/sync/v1/pairing/other",
+        "/node-link/v1/pairing/other",
+        "/node-link/v1/unknown",
+    ] {
+        for method in ["GET", "POST"] {
+            let response = request(&server, method, path, &host, b"{}").await;
+            assert_eq!(response.status, 404, "{method} {path}");
+            assert_ne!(response.body_text(), ENTRY_DOCUMENT, "{method} {path}");
+        }
+    }
+
+    // ② 非协议路径：`/`、前端深链与 `/unknown` 都回退到同一入口文档（旧断言里的 404 已不成立）。
+    for path in ["/", "/pair", "/hosts/local/sessions/abc", "/unknown"] {
+        let response = request(&server, "GET", path, &host, b"").await;
+        assert_eq!(response.status, 200, "GET {path}");
+        assert_eq!(response.body_text(), ENTRY_DOCUMENT, "GET {path}");
+        assert!(
+            response
+                .header("content-type")
+                .is_some_and(|value| value.starts_with("text/html")),
+            "GET {path} 的内容类型必须是 HTML"
+        );
+    }
+
+    // ③ 构建产物中存在的资源：按路径原样返回，不返回入口文档。
+    let asset = request(&server, "GET", "/assets/app.css", &host, b"").await;
+    assert_eq!(asset.status, 200);
+    assert_eq!(asset.body_text(), "body{margin:0}");
+    assert_eq!(
+        asset.header("content-type"),
+        Some("text/css; charset=utf-8")
+    );
+
+    // ④ 静态语义下的非读取方法：405 + `Allow`，不是 200 入口文档。
+    for path in ["/", "/pair", "/unknown"] {
+        let response = request(&server, "POST", path, &host, b"{}").await;
+        assert_eq!(response.status, 405, "POST {path}");
+        assert_eq!(response.header("allow"), Some("GET, HEAD"), "POST {path}");
+        assert_ne!(response.body_text(), ENTRY_DOCUMENT, "POST {path}");
+    }
+
+    // ⑤ 已注册的协议端点未被回退吞掉：非升级请求打 WS path 仍是既有 4xx，配对 POST 仍由各自处理器接管。
+    let plain_upgrade = request(&server, "GET", WS_PATH, &host, b"").await;
+    assert!(
+        (400..500).contains(&plain_upgrade.status),
+        "非升级请求必须 4xx，实际 {}",
+        plain_upgrade.status
+    );
+    assert_ne!(plain_upgrade.body_text(), ENTRY_DOCUMENT);
+    let claim = request(&server, "POST", CLAIM_PATH, &host, b"{}").await;
+    assert_eq!(claim.status, 200);
+    assert_eq!(claim.body_text(), "claim");
+    let wrong_method = request(&server, "GET", CLAIM_PATH, &host, b"").await;
+    assert_eq!(wrong_method.status, 405);
+    assert_ne!(wrong_method.body_text(), ENTRY_DOCUMENT);
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn protocol_endpoints_win_over_the_static_fallback() {
+    // spec「协议端点不被回退吞掉」：静态面注册在根路径后，两个协议族的 WS 端点与四条配对 POST 仍由各自
+    // 的协议逻辑接管，返回的结果 MUST NOT 是入口文档。WS 端点用**真实升级**（101）证明这一点，比断言
+    // 「不是 200 HTML」更强。
+    let server = start_server(loopback_config(), register_production_shape).await;
+    let host = host_of(server.addr);
+
+    for (path, subprotocol) in [
+        (WS_PATH, WS_SUBPROTOCOL),
+        (SYNC_WS_PATH, SYNC_WS_SUBPROTOCOL),
+    ] {
         let mut connection = connect(server.addr).await.expect("连接");
         connection
-            .write_all(&http_request("POST", path, &host, &[], b"{}"))
+            .write_all(ws_request(path, &host, Some(subprotocol), None).as_bytes())
             .await
-            .expect("写请求");
-        let response = connection.read_response().await.expect("读响应");
-        assert_eq!(response.status, 404, "{path} 必须 404");
+            .expect("写升级请求");
+        let upgrade = connection.read_response().await.expect("读升级响应");
+        assert_eq!(upgrade.status, 101, "{path} 必须由 WS 端点接管");
+        assert_eq!(upgrade.header("sec-websocket-protocol"), Some(subprotocol));
     }
-    // 未注册 path 上的其他方法同样 404（不是 405）。
-    let mut connection = connect(server.addr).await.expect("连接");
-    connection
-        .write_all(&http_request("GET", "/sync/v1", &host, &[], b""))
-        .await
-        .expect("写请求");
+
+    for (path, marker) in [
+        (CLAIM_PATH, "claim"),
+        (STATUS_PATH, "status"),
+        (SYNC_CLAIM_PATH, "sync-claim"),
+        (SYNC_STATUS_PATH, "sync-status"),
+    ] {
+        let response = request(&server, "POST", path, &host, b"{}").await;
+        assert_eq!(response.status, 200, "POST {path}");
+        assert_eq!(response.body_text(), marker, "POST {path}");
+        assert_ne!(response.body_text(), ENTRY_DOCUMENT, "POST {path}");
+    }
+
+    // 非 POST 打配对 path：`axum` 的方法路由给 405，不会被回退改成入口文档。
+    let wrong_method = request(&server, "GET", SYNC_CLAIM_PATH, &host, b"").await;
+    assert_eq!(wrong_method.status, 405);
+    assert_ne!(wrong_method.body_text(), ENTRY_DOCUMENT);
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn unregistered_protocol_subpaths_stay_rejected_under_the_static_fallback() {
+    // spec「未注册的协议子路径不被回退接管」：保留前缀由**已注册 path 的前两段**派生
+    // （两个协议族都在第 2 段带版本号），因此协议族下未注册的子路径仍按接入层既有语义 404，
+    // 不会被静态回退接管成入口文档或构建产物。
+    let server = start_server(loopback_config(), register_production_shape).await;
+    let host = host_of(server.addr);
+    for path in [
+        "/sync/v1/pairing/other",
+        "/sync/v1/sessions",
+        "/node-link/v1/pairing/other",
+        "/node-link/v1/unknown",
+        "/node-link/v1/",
+    ] {
+        let response = request(&server, "GET", path, &host, b"").await;
+        assert_eq!(response.status, 404, "GET {path}");
+        assert_ne!(response.body_text(), ENTRY_DOCUMENT, "GET {path}");
+    }
+    // 与保留前缀共享字符串但不在其「之下」的 path 不属于协议族：它按静态语义回退。
+    let sibling = request(&server, "GET", "/sync/v1extra", &host, b"").await;
+    assert_eq!(sibling.status, 200);
+    assert_eq!(sibling.body_text(), ENTRY_DOCUMENT);
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn root_path_serves_the_entry_document() {
+    // spec「根路径返回入口」：`GET /` 200 + HTML 且正文是入口文档；`HEAD` 属于读取方法（不 405）。
+    let server = start_server(loopback_config(), register_static_only).await;
+    let host = host_of(server.addr);
+    let root = request(&server, "GET", "/", &host, b"").await;
+    assert_eq!(root.status, 200);
+    assert_eq!(root.body_text(), ENTRY_DOCUMENT);
+    let content_type = root.header("content-type").expect("根路径必须带内容类型");
+    assert!(content_type.starts_with("text/html"), "实际 {content_type}");
+
+    let head = request(&server, "HEAD", "/", &host, b"").await;
+    assert_eq!(head.status, 200);
+    assert_eq!(head.header("content-type"), root.header("content-type"));
+    assert!(head.body.is_empty(), "HEAD 只回头部");
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn frontend_deep_links_fall_back_to_the_entry_document() {
+    // spec「前端路由深链可刷新」：构建产物里没有同名文件 → 返回同一入口文档而不是 404。
+    let server = start_server(loopback_config(), register_static_only).await;
+    let host = host_of(server.addr);
+    for path in [
+        "/pair",
+        "/hosts",
+        "/hosts/local/sessions/abc",
+        "/assets/missing.png",
+    ] {
+        let response = request(&server, "GET", path, &host, b"").await;
+        assert_eq!(response.status, 200, "GET {path}");
+        assert_eq!(response.body_text(), ENTRY_DOCUMENT, "GET {path}");
+        assert!(
+            response
+                .header("content-type")
+                .is_some_and(|value| value.starts_with("text/html")),
+            "GET {path} 的内容类型必须是 HTML"
+        );
+    }
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn built_assets_are_served_with_matching_content_types() {
+    // spec「构建产物按路径返回」+「资源带正确类型」：逐类型断言，且脚本/样式不得被标成通用二进制
+    // （`nosniff` 下那会让浏览器拒绝执行），未知扩展名不得误导浏览器按 HTML 执行。
+    let server = start_server(loopback_config(), register_static_only).await;
+    let host = host_of(server.addr);
+    for (path, content_type, body) in [
+        (
+            "/_expo/static/js/web/entry-abc.js",
+            "text/javascript; charset=utf-8",
+            "console.log('entry');",
+        ),
+        (
+            "/_expo/static/js/web/entry-abc.js.map",
+            "application/json; charset=utf-8",
+            "{\"version\":3}",
+        ),
+        (
+            "/assets/app.css",
+            "text/css; charset=utf-8",
+            "body{margin:0}",
+        ),
+        ("/assets/logo.svg", "image/svg+xml", "<svg/>"),
+        ("/assets/icon.png", "image/png", "PNGDATA"),
+        ("/assets/font.woff2", "font/woff2", "WOFF2"),
+        (
+            "/manifest.webmanifest",
+            "application/manifest+json; charset=utf-8",
+            "{\"name\":\"acp-remote\"}",
+        ),
+        ("/assets/blob.dat", "application/octet-stream", "RAW"),
+    ] {
+        let response = request(&server, "GET", path, &host, b"").await;
+        assert_eq!(response.status, 200, "{path}");
+        assert_eq!(response.body_text(), body, "{path}");
+        assert_eq!(
+            response.header("content-type"),
+            Some(content_type),
+            "{path}"
+        );
+        assert_ne!(response.header("content-type"), Some("text/html"), "{path}");
+    }
+    for path in [
+        "/_expo/static/js/web/entry-abc.js",
+        "/assets/app.css",
+        "/assets/icon.png",
+    ] {
+        let response = request(&server, "GET", path, &host, b"").await;
+        assert_ne!(
+            response.header("content-type"),
+            Some(static_ui::FALLBACK_CONTENT_TYPE),
+            "{path} 不得被标成通用二进制"
+        );
+    }
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn static_responses_carry_the_csp_baseline_and_the_access_layer_security_headers() {
+    // spec「入口文档带 CSP 响应头」：CSP 由**响应头**下发（不是文档内的 `<meta>`），取值逐字等于
+    // `docs/FRONTEND_DESIGN.md` §4.5 的基线；四个既有安全头取值与配对端点一致。
+    const CSP_BASELINE: &str = "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+    let server = start_server(loopback_config(), register_static_only).await;
+    let host = host_of(server.addr);
+    for path in [
+        "/",
+        "/pair",
+        "/_expo/static/js/web/entry-abc.js",
+        "/assets/icon.png",
+    ] {
+        let response = request(&server, "GET", path, &host, b"").await;
+        assert_eq!(response.status, 200, "{path}");
+        assert_eq!(
+            response.header("content-security-policy"),
+            Some(CSP_BASELINE),
+            "{path}"
+        );
+        assert_eq!(response.header("cache-control"), Some("no-store"), "{path}");
+        assert_eq!(response.header("pragma"), Some("no-cache"), "{path}");
+        assert_eq!(
+            response.header("referrer-policy"),
+            Some("no-referrer"),
+            "{path}"
+        );
+        assert_eq!(
+            response.header("x-content-type-options"),
+            Some("nosniff"),
+            "{path}"
+        );
+    }
+    // 接入层在调用处理器前产生的响应同样带安全头：Host 边界在静态 path 上的 400。
+    let wrong_host = request(&server, "GET", "/", "evil.example.com", b"").await;
+    assert_eq!(wrong_host.status, 400);
     assert_eq!(
-        connection.read_response().await.expect("读响应").status,
-        404
+        wrong_host.header("content-security-policy"),
+        Some(CSP_BASELINE)
     );
+    assert_eq!(wrong_host.header("x-content-type-options"), Some("nosniff"));
+    // 用例里的字面量与实现常量必须是同一份（改动常量会让用例失败，而不是悄悄放行）。
+    assert_eq!(static_ui::CONTENT_SECURITY_POLICY, CSP_BASELINE);
+    // 基线不含放宽项（不是「包含某个子串就过」：六个指令的逐条比对在 `static_ui` 的单测里）。
+    for forbidden in [
+        "unsafe-inline",
+        "unsafe-eval",
+        "*",
+        "http:",
+        "data:",
+        "https:",
+    ] {
+        assert!(!CSP_BASELINE.contains(forbidden), "基线不得含 {forbidden}");
+    }
+    server.stop().await.expect("关闭序列成功");
+}
+
+#[tokio::test]
+async fn non_read_methods_on_static_paths_are_explicitly_rejected() {
+    // spec「请求方法不匹配」：静态语义下的非 GET/HEAD 返回 405 + `Allow: GET, HEAD`，
+    // 不得返回 200 入口文档冒充成功。
+    let server = start_server(loopback_config(), register_static_only).await;
+    let host = host_of(server.addr);
+    for path in ["/", "/pair", "/assets/app.css", "/unknown"] {
+        for method in ["POST", "PUT", "DELETE", "OPTIONS"] {
+            let response = request(&server, method, path, &host, b"{}").await;
+            assert_eq!(response.status, 405, "{method} {path}");
+            assert_eq!(
+                response.header("allow"),
+                Some("GET, HEAD"),
+                "{method} {path}"
+            );
+            assert_ne!(response.body_text(), ENTRY_DOCUMENT, "{method} {path}");
+        }
+    }
+    // 保留前缀下的非读取请求仍是**协议面**语义的 404（不是静态面的 405）——该断言在
+    // `production_shaped_listener_keeps_protocol_rejections_and_serves_static_paths` 里，因为只有注册了
+    // 协议端点的 listener 才派生出保留前缀（这里是静态面单独在跑的形态）。
     server.stop().await.expect("关闭序列成功");
 }
 
@@ -1154,6 +1525,9 @@ async fn path_default_headers_cover_access_layer_rejections_and_keep_route_isola
     assert_eq!(wrong_method.status, 405);
     assert_eq!(wrong_method.header("cache-control"), Some("no-store"));
     // ④ 未声明默认头的 path（空切片）与未注册 path 都不受影响。
+    // 注意 `/unknown` 的 404 仍然成立：本用例的 listener **没有**注册静态端点（`register_static`），
+    // fallback 因此还是接入层既有的 `not_found`——静态面的单页回退不在这里生效（语义已随
+    // `sync-ui-hosting` 改变的同名断言在 `production_shaped_listener_keeps_protocol_rejections_and_serves_static_paths`）。
     for (path, expected) in [(STATUS_PATH, 200), ("/unknown", 404)] {
         let response = request(&server, "POST", path, host, b"{}").await;
         assert_eq!(response.status, expected, "{path}");

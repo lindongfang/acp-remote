@@ -737,6 +737,8 @@ impl Default for FakeDaemon {
                     available: true,
                 }],
                 links: Vec::new(),
+                // 替身不模拟前端产物：版本缺失的显式语义（`daemon.status.uiBuildVersion` = null）。
+                ui_build_version: None,
             })),
             stops: Arc::default(),
             failure: Arc::default(),

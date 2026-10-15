@@ -1,8 +1,8 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.10
-> 日期：2026-10-14
+> 版本：0.11
+> 日期：2026-10-15
 > 修订记录（2026-09-18）：补充 `daemon.tls.*`、`daemon.local_admin.endpoint`、`logging.*` 与 Owner 侧 `[[exports]]`（原先只有 Access 侧 `[[imports]]`）；明确限流与协议上限是固定 v1 常量而非配置键。
 > 修订记录（2026-09-18，0.3）：`[[exports]].grants` 更名为 `scopes`，与 Node Link Export 模型及本地通道 `ExportView` 同名同义（Access 侧 `[[imports]].grants` 是另一概念，不变）。
 > 修订记录（2026-09-18，0.4）：新增 `storage.audit_retention_days`（默认 365），审计清理排在容量顺序最后。
@@ -12,6 +12,7 @@
 > 修订记录（2026-09-26，0.8）：按 `node-link-owner`（切片 5）的实绩写回三处——§1 的 `daemon.allowed_hosts` 行补「`public_origin` 与 `allowed_hosts` 都为空（默认配置）时只接受 loopback 形态 `Host`」这一分支（原先只写了「为空时按 `public_origin` 推导」）并在 §1 末尾补 `public_origin` 的 canonical origin 口径与实现现状；§2/§3 加「本交付版本只解析、不消费」注记（`sync.*` 与 `node_link.*` 均被登记为未接线）。键名、类型、默认值**未变**（仍以本节为唯一权威）。
 > 修订记录（2026-10-13，0.9）：§2 撤下「三个 `sync.*` 键只解析、不消费」的注记——它们已接线，并写明「只下调」的生效路径与不再进 `Config::unwired`；§2 补记配对 HTTP 的请求体上限固定 16 KiB（非配置键，两面共用）。键名、类型与默认值**未变**（仍以本节为唯一权威）。
 > 修订记录（2026-10-14，0.10，`sync-server-connection` WP7）：§2 的「已接线」注记补上代码落点（`lower_of`/`sync_config`/`SyncConfig`/`SessionLimits::negotiate` 与「下调生效、上调被忽略」的自检用例），并如实登记 wire 下限造成的「过小值被协议层夹取而非失败关闭」缺口。键名、类型、默认值与「只下调」口径**均未变**（仍以本节为唯一权威）。
+> 修订记录（2026-10-15，0.11，`sync-ui-hosting` WP4）：§1 的 `daemon.listen` 行补上**根目录静态托管**（同一个 listener 同源托管前端静态资源）与它与协议 path 的**优先级关系**（协议 path 先命中；静态面只接住未命中任何协议端点的请求；协议族保留前缀下的未注册子路径仍 404，不被静态面接管）。键名、类型与默认值**未变**（仍以本节为唯一权威）。
 > 上位文档：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)
 
 本文是 Daemon 运行时配置键名、类型、默认值与可否调整的**唯一权威来源**。协议层限额不在此重复定义：
@@ -45,7 +46,7 @@
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `daemon.data_dir` | path | 平台用户配置目录下的 `acp-remote/` | SQLite、附件、日志的根目录；权限要求见 `SECURITY_DESIGN.md` §13.2 |
-| `daemon.listen` | string | `"127.0.0.1:8765"` | HTTP/WSS listener 地址；**Sync、Node Link 与两者的配对 HTTP 共用同一个 listener，按 path 路由**（`/sync/v1`、`/node-link/v1`、`/sync/v1/pairing/*`、`/node-link/v1/pairing/*`）。默认只监听 loopback；监听 `0.0.0.0`/`[::]` 必须显式配置并在启动输出中告警 |
+| `daemon.listen` | string | `"127.0.0.1:8765"` | HTTP/WSS listener 地址；**Sync、Node Link 与两者的配对 HTTP 共用同一个 listener，按 path 路由**（`/sync/v1`、`/node-link/v1`、`/sync/v1/pairing/*`、`/node-link/v1/pairing/*`），并在**根路径 `/`** 上以同一个 listener **同源托管前端静态资源**（PWA 入口文档与构建产物，见 `FRONTEND_DESIGN.md` §4.3）。**与协议 path 的优先级**：已注册的协议 path 先命中（axum 精确路由，静态面只是 router 的 fallback），静态面只接住**未命中任何协议端点**的请求；协议族**保留前缀**之下的未注册子路径仍按协议面语义 404，**不被静态面接管**（保留前缀由已注册协议 path 的**前两段**派生、按段匹配，因此 `/sync/v1extra` 不属于 `/sync/v1`）。默认只监听 loopback；监听 `0.0.0.0`/`[::]` 必须显式配置并在启动输出中告警 |
 | `daemon.public_origin` | string\\|null | `null` | canonical public origin（`scheme://host[:port]`）；配置了远程入口就必须给出，用于 Origin/Host 校验与配对二维码 |
 | `daemon.allowed_hosts` | string[] | `[]` | 反向代理场景下允许的 `Host` 白名单；为空时只接受与 `public_origin` 一致的 Host。**`public_origin` 与 `allowed_hosts` 两者都为空**（默认配置：只监听 loopback）时只接受 loopback 形态的 `Host`（`127.0.0.0/8`、`[::1]`、`localhost`，忽略端口）——这是 `SECURITY_DESIGN.md` §7.2「限制 Host，拒绝任意 Host 转发和 DNS rebinding」在默认配置下的补全，判定与用例在 `crates/server/src/transport/net/host.rs` |
 | `daemon.trusted_proxies` | string[] | `[]` | 允许终止 TLS 的同机代理地址；非空时才考虑 `Forwarded`/`X-Forwarded-*` |
