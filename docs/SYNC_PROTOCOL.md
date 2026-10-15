@@ -1,12 +1,13 @@
 # ACP Remote Sync Protocol
 
-> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：§11 的业务命令面与终态投递、`server::acp_facade`、§9.6 的 imported 事件回源投递（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。  
+> 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。  
 > 协议版本：1  
 > 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 修订记录（2026-10-02）：`session.create` 经 Sync 暴露（feature `core.session-create.v1`）——§11.3 把它移入可授予集合并写明双层授权与设备级判定，§11.5 给出 Sync 面的 `{ workspaceAlias, agentId }` payload、`accepted`/`completed` 终态与失败分类，§16.2 说明它是可选 feature 引入而非 major version；§5.2 新增 `core.session-create.v1` 与 `core.local-catalog.v1` 两条 feature。本次不新增任何错误码（映射见 §11.5）。
 > 修订记录（2026-10-14）：`event.body.origin` 增加第五个产生者类型 `kind = "node"`（由另一个节点经 Node Link 下发命令、在**本机**事件库落库的事件）与身份字段 `nodeId`，两者由 feature `core.event-origin.v1` 协商启用——§10.1 给出 `origin` 的两种形状（未协商时仍是冻结的 `{kind, deviceId}` 两个键）、`kind` 取值表的新行、唯一一条配对规则（`node` 必须带非空 `nodeId` 且 `deviceId` 为 `null`）与"经 feature 协商启用、不是加性变更"的理由；§9.6 同步 kind 枚举，§5.2 登记 `core.event-origin.v1`，§16.1/§16.2 把这次扩展归入 feature 协商并说明它为什么不需要 major version。机器资产同步：`schemas/sync/v1/event.schema.json` 的 enum、可选字段与 `if`/`then`（`origin.required` 保持 `kind`/`deviceId`），`compatibility/features/v1/features.json`，`fixtures/sync/v1/` 的固定向量（既有事件夹具补 `"nodeId": null`，新增 `kind = "node"` 的正例、两条 `node` 形状反例与一条未协商形状 `{kind, deviceId}` 的正例）。
 > 修订记录（2026-10-14，`sync-server-connection` WP7 文档写回，无 wire 变更）：按 Daemon 侧实绩写入四节实现状态注记——§3.1（端点与 subprotocol 已可用、来源三形态的传递、binary 帧关闭）、§7.4（配对 HTTP 五项原子校验/幂等/status 一律 200/四个安全响应头/固定限流，并如实登记「证明失败 5 次失效只在内存」与本地确认入口在本机管理通道两项未落地）、§8.5（四消息握手、来源绑定、认证前固定上限、单设备替换与撤销传播、心跳与静默超时、出站账本双上限、close code 映射，并如实登记业务命令面未接线）、§9.6 末与 §9 末（cursor 判定、增量重放与 barrier、快照与摘要、ACK 已落地，§9.6 末条的 imported 回源投递**仍是计划**并注明缺口的接缝）。wire 形状、schema 与 fixture 均未变。
-> 日期：2026-10-14（2026-09-18 基线；2026-10-02 追加 `session.create` 与本机目录 feature；2026-10-14 追加 `origin` 的 `node` 与 `nodeId`，feature `core.event-origin.v1`；同日按 `sync-server-connection` 的 Daemon 侧实绩写回四节实现状态注记）
+> 修订记录（2026-10-15，`sync-server-commands` 文档写回，无 wire 变更）：按 Daemon 侧实绩写入 §9.4/§9 末与 §10.3 的实现状态注记——业务命令面（§11.2 的五态 `command.result`、§11.3 的五条查询、§11.4 的 `command.status`、§11.5 的 12 条 Sync 命令）已接线并覆盖 mutation 的接受/幂等/版本冲突/终态观察者与 `session.create`；同时**如实登记本期降级**：`session.read` 的 `turns`/`pending_interactions`/`capabilities` 三类与 imported 会话明细一律回 `capability.unsupported_by_broker`（§9.4 说明「客户端 MUST NOT 当成会话无内容或已到最早一条」），§11.5 的 `session.read` 行同步标注。wire 形状、schema 与 fixture 均未变。
+> 日期：2026-10-15（2026-09-18 基线；2026-10-02 追加 `session.create` 与本机目录 feature；2026-10-14 追加 `origin` 的 `node` 与 `nodeId`（feature `core.event-origin.v1`）并写回连接面实绩；同日按 `sync-server-commands` 的实绩写回命令面与明细降级）
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
 ## 1. 文档职责
@@ -831,6 +832,14 @@ Snapshot item 的最低 schema：
 
 **明细缺席不是「为空」**：客户端在快照里找不到某会话的明细资源时，该会话的明细状态是「尚未加载」而不是「没有消息、没有待处理交互」。客户端 MUST NOT 据此向用户呈现该会话为空。待处理交互数由 `SessionSummary.state` 的 `waiting_permission`/`waiting_input` 得出（目录页徽标），交互细节按需用 `session.read { include: ["pending_interactions"] }` 取得。
 
+**本期服务端对三类明细资源显式回不支持**：`turns`、`pending_interactions` 与 `capabilities` 在当前 `core` 读面上**给不出本表要求的字段**——`Turn` 没有必填的 `createdAt`（也没有可选的 `terminalError`），`CapabilitySet` 是一个能力集合、给不出 `agentCapabilities` 与 `brokerAdditions` 的拆分，`PendingInteraction` 没有 `schema` 对象。服务端因此对这三类 `include` 一律回 `capability.unsupported_by_broker`，**不静默省略、不伪造字段**（符合 [AGENTS.md](../AGENTS.md) 第 4 节「无法安全处理的能力必须明确返回不支持」）。
+
+客户端 MUST NOT 把该拒绝当成「该会话没有 turn / 没有待处理交互 / 没有能力信息」，也 MUST NOT 因此认为明细已到最早一条——它表达的是「本期服务端不提供这一类」，不是空集合。因此客户端 MUST NOT 用 `resource.requested` 的拒绝推断该会话的真实内容。
+
+**imported 会话的明细同样回该错误**：`resources` 里非本节点权威的会话，其明细本应**回源 Owner**（第 9.6 节），但回源通道需要 `node-link-client` 的出站客户端，而它尚未落地；`server::sync` 也不得调用平级的 `server::node_link`。本期实现因此对非自有引用一律回 `capability.unsupported_by_broker`，而不是返回一份「看起来完整」的本地空结果。接通时机与 `node-link-client` 的落地绑定。
+
+上述两处都是**本期已知的功能缺口**，不是协议意图：补齐（为 `Turn` 定 `createdAt` 的产品语义、拆 `CapabilitySet`、给 `PendingInteraction` 补 `schema`、接通回源）属独立变更。
+
 ### 9.5 ACK
 
 客户端在事件已经进入其可恢复本地状态后发送累计 ACK：
@@ -910,7 +919,9 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
 - 快照（§9.4）：`sessions` chunk 恒发一个（空会话也发空数组），`workspaces`/`agents` 受 `core.local-catalog.v1` 门控（未协商不下发、不以空数组占位），`chunkCount` 与实际块数一致且取值 `1..=3`；六类会话明细资源不进快照；`snapshotDigest` 按每个 chunk 的**原始 UTF-8 文本字节**分别求 SHA-256、按 `chunkIndex` 顺序连接后再求一次 SHA-256，结果取无填充 base64url。
 - ACK（§9.5）：只前进，回退被忽略并记诊断；超过本连接已发送最高游标时回 `sync.cursor_invalid`；ACK 不推进事件库 head，服务端保存的设备 ACK 最大值不决定新连接的恢复位置。
 
-**仍未落地**（与本小节相邻）：业务命令面（§11）尚未接线（§11 的命令、终态投递与授权后的执行路径都未实现；其余 type 以 `protocol.type_unsupported` 拒绝）；imported 事件的回源投递见 §9.6 末条的计划标注。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
+**已落地的业务命令面**（本小节相邻）：§11.2 的 `command.result`（`accepted`/`completed`/`failed`/`rejected`/`uncertain` 五态、`acceptedAt` 与 `terminalEventId` 的取值约束）、§11.3 的五条查询命令（同步 `completed` 或 `rejected`）、§11.4 的 `command.status`、以及 §11.5 的 12 条 Sync 命令（含 7 条 mutation 的「先持久接受、后经持久记录给终态」路径、`(actor, requestId)` 幂等与 `command.idempotency_conflict`、`state.version_conflict` 带 `currentVersion`、`session.create` 的 feature 门控 `core.session-create.v1` 与 `uncertain` 收口）均已接线：命令帧经 `/sync/v1` 的组合路由（订阅面 → 命令面）到达，mutation 的终态由**连接期观察者**按 `(deviceId, requestId)` 轮询持久记录后推回提交方，断开即取消。`session.resume` 不在 Sync v1 的封闭词表内，按 §4.2 回 `command.unsupported`。
+
+**仍未落地**（与本小节相邻）：imported 事件的回源投递见 §9.6 末条的计划标注；`session.read` 的三类明细资源与 imported 明细的降级见 §9.4 的说明。`sync.reset_required` 的四种 `reason` 中，`cache_incompatible` 是唯一只能由客户端自报的一种（v1 无「客户端缓存版本」字段），服务端对每连接确权一次以防回声循环，其余三种由服务端按 §9.2/§9.4 的判定主动下发。
 
 ## 10. Event
 
@@ -1365,7 +1376,7 @@ local.audit.export
 | Command | 类别 | `sessionId` | Payload | 成功结果/终态 |
 |---|---|---|---|---|
 | `session.list` | query | 禁止 | `{}` | `completed { sessions: SessionSummary[] }` |
-| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；imported 会话回源 Owner |
+| `session.read` | query | 必须 | `{ include: string[] }`; include 只允许 `messages,turns,pending_interactions,config_options,capabilities,history`；Sync 面另接受可选 `before`（复合游标）、`beforeHistory`（会话内事件序号，十进制字符串）与 `limit` | `completed SessionReadResult`，`resources` 与第 9.4 节同名元素同形并附必填 `hasEarlier` 与只描述 `history` 这一页的可选 `historyHasEarlier`；imported 会话回源 Owner。**本期降级**：`turns`/`pending_interactions`/`capabilities` 三类与 imported 会话的明细一律回 `capability.unsupported_by_broker`（见第 9.4 节的说明），客户端 MUST NOT 把它当成「会话无内容」或「已到最早一条」 |
 | `command.status` | query | 禁止 | `{ targetRequestId }` | `completed CommandStatusRecord` |
 | `session.mode.list` | query | 必须 | `{}` | `completed ModeState { currentModeId, availableModes: ModeRef[], version }` |
 | `session.config.list` | query | 必须 | `{}` | `completed { configOptions: SessionConfigOptionView[], version }` |

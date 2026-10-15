@@ -128,6 +128,7 @@ clients/
 
 ### 4.2 明确不包含
 
+- 会话明细中的 `turns`、`pending_interactions`、`capabilities` 三类资源，以及 imported（来源为其它节点）会话的明细资源。本期服务端对它们的请求一律回 `capability.unsupported_by_broker`（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.4），PWA 因此不展示这三类明细与 imported 明细。**这不影响其余三类明细**：`messages`、`config_options` 与 `history` 照常经 `session.read` 取得并呈现。客户端 MUST NOT 把该拒绝渲染成「该会话没有 turn / 没有待处理交互 / 没有能力信息」，也 MUST NOT 因此认为明细已到最早一条——它是「本期服务端不提供这一类」，必须按 §6 的降级规则呈现为不可用并说明原因。
 - Android APK/AAB 和 iOS App/IPA。
 - APNs、FCM 或 Web Push 服务。
 - 后台常驻 WebSocket。
@@ -232,6 +233,7 @@ draft -> submitting -> accepted -> completed | failed | rejected | uncertain
 - 暂时没有专用组件时显示明确的“当前客户端未提供专用视图”，不能直接隐藏事件。
 - ACP 原文按 `acp.rawJson` 作为不可信文本保存或诊断展示；不得为了渲染先解析再覆盖原值，尤其不能损坏超过 JavaScript safe integer 的未知数字。
 - `unsupported_by_client`、`unsupported_by_broker` 和 `unsupported_by_agent` 必须可区分。
+- `unsupported_by_broker` 的呈现必须说清是**服务端本期不提供**，而不是「内容为空」或「已到最早一条」：本期服务端对 `turns`、`pending_interactions`、`capabilities` 三类明细资源与 imported 会话的明细一律回该错误（§4.2 与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §9.4），客户端据此呈现「本期不可用」并说明原因，`hasEarlier` 之类的分页标记不得由该拒绝推断。其余三类明细（`messages`、`config_options`、`history`）不受影响。
 - capability negotiation 的结果进入客户端 feature gate，不能只靠版本号猜测能力。
 - 呈现覆盖由客户端自持：客户端呈现能力由客户端自己维护，不进入服务端快照；服务端不定义、不协商也不下发客户端呈现能力字段。客户端自己维护「哪些事件类型有专用视图」的覆盖判定，而协议的**事件类型词表只决定客户端能否解析一个事件**，不得以该词表代替覆盖判定。对任一被消费的事件，只有两种结果——按专用视图呈现，或呈现明确的降级卡片；「协议认识该类型、但客户端当前没有它的专用视图」的事件同样必须呈现降级卡片并保留原文与事件元数据的入口，不得存在既不呈现也不降级的第三种结果。覆盖判定未命中不得导致整个会话渲染失败。
 - 未知事件不得导致整个会话渲染崩溃。

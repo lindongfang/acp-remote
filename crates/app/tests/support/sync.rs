@@ -465,6 +465,62 @@ impl SyncClient {
         self.send("sync.ack", json!({ "cursor": cursor })).await;
     }
 
+    /// 派发一条 `command` 帧（查询与 mutation 同一个帧形状；`sessionId` 可缺席）。
+    pub async fn command(
+        &mut self,
+        request_id: &str,
+        command: &str,
+        session_id: Option<&str>,
+        payload: Value,
+    ) {
+        self.command_with_version(request_id, command, session_id, payload, None)
+            .await;
+    }
+
+    /// 同上，但带上 body 顶层的 `expectedVersion`（`session.mode.set`/`session.config.set` 必填）。
+    pub async fn command_with_version(
+        &mut self,
+        request_id: &str,
+        command: &str,
+        session_id: Option<&str>,
+        payload: Value,
+        expected_version: Option<&str>,
+    ) {
+        let mut body = json!({
+            "requestId": request_id,
+            "command": command,
+            "payload": payload,
+        });
+        if let Some(session_id) = session_id {
+            body["sessionId"] = json!(session_id);
+        }
+        if let Some(version) = expected_version {
+            body["expectedVersion"] = json!(version);
+        }
+        self.send("command", body).await;
+    }
+
+    /// 等下一条**属于该 requestId** 的 `command.result`（跳过事件与控制帧），返回它的 `body`。
+    ///
+    /// 只按 requestId 过滤、不按到达顺序假定：mutation 的 `accepted` 与终态是两条独立的
+    /// `command.result`，调用方按其 `status` 自己判定。
+    pub async fn expect_command_result(&mut self, request_id: &str) -> Value {
+        let deadline = tokio::time::Instant::now() + MESSAGE_TIMEOUT;
+        loop {
+            let message = self.take().await;
+            if message["type"] == json!("command.result")
+                && message["body"]["requestId"] == json!(request_id)
+            {
+                return message["body"].clone();
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "步骤「{}」在超时前没有等到 `{request_id}` 的 command.result",
+                self.step
+            );
+        }
+    }
+
     /// 期待下一条消息的类型（跳过 `control.ping`；其它类型 panic 出可读上下文）。
     pub async fn expect_type(&mut self, message_type: &str) -> Value {
         let deadline = tokio::time::Instant::now() + MESSAGE_TIMEOUT;
@@ -823,6 +879,13 @@ pub struct ParkedEvents {
 }
 
 impl ParkedEvents {
+    /// 脚本端点建立时登记它的 sink：`release` 把暂存事件从这里送进真实扇出。
+    ///
+    /// 后建的端点会覆盖前一个（同一会话在用例里只有一个活动端点时就足够）。
+    fn attach(&self, sink: &acp_core::ports::EventSink) {
+        *self.sink.lock().expect("用例内互斥量不会中毒") = Some(sink.clone());
+    }
+
     fn park(&self, marker: &str, events: Vec<acp_core::model::EndpointEvent>) {
         self.events
             .lock()
@@ -931,10 +994,10 @@ impl SessionBackendFactory for ScriptedBackends {
         _request: acp_core::model::CreateSessionRequest,
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
-        Ok(Box::new(ScriptedEndpoint {
+        Ok(Box::new(ScriptedEndpoint::attach(
             sink,
-            parked: Arc::clone(&self.parked),
-        }))
+            Arc::clone(&self.parked),
+        )))
     }
 
     async fn open(
@@ -942,10 +1005,10 @@ impl SessionBackendFactory for ScriptedBackends {
         _reference: acp_core::model::SessionReference,
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
-        Ok(Box::new(ScriptedEndpoint {
+        Ok(Box::new(ScriptedEndpoint::attach(
             sink,
-            parked: Arc::clone(&self.parked),
-        }))
+            Arc::clone(&self.parked),
+        )))
     }
 
     async fn resume(
@@ -955,10 +1018,10 @@ impl SessionBackendFactory for ScriptedBackends {
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
         let _ = (session, request);
-        Ok(Box::new(ScriptedEndpoint {
+        Ok(Box::new(ScriptedEndpoint::attach(
             sink,
-            parked: Arc::clone(&self.parked),
-        }))
+            Arc::clone(&self.parked),
+        )))
     }
 }
 
@@ -1218,6 +1281,16 @@ impl HostNode {
         ));
         // Sync 的实时扇出（真实 `fanout::dispatch`）。
         let sync_registry = Arc::clone(sync.registry());
+        // Sync 命令面的终态观察者（与 `app::daemon::NetIngress::start` 同一条接线）：
+        // 没有它，mutation 的 `accepted` 之后就永远收不到终态。
+        let sync_command = Arc::clone(sync.command());
+        tasks.push((
+            "sync_commands",
+            tokio::spawn({
+                let signal = signal.clone();
+                async move { sync_command.dispatch(signal).await }
+            }),
+        ));
         let (sync_route, fanout_registry, sync_events) = sync.into_fanout();
         let sync_reader = sync_route.reader();
         tasks.push((
@@ -1464,5 +1537,13 @@ impl HostNode {
         drop(parked);
         drop(sync_registry);
         drop(root);
+    }
+}
+
+impl ScriptedEndpoint {
+    /// 建端点并把它挂上暂存表的 sink（否则 `ParkedEvents::release` 没有出口）。
+    fn attach(sink: acp_core::ports::EventSink, parked: Arc<ParkedEvents>) -> Self {
+        parked.attach(&sink);
+        Self { sink, parked }
     }
 }
