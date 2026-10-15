@@ -3407,6 +3407,18 @@ impl ReadView for ResumeStore {
         unreachable!("受害面用例不读 Sync 重放面")
     }
 
+    /// Sync 事件读面不在这个替身的范围内：受害面用例只驱动 Node Link 自己的路径。
+    ///
+    /// `sync_replay` 由 `sync-server-connection` 的 1.6 新增进 `ReadView`；本替身走同款机械桩，
+    /// 与 `node_link/command/tests.rs` 的同名实现一致（真被调用即 `unreachable!`，让缺口显式而非静默）。
+    async fn sync_replay(
+        &self,
+        _after: Option<GlobalCursor>,
+        _limit: ReplayLimit,
+    ) -> Result<acp_core::ports::SyncReplaySlice, PortError> {
+        unreachable!("受害面用例不读 Sync 事件重放面")
+    }
+
     async fn read_session(&self, _query: HistoryQuery) -> Result<HistoryPage, PortError> {
         unreachable!("受害面用例不读历史面")
     }
