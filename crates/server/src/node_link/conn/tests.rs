@@ -33,11 +33,16 @@
 //! | 未知字段被拒绝 | `envelope_and_sequence_violations_are_rejected_without_closing` |
 //! | 首次认证清除已批准配对 | `handshake_completes_and_enters_the_business_phase` |
 //! | 心跳与 90 秒静默 | `heartbeat_round_trip_keeps_the_connection_alive`、`silence_beyond_the_window_is_closed_with_4408`、`a_busy_outbound_queue_does_not_starve_the_heartbeat`、`inbound_silence_still_closes_a_connection_with_a_busy_outbound_queue` |
-//! | 慢连接不影响其他连接 | `a_saturated_connection_is_disconnected_without_affecting_its_peer`、`a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` |
+//! | 饱和可恢复（高水位进入 / 低水位迟滞退出） | `a_saturated_queue_clears_only_below_the_low_water_mark` |
+//! | 瞬时突发后回落不得断开、不影响其他连接 | `a_transient_burst_that_drains_does_not_disconnect_the_connection` |
+//! | 持续饱和的判定必须成立、且不拖住其他连接 | `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment`、`a_continuously_saturated_connection_does_not_stall_its_peer` |
+//! | 持续饱和的连接仍会被断开 | `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` |
+//! | 饱和期间心跳不停（不得因心跳停摆走静默关闭） | `the_tick_keeps_the_heartbeat_while_the_connection_is_saturated`、`a_heartbeat_deferred_by_the_high_water_mark_is_not_fatal` |
+//! | 饱和恢复后重新读取快照与事件批次 | `a_recovered_connection_resumes_catalog_batches_and_event_delivery` |
 //! | 审计与日志边界 | `handshake_completes_and_enters_the_business_phase`、`an_invalid_proof_is_closed_with_4401_and_audited` |
 //! | 验收「schema/fixture 漂移」 | `fixtures_are_consumed_by_the_handshake_and_error_layers` |
 //!
-//! 三处**刻意的测试手法**（都在用例里就地说明）：
+//! 四处**刻意的测试手法**（都在用例里就地说明）：
 //!
 //! - `node-link-proof/v1` 的 `catalogRevision`：用例只从 `node.challenge` 的 body 取该字段（Access 该走的路），
 //!   不再带外取值——2026-09-26 的 v1 内合同修订把字段补进了握手消息（`NODE_LINK_PROTOCOL.md` §12.2 的修订记录，
@@ -47,7 +52,14 @@
 //!   `protocol_constants_are_not_configurable` 与静默边界断言锁定，机制由真实连接覆盖）；
 //! - 「出站队列持续非空 / 持续饱和」的压力：用独立 OS 线程当生产者（[`OutboundPressure`]），而不是
 //!   tokio 任务——只有与运行时**并行**的生产者才能保证 `select!` 的每一轮都有出站消息就绪，从而真的
-//!   复现「tick 被出站分支饿死」这一缺陷条件（理由见该结构的文档注释）。
+//!   复现「tick 被出站分支饿死」这一缺陷条件（理由见该结构的文档注释）；
+//! - 饱和的判定分两层锁定：**瞬时突发后回落**、**持续饱和 → 断开**、**持续饱和不拖住其他连接**与
+//!   **恢复后重新读取批次**都走真实连接 / 真实路由（分别在宽限之后断言连接仍在、宽限之后断言以
+//!   `close::NORMAL` 断开、宽限窗口内断言占用始终在低水位之上且对照组持续可用、以及断言两批 catalog
+//!   快照 + 完整 resource 快照 + 扇出事件都重新到达）；**饱和期心跳不被短路**与**「持续饱和」判据本身**
+//!   在句柄口径与两个纯函数（[`tick_action`]、[`heartbeat_outcome`]）上锁定——饱和时队列本就顶满，
+//!   `link.ping` 只能被推迟（一级处置），端到端观察不到「饱和期间真的收到 ping」；「队列持续非空（未
+//!   饱和）时心跳照发」由 `a_busy_outbound_queue_does_not_starve_the_heartbeat` 在真实连接上覆盖。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -55,19 +67,29 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use acp_core::model::{
-    AuditAction, AuditOutcome, EntityRef, NodeId, NodeKind, NodeState, PairingId, PairingPeer,
-    PairingState, PeerIdentity,
+    Actor, AgentId, AgentRef, AuditAction, AuditOutcome, CachePolicy, CommandRecord,
+    CommittedDelivery, CommittedEvent, EntityRef, EventId, EventPayload, EventType, ExportId,
+    ExportRecord, ExportTemplate, GlobalCursor, GrantSet, NodeId, NodeKind, NodeRecord, NodeState,
+    OriginCursor, OriginEpoch, OwnedSessionRef, PairingId, PairingPeer, PairingState, PeerIdentity,
+    PortError, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session, SessionId,
+    SessionSnapshot, SessionState, SessionSummary, TemplateId, Timestamp as TimestampText, Version,
+    ViewJson, WorkspaceAlias, WorkspaceAliasEntry,
 };
-use acp_core::ports::{AuditQuery, AuditStore as _, SessionStore};
+use acp_core::ports::{
+    AuditQuery, AuditStore as _, CommitOutcome, EventPublisher as _, HistoryPage, HistoryQuery,
+    NodeLinkSlice, OwnedCommit, OwnedEventRecord, PruneReport, ReadView, ReplayBatch, ReplayLimit,
+    RetentionPolicy, SessionQuery, SessionStore, StoreHealth,
+};
 use acp_core::use_cases::NodeLinkHandshakeView;
 use base64::Engine as _;
 use identity_auth::{ChallengeId, FeatureList, NodeLinkChallenge, NodeLinkProof, P1363Signature};
-use node_link_protocol::common::Uuid;
-use node_link_protocol::envelope::MessageType;
+use node_link_protocol::common::{DecimalString, Uuid};
+use node_link_protocol::envelope::{ConnectionFields, Envelope, MessageType};
 use node_link_protocol::structure::{MAX_ARRAY_ELEMENTS, MAX_NESTING_DEPTH, MAX_OBJECT_FIELDS};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::local_admin::envelope::{AdminOutcome, AdminRequest, AdminResponse, decode_request};
@@ -77,6 +99,7 @@ use crate::local_admin::test_support::{
     FakeIds, FixedStore, TEST_PUBLIC_ORIGIN, TEST_SERVER_EPOCH, TestWorld, test_nonce,
     test_public_key,
 };
+use crate::node_link::catalog::CatalogRoute;
 use crate::node_link::conn::handshake::SUPPORTED_FEATURES;
 use crate::node_link::conn::limits::{
     DEFAULT_CATALOG_SNAPSHOT_BATCH_SIZE, DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -84,12 +107,15 @@ use crate::node_link::conn::limits::{
     DEFAULT_MAX_PENDING_QUEUE_MESSAGES, DEFAULT_RESOURCE_SNAPSHOT_BATCH_SIZE, NodeLinkConfig,
 };
 use crate::node_link::conn::registry::Outbound;
-use crate::node_link::conn::session::HEARTBEAT_SILENCE_TIMEOUT;
+use crate::node_link::conn::session::{
+    HEARTBEAT_SILENCE_TIMEOUT, HeartbeatOutcome, TickAction, heartbeat_outcome, tick_action,
+};
 use crate::node_link::conn::{
     AUTH_ATTEMPTS_PER_MINUTE, ConnectionHandle, ConnectionRegistry, HANDSHAKE_TIMEOUT,
-    MAX_IN_FLIGHT_HANDSHAKES_PER_IP, NodeLinkConn, SendFault, SessionLimits, WS_PATH,
-    WS_SUBPROTOCOL, WsEndpoint, close,
+    MAX_IN_FLIGHT_HANDSHAKES_PER_IP, MessageRoute, NodeLinkConn, RouteOutcome, SendFault,
+    SessionLimits, WS_PATH, WS_SUBPROTOCOL, WsEndpoint, close,
 };
+use crate::node_link::resource::{NodeLinkPublisher, ResourceRoute};
 use crate::transport::net::{NetConfig, NetError, NetListener, Shutdown, ShutdownHandle};
 
 // ---------------------------------------------------------------------------------------------
@@ -130,16 +156,42 @@ struct Harness {
 impl Harness {
     /// 起一个已注册 `/node-link/v1` 的接入层（`127.0.0.1:0`，端口由内核分配）。
     async fn start(world: TestWorld, config: NodeLinkConfig) -> Self {
+        Self::start_with_windows(world, config, None).await
+    }
+
+    /// 同 [`Harness::start`]，但把会话看门狗的两个窗口换成本次用例的值。
+    ///
+    /// §2.5 的两个窗口是固定常量（90 秒静默 + 30 秒慢消费者宽限），真实等待在用例里不可接受；窗口取值
+    /// 本身由 `protocol_constants_are_not_configurable` 与静默边界断言锁定，本入口只让机制可被覆盖。
+    async fn start_with_test_windows(
+        world: TestWorld,
+        config: NodeLinkConfig,
+        silence: Duration,
+        slow_consumer: Duration,
+    ) -> Self {
+        Self::start_with_windows(world, config, Some((silence, slow_consumer))).await
+    }
+
+    async fn start_with_windows(
+        world: TestWorld,
+        config: NodeLinkConfig,
+        windows: Option<(Duration, Duration)>,
+    ) -> Self {
         // `catalogRevision` 取审计水位（`AuditStore::watermark`，design D4/G5 的口径）：把本机世界的水位
         // 固定为 [`CATALOG_REVISION`]，断言值因此可判定。
         world.audit.set_watermark(CATALOG_REVISION);
         let registry = ConnectionRegistry::new();
-        let conn = Arc::new(NodeLinkConn::new(
+        let conn = NodeLinkConn::new(
             world.core.clone(),
             world.authority.clone(),
             config,
             Arc::clone(&registry),
-        ));
+        );
+        let conn = match windows {
+            Some((silence, slow_consumer)) => conn.with_test_windows(silence, slow_consumer),
+            None => conn,
+        };
+        let conn = Arc::new(conn);
         let mut listener = NetListener::bind(NetConfig {
             listen: "127.0.0.1:0".to_owned(),
             ..NetConfig::default()
@@ -2120,51 +2172,23 @@ async fn heartbeat_round_trip_keeps_the_connection_alive() {
 /// [`protocol_constants_are_not_configurable`] 锁定，本用例证明的是「静默判定 → 4408」这条机制。
 #[tokio::test]
 async fn silence_beyond_the_window_is_closed_with_4408() {
-    let world = TestWorld::with_store(Arc::new(FixedStore::new(
-        TEST_SERVER_EPOCH,
-        STORE_HEAD_SEQUENCE,
-    )));
-    let registry = ConnectionRegistry::new();
-    let conn = Arc::new(
-        NodeLinkConn::new(
-            world.core.clone(),
-            world.authority.clone(),
-            NodeLinkConfig {
-                public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
-                // 心跳间隔取 schema 上限以免 ping 掩盖静默判定（静默窗口仍独立计时）。
-                heartbeat_interval_ms: 300_000,
-                ..NodeLinkConfig::default()
-            },
-            Arc::clone(&registry),
-        )
-        .with_test_windows(Duration::from_secs(2), Duration::from_secs(30)),
-    );
-    let mut listener = NetListener::bind(NetConfig {
-        listen: "127.0.0.1:0".to_owned(),
-        ..NetConfig::default()
-    })
-    .await
-    .expect("绑定 loopback listener");
-    listener
-        .register_ws(
-            WS_PATH,
-            WS_SUBPROTOCOL,
-            WsEndpoint::handler(Arc::clone(&conn)),
-        )
-        .expect("注册 Node Link 端点");
-    let addr = listener.local_addrs()[0];
-    let (shutdown, signal) = Shutdown::channel();
-    let join = tokio::spawn(async move { listener.serve(signal).await });
-
-    let harness = Harness {
-        world,
-        addr,
-        conn,
-        shutdown,
-        join,
-    };
+    let harness = Harness::start_with_test_windows(
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
+        NodeLinkConfig {
+            public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+            // 心跳间隔取 schema 上限以免 ping 掩盖静默判定（静默窗口仍独立计时）。
+            heartbeat_interval_ms: 300_000,
+            ..NodeLinkConfig::default()
+        },
+        Duration::from_secs(2),
+        Duration::from_secs(30),
+    )
+    .await;
     let pairing = harness.approved_pairing().await;
-    let mut client = Client::connect_with_timeout(addr, IO_TIMEOUT).await;
+    let mut client = Client::connect_with_timeout(harness.addr, IO_TIMEOUT).await;
     let _ = authenticated(&mut client, ACCESS_NODE, false).await;
     let started = Instant::now();
     assert_eq!(
@@ -2193,123 +2217,184 @@ async fn silence_beyond_the_window_is_closed_with_4408() {
     harness.stop().await;
 }
 
-/// 慢消费者（待发送队列持续高水位）被断开，同 Owner 上其他连接不受影响。
+/// 瞬时突发后回落：该连接**不得**被断开，同 Owner 上其他连接不受影响。
 ///
-/// 队列上限下调到 1 条 / 1 KiB，客户端的读被暂停；慢消费者宽限用 [`NodeLinkConn::with_test_windows`]
-/// 调成 1.5 秒（同 的理由：30 秒的真实等待在用例里不可接受）。
+/// 这是「饱和可恢复」在真实连接上的证据（另一侧见句柄级的
+/// `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment`）：队列被压到高水位（其中一条投递
+/// 真的被拒、饱和段真的建立过），客户端的读随后把队列排到低水位之下——该连接必须继续正常往来，而不是
+/// 因为「曾经饱和过」被会话 Tick 的慢消费者看门狗断开。
+///
+/// 饱和宽限调成 1.5 秒（30 秒的真实等待在用例里不可接受），断言发生在宽限之后：只要饱和状态没被清除，
+/// 同一个 Tick 分支早已把这条连接关掉。
 #[tokio::test]
-async fn a_saturated_connection_is_disconnected_without_affecting_its_peer() {
-    let world = TestWorld::with_store(Arc::new(FixedStore::new(
-        TEST_SERVER_EPOCH,
-        STORE_HEAD_SEQUENCE,
-    )));
-    let registry = ConnectionRegistry::new();
-    let conn = Arc::new(
-        NodeLinkConn::new(
-            world.core.clone(),
-            world.authority.clone(),
-            NodeLinkConfig {
-                public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
-                max_pending_queue_messages: 1,
-                max_pending_queue_bytes: 1_024,
-                heartbeat_interval_ms: 300_000,
-                ..NodeLinkConfig::default()
-            },
-            Arc::clone(&registry),
-        )
-        .with_test_windows(Duration::from_secs(90), Duration::from_millis(1_500)),
-    );
-    let mut listener = NetListener::bind(NetConfig {
-        listen: "127.0.0.1:0".to_owned(),
-        ..NetConfig::default()
-    })
-    .await
-    .expect("绑定 loopback listener");
-    listener
-        .register_ws(
-            WS_PATH,
-            WS_SUBPROTOCOL,
-            WsEndpoint::handler(Arc::clone(&conn)),
-        )
-        .expect("注册 Node Link 端点");
-    let addr = listener.local_addrs()[0];
-    let (shutdown, signal) = Shutdown::channel();
-    let join = tokio::spawn(async move { listener.serve(signal).await });
-    let harness = Harness {
-        world,
-        addr,
-        conn,
-        shutdown,
-        join,
-    };
+async fn a_transient_burst_that_drains_does_not_disconnect_the_connection() {
+    let harness = Harness::start_with_test_windows(
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
+        NodeLinkConfig {
+            public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+            max_pending_queue_messages: 4,
+            // 心跳取 schema 上限：本用例只看饱和判定，不让 ping 混进队列水位。
+            heartbeat_interval_ms: 300_000,
+            ..NodeLinkConfig::default()
+        },
+        Duration::from_secs(90),
+        Duration::from_millis(1_500),
+    )
+    .await;
     let _ = harness.approved_pairing().await;
 
-    // ① 快速连接：正常往来，作为「其他连接」的对照组。
-    let mut healthy = Client::connect(addr).await;
+    // ① 对照组（快连接）：全程正常往来，证明一侧的突发不影响别人（R81）。
+    let mut healthy = Client::connect(harness.addr).await;
     let _ = authenticated(&mut healthy, ACCESS_NODE, false).await;
 
-    // ② 慢连接：完成握手后停止读（socket 缓冲被填满 → 会话写阻塞 → 队列达高水位）。
-    let mut slow = Client::connect(addr).await;
-    let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
-
-    let slow_id = harness
-        .conn
-        .registry()
-        .handles()
-        .iter()
-        .map(|handle| handle.connection_id().as_str().to_owned())
-        .find(|id| id != healthy.connection_id.as_deref().expect("connectionId"))
-        .expect("慢连接必须已登记");
-    let slow_handle = harness
-        .conn
-        .registry()
-        .handles()
-        .into_iter()
-        .find(|handle| handle.connection_id().as_str() == slow_id)
-        .expect("句柄仍存在");
-
-    // 往慢连接投递大消息直到高水位（WP5 的「停读快照批次」在同一条判定上）。
-    let payload = "x".repeat(512);
-    let mut saturated = false;
-    for _ in 0..4_096 {
-        match slow_handle.send(MessageType::LinkError, &json!({"padding": payload})) {
-            Ok(()) => {}
-            Err(crate::node_link::conn::SendFault::HighWater) => {
-                saturated = true;
-                break;
-            }
-            Err(fault) => panic!("未预期的投递失败：{fault:?}"),
-        }
-    }
-    assert!(saturated, "持续投递必须让队列达到高水位");
-    assert!(slow_handle.saturated(), "高水位判定必须对投递方可见");
+    // ② 突发连接：握手后立刻把队列压到高水位（客户端的读照常进行，写不会阻塞会话）。
+    let mut burst = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut burst, ACCESS_NODE, false).await;
+    let burst_handle = other_handle(&harness, &healthy);
     assert_eq!(
-        slow_handle.pending().messages,
+        saturate(&burst_handle),
         1,
-        "队列里必须真的留下了一条未写出的消息（其余被高水位拦下）"
+        "突发必须真的顶到高水位，否则本用例什么都没证明"
+    );
+    assert!(burst_handle.saturated(), "高水位判定必须对投递方可见");
+    assert!(burst_handle.saturated_for().is_some(), "饱和段必须已经建立");
+
+    // ③ 客户端把突发读完 → 队列排到低水位之下 → 会话侧的 `consumed` 清除饱和状态。
+    for _ in 0..burst_handle.limits().max_pending_queue_messages() {
+        burst.expect_type("link.error").await;
+    }
+    assert_eventually(
+        || !burst_handle.saturated(),
+        "客户端读完突发后，队列必须排到低水位之下并清除饱和状态",
+    )
+    .await;
+    assert!(
+        burst_handle.saturated_for().is_none(),
+        "清除必须连饱和段计时一起归零"
     );
 
-    // ③ 对照组仍能正常往来（R81 的「不影响其他连接」）。
-    healthy.ping_round_trip(0x81).await;
-
-    // ④ 持续过慢 → 断开慢连接（宽限 1.5 秒）。
-    let deadline = Instant::now() + IO_TIMEOUT;
-    while harness.conn.registry().active() > 1 && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // ④ 宽限窗口过去之后：曾被饱和的连接必须还在，且两侧都能继续正常往来。
+    tokio::time::sleep(Duration::from_millis(2_000)).await;
     assert_eq!(
         harness.conn.registry().active(),
-        1,
-        "慢连接必须被断开，快连接必须留着"
+        2,
+        "瞬时突发后回落的连接不得被断开（曾饱和 ≠ 持续饱和）"
+    );
+    burst.ping_round_trip(0x91).await;
+    healthy.ping_round_trip(0x92).await;
+    harness.stop().await;
+}
+
+/// 持续饱和的连接**不得**拖住同 Owner 上的其他连接；该连接的饱和段必须连续累计到宽限之上。
+///
+/// **判据取规格实际用的那个量**：慢消费者看门狗的唯一判据是 `saturated_for() >= slow_consumer`
+/// （`session.rs` 的 `tick_action`）——「当前饱和段已持续的时长」。因此本用例断言「观测到一个
+/// 饱和段连续累计到宽限之上」，同时对照组一直在正常往来（R81 的另一半）。它**不断言**每一轮
+/// 占用都在低水位之上：会话的 `send_text` 只把数据交给内核（`transport/net/ws.rs` 没有写期限），
+/// 压力源补货与它赛跑，占用可能某一刻掉到低水位之下、判定断一次再重建；那不影响看门狗，因为
+/// 断开用的是「单段连续时长」。
+///
+/// **两版失败的修法（都记下来，避免再走）**：曾断言「占用必须始终在低水位之上」——那把「内核
+/// 吸收了多少」当成常量，是平台相关的量（CI 的 Linux runner 吸收得更多）。于是先把形状换成压力源
+/// 持续补货，又把上限抬到 schema 默认的 2,000 条（低水位 1,000）——两者都只是在降概率，没有消除
+/// 竞态，仍在该 runner 上失败。最终按规格改成只看「单段连续时长」。
+///
+/// 这里**不**断言「该连接被断开」：断开判定由「队列持续饱和、写路径没卡住」的
+/// `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 与句柄级的
+/// `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment` 覆盖，本用例只看「不拖住对端」。
+#[tokio::test]
+async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
+    const GRACE: Duration = Duration::from_millis(1_500);
+    let harness = Harness::start_with_test_windows(
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
+        NodeLinkConfig {
+            public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+            // 上限取 §2.5 的默认值 2,000 条 ⇒ 低水位 1,000 条。会话的 `send_text` 只把数据交给内核，
+            // 而 loopback 上内核缓冲能吸收的量远大于几十条：用小上限（旧形状用 64 ⇒ 低水位 32）时队列
+            // 会被排空到低水位之下，那是【平台相关的量】，Linux runner 上尤甚。低水位 1,000 让
+            // 「占用始终在低水位之上」与平台无关。
+            max_pending_queue_messages: 2_000,
+            // 心跳取 schema 上限：本用例只看饱和判定，不让 ping 混进队列水位。
+            heartbeat_interval_ms: 300_000,
+            ..NodeLinkConfig::default()
+        },
+        Duration::from_secs(90),
+        GRACE,
+    )
+    .await;
+    let _ = harness.approved_pairing().await;
+
+    // ① 对照组（快连接）。
+    let mut healthy = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut healthy, ACCESS_NODE, false).await;
+
+    // ② 慢连接：握手后一个字节都不再读；压力源持续投递，队列永不回落到低水位之下。
+    let mut slow = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
+    let slow_handle = other_handle(&harness, &healthy);
+    let pressure = OutboundPressure::spawn(Arc::clone(&slow_handle), None);
+    // 先等饱和真正建立（压力源是独立 OS 线程，起步时隙在用例之外，不能假定它已开跑）。
+    assert_eventually(
+        || slow_handle.saturated(),
+        "压力源挂上后队列必须达到高水位（否则本用例什么都没证明）",
+    )
+    .await;
+    assert!(
+        pressure.sent() >= 1,
+        "压力源必须真的投过消息，实际 {} 条",
+        pressure.sent()
+    );
+
+    // ③ 宽限窗口内观测饱和段。判据取**规格实际用的那个量**：慢消费者看门狗的唯一判据是
+    // `saturated_for() >= slow_consumer`（`session.rs` 的 `tick_action`），即「当前饱和段已持续的
+    // 时长」。因此这里断言「观测到一个饱和段连续累计到宽限之上」，而**不断言**每一轮占用都在
+    // 低水位之上——后者把「内核吸收了多少」当成常量，是平台相关的量（前两版修法在 Linux CI 上
+    // 反复失败正是如此）。会话的 `send_text` 只把数据交给内核：只要某一刻压力源没补上、占用掉到
+    // 低水位之下，判定就会断一次，随后重新建立；那不影响看门狗，因为断开用的是「单段连续时长」。
+    let deadline = Instant::now() + 2 * GRACE;
+    let mut longest: std::time::Duration = std::time::Duration::ZERO;
+    let mut observed_saturated = false;
+    loop {
+        if let Some(since) = slow_handle.saturated_for() {
+            observed_saturated = true;
+            longest = longest.max(since);
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        // 对照组在同一窗口内持续可用（§2.5：不丢消息、不阻塞其他连接）。
+        healthy.ping_round_trip(0xa1).await;
+    }
+    assert!(
+        pressure.sent() >= 10,
+        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
+        pressure.sent()
+    );
+    assert!(
+        observed_saturated,
+        "窗口内必须至少一次观测到饱和（否则本用例什么都没证明）"
+    );
+    assert!(
+        longest >= GRACE,
+        "必须观测到一个饱和段连续累计到宽限之上（实际 {:?}）——看门狗的判据正是这个量",
+        longest
     );
     assert_eq!(
-        harness.conn.registry().handles()[0]
-            .connection_id()
-            .as_str(),
-        healthy.connection_id.as_deref().expect("connectionId"),
-        "留下的必须是快连接"
+        harness.conn.registry().active(),
+        2,
+        "两条连接都必须还在（慢连接从未被判定为拖住对端）"
     );
-    healthy.ping_round_trip(0x82).await;
+    healthy.ping_round_trip(0xa2).await;
+
+    // 关掉慢连接的对端并停掉压力源：会话从写路径上退出，接入层随之收尾。
+    drop(pressure);
+    drop(slow);
     harness.stop().await;
 }
 
@@ -2366,7 +2451,7 @@ const CLOSE_WAIT_BUDGET: Duration = Duration::from_secs(8);
 /// 一条之后立刻被补上，`receiver.recv()` 因此在每个 `select!` 轮次上都就绪——这正是缺陷里 tick
 /// 被饿死的条件。若换成 tokio 任务，队列会出现「已被排空、生产者还没补上」的空窗，而空窗里
 /// `select!` 会把 tick 轮询到，用例就会漏报（这正是既有
-/// [`a_saturated_connection_is_disconnected_without_affecting_its_peer`] 在缺陷版本下仍然通过的原因：
+/// [`a_transient_burst_that_drains_does_not_disconnect_the_connection`] 在缺陷版本下也仍然通过的原因：
 /// 它只灌一次队列，之后队列被排空，tick 就有了被轮询的机会）。
 ///
 /// - `target = Some(n)`：只在队列少于 `n` 条时投递，**从不触发高水位**（`saturated_for()` 保持
@@ -2590,6 +2675,21 @@ async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog(
 // 连接句柄：序号与队列账本
 // ---------------------------------------------------------------------------------------------
 
+/// 除 `known` 之外那条已登记连接的句柄（用例总是同时持有「对照组」与「被测连接」）。
+fn other_handle(harness: &Harness, known: &Client) -> Arc<ConnectionHandle> {
+    let known_id = known
+        .connection_id
+        .as_deref()
+        .expect("认证后必须有 connectionId");
+    harness
+        .conn
+        .registry()
+        .handles()
+        .into_iter()
+        .find(|handle| handle.connection_id().as_str() != known_id)
+        .expect("另一条连接必须已登记")
+}
+
 /// 一条已入队消息信封里的 `connectionSequence`（对端看到的那个值）。
 fn outbound_sequence(outbound: &Outbound) -> String {
     let message: Value = serde_json::from_str(&outbound.text).expect("出站消息是 JSON");
@@ -2645,6 +2745,200 @@ fn a_rejected_delivery_does_not_consume_the_outbound_sequence() {
         [outbound_sequence(&first), outbound_sequence(&second)],
         ["1".to_owned(), "2".to_owned()],
         "被拒的投递不得消耗序号"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 饱和：高/低水位迟滞、「曾经饱和」与「持续饱和」的区分
+// ---------------------------------------------------------------------------------------------
+
+/// 一个只按条数上限判定的连接句柄（字节上限取 §2.5 默认值，本组用例不碰字节维度）。
+fn handle_with_queue(messages: u64) -> (Arc<ConnectionHandle>, mpsc::Receiver<Outbound>) {
+    ConnectionHandle::new(
+        Uuid::parse(&uuid_text()).expect("连接标识是规范 uuid"),
+        node(ACCESS_NODE),
+        "127.0.0.1".parse().expect("loopback 地址"),
+        SessionLimits::negotiate(&NodeLinkConfig {
+            max_pending_queue_messages: messages,
+            ..NodeLinkConfig::default()
+        }),
+        Arc::new(FakeIds::default()),
+    )
+}
+
+/// 把待发送队列压到高水位，返回被容量判定拒绝的次数（`1` = 饱和起点已建立）。
+///
+/// 投递方（WP5 的 catalog/resource 与这里的用例）都在被拒一次后停手；循环里没有 `await`，因此在
+/// 单线程运行时上用例与生产者不会交错，压满的过程是确定的。
+fn saturate(handle: &ConnectionHandle) -> u64 {
+    saturate_with(handle, 64)
+}
+
+/// 同 [`saturate`]，但由调用方给出每条 filler 的字节数（`a_continuously_saturated_connection_does_not_stall_its_peer`
+/// 需要足够大的消息把 socket 缓冲填满，队列才会真的停在低水位之上）。
+fn saturate_with(handle: &ConnectionHandle, payload_len: usize) -> u64 {
+    let payload = "x".repeat(payload_len);
+    let mut rejected = 0;
+    for _ in 0..handle.limits().max_pending_queue_messages() + 1 {
+        match handle.send(MessageType::LinkError, &json!({ "padding": payload })) {
+            Ok(()) => {}
+            Err(SendFault::HighWater) => {
+                rejected += 1;
+                break;
+            }
+            Err(fault) => panic!("未预期的投递失败：{fault:?}"),
+        }
+    }
+    rejected
+}
+
+/// 饱和是**可恢复的迟滞判定**：高水位进入、低水位（高水位的一半）退出。
+///
+/// 三处断言对应三件必须同时成立的事：① 低水位不得等于高水位（否则没有迟滞带，消费者在阈值附近抖动时
+/// 看门狗永远攒不满宽限）；② 占用仍在迟滞带内（≥ 低水位）时**不得**清除——这正是「持续」的判定面；
+/// ③ 占用真的降到低水位之下才清除，且计时一并归零（「曾经饱和过」不等于「此刻饱和」）。
+#[test]
+fn a_saturated_queue_clears_only_below_the_low_water_mark() {
+    // 低水位常量与其口径：§2.5 的默认上限（2,000 条 / 8 MiB）之半。
+    let (defaults, _defaults_outbound) = handle_with_queue(DEFAULT_MAX_PENDING_QUEUE_MESSAGES);
+    assert_eq!(
+        defaults.low_water_messages(),
+        DEFAULT_MAX_PENDING_QUEUE_MESSAGES / 2,
+        "条数低水位取高水位的一半"
+    );
+    assert_eq!(
+        defaults.low_water_bytes(),
+        DEFAULT_MAX_PENDING_QUEUE_BYTES / 2,
+        "字节低水位取高水位的一半"
+    );
+    assert!(
+        defaults.low_water_messages() < DEFAULT_MAX_PENDING_QUEUE_MESSAGES
+            && defaults.low_water_bytes() < DEFAULT_MAX_PENDING_QUEUE_BYTES,
+        "低水位不得等于高水位：否则迟滞带为空"
+    );
+
+    let (handle, mut receiver) = handle_with_queue(4);
+    assert_eq!(handle.low_water_messages(), 2, "4 条上限 → 低水位 2 条");
+
+    // ① 压到高水位：4 条入队、第 5 条被拒（饱和起点建立）。
+    assert_eq!(saturate(&handle), 1, "持续投递必须让队列顶到上限");
+    assert!(handle.saturated(), "高水位判定必须对投递方可见");
+    assert!(handle.saturated_for().is_some(), "被拒一次即建立饱和段计时");
+
+    // ② 消费一条（占用 3，仍在低水位 2 之上）→ 仍然饱和、计时连续累计。
+    let first = receiver.try_recv().expect("第一条已入队");
+    handle.consumed(&first);
+    assert_eq!(handle.pending().messages, 3);
+    assert!(handle.saturated(), "迟滞带内不得复位：低水位不得等于高水位");
+    assert!(
+        handle.saturated_for().is_some(),
+        "迟滞带内饱和段必须连续累计"
+    );
+
+    // ③ 再消费两条（占用 1 < 低水位 2）→ 清除：曾饱和的连接恢复为「不饱和」。
+    for _ in 0..2 {
+        let outbound = receiver.try_recv().expect("已入队");
+        handle.consumed(&outbound);
+    }
+    assert_eq!(handle.pending().messages, 1);
+    assert!(!handle.saturated(), "降到低水位以下必须清除饱和状态");
+    assert!(handle.saturated_for().is_none(), "清除必须连计时一起归零");
+
+    // ④ 恢复后容量判定重新可用（读入门据此重新开始读取批次）。
+    handle
+        .send(MessageType::LinkError, &json!({ "padding": "y" }))
+        .expect("恢复后必须能继续入队");
+}
+
+/// 「持续饱和」必须与「曾经饱和」区分开：只要消费者**从未**把队列排到低水位之下，饱和段就连续累计，
+/// 看门狗的判据（`saturated_for >= SLOW_CONSUMER_GRACE`）成立、[`tick_action`] 判为断开。
+///
+/// 这是 [`a_saturated_queue_clears_only_below_the_low_water_mark`] 的另一侧：那里是瞬时突发后回落（不得
+/// 断开），这里是消费者一直在动、却始终没跟上（宽限后必须断开）。用例按 `send`/`consumed` 的真实口径
+/// 驱动句柄——会话 Tick 消费的正是这两个入口产生的结论——因此在毫秒级真实时间里覆盖 30 秒宽限所依赖
+/// 的状态形状。
+#[test]
+fn a_slow_consumer_that_never_recovers_keeps_its_saturation_segment() {
+    const GRACE: Duration = Duration::from_millis(250);
+    let (handle, mut receiver) = handle_with_queue(4);
+    assert_eq!(saturate(&handle), 1, "持续投递必须让队列顶到上限");
+
+    let started = Instant::now();
+    while started.elapsed() < 3 * GRACE {
+        // 消费者在动（每取走一条就有人立刻补上一条），占用因此始终停在低水位 2 之上。
+        let outbound = receiver.try_recv().expect("生产者必须已经把队列补满");
+        handle.consumed(&outbound);
+        assert!(
+            handle.saturated(),
+            "占用从未降到低水位之下：饱和段不得被清除"
+        );
+        handle
+            .send(MessageType::LinkError, &json!({ "padding": "x" }))
+            .expect("腾出的位置必须能立刻补上");
+    }
+    let saturated = handle.saturated_for().expect("饱和段必须连续存在");
+    assert!(
+        saturated >= GRACE,
+        "持续饱和必须让饱和段累积到宽限之上（实际 {saturated:?}）"
+    );
+    assert_eq!(
+        tick_action(handle.saturated_for(), GRACE, true),
+        TickAction::Disconnect,
+        "持续饱和必须断开，且断开优先于心跳"
+    );
+}
+
+/// Tick 的动作判定：饱和**不得**短路心跳（§2.5：饱和不是静默）。
+///
+/// 第一行是回退成 `if saturated { … } else if due { … }` 时变红的那一条：饱和段尚未过宽限又到了心跳
+/// 周期，必须仍然发 `link.ping`。其余三行锁定边界——过宽限时断开优先于心跳、未饱和时心跳照旧、未到期
+/// 什么都不做。会话 Tick 只做分派，判定本身在这里被逐条锁定。
+#[test]
+fn the_tick_keeps_the_heartbeat_while_the_connection_is_saturated() {
+    const GRACE: Duration = Duration::from_millis(1_500);
+    assert_eq!(
+        tick_action(Some(Duration::from_millis(200)), GRACE, true),
+        TickAction::Ping,
+        "饱和期间心跳必须照发（饱和不是静默）"
+    );
+    assert_eq!(
+        tick_action(Some(GRACE), GRACE, true),
+        TickAction::Disconnect,
+        "饱和段达到宽限即断开，且优先于心跳"
+    );
+    assert_eq!(
+        tick_action(None, GRACE, true),
+        TickAction::Ping,
+        "不饱和时心跳照旧"
+    );
+    assert_eq!(
+        tick_action(Some(Duration::from_millis(200)), GRACE, false),
+        TickAction::Idle,
+        "未到心跳周期且未过宽限时什么都不做"
+    );
+}
+
+/// 心跳投递结果的分类：高水位是**一级处置（推迟）**，不得当致命错误——那是看门狗的二级处置。
+///
+/// 这一行是「把推迟改回致命」时变红的那一条：把 [`SendFault::HighWater`] 映射成
+/// [`HeartbeatOutcome::Ended`] 会让队列顶满的那一次心跳直接关掉连接，绕过 30 秒宽限。
+#[test]
+fn a_heartbeat_deferred_by_the_high_water_mark_is_not_fatal() {
+    assert_eq!(heartbeat_outcome(Ok(())), HeartbeatOutcome::Queued);
+    assert_eq!(
+        heartbeat_outcome(Err(SendFault::HighWater)),
+        HeartbeatOutcome::Deferred,
+        "高水位只推迟这一次心跳，生死由慢消费者看门狗按宽限判定"
+    );
+    assert_eq!(
+        heartbeat_outcome(Err(SendFault::Closed)),
+        HeartbeatOutcome::Ended,
+        "连接已结束不是背压"
+    );
+    assert_eq!(
+        heartbeat_outcome(Err(SendFault::Encoding)),
+        HeartbeatOutcome::Ended,
+        "装不出信封是本机缺陷，不是背压"
     );
 }
 
@@ -2864,4 +3158,492 @@ fn describe(inbound: &crate::node_link::conn::wire::Inbound) -> String {
             format!("致命拒绝（{}）", code.as_str())
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// 受害面：饱和恢复后读入门必须重新开始读取批次
+// ---------------------------------------------------------------------------------------------
+
+/// 本组用例的会话 / Export / 事件素材（与 `resource/tests.rs`、`catalog.rs` 的路由夹具同形：固定 id 与
+/// 固定时间戳让断言可判定）。
+const RESUME_SESSION: &str = "3ae1c07c-9242-46e9-a9d2-4ec58c130f4a";
+const RESUME_EXPORT_A: &str = "11111111-1111-4111-8111-111111111111";
+const RESUME_EXPORT_B: &str = "22222222-2222-4222-8222-222222222222";
+const RESUME_ORIGIN_EPOCH: &str = "018f6f89-8a23-7a10-a0d3-f92e6a31d952";
+const RESUME_EVENT: &str = "4ae1c07c-9242-46e9-a9d2-4ec58c130f4b";
+const RESUME_CONNECTION: &str = "5ae1c07c-9242-46e9-a9d2-4ec58c130f4c";
+
+fn resume_timestamp() -> TimestampText {
+    TimestampText::new("2026-09-18T09:00:00.000Z").expect("固定时间戳")
+}
+
+fn resume_agent() -> AgentRef {
+    AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex").expect("agent ref")
+}
+
+fn resume_session_id() -> SessionId {
+    SessionId::new(RESUME_SESSION).expect("session id")
+}
+
+/// 会话聚合：归属校验读 `session.agent()`，因此 agent 必须与 Export 的清单一致。
+fn resume_session() -> Session {
+    Session::try_new(
+        resume_session_id(),
+        OwnedSessionRef::new(resume_session_id()),
+        Some("Session".to_owned()),
+        resume_agent(),
+        SessionState::Idle,
+        ResourceOrigin::Local,
+        None,
+        Version::new(3),
+        resume_timestamp(),
+        resume_timestamp(),
+        None,
+    )
+    .expect("会话聚合")
+}
+
+fn resume_summary() -> SessionSummary {
+    SessionSummary::try_new(
+        resume_session_id(),
+        Some("Session".to_owned()),
+        resume_agent(),
+        SessionState::Idle,
+        ResourceOrigin::Local,
+        None,
+        Version::new(3),
+        resume_timestamp(),
+        resume_timestamp(),
+        None,
+    )
+    .expect("会话摘要")
+}
+
+fn resume_origin_head(sequence: u64) -> OriginCursor {
+    OriginCursor::new(
+        OriginEpoch::new(RESUME_ORIGIN_EPOCH).expect("epoch"),
+        Sequence::new(sequence).expect("sequence"),
+    )
+}
+
+/// 一条已持久化的会话事件（`payload` 正文经会话绑定的读入口取回）。
+fn resume_event() -> CommittedEvent {
+    CommittedEvent {
+        id: EventId::new(RESUME_EVENT).expect("event id"),
+        event_type: EventType::new("agent.message").expect("event type"),
+        session: Some(resume_session_id()),
+        session_sequence: Some(Sequence::new(1).expect("sequence")),
+        global_sequence: Sequence::new(1).expect("sequence"),
+        origin_epoch: Some(OriginEpoch::new(RESUME_ORIGIN_EPOCH).expect("epoch")),
+        origin_sequence: Some(Sequence::new(1).expect("sequence")),
+        created_at: resume_timestamp(),
+    }
+}
+
+/// 一条已配对的 Access 信任行：两个 Export 都在清单里（不在清单里的 Export 一概不授予）。
+fn resume_node() -> NodeRecord {
+    NodeRecord::try_new(
+        node(ACCESS_NODE),
+        "Office Access",
+        NodeKind::Access,
+        test_public_key().fingerprint(),
+        GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
+        vec![
+            ExportId::new(RESUME_EXPORT_A).expect("export id"),
+            ExportId::new(RESUME_EXPORT_B).expect("export id"),
+        ],
+        NodeState::Paired,
+        None,
+        resume_timestamp(),
+        None,
+        None,
+    )
+    .expect("信任行")
+}
+
+/// 一条可见 Export：零参数 template（带参数的投影整体失败关闭）、agent 与会话一致。
+fn resume_export(id: &str) -> ExportRecord {
+    ExportRecord::try_new(
+        ExportId::new(id).expect("export id"),
+        "Project Export",
+        vec![AgentId::new("codex").expect("agent id")],
+        vec![
+            WorkspaceAliasEntry::try_new(WorkspaceAlias::new("project").expect("alias"), "Project")
+                .expect("alias entry"),
+        ],
+        WorkspaceAlias::new("project").expect("alias"),
+        vec![
+            ExportTemplate::try_new(
+                TemplateId::new("template-1").expect("template id"),
+                "Template",
+                WorkspaceAlias::new("project").expect("alias"),
+                Vec::new(),
+            )
+            .expect("template"),
+        ],
+        TemplateId::new("template-1").expect("template id"),
+        GrantSet::try_from_iter(["grant.observe"]).expect("scopes"),
+        CachePolicy::NoContentCache,
+        resume_timestamp(),
+        None,
+    )
+    .expect("Export 记录")
+}
+
+/// Node Link 会话读面的最小存储替身：只实现快照/扇出路径触及的方法（其余一律 `unreachable!`，
+/// 替身不比真实存储宽容）。
+#[derive(Clone)]
+struct ResumeStore {
+    head: GlobalCursor,
+    slice: NodeLinkSlice,
+}
+
+impl ResumeStore {
+    /// 一个会话 + 一条已持久化事件（未决交互为空：快照因此只有一个 `session_meta` chunk）。
+    fn new() -> Self {
+        Self {
+            head: GlobalCursor::new(
+                ServerEpoch::new(TEST_SERVER_EPOCH).expect("server epoch"),
+                Sequence::new(1).expect("sequence"),
+            ),
+            slice: NodeLinkSlice {
+                summary: resume_summary(),
+                head: resume_origin_head(1),
+                pending_interactions: Vec::new(),
+                events: vec![OwnedEventRecord {
+                    event: resume_event(),
+                    payload: EventPayload::new(
+                        ViewJson::new(r#"{"kind":"agent.message"}"#).expect("view"),
+                        None,
+                    ),
+                }],
+            },
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionStore for ResumeStore {
+    async fn commit(&self, _commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
+        unreachable!("受害面用例不写存储")
+    }
+
+    async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError> {
+        if session != &resume_session_id() {
+            return Ok(None);
+        }
+        Ok(Some(SessionSnapshot {
+            session: resume_session(),
+            origin_epoch: OriginEpoch::new(RESUME_ORIGIN_EPOCH).expect("epoch"),
+            head: self.head.clone(),
+        }))
+    }
+
+    async fn list(&self, _query: SessionQuery) -> Result<Vec<SessionSummary>, PortError> {
+        unreachable!("受害面用例不列举会话")
+    }
+
+    async fn head(&self) -> Result<GlobalCursor, PortError> {
+        Ok(self.head.clone())
+    }
+
+    async fn read_view(&self) -> Result<Box<dyn ReadView>, PortError> {
+        Ok(Box::new(self.clone()))
+    }
+
+    async fn find_request(
+        &self,
+        _request: &RequestId,
+        _actor: &Actor,
+    ) -> Result<Option<CommandRecord>, PortError> {
+        unreachable!("受害面用例不查命令")
+    }
+
+    async fn load_recovery(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<acp_core::model::SessionRecoveryRecord>, PortError> {
+        unreachable!("受害面用例不读恢复数据")
+    }
+
+    async fn unsettled_commands(
+        &self,
+        _limit: ReplayLimit,
+    ) -> Result<Vec<CommandRecord>, PortError> {
+        unreachable!("受害面用例不查命令")
+    }
+
+    async fn retention_window(
+        &self,
+        _session: &SessionId,
+    ) -> Result<Option<(Sequence, Sequence)>, PortError> {
+        unreachable!("受害面用例不查保留窗口")
+    }
+
+    async fn prune(
+        &self,
+        _policy: RetentionPolicy,
+        _at: TimestampText,
+    ) -> Result<PruneReport, PortError> {
+        unreachable!("受害面用例不清扫")
+    }
+
+    async fn health(&self) -> Result<StoreHealth, PortError> {
+        unreachable!("受害面用例不查健康")
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadView for ResumeStore {
+    async fn head(&self) -> Result<GlobalCursor, PortError> {
+        Ok(self.head.clone())
+    }
+
+    async fn replay(
+        &self,
+        _after: Option<GlobalCursor>,
+        _limit: ReplayLimit,
+    ) -> Result<ReplayBatch, PortError> {
+        unreachable!("受害面用例不读 Sync 重放面")
+    }
+
+    /// Sync 事件读面不在这个替身的范围内：受害面用例只驱动 Node Link 自己的路径。
+    ///
+    /// `sync_replay` 由 `sync-server-connection` 的 1.6 新增进 `ReadView`；本替身走同款机械桩，
+    /// 与 `node_link/command/tests.rs` 的同名实现一致（真被调用即 `unreachable!`，让缺口显式而非静默）。
+    async fn sync_replay(
+        &self,
+        _after: Option<GlobalCursor>,
+        _limit: ReplayLimit,
+    ) -> Result<acp_core::ports::SyncReplaySlice, PortError> {
+        unreachable!("受害面用例不读 Sync 事件重放面")
+    }
+
+    async fn read_session(&self, _query: HistoryQuery) -> Result<HistoryPage, PortError> {
+        unreachable!("受害面用例不读历史面")
+    }
+
+    async fn event_payload(&self, _event: &EventId) -> Result<Option<EventPayload>, PortError> {
+        unreachable!("受害面用例只经会话绑定的读入口取正文")
+    }
+
+    /// 只按 `origin_sequence > after` 取行；`after` 的 epoch 解释权在用例层（与真实存储同口径）。
+    async fn node_link_slice(
+        &self,
+        session: &SessionId,
+        after: Option<OriginCursor>,
+        _limit: ReplayLimit,
+    ) -> Result<NodeLinkSlice, PortError> {
+        if session != &resume_session_id() {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        }
+        let mut slice = self.slice.clone();
+        if let Some(after) = after {
+            slice
+                .events
+                .retain(|record| record.event.origin_sequence > Some(after.origin_sequence));
+        }
+        Ok(slice)
+    }
+
+    async fn session_event_payload(
+        &self,
+        session: &SessionId,
+        event: &EventId,
+    ) -> Result<Option<EventPayload>, PortError> {
+        if session != &resume_session_id() {
+            return Err(PortError::NotFound(EntityRef::Session(session.clone())));
+        }
+        Ok(self
+            .slice
+            .events
+            .iter()
+            .find(|record| &record.event.id == event)
+            .map(|record| record.payload.clone()))
+    }
+}
+
+/// 认证后消息的信封（连接字段按 §2.2 必需；序号在本组用例里不参与判定）。
+fn resume_envelope(handle: &ConnectionHandle, message_type: MessageType, body: Value) -> Envelope {
+    Envelope::new(
+        message_type,
+        Uuid::parse(&uuid_text()).expect("message id"),
+        Some(ConnectionFields {
+            connection_id: handle.connection_id().clone(),
+            connection_sequence: DecimalString::parse("1").expect("sequence"),
+        }),
+        serde_json::value::RawValue::from_string(body.to_string()).expect("body"),
+    )
+    .expect("信封")
+}
+
+/// 取走出站队列里已有的消息并记账（模拟会话写出），返回解析后的帧。
+fn deliver_pending(
+    handle: &ConnectionHandle,
+    outbound: &mut mpsc::Receiver<Outbound>,
+) -> Vec<Value> {
+    let mut frames = Vec::new();
+    while let Ok(outbound) = outbound.try_recv() {
+        handle.consumed(&outbound);
+        frames.push(serde_json::from_str(&outbound.text).expect("帧是合法 JSON"));
+    }
+    frames
+}
+
+/// 出站队列里各帧的 `type`（顺序即投递顺序）。
+fn frame_types(frames: &[Value]) -> Vec<&str> {
+    frames
+        .iter()
+        .map(|frame| frame["type"].as_str().expect("帧必须有 type"))
+        .collect()
+}
+
+/// 饱和 → 恢复后，读入门必须重新开始读取批次（`catalog.rs` 的批间门 + `resource.rs` 的 chunk 门）。
+///
+/// 两个门都以 `handle.saturated()` 判定：饱和状态一旦粘滞（清除点不可达），恢复后的每一次
+/// `catalog.subscribe`/`resource.subscribe` 都会在批量中途、第一个 chunk 之前被拦下——连接还在、订阅也
+/// 成功，但快照批次与事件再也不会到达。
+///
+/// 断言的是**全量恢复**：协商批次=1、可见 2 条 → 目录快照必须到两帧；资源快照必须走完
+/// `snapshot_begin → chunk → snapshot_end`；扇出的 `resource.event` 也必须送达。把任一受害门改成
+/// 「永不再读」时，前半只剩一条批次、后半停在 `snapshot_begin`。
+#[tokio::test]
+async fn a_recovered_connection_resumes_catalog_batches_and_event_delivery() {
+    let world = TestWorld::with_store(Arc::new(ResumeStore::new()));
+    world.trust.seed_node(resume_node());
+    world.exports.seed_export(resume_export(RESUME_EXPORT_A));
+    world.exports.seed_export(resume_export(RESUME_EXPORT_B));
+
+    let registry = ConnectionRegistry::new();
+    let (handle, mut outbound) = ConnectionHandle::new(
+        Uuid::parse(RESUME_CONNECTION).expect("连接标识是规范 uuid"),
+        node(ACCESS_NODE),
+        "127.0.0.1".parse().expect("loopback 地址"),
+        SessionLimits::negotiate(&NodeLinkConfig {
+            // 协商批次=1、可见 2 条：目录快照因此必须切两批，批间门才有机会被命中。
+            catalog_snapshot_batch_size: 1,
+            resource_snapshot_batch_size: 1,
+            max_pending_queue_messages: 4,
+            ..NodeLinkConfig::default()
+        }),
+        Arc::new(FakeIds::default()),
+    );
+    registry.register(Arc::clone(&handle));
+    let catalog_route = CatalogRoute::new(Arc::clone(&world.core));
+    let resource_route = Arc::new(ResourceRoute::new(
+        Arc::clone(&world.core),
+        Arc::clone(&registry),
+        world.authority.local_node().clone(),
+    ));
+
+    // ① 顶到高水位（第 5 条被拒）→ 这条连接真的进入过饱和。
+    assert_eq!(
+        saturate(&handle),
+        1,
+        "必须先真的进入过饱和，否则本用例没有受害面"
+    );
+    assert!(handle.saturated());
+    assert!(handle.saturated_for().is_some());
+
+    // ② 按会话侧的口径排空（`consumed` 是唯一的清除点）→ 恢复。
+    let drained = deliver_pending(&handle, &mut outbound);
+    assert_eq!(drained.len(), 4, "排空的正是刚才入队的那几条");
+    assert_eq!(handle.pending().messages, 0);
+    assert!(!handle.saturated(), "排到低水位以下必须清除饱和状态");
+
+    // ③ 目录快照：两批都必须到达（批间门在 index > 0 的那一批上）。
+    let subscribe = resume_envelope(
+        &handle,
+        MessageType::CatalogSubscribe,
+        json!({ "knownRevision": null }),
+    );
+    assert_eq!(
+        catalog_route.route(&handle, &subscribe).await,
+        RouteOutcome::Claimed
+    );
+    let frames = deliver_pending(&handle, &mut outbound);
+    assert_eq!(
+        frame_types(&frames),
+        ["catalog.snapshot", "catalog.snapshot"],
+        "恢复后必须重新发出**全部**快照批次（两条可见 Export、协商批次 1）"
+    );
+    let export_ids: Vec<&str> = frames
+        .iter()
+        .map(|frame| {
+            frame["body"]["exports"][0]["exportId"]
+                .as_str()
+                .expect("exportId")
+        })
+        .collect();
+    assert_eq!(
+        export_ids,
+        [RESUME_EXPORT_A, RESUME_EXPORT_B],
+        "批次顺序按 exportId 升序，且不得丢批"
+    );
+
+    // ④ 资源快照：attach → subscribe(cursor = null) 必须走完 begin → chunk → end。
+    let attach = resume_envelope(
+        &handle,
+        MessageType::ResourceAttach,
+        json!({
+            "remoteSessionRef": {
+                "ownerNodeId": world.authority.local_node().as_str(),
+                "exportId": RESUME_EXPORT_A,
+                "sessionId": RESUME_SESSION,
+            }
+        }),
+    );
+    assert_eq!(
+        resource_route.route(&handle, &attach).await,
+        RouteOutcome::Claimed
+    );
+    let attached = deliver_pending(&handle, &mut outbound);
+    assert_eq!(
+        frame_types(&attached),
+        ["resource.attached"],
+        "attach 必须回一帧"
+    );
+    let subscribe = resume_envelope(
+        &handle,
+        MessageType::ResourceSubscribe,
+        json!({
+            "attachmentId": attached[0]["body"]["attachmentId"],
+            "attachmentGeneration": attached[0]["body"]["attachmentGeneration"],
+            "cursor": null,
+        }),
+    );
+    assert_eq!(
+        resource_route.route(&handle, &subscribe).await,
+        RouteOutcome::Claimed
+    );
+    let snapshot = deliver_pending(&handle, &mut outbound);
+    assert_eq!(
+        frame_types(&snapshot),
+        [
+            "resource.snapshot_begin",
+            "resource.snapshot_chunk",
+            "resource.snapshot_end"
+        ],
+        "恢复后快照 chunk 必须重新开始发出（chunk 门在第一个 chunk 之前）"
+    );
+
+    // ⑤ 扇出：已持久化事件必须投给这条订阅过的连接。
+    let (publisher, queue) = NodeLinkPublisher::channel();
+    let (shutdown_handle, shutdown) = Shutdown::channel();
+    let dispatch = tokio::spawn(Arc::clone(&resource_route).dispatch(queue, shutdown));
+    publisher.publish(CommittedDelivery::Owned(resume_event()));
+    let frame = tokio::time::timeout(IO_TIMEOUT, outbound.recv())
+        .await
+        .expect("扇出必须送达")
+        .expect("队列未关闭");
+    let frame: Value = serde_json::from_str(&frame.text).expect("帧是合法 JSON");
+    assert_eq!(frame["type"], "resource.event");
+    assert_eq!(frame["body"]["originEventId"], RESUME_EVENT);
+
+    // 关闭序列：分发循环随 Shutdown 结束（不留 detached task）。
+    shutdown_handle.trigger();
+    tokio::time::timeout(IO_TIMEOUT, dispatch)
+        .await
+        .expect("分发循环必须随关闭信号结束")
+        .expect("分发任务不 panic");
 }

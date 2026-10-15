@@ -8,6 +8,11 @@
 //! - **每连接待发送队列有界**：条数上限由 `tokio::sync::mpsc` 的容量给出，字节上限由 [`ConnectionHandle`]
 //!   自行计数（`maxPendingQueueBytes`/`maxPendingQueueMessages` 双上限，§2.5）。达到上限即
 //!   [`SendFault::HighWater`]，调用方（WP5）据此停读新的快照批次；本模块不丢消息、不阻塞其他连接；
+//! - **饱和是迟滞判定、不是粘性标志**：进入用**高水位**（占用达上限，或刚被容量判定拒过一次），退出用
+//!   **低水位**（[`RECOVERY_WATERMARK_DIVISOR`]：高水位的一半，见 [`ConnectionHandle::low_water_messages`]/
+//!   [`ConnectionHandle::low_water_bytes`]）；两者都在 [`ConnectionHandle::consumed`] 的同一临界区里判定，
+//!   因此一条只是暂时落后的连接在队列被排空后**必然**恢复为「不饱和」——它不会仅因「曾经饱和过」而被
+//!   会话 Tick 的慢消费者看门狗断开，也不会让读入门永久停读批次（`catalog.rs`/`resource.rs`）；
 //! - **序号只在投递确定时消耗**：出站 `connectionSequence` 的分配、容量准入与入队在同一临界区（
 //!   [`OutboundState`]）：被高水位拒绝的投递不消耗序号（§2.2 要求序号严格 +1，缺号只能被对端判为
 //!   `sequence_invalid`，而协议没有重同步规则）；
@@ -244,7 +249,13 @@ impl ConnectionHandle {
     /// 是否处于高水位（字节或条数达上限，或刚刚被拒过一条消息）。WP5 在生成快照批次前检查它。
     ///
     /// 「刚被拒过」也计入：队里可能已经没有消息（那条消息根本没入队），但高水位状态仍然成立，
-    /// 调用方应先停下来而不是继续尝试。一旦 `consumed` 观察到队列回到上限之下，该状态自动清除。
+    /// 调用方应先停下来而不是继续尝试。清除要等 [`ConnectionHandle::consumed`] 观察到占用回到**低水位线**
+    /// （[`ConnectionHandle::low_water_messages`]/[`ConnectionHandle::low_water_bytes`]，高水位的一半）
+    /// 之下——迟滞（hysteresis）让投递方不必在阈值上下反复启停。
+    ///
+    /// 因此本判定是**可恢复**的：饱和只描述「此刻（或刚刚）队列顶到了上限」，不描述「这条连接曾经慢
+    /// 过」。把它当成后者的粘性标志会让一条已经追上的连接被慢消费者看门狗（会话 Tick）判死，也会让
+    /// `catalog.rs`/`resource.rs` 的读入门永久停读批次。
     pub fn saturated(&self) -> bool {
         let rejected_recently = lock(&self.saturated_since).is_some();
         if rejected_recently {
@@ -255,7 +266,33 @@ impl ConnectionHandle {
             || pending.messages as usize >= self.limits.max_pending_queue_messages()
     }
 
+    /// 条数低水位（迟滞的退出阈值）：占用**低于**它才算真的脱离饱和。
+    ///
+    /// 取高水位的一半（[`RECOVERY_WATERMARK_DIVISOR`]）后向下取整，再抬到 1：`maxPendingQueueMessages`
+    /// 的 wire 下限是 1 条，容量只有 1 条时唯一的可满足退出条件就是「排空」，抬到 1 让这个边界仍可恢复
+    /// （进入判据是 `≥ 高水位`、退出判据是 `< 低水位`，两条的方向仍然把 0 条与 1 条区分开）。
+    pub(crate) fn low_water_messages(&self) -> u64 {
+        (self.limits.max_pending_queue_messages() as u64 / RECOVERY_WATERMARK_DIVISOR).max(1)
+    }
+
+    /// 字节低水位（与 [`ConnectionHandle::low_water_messages`] 同口径；字节上限的 wire 下限是 1 KiB，
+    /// 取一半即可）。
+    pub(crate) fn low_water_bytes(&self) -> u64 {
+        self.limits.max_pending_queue_bytes() / RECOVERY_WATERMARK_DIVISOR
+    }
+
     /// 进入过饱和状态的持续时长（没有进入过时 `None`）；会话的慢消费者看门狗据此断开。
+    ///
+    /// **口径**：计时属于**当前这一饱和段**——起点是首次被 [`ConnectionHandle::send`] 的容量判定拒绝的
+    /// 时刻（[`ConnectionHandle::mark_saturated`]，即占用真的顶到上限的那一刻），终点只在占用回到低水位
+    /// 线之下时到来（[`ConnectionHandle::consumed`]）。于是：
+    ///
+    /// - 在高低水位之间反复抖动的消费者**不会**把计时清零：它从未真的脱离饱和，计时连续累计到宽限
+    ///   （`SLOW_CONSUMER_GRACE`）即断开——这正是 §2.5 的「**持续**过慢则断开」；
+    /// - 瞬时突发会真的把队列排到低水位之下，计时随之清除，因此一次突发不会被判死。
+    ///
+    /// 只按「占用是否仍 ≥ 高水位」清除会让抖动永远攒不满宽限（永不断开）；只累计不清除又会把长期健康、
+    /// 偶尔突发的连接算成慢消费者。两道阈值（高水位进入、低水位退出）是这两端的折中。
     pub(crate) fn saturated_for(&self) -> Option<std::time::Duration> {
         (*lock(&self.saturated_since)).map(|since| since.elapsed())
     }
@@ -288,18 +325,30 @@ impl ConnectionHandle {
         ))
     }
 
-    /// 队列消费记账（会话写出后调用）。
+    /// 队列消费记账（会话写出后调用）：占用递减，并可能清除饱和状态。
+    ///
+    /// 清除判据不只是「占用回到上限之下」，而是「占用回到**低水位线**之下」（[`ConnectionHandle::low_water_messages`]/
+    /// [`ConnectionHandle::low_water_bytes`]）。两个阈值分开口径的理由见
+    /// [`ConnectionHandle::saturated_for`]：只在高水位附近反复起伏的消费者不会掉到低水位之下，饱和计时
+    /// 因此连续累计；只有真的把队列排出可观比例才算脱离饱和。
+    ///
+    /// 「先在同一临界区内算出结论、再清除」是**必须**的：清除判据读的正是待清的那个标志与同一份占用账本，
+    /// 出锁后再调 [`ConnectionHandle::saturated`] 会读到「标志仍置位」而永远清除不掉（清除点不可达 → 判定
+    /// 退化成「曾经饱和过」）。
     pub(crate) fn consumed(&self, outbound: &Outbound) {
-        {
+        let recovered = {
             let mut state = lock(&self.outbound_state);
             state.pending_messages = state.pending_messages.saturating_sub(1);
             state.pending_bytes = state.pending_bytes.saturating_sub(outbound.bytes);
-        }
-        if !self.saturated() {
+            state.pending_messages < self.low_water_messages()
+                && state.pending_bytes < self.low_water_bytes()
+        };
+        if recovered {
             *lock(&self.saturated_since) = None;
         }
     }
 
+    /// 建立当前饱和段的计时起点（只在首次被拒时；`consumed` 只清除、不建立）。
     fn mark_saturated(&self) {
         let mut since = lock(&self.saturated_since);
         if since.is_none() {
@@ -307,6 +356,13 @@ impl ConnectionHandle {
         }
     }
 }
+
+/// 「脱离饱和」的低水位线因数：低水位 = 高水位 ÷ 本值（迟滞阈值，**不得**等于高水位）。
+///
+/// 与 Sync 侧同口径（`crate::sync::conn::registry` 的 `RECOVERY_MESSAGES`/`RECOVERY_BYTES` 取该文档
+/// §14 默认值的一半），差别只在来源：Node Link 的队列上限是**每连接协商**的（`node.ready.limits`，
+/// [`SessionLimits`]），因此低水位由生效限额现算而不是编译期常量。
+pub(crate) const RECOVERY_WATERMARK_DIVISOR: u64 = 2;
 
 /// 活跃连接的注册表（组合根装配一次，进程内唯一）。
 ///

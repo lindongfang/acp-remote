@@ -24,7 +24,31 @@
 //! 周期」，永远凑不满一个周期；只保留 deadline 而把它排在出站之后，只要出站队列每轮都就绪，它连被
 //! 轮询的机会都没有。合起来才保证心跳（`link.ping`）、90 秒静默判定与慢消费者看门狗在连接繁忙时仍
 //! 按固定节拍被检查——否则「待发送队列持续处于高水位」这条判据永远等不到检查它的时刻，慢消费者断开
-//! 就成了死代码。`sync/conn/session.rs` 的同构实现是同一口径（那里已先行改正，本模块此前是旧形态）。
+//! 就成了死代码。`sync/conn/session.rs` 的同构实现是同一口径。
+//!
+//! **饱和（慢消费者）与保活的口径**：每连接待发送队列的水位判定完全归 [`ConnectionHandle`]
+//! （进入用高水位、退出用低水位迟滞，见 `conn::registry` 的模块文档），会话只消费它的两个结论：
+//! [`ConnectionHandle::saturated_for`] 给出**当前**饱和段已持续的时长，`send` 给出 [`SendFault`]。
+//! 因此 Tick 分支里心跳与看门狗必须各自独立判定——饱和**不是**静默：
+//!
+//! - 饱和期间 `link.ping` 仍按协商的 `heartbeatIntervalMs` 发出（心跳是唯一「没有业务消息也要产生
+//!   入站 pong」的来源，停发它会让对端也不再产生入站消息，最终撞上 90 秒静默关闭）；
+//! - ping 因队列顶满而被拒（[`SendFault::HighWater`]）不算「心跳停摆」：这一轮不发出、下个 tick 重试，
+//!   生死由看门狗按 `SLOW_CONSUMER_GRACE` 判定（瞬时突发因此有机会自行排空）；
+//! - 看门狗只看**当前**饱和段的时长：曾被拒过一次但随后把队列排到低水位之下的连接会清掉该计时，
+//!   不会被判死。
+//!
+//! 上面两组口径缺一不可：水位判定（本节）保证判据的语义，tick 的调度口径（上一节）保证判据真的被按
+//! 节拍轮询到。「持续饱和 → 断开」因此在真实连接上可达：队列持续顶在高水位、出站分支每轮都就绪时，
+//! 看门狗仍在宽限后断开——用例
+//! `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 在真实连接上锁定了它。
+//! 仍存在的**相邻**缺口不在 tick 的调度上，而在写路径：对端一个字节都不读、socket 缓冲被填满时会话
+//! 阻塞在 `send_text`（`transport/net/ws.rs` 没有写期限），整个 `select!` 都得不到轮询——那是传输层
+//! 写期限的问题，不在本模块。
+//!
+//! 另注：`crate::sync::conn::session` 的同一处分支仍是 `} else if now >= next_ping {`——饱和期间它连自己
+//! `control.ping` 也不发（只对撞上高水位的投递做推迟）。本模块的规格明确要求饱和期间心跳照发，因此
+//! `node_link` 在此**有意**比 sync 严格；两侧口径若需对齐，属另一个变更的决策。
 //!
 //! **认证限流的接线口径**：接入层（`transport::net`）在 WS upgrade 之前没有每路径的准入钩子
 //! （WP2 冻结形状只提供 `WsHandler`），因此本层把闸门放在**会话的第一步**：任何帧（包括
@@ -101,6 +125,66 @@ impl SessionWindows {
             silence: HEARTBEAT_SILENCE_TIMEOUT,
             slow_consumer: SLOW_CONSUMER_GRACE,
         }
+    }
+}
+
+/// 一个 Tick 的动作（§2.5 的静默判定之外，剩下的两个判定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TickAction {
+    /// 当前饱和段已超过宽限：断开（`SLOW_CONSUMER_GRACE`）。
+    Disconnect,
+    /// 该发心跳（`now >= next_ping`）。
+    Ping,
+    /// 什么都不做。
+    Idle,
+}
+
+/// Tick 的动作判定：慢消费者看门狗与心跳是**并列**的两件事，不是二选一。
+///
+/// 写成 `if saturated { … } else if due { ping }` 会让饱和分支一旦命中就把心跳变成永久不可达：饱和不是
+/// 静默，对端收不到 `link.ping` 也就不会回 `link.pong`，本机最终以「连续 90 秒无入站消息」关掉一条其实
+/// 只是暂时落后的连接。只有「当前饱和段已超过宽限」才短路心跳——那一刻连接马上要被断开，发不发 ping
+/// 已无意义（且断开优先于发心跳）。
+///
+/// 提取成纯函数是为了让这条不变量可被用例直接锁定（会话 Tick 里只剩分派；对照 `sync::conn::session` 的
+/// 同构处理）。
+pub(crate) fn tick_action(
+    saturated_for: Option<std::time::Duration>,
+    slow_consumer: Duration,
+    ping_due: bool,
+) -> TickAction {
+    if let Some(saturated) = saturated_for
+        && saturated >= slow_consumer
+    {
+        return TickAction::Disconnect;
+    }
+    if ping_due {
+        TickAction::Ping
+    } else {
+        TickAction::Idle
+    }
+}
+
+/// 一次心跳投递的结果（§2.5 的两级处置，与 `sync::conn::session::heartbeat_outcome` 同口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeartbeatOutcome {
+    /// 已入队：登记 nonce 并推进下一个心跳周期。
+    Queued,
+    /// 队列顶满：推迟这一次（不推进周期、不登记 nonce），交给慢消费者看门狗按宽限做二级处置。
+    Deferred,
+    /// 连接已结束或本机装不出信封：不是背压，按调用方给出的 close 结束会话。
+    Ended,
+}
+
+/// 心跳投递结果的分类：**一级处置是推迟**，把对端「暂时读得慢」当致命错误直接断开等于跳过一级处置。
+///
+/// 二级处置（断开）由慢消费者看门狗承担（[`TickAction::Disconnect`]，判据是 `saturated_for` 超过宽限）。
+/// 高水位这一条因此绝不能映射成 [`HeartbeatOutcome::Ended`]。
+pub(crate) fn heartbeat_outcome(result: Result<(), SendFault>) -> HeartbeatOutcome {
+    match result {
+        Ok(()) => HeartbeatOutcome::Queued,
+        Err(SendFault::HighWater) => HeartbeatOutcome::Deferred,
+        Err(SendFault::Closed | SendFault::Encoding) => HeartbeatOutcome::Ended,
     }
 }
 
@@ -907,8 +991,12 @@ impl Session {
                         );
                         break Ending::Close(close::TIMEOUT, "heartbeat timeout");
                     }
-                    if let Some(saturated) = handle.saturated_for() {
-                        if saturated >= windows.slow_consumer {
+                    match tick_action(
+                        handle.saturated_for(),
+                        windows.slow_consumer,
+                        now >= next_ping,
+                    ) {
+                        TickAction::Disconnect => {
                             warn!(
                                 event = "node_link.slow_consumer",
                                 access_node_id = handle.node_id().as_str(),
@@ -920,23 +1008,38 @@ impl Session {
                                 "the connection cannot consume messages fast enough",
                             );
                         }
-                    } else if now >= next_ping {
-                        let Some(body) = ping_body() else {
-                            break Ending::Close(close::UNAVAILABLE, "entropy unavailable");
-                        };
-                        last_ping = Some(body.nonce.clone());
-                        if let Err(fault) = handle.send(MessageType::LinkPing, &body) {
-                            warn!(
-                                event = "node_link.ping_not_sent",
-                                fault = ?fault,
-                                "the heartbeat ping could not be queued"
-                            );
-                            break Ending::Close(
-                                close::NORMAL,
-                                "the connection cannot consume messages fast enough",
-                            );
+                        TickAction::Ping => {
+                            let Some(body) = ping_body() else {
+                                break Ending::Close(close::UNAVAILABLE, "entropy unavailable");
+                            };
+                            match heartbeat_outcome(handle.send(MessageType::LinkPing, &body)) {
+                                HeartbeatOutcome::Queued => {
+                                    last_ping = Some(body.nonce);
+                                    next_ping = now + heartbeat;
+                                }
+                                // 队列此刻仍然顶满：这一轮心跳挤不进去。这不是「心跳停摆」，也不该由心跳
+                                // 决定生死——持续过慢由上面的看门狗按宽限判定。不推进 `next_ping`：下一个
+                                // tick 立刻重试，队列一腾出位置就补发；也不登记这条没发出去的 nonce（否则
+                                // 对端之后回填它会命中 `pong_mismatch`）。
+                                HeartbeatOutcome::Deferred => warn!(
+                                    event = "node_link.ping_deferred",
+                                    connection_id = handle.connection_id().as_str(),
+                                    pending_messages = handle.pending().messages,
+                                    "the heartbeat ping was deferred: the outbound queue is at its high water mark"
+                                ),
+                                HeartbeatOutcome::Ended => {
+                                    warn!(
+                                        event = "node_link.ping_not_sent",
+                                        "the heartbeat ping could not be queued"
+                                    );
+                                    break Ending::Close(
+                                        close::NORMAL,
+                                        "the connection cannot consume messages fast enough",
+                                    );
+                                }
+                            }
                         }
-                        next_ping = now + heartbeat;
+                        TickAction::Idle => {}
                     }
                 }
             }

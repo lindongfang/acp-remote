@@ -20,7 +20,9 @@
 //! - **快照并发为 1**：一条连接 = 一个会话任务（`conn::session`），`route` 因此对该连接串行调用，
 //!   一次 `resource.subscribe` 内部同步发完整条快照；
 //! - **慢连接**：投递一律经 WP4 的有界队列；高水位时跳过这一条并记录，持续过慢由会话看门狗断开，
-//!   Access 重连后凭 origin cursor 重放补齐（§2.5；v1 不发 `link.backpressure`）。
+//!   Access 重连后凭 origin cursor 重放补齐（§2.5；v1 不发 `link.backpressure`）。高水位是**可恢复**的
+//!   迟滞判定（队列排到低水位之下即清除，见 `conn::registry`）：队列一旦腾出空间，快照 chunk 与扇出
+//!   事件立即恢复投递，只有**持续**过慢的连接才会被断开。
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -587,6 +589,11 @@ impl ResourceRoute {
     }
 
     /// 发送一个 chunk 并回传它实际入队的帧文本（digest 的前像）。
+    ///
+    /// 高水位时中止本次快照（剩余 chunk 由 Access 重新 `resource.subscribe` 补齐，§2.5）。与
+    /// [`catalog::CatalogRoute`] 的批间门同一口径，这个中止**不是锁存**：`handle.saturated()` 是高水位
+    /// 进入、低水位退出的迟滞活判定（见 `conn::registry`），连接把队列排到低水位之下后，下一次
+    /// `resource.subscribe` 会重新发出完整的 `snapshot_begin` → chunk* → `snapshot_end`。
     fn send_chunk(&self, handle: &ConnectionHandle, chunk: &SnapshotChunk) -> Result<String, ()> {
         if handle.saturated() {
             debug!(
