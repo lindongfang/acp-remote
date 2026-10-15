@@ -10,7 +10,13 @@
 //!   组合根里填入，本模块不写死协议路径。
 //! - **Host/代理头边界在路由之前**：`axum::Router::layer` 同时覆盖 fallback，因此 Host 不匹配的请求
 //!   在未注册 path 上也返回 400，而不会先走 404。
-//! - **WebSocket 升级规则**：协商到 `permessage-deflate` 或未声明约定 subprotocol 的升级请求被拒绝；
+//! - **WebSocket 升级规则**：声明了约定 subprotocol 的升级请求照常接受；**提出** `permessage-deflate`
+//!   的升级**同样接受**——`Sec-WebSocket-Extensions` 是**协商**请求（RFC 7692），服务端只要不选择任何
+//!   扩展（101 响应不回显 `Sec-WebSocket-Extensions`，本层不开启 axum 的压缩特性）就等于「不协商压缩」
+//!   （`NODE_LINK_PROTOCOL.md` §2.1 与 `SYNC_PROTOCOL.md` §3.1 都是「不协商」口径）。**拒绝提出扩展的
+//!   请求是错的**：Chromium/Firefox 的 `WebSocket` 构造函数**一律**带上这个头且页面侧无法关闭，按提出
+//!   即拒会让任何浏览器客户端都连不上（实测：400「本端点不接受 permessage-deflate」）；
+//!   未声明约定 subprotocol 的升级请求仍被拒绝。
 //!   非升级请求由 `axum` 的升级提取器按 400/405/426 拒绝；单条消息上限在升级响应上固定。
 //! - **来源（`Origin`）与升级一起取值**：升级请求带 `Origin` 头时，本模块按 `docs/SYNC_PROTOCOL.md`
 //!   §3.2 的口径归一化后交给处理器（见 [`crate::transport::net::origin`]）；头缺席也是合法形态（非浏览器
@@ -512,14 +518,6 @@ async fn upgrade_websocket(
     let Some(peer) = request.extensions().get::<PeerInfo>().cloned() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    if offers_permessage_deflate(request.headers()) {
-        // `NODE_LINK_PROTOCOL.md` §2.1：v1 不接受压缩，协商到压缩的 upgrade 必须拒绝。
-        return (
-            StatusCode::BAD_REQUEST,
-            "本端点不接受 permessage-deflate（NODE_LINK_PROTOCOL.md §2.1）",
-        )
-            .into_response();
-    }
     if !offers_subprotocol(request.headers(), &required_subprotocol) {
         return (
             StatusCode::BAD_REQUEST,
@@ -588,23 +586,6 @@ fn offers_subprotocol(headers: &HeaderMap, required: &str) -> bool {
             value
                 .to_str()
                 .is_ok_and(|value| value.split(',').any(|token| token.trim() == required))
-        })
-}
-
-/// 客户端是否要求 `permessage-deflate`。
-fn offers_permessage_deflate(headers: &HeaderMap) -> bool {
-    headers
-        .get_all(header::SEC_WEBSOCKET_EXTENSIONS)
-        .iter()
-        .any(|value| {
-            value.to_str().is_ok_and(|value| {
-                value.split(',').any(|extension| {
-                    extension
-                        .split(';')
-                        .next()
-                        .is_some_and(|name| name.trim().eq_ignore_ascii_case("permessage-deflate"))
-                })
-            })
         })
 }
 
@@ -689,23 +670,6 @@ mod tests {
             required
         ));
         assert!(!offers_subprotocol(&HeaderMap::new(), required));
-    }
-
-    #[test]
-    fn compression_detection_covers_parameterised_offers() {
-        assert!(offers_permessage_deflate(&headers(&[(
-            "sec-websocket-extensions",
-            "permessage-deflate; client_max_window_bits"
-        )])));
-        assert!(offers_permessage_deflate(&headers(&[(
-            "sec-websocket-extensions",
-            "foo, PerMessage-Deflate"
-        )])));
-        assert!(!offers_permessage_deflate(&headers(&[(
-            "sec-websocket-extensions",
-            "x-webkit-deflate-frame"
-        )])));
-        assert!(!offers_permessage_deflate(&HeaderMap::new()));
     }
 
     /// 只回固定入口文档的资源源（注册表用例不关心资源内容）。
