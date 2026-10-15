@@ -702,6 +702,32 @@ async function waitForEventLoopTurn(
 }
 
 /**
+ * 推进假时钟 + 让出事件循环，直到条件成立。
+ *
+ * 为什么不能写成「先 `advanceBy` 再等条件」：轮询计时器只有在**认领那条链跑完之后**才会被装上，
+ * 而那条链里有 WebCrypto（HMAC proof）与 fetch 的宏任务。于是「先推进」有机会落在计时器装上之前，
+ * 那次推进被白白吃掉，条件就永不成立——CI 上正是这样挂了三条用例（本地快机每次都赢，所以看不见）。
+ * 这里每一轮都「先让出一次事件循环、再推进一个窗口」，因此既不会漏掉尚未装上的计时器，
+ * 也不引入任何真实时间依赖（`setImmediate` 表达的是「下一轮」，不是「等一段时长」）。
+ * 轮数上限只把「条件永不成立」变成一条明确的失败。
+ */
+async function advanceUntil(
+  context: { readonly clock: FakeClock },
+  predicate: () => boolean,
+  label: string,
+  maxTurns = 2000,
+): Promise<void> {
+  for (let turn = 0; turn < maxTurns; turn += 1) {
+    if (predicate()) return;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
+  }
+  throw new Error(`等待条件未成立：${label}`);
+}
+
+/**
  * 在测试期间装一个假地址栏：片段可读，`replaceState` 记账并真的清掉片段。
  *
  * 真实的清除行为只能证明在**地址栏**这一层：`location` 是平台能力，组合根读它、页面碰不到。
@@ -753,11 +779,17 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     expect(context.composition.store.pairingPage().phase).toBe("claiming");
 
     // 轮询节奏由注入的假时钟驱动：推进一个窗口才有第一次状态查询（否则页面会空转打服务端）。
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "pending_confirmation", "等待本机确认");
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "pending_confirmation",
+      "等待本机确认",
+    );
 
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "approved",
+      "已批准",
+    );
 
     // 2.2 三个字段：主机标识与主机公钥取自**状态响应**，规范化来源是缓存键的一部分
     // （取二维码里的那份、或只写 deviceId 都会让这条断言变红）。
@@ -826,10 +858,16 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
       expect(context.composition.store.pairingPage().phase).toBe("claiming");
       expect(context.fetches[0]?.url).toBe(`${ORIGIN}/sync/v1/pairing/claim`);
 
-      context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-      await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "pending_confirmation", "等待本机确认");
-      context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-      await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
+      await advanceUntil(
+        context,
+        () => context.composition.store.pairingPage().phase === "pending_confirmation",
+        "等待本机确认",
+      );
+      await advanceUntil(
+        context,
+        () => context.composition.store.pairingPage().phase === "approved",
+        "已批准",
+      );
 
       // 秘密不进入两条**真实存在**的旁路：本地缓存摘要（IndexedDB 上是唯一的持久面）与
       // 可导出的状态快照。
@@ -889,14 +927,14 @@ describe("组合根：配对成功但收口失败（连接没起来）的页面�
     });
 
     await context.composition.store.submitPairingQrText(pairingUrl());
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(
+    await advanceUntil(
+      context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",
       "等待本机确认",
     );
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
     // 直接等「原因已落到页面」：收口失败本身就是这条用例的被测对象，等它比等中间的 `approved` 稳。
-    await waitForEventLoopTurn(
+    await advanceUntil(
+      context,
       () => context.composition.store.pairingPage().error !== null,
       "收口失败的原因落到页面",
     );
@@ -959,8 +997,8 @@ describe("组合根：配对请求被拒绝时收口（不把状态留在「进�
     // 会话真的结束了：同一次页面会话里可以立刻重试，且这次走到了轮询。
     await context.composition.store.submitPairingQrText(pairingUrl());
     expect(context.composition.store.pairingPage().phase).toBe("claiming");
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(
+    await advanceUntil(
+      context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",
       "重试后进入等待确认",
     );
@@ -1003,10 +1041,16 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
     expect(context.sockets.sockets).toHaveLength(1);
 
     await context.composition.store.submitPairingQrText(pairingUrl());
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "pending_confirmation", "等待本机确认");
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "pending_confirmation",
+      "等待本机确认",
+    );
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "approved",
+      "已批准",
+    );
 
     // 反例：若 `pairingCompleted` 不解除门面的阻断（`SyncClient.connect()` 抛错后又被吞掉），
     // 这里仍是 1 条 socket、状态仍停在 `identity_changed` → 两条断言都变红。
@@ -1040,10 +1084,16 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
     await startBlockedOnMissingHostKey(context);
 
     await context.composition.store.submitPairingQrText(pairingUrl({ hostId: NEW_HOST_ID }));
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "pending_confirmation", "等待本机确认");
-    context.clock.advanceBy(PAIRING_POLL_INTERVAL_MS);
-    await waitForEventLoopTurn(() => context.composition.store.pairingPage().phase === "approved", "已批准");
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "pending_confirmation",
+      "等待本机确认",
+    );
+    await advanceUntil(
+      context,
+      () => context.composition.store.pairingPage().phase === "approved",
+      "已批准",
+    );
 
     expect(context.sockets.sockets).toHaveLength(2);
     const rebuilt = context.sockets.latest;
