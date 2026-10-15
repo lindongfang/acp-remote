@@ -460,12 +460,27 @@ impl Context {
 
     /// 释放缓存的 runtime（连同其中所有连接）。
     ///
-    /// **`daemon stop` 必须在等待单实例锁之前调用**：Tokio 在 Windows 上不会在 `drop(连接)` 时同步释放
-    /// Named Pipe 句柄——句柄由挂起的 overlapped 读持有（mio 的 `NamedPipe::drop` 只取消挂起操作、
-    /// 不关闭句柄），只有 runtime 的 I/O driver 处理完那个 completion 才真正 `CloseHandle`，而
-    /// current-thread runtime 只在 `block_on` 期间驱动 driver。等锁循环全程 `std::thread::sleep`，
-    /// 因此句柄会一直开到进程退出；在那之前 Daemon 的 `drain_connections` 看不到对端 EOF，只能等满
-    /// `daemon.shutdown_grace_ms`（实测：`drain_timeout{remaining:1}` 与 `elapsed_ms ≈ grace_ms`）。
+    /// **`daemon stop` 必须在等待单实例锁之前调用**：在 `daemon stop` 这条路径上必须先发出
+    /// `daemon.stop` 触发关闭序列，Daemon 才会在收尾时释放单实例锁（OS 信号 Ctrl+C/SIGTERM 同样可触发
+    /// 关闭序列并释放锁，但本循环不会发出信号）；等锁循环全程 `std::thread::sleep`，它自己不会促成任何一步。
+    ///
+    /// 该顺序的**理由已随变更 `daemon-shutdown-drain` 改变**，本函数不再决定排空时长：
+    /// - 旧前提：Tokio 在 Windows 上不会在 `drop(连接)` 时同步释放 Named Pipe 句柄——句柄由挂起的
+    ///   overlapped 读持有（mio 的 `NamedPipe::drop` 只取消挂起操作、不关闭句柄），只有 runtime 的
+    ///   I/O driver 处理完那个 completion 才真正 `CloseHandle`，而 current-thread runtime 只在
+    ///   `block_on` 期间驱动 driver。等锁循环期间句柄会一直开到进程退出，Daemon 的 `drain_connections`
+    ///   看不到对端 EOF，只能等满 `daemon.shutdown_grace_ms`（实测：`drain_timeout{remaining:1}` 与
+    ///   `elapsed_ms ≈ grace_ms`）。
+    /// - 现状：Daemon 在**接受** `daemon.stop` 之后给这条连接置位（`crates/app/src/daemon.rs` 的
+    ///   `ShuttingDownGate` → `crates/server/src/transport/local/connection.rs` 的 `ConnectionShutdown`），
+    ///   `serve_connection` 在写回响应后**自行结束该连接**（`CloseReason::ShutdownRequested`），排空因此
+    ///   不为它等待（它可能仍短暂留在集合里，但不再占用排空预算）。CLI 侧何时释放 runtime 不再是排空判据；
+    ///   权威行为见
+    ///   `openspec/changes/daemon-shutdown-drain/specs/daemon-lifecycle/spec.md` 的「关闭时的连接排空」。
+    ///
+    /// 判定：就其记载的目的（让 Daemon 及时看到对端 EOF、避免排空等满宽限）而言，本函数**已冗余**。
+    /// 之所以保留：删除属于行为变更，仍需另行验证释放句柄对关闭序列其余步骤（收尾、进程退出路径）
+    /// 没有影响。
     fn release_runtime(&mut self) {
         // 显式命名被释放的值：该 `Runtime` 的析构会停机 I/O driver，让挂起的 completion 落定，
         // 连接句柄随之关闭。
@@ -711,8 +726,10 @@ fn daemon_stop(context: &mut Context, args: &DaemonStop) -> Result<(), Failure> 
         drop(client);
         Ok(())
     })?;
-    // 连接句柄只有在它的 runtime 被销毁时才真正释放（见 `Context::release_runtime`）：不释放的话，
-    // 整个 `wait_for_lock_release` 期间对端都看不到 EOF，Daemon 的排空窗口只能等满宽限。
+    // 保留 `release_runtime` 只为显式回收句柄：服务端在写回 `daemon.stop` 响应后即自行结束本连接
+    // （`ShuttingDownGate` 置位 `ConnectionShutdown`，`serve_connection` 走 `CloseReason::ShutdownRequested`），
+    // 该连接因此不被计入排空等待，是否释放 runtime 不再决定排空时长。
+    // 「为何仍要先 `daemon stop` 再等锁」与「该调用为何已冗余」见 `Context::release_runtime` 的文档。
     context.release_runtime();
     wait_for_lock_release(context.data_dir())?;
     println!("daemon 已停止（单实例锁已释放）");

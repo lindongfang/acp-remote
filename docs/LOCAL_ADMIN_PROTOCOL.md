@@ -222,6 +222,7 @@ uiBuildVersion string | null         # 本次二进制嵌入并托管的前端�
 - `params`：`{ graceMs: integer | null }`；`null` 表示使用 `daemon.shutdown_grace_ms`，非空时取值 `0`–`60000`。
 - `result`：`{ accepted: true }`，`accepted` 恒为 `true`；失败必须走 `error`，不得用 `false` 表达。
 - 响应在关闭序列开始时发出；CLI 随后等待锁释放与连接关闭。关闭顺序按 `SECURITY_DESIGN.md` §12.1 与 `AGENTS.md` §7。
+- 响应写回后由**服务端结束该连接**：发出 `daemon.stop` 的这条连接不会再收到任何响应，也不进入关闭序列的连接排空等待。这与「关闭序列进行中**新**请求以 `local.unavailable` 失败关闭」是两件事、互不覆盖——后者约束关闭开始后到达的新请求，本条约束的是**发出 `daemon.stop` 的连接自身**（它的语义是请求关闭，不是新请求）。
 
 #### `workspace.select`（`local.workspace.select`）
 
