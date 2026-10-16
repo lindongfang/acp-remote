@@ -17,6 +17,7 @@
 - 写范围：`clients/app/app/`（新增 node-link 配对路由文件）、`clients/app/src/**`（配对入口组件的「期望类型」入参、载荷与类型的一致性校验、失败态）、`clients/app/src/**/*.test.ts` 与 `clients/app/e2e/**`（断言）、`docs/FRONTEND_DESIGN.md`（新路由与口径登记）。
 - 依赖：无。
 - 不做：不改 `crates/server/**`（D1 已定不改 URL 构造）、不改 `docs/NODE_LINK_PROTOCOL.md`（§13.1 不动）。
+- 写范围的**实现期扩展**（第一轮检视/实现反馈、已接受）：`README.md` 里「服务端…配对二维码指向 `/node-link/pair`，而前端没有该路由」这句被本变更变成假话，订正为「已由本变更关闭」并指向 `docs/FRONTEND_DESIGN.md` §4.1。理由：留下与现状相反的登记比不写更糟；该订正不改变任何行为。
 
 ## Merge Order
 

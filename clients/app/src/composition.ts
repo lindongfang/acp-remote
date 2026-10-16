@@ -61,9 +61,14 @@ import type {
 } from "./sync-client";
 import { ClientStore } from "./features/client-store";
 import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./features/ports";
-import type { PairingPollResult, PairingTransport, PairingWiring } from "./features/pairing-model";
+import type {
+  PairingPollResult,
+  PairingQrRead,
+  PairingTransport,
+  PairingWiring,
+} from "./features/pairing-model";
 import { PairingQrInvalidError } from "./features/pairing-model";
-import type { ErrorCode, PairingQrPayload, PublicError } from "./protocol";
+import type { ErrorCode, NodeLinkQrPayload, PairingQrPayload, PublicError } from "./protocol";
 import { openPlatform } from "./platform";
 import type { LifecycleEvent, PlatformPorts } from "./platform";
 import {
@@ -101,6 +106,18 @@ const DOMAIN = {
 
 /** `$defs.canonicalOrigin`：`^https://[^/?#]+$`。 */
 const CANONICAL_ORIGIN_PATTERN = /^https:\/\/[^/?#]+$/;
+
+/** 两类二维码载荷的 `pairingProtocol` 常量（`schemas/sync/v1/pairing.schema.json`、`schemas/node-link/v1/pairing.schema.json`）。 */
+const SYNC_PAIRING_PROTOCOL = "acp-remote-pairing-v1";
+const NODE_LINK_PAIRING_PROTOCOL = "acp-remote-nodelink-v1";
+
+/**
+ * `schemas/node-link/v1/pairing.schema.json` 的 `$defs.endpoint`：`^wss://[^/?#]+/node-link/v1$`。
+ *
+ * 端点形状是 §13.1 的既有口径（HTTP origin 由它派生），因此在这里按同一口径校验，
+ * 不放宽成「任意 wss 地址」。
+ */
+const NODE_LINK_ENDPOINT_PATTERN = /^wss:\/\/[^/?#]+\/node-link\/v1$/;
 
 /**
  * 二维码地址里承载载荷的片段标记（协议 §7.1：`https://<origin>/pair#data=<base64url-json>`）。
@@ -421,48 +438,38 @@ class HttpPairingTransport implements PairingTransport {
   }
 
   /**
-   * 二维码内容 → `pairing.qr` 载荷。
+   * 二维码内容 → 载荷 + 它的**类型**（design D3 的读取口）。
    *
-   * ## 接受三种**容器**形态，载荷校验只有一套
+   * ## 接受三种**容器**形态，两类**载荷**各自一套字段校验
    *
    * 用户能拿到的文本有三种：二维码里的完整地址（`https://<origin>/pair#data=<base64url-json>`，
    * §7.1）、地址里的片段本身（页面自己读片段时给的就是它）、以及裸 base64url 载荷。
    * 容器的宽松**不**等于载荷的宽松：无论从哪一种容器取出 JSON 文本，字段校验都逐项照旧
-   * （协议版本、字段齐全、来源形状、字段长度、过期时间），不符即抛 `PairingQrInvalidError`，
+   * （协议版本、字段齐全、来源/端点形状、字段长度、过期时间），不符即抛 `PairingQrInvalidError`，
    * **绝不**尽力解析（补缺失字段、放过版本不符、把乱码当文本）。
+   *
+   * ## 类型在这里只被**标注**，不被判定
+   *
+   * 同一份 node-link 内容在 sync 入口是「明确失败」、在 node-link 入口是「已读到的内容」，
+   * 那是入口的判定（design D2/D3）：入口把这里标出的 `kind` 与路由声明的类型对上，
+   * 因此判定不依赖任何对载荷形状的猜测，也不在这里替入口做取舍。
    */
-  readQrPayload(text: string): PairingQrPayload {
+  readQrPayload(text: string): PairingQrRead {
     const payload = parseJsonObject(qrPayloadJsonOf(text));
     if (payload === null) {
       throw new PairingQrInvalidError("protocol.invalid_json", "二维码内容不是 JSON 对象");
     }
-    const qr = payload as unknown as PairingQrPayload;
-    for (const key of ["hostId", "hostPublicKey", "canonicalOrigin", "pairingId", "pairingSecret", "expiresAt"] as const) {
-      if (typeof qr[key] !== "string" || qr[key].length === 0) {
-        throw new PairingQrInvalidError("protocol.schema_invalid", `二维码缺少字段 ${key}`);
-      }
+    const protocol = payload["pairingProtocol"];
+    if (typeof protocol !== "string" || protocol.length === 0) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码缺少字段 pairingProtocol");
     }
-    if (qr.pairingProtocol !== "acp-remote-pairing-v1") {
-      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码协议版本不匹配");
+    if (protocol === SYNC_PAIRING_PROTOCOL) {
+      return { kind: "sync", qr: readSyncQrPayload(payload, this.#now()) };
     }
-    if (!CANONICAL_ORIGIN_PATTERN.test(qr.canonicalOrigin)) {
-      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码来源形状非法");
+    if (protocol === NODE_LINK_PAIRING_PROTOCOL) {
+      return { kind: "node-link", qr: readNodeLinkQrPayload(payload, this.#now()) };
     }
-    // §7.1 要求校验字段长度：两条 base64url 字段必须与 wire 形状同长（32 / 65 字节）。
-    if (!isBase64UrlLength(qr.pairingSecret, QR_SECRET_BYTES)) {
-      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 pairingSecret 长度不符");
-    }
-    if (!isBase64UrlLength(qr.hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) {
-      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 hostPublicKey 长度不符");
-    }
-    const expiresAt = Date.parse(qr.expiresAt);
-    if (Number.isNaN(expiresAt)) {
-      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
-    }
-    if (expiresAt <= this.#now()) {
-      throw new PairingQrInvalidError("protocol.schema_invalid", "二维码已过期");
-    }
-    return qr;
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码协议版本不匹配");
   }
 
   /** `POST /sync/v1/pairing/claim`（§7.2）。 */
@@ -630,6 +637,75 @@ function encodeUnixSeconds(timestamp: string): ByteArray {
 }
 
 // ── 二维码内容与地址片段 ────────────────────────────────────────────────────
+
+/**
+ * sync 配对二维码载荷（`SYNC_PROTOCOL.md` §7.1 / `schemas/sync/v1/pairing.schema.json` 的
+ * `$defs.qrPayload`）的字段校验。
+ *
+ * 容器已经解开（`qrPayloadJsonOf`），这里只管**载荷**：字段齐全、来源形状、两条 base64url 字段的
+ * 长度（32 / 65 字节）、过期时间——逐项照旧，不尽力解析。协议常量由调用方（`readQrPayload`）
+ * 判过，这里因此不再重复判一次。
+ */
+function readSyncQrPayload(payload: Record<string, unknown>, now: number): PairingQrPayload {
+  const qr = payload as unknown as PairingQrPayload;
+  for (const key of ["hostId", "hostPublicKey", "canonicalOrigin", "pairingId", "pairingSecret", "expiresAt"] as const) {
+    if (typeof qr[key] !== "string" || qr[key].length === 0) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", `二维码缺少字段 ${key}`);
+    }
+  }
+  if (!CANONICAL_ORIGIN_PATTERN.test(qr.canonicalOrigin)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码来源形状非法");
+  }
+  // §7.1 要求校验字段长度：两条 base64url 字段必须与 wire 形状同长（32 / 65 字节）。
+  if (!isBase64UrlLength(qr.pairingSecret, QR_SECRET_BYTES)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 pairingSecret 长度不符");
+  }
+  if (!isBase64UrlLength(qr.hostPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 hostPublicKey 长度不符");
+  }
+  const expiresAt = Date.parse(qr.expiresAt);
+  if (Number.isNaN(expiresAt)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
+  }
+  if (expiresAt <= now) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码已过期");
+  }
+  return qr;
+}
+
+/**
+ * node-link 配对二维码载荷（`NODE_LINK_PROTOCOL.md` §13.1 / `schemas/node-link/v1/pairing.schema.json`
+ * 的 `$defs.qrPayload`）的字段校验。
+ *
+ * 与 sync 侧**同一口径**（同一组失败形态与消息结构，见 `readSyncQrPayload`）：字段齐全、
+ * 端点形状、两条 base64url 字段的长度（32 / 65 字节）、过期时间逐项照旧，不尽力解析。
+ * 这里**不**判定「入口是否接受它」——入口按声明的类型决定（design D2/D3）。
+ */
+function readNodeLinkQrPayload(payload: Record<string, unknown>, now: number): NodeLinkQrPayload {
+  const qr = payload as unknown as NodeLinkQrPayload;
+  for (const key of ["ownerNodeId", "ownerPublicKey", "endpoint", "pairingId", "pairingSecret", "expiresAt"] as const) {
+    if (typeof qr[key] !== "string" || qr[key].length === 0) {
+      throw new PairingQrInvalidError("protocol.schema_invalid", `二维码缺少字段 ${key}`);
+    }
+  }
+  if (!NODE_LINK_ENDPOINT_PATTERN.test(qr.endpoint)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码端点形状非法");
+  }
+  if (!isBase64UrlLength(qr.pairingSecret, QR_SECRET_BYTES)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 pairingSecret 长度不符");
+  }
+  if (!isBase64UrlLength(qr.ownerPublicKey, QR_HOST_PUBLIC_KEY_BYTES)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码字段 ownerPublicKey 长度不符");
+  }
+  const expiresAt = Date.parse(qr.expiresAt);
+  if (Number.isNaN(expiresAt)) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
+  }
+  if (expiresAt <= now) {
+    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码已过期");
+  }
+  return qr;
+}
 
 /**
  * 用户给的文本 → 待校验的 JSON 文本（只解**容器**，不做任何载荷级放宽）。

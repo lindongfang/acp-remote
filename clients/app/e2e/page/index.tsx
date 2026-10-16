@@ -13,6 +13,7 @@ import { CONVERSATION_TIMELINE_CHECKS } from "./checks/conversation-timeline";
 import { CONVERSATION_INTERACTION_CHECKS } from "./checks/conversation-interaction";
 import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
+import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
 import { runChecks } from "./support";
 import type { CheckResult } from "./support";
 
@@ -34,9 +35,12 @@ import type { CheckResult } from "./support";
  * 变更文件右栏/来源降级/富文本。三者的共用机关（`sessionScenario` / `enterRoute` /
  * `withSessionPage` / `commandBody`）与 R15 同一取舍，放在**时间线**那一半，另外两个单向导入。
  *
- * 配对链路（`pairing-first-run.ts`）放在**最后**：它是唯一从「未配对」出发的检查集，
- * 为此会清掉本地缓存里的 `paired-host/<origin>` 记录（见 `support.tsx` 的 `seedPaired: false`）。
+ * 配对链路（`pairing-first-run.ts`）放在**最后**：它是唯一从「未配对」出发的检查集，为此会清掉
+ * 本地缓存里的 `paired-host/<origin>` 记录（见 `support.tsx` 的 `seedPaired: false`）。
  * 排在最后既不影响其它检查集的起点，也让「配对链路」这块证据在输出末尾自成一段。
+ *
+ * 两类入口的区分（`pairing-kinds.ts`）排在它之后：同样从「未配对」出发（同一条清缓存的理由），
+ * 而它验的是「打开 node-link 二维码落在可用入口」与「两类内容喂错入口都明确失败」。
  */
 const ALL_CHECKS = [
   ...COMPOSITION_CHECKS,
@@ -48,6 +52,7 @@ const ALL_CHECKS = [
   ...CONVERSATION_INTERACTION_CHECKS,
   ...CONVERSATION_CONTENT_CHECKS,
   ...PAIRING_FIRST_RUN_CHECKS,
+  ...PAIRING_KIND_CHECKS,
 ];
 
 declare global {

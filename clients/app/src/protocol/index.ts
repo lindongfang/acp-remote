@@ -26,6 +26,8 @@ export type * from "./command";
 export type * from "./event";
 export type * from "./error";
 export type * from "./pairing";
+// node-link 侧只镜像了配对的二维码载荷（见该文件头）；它同样是**纯类型**，不进运行期面。
+export type * from "./node-link";
 
 // 纯计算 + 编译期常量：无 Node 依赖，浏览器与 `src/domain/` 都可安全消费。
 export { projectView, isKnownEventType, KNOWN_EVENT_TYPES, KNOWN_EVENT_TYPE_COUNT } from "./event";

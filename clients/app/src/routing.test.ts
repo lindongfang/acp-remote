@@ -74,6 +74,12 @@ const SESSION_ID = "5d73cd10-a465-43cd-b3f1-704e2d49e99e";
 const PAGES = [
   { page: "目录页", route: "/", sample: "/", file: "index.tsx" },
   { page: "配对页", route: "/pair", sample: "/pair", file: "pair.tsx" },
+  {
+    page: "node-link 配对页",
+    route: "/node-link/pair",
+    sample: "/node-link/pair",
+    file: "node-link/pair.tsx",
+  },
   { page: "主机与连接页", route: "/hosts", sample: "/hosts", file: "hosts.tsx" },
   { page: "目录详情页", route: "/dir/[alias]", sample: "/dir/work-api", file: "dir/[alias].tsx" },
   { page: "会话页", route: "/session/[id]", sample: `/session/${SESSION_ID}`, file: "session/[id].tsx" },
@@ -160,6 +166,26 @@ function routeKeyOf(address: string): string {
 function qrFragment(payload: Record<string, string>): string {
   const json = JSON.stringify(payload);
   return `#${QR_DATA_MARKER}${encodeBase64Url(new TextEncoder().encode(json))}`;
+}
+
+/**
+ * 一份**完整可读**的 node-link 配对片段（`NODE_LINK_PROTOCOL.md` §13.1）：字段齐全、
+ * 端点形状与两条 base64url 字段的长度（65 / 32 字节）合规、未过期。
+ *
+ * 长度合规用全零字节拼出来（`encodeBase64Url` 决定实际长度），不写死一串 base64 字面量——
+ * 字面量截短或改长会让「字段长度校验」这一层悄悄失去判别力。
+ */
+function nodeLinkQrFragment(): string {
+  const payload = {
+    pairingProtocol: "acp-remote-nodelink-v1",
+    ownerNodeId: HOST_ID,
+    ownerPublicKey: encodeBase64Url(new Uint8Array(65)),
+    endpoint: "wss://work-pc.example.ts.net/node-link/v1",
+    pairingId: "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+    pairingSecret: encodeBase64Url(new Uint8Array(32)),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+  };
+  return `#${QR_DATA_MARKER}${encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)))}`;
 }
 
 interface StubAddressBar {
@@ -304,7 +330,7 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
       const before = routeKeyOf(addressBar.address());
       expect(before).toBe("/pair");
 
-      await composition.store.startPairingFromAddress();
+      await composition.store.startPairingFromAddress("sync");
 
       const page = composition.store.pairingPage();
       expect(page.phase).toBe("failed");
@@ -324,7 +350,7 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
     const addressBar = stubAddressBar("/pair", "?from=qr", qrFragment({ hostId: HOST_ID }));
     const composition = compositionWithoutNetwork();
     try {
-      await composition.store.startPairingFromAddress();
+      await composition.store.startPairingFromAddress("sync");
 
       expect(addressBar.replaced).toEqual(["/pair?from=qr"]);
       expect(addressBar.address()).toBe("/pair?from=qr");
@@ -339,7 +365,7 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
     const addressBar = stubAddressBar("/pair", "", "#/hosts");
     const composition = compositionWithoutNetwork();
     try {
-      await composition.store.startPairingFromAddress();
+      await composition.store.startPairingFromAddress("sync");
 
       // 片段不归配对所有：既不进配对流程，也不被清除（别人的片段可能承载别的语义）。
       expect(composition.store.pairingPage().phase).toBe("idle");
@@ -347,6 +373,28 @@ describe("3.3 配对二维码地址：片段被读出、被清除，清除后仍
       expect(addressBar.pushed).toEqual([]);
       expect(addressBar.address()).toBe("/pair#/hosts");
       expect(routeKeyOf(addressBar.address())).toBe("/pair");
+    } finally {
+      addressBar.restore();
+      composition.dispose();
+    }
+  });
+
+  it("node-link 二维码地址：片段被读出、被清除，清除后仍停在 node-link 配对页", async () => {
+    const addressBar = stubAddressBar("/node-link/pair", "", nodeLinkQrFragment());
+    const composition = compositionWithoutNetwork();
+    try {
+      await composition.store.startPairingFromAddress("node-link");
+
+      const page = composition.store.pairingPage();
+      // 已读到内容（不是 `idle`），且**不是** `failed`：这条入口接受 node-link 载荷，
+      // 并把载荷里公开的对端信息呈现出来（§13.1：HTTP 来源由 endpoint 的 host 派生）。
+      expect(page.phase).toBe("node_link_scanned");
+      expect(page.host?.address).toBe("https://work-pc.example.ts.net");
+      expect(page.host?.hostId).toBe(HOST_ID);
+      expect(addressBar.replaced).toEqual(["/node-link/pair"]);
+      expect(addressBar.pushed).toEqual([]);
+      // 清除后地址栏里的地址仍落在 node-link 配对页（`replaceState` 只改地址，不触发导航）。
+      expect(routeKeyOf(addressBar.address())).toBe("/node-link/pair");
     } finally {
       addressBar.restore();
       composition.dispose();

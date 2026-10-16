@@ -15,6 +15,7 @@ import type { SessionSummary, WorkspaceRef } from "../../src/protocol";
 import DirectoriesRoute from "../../app/index";
 import DirectoryDetailRoute from "../../app/dir/[alias]";
 import HostsRoute from "../../app/hosts";
+import NodeLinkPairRoute from "../../app/node-link/pair";
 import PairRoute from "../../app/pair";
 import SessionRoute from "../../app/session/[id]";
 import type { RouteEntry } from "./router-stub";
@@ -143,6 +144,19 @@ export const DIRS_ROUTE: RouteEntry = { path: "/", component: DirectoriesRoute a
  * 「未配对」起点的用例（`checks/pairing-first-run.ts`）从这一页走真实配对链路。
  */
 export const PAIR_ROUTE: RouteEntry = { path: "/pair", component: PairRoute as RouteComponent, params: {} };
+
+/**
+ * node-link 配对路由（`app/node-link/pair.tsx`）。
+ *
+ * 服务端为本机 node-link 配对生成的二维码指向这一条路径（`NODE_LINK_PROTOCOL.md` §13.1）：
+ * 它复用 `app/pair.tsx` 的配对入口主体，只把期望的配对类型声明成 `node-link`。
+ * `checks/pairing-kinds.ts` 用它验「打开该地址落在可用入口」与「两类入口互不混淆」。
+ */
+export const NODE_LINK_PAIR_ROUTE: RouteEntry = {
+  path: "/node-link/pair",
+  component: NodeLinkPairRoute as RouteComponent,
+  params: {},
+};
 
 /**
  * 主机与连接页路由（`app/hosts.tsx`）。

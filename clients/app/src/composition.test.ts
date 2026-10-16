@@ -31,6 +31,8 @@ import { PairingPanel } from "./components";
 import { createComposition } from "./composition";
 import type { Composition, CompositionPorts, FetchLike, PairingHttpResponse } from "./composition";
 import { PAIRING_POLL_INTERVAL_MS, isPairingInFlight } from "./features/pairing-model";
+import type { PairingTransport } from "./features/pairing-model";
+import type { PairingQrPayload } from "./protocol";
 import { encodeBase64Url } from "./sync-client";
 import {
   FakeClock,
@@ -455,6 +457,19 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
     expiresAt: new Date(Date.now() + 600_000).toISOString(),
   };
 
+  /**
+   * 读出夹具二维码（`QR`）的**sync**载荷。
+   *
+   * `readQrPayload` 现在返回「载荷 + 类型」的联合（design D3），而 `claim` / `poll` 只接
+   * `PairingQrPayload`。夹具内容都是 sync 的，这里按 `kind` 判别收窄——用判别而不是 `as`
+   * 断言：真读成 node-link 时这里当场抛错，而不是把联合藏进生产签名。
+   */
+  const readFixtureQr = (pairing: PairingTransport): PairingQrPayload => {
+    const read = pairing.readQrPayload(JSON.stringify(QR));
+    if (read.kind !== "sync") throw new Error("夹具二维码应当是 sync 载荷");
+    return read.qr;
+  };
+
   it("二维码形状校验：过期、协议不符、缺字段一律抛错（不尽力解析）", () => {
     const context = setup();
     expect(() => context.composition.pairing.readQrPayload("{")).toThrow(/JSON/);
@@ -476,9 +491,13 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
     const payload = encodeBase64Url(new TextEncoder().encode(json));
 
     // 三种容器都解析出同一份载荷：地址（§7.1 的二维码形态）、片段（页面自己读片段时给它）、裸载荷。
-    expect(context.composition.pairing.readQrPayload(`${ORIGIN}/pair#data=${payload}`)).toEqual(QR);
-    expect(context.composition.pairing.readQrPayload(`data=${payload}`)).toEqual(QR);
-    expect(context.composition.pairing.readQrPayload(payload)).toEqual(QR);
+    // 类型由读取口**标注**（`kind`）：入口据此校验，不靠载荷形状猜（design D2/D3）。
+    expect(context.composition.pairing.readQrPayload(`${ORIGIN}/pair#data=${payload}`)).toEqual({
+      kind: "sync",
+      qr: QR,
+    });
+    expect(context.composition.pairing.readQrPayload(`data=${payload}`)).toEqual({ kind: "sync", qr: QR });
+    expect(context.composition.pairing.readQrPayload(payload)).toEqual({ kind: "sync", qr: QR });
     // 容器对了但载荷不对（版本不符）仍然明确失败——容器宽松不等于载荷宽松。
     expect(() =>
       context.composition.pairing.readQrPayload(`${ORIGIN}/pair#data=${encodeBase64Url(new TextEncoder().encode("{}"))}`),
@@ -488,10 +507,53 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
     context.composition.dispose();
   });
 
+  it("node-link 载荷按同一口径读出并标注类型；字段校验不放宽（design D3）", () => {
+    const context = setup();
+    const nodeLink = {
+      pairingProtocol: "acp-remote-nodelink-v1",
+      ownerNodeId: HOST_ID,
+      ownerPublicKey: QR_HOST_PUBLIC_KEY,
+      endpoint: "wss://work-pc.example.ts.net/node-link/v1",
+      pairingId: "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+      pairingSecret: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    };
+    const payload = encodeBase64Url(new TextEncoder().encode(JSON.stringify(nodeLink)));
+
+    // 三种容器读出的都是同一份 node-link 载荷，且类型被标注出来——**不**在这里拒收：
+    // 「哪一类入口接受哪一类载荷」是入口的判定（design D2/D3）。
+    expect(context.composition.pairing.readQrPayload(`${ORIGIN}/node-link/pair#data=${payload}`)).toEqual({
+      kind: "node-link",
+      qr: nodeLink,
+    });
+    expect(context.composition.pairing.readQrPayload(`data=${payload}`)).toEqual({ kind: "node-link", qr: nodeLink });
+    expect(context.composition.pairing.readQrPayload(payload)).toEqual({ kind: "node-link", qr: nodeLink });
+
+    // 与 sync 侧同一组失败形态：端点形状、两条 base64url 字段的长度、过期时间逐项照旧。
+    for (const [name, payloadWith] of [
+      ["端点形状非法", { ...nodeLink, endpoint: "wss://work-pc.example.ts.net/other" }],
+      ["端点不是 wss", { ...nodeLink, endpoint: "https://work-pc.example.ts.net/node-link/v1" }],
+      ["缺字段", { ...nodeLink, ownerNodeId: undefined }],
+      ["公钥长度不符", { ...nodeLink, ownerPublicKey: "AQID" }],
+      ["秘密长度不符", { ...nodeLink, pairingSecret: "AQID" }],
+      ["已过期", { ...nodeLink, expiresAt: new Date(0).toISOString() }],
+    ] as const) {
+      expect(
+        () => context.composition.pairing.readQrPayload(JSON.stringify(payloadWith)),
+        name,
+      ).toThrow(/二维码/);
+    }
+    // 协议常量不在登记表内（既不是 sync 也不是 node-link）：仍然明确失败。
+    expect(() =>
+      context.composition.pairing.readQrPayload(JSON.stringify({ ...nodeLink, pairingProtocol: "acp-remote-other-v1" })),
+    ).toThrow(/协议/);
+    context.composition.dispose();
+  });
+
   it("claim 发往 /sync/v1/pairing/claim，body 含 pairingId/deviceId/clientNonce/proof", async () => {
     const context = setup();
     const error = await context.composition.pairing.claim({
-      qr: context.composition.pairing.readQrPayload(JSON.stringify(QR)),
+      qr: readFixtureQr(context.composition.pairing),
       canonicalOrigin: ORIGIN,
     });
 
@@ -521,7 +583,7 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
       }),
     });
     const error = await context.composition.pairing.claim({
-      qr: context.composition.pairing.readQrPayload(JSON.stringify(QR)),
+      qr: readFixtureQr(context.composition.pairing),
       canonicalOrigin: ORIGIN,
     });
 
@@ -545,12 +607,12 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
         return { ok: true, status: 200, json: () => Promise.resolve(bodyFor(polls)) };
       },
     });
-    const qr = context.composition.pairing.readQrPayload(JSON.stringify(QR));
+    const qr = readFixtureQr(context.composition.pairing);
     await context.composition.pairing.claim({ qr, canonicalOrigin: ORIGIN });
 
     // 未声明过配对时轮询明确失败，而不是发一个缺 `pairingRequestId` 的请求。
     const fresh = setup();
-    const freshQr = fresh.composition.pairing.readQrPayload(JSON.stringify(QR));
+    const freshQr = readFixtureQr(fresh.composition.pairing);
     expect(await fresh.composition.pairing.poll({ qr: freshQr, requestNonce: "AAECAwQFBgcICQoLDA0ODw" })).toMatchObject({
       kind: "error",
     });
@@ -602,7 +664,7 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
           return { ok: true, status: 200, json: () => Promise.resolve(scenario.body) };
         },
       });
-      const qr = context.composition.pairing.readQrPayload(JSON.stringify(QR));
+      const qr = readFixtureQr(context.composition.pairing);
       await context.composition.pairing.claim({ qr, canonicalOrigin: ORIGIN });
       const result = await context.composition.pairing.poll({ qr, requestNonce: "AAECAwQFBgcICQoLDA0ODw" });
 
@@ -775,7 +837,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     expect(context.sockets.sockets).toHaveLength(0);
     expect(context.composition.store.state.connection.state).toBe("unpaired");
 
-    await context.composition.store.submitPairingQrText(pairingUrl());
+    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
     expect(context.composition.store.pairingPage().phase).toBe("claiming");
 
     // 轮询节奏由注入的假时钟驱动：推进一个窗口才有第一次状态查询（否则页面会空转打服务端）。
@@ -829,7 +891,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
       ["字段长度不符", pairingUrl({ pairingSecret: "AQID" })],
       ["不是二维码内容", "把这一段贴进来"],
     ] as const) {
-      await context.composition.store.submitPairingQrText(text);
+      await context.composition.store.submitPairingQrText(text, "sync");
       const page = context.composition.store.pairingPage();
       expect(page.phase, name).toBe("failed");
       expect(page.error?.code, name).toBe(
@@ -849,7 +911,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
 
     try {
       await context.composition.start();
-      await context.composition.store.startPairingFromAddress();
+      await context.composition.store.startPairingFromAddress("sync");
 
       // 2.4 片段被清除：`replaceState` 收到的是「路径 + 查询」，片段（含 secret）已不在地址里。
       expect(addressBar.replaced).toEqual(["/pair"]);
@@ -926,7 +988,7 @@ describe("组合根：配对成功但收口失败（连接没起来）的页面�
       },
     });
 
-    await context.composition.store.submitPairingQrText(pairingUrl());
+    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
     await advanceUntil(
       context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",
@@ -980,7 +1042,7 @@ describe("组合根：配对请求被拒绝时收口（不把状态留在「进�
     });
     await context.composition.start();
 
-    await context.composition.store.submitPairingQrText(pairingUrl());
+    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
 
     const failed = context.composition.store.pairingPage();
     // 反例：若 `claim` 的拒绝直接冒泡（没有收口），阶段会停在 `claiming` → 断言变红。
@@ -995,7 +1057,7 @@ describe("组合根：配对请求被拒绝时收口（不把状态留在「进�
     expect([...context.cache.entries.keys()]).toEqual([]);
 
     // 会话真的结束了：同一次页面会话里可以立刻重试，且这次走到了轮询。
-    await context.composition.store.submitPairingQrText(pairingUrl());
+    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
     expect(context.composition.store.pairingPage().phase).toBe("claiming");
     await advanceUntil(
       context,
@@ -1040,7 +1102,7 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
     context.clock.advanceBy(RECONNECT_MAX_WINDOW_MS);
     expect(context.sockets.sockets).toHaveLength(1);
 
-    await context.composition.store.submitPairingQrText(pairingUrl());
+    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
     await advanceUntil(
       context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",
@@ -1083,7 +1145,7 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
     });
     await startBlockedOnMissingHostKey(context);
 
-    await context.composition.store.submitPairingQrText(pairingUrl({ hostId: NEW_HOST_ID }));
+    await context.composition.store.submitPairingQrText(pairingUrl({ hostId: NEW_HOST_ID }), "sync");
     await advanceUntil(
       context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",

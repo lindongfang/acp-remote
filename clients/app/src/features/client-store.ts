@@ -118,15 +118,17 @@ import type {
 import { buildDirectoryDetailModel, buildDirectoryPageModel, buildSessionRowsByAlias } from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
-import type { PairingPageModel, PairingPollResult, PairingWiring } from "./pairing-model";
+import type { PairingKind, PairingPageModel, PairingPollResult, PairingQrRead, PairingWiring } from "./pairing-model";
 import {
   PAIRING_POLL_INTERVAL_MS,
   applyClaiming,
   applyPairingCloseoutFailure,
   applyPairingFailure,
   applyPollResult,
+  applyScannedNodeLink,
   applyScannedQr,
   initialPairingPageModel,
+  kindMismatchFailure,
   pairedHostRecordFor,
   pairedHostWriteFailure,
   publicErrorForCloseoutFailure,
@@ -1212,23 +1214,25 @@ export class ClientStore {
 
   /**
    * 配对页的主用例（页面进页时调用一次）：地址片段里有配对内容就读取并**立即清除**该片段，
-   * 然后进入认领流程；没有内容时不动状态——页面停在输入入口等用户粘贴。
+   * 然后进入与 `kind` 对应的流程；没有内容时不动状态——页面停在输入入口等用户粘贴。
    *
+   * `kind` 是**路由**声明的期望类型（design D2）：载荷与它不一致时明确失败，绝不交给另一类流程。
    * 片段读取与清除都在组合根（地址栏是平台能力，`AGENTS.md` §6），本方法只消费它的结果。
    */
-  async startPairingFromAddress(): Promise<void> {
+  async startPairingFromAddress(kind: PairingKind): Promise<void> {
     const text = this.#pairing?.takeQrTextFromFragment() ?? null;
     if (text === null) return;
-    await this.#beginPairing(text);
+    await this.#beginPairing(text, kind);
   }
 
   /**
    * 粘贴入口：一段二维码内容（地址 / 片段 / 载荷）→ 结构校验 → 认领 → 轮询 → 已配对。
    *
+   * `kind` 同 {@link startPairingFromAddress}：由本页的路由声明，用于把「喂错内容」变成明确失败。
    * 结构校验不过时**明确失败且不发任何请求**（不尽力解析）；配对进行中重复提交被忽略，
    * 否则会出现两条并行的 claim 与轮询。
    */
-  async submitPairingQrText(text: string): Promise<void> {
+  async submitPairingQrText(text: string, kind: PairingKind): Promise<void> {
     if (this.#pairing === null) {
       this.#commit({
         ...this.#state,
@@ -1242,17 +1246,17 @@ export class ClientStore {
       return;
     }
     if (this.#pairingSession !== null) return;
-    await this.#beginPairing(text);
+    await this.#beginPairing(text, kind);
   }
 
-  /** 结构校验 → claim → 首次轮询。校验不过时在这里收口，绝不发请求。 */
-  async #beginPairing(text: string): Promise<void> {
+  /** 结构校验 → 类型校验 → claim → 首次轮询。校验不过时在这里收口，绝不发请求。 */
+  async #beginPairing(text: string, expectedKind: PairingKind): Promise<void> {
     const wiring = this.#pairing;
     if (wiring === null) return;
 
-    let qr: PairingQrPayload;
+    let read: PairingQrRead;
     try {
-      qr = wiring.transport.readQrPayload(text);
+      read = wiring.transport.readQrPayload(text);
     } catch (error) {
       this.#commit({
         ...this.#state,
@@ -1261,6 +1265,29 @@ export class ClientStore {
       return;
     }
 
+    // 类型校验（design D2/D3）：载荷的类型由组合根在读取时标注，这里只把它与**路由声明的**类型
+    // 对上——不猜载荷形状。不一致（例如把 node-link 二维码喂给 sync 入口）就在这里停住：
+    // 另一类流程拿不到它，也不会有任何请求发出去。
+    if (read.kind !== expectedKind) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(
+          this.#state.pairing,
+          kindMismatchFailure(expectedKind, read.kind),
+        ),
+      });
+      return;
+    }
+
+    if (read.kind === "node-link") {
+      // node-link 载荷：本客户端不是 node-link 配对的参与方（§13.2/§13.3 的 claim 与 status
+      // 由节点发起），因此只把公开的对端信息呈现给入口，**不发任何请求**，也不开配对会话
+      // （含 `pairingSecret` 的载荷在这里即弃，不进仓库的任何字段）。
+      this.#commit({ ...this.#state, pairing: applyScannedNodeLink(this.#state.pairing, read.qr) });
+      return;
+    }
+
+    const qr = read.qr;
     // 载荷从这一刻起由私有字段持有；`applyScannedQr` 只把**公开**的主机出示信息写进状态。
     this.#pairingSession = { qr, cancel: null };
     this.#commit({ ...this.#state, pairing: applyClaiming(applyScannedQr(this.#state.pairing, qr)) });
