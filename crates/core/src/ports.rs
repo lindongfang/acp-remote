@@ -1394,3 +1394,40 @@ pub trait IdGenerator: Send + Sync {
     fn origin_epoch(&self) -> OriginEpoch;
     fn request_id(&self) -> RequestId;
 }
+
+// ---------------------------------------------------------------------------------------------
+// §5.5 目录浏览
+// ---------------------------------------------------------------------------------------------
+
+/// 目录浏览端口（§5.5/§11.9）：`workspace.browse` 的只读、逐层目录列举。
+///
+/// 三条约束（`sync-workspace-browse` 的「结果形状」与「无副作用」）：
+///
+/// - **只列目录**：只返回**直接子目录**，MUST NOT 返回文件条目，也不返回文件内容、大小、时间戳或权限
+///   位——`workspace.browse` 的条目只承载名称与绝对路径，因此本端口没有承载这些事实的字段；
+/// - **只读**：不写任何登记、缓存或会话状态，也不让被查看的目录因此获得任何后续权限；
+/// - **顺序不作要求**：确定顺序（名称的 Unicode 码点升序）由用例层在投影时施加，端口按自己的自然顺序
+///   返回即可；同一层不可读、不存在或不是目录对调用方是**同一类**事实（[`PortError::Unavailable`] 的
+///   `IoError`），不得用错误区分它们，也不得回退到父层或根列表。
+#[async_trait]
+pub trait DirectoryBrowser: Send + Sync {
+    /// 本机的根列表（`workspace.browse` 的父路径为 `null` 的分支）：每个条目是一个根挂载点/盘符。
+    async fn roots(&self) -> Result<Vec<DirectoryListing>, PortError>;
+
+    /// `parent` 的**直接**子目录。`parent` 是**已规范化**的绝对路径：形状校验（绝对、无 `..`）与
+    /// 存在性/目录性判定由用例层在调用本方法**之前**完成（§5.1 的同一口径），实现只负责列举。
+    async fn directories(&self, parent: &str) -> Result<Vec<DirectoryListing>, PortError>;
+}
+
+/// 目录浏览端口的一条子目录：只含名称与该目录的绝对路径。
+///
+/// 刻意没有大小、时间戳、权限或「是否是文件」这类字段——那些事实不在 `workspace.browse` 的下发范围内
+/// （`sync-workspace-browse` 的「结果不含文件内容与元数据」），类型上不给可能性比运行时过滤更可靠。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryListing {
+    /// 该子目录的名称（单层，不含任何路径分隔符）。
+    pub name: String,
+    /// 该子目录的绝对路径（实现侧的规范化结果；下发给客户端的形式还要经 `strip_verbatim`，见
+    /// §11.9 与 `design.md` D2）。
+    pub path: String,
+}

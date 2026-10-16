@@ -700,3 +700,200 @@ fn the_raw_payload_feature_id_is_in_the_negotiated_vocabulary() {
         "{RAW_PAYLOAD_FEATURE} 不在 SUPPORTED_FEATURES 里 —— 门控会永不命中"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// `core.file-diff.v1` 的投递侧门控（`file.changed` 的差异行）
+// ---------------------------------------------------------------------------------------------
+
+/// 已协商差异行能力的连接（协商集合只比 [`without_file_diff`] 多 `core.file-diff.v1`）。
+fn with_file_diff() -> NegotiatedFeatures {
+    NegotiatedFeatures::new(vec![
+        EVENT_ORIGIN_FEATURE.to_owned(),
+        RAW_PAYLOAD_FEATURE.to_owned(),
+        FILE_DIFF_FEATURE.to_owned(),
+    ])
+}
+
+/// 未协商差异行能力的连接（其余两条与本模块的既有素材一致）。
+fn without_file_diff() -> NegotiatedFeatures {
+    NegotiatedFeatures::new(vec![
+        EVENT_ORIGIN_FEATURE.to_owned(),
+        RAW_PAYLOAD_FEATURE.to_owned(),
+    ])
+}
+
+/// core 的 `file_changed_view` 逐字符拼出的紧凑视图：`changeId`/`kind`/`displayPath`/`summary`/统计 +
+/// **尾部的** `diffLines`（差异行是最后一个成员，因此去键就是去掉这一段）。
+const FILE_CHANGED_WITH_DIFF: &str = r#"{"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"1 处改动","addedLines":"1","deletedLines":"1","diffLines":[{"kind":"deleted","text":"a"},{"kind":"added","text":"X"}]}"#;
+
+/// 同一视图**去掉差异行**后的字节（协商与未协商两条路径的其余字段必须逐字节相同）。
+const FILE_CHANGED_WITH_DIFF_STRIPPED: &str = r#"{"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"1 处改动","addedLines":"1","deletedLines":"1"}"#;
+
+/// 差异行因超限未下发：视图带 `diffUnavailable`（与 `diffLines` 互斥）——它受**同一条**门控。
+const FILE_CHANGED_OVER_LIMIT: &str = r#"{"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"900 处改动","addedLines":"900","deletedLines":"900","diffUnavailable":{"reason":"size_limit"}}"#;
+
+/// 同一视图**去掉不可用标记**后的字节。
+const FILE_CHANGED_OVER_LIMIT_STRIPPED: &str = r#"{"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"900 处改动","addedLines":"900","deletedLines":"900"}"#;
+
+/// 同一条差异行视图，但 `diffLines` 在**对象第一个成员位**（core 今天把这两个键写在末位，这里刻意反过来）。
+///
+/// 视图的登记形状（`event-views.schema.json#/$defs/file.changed`）不约束成员顺序，将来多一个
+/// `file.changed` 视图生产者也完全可能给出别的顺序，因此去键必须对两种形状都成立——见用例
+/// [`a_leading_file_diff_key_is_stripped_like_a_trailing_one`]。
+const FILE_CHANGED_DIFF_FIRST: &str = r#"{"diffLines":[{"kind":"deleted","text":"a"},{"kind":"added","text":"X"}],"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"1 处改动","addedLines":"1","deletedLines":"1"}"#;
+
+/// 同一条 `diffUnavailable` 视图，同样把被删键放在第一个成员位。
+const FILE_CHANGED_OVER_LIMIT_FIRST: &str = r#"{"diffUnavailable":{"reason":"size_limit"},"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"900 处改动","addedLines":"900","deletedLines":"900"}"#;
+
+/// 一条 `file.changed` 事件（正文就是给定的视图文本）。
+fn file_changed(sequence: u64, view: &str) -> SyncEventRecord {
+    record(
+        sequence,
+        "file.changed",
+        CoreEventPayload::new(ViewJson::new(view).expect("view"), None),
+    )
+}
+
+/// 协商了 `core.file-diff.v1` 的连接照常收到差异行（这一条锚住另一侧：门控不是「永不携带」）。
+#[test]
+fn a_negotiated_file_diff_feature_carries_the_diff_lines() {
+    let record = file_changed(21, FILE_CHANGED_WITH_DIFF);
+    let (handle, mut receiver) = connection();
+
+    let (outcome, frames) = deliver_once(&handle, &record, &with_file_diff(), &mut receiver);
+
+    assert_eq!(outcome, EventDelivery::Queued);
+    assert!(
+        frames[0].text.contains(FILE_CHANGED_WITH_DIFF),
+        "协商后视图必须逐字节携带差异行：{}",
+        frames[0].text
+    );
+}
+
+/// 未协商 `core.file-diff.v1`：差异行键**缺席**（不是 `null`、不是空数组），其余字段逐字节一致。
+///
+/// 两条判据都在**帧文本**上做：`diffLines`/`diffUnavailable` 一次都不许出现，而去掉该键的那段字节必须
+/// 逐字出现在帧里（因此「顺手改坏了别的字段」也会被抓住）。
+#[test]
+fn an_unnegotiated_file_diff_feature_omits_the_keys_and_keeps_the_rest_verbatim() {
+    for (index, (view, stripped, key)) in [
+        (
+            FILE_CHANGED_WITH_DIFF,
+            FILE_CHANGED_WITH_DIFF_STRIPPED,
+            "diffLines",
+        ),
+        (
+            FILE_CHANGED_OVER_LIMIT,
+            FILE_CHANGED_OVER_LIMIT_STRIPPED,
+            "diffUnavailable",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let record = file_changed(30 + index as u64, view);
+        let (handle, mut receiver) = connection();
+
+        let (outcome, frames) = deliver_once(&handle, &record, &without_file_diff(), &mut receiver);
+
+        assert_eq!(outcome, EventDelivery::Queued, "事件仍必须下发");
+        let text = &frames[0].text;
+        assert!(!text.contains(key), "未协商时 {key} 必须缺席：{text}");
+        assert!(
+            !text.contains(&format!("\"{key}\":null")) && !text.contains(&format!("\"{key}\":[]")),
+            "缺席不是 null、也不是空数组：{text}"
+        );
+        assert!(
+            text.contains(stripped),
+            "去键后其余字段必须逐字节保留（期望片段 {stripped}）：{text}"
+        );
+        // 去键后的视图仍是登记形状（`event-views.schema.json#/$defs/file.changed` 里两个键都可选），
+        // 因此客户端按自己的封闭形状校验不会因为「多键」或「缺键」拒收整条事件。
+        let view = RawObject::parse(&payload_of(&frames[0].body)["view"].to_string())
+            .expect("view 是对象");
+        assert!(
+            views::project("file.changed", &view).is_ok(),
+            "去键后的视图必须仍满足登记的最低字段：{text}"
+        );
+    }
+}
+
+/// 被删键位于**第一个成员位**时必须照样去键（上一条用例只覆盖「被删键在末位」的形状）。
+///
+/// 这两种形状会把「用一个标记同时表达『输出里是否已有成员』与『语法上此处是否该出现成员』」的实现
+/// 分开：合并写法下删掉首位成员不改变那个标记，下一次循环读到的**合法**分隔逗号会被当成「开头就是
+/// 逗号」，整段文本判失败 → [`crate::sync::event::gate_file_diff`] 返回 `None` → 调用方保留原文 →
+/// 未协商 `core.file-diff.v1` 的连接照常收到差异行（fail-open）。因此本用例断言两条：这两个键缺席，
+/// 且其余成员逐字节保留（去键后的整段视图就是既有末位夹具去键后的那段字节）。
+#[test]
+fn a_leading_file_diff_key_is_stripped_like_a_trailing_one() {
+    for (index, (view, stripped, key)) in [
+        (
+            FILE_CHANGED_DIFF_FIRST,
+            FILE_CHANGED_WITH_DIFF_STRIPPED,
+            "diffLines",
+        ),
+        (
+            FILE_CHANGED_OVER_LIMIT_FIRST,
+            FILE_CHANGED_OVER_LIMIT_STRIPPED,
+            "diffUnavailable",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let record = file_changed(50 + index as u64, view);
+        let (handle, mut receiver) = connection();
+
+        let (outcome, frames) = deliver_once(&handle, &record, &without_file_diff(), &mut receiver);
+
+        assert_eq!(outcome, EventDelivery::Queued, "事件仍必须下发");
+        let text = &frames[0].text;
+        assert!(
+            !text.contains(key),
+            "首位被删键 {key} 必须缺席（合并标记的写法会在这里变红）：{text}"
+        );
+        assert!(
+            text.contains(stripped),
+            "去键后其余成员必须逐字节保留且顺序不变（期望片段 {stripped}）：{text}"
+        );
+        // 去键后的视图仍是登记形状：客户端按自己的封闭形状校验不会因为「缺键」拒收整条事件。
+        let view = RawObject::parse(&payload_of(&frames[0].body)["view"].to_string())
+            .expect("view 是对象");
+        assert!(
+            views::project("file.changed", &view).is_ok(),
+            "去键后的视图必须仍满足登记的最低字段：{text}"
+        );
+    }
+}
+
+/// `FILE_DIFF_FEATURE` 必须真的是协商词表里的一项（否则门控会静默永不命中）。
+#[test]
+fn the_file_diff_feature_id_is_in_the_negotiated_vocabulary() {
+    assert!(
+        crate::sync::conn::handshake::SUPPORTED_FEATURES.contains(&FILE_DIFF_FEATURE),
+        "{FILE_DIFF_FEATURE} 不在 SUPPORTED_FEATURES 里 —— 门控会永不命中"
+    );
+}
+
+/// 门控只作用于 `file.changed`：别的 eventType 上同名键（生产者错写、或将来的别的事件视图）不动。
+#[test]
+fn the_diff_gate_leaves_other_event_types_untouched() {
+    let view =
+        r#"{"turnId":"7f3e9a10-5c2b-4d8e-9f01-3a6b5c7d8e9f","state":"running","diffLines":[]}"#;
+    let record = record(
+        40,
+        "turn.started",
+        CoreEventPayload::new(ViewJson::new(view).expect("view"), None),
+    );
+    let (handle, mut receiver) = connection();
+
+    let (outcome, frames) = deliver_once(&handle, &record, &without_file_diff(), &mut receiver);
+
+    assert_eq!(outcome, EventDelivery::Queued);
+    assert!(
+        frames[0].text.contains(view),
+        "只有 file.changed 受该门控：{}",
+        frames[0].text
+    );
+}

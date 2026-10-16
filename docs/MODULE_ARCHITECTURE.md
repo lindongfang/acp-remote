@@ -2,6 +2,7 @@
 
 > 状态：模块边界已冻结并开始落地（`acpr-transcript`/`acpr-wire`/`sync-protocol`/`node-link-protocol`/`core`/`storage-sqlite`/`acp-protocol`/`agent-host`/`identity-auth`/`identity-keystore`/`server`/`app` 已实现；`server` 已落地的路径是切片 4 的 `transport::local` + `local_admin`、切片 5 的 `transport::net` + `node_link`、`sync-server-connection` 的 `sync`（认证、订阅、投递、快照与配对 HTTP）与 `sync-server-commands` 的业务命令面，以及 `sync-ui-hosting` 在 `transport::net` 上的根路径静态托管（见 §4.9），`acp_facade` 仍待后续切片；`app` 已按切片 4/5/本变更接线，见 §3 `[现状]` 与 `README.md` 的 crate 表）
 > 版本：0.5
+> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery` WP2）：§4.1 的 out-port 摘要新增 `DirectoryBrowser`（`workspace.browse` 的逐层目录列举）、入站能力新增 `WorkspaceBrowse / SyncSnapshotQueries`，并新增一条 `[决定]` 收口「已登记目录的路径边界 + 目录浏览 + 建目录开关」三条职责（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）；`file.changed` 的行级统计与结构化差异行同源派生也记入 §4.1 的事件 view 分工。§4.9 新增一条 `[决定]`：Sync 面的三处 feature 门控（浏览命令、`workspaces` 的路径键、`file.changed` 的差异行）是投递层的唯一判定点，core 不读 feature 表。crate 边界与依赖矩阵**未变**。
 > 修订记录（2026-10-16，`pairing-model`）：§4.8 的 `identity-auth` 职责与授权词汇段按设备权限层删除改写（`identity-auth` 保留跨节点 `grant.*` 展开，设备方向没有授权词汇；`pack.*`/`preset.*` 删除）；§4.9 `[现状]` 把 `sync::command` 的「逐命令 scope 授权先于本机读取」改为「认证与撤销判定先于本机读取」；§11 的词表来源去掉 `pack`。crate 边界、依赖矩阵与 `[现状]` 的落地范围**未变**。
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4/WP2）：§3.1 新增依赖选型的 `[决定]`（`rust-embed 8.13` + `debug-embed`：四判据核验、依赖闭包 8 个节点、落选候选与「为何不用 `interpolate-folder-path`」）；§4.9 `[现状]` 按静态面实绩更新（`transport::net` 的**三类端点**、嵌入资源表模块与 `crates/server/build.rs` 的编译期二选一、发布构建缺产物即拒绝启动、`daemon.status.uiBuildVersion`）；§3 状态行的 `server` 已落地范围随之补上业务命令面（此前 `sync-server-commands` 只更新了 §4.9）与根路径静态托管。
 > 修订记录（2026-10-14，`sync-server-connection` WP7）：§3 状态行、§3 `[现状]` 与 §4.9 `[现状]` 按本变更的同步面实绩写回——`server::sync` 的 WSS 连接面、订阅与投递面、快照面与配对 HTTP 已落地（`app` 组合根 `register_sync_paths` 接线），`acp_facade`、`node-link-client` 与 §11 业务命令面仍未落地，imported 事件回源投递仍是计划条款。
@@ -222,7 +223,7 @@ Actor / DeviceRecord / NodeRecord / PairingRecord / ExportRecord / ImportRecord 
 - ID 使用 newtype；状态转换由领域方法验证，adapter 不能直接修改状态字段。
 - Owned 与 imported session 必须在类型或 `ResourceOrigin` 上可区分，禁止依靠 nullable `ownerNodeId` 猜测持久化规则。
 - `core::broker` 实现每会话串行、active turn、授权调用点、幂等、permission first-writer-wins、模型切换时机和先提交后发布。
-- 事件 view 的职责分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：适配器负责 ACP 派生投影（`block`/`title`/`options`/`deltaIndex` 等，它持有 ACP DTO），`core::broker` 在提交前补 `SYNC_PROTOCOL.md` §10.3 要求的身份与会话版本字段（`turnId`、`version`）并在存储返回后比对版本；两侧不得互相替代，也不得在 broker 的公共领域视图里重建 ACP 语义。
+- 事件 view 的职责分工（`CORE_PORTS_AND_STORAGE.md` §6 第 19 条）：适配器负责 ACP 派生投影（`block`/`title`/`options`/`deltaIndex` 等，它持有 ACP DTO），`core::broker` 在提交前补 `SYNC_PROTOCOL.md` §10.3 要求的身份与会话版本字段（`turnId`、`version`）并在存储返回后比对版本；两侧不得互相替代，也不得在 broker 的公共领域视图里重建 ACP 语义。同一分工下，`file.changed` 的**行级差异统计与结构化差异行**（新增/删除/上下文，feature `core.file-diff.v1`）都由 `core::broker` 从**同一次**类型化 Diff 派生，受 `SYNC_PROTOCOL.md` §14 的固定行数/字节/单行上限约束，超限时只带统计并以已登记原因标记差异行未下发；未协商该 feature 的连接由投递层去掉该键。
 
 入站 use case 按能力拆分：
 
@@ -231,6 +232,7 @@ SessionCommands / SessionQueries
 ConfigCommands
 PermissionCommands
 SubscriptionQueries
+WorkspaceBrowse / SyncSnapshotQueries
 DeviceManagement
 ExportManagement
 RemoteCatalogQueries
@@ -251,6 +253,7 @@ AttachmentStore          内容寻址附件字节与 LRU 清理
 EventPublisher           发布已经提交的事件或远程交付
 EventSink                后端事件通道；调用顺序即提交顺序
 ReadView                 一致性读视图，`sync.snapshot_*` 的 barrier
+DirectoryBrowser         只读的逐层目录列举（`workspace.browse` 的根列表与一层子目录，只返回名称与绝对路径）
 Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交事务内分配）
 ```
 
@@ -263,6 +266,12 @@ Clock / IdGenerator      可测试时间与 ID（eventId 由存储层在提交�
 `read-history` 服务于 Sync 的 `session.read`：owned session 由 `storage-sqlite` 从本地事件日志回答，imported session 必须由 `node-link-client` 在线向 Owner 取，Access 不得把它写进本地正文缓存；Owner 不可达时返回可区分的错误，由 `server::sync` 映射成 `resource.remote_unavailable`。远程可达性变化通过 `EventPublisher` 以 `session.origin.online_changed` 暴露给客户端，不在 core 里维护独立的在线状态缓存。
 
 端口签名、值对象形状、用例入口与 broker 事务顺序已冻结在 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3–§6；本节只保留职责边界与依赖规则。
+
+`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery`）**已登记目录的路径边界与两条受限能力**（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)；`SYNC_PROTOCOL.md` §9.4/§11.5、`SECURITY_DESIGN.md` §12.3）：
+
+- **路径**：本机规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发，且只覆盖**已登记**目录；取值是 `canonicalize` 的结果**剥掉平台 verbatim 前缀**后的形式（复用 `core` 的 `strip_verbatim`，与发往 Agent 的 `cwd` 同一条规则），客户端回传该形式时 core 重新规范化并以其为权威值。会话摘要的目录引用仍只有 `{alias, displayName}` 两个键；**客户端自己提交的目录不得被回显**，日志、审计、错误 `details`、事件载荷也一律不含路径。投影入口是 `UseCases::sync_workspace_catalog(actor, include_path)`，`include_path` 是**调用方**的协商结果（core 不读 feature 表）。
+- **目录浏览**：`workspace.browse` 是只读查询，core 侧的实现是 `UseCases::workspace_browse(actor, Option<&str>)` + 出站端口 `DirectoryBrowser`（逐层列举、只返回直接子目录的名称与绝对路径，不含文件、大小、时间戳与权限；条目的 `path` 取规范化结果剥掉平台 verbatim 前缀的下发形式，结果的 `path` 则**逐字回显本次请求的父路径**——那是「客户端自己提交的路径不得被回显」的唯一例外，见 `SYNC_PROTOCOL.md` §11.5；顺序由 core 按名称施加、单层上限 128 并置截断标记；不登记、不缓存、不产生审计动作）。feature `core.workspace-browse.v1` 的门控与未认证拒绝都在**适配层**、且在触碰文件系统之前。
+- **建目录开关**：`session.create` 的目录来源为 `WorkspaceSource::PathWithCreate` 时，core 在启动后端**之前**创建目录（连同缺失的父层）并把 `canonicalize` 的结果作为权威值；开关与别名在**类型上**互斥（别名没有对应变体），被创建的目录不登记为别名、也不在任何后续失败时被删除或回滚。
 
 ### 4.2 `acp-protocol`
 
@@ -399,6 +408,8 @@ server::transport    listener、连接级 backpressure 与根路径静态托管�
 ```
 
 四个 adapter 只能调用 `core::use_cases`，不能互相调用、查询 SQLite、启动 Agent 或直接调用 `node-link-client`。每个 adapter 自己拥有 wire/core mapper；共享的只有通用连接生命周期原语，禁止抽出“万能消息 DTO”。
+
+`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery`）Sync 面的三条新增边界（[ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)；`SYNC_PROTOCOL.md` §9.4/§10.3/§11.5）：`workspace.browse` 的 feature `core.workspace-browse.v1` 门控（未协商 → `protocol.feature_required`）与未认证拒绝都发生在**触碰文件系统之前**；快照的 `workspaces` 条目只在本连接协商了 `core.workspace-path.v1` 时带路径键（未协商时该键缺席，其余字段逐字节不变）；`file.changed` 视图的差异行（feature `core.file-diff.v1`）按同一原则由投递层去掉该键。三处门控都是**唯一**判定点——core 不读 feature 表，也不为「多出来的键」回退到任何默认值。
 
 `server::acp_facade` 常驻 daemon：ACP 会话状态、幂等记录与事件提交都必须落在拥有该会话的进程里，因此 `acp-remote acp-stdio` 只是“stdin/stdout ↔ 本地通道”的字节泵，不内嵌 core、storage 或 agent-host（否则会与 daemon 争用同一 SQLite，违反单实例锁与单一权威写入者）。本地通道因此承载两类载荷：`server::local_admin` 的管理请求/响应，以及 `server::acp_facade` 的长期双向 ACP 流；两者各自的编码由本地通道适配器拥有，不复用 Sync 与 Node Link 的 DTO。该通道的 endpoint、访问控制、framing、管理信封、两类载荷的会话语义、方法集与本地错误码以 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) 为唯一权威来源（ACP 流见其 §3.1）。daemon 未运行时 `acp-stdio` 必须以明确错误退出，不得自行打开数据库或启动第二套核心。
 

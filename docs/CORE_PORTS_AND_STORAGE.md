@@ -32,6 +32,8 @@
 > 版本：0.20（2026-10-16，`pairing-model` 变更 WP2 的文档收尾：**删除设备权限层**——设备通过认证即可执行命令、配对不授予授权，设备记录不再有授权集合。core 侧：§3.5 的 `Actor::Device` 去掉 `scopes` 字段（`Actor::scopes()` 已删除）、`DeviceRecord` 不含 `scopes`（`try_new` 7 参）；§6 第 5 条明确设备方向**没有命令级判定**（节点/本地方向不变，仍按 scope/grant 与 Export 交集判定）；§4 的两条认证收尾入口（`record_device_connected`/`record_device_auth_failure`）不再按设备 scope 归因；§11.6 第 1 条去掉 `put_device` 的「scopes 变化」分支。持久化侧：§7 升级到 **v8**（`owned_device` 删除 `scopes_json` 列，`ALTER TABLE ... DROP COLUMN`，只作用于升级前已存在的表——新建库由 DDL 常量直接建成当前形状），§7.2 版本常量改 8/8/3（imported 家族仍为 3）并新增 v7 → v8 升级段。`device.scopes_changed` 作为**历史取值**保留在两张审计表的 `action` CHECK 里（本二进制不再产生它——升级前的库可能仍有这类审计行，收缩 CHECK 会让历史行写不回去、读不出来），理由见 §7.2/§11.6 第 1 条；§9 判据 1/28 的版本链与断言同步到 v8。**§5 的 rust 块与端口签名未变**，漂移门禁继续逐条成立）
 > 版本：0.21（2026-10-16，`session-create-settle-order`：`session.create` 的落账时序改为**三笔**——受理只落幂等记录（`owned_command.session_id` 为 `NULL`、无会话行）→ 执行（`SessionBackendFactory::create`）→ 落账提交（`StateChange::SettleCreate`：建会话行 + 回填幂等行 + 终态，**同一次事务**），失败零会话行且必达终态（可证明未产生会话 ⇒ `failed`、复用既有码 `internal.unavailable`；说不清 ⇒ `uncertain`）。随之：`SessionId` 改由 core 的 `IdGenerator::session_id` 分配、存储层采用（§3.1/§5.4）；§5.1 新增 `SessionBackendFactory::terminate_agent`（窗口期事件队列超限的失败关闭——结束该 Agent 运行时）；§6 第 20 条改写为三笔时序与「窗口期有界队列 + 失败关闭后围栏」，第 16 条补**无会话**恢复分支；§9 判据 20 补无会话崩溃窗口。§2 新增 `UnavailableKind::SessionNotEstablished`。**§7 的 DDL 与 migration 未变**，漂移门禁逐条成立）
 
+> 版本：0.22（2026-10-17，`sync-path-browse-and-diff-delivery` 变更 WP2：**目录浏览端口与目录资源投影**——§5 新增 §5.5 的 `DirectoryBrowser`（`roots`/`directories`，只列直接子目录、只读、顺序不作要求）与 `DirectoryListing { name, path }`；§3.7 新增 `WorkspaceCatalogEntry { alias, display_name, path }`（`path` 为 `None` = 该键缺席，取值是规范化结果剥掉 verbatim 前缀后的形式）；§4 新增 `WorkspaceBrowse`（`workspace_browse`）与 `SyncSnapshotQueries` 的 `sync_workspace_catalog`，`session.create` 的目录来源增 `WorkspaceSource::PathWithCreate`（显式建目录开关，与别名在类型上互斥、失败不删除已建目录）；§11.1/§11.9 的路径口径改写为「**已登记**目录的路径只在协商 `core.workspace-path.v1` 时随 `workspaces` 条目下发，客户端自己提交的目录不被回显」。**§7 的 DDL 与 migration 未变**（路径取自既有 `owned_workspace.canonical_path`，无回填、无新列），漂移门禁逐条成立）
+
 ## 1. 范围与非目标
 
 范围：core 的值对象/用例/端口/错误类型、broker 的提交与发布契约、`storage-sqlite` 的 PRAGMA/文件布局/migration/表结构/索引/保留与容量/崩溃恢复、以及实现该合同的验收判据。
@@ -192,7 +194,7 @@ pub enum UnavailableKind {
 | `CreateSessionRequest` | `{ agent: AgentRef, workspace: Option<ResolvedWorkspace>, template: Option<TemplateSelection>, origin: ResourceOrigin }`——alias → 路径的解析在 `UseCases::create_session` 内完成（§5.1），后端只收已解析路径 | `NODE_LINK_PROTOCOL.md` §12.7 |
 | `ResolvedWorkspace` | `{ alias: WorkspaceAlias, canonical_path: String }`；`canonical_path` 是本机规范化绝对路径，只交给后端，不得进事件、错误 `details`、审计 `detail_digest` 的前像或 Node Link catalog（解析、校验与失败分类见 §5.1） | 本合同 |
 | `ResumeSessionRequest` | `{ agent: AgentRef, agent_session_id: AgentSessionId, workspace_cwd: String }`——恢复的输入**全部取自 Owner 自身的持久化记录**（客户端不得提供，Node Link 的 `session.resume` payload 是空对象）。`workspace_cwd` 是持久化的「创建时 canonical path」**原文**，不带 workspace 别名（别名指向可被改写或删除，恢复一律以持久化取值为权威、不得按别名重解析）；构造校验与 `ResolvedWorkspace::canonical_path` 同口径（非空、≤4096 字符、无 NUL、绝对路径形状），存在性/目录性/`canonicalize` 一致性由恢复用例在调用后端**之前**复校验（§5.1） | 本合同（§5.1） |
-| `SessionRecoveryRecord` | `{ agent: AgentRef, agent_session_id: Option<AgentSessionId>, workspace_cwd: Option<String> }`——`owned_session` 两列在 core 侧的读取形状：`None` 就是 `NULL`，语义为「该会话没有可用于恢复的数据」，恢复必须显式失败，**不得**推导、补齐或用别名重解析。两列**不进** `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，进入可投影形状会违反本条对 `canonical_path` 的边界），只经窄读取 `SessionStore::load_recovery` 进出（§5.2）。`owned_session.workspace_alias` 是**第三列但不是恢复列**：它不进本类型、也不进 `Session` 聚合，只出现在 `SessionSummary.workspace`（§3.1 的 `WorkspaceRef`）里；恢复路径既不读它也不改它 | 本合同（§5.2） |
+| `SessionRecoveryRecord` | `{ agent: AgentRef, agent_session_id: Option<AgentSessionId>, workspace_cwd: Option<String> }`——`owned_session` 两列在 core 侧的读取形状：`None` 就是 `NULL`，语义为「该会话没有可用于恢复的数据」，恢复必须显式失败，**不得**推导、补齐或用别名重解析。两列**不进** `Session`/`SessionSummary`（`workspace_cwd` 是本机规范化路径，进入可投影形状会违反「路径只出现在目录资源条目上」的边界，§3.7/§11.1），只经窄读取 `SessionStore::load_recovery` 进出（§5.2）。`owned_session.workspace_alias` 是**第三列但不是恢复列**：它不进本类型、也不进 `Session` 聚合，只出现在 `SessionSummary.workspace`（§3.1 的 `WorkspaceRef`）里；恢复路径既不读它也不改它 | 本合同（§5.2） |
 | `TemplateSelection` | `{ template_id: String(1..=128), params: Vec<(String, ConfigValue)> }` | `NODE_LINK_PROTOCOL.md` §12.3 |
 | `PromptRequest` | `{ content: Vec<PromptContentBlock> }`（形状见协议 crate 的 `promptContentBlock`） | `SYNC_PROTOCOL.md` §11.5 |
 | `EndpointEvent` | `{ kind: EventKind, event_type: EventType, payload: EventPayload, turn: Option<TurnId>, causation: Option<RequestId>, at: Timestamp }`（`SessionEndpoint` 的输出流元素） | 本合同 |
@@ -203,7 +205,8 @@ pub enum UnavailableKind {
 |---|---|---|
 | `AgentProfile` | `{ id: AgentId, display_name: String(1..=128), command: String, args: Vec<String>, env_allowlist: Vec<String>, env: Vec<ProviderEnvBinding>, default: bool, created_at: Timestamp, updated_at: Timestamp }`；`command` 是可执行文件路径或名字、**不经 shell 拼接**；`env_allowlist` 是环境变量名白名单（上限而非提示）；`env` 为空表示不注入任何凭据；至多一条 `default = true`（§7.3 的部分唯一索引） | 本合同（`crates/core/src/model/config.rs`）；写入路径 `LocalConfigStore::put_profile`（§5.3） |
 | `ProviderEnvBinding` | `{ provider_id: String, field: String, name: String }`；不变式：`name` 必须同时出现在 `env_allowlist` 里（绑定不能越过白名单）；`(provider_id, field)` 在同一条 profile 内不重复；`name` 不得是保留名（如 `ACP_REMOTE_*`）；`provider_id`/`field` 必须在 `owned_provider_ref` 的已配置字段内 | 本合同（`agent.configure` 写入时校验，运行期失效只影响新启动的进程） |
-| `WorkspaceRecord` | `{ alias: WorkspaceAlias, display_name: String(1..=128), canonical_path: String, created_at, updated_at }`；`canonical_path` 只在本节点可读，不进 Node Link catalog（§11.1） | 本合同（`crates/core/src/model/config.rs`） |
+| `WorkspaceRecord` | `{ alias: WorkspaceAlias, display_name: String(1..=128), canonical_path: String, created_at, updated_at }`；`canonical_path` 只在协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发（且只覆盖**已登记**目录），其余对端可见输出（会话摘要、事件载荷、错误 `details`、审计）都不含它，也不进 Node Link catalog（§11.1、`SYNC_PROTOCOL.md` §9.4） | 本合同（`crates/core/src/model/config.rs`） |
+| `WorkspaceCatalogEntry` | `{ alias: WorkspaceAlias, display_name: String(1..=128), path: Option<String> }`；`WorkspaceRecord` 的**投影**（Sync 快照 `workspaces` 的资源条目）。`path` 为 `None` = 该键**缺席**（客户端未协商 `core.workspace-path.v1`，不是空串、不是 `null`）；在场时是已登记目录的规范化路径**剥掉平台 verbatim 前缀**后的形式（`design.md` D2）。形状约束与 `WorkspaceRecord.canonical_path` 相同（1..=4096 字符、不含 NUL、绝对路径形状） | 本合同（`crates/core/src/model/config.rs`）；投影入口 `UseCases::sync_workspace_catalog`（§4） |
 | `ProviderRef` | `{ id: String(^[A-Za-z0-9._-]{1,64}$), kind: ProviderRefKind, display_name: String(1..=128), configured_fields: Vec<String>, keystore_ref: String, version: u64, updated_at: Timestamp }`；只记字段名、keystore 引用与版本，**永不记凭据值**；换绑必须递增 `version`（§11.2 第 7 条） | `LOCAL_ADMIN_PROTOCOL.md` §5.2；`SECURITY_DESIGN.md` §13.1 |
 | `ProviderRefKind` | enum `Provider｜Mcp` | 同左 |
 | `SeedState` | `{ seeded: bool, seeded_at: Option<Timestamp> }`；`seeded = false` 时启动流程才能导入种子，且该标记与种子 profile 同一事务提交（`LocalConfigStore::mark_seeded`，§5.3） | `CONFIG_REFERENCE.md`「配置与管理状态的权威」 |
@@ -223,11 +226,12 @@ pub enum UnavailableKind {
 | `SubscriptionQueries` | `replay(actor, SessionReference, Option<GlobalCursor>, ReplayLimit) -> ReplayBatch`、`retention_window(actor, SessionId) -> Option<(Sequence, Sequence)>`、`sync_replay(actor, Option<GlobalCursor>, ReplayLimit) -> SyncReplaySlice`（设备主体恒通过、节点按 `grant.observe`；§5.2） | `server::sync`、`server::node_link` |
 | `DeviceManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4 的 `device.*`/`node.*` | `server::local_admin`、`app::cli` |
 | `ExportManagement` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 的 `export.*`/`import.*` 写方法 | 同上 |
-| `RemoteCatalogQueries` | 见 §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
+| `RemoteCatalogQueries` | 见 `LOCAL_ADMIN_PROTOCOL.md` §5.5 读取方法与 `NODE_LINK_PROTOCOL.md` §12.3 catalog 投影 | 同上、`server::node_link` |
 | `PairingChannel` | `claim_pairing(actor, PairingClaim) -> PairingClaimOutcome`、`pairing(actor, PairingId) -> Option<PairingRecord>`、`pairing_channel_view(actor, PairingId) -> Option<PairingChannelView>`、`consume_pairing(actor, PairingId) -> PairingRecord` | `server::node_link`（及未来 `server::sync`）；前两项另由 `server::local_admin` 以 `Actor::LocalCli` 调用 |
 | `NodeLinkHandshake` | `node_link_handshake_view(accessNodeId) -> NodeLinkHandshakeView`、`record_node_link_auth(accessNodeId, AuditAction, AuditOutcome) -> ()`、`record_node_connected(accessNodeId) -> ()` | `server::node_link`（及未来 `server::sync` 的同形入口） |
 | `SyncDeviceHandshake` | `sync_device_handshake_view(deviceId) -> SyncDeviceHandshakeView`、`record_device_connected(deviceId) -> ()`、`record_device_auth_failure(deviceId) -> ()` | `server::sync` |
-| `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>` | `server::sync`（快照的 `sessions` 资源） |
+| `SyncSnapshotQueries` | `sync_visible_sessions(actor, SyncSessionQuery, owner_reachable) -> Vec<SessionSummary>`、`sync_workspace_catalog(actor, include_path: bool) -> Vec<WorkspaceCatalogEntry>`（快照的 `workspaces` 资源：`include_path` 是调用方对本连接 feature `core.workspace-path.v1` 的协商结果，为假时条目的 `path` 为 `None`） | `server::sync`（快照的 `sessions`/`workspaces` 资源） |
+| `WorkspaceBrowse` | `workspace_browse(actor, Option<&str>) -> WorkspaceBrowse`（`workspace.browse`：`None` = 根列表；条目只含名称、绝对路径与是否已登记，按名称升序、单层上限 128 并置截断标记；受 feature `core.workspace-browse.v1` 门控，门控在适配层） | `server::sync` |
 
 `[决定]` 配对通道的 actor 规则（design D12）：`claim_pairing`/`pairing`/`pairing_channel_view` 在 `Actor::LocalCli` 之外**只**接受 `Actor::PairingClaimant`，且 `actor.pairing` 必须等于本次调用的目标配对，否则与其它 actor 一样得到 `authorization.scope_denied`（同一拒绝形状，不区分「不是本机入口」与「绑定了别的配对」）；`consume_pairing` **只**接受与该配对已批准对端一致的 `Actor::Node`/`Actor::Device`，把 `approved` 推进到 `consumed`（`terminal_at` + 审计同一写集），已是 `consumed` 且对端一致时幂等成功（不覆盖首次 `terminal_at`，也不重复写审计）。
 
@@ -251,7 +255,13 @@ pub enum UnavailableKind {
 - `record_device_connected(device_id)`：认证**成功**的收尾写集（`SYNC_PROTOCOL.md` §8.4；`SECURITY_DESIGN.md` §14.2 的 `device.authenticated`）——把该设备的 `last_seen_at` 推进到本次时间，并把该设备的 `device.authenticated` 成功行在**同一事务**提交（`WriteContext` 同时携带两者，§11.2 第 6 条）。本入口没有 `actor` 参数：归因由 `device_id` 唯一确定，审计行的 actor 取 `Actor::Device { device: 该 id }`（设备不再有授权集合，因此没有 scopes 可归因，也不得取对端自报值）。`last_seen_at` 的**只前进**三分支（旧值为空 → 写入新值、新值为空 → 保留旧值、两者非空取较大者）与「`revoked` 记录不得复活」都由存储层的 `put_device`/`upsert_device` 判定，本层只读出既有行、置 `Some(now)` 并把**其余每一列原样写回**（不得用 `None` 抹掉已存值），也不预先判定撤销。**设备行不存在 → `NotFound(EntityRef::Device)` 且零写入**（`DeviceWrite` 携带的是整行，编造一行等于伪造信任）。`owned_device.last_seen_at` 的**唯一生产者是本入口**——首次认证（有待消费配对）也必须经它推进。
 - `record_device_auth_failure(device_id)`：认证**失败**的留痕（`SECURITY_DESIGN.md` §14.2 的 `device.auth_failed`；`SYNC_PROTOCOL.md` §8 的握手失败路径）。动作**恒为** `AuditAction::DeviceAuthFailed`（不接受动作参数，因此结构上写不出别的动作）、目标恒为 `Device(device_id)`、结果恒为 `AuditOutcome::Failed`，`via_node`/`local_principal_ref`/`detail_digest` 均为空（细分失败原因只进结构化日志，§14.1/§14.2 的 no-content 取舍）。**已知设备**与**未知设备**写出**形状相同**的审计行（都只按 `device_id` 归因，不带任何授权集合），**不得返回 `NotFound`**——未配对设备发起握手并失败是最常见的失败场景，正是本入口存在的主要理由，而「未知 → 错误 / 已知 → 成功」的响应差异会变成设备存在性预言机（这条与 `record_device_connected` 刻意不同：那个入口的整行写集要求行存在）。两种情形都返回 `Ok(())` 且各写一行形状相同的审计。本入口没有关联状态变更，故直接用 `AuditStore::append` 追加、不新增端口方法（§11.2 第 6 条的后半句）；成功路径的 `device.authenticated` 由 `record_device_connected` 承担，两者**不得互相替代**。
 
-`[决定]`（2026-10-14，同一变更）`SyncSnapshotQueries` 只有 `sync_visible_sessions(actor, query, owner_reachable)` 一处：Sync 快照 `sessions` 资源的来源（`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」）。它先按 `session.list` 走 `Broker::authorize`——与 `list_sessions` **逐字同口径**（同一命令名、同一 broker 判定、同一 `authorization.scope_denied`；未授权时不读会话/索引存储、也不返回任何会话）；通过后取自有会话（`SessionStore::list`，条目的 `workspace` 取自该行**持久化**的 `workspace_alias`，不得按 `workspace_cwd` 反查），并在 `include_imported` 为真时追加已导入行（`RemoteDeliveryStore::list_sessions`，投影成**同一形状**的 `SessionSummary`，不得另造字段）。`SyncSessionQuery` 的三个字段各承载一件**调用方**的判定：`owned`/`imported` 是两侧各自的过滤/分页（按各自存储的既有语义原样透传），`include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（core 不读 feature 表、也不缓存它）——为假时一行 imported 摘要都不得出现，连空占位也不给（`Default` 因此取 `false`）。顺序是自有在前、已导入在后，本层不重排（`SessionSummary` 没有排序语义字段）。`owner_reachable` 是调用方给出的 Owner 可达性**运行时事实**（投影 imported 条目的 `origin.online`），core 不缓存也不推断该状态（`MODULE_ARCHITECTURE.md` §4.1：可达性变化经 `EventPublisher` 暴露），闭包要求 `Send + Sync`。合并必须发生在 core：授权只在 core 判定、`server` 不得代替 core 判定（本节开头的 `[决定]`），适配层分别取行再自行拼接会形成第二条可见性判定路径。
+`[决定]`（2026-10-14，同一变更）`SyncSnapshotQueries` 的 `sync_visible_sessions(actor, query, owner_reachable)` 一处（另一端是 `sync_workspace_catalog`，见本节的目录资源条）：Sync 快照 `sessions` 资源的来源（`SYNC_PROTOCOL.md` §9.6；spec `sync-event-delivery`「设备可见的会话清单范围」）。它先按 `session.list` 走 `Broker::authorize`——与 `list_sessions` **逐字同口径**（同一命令名、同一 broker 判定、同一 `authorization.scope_denied`；未授权时不读会话/索引存储、也不返回任何会话）；通过后取自有会话（`SessionStore::list`，条目的 `workspace` 取自该行**持久化**的 `workspace_alias`，不得按 `workspace_cwd` 反查），并在 `include_imported` 为真时追加已导入行（`RemoteDeliveryStore::list_sessions`，投影成**同一形状**的 `SessionSummary`，不得另造字段）。`SyncSessionQuery` 的三个字段各承载一件**调用方**的判定：`owned`/`imported` 是两侧各自的过滤/分页（按各自存储的既有语义原样透传），`include_imported` 是 feature `resource.remote-origin.v1` 的**协商结果**（core 不读 feature 表、也不缓存它）——为假时一行 imported 摘要都不得出现，连空占位也不给（`Default` 因此取 `false`）。顺序是自有在前、已导入在后，本层不重排（`SessionSummary` 没有排序语义字段）。`owner_reachable` 是调用方给出的 Owner 可达性**运行时事实**（投影 imported 条目的 `origin.online`），core 不缓存也不推断该状态（`MODULE_ARCHITECTURE.md` §4.1：可达性变化经 `EventPublisher` 暴露），闭包要求 `Send + Sync`。合并必须发生在 core：授权只在 core 判定、`server` 不得代替 core 判定（本节开头的 `[决定]`），适配层分别取行再自行拼接会形成第二条可见性判定路径。
+
+`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery` 变更 WP2）**目录浏览、目录资源与建目录开关的三条口径**（spec `sync-workspace-browse`、`sync-workspace-catalog` 与 `sync-session-create`；`design.md` D1–D4/D7）：
+
+- **`workspace_browse(actor, Option<&str>)`**（`workspace.browse`）：先按 `workspace.browse` 走 `Broker::authorize`（`required_grant` 把它归入 `grant.observe`，§6 第 5 条的命令表），再按 §5.1 的**同一五步顺序**校验父路径——非绝对 → 含 `..` → 存在 → 是目录 → `canonicalize`；前两步是参数类错误（`InvalidRequest`）且判定在**任何文件系统访问之前**（端口一次都不会被调用，这条有测试断言），后三步失败是服务端不可用类（`Unavailable(IoError)`）；两类都不返回条目，也不回退到父层或根列表。顺序上「先拒 `..` 再 `canonicalize`」不可交换：Windows 的 `canonicalize` 不归一化 `..`。结果只含名称、绝对路径与是否已登记：结果的 `path` **逐字回显请求的父路径原文**（`None` = 根列表；请求字段与结果回显字段逐字相同是 `SYNC_PROTOCOL.md` §11.5 与 `command.schema.json#/$defs/workspaceBrowsePath` 的硬要求，规范化结果因此只用于调用端口与 `registered` 判定），每个**条目**的 `path` 取**下发形式**（`canonicalize` 的结果剥掉平台 verbatim 前缀），`registered` 由本层把条目的下发路径与已登记目录的下发路径比较得出（登记表的路径不下发），条目按名称的 Unicode 码点升序排列（名称相同再按路径，保证同一层两次调用同序），超过**固定**上限 128（§14）时只返回上限内条目并置 `truncated`——不静默丢弃，也不因超限整次失败。只读：不登记、不缓存、不写会话状态、不产生审计动作；命令本身受 feature `core.workspace-browse.v1` 门控，门控在适配层且必须在触碰文件系统之前（`SYNC_PROTOCOL.md` §11.5）。`None` 的父路径请求根列表（走端口的根列举），条目格式与某一层一致。
+- **`sync_workspace_catalog(actor, include_path)`**：Sync 快照 `workspaces` 资源的投影源；`include_path` 是**调用方**对本连接 feature `core.workspace-path.v1` 的协商结果（与 `include_imported` 同一模式：core 不读 feature 表、也不缓存它）。为真时每条带 `path`，取值是**已登记目录**的 `canonicalize` 结果**剥掉平台 verbatim 前缀**后的形式（`design.md` D2，复用唯一的 `strip_verbatim`）；为假时 `path` 为 `None`，对端看到的仍是只有 `alias`/`displayName` 两个键的封闭对象（多一个键会让已协商 `core.local-catalog.v1` 的旧客户端按 `protocol.schema_invalid` 拒收整条快照）。路径只出现在这些条目上：会话摘要的 `workspace` 引用仍只有两个键，客户端按别名在同一份快照内查表。
+- **`create_session` 的目录来源增 `WorkspaceSource::PathWithCreate`**（客户端提供的目录 + 显式建目录开关，`design.md` D4）：开关与别名**互斥**在类型上成立（别名没有对应变体，别名解析出的目录必然已存在），因此没有「别名 + 开关」的传参形状，也不需要运行时判定。开关为真时目录可以不存在：本层先 `create_dir_all`（缺失父层一并创建）再 `canonicalize` 并把结果作为权威值，**然后**才调 `SessionBackendFactory::create`；路径上已有成分不是目录、父层不可达、无写权限或随后的规范化失败一律是服务端不可用类（`Unavailable(IoError)`），**不覆盖、不删除**既有内容。被创建的目录**不登记**为别名（该会话呈现为「未分组」），且在任何后续失败（后端启动、落账提交）时**不删除、不回滚**——删除要区分「哪些层是这次建的」，误删用户目录的代价远高于留下一个空目录。
 
 ## 5. `core::ports` 出站端口
 
@@ -944,6 +954,35 @@ pub trait IdGenerator: Send + Sync {
 - `[决定]` `publish` 不返回结果，且不得回滚已提交事务；订阅注册与背压属于 `server`（它持有注册表与有界队列），`app` 把同一个 hub 交给 core 与 server（`MODULE_ARCHITECTURE.md` §6）。
 - `[决定]` **节点级事件不走 `EventSink`**（`sync-scope-and-pwa-client` 变更 WP3、`design.md` D6）：`agent.connected`/`agent.disconnected` 的会话标识为空，而 `EventSink` 是**会话槽位**的入口（`Broker::sink(&SessionId)` 把事件塞进该会话的 pending 队列），走它会把节点级事件归到某个会话上。节点级事实的产生点在适配器（只有它知道「本次是新 spawn 还是复用」与「进程真的退出了」），因此 `agent-host` 用 `NodeEventSink` 交付**已构造好的 `EndpointEvent`**，core 侧的唯一提交入口是 `Broker::commit_node_event`（校验事件类型/类别/turn/ACP 原文/`agentId`/`state` 词表，失败即 `InvalidRequest`），提交形状是 `session: None` 的 `OwnedCommit`。这两类事件当前**没有投递通道**（唯一的入站适配器按会话归属投递），本切片只交付产生与持久化。
 
+### 5.5 目录浏览
+
+`[决定]`（2026-10-17，`sync-path-browse-and-diff-delivery` 变更 WP2）目录浏览是 `workspace.browse` 的**只读、逐层**目录列举端口（spec `sync-workspace-browse`；§11.9）：类型上只有「名称 + 绝对路径」两个事实，因此**没有**承载文件条目、文件内容、大小、时间戳或权限位的字段——不给可能性比运行时过滤更可靠。顺序不作要求（确定顺序由用例层按名称施加），不可读/不存在/不是目录对调用方是同一类事实（`Unavailable(IoError)`），不用于区分「这一层不存在」与「这一层不可读」。端口是 dyn 化的异步 trait，由组合根注入；core 侧随 crate 提供一个本机文件系统实现作为默认值（组合根可用 `UseCases::with_directory_browser` 换掉）。
+
+```rust
+/// 目录浏览端口（§5.5/§11.9）：`workspace.browse` 的只读、逐层目录列举。
+///
+/// 三条约束：只返回**直接子目录**（不含文件、内容、大小、时间戳与权限）；只读（不写任何登记、
+/// 缓存或会话状态）；顺序不作要求（确定顺序由用例层施加）。`parent` 是**已规范化**的绝对路径，
+/// 形状校验与存在性/目录性判定由用例层在调用前完成。
+#[async_trait]
+pub trait DirectoryBrowser: Send + Sync {
+    /// 本机的根列表（父路径为 `null` 的分支）：每个条目是一个根挂载点/盘符。
+    async fn roots(&self) -> Result<Vec<DirectoryListing>, PortError>;
+
+    /// `parent` 的**直接**子目录。
+    async fn directories(&self, parent: &str) -> Result<Vec<DirectoryListing>, PortError>;
+}
+
+/// 目录浏览端口的一条子目录：只含名称与该目录的绝对路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryListing {
+    /// 该子目录的名称（单层，不含任何路径分隔符）。
+    pub name: String,
+    /// 该子目录的绝对路径（实现侧的规范化结果）。
+    pub path: String,
+}
+```
+
 ## 6. Broker 的顺序与事务契约
 
 1. owned：`EventSink` → broker 组装 `OwnedCommit` → `SessionStore::commit` → `EventPublisher::publish`（顺序不可交换）。
@@ -1035,7 +1074,7 @@ pub trait IdGenerator: Send + Sync {
 - `[决定]` **v5 → v6 升级步骤**（与 v2/v3/v4/v5 段在同一事务内、顺序在后）：唯一差异是给 §7.3 的 `owned_session` 在**列清单末尾**追加一列 `workspace_alias TEXT`（会话的目录归属），用 `ALTER TABLE owned_session ADD COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK）；该列可空、**无默认值**，因此既有会话行得到 `NULL`——`NULL` 的语义是「该会话没有目录归属（未分组）」，`MUST NOT` 被任何读取路径按 `workspace_cwd` 反查 `owned_workspace` 补齐，也 `MUST NOT` 用空串或占位别名代替（`NOT NULL DEFAULT ''` 做不到这一点：空串无法与「未分组」区分，会让「已分组」判定被默认值蒙蔽，与 v5 两列同一理由），§9 判据 28 逐行断言。写入侧与 v5 两列同属会话创建的那一次窄写提交（`CASE WHEN ?x IS NULL THEN col ELSE ?x END`，`None` = 不改该列），因此恢复流程既不读也不改它。`ALTER TABLE ADD COLUMN` 同样把新列追加在列清单末尾，所以升级库与新建库的 `pragma table_info` 列顺序逐项相等（§9 判据 18/28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
 - `[决定]` **v6 → v7 升级步骤**（与 v2/v3/v4/v5/v6 段在同一事务内、顺序在后）：唯一差异是 `owned_event.origin_kind` 的 CHECK 从四值扩到五值（新增 `'node'`，§3.4/§10.1），列集合、列顺序、其余 CHECK 与索引**逐字不变**。SQLite 不能修改既有 CHECK，因此走 **12-step 表重建**（新建 `owned_event` 新形状 → 按列拷贝**全部行（含 `global_sequence`）** → `DROP` 旧表 → `RENAME` → 重建四个索引）。**子表必须一起挪开**：`owned_interaction.request_event` 是 `owned_event` 的子外键且是 `NO ACTION`，`foreign_keys = ON` 时 `DROP TABLE` 的隐式 DELETE 会直接违反它（实测 `FOREIGN KEY constraint failed`），而官方流程要求的 `PRAGMA foreign_keys = OFF` 在事务内是 no-op、与本段「单事务」的要求冲突；因此照 v1 → v2 段处理 `imported_import` 的同款手法，先把 `owned_interaction` 的行搬进一张**无外键的过渡表**并 `DROP` 该子表（它是叶子，删除永远安全），父表重建后按 §7.3 的**规范 DDL** 把它建回并回填行——过渡表不进 `sqlite_manifest` 的最终形状，升级库与新建库的 `owned_interaction` 逐列（名称/顺序/类型/`NOT NULL`/默认值）相等。`owned_event` 的 `AUTOINCREMENT` 序列（`sqlite_sequence`）与两张审计表一起在**全部**重建之前取一次、之后回填一次（`global_sequence` 是跨节点排序与 cursor 的基准，`MUST NOT` 因保留期清理过尾部行而回退）。行级保留要求见 §9 判据 28。
 - `[决定]` **v7 → v8 升级步骤**（与 v2/v3/v4/v5/v6/v7 段在同一事务内、顺序在后）：唯一差异是从 §7.3 的 `owned_device` **删除一列** `scopes_json`（设备不再有授权集合，§3.5、§6 第 5 条），用 `ALTER TABLE owned_device DROP COLUMN` 实现——**不**走 12-step 表重建（重建只用于改既有 CHECK，见 §11.8）：该列既不在任何 CHECK/索引/外键/生成列里，也没有表引用 `owned_device`。本段**只作用于升级前就存在**的 `owned_device`（v1 库没有这张表，它由 §7.3 的 DDL 常量按**当前形状**直接建出、已不含该列，再 `ALTER TABLE ... DROP COLUMN` 会因缺列失败，因此与 v4 段同款加 `owned_device` 存在性守卫）；删列**不动** `owned_audit`/`imported_audit` 的 `action` CHECK——`'device.scopes_changed'` 作为**历史取值**保留（升级前的库可能已有这类审计行，收缩 CHECK 会让历史行写不回去、读不出来），只是本二进制不再产生它（§11.6 第 1 条）。删列后升级库与新建库的 `owned_device` 列清单（列名/顺序/类型/`NOT NULL`/默认值）逐项相等（§9 判据 28）。之后由全部升级段结束后的统一落盘把 `meta.owned_schema_version` 置为 `'8'`、`PRAGMA user_version` 置为 `8`，`meta.imported_schema_version` 保持 `'3'`（imported 家族本次不变）。
-- `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不泄漏规范化路径）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
+- `[决定]` **目录归属的读取投影**（`design.md` D1/D6）：`SessionSummary.workspace` 取自 `owned_session.workspace_alias`，展示名由 `storage-sqlite` 在同一条读查询里 `LEFT JOIN owned_workspace ON w.alias = s.workspace_alias` 取得；**关联不上时回退为别名本身**（目录被删除不丢分组，也不让规范化路径进入摘要——路径只出现在快照的 `workspaces` 条目上，§11.1）。该 JOIN 留在 `storage-sqlite` 内部（它同时拥有两张表），**不上浮到 core**。实现 `MUST NOT` 存在任何「按 `owned_session.workspace_cwd` 反查别名」的查询——`NULL` 就是未分组，这是「别名重指向后既有会话归属不漂移」的前提。
 - `[决定]` 保留不变量：`server_epoch`、会话 `origin_epoch` 与事件 `global_sequence`/`session_sequence`、`requestId` 与幂等行、命令终态、全部既有审计都逐行保留，**不得重新编号**。管理表初始为空；profile 种子与「已初始化」标记在同一事务里提交（`LocalConfigStore::mark_seeded`，§5.3），不从聊天或审计内容推断信任。
 - `[决定]` 管理表纳入 §7.5 的容量度量（TEXT 列 + 附件字节）与清理顺序；撤销 tombstone 不因容量压力被删除，空间不足时拒绝新写入而不是删活动信任或未到期审计。
 - `[决定]` 迁移测试资产：`fixtures/storage/v2/` 三件套在 v3 之后是**冻结的历史升级输入**——`empty.sqlite3`（v2 形状的空库，v2 → … → v8 连续升级用例的输入）、`from-v1.sqlite3`（含会话/事件/cursor/幂等/审计数据的 v1 库，`owned_audit` 故意留下 `audit_id = 1,2,5` 的空洞以覆盖「序列领先于 `max(audit_id)`」；v1 → … → v8 连续升级用例的输入）与 `too-new.sqlite3`（`user_version = 3`，v3 之后不再「过新」，保留为历史资产）；`fixtures/storage/v1/` 的两个文件是更早的历史资产。当前二进制不再能生成 v2 形状的空库，因此 `from-v1.sqlite3` 的生成器（`crates/storage-sqlite/tests/migration.rs` 的 `regenerate_v1_fixture`，默认 `#[ignore]`）只重建它；v3、v4 与 v5 形状的库同样不由夹具提供，而由用例现场造（新建库写行 → `DROP` 掉换代才有的列、并把换代才删的列按旧声明补回 → 降版本键），`v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_columns_only`、`v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only` 与 `v5_database_upgrades_to_v6_by_appending_a_null_workspace_alias_column`（`tests/workspace_alias.rs`）分别覆盖三段；「版本过新拒绝启动」用例改在临时副本上把 `user_version` 顶到 `FILE_FORMAT_VERSION + 1`；「已是最新版则不重写」用例改在空目录新建的当前版本库上判定。
@@ -1311,7 +1350,7 @@ CREATE TABLE owned_agent_profile (
 -- 至多一个默认 profile。
 CREATE UNIQUE INDEX owned_agent_profile_default ON owned_agent_profile(is_default) WHERE is_default = 1;
 
--- 路径只在本节点可读；不进入 Node Link catalog（§11.1）。
+-- 路径只在本机持久化，且只在协商 core.workspace-path.v1 时随快照的 workspaces 条目下发；不进入 Node Link catalog（§11.1）。
 CREATE TABLE owned_workspace (
   alias          TEXT PRIMARY KEY,
   display_name   TEXT NOT NULL,
@@ -1596,7 +1635,7 @@ CREATE TABLE imported_import_export (
 | `owned_pairing_peer` | `pairing_id`（主键）；claim 后的对端身份（`peer_kind`/`peer_id`）、名称、公钥、指纹、`client_nonce`、`claimed_at` | 每个配对最多一个 peer；与配对目标一致；claim 之后不能换人；确认时公钥转入信任材料。**不存绑定与角色**：绑定只在 `owned_pairing.host_binding`（认领时已校验两侧逐字相等，读取时回填），对端角色由配对方向推导（§11.2 第 2 条） |
 | `owned_export` | `export_id`；§3.5 `ExportRecord` 的全部字段 | `cache_policy` 固定；默认 alias/template 必须属于本 Export；撤销记录保留 |
 | `owned_agent_profile` | `agent_id`；本地 `agent.configure` 的名称、命令、参数、环境白名单、default 及创建/更新时间 | 至多一个默认 profile；字段不含 Provider/MCP 凭据；参数不经 shell 拼接 |
-| `owned_workspace` | `alias`；本地 `workspace.select` 的名称、规范化路径及创建/更新时间 | 路径只在本节点可读；建立/使用时校验目录与路径边界；不进入 Node Link catalog |
+| `owned_workspace` | `alias`；本地 `workspace.select` 的名称、规范化路径及创建/更新时间 | 路径**只在本机持久化**，且只在客户端协商 `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发（只覆盖已登记目录；`design.md` D1/D2、`SYNC_PROTOCOL.md` §9.4）；客户端自己提交的目录不被回显，日志、审计与错误 `details` 也都不含路径；建立/使用时校验目录与路径边界；不进入 Node Link catalog |
 | `owned_provider_ref` | `(provider_id, kind)`；名称、已配置字段名、keystore 引用及版本 | 不含凭据值；引用失效时失败关闭，不回落到配置文件 |
 | `imported_import`（升级） | `import_id`；`ImportRecord` 的 endpoint、owner ID、grant 集合、时间戳 | 管理记录自身不再假定恰好一个 Export；不存在内容列 |
 | `imported_import_export`（新增） | `(import_id, export_id)`；外键到 Import，关联 Owner | 同一 `(owner_node_id, export_id)` 只归一个 Import，避免两套权限与删除权威；一个 Import 可关联多个 Export |
@@ -1728,4 +1767,4 @@ CREATE TABLE imported_import_export (
 
 ### 11.9 workspace 解析（并入 §5.1/§3.6）
 
-`[已并入]` `ResolvedWorkspace` 的形状在 §3.6，解析时机、校验、失败分类、别名命名空间与不泄漏规则在 §5.1。保留的设计理由：**alias → 实际路径的解析归 core，不属于任何后端**——`agent-host`/`node-link-client` 都拿不到 `owned_workspace`（`MODULE_ARCHITECTURE.md` §5 矩阵：后端只依赖 `core` + 协议 crate），而 `SECURITY_DESIGN.md` §12.3 要求原始路径只能由 Owner 本地管理入口选择、不得经 wire 传输。UNC/网络路径允许解析但不改变授权模型；其结构化告警落在 `server` 层（core 不引入日志依赖）。
+`[已并入]` `ResolvedWorkspace` 的形状在 §3.6，解析时机、校验、失败分类、别名命名空间与路径下发口径在 §5.1。保留的设计理由：**alias → 实际路径的解析归 core，不属于任何后端**——`agent-host`/`node-link-client` 都拿不到 `owned_workspace`（`MODULE_ARCHITECTURE.md` §5 矩阵：后端只依赖 `core` + 协议 crate）。路径的边界口径（`SECURITY_DESIGN.md` §12.3、`SYNC_PROTOCOL.md` §9.4 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)）是：**已登记**目录的规范化路径只在客户端协商了 feature `core.workspace-path.v1` 时随 Sync 快照的 `workspaces` 条目下发给已认证设备（取值剥掉平台 verbatim 前缀），**客户端自己提交的目录不得被回显**，而日志、审计、错误 `details`、事件载荷与会话摘要仍一律不含路径。UNC/网络路径允许解析但不改变授权模型；其结构化告警落在 `server` 层（core 不引入日志依赖）。

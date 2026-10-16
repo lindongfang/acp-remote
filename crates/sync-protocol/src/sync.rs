@@ -14,7 +14,7 @@ use serde_json::value::RawValue;
 use crate::common::{
     AgentCatalogEntry, AgentContentBlock, Base64Url, BoundedU64, Cursor, DecimalString,
     NonEmptyText, Nullable, ProtocolVersionV1, PublicError, RawAcp, RawObject, SessionSummary,
-    Timestamp, Uuid, ValueError, WorkspaceRef, deserialize_optional_non_null,
+    Timestamp, Uuid, ValueError, WorkspaceCatalogEntry, deserialize_optional_non_null,
 };
 use crate::event::EventType;
 
@@ -396,9 +396,10 @@ pub struct SnapshotItemHistory {
 
 /// `sync.snapshotItem.workspaces` 的单个元素。
 ///
-/// `snapshotItem.workspaces` 在 schema 里是 `common.schema.json#/$defs/workspaceRef` 的 `$ref`，
-/// 因此直接复用同一个类型，不另立同形结构。
-pub type SnapshotItemWorkspace = WorkspaceRef;
+/// `snapshotItem.workspaces` 在 schema 里是 `common.schema.json#/$defs/workspaceCatalogEntry` 的
+/// `$ref`，因此直接复用同一个类型。它与 [`WorkspaceRef`]（会话摘要的目录引用）**不是**同一个形状：
+/// 只有它带 feature `core.workspace-path.v1` 门控下的可选路径键，路径因此不会在每条会话摘要里重复。
+pub type SnapshotItemWorkspace = WorkspaceCatalogEntry;
 
 /// `sync.snapshotItem.agents` 的单个元素；同理是 `#/$defs/agentCatalogEntry` 的别名。
 pub type SnapshotItemAgent = AgentCatalogEntry;

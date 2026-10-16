@@ -1,0 +1,12 @@
+{
+  "changeId": "51f0c9a2-77de-4a1b-9c33-8d2b1e4f6a90",
+  "kind": "modified",
+  "displayPath": "src/legacy/report.ts",
+  "summary": "不可用原因是封闭词表：未登记的原因不得下发",
+  "addedLines": "820",
+  "deletedLines": "640",
+  "outsideWorkspace": false,
+  "diffUnavailable": {
+    "reason": "too_many_lines"
+  }
+}

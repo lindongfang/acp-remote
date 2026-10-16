@@ -372,7 +372,7 @@ impl CommandRoute {
         command: CommandName,
     ) -> RouteOutcome {
         let Some(grant) = acp_core::broker::required_grant(command.as_str()) else {
-            // 不在 12 条命令表里的名字：wire 的枚举已保证不可达，这里显式拒绝而非放行。
+            // 不在 Node Link 命令表（13 条）里的名字：wire 的枚举已保证不可达，这里显式拒绝而非放行。
             return self.reject_field(handle, command, &submit.request_id, "command");
         };
         // ② 会话定位（不改内部状态）→ 授权交集 → attachment 代际复核：越权优先于代际判定，

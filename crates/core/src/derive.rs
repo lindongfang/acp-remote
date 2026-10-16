@@ -7,6 +7,9 @@
 //!   投影而来；本模块**不读** `rawInput` 等自由形状字段，也不猜 Agent 的意图。
 //! - 行数统计：对 `oldText`/`newText` 跑行级 Myers diff（O(ND)、线性空间），判定不出时**省略**两项而不是
 //!   填零。行数差是错的且错得隐蔽（10 行换 10 行也可能是删 2 加 2），因此这里绝不使用行数差。
+//! - 结构化差异行（R10、feature `core.file-diff.v1`）：同一份行级 diff 的**逐行**对齐（新增/删除/上下文），
+//!   受 §14 的固定行数/字节/单行上限约束；超限时只带统计并把差异行标记为 `size_limit` 未下发，绝不裁剪
+//!   行，也绝不改写 ACP 原文的字节、摘要与长度。
 //! - 展示路径：用**规范化后的前缀关系**相对化（`/a/b` 与 `/a/bc` 不会被误判为前缀关系）；越界时只下发
 //!   文件名称并置 `outsideWorkspace`，绝不泄漏工作目录根的任何片段或回退层级。
 //! - 会话标题（R9）：从 `session.info.changed` 的 ACP 原文读标题意图——`SessionInfoUpdate` 的所有字段都是
@@ -42,8 +45,18 @@ const LINE_STAT_MAX_LINES: usize = 200_000;
 /// 单个标题的长度上界（与 `Session::title`/`sessionSummary.title` 一致）。
 const TITLE_MAX_CHARS: usize = 512;
 
+/// 单处改动的**差异行数**上限（`SYNC_PROTOCOL.md` §14 的固定 v1 常量，`event-views.schema.json` 的
+/// `diffLines.maxItems`）。
+const DIFF_LINE_LIMIT: usize = 400;
+
+/// 单处改动的**差异行合计文本**上限（§14：64 KiB，按 UTF-8 字节计）。
+const DIFF_BYTE_LIMIT: usize = 64 * 1024;
+
+/// **单行**差异行文本的字符上限（§14 与 `event-views.schema.json` 的 `text.maxLength`）。
+const DIFF_LINE_MAX_CHARS: usize = 4096;
+
 // ---------------------------------------------------------------------------------------------
-// 行级差异统计（R6）
+// 行级差异（R6 统计 / R10 结构化差异行）
 // ---------------------------------------------------------------------------------------------
 
 /// 行级差异统计：`(added, deleted)`；判定不出或超出工作预算时返回 `None`（**省略**，不是零）。
@@ -129,6 +142,165 @@ fn myers_distance(a: &[&str], b: &[&str]) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 结构化差异行（R10 / feature `core.file-diff.v1`）
+// ---------------------------------------------------------------------------------------------
+
+/// `file.changed.diffLines` 的一行：判别子（`added`/`deleted`/`context`）+ **不带前缀**的行文本。
+///
+/// 文本不带 `+ `/`- `/`  ` 前缀：前缀是客户端的呈现选择，逐行下发结构化数据才能让客户端自己决定配色与
+/// 前缀，而不必解析任何拼好的文本块（`SYNC_PROTOCOL.md` §10.3）。
+pub(crate) struct DiffLine {
+    /// `diffLines[].kind`：封闭词表。
+    pub(crate) kind: &'static str,
+    /// `diffLines[].text`：该行的原文（不含行尾换行）。
+    pub(crate) text: String,
+}
+
+/// 一处改动的行级差异派生结果（R6 的统计与 R10 的差异行**同源**：来自同一次行级 diff）。
+///
+/// 三态而不是「统计 + 可选的差异行」两个独立字段：`Omitted` 是唯一会同时丢掉统计与差异行的状态，其余
+/// 两态都带统计，因此不可能出现「有差异行却没有统计」或「统计与逐行行数不一致」的形状。
+pub(crate) enum LineDiff {
+    /// 判定不出（`newText` 缺席，或行级 diff 超出工作预算）：统计与差异行**都**省略，绝不填零。
+    Omitted,
+    /// 判定得出但差异行超出 §14 的固定上限：只保留统计，差异行改由 `diffUnavailable` 标记未下发。
+    OverLimit { added: u64, deleted: u64 },
+    /// 上限内：统计 + 完整的逐行差异（未做任何裁剪）。
+    Complete {
+        added: u64,
+        deleted: u64,
+        lines: Vec<DiffLine>,
+    },
+}
+
+impl LineDiff {
+    /// `(addedLines, deletedLines)`；`None` = 判定不出（view 里两项**整个键缺席**）。
+    pub(crate) fn stats(&self) -> Option<(u64, u64)> {
+        match self {
+            LineDiff::Omitted => None,
+            LineDiff::OverLimit { added, deleted } | LineDiff::Complete { added, deleted, .. } => {
+                Some((*added, *deleted))
+            }
+        }
+    }
+
+    /// 上限内的完整逐行差异；`Omitted` 与 `OverLimit` 都是 `None`（前者没有统计、后者只带统计）。
+    pub(crate) fn lines(&self) -> Option<&[DiffLine]> {
+        match self {
+            LineDiff::Complete { lines, .. } => Some(lines),
+            LineDiff::Omitted | LineDiff::OverLimit { .. } => None,
+        }
+    }
+
+    /// 判定得出但差异行未随本次派生下发（只带统计）时为真——view 据此写 `diffUnavailable`。
+    pub(crate) fn over_limit(&self) -> bool {
+        matches!(self, LineDiff::OverLimit { .. })
+    }
+}
+
+/// 从同一份 `oldText`/`newText` 派生行级统计与结构化差异行（R6 + R10）。
+///
+/// 统计口径**逐条**复用 [`line_stats`]（同一份权威实现，本函数不重算 Myers 距离），因此不可能出现
+/// 「统计说改了 3 行、逐行却给了别的行数」：逐行差异由 LCS 对齐得出，而 LCS 长度与 Myers 距离互为
+/// 定值（`added = M - LCS`、`deleted = N - LCS`）。
+///
+/// 上限（§14 的固定 v1 常量）在**建脚本之前**用输入判定，因此病态输入不会先付出 `O(N·M)` 的代价：
+/// 完整逐行差异把每个旧行、每个新行各输出一次，所以元素个数 ≥ `max(N, M)`、文本字节数恰好等于两侧
+/// 行文本字节数之和、单行长度不变。超限时**不裁剪**，整份差异行改为 [`LineDiff::OverLimit`]。
+pub(crate) fn line_diff(old: Option<&str>, new: Option<&str>) -> LineDiff {
+    let Some((added, deleted)) = line_stats(old, new) else {
+        return LineDiff::Omitted;
+    };
+    // `line_stats` 判定得出 ⇒ `new` 必定在场（它把 `new` 缺失映射成 `None`）。
+    let new_lines = split_lines(new.unwrap_or_default());
+    let old_lines = old.map(split_lines).unwrap_or_default();
+    if old_lines.len().max(new_lines.len()) > DIFF_LINE_LIMIT
+        || line_bytes(&old_lines) + line_bytes(&new_lines) > DIFF_BYTE_LIMIT
+        || old_lines
+            .iter()
+            .chain(new_lines.iter())
+            .any(|line| line.chars().count() > DIFF_LINE_MAX_CHARS)
+    {
+        return LineDiff::OverLimit { added, deleted };
+    }
+    let lines = align_lines(&old_lines, &new_lines);
+    // 行数上限只能在这里判定：`n + m - LCS` 可能大于 `max(n, m)`（两侧完全不同的 400 行文件会得出
+    // 800 行差异）。字节上限不必再查——上面的先验判定是**恰好**的（每个输入行在输出里出现一次）。
+    if lines.len() > DIFF_LINE_LIMIT {
+        return LineDiff::OverLimit { added, deleted };
+    }
+    LineDiff::Complete {
+        added,
+        deleted,
+        lines,
+    }
+}
+
+/// 一组行的文本字节数（不含行尾换行：`split_lines` 已经把换行从行文本里去掉）。
+fn line_bytes(lines: &[&str]) -> usize {
+    lines.iter().map(|line| line.len()).sum()
+}
+
+/// 行级对齐：返回**完整**的逐行差异——每个旧行恰好出现一次（`deleted` 或 `context`）、每个新行恰好
+/// 出现一次（`added` 或 `context`），顺序与原文一致。
+///
+/// 用「最长公共子序列」长度表（`O(N·M)` 时间与空间）加一次左上到右下的回溯。调用方保证
+/// `max(N, M) <= DIFF_LINE_LIMIT`，因此表规模有界（≤ 401×401）。平局（两侧都能延伸）固定取
+/// **先删后增**，使同一份输入永远给出同一份输出。
+fn align_lines(old: &[&str], new: &[&str]) -> Vec<DiffLine> {
+    let n = old.len();
+    let m = new.len();
+    let mut table = vec![0_u32; (n + 1) * (m + 1)];
+    let index = |i: usize, j: usize| i * (m + 1) + j;
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            table[index(i, j)] = if old[i] == new[j] {
+                table[index(i + 1, j + 1)] + 1
+            } else {
+                table[index(i + 1, j)].max(table[index(i, j + 1)])
+            };
+        }
+    }
+    let mut lines = Vec::with_capacity(n + m);
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if old[i] == new[j] {
+            lines.push(DiffLine {
+                kind: "context",
+                text: old[i].to_owned(),
+            });
+            i += 1;
+            j += 1;
+        } else if table[index(i + 1, j)] >= table[index(i, j + 1)] {
+            lines.push(DiffLine {
+                kind: "deleted",
+                text: old[i].to_owned(),
+            });
+            i += 1;
+        } else {
+            lines.push(DiffLine {
+                kind: "added",
+                text: new[j].to_owned(),
+            });
+            j += 1;
+        }
+    }
+    for line in &old[i..] {
+        lines.push(DiffLine {
+            kind: "deleted",
+            text: (*line).to_owned(),
+        });
+    }
+    for line in &new[j..] {
+        lines.push(DiffLine {
+            kind: "added",
+            text: (*line).to_owned(),
+        });
+    }
+    lines
+}
+
+// ---------------------------------------------------------------------------------------------
 // 文件改动（R5–R7）
 // ---------------------------------------------------------------------------------------------
 
@@ -142,8 +314,8 @@ pub(crate) struct DerivedFileChange {
     pub(crate) display_path: String,
     /// 是否位于工作目录根之外。
     pub(crate) outside: bool,
-    /// 行数统计；`None` = 判定不出（省略两项）。
-    pub(crate) stats: Option<(u64, u64)>,
+    /// 行级差异（统计 + 结构化差异行，**同源**）；`Omitted` = 判定不出（统计与差异行都省略）。
+    pub(crate) diff: LineDiff,
     /// 工具调用给出的**原始 `path` 原文**（`display_path` 相对化/越界收窄**之前**的取值）。
     ///
     /// **不参与投影**：任何 view 字段都不读它。它只作「同一处改动」的稳定标识——展示路径是有损的
@@ -225,13 +397,10 @@ fn derive_from_elements(
         let old_text = optional_string(&members, "oldText")?;
         let new_text = optional_string(&members, "newText")?;
         let (display_path, outside) = display_path(workspace_root, &path);
-        // R6 的三种口径：`oldText` 缺席 = 新建（全部行计新增、删除为零）；`newText` 缺席 = 判定不出行数
-        // （**省略**两项，绝不填零）；两者都在时才跑行级 diff。
-        let stats = match (old_text.as_deref(), new_text.as_deref()) {
-            (None, Some(new)) => line_stats(None, Some(new)),
-            (Some(old), Some(new)) => line_stats(Some(old), Some(new)),
-            (_, None) => None,
-        };
+        // R6/R10 的口径只有一处实现（`line_diff`）：`oldText` 缺席 = 新建（全部行计新增、删除为零）；
+        // `newText` 缺席 = 判定不出行数（**省略**两项，绝不填零）；两者都在时才跑行级 diff。差异行与
+        // 统计由**同一次**调用给出，因此两者的规模不可能分叉。
+        let diff = line_diff(old_text.as_deref(), new_text.as_deref());
         let kind = match (old_text.is_some(), new_text.is_some()) {
             (false, _) => "added",
             // `oldText` 在、`newText` 缺席：工具调用没有可用的改动后内容，不猜改动方向。
@@ -244,7 +413,7 @@ fn derive_from_elements(
             kind,
             display_path,
             outside,
-            stats,
+            diff,
             // 去重键与 `changeId` 取工具调用给出的原始路径：展示路径在越界时被收窄为文件名，是有损的
             // （两个不同目录下的同名越界文件会碰撞，后者被静默当成重复丢掉）。
             origin_key: path,
@@ -527,8 +696,13 @@ fn canonical_uuid(seed: &str) -> String {
 
 /// 派生事件的 view 文本（`file.changed`，`SYNC_PROTOCOL.md` §10.3）。
 ///
-/// 只写合同登记的字段：`addedLines`/`deletedLines` 在 `stats` 为 `None` 时**整个键缺席**（省略而非零），
+/// 只写合同登记的字段：`addedLines`/`deletedLines` 在判定不出时**整个键缺席**（省略而非零），
 /// `outsideWorkspace` 只在越界时为 `true`（工作区内时省略，与既有 fixture 的最小集一致）。
+///
+/// 差异行（feature `core.file-diff.v1`）与 `diffUnavailable` **互斥**：上限内写完整的 `diffLines`，
+/// 超限时只写 `diffUnavailable{reason:"size_limit"}`（绝不写被裁剪的行，也绝不只是静默缺席）；判定
+/// 不出时两者都不写（与统计同源，由 [`LineDiff::Omitted`] 一态表达）。本模块总是写出差异行——未协商
+/// 该 feature 的连接由投递层按协商结果去掉该键（`server::sync` 是唯一的投递侧门控点）。
 pub(crate) fn file_changed_view(change: &DerivedFileChange, session: &str) -> String {
     let mut out = String::from("{\"changeId\":");
     out.push_str(&encode_json_string(&change.change_id(session)));
@@ -538,7 +712,7 @@ pub(crate) fn file_changed_view(change: &DerivedFileChange, session: &str) -> St
     out.push_str(&encode_json_string(&change.display_path));
     out.push_str(",\"summary\":");
     out.push_str(&encode_json_string(&change.summary()));
-    if let Some((added, deleted)) = change.stats {
+    if let Some((added, deleted)) = change.diff.stats() {
         out.push_str(",\"addedLines\":\"");
         out.push_str(&added.to_string());
         out.push_str("\",\"deletedLines\":\"");
@@ -547,6 +721,22 @@ pub(crate) fn file_changed_view(change: &DerivedFileChange, session: &str) -> St
     }
     if change.outside {
         out.push_str(",\"outsideWorkspace\":true");
+    }
+    if let Some(lines) = change.diff.lines() {
+        out.push_str(",\"diffLines\":[");
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"kind\":");
+            out.push_str(&encode_json_string(line.kind));
+            out.push_str(",\"text\":");
+            out.push_str(&encode_json_string(&line.text));
+            out.push('}');
+        }
+        out.push(']');
+    } else if change.diff.over_limit() {
+        out.push_str(",\"diffUnavailable\":{\"reason\":\"size_limit\"}");
     }
     out.push('}');
     out
@@ -765,6 +955,198 @@ mod tests {
     #[test]
     fn line_stats_counts_deletion_of_every_line() {
         assert_eq!(line_stats(Some("a\nb"), Some("")), Some((0, 2)));
+    }
+
+    /// 逐行差异里的 `added`/`deleted` 计数。
+    fn counts_of(lines: &[DiffLine]) -> (u64, u64) {
+        let added = lines.iter().filter(|line| line.kind == "added").count() as u64;
+        let deleted = lines.iter().filter(|line| line.kind == "deleted").count() as u64;
+        (added, deleted)
+    }
+
+    /// R10：从同一份 `oldText`/`newText` 派生逐行差异（新增/删除/上下文），且与统计**同源**。
+    #[test]
+    fn line_diff_derives_added_deleted_and_context_lines() {
+        let diff = line_diff(Some("a\nb\nc"), Some("a\nX\nc"));
+        assert_eq!(diff.stats(), Some((1, 1)));
+        assert!(!diff.over_limit());
+        let lines = diff.lines().expect("上限内必须带差异行");
+        let shape: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|line| (line.kind, line.text.as_str()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("context", "a"),
+                ("deleted", "b"),
+                ("added", "X"),
+                ("context", "c"),
+            ]
+        );
+        assert_eq!(counts_of(lines), (1, 1), "逐行计数与统计必须相等");
+    }
+
+    #[test]
+    fn line_diff_treats_a_missing_old_text_as_a_new_file() {
+        let diff = line_diff(None, Some("a\nb"));
+        assert_eq!(diff.stats(), Some((2, 0)));
+        let lines = diff.lines().expect("差异行");
+        assert!(lines.iter().all(|line| line.kind == "added"));
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    /// R6 + R10：判定不出时统计与差异行**一起**省略，且**不是**超限（不得写 `diffUnavailable`）。
+    #[test]
+    fn line_diff_omits_stats_and_lines_together_when_undetermined() {
+        let diff = line_diff(Some("a\nb"), None);
+        assert_eq!(diff.stats(), None, "判定不出时省略而非填零");
+        assert!(diff.lines().is_none());
+        assert!(!diff.over_limit(), "判定不出不是超限：不得标记差异行未下发");
+    }
+
+    /// R10：超出 §14 的固定上限时**不裁剪**——只保留统计并把差异行标记为未下发。
+    #[test]
+    fn line_diff_marks_over_limit_instead_of_trimming_lines() {
+        // 行数：两侧各 401 行、内容完全不同（完整差异必然超过 400 行的上限）。
+        let old = (0..401)
+            .map(|index| format!("old-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new = (0..401)
+            .map(|index| format!("new-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let diff = line_diff(Some(&old), Some(&new));
+        assert_eq!(diff.stats(), Some((401, 401)), "超限时统计照常给出");
+        assert!(diff.lines().is_none(), "超限时不得下发被裁剪的行");
+        assert!(diff.over_limit());
+
+        // 合计字节：两侧各 400 行 × 100 字节 = 80 KiB > 64 KiB（行数与单行长度都在上限内）。
+        let line = "y".repeat(100);
+        let text = vec![line.as_str(); 400].join("\n");
+        let diff = line_diff(Some(&text), Some(&text));
+        assert!(diff.over_limit());
+        assert_eq!(diff.stats(), Some((0, 0)));
+
+        // 单行字符数：一行超过 4,096 字符时同样不下发（裁剪那一行就是「下发了被裁剪的内容」）。
+        let long = "z".repeat(DIFF_LINE_MAX_CHARS + 1);
+        let diff = line_diff(Some("short"), Some(&long));
+        assert!(diff.over_limit());
+        assert!(diff.lines().is_none());
+    }
+
+    /// R6 + R10：逐行差异与统计**同源**——脚本的计数与 `line_stats` 在随机输入上逐例相等，且每个旧行、
+    /// 每个新行在脚本里恰好出现一次（顺序与原文一致）。
+    #[test]
+    fn line_diff_agrees_with_line_stats_on_random_inputs() {
+        let mut rng = Lcg(0x9e37_79b9_7f4a_7c15);
+        let alphabet = ["alpha", "beta", "gamma", "delta", "epsilon"];
+        for _ in 0..400 {
+            let n = rng.next(20);
+            let m = rng.next(20);
+            let old_lines: Vec<&str> = (0..n).map(|_| alphabet[rng.next(alphabet.len())]).collect();
+            let new_lines: Vec<&str> = (0..m).map(|_| alphabet[rng.next(alphabet.len())]).collect();
+            let old = old_lines.join("\n");
+            let new = new_lines.join("\n");
+            let diff = line_diff(Some(&old), Some(&new));
+            assert_eq!(
+                diff.stats(),
+                line_stats(Some(&old), Some(&new)),
+                "统计必须与既有口径逐字一致"
+            );
+            let lines = diff.lines().expect("20 行以内必定在上限内");
+            assert_eq!(counts_of(lines), diff.stats().expect("判定得出"));
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.kind != "added")
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>(),
+                old_lines,
+                "旧侧每个行各出现一次且顺序不变"
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.kind != "deleted")
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>(),
+                new_lines,
+                "新侧每个行各出现一次且顺序不变"
+            );
+        }
+    }
+
+    /// R10：`file.changed` 视图按上限写 `diffLines`；判定不出时两个键都不写，超限时只带统计 +
+    /// `diffUnavailable`。统计与摘要字段不得被差异内容文本化。
+    #[test]
+    fn file_changed_view_writes_diff_lines_and_marks_the_omitted_case() {
+        let view = r#"{"toolCallId":"tool-1","diff":[{"path":"src/main.rs","oldText":"a\nb","newText":"a\nX"}]}"#;
+        let derived = derived_file_changes(view, None).expect("可解析");
+        let text = file_changed_view(&derived[0], "session-1");
+        assert!(
+            text.contains(
+                r#""diffLines":[{"kind":"context","text":"a"},{"kind":"deleted","text":"b"},{"kind":"added","text":"X"}]"#
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("diffUnavailable"), "{text}");
+        // 本用例**没有**传工作目录根，因此展示路径按 R7 只留文件名称并置 `outsideWorkspace`；摘要是
+        // `kind` + 展示路径的同源产物（`DerivedFileChange::summary`），不会把请求里的相对路径拼回来。
+        assert!(text.contains(r#""displayPath":"main.rs""#), "{text}");
+        assert!(text.contains(r#""outsideWorkspace":true"#), "{text}");
+        assert!(
+            text.contains(r#""summary":"modified main.rs""#),
+            "摘要仍只描述改动本身：{text}"
+        );
+
+        // 判定不出：`addedLines`/`deletedLines`、`diffLines` 与 `diffUnavailable` 都不写。
+        let bare = derived_file_changes(
+            r#"{"toolCallId":"tool-2","diff":[{"path":"src/main.rs","oldText":"a"}]}"#,
+            None,
+        )
+        .expect("可解析");
+        let text = file_changed_view(&bare[0], "session-1");
+        assert!(
+            !text.contains("diffLines")
+                && !text.contains("diffUnavailable")
+                && !text.contains("addedLines"),
+            "{text}"
+        );
+
+        // 超限：只带统计 + 已登记原因，绝不带被裁剪的行。
+        let old = (0..301)
+            .map(|index| format!("old-{index}"))
+            .collect::<Vec<_>>()
+            .join("\\n");
+        let new = (0..301)
+            .map(|index| format!("new-{index}"))
+            .collect::<Vec<_>>()
+            .join("\\n");
+        let view = format!(
+            r#"{{"toolCallId":"tool-3","diff":[{{"path":"src/big.rs","oldText":"{old}","newText":"{new}"}}]}}"#
+        );
+        let derived = derived_file_changes(&view, None).expect("可解析");
+        let text = file_changed_view(&derived[0], "session-1");
+        assert!(
+            text.contains(r#""diffUnavailable":{"reason":"size_limit"}"#),
+            "{text}"
+        );
+        assert!(
+            !text.contains("diffLines"),
+            "超限时不得下发被裁剪的行：{text}"
+        );
+        assert!(
+            text.contains(r#""addedLines":"301""#) && text.contains(r#""deletedLines":"301""#),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1013,7 +1395,7 @@ mod tests {
         assert_eq!(derived.len(), 1);
         assert_eq!(derived[0].kind, "modified");
         assert_eq!(derived[0].display_path, "src/main.rs");
-        assert_eq!(derived[0].stats, Some((1, 1)));
+        assert_eq!(derived[0].diff.stats(), Some((1, 1)));
         assert!(!derived[0].outside);
     }
 
@@ -1022,7 +1404,7 @@ mod tests {
         let view = r#"{"toolCallId":"tool-1","diff":[{"path":"src/main.rs","oldText":"a"}]}"#;
         let derived = derived_file_changes(view, None).expect("可解析");
         assert_eq!(derived.len(), 1);
-        assert_eq!(derived[0].stats, None, "判定不出时省略而非填零");
+        assert_eq!(derived[0].diff.stats(), None, "判定不出时省略而非填零");
         assert_eq!(derived[0].kind, "modified", "没有改动后内容时不猜改动方向");
     }
 
@@ -1032,7 +1414,7 @@ mod tests {
         let derived = derived_file_changes(view, None).expect("可解析");
         assert_eq!(derived.len(), 1);
         assert_eq!(derived[0].kind, "added");
-        assert_eq!(derived[0].stats, Some((2, 0)));
+        assert_eq!(derived[0].diff.stats(), Some((2, 0)));
     }
 
     #[test]
@@ -1041,7 +1423,7 @@ mod tests {
         let derived = derived_file_changes(view, None).expect("可解析");
         assert_eq!(derived.len(), 1);
         assert_eq!(derived[0].kind, "deleted");
-        assert_eq!(derived[0].stats, Some((0, 2)));
+        assert_eq!(derived[0].diff.stats(), Some((0, 2)));
     }
 
     #[test]

@@ -27,10 +27,18 @@ import {
 } from "./manifest";
 import { repoRoot, syncFixtureDir, syncSchemaDir, syncManifestPath, SYNC_SCHEMA_FILES } from "./paths";
 import { KNOWN_EVENT_TYPE_COUNT, isKnownEventType, projectView } from "./event";
-import type { SessionReadInclude } from "./command";
+import type {
+  CommandBody,
+  CommandName,
+  SessionCreatePayload,
+  SessionReadInclude,
+  WorkspaceBrowseEntry,
+  WorkspaceBrowseResult,
+} from "./command";
 import type { AuthAuthenticated } from "./auth";
-import type { EventOriginKind } from "./event";
-import type { SnapshotItemHistory } from "./sync";
+import type { EventOriginKind, FileChangedDiff, FileChangedFields } from "./event";
+import type { SnapshotItemHistory, SnapshotItemWorkspaces } from "./sync";
+import type { WorkspaceRef } from "./common";
 
 /**
  * include 词表的**编译期**镜像：`SessionReadInclude` 的每个取值都必须在这里登记。
@@ -55,6 +63,115 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
   createdAt: true,
   view: true,
   acp: true,
+};
+
+/**
+ * 联合型的**全部**键（`keyof` 对联合取交集，因此不能用它枚举 XOR 联合的键：两侧独有的键会互相
+ * 消掉，正是本文件最需要盯住的那两个——`workspaceAlias`/`workspacePath`）。
+ */
+type UnionKeys<T> = T extends unknown ? keyof T : never;
+
+/**
+ * `CommandName` 词表的编译期镜像（13 条 Sync 面命令）。
+ *
+ * 与 `INCLUDE_MIRROR` 同理：多一个或少一个取值都会让本文件编译失败，运行期那句比对的是
+ * 「TS 联合 ↔ `command.schema.json` 的 `commandName` enum」这一对。新增/删除命令时既要在
+ * `compatibility/commands/v1/commands.json` 登记，也要同步 schema 与本联合。
+ */
+const COMMAND_NAME_MIRROR: Record<CommandName, true> = {
+  "session.list": true,
+  "session.read": true,
+  "command.status": true,
+  "session.mode.list": true,
+  "session.config.list": true,
+  "workspace.browse": true,
+  "session.prompt": true,
+  "session.cancel": true,
+  "elicitation.respond": true,
+  "session.mode.set": true,
+  "session.config.set": true,
+  "permission.resolve": true,
+  "session.create": true,
+};
+
+/**
+ * `SessionCreatePayload` 的键集合的编译期镜像（联合两支的键**并**在一起）。
+ *
+ * 运行期用它比对 schema 的 `payload.properties`：schema 再增删一个键而镜像没跟上时断言变红。
+ */
+const SESSION_CREATE_PAYLOAD_MIRROR: Record<UnionKeys<SessionCreatePayload>, true> = {
+  agentId: true,
+  workspaceAlias: true,
+  workspacePath: true,
+  createIfMissing: true,
+};
+
+/** `FileChangedView` 的**命名字段**集合的编译期镜像（开放对象尾巴 `OpenView` 不算字段）。 */
+const FILE_CHANGED_FIELD_MIRROR: Record<keyof FileChangedFields, true> = {
+  changeId: true,
+  kind: true,
+  displayPath: true,
+  summary: true,
+  addedLines: true,
+  deletedLines: true,
+  outsideWorkspace: true,
+};
+
+/**
+ * `file.changed` 差异行面的键集合的编译期镜像。
+ *
+ * `FileChangedDiff` 的每一支都把另一支的键声明成 `never`（互斥在编译期成立），而 `keyof` 对联合
+ * 取交集后仍是这两个键，因此这里能双向钉住：少一个键或改名都会让本文件编译失败。
+ */
+const FILE_CHANGED_DIFF_KEY_MIRROR: Record<keyof FileChangedDiff, true> = {
+  diffLines: true,
+  diffUnavailable: true,
+};
+
+/** `WorkspaceCatalogEntry` 的键集合的编译期镜像（`path` 是唯一可选键）。 */
+const WORKSPACE_CATALOG_KEY_MIRROR: Record<keyof SnapshotItemWorkspaces, true> = {
+  alias: true,
+  displayName: true,
+  path: true,
+};
+
+/**
+ * `WorkspaceRef`（会话摘要的目录引用）的键集合的编译期镜像。
+ *
+ * 它必须**只有**两个键：路径只随快照的 `workspaces` 条目下发，MUST NOT 复制到会话摘要里。
+ */
+const WORKSPACE_REF_KEY_MIRROR: Record<keyof WorkspaceRef, true> = {
+  alias: true,
+  displayName: true,
+};
+
+/**
+ * 编译期：`command.body` 联合的判别字段与 `CommandName` **双向**相等。
+ *
+ * 少一支（schema 加了命令而镜像没补 body 分支）或多一支（镜像凭空造了命令）都会让这个条件类型
+ * 退化成 `false`，于是下面的 `= true` 赋不进去、编译失败。
+ */
+type CommandBodyCoversNames = CommandName extends CommandBody["command"]
+  ? CommandBody["command"] extends CommandName
+    ? true
+    : false
+  : false;
+
+/** 运行期可见的那一半：类型是 `true`，`= true` 因此才成立。 */
+const COMMAND_BODY_COVERS_NAMES: CommandBodyCoversNames = true;
+
+/** `WorkspaceBrowseEntry` 的键集合的编译期镜像。 */
+const WORKSPACE_BROWSE_ENTRY_KEY_MIRROR: Record<keyof WorkspaceBrowseEntry, true> = {
+  name: true,
+  path: true,
+  registered: true,
+};
+
+/** `WorkspaceBrowseResult` 的键集合的编译期镜像。 */
+const WORKSPACE_BROWSE_RESULT_KEY_MIRROR: Record<keyof WorkspaceBrowseResult, true> = {
+  path: true,
+  entries: true,
+  truncated: true,
 };
 
 /**
@@ -440,40 +557,170 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(result.required).toEqual(["sessionId", "resources", "hasEarlier"]);
   });
 
-  it("sessionCreate 的 payload 允许 agentId 与一个目录引用", () => {
+  it("sessionCreate 的 payload 键集与镜像逐项相等，且 createIfMissing 只与 workspacePath 相容", () => {
     const schema = readSchema("command.schema.json");
     const create = defs(schema)["sessionCreate"] as {
       properties: {
         payload: {
           required: string[];
           additionalProperties: boolean;
+          oneOf: unknown;
+          not: unknown;
           properties: Record<string, unknown>;
         };
       };
     };
-    // `agentId` 必填，目录引用由 `workspaceAlias` / `workspacePath` 之一给出（二者不同时出现）。
-    expect(create.properties.payload.required).toEqual(["agentId"]);
-    expect(create.properties.payload.additionalProperties).toBe(false);
-    expect(Object.keys(create.properties.payload.properties).sort()).toEqual([
-      "agentId",
-      "workspaceAlias",
-      "workspacePath",
-    ]);
+    const payload = create.properties.payload;
+    // 期望值从 schema 读出，再与「编译期钉住的镜像」比对：schema 增删一个键而镜像没跟上时这里变红。
+    expect(payload.required).toEqual(["agentId"]);
+    expect(payload.additionalProperties).toBe(false);
+    expect(Object.keys(payload.properties).sort()).toEqual(Object.keys(SESSION_CREATE_PAYLOAD_MIRROR).sort());
+    // 目录来源**恰好一个**：schema 用两支 oneOf 各要一个键表达，镜像用联合的两支表达同一件事。
+    expect(payload.oneOf).toEqual([{ required: ["workspaceAlias"] }, { required: ["workspacePath"] }]);
+    // `createIfMissing` 与 `workspaceAlias` 互斥（镜像里前者只出现在 workspacePath 那一支）。
+    expect(payload.not).toEqual({ required: ["workspaceAlias", "createIfMissing"] });
+    expect(payload.properties["createIfMissing"]).toMatchObject({ type: "boolean" });
+    expect(payload.properties["workspacePath"]).toMatchObject({ type: "string", maxLength: 4096 });
   });
 
-  it("file.changed 的三个新可选字段存在，必填集合不变", () => {
+  it("file.changed 的键集与镜像逐项相等，差异行与不可用标记互斥", () => {
     const schema = readSchema("event-views.schema.json");
-    const changed = defs(schema)["file.changed"] as { required: string[]; properties: Record<string, unknown> };
+    const changed = defs(schema)["file.changed"] as {
+      required: string[];
+      not: unknown;
+      properties: Record<string, unknown>;
+    };
+    // 必填集合一字未动：三个新键都是**可选**的，未协商 feature 的客户端不该被拒收。
     expect(changed.required).toEqual(["changeId", "kind", "displayPath", "summary"]);
-    expect(Object.keys(changed.properties).sort()).toEqual([
-      "addedLines",
-      "changeId",
-      "deletedLines",
-      "displayPath",
-      "kind",
-      "outsideWorkspace",
-      "summary",
-    ]);
+    // 期望值从 schema 读出，再与镜像的键集比对（命名字段七个 + 差异行面两个）。
+    expect(Object.keys(changed.properties).sort()).toEqual(
+      [...Object.keys(FILE_CHANGED_FIELD_MIRROR), ...Object.keys(FILE_CHANGED_DIFF_KEY_MIRROR)].sort(),
+    );
+    // 互斥：镜像里两支各把对方的键声明成 `never`，与 schema 的 `not` 表达同一件事。
+    expect(changed.not).toEqual({ required: ["diffLines", "diffUnavailable"] });
+
+    const diffLines = changed.properties["diffLines"] as {
+      minItems: number;
+      maxItems: number;
+      items: { properties: { kind: { enum: string[] }; text: { maxLength: number } } };
+    };
+    // 键在场即至少一行；行数上限 400、单行上限 4096 字符都是固定 v1 常量（`SYNC_PROTOCOL.md` §14）。
+    expect(diffLines.minItems).toBe(1);
+    expect(diffLines.maxItems).toBe(400);
+    expect(diffLines.items.properties.kind.enum).toEqual(["added", "deleted", "context"]);
+    expect(diffLines.items.properties.text.maxLength).toBe(4096);
+
+    const unavailable = changed.properties["diffUnavailable"] as {
+      required: string[];
+      properties: { reason: { enum: string[] } };
+    };
+    expect(unavailable.required).toEqual(["reason"]);
+    // `reason` 是封闭词表：v1 只有 `size_limit` 一档，镜像的 `FileDiffUnavailableReason` 与它同值域。
+    expect(unavailable.properties.reason.enum).toEqual(["size_limit"]);
+  });
+
+  it("commandName 词表与镜像逐项相等，body.oneOf 覆盖全部 13 条 Sync 命令", () => {
+    const schema = readSchema("command.schema.json");
+    const defsMap = defs(schema);
+    const commandName = defsMap["commandName"] as { enum: string[] };
+    expect([...commandName.enum].sort()).toEqual(Object.keys(COMMAND_NAME_MIRROR).sort());
+    expect(Object.keys(COMMAND_NAME_MIRROR)).toContain("workspace.browse");
+    // 编译期：`body` 联合的判别字段与 `CommandName` 双向相等（少一支或多一支都赋不进 `true`）。
+    expect(COMMAND_BODY_COVERS_NAMES).toBe(true);
+
+    // 命令名从 `body.oneOf` 的每个 `$ref` 解出来：期望值由 schema 派生，不抄常量表。
+    const command = defsMap["command"] as {
+      properties: { body: { oneOf: { $ref: string }[] } };
+    };
+    const names = command.properties.body.oneOf.map((entry) => {
+      const branch = defsMap[entry.$ref.slice("#/$defs/".length)] as {
+        properties: { command: { const: string } };
+      };
+      return branch.properties.command.const;
+    });
+    expect([...names].sort()).toEqual(Object.keys(COMMAND_NAME_MIRROR).sort());
+  });
+
+  it("快照 workspaces 条目是 workspaceCatalogEntry：path 可选且非 null，workspaceRef 仍是两键", () => {
+    const syncSchema = readSchema("sync.schema.json");
+    const item = defs(syncSchema)["snapshotItem.workspaces"] as { $ref: string };
+    expect(item.$ref).toBe("common.schema.json#/$defs/workspaceCatalogEntry");
+
+    const commonSchema = readSchema("common.schema.json");
+    const catalog = defs(commonSchema)["workspaceCatalogEntry"] as {
+      required: string[];
+      additionalProperties: boolean;
+      properties: Record<string, unknown>;
+    };
+    expect(catalog.required).toEqual(["alias", "displayName"]);
+    expect(catalog.additionalProperties).toBe(false);
+    expect(Object.keys(catalog.properties).sort()).toEqual(Object.keys(WORKSPACE_CATALOG_KEY_MIRROR).sort());
+    // schema 的 `path` **没有** `null` 这一档：未协商 feature `core.workspace-path.v1` 时该键缺席。
+    expect(catalog.properties["path"]).toMatchObject({ type: "string", minLength: 1, maxLength: 4096 });
+
+    // 会话摘要的目录引用仍是封闭两键：路径不在那里重复（镜像的 `WorkspaceRef` 也只有两键）。
+    const ref = defs(commonSchema)["workspaceRef"] as { required: string[]; properties: Record<string, unknown> };
+    expect(ref.required).toEqual(["alias", "displayName"]);
+    expect(Object.keys(ref.properties).sort()).toEqual(Object.keys(WORKSPACE_REF_KEY_MIRROR).sort());
+  });
+
+  it("workspace.browse 的请求与结果形状与镜像一致", () => {
+    const defsMap = defs(readSchema("command.schema.json"));
+
+    const browsePath = defsMap["workspaceBrowsePath"] as { type: string; minLength: number; maxLength: number };
+    expect(browsePath.type).toBe("string");
+    expect(browsePath.minLength).toBe(1);
+    expect(browsePath.maxLength).toBe(4096);
+
+    const browse = defsMap["workspaceBrowse"] as {
+      required: string[];
+      additionalProperties: boolean;
+      properties: {
+        command: unknown;
+        payload: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> };
+      };
+    };
+    expect(browse.required).toEqual(["requestId", "command", "payload"]);
+    expect(browse.properties.command).toEqual({ const: "workspace.browse" });
+    // 请求**只含**一个父路径字段，且该键必填：`null`（根列表）不能靠缺省表达。
+    expect(browse.properties.payload.required).toEqual(["path"]);
+    expect(browse.properties.payload.additionalProperties).toBe(false);
+    expect(Object.keys(browse.properties.payload.properties)).toEqual(["path"]);
+    expect(browse.properties.payload.properties["path"]).toEqual({
+      oneOf: [{ $ref: "#/$defs/workspaceBrowsePath" }, { type: "null" }],
+    });
+
+    const entry = defsMap["workspaceBrowseEntry"] as { required: string[]; properties: Record<string, unknown> };
+    expect(entry.required).toEqual(["name", "path", "registered"]);
+    expect(Object.keys(entry.properties).sort()).toEqual(Object.keys(WORKSPACE_BROWSE_ENTRY_KEY_MIRROR).sort());
+
+    const result = defsMap["workspaceBrowseResult"] as {
+      required: string[];
+      // 键集合是运行时从 schema 读出来的（`entries` / `path` / `truncated`），
+      // 只有 `entries` 需要具体形状；其余键按任意键取，避免为每个键再抄一遍断言类型。
+      properties: Record<string, unknown> & { entries: { maxItems: number; items: { $ref: string } } };
+    };
+    expect([...result.required].sort()).toEqual(Object.keys(WORKSPACE_BROWSE_RESULT_KEY_MIRROR).sort());
+    // 单层条目上限是固定 v1 常量 128（`SYNC_PROTOCOL.md` §14）：超限时回上限内条目并置 `truncated`。
+    expect(result.properties.entries.maxItems).toBe(128);
+    expect(result.properties.entries.items.$ref).toBe("#/$defs/workspaceBrowseEntry");
+    // 结果里的 `path` 与请求共用同一份定义 + `null`：逐字回显本次请求的父路径。
+    expect(result.properties["path"]).toEqual({
+      oneOf: [{ $ref: "#/$defs/workspaceBrowsePath" }, { type: "null" }],
+    });
+
+    // `completed` 的结果与命令名的绑定，以及「查询类命令没有 terminalEventId」这条既有口径。
+    const commandResult = defsMap["commandResult"] as {
+      properties: { body: { allOf: { if?: unknown; then?: { properties?: Record<string, unknown> } }[] } };
+    };
+    const allOf = commandResult.properties.body.allOf.map((branch) => ({
+      if: branch.if as { properties?: { command?: { const?: string; enum?: string[] } } } | undefined,
+      then: branch.then,
+    }));
+    const bound = allOf.find((branch) => branch.if?.properties?.command?.const === "workspace.browse");
+    expect(bound?.then?.properties?.["result"]).toEqual({ $ref: "#/$defs/workspaceBrowseResult" });
+    const query = allOf.find((branch) => branch.if?.properties?.command?.enum?.includes("workspace.browse") === true);
+    expect(query?.then?.properties?.["terminalEventId"]).toEqual({ type: "null" });
   });
 
   it("agent.connected / agent.disconnected 的 state 是唯一取值的封闭枚举", () => {

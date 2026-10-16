@@ -24,25 +24,30 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
 /// `manifest.json` 中 WSS 消息（`schema` 指向 `message.schema.json`）且 `valid: true` 的用例数。
 ///
-/// 来源：`fixtures/sync/v1/manifest.json` 的 `cases`。WP6（`pairing-model`）新增 1 条合法
-/// `session.create` 夹具（`valid/command-session-create-workspace-path.json`），故由 93 变为 94。
-const EXPECTED_VALID_MESSAGE_CASES: usize = 94;
+/// 来源：`fixtures/sync/v1/manifest.json` 的 `cases`。变更
+/// `sync-path-browse-and-diff-delivery`（WP1）新增 7 条合法夹具（`workspace.browse` 的根列表/某一层
+/// 与 completed 结果、`session.create` 的建目录开关、带路径的 `workspaces` 快照 chunk、`file.changed`
+/// 的差异行与不可用标记），故由 94 变为 101。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 101;
 /// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
 /// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
 /// 其余非法 WSS 用例都落在 body 类型化层）。
 const EXPECTED_ENVELOPE_REJECTED: usize = 2;
-/// 同一集合中 `valid: false` 且在 body 类型化层被拒的用例数。WP6（`pairing-model`）新增 2 条非法
-/// `session.create` 夹具（`invalid/command-session-create-with-both-workspace-keys.json`、
-/// `invalid/command-session-create-without-workspace.json`），故由 24 变为 26。
-const EXPECTED_BODY_REJECTED: usize = 26;
+/// 同一集合中 `valid: false` 且在 body 类型化层被拒的用例数。变更
+/// `sync-path-browse-and-diff-delivery`（WP1）新增 7 条非法夹具（`workspace.browse` 的缺父路径键/
+/// 多余 payload 键/非字符串父路径、浏览结果缺截断标记/条目带未登记键、`session.create` 的建目录开关
+/// 与别名同用、`workspaces` 条目的 `path` 为 `null`），故由 26 变为 33。
+const EXPECTED_BODY_REJECTED: usize = 33;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 const EXPECTED_SKIPPED_PAIRING: usize = 5;
 /// 只针对某个 **子模式**（`schemaPointer`）的载荷用例：它们不是一条完整的 WSS 消息，因此不经过
 /// 信封层。三类来源：acp 上游的片段（`fixtures/acp/v1/...`）、事件视图封闭 enum 与可选字段的
 /// 负例（`event-views.schema.json#/$defs/*`）、以及 `sync.cursor_invalid.details.reason` 的词表
-/// 负例（`common.schema.json#/$defs/errorCode`）。它们由 `check-schema-fixtures.mjs` 的
-/// `checkValueAtPointer` 与 `tests/contract_vectors_r1_r9.rs` 覆盖。
-const EXPECTED_TARGETED_PAYLOADS: usize = 9;
+/// 负例（`common.schema.json#/$defs/errorCode`）。变更 `sync-path-browse-and-diff-delivery`（WP1）
+/// 新增 5 条 `file.changed` 的差异行负例（`diffLines` 为 `null`、行判别子未登记、不可用原因未登记、
+/// `diffLines` 与 `diffUnavailable` 同时出现、`diffLines` 为空数组违反 `minItems`），故由 9 变为 14。
+/// 它们由 `check-schema-fixtures.mjs` 的 `checkValueAtPointer` 与 `tests/contract_vectors_r1_r9.rs` 覆盖。
+const EXPECTED_TARGETED_PAYLOADS: usize = 14;
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/sync/v1/pairing.schema.json";
 
 fn parse<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, String> {

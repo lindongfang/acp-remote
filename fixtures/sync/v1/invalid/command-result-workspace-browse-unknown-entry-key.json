@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "type": "command.result",
+  "messageId": "a1b7c93e-4d20-4867-9f35-6e8c0a2d5b71",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "109",
+  "body": {
+    "requestId": "0a6f3c85-91d2-4e77-b5c8-3f4a2d9e6b10",
+    "command": "workspace.browse",
+    "status": "completed",
+    "acceptedAt": "2026-10-17T09:21:03.500Z",
+    "terminalEventId": null,
+    "result": {
+      "path": "D:\\work",
+      "entries": [
+        {
+          "name": "api",
+          "path": "D:\\work\\api",
+          "registered": true,
+          "size": "4096"
+        }
+      ],
+      "truncated": false
+    },
+    "error": null
+  }
+}

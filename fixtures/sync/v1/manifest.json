@@ -102,6 +102,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/sync-snapshot-chunk-workspaces-with-path.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/sync-snapshot-chunk-agents.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
@@ -127,6 +132,17 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-session-create-with-create-if-missing.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-session-create-with-create-if-missing-and-alias.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "not"
+    },
+    {
       "fixture": "valid/command-result-session-create-accepted.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
@@ -135,6 +151,51 @@
       "fixture": "valid/command-result-session-create-completed.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
+    },
+    {
+      "fixture": "valid/command-workspace-browse-root.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-workspace-browse-layer.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "valid/command-result-workspace-browse-completed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
+      "fixture": "invalid/command-workspace-browse-without-path.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-workspace-browse-unknown-payload-key.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/command-workspace-browse-path-non-string.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/command-result-workspace-browse-without-truncated.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "required"
+    },
+    {
+      "fixture": "invalid/command-result-workspace-browse-unknown-entry-key.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "additionalProperties"
     },
     {
       "fixture": "invalid/command-session-create-with-cwd.json",
@@ -331,6 +392,12 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/snapshot-chunk-workspace-item-path-null.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "type"
     },
     {
       "fixture": "invalid/snapshot-chunk-agent-item-missing-default.json",
@@ -555,6 +622,20 @@
     },
     {
       "fixture": "valid/view-file-changed.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/file.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-file-changed-diff-lines.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
+      "viewDef": "#/$defs/file.changed",
+      "valid": true
+    },
+    {
+      "fixture": "valid/view-file-changed-diff-unavailable.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "viewSchema": "../../../schemas/sync/v1/event-views.schema.json",
       "viewDef": "#/$defs/file.changed",
@@ -806,6 +887,41 @@
       "schemaPointer": "#/$defs/file.changed",
       "valid": false,
       "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/view-file-changed-diff-lines-null.json",
+      "schema": "../../../schemas/sync/v1/event-views.schema.json",
+      "schemaPointer": "#/$defs/file.changed",
+      "valid": false,
+      "expectedKeyword": "type"
+    },
+    {
+      "fixture": "invalid/view-file-changed-diff-line-kind-unknown.json",
+      "schema": "../../../schemas/sync/v1/event-views.schema.json",
+      "schemaPointer": "#/$defs/file.changed",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/view-file-changed-diff-unavailable-reason-unknown.json",
+      "schema": "../../../schemas/sync/v1/event-views.schema.json",
+      "schemaPointer": "#/$defs/file.changed",
+      "valid": false,
+      "expectedKeyword": "enum"
+    },
+    {
+      "fixture": "invalid/view-file-changed-diff-lines-and-diff-unavailable.json",
+      "schema": "../../../schemas/sync/v1/event-views.schema.json",
+      "schemaPointer": "#/$defs/file.changed",
+      "valid": false,
+      "expectedKeyword": "not"
+    },
+    {
+      "fixture": "invalid/view-file-changed-diff-lines-empty.json",
+      "schema": "../../../schemas/sync/v1/event-views.schema.json",
+      "schemaPointer": "#/$defs/file.changed",
+      "valid": false,
+      "expectedKeyword": "minItems"
     }
   ],
   "transcriptVectors": [

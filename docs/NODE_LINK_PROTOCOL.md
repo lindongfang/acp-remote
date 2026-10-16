@@ -410,6 +410,7 @@ createdAt / revokedAt
 | `grant.remote-work` | `session.create`、`session.resume` |
 
 - `grant.interact` 不含审批：审批必须显式给 `grant.approve`。
+- `grant.observe` 在 registry 中还含 `workspace.browse`（该 grant 共 6 个成员），但该命令的 `transport` 不含 `node_link`，因此在 Node Link 面不可达、不出现在上表；上表只列跨节点可达者，命令与 grant 的完整对应关系仍以 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2 与 [`commands.json`](../compatibility/commands/v1/commands.json) 为准。
 - 授权词汇只有跨节点导出授权 `grant.*`：设备授权包 `pack.*` 与配对预设 `preset.*` 已随设备权限层删除（设备配对不授予授权，设备记录与 wire 都不带任何授权集合）。命令与 grant 的完整对应关系与 `local.*` 本地管理能力见 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2。
 - Export 的创建、修改与撤销属于 Owner 本地管理能力 `local.export.manage`，永不远程授予：Access Node 不能通过 Node Link 修改自己的 scopes 或 Export 定义。
 - 设备类型不是授权依据。手机、电脑和 Zed 背后的 Access Node 都可以获得不同 grant 组合。Node Link 首个纵向切片必须实现 `grant.remote-work` 所需的 `session.create`，以便 Access Node 的 ACP facade 正确处理 Zed `session/new`；PWA UI 首版可以不展示创建入口。

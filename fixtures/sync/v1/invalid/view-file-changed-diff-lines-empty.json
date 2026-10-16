@@ -1,0 +1,10 @@
+{
+  "changeId": "f955151e-316e-4b2f-a61d-1d4d075331c5",
+  "kind": "modified",
+  "displayPath": "src/auth/session.ts",
+  "summary": "差异行键在场即至少一行：空数组不是「没有差异」的表示（未协商或超限时该键缺席，不是空数组）",
+  "addedLines": "0",
+  "deletedLines": "0",
+  "outsideWorkspace": false,
+  "diffLines": []
+}

@@ -1,14 +1,18 @@
-//! 五条查询命令的用例面调用与 core → wire 投影（§11.2/§11.5；任务 2.3/2.4）。
+//! 六条查询命令的用例面调用与 core → wire 投影（§11.2/§11.5；任务 2.3/2.4、3.1）。
 //!
-//! 三条边界：
+//! 四条边界：
 //!
-//! - **同步完成**：五条查询命令都在本模块内直接算出终态，返回**一次** `completed` 或 `rejected`，
+//! - **同步完成**：六条查询命令都在本模块内直接算出终态，返回**一次** `completed` 或 `rejected`，
 //!   绝不先回 `accepted`（§11.2「查询命令不进入异步队列」）。结果的形状由命令名决定，逐条与
 //!   `command.schema.json` 的 `allOf/if-then` 对齐。
 //! - **授权已在调用方完成**：本模块只负责读取与投影；每条命令进入这里之前都已按设备 scope 判定过
 //!   （见 [`super::CommandRoute::authorize`]），因此这里既不重算可见性，也不把未授权的读取当成「读出来
 //!   再丢掉」。用例内部还会再授权一次（各查询用例的第一步都是同一处 `Broker::authorize`），那是同一
 //!   判定点的第二次廉价判定，不是第二条判定路径。
+//! - **feature 门控先于本机读取**：需要 feature 的两条（`session.read` 的 `history`、
+//!   `workspace.browse`）都在调用用例**之前**判定协商结果，未协商即 `protocol.feature_required`——
+//!   尤其 `workspace.browse` 的门控必须在触碰文件系统之前（spec `sync-workspace-browse`），因此它排在
+//!   [`workspace_browse`] 的第一行，而不是留给用例去发现。
 //! - **不可表达就显式失败，绝不伪装**：`session.read` 的三类明细资源（`turns`、`pending_interactions`、
 //!   `capabilities`）在**当前 core 读面**上拿不到投影所需的取值（`SnapshotItemTurn.createdAt`、
 //!   `SnapshotItemPendingInteraction.schema`、`SnapshotItemCapability.agentCapabilities` 在 core 的
@@ -32,7 +36,7 @@ use acp_core::use_cases::{ModeListing, SyncSessionQuery, UseCases};
 use sync_protocol::command::{
     Command, CommandResultPayload, CommandStatus as WireCommandStatus, CommandStatusRecord,
     ConfigListResult, IncludeList, SessionListResult, SessionRead, SessionReadResources,
-    SessionReadResult,
+    SessionReadResult, WorkspaceBrowse, WorkspaceBrowseEntry, WorkspaceBrowseResult,
 };
 use sync_protocol::common::{
     AgentContentBlock, Base64Url, ConfigOption as WireConfigOptionEntry, ConfigOptionType,
@@ -47,7 +51,7 @@ use sync_protocol::sync::{MessageRole, SnapshotItemHistory, SnapshotItemMessage}
 use sync_protocol::views::{View, project};
 use tracing::debug;
 
-use crate::sync::event::RAW_PAYLOAD_FEATURE;
+use crate::sync::event::{FILE_DIFF_FEATURE, RAW_PAYLOAD_FEATURE};
 use crate::sync::snapshot::{LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE};
 use crate::sync::subscribe::cursor::CursorFault;
 use crate::sync::subscribe::{NegotiatedFeatures, OwnerReachability};
@@ -102,7 +106,11 @@ pub enum Rejection {
     /// body 形状不符（`protocol.schema_invalid`）。
     Schema(&'static str),
     /// 请求了未协商的 feature（`protocol.feature_required`，`details.features` 给出缺的那个）。
-    FeatureRequired,
+    ///
+    /// 携带**缺的那一个** feature ID：登记的 `details.features` 因此不可能与它漂移，且多一条门控
+    /// （`core.session-history.v1`、`core.workspace-browse.v1`）各自报出自己缺的那一条，不共用一份
+    /// 写死的取值。
+    FeatureRequired(&'static str),
     /// 请求了用例面无法表达的资源（`capability.unsupported_by_broker`）。
     UnsupportedResource(&'static str),
     /// `expectedVersion` 与当前会话版本不一致（`state.version_conflict`）。
@@ -126,12 +134,10 @@ impl Rejection {
                 cursor_details(fault),
             ),
             Rejection::Schema(text) => (ErrorCode::ProtocolSchemaInvalid, text, RawObject::empty()),
-            Rejection::FeatureRequired => (
+            Rejection::FeatureRequired(feature) => (
                 ErrorCode::ProtocolFeatureRequired,
                 "the client did not negotiate a feature this resource requires",
-                details_object(&serde_json::json!({
-                    "features": [SESSION_HISTORY_FEATURE]
-                })),
+                details_object(&serde_json::json!({ "features": [feature] })),
             ),
             Rejection::VersionConflict(current) => (
                 ErrorCode::StateVersionConflict,
@@ -229,7 +235,7 @@ pub async fn session_read(
     };
     let include = history_include(&payload.include)?;
     if include.history && !features.contains(SESSION_HISTORY_FEATURE) {
-        return Err(Rejection::FeatureRequired);
+        return Err(Rejection::FeatureRequired(SESSION_HISTORY_FEATURE));
     }
     for (requested, resource) in [
         (include.turns, "turns"),
@@ -356,11 +362,12 @@ pub async fn session_read(
         None
     };
     let negotiate_acp = features.contains(RAW_PAYLOAD_FEATURE);
+    let negotiate_file_diff = features.contains(FILE_DIFF_FEATURE);
     let history_items = if include.history {
         Some(
             history
                 .iter()
-                .map(|record| wire_history_item(record, negotiate_acp))
+                .map(|record| wire_history_item(record, negotiate_acp, negotiate_file_diff))
                 .collect::<Option<Vec<_>>>()
                 .ok_or(Rejection::Code(
                     ErrorCode::InternalUnavailable,
@@ -490,6 +497,75 @@ pub async fn config_list(
         config_options,
         version,
     }))
+}
+
+/// `core.workspace-browse.v1`：`workspace.browse` 需要协商该 feature（§11.5；spec
+/// `sync-workspace-browse`）。
+///
+/// 门控判定是 [`workspace_browse`] 的第一件事，因此未协商的连接既拿不到任何条目，也不会让
+/// `UseCases::workspace_browse`（形状校验与目录读取都在它里面）被调用一次——「未协商时不触碰文件系统」
+/// 这条因此是**可观察**的（端口一次都没被调用），而不只是「错误码看着对」。
+pub const WORKSPACE_BROWSE_FEATURE: &str = "core.workspace-browse.v1";
+
+/// `workspace.browse`：逐层浏览本机目录（§11.5；spec `sync-workspace-browse`）。
+///
+/// 四条判定的顺序与归属：
+///
+/// 1. **未协商 `core.workspace-browse.v1`** → `protocol.feature_required`
+///    （`details.features = [WORKSPACE_BROWSE_FEATURE]`）。判定在**本函数第一行**，先于一切文件系统
+///    访问——core 的用例根本不会被调用；
+/// 2. **形状非法**（相对路径、含 `..`、空串）→ `protocol.schema_invalid`，由 core 的
+///    [`acp_core::use_cases::UseCases::workspace_browse`] 在文件系统访问**之前**判定
+///    （[`port_rejection`] 的 `schema_hint` 只回字段名与规则，不回显路径原文）；
+/// 3. **不可达**（该层不存在/不可读/不是目录）→ 服务端不可用类 `internal.unavailable`；core 不返回
+///    任何条目，也**不回退**到父层或根列表，本层因此没有可回退的取值可用；
+/// 4. **整条结果超限** → 由调用方（[`super::CommandRoute::on_query`]）在入队前按编码后字节数换成
+///    `resource.result_too_large`；单层条目上限（128）与截断标记是 core 的事，**不是**本层的截断
+///    （本层绝不截断后当成功）。
+///
+/// 结果的 `path` 是**请求父路径的逐字回显**（`null` = 根列表）：`command.schema.json#/$defs/
+/// workspaceBrowsePath` 明确要求「请求字段与结果回显字段必须逐字相同」，因此本层直接回显解码后的
+/// `payload.path`。core 的 [`UseCases::workspace_browse`] 口径同源：它把请求原文留在 `echo` 里原样写进
+/// 结果的 `path`，规范化结果只用来调端口与算 `registered`，所以本层没有「换成 core 那个值」的理由。
+/// **条目**的 `path` 才是规范化后剥掉平台 verbatim 前缀的**下发形式**（`design.md` D2）。条目的名称/
+/// 绝对路径/是否已登记与截断标记都来自 core 的投影。
+pub async fn workspace_browse(
+    core: &Arc<UseCases>,
+    actor: &Actor,
+    payload: WorkspaceBrowse,
+    features: &NegotiatedFeatures,
+) -> Result<CommandResultPayload, Rejection> {
+    if !features.contains(WORKSPACE_BROWSE_FEATURE) {
+        return Err(Rejection::FeatureRequired(WORKSPACE_BROWSE_FEATURE));
+    }
+    // `null` = 请求本机根列表；`Some` = 该层的父路径原文（形状与可达性由 core 判定）。
+    let parent = payload.path.as_ref().map(|path| path.as_str().to_owned());
+    let browse = core
+        .workspace_browse(actor, parent.as_deref())
+        .await
+        .map_err(|error| port_rejection(&error))?;
+    let entries = browse
+        .entries
+        .iter()
+        .map(|entry| {
+            Some(WorkspaceBrowseEntry {
+                name: NonEmptyText::<256>::parse(&entry.name).ok()?,
+                path: NonEmptyText::<4096>::parse(&entry.path).ok()?,
+                registered: entry.registered,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(Rejection::Code(
+            ErrorCode::InternalUnavailable,
+            "a directory entry cannot be projected",
+        ))?;
+    Ok(CommandResultPayload::WorkspaceBrowse(
+        WorkspaceBrowseResult {
+            path: payload.path,
+            entries,
+            truncated: browse.truncated,
+        },
+    ))
 }
 
 /// `sessionId` → owned 会话引用（`session.mode.list`/`session.config.list` 的入参形状）。
@@ -716,20 +792,29 @@ fn wire_status_record(record: &CommandRecord) -> Option<CommandStatusRecord> {
 }
 
 /// 一条结构化历史条目 → wire `snapshotItem.history`（与 `event` 帧的 `payload` 同形：同一个 `view` 原文、
-/// 同一条 `acp.raw-payload.v1` 门控）。
+/// 同一条 `acp.raw-payload.v1` 门控，以及同一条 `core.file-diff.v1` 门控）。
+///
+/// 两条门控共用事件腿的判定（[`crate::sync::event::gate_file_diff`]）：历史条目里装的就是同一条
+/// `file.changed` 视图，未协商差异行能力的连接在**任何一条**下发路径上都不该收到那两个键。
 fn wire_history_item(
     record: &OwnedEventRecord,
     negotiate_acp: bool,
+    negotiate_file_diff: bool,
 ) -> Option<SnapshotItemHistory> {
     let event = &record.event;
     let sequence = event.session_sequence.as_ref()?;
+    let view = RawObject::parse(record.payload.view.as_str()).ok()?;
+    // `view` 是库里原文（`payload_json`）：未协商差异行时只在 `file.changed` 上去掉那两个键，其余字节
+    // 原样（不解析、不重新序列化）。
+    let view =
+        crate::sync::event::gate_file_diff(event.event_type.as_str(), &view, negotiate_file_diff)
+            .unwrap_or(view);
     Some(SnapshotItemHistory {
         event_id: Uuid::parse(event.id.as_str()).ok()?,
         event_type: EventType::parse(event.event_type.as_str()).ok()?,
         session_sequence: decimal(&sequence.get().to_string())?,
         created_at: Timestamp::parse(event.created_at.as_str()).ok()?,
-        // `view` 是库里原文（`payload_json`），逐字节下发：不解析、不重新序列化。
-        view: RawObject::parse(record.payload.view.as_str()).ok()?,
+        view,
         acp: if negotiate_acp {
             wire_raw_acp(record.payload.acp.as_ref())?
         } else {

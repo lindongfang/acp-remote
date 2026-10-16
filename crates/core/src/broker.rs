@@ -108,6 +108,7 @@ pub fn command_name(payload: &CommandPayload) -> &'static str {
         CommandPayload::Prompt { .. } => "session.prompt",
         CommandPayload::Cancel { .. } => "session.cancel",
         CommandPayload::ElicitationRespond { .. } => "elicitation.respond",
+        CommandPayload::WorkspaceBrowse { .. } => "workspace.browse",
         CommandPayload::ModeSet { .. } => "session.mode.set",
         CommandPayload::ConfigSet { .. } => "session.config.set",
         CommandPayload::PermissionResolve { .. } => "permission.resolve",
@@ -129,7 +130,8 @@ pub fn required_grant(command: &str) -> Option<&'static str> {
         | "session.read"
         | "command.status"
         | "session.mode.list"
-        | "session.config.list" => "grant.observe",
+        | "session.config.list"
+        | "workspace.browse" => "grant.observe",
         "session.prompt" | "session.cancel" | "elicitation.respond" => "grant.interact",
         "session.mode.set" | "session.config.set" => "grant.configure-session",
         "permission.resolve" => "grant.approve",
@@ -1123,7 +1125,8 @@ impl Broker {
             | CommandPayload::SessionRead { .. }
             | CommandPayload::CommandStatus { .. }
             | CommandPayload::ModeList { .. }
-            | CommandPayload::ConfigList { .. } => Ok(CommandReceipt::Accepted {
+            | CommandPayload::ConfigList { .. }
+            | CommandPayload::WorkspaceBrowse { .. } => Ok(CommandReceipt::Accepted {
                 request: command.request.clone(),
                 turn: None,
             }),
@@ -10844,7 +10847,21 @@ mod tests {
             endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
         ]));
         let _ = harness.submit_prompt(1, 'F');
-        assert_eq!(stored_views_of(&harness, "file.changed").len(), 1);
+        let changes = stored_views_of(&harness, "file.changed");
+        assert_eq!(changes.len(), 1);
+        // R10：同一份类型化 Diff 还派生了结构化差异行（与统计同源），且**不含** ACP 原文本身。
+        assert!(
+            changes[0].contains(
+                r#""diffLines":[{"kind":"deleted","text":"a"},{"kind":"added","text":"b"}]"#
+            ),
+            "差异行必须逐行标明新增/删除/上下文，实际 {}",
+            changes[0]
+        );
+        assert!(
+            !changes[0].contains("jsonrpc") && !changes[0].contains("session/update"),
+            "视图里不得出现 ACP 原文：{}",
+            changes[0]
+        );
         // 携带 Diff 的那条工具调用事件仍在库里，且 ACP 三要素逐字不变。
         let stored = harness.world.events(&harness.session);
         let tool_call = stored
@@ -10857,6 +10874,15 @@ mod tests {
             .cloned()
             .expect("正文");
         assert_eq!(payload.acp.as_ref(), Some(&acp), "派生不得改动 ACP 原文");
+        let (media_type, raw_json, byte_length, sha256) = payload
+            .acp
+            .as_ref()
+            .and_then(AcpRaw::as_available)
+            .expect("原文可用");
+        assert_eq!(media_type, "application/json");
+        assert_eq!(raw_json.as_bytes(), raw.as_bytes(), "原文必须逐字节不变");
+        assert_eq!(byte_length, raw.len() as u64, "字节长度必须不变");
+        assert_eq!(sha256, &digest, "摘要必须不变");
     }
 
     /// R8：节点级 `agent.connected` 落库且会话标识为空；`sessionId`/`sessionSequence` 同时为 NULL。

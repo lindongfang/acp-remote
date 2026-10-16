@@ -18,12 +18,14 @@
 //! `session.list` 授权），本模块只做 core → wire 的字段映射，**不重算可见性**；`workspaces`/`agents`
 //! 来自 `LocalConfigStore`（`require_local` 卡死，只能以 `Actor::LocalCli` 读），其对外可见性由
 //! 「设备已过 `session.list` 授权 ∧ 已协商 `core.local-catalog.v1`」两把闸共同决定。目录元素只出
-//! `alias`/`displayName`/`agentId`/`default`：本机规范化路径与其任何分段 MUST NOT 出现在快照、摘要或
-//! 任何对端可见输出（`SECURITY_DESIGN.md` §12.3）。
+//! `alias`/`displayName`/`agentId`/`default`，**外加** `core.workspace-path.v1` 门控下的可选 `path`
+//! ——已登记目录的规范化路径只在协商了该 feature 的连接上出现（`SECURITY_DESIGN.md` §12.3 的现行口径：
+//! 客户端自己提交的目录不被回显，本机路径的可见面只有快照的这一个键与 §11.5 的目录浏览结果）。
 
 use acp_core::model::{
     Actor, GlobalCursor, PortError, RemoteSessionRef, ResourceOrigin,
-    SessionState as CoreSessionState, SessionSummary as CoreSessionSummary, WorkspaceRecord,
+    SessionState as CoreSessionState, SessionSummary as CoreSessionSummary,
+    WorkspaceCatalogEntry as CoreWorkspaceCatalogEntry,
 };
 use acp_core::use_cases::{SyncSessionQuery, UseCases};
 use sha2::{Digest as _, Sha256};
@@ -31,7 +33,7 @@ use sync_protocol::common::{
     AgentCatalogEntry, Base64Url, BoundedU64, Cursor, DecimalString, ModeRef as WireModeRef,
     NonEmptyText, Nullable, OriginBlock, ProtocolVersionV1, SessionAgentRef,
     SessionState as WireSessionState, SessionSummary as WireSessionSummary, Text, Timestamp, Uuid,
-    WorkspaceRef as WireWorkspaceRef,
+    WorkspaceCatalogEntry as WireWorkspaceCatalogEntry, WorkspaceRef as WireWorkspaceRef,
 };
 use sync_protocol::envelope::MessageType;
 use sync_protocol::sync::{SnapshotBegin, SnapshotChunk, SnapshotEnd, SnapshotItems};
@@ -142,8 +144,16 @@ pub async fn plan(
         // 目录资源的两笔读都以 `Actor::LocalCli` 发出：`workspaces`/`profiles` 被 `require_local` 守卫
         // （它们同时保护着本机管理读面），设备无权直接读；对端可见性由上面两把闸决定，因此这里**只能**
         // 以本机身份代读——放宽 `require_local` 会连带打开一批本机管理面（`design.md` D2 的否决理由）。
-        let workspaces = core.workspaces(&Actor::LocalCli).await?;
-        let items = workspaces
+        //
+        // `workspaces` 的投影（含 `path` 键的门控）在 core 的 `sync_workspace_catalog` 里：已登记目录的
+        // 规范化路径只在协商了 `core.workspace-path.v1` 时出现（`include_path` 就是本连接的那个协商
+        // 结果），未协商时该键**缺席**——条目是 `additionalProperties: false` 的封闭对象，只协商
+        // `core.local-catalog.v1` 的旧客户端因此仍收到与本变更前逐字节相同的两个键。
+        let include_path = inputs.features.contains(WORKSPACE_PATH_FEATURE);
+        let catalog = core
+            .sync_workspace_catalog(&Actor::LocalCli, include_path)
+            .await?;
+        let items = catalog
             .iter()
             .map(wire_workspace)
             .collect::<Option<Vec<_>>>()
@@ -241,6 +251,12 @@ pub fn digest(frames: &[sha2::digest::Output<Sha256>]) -> Option<Base64Url<32>> 
 
 /// `core.local-catalog.v1` 的门控（目录资源 `workspaces`/`agents`）。
 pub const LOCAL_CATALOG_FEATURE: &str = "core.local-catalog.v1";
+
+/// `core.workspace-path.v1` 的门控（快照 `workspaces` 条目的可选键 `path`）。
+///
+/// 未协商时该键**缺席**（不是 `null`、不是空串）：条目是 `additionalProperties: false` 的封闭对象，
+/// 只协商 `core.local-catalog.v1` 的旧客户端多收到一个键就会拒收整条消息（§9.4）。
+pub const WORKSPACE_PATH_FEATURE: &str = "core.workspace-path.v1";
 
 /// `resource.remote-origin.v1` 的门控（已导入会话与其来源信息）。
 pub const REMOTE_ORIGIN_FEATURE: &str = "resource.remote-origin.v1";
@@ -341,9 +357,22 @@ fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessi
     })
 }
 
-/// `WorkspaceRecord` → `workspaceRef`（只有别名与展示名；`canonical_path` **不映射**）。
-fn wire_workspace(record: &WorkspaceRecord) -> Option<WireWorkspaceRef> {
-    wire_workspace_ref(record.alias().as_str(), record.display_name())
+/// core 的目录资源投影 → wire `workspaceCatalogEntry`（快照 `workspaces` 资源的元素）。
+///
+/// 只映射 core 给出的三个取值：`alias`/`displayName` 是 `WorkspaceRef` 的两键，`path` 是可选键——**键的
+/// 三态由 core 的 `sync_workspace_catalog(actor, include_path)` 决定**（`None` = 本连接未协商
+/// `core.workspace-path.v1`，键缺席；`Some` = 已登记目录的规范化路径，`canonicalize` 结果剥掉平台
+/// verbatim 前缀），本层不重算协商结果、也不做第二套取值规范化。这些条目是本节点规范化路径唯一的
+/// **快照侧**可见面（§9.4/§12.3）；会话摘要的目录引用仍是 `workspaceRef` 的两个键。
+fn wire_workspace(entry: &CoreWorkspaceCatalogEntry) -> Option<WireWorkspaceCatalogEntry> {
+    Some(WireWorkspaceCatalogEntry {
+        alias: NonEmptyText::<64>::parse(entry.alias().as_str()).ok()?,
+        display_name: NonEmptyText::<128>::parse(entry.display_name()).ok()?,
+        path: match entry.path() {
+            Some(path) => Some(NonEmptyText::<4096>::parse(path).ok()?),
+            None => None,
+        },
+    })
 }
 
 fn wire_workspace_ref(alias: &str, display_name: &str) -> Option<WireWorkspaceRef> {
