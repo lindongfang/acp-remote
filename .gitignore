@@ -34,3 +34,11 @@ openspec/changes/**/reports/**/*.log
 # 本地临时工作树与独占构建目录，不入版本控制
 .worktrees/
 .target-wt/
+
+# SQLite 运行时副产物：`fixtures/storage/**/*.sqlite3` 本身是入库的固定 fixture，但库文件一旦被以连接
+# 方式打开，SQLite 就会在它旁边生成预写日志与共享内存索引（`-wal` / `-shm`）。这两个文件的内容与
+# 进程时序绑定、退出时被 checkpoint 回收，不构成可复现的版本控制内容：本机跑完 `storage-sqlite`
+# 的用例后它们必然重新出现（`fixtures/storage/v2/` 下尤其明显），因此按后缀整体忽略，而不是
+# 每次删除后又被重建、反复出现在 `git status` 里。
+*.sqlite3-wal
+*.sqlite3-shm
