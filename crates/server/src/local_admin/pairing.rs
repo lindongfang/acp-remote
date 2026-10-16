@@ -26,7 +26,7 @@ use acp_core::model::{
 use base64::Engine as _;
 use identity_auth::{
     Authority, CanonicalOrigin, ClaimedPairing, IdentityError, KeystoreError, NodeEndpoint,
-    PairingError, PairingSecret, RequestedCapabilities, Sas,
+    PairingSecret, RequestedCapabilities,
 };
 
 use crate::local_admin::error::{AdminError, LocalErrorCode};
@@ -102,7 +102,7 @@ impl PairingSessions {
         }
     }
 
-    /// 配对状态机（组合根同时用它跑重启终结与过期扫描；配对方法用它取得记录草稿、落定与 SAS）。
+    /// 配对状态机（组合根同时用它跑重启终结与过期扫描；配对方法用它取得记录草稿与落定结果）。
     pub fn authority(&self) -> &Authority {
         &self.authority
     }
@@ -149,27 +149,6 @@ impl PairingSessions {
             .node_public_key()
             .await
             .map_err(|error| map_identity_error(operation, error))
-    }
-
-    /// 主机侧 SAS（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §9.4）：claim 之后展示给本地用户
-    /// 的 6 位短验证码，由 `identity-auth` 的 transcript 派生——本层不自行计算，也不下传任何「对端结果」。
-    ///
-    /// 前置条件与状态机一致：记录处于 `pending_confirmation` 且内存仍持有该配对的 secret；不满足时返回
-    /// 具名错误（调用方据此区分「暂时不可用」与「实现缺陷」，而不是把 `null` 当结果）。
-    pub async fn host_sas(
-        &self,
-        record: &PairingRecord,
-        peer: &PairingPeer,
-    ) -> Result<Sas, PairingError> {
-        if record.state() != PairingState::PendingConfirmation {
-            return Err(PairingError::WrongState);
-        }
-        if !self.authority.has_secret(record.id()) {
-            return Err(PairingError::SecretUnavailable);
-        }
-        self.authority
-            .pairing_sas(record, &claimed_pairing(record, peer))
-            .await
     }
 
     /// `device.pair.begin` 的二维码 URL：`https://<origin>/pair#data=<base64url-json>`

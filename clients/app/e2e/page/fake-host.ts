@@ -15,6 +15,12 @@
  * - transcript 的 domain 与字段 tag 由 `src/composition.ts:254-263` 逐字复制。**抄错就会验签失败**、
  *   连接被阻断、全部用例变红，因此这里不存在「怎么签都能过」的可能。
  * - `tamperHostProof` 开关故意签错一条，检查据此断言阻断态——证明校验真的在跑。
+ * - `signPairingClaimHostProof` 按 §7.2 现签认领响应的主机证明：客户端验它用的是**二维码里那把**
+ *   公钥（`src/composition.ts` 的 `verifyClaimHostProof`）。因此把 `signer` 换成另一把钥匙，就得到
+ *   一支长度与形状都合法、只有钥匙不对的证明——真主机诚实产不出这种响应，它正是“验签真的在跑”
+ *   的判别力来源。
+ * - `tamperPublicKeyLastByte` 只改公钥的**末字节**：`approved` 响应没有主机签名，与二维码逐字节
+ *   相同是唯一依据；只比主机标识、或做前缀/trim/大小写宽松比较的实现会在这条响应上放行。
  * - 快照 digest 用**真实 SHA-256** 两级哈希（每 chunk 一次再对连接结果一次，§9.4），
  *   由 `src/sync-client/snapshot.ts:232-248` 独立校验。digest 算错 → `digest_mismatch` → 不提交。
  *
@@ -137,13 +143,39 @@ function flipSignature(signature: string): string {
   return encodeBase64Url(bytes);
 }
 
+/**
+ * 翻转一段公钥的**末字节**后按 base64url 重新编码：长度、字母表与前 64 字节都原样保留。
+ *
+ * `approved` 响应（§7.3）没有主机签名，因此它与二维码里那把公钥**逐字节相同**是唯一的依据。
+ * 这条响应专门用来抓「比较写宽松了」的实现错误：只比主机标识、或做前缀/trim/大小写折叠的实现，
+ * 拿到它照样会放行并落盘，而「逐字节比对」的实现会明确失败。
+ *
+ * 为什么是末字节而不是首字节：P-256 的未压缩点是 `04 || x || y`，改首字节会同时把曲线前缀改坏，
+ * 于是「形状不符」这条**另一条**检查也会拒——那就分不清是谁拒的。改末字节则形状完全合法。
+ */
+export function tamperPublicKeyLastByte(publicKeyBase64Url: string): string {
+  const bytes = decodeBase64UrlLoose(publicKeyBase64Url);
+  const last = bytes.length - 1;
+  bytes[last] = (bytes[last] ?? 0) ^ 0x01;
+  return encodeBase64Url(bytes);
+}
+
 export interface FakeHostOptions {
   readonly canonicalOrigin: string;
   readonly workspaces: readonly unknown[];
   readonly sessions: readonly unknown[];
   readonly agents: readonly unknown[];
-  /** `null` = 不下发 `auth.authenticated`：客户端停在未认证，`scopes` 恒为 `null`。 */
-  readonly scopes: readonly string[] | null;
+  /**
+   * 是否下发 `auth.authenticated`。
+   *
+   * `false` = 握手停在「已签出设备证明」这一步：客户端始终未认证（`state.deviceId` 恒为 `null`、
+   * 也不会发 `sync.subscribe`），用于「未认证」的场景。
+   *
+   * 这里**没有**任何授权集合可给：本次变更后设备方向没有授权维度，`auth.authenticated` 的 body
+   * 也不再携带 `scopes`（schema 的 `additionalProperties: false` 不容许该键）。因此这个开关只剩
+   * 「认证走到哪一步」这一件事，名实一致。
+   */
+  readonly authenticate: boolean;
   /** 故意签一条错的 hostProof：用于「验签不是橡皮图章」的负向对照。 */
   readonly tamperHostProof: boolean;
   /** 是否下发快照与屏障（`false` 用于「已配对但从未同步过」）。 */
@@ -173,7 +205,14 @@ export interface HostKeyRecord {
 
 /** 主机 P-256 密钥对：私钥只留在页内，公开材料进「已配对主机记录」。 */
 export interface FakeHostIdentity extends HostKeyRecord {
-  readonly signHostChallenge: (transcript: Uint8Array) => Promise<string>;
+  /**
+   * 用这把主机钥匙签一段 transcript。
+   *
+   * 两类证明共用它：握手的 `auth.server_challenge` 主机证明，与认领响应（§7.2）的主机证明。
+   * 两者签的都是 ECDSA P-256 / SHA-256 的 P1363 `r||s`，差别只在域与字段——因此这里只收一段
+   * 现编好的 transcript，不把任一条 transcript 的构造藏进来。
+   */
+  readonly signTranscript: (transcript: Uint8Array) => Promise<string>;
 }
 
 /** 生成主机密钥对。这是**主机**的钥匙，与设备私钥无关（设备私钥由 IndexedDB 持有）。 */
@@ -187,7 +226,7 @@ export async function createFakeHostIdentity(hostId: string): Promise<FakeHostId
   return {
     hostId,
     publicKeyBase64Url: encodeBase64Url(raw as Uint8Array<ArrayBuffer>),
-    async signHostChallenge(transcript: Uint8Array) {
+    async signTranscript(transcript: Uint8Array) {
       const signature = await crypto.subtle.sign(
         { name: "ECDSA", hash: "SHA-256" },
         pair.privateKey,
@@ -196,6 +235,77 @@ export async function createFakeHostIdentity(hostId: string): Promise<FakeHostId
       return encodeBase64Url(new Uint8Array(signature) as Uint8Array<ArrayBuffer>);
     },
   };
+}
+
+/** `pairing-host-proof` transcript 的域（`src/composition.ts` 的 `DOMAIN.pairingHostProof`）。 */
+const PAIRING_HOST_PROOF_DOMAIN = "acp-remote/pairing-host-proof/v1";
+
+/**
+ * `pairing-host-proof` 的字段 tag（`src/composition.ts` 的 `TAG`）。
+ *
+ * 与握手的 tag 表**分开**写：两张表混用会让「签的字段」与「验的字段」悄悄错位，而错位的后果
+ * 只是验签失败（一条看起来像环境问题的红）。这里只列 §6.3 里被签进这条证明的字段。
+ */
+const PAIRING_HOST_PROOF_TAG = {
+  protocolVersion: 1,
+  hostId: 2,
+  deviceId: 3,
+  pairingId: 4,
+  canonicalOrigin: 6,
+  hostPublicKey: 7,
+  devicePublicKey: 8,
+  clientNonce: 9,
+  serverNonce: 10,
+  pairingRequestId: 13,
+} as const;
+
+/** 认领请求正文里参与被签 transcript 的字段（`POST /sync/v1/pairing/claim`，§7.2）。 */
+export interface PairingClaimRequestView {
+  readonly hostId: string;
+  readonly deviceId: string;
+  readonly pairingId: string;
+  readonly canonicalOrigin: string;
+  readonly devicePublicKey: string;
+  /** 客户端本次的 nonce（base64url，32 字节）。 */
+  readonly clientNonce: string;
+}
+
+/**
+ * 按 §7.2 现签一条认领响应的主机证明。
+ *
+ * 字段值全部取自**认领请求本身**，加上二维码里那把主机公钥、本次的 `serverNonce` 与
+ * `pairingRequestId`——与客户端验签时重建的 transcript 逐字段对应
+ * （`src/composition.ts` 的 `verifyClaimHostProof`）。因此这里改错任一字段，或把 `signer` 换成
+ * 另一把钥匙，客户端的验签都会失败。
+ *
+ * ## 为什么「换一把钥匙」是这个替身最有价值的能力
+ *
+ * 真 Daemon 只能用它自己那把（也就是二维码里那把）钥匙签，因此「签名不匹配」这条响应只有
+ * 替身造得出来：把 `signer` 换成另一把，签出来的仍是长度、字母表都合法的 64 字节 P1363 签名，
+ * 客户端**只可能**因为「钥匙不对」而拒。若实现跳过验签（或拿别处的材料自证），这条响应会被
+ * 放行——用例因此变红，而不是「恰好没成功」。
+ */
+export async function signPairingClaimHostProof(input: {
+  readonly signer: FakeHostIdentity;
+  readonly request: PairingClaimRequestView;
+  /** 二维码里的主机公钥：transcript 的 7 号字段，也是客户端唯一会拿来验签的那把。 */
+  readonly hostPublicKey: string;
+  readonly serverNonce: string;
+  readonly pairingRequestId: string;
+}): Promise<string> {
+  const transcript = encodeTranscript(PAIRING_HOST_PROOF_DOMAIN, [
+    { tag: PAIRING_HOST_PROOF_TAG.protocolVersion, bytes: encodeU16be(1) },
+    { tag: PAIRING_HOST_PROOF_TAG.hostId, bytes: encodeUuid16(input.request.hostId) },
+    { tag: PAIRING_HOST_PROOF_TAG.deviceId, bytes: encodeUuid16(input.request.deviceId) },
+    { tag: PAIRING_HOST_PROOF_TAG.pairingId, bytes: encodeUuid16(input.request.pairingId) },
+    { tag: PAIRING_HOST_PROOF_TAG.canonicalOrigin, bytes: encodeUtf8(input.request.canonicalOrigin) },
+    { tag: PAIRING_HOST_PROOF_TAG.hostPublicKey, bytes: decodeBase64UrlLoose(input.hostPublicKey) },
+    { tag: PAIRING_HOST_PROOF_TAG.devicePublicKey, bytes: decodeBase64UrlLoose(input.request.devicePublicKey) },
+    { tag: PAIRING_HOST_PROOF_TAG.clientNonce, bytes: decodeBase64UrlLoose(input.request.clientNonce) },
+    { tag: PAIRING_HOST_PROOF_TAG.serverNonce, bytes: decodeBase64UrlLoose(input.serverNonce) },
+    { tag: PAIRING_HOST_PROOF_TAG.pairingRequestId, bytes: encodeUuid16(input.pairingRequestId) },
+  ]);
+  return input.signer.signTranscript(transcript);
 }
 
 /** 真实 SHA-256（快照两级摘要的第一级）。 */
@@ -383,7 +493,7 @@ export class FakeHost {
         bytes: encodeNulJoinedUtf8(sortedFeatures(selectedFeatures)),
       },
     ]);
-    const hostProof = await this.identity.signHostChallenge(transcript as Uint8Array<ArrayBuffer>);
+    const hostProof = await this.identity.signTranscript(transcript as Uint8Array<ArrayBuffer>);
 
     this.#deliver(
       JSON.stringify({
@@ -403,7 +513,7 @@ export class FakeHost {
   }
 
   #sendAuthenticated(): void {
-    if (this.options.scopes === null) return;
+    if (!this.options.authenticate) return;
     this.#deliver(
       JSON.stringify({
         protocolVersion: 1,
@@ -413,7 +523,7 @@ export class FakeHost {
         connectionSequence: "1",
         body: {
           deviceId: this.#deviceIdFromHello(),
-          scopes: this.options.scopes,
+          // 设备方向没有授权维度：body 里**没有** `scopes`（`wire.ts` 的必填集合与 schema 逐字对应）。
           serverEpoch: SERVER_EPOCH,
           headGlobalSequence: this.options.barrierGlobalSequence,
           heartbeatIntervalMs: 30_000,

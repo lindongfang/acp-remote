@@ -151,7 +151,6 @@ export interface RecordingGateway extends SyncGateway {
 
 export function recordingGateway(input: {
   readonly resources: StagedResources | null;
-  readonly scopes?: readonly string[] | null;
   readonly connectionId?: string | null;
 }): RecordingGateway {
   const dispatches: CommandMessage[] = [];
@@ -167,21 +166,9 @@ export function recordingGateway(input: {
   return {
     dispatches,
     current,
-    authenticatedInfo:
-      input.scopes === undefined || input.scopes === null
-        ? null
-        : {
-            deviceId: "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
-            scopes: input.scopes,
-            serverEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13",
-            headGlobalSequence: "10",
-            heartbeatIntervalMs: 30000,
-            limits: {
-              maxMessageBytes: 1048576,
-              maxPromptBytes: 262144,
-              maxReplayEventsPerBatch: 500,
-            },
-          },
+    // 认证结果（`deviceId` / serverEpoch / 限额）由 `onlineStore` 自己发一条 `authenticated` 事件
+    // 交付；wire 上没有授权集合，因此这里没有任何 scope 可给，也不编造一份。
+    authenticatedInfo: null,
     dispatch(command: CommandMessage) {
       dispatches.push(command);
     },
@@ -194,10 +181,9 @@ export interface StoreFixture {
   readonly gateway: RecordingGateway;
 }
 
-/** 建一个已喂入快照（必要时还有认证结果）的仓库。 */
+/** 建一个已喂入快照的仓库。 */
 export function storeWith(input: {
   readonly resources: StagedResources | null;
-  readonly scopes?: readonly string[] | null;
   readonly connectionId?: string | null;
 }): StoreFixture {
   const gateway = recordingGateway(input);
@@ -224,12 +210,6 @@ export function storeWith(input: {
         receivedChunks: 3,
         snapshotDigest: "kQ8x2mB7yV1cJ0nP5",
       },
-    });
-  }
-  if (input.scopes !== undefined && input.scopes !== null) {
-    store.apply({
-      kind: "authenticated",
-      info: gateway.authenticatedInfo as NonNullable<SyncGateway["authenticatedInfo"]>,
     });
   }
   return { store, gateway };
@@ -300,17 +280,14 @@ export const TEST_SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
  */
 export function onlineStore(input: {
   readonly resources?: StagedResources;
-  readonly scopes?: readonly string[];
   readonly features?: readonly string[];
 }): StoreFixture {
-  const scopes = input.scopes ?? ["session.read", "session.prompt"];
-  const { store, gateway } = storeWith({ resources: input.resources ?? resources({}), scopes });
-  // 再发一次认证结果，这一次带上服务端在 `auth.server_challenge` 里选中的 feature。
+  const { store, gateway } = storeWith({ resources: input.resources ?? resources({}) });
+  // 发一次认证结果，带上服务端在 `auth.server_challenge` 里选中的 feature。
   store.apply({
     kind: "authenticated",
     info: {
       deviceId: TEST_DEVICE_ID,
-      scopes: [...scopes],
       serverEpoch: TEST_SERVER_EPOCH,
       headGlobalSequence: "10",
       heartbeatIntervalMs: 30000,

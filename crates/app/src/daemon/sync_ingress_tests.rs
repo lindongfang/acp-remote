@@ -620,7 +620,6 @@ async fn approve_device(
     public: &PeerPublicKey,
     origin: &CanonicalOrigin,
 ) -> PairingId {
-    let scopes = ScopeSet::try_from_iter(["session.read"]).expect("scope 文本合法");
     let pairing_id = PairingId::new(&uuid_text()).expect("pairing id 是 canonical uuid");
     let expires_at = timestamp_from_unix_seconds(unix_now() + 60).expect("60 秒后是合法时间戳");
     let draft = authority
@@ -629,10 +628,9 @@ async fn approve_device(
             &PairingSpec::Device {
                 canonical_origin: origin.clone(),
             },
-            &RequestedCapabilities {
-                scopes: scopes.clone(),
-                grants: GrantSet::empty(),
-            },
+            // 设备配对不申请任何授权词汇（`pairing-model` 删除设备权限层）：两侧集合都必须为空，
+            // 否则 `RequestedCapabilities::matches_target(Device)` 以 `CapabilityKindMismatch` 拒绝。
+            &RequestedCapabilities::empty(),
             Some("Test Phone"),
             &authority.now(),
             &expires_at,
@@ -652,10 +650,7 @@ async fn approve_device(
         host_binding: origin.as_str().to_owned(),
         public_key: public.clone(),
         client_nonce: client_nonce.clone(),
-        requested: RequestedCapabilities {
-            scopes: scopes.clone(),
-            grants: GrantSet::empty(),
-        },
+        requested: RequestedCapabilities::empty(),
         proof: PairingProof::try_from_bytes(&[0u8; 32]).expect("32 字节占位 proof"),
     };
     fields.proof = SyncPairingProof {
@@ -699,7 +694,7 @@ async fn approve_device(
         .settle(
             &record,
             &PairingDecision::Approve {
-                granted_scopes: scopes,
+                granted_scopes: ScopeSet::empty(),
                 granted_grants: GrantSet::empty(),
             },
             &authority.now(),

@@ -56,8 +56,8 @@ use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
 use storage_sqlite::session_store::SqliteStore;
 use support::{
-    digest_text, measured_storage_bytes, raw_pool, raw_write_pool, scalar_i64, table_snapshot,
-    temp_dir,
+    column_names, digest_text, measured_storage_bytes, raw_pool, raw_write_pool, scalar_i64,
+    table_snapshot, temp_dir,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -215,11 +215,10 @@ fn audit_for(actor: Actor, action: AuditAction, target: EntityRef) -> PendingAud
     }
 }
 
-/// 消费配对用的设备主体（该端口不看 scopes）。
+/// 消费配对用的设备主体（设备不再有授权集合，构造只需要 id）。
 fn device_actor() -> Actor {
     Actor::Device {
         device: device_id(),
-        scopes: ScopeSet::empty(),
     }
 }
 
@@ -255,13 +254,15 @@ fn node_connected(peer: &NodeId, kind: NodeKind, minute: u32) -> NodeConnectedWr
 }
 
 /// 设备配对登记（`created`），`display_name` 在 claim 之前为空。
+///
+/// 设备配对不携带任何授权集合（`pairing-model`：设备不再有授权维度），因此请求集合恒为空。
 fn device_pairing(expires: u32) -> PairingRecord {
     PairingRecord::try_new(
         pairing_id(),
         PairingTarget::Device,
         PairingState::Created,
         None,
-        ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+        ScopeSet::empty(),
         GrantSet::empty(),
         digest(PAIRING_SECRET),
         HOST_BINDING,
@@ -290,7 +291,7 @@ fn device_claim_with(id: &DeviceId, host_binding: &str) -> PairingClaimWrite {
     let claim = acp_core::model::PairingClaim::try_new(
         pairing_id(),
         peer,
-        ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+        ScopeSet::empty(),
         GrantSet::empty(),
     )
     .expect("claim");
@@ -386,19 +387,18 @@ fn node_claim(id: &NodeId) -> PairingClaimWrite {
     }
 }
 
+/// 设备配对的批准落定：**不带任何授权集合**（设备配对不授予授权，非空 scope 集合会被拒绝；见
+/// `a_pairing_settlement_must_not_carry_a_scope_set`）。
 fn approved_settlement() -> PairingSettlement {
-    PairingSettlement::approved(
-        ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
-        GrantSet::empty(),
-    )
+    PairingSettlement::approved(ScopeSet::empty(), GrantSet::empty())
 }
 
+/// 不含凭据绑定的 profile：默认唯一性、种子与失败关闭用例只关心 profile 行本身。
 fn device_record(fingerprint: Fingerprint, state: DeviceState) -> DeviceRecord {
     DeviceRecord::try_new(
         device_id(),
         "phone",
         fingerprint,
-        ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
         state,
         at(2),
         None,
@@ -441,7 +441,6 @@ fn device_record_with_seen(fingerprint: Fingerprint, last_seen: Option<Timestamp
         device_id(),
         "phone",
         fingerprint,
-        ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
         DeviceState::Active,
         at(2),
         last_seen,
@@ -1484,6 +1483,90 @@ async fn a_device_pairing_must_not_carry_export_ids() {
     store.close().await;
 }
 
+/// 设备配对的落定不接受非空 `ScopeSet`：设备不再有授权维度（`AGENTS.md` §4），非空集合是构造错误、
+/// 必须**显式拒绝**而非静默丢弃（`trust.rs` 的 `InvalidRequest` 分支），且失败零写入零审计。同处也
+/// 断言设备表已无 `scopes_json` 列（v8 迁移的读/写投影）。
+#[tokio::test]
+async fn a_pairing_settlement_must_not_carry_a_scope_set() {
+    let dir = temp_dir("admin-device-scope-set");
+    let store = open(&dir).await;
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    store
+        .create_pairing(PairingWrite {
+            record: device_pairing(30),
+            context: context(0, Vec::new()),
+        })
+        .await
+        .expect("create pairing");
+    store
+        .claim_pairing(device_claim(&device_id()))
+        .await
+        .expect("claim pairing");
+
+    let error = store
+        .settle_pairing(PairingSettlementWrite {
+            pairing: pairing_id(),
+            settlement: PairingSettlement::approved(
+                ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
+                GrantSet::empty(),
+            ),
+            context: context(
+                2,
+                vec![audit(
+                    AuditAction::PairingApproved,
+                    EntityRef::Pairing(pairing_id()),
+                    AuditOutcome::Success,
+                )],
+            ),
+        })
+        .await
+        .expect_err("带 scope 集合的设备配对落定必须拒绝");
+    assert_invalid_request(error, "a pairing settlement must not carry a scope set");
+
+    assert!(
+        store.devices().await.expect("devices").is_empty(),
+        "失败路径不得创建信任行"
+    );
+    assert!(
+        store
+            .peer_key(&PeerIdentity::Device(device_id()))
+            .await
+            .expect("peer key")
+            .is_none(),
+        "失败路径不得写身份材料"
+    );
+    assert_eq!(
+        store
+            .pairing(&pairing_id())
+            .await
+            .expect("pairing")
+            .expect("pairing row")
+            .state(),
+        PairingState::PendingConfirmation,
+        "失败路径不得推进配对状态"
+    );
+
+    let pool = raw_pool(&path).await;
+    assert_eq!(
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_device").await,
+        0,
+        "失败路径不得写设备行"
+    );
+    assert_eq!(
+        audit_rows(&pool, AuditAction::PairingApproved).await,
+        0,
+        "失败路径不得写审计"
+    );
+    assert!(
+        !column_names(&pool, "owned_device")
+            .await
+            .contains(&"scopes_json".to_owned()),
+        "设备表不得再有授权集合列（v8 已删）"
+    );
+    pool.close().await;
+    store.close().await;
+}
+
 /// §11.2 第 1 条回归：claim 必须逐字回显登记时宣告的本机绑定；回显别的机器一律以身份不匹配拒绝，
 /// 且不推进状态、不写对端行。
 #[tokio::test]
@@ -1586,7 +1669,7 @@ async fn only_a_fresh_pairing_can_lift_a_revocation() {
                 PairingTarget::Device,
                 PairingState::Created,
                 None,
-                ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                ScopeSet::empty(),
                 GrantSet::empty(),
                 digest(PAIRING_SECRET),
                 HOST_BINDING,
@@ -1615,7 +1698,7 @@ async fn only_a_fresh_pairing_can_lift_a_revocation() {
                 acp_core::model::PairingClaim::try_new(
                     pairing.clone(),
                     peer,
-                    ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                    ScopeSet::empty(),
                     GrantSet::empty(),
                 )
                 .expect("claim")
@@ -1907,7 +1990,6 @@ async fn consume_pairing_refuses_a_mismatched_peer_or_audit_actor() {
                 pairing: pairing_id(),
                 actor: Actor::Device {
                     device: remote_device_id(),
-                    scopes: ScopeSet::empty(),
                 },
                 context: context(3, Vec::new()),
             })
@@ -2633,7 +2715,7 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                 PairingTarget::Device,
                 PairingState::Created,
                 None,
-                ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                ScopeSet::empty(),
                 GrantSet::empty(),
                 digest(PAIRING_SECRET),
                 HOST_BINDING,
@@ -2668,7 +2750,7 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                     acp_core::model::PairingClaim::try_new(
                         stale.clone(),
                         peer,
-                        ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
+                        ScopeSet::empty(),
                         GrantSet::empty(),
                     )
                     .expect("claim")
@@ -3205,7 +3287,6 @@ async fn timestamps_are_advanced_never_erased() {
                 device_id(),
                 "phone-renamed",
                 fingerprint.clone(),
-                ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
                 DeviceState::Active,
                 at(2),
                 Some(at(2)),

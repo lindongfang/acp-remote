@@ -75,6 +75,26 @@ function tableCommands(text, heading) {
   return names;
 }
 
+// 递归收集 JSON 里全部对象键与字符串叶子（附各自的路径），用于「已删除词汇不得回潮」的扫描：
+// 键名与取值都只看**字面量**，因此不会因为嵌套位置不同而漏判。
+function vocabulary(value, path = "$", found = []) {
+  if (typeof value === "string") {
+    found.push([path, value]);
+    return found;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) vocabulary(item, `${path}[${index}]`, found);
+    return found;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      found.push([`${path}.${key}`, key]);
+      vocabulary(child, `${path}.${key}`, found);
+    }
+  }
+  return found;
+}
+
 // `crates/core/src/broker.rs::required_grant` 是 commands.json 的**手工镜像**（core 无 serde，读不了
 // JSON），而 Node actor 的 Export/Import 交集判定依赖它。镜像漂移等于授权漂移，因此这里按源码解析
 // match 臂逐条比对：`"a" | "b" => "grant.x"`。解析失败即报错——形状变了必须同步改本门禁。
@@ -191,29 +211,25 @@ if (catalog) {
     if (command.name !== "session.create" && command.scope !== command.name) {
       errors.push(`commands.json: ${command.name} scope must equal command name`);
     }
-    // `pack.*` 是设备/配对面概念：只经 Node Link 接受的命令（`transport` 不含 `sync`）没有设备包，
-    // 因此允许 `pack: null`；含 `sync` 的命令必须有 pack。判据是 transport 而不是命令名——
-    // 新增 Node Link-only 命令不需要改本门禁。
-    if (!command.pack && (command.transport ?? []).includes("sync")) {
-      errors.push(`commands.json: ${command.name} has no pack`);
-    }
   }
   commandTotal = names.size;
 
-  const referenced = new Set([
-    ...Object.values(catalog.packs ?? {}).flat(),
-    ...Object.values(catalog.grants ?? {}).flat(),
-  ]);
-  compareSets("commands.json packs/grants", referenced, names);
-
-  for (const [pack, members] of Object.entries(catalog.packs ?? {})) {
-    for (const member of members) {
-      const command = (catalog.commands ?? []).find((c) => c.name === member);
-      if (command && command.pack !== pack) {
-        errors.push(`commands.json: ${member} listed in ${pack} but declares pack ${command.pack}`);
-      }
-    }
+  // 设备权限层已删除（`pairing-model`）：命令登记表只剩两处授权词汇——跨节点导出授权 `grants` 与本地
+  // 管理能力 `localCapabilities`。命令条目不再有 `pack` 字段，顶层不再有 `packs`/`presets` 两个输入
+  // 映射。这一条是「不得回潮」的判据：资产删掉之后它仍然会因为词汇重新出现而独立变红（不是空断言）。
+  const removedKeys = new Set(["pack", "packs", "presets", "requestedPacks", "requestedScopes", "sas"]);
+  const reappeared = [];
+  for (const [keyPath, text] of vocabulary(catalog)) {
+    if (removedKeys.has(text)) reappeared.push(`${keyPath}（键名 ${text}）`);
+    else if (/^(pack|preset)\./.test(text)) reappeared.push(`${keyPath} = ${text}`);
   }
+  if (reappeared.length > 0) {
+    errors.push(`commands.json: 设备授权词汇（pack/preset/sas）与设备方向请求字段必须已删除，实际仍有 ${reappeared.join("、")}`);
+  }
+
+  // `grants` 是命令条目的唯一授权分组：每条命令必须恰好被一个导出授权覆盖（设备方向不再有分组）。
+  const referenced = new Set(Object.values(catalog.grants ?? {}).flat());
+  compareSets("commands.json grants", referenced, names);
 
   const nodeLinkTransport = (catalog.commands ?? []).filter((c) => (c.transport ?? []).includes("node_link"));
   if (nodeLinkTransport.length === 0) errors.push("commands.json: no node_link transport commands");
@@ -247,7 +263,10 @@ if (catalog) {
 
   const securityDoc = readText(securityDocPath);
   if (securityDoc) {
-    compareSets("docs/SECURITY_DESIGN.md §10.2", tableCommands(securityDoc, "### 10.2 命令、scope、pack 与 grant"), names);
+    // 该节标题由 `SECURITY_DESIGN.md` 自持：本变更删掉 pack/preset 后标题的措辞必然改写，因此这里
+    // **只按编号前缀定位**，判据仍是「节内表格的命令名与登记表相等」。改标题不会误伤这条判据，
+    // 删掉整节或改编号仍会失败。
+    compareSets("docs/SECURITY_DESIGN.md §10.2", tableCommands(securityDoc, "### 10.2 "), names);
   }
 
   const broker = readText(coreBrokerPath);

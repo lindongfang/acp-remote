@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 use sqlx::sqlite::SqliteRow;
 
-use acp_core::model::{Actor, ActorKind, AuditRecord, EntityRef, PortError, ScopeSet};
+use acp_core::model::{Actor, ActorKind, AuditRecord, EntityRef, PortError};
 use acp_core::ports::{AuditQuery, AuditStore, PendingAudit};
 
 use crate::admin::{enforce_capacity_gate, insert_audit_rows};
@@ -50,14 +50,13 @@ fn pending_audit(record: &AuditRecord) -> PendingAudit {
 
 /// 从 §7.3 的 `(actor_kind, actor_id)` 还原 `Actor`。
 ///
-/// 与 `owned_command` 的还原同款、**同样有损**：审计列只有这两列，设备 scopes 不在表里——审计只记录
-/// 归因，授权不在持久层判定。Node 的复合键按 `"{node}/{access_node}"` 拆回（`Actor::id_text` 的形状）；
+/// 与 `owned_command` 的还原同款：审计列只有这两列（归因），设备记录也没有授权集合列，因此
+/// `Actor::Device` 只由 id 构成。Node 的复合键按 `"{node}/{access_node}"` 拆回（`Actor::id_text` 的形状）；
 /// 认领方（`pairing_claimant`）的 `actor_id` 就是该配对 id。
 fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> {
     match kind {
         ActorKind::Device => Ok(Actor::Device {
             device: decode(id, "owned_audit.actor_id")?,
-            scopes: ScopeSet::empty(),
         }),
         ActorKind::Node => {
             let (node, access_node) = id.split_once('/').ok_or(StorageError::ColumnValue {

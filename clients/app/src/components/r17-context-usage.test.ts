@@ -132,9 +132,8 @@ describe("R17 未上报不影响其它交互", () => {
         sessions: [session({ id: HEADER.sessionId, state: "running" })],
         agents: [],
       }),
-      scopes: ["session.read"],
     });
-    store.apply({ kind: "authenticated", info: { deviceId: "d", scopes: ["session.read"], serverEpoch: "e", headGlobalSequence: "1", heartbeatIntervalMs: 30000, limits: { maxMessageBytes: 1, maxPromptBytes: 1, maxReplayEventsPerBatch: 1 } } });
+    store.apply({ kind: "authenticated", info: { deviceId: "d", serverEpoch: "e", headGlobalSequence: "1", heartbeatIntervalMs: 30000, limits: { maxMessageBytes: 1, maxPromptBytes: 1, maxReplayEventsPerBatch: 1 } } });
     // 让连接走到在线：配对完成 → 开始连接 → socket 打开 → 已订阅 → 追平完成。
     store.pairSucceeded();
     store.apply({ kind: "authenticating" });
@@ -159,7 +158,6 @@ describe("R17 未上报不影响其它交互", () => {
         ],
         agents: [],
       }),
-      scopes: ["session.read"],
     });
 
     const model = store.conversationPage(HEADER.sessionId);

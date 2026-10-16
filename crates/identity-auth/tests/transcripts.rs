@@ -1,4 +1,4 @@
-//! [PV3] / 任务 2.4：12 个已登记 domain 的固定向量逐字节重算、验签、HMAC、SAS 与畸形输入负例。
+//! [PV3] / 任务 2.4：10 个已登记 domain 的固定向量逐字节重算、验签、HMAC 与畸形输入负例。
 //!
 //! 这些用例是合同 §3 第 5 条要求的**常驻回归测试**：向量来自 `fixtures/{sync,node-link}/v1/transcripts/`，
 //! 装配只经协议 crate 的表（`design.md` D2），因此「表写错」「字段顺序写错」「宽度写错」都会在这里红。
@@ -7,13 +7,13 @@ mod support;
 
 use acp_core::model::{NodeKind, Nonce, PeerPublicKey, Timestamp};
 use identity_auth::transcript::{
-    NodeLinkChallenge, NodeLinkPairingOwnerProof, NodeLinkPairingProof, NodeLinkPairingSas,
-    NodeLinkPairingStatus, NodeLinkProof, SyncDeviceProof, SyncHostChallenge, SyncPairingHostProof,
-    SyncPairingProof, SyncPairingSas, SyncPairingStatus,
+    NodeLinkChallenge, NodeLinkPairingOwnerProof, NodeLinkPairingProof, NodeLinkPairingStatus,
+    NodeLinkProof, SyncDeviceProof, SyncHostChallenge, SyncPairingHostProof, SyncPairingProof,
+    SyncPairingStatus,
 };
 use identity_auth::{
     CanonicalOrigin, ChallengeId, ClientKind, FeatureList, P1363Signature, PairingProof,
-    PairingRequestId, PairingSecret, Sas,
+    PairingRequestId, PairingSecret,
 };
 use serde_json::Value;
 
@@ -27,7 +27,6 @@ macro_rules! vector {
 const SYNC_VECTORS: &[&str] = &[
     vector!("sync/v1/transcripts/pairing-proof.json"),
     vector!("sync/v1/transcripts/pairing-host-proof.json"),
-    vector!("sync/v1/transcripts/pairing-sas.json"),
     vector!("sync/v1/transcripts/pairing-status.json"),
     vector!("sync/v1/transcripts/host-challenge.json"),
     vector!("sync/v1/transcripts/device-proof.json"),
@@ -36,7 +35,6 @@ const SYNC_VECTORS: &[&str] = &[
 const NODE_LINK_VECTORS: &[&str] = &[
     vector!("node-link/v1/transcripts/pairing-proof.json"),
     vector!("node-link/v1/transcripts/pairing-owner-proof.json"),
-    vector!("node-link/v1/transcripts/pairing-sas.json"),
     vector!("node-link/v1/transcripts/pairing-status.json"),
     vector!("node-link/v1/transcripts/challenge.json"),
     vector!("node-link/v1/transcripts/node-proof.json"),
@@ -129,17 +127,15 @@ fn connection_id_of(input: &Value) -> ChallengeId {
     ChallengeId::parse(&uuid_of(input, "connectionId")).expect("规范 connectionId")
 }
 
-/// 12 个 domain 的输入结构（每个分支只出现一次，装配与校验都在这里分发）。
+/// 10 个 domain 的输入结构（每个分支只出现一次，装配与校验都在这里分发）。
 enum Vector {
     SyncPairingProof(SyncPairingProof),
     SyncPairingHostProof(SyncPairingHostProof),
-    SyncPairingSas(SyncPairingSas),
     SyncPairingStatus(SyncPairingStatus),
     SyncHostChallenge(SyncHostChallenge),
     SyncDeviceProof(SyncDeviceProof),
     NodeLinkPairingProof(NodeLinkPairingProof),
     NodeLinkPairingOwnerProof(NodeLinkPairingOwnerProof),
-    NodeLinkPairingSas(NodeLinkPairingSas),
     NodeLinkPairingStatus(NodeLinkPairingStatus),
     NodeLinkChallenge(NodeLinkChallenge),
     NodeLinkProof(NodeLinkProof),
@@ -175,17 +171,6 @@ impl Vector {
                     pairing_request_id: request_id_of(input),
                 })
             }
-            "acp-remote/pairing-sas/v1" => Self::SyncPairingSas(SyncPairingSas {
-                host_id: support::node(&uuid_of(input, "hostId")),
-                device_id: support::device(&uuid_of(input, "deviceId")),
-                pairing_id: support::pairing(&uuid_of(input, "pairingId")),
-                canonical_origin: origin_of(input),
-                host_public_key: key_of(&text_of(input, "hostPublicKey")),
-                device_public_key: key_of(&text_of(input, "devicePublicKey")),
-                client_nonce: nonce_of(input, "clientNonceHex"),
-                server_nonce: nonce_of(input, "serverNonceHex"),
-                pairing_request_id: request_id_of(input),
-            }),
             "acp-remote/pairing-status/v1" => Self::SyncPairingStatus(SyncPairingStatus {
                 host_id: support::node(&uuid_of(input, "hostId")),
                 device_id: support::device(&uuid_of(input, "deviceId")),
@@ -237,16 +222,6 @@ impl Vector {
                     pairing_request_id: request_id_of(input),
                 })
             }
-            "acp-remote/node-link-pairing-sas/v1" => Self::NodeLinkPairingSas(NodeLinkPairingSas {
-                owner_node_id: support::node(&uuid_of(input, "ownerNodeId")),
-                access_node_id: support::node(&uuid_of(input, "accessNodeId")),
-                pairing_id: support::pairing(&uuid_of(input, "pairingId")),
-                owner_public_key: support::key_from_hex(&text_of(input, "ownerPublicKeyHex")),
-                access_public_key: support::key_from_hex(&text_of(input, "accessPublicKeyHex")),
-                client_nonce: nonce_of(input, "clientNonceHex"),
-                server_nonce: nonce_of(input, "serverNonceHex"),
-                pairing_request_id: request_id_of(input),
-            }),
             "acp-remote/node-link-pairing-status/v1" => {
                 Self::NodeLinkPairingStatus(NodeLinkPairingStatus {
                     owner_node_id: support::node(&uuid_of(input, "ownerNodeId")),
@@ -283,13 +258,11 @@ impl Vector {
         match self {
             Self::SyncPairingProof(input) => input.transcript(),
             Self::SyncPairingHostProof(input) => input.transcript(),
-            Self::SyncPairingSas(input) => input.transcript(),
             Self::SyncPairingStatus(input) => input.transcript(),
             Self::SyncHostChallenge(input) => input.transcript(),
             Self::SyncDeviceProof(input) => input.transcript(),
             Self::NodeLinkPairingProof(input) => input.transcript(),
             Self::NodeLinkPairingOwnerProof(input) => input.transcript(),
-            Self::NodeLinkPairingSas(input) => input.transcript(),
             Self::NodeLinkPairingStatus(input) => input.transcript(),
             Self::NodeLinkChallenge(input) => input.transcript(),
             Self::NodeLinkProof(input) => input.transcript(),
@@ -334,7 +307,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     text
 }
 
-/// 逐字节重算 + 摘要 + HMAC/验签 + SAS：12 个向量共用一条断言路径。
+/// 逐字节重算 + 摘要 + HMAC/验签：10 个向量共用一条断言路径。
 fn assert_vector(document: &Value) {
     let domain = document["domain"].as_str().expect("向量必须有 domain");
     let input = &document["input"];
@@ -365,34 +338,19 @@ fn assert_vector(document: &Value) {
         .expect("HMAC key 必须是规范 base64url");
         let secret = PairingSecret::try_from_bytes(&key).expect("HMAC key 必须是 32 字节");
         let proof = PairingProof::try_from_base64url(hmac).expect("HMAC 必须规范");
-        let sas = expected.get("sas").and_then(Value::as_str);
-        // 向量分两类，两个分支都必须是**精确**断言（不允许静默跳过）：
-        // - 证明/状态域：入口是 `verify_hmac`，必须精确得 `Some(true/false)`——域分派错位返回 `None` 会失败；
-        // - SAS 域：入口是 `derive_sas`（由 HMAC 输出派生 6 位数字），下面逐字比对。
-        if sas.is_none() {
-            assert_eq!(
-                vector.verify_hmac(&secret, &proof),
-                Some(true),
-                "{domain}: 固定向量的 HMAC 必须验证通过（不得因域分派错位而返回 None）"
-            );
-            // 不同的 secret 必须不通过（避免「只比较长度」这类退化实现）。
-            let other = PairingSecret::try_from_bytes(&[0u8; 32]).expect("32 字节");
-            assert_eq!(
-                vector.verify_hmac(&other, &proof),
-                Some(false),
-                "{domain}: 换一把 secret 必须校验失败"
-            );
-        }
-        if let Some(sas) = sas {
-            let derived =
-                identity_auth::derive_sas(&transcript, &secret).expect("SAS 派生必须成功");
-            assert_eq!(derived.as_str(), sas, "{domain}: SAS 必须等于固定向量");
-            assert_eq!(
-                derived,
-                Sas::from_hmac_output(&key_to_output(hmac)).expect("SAS 形状"),
-                "{domain}: SAS 只由 HMAC 输出前 4 字节派生"
-            );
-        }
+        // HMAC 域的入口是 `verify_hmac`：必须精确得 `Some(true/false)`——域分派错位返回 `None` 会失败。
+        assert_eq!(
+            vector.verify_hmac(&secret, &proof),
+            Some(true),
+            "{domain}: 固定向量的 HMAC 必须验证通过（不得因域分派错位而返回 None）"
+        );
+        // 不同的 secret 必须不通过（避免「只比较长度」这类退化实现）。
+        let other = PairingSecret::try_from_bytes(&[0u8; 32]).expect("32 字节");
+        assert_eq!(
+            vector.verify_hmac(&other, &proof),
+            Some(false),
+            "{domain}: 换一把 secret 必须校验失败"
+        );
     }
     if let Some(signature) = expected.get("p1363Signature").and_then(Value::as_str) {
         let public_key = key_of(
@@ -414,14 +372,6 @@ fn assert_vector(document: &Value) {
             "{domain}: 换一把公钥必须验证失败"
         );
     }
-}
-
-/// 由向量里的 HMAC 文本还原 32 字节输出（SAS 派生的一致性检查用）。
-fn key_to_output(hmac: &str) -> [u8; 32] {
-    acpr_transcript::decode_base64url(hmac)
-        .expect("HMAC 必须是规范 base64url")
-        .try_into()
-        .expect("HMAC-SHA256 输出必须是 32 字节")
 }
 
 /// 另一把合法公钥（负例用）。
@@ -454,7 +404,7 @@ fn node_link_fixed_vectors_round_trip() {
 
 #[test]
 fn registry_and_fixture_domains_agree() {
-    // 12 个向量必须覆盖 12 个已登记 domain（少一个就说明向量或表有一侧缺项）。
+    // 10 个向量必须覆盖 10 个已登记 domain（少一个就说明向量或表有一侧缺项）。
     let mut domains: Vec<String> = SYNC_VECTORS
         .iter()
         .chain(NODE_LINK_VECTORS.iter())
@@ -462,7 +412,7 @@ fn registry_and_fixture_domains_agree() {
         .collect();
     domains.sort();
     domains.dedup();
-    assert_eq!(domains.len(), 12, "固定向量必须覆盖全部 12 个 domain");
+    assert_eq!(domains.len(), 10, "固定向量必须覆盖全部 10 个 domain");
 }
 
 #[test]

@@ -108,15 +108,14 @@ export {
 } from "./directory-model";
 
 // ── R16 会话创建 ────────────────────────────────────────────────────────────
-export type { CreateSessionEntryModel, CreateSessionPermission, CreateSessionRefs, CreateSubmissionModel } from "./create-session-model";
+export type { CreateSessionEntryModel, CreateSessionRefs, CreateSubmissionModel } from "./create-session-model";
 export {
-  CREATE_DENIED_NOTE,
-  CREATE_SESSION_SCOPE,
+  CREATE_DIRECTORY_HINT,
+  CREATE_EFFECT_NOTE,
   CreateSessionPayloadViolation,
   assertCreateSessionRefs,
   buildCreateSessionCommand,
   buildCreateSessionEntryModel,
-  createSessionPermission,
   createSubmissionModel,
   isSubmissionAvailable,
   isSubmissionTerminal,

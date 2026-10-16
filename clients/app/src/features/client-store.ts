@@ -188,8 +188,6 @@ interface SwitchIntent {
 /** 客户端状态（不可变快照）。 */
 export interface ClientState {
   readonly connection: ConnectionMachineState;
-  /** 本次认证授予的 scopes；未认证为 `null`（创建入口据此判定不可用）。 */
-  readonly scopes: readonly string[] | null;
   /** 本设备标识（`auth.authenticated.deviceId`）；未认证为 `null`。 */
   readonly deviceId: string | null;
   /** 服务端本次协商选中的 feature（决定 `history` include 要不要带）。 */
@@ -252,7 +250,6 @@ export interface ClientState {
 export function initialClientState(): ClientState {
   return {
     connection: initialConnectionState(),
-    scopes: null,
     deviceId: null,
     selectedFeatures: [],
     resources: null,
@@ -607,7 +604,6 @@ export class ClientStore {
       case "authenticated":
         return {
           ...this.#state,
-          scopes: [...event.info.scopes],
           deviceId: event.info.deviceId,
           selectedFeatures: [...(event.selectedFeatures ?? [])],
         };
@@ -935,12 +931,11 @@ export class ClientStore {
     return buildAgentCatalogView(this.#state.resources?.agents ?? [], this.#state.overlay).entries;
   }
 
-  /** 创建弹层模型（R16）。 */
+  /** 创建弹层模型（R16）。入口没有权限维度：创建入口恒可用。 */
   createEntry(alias: string): CreateSessionEntryModel {
     const requestId = this.#state.createRequestIds.get(alias);
     return buildCreateSessionEntryModel({
       directoryAlias: alias,
-      scopes: this.#state.scopes,
       agents: this.agentCatalog(),
       record: requestId === undefined ? null : (this.#state.commands.get(requestId) ?? null),
       connectionOnline: this.#state.connection.state === "online",
@@ -1515,28 +1510,40 @@ export class ClientStore {
   /**
    * 提交创建会话。
    *
-   * 四道闸门，任一不过即**不发命令**：
+   * 三道闸门，任一不过即**不发命令**：
    * 1. 已建立连接（命令信封需要 `connectionId`）；
-   * 2. 权限（scopes）——R16 要求无权限时入口不可用；
-   * 3. Agent 必须在本机已配置的目录里（快照 `agents`），不是「用户输入什么就发什么」；
-   * 4. 载荷精确两键（`assertCreateSessionRefs`）。
+   * 2. Agent 必须在本机已配置的目录里（快照 `agents`），不是「用户输入什么就发什么」；
+   * 3. 载荷恰好是 `agentId` 加一个目录引用（`assertCreateSessionRefs`）。
+   *
+   * 目录**不再有权限门控**（设备权限层已删除）：入口与提交都不看任何 scope。目录来源由
+   * `directoryPath` 决定——给了就用客户端提供的绝对目录，留空就退回本目录的已登记别名。
+   * `createRequestIds` 一律以**本目录的别名**为键（弹层是按它打开的），因此用户在输入框里
+   * 换目录不会让提交状态在界面上失联。
    */
-  submitCreateSession(refs: CreateSessionRefs): CreateOutcome {
+  submitCreateSession(input: {
+    readonly directoryAlias: string;
+    readonly agentId: string;
+    readonly directoryPath?: string;
+  }): CreateOutcome {
     const connectionId = this.#identity.connectionId;
     if (connectionId === null) return { ok: false, reason: "尚未建立已认证连接，无法提交命令" };
 
-    const entry = this.createEntry(refs.workspaceAlias);
-    if (entry.permission.kind === "denied") return { ok: false, reason: entry.permission.reason };
-    if (!entry.agents.some((agent) => agent.id === refs.agentId)) {
+    const entry = this.createEntry(input.directoryAlias);
+    if (!entry.agents.some((agent) => agent.id === input.agentId)) {
       return { ok: false, reason: "所选 Agent 不在本机已配置的 Agent 目录里" };
     }
-    assertCreateSessionRefs({ workspaceAlias: refs.workspaceAlias, agentId: refs.agentId });
+    const directoryPath = input.directoryPath ?? "";
+    const refs: CreateSessionRefs =
+      directoryPath.length > 0
+        ? { workspacePath: directoryPath, agentId: input.agentId }
+        : { workspaceAlias: input.directoryAlias, agentId: input.agentId };
+    assertCreateSessionRefs(refs);
 
     const requestId = this.#ids.uuid();
     const commands = new Map(this.#state.commands);
     commands.set(requestId, createCommand({ requestId, command: "session.create" }));
     const createRequestIds = new Map(this.#state.createRequestIds);
-    createRequestIds.set(refs.workspaceAlias, requestId);
+    createRequestIds.set(input.directoryAlias, requestId);
     this.#commit({ ...this.#state, commands, createRequestIds });
 
     this.#sync.dispatch(

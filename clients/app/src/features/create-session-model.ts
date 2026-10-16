@@ -1,19 +1,20 @@
 /**
- * 会话创建：受限入口（R16「会话创建是受限入口」）。
+ * 会话创建（R16）。
  *
- * ## 载荷为什么可以是「精确两键」而不是「至少两键」
+ * ## 载荷为什么可以是「精确列出」而不是「至少列出」
  *
- * `schemas/sync/v1/command.schema.json#/$defs/sessionCreate` 的 `payload` 是精确两键对象，
- * 多写 `cwd`/`exportId`/`templateParams`/绝对路径/MCP 配置/凭据即被服务端按
+ * `schemas/sync/v1/command.schema.json#/$defs/sessionCreate` 的 `payload` 只允许 `agentId`
+ * 与**一个**目录引用：`workspaceAlias`（已登记别名）或 `workspacePath`（客户端提供的绝对目录），
+ * 二者恰好一个。多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即被服务端按
  * `protocol.schema_invalid` 拒绝。因此本模块的 `CreateSessionRefs` 是精确形状，
  * 并配一条**运行期**断言 `assertCreateSessionRefs`：类型系统保护编译期，
  * 断言保护「从别处拼出来的对象」这一路（例如后续有人从 JSON 里读回 payload 再转发）。
  *
- * ## 无权限态为什么不是「隐藏入口」
+ * ## 目录不再有权限门控
  *
- * spec 场景「无权限时入口不可用且说明原因」MUST NOT 仅隐藏入口而不作说明。
- * 因此 `CreateSessionPermission` 的两个分支都带**非空**的说明文案，组件必须把
- * `denied` 分支的说明渲染出来；「入口不可用」由 `enabled: false` 表达。
+ * 设备不再有创建会话的权限维度（`pairing-model` 删除设备权限层）：入口**始终**可用，
+ * 也不再有任何「需要由电脑端授予」的说明。会话开在哪个目录由用户承担——浏览器没有获取宿主
+ * 绝对路径的能力，因此目录来源在界面上就是一次文本输入（另可选用本目录的已登记别名）。
  *
  * ## 结果不确定为什么不会自动消解
  *
@@ -28,14 +29,10 @@ import type { CommandRecord, CommandState } from "../state";
 import { isTerminalState, mayDisplayAsAccepted, shouldPresentUncertain } from "../state";
 import type { AgentCatalogEntryView } from "../domain";
 
-/** 创建会话所需的 scope（`compatibility/commands/v1/commands.json` 的 `session.create.scope`）。 */
-export const CREATE_SESSION_SCOPE = "session.create";
-
-/** 提交载荷的两个引用：目录别名 + Agent 标识。**只有这两项**。 */
-export interface CreateSessionRefs {
-  readonly workspaceAlias: string;
-  readonly agentId: string;
-}
+/** 提交载荷的两个引用：目录引用（别名或客户端提供的绝对目录）+ Agent 标识。**只有这两项**。 */
+export type CreateSessionRefs =
+  | { readonly workspaceAlias: string; readonly agentId: string }
+  | { readonly workspacePath: string; readonly agentId: string };
 
 /** 载荷越界：出现了路径、目录追加、MCP 配置或凭据字段。 */
 export class CreateSessionPayloadViolation extends Error {
@@ -45,14 +42,18 @@ export class CreateSessionPayloadViolation extends Error {
   }
 }
 
-/** 精确两键的载荷键表；任何其它键都是越界。 */
-const ALLOWED_PAYLOAD_KEYS: readonly string[] = ["workspaceAlias", "agentId"];
+/** 载荷允许出现的键；`agentId` 之外只允许一个目录引用键。 */
+const ALLOWED_PAYLOAD_KEYS: readonly string[] = ["workspaceAlias", "workspacePath", "agentId"];
+const DIRECTORY_REF_KEYS: readonly string[] = ["workspaceAlias", "workspacePath"];
 
 /**
- * 运行期校验：载荷**恰好**是两个引用。
+ * 运行期校验：载荷**恰好**是 `agentId` 加一个目录引用。
  *
  * 存在的理由不是「类型已经保证了」——它保证的是**本模块内部**写出来的对象；
  * 断言拦的是「对象来自别处」（从 JSON 读回、从缓存恢复、从 UI 事件里解出来的字段）。
+ *
+ * 目录引用必须**恰好一个**：同时给出别名与路径、或两者都不给，都在这里当场失败——
+ * 与 `sync-session-create` 的「目录引用二选一」同一条口径（不猜以哪一个为准）。
  */
 export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
@@ -63,21 +64,28 @@ export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   if (extra.length > 0) {
     throw new CreateSessionPayloadViolation(`出现越界字段 ${extra.join("、")}`);
   }
-  const workspaceAlias = record["workspaceAlias"];
-  const agentId = record["agentId"];
-  if (typeof workspaceAlias !== "string" || workspaceAlias.length === 0) {
-    throw new CreateSessionPayloadViolation("workspaceAlias 缺失或为空");
+  const present = DIRECTORY_REF_KEYS.filter((key) => record[key] !== undefined);
+  if (present.length !== 1) {
+    throw new CreateSessionPayloadViolation("目录引用必须恰好给出一个（workspaceAlias 或 workspacePath）");
   }
+  const agentId = record["agentId"];
   if (typeof agentId !== "string" || agentId.length === 0) {
     throw new CreateSessionPayloadViolation("agentId 缺失或为空");
   }
-  return { workspaceAlias, agentId };
+  const key = present[0];
+  const value = key === undefined ? undefined : record[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new CreateSessionPayloadViolation(`${String(key)} 缺失或为空`);
+  }
+  return key === "workspacePath"
+    ? { workspacePath: value, agentId }
+    : { workspaceAlias: value, agentId };
 }
 
 /**
  * 构造 `session.create` 命令。
  *
- * `payload` 是**就地构造**的两键对象，不接受调用方传入的任意 payload：
+ * `payload` 是**就地构造**的对象，不接受调用方传入的任意 payload：
  * 这样「多带一个字段」在本模块内没有表达方式。
  */
 export function buildCreateSessionCommand(input: {
@@ -93,10 +101,7 @@ export function buildCreateSessionCommand(input: {
    */
   readonly connectionSequence?: string;
 }): CommandMessage {
-  const payload = assertCreateSessionRefs({
-    workspaceAlias: input.refs.workspaceAlias,
-    agentId: input.refs.agentId,
-  });
+  const payload = assertCreateSessionRefs(input.refs);
   return {
     protocolVersion: 1,
     type: "command",
@@ -111,33 +116,22 @@ export function buildCreateSessionCommand(input: {
   };
 }
 
-/** 入口权限。两个分支都带说明——「不可用」不允许等于「不解释」。 */
-export type CreateSessionPermission =
-  | { readonly kind: "granted"; readonly scope: string; readonly note: string }
-  | { readonly kind: "denied"; readonly reason: string; readonly note: string };
-
-/** 无权限时的固定说明：必须由电脑端授予，且不得换个说法伪装成可用。 */
-export const CREATE_DENIED_NOTE = "这台设备没有创建会话的权限，需要在电脑端授予后才能使用。";
+/**
+ * 创建入口旁**始终**呈现的副作用说明（spec「创建入口的副作用说明」）。
+ *
+ * 提交会在电脑上真的启动一个 Agent 进程；目录由用户输入，因此把会话开在敏感目录的风险
+ * 由用户承担，这句提示是唯一的缓解——它 MUST NOT 声称服务端会替用户拦截。
+ */
+export const CREATE_EFFECT_NOTE = "将在你的电脑上启动一个 Agent 进程。";
 
 /**
- * 由本次认证授予的 scopes 判定入口权限。
- *
- * `scopes` 为 `null` 表示尚未认证：同样不可用，说明理由是「尚未连接」，而不是「没有权限」——
- * 两者必须能被用户区分。
+ * 目录输入的提示：说清「留空用本目录、填写则是客户端指定的绝对目录」与两类失败，
+ * 并且**不**声称服务端会拦截敏感目录。
  */
-export function createSessionPermission(scopes: readonly string[] | null): CreateSessionPermission {
-  if (scopes === null) {
-    return { kind: "denied", reason: "尚未连接主机，权限未知", note: CREATE_DENIED_NOTE };
-  }
-  if (scopes.includes(CREATE_SESSION_SCOPE)) {
-    return {
-      kind: "granted",
-      scope: CREATE_SESSION_SCOPE,
-      note: "只会列出这台电脑上已配置的 Agent；凭据不会进入浏览器。",
-    };
-  }
-  return { kind: "denied", reason: `权限中不含 ${CREATE_SESSION_SCOPE}`, note: CREATE_DENIED_NOTE };
-}
+export const CREATE_DIRECTORY_HINT =
+  "留空则使用本目录；也可以填写电脑上的绝对目录（如 D:\\work\\api）另开一处。" +
+  "相对路径或含「..」的路径会被拒绝；目录不存在或不是目录会以服务端不可用类错误失败。" +
+  "请自行确认这个目录不是敏感目录——服务端不会替你做这个判断。";
 
 /** 提交状态。`uncertain` 没有时间维度，因此不会被自动消解。 */
 export type CreateSubmissionModel =
@@ -213,10 +207,13 @@ function genericFailureError(state: CommandState): PublicError {
   };
 }
 
-/** 创建弹层模型：目录 + 权限 + Agent 候选 + 提交状态。 */
+/** 创建弹层模型：目录 + Agent 候选 + 提交状态。 */
 export interface CreateSessionEntryModel {
   readonly directoryAlias: string;
-  readonly permission: CreateSessionPermission;
+  /** 入口旁始终呈现的副作用说明（{@link CREATE_EFFECT_NOTE}）。 */
+  readonly effectNote: string;
+  /** 目录输入的提示（{@link CREATE_DIRECTORY_HINT}）。 */
+  readonly directoryHint: string;
   /** Agent 候选：**只**来自本机已配置的 Agent 目录（快照 `agents` 资源）。 */
   readonly agents: readonly AgentCatalogEntryView[];
   readonly submission: CreateSubmissionModel;
@@ -227,12 +224,14 @@ export interface CreateSessionEntryModel {
 /**
  * 构造创建弹层模型。
  *
+ * 入口**没有**权限维度：删掉设备权限层后，创建入口恒可用（spec「入口不因权限不可用」），
+ * 因此这里不接任何 scopes 入参。
+ *
  * @param agents 本机已配置的 Agent 目录（快照 `agents`）。传入目录之外的 Agent 不会被补进来，
  *   因此「候选只来自已配置 Agent」在数据流上成立。
  */
 export function buildCreateSessionEntryModel(input: {
   readonly directoryAlias: string;
-  readonly scopes: readonly string[] | null;
   readonly agents: readonly AgentCatalogEntryView[];
   readonly record: CommandRecord | null;
   readonly connectionOnline: boolean;
@@ -240,7 +239,8 @@ export function buildCreateSessionEntryModel(input: {
   const submission = createSubmissionModel(input.record, { connectionOnline: input.connectionOnline });
   return {
     directoryAlias: input.directoryAlias,
-    permission: createSessionPermission(input.scopes),
+    effectNote: CREATE_EFFECT_NOTE,
+    directoryHint: CREATE_DIRECTORY_HINT,
     agents: input.agents,
     submission,
     uncertainRequiresUserAction: submission.kind === "uncertain",

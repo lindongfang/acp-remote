@@ -87,15 +87,11 @@
         "device": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["deviceId", "name", "scopes"],
+          "required": ["deviceId", "name"],
+          "description": "已批准分支的设备非秘密元数据。设备方向没有授权维度（`pairing-model` 删除设备权限层），因此这里不再有授权集合字段。",
           "properties": {
             "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
-            "name": { "type": "string", "minLength": 1, "maxLength": 128 },
-            "scopes": {
-              "type": "array",
-              "uniqueItems": true,
-              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
-            }
+            "name": { "type": "string", "minLength": 1, "maxLength": 128 }
           }
         },
         "host": {

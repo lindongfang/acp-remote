@@ -1422,7 +1422,6 @@ impl TrustStore for FakeTrust {
             record.device_id().clone(),
             record.display_name(),
             record.public_key_fingerprint().clone(),
-            record.scopes().clone(),
             DeviceState::Revoked,
             record.created_at().clone(),
             record.last_seen_at().cloned(),
@@ -1589,12 +1588,17 @@ impl TrustStore for FakeTrust {
                 }
                 match record.target() {
                     PairingTarget::Device => {
+                        if !granted_scopes.is_empty() {
+                            return Err(PortError::InvalidRequest(
+                                "a pairing settlement must not carry a scope set",
+                            ));
+                        }
                         if !granted_grants.is_empty() {
                             return Err(PortError::InvalidRequest(
                                 "a device pairing must not carry grants",
                             ));
                         }
-                        self.approve_device(&peer, granted_scopes, &write.context.at);
+                        self.approve_device(&peer, &write.context.at);
                     }
                     PairingTarget::Node => {
                         if !granted_scopes.is_empty() {
@@ -1776,7 +1780,10 @@ impl FakeTrust {
     }
 
     /// 批准（设备）：与存储层的 `approve_device` 同形状。
-    fn approve_device(&self, peer: &PairingPeer, granted_scopes: &ScopeSet, at: &Timestamp) {
+    ///
+    /// 设备记录不再保存授权集合（`pairing-model` 删除设备权限层），因此这里没有 scopes 参数，
+    /// 构造也取 7 参。
+    fn approve_device(&self, peer: &PairingPeer, at: &Timestamp) {
         let PeerIdentity::Device(device_id) = peer.id() else {
             unreachable!("目标族已由写集保证")
         };
@@ -1784,7 +1791,6 @@ impl FakeTrust {
             device_id.clone(),
             peer.display_name(),
             peer.public_key_fingerprint(),
-            granted_scopes.clone(),
             DeviceState::Active,
             at.clone(),
             None,

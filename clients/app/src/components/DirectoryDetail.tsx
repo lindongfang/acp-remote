@@ -1,8 +1,8 @@
 /**
  * 目录详情页（R15）。
  *
- * 目录详情呈现「这个目录里的会话」与「在这个目录里新建会话」的入口（后者受 R16 的权限闸门
- * 控制），并在本次变更里接上三件事：目录内搜索、月份分档与「当前显示 N / M」、按可用宽度
+ * 目录详情呈现「这个目录里的会话」与「在这个目录里新建会话」的入口（设备不再有创建权限维度，
+ * 入口恒可用），并在本次变更里接上三件事：目录内搜索、月份分档与「当前显示 N / M」、按可用宽度
  * 自适应的布局（`design.md` 的 D5/D6/D7/D8）。
  *
  * ## 三种「空」互不冒充
@@ -33,7 +33,6 @@ import type { ReactElement } from "react";
 
 import type { DirectoryDetailModel } from "../features/directory-model";
 import { CONTENT_ORIGIN_LABELS } from "../features/directory-model";
-import type { CreateSessionEntryModel } from "../features/create-session-model";
 import { SegmentControl } from "./SegmentControl";
 import { SessionRow } from "./SessionRow";
 import type { Palette } from "./theme";
@@ -57,10 +56,8 @@ const WIDE_LAYOUT_MIN_WIDTH = 720;
 
 export interface DirectoryDetailProps {
   readonly model: DirectoryDetailModel;
-  readonly createEntry: CreateSessionEntryModel;
   readonly onOpenSession: (sessionId: string) => void;
   readonly onCreateSession: () => void;
-  readonly canCreate: boolean;
   /** 目录内搜索词；缺省 `""`（等于不启用搜索）。 */
   readonly query?: string;
   /** 搜索词变化（页面负责写进仓库）。 */
@@ -255,39 +252,16 @@ function buildStyles(colors: Palette) {
       borderRadius: radius.sm,
       backgroundColor: colors.accent,
     },
-    createButtonDisabled: {
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.lg,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
-      borderWidth: 1,
-      borderColor: colors.line,
-    },
     createText: {
       color: colors.accentInk,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
       fontWeight: "600",
     },
-    createTextDisabled: {
-      color: colors.ink3,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.md,
-    },
     hint: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
-    },
-    denied: {
-      flexBasis: "100%",
-      color: colors.warn,
-      backgroundColor: colors.warnSoft,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.sm,
-      borderRadius: radius.sm,
     },
     alert: {
       color: colors.danger,
@@ -310,10 +284,8 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
 /** 目录详情。 */
 export function DirectoryDetail({
   model,
-  createEntry,
   onOpenSession,
   onCreateSession,
-  canCreate,
   query = "",
   onQueryChange,
   onMonthChange,
@@ -467,24 +439,16 @@ export function DirectoryDetail({
       <View style={styles.foot}>
         <Pressable
           role="button"
-          disabled={!canCreate}
-          style={canCreate ? styles.createButton : styles.createButtonDisabled}
+          style={styles.createButton}
           dataSet={{ action: "open-create-sheet" }}
           onPress={onCreateSession}
         >
-          <Text style={canCreate ? styles.createText : styles.createTextDisabled}>
-            在这个目录里新建会话
-          </Text>
+          <Text style={styles.createText}>在这个目录里新建会话</Text>
         </Pressable>
-        {/* 副作用提示与权限无关：入口**始终**在，说明也就始终在（不因不可用而换掉解释）。 */}
+        {/* 副作用提示：入口恒可用（设备不再有创建权限维度），所以说明也始终在。 */}
         <Text style={styles.hint} dataSet={{ createSideEffect: "true" }}>
           将在你的电脑上启动一个 Agent 进程
         </Text>
-        {canCreate ? null : (
-          <Text style={styles.denied} dataSet={{ createEntryUnavailable: "true" }}>
-            {createEntry.permission.note}
-          </Text>
-        )}
       </View>
     </View>
   );

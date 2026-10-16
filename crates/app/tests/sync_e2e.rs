@@ -20,8 +20,10 @@ const HOST: &str = "sync-e2e.example.invalid";
 const AGENT: &str = "codex";
 /// 设备名（`deviceName`；`device.pair.begin` 不携带展示名，由 claim 声明）。
 const DEVICE_NAME: &str = "Test Phone";
-/// 请求的 scope（会话观察；`session.list` 是订阅与快照的授权点）。
-const SCOPES: [&str; 1] = ["session.list"];
+/// 设备配对**不提交也不分配任何授权集合**（`pairing-model` 删除设备权限层）：`device.pair.begin`
+/// 只收 `expiresInMs`、`confirm` 只收 `pairingId`，配对状态与认证事实里都不得再出现这组词汇——
+/// 它们是「已删掉的授权集合与短验证码」的清单，出现在响应任何层级都让对应用例变红。
+const REMOVED_AUTHORIZATION_KEYS: [&str; 5] = ["sas", "scopes", "grants", "packs", "presets"];
 
 /// 客户端声明的 feature（含三类清单资源门控 `core.local-catalog.v1`：快照因此下发三块）。
 fn supported_features() -> Vec<&'static str> {
@@ -135,10 +137,12 @@ async fn register_agent(host: &HostNode) {
 /// `identity_auth::Authority` 的状态机。
 async fn pair_and_approve(host: &HostNode, device: &Device) -> Value {
     // ① 本机开始配对（真实本地通道），拿到二维码 URL（含 pairing secret fragment）。
+    //    设备方向的参数面只有 `expiresInMs`：`requestedPacks`/`requestedScopes` 之类的授权词汇
+    //    出现即 `local.invalid_params`（配对不授予授权）。
     let begin = host
         .admin(
             server::local_admin::Method::DevicePairBegin,
-            json!({ "requestedPacks": [], "requestedScopes": SCOPES, "expiresInMs": null }),
+            json!({ "expiresInMs": null }),
         )
         .await;
     let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
@@ -171,11 +175,12 @@ async fn pair_and_approve(host: &HostNode, device: &Device) -> Value {
         "claim 之后必须仍是待确认：{claim_body}"
     );
 
-    // ③ 本机确认（真实本地通道）：授予 device scope 并创建设备信任行。
+    // ③ 本机确认（真实本地通道）：**只**提交 `pairingId`——设备配对不分配任何授权集合，
+    //    确认因此没有可提交的 scope/pack；这些键出现即 `local.invalid_params`。
     let confirmed = host
         .admin(
             server::local_admin::Method::DevicePairConfirm,
-            json!({ "pairingId": pairing_id, "scopes": SCOPES }),
+            json!({ "pairingId": pairing_id }),
         )
         .await;
     assert_eq!(
@@ -207,6 +212,15 @@ async fn pair_and_approve(host: &HostNode, device: &Device) -> Value {
         "确认之后 status 必须是 approved：{}",
         replied.body
     );
+    // 已批准响应只承载协议事实与两侧的非秘密元数据：设备配对既不再派生短验证码（`sas`），也不再
+    // 分配任何授权集合，因此这组词汇出现在响应任何层级都让本断言变红。
+    for removed in REMOVED_AUTHORIZATION_KEYS {
+        assert!(
+            !support::sync::contains_key_deep(&replied.body, removed),
+            "`{removed}` 不得出现在配对状态响应里：{}",
+            replied.body
+        );
+    }
     replied.body
 }
 
@@ -358,15 +372,51 @@ async fn a_device_completes_the_four_message_handshake_on_the_real_listener() {
         json!(device.id()),
         "authenticated 必须回本设备：{authenticated}"
     );
+    // 认证事实（§8.4）：设备标识、事件库 epoch 与水位、心跳间隔与本次连接的 limits。设备方向
+    // **不携带任何授权集合**——设备权限层已删除，`scopes` 之类的键出现即本断言集合变红。
+    let head = host.head().await;
     assert_eq!(
-        authenticated["body"]["scopes"],
-        json!(SCOPES),
-        "authenticated 的 scopes 必须取持久化设备行（本机确认授予的值）：{authenticated}"
+        authenticated["body"]["serverEpoch"],
+        json!(head.server_epoch.as_str()),
+        "serverEpoch 必须是本机事件库的 epoch：{authenticated}"
+    );
+    assert_eq!(
+        authenticated["body"]["headGlobalSequence"],
+        json!(head.global_sequence.get().to_string()),
+        "headGlobalSequence 必须是事件库当前水位：{authenticated}"
     );
     assert_eq!(
         authenticated["body"]["heartbeatIntervalMs"],
-        json!(30000),
-        "心跳间隔必须是协议默认 30 秒：{authenticated}"
+        json!(server::sync::conn::limits::DEFAULT_HEARTBEAT_INTERVAL_MS),
+        "心跳间隔必须是协议固定值 30 秒：{authenticated}"
+    );
+    assert_eq!(
+        authenticated["body"]["limits"],
+        json!({
+            "maxMessageBytes": server::sync::conn::limits::DEFAULT_MAX_MESSAGE_BYTES,
+            "maxPromptBytes": server::sync::conn::limits::DEFAULT_MAX_PROMPT_BYTES,
+            "maxReplayEventsPerBatch":
+                server::sync::conn::limits::DEFAULT_MAX_REPLAY_EVENTS_PER_BATCH,
+        }),
+        "limits 必须是与连接内部判定同源的三个值（多一个键也算漂移）：{authenticated}"
+    );
+    let mut body_keys: Vec<&str> = authenticated["body"]
+        .as_object()
+        .expect("authenticated 的 body 是 object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    body_keys.sort_unstable();
+    assert_eq!(
+        body_keys,
+        vec![
+            "deviceId",
+            "headGlobalSequence",
+            "heartbeatIntervalMs",
+            "limits",
+            "serverEpoch"
+        ],
+        "认证事实只有这五个键：任何授权集合（`scopes`/`grants`/`packs`/`presets`）出现即变红：{authenticated}"
     );
     // 连接字段：认证后每条消息都带，且 `connectionId` 与本连接一致（客户端已逐条核对过序号）。
     assert!(

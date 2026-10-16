@@ -861,24 +861,22 @@ pub struct NodeLinkLimits {
 /// `common.schema.json#/$defs/transcriptCodec`：与 `SYNC_PROTOCOL.md` §6.2 同一二进制 codec。
 pub const TRANSCRIPT_CODEC: &str = "acpr-transcript-v1";
 
-/// `common.schema.json#/$defs/transcriptDomain`：Node Link 的六个 domain。
+/// `common.schema.json#/$defs/transcriptDomain`：Node Link 的五个 domain。
 ///
 /// 取值必须与 `crate::domains::DOMAINS` 的表逐条一致（由契约测试断言）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TranscriptDomain {
     PairingProof,
     PairingOwnerProof,
-    PairingSas,
     PairingStatus,
     Challenge,
     Proof,
 }
 
 impl TranscriptDomain {
-    pub const ALL: [TranscriptDomain; 6] = [
+    pub const ALL: [TranscriptDomain; 5] = [
         TranscriptDomain::PairingProof,
         TranscriptDomain::PairingOwnerProof,
-        TranscriptDomain::PairingSas,
         TranscriptDomain::PairingStatus,
         TranscriptDomain::Challenge,
         TranscriptDomain::Proof,
@@ -888,7 +886,6 @@ impl TranscriptDomain {
         match self {
             TranscriptDomain::PairingProof => "acp-remote/node-link-pairing-proof/v1",
             TranscriptDomain::PairingOwnerProof => "acp-remote/node-link-pairing-owner-proof/v1",
-            TranscriptDomain::PairingSas => "acp-remote/node-link-pairing-sas/v1",
             TranscriptDomain::PairingStatus => "acp-remote/node-link-pairing-status/v1",
             TranscriptDomain::Challenge => "acp-remote/node-link-challenge/v1",
             TranscriptDomain::Proof => "acp-remote/node-link-proof/v1",

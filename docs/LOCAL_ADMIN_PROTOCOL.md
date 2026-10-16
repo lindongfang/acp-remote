@@ -279,17 +279,18 @@ values      { <fieldName>: string }         # 字段名 ^[A-Za-z0-9._-]{1,64}$�
 deviceId            UUID
 displayName         string                # ≤128
 publicKeyFingerprint string               # SHA-256(65 bytes 未压缩 P-256 公钥原始字节) 的小写 hex，64 字符，无分隔符
-scopes              string[]              # 展开后的独立 scope，等于命令名
 state               "pending" | "active" | "revoked"
 createdAt           timestamp
 lastSeenAt          timestamp | null
 revokedAt           timestamp | null
 ```
 
+设备记录**不含任何授权集合**：通过设备认证即可执行本节点全部业务命令（`SECURITY_DESIGN.md` §10.1）。
+
 #### `device.pair.begin`
 
-- `params`：`{ requestedPacks: string[], requestedScopes: string[], expiresInMs: integer | null }`；两个数组可为空，取值分别限于 `commands.json` 的 `pack.*` 与命令名集合。
-- `result`：`{ pairingId, pairingUrl, expiresAt, scopes }`，其中 `scopes` 是展开后的独立 scope 集合（`SECURITY_DESIGN.md` §10.2：`pack.*`/`preset.*` 落到 wire 前必须展开）。
+- `params`：`{ expiresInMs: integer | null }`——设备配对不申请任何授权词汇，本方法**只**接受这一个键；出现 `requestedScopes`/`requestedPacks` 之类的键即 `local.invalid_params`（`params` 是 closed object）。
+- `result`：`{ pairingId, pairingUrl, expiresAt }`；不返回任何授权集合。
 - 配对有效期固定 5 分钟（`SYNC_PROTOCOL.md` §7、§14）；`expiresInMs` 只能收窄，不能延长。
 - `pairingUrl` 只经本通道返回；fragment、`pairingSecret` 与完整 QR payload 不得进入日志或 analytics（`SECURITY_DESIGN.md` §14.1）。
 
@@ -302,18 +303,17 @@ revokedAt           timestamp | null
 state                "pending" | "claimed" | "approved" | "rejected" | "expired"
 displayName          string | null
 publicKeyFingerprint string | null
-sas                  string | null       # 6 位十进制，规则见 SYNC_PROTOCOL.md §7.2
-requestedScopes      string[] | null
 deviceId             UUID | null
 expiresAt            timestamp
 ```
 
 - claim 之前只返回 `state` 与 `expiresAt`，其余字段为 `null`。
+- 不返回短验证码，也不返回任何授权集合（设备配对不授予授权；理由见 `SECURITY_DESIGN.md` §5.1）。
 
 #### `device.pair.confirm`
 
-- `params`：`{ pairingId, scopes: string[] }`——`scopes` 是用户确认的最终集合，必须完整展示（`SECURITY_DESIGN.md` §9.4）。
-- `result`：`{ deviceId, scopes, confirmedAt }`。
+- `params`：`{ pairingId }`——设备方向不提交任何授权集合（授权集合不是本方法的输入）。
+- `result`：`{ deviceId, confirmedAt }`。
 - 只有本地用户显式确认后设备记录才获得 `active`；本方法必须等持久状态提交成功后才返回。
 
 #### `device.pair.reject`
@@ -370,7 +370,6 @@ pairingId               UUID
 pairingUrl              string | null    # owner：新建 URL；access：回显输入
 state                   "pending" | "claimed" | "pending_confirmation" | "approved" | "rejected" | "expired"
 expiresAt               timestamp
-sas                     string | null    # 双方各自计算并展示，规则见 NODE_LINK_PROTOCOL.md §9.4
 peerNodeId              UUID | null      # claim 之后可确定
 peerPublicKeyFingerprint string | null
 ```
@@ -378,7 +377,7 @@ peerPublicKeyFingerprint string | null
 #### `node.pair.status`
 
 - `params`：`{ pairingId }`
-- `result`：`{ state, peerNodeId, peerPublicKeyFingerprint, sas, requestedGrants, expiresAt, lastRefreshError }`；除 `expiresAt` 与 `state` 外均可为 `null`。
+- `result`：`{ state, peerNodeId, peerPublicKeyFingerprint, requestedGrants, expiresAt, lastRefreshError }`；除 `expiresAt` 与 `state` 外均可为 `null`。本协议不派生也不返回短验证码（理由见 `SECURITY_DESIGN.md` §5.1）。
 - `mode = "access"` 且状态非终态时，Daemon 按 `NODE_LINK_PROTOCOL.md` §13.3 向 Owner 刷新状态；刷新失败不改变已有状态，只在 `lastRefreshError`（string \| null）中给出简短原因。
 
 #### `node.pair.confirm`
@@ -527,9 +526,9 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 | `workspace select` | 本地方法 | `workspace.select` | 以 `--alias`、`--display-name`、`--root-path` 提供 §5.2 的三个参数；路径仅发送到本机 Daemon，不能放入 Export 或 Node Link 载荷 |
 | `agent configure` | 本地方法 | `agent.configure` | 以 `--file <path>` 读取与 §5.2 `params` 同形的 JSON；文件不得包含凭据值，CLI 不自行写入 profile 或启动配置 |
 | `provider configure` | 本地方法 | `provider.configure` | 以 `--provider-id`、`--kind`、`--display-name`、可重复的 `--field <name>` 指定非秘密字段；`values` 由 CLI 在交互终端逐项无回显读取，不接受凭据值作为命令行参数或普通文件输入；无交互终端时明确失败 |
-| `device pair` | 本地方法 ×3 | `device.pair.begin` → `device.pair.status`（轮询）→ `device.pair.confirm` | 多步流程见下 |
+| `device pair` | 本地方法 ×3 | `device.pair.begin` → `device.pair.status`（轮询）→ `device.pair.confirm` | 多步流程见下；参数只有 `--fingerprint`（非交互确认）与 `--expires-in-ms`——设备方向没有授权词汇 |
 | `device list` / `device revoke` | 本地方法 | 1:1 | |
-| `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下 |
+| `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id` 与非交互的 `--fingerprint` |
 | `node list` / `node revoke` | 本地方法 | 1:1 | |
 | `export create` | 本地方法 | `export.create` | 参数多且有嵌套结构：以 `--file <path>` 传一份 JSON，不用长串 flags；校验失败分别映射为 `local.invalid_params` / `local.conflict` |
 | `export list` / `export revoke` | 本地方法 | 1:1 | |
@@ -538,35 +537,48 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 
 **首切片不提供 `session create`**，`session list` 标为 `post_mvp`：业务命令（`session.*`、`permission.resolve` 等）在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `sync` 与 `node_link`，**本地通道不承载业务命令**；本地会话的唯一入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`，不经 wire 命令）。若要给 CLI 加会话语义，必须先决定是否为命令引入 `local` transport（那时需同步 `commands.json`、`broker::required_grant` 镜像与那条“四处一致”门禁），**不得**在本地通道另造同名方法。
 
-**配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹、SAS、请求 scopes 与过期时间；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
+**配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间（节点方向另显示待授予的 `grant.*`）；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
 
 1. `begin`：拿到 `pairingId` 与 `pairingUrl`，打印 URL 与二维码（如终端支持）；
-2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹、SAS、请求 scopes/grants、过期时间；
-3. 用户输入确认后调 `confirm`，把用户确认的 scopes/grants 作为最终集合提交（不是请求值）。
+2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间，节点方向另展示待授予的 `grant.*`；
+3. 用户输入确认后调 `confirm`：设备方向**不提交任何授权集合**，节点方向把用户确认过的 `grants` 与本次点名的 `--export-id` 清单作为最终集合提交。
 
-示例（交互式）：
+示例（交互式设备配对）：
 
 ```text
-$ acp-remote device pair --request session.read,session.list
-正在等待设备扫码…（有效期至 14:31:00，Ctrl-C 取消）
+$ acp-remote device pair
+https://home.example.invalid/sync/v1/pairing#…（含 pairing secret，只在本终端展示）
+正在等待设备认领…（有效期至 2026-09-23T14:31:00.000Z，Ctrl-C 取消）
 
 设备已认领：
-  名称        Zhang's Phone
-  指纹        ab12…（64 位 hex）
-  SAS         481502      # 必须与手机屏幕上显示的 6 位数字一致
-  请求 scope  session.list, session.read, command.status
-  过期        2026-09-23T14:31:00.000Z
-确认授予以上 scope？[y/N]: y
-✓ 已配对：deviceId=2ae1c07c-…
+  名称            Zhang's Phone
+  指纹            ab12…（64 位 hex）
+  过期            2026-09-23T14:31:00.000Z
+确认与本机记录该设备（不授予任何授权）？[y/N]: y
+已配对：deviceId=2ae1c07c-…
 ```
 
-非交互场景（脚本、远程 shell）必须把从另一台设备读到的值显式传入，**不得**提供“无参数自动确认”开关：
+节点方向多一行待授予的 `grant.*`（授权只存在于跨节点方向）：
 
 ```text
-$ acp-remote device pair --request session.read --sas 481502 --fingerprint ab12…
+$ acp-remote node pair --mode owner --display-name my-node --grant grant.session.read --export-id export-1
+…
+节点已认领：
+  名称            my-node
+  指纹            cd34…（64 位 hex）
+  待授予 grants   grant.session.read
+  过期            2026-09-23T14:31:00.000Z
+确认授予以上 grants（1 项）？[y/N]: y
+已配对：nodeId=7f30a1b2-…
 ```
 
-`--sas` 与 `--fingerprint` 必须与 `status` 返回值逐字匹配才调 `confirm`；不匹配时以非零退出且不修改任何状态。`node pair` 的方向差异：`--mode owner` 在本机生成二维码并**在本机确认**；`--mode access` 拿用户给的 pairing URL 执行 claim，展示 SAS 后**等待对端（Owner）本机确认**，本机没有 `confirm` 调用。`pairingUrl` 与其中的 secret 只允许在内存与终端展示中存在，不得写入 shell 历史、日志或文件（`SECURITY_DESIGN.md` §14.1）。
+非交互场景（脚本、远程 shell）必须把从另一台设备读到的指纹显式传入，**不得**提供“无参数自动确认”开关：
+
+```text
+$ acp-remote device pair --fingerprint ab12…（64 位 hex）
+```
+
+`--fingerprint` 必须与 `status` 返回值逐字匹配才调 `confirm`（不 trim、不折叠大小写、不允许前缀匹配）；不匹配时以非零退出且不修改任何状态。短验证码与设备方向的授权词汇都没有参数：`--sas`/`--request`/`--pack` 不是本 CLI 的开关（出现即用法错误，不得被静默忽略；理由见 `SECURITY_DESIGN.md` §5.1）。`node pair` 的方向差异：`--mode owner` 在本机生成二维码并**在本机确认**；`--mode access` 拿用户给的 pairing URL 执行 claim，**等待对端（Owner）本机确认**，本机没有 `confirm` 调用。`pairingUrl` 与其中的 secret 只允许在内存与终端展示中存在，不得写入 shell 历史、日志或文件（`SECURITY_DESIGN.md` §14.1）。
 
 **退出码与错误输出**：成功 `0`；失败非零。失败时 stdout 只输出人类可读的简短说明，机器可读信息以一行结构化 JSON 输出到 **stderr**（至少含 `code`，取值来自 §6 或 `compatibility/errors/v1/errors.json`）。CLI **不得**把 `error.message` 当稳定契约解析，也不得在输出中回显 secret 或完整路径（§4 第 6 条）。
 

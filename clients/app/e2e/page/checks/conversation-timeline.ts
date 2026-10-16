@@ -137,7 +137,7 @@ export function sessionScenario(overrides: Partial<ScenarioOptions> = {}): Scena
     workspaces: WORKSPACES,
     sessions: [sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "running" })],
     agents: AGENTS,
-    scopes: ["session.list", "session.read"],
+    authenticate: true,
     tamperHostProof: false,
     deliverSnapshot: true,
     barrierGlobalSequence: "10",

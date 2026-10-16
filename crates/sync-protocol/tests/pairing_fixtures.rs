@@ -230,18 +230,13 @@ fn status_response_device_and_host_follow_the_status() {
         "device 可选但没有 null 分支：显式 null 必须被拒"
     );
 
-    let mut duplicated_scope = approved_status_response();
-    duplicated_scope["device"]["scopes"] = serde_json::json!(["session.read", "session.read"]);
+    // 设备方向没有授权维度（`pairing-model` 删除设备权限层）：`device` 块不再有 `scopes`，
+    // 它是未知字段，必须被拒（`pairing.schema.json` 的 `device.additionalProperties: false`）。
+    let mut with_scope = approved_status_response();
+    with_scope["device"]["scopes"] = serde_json::json!(["session.read"]);
     assert!(
-        serde_json::from_value::<StatusResponse>(duplicated_scope).is_err(),
-        "scopes 的 uniqueItems 必须被执行"
-    );
-
-    let mut empty_scope = approved_status_response();
-    empty_scope["device"]["scopes"] = serde_json::json!([""]);
-    assert!(
-        serde_json::from_value::<StatusResponse>(empty_scope).is_err(),
-        "scopes 单项 minLength 1 必须被执行"
+        serde_json::from_value::<StatusResponse>(with_scope).is_err(),
+        "device 块携带 scopes 必须被拒（设备权限层已删除）"
     );
 }
 

@@ -612,9 +612,10 @@ function decodeClientProof(parsed: JsonObject, body: unknown): WireDecodeResult 
 
 function decodeAuthenticated(parsed: JsonObject, body: unknown): WireDecodeResult {
   if (!isObject(body)) return reject("missing_field", "authenticated 缺 body");
+  // body 的必填集合与 `$defs.authenticated` 逐字对应：设备方向没有授权维度，因此**没有**
+  // `scopes`（schema 的 `additionalProperties: false` 不容许该键）——本层既不要求它，也不读它。
   const keys = [
     "deviceId",
-    "scopes",
     "serverEpoch",
     "headGlobalSequence",
     "heartbeatIntervalMs",
@@ -623,10 +624,6 @@ function decodeAuthenticated(parsed: JsonObject, body: unknown): WireDecodeResul
   const missing = preAuthRequired(body, keys);
   if (missing) return missing;
   if (!isUuid(body["deviceId"])) return reject("field_type", "deviceId 非 UUID");
-  const scopes = body["scopes"];
-  if (!Array.isArray(scopes) || scopes.some((scope) => typeof scope !== "string")) {
-    return reject("field_type", "scopes 必须是字符串数组");
-  }
   if (!isUuid(body["serverEpoch"])) return reject("field_type", "serverEpoch 非 UUID");
   if (!isDecimalString(body["headGlobalSequence"])) {
     return reject("field_type", "headGlobalSequence 非 decimalString");

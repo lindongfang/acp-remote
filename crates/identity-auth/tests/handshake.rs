@@ -93,7 +93,6 @@ fn trust(peer: &PeerKey, credential: CredentialStatus) -> PeerTrust {
         credential,
         host_binding: Some(ORIGIN.to_owned()),
         node_kind: None,
-        scopes: support::scopes(&["session.list", "session.read"]),
         grants: support::grants(&[]),
     }
 }
@@ -428,7 +427,7 @@ fn revoked_and_scope_reduced_are_not_authorization_denials() {
 
 #[test]
 fn fact_carries_no_authorization_conclusion() {
-    // R47 / 场景「事实本身不携带授权结论」：只有主体与集合。
+    // R47 / 场景「事实本身不携带授权结论」：设备方向只有主体（没有授权集合），也没有任何命令判定。
     let state = setup();
     let issue = block_on(
         state
@@ -441,15 +440,17 @@ fn fact_carries_no_authorization_conclusion() {
         &trust(&state.peer, CredentialStatus::Active),
     ))
     .expect("证明必须通过");
-    let IdentityFact::Device {
-        device: subject,
-        scopes,
-    } = authenticated.fact
-    else {
+    // 模式里不写 `..`：事实一旦重新带上授权集合，这个用例连编译都过不了。
+    let IdentityFact::Device { device: subject } = &authenticated.fact else {
         panic!("设备侧事实必须是设备主体");
     };
     assert_eq!(subject.as_str(), DEVICE);
-    assert_eq!(scopes.len(), 2);
+    assert_eq!(
+        authenticated.fact,
+        IdentityFact::Device {
+            device: device(DEVICE)
+        }
+    );
 }
 
 #[test]
@@ -458,7 +459,6 @@ fn completion_reports_consumption_target_once() {
     let state = setup();
     let fact = IdentityFact::Device {
         device: device(DEVICE),
-        scopes: support::scopes(&["session.list"]),
     };
     let completion =
         state
@@ -573,7 +573,6 @@ fn node_link_challenge_requires_catalog_revision() {
         credential: CredentialStatus::Active,
         host_binding: Some("wss://owner.example.ts.net:8443/node-link/v1".to_owned()),
         node_kind: Some(NodeKind::Access),
-        scopes: support::scopes(&[]),
         grants: support::grants(&["grant.observe"]),
     };
     let mut node_request = ChallengeRequest {

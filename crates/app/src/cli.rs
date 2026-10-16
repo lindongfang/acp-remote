@@ -186,19 +186,10 @@ enum DeviceCommand {
     Revoke(DeviceRevoke),
 }
 
-/// `device pair`：`--request` 是逗号分隔的 scope 列表（§5.8 的示例形态）。
+/// `device pair`：设备方向不提交任何授权词汇（`pairing-model` 删除设备权限层，§5.3）。
 #[derive(Debug, Args)]
 struct DevicePair {
-    /// 请求的 scope（逗号分隔，可重复；§5.3 的 `requestedScopes`）。
-    #[arg(long, value_delimiter = ',', value_name = "SCOPE")]
-    request: Vec<String>,
-    /// 请求的 pack（可重复；§5.3 的 `requestedPacks`）。
-    #[arg(long = "pack", value_name = "PACK")]
-    pack: Vec<String>,
-    /// 非交互场景必须与 `--fingerprint` 同时给出：6 位 SAS（必须与设备屏幕逐字一致）。
-    #[arg(long, value_name = "DIGITS")]
-    sas: Option<String>,
-    /// 非交互场景必须与 `--sas` 同时给出：64 位小写 hex 指纹（逐字匹配）。
+    /// 非交互场景必须给出：64 位小写 hex 指纹，与 `device.pair.status` 的返回值逐字匹配。
     #[arg(long, value_name = "HEX")]
     fingerprint: Option<String>,
     /// 收窄配对有效期（毫秒，`1..=300000`）；缺省用满 5 分钟窗口。
@@ -244,15 +235,9 @@ struct NodePair {
     /// 握手与连接（空清单的节点仍能配对、握手，只是 catalog 为空）。
     #[arg(long = "export-id", value_name = "ID")]
     export_id: Vec<String>,
-    /// 非交互场景必须与 `--fingerprint` 同时给出：6 位 SAS（逐字匹配）。
-    #[arg(long, value_name = "DIGITS")]
-    sas: Option<String>,
-    /// 非交互场景必须与 `--sas` 同时给出：64 位小写 hex 指纹（逐字匹配）。
+    /// 非交互场景必须给出：64 位小写 hex 指纹，与 `node.pair.status` 的返回值逐字匹配。
     #[arg(long, value_name = "HEX")]
     fingerprint: Option<String>,
-    /// 收窄配对有效期（毫秒，`1..=300000`）；缺省用满 5 分钟窗口。
-    #[arg(long, value_name = "MS")]
-    expires_in_ms: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -1067,6 +1052,59 @@ mod tests {
         assert!(Cli::try_parse_from(["acp-remote", "daemon", "start", "--config", "x"]).is_ok());
         assert!(Cli::try_parse_from(["acp-remote", "--config", "x", "daemon", "status"]).is_ok());
         assert!(Cli::try_parse_from(["acp-remote", "daemon"]).is_err());
+    }
+
+    /// 配对参数面（§5.3/§5.4/§5.8）：设备方向只接受 `--fingerprint`/`--expires-in-ms`，节点方向保留
+    /// `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id`；被删掉的授权词汇与短验证码开关
+    /// 必须**报用法错误**（clap 拒绝未知参数，不得静默忽略）。
+    #[test]
+    fn the_pair_flags_reject_the_removed_vocabulary() {
+        for rejected in [
+            vec!["acp-remote", "device", "pair", "--sas", "481502"],
+            vec!["acp-remote", "device", "pair", "--request", "session.read"],
+            vec!["acp-remote", "device", "pair", "--pack", "pack.read"],
+            vec!["acp-remote", "node", "pair", "--sas", "481502"],
+            vec!["acp-remote", "node", "pair", "--request", "session.read"],
+            vec!["acp-remote", "node", "pair", "--pack", "pack.read"],
+        ] {
+            assert!(
+                Cli::try_parse_from(rejected.clone()).is_err(),
+                "{rejected:?} 必须报用法错误"
+            );
+        }
+
+        for accepted in [
+            vec!["acp-remote", "device", "pair"],
+            vec!["acp-remote", "device", "pair", "--fingerprint", "ab12"],
+            vec![
+                "acp-remote",
+                "device",
+                "pair",
+                "--fingerprint",
+                "ab12",
+                "--expires-in-ms",
+                "60000",
+            ],
+            vec![
+                "acp-remote",
+                "node",
+                "pair",
+                "--mode",
+                "owner",
+                "--display-name",
+                "N",
+                "--grant",
+                "grant.session.read",
+                "--export-id",
+                "export-1",
+            ],
+            vec!["acp-remote", "node", "pair", "--fingerprint", "ab12"],
+        ] {
+            assert!(
+                Cli::try_parse_from(accepted.clone()).is_ok(),
+                "{accepted:?} 必须可解析"
+            );
+        }
     }
 
     /// 失败行恰好一行、含 `code`（`cli-commands` 规格的「退出码与错误输出契约」）。

@@ -33,7 +33,8 @@ import type { Composition, CompositionPorts, FetchLike, PairingHttpResponse } fr
 import { PAIRING_POLL_INTERVAL_MS, isPairingInFlight } from "./features/pairing-model";
 import type { PairingTransport } from "./features/pairing-model";
 import type { PairingQrPayload } from "./protocol";
-import { encodeBase64Url } from "./sync-client";
+import { decodeBase64Url, encodeBase64Url } from "./sync-client";
+import { encodeTranscript, encodeU16be, encodeUtf8, encodeUuid16 } from "./platform/transcript";
 import {
   FakeClock,
   FakeSocketFactory,
@@ -70,11 +71,80 @@ const SESSION_ID = "5d73cd10-a465-43cd-b3f1-704e2d49e99e";
 const PAIRING_REQUEST_ID = "b2f3fbfa-c2c6-4f49-9e0c-643d152de18d";
 
 /**
- * 二维码里的主机公钥：65 字节 SEC1 未压缩点的 base64url（87 字符）。
+ * 二维码里那把主机公钥：65 字节 SEC1 未压缩点的 base64url（87 字符）。
  *
  * §7.1 要求 PWA 校验字段长度，因此夹具的形状必须真（截短的字符串会被判成结构错误）。
+ * 同时它必须真的能验签——认领响应里的 `hostProof` 由下面 `HOST_PRIVATE_JWK` 对应的私钥签出，
+ * 客户端只用**这把**公钥验证（design D2 的 L1）。换成别的公钥，验签就会失败。
  */
-const QR_HOST_PUBLIC_KEY = "BAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+const QR_HOST_PUBLIC_KEY =
+  "BIClOUrR8wOLSGIX7G7E1Xnepu8XTVE43CTCgGfuX4lN7NK-YeWPyyGT33ANPqAyHHCAaM7minO-H0aLYytpk74";
+
+/**
+ * 与 {@link QR_HOST_PUBLIC_KEY} 配对的固定 P-256 私钥（测试向量，只用于签出被验的那一支证明）。
+ *
+ * 硬编码而不是现场生成：二维码载荷与断言都在模块加载期就需要那把公钥，现场生成会把整份夹具
+ * 变成异步初始化。
+ */
+const HOST_PRIVATE_JWK: JsonWebKey = {
+  key_ops: ["sign"],
+  ext: true,
+  kty: "EC",
+  x: "gKU5StHzA4tIYhfsbsTVed6m7xdNUTjcJMKAZ-5fiU0",
+  y: "7NK-YeWPyyGT33ANPqAyHHCAaM7minO-H0aLYytpk74",
+  crv: "P-256",
+  d: "IVpAYQYFb_p-d93BzOWR4J4QdwPfBl_iydLKlOOsKwE",
+};
+
+/** 认领响应里的服务端随机数（32 字节 base64url，§7.2）。 */
+const CLAIM_SERVER_NONCE = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
+/**
+ * 按 `pairing-host-proof` 域（§6.3，字段 tag `1,2,3,4,6,7,8,9,10,13`）现编一支主机证明。
+ *
+ * 字段值全部取自认领请求本身（`hostId`/`deviceId`/`pairingId`/`canonicalOrigin`/
+ * `devicePublicKey`/`clientNonce`），再加二维码里的主机公钥、本次的 `serverNonce` 与
+ * `pairingRequestId`——与客户端验签时重建的 transcript 逐字段对应。这里改错任一字段、
+ * 或换一把私钥，客户端的验签都会失败。
+ */
+async function signClaimHostProof(requestBody: Record<string, unknown>): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    HOST_PRIVATE_JWK,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"],
+  );
+  const transcript = encodeTranscript("acp-remote/pairing-host-proof/v1", [
+    { tag: 1, bytes: encodeU16be(1) },
+    { tag: 2, bytes: encodeUuid16(String(requestBody["hostId"])) },
+    { tag: 3, bytes: encodeUuid16(String(requestBody["deviceId"])) },
+    { tag: 4, bytes: encodeUuid16(String(requestBody["pairingId"])) },
+    { tag: 6, bytes: encodeUtf8(String(requestBody["canonicalOrigin"])) },
+    { tag: 7, bytes: decodeBase64Url(QR_HOST_PUBLIC_KEY) },
+    { tag: 8, bytes: decodeBase64Url(String(requestBody["devicePublicKey"])) },
+    { tag: 9, bytes: decodeBase64Url(String(requestBody["clientNonce"])) },
+    { tag: 10, bytes: decodeBase64Url(CLAIM_SERVER_NONCE) },
+    { tag: 13, bytes: encodeUuid16(PAIRING_REQUEST_ID) },
+  ]);
+  const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, transcript);
+  return encodeBase64Url(new Uint8Array(signature));
+}
+
+/** 一次**合法**的认领响应（§7.2）：`pairingRequestId` + `serverNonce` + 能被二维码公钥验证的主机证明。 */
+async function claimResponseFor(init: { readonly body: string }): Promise<PairingHttpResponse> {
+  const requestBody = JSON.parse(init.body) as Record<string, unknown>;
+  return {
+    ok: true,
+    status: 201,
+    json: async () =>
+      Promise.resolve({
+        pairingRequestId: PAIRING_REQUEST_ID,
+        serverNonce: CLAIM_SERVER_NONCE,
+        hostProof: await signClaimHostProof(requestBody),
+      }),
+  };
+}
 
 /** 组合根的首个退避窗口与上限（`src/composition.ts` 的 `RECONNECT`）；这里只引用，不复制实现。 */
 const RECONNECT_BASE_DELAY_MS = 500;
@@ -224,15 +294,12 @@ function setup(
   const ports: Partial<CompositionPorts> = input.realHostIdentity === true
     ? { clock, digest: fakeDigest() }
     : { clock, digest: fakeDigest(), host: cacheBackedHost(cache) };
-  // 默认替身：claim 成功给 `pairingRequestId`。注入的替身同样经下面那一层记账，
-  // 因此断言「发了什么」与「一个都没发」都落在 `fetches` 上（不因替换而失去证据）。
+  // 默认替身：claim 成功给一条**能被二维码公钥验签通过**的认领响应（§7.2：`pairingRequestId`
+  // + `serverNonce` + `hostProof`）。注入的替身同样经下面那一层记账，因此断言「发了什么」与
+  // 「一个都没发」都落在 `fetches` 上（不因替换而失去证据）。
   const respond: FetchLike =
     input.fetch ??
-    (async (): Promise<PairingHttpResponse> => ({
-      ok: true,
-      status: 201,
-      json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }),
-    }));
+    ((_url, init) => claimResponseFor(init));
   const composition = createComposition({
     platform: {
       deviceIdentity: input.deviceIdentity ?? fakeDeviceIdentity(true),
@@ -294,17 +361,15 @@ async function deliverSnapshot(socket: FakeSocket): Promise<void> {
 /**
  * 跑完握手并停在「已认证、已发 subscribe」。
  *
- * `scopes` 显式包含 `session.create`：创建会话有四道闸门，要证明**第一道**（已建立连接）
- * 在起作用，其余三道就必须放行，否则「被拒」可能来自权限而不是缺少 `connectionId`，
- * 用例就没有判别力（它会被任何一种拒绝理由满足）。
+ * 认证结果里**没有**任何授权集合（设备权限层已删除），因此这里不需要为「放行其余闸门」准备
+ * 任何 scope——创建会话只剩连接与载荷两道判定，缺 `connectionId` 就是唯一可能的拒绝理由。
  */
-async function authenticate(socket: FakeSocket, scopes: readonly string[] = ["session.create"]): Promise<void> {
+async function authenticate(socket: FakeSocket): Promise<void> {
   socket.open();
   await waitUntil(() => socket.types().includes("auth.client_hello"), "发出 clientHello");
   socket.deliver(makeChallenge({ connectionId: CONNECTION_ID }));
   await waitUntil(() => socket.types().includes("auth.client_proof"), "发出 clientProof");
-  const authenticated = makeAuthenticated({ connectionId: CONNECTION_ID });
-  socket.deliver({ ...authenticated, body: { ...authenticated.body, scopes: [...scopes] } });
+  socket.deliver(makeAuthenticated({ connectionId: CONNECTION_ID }));
   await waitUntil(() => socket.types().includes("sync.subscribe"), "发出 subscribe");
 }
 
@@ -357,9 +422,9 @@ describe("组合根：已配对时接线成立", () => {
     await deliverSnapshot(socket);
     await waitUntil(() => context.composition.store.state.resources !== null, "快照入仓");
 
-    // 认证之后：四道闸门全过（scopes 含 `session.create`、Agent 在快照目录里、载荷两键）。
-    // 这条同时证明 `connectionId` 真的取到了值——否则这里会是 `ok: false`。
-    const allowed = context.composition.store.submitCreateSession({ workspaceAlias: "work-api", agentId: "codex-a" });
+    // 认证之后：闸门全过（Agent 在快照目录里、载荷恰好一个目录引用）。设备不再有创建权限维度，
+    // 因此这里不再需要任何 scope。这条同时证明 `connectionId` 真的取到了值——否则这里会是 `ok: false`。
+    const allowed = context.composition.store.submitCreateSession({ directoryAlias: "work-api", agentId: "codex-a" });
     expect(allowed.ok).toBe(true);
     expect(socket.last("command")?.["body"]).toMatchObject({ command: "session.create" });
 
@@ -367,7 +432,7 @@ describe("组合根：已配对时接线成立", () => {
     socket.serverClose(4500, "service_unavailable");
     await waitUntil(() => context.composition.store.state.connection.state === "reconnecting", "进入重连中");
     // 反例：若 `ConnectionIdentity` 编造一个固定值，这里仍会是 `ok: true` → 断言变红。
-    expect(context.composition.store.submitCreateSession({ workspaceAlias: "work-api", agentId: "codex-a" }).ok).toBe(false);
+    expect(context.composition.store.submitCreateSession({ directoryAlias: "work-api", agentId: "codex-a" }).ok).toBe(false);
     context.composition.dispose();
   });
 
@@ -598,15 +663,92 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
     context.composition.dispose();
   });
 
+  it("认领响应的主机证明验不过 / 缺材料：明确失败、不轮询、不落盘（design D2 的 L1）", async () => {
+    // 三条拒绝路径各自一条：签名不匹配（被换了一台电脑）与两种缺材料（协议形状就不完整）。
+    const variants: readonly {
+      readonly name: string;
+      readonly respond: () => PairingHttpResponse;
+      readonly code: string;
+    }[] = [
+      {
+        name: "签名不匹配",
+        // 有效长度（64 字节）但由别的密钥签出来：任何公钥都验不过。
+        respond: () => ({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              pairingRequestId: PAIRING_REQUEST_ID,
+              serverNonce: CLAIM_SERVER_NONCE,
+              hostProof: encodeBase64Url(new Uint8Array(64).fill(0x5a)),
+            }),
+        }),
+        code: "auth.proof_invalid",
+      },
+      {
+        name: "缺 hostProof",
+        respond: () => ({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID, serverNonce: CLAIM_SERVER_NONCE }),
+        }),
+        code: "protocol.schema_invalid",
+      },
+      {
+        name: "缺 serverNonce",
+        respond: () => ({
+          ok: true,
+          status: 201,
+          json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID, hostProof: encodeBase64Url(new Uint8Array(64)) }),
+        }),
+        code: "protocol.schema_invalid",
+      },
+    ];
+
+    for (const variant of variants) {
+      let statusPolls = 0;
+      const context = setup({
+        fetch: async (_url, init): Promise<PairingHttpResponse> => {
+          if (JSON.parse(init.body)["pairingRequestId"] === undefined) return variant.respond();
+          statusPolls += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                status: "approved",
+                device: { deviceId: DEVICE_ID },
+                host: { hostId: HOST_ID, hostPublicKey: APPROVED_HOST_PUBLIC_KEY },
+              }),
+          };
+        },
+      });
+      await context.composition.start();
+      await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+
+      const page = context.composition.store.pairingPage();
+      // 反例：若 claim 跳过验签（或拿响应自带材料「自证」），这里会走到 pending_confirmation/approved。
+      expect(page.phase, variant.name).toBe("failed");
+      expect(page.error?.code, variant.name).toBe(variant.code);
+      // 反例：验签失败后若仍排下一次轮询，这里会 > 0。
+      expect(statusPolls, variant.name).toBe(0);
+      // 反例：若失败后仍写已配对记录，这里会出现 `paired-host/...`；连接也不该被带起来。
+      expect([...context.cache.entries.keys()], variant.name).toEqual([]);
+      expect(context.sockets.sockets, variant.name).toHaveLength(0);
+      context.composition.dispose();
+    }
+  });
+
   it("状态轮询：pending/approved/终态/未知各自分派（业务状态只由 body 表达）", async () => {
     let polls = 0;
     const recorded: { url: string; method: string; body: string }[] = [];
     const context = setup({
-      // claim 与 status 是两个端点（§7.2/§7.3）：claim 给 `pairingRequestId`，status 给业务状态。
+      // claim 与 status 是两个端点（§7.2/§7.3）：claim 给 `pairingRequestId` + `serverNonce` +
+      // 可验签的 `hostProof`，status 给业务状态。
       fetch: async (_url, init): Promise<PairingHttpResponse> => {
         recorded.push({ url: _url, method: init.method, body: init.body });
         if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
-          return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+          return claimResponseFor(init);
         }
         polls += 1;
         return { ok: true, status: 200, json: () => Promise.resolve(bodyFor(polls)) };
@@ -644,7 +786,7 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
     fresh.composition.dispose();
   });
 
-  it("已批准缺主机材料 / 主机标识不是同一台：可区分的失败，而不是「已批准」", async () => {
+  it("已批准缺主机材料 / 标识不符 / 公钥与载荷不一致：可区分的失败，而不是「已批准」", async () => {
     const approvedWith = (host: Record<string, unknown>): Record<string, unknown> => ({
       status: "approved",
       device: { deviceId: DEVICE_ID },
@@ -655,6 +797,12 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
       { name: "缺公钥", body: approvedWith({ hostId: HOST_ID }) },
       { name: "公钥长度不符", body: approvedWith({ hostId: HOST_ID, hostPublicKey: "AQID" }) },
       { name: "主机标识不是同一台", body: approvedWith({ hostId: DEVICE_ID, hostPublicKey: QR_HOST_PUBLIC_KEY }) },
+      // 状态响应没有主机签名，因此公钥必须与二维码里那把**逐字节相同**；这里换一把等长的别的
+      // 公钥（长度、字母表都合法）→ 必须明确失败且不落盘（design D2 的 L3）。
+      {
+        name: "主机公钥与载荷不一致",
+        body: approvedWith({ hostId: HOST_ID, hostPublicKey: MISMATCHED_HOST_PUBLIC_KEY }),
+      },
       { name: "缺设备元数据", body: { status: "approved", host: { hostId: HOST_ID, hostPublicKey: QR_HOST_PUBLIC_KEY } } },
     ];
 
@@ -663,7 +811,7 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
       const context = setup({
         fetch: async (_url, init): Promise<PairingHttpResponse> => {
           if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
-            return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+            return claimResponseFor(init);
           }
           statusPolls += 1;
           return { ok: true, status: 200, json: () => Promise.resolve(scenario.body) };
@@ -700,19 +848,30 @@ function bodyFor(index: number): Record<string, unknown> {
 }
 
 /**
- * 状态响应里的主机公钥（65 字节 base64url）。
+ * 状态响应里的主机公钥。
  *
- * 与二维码里的那份**故意不同**：已配对记录必须取状态响应给出的主机身份材料（§7.3），
- * 取错来源（例如抄二维码）时「记录含主机公钥」这条断言会变红。
+ * **必须与二维码里的那把逐字节相同**：状态响应没有主机签名，因此此后每次连接验签的信任根
+ * 只能靠这条比对来确立（design D2 的 L3）。因此它就是 {@link QR_HOST_PUBLIC_KEY}——两处
+ * 各自写一份字面量会让「逐字节相同」这条要求看起来像巧合。
  */
-const APPROVED_HOST_PUBLIC_KEY = "BAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY";
+const APPROVED_HOST_PUBLIC_KEY = QR_HOST_PUBLIC_KEY;
 
-/** 一次成功配对的 HTTPS 面：claim 给 `pairingRequestId`，首次 status 待确认，第二次已批准。 */
+/**
+ * 一把**等长但不同**的公钥：用途只有一个——`approved` 响应里拿它冒充二维码里的那把。
+ *
+ * 长度与字母表都合法（65 字节 base64url），因此它会一路通过形状校验，只被**逐字节比对**拦下。
+ * 这正是「不一致路径」要证的：比对一旦放水（trim、大小写折叠、前缀匹配、干脆不比），
+ * 这个夹具就会落盘成一条不属于二维码的主机记录。
+ */
+const MISMATCHED_HOST_PUBLIC_KEY =
+  "BAYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY";
+
+/** 一次成功配对的 HTTPS 面：claim 给合法的认领响应，首次 status 待确认，第二次已批准。 */
 function successfulPairingFetch(): FetchLike {
   let statusPolls = 0;
   return async (_url, init): Promise<PairingHttpResponse> => {
     if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
-      return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+      return claimResponseFor(init);
     }
     statusPolls += 1;
     const body =
@@ -1040,7 +1199,7 @@ describe("组合根：配对请求被拒绝时收口（不把状态留在「进�
           claims += 1;
           // 第一次断网：`fetch` 直接拒绝（真实实现里没有第二层 catch，异常从 claim 冒泡上来）。
           if (claims === 1) throw new Error("Failed to fetch");
-          return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+          return claimResponseFor(init);
         }
         return { ok: true, status: 200, json: () => Promise.resolve({ status: "pending_confirmation" }) };
       },
@@ -1134,7 +1293,7 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
       realHostIdentity: true,
       fetch: async (_url, init): Promise<PairingHttpResponse> => {
         if (JSON.parse(init.body)["pairingRequestId"] === undefined) {
-          return { ok: true, status: 201, json: () => Promise.resolve({ pairingRequestId: PAIRING_REQUEST_ID }) };
+          return claimResponseFor(init);
         }
         statusPolls += 1;
         const body =

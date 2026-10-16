@@ -51,7 +51,13 @@ export interface AuthClientProof {
   };
 }
 
-/** `$defs.authenticated`：连接级限额随认证结果下发。 */
+/**
+ * `$defs.authenticated`：连接级限额随认证结果下发。
+ *
+ * body **没有**授权集合字段（schema 的 `additionalProperties: false`）：设备方向没有授权维度，
+ * 认证结果只陈述事实（`deviceId` / `serverEpoch` / `headGlobalSequence`）与本次连接的参数
+ * （心跳间隔与限额）。通过认证即可执行任何业务命令，因此这里 MUST NOT 读或要求任何 scope。
+ */
 export interface AuthAuthenticated {
   readonly protocolVersion: 1;
   readonly type: "auth.authenticated";
@@ -60,7 +66,6 @@ export interface AuthAuthenticated {
   readonly connectionSequence: string;
   readonly body: {
     readonly deviceId: Uuid;
-    readonly scopes: readonly string[];
     readonly serverEpoch: Uuid;
     readonly headGlobalSequence: string;
     readonly heartbeatIntervalMs: number;

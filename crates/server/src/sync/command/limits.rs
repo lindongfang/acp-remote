@@ -5,10 +5,11 @@
 //! - **键是 `(deviceId, 命令族)`**，不是连接、也不是网络来源：同一设备重连不会重置额度，而网络身份
 //!   不能替代设备授权（§14 末条）。同一设备的多标签页共享一份额度（`design.md` D4 的取舍：误伤的代价是
 //!   一条带 `retryAfterMs` 的可重试错误，而不是静默失败）。
-//! - **命令族取自 `compatibility/commands/v1/commands.json` 的 `packs`**（那是命令名的权威分组：
-//!   `pack.observe`/`pack.interact`/`pack.configure-session`/`pack.approve`/`pack.create-session`），
-//!   因此高频查询（`observe`）与 prompt（`interact`）**各占各的额度**——这正是分族统计的目的。
-//!   本文件是该分组的本地镜像（与 §14 的 120/分钟同款：数值与分组各自持有、各自有测试断言）。
+//! - **命令族是服务端自持的分组**（`CommandFamily`：`observe`/`interact`/`configure-session`/`approve`/
+//!   `create-session`），因此高频查询（`observe`）与 prompt（`interact`）**各占各的额度**——这正是分族
+//!   统计的目的。分组不由任何机器资产下发（`commands.json` 已不再有 `packs`），它只由本文件的
+//!   [`CommandFamily::of`] 一份定义持有；**命令名这一词表仍以 `compatibility/commands/v1/commands.json`
+//!   为唯一来源**，用例逐条断言「registry 里每个 sync 命令名恰好被一个族覆盖」，新增命令名而不归类即红。
 //! - **单次超限只回可重试错误**（`resource.rate_limited` + `details.retryAfterMs`）；**连续**超限达
 //!   [`MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS`] 才以 `4429` 关闭连接（与
 //!   `server::node_link::command` 同形态、数值各自持有）。
@@ -40,26 +41,36 @@ pub const MAX_CONSECUTIVE_RATE_LIMIT_REJECTIONS: u32 = 3;
 /// 单连接去重表的条数上限（连接期状态的界：查询类去重是许可而非义务，取一个够用的上界即可）。
 pub const MAX_DEDUP_ENTRIES: usize = 64;
 
-/// 命令族（`compatibility/commands/v1/commands.json` 的 `packs` 分组）。
+/// 命令族（服务端自持的分组，见模块文档）。
 ///
 /// 分族的意义是「一个族的高频命令不会挤掉另一个族的额度」：`observe` 是高频只读，`interact` 承载
 /// prompt/cancel，二者共用一个额度会让一台在时间线上疯狂翻页的客户端把 prompt 饿死（`design.md` D4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CommandFamily {
-    /// `pack.observe`：五条查询命令。
+    /// 五条查询命令。
     Observe,
-    /// `pack.interact`：`session.prompt`、`session.cancel`、`elicitation.respond`。
+    /// `session.prompt`、`session.cancel`、`elicitation.respond`。
     Interact,
-    /// `pack.configure-session`：`session.mode.set`、`session.config.set`。
+    /// `session.mode.set`、`session.config.set`。
     ConfigureSession,
-    /// `pack.approve`：`permission.resolve`。
+    /// `permission.resolve`。
     Approve,
-    /// `pack.create-session`：`session.create`。
+    /// `session.create`。
     CreateSession,
 }
 
 impl CommandFamily {
-    /// 该命令所属的族（与 registry 的 `packs` 逐条相等：`observe` 恰是五条查询命令）。
+    /// 全部族（`of` 的取值域；每个族都必须至少覆盖一条命令，否则用例会红）。
+    pub const ALL: [CommandFamily; 5] = [
+        CommandFamily::Observe,
+        CommandFamily::Interact,
+        CommandFamily::ConfigureSession,
+        CommandFamily::Approve,
+        CommandFamily::CreateSession,
+    ];
+
+    /// 该命令所属的族（`CommandName` 是闭合词表，因此每条命令**恰好**落进一个族：`match` 的穷尽性
+    /// 由编译器保证，「恰好一个」由值唯一性保证）。
     pub fn of(command: CommandName) -> Self {
         match command {
             CommandName::SessionList
@@ -78,7 +89,7 @@ impl CommandFamily {
         }
     }
 
-    /// 诊断用的稳定取值（`packs` 的名字去掉 `pack.` 前缀）。
+    /// 诊断用的稳定取值（与族名逐字相同，也是限流键的一部分）。
     pub fn as_str(self) -> &'static str {
         match self {
             CommandFamily::Observe => "observe",

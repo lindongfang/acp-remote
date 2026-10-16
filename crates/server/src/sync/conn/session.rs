@@ -75,7 +75,7 @@ use identity_auth::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sync_protocol::auth::{
-    Authenticated as AuthenticatedBody, ClientHello, ClientProof, Scopes, ServerChallenge,
+    Authenticated as AuthenticatedBody, ClientHello, ClientProof, ServerChallenge,
 };
 use sync_protocol::common::{Base64Url, BoundedU64, DecimalString, RawObject, UIntAtLeast, Uuid};
 use sync_protocol::control::Body as ControlBody;
@@ -920,8 +920,8 @@ impl Session {
             CredentialStatus::Unknown => {
                 Some((close::UNAUTHENTICATED, ErrorCode::AuthProofInvalid))
             }
-            // scope 缩减要求重新认证；设备侧 scopes 由信任行当次读出、不由本状态机下发，因此这里不可达
-            // （保留分支只为失败关闭，不 panic）。
+            // scope 缩减要求重新认证：设备方向已没有授权集合可缩减（`pairing-model` 删除设备权限层），
+            // 因此设备侧不可能产生该状态；保留分支只为让判定穷尽并失败关闭，不 panic。
             CredentialStatus::ScopeReduced => {
                 Some((close::STATE_CONFLICT, ErrorCode::AuthProofInvalid))
             }
@@ -952,14 +952,8 @@ impl Session {
                 .authority
                 .complete_auth(authenticated.fact, pending.as_ref(), &at);
         if let Some(pairing) = completion.consume_pairing {
-            let scopes = view
-                .device
-                .as_ref()
-                .map(|row| row.scopes().clone())
-                .unwrap_or_default();
             let actor = Actor::Device {
                 device: device_id.clone(),
-                scopes,
             };
             if let Err(error) = self.conn.core.consume_pairing(&actor, &pairing).await {
                 // 写集没提交成功就绝不进入业务阶段（不半认证）。
@@ -1831,32 +1825,22 @@ fn challenge_body(
 
 /// `auth.authenticated` 的 body（§8.4）。
 ///
-/// `scopes` 取**持久化**设备行（与授权判定同源，不由对端自报）；`serverEpoch`/`headGlobalSequence` 取
-/// 本机水位（与 `sync.subscribe` 的 cursor 判定同源）；`limits` 是协商结果。
+/// 只写**已验证事实**与本次连接的参数：`serverEpoch`/`headGlobalSequence` 取本机水位（与
+/// `sync.subscribe` 的 cursor 判定同源）、`limits` 是协商结果。设备方向**没有授权维度**（`pairing-model`
+/// 删除设备权限层），因此这里不计算、也不填充任何授权集合字段——通过认证即具备执行业务命令的前提。
 fn authenticated_body(
     view: &SyncDeviceHandshakeView,
     device: &DeviceId,
     limits: SessionLimits,
 ) -> Option<AuthenticatedBody> {
-    let scopes = view.device.as_ref()?.scopes();
     let heartbeat = limits.heartbeat_interval().as_millis();
     Some(AuthenticatedBody {
         device_id: Uuid::parse(device.as_str()).ok()?,
-        scopes: wire_scopes(scopes)?,
         server_epoch: Uuid::parse(view.head.server_epoch.as_str()).ok()?,
         head_global_sequence: DecimalString::parse(&view.head.global_sequence.to_string()).ok()?,
         heartbeat_interval_ms: BoundedU64::<1_000, 300_000>::new(heartbeat as u64).ok()?,
         limits: limits.to_wire()?,
     })
-}
-
-/// `auth.authenticated.scopes` 的 wire 形状。
-///
-/// `Scopes` 只提供反序列化这一条构造路径（它自己承担去重与非空文本校验），因此这里经一次 JSON
-/// 往返：失败即本机接线错误（例如 scope 名超过 128 字符），调用方按内部不可用失败关闭。
-fn wire_scopes(scopes: &acp_core::model::ScopeSet) -> Option<Scopes> {
-    let text = serde_json::to_string(&scopes.iter().collect::<Vec<&str>>()).ok()?;
-    serde_json::from_str(&text).ok()
 }
 
 /// 挑战标识（wire 的 `connectionId`）的 UUID 视图。

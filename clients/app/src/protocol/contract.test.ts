@@ -28,6 +28,7 @@ import {
 import { repoRoot, syncFixtureDir, syncSchemaDir, syncManifestPath, SYNC_SCHEMA_FILES } from "./paths";
 import { KNOWN_EVENT_TYPE_COUNT, isKnownEventType, projectView } from "./event";
 import type { SessionReadInclude } from "./command";
+import type { AuthAuthenticated } from "./auth";
 import type { EventOriginKind } from "./event";
 import type { SnapshotItemHistory } from "./sync";
 
@@ -54,6 +55,20 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
   createdAt: true,
   view: true,
   acp: true,
+};
+
+/**
+ * `AuthAuthenticated["body"]` 的字段集合的编译期镜像。
+ *
+ * 与其它镜像同理：镜像里多一个键（例如已被 wire 删掉的授权集合 `scopes`）或少一个键都会让
+ * 本文件编译失败，因此下面的比对是「TS 字段集 ↔ schema `required`」这一对，而不是抄来的常量。
+ */
+const AUTH_BODY_MIRROR: Record<keyof AuthAuthenticated["body"], true> = {
+  deviceId: true,
+  serverEpoch: true,
+  headGlobalSequence: true,
+  heartbeatIntervalMs: true,
+  limits: true,
 };
 
 /**
@@ -273,6 +288,36 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     ]);
   });
 
+  it("auth.authenticated 的 body 必填集合与镜像一致（设备方向没有授权集合）", () => {
+    const schema = readSchema("auth.schema.json");
+    const authenticated = defs(schema)["authenticated"] as {
+      properties: { body: { required: string[]; properties: Record<string, unknown> } };
+    };
+    // 反例：镜像里若还留着已被 wire 删掉的授权集合字段（`scopes`），下面任一条 `toEqual` 都会变红。
+    expect(authenticated.properties.body.required).toEqual([
+      "deviceId",
+      "serverEpoch",
+      "headGlobalSequence",
+      "heartbeatIntervalMs",
+      "limits",
+    ]);
+    expect(Object.keys(authenticated.properties.body.properties).sort()).toEqual([
+      "deviceId",
+      "headGlobalSequence",
+      "heartbeatIntervalMs",
+      "limits",
+      "serverEpoch",
+    ]);
+    // 镜像侧同样是编译期判定：`AuthAuthenticated["body"]` 的键集与这份常量必须逐键相同。
+    expect(Object.keys(AUTH_BODY_MIRROR).sort()).toEqual([
+      "deviceId",
+      "headGlobalSequence",
+      "heartbeatIntervalMs",
+      "limits",
+      "serverEpoch",
+    ]);
+  });
+
   it("snapshotResource 收窄为三类清单资源（design D1）", () => {
     const schema = readSchema("sync.schema.json");
     const resource = defs(schema)["snapshotResource"] as { enum: string[] };
@@ -395,13 +440,25 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(result.required).toEqual(["sessionId", "resources", "hasEarlier"]);
   });
 
-  it("sessionCreate 的 payload 只允许两个引用", () => {
+  it("sessionCreate 的 payload 允许 agentId 与一个目录引用", () => {
     const schema = readSchema("command.schema.json");
     const create = defs(schema)["sessionCreate"] as {
-      properties: { payload: { required: string[]; additionalProperties: boolean } };
+      properties: {
+        payload: {
+          required: string[];
+          additionalProperties: boolean;
+          properties: Record<string, unknown>;
+        };
+      };
     };
-    expect(create.properties.payload.required).toEqual(["workspaceAlias", "agentId"]);
+    // `agentId` 必填，目录引用由 `workspaceAlias` / `workspacePath` 之一给出（二者不同时出现）。
+    expect(create.properties.payload.required).toEqual(["agentId"]);
     expect(create.properties.payload.additionalProperties).toBe(false);
+    expect(Object.keys(create.properties.payload.properties).sort()).toEqual([
+      "agentId",
+      "workspaceAlias",
+      "workspacePath",
+    ]);
   });
 
   it("file.changed 的三个新可选字段存在，必填集合不变", () => {

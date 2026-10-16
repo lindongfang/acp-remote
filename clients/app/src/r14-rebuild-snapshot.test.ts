@@ -204,7 +204,6 @@ async function authenticate(harness: Harness, hostKey: HostKey): Promise<void> {
     connectionSequence: "1",
     body: {
       deviceId: DEVICE_ID,
-      scopes: ["session.list", "session.read"],
       serverEpoch: SERVER_EPOCH,
       headGlobalSequence: "10",
       heartbeatIntervalMs: 30000,

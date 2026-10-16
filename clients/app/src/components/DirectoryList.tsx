@@ -34,8 +34,8 @@
  *   与会话数无关）与**「查看全部 N 个 ›」**（`data-action="open-directory-all"`，只有该目录有
  *   会话时才给出；N 是目录项的 `counts.total`，全量口径而非内联行数）。两者都走
  *   `onOpenDirectory`，动作取值可区分是为了让消费方能分别断言。
- * - **目录内创建**：`onCreateSession(alias)`；缺省不给时卡片不呈现「⊕ 新建」。
- *   是否给出由页面按权限决定——组件不做权限判定。
+ * - **目录内创建**：`onCreateSession(alias)`（**必填**）；每个目录项恒呈现「⊕ 新建」——
+ *   设备不再有创建会话的权限维度，因此组件不做也不接受任何权限判定或说明。
  * - **折叠**：每个目录项**各自**的局部状态，翻转一个别名不影响其它目录项。
  * - **同步时间**：`lastSyncedAtMs` 非 `null` 才画；从未成功替换过快照时为 `null`，
  *   此时绝不编造时刻（spec「从未成功同步」MUST NOT）。
@@ -85,10 +85,12 @@ export interface DirectoryListProps {
   /** 进入某个目录详情（页面负责导航）。 */
   readonly onOpenDirectory: (alias: string) => void;
   /**
-   * 在该目录内创建会话（页面负责打开弹层与提交）；缺省表示没有这个能力，
-   * 此时卡片不呈现「⊕ 新建」。是否给出由页面按 `session.create` 权限决定。
+   * 在该目录内创建会话（页面负责打开弹层与提交）。
+   *
+   * **必填**：设备不再有创建会话的权限维度，目录项上的创建入口恒可用（spec「入口不因权限不可用」），
+   * 因此调用方没有「因为权限而不给回调」这个选项，组件也不再承接任何权限说明。
    */
-  readonly onCreateSession?: (alias: string) => void;
+  readonly onCreateSession: (alias: string) => void;
   /**
    * 内联会话行的来源：按目录别名分组的会话行（页面从 store 取）。
    * 缺省空 Map，等价于「只呈现目录项、不列会话行」。
@@ -104,11 +106,6 @@ export interface DirectoryListProps {
   readonly onFilterChange?: (filter: DirectoryFilter) => void;
   /** 打开某个会话（页面负责导航）；缺省时会话行只是展示。 */
   readonly onOpenSession?: (sessionId: string) => void;
-  /**
-   * 无创建会话权限时的提示条文案；`null`/缺省不呈现（有权限时不留痕，因此「缺省等价于有权限」）。
-   * 文案由页面给出：两页共用同一句来源（`CreateSessionPermission.note`），不各写一套说法。
-   */
-  readonly createPermissionNote?: string | null;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -132,19 +129,6 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
-    },
-    notice: {
-      backgroundColor: colors.warnSoft,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-    },
-    noticeText: {
-      color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
     },
     toolbar: {
       flexDirection: "row",
@@ -221,7 +205,6 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
     filter = "all",
     onFilterChange,
     onOpenSession,
-    createPermissionNote = null,
   } = props;
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -291,14 +274,10 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
                 onOpenDirectory(directory.alias);
               }
         }
-        // 目录内创建：调用方没给回调就不呈现（调用方按权限决定给不给）。
-        onCreate={
-          onCreateSession === undefined
-            ? null
-            : () => {
-                onCreateSession(directory.alias);
-              }
-        }
+        // 目录内创建：入口恒可用（页面无条件给出回调）。
+        onCreate={() => {
+          onCreateSession(directory.alias);
+        }}
       >
         {inline.length === 0 ? null : (
           <View role="list" style={styles.sessions}>
@@ -349,12 +328,6 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
           </Text>
         )}
       </View>
-
-      {createPermissionNote === null ? null : (
-        <View style={styles.notice} dataSet={{ createPermissionNote: "true" }}>
-          <Text style={styles.noticeText}>{createPermissionNote}</Text>
-        </View>
-      )}
 
       {/* 空态下没有可搜索/可筛选的内容，因此不呈现工具条；「搜索无结果」时**必须**呈现，
           否则用户没有把关键词或筛选改回去的入口。 */}

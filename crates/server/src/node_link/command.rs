@@ -67,6 +67,7 @@ use acp_core::model::{
     ExportId as CoreExportId, ExportRecord, InteractionId, ModeId, NodeId, NodeState, PortError,
     PromptContentBlock, ReadInclude, RequestId as CoreRequestId, ResourceOrigin, SessionId,
     TemplateSelection, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceAlias,
+    WorkspaceSource,
 };
 use acp_core::ports::SessionQuery;
 use acp_core::use_cases::{NodeLinkCatalogView, UseCases};
@@ -727,7 +728,13 @@ impl CommandRoute {
         };
         let outcome = match self
             .core
-            .create_session(&actor, request.clone(), fingerprint, create, Some(alias))
+            .create_session(
+                &actor,
+                request.clone(),
+                fingerprint,
+                create,
+                Some(WorkspaceSource::Alias(alias)),
+            )
             .await
         {
             Ok(session) => match self

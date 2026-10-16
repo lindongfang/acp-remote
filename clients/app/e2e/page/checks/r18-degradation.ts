@@ -79,7 +79,7 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
       },
     ],
     agents: AGENTS,
-    scopes: ["session.list", "session.read"],
+    authenticate: true,
     tamperHostProof: false,
     deliverSnapshot: true,
     barrierGlobalSequence: "10",

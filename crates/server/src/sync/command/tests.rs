@@ -795,12 +795,14 @@ impl CommandWorld {
     }
 
     /// 预置一条设备信任行（`sync_device_handshake_view` 的唯一读面）。
-    fn seed_device(&self, device: &str, scopes: &[&str]) {
+    ///
+    /// 设备不再有授权集合（`pairing-model` 删除设备权限层），因此没有 scopes 参数：命令的执行前提只有
+    /// 「该设备在本机有一条信任行」。
+    fn seed_device(&self, device: &str) {
         let record = acp_core::model::DeviceRecord::try_new(
             DeviceId::new(device).expect("device id"),
             "Test Phone",
             acp_core::model::Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
-            acp_core::model::ScopeSet::try_from_iter(scopes.iter().copied()).expect("scopes"),
             acp_core::model::DeviceState::Active,
             timestamp("2026-09-18T09:12:03.412Z"),
             None,
@@ -1092,7 +1094,6 @@ fn command_record(status: CommandStatus) -> CommandRecord {
         CommandKind::Mutation,
         Actor::Device {
             device: DeviceId::new(DEVICE).expect("device id"),
-            scopes: acp_core::model::ScopeSet::try_from_iter(["session.prompt"]).expect("scopes"),
         },
         Some(timestamp(NOW)),
         status,
@@ -1143,41 +1144,18 @@ fn the_rate_limiter_counts_by_device_and_family() {
     );
 }
 
-/// 命令族与 `compatibility/commands/v1/commands.json` 的 `packs` 分组逐条相等（该登记表是命令名分组的
-/// **唯一机器来源**，本文件按同仓其它契约测试的做法直接读它，不再在用例里维护第二份期望值）：
-/// 12 条 sync 命令（`CommandName::ALL`）**逐条**都比一遍，`session.cancel`/`elicitation.respond`/
-/// `session.config.set` 这类此前没有断言的命令因此也在覆盖内。
+/// 命令名这一词表以 `compatibility/commands/v1/commands.json` 为**唯一机器来源**；命令族是服务端自持
+/// 的常量分组（`CommandFamily::of` 的 `match`）。本用例钉住两者之间的接缝：
+///
+/// - registry 里 `transport` 含 `sync` 的命令名与 `CommandName::ALL` **双向逐条相等**（新增一个 sync
+///   命令名而不加进枚举 → 红；枚举里多出一个 registry 没有的名字 → 也红）；
+/// - 每条命令**恰好**被一个族覆盖：族的取值域就是 `CommandFamily::ALL`，每个族都非空，且各族的成员
+///   合起来正是全部命令（数量相等 + 每个名字在结果里只出现一次）。
 #[test]
-fn command_families_mirror_the_registry_packs() {
+fn every_sync_command_is_covered_by_exactly_one_family() {
     use sync_protocol::command::CommandName;
     let registry: serde_json::Value =
         serde_json::from_str(COMMAND_CATALOG).expect("命令登记表是合法 JSON");
-    // pack → 成员命令名（登记表的 packs 分组）。
-    let mut pack_of: BTreeMap<String, String> = BTreeMap::new();
-    for (pack, names) in registry["packs"].as_object().expect("packs 对象") {
-        for name in names.as_array().expect("pack 成员数组") {
-            let name = name.as_str().expect("命令名是字符串");
-            assert!(
-                pack_of.insert(name.to_owned(), pack.clone()).is_none(),
-                "{name} 不得出现在两个 pack 里"
-            );
-        }
-    }
-    // 逐条：命令名的族必须就是它登记的 pack（`CommandFamily::as_str` 是 pack 去掉 `pack.` 前缀）。
-    for command in CommandName::ALL {
-        let name = command.as_str();
-        let pack = pack_of
-            .get(name)
-            .unwrap_or_else(|| panic!("{name} 不在登记表的任何 pack 里"));
-        assert_eq!(
-            &format!("pack.{}", CommandFamily::of(command).as_str()),
-            pack,
-            "{name} 的族必须等于登记表的 pack"
-        );
-    }
-    // 反向与计数：登记表里带 pack 的命令恰好是这 12 条 sync 命令（`session.resume` 的 pack 为 null，
-    // 它不在 `CommandName::ALL` 里），`transport` 含 sync 的集合也与它逐条相等。
-    assert_eq!(pack_of.len(), CommandName::ALL.len());
     let sync_commands = registry["commands"]
         .as_array()
         .expect("commands 数组")
@@ -1187,12 +1165,63 @@ fn command_families_mirror_the_registry_packs() {
                 .as_array()
                 .is_some_and(|transports| transports.iter().any(|it| it.as_str() == Some("sync")))
         })
-        .map(|entry| entry["name"].as_str().expect("命令名"))
+        .map(|entry| entry["name"].as_str().expect("命令名").to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(sync_commands.len(), CommandName::ALL.len());
-    for name in &sync_commands {
-        assert!(pack_of.contains_key(*name), "{name} 必须有 pack");
+    assert_eq!(
+        sync_commands.len(),
+        CommandName::ALL.len(),
+        "registry 的 sync 命令数必须等于命令枚举：{sync_commands:?}"
+    );
+    for command in CommandName::ALL {
+        assert!(
+            sync_commands.iter().any(|name| name == command.as_str()),
+            "{} 必须登记在 registry 里（transport 含 sync）",
+            command.as_str()
+        );
     }
+    for name in &sync_commands {
+        assert!(
+            CommandName::ALL
+                .iter()
+                .any(|command| command.as_str() == name),
+            "{name} 不在命令枚举里：新增命令必须先进词表再归类"
+        );
+    }
+
+    // 每族的成员（同一命令名不可能落进两个族：`of` 是值唯一的 `match`）。
+    let mut members: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
+    for command in CommandName::ALL {
+        members
+            .entry(CommandFamily::of(command).as_str())
+            .or_default()
+            .push(command.as_str());
+    }
+    assert_eq!(
+        members.len(),
+        CommandFamily::ALL.len(),
+        "每个族都必须至少覆盖一条命令"
+    );
+    assert_eq!(
+        members.values().map(Vec::len).sum::<usize>(),
+        CommandName::ALL.len(),
+        "命令必须恰好落进一个族"
+    );
+    for family in CommandFamily::ALL {
+        assert!(
+            members.contains_key(family.as_str()),
+            "族 {} 没有任何命令",
+            family.as_str()
+        );
+    }
+    // 没有族名重复（`as_str` 是限流键的一部分，重名会让两族共用一个额度）。
+    let mut names = CommandFamily::ALL
+        .iter()
+        .map(|family| family.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    let unique = names.len();
+    names.dedup();
+    assert_eq!(names.len(), unique, "族名必须互不相同");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1203,7 +1232,7 @@ fn command_families_mirror_the_registry_packs() {
 #[tokio::test]
 async fn session_resume_is_rejected_as_unsupported_without_local_reads() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.list", "session.resume"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -1239,7 +1268,7 @@ async fn session_resume_is_rejected_as_unsupported_without_local_reads() {
 #[tokio::test]
 async fn an_unknown_command_name_is_rejected_as_unsupported() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(REQUEST, "local.device.manage", None, serde_json::json!({}));
@@ -1257,7 +1286,7 @@ async fn an_unknown_command_name_is_rejected_as_unsupported() {
 #[tokio::test]
 async fn a_malformed_command_body_is_rejected_as_schema_invalid() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     // `session.read` 的 payload 必须是 `{ include: [...] }`；这里给一个空对象。
@@ -1278,17 +1307,20 @@ async fn a_malformed_command_body_is_rejected_as_schema_invalid() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 2.2 授权先于读取
+// 2.2 前提先于读取（设备不再有命令级授权判定）
 // ---------------------------------------------------------------------------------------------
 
-/// 未持 scope 的设备对**不存在**的会话派发命令，也只得授权拒绝，且零业务读取、零写入。
+/// 本机没有该设备的信任行：命令被认证类失败拒绝，且零业务读取、零写入。
+///
+/// 设备方向不再有 scope 判定（`pairing-model` 删除设备权限层），剩下的唯一前提是「持久信任行存在」；
+/// 这条用例同时钉住「拒绝先于本机读取」——`session.prompt` 指向一个**不存在**的会话，记账替身证明
+/// 没有任何会话读取发生。
 #[tokio::test]
-async fn an_unauthorized_device_gets_scope_denied_without_reading_sessions() {
+async fn an_unauthenticated_device_is_denied_without_reading_sessions() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    // 故意不 seed_device：连接声称的设备在本机没有信任行。
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
-    // OTHER_SESSION 在存储里根本不存在；`session.prompt` 也不在该设备的 scope 里。
     let body = command_body(
         REQUEST,
         "session.prompt",
@@ -1308,23 +1340,22 @@ async fn an_unauthorized_device_gets_scope_denied_without_reading_sessions() {
             .get("error")
             .and_then(|error| error.get("code"))
             .and_then(|code| code.as_str()),
-        Some(ErrorCode::AuthorizationScopeDenied.as_str())
+        Some(ErrorCode::AuthDeviceUnknown.as_str())
     );
     assert_eq!(
         world.store.session_reads(),
         0,
-        "授权判定不得触碰任何会话读取（记账替身证明）"
+        "前提判定不得触碰任何会话读取（记账替身证明）"
     );
     assert_eq!(world.store.commits(), 0, "被拒命令零副作用");
 }
 
-/// 错误类型**不随会话是否存在而变**：同一条被拒命令，会话存在与不存在都得到同一个 `authorization.scope_denied`
+/// 错误类型**不随会话是否存在而变**：同一条被拒命令，会话存在与不存在都得到同一个 `auth.device_unknown`
 /// （否则该错误码就成了会话是否存在的预言机）。
 #[tokio::test]
-async fn the_authorization_error_does_not_depend_on_session_existence() {
+async fn the_authentication_error_does_not_depend_on_session_existence() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let mut codes = Vec::new();
@@ -1355,20 +1386,50 @@ async fn the_authorization_error_does_not_depend_on_session_existence() {
     assert_eq!(
         codes,
         vec![
-            Some(ErrorCode::AuthorizationScopeDenied.as_str().to_owned()),
-            Some(ErrorCode::AuthorizationScopeDenied.as_str().to_owned())
+            Some(ErrorCode::AuthDeviceUnknown.as_str().to_owned()),
+            Some(ErrorCode::AuthDeviceUnknown.as_str().to_owned())
         ],
         "会话存在与否不得改变错误类型"
     );
     assert_eq!(world.store.session_reads(), 0);
 }
 
-/// 已授权的查询对不存在的会话给出 `session.not_found`——**授权先行**的证明：同一个不存在的会话在未授权
-/// 设备那里得到的是授权拒绝，在授权设备这里才是「找不到」。
+/// 设备方向不再有授权维度：一台**没有任何授权集合**的已认证设备照常执行命令（旧实现会以
+/// `authorization.scope_denied` 拒绝）。这里用 `session.prompt`（旧实现的 `interact` scope）验证。
+#[tokio::test]
+async fn an_authenticated_device_executes_without_any_scope() {
+    let world = CommandWorld::new();
+    world.push_session(core_session(SESSION));
+    world.seed_device(DEVICE);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    let body = command_body(
+        REQUEST,
+        "session.prompt",
+        Some(SESSION),
+        serde_json::json!({ "content": [{ "type": "text", "text": "你好" }] }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let results = bodies(&out, "command.result");
+    assert_eq!(
+        results[0].get("status").and_then(|status| status.as_str()),
+        Some("accepted"),
+        "已认证设备必须被受理：{results:?}"
+    );
+    // 落盘至少一次即证明「已受理」不是内存里的假成功。这条路径有两次结构性的提交（命令面的接受行 +
+    // broker 的受理写集），因此这里只断言「确实发生了写入」，不钉内部记账的具体次数。
+    assert!(
+        world.store.commits() >= 1,
+        "受理必须真的落盘，实际提交 {} 次",
+        world.store.commits()
+    );
+}
+
+/// 已认证的设备对不存在的会话给出 `session.not_found`（前提判定不读取会话行，因此这个错误来自业务层）。
 #[tokio::test]
 async fn an_authorized_query_on_a_missing_session_reports_not_found() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.mode.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -1440,7 +1501,7 @@ fn assert_single_completed(out: &[Frame], command: &str) -> serde_json::Value {
 async fn session_list_completes_in_one_result() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(REQUEST, "session.list", None, serde_json::json!({}));
@@ -1529,7 +1590,7 @@ async fn session_read_completes_in_one_result_with_messages_and_history() {
             &serde_json::json!({ "turnId": TURN, "state": "completed" }).to_string(),
         ),
     );
-    world.seed_device(DEVICE, &["session.read", "core.session-history.v1"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     // `core.session-history.v1` 是 feature，不是 scope：测试里直接交接协商结果。
@@ -1601,7 +1662,7 @@ async fn session_read_completes_in_one_result_with_messages_and_history() {
 async fn session_read_history_requires_the_feature() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -1634,7 +1695,7 @@ async fn session_read_history_requires_the_feature() {
 async fn session_read_unsupported_resources_are_rejected() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     for (index, resource) in ["turns", "pending_interactions", "capabilities"]
@@ -1687,7 +1748,7 @@ async fn session_read_rejects_a_history_cursor_before_the_retained_window() {
     push_history_entry(&world, EVENT_TWO, 6, T2);
     // 序号 1..=4 的行已按保留策略清理：可读窗口从序号 5 开始。
     world.store.prune_below(SESSION, 5);
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     crate::sync::conn::MessageRoute::on_authenticated(
@@ -1759,7 +1820,7 @@ async fn session_read_rejects_a_message_cursor_before_the_retained_window() {
     push_user_message(&world, SECOND_MESSAGE_ID, 3, NOW, "最新的一条");
     // 序号 1 的那条（`PRUNED_MESSAGE_ID`）已被清理。
     world.store.prune_below(SESSION, 2);
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let read = |before: serde_json::Value| {
@@ -1853,7 +1914,7 @@ async fn session_read_converges_an_oversized_limit_to_the_server_cap() {
     push_user_message(&world, PRUNED_MESSAGE_ID, 1, T1, "第一条");
     push_user_message(&world, MESSAGE_ID, 2, T2, "第二条");
     push_user_message(&world, SECOND_MESSAGE_ID, 3, NOW, "第三条");
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let read = |limit: u64| {
@@ -1907,7 +1968,7 @@ async fn session_read_pages_backwards_without_gaps_or_overlap() {
     push_user_message(&world, PRUNED_MESSAGE_ID, 1, T1, "第一条");
     push_user_message(&world, MESSAGE_ID, 2, T2, "第二条");
     push_user_message(&world, SECOND_MESSAGE_ID, 3, NOW, "第三条");
-    world.seed_device(DEVICE, &["session.read"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let read = |before: Option<serde_json::Value>| {
@@ -1959,7 +2020,7 @@ async fn command_status_completes_in_one_result() {
     world
         .store
         .push_command(command_record(CommandStatus::Completed));
-    world.seed_device(DEVICE, &["command.status"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -1990,7 +2051,7 @@ async fn command_status_completes_in_one_result() {
 #[tokio::test]
 async fn command_status_reports_not_found() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["command.status"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -2019,7 +2080,7 @@ async fn command_status_reports_not_found() {
 async fn session_mode_list_completes_in_one_result() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.mode.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -2049,7 +2110,7 @@ async fn session_mode_list_completes_in_one_result() {
 async fn session_config_list_completes_in_one_result() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.config.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(
@@ -2118,7 +2179,7 @@ async fn an_oversized_query_result_is_rejected_instead_of_truncated() {
         .expect("会话摘要");
         world.push_session(summary);
     }
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     // 压小单条消息上限（`SessionLimits` 的 wire 下限是 1024，取 2048）。
     let config = SyncConfig {
@@ -2178,7 +2239,7 @@ async fn an_almost_full_query_result_still_fits() {
     for index in 0..16 {
         world.push_session(fat_session(index));
     }
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let body = command_body(REQUEST, "session.list", None, serde_json::json!({}));
     // ① 先用宽松上限量出这份结果真实出站帧的长度。
@@ -2242,7 +2303,7 @@ async fn an_almost_full_query_result_still_fits() {
 async fn a_single_rate_limit_rejection_is_retryable_and_has_no_side_effect() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = Arc::new(
         CommandRoute::new(
             Arc::clone(&world.core),
@@ -2299,7 +2360,7 @@ async fn a_single_rate_limit_rejection_is_retryable_and_has_no_side_effect() {
 #[tokio::test]
 async fn consecutive_rate_limit_rejections_close_the_connection_with_4429() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = Arc::new(
         CommandRoute::new(
             Arc::clone(&world.core),
@@ -2349,7 +2410,7 @@ async fn consecutive_rate_limit_rejections_close_the_connection_with_4429() {
 #[tokio::test]
 async fn different_command_families_do_not_share_the_quota() {
     let world = CommandWorld::new();
-    world.seed_device(DEVICE, &["session.list", "session.prompt"]);
+    world.seed_device(DEVICE);
     let route = Arc::new(
         CommandRoute::new(
             Arc::clone(&world.core),
@@ -2410,8 +2471,8 @@ async fn different_command_families_do_not_share_the_quota() {
 async fn the_command_quota_is_counted_per_device_not_per_connection() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
-    world.seed_device(OTHER_DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
+    world.seed_device(OTHER_DEVICE);
     let route = Arc::new(
         CommandRoute::new(
             Arc::clone(&world.core),
@@ -2477,7 +2538,7 @@ async fn the_command_quota_is_counted_per_device_not_per_connection() {
 async fn a_duplicate_message_id_is_answered_from_the_connection_cache() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let body = command_body(REQUEST, "session.list", None, serde_json::json!({}));
@@ -2500,7 +2561,7 @@ async fn a_duplicate_message_id_is_answered_from_the_connection_cache() {
 async fn the_connection_dedup_key_is_the_frame_pair() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let frame = command_body(REQUEST, "session.list", None, serde_json::json!({}));
@@ -2563,8 +2624,8 @@ async fn the_connection_dedup_key_is_the_frame_pair() {
 async fn the_same_query_on_another_connection_reads_again() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.list"]);
-    world.seed_device(OTHER_DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
+    world.seed_device(OTHER_DEVICE);
     let route = world.route();
     let (first_handle, mut first_receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let (second_handle, mut second_receiver) =
@@ -2631,7 +2692,7 @@ async fn the_same_query_on_another_connection_reads_again() {
 async fn a_prompt_mutation_is_accepted_without_any_business_result() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.prompt"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
 
@@ -2670,7 +2731,7 @@ async fn a_prompt_mutation_is_accepted_without_any_business_result() {
 async fn an_accepted_mutation_carries_the_acceptance_time() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.prompt"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
 
@@ -2702,7 +2763,7 @@ async fn an_accepted_mutation_carries_the_acceptance_time() {
 async fn the_same_request_id_dispatches_only_once_even_after_a_reopen() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.prompt"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
     let payload = prompt_payload("你好");
@@ -2778,7 +2839,7 @@ fn the_payload_fingerprint_ignores_key_order() {
 async fn the_same_request_id_with_a_different_payload_is_a_conflict() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.prompt"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
 
@@ -2825,7 +2886,7 @@ async fn the_same_request_id_with_a_different_payload_is_a_conflict() {
 async fn a_stale_expected_version_is_rejected_with_the_current_version() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.mode.set"]);
+    world.seed_device(DEVICE);
     let before = world.store.commits();
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
@@ -2856,7 +2917,7 @@ async fn a_stale_expected_version_is_rejected_with_the_current_version() {
 async fn the_submitter_receives_its_own_terminal_state() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.prompt"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
 
@@ -2904,7 +2965,7 @@ async fn the_submitter_receives_its_own_terminal_state() {
 async fn a_disconnected_submitter_leaves_no_watcher_behind() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
-    world.seed_device(DEVICE, &["session.prompt"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
 
@@ -2937,7 +2998,7 @@ async fn an_uncertain_command_is_never_dispatched_again() {
     let world = CommandWorld::new();
     world.push_session(core_session(SESSION));
     // `command.status` 需要 `grant.observe` 覆盖的那条 scope：本用例要同时走提交流与重查流。
-    world.seed_device(DEVICE, &["session.prompt", "command.status"]);
+    world.seed_device(DEVICE);
     let route = world.route();
     let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
 

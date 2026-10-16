@@ -24,6 +24,7 @@ use std::str::FromStr;
 use serde::de::DeserializeOwned;
 use serde::de::Error as DeError;
 use serde::de::IgnoredAny;
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
@@ -49,9 +50,9 @@ pub type RequestId = Uuid;
 /// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 12 条命令，顺序
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
-/// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧只有
-/// `{ workspaceAlias, agentId }`（`exportId`/`templateParams` 是跨节点 Export 概念，见
-/// `docs/SYNC_PROTOCOL.md` §11.5）。
+/// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
+/// `{ agentId, workspaceAlias | workspacePath（恰好一个） }`（`exportId`/`templateParams` 是跨节点
+/// Export 概念，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandName {
     /// `session.list`
@@ -257,20 +258,93 @@ impl<'de> Deserialize<'de> for CommandState {
 #[serde(deny_unknown_fields)]
 pub struct SessionList {}
 
-/// `sessionCreate`（`command.schema.json#/$defs/sessionCreate`）的 `payload`：
-/// `{ workspaceAlias, agentId }`。
+/// `sessionCreate`（`command.schema.json#/$defs/sessionCreate`）的 `payload`。
 ///
-/// 两个字段都是**引用**：workspace 别名对应本机 `owned_workspace` 已登记的行，`agentId` 对应本机
-/// 已配置的 Agent profile。规范化路径、目录追加、MCP 配置与凭据都不在 wire 上，因此
-/// `deny_unknown_fields` 会把 `cwd`/`exportId`/`templateParams` 之类的键直接拒成
-/// [`ValueError::Shape`]——与 schema 的 `additionalProperties: false` 同口径。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// schema 要求 `agentId` 必填，且 `workspaceAlias` 与 `workspacePath` **恰好出现一个**（`oneOf`）；
+/// 目录来源是 [`SessionCreateWorkspace`] 的二选一，因此"两个都给"或"都不给"在构造与反序列化两侧
+/// 都不可能成立。
+///
+/// `workspaceAlias` 对应本机 `owned_workspace` 已登记的行，`workspacePath` 是客户端提供的绝对
+/// 目录（浏览器拿不到宿主路径，因此这一来源就是一次文本输入），`agentId` 对应本机已配置的 Agent
+/// profile。规范化路径、目录追加、MCP 配置与凭据都不在 wire 上，因此 `deny_unknown_fields` 会把
+/// `cwd`/`exportId`/`templateParams` 之类的键直接拒成 [`ValueError::Shape`]——与 schema 的
+/// `additionalProperties: false` 同口径。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCreate {
-    #[serde(rename = "workspaceAlias")]
-    pub workspace_alias: NonEmptyText<128>,
-    #[serde(rename = "agentId")]
     pub agent_id: NonEmptyText<128>,
+    pub workspace: SessionCreateWorkspace,
+}
+
+/// `session.create` 的目录来源：本机已登记别名或客户端提供的绝对路径，**恰好一个**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionCreateWorkspace {
+    /// `workspaceAlias`：本机已登记 workspace 的别名（schema 的 `maxLength: 128`）。
+    Alias(NonEmptyText<128>),
+    /// `workspacePath`：客户端提供的**绝对**路径（schema 的 `maxLength: 4096`）。本机校验它存在、
+    /// 是目录，并以 `canonicalize` 的结果为权威值；形状校验与解析失败由本机用例分类，不在本层判定。
+    Path(NonEmptyText<4096>),
+}
+
+impl Serialize for SessionCreate {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("agentId", &self.agent_id)?;
+        match &self.workspace {
+            SessionCreateWorkspace::Alias(alias) => map.serialize_entry("workspaceAlias", alias)?,
+            SessionCreateWorkspace::Path(path) => map.serialize_entry("workspacePath", path)?,
+        }
+        map.end()
+    }
+}
+
+/// [`SessionCreate`] 的反序列化中间形态：两个目录键都声明为可缺失的 `Option`，由
+/// [`TryFrom`] 把"恰好一个"这条 `oneOf` 钉死。键存在但为 `null` 必须被拒（它们不是可空字段），
+/// 因此用 [`deserialize_optional_non_null`] 而不是裸 `Option`。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSessionCreate {
+    #[serde(rename = "agentId")]
+    agent_id: NonEmptyText<128>,
+    #[serde(
+        rename = "workspaceAlias",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    workspace_alias: Option<NonEmptyText<128>>,
+    #[serde(
+        rename = "workspacePath",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    workspace_path: Option<NonEmptyText<4096>>,
+}
+
+impl TryFrom<RawSessionCreate> for SessionCreate {
+    type Error = ValueError;
+
+    fn try_from(raw: RawSessionCreate) -> Result<Self, Self::Error> {
+        let workspace = match (raw.workspace_alias, raw.workspace_path) {
+            (Some(alias), None) => SessionCreateWorkspace::Alias(alias),
+            (None, Some(path)) => SessionCreateWorkspace::Path(path),
+            _ => {
+                return Err(ValueError::Shape {
+                    field: "payload",
+                    expected: "workspaceAlias 与 workspacePath 必须恰好给出一个（command.schema.json#/$defs/sessionCreate 的 oneOf）",
+                });
+            }
+        };
+        Ok(Self {
+            agent_id: raw.agent_id,
+            workspace,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionCreate {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = RawSessionCreate::deserialize(deserializer)?;
+        Self::try_from(raw).map_err(DeError::custom)
+    }
 }
 
 /// `session.read.payload.include` 的元素（schema 的 `items.enum`）。
@@ -719,7 +793,7 @@ impl CommandPayload {
             }
             CommandName::SessionCreate => parse_payload(
                 payload,
-                "{ workspaceAlias, agentId }（sessionCreate 的 payload）",
+                "{ agentId, workspaceAlias | workspacePath（恰好一个） }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
             CommandName::SessionRead => parse_payload(
@@ -1340,38 +1414,71 @@ mod tests {
     }
 
     #[test]
-    fn session_create_accepts_only_the_two_registered_references() {
-        let command: Command = serde_json::from_str(&body(
+    fn session_create_accepts_exactly_one_directory_source_plus_agent() {
+        // 别名来源。
+        let by_alias: Command = serde_json::from_str(&body(
             "session.create",
             "",
             r#"{"workspaceAlias":"work-api","agentId":"claude-code"}"#,
         ))
-        .expect("两个引用都在时必须接受");
+        .expect("别名 + agentId 必须接受");
         assert_eq!(
-            command.payload,
+            by_alias.payload,
             CommandPayload::SessionCreate(SessionCreate {
-                workspace_alias: NonEmptyText::parse("work-api").expect("非空"),
                 agent_id: NonEmptyText::parse("claude-code").expect("非空"),
+                workspace: SessionCreateWorkspace::Alias(
+                    NonEmptyText::parse("work-api").expect("非空")
+                ),
+            })
+        );
+
+        // 客户端提供的绝对路径来源。
+        let by_path: Command = serde_json::from_str(&body(
+            "session.create",
+            "",
+            r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api"}"#,
+        ))
+        .expect("绝对路径 + agentId 必须接受");
+        assert_eq!(
+            by_path.payload,
+            CommandPayload::SessionCreate(SessionCreate {
+                agent_id: NonEmptyText::parse("claude-code").expect("非空"),
+                workspace: SessionCreateWorkspace::Path(
+                    NonEmptyText::parse("/home/dev/projects/work-api").expect("非空")
+                ),
             })
         );
 
         for rejected in [
-            // 路径与目录追加不是授权输入（SECURITY_DESIGN.md §12.3）。
+            // oneOf：两个目录键都给或都不给都必须被拒。
+            r#"{"agentId":"claude-code","workspaceAlias":"work-api","workspacePath":"/home/dev/projects/work-api"}"#,
+            r#"{"agentId":"claude-code"}"#,
+            // 目录键可缺失但不可为 null（它们不是可空字段）。
+            r#"{"agentId":"claude-code","workspaceAlias":null}"#,
+            r#"{"agentId":"claude-code","workspacePath":null}"#,
+            // cwd 与目录追加不是授权输入（SECURITY_DESIGN.md §12.3）。
             r#"{"workspaceAlias":"work-api","agentId":"claude-code","cwd":"C:\\repo"}"#,
             // 跨节点 Export 概念在 Sync 面不存在。
             r#"{"workspaceAlias":"work-api","agentId":"claude-code","exportId":"export-laptop-zed"}"#,
             r#"{"workspaceAlias":"work-api","agentId":"claude-code","templateParams":{}}"#,
             // 凭据与 MCP 配置同样不进入 wire。
             r#"{"workspaceAlias":"work-api","agentId":"claude-code","mcpServers":{}}"#,
-            // 两个键都必需，空串不满足取值域。
-            r#"{"workspaceAlias":"work-api"}"#,
+            // 空串不满足取值域；agentId 必填。
             r#"{"workspaceAlias":"","agentId":"claude-code"}"#,
+            r#"{"workspacePath":"","agentId":"claude-code"}"#,
+            r#"{"workspaceAlias":"work-api"}"#,
         ] {
             assert!(
                 serde_json::from_str::<Command>(&body("session.create", "", rejected)).is_err(),
                 "payload 必须被拒：{rejected}"
             );
         }
+
+        // 手写 `Serialize` 必须回到 wire 形状（`payload` 是 `untagged` 枚举的一支）。
+        assert_eq!(
+            serde_json::to_string(&by_path.payload).expect("必须可序列化"),
+            r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api"}"#
+        );
 
         // 顶层 sessionId 由 `additionalProperties: false` 拒绝（不是被静默忽略）。
         let with_session = format!(

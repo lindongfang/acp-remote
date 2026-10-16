@@ -22,9 +22,19 @@ use sync_protocol::sync;
 const FIXTURE_ROOT: &str = "fixtures/sync/v1/";
 const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 
-const EXPECTED_VALID_MESSAGE_CASES: usize = 93;
+/// `manifest.json` 中 WSS 消息（`schema` 指向 `message.schema.json`）且 `valid: true` 的用例数。
+///
+/// 来源：`fixtures/sync/v1/manifest.json` 的 `cases`。WP6（`pairing-model`）新增 1 条合法
+/// `session.create` 夹具（`valid/command-session-create-workspace-path.json`），故由 93 变为 94。
+const EXPECTED_VALID_MESSAGE_CASES: usize = 94;
+/// 同一集合中 `valid: false` 且由**信封层**拒绝的用例数（`every_manifest_case_behaves_as_declared`
+/// 只显式登记 `invalid/ping-without-connection.json` 与 `invalid/sequence-is-number.json` 两条，
+/// 其余非法 WSS 用例都落在 body 类型化层）。
 const EXPECTED_ENVELOPE_REJECTED: usize = 2;
-const EXPECTED_BODY_REJECTED: usize = 24;
+/// 同一集合中 `valid: false` 且在 body 类型化层被拒的用例数。WP6（`pairing-model`）新增 2 条非法
+/// `session.create` 夹具（`invalid/command-session-create-with-both-workspace-keys.json`、
+/// `invalid/command-session-create-without-workspace.json`），故由 24 变为 26。
+const EXPECTED_BODY_REJECTED: usize = 26;
 /// 非 WSS 的 HTTPS 载荷（配对）用例数；它们由 `tests/pairing_fixtures.rs` 覆盖。
 const EXPECTED_SKIPPED_PAIRING: usize = 5;
 /// 只针对某个 **子模式**（`schemaPointer`）的载荷用例：它们不是一条完整的 WSS 消息，因此不经过

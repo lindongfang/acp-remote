@@ -2,6 +2,7 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 `node-link-client`（含出站重连管理器）与 Access facade 仍待落地。  
 > 版本：1.0  
+> 修订记录（2026-10-16，`pairing-model`）：**删除节点配对的短验证码**——§9.2 的 domain 表与 §9.4 的字段集合删除 `acp-remote/node-link-pairing-sas/v1` 一行与 SAS 计算规则，§8.2 与 §13.2 的确认仪式去掉 SAS（本机界面仍显示节点名、类型、指纹与待授予的 `grant.*`），机器资产（`compatibility/transcripts/v1/transcripts.json` 与节点侧固定向量）同步删除。**设备方向不再有授权维度**——§3.4 与 §10 的措辞收窄为「设备通过认证即可执行本节点命令」，`pack.*`/`preset.*` 两类词汇（设备授权包与配对预设）删除，跨节点导出授权 `grant.*`、Export `scopes` 与 Import `grants` 边界不变。Node Link 面的这次修订**不改 wire**：本节列出的都是节点配对仪式与词汇表口径，消息形状、握手、catalog、resource、command 与 `fixtures/node-link/v1/` 的其余向量不变（仅删除 `transcripts/pairing-sas.json` 与 `manifest.json` 的对应条目；§12.7 的 `session.create` 仍只接受 `workspaceAlias`、请求不得携带任意 Owner 路径）。  
 > 修订记录（2026-10-12，文档登记，无 wire 变更，`pwa-conversation-ui` 变更）：§12.7 与 §17 登记「Node Link 面无结构化历史」这一**尚未实现**的已知缺口——本次变更将在 Sync 面新增历史条目读取（`session.read` 的 `history` include 与 `beforeHistory` 游标，与它同批落地），该读取只在 Sync 面生效，本面不登记对应的 feature，经本面展示的 imported 会话在客户端侧对结构化历史显式降级。wire schema、消息族、错误码登记、§11.3 feature 表与 `fixtures/node-link/v1/` 均不变。  
 > 修订记录（2026-09-27，v1 内合同修订，未实现未发布，`node-trust-export-ids` 变更）：§8.2 的信任记录新增 `exportIds`（按节点收窄可见 Export 的白名单）——可见性三条件、清单只能收窄、`export.revoke` 不级联清理清单条目、只在配对确认时填报（无配对后修改入口，属已知限制）、v3 及更早的库升级到 v4 后既有节点行清单为空（不得默认放权）。Node Link wire 与 fixture 不变：`exportIds` 不进握手/catalog/resource/command，消息形状与错误码登记均未动；并写明重新配对（同一 `nodeId` 再次经 `node.pair.begin`/claim/`node.pair.confirm` 落定，含密钥变化后的重新配对）在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效；并明确该关闭与 `node.revoke` 的**语义与关闭码不同**：重新配对**不**推送 `node.trust.revoked`、以 `1000`（正常关闭）关闭并给出说明「信任已重新确认、请重连以重取 catalog」的 close reason，因此 §15 的「撤销即停」不适用、该节点仍按 §15 自动重连；只有 `node.revoke` 才推送 `node.trust.revoked` 并以 `4410` 关闭、停止重连。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
@@ -27,7 +28,7 @@ Node Link 不等于：
 
 本文是 Node Link 语义、不变量与 **v1 wire 标准**的权威来源：§2 冻结传输、信封、版本协商与 limits，§9 冻结节点专属 transcript，§12 冻结全部消息体，§13 冻结节点配对 HTTP，§14 冻结错误码与 close code。机器表达位于 [`schemas/node-link/v1/`](../schemas/node-link/v1/)，固定向量位于 [`fixtures/node-link/v1/`](../fixtures/node-link/v1/)；三者不一致时必须先修正文档与资产，不能任选其一。
 
-命令名、pack、preset、grant 与 Owner 本地管理能力的唯一来源是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json)；授权分级的权威表是 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2。本文只引用这些名字，不重新定义。
+命令名、grant 与 Owner 本地管理能力的唯一来源是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json)；授权分级的权威表是 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2。本文只引用这些名字，不重新定义。
 
 本文不定义 ACP 本身、Broker 领域模型、SQLite schema、UI 组件或 Sync wire。Sync 由 [`SYNC_PROTOCOL.md`](./SYNC_PROTOCOL.md) 独立定义，两套协议不共享 DTO；两者只在命令名、授权词汇和 ACP 语义上对齐。
 
@@ -155,7 +156,7 @@ Node Link 不依赖 TLS 提供的节点身份：TLS 只保护传输，节点身�
 
 ### 3.4 Client
 
-连接某个节点的调用方，包括 Zed、CLI、PWA、手机 App、桌面 App 或其他 ACP Client。设备形态不再决定产品权限，权限由 principal、scope、export policy 和会话状态决定。
+连接某个节点的调用方，包括 Zed、CLI、PWA、手机 App、桌面 App 或其他 ACP Client。设备形态不决定产品权限：本节点自己的设备通过认证即可执行命令（设备方向没有授权维度），跨节点的能力由 Export policy 与 `grant.*` 的交集决定。
 
 ### 3.5 Export / Import
 
@@ -259,7 +260,7 @@ Node Identity 与 PWA Device Identity 是不同用途的长期身份：
 
 ### 8.2 长期配对
 
-两个节点首次通过二维码或一次性配对码建立信任（§13），用户在 Owner Node 本地确认 Node 名称、指纹、SAS、Export 与初始 `grant.*`。后续连接执行双向 challenge-response（§12.2、§9.4），不重复扫码。
+两个节点首次通过二维码或一次性配对码建立信任（§13），用户在 Owner Node 本地确认 Node 名称、节点类型、指纹、Export 与初始 `grant.*`（不再显示短验证码，理由见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）。后续连接执行双向 challenge-response（§12.2、§9.4），不重复扫码。
 
 配对结果是一条 Owner 侧信任记录：
 
@@ -317,7 +318,6 @@ Node Link 的 `fieldTag` 表**独立于** `SYNC_PROTOCOL.md` §6.3 的全局表�
 |---|---|---|
 | 配对 claim 证明 | `acp-remote/node-link-pairing-proof/v1` | HMAC-SHA256（key = `pairingSecret`） |
 | 配对 Owner 证明 | `acp-remote/node-link-pairing-owner-proof/v1` | ECDSA，Owner Node Identity Key |
-| 配对短验证码 | `acp-remote/node-link-pairing-sas/v1` | HMAC-SHA256（key = `pairingSecret`） |
 | 配对状态证明 | `acp-remote/node-link-pairing-status/v1` | HMAC-SHA256（key = `pairingSecret`） |
 | 连接节点挑战 | `acp-remote/node-link-challenge/v1` | ECDSA，Owner Node Identity Key |
 | 连接节点证明 | `acp-remote/node-link-proof/v1` | ECDSA，Access Node Identity Key |
@@ -351,13 +351,12 @@ domain 字符串必须逐字节一致；不得通过大小写、尾随 `/` 或�
 |---|---|
 | `node-link-pairing-proof/v1` | `1,2,3,4,5,8,9,14,15` |
 | `node-link-pairing-owner-proof/v1` | `1,2,3,4,7,8,9,10,13` |
-| `node-link-pairing-sas/v1` | `1,2,3,4,7,8,9,10,13` |
 | `node-link-pairing-status/v1` | `1,2,3,4,13,16` |
 | `node-link-challenge/v1` | `1,2,3,6,9,10,11,12` |
 | `node-link-proof/v1` | `1,2,3,6,9,10,11,12` |
 
 - `node-link-challenge/v1` 与 `node-link-proof/v1` 字段集合相同但 domain 不同，且分别由 Owner 与 Access 的密钥签名，避免签名跨角色复用。
-- 配对 SAS 计算为 `node-link-pairing-sas/v1` transcript 的 HMAC-SHA256 输出前 4 bytes 按 u32be 解释后 `% 1_000_000`，左侧补零为 6 位十进制数；双方各自计算并显示，Owner 不得把其中一方算出的 SAS 当作另一方的结果下发。
+- 本表**不含短验证码 domain**：节点配对不派生、不下发也不显示 SAS（信任锚与理由见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）。
 - HMAC 比较必须使用 constant-time compare；`accessPublicKey`/`ownerPublicKey` 必须先验证为曲线上的非无穷点。
 - 不允许省略本表登记的字段，也不允许加入未登记字段；验证方先检查长度与类型，再执行密码学操作。
 
@@ -365,7 +364,7 @@ domain 字符串必须逐字节一致；不得通过大小写、尾随 `/` 或�
 
 跨语言固定向量位于 [`fixtures/node-link/v1/transcripts/`](../fixtures/node-link/v1/transcripts/)，每个 domain 一份，包含 `input`、`expected.transcriptBase64url`、`expected.transcriptSha256Hex`，并按证明方式附带 `expected.hmacKeyBase64url`/`hmacSha256` 或 `expected.publicKey`/`p1363Signature`。测试私钥仅用于公开 fixture，不得用于真实节点。
 
-`fixtures/node-link/v1/manifest.json` 的 `transcriptVectors` 是这六份向量的路径清单；没有共享 fixture 不得宣称 Rust/WebCrypto 互操作完成。
+`fixtures/node-link/v1/manifest.json` 的 `transcriptVectors` 是这五份向量的路径清单；没有共享 fixture 不得宣称 Rust/WebCrypto 互操作完成。
 
 ## 10. Export Policy
 
@@ -410,7 +409,7 @@ createdAt / revokedAt
 | `grant.remote-work` | `session.create`、`session.resume` |
 
 - `grant.interact` 不含审批：审批必须显式给 `grant.approve`。
-- 设备配对分组使用 `pack.*`，预录用 `preset.*`（`preset.remote-control` = `pack.observe` + `pack.interact` + `pack.configure-session` + `pack.approve`；`preset.read-only` = `pack.observe`）。命令、pack、grant 的完整对应关系与 `local.*` 本地管理能力见 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2。
+- 授权词汇只有跨节点导出授权 `grant.*`：设备授权包 `pack.*` 与配对预设 `preset.*` 已随设备权限层删除（设备配对不授予授权，设备记录与 wire 都不带任何授权集合）。命令与 grant 的完整对应关系与 `local.*` 本地管理能力见 [`SECURITY_DESIGN.md`](./SECURITY_DESIGN.md) §10.2。
 - Export 的创建、修改与撤销属于 Owner 本地管理能力 `local.export.manage`，永不远程授予：Access Node 不能通过 Node Link 修改自己的 scopes 或 Export 定义。
 - 设备类型不是授权依据。手机、电脑和 Zed 背后的 Access Node 都可以获得不同 grant 组合。Node Link 首个纵向切片必须实现 `grant.remote-work` 所需的 `session.create`，以便 Access Node 的 ACP facade 正确处理 Zed `session/new`；PWA UI 首版可以不展示创建入口。
 
@@ -797,7 +796,7 @@ Owner 必须原子检查 pairing 存在、未过期、仍为 `created`、`endpoi
 ```
 
 - `ownerProof` 是 Owner 对 `node-link-pairing-owner-proof/v1` transcript 的签名，Access 用二维码中固定的 `ownerPublicKey` 验证。
-- 双方各自计算并显示 SAS（§9.4）；Owner 本地界面必须显示同一个 SAS、`nodeName`、`nodeKind` 与待授予的 `grant.*`。
+- 节点配对不派生也不显示短验证码（信任锚是二维码带外携带的 Owner 公钥、一次性配对秘密与认领 HMAC，理由见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）；Owner 本地界面必须显示 `nodeName`、`nodeKind`、指纹与待授予的 `grant.*`，由本机用户确认。
 - HMAC 与签名比较失败返回 `401`，且响应不得泄露具体校验差异。
 
 ### 13.3 状态确认

@@ -59,6 +59,10 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
             .await
             .expect("回退 owned_session 的恢复列");
     }
+    sqlx::query("ALTER TABLE owned_device ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]'")
+        .execute(&pool)
+        .await
+        .expect("把 owned_device 补回 v8 之前就有的 scopes_json（v8 段只删这一列）");
     sqlx::query("PRAGMA user_version = 4")
         .execute(&pool)
         .await

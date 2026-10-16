@@ -251,7 +251,6 @@ describe("R15 目录数据只来自快照", () => {
       kind: "authenticated",
       info: {
         deviceId: "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
-        scopes: ["session.list", "session.read", "session.create"],
         serverEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13",
         headGlobalSequence: "10",
         heartbeatIntervalMs: 30000,
@@ -263,7 +262,7 @@ describe("R15 目录数据只来自快照", () => {
       },
     });
 
-    const outcome = store.submitCreateSession({ workspaceAlias: "work-api", agentId: "claude" });
+    const outcome = store.submitCreateSession({ directoryAlias: "work-api", agentId: "claude" });
 
     expect(outcome.ok).toBe(true);
     expect(gateway.dispatches).toHaveLength(1);

@@ -277,32 +277,6 @@ impl fmt::Debug for PairingSecret {
     }
 }
 
-/// 6 位十进制短验证码（`docs/SYNC_PROTOCOL.md` §7.2）。
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Sas(String);
-
-impl Sas {
-    /// 由 HMAC-SHA256 输出前 4 字节（大端 u32）对 1,000,000 取模、左补零为 6 位十进制派生。
-    pub fn from_hmac_output(output: &[u8]) -> Result<Self, TranscriptError> {
-        let head: [u8; 4] = output
-            .get(..4)
-            .and_then(|bytes| bytes.try_into().ok())
-            .ok_or(TranscriptError::Base64Url("sas"))?;
-        Ok(Self(format!("{:06}", u32::from_be_bytes(head) % 1_000_000)))
-    }
-
-    /// 文本（6 位十进制）。
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for Sas {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 /// `clientKind`（`docs/SYNC_PROTOCOL.md` §6.3 的 4 个取值）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ClientKind {
@@ -396,10 +370,13 @@ impl PairingSpec {
     }
 }
 
-/// 配对上请求的集合：设备侧只允许 `scopes`，节点侧只允许 `grants`。
+/// 配对上请求的集合：设备侧不带任何集合，节点侧只允许 `grants`。
+///
+/// 设备不再有授权维度（`pairing-model` 删除设备权限层），因此设备方向提交任何集合字段
+/// ——无论是 `scopes` 还是 `grants`——都属于方向错误，必须被拒绝。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RequestedCapabilities {
-    /// 请求的 scope（仅设备配对）。
+    /// 请求的 scope（任何方向都必须为空：设备没有授权维度、节点只带 grant）。
     pub scopes: ScopeSet,
     /// 请求的 grant（仅节点配对）。
     pub grants: GrantSet,
@@ -416,10 +393,10 @@ impl RequestedCapabilities {
         self.scopes.is_empty() && self.grants.is_empty()
     }
 
-    /// 与目标族是否一致（设备不得带 grants、节点不得带 scopes）。
+    /// 与目标族是否一致：设备不得带任何集合，节点不得带 scopes。
     pub fn matches_target(&self, target: PairingTarget) -> bool {
         match target {
-            PairingTarget::Device => self.grants.is_empty(),
+            PairingTarget::Device => self.scopes.is_empty() && self.grants.is_empty(),
             PairingTarget::Node => self.scopes.is_empty(),
         }
     }
@@ -436,16 +413,16 @@ impl RequestedCapabilities {
     }
 }
 
-/// 配对的创建结果：待落库的记录草稿 + 只在内存的 secret 与其派生 SAS 需要的本机值。
+/// 配对的创建结果：待落库的记录草稿 + 只在内存的 secret 与本机配对材料。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingDraft {
     /// 状态为 `created` 的配对记录草稿（含 digest、绑定与过期时间）。
     pub record: PairingRecord,
     /// pairing secret 明文（只在内存；落库只有 [`PairingDraft::record`] 的 digest）。
     pub secret: PairingSecret,
-    /// 本机在配对期内使用的 server nonce（SAS transcript 字段 `serverNonce`）。
+    /// 本机在配对期内使用的 server nonce（claim 响应与 Owner 证明的字段 `serverNonce`）。
     pub server_nonce: Nonce,
-    /// 本机为该配对生成的请求标识（SAS transcript 字段 `pairingRequestId`）。
+    /// 本机为该配对生成的请求标识（claim 响应与状态查询共用）。
     pub pairing_request_id: PairingRequestId,
 }
 
@@ -468,9 +445,9 @@ pub struct PairingRequestMaterial {
 pub enum PairingDecision {
     /// 批准：`granted_*` 是用户确认的最终集合。
     Approve {
-        /// 最终 scope（仅设备配对）。
+        /// 最终 scope（必须为空：设备没有授权维度、节点只带 grant）。
         granted_scopes: ScopeSet,
-        /// 最终 grant（仅节点配对）。
+        /// 最终 grant（仅节点配对，且不得超过登记与请求值）。
         granted_grants: GrantSet,
     },
     /// 拒绝：可选简短原因（≤256 字符）。
@@ -672,9 +649,7 @@ pub struct PeerTrust {
     pub host_binding: Option<String>,
     /// 该对端在本机的节点角色（`NodeRecord.kind`；设备侧为 `None`）。
     pub node_kind: Option<NodeKind>,
-    /// 设备侧当前 scope。
-    pub scopes: ScopeSet,
-    /// 节点侧当前 grant。
+    /// 节点侧当前 grant（设备侧没有授权维度，因此没有对应的集合字段）。
     pub grants: GrantSet,
 }
 
@@ -687,7 +662,6 @@ impl PeerTrust {
             credential: CredentialStatus::Unknown,
             host_binding: None,
             node_kind: None,
-            scopes: ScopeSet::empty(),
             grants: GrantSet::empty(),
         }
     }
@@ -696,12 +670,10 @@ impl PeerTrust {
 /// 交给 core 的已验证事实。core 只消费它，不重新验证签名，也不据此跳过授权判定。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityFact {
-    /// 设备主体及其 scope。
+    /// 设备主体（没有授权集合：通过认证的设备可执行任何命令）。
     Device {
         /// 设备标识。
         device: DeviceId,
-        /// 该设备的 scope（最新持久记录的展开结果）。
-        scopes: ScopeSet,
     },
     /// 节点主体及其 grant。
     Node {
@@ -768,7 +740,7 @@ pub enum HandshakeFailureClass {
 
 /// 配对状态查询可对外展示的视图（设备/节点共用的形状）。
 ///
-/// `created` 阶段只允许暴露状态与过期时间：对端标识、名称、指纹、SAS 与请求集合都必须为 `None`
+/// `created` 阶段只允许暴露状态与过期时间：对端标识、名称、指纹与请求集合都必须为 `None`
 /// （`docs/SYNC_PROTOCOL.md` §7.0；`docs/LOCAL_ADMIN_PROTOCOL.md` §5.3/§5.4）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingStatusView {
@@ -778,8 +750,6 @@ pub struct PairingStatusView {
     pub display_name: Option<String>,
     /// 对端公钥指纹（认领后才有）。
     pub public_key_fingerprint: Option<Fingerprint>,
-    /// 6 位 SAS（认领后才有，且由调用方传入而不由本层计算对端结果）。
-    pub sas: Option<Sas>,
     /// 请求集合（认领后才有）。
     pub requested: Option<RequestedCapabilities>,
     /// 对端身份（认领后才有）。

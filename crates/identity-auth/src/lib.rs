@@ -9,7 +9,7 @@
 //! - **transcript 只有一份实现**：domain 与 field tag 表来自 `sync-protocol` / `node-link-protocol`
 //!   的 `DOMAINS`，编解码来自叶子 crate `acpr-transcript`；本 crate 不复制常量、不手拼字节。
 //!
-//! 模块划分：`types`（值对象与事实）、`transcript`（12 个 domain 的输入与编解码/验签/HMAC 入口）、
+//! 模块划分：`types`（值对象与事实）、`transcript`（10 个 domain 的输入与编解码/验签/HMAC 入口）、
 //! `pairing`（配对状态机）、`handshake`（逐连接挑战-证明）、`authorization`（授权词表展开）、
 //! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、挑战缓存、失败计数）。
 
@@ -44,9 +44,8 @@ pub use port::{
 pub use state::MAX_CHALLENGES;
 pub use transcript::{
     FeatureList, NodeLinkChallenge, NodeLinkPairingOwnerProof, NodeLinkPairingProof,
-    NodeLinkPairingSas, NodeLinkPairingStatus, NodeLinkProof, SyncDeviceProof, SyncHostChallenge,
-    SyncPairingHostProof, SyncPairingProof, SyncPairingSas, SyncPairingStatus, derive_sas,
-    timestamp_from_unix_seconds,
+    NodeLinkPairingStatus, NodeLinkProof, SyncDeviceProof, SyncHostChallenge, SyncPairingHostProof,
+    SyncPairingProof, SyncPairingStatus, timestamp_from_unix_seconds,
 };
 pub use types::{
     Authenticated, CHALLENGE_TTL_SECONDS, CanonicalOrigin, ChallengeId, ClaimFailureClass,
@@ -55,5 +54,5 @@ pub use types::{
     HandshakeFailureClass, IdentityFact, NodeEndpoint, P1363Signature, PAIRING_MAX_FAILURES,
     PAIRING_MAX_SECONDS, PROTOCOL_VERSION, PairingDecision, PairingDraft, PairingProof,
     PairingRequestId, PairingRequestMaterial, PairingSecret, PairingSpec, PairingStatusView,
-    PeerTrust, RequestedCapabilities, Sas,
+    PeerTrust, RequestedCapabilities,
 };

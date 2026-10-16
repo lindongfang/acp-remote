@@ -1,14 +1,17 @@
 /**
- * 新建会话弹层（R16「会话创建是受限入口」）。
+ * 新建会话弹层（R16）。
  *
- * ## 四条 MUST 的渲染落点
+ * ## MUST 的渲染落点
  *
- * 1. **载荷只含两个引用**：本组件没有路径、MCP 配置、凭据的任何输入框；Agent 候选来自
- *    `model.agents`（本机已配置的 Agent 目录），不是自由文本。
- * 2. **无权限时入口不可用且说明原因**：`data-create-permission="denied"` 的分支**照常渲染
- *    提交按钮**（`disabled`）并把说明摆在旁边——只隐藏按钮不作说明是不允许的。
- * 3. **创建中与终态分别呈现**：`creating` 分支显示「创建中」且按钮禁用（不接受重复提交）。
- * 4. **结果不确定显眼且不被自动消解**：`uncertain` 分支是一个独立的、醒目的区块，
+ * 1. **载荷只含 `agentId` 与一个目录引用**：本组件没有凭据、MCP 配置的输入框；Agent 候选来自
+ *    `model.agents`（本机已配置的 Agent 目录），不是自由文本。目录既可以用本目录的已登记别名
+ *    （输入框留空），也允许用户直接输入电脑上的绝对目录（`workspacePath`）。
+ * 2. **入口恒可用**：设备不再有创建会话的权限维度，因此这里**没有**任何权限门控，也不再出现
+ *    「需要由电脑端授予」类说明。副作用说明照常呈现（{@link create-session-model 的 CREATE_EFFECT_NOTE}）。
+ * 3. **目录失败要有可理解的中文说明**：提示与失败原因都摆在输入框与提交状态旁；提示 MUST NOT
+ *    声称服务端会拦截敏感目录。
+ * 4. **创建中与终态分别呈现**：`creating` 分支显示「创建中」且按钮禁用（不接受重复提交）。
+ * 5. **结果不确定显眼且不被自动消解**：`uncertain` 分支是一个独立的、醒目的区块，
  *    它只由用户点击「我知道了」才消失。
  *
  * 迁移到 RNW 原语（`design.md` D1）：`View`/`Text`/`Pressable` + `StyleSheet`。可点控件一律
@@ -16,6 +19,7 @@
  * `role="list"`/`role="listitem"` 补回；所有 `data-*` 属性名与取值原样经 `dataSet` 进 DOM。
  */
 
+import { useState } from "react";
 import type { ReactElement } from "react";
 import type { TextProps } from "react-native";
 
@@ -23,14 +27,32 @@ import type { CreateSessionEntryModel, CreateSubmissionModel } from "../features
 import { isSubmissionAvailable } from "../features/create-session-model";
 import { UNKNOWN_CONNECTION_LABEL } from "../domain";
 import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  fontFamily,
+  fontSize,
+  palettes,
+  radius,
+  spacing,
+  useTheme,
+} from "./theme";
+
+/** 提交时要带上的两样东西：选中的 Agent，与用户输入的目录（留空表示用本目录别名）。 */
+export interface CreateSessionSubmit {
+  readonly agentId: string;
+  readonly directoryPath: string;
+}
 
 export interface CreateSessionSheetProps {
   readonly model: CreateSessionEntryModel;
   /** 当前选中的 Agent 标识；`null` 表示尚未选择（此时不允许提交）。 */
   readonly selectedAgentId: string | null;
   readonly onSelectAgent: (agentId: string) => void;
-  readonly onSubmit: (agentId: string) => void;
+  readonly onSubmit: (input: CreateSessionSubmit) => void;
   readonly onDismissUncertain: () => void;
   readonly onClose: () => void;
 }
@@ -90,13 +112,30 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    denied: {
-      padding: spacing.sm,
-      borderRadius: radius.sm,
-      backgroundColor: colors.warnSoft,
-      color: colors.warn,
+    field: {
+      gap: spacing.xs,
+    },
+    fieldLabel: {
+      color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      fontWeight: "600",
+    },
+    input: {
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.line2,
+      backgroundColor: colors.panel2,
+      color: colors.ink,
+      fontFamily: fontFamily.mono,
+      fontSize: fontSize.sm,
+    },
+    hint: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
     },
     options: {
       gap: spacing.xs,
@@ -291,14 +330,17 @@ export function CreateSessionSheet({
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  const denied = model.permission.kind === "denied";
-  const disabled = denied || selectedAgentId === null || !isSubmissionAvailable(model.submission);
+  /**
+   * 用户输入的目录：留空表示「就用本目录的已登记别名」。这是弹层内部的临时状态——它不跨路由、
+   * 也不参与任何数据判定，因此住在这里而不是 store（弹层每次打开都会重新挂载，状态自然复位）。
+   */
+  const [directoryPath, setDirectoryPath] = useState("");
+
+  // 入口**没有**权限判断：只有「还没选 Agent」与「正在提交/已接受」两个理由会让按钮不可点。
+  const disabled = selectedAgentId === null || !isSubmissionAvailable(model.submission);
 
   return (
-    <View
-      style={styles.sheet}
-      dataSet={{ createSheet: model.directoryAlias, createPermission: model.permission.kind }}
-    >
+    <View style={styles.sheet} dataSet={{ createSheet: model.directoryAlias }}>
       <View style={styles.head}>
         <Text {...TITLE_PROPS} style={styles.title} dataSet={{ createSheetTitle: "true" }}>
           {`在「${model.directoryAlias}」里新建会话`}
@@ -308,14 +350,29 @@ export function CreateSessionSheet({
         </Pressable>
       </View>
 
+      {/* 副作用说明**始终**呈现：入口恒可用，因此这句说明不再与任何权限态成对出现。 */}
       <Text style={styles.note} dataSet={{ createNote: "true" }}>
-        {model.permission.note}
+        {model.effectNote}
       </Text>
-      {denied ? (
-        <Text style={styles.denied} dataSet={{ createDeniedReason: "true" }}>
-          {model.permission.reason}
+
+      {/* 目录来源：留空用本目录别名，填写则以客户端提供的绝对目录为准（`workspacePath`）。 */}
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>要使用的目录（可选）</Text>
+        <TextInput
+          value={directoryPath}
+          onChangeText={setDirectoryPath}
+          placeholder="留空使用本目录，或输入电脑上的绝对目录"
+          placeholderTextColor={theme.colors.ink3}
+          accessibilityLabel="要使用的目录"
+          style={styles.input}
+          // `data-create-directory` 是定位输入框的锚点；当前值另存一份，便于断言（受控控件的
+          // value 在 DOM 里只有属性值可读）。
+          dataSet={{ createDirectory: "true", createDirectoryValue: directoryPath }}
+        />
+        <Text style={styles.hint} dataSet={{ createDirectoryHint: "true" }}>
+          {model.directoryHint}
         </Text>
-      ) : null}
+      </View>
 
       <View role="list" style={styles.options} dataSet={{ agentOptions: "true" }}>
         {model.agents.map((agent) => (
@@ -354,14 +411,13 @@ export function CreateSessionSheet({
 
       <Submission submission={model.submission} onDismissUncertain={onDismissUncertain} />
 
-      {/* 无权限时这个按钮照常渲染、只是 `disabled`——「不解释就藏起来」是不允许的。 */}
       <Pressable
         role="button"
         disabled={disabled}
         style={styles.submit}
         dataSet={{ action: "submit-create" }}
         onPress={() => {
-          if (selectedAgentId !== null) onSubmit(selectedAgentId);
+          if (selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath });
         }}
       >
         <Text style={styles.submitText}>创建会话</Text>

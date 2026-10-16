@@ -398,7 +398,7 @@ impl PairingHttp {
         let peer_view = view.peer.as_ref().map(|peer| claimed_pairing(record, peer));
         let state = self
             .authority
-            .pairing_status(record, peer_view.as_ref(), None)
+            .pairing_status(record, peer_view.as_ref())
             .state;
         let status = wire_status(state);
         // ⑤ 证明校验：本机仍持有该配对的 secret 时一律先验 proof（终态也一样），失败 → 401（§13.3）。

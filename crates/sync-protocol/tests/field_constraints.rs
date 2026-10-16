@@ -46,9 +46,9 @@ fn client_hello(client_nonce: &str, supported_features: &str) -> String {
     )
 }
 
-fn authenticated(heartbeat_interval_ms: u64, max_message_bytes: u64, scopes: &str) -> String {
+fn authenticated(heartbeat_interval_ms: u64, max_message_bytes: u64) -> String {
     format!(
-        "{{\"deviceId\":\"{DEVICE_ID}\",\"scopes\":{scopes},\"serverEpoch\":\"{SERVER_EPOCH}\",\"headGlobalSequence\":\"2318\",\"heartbeatIntervalMs\":{heartbeat_interval_ms},\"limits\":{{\"maxMessageBytes\":{max_message_bytes},\"maxPromptBytes\":262144,\"maxReplayEventsPerBatch\":500}}}}"
+        "{{\"deviceId\":\"{DEVICE_ID}\",\"serverEpoch\":\"{SERVER_EPOCH}\",\"headGlobalSequence\":\"2318\",\"heartbeatIntervalMs\":{heartbeat_interval_ms},\"limits\":{{\"maxMessageBytes\":{max_message_bytes},\"maxPromptBytes\":262144,\"maxReplayEventsPerBatch\":500}}}}"
     )
 }
 
@@ -66,7 +66,7 @@ fn heartbeat_interval_bounds_are_enforced() {
         (300_000, true),
         (300_001, false),
     ] {
-        let text = post_auth("auth.authenticated", &authenticated(value, 1_048_576, "[]"));
+        let text = post_auth("auth.authenticated", &authenticated(value, 1_048_576));
         let decoded = decode_body::<auth::Authenticated>(&text);
         assert_eq!(
             decoded.is_ok(),
@@ -79,7 +79,7 @@ fn heartbeat_interval_bounds_are_enforced() {
 #[test]
 fn limits_minimums_are_enforced() {
     for (value, accepted) in [(1023_u64, false), (1024, true)] {
-        let text = post_auth("auth.authenticated", &authenticated(30_000, value, "[]"));
+        let text = post_auth("auth.authenticated", &authenticated(30_000, value));
         assert_eq!(
             decode_body::<auth::Authenticated>(&text).is_ok(),
             accepted,
@@ -89,7 +89,7 @@ fn limits_minimums_are_enforced() {
 
     for value in [0_u64, 1] {
         let body = format!(
-            "{{\"deviceId\":\"{DEVICE_ID}\",\"scopes\":[],\"serverEpoch\":\"{SERVER_EPOCH}\",\"headGlobalSequence\":\"0\",\"heartbeatIntervalMs\":30000,\"limits\":{{\"maxMessageBytes\":1048576,\"maxPromptBytes\":{value},\"maxReplayEventsPerBatch\":{value}}}}}"
+            "{{\"deviceId\":\"{DEVICE_ID}\",\"serverEpoch\":\"{SERVER_EPOCH}\",\"headGlobalSequence\":\"0\",\"heartbeatIntervalMs\":30000,\"limits\":{{\"maxMessageBytes\":1048576,\"maxPromptBytes\":{value},\"maxReplayEventsPerBatch\":{value}}}}}"
         );
         let text = post_auth("auth.authenticated", &body);
         assert_eq!(
@@ -116,34 +116,21 @@ fn protocol_version_minimums_are_enforced() {
 }
 
 #[test]
-fn scopes_reject_duplicates_empty_and_overlong_entries() {
-    let duplicated = post_auth(
-        "auth.authenticated",
-        &authenticated(30_000, 1_048_576, "[\"session.read\",\"session.read\"]"),
-    );
-    assert!(
-        decode_body::<auth::Authenticated>(&duplicated).is_err(),
-        "scopes 的 uniqueItems 必须被执行"
-    );
-
-    let empty = post_auth(
-        "auth.authenticated",
-        &authenticated(30_000, 1_048_576, "[\"\"]"),
-    );
-    assert!(
-        decode_body::<auth::Authenticated>(&empty).is_err(),
-        "scopes 单项 minLength 1 必须被执行"
-    );
-
-    let overlong = format!("[\"{}\"]", "s".repeat(129));
-    let text = post_auth(
-        "auth.authenticated",
-        &authenticated(30_000, 1_048_576, &overlong),
-    );
-    assert!(
-        decode_body::<auth::Authenticated>(&text).is_err(),
-        "scopes 单项 maxLength 128 必须被执行"
-    );
+fn authenticated_body_no_longer_carries_a_device_scope_collection() {
+    // 设备方向没有授权维度（`pairing-model` 删除设备权限层）：认证成功的 body 里 `scopes` 是未知
+    // 字段，必须被拒（`auth.schema.json` 的 `authenticated.body.additionalProperties: false`）。
+    for scopes in ["[]", "[\"session.read\"]"] {
+        let text = post_auth(
+            "auth.authenticated",
+            &format!(
+                "{{\"deviceId\":\"{DEVICE_ID}\",\"scopes\":{scopes},\"serverEpoch\":\"{SERVER_EPOCH}\",\"headGlobalSequence\":\"2318\",\"heartbeatIntervalMs\":30000,\"limits\":{{\"maxMessageBytes\":1048576,\"maxPromptBytes\":262144,\"maxReplayEventsPerBatch\":500}}}}"
+            ),
+        );
+        assert!(
+            decode_body::<auth::Authenticated>(&text).is_err(),
+            "认证响应不得再携带设备 scope 集合（scopes = {scopes}）"
+        );
+    }
 }
 
 #[test]

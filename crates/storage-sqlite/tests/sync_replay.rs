@@ -17,8 +17,8 @@ mod support;
 
 use acp_core::model::{
     Actor, AgentId, AgentRef, CommandKind, DeviceId, Digest, EventKind, EventOrigin, EventPayload,
-    EventType, GlobalCursor, NodeId, OriginEpoch, PendingEvent, PortError, RequestId, ScopeSet,
-    Sequence, SessionId, StoredPolicy, Timestamp, ViewJson,
+    EventType, GlobalCursor, NodeId, OriginEpoch, PendingEvent, PortError, RequestId, Sequence,
+    SessionId, StoredPolicy, Timestamp, ViewJson,
 };
 use acp_core::ports::{
     IdempotencyRecord, NewSession, OwnedCommit, ReplayLimit, SessionStore, StateChange,
@@ -119,10 +119,7 @@ async fn create_session(store: &SqliteStore) -> SessionId {
 /// 一条设备命令行（`actor_kind = 'device'`）。
 fn device_command(session: &SessionId, request: RequestId) -> IdempotencyRecord {
     IdempotencyRecord {
-        actor: Actor::Device {
-            device: device(),
-            scopes: ScopeSet::empty(),
-        },
+        actor: Actor::Device { device: device() },
         request,
         command: "session.prompt".to_owned(),
         kind: CommandKind::Mutation,

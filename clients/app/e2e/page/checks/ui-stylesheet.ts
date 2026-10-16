@@ -56,7 +56,7 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     workspaces: WORKSPACES_WITH_PATHS,
     sessions: sessionsForBothDirectories(),
     agents: AGENTS,
-    scopes: ["session.list", "session.read"],
+    authenticate: true,
     tamperHostProof: false,
     deliverSnapshot: false,
     barrierGlobalSequence: "10",

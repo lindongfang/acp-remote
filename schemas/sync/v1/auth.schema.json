@@ -90,14 +90,10 @@
         "body": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["deviceId", "scopes", "serverEpoch", "headGlobalSequence", "heartbeatIntervalMs", "limits"],
+          "required": ["deviceId", "serverEpoch", "headGlobalSequence", "heartbeatIntervalMs", "limits"],
+          "description": "认证结果只陈述事实与本次连接的参数。设备方向没有授权维度（`pairing-model` 删除设备权限层），因此 body 不再有授权集合字段：通过认证即可执行任何业务命令。",
           "properties": {
             "deviceId": { "$ref": "common.schema.json#/$defs/uuid" },
-            "scopes": {
-              "type": "array",
-              "uniqueItems": true,
-              "items": { "type": "string", "minLength": 1, "maxLength": 128 }
-            },
             "serverEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
             "headGlobalSequence": { "$ref": "common.schema.json#/$defs/decimalString" },
             "heartbeatIntervalMs": { "type": "integer", "minimum": 1000, "maximum": 300000 },

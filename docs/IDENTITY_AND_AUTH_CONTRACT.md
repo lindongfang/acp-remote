@@ -1,6 +1,7 @@
 # ACP Remote 身份与认证合同（`identity-auth`）
 
 > 状态：已定型并已落地（v1）。`identity-auth` 与 `identity-keystore` 两个 crate 均已实现（见 `README.md` 的 crate 表与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.8/§4.12）；本文的入口签名、类型归属与端口形状与实现逐条对应。本合同**没有**合同漂移门禁（`scripts/check-contract-drift.mjs` 只覆盖 `CORE_PORTS_AND_STORAGE.md` §5/§7），因此靠「文档与实现同一变更内改动 + 独立 reviewer 核对 + 常驻测试」维持一致。
+> 版本：0.5（2026-10-16：随 `pairing-model` 删除两套短验证码（SAS）与设备权限层。§4.4 改写为「为什么没有短验证码」；§4.1/§5.1/§6.1 与 §2 的类型清单、依赖矩阵按实现同步：`Sas`、`Authority::pairing_sas`、两个 SAS transcript 域、`expand_device_request`/`expand_pack`/`expand_preset` 与 `PACKS`/`PRESETS` 镜像、`PeerTrust.scopes`、`IdentityFact::Device.scopes`、`PairingStatusView.sas` 全部消失；设备配对的请求集合必须为空）
 > 版本：0.4（2026-09-25：随 `daemon-cli-and-local-admin` 切片 4 在 §7 第 7 条写入本节点 `nodeId` 的派生式与「不存在独立本地 `nodeId` 持久记录」的裁定，并登记「密钥轮换即换 `nodeId`」的代价与 §6.3 的对应关系）
 > 版本：0.3（2026-09-24：随 `identity-auth-and-keystore` 的独立 review 把定型块**对齐实现**。0.2 的「目标形状」里 §4.1 写的是入口直接返回 `PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`，实现改为「入口返回领域值、调用方组装写集」（理由与代价见 §4.1 的定型说明）；同时补 `PeerTrust.host_binding`/`node_kind` 与三个握手入口签名、把 §2 清单里不存在的类型名（`HandshakeCompletion`/`ClaimVerification`/`SettlementRequest`）换成实现名，并把 `PairingTarget` 归回「已有并直接复用」）
 > 版本：0.2（2026-09-24：随 `identity-auth-and-keystore` 实现定型。在 0.1 的首次冻结之上：§2 补充类型归属（`PeerTrust` 当次持久事实快照、`EntropySource`/`EntropyError` 熵源端口），§4.1/§5.1 把入口定型为「结构化字段 + 调用方读到的当次持久事实快照」（状态机自身不访问存储），§7 冻结 keystore 端口最终形状并**删除** `KeyPurpose::DeviceIdentity`）
@@ -33,8 +34,8 @@
 | 长期密钥生成、签名、平台存储 | `identity-keystore`（经 §7 端口） | `identity-auth` 只持不透明 handle |
 | challenge/nonce 生成与一次性校验、proof 验签 | `identity-auth` | §5 |
 | 挑战 nonce、pairing secret 与密钥材料的随机性 | 注入的熵源端口（§7） | §4.3/§5.2/§7；状态机不读系统随机数，也不自研 PRNG |
-| pairing secret 的内存持有、SAS 计算、配对状态机 | `identity-auth` | §4；secret 不落库、不进 keystore |
-| `pack.*`/`preset.*`/`grant.*` → 命令级 scope 展开 | `identity-auth`（`authorization/`） | §6.1；输入形式只在这里出现 |
+| pairing secret 的内存持有、配对状态机 | `identity-auth` | §4；secret 不落库、不进 keystore |
+| `grant.*` → 命令级 scope 展开 | `identity-auth`（`authorization/`） | §6.1；输入形式只在这里出现 |
 | 命令级授权判定与 Export 交集 | `core`（`broker`） | [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §6.5 |
 | 按 IP/连接的认证速率与并发上限 | `server::transport` | [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14 |
 | 单个配对的 proof 失败次数与失效 | `identity-auth` | §4.5；需要配对状态与原子回写 |
@@ -46,9 +47,9 @@
 
 - 已有并直接复用：`Actor`、`DeviceRecord`、`NodeRecord`、`NodeKind`、`PairingRecord`、`PairingState`、`PairingTarget`（纯 token 枚举，不带载荷）、`PairingPeer`、`PairingClaim`、`PairingSettlement`、`PeerIdentity`、`ScopeSet`、`GrantSet`、`Fingerprint`、`Nonce`、`Digest`、`Timestamp`、`AuditAction`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）。`identity-auth` 把其中出现在端口与公开 API 里的类型**如实转出**（`pub use acp_core::model::{…}`），使端口实现方（`identity-keystore`）无需依赖 `core`（§5 依赖矩阵不允许该边）。
 - 已在 `core::model` 落地：`PeerPublicKey`（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）与写集相关 DTO（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §5.3）。节点角色直接复用已有的 `NodeKind`，**不要**新增 `NodeRole`。
-- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`Completion`（收尾入口的返回值：事实 + 时间 + 需要推进为 `consumed` 的配对）、`IdentityFact`、`Authenticated`、`CredentialStatus`、`HandshakeFailure`/`HandshakeFailureClass`、`PairingSpec`（配对目标 + 本机绑定：设备为 canonical origin、节点为 endpoint 与角色）、`PairingDecision`、`PairingDraft`、`PairingRequestId`、`ClaimFields`、`ClaimKindFields`、`ClaimOutcome`、`ClaimRejection`/`ClaimFailureClass`、`ClaimedPairing`、`RequestedCapabilities`、`PairingStatusView`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`Sas`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
+- 只存在于 `identity-auth`（不进 `core::model`）：`ConnectionKind`、`ConnectionBinding`、`ChallengeRequest`、`ChallengeIssue`、`ProofSubmission`、`Completion`（收尾入口的返回值：事实 + 时间 + 需要推进为 `consumed` 的配对）、`IdentityFact`、`Authenticated`、`CredentialStatus`、`HandshakeFailure`/`HandshakeFailureClass`、`PairingSpec`（配对目标 + 本机绑定：设备为 canonical origin、节点为 endpoint 与角色）、`PairingDecision`、`PairingDraft`、`PairingRequestId`、`ClaimFields`、`ClaimKindFields`、`ClaimOutcome`、`ClaimRejection`/`ClaimFailureClass`、`ClaimedPairing`、`RequestedCapabilities`、`PairingStatusView`、`CanonicalOrigin`、`NodeEndpoint`、`PairingSecret`、`ChallengeId`、`P1363Signature`（64 字节 P1363）、`PeerTrust`（调用方读到的当次持久事实快照）、`EntropySource`/`EntropyError`（熵源端口）。
 - 只存在于 `identity-auth`、且与其它 crate 有**同名类型**的（务必按下表指认，不要串用）：`FeatureList`（本 crate 自己实现的连接特性列表；与 `acpr-wire::FeatureList` **不是同一个类型**，依赖矩阵也禁止 `identity-auth` 依赖 `acpr-wire`——§5.1 签名块里的 `FeatureList` 指的就是本 crate 的这一个）、`ClientKind`（与 `sync_protocol::auth::ClientKind` 同名不同物）、`PairingProof`（配对期 HMAC 证明的载荷形状）。
-- 只存在于 `identity-auth` 的**授权词表镜像**：`authorization::{PACKS, PRESETS, GRANTS, LOCAL_CAPABILITIES}`；唯一机器来源仍是 `compatibility/commands/v1/commands.json`（§6.1），镜像由常驻测试逐项断言。
+- 只存在于 `identity-auth` 的**授权词表镜像**：`authorization::{GRANTS, LOCAL_CAPABILITIES}`；唯一机器来源仍是 `compatibility/commands/v1/commands.json`（§6.1），镜像由常驻测试逐项断言。设备方向没有词汇表（设备权限层已删除）：这里不存在设备授权包或配对预设。
 - **由 `identity-auth` 定义、由 `identity-keystore` 实现**的 keystore 端口边界：`KeyPurpose`、`SecretPurpose`、`KeyHandle`、`SecretBytes`、`P1363Signature`、`EntropySource`/`EntropyError`（§7）。定义方是 `identity-auth`——端口 trait 与这些类型都在 `crates/identity-auth/src/port.rs`；`identity-keystore` 只 `use` 端口，不自己定义同名类型（§5 依赖矩阵不允许它依赖 `core`）。
 
 ## 3. 密钥与身份材料
@@ -60,7 +61,7 @@
   - wire 上只接受 64 字节 P1363（`r || s`），禁止 DER（`from_der` 不得出现在实现里）；
   - 合法 high-S 与 low-S 都必须接受，`r`/`s` 为 0 必须拒绝；
   - base64url 必须无填充，带填充或非字母表字符必须拒绝。
-- `[决定]` 这些约束必须固化为**常驻回归测试**，而不是停留在探针记录：用 `fixtures/sync/v1/transcripts/` 与 `fixtures/node-link/v1/transcripts/` 的固定向量重算 transcript、验签、HMAC 与 SAS，并跑畸形输入负例（transcript 结构错误、非法公钥）。探针在 `sha2`/`base64` 升版后没有重跑，因此这批测试是它唯一的替代证据。
+- `[决定]` 这些约束必须固化为**常驻回归测试**，而不是停留在探针记录：用 `fixtures/sync/v1/transcripts/` 与 `fixtures/node-link/v1/transcripts/` 的固定向量重算 transcript、验签与 HMAC，并跑畸形输入负例（transcript 结构错误、非法公钥）。探针在 `sha2`/`base64` 升版后没有重跑，因此这批测试是它唯一的替代证据。
 - `[决定]` 私钥、keystore 材料与 pairing secret 明文不得出现在 `core::model`、SQLite、日志、错误、测试快照或协议载荷里（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §13.1/§14.1）。公钥与指纹是非秘密认证材料，可以落库与展示。
 
 ## 4. 配对状态机
@@ -72,7 +73,7 @@
 | 维度 | 设备配对（`PairingTarget::Device`） | 节点配对（`PairingTarget::Node`） |
 |---|---|---|
 | 绑定校验 | canonical origin + Host | `endpoint` 的 host 与本地配置一致 |
-| 集合字段 | 只带 `scopes`，**不得**带 grants | 只带 `grants`，**不得**带 scopes |
+| 集合字段 | **不带任何集合**（设备没有授权维度，提交 scope 或 grant 都被拒） | 只带 `grants`，**不得**带 scopes |
 | proof 域 | pairing proof / status domain（Sync） | `node-link-pairing-proof/v1`（Node Link） |
 | 创建者 | 本节点（二维码） | 两种方向都有：本节点创建（`mode = owner`）或对端创建、本节点 claim（`mode = access`） |
 | 确认后写入 | `owned_device` + `owned_peer_key` | `owned_node`（角色取 claim 的 `nodeKind`，即 `core::model` 的 `NodeKind`：`access`/`owner`）+ `owned_peer_key` |
@@ -88,7 +89,8 @@ pub enum PairingDecision {
     Reject { reason: Option<String> },
 }
 
-/// 配对上请求的集合：设备侧只允许 `scopes`，节点侧只允许 `grants`（与 §3.5 的不变式一致）。
+/// 配对上请求的集合：设备侧**必须为空**（设备没有授权维度），节点侧只允许 `grants`。
+/// 设备方向提交任何集合字段（scope 或 grant）都是方向错误，`begin_pairing` 与 `settle` 都会拒绝。
 pub struct RequestedCapabilities {
     pub scopes: ScopeSet,
     pub grants: GrantSet,
@@ -99,8 +101,9 @@ pub struct RequestedCapabilities {
 
 ```rust
 impl Authority {
-    // 创建：产出待落库的 PairingRecord 草稿 + 只在内存的 secret + 派生 SAS 需要的本机 nonce/请求标识。
+    // 创建：产出待落库的 PairingRecord 草稿 + 只在内存的 secret + 配对通道要用的本机 nonce/请求标识。
     // expires_at 由调用方按「不超过 5 分钟」算出后传入；状态机只复核上界（收窄可以、延长不行）。
+    // 请求集合必须与目标族一致：设备配对不得携带任何集合，节点配对只带 grants。
     pub fn begin_pairing(
         &self,
         pairing_id: &PairingId,          // 由调用方的 IdGenerator 分配（状态机不分配持久标识）
@@ -143,8 +146,8 @@ impl Authority {
     // 装配要求（否则「硬上界」不成立）：调用方必须把**存储里当前仍存在的、expires_at <= now 的
     // 全部配对记录**（含 rejected/expired/consumed 等终态）传进来，且这次扫描必须**先于**任何
     // 配对行的保留期/容量清理。若某条终态行在扫描前就被删除，它的内存 secret 只能等进程退出才释放
-    // （无安全可利用性：verify_claim 要求 created、pairing_sas 要求 pending_confirmation、
-    // complete_auth 要求已确认批准，但上界会因此被推迟）。
+    // （无安全可利用性：verify_claim 要求 created、complete_auth 要求已确认批准，
+    // 但上界会因此被推迟）。
     // 重启时未确认且无法继续验密的配对**全部**终结（secret 只在内存）。
     pub fn due_pairings(&self, pairings: &[PairingRecord], at: &Timestamp) -> Vec<PairingId>;
     pub fn unrecoverable_after_restart(&self, pairings: &[PairingRecord]) -> Vec<PairingId>;
@@ -154,15 +157,7 @@ impl Authority {
         &self,
         pairing: &PairingRecord,
         peer: Option<&ClaimedPairing>,
-        sas: Option<Sas>,
     ) -> PairingStatusView;
-
-    // SAS：本机展示用（双方各自计算；绝不把本机结果当作对端结果下发）。
-    pub async fn pairing_sas(
-        &self,
-        pairing: &PairingRecord,
-        peer: &ClaimedPairing,
-    ) -> Result<Sas, PairingError>;
 }
 
 // 写集组装（调用方一侧）：认领成功后用 ClaimedPairing::to_claim() 得到 core 的 PairingClaim，
@@ -182,7 +177,7 @@ impl ClaimedPairing {
 - 代价（已记录）：切片 4–7 的 adapter 需要多写一行组装代码；好处是 `identity-auth` 不需要认识
   `core::ports` 的写集类型，纯状态机边界更窄。
 
-- 构造校验沿用 `PairingRecord` 的既有不变式（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；设备配对不对带 grants、节点配对不得带 scopes。
+- 构造校验沿用 `PairingRecord` 的既有不变式（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §3.5）：`claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ `approved`/`consumed`；`terminal_at` 非空 ⟺ `rejected`/`expired`/`consumed`；设备配对的请求集合必须为空、节点配对只带 grants（`scopes` 在任何方向都必须为空）。
 - `claimed` 只存在于服务端事务与审计，**不对外可见**（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.0）。
 
 ### 4.2 并发与原子性
@@ -191,7 +186,7 @@ impl ClaimedPairing {
 
 1. 一条配对只允许从 `created` 成功认领一次；并发认领只有一个成功，其余得到 `Conflict(AlreadyClaimed)`（路由到 Sync 的 `409 pairing.already_claimed`）。
 2. 认领成功后不再接受第二个 claim（唯一 peer 行 + 条件更新共同保证）；重复的**相同**认领内容返回首次结果（幂等重试），不同内容返回冲突。
-3. 确认事务同时完成：过期/状态检查、peer 固定校验、最终 scopes/grants 校验、信任记录创建、`owned_peer_key` 写入、配对状态推进与审计。任一步失败全回滚，**绝不能**返回成功却没有持久信任。
+3. 确认事务同时完成：过期/状态检查、peer 固定校验、最终集合校验（设备方向必须为空、节点方向按 grant）、信任记录创建、`owned_peer_key` 写入、配对状态推进与审计。任一步失败全回滚，**绝不能**返回成功却没有持久信任。
 4. 拒绝或过期**不创建**信任，也不写入任何授权。
 5. 已撤销身份不得经普通写入自动激活，只能按协议重新配对。
 
@@ -205,9 +200,11 @@ impl ClaimedPairing {
 - 二维码 fragment 与完整配对载荷读取后立即清除，不得进入日志或 analytics（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §14.1）。
 - Daemon 重启不能凭 digest 恢复 secret：启动时终结「未确认且无法继续验密」的配对，客户端重新发起；已批准的信任记录保留，正常重连不要求重新配对（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.3）。
 
-### 4.4 SAS
+### 4.4 为什么没有短验证码（SAS）
 
-`[决定]` SAS 由双方各自计算，Daemon **不得**把本机结果当作对端结果下发（[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.2）：取 pairing SAS transcript 的 HMAC-SHA256 输出前 4 字节按 u32be 解释后 `% 1_000_000`，左侧补零为 6 位十进制。展示必须包含设备/节点名称、密钥指纹、SAS、请求的 scopes/grants 与过期时间（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.4）。HMAC 与签名比较一律 constant-time。
+`[决定]`（2026-10-16，随 `pairing-model`）本层**不再派生、不再返回、不再展示**任何短验证码：设备配对与节点配对的两套 SAS transcript 域（`acp-remote/pairing-sas/v1`、`acp-remote/node-link-pairing-sas/v1`）连同它们的固定向量一并从登记表与实现中删除，`Authority` 没有 SAS 入口，配对状态视图也没有 SAS 字段。
+
+理由（详细威胁模型见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 的对应小节）：本协议的信任锚是「配对载荷**带外**携带主机公钥与一次性配对秘密 + claim 阶段以配对秘密计算的 HMAC」，教科书里 SAS 所防的公钥替换已由这条锚承担；而对本流程剩下的两种现实威胁——配对载荷在带外被**整条替换**、配对秘密**泄露**——SAS 完全无效（前者真主机从未被认领、其终端上没有可对照的数字；后者持有者能算出同一个数字）。设备侧对主机的验证由两条密码学要求承担：用配对载荷里的公钥验证 claim 响应中的主机证明，以及已批准响应里的主机公钥必须与载荷逐字节一致（见 `pwa-web-client`；`authority` 侧的两个入口见 §5.1）。HMAC 与签名比较一律 constant-time。
 
 ### 4.5 失败计数
 
@@ -292,8 +289,7 @@ pub struct PeerTrust {
     pub host_binding: Option<String>,
     /// 该对端在本机的节点角色（设备侧为 `None`）。
     pub node_kind: Option<NodeKind>,
-    pub scopes: ScopeSet,               // 设备侧
-    pub grants: GrantSet,               // 节点侧
+    pub grants: GrantSet,               // 节点侧（设备没有授权维度，因此没有对应的集合字段）
 }
 ```
 
@@ -347,7 +343,8 @@ pub struct PeerTrust {
 ```rust
 /// 交给 core 的已验证事实。core 只消费它，不重新验证签名。
 pub enum IdentityFact {
-    Device { device: DeviceId, scopes: ScopeSet },
+    /// 设备主体：没有授权集合（通过认证的设备可执行任何命令）。
+    Device { device: DeviceId },
     Node { node: NodeId, kind: NodeKind, grants: GrantSet },
 }
 
@@ -387,31 +384,30 @@ proof」的连接上会永不消费，因此内存上界必须与真实并发连
 
 ## 6. 授权
 
-### 6.1 `pack.*` / `preset.*` / `grant.*` → scope 展开
+### 6.1 跨节点导出授权 `grant.*` → scope 展开
 
-`[决定]` 展开只在 `identity-auth` 的 `authorization/` 发生，展开结果是**命令名集合**（`ScopeSet`），其唯一机器权威是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json)：
+`[决定]`（2026-10-16，随 `pairing-model`）展开只在 `identity-auth` 的 `authorization/` 发生，展开结果是**命令名集合**（`ScopeSet`），其唯一机器权威是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json)：
 
 | 输入形式 | 展开规则 |
 |---|---|
-| `pack.*` | 该 pack 直接列出的命令名集合 |
-| `preset.*` | 该 preset 列出的 pack 集合的并集（递归到命令名） |
-| `grant.*` | 该 grant 直接列出的命令名集合（Node Link Export 的 `scopes` 用同一张表） |
+| `grant.*` | 该 grant 直接列出的命令名集合（Node Link Export 的 `scopes` 与节点配对的请求集合用同一张表） |
 
-- 展开结果进入 wire 前必须是独立 scope，不允许把 `pack.*`/`preset.*` 当作 scope 下发（[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.3 `device.pair.begin`）。
-- 未知或拼错的 pack/preset/grant 必须明确拒绝，不得忽略、不得部分展开。
-- `[决定]` core 只看展开后的 scope 与 grant fact，不认识 pack/preset 名称（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.8）。
+- 展开结果进入 wire 与写入记录之前必须完成（`expand_node_request` 同时给出要记录的 grant 名集合与它展开出的命令级 scope）；不允许把 `grant.*` 当作 scope 下发。
+- 未知或拼错的 `grant.*` 必须明确拒绝，不得忽略、不得部分展开（`AuthorizationError::UnknownName`）。
+- **设备方向没有任何授权词汇**：设备权限层已删除（设备没有授权维度），因此不存在设备授权包（`pack.*`）与配对预设（`preset.*`）这两类输入，也没有对应的镜像表；设备配对请求提交任何集合字段都在 `RequestedCapabilities` 的定向校验上被拒（§4.1）。
+- `[决定]` core 只看展开后的 scope 与 grant fact，不认识 grant 名称（[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.8）。
 - `[决定]` 7 个 `local.*` 能力永不可远程授予，也不参与展开（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.3、[LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5.1）。
 
 ### 6.2 有效权限交集
 
-`[决定]` 有效权限固定为 `Owner grant ∩ Access local grant ∩ runtime capability`（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.6）。`identity-auth` 只负责 principal 侧的两项（该 principal 的 scope/grant 集合），**不**计算 capability，也不缓存授权结论：授权从最新持久记录计算，不能只信任旧连接上的缓存（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.2 第 4 条）。
+`[决定]` 有效权限固定为 `Owner grant ∩ Access local grant ∩ runtime capability`（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.6）。`identity-auth` 只负责仍有授权集合的方向（节点 principal 的 grant 集合），**不**计算 capability，也不缓存授权结论：授权从最新持久记录计算，不能只信任旧连接上的缓存（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.2 第 4 条）。设备方向没有授权集合可参与交集：通过认证的设备可执行任何命令（`AGENTS.md` §4）。
 
 ### 6.3 撤销与身份变化
 
 `[决定]`：
 
 - 撤销必须先提交持久状态，再由组合根关闭该身份的 active connection；提交失败即返回失败，不得把内存撤销当作持久成功（[CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §11.2 第 3 条）。
-- scope 缩减立即作用于后续命令；高风险缩减主动关闭连接并要求重新认证。
+- 授权集合缩减（节点方向的 grant）立即作用于后续命令；高风险缩减主动关闭连接并要求重新认证。
 - Node identity 变化（指纹/公钥不一致）进入 `identity_changed`，**不得**自动接受；只有按协议重新配对才能恢复（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §9.4）。
 - 第一阶段不存在传递信任：Owner 信任 Access Node 不代表信任其下游设备或其他节点。
 

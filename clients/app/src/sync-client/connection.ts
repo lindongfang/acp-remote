@@ -138,9 +138,10 @@ const CLOSE = {
  * ## 触发条件（与上一轮相比已收紧）
  *
  * 触发源只有一个：账本判出 `late`——**服务端声明过「这条序号之前都已交付」，却又送来一条
- * 客户端从未呈现过的事件**（详见 `dedupe.ts` 文件头）。scope 过滤造成的合法空洞**不再**触发
- * 重订阅：§9.2 明文「全局 sequence 对单个设备可以有不可见的空洞，不能据此推断隐藏事件」，
- * 按空洞重订阅只会拿回同一条事件、原地打转，并对服务端构成持续的 `sync.subscribe` 洪泛。
+ * 客户端从未呈现过的事件**（详见 `dedupe.ts` 文件头）。保留策略造成的合法空洞**不再**触发
+ * 重订阅：§9.2 明文「仍可能出现的序号空洞只来自保留策略（已压缩或已清理的事件），不能据此
+ * 推断隐藏事件」——按空洞重订阅只会拿回同一条事件、原地打转，并对服务端构成持续的
+ * `sync.subscribe` 洪泛。
  *
  * ## 为什么仍然必须有上限而不是「一直重订阅」
  *
@@ -198,7 +199,7 @@ export type IncompatibleReason =
 export type SyncClientEvent =
   /** socket 已建立，开始逐连接握手。 */
   | { readonly kind: "authenticating" }
-  /** 认证成功：连接级信息（scopes、serverEpoch、限额）在此交付。 */
+  /** 认证成功：连接级信息（`deviceId`、`serverEpoch`、限额）在此交付。 */
   | {
       readonly kind: "authenticated";
       readonly info: AuthenticatedInfo;
@@ -227,7 +228,7 @@ export type SyncClientEvent =
    * 检测到丢失区间：服务端声明过「`expected` 之前都已交付」，却送来了 `received`（低于水位）。
    *
    * 该事件随后仍会被 `event` 补齐呈现（R14 不允许丢失），同时触发有界重订阅。
-   * scope 过滤造成的合法空洞**不会**产生本事件（§9.2）。
+   * 保留策略造成的合法空洞**不会**产生本事件（§9.2）。
    */
   | { readonly kind: "gap_detected"; readonly expected: string; readonly received: string }
   /** 命令结果。 */
@@ -343,7 +344,7 @@ export class SyncConnection {
    * 也不能让认证前的消息消耗它（§4.1 要求认证前省略该字段）。
    */
   #outboundSequence = 0;
-  /** 本连接的认证结果（scopes 与限额据此生效）。 */
+  /** 本连接的认证结果（serverEpoch 与限额据此生效）。 */
   #authenticated: AuthenticatedInfo | null = null;
   /**
    * 服务端在 `auth.server_challenge` 里选中的 feature 列表。
@@ -688,7 +689,7 @@ export class SyncConnection {
    * 事件去重 + 丢失处理。
    *
    * 重复事件**不**推进水位也不触发呈现；低于权威水位却从未呈现过的事件（`late`）必须**补齐
-   * 呈现**并触发有界重订阅。scope 过滤造成的合法空洞（§9.2）不判为丢失，也不触发重订阅。
+   * 呈现**并触发有界重订阅。保留策略造成的合法空洞（§9.2）不判为丢失，也不触发重订阅。
    */
   #onEventMessage(message: EventMessage): void {
     if (!isImportedEventIdConsistent(message)) {
@@ -1011,20 +1012,6 @@ export class SyncConnection {
     }
     return id;
   }
-}
-
-/** 已认证信息（`auth.authenticated.body`）。 */
-export interface AuthenticatedBody {
-  readonly deviceId: Uuid;
-  readonly scopes: readonly string[];
-  readonly serverEpoch: Uuid;
-  readonly headGlobalSequence: string;
-  readonly heartbeatIntervalMs: number;
-  readonly limits: {
-    readonly maxMessageBytes: number;
-    readonly maxPromptBytes: number;
-    readonly maxReplayEventsPerBatch: number;
-  };
 }
 
 /** 关闭码 → 阻断原因；`null` 表示不是阻断（可退避重连）。 */

@@ -23,7 +23,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DirectoryDetail } from "./DirectoryDetail";
-import { CREATE_DENIED_NOTE, buildCreateSessionEntryModel } from "../features/create-session-model";
 import { buildDirectoryDetailModel } from "../features/directory-model";
 import type { DirectoryDetailModel } from "../features/directory-model";
 import { CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "../features/testing/fixtures";
@@ -38,25 +37,15 @@ function renderDetail(
   model: DirectoryDetailModel,
   options: {
     readonly query?: string;
-    readonly canCreate?: boolean;
     readonly lastSyncedAtMs?: number | null;
     readonly availableWidth?: number;
   } = {},
 ): string {
-  const canCreate = options.canCreate ?? true;
   return renderToStaticMarkup(
     createElement(DirectoryDetail, {
       model,
-      createEntry: buildCreateSessionEntryModel({
-        directoryAlias: "work-api",
-        scopes: canCreate ? ["session.create"] : [],
-        agents: [],
-        record: null,
-        connectionOnline: true,
-      }),
       onOpenSession: () => undefined,
       onCreateSession: () => undefined,
-      canCreate,
       query: options.query ?? "",
       lastSyncedAtMs: options.lastSyncedAtMs ?? null,
       availableWidth: options.availableWidth ?? WIDE_WIDTH,
@@ -366,35 +355,27 @@ describe("R15 目录详情：按设备宽度自适应，且信息集合相同", 
   });
 });
 
-describe("R15 目录详情：创建入口的副作用与权限说明", () => {
-  it("有权限：入口可用，旁边给出「将在你的电脑上启动一个 Agent 进程」，不出现拒绝说明", () => {
+describe("R15 目录详情：创建入口的副作用说明", () => {
+  it("入口恒可用，旁边给出「将在你的电脑上启动一个 Agent 进程」，且不出现任何权限说明", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
-    const html = renderDetail(store.directoryDetail("work-api"), { canCreate: true });
+    const html = renderDetail(store.directoryDetail("work-api"));
 
     const entry = tagContaining(html, 'data-action="open-create-sheet"');
     expect(html).toContain('data-create-side-effect="true"');
     expect(html).toContain("将在你的电脑上启动一个 Agent 进程");
+    // 反例：入口若因权限不可用，这里会带 `disabled` → 断言变红。
     expect(entry).not.toContain("disabled");
+    // 反例：权限门控若残留，这里会出现 `create-entry-unavailable` 或那句「需要电脑端授予」。
     expect(html).not.toContain("data-create-entry-unavailable");
-    expect(html).not.toContain(CREATE_DENIED_NOTE);
-  });
-
-  it("无权限：入口仍呈现（不隐藏）但不可用，并同时给出拒绝说明与副作用说明", () => {
-    const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
-    const html = renderDetail(store.directoryDetail("work-api"), { canCreate: false });
-
-    const entry = tagContaining(html, 'data-action="open-create-sheet"');
-    expect(entry).toContain("disabled");
-    expect(html).toContain('data-create-entry-unavailable="true"');
-    expect(html).toContain(CREATE_DENIED_NOTE);
-    expect(html).toContain("将在你的电脑上启动一个 Agent 进程");
+    expect(html).not.toContain("需要电脑端授予");
+    expect(html).not.toContain("没有创建会话的权限");
   });
 });
 
 describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
   it("一条带标题的会话 + 一条来源离线的会话渲染出全部既有标记", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
-    const html = renderDetail(store.directoryDetail("work-api"), { canCreate: false });
+    const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-route="dir-detail"');
     expect(html).toContain('data-directory-alias="work-api"');
@@ -411,7 +392,9 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     expect(html).toContain('data-origin-offline="true"');
     expect(html).toContain('data-action="open-session"');
     expect(html).toContain('data-action="open-create-sheet"');
-    expect(html).toContain('data-create-entry-unavailable="true"');
+    // 创建入口不再按权限门控：ready 态既不呈现「不可用」标记，也不呈现权限文案。
+    expect(html).not.toContain('data-create-entry-unavailable');
+    expect(html).not.toContain("需要电脑端授予");
     // ready 分支不呈现「别名失效 / 等待同步」这两个状态标记。
     expect(html).not.toContain("data-directory-detail-state");
 

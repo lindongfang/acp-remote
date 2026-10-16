@@ -90,6 +90,7 @@ const TAG = {
   pairingId: 4,
   pairingExpiresAt: 5,
   canonicalOrigin: 6,
+  hostPublicKey: 7,
   devicePublicKey: 8,
   clientNonce: 9,
   serverNonce: 10,
@@ -103,6 +104,7 @@ const TAG = {
 /** 本实现使用的 transcript domain（§6.3 表）。 */
 const DOMAIN = {
   pairingProof: "acp-remote/pairing-proof/v1",
+  pairingHostProof: "acp-remote/pairing-host-proof/v1",
   hostChallenge: "acp-remote/host-challenge/v1",
   pairingStatus: "acp-remote/pairing-status/v1",
 } as const;
@@ -135,6 +137,8 @@ const QR_BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 /** 二维码里两条 base64url 字段的字节长度（§7.1 要求 PWA 校验字段长度；wire 形状是 32 / 65）。 */
 const QR_SECRET_BYTES = 32;
 const QR_HOST_PUBLIC_KEY_BYTES = 65;
+/** §7.2 的 `hostProof`：P-1363 的 `r||s`，64 字节（`common.schema.json#/$defs/base64url64`）。 */
+const HOST_PROOF_SIGNATURE_BYTES = 64;
 
 /** P-256 SPKI 的 DER 前缀：后接 65 字节 SEC1 未压缩点即可被 `importKey("spki")` 接受。 */
 const P256_SPKI_PREFIX = new Uint8Array([
@@ -165,6 +169,9 @@ type PairingTerminalStatus = "rejected" | "expired" | "consumed";
 interface PairingStatusBody {
   readonly status?: unknown;
   readonly pairingRequestId?: unknown;
+  /** claim 响应（§7.2）里本客户端必须消费的两个字段：`serverNonce` 与主机证明 `hostProof`。 */
+  readonly serverNonce?: unknown;
+  readonly hostProof?: unknown;
   readonly device?: { readonly deviceId?: unknown } | undefined;
   /** 已批准时的主机身份材料（§7.3：`approved` 响应返回 Host identity）。 */
   readonly host?: { readonly hostId?: unknown; readonly hostPublicKey?: unknown } | undefined;
@@ -340,6 +347,107 @@ async function importHostPublicKey(publicKeyBase64Url: string): Promise<CryptoKe
   return crypto.subtle
     .importKey("spki", spki as BufferSource, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"])
     .catch(() => null);
+}
+
+// ── 认领响应的主机证明（design D2 的 L1）──────────────────────────────────────
+
+/**
+ * §7.2 的主机证明校验：**用二维码里固定的主机公钥**验证认领响应里的 `hostProof`。
+ *
+ * ## 为什么信任根只能来自二维码
+ *
+ * 配对载荷是**带外**（二维码）送达本设备的：它同时携带主机公钥与一次性配对秘密。认领响应
+ * 走的是网络，中间人可以对它做任何事——因此它 MUST NOT 成为「这台电脑是谁」的依据。
+ * 这里用的公钥来自 `qr.hostPublicKey`，响应的任何字段都不参与「验证谁」的判定（响应里
+ * 根本没有公钥字段）。被签的 transcript 覆盖 hostId、deviceId、pairingId、来源、两把公钥、
+ * 两个 nonce 与 pairingRequestId，因此「换一台电脑」「换一个来源」「重放到别的会话」
+ * 都会让验签失败。
+ *
+ * ## 失败即停止
+ *
+ * 缺材料、材料形状不符、公钥导不进来、签名验不过——四种情形一律返回明确失败。调用方
+ * （`#claim`）据此**不**登记 `pairingRequestId`，页面因此不会进入轮询，也不会有任何已配对
+ * 主机记录被写入。
+ */
+async function verifyClaimHostProof(input: {
+  readonly body: PairingStatusBody;
+  readonly qr: PairingQrPayload;
+  readonly canonicalOrigin: string;
+  readonly deviceId: string;
+  readonly devicePublicKeyBase64Url: string;
+  readonly clientNonce: ByteArray;
+}): Promise<{ readonly kind: "ok"; readonly pairingRequestId: string } | { readonly kind: "error"; readonly error: PublicError }> {
+  const pairingRequestId = input.body.pairingRequestId;
+  const serverNonce = input.body.serverNonce;
+  const hostProof = input.body.hostProof;
+  const missing = [
+    typeof pairingRequestId === "string" ? null : "pairingRequestId",
+    typeof serverNonce === "string" && isBase64UrlLength(serverNonce, QR_SECRET_BYTES) ? null : "serverNonce",
+    typeof hostProof === "string" && isBase64UrlLength(hostProof, HOST_PROOF_SIGNATURE_BYTES) ? null : "hostProof",
+  ].filter((field): field is string => field !== null);
+  if (
+    missing.length > 0 ||
+    typeof pairingRequestId !== "string" ||
+    typeof serverNonce !== "string" ||
+    typeof hostProof !== "string"
+  ) {
+    return {
+      kind: "error",
+      error: {
+        code: "protocol.schema_invalid",
+        message: `认领响应缺少可用的主机证明材料（${missing.join("、")}）：本次配对不会被继续。`,
+        retryable: false,
+        details: {},
+      },
+    };
+  }
+
+  const publicKey = await importHostPublicKey(input.qr.hostPublicKey);
+  if (publicKey === null) {
+    return {
+      kind: "error",
+      error: {
+        code: "auth.proof_invalid",
+        message: "二维码里的主机公钥无法用于验签：请在电脑上重新生成二维码后再扫。",
+        retryable: false,
+        details: {},
+      },
+    };
+  }
+
+  const transcript = encodeTranscript(DOMAIN.pairingHostProof, [
+    { tag: TAG.protocolVersion, bytes: transcriptCodec.u16be(PAIRING_PROTOCOL_VERSION) },
+    { tag: TAG.hostId, bytes: transcriptCodec.uuid16(input.qr.hostId) },
+    { tag: TAG.deviceId, bytes: transcriptCodec.uuid16(input.deviceId) },
+    { tag: TAG.pairingId, bytes: transcriptCodec.uuid16(input.qr.pairingId) },
+    { tag: TAG.canonicalOrigin, bytes: transcriptCodec.utf8(input.canonicalOrigin) },
+    { tag: TAG.hostPublicKey, bytes: decodeBase64Url(input.qr.hostPublicKey) },
+    { tag: TAG.devicePublicKey, bytes: decodeBase64Url(input.devicePublicKeyBase64Url) },
+    { tag: TAG.clientNonce, bytes: input.clientNonce },
+    { tag: TAG.serverNonce, bytes: decodeBase64Url(serverNonce) },
+    { tag: TAG.pairingRequestId, bytes: transcriptCodec.uuid16(pairingRequestId) },
+  ]);
+
+  const verified = await crypto.subtle
+    .verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      publicKey,
+      decodeBase64Url(hostProof) as BufferSource,
+      transcript as BufferSource,
+    )
+    .catch(() => false);
+  if (!verified) {
+    return {
+      kind: "error",
+      error: {
+        code: "auth.proof_invalid",
+        message: "认领响应里的主机证明无法用二维码里的主机公钥验证通过：这台电脑不是二维码所指的那台，配对已停止。",
+        retryable: false,
+        details: {},
+      },
+    };
+  }
+  return { kind: "ok", pairingRequestId };
 }
 
 // ── 配对传输（HTTPS 面）────────────────────────────────────────────────────
@@ -519,9 +627,19 @@ class HttpPairingTransport implements PairingTransport {
 
     const body = (await response.json()) as PairingStatusBody & Record<string, unknown>;
     if (!response.ok) return toPublicError(body, response.status, "配对声明未成功");
-    if (typeof body.pairingRequestId === "string") {
-      this.#requestIdByPairing.set(input.qr.pairingId, body.pairingRequestId);
-    }
+    // §7.2：认领响应携带主机证明 `hostProof`。设备 MUST 用二维码里**固定**的主机公钥验证它，
+    // 绝不拿响应自带的任何公钥做「自证」（响应里本就没有公钥）。失败即明确失败——既不写任何
+    // 已配对主机记录，也不进入轮询。
+    const claim = await verifyClaimHostProof({
+      body,
+      qr: input.qr,
+      canonicalOrigin: input.canonicalOrigin,
+      deviceId: identity.deviceId,
+      devicePublicKeyBase64Url: identity.publicKeyBase64Url,
+      clientNonce,
+    });
+    if (claim.kind === "error") return claim.error;
+    this.#requestIdByPairing.set(input.qr.pairingId, claim.pairingRequestId);
     return null;
   }
 
@@ -581,6 +699,12 @@ class HttpPairingTransport implements PairingTransport {
           : "host.hostPublicKey",
         // 主机标识必须与二维码里的是同一台：否则「已批准」指的是另一台主机，落盘的记录会张冠李戴。
         typeof hostId === "string" && hostId !== input.qr.hostId ? `host.hostId != ${input.qr.hostId}` : null,
+        // 状态响应**没有**主机签名（§7.3），因此主机公钥只能靠与二维码里那把**逐字节相同**来
+        // 确立——不 trim、不折叠大小写、不做前缀匹配。这是此后每次 WSS 连接验签的唯一信任根，
+        // 这里放水会让设备此后长期信任一把不是二维码带来的公钥。
+        typeof hostPublicKey === "string" && hostPublicKey !== input.qr.hostPublicKey
+          ? "host.hostPublicKey != 二维码里的主机公钥"
+          : null,
       ].filter((field): field is string => field !== null);
       if (
         missing.length > 0 ||

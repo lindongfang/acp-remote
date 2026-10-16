@@ -240,7 +240,6 @@ impl Authority {
         let fact = match &submission.peer {
             PeerIdentity::Device(device) => IdentityFact::Device {
                 device: device.clone(),
-                scopes: trust.scopes.clone(),
             },
             PeerIdentity::Node(node) => IdentityFact::Node {
                 node: node.clone(),

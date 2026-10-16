@@ -5,8 +5,7 @@
   "expiresAt": "2026-09-18T09:14:33.000Z",
   "device": {
     "deviceId": "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
-    "name": "Test Phone",
-    "scopes": ["session.read", "session.prompt"]
+    "name": "Test Phone"
   },
   "host": {
     "hostId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",

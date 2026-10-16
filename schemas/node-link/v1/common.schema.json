@@ -342,12 +342,11 @@
       "enum": [
         "acp-remote/node-link-pairing-proof/v1",
         "acp-remote/node-link-pairing-owner-proof/v1",
-        "acp-remote/node-link-pairing-sas/v1",
         "acp-remote/node-link-pairing-status/v1",
         "acp-remote/node-link-challenge/v1",
         "acp-remote/node-link-proof/v1"
       ],
-      "description": "Node Link v1 冻结的六个 domain，见 docs/NODE_LINK_PROTOCOL.md §9.2。"
+      "description": "Node Link v1 冻结的五个 domain，见 docs/NODE_LINK_PROTOCOL.md §9.2。"
     },
     "transcriptFieldTag": {
       "type": "integer",

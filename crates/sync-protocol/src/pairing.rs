@@ -10,7 +10,7 @@ use std::str::FromStr;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::auth::{ClientKind, Scopes};
+use crate::auth::ClientKind;
 use crate::common::{
     Base64Url, NonEmptyText, ProtocolVersionV1, Timestamp, Uuid, ValueError,
     deserialize_optional_non_null,
@@ -269,13 +269,16 @@ pub struct StatusRequest {
 }
 
 /// `statusResponse.device`：仅在 `status = "approved"` 时出现。
+///
+/// 设备方向没有授权维度（`pairing-model` 删除设备权限层）：设备块只承载非秘密元数据，
+/// `schemas/sync/v1/pairing.schema.json` 的 `device.additionalProperties: false` 使携带
+/// `scopes` 键的响应被拒。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceBlock {
     #[serde(rename = "deviceId")]
     pub device_id: Uuid,
     pub name: NonEmptyText<128>,
-    pub scopes: Scopes,
 }
 
 /// `statusResponse.host`：仅在 `status = "approved"` 时出现。
