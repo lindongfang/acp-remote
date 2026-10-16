@@ -390,6 +390,8 @@ https://work-pc.example.ts.net/pair#data=<base64url-json>
 
 `expiresAt` 是毫秒精度 UTC RFC 3339 字符串，不是 Unix 秒数；PWA 必须验证当前 origin、secure context、过期时间和字段长度，读取后立即用 `history.replaceState` 清除 fragment。fragment、secret 和完整 QR payload 不得进入日志或 analytics。
 
+实现状态（`openspec/changes/pairing-origin-secure-context`，截至本修订）：本条要求的 PWA 侧校验**已在前端落地**。配对入口是唯一入口 `clients/app/src/features/client-store.ts` 的 `#beginPairing`：它读完载荷之后、发任何请求之前依次校验安全上下文、来源一致与载荷类型（类型校验保持在最后，因为它需要已读出的载荷）。环境事实（是否安全上下文、当前来源）经组合根 `CompositionInputs` 注入，默认实现读浏览器全局 `isSecureContext` 与 `location.origin`；来源比较复用 §3.2 的 canonical origin 口径（浏览器 `URL.origin`），与身份绑定检查同一条口径。失败码取自 §12.2 的封闭词表：来源不符复用既有的 `auth.origin_mismatch`，非安全上下文用新增的 `auth.insecure_context`；两条都明确失败，且一个 claim/status 请求都不发。
+
 所有 pairing HTTP 响应必须包含：
 
 ```http
@@ -1481,6 +1483,7 @@ auth.host_mismatch
 auth.device_unknown
 auth.device_revoked
 auth.origin_mismatch
+auth.insecure_context
 auth.proof_invalid
 authorization.scope_denied
 pairing.already_claimed

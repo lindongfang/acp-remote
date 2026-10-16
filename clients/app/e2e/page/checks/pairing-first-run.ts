@@ -84,6 +84,11 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     events: [],
     readResult: () => ({ sessionId: "", resources: { messages: [] }, hasEarlier: false }),
     route: PAIR_ROUTE,
+    // 环境事实（design D2）：e2e 页面由 http 提供、二维码夹具的 `canonicalOrigin` 是 `https://…`，
+    // 因此与注入 `fetch` 同一个理由注入「安全上下文 + 来源等于夹具来源」，让入口的
+    // 安全上下文与来源一致校验成立，配对流程才走得到认领与轮询。
+    secureContext: () => true,
+    origin: () => CANONICAL_ORIGIN,
     ...overrides,
   };
 }

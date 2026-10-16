@@ -53,6 +53,7 @@ export type ErrorCode =
   | "auth.device_unknown"
   | "auth.device_revoked"
   | "auth.origin_mismatch"
+  | "auth.insecure_context"
   | "auth.proof_invalid"
   | "authorization.scope_denied"
   | "pairing.already_claimed"

@@ -80,6 +80,11 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     events: [],
     readResult: () => ({ sessionId: "", resources: { messages: [] }, hasEarlier: false }),
     route: PAIR_ROUTE,
+    // 环境事实（design D2）：e2e 页面由 http 提供、二维码夹具的 `canonicalOrigin` 是 `https://…`；
+    // 注入「安全上下文 + 来源等于夹具来源」让两条前置校验成立，NL-1/NL-2 才判得到它们各自要判的
+    // 那一幕（入口可用性 / 类型互不混淆），而不是先被环境前置条件拦下。
+    secureContext: () => true,
+    origin: () => CANONICAL_ORIGIN,
     ...overrides,
   };
 }
@@ -257,6 +262,69 @@ const checks: readonly Check[] = [
           expectThat(message.includes(scenario.foreign), `${scenario.name}：失败文案要指出喂错的是哪一类`);
           expectAbsent(message, PAIRING_SECRET, `${scenario.name}：失败文案不得回显配对秘密`);
           // 反例：去掉类型校验 → 一类内容会被另一类流程接手，这里会出现认领或状态查询请求。
+          expectEqual(http.urls.length, 0, `${scenario.name}：一个配对请求都不发`);
+        } finally {
+          await mounted.unmount();
+        }
+      }
+    },
+  },
+  /**
+   * 环境前置条件（`SYNC_PROTOCOL.md` §7.1 的「当前 origin 与 secure context」）：
+   * 只有把环境事实造出来才验得到——页面由 http 提供、二维码夹具是 https 来源，生产默认两条
+   * 都成立，因此这里注入替身把两条各破一次。
+   */
+  {
+    name: "NL-3 环境前置条件：非安全上下文与来源不符都明确失败，且一个请求都不发",
+    async run() {
+      const identity = await createFakeHostIdentity(HOST_ID);
+      const cases: readonly { readonly name: string; readonly env: Partial<ScenarioOptions>; readonly code: string }[] = [
+        { name: "非安全上下文", env: { secureContext: () => false }, code: "auth.insecure_context" },
+        {
+          name: "来源不符",
+          env: { origin: () => "https://other-host.example.ts.net" },
+          code: "auth.origin_mismatch",
+        },
+      ];
+
+      for (const scenario of cases) {
+        const http = recordingFetch();
+        // 走**粘贴**入口：起点不携带任何片段，避免页面先按片段读一次内容。
+        globalThis.location.hash = "";
+        const mounted = await mountScenario(
+          baseScenario({ seedPaired: false, fetch: http.fetch, route: PAIR_ROUTE, ...scenario.env }),
+        );
+        try {
+          await waitFor(
+            () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
+            `${scenario.name}：渲染出配对入口`,
+          );
+          // 起点：还没读到任何内容。
+          expectEqual(phaseOf(mounted.container), "idle", `${scenario.name}：入口的初始阶段`);
+
+          typeIntoInput(
+            mounted.container,
+            PAIRING_SELECTOR.input,
+            syncQrText(identity.publicKeyBase64Url),
+            scenario.name,
+          );
+          click(query(mounted.container, PAIRING_SELECTOR.submit), `${scenario.name}：提交按钮`);
+
+          // 明确失败、且失败态带自己的码（两条前置条件各自可区分）。
+          await waitFor(
+            () => phaseOf(mounted.container) === "failed",
+            `${scenario.name}：明确失败（而不是误入认领流程）`,
+          );
+          expectEqual(
+            query(mounted.container, `[data-pairing-error="${scenario.code}"]`) !== null,
+            true,
+            `${scenario.name}：失败态带自己的码`,
+          );
+          const message = textOf(query(mounted.container, "[data-pairing-error]"));
+          expectThat(message.length > 0, `${scenario.name}：失败文案必须可读`);
+          // 文案不回显载荷内容（一次性配对秘密不得落呈现）。
+          expectAbsent(message, PAIRING_SECRET, `${scenario.name}：失败文案不得回显配对秘密`);
+          // 反例：去掉任一条环境前置判定 → 会走到认领，这里就会出现请求。
           expectEqual(http.urls.length, 0, `${scenario.name}：一个配对请求都不发`);
         } finally {
           await mounted.unmount();

@@ -266,6 +266,11 @@ function compositionWithoutNetwork(): Composition {
   } as unknown as PlatformPorts;
   return createComposition({
     platform,
+    // 配对入口的前置校验（`pairing-origin-secure-context`）：本文件用的是 `https://…` 形态的来源，
+    // jsdom 的全局默认（`http://localhost`、无 `isSecureContext`）会先被判成非安全上下文，
+    // 于是所有配对路径都停在环境校验处——这里注入与本文件载荷一致的事实。
+    secureContext: () => true,
+    origin: () => ORIGIN,
     // 一次请求都不该发出：配对内容在校验阶段就被挡下。
     fetch: async () => {
       throw new Error("本用例的配对内容应在结构校验阶段失败，不应发出任何请求");

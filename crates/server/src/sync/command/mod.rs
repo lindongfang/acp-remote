@@ -1407,7 +1407,7 @@ fn error_body(
 
 /// core 的 `PublicError` → wire 的 `PublicError`。
 ///
-/// core 的错误码是开放字符串（它的词表比 Sync 的 34 个更宽，且能携带 `nodelink.*` 之类的细分），wire 的
+/// core 的错误码是开放字符串（它的词表比 Sync 的 35 个更宽，且能携带 `nodelink.*` 之类的细分），wire 的
 /// 是封闭枚举：**认不出的码一律落到 `internal.unavailable`**——保守地按可重试处理，而不是谎报一个语义
 /// 更窄的码。`details` 逐字节保留（`ViewJson` 是库里/核心给出的原文）。
 pub(crate) fn wire_public_error(error: &CorePublicError) -> Option<PublicError> {

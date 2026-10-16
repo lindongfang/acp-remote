@@ -22,6 +22,9 @@
  *   因此断言入口呈现落到 `failed`（码 `protocol.schema_invalid`，有可执行的下一步）而不是抛异常
  *   或停在 `idle`（把 `new URL` 的解析放回求值中途 → 用例红）。
  * - 「不停在等待扫码」：断言状态机落到 `disconnected`（已配对），而不是 `unpaired`。
+ * - 「环境前置条件」：注入非安全上下文 / 跨来源两条环境事实，断言各自落到**可区分**的失败态
+ *   （`auth.insecure_context` / `auth.origin_mismatch`）、claim / poll / 定时器三处计数为 0，
+ *   且文案与错误对象都不含一次性配对秘密。去掉任一条判定 → 对应失败会走到 claim（计数非 0）。
  */
 
 import { describe, expect, it } from "vitest";
@@ -41,8 +44,11 @@ import {
   applyPairingFailure,
   applyPollResult,
   applyScannedNodeLink,
+  canonicalOriginOf,
   initialPairingPageModel,
+  insecureContextFailure,
   isPairingInFlight,
+  originMismatchFailure,
   pairedHostRecordFor,
   publicErrorForCloseoutFailure,
   publicErrorForQrInput,
@@ -206,6 +212,21 @@ class RecordingPairingWiring implements PairingWiring {
   nextRequestNonce(): string {
     this.#nonceCounter += 1;
     return `nonce-${this.#nonceCounter}`;
+  }
+
+  /**
+   * 环境事实（design D2）：缺省「安全上下文成立、本页来源等于二维码声明的来源」，让既有用例
+   * 判的是配对链路本身；新增的两条前置条件用例各自把其中一项破掉来造出失败形态。
+   */
+  secure = true;
+  origin = ORIGIN;
+
+  isSecureContext(): boolean {
+    return this.secure;
+  }
+
+  currentOrigin(): string {
+    return this.origin;
   }
 
   /**
@@ -648,6 +669,136 @@ describe("两类配对入口互不混淆（design D2/D3）", () => {
       // 含秘密的载荷不进公开状态。
       expect(JSON.stringify(store.state), endpoint).not.toContain(QR_SECRET);
     }
+  });
+});
+
+describe("配对入口的环境前置条件（design D1–D5）", () => {
+  it("来源不符：可区分的失败态 + 可读原因 + claim/status 计数为 0（任务 1.1）", async () => {
+    const wiring = new RecordingPairingWiring();
+    // 本页来源与二维码声明的 `canonicalOrigin`（ORIGIN）不同：一个配对请求都不该发。
+    wiring.origin = "https://other-host.example.ts.net";
+    wiring.results = [{ kind: "pending_confirmation" }];
+    const store = storeWithPairing(wiring);
+
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("failed");
+    // 复用既有的来源不符码（design D3）：不是通用故障、也不可重试。
+    expect(page.error?.code).toBe("auth.origin_mismatch");
+    expect(page.error?.retryable).toBe(false);
+    expect((page.error?.message ?? "").length).toBeGreaterThan(0);
+    expect(page.error?.details).toEqual({});
+    // 反例：去掉来源一致判定 → 这里会走到 claim（计数 > 0），失败码也会变成别的 → 变红。
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+    expect(isPairingInFlight(page)).toBe(false);
+    expect(page.canRestart).toBe(true);
+    // 文案与错误对象都不回显载荷内容（一次性配对秘密不落呈现）。
+    expect(page.error?.message).not.toContain(QR_SECRET);
+    expect(JSON.stringify(page.error)).not.toContain(QR_SECRET);
+  });
+
+  it("来源比较走同一归一化口径：默认端口与尾部斜杠不产生误判（design D4）", async () => {
+    const wiring = new RecordingPairingWiring();
+    // 本页来源写成带默认端口与尾部斜杠的形态；二维码声明是省略默认端口的规范形态。
+    wiring.origin = "https://work-pc.example.ts.net:443/";
+    wiring.results = [{ kind: "pending_confirmation" }];
+    const store = storeWithPairing(wiring);
+
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
+
+    // 归一化后两侧一致 → 正常进入认领流程。
+    // 反例：不归一化的随手字符串比较会把这一对判成不符 → 停在 failed → 变红。
+    expect(store.pairingPage().phase).toBe("claiming");
+    expect(wiring.claims).toHaveLength(1);
+  });
+
+  it("非安全上下文：明确失败 + 可读原因 + 一个请求都不发（任务 1.2）", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.secure = false;
+    wiring.results = [{ kind: "pending_confirmation" }];
+    const store = storeWithPairing(wiring);
+
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
+
+    const page = store.pairingPage();
+    expect(page.phase).toBe("failed");
+    // 新增的专用码（design D3）：与来源不符、与通用故障都分得开。
+    expect(page.error?.code).toBe("auth.insecure_context");
+    expect(page.error?.retryable).toBe(false);
+    expect(page.error?.message).toContain("安全上下文");
+    expect(page.error?.details).toEqual({});
+    // 反例：去掉安全上下文判定 → 会一路走到 claim（计数 > 0）→ 变红。
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+    expect(isPairingInFlight(page)).toBe(false);
+    expect(page.canRestart).toBe(true);
+  });
+
+  it("顺序（design D1）：安全上下文 → 来源一致 → 载荷类型", async () => {
+    // 非安全上下文 + 类型不符：报安全上下文（环境根本不满足，比「内容对不上」更根本）。
+    const insecure = new RecordingPairingWiring();
+    insecure.secure = false;
+    insecure.readResult = { kind: "node-link", qr: NODE_LINK_QR };
+    const insecureStore = storeWithPairing(insecure);
+    await insecureStore.submitPairingQrText("任意内容", "sync");
+    expect(insecureStore.pairingPage().error?.code).toBe("auth.insecure_context");
+
+    // 来源不符 + 类型不符（sync 载荷喂给 node-link 入口）：报来源不符（来源一致先于类型校验）。
+    const mismatched = new RecordingPairingWiring();
+    mismatched.origin = "https://other-host.example.ts.net";
+    const mismatchStore = storeWithPairing(mismatched);
+    await mismatchStore.submitPairingQrText("任意内容", "node-link");
+    expect(mismatchStore.pairingPage().error?.code).toBe("auth.origin_mismatch");
+    // 反例：把两条前置条件挪到类型校验之后 → 这里会拿到 `protocol.schema_invalid` → 变红。
+  });
+
+  it("秘密不透传：失败文案与错误对象都不含配对秘密（任务 1.3）", async () => {
+    // 载荷里带着秘密，但两条前置条件的失败文案与错误对象一律不回显（`details` 恒为 `{}`）。
+    const leakPaths: readonly ((wiring: RecordingPairingWiring) => void)[] = [
+      (wiring) => {
+        wiring.origin = "https://other-host.example.ts.net";
+      },
+      (wiring) => {
+        wiring.secure = false;
+      },
+    ];
+    for (const configure of leakPaths) {
+      const wiring = new RecordingPairingWiring();
+      configure(wiring);
+      const store = storeWithPairing(wiring);
+      await store.submitPairingQrText(JSON.stringify(QR), "sync");
+      const page = store.pairingPage();
+      expect(page.error).not.toBeNull();
+      expect(JSON.stringify(page.error)).not.toContain(QR_SECRET);
+      expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
+    }
+
+    // 异常文本同样不透传（既有的 `publicErrorForQrInput` 口径）。
+    // 反例：把 `error.message` 原样透传 → 下面两条变红。
+    const failure = publicErrorForQrInput(new Error(`解析失败：${QR_SECRET}`));
+    expect(failure.message).not.toContain(QR_SECRET);
+    expect(JSON.stringify(failure)).not.toContain(QR_SECRET);
+  });
+
+  it("失败构造器取自封闭词表，归一化口径就是 §3.2 的 canonical origin", () => {
+    expect(insecureContextFailure()).toMatchObject({
+      code: "auth.insecure_context",
+      retryable: false,
+      details: {},
+    });
+    expect(originMismatchFailure()).toMatchObject({
+      code: "auth.origin_mismatch",
+      retryable: false,
+      details: {},
+    });
+    // 归一化本身：`URL.origin` 就是 §3.2 的 canonical origin 形态（默认端口省略、host 小写）。
+    expect(canonicalOriginOf("https://Host.Example:443/path?x#y")).toBe("https://host.example");
+    expect(canonicalOriginOf("https://host.example:8443")).toBe("https://host.example:8443");
+    expect(canonicalOriginOf("不是来源")).toBeNull();
   });
 });
 
