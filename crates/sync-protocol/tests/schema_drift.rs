@@ -326,6 +326,24 @@ fn view_enums_match_schema() {
                 .map(|value| value.as_str())
                 .to_vec()
         }),
+        (
+            "file.changed",
+            "/properties/diffLines/items/properties/kind",
+            || {
+                views::FileDiffLineKind::ALL
+                    .map(|value| value.as_str())
+                    .to_vec()
+            },
+        ),
+        (
+            "file.changed",
+            "/properties/diffUnavailable/properties/reason",
+            || {
+                views::FileDiffUnavailableReason::ALL
+                    .map(|value| value.as_str())
+                    .to_vec()
+            },
+        ),
     ];
 
     // 双向：登记表里的每个条目都必须在本表里有镜像，本表的每个条目也必须已登记。

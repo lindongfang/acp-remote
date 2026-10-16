@@ -17,7 +17,7 @@ import type {
   SessionSummary,
   Timestamp,
   Uuid,
-  WorkspaceRef,
+  WorkspaceCatalogEntry,
 } from "./common";
 
 /** 认证后消息的公共信封（`$defs.postAuthBase`）。 */
@@ -151,8 +151,13 @@ export interface SnapshotItemCapabilities {
   readonly brokerAdditions: Record<string, unknown>;
 }
 
-/** `$defs.snapshotItem.workspaces` / `.agents` 的别名（同一份值对象）。 */
-export type SnapshotItemWorkspaces = WorkspaceRef;
+/**
+ * `$defs.snapshotItem.workspaces` / `.agents`：`workspaces` 的元素是 `workspaceCatalogEntry`
+ * ——它比会话摘要里的 `workspaceRef` 多一个**可选**（非可空）的规范化路径键 `path`，只在协商了
+ * feature `core.workspace-path.v1` 时出现（`docs/SYNC_PROTOCOL.md` §9.4）。`agents` 的元素是
+ * `agentCatalogEntry`，与快照之外的用途共用同一份值对象。
+ */
+export type SnapshotItemWorkspaces = WorkspaceCatalogEntry;
 export type SnapshotItemAgents = AgentCatalogEntry;
 
 /**

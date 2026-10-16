@@ -60,6 +60,16 @@ pub const VIEW_ENUMS: &[(&str, &str, &[&str])] = &[
     ),
     ("agent.connected", "/properties/state", &["connected"]),
     ("agent.disconnected", "/properties/state", &["disconnected"]),
+    (
+        "file.changed",
+        "/properties/diffLines/items/properties/kind",
+        &["added", "deleted", "context"],
+    ),
+    (
+        "file.changed",
+        "/properties/diffUnavailable/properties/reason",
+        &["size_limit"],
+    ),
 ];
 
 /// `session.plan.changed.entries[].priority`。
@@ -320,6 +330,139 @@ impl<'de> Deserialize<'de> for AgentDisconnectedState {
         let text = String::deserialize(deserializer)?;
         text.parse::<Self>().map_err(DeError::custom)
     }
+}
+
+/// `file.changed.diffLines[].kind`：结构化差异行的判别子（feature `core.file-diff.v1` 门控）。
+///
+/// 客户端据此给每一行加前缀与配色，**不必**解析任何原文；取值集合是封闭词表，未登记的取值不是
+/// 「另一种行」而是形状错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileDiffLineKind {
+    Added,
+    Deleted,
+    Context,
+}
+
+impl FileDiffLineKind {
+    pub const ALL: [FileDiffLineKind; 3] = [
+        FileDiffLineKind::Added,
+        FileDiffLineKind::Deleted,
+        FileDiffLineKind::Context,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileDiffLineKind::Added => "added",
+            FileDiffLineKind::Deleted => "deleted",
+            FileDiffLineKind::Context => "context",
+        }
+    }
+}
+
+impl fmt::Display for FileDiffLineKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FileDiffLineKind {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        FileDiffLineKind::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "kind",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for FileDiffLineKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FileDiffLineKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<Self>().map_err(DeError::custom)
+    }
+}
+
+/// `file.changed.diffUnavailable.reason`：差异行未随事件下发的**已登记**原因（封闭词表）。
+///
+/// v1 只登记一个原因——单处改动的差异行数或字节数超过固定上限（`docs/SYNC_PROTOCOL.md` §14）；
+/// 客户端据此呈现明确说明，MUST NOT 把省略读成「该处没有内容」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileDiffUnavailableReason {
+    SizeLimit,
+}
+
+impl FileDiffUnavailableReason {
+    pub const ALL: [FileDiffUnavailableReason; 1] = [FileDiffUnavailableReason::SizeLimit];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileDiffUnavailableReason::SizeLimit => "size_limit",
+        }
+    }
+}
+
+impl fmt::Display for FileDiffUnavailableReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FileDiffUnavailableReason {
+    type Err = ValueError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        FileDiffUnavailableReason::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == text)
+            .ok_or_else(|| ValueError::Enumerated {
+                field: "reason",
+                value: text.to_owned(),
+            })
+    }
+}
+
+impl Serialize for FileDiffUnavailableReason {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FileDiffUnavailableReason {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse::<Self>().map_err(DeError::custom)
+    }
+}
+
+/// `file.changed.diffLines` 的一行（`event-views.schema.json#/$defs/file.changed.properties.diffLines.
+/// items`）：判别子加**不带前缀**的行文本。行文本是结构化数据而不是拼好的文本块，客户端按 `kind`
+/// 自行加 `+ `/`- `/`  ` 前缀。
+///
+/// 与其它视图内嵌对象一致：`additionalProperties: true`，未知键经 [`ExtraFields`] 原样保留。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiffLine {
+    pub kind: FileDiffLineKind,
+    pub text: Text<4096>,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
+/// `file.changed.diffUnavailable`：差异行未下发的显式标记（feature `core.file-diff.v1` 门控）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiffUnavailable {
+    pub reason: FileDiffUnavailableReason,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
 }
 
 /// `elicitation.resolved.action`。
@@ -605,7 +748,12 @@ pub struct ElicitationResolved {
 /// `file.changed`（`event-views.schema.json#/$defs/file.changed`）。
 ///
 /// `addedLines`/`deletedLines`/`outsideWorkspace` 是可选字段，schema 的 `required` 集合不含它们。
+///
+/// 字段级属性只服务 `Serialize`；反序列化由 [`RawFileChanged`] 的表单承担，因为 `diffLines` 与
+/// `diffUnavailable` 的**互斥**（schema 的 `not`）是跨字段约束——手法与 [`crate::event::Body`] 的
+/// `try_from` 相同。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "RawFileChanged")]
 pub struct FileChanged {
     #[serde(rename = "changeId")]
     pub change_id: Uuid,
@@ -615,33 +763,98 @@ pub struct FileChanged {
     pub summary: Text<2048>,
     /// 非 required：键缺失即「本次工具调用判定不出行数」，不得读成零改动；
     /// 键存在时 schema 只允许 `decimalString`，不接受 `null`。
-    #[serde(
-        rename = "addedLines",
-        default,
-        deserialize_with = "deserialize_optional_non_null",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "addedLines", skip_serializing_if = "Option::is_none")]
     pub added_lines: Option<DecimalString>,
     /// 非 required：键缺失即「本次工具调用判定不出行数」，不得读成零改动；
     /// 键存在时 schema 只允许 `decimalString`，不接受 `null`。
-    #[serde(
-        rename = "deletedLines",
-        default,
-        deserialize_with = "deserialize_optional_non_null",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "deletedLines", skip_serializing_if = "Option::is_none")]
     pub deleted_lines: Option<DecimalString>,
     /// 非 required：键缺失即路径在该会话工作区之内；
     /// 键存在时 schema 只允许 `boolean`，不接受 `null`。
+    #[serde(rename = "outsideWorkspace", skip_serializing_if = "Option::is_none")]
+    pub outside_workspace: Option<bool>,
+    /// 结构化差异行（feature `core.file-diff.v1` 门控）：未协商该 feature 时键**缺席**（不是空数组），
+    /// 差异行因超限未下发时同样缺席并改由 [`Self::diff_unavailable`] 说明原因。
+    #[serde(rename = "diffLines", skip_serializing_if = "Option::is_none")]
+    pub diff_lines: Option<Vec<FileDiffLine>>,
+    /// 差异行未随本事件下发时的显式标记；与 [`Self::diff_lines`] 互斥。
+    #[serde(rename = "diffUnavailable", skip_serializing_if = "Option::is_none")]
+    pub diff_unavailable: Option<FileDiffUnavailable>,
+    #[serde(flatten)]
+    pub extra: ExtraFields,
+}
+
+/// [`FileChanged`] 的线形状：字段与 [`FileChanged`] 一一对应，「键可缺省」的 `default` 与
+/// 「键在场时不得为 `null`」的 `deserialize_with` 都落在这一侧。视图是**开放对象**，因此这里
+/// **不**加 `deny_unknown_fields`——未知键照旧经 `extra` 原样保留。
+#[derive(Debug, Deserialize)]
+struct RawFileChanged {
+    #[serde(rename = "changeId")]
+    change_id: Uuid,
+    kind: NonEmptyText<64>,
+    #[serde(rename = "displayPath")]
+    display_path: NonEmptyText<1024>,
+    summary: Text<2048>,
+    #[serde(
+        rename = "addedLines",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    added_lines: Option<DecimalString>,
+    #[serde(
+        rename = "deletedLines",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    deleted_lines: Option<DecimalString>,
     #[serde(
         rename = "outsideWorkspace",
         default,
-        deserialize_with = "deserialize_optional_non_null",
-        skip_serializing_if = "Option::is_none"
+        deserialize_with = "deserialize_optional_non_null"
     )]
-    pub outside_workspace: Option<bool>,
+    outside_workspace: Option<bool>,
+    #[serde(
+        rename = "diffLines",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    diff_lines: Option<Vec<FileDiffLine>>,
+    #[serde(
+        rename = "diffUnavailable",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    diff_unavailable: Option<FileDiffUnavailable>,
     #[serde(flatten)]
-    pub extra: ExtraFields,
+    extra: ExtraFields,
+}
+
+/// `diffLines` 与 `diffUnavailable` 互斥（`event-views.schema.json#/$defs/file.changed` 的 `not`，
+/// `docs/SYNC_PROTOCOL.md` §10.3）：同时携带两者会让消费方同时收到「逐行差异」与「差异未下发」两条
+/// 相反信号，因此按形状错误拒绝，而不是让其中一个静默胜出。
+impl TryFrom<RawFileChanged> for FileChanged {
+    type Error = ValueError;
+
+    fn try_from(raw: RawFileChanged) -> Result<Self, Self::Error> {
+        if raw.diff_lines.is_some() && raw.diff_unavailable.is_some() {
+            return Err(ValueError::Shape {
+                field: "view",
+                expected: "diffLines 与 diffUnavailable 不得同时出现（event-views.schema.json#/$defs/file.changed 的 not）",
+            });
+        }
+        Ok(Self {
+            change_id: raw.change_id,
+            kind: raw.kind,
+            display_path: raw.display_path,
+            summary: raw.summary,
+            added_lines: raw.added_lines,
+            deleted_lines: raw.deleted_lines,
+            outside_workspace: raw.outside_workspace,
+            diff_lines: raw.diff_lines,
+            diff_unavailable: raw.diff_unavailable,
+            extra: raw.extra,
+        })
+    }
 }
 
 /// `permission.requested`（`event-views.schema.json#/$defs/permission.requested`）。

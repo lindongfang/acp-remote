@@ -1,0 +1,10 @@
+{
+  "changeId": "f955151e-316e-4b2f-a61d-1d4d075331c5",
+  "kind": "modified",
+  "displayPath": "src/auth/session.ts",
+  "summary": "差异行是可选项，但出现时必须是数组（没有 null 分支）",
+  "addedLines": "2",
+  "deletedLines": "1",
+  "outsideWorkspace": false,
+  "diffLines": null
+}

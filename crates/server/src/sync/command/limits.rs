@@ -47,7 +47,7 @@ pub const MAX_DEDUP_ENTRIES: usize = 64;
 /// prompt/cancel，二者共用一个额度会让一台在时间线上疯狂翻页的客户端把 prompt 饿死（`design.md` D4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CommandFamily {
-    /// 五条查询命令。
+    /// 六条查询命令（`workspace.browse` 也在其中：它同样是只读、高频的浏览）。
     Observe,
     /// `session.prompt`、`session.cancel`、`elicitation.respond`。
     Interact,
@@ -77,7 +77,8 @@ impl CommandFamily {
             | CommandName::SessionRead
             | CommandName::CommandStatus
             | CommandName::SessionModeList
-            | CommandName::SessionConfigList => CommandFamily::Observe,
+            | CommandName::SessionConfigList
+            | CommandName::WorkspaceBrowse => CommandFamily::Observe,
             CommandName::SessionPrompt
             | CommandName::SessionCancel
             | CommandName::ElicitationRespond => CommandFamily::Interact,

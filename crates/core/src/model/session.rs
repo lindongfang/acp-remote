@@ -805,6 +805,13 @@ pub enum CommandPayload {
         action: ElicitationAction,
         values: ElicitationValues,
     },
+    /// `workspace.browse`（Sync 面）：逐层浏览本机目录。`path` 是请求的父路径**原文**（绝对路径），
+    /// `None` = 请求本机的根列表。形状校验（绝对、无 `..`）、存在性与目录性判定由
+    /// [`crate::use_cases::UseCases::workspace_browse`] 完成——本变体只承载请求形状，不做任何文件系统
+    /// 访问（payload 层不得触碰文件系统）。
+    WorkspaceBrowse {
+        path: Option<String>,
+    },
 }
 
 impl CommandPayload {
@@ -815,7 +822,8 @@ impl CommandPayload {
             | Self::SessionRead { .. }
             | Self::CommandStatus { .. }
             | Self::ModeList {}
-            | Self::ConfigList {} => CommandKind::Query,
+            | Self::ConfigList {}
+            | Self::WorkspaceBrowse { .. } => CommandKind::Query,
             Self::Prompt { .. }
             | Self::Cancel { .. }
             | Self::ModeSet { .. }
@@ -827,7 +835,10 @@ impl CommandPayload {
 
     /// 该 payload 是否要求顶层 `sessionId`（`SYNC_PROTOCOL.md` §11.5 的 `sessionId` 列）。
     pub fn requires_session(&self) -> bool {
-        !matches!(self, Self::SessionList {} | Self::CommandStatus { .. })
+        !matches!(
+            self,
+            Self::SessionList {} | Self::CommandStatus { .. } | Self::WorkspaceBrowse { .. }
+        )
     }
 
     /// 该 payload 是否要求 `expectedVersion`。
@@ -852,6 +863,12 @@ impl CommandPayload {
             Self::Prompt { content } => check_prompt_len(content.len()),
             Self::PermissionResolve { option_id, .. } => require_bounded(option_id, 1, 64),
             Self::ElicitationRespond { action, values, .. } => check_elicitation(*action, values),
+            // `WorkspaceBrowse` 的父路径形状（绝对、无 `..`、长度、存在性）由用例层判定：那一步要读文件
+            // 系统，而 payload 的 `validate` 是**纯形状**层，不触碰文件系统（§11.2 的管线顺序）。
+            Self::WorkspaceBrowse { path } => match path {
+                None => Ok(()),
+                Some(path) => require_bounded(path, 1, 4096),
+            },
             Self::SessionList {}
             | Self::CommandStatus { .. }
             | Self::ModeList {}

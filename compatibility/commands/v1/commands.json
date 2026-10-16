@@ -7,6 +7,7 @@
     { "name": "command.status", "kind": "query", "scope": "command.status", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.mode.list", "kind": "query", "scope": "session.mode.list", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
     { "name": "session.config.list", "kind": "query", "scope": "session.config.list", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "workspace.browse", "kind": "query", "scope": "workspace.browse", "grant": "grant.observe", "transport": ["sync"], "delivery": "mvp" },
     { "name": "session.prompt", "kind": "mutation", "scope": "session.prompt", "grant": "grant.interact", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "session.cancel", "kind": "mutation", "scope": "session.cancel", "grant": "grant.interact", "transport": ["sync", "node_link"], "delivery": "mvp" },
     { "name": "elicitation.respond", "kind": "mutation", "scope": "elicitation.respond", "grant": "grant.interact", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
@@ -17,7 +18,7 @@
     { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "grant": "grant.remote-work", "transport": ["node_link"], "delivery": "conditional_mvp" }
   ],
   "grants": {
-    "grant.observe": ["session.list", "session.read", "command.status", "session.mode.list", "session.config.list"],
+    "grant.observe": ["session.list", "session.read", "command.status", "session.mode.list", "session.config.list", "workspace.browse"],
     "grant.interact": ["session.prompt", "session.cancel", "elicitation.respond"],
     "grant.configure-session": ["session.mode.set", "session.config.set"],
     "grant.approve": ["permission.resolve"],

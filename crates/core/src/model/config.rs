@@ -262,6 +262,61 @@ impl WorkspaceRecord {
     }
 }
 
+/// Sync 快照 `workspaces` 资源的条目（`SYNC_PROTOCOL.md` §9.4；§3.7）。
+///
+/// 它是 [`WorkspaceRecord`] 的**投影**：`alias`/`display_name` 逐字取自记录，`path` 只在客户端协商了
+/// feature `core.workspace-path.v1` 时非空。`None` 的语义是「该键**缺席**」（不是空串、不是 `null`）
+/// ——已协商 `core.local-catalog.v1` 的旧客户端在封闭对象上多收到一个键会按 `protocol.schema_invalid`
+/// 拒收整条快照，因此路径必须由协商结果门控（`design.md` D1/D7）。
+///
+/// `path` 的取值是已登记目录的规范化路径**剥掉平台 verbatim 前缀**后的形式（`design.md` D2）：客户端
+/// 回传该形式时本机重新 `canonicalize` 并以其结果为权威值，因此显示形式与权威值不会分叉。路径只出现在
+/// 本类型的 `path` 上——会话摘要的目录引用仍只有 `{alias, displayName}` 两个键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceCatalogEntry {
+    alias: WorkspaceAlias,
+    display_name: String,
+    path: Option<String>,
+}
+
+impl WorkspaceCatalogEntry {
+    /// 构造。显示名与路径（若在场）的约束与 [`WorkspaceRecord`] 逐条相同：1..=4096 字符、不含 NUL、
+    /// 绝对路径形状（真正的 `canonicalize` 由解析路径负责）。
+    pub fn try_new(
+        alias: WorkspaceAlias,
+        display_name: &str,
+        path: Option<&str>,
+    ) -> Result<Self, InvalidValue> {
+        require_bounded(display_name, 1, 128)?;
+        if let Some(path) = path {
+            require_bounded(path, 1, 4096)?;
+            if !no_nul(path) || !Path::new(path).is_absolute() {
+                return Err(InvalidValue::Field);
+            }
+        }
+        Ok(Self {
+            alias,
+            display_name: display_name.to_owned(),
+            path: path.map(str::to_owned),
+        })
+    }
+
+    /// 别名（与 Export 的 `workspace_aliases[].alias` 同一命名空间）。
+    pub fn alias(&self) -> &WorkspaceAlias {
+        &self.alias
+    }
+
+    /// 显示名。
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    /// 规范化路径；`None` = 客户端未协商 `core.workspace-path.v1`（该键缺席）。
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+}
+
 token_enum!(
     /// Provider 引用的类别（§11.6/§11.7）。
     ProviderRefKind {
@@ -476,15 +531,25 @@ impl ResolvedWorkspace {
 
 /// `session.create` 的目录来源（`workspace-resolution` 的「解析归属与后端输入」）。
 ///
-/// 两种来源的失败分类不同（见 `UseCases::create_session`）：**别名未在本机登记**是参数类错误
+/// 三种来源的失败分类不同（见 `UseCases::create_session`）：**别名未在本机登记**是参数类错误
 /// （客户端可修正），**目录形状非法**（相对路径、含 `..`）同样是参数类错误且不触碰文件系统，
 /// 而**形式合法却解析不了**（目录被删除、被换成文件、`canonicalize` 失败、权限不足）是服务端
-/// 不可用类。目录来源只经 Sync 面出现（Node Link 面的请求不得携带任意 Owner 路径）。
+/// 不可用类；**置了建目录开关**时目录可以不存在，由本层先创建（连同缺失的父层），创建失败或路径上
+/// 已存在非目录成分同样按服务端不可用类拒绝（`sync-session-create` 的「目录校验与失败分类」）。
+/// 目录来源只经 Sync 面出现（Node Link 面的请求不得携带任意 Owner 路径）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceSource {
     /// 本机已登记的 workspace 别名（Node Link 与 Sync 的 `workspaceAlias`）。
     Alias(WorkspaceAlias),
     /// 客户端提供的目录原文（仅 Sync 面的 `workspacePath`）：本层只校验形状与文件系统事实，
-    /// **不查**登记表、也**不登记**新目录。
+    /// **不查**登记表、也**不登记**新目录。默认（未置建目录开关）时该目录必须**已存在**且是目录。
     Path(String),
+    /// 客户端提供的目录原文 + 显式的「目录不存在则先创建」开关（仅 Sync 面的 `workspacePath` +
+    /// `createIfMissing: true`）：该目录**可以不存在**，系统先创建它（连同缺失的父层）再启动 Agent。
+    ///
+    /// 开关只可能是这个变体形态：`sync-session-create` 要求开关与已登记别名**互斥**（别名解析出的目录
+    /// 必然已存在），而别名必然已存在是登记的前提——因此这里没有「别名 + 开关」的组合可表达，
+    /// 该互斥在类型上成立，不依赖运行时校验。被创建的目录**不登记**为别名：它没有别名，
+    /// 该会话的目录归属因此是「未分组」。
+    PathWithCreate(String),
 }

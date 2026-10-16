@@ -1,7 +1,8 @@
-//! Sync 命令面：`command` 帧的解码分派、**授权前置**、五条查询命令的同步完成、结果超限的显式失败、
+//! Sync 命令面：`command` 帧的解码分派、**授权前置**、六条查询命令的同步完成、结果超限的显式失败、
 //! 按（设备，命令族）计数的命令限流与查询类命令的连接期去重
 //! （`docs/SYNC_PROTOCOL.md` §11/§12.2/§14；变更 `sync-server-commands` 的任务 2.1–2.6，
-//! 行为范围以 `openspec/changes/archive/2026-10-16-sync-server-commands/specs/sync-command-handling/spec.md` 为准）。
+//! 行为范围以 `openspec/changes/archive/2026-10-16-sync-server-commands/specs/sync-command-handling/spec.md`
+//! 与变更 `sync-path-browse-and-diff-delivery` 的 `sync-workspace-browse` 为准）。
 //!
 //! ## 管线顺序（§11.2 的「命令处理建议顺序」）
 //!
@@ -12,9 +13,11 @@
 //!
 //! 本工作包（WP2）落地的是**查询命令**那一半：`session.list`、`session.read`、`command.status`、
 //! `session.mode.list`、`session.config.list` 同步返回**一次** `completed` 或 `rejected`，MUST NOT 先回
-//! `accepted`（§11.2「查询命令不进入异步队列」）。mutation 的接受路径、幂等与终态观察者是同一个模块目录
-//! 的下一个工作包（WP3）——本包在 [`CommandRoute::on_mutation`] 处**显式失败关闭**，绝不伪造
-//! `accepted`、绝不静默成功，也绝不把 mutation 当作已实现。
+//! `accepted`（§11.2「查询命令不进入异步队列」）——`workspace.browse` 是同一形状的第六条（变更
+//! `sync-path-browse-and-diff-delivery` 的 WP3 加入，见 [`query::workspace_browse`]）。mutation 的接受
+//! 路径、幂等与终态观察者是同一个模块目录的下一个工作包（WP3）——本包在
+//! [`CommandRoute::on_mutation`] 处**显式失败关闭**，绝不伪造 `accepted`、绝不静默成功，也绝不把
+//! mutation 当作已实现。
 //!
 //! ## 五条硬规则
 //!
@@ -611,6 +614,11 @@ impl CommandRoute {
             CommandPayload::ConfigList(_) => {
                 query::config_list(&self.core, &self.broker, actor, &command).await
             }
+            // `workspace.browse` 的 feature 门控在 `query::workspace_browse` 的第一行：未协商时
+            // 用例面（形状校验与目录读取）根本不会被调用（§11.5、spec `sync-workspace-browse`）。
+            CommandPayload::WorkspaceBrowse(payload) => {
+                query::workspace_browse(&self.core, actor, payload, &features).await
+            }
             // 由 `CommandName::is_query` 与 `CommandPayload` 的判别一致性保证不可达；保留臂只为让判定
             // 穷尽，不 panic。
             _ => Err(Rejection::Schema(
@@ -805,7 +813,9 @@ impl CommandRoute {
         RouteOutcome::Claimed
     }
 
-    /// `session.create`（§11.5 的 Sync 面形状：payload 只有 `{ workspaceAlias, agentId }`）。
+    /// `session.create`（§11.5 的 Sync 面形状：payload 的目录来源是 `workspaceAlias` 或客户端提供的
+    /// `workspacePath` 二者取一，加必填 `agentId`，以及仅在路径来源下允许的可选 `createIfMissing`
+    /// 建目录开关）。
     ///
     /// 与其余 mutation 的差别只在入口：core 用独立用例（[`UseCases::create_session`]）而不是
     /// `ClientCommand`（别名解析与 owned 会话行由它负责）。**接受与终态语义完全相同**。
@@ -874,6 +884,18 @@ impl CommandRoute {
         // 校验都在 core 的解析路径里（先形状、后 IO），因此分类与该用例同源。
         let workspace = match &create.workspace {
             SessionCreateWorkspace::Alias(alias) => {
+                // `createIfMissing` 与别名**互斥**（`sync-session-create`：别名解析出的目录必然已存在），
+                // wire 的 schema 已用 `not` 在解码期拒掉这种组合。这里再核一次不变量：`SessionCreate` 的
+                // 字段是公开的，构造侧（或将来多一条入口）把两者凑在一起时 MUST NOT 被当成合法输入。
+                if create.create_if_missing.is_some() {
+                    self.deny(
+                        handle,
+                        &command,
+                        "createIfMissing is not allowed with workspaceAlias",
+                        ErrorCode::ProtocolSchemaInvalid,
+                    );
+                    return RouteOutcome::Claimed;
+                }
                 let Ok(alias) = acp_core::model::WorkspaceAlias::new(alias.as_str()) else {
                     self.deny(
                         handle,
@@ -885,7 +907,13 @@ impl CommandRoute {
                 };
                 WorkspaceSource::Alias(alias)
             }
-            SessionCreateWorkspace::Path(path) => WorkspaceSource::Path(path.as_str().to_owned()),
+            // `createIfMissing` 缺席即假（行为与引入该键之前完全一致）：缺了开关的路径来源要求该目录
+            // 已存在；显式 `true` 才走「先创建（连同缺失的父层）再启动 Agent」那一支。两种来源的解析与
+            // 失败分类都在 core 的同一条形状校验之上（先形状、后 IO），因此本层只选来源，不自己判 IO。
+            SessionCreateWorkspace::Path(path) => match create.create_if_missing {
+                Some(true) => WorkspaceSource::PathWithCreate(path.as_str().to_owned()),
+                _ => WorkspaceSource::Path(path.as_str().to_owned()),
+            },
         };
         let request = acp_core::model::CreateSessionRequest::new(
             agent,
@@ -1675,6 +1703,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 fn core_payload(payload: &CommandPayload) -> Result<CorePayload, &'static str> {
     Ok(match payload {
         CommandPayload::SessionList(_) => CorePayload::SessionList {},
+        // `workspace.browse` 是查询命令（`CommandName::is_query`），永远不会走到本函数（mutation 的
+        // 载荷映射）：保留臂只为让判定穷尽，不伪造一个 core 载荷。
+        CommandPayload::WorkspaceBrowse(_) => {
+            return Err("workspace.browse does not use CommandPayload");
+        }
         CommandPayload::SessionRead(read) => {
             if read
                 .include

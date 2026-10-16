@@ -30,18 +30,19 @@ use crate::model::{
     PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
     ProviderRef, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
     ResourceOrigin, SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
-    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord, WorkspaceRef, WorkspaceSource,
+    UnavailableKind, Version, WorkspaceAlias, WorkspaceCatalogEntry, WorkspaceRecord, WorkspaceRef,
+    WorkspaceSource,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
-    DeliveryIndexEntry, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
-    ExportWrite, HistoryPage, HistoryQuery, IdGenerator, ImportRemoval, ImportWrite,
-    ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore, NodeConnectedWrite,
-    NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
-    PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
-    PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
-    SeedWrite, SessionCreateAdmission, SessionQuery, SessionStore, StoreHealth, SyncReplaySlice,
-    TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
+    DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryListing,
+    ExpiryWrite, ExportRevocation, ExportStore, ExportWrite, HistoryPage, HistoryQuery,
+    IdGenerator, ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord,
+    LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
+    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
+    ProfileWrite, ProviderRefWrite, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
+    RetentionPolicy, RevokeReason, SeedWrite, SessionCreateAdmission, SessionQuery, SessionStore,
+    StoreHealth, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -132,6 +133,41 @@ pub struct SyncSessionQuery {
     pub include_imported: bool,
 }
 
+/// `workspace.browse` 的单层条目上限（`SYNC_PROTOCOL.md` §14 的固定 v1 常量：128）。
+///
+/// 它是**固定常量**而不是可下调配置键：§14 只允许 `maxMessageBytes`/`maxPromptBytes`/
+/// `maxReplayEventsPerBatch` 三项经 `auth.authenticated.limits` 调整，其余上限都写死在协议里。
+const WORKSPACE_BROWSE_ENTRY_LIMIT: usize = 128;
+
+/// `workspace.browse` 结果里的一条子目录（`SYNC_PROTOCOL.md` §11.5 的 `WorkspaceBrowseEntry`）。
+///
+/// 只有三个字段——**没有**文件条目、文件内容、字节大小、时间戳或权限位：浏览是逐层选目录用的，不下发
+/// 目录里有什么文件（spec `sync-workspace-browse`「结果不含文件内容与元数据」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceBrowseEntry {
+    /// 该子目录的名称（单层，不含路径片段）。
+    pub name: String,
+    /// 该子目录的绝对路径（下发形式：`canonicalize` 结果剥掉平台 verbatim 前缀）。
+    pub path: String,
+    /// 它是否就是本机某个**已登记** workspace 的目录：与已登记目录的规范化路径（同样剥掉平台
+    /// verbatim 前缀后）逐字相等时为真，判定始终走规范化路径，与请求原文的形态无关。
+    pub registered: bool,
+}
+
+/// `workspace.browse` 的结果：请求的父路径回显 + 该层的直接子目录 + 截断标记。
+///
+/// `path` 是**请求的父路径原文**（`None` = 根列表请求）的**逐字回显**——不是规范化后的另一份取值：
+/// `SYNC_PROTOCOL.md` §11.5 要求它与请求里的 `path` 逐字相同，`command.schema.json` 的
+/// `workspaceBrowsePath` 也把它定义成「请求字段与结果回显字段」同一个形状。`truncated` 为真表示该层还有
+/// 超出 [`WORKSPACE_BROWSE_ENTRY_LIMIT`] 的条目未随本次结果下发——客户端据此告知用户还有更多，而
+/// **不能**把「没看到」理解成「不存在」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceBrowse {
+    pub path: Option<String>,
+    pub entries: Vec<WorkspaceBrowseEntry>,
+    pub truncated: bool,
+}
+
 /// Node Link 的 catalog 投影源（`design.md` D4；`NODE_LINK_PROTOCOL.md` §12.3）。
 ///
 /// 只承载投影需要的持久事实：管理写集水位（`revision`，取自 `AuditStore::watermark`）、该对端的
@@ -207,6 +243,13 @@ pub struct UseCases {
     catalog: Arc<dyn AgentCatalog>,
     clock: Arc<dyn Clock>,
     ids: Arc<dyn IdGenerator>,
+    /// 目录浏览端口（`workspace.browse`）。默认是本机文件系统实现（[`SystemDirectories`]）；
+    /// 需要替身或另一份实现时用 [`UseCases::with_directory_browser`] 换掉。
+    ///
+    /// 为什么不在 [`UseCaseDeps`] 里：那份依赖结构的字面量构造点分布在本 crate 之外（组合根与多个
+    /// 适配器的测试装配），加一个必填字段会让它们全部编译失败；而目录浏览是本机文件系统事实，
+    /// 默认实现不依赖任何外部 crate（§2 的依赖 allow-list 不变），因此默认可用、按需替换。
+    browser: Arc<dyn DirectoryBrowser>,
 }
 
 /// [`UseCases`] 的依赖。
@@ -238,7 +281,16 @@ impl UseCases {
             catalog: deps.catalog,
             clock: deps.clock,
             ids: deps.ids,
+            browser: Arc::new(SystemDirectories),
         }
+    }
+
+    /// 换用另一份目录浏览实现（组合根注入别的实现，或测试注入记录调用的替身）。
+    ///
+    /// 消耗 `self` 并返回它：组合根在 `Arc::new(UseCases::new(..))` 之前接一次即可，与
+    /// [`UseCases::new`] 的「一次装配」语义一致（`&mut self` 的 setter 在 `Arc` 之后就用不了了）。
+    pub fn with_directory_browser(self, browser: Arc<dyn DirectoryBrowser>) -> Self {
+        Self { browser, ..self }
     }
 
     // ---------------------------------------------------------------------------------------
@@ -278,13 +330,21 @@ impl UseCases {
     /// 之后的解码 payload 摘要（§6 第 6 条）。core 不自造 requestId——否则同一次重试会得到第二个
     /// 幂等键，重启后就会重复创建。
     ///
-    /// `workspace` 是本次的目录来源（[`WorkspaceSource`]），两种来源的解析与失败分类：
+    /// `workspace` 是本次的目录来源（[`WorkspaceSource`]），三种来源的解析与失败分类：
     ///
     /// - [`WorkspaceSource::Alias`]：该请求声明的是别名——「是否在该 Export 的别名集合内」由
     ///   `server::node_link` 校验（`nodelink.export.not_granted`，参数类）；本层只负责本机解析，
     ///   **未在本机登记**是参数类错误，**已登记但解析失败** MUST 返回
     ///   [`UnavailableKind::IoError`]、**不得**降级为参数错误；
     /// - [`WorkspaceSource::Path`]（仅 Sync 面）：客户端提供的目录，见 [`resolve_client_workspace`]。
+    ///   未给出建目录开关时该目录必须已存在且是目录；
+    /// - [`WorkspaceSource::PathWithCreate`]（仅 Sync 面）：客户端提供的目录 + 「目录不存在则先创建」
+    ///   开关，见 [`create_client_workspace`]。`sync-session-create` 要求该开关与别名**互斥**——这一点
+    ///   由类型保证（别名没有对应的变体），不需要另做运行时判定；被创建的目录**不登记**为别名。
+    ///
+    /// 开关为真时的创建发生在**启动后端之前**，且**不回滚**：`SessionBackendFactory::create` 或落账
+    /// 提交无论以何种方式失败，已创建的目录都留在主机上（`sync-session-create`「后续失败不删除已创建的
+    /// 目录」）——删除要区分「哪些层是这次建的」，而误删用户目录的代价远高于留下一个空目录。
     ///
     /// UNC/网络路径允许使用；core 不持日志设施，因此「网络路径」的结构化警告由接入层在解析成功
     /// 后记录，本层不因它改变授权模型（`design.md` D6）。
@@ -333,6 +393,11 @@ impl UseCases {
                 // 客户端提供的目录没有别名：`ResolvedWorkspace` 的别名是 `None`，因此这里**不**
                 // 造归属投影——该会话落库即「未分组」（`design.md` D1 的 `NULL` 语义）。
                 request.workspace = Some(resolve_client_workspace(&path)?);
+            }
+            Some(WorkspaceSource::PathWithCreate(path)) => {
+                // 建目录开关（`design.md` D4）：先创建（连同缺失的父层）再启动 Agent；创建出来的目录
+                // **不登记**为别名，因此同样没有归属投影，该会话呈现为「未分组」。
+                request.workspace = Some(create_client_workspace(&path)?);
             }
             None => {
                 // 调用方已经交来解析结果（内部入口）：解析出别名的请求**必须**带上归属投影，否则投影给
@@ -542,6 +607,96 @@ impl UseCases {
             .await?
             .sync_replay(after, limit)
             .await
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 目录浏览与目录资源投影（§4 的 `SyncSnapshotQueries` / `workspace.browse`）
+    // ---------------------------------------------------------------------------------------
+
+    /// `workspace.browse`（`SYNC_PROTOCOL.md` §11.5；spec `sync-workspace-browse`）：逐层浏览本机目录。
+    ///
+    /// `path` 是请求的父路径原文（绝对路径），`None` = 请求本机的根列表。执行顺序即契约的顺序：
+    ///
+    /// 1. **授权**（`workspace.browse` 走 [`crate::broker::Broker::authorize`] 与 `required_grant` 的
+    ///    `grant.observe`）——授权先于任何本机读取与文件系统访问；
+    /// 2. **形状校验**（[`browse_parent`]）：不是绝对路径或含 `..` 是参数类错误，且**不触碰文件系统**；
+    /// 3. **列举**（[`DirectoryBrowser`]）：形状合法但该层不存在、不可读或不是目录是服务端不可用类
+    ///    （[`UnavailableKind::IoError`]），不返回任何条目，也不回退到父层或根列表；
+    /// 4. **投影**（[`project_browse`]）：只保留名称与绝对路径 + 是否已登记，按名称的 Unicode 码点升序
+    ///    排列，超过 [`WORKSPACE_BROWSE_ENTRY_LIMIT`] 时只返回上限内的条目并置截断标记。
+    ///
+    /// 只读：不登记、不缓存、不写会话状态，也不产生审计记录；被查看的目录不因此获得任何后续权限（它成为
+    /// 会话归属的唯一路径仍是创建会话时按**已登记别名**解析）。
+    ///
+    /// 路径的**下发形式**是「`canonicalize` 的结果剥掉平台 verbatim 前缀」（`design.md` D2）：每个
+    /// **条目**的 `path` 取该形式，客户端回传它时本层重新 `canonicalize` 并以其为权威。结果的 `path`
+    /// **不**取该形式——它**逐字回显请求的父路径原文**（`None` = 根列表）：`SYNC_PROTOCOL.md` §11.5 与
+    /// `command.schema.json#/$defs/workspaceBrowsePath` 要求请求字段与该回显字段逐字相同，规范化结果只
+    /// 用于调用端口与 `registered` 判定。
+    /// 未被浏览命令授权查看的层不因此泄漏——条目只覆盖请求的那一层（`sync-workspace-catalog`）。
+    pub async fn workspace_browse(
+        &self,
+        actor: &Actor,
+        path: Option<&str>,
+    ) -> Result<WorkspaceBrowse, PortError> {
+        let request = self.ids.request_id();
+        self.broker
+            .authorize(actor, "workspace.browse", None, &request)
+            .await
+            .map_err(Denied::into_port_error)?;
+        // 形状校验先于一切文件系统访问；`None`（根列表）没有可校验的路径。规范化结果**只**用于调用
+        // 端口：结果的 `path` 必须**逐字回显请求原文**（`SYNC_PROTOCOL.md` §11.5 与
+        // `command.schema.json#/$defs/workspaceBrowsePath` 要求请求字段与结果回显字段逐字相同），
+        // 因此原文原样留在 `echo` 里，不换成任何规范化形态。
+        let (echo, canonical) = match path {
+            Some(path) => (Some(path.to_owned()), Some(browse_parent(path)?)),
+            None => (None, None),
+        };
+        let listings = match canonical.as_deref() {
+            Some(parent) => self.browser.directories(parent).await?,
+            None => self.browser.roots().await?,
+        };
+        // `registered` 标记是**本条命令唯一需要登记表的地方**：登记表的路径不下发，只用来算一个布尔值。
+        let registered: Vec<String> = self
+            .config
+            .workspaces()
+            .await?
+            .iter()
+            .map(|record| delivered_path(record.canonical_path()))
+            .collect();
+        Ok(project_browse(echo, listings, &registered))
+    }
+
+    /// Sync 快照 `workspaces` 资源的投影（`SYNC_PROTOCOL.md` §9.4；spec `sync-workspace-catalog`）。
+    ///
+    /// `include_path` 是**调用方**对 feature `core.workspace-path.v1` 的协商结果——core 不读 feature
+    /// 表、也不缓存它（与 [`UseCases::sync_visible_sessions`] 的 `include_imported` 同一模式）。为假时
+    /// 每个条目的 `path` 都是 `None`：对端看到的对象因此仍是「只有 `alias` 与 `displayName` 两个键」的
+    /// 封闭形状，已协商 `core.local-catalog.v1` 的旧客户端不会因为多一个键拒绝整条快照。
+    ///
+    /// 路径的取值是**已登记目录**的规范化结果剥掉平台 verbatim 前缀后的形式（`design.md` D2），只出现在
+    /// 这些条目上——会话摘要的 `workspace` 引用不带它，客户端按别名在同一份快照内查表。这里只投影，不
+    /// 判定可见性：设备方向没有可见性过滤（`pairing-model`），本入口与本机 `workspace.list` 走同一份
+    /// 登记表读取（[`UseCases::workspaces`] 的 `require_local` 守卫照旧）。
+    pub async fn sync_workspace_catalog(
+        &self,
+        actor: &Actor,
+        include_path: bool,
+    ) -> Result<Vec<WorkspaceCatalogEntry>, PortError> {
+        self.require_local(actor)?;
+        let records = self.config.workspaces().await?;
+        records
+            .iter()
+            .map(|record| {
+                let path = include_path.then(|| delivered_path(record.canonical_path()));
+                WorkspaceCatalogEntry::try_new(
+                    record.alias().clone(),
+                    record.display_name(),
+                    path.as_deref(),
+                )
+                .map_err(PortError::from)
+            })
+            .collect()
     }
 
     /// `session.read`：owned 走事件日志；`include` 里的活体数据（config/capabilities）由本层从
@@ -2081,10 +2236,48 @@ fn resolve_workspace(alias: &WorkspaceAlias, path: &str) -> Result<ResolvedWorks
 /// - **形式合法但解析不了**（不存在、不是目录、`canonicalize` 失败、权限不足）是**服务端不可用类**
 ///   （[`UnavailableKind::IoError`]），不得降级为参数错误。
 ///
-/// 两类都不创建会话、不启动进程、不回退到任何替代目录。本函数**不查**别名登记表、也**不登记**新目录：
-/// 未登记目录不得因此被接受为别名（`workspace-resolution`），解析结果因此没有别名，该会话呈现为
+/// 两类都不创建会话、不启动进程、不回退到任何替代目录。形状校验与 [`create_client_workspace`] 共用
+/// 同一实现（[`shape_checked_client_path`]），因此「先拒 `..` 再 `canonicalize`」的顺序在两条路径上
+/// 一致，不依赖 `canonicalize` 归一化 `..`（Windows 上它不会）。本函数**不查**别名登记表、也**不登记**
+/// 新目录：未登记目录不得因此被接受为别名（`workspace-resolution`），解析结果因此没有别名，该会话呈现为
 /// 「未分组」。返回值只带规范化路径，路径本身不得进事件、错误 `details` 或审计前像。
 fn resolve_client_workspace(path: &str) -> Result<ResolvedWorkspace, PortError> {
+    let candidate = shape_checked_client_path(path)?;
+    let io = || PortError::Unavailable(UnavailableKind::IoError);
+    let metadata = std::fs::metadata(candidate).map_err(|_| io())?;
+    if !metadata.is_dir() {
+        return Err(io());
+    }
+    canonical_client_path(candidate)
+}
+
+/// 客户端提供的目录 → 已解析的 workspace，**目录不存在时先创建**（`createIfMissing: true`）。
+///
+/// 与 [`resolve_client_workspace`] 共用同一条形状校验（[`shape_checked_client_path`]）：形状非法是
+/// **参数类**错误且判定在文件系统访问**之前**——开关为真也不例外，形状非法的输入 MUST NOT 触碰文件
+/// 系统（否则一次笔误就会在没有校验的情况下落到磁盘上）。
+///
+/// 形状合法时的顺序（`sync-session-create`「开关为真且目录不存在时先创建」）：
+///
+/// 1. `create_dir_all`：目录已存在时是幂等成功，缺失的父层一并创建；
+/// 2. `canonicalize`：创建结果（或被创建的目录）重新规范化为权威取值。
+///
+/// 两类失败都归**服务端不可用类**（[`UnavailableKind::IoError`]）：路径上已有成分不是目录（`create_dir_all`
+/// 会因它失败，本层**不覆盖、不删除**既有内容）、父层不可达、无写权限，以及随后的规范化失败。任一失败
+/// 都 MUST NOT 启动后端、MUST NOT 留会话行，也 MUST NOT 删除已经建出来的目录。
+fn create_client_workspace(path: &str) -> Result<ResolvedWorkspace, PortError> {
+    let candidate = shape_checked_client_path(path)?;
+    let io = || PortError::Unavailable(UnavailableKind::IoError);
+    std::fs::create_dir_all(candidate).map_err(|_| io())?;
+    canonical_client_path(candidate)
+}
+
+/// 客户端提供的目录的形状校验（两种 Path 来源共用）：返回**已通过形状检查**的原样候选路径。
+///
+/// 形状不合法（空、相对路径、含 `..` 组件）是**参数类**错误（`InvalidRequest`），判定顺序在文件系统
+/// 访问**之前**：形状非法的输入 MUST NOT 触碰文件系统。不查别名登记表、也不登记新目录——未登记目录
+/// 不得因此被接受为别名（`workspace-resolution`）。
+fn shape_checked_client_path(path: &str) -> Result<&std::path::Path, PortError> {
     let candidate = std::path::Path::new(path);
     if path.is_empty()
         || !candidate.is_absolute()
@@ -2096,6 +2289,44 @@ fn resolve_client_workspace(path: &str) -> Result<ResolvedWorkspace, PortError> 
             "the workspace path must be an absolute path without parent references",
         ));
     }
+    Ok(candidate)
+}
+
+/// 已存在（或刚创建）的目录 → `canonicalize` 的权威取值（两个 Path 来源共用的收尾一步）。
+fn canonical_client_path(candidate: &std::path::Path) -> Result<ResolvedWorkspace, PortError> {
+    let io = || PortError::Unavailable(UnavailableKind::IoError);
+    let canonical = std::fs::canonicalize(candidate).map_err(|_| io())?;
+    let text = canonical.to_str().ok_or_else(io)?;
+    ResolvedWorkspace::at_path(text.to_owned()).map_err(PortError::from)
+}
+
+/// 下发给设备的路径形式（`design.md` D2）：规范化结果**剥掉平台 verbatim 前缀**（`\\?\D:\…` →
+/// `D:\…`、`\\?\UNC\server\share\…` → `\\server\share\…`，非 Windows 逐字节直通）。
+///
+/// 前缀规则只有一处实现（[`crate::strip_verbatim`]，`agent-host` 的出站 ACP 参数也在用）；本函数只把
+/// `&str` 与 `PathBuf` 之间来回一趟，不另写前缀判断。**只用于下发形式**：持久化取值与本机解析结果都
+/// 保持 `canonicalize` 的原样，客户端回传该形式时本层重新规范化（[`browse_parent`]）。
+fn delivered_path(path: &str) -> String {
+    crate::strip_verbatim(std::path::PathBuf::from(path))
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `workspace.browse` 的父路径形状校验与规范化，顺序与既有路径口径**逐条一致**
+/// （[`shape_checked_client_path`] → 存在 → 是目录 → `canonicalize`）：
+///
+/// - 不是绝对路径、含父目录引用或为空 → **参数类**错误（`InvalidRequest`）且**不触碰文件系统**；
+/// - 形式合法但不存在、不是目录、`canonicalize` 失败或权限不足 → **服务端不可用类**
+///   （[`UnavailableKind::IoError`]）。
+///
+/// 两类都不返回任何条目，也**不回退**到父层或根列表（spec `sync-workspace-browse`「不回退到替代目录」）。
+/// 先拒 `..` 再 `canonicalize` 的顺序是关键：Windows 的 `canonicalize` **不**归一化 `..`，依赖它来
+/// 消除回退层级会让 `..` 逃逸被静默接受。
+///
+/// 返回值是**下发形式**（[`delivered_path`]），调用方只用它列举这一层；结果的 `path` **不**取它——
+/// 那是请求原文的逐字回显（[`UseCases::workspace_browse`]）。
+fn browse_parent(path: &str) -> Result<String, PortError> {
+    let candidate = shape_checked_client_path(path)?;
     let io = || PortError::Unavailable(UnavailableKind::IoError);
     let metadata = std::fs::metadata(candidate).map_err(|_| io())?;
     if !metadata.is_dir() {
@@ -2103,7 +2334,106 @@ fn resolve_client_workspace(path: &str) -> Result<ResolvedWorkspace, PortError> 
     }
     let canonical = std::fs::canonicalize(candidate).map_err(|_| io())?;
     let text = canonical.to_str().ok_or_else(io)?;
-    ResolvedWorkspace::at_path(text.to_owned()).map_err(PortError::from)
+    Ok(delivered_path(text))
+}
+
+/// 浏览结果的有序、有界投影（纯函数，便于单独断言顺序与截断口径）。
+///
+/// `requested_parent` 是**请求父路径原文**的逐字回显（`None` = 根列表），原样写进结果的 `path`：规范化
+/// 只作用于每个条目的下发路径与 `registered`，`path` 的取值不由本函数改写（`SYNC_PROTOCOL.md` §11.5）。
+///
+/// - **确定顺序**：按名称的 Unicode 码点升序（`str` 的序即 UTF-8 字节序，也就是码点序）；名称相同时
+///   按路径升序兜底，使同一层在两次调用中给出相同顺序（spec「顺序确定」）——端口自己的返回顺序因此
+///   只影响性能，不影响结果；
+/// - **有界**：超过 [`WORKSPACE_BROWSE_ENTRY_LIMIT`] 时只取前 `limit` 条并置 `truncated`，**不**静默
+///   丢弃（也不因超限整次失败）；
+/// - **只保留两种事实**：名称与绝对路径（+ 是否已登记），不构造任何文件/元数据字段。
+fn project_browse(
+    requested_parent: Option<String>,
+    listings: Vec<DirectoryListing>,
+    registered: &[String],
+) -> WorkspaceBrowse {
+    let mut entries: Vec<WorkspaceBrowseEntry> = listings
+        .into_iter()
+        .map(|listing| {
+            let path = delivered_path(&listing.path);
+            let is_registered = registered.contains(&path);
+            WorkspaceBrowseEntry {
+                name: listing.name,
+                path,
+                registered: is_registered,
+            }
+        })
+        .collect();
+    entries.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let truncated = entries.len() > WORKSPACE_BROWSE_ENTRY_LIMIT;
+    entries.truncate(WORKSPACE_BROWSE_ENTRY_LIMIT);
+    WorkspaceBrowse {
+        path: requested_parent,
+        entries,
+        truncated,
+    }
+}
+
+/// 随 core 提供的本机文件系统目录浏览实现（[`DirectoryBrowser`] 的默认实现）。
+///
+/// 它是**默认值**而不是唯一实现：组合根可以用 [`UseCases::with_directory_browser`] 换掉（另一份实现或
+/// 测试替身）。三处约束与端口文档逐条对应：
+///
+/// - 只列**目录**（[`std::fs::DirEntry::file_type`] 判定，不跟随符号链接；文件与其它类型一律跳过）；
+/// - 只读（不创建、不删除、不写任何缓存）；
+/// - 不可读的一层与不存在的一层对调用方是同一类事实（`Unavailable(IoError)`），不回退到父层。
+///
+/// 不读系统时间、不读文档外的事实，也不引入任何新依赖（`std::fs` 早已在 `use_cases` 里被使用）。
+struct SystemDirectories;
+
+#[async_trait::async_trait]
+impl DirectoryBrowser for SystemDirectories {
+    async fn roots(&self) -> Result<Vec<DirectoryListing>, PortError> {
+        // 平台差异只有一处：Windows 有盘符根，其余平台只有一个 `/`。两者都是「列出这个节点的根」的
+        // 直接答案，不猜测只读卷、网络挂载或驱动器类型（`design.md` 的 Non-Goals）。
+        let roots: Vec<DirectoryListing> = if cfg!(windows) {
+            ('A'..='Z')
+                .filter_map(|letter| {
+                    let path = format!("{letter}:\\");
+                    // 只下发**存在**的盘符根：不存在的盘符（例如没有对应卷的 `E:`）不是这一层的一个条目。
+                    std::fs::metadata(&path).ok().map(|_| DirectoryListing {
+                        name: format!("{letter}:"),
+                        path,
+                    })
+                })
+                .collect()
+        } else {
+            vec![DirectoryListing {
+                name: "/".to_owned(),
+                path: "/".to_owned(),
+            }]
+        };
+        Ok(roots)
+    }
+
+    async fn directories(&self, parent: &str) -> Result<Vec<DirectoryListing>, PortError> {
+        let io = || PortError::Unavailable(UnavailableKind::IoError);
+        let entries = std::fs::read_dir(parent).map_err(|_| io())?;
+        let mut listings = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|_| io())?;
+            // `file_type` 不跟随符号链接：指向目录的链接不被当成目录下发（避免把别处的一棵树暴露成
+            // 「这一层有一个子目录」）。
+            let file_type = entry.file_type().map_err(|_| io())?;
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path().to_string_lossy().into_owned();
+            listings.push(DirectoryListing { name, path });
+        }
+        Ok(listings)
+    }
 }
 
 #[cfg(test)]
@@ -4394,6 +4724,646 @@ mod tests {
             "客户端提供的目录不得被登记进 workspace 目录表"
         );
         let _ = std::fs::remove_dir_all(&*dir);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // `session.create` 的建目录开关（`sync-session-create` 的四条新场景）
+    // -----------------------------------------------------------------------------------------
+
+    /// 建目录开关与别名**互斥**在类型上成立：开关只可能挂在客户端提供的目录上，而别名没有对应变体
+    /// （别名解析出的目录必然已存在）——因此这里没有「别名 + 开关」的组合可表达，不需要运行时判定。
+    #[test]
+    fn the_create_switch_is_structurally_exclusive_with_an_alias() {
+        let alias = WorkspaceAlias::new("project").expect("alias");
+        // 开关就是 `PathWithCreate` 这个变体本身：别名与「客户端提供但不建目录」的来源都不可能是它。
+        for without_switch in [
+            WorkspaceSource::Alias(alias.clone()),
+            WorkspaceSource::Path("/work/api".to_owned()),
+        ] {
+            assert!(
+                !matches!(without_switch, WorkspaceSource::PathWithCreate(_)),
+                "只有客户端目录 + 显式开关那一种变体带开关：{without_switch:?}"
+            );
+        }
+        // 客户端提供的两种来源各自携带路径原文；别名的路径由登记表解析，来源本身不带路径。
+        assert!(matches!(
+            WorkspaceSource::Path("/work/api".to_owned()),
+            WorkspaceSource::Path(path) if path == "/work/api"
+        ));
+        assert!(matches!(
+            WorkspaceSource::PathWithCreate("/work/api".to_owned()),
+            WorkspaceSource::PathWithCreate(path) if path == "/work/api"
+        ));
+        assert!(matches!(
+            WorkspaceSource::Alias(alias),
+            WorkspaceSource::Alias(kept) if kept.as_str() == "project"
+        ));
+    }
+
+    /// 开关为真且目录不存在：先创建（**连同缺失的父层**）再启动 Agent；创建出来的目录不是别名，
+    /// 该会话呈现为「未分组」。
+    #[test]
+    fn the_create_switch_creates_missing_parents_before_starting_the_agent() {
+        let fixture = fixture();
+        fixture
+            .world
+            .set_agent_session_id(AgentSessionId::new("acp-session-created").expect("session id"));
+        let root = temp_dir(&format!("acpr-create-switch-{}", std::process::id()));
+        // 目标目录与其两层父目录都不存在。
+        let target = root.join("a").join("b").join("c");
+        assert!(!target.exists(), "前提：目标目录尚未存在");
+        let before = block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
+            .expect("workspaces")
+            .len();
+
+        let created = create_and_settle(
+            &fixture,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            Some(WorkspaceSource::PathWithCreate(
+                target.to_str().expect("path").to_owned(),
+            )),
+        );
+
+        assert!(target.is_dir(), "缺失的父层必须一起创建");
+        let canonical = std::fs::canonicalize(&target)
+            .expect("canonicalize")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        let state = lock(&fixture.world.state);
+        assert_eq!(
+            state
+                .recoveries
+                .get(created.as_str())
+                .and_then(|columns| columns.workspace_cwd.clone()),
+            Some(canonical),
+            "落盘的是创建后 canonicalize 的权威取值"
+        );
+        assert!(
+            !state.workspace_aliases.contains_key(created.as_str()),
+            "被创建的目录不成为已登记别名"
+        );
+        drop(state);
+        assert!(
+            projected_workspace(&fixture, &created).is_none(),
+            "归属是「未分组」，MUST NOT 为它补出别名"
+        );
+        assert_eq!(
+            block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
+                .expect("workspaces")
+                .len(),
+            before,
+            "被创建的目录不进 workspace 登记表"
+        );
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 路径上已有成分不是目录（目标本身是文件、或某个父层是文件）：服务端不可用类错误，**不覆盖、
+    /// 不删除**既有内容，也不启动 Agent、不留会话行。
+    #[test]
+    fn the_create_switch_refuses_when_a_component_is_not_a_directory() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-create-switch-file-{}", std::process::id()));
+        let file = root.join("blocker");
+        std::fs::write(&file, b"not a directory").expect("write file");
+        let before = session_count(&fixture);
+
+        // 目标本身就是文件。
+        let error = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            Some(WorkspaceSource::PathWithCreate(
+                file.to_str().expect("path").to_owned(),
+            )),
+        ))
+        .expect_err("文件不能当目录");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        assert_eq!(
+            std::fs::read(&file).expect("read"),
+            b"not a directory".as_slice(),
+            "不得覆盖既有文件"
+        );
+
+        // 某个父层成分是文件。
+        let nested = file.join("child").join("leaf");
+        let error = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('B'),
+            create_request(),
+            Some(WorkspaceSource::PathWithCreate(
+                nested.to_str().expect("path").to_owned(),
+            )),
+        ))
+        .expect_err("父层是文件时创建必须失败");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        assert_eq!(session_count(&fixture), before, "失败零会话行");
+        assert!(!nested.exists());
+        assert_eq!(
+            std::fs::read(&file).expect("read"),
+            b"not a directory".as_slice(),
+            "不得删除既有文件"
+        );
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 形状非法（相对路径、含 `..`）在**开关为真**时同样是参数类错误，且 MUST NOT 触碰文件系统：
+    /// 目录不会被（部分）创建出来。
+    #[test]
+    fn the_create_switch_still_rejects_an_illegal_shape_without_touching_the_filesystem() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-create-switch-shape-{}", std::process::id()));
+        let created = root.join("escape");
+        let escaped = format!(
+            "{}{}..{}escape",
+            created.display(),
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR
+        );
+        for shape in ["relative/dir", &escaped] {
+            let error = block_on(fixture.use_cases.create_session(
+                &Actor::LocalCli,
+                create_session_request_id(),
+                digest('A'),
+                create_request(),
+                Some(WorkspaceSource::PathWithCreate(shape.to_owned())),
+            ))
+            .expect_err("形状非法必须拒绝");
+            assert!(
+                matches!(error, PortError::InvalidRequest(_)),
+                "{shape} 必须是参数类错误，实际 {error:?}"
+            );
+        }
+        assert!(!created.exists(), "形状非法时不得创建任何目录");
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 目录已按开关创建，但随后的后端启动失败：命令失败，**已创建的目录仍在主机上**（不回滚、
+    /// 不删除）。
+    #[test]
+    fn a_created_directory_survives_a_later_backend_failure() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-create-switch-fail-{}", std::process::id()));
+        let target = root.join("keep").join("me");
+        fixture
+            .world
+            .push_create_error(PortError::Unavailable(UnavailableKind::Busy));
+        let before = session_count(&fixture);
+
+        block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            Some(WorkspaceSource::PathWithCreate(
+                target.to_str().expect("path").to_owned(),
+            )),
+        ))
+        .expect_err("后端失败");
+
+        assert!(target.is_dir(), "已创建的目录不得被删除或回滚");
+        assert_eq!(session_count(&fixture), before, "失败零会话行");
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // `workspace.browse` 与目录资源投影
+    // -----------------------------------------------------------------------------------------
+
+    /// 目录浏览替身：记录 `directories()` 的每次入参（用来观察「形状非法时不触碰文件系统」），
+    /// 并按预置内容返回一层；`unreachable` 为真时按不可达的一层失败。
+    struct RecordingBrowser {
+        roots: Vec<DirectoryListing>,
+        layer: Vec<DirectoryListing>,
+        unreachable: bool,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingBrowser {
+        fn new(layer: Vec<DirectoryListing>) -> Self {
+            Self {
+                roots: Vec::new(),
+                layer,
+                unreachable: false,
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            lock(&self.calls).clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl DirectoryBrowser for RecordingBrowser {
+        async fn roots(&self) -> Result<Vec<DirectoryListing>, PortError> {
+            lock(&self.calls).push("<roots>".to_owned());
+            Ok(self.roots.clone())
+        }
+
+        async fn directories(&self, parent: &str) -> Result<Vec<DirectoryListing>, PortError> {
+            lock(&self.calls).push(parent.to_owned());
+            if self.unreachable {
+                return Err(PortError::Unavailable(UnavailableKind::IoError));
+            }
+            Ok(self.layer.clone())
+        }
+    }
+
+    /// [`fixture`] 的目录浏览端口可替换版本（注入替身以观察是否触碰文件系统）。
+    fn fixture_with_browser(browser: Arc<dyn DirectoryBrowser>) -> Fixture {
+        let Fixture {
+            use_cases,
+            world,
+            session,
+        } = fixture();
+        Fixture {
+            use_cases: use_cases.with_directory_browser(browser),
+            world,
+            session,
+        }
+    }
+
+    /// 一层里的一条目录条目（名称 + 绝对路径）。
+    fn listing(parent: &std::path::Path, name: &str) -> DirectoryListing {
+        DirectoryListing {
+            name: name.to_owned(),
+            path: parent.join(name).to_string_lossy().into_owned(),
+        }
+    }
+
+    /// 形状非法（相对路径、含 `..`）是参数类错误，且**端口一次都没被调用**——目录浏览的判定顺序
+    /// 必须是「形状 → 文件系统」，与既有的路径口径一致（不依赖 `canonicalize` 归一化 `..`）。
+    #[test]
+    fn workspace_browse_rejects_an_illegal_shape_without_touching_the_filesystem() {
+        let browser = Arc::new(RecordingBrowser::new(Vec::new()));
+        let fixture = fixture_with_browser(browser.clone());
+        let parent_ref = std::env::temp_dir().join("sub").join("..");
+        for shape in [
+            "relative/dir".to_owned(),
+            parent_ref.to_string_lossy().into_owned(),
+            String::new(),
+        ] {
+            let error = block_on(
+                fixture
+                    .use_cases
+                    .workspace_browse(&Actor::LocalCli, Some(&shape)),
+            )
+            .expect_err("形状非法必须拒绝");
+            assert!(
+                matches!(error, PortError::InvalidRequest(_)),
+                "{shape} 必须是参数类错误，实际 {error:?}"
+            );
+        }
+        assert!(
+            browser.calls().is_empty(),
+            "形状非法时不得触碰文件系统，实际调用 {}",
+            browser.calls().len()
+        );
+    }
+
+    /// 一层不可达（不存在/不可读/不是目录）是服务端不可用类错误，且**不返回任何条目**，也不回退到
+    /// 父层或根列表。
+    #[test]
+    fn workspace_browse_reports_an_unreachable_layer_as_unavailable() {
+        // 用随 core 提供的默认实现：真实临时目录下不存在的一层。
+        let fixture = fixture();
+        let missing = std::env::temp_dir().join(format!("acpr-browse-missing-{}", uuid_text(31)));
+        let error = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(missing.to_str().expect("path"))),
+        )
+        .expect_err("不存在的一层必须失败");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+
+        // 形式合法但是文件：同样是不可用类（不是「这一层没有目录」）。
+        let file = std::env::temp_dir().join(format!("acpr-browse-file-{}", uuid_text(32)));
+        std::fs::write(&file, b"x").expect("write");
+        let error = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(file.to_str().expect("path"))),
+        )
+        .expect_err("文件不是一层");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        let _ = std::fs::remove_file(&file);
+
+        // 端口的不可达（读目录中途失败）同样映射成不可用类，而不是空列表。
+        let browser = Arc::new(RecordingBrowser {
+            unreachable: true,
+            ..RecordingBrowser::new(Vec::new())
+        });
+        let fixture = fixture_with_browser(browser);
+        let dir = temp_dir(&format!("acpr-browse-unreadable-{}", std::process::id()));
+        let error = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(dir.to_str().expect("path"))),
+        )
+        .expect_err("端口的失败必须上抛");
+        assert!(matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::IoError)
+        ));
+        let _ = std::fs::remove_dir_all(&*dir);
+    }
+
+    /// 默认实现只返回**目录**：同一层里的普通文件不出现在条目里，条目也不带任何大小/时间戳字段。
+    #[test]
+    fn workspace_browse_lists_directories_only() {
+        let fixture = fixture();
+        let root = temp_dir(&format!("acpr-browse-layer-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("nested")).expect("nested dir");
+        std::fs::write(root.join("note.txt"), b"content").expect("file");
+        let result = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(root.to_str().expect("path"))),
+        )
+        .expect("browse");
+        assert_eq!(
+            result.entries.len(),
+            1,
+            "只列直接子目录：{:?}",
+            result.entries
+        );
+        assert_eq!(result.entries[0].name, "nested");
+        assert!(result.entries[0].path.ends_with("nested"));
+        assert!(!result.truncated);
+        assert!(
+            !result
+                .entries
+                .iter()
+                .any(|entry| entry.name.contains("note.txt")),
+            "文件条目不得出现"
+        );
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 条目按名称以确定的顺序排列（端口给出的顺序不影响结果），并标记「是否已登记」。
+    #[test]
+    fn workspace_browse_sorts_entries_and_marks_registered_directories() {
+        let root = temp_dir(&format!("acpr-browse-order-{}", std::process::id()));
+        let canonical = std::fs::canonicalize(&*root).expect("canonicalize");
+        let alias = WorkspaceAlias::new("api").expect("alias");
+        let browser = Arc::new(RecordingBrowser::new(vec![
+            listing(&canonical, "zeta"),
+            listing(&canonical, "Alpha"),
+            listing(&canonical, "beta"),
+        ]));
+        let fixture = fixture_with_browser(browser.clone());
+        fixture.world.workspaces.lock().expect("lock").push(
+            WorkspaceRecord::try_new(
+                alias,
+                "API",
+                canonical.join("beta").to_str().expect("path"),
+                crate::broker::test_support::ts(0),
+                crate::broker::test_support::ts(0),
+            )
+            .expect("workspace record"),
+        );
+
+        let result = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(root.to_str().expect("path"))),
+        )
+        .expect("browse");
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Alpha", "beta", "zeta"],
+            "按名称的 Unicode 码点升序，端口给出的顺序不影响结果"
+        );
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|entry| entry.registered)
+                .collect::<Vec<_>>(),
+            vec![false, true, false],
+            "只有与某个已登记目录的规范化路径相同的那条为真"
+        );
+        // 结果里的 `path` 是**请求原文的逐字回显**（这里请求的就是 temp 目录的原文，规范化结果在
+        // Windows 上多出 verbatim 前缀，因此两者不是同一个取值）。
+        assert_eq!(result.path.as_deref(), root.to_str());
+        assert_eq!(browser.calls().len(), 1, "每次浏览只查询一层");
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 结果里的 `path` 与请求原文**逐字相同**，即使它与规范化结果不是同一个取值；条目的 `path` 仍取
+    /// 下发形式，`registered` 仍按规范化路径判定。
+    ///
+    /// 用**尾分隔符**制造「原文 ≠ 规范化结果」：形状校验接受它，`canonicalize` 会去掉它，这条差异在
+    /// Windows 与 Unix 上都成立（Windows 上还有 verbatim 前缀这一层差异）。
+    #[test]
+    fn workspace_browse_echoes_the_requested_parent_verbatim() {
+        let root = temp_dir(&format!("acpr-browse-echo-{}", std::process::id()));
+        let canonical = std::fs::canonicalize(&*root).expect("canonicalize");
+        let requested = format!(
+            "{}{}",
+            root.to_str().expect("path"),
+            std::path::MAIN_SEPARATOR
+        );
+        let alias = WorkspaceAlias::new("api").expect("alias");
+        let browser = Arc::new(RecordingBrowser::new(vec![
+            listing(&canonical, "sub"),
+            listing(&canonical, "registered"),
+        ]));
+        let fixture = fixture_with_browser(browser);
+        // 已登记目录取 `registered` 这一条：`registered` 必须按**规范化路径**判定，与请求形态无关。
+        fixture.world.workspaces.lock().expect("lock").push(
+            WorkspaceRecord::try_new(
+                alias,
+                "API",
+                canonical.join("registered").to_str().expect("path"),
+                crate::broker::test_support::ts(0),
+                crate::broker::test_support::ts(0),
+            )
+            .expect("workspace record"),
+        );
+
+        let result = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(requested.as_str())),
+        )
+        .expect("browse");
+
+        assert_eq!(
+            result.path.as_deref(),
+            Some(requested.as_str()),
+            "结果里的 `path` 必须是请求原文"
+        );
+        assert_ne!(
+            result.path.as_deref(),
+            Some(canonical.to_str().expect("path")),
+            "回显的不是规范化结果——否则这条断言在斜杠/尾分隔符形态下就会漏过"
+        );
+        // 条目的 `path` 仍是**下发形式**：规范化结果剥掉平台 verbatim 前缀。
+        assert_eq!(
+            result
+                .entries
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["registered", "sub"],
+            "条目按名称升序"
+        );
+        assert_eq!(
+            result.entries[1].path,
+            crate::strip_verbatim(canonical.join("sub"))
+                .to_string_lossy()
+                .into_owned(),
+            "条目的 `path` 仍是下发形式（规范化结果剥掉 verbatim 前缀）"
+        );
+        assert!(
+            result.entries[0].registered,
+            "registered 按规范化路径判定，不受请求形态影响"
+        );
+        assert!(!result.entries[1].registered);
+
+        // Windows 上再钉住一种「请求原文与规范化结果不同」的形态：正斜杠。`canonicalize` 会把它换成
+        // 反斜杠（并补上 verbatim 前缀），回显则必须保留客户端提交的那一份文本。
+        #[cfg(windows)]
+        {
+            let forward = requested.replace('\\', "/");
+            let echoed = block_on(
+                fixture
+                    .use_cases
+                    .workspace_browse(&Actor::LocalCli, Some(forward.as_str())),
+            )
+            .expect("browse");
+            assert_eq!(echoed.path.as_deref(), Some(forward.as_str()));
+            assert_ne!(
+                echoed.path.as_deref(),
+                Some(canonical.to_str().expect("path"))
+            );
+        }
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 根列表请求（`path = null`）走端口的 `roots()`，结果条目的父路径是 `None`。
+    #[test]
+    fn workspace_browse_without_a_parent_returns_the_root_list() {
+        let browser = Arc::new(RecordingBrowser {
+            roots: vec![
+                DirectoryListing {
+                    name: "C:".to_owned(),
+                    path: "C:\\".to_owned(),
+                },
+                DirectoryListing {
+                    name: "D:".to_owned(),
+                    path: "D:\\".to_owned(),
+                },
+            ],
+            ..RecordingBrowser::new(Vec::new())
+        });
+        let fixture = fixture_with_browser(browser.clone());
+        let result =
+            block_on(fixture.use_cases.workspace_browse(&Actor::LocalCli, None)).expect("roots");
+        assert_eq!(result.path, None);
+        assert_eq!(result.entries.len(), 2);
+        assert_eq!(result.entries[0].name, "C:");
+        assert!(!result.truncated);
+        assert_eq!(browser.calls(), vec!["<roots>".to_owned()]);
+    }
+
+    /// 超过固定上限时只返回上限内的条目并置截断标记：不静默丢弃，也不因超限整次失败。
+    #[test]
+    fn workspace_browse_truncates_over_the_fixed_limit() {
+        let root = temp_dir(&format!("acpr-browse-limit-{}", std::process::id()));
+        let canonical = std::fs::canonicalize(&*root).expect("canonicalize");
+        let layer: Vec<DirectoryListing> = (0..WORKSPACE_BROWSE_ENTRY_LIMIT + 12)
+            .map(|index| listing(&canonical, &format!("dir-{index:03}")))
+            .collect();
+        let browser = Arc::new(RecordingBrowser::new(layer));
+        let fixture = fixture_with_browser(browser);
+        let result = block_on(
+            fixture
+                .use_cases
+                .workspace_browse(&Actor::LocalCli, Some(root.to_str().expect("path"))),
+        )
+        .expect("browse");
+        assert!(result.truncated, "超限必须置截断标记");
+        assert_eq!(result.entries.len(), WORKSPACE_BROWSE_ENTRY_LIMIT);
+        assert_eq!(
+            result.entries[0].name, "dir-000",
+            "保留的是排序后的前若干条"
+        );
+        let _ = std::fs::remove_dir_all(&*root);
+    }
+
+    /// 目录资源投影：协商 `core.workspace-path.v1` 时每条带规范化路径（`strip_verbatim` 之后的形式），
+    /// 未协商时该键**缺席**（`None`，不是空串）——对端因此仍看到只有两个键的封闭对象。
+    #[test]
+    fn the_workspace_catalog_carries_paths_only_when_negotiated() {
+        let fixture = fixture();
+        let alias = WorkspaceAlias::new("project").expect("alias");
+        fixture.world.workspaces.lock().expect("lock").push(
+            WorkspaceRecord::try_new(
+                alias.clone(),
+                "Project",
+                std::env::temp_dir().to_str().expect("temp dir is utf-8"),
+                crate::broker::test_support::ts(0),
+                crate::broker::test_support::ts(0),
+            )
+            .expect("workspace record"),
+        );
+
+        let with_path = block_on(
+            fixture
+                .use_cases
+                .sync_workspace_catalog(&Actor::LocalCli, true),
+        )
+        .expect("catalog");
+        assert_eq!(with_path.len(), 1);
+        assert_eq!(with_path[0].alias(), &alias);
+        assert_eq!(with_path[0].display_name(), "Project");
+        let path = with_path[0].path().expect("协商后必须带路径");
+        assert!(
+            std::path::Path::new(path).is_absolute(),
+            "路径必须是绝对路径形状：{path}"
+        );
+        assert!(
+            !path.starts_with(r"\\?\"),
+            "下发形式必须剥掉 verbatim 前缀：{path}"
+        );
+
+        let without_path = block_on(
+            fixture
+                .use_cases
+                .sync_workspace_catalog(&Actor::LocalCli, false),
+        )
+        .expect("catalog");
+        assert_eq!(without_path.len(), 1);
+        assert_eq!(
+            without_path[0].path(),
+            None,
+            "未协商路径能力时该键缺席（不是空串、不是 null 占位）"
+        );
+        assert_eq!(without_path[0].alias(), &alias);
+        assert_eq!(without_path[0].display_name(), "Project");
     }
 
     /// §11.6：`import.remove` 只走一次写集（管理行 + 关联行 + 交付索引 + 命令引用），

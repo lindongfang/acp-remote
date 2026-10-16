@@ -3,6 +3,7 @@
 > 状态：编码前契约（Draft）  
 > ACP wire 版本：1  
 > 修订记录（2026-09-18）：新增 §6 `acp_facade` 的 `session/new` 映射与错误映射；`elicitation/create` 的 capability 占位符改为 `clientCapabilities.elicitation.form`；新增 `meta_fields_byte_exact`、`extension_method_explicit_unsupported` 两个不变量，未知判别子改为 `visible_degradation`；capability 路径改为可校验的字面量；`content.resource_link` 的 gate 由 `embeddedContext` 改为 `null`（上游把它列为 baseline，不是 opt-in）；补齐 Sync/Node Link 的 `elicitation.respond` 动作集到 ACP 的 `accept`/`decline`/`cancel`（此前缺 `decline`，会让 Access 节点上的上游客户端无法表达"拒绝"）。  
+> 修订记录（2026-10-17）：`tool_content.diff` 的第一阶段交付由「行级差异统计 + 相对化展示路径」扩为「统计 + 相对化路径 + **有界**结构化逐行差异」——逐行差异在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，受固定的行数与字节上限约束，超限时只带统计并显式标记差异行未下发（见 §5 第 4 条）；该行的 `delivery` 仍为 `mvp`、`layers.pwa` 仍为 `view_only`（机器矩阵相应条目只更新其 `revision` 元信息，其余字段不变）。  
 > 修订记录（2026-09-30）：`method.session_resume` 与 `cap.agent.session_resume` 的 `delivery` 由 `post_mvp` 提升为 `conditional_mvp`，`broker` 层由 `explicit_unsupported` 改为 `project_and_preserve`（`acp=native`、`sync`/`pwa=explicit_unsupported`、`facade=not_advertised` 不变）；`session/load` 仍为 `post_mvp`。  
 > 上游快照已 vendored 到 `schemas/acp/v1/upstream/schema.json`，`check:acp` 强制重算其 sha256 并与本文固定值比对；`fixtures/acp/v1` 由 `manifest.json` 驱动、按同一快照做 ajv 校验。
 > 上游快照：`agentclientprotocol/agent-client-protocol@c4137ab3b168d97f0ad6c542f483b6a417b2d610`  
@@ -178,7 +179,7 @@ Rust/TypeScript 测试必须读取同一矩阵或引用相同 row/test ID 输出
 1. `initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/update` 的 fake Agent 端到端测试，并覆盖 Owner—Access Node Link；
 2. 全部 11 种 `session/update` 的解码与 raw 保真测试，即使 PWA 尚不能完整呈现其中某项；
 3. text prompt 输入；Agent 输出的五种 content block 均不会静默丢失；
-4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；其中 `tool_content.diff` 是 `file.changed` 事件的**唯一**派生源（`delivery = mvp`），首阶段即交付行级差异统计 `addedLines`/`deletedLines` 与相对化展示路径 `displayPath`／`outsideWorkspace`，且行数只覆盖 Agent 在工具调用里声明的改动——shell 驱动的改动不计入、判定不出时省略而非填零，字段语义见 `SYNC_PROTOCOL.md` §10.3；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化，agent→client 的 `terminal/*` 服务方法不在此列——它们仍是 `post_mvp`、`facade=not_advertised`；
+4. tool call、diff、permission、elicitation 的结构化内容块与事件视图保持结构化或明确降级；其中 `tool_content.diff` 是 `file.changed` 事件的**唯一**派生源（`delivery = mvp`），首阶段即交付行级差异统计 `addedLines`/`deletedLines`、相对化展示路径 `displayPath`／`outsideWorkspace`，以及**有界**的结构化逐行差异（每行标明新增、删除或上下文；受固定的行数与字节上限约束，超限时改为只带统计并显式标记「差异行未下发」与已登记原因，MUST NOT 下发被截断或被裁剪的行）——逐行差异只在客户端协商 `core.file-diff.v1` 时随 `file.changed` 视图出现，未协商时该键缺席（不是空数组）。行数只覆盖 Agent 在工具调用里声明的改动——shell 驱动的改动不计入、判定不出时省略而非填零，字段语义见 `SYNC_PROTOCOL.md` §10.3；tool result 中的 terminal 内容块（`tool_content.terminal`）同属首阶段必须结构化，agent→client 的 `terminal/*` 服务方法不在此列——它们仍是 `post_mvp`、`facade=not_advertised`；
 5. `_meta`、下划线扩展方法和未知未来 discriminator 的保真/显式不支持行为：已知消息内出现的未知字段与任意层级的 `_meta` 必须逐字节保真（`invariant.meta_fields_byte_exact`，`expectation = byte_exact`）；未知的 `_` 前缀方法必须由 facade 显式拒绝（ACP 方法未找到的等价错误），不得转发或静默丢弃（`invariant.extension_method_explicit_unsupported`）；未出现在上游固定快照中的 `sessionUpdate` 判别子按未知事件可见降级并保留 `acp.rawJson`（`invariant.future_update_visible`，`expectation = visible_degradation`）。`visible_degradation` 的含义是：无法理解的结构化字段必须保留原文并向用户可见降级，既不得静默丢弃，也不得降格为普通文本；这与 `explicit_unsupported` 的区别在于前者仍保持内容可见，后者是明确的拒绝。
 6. capability 未宣告、已宣告但 Broker 不支持、Broker 支持但 PWA 不支持三种路径可区分；
 7. `acp-facade` 只宣告经端到端测试证明的能力。

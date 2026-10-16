@@ -124,7 +124,8 @@ fn snapshot_chunk_index_is_a_decimal_string_and_items_follow_the_resource() {
 }
 
 /// `workspaces`/`agents` 是与既有六类同级的快照资源：元素形状由 `resource` 决定，未登记取值被拒，
-/// 且 `items` 里只允许出现 wire 合同的两个字段（`canonicalPath` 之类一律拒）。
+/// 且 `items` 里的键必须落在各自的值对象上（`workspaceCatalogEntry` 的路径键是**可选**的，
+/// 未登记的键一律拒）。
 #[test]
 fn catalog_snapshot_resources_enforce_their_item_shape() {
     let chunk = |resource: &str, items: &str| {
@@ -145,6 +146,30 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "workspaces chunk 必须被接受：{workspaces:?}"
     );
 
+    // 协商 `core.workspace-path.v1` 时的形状：路径键**出现在条目上**（feature 门控本身不由 schema
+    // 表达，未协商时服务端不下发该键）。
+    let with_path: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk(
+            "workspaces",
+            "[{\"alias\":\"project.1\",\"displayName\":\"Project One\",\"path\":\"D:/src/project\"}]",
+        ),
+    );
+    assert!(
+        with_path.is_ok(),
+        "workspaces item 带路径键必须被接受：{with_path:?}"
+    );
+
+    // 路径键没有 `null` 分支：显式 `null` 不是「未协商」（未协商是键缺席）。
+    let null_path: Result<SnapshotChunk, String> = decode(
+        "sync.snapshot_chunk",
+        &chunk(
+            "workspaces",
+            "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"path\":null}]",
+        ),
+    );
+    assert!(null_path.is_err(), "workspaces item 的 path 不得为 null");
+
     let agents: Result<SnapshotChunk, String> = decode(
         "sync.snapshot_chunk",
         &chunk(
@@ -164,15 +189,16 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
     );
     assert!(missing_default.is_err(), "agents item 缺 default 必须被拒");
 
-    // 本机规范化路径不得出现在 wire 上（§12.3）：多一个键即拒。
-    let leaked_path: Result<SnapshotChunk, String> = decode(
+    // 值对象是封闭的：未登记的键（含别的路径名）一律拒——路径只在 `path` 这一个键上，且只在这类
+    // 条目上出现（`SECURITY_DESIGN.md` §12.3、`SYNC_PROTOCOL.md` §9.4）。
+    let unknown_key: Result<SnapshotChunk, String> = decode(
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
             "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"canonicalPath\":\"C:/src/p\"}]",
         ),
     );
-    assert!(leaked_path.is_err(), "workspaces item 带路径必须被拒");
+    assert!(unknown_key.is_err(), "workspaces item 的未登记键必须被拒");
 
     // 两类资源的 items 不得互换。
     let swapped: Result<SnapshotChunk, String> = decode(

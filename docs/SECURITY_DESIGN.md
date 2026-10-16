@@ -1,8 +1,9 @@
 # ACP Remote 安全设计
 
 > 状态：编码前安全基线（Draft）  
-> 版本：0.5
-> 日期：2026-10-16  
+> 版本：0.6
+> 日期：2026-10-17  
+> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「本机规范化路径永不出网」改写为**带前提的新边界**——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览 `workspace.browse` 的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显；日志、审计记录与错误 `details` 仍不含任何路径（§14.1 **未变**）。§3 把已登记目录的规范化路径纳入 `operational-metadata` 并写明例外共有两处（目录资源条目与只读浏览结果）；§8 补一句远程提交目录与目录浏览能力的边界；§10.2 新增只读查询命令 `workspace.browse`（feature `core.workspace-browse.v1` 门控、不登记、不产生审计动作）并改写 Sync 面目录校验的路径口径；§10.3 删去与 §10.2 自相矛盾的「规范化路径永不出网」表述、改为新口径；§12.3 把路径口径改为「只下发给协商该能力的设备、且只含已登记目录，另加只读浏览返回的那一层条目」；§19 登记残余风险。决策理由与被否决备选见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)。威胁模型与信任边界**变**：在新前提下路径的可见面扩大（残余风险见 §19 与 ADR-0009）。  
 > 修订记录（2026-10-16，`pairing-model`）：配对只保留两条密码学校验（用配对载荷里的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节一致），**短验证码（SAS）两套全部删除**——§5 新增 §5.1 说明「为什么本协议不需要短验证码」，§9.3 的 pairing secret 用途、§9.4 的确认页展示项与 §18.1 的测试项随之收窄；**设备权限层删除**——§2.1/§2.2、§3 的 `security-metadata` 行、§4.2 的设备条目、§5 的威胁控制、§7.1/§7.2、§8、§9.4、§9.5、§10.1、§10.2 与 §12.3 改为「通过设备认证即可执行业务命令，设备不再有授权维度」，§10.2 的表格去掉「所属 pack」列、`pack.*`/`preset.*` 两类词汇删除；**保留**设备认证与每连接 challenge-response、配对确认只能由本机用户完成、撤销立即关闭连接、速率与各项上限、跨节点 `grant.*`/Export `scopes`/Import grants。威胁模型与信任边界没有放宽——删 SAS 的前提是 §5.1 写明的两条密码学要求已由 `pwa-web-client` 承担。  
 > 修订记录（2026-10-16，`session-create-settle-order`）：§14.1 的「默认日志允许字段」补上**命令级日志**的固定字段（主体标识——哪个设备/节点在控制、命令名、资源标识、终态类别与**封闭词表**的失败成因类别），并重申「默认禁止」不变（不写路径、凭据与 prompt 正文）。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-16，`ui-csp-inline-styles`）：§11.1 的 `[实现现状]` 按实绩改写——前端内联样式形态已移除（入口文档把 reset 外置为同源 `/entry-reset.css`，并以**必须保持为空**的同源 `/rnw-stylesheet.css` 承载 `react-native-web` 的运行时样式表），样式改由**同源外部样式表**交付，CSP 取值**仍未放宽**（`insertRule` 不是 CSP 的检查点，既不得写成「阻止了样式注入」，也不得写成「放宽了基线」）。威胁模型与信任边界**未变**。  
@@ -67,7 +68,7 @@
 | `secret` | Node/Device 私钥、Provider token、pairing secret、TLS private key | 不同步、不记录；平台安全存储或明确失败关闭 |
 | `sensitive-content` | prompt、回复、终端、diff、文件内容、ACP `rawJson`、附件 | 仅授权设备可读；受保留期、配额和渲染隔离约束 |
 | `security-metadata` | node/device public key、Export grant、节点信任记录与 Export 的授权集合（`grant.*` 展开值）、撤销时间、Node fingerprint、审计结果 | 完整性优先；只向有权主体暴露必要字段 |
-| `operational-metadata` | session title、Agent/model、时间、错误码、sequence | 仍可能泄露项目活动；按授权过滤和日志最小化 |
+| `operational-metadata` | session title、Agent/model、时间、错误码、sequence、**已登记 workspace 的规范化路径**（仅协商 `core.workspace-path.v1` 时随目录资源下发，见 §12.3） | 仍可能泄露项目活动；按授权过滤和日志最小化 |
 | `public-artifact` | PWA 静态资源、公开 schema、fixture、公钥算法信息 | 必须有发布完整性，不能包含生产 secret |
 
 处理规则：
@@ -75,7 +76,7 @@
 - 数据分类跟随内容，不因进入日志、缓存、fixture 或错误对象而降低。
 - fixture 只能使用明确标记的公开测试密钥和虚构内容。
 - 客户端可见不等于可写；每个 mutation 单独授权。
-- 从高等级数据派生的摘要、文件名和路径仍可能敏感，不能默认公开。
+- 从高等级数据派生的摘要、文件名和路径仍可能敏感，不能默认公开；许可的路径面**只有两处**：(1) **已登记** workspace 的规范化路径——它在客户端协商 `core.workspace-path.v1` 时随快照的 `workspaces` 资源条目下发（§12.3）；(2) 只读目录浏览 `workspace.browse` 的结果——它在客户端协商 `core.workspace-browse.v1` 时于 `command.result` 里返回被请求那一层的直接子目录绝对路径与逐字回显的父路径（§10.2、§12.3）。除这两处之外的一切输出（事件、错误 `details`、其余 `command.result`、日志与审计记录）仍不含任何路径，客户端自己提交的目录也不被回显——`workspace.browse` 逐字回显的请求父路径属上述第 (2) 处例外。
 
 ## 4. 主体与信任假设
 
@@ -190,7 +191,7 @@ TLS 在其他机器或云服务终止时，默认 Profile 不再提供客户端�
 
 ## 8. 本地管理入口
 
-Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管理属于 Owner Node 本地管理能力。远程 `session.create` 是受限业务能力，只能引用 Owner 预发布的 workspace template。loopback 本身不是充分授权，因为普通网页也可能访问 localhost。
+Provider/MCP 配置、原始 workspace 路径的**登记**、Node/Device 管理和 Export 管理属于 Owner Node 本地管理能力。远程 `session.create` 是受限业务能力，只能引用 Owner 预发布的 workspace template。设备侧另有两项受限远程能力：`session.create` 可以带一个客户端提交的绝对目录（受 §12.3 校验，且不得被当作登记别名），`workspace.browse` 可以只读地逐层查看目录（feature `core.workspace-browse.v1` 门控、不登记、不产生审计动作，见 §10.2）；**已登记**目录的规范化路径只在客户端协商 `core.workspace-path.v1` 时随目录资源下发，只读浏览的 `command.result` 是许可的另一处路径面（§10.2、§12.3）。loopback 本身不是充分授权，因为普通网页也可能访问 localhost。
 
 优先顺序（已由 [ADR-0004](./adr/0004-local-admin-transport.md) 落定）：
 
@@ -310,6 +311,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `command.status` | query | `command.status` | `grant.observe` | mvp |
 | `session.mode.list` | query | `session.mode.list` | `grant.observe` | conditional_mvp |
 | `session.config.list` | query | `session.config.list` | `grant.observe` | conditional_mvp |
+| `workspace.browse` | query | `workspace.browse` | `grant.observe` | mvp |
 | `session.prompt` | mutation | `session.prompt` | `grant.interact` | mvp |
 | `session.cancel` | mutation | `session.cancel` | `grant.interact` | mvp |
 | `elicitation.respond` | mutation | `elicitation.respond` | `grant.interact` | conditional_mvp |
@@ -320,10 +322,11 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 | `session.resume` | mutation | `session.resume` | `grant.remote-work` | conditional_mvp（仅 Node Link；Sync 收到返回 `command.unsupported`） |
 
 - 「所需 scope」列是**登记副本**，不是设备侧的授权判定：设备方向对任何命令都没有 scope 前提，认证通过即可执行。
-- 五条查询命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`）在设备方向无需任何授权；断线恢复所需的 `command.status` 因此始终可用。节点方向它们仍归 `grant.observe`。
+- 六条查询命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`、`workspace.browse`）在设备方向无需任何授权；断线恢复所需的 `command.status` 因此始终可用。节点方向它们仍归 `grant.observe`（`workspace.browse` 只归 Sync 面，见下一条）。
+- `workspace.browse` 是 Sync 面的**只读**目录查询，受 feature `core.workspace-browse.v1` 门控：未协商该 feature 的连接提交它以 `protocol.feature_required` 拒绝且**不触碰文件系统**。它只返回被请求那一层的直接子目录（名称、绝对路径、是否已登记）与截断标记，不返回文件，也不返回任何文件内容、大小、时间戳或权限；不登记、不缓存、不产生审计动作（审计动作词表不因它扩张）。单层条目上限是固定 v1 常量（见 `SYNC_PROTOCOL.md` §14），超限只置截断标记而不失败、不静默丢弃。请求与结果形状见 `SYNC_PROTOCOL.md` §11.5。
 - `session.create` 经两个传输面暴露，前提与载荷不同：
-  - **Sync 面**以「该连接已通过设备认证」为唯一前提（不再有设备侧授权判定）。payload 只允许 `agentId`（必填）与目录引用二者之一：已登记别名 `workspaceAlias`，或客户端提交的**绝对**目录 `workspacePath`（1..=4096 字节）；两者恰好出现一个，同时出现或都不出现，以及出现任何其它键（含 `exportId`、`templateParams`、MCP 配置或凭据字段）一律以 `protocol.schema_invalid` 拒绝且不创建会话。
-  - **Sync 面的目录校验**：形状不合法（相对路径、含 `..`、别名未在本机登记）以参数类错误拒绝，且不触碰文件系统；形式合法但无法解析（目录被删除、被换成文件、规范化失败、权限不足）以 `internal.unavailable` 拒绝。两类都不得创建会话、不得启动 Agent 进程、不得回退到任何替代目录；解析得到的规范化路径不得回显给对端（§12.3）。
+  - **Sync 面**以「该连接已通过设备认证」为唯一前提（不再有设备侧授权判定）。payload 只允许 `agentId`（必填）、目录引用（二者之一：已登记别名 `workspaceAlias`，或客户端提交的**绝对**目录 `workspacePath`，1..=4096 字符）与一个可选的「目录不存在则先创建」开关三类字段；目录引用恰好出现一个，同时出现或都不出现、别名与建目录开关同时出现，以及出现任何其它键（含 `exportId`、`templateParams`、MCP 配置或凭据字段）一律以 `protocol.schema_invalid` 拒绝且不创建会话。建目录开关为真且目标不存在时，系统先创建它（连同缺失父层）再启动 Agent；路径上已存在非目录成分或创建失败以服务端不可用类错误拒绝，且不覆盖、不删除已有内容。已创建的目录在后续失败时**不删除、不回滚**。
+  - **Sync 面的目录校验**：形状不合法（相对路径、含 `..`、别名未在本机登记）以参数类错误拒绝，且不触碰文件系统；形式合法但无法解析（目录被删除、被换成文件、规范化失败、权限不足）以 `internal.unavailable` 拒绝。两类都不得创建会话、不得启动 Agent 进程、不得回退到任何替代目录；解析得到的规范化路径不得回显给对端——客户端自己提交的目录不构成泄漏，但它 MUST NOT 被回显为对端可见字段；**已登记**目录的路径只在协商 `core.workspace-path.v1` 时随目录资源下发（§12.3）。
   - **Node Link 面**仍额外要求 `exportId`、Export 发布的 workspace template 与 Owner 的 `grant.remote-work`，且**请求不得携带任意 Owner 路径**（只允许 `workspaceAlias`），形状见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.7。两个面共用同一套命令名、幂等与终态语义。
 - `session.resume` 只归 `grant.remote-work`（不新增授权维度），它的 payload 是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录一律取自 Owner 自身的持久化记录，不接受客户端提供。目标 Agent 未宣告 `sessionCapabilities.resume` 时显式失败，不降级为新建会话。
 - 节点方向的配对确认页与 Export 管理 UI 必须完整展示最终 `grant.*` 集合，不能用含糊的「完全访问」替代；设备方向的配对确认页没有权限栏——设备方向没有可授予的授权。
@@ -344,7 +347,9 @@ local.node.rotate-key      Node Identity 轮换
 local.audit.export         本地审计导出（不含会话正文）
 ```
 
-远程 `session.create` 是唯一与 workspace 相关的受限远程能力。Node Link 面只能引用 Export 发布的 alias/template；Sync 面只能引用本机当前已登记的 workspace 别名与已配置的 Agent 标识（wire 上传 `{ workspaceAlias, agentId }`，规范化路径、目录追加与凭据永远不出网）。两者都不得让客户端提交任意 Owner 路径或 Provider/MCP 凭据。未来改变这条边界属于产品与安全边界变更，需要更新本文及 `INITIAL_DESIGN.md`，不能只增加一个 command schema。
+远程与 workspace 相关的受限能力有两条：`session.create`（Sync 面按「该连接已通过设备认证」判定）与只读的 `workspace.browse`（feature `core.workspace-browse.v1` 门控，见 §10.2）。Node Link 面只能引用 Export 发布的 alias/template；Sync 面可以引用本机当前已登记的 workspace 别名与已配置的 Agent 标识，**也可以**带一个客户端提交的绝对目录（受 §12.3 校验，且不因此登记为别名）。客户端提交的目录 MUST NOT 被回显为对端可见字段。路径的可见面**只有两处**：**已登记**目录的规范化路径只在客户端协商 `core.workspace-path.v1` 时随快照的 `workspaces` 资源条目下发；只读目录浏览 `workspace.browse` 只在客户端协商 `core.workspace-browse.v1` 时于 `command.result` 里返回被请求那一层的直接子目录绝对路径与逐字回显的父路径（§10.2）。除这两处之外的一切输出（事件、其余 `command.result`、错误 `details`、日志与审计记录）仍不含任何路径；凭据与目录追加永远不出网。两个面都不得让客户端提交任意 Owner 路径或 Provider/MCP 凭据。
+
+这条边界在 `sync-path-browse-and-diff-delivery` 变更中被**显式改写**——此前是「规范化路径永不出网」，现在改为「只下发给协商了 `core.workspace-path.v1` 的已认证设备、且只含已登记目录」，另加许可的第二处路径面「协商了 `core.workspace-browse.v1` 时只读浏览返回的那一层条目」。改写的前提、被否决的备选与残余风险见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md)。再次改变它属于产品与安全边界变更，需要更新本文及 `INITIAL_DESIGN.md`，不能只增加一个 command schema。
 
 ### 10.4 并发决策
 
@@ -373,7 +378,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 终端使用纯文本/受控 ANSI renderer，不把输出写入 `innerHTML`。
 - diff、路径、工具参数和错误栈使用文本节点或经过测试的结构化组件。
 - ACP `rawJson` 只能作为文本查看、复制或受控下载，不能执行、注入 DOM 或作为授权输入。
-- 目录展示名（`displayName`）是用户经 `local.workspace.select` 输入的**不可信内容**（§4.3）：按 §4.3 的转义规则渲染，不得当 HTML/Markdown 解析、不得据此拼接路径或 URL、不得进入 `innerHTML`。目录别名是稳定主键；规范化路径既不是授权输入，也不出网（§12.3）。
+- 目录展示名（`displayName`）是用户经 `local.workspace.select` 输入的**不可信内容**（§4.3）：按 §4.3 的转义规则渲染，不得当 HTML/Markdown 解析、不得据此拼接路径或 URL、不得进入 `innerHTML`。目录别名是稳定主键；规范化路径既不是授权输入，其对外下发也只有两处、都受 feature 门控且只含对端必需的那一层：协商 `core.workspace-path.v1` 时随目录资源下发**已登记**目录，协商 `core.workspace-browse.v1` 时随 `workspace.browse` 的结果下发该层直接子目录（§12.3）。
 - sanitizer 配置、Markdown renderer 和链接策略必须有恶意 fixture。
 
 ### 11.3 Service Worker 与缓存
@@ -425,10 +430,10 @@ local.audit.export         本地审计导出（不含会话正文）
 
 ### 12.3 Workspace
 
-- 原始 workspace 路径的登记只能由 Owner Node 本地管理入口完成（`local.workspace.select`）。唯一例外是 Sync 面的 `session.create` 可以携带本机自己的设备提交的绝对目录；它必须先通过本节的路径校验与规范化，且不得被当作「别名」登记（见 §10.2 与 `SYNC_PROTOCOL.md` §11.5）。
+- 原始 workspace 路径的**登记**只能由 Owner Node 本地管理入口完成（`local.workspace.select`）。设备侧另有一条受限入口：Sync 面的 `session.create` 可以携带客户端提交的绝对目录；它必须先通过本节的路径校验与规范化，且不得被当作「别名」登记（见 §10.2 与 `SYNC_PROTOCOL.md` §11.5）。
 - 跨节点远程主体只能选择 Export 发布的 workspace alias/template，不能构造任意绝对路径、追加目录或修改 Agent 沙箱；Node Link 面的请求不得携带任意 Owner 路径。
 - 文件路径展示和下载必须重新检查其属于会话授权边界；不能只依赖客户端传来的 path。
-- 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。可判定规则（权威实现归 core，见 `CORE_PORTS_AND_STORAGE.md` §11.9）：只接受**绝对路径**；写入与使用前都必须存在且是**目录**；`canonicalize` 后的结果才是持久权威值；拒绝相对路径与含 `..` 的输入；UNC/网络路径允许但记一次结构化警告；路径与规范化结果**不得**出现在 catalog、事件、错误 `details` 或对端可见的任何输出里——口径是「不得泄漏**客户端尚未知道的**宿主路径」：客户端自己提交的目录因此不构成泄漏，但它同样 MUST NOT 被回显为对端可见字段。
+- 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。可判定规则（权威实现归 core，见 `CORE_PORTS_AND_STORAGE.md` §11.9）：只接受**绝对路径**；写入与使用前都必须存在且是**目录**；`canonicalize` 后的结果才是持久权威值；拒绝相对路径与含 `..` 的输入；UNC/网络路径允许但记一次结构化警告；路径与规范化结果 MUST NOT 出现在事件、错误 `details`、日志或审计记录里，也不得出现在下面两处例外之外的任何 `command.result` 里。例外**只有两处**：一是快照的 `workspaces` 资源条目——协商了 `core.workspace-path.v1` 的设备在那里收到**已登记**目录的规范化权威值（下发形式是剥掉平台 verbatim 前缀后的规范化结果）；二是只读目录浏览 `workspace.browse` 的 `command.result`——协商了 `core.workspace-browse.v1` 的设备在那里收到被请求那一层的直接子目录绝对路径与逐字回显的父路径（§10.2）。口径是「不得泄漏**客户端尚未知道的**宿主路径」：客户端自己提交的目录因此不构成泄漏，但它同样 MUST NOT 被回显为对端可见字段，也不会被登记为别名。`workspace.browse`（§10.2）只返回它必然要给客户端的那一层条目（名称、绝对路径、是否已登记），不得借该命令泄漏其它层的路径，且不产生登记、缓存或审计副作用。
 - Agent 的实际文件/命令权限仍由 Agent sandbox 和用户配置控制；ACP Remote 不能虚报更严格隔离。
 
 ## 13. 持久化与本地数据保护
@@ -637,6 +642,7 @@ manual pairing/revoke smoke test
 | 无云时 Owner Node 离线不可用 | 产品明确选择 local-first | 默认不展示 imported 会话正文，明确离线状态 |
 | 内存或未来显式缓存无法保证远程擦除 | Web/PWA/分布式系统限制 | 默认 `no-content-cache`、断线/撤销清内存；未来缓存需单独授权和提示 |
 | 超大 ACP 原文可能不下发 | 有界资源要求 | Daemon 保留策略 + `rawUnavailable` 显式降级 |
+| 已登记目录的规范化路径对被配对设备可见；目录浏览构成有限的目录结构探测面 | 目录页与创建选择器需要路径才能做同名消歧与展示，属产品明确要求的展示能力；任一被配对设备本就可见本节点全部会话与事件 | 路径可见面**只有两处**且各自 feature 门控（快照 `workspaces` 条目的规范化路径只在协商 `core.workspace-path.v1` 时下发、且只含**已登记**目录；`workspace.browse` 的 `command.result` 只在协商 `core.workspace-browse.v1` 时返回该层条目；未协商的一律不下发/拒绝且不触碰文件系统）+ 浏览只读且只返回一层、不返回文件与任何文件元数据、单层条目上限、复用命令族限流（120/分钟）、不产生审计动作（避免第二条"谁看了什么"的隐私面）+ 这两处之外的一切输出（事件、日志、审计记录、错误 `details`）仍不含任何路径；决策见 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) |
 
 ## 20. 编码前仍需收口的实现选择
 

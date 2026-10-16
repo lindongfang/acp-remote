@@ -648,6 +648,37 @@ fn file_changed_optional_fields_reject_wrong_shapes() {
     }
 }
 
+/// `diffLines` 与 `diffUnavailable` 互斥（`event-views.schema.json#/$defs/file.changed` 的 `not`）：
+/// 同时携带两者的视图必须在类型化层被拒，而单独携带其一仍然合法。
+///
+/// 阳性对照直接用两条合法夹具：它们的 `view` 分别只带 `diffLines`、只带 `diffUnavailable`。
+#[test]
+fn file_changed_diff_payloads_are_mutually_exclusive() {
+    const BOTH: &str = "invalid/view-file-changed-diff-lines-and-diff-unavailable.json";
+
+    assert!(
+        serde_json::from_str::<FileChanged>(&read_case(BOTH)).is_err(),
+        "{BOTH}：同时携带 diffLines 与 diffUnavailable 必须在类型化层被拒"
+    );
+    assert_eq!(
+        manifest_case(BOTH).expected_keyword.as_deref(),
+        Some("not"),
+        "{BOTH}：schema 侧的失败原因必须是互斥（not），而不是字段类型或缺失"
+    );
+
+    let lines = project_file_changed("valid/view-file-changed-diff-lines.json");
+    assert!(
+        lines.diff_lines.is_some() && lines.diff_unavailable.is_none(),
+        "只带 diffLines 的事件必须合法且不产生不可用标记"
+    );
+
+    let unavailable = project_file_changed("valid/view-file-changed-diff-unavailable.json");
+    assert!(
+        unavailable.diff_unavailable.is_some() && unavailable.diff_lines.is_none(),
+        "只带 diffUnavailable 的事件必须合法且不带差异行"
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // R8：`state` 封闭枚举
 // ---------------------------------------------------------------------------------------------

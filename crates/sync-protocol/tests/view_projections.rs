@@ -23,8 +23,10 @@ const MANIFEST: &str = "fixtures/sync/v1/manifest.json";
 /// MU1b 的 TP1 追加了两条 `file.changed` 合法视图夹具（统计省略、工作区外），因此由 36 增至 38。
 /// `event-node-origin.json`（`origin.kind = "node"`）又追加一条 `session.created` 视图夹具，故为 39。
 /// `event-origin-legacy-shape.json`（未协商 `core.event-origin.v1` 的 `{kind, deviceId}` 形状）
-/// 再追加一条 `session.created` 视图夹具，故为 40。
-const EXPECTED_VIEW_CASES: usize = 40;
+/// 再追加一条 `session.created` 视图夹具，故为 40。变更
+/// `sync-path-browse-and-diff-delivery`（WP1）又追加两条 `file.changed` 合法视图夹具
+/// （`diffLines` 结构化差异行、`diffUnavailable` 不可用标记），故为 42。
+const EXPECTED_VIEW_CASES: usize = 42;
 /// 被夹具覆盖的**不同** event 类型数，等于 `event-views.schema.json` 的 `$defs` 条目数。
 const EXPECTED_DISTINCT_VIEWS: usize = 34;
 

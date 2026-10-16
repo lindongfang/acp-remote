@@ -328,7 +328,7 @@
         "acp": { "$ref": "common.schema.json#/$defs/rawAcp" }
       }
     },
-    "snapshotItem.workspaces": { "$ref": "common.schema.json#/$defs/workspaceRef" },
+    "snapshotItem.workspaces": { "$ref": "common.schema.json#/$defs/workspaceCatalogEntry" },
     "snapshotItem.agents": { "$ref": "common.schema.json#/$defs/agentCatalogEntry" }
   }
 }

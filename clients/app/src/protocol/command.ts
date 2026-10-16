@@ -1,11 +1,13 @@
 /**
- * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：11 条 Sync 面命令与结果。
+ * `schemas/sync/v1/command.schema.json` 的严格 TypeScript 镜像：13 条 Sync 面命令与结果。
  *
  * `session.read` 的 `before`/`limit`/`beforeHistory`/`include` 里的 `history` **只**在 Sync
  * 传输面生效（`design.md` D3、D11）；Node Link 面的同名命令不含这些键。`session.create` 的
- * `payload` **只**允许 `agentId` 与目录引用两类字段：目录引用由 `workspaceAlias`（已登记别名）
- * 与 `workspacePath`（客户端提供的绝对目录）**恰好一个**给出（`design.md` D4 /
- * `pwa-web-client` 的「会话创建入口与载荷」）。
+ * `payload` **只**允许 `agentId`、目录引用与建目录开关三类字段：目录引用由 `workspaceAlias`
+ * （已登记别名）与 `workspacePath`（客户端提供的绝对目录）**恰好一个**给出，可选的
+ * `createIfMissing` 只与 `workspacePath` 相容（`design.md` D4 / `pwa-web-client` 的
+ * 「会话创建入口与载荷」）。`workspace.browse` 是只读的逐层目录列举（feature
+ * `core.workspace-browse.v1` 门控，§11.5）。
  *
  * `session.resume` 只经 Node Link 接受，因此不在本镜像的 `CommandName` 里。
  */
@@ -28,13 +30,17 @@ import type {
   SnapshotItemTurns,
 } from "./sync";
 
-/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令。 */
+/**
+ * `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（当前 13 条，与
+ * `compatibility/commands/v1/commands.json` 里 `transport` 含 `sync` 的条目一一对应）。
+ */
 export type CommandName =
   | "session.list"
   | "session.read"
   | "command.status"
   | "session.mode.list"
   | "session.config.list"
+  | "workspace.browse"
   | "session.prompt"
   | "session.cancel"
   | "elicitation.respond"
@@ -62,20 +68,66 @@ export interface SessionListCommand extends CommandEnvelope {
 }
 
 /**
+ * `$defs.workspaceBrowsePath`：`workspace.browse` 的父路径——**绝对**路径（1..=4096 字符）。
+ * 它同时是请求字段与结果回显字段：结果里的取值必须与请求**逐字相同**，客户端 MUST NOT 把它
+ * 读成「服务端规范化过的权威值」（权威值是条目里的 `path`）。
+ */
+export type WorkspaceBrowsePath = string;
+
+/** `$defs.workspaceBrowseEntry`：该层的**直接子目录**一项；只含名称、绝对路径与登记状态。 */
+export interface WorkspaceBrowseEntry {
+  /** 子目录的名称（不含路径分隔符）。 */
+  readonly name: string;
+  /** 该子目录的下发形式绝对路径（规范化结果剥掉平台 verbatim 前缀）。 */
+  readonly path: WorkspaceBrowsePath;
+  /** 该子目录是否已是本机已登记的 workspace（只反映登记状态，不产生登记副作用）。 */
+  readonly registered: boolean;
+}
+
+/**
+ * `$defs.workspaceBrowse`：只读的逐层目录列举（`docs/SYNC_PROTOCOL.md` §11.5）。
+ *
+ * 请求只含一个父路径字段，且该键**必填**：`null` 表示「该节点的根列表」，缺席不是它的同义词
+ * （缺席按 `protocol.schema_invalid` 拒收）。受 feature `core.workspace-browse.v1` 门控，未协商
+ * 时服务端在触碰文件系统之前回 `protocol.feature_required`。
+ */
+export interface WorkspaceBrowseCommand extends CommandEnvelope {
+  readonly body: {
+    readonly requestId: Uuid;
+    readonly command: "workspace.browse";
+    readonly payload: {
+      readonly path: WorkspaceBrowsePath | null;
+    };
+  };
+}
+
+/**
  * `$defs.sessionCreate` 的 payload（Sync 面）。
  *
- * 两个键：`agentId`（必填，本机已配置的 Agent 标识）与目录引用。目录引用由 `workspaceAlias`
+ * `agentId`（必填，本机已配置的 Agent 标识）与目录引用：目录引用由 `workspaceAlias`
  * （本机已登记 workspace 的别名）与 `workspacePath`（客户端提供的**绝对**目录）**恰好一个**
  * 给出——同时给出或都不给出一律被服务端以 `protocol.schema_invalid` 拒绝，客户端 MUST NOT
  * 猜测以哪一个为准。
+ *
+ * 可选的 `createIfMissing` 是显式的「目录不存在则先创建」开关，它与 `workspaceAlias`
+ * **互斥**（别名解析出的目录必然已存在）：联合型把它钉在 `workspacePath` 那一支上，
+ * 另一支把该键声明成 `never`，因此「别名 + createIfMissing」这种形状在编译期就无法构造。
  */
 export type SessionCreatePayload =
-  | { readonly workspaceAlias: string; readonly agentId: string }
-  | { readonly workspacePath: string; readonly agentId: string };
+  | {
+      readonly workspaceAlias: string;
+      readonly agentId: string;
+      readonly createIfMissing?: never;
+    }
+  | {
+      readonly workspacePath: string;
+      readonly agentId: string;
+      readonly createIfMissing?: boolean;
+    };
 
 /**
- * `$defs.sessionCreate`：Sync 面 `body` 顶层不含 `sessionId`；`payload` 只允许 `agentId` 与
- * 目录引用两类字段，多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即编译失败。
+ * `$defs.sessionCreate`：Sync 面 `body` 顶层不含 `sessionId`；`payload` 只允许 `agentId`、目录引用
+ * 与建目录开关三类字段，多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即编译失败。
  */
 export interface SessionCreateCommand extends CommandEnvelope {
   readonly body: {
@@ -252,6 +304,7 @@ export interface CommandStatusCommand extends CommandEnvelope {
 export type CommandBody =
   | SessionListCommand["body"]
   | SessionCreateCommand["body"]
+  | WorkspaceBrowseCommand["body"]
   | SessionReadCommand["body"]
   | SessionPromptCommand["body"]
   | SessionCancelCommand["body"]
@@ -310,6 +363,20 @@ export interface SessionCreateResult {
   readonly session: SessionSummary;
 }
 
+/**
+ * `$defs.workspaceBrowseResult`：`completed` 的结果。
+ *
+ * `path` **逐字回显**请求的父路径（`null` = 根列表），客户端 MUST NOT 把它当权威路径；
+ * `entries` 只含该层的直接子目录，不含文件条目、内容、大小、时间戳或权限，按名称以确定顺序
+ * 排列；单层条目数上限是固定 v1 常量 128（`docs/SYNC_PROTOCOL.md` §14），超过上限时只返回
+ * 上限内的条目并把 `truncated` 置真——不得静默丢弃、不得整次失败。
+ */
+export interface WorkspaceBrowseResult {
+  readonly path: WorkspaceBrowsePath | null;
+  readonly entries: readonly WorkspaceBrowseEntry[];
+  readonly truncated: boolean;
+}
+
 /** `$defs.commandStatusRecord.state` 的封闭词表。 */
 export type CommandStatusRecordState =
   | "accepted"
@@ -342,7 +409,8 @@ export type CommandResultStatus =
  *
  * schema 用 `allOf`/`if`/`then` 把 `result` 的具体形状与 `command`+`status` 绑定，
  * 这里保留 `result` 为结构化联合以表达「只有 `completed` 才有具体结果」，
- * 并在 `protocol/result.ts` 提供按 `command` 收窄的读取器。
+ * 按 `command` 收窄的运行期读取器在 `src/sync-client/`（例如 `isCommandStatusRecord`），
+ * 而不是在协议镜像层凭空解析 `result`。
  */
 export interface CommandResultBody {
   readonly requestId: Uuid;
@@ -360,6 +428,7 @@ export type CommandResultValue =
   | SessionListResult
   | SessionReadResult
   | SessionCreateResult
+  | WorkspaceBrowseResult
   | ConfigListResult
   | ModeListResult
   | CommandStatusRecord

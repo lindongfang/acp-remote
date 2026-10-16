@@ -312,7 +312,8 @@ CREATE TABLE IF NOT EXISTS owned_agent_profile (
 -- 至多一个默认 profile。
 CREATE UNIQUE INDEX IF NOT EXISTS owned_agent_profile_default ON owned_agent_profile(is_default) WHERE is_default = 1;
 
--- 路径只在本节点可读；不进入 Node Link catalog（§11.1）。
+-- 路径不进入 Node Link catalog（§11.1）：它只在客户端协商 `core.workspace-path.v1` 时随 Sync 快照的
+-- `workspaces` 条目下发（已登记目录的规范化路径），命令行日志、审计记录与错误 details 仍不含路径。
 CREATE TABLE IF NOT EXISTS owned_workspace (
   alias          TEXT PRIMARY KEY,
   display_name   TEXT NOT NULL,

@@ -44,7 +44,7 @@
         },
         {
           "id": "core.session-create.v1",
-          "description": "Sync 面 `session.create`（§11.5 的 `{ workspaceAlias, agentId }` payload 与 completed 终态结果）",
+          "description": "Sync 面 `session.create`（§11.5 的目录来源二选一 payload——`workspaceAlias` 或客户端提供的 `workspacePath`——加必填 `agentId`，以及可选的「目录不存在则先创建」开关；completed 终态结果）",
           "delivery": "mvp",
           "required": false
         },
@@ -57,6 +57,24 @@
         {
           "id": "core.event-origin.v1",
           "description": "事件帧 `origin` 的身份字段（`nodeId`）与 `node` 取值",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.workspace-path.v1",
+          "description": "已登记目录的规范化路径随快照 `workspaces` 条目下发（§9.4；只在协商时出现该键）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.workspace-browse.v1",
+          "description": "Sync 面逐层浏览节点目录的查询命令 `workspace.browse`（§11.5 的请求/结果形状、失败分类与单层条目上限）",
+          "delivery": "mvp",
+          "required": false
+        },
+        {
+          "id": "core.file-diff.v1",
+          "description": "`file.changed` 事件视图携带结构化差异行（§10.3 的 `diffLines` 与 `diffUnavailable`；只在协商时出现该键）",
           "delivery": "mvp",
           "required": false
         }

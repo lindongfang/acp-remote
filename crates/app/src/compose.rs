@@ -15,6 +15,7 @@
 //! | `AuditHook`（连接级拒绝） | [`AuditSink`]（有界通道 + 由组合根持有的写任务） |
 //! | `ConnectionCloser` | [`NodeLinkCloser`]（把撤销通知与重新配对的连接作废接到 Node Link 的连接注册表与命令管线，把设备撤销接到 Sync 的连接注册表） |
 //! | `sync::subscribe::OwnerReachability` | [`NodeLinkReachability`]（Owner 可达 = 存在来自该 node 的活跃 Node Link 连接） |
+//! | `core::ports::DirectoryBrowser`（`workspace.browse` 的唯一端口） | core 自带的默认实现（[`UseCases::new`] 的默认值，即 `crates/core/src/use_cases.rs` 的 `SystemDirectories`：只列直接子目录、只读、不回退）。组合根**不替换**它——本机文件系统就是生产实现；[`UseCases::with_directory_browser`] 留给测试替身与另一份实现 |
 //! | `DaemonControl` | `crate::daemon::AppDaemonControl` |
 //!
 //! 关闭期的资源释放由 [`Composition::close`] 负责：它逐一释放共享句柄，再执行 `storage-sqlite` 的

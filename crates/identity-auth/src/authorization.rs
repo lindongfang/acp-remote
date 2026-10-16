@@ -24,6 +24,7 @@ pub const GRANTS: &[(&str, &[&str])] = &[
             "command.status",
             "session.mode.list",
             "session.config.list",
+            "workspace.browse",
         ],
     ),
     (
@@ -76,7 +77,7 @@ pub fn expand_grant_scopes(name: &str) -> Result<Vec<String>, AuthorizationError
     Ok(members.iter().map(|member| (*member).to_owned()).collect())
 }
 
-/// 全部命令名（`grants` 的成员集合；与 `commands.json` 的 13 条命令逐项相等，由测试断言）。
+/// 全部命令名（`grants` 的成员集合；与 `commands.json` 的 14 条命令逐项相等，由测试断言）。
 pub fn command_names() -> BTreeSet<&'static str> {
     let mut names = BTreeSet::new();
     for (_, members) in GRANTS.iter() {

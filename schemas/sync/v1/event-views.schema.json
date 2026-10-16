@@ -315,6 +315,7 @@
     "file.changed": {
       "type": "object",
       "required": ["changeId", "kind", "displayPath", "summary"],
+      "not": { "required": ["diffLines", "diffUnavailable"] },
       "properties": {
         "changeId": { "$ref": "common.schema.json#/$defs/uuid" },
         "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -322,7 +323,31 @@
         "summary": { "type": "string", "maxLength": 2048 },
         "addedLines": { "$ref": "common.schema.json#/$defs/decimalString" },
         "deletedLines": { "$ref": "common.schema.json#/$defs/decimalString" },
-        "outsideWorkspace": { "type": "boolean" }
+        "outsideWorkspace": { "type": "boolean" },
+        "diffLines": {
+          "description": "结构化差异行（feature `core.file-diff.v1` 门控）：每行逐条标明新增、删除或上下文，客户端据此渲染而不必解析任何原文。未协商该 feature 时该键 MUST **缺席**（不是空数组，也不是占位行）；差异行因超出单条上限而未随事件下发时同样缺席，改由 `diffUnavailable` 说明原因。键在场即至少一行，因此 `minItems` 是 1。",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 400,
+          "items": {
+            "type": "object",
+            "required": ["kind", "text"],
+            "properties": {
+              "kind": { "enum": ["added", "deleted", "context"] },
+              "text": { "type": "string", "maxLength": 4096 }
+            },
+            "additionalProperties": true
+          }
+        },
+        "diffUnavailable": {
+          "description": "差异行未随本事件下发时的显式标记（feature `core.file-diff.v1` 门控），与 `diffLines` 互斥：`reason` 只取已登记的取值，客户端据此呈现明确说明而不是空白的差异区。",
+          "type": "object",
+          "required": ["reason"],
+          "properties": {
+            "reason": { "enum": ["size_limit"] }
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     },

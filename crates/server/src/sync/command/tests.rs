@@ -22,9 +22,9 @@ use acp_core::model::{
     ViewJson,
 };
 use acp_core::ports::{
-    Clock, CommitOutcome, EventSink, HistoryPage, HistoryQuery, OwnedCommit, OwnedEventRecord,
-    PruneReport, ReadView, ReplayLimit, SessionEndpoint, SessionQuery, SessionStore, StoreHealth,
-    TurnAccepted,
+    Clock, CommitOutcome, DirectoryBrowser, DirectoryListing, EventSink, HistoryPage, HistoryQuery,
+    OwnedCommit, OwnedEventRecord, PruneReport, ReadView, ReplayLimit, SessionEndpoint,
+    SessionQuery, SessionStore, StoreHealth, TurnAccepted,
 };
 use acp_core::use_cases::{UseCaseDeps, UseCases};
 use identity_auth::Authority;
@@ -879,6 +879,62 @@ impl acp_core::ports::SessionBackendFactory for ConfigBackend {
 // 世界
 // ---------------------------------------------------------------------------------------------
 
+/// 目录浏览端口的替身（[`acp_core::ports::DirectoryBrowser`]）。
+///
+/// 三个观测口对应三条判据：
+///
+/// - [`Self::calls`]：逐次记录 `roots()`/`directories()` 的入参（`None` = 根列表）——「未协商 feature」与
+///   「形状非法」两条判定都必须**不触碰文件系统**，因此它们的判据是「调用次数为 0」，而不是只看错误码；
+///   同时它也是「不回退到父层或根列表」的判据（不可达时恰好只有那一次调用，入参就是请求的那一层）；
+/// - [`Self::seed_layer`]/[`Self::seed_roots`]：给该层预置条目（`workspace.browse` 的结果素材）；
+/// - [`Self::break_layers`]：让 `directories()` 按不可达失败（不存在/不可读/不是目录是同一类事实）。
+#[derive(Default)]
+struct FakeDirectories {
+    calls: Mutex<Vec<Option<String>>>,
+    roots: Mutex<Vec<DirectoryListing>>,
+    layer: Mutex<Vec<DirectoryListing>>,
+    unreachable: std::sync::atomic::AtomicBool,
+}
+
+impl FakeDirectories {
+    fn calls(&self) -> Vec<Option<String>> {
+        self.calls.lock().expect("调用表锁").clone()
+    }
+
+    fn seed_roots(&self, listings: Vec<DirectoryListing>) {
+        *self.roots.lock().expect("根列表锁") = listings;
+    }
+
+    fn seed_layer(&self, listings: Vec<DirectoryListing>) {
+        *self.layer.lock().expect("层锁") = listings;
+    }
+
+    fn break_layers(&self) {
+        self.unreachable.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl DirectoryBrowser for FakeDirectories {
+    async fn roots(&self) -> Result<Vec<DirectoryListing>, PortError> {
+        self.calls.lock().expect("调用表锁").push(None);
+        Ok(self.roots.lock().expect("根列表锁").clone())
+    }
+
+    async fn directories(&self, parent: &str) -> Result<Vec<DirectoryListing>, PortError> {
+        self.calls
+            .lock()
+            .expect("调用表锁")
+            .push(Some(parent.to_owned()));
+        if self.unreachable.load(Ordering::SeqCst) {
+            return Err(PortError::Unavailable(
+                acp_core::model::UnavailableKind::IoError,
+            ));
+        }
+        Ok(self.layer.lock().expect("层锁").clone())
+    }
+}
+
 /// 命令面用例的端口替身世界（`UseCases`/`Broker`/`Authority` 共享同一批实例，与组合根同形）。
 struct CommandWorld {
     core: Arc<UseCases>,
@@ -887,6 +943,8 @@ struct CommandWorld {
     registry: Arc<ConnectionRegistry>,
     store: CommandStore,
     trust: FakeTrust,
+    /// 目录浏览端口的替身（`workspace.browse` 的素材与「未协商时不触碰文件系统」的判据都在它上面）。
+    directories: Arc<FakeDirectories>,
     /// 已登记会话名（[`ConfigBackend`] 的可见性输入，与真实后端的 `owned_session` 行同口径）。
     sessions: Arc<Mutex<Vec<String>>>,
     /// 后端 `prompt` 的调用计数（与 `ConfigEndpoint` 共享）。
@@ -949,19 +1007,26 @@ impl CommandWorld {
             },
             BrokerConfig::default(),
         ));
-        let core = Arc::new(UseCases::new(UseCaseDeps {
-            broker: Arc::clone(&broker),
-            store: store_port,
-            deliveries: delivery_port,
-            exports: exports_port,
-            trust: Arc::new(trust.clone()),
-            audit: audit_port,
-            config: Arc::new(config.clone()),
-            attachments: Arc::new(NotTouched),
-            catalog: Arc::new(FakeCatalog::default()),
-            clock: clock_port,
-            ids,
-        }));
+        // 目录浏览端口换成替身：真实实现会去读本机文件系统，而用例要能（a）观察它**一次都没被调用**
+        // （未协商 feature、形状非法两条判定都必须在触碰文件系统之前），（b）注入不可达与超限的素材。
+        let directories = Arc::new(FakeDirectories::default());
+        let browser: Arc<dyn acp_core::ports::DirectoryBrowser> = directories.clone();
+        let core = Arc::new(
+            UseCases::new(UseCaseDeps {
+                broker: Arc::clone(&broker),
+                store: store_port,
+                deliveries: delivery_port,
+                exports: exports_port,
+                trust: Arc::new(trust.clone()),
+                audit: audit_port,
+                config: Arc::new(config.clone()),
+                attachments: Arc::new(NotTouched),
+                catalog: Arc::new(FakeCatalog::default()),
+                clock: clock_port,
+                ids,
+            })
+            .with_directory_browser(browser),
+        );
         let authority = Arc::new(Authority::new(
             acp_core::model::NodeId::new(HOST).expect("host id"),
             identity_auth::port::KeyHandle::new("node-identity").expect("key handle"),
@@ -976,6 +1041,7 @@ impl CommandWorld {
             registry: ConnectionRegistry::new(),
             store,
             trust,
+            directories,
             sessions,
             prompt_calls,
             backend,
@@ -2540,6 +2606,375 @@ async fn an_almost_full_query_result_still_fits() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// `workspace.browse`（任务 3.1）：feature 门控、形状、不可达与超限
+// ---------------------------------------------------------------------------------------------
+
+/// 协商 `core.workspace-browse.v1`（未协商时该命令被 feature 门控拒绝）。
+fn negotiate_workspace_browse(route: &CommandRoute, handle: &ConnectionHandle) {
+    crate::sync::conn::MessageRoute::on_authenticated(
+        route,
+        handle,
+        &[super::query::WORKSPACE_BROWSE_FEATURE.to_owned()],
+    );
+}
+
+/// 一个**真实存在**的临时目录（浏览的成功路径要经过 core 的存在性判定与 `canonicalize`，因此请求的父
+/// 路径不能是纯文本）；析构时删掉，用例之间互不残留。
+struct TempLayer(std::path::PathBuf);
+
+impl TempLayer {
+    fn new(label: &str) -> Self {
+        let path =
+            std::env::temp_dir().join(format!("acpr-browse-wp3-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("建临时目录");
+        Self(path)
+    }
+
+    /// 该目录的文本形式（请求路径）。
+    fn text(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
+
+    /// 该目录带**尾部分隔符**的文本形式（形状合法、指向同一层，但不是它的规范化文本）。
+    fn trailing(&self) -> String {
+        format!("{}{}", self.text(), std::path::MAIN_SEPARATOR)
+    }
+}
+
+impl Drop for TempLayer {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// 一条替身条目（名称 + 绝对路径；与 [`DirectoryListing`] 同形，只是省掉重复写类型名）。
+fn listing(path: &str, name: &str) -> DirectoryListing {
+    DirectoryListing {
+        name: name.to_owned(),
+        path: path.to_owned(),
+    }
+}
+
+/// 一条 `command.result` 的错误码（拒绝路径的判据都从这里取）。
+fn rejection_code(message: &serde_json::Value) -> Option<&str> {
+    message
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(|code| code.as_str())
+}
+
+/// 未协商 `core.workspace-browse.v1`：`protocol.feature_required` **且端口一次都没被调用**。
+///
+/// 判据刻意用「一个存在、且预置了条目的层」：如果门控排在文件系统访问之后，这条命令会照常
+/// `completed` 并把该层的条目下发出去——因此「拒绝 + 零调用」同时排除了「先读后拒」。
+#[tokio::test]
+async fn workspace_browse_without_the_feature_is_rejected_before_touching_the_filesystem() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    let layer = TempLayer::new("gate");
+    world
+        .directories
+        .seed_layer(vec![listing(&layer.text(), "api")]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    let body = command_body(
+        REQUEST,
+        "workspace.browse",
+        None,
+        serde_json::json!({ "path": layer.text() }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let results = bodies(&out, "command.result");
+    assert_eq!(results.len(), 1, "查询命令同步回一条");
+    assert_eq!(results[0]["status"], "rejected");
+    assert_eq!(
+        rejection_code(results[0]),
+        Some(ErrorCode::ProtocolFeatureRequired.as_str())
+    );
+    assert_eq!(
+        results[0]["error"]["details"]["features"][0],
+        super::query::WORKSPACE_BROWSE_FEATURE,
+        "details.features 必须给出缺的那一个 feature"
+    );
+    assert!(
+        results[0]["result"].is_null(),
+        "拒绝不得携带任何结果（不得返回空列表冒充成功）"
+    );
+    assert!(
+        world.directories.calls().is_empty(),
+        "未协商 feature 时 MUST NOT 触碰文件系统，实际调用：{:?}",
+        world.directories.calls()
+    );
+}
+
+/// 形状非法（相对路径、含 `..` 的绝对路径）→ `protocol.schema_invalid`，且**端口一次都没被调用**。
+#[tokio::test]
+async fn workspace_browse_rejects_an_illegal_shape_without_touching_the_filesystem() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    let layer = TempLayer::new("shape");
+    world
+        .directories
+        .seed_layer(vec![listing(&layer.text(), "api")]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_workspace_browse(&route, &handle);
+    let parent_reference = format!(
+        "{}{}sub{}..{}escape",
+        layer.text(),
+        std::path::MAIN_SEPARATOR,
+        std::path::MAIN_SEPARATOR,
+        std::path::MAIN_SEPARATOR
+    );
+    for (index, shape) in ["relative/repo", parent_reference.as_str()]
+        .iter()
+        .enumerate()
+    {
+        let body = command_body(
+            REQUEST,
+            "workspace.browse",
+            None,
+            serde_json::json!({ "path": shape }),
+        );
+        let out = dispatch(
+            &route,
+            &handle,
+            &mut receiver,
+            &message_id(index as u64 + 1),
+            index as u64 + 1,
+            body,
+        )
+        .await;
+        let results = bodies(&out, "command.result");
+        assert_eq!(
+            results[0]["status"], "rejected",
+            "{shape} 必须被拒绝：{results:?}"
+        );
+        assert_eq!(
+            rejection_code(results[0]),
+            Some(ErrorCode::ProtocolSchemaInvalid.as_str()),
+            "{shape} 是参数类错误"
+        );
+        assert!(results[0]["result"].is_null(), "形状非法不得返回任何条目");
+    }
+    assert!(
+        world.directories.calls().is_empty(),
+        "形状非法时 MUST NOT 触碰文件系统，实际调用：{:?}",
+        world.directories.calls()
+    );
+}
+
+/// 形状合法但该层不可达 → 服务端不可用类 `internal.unavailable`，且**不回退**到父层或根列表。
+///
+/// 不回退的判据是入参表：恰好一次调用、入参就是请求的那一层（不是 `roots()`，也不是别的路径）。
+#[tokio::test]
+async fn workspace_browse_reports_an_unreachable_layer_as_unavailable_without_fallback() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    let layer = TempLayer::new("unreachable");
+    world.directories.break_layers();
+    world.directories.seed_roots(vec![listing("/", "/")]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_workspace_browse(&route, &handle);
+    let body = command_body(
+        REQUEST,
+        "workspace.browse",
+        None,
+        serde_json::json!({ "path": layer.text() }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let results = bodies(&out, "command.result");
+    assert_eq!(results[0]["status"], "rejected");
+    assert_eq!(
+        rejection_code(results[0]),
+        Some(ErrorCode::InternalUnavailable.as_str()),
+        "不可达是服务端不可用类，不是形状错误"
+    );
+    assert!(results[0]["result"].is_null(), "不可达不得返回任何条目");
+    let calls = world.directories.calls();
+    assert_eq!(calls.len(), 1, "只查询请求的那一层：{calls:?}");
+    let parent = calls[0].as_ref().expect("必须是这一层，不是根列表");
+    assert_eq!(
+        std::path::Path::new(parent)
+            .file_name()
+            .and_then(|name| name.to_str()),
+        layer.0.file_name().and_then(|name| name.to_str()),
+        "入参必须是请求的那一层（不得回退到父层或根列表）：{calls:?}"
+    );
+}
+
+/// 请求根列表（`path = null`）走端口的 `roots()`，结果回显 `null` 与那一层的条目。
+#[tokio::test]
+async fn workspace_browse_without_a_parent_returns_the_root_list() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    world
+        .directories
+        .seed_roots(vec![listing("C:\\", "C:"), listing("D:\\", "D:")]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_workspace_browse(&route, &handle);
+    let body = command_body(
+        REQUEST,
+        "workspace.browse",
+        None,
+        serde_json::json!({ "path": null }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let result = assert_single_completed(&out, "workspace.browse");
+    assert!(result["path"].is_null(), "根列表请求回显 null");
+    assert_eq!(result["truncated"], false);
+    let entries = result["entries"].as_array().expect("entries 数组");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["name"], "C:");
+    assert_eq!(entries[0]["path"], "C:\\");
+    assert_eq!(entries[0]["registered"], false);
+    assert_eq!(
+        world.directories.calls(),
+        vec![None],
+        "根列表请求只调用一次 roots()"
+    );
+}
+
+/// 某一层的正常结果：条目按名称升序、`registered` 只对已登记目录为真，父路径**逐字回显请求**。
+#[tokio::test]
+async fn workspace_browse_completes_with_the_layer_and_marks_registered_directories() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    world.seed_workspace("project");
+    // `CommandWorld::seed_workspace` 把该别名登记在 `std::env::temp_dir()` 上：与它同路径的那条条目
+    // 因此必须被判为已登记（`registered` 只反映登记状态，不产生登记副作用）。
+    let registered = std::env::temp_dir().to_string_lossy().into_owned();
+    let layer = TempLayer::new("layer");
+    world.directories.seed_layer(vec![
+        listing(&format!("{registered}-zeta"), "zeta"),
+        listing(&format!("{registered}-Alpha"), "Alpha"),
+        listing(&registered, "beta"),
+    ]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_workspace_browse(&route, &handle);
+    let body = command_body(
+        REQUEST,
+        "workspace.browse",
+        None,
+        serde_json::json!({ "path": layer.text() }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let result = assert_single_completed(&out, "workspace.browse");
+    let entries = result["entries"].as_array().expect("entries 数组");
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(
+        names,
+        ["Alpha", "beta", "zeta"],
+        "按名称的 Unicode 码点升序"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry["registered"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            serde_json::json!(false),
+            serde_json::json!(true),
+            serde_json::json!(false)
+        ],
+        "只有与已登记目录同路径的那条为真"
+    );
+    assert!(
+        entries.iter().all(|entry| entry.get("kind").is_none()
+            && entry.get("size").is_none()
+            && entry.get("modifiedAt").is_none()),
+        "条目不得携带文件条目或文件元数据：{entries:?}"
+    );
+    assert_eq!(
+        world.directories.calls().len(),
+        1,
+        "每次浏览只查询一层（不递归）"
+    );
+}
+
+/// 结果的 `path` 是**请求父路径的逐字回显**（`command.schema.json#/$defs/workspaceBrowsePath`：
+/// 「请求字段与结果回显字段必须逐字相同」）：连尾部分隔符这种非规范写法也照原样回，
+/// **不**改写成 core 的规范化取值。
+#[tokio::test]
+async fn the_browse_result_echoes_the_requested_parent_path_verbatim() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    let layer = TempLayer::new("echo");
+    world
+        .directories
+        .seed_layer(vec![listing(&layer.text(), "api")]);
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_workspace_browse(&route, &handle);
+    let requested = layer.trailing();
+    let body = command_body(
+        REQUEST,
+        "workspace.browse",
+        None,
+        serde_json::json!({ "path": requested }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let result = assert_single_completed(&out, "workspace.browse");
+    assert_eq!(
+        result["path"].as_str(),
+        Some(requested.as_str()),
+        "结果必须逐字回显请求的父路径"
+    );
+}
+
+/// 整条结果超出**本连接**的单条消息上限 → `resource.result_too_large`，且不得截断后当成功。
+#[tokio::test]
+async fn an_oversized_workspace_browse_result_is_rejected_instead_of_truncated() {
+    let world = CommandWorld::new();
+    world.seed_device(DEVICE);
+    let layer = TempLayer::new("oversized");
+    // 单层条目上限（128）内的长路径条目：结果装不进 2048 字节的单条消息上限。
+    let padding = "x".repeat(3_900);
+    world.directories.seed_layer(
+        (0..128)
+            .map(|index| {
+                listing(
+                    &format!("{}{}{padding}", layer.text(), std::path::MAIN_SEPARATOR),
+                    &format!("dir-{index:03}"),
+                )
+            })
+            .collect(),
+    );
+    let route = world.route();
+    let config = SyncConfig {
+        max_message_bytes: 2_048,
+        ..SyncConfig::default()
+    };
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &config);
+    negotiate_workspace_browse(&route, &handle);
+    let body = command_body(
+        REQUEST,
+        "workspace.browse",
+        None,
+        serde_json::json!({ "path": layer.text() }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    let results = bodies(&out, "command.result");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "rejected", "超限必须显式失败");
+    assert_eq!(
+        rejection_code(results[0]),
+        Some(ErrorCode::ResourceResultTooLarge.as_str())
+    );
+    assert!(results[0]["result"].is_null(), "不得返回被截断的结果");
+    assert!(
+        out.iter().all(|frame| !frame.text.contains("dir-000")),
+        "出站帧里不得出现被截断的条目"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // 2.5 命令级限流
 // ---------------------------------------------------------------------------------------------
 
@@ -3743,3 +4178,192 @@ fn prompt_payload(text: &str) -> serde_json::Value {
 const TERMINAL_EVENT: &str = "7b3f9c21-4d5e-4a6b-9c8d-1e2f3a4b5c6d";
 /// `command.status` 查询用的 requestId（与 mutation 的 requestId 不同）。
 const STATUS_REQUEST: &str = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";
+
+// ---------------------------------------------------------------------------------------------
+// `session.create`：客户端提供的目录与建目录开关的 wire 映射（任务 3.1）
+// ---------------------------------------------------------------------------------------------
+
+/// `session.create` 的**路径**来源 body：`workspacePath` + 可选 `createIfMissing`。
+fn create_path_body(
+    request: &str,
+    path: &str,
+    create_if_missing: Option<bool>,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({ "workspacePath": path, "agentId": "codex" });
+    if let Some(flag) = create_if_missing {
+        payload["createIfMissing"] = serde_json::Value::Bool(flag);
+    }
+    command_body(request, "session.create", None, payload)
+}
+
+/// 一个**尚不存在**的临时目录（建目录开关的两条路径靠它区分：缺了开关要求它已存在）。
+fn missing_layer(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("acpr-create-wp3-{label}-{}", std::process::id()))
+}
+
+/// 开关缺席（= 假，行为与引入该键之前完全一致）：目标不存在 ⇒ 服务端不可用类拒绝，且**不创建**目录。
+///
+/// 这一条同时钉住「来源选择」：同样的 `workspacePath` 在 `createIfMissing: true` 下会成功（见
+/// [`a_session_create_with_the_switch_creates_the_directory_and_completes`]），因此两条用例合起来才
+/// 能证明开关真的改变了 core 收到的来源（`Path` vs `PathWithCreate`）。
+#[tokio::test]
+async fn a_session_create_with_a_missing_path_stays_rejected_without_the_switch() {
+    let world = create_world();
+    let before = world.session_rows();
+    let missing = missing_layer("absent");
+    let text = missing.to_string_lossy().into_owned();
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_session_create(&route, &handle);
+    let out = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        create_path_body(REQUEST, &text, None),
+    )
+    .await;
+    let result = &bodies(&out, "command.result")[0];
+    assert_eq!(result["status"], "rejected", "{result}");
+    assert_eq!(
+        result["error"]["code"], "internal.unavailable",
+        "不存在的目录是服务端不可用类：{result}"
+    );
+    assert!(!missing.exists(), "开关缺席时 MUST NOT 创建目录");
+    assert_eq!(world.create_calls(), 0, "解析失败不得触碰后端");
+    assert_eq!(world.session_rows(), before, "失败零会话行");
+    assert!(
+        out.iter().all(|frame| !frame.text.contains(&text)),
+        "错误响应不得回显客户端提供的路径：{:?}",
+        out.iter()
+            .map(|frame| frame.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// `createIfMissing: true`：目录不存在时先创建（含缺失的父层），会话照常建立并走到 `completed`。
+#[tokio::test]
+async fn a_session_create_with_the_switch_creates_the_directory_and_completes() {
+    let world = create_world();
+    let root = missing_layer("switch");
+    let target = root.join("nested");
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_session_create(&route, &handle);
+    let out = dispatch(
+        &route,
+        &handle,
+        &mut receiver,
+        &message_id(1),
+        1,
+        create_path_body(REQUEST, &target.to_string_lossy(), Some(true)),
+    )
+    .await;
+    let accepted = bodies(&out, "command.result");
+    assert_eq!(accepted.len(), 1, "受理只回一条：{accepted:?}");
+    assert_eq!(accepted[0]["status"], "accepted", "{accepted:?}");
+    assert_eq!(world.create_calls(), 1, "创建已派发到后端");
+    assert!(target.is_dir(), "开关为真时先创建目录（连同缺失的父层）");
+
+    route.poll_terminal_for_test().await;
+    let terminal_frames = frames(&mut receiver);
+    let terminal = bodies(&terminal_frames, "command.result");
+    assert_eq!(terminal.len(), 1, "终态一条：{terminal:?}");
+    assert_eq!(terminal[0]["status"], "completed", "{terminal:?}");
+    assert_eq!(terminal[0]["result"]["session"]["state"], "idle");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `workspaceAlias` + `createIfMissing` 互斥：这种组合在解码期就按 `protocol.schema_invalid` 拒绝
+/// （`command.schema.json#/$defs/sessionCreate` 的 `not`），**不解析别名、不创建会话**。
+#[tokio::test]
+async fn a_session_create_with_both_an_alias_and_the_switch_is_schema_invalid() {
+    let world = create_world();
+    let before = world.session_rows();
+    let route = world.route();
+    let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+    negotiate_session_create(&route, &handle);
+    let body = command_body(
+        REQUEST,
+        "session.create",
+        None,
+        serde_json::json!({
+            "workspaceAlias": "project",
+            "agentId": "codex",
+            "createIfMissing": true,
+        }),
+    );
+    let out = dispatch(&route, &handle, &mut receiver, MESSAGE_ID, 1, body).await;
+    assert!(
+        bodies(&out, "command.result").is_empty(),
+        "解码期拒绝没有可填的 command.result：{:?}",
+        bodies(&out, "error")
+    );
+    let errors = bodies(&out, "error");
+    assert_eq!(errors.len(), 1, "必须回一条 error：{errors:?}");
+    assert_eq!(errors[0]["code"], "protocol.schema_invalid");
+    assert_eq!(world.create_calls(), 0, "不得触碰后端");
+    assert_eq!(world.session_rows(), before, "不得创建会话");
+}
+
+// ---------------------------------------------------------------------------------------------
+// `core.file-diff.v1` 的第二条下发路径：`session.read` 的历史条目
+// ---------------------------------------------------------------------------------------------
+
+/// `session.read` 的历史条目与 `event` 帧**共用同一条**差异行门控：历史条目里装的就是同一条
+/// `file.changed` 视图，未协商 `core.file-diff.v1` 的连接在两条路径上都不该看到 `diffLines`。
+#[tokio::test]
+async fn session_read_history_hides_the_diff_keys_unless_negotiated() {
+    /// 与 `server::sync::event` 的用例同形的一条 `file.changed` 视图（core 的紧凑拼装形状）。
+    const VIEW: &str = r#"{"changeId":"3f0c1a44-2b7e-4d51-9c8a-1e2f3a4b5c6d","kind":"modified","displayPath":"src/lib.rs","summary":"1 处改动","addedLines":"1","deletedLines":"1","diffLines":[{"kind":"deleted","text":"a"}]}"#;
+    /// 该历史条目的事件 id（canonical uuid）。
+    const HISTORY_EVENT: &str = "9b1c2d3e-4f50-4a61-8b72-9c3d4e5f6a7b";
+
+    for (index, negotiated) in [false, true].into_iter().enumerate() {
+        let world = CommandWorld::new();
+        world.push_session(core_session(SESSION));
+        world.seed_device(DEVICE);
+        world.store.push_event(
+            SESSION,
+            owned_event(SESSION, HISTORY_EVENT, "file.changed", 3, 3, NOW, VIEW),
+        );
+        let route = world.route();
+        let (handle, mut receiver) = connect(&world, CONNECTION_A, &SyncConfig::default());
+        // `history` 那一类本身要求 `core.session-history.v1`；两次只差 `core.file-diff.v1` 这一条。
+        let mut features = vec![super::query::SESSION_HISTORY_FEATURE.to_owned()];
+        if negotiated {
+            features.push(crate::sync::event::FILE_DIFF_FEATURE.to_owned());
+        }
+        crate::sync::conn::MessageRoute::on_authenticated(&*route, &handle, &features);
+        let body = command_body(
+            REQUEST,
+            "session.read",
+            Some(SESSION),
+            serde_json::json!({ "include": ["history"] }),
+        );
+        let out = dispatch(
+            &route,
+            &handle,
+            &mut receiver,
+            &message_id(index as u64 + 1),
+            1,
+            body,
+        )
+        .await;
+        let result = assert_single_completed(&out, "session.read");
+        let view = &result["resources"]["history"][0]["view"];
+        assert_eq!(view["summary"], "1 处改动", "其余字段照旧：{view}");
+        if negotiated {
+            assert!(
+                view.get("diffLines").is_some(),
+                "协商后必须带差异行：{view}"
+            );
+        } else {
+            assert!(
+                view.get("diffLines").is_none(),
+                "未协商时键必须缺席（不是 null、不是空数组）：{view}"
+            );
+        }
+    }
+}

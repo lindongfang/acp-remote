@@ -1,7 +1,8 @@
 # ACP Remote 初始设计文档
 
 > 状态：编码前原始设计（Draft）  
-> 版本：0.3  
+> 版本：0.4  
+> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：把「workspace 实际路径不离开 Owner Node」收窄为带前提的边界——**已登记**目录的规范化路径只下发给**协商了 `core.workspace-path.v1`** 的**已认证设备**，且只出现在快照的 `workspaces` 资源条目上（协商 `core.workspace-browse.v1` 时只读浏览的 `command.result` 是第二处路径可见面，只含该层条目）；客户端自己提交的目录不得被回显（§2/§8）。本机自己的设备新增两项受限能力：`session.create` 可带一个「目录不存在则先创建」开关，`workspace.browse` 提供只读的逐层目录浏览（feature 门控、不登记、不产生审计动作）。口径以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2/§12.3 与 [ADR-0009](./adr/0009-authenticated-workspace-path-and-browse.md) 为权威。
 > 修订记录（2026-10-16，`pairing-model`）：删除两套配对短验证码（§11.2/§11.7 的展示与派生规则改为两条设备侧密码学校验：用二维码里固定的主机公钥验证认领响应的 `hostProof`，已批准响应的主机公钥必须与二维码逐字节相同）；删除设备权限层（§1/§3.4/§8/§9/§11.4/§17 的「按 Actor 的 scope 授权」「设备记录保存命令 scope」「设备是否拥有该命令 scope」改为「通过设备认证即可执行，设备方向没有授权维度」，§11.4 的设备记录示例去掉 `scopes` 并改名）；`session.create` 在 Sync 面允许客户端提交绝对目录（§8）。跨节点 `grant.*`/Export `scopes`/Import grants 与设备认证、撤销、速率上限不变。
 > 修订记录（2026-09-18）：配对有效期改为固定 5 分钟；PWA 首版明确不展示会话创建入口；移除与 Sync/Node Link 已冻结取值冲突的旧叙述。  
 > 日期：2026-09-18
@@ -35,8 +36,8 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 - 不提供 Owner Node 离线时的可靠命令排队。
 - 不提供 Owner Node 离线时的权威历史读取；默认 `no-content-cache` 下，Access Node/远程客户端离线时不提供会话正文。
 - 不实现模型供应商账号系统。
-- Provider API Key、OAuth 凭据、MCP 和 workspace 实际路径不离开 Owner Node。
-- 远程会话创建只能引用 Owner Node 预先导出的 workspace alias/template，不能提交任意绝对路径。
+- 除协商了 `core.workspace-path.v1` 的设备可按目录资源收到**已登记**目录的规范化路径、以及协商了 `core.workspace-browse.v1` 的设备可在只读浏览结果里收到所请求那一层的直接子目录绝对路径外，Provider API Key、OAuth 凭据、MCP 配置与 workspace 实际路径不离开 Owner Node。
+- 跨节点的远程会话创建只能引用 Owner Node 预先导出的 workspace alias/template，不能提交任意绝对路径；本机自己的设备在 Sync 面可提交一个绝对目录，但受本机的绝对路径与存在性校验约束（§8）。
 - 不重新实现 Codex、Oh My Pi 的 Agent Runtime。
 - 不将 Tailscale、Zed 或某个具体 Agent 写入核心协议。
 - 第一阶段不允许 imported Agent 再经 Node Link 导出，不实现多跳 federation。
@@ -70,7 +71,7 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 ### 3.3 访问客户端
 
-Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除与管理能力：本机自己的设备通过认证即可执行（设备方向没有授权维度）；跨节点能力由 Export Policy 与 `grant.*` 决定。Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`；PWA 按 `FRONTEND_DESIGN.md` §2.2/§9 在目录内提供创建入口。
+Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除与管理能力：本机自己的设备通过认证即可执行（设备方向没有授权维度）；跨节点能力由 Export Policy 与 `grant.*` 决定。Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`；本机设备另可只读地逐层浏览目录以选择工作目录（`workspace.browse`，feature `core.workspace-browse.v1` 门控，见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2）；PWA 按 `FRONTEND_DESIGN.md` §2.2/§9 在目录内提供创建入口。
 
 ### 3.4 Zed
 
@@ -313,7 +314,7 @@ Daemon 立即返回接受、排队或拒绝状态；实际执行结果通过事�
 
 命令名不等于权限：设备方向以「该连接已通过设备认证且设备未撤销」为执行前提（设备没有授权维度，配对不授予授权），跨节点方向另按 Owner Export Policy 与 `grant.*` 授权；逐命令的对照表见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2。原始 workspace 路径选择、Agent/Provider 配置、设备与 Export 管理、Node key 轮换和审计导出只能由 Owner Node 本地管理入口执行，永不远程授予，清单见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.3。
 
-跨节点的远程 `session.create` 只能选择已发布的 Agent 与 workspace template，禁止提交 `cwd`、`mcpServers`、绝对路径或任何 Provider/MCP 凭据；本机自己的设备在 Sync 面可以提交一个绝对目录，但必须先通过本机的绝对路径与存在性校验，且本机规范化后的路径不得回显给对端（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §12.3）。
+跨节点的远程 `session.create` 只能选择已发布的 Agent 与 workspace template，禁止提交 `cwd`、`mcpServers`、绝对路径或任何 Provider/MCP 凭据；本机自己的设备在 Sync 面可以提交一个绝对目录，但必须先通过本机的绝对路径与存在性校验，客户端提交的目录不会被回显，路径的可见面只有两处：协商 `core.workspace-path.v1` 时随目录资源下发**已登记**目录的规范化路径，协商 `core.workspace-browse.v1` 时随只读浏览结果下发该层直接子目录的绝对路径（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §12.3）。目录浏览 `workspace.browse` 是只读查询（feature `core.workspace-browse.v1` 门控，不登记、不产生审计动作），创建会话时可带一个「目录不存在则先创建」开关；命令与载荷形状以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5 为准。
 
 ## 9. 模型与模式选择
 

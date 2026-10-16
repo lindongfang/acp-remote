@@ -297,12 +297,45 @@ export type TerminalOutputView = {
   readonly truncated: boolean;
 } & OpenView;
 
+/** `$defs.file.changed.properties.diffLines.items`：一条结构化差异行（`{kind, text}`，开放对象）。 */
+export type FileDiffLine = {
+  readonly kind: "added" | "deleted" | "context";
+  readonly text: string;
+} & OpenView;
+
+/** `$defs.file.changed.properties.diffUnavailable.reason` 的封闭词表（v1 只有一个取值）。 */
+export type FileDiffUnavailableReason = "size_limit";
+
+/** `$defs.file.changed.properties.diffUnavailable`（开放对象）。 */
+export type FileDiffUnavailable = {
+  readonly reason: FileDiffUnavailableReason;
+} & OpenView;
+
 /**
- * `$defs.file.changed`：`addedLines`/`deletedLines`/`outsideWorkspace` 都是可选——
+ * `$defs.file.changed` 的差异行面（feature `core.file-diff.v1` 门控，§10.3）。
+ *
+ * 两个键都**可选**且**互斥**（schema 用 `not: {required: [diffLines, diffUnavailable]}` 表达）：
+ * 未协商该 feature 时两者都**缺席**（不是空数组、不是占位说明），超限时只有 `diffUnavailable`
+ * 在场。联合型的每一支都把另一支的键声明成 `never`，因此「同时写出两个键」这种形状无法匹配
+ * 任何一支 —— 互斥在编译期成立，而不是留给运行期校验。
+ *
+ * 键在场即至少一行、至多 400 行、单行文本至多 4096 字符（`docs/SYNC_PROTOCOL.md` §14 的固定
+ * 上限）；超限时服务端改为 `diffUnavailable: { reason: "size_limit" }`，MUST NOT 下发被截断的行。
+ */
+export type FileChangedDiff =
+  | { readonly diffLines?: readonly FileDiffLine[]; readonly diffUnavailable?: never }
+  | { readonly diffLines?: never; readonly diffUnavailable?: FileDiffUnavailable };
+
+/**
+ * `$defs.file.changed` 的命名字段：`addedLines`/`deletedLines`/`outsideWorkspace` 都是可选——
  * 「判定不出时省略而非填零」（`design.md` D4）。`displayPath` 由 core 相对化，
  * 越界时只给文件名且置 `outsideWorkspace: true`（D5）。
+ *
+ * 单独成为一个接口是为了让契约测试能用 `Record<keyof FileChangedFields, true>` 精确钉住字段集：
+ * 视图的开放对象尾巴（`OpenView`）会把 `keyof` 退化成 `string`，那样就再也比不出「镜像少了一个
+ * 键」。
  */
-export type FileChangedView = {
+export interface FileChangedFields {
   readonly changeId: Uuid;
   readonly kind: string;
   readonly displayPath: string;
@@ -310,7 +343,10 @@ export type FileChangedView = {
   readonly addedLines?: DecimalString;
   readonly deletedLines?: DecimalString;
   readonly outsideWorkspace?: boolean;
-} & OpenView;
+}
+
+/** `$defs.file.changed`：命名字段 + 差异行面 + 开放对象尾巴。 */
+export type FileChangedView = FileChangedFields & FileChangedDiff & OpenView;
 
 /** `$defs.agent.connected`：节点级事件，`state` 取值唯一。 */
 export type AgentConnectedView = {

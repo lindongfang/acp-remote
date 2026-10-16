@@ -661,7 +661,8 @@ impl World {
         self.trust.seed_device(record);
     }
 
-    /// 预置一条 workspace 记录（`workspaces` 资源的唯一来源；`canonical_path` 绝不进快照）。
+    /// 预置一条 workspace 记录（`workspaces` 资源的唯一来源；`canonical_path` 只在快照条目上、且只在
+    /// 客户端协商了 `core.workspace-path.v1` 时进快照）。
     pub(crate) fn seed_workspace(&self, alias: &str, display_name: &str, path: &str) {
         self.config.seed_workspace(
             acp_core::model::WorkspaceRecord::try_new(
@@ -694,7 +695,8 @@ impl World {
 }
 
 /// 一个**本机绝对**的目录文本（`WorkspaceRecord::canonical_path` 要求绝对路径形状；Windows 上
-/// `/home/...` 不是绝对路径）。用例用它断言"本机路径绝不进快照"。
+/// `/home/...` 不是绝对路径）。用例用它断言「未协商 `core.workspace-path.v1` 时本机路径不进快照」
+/// 与「协商后该条目带这个取值」。
 pub(crate) fn workspace_path() -> String {
     std::env::temp_dir()
         .join("acpr-sync-wp4-workspace")

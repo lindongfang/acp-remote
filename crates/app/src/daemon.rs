@@ -1109,6 +1109,9 @@ impl SyncIngress {
 /// 这是**唯一的 Sync 接线点**：组合根（[`NetIngress::start`]）与受控路径集成测试都调它，因此
 /// 「subprotocol 常量」「认证后消息的路由组合」「配对端点的安全响应头」不会在两处漂移：认证后的消息由
 /// [`SyncRoutes`]（订阅面 → 命令面）承接，`sync.*` 走 `SubscribeRoute`、`command` 走 `SyncCommandRoute`。
+/// 命令面本身覆盖 §11.5 的全部 13 条命令——包括只读目录浏览 `workspace.browse`：它的目录读取由
+/// `UseCases` 持有的目录浏览端口承担，因此组合根这里**不需要**再接一个目录读取实现（端口表见
+/// [`crate::compose`]）。
 ///
 /// 配对端点的四个安全响应头经 `SyncPairingHttp::default_response_headers` **同时**声明给接入层
 /// （`register_post` 的每路径默认响应头）：否则接入层在调用处理器前产生的 413/Host 400 不带这些头。

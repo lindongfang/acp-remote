@@ -1,7 +1,7 @@
 {
   "$schema": "../../../schemas/acp/compatibility-matrix.schema.json",
   "schemaVersion": 1,
-  "revision": "2026-09-18",
+  "revision": "2026-10-17",
   "protocol": {
     "name": "ACP",
     "wireVersion": 1,

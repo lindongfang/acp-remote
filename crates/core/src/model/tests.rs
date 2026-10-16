@@ -2451,6 +2451,50 @@ fn local_config_values_enforce_their_invariants() {
         .is_err()
     );
 
+    // §3.7：Sync 快照 `workspaces` 的条目。`path` 的 `None` 是「该键缺席」（未协商
+    // `core.workspace-path.v1`），在场时必须是绝对路径形状且与记录同口径。
+    let entry =
+        WorkspaceCatalogEntry::try_new(workspace.alias().clone(), workspace.display_name(), None)
+            .expect("catalog entry without path");
+    assert_eq!(entry.alias(), workspace.alias());
+    assert_eq!(entry.display_name(), workspace.display_name());
+    assert!(entry.path().is_none());
+    let entry = WorkspaceCatalogEntry::try_new(
+        workspace.alias().clone(),
+        workspace.display_name(),
+        Some(workspace.canonical_path()),
+    )
+    .expect("catalog entry with path");
+    assert_eq!(entry.path(), Some(workspace.canonical_path()));
+    assert!(
+        WorkspaceCatalogEntry::try_new(
+            workspace.alias().clone(),
+            workspace.display_name(),
+            Some("relative/path"),
+        )
+        .is_err()
+    );
+    assert!(
+        WorkspaceCatalogEntry::try_new(workspace.alias().clone(), "", None).is_err(),
+        "显示名的下界与 WorkspaceRecord 相同"
+    );
+
+    // 建目录开关只可能挂在客户端提供的目录上：别名没有对应的变体，因此「别名 + 开关」不可表达——
+    // 这一点由类型保证，不靠运行时判定。三种来源各自携带什么按变体直接匹配（`WorkspaceSource` 不提供
+    // 路径/开关访问器，避免多出一条与变体形状同义的间接层）。
+    assert!(matches!(
+        WorkspaceSource::Alias(workspace.alias().clone()),
+        WorkspaceSource::Alias(alias) if &alias == workspace.alias()
+    ));
+    assert!(matches!(
+        WorkspaceSource::Path("D:\\work".to_owned()),
+        WorkspaceSource::Path(path) if path == "D:\\work"
+    ));
+    assert!(matches!(
+        WorkspaceSource::PathWithCreate("D:\\work".to_owned()),
+        WorkspaceSource::PathWithCreate(path) if path == "D:\\work"
+    ));
+
     // §3.7：同一条 profile 内不得重复绑定同一个 `(provider_id, field)`。
     assert!(
         AgentProfile::try_new(

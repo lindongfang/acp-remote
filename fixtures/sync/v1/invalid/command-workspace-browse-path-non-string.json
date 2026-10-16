@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "2f7d0b61-9e35-4c8a-b742-0d1f6a3e9c58",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "107",
+  "body": {
+    "requestId": "b0e39a57-6c14-4d82-9f06-3a7d2b5e8c41",
+    "command": "workspace.browse",
+    "payload": {
+      "path": 7
+    }
+  }
+}

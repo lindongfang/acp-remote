@@ -318,22 +318,39 @@ async fn the_workspace_key_has_three_states() {
     );
 }
 
+/// 目录资源的 `path` 键受**它自己**的 feature 门控（`core.workspace-path.v1`）：未协商时键缺席且路径
+/// （连同它的任何分段）不出现在任何帧里，协商后同一条目多出该键、取值是已登记目录的规范化下发形式。
 #[tokio::test]
-async fn the_canonical_path_never_leaves_the_host() {
+async fn the_workspace_path_key_follows_its_own_feature() {
     let world = World::new();
     let path = fixture::workspace_path();
     world.seed_workspace("project", "Project", &path);
-    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
-    for frame in &frames {
+
+    // 未协商：条目仍是「两个键的封闭对象」，客户端自己提交的目录与本机路径都不出现在帧里。
+    let ungated = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
+    let entry = &items(&ungated, "workspaces").expect("workspaces")[0];
+    assert_eq!(entry["alias"], "project");
+    assert_eq!(entry["displayName"], "Project");
+    assert!(
+        entry.get("path").is_none(),
+        "未协商 core.workspace-path.v1 时 path 键必须缺席（不是 null、不是空串）：{entry}"
+    );
+    for frame in &ungated {
         assert!(
             !frame.text.contains(&path),
-            "本机规范化路径与其分段不得出现在任何帧里：{}",
+            "未协商时本机规范化路径与其分段不得出现在任何帧里：{}",
             frame.text
         );
     }
+
+    // 协商后：同一条目多出 path 键，取值是 core 给出的规范化下发形式。
+    let gated = snapshot(&world, &[LOCAL_CATALOG_FEATURE, WORKSPACE_PATH_FEATURE]).await;
+    let entry = &items(&gated, "workspaces").expect("workspaces")[0];
+    assert_eq!(entry["alias"], "project");
     assert_eq!(
-        items(&frames, "workspaces").expect("workspaces")[0]["alias"],
-        "project"
+        entry["path"],
+        serde_json::Value::String(path.clone()),
+        "协商后必须带已登记目录的规范化路径：{entry}"
     );
 }
 

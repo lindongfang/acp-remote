@@ -5,7 +5,7 @@
 //! [`crate::envelope`] 承载；本模块只承载 `body`，与 `auth`/`control`/`error` 三个家族一致。
 //!
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它
-//! `transport` 含 `sync` 的 12 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
+//! `transport` 含 `sync` 的 13 条命令的镜像（`session.resume` 只经 Node Link 接受，Sync v1 收到时
 //! 按 `command.unsupported` 拒绝）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
@@ -47,12 +47,15 @@ pub type RequestId = Uuid;
 
 /// `commandName`（`command.schema.json#/$defs/commandName`）。
 ///
-/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 12 条命令，顺序
+/// 逐条等于 `compatibility/commands/v1/commands.json` 中 `transport` 含 `sync` 的 13 条命令，顺序
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
-/// `{ agentId, workspaceAlias | workspacePath（恰好一个） }`（`exportId`/`templateParams` 是跨节点
-/// Export 概念，见 `docs/SYNC_PROTOCOL.md` §11.5）。
+/// `{ agentId, workspaceAlias | workspacePath（恰好一个）, createIfMissing? }`（`exportId`/
+/// `templateParams` 是跨节点 Export 概念，见 `docs/SYNC_PROTOCOL.md` §11.5）。
+///
+/// `workspace.browse` 只经 Sync 面接受（它是本机目录的逐层浏览查询，Node Link 的请求不得携带任意
+/// Owner 路径，因此不在 Node Link 的命令枚举里）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandName {
     /// `session.list`
@@ -65,6 +68,8 @@ pub enum CommandName {
     SessionModeList,
     /// `session.config.list`
     SessionConfigList,
+    /// `workspace.browse`
+    WorkspaceBrowse,
     /// `session.prompt`
     SessionPrompt,
     /// `session.cancel`
@@ -83,12 +88,13 @@ pub enum CommandName {
 
 impl CommandName {
     /// 与 `compatibility/commands/v1/commands.json` 的 sync 子集逐条相等，顺序一致。
-    pub const ALL: [CommandName; 12] = [
+    pub const ALL: [CommandName; 13] = [
         CommandName::SessionList,
         CommandName::SessionRead,
         CommandName::CommandStatus,
         CommandName::SessionModeList,
         CommandName::SessionConfigList,
+        CommandName::WorkspaceBrowse,
         CommandName::SessionPrompt,
         CommandName::SessionCancel,
         CommandName::ElicitationRespond,
@@ -108,16 +114,21 @@ impl CommandName {
                 | CommandName::CommandStatus
                 | CommandName::SessionModeList
                 | CommandName::SessionConfigList
+                | CommandName::WorkspaceBrowse
         )
     }
 
     /// body 顶层是否**必须**携带 `sessionId`（各 def 的 `required` 列表；其余命令按
-    /// `additionalProperties: false` 反过来禁止它）。`session.create` 的目标会话尚不存在，因此与
-    /// `session.list`/`command.status` 一样禁止该键。
+    /// `additionalProperties: false` 反过来禁止它）。`session.create` 的目标会话尚不存在，
+    /// `workspace.browse` 只浏览目录而不属于任何会话，因此两者与 `session.list`/`command.status`
+    /// 一样禁止该键。
     pub fn requires_session_id(self) -> bool {
         !matches!(
             self,
-            CommandName::SessionList | CommandName::CommandStatus | CommandName::SessionCreate
+            CommandName::SessionList
+                | CommandName::CommandStatus
+                | CommandName::SessionCreate
+                | CommandName::WorkspaceBrowse
         )
     }
 
@@ -136,6 +147,7 @@ impl CommandName {
             CommandName::CommandStatus => "command.status",
             CommandName::SessionModeList => "session.mode.list",
             CommandName::SessionConfigList => "session.config.list",
+            CommandName::WorkspaceBrowse => "workspace.browse",
             CommandName::SessionPrompt => "session.prompt",
             CommandName::SessionCancel => "session.cancel",
             CommandName::ElicitationRespond => "elicitation.respond",
@@ -258,11 +270,54 @@ impl<'de> Deserialize<'de> for CommandState {
 #[serde(deny_unknown_fields)]
 pub struct SessionList {}
 
+/// `workspaceBrowse` 判定父路径与条目路径的长度域（`command.schema.json#/$defs/workspaceBrowsePath`，
+/// 与 `workspacePath` 同为 1..=4096）。
+pub type WorkspaceBrowsePath = NonEmptyText<4096>;
+
+/// `workspaceBrowse`（`command.schema.json#/$defs/workspaceBrowse`）的 `payload`：只含一个父路径键，
+/// 取值是绝对路径或 `null`（`null` = 该节点的根列表）。形状校验（相对路径、含 `..`）与可达性判定
+/// 属于本机用例，不在这一层判定——这一层只保证「恰好一个路径键，且不是空串」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceBrowse {
+    pub path: Nullable<WorkspaceBrowsePath>,
+}
+
+/// `workspaceBrowseEntry`（`command.schema.json#/$defs/workspaceBrowseEntry`）：该层的**直接**子目录
+/// 条目。只有名称、绝对路径与「是否已登记 workspace」三项：文件条目、文件内容、大小、时间戳与权限
+/// 都不在 wire 上。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceBrowseEntry {
+    pub name: NonEmptyText<256>,
+    pub path: WorkspaceBrowsePath,
+    /// 该子目录是否已是本机已登记的 workspace（只反映登记状态，不产生任何登记副作用）。
+    pub registered: bool,
+}
+
+/// `workspaceBrowseResult`（`command.schema.json#/$defs/workspaceBrowseResult`）：`workspace.browse` 的
+/// completed 结果——回显的父路径、该层条目与截断标记。
+///
+/// `truncated` 为真表示该层的子目录数超过固定 v1 上限（`docs/SYNC_PROTOCOL.md` §14），`entries`
+/// 因此只含上限内的条目；它不是「结果不完整所以失败」，客户端据此提示还有更多。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceBrowseResult {
+    pub path: Nullable<WorkspaceBrowsePath>,
+    pub entries: Vec<WorkspaceBrowseEntry>,
+    pub truncated: bool,
+}
+
 /// `sessionCreate`（`command.schema.json#/$defs/sessionCreate`）的 `payload`。
 ///
 /// schema 要求 `agentId` 必填，且 `workspaceAlias` 与 `workspacePath` **恰好出现一个**（`oneOf`）；
 /// 目录来源是 [`SessionCreateWorkspace`] 的二选一，因此"两个都给"或"都不给"在构造与反序列化两侧
 /// 都不可能成立。
+///
+/// [`create_if_missing`](Self::create_if_missing) 是可选的显式「目录不存在则先创建」开关：缺席即
+/// 假（行为与引入该键之前完全一致），只有客户端提供的目录才可能与它同时出现——它与
+/// `workspaceAlias` **互斥**（别名解析出的目录必然已存在），同时给出时按 schema 的 `not` 在
+/// 反序列化期被拒。
 ///
 /// `workspaceAlias` 对应本机 `owned_workspace` 已登记的行，`workspacePath` 是客户端提供的绝对
 /// 目录（浏览器拿不到宿主路径，因此这一来源就是一次文本输入），`agentId` 对应本机已配置的 Agent
@@ -273,6 +328,8 @@ pub struct SessionList {}
 pub struct SessionCreate {
     pub agent_id: NonEmptyText<128>,
     pub workspace: SessionCreateWorkspace,
+    /// 键缺席即默认「不创建」；键在场时只接受 `true`/`false`（没有 `null` 分支）。
+    pub create_if_missing: Option<bool>,
 }
 
 /// `session.create` 的目录来源：本机已登记别名或客户端提供的绝对路径，**恰好一个**。
@@ -287,19 +344,22 @@ pub enum SessionCreateWorkspace {
 
 impl Serialize for SessionCreate {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(2))?;
+        let mut map = serializer.serialize_map(Some(3))?;
         map.serialize_entry("agentId", &self.agent_id)?;
         match &self.workspace {
             SessionCreateWorkspace::Alias(alias) => map.serialize_entry("workspaceAlias", alias)?,
             SessionCreateWorkspace::Path(path) => map.serialize_entry("workspacePath", path)?,
+        }
+        if let Some(create_if_missing) = self.create_if_missing {
+            map.serialize_entry("createIfMissing", &create_if_missing)?;
         }
         map.end()
     }
 }
 
 /// [`SessionCreate`] 的反序列化中间形态：两个目录键都声明为可缺失的 `Option`，由
-/// [`TryFrom`] 把"恰好一个"这条 `oneOf` 钉死。键存在但为 `null` 必须被拒（它们不是可空字段），
-/// 因此用 [`deserialize_optional_non_null`] 而不是裸 `Option`。
+/// [`TryFrom`] 把"恰好一个"这条 `oneOf` 与「建目录开关不与别名同用」这条 `not` 一起钉死。键存在但为
+/// `null` 必须被拒（它们不是可空字段），因此用 [`deserialize_optional_non_null`] 而不是裸 `Option`。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSessionCreate {
@@ -317,6 +377,14 @@ struct RawSessionCreate {
         deserialize_with = "deserialize_optional_non_null"
     )]
     workspace_path: Option<NonEmptyText<4096>>,
+    /// 建目录开关：键缺席即 `None`（默认假），键在场时只接受 `true`/`false`（没有 `null` 分支）。
+    /// 保留「键在不在」这一维，才能与 `workspaceAlias` 互斥（`Some(false)` 也算同时出现）。
+    #[serde(
+        rename = "createIfMissing",
+        default,
+        deserialize_with = "deserialize_optional_non_null"
+    )]
+    create_if_missing: Option<bool>,
 }
 
 impl TryFrom<RawSessionCreate> for SessionCreate {
@@ -333,9 +401,19 @@ impl TryFrom<RawSessionCreate> for SessionCreate {
                 });
             }
         };
+        // 别名解析出的目录必然已存在，因此「不存在则先创建」与它同时出现是形状错误
+        // （command.schema.json#/$defs/sessionCreate.payload 的 `not`）；值是不是 true 都算同时出现。
+        if matches!(workspace, SessionCreateWorkspace::Alias(_)) && raw.create_if_missing.is_some()
+        {
+            return Err(ValueError::Shape {
+                field: "payload",
+                expected: "createIfMissing 不得与 workspaceAlias 同时出现（command.schema.json#/$defs/sessionCreate.payload 的 not）",
+            });
+        }
         Ok(Self {
             agent_id: raw.agent_id,
             workspace,
+            create_if_missing: raw.create_if_missing,
         })
     }
 }
@@ -758,6 +836,8 @@ pub enum CommandPayload {
     SessionList(SessionList),
     /// `session.create` 的 payload。
     SessionCreate(SessionCreate),
+    /// `workspace.browse` 的 payload。
+    WorkspaceBrowse(WorkspaceBrowse),
     /// `session.read` 的 payload。
     SessionRead(SessionRead),
     /// `session.prompt` 的 payload。
@@ -796,6 +876,11 @@ impl CommandPayload {
                 "{ agentId, workspaceAlias | workspacePath（恰好一个） }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
+            CommandName::WorkspaceBrowse => parse_payload(
+                payload,
+                "{ path: 绝对路径 | null }（workspaceBrowse 的 payload）",
+            )
+            .map(CommandPayload::WorkspaceBrowse),
             CommandName::SessionRead => parse_payload(
                 payload,
                 "{ include: 资源名数组, before?: { createdAt, messageId }, beforeHistory?: decimalString, limit?: >=1 }（sessionRead 的 payload）",
@@ -1099,6 +1184,8 @@ pub struct CommandStatusRecord {
 pub enum CommandResultPayload {
     /// `session.list` 的完成结果。
     SessionList(SessionListResult),
+    /// `workspace.browse` 的完成结果。
+    WorkspaceBrowse(WorkspaceBrowseResult),
     /// `session.create` 的完成结果。
     SessionCreate(Box<SessionCreateResult>),
     /// `session.read` 的完成结果。
@@ -1141,6 +1228,13 @@ impl CommandResultPayload {
                     .map(|value| {
                         Nullable::value(CommandResultPayload::SessionCreate(Box::new(value)))
                     });
+                }
+                CommandName::WorkspaceBrowse => {
+                    return parse_result::<WorkspaceBrowseResult>(
+                        result,
+                        "workspaceBrowseResult（workspace.browse 的 completed）",
+                    )
+                    .map(|value| Nullable::value(CommandResultPayload::WorkspaceBrowse(value)));
                 }
                 CommandName::SessionRead => {
                     return parse_result::<SessionReadResult>(
@@ -1392,7 +1486,7 @@ mod tests {
 
     #[test]
     fn command_name_covers_the_sync_subset_and_round_trips() {
-        assert_eq!(CommandName::ALL.len(), 12, "sync 子集是 12 条命令");
+        assert_eq!(CommandName::ALL.len(), 13, "sync 子集是 13 条命令");
         assert!(
             CommandName::ALL
                 .iter()
@@ -1411,6 +1505,22 @@ mod tests {
             "会话尚不存在，body 顶层不得携带 sessionId"
         );
         assert!(!CommandName::SessionCreate.requires_expected_version());
+
+        // workspace.browse 是查询命令，且不属于任何会话（与 session.list 同类禁止 sessionId）。
+        assert_eq!(
+            CommandName::from_str("workspace.browse"),
+            Ok(CommandName::WorkspaceBrowse)
+        );
+        assert!(
+            CommandName::WorkspaceBrowse.is_query(),
+            "workspace.browse 是 query：completed 直接给结果且 terminalEventId 为 null"
+        );
+        assert!(
+            !CommandName::WorkspaceBrowse.requires_session_id(),
+            "浏览目录不属于任何会话，body 顶层不得携带 sessionId"
+        );
+        assert!(!CommandName::WorkspaceBrowse.requires_expected_version());
+        assert_eq!(CommandName::WorkspaceBrowse.as_str(), "workspace.browse");
     }
 
     #[test]
@@ -1429,6 +1539,7 @@ mod tests {
                 workspace: SessionCreateWorkspace::Alias(
                     NonEmptyText::parse("work-api").expect("非空")
                 ),
+                create_if_missing: None,
             })
         );
 
@@ -1446,6 +1557,7 @@ mod tests {
                 workspace: SessionCreateWorkspace::Path(
                     NonEmptyText::parse("/home/dev/projects/work-api").expect("非空")
                 ),
+                create_if_missing: None,
             })
         );
 
@@ -1456,6 +1568,11 @@ mod tests {
             // 目录键可缺失但不可为 null（它们不是可空字段）。
             r#"{"agentId":"claude-code","workspaceAlias":null}"#,
             r#"{"agentId":"claude-code","workspacePath":null}"#,
+            // 建目录开关与别名互斥：值是不是 true 都算「同时出现」（schema 的 not）。
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code","createIfMissing":true}"#,
+            r#"{"workspaceAlias":"work-api","agentId":"claude-code","createIfMissing":false}"#,
+            // 建目录开关是布尔键，没有 null 分支。
+            r#"{"workspacePath":"/home/dev/projects/work-api","agentId":"claude-code","createIfMissing":null}"#,
             // cwd 与目录追加不是授权输入（SECURITY_DESIGN.md §12.3）。
             r#"{"workspaceAlias":"work-api","agentId":"claude-code","cwd":"C:\\repo"}"#,
             // 跨节点 Export 概念在 Sync 面不存在。
@@ -1478,6 +1595,56 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&by_path.payload).expect("必须可序列化"),
             r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api"}"#
+        );
+
+        // 建目录开关：与客户端提供的目录可以同时出现，且键缺席与键在场（false）必须可区分。
+        let with_create: Command = serde_json::from_str(&body(
+            "session.create",
+            "",
+            r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api","createIfMissing":true}"#,
+        ))
+        .expect("绝对路径 + 建目录开关必须接受");
+        let CommandPayload::SessionCreate(payload) = with_create.payload else {
+            panic!("payload 必须是 SessionCreate");
+        };
+        assert_eq!(
+            payload.create_if_missing,
+            Some(true),
+            "开关必须逐字承载服务端要执行的语义"
+        );
+        assert_eq!(
+            serde_json::to_string(&CommandPayload::SessionCreate(payload)).expect("必须可序列化"),
+            r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api","createIfMissing":true}"#,
+            "开关在场时必须写回 wire，不得被 skip_serializing_if 吞掉"
+        );
+
+        let absent: Command = serde_json::from_str(&body(
+            "session.create",
+            "",
+            r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api"}"#,
+        ))
+        .expect("省略开关必须接受");
+        let CommandPayload::SessionCreate(payload) = absent.payload else {
+            panic!("payload 必须是 SessionCreate");
+        };
+        assert_eq!(
+            payload.create_if_missing, None,
+            "键缺席即「不创建」：不得被读成 false 之外的任何默认"
+        );
+
+        let explicit_false: Command = serde_json::from_str(&body(
+            "session.create",
+            "",
+            r#"{"agentId":"claude-code","workspacePath":"/home/dev/projects/work-api","createIfMissing":false}"#,
+        ))
+        .expect("显式 false 必须接受");
+        let CommandPayload::SessionCreate(payload) = explicit_false.payload else {
+            panic!("payload 必须是 SessionCreate");
+        };
+        assert_eq!(
+            payload.create_if_missing,
+            Some(false),
+            "显式 false 与键缺席在 wire 上是两种形状（对端必须能逐字区分）"
         );
 
         // 顶层 sessionId 由 `additionalProperties: false` 拒绝（不是被静默忽略）。
@@ -1528,6 +1695,102 @@ mod tests {
         let accepted: CommandResult = serde_json::from_str(&accepted).expect("accepted 必须接受");
         assert!(accepted.result.is_null());
     }
+
+    #[test]
+    fn workspace_browse_takes_one_nullable_path_and_binds_its_result() {
+        // 根列表：`path` 为 `null`。它是**键在场且值为 null**，不得被写成键缺席。
+        let root: Command = serde_json::from_str(&body("workspace.browse", "", r#"{"path":null}"#))
+            .expect("path 为 null（根列表）必须接受");
+        let CommandPayload::WorkspaceBrowse(payload) = root.payload else {
+            panic!("payload 必须是 WorkspaceBrowse");
+        };
+        assert!(payload.path.is_null(), "null 表示请求该节点的根列表");
+        assert_eq!(
+            serde_json::to_string(&CommandPayload::WorkspaceBrowse(payload)).expect("可序列化"),
+            r#"{"path":null}"#,
+            "根列表必须逐字写成 path: null，不得被压成键缺席"
+        );
+
+        // 某一层：绝对路径逐字保留（规范化与可达性判定属于本机用例）。
+        let layer: Command =
+            serde_json::from_str(&body("workspace.browse", "", r#"{"path":"D:\\work\\api"}"#))
+                .expect("绝对路径必须接受");
+        let CommandPayload::WorkspaceBrowse(payload) = layer.payload else {
+            panic!("payload 必须是 WorkspaceBrowse");
+        };
+        assert_eq!(
+            payload.path.as_ref().map(|path| path.as_str()),
+            Some(r"D:\work\api")
+        );
+
+        // 这一层只判定 shape：相对路径与含 `..` 由本机用例分类（不在这里拒绝），但空串、缺键、
+        // 多余键与非字符串必须被拒。
+        for rejected in [
+            r#"{}"#,
+            r#"{"path":""}"#,
+            r#"{"path":"D:\\work","entries":[]}"#,
+            r#"{"path":"D:\\work","recursive":true}"#,
+            r#"{"path":7}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Command>(&body("workspace.browse", "", rejected)).is_err(),
+                "payload 必须被拒：{rejected}"
+            );
+        }
+
+        // 浏览不属于任何会话：顶层 sessionId 由 `additionalProperties: false` 拒绝。
+        let with_session = format!(
+            r#"{{"requestId":"{REQUEST}","command":"workspace.browse","sessionId":"{SESSION}","payload":{{"path":null}}}}"#
+        );
+        assert!(serde_json::from_str::<Command>(&with_session).is_err());
+
+        // completed 的结果必须落在自己的形状上（workspaceBrowseResult），且逐字承载截断标记与登记状态。
+        let completed = format!(
+            r#"{{"requestId":"{REQUEST}","command":"workspace.browse","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":null,"result":{{"path":null,"entries":[{{"name":"work","path":"D:\\work","registered":true}},{{"name":"tmp","path":"D:\\tmp","registered":false}}],"truncated":true}},"error":null}}"#
+        );
+        let parsed: CommandResult = serde_json::from_str(&completed).expect("completed 必须接受");
+        let payload = match parsed.result.as_ref() {
+            Some(CommandResultPayload::WorkspaceBrowse(payload)) => payload,
+            other => panic!("completed 的 result 必须是 workspaceBrowseResult：{other:?}"),
+        };
+        assert!(payload.truncated, "截断标记必须逐字承载");
+        assert!(payload.entries[0].registered, "已登记的条目必须标出");
+        assert!(!payload.entries[1].registered);
+
+        for rejected in [
+            // 截断标记是必填的：缺席不得按默认值放行。
+            r#"{"path":null,"entries":[]}"#,
+            // 条目的三个字段都是必填。
+            r#"{"path":null,"entries":[{"name":"work","path":"D:\\work"}],"truncated":false}"#,
+            // 文件内容与元数据不在 wire 上：多一个键即拒。
+            r#"{"path":null,"entries":[{"name":"work","path":"D:\\work","registered":false,"size":"12"}],"truncated":false}"#,
+            // 回显的父路径是必填字段。
+            r#"{"entries":[],"truncated":false}"#,
+        ] {
+            let wire = format!(
+                r#"{{"requestId":"{REQUEST}","command":"workspace.browse","status":"completed","acceptedAt":"2026-09-17T12:12:00.000Z","terminalEventId":null,"result":{rejected},"error":null}}"#
+            );
+            assert!(
+                serde_json::from_str::<CommandResult>(&wire).is_err(),
+                "result 必须被拒：{rejected}"
+            );
+        }
+
+        // 查询命令的 completed 必须 terminalEventId = null（mutation 才带终态事件）。
+        let with_terminal = completed.replace(
+            r#""terminalEventId":null"#,
+            &format!(r#""terminalEventId":"{TERMINAL}""#),
+        );
+        assert!(serde_json::from_str::<CommandResult>(&with_terminal).is_err());
+
+        // 别的命令的完成结果形状不得被放行。
+        let mismatched = completed.replace(
+            r#""command":"workspace.browse""#,
+            r#""command":"session.list""#,
+        );
+        assert!(serde_json::from_str::<CommandResult>(&mismatched).is_err());
+    }
+
     #[test]
     fn session_read_paging_is_optional_and_the_cursor_is_composite() {
         let include_only = body(

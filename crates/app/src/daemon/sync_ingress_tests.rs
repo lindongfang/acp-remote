@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use acp_core::model::{
     Actor, DeviceId, GrantSet, NodeId, Nonce, PairingId, PeerIdentity, PeerPublicKey, ScopeSet,
 };
-use acp_core::ports::TrustRecordRef;
+use acp_core::ports::{AuditQuery, TrustRecordRef};
 use acp_core::use_cases::UseCases;
 use base64::Engine as _;
 use server::sync::subscribe::fanout::SyncPublisher;
@@ -545,14 +545,15 @@ fn envelope(message_type: &str, body: Value) -> String {
     .to_string()
 }
 
-/// 设备侧四消息握手：`auth.client_hello` → `auth.server_challenge` → `auth.client_proof` →
-/// `auth.authenticated`。返回最后一条消息（`auth.authenticated` 或 `error`）。
-async fn authenticate(
+/// 握手的前两步：`auth.client_hello`（声明 `declared` 条 supportedFeatures）→ `auth.server_challenge`。
+///
+/// `declared` 由调用方给：协商是**交集**（`selected = 客户端 ∩ 服务端`），因此少报一条就是「这一条协商
+/// 不到」——这条路径在真实握手上可达。
+async fn hello_and_challenge(
     client: &mut WsClient,
     host: &NodeId,
     device: &DeviceId,
-    origin: &str,
-    signing: &p256::ecdsa::SigningKey,
+    declared: Vec<&str>,
 ) -> Value {
     let client_nonce = base64url(&CLIENT_NONCE);
     client
@@ -565,32 +566,53 @@ async fn authenticate(
                 "deviceId": device.as_str(),
                 "clientKind": "pwa",
                 "clientNonce": client_nonce,
-                "supportedFeatures": SUPPORTED_FEATURES,
+                "supportedFeatures": declared,
                 "requiredFeatures": [],
             }),
         ))
         .await;
-    let challenge = client.expect_type("auth.server_challenge").await;
-    let body = challenge["body"].clone();
-    let connection_id = body["connectionId"]
+    client.expect_type("auth.server_challenge").await
+}
+
+/// `auth.server_challenge` 的 `connectionId`（认证后的消息必须回填它 + `connectionSequence`）。
+fn challenge_connection_id(challenge: &Value) -> String {
+    challenge["body"]["connectionId"]
         .as_str()
         .expect("connectionId")
-        .to_owned();
-    let selected: Vec<String> = body["selectedFeatures"]
+        .to_owned()
+}
+
+/// `auth.server_challenge` 的 `selectedFeatures`（本次协商结果）。
+fn selected_feature_ids(challenge: &Value) -> Vec<String> {
+    challenge["body"]["selectedFeatures"]
         .as_array()
         .expect("selectedFeatures")
         .iter()
-        .map(|feature| feature.as_str().expect("feature id").to_owned())
-        .collect();
+        .map(|feature| feature.as_str().expect("feature id 是文本").to_owned())
+        .collect()
+}
+
+/// 用 `auth.server_challenge` 的 body 提交 `auth.client_proof`，交回最后一条消息
+/// （`auth.authenticated` 或 `error`）。
+async fn prove(
+    client: &mut WsClient,
+    host: &NodeId,
+    device: &DeviceId,
+    origin: &str,
+    signing: &p256::ecdsa::SigningKey,
+    challenge: &Value,
+) -> Value {
+    let body = challenge["body"].clone();
+    let connection_id = challenge_connection_id(challenge);
     let input = SyncDeviceProof {
         host_id: host.clone(),
         device_id: device.clone(),
         canonical_origin: CanonicalOrigin::parse(origin).expect("canonical origin"),
-        client_nonce: Nonce::new(&client_nonce).expect("nonce"),
+        client_nonce: Nonce::new(&base64url(&CLIENT_NONCE)).expect("nonce"),
         server_nonce: Nonce::new(body["serverNonce"].as_str().expect("serverNonce"))
             .expect("nonce"),
         connection_id: ChallengeId::parse(&connection_id).expect("connectionId 是 uuid"),
-        negotiated_features: FeatureList::new(selected),
+        negotiated_features: FeatureList::new(selected_feature_ids(challenge)),
     };
     let transcript = input.transcript().expect("transcript 可装配");
     let signature: p256::ecdsa::Signature = signing.sign(&transcript);
@@ -607,6 +629,19 @@ async fn authenticate(
         ))
         .await;
     client.next_message().await
+}
+
+/// 设备侧四消息握手：`auth.client_hello` → `auth.server_challenge` → `auth.client_proof` →
+/// `auth.authenticated`。返回最后一条消息（`auth.authenticated` 或 `error`）。
+async fn authenticate(
+    client: &mut WsClient,
+    host: &NodeId,
+    device: &DeviceId,
+    origin: &str,
+    signing: &p256::ecdsa::SigningKey,
+) -> Value {
+    let challenge = hello_and_challenge(client, host, device, SUPPORTED_FEATURES.to_vec()).await;
+    prove(client, host, device, origin, signing, &challenge).await
 }
 
 /// 本机用户登记、认领并批准一次设备配对，落库出 `active` 的设备信任行。
@@ -928,7 +963,7 @@ async fn revoking_a_device_closes_its_connection_and_blocks_later_authentication
 /// 走完一次真实握手并**交回协商出的 feature 集合**（`selected = 客户端 ∩ 服务端`）。
 ///
 /// `omitted = Some(id)` 时客户端少报那一条 —— 真实握手路径上可达（协商是交集，不是服务端单方面决定）。
-/// 不共用 `authenticate`：后者是四条既有用例的素材，且它不回传协商集合。
+/// 只走前两步（`auth.client_hello` → `auth.server_challenge`）就够：协商结果在 challenge 上。
 async fn challenge_features(
     client: &mut WsClient,
     host: &NodeId,
@@ -940,29 +975,8 @@ async fn challenge_features(
         .copied()
         .filter(|feature| omitted != Some(feature))
         .collect();
-    let client_nonce = base64url(&CLIENT_NONCE);
-    client
-        .send_text(&envelope(
-            "auth.client_hello",
-            json!({
-                "minProtocolVersion": 1,
-                "maxProtocolVersion": 1,
-                "hostId": host.as_str(),
-                "deviceId": device.as_str(),
-                "clientKind": "pwa",
-                "clientNonce": client_nonce,
-                "supportedFeatures": declared,
-                "requiredFeatures": [],
-            }),
-        ))
-        .await;
-    let challenge = client.expect_type("auth.server_challenge").await;
-    challenge["body"]["selectedFeatures"]
-        .as_array()
-        .expect("selectedFeatures")
-        .iter()
-        .map(|feature| feature.as_str().expect("feature id 是文本").to_owned())
-        .collect()
+    let challenge = hello_and_challenge(client, host, device, declared).await;
+    selected_feature_ids(&challenge)
 }
 
 /// 组合根接线的门控：协商集合由**客户端声明 ∩ 服务端支持**决定，而它决定后续 `event` 帧的形状。
@@ -1018,6 +1032,295 @@ async fn the_negotiated_features_differ_per_connection_and_gate_the_event_shape(
     assert_ne!(
         negotiated_full, negotiated_partial,
         "同一条链路上的两条连接必须能协商出不同集合"
+    );
+
+    harness.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// `workspace.browse`：真实 daemon + 真实 SQLite 上的端到端往返与负向断言（任务 3.3–3.5）
+// ---------------------------------------------------------------------------------------------
+
+/// 一条认证后、能发 `command` 帧的连接（认证后的消息必须带 `connectionId`/`connectionSequence`，
+/// §4.1，因此这里把连接标识与序号一起持住）。
+struct CommandClient {
+    client: WsClient,
+    connection_id: String,
+    /// 本方向的期望序号（四条 `auth` 消息在认证前，因此第一条 `command` 从 1 起）。
+    sequence: u64,
+    /// 本次协商出的 feature 集合（门控的输入）。
+    selected: Vec<String>,
+}
+
+impl CommandClient {
+    /// 发一条 `command` 帧并交回服务端的**下一条**消息（`command.result` 或 `error`）。
+    async fn command(&mut self, request_id: &str, command: &str, payload: Value) -> Value {
+        self.sequence += 1;
+        self.client
+            .send_text(
+                &json!({
+                    "protocolVersion": 1,
+                    "type": "command",
+                    "messageId": uuid_text(),
+                    "connectionId": self.connection_id,
+                    "connectionSequence": self.sequence.to_string(),
+                    "body": {
+                        "requestId": request_id,
+                        "command": command,
+                        "payload": payload,
+                    },
+                })
+                .to_string(),
+            )
+            .await;
+        self.client.next_message().await
+    }
+}
+
+/// 配对一台设备、升级 `/sync/v1` 并走完握手，交回可发命令的连接。
+///
+/// 与其余用例同一条写入路径（`identity_auth` 的状态机 + `core::use_cases` 落库）与同一个装配点
+/// （`NetIngress::start`）。
+async fn command_client(
+    harness: &Harness,
+    origin: &CanonicalOrigin,
+    device: &DeviceId,
+) -> CommandClient {
+    let signing = p256::ecdsa::SigningKey::from_slice(&DEVICE_SCALAR).expect("测试标量合法");
+    let public =
+        PeerPublicKey::try_from_bytes(signing.verifying_key().to_sec1_point(false).as_bytes())
+            .expect("设备公钥是 65 字节 SEC1 未压缩点");
+    let node_id = harness.authority.local_node().clone();
+    approve_device(&harness.core, &harness.authority, device, &public, origin).await;
+    let mut client = WsClient::upgrade(
+        harness.addr,
+        SYNC_WS_PATH,
+        SYNC_WS_SUBPROTOCOL,
+        &harness.origin(),
+    )
+    .await;
+    let challenge =
+        hello_and_challenge(&mut client, &node_id, device, SUPPORTED_FEATURES.to_vec()).await;
+    let selected = selected_feature_ids(&challenge);
+    let authenticated = prove(
+        &mut client,
+        &node_id,
+        device,
+        &harness.origin(),
+        &signing,
+        &challenge,
+    )
+    .await;
+    assert_eq!(
+        authenticated["type"],
+        json!("auth.authenticated"),
+        "设备必须完成认证，实际：{authenticated}"
+    );
+    CommandClient {
+        connection_id: challenge_connection_id(&challenge),
+        client,
+        sequence: 0,
+        selected,
+    }
+}
+
+/// 本机 workspace 登记表与审计表的行数（浏览「无副作用」的判据）。
+async fn table_rows(core: &UseCases) -> (usize, usize) {
+    let workspaces = core.workspaces(&Actor::LocalCli).await.expect("登记表可读");
+    let audit = core
+        .audit(&Actor::LocalCli, AuditQuery::default())
+        .await
+        .expect("审计表可读");
+    (workspaces.len(), audit.len())
+}
+
+/// 一次真实浏览：逐层返回**直接**子目录（不含文件、不含更深层），并回显请求的父路径。
+///
+/// 同时钉住「浏览不产生登记与审计副作用」：调用前后 workspace 登记表与审计表的行数都不变（登记表里
+/// 已有一条记录，因此这不是「0 == 0」的弱断言），且已登记目录在同一次浏览里被标成 `registered`。
+#[tokio::test]
+async fn a_workspace_browse_round_trip_has_no_registration_or_audit_side_effect() {
+    let harness = Harness::start("browse").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("canonical origin");
+    let device = DeviceId::new(&uuid_text()).expect("device id 是 canonical uuid");
+    let mut client = command_client(&harness, &origin, &device).await;
+    assert!(
+        client
+            .selected
+            .contains(&"core.workspace-browse.v1".to_owned()),
+        "客户端报全部 feature，必须协商到 core.workspace-browse.v1：{:?}",
+        client.selected
+    );
+
+    // 一棵真实目录树：两个子目录 + 一个普通文件（文件条目与更深层都不得出现在结果里）。
+    let tree = TempDir::new("browse-tree");
+    std::fs::create_dir_all(tree.0.join("alpha")).expect("建子目录");
+    std::fs::create_dir_all(tree.0.join("beta").join("deeper")).expect("建更深的层");
+    std::fs::write(tree.0.join("note.txt"), b"content").expect("写文件");
+
+    // 先把 `beta` 登记成一个 workspace：结果里它必须带 `registered: true`，而登记表本身不得被改动。
+    let at = acp_core::model::Timestamp::new("2026-10-17T09:00:00.000Z").expect("时间戳");
+    harness
+        .core
+        .put_workspace(
+            &Actor::LocalCli,
+            acp_core::model::WorkspaceRecord::try_new(
+                acp_core::model::WorkspaceAlias::new("beta").expect("别名"),
+                "Beta",
+                tree.0.join("beta").to_str().expect("路径是 UTF-8"),
+                at.clone(),
+                at,
+            )
+            .expect("workspace 记录"),
+        )
+        .await
+        .expect("登记 workspace");
+
+    let before = table_rows(&harness.core).await;
+    assert_eq!(
+        before.0, 1,
+        "登记表里必须已有一条记录（否则行数断言没有意义）"
+    );
+
+    let requested = tree.0.to_string_lossy().into_owned();
+    let message = client
+        .command(
+            "0a6f3c85-91d2-4e77-b5c8-3f4a2d9e6b10",
+            "workspace.browse",
+            json!({ "path": requested }),
+        )
+        .await;
+    assert_eq!(message["type"], json!("command.result"), "{message}");
+    let body = &message["body"];
+    assert_eq!(body["status"], json!("completed"), "{message}");
+    assert_eq!(
+        body["result"]["path"],
+        json!(requested),
+        "结果逐字回显请求的父路径"
+    );
+    assert_eq!(body["result"]["truncated"], json!(false));
+    let entries = body["result"]["entries"]
+        .as_array()
+        .expect("entries 是数组");
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(
+        names,
+        ["alpha", "beta"],
+        "只含直接子目录（不含文件，也不含 beta 下的 deeper），且按名称升序"
+    );
+    for (entry, name) in entries.iter().zip(["alpha", "beta"]) {
+        assert_eq!(
+            entry["path"]
+                .as_str()
+                .and_then(|path| Path::new(path).canonicalize().ok()),
+            tree.0.join(name).canonicalize().ok(),
+            "条目的绝对路径必须指回该子目录：{entry}"
+        );
+    }
+    assert_eq!(
+        entries[0]["registered"],
+        json!(false),
+        "未登记的目录不是已登记：{entries:?}"
+    );
+    assert_eq!(
+        entries[1]["registered"],
+        json!(true),
+        "已登记的目录必须被标成 registered：{entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["name"] != json!("note.txt")),
+        "文件条目不得到达对端：{entries:?}"
+    );
+
+    let after = table_rows(&harness.core).await;
+    assert_eq!(after.0, before.0, "浏览不得改变 workspace 登记表");
+    assert_eq!(after.1, before.1, "浏览不得写入审计记录");
+
+    harness.stop().await;
+}
+
+/// 失败路径不回显客户端提供的路径：形状非法与不可达各自的错误 `details` 只含登记字段（这里为空），
+/// 整条帧里都不出现那段路径文本（浏览与建目录两条都查）。
+#[tokio::test]
+async fn a_failed_browse_or_create_never_echoes_the_path() {
+    let harness = Harness::start("browse-negative").await;
+    let origin = CanonicalOrigin::parse(&harness.origin()).expect("canonical origin");
+    let device = DeviceId::new(&uuid_text()).expect("device id 是 canonical uuid");
+    let mut client = command_client(&harness, &origin, &device).await;
+    /// 只出现在客户端输入里的哨兵：它一出现就说明服务端把路径回显了。
+    const SENTINEL: &str = "acpr-leak-sentinel-wp3";
+
+    // ① 形状非法（相对路径 + 父目录引用）：参数类错误，`details` 为空，帧里没有哨兵。
+    let relative = format!("../{SENTINEL}");
+    let message = client
+        .command(
+            "1c8e5b73-2a49-4d60-9f31-6b0d7e2c8a54",
+            "workspace.browse",
+            json!({ "path": relative }),
+        )
+        .await;
+    assert_eq!(
+        message["body"]["error"]["code"],
+        json!("protocol.schema_invalid"),
+        "{message}"
+    );
+    assert_eq!(
+        message["body"]["error"]["details"],
+        json!({}),
+        "错误 details 不得携带任何路径：{message}"
+    );
+    assert!(
+        !message.to_string().contains(SENTINEL),
+        "形状非法的错误不得回显路径：{message}"
+    );
+
+    // ② 形状合法但不存在：服务端不可用类，同样不回显。
+    let missing = std::env::temp_dir()
+        .join(SENTINEL)
+        .to_string_lossy()
+        .into_owned();
+    let message = client
+        .command(
+            "2a5f0b7d-3c61-4b8c-9d72-8e1f2a3b4c5d",
+            "workspace.browse",
+            json!({ "path": missing }),
+        )
+        .await;
+    assert_eq!(
+        message["body"]["error"]["code"],
+        json!("internal.unavailable"),
+        "{message}"
+    );
+    assert!(
+        !message.to_string().contains(SENTINEL),
+        "不可达的错误不得回显路径：{message}"
+    );
+
+    // ③ 建目录失败（`createIfMissing` 为真但路径形状非法）：只带字段名与规则，不带路径。
+    let message = client
+        .command(
+            "3b6a1c8d-4d72-4c9d-8e83-9f2a3b4c5d6e",
+            "session.create",
+            json!({
+                "agentId": "codex",
+                "workspacePath": relative,
+                "createIfMissing": true,
+            }),
+        )
+        .await;
+    assert_eq!(
+        message["body"]["error"]["code"],
+        json!("protocol.schema_invalid"),
+        "{message}"
+    );
+    assert!(
+        !message.to_string().contains(SENTINEL),
+        "建目录失败的错误不得回显路径：{message}"
     );
 
     harness.stop().await;
