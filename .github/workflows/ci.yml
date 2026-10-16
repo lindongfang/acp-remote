@@ -106,7 +106,7 @@ jobs:
     #   - #69：命中同一个生成器缺陷 (a)——它的锁文件同样缺那条嵌套条目、`npm ci` 一样失败，
     #     补齐之后六个检查才全绿。也就是说 (a) 是两个 PR 共有的，只有 (b) 是 RN 0.87.1 特有的。
     # 因此这里跑两件事：`npm ci` 按锁文件严格安装（顺带断言 package.json 与 lock 同步），
-    # 再 `npm run check` = typecheck + vitest + `expo export --platform web`。
+    # 再 `npm run check` = typecheck + typecheck:e2e + vitest + `expo export --platform web`。
     #
     # 仍未覆盖：`clients/app` 的浏览器级 E2E（`e2e/run-e2e.mjs`，需要真实 Chromium 内核）
     # 与 `scripts/run-browser-check.mjs`。它们目前仍需在本地手动跑；接入 CI 需要先决定
@@ -126,7 +126,7 @@ jobs:
         working-directory: clients/app
         run: npm ci
 
-      - name: 前端检查（typecheck + vitest + expo export）
+      - name: 前端检查（typecheck + typecheck:e2e + vitest + expo export）
         working-directory: clients/app
         run: npm run check
 

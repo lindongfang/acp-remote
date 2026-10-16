@@ -285,7 +285,7 @@ export function historyItem(input: {
     createdAt: input.createdAt,
     view: input.view,
   };
-  if (input.acp !== undefined) item.acp = input.acp;
+  if (input.acp !== undefined) item["acp"] = input.acp;
   return item;
 }
 
@@ -345,10 +345,10 @@ export function readPage(input: {
   readonly historyHasEarlier?: boolean;
 }): Record<string, unknown> {
   const resources: Record<string, unknown> = { messages: input.messages ?? [] };
-  if (input.history !== undefined) resources.history = input.history;
-  if (input.pendingInteractions !== undefined) resources.pending_interactions = input.pendingInteractions;
+  if (input.history !== undefined) resources["history"] = input.history;
+  if (input.pendingInteractions !== undefined) resources["pending_interactions"] = input.pendingInteractions;
   if (input.configOptions !== undefined) {
-    resources.config_options = [
+    resources["config_options"] = [
       {
         sessionId: input.sessionId,
         configOptions: input.configOptions,
@@ -361,6 +361,6 @@ export function readPage(input: {
     resources,
     hasEarlier: input.hasEarlier ?? false,
   };
-  if (input.historyHasEarlier !== undefined) page.historyHasEarlier = input.historyHasEarlier;
+  if (input.historyHasEarlier !== undefined) page["historyHasEarlier"] = input.historyHasEarlier;
   return page;
 }
