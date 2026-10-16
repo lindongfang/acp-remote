@@ -216,6 +216,10 @@ export const DIRECTORY_ROUTES: readonly RouteEntry[] = [dirRoute("alpha"), dirRo
  *
  * `sessionId` 为 `null` 表示**节点级**事件（如 `device.revoked`）：它们没有会话时间线可挂，
  * 只能落在主机/连接面的节点级降级列表。`createdAt` 缺省与既有调用一字不差。
+ *
+ * `origin` 缺省与既有调用一字不差（`{ kind: "agent", deviceId: null }`）：它是**加性**入参，
+ * 只为让用例把协议允许的其它来源种类送到真实连接上（例如 `kind: "node"` 的形状照
+ * `fixtures/sync/v1/valid/event-node-origin.json`）。既有检查集的取值因此逐字不变。
  */
 export function wireEvent(input: {
   readonly globalSequence: number;
@@ -225,6 +229,8 @@ export function wireEvent(input: {
   readonly view?: Record<string, unknown>;
   readonly acp?: Record<string, unknown>;
   readonly createdAt?: string;
+  /** 事件来源（`event.body.origin`）；缺省 `{ kind: "agent", deviceId: null }`。 */
+  readonly origin?: Record<string, unknown>;
 }): Record<string, unknown> {
   const payload: { view: Record<string, unknown>; acp?: Record<string, unknown> } = {
     view: input.view ?? {},
@@ -242,7 +248,7 @@ export function wireEvent(input: {
       sessionId: input.sessionId,
       eventType: input.eventType,
       causationRequestId: null,
-      origin: { kind: "agent", deviceId: null },
+      origin: input.origin ?? { kind: "agent", deviceId: null },
       remoteOrigin: null,
       createdAt: input.createdAt ?? "2026-10-01T00:00:02.000Z",
       payload,

@@ -12,6 +12,7 @@ import { COMPOSITION_CHECKS } from "./checks/composition-root";
 import { CONVERSATION_TIMELINE_CHECKS } from "./checks/conversation-timeline";
 import { CONVERSATION_INTERACTION_CHECKS } from "./checks/conversation-interaction";
 import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
+import { FRAME_ACCEPTANCE_CHECKS } from "./checks/frame-acceptance";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
 import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
 import { UI_SHELL_CHECKS } from "./checks/ui-shell";
@@ -53,6 +54,13 @@ import type { CheckResult } from "./support";
  * 变更文件右栏/来源降级/富文本。三者的共用机关（`sessionScenario` / `enterRoute` /
  * `withSessionPage` / `commandBody`）与 R15 同一取舍，放在**时间线**那一半，另外两个单向导入。
  *
+ * 帧受理面（`frame-acceptance.ts`）排在**各需求用例的最后一段**（配对用例之前）：它验的是
+ * 解码边界的受理面——`origin.kind = "node"` 的协议合法事件进了账本、被页面呈现、游标继续前进。
+ * 为此它自带场景（已配对起点 + 真实握手 + 真实路由，自己挂、自己卸），既不占用
+ * `mountRootLayout` 的唯一一次挂载，也不动配对用例那条「清掉已配对记录」的起点。它借道对话页
+ * 观察呈现结果（时间线卡片由结构化记录派生），因此放在对话页三段之后，输出上也与它们连成一段；
+ * 但它不依赖这三段里任何一条用例先跑过。
+ *
  * 配对链路（`pairing-first-run.ts`）放在**最后**：它是唯一从「未配对」出发的检查集，为此会清掉
  * 本地缓存里的 `paired-host/<origin>` 记录（见 `support.tsx` 的 `seedPaired: false`）。
  * 排在最后既不影响其它检查集的起点，也让「配对链路」这块证据在输出末尾自成一段。
@@ -71,6 +79,7 @@ const ALL_CHECKS = [
   ...CONVERSATION_TIMELINE_CHECKS,
   ...CONVERSATION_INTERACTION_CHECKS,
   ...CONVERSATION_CONTENT_CHECKS,
+  ...FRAME_ACCEPTANCE_CHECKS,
   ...PAIRING_FIRST_RUN_CHECKS,
   ...PAIRING_KIND_CHECKS,
 ];
