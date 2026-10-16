@@ -528,8 +528,9 @@ impl AsyncWrite for NetStream {
 /// `accept`），因此慢握手或只连接不握手的对端不会把新连接的接入压在 accept 关键路径上（它们只占槽位）。
 ///
 /// 所有权与取消：握手任务由 [`NetAcceptor::handshakes`] 持有，`accept` 顺带收割已结束的任务；
-/// `axum::serve` 结束时（宽限排空完成或强制 abort）`NetAcceptor` 被丢弃，`JoinSet` 随之中止全部在途
-/// 握手——不遗留 detached task。尚未握完的连接也没进过 `axum` 的连接表，因此不影响 HTTP 侧的排空。
+/// `NetAcceptor` 在接受循环跳出时（收到关闭信号，或任务被 abort）就被丢弃，之后 `axum::serve` 才等在途
+/// 连接结束；`JoinSet` 随之中止全部在途握手——不遗留 detached task。尚未握完的连接也没进过 `axum` 的
+/// 连接表，因此不影响 HTTP 侧的排空。
 struct NetAcceptor {
     tcp: TcpListener,
     tls: Option<TlsAcceptor>,
