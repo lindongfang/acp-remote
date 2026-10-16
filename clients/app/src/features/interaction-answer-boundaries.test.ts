@@ -67,8 +67,8 @@ describe("D7 边界一：亲历的请求可应答", () => {
     expect(before?.availability).toEqual({
       kind: "answerable",
       answers: [
-        { via: "option", optionId: "allow-once", label: "允许一次" },
-        { via: "option", optionId: "deny", label: "拒绝" },
+        { via: "option", optionId: "allow-once", label: "允许一次", kind: "allow_once" },
+        { via: "option", optionId: "deny", label: "拒绝", kind: "deny" },
       ],
     });
     // 时间线上的那张授权卡片带同一份判定（卡片与应答区不各自为政）。

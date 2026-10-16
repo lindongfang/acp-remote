@@ -265,10 +265,14 @@ function buildStyles(colors: Palette) {
     root: {
       borderWidth: 1,
       borderColor: colors.line,
+      // 左侧一道强调色（原型 `.code`）：代码卡与普通卡片在视觉上不是一回事。
+      borderLeftWidth: 3,
+      borderLeftColor: colors.accent,
       borderRadius: radius.md,
-      backgroundColor: colors.panel2,
+      backgroundColor: colors.panel,
       overflow: "hidden",
     },
+    /** 语言条（原型 `.code .ch`）：与左侧强调色同族的一层浅底。 */
     header: {
       flexDirection: "row",
       alignItems: "center",
@@ -276,11 +280,12 @@ function buildStyles(colors: Palette) {
       gap: spacing.sm,
       paddingVertical: spacing.xs,
       paddingHorizontal: spacing.sm,
+      backgroundColor: colors.accentSoft,
       borderBottomWidth: 1,
       borderBottomColor: colors.line2,
     },
     language: {
-      color: colors.ink3,
+      color: colors.accentInk,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
     },
@@ -288,7 +293,7 @@ function buildStyles(colors: Palette) {
       paddingVertical: 2,
       paddingHorizontal: spacing.sm,
       borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
+      backgroundColor: colors.panel,
     },
     copyText: {
       color: colors.accentInk,

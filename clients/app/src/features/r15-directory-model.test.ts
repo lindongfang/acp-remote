@@ -6,11 +6,11 @@
  *
  * 1. **MUST NOT 依赖额外的在线查询命令**：注入一个「任何 `dispatch` 都记账」的替身，
  *    走完目录页的完整读取路径后断言**一次都没有派发**。
- * 2. **同名目录不合并 / 两种空态可区分 / 断连仍可渲染**：模型层的判定。
+ * 2. **同名目录不合并 / 路径逐字透传且只在同名时给尾段 / 两种空态可区分 / 断连仍可渲染**。
  *
- * 判别力来源：反例（把目录项渲染成含路径、或让目录页发 `session.list`）会让
- * 「模型里没有路径字段」与「`dispatches` 为空」这两条断言变红；
- * 对照用例（用户意图确实会派发）证明派发通道本身是通的，不是被误伤。
+ * 判别力来源：反例（拿展示名拼一段路径、展示名唯一却给出尾段、让目录页发 `session.list`）会让
+ * 「`path` 只在服务端下发时非 null」「`pathTail` 只在同名时非 null」与「`dispatches` 为空」
+ * 这几条断言变红；对照用例（用户意图确实会派发）证明派发通道本身是通的，不是被误伤。
  */
 
 import { describe, expect, it } from "vitest";
@@ -22,11 +22,11 @@ import type { SyncGateway } from "./ports";
 import { buildDirectoryDetailModel, buildDirectoryPageModel } from "./directory-model";
 
 /**
- * 带路径字段的目录项。
+ * 带路径字段的目录项：`core.workspace-path.v1` 协商后快照条目的样子。
  *
- * wire 上的 `WorkspaceRef` 只有 `alias`/`displayName`；这里额外挂上路径类字段，
- * 模拟「宿主多带了字段」或「有人把路径塞进展示数据」的违规输入。
- * 模型必须**只**取展示名与别名。
+ * 协议的 TypeScript 镜像还没带上这个可选键（该键由变更 `sync-path-browse-and-diff-delivery`
+ * 的合同侧交付），因此这里按 open object 声明。**多带的字段（`root`/`cwd`）必须被丢掉**：
+ * 模型只认 `path` 这一个服务端下发的键。
  */
 const WORKSPACES_WITH_PATHS = [
   { alias: "work-api", displayName: "api", path: "D:\\work\\api", root: "D:\\work", cwd: "D:\\work\\api" },
@@ -128,25 +128,57 @@ function storeWith(resources: StagedResources): { store: ClientStore; gateway: R
   return { store, gateway };
 }
 
-describe("R15 目录项只含展示名与别名", () => {
-  it("带路径字段的快照资源也只投影出展示名、别名、三项汇总与最近活动时间", () => {
+describe("R15 目录项：展示名、路径与消歧尾段", () => {
+  it("展示名唯一时不呈现路径：`pathTail` 为 null（哪怕路径已下发）", () => {
+    const single = [{ alias: "notes", displayName: "notes", path: "/home/dev/notes" }] as unknown as readonly WorkspaceRef[];
     const model = buildDirectoryPageModel({
-      resources: { sessions: SESSIONS, workspaces: WORKSPACES_WITH_PATHS, agents: [] },
+      resources: { sessions: [], workspaces: single, agents: [] },
       connection: "online",
-      lastSyncedAtMs: 1_700_000_000_000,
+      lastSyncedAtMs: null,
     });
+    if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
 
-    expect(model.kind).toBe("ready");
-    if (model.kind !== "ready") return;
-    // 反例：若模型把路径字段透传下来，这里会出现 `path`/`root` 键，断言变红。
-    expect(Object.keys(model.directories[0] ?? {}).sort()).toEqual([
-      "alias",
-      "counts",
-      "displayName",
-      "latestActivityAt",
+    // 反例：展示名唯一却给出尾段（「顺手显示路径」）时这里非 null → 断言变红。
+    expect(model.directories[0]?.pathTail).toBeNull();
+    // 逐字路径仍带出（详情页页头要它），但列表页的消歧判定是 null。
+    expect(model.directories[0]?.path).toBe("/home/dev/notes");
+  });
+
+  it("同名目录才给消歧尾段：取路径里与展示名不同的那一段（父目录段）", () => {
+    const model = buildDirectoryPageModel({
+      resources: { sessions: [], workspaces: WORKSPACES_WITH_PATHS, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
+
+    // 两条同名（展示名都是 api）：差异在父目录那一段，因此尾段是 work / personal。
+    const sameName = model.directories.filter((row) => row.displayName === "api");
+    expect(sameName.map((row) => [row.displayName, row.pathTail])).toEqual([
+      ["api", "work"],
+      ["api", "personal"],
     ]);
-    expect(JSON.stringify(model)).not.toContain("D:\\\\work");
-    expect(JSON.stringify(model)).not.toContain("/home/dev");
+    // 路径本身逐字来自快照（不规范化、不拼接；`root`/`cwd` 这类多带的键不进模型）。
+    expect(sameName.map((row) => row.path)).toEqual(["D:\\work\\api", "D:\\personal\\api"]);
+
+    // 对照：这一份快照里唯一命名的那个目录即使有路径，也不给尾段。
+    const unique = model.directories.find((row) => row.alias === "notes");
+    expect(unique?.path).toBe("/home/dev/notes");
+    expect(unique?.pathTail).toBeNull();
+  });
+
+  it("同名但未下发路径：`path` 与 `pathTail` 都是 null，不拿展示名拼一段路径", () => {
+    const model = buildDirectoryPageModel({
+      resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
+
+    for (const row of model.directories) {
+      expect(row.path).toBeNull();
+      expect(row.pathTail).toBeNull();
+    }
   });
 
   it("同名目录不被合并：两个别名各自成项", () => {
@@ -210,7 +242,7 @@ describe("R15 两种空态可区分", () => {
     expect(model.directories.map((row) => row.displayName)).toEqual(["api", "api", "notes"]);
   });
 
-  it("空态列出的目录项同样只含展示名、别名、汇总与活动时间，不引入路径槽位", () => {
+  it("空态列出的目录项与列表页其余项同一套键（含路径槽位，未下发时是 null）", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES_WITH_PATHS, agents: [] },
       connection: "online",
@@ -220,11 +252,27 @@ describe("R15 两种空态可区分", () => {
 
     expect(model.directories).toHaveLength(3);
     for (const row of model.directories) {
-      expect(Object.keys(row).sort()).toEqual(["alias", "counts", "displayName", "latestActivityAt"]);
+      expect(Object.keys(row).sort()).toEqual([
+        "alias",
+        "counts",
+        "displayName",
+        "latestActivityAt",
+        "path",
+        "pathTail",
+      ]);
     }
-    // 反例：空态这一支新引入的目录项若顺手带上路径字段，这里会变红。
-    expect(JSON.stringify(model)).not.toContain("D:\\\\work");
-    expect(JSON.stringify(model)).not.toContain("/home/dev");
+    // 空态这一支走同一条投影：同名目录同样给出消歧尾段（否则空态列表里两项看起来一模一样）。
+    expect(model.directories.map((row) => row.pathTail)).toEqual(["work", "personal", null]);
+
+    // 对照：未下发路径的同一份目录集里，两个路径键都只能是 null（不猜、不拼）。
+    const withoutPaths = buildDirectoryPageModel({
+      resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
+      connection: "online",
+      lastSyncedAtMs: null,
+    });
+    if (withoutPaths.kind !== "empty") throw new Error(`期望 empty，实际是 ${withoutPaths.kind}`);
+    expect(withoutPaths.directories.map((row) => row.path)).toEqual([null, null, null]);
+    expect(withoutPaths.directories.map((row) => row.pathTail)).toEqual([null, null, null]);
   });
 
   it("从未同步过 → loading，不冒充任何一种空态", () => {
@@ -276,6 +324,7 @@ describe("R15 目录详情", () => {
       connection: "online",
       alias: "work-api",
       ownerLabelOf: () => "工作站",
+      nowMs: 1_700_000_000_000,
     });
     expect(detail.kind).toBe("ready");
     if (detail.kind !== "ready") return;
@@ -291,6 +340,7 @@ describe("R15 目录详情", () => {
         connection: "online",
         alias: "not-there",
         ownerLabelOf: () => "工作站",
+        nowMs: 1_700_000_000_000,
       }),
     ).toMatchObject({ kind: "unknown_directory", alias: "not-there" });
   });
@@ -330,16 +380,21 @@ describe("R15 查询与筛选是纯 UI 状态", () => {
     if (page.kind !== "ready") return;
     expect(page.directories.map((item) => item.alias)).toEqual(["personal-api"]);
 
-    store.setDirectoryDetailQuery("会话");
-    store.setDirectoryDetailMonth("2026-10");
+    // 详情页的页码是同一类 UI 状态：它只决定自己的切片，不改目录页的命中集合。
+    store.setDirectoryDetailPage("work-api", "2");
     const detail = store.directoryDetail("work-api");
     expect(detail.kind).toBe("ready");
     if (detail.kind !== "ready") return;
-    // 两条 work-api 会话的 `updatedAt` 同在 2026-10：一条档、两行。
-    expect(detail.months).toEqual([{ key: "2026-10", count: 2 }]);
+    // work-api 只有两条会话：越界输入被夹到唯一那一页，两条都在。
+    expect(detail.page).toBe(1);
     expect(detail.total).toBe(2);
+    expect(detail.sessions.map((item) => item.id)).toEqual([
+      "aaaaaaaa-0000-4000-8000-000000000001",
+      "aaaaaaaa-0000-4000-8000-000000000002",
+    ]);
 
-    // 两页的查询词互相独立：设置详情页查询词不得清空目录页的查询词。
+    // 两页互不影响：详情页的页码不得改变目录页的命中集合（反向同理，目录页的查询/筛选
+    // 不进入详情页——详情页连查询词都没有）。
     const pageAgain = store.directoryPage();
     expect(pageAgain.kind === "ready" ? pageAgain.directories.map((item) => item.alias) : []).toEqual([
       "personal-api",

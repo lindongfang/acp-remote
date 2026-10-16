@@ -47,9 +47,18 @@ export const INTERACTION_UNAVAILABLE_LABELS: Readonly<Record<InteractionUnavaila
  * 两支是两种**不同的命令载荷**，刻意不合一：授权用 `permission.resolve`（`optionId`），
  * 提问用 `elicitation.respond`（`action`，值来自表单）。判别键是 `via`，组件据此决定点下去
  * 派发哪条命令、要不要收集表单值。
+ *
+ * 授权那一支另带 `kind`（ACP 的 `PermissionOptionKind`，`schemas/acp/v1/upstream/schema.json`
+ * 的 `allow_once` / `allow_always` / `reject_once` / `reject_always`）。它**不参与命令载荷**
+ * （`permission.resolve` 只发 `optionId`），只用于呈现：原型 `.perm .opts .btn.p-*` 按严重度
+ * 给三档底色，若不把它带出来，组件就只能把三个按钮画成同一档。取值原样透传，组件负责归一与
+ * 未知取值的降级。
+ *
+ * `kind` 是普通可枚举只读字段：它是应答模型的一部分，`{ ...answer }` / `JSON.stringify(answer)`
+ * 都会原样带上它。它不参与任何数据判定，越过 `via` 判别键之后的相等比较本就该看见它。
  */
 export type InteractionAnswer =
-  | { readonly via: "option"; readonly optionId: string; readonly label: string }
+  | { readonly via: "option"; readonly optionId: string; readonly label: string; readonly kind: string }
   | { readonly via: "action"; readonly action: ElicitationResolutionAction; readonly label: string };
 
 /** 提问的三条动作（`elicitation.respond` 的载荷固定，不来自服务端可选项）。 */
@@ -58,6 +67,11 @@ export const ELICITATION_ANSWERS: readonly InteractionAnswer[] = [
   { via: "action", action: "decline", label: "拒绝" },
   { via: "action", action: "cancel", label: "取消" },
 ];
+
+/** 授权选项 → 应答选项。 */
+function optionAnswer(option: InteractionOption): InteractionAnswer {
+  return { via: "option", optionId: option.optionId, label: option.label, kind: option.kind };
+}
 
 /** 一次已到达的终态（来自 `permission.resolved` / `elicitation.resolved`）。 */
 export interface InteractionResolution {
@@ -118,7 +132,7 @@ export function buildInteractionAvailability(input: {
   }
   return {
     kind: "answerable",
-    answers: options.map((option) => ({ via: "option", optionId: option.optionId, label: option.label })),
+    answers: options.map(optionAnswer),
   };
 }
 

@@ -34,17 +34,63 @@ import type {
   SessionReadPageView,
   SessionStateView,
 } from "../domain";
-import { buildContextUsageView } from "../domain";
-import type { ReadCursor } from "../sync-client";
+import { buildContextUsageView, workspacePathOf } from "../domain";
+import type { WorkspaceRef } from "../protocol";
+import type { ReadCursor, StagedResources } from "../sync-client";
 import type { ConversationInputModel } from "./conversation-input-model";
 import type { ConversationSettingsModel } from "./conversation-settings-model";
 import type { FileChangeView, TimelineEntry } from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
+import type { SessionRowModel } from "./directory-model";
+import { buildSessionRowsByAlias } from "./directory-model";
 
 /** 一次用量事件的两项计数（`$defs.session.usage.changed`）。 */
 export interface UsageReading {
   readonly used: string;
   readonly size: string;
+}
+
+/**
+ * 对话页窄屏的**次级视图**（D5）：它决定哪一栏占主体，而三栏内容**始终在 DOM**，
+ * 未选中的栏只是 `display: none`，因此窄屏与宽屏呈现的信息集合一致（规格「对话页的宽窄两种形态」）。
+ *
+ * 取值：`all` 不隐藏任何一栏；`timeline` / `sessions` / `files` 各只留下对应的一栏。它住在
+ * store（跨路由存活），页面把它读出来交给组件；`hiddenConversationColumns` 是「哪个视图隐藏哪几栏」
+ * 的**唯一**判据，组件不该另写一套。
+ */
+export type ConversationSecondaryView = "all" | "timeline" | "sessions" | "files";
+
+/** 四个取值的登记表（穷尽 switch 与用例都从它出发，避免散落字符串字面量）。 */
+export const CONVERSATION_SECONDARY_VIEWS: readonly ConversationSecondaryView[] = [
+  "all",
+  "timeline",
+  "sessions",
+  "files",
+];
+
+/** 缺省次级视图：进对话页先看对话本体（原型窄屏的默认形态）。 */
+export const DEFAULT_CONVERSATION_SECONDARY_VIEW: ConversationSecondaryView = "timeline";
+
+/** 对话页的三列（`data-conversation-column` 的三个取值）。 */
+export type ConversationColumnName = "sessions" | "timeline" | "files";
+
+/**
+ * 次级视图 → 被隐藏的列。
+ *
+ * 三个取值各自**互补**：任一时刻最多一列成为「唯一可见的列」，而 `all` 一列都不隐藏——
+ * 「四列内容都在 DOM」因此不是靠组件记得别删，而是这条映射的结果。
+ */
+export function hiddenConversationColumns(view: ConversationSecondaryView): readonly ConversationColumnName[] {
+  switch (view) {
+    case "all":
+      return [];
+    case "timeline":
+      return ["sessions", "files"];
+    case "sessions":
+      return ["timeline", "files"];
+    case "files":
+      return ["sessions", "timeline"];
+  }
 }
 
 /** 会话头（对话页顶部）。 */
@@ -139,6 +185,63 @@ const ABSENT_SETTINGS: ConversationSettingsModel = {
   mode: { state: "unavailable", currentId: null, currentName: null, choices: [], notice: "本页模型未提供模式可选项。", configId: null },
 };
 
+/**
+ * 手工拼页模型时的左栏缺省（**只**影响「为了渲染某个子组件而拼一份页模型」的调用点）。
+ *
+ * `notice` 的措辞刻意是「未提供」：它不能被读成「这个会话没有目录归属」——那是真实数据的结论，
+ * 由 {@link buildConversationSidebar} 给出。
+ */
+const ABSENT_SIDEBAR: ConversationSidebarModel = {
+  directory: null,
+  notice: "本页模型未提供左栏数据。",
+  query: "",
+  total: 0,
+  shown: 0,
+  canLoadMore: false,
+  selectedSessionId: "",
+  rows: [],
+};
+
+/** 对话页左栏的目录上下文（展示名 + 逐字路径；`alias` 是进入目录详情页的入口）。 */
+export interface ConversationSidebarDirectoryModel {
+  readonly alias: string;
+  readonly displayName: string;
+  /** 服务端下发的逐字路径；未协商 `core.workspace-path.v1` 或该键缺席时为 `null`。 */
+  readonly path: string | null;
+}
+
+/**
+ * 对话页左栏：同目录会话列表与它的目录上下文。
+ *
+ * 「没有目录归属」与「有目录但暂时一条会话都没有」是两件事：前者 `directory` 为 `null` 且
+ * `notice` 必为文案（规格场景「没有目录归属的会话」），后者 `directory` 在场、`rows` 为空。
+ */
+export interface ConversationSidebarModel {
+  /** 目录上下文；会话没有目录归属时为 `null`。 */
+  readonly directory: ConversationSidebarDirectoryModel | null;
+  /** 没有目录归属时的说明；`directory` 在场时为 `null`（两者互斥，中栏不受影响）。 */
+  readonly notice: string | null;
+  /** 目录内搜索词（受控输入的回填值）；只影响本栏的 `rows`/`total`。 */
+  readonly query: string;
+  /** 搜索命中后的同目录会话总数（「已呈现 N / M」的分母 M）。 */
+  readonly total: number;
+  /** 已呈现的会话数（`rows.length`）；与 `total` 一起构成「已呈现 N / M」。 */
+  readonly shown: number;
+  /** 还能继续加载（`shown < total`）：左栏据此呈现「加载更多」入口。 */
+  readonly canLoadMore: boolean;
+  /** 当前会话在列表里的选中标记（行本身不带 `selected` 字段，组件按此值比对）。 */
+  readonly selectedSessionId: string;
+  /** 同目录会话行：时间倒序、按搜索过滤、按批次截取。 */
+  readonly rows: readonly SessionRowModel[];
+}
+
+/** 左栏一次呈现的会话条数；「继续加载」再放一批（与原型 `A.shown += 15` 同口径）。 */
+export const CONVERSATION_SIDEBAR_BATCH_SIZE = 15;
+
+/** 会话没有目录归属时左栏的说明（规格：说明它没有目录归属，而不是静默隐藏左栏）。 */
+export const CONVERSATION_NO_DIRECTORY_NOTICE =
+  "这个会话没有目录归属：它没有可用的目录引用，因此这里列不出同目录会话。";
+
 /** 对话页模型。 */
 export interface ConversationPageModel {
   readonly header: ConversationHeaderModel;
@@ -154,6 +257,74 @@ export interface ConversationPageModel {
   readonly interactions: readonly InteractionView[];
   readonly settings: ConversationSettingsModel;
   readonly fileChanges: readonly FileChangeView[];
+  /** 左栏：目录上下文与同目录会话列表（宽屏常驻、窄屏为次级视图之一）。 */
+  readonly sidebar: ConversationSidebarModel;
+}
+
+/**
+ * 左栏模型（对话页）：目录上下文 + 同目录会话列表 + 已呈现数与总数。
+ *
+ * 数据只从**快照资源**来（与目录页共用 `buildSessionRowsByAlias` 这一条行投影），因此本函数
+ * 没有命令出口——「只读快照、不派发新命令」在结构上成立。目录上下文里的路径同样只可能是
+ * 服务端下发的那一个字符串（`workspacePathOf`），不拼接、不反查。
+ */
+export function buildConversationSidebar(input: {
+  readonly resources: StagedResources | null;
+  /** 当前会话自己的目录引用（`SessionSummary.workspace`）；`null` = 没有目录归属。 */
+  readonly workspace: WorkspaceRef | null;
+  readonly sessionId: string;
+  readonly ownerLabelOf: (ownerNodeId: string) => string;
+  /** 左栏目录内搜索词；空串即不过滤。 */
+  readonly query: string;
+  /** 一次呈现的条数（{@link CONVERSATION_SIDEBAR_BATCH_SIZE} 的倍数）。 */
+  readonly limit: number;
+  /** 相对时间的基准（D3：时钟是**输入**）。 */
+  readonly nowMs: number;
+}): ConversationSidebarModel {
+  const workspace = input.workspace;
+  if (workspace === null) {
+    return {
+      directory: null,
+      notice: CONVERSATION_NO_DIRECTORY_NOTICE,
+      query: input.query,
+      total: 0,
+      shown: 0,
+      canLoadMore: false,
+      selectedSessionId: input.sessionId,
+      rows: [],
+    };
+  }
+
+  // 展示名优先取快照目录条目（与目录页同一份值）；目录未登记时回落到会话摘要自己带的那个
+  // （两者都是服务端下发的字符串，不是一个由本地拼出来的替代品）。路径只在快照条目上下发，
+  // 因此目录未登记时没有路径可呈现，而不是拿展示名去拼一段。
+  const registered = input.resources?.workspaces.find((item) => item.alias === workspace.alias) ?? null;
+  const directory: ConversationSidebarDirectoryModel = {
+    alias: workspace.alias,
+    displayName: registered?.displayName ?? workspace.displayName,
+    path: registered === null ? null : workspacePathOf(registered),
+  };
+
+  const needle = input.query.trim().toLowerCase();
+  const rowsOfDirectory =
+    buildSessionRowsByAlias({
+      resources: input.resources,
+      ownerLabelOf: input.ownerLabelOf,
+      nowMs: input.nowMs,
+    }).get(directory.alias) ?? [];
+  const matched = rowsOfDirectory.filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
+  const rows = matched.slice(0, Math.max(1, input.limit));
+
+  return {
+    directory,
+    notice: null,
+    query: input.query,
+    total: matched.length,
+    shown: rows.length,
+    canLoadMore: matched.length > rows.length,
+    selectedSessionId: input.sessionId,
+    rows,
+  };
 }
 
 /**
@@ -205,6 +376,8 @@ export function buildConversationModel(input: {
   readonly interactions?: readonly InteractionView[];
   readonly settings?: ConversationSettingsModel;
   readonly fileChanges?: readonly FileChangeView[];
+  /** 左栏模型（目录上下文 + 同目录会话列表）；缺省时用「未提供」的缺省支。 */
+  readonly sidebar?: ConversationSidebarModel;
   readonly capabilities: Omit<ConversationCapabilitiesModel, "canLoadEarlier">;
 }): ConversationPageModel {
   const page = input.page;
@@ -238,6 +411,7 @@ export function buildConversationModel(input: {
     interactions: input.interactions ?? [],
     settings: input.settings ?? ABSENT_SETTINGS,
     fileChanges: input.fileChanges ?? [],
+    sidebar: input.sidebar ?? ABSENT_SIDEBAR,
   };
 }
 

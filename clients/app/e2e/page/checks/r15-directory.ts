@@ -1,16 +1,20 @@
 /**
- * R15「目录页以目录为主角且可离线渲染」的浏览器级验证（目录页那一半）。
+ * R15「目录页」的浏览器级验证。
  *
- * 每条用例都跑在**真实页面**上：`app/index.tsx` / `app/dir/[alias].tsx` → 展示组件 →
- * `src/features/` 的模型，数据来自**真实快照管线**（经真实 SHA-256 两级摘要校验过的
- * `sync.snapshot_*` 帧，由真实 `SyncClient` 校验后交给 `ClientStore`）。
+ * 每条用例都跑在**真实页面**上：`app/index.tsx` → 展示组件 → `src/features/` 的模型，数据来自
+ * **真实快照管线**（经真实 SHA-256 两级摘要校验过的 `sync.snapshot_*` 帧，由真实 `SyncClient`
+ * 校验后交给 `ClientStore`）。
  *
  * 目录详情页的用例在 `r15-directory-detail.ts`（同一批选择器与夹具，见那里的说明）。
  *
  * ## 判别力
  *
- * - 「不泄露本机路径」用**负向断言**：快照里真的塞进了协议中不存在的 `path` / `root`，
- *   断言渲染后的 DOM 里连片段都没有。只断言「模型对象没有 path 键」证明不了这一点。
+ * - 「只呈现服务端下发的路径」用**负向断言**：快照里真的塞进了协议中不存在的 `path` / `root`，
+ *   断言渲染后的 DOM 里没有整条路径、没有它的父段、也没有任何分隔符——只有同名消歧尾段
+ *   （逐字搬运的那一段）允许出现。只断言「模型对象没有 path 键」证明不了这一点。
+ * - 「同名目录以路径尾段区分」正面断言那两段尾段逐字等于快照 `path` 的尾段，并断言**别名不是
+ *   界面文字**（把别名画出来承担消歧，这条与别名的可见文本断言会一起红）。
+ * - 「展示名唯一时不呈现路径」换一份展示名唯一的目录，断言连尾段锚点都不出现。
  * - 「断连仍可呈现」先断言在线时来源是 `live`，再断开连接断言变 `last_sync` 且列表仍在——
  *   单看 `last_sync` 那一帧区分不出「断连后仍渲染」与「从来没有过内容」。
  * - 「两种空态可区分」分别挂两个场景，比对 `data-empty-state` 与标题、指引文案。
@@ -21,19 +25,24 @@
  * - 选择器一律**属性型**（`[data-directory-alias]` 等 `data-*` 锚点），不依赖 RNW 把 `role`
  *   映射成哪个标签：`role="listitem"` 目前渲染成 `li`，但那是渲染器的实现细节，不是契约。
  * - 「创建入口不再有权限维度」既查**呈现**也查**痕迹**：每个目录项恒有一个入口且都不是禁用态，
- *   同时目录页全文不得出现权限提示条/不可用说明的标记或「电脑端授予」类说法——把提示条藏进
- *   别的容器、或只改文案不改标记，都会被这两条中的一条抓住。
+ *   同时目录页全文不得出现权限提示条/不可用说明的标记或「电脑端授予」类说法。
+ * - 「连接状态只有一个表达」量的是**路由自己那一层**（`data-route="dirs"` 的父节点）：自建导航
+ *   (`data-action="open-pairing"`) 与第二个状态徽标 (`data-action="open-hosts"`，`ConnectionBadge`
+ *   的指纹) 在这一层里一个都不许再出现；这一层里表达连接状态的只剩主机面板。共享外壳的顶栏
+ *   （含设备胶囊）在**外面**一层，因此这条断言不受它影响。
  */
 
 import {
   AGENTS,
   DIRS_ROUTE,
-  SECRET_FRAGMENTS,
   WORKSPACES_WITH_PATHS,
   seriesSessionId,
   sessionSeries,
   sessionsForBothDirectories,
 } from "../fixtures";
+// 深度与同目录其它 check 一致（`checks/` → `e2e/page` → `e2e` → `src`）：`../../src/*`
+// 会落到 `e2e/src/*` 这个不存在的目录，只有 `../../../src/*` 才指向 `src/`。
+import type { WorkspaceRef } from "../../../src/protocol";
 import {
   CANONICAL_ORIGIN,
   CheckFailure,
@@ -52,6 +61,16 @@ import {
   waitFor,
 } from "../support";
 import type { Check, ScenarioOptions } from "../support";
+
+/**
+ * 目录页允许呈现的**唯一**路径片段是同名消歧尾段（逐字取自服务端下发）。整条路径、它的父段与
+ * 任何分隔符都 MUST NOT 出现。
+ *
+ * 这里不用 `SECRET_FRAGMENTS` 整表：那张表里的 `repo-x` / `repo-y` 恰好是本用例快照（
+ * `D:\secret\vault\repo-x`）的**尾段**，而尾段是本轮规格明确要求呈现的。因此按「不许出现整条
+ * 路径」的口径单独列一份前缀片段，别处（目录详情页、创建弹层）仍用整表。
+ */
+const PATH_PREFIX_FRAGMENTS = ["D:\\", "secret", "vault"] as const;
 
 /** 两条同名目录 + 各一条会话的默认场景。 */
 function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions {
@@ -85,15 +104,20 @@ export async function waitForDirectoryList(container: HTMLElement): Promise<void
   );
 }
 
-/** 一个目录行：只有展示名与别名两项文字。 */
-function assertRowShowsNameAndAlias(row: Element | null, alias: string): void {
+/** 一个目录行：呈现展示名与（同名时的）路径尾段，**不**呈现别名。 */
+function assertRowShowsNameOnly(row: Element | null, alias: string): void {
   expectEqual(row?.getAttribute("data-directory-alias") ?? null, alias, `目录行 ${alias} 的 data-directory-alias`);
   expectEqual(
     textOf(row?.querySelector("[data-directory-display-name]")),
     "api",
     `目录行 ${alias} 的展示名`,
   );
-  expectEqual(textOf(row?.querySelector("[data-directory-alias-label]")), alias, `目录行 ${alias} 的别名标签`);
+  // 别名只作属性：行内既没有别名标签这个锚点，也没有别名的可见文本。
+  expectThat(
+    row?.querySelector("[data-directory-alias-label]") === null,
+    `目录行 ${alias} 不得把别名呈现为界面元素`,
+  );
+  expectAbsent(textOf(row), alias, `目录行 ${alias} 的可见文本里出现了别名`);
 }
 
 /**
@@ -123,12 +147,19 @@ function aliasesOf(container: HTMLElement): readonly string[] {
     .sort();
 }
 
-/** 一个目录项上的三项汇总（数字以文本呈现）。 */
+/**
+ * 一个目录项上的三项汇总（数字以文本呈现）。
+ *
+ * 会话总数胶囊恒在；运行中/待处理徽标只在**非零**时追加（原型同此），缺席即空串。
+ */
 function countsOf(row: Element | null): readonly string[] {
   return ["total", "active", "pending"].map((kind) =>
-    textOf(row?.querySelector(`[data-directory-count="${kind}"]`)),
+    textOf(query(row, `[data-directory-count="${kind}"]`)),
   );
 }
+
+/** 会话的时间文案允许的三种形态（相对口径）：刚刚 / N 分钟前 / 年月日。 */
+const RELATIVE_TIME_PATTERN = /^(刚刚|\d+ 分钟前|\d{4}-\d{2}-\d{2})$/;
 
 /**
  * 搜索/筛选用例的会话：两条目录都叫 `api`，别名是 `alpha`/`beta`，
@@ -169,7 +200,7 @@ export async function withScenario<T>(
 
 const checks: readonly Check[] = [
   {
-    name: "R15-1 目录页只显示展示名与别名：快照里的 path/root 一个片段都不许出现在 DOM",
+    name: "R15-1 目录页只呈现展示名与同名消歧尾段：快照里的整条路径、父段与分隔符都不许出现在 DOM",
     async run() {
       await withScenario(baseScenario(), async (container) => {
         await waitForDirectoryList(container);
@@ -177,32 +208,72 @@ const checks: readonly Check[] = [
 
         const rows = queryAll(container, "[data-directory-alias]");
         expectEqual(rows.length, 2, "目录行数");
-        assertRowShowsNameAndAlias(rows[0] ?? null, "alpha");
-        assertRowShowsNameAndAlias(rows[1] ?? null, "beta");
+        assertRowShowsNameOnly(rows[0] ?? null, "alpha");
+        assertRowShowsNameOnly(rows[1] ?? null, "beta");
 
-        // MUST NOT：渲染结果里不得出现本机规范化路径的任何片段。
-        expectNone(html, SECRET_FRAGMENTS, "目录页渲染结果泄露了本机路径");
+        // MUST NOT：渲染结果里不得出现整条本机路径、它的父段或盘符。
+        expectNone(html, PATH_PREFIX_FRAGMENTS, "目录页渲染结果泄露了本机路径");
+        // 分隔符一个都不许出现：客户端**没有**拼接任何路径（尾段是不带分隔符的一段）。
+        expectAbsent(html, "\\", "目录页出现了路径分隔符（说明有一段路径是本地拼出来的）");
         expectAbsent(html, "path=", "目录行把 path 当成了 DOM 属性");
       });
     },
   },
   {
-    name: "R15-2 同名目录以别名区分：两条同名目录各自渲染出自己的别名，且没有第二种消歧依据",
+    name: "R15-2 同名目录以路径尾段区分：尾段逐字取自服务端下发的路径，别名不承担消歧",
     async run() {
       await withScenario(baseScenario(), async (container) => {
         await waitForDirectoryList(container);
         const names = queryAll(container, "[data-directory-display-name]").map((node) => node.textContent);
-        const aliases = queryAll(container, "[data-directory-alias-label]").map((node) => node.textContent);
+        const tails = queryAll(container, "[data-directory-path-tail]");
 
         expectEqual(names, ["api", "api"], "两条目录的展示名必须相同，否则这条用例没在测同名");
-        expectEqual(aliases, ["alpha", "beta"], "两条目录的别名标签");
-        // 区分同名目录的**唯一**依据是别名；渲染结果里不得再有路径之类的第二种依据。
-        expectNone(domHtml(container), SECRET_FRAGMENTS, "同名消歧用了路径片段");
+        // 快照里是 `D:\secret\vault\repo-x` / `D:\secret\vault\repo-y`，展示名都叫 `api`：
+        // 尾段因此就是那两段的末段，**逐字**搬运（没有取父段、也没有加工）。
+        expectEqual(
+          tails.map((node) => node.getAttribute("data-directory-path-tail")),
+          ["repo-x", "repo-y"],
+          "两条同名目录的消歧尾段",
+        );
+        expectEqual(tails.map((node) => node.textContent), ["repo-x", "repo-y"], "消歧尾段的可见文本");
+        // 反例：改用别名承担消歧（把别名画出来）会在别名的可见文本断言上红。
+        expectAbsent(domText(container), "alpha", "同名消歧不得改用别名");
+        expectAbsent(domText(container), "beta", "同名消歧不得改用别名");
+        // 整条路径与父段仍然不许出现（尾段是允许的那一段，前缀不是）。
+        expectNone(domHtml(container), ["D:\\", "secret", "vault"], "同名消歧用了整条路径");
       });
     },
   },
   {
-    name: "R15-3 会话数/运行中/待处理由会话摘要得出，且断开连接后目录页仍列出内容",
+    name: "R15-2b 展示名唯一时不呈现任何路径片段",
+    async run() {
+      // 展示名唯一的目录：feature 层据「同名才给尾段」把 `pathTail` 判成 `null`。
+      const solo = [
+        { alias: "solo", displayName: "solo", path: "D:\\secret\\vault\\solo" },
+      ] as unknown as readonly WorkspaceRef[];
+      const soloIds = sessionSeries({
+        alias: "solo",
+        idPrefix: "aaaaaaaa",
+        titles: ["独自一条"],
+        at: ["2026-10-05T09:00:00.000Z"],
+        states: ["running"],
+      });
+
+      await withScenario(baseScenario({ workspaces: solo, sessions: soloIds }), async (container) => {
+        await waitForDirectoryList(container);
+        expectEqual(queryAll(container, "[data-directory-path-tail]").length, 0, "唯一展示名不得呈现路径");
+        expectNone(domHtml(container), PATH_PREFIX_FRAGMENTS, "唯一展示名泄露了本机路径");
+        // 对照：那一项确实渲染出来了——否则上一条可能只是「什么都没渲染」。
+        expectEqual(
+          queryAll(container, "[data-directory-display-name]").map((node) => node.textContent),
+          ["solo"],
+          "唯一展示名的目录项",
+        );
+      });
+    },
+  },
+  {
+    name: "R15-3 会话数由会话摘要得出（总数胶囊恒在、运行中/待处理徽标只在非零时追加），且断连后仍列出内容",
     async run() {
       const mounted = await mountScenario(baseScenario());
       try {
@@ -215,8 +286,13 @@ const checks: readonly Check[] = [
 
         const alphaRow = query(mounted.container, '[data-directory-alias="alpha"]');
         const betaRow = query(mounted.container, '[data-directory-alias="beta"]');
-        expectEqual(countsOf(alphaRow), ["1", "1", "0"], "alpha 的会话数/运行中/待处理");
-        expectEqual(countsOf(betaRow), ["1", "0", "1"], "beta 的会话数/运行中/待处理");
+        // alpha 一条运行中会话；beta 一条等待输入会话（计入待处理）。零值那一档由徽标缺席表达。
+        expectEqual(countsOf(alphaRow), ["1", "1", ""], "alpha 的会话总数/运行中/待处理");
+        expectEqual(countsOf(betaRow), ["1", "", "1"], "beta 的会话总数/运行中/待处理");
+        const alphaText = textOf(alphaRow);
+        const betaText = textOf(betaRow);
+        expectThat(alphaText.includes("运行中") && !alphaText.includes("待处理"), "alpha 只应带运行中徽标");
+        expectThat(betaText.includes("待处理") && !betaText.includes("运行中"), "beta 只应带待处理徽标");
 
         // 断开连接：内容必须仍在，且来源标注切换成「上次同步」。
         mounted.host?.drop();
@@ -226,8 +302,8 @@ const checks: readonly Check[] = [
         );
         expectEqual(queryAll(mounted.container, "[data-directory-alias]").length, 2, "断连后的目录行数");
         const text = domText(mounted.container);
-        expectThat(text.includes("alpha") && text.includes("beta"), "断连后目录项文本应仍在");
-        expectNone(domHtml(mounted.container), SECRET_FRAGMENTS, "断连后的渲染结果泄露了本机路径");
+        expectThat(text.includes("alpha") === false && text.includes("beta") === false, "别名不得出现在界面上");
+        expectNone(domHtml(mounted.container), PATH_PREFIX_FRAGMENTS, "断连后的渲染结果泄露了本机路径");
       } finally {
         await mounted.unmount();
       }
@@ -288,7 +364,7 @@ const checks: readonly Check[] = [
           "受控搜索框回读到的查询词",
         );
         // 命中集合变了，但存活目录的三项汇总仍是它自己的全量数字，不是「命中的会话数」。
-        expectEqual(countsOf(query(container, '[data-directory-alias="alpha"]')), ["2", "1", "0"], "alpha 的三项汇总");
+        expectEqual(countsOf(query(container, '[data-directory-alias="alpha"]')), ["2", "1", ""], "alpha 的会话总数/运行中");
         // 未命中的目录连同它的会话行一起不呈现。
         expectEqual(
           queryAll(container, "[data-session-id]")
@@ -342,11 +418,19 @@ const checks: readonly Check[] = [
           "false",
           "「全部」应不再是选中态",
         );
-        expectEqual(countsOf(query(container, '[data-directory-alias="alpha"]')), ["2", "1", "0"], "筛选不改 alpha 的三项汇总");
+        expectEqual(
+          countsOf(query(container, '[data-directory-alias="alpha"]')),
+          ["2", "1", ""],
+          "筛选不改 alpha 的会话总数与运行中数",
+        );
 
         click(query(container, '[data-segment="筛选"] [data-segment-option="pending"]'), "「待处理」筛选");
         await waitFor(() => aliasesOf(container).join(",") === "beta", "筛选「待处理」后只剩 beta");
-        expectEqual(countsOf(query(container, '[data-directory-alias="beta"]')), ["1", "0", "1"], "筛选不改 beta 的三项汇总");
+        expectEqual(
+          countsOf(query(container, '[data-directory-alias="beta"]')),
+          ["1", "", "1"],
+          "筛选不改 beta 的会话总数与待处理数",
+        );
 
         // 叠加：查询词「api」对两条目录都命中，决定性的因此仍然是「待处理」这一筛选。
         typeIntoInput(container, "[data-directory-search]", "api", "目录页搜索框");
@@ -359,7 +443,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-10 超过内联上限的目录：只列 5 条最近的会话，并给出「查看全部 N 个」入口",
+    name: "R15-10 超过内联上限的目录：只列 5 条最近的会话，并给出「查看全部 ›」入口",
     async run() {
       const sessions = sessionSeries({
         alias: "alpha",
@@ -384,21 +468,18 @@ const checks: readonly Check[] = [
           [0, 1, 2, 3, 4].map((index) => seriesSessionId("aaaaaaaa", index)),
           "内联会话行必须是最近的 5 条、按时间倒序",
         );
-        expectEqual(countsOf(card), ["6", "0", "0"], "目录项的三项汇总按全量口径");
+        expectEqual(countsOf(card), ["6", "", ""], "目录项的会话总数按全量口径");
 
-        // 入口文案里的 N 是目录的**会话总数**（不是内联行数）：写成 5 或写成内联行数都会在这里红。
-        // 「查看全部」的动作取值是 `open-directory-all`（与卡片标题的 `open-directory` 区分开）。
+        // 入口文案里**不带 N**（原型这一轮去掉了 N）：写成「查看全部 6 个」会在下面两条里红。
+        // 动作取值是 `open-directory-all`（与展示名入口的 `open-directory` 区分开）。
         const openAll = query(card, '[data-action="open-directory-all"]');
         expectThat(openAll !== null, "会话数超过内联上限时必须给出进入详情页的入口");
-        expectThat(
-          textOf(openAll).includes("查看全部 6 个"),
-          `入口文案里的 N 必须是目录的会话总数，实际 ${JSON.stringify(textOf(openAll))}`,
-        );
+        expectEqual(textOf(openAll), "查看全部 ›", "「查看全部」入口的文案");
       });
     },
   },
   {
-    name: "R15-11 0 会话的目录项仍有进入详情页的标题入口，但不呈现「查看全部」（对照：有会话的目录项两个入口都在）",
+    name: "R15-11 0 会话的目录项仍有进入详情页的展示名入口，但不呈现「查看全部」（对照：有会话的目录项两个入口都在）",
     async run() {
       const onlyAlpha = sessionSeries({
         alias: "alpha",
@@ -411,34 +492,33 @@ const checks: readonly Check[] = [
         await waitForDirectoryList(container);
         expectEqual(aliasesOf(container), ["alpha", "beta"], "两条目录都要呈现（一条没有会话）");
         const beta = query(container, '[data-directory-alias="beta"]');
-        expectEqual(countsOf(beta), ["0", "0", "0"], "beta 的三项汇总为零");
-        // 0 条会话：没有「查看全部 N 个」（那里也没有会话可看），但**必须**留下标题入口——
+        expectEqual(countsOf(beta), ["0", "", ""], "beta 的会话总数是零（另两档由徽标缺席表达）");
+        // 0 条会话的卡体是那一行说明（原型 `.emptyline`），不是空白。
+        expectThat(textOf(beta).includes("这个目录还没有会话"), "0 会话的卡体应说明「这个目录还没有会话」");
+        // 0 条会话：没有「查看全部」（那里也没有会话可看），但**必须**留下展示名入口——
         // 否则这台机器上没有任何路径进入该目录的详情页，详情页的创建入口也随之不可达。
         expectThat(
           query(beta, '[data-action="open-directory-all"]') === null,
-          "0 条会话的目录项不得给出「查看全部 N 个」入口（那里也没有会话可看）",
+          "0 条会话的目录项不得给出「查看全部」入口（那里也没有会话可看）",
         );
         expectThat(
           query(beta, '[data-action="open-directory"]') !== null,
-          "0 条会话的目录项必须仍有进入详情页的标题入口",
+          "0 条会话的目录项必须仍有进入详情页的展示名入口",
         );
-        // 对照：有会话的目录项两个入口都在，且「查看全部」的 N 是它的会话总数。
+        // 对照：有会话的目录项两个入口都在。
         const alpha = query(container, '[data-directory-alias="alpha"]');
         expectThat(
           query(alpha, '[data-action="open-directory"]') !== null,
-          "对照：有会话的目录项必须给出标题入口",
+          "对照：有会话的目录项必须给出展示名入口",
         );
         const openAll = query(alpha, '[data-action="open-directory-all"]');
         expectThat(openAll !== null, "对照：有会话的目录项必须给出「查看全部」入口");
-        expectThat(
-          textOf(openAll).includes("查看全部 1 个"),
-          `对照：「查看全部」的 N 是会话总数，实际 ${JSON.stringify(textOf(openAll))}`,
-        );
+        expectEqual(textOf(openAll), "查看全部 ›", "「查看全部」入口的文案");
         // 两个入口各自每条目录项恰好一处：把新属性挂到卡片根节点或重复渲染都会在这里红。
         expectEqual(
           queryAll(container, '[data-action="open-directory"]').length,
           2,
-          "每条目录项恰好一个标题入口",
+          "每条目录项恰好一个展示名入口",
         );
         expectEqual(
           queryAll(container, '[data-action="open-directory-all"]').length,
@@ -471,7 +551,7 @@ const checks: readonly Check[] = [
         // 展示文本是 UTC 固定切片（`YYYY-MM-DD HH:MM UTC`），因此可以逐字断言：走本地时区
         // 或改成「N 分钟前」都会在这里红。
         expectEqual(
-          textOf(query(mounted.container, '[data-synced-at]')),
+          textOf(query(mounted.container, "[data-synced-at]")),
           `已同步 ${new Date(Number(epochMs)).toISOString().slice(0, 16).replace("T", " ")} UTC`,
           "同步时刻的展示文本（UTC 固定切片）",
         );
@@ -491,6 +571,7 @@ const checks: readonly Check[] = [
       }
 
       // 从未成功替换过快照：连接已经建起来（认证通过、已订阅、停在追平），但仓库里没有快照。
+      // 等待条件用 `[data-connection-state]`（主机面板头部；占位 `RuntimeUnavailable` 不发它）。
       await withScenario(baseScenario({ deliverSnapshot: false }), async (container) => {
         await waitFor(
           () => query(container, '[data-connection-state="replaying"]') !== null,
@@ -509,10 +590,8 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-19 目录项呈现该目录下最晚的会话时间（UTC 固定切片）；没有会话的目录项不呈现任何时间",
+    name: "R15-19 目录项不再呈现最近活动时间（该呈现已随原型撤销）",
     async run() {
-      // 三条会话里**最晚的那条在中间**：取第一条、取最后一条、取「当前时间」都会在这里红。
-      // 快照的数组顺序不影响呈现（行在模型里按会话自身时间倒序排过），因此这里可以故意乱序。
       const sessions = sessionSeries({
         alias: "alpha",
         idPrefix: "aaaaaaaa",
@@ -525,24 +604,94 @@ const checks: readonly Check[] = [
       });
       await withScenario(baseScenario({ sessions }), async (container) => {
         await waitForDirectoryList(container);
-        const latest = query(container, '[data-directory-alias="alpha"] [data-directory-latest-at]');
-        expectThat(latest !== null, "有会话的目录项必须呈现最近活动时间");
-        expectEqual(
-          latest?.getAttribute("data-directory-latest-at") ?? null,
-          "2026-10-06T09:00:00.000Z",
-          "最近活动时间的原值必须是该目录下**最晚**的那条会话时间",
-        );
-        // 展示文本是 UTC 固定切片（`YYYY-MM-DD HH:MM UTC`）：走本地时区或画「N 分钟前」都会红。
-        expectEqual(textOf(latest), "最近 2026-10-06 09:00 UTC", "最近活动时间的展示文本（UTC 固定切片）");
-        // 没有会话的目录项不呈现时间，也不拿当前时间顶替（beta 一条会话都没有）。
+        // 反例：把目录项的最近活动时间加回来（锚点或「最近 …」文案）都会在这里红。
         expectThat(
-          query(container, '[data-directory-alias="beta"] [data-directory-latest-at]') === null,
-          "0 会话的目录项不得呈现任何活动时间",
+          query(container, "[data-directory-latest-at]") === null,
+          "目录项不得再呈现最近活动时间",
+        );
+        expectAbsent(domText(container), "最近 ", "目录项不得再呈现最近活动时间");
+        // 对照：那一项仍然渲染出会话行与会话总数——不是「谁都没渲染」。
+        const card = query(container, '[data-directory-alias="alpha"]');
+        expectThat(card !== null, "对照：alpha 的目录项必须在");
+        expectEqual(countsOf(card), ["3", "", ""], "对照：会话总数仍是全量口径");
+        expectEqual(queryAll(card, "[data-session-id]").length, 3, "对照：三条会话行都在");
+      });
+    },
+  },
+  {
+    name: "R15-21 内联会话行五字段：状态圆点、标题、等待状态词、Agent、相对时间",
+    async run() {
+      const sessions = sessionSeries({
+        alias: "alpha",
+        idPrefix: "aaaaaaaa",
+        titles: ["授权中的一单", "等回信的一单", "尚未开始的一单"],
+        at: ["2026-10-05T09:00:00.000Z", "2026-10-04T09:00:00.000Z", "2026-10-03T09:00:00.000Z"],
+        states: ["waiting_permission", "waiting_input", "idle"],
+      });
+      await withScenario(baseScenario({ sessions }), async (container) => {
+        await waitForDirectoryList(container);
+        const card = query(container, '[data-directory-alias="alpha"]');
+        // 目录项找不到时给一条**可读的**失败，而不是让下面几条断言各自在空值上假红。
+        expectThat(card !== null, "alpha 的目录项必须在，才能看到它的内联会话行");
+        const rows = queryAll(card, "[data-session-id]");
+        expectEqual(rows.length, 3, "alpha 的三条内联会话行");
+
+        // 圆点上的状态标识（机器证据）+ 与状态对应的状态词。
+        expectEqual(
+          rows.map((row) => query(row, "[data-session-state]")?.getAttribute("data-session-state")),
+          ["waiting_permission", "waiting_input", "idle"],
+          "三条行圆点上的状态标识",
         );
         expectEqual(
-          queryAll(container, "[data-directory-latest-at]").length,
-          1,
-          "整页只有有会话的那一项带活动时间",
+          rows.map((row) => textOf(query(row, "[data-session-title]"))),
+          // 逐字取自夹具里的标题（行序由 `updatedAt` 倒序钉死，见上一条状态断言）。
+          // 第三行是 `idle` 那一单：它的标题必须与夹具一致，而不是被写成状态词「空闲的一单」——
+          // 后者会让下面的 `!rows[2].includes("空闲")` 自相矛盾。
+          ["授权中的一单", "等回信的一单", "尚未开始的一单"],
+          "三条行的标题",
+        );
+        expectThat(textOf(rows[0]).includes("待授权"), "等待授权必须在行内说明原因");
+        expectThat(textOf(rows[1]).includes("等你回复"), "等待输入必须在行内说明原因");
+        expectThat(!textOf(rows[2]).includes("空闲"), "非等待状态不追加状态词（只有圆点标识状态）");
+        expectEqual(textOf(query(rows[0] ?? null, "[data-session-agent]")), "codex", "Agent 名称");
+
+        // 时间按**相对口径**呈现（刚刚 / N 分钟前 / 年月日），绝不是 `MM-DD HH:MM` 那种绝对切片。
+        for (const row of rows) {
+          const label = textOf(query(row, "[data-session-updated-at]"));
+          expectThat(RELATIVE_TIME_PATTERN.test(label), `会话时间应是相对口径，实际 ${JSON.stringify(label)}`);
+        }
+
+        // 会话行不得带任何路径信息：整条路径与父段一个片段都不许出现。
+        expectNone(domHtml(card), PATH_PREFIX_FRAGMENTS, "会话行泄露了本机路径");
+      });
+    },
+  },
+  {
+    name: "R15-22 连接状态只有一个表达：路由自建的状态徽标与导航条都已从目录页移除",
+    async run() {
+      await withScenario(baseScenario(), async (container) => {
+        await waitForDirectoryList(container);
+
+        // **目录页自己那一层**：`data-route="dirs"` 的父节点（路由组件的根 `View role="main"`）。
+        // 自建导航与第二个状态徽标都曾是这一层里的兄弟节点；顶栏（含设备胶囊）由根布局装配的
+        // 共享外壳承担，在**外面**一层，因此这里量到的正是「路由自己拼出来的东西」。
+        const pageLayer = query(container, '[data-route="dirs"]')?.parentElement ?? null;
+        expectThat(pageLayer !== null, '目录页应渲染出带 `data-route="dirs"` 的容器');
+
+        // 导航：路由不再自建「配对」「主机与连接」两个入口（那些由外壳的设备胶囊承担）。
+        expectThat(
+          query(pageLayer, '[data-action="open-pairing"]') === null,
+          "目录页不得再自建「配对」导航入口",
+        );
+        // 第二个状态徽标：`data-action="open-hosts"` 只有 `ConnectionBadge` 会发，是它的指纹。
+        expectThat(
+          query(pageLayer, '[data-action="open-hosts"]') === null,
+          "目录页不得再出现自建的状态徽标",
+        );
+        // 连接状态在**这一层**里只经主机面板（`data-route="hosts"`）表达。
+        expectThat(
+          query(pageLayer, '[data-route="hosts"] [data-connection-state]') !== null,
+          "连接状态必须仍经主机面板表达（面板是这一层里唯一的状态控件）",
         );
       });
     },

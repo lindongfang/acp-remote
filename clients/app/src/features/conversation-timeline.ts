@@ -22,7 +22,7 @@
 
 import type { MessageView } from "../domain/conversation";
 import type { InteractionAvailability, InteractionView } from "../domain/interaction";
-import type { StructuredRecord, TimelineCard } from "../domain/timeline";
+import type { FileDiffView, StructuredRecord, TimelineCard } from "../domain/timeline";
 import { buildTimelineCard, compareTimelinePosition, groupStructuredRecords, positionOf, recordGroupOf } from "../domain/timeline";
 import type { DegradedEventModel, RawAvailability } from "./degradation-model";
 import { buildDegradedRecordModel, isDegradedRecord, rawAvailabilityOf } from "./degradation-model";
@@ -244,7 +244,7 @@ export interface FileChangeDiagnostics {
   readonly view: Readonly<Record<string, unknown>>;
 }
 
-/** 变更文件的呈现模型：结构化统计 + 相对化路径 + 诊断入口的数据（D8）。 */
+/** 变更文件的呈现模型：结构化统计 + 相对化路径 + 结构化差异区 + 诊断入口的数据（D8/D6）。 */
 export interface FileChangeView {
   readonly changeId: string;
   readonly kind: string;
@@ -255,6 +255,11 @@ export interface FileChangeView {
   readonly addedLines: string | null;
   readonly deletedLines: string | null;
   readonly outsideWorkspace: boolean;
+  /**
+   * 差异区：`lines`（随事件下发的结构化差异行）/ `unavailable`（服务端说明了为什么没有）
+   * / `null`（两者都没有，即「只有统计」）。三态互斥，见 `domain/timeline.ts` 的 `FileDiffView`。
+   */
+  readonly diff: FileDiffView | null;
   /** 诊断入口：查看这一处改动的完整 ACP 原文与元数据。 */
   readonly diagnostics: FileChangeDiagnostics;
 }
@@ -281,6 +286,7 @@ export function buildFileChangeViews(records: readonly StructuredRecord[]): read
       addedLines: card.addedLines,
       deletedLines: card.deletedLines,
       outsideWorkspace: card.outsideWorkspace,
+      diff: card.diff,
       diagnostics: {
         eventId: record.eventId,
         eventType: record.eventType,

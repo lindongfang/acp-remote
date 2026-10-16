@@ -52,6 +52,7 @@ import {
   waitFor,
 } from "../support";
 import type { Check } from "../support";
+import { FILE_DIFF_UNAVAILABLE_LABELS } from "../../../src/domain";
 import {
   MESSAGE_ID,
   TOOL_CALL_ID,
@@ -77,6 +78,9 @@ const ORIGIN_EPOCH = "f0000000-0000-4000-8000-0000000000bb";
 const CHANGE_ID = "f0000000-0000-4000-8000-000000000101";
 const EVENT_FILE_CHANGED = "f0000000-0000-4000-8000-000000000111";
 const EVENT_FILE_CHANGED_NO_STATS = "f0000000-0000-4000-8000-000000000112";
+/** 只有不可用标记（未下发差异行）的那一处。 */
+const CHANGE_ID_UNAVAILABLE = "f0000000-0000-4000-8000-000000000103";
+const EVENT_FILE_CHANGED_UNAVAILABLE = "f0000000-0000-4000-8000-000000000113";
 
 /** 未下发的差异正文（只会作为**不可信原文**出现在诊断槽位里）。 */
 const RAW_DIFF = [
@@ -90,6 +94,21 @@ const RAW_DIFF = [
 /** 诊断槽位里的原文必须是**逐字**这一份。 */
 const DIFF_MARKERS = ["DIFF_BODY_LINE_REMOVED", "DIFF_BODY_LINE_ADDED"] as const;
 
+/**
+ * 服务端随事件下发的**结构化**差异行（三档各一行）。
+ *
+ * 行内容刻意与上面那份原文里的标记不同：右栏出现的必须是这一份（结构化来源），而不是从原文里
+ * 还原出来的东西——「未展开诊断时原文片段一个都不出现」因此才有判别力。
+ */
+const STRUCTURED_DIFF_LINES = [
+  { kind: "context", text: "  const opts = resolveOptions(input);" },
+  { kind: "deleted", text: "- const idleTimeout = 30_000;" },
+  { kind: "added", text: "+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
+] as const;
+
+/** 结构化差异行里出现过的文本片段（右栏必须逐字呈现它们）。 */
+const STRUCTURED_DIFF_MARKERS = ["const opts = resolveOptions(input);", "- const idleTimeout = 30_000;", "opts.idleTimeoutMs ?? 10_000;"] as const;
+
 /** Markdown 的原文能力（`rawJson` 分支要求 sha256；客户端不校验，但夹具按协议给全）。 */
 function rawAcp(rawJson: string): Record<string, unknown> {
   return {
@@ -100,8 +119,8 @@ function rawAcp(rawJson: string): Record<string, unknown> {
   };
 }
 
-/** 一条 `file.changed` 视图：只有结构化统计与相对化展示路径，没有任何差异正文。 */
-function fileChangedView(changeId: string, summary: string): Record<string, unknown> {
+/** 一条 `file.changed` 视图：结构化统计 + 相对化展示路径；差异区由调用方按形态给出。 */
+function fileChangedView(changeId: string, summary: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     changeId,
     kind: "update",
@@ -110,6 +129,7 @@ function fileChangedView(changeId: string, summary: string): Record<string, unkn
     addedLines: "2",
     deletedLines: "1",
     outsideWorkspace: false,
+    ...extra,
   };
 }
 
@@ -157,7 +177,7 @@ const checks: readonly Check[] = [
               eventId: EVENT_FILE_CHANGED,
               sessionId: SESSION_ALPHA,
               eventType: "file.changed",
-              view: fileChangedView(CHANGE_ID, "调整入口"),
+              view: fileChangedView(CHANGE_ID, "调整入口", { diffLines: STRUCTURED_DIFF_LINES }),
               acp: rawAcp(RAW_DIFF),
             }),
             wireEvent({
@@ -166,6 +186,16 @@ const checks: readonly Check[] = [
               sessionId: SESSION_ALPHA,
               eventType: "file.changed",
               view: { changeId: "f0000000-0000-4000-8000-000000000102", kind: "create", displayPath: "src/new.ts", summary: "新增文件" },
+            }),
+            wireEvent({
+              globalSequence: 13,
+              eventId: EVENT_FILE_CHANGED_UNAVAILABLE,
+              sessionId: SESSION_ALPHA,
+              eventType: "file.changed",
+              view: fileChangedView(CHANGE_ID_UNAVAILABLE, "diff 未能同步", {
+                displayPath: "src/legacy/report.ts",
+                diffUnavailable: { reason: "size_limit" },
+              }),
             }),
           ],
         }),
@@ -178,9 +208,9 @@ const checks: readonly Check[] = [
           expectEqual(
             query(filesColumn, "[data-file-changes]")?.getAttribute("data-file-changes"),
             "list",
-            "两处改动时右栏是清单",
+            "三处改动时右栏是清单",
           );
-          expectEqual(query(filesColumn, "[data-file-change-count]")?.getAttribute("data-file-change-count"), "2", "改动处数");
+          expectEqual(query(filesColumn, "[data-file-change-count]")?.getAttribute("data-file-change-count"), "3", "改动处数");
 
           // 有结构化来源的那一项：相对化展示路径 + 两侧行数统计。
           const changed = query(filesColumn, `[data-file-change="${CHANGE_ID}"]`);
@@ -207,18 +237,52 @@ const checks: readonly Check[] = [
           );
           expectEqual(
             queryAll(filesColumn, "[data-change-added-lines]").length,
-            1,
-            "右栏里只有有统计的那一项才出现行数锚点（时间线卡片另有一处同名锚点，因此这里按右栏计数）",
+            2,
+            "右栏里只有有统计的那两项才出现行数锚点",
           );
           expectThat(
-            textOf(query(filesColumn, "[data-change-statistics-scope]")).includes("不呈现"),
-            "右栏必须说明差异正文没有结构化来源、因此不呈现",
+            textOf(query(filesColumn, "[data-change-statistics-scope]")).includes("不解析 ACP 原文"),
+            "右栏必须说明差异行只来自结构化来源、不解析 ACP 原文",
+          );
+
+          // 差异区的三种形态各就各位（右栏退回「只有统计」的形态时，下面这一组同时变红）。
+          const diffRegion = query(filesColumn, `[data-file-change="${CHANGE_ID}"] [data-diff-region]`);
+          expectEqual(
+            diffRegion?.getAttribute("data-diff-region"),
+            "lines",
+            "下发了结构化差异行时右栏必须逐行呈现",
+          );
+          expectEqual(
+            queryAll(diffRegion, "[data-diff-line-kind]").map((node) => node.getAttribute("data-diff-line-kind")),
+            ["context", "deleted", "added"],
+            "新增 / 删除 / 上下文三档必须各自成立",
+          );
+          const filesText = domText(filesColumn);
+          for (const marker of STRUCTURED_DIFF_MARKERS) {
+            expectThat(filesText.includes(marker), `差异行内容必须逐字来自结构化来源：${marker}`);
+          }
+          // 先取到那一项再断言它存在：`domText` 只接受非 null，缺元素时要报「有不可用标记的那处改动
+          // 没渲染」这条可定位的失败，而不是让 `domText(null)` 抛一个看不出原因的 TypeError。
+          const unavailableChange = query(filesColumn, `[data-file-change="${CHANGE_ID_UNAVAILABLE}"]`);
+          expectThat(unavailableChange !== null, "有不可用标记的那处改动必须渲染");
+          expectEqual(
+            query(unavailableChange, "[data-diff-unavailable]")?.getAttribute("data-diff-unavailable"),
+            "size_limit",
+            "有不可用标记时必须呈现该原因的说明",
+          );
+          expectThat(
+            domText(unavailableChange).includes(FILE_DIFF_UNAVAILABLE_LABELS.size_limit),
+            "不可用标记的文案必须来自已登记的词表",
+          );
+          expectThat(
+            query(noStats, "[data-diff-not-delivered]") !== null,
+            "两者都没有时必须明确说明，而不是留一块空的差异区",
           );
 
           // 每处改动都有诊断入口（入口只在右栏；时间线卡片给的是指向右栏的说明）。
           expectEqual(
             queryAll(filesColumn, 'button[data-action="open-file-change-diagnostics"]').length,
-            2,
+            3,
             "每处改动都要有查看 ACP 原文的诊断入口",
           );
 
@@ -247,6 +311,12 @@ const checks: readonly Check[] = [
             queryAll(container, '[data-raw-json="available"]').length,
             1,
             "原文只允许出现在诊断槽位里",
+          );
+          // 原文是诊断入口而不是渲染源：展开原文不会多出任何差异行（那三行只来自结构化来源）。
+          expectEqual(
+            queryAll(container, "[data-diff-line-kind]").length,
+            3,
+            "原文不得被解析成差异行",
           );
         },
       );

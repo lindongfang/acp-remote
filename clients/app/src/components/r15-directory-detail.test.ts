@@ -1,16 +1,19 @@
 /**
- * 目录详情页渲染层的判定（R15 + 本次新增的目录内搜索 / 月份分档 / 响应式 / 副作用提示）。
+ * 目录详情页渲染层的判定（R15：页头、平铺分页、两种空、响应式、副作用提示）。
  *
  * ## 判别力从哪来
  *
- * 断言的是**渲染后的 HTML 字符串**而不是模型字段：模型里没有路径字段，并不能保证组件不会
- * 去渲染别的东西；同理，「三种空互不冒充」只有落到「哪一段文案出现在同一份渲染结果里」才是
- * 真的。
+ * 断言的是**渲染后的 HTML 字符串**而不是模型字段：「别名不呈现」「路径要么逐字呈现、要么整行
+ * 不呈现」这类要求只有落到「哪一段文字出现在同一份渲染结果里」才是真的。为此本文件把渲染结果
+ * 里**所有标签剥掉**再断言文本（见 `textContentOf`）：`data-directory-alias` 之类的机器锚点
+ * 本来就带着别名，只有文本层才能回答「用户看得见别名吗」。
  *
- * `renderToStaticMarkup` 没有事件、也没有时钟，因此这里**不**断言交互（「输入查询词 → 列表
- * 变化」由 `features/directory-filter.test.ts` 的纯函数单测与 e2e 覆盖）。这里断言的是：
- * 页面把仓库里的查询词/月份档原样交给控件（`data-directory-detail-search-value`、
- * `data-segment-selected`），以及视图模型里的 N/M 真的被渲染出来。
+ * `renderToStaticMarkup` 没有事件、也没有布局引擎，因此这里**不**断言交互与滚动：
+ * 「点上一页/下一页」「输入期间列表不重画、回车与失焦才提交（非法页码就地纠正）」
+ * 「翻页后回到页首」由 e2e 用例（`e2e/page/checks/r15-directory-detail.ts`）与 feature 层单测
+ * （`features/directory-detail-paging.test.ts`）覆盖。这里断言的是：页码、总页数、输入框上
+ * **真实的 `value` 属性**（= 纠正后的生效页码）、翻页控件的**有无**，以及「禁用」落在按钮真实的
+ * `disabled` 属性而不是某个 `data-*` 锚点的名字上。
  *
  * 宽度用 `availableWidth` 注入：Node 下 `Dimensions.get('window')` 恒为 0，只有注入了两种宽度，
  * 「窄屏与宽屏的信息集合相同」才是一条能红的断言。
@@ -25,9 +28,10 @@ import { describe, expect, it } from "vitest";
 import { DirectoryDetail } from "./DirectoryDetail";
 import { buildDirectoryDetailModel } from "../features/directory-model";
 import type { DirectoryDetailModel } from "../features/directory-model";
-import { CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "../features/testing/fixtures";
+import type { SessionSummary } from "../protocol";
+import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session, storeWith } from "../features/testing/fixtures";
 
-/** 宽屏那一档的注入宽度（组件内部断点是 720）。 */
+/** 宽屏那一档的注入宽度（组件内部断点取 `breakpoints.wide`）。 */
 const WIDE_WIDTH = 1024;
 /** 窄屏那一档的注入宽度。 */
 const NARROW_WIDTH = 375;
@@ -36,7 +40,6 @@ const NARROW_WIDTH = 375;
 function renderDetail(
   model: DirectoryDetailModel,
   options: {
-    readonly query?: string;
     readonly lastSyncedAtMs?: number | null;
     readonly availableWidth?: number;
   } = {},
@@ -44,18 +47,17 @@ function renderDetail(
   return renderToStaticMarkup(
     createElement(DirectoryDetail, {
       model,
+      onBack: () => undefined,
       onOpenSession: () => undefined,
       onCreateSession: () => undefined,
-      query: options.query ?? "",
+      onPageChange: () => undefined,
       lastSyncedAtMs: options.lastSyncedAtMs ?? null,
       availableWidth: options.availableWidth ?? WIDE_WIDTH,
-      onQueryChange: () => undefined,
-      onMonthChange: () => undefined,
     }),
   );
 }
 
-/** 渲染结果里全部 `data-*` 属性（键与取值都在内），排序后便于按集合比较。 */
+/** 渲染结果里全部的 `data-*` 属性（键与取值都在内），排序后便于按集合比较。 */
 function dataAttributes(html: string): readonly string[] {
   return (html.match(/data-[a-zA-Z0-9-]+="[^"]*"/g) ?? []).slice().sort();
 }
@@ -67,6 +69,58 @@ function tagContaining(html: string, marker: string): string {
   const start = html.lastIndexOf("<", at);
   const end = html.indexOf(">", at);
   return html.slice(start, end + 1);
+}
+
+/**
+ * 标签上是否带**真**的 `disabled` 属性。
+ *
+ * RNW 把 `disabled={true}` 渲染成 `disabled=""`（另附 `aria-disabled="true"`，见标签原文）。
+ * 判禁用**必须**按这个属性判，不能靠子串：属性**名**里带 `disabled` 的锚点（本组件曾输出过
+ * `data-page-disabled="true|false"`）会让 `toContain("disabled")` 两个方向都假通过——把
+ * `disabled={…}` 整句删掉、只留那个锚点，断言照样绿（那个锚点因此也被删了）。
+ *
+ * 模式要求 `disabled` 是**独立属性**（前面是空白，后面紧跟 `=`、空白、`>` 或 `/`），
+ * 因此 `aria-disabled="true"` 与 `data-page-disabled="true"` 里的那两次出现都不算数。
+ */
+function isDisabled(tag: string): boolean {
+  return /(^|\s)disabled(=""|\s|>|\/)/.test(tag);
+}
+
+/**
+ * 渲染结果的**可见文本**：剥掉全部标签与实体后剩下的文字。
+ *
+ * 别名、路径这类「该不该让用户看见」的要求必须在文本层判定——机器锚点（`data-directory-alias`）
+ * 本来就带别名，拿整串 HTML 断言只会得到自相矛盾的结论。
+ */
+function textContentOf(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/** 会话行的标识，按 DOM 顺序（= 视图模型的顺序）。 */
+function rowIdsOf(html: string): readonly string[] {
+  return [...html.matchAll(/data-session-id="([^"]*)"/g)].map((match) => match[1] ?? "");
+}
+
+/**
+ * `count` 条 `work-api` 下的会话，每条比上一条早一分钟：倒序即编号顺序，
+ * 因此「第几页是哪几条」在断言里是可预期的（`会话 N` 的编号与页号对得上）。
+ */
+function manySessions(count: number): readonly SessionSummary[] {
+  const base = Date.parse("2026-10-02T12:00:00.000Z");
+  return Array.from({ length: count }, (_, index) =>
+    session({
+      id: `dddddddd-0000-4000-8000-${(index + 1).toString().padStart(12, "0")}`,
+      title: `会话 ${index + 1}`,
+      state: index % 3 === 0 ? "running" : "idle",
+      updatedAt: new Date(base - index * 60_000).toISOString(),
+    }),
+  );
 }
 
 /** 一条 `work-api` 下的会话 + 一条 imported 且来源离线的会话。 */
@@ -86,33 +140,31 @@ const DETAIL_SESSIONS = [
   }),
 ];
 
-describe("R15 目录详情：三种「空」互不冒充", () => {
-  it("目录存在但没有任何会话：呈现「还没有会话」，不呈现「没有符合条件的会话」，也不说成链接失效", () => {
+describe("R15 目录详情：两种「空」互不冒充", () => {
+  it("目录存在但没有任何会话：呈现「还没有会话」，不呈现「链接失效」，也不呈现翻页", () => {
     const { store } = storeWith({ resources: resources({ sessions: [], workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-directory-sessions="empty"');
     expect(html).toContain("这个目录里还没有会话");
-    // 反例：把「还没有会话」当成「搜索无结果」，或当成别名失效，下面三条会各自变红。
-    expect(html).not.toContain("没有符合条件的会话");
-    expect(html).not.toContain("data-directory-detail-no-match");
+    // 反例：把「还没有会话」当成别名失效，下面两条会各自变红。
     expect(html).not.toContain("可能已被删除");
     expect(html).not.toContain("data-directory-detail-state");
+    // 一条会话都没有时总页数是 1：翻页控件（含页码输入）不得呈现。
+    expect(html).not.toContain("data-directory-detail-pager");
+    expect(html).not.toContain("data-directory-detail-page-input");
   });
 
-  it("目录里有会话、但目录内搜索无命中：呈现「没有符合条件的会话」，且不占用 data-directory-sessions", () => {
+  it("目录里有会话：既不呈现空态也不呈现链接失效（详情页没有「被筛掉」的第三种空）", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
-    store.setDirectoryDetailQuery("查无此项");
-    const html = renderDetail(store.directoryDetail("work-api"), {
-      query: store.state.directoryDetailQuery,
-    });
+    const html = renderDetail(store.directoryDetail("work-api"));
 
-    expect(html).toContain('data-directory-detail-no-match="true"');
-    expect(html).toContain("没有符合条件的会话");
-    // 反例：这一支若复用「还没有会话」或占用 data-directory-sessions，R15 的两种空态就被合并了。
+    expect(html).toContain('data-directory-sessions="list"');
+    expect(rowIdsOf(html)).toHaveLength(2);
+    // 反例：把「详情页有查询词/月份档」的旧第三支留下时，这里会出现空态标记或那句文案。
     expect(html).not.toContain("这个目录里还没有会话");
-    expect(html).not.toContain("data-directory-sessions");
-    expect(html).not.toContain("可能已被删除");
+    expect(html).not.toContain("没有符合条件的会话");
+    expect(html).not.toContain("data-directory-detail-state");
   });
 
   it("对照：别名不在快照里才是「链接已失效」——与上面两种在文案与标记上都不同", () => {
@@ -121,10 +173,13 @@ describe("R15 目录详情：三种「空」互不冒充", () => {
 
     expect(html).toContain('data-directory-detail-state="unknown_directory"');
     expect(html).toContain("可能已被删除");
+    // 提示里**不得**出现别名（它只作机器锚点）：反例是把文案写回「目录「not-there」不在…」。
+    expect(textContentOf(html)).not.toContain("not-there");
+    expect(textContentOf(html)).toContain("这个目录不在最近一次同步的目录列表里");
     expect(html).not.toContain("这个目录里还没有会话");
-    expect(html).not.toContain("没有符合条件的会话");
     expect(html).not.toContain("data-directory-sessions");
-    expect(html).not.toContain("data-directory-detail-no-match");
+    // 失效别名下也要有离开本页的入口：自建导航删掉后，返回按钮只在这里（见组件内的页头）。
+    expect(html).toContain('data-action="back-to-dirs"');
   });
 
   it("从未同步过：呈现等待同步，不冒充任何一种空态，也不呈现同步时间", () => {
@@ -133,148 +188,134 @@ describe("R15 目录详情：三种「空」互不冒充", () => {
 
     expect(html).toContain('data-directory-detail-state="loading"');
     expect(html).not.toContain("data-directory-sessions");
-    expect(html).not.toContain("data-directory-detail-no-match");
     expect(html).not.toContain("已同步");
+    expect(html).toContain('data-action="back-to-dirs"');
   });
 });
 
-describe("R15 目录详情：月份分档与「当前显示 N / M」", () => {
-  it("两个月份档各自只含本月会话，且档按时间倒序", () => {
-    const { store } = storeWith({ resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }) });
+describe("R15 目录详情：页头（返回 + 标题 + 会话数芯片 + 路径）", () => {
+  it("四项都在：返回入口、展示名标题、会话数芯片、路径标签与逐字路径值", () => {
+    const { store } = storeWith({
+      resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES_WITH_PATHS }),
+    });
+    const html = renderDetail(store.directoryDetail("work-api"));
+
+    expect(html).toContain('data-action="back-to-dirs"');
+    expect(html).toContain('data-directory-display-name="api"');
+    // 芯片：数字与文案都来自模型（`total` = 该目录的全部会话数，不是本页条数）。
+    expect(html).toContain('data-directory-session-count="2"');
+    expect(textContentOf(html)).toContain("2 个会话");
+    // 路径行是「淡标签 + 值」两段（原型的 `.drow .dk` + `.dpath`）：行上有逐字的路径属性，
+    // 行内的文字先出现标签「路径」、再出现那一串路径——组件不做任何拼接、规范化或截断
+    // （超宽交给 CSS 省略号，DOM 文本仍是逐字的那一串）。
+    const rowAt = html.indexOf('data-directory-path="D:\\work\\api"');
+    expect(rowAt, "路径行没带上逐字路径").toBeGreaterThanOrEqual(0);
+    const labelAt = html.indexOf("路径", rowAt);
+    expect(labelAt, "路径行缺少「路径」标签").toBeGreaterThanOrEqual(0);
+    // 从标签之后开始找：属性里那次出现在标签之前，因此这里命中的是渲染出的值。
+    expect(html.indexOf("D:\\work\\api", labelAt), "路径值必须出现在标签之后").toBeGreaterThanOrEqual(0);
+  });
+
+  it("别名不呈现：它只作为路由与命令引用的内部标识留在机器锚点上", () => {
+    const { store } = storeWith({
+      resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES_WITH_PATHS }),
+    });
+    const html = renderDetail(store.directoryDetail("work-api"));
+
+    // 反例：把别名再当标题/副标题渲染出来时，下面两条会红（`data-directory-alias-label` 是旧锚点）。
+    expect(textContentOf(html)).not.toContain("work-api");
+    expect(html).not.toContain("data-directory-alias-label");
+    // 别名仍在机器锚点上：路由与命令引用需要它，R15 的既有断言也靠它选节点。
+    expect(html).toContain('data-directory-alias="work-api"');
+  });
+
+  it("未协商路径（快照条目没有 `path` 键）时整行不呈现，也不用展示名拼一段看起来像路径的文本", () => {
+    const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
+    const html = renderDetail(store.directoryDetail("work-api"));
+
+    expect(html).not.toContain("data-directory-path");
+    expect(textContentOf(html)).not.toContain("路径");
+    // 反例：拿展示名/别名拼路径的实现会在这里露出盘符或分隔符。
+    expect(textContentOf(html)).not.toMatch(/[A-Za-z]:[\\/]/);
+    expect(textContentOf(html)).not.toContain("\\");
+  });
+});
+
+describe("R15 目录详情：平铺 + 每页 10 条 + 翻页", () => {
+  it("第一页只给最新的 10 条，页码与总页数上到 DOM", () => {
+    const { store } = storeWith({ resources: resources({ sessions: manySessions(25), workspaces: WORKSPACES }) });
     const model = store.directoryDetail("work-api");
     expect(model.kind).toBe("ready");
     if (model.kind !== "ready") return;
-
-    expect(model.months.map((bucket) => bucket.key)).toEqual(["2026-10", "2026-09"]);
-    expect(model.shown).toBe(2);
-    expect(model.total).toBe(2);
 
     const html = renderDetail(model);
-    expect(html).toContain("十月的发布");
-    expect(html).toContain("九月的重构");
-    expect(html).toContain("当前显示 2 / 2");
-    expect(html).toContain('data-directory-shown="2"');
-    expect(html).toContain('data-directory-total="2"');
+    // 平铺倒序：第一页是最新的十条（夹具里编号越小越新），第 11 条只在第二页。
+    expect(rowIdsOf(html)).toEqual(manySessions(25).slice(0, 10).map((item) => item.sessionId));
+    expect(textContentOf(html)).toContain("会话 1");
+    expect(textContentOf(html)).not.toContain("会话 11");
+    // 芯片是**全部**会话数，翻页区里的页码是当前页 / 总页数：两个数字各有出处。
+    expect(html).toContain('data-directory-session-count="25"');
+    expect(html).toContain('data-directory-detail-pager="true"');
+    expect(html).toContain('data-directory-page="1"');
+    expect(html).toContain('data-directory-page-count="3"');
+    expect(html).toContain('data-directory-detail-page-value="1"');
+    // 真属性：`disabled=""`（不是 `data-*` 锚点里的子串）。
+    expect(isDisabled(tagContaining(html, 'data-action="page-prev"'))).toBe(true);
+    expect(isDisabled(tagContaining(html, 'data-action="page-next"'))).toBe(false);
   });
 
-  it("切到某个月份档后 N 变小而 M 不变，且只渲染该月的会话", () => {
-    const { store } = storeWith({ resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }) });
-    const before = store.directoryDetail("work-api");
-    store.setDirectoryDetailMonth("2026-10");
-    const after = store.directoryDetail("work-api");
-    expect(before.kind).toBe("ready");
-    expect(after.kind).toBe("ready");
-    if (before.kind !== "ready" || after.kind !== "ready") return;
+  it("请求最后一页：只给那 5 条，且「下一页」在边界上不可用", () => {
+    const { store } = storeWith({ resources: resources({ sessions: manySessions(25), workspaces: WORKSPACES }) });
+    store.setDirectoryDetailPage("work-api", "3");
+    const html = renderDetail(store.directoryDetail("work-api"));
 
-    // 分子随月份档变小，分母（查询命中后的总数）不变。
-    expect(after.shown).toBeLessThan(before.shown);
-    expect(after.total).toBe(before.total);
-
-    const html = renderDetail(after);
-    expect(html).toContain("当前显示 1 / 2");
-    expect(html).toContain('data-directory-shown="1"');
-    expect(html).toContain('data-directory-total="2"');
-    expect(html).toContain("十月的发布");
-    // 反例：月份档没接上（或不按会话自身时间分档）时，九月的会话仍会出现。
-    expect(html).not.toContain("九月的重构");
+    expect(rowIdsOf(html)).toHaveLength(5);
+    expect(textContentOf(html)).toContain("会话 25");
+    expect(textContentOf(html)).not.toContain("会话 20");
+    expect(html).toContain('data-directory-page="3"');
+    expect(html).toContain('data-directory-detail-page-value="3"');
+    expect(isDisabled(tagContaining(html, 'data-action="page-next"'))).toBe(true);
+    expect(isDisabled(tagContaining(html, 'data-action="page-prev"'))).toBe(false);
   });
 
-  it("月份分段控件呈现「全部」+ 各月份档 key，并标出当前档", () => {
-    const { store } = storeWith({ resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }) });
-    const all = renderDetail(store.directoryDetail("work-api"));
+  it("只有一页时（含空目录）不呈现上/下一页与页码输入", () => {
+    const { store } = storeWith({ resources: resources({ sessions: manySessions(9), workspaces: WORKSPACES }) });
+    const html = renderDetail(store.directoryDetail("work-api"));
 
-    expect(all).toContain('data-segment="月份"');
-    expect(all).toContain('data-segment-option="all"');
-    expect(all).toContain('data-segment-option="2026-09"');
-    expect(all).toContain('data-segment-option="2026-10"');
-    expect(tagContaining(all, 'data-segment-option="all"')).toContain('data-segment-selected="true"');
-
-    store.setDirectoryDetailMonth("2026-09");
-    const september = renderDetail(store.directoryDetail("work-api"));
-    expect(tagContaining(september, 'data-segment-option="2026-09"')).toContain('data-segment-selected="true"');
-    expect(tagContaining(september, 'data-segment-option="all"')).toContain('data-segment-selected="false"');
-    expect(september).toContain("九月的重构");
-    expect(september).not.toContain("十月的发布");
+    expect(rowIdsOf(html)).toHaveLength(9);
+    expect(html).toContain('data-directory-session-count="9"');
+    // 反例：「只有一页也画一组禁用的翻页」在这里会红。
+    expect(html).not.toContain("data-directory-detail-pager");
+    expect(html).not.toContain('data-action="page-prev"');
+    expect(html).not.toContain('data-action="page-next"');
+    expect(html).not.toContain("data-directory-detail-page-input");
   });
 
-  it("已选月份档在查询命中后消失：控件选中态落到「全部」，而不是整组全 false", () => {
-    const { store } = storeWith({ resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }) });
-    // 用户先选了 2026-09，然后输入的查询词只命中 2026-10 的会话——`months` 随之收缩，
-    // 那个被选中的档已不在选项集合里。
-    store.setDirectoryDetailMonth("2026-09");
-    store.setDirectoryDetailQuery("十月的发布");
+  it("页码输入框回填的是**纠正后**的值：非数字回落当前页、越界夹到边界", () => {
+    const { store } = storeWith({ resources: resources({ sessions: manySessions(25), workspaces: WORKSPACES }) });
+    store.setDirectoryDetailPage("work-api", "2");
+    // 非数字：回落到当前生效页（2），列表因此还是第二页那十条。
+    store.setDirectoryDetailPage("work-api", "abc");
+    const corrected = renderDetail(store.directoryDetail("work-api"));
+    expect(corrected).toContain('data-directory-detail-page-value="2"');
+    // 回填落在输入框**真实的 `value` 属性**上（草稿为空时输入框显示的恒是生效页码）：
+    // 反例：`value` 挂到别处（或写死不回填）时这里会红。
+    expect(tagContaining(corrected, "data-directory-detail-page-input")).toContain('value="2"');
+    expect(textContentOf(corrected)).toContain("会话 11");
 
-    const model = store.directoryDetail("work-api");
-    expect(model.kind).toBe("ready");
-    if (model.kind !== "ready") return;
-    // 模型层对账：请求的档算出的生效值回落 "all"（目录页/详情页的档集合只有 2026-10）。
-    expect(model.month).toBe("all");
-    expect(model.months.map((bucket) => bucket.key)).toEqual(["2026-10"]);
+    // 越界：夹到上界（3），输入框与列表同时落到最后一页。
+    store.setDirectoryDetailPage("work-api", "99");
+    const clamped = renderDetail(store.directoryDetail("work-api"));
+    expect(clamped).toContain('data-directory-detail-page-value="3"');
+    expect(tagContaining(clamped, "data-directory-detail-page-input")).toContain('value="3"');
+    expect(textContentOf(clamped)).toContain("会话 21");
 
-    const html = renderDetail(model, { query: store.state.directoryDetailQuery });
-    // 反例：若控件仍直取仓库里的原始值（这里是 "2026-09"，选项里已经没有了），
-    // 整组 data-segment-selected 会全为 false；若模型不对账，列表还会被滤成空白。
-    expect(tagContaining(html, 'data-segment-option="all"')).toContain('data-segment-selected="true"');
-    expect(html).not.toContain('data-segment-option="2026-09"');
-    expect(html).toContain('data-directory-shown="1"');
-    expect(html).toContain('data-directory-total="1"');
-    expect(html).toContain("十月的发布");
-    // 搜索框里确实有查询词，也就是说列表不是被「查询无命中」挡住的（它本来就该命中）。
-    expect(html).toContain('data-directory-detail-search-value="十月的发布"');
-    expect(html).not.toContain("没有符合条件的会话");
-  });
-});
-
-describe("R15 目录详情：目录内搜索只在本目录内生效", () => {
-  const TWO_DIRECTORIES = [
-    session({ id: "cccccccc-0000-4000-8000-000000000001", title: "本目录检索词", alias: "work-api" }),
-    session({ id: "cccccccc-0000-4000-8000-000000000002", title: "别的目录检索词", alias: "personal-api" }),
-  ];
-
-  it("查询词命中别的目录的会话时不呈现任何会话（其它目录不参与匹配）", () => {
-    const { store } = storeWith({ resources: resources({ sessions: TWO_DIRECTORIES, workspaces: WORKSPACES }) });
-    store.setDirectoryDetailQuery("别的目录检索词");
-    const html = renderDetail(store.directoryDetail("work-api"), {
-      query: store.state.directoryDetailQuery,
-    });
-
-    expect(html).toContain("没有符合条件的会话");
-    // 反例：匹配跨目录时，这里会列出那条属于 personal-api 的会话。
-    // 断言按**会话标识**而不是查询词：搜索框是受控的，会把查询词回显进它的 value，
-    // 因此「HTML 里没有查询词」这条断言本身就与实现相矛盾（同文件的对照用例也依赖这处回显）。
-    expect(html).not.toContain("cccccccc-0000-4000-8000-000000000002");
-    expect(html).not.toContain("personal-api");
-  });
-
-  it("对照：查询词命中本目录的会话时正常列出，且不列出其它目录的会话", () => {
-    const { store } = storeWith({ resources: resources({ sessions: TWO_DIRECTORIES, workspaces: WORKSPACES }) });
-    store.setDirectoryDetailQuery("本目录检索词");
-    const html = renderDetail(store.directoryDetail("work-api"), {
-      query: store.state.directoryDetailQuery,
-    });
-
-    expect(html).toContain("本目录检索词");
-    expect(html).toContain('data-directory-shown="1"');
-    expect(html).toContain('data-directory-total="1"');
-    expect(html).not.toContain("别的目录检索词");
-    // 查询词原样交给搜索框（否则用户看到的框是空的，输入就被吞掉了）。
-    expect(html).toContain('data-directory-detail-search-value="本目录检索词"');
-  });
-
-  it("详情页的目录内搜索与目录页的查询词是两个独立字段", () => {
-    const { store } = storeWith({ resources: resources({ sessions: TWO_DIRECTORIES, workspaces: WORKSPACES }) });
-    // 目录页的查询词只命中 personal-api：若它漏进详情页，work-api 会被整页过滤成「无命中」。
-    store.setDirectoryQuery("别的目录检索词");
-
-    const html = renderDetail(store.directoryDetail("work-api"), { query: store.state.directoryDetailQuery });
-    expect(store.state.directoryDetailQuery).toBe("");
-    expect(html).toContain("本目录检索词");
-    expect(html).not.toContain("没有符合条件的会话");
-
-    // 在详情页输入查询词（页面对搜索框做的事）：目录页的查询词必须原样还在。
-    store.setDirectoryDetailQuery("本目录检索词");
-    expect(store.state.directoryQuery).toBe("别的目录检索词");
-    expect(store.directoryPage().kind).toBe("ready");
+    // 下界：0 落到第 1 页。
+    store.setDirectoryDetailPage("work-api", "0");
+    const first = renderDetail(store.directoryDetail("work-api"));
+    expect(first).toContain('data-directory-detail-page-value="1"');
+    expect(tagContaining(first, "data-directory-detail-page-input")).toContain('value="1"');
+    expect(textContentOf(first)).toContain("会话 1");
   });
 });
 
@@ -286,8 +327,7 @@ describe("R15 目录详情：断连时标注上次同步时刻", () => {
       connection,
       alias: "work-api",
       ownerLabelOf: () => "另一台电脑",
-      query: "",
-      month: "all",
+      nowMs: 1_700_000_000_000,
     });
   }
 
@@ -323,15 +363,15 @@ describe("R15 目录详情：断连时标注上次同步时刻", () => {
 
 describe("R15 目录详情：按设备宽度自适应，且信息集合相同", () => {
   it("窄屏与宽屏渲染出完全相同的 data-* 集合（差异只在样式）", () => {
-    const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
+    const { store } = storeWith({
+      resources: resources({ sessions: manySessions(25), workspaces: WORKSPACES_WITH_PATHS }),
+    });
     const model = store.directoryDetail("work-api");
     const narrow = renderDetail(model, {
-      query: "检索词",
       lastSyncedAtMs: store.state.lastSyncedAtMs,
       availableWidth: NARROW_WIDTH,
     });
     const wide = renderDetail(model, {
-      query: "检索词",
       lastSyncedAtMs: store.state.lastSyncedAtMs,
       availableWidth: WIDE_WIDTH,
     });
@@ -341,17 +381,20 @@ describe("R15 目录详情：按设备宽度自适应，且信息集合相同", 
     expect(narrow).not.toBe(wide);
   });
 
-  it("窄屏下会话行、三项汇总与创建入口都还在", () => {
-    const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
+  it("窄屏下会话行、会话数芯片、创建入口、副作用说明与翻页都还在", () => {
+    const { store } = storeWith({
+      resources: resources({ sessions: manySessions(25), workspaces: WORKSPACES_WITH_PATHS }),
+    });
     const narrow = renderDetail(store.directoryDetail("work-api"), { availableWidth: NARROW_WIDTH });
 
     expect(narrow).toContain('data-directory-sessions="list"');
     expect(narrow).toContain("data-session-id");
-    expect(narrow).toContain('data-directory-count="total"');
-    expect(narrow).toContain('data-directory-count="active"');
-    expect(narrow).toContain('data-directory-count="pending"');
+    expect(narrow).toContain('data-directory-session-count="25"');
     expect(narrow).toContain('data-action="open-create-sheet"');
     expect(narrow).toContain("将在你的电脑上启动一个 Agent 进程");
+    // 反例：窄屏把翻页藏起来（MUST NOT 因宽度不足改变判定结果）时这里的锚点会消失。
+    expect(narrow).toContain('data-directory-detail-pager="true"');
+    expect(narrow).toContain("data-directory-detail-page-input");
   });
 });
 
@@ -363,8 +406,8 @@ describe("R15 目录详情：创建入口的副作用说明", () => {
     const entry = tagContaining(html, 'data-action="open-create-sheet"');
     expect(html).toContain('data-create-side-effect="true"');
     expect(html).toContain("将在你的电脑上启动一个 Agent 进程");
-    // 反例：入口若因权限不可用，这里会带 `disabled` → 断言变红。
-    expect(entry).not.toContain("disabled");
+    // 反例：入口若因权限不可用，这里会带 `disabled=""` → 断言变红。
+    expect(isDisabled(entry)).toBe(false);
     // 反例：权限门控若残留，这里会出现 `create-entry-unavailable` 或那句「需要电脑端授予」。
     expect(html).not.toContain("data-create-entry-unavailable");
     expect(html).not.toContain("需要电脑端授予");
@@ -380,10 +423,6 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     expect(html).toContain('data-route="dir-detail"');
     expect(html).toContain('data-directory-alias="work-api"');
     expect(html).toContain('data-directory-display-name="api"');
-    expect(html).toContain('data-directory-alias-label="true"');
-    expect(html).toContain('data-directory-count="total"');
-    expect(html).toContain('data-directory-count="active"');
-    expect(html).toContain('data-directory-count="pending"');
     expect(html).toContain('data-content-origin="last_sync"');
     expect(html).toContain('data-directory-sessions="list"');
     expect(html).toContain('data-session-id="dddddddd-0000-4000-8000-000000000001"');
@@ -395,6 +434,8 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     // 创建入口不再按权限门控：ready 态既不呈现「不可用」标记，也不呈现权限文案。
     expect(html).not.toContain('data-create-entry-unavailable');
     expect(html).not.toContain("需要电脑端授予");
+    // 三项汇总徽标已随本变更移除（它是旧详情页的呈现，原型上只有「N 个会话」芯片）。
+    expect(html).not.toContain("data-directory-count");
     // ready 分支不呈现「别名失效 / 等待同步」这两个状态标记。
     expect(html).not.toContain("data-directory-detail-state");
 
@@ -404,7 +445,7 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     expect(html).toContain("<li");
   });
 
-  it("详情页渲染结果里不出现任何路径片段", () => {
+  it("没有服务端下发的路径时，渲染结果里不出现任何路径片段", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 

@@ -27,15 +27,20 @@ import type {
   SyncSnapshotChunk,
   SyncSnapshotEnd,
   Uuid,
-  WorkspaceRef,
+  WorkspaceCatalogEntry,
 } from "../protocol";
 import { bytesEqual, decodeBase64Url } from "./base64url";
 import type { DigestPort } from "./ports";
 
-/** 暂存区里一份已验证的清单资源。 */
+/**
+ * 暂存区里一份已验证的清单资源。
+ *
+ * `workspaces` 的元素是 `workspaceCatalogEntry`（比 `WorkspaceRef` 多一个可选的规范化路径键
+ * `path`）：路径在协商了 feature `core.workspace-path.v1` 时才随条目下来，未协商时该键缺席。
+ */
 export interface StagedResources {
   readonly sessions: readonly SessionSummary[];
-  readonly workspaces: readonly WorkspaceRef[];
+  readonly workspaces: readonly WorkspaceCatalogEntry[];
   readonly agents: readonly AgentCatalogEntry[];
 }
 

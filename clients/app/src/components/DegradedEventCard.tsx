@@ -1,5 +1,5 @@
 /**
- * 未识别/不可用结构化内容的降级卡片（共享展示原语，WP5a 只建骨架，WP7 接管实现）。
+ * 未识别/不可用结构化内容的降级卡片（共享展示原语；`design.md` D7 只补样式与结构）。
  *
  * `pwa-web-client` 的「未识别与不可用的结构化内容显式降级」要求：
  *
@@ -11,9 +11,29 @@
  * `unsupportedBy` 与 `noDedicatedView` 是**两个**独立信号而不是一个：前者是三类能力不支持
  * 之一（没有它就没有归因），后者只回答「客户端确实没有这个视图」。原文未下发与二进制未下发
  * 都属于后者为假、前者为 `null` 的情形——客户端有视图，缺的是内容。
+ *
+ * ## 迁移到样式基座（`design.md` D1/D7）
+ *
+ * 形态取自原型的 `.deg`：虚线边框 + 左侧一道 3px 的提示色，头一行是 ⚠ 与事件类型，下面是
+ * 各条说明。**字段与 `data-*` 锚点一个都没有变**（`data-degraded-event`、`data-unsupported-by`、
+ * `data-degraded-view`、`data-unsupported-reason`、`data-raw-unavailable`），取值也原样：
+ * 能力归因只在该信号存在时才出现（`data-*` 的缺失本身就是「内容缺失 ≠ 能力不支持」的判据）。
  */
 import type { ReactElement } from "react";
 
+import type { Palette } from "./theme";
+import {
+  StyleSheet,
+  Text,
+  View,
+  fontFamily,
+  fontSize,
+  fontWeight,
+  palettes,
+  radius,
+  spacing,
+  useTheme,
+} from "./theme";
 
 /** 不支持的三种原因（`capability.unsupported_by_*` 的前端对应）。 */
 export type UnsupportedBy = "client" | "broker" | "agent";
@@ -46,6 +66,57 @@ export interface DegradedEventCardProps {
   readonly raw: RawAvailability;
 }
 
+/** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
+function buildStyles(colors: Palette) {
+  return StyleSheet.create({
+    card: {
+      gap: spacing.xs,
+      padding: spacing.md,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: colors.line,
+      // 原型 `.deg`：左边一道 3px 的竖线；`.deg.warn` 把它换成提醒色。
+      borderLeftWidth: 3,
+      borderLeftColor: colors.ink3,
+      borderRadius: radius.sm,
+      backgroundColor: colors.panel2,
+    },
+    cardAttention: {
+      borderColor: colors.warnSoft,
+      borderLeftColor: colors.warn,
+    },
+    head: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: spacing.sm,
+    },
+    glyph: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    type: {
+      flexShrink: 1,
+      color: colors.ink,
+      fontFamily: fontFamily.mono,
+      fontSize: fontSize.sm,
+      fontWeight: fontWeight.medium,
+    },
+    note: {
+      color: colors.ink2,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    rawUnavailable: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+  });
+}
+
+const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
+
 /** 渲染一张降级卡片。 */
 export function DegradedEventCard({
   eventType,
@@ -53,16 +124,34 @@ export function DegradedEventCard({
   noDedicatedView,
   raw,
 }: DegradedEventCardProps): ReactElement {
+  const theme = useTheme();
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  // 归因落在卡片根节点上：`data-unsupported-by` 与 `data-unsupported-reason` 表达同一个信号，
+  // 只在**能力不支持**时才出现（内容未下发时两个锚点都不存在）。
+  const attribution: Record<string, string> =
+    unsupportedBy === null ? {} : { unsupportedBy, unsupportedReason: unsupportedBy };
+
   return (
-    <div data-degraded-event={eventType} data-unsupported-by={unsupportedBy ?? undefined}>
-      <strong>{eventType}</strong>
+    <View
+      style={[styles.card, unsupportedBy === null && !noDedicatedView ? null : styles.cardAttention]}
+      dataSet={{ degradedEvent: eventType, ...attribution }}
+    >
+      <View style={styles.head}>
+        <Text style={styles.glyph}>⚠</Text>
+        <Text style={styles.type}>{eventType}</Text>
+      </View>
+
       {noDedicatedView ? (
-        <span data-degraded-view="no-dedicated-view">当前客户端未提供专用视图</span>
+        <Text style={styles.note} dataSet={{ degradedView: "no-dedicated-view" }}>
+          当前客户端未提供专用视图
+        </Text>
       ) : null}
-      {unsupportedBy === null ? null : <span data-unsupported-reason={unsupportedBy} />}
+
       {raw.kind === "not_synced" ? (
-        <span data-raw-unavailable={raw.reason}>原文未同步（{raw.reason}）</span>
+        <Text style={styles.rawUnavailable} dataSet={{ rawUnavailable: raw.reason }}>
+          原文未同步（{raw.reason}）
+        </Text>
       ) : null}
-    </div>
+    </View>
   );
 }

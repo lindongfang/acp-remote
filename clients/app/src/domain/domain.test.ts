@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { AgentCatalogEntry, SessionSummary } from "../protocol/common";
+import type { AgentCatalogEntry, SessionSummary, WorkspaceRef } from "../protocol/common";
 import { buildAgentCatalogView } from "./agent-catalog";
 import { buildSessionReadPageView, buildContextUsageView, contextUsageLabel } from "./conversation";
 import { buildDirectoryViews } from "./directory";
@@ -37,17 +37,39 @@ describe("R15 目录视图模型", () => {
     { alias: "site", displayName: "site" },
   ];
 
-  it("目录项只含展示名与别名，不含任何路径信息", () => {
+  it("目录项给出展示名、别名与路径槽位：未下发路径时是 null（不是拼出来的）", () => {
     const state = buildDirectoryViews(workspaces, [summary({ sessionId: "s1", workspace: workspaces[0]! })]);
     expect(state.kind).toBe("ready");
     if (state.kind !== "ready") return;
     for (const directory of state.directories) {
-      const keys = Object.keys(directory).sort();
-      expect(keys).toEqual(["alias", "counts", "displayName", "id"]);
-      expect(keys).not.toContain("path");
-      expect(keys).not.toContain("cwd");
-      expect(keys).not.toContain("displayPath");
+      expect(Object.keys(directory).sort()).toEqual(["alias", "counts", "displayName", "id", "path"]);
+      // 反例：把展示名或别名当成路径填进 `path` 时这里是 "api"/"site" → 断言变红。
+      expect(directory.path).toBeNull();
     }
+  });
+
+  it("服务端下发的路径被**逐字**带出（不规范化、不拼接、不反查）", () => {
+    const withPaths = [
+      { alias: "work-api", displayName: "api", path: "D:\\work\\api" },
+      { alias: "site", displayName: "site", path: "/home/dev/site" },
+    ] as unknown as readonly WorkspaceRef[];
+    const state = buildDirectoryViews(withPaths, [summary({ sessionId: "s1", workspace: workspaces[0]! })]);
+    expect(state.kind).toBe("ready");
+    if (state.kind !== "ready") return;
+
+    expect(state.directories.map((directory) => directory.path)).toEqual(["D:\\work\\api", "/home/dev/site"]);
+  });
+
+  it("形状不合规的路径键（非字符串 / 空串）一律当作没有下发", () => {
+    const odd = [
+      { alias: "work-api", displayName: "api", path: 42 },
+      { alias: "site", displayName: "site", path: "" },
+    ] as unknown as readonly WorkspaceRef[];
+    const state = buildDirectoryViews(odd, [summary({ sessionId: "s1", workspace: workspaces[0]! })]);
+    expect(state.kind).toBe("ready");
+    if (state.kind !== "ready") return;
+
+    expect(state.directories.map((directory) => directory.path)).toEqual([null, null]);
   });
 
   it("会话数、运行中、待处理由摘要得出", () => {
@@ -75,11 +97,11 @@ describe("R15 目录视图模型", () => {
     expect(state).toEqual({ kind: "empty", empty: "directories_without_sessions" });
   });
 
-  it("同名目录以别名区分，不做路径消歧", () => {
+  it("同名目录不被合并：两项各自带着自己的路径（消歧由上层按快照决定）", () => {
     const duplicateNamed = [
-      { alias: "api-work", displayName: "api" },
-      { alias: "api-personal", displayName: "api" },
-    ];
+      { alias: "api-work", displayName: "api", path: "D:\\work\\api" },
+      { alias: "api-personal", displayName: "api", path: "D:\\personal\\api" },
+    ] as unknown as readonly WorkspaceRef[];
     const state = buildDirectoryViews(duplicateNamed, []);
     expect(state.kind).toBe("empty");
     // 空态下仍能证明两项未被合并：换成有会话的输入再核对。
@@ -91,6 +113,7 @@ describe("R15 目录视图模型", () => {
     if (withSessions.kind !== "ready") return;
     expect(withSessions.directories).toHaveLength(2);
     expect(withSessions.directories.map((d) => d.id)).toEqual(["api-work", "api-personal"]);
+    expect(withSessions.directories.map((d) => d.path)).toEqual(["D:\\work\\api", "D:\\personal\\api"]);
   });
 });
 

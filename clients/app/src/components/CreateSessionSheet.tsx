@@ -3,15 +3,19 @@
  *
  * ## MUST 的渲染落点
  *
- * 1. **载荷只含 `agentId` 与一个目录引用**：本组件没有凭据、MCP 配置的输入框；Agent 候选来自
- *    `model.agents`（本机已配置的 Agent 目录），不是自由文本。目录既可以用本目录的已登记别名
- *    （输入框留空），也允许用户直接输入电脑上的绝对目录（`workspacePath`）。
- * 2. **入口恒可用**：设备不再有创建会话的权限维度，因此这里**没有**任何权限门控，也不再出现
- *    「需要由电脑端授予」类说明。副作用说明照常呈现（{@link create-session-model 的 CREATE_EFFECT_NOTE}）。
- * 3. **目录失败要有可理解的中文说明**：提示与失败原因都摆在输入框与提交状态旁；提示 MUST NOT
- *    声称服务端会拦截敏感目录。
- * 4. **创建中与终态分别呈现**：`creating` 分支显示「创建中」且按钮禁用（不接受重复提交）。
- * 5. **结果不确定显眼且不被自动消解**：`uncertain` 分支是一个独立的、醒目的区块，
+ * 1. **载荷只含 `agentId`、一个目录引用与一个可选的建目录布尔**：本组件没有凭据、MCP 配置的
+ *    输入框；Agent 候选来自 `model.agents`（本机已配置的 Agent 目录），不是自由文本。
+ * 2. **目录不由用户手工输入**：目录块只有两种形态——**已知目录**（从目录卡片/详情页进来：目录、
+ *    路径两行）与**顶部入口**（目录未知：选择文件夹控件 + 已选路径 + 说明 + 四类分支提示）。
+ *    两条形态都**没有**路径输入框：宿主路径要么逐字来自服务端，要么来自「浏览选定/新建」的结果，
+ *    客户端不会凭空拼一段路径让用户去改。不能逐层浏览时，说明文字给出**是哪一种**原因
+ *    （还没连上主机 / 服务端未提供该能力，见 `BROWSE_UNAVAILABLE_NOTICES`）——未协商不等于服务端不支持。
+ * 3. **入口恒可用**：设备不再有创建会话的权限维度，因此这里**没有**任何权限门控，也不再出现
+ *    「需要由电脑端授予」类说明。副作用说明照常呈现（`CREATE_EFFECT_NOTE`）。
+ * 4. **列表里不出现别名**：目录块呈现展示名与路径（别名只作机器标识，见根节点的 `data-create-sheet`）。
+ * 5. **创建中与终态分别呈现**：`creating` 分支显示「创建中」且按钮禁用（不接受重复提交）；
+ *    失败分支把**参数类**与**服务端不可用类**分开说明（`CREATE_FAILURE_NOTES`）。
+ * 6. **结果不确定显眼且不被自动消解**：`uncertain` 分支是一个独立的、醒目的区块，
  *    它只由用户点击「我知道了」才消失。
  *
  * 迁移到 RNW 原语（`design.md` D1）：`View`/`Text`/`Pressable` + `StyleSheet`。可点控件一律
@@ -19,32 +23,44 @@
  * `role="list"`/`role="listitem"` 补回；所有 `data-*` 属性名与取值原样经 `dataSet` 进 DOM。
  */
 
-import { useState } from "react";
 import type { ReactElement } from "react";
 import type { TextProps } from "react-native";
 
 import type { CreateSessionEntryModel, CreateSubmissionModel } from "../features/create-session-model";
-import { isSubmissionAvailable } from "../features/create-session-model";
+import {
+  BROWSE_UNAVAILABLE_NOTICES,
+  CREATE_DIRECTORY_HINT,
+  CREATE_FAILURE_NOTES,
+  createDirectoryNoticeText,
+  createFailureKind,
+  isSubmissionAvailable,
+} from "../features/create-session-model";
 import { UNKNOWN_CONNECTION_LABEL } from "../domain";
 import type { Palette } from "./theme";
 import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   fontFamily,
   fontSize,
+  fontWeight,
   palettes,
   radius,
   spacing,
   useTheme,
 } from "./theme";
 
-/** 提交时要带上的两样东西：选中的 Agent，与用户输入的目录（留空表示用本目录别名）。 */
+/**
+ * 提交时要带上的三样东西：选中的 Agent、用户看到的那个目录路径、以及是否允许「不存在则先创建」。
+ *
+ * `directoryPath` 留空表示「用入口所属的那个**已登记目录**」（别名引用）；顶部入口在回退列表里
+ * 选中一项时同样留空——别名不在表单载荷里，而是由仓库从它自己的单份浏览状态里读。
+ */
 export interface CreateSessionSubmit {
   readonly agentId: string;
   readonly directoryPath: string;
+  readonly createIfMissing: boolean;
 }
 
 export interface CreateSessionSheetProps {
@@ -53,6 +69,12 @@ export interface CreateSessionSheetProps {
   readonly selectedAgentId: string | null;
   readonly onSelectAgent: (agentId: string) => void;
   readonly onSubmit: (input: CreateSessionSubmit) => void;
+  /**
+   * 打开目录选择器（顶部入口形态的「选择文件夹」控件）。
+   *
+   * 可选：目录已知的形态用不到它。省略时该控件不呈现——目录块因此不会画一个点了没反应的按钮。
+   */
+  readonly onOpenDirectoryPicker?: (() => void) | undefined;
   readonly onDismissUncertain: () => void;
   readonly onClose: () => void;
 }
@@ -65,6 +87,9 @@ export interface CreateSessionSheetProps {
  * 属性原样透传：属性名与取值不得改名。语义标签是读屏与文档结构的依据，退化成 `div` 会把
  * 「这是弹层标题」这件事丢掉；同时标题上另带 `data-create-sheet-title="true"`（见下面
  * `dataSet`），消费方按**属性**取这段文字，不必依赖 RNW 的标签映射。
+ *
+ * 文案与原型一致（就是「新建会话」四个字）：目录的展示名与路径在下方的目录块里，标题里不再复述——
+ * 别名也因此没有出现在标题里的机会。
  */
 const TITLE_PROPS = { role: "heading", "aria-level": 2 } as unknown as TextProps;
 
@@ -112,30 +137,80 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    field: {
+    // 目录块：目录 / 路径 两行（标签淡、值醒目；路径用等宽字体）。
+    dirBlock: {
       gap: spacing.xs,
     },
-    fieldLabel: {
-      color: colors.ink,
+    dirRow: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: spacing.sm,
+      minWidth: 0,
+    },
+    dirKey: {
+      flexShrink: 0,
+      minWidth: 34,
+      color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+    },
+    dirValue: {
+      flexShrink: 1,
+      color: colors.ink,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.md,
       fontWeight: "600",
     },
-    input: {
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: colors.line2,
-      backgroundColor: colors.panel2,
+    dirPath: {
+      flexShrink: 1,
       color: colors.ink,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
+      // 原型 `.dv.mono` 的等宽「值」行是 500（`fontWeight.value`）——静态路径值的档位，不写数字字面量。
+      fontWeight: fontWeight.value,
+    },
+    // 「选择文件夹」控件：按钮 + 右侧的选择结果。
+    picker: {
+      flexDirection: "row",
+      alignItems: "center",
+      flexShrink: 1,
+      gap: spacing.sm,
+      minWidth: 0,
+    },
+    pickerButton: {
+      flexShrink: 0,
+      paddingVertical: spacing.xs,
+      paddingHorizontal: spacing.md,
+      borderRadius: radius.sm,
+      backgroundColor: colors.panel2,
+      borderWidth: 1,
+      borderColor: colors.line,
+    },
+    pickerButtonText: {
+      color: colors.ink,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    pickerPlaceholder: {
+      flexShrink: 1,
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.md,
     },
     hint: {
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+    },
+    noticeInfo: {
+      color: colors.ink2,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    noticeWarn: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
     },
     options: {
       gap: spacing.xs,
@@ -196,6 +271,9 @@ function buildStyles(colors: Palette) {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+    },
+    failure: {
+      gap: spacing.xs,
     },
     uncertain: {
       gap: spacing.sm,
@@ -298,17 +376,24 @@ function Submission({
     );
   }
   if (submission.kind === "failed") {
+    // 失败的两类分开呈现：形状非法是**参数类**（服务端不触碰文件系统），目录不可达是
+    // **服务端不可用类**（父层不存在或没有写权限）。把两者写成一句话会让用户以为要改目录名。
+    const kind = createFailureKind(submission.error);
+    const extra = CREATE_FAILURE_NOTES[kind];
     return (
-      <Text
-        style={styles.submission}
+      <View
+        role="alert"
+        style={styles.failure}
         dataSet={{
           createSubmission: "failed",
           failureCode: submission.error.code,
           failureRetryable: String(submission.error.retryable),
+          failureKind: kind,
         }}
       >
-        {submission.error.message}
-      </Text>
+        <Text style={styles.submission}>{submission.error.message}</Text>
+        {extra.length === 0 ? null : <Text style={styles.noticeWarn}>{extra}</Text>}
+      </View>
     );
   }
   return (
@@ -324,26 +409,34 @@ export function CreateSessionSheet({
   selectedAgentId,
   onSelectAgent,
   onSubmit,
+  onOpenDirectoryPicker,
   onDismissUncertain,
   onClose,
 }: CreateSessionSheetProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  /**
-   * 用户输入的目录：留空表示「就用本目录的已登记别名」。这是弹层内部的临时状态——它不跨路由、
-   * 也不参与任何数据判定，因此住在这里而不是 store（弹层每次打开都会重新挂载，状态自然复位）。
-   */
-  const [directoryPath, setDirectoryPath] = useState("");
+  // 顶部入口的选定结果：目录引用由它给出（已登记目录用别名，选定的路径用 `workspacePath`）。
+  // 目录块先取成局部常量：下面按 `kind` 分支时 narrowing 只依赖这一个不可变绑定。
+  const directory = model.directory;
+  const selection = directory.kind === "browse" ? directory.selection : null;
+  const picked = selection !== null && selection.kind === "path" ? selection : null;
+  // 留空 = 用入口所属的已登记目录（或回退列表里选中的那一项）——别名不在表单载荷里。
+  const directoryPath = picked === null ? "" : picked.path;
+  const createIfMissing = picked !== null && picked.willCreate;
+  const selectedName =
+    selection === null ? null : selection.kind === "registered" ? selection.displayName : selection.name;
+  const selectedPath = selection === null ? null : selection.path;
 
-  // 入口**没有**权限判断：只有「还没选 Agent」与「正在提交/已接受」两个理由会让按钮不可点。
-  const disabled = selectedAgentId === null || !isSubmissionAvailable(model.submission);
+  // 入口**没有**权限判断：只有「还没选 Agent」「目录还没定下来」与「正在提交/已接受」会让按钮不可点。
+  const directorySelected = directory.kind === "known" || selection !== null;
+  const disabled = selectedAgentId === null || !directorySelected || !isSubmissionAvailable(model.submission);
 
   return (
-    <View style={styles.sheet} dataSet={{ createSheet: model.directoryAlias }}>
+    <View style={styles.sheet} dataSet={{ createSheet: model.sheetKey }}>
       <View style={styles.head}>
         <Text {...TITLE_PROPS} style={styles.title} dataSet={{ createSheetTitle: "true" }}>
-          {`在「${model.directoryAlias}」里新建会话`}
+          新建会话
         </Text>
         <Pressable role="button" style={styles.close} dataSet={{ action: "close-create-sheet" }} onPress={onClose}>
           <Text style={styles.closeText}>关闭</Text>
@@ -355,24 +448,82 @@ export function CreateSessionSheet({
         {model.effectNote}
       </Text>
 
-      {/* 目录来源：留空用本目录别名，填写则以客户端提供的绝对目录为准（`workspacePath`）。 */}
-      <View style={styles.field}>
-        <Text style={styles.fieldLabel}>要使用的目录（可选）</Text>
-        <TextInput
-          value={directoryPath}
-          onChangeText={setDirectoryPath}
-          placeholder="留空使用本目录，或输入电脑上的绝对目录"
-          placeholderTextColor={theme.colors.ink3}
-          accessibilityLabel="要使用的目录"
-          style={styles.input}
-          // `data-create-directory` 是定位输入框的锚点；当前值另存一份，便于断言（受控控件的
-          // value 在 DOM 里只有属性值可读）。
-          dataSet={{ createDirectory: "true", createDirectoryValue: directoryPath }}
-        />
-        <Text style={styles.hint} dataSet={{ createDirectoryHint: "true" }}>
-          {model.directoryHint}
-        </Text>
-      </View>
+      {directory.kind === "known" ? (
+        // 形态一：目录已知（从目录卡片/详情页进来）。目录与路径各一行，都是服务端下发的原文。
+        <View style={styles.dirBlock} dataSet={{ createDirectoryBlock: "known" }}>
+          <View style={styles.dirRow}>
+            <Text style={styles.dirKey}>目录</Text>
+            <Text style={styles.dirValue} dataSet={{ createDirectoryName: directory.displayName }}>
+              {directory.displayName}
+            </Text>
+          </View>
+          <View style={styles.dirRow}>
+            <Text style={styles.dirKey}>路径</Text>
+            <Text style={styles.dirPath} dataSet={{ createDirectoryPath: directory.path ?? "" }}>
+              {directory.path ?? "—"}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        // 形态二：顶部入口，目录还没定（选择文件夹控件 + 已选路径 + 说明 + 分支提示）。
+        <View style={styles.dirBlock} dataSet={{ createDirectoryBlock: "browse" }}>
+          <View style={styles.dirRow}>
+            <Text style={styles.dirKey}>目录</Text>
+            <View style={styles.picker}>
+              {onOpenDirectoryPicker === undefined ? null : (
+                <Pressable
+                  role="button"
+                  style={styles.pickerButton}
+                  dataSet={{
+                    action: "open-directory-picker",
+                    pickerSupported: String(directory.unavailable === null),
+                  }}
+                  onPress={onOpenDirectoryPicker}
+                >
+                  {/* 不能浏览时控件改名为「选择已登记的目录」：它通向的正是那条保留下来的路。 */}
+                  <Text style={styles.pickerButtonText}>
+                    {directory.unavailable === null ? "选择文件夹" : "选择已登记的目录"}
+                  </Text>
+                </Pressable>
+              )}
+              <Text
+                style={selectedName === null ? styles.pickerPlaceholder : styles.dirValue}
+                dataSet={{ createSelectedName: selectedName ?? "" }}
+              >
+                {selectedName ?? "未选择任何文件"}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.dirRow}>
+            <Text style={styles.dirKey}>路径</Text>
+            <Text style={styles.dirPath} dataSet={{ createDirectoryPath: selectedPath ?? "" }}>
+              {selectedPath ?? "—"}
+            </Text>
+          </View>
+          <Text style={styles.hint} dataSet={{ createDirectoryHint: "true" }}>
+            {CREATE_DIRECTORY_HINT}
+          </Text>
+          {directory.unavailable === null ? null : (
+            // spec 场景「服务端不支持浏览」：明确说明该能力不可用，并保留已登记目录这条路。
+            // 锚点带上**原因**：未认证的起点（还没连上）不能把「还不知道服务端支持什么」写成
+            // 「服务端没有提供该能力」，两句文案各有一条（见模型的 `BROWSE_UNAVAILABLE_NOTICES`）。
+            <Text
+              role="alert"
+              style={styles.noticeWarn}
+              dataSet={{ createBrowseUnavailable: directory.unavailable }}
+            >
+              {BROWSE_UNAVAILABLE_NOTICES[directory.unavailable]}
+            </Text>
+          )}
+          {/* 分支提示：还没选定 / 会先新建 / 存在但未登记 / 已登记（四类，见模型层）。 */}
+          <Text
+            style={directory.notice.kind === "registered" ? styles.noticeInfo : styles.noticeWarn}
+            dataSet={{ createDirectoryNotice: directory.notice.kind }}
+          >
+            {createDirectoryNoticeText(directory.notice)}
+          </Text>
+        </View>
+      )}
 
       <View role="list" style={styles.options} dataSet={{ agentOptions: "true" }}>
         {model.agents.map((agent) => (
@@ -417,7 +568,7 @@ export function CreateSessionSheet({
         style={styles.submit}
         dataSet={{ action: "submit-create" }}
         onPress={() => {
-          if (selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath });
+          if (selectedAgentId !== null) onSubmit({ agentId: selectedAgentId, directoryPath, createIfMissing });
         }}
       >
         <Text style={styles.submitText}>创建会话</Text>
