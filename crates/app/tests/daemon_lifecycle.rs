@@ -603,9 +603,9 @@ fn stop_is_accepted_first_and_requests_during_shutdown_are_unavailable() {
 /// 而监听地址在这整个窗口里等不到任何 HTTP 响应。旧实现把触发推到了 `await` 点（本地排空之后），
 /// 因此同一条请求在当时会被正常作答。
 ///
-/// 不用「TCP 连接被拒」做判据：应用的 accept 循环停下后监听套接字仍然打开（在途连接排空期间由
-/// `axum::serve` 持有），内核 backlog 会照常完成握手——`connect` 仍会成功，它不能区分「已停 accept」
-/// 与「仍在 accept」。
+/// 不用「单次采样」做判据：停 accept 确实会让 `axum::serve` 立刻丢弃监听套接字、此后 `connect` 被拒，
+/// 但日志（`daemon.ingress_stopped`）与接受循环真正跳出之间隔着一个信号生效窗口——那一瞬的采样无论成败
+/// 都不能定论。判据因此落在有界预算内的「有响应 → 无响应」转变上，而不落在某一个瞬间。
 #[test]
 fn the_network_listener_stops_serving_new_connections_before_the_local_drain_finishes() {
     let mut daemon = Daemon::configure_with("stop-accept", "shutdown_grace_ms = 5000\n", "");
@@ -646,25 +646,75 @@ fn the_network_listener_stops_serving_new_connections_before_the_local_drain_fin
         "关闭序列必须已经开始：{}",
         daemon.log()
     );
+    // 判据从「日志出现后的一次采样」改成「有界预算内的状态转变」：`trigger_shutdown()` 只发取消信号，
+    // 接受循环此刻可能仍在 `accept`，内核 backlog 也会照常完成握手，所以「日志」与「真正拒绝」之间隔着
+    // 一个信号生效窗口。观察点因此落在「探针开始收不到响应」这个行为转变上，而不是日志出现的那一瞬。
+    //
+    // 就绪阶段已用同一地址断言过探针能成功（上面的 `probe_http(addr, 2s)`），因此这里「有响应 → 无响应」
+    // 的转变必须真实发生。
+    //
+    // 预算必须**严格且宽裕地**小于实现自身的强制停止时刻：本用例配置 `shutdown_grace_ms = 5000`，
+    // 关闭序列按 `deadline = started + max(grace_ms, MIN_DRAIN_MS)`（`crates/app/src/daemon.rs`）计时，
+    // 到点会对仍在 accept 的任务 `handle.abort()`，监听套接字随之关闭。若预算与之重合（5s），
+    // 那么「接受循环从不停」这条回归会在预算末端恰好被强杀掩盖成假绿（末次探针落在 abort 之后失败）。
+    // 取 2s：正常实现是毫秒级停止，约三个数量级的余量足够吸收调度抖动，又严格早于 5s 的强杀。
+    let probing_since = Instant::now();
+    let deadline = probing_since + Duration::from_secs(2);
+    // 单次 200ms 超时不足以充当「停 accept」的证据（排空/调度抖动都可能制造一次孤立失败）；
+    // 要求**连续两次**探针失败才确认转变，成功一次即重置计数。
+    let mut refused_after = None;
+    let mut consecutive_failures = 0u32;
+    while Instant::now() < deadline {
+        // 「进程已退出」不能当作「停止接受」的证据：先确认还活着，再看探针结果。
+        let alive = daemon.is_running();
+        assert!(
+            alive,
+            "在确认停 accept 之前进程就退出了——「进程已退出」不能充当「停止接受新连接」的证据：{}",
+            daemon.log()
+        );
+        if probe_http(addr, Duration::from_millis(200)) {
+            consecutive_failures = 0;
+        } else {
+            consecutive_failures += 1;
+            if consecutive_failures >= 2 {
+                refused_after = Some(probing_since.elapsed());
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // 预算内始终有响应 ⇒ 接受循环没停（实现坏了，必须红）；循环自然结束意味着从未确认转变。
+    let refused_after = refused_after.unwrap_or_else(|| {
+        panic!(
+            "2 秒预算内监听地址始终在服务新连接（接受循环没停）：{}",
+            daemon.log()
+        )
+    });
+    // 转变确实发生过（就绪探针成功过，`refused_after` 也因此存在），且必须来自停 accept 而非进程退出。
+    let alive_after = daemon.is_running();
     assert!(
-        !probe_http(addr, Duration::from_millis(500)),
-        "停接入层之后不得再服务新连接（本地排空窗口内 listener 仍在 accept）：{}",
+        alive_after,
+        "停 accept 的转变在 {refused_after:?} 内出现，但进程此时必须仍存活：{}",
         daemon.log()
-    );
-    assert!(
-        daemon.is_running(),
-        "拒绝必须是停 accept 的结果，而不是进程已退出"
     );
 
     held.close();
     assert!(daemon.wait_exit().success(), "关闭序列完成后必须正常退出");
 }
 
-/// 向监听地址发一条最小 HTTP 请求，返回「是否收到响应」。连接失败、写入失败与等不到任何字节都算
-/// 「没有响应」（停 accept 之后三种情形都会出现：套接字已关闭、backlog 里的连接无人认领）。
+/// 向监听地址发一条最小 HTTP 请求，返回「是否收到响应」。连接失败、连接超时、写入失败与等不到任何字节
+/// 都算「没有响应」；监听套接字由 `axum::serve` 持有，收到关闭信号（= 停 accept）时它立刻丢弃该套接字
+/// （宽限只用在等在途连接上），因此从那一刻起 `connect` 会被拒绝；在此之前，backlog 里已完成握手的连接
+/// 会一直无人认领，表现为写入成功而读等不到字节。两者都发生在进程仍存活期间，故本判据不区分、也不依赖
+/// 它们。
+///
+/// `connect` 也必须纳入超时：Windows 上被拒绝的 loopback 连接要约 2 秒才返回错误，只给 `read`/`write`
+/// 设超时会让一次失败探针的成本（≈2s）远超调用方给出的 `wait`，把「有界预算」变成空话——实测一次失败
+/// 探针耗时 `2.0491723s` / `2.0524813s`，且整段里本函数均未收到任何字节（耗时全在 `connect` 返回上，
+/// 不是读等待）。
 fn probe_http(addr: std::net::SocketAddr, wait: Duration) -> bool {
     use std::io::{Read as _, Write as _};
-    let Ok(mut stream) = TcpStream::connect(addr) else {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, wait) else {
         return false;
     };
     stream.set_read_timeout(Some(wait)).expect("读超时");
