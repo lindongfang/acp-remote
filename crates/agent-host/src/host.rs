@@ -12,6 +12,7 @@
 //! - 能力协商按**进程代**缓存：进程换了，缓存即失效。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -740,7 +741,8 @@ impl SessionBackendFactory for AgentHost {
     /// 才发送 `session/resume { sessionId, cwd }`。
     ///
     /// 发送的取值**全部来自持久化记录**（`request`）：本层不读存储、不解析路径、也不做任何补齐，
-    /// `cwd` 就是 `request.workspace_cwd` 原文（不含 workspace 别名）。
+    /// `cwd` 取值逐字来自 `request.workspace_cwd`（不含 workspace 别名）；只有出站参数的**形式**经
+    /// `session_resume_params` 转换（剥掉 Windows verbatim 前缀），持久化取值本身不变。
     async fn resume(
         &self,
         session: &SessionId,
@@ -826,6 +828,9 @@ impl SessionBackendFactory for AgentHost {
 ///
 /// - `cwd` 只能来自 core 已解析的 workspace 路径（本 crate 不读存储、不拼路径、也不拿 Daemon 的当前目录
 ///   冒充用户选定的 workspace）；core 未解析时显式拒绝，而不是发一个缺必填字段的请求；
+/// - 出站的 `cwd` 是**剥掉 Windows verbatim 前缀（`\\?\`）后的形式**：Agent 可能把 `cwd` 当路径片段用
+///   （例如派生会话目录名），而 `?` 是 Windows 非法文件名字符。转换只作用于这个出站参数，持久化取值与
+///   core 的解析结果都不动；前缀规则的唯一实现是 [`acp_core::strip_verbatim`]（本层不复制判断）；
 /// - `mcpServers` 本阶段固定为空数组（没有 MCP 配置来源），空数组合法。
 fn session_new_params(request: &CreateSessionRequest) -> Result<Value, PortError> {
     if request.template.is_some() {
@@ -840,8 +845,9 @@ fn session_new_params(request: &CreateSessionRequest) -> Result<Value, PortError
             "session/new 需要已解析的 workspace（ACP 要求 cwd）",
         ));
     };
+    let cwd = outbound_cwd(workspace.canonical_path());
     Ok(json!({
-        "cwd": workspace.canonical_path(),
+        "cwd": cwd,
         "mcpServers": [],
     }))
 }
@@ -849,16 +855,27 @@ fn session_new_params(request: &CreateSessionRequest) -> Result<Value, PortError
 /// `session/resume` 的参数。
 ///
 /// 两个字段都是 pinned schema（`schemas/acp/v1/upstream/schema.json` 的 `ResumeSessionRequest`）的
-/// **必填**字段，取值逐字来自持久化记录：`sessionId` 是该会话持久化的 ACP 会话标识，`cwd` 是持久化的
-/// 「创建时 canonical path」原文。字段名与形状取自 `acp-protocol` 的类型化 DTO，本层不另抄一份；
-/// 路径的解析、存在性与 `canonicalize` 一致性都由 core 在调用本端口**之前**复校验（§5.1）。
+/// **必填**字段，取值逐字来自持久化记录：`sessionId` 是该会话持久化的 ACP 会话标识（一字不改），`cwd`
+/// 是持久化的「创建时 canonical path」原文、**其出站字节剥掉 Windows verbatim 前缀（`\\?\`）**（理由同
+/// [`session_new_params`]：Agent 可能把它当路径片段用）。持久化取值本身不变，转换只作用于这个出站参数。
+/// 字段名与形状取自 `acp-protocol` 的类型化 DTO，本层不另抄一份；路径的解析、存在性与 `canonicalize`
+/// 一致性都由 core 在调用本端口**之前**复校验（§5.1）。
 fn session_resume_params(
     agent_session_id: &AgentSessionId,
     workspace_cwd: &str,
 ) -> Result<Value, PortError> {
-    let request = message::SessionResumeRequest::new(agent_session_id.as_str(), workspace_cwd);
+    let cwd = outbound_cwd(workspace_cwd);
+    let request = message::SessionResumeRequest::new(agent_session_id.as_str(), cwd.as_str());
     // 两个字符串字段的编码不会失败；沿用 `initialize` 对「自编码失败」的既有映射。
     serde_json::to_value(&request).map_err(|_| HostError::IdUnavailable.to_port_error())
+}
+
+/// 出站路径参数的形式转换：剥掉 Windows verbatim 前缀（`acp_core::strip_verbatim`，规则只在 core 一处
+/// 实现）。**只**用于发往 Agent 的参数，不回写持久化取值或 core 的解析结果。
+fn outbound_cwd(cwd: &str) -> String {
+    acp_core::strip_verbatim(PathBuf::from(cwd))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// 从 profile 造 `AgentRef`。
@@ -972,6 +989,9 @@ mod tests {
     use super::*;
 
     /// 恢复请求的参数逐字来自持久化取值：恰好是 `sessionId` 与 `cwd` 两个必填字段。
+    ///
+    /// 本用例的取值为无前缀的普通绝对路径，因此 `outbound_cwd` 的形式转换是逐字节直通；带 verbatim
+    /// 前缀时的剥离由 `outbound_cwd` 负责（其断言属集成层，见 `tests/`）。
     ///
     /// 键集合也是断言对象：**不得**把 workspace 别名、默认值或任何补齐字段发出去
     /// （`design.md` D3 的 Round 13 订正：恢复路径以持久化取值为权威、不按别名重解析）。

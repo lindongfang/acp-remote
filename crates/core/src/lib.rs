@@ -6,8 +6,10 @@
 //! wire protocol（`AGENTS.md` §5、`docs/MODULE_ARCHITECTURE.md` §4.1）；端口用 `#[async_trait]`
 //! （纯 proc-macro，不引入 runtime），由组合根注入具体实现。
 //!
-//! `derive` 是 crate 内部的**纯函数投影层**（`file.changed` 的派生源与行级 diff、展示路径相对化、
-//! 会话标题的部分更新语义），只被 `broker` 使用，因此不对外导出。
+//! `derive` 仍是 crate 内部的**纯函数投影层**（`file.changed` 的派生源与行级 diff、展示路径相对化、
+//! 会话标题的部分更新语义），只被 `broker` 使用，因此模块本身保持私有；对外**只**再导出
+//! [`strip_verbatim`] 一项——`agent-host` 在构造发往本地 ACP Agent 的 `session/new`/`session/resume`
+//! 参数时，`cwd` 必须复用同一条 Windows verbatim 前缀规则，避免出现第二份实现。
 
 pub mod broker;
 pub mod model;
@@ -15,3 +17,5 @@ pub mod ports;
 pub mod use_cases;
 
 mod derive;
+
+pub use derive::strip_verbatim;

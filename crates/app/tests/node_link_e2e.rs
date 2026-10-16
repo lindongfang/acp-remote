@@ -1765,3 +1765,237 @@ fn ac1_the_composition_root_updates_the_session_title_from_the_agent_notificatio
         composition.close().await.expect("组合根可关闭");
     });
 }
+
+// ---------------------------------------------------------------------------------------------
+// tasks 3.2（WP4）：「出站 ACP 路径参数的形式」（`openspec/changes/acp-cwd-path-form/specs/
+// local-agent-host/spec.md` 的 ADDED Requirement）在 app 层的证伪断言——同一次 `session.create`
+// 的**两侧**取值同时被观察：持久化侧不改写、线缆侧剥掉 Windows verbatim 前缀。
+//
+// 覆盖该要求的三个 Scenario：①「带 verbatim 前缀的目录在出站时被剥除」（本用例即此形态）、
+// ②「持久化取值与解析结果不被改写」（持久化侧断言）、③「非 Windows 平台保持原值」（非 Windows
+// 分支下出站取值与持久化取值逐字节相同）。
+//
+// 为什么必须是这条形状：`outbound_cwd`（`crates/agent-host/src/host.rs`）只作用于**发往 Agent 的
+// 参数**，不得回写 core 的解析结果或持久化列。两侧断言必须落在**同一个** `create_session` 上，
+// 否则「没剥前缀」与「把剥过的值写回持久化」两种相反的实现错误都能各自被另一半掩盖。因此：
+//
+// - 持久化侧读**真实 SQLite** 的 `owned_session.workspace_cwd`（core 在 `factory.create` 成功后
+//   紧接着写入的取值，来自 `ResolvedWorkspace::canonical_path()`）；
+// - 线缆侧读假 ACP 子进程经 `--dump-request-params` 写下的**真实入站报文**里的
+//   `session/new` → `params.cwd`（口径同 `crates/agent-host/tests/resume.rs`：只有真实子进程
+//   收到的字节才算线级证据）。
+//
+// 平台分工（CI 在 Linux 上跑 `cargo test -p app`，因此断言不能整条 `#[cfg(windows)]` 钡掉）：
+// Windows 上 `canonicalize` 给出 `\\?\` 前缀，出站取值必然与持久化取值**不同**；其它平台上
+// `strip_verbatim` 逐字节直通，三者必须相同。两种情况都由断言固定，不靠「不抛异常」兜底。
+// ---------------------------------------------------------------------------------------------
+
+/// [`ac1_config_with_scenario`] 的同形变体：场景固定为 `normal`，另在 profile 的 `args` 里加
+/// `--dump-request-params <path>`，让假 Agent 把**实际收到**的每条入站报文追加一行
+/// `{"method":…,"params":…}`（`acpr-fake-acp-agent.rs` 的同名选项）。
+///
+/// 路径文本按本文件既有口径处理（正斜杠 → TOML 基本字符串，与 `command` 一致），避免 Windows
+/// 反斜杠的转义问题；调用方给的 `dump_path` 同样先走 `TempRoot::toml`。
+fn ac1_config_with_request_dump(
+    data_dir: &std::path::Path,
+    agent_command: &str,
+    dump_path: &str,
+) -> app::Config {
+    let command = agent_command.replace('\\', "/");
+    let dump = dump_path.replace('\\', "/");
+    let text = format!(
+        "[daemon]\ndata_dir = {dir:?}\n[identity]\nkeystore = \"ephemeral\"\n\
+         [dev_mode]\nenabled = true\n\
+         [[agents.profiles]]\nagent_id = \"codex\"\ndisplay_name = \"Codex\"\n\
+         command = \"{command}\"\n\
+         args = [\"--scenario\", \"normal\", \"--dump-request-params\", {dump:?}]\n\
+         env_allowlist = []\ndefault = true\n",
+        dir = data_dir.display(),
+    );
+    app::Config::from_toml(&text).expect("cwd 用例配置合法")
+}
+
+/// `--dump-request-params` 的记录行（每行一条 `{"method":…,"params":…}`，由真实子进程追加写出）。
+///
+/// 文件尚未创建（子进程还没收到任何报文）时返回空表——调用方一律轮询到出现目标方法再断言，因此
+/// 「读空」不是通过、而是「还没到」。
+fn ac1_dumped_request_rows(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|error| panic!("dump 行不是 JSON：{line}（{error}）"))
+        })
+        .collect()
+}
+
+/// tasks 3.2（WP4）：`session/new` 的出站 `cwd` 剥掉 Windows verbatim 前缀，而会话行的
+/// `workspace_cwd` 仍是创建时交给 core 的 canonical 原文。
+///
+/// 可证伪点：
+/// - 实现漏掉剥离（`session_new_params` 直发 `canonical_path()`）⇒ Windows 上线缆侧断言红
+///   （出站取值带 `\\?\`，与持久化取值相同）；
+/// - 实现把剥离**回写**持久化（写库用 `outbound_cwd` 的结果）⇒ 持久化侧断言红；
+/// - 实现多剥/少剥（例如按字面量截前 4 字节而非按 `strip_verbatim` 规则）⇒ 两侧必有一条红；
+/// - 一次 `session.create` 发出**多次** `session/new`（重试语义变化）⇒ 条数断言红。
+#[test]
+fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical() {
+    use acp_core::model::{
+        Actor, AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin,
+        WorkspaceAlias,
+    };
+
+    support::block_on(async {
+        let root = support::TempRoot::new("ac1-cwd");
+        let data_dir = root.join("data");
+        support::create_owner_only_dir(&data_dir);
+        let fake = fake_acp_agent_binary();
+
+        // 真实存在、可 `canonicalize` 的工作目录：core 的 workspace 解析与本用例的前置都要求它存在，
+        // 且不是 `data_dir`（否则「两侧取值不同」的对照会被数据目录自己的形态搅浑）。
+        let workspace_dir = root.join("workspace");
+        support::create_owner_only_dir(&workspace_dir);
+        let canonical = std::fs::canonicalize(&workspace_dir)
+            .expect("工作目录可规范化")
+            .to_str()
+            .expect("路径是 UTF-8")
+            .to_owned();
+
+        // 前置（不成立即失败，绝不退化成恒真）：Windows 上 `canonicalize` 必须给出 verbatim 前缀，
+        // 否则本用例根本证伪不了「剥前缀」这一条。
+        #[cfg(windows)]
+        assert!(
+            canonical.starts_with(r"\\?\"),
+            "前提：Windows 上 canonicalize 必须给出 \\\\?\\ 前缀（本用例的转换才有对象）；实际 {canonical}"
+        );
+
+        // 期望的出站取值：规则只由 core 的唯一实现给出（`acp_core::strip_verbatim`，WP1 已公开）；
+        // 本用例不复制前缀判断。
+        let expected_wire = acp_core::strip_verbatim(std::path::PathBuf::from(&canonical))
+            .to_str()
+            .expect("剥前缀后仍是 UTF-8")
+            .to_owned();
+        #[cfg(windows)]
+        assert_ne!(
+            expected_wire, canonical,
+            "前提：Windows 上剥掉 \\\\?\\ 前缀必须真的改变取值（否则两侧断言同真而毫无信息）"
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            expected_wire, canonical,
+            "非 Windows 上 strip_verbatim 是逐字节直通，出站取值与持久化取值必须相同"
+        );
+
+        let dump_path = root.join("session-new-params.jsonl");
+        let dump_arg = root.toml("session-new-params.jsonl");
+        let (publisher, _fanout) = app::compose::forked_publisher();
+        let composition = app::compose::Composition::assemble(
+            ac1_config_with_request_dump(&data_dir, &fake.display().to_string(), &dump_arg),
+            publisher,
+        )
+        .await
+        .expect("组合根装配");
+        assert_eq!(
+            composition.seed_if_needed().await.expect("种子导入"),
+            app::compose::SeedOutcome::Imported { count: 1 }
+        );
+
+        // `ResolvedWorkspace` 直接给 canonical 原文：core 不重新解析，落盘与交给后端的是同一个取值。
+        let agent =
+            AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
+        let workspace = ResolvedWorkspace::try_new(
+            WorkspaceAlias::new("project.one").expect("alias"),
+            canonical.clone(),
+        )
+        .expect("workspace");
+        let request =
+            CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
+        let session = composition
+            .use_cases()
+            .create_session(
+                &Actor::LocalCli,
+                composition.ids().request_id(),
+                ac1_digest("ac1-cwd-session-create"),
+                request,
+                None,
+            )
+            .await
+            .expect("session.create（会拉起真实 fake ACP 子进程）");
+
+        // ① 持久化侧：真实 SQLite 的 `owned_session.workspace_cwd`。创建提交写入时该列为 `NULL`，
+        //    两列提交紧随其后（组合根 runtime 上的异步落库），因此按 15 s 上限轮询到非空再断言。
+        let pool = ac1_ro_pool(&data_dir).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let persisted: String = loop {
+            let row: Option<Option<String>> = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT workspace_cwd FROM owned_session WHERE session_id = ?1",
+            )
+            .bind(session.as_str())
+            .fetch_optional(&pool)
+            .await
+            .expect("查询 owned_session");
+            if let Some(Some(cwd)) = row {
+                break cwd;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "超时：会话 {session} 的 owned_session.workspace_cwd 未落盘（创建时的两列提交缺失）"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        assert_eq!(
+            persisted, canonical,
+            "持久化取值必须逐字节等于创建时交给 core 的 canonical 路径：\
+             出站的剥前缀只作用于发往 Agent 的参数，不得回写 `owned_session.workspace_cwd`"
+        );
+        pool.close().await;
+
+        // ② 线缆侧：假 Agent **实际收到**的 `session/new`（子进程写盘是异步的，同样轮询到就绪）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let rows: Vec<Value> = loop {
+            let rows = ac1_dumped_request_rows(&dump_path);
+            if rows.iter().any(|row| row["method"] == json!("session/new")) {
+                break rows;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "超时：假 Agent 未收到 session/new；dump 现有 {} 行：{rows:?}",
+                rows.len()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let session_new: Vec<&Value> = rows
+            .iter()
+            .filter(|row| row["method"] == json!("session/new"))
+            .collect();
+        assert_eq!(
+            session_new.len(),
+            1,
+            "一次 session.create 必须恰好发出一次 session/new（多于一次=重试语义变了，少于一次=上面已排除）；\
+             dump 实际 {} 行",
+            session_new.len()
+        );
+        let params = &session_new[0]["params"];
+        let wire_cwd = params
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("session/new 的 params.cwd 缺失或不是字符串：{params}"));
+        assert_eq!(
+            wire_cwd, expected_wire,
+            "发往 Agent 的 cwd 必须是剥掉 Windows verbatim 前缀（`\\\\?\\`）后的形式：\
+             带前缀时 Agent 可能把它当路径片段（`?` 是 Windows 非法文件名字符）"
+        );
+        // Windows 上额外钉死「转换真的发生了」：出站取值与持久化取值必须是两个不同的字节串。
+        #[cfg(windows)]
+        assert_ne!(
+            wire_cwd,
+            canonical.as_str(),
+            "Windows 上线缆侧取值不得与持久化取值相同（相同即意味着剥离没做）"
+        );
+
+        composition.host().shutdown_all().await;
+        composition.close().await.expect("组合根可关闭");
+    });
+}

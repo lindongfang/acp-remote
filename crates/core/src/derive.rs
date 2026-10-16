@@ -474,10 +474,17 @@ fn canonical_path(path: &Path) -> PathBuf {
     normalized
 }
 
-/// Windows 的 `canonicalize` 会带 verbatim 前缀（`\\?\`、`\\?\UNC\`），把它剥掉使「已 canonical 化的
-/// 根」与「词法规范化的报告路径」可比较。
+/// 剥掉 Windows 的 verbatim 前缀，使「已 `canonicalize` 化的根」与「词法规范化的报告路径」可比较。
+///
+/// - `\\?\D:\...` 剥掉前缀成为 `D:\...`。
+/// - `\\?\UNC\server\share\...`（verbatim UNC）还原为普通 UNC 形式 `\\server\share\...`。
+/// - 非 Windows 平台逐字节直通（identity），见下方 `#[cfg(not(windows))]` 版本。
+///
+/// 除 `canonical_path` 外，出站 ACP 参数（本地 Agent 的 `session/new`/`session/resume` 之 `cwd`）也复用
+/// 本函数：前缀规则必须只有一处实现。`derive` 模块本身私有，故 `pub` 只经由 `lib.rs` 顶层
+/// `pub use` 暴露为 `acp_core::strip_verbatim`，不额外打开模块。
 #[cfg(windows)]
-fn strip_verbatim(path: PathBuf) -> PathBuf {
+pub fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));
@@ -488,8 +495,12 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
     }
 }
 
+/// 非 Windows 平台上的 [`strip_verbatim`]：verbatim 前缀只存在于 Windows，故逐字节直通（identity）。
+///
+/// Windows 版本的完整语义（`\\?\` 剥除、`\\?\UNC\server\share` 还原为 `\\server\share`）见其上方
+/// `#[cfg(windows)]` 版本。`derive` 模块本身私有，故 `pub` 只经由 `lib.rs` 顶层 `pub use` 暴露。
 #[cfg(not(windows))]
-fn strip_verbatim(path: PathBuf) -> PathBuf {
+pub fn strip_verbatim(path: PathBuf) -> PathBuf {
     path
 }
 
@@ -1133,5 +1144,36 @@ mod tests {
             title_intent(Some(&raw), r#"{"title":null}"#).is_err(),
             "超过 512 字符的标题必须失败关闭"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_removes_the_windows_prefix() {
+        for (input, expected) in [
+            (r"\\?\D:\tmp\ws", r"D:\tmp\ws"),
+            (r"\\?\UNC\server\share\ws", r"\\server\share\ws"),
+        ] {
+            let stripped = strip_verbatim(PathBuf::from(input));
+            assert_eq!(stripped.as_os_str().to_string_lossy(), expected, "{input}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn strip_verbatim_is_identity_on_non_windows() {
+        // 非 Windows 分支逐字节直通：verbatim 形态的输入也不做任何改写（Linux CI 会真正执行这条）。
+        for input in [r"\\?\D:\tmp\ws", r"\\?\UNC\server\share\ws"] {
+            let stripped = strip_verbatim(PathBuf::from(input));
+            assert_eq!(stripped.as_os_str().to_string_lossy(), input, "{input}");
+        }
+    }
+
+    #[test]
+    fn strip_verbatim_leaves_unprefixed_paths_byte_identical() {
+        // 无前缀路径在两条平台上都必须逐字节不变。
+        for input in ["/tmp/ws", "relative/ws"] {
+            let stripped = strip_verbatim(PathBuf::from(input));
+            assert_eq!(stripped.as_os_str().to_string_lossy(), input, "{input}");
+        }
     }
 }
