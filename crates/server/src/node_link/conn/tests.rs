@@ -2930,9 +2930,13 @@ async fn a_peer_that_never_reads_is_finalized_within_a_bounded_time() {
     );
 
     assert_eventually_within(
-        // 写期限与慢消费者宽限同窗口：宽限 + 收尾余量（收尾无需等到下一拍 tick——写任务结束会立刻
-        // 唤醒会话的 `select!`）。
-        GRACE + Duration::from_millis(1_000),
+        // 收尾只能来自写期限：看门狗没有判据（队列按条数停在 200 条，从未触发高水位，`saturated_for()`
+        // 为 `None`），静默窗口注入 90 秒。写期限与慢消费者宽限同窗口（本用例注入 `GRACE` = 1.5 秒），
+        // 写任务到期即结束并立刻唤醒会话的 `select!`（无需等到下一拍 tick），合法路径的收尾因此在
+        // GRACE 量级。预算 GRACE + 8 秒 = 9.5 秒：对 CI 慢跑器留数倍余量，同时仍远小于本用例注入的静默
+        // 窗口（90 秒）与生产默认的看门狗窗口（`SLOW_CONSUMER_GRACE` 30 秒），「只可能由写期限收尾」
+        // 这层判别力不变。
+        GRACE + Duration::from_secs(8),
         || harness.conn.registry().active() == 0,
         "对端一个字节都不读时，连接必须在有界时间内被收尾，而不是一直停在「已连接」",
     )
@@ -2952,8 +2956,12 @@ async fn a_peer_that_never_reads_is_finalized_within_a_bounded_time() {
 /// 等不到执行——本用例因此是「写任务在推进、判据在跑」与「整体停摆」的判别器。
 ///
 /// 断言写成对**行为**的断言：连接在静默窗口量级内被收尾（从注册表摘除），而这个时间远小于写期限与
-/// 看门狗窗口（30 秒）——收尾只可能来自静默判定，不可能来自写期限或看门狗。（收尾预算含关闭路径的
-/// `CLOSE_DRAIN_BUDGET`：写卡住时排空按预算走满，因此给到 6 秒，仍远小于 30 秒。）
+/// 看门狗窗口（30 秒）——收尾只可能来自静默判定，不可能来自写期限或看门狗。
+///
+/// 收尾预算取 12 秒：合法路径的最坏情形是静默判定（第 2 拍 tick，本机 ≈1.0–1.1 秒）+ 关闭路径按预算
+/// 走满的 `CLOSE_DRAIN_BUDGET`（2 秒）+ 收尾本身，本机约 3.5 秒，CI 慢跑器/并发下实测 7.54 秒——12 秒
+/// 对慢跑器仍留数倍余量，而它仍**远小于**写期限/看门狗窗口（30 秒）与本用例注入的静默窗口（0.6 秒；
+/// 生产 90 秒）这两条竞争成因，因此「收尾只可能来自静默判定」这层判别力不变。
 #[tokio::test]
 async fn a_stuck_write_still_lets_the_session_judgments_run() {
     const SILENCE: Duration = Duration::from_millis(600);
@@ -2990,9 +2998,11 @@ async fn a_stuck_write_still_lets_the_session_judgments_run() {
     )
     .await;
 
-    // 静默窗口 + 一拍 tick + 关闭路径预算（排空与 join 各 2 秒），远小于写期限/看门狗窗口 30 秒。
+    // 预算 12 秒（静默窗口 0.6 秒 + 11.4 秒收尾余量）：合法路径最坏 = 静默判定（第 2 拍 tick
+    // ≈1.0–1.1 秒）+ 关闭路径按预算走满的 `CLOSE_DRAIN_BUDGET`（排空与 join，各 2 秒）+ 收尾，本机
+    // ≈3.5 秒、CI 慢跑器实测 7.54 秒。12 秒仍远小于写期限/看门狗窗口 30 秒，收尾只可能来自静默判定。
     assert_eventually_within(
-        SILENCE + Duration::from_millis(5_500),
+        SILENCE + Duration::from_millis(11_400),
         || harness.conn.registry().active() == 0,
         "写卡住期间静默判定仍必须按窗口生效（收尾远早于写期限/看门狗窗口）",
     )
