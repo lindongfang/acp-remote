@@ -47,17 +47,22 @@
 - **THEN** 返回服务端不可用类错误（`internal.unavailable`），不创建会话也不启动进程
 ### Requirement: 引用失败与解析失败的分类
 
-引用的别名或 Agent 不在本机登记/配置集合内时，系统 MUST 以参数类错误拒绝并 MUST NOT 触碰文件系统；别名已登记但本机解析失败（目录被删除、被替换为文件、规范化失败或权限不足）时 MUST 以服务端不可用类错误拒绝。两类失败都 MUST NOT 创建会话、MUST NOT 启动进程、MUST NOT 回退到任何替代目录或替代 Agent。
+引用的别名不在本机登记集合内时，系统 MUST 以参数类错误拒绝并 MUST NOT 触碰文件系统；引用的 Agent 在本机没有对应 profile 时，失败发生在**受理之后**，以 `failed` 终态收尾（判据见本文件「终态与幂等」）。别名已登记但本机解析失败（目录被删除、被替换为文件、规范化失败或权限不足）时 MUST 以服务端不可用类错误拒绝。三类失败都 MUST NOT 创建会话、MUST NOT 启动进程、MUST NOT 回退到任何替代目录或替代 Agent。
 
 #### Scenario: 未登记别名是参数类错误
 
 - **WHEN** payload 引用一个本机从未登记的 workspace 别名
-- **THEN** 返回授权/参数类错误（`authorization.scope_denied`），且不访问文件系统
+- **THEN** 返回参数类错误（Sync 面为 `protocol.schema_invalid`），且不访问文件系统
 
 #### Scenario: 已登记但解析失败是服务端错误
 
 - **WHEN** 别名已登记，但其目录已被删除或已不是目录
 - **THEN** 返回服务端不可用类错误（`internal.unavailable`），不创建会话也不启动进程
+
+#### Scenario: 未配置的 Agent 在受理之后失败
+
+- **WHEN** payload 的 `agentId` 在本机没有对应的 profile
+- **THEN** 该命令先被受理，随后以 `failed` 终态收尾（错误码复用既有 `internal.unavailable`），本机不产生会话行
 ### Requirement: 终态与幂等
 
 `session.create` 是有副作用的 mutation：系统 SHALL 先接受（`accepted`，`result` 与 `terminalEventId` 均为 `null`）再执行，最终以 `completed`（携带新会话标识与会话摘要）、`failed` 或 `uncertain` 之一终结。同一稳定 `requestId` 重复提交 MUST 返回首次结果，MUST NOT 产生第二个会话或第二次 Agent 启动；已接受但副作用无法确认的崩溃窗口 MUST 落 `uncertain` 终态，MUST NOT 自动重试。
