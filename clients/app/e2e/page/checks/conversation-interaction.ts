@@ -28,9 +28,12 @@
 
 import {
   SESSION_ALPHA,
+  SESSION_BETA,
+  WORKSPACES_WITH_PATHS,
   configOption,
   historyItem,
   pendingInteraction,
+  readMessage,
   readPage,
   sessionSummary,
   wireEvent,
@@ -48,7 +51,16 @@ import {
   waitFor,
 } from "../support";
 import type { Check } from "../support";
-import { TURN_ID, commandBody, enterRoute, sessionScenario, withSessionPage } from "./conversation-timeline";
+import { typeIntoInput } from "./r15-directory";
+import {
+  MESSAGE_ID,
+  TURN_ID,
+  commandBodies,
+  commandBody,
+  enterRoute,
+  sessionScenario,
+  withSessionPage,
+} from "./conversation-timeline";
 
 /** 轮次开始事件（`canCancel` 与「进行中」判定都挂在它上面）。 */
 const EVENT_TURN_STARTED = "e0000000-0000-4000-8000-000000000101";
@@ -118,6 +130,35 @@ function typeIntoComposer(container: HTMLElement, value: string): void {
   if (native?.set !== undefined && native.set !== own?.set) native.set.call(node, value);
   else if (own?.set !== undefined) own.set.call(node, value);
   node.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/**
+ * 在输入区的多行输入框里按一次回车。
+ *
+ * 派发的是**真实宿主 `keydown`**：RNW 的 `TextInput` 把 `keydown` 原样交给 `onKeyPress`
+ * （`node_modules/react-native-web/dist/exports/TextInput/index.js` 的 `handleKeyDown`），
+ * 因此这条路与用户敲键一致（`key`/`shiftKey` 都在、`preventDefault()` 也拦得住换行）。
+ * 合成事件不触发浏览器的默认行为（`isTrusted: false`），所以「Shift+回车插入换行」这一侧
+ * 由「不拦截」的断言覆盖（草稿原样留着、不产生任何提交），而不是断言换行符真的被插进去。
+ */
+function pressEnter(container: HTMLElement, options: { readonly shiftKey?: boolean } = {}): void {
+  const node = composerTextArea(container);
+  if (node === null) throw new CheckFailure("输入区：找不到多行输入框");
+  node.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      shiftKey: options.shiftKey === true,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
+/** 时间线里消息条目的标识集合（按集合比较，不依赖 DOM 顺序）。 */
+function messageIdsOf(container: HTMLElement): readonly string[] {
+  return queryAll(container, "[data-message-id]")
+    .map((node) => node.getAttribute("data-message-id") ?? "")
+    .sort();
 }
 
 const checks: readonly Check[] = [
@@ -498,6 +539,326 @@ const checks: readonly Check[] = [
         );
       } finally {
         await absent.unmount();
+      }
+    },
+  },
+  {
+    name: "CP-7 左栏：目录上下文与同目录会话，目录内搜索只影响左栏，吸底新建会话打开同一目录的弹层",
+    async run() {
+      const SIBLING_A = "aaaaaaaa-0000-4000-8000-00000000aa02";
+      const SIBLING_B = "aaaaaaaa-0000-4000-8000-00000000aa03";
+      await withSessionPage(
+        sessionScenario({
+          // 两条同名目录都带路径（`alpha` 的那条就是左栏目录上下文的来源）。
+          workspaces: WORKSPACES_WITH_PATHS,
+          sessions: [
+            sessionSummary({ id: SESSION_ALPHA, alias: "alpha", title: "部署脚本", state: "running" }),
+            sessionSummary({ id: SIBLING_A, alias: "alpha", title: "登录流程", state: "idle" }),
+            sessionSummary({ id: SIBLING_B, alias: "alpha", title: "缓存清理", state: "idle" }),
+            // 别的目录的那条：左栏**只**列同目录会话，它一次都不该出现。
+            sessionSummary({ id: SESSION_BETA, alias: "beta", title: "别处的会话", state: "idle" }),
+          ],
+          readResult: (sessionId) =>
+            readPage({
+              sessionId,
+              messages: [readMessage({ messageId: MESSAGE_ID, sessionId, role: "user", text: "看一下部署脚本", createdAt: "2026-10-01T00:09:00.000Z" })],
+            }),
+        }),
+        (container) => query(container, "[data-conversation-sidebar]") !== null,
+        "左栏渲染",
+        async (mounted) => {
+          const container = mounted.container;
+
+          // 目录上下文：展示名 + **逐字**路径 + 进详情页的入口。
+          expectEqual(
+            query(container, "[data-sidebar-directory]")?.getAttribute("data-sidebar-directory"),
+            "alpha",
+            "左栏的目录引用",
+          );
+          expectEqual(textOf(query(container, "[data-sidebar-directory-name]")), "api", "目录展示名取自快照的目录条目");
+          expectEqual(
+            query(container, "[data-sidebar-directory-path]")?.getAttribute("data-sidebar-directory-path"),
+            "D:\\secret\\vault\\repo-x",
+            "路径逐字来自服务端下发的引用",
+          );
+          expectThat(query(container, '[data-action="open-directory"]') !== null, "必须给出进入该目录详情页的入口");
+          expectThat(query(container, "[data-sidebar-search]") !== null, "必须有目录内搜索框");
+
+          // 只列同目录会话，且当前会话被标记为选中。
+          const rowsBefore = queryAll(container, "[data-sidebar-session]")
+            .map((node) => node.getAttribute("data-sidebar-session") ?? "")
+            .sort();
+          expectEqual(rowsBefore, [SIBLING_A, SIBLING_B, SESSION_ALPHA].sort(), "左栏只列同目录会话");
+          expectEqual(
+            query(container, `[data-sidebar-session="${SESSION_ALPHA}"]`)?.getAttribute("data-sidebar-session-selected"),
+            "true",
+            "当前会话在列表里被标记为选中",
+          );
+          expectEqual(query(container, `[data-sidebar-session="${SESSION_BETA}"]`), null, "别的目录的会话不得出现");
+          expectEqual(
+            query(container, "[data-sidebar-total]")?.getAttribute("data-sidebar-total"),
+            "3",
+            "「已呈现 N / M」的分母",
+          );
+          expectEqual(query(container, '[data-action="load-more-sidebar"]'), null, "三条约一页放得下，不呈现继续加载");
+
+          // 中栏的读取结果先落地再取「搜索前的事实」：`session.read` 的应答是异步的，读早了
+          // 会拿到 0 条条目，后面就会把「读取到达」误判成「搜索改了中栏」。
+          await waitFor(
+            () => query(container, "[data-timeline-entry-count]")?.getAttribute("data-timeline-entry-count") === "1",
+            "中栏读取落地",
+          );
+
+          // 搜索前的**中栏事实**：搜索只允许改左栏，因此这些值一个都不能变。
+          const beforeFacts = {
+            entryCount: query(container, "[data-timeline-entry-count]")?.getAttribute("data-timeline-entry-count"),
+            messageIds: messageIdsOf(container),
+            title: textOf(query(container, "[data-session-title]")),
+          };
+
+          typeIntoInput(container, "[data-sidebar-search]", "登录", "目录内搜索");
+          await waitFor(
+            () => query(container, "[data-sidebar-total]")?.getAttribute("data-sidebar-total") === "1",
+            "搜索把左栏收窄到一条",
+          );
+          expectEqual(
+            queryAll(container, "[data-sidebar-session]").map((node) => node.getAttribute("data-sidebar-session")),
+            [SIBLING_A],
+            "命中的那一条留下",
+          );
+          // 反例：把搜索词也带进中栏（按关键词过滤时间线）→ 下面三条会红。
+          expectEqual(
+            query(container, "[data-timeline-entry-count]")?.getAttribute("data-timeline-entry-count"),
+            beforeFacts.entryCount,
+            "搜索不得改变中栏的时间线条目数",
+          );
+          expectEqual(messageIdsOf(container), beforeFacts.messageIds, "搜索不得改变中栏的消息集合");
+          expectEqual(textOf(query(container, "[data-session-title]")), beforeFacts.title, "搜索不得改变当前会话的标题");
+
+          // 吸底新建会话：入口打开的是**同一目录**的创建弹层（弹层开关是仓库的单份状态）。
+          expectThat(
+            textOf(query(container, '[data-action="create-session-in-directory"]')).includes("新建会话"),
+            "左栏底部必须有新建会话入口",
+          );
+          click(query(container, '[data-action="create-session-in-directory"]'), "在目录内新建会话");
+          await waitFor(() => query(container, '[data-create-sheet="alpha"]') !== null, "创建弹层打开");
+        },
+      );
+    },
+  },
+  {
+    name: "CP-8 会话头：Agent 胶囊沿用连接覆盖层（缺覆盖层即「状态未知」）；路由层不再自建连接表达与导航",
+    async run() {
+      await withSessionPage(
+        sessionScenario(),
+        (container) => query(container, '[data-agent-chip="agents"]') !== null,
+        "会话头渲染",
+        async (mounted) => {
+          const container = mounted.container;
+
+          // 会话头三项：标题、状态徽标、Agent 名。
+          expectThat(textOf(query(container, "[data-session-title]")).length > 0, "会话头必须有标题");
+          expectThat(query(container, "[data-session-state]") !== null, "会话头必须有状态徽标");
+          expectEqual(textOf(query(container, "[data-session-agent]")), "codex", "会话头必须给出 Agent 名");
+
+          // 胶囊的弹层内容**始终在 DOM**（收起时只是不显示），因此静置状态就能断言。
+          expectEqual(
+            query(container, "[data-agent-popover]")?.getAttribute("data-agent-popover"),
+            "closed",
+            "弹层缺省收起",
+          );
+          const rows = queryAll(container, "[data-agent-row]");
+          expectEqual(
+            rows.map((row) => row.getAttribute("data-agent-row")).sort(),
+            ["codex-a", "codex-b"],
+            "名单来自快照的 Agent 目录（同名靠标识区分，不合并）",
+          );
+          expectEqual(
+            rows.map((row) => row.getAttribute("data-agent-connection")),
+            ["unknown", "unknown"],
+            "覆盖层缺席时状态是未知",
+          );
+          // 反例：把「缺席」写成「已断开」→ 上面这条与下面这条都会红。
+          expectEqual(query(container, '[data-agent-connection="disconnected"]'), null, "状态未知不等于已断开");
+          expectThat(
+            textOf(query(container, "[data-agent-chip-source]")).includes("连接事件"),
+            "必须说明名单来源是连接事件而不是静态配置",
+          );
+
+          // 点开：弹层展开（内容本来就在 DOM 里，展开只是把样式换掉）。
+          click(query(container, '[data-action="toggle-agent-chip"]'), "展开 Agent 胶囊");
+          await waitFor(() => query(container, '[data-agent-popover="open"]') !== null, "弹层展开");
+          expectEqual(
+            query(container, "[data-agent-chip]")?.getAttribute("data-agent-chip-open"),
+            "true",
+            "展开状态可从锚点读出",
+          );
+
+          // 路由自己那一层：不再自建导航，也不再有第二个连接状态徽标
+          // （连接状态只由共享外壳的设备胶囊表达；本用例不挂外壳，因此这里只需证明路由层没有）。
+          const pageLayer = query(container, '[data-route="session"]')?.parentElement ?? null;
+          expectThat(pageLayer !== null, '对话页应渲染出带 `data-route="session"` 的容器');
+          expectEqual(query(pageLayer, "nav"), null, "路由层不得再自建导航");
+          expectEqual(
+            query(pageLayer, "[data-connection-state], [data-connection-label]"),
+            null,
+            "路由层不得再拼第二个连接状态徽标",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "CP-9 回车提交、Shift+回车不提交；不可提交时回车不发任何命令",
+    async run() {
+      await withSessionPage(
+        sessionScenario({
+          events: [
+            wireEvent({
+              globalSequence: 11,
+              eventId: EVENT_TURN_STARTED,
+              sessionId: SESSION_ALPHA,
+              eventType: "turn.started",
+              view: { turnId: TURN_ID, state: "running" },
+            }),
+          ],
+        }),
+        (container) => query(container, "[data-composer-input]") !== null,
+        "输入区渲染",
+        async (mounted) => {
+          const container = mounted.container;
+          typeIntoComposer(container, PROMPT_TEXT);
+          await waitFor(() => mounted.composition?.store.draftOf(SESSION_ALPHA) === PROMPT_TEXT, "草稿进入仓库");
+
+          // Shift+回车：换行那一支，**不**提交——草稿原样留着，页面上不出现任何提交呈现。
+          pressEnter(container, { shiftKey: true });
+          expectEqual(composerTextArea(container)?.value, PROMPT_TEXT, "Shift+回车不得清空草稿");
+          expectEqual(mounted.composition?.store.draftOf(SESSION_ALPHA), PROMPT_TEXT, "Shift+回车不得提交草稿");
+          expectEqual(query(container, "[data-submission]"), null, "Shift+回车不得产生任何提交呈现");
+
+          // 回车：提交当前草稿（载荷与点击发送同一形状）。
+          pressEnter(container);
+          await waitFor(() => query(container, "[data-submission]") !== null, "回车提交后呈现提交态");
+          expectEqual(
+            commandBodies(mounted.host?.sent ?? [], "session.prompt").length,
+            1,
+            "回车应恰好发出一次 session.prompt",
+          );
+          expectEqual(
+            commandBody(mounted.host?.sent ?? [], "session.prompt")?.["payload"],
+            { content: [{ type: "text", text: PROMPT_TEXT }] },
+            "回车提交的载荷取自当前草稿",
+          );
+        },
+      );
+
+      // 已关闭的会话：回车 MUST NOT 发出任何命令，也不改变输入区的状态说明。
+      const closed = await enterRoute(
+        sessionScenario({ sessions: [sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "closed" })] }),
+      );
+      try {
+        await waitFor(() => query(closed.container, '[data-composer="closed"]') !== null, "已关闭的输入区");
+        const reason = textOf(query(closed.container, "[data-submit-unavailable]"));
+        pressEnter(closed.container);
+        expectEqual(
+          commandBodies(closed.host?.sent ?? [], "session.prompt").length,
+          0,
+          "不可提交时回车 MUST NOT 发出 session.prompt",
+        );
+        expectEqual(query(closed.container, "[data-submission]"), null, "回车不得产生提交呈现");
+        expectEqual(
+          textOf(query(closed.container, "[data-submit-unavailable]")),
+          reason,
+          "回车不得改变输入区的状态说明",
+        );
+      } finally {
+        await closed.unmount();
+      }
+    },
+  },
+  {
+    name: "CP-10 跳转胶囊：没有用户输入时不呈现；输入滚出视口时呈现，跳转后短暂高亮目标",
+    async run() {
+      // ① 一条用户输入都没有：MUST NOT 呈现跳转入口。
+      const withoutInput = await enterRoute(
+        sessionScenario({
+          readResult: (sessionId) =>
+            readPage({
+              sessionId,
+              messages: [
+                readMessage({
+                  messageId: MESSAGE_ID,
+                  sessionId,
+                  role: "agent",
+                  text: "先看下这个项目怎么跑起来",
+                  createdAt: "2026-10-01T00:09:00.000Z",
+                }),
+              ],
+            }),
+        }),
+      );
+      try {
+        await waitFor(
+          () => query(withoutInput.container, `[data-message-id="${MESSAGE_ID}"]`) !== null,
+          "Agent 消息渲染",
+        );
+        expectEqual(
+          query(withoutInput.container, "[data-jump-pill]"),
+          null,
+          "没有用户输入时 MUST NOT 呈现跳转入口",
+        );
+      } finally {
+        await withoutInput.unmount();
+      }
+
+      // ② 一条用户输入 + 后面一长串 Agent 消息：滚到底后用户输入在视口外 → 呈现向上跳转入口。
+      const longText = Array.from({ length: 24 }, (_, line) => `第 ${String(line)} 行：这一段用来把时间线撑长。`).join("\n");
+      const messages = [
+        readMessage({
+          messageId: MESSAGE_ID,
+          sessionId: SESSION_ALPHA,
+          role: "user",
+          text: "先看下这个项目怎么跑起来",
+          createdAt: "2026-10-01T00:09:00.000Z",
+        }),
+        ...Array.from({ length: 12 }, (_, index) =>
+          readMessage({
+            messageId: `f0000000-0000-4000-8000-00000000${String(index + 10).padStart(4, "0")}`,
+            sessionId: SESSION_ALPHA,
+            role: "agent",
+            text: longText,
+            createdAt: `2026-10-01T00:${String(10 + index).padStart(2, "0")}:00.000Z`,
+          }),
+        ),
+      ];
+      const scrolled = await enterRoute(sessionScenario({ readResult: (sessionId) => readPage({ sessionId, messages }) }));
+      try {
+        const lastMessageId = `f0000000-0000-4000-8000-00000000${String(21).padStart(4, "0")}`;
+        await waitFor(
+          () => query(scrolled.container, `[data-message-id="${lastMessageId}"]`) !== null,
+          "最后一条消息渲染（读取已完成）",
+        );
+
+        window.scrollTo(0, document.body.scrollHeight);
+        await waitFor(
+          () => query(scrolled.container, '[data-jump-pill="up"]') !== null,
+          "用户输入滚出视口后呈现向上跳转入口",
+        );
+        expectEqual(
+          query(scrolled.container, '[data-jump-pill="up"]')?.getAttribute("data-jump-remaining"),
+          "1",
+          "向上还有一条输入",
+        );
+
+        click(query(scrolled.container, '[data-jump-pill="up"]'), "跳到你最近的输入");
+        await waitFor(
+          () => query(scrolled.container, `[data-jump-flash="${MESSAGE_ID}"]`) !== null,
+          "跳转后短暂高亮目标",
+        );
+      } finally {
+        await scrolled.unmount();
+        // 滚动位置是**页面级**的事实：留给后面的用例会让它们跑在一个被滚到底的文档上。
+        window.scrollTo(0, 0);
       }
     },
   },

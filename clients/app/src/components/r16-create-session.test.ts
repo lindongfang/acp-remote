@@ -3,12 +3,18 @@
  *
  * 逐条 MUST NOT 的负向用例：
  *
- * - **载荷只含两个引用** → 对越界载荷（`cwd`/`path`/`mcpServers`/`token`）构造违规输入，
- *   断言 `assertCreateSessionRefs` 抛错；并断言实际派发的命令 JSON 里只有那两个键、
- *   不含任何路径或凭据字面量。
+ * - **载荷恰好三类键集** → 别名、浏览选定的路径、会先新建的路径各一条：键集分别是
+ *   `{agentId, workspaceAlias}`、`{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
+ *   对越界载荷（`cwd`/`path`/`mcpServers`/`token`）、「目录引用不唯一」与「别名 + createIfMissing」
+ *   构造违规输入，断言 `assertCreateSessionRefs` 抛错；并断言实际派发的命令 JSON 里只有那三类键、
+ *   不含任何凭据字面量。
  * - **候选只来自本机已配置的 Agent** → 选一个不在快照 `agents` 里的 Agent 提交，
  *   断言被拒绝且**一条命令都没发**。
- * - **无权限时入口不可用且说明原因** → 断言按钮 `disabled` **且**说明文字出现在 HTML 里。
+ * - **目录不由用户手工输入** → 弹层里没有目录输入框；目录与路径逐字来自服务端（别名不出现文本里）。
+ * - **服务端不支持浏览时明确说明而不是静默失败** → 顶部入口形态给出说明、控件改名为「选择已登记的
+ *   目录」、回退列表列出已登记目录，且**一条浏览命令都不发**（发了必然被 feature 门控拒）。
+ * - **不能浏览的原因分岔** → 「还没连上主机」与「已连上但未协商到该能力」是**两条**文案：前者 MUST NOT
+ *   写成「服务端没有提供该能力」（未认证时 `selectedFeatures` 本来就是空的，本机无从知道服务端支持什么）。
  * - **创建中与终态分别呈现** → 提交中的记录渲染「创建中」并禁止重复提交；
  *   `completed` 渲染已创建；`uncertain` 渲染显眼区块。
  * - **结果不确定不被自动消解** → 之后再来无关事件，它仍然在列表里。
@@ -19,18 +25,42 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { CreateSessionSheet } from "./CreateSessionSheet";
+import { DirectoryPicker } from "./DirectoryPicker";
+import type { ClientStore } from "../features/client-store";
+import type {
+  BrowseUnavailableReason,
+  CreateSessionEntryModel,
+  DirectoryBrowseState,
+  DirectorySelection,
+  RegisteredDirectoryModel,
+} from "../features/create-session-model";
 import {
+  BROWSE_EMPTY_FALLBACK_NOTICES,
+  BROWSE_OFFLINE_NOTICE,
+  BROWSE_TRUNCATED_NOTICE,
+  BROWSE_UNSUPPORTED_NOTICE,
   CREATE_EFFECT_NOTE,
+  CREATE_FOLDER_NAME_RULE,
+  WORKSPACE_BROWSE_FEATURE,
   assertCreateSessionRefs,
   buildCreateSessionCommand,
+  buildDirectoryBrowserModel,
+  createDirectoryNoticeText,
+  initialDirectoryBrowseState,
 } from "../features/create-session-model";
-import type { CreateSessionEntryModel } from "../features/create-session-model";
-import { resources, storeWith } from "../features/testing/fixtures";
+import type { RecordingGateway } from "../features/testing/fixtures";
+import { WORKSPACES_WITH_PATHS, onlineStore, resources, storeWith } from "../features/testing/fixtures";
 
 const ALIAS = "work-api";
 const AGENTS = [
   { agentId: "claude", displayName: "Claude", default: true },
   { agentId: "codex", displayName: "codex", default: false },
+] as const;
+
+/** 只含协议字段的已登记目录（回退列表的输入）。 */
+const REGISTERED: readonly RegisteredDirectoryModel[] = [
+  { alias: "work-api", displayName: "api", path: "D:\\work\\api" },
+  { alias: "personal-api", displayName: "api", path: null },
 ];
 
 /** 渲染创建弹层。 */
@@ -42,13 +72,47 @@ function renderSheet(model: CreateSessionEntryModel, selectedAgentId: string | n
       onSelectAgent: () => undefined,
       onSubmit: () => undefined,
       onDismissUncertain: () => undefined,
+      onOpenDirectoryPicker: () => undefined,
       onClose: () => undefined,
     }),
   );
 }
 
+/** 渲染目录选择器（纯组件：直接喂一份浏览状态，不经过仓库）。 */
+function renderPicker(input: {
+  readonly supported: boolean;
+  readonly browse: DirectoryBrowseState;
+  readonly initialPath: string | null;
+  readonly registeredDirectories?: readonly RegisteredDirectoryModel[];
+  /** 「不能逐层浏览」的原因；**缺省不传**——与「调用方给不出更准的事实」那条路径逐字相同。 */
+  readonly unavailable?: BrowseUnavailableReason;
+}): string {
+  return renderToStaticMarkup(
+    createElement(DirectoryPicker, {
+      initialPath: input.initialPath,
+      registeredDirectories: input.registeredDirectories ?? REGISTERED,
+      browser: buildDirectoryBrowserModel({ supported: input.supported, browse: input.browse }),
+      // `exactOptionalPropertyTypes`：缺省时不能显式传 `undefined`。
+      ...(input.unavailable === undefined ? {} : { unavailable: input.unavailable }),
+      onBrowse: () => undefined,
+      onCreateFolder: () => undefined,
+      onConfirm: () => undefined,
+      onCancel: () => undefined,
+    }),
+  );
+}
+
 /**
- * 取出带指定 `data-action` 的那个控件的**开标签**。
+ * 渲染结果的**可见文本**（剥掉标签）。
+ *
+ * 「别名不出现在界面上」是文本口径的断言（别名仍作为机器标识留在 `data-*` 上，例如
+ * `data-create-sheet`），因此它必须在文本上判，而不是在整段 HTML 上判。
+ */
+function textOfHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, "");
+}
+
+/** 取出带指定 `data-action` 的那个控件的**开标签**。
  *
  * 为什么不写成 `/<tag data-action=…>…/`：迁移到 RNW 原语后标签名由渲染器决定
  * （`role="button"` → `<button>`），标签不是本仓库的契约（`design.md` D2：机读证据
@@ -61,13 +125,89 @@ function openingTagWithAction(html: string, action: string): string {
   return tag[0];
 }
 
-/** 尚未提交时的弹层模型（入口没有权限维度，因此不需要任何授权输入）。 */
+/**
+ * 第 `index` 条 `session.create` 派发的载荷。
+ *
+ * 按命令名筛过一遍：目录浏览（`workspace.browse`）同样会进记账网关的派发列表，直接按下标取会把
+ * 「第几条创建命令」读成「第几条命令」。形状逐层确证后按记录读键——断言要证明的正是这个对象的
+ * 键集与取值。
+ */
+function createPayloadAt(gateway: RecordingGateway, index: number): Record<string, unknown> {
+  const commands = gateway.dispatches.filter((command) => command.body.command === "session.create");
+  const body = commands[index]?.body;
+  if (body === undefined || body.command !== "session.create") {
+    throw new Error(`派发记录里没有第 ${index} 条 session.create`);
+  }
+  const payload: unknown = body.payload;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new Error("session.create 的载荷不是对象");
+  }
+  // 上面已确证「是对象、非数组」，这里只是补上索引签名。
+  return payload as Record<string, unknown>;
+}
+
+/** 当前弹层模型（顶部入口形态：目录未知）。 */
+function browseEntry(store: ClientStore): CreateSessionEntryModel {
+  return store.createEntry(null);
+}
+
+/** 尚未提交时的弹层模型（目录带服务端下发的路径；入口没有权限维度，因此不需要任何授权输入）。 */
 function entryModel(): CreateSessionEntryModel {
-  const { store } = storeWith({ resources: resources({ agents: AGENTS }) });
+  const { store } = storeWith({
+    resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+  });
   return store.createEntry(ALIAS);
 }
 
-describe("R16 提交载荷只含一个目录引用与 Agent 标识", () => {
+/** 给一条 `workspace.browse` 请求回一条结果：用例扮演服务端的那一侧。 */
+function answerBrowse(
+  store: ClientStore,
+  requestId: string,
+  result: { readonly path: string | null; readonly entries: readonly Record<string, unknown>[]; readonly truncated: boolean },
+): void {
+  store.apply({
+    kind: "command_result",
+    result: {
+      protocolVersion: 1,
+      type: "command.result",
+      messageId: "bbbbbbbb-1111-4111-8111-0000000000aa",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+      connectionSequence: "1",
+      body: {
+        requestId,
+        command: "workspace.browse",
+        status: "completed",
+        acceptedAt: "2026-10-01T00:00:01.000Z",
+        terminalEventId: null,
+        result,
+        error: null,
+      },
+    },
+  });
+}
+
+/** 走一次真实的浏览往返（派发请求 → 注入服务端应答）。 */
+function browseTo(
+  store: ClientStore,
+  gateway: RecordingGateway,
+  path: string | null,
+  entries: readonly Record<string, unknown>[],
+  truncated = false,
+): void {
+  const outcome = store.browseDirectory(path);
+  if (!outcome.ok) throw new Error(`浏览请求未派发：${outcome.reason}`);
+  // 请求必须**真的经网关发出去**、带的还得是这一层：只看仓库状态的变更证明不了这条往返
+  // （那一路没有任何东西在断言命令发到了线上）。这也是「浏览结果来自服务端」这个前提的一部分。
+  const dispatched = gateway.dispatches[gateway.dispatches.length - 1]?.body;
+  if (dispatched === undefined || dispatched.command !== "workspace.browse" || dispatched.payload.path !== path) {
+    throw new Error(
+      `第 ${String(gateway.dispatches.length)} 条派发记录不是 path=${String(path)} 的 workspace.browse`,
+    );
+  }
+  answerBrowse(store, outcome.requestId, { path, entries, truncated });
+}
+
+describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目录开关", () => {
   it("别名载荷：键恰好是 agentId 与 workspaceAlias", () => {
     const command = buildCreateSessionCommand({
       refs: { workspaceAlias: ALIAS, agentId: "claude" },
@@ -83,7 +223,7 @@ describe("R16 提交载荷只含一个目录引用与 Agent 标识", () => {
     expect(serialized).not.toMatch(/token|password|apiKey|mcp|exportId|templateParams/i);
   });
 
-  it("目录载荷：键恰好是 agentId 与 workspacePath", () => {
+  it("目录载荷：键恰好是 agentId 与 workspacePath（不带建目录开关）", () => {
     const command = buildCreateSessionCommand({
       refs: { workspacePath: "D:\\work\\api", agentId: "claude" },
       requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d",
@@ -95,9 +235,26 @@ describe("R16 提交载荷只含一个目录引用与 Agent 标识", () => {
     // 反例：把路径塞进 workspaceAlias（或反过来丢弃它）→ 键集与取值都会红。
     expect(Object.keys(payload).sort()).toEqual(["agentId", "workspacePath"]);
     expect(payload["workspacePath"]).toBe("D:\\work\\api");
+    // 缺席即假：显式给 `false` 与不给，发出的载荷逐字相同（不凭空多一个键）。
+    expect(assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: false })).toEqual(
+      { workspacePath: "D:\\work\\api", agentId: "claude" },
+    );
   });
 
-  it("越界载荷与「目录引用不唯一」一律被拒绝", () => {
+  it("会先新建：键恰好是 agentId、workspacePath 与 createIfMissing", () => {
+    const command = buildCreateSessionCommand({
+      refs: { workspacePath: "D:\\work\\new-api", agentId: "claude", createIfMissing: true },
+      requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d",
+      messageId: "bbbbbbbb-1111-4111-8111-00000000000b",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+    });
+
+    const payload = command.body.payload as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(["agentId", "createIfMissing", "workspacePath"]);
+    expect(payload["createIfMissing"]).toBe(true);
+  });
+
+  it("越界载荷、「目录引用不唯一」与「别名 + 建目录开关」一律被拒绝", () => {
     const violations: readonly Record<string, unknown>[] = [
       { workspaceAlias: ALIAS, agentId: "claude", cwd: "D:\\work\\api" },
       { workspaceAlias: ALIAS, agentId: "claude", path: "/home/dev/api" },
@@ -108,13 +265,17 @@ describe("R16 提交载荷只含一个目录引用与 Agent 标识", () => {
       // 目录引用必须**恰好一个**：两个都给，或都不给。
       { workspaceAlias: ALIAS, workspacePath: "D:\\work\\api", agentId: "claude" },
       { agentId: "claude" },
+      // 别名解析出的目录必然已存在，因此建目录开关与它互斥。
+      { workspaceAlias: ALIAS, agentId: "claude", createIfMissing: true },
+      // 开关不是布尔。
+      { workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: "yes" },
     ];
 
     for (const payload of violations) {
       // 反例：若断言放宽成「至少一个目录引用」，后两条不会抛错，用例变红。
       expect(() => assertCreateSessionRefs(payload)).toThrow();
     }
-    // 对照：两种合法载荷仍然通过（证明断言不是「一律拒绝」）。
+    // 对照：三种合法载荷仍然通过（证明断言不是「一律拒绝」）。
     expect(assertCreateSessionRefs({ workspaceAlias: ALIAS, agentId: "claude" })).toEqual({
       workspaceAlias: ALIAS,
       agentId: "claude",
@@ -123,46 +284,80 @@ describe("R16 提交载荷只含一个目录引用与 Agent 标识", () => {
       workspacePath: "D:\\work\\api",
       agentId: "claude",
     });
+    expect(assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: true })).toEqual({
+      workspacePath: "D:\\work\\api",
+      agentId: "claude",
+      createIfMissing: true,
+    });
   });
 
-  it("实际派发的命令：别名与目录两条路径的载荷键都只有两个", () => {
-    const { store, gateway } = storeWith({ resources: resources({ agents: AGENTS }) });
-
-    const aliased = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
-    expect(aliased.ok).toBe(true);
-    const aliasedBody = gateway.dispatches[0]?.body;
-    if (aliasedBody === undefined || aliasedBody.command !== "session.create") throw new Error("未派发 session.create");
-    expect(Object.keys(aliasedBody.payload).sort()).toEqual(["agentId", "workspaceAlias"]);
-    expect(aliasedBody.requestId).toBe(aliased.ok ? aliased.requestId : "");
-
-    // 用户输入目录时走 `workspacePath`：别名那份不再出现在载荷里。
-    const pathBased = store.submitCreateSession({
-      directoryAlias: ALIAS,
-      agentId: "claude",
-      directoryPath: "D:\\work\\api",
+  it("实际派发的命令：三条路径的载荷键集恰好是规范允许的三类", () => {
+    const { store, gateway } = onlineStore({
+      resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+      features: [WORKSPACE_BROWSE_FEATURE],
     });
-    expect(pathBased.ok).toBe(true);
-    const pathBody = gateway.dispatches[1]?.body;
-    if (pathBody === undefined || pathBody.command !== "session.create") throw new Error("未派发 session.create");
-    expect(Object.keys(pathBody.payload).sort()).toEqual(["agentId", "workspacePath"]);
-    expect((pathBody.payload as Record<string, unknown>)["workspacePath"]).toBe("D:\\work\\api");
+
+    // 1) 目录已知（卡片/详情页入口）：别名引用。
+    expect(store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" }).ok).toBe(true);
+    expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "workspaceAlias"]);
+
+    // 2) 顶部入口浏览到一个**已存在**的目录：路径引用，不带建目录开关。
+    browseTo(store, gateway, "D:\\work", [{ name: "api", path: "D:\\work\\api", registered: true }]);
+    const existing = store.directoryBrowser().entries[0];
+    if (existing === undefined) throw new Error("浏览结果里应有条目");
+    store.selectBrowsedDirectory({
+      kind: "path",
+      path: existing.path,
+      name: existing.name,
+      registered: existing.registered,
+      willCreate: false,
+    });
+    expect(
+      store.submitCreateSession({
+        directoryAlias: null,
+        agentId: "claude",
+        directoryPath: existing.path,
+        createIfMissing: false,
+      }).ok,
+    ).toBe(true);
+    expect(Object.keys(createPayloadAt(gateway, 1)).sort()).toEqual(["agentId", "workspacePath"]);
+
+    // 3) 顶部入口在当前层新建一层：路径引用 + `createIfMissing`。
+    const created = store.createFolderInBrowse("new-api");
+    expect(created).toEqual({ ok: true, path: "D:\\work\\new-api" });
+    expect(
+      store.submitCreateSession({
+        directoryAlias: null,
+        agentId: "claude",
+        directoryPath: "D:\\work\\new-api",
+        createIfMissing: true,
+      }).ok,
+    ).toBe(true);
+    expect(Object.keys(createPayloadAt(gateway, 2)).sort()).toEqual(["agentId", "createIfMissing", "workspacePath"]);
+    expect(createPayloadAt(gateway, 2)["workspacePath"]).toBe("D:\\work\\new-api");
+    expect(createPayloadAt(gateway, 2)["createIfMissing"]).toBe(true);
+
+    // 反例：任何一条载荷里出现凭据类字段名，这里会出现它们，断言变红。
+    for (const command of gateway.dispatches) {
+      expect(JSON.stringify(command)).not.toMatch(/token|password|apiKey|mcpServers|exportId|templateParams/i);
+    }
   });
 });
 
 describe("R16 候选只来自本机已配置的 Agent", () => {
-  it("弹层只列出快照里的 Agent", () => {
+  it("弹层只列出快照里的 Agent，且目录不由用户手工输入", () => {
     const html = renderSheet(entryModel());
     expect(html).toContain('data-agent-id="claude"');
     expect(html).toContain('data-agent-id="codex"');
     // 反例：若候选来自任何其它来源（例如本地配置或用户输入），这里会出现它，断言变红。
     expect(html).not.toContain("gemini");
-    // 弹层里唯一的文本输入是**目录**输入（Agent 不是自由文本）；多出别的输入框会变红。
-    expect(html.match(/<input/g) ?? []).toHaveLength(1);
-    expect(html).toContain('data-create-directory="true"');
+    // 目录**不是**自由文本：弹层里没有任何文本输入框（Agent 也不是），路径只可能是服务端下发的那一份。
+    expect(html.match(/<input/g) ?? []).toHaveLength(0);
+    expect(html).toContain('data-create-directory-block="known"');
   });
 
   it("选一个不在目录里的 Agent 提交：被拒绝且一条命令都不发", () => {
-    const { store, gateway } = storeWith({ resources: resources({ agents: AGENTS }) });
+    const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
 
     const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "not-installed" });
 
@@ -172,7 +367,7 @@ describe("R16 候选只来自本机已配置的 Agent", () => {
   });
 
   it("与授权无关：没有任何授权输入也照样能提交（创建入口不再有权限门控）", () => {
-    const { store, gateway } = storeWith({ resources: resources({ agents: AGENTS }) });
+    const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
 
     const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
 
@@ -196,27 +391,359 @@ describe("R16 入口不因权限不可用", () => {
     expect(openingTagWithAction(html, "submit-create")).not.toContain("disabled");
   });
 
-  it("副作用说明照常呈现，且目录输入有可理解的失败提示", () => {
+  it("副作用说明照常呈现，且目录块给出目录/路径两行与说明", () => {
     const html = renderSheet(entryModel(), "claude");
     // spec「创建入口的副作用说明」：入口旁必须说明会在电脑上启动一个 Agent 进程。
     expect(html).toContain("将在你的电脑上启动一个 Agent 进程");
     expect(html).toContain(CREATE_EFFECT_NOTE);
-    // 目录输入的提示：说清留空用本目录、填写要绝对路径，且不声称服务端会替用户拦截。
-    expect(html).toContain('data-create-directory-hint="true"');
-    expect(html).toContain("绝对目录");
+    // 目录块：展示名与路径逐字来自服务端，别名不出现在**文本**里（它只作机器标识）。
+    expect(html).toContain('data-create-directory-name="api"');
+    expect(html).toContain("D:\\work\\api");
+    expect(textOfHtml(html)).not.toContain(ALIAS);
     expect(html).not.toContain("服务端会拦截");
   });
 
-  it("目录输入为空时提交按钮可用（不因缺少目录路径而禁用）", () => {
+  it("目录已知时提交按钮可用（目录引用已经定下来了）", () => {
     const html = renderSheet(entryModel(), "claude");
-    // 目录留空是有意义的默认（用本目录别名），因此它不该让入口不可点。
     expect(openingTagWithAction(html, "submit-create")).not.toContain("disabled");
   });
 });
 
+describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这条路", () => {
+  /** 未协商 `core.workspace-browse.v1` 的在线仓库 + 顶部入口形态的弹层。 */
+  function unsupportedSheet(): { readonly store: ClientStore; readonly gateway: RecordingGateway } {
+    const fixture = onlineStore({
+      resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+      features: [],
+    });
+    fixture.store.openCreateSheetToBrowse();
+    return fixture;
+  }
+
+  it("弹层说明不可用、控件改名为「选择已登记的目录」，且不呈现手工输入", () => {
+    const { store } = unsupportedSheet();
+    const html = renderSheet(browseEntry(store), "claude");
+
+    expect(html).toContain('data-create-directory-block="browse"');
+    // 已连上（在线）却没协商到该能力：这才是「服务端没有提供」那一支。
+    expect(html).toContain('data-create-browse-unavailable="unsupported"');
+    expect(html).toContain(BROWSE_UNSUPPORTED_NOTICE);
+    expect(openingTagWithAction(html, "open-directory-picker")).toContain('data-picker-supported="false"');
+    // 反例：把「选择文件夹」画成一个点了必然失败的控件时，这里会看到 supported=true。
+    expect(html.match(/<input/g) ?? []).toHaveLength(0);
+    // 还没选定：提示说明下一步，且分支提示就是「unselected」。
+    expect(html).toContain('data-create-directory-notice="unselected"');
+    expect(html).toContain(createDirectoryNoticeText({ kind: "unselected" }));
+  });
+
+  it("还没连上时说的是「还没连上」，不是「服务端没有提供该能力」", () => {
+    // 未认证 / 还没拿到协商结果时 `selectedFeatures` 本来就是空的，把它当成「服务端不支持浏览」
+    // 是在断言一件本机无从知道的事（R16-3 的未认证起点就是这一支）。
+    const { store } = storeWith({
+      resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+    });
+    store.openCreateSheetToBrowse();
+    const html = renderSheet(browseEntry(store), "claude");
+
+    expect(html).toContain('data-create-browse-unavailable="offline"');
+    expect(html).toContain(BROWSE_OFFLINE_NOTICE);
+    // 反例：把「还没协商」写成「服务端没有提供该能力」时，这两条会红。
+    expect(html).not.toContain(BROWSE_UNSUPPORTED_NOTICE);
+    expect(html).not.toContain("服务端没有提供目录浏览能力");
+    // 控件仍只是改名、不是不可点：已登记目录那条路照旧在。
+    expect(openingTagWithAction(html, "open-directory-picker")).toContain('data-picker-supported="false"');
+
+    // 对照：同一形态在**已连上**却没协商到该能力时才是「服务端没有提供」（上一条用例）。
+    const online = unsupportedSheet();
+    expect(renderSheet(browseEntry(online.store), "claude")).toContain(BROWSE_UNSUPPORTED_NOTICE);
+  });
+
+  it("选择器也说明不可用，并把已登记目录摆出来（不是空白页）", () => {
+    const { store } = unsupportedSheet();
+    const html = renderPicker({
+      supported: false,
+      browse: store.state.directoryBrowse,
+      initialPath: null,
+      unavailable: "unsupported",
+    });
+
+    expect(html).toContain('data-directory-picker="open"');
+    expect(html).toContain('data-browse-unsupported="unsupported"');
+    expect(html).toContain(BROWSE_UNSUPPORTED_NOTICE);
+    // 已登记目录逐项可点：展示名是文本，别名与（可能缺席的）路径是机器属性。
+    expect(html).toContain('data-action="choose-registered-directory"');
+    expect(html).toContain('data-registered-alias="work-api"');
+    expect(html).toContain('data-registered-alias="personal-api"');
+    // 路径未下发的那一项不得用别名或展示名冒充路径。
+    expect(html).toContain("路径未下发");
+    // 不支持浏览时不呈现「选择此文件夹」：当前层无从浏览，画出来只会必然失败。
+    expect(html).not.toContain('data-action="confirm-directory"');
+  });
+
+  it("选择器在未连上时同样分岔：不说「服务端没有提供」，也不建议升级服务端", () => {
+    // 选择器自己只有一个「能不能」的布尔，分不出「还没连上」与「服务端未提供」：原因由页面从
+    // 顶部入口的目录块带进来（`unavailable`）。
+    const { store } = storeWith({ resources: resources({ workspaces: [], agents: [] }) });
+    store.openCreateSheetToBrowse();
+    store.openDirectoryPicker();
+    const html = renderPicker({
+      supported: false,
+      browse: store.state.directoryBrowse,
+      initialPath: null,
+      registeredDirectories: [],
+      unavailable: "offline",
+    });
+
+    expect(html).toContain('data-browse-unsupported="offline"');
+    expect(html).toContain(BROWSE_OFFLINE_NOTICE);
+    // 反例：把「还没连上」写成「服务端没有提供该能力」→ 这条红。
+    expect(html).not.toContain(BROWSE_UNSUPPORTED_NOTICE);
+    // 空列表那一行只说本机能做的事，且**不**建议升级服务端（真实原因还不是「服务端不支持」）。
+    expect(html).toContain(BROWSE_EMPTY_FALLBACK_NOTICES.offline);
+    expect(html).not.toContain("把服务端升级到支持目录浏览的版本");
+
+    // 对照：已连上却没协商到该能力时，那条建议仍然逐字保留（这正是旧文案唯一成立的那一支）。
+    const connected = renderPicker({
+      supported: false,
+      browse: store.state.directoryBrowse,
+      initialPath: null,
+      registeredDirectories: [],
+      unavailable: "unsupported",
+    });
+    expect(connected).toContain(BROWSE_EMPTY_FALLBACK_NOTICES.unsupported);
+    expect(connected).toContain("把服务端升级到支持目录浏览的版本");
+  });
+
+  it("一条浏览命令都不发，且从回退列表选了之后载荷仍只有两个引用", () => {
+    const { store, gateway } = unsupportedSheet();
+    store.openDirectoryPicker();
+
+    // 反例：发了再看反应的话，这里会多一条必然被 feature 门控拒掉的 workspace.browse。
+    expect(store.browseDirectory(null)).toEqual({
+      ok: false,
+      reason: "服务端未提供目录浏览能力（未协商 core.workspace-browse.v1）",
+    });
+    expect(gateway.dispatches).toEqual([]);
+
+    // 回退列表给出的是**已登记目录**：选定它走别名引用，键集与目录层级入口逐字相同。
+    const pick: DirectorySelection = {
+      kind: "registered",
+      alias: "work-api",
+      displayName: "api",
+      path: "D:\\work\\api",
+    };
+    store.selectBrowsedDirectory(pick);
+    const html = renderSheet(browseEntry(store), "claude");
+    expect(html).toContain('data-create-directory-notice="registered"');
+    expect(html).toContain('data-create-selected-name="api"');
+
+    expect(store.submitCreateSession({ directoryAlias: null, agentId: "claude", directoryPath: "", createIfMissing: false }).ok).toBe(
+      true,
+    );
+    expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "workspaceAlias"]);
+    expect(createPayloadAt(gateway, 0)["workspaceAlias"]).toBe("work-api");
+  });
+});
+
+describe("R16 浏览：已登记目录被标注、逐层选定与新建一层目录", () => {
+  /** 已协商浏览能力的在线仓库（带快照与 Agent）。 */
+  function browsingStore(): { readonly store: ClientStore; readonly gateway: RecordingGateway } {
+    const fixture = onlineStore({
+      resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
+      features: [WORKSPACE_BROWSE_FEATURE],
+    });
+    fixture.store.openCreateSheetToBrowse();
+    fixture.store.openDirectoryPicker();
+    return fixture;
+  }
+
+  it("根列表从「此电脑」开始，进入一层后已登记的子目录被标注", () => {
+    const { store, gateway } = browsingStore();
+    browseTo(store, gateway, null, [
+      { name: "D:", path: "D:\\", registered: false },
+      { name: "C:", path: "C:\\", registered: false },
+    ]);
+    const root = store.directoryBrowser();
+    expect(root.here).toBeNull();
+    expect(root.current.name).toBe("此电脑");
+    expect(root.canConfirm).toBe(false);
+    expect(root.entries.map((entry) => entry.name)).toEqual(["D:", "C:"]);
+    expect(renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: null })).toContain(
+      "此电脑（先选一个盘）",
+    );
+
+    browseTo(store, gateway, "D:\\", [
+      { name: "work", path: "D:\\work", registered: false },
+      { name: "kept", path: "D:\\kept", registered: true },
+    ]);
+    const level = store.directoryBrowser();
+    expect(level.crumbs.map((crumb) => crumb.name)).toEqual(["此电脑", "D:"]);
+    expect(level.canConfirm).toBe(true);
+    const html = renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: "D:\\" });
+    // 反例：不标注登记状态时这一条会红（两处：文案与机器属性）。
+    expect(html).toContain("已登记");
+    expect(html).toContain('data-entry-registered="true"');
+    expect(html).toContain('data-entry-path="D:\\kept"');
+    // 截断说明与「还有更多」必须出现，不得静默丢弃。
+    browseTo(store, gateway, "D:\\kept", [], true);
+    const truncated = renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: "D:\\kept" });
+    expect(truncated).toContain('data-browse-truncated="true"');
+    expect(truncated).toContain(BROWSE_TRUNCATED_NOTICE);
+    // 空层与截断是两种可区分的呈现。
+    expect(truncated).toContain('data-browse-state="empty"');
+  });
+
+  it("「上一级」回到面包屑里的上一段，路径取自服务端回显（不是客户端算出来的）", () => {
+    const { store, gateway } = browsingStore();
+    browseTo(store, gateway, "D:\\", [{ name: "work", path: "D:\\work", registered: false }]);
+    browseTo(store, gateway, "D:\\work", [{ name: "api", path: "D:\\work\\api", registered: true }]);
+    expect(store.directoryBrowser().here).toBe("D:\\work");
+
+    const parent = store.directoryBrowser().parent;
+    if (parent === null) throw new Error("这一层应有上一级");
+    expect(parent.path).toBe("D:\\");
+
+    browseTo(store, gateway, parent.path, [{ name: "work", path: "D:\\work", registered: false }]);
+    expect(store.directoryBrowser().crumbs.map((crumb) => crumb.path)).toEqual([null, "D:\\"]);
+  });
+
+  it("选定当前层：路径取服务端回显、名称取面包屑那一段，载荷用 workspacePath", () => {
+    const { store, gateway } = browsingStore();
+    browseTo(store, gateway, "D:\\", [{ name: "work", path: "D:\\work", registered: false }]);
+    browseTo(store, gateway, "D:\\work", []);
+
+    const selection = store.directoryBrowser();
+    expect(selection.canConfirm).toBe(true);
+    expect(selection.current.name).toBe("work");
+    store.selectBrowsedDirectory({
+      kind: "path",
+      path: selection.here ?? "",
+      name: selection.current.name,
+      registered: selection.current.registered,
+      willCreate: false,
+    });
+    const html = renderSheet(browseEntry(store), "claude");
+    expect(html).toContain('data-create-selected-name="work"');
+    expect(html).toContain('data-create-directory-path="D:\\work"');
+    expect(html).toContain('data-create-directory-notice="unregistered"');
+    expect(html).toContain(createDirectoryNoticeText({ kind: "unregistered", path: "D:\\work" }));
+  });
+
+  it("新建一层目录：候选路径由父层回显 + 用户输入构成，选定带 willCreate 且说明会先建", () => {
+    const { store, gateway } = browsingStore();
+    browseTo(store, gateway, "D:\\", [{ name: "work", path: "D:\\work", registered: false }]);
+    browseTo(store, gateway, "D:\\work", []);
+
+    expect(store.createFolderInBrowse("  new-api  ")).toEqual({ ok: true, path: "D:\\work\\new-api" });
+    const html = renderSheet(browseEntry(store), "claude");
+    expect(html).toContain('data-create-selected-name="new-api"');
+    expect(html).toContain('data-create-directory-path="D:\\work\\new-api"');
+    expect(html).toContain('data-create-directory-notice="will_create"');
+    expect(html).toContain(createDirectoryNoticeText({ kind: "will_create", path: "D:\\work\\new-api" }));
+  });
+
+  it("POSIX 父层按它自己的分隔符拼接（不做规范化）", () => {
+    const { store, gateway } = browsingStore();
+    browseTo(store, gateway, "/home/dev", []);
+    expect(store.createFolderInBrowse("api")).toEqual({ ok: true, path: "/home/dev/api" });
+  });
+
+  it("名字非法：明确拒绝，既不构造候选路径也不改选定", () => {
+    const { store, gateway } = browsingStore();
+    browseTo(store, gateway, "D:\\", []);
+
+    expect(store.createFolderInBrowse("   ")).toEqual({ ok: false, reason: CREATE_FOLDER_NAME_RULE });
+    expect(store.createFolderInBrowse("a\\b")).toEqual({ ok: false, reason: CREATE_FOLDER_NAME_RULE });
+    expect(store.createFolderInBrowse("D:")).toEqual({ ok: false, reason: CREATE_FOLDER_NAME_RULE });
+    // 反例：静默失败时选定会变成一条拼出来的路径，这里会红。
+    expect(store.state.directoryBrowse.selection).toBeNull();
+    expect(store.directoryBrowser().folderError).toBe(CREATE_FOLDER_NAME_RULE);
+    expect(renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: "D:\\" })).toContain(
+      'data-browse-folder-error="true"',
+    );
+  });
+
+  it("浏览到已登记的目录：分支提示说明它已登记", () => {
+    const { store } = browsingStore();
+    store.selectBrowsedDirectory({
+      kind: "path",
+      path: "D:\\kept",
+      name: "kept",
+      registered: true,
+      willCreate: false,
+    });
+    const html = renderSheet(browseEntry(store), "claude");
+    expect(html).toContain('data-create-directory-notice="registered"');
+    expect(html).toContain(createDirectoryNoticeText({ kind: "registered", displayName: "kept", path: "D:\\kept" }));
+  });
+
+  it("形状不符的浏览结果明确失败，不当成「这一层没有子目录」", () => {
+    const { store, gateway } = browsingStore();
+    const outcome = store.browseDirectory(null);
+    if (!outcome.ok) throw new Error("浏览请求应已派发");
+    // 服务端答非所问（例如回了别的命令的结果）：必须落到 failed，而不是空层。
+    answerBrowseWithRaw(store, outcome.requestId, { sessionId: "dddddddd-0000-4000-8000-0000000000ff" });
+    const browser = store.directoryBrowser();
+    expect(browser.status).toBe("failed");
+    expect(browser.entries).toEqual([]);
+    expect(gateway.dispatches).toHaveLength(1);
+    expect(
+      renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: null }),
+    ).toContain('data-browse-state="failed"');
+  });
+
+  it("读取失败的那一层：不给「新建文件夹」，也不把它说成已进入的层", () => {
+    const { store } = browsingStore();
+    const outcome = store.browseDirectory("D:\\broken");
+    if (!outcome.ok) throw new Error("浏览请求应已派发");
+    // 服务端答非所问 → failed。失败层里 `here` **不是** null：它是乐观写入的**请求**路径。
+    answerBrowseWithRaw(store, outcome.requestId, { sessionId: "dddddddd-0000-4000-8000-0000000000ff" });
+    const browser = store.directoryBrowser();
+    expect(browser.status).toBe("failed");
+    expect(browser.here).toBe("D:\\broken");
+    // 模型那边对同一状态的口径：「当前层可选」要求 `status === "ready"`（失败层不可选）。
+    expect(browser.canConfirm).toBe(false);
+
+    const html = renderPicker({ supported: true, browse: store.state.directoryBrowse, initialPath: "D:\\broken" });
+
+    expect(html).toContain('data-browse-state="failed"');
+    // 反例：只判 `here !== null` 时，失败层与「＋ 新建文件夹…」会同屏。
+    expect(html).not.toContain('data-browse-new-folder-row="true"');
+    expect(html).not.toContain('data-action="open-new-folder"');
+    // 也不把它说成「当前位置：…」——那一层并没有读出来（`here` 只是当初请求的路径）。
+    expect(html).toContain("这一层没读出来：D:\\broken");
+    expect(html).not.toContain("当前位置：");
+    // 对照：「选择此文件夹」的口径本来就没变（同一个 `status === "ready"`）。
+    expect(openingTagWithAction(html, "confirm-directory")).toContain("disabled");
+  });
+});
+
+/** 注入一条**形状不符**的浏览结果（服务端答非所问的那一路）。 */
+function answerBrowseWithRaw(store: ClientStore, requestId: string, result: Record<string, unknown>): void {
+  store.apply({
+    kind: "command_result",
+    result: {
+      protocolVersion: 1,
+      type: "command.result",
+      messageId: "bbbbbbbb-1111-4111-8111-0000000000ab",
+      connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+      connectionSequence: "1",
+      body: {
+        requestId,
+        command: "workspace.browse",
+        status: "completed",
+        acceptedAt: "2026-10-01T00:00:01.000Z",
+        terminalEventId: null,
+        result,
+        error: null,
+      },
+    },
+  });
+}
+
 describe("R16 创建中与终态分别呈现", () => {
   it("提交后呈现「创建中」且不接受重复提交", () => {
-    const { store, gateway } = storeWith({ resources: resources({ agents: AGENTS }) });
+    const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
     store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
 
     const model = store.createEntry(ALIAS);
@@ -230,14 +757,14 @@ describe("R16 创建中与终态分别呈现", () => {
     // 两者都落在同一个开标签里（属性顺序由渲染器决定，因此断言不看顺序）。
     const submit = openingTagWithAction(html, "submit-create");
     expect(submit).toContain("aria-disabled=\"true\"");
-    // e2e 判定的是**原生**属性（`hasAttribute("disabled")`，见 `e2e/page/checks/r16-create.ts:74`），
-    // 所以单独钉住它：`\s` 前缀把 `aria-disabled` 排除在外。
+    // e2e 判定的是**原生**属性（`hasAttribute("disabled")`），所以单独钉住它：
+    // `\s` 前缀把 `aria-disabled` 排除在外。
     expect(submit).toMatch(/\sdisabled\b/);
     expect(gateway.dispatches).toHaveLength(1);
   });
 
   it("completed 终态进入已创建并带新会话标识", () => {
-    const { store } = storeWith({ resources: resources({ agents: AGENTS }) });
+    const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
     const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
@@ -266,8 +793,8 @@ describe("R16 创建中与终态分别呈现", () => {
     expect(renderSheet(model, "claude")).toContain('data-create-submission="created"');
   });
 
-  it("失败终态呈现结构化失败原因（码与可重试分别可见）", () => {
-    const { store } = storeWith({ resources: resources({ agents: AGENTS }) });
+  it("失败终态按参数类与服务端不可用类分开说明", () => {
+    const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
     const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
@@ -295,13 +822,14 @@ describe("R16 创建中与终态分别呈现", () => {
     expect(html).toContain('data-create-submission="failed"');
     expect(html).toContain('data-failure-code="capability.unsupported_by_agent"');
     expect(html).toContain('data-failure-retryable="false"');
+    expect(html).toContain('data-failure-kind="other"');
     expect(html).toContain("Agent 缺少凭据");
   });
 });
 
 describe("R16 结果不确定显眼且不被自动消解", () => {
   it("服务端确认 uncertain 后呈现显眼区块，并在后续事件后仍然保留", () => {
-    const { store } = storeWith({ resources: resources({ agents: AGENTS }) });
+    const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
     const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
@@ -359,5 +887,16 @@ describe("R16 结果不确定显眼且不被自动消解", () => {
     // 用户主动处理之后才消失。
     store.dismissUncertain(outcome.requestId);
     expect(store.state.uncertainRequestIds).toEqual([]);
+  });
+});
+
+describe("R16 浏览状态本身没有路径拼接", () => {
+  it("初始状态只有「此电脑」那一段，且没有任何条目", () => {
+    const state = initialDirectoryBrowseState();
+    expect(state.crumbs).toEqual([{ name: "此电脑", path: null, registered: false }]);
+    expect(state.entries).toEqual([]);
+    expect(state.selection).toBeNull();
+    expect(state.open).toBe(false);
+    expect(state.loaded).toBe(false);
   });
 });

@@ -43,7 +43,11 @@ import {
 } from "../fixtures";
 import {
   CANONICAL_ORIGIN,
+  CheckFailure,
+  click,
+  domText,
   expectEqual,
+  expectNone,
   expectThat,
   mountScenario,
   navigate,
@@ -73,6 +77,34 @@ const EVENT_INFO_CHANGED = "d0000000-0000-4000-8000-000000000201";
 const EVENT_COMMANDS_CHANGED = "d0000000-0000-4000-8000-000000000202";
 /** 协议已知、客户端没有专用视图的**节点级**类型（没有会话可挂）。 */
 const EVENT_DEVICE_REVOKED = "d0000000-0000-4000-8000-000000000203";
+
+/** 折叠块与右栏联动检查用的事件标识（每类一条，互不重复）。 */
+const EVENT_TOOL_RUN = "d0000000-0000-4000-8000-000000000301";
+const EVENT_TOOL_DONE = "d0000000-0000-4000-8000-000000000302";
+const EVENT_TERMINAL_TWO = "d0000000-0000-4000-8000-000000000303";
+const EVENT_FILE_CHANGED = "d0000000-0000-4000-8000-000000000304";
+/** 第二条**同样进行中**（默认同样展开）的工具调用：用来证明显式操作不牵连同状态的另一条。 */
+const EVENT_TOOL_RUN_TWO = "d0000000-0000-4000-8000-000000000305";
+/** 进行中 / 已完成的两个工具调用标识。 */
+const TOOL_RUN_ID = "d0000000-0000-4000-8000-000000000311";
+const TOOL_DONE_ID = "d0000000-0000-4000-8000-000000000312";
+/** 第二条进行中的工具调用标识。 */
+const TOOL_RUN_TWO_ID = "d0000000-0000-4000-8000-000000000314";
+/** 第二块终端输出（默认收起，用于证明「显式操作只影响本条」）。 */
+const TERMINAL_TWO_ID = "d0000000-0000-4000-8000-000000000313";
+/** 右栏那一处改动。 */
+const CHANGE_ID = "d0000000-0000-4000-8000-000000000321";
+/** 结构化差异行的行内容：只有服务端下发的这一份，客户端不拼、不从原文还原。 */
+const DIFF_TEXT = ["  const opts = resolveOptions(input);", "- const idleTimeout = 30_000;", "+ const idleTimeout = 10_000;"] as const;
+/** 未下发的差异正文（只可能作为不可信原文出现在诊断槽位里）。 */
+const RAW_DIFF = JSON.stringify({ params: { update: { sessionUpdate: "tool_call_update", rawInput: { path: "docs/RAW_ONLY_MARKER.md" } } } });
+
+/** 条目形态检查（CP-6）用的事件与轮次标识。 */
+const EVENT_TURN_RUNNING = "d0000000-0000-4000-8000-000000000401";
+const EVENT_TURN_FAILED = "d0000000-0000-4000-8000-000000000402";
+const EVENT_TERMINAL_THREE = "d0000000-0000-4000-8000-000000000403";
+const TURN_RUNNING_ID = "d0000000-0000-4000-8000-000000000411";
+const TURN_FAILED_ID = "d0000000-0000-4000-8000-000000000412";
 
 /** 工具调用视图：卡片只用到这三个字段（`domain/timeline.ts` 的 `buildTimelineCard`）。 */
 function toolCallView(state: string): Record<string, unknown> {
@@ -128,6 +160,45 @@ function conversationMessage(): Record<string, unknown> {
     createdAt: "2026-10-01T00:09:00.000Z",
     turnId: TURN_ID,
   });
+}
+
+/** Agent 消息标识（与用户那条成对，用于比对两种气泡的形态）。 */
+const AGENT_MESSAGE_ID = "d0000000-0000-4000-8000-000000000005";
+
+/** Agent 的消息（同上，只用于气泡形态对照）。 */
+function agentMessage(): Record<string, unknown> {
+  return readMessage({
+    messageId: AGENT_MESSAGE_ID,
+    sessionId: SESSION_ALPHA,
+    role: "agent",
+    text: "先看 `session.ts` 的关闭路径。",
+    createdAt: "2026-10-01T00:09:30.000Z",
+    turnId: TURN_ID,
+  });
+}
+
+/** ACP 原文（只有诊断槽位会呈现它；差异行必须来自结构化来源而不是解析它）。 */
+function rawAcp(rawJson: string): Record<string, unknown> {
+  return {
+    mediaType: "application/json",
+    rawJson,
+    byteLength: String(rawJson.length),
+    sha256: "kQ8x2mB7yV1cJ0nP5rT9wZa3dE6fH8iL1sU4vX7yZ0a",
+  };
+}
+
+/** 某个折叠块的有效展开值（`data-entry-expanded`；折叠块缺席即用例外加一次定位判红）。 */
+function foldState(container: HTMLElement, eventId: string): string {
+  const fold = query(container, `[data-fold-entry="event:${eventId}"]`);
+  if (fold === null) throw new CheckFailure(`容器里找不到 event:${eventId} 的折叠块`);
+  return fold.getAttribute("data-entry-expanded") ?? "";
+}
+
+/** 某个锚点的计算样式；锚点缺席即判红（与 `ui-stylesheet` 同一做法）。 */
+function computedStyleOf(container: HTMLElement, selector: string, label: string): CSSStyleDeclaration {
+  const element = query(container, selector);
+  if (element === null) throw new CheckFailure(`${label}：容器里找不到 ${selector}`);
+  return getComputedStyle(element);
 }
 
 /** 会话页默认场景：一条本机自有、进行中的会话 + 两个 scope；事件与读回应答由各用例给出。 */
@@ -463,6 +534,313 @@ const checks: readonly Check[] = [
           expectThat(
             query(entry, "[data-unsupported-reason]") === null,
             "节点级未覆盖事件不得被归为三类能力不支持",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "CP-4 结构化条目的展开收起：默认值由状态决定，显式操作只影响本条",
+    async run() {
+      await withSessionPage(
+        sessionScenario({
+          events: [
+            wireEvent({
+              globalSequence: 11,
+              eventId: EVENT_TOOL_RUN,
+              sessionId: SESSION_ALPHA,
+              eventType: "tool.call.started",
+              createdAt: "2026-10-01T00:12:00.000Z",
+              view: { toolCallId: TOOL_RUN_ID, turnId: TURN_ID, title: "编辑 src/auth/session.ts", state: "in_progress" },
+            }),
+            wireEvent({
+              globalSequence: 12,
+              eventId: EVENT_TOOL_DONE,
+              sessionId: SESSION_ALPHA,
+              eventType: "tool.call.completed",
+              createdAt: "2026-10-01T00:13:00.000Z",
+              view: { toolCallId: TOOL_DONE_ID, turnId: TURN_ID, title: "读取 src/auth/config.ts", state: "completed" },
+            }),
+            wireEvent({
+              globalSequence: 13,
+              eventId: EVENT_TERMINAL_TWO,
+              sessionId: SESSION_ALPHA,
+              eventType: "terminal.output",
+              createdAt: "2026-10-01T00:14:00.000Z",
+              view: { terminalId: TERMINAL_TWO_ID, chunkIndex: "0", stream: "stdout", text: "deploy ok", truncated: false },
+            }),
+            // 第二条**同样进行中**的条目：它与 EVENT_TOOL_RUN 默认同样展开，因此「点一条却把另一条
+            // 也改了」会被下面「另一条原封不动」的断言抓住（异状态的条目默认就是 false，抓不住）。
+            wireEvent({
+              globalSequence: 14,
+              eventId: EVENT_TOOL_RUN_TWO,
+              sessionId: SESSION_ALPHA,
+              eventType: "tool.call.started",
+              createdAt: "2026-10-01T00:14:30.000Z",
+              view: { toolCallId: TOOL_RUN_TWO_ID, turnId: TURN_ID, title: "编辑 src/auth/token.ts", state: "in_progress" },
+            }),
+          ],
+        }),
+        (container) =>
+          query(container, `[data-fold-entry="event:${EVENT_TOOL_RUN}"]`) !== null &&
+          query(container, `[data-fold-entry="event:${EVENT_TOOL_RUN_TWO}"]`) !== null &&
+          query(container, `[data-fold-entry="event:${EVENT_TOOL_DONE}"]`) !== null &&
+          query(container, `[data-fold-entry="event:${EVENT_TERMINAL_TWO}"]`) !== null,
+        "四个折叠块渲染",
+        async (mounted) => {
+          const container = mounted.container;
+
+          // 默认值只跟条目自己的状态走：进行中的展开、已完成的收起、终端块（没有「进行中」这一档）收起。
+          expectEqual(foldState(container, EVENT_TOOL_RUN), "true", "进行中的工具调用必须默认展开");
+          expectEqual(foldState(container, EVENT_TOOL_RUN_TWO), "true", "同为 in_progress 的第二条也必须默认展开");
+          expectEqual(foldState(container, EVENT_TOOL_DONE), "false", "已完成的工具调用必须默认收起");
+          expectEqual(foldState(container, EVENT_TERMINAL_TWO), "false", "终端输出块必须默认收起");
+
+          // 收起是「留在 DOM 里但不可见」：内容不因为收起而消失。
+          expectEqual(
+            computedStyleOf(
+              container,
+              `[data-fold-entry="event:${EVENT_TOOL_DONE}"] [data-fold-body]`,
+              "已完成工具调用的正文",
+            ).display,
+            "none",
+            "收起的折叠块正文必须不可见",
+          );
+
+          // 显式操作：点开进行中的那一条 → 只有它收起，其它条目不变。
+          click(
+            query(container, `[data-action="toggle-timeline-entry"][data-entry-key="event:${EVENT_TOOL_RUN}"]`),
+            "收起进行中的工具调用",
+          );
+          await waitFor(() => foldState(container, EVENT_TOOL_RUN) === "false", "该条目收起");
+          expectEqual(foldState(container, EVENT_TOOL_RUN), "false", "显式收起必须覆盖默认展开");
+          // 判别力：这条与上一条**默认同样展开**。若实现把「任一点击」做成「收起全部」，这里会读到
+          // `false` 而变红；异状态的条目默认就是 `false`，抓不住这种实现。
+          expectEqual(foldState(container, EVENT_TOOL_RUN_TWO), "true", "同为 in_progress 的另一条不受影响");
+          expectEqual(foldState(container, EVENT_TOOL_DONE), "false", "同状态之外的条目不受影响");
+          expectEqual(foldState(container, EVENT_TERMINAL_TWO), "false", "另一个条目不受影响");
+
+          // 再点同一条 → 回到展开：翻转依据的是**当前生效值**（含刚写下的那条覆盖），而不是条目状态
+          // 推出的默认值。判别力：把子组件上抛的 `!expanded` 写成 `expanded`、或省掉第二个参数
+          // （页面收到 `undefined`，该条退回默认值），上面那次收起就等不到 `false`；若按默认值翻转，
+          // 这一次会停在 `false`。
+          click(
+            query(container, `[data-action="toggle-timeline-entry"][data-entry-key="event:${EVENT_TOOL_RUN}"]`),
+            "再点进行中的工具调用（回到展开）",
+          );
+          await waitFor(() => foldState(container, EVENT_TOOL_RUN) === "true", "该条目重新展开");
+          expectThat(
+            computedStyleOf(
+              container,
+              `[data-fold-entry="event:${EVENT_TOOL_RUN}"] [data-fold-body]`,
+              "进行中工具调用的正文",
+            ).display !== "none",
+            "再次点选后正文必须重新可见",
+          );
+          expectEqual(
+            query(container, `[data-action="toggle-timeline-entry"][data-entry-key="event:${EVENT_TOOL_RUN}"]`)
+              ?.getAttribute("data-entry-expanded"),
+            "true",
+            "表头锚点必须与折叠块的有效展开值一致",
+          );
+
+          // 反向同样成立：收起同状态的**另一条** → 先前那条的有效值原封不动。若实现把「任一点击」
+          // 做成「切换全部」，这里读到 `false` 就会变红。
+          click(
+            query(container, `[data-action="toggle-timeline-entry"][data-entry-key="event:${EVENT_TOOL_RUN_TWO}"]`),
+            "收起另一条进行中的工具调用",
+          );
+          await waitFor(() => foldState(container, EVENT_TOOL_RUN_TWO) === "false", "另一条收起");
+          expectEqual(foldState(container, EVENT_TOOL_RUN_TWO), "false", "另一条显式收起");
+          expectEqual(foldState(container, EVENT_TOOL_RUN), "true", "同为 in_progress 的另一条仍原封不动");
+
+          // 反方向也成立：显式展开覆盖默认收起。
+          click(
+            query(container, `[data-action="toggle-timeline-entry"][data-entry-key="event:${EVENT_TERMINAL_TWO}"]`),
+            "展开终端输出块",
+          );
+          await waitFor(() => foldState(container, EVENT_TERMINAL_TWO) === "true", "终端块展开");
+          expectThat(
+            computedStyleOf(
+              container,
+              `[data-fold-entry="event:${EVENT_TERMINAL_TWO}"] [data-fold-body]`,
+              "终端块正文",
+            ).display !== "none",
+            "展开后折叠块的正文必须可见",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "CP-5 从条目联动到右栏：右栏逐行呈现结构化差异行，选中时间线条目即选中同一处改动",
+    async run() {
+      await withSessionPage(
+        sessionScenario({
+          events: [
+            wireEvent({
+              globalSequence: 11,
+              eventId: EVENT_FILE_CHANGED,
+              sessionId: SESSION_ALPHA,
+              eventType: "file.changed",
+              createdAt: "2026-10-01T00:15:00.000Z",
+              view: {
+                changeId: CHANGE_ID,
+                kind: "update",
+                displayPath: "src/auth/session.ts",
+                summary: "替换 1 行",
+                addedLines: "2",
+                deletedLines: "1",
+                outsideWorkspace: false,
+                diffLines: [
+                  { kind: "context", text: DIFF_TEXT[0] },
+                  { kind: "deleted", text: DIFF_TEXT[1] },
+                  { kind: "added", text: DIFF_TEXT[2] },
+                ],
+              },
+              acp: rawAcp(RAW_DIFF),
+            }),
+          ],
+        }),
+        (container) =>
+          query(container, `[data-file-change="${CHANGE_ID}"]`) !== null &&
+          query(container, `[data-timeline-card="file-changed"] [data-action="select-file-change"]`) !== null,
+        "改动进入右栏且时间线可选中",
+        async (mounted) => {
+          const container = mounted.container;
+          const filesColumn = query(container, '[data-conversation-column="files"]');
+          expectThat(filesColumn !== null, "变更文件必须落在右栏");
+
+          // 右栏逐行呈现结构化差异行：退回「只有统计」的形态时，下面这几条同时变红。
+          expectEqual(
+            query(filesColumn, "[data-diff-region]")?.getAttribute("data-diff-region"),
+            "lines",
+            "右栏必须有结构化差异区",
+          );
+          expectEqual(queryAll(filesColumn, "[data-diff-line-kind]").length, 3, "差异行必须逐行呈现");
+          expectEqual(
+            queryAll(filesColumn, "[data-diff-line-kind]").map((node) => node.getAttribute("data-diff-line-kind")),
+            ["context", "deleted", "added"],
+            "新增 / 删除 / 上下文三档必须各自成立",
+          );
+          const filesText = domText(filesColumn);
+          for (const line of DIFF_TEXT) {
+            expectThat(filesText.includes(line), `差异行内容必须逐字来自结构化来源：${line}`);
+          }
+          // 差异行不来自解析 ACP 原文：未展开诊断时，原文片段一个都不出现。
+          expectNone(domText(container), ["RAW_ONLY_MARKER"], "未展开诊断时页面上出现了未下发的 ACP 原文");
+
+          // 联动：时间线条目上点一下 → 右栏同一处改动被选中（用户不必在右栏再找一次）。
+          expectThat(
+            query(container, '[data-file-change-selected="true"]') === null,
+            "未点选之前右栏不得有选中项",
+          );
+          click(
+            query(container, `[data-timeline-card="file-changed"] [data-action="select-file-change"]`),
+            "在时间线上选中这处改动",
+          );
+          await waitFor(
+            () => query(container, `[data-file-change="${CHANGE_ID}"][data-file-change-selected="true"]`) !== null,
+            "右栏选中同一处改动",
+          );
+          expectThat(
+            query(container, `[data-timeline-card="file-changed"][data-change-selected="true"]`) !== null,
+            "时间线条目自己也必须标出选中",
+          );
+        },
+      );
+    },
+  },
+  {
+    name: "CP-6 条目形态：用户气泡靠右、代码卡有语言条与复制、运行指示与失败条各就各位",
+    async run() {
+      await withSessionPage(
+        sessionScenario({
+          events: [
+            wireEvent({
+              globalSequence: 11,
+              eventId: EVENT_TURN_RUNNING,
+              sessionId: SESSION_ALPHA,
+              eventType: "turn.started",
+              createdAt: "2026-10-01T00:10:00.000Z",
+              view: { turnId: TURN_RUNNING_ID, state: "running" },
+            }),
+            wireEvent({
+              globalSequence: 12,
+              eventId: EVENT_TURN_FAILED,
+              sessionId: SESSION_ALPHA,
+              eventType: "turn.failed",
+              createdAt: "2026-10-01T00:16:00.000Z",
+              view: {
+                turnId: TURN_FAILED_ID,
+                state: "failed",
+                error: { code: "session.busy", message: "Agent 进程异常退出", retryable: true, details: {} },
+              },
+            }),
+            wireEvent({
+              globalSequence: 13,
+              eventId: EVENT_TERMINAL_THREE,
+              sessionId: SESSION_ALPHA,
+              eventType: "terminal.output",
+              createdAt: "2026-10-01T00:11:00.000Z",
+              view: { terminalId: TERMINAL_TWO_ID, chunkIndex: "0", stream: "stdout", text: "deploy ok", truncated: false },
+            }),
+          ],
+          readResult: (sessionId) =>
+            readPage({ sessionId, messages: [conversationMessage(), agentMessage()] }),
+        }),
+        (container) =>
+          query(container, `[data-message-id="${MESSAGE_ID}"]`) !== null &&
+          query(container, `[data-fold-entry="event:${EVENT_TERMINAL_THREE}"]`) !== null,
+        "消息与折叠块渲染",
+        async (mounted) => {
+          const container = mounted.container;
+
+          // 用户气泡靠右（整条条目右对齐），Agent 气泡不靠右——两档样式的机器证据取计算样式。
+          expectEqual(
+            computedStyleOf(container, `[data-message-id="${MESSAGE_ID}"]`, "用户消息条目").alignItems,
+            "flex-end",
+            "用户消息必须靠右",
+          );
+          expectThat(
+            computedStyleOf(container, `[data-message-id="${AGENT_MESSAGE_ID}"]`, "Agent 消息条目").alignItems !==
+              "flex-end",
+            "Agent 气泡不得靠右",
+          );
+
+          // 运行指示：进行中的轮次带它（只看状态，不看位置）。
+          expectThat(
+            query(container, '[data-turn-running="true"]') !== null,
+            "进行中的轮次必须带运行指示",
+          );
+          // 失败条：失败轮次的错误在一条明确的条里。
+          const failure = query(container, "[data-turn-failure]");
+          expectThat(failure !== null, "失败的轮次必须是一条失败条");
+          expectThat(domText(failure).includes("轮次失败"), "失败条必须说明这是轮次失败");
+
+          // 代码卡：语言条 + 复制入口，且展开后真的可见（不是 display:none 里的漂亮结构）。
+          expectThat(query(container, "[data-code-block]") !== null, "终端输出必须是代码卡");
+          expectEqual(
+            query(container, "[data-code-language]")?.getAttribute("data-code-language"),
+            "stdout",
+            "代码卡必须带语言标记",
+          );
+          expectThat(
+            query(container, '[data-code-block] [data-action="copy-code"]') !== null,
+            "代码卡必须提供复制入口",
+          );
+          click(
+            query(container, `[data-action="toggle-timeline-entry"][data-entry-key="event:${EVENT_TERMINAL_THREE}"]`),
+            "展开终端输出块",
+          );
+          await waitFor(
+            () =>
+              computedStyleOf(
+                container,
+                `[data-fold-entry="event:${EVENT_TERMINAL_THREE}"] [data-fold-body]`,
+                "终端块正文",
+              ).display !== "none",
+            "终端输出块展开",
           );
         },
       );

@@ -1,32 +1,35 @@
 /**
  * 目录卡片（目录页的目录项骨架）。
  *
- * **不接收模型对象**：只收扁平 props（展示名、别名、三项汇总、最近活动时间、折叠态与几个
- * 回调）。这样 feature 层模型的形状变化不会穿透到这个展示原语——卡片只认得它渲染的那几个值。
+ * **不接收模型对象**：只收扁平 props（展示名、同名消歧尾段、三项汇总、折叠态与几个回调）。
+ * 这样 feature 层模型的形状变化不会穿透到这个展示原语——卡片只认得它渲染的那几个值。
  *
- * R15 的三条 MUST 在渲染上的落点：
+ * ## 卡片头的槽位与原型 `viewDirs()` 的 `dhead` 逐项对齐
  *
- * - **只显示展示名与别名**：卡片没有任何接收路径的 props，别名**始终**渲染（不放进
- *   「同名时才显示」的分支——那正是路径消歧得以藏身的地方）。
- * - **同名以别名区分**：`data-directory-alias` 只出现在卡片根节点这一个元素上，子元素不再
- *   重复这个属性，e2e 的 `[data-directory-alias]` 计数才不会因标签迁移而失真。
- *   标题入口与「⊕ 新建」（都在卡片内）**不得**把那属性挪到按钮上——计数会被它们扰乱。
- * - **折叠不影响其它目录项**：折叠态由外部传入，卡片自身不持有状态。
+ * 折叠箭头 → 目录图标 → 展示名（进入详情页的入口）→ 同名时的路径尾段 → 计数胶囊 →
+ * 运行中徽标 → 待处理徽标 → 弹性空白 → `⊕ 新建` → `查看全部 ›`。
  *
- * ## 两个进入详情页的入口（design D3）
+ * - **别名不进界面**：卡片只把 `alias` 挂在根节点的 `data-directory-alias` 上（路由与命令引用的
+ *   内部标识、e2e 的锚点），**不**渲染成任何文字。相邻目录是否同名由别的槽位（路径尾段）区分。
+ * - **路径尾段只逐字搬运**：`pathTail` 由 feature 层判定并在「同名」时给出（展示名唯一或没有
+ *   下发路径时为 `null`）。卡片不拼、不规范化、也不从展示名或别名反推它——因此「展示名唯一时
+ *   MUST NOT 呈现路径」这条不需要卡片再判断一次。
+ * - **三项汇总由会话摘要得出**（断连时仍可呈现）：计数胶囊恒呈现会话总数；运行中与待处理
+ *   徽标只在**非零**时追加（原型同此），零值不占槽位。
+ * - **别名只出现一次**：`data-directory-alias` 只在根节点这**一个**元素上，子元素（含标题入口与
+ *   「⊕ 新建」）不再重复——e2e 的 `[data-directory-alias]` 计数才不会因标签迁移而失真。
  *
- * - **标题**：`data-action="open-directory"` → `onOpen`。它是「每个目录项都可进入详情页」的
+ * ## 两个进入详情页的入口
+ *
+ * - **展示名**：`data-action="open-directory"` → `onOpen`。它是「每个目录项都可进入详情页」的
  *   保证——**与会话数无关**，0 会话的目录也点得进去。
- * - **「查看全部 N 个 ›」**：`data-action="open-directory-all"` → `onOpenAll`，只在有会话时由
- *   调用方给出（`null` 即不呈现）。两者指向同一页面但语义不同，因此动作取值必须可区分。
+ * - **「查看全部 ›」**：`data-action="open-directory-all"` → `onOpenAll`，只在有会话时由调用方
+ *   给出（`null` 即不呈现）。两者指向同一页面但语义不同，因此动作取值必须可区分。
  *
- * ## 另外两处呈现（原型的 `dwhen` 与 `data-new`）
+ * ## 卡体是缩进树
  *
- * - **最近活动时间**：`latestActivityAt` 由 feature 层取该目录下会话 `updatedAt` 的**最大值**
- *   （卡片不做任何比较，只把值画出来）；`null`/缺省表示该目录没有会话，**不呈现**该元素，
- *   也不拿当前时间顶替。
- * - **「⊕ 新建」**：`onCreate` 为 `null`/缺省时不呈现。设备不再有创建会话的权限维度后，
- *   页面无条件给出回调，卡片刻意不认权限——判定本就不该在这里。
+ * `children`（内联会话行）挂在带左缩进与左边线的卡体里（原型 `.dbody`）；折叠时卡体整块不渲染，
+ * 且折叠态由外部传入，卡片自身不持有状态——一个目录项的折叠因此不影响其它目录项。
  */
 
 import type { ReactElement, ReactNode } from "react";
@@ -36,31 +39,26 @@ import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radi
 
 export interface DirectoryCardProps {
   readonly displayName: string;
+  /**
+   * 别名：**只**作路由与命令引用的内部标识（渲染成根节点的 `data-directory-alias`），
+   * MUST NOT 呈现为界面文字。
+   */
   readonly alias: string;
+  /**
+   * 同名目录的消歧尾段（逐字取自服务端下发的路径，feature 层已判定「同名才给」）；
+   * 展示名唯一或没有下发路径时为 `null`，此时**不呈现**任何路径片段。
+   */
+  readonly pathTail: string | null;
   readonly counts: { readonly total: number; readonly active: number; readonly pending: number };
-  /** 该目录下最晚的会话时间（ISO 原值）；`null`/缺省表示无会话，不呈现该元素。 */
-  readonly latestActivityAt?: string | null;
   readonly collapsed: boolean;
   readonly onToggleCollapsed: () => void;
-  /** 进入该目录详情页（标题入口）；必需——它就是「每个目录项都可进入」的保证。 */
+  /** 进入该目录详情页（展示名入口）；必需——它就是「每个目录项都可进入」的保证。 */
   readonly onOpen: () => void;
-  /** 「查看全部 N 个 ›」入口；`null` 表示不呈现（是否呈现由调用方按内联上限决定）。 */
+  /** 「查看全部 ›」入口；`null` 表示不呈现（是否呈现由调用方按会话数决定）。 */
   readonly onOpenAll: (() => void) | null;
   /** 「⊕ 新建」入口；`null`/缺省表示不呈现（页面无条件给出，不再有权限维度）。 */
   readonly onCreate?: (() => void) | null;
   readonly children?: ReactNode;
-}
-
-/**
- * 最近活动时间的展示形式：与目录页的同步时刻**同一口径**——按 UTC 值固定位置切片
- * （`YYYY-MM-DD HH:MM UTC`）。
- *
- * 刻意不用 `Date` 的本地时区格式化、也不画「N 分钟前」：前者会在不同时区的机器之间漂移，
- * 后者需要一个时钟，而 `renderToStaticMarkup` 与浏览器断言都不该依赖运行时刻——同一份
- * 视图模型必须在任何机器上渲染出同一段文本。精确值另经 `data-directory-latest-at` 原样进 DOM。
- */
-function formatLatestActivity(latestActivityAt: string): string {
-  return `最近 ${new Date(latestActivityAt).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
@@ -90,12 +88,26 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.panel2,
     },
     caretGlyph: {
-      color: colors.ink2,
+      color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
     },
+    // 目录图标：原型 `.dicon` 是「accent-soft 底 + accent-ink 字」的小方块。
+    icon: {
+      width: 26,
+      height: 26,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: radius.sm,
+      backgroundColor: colors.accentSoft,
+    },
+    iconGlyph: {
+      color: colors.accentInk,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
     nameButton: {
-      // 标题从 `Text` 变成可点元素后，截断仍要生效：与 `SessionRow` 的 `main` 同一手法。
+      // 展示名从 `Text` 变成可点元素后，截断仍要生效：与 `SessionRow` 的 `main` 同一手法。
       flexShrink: 1,
       minWidth: 0,
     },
@@ -106,15 +118,60 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.lg,
       fontWeight: "600",
     },
-    alias: {
+    // 同名消歧尾段：等宽小字、弱化，紧跟在展示名之后（原型 `.dpath`）。
+    pathTail: {
+      flexShrink: 1,
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
     },
-    latestAt: {
-      color: colors.ink3,
-      fontFamily: fontFamily.mono,
+    countChip: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: spacing.xs,
+      paddingVertical: 2,
+      paddingHorizontal: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: radius.lg,
+      backgroundColor: colors.panel,
+    },
+    countChipText: {
+      color: colors.ink2,
+      fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
+    },
+    badgeOk: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: spacing.xs,
+      paddingVertical: 2,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.lg,
+      backgroundColor: colors.okSoft,
+    },
+    badgeWarn: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      gap: spacing.xs,
+      paddingVertical: 2,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.lg,
+      backgroundColor: colors.warnSoft,
+    },
+    badgeOkText: {
+      color: colors.ok,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+    },
+    badgeWarnText: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+    },
+    // 弹性空白：把创建与「查看全部」两个入口推到卡片头右侧（原型 `.spacer`）。
+    spacer: {
+      flexGrow: 1,
     },
     create: {
       paddingVertical: 4,
@@ -129,58 +186,7 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    counts: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.sm,
-    },
-    badgeNeutral: {
-      flexDirection: "row",
-      alignItems: "baseline",
-      gap: spacing.xs,
-      paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
-      borderWidth: 1,
-      borderColor: colors.line2,
-    },
-    badgeOk: {
-      flexDirection: "row",
-      alignItems: "baseline",
-      gap: spacing.xs,
-      paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
-      borderRadius: radius.sm,
-      backgroundColor: colors.okSoft,
-    },
-    badgeWarn: {
-      flexDirection: "row",
-      alignItems: "baseline",
-      gap: spacing.xs,
-      paddingVertical: 2,
-      paddingHorizontal: spacing.sm,
-      borderRadius: radius.sm,
-      backgroundColor: colors.warnSoft,
-    },
-    badgeNeutralText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-    },
-    badgeOkText: {
-      color: colors.ok,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-    },
-    badgeWarnText: {
-      color: colors.warn,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.xs,
-    },
     openAll: {
-      marginLeft: "auto",
       paddingVertical: 4,
       paddingHorizontal: spacing.sm,
       borderRadius: radius.sm,
@@ -191,7 +197,11 @@ function buildStyles(colors: Palette) {
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
+    // 卡体：缩进 + 左边线（原型 `.dbody{margin-left:30px;border-left:2px solid var(--line-2)}`）。
     body: {
+      marginLeft: 30,
+      borderLeftWidth: 2,
+      borderLeftColor: colors.line2,
       gap: spacing.xs,
     },
   });
@@ -203,8 +213,8 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
 export function DirectoryCard({
   displayName,
   alias,
+  pathTail,
   counts,
-  latestActivityAt = null,
   collapsed,
   onToggleCollapsed,
   onOpen,
@@ -233,8 +243,11 @@ export function DirectoryCard({
         >
           <Text style={styles.caretGlyph}>{collapsed ? "▸" : "▾"}</Text>
         </Pressable>
-        {/* 标题是进入详情页的入口，且**与会话数无关**（0 会话的目录也点得进去）。
-            `data-directory-alias` 不挂在这里：它只在卡片根节点出现一次（R15-1 数它的个数）。 */}
+        <View style={styles.icon}>
+          <Text style={styles.iconGlyph}>▤</Text>
+        </View>
+        {/* 展示名是进入详情页的入口，且**与会话数无关**（0 会话的目录也点得进去）。
+            `data-directory-alias` 不挂在这里：它只在卡片根节点出现一次（R15 数它的个数）。 */}
         <Pressable
           role="button"
           style={styles.nameButton}
@@ -245,38 +258,38 @@ export function DirectoryCard({
             {displayName}
           </Text>
         </Pressable>
-        {/* 展示名可以重复；别名始终展示，是区分同名目录的唯一依据。 */}
-        <Text style={styles.alias} dataSet={{ directoryAliasLabel: "true" }} numberOfLines={1}>
-          {alias}
-        </Text>
-        {/* 三项汇总来自会话摘要，因此断连时仍然呈现；筛选也不改变它们（spec 的筛选场景）。 */}
-        <View style={styles.counts}>
-          <View style={styles.badgeNeutral}>
-            <Text style={styles.badgeNeutralText}>会话</Text>
-            <Text style={styles.badgeNeutralText} dataSet={{ directoryCount: "total" }}>
-              {String(counts.total)}
-            </Text>
-          </View>
+        {/* 同名消歧：只呈现 feature 层给出的路径尾段（展示名唯一时它必为 `null`——那时这一格
+            整块不存在，因此「展示名唯一时不呈现路径」是一条结构上的性质，不是这里的分支）。 */}
+        {pathTail === null ? null : (
+          <Text style={styles.pathTail} dataSet={{ directoryPathTail: pathTail }} numberOfLines={1}>
+            {pathTail}
+          </Text>
+        )}
+        {/* 会话总数：三项汇总都来自会话摘要，因此断连时仍然呈现；筛选也不改变它们。 */}
+        <View style={styles.countChip}>
+          <Text style={styles.countChipText} dataSet={{ directoryCount: "total" }}>
+            {String(counts.total)}
+          </Text>
+          <Text style={styles.countChipText}>个</Text>
+        </View>
+        {/* 运行中 / 待处理：只在非零时追加（原型同此），零值不占槽位。 */}
+        {counts.active === 0 ? null : (
           <View style={styles.badgeOk}>
-            <Text style={styles.badgeOkText}>运行中</Text>
+            <Text style={styles.badgeOkText}>● 运行中</Text>
             <Text style={styles.badgeOkText} dataSet={{ directoryCount: "active" }}>
               {String(counts.active)}
             </Text>
           </View>
+        )}
+        {counts.pending === 0 ? null : (
           <View style={styles.badgeWarn}>
-            <Text style={styles.badgeWarnText}>待处理</Text>
+            <Text style={styles.badgeWarnText}>⏸ 待处理</Text>
             <Text style={styles.badgeWarnText} dataSet={{ directoryCount: "pending" }}>
               {String(counts.pending)}
             </Text>
           </View>
-        </View>
-        {/* 最近活动时间：值是 feature 层取的**最大值**，卡片自己不做比较；无会话时不呈现
-            （也不拿当前时间顶替——spec 的 MUST NOT）。 */}
-        {latestActivityAt === null ? null : (
-          <Text style={styles.latestAt} dataSet={{ directoryLatestAt: latestActivityAt }}>
-            {formatLatestActivity(latestActivityAt)}
-          </Text>
         )}
+        <View style={styles.spacer} />
         {/* 目录内创建会话：与详情页的创建入口共用同一条命令；设备不再有创建权限维度，
             因此这里只是个入口回调——页面无条件给出。 */}
         {onCreate === null ? null : (
@@ -296,11 +309,11 @@ export function DirectoryCard({
             dataSet={{ action: "open-directory-all" }}
             onPress={onOpenAll}
           >
-            <Text style={styles.openAllText}>{`查看全部 ${String(counts.total)} 个 ›`}</Text>
+            <Text style={styles.openAllText}>查看全部 ›</Text>
           </Pressable>
         )}
       </View>
-      {/* 折叠时只保留展示名与汇总：会话行（children）不再渲染。 */}
+      {/* 折叠时只保留展示名与汇总：卡体（会话行或空行）整块不再渲染。 */}
       {collapsed ? null : <View style={styles.body}>{children}</View>}
     </View>
   );

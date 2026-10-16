@@ -15,7 +15,8 @@
 import { describe, expect, it } from "vitest";
 
 import { SESSION_HISTORY_FEATURE } from "../sync-client";
-import type { MessageTimelineEntry } from "./conversation-timeline";
+import { FILE_DIFF_UNAVAILABLE_LABELS } from "../domain";
+import type { FileChangeView, MessageTimelineEntry } from "./conversation-timeline";
 import type { StoreFixture } from "./testing/fixtures";
 import {
   eventMessage,
@@ -437,5 +438,153 @@ describe("D8 变更文件：结构化统计与相对化路径 + 诊断入口", (
     // 统计仍来自视图（缺的是原文，不是统计）。
     expect(change?.addedLines).toBe("2");
     expect(change?.diagnostics.view).toMatchObject({ displayPath: "src/b.ts" });
+  });
+});
+
+describe("D6 右栏差异区的三种形态", () => {
+  /** 把一条 `file.changed` 事件喂进仓库，返回右栏里的那一处改动。 */
+  function changeOf(store: StoreFixture["store"], view: Record<string, unknown>, sequence: string): FileChangeView {
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "file.changed",
+        eventId: `dddddddd-0000-4000-8000-0000000000${sequence}`,
+        sessionId: SESSION_ID,
+        globalSequence: sequence,
+        view,
+      }),
+    });
+    const change = store.conversationPage(SESSION_ID)?.fileChanges.at(-1);
+    if (change === undefined) throw new Error("右栏应有这一处改动");
+    return change;
+  }
+
+  it("随事件下发差异行时逐行呈现，并区分新增 / 删除 / 上下文", () => {
+    const { store } = storeWithHistoryFeature();
+    const change = changeOf(
+      store,
+      {
+        ...fileChangedView("11111111-0000-4000-8000-0000000000d1", "src/a.ts"),
+        diffLines: [
+          { kind: "context", text: "  const opts = resolveOptions(input);" },
+          { kind: "deleted", text: "- const idleTimeout = 30_000;" },
+          { kind: "added", text: "+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;" },
+        ],
+      },
+      "21",
+    );
+
+    expect(change.diff?.kind).toBe("lines");
+    if (change.diff?.kind !== "lines") throw new Error("期望 lines");
+    // 反例：把三档合并成一种颜色/一种标记时，这里会全等 → 断言变红。
+    expect(change.diff.lines.map((line) => line.kind)).toEqual(["context", "deleted", "added"]);
+    expect(change.diff.lines.map((line) => line.text)).toEqual([
+      "  const opts = resolveOptions(input);",
+      "- const idleTimeout = 30_000;",
+      "+ const idleTimeout = opts.idleTimeoutMs ?? 10_000;",
+    ]);
+  });
+
+  it("差异行内容按不可信文本逐字呈现（不被解析、不被改写）", () => {
+    const { store } = storeWithHistoryFeature();
+    const odd = "<script>alert(1)</script> \\u0000 @@ -1 +1 @@";
+    const change = changeOf(
+      store,
+      {
+        ...fileChangedView("11111111-0000-4000-8000-0000000000d2", "src/a.ts"),
+        diffLines: [{ kind: "context", text: odd }],
+      },
+      "22",
+    );
+
+    expect(change.diff?.kind === "lines" ? change.diff.lines[0]?.text : null).toBe(odd);
+  });
+
+  it("有不可用标记时给出原因，且**没有**任何差异行可渲染", () => {
+    const { store } = storeWithHistoryFeature();
+    const change = changeOf(
+      store,
+      {
+        ...fileChangedView("11111111-0000-4000-8000-0000000000d3", "src/a.ts"),
+        diffUnavailable: { reason: "size_limit" },
+      },
+      "23",
+    );
+
+    expect(change.diff).toEqual({ kind: "unavailable", reason: "size_limit" });
+    // 文案表跟着取值走（词表封闭）：未知取值不会有文案。
+    expect(FILE_DIFF_UNAVAILABLE_LABELS.size_limit.length).toBeGreaterThan(0);
+  });
+
+  it("两者都没有时保持「只有统计」的形态（`null`，不冒充成任何一种）", () => {
+    const { store } = storeWithHistoryFeature();
+    const change = changeOf(
+      store,
+      fileChangedView("11111111-0000-4000-8000-0000000000d4", "src/a.ts"),
+      "24",
+    );
+
+    expect(change.diff).toBeNull();
+    // 对照：统计照常在，因此这一条不是「整条改动都没了」。
+    expect(change.addedLines).toBe("2");
+    expect(change.displayPath).toBe("src/a.ts");
+  });
+
+  it("不解析 ACP 原文补差异：只有 `rawJson` 带 diff 文本时差异区仍是「两者都没有」", () => {
+    const { store } = storeWithHistoryFeature();
+    store.apply({
+      kind: "event",
+      event: eventMessage({
+        eventType: "file.changed",
+        eventId: "dddddddd-0000-4000-8000-0000000000d5",
+        sessionId: SESSION_ID,
+        globalSequence: "25",
+        view: fileChangedView("11111111-0000-4000-8000-0000000000d5", "src/a.ts"),
+        acp: {
+          mediaType: "application/json",
+          rawJson: '{"diff":[{"kind":"added","text":"+ 不该被解析出来"}]}',
+          byteLength: "48",
+          sha256: "kQ8x2mB7yV1cJ0nP5rT9wZa3dE6fH8iL1sU4vX7yZ0aB2cD5eF8gH1iJ4kL7mN0p",
+        },
+      }),
+    });
+
+    const change = store.conversationPage(SESSION_ID)?.fileChanges[0];
+    // 反例：从 `rawJson` 里解析出差异行时，这里会是 lines → 断言变红。
+    expect(change?.diff).toBeNull();
+    expect(change?.diagnostics.raw.kind).toBe("available");
+  });
+
+  it("形状不合规的差异行不冒充成任何一种形态（不当上下文行吞下、也不假装完整）", () => {
+    const { store } = storeWithHistoryFeature();
+    const empty = changeOf(
+      store,
+      {
+        ...fileChangedView("11111111-0000-4000-8000-0000000000d6", "src/a.ts"),
+        diffLines: [],
+      },
+      "26",
+    );
+    expect(empty.diff).toBeNull();
+
+    const unknownKind = changeOf(
+      store,
+      {
+        ...fileChangedView("11111111-0000-4000-8000-0000000000d7", "src/b.ts"),
+        diffLines: [{ kind: "moved", text: "?" }],
+      },
+      "27",
+    );
+    expect(unknownKind.diff).toBeNull();
+
+    const unknownReason = changeOf(
+      store,
+      {
+        ...fileChangedView("11111111-0000-4000-8000-0000000000d8", "src/c.ts"),
+        diffUnavailable: { reason: "too_many" },
+      },
+      "28",
+    );
+    expect(unknownReason.diff).toBeNull();
   });
 });

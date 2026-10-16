@@ -92,8 +92,12 @@ describe("R17：上下文三态经 ClientStore 投影后仍可区分", () => {
     expect(html).not.toContain("data-context-size");
     expect(html).not.toContain("NaN");
     expect(html).not.toContain("Infinity");
-    // 整段 HTML 不含任何阿拉伯数字：未上报态没有数字槽位。
-    expect(/[0-9]/.test(html.replace(/data-context-state="unreported"/u, ""))).toBe(false);
+    // 整段渲染结果的**文本**里不含任何阿拉伯数字：未上报态没有数字槽位。
+    // 属性不进这条判据：组件迁到样式基座后每个元素都带 RNW 的原子类名（`css-g5y9jx r-13awgt0`），
+    // `role="button"` 还会带上 `tabindex="0"`——它们不是数字槽位。槽位本身另有上面的
+    // `data-context-used` / `data-context-size` 与 `0%` 三条负向断言逐项把关。
+    const renderedText = html.replace(/<[^>]*>/gu, "");
+    expect(/[0-9]/.test(renderedText)).toBe(false);
   });
 
   it("窗口大小为零：同样呈现未上报，但与「从未上报」可区分", () => {

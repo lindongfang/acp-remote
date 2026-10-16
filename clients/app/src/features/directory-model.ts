@@ -1,29 +1,59 @@
 /**
- * 目录页与目录详情的视图模型（R15「目录页以目录为主角且可离线渲染」）。
+ * 目录面视图模型（目录页、目录详情页与对话页左栏）。
  *
- * ## 三条结构性约束如何被落到类型上
+ * ## 结构性约束如何落到类型上
  *
- * 1. **目录项只有展示名、别名、汇总与最近活动时间**：`DirectoryRowModel` 的字段就这四样，
- *    **没有**任何可以反推路径的槽位（没有 id 派生自路径、没有父目录、没有末段、没有 cwd）。
- *    `WorkspaceRef` 在 wire 上本就只有 `alias`/`displayName`，本层再投影一次；
- *    `latestActivityAt` 是该目录下会话自身的 `updatedAt`（固定形状的 UTC 串），同样不含路径。
- *    于是「多带一个 path 字段」在类型与渲染两处都不成立。
- * 2. **同名目录以别名区分**：`displayName` 允许重复，`alias` 是唯一标识且**始终**渲染。
- *    组件没有任何「同名时才显示别名」的分支——那种分支就是路径消歧的入口。
+ * 1. **路径只有一处来源**：`DirectoryRowModel.path` 逐字等于快照目录条目上的 `path` 键
+ *    （`core.workspace-path.v1` 门控），缺席即 `null`。本层不做拼接、不做规范化，也**不**
+ *    用展示名或别名拼一段看起来像路径的文本。
+ * 2. **「要不要显示路径」由本层判定**：展示名唯一时列表项 MUST NOT 呈现路径，同名时以路径
+ *    尾段消歧——所以 `pathTail` 是「同名」这一判定的产物（唯一名为 `null`），组件只渲染。
  * 3. **两种空态可区分**：`no_directories` 与 `directories_without_sessions` 是两个取值，
  *    且各自的标题与操作指引来自不同词表，不可能被合并成一句话。
+ * 4. **会话时间只有一处口径**：三个页面共用的 {@link SessionRowModel.updatedAtLabel} 由
+ *    {@link formatRelativeTime} 按**注入的**时钟算出，组件不再自行格式化时刻（D3）。
+ * 5. **分页判定全在本层的纯函数里**：每页条数、总页数、当前页切片与页码纠正都由
+ *    {@link buildDirectoryDetailModel} / {@link correctPageNumber} 给出，组件只渲染并上抛。
  *
  * ## 数据只来自快照
  *
- * 构造输入只有「上一次成功替换的快照资源」与「连接状态」两个，**没有任何命令出口**：
- * 目录页因此在结构上不可能依赖额外的在线查询命令，断连时也照常渲染（R15 MUST）。
+ * 构造输入只有「上一次成功替换的快照资源」「连接状态」与「时钟」三个，**没有任何命令出口**：
+ * 目录面因此在结构上不可能依赖额外的在线查询命令，断连时也照常渲染（R15 MUST）。
  */
 
 import type { DirectoryListState, DirectoryView, SessionSummaryView } from "../domain";
-import { UNTITLED_SESSION_LABEL, buildDirectoryViews, buildSessionSummaryView } from "../domain";
+import { UNTITLED_SESSION_LABEL, buildDirectoryViews, buildSessionSummaryView, workspacePathOf } from "../domain";
 import type { SessionSummary, WorkspaceRef } from "../protocol";
 import type { StagedResources } from "../sync-client";
 import type { ConnectionStateName } from "../state";
+
+/** 一分钟的毫秒数（相对时间的分档线）。 */
+const MINUTE_MS = 60_000;
+
+/** 一小时的毫秒数（相对时间的分档线）。 */
+const HOUR_MS = 3_600_000;
+
+/**
+ * 会话时间 → 相对文案（规格「会话时间按相对口径呈现」，D3）。
+ *
+ * 口径：距 `nowMs` 不足一分钟给「刚刚」，不足一小时给「N 分钟前」（`N` 四舍五入到分钟），
+ * 否则给该时刻的 UTC 年月日。三个页面（目录页内联行、目录详情行、对话页左栏）共用这一段。
+ *
+ * **时钟是输入**：`nowMs` 由调用方（页面从 store 的时钟端口读一次、测试注入固定值）传入，
+ * 函数本身不读任何全局时钟。因此「同一份输入渲染出同一段文本」这条既有性质被保留：同一份
+ * `(timestamp, nowMs)` 永远得到同一段文字，`renderToStaticMarkup` 与浏览器断言都不依赖运行时刻。
+ *
+ * 时间串形状不合规时**原样返回**那个串：不假装算出了相对时间，也不抛出（渲染路径不该崩）。
+ */
+export function formatRelativeTime(timestamp: string, nowMs: number): string {
+  const at = Date.parse(timestamp);
+  if (Number.isNaN(at)) return timestamp;
+  const diff = nowMs - at;
+  if (diff < MINUTE_MS) return "刚刚";
+  if (diff < HOUR_MS) return `${Math.round(diff / MINUTE_MS)} 分钟前`;
+  // 与原型同口径：UTC 的年月日，不按本地时区换算（会话时刻本身就是 UTC 串）。
+  return new Date(at).toISOString().slice(0, 10);
+}
 
 /** 目录的三项汇总（全部由会话摘要得出，因此断连时仍可呈现）。 */
 export interface DirectoryCountsModel {
@@ -33,7 +63,14 @@ export interface DirectoryCountsModel {
 }
 
 /**
- * 一个目录项：**只有**展示名、别名、三项汇总与最近活动时间。
+ * 一个目录项。
+ *
+ * `path` 是服务端下发的**逐字**路径（快照目录条目的可选 `path` 键）；未协商该 feature 或该键
+ * 缺席时为 `null`——此时项上没有任何路径可显示，MUST NOT 用展示名顶替。
+ *
+ * `pathTail` 是**列表项消歧用的**路径尾段，只在「同一份快照里有另一个目录的展示名与它相同」
+ * 时才有值（展示名唯一时为 `null`，规格要求此时 MUST NOT 呈现路径）。它是 `path` 的一段，
+ * 不经过任何规范化；`path` 缺席时也必然是 `null`。
  *
  * `latestActivityAt` 是该目录下会话 `updatedAt` 的**最大值**（`Timestamp` 是固定形状的 UTC 串，
  * 字典序即时间序）；该目录没有任何会话时为 `null`——**不**用当前时间或别的信号顶替。
@@ -42,6 +79,10 @@ export interface DirectoryCountsModel {
 export interface DirectoryRowModel {
   readonly alias: string;
   readonly displayName: string;
+  /** 逐字路径；未下发（未协商 / 键缺席 / 空串）时为 `null`。 */
+  readonly path: string | null;
+  /** 同名目录的消歧尾段；展示名唯一或没有路径时为 `null`。 */
+  readonly pathTail: string | null;
   readonly counts: DirectoryCountsModel;
   readonly latestActivityAt: string | null;
 }
@@ -58,24 +99,13 @@ export type DirectoryContentOrigin = "live" | "last_sync";
  */
 export type DirectoryFilter = "all" | "running" | "pending";
 
-/** 一个月份档：`key` 为 `YYYY-MM`，`count` 是该月的行数。 */
-export interface DirectoryMonthModel {
-  readonly key: string;
-  readonly count: number;
-}
-
 /**
- * 会话时间 → `YYYY-MM`。
+ * 会话行（目录页内联行、目录详情行与对话页左栏共用）。
  *
- * 直接取字符串前 7 位，不经过 `Date`：`Timestamp` 是固定形状的 UTC 串
- * （`src/protocol/common.ts` 的 `$defs.timestamp`），而 `Date` 会按本地时区换算，
- * 把月界附近的会话挪进相邻月份。分档必须落在会话**自身**的时间上。
+ * `updatedAt` 是会话自身的时刻（固定形状的 UTC 串，排序与 `data-*` 精确值都用它）；
+ * `updatedAtLabel` 是**呈现用**的相对文案，由 {@link formatRelativeTime} 按注入的时钟算出。
+ * 组件 MUST 渲染 `updatedAtLabel`：自己拿 `updatedAt` 格式化就等于各写一套时区/相对口径。
  */
-export function monthKeyOf(timestamp: string): string {
-  return timestamp.slice(0, 7);
-}
-
-/** 会话行（目录详情里的条目）。 */
 export interface SessionRowModel {
   readonly id: string;
   readonly title: string;
@@ -85,6 +115,8 @@ export interface SessionRowModel {
   /** imported 会话来源离线时的标注；本节点自有会话为 `null`。 */
   readonly originOfflineLabel: string | null;
   readonly updatedAt: string;
+  /** 相对文案（刚刚 / N 分钟前 / 年月日），时钟经输入注入。 */
+  readonly updatedAtLabel: string;
 }
 
 /** 目录页模型。 */
@@ -124,6 +156,36 @@ export type DirectoryPageModel =
       readonly lastSyncedAtMs: number | null;
     };
 
+/**
+ * 目录详情页每页的会话条数（规格「每页固定条数」的唯一出处，与原型 `PAGE_SIZE` 一致）。
+ */
+export const DIRECTORY_DETAIL_PAGE_SIZE = 10;
+
+/**
+ * 页码输入 → 合法页码（纯函数，D4 的纠正规则与原型 `commitPage` 同口径）。
+ *
+ * - 能解析成正整数：夹紧到 `[1, pageCount]`（超出上界取下界/上界）；
+ * - 解析不出（空串、`"abc"`、`"2页"` 这类带尾巴的、纯符号）：回落 `fallback`——调用方给的
+ *   **当前生效页码**。这正是规格里「列表内容不因一次非法输入而重画」的落点：纠正后的值等于
+ *   原来的值，切片自然是同一段。
+ *
+ * 严格解析（而不是 `parseInt` 的宽松解析）是有意的：`parseInt("2abc") === 2` 会把一段明显
+ * 不合法的输入当成合法页码跳过去，而规格要求的是「不是合法页码就就地纠正」。
+ */
+export function correctPageNumber(input: {
+  readonly requested: string;
+  readonly pageCount: number;
+  readonly fallback: number;
+}): number {
+  const pageCount = Math.max(1, Math.trunc(input.pageCount));
+  const fallback = Math.min(Math.max(1, Math.trunc(input.fallback)), pageCount);
+  const requested = input.requested.trim();
+  if (!/^[0-9]+$/.test(requested)) return fallback;
+  const parsed = Number.parseInt(requested, 10);
+  if (parsed < 1) return 1;
+  return Math.min(parsed, pageCount);
+}
+
 /** 目录详情模型。 */
 export type DirectoryDetailModel =
   | { readonly kind: "loading" }
@@ -131,19 +193,26 @@ export type DirectoryDetailModel =
       readonly kind: "ready";
       readonly directory: DirectoryRowModel;
       /**
-       * **生效**的月份档（对账后的值）：请求的档若已不在 `months` 的 key 集合里，这里回落为
-       * `"all"`。组件必须拿它当分段控件的 `value`——否则控件（选项由 `months` 生成）无法表示
-       * 该值，整组 `data-segment-selected` 会全为 false，而 `sessions` 又被一个已经不存在的档
-       * 挡成空列表，用户看不到是哪个档在挡着。
+       * **当前页**的会话行：按时间倒序平铺后的第 `page` 页切片。
+       *
+       * 详情页没有查询词与月份档（规格「目录详情按时间倒序分页」替换了旧的月份分档与目录内
+       * 搜索），因此切片前的行就是该目录的全部会话行。
        */
-      readonly month: string | "all";
-      /** 已按**生效**月份档过滤后的行；`month` 为 `"all"` 时即查询命中的全部行。 */
       readonly sessions: readonly SessionRowModel[];
-      /** 全部月份档（受查询影响，但不受当前月份选择影响），按时间倒序。 */
-      readonly months: readonly DirectoryMonthModel[];
-      /** 当前呈现的行数（随月份选择变化）。 */
+      /**
+       * **生效**（纠正后）的页码：请求值不是合法页码或超出范围时，这里给出纠正后的值。
+       * 组件必须拿它回填页码输入框——因此「非法输入就地纠正」是可断言的行为而不是实现细节。
+       */
+      readonly page: number;
+      /** 总页数（`ceil(total / pageSize)`，至少 1，因此 `page` 恒有合法解）。 */
+      readonly pageCount: number;
+      /** 每页条数（{@link DIRECTORY_DETAIL_PAGE_SIZE}）。 */
+      readonly pageSize: number;
+      /** 当前呈现的行数（即本页切片长度）。 */
       readonly shown: number;
-      /** 查询命中后的会话总数（与月份选择无关，即「当前显示 N / M」的分母 M）。 */
+      /**
+       * 该目录的全部会话数（分页前）：页面头部的「N 个会话」与总页数都从它算出。
+       */
       readonly total: number;
       readonly contentOrigin: DirectoryContentOrigin;
     }
@@ -174,16 +243,60 @@ export const CONTENT_ORIGIN_LABELS: Readonly<Record<DirectoryContentOrigin, stri
 };
 
 /**
- * 目录项投影：目录名出现在标题上，会话数/运行中/待处理来自会话摘要，最近活动时间由调用方传入
- * （见 {@link latestActivityByAlias}）。
+ * 路径的**末段**（同名目录消歧用）：按 `\` 与 `/` 切分，取最后一段。
+ *
+ * 只在「同一份快照里有另一个目录的展示名与之相同」时才被调用（判定见 {@link toRow} 的 `pathTail`）。
+ * 尾段恰好等于展示名时往前取一段——同名目录的差异本来就在**父目录**那一段，只给末段等于什么也
+ * 没消歧（原型 `pathCandidates(..., keepLast=false)` 同样把等于名字的末段去掉）。
+ *
+ * 这不是「推导路径」：结果逐字是 `path` 里的一段，本层既不拼分隔符也不做规范化；
+ * 只取一段而不是整条路径，是因为同名项需要的正是那一段差异。
+ */
+function pathSegmentTail(path: string, displayName: string): string | null {
+  const parts = path.split(/[\\/]+/).filter((part) => part.length > 0);
+  const last = parts.at(-1);
+  if (last === undefined) return null;
+  if (parts.length > 1 && last.toLowerCase() === displayName.toLowerCase()) return parts.at(-2) ?? null;
+  return last;
+}
+
+/**
+ * 展示名重复的那一组（`true` 表示「有同名兄弟」，列表项据此才呈现路径消歧）。
+ *
+ * 按**整份快照**的目录集算：展示名唯一与否是数据的性质，不随查询/筛选变化。
+ */
+function duplicatedNamesOf(entries: readonly { readonly displayName: string }[]): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.displayName)) duplicated.add(entry.displayName);
+    else seen.add(entry.displayName);
+  }
+  return duplicated;
+}
+
+/**
+ * 目录项投影：目录名出现在标题上，会话数/运行中/待处理来自会话摘要，路径与最近活动时间由
+ * 调用方传入（见 {@link latestActivityByAlias} 与 {@link duplicatedNamesOf}）。
+ *
+ * `pathTail` 就是列表项消歧的判定结果：展示名唯一时 **`null`**（规格 MUST NOT 呈现路径），
+ * 同名时给路径尾段，没有下发路径时也只能是 `null`——组件因此不需要自己判断「要不要显示路径」。
  *
  * 带会话聚合结果的目录项（目录页 `ready` 支的每一项与详情页的目录）都走这里，因此不会有第二份
  * 行构造漏掉新字段；「目录存在但没有任何会话」的零汇总项没有聚合结果可投影，另见 {@link zeroRow}。
  */
-function toRow(directory: DirectoryView, latestActivityAt: string | null): DirectoryRowModel {
+function toRow(
+  directory: DirectoryView,
+  latestActivityAt: string | null,
+  duplicatedNames: ReadonlySet<string>,
+): DirectoryRowModel {
+  const { path, displayName } = directory;
   return {
     alias: directory.alias,
-    displayName: directory.displayName,
+    displayName,
+    path,
+    pathTail:
+      path === null || !duplicatedNames.has(displayName) ? null : pathSegmentTail(path, displayName),
     counts: {
       total: directory.counts.total,
       active: directory.counts.active,
@@ -200,14 +313,21 @@ function toRow(directory: DirectoryView, latestActivityAt: string | null): Direc
  * 「没有任何会话归属任何已登记目录」（`buildDirectoryViews` 里的 `hasAnySession` 为假），
  * 因此由快照目录直接投影，不必再走一遍会话聚合。这一支也没有任何会话，活动时间固定为 `null`
  * ——**不**用当前时间或别的信号顶替。列表页在空态下列出它，详情页也由它按别名取到该目录。
+ *
+ * 投影仍走 {@link toRow}：路径与「同名才给尾段」这两条判定因此与列表页其余项只有一处实现。
  */
-function zeroRow(workspace: WorkspaceRef): DirectoryRowModel {
-  return {
-    alias: workspace.alias,
-    displayName: workspace.displayName,
-    counts: { total: 0, active: 0, pending: 0 },
-    latestActivityAt: null,
-  };
+function zeroRow(workspace: WorkspaceRef, duplicatedNames: ReadonlySet<string>): DirectoryRowModel {
+  return toRow(
+    {
+      id: workspace.alias,
+      alias: workspace.alias,
+      displayName: workspace.displayName,
+      path: workspacePathOf(workspace),
+      counts: { total: 0, active: 0, pending: 0 },
+    },
+    null,
+    duplicatedNames,
+  );
 }
 
 /**
@@ -291,6 +411,9 @@ export function buildDirectoryPageModel(input: {
 
   const list: DirectoryListState = buildDirectoryViews(input.resources.workspaces, input.resources.sessions);
   const contentOrigin = contentOriginOf(input.connection);
+  // 同名的判定按**整份快照**算（不是按筛选后的子集）：展示名唯一与否是数据的性质，
+  // 不因为用户敲了一个查询词就变——否则路径尾段会时有时无。
+  const duplicatedNames = duplicatedNamesOf(input.resources.workspaces);
   if (list.kind === "empty") {
     return {
       kind: "empty",
@@ -300,7 +423,7 @@ export function buildDirectoryPageModel(input: {
       // `no_directories` 时确实是空数组。本支的 kind/empty 取值与判定条件都不因此改变。
       directories:
         list.empty === "directories_without_sessions"
-          ? input.resources.workspaces.map((workspace) => zeroRow(workspace))
+          ? input.resources.workspaces.map((workspace) => zeroRow(workspace, duplicatedNames))
           : [],
       contentOrigin,
       lastSyncedAtMs: input.lastSyncedAtMs,
@@ -323,14 +446,16 @@ export function buildDirectoryPageModel(input: {
   const latestActivity = latestActivityByAlias(input.resources.sessions);
   return {
     kind: "ready",
-    directories: directories.map((directory) => toRow(directory, latestActivity.get(directory.alias) ?? null)),
+    directories: directories.map((directory) =>
+      toRow(directory, latestActivity.get(directory.alias) ?? null, duplicatedNames),
+    ),
     contentOrigin,
     lastSyncedAtMs: input.lastSyncedAtMs,
   };
 }
 
 /** 会话摘要 → 会话行。imported 会话来源离线时标注来源（R20：只显示元数据）。 */
-function toSessionRow(summary: SessionSummaryView): SessionRowModel {
+function toSessionRow(summary: SessionSummaryView, nowMs: number): SessionRowModel {
   const offline =
     summary.origin.kind === "remote" && !summary.origin.online
       ? `来源「${summary.origin.ownerLabel}」当前离线`
@@ -343,22 +468,26 @@ function toSessionRow(summary: SessionSummaryView): SessionRowModel {
     directoryAlias: summary.directoryAlias,
     originOfflineLabel: offline,
     updatedAt: summary.updatedAt,
+    updatedAtLabel: formatRelativeTime(summary.updatedAt, nowMs),
   };
 }
 
 /**
  * 按目录别名分组、组内按 `updatedAt` 倒序的会话行（`design.md` D3 的「会话行投影」）。
  *
- * 目录页的内联会话行用它——**不经过**详情页的查询词/月份状态：那两个字段只属于详情页
- * （spec「与目录页的查询词互不影响」，反向同理：详情页里敲的关键词不得改变目录页看到的内容）。
- * 目录详情的行也走这里（再叠加目录内查询与月份档），因此两页的行口径只有一份。
+ * 目录页的内联会话行用它——**不经过**目录页自己的查询词与筛选：那两个字段只属于目录页的
+ * 呈现。目录详情的平铺列表与对话页左栏的列表也走这里（详情页再叠加分页、左栏再叠加它自己的
+ * 目录内搜索），因此三处的行口径只有一份。
  *
  * 只收录别名在快照 `workspaces` 里登记过的会话：未登记目录的会话不归入任何目录项，
  * 与 `buildDirectoryViews` 的汇总口径一致。`resources` 为 `null`（从未同步）时返回空 Map。
+ *
+ * @param nowMs 相对时间的基准（D3：时钟是**输入**，由调用方注入，本层不读全局时钟）。
  */
 export function buildSessionRowsByAlias(input: {
   readonly resources: StagedResources | null;
   readonly ownerLabelOf: (ownerNodeId: string) => string;
+  readonly nowMs: number;
 }): ReadonlyMap<string, readonly SessionRowModel[]> {
   const byAlias = new Map<string, SessionRowModel[]>();
   if (input.resources === null) return byAlias;
@@ -369,13 +498,13 @@ export function buildSessionRowsByAlias(input: {
     if (alias === undefined || !registered.has(alias)) continue;
     const origin = summary.origin;
     const ownerLabel = origin.kind === "remote" ? input.ownerLabelOf(origin.ownerNodeId) : "";
-    const row = toSessionRow(buildSessionSummaryView(summary, ownerLabel));
+    const row = toSessionRow(buildSessionSummaryView(summary, ownerLabel), input.nowMs);
     const bucket = byAlias.get(alias);
     if (bucket === undefined) byAlias.set(alias, [row]);
     else bucket.push(row);
   }
 
-  // 组内倒序：详情页的月份档由这段已排序的行派生，于是档间也自动倒序。
+  // 组内倒序：详情页的平铺列表直接按这个顺序切片，因此第 1 页就是最新的那一页。
   for (const bucket of byAlias.values()) {
     bucket.sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : left.updatedAt > right.updatedAt ? -1 : 0));
   }
@@ -402,35 +531,28 @@ function findDirectoryByAlias(
   alias: string,
   latestActivityAt: string | null,
 ): DirectoryRowModel | undefined {
+  const duplicatedNames = duplicatedNamesOf(workspaces);
   if (list.kind === "ready") {
     const found = list.directories.find((candidate) => candidate.alias === alias);
-    return found === undefined ? undefined : toRow(found, latestActivityAt);
+    return found === undefined ? undefined : toRow(found, latestActivityAt, duplicatedNames);
   }
   if (list.empty !== "directories_without_sessions") return undefined;
   const workspace = workspaces.find((candidate) => candidate.alias === alias);
-  return workspace === undefined ? undefined : zeroRow(workspace);
-}
-
-/** 月份档：入参已按时间倒序，因此首次出现即倒序；`count` 是该月的行数。 */
-function monthBuckets(rows: readonly SessionRowModel[]): readonly DirectoryMonthModel[] {
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    const key = monthKeyOf(row.updatedAt);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts].map(([key, count]) => ({ key, count }));
+  return workspace === undefined ? undefined : zeroRow(workspace, duplicatedNames);
 }
 
 /**
- * 目录详情模型：某个别名下的会话列表。
+ * 目录详情模型：某个别名下的会话列表（倒序平铺 + 分页）。
  *
  * `alias` 不在快照目录里时返回 `unknown_directory`——它与「目录存在但没有会话」不是同一件事，
  * 前者说明链接已失效，后者说明目录是好的。
  *
- * @param query 目录内查询词（缺省 `""`）；只匹配**本目录**会话的呈现标题。
- * @param month 请求的月份档（缺省 `"all"`）；只决定 `sessions`/`shown`，不影响 `months`/`total`。
- *   不在派生出的 `months` 里时按 `"all"` 计算，并把回落后的值放进 {@link DirectoryDetailModel}
- *   的 `month` 字段（生效值）。
+ * @param pageInput 页码输入框里的**原文**（缺省 `""`，等价于第一页）。它按
+ *   {@link correctPageNumber} 纠正：不是合法页码时回落到第一页，超出范围时夹紧到边界。
+ *   「回落」在这里是**第一页**而不是「上一页」——从原文里读不出「上一页」是第几页；
+ *   store 的 `setDirectoryDetailPage` 在提交时用当前生效页做回落，因此用户敲一段垃圾
+ *   不会把列表换掉（规格「列表内容不因一次非法输入而重画」）。
+ * @param nowMs 相对时间的基准（D3：时钟是**输入**）。
  */
 export function buildDirectoryDetailModel(input: {
   readonly resources: StagedResources | null;
@@ -438,8 +560,8 @@ export function buildDirectoryDetailModel(input: {
   readonly alias: string;
   /** imported 会话的来源展示名（按 `ownerNodeId` 解析）。 */
   readonly ownerLabelOf: (ownerNodeId: string) => string;
-  readonly query?: string;
-  readonly month?: string | "all";
+  readonly nowMs: number;
+  readonly pageInput?: string;
 }): DirectoryDetailModel {
   if (input.resources === null) return { kind: "loading" };
 
@@ -452,32 +574,33 @@ export function buildDirectoryDetailModel(input: {
     return { kind: "unknown_directory", alias: input.alias };
   }
 
-  const needle = (input.query ?? "").trim().toLowerCase();
   // 行投影与目录页共用同一个出口（`buildSessionRowsByAlias`）：两页的标题、来源标注与排序
-  // 口径只有一份；`input.query`/`input.month` 只作用于**详情页**这两个局部量，不回流到目录页。
-  const rows = (
-    buildSessionRowsByAlias({ resources: input.resources, ownerLabelOf: input.ownerLabelOf }).get(input.alias) ?? []
-  ).filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
+  // 口径只有一份。详情页没有任何查询词或月份档（规格把两者都移除了），因此切片前的行
+  // 就是该目录的全部会话行——「空列表」于是只可能是「该目录一条会话都没有」。
+  const rows =
+    buildSessionRowsByAlias({
+      resources: input.resources,
+      ownerLabelOf: input.ownerLabelOf,
+      nowMs: input.nowMs,
+    }).get(input.alias) ?? [];
+  const total = rows.length;
 
-  const months = monthBuckets(rows);
-  const requestedMonth = input.month ?? "all";
-  // 对账：请求的档若不在派生出的 `months` 里（目录内搜索把只含别的月份的档滤没了、或跨目录
-  // 残留下上一个目录的档），必须回落 `"all"`。否则会同时坏两处：控件的选项由 `months` 生成，
-  // 表示不了这个值，于是整组选中态为空；而 `sessions` 又被这个不存在的档滤成空——用户看到
-  // 「没有符合条件的会话」，却看不到是哪个（已经消失的）档在挡着。
-  const month =
-    requestedMonth === "all" || months.some((bucket) => bucket.key === requestedMonth) ? requestedMonth : "all";
-  const sessions = month === "all" ? rows : rows.filter((row) => monthKeyOf(row.updatedAt) === month);
+  // 分页：条数、总页数、纠正后的页码与切片都在这里算完（D4），组件只渲染。
+  const pageCount = Math.max(1, Math.ceil(total / DIRECTORY_DETAIL_PAGE_SIZE));
+  const page = correctPageNumber({ requested: input.pageInput ?? "", pageCount, fallback: 1 });
+  const sessions = rows.slice((page - 1) * DIRECTORY_DETAIL_PAGE_SIZE, page * DIRECTORY_DETAIL_PAGE_SIZE);
 
   return {
     kind: "ready",
     // 目录项与列表页走同一条投影（`toRow`）：汇总来自快照聚合，活动时间即上面算出的最大值。
     directory,
-    month,
+    // 本页切片；`total` 是**分页前**的全部会话数，总页数与页面头部的「N 个会话」都从它算。
     sessions,
-    months,
+    page,
+    pageCount,
+    pageSize: DIRECTORY_DETAIL_PAGE_SIZE,
     shown: sessions.length,
-    total: rows.length,
+    total,
     contentOrigin: contentOriginOf(input.connection),
   };
 }

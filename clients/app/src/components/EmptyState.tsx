@@ -43,25 +43,31 @@ const GUIDANCE_PROPS = { role: "paragraph" } as unknown as TextProps;
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
+    // 原型 `.blank`：虚线边框、居中、块内留白大一些；两种空态因此长得像同一块「说明区」，
+    // 区别落在文案与操作指引上（那份区分由词表保证）。
     root: {
+      alignItems: "center",
       backgroundColor: colors.panel,
       borderWidth: 1,
+      borderStyle: "dashed",
       borderColor: colors.line,
       borderRadius: radius.md,
-      padding: spacing.lg,
+      paddingVertical: spacing.xl,
+      paddingHorizontal: spacing.xl,
       gap: spacing.sm,
-      boxShadow: colors.shadow,
     },
     title: {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.lg,
       fontWeight: "600",
+      textAlign: "center",
     },
     guidance: {
-      color: colors.ink2,
+      color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      textAlign: "center",
     },
   });
 }

@@ -84,11 +84,24 @@ import {
   recordFromHistoryItem,
   recordGroupOf,
   viewText,
+  workspacePathOf,
 } from "../domain";
 import type { AgentConnectionOverlay } from "../domain/agent-catalog";
 import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./ports";
-import type { ConversationHeaderModel, ConversationPageModel, UsageReading } from "./conversation-model";
-import { buildConversationModel, conversationCapabilities, structuredHistoryAvailability } from "./conversation-model";
+import type {
+  ConversationHeaderModel,
+  ConversationPageModel,
+  ConversationSecondaryView,
+  UsageReading,
+} from "./conversation-model";
+import {
+  CONVERSATION_SIDEBAR_BATCH_SIZE,
+  DEFAULT_CONVERSATION_SECONDARY_VIEW,
+  buildConversationModel,
+  buildConversationSidebar,
+  conversationCapabilities,
+  structuredHistoryAvailability,
+} from "./conversation-model";
 import type { ConversationInputModel } from "./conversation-input-model";
 import { buildConversationInputModel } from "./conversation-input-model";
 import type { ConversationSettingsModel } from "./conversation-settings-model";
@@ -103,11 +116,27 @@ import {
 import type { DegradedEventModel } from "./degradation-model";
 import { buildDegradedRecordModel, isDegradedRecord } from "./degradation-model";
 import { buildInteractionViews } from "./interaction-model";
-import type { CreateSessionEntryModel, CreateSessionRefs } from "./create-session-model";
+import type {
+  CreateSessionEntryModel,
+  CreateSessionRefs,
+  DirectoryBrowseState,
+  DirectoryBrowserModel,
+  DirectorySelection,
+  RegisteredDirectoryModel,
+} from "./create-session-model";
 import {
+  BROWSE_RESULT_INVALID_ERROR,
+  CREATE_SHEET_BROWSE_KEY,
+  WORKSPACE_BROWSE_FEATURE,
   assertCreateSessionRefs,
+  buildCreateFolderPath,
   buildCreateSessionCommand,
   buildCreateSessionEntryModel,
+  buildDirectoryBrowserModel,
+  crumbsFor,
+  initialDirectoryBrowseState,
+  openedDirectoryBrowseState,
+  parseBrowseResult,
 } from "./create-session-model";
 import type {
   DirectoryDetailModel,
@@ -115,7 +144,7 @@ import type {
   DirectoryPageModel,
   SessionRowModel,
 } from "./directory-model";
-import { buildDirectoryDetailModel, buildDirectoryPageModel, buildSessionRowsByAlias } from "./directory-model";
+import { buildDirectoryDetailModel, buildDirectoryPageModel, buildSessionRowsByAlias, correctPageNumber } from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
 import type { PairingKind, PairingPageModel, PairingPollResult, PairingQrRead, PairingWiring } from "./pairing-model";
@@ -235,13 +264,42 @@ export interface ClientState {
   /** 结果不确定的 `requestId`：保留到用户主动处理，不随时间或重连清除。 */
   readonly uncertainRequestIds: readonly Uuid[];
   readonly createSheetAlias: string | null;
+  /**
+   * 顶部入口打开的创建弹层（没有已知目录，目录由浏览/选择给出）。
+   *
+   * 与 `createSheetAlias` **互斥**、共同构成「弹层是否打开」这**一个**判据的两支：三个写入方
+   * （`openCreateSheet` / `openCreateSheetToBrowse` / `closeCreateSheet`）每次都同时设置两者，
+   * 因此不存在「两边都开着」或「都关着却还渲染弹层」的中间态。之所以不把它塞进 `createSheetAlias`
+   * 的取值域，是因为那个字段的语义是「入口所属的已登记目录别名」，而顶部入口根本没有别名。
+   */
+  readonly createSheetBrowses: boolean;
+  /** 目录浏览选择器（`workspace.browse`）的状态：单份、跨路由存活。 */
+  readonly directoryBrowse: DirectoryBrowseState;
   readonly diagnosticsEventId: string | null;
-  /** 目录页查询词；与详情页的查询词是**两个独立**状态（页面各有自己的搜索框）。 */
+  /** 目录页查询词；与详情页的页码是两个独立状态（两页各有自己的 UI 状态）。 */
   readonly directoryQuery: string;
   readonly directoryFilter: DirectoryFilter;
-  readonly directoryDetailQuery: string;
-  /** 详情页当前月份档；`"all"` 表示呈现全部月份。 */
-  readonly directoryDetailMonth: string | "all";
+  /**
+   * 详情页页码输入框里的值（**合法值**：提交时已按 `correctPageNumber` 纠正）。
+   *
+   * 单份 UI 状态：跨路由存活、只影响渲染。存的是字符串而不是数字，因为它是输入框的回填值，
+   * 而且「非法输入回落到当前页」这条判定要用提交时那一刻的生效页。
+   */
+  readonly directoryDetailPage: string;
+  /**
+   * 上面那个页码属于**哪个目录**；`null` 表示它不属于任何目录（没有生效值）。
+   *
+   * 页码是单份状态，而它的含义与目录绑定：`directoryDetail(alias)` 只在两者对得上时才采用这个值，
+   * 换一个目录立刻按第一页渲染——**首帧**就是对的，不必等挂载后的复位（复位晚一帧时，用户会先看到
+   * 上一个目录的页码被渲染出来再被跳回去）。
+   */
+  readonly directoryDetailAlias: string | null;
+  /** 对话页窄屏的次级视图（D5）；三栏内容始终在 DOM，未选中的栏只隐藏。 */
+  readonly conversationSecondaryView: ConversationSecondaryView;
+  /** 对话页左栏的目录内搜索词；只影响左栏列表，不改中栏当前会话。 */
+  readonly conversationSidebarQuery: string;
+  /** 对话页左栏一次呈现的会话条数（「继续加载」按批增加）。 */
+  readonly conversationSidebarLimit: number;
   readonly pairing: PairingPageModel;
   readonly host: HostIdentityModel | null;
 }
@@ -272,11 +330,16 @@ export function initialClientState(): ClientState {
     createRequestIds: new Map(),
     uncertainRequestIds: [],
     createSheetAlias: null,
+    createSheetBrowses: false,
+    directoryBrowse: initialDirectoryBrowseState(),
     diagnosticsEventId: null,
     directoryQuery: "",
     directoryFilter: "all",
-    directoryDetailQuery: "",
-    directoryDetailMonth: "all",
+    directoryDetailPage: "",
+    directoryDetailAlias: null,
+    conversationSecondaryView: DEFAULT_CONVERSATION_SECONDARY_VIEW,
+    conversationSidebarQuery: "",
+    conversationSidebarLimit: CONVERSATION_SIDEBAR_BATCH_SIZE,
     pairing: initialPairingPageModel(),
     host: null,
   };
@@ -422,6 +485,11 @@ export type CommandOutcome =
 
 /** 创建会话的提交结果（与 {@link CommandOutcome} 同一形状的历史名）。 */
 export type CreateOutcome = CommandOutcome;
+
+/** 「新建文件夹」的结果：成功给出候选路径（它随后成为选定结果），失败给出原因且**没有**改选定。 */
+export type CreateFolderOutcome =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly reason: string };
 
 /** 未建立已认证连接时的统一拒绝理由（命令信封需要 `connectionId`）。 */
 const NOT_CONNECTED: CommandOutcome = { ok: false, reason: "尚未建立已认证连接，无法提交命令" };
@@ -768,8 +836,55 @@ export class ClientStore {
       // 结果不确定**只**在服务端确认后登记，且没有任何自动清除路径（R16 场景 4）。
       next = { ...next, uncertainRequestIds: [...next.uncertainRequestIds, updated.requestId] };
     }
+    next = this.#withBrowseResult(next, updated, result);
     next = this.#withModeListResult(next, updated, result);
     return this.#applyReadResult(next, result);
+  }
+
+  /**
+   * `workspace.browse` 的完成结果 → 浏览状态。
+   *
+   * 只认**当前那一层**的在途请求（`pendingRequestId`）：换层之后迟到的结果不再改界面（否则用户已经
+   * 在别处，界面却被旧层的条目改写）。结果形状不符时必须给出一条明确的失败，而不是当成「这一层没有
+   * 子目录」——那会把服务端答非所问呈现成正常的空层。
+   */
+  #withBrowseResult(state: ClientState, record: CommandRecord, result: CommandResultMessage): ClientState {
+    const browse = state.directoryBrowse;
+    if (record.command !== "workspace.browse" || browse.pendingRequestId !== record.requestId) return state;
+    const settled: DirectoryBrowseState = {
+      ...browse,
+      loaded: true,
+      pendingRequestId: null,
+      entries: [],
+      truncated: false,
+      error: null,
+    };
+    if (result.body.status !== "completed") {
+      return {
+        ...state,
+        directoryBrowse: {
+          ...settled,
+          error:
+            record.error ?? {
+              code: "internal.unavailable",
+              message: `服务端未给出目录浏览失败的原因（${result.body.status}）。`,
+              retryable: false,
+              details: {},
+            },
+        },
+      };
+    }
+    const parsed = parseBrowseResult(result.body.result);
+    if (parsed === null) return { ...state, directoryBrowse: { ...settled, error: BROWSE_RESULT_INVALID_ERROR } };
+    return {
+      ...state,
+      directoryBrowse: {
+        ...settled,
+        here: parsed.path,
+        entries: parsed.entries,
+        truncated: parsed.truncated,
+      },
+    };
   }
 
   /** `session.mode.list` 的完成结果 → 模式清单（模型/模式分节的「可选项」来源）。 */
@@ -892,6 +1007,16 @@ export class ClientStore {
 
   // ── 选择器 ────────────────────────────────────────────────────────────────
 
+  /**
+   * 仓库的**时钟端口**：页面（或任何消费方）读一次，再把同一个值传给需要它的选择器。
+   *
+   * 视图模型不读全局时钟（D3）：这一读一传让「同一帧里的所有时间文案用同一个基准」成为
+   * 调用方可以保证的事，测试与 e2e 也能注入固定时刻。本类内部的时钟来自构造输入 `now`。
+   */
+  nowMs(): number {
+    return this.#now();
+  }
+
   /** 目录页模型（R15）。数据只来自快照，不发任何命令；查询与筛选只是纯渲染状态。 */
   directoryPage(): DirectoryPageModel {
     return buildDirectoryPageModel({
@@ -903,27 +1028,41 @@ export class ClientStore {
     });
   }
 
-  /** 目录详情模型（R15）。 */
-  directoryDetail(alias: string): DirectoryDetailModel {
+  /**
+   * 目录详情模型（R15 + 分页）。
+   *
+   * 页码是**单份**状态（跨路由存活），但它的含义与目录绑定：只有它属于**这个**目录时才采用，
+   * 否则按「没有输入」（第一页）算。这样「进入另一个目录时从第一页开始」在**首帧**就成立，
+   * 不依赖挂载后的复位——复位晚一帧时，上一次的页码会先被渲染出来再被跳回去。
+   * 同一个目录内翻页不受影响：`setDirectoryDetailPage` 每次都把持有者写成它。
+   *
+   * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
+   */
+  directoryDetail(alias: string, nowMs?: number): DirectoryDetailModel {
     return buildDirectoryDetailModel({
       resources: this.#state.resources,
       connection: this.#state.connection.state,
       alias,
       ownerLabelOf: this.#ownerLabelOf,
-      query: this.#state.directoryDetailQuery,
-      month: this.#state.directoryDetailMonth,
+      nowMs: nowMs ?? this.#now(),
+      pageInput: this.#state.directoryDetailAlias === alias ? this.#state.directoryDetailPage : "",
     });
   }
 
   /**
    * 目录页的内联会话行：按目录别名分组、组内按时间倒序。
    *
-   * 只依赖快照，**不读** `directoryDetailQuery`/`directoryDetailMonth`，也不派发任何命令——
-   * 因此详情页里敲过的关键词或选过的月份不会改变目录页看到的内容（spec「与目录页的查询词
-   * 互不影响」的反向）。
+   * 只依赖快照，**不读** `directoryQuery`/`directoryFilter`/`directoryDetailPage`，
+   * 也不派发任何命令——因此目录页的查询与筛选、详情页翻到的页码都不会改变目录页看到的内容。
+   *
+   * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
    */
-  directoryPageSessions(): ReadonlyMap<string, readonly SessionRowModel[]> {
-    return buildSessionRowsByAlias({ resources: this.#state.resources, ownerLabelOf: this.#ownerLabelOf });
+  directoryPageSessions(nowMs?: number): ReadonlyMap<string, readonly SessionRowModel[]> {
+    return buildSessionRowsByAlias({
+      resources: this.#state.resources,
+      ownerLabelOf: this.#ownerLabelOf,
+      nowMs: nowMs ?? this.#now(),
+    });
   }
 
   /** 本机已配置的 Agent 目录（快照 `agents` + 连接覆盖层，R19）。 */
@@ -931,11 +1070,25 @@ export class ClientStore {
     return buildAgentCatalogView(this.#state.resources?.agents ?? [], this.#state.overlay).entries;
   }
 
-  /** 创建弹层模型（R16）。入口没有权限维度：创建入口恒可用。 */
-  createEntry(alias: string): CreateSessionEntryModel {
-    const requestId = this.#state.createRequestIds.get(alias);
+  /**
+   * 创建弹层模型（R16）。入口没有权限维度：创建入口恒可用。
+   *
+   * @param alias 入口所属的已登记目录别名；顶部入口（目录由浏览/选择给出）传 `null`。
+   *   别名不在快照里时目录块退回浏览/选择形态——别名只是机器标识，不拿它当展示名。
+   */
+  createEntry(alias: string | null): CreateSessionEntryModel {
+    const sheetKey = alias ?? CREATE_SHEET_BROWSE_KEY;
+    const requestId = this.#state.createRequestIds.get(sheetKey);
+    const workspace =
+      alias === null ? undefined : this.#state.resources?.workspaces.find((item) => item.alias === alias);
     return buildCreateSessionEntryModel({
       directoryAlias: alias,
+      knownDirectory:
+        workspace === undefined
+          ? null
+          : { displayName: workspace.displayName, path: workspacePathOf(workspace) },
+      browsingSupported: this.#state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE),
+      selection: this.#state.directoryBrowse.selection,
       agents: this.agentCatalog(),
       record: requestId === undefined ? null : (this.#state.commands.get(requestId) ?? null),
       connectionOnline: this.#state.connection.state === "online",
@@ -943,13 +1096,15 @@ export class ClientStore {
   }
 
   /**
-   * 对话页模型（R17 + R18 + 时间线 + 输入/交互/设置 + 两套分页）。
+   * 对话页模型（R17 + R18 + 时间线 + 输入/交互/设置 + 两套分页 + 左栏 + 右栏差异区）。
    *
    * 会话既不在快照里也没有线程时为 `null`（没有任何可呈现的东西）。判定全部在这里与
    * `conversation-model.ts` / `conversation-timeline.ts` / `interaction-model.ts` 里完成，
    * 组件只消费结果。
+   *
+   * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
    */
-  conversationPage(sessionId: Uuid): ConversationPageModel | null {
+  conversationPage(sessionId: Uuid, nowMs?: number): ConversationPageModel | null {
     const thread = this.#state.threads.get(sessionId);
     const summary = this.#findSession(sessionId);
     if (thread === undefined && summary === undefined) return null;
@@ -1031,6 +1186,16 @@ export class ClientStore {
       interactions,
       settings,
       fileChanges: buildFileChangeViews(records),
+      // 左栏只读快照：同目录会话、目录上下文与「已呈现 / 总数」都由快照推出，没有命令出口。
+      sidebar: buildConversationSidebar({
+        resources: this.#state.resources,
+        workspace: summary?.workspace ?? null,
+        sessionId,
+        ownerLabelOf: this.#ownerLabelOf,
+        query: this.#state.conversationSidebarQuery,
+        limit: this.#state.conversationSidebarLimit,
+        nowMs: nowMs ?? this.#now(),
+      }),
       capabilities: conversationCapabilities({
         connectionOnline,
         sessionState: summary?.state ?? "idle",
@@ -1146,14 +1311,186 @@ export class ClientStore {
 
   // ── 用户意图 ──────────────────────────────────────────────────────────────
 
-  /** 打开创建弹层。 */
+  /**
+   * 打开创建弹层（目录层级入口：目录**已知**）。
+   *
+   * 三个写入方都从这里或 {@link openCreateSheetToBrowse} 走，因此「弹层是否打开」永远只有一处判据。
+   * 同时复位浏览状态：换一个目录入口就是新一次创建，上一次的选定不该被带过来。
+   */
   openCreateSheet(alias: string): void {
-    this.#commit({ ...this.#state, createSheetAlias: alias });
+    this.#commit({
+      ...this.#state,
+      createSheetAlias: alias,
+      createSheetBrowses: false,
+      directoryBrowse: initialDirectoryBrowseState(),
+    });
   }
 
-  /** 关闭创建弹层。 */
+  /**
+   * 打开创建弹层（顶部入口：目录**未知**，要先浏览/选择一层）。
+   *
+   * 这条入口同样**恒可用**（创建入口没有权限维度）；服务端没提供目录浏览能力时，
+   * 弹层按「不可用并保留已登记目录这条路」呈现（见 `create-session-model.ts` 的目录块模型）。
+   */
+  openCreateSheetToBrowse(): void {
+    this.#commit({
+      ...this.#state,
+      createSheetAlias: null,
+      createSheetBrowses: true,
+      directoryBrowse: initialDirectoryBrowseState(),
+    });
+  }
+
+  /** 关闭创建弹层（连带关闭并复位它的目录选择器：选定只在一次弹层会话里有效）。 */
   closeCreateSheet(): void {
-    this.#commit({ ...this.#state, createSheetAlias: null });
+    if (this.#state.createSheetAlias === null && !this.#state.createSheetBrowses) return;
+    this.#commit({
+      ...this.#state,
+      createSheetAlias: null,
+      createSheetBrowses: false,
+      directoryBrowse: initialDirectoryBrowseState(),
+    });
+  }
+
+  /**
+   * 打开目录浏览选择器。
+   *
+   * 这里是**只**翻开关：第一层数据由选择器挂载时请求（`initialPath` → `onBrowse`），
+   * 因此「打开」不依赖页面先知道该请求哪一层。已确认的选定保留，用户取消后重开能从原处继续。
+   */
+  openDirectoryPicker(): void {
+    this.#commit({ ...this.#state, directoryBrowse: openedDirectoryBrowseState(this.#state.directoryBrowse) });
+  }
+
+  /** 关闭目录浏览选择器（保留选定与浏览轨迹）。 */
+  closeDirectoryPicker(): void {
+    if (!this.#state.directoryBrowse.open) return;
+    this.#commit({
+      ...this.#state,
+      directoryBrowse: { ...this.#state.directoryBrowse, open: false, folderError: null },
+    });
+  }
+
+  /**
+   * 请求某一层目录（`null` = 该节点的根列表）。
+   *
+   * 四道闸门与 `loadEarlierHistory` 同一个口径：未协商 `core.workspace-browse.v1` 时**不派发**——
+   * 服务端会在触碰文件系统之前回 `protocol.feature_required`，靠「发了再看反应」只会白跑一趟；
+   * 未连接同理（命令信封需要 `connectionId`）。面包屑由 {@link crumbsFor} 从**服务端下发**的条目
+   * 或当前选定推出，路径一律是服务端给过的那一份。
+   */
+  browseDirectory(path: string | null): CommandOutcome {
+    if (!this.#state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE)) {
+      return { ok: false, reason: "服务端未提供目录浏览能力（未协商 core.workspace-browse.v1）" };
+    }
+    const browse = this.#state.directoryBrowse;
+    const crumbs = crumbsFor({
+      current: browse.crumbs,
+      entries: browse.entries,
+      selection: browse.selection,
+      path,
+    });
+    const requestId = this.#dispatchIntent({
+      sessionId: null,
+      build: (id) => ({ requestId: id, command: "workspace.browse", payload: { path } }),
+      patch: (id) => ({
+        directoryBrowse: {
+          ...browse,
+          here: path,
+          crumbs,
+          // 换层时先清空条目：不能拿上一层的条目冒充这一层（结果回来前呈现「读取中」）。
+          entries: [],
+          truncated: false,
+          loaded: false,
+          pendingRequestId: id,
+          error: null,
+          folderError: null,
+        },
+      }),
+    });
+    if (requestId !== null) return { ok: true, requestId };
+    // 没有可用的已认证连接：命令发不出去。这**不是**「正在读取」，因此留下一条明确的原因，
+    // 否则选择器会永远停在「正在读取这一层的目录……」（静默失败）。
+    this.#commit({
+      ...this.#state,
+      directoryBrowse: {
+        ...browse,
+        loaded: true,
+        pendingRequestId: null,
+        entries: [],
+        truncated: false,
+        error: {
+          code: "internal.unavailable",
+          message: "尚未建立已认证连接，无法读取主机上的目录。",
+          retryable: true,
+          details: {},
+        },
+      },
+    });
+    return NOT_CONNECTED;
+  }
+
+  /**
+   * 在当前层新建一层目录，并把它作为选定结果。
+   *
+   * 候选路径由 {@link buildCreateFolderPath} 就地构造（父层来自服务端回显、名字来自用户输入），
+   * 名字不合规时**不**构造也不提交，只把原因留在 `folderError` 上（参数类拒绝）。
+   * 新建的目录此刻在主机上还不存在，因此选定带 `willCreate`，提交时会带上 `createIfMissing`。
+   */
+  createFolderInBrowse(name: string): CreateFolderOutcome {
+    const here = this.#state.directoryBrowse.here;
+    if (here === null) {
+      return { ok: false, reason: "根列表不是一个目录，先在它下面选一个目录再新建文件夹。" };
+    }
+    const built = buildCreateFolderPath({ parent: here, name });
+    if (!built.ok) {
+      this.#commit({
+        ...this.#state,
+        directoryBrowse: { ...this.#state.directoryBrowse, folderError: built.reason },
+      });
+      return { ok: false, reason: built.reason };
+    }
+    this.#commit({
+      ...this.#state,
+      directoryBrowse: {
+        ...this.#state.directoryBrowse,
+        open: false,
+        folderError: null,
+        selection: {
+          kind: "path",
+          path: built.path,
+          name: built.name,
+          registered: false,
+          willCreate: true,
+        },
+      },
+    });
+    return { ok: true, path: built.path };
+  }
+
+  /** 确认选定并关掉选择器（选定内容逐字来自服务端下发或用户输入的新层名字）。 */
+  selectBrowsedDirectory(selection: DirectorySelection): void {
+    this.#commit({
+      ...this.#state,
+      directoryBrowse: { ...this.#state.directoryBrowse, open: false, folderError: null, selection },
+    });
+  }
+
+  /** 目录浏览选择器的视图模型。 */
+  directoryBrowser(): DirectoryBrowserModel {
+    return buildDirectoryBrowserModel({
+      supported: this.#state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE),
+      browse: this.#state.directoryBrowse,
+    });
+  }
+
+  /** 本机已登记的目录（快照 `workspaces`）：不支持浏览时的回退选择，路径未下发时为 `null`。 */
+  registeredDirectories(): readonly RegisteredDirectoryModel[] {
+    return (this.#state.resources?.workspaces ?? []).map((workspace) => ({
+      alias: workspace.alias,
+      displayName: workspace.displayName,
+      path: workspacePathOf(workspace),
+    }));
   }
 
   /** 打开诊断抽屉。 */
@@ -1169,8 +1506,8 @@ export class ClientStore {
   /**
    * 更新目录页查询词。
    *
-   * 与 `setDirectoryDetailQuery` 分开，是因为两页各有独立搜索框：进入详情页不得清空
-   * 目录页的查询词，返回时它仍在（spec「与目录页的查询词互不影响」）。
+   * 它是**目录页独有**的 UI 状态：详情页没有搜索框（规格把「目录详情的目录内搜索」移除了），
+   * 因此进入详情页不得清空它，返回时它仍在。
    */
   setDirectoryQuery(query: string): void {
     this.#commit({ ...this.#state, directoryQuery: query });
@@ -1181,28 +1518,68 @@ export class ClientStore {
     this.#commit({ ...this.#state, directoryFilter: filter });
   }
 
-  /** 更新目录详情页的目录内查询词。 */
-  setDirectoryDetailQuery(query: string): void {
-    this.#commit({ ...this.#state, directoryDetailQuery: query });
+  /**
+   * 提交详情页的页码输入（回车/失焦时调用）。
+   *
+   * 纠正**在提交时**完成，且回落值是**当前生效页**：因此敲一段非数字不会把列表换掉（规格
+   * 「列表内容不因一次非法输入而重画」——纠正后的值就是原来的值），越界数字则夹紧到边界。
+   * 存回状态的也是纠正后的字符串，于是输入框的回填与列表永远一致。持有者同时记为 `alias`：
+   * 这个页码从此只属于这个目录（见 `directoryDetail`）。
+   *
+   * @param alias 正在看的目录：页数与生效页码都取决于它（`total` 是**该目录**的行数）。
+   */
+  setDirectoryDetailPage(alias: string, requested: string): void {
+    const model = this.directoryDetail(alias);
+    const current = model.kind === "ready" ? model.page : 1;
+    const pageCount = model.kind === "ready" ? model.pageCount : 1;
+    this.#commit({
+      ...this.#state,
+      directoryDetailPage: String(correctPageNumber({ requested, pageCount, fallback: current })),
+      directoryDetailAlias: alias,
+    });
   }
 
-  /** 更新目录详情页的月份档；`"all"` 表示呈现全部月份。 */
-  setDirectoryDetailMonth(month: string | "all"): void {
-    this.#commit({ ...this.#state, directoryDetailMonth: month });
+  /** 更新对话页的次级视图（窄屏切换控件）。 */
+  setConversationSecondaryView(view: ConversationSecondaryView): void {
+    this.#commit({ ...this.#state, conversationSecondaryView: view });
+  }
+
+  /** 更新对话页左栏的目录内搜索词（只影响左栏列表）。 */
+  setConversationSidebarQuery(query: string): void {
+    this.#commit({ ...this.#state, conversationSidebarQuery: query });
   }
 
   /**
-   * 进入某个目录详情页时调用：目录内查询词与月份档都是**单份**状态，必须在新目录上复位。
+   * 左栏「继续加载」：再放一批（{@link CONVERSATION_SIDEBAR_BATCH_SIZE} 条）。
    *
-   * 两者都挂在 store 单例上、跨路由存活；不复位的话，在目录 A 选的月份档（或敲的查询词）
-   * 会带进目录 B，把 B 的内容整片挡掉——而控件上已经看不到那个档了。原型在进入目录与
-   * `hashchange` 时同样把 `A.month` 重置为 `all`。
+   * 它只改呈现条数，不派发任何命令、也不改中栏当前会话。
+   */
+  loadMoreSidebarSessions(): void {
+    this.#commit({
+      ...this.#state,
+      conversationSidebarLimit: this.#state.conversationSidebarLimit + CONVERSATION_SIDEBAR_BATCH_SIZE,
+    });
+  }
+
+  /**
+   * 丢掉详情页的页码状态（页码复位成 `""` = 第一页，持有者清空）。
    *
-   * 一次 commit 改两处（形状同 {@link pairSucceeded}），避免出现「查询词已清、月份档还留着」
-   * 的中间态被渲染出来。
+   * 页码挂在 store 单例上、跨路由存活；不复位的话，在目录 A 翻到的页码会带进目录 B。
+   * 页面在**进入某个目录详情页时**调用它（含再次进入同一个目录），把「进入即从第一页开始」
+   * 这条约定落实；原型在进入目录与 `hashchange` 时同样把页码重置为 1。
+   *
+   * 它与 `directoryDetail` 的读取侧判定分工明确：读取侧保证「跨目录进入的首帧就是第一页」
+   * （遗留页码在别的目录里直接不被采用），本方法保证「同目录再次进入也回到第一页」。
+   *
+   * `""` 不是「上一次的页」，而是一份没有输入的状态，由 `correctPageNumber` 得出 1。目录页的查询词与
+   * 筛选不在复位范围内：它们是**目录页**的状态，返回目录页时要原样还在。
    */
   resetDirectoryDetailView(): void {
-    this.#commit({ ...this.#state, directoryDetailQuery: "", directoryDetailMonth: "all" });
+    this.#commit({
+      ...this.#state,
+      directoryDetailPage: "",
+      directoryDetailAlias: null,
+    });
   }
 
   /** 更新配对页状态。 */
@@ -1510,40 +1887,59 @@ export class ClientStore {
   /**
    * 提交创建会话。
    *
-   * 三道闸门，任一不过即**不发命令**：
+   * 四道闸门，任一不过即**不发命令**：
    * 1. 已建立连接（命令信封需要 `connectionId`）；
    * 2. Agent 必须在本机已配置的目录里（快照 `agents`），不是「用户输入什么就发什么」；
-   * 3. 载荷恰好是 `agentId` 加一个目录引用（`assertCreateSessionRefs`）。
+   * 3. 目录引用必须能定下来（入口别名、选定结果，或表单带回来的路径，三者都不为空）；
+   * 4. 载荷恰好是 `agentId` 加一个目录引用（加可选的 `createIfMissing`，由 `assertCreateSessionRefs` 把关）。
    *
-   * 目录**不再有权限门控**（设备权限层已删除）：入口与提交都不看任何 scope。目录来源由
-   * `directoryPath` 决定——给了就用客户端提供的绝对目录，留空就退回本目录的已登记别名。
-   * `createRequestIds` 一律以**本目录的别名**为键（弹层是按它打开的），因此用户在输入框里
-   * 换目录不会让提交状态在界面上失联。
+   * 目录**不再有权限门控**（设备权限层已删除）：入口与提交都不看任何 scope。
+   * `directoryPath` 是表单带回来的那一份（顶部入口选定/新建出来的路径，逐字是用户看到的那一份）；
+   * 别名不跟着表单走，而是从本仓库的浏览器状态里读——顶部入口在回退列表里选中的那一项就是它。
+   * 两者都换算成 `session.create` 的两个合法形状之一，含 `createIfMissing` 的那一支只跟路径搭配。
+   *
+   * `createRequestIds` 一律以**弹层的机器键**为键（已登记目录用别名，顶部入口用
+   * `CREATE_SHEET_BROWSE_KEY`）：用户改目录不改弹层，因此提交状态不会与界面失联。
    */
   submitCreateSession(input: {
-    readonly directoryAlias: string;
+    readonly directoryAlias: string | null;
     readonly agentId: string;
     readonly directoryPath?: string;
+    readonly createIfMissing?: boolean;
   }): CreateOutcome {
     const connectionId = this.#identity.connectionId;
-    if (connectionId === null) return { ok: false, reason: "尚未建立已认证连接，无法提交命令" };
+    if (connectionId === null) return NOT_CONNECTED;
 
     const entry = this.createEntry(input.directoryAlias);
     if (!entry.agents.some((agent) => agent.id === input.agentId)) {
       return { ok: false, reason: "所选 Agent 不在本机已配置的 Agent 目录里" };
     }
-    const directoryPath = input.directoryPath ?? "";
-    const refs: CreateSessionRefs =
-      directoryPath.length > 0
-        ? { workspacePath: directoryPath, agentId: input.agentId }
-        : { workspaceAlias: input.directoryAlias, agentId: input.agentId };
+    const path = input.directoryPath ?? "";
+    const createIfMissing = input.createIfMissing === true;
+    const selected = this.#state.directoryBrowse.selection;
+    const registeredAlias =
+      input.directoryAlias ?? (selected !== null && selected.kind === "registered" ? selected.alias : null);
+    let refs: CreateSessionRefs;
+    if (path.length > 0) {
+      refs = createIfMissing
+        ? { workspacePath: path, agentId: input.agentId, createIfMissing: true }
+        : { workspacePath: path, agentId: input.agentId };
+    } else {
+      if (registeredAlias === null) {
+        return { ok: false, reason: "还没有选定目录：先浏览并选中一层，或改用已登记的目录。" };
+      }
+      if (createIfMissing) {
+        return { ok: false, reason: "已登记的目录必然存在，不能对它启用「不存在则先创建」。" };
+      }
+      refs = { workspaceAlias: registeredAlias, agentId: input.agentId };
+    }
     assertCreateSessionRefs(refs);
 
     const requestId = this.#ids.uuid();
     const commands = new Map(this.#state.commands);
     commands.set(requestId, createCommand({ requestId, command: "session.create" }));
     const createRequestIds = new Map(this.#state.createRequestIds);
-    createRequestIds.set(input.directoryAlias, requestId);
+    createRequestIds.set(input.directoryAlias ?? CREATE_SHEET_BROWSE_KEY, requestId);
     this.#commit({ ...this.#state, commands, createRequestIds });
 
     this.#sync.dispatch(

@@ -1,5 +1,5 @@
 /**
- * 目录页搜索/筛选与目录详情按月分档的判定（design D3/D4/D5/D6）。
+ * 目录页搜索/筛选与目录详情平铺列表的判定（design D3/D4/D5）。
  *
  * 渲染层拿不到事件（`vitest.config.ts` 只收 `*.test.ts`，组件测试用
  * `renderToStaticMarkup`），因此「输入查询词 → 列表变化」这类判定只能在**纯函数**这层证伪。
@@ -9,15 +9,13 @@
  *
  * - 命中口径：三种命中方式各给一个只有它能命中的查询词，任何漏掉一种匹配的实现都会少一项；
  * - 筛选：三个取值分别建了只有它能命中的目录，漏掉汇总口径会多留或多删目录；
- * - 分档：用了 2026-09 / 2026-10 两个月份与一条 2020 年的会话——若实现改用「当前时间」，
- *   三个月份会并成一档，`months` 与「今天所在的档」两条断言都会变红；
  * - `no_match`：只在非默认查询/筛选下构造可达用例，并对照「缺省输入永不进入」。
  * - 最近活动时间：夹具里 `work-api` 的三条会话**最新的一条在中间**、`personal-api` 有一条**全局最晚**
  *   的会话——取第一条 / 取最后一条 / 取全局最大值 / 取当前时间的实现各会得到不同的值，只有
  *   「该目录下 `updatedAt` 的最大值」等于 `10-02`。
- * - 月份档对账：构造「请求的档已不在派生档集合里」的可达用例（目录内查询收缩档集合、
- *   跨目录残留上一个目录的档），断言生效月份回落到能被控件表示的 `"all"`——没有对账时
- *   这些用例会得到空白列表 + 无选中控件，正是本文件要挡住的错态。
+ * - 详情列表：跨月的会话必须落在**同一条**倒序平铺的列表里（规格用「目录详情按时间倒序分页」
+ *   替换了旧的月份分档与目录内搜索），且只收录本目录的行——按月份分档、或按标题再过滤一次
+ *   的实现都会在「行数与顺序」上露馅。
  */
 
 import { describe, expect, it } from "vitest";
@@ -25,7 +23,11 @@ import { describe, expect, it } from "vitest";
 import { UNTITLED_SESSION_LABEL } from "../domain";
 import type { SessionSummary, WorkspaceRef } from "../protocol";
 import type { DirectoryDetailModel, DirectoryFilter, DirectoryPageModel } from "./directory-model";
-import { buildDirectoryDetailModel, buildDirectoryPageModel, monthKeyOf } from "./directory-model";
+import {
+  DIRECTORY_DETAIL_PAGE_SIZE,
+  buildDirectoryDetailModel,
+  buildDirectoryPageModel,
+} from "./directory-model";
 import { ACTIVITY_SESSIONS, CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
 
 /** 三个目录，展示名、别名、名下会话标题两两不相交，便于把「命中来自哪一处」分离出来。 */
@@ -70,20 +72,18 @@ function page(input: {
   });
 }
 
+/** 详情模型：注入固定时钟（相对时间与列表顺序无关，但模型要求它作为输入）。 */
 function detail(input: {
   readonly sessions: readonly SessionSummary[];
   readonly workspaces?: readonly WorkspaceRef[];
   readonly alias: string;
-  readonly query?: string;
-  readonly month?: string | "all";
 }): DirectoryDetailModel {
   return buildDirectoryDetailModel({
     resources: resources({ sessions: input.sessions, workspaces: input.workspaces ?? WORKSPACES }),
     connection: "online",
     alias: input.alias,
     ownerLabelOf: () => "工作站",
-    query: input.query ?? "",
-    month: input.month ?? "all",
+    nowMs: 1_700_000_000_000,
   });
 }
 
@@ -247,71 +247,39 @@ describe("目录页 no_match 分支", () => {
   });
 });
 
-describe("目录详情按月分档", () => {
-  it("两个不同月份各自成档，档按时间倒序，档内也倒序", () => {
+describe("目录详情：按时间倒序平铺（一条列表，没有月份档与目录内查询）", () => {
+  it("跨月的会话落在同一条列表里，且按时间倒序", () => {
     const model = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api" });
     if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
 
-    // 反例：若按「当前时间」分档，两条会话会落进同一档，这里只剩一个元素。
-    expect(model.months).toEqual([
-      { key: "2026-10", count: 1 },
-      { key: "2026-09", count: 1 },
-    ]);
+    // 反例：按月份分档的实现会把两个月的会话切开（每档各只剩一条，甚至列表被空档挡空）。
     expect(model.sessions.map((row) => row.id)).toEqual([
       "eeeeeeee-0000-4000-8000-000000000002",
       "eeeeeeee-0000-4000-8000-000000000001",
     ]);
     expect(model.shown).toBe(2);
     expect(model.total).toBe(2);
+    // 两条会话只有一页：条数、页码、总页数三者自洽。
+    expect(model.page).toBe(1);
+    expect(model.pageCount).toBe(1);
+    expect(model.pageSize).toBe(DIRECTORY_DETAIL_PAGE_SIZE);
   });
 
-  it("按会话自身时间而不是当前时间：2020 年的会话落在 2020-03，不在今天的档", () => {
-    const longAgo = session({
-      id: "eeeeeeee-0000-4000-8000-00000000000f",
-      title: "老项目",
-      updatedAt: "2020-03-15T12:00:00.000Z",
-    });
-    const model = detail({ sessions: [longAgo], alias: "work-api" });
-    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
+  it("只列该别名下的会话：别的目录的会话既不进列表也不进点数", () => {
+    // 反例：把整份快照的会话都列出来时，web-ui 会多出两张不属于它的行。
+    const webUi = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, alias: "web-ui" });
+    if (webUi.kind !== "ready") throw new Error(`期望 ready，实际是 ${webUi.kind}`);
+    expect(webUi.total).toBe(1);
+    expect(webUi.sessions.map((row) => row.title)).toEqual(["Design Tokens"]);
 
-    expect(monthKeyOf("2020-03-15T12:00:00.000Z")).toBe("2020-03");
-    expect(model.months).toEqual([{ key: "2020-03", count: 1 }]);
-    // 反例：若档取自当前时间，这里会出现今天所在的月份。
-    expect(model.months.map((month) => month.key)).not.toContain(monthKeyOf(new Date().toISOString()));
-  });
-
-  it("切换到某个月份后 shown 变小而 total 与 months 不变", () => {
-    const september = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api", month: "2026-09" });
-    if (september.kind !== "ready") throw new Error(`期望 ready，实际是 ${september.kind}`);
-
-    expect(september.sessions.map((row) => row.id)).toEqual(["eeeeeeee-0000-4000-8000-000000000001"]);
-    expect(september.shown).toBe(1);
-    // 分子随月份变，分母与月份档集合不随月份选择变。
-    expect(september.total).toBe(2);
-    expect(september.months).toHaveLength(2);
-  });
-});
-
-describe("目录详情的目录内搜索", () => {
-  it("只匹配本目录会话的标题", () => {
-    const hit = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, alias: "web-ui", query: "design" });
-    if (hit.kind !== "ready") throw new Error(`期望 ready，实际是 ${hit.kind}`);
-    expect(hit.total).toBe(1);
-    expect(hit.sessions.map((row) => row.title)).toEqual(["Design Tokens"]);
-
-    // core-eu 没有标题含 design 的会话：命中数归零，且不把其它目录的会话拉进来。
-    const miss = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, alias: "core-eu", query: "design" });
-    if (miss.kind !== "ready") throw new Error(`期望 ready，实际是 ${miss.kind}`);
-    expect(miss.total).toBe(0);
-    expect(miss.sessions).toEqual([]);
-  });
-
-  it("months 受查询影响：查询命中后档集合随之收缩", () => {
-    const model = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api", query: "十月的发布" });
-    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-    expect(model.months).toEqual([{ key: "2026-10", count: 1 }]);
-    expect(model.total).toBe(1);
-    expect(model.shown).toBe(1);
+    const coreEu = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, alias: "core-eu" });
+    if (coreEu.kind !== "ready") throw new Error(`期望 ready，实际是 ${coreEu.kind}`);
+    expect(coreEu.total).toBe(2);
+    expect(coreEu.sessions.map((row) => row.id)).toEqual([
+      "cccccccc-0000-4000-8000-000000000001",
+      "cccccccc-0000-4000-8000-000000000002",
+    ]);
+    expect(coreEu.sessions.some((row) => row.id === "cccccccc-0000-4000-8000-000000000003")).toBe(false);
   });
 
   it("空标题呈现为「未命名会话」（null 与空串都算空）", () => {
@@ -325,103 +293,59 @@ describe("目录详情的目录内搜索", () => {
     if (blank.kind !== "ready") throw new Error(`期望 ready，实际是 ${blank.kind}`);
     expect(blank.sessions.map((row) => row.title)).toEqual([UNTITLED_SESSION_LABEL, UNTITLED_SESSION_LABEL]);
   });
-});
 
-describe("目录详情：请求的月份档与派生档集合对账", () => {
-  it("已选 2026-09、再用只命中 2026-10 的关键词搜索：档集合收缩，生效月份回落 all，列表不再被挡空", () => {
-    // 可达路径 (a)：详情页已选 2026-09，随后输入的查询词只命中 2026-10 的会话——`months` 随之收缩，
-    // 被选中的那个档从选项集合里消失。
-    const model = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api", month: "2026-09", query: "十月的发布" });
-    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
+  it("对照：目录页自己的查询词与筛选不进入详情列表", () => {
+    const { store } = storeWith({
+      resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }),
+    });
+    const before = store.directoryDetail("work-api");
 
-    expect(model.months).toEqual([{ key: "2026-10", count: 1 }]);
-    // 反例（修复前）：仍按请求的 "2026-09" 过滤，于是 sessions 为空、shown 为 0，而 months 里
-    // 已经没有这个档——控件表示不了它，用户看到空白列表却看不到是哪个档在挡着。
-    expect(model.month).toBe("all");
-    expect(model.total).toBe(1);
-    expect(model.shown).toBe(1);
-    expect(model.sessions.map((row) => row.id)).toEqual(["eeeeeeee-0000-4000-8000-000000000002"]);
-    // 三者自洽：生效值可被档集合表示（"all" 恒可）、shown 等于列表长度、各档 count 之和等于 total。
-    expect(model.month === "all" || model.months.some((bucket) => bucket.key === model.month)).toBe(true);
-    expect(model.shown).toBe(model.sessions.length);
-    expect(model.months.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(model.total);
-  });
+    // 目录页的两个字段都只属于目录页：这个查询词命中的是**别**的目录，筛选又会把 work-api 排除，
+    // 于是目录页自己落到 no_match。
+    store.setDirectoryQuery("personal-api");
+    store.setDirectoryFilter("running");
+    expect(store.directoryPage()).toMatchObject({ kind: "no_match" });
 
-  it("跨目录残留的月份档：进入只含别的月份的目录时同样回落 all", () => {
-    // 可达路径 (b)：在目录 A 选了 2026-09 后进入目录 B，而 B 只有 2026-10 的会话
-    // （`directoryDetailMonth` 是单份 store 字段，跨路由存活；对账不依赖调用方是否复位）。
-    const onlyOctober = [
-      ...CROSS_MONTH_SESSIONS,
-      session({
-        id: "eeeeeeee-0000-4000-8000-000000000003",
-        title: "另一目录的十月会话",
-        alias: "personal-api",
-        updatedAt: "2026-10-05T00:00:00.000Z",
-      }),
-    ];
-    const model = detail({ sessions: onlyOctober, alias: "personal-api", month: "2026-09" });
-    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-
-    expect(model.months).toEqual([{ key: "2026-10", count: 1 }]);
-    expect(model.month).toBe("all");
-    expect(model.total).toBe(1);
-    expect(model.shown).toBe(1);
-    expect(model.sessions.map((row) => row.id)).toEqual(["eeeeeeee-0000-4000-8000-000000000003"]);
-  });
-
-  it("对照：请求的档仍在 months 里时保持原样——对账不会吞掉合法的月份选择", () => {
-    const model = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api", month: "2026-09" });
-    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-
-    // 反例：若对账被写成「一律回落 all」，这里会变成 all，断言变红。
-    expect(model.month).toBe("2026-09");
-    expect(model.shown).toBe(1);
-    expect(model.total).toBe(2);
-  });
-
-  it("对照：缺省请求（未提供 month）下生效值就是 all", () => {
-    const model = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api" });
-    if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-    expect(model.month).toBe("all");
+    // 反例：详情列表若借道目录页的查询/筛选，这里会少行甚至变空。
+    expect(store.directoryDetail("work-api")).toEqual(before);
   });
 });
 
 describe("进入目录时复位详情页视图状态（行为对齐原型）", () => {
-  it("resetDirectoryDetailView() 清空目录内查询词与月份档，且不碰目录页状态与连接/资源快照", () => {
+  it("resetDirectoryDetailView() 只把页码复位，且不碰目录页状态与连接/资源快照", () => {
     const { store } = storeWith({
       resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }),
     });
     store.setDirectoryQuery("欧洲核心");
     store.setDirectoryFilter("running");
-    store.setDirectoryDetailQuery("十月的发布");
-    store.setDirectoryDetailMonth("2026-09");
+    // 该夹具只有两条会话（一页）：越界的页码在提交时就被夹到 1，这里只关心复位把它清空。
+    store.setDirectoryDetailPage("work-api", "2");
     const before = store.state;
 
     store.resetDirectoryDetailView();
     const after = store.state;
 
-    expect(after.directoryDetailQuery).toBe("");
-    expect(after.directoryDetailMonth).toBe("all");
-    // 目录页的查询词与筛选是**另外两个**字段：复位详情页不得把它们也清掉（两页互不影响）。
+    // 页码是单份、跨路由存活的 UI 状态：不复位会把它带进下一个目录（可能直接越界）。
+    expect(after.directoryDetailPage).toBe("");
+    // 目录页的查询词与筛选是**另外两个**字段：复位详情页不得把它们也清掉。
     expect(after.directoryQuery).toBe("欧洲核心");
     expect(after.directoryFilter).toBe("running");
-    // 引用级断言：这一方法只改那两处 UI 状态，连接机快照与资源快照必须是同一个对象。
+    // 引用级断言：这一方法只改那一处 UI 状态的字符串，连接机快照与资源快照必须是同一个对象。
     expect(after.connection).toBe(before.connection);
     expect(after.resources).toBe(before.resources);
   });
 
-  it("复位后详情模型回到「全部」档并呈现全部命中行", () => {
+  it("复位后详情模型回到第一页并呈现该目录的全部会话", () => {
     const { store } = storeWith({
       resources: resources({ sessions: CROSS_MONTH_SESSIONS, workspaces: WORKSPACES }),
     });
-    store.setDirectoryDetailMonth("2026-09");
-    store.setDirectoryDetailQuery("十月的发布");
+    store.setDirectoryDetailPage("work-api", "2");
 
     store.resetDirectoryDetailView();
     const model = store.directoryDetail("work-api");
     if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
 
-    expect(model.month).toBe("all");
+    expect(model.page).toBe(1);
     expect(model.total).toBe(2);
     expect(model.shown).toBe(2);
   });

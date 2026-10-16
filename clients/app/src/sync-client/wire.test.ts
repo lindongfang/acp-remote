@@ -300,6 +300,70 @@ describe("command.status 记录收窄", () => {
   });
 });
 
+describe("解码：命令词表与快照 workspaces 的可选 path", () => {
+  const REQUEST_ID = "4c4dafda-dd98-442e-8d55-252b75bac72d";
+
+  /** 形状正确、只有 `body` 可换的命令帧信封。 */
+  const COMMAND_ENVELOPE = {
+    protocolVersion: 1,
+    type: "command",
+    messageId: "cccccccc-1111-4111-8111-000000000001",
+    connectionId: CONNECTION_ID,
+    connectionSequence: "1",
+  };
+
+  /** 形状正确、只有 `items` 可换的 `workspaces` 快照 chunk。 */
+  const WORKSPACES_CHUNK = {
+    protocolVersion: 1,
+    type: "sync.snapshot_chunk",
+    messageId: "dddddddd-1111-4111-8111-000000000001",
+    connectionId: CONNECTION_ID,
+    connectionSequence: "1",
+    body: {
+      snapshotId: "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      chunkIndex: "1",
+      resource: "workspaces",
+    },
+  };
+
+  /** 四个用例共用同一份 chunk 形状，只有条目不同。 */
+  const chunkWith = (items: readonly unknown[]): string =>
+    JSON.stringify({ ...WORKSPACES_CHUNK, body: { ...WORKSPACES_CHUNK.body, items } });
+
+  it("workspace.browse 在词表内，未登记的命令名仍被拒", () => {
+    // 反例：`workspace.browse` 已登记进 commands.json 与 command.schema.json，若这条封闭词表没跟上，
+    // 它会被按 `field_type` 拒收 → 断言变红。
+    const browse = JSON.stringify({
+      ...COMMAND_ENVELOPE,
+      body: { requestId: REQUEST_ID, command: "workspace.browse" },
+    });
+    const unknown = JSON.stringify({
+      ...COMMAND_ENVELOPE,
+      body: { requestId: REQUEST_ID, command: "workspace.rename" },
+    });
+    expect(decodeWireMessage(browse)).toMatchObject({ ok: true });
+    expect(decodeWireMessage(unknown)).toMatchObject({ ok: false, reason: "field_type" });
+  });
+
+  it("workspaces 条目的 path 可缺席、可非空字符串，但不得为 null 或空串", () => {
+    // 未协商 feature `core.workspace-path.v1`：该键缺席（不是 null、不是空串）。
+    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API" }]))).toMatchObject({ ok: true });
+    // 已协商：规范化路径随条目下发。
+    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: "/home/u/api" }]))).toMatchObject({
+      ok: true,
+    });
+    // 反例：把「路径不可见」编码成显式空值——schema 里没有这一档，整条 chunk 因此被拒。
+    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: null }]))).toMatchObject({
+      ok: false,
+      reason: "field_type",
+    });
+    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: "" }]))).toMatchObject({
+      ok: false,
+      reason: "field_type",
+    });
+  });
+});
+
 describe("base64url 编解码", () => {
   it("往返一致", () => {
     const bytes = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255]);

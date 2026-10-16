@@ -93,18 +93,19 @@ export type {
   DirectoryCountsModel,
   DirectoryDetailModel,
   DirectoryFilter,
-  DirectoryMonthModel,
   DirectoryPageModel,
   DirectoryRowModel,
   SessionRowModel,
 } from "./directory-model";
 export {
   CONTENT_ORIGIN_LABELS,
+  DIRECTORY_DETAIL_PAGE_SIZE,
   DIRECTORY_EMPTY_COPY,
   buildDirectoryDetailModel,
   buildDirectoryPageModel,
   buildSessionRowsByAlias,
-  monthKeyOf,
+  correctPageNumber,
+  formatRelativeTime,
 } from "./directory-model";
 
 // ── R16 会话创建 ────────────────────────────────────────────────────────────
@@ -124,16 +125,26 @@ export {
 // ── R17/R18 对话与降级 ──────────────────────────────────────────────────────
 export type {
   ConversationCapabilitiesModel,
+  ConversationColumnName,
   ConversationHeaderModel,
   ConversationMessageModel,
   ConversationPageModel,
   ConversationPagingModel,
+  ConversationSecondaryView,
+  ConversationSidebarDirectoryModel,
+  ConversationSidebarModel,
   ConversationTimelineModel,
   UsageReading,
 } from "./conversation-model";
 export {
+  CONVERSATION_NO_DIRECTORY_NOTICE,
+  CONVERSATION_SECONDARY_VIEWS,
+  CONVERSATION_SIDEBAR_BATCH_SIZE,
+  DEFAULT_CONVERSATION_SECONDARY_VIEW,
   buildConversationModel,
+  buildConversationSidebar,
   conversationCapabilities,
+  hiddenConversationColumns,
   nextBeforeCursor,
   structuredHistoryAvailability,
 } from "./conversation-model";

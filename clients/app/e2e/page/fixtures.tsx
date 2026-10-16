@@ -31,7 +31,12 @@ export const SECRET_FRAGMENTS = ["D:\\", "secret", "vault", "repo-x", "repo-y", 
  */
 export const HOST_PATH_FRAGMENTS = ["secret", "vault", "repo-x", "repo-y"] as const;
 
-/** 两条同名目录，各自带一个**不存在于协议**的路径字段。 */
+/**
+ * 两条同名目录，`path` 是协议字段（已登记！），另多带一个**不存在于协议**的 `root` 字段。
+ *
+ * 这个 `root` 是刻意的：协议里没有它，因此本条夹具能证明「渲染只取协议内的字段」——
+ * 镜像（`WorkspaceCatalogEntry`）装不下它，所以这里按 open object 断言（见 `domain/directory.ts`）。
+ */
 export const WORKSPACES_WITH_PATHS = [
   { alias: "alpha", displayName: "api", path: "D:\\secret\\vault\\repo-x", root: "D:\\secret\\vault" },
   { alias: "beta", displayName: "api", path: "D:\\secret\\vault\\repo-y", root: "D:\\secret\\vault" },
@@ -61,8 +66,8 @@ export const SESSION_BETA = "aaaaaaaa-0000-4000-8000-00000000bb01";
  *
  * `title` / `updatedAt` 是**可选**覆盖：缺省值与既有调用一字不差（`会话 <id 末两位>` +
  * 固定的 2026-10-01），因此既有用例的期望不受影响。搜索用例需要能逐字断言的标题
- * （目录页按会话标题匹配），月份档用例需要**会话自身**的时间（分档必须落在它上面），
- * 两者都不能靠 id 末两位或当前时间凑出来。
+ * （目录页按会话标题匹配），分页用例需要**会话自身**的时间（倒序切片与相对时间文案都落在
+ * 它上面），两者都不能靠 id 末两位或当前时间凑出来。
  */
 export function sessionSummary(input: {
   readonly id: string;
@@ -100,8 +105,8 @@ export function sessionSummary(input: {
  * 一个目录下的 `titles.length` 条会话：标题、时间与状态逐条给出。
  *
  * `idPrefix` 是 8 位十六进制（如 `aaaaaaaa`），序号补成 12 位，因此 id 是**可断言的确定值**
- * （`seriesSessionId`），不必把 UUID 抄进用例。`at` 决定两件事：目录页内联会话行的顺序与
- * 详情页的月份档——两条路径都按会话**自身**的时间排序/分档。
+ * （`seriesSessionId`），不必把 UUID 抄进用例。`at` 决定两件事：目录页内联会话行的顺序（它
+ * 与相对时间文案同源）与详情页按页取片时的倒序——两条路径都按会话**自身**的时间排序。
  */
 export function sessionSeries(input: {
   readonly alias: string;
