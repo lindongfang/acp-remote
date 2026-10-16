@@ -2,49 +2,49 @@
 
 ## Purpose
 
-定义 Sync 面 `session.create` 命令的设备级授权语义、载荷约束、失败分类与终态契约，使 PWA 能在本机已登记 workspace 与已配置 Agent 的范围内创建会话，同时不接受任何绝对路径、目录追加或凭据输入。
+定义 Sync 面 `session.create` 命令的认证前提、载荷约束、失败分类与终态契约，使 PWA 能在本机已登记目录或用户提供的目录里、用已配置的 Agent 创建会话，同时不接受凭据输入。
 
 ## Requirements
 
-### Requirement: 命令登记与双层授权
+### Requirement: 命令登记与授权边界
 
-`session.create` SHALL 同时经 Node Link 与 Sync 暴露，归设备授权包 `pack.create-session` 与 `grant.remote-work`。Sync 侧发起时 MUST 同时满足设备 scope `session.create` 与 Owner 侧 `grant.remote-work`；未满足时 MUST 以授权拒绝错误（`authorization.scope_denied`）终止且无副作用——不启动进程、不写会话行、不分配会话标识。
+`session.create` SHALL 同时经 Node Link 与 Sync 暴露。Sync 侧以「该连接已通过设备认证」为唯一前提，不再有设备级授权判定；Node Link 侧仍按 Owner 的 Export 与 `grant.remote-work` 判定。未通过认证时 MUST 拒绝且无副作用——不启动进程、不写会话行、不分配会话标识。
 
-#### Scenario: 未持 scope 的设备被拒且无副作用
+#### Scenario: 未认证的连接被拒且无副作用
 
-- **WHEN** 一台持 observe 与 interact 但不持 `session.create` 的设备提交 `session.create`
-- **THEN** 返回 `authorization.scope_denied`，本机不产生会话行、不启动任何 Agent 进程
+- **WHEN** 一个尚未完成设备认证的连接提交 `session.create`
+- **THEN** 返回认证类失败，本机不产生会话行、不启动任何 Agent 进程
 
-#### Scenario: 持 scope 的设备成功创建
+#### Scenario: 已认证设备成功创建
 
-- **WHEN** 一台持 `session.create` 的设备提交本机已登记的 workspace 别名与已配置的 Agent 标识
+- **WHEN** 一台已认证的设备提交已配置的 Agent 标识与一个合法目录
 - **THEN** 请求先被接受，随后以 `completed` 终态返回新会话的标识与会话摘要
-### Requirement: 载荷形状与拒绝
+### Requirement: 载荷形状与目录来源
 
-`session.create` 的 payload MUST 只允许 `workspaceAlias` 与 `agentId` 两个键。出现任何其它键（含 `cwd`、`exportId`、`templateParams`、绝对路径、MCP 配置或凭据字段）时 MUST 以 schema 校验错误（`protocol.schema_invalid`）拒绝，MUST NOT 创建会话、MUST NOT 部分应用参数、MUST NOT 回显提交内容。系统 MUST NOT 接受客户端提供的任何绝对路径、目录追加或凭据。
+`session.create` 的 payload MUST 只允许 `agentId` 与目录引用（`workspaceAlias` 或客户端提供的目录，二者之一）两类字段。出现任何其它键（含 `exportId`、`templateParams`、`mcpServers`、MCP 配置或凭据字段）时 MUST 以 schema 校验错误（`protocol.schema_invalid`）拒绝，MUST NOT 创建会话、MUST NOT 部分应用参数、MUST NOT 回显提交内容。凭据 MUST NOT 经本命令传入。
 
-#### Scenario: 携带 cwd 被拒且不创建
+#### Scenario: 未登记的键被拒且不创建
 
-- **WHEN** payload 携带 `cwd` 或任何绝对路径取值
+- **WHEN** payload 携带 `exportId`、`templateParams`、MCP 配置或凭据类字段
 - **THEN** 返回 `protocol.schema_invalid`，不创建会话、不启动进程，错误细节不回显该取值
 
-#### Scenario: 只接受已登记引用
+#### Scenario: 目录引用二选一
 
-- **WHEN** payload 的 `workspaceAlias` 与 `agentId` 都是本机已登记/已配置的取值
-- **THEN** 请求通过形状校验并进入授权与解析流程
-### Requirement: 设备级授权语义与副作用
+- **WHEN** payload 同时给出别名与一个客户端提供的目录
+- **THEN** 请求被拒绝，不创建会话；系统 MUST NOT 猜测以哪一个为准
+### Requirement: 目录校验与失败分类
 
-`session.create` 对设备的授权判定 SHALL 以「该资源当前是否已登记（workspace）或已配置（Agent）」为准，而不是以配对时的快照为准。一次授予 MUST 因此覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent；该副作用 MUST 在权威安全文档中显式记录，MUST NOT 仅隐含在 scope 名称之下。撤销该 scope 或撤销设备 MUST 立即使后续创建被拒。
+本机 SHALL 对生效的目录来源做与既有口径一致的校验：别名按登记表解析，客户端提供的目录 MUST 是绝对路径、存在且为目录，并以 `canonicalize` 的结果作为权威值。形状不合法（相对路径、含 `..`、或别名未登记）时 MUST 以参数类错误拒绝并 MUST NOT 触碰文件系统；形式合法但无法解析（目录被删除、被替换为文件、规范化失败、权限不足）时 MUST 以服务端不可用类错误拒绝。两类失败都 MUST NOT 创建会话、MUST NOT 启动进程、MUST NOT 回退到任何替代目录。
 
-#### Scenario: 新登记的目录自动进入已授权范围
+#### Scenario: 形状不合法是参数类错误
 
-- **WHEN** 一台设备配对时被授予 `session.create`，此后本机新登记了一个 workspace
-- **THEN** 该设备无需重新授权即可在该 workspace 中创建会话
+- **WHEN** payload 给出一个相对路径、含 `..` 的路径，或一个本机未登记的别名
+- **THEN** 返回参数类错误，且不访问文件系统、不启动进程
 
-#### Scenario: 撤销后立即失效
+#### Scenario: 无法解析是服务端错误
 
-- **WHEN** 该设备的 `session.create` scope 被撤销，或设备本身被撤销
-- **THEN** 其后续 `session.create` 一律被拒且无副作用
+- **WHEN** 形式合法的目录已被删除、已不是目录，或规范化结果与预期不同
+- **THEN** 返回服务端不可用类错误（`internal.unavailable`），不创建会话也不启动进程
 ### Requirement: 引用失败与解析失败的分类
 
 引用的别名或 Agent 不在本机登记/配置集合内时，系统 MUST 以参数类错误拒绝并 MUST NOT 触碰文件系统；别名已登记但本机解析失败（目录被删除、被替换为文件、规范化失败或权限不足）时 MUST 以服务端不可用类错误拒绝。两类失败都 MUST NOT 创建会话、MUST NOT 启动进程、MUST NOT 回退到任何替代目录或替代 Agent。
@@ -62,6 +62,8 @@
 
 `session.create` 是有副作用的 mutation：系统 SHALL 先接受（`accepted`，`result` 与 `terminalEventId` 均为 `null`）再执行，最终以 `completed`（携带新会话标识与会话摘要）、`failed` 或 `uncertain` 之一终结。同一稳定 `requestId` 重复提交 MUST 返回首次结果，MUST NOT 产生第二个会话或第二次 Agent 启动；已接受但副作用无法确认的崩溃窗口 MUST 落 `uncertain` 终态，MUST NOT 自动重试。
 
+受理 MUST 只持久化该命令的幂等记录，MUST NOT 因此创建会话行；会话行、ACP 会话标识与归属信息的落盘 MUST 与终态在同一次提交内完成；后端失败时 MUST NOT 留下会话行。终结类别 SHALL 按「能否证明 Agent 侧未产生会话」判定：可证明时 `failed`，无法证明时 `uncertain`。
+
 #### Scenario: 重复 requestId 不产生第二个会话
 
 - **WHEN** 同一设备用同一 `requestId` 重发一次已完成的 `session.create`
@@ -70,4 +72,19 @@
 #### Scenario: 崩溃窗口进 uncertain
 
 - **WHEN** 命令已被接受，但在确认 Agent 启动结果之前进程崩溃
-- **THEN** 恢复后该命令的终态为 `uncertain`，且不自动重试创建
+- **THEN** 恢复后该命令的终态为 `uncertain`，且不自动重试创建；本机没有该会话的会话行
+
+#### Scenario: 受理不创建会话行
+
+- **WHEN** 一条 `session.create` 已被接受，但后端尚未返回结果
+- **THEN** 本机只有该命令的幂等记录（会话标识为空），没有对应的会话行；同 `requestId` 的重复提交返回受理态而不再派发一次创建
+
+#### Scenario: 可证明未产生会话时以 failed 终结且零会话行
+
+- **WHEN** 后端因进程未能启动，或 Agent 明确对会话建立请求返回错误（含请求未发出即失败）而未能建立会话
+- **THEN** 该命令以 `failed` 终结并携带服务端不可用类错误，本机不产生会话行，同 `requestId` 重发返回该终态
+
+#### Scenario: 无法证明时以 uncertain 终结
+
+- **WHEN** 请求已发出但结果无法证明（短请求超时、发出后连接断开，或会话已建立但后续落盘/存储失败）
+- **THEN** 该命令以 `uncertain` 终结并标记可能已到达 Agent，MUST NOT 自动重试
