@@ -75,7 +75,7 @@ CSP 里没有 `style-src`，`style-src` 与 `style-src-attr` 都回落到 `defau
 
 ### D3：回归证据分两层，浏览器层落在既有的 e2e 检查集
 
-- **构建期（CI 可见，无需浏览器）**：`npm run check` = typecheck + vitest + `expo export`，转换串在 `export:web` 上，因此 D2 的三条断言在 CI 的 `前端检查（clients/app）` 里真的会执行。
+- **构建期（CI 可见，无需浏览器）**：`npm run check` = typecheck + vitest + `expo export`（`typecheck:e2e` 由后续的 #134 追加进这条链），转换串在 `export:web` 上，因此 D2 的三条断言在 CI 的 `前端检查（clients/app）` 里真的会执行。
 - **浏览器级（判据在这里）**：`clients/app/e2e` 的假主机面按生产口径加上**同一组静态响应头（含 CSP）**，页面按 D1 声明 link，新增一条检查断言**计算样式**生效并断言页面里没有内联 `<style>` 元素。
 
 为什么浏览器层是判据：CSP 由浏览器内核执行，vitest 的 node/jsdom 环境复现不了这条拦截（jsdom 里 `sheet` 不为 `null`，样式照样生效）。而 CI 的前端 job 不装浏览器内核，所以这一层只能进 `clients/app/e2e` 这份**既有**检查集（`task 2.2` 的二选一里正是这一支）。

@@ -14,7 +14,7 @@
 
 | ID | Goal / Scenarios | Dependencies | Agent | Write Scope | Deliverable | Verify |
 | --- | --- | --- | --- | --- | --- | --- |
-| WP1 | 生产入口文档不再依赖内联样式形态（design D1/D2；scenario「真实 CSP 下样式真的生效」的生产形态）：`dist/index.html` 抽出内联 reset 为同源 `entry-reset.css`、在 bundle 之前声明空的同源 `rnw-stylesheet.css` link；转换自身失败关闭 | none | wp-coder | `clients/app/scripts/`, `clients/app/package.json` | `<id>.patch`：新增入口文档转换模块（导出纯函数 + CLI 入口）并接进 `export:web`；**不另写单测**（vitest `include` 只收 `src/**/*.test.ts`，写进 `scripts/` 会被静默跳过，理由见 design D2）；报告写明三条构建期断言与它们的触发条件 | `cd clients/app && npm run check`（typecheck + vitest + `expo export`；三条断言在 `export:web` 里执行） |
+| WP1 | 生产入口文档不再依赖内联样式形态（design D1/D2；scenario「真实 CSP 下样式真的生效」的生产形态）：`dist/index.html` 抽出内联 reset 为同源 `entry-reset.css`、在 bundle 之前声明空的同源 `rnw-stylesheet.css` link；转换自身失败关闭 | none | wp-coder | `clients/app/scripts/`, `clients/app/package.json` | `<id>.patch`：新增入口文档转换模块（导出纯函数 + CLI 入口）并接进 `export:web`；**不另写单测**（vitest `include` 只收 `src/**/*.test.ts`，写进 `scripts/` 会被静默跳过，理由见 design D2）；报告写明三条构建期断言与它们的触发条件 | `cd clients/app && npm run check`（typecheck + vitest + `expo export`；三条断言在 `export:web` 里执行；`typecheck:e2e` 由后续的 #134 追加进这条链） |
 | WP2 | e2e 面按生产口径带 CSP，并新增「计算样式真的生效」的检查（design D3；task 2.2） | none | wp-tester | `clients/app/e2e/` | `<id>.patch`：`run-e2e.mjs` 下发与 `STATIC_HEADERS` 同取值的五个响应头、内联错误收集脚本改为外部文件、入口 HTML 声明空表 link；新增检查断言计算样式 + 页面无内联 `<style>`，并注册进检查集 | `cd clients/app && node e2e/run-e2e.mjs`（真实 Chromium；主 Agent 执行） |
 | WP3 | 如实登记新实绩与清除陈旧断言（task 3.1） | none | wp-coder | `docs/FRONTEND_DESIGN.md`, `docs/SECURITY_DESIGN.md`, `README.md`, `crates/server/src/transport/net/static_ui.rs` | `<id>.patch`：文档登记入口文档的样式形态与「同源托管下前端可用」的实绩；按实绩改写 `docs/SECURITY_DESIGN.md` §11.1 的 `[实现现状]`（旧句断言「内联 `<style id="expo-reset">` 被拒、冲突交 `frontend-sync-wiring` 解决」，本变更后不再成立；须写明基线未放宽、内联形态已移除、`insertRule` 不是 CSP 检查点，并按该文件惯例在头部补一条本次修订记录）；清掉 `static_ui.rs` 里同一条过期注释 | `npm run check:docs`, `npm run check:drift`, `npm run check:rust`（第三项覆盖 Rust 注释改动） |
 
@@ -30,7 +30,7 @@
 
 | Check ID | Command / Working Directory | Scope / Pass Criteria |
 | --- | --- | --- |
-| PV1 | `cd clients/app && npm run check` | typecheck + vitest + `expo export --platform web` 全绿；导出后 `dist/index.html` 不含内联 `<style>`，含两份同源样式表 link |
+| PV1 | `cd clients/app && npm run check` | typecheck + vitest + `expo export --platform web` 全绿（`typecheck:e2e` 由后续的 #134 追加进这条链）；导出后 `dist/index.html` 不含内联 `<style>`，含两份同源样式表 link |
 | PV2 | `cd clients/app && node e2e/run-e2e.mjs` | 全部检查通过（含新增的样式检查）；**且**把样式改回内联形态时该检查变红（反向核对由主 Agent 在做完 PV2 后临时改回一次确认，随即还原） |
 | PV3 | `npm run check`（仓库根） | 十项合同门禁全绿（含 `check:docs`、`check:drift`、`check:openspec`） |
 | PV4 | `npm run verify`（仓库根） | 合同门禁 + `cargo fmt --check` / `clippy -D warnings` / `cargo test --workspace` 全绿（覆盖 WP3 的 Rust 注释改动） |

@@ -2,7 +2,7 @@
 
 > 状态：编码前客户端约束  
 > 版本：0.5
-> 修订记录（2026-10-16，`ui-csp-inline-styles`）：§4.5 登记入口文档的**样式形态**实绩——reset 外置为同源 `/entry-reset.css`、`react-native-web` 的运行时样式表写进**必须保持为空**的同源 `/rnw-stylesheet.css`，样式因此在既定 CSP 下由同源外部样式表交付（**不是**放宽 CSP）；取舍依据见本次变更 `openspec/changes/ui-csp-inline-styles/design.md`。  
+> 修订记录（2026-10-16，`ui-csp-inline-styles`）：§4.5 登记入口文档的**样式形态**实绩——reset 外置为同源 `/entry-reset.css`、`react-native-web` 的运行时样式表写进**必须保持为空**的同源 `/rnw-stylesheet.css`，样式因此在既定 CSP 下由同源外部样式表交付（**不是**放宽 CSP）；取舍依据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`。  
 > 修订记录（2026-10-16，`node-link-pair-route`）：§4.1 登记新增路由 `/node-link/pair`（与 `/pair` 共用同一入口主体）与「两类配对入口互不混淆」的口径，并记下该路径与协议保留前缀的关系；§9 追加两条入口区分用例。  
 > 修订记录（2026-10-16，`pairing-origin-secure-context`）：§4.5 把「来源与 secure context 校验尚未实现」改写成实绩——配对入口在读载荷之后、发任何请求之前依次校验安全上下文、来源一致与载荷类型，环境事实经组合根注入，失败码为 `auth.origin_mismatch` / 新增的 `auth.insecure_context`。  
 > 修订记录（2026-10-16，`frontend-sync-wiring`）：§4.1 写回「主机连接与首次配对」的实绩与两处未闭合边界；§4.5 写回配对秘密的清理口径与尚未实现的来源校验；§5 补阻断态的封闭成因词表与「与普通断网可分、阻断后结构性停止自动重连」；§9 写回前端级验收证据，并如实登记尚未执行的真实 Daemon 浏览器级端到端验收。  
@@ -211,7 +211,7 @@ PWA 不需要独立云服务器。`[决定]`（2026-10-15，`sync-ui-hosting`）
 
 PWA 不加载第三方脚本、字体或 CDN 资源。CSP 最低基线为 `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`，Agent 产生的 Markdown、终端、diff 和工具内容全部按不可信输入渲染。
 
-`[实现现状]`（2026-10-16，`ui-csp-inline-styles`）入口文档的**样式形态**已按上述基线落地：`expo export` 生成的入口文档里原有的内联 `<style id="expo-reset">` 被抽出为同源 `/entry-reset.css`，并在 bundle 的 `<script defer>` **之前**声明一份**必须保持为空**的同源 `/rnw-stylesheet.css`——`react-native-web`（RNW）于模块求值期按 id 复用该 `<link>` 的 `sheet`，把它的初始 reset 与全部原子类 `insertRule` 进去，因此页面不再依赖任何内联样式形态。两个文件都由 Daemon 在同源根路径托管（`MIME_TYPES` 已含 `css → text/css; charset=utf-8`，托管层与响应头一字未动），样式由此在**既定 CSP** 的同源托管下完整交付（此前「同源托管下前端无样式」的缺口就此闭合）；**这不是放宽 CSP**（`insertRule` 不是 CSP 的检查点）。取舍、失败形态与判据见本次变更 `openspec/changes/ui-csp-inline-styles/design.md`（D1/R2/R3）。**硬边界**：`/rnw-stylesheet.css` 必须保持为空，写进内容会让 RNW 的 hydration 遍历到无 `[stylesheet-group]` 标记的规则并抛错（整页空白）；link 必须排在 bundle 之前（RNW 取 `link.sheet`，未加载完时为 `null` 且不重试）；回归判据是浏览器级的**计算样式**断言，而不是「DOM 里有 `<style>`」。
+`[实现现状]`（2026-10-16，`ui-csp-inline-styles`）入口文档的**样式形态**已按上述基线落地：`expo export` 生成的入口文档里原有的内联 `<style id="expo-reset">` 被抽出为同源 `/entry-reset.css`，并在 bundle 的 `<script defer>` **之前**声明一份**必须保持为空**的同源 `/rnw-stylesheet.css`——`react-native-web`（RNW）于模块求值期按 id 复用该 `<link>` 的 `sheet`，把它的初始 reset 与全部原子类 `insertRule` 进去，因此页面不再依赖任何内联样式形态。两个文件都由 Daemon 在同源根路径托管（`MIME_TYPES` 已含 `css → text/css; charset=utf-8`，托管层与响应头一字未动），样式由此在**既定 CSP** 的同源托管下完整交付（此前「同源托管下前端无样式」的缺口就此闭合）；**这不是放宽 CSP**（`insertRule` 不是 CSP 的检查点）。取舍、失败形态与判据见归档的 `openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md`（D1/R2/R3）。**硬边界**：`/rnw-stylesheet.css` 必须保持为空，写进内容会让 RNW 的 hydration 遍历到无 `[stylesheet-group]` 标记的规则并抛错（整页空白）；link 必须排在 bundle 之前（RNW 取 `link.sheet`，未加载完时为 `null` 且不重试）；回归判据是浏览器级的**计算样式**断言，而不是「DOM 里有 `<style>`」。
 
 若可靠的浏览器长期密钥方案尚未完成，PWA 只能运行在显式开发模式。开发模式必须：
 
