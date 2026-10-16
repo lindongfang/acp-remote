@@ -420,8 +420,12 @@ const checks: readonly Check[] = [
             0,
             "降级说明里不得夹带可加载元素",
           );
+          // 先取到那个元素再断言它存在：`domText` 只接受非 null，缺元素时要报「链接降级说明没渲染」
+          // 这条可定位的失败，而不是让 `domText(null)` 抛一个看不出原因的 TypeError。
+          const omittedLink = query(entry, '[data-markdown-omitted="link"]');
+          expectThat(omittedLink !== null, "远端链接的降级说明必须渲染");
           expectThat(
-            domText(query(entry, '[data-markdown-omitted="link"]')).includes("evil.example") === false,
+            domText(omittedLink).includes("evil.example") === false,
             "链接降级只呈现标签与说明，不把地址当链接目标呈现",
           );
 

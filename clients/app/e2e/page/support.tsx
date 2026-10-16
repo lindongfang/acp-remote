@@ -114,8 +114,16 @@ export class CheckFailure extends Error {
   }
 }
 
-/** 条件断言。 */
-export function expectThat(condition: boolean, detail: string): void {
+/**
+ * 条件断言。
+ *
+ * 声明为**断言函数**（`asserts condition`）而不是返回 `void`：用例普遍写成
+ * `const entry = query(...); expectThat(entry !== null, "…");` 之后直接用 `entry`——
+ * 那正是「断言不过就抛 `CheckFailure`、过了就一定有值」的语义。少了 `asserts`，TS 的控制流分析
+ * 看不见这层保证，`domText(entry)` 这类**只接受非 null** 的助手就会报类型错误（或者迫使每个调用点
+ * 写一遍局部变量 + 非空断言）。行为不变：条件不成立时仍然抛同一个 `CheckFailure`。
+ */
+export function expectThat(condition: boolean, detail: string): asserts condition {
   if (!condition) throw new CheckFailure(detail);
 }
 

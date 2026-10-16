@@ -12,9 +12,10 @@
     "start": "expo start --web",
     "export:web": "expo export --platform web && node scripts/adapt-entry-document.mjs && node scripts/write-build-version.mjs",
     "typecheck": "tsc --project tsconfig.json --noEmit",
+    "typecheck:e2e": "tsc --project e2e/tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "service": "vite preview",
-    "check": "npm run typecheck && npm run test && npm run export:web"
+    "check": "npm run typecheck && npm run typecheck:e2e && npm run test && npm run export:web"
   },
   "dependencies": {
     "expo": "~57.0.0",
