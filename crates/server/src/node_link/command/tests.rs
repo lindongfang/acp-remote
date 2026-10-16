@@ -167,13 +167,27 @@ impl CommandStore {
     }
 }
 
+/// 终态提交里那条 `command.*` 事件的 `causation`（= 这条终态属于哪个请求）。
+///
+/// 真实存储用同一条线索定位要推进的 `owned_command` 行（终态提交只带事件与终态记录，不带 requestId），
+/// 替身照抄它——不按「哪条记录还是 `accepted`」猜。
+fn causation_request(commit: &OwnedCommit) -> Result<CoreRequestId, PortError> {
+    commit
+        .events
+        .iter()
+        .rev()
+        .find(|event| event.event_type.as_str().starts_with("command."))
+        .and_then(|event| event.causation.clone())
+        .ok_or(PortError::InvalidRequest("终态提交缺少 command.* 事件"))
+}
+
 #[async_trait::async_trait]
 impl SessionStore for CommandStore {
     async fn commit(&self, commit: OwnedCommit) -> Result<CommitOutcome, PortError> {
         self.commit_calls.fetch_add(1, Ordering::SeqCst);
         lock(&self.commits).push(commit.clone());
-        // 幂等命中（§6 第 6 条与第 20 条）：五项比对，`session = None` 不参与（`session.create` 的
-        // 目标会话由存储层分配并回填）。
+        // 幂等命中（§6 第 6 条与第 20 条）：五项比对，`session = None` 不参与（`session.create` 的会话
+        // 标识由 core 分配、受理阶段还没有，落账提交才回填）。
         if let Some(idem) = commit.idempotency.as_ref() {
             if let Some(existing) = lock(&self.commands).get(idem.request.as_str()).cloned() {
                 let same = existing.command() == idem.command
@@ -196,8 +210,10 @@ impl SessionStore for CommandStore {
                 });
             }
         }
-        // `session.resume` 的 `accepted` 提交（core 的 `resume_session` 自建幂等行）：没有 `StateChange`、
-        // 也没有 `command_terminal`，只在既有会话行旁落一条 `accepted` 命令记录（§5.1）。
+        // **受理**提交（§6 第 20 条的三笔时序第一笔）：没有 `StateChange`、也没有 `command_terminal`，
+        // 只落一条 `accepted` 命令记录——`session.create` 的这条记录**不带会话行**（`session_id` 为
+        // `NULL`，会话标识由 core 分配、落账提交才回填）；`session.resume` 同形（core 的
+        // `resume_session` 自建幂等行，§5.1）。
         if commit.state.is_none() && commit.command_terminal.is_none() {
             let idem = commit
                 .idempotency
@@ -219,7 +235,7 @@ impl SessionStore for CommandStore {
                     idem.expected_version,
                     idem.request_fingerprint.clone(),
                 )
-                .expect("session.resume 的 accepted 行"),
+                .expect("accepted 行"),
             );
             return Ok(CommitOutcome {
                 session_id: commit.session.clone(),
@@ -229,38 +245,40 @@ impl SessionStore for CommandStore {
                 replayed: None,
             });
         }
-        let Some(StateChange::Create(new)) = &commit.state else {
-            // 终态提交：按同一批 `command.*` 事件的 causation 定位行，推进到终态。
-            let request = commit
-                .events
-                .iter()
-                .rev()
-                .find(|event| event.event_type.as_str().starts_with("command."))
-                .and_then(|event| event.causation.clone())
-                .ok_or(PortError::InvalidRequest("终态提交缺少 command.* 事件"))?;
+        if let Some(StateChange::SettleCreate(settled)) = &commit.state {
+            // 落账提交（§6 第 20 条）：**同一次**提交里建会话行（采用 core 已分配的标识）、回填幂等行的
+            // `session_id`、写终态。替身的 `commit` 本身是原子的，「同一次提交」由此成立。
+            self.seed_session(
+                SessionSummary::try_new(
+                    settled.session.clone(),
+                    settled.title.clone(),
+                    settled.agent.clone(),
+                    SessionState::Idle,
+                    ResourceOrigin::Local,
+                    None,
+                    Version::new(1),
+                    commit.at.clone(),
+                    commit.at.clone(),
+                    None,
+                )
+                .expect("落账的会话摘要"),
+            );
             let terminal = commit
                 .command_terminal
                 .clone()
-                .ok_or(PortError::InvalidRequest("终态提交缺少 command_terminal"))?;
+                .ok_or(PortError::InvalidRequest("落账提交缺少 command_terminal"))?;
+            let request = causation_request(&commit)?;
             let existing =
                 lock(&self.commands)
                     .get(request.as_str())
                     .cloned()
                     .ok_or(PortError::NotFound(EntityRef::Command {
-                        session: commit.session.clone(),
+                        session: Some(settled.session.clone()),
                         request: request.clone(),
                     }))?;
-            if existing.status().is_terminal() {
-                return Ok(CommitOutcome {
-                    session_id: existing.session().cloned(),
-                    origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
-                    version: Version::new(1),
-                    appended: Vec::new(),
-                    replayed: Some(acp_core::ports::IdempotentReplay { record: existing }),
-                });
-            }
             let updated = CommandRecord::try_new(
-                existing.session().cloned(),
+                // 回填：受理行的 `session_id` 在受理阶段是 `NULL`，落账提交才写上 core 分配的标识。
+                Some(settled.session.clone()),
                 existing.request().clone(),
                 existing.command(),
                 existing.kind(),
@@ -276,53 +294,64 @@ impl SessionStore for CommandStore {
             )?;
             self.seed_command(updated);
             return Ok(CommitOutcome {
-                session_id: commit.session.clone(),
+                session_id: Some(settled.session.clone()),
                 origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
                 version: Version::new(1),
                 appended: Vec::new(),
                 replayed: None,
             });
-        };
-        // 会话身份永远由 Owner（存储层）在提交事务内分配。
-        let session = SessionId::new("8ae1c07c-9242-46e9-a9d2-4ec58c130f50").expect("session id");
-        self.seed_session(
-            SessionSummary::try_new(
-                session.clone(),
-                new.title.clone(),
-                new.agent.clone(),
-                SessionState::Idle,
-                ResourceOrigin::Local,
-                None,
-                Version::new(1),
-                commit.at.clone(),
-                commit.at.clone(),
-                None,
-            )
-            .expect("新建会话摘要"),
-        );
-        // 幂等行：`session` 由创建方的 `None` 回填为本次分配的会话 id（§6 第 20 条）。
-        if let Some(idem) = commit.idempotency.as_ref() {
-            self.seed_command(
-                CommandRecord::try_new(
-                    Some(session.clone()),
-                    idem.request.clone(),
-                    &idem.command,
-                    idem.kind,
-                    idem.actor.clone(),
-                    Some(idem.accepted_at.clone()),
-                    CoreStatus::Accepted,
-                    None,
-                    None,
-                    None,
-                    None,
-                    idem.expected_version,
-                    idem.request_fingerprint.clone(),
-                )
-                .expect("幂等行"),
-            );
         }
+        if let Some(StateChange::Create(_)) = &commit.state {
+            // `StateChange::Create` 只有**不经 core 用例**的提交方使用（`session.create` 的落账走
+            // `SettleCreate`：会话标识必须由 core 在调用后端**之前**分配）：命令面没有这样的调用点，
+            // 替身因此显式拒绝而不是静默接受。
+            return Err(PortError::InvalidRequest(
+                "命令面不经 StateChange::Create 建会话",
+            ));
+        }
+        // 其余形状都是**终态提交**（`command_terminal` 有、`state` 没有或只是状态修改）：按同一批
+        // `command.*` 事件的 causation 定位行，推进到终态；不建会话行（后端失败与窗口期超限都是
+        // 「尚无会话」形状）。
+        let request = causation_request(&commit)?;
+        let terminal = commit
+            .command_terminal
+            .clone()
+            .ok_or(PortError::InvalidRequest("终态提交缺少 command_terminal"))?;
+        let existing =
+            lock(&self.commands)
+                .get(request.as_str())
+                .cloned()
+                .ok_or(PortError::NotFound(EntityRef::Command {
+                    session: commit.session.clone(),
+                    request: request.clone(),
+                }))?;
+        if existing.status().is_terminal() {
+            return Ok(CommitOutcome {
+                session_id: existing.session().cloned(),
+                origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
+                version: Version::new(1),
+                appended: Vec::new(),
+                replayed: Some(acp_core::ports::IdempotentReplay { record: existing }),
+            });
+        }
+        let updated = CommandRecord::try_new(
+            existing.session().cloned(),
+            existing.request().clone(),
+            existing.command(),
+            existing.kind(),
+            existing.actor().clone(),
+            existing.accepted_at().cloned(),
+            terminal.status(),
+            terminal.terminal_at().cloned(),
+            Some(EventId::new(EVENT).expect("终态事件 id")),
+            terminal.result().cloned(),
+            terminal.error().cloned(),
+            existing.expected_version(),
+            existing.request_fingerprint().clone(),
+        )?;
+        self.seed_command(updated);
         Ok(CommitOutcome {
-            session_id: Some(session),
+            session_id: commit.session.clone(),
             origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH_2).expect("epoch")),
             version: Version::new(1),
             appended: Vec::new(),
@@ -522,19 +551,53 @@ fn origin_head() -> CoreOriginCursor {
 }
 
 /// 后端替身：`session.create` 只要求一个能给出自身引用的端点。
-struct FakeBackends;
+///
+/// `create_step` 是失败类别的注入点（`Unavailable(SessionNotEstablished)` ⇒ 可证明 Agent 侧未产生会话
+/// ⇒ 终态 `failed`；其余不可用取值 ⇒ 说不清 ⇒ `uncertain`），`create_calls` 是「同一 requestId 不派发
+/// 第二次创建」的判据。
+#[derive(Default)]
+struct FakeBackends {
+    create_calls: Arc<AtomicUsize>,
+    create_step: Arc<Mutex<Option<CreateStep>>>,
+}
+
+/// 下一次 `create` 的行为（消费一次）。
+enum CreateStep {
+    /// 后端拒绝建立会话（类别由用例给）。
+    Refused(PortError),
+}
+
+impl FakeBackends {
+    /// 让下一次 `create` 回退为给定错误。
+    fn refuse_next_create(&self, error: PortError) {
+        *lock(&self.create_step) = Some(CreateStep::Refused(error));
+    }
+
+    /// `create` 被派发几次。
+    fn create_calls(&self) -> usize {
+        self.create_calls.load(Ordering::SeqCst)
+    }
+}
 
 #[async_trait::async_trait]
 impl SessionBackendFactory for FakeBackends {
+    async fn terminate_agent(&self, _session: &SessionId) -> Result<(), PortError> {
+        Ok(())
+    }
+
     async fn create(
         &self,
         session: &SessionId,
         _request: CreateSessionRequest,
         _sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
-        Ok(Box::new(FakeEndpoint {
-            reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
-        }))
+        self.create_calls.fetch_add(1, Ordering::SeqCst);
+        match lock(&self.create_step).take() {
+            Some(CreateStep::Refused(error)) => Err(error),
+            None => Ok(Box::new(FakeEndpoint {
+                reference: SessionReference::Owned(OwnedSessionRef::new(session.clone())),
+            })),
+        }
     }
 
     async fn open(
@@ -659,6 +722,8 @@ struct World {
     resource: Arc<ResourceRoute>,
     clock: FakeClock,
     config: FakeConfig,
+    /// 后端替身（`create` 的失败注入点与调用计数；`restarted_route` 复用同一份实例）。
+    backends: Arc<FakeBackends>,
 }
 
 impl Fixture {
@@ -751,11 +816,12 @@ impl Fixture {
                 );
             }
         }
+        let backends = Arc::new(FakeBackends::default());
         let broker = Arc::new(Broker::new(
             BrokerDeps {
                 store: store.clone(),
                 deliveries: Arc::new(NotTouched),
-                backends: Arc::new(FakeBackends),
+                backends: Arc::clone(&backends) as Arc<dyn SessionBackendFactory>,
                 exports: Arc::new(exports.clone()),
                 trust: Arc::new(trust.clone()),
                 publisher: Arc::new(NotTouched),
@@ -804,6 +870,7 @@ impl Fixture {
                 resource,
                 clock,
                 config: config_store,
+                backends,
             },
             handle,
             outbound,
@@ -828,7 +895,7 @@ impl Fixture {
             BrokerDeps {
                 store: Arc::clone(&store),
                 deliveries: Arc::new(NotTouched),
-                backends: Arc::new(FakeBackends),
+                backends: Arc::clone(&self.world.backends) as Arc<dyn SessionBackendFactory>,
                 exports: Arc::new(self.world.exports.clone()),
                 trust: Arc::new(self.world.trust.clone()),
                 publisher: Arc::new(NotTouched),
@@ -943,6 +1010,7 @@ impl Fixture {
 }
 
 /// 一帧：原始文本 + 解析后的 JSON。
+#[derive(Debug)]
 struct Frame {
     value: Value,
 }
@@ -1884,11 +1952,11 @@ async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
             "workspaceAlias": "project",
         }),
     );
-    // 直接提交**创建**提交（不经过适配层的终态落盘），模拟崩溃后的现场。
+    // 直接提交**受理**提交（不经过适配层的落账提交），模拟崩溃后的现场：只有幂等行、没有会话行。
     let request = core_request(&Uuid::parse(REQUEST).expect("uuid")).expect("request id");
     let actor = node_actor(&NodeId::new(ACCESS_NODE).expect("node id"));
     let fingerprint = fingerprint_of(&wire_submit(&body).payload).expect("指纹");
-    let session = fixture
+    let session = match fixture
         .world
         .core
         .create_session(
@@ -1904,7 +1972,11 @@ async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
             None,
         )
         .await
-        .expect("创建会话");
+        .expect("创建会话")
+    {
+        acp_core::ports::SessionCreateAdmission::Prepared(prepared) => prepared.session.clone(),
+        other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+    };
 
     assert_eq!(
         fixture.world.store.commit_calls(),
@@ -1954,10 +2026,215 @@ async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
     );
     assert_eq!(
         lock(&fixture.world.store.sessions).len(),
-        2,
-        "夹具预置一个会话 + 崩溃前创建的一个"
+        1,
+        "夹具预置一个会话；崩溃窗口里会话行从未落账（§6 第 20 条的三笔时序只走完受理）"
     );
     assert_ne!(session.as_str(), "");
+}
+
+// ---------------------------------------------------------------------------------------------
+// `session.create` 的终态判据与命令级日志（终态类别取自 core 写下的持久记录）
+// ---------------------------------------------------------------------------------------------
+
+/// **可证明未产生会话**（进程未能启动、请求未发出、Agent 明确返回错误）⇒ 终态 `failed` + 结构化错误，
+/// 且**零会话行**。受理记录的存在只是「受理过」，**不是**副作用证据（§12.7 的增量要求）。
+#[tokio::test]
+async fn a_session_create_that_provably_did_not_establish_a_session_fails() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .world
+        .backends
+        .refuse_next_create(PortError::Unavailable(
+            acp_core::model::UnavailableKind::SessionNotEstablished,
+        ));
+    let route = fixture.route();
+    let body = submit_body(
+        REQUEST,
+        "session.create",
+        json!({
+            "agentId": "codex",
+            "exportId": EXPORT,
+            "workspaceAlias": "project",
+        }),
+    );
+
+    let frames = submit(&mut fixture, &route, body.clone()).await;
+    let accepted = of_type(&frames, "command.accepted");
+    assert_eq!(accepted.len(), 1, "受理先回：{:?}", frames);
+    let terminal = of_type(&frames, "command.terminal");
+    assert_eq!(terminal.len(), 1, "终态一条：{:?}", frames);
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["status"], "failed",
+        "可证明的失败不得报 uncertain：{}",
+        terminal[0]["body"]
+    );
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["error"]["code"], "nodelink.internal.unavailable",
+        "复用 Node Link 既有错误码：{}",
+        terminal[0]["body"]
+    );
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["terminalEventId"], EVENT,
+        "终态以持久记录为唯一权威（terminalEventId 非 null）"
+    );
+    assert_eq!(
+        lock(&fixture.world.store.sessions).len(),
+        1,
+        "夹具预置一个会话；失败零会话行（受理阶段不建行、失败也不留孤儿行）"
+    );
+    assert_eq!(fixture.world.backends.create_calls(), 1);
+
+    // 同 requestId 重查：按**失败是否可证明**给终态——受理记录的存在不把它变成 `uncertain`。
+    let status = submit(
+        &mut fixture,
+        &route,
+        submit_body(
+            REQUEST_2,
+            "command.status",
+            json!({ "targetRequestId": REQUEST }),
+        ),
+    )
+    .await;
+    let reread = of_type(&status, "command.terminal");
+    assert_eq!(reread.len(), 1);
+    assert_eq!(reread[0]["body"]["terminal"]["status"], "failed");
+    assert_eq!(reread[0]["body"], terminal[0]["body"], "重查与首次同形");
+
+    // 同键重发：回首次终态，不再派发第二次创建。
+    let commits_after_failure = fixture.world.store.commit_calls();
+    let resubmitted = submit(&mut fixture, &route, body).await;
+    let replayed = of_type(&resubmitted, "command.terminal");
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0]["body"], terminal[0]["body"]);
+    assert_eq!(
+        fixture.world.store.commit_calls(),
+        commits_after_failure,
+        "重发不得重复创建"
+    );
+    assert_eq!(fixture.world.backends.create_calls(), 1);
+}
+
+/// **说不清**（短请求超时、发出后连接断开一类）⇒ 终态 `uncertain`，且标记「可能已到达 Agent」。
+#[tokio::test]
+async fn a_session_create_that_cannot_prove_the_outcome_is_uncertain() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .world
+        .backends
+        .refuse_next_create(PortError::Unavailable(
+            acp_core::model::UnavailableKind::IoError,
+        ));
+    let route = fixture.route();
+
+    let frames = submit(
+        &mut fixture,
+        &route,
+        submit_body(
+            REQUEST,
+            "session.create",
+            json!({
+                "agentId": "codex",
+                "exportId": EXPORT,
+                "workspaceAlias": "project",
+            }),
+        ),
+    )
+    .await;
+    let terminal = of_type(&frames, "command.terminal");
+    assert_eq!(terminal.len(), 1, "{frames:?}");
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["status"], "uncertain",
+        "说不清时不得报 failed：{}",
+        terminal[0]["body"]
+    );
+    assert_eq!(
+        terminal[0]["body"]["terminal"]["error"]["code"], "nodelink.command.uncertain",
+        "{}",
+        terminal[0]["body"]
+    );
+    assert_eq!(
+        lock(&fixture.world.store.sessions).len(),
+        1,
+        "可证明与否都不建会话行（夹具预置的那一个之外没有第二行）"
+    );
+}
+
+/// 命令级日志（`sync-command-handling` 的「命令级结构化日志」在 Node Link 面的落地）：受理与终态各一条，
+/// 字段集合恰好是登记的那一组（主体用 `access_node_id`）。
+#[tokio::test]
+async fn the_accepted_session_create_and_its_terminal_each_leave_one_log_line() {
+    let mut fixture = Fixture::new().await;
+    fixture
+        .world
+        .backends
+        .refuse_next_create(PortError::Unavailable(
+            acp_core::model::UnavailableKind::SessionNotEstablished,
+        ));
+    let route = fixture.route();
+    let (logs, guard) = crate::command_log::capture::Logs::install();
+    let _ = submit(
+        &mut fixture,
+        &route,
+        submit_body(
+            REQUEST,
+            "session.create",
+            json!({
+                "agentId": "codex",
+                "exportId": EXPORT,
+                "workspaceAlias": "project",
+            }),
+        ),
+    )
+    .await;
+    drop(guard);
+
+    let accepted = logs.of("node_link.command_accepted");
+    assert_eq!(accepted.len(), 1, "受理一条：{accepted:?}");
+    crate::command_log::capture::assert_field_set(
+        &accepted[0],
+        &[
+            "event",
+            "access_node_id",
+            "command",
+            "session_id",
+            "request_id",
+            "turn",
+            "message",
+        ],
+    );
+    assert_eq!(accepted[0]["access_node_id"], ACCESS_NODE);
+    assert_eq!(accepted[0]["command"], "session.create");
+    assert_eq!(accepted[0]["request_id"], REQUEST);
+    assert_eq!(
+        accepted[0]["session_id"], "None",
+        "受理阶段还没有会话（资源标识为空）"
+    );
+
+    let terminal = logs.of("node_link.command_terminal");
+    assert_eq!(terminal.len(), 1, "终态一条：{terminal:?}");
+    crate::command_log::capture::assert_field_set(
+        &terminal[0],
+        &[
+            "event",
+            "access_node_id",
+            "command",
+            "session_id",
+            "request_id",
+            "terminal",
+            "cause",
+            "message",
+        ],
+    );
+    assert_eq!(terminal[0]["access_node_id"], ACCESS_NODE);
+    assert_eq!(terminal[0]["command"], "session.create");
+    assert_eq!(terminal[0]["terminal"], "failed");
+    assert_eq!(terminal[0]["cause"], "unavailable");
+    let text = format!("{terminal:?}");
+    assert!(!text.contains('\\'), "日志不得带出路径：{text}");
+    assert!(
+        !text.contains("owner node cannot serve"),
+        "日志只写封闭类别与标识，不写错误消息：{text}"
+    );
 }
 
 /// 相同 `(requestId, command, payload)` 的重复 mutation 回首次结果且不二次派发。
@@ -2610,12 +2887,14 @@ async fn command_accepted_result_carries_the_receipt_turn() {
         CommandName::SessionPrompt,
         &at,
         Some(&turn),
+        None,
     );
     route.send_accepted(
         &fixture.handle,
         &request,
         CommandName::SessionCancel,
         &at,
+        None,
         None,
     );
     route.send_accepted(
@@ -2624,6 +2903,7 @@ async fn command_accepted_result_carries_the_receipt_turn() {
         CommandName::SessionCreate,
         &at,
         Some(&turn),
+        None,
     );
     let frames = fixture.drain();
     let accepted = of_type(&frames, "command.accepted");

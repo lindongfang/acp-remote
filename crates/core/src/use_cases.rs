@@ -30,7 +30,7 @@ use crate::model::{
     PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
     ProviderRef, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
     ResourceOrigin, SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
-    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord, WorkspaceSource,
+    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord, WorkspaceRef, WorkspaceSource,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
@@ -40,8 +40,8 @@ use crate::ports::{
     NodeRevocation, NodeWrite, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
     PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
     PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit, RetentionPolicy, RevokeReason,
-    SeedWrite, SessionQuery, SessionStore, StoreHealth, SyncReplaySlice, TrustRecordRef,
-    TrustStore, WorkspaceWrite, WriteContext,
+    SeedWrite, SessionCreateAdmission, SessionQuery, SessionStore, StoreHealth, SyncReplaySlice,
+    TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -271,7 +271,7 @@ impl UseCases {
     }
 
     /// `session.create`（Node Link §12.7 / Sync §11.5）：先把目录来源解析成本机规范化绝对路径，
-    /// 再以客户端 `requestId` 为幂等键创建 owned 会话并打开其后端端点（§11.9）。
+    /// 再以客户端 `requestId` 为幂等键走 core 的三笔时序——**受理 → 执行 → 落账**（§6 第 20 条）。
     ///
     /// `request_id`/`request_fingerprint` 由适配层给出：幂等键是
     /// `(actor, requestId)`（Node Link 的 actor 即本进程的 `Actor::Node` 对端），指纹是 ACPR-CJ1
@@ -292,8 +292,13 @@ impl UseCases {
     /// 解析成功时，**别名原文（若有）与该次解析得到的规范化路径一起**落进该会话行（`design.md`
     /// D1/D6、`workspace-resolution`）：别名是目录归属的权威投影来源，路径是恢复流程的权威取值，
     /// 二者独立保存、互不推导；目录来源是客户端提供的目录时**没有别名**，该会话呈现为「未分组」。
-    /// 目录归属的读取与展示名关联都在读路径（`SessionStore::list`），本方法不投影任何引用，也不
-    /// 把客户端提供的目录登记进 workspace 目录表。
+    /// 目录归属的读取与展示名关联都在读路径（`SessionStore::list`）。本层只把**别名与展示名的
+    /// 投影**（`WorkspaceRef`）交给 broker 落进会话行与终态结果——展示名只有本层拿得到（它持有
+    /// `LocalConfigStore`），读取时按别名关联目录记录取得的也是同一个值。
+    ///
+    /// 返回 [`SessionCreateAdmission`]：首次受理且后端建立成功时是 `Prepared`（适配层据此投影终态
+    /// 结果，再调 [`UseCases::settle_session_create`] 落账）；窗口期重发是 `InFlight`（回受理态、
+    /// 不再派发第二次创建）；已终结时是 `Settled`（回首次结果）。
     pub async fn create_session(
         &self,
         actor: &Actor,
@@ -301,7 +306,7 @@ impl UseCases {
         request_fingerprint: Digest,
         mut request: CreateSessionRequest,
         workspace: Option<WorkspaceSource>,
-    ) -> Result<SessionId, PortError> {
+    ) -> Result<SessionCreateAdmission, PortError> {
         // 授权先于任何本机读取与文件系统访问（与其余用例入口同款；broker 内部还会再授权一次，
         // 对本地 actor 恒成功、不重复写审计）。否则未授权调用方能借解析结果的差异探测「别名是否
         // 已登记、目录当前是否存在」——那是一个本机状态预言机。
@@ -309,6 +314,7 @@ impl UseCases {
             .authorize(actor, "session.create", None, &request_id)
             .await
             .map_err(Denied::into_port_error)?;
+        let mut ownership = None;
         match workspace {
             Some(WorkspaceSource::Alias(alias)) => {
                 let record =
@@ -319,21 +325,49 @@ impl UseCases {
                             "workspace alias is not registered on this node",
                         ))?;
                 request.workspace = Some(resolve_workspace(&alias, record.canonical_path())?);
+                ownership = Some(
+                    WorkspaceRef::try_new(alias, record.display_name()).map_err(PortError::from)?,
+                );
             }
             Some(WorkspaceSource::Path(path)) => {
+                // 客户端提供的目录没有别名：`ResolvedWorkspace` 的别名是 `None`，因此这里**不**
+                // 造归属投影——该会话落库即「未分组」（`design.md` D1 的 `NULL` 语义）。
                 request.workspace = Some(resolve_client_workspace(&path)?);
             }
-            None => {}
+            None => {
+                // 调用方已经交来解析结果（内部入口）：解析出别名的请求**必须**带上归属投影，否则投影给
+                // 适配层的摘要与读路径看到的行会不一致（`check_workspace_ownership` 在那条边界上失败
+                // 关闭）。展示名按读路径同一条规则取——目录记录在册时用记录的展示名，不在册时回退为
+                // 别名本身（`CORE_PORTS_AND_STORAGE.md` §7.2 的 `LEFT JOIN` 回退）。
+                if let Some(alias) = request
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.alias())
+                {
+                    let display_name = match self.config.workspace(alias).await? {
+                        Some(record) => record.display_name().to_owned(),
+                        None => alias.as_str().to_owned(),
+                    };
+                    ownership = Some(
+                        WorkspaceRef::try_new(alias.clone(), &display_name)
+                            .map_err(PortError::from)?,
+                    );
+                }
+            }
         }
         self.broker
-            .create_session(actor, &request_id, &request_fingerprint, request)
+            .create_session(actor, &request_id, &request_fingerprint, request, ownership)
             .await
     }
 
-    /// `session.create` 的终态（§12.7）：把已持久化的 `accepted` 行推进到终态。结果由适配层投影
-    /// （`completed` 携带 `SessionCreateResult` 的原文），失败/不确定携带适配层构造的结构化错误。
+    /// `session.create` 的**落账提交**（§6 第 20 条、§12.7）：把 [`UseCases::create_session`] 返回的
+    /// `Prepared` 落成持久事实——会话行（含 core 分配的标识、ACP 会话标识、创建时 cwd、目录别名）、
+    /// 幂等行的 `session_id` 回填与终态在**同一次提交**里完成，随后把窗口期排队的事件按序写库再广播。
+    /// 结果由适配层投影（`completed` 携带 `SessionCreateResult` 的原文），失败/不确定携带适配层构造的
+    /// 结构化错误。
     ///
-    /// 没有持久记录（创建在幂等行落盘前失败）或记录已终结时是**幂等 no-op**（返回 `false`）。
+    /// 没有持久记录（创建在幂等行落盘前失败）或记录已终结时是**幂等 no-op**（返回 `false`）；没有窗口期
+    /// 状态、只有一条尚无会话的 `accepted` 记录时（后端失败那条路径的兜底）写「无会话」形状的终态。
     pub async fn settle_session_create(
         &self,
         actor: &Actor,
@@ -3149,12 +3183,52 @@ mod tests {
         lock(&fixture.world.state).sessions.len()
     }
 
-    /// design D2：`create_session` 在 `factory.create` 成功返回后**紧接着**提交一次两列
-    /// 写入（不是终态提交）：`agent_session_id` 来自 `SessionEndpoint::agent_session_id()`，
-    /// `workspace_cwd` 来自 core **自己**已解析的 `ResolvedWorkspace::canonical_path()`。该提交使会话
-    /// 的可见版本变为 2（创建提交 v1 + 两列提交 v2）。
+    /// 走完一次完整的 `session.create`：受理 → 执行 → **落账**。
+    ///
+    /// `Prepared` 之后必须结算一次（`sync-session-create` 的时序），结算用适配层会给的形状：
+    /// `completed` + 一个**投影结果原文**（core 不解释它的内容，只原样落进终态）。
+    /// 返回新建会话的标识。
+    fn create_and_settle(
+        fixture: &Fixture,
+        request: RequestId,
+        fingerprint: Digest,
+        create: CreateSessionRequest,
+        workspace: Option<WorkspaceSource>,
+    ) -> crate::model::SessionId {
+        let prepared = match block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            request.clone(),
+            fingerprint,
+            create,
+            workspace,
+        ))
+        .expect("create")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
+        let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"projected"}"#)
+            .expect("result object");
+        assert!(
+            block_on(fixture.use_cases.settle_session_create(
+                &Actor::LocalCli,
+                &request,
+                CommandStatus::Completed,
+                Some(result),
+                None,
+            ))
+            .expect("settle"),
+            "落账必须真的写入"
+        );
+        prepared.session
+    }
+
+    /// §6 第 20 条 / design D2：ACP 会话标识、创建时规范化 cwd 与目录别名由**落账那一次提交**写进会话行，
+    /// 与终态同批——不存在「创建提交 + 紧接着的两列提交」两笔。
+    ///
+    /// 会话版本因此停在 1（不是 2）：落账提交建行（v1）与终态在同一个批次里完成，此后没有第二次状态提交。
     #[test]
-    fn create_session_writes_the_recovery_columns_right_after_create() {
+    fn the_settlement_commit_writes_the_recovery_columns_together_with_the_terminal() {
         let fixture = fixture();
         let agent_session_id = AgentSessionId::new("acp-session-1").expect("agent session id");
         fixture.world.set_agent_session_id(agent_session_id.clone());
@@ -3170,27 +3244,37 @@ mod tests {
         .expect("workspace record");
         block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
 
-        let created = block_on(fixture.use_cases.create_session(
-            &Actor::LocalCli,
-            create_session_request_id(),
+        let request = create_session_request_id();
+        let created = create_and_settle(
+            &fixture,
+            request.clone(),
             digest('A'),
             create_request(),
             Some(WorkspaceSource::Alias(alias)),
-        ))
-        .expect("create");
+        );
 
         let expected = std::fs::canonicalize(&*workspace)
             .expect("canonicalize")
             .to_str()
             .expect("path")
             .to_owned();
-        let columns = lock(&fixture.world.state)
+        let state = lock(&fixture.world.state);
+        let columns = state
             .recoveries
             .get(created.as_str())
             .cloned()
-            .expect("两列已落盘");
-        assert_eq!(columns.agent_session_id, Some(agent_session_id));
+            .expect("三列随落账提交一起落盘");
+        assert_eq!(columns.agent_session_id, Some(agent_session_id.clone()));
         assert_eq!(columns.workspace_cwd, Some(expected.clone()));
+        assert_eq!(
+            state
+                .workspace_aliases
+                .get(created.as_str())
+                .map(WorkspaceAlias::as_str),
+            Some("resume"),
+            "目录归属的别名与两列同批落盘"
+        );
+        drop(state);
         assert_eq!(
             fixture
                 .world
@@ -3198,12 +3282,30 @@ mod tests {
                 .expect("会话行")
                 .version()
                 .get(),
-            2,
-            "创建提交（v1）+ 紧接着的两列提交（v2）"
+            1,
+            "落账提交只建一次行：没有第二次状态提交"
+        );
+
+        // 该会话的批次里只有一条终态事件——会话行、三个列与终态出自**同一次提交**。
+        let batches: Vec<Vec<String>> = fixture
+            .world
+            .batches()
+            .into_iter()
+            .filter(|batch| batch.session.as_deref() == Some(created.as_str()))
+            .map(|batch| batch.types)
+            .collect();
+        assert_eq!(
+            batches,
+            vec![vec!["command.completed".to_owned()]],
+            "落账提交是唯一一次带该会话的提交，且它带着终态事件"
         );
 
         // 恢复流程读到的就是这两个持久化取值（可读回、不推导）。
-        assert_eq!(columns.workspace_cwd.as_deref(), Some(expected.as_str()));
+        let record = block_on(fixture.use_cases.store.load_recovery(&created))
+            .expect("load recovery")
+            .expect("恢复数据");
+        assert_eq!(record.workspace_cwd.as_deref(), Some(expected.as_str()));
+        assert_eq!(record.agent_session_id, Some(agent_session_id));
     }
 
     /// 登记一个目录记录（`local.workspace.select` 的形状），返回其别名与目录守卫（创建流程要
@@ -3228,7 +3330,7 @@ mod tests {
         (alias, path)
     }
 
-    /// 一个带目录的会话（登记目录 + 打开后端），返回会话 id、别名与目录守卫。
+    /// 一个带目录的会话（登记目录 + 打开后端并落账），返回会话 id、别名与目录守卫。
     ///
     /// 守卫必须交回调用方：恢复路径会重新校验持久化 cwd，目录提前消失就不是「别名不被恢复改写」
     /// 而是「目录已删除」了。
@@ -3237,14 +3339,13 @@ mod tests {
         unique: u64,
     ) -> (crate::model::SessionId, WorkspaceAlias, TempDir) {
         let (alias, dir) = register_workspace(fixture, unique, "repo", "Repository");
-        let session = block_on(fixture.use_cases.create_session(
-            &Actor::LocalCli,
+        let session = create_and_settle(
+            fixture,
             create_session_request_id(),
             digest('A'),
             create_request(),
             Some(WorkspaceSource::Alias(alias.clone())),
-        ))
-        .expect("create");
+        );
         (session, alias, dir)
     }
 
@@ -3401,19 +3502,13 @@ mod tests {
         assert!(record.workspace_cwd.is_some(), "恢复输入仍只来自两列窄读取");
     }
 
-    /// §3.6：`agent_session_id()` 为 `None`（未取得标识）时**两列都不写**，也不产生那次追加
-    /// 提交——该会话不被当作可恢复会话。
+    /// §3.6：`agent_session_id()` 为 `None`（未取得标识）时**不写占位值**——该会话不被当作可恢复会话，
+    /// `load_recovery` 因此返回 `None`（`NULL` 就是「没有可用于恢复的数据」）。
     #[test]
     fn create_session_writes_no_recovery_columns_without_an_agent_session_id() {
         let fixture = fixture();
-        let created = block_on(fixture.use_cases.create_session(
-            &Actor::LocalCli,
-            create_session_request_id(),
-            digest('A'),
-            create_request(),
-            None,
-        ))
-        .expect("create");
+        let request = create_session_request_id();
+        let created = create_and_settle(&fixture, request, digest('A'), create_request(), None);
 
         assert!(
             lock(&fixture.world.state).recoveries.is_empty(),
@@ -3427,7 +3522,13 @@ mod tests {
                 .version()
                 .get(),
             1,
-            "没有第二次提交"
+            "落账提交只建一次行"
+        );
+        assert!(
+            block_on(fixture.use_cases.store.load_recovery(&created))
+                .expect("load recovery")
+                .is_none(),
+            "没有恢复数据（两列都是 NULL）"
         );
     }
 
@@ -3726,8 +3827,13 @@ mod tests {
         );
     }
 
-    /// §6 第 6 条与第 20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在
-    /// `owned_command` 里；同键重试回首次结果且不重复创建，同键不同语义是 `idempotency_conflict`。
+    /// §6 第 6/20 条：`session.create` 的幂等键是 `(actor, requestId)`，**落盘**在
+    /// `owned_command` 里；同键重试回首次结果且不重复派发创建，同键不同语义是 `idempotency_conflict`。
+    ///
+    /// 三个时点的语义各不同（这也是本变更的 core 侧结论）：
+    /// ① 首次受理且后端已建立 → `Prepared`；
+    /// ② **窗口期**（受理已落盘、尚未落账）重发 → `InFlight`：回受理态，**不再派发第二次创建**；
+    /// ③ 已终结后重发 → `Settled`：回首次终态，不覆盖。
     #[test]
     fn session_create_replay_does_not_create_a_second_session() {
         let fixture = fixture();
@@ -3736,17 +3842,52 @@ mod tests {
         let fingerprint = digest('A');
         let before = session_count(&fixture);
 
-        let created = block_on(fixture.use_cases.create_session(
+        let prepared = match block_on(fixture.use_cases.create_session(
             &actor,
             request.clone(),
             fingerprint.clone(),
             create_request(),
             None,
         ))
-        .expect("create");
-        assert_eq!(session_count(&fixture), before + 1, "首次提交创建一个会话");
+        .expect("create")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
+        assert_eq!(fixture.world.create_calls(), 1, "首次受理派发一次创建");
 
-        // 同键同语义：重放首次结果，不创建第二个会话、不开第二个后端端点。
+        // ② 窗口期重发：受理态，不再派发第二次创建，也不建第二行。
+        assert_eq!(
+            block_on(fixture.use_cases.create_session(
+                &actor,
+                request.clone(),
+                fingerprint.clone(),
+                create_request(),
+                None,
+            ))
+            .expect("in-flight replay"),
+            SessionCreateAdmission::InFlight,
+            "窗口期的同键重发必须回受理态"
+        );
+        assert_eq!(fixture.world.create_calls(), 1, "不得派发第二次创建");
+        assert_eq!(session_count(&fixture), before, "落账之前没有会话行");
+
+        // 落账。
+        let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"first"}"#)
+            .expect("result object");
+        assert!(
+            block_on(fixture.use_cases.settle_session_create(
+                &actor,
+                &request,
+                CommandStatus::Completed,
+                Some(result.clone()),
+                None,
+            ))
+            .expect("settle")
+        );
+        assert_eq!(session_count(&fixture), before + 1, "落账创建一个会话");
+
+        // ③ 已终结后重发：回首次结果，不覆盖、不重复创建。
         let replayed = block_on(fixture.use_cases.create_session(
             &actor,
             request.clone(),
@@ -3754,8 +3895,19 @@ mod tests {
             create_request(),
             None,
         ))
-        .expect("replay");
-        assert_eq!(replayed, created, "重试回首次创建的 sessionId");
+        .expect("settled replay");
+        match replayed {
+            SessionCreateAdmission::Settled(record) => {
+                assert_eq!(record.status(), CommandStatus::Completed);
+                assert_eq!(record.session(), Some(&prepared.session));
+                assert_eq!(
+                    record.result().map(crate::model::CommandResult::as_str),
+                    Some(r#"{"sessionId":"first"}"#)
+                );
+            }
+            other => panic!("已终结的同键重发必须回首次终态，得到 {other:?}"),
+        }
+        assert_eq!(fixture.world.create_calls(), 1, "重发不得再派发创建");
         assert_eq!(session_count(&fixture), before + 1, "重试不得重复创建");
 
         // 同键不同语义：`command.idempotency_conflict`，同样零副作用。
@@ -3775,30 +3927,210 @@ mod tests {
             "得到 {conflict:?}"
         );
         assert_eq!(session_count(&fixture), before + 1);
+        assert_eq!(fixture.world.create_calls(), 1);
     }
 
-    /// §6 第 16/20 条：创建的崩溃窗口（幂等行已落盘、终态从未提交）由启动恢复终结为 `uncertain`，
-    /// 不自动重放副作用，且之后同键重试仍回首次创建的会话。
+    /// §6 第 20 条（`sync-session-create`「受理不创建会话行」）：受理只落幂等记录——后端调用之前的
+    /// 每一刻，本机都**查不到**这个会话；落账之后它才作为一行出现（并带上 ACP 会话标识与目录归属）。
     #[test]
-    fn session_create_crash_window_is_recovered_as_uncertain() {
+    fn the_admission_leaves_no_session_row_until_the_settlement() {
         let fixture = fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
-        let fingerprint = digest('A');
-        let created = block_on(fixture.use_cases.create_session(
+        let agent_session_id =
+            AgentSessionId::new("acp-session-admission").expect("agent session id");
+        fixture.world.set_agent_session_id(agent_session_id.clone());
+        let before = session_count(&fixture);
+
+        let prepared = match block_on(fixture.use_cases.create_session(
             &actor,
             request.clone(),
-            fingerprint.clone(),
+            digest('A'),
             create_request(),
             None,
         ))
-        .expect("create");
-        // 崩溃：`settle_session_create` 从未被调用，行仍是 accepted（这正是重启时的现场）。
+        .expect("create")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
+        let session = prepared.session.clone();
+
+        // 受理 + 执行之后、落账之前：幂等行在（`session_id` 为空），会话行**不在**。
+        let accepted = block_on(fixture.use_cases.command_status(&actor, request.clone()))
+            .expect("status")
+            .expect("受理记录已落盘");
+        assert_eq!(accepted.status(), CommandStatus::Accepted);
+        assert_eq!(accepted.session(), None, "受理行的 session_id 必须为空");
+        assert_eq!(accepted.terminal_event(), None);
+        assert_eq!(session_count(&fixture), before, "受理不得创建会话行");
+        assert!(
+            block_on(fixture.use_cases.store.load(&session))
+                .expect("load")
+                .is_none(),
+            "受理之后本机查不到该会话"
+        );
+        assert!(
+            !block_on(fixture.use_cases.list_sessions(
+                &actor,
+                SessionQuery {
+                    only: None,
+                    states: Vec::new(),
+                    limit: None,
+                },
+            ))
+            .expect("list")
+            .iter()
+            .any(|summary| summary.session_id() == &session),
+            "会话清单里也不得有它"
+        );
+
+        // 落账（终态与行同批）。
+        let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"projected"}"#)
+            .expect("result object");
+        assert!(
+            block_on(fixture.use_cases.settle_session_create(
+                &actor,
+                &request,
+                CommandStatus::Completed,
+                Some(result),
+                None,
+            ))
+            .expect("settle")
+        );
+
+        assert_eq!(session_count(&fixture), before + 1);
+        assert!(
+            block_on(fixture.use_cases.store.load(&session))
+                .expect("load")
+                .is_some(),
+            "落账之后会话行才出现"
+        );
+        let record = block_on(fixture.use_cases.command_status(&actor, request))
+            .expect("status")
+            .expect("记录");
+        assert_eq!(record.status(), CommandStatus::Completed);
+        assert_eq!(record.session(), Some(&session), "终态回填了会话标识");
+        assert!(
+            record.terminal_event().is_some(),
+            "completed 必须有终态事件"
+        );
+    }
+
+    /// §6 第 20 条（`sync-session-create`「可证明未产生会话时以 failed 终结且零会话行」）：后端失败时
+    /// **零会话行**，命令必须到达终态。
+    #[test]
+    fn a_provable_backend_failure_terminates_as_failed_with_no_session_row() {
+        let fixture = fixture();
+        let actor = Actor::LocalCli;
+        let request = create_session_request_id();
+        let before = session_count(&fixture);
+        fixture.world.push_create_error(PortError::Unavailable(
+            UnavailableKind::SessionNotEstablished,
+        ));
+
+        let error = block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            digest('A'),
+            create_request(),
+            None,
+        ))
+        .expect_err("后端未能建立会话时必须失败");
+        assert!(
+            matches!(
+                error,
+                PortError::Unavailable(UnavailableKind::SessionNotEstablished)
+            ),
+            "原错误原样上抛给适配层，得到 {error:?}"
+        );
+
+        assert_eq!(session_count(&fixture), before, "失败零会话行");
+        let record = block_on(fixture.use_cases.command_status(&actor, request))
+            .expect("status")
+            .expect("终态已落盘");
+        assert_eq!(record.status(), CommandStatus::Failed);
+        assert_eq!(record.session(), None);
+        assert!(
+            record.terminal_event().is_some(),
+            "failed 必须有终态事件（不得停在只有受理记录的状态）"
+        );
+        assert_eq!(
+            record.error().map(crate::model::PublicError::code),
+            Some("internal.unavailable"),
+            "可证明失败复用既有错误码（design D4 不新增码）"
+        );
+    }
+
+    /// §6 第 20 条（`sync-session-create`「无法证明时以 uncertain 终结」）：短请求超时这类说不清的失败
+    /// 结 `uncertain` 并标记可能已到达 Agent，同样**零会话行**。
+    #[test]
+    fn an_unprovable_backend_failure_terminates_as_uncertain_with_no_session_row() {
+        let fixture = fixture();
+        let actor = Actor::LocalCli;
+        let request = create_session_request_id();
+        let before = session_count(&fixture);
+        fixture
+            .world
+            .push_create_error(PortError::Unavailable(UnavailableKind::Busy));
+
+        block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            digest('A'),
+            create_request(),
+            None,
+        ))
+        .expect_err("短请求超时必须失败");
+
+        assert_eq!(session_count(&fixture), before, "失败零会话行");
+        let record = block_on(fixture.use_cases.command_status(&actor, request))
+            .expect("status")
+            .expect("终态已落盘");
+        assert_eq!(record.status(), CommandStatus::Uncertain);
+        assert_eq!(record.session(), None);
+        assert_eq!(
+            record.error().map(crate::model::PublicError::code),
+            Some("command.uncertain"),
+            "说不清的成因由终态的 message 承担，码取 core 的「无法确认」"
+        );
+        assert!(
+            record
+                .error()
+                .is_some_and(|error| !error.message().is_empty()),
+            "成因必须可读"
+        );
+    }
+
+    /// §6 第 16/20 条：**新的**崩溃窗口形状——受理已落盘、会话行从未落盘（后端已建立、落账前崩溃）。
+    /// 启动恢复把它终结为 `uncertain`，且本机**没有**该会话的会话行。
+    ///
+    /// 旧口径里的「恢复走有会话分支」因此不再成立（`CORE_PORTS` §6 第 20 条同步改写）。
+    #[test]
+    fn the_crash_window_recovers_as_uncertain_without_a_session_row() {
+        let fixture = fixture();
+        let actor = Actor::LocalCli;
+        let request = create_session_request_id();
+        let before = session_count(&fixture);
+        let prepared = match block_on(fixture.use_cases.create_session(
+            &actor,
+            request.clone(),
+            digest('A'),
+            create_request(),
+            None,
+        ))
+        .expect("create")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
+        // 崩溃：`settle_session_create` 从未被调用，行仍是 accepted 且 `session_id` 仍为空
+        // ——这正是重启时的现场。
         let accepted = block_on(fixture.use_cases.command_status(&actor, request.clone()))
             .expect("status")
             .expect("记录已落盘");
         assert_eq!(accepted.status(), CommandStatus::Accepted);
-        assert_eq!(accepted.session(), Some(&created));
+        assert_eq!(accepted.session(), None);
 
         let recovered = block_on(
             fixture
@@ -3816,25 +4148,38 @@ mod tests {
             "恢复必须写持久终态事件（terminalEventId 的来源）"
         );
         assert_eq!(
-            record.error().map(|error| error.code()),
+            record.error().map(crate::model::PublicError::code),
             Some("command.uncertain")
         );
+        assert_eq!(session_count(&fixture), before, "崩溃窗口不留会话行");
+        assert!(
+            block_on(fixture.use_cases.store.load(&prepared.session))
+                .expect("load")
+                .is_none(),
+            "本机没有该会话的会话行"
+        );
 
-        // 重试：回首次创建的会话，不重建第二个。
+        // 重试：不再派发创建，回首次终态（不重建、不覆盖）。
         let replayed = block_on(fixture.use_cases.create_session(
             &actor,
             request.clone(),
-            fingerprint,
+            digest('A'),
             create_request(),
             None,
         ))
         .expect("replay");
-        assert_eq!(replayed, created);
+        match replayed {
+            SessionCreateAdmission::Settled(record) => {
+                assert_eq!(record.status(), CommandStatus::Uncertain)
+            }
+            other => panic!("崩溃窗口终结之后的重发必须回首次终态，得到 {other:?}"),
+        }
         assert_eq!(
-            session_count(&fixture),
-            2,
-            "夹具预置一个会话 + 本次创建的一个"
+            fixture.world.create_calls(),
+            1,
+            "崩溃窗口之后的重试不得再派发创建"
         );
+        assert_eq!(session_count(&fixture), before);
         // 终态不被重试覆盖。
         let after = block_on(fixture.use_cases.command_status(&actor, request))
             .expect("status")
@@ -3848,14 +4193,18 @@ mod tests {
         let fixture = fixture();
         let actor = Actor::LocalCli;
         let request = create_session_request_id();
-        block_on(fixture.use_cases.create_session(
+        let prepared = match block_on(fixture.use_cases.create_session(
             &actor,
             request.clone(),
             digest('A'),
             create_request(),
             None,
         ))
-        .expect("create");
+        .expect("create")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
 
         let result = crate::model::CommandResult::from_json_text(r#"{"sessionId":"first"}"#)
             .expect("result object");
@@ -3872,12 +4221,13 @@ mod tests {
             .expect("status")
             .expect("记录");
         assert_eq!(record.status(), CommandStatus::Completed);
+        assert_eq!(record.session(), Some(&prepared.session));
         assert!(
             record.terminal_event().is_some(),
             "completed 必须有终态事件"
         );
         assert_eq!(
-            record.result().map(CommandResult::as_str),
+            record.result().map(crate::model::CommandResult::as_str),
             Some(r#"{"sessionId":"first"}"#)
         );
 
@@ -3897,7 +4247,7 @@ mod tests {
             .expect("status")
             .expect("记录");
         assert_eq!(
-            after.result().map(CommandResult::as_str),
+            after.result().map(crate::model::CommandResult::as_str),
             Some(r#"{"sessionId":"first"}"#)
         );
     }
@@ -4010,14 +4360,13 @@ mod tests {
             .expect("workspaces")
             .len();
 
-        let created = block_on(fixture.use_cases.create_session(
-            &Actor::LocalCli,
+        let created = create_and_settle(
+            &fixture,
             create_session_request_id(),
             digest('A'),
             create_request(),
             Some(WorkspaceSource::Path(canonical.clone())),
-        ))
-        .expect("create");
+        );
 
         let state = lock(&fixture.world.state);
         assert_eq!(

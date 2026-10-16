@@ -111,6 +111,10 @@ impl SeqIds {
 }
 
 impl IdGenerator for SeqIds {
+    fn session_id(&self) -> SessionId {
+        SessionId::new(&self.next()).expect("session id")
+    }
+
     fn turn_id(&self) -> TurnId {
         TurnId::new(&self.next()).expect("turn id")
     }
@@ -157,6 +161,10 @@ struct UntouchedBackends;
 
 #[async_trait::async_trait]
 impl SessionBackendFactory for UntouchedBackends {
+    async fn terminate_agent(&self, _session: &SessionId) -> Result<(), PortError> {
+        unreachable!("TP2 夹具：本文件不驱动后端工厂（会话由 store 建立）")
+    }
+
     async fn create(
         &self,
         _session: &SessionId,

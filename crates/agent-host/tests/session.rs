@@ -928,8 +928,11 @@ async fn failed_session_new_yields_no_endpoint_and_no_identifier() {
         .await,
     );
     assert!(
-        matches!(error, PortError::InvalidRequest(_)),
-        "Agent 拒绝 session/new 必须明确失败：{error}"
+        matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::SessionNotEstablished)
+        ),
+        "Agent 拒绝 session/new 必须明确失败，且属于**可证明未产生会话**的一类：{error}"
     );
     let opened = host
         .open(
@@ -1128,8 +1131,11 @@ async fn agent_refusal_of_resume_fails_explicitly() {
         .await,
     );
     assert!(
-        matches!(error, PortError::InvalidRequest(_)),
-        "Agent 拒绝恢复必须明确失败：{error}"
+        matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::SessionNotEstablished)
+        ),
+        "Agent 拒绝恢复必须明确失败，且属于**可证明未产生会话**的一类：{error}"
     );
     let methods = dumped_methods(&dumps);
     assert!(

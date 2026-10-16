@@ -1035,6 +1035,10 @@ pub(crate) const TEST_SERVER_EPOCH: &str = "018f6f89-8a23-7a10-a0d3-f92e6a31d952
 
 #[async_trait::async_trait]
 impl SessionBackendFactory for NotTouched {
+    async fn terminate_agent(&self, _session: &SessionId) -> Result<(), PortError> {
+        unreachable!("{NOT_TOUCHED}")
+    }
+
     async fn create(
         &self,
         _session: &SessionId,
@@ -1210,6 +1214,10 @@ impl FakeIds {
 }
 
 impl IdGenerator for FakeIds {
+    fn session_id(&self) -> SessionId {
+        SessionId::new(&self.next_text()).expect("规范 uuid 文本")
+    }
+
     fn turn_id(&self) -> TurnId {
         TurnId::new(&self.next_text()).expect("规范 uuid 文本")
     }

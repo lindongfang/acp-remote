@@ -2211,7 +2211,7 @@ fn port_error_and_kinds_are_wired_to_the_model_errors() {
         "unavailable: storage_full"
     );
     assert_eq!(ConflictKind::ALL.len(), 9);
-    assert_eq!(UnavailableKind::ALL.len(), 8);
+    assert_eq!(UnavailableKind::ALL.len(), 9);
     assert_eq!(ConflictKind::AlreadyResolved.as_str(), "already_resolved");
     assert_eq!(
         UnavailableKind::RemoteUnavailable.as_str(),
@@ -2225,6 +2225,16 @@ fn port_error_and_kinds_are_wired_to_the_model_errors() {
     assert_eq!(
         PortError::Unavailable(UnavailableKind::BackendUnsupported).to_string(),
         "unavailable: backend_unsupported"
+    );
+    // `session-create-settle-order`：会话建立入口的「可证明未产生会话」取值（`session.create` 的
+    // `failed` 判据输入）；它同样不新增 wire 码，公开错误仍取 `internal.unavailable`。
+    assert_eq!(
+        UnavailableKind::SessionNotEstablished.as_str(),
+        "session_not_established"
+    );
+    assert_eq!(
+        PortError::Unavailable(UnavailableKind::SessionNotEstablished).to_string(),
+        "unavailable: session_not_established"
     );
     // Infallible 到 PortError 的收敛存在（供 `TryFrom<u64>` 的不可失败分支使用）。
     let never: Result<Version, std::convert::Infallible> = Ok(Version::from(1));

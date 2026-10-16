@@ -82,6 +82,7 @@ use sync_protocol::envelope::{Envelope, MessageType, encode_body};
 use sync_protocol::error::{Body, ErrorCode};
 use tracing::{debug, warn};
 
+use crate::command_log::{self, Cause, Subject, TerminalClass};
 use crate::sync::conn::registry::SendFault;
 use crate::sync::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close};
 use crate::sync::snapshot::LOCAL_CATALOG_FEATURE;
@@ -162,6 +163,19 @@ fn wire_command_state(status: acp_core::model::CommandStatus) -> CommandState {
         CommandStatus::Failed => CommandState::Failed,
         CommandStatus::Uncertain => CommandState::Uncertain,
         CommandStatus::Rejected | CommandStatus::Accepted => CommandState::Rejected,
+    }
+}
+
+/// wire 的 `CommandState` → 命令级日志的终态类别。
+///
+/// `accepted`/`rejected` 返回 `None`：前者不是终态，后者不是**已接受**命令的终态（那条命令从未被接受，
+/// 它的结局由 `sync.command_rejected` 一类日志记录）。
+fn terminal_class(status: CommandState) -> Option<TerminalClass> {
+    match status {
+        CommandState::Completed => Some(TerminalClass::Completed),
+        CommandState::Failed => Some(TerminalClass::Failed),
+        CommandState::Uncertain => Some(TerminalClass::Uncertain),
+        CommandState::Accepted | CommandState::Rejected => None,
     }
 }
 
@@ -796,11 +810,13 @@ impl CommandRoute {
     /// 与其余 mutation 的差别只在入口：core 用独立用例（[`UseCases::create_session`]）而不是
     /// `ClientCommand`（别名解析与 owned 会话行由它负责）。**接受与终态语义完全相同**。
     ///
-    /// 顺序上有一处**与其余 mutation 相反**、且是刻意的：这里先创建、再回 `accepted`。原因是 §11.5
-    /// 要求三种失败（未持 scope、别名/Agent 未登记、本机解析失败）以 `authorization.scope_denied` /
-    /// `internal.unavailable` **拒绝**而不是 `accepted` 后转 `failed`——而「已接受」对
-    /// `session.create` 的语义就是「会话已创建」（创建与幂等行在同一次提交里落盘）。先回
-    /// `accepted` 再失败会留下一条撒谎的接受记录。
+    /// 顺序上有一处**与其余 mutation 相反**、且是刻意的：这里先创建、再按需要回 `accepted`。原因是
+    /// 「已接受」对 `session.create` 的语义是「该命令的**受理已经落盘**」（受理只落幂等记录，会话行
+    /// 随落账提交里的终态在**同一次提交**里落盘，§6 第 20 条）：成功时先回 `accepted` 再等观察者推
+    /// 终态；失败时先回 `accepted`（取记录里的首次持久接受时间）、再回 core 写定的终态——客户端因此
+    /// 总能观察到「`accepted` → 终态」，而不是凭空收到一条终态。失败时的回包判据见
+    /// [`Self::reply_after_create_failure`]（可证明未产生会话 ⇒ `failed`、说不清 ⇒ `uncertain`，都由
+    /// core 写进持久终态；只有「受理之前就失败」那一档才是 `rejected`）。
     async fn on_session_create(
         &self,
         handle: &ConnectionHandle,
@@ -877,7 +893,7 @@ impl CommandRoute {
             None,
             acp_core::model::ResourceOrigin::Local,
         );
-        let session = match self
+        let prepared = match self
             .core
             .create_session(
                 actor,
@@ -888,18 +904,35 @@ impl CommandRoute {
             )
             .await
         {
-            Ok(session) => session,
-            Err(error) => {
-                // 失败分类按 §11.5 的增量：别名未登记、目录形状不合法都是**参数类**错误
-                // （`protocol.schema_invalid`），形式合法但本机解析不了是 `internal.unavailable`。
-                // 两者都不再用 `authorization.scope_denied` 表达——该错误码保留给节点侧 grant 与本地通道，
-                // 设备方向已没有授权维度（`pairing-model`）。
-                let rejection = port_rejection(&error);
-                let (code, text, details) = rejection.into_parts();
-                let Some(error) = public_error(code, text, details) else {
-                    return self.encoding_fault(handle);
+            Ok(acp_core::ports::SessionCreateAdmission::Prepared(prepared)) => prepared,
+            Ok(acp_core::ports::SessionCreateAdmission::InFlight) => {
+                // 同键、首次创建仍在窗口期（并发重发）：**不**派发第二次创建（§11.5 的「同一稳定
+                // requestId 重复提交不产生第二个会话」）。终态由首次受理那一次的结算写入，这里与其余
+                // mutation 的「已 accepted」分支同形：回受理态并挂终态观察。
+                //
+                // `acceptedAt` 取**首次持久接受**的时间（§11.2：`rejected` 之外的所有状态都必须给出该
+                // 时间）：`InFlight` 只可能在该 `requestId` 已有 `accepted` 记录时返回，因此那笔时间是可
+                // 读的；读不回来时退回本机时钟（与其余 mutation 的已接受分支同款兜底），不伪造首见时间。
+                let accepted_at = match self.broker.command_status(actor, &request_id).await {
+                    Ok(Some(record)) => record.accepted_at().cloned(),
+                    _ => None,
                 };
-                self.send_rejected(handle, &command, error);
+                self.send_accepted(handle, &command, None, accepted_at.as_ref());
+                self.watch_terminal(handle, &command, actor);
+                return RouteOutcome::Claimed;
+            }
+            Ok(acp_core::ports::SessionCreateAdmission::Settled(record)) => {
+                // 同键且首次已经终结：回首次结果，不覆盖、不重建（与其余 mutation 的已终结分支同形）。
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+                return RouteOutcome::Claimed;
+            }
+            Err(error) => {
+                // 失败分类在 core（`Unavailable(SessionNotEstablished)` ⇒ `failed`，其余 ⇒ `uncertain`），
+                // 且后端失败时 core **已经**写好终态（无会话形状）再把原错误上抛：本层不再自己分类，
+                // 也不再以「有没有受理记录」当副作用证据（受理记录在受理阶段就已存在，用它当替身会把
+                // 可证明的失败误报成 `uncertain`）。回包一律见 [`Self::reply_after_create_failure`]。
+                self.reply_after_create_failure(handle, actor, &command, &request_id, &error)
+                    .await;
                 return RouteOutcome::Claimed;
             }
         };
@@ -908,9 +941,12 @@ impl CommandRoute {
         // 终态：把持久记录推进到 `completed { sessionId, session }`。摘要与 `session.list` **同源**
         // （同一个 `wire_session` 投影），因此两侧形状必然一致。
         let catalog = self.features(handle).contains(LOCAL_CATALOG_FEATURE);
-        let settled = match self.session_summary(actor, &session, catalog).await {
+        let settled = match self
+            .created_session_summary(actor, &prepared, catalog)
+            .await
+        {
             Some(summary) => {
-                match Uuid::parse(session.as_str())
+                match Uuid::parse(prepared.session.as_str())
                     .ok()
                     .map(|session_id| SessionCreateResult {
                         session_id,
@@ -936,13 +972,20 @@ impl CommandRoute {
             None => Ok(false),
         };
         if !matches!(settled, Ok(true)) {
-            // 会话已创建，但摘要投影不出来：**不得**回 `failed`（那会让客户端以为没有会话）。
-            // §11.5 对这一档的定论是 `uncertain`。
+            // 会话已创建，但摘要投影不出来（或那条终态没落盘）：**不得**回 `failed`（那会让客户端以为
+            // 没有会话）。§11.5 对这一档的定论是 `uncertain`。终态的成因只写封闭类别：`PortError` 的
+            // `Debug` 可能带出后端文本（含路径），不写进日志。
             warn!(
                 event = "sync.session_create_terminal_unsettled",
-                connection_id = handle.connection_id().as_str(),
+                device_id = handle.device_id().as_str(),
+                command = command.command.as_str(),
+                session_id = prepared.session.as_str(),
                 request_id = request_id.as_str(),
-                error = ?settled.err(),
+                cause = settled
+                    .as_ref()
+                    .err()
+                    .map_or(Cause::Projection, Cause::of_port_error)
+                    .as_str(),
                 "the created session cannot be projected into the terminal result"
             );
             let Some(error) = acp_core::model::PublicError::coded(
@@ -968,23 +1011,116 @@ impl CommandRoute {
         RouteOutcome::Claimed
     }
 
-    /// 一条 owned 会话的 wire 摘要（与 `session.list` 同一条可见性与投影口径）。
+    /// `session.create` 失败后的回包：**以持久记录为唯一权威**。
     ///
-    /// 读的是 `session.list` scope：`session.create` 的结果形状要求 `session`，而摘要的唯一来源就是
-    /// 会话读面。持 `grant.remote-work` 而不持 `grant.observe` 的设备因此只能拿到终态前的 `accepted`
-    /// —— 这条降级由 §11.5 的 `uncertain` 收口，不伪造摘要。
-    async fn session_summary(
+    /// core 已按错误类别写好终态（[`acp_core::broker::Broker::create_session`]：可证明 Agent 侧未产生
+    /// 会话 ⇒ `failed`，说不清 ⇒ `uncertain`，两者都是**零会话行**的形状）并原样上抛后端错误，因此本层
+    /// 的责任只有「按持久记录回包」这一件：
+    ///
+    /// - **有记录且已终结** ⇒ 回首次终态（`terminalEventId` 非空）。同 `requestId` 重发因此既不会被回成
+    ///   `rejected`（那是「未产生任何副作用」的宣告），也不会被当成一条新命令；
+    /// - **有记录但仍是 `accepted`**（core 的失败终态没落盘，例如存储瞬断）⇒ 回受理态并挂终态观察，
+    ///   **不伪造终态**：记录是唯一事实，它由启动恢复按 §6 第 16 条收敛到 `uncertain`；
+    /// - **没有记录**（受理提交之前就失败：授权拒绝、schema/参数拒绝、别名未登记、本机解析失败，或受理
+    ///   提交本身写失败）⇒ 保留今天的行为：`port_rejection` 的 `rejected`。这一档**可以**被证明「本机
+    ///   没有任何副作用」，主 spec「引用失败与解析失败的分类」要求以 `rejected` 表达；
+    /// - **记录读不回来**（存储不可用）⇒ 不得回 `rejected`：它断言「本机没有副作用」，而此刻恰恰不知道
+    ///   有没有。回受理态并挂观察，对端可凭 `command.status` 自行确认。
+    ///
+    /// 一处例外：**幂等冲突**（同键不同语义）先判——那时确实有一条记录，但它的首次结果属于另一条语义的
+    /// 命令，重放它会让对端以为这次的不同 payload 被执行过。只有这一档「已有记录也回 `rejected`」是
+    /// 如实的，且主 spec 的幂等要求指定了它的错误码。
+    async fn reply_after_create_failure(
+        &self,
+        handle: &ConnectionHandle,
+        actor: &Actor,
+        command: &Command,
+        request_id: &CoreRequestId,
+        error: &PortError,
+    ) {
+        if matches!(
+            error,
+            PortError::Conflict(ConflictKind::IdempotencyConflict)
+        ) {
+            match public_error(
+                ErrorCode::CommandIdempotencyConflict,
+                "the requestId was already used for a different command or payload",
+                RawObject::empty(),
+            ) {
+                Some(error) => self.send_rejected(handle, command, error),
+                None => {
+                    self.encoding_fault(handle);
+                }
+            }
+            return;
+        }
+        match self.broker.command_status(actor, request_id).await {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                // 首次响应必须是**受理态**：这条命令确实被受理过（受理提交在本请求里先落盘，后端紧接着
+                // 失败、终态也已经写好）。先回 `accepted`（取记录里的首次受理时间），再回该终态——与
+                // Node Link 面同形，客户端因此总能观察到「`accepted` → 终态」，而不是凭空收到一条终态
+                // （`SYNC_PROTOCOL.md` §11.2：mutation 首次提交只返回 `accepted` 或 `rejected`）。
+                // 受理日志由 `send_accepted` 记，不再另记一条。
+                self.send_accepted(handle, command, None, record.accepted_at());
+                self.send_record_terminal(handle, &command.request_id, command.command, &record);
+            }
+            Ok(Some(record)) => {
+                self.send_accepted(handle, command, None, record.accepted_at());
+                self.watch_terminal(handle, command, actor);
+            }
+            Ok(None) => self.reject_from_port_error(handle, command, error),
+            Err(read_error) => {
+                warn!(
+                    event = "sync.session_create_status_unreadable",
+                    device_id = handle.device_id().as_str(),
+                    command = command.command.as_str(),
+                    request_id = command.request_id.as_str(),
+                    cause = Cause::of_port_error(&read_error).as_str(),
+                    "the command record could not be read; the reply stays non-committal"
+                );
+                self.send_accepted(handle, command, None, None);
+                self.watch_terminal(handle, command, actor);
+            }
+        }
+    }
+
+    /// 端口错误 → `rejected`（`port_rejection` 的映射 + 错误体装配）。
+    fn reject_from_port_error(
+        &self,
+        handle: &ConnectionHandle,
+        command: &Command,
+        error: &PortError,
+    ) {
+        let (code, text, details) = port_rejection(error).into_parts();
+        match public_error(code, text, details) {
+            Some(error) => self.send_rejected(handle, command, error),
+            None => {
+                self.encoding_fault(handle);
+            }
+        }
+    }
+
+    /// 创建终态的 wire 摘要（与 `session.list` 同一条可见性与投影口径）。
+    ///
+    /// 摘要取自 core 随 `Prepared` 给出的那一份：会话行要到**落账提交**（`settle_session_create`）才
+    /// 存在（§6 第 20 条），此前会话读面里必然还没有它——按读面取摘要会让每次创建都降级为
+    /// `uncertain`；而 core 的摘要与落账提交将写入的取值同源，投影又复用 `session.list` 的
+    /// `wire_session`，因此两侧形状必然一致。
+    ///
+    /// `session.list` 这一读保留原职：它是「本主体能不能读会话读面」这一判定的落点（`list_sessions`
+    /// 先授权、再读行），未授权时返回 `None`、由 §11.5 的 `uncertain` 收口，不伪造摘要。
+    async fn created_session_summary(
         &self,
         actor: &Actor,
-        session: &acp_core::model::SessionId,
+        prepared: &acp_core::ports::PreparedSessionCreate,
         catalog: bool,
     ) -> Option<WireSessionSummary> {
-        let query = acp_core::ports::SessionQuery::default();
-        let sessions = self.core.list_sessions(actor, query).await.ok()?;
-        sessions
-            .iter()
-            .find(|summary| summary.session_id() == session)
-            .and_then(|summary| self::query::wire_session(summary, catalog))
+        // 取值本身不使用：窗口期列表里还没有这条会话，本调用只落实那次授权判定。
+        self.core
+            .list_sessions(actor, acp_core::ports::SessionQuery::default())
+            .await
+            .ok()?;
+        self::query::wire_session(&prepared.summary, catalog)
     }
 
     /// 回一条 `accepted` 的 `command.result`：`result` 与 `terminalEventId` 均为 `null`。
@@ -995,13 +1131,19 @@ impl CommandRoute {
         turn: Option<TurnId>,
         accepted_at: Option<&CoreTimestamp>,
     ) {
-        debug!(
-            event = "sync.command_accepted",
-            device_id = handle.device_id().as_str(),
-            command = command.command.as_str(),
-            request_id = command.request_id.as_str(),
-            turn = ?turn.as_ref().map(|turn| turn.as_str()),
-            "the mutation is accepted; the terminal state follows as a persisted event"
+        // 受理日志（`sync-command-handling` 的「命令级结构化日志」）：主体、命令名、资源标识与请求标识，
+        // 字段名与成因/终态词表集中在 `crate::command_log`。`session.create` 的受理阶段还没有会话行，
+        // 因此 `sessionId` 为 `null`（wire 的 `sessionId` 就是那一档的证据）。
+        command_log::accepted(
+            Subject::Device(handle.device_id().as_str()),
+            command.command.as_str(),
+            command
+                .session_id
+                .as_ref()
+                .and_then(|id| acp_core::model::SessionId::new(id.as_str()).ok())
+                .as_ref(),
+            command.request_id.as_str(),
+            turn.as_ref(),
         );
         // 首见提交用本机时钟；幂等重放用首次落盘的那个 acceptedAt（不得换成现在）。
         // 两个时钟类型不同源（`Authority` 与 core 各自持有），因此以 ISO 文本为公共面。
@@ -1042,6 +1184,21 @@ impl CommandRoute {
         record: &acp_core::model::CommandRecord,
     ) {
         let status = wire_command_state(record.status());
+        // 终态日志（与受理那条成对）：类别取自持久记录本身，成因由记录里的错误码经封闭词表收敛
+        // （`accepted`/`rejected` 不是**已接受**命令的终态，因此不在这里记）。
+        if let Some(class) = terminal_class(status) {
+            command_log::terminal(
+                Subject::Device(handle.device_id().as_str()),
+                name.as_str(),
+                record.session(),
+                request_id.as_str(),
+                class,
+                record
+                    .error()
+                    .map(|error| Cause::of_code(error.code()))
+                    .unwrap_or(Cause::None),
+            );
+        }
         let accepted_at = match record.accepted_at() {
             Some(at) => match wire_timestamp(at.as_str()) {
                 Some(at) => Nullable::value(at),

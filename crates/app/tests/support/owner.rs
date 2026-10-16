@@ -642,6 +642,11 @@ fn scripted_agent_session_id(session: &SessionId) -> AgentSessionId {
 
 #[async_trait::async_trait]
 impl SessionBackendFactory for ScriptedBackends {
+    /// 替身不持有进程：终止是成功的空操作（core 侧只用真 `AgentHost` 验证「运行时不复被复用」）。
+    async fn terminate_agent(&self, _session: &SessionId) -> Result<(), PortError> {
+        Ok(())
+    }
+
     async fn create(
         &self,
         session: &SessionId,

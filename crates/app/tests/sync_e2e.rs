@@ -443,6 +443,59 @@ fn snapshot_helpers_are_exported() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 本机会话的来源（不经 wire）
+// ---------------------------------------------------------------------------------------------
+
+/// 本机建一条 owned 会话并**落账**（§6 第 20 条的三笔时序：受理 → 执行 → 落账），返回会话标识。
+///
+/// 受理提交只落幂等记录——会话行与终态在**落账提交**里同批落盘，而本文件的用例都要求这条会话真实
+/// 存在（快照的 `sessions` chunk 要列得到它、事件回放要有它的事件），因此创建后必须再结算一次
+/// （与生产适配层同形）。终态结果原文只是形状占位：本文件不读它。
+async fn local_session(host: &HostNode, fingerprint: &str) -> acp_core::model::SessionId {
+    let request_id = acp_core::model::RequestId::new(&uuid_text()).expect("request id 规范");
+    let prepared = match host
+        .core()
+        .create_session(
+            &acp_core::model::Actor::LocalCli,
+            request_id.clone(),
+            ac1_digest(fingerprint),
+            acp_core::model::CreateSessionRequest::new(
+                acp_core::model::AgentRef::try_new(
+                    acp_core::model::AgentId::new(AGENT).expect("agent id"),
+                    "Codex",
+                )
+                .expect("agent ref"),
+                None,
+                None,
+                acp_core::model::ResourceOrigin::Local,
+            ),
+            None,
+        )
+        .await
+        .expect("本机会话创建")
+    {
+        acp_core::ports::SessionCreateAdmission::Prepared(prepared) => prepared,
+        other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+    };
+    let result = acp_core::model::CommandResult::from_json_text(r#"{"sessionId":"projected"}"#)
+        .expect("result object");
+    assert!(
+        host.core()
+            .settle_session_create(
+                &acp_core::model::Actor::LocalCli,
+                &request_id,
+                acp_core::model::CommandStatus::Completed,
+                Some(result),
+                None,
+            )
+            .await
+            .expect("落账"),
+        "落账必须真的写入"
+    );
+    prepared.session
+}
+
+// ---------------------------------------------------------------------------------------------
 // 8.2：主链路（配对 → 握手 → 订阅 → 快照 → 摘要复算 → caught_up → ACK）
 // ---------------------------------------------------------------------------------------------
 
@@ -463,27 +516,10 @@ async fn the_main_chain_runs_snapshot_digest_recompute_and_ack() {
     // 经 `Broker::commit_node_event` 落库——因此事件库里 head > 0，快照屏障游标可断言）。
     register_workspace(&host, "project.one").await;
     register_agent(&host).await;
+    // 水位取样在**本地会话落账之后**：落账提交自身也会追加一条终态事件（推进水位），若把它夹在两次
+    // 读数之间，下面的断言就会被它顺带满足，不再证明「节点级事件推进水位」这件事。
+    let session_id = local_session(&host, "acp-remote/sync-e2e/session-create").await;
     let head_before = host.head().await;
-    let session_id = host
-        .core()
-        .create_session(
-            &acp_core::model::Actor::LocalCli,
-            acp_core::model::RequestId::new(&uuid_text()).expect("request id 规范"),
-            ac1_digest("acp-remote/sync-e2e/session-create"),
-            acp_core::model::CreateSessionRequest::new(
-                acp_core::model::AgentRef::try_new(
-                    acp_core::model::AgentId::new(AGENT).expect("agent id"),
-                    "Codex",
-                )
-                .expect("agent ref"),
-                None,
-                None,
-                acp_core::model::ResourceOrigin::Local,
-            ),
-            None,
-        )
-        .await
-        .expect("本机会话创建");
     host.emit_agent_lifecycle(AGENT, "connected").await;
     let head = host.head().await;
     assert!(
@@ -865,25 +901,7 @@ async fn resubscribing_with_an_older_cursor_replays_from_that_cursor() {
     let device = Device::new();
     pair_and_approve(&host, &device).await;
     register_agent(&host).await;
-    host.core()
-        .create_session(
-            &acp_core::model::Actor::LocalCli,
-            acp_core::model::RequestId::new(&uuid_text()).expect("request id 规范"),
-            ac1_digest("acp-remote/sync-e2e/replay-session"),
-            acp_core::model::CreateSessionRequest::new(
-                acp_core::model::AgentRef::try_new(
-                    acp_core::model::AgentId::new(AGENT).expect("agent id"),
-                    "Codex",
-                )
-                .expect("agent ref"),
-                None,
-                None,
-                acp_core::model::ResourceOrigin::Local,
-            ),
-            None,
-        )
-        .await
-        .expect("本机会话创建");
+    local_session(&host, "acp-remote/sync-e2e/replay-session").await;
     let older_head = host.head().await;
 
     let mut client = SyncClient::connect_plain(host.addr(), host.host_name(), &host.origin()).await;

@@ -26,6 +26,7 @@
 //!   由常驻漂移测试逐项断言，不在别处复制第二套；
 //! - 平台分支只出现在 [`transport::local`] 的 `platform` 子模块与 [`transport::net`] 的权限/流实现里。
 
+pub(crate) mod command_log;
 pub mod local_admin;
 pub mod node_link;
 pub mod sync;

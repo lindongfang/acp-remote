@@ -462,6 +462,43 @@ impl AgentHost {
         runtime.supervisor.shutdown().await;
     }
 
+    /// 结束某个 core 会话所属的 Agent 运行时（窗口期事件队列超限的失败关闭口径）。
+    ///
+    /// 顺序与 `local-agent-host` 的「超限结束的失败关闭顺序」同源：**先**把该运行时从运行目录里摘掉
+    /// （此后按 `AgentId` 复用取不到它，`Supervisor::is_running()` 在 `shutdown()` 置位后即为假），**再**
+    /// 让未完成请求以明确结果结束、回收进程树与子任务。与 [`Self::discard_spawned_runtime`] 的唯一差别
+    /// 是触发者：那一条服务「本次恢复失败」，本一条服务「这个运行时的会话已不可信」。
+    ///
+    /// 按**运行时**（= 一个 Agent 进程）回收而不是只按会话：进程是按 `AgentId` 复用与关停的最小单位，
+    /// 而「一条超限消息结束一个 Agent」的既有口径同样是整进程处置——复用同一进程的其它会话因此与那份
+    /// 口径一致，不会出现「同一个进程一半可用一半不可用」的分裂状态。
+    async fn terminate_runtime_of(&self, session: &SessionId) {
+        let candidates: Vec<(AgentId, Arc<AgentRuntime>)> = {
+            let runtimes = self.runtimes.lock().await;
+            runtimes
+                .iter()
+                .filter(|(_, runtime)| lock(&runtime.by_core).contains_key(session.as_str()))
+                .map(|(agent, runtime)| (agent.clone(), Arc::clone(runtime)))
+                .collect()
+        };
+        for (agent, runtime) in candidates {
+            {
+                let mut runtimes = self.runtimes.lock().await;
+                if runtimes
+                    .get(&agent)
+                    .is_some_and(|current| Arc::ptr_eq(current, &runtime))
+                {
+                    runtimes.remove(&agent);
+                }
+            }
+            for session in runtime.sessions() {
+                session.close_session();
+            }
+            runtime.clear_sessions();
+            runtime.supervisor.shutdown().await;
+        }
+    }
+
     /// 执行 `initialize` 并解出能力声明（只记录 Agent 真宣告的内容）。
     async fn initialize(
         &self,
@@ -481,8 +518,9 @@ impl AgentHost {
             .request("initialize", &params, timeout)
             .await?;
         let response: InitializeResponse =
-            serde_json::from_value(value).map_err(|error| HostError::SpawnFailed {
-                detail: format!("无法解码 initialize 响应：{error}"),
+            serde_json::from_value(value).map_err(|error| HostError::MalformedResponse {
+                method: "initialize",
+                detail: error.to_string(),
             })?;
         if response.protocol_version != 1 {
             return Err(HostError::Protocol(acp_protocol::AcpError::InvalidField {
@@ -650,6 +688,13 @@ impl AgentCatalog for AgentHost {
 
 #[async_trait::async_trait]
 impl SessionBackendFactory for AgentHost {
+    /// 结束该会话所属的 Agent 运行时（进程树与映射一并回收，此后不再被复用）。幂等：该会话没有任何
+    /// 运行时（已结束、从未建立）时是成功的空操作。
+    async fn terminate_agent(&self, session: &SessionId) -> Result<(), PortError> {
+        self.terminate_runtime_of(session).await;
+        Ok(())
+    }
+
     async fn create(
         &self,
         session: &SessionId,
@@ -657,10 +702,12 @@ impl SessionBackendFactory for AgentHost {
         sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError> {
         let agent = request.agent.agent_id().clone();
+        // 建立路径的错误映射走 `to_establishment_error`：可证明「Agent 侧没有产生会话」的那一类收敛成
+        // `Unavailable(SessionNotEstablished)`，core 据此把终态判为 `failed`（其余一律 `uncertain`）。
         let runtime = self
             .ensure_runtime(&agent)
             .await
-            .map_err(|error| error.to_port_error())?;
+            .map_err(|error| error.to_establishment_error())?;
         let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
 
         let params = session_new_params(&request)?;
@@ -668,13 +715,16 @@ impl SessionBackendFactory for AgentHost {
             .supervisor
             .request("session/new", &params, limits::SHORT_REQUEST_TIMEOUT)
             .await
-            .map_err(|error| error.to_port_error())?;
+            .map_err(|error| error.to_establishment_error())?;
         let response: acp_protocol::message::NewSessionResponse = serde_json::from_value(value)
             .map_err(|error| {
-                HostError::SpawnFailed {
-                    detail: format!("无法解码 session/new 响应：{error}"),
+                // 请求已发出、Agent 已答复，只是答复形状不合约定：会话**可能**已经建立，
+                // 因此这不是「可证明未产生会话」那一类。
+                HostError::MalformedResponse {
+                    method: "session/new",
+                    detail: error.to_string(),
                 }
-                .to_port_error()
+                .to_establishment_error()
             })?;
 
         // `session/new` 成功返回的 ACP 会话标识：core 用它落盘（§3.6）。取不出合法 `AgentSessionId`
@@ -755,10 +805,12 @@ impl SessionBackendFactory for AgentHost {
             workspace_cwd,
         } = request;
         let agent_id = agent.agent_id().clone();
+        // 与 `create` 同一口径（见那里的注释）：可证明未建立会话的一类收敛成
+        // `Unavailable(SessionNotEstablished)`，让 `settle_session_resume` 能把终态判为 `failed`。
         let (runtime, spawned) = self
             .ensure_runtime_tracked(&agent_id)
             .await
-            .map_err(|error| error.to_port_error())?;
+            .map_err(|error| error.to_establishment_error())?;
         // 读的是该 runtime 协商并缓存下来的能力：本次拉起进程时 `initialize` 刚协商过；复用既有进程
         // （`spawned == false`）时读到的是**那个进程此前**的协商结果——不重新协商，也不虚报能力。
         let capabilities = lock(&runtime.capabilities).clone().unwrap_or_default();
@@ -779,10 +831,11 @@ impl SessionBackendFactory for AgentHost {
         {
             Ok(value) => value,
             Err(error) => {
-                // Agent 拒绝（或进程消失/超时）：明确失败，且不留下本次拉起的进程。
+                // Agent 拒绝（或进程消失/超时）：明确失败，且不留下本次拉起的进程。分类与 `create`
+                // 同口径——Agent 明确拒绝 ⇒ 可证明；超时/掉线 ⇒ 说不清。
                 self.discard_spawned_runtime(&agent_id, &runtime, spawned)
                     .await;
-                return Err(error.to_port_error());
+                return Err(error.to_establishment_error());
             }
         };
         let response: message::SessionResumeResponse = match serde_json::from_value(value) {
@@ -790,10 +843,11 @@ impl SessionBackendFactory for AgentHost {
             Err(error) => {
                 self.discard_spawned_runtime(&agent_id, &runtime, spawned)
                     .await;
-                return Err(HostError::SpawnFailed {
-                    detail: format!("无法解码 session/resume 响应：{error}"),
+                return Err(HostError::MalformedResponse {
+                    method: "session/resume",
+                    detail: error.to_string(),
                 }
-                .to_port_error());
+                .to_establishment_error());
             }
         };
 

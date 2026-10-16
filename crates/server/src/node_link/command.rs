@@ -21,8 +21,13 @@
 //!    ACPR-CJ1 指纹不同即回 `nodelink.command.idempotency_conflict`，**不**回首次结果。
 //! 4. **派发**：查询命令同步完成（结果直接放进 `command.terminal`），mutation 同步接受；`session.create`
 //!    先回 `accepted(result = null)`，创建后把适配层投影的结果写进终态并**以持久记录为唯一权威**回
-//!    `command.terminal`（`terminalEventId` 因此非 null）；创建在幂等行落盘前就失败时（授权、本机
-//!    workspace 解析、写盘）没有记录可回读，本地合成同形 `failed` 终态。
+//!    `command.terminal`（`terminalEventId` 因此非 null）。后端失败的终态由 **core** 写（按错误类别
+//!    `failed`/`uncertain`，零会话行），本层只回读回包；只有「受理提交之前就失败」（授权、参数/别名、
+//!    本机 workspace 解析、写盘）没有记录可回读，那时才本地合成同形 `failed` 终态。
+//!
+//! **命令级日志**（`sync-command-handling` 的「命令级结构化日志」）：每条被接受的业务命令与其终态各记一条
+//! 结构化日志（主体标识、命令名、资源标识、请求标识；终态再加类别与封闭词表里的成因）。字段与词表的唯一
+//! 产出点是 [`crate::command_log`]。
 //! 5. **终态映射**：`completed` 必带非空 `result`（core 的 `CommandResult` 可空，**非空由本层保证**；
 //!    `session.create` 的持久结果就是 `SessionCreateResult` 原文，回读时还原成具名变体）、其余 status
 //!    必带 `error`、`terminalEventId` 取该记录的终态事件、`uncertain` 原样透传。
@@ -69,7 +74,7 @@ use acp_core::model::{
     TemplateSelection, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceAlias,
     WorkspaceSource,
 };
-use acp_core::ports::SessionQuery;
+use acp_core::ports::{PreparedSessionCreate, SessionCreateAdmission, SessionQuery};
 use acp_core::use_cases::{NodeLinkCatalogView, UseCases};
 use identity_auth::Authority;
 use node_link_protocol::catalog::{ExportRevoked, NodeTrustRevoked};
@@ -90,6 +95,7 @@ use serde::de::IgnoredAny;
 use sha2::{Digest as _, Sha256};
 use tracing::{debug, info, warn};
 
+use crate::command_log::{self, Cause, Subject, TerminalClass};
 use crate::node_link::conn::{
     ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome, close,
 };
@@ -350,7 +356,7 @@ impl CommandRoute {
             );
             return RouteOutcome::Claimed;
         };
-        self.send_accepted(handle, target, command, accepted_at, None);
+        self.send_accepted(handle, target, command, accepted_at, None, record.session());
         RouteOutcome::Claimed
     }
 
@@ -485,6 +491,7 @@ impl CommandRoute {
                 .cloned()
                 .unwrap_or_else(|| self.clock()),
             receipt_turn.as_ref(),
+            record.session(),
         );
         self.watch(handle, &request);
         RouteOutcome::Claimed
@@ -686,6 +693,7 @@ impl CommandRoute {
                         CommandName::SessionCreate,
                         &accepted_at,
                         None,
+                        record.session(),
                     );
                     self.watch(handle, &request);
                 }
@@ -703,6 +711,7 @@ impl CommandRoute {
             &submit.request_id,
             CommandName::SessionCreate,
             &self.clock(),
+            None,
             None,
         );
         let Ok(agent_id) = AgentId::new(payload.agent_id.as_str()) else {
@@ -737,24 +746,41 @@ impl CommandRoute {
             )
             .await
         {
-            Ok(session) => match self
-                .session_create_result(handle.node_id(), &export_id, &session)
-                .await
-            {
-                Ok(result) => LocalOutcome::Completed(CommandResultPayload::SessionCreate(result)),
-                Err(error) => {
-                    // 会话确实已创建：不能用 `failed` 撒谎（那会让 Access 以为没有会话），按 §12.7 的
-                    // `uncertain` 语义终结本次命令（Access 不得自动重试）。
-                    warn!(
-                        event = "node_link.session_create_result_failed",
-                        access_node_id = handle.node_id().as_str(),
-                        request_id = submit.request_id.as_str(),
-                        error = ?error,
-                        "the created session cannot be projected into SessionCreateResult"
-                    );
-                    LocalOutcome::Uncertain(error_info("nodelink.command.uncertain"))
+            Ok(SessionCreateAdmission::Prepared(prepared)) => {
+                // 会话行此刻**尚未落账**（§6 第 20 条）：结果由 core 给出的准备值投影（不回读存储），
+                // 随后由下面的终态结算把会话行、幂等行回填与终态一次落盘。
+                match self.session_create_result(&export_id, &prepared) {
+                    Ok(result) => {
+                        LocalOutcome::Completed(CommandResultPayload::SessionCreate(result))
+                    }
+                    Err(error) => {
+                        // 会话确实已创建：不能用 `failed` 撒谎（那会让 Access 以为没有会话），按 §12.7 的
+                        // `uncertain` 语义终结本次命令（Access 不得自动重试）。
+                        warn!(
+                            event = "node_link.session_create_result_failed",
+                            access_node_id = handle.node_id().as_str(),
+                            command = CommandName::SessionCreate.as_str(),
+                            request_id = submit.request_id.as_str(),
+                            cause = Cause::of_port_error(&error).as_str(),
+                            "the created session cannot be projected into SessionCreateResult"
+                        );
+                        LocalOutcome::Uncertain(error_info("nodelink.command.uncertain"))
+                    }
                 }
-            },
+            }
+            Ok(SessionCreateAdmission::InFlight) => {
+                // 键相同、首次创建仍在窗口期（并发重发）：**不**派发第二次创建（§12.7 的「同一 requestId
+                // 不产生第二个会话」）。上一步的持久记录检查覆盖不到它——另一条任务尚未来得及回填终态
+                // ——而本层已回过一条同形的 `accepted(result = null)`，因此这里只挂终态观察：终态由
+                // 首次受理的那一次结算写入，本连接收到它即收尾（与未终结记录那条分支同形）。
+                self.watch(handle, &request);
+                return RouteOutcome::Claimed;
+            }
+            Ok(SessionCreateAdmission::Settled(record)) => {
+                // 键相同且首次已经终结：回首次结果，不覆盖、不重建（与上一步的已终结分支同形）。
+                self.send_terminal(handle, &record);
+                return RouteOutcome::Claimed;
+            }
             Err(PortError::Conflict(acp_core::model::ConflictKind::IdempotencyConflict)) => {
                 // 同键不同语义（§12.5）：回 `command.rejected` 且零副作用。
                 return self.reject_code(
@@ -765,35 +791,28 @@ impl CommandRoute {
                 );
             }
             Err(error) => {
-                // 会话行与幂等行在 **Create 那一次提交**里一起落盘（§6 第 20 条），因此「有没有持久
-                // 记录」就是「会话行有没有被提交」的**权威判据**：`create_session` 返回错误时它仍可能已经
-                // 提交了会话行（例如紧接着的两列提交遇 `StorageFull`/`IoError`，core 用 `?` 上抛，而
-                // 已构造的端点来不及登记）。
-                //
-                // 那一类**不得**结 `failed`：Access 会以为根本没有会话，而 Owner 侧留下一条永不回传
-                // 会话标识的孤儿行。沿用本处理器投影失败分支的同一判据（不能用 `failed` 撒谎）结
-                // `uncertain`。没有记录则相反——会话行确实没提交，`failed` 是如实的确定类结论。
+                // 后端的终态由 **core** 写：`create_session` 按错误类别落 `failed`（可证明 Agent 侧未产生
+                // 会话）或 `uncertain`（说不清），两者都是**零会话行**的形状，然后把原错误上抛。因此本层
+                // 不再自己分类，更不再以「有没有持久记录」当副作用证据——受理记录在受理阶段就已存在
+                // （`SessionCreateAdmission` 的三态），拿它当替身会把可证明的失败误报成 `uncertain`
+                // （`node-link-owner-server`「受理记录的存在不构成副作用证据」）。成因只写封闭类别：
+                // `PortError` 的 `Debug` 可能带出后端文本（含路径）。
                 warn!(
                     event = "node_link.session_create_failed",
                     access_node_id = handle.node_id().as_str(),
+                    command = CommandName::SessionCreate.as_str(),
                     request_id = submit.request_id.as_str(),
-                    error = ?error,
+                    cause = Cause::of_port_error(&error).as_str(),
                     "session.create could not be completed"
                 );
-                let committed = matches!(
-                    self.core.command_status(&actor, request.clone()).await,
-                    Ok(Some(_))
-                );
-                if committed {
-                    LocalOutcome::Uncertain(error_info("nodelink.command.uncertain"))
-                } else {
-                    LocalOutcome::Failed(error_info(&port_error_code(&error)))
-                }
+                return self
+                    .reply_after_create_failure(handle, &submit.request_id, &request, &error)
+                    .await;
             }
         };
-        // 终态落盘（§6 第 20 条）：把幂等行推进到终态。投影失败时写 `uncertain`（会话已创建，
-        // 不能报 `failed`）；创建立即失败时写 `failed`（没有可用会话）。`failed`/`uncertain` 的错误
-        // 取本层映射后的 wire 错误（code/message/retryable/details 一并落盘，回读因此逐字一致）。
+        // 终态落盘（§6 第 20 条）：只有**本层投影出的**终态需要结算——会话行与终态在同一次提交里落盘
+        // （投影失败写 `uncertain`：会话已创建，不能报 `failed`）。后端失败那条路径的终态已经由 core
+        // 写好，本层不结算也不分类（见上面的 `Err` 臂）。
         let settled = match &outcome {
             LocalOutcome::Completed(result) => match serde_json::to_string(result)
                 .ok()
@@ -819,17 +838,6 @@ impl CommandRoute {
                     Ok(false)
                 }
             },
-            LocalOutcome::Failed(error) => self
-                .core
-                .settle_session_create(
-                    &actor,
-                    &request,
-                    CoreStatus::Failed,
-                    None,
-                    core_error(error),
-                )
-                .await
-                .map(|_| true),
             LocalOutcome::Uncertain(error) => self
                 .core
                 .settle_session_create(
@@ -841,13 +849,16 @@ impl CommandRoute {
                 )
                 .await
                 .map(|_| true),
+            // `session.create` 不产出 `Failed` 终态：可证明未产生会话的那一档由 core 按错误类别写好，
+            // 本层不再分类。保留臂只为让匹配穷尽（`LocalOutcome` 与 `session.resume` 共用）。
+            LocalOutcome::Failed(_) => Ok(false),
         };
         if let Err(error) = settled {
             warn!(
                 event = "node_link.session_create_terminal_failed",
                 access_node_id = handle.node_id().as_str(),
                 request_id = submit.request_id.as_str(),
-                error = ?error,
+                cause = Cause::of_port_error(&error).as_str(),
                 "the session.create terminal could not be persisted"
             );
         }
@@ -857,20 +868,101 @@ impl CommandRoute {
             Ok(Some(record)) if record.status().is_terminal() => {
                 self.send_terminal(handle, &record)
             }
-            _ => {
-                // 没有持久记录：创建在幂等行落盘前就失败。本层能确认的只有**确定类失败**——授权拒绝
-                // 与本机 workspace 解析失败：同一 requestId 重试得到同一结果，本地回 `failed` 终态。
-                // 存储写失败落在同一窗口却不属这一类：它没有留下持久首次结果（`CORE_PORTS_AND_STORAGE.md`
-                // §6 第 20 条、`NODE_LINK_PROTOCOL.md` §12.7），同 requestId 重查 `command.status` 回
-                // `nodelink.command.not_found`，重试可以创建出另一个会话。
-                if let Some(body) = local_terminal(
-                    CommandName::SessionCreate,
+            Ok(Some(record)) => {
+                // 已受理但尚未终结：core 的失败终态没落盘（存储瞬断）。**不伪造终态**——回受理态并挂终态
+                // 观察；记录由启动恢复按 §6 第 16 条收敛到 `uncertain`。
+                self.accept_and_watch_create(
+                    handle,
                     &submit.request_id,
-                    &outcome,
-                    &self.clock(),
-                ) {
-                    let _ = handle.send(MessageType::CommandTerminal, &body);
-                }
+                    &request,
+                    record.session(),
+                    record.accepted_at(),
+                );
+            }
+            Ok(None) => {
+                // 受理提交成功却查无记录：存储与用例不一致（接线缺陷）。不宣告任何结论，回受理态并挂
+                // 观察，对端据此等待或凭 `command.status` 重查。
+                warn!(
+                    event = "node_link.session_create_record_missing",
+                    access_node_id = handle.node_id().as_str(),
+                    command = CommandName::SessionCreate.as_str(),
+                    request_id = submit.request_id.as_str(),
+                    cause = Cause::NotFound.as_str(),
+                    "the accepted session.create has no persisted record"
+                );
+                self.accept_and_watch_create(handle, &submit.request_id, &request, None, None);
+            }
+            Err(read_error) => {
+                // 记录读不回来（存储不可用）：此刻既不能宣告「没有副作用」，也不能凭空造终态。
+                warn!(
+                    event = "node_link.session_create_record_unreadable",
+                    access_node_id = handle.node_id().as_str(),
+                    command = CommandName::SessionCreate.as_str(),
+                    request_id = submit.request_id.as_str(),
+                    cause = Cause::of_port_error(&read_error).as_str(),
+                    "the session.create record could not be read"
+                );
+                self.accept_and_watch_create(handle, &submit.request_id, &request, None, None);
+            }
+        }
+        RouteOutcome::Claimed
+    }
+
+    /// `session.create` 失败后的回包：**以持久记录为唯一权威**（与 Sync 面 `reply_after_create_failure`
+    /// 同一判据，只是本面的「没有记录」那一档有自己的本地合成形状）。
+    ///
+    /// core 已按错误类别写好终态（可证明 Agent 侧未产生会话 ⇒ `failed`，说不清 ⇒ `uncertain`，零会话行），
+    /// 因此：
+    ///
+    /// - **有记录且已终结** ⇒ `command.terminal`（`terminalEventId` 非空），同键重发因此回首次结果、不会
+    ///   被回成「没有副作用」；
+    /// - **有记录但仍是 `accepted`**（core 的失败终态没落盘）⇒ 回受理态并挂终态观察，不伪造终态；
+    /// - **没有记录** ⇒ 失败发生在受理提交之前（授权拒绝、参数/别名未登记、本机解析失败，或受理提交本身
+    ///   写失败）：这一档 core 还没调用后端，**可证明**本机没有副作用，因此本地合成 `failed` 终态是如实的
+    ///   （§12.7 的「幂等行落盘前失败」：同 `requestId` 重查回 `nodelink.command.not_found`）；
+    /// - **记录读不回来**（存储不可用）⇒ 不宣告任何结论：回受理态并挂观察，对端可凭 `command.status` 重查。
+    async fn reply_after_create_failure(
+        &self,
+        handle: &ConnectionHandle,
+        submit_request: &Uuid,
+        request: &CoreRequestId,
+        error: &PortError,
+    ) -> RouteOutcome {
+        match self
+            .core
+            .command_status(&node_actor(handle.node_id()), request.clone())
+            .await
+        {
+            Ok(Some(record)) if record.status().is_terminal() => {
+                self.send_terminal(handle, &record);
+            }
+            Ok(Some(record)) => {
+                self.accept_and_watch_create(
+                    handle,
+                    submit_request,
+                    request,
+                    record.session(),
+                    record.accepted_at(),
+                );
+            }
+            Ok(None) => self.send_local_terminal(
+                handle,
+                CommandName::SessionCreate,
+                submit_request,
+                None,
+                &LocalOutcome::Failed(error_info(&port_error_code(error))),
+                Cause::of_port_error(error),
+            ),
+            Err(read_error) => {
+                warn!(
+                    event = "node_link.session_create_record_unreadable",
+                    access_node_id = handle.node_id().as_str(),
+                    command = CommandName::SessionCreate.as_str(),
+                    request_id = submit_request.as_str(),
+                    cause = Cause::of_port_error(&read_error).as_str(),
+                    "the session.create record could not be read after a backend failure"
+                );
+                self.accept_and_watch_create(handle, submit_request, request, None, None);
             }
         }
         RouteOutcome::Claimed
@@ -911,19 +1003,50 @@ impl CommandRoute {
     }
 
     /// 创建成功后组装 `SessionCreateResult`：`sessionId` 永远来自 Owner（core 的会话身份），
-    /// `sessionMeta` 取自该会话的持久化摘要（读面按**该 Access 节点**的可见性复核）。
-    async fn session_create_result(
+    /// `sessionMeta` 取自 core 随 [`PreparedSessionCreate`] 给出的会话摘要。
+    ///
+    /// 这里**不回读存储**：会话行要到 `settle_session_create` 的落账提交才存在（§6 第 20 条），此前任何
+    /// 读面（含 `node_link_session_view` 的可见性前置）都必然报「会话不存在」；而 core 的摘要与落账提交
+    /// 将写入的取值同源（同一套投影口径），因此结果与之后的读路径逐字段一致。
+    /// `node_link_session_view` 的可见性前置（对端是已配对的 access 行、Export 未撤销且覆盖
+    /// `grant.remote-work`、会话的 Agent 属于该 Export）在本处理器内由 `session_create_parameter` 在
+    /// **同一个请求**上先行判定；会话又是本请求刚建的，因此不存在「借用任意 `(exportId, sessionId)`
+    /// 组合读取」这条路径。
+    fn session_create_result(
         &self,
-        access_node: &NodeId,
+        export: &CoreExportId,
+        prepared: &PreparedSessionCreate,
+    ) -> Result<SessionCreateResult, PortError> {
+        let Some(session_meta) = crate::node_link::resource::session_meta(&prepared.summary) else {
+            return Err(PortError::Corrupt("session meta"));
+        };
+        Ok(SessionCreateResult {
+            remote_session_ref: self.remote_session_ref(export, &prepared.session)?,
+            session_meta,
+        })
+    }
+
+    /// `remoteSessionRef` 的唯一投影：三个分量都来自本层与 core 的会话身份（不读存储）。
+    fn remote_session_ref(
+        &self,
         export: &CoreExportId,
         session: &SessionId,
-    ) -> Result<SessionCreateResult, PortError> {
-        let (remote_session_ref, session_meta) = self
-            .remote_session_ref_and_meta(access_node, export, session)
-            .await?;
-        Ok(SessionCreateResult {
-            remote_session_ref,
-            session_meta,
+    ) -> Result<RemoteSessionRef, PortError> {
+        let Some(owner_node_id) = uuid_of(self.node_id.as_str()) else {
+            return Err(PortError::Corrupt("the owner node id is not a uuid"));
+        };
+        let Some(session_id) = uuid_of(session.as_str()) else {
+            return Err(PortError::Corrupt("the session id is not a uuid"));
+        };
+        let Some(export_id) = WireExportId::parse(export.as_str()).ok() else {
+            return Err(PortError::Corrupt(
+                "the export id cannot be expressed on the wire",
+            ));
+        };
+        Ok(RemoteSessionRef {
+            owner_node_id,
+            export_id,
+            session_id,
         })
     }
 
@@ -945,8 +1068,8 @@ impl CommandRoute {
         })
     }
 
-    /// `remoteSessionRef` + `sessionMeta` 的**唯一**投影：`sessionId` 永远来自 Owner（core 的会话
-    /// 身份），`sessionMeta` 取自该会话的持久化摘要（读面按**该 Access 节点**的可见性复核）。
+    /// `remoteSessionRef` + `sessionMeta` 的**唯一**读面投影：`sessionMeta` 取自该会话的持久化摘要
+    /// （读面按**该 Access 节点**的可见性复核）。只服务**已落账**的会话（`session.resume`）。
     async fn remote_session_ref_and_meta(
         &self,
         access_node: &NodeId,
@@ -960,25 +1083,7 @@ impl CommandRoute {
         let Some(session_meta) = crate::node_link::resource::session_meta(&view.session) else {
             return Err(PortError::Corrupt("session meta"));
         };
-        let Some(owner_node_id) = uuid_of(self.node_id.as_str()) else {
-            return Err(PortError::Corrupt("the owner node id is not a uuid"));
-        };
-        let Some(session_id) = uuid_of(session.as_str()) else {
-            return Err(PortError::Corrupt("the session id is not a uuid"));
-        };
-        let Some(export_id) = WireExportId::parse(export.as_str()).ok() else {
-            return Err(PortError::Corrupt(
-                "the export id cannot be expressed on the wire",
-            ));
-        };
-        Ok((
-            RemoteSessionRef {
-                owner_node_id,
-                export_id,
-                session_id,
-            },
-            session_meta,
-        ))
+        Ok((self.remote_session_ref(export, session)?, session_meta))
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1065,6 +1170,7 @@ impl CommandRoute {
                         CommandName::SessionResume,
                         &accepted_at,
                         None,
+                        record.session(),
                     );
                     self.watch(handle, &request);
                 }
@@ -1083,6 +1189,7 @@ impl CommandRoute {
             CommandName::SessionResume,
             &self.clock(),
             None,
+            Some(&target.session),
         );
         // ⑥ 恢复（core 用例内部：授权 → 窄读取 → cwd 复校验 → `factory.resume`；**授权先于本机读取**）。
         let outcome = match self
@@ -1201,14 +1308,14 @@ impl CommandRoute {
                 // 没有持久记录：恢复在幂等行落盘前就失败（授权、窄读取、cwd 复校验）。本层能确认的
                 // 只有**确定类失败**，因此本地回 `failed` 终态；存储写失败落在同一窗口却不属这一类，
                 // 它没有留下持久首次结果，同 requestId 重查回 `nodelink.command.not_found`。
-                if let Some(body) = local_terminal(
+                self.send_local_terminal(
+                    handle,
                     CommandName::SessionResume,
                     &submit.request_id,
+                    Some(&target.session),
                     &outcome,
-                    &self.clock(),
-                ) {
-                    let _ = handle.send(MessageType::CommandTerminal, &body);
-                }
+                    local_outcome_cause(&outcome),
+                );
             }
         }
         RouteOutcome::Claimed
@@ -1485,7 +1592,7 @@ impl CommandRoute {
                 warn!(
                     event = "node_link.command_failed",
                     access_node_id = handle.node_id().as_str(),
-                    error = ?other,
+                    cause = Cause::of_port_error(other).as_str(),
                     "the command could not be served"
                 );
                 "the owner node cannot serve the command right now"
@@ -1532,6 +1639,8 @@ impl CommandRoute {
     /// 没有 turn 的 mutation（取消/模式/配置/交互解析）也回 `null`，不编造字段。`command.status` 重查
     /// 未终结 mutation 时同样回 `null`——turn 归属不在持久命令行里（它在 `owned_turn.causation`），
     /// 重查的单点读入口只有命令行本身；首次提交与同键重试都带 `turnId`。
+    ///
+    /// `session` 只服务命令级日志（资源标识；创建类命令受理阶段还没有会话，传 `None`），不参与 wire 形状。
     fn send_accepted(
         &self,
         handle: &ConnectionHandle,
@@ -1539,7 +1648,15 @@ impl CommandRoute {
         command: CommandName,
         accepted_at: &CoreTimestamp,
         turn: Option<&TurnId>,
+        session: Option<&SessionId>,
     ) {
+        command_log::accepted(
+            Subject::Node(handle.node_id().as_str()),
+            command.as_str(),
+            session,
+            request.as_str(),
+            turn,
+        );
         let Some(accepted_at) = wire_timestamp(accepted_at) else {
             warn!(
                 event = "node_link.command_accepted_at_invalid",
@@ -1576,7 +1693,22 @@ impl CommandRoute {
     }
 
     /// 终态推送（`command.terminal`）。
+    ///
+    /// 这是把**持久终态**交付给对端的唯一落点（终态观察者、`command.status` 重查、幂等重放、落账后的
+    /// 首次回包都经它），命令级终态日志因此也在这里：类别与成因都取自持久记录本身。
     fn send_terminal(&self, handle: &ConnectionHandle, record: &CommandRecord) {
+        if let Some(class) = record_terminal_class(record.status()) {
+            command_log::terminal(
+                Subject::Node(handle.node_id().as_str()),
+                record.command(),
+                record.session(),
+                record.request().as_str(),
+                class,
+                record
+                    .error()
+                    .map_or(Cause::None, |error| Cause::of_code(error.code())),
+            );
+        }
         match terminal_body(record, &self.clock()) {
             Some(body) => {
                 if handle.send(MessageType::CommandTerminal, &body).is_err() {
@@ -1592,6 +1724,69 @@ impl CommandRoute {
                 request_id = record.request().as_str(),
                 "the persisted command record cannot be mapped to command.terminal"
             ),
+        }
+    }
+
+    /// 建会话的「回受理态并挂终态观察」：记录仍是 `accepted`（core 的终态没落盘）与记录读不回来两档
+    /// 共用——两者都**不伪造终态**，记录才是唯一事实（有记录时由启动恢复收敛到 `uncertain`）。
+    fn accept_and_watch_create(
+        &self,
+        handle: &ConnectionHandle,
+        submit_request: &Uuid,
+        request: &CoreRequestId,
+        session: Option<&SessionId>,
+        accepted_at: Option<&CoreTimestamp>,
+    ) {
+        let at = accepted_at.cloned().unwrap_or_else(|| self.clock());
+        self.send_accepted(
+            handle,
+            submit_request,
+            CommandName::SessionCreate,
+            &at,
+            None,
+            session,
+        );
+        self.watch(handle, request);
+    }
+
+    /// **本地合成**终态的发送：没有持久记录可读时用它（`session.create`/`session.resume` 在幂等行落盘
+    /// 之前就失败的那一档）。
+    ///
+    /// 与 [`Self::send_terminal`] 的差别是记录不存在：`terminalEventId` 因此为 `null`——这是这一档的既有
+    /// 口径（§12.7 的「幂等行落盘前失败」：同 `requestId` 重查回 `nodelink.command.not_found`，重试可以
+    /// 得到不同结果），日志照记（对端确实收到了一条终态）。
+    fn send_local_terminal(
+        &self,
+        handle: &ConnectionHandle,
+        command: CommandName,
+        request: &Uuid,
+        session: Option<&SessionId>,
+        outcome: &LocalOutcome,
+        cause: Cause,
+    ) {
+        let Some(body) = local_terminal(command, request, outcome, &self.clock()) else {
+            warn!(
+                event = "node_link.command_terminal_not_assembled",
+                command = command.as_str(),
+                request_id = request.as_str(),
+                "the locally synthesized terminal could not be assembled"
+            );
+            return;
+        };
+        command_log::terminal(
+            Subject::Node(handle.node_id().as_str()),
+            command.as_str(),
+            session,
+            request.as_str(),
+            local_terminal_class(outcome),
+            cause,
+        );
+        if handle.send(MessageType::CommandTerminal, &body).is_err() {
+            debug!(
+                event = "node_link.command_terminal_not_queued",
+                connection_id = handle.connection_id().as_str(),
+                "the locally synthesized terminal could not be queued"
+            );
         }
     }
 
@@ -2243,6 +2438,39 @@ fn core_error(error: &PublicError) -> Option<acp_core::model::PublicError> {
         details,
     )
     .ok()
+}
+
+/// core 记录的状态 → 命令级日志的终态类别。
+///
+/// `accepted`/`rejected` 返回 `None`：前者不是终态，后者不是**已接受**命令的终态（那条命令从未被接受，
+/// 它的结局由 `node_link.command_rejected` 一类日志记录）。
+fn record_terminal_class(status: CoreStatus) -> Option<TerminalClass> {
+    match status {
+        CoreStatus::Completed => Some(TerminalClass::Completed),
+        CoreStatus::Failed => Some(TerminalClass::Failed),
+        CoreStatus::Uncertain => Some(TerminalClass::Uncertain),
+        CoreStatus::Accepted | CoreStatus::Rejected => None,
+    }
+}
+
+/// 本地合成终态的类别（与 [`local_terminal`] 的同一个 `match`，不另立第二套判定）。
+fn local_terminal_class(outcome: &LocalOutcome) -> TerminalClass {
+    match outcome {
+        LocalOutcome::Completed(_) => TerminalClass::Completed,
+        LocalOutcome::Failed(_) => TerminalClass::Failed,
+        LocalOutcome::Uncertain(_) => TerminalClass::Uncertain,
+    }
+}
+
+/// 本地合成终态的成因：本层投影出的 wire 错误码 → 封闭词表（这一档手里没有 core 的错误对象；
+/// [`Cause::of_code`] 同样认识 `nodelink.*` 的细分码）。
+fn local_outcome_cause(outcome: &LocalOutcome) -> Cause {
+    match outcome {
+        LocalOutcome::Completed(_) => Cause::None,
+        LocalOutcome::Failed(error) | LocalOutcome::Uncertain(error) => {
+            Cause::of_code(error.code.as_str())
+        }
+    }
 }
 
 /// `session.create` / `session.resume` 的本地合成终态（`completed` 带具名结果变体，其余带原错误）。

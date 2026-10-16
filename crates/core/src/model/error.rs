@@ -92,11 +92,19 @@ pub enum UnavailableKind {
     /// 映射为既有 `nodelink.command.unsupported`，本地管理适配器映射为既有 `local.unavailable`
     /// （都不新增 wire 码）。
     BackendUnsupported,
+    /// 后端**可证明**没有建立本次会话（`session.create`/`session.resume` 的失败分类，§2、§6 第 20 条）：
+    /// 进程未能启动（spawn / profile / 凭据 / 环境变量解析失败）、请求未发出即失败（能力未宣告、宿主
+    /// 正在关闭、进程不在），或 Agent 对会话建立请求给出**明确的错误答复**。
+    ///
+    /// 三类成因都排除了「Agent 侧已经产生会话」的可能，因此 `session.create` 据此把终态判为 `failed`；
+    /// 其余不可用取值（`Busy`/`IoError`/…）都**说不清**，终态是 `uncertain`。它**不是**临时故障，但
+    /// `port_error_public` 取既有码 `internal.unavailable`（成因由终态的 `message` 承担，不新增 wire 码）。
+    SessionNotEstablished,
 }
 
 impl UnavailableKind {
     /// 全部取值，顺序即声明顺序。
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Busy,
         Self::StorageFull,
         Self::IoError,
@@ -105,6 +113,7 @@ impl UnavailableKind {
         Self::ExportRevoked,
         Self::KeystoreUnavailable,
         Self::BackendUnsupported,
+        Self::SessionNotEstablished,
     ];
 
     /// 稳定的下划线标记（同上，不是 wire 错误码）。
@@ -118,6 +127,7 @@ impl UnavailableKind {
             Self::ExportRevoked => "export_revoked",
             Self::KeystoreUnavailable => "keystore_unavailable",
             Self::BackendUnsupported => "backend_unsupported",
+            Self::SessionNotEstablished => "session_not_established",
         }
     }
 }
