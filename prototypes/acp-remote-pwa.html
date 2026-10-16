@@ -61,6 +61,13 @@
   .logo .mark::after{content:"";position:absolute;inset:5px;border-radius:2px;background:var(--panel)}
   .hostchip{display:flex;align-items:center;gap:8px;color:var(--ink-2);font-size:13px;padding:4px 10px;
     border:1px solid var(--line);border-radius:999px;background:var(--panel-2)}
+  /* 连接状态统一由设备标识这一个胶囊表达：小圆点给颜色，异常时再补一个短词；
+     ⌄ 用内联 SVG（原来那个文字字形在字体里高低不对，看着是错位的） */
+  .hostchip.warn{color:var(--warn);border-color:var(--warn-soft)}
+  .hostchip.danger{color:var(--danger);border-color:var(--danger-soft)}
+  .hostchip .chipstate{font-size:12.5px;opacity:.9}
+  .hostchip .chipcaret{display:flex;align-items:center;color:currentColor;opacity:.75}
+  .hostchip .chipcaret svg{width:12px;height:12px;display:block}
   .spacer{flex:1}
   .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:999px;
     border:1px solid var(--line);background:var(--panel-2);color:var(--ink-2);white-space:nowrap}
@@ -154,9 +161,12 @@
   .dname{font-weight:600;font-size:15px;letter-spacing:-.01em}
   .dpath{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;
     white-space:nowrap;flex:0 1 auto;min-width:0}
-  .pathline{margin:6px 0 0}
-  .pathline .dpath{display:block;font-size:12px;color:var(--ink-2)}
-  .dwhen{font-size:12.5px;color:var(--ink-3)}
+  /* 详情页的路径：与新建弹层的「路径」同一套（淡标签 + 等宽值），不再是没头没尾的一行大字 */
+  /* 页面头部（返回 + 标题 + 路径）与下面的月份分段条之间要有间距，否则「路径」那行会贴着「全部」 */
+  .pagehead{margin-bottom:14px}
+  .pagehead .dirinfo{margin:8px 0 0}
+  .drow .dpath{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-family:var(--mono);font-size:13.5px;font-weight:500;color:var(--ink)}
   .dbody{display:block;margin-left:30px;border-left:2px solid var(--line-2)}
   .dbody .row,.dbody .emptyline,.dbody .footline{padding-left:16px}
   .card.collapsed .dbody{display:none}
@@ -181,11 +191,12 @@
   .backlink:hover{text-decoration:underline}
   .pagetitle{display:flex;align-items:center;gap:10px;margin:10px 0 0;font-size:21px;font-weight:600;letter-spacing:-.01em}
   .pagetitle .chip-count{font-size:12px;font-weight:400}
-  .monthbar{position:sticky;top:0;z-index:14;background:var(--bg);padding:10px 0;display:flex;gap:10px;
-    align-items:center;border-bottom:1px solid var(--line);margin-bottom:8px}
-  .bucket{margin:18px 0 8px;font-size:12.5px;font-weight:600;color:var(--ink-3);letter-spacing:.04em;
-    display:flex;align-items:center;gap:10px}
-  .bucket .n{font-weight:400}
+  /* 详情页底栏：左边新建、右边翻页（可输入页码） */
+  .pager{display:flex;align-items:center;gap:10px}
+  .pageinput{width:40px;text-align:center;padding:4px 6px;border-radius:7px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink);font:inherit;font-size:12.5px;outline:0}
+  .pageinput:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .pinfo{font-size:12.5px;color:var(--ink-3)}
   .endline{text-align:center;color:var(--ink-3);font-size:12.5px;padding:18px 0 4px}
   .endline::before,.endline::after{content:"";display:inline-block;width:60px;height:1px;background:var(--line);
     vertical-align:middle;margin:0 12px}
@@ -203,7 +214,7 @@
   .col.right .colhead{background:var(--panel-2)}
   .dirctx{display:flex;align-items:flex-start;gap:8px}
   .dirctx .nm{font-weight:600;font-size:15px}
-  .dirctx .pt{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);word-break:break-all}
+  .dirctx .pt{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--ink);word-break:break-all;margin-top:2px}
   .searchbox{margin-top:10px;display:flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line);
     border-radius:8px;padding:5px 10px}
   .searchbox input{flex:1;border:0;outline:0;background:transparent;font:inherit;font-size:13px;color:var(--ink)}
@@ -506,6 +517,60 @@
   .sheet>footer{padding:13px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end}
   .field{margin-bottom:16px}
   .field>label{display:block;font-size:13px;font-weight:600;margin-bottom:7px}
+  .field input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:9px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink);font:inherit;outline:0}
+  .field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .field .hint{font-size:12px;color:var(--ink-3);margin-top:6px;line-height:1.55}
+  #mDirNotice:not(:empty){margin-bottom:14px}
+  /* 新建会话弹层里的目录信息：目录 / 路径 两行（标签淡、值醒目；路径用等宽字体） */
+  .dirinfo{margin-bottom:14px;display:flex;flex-direction:column;gap:7px}
+  .drow{display:flex;align-items:baseline;gap:10px;min-width:0}
+  .dk{flex:none;min-width:34px;font-size:12px;color:var(--ink-3);letter-spacing:.02em}
+  .dv{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:600;color:var(--ink)}
+  .dv.mono{font-family:var(--mono);font-size:13.5px;font-weight:500;color:var(--ink)}
+  .dirinfo .hint{margin-top:2px}
+  /* 「选择文件夹」控件（仿浏览器 <input type="file" webkitdirectory>）：按钮 + 右侧的选择结果 */
+  .filec{display:flex;align-items:center;gap:10px;min-width:0}
+  .filecbtn{border:1px solid var(--line);background:var(--panel-2);color:var(--ink);font:inherit;font-size:13px;
+    padding:6px 12px;border-radius:6px;cursor:pointer;flex:none}
+  .filecbtn:hover{border-color:var(--accent)}
+  .filecval{font-size:15px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .filecval.ph{font-weight:400;color:var(--ink-3)}
+  /* 选择文件夹的弹窗：浏览远端节点上的目录看（面包屑 + 子目录 + 新建文件夹），不是让用户手输路径 */
+  .dirpick{position:fixed;inset:0;background:rgba(10,12,16,.45);display:none;align-items:center;
+    justify-content:center;z-index:76;padding:20px}
+  .dirpick.open{display:flex}
+  .dpbox{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
+    width:460px;max-width:100%;max-height:84vh;display:flex;flex-direction:column}
+  .dpbox>header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);font-weight:600}
+  .dpwhere{font-weight:400;font-size:12px;color:var(--ink-3)}
+  .dpbody{padding:14px 18px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+  .dpcrumb{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-family:var(--mono);font-size:12.5px}
+  .dpcrumb button{border:0;background:transparent;color:var(--accent);font:inherit;cursor:pointer;
+    padding:2px 5px;border-radius:5px}
+  .dpcrumb button:hover{background:var(--accent-soft)}
+  .dpcrumb .sep{color:var(--ink-3)}
+  .dpup{border:1px solid var(--line);background:var(--panel-2);color:var(--ink);border-radius:7px;
+    padding:4px 9px;font-size:12px;cursor:pointer;font-family:var(--sans)}
+  .dpup:hover{border-color:var(--accent)}
+  .dplist{display:flex;flex-direction:column;gap:2px}
+  .dpempty{padding:14px 4px;color:var(--ink-3);font-size:12.5px}
+  .dpnew{display:flex;align-items:center;gap:8px;padding:6px 8px}
+  .dpnew input{flex:1;min-width:0;box-sizing:border-box;padding:8px 10px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink);font:inherit;outline:0}
+  .dpnew input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .dpbox>footer{padding:12px 18px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .dpcur{font-family:var(--mono);font-size:12px;color:var(--ink-2);min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .diropt{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;border-radius:8px;
+    background:transparent;color:var(--ink);font:inherit;cursor:pointer;text-align:left}
+  .diropt:hover{background:var(--accent-soft)}
+  .diropt.on{background:var(--accent-soft)}
+  .diropt .dn{font-weight:600}
+  .diropt .da{font-family:var(--mono);font-size:11.5px;color:var(--ink-3);flex:1;min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .diropt .ch{color:var(--ink-3);flex:none}
+  .diropt.other .da{font-family:inherit;font-size:12px;white-space:normal}
   .agents{display:flex;flex-direction:column;gap:8px}
   .agentopt{display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border:1px solid var(--line);
     border-radius:10px;cursor:pointer}
@@ -541,9 +606,9 @@
 <header class="top" id="topbar">
   <div class="logo"><span class="mark"></span>ACP Remote</div>
   <div class="hostchip" id="hostchip" role="button" tabindex="0"><span id="hostDot" style="width:7px;height:7px;border-radius:50%;background:var(--ok)"></span>
-    <span>acp-pc</span><span style="color:var(--ink-3)">⌄</span></div>
+    <span>acp-pc</span><span class="chipstate" id="hostState" style="display:none"></span>
+    <span class="chipcaret" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 10 12 15.2 17.5 10"/></svg></span></div>
   <div class="spacer"></div>
-  <span class="badge ok" id="connBadge" role="button" tabindex="0">● 在线</span>
   <span class="badge warn" id="devBadge" style="display:none">开发模式</span>
   <button class="iconbtn" id="themeBtn" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7z"/></svg></button>
   <button class="iconbtn" id="helpBtn" title="说明">ⓘ</button>
@@ -664,6 +729,12 @@
         <option value="unknown">Agent 未上报</option>
       </select>
     </label>
+    <label>顶部「新建」：能不能建目录
+      <select id="mkdirSel">
+        <option value="ok">能（选中新目录时先新建）</option>
+        <option value="blocked">不能（父目录缺失 / 无权限）</option>
+      </select>
+    </label>
     <label>新建会话结果
       <select id="createSel">
         <option value="ok">成功 → 直接进入对话页</option>
@@ -683,6 +754,20 @@
   <div class="body" id="mBody"></div>
   <footer id="mFoot"></footer>
 </div></div>
+<div class="dirpick" id="dirPick" role="dialog" aria-modal="true" aria-label="选择文件夹">
+  <div class="dpbox">
+    <header><span>选择文件夹</span><span class="dpwhere">acp-pc 上的目录</span>
+      <span class="spacer"></span><button class="iconbtn" id="dpX" aria-label="关闭">✕</button></header>
+    <div class="dpbody">
+      <div class="dpcrumb" id="dpCrumb"></div>
+      <div class="dplist" id="dpList"></div>
+      <div id="dpNewRow"></div>
+    </div>
+    <footer><span class="dpcur" id="dpCur"></span><span class="spacer"></span>
+      <button class="btn" id="dpCancel">取消</button>
+      <button class="btn primary" id="dpOk">选择此文件夹</button></footer>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <div class="scrim" id="dxScrim"></div>
@@ -747,32 +832,45 @@
     "检查打包体积","同步上游快照","导出审计日志","校验权限交集","压缩会话负载","设计游标语义",
     "补充分页游标测试","评审导出策略","核对限额配置","整理配对流程","核对事件视图","修订协议文档",
     "补充契约用例","压缩快照体积"];
-  var DATES = ["8 月 30 日","8 月 28 日","8 月 25 日","8 月 21 日","8 月 18 日","8 月 14 日","8 月 11 日",
-    "8 月 07 日","8 月 04 日","8 月 01 日","7 月 29 日","7 月 25 日"];
-  function mk(id, title, agent, state, when, dir){
-    return { id:id, title:title, agent:agent, state:state, when:when, dir:dir };
+  /* 会话时间：原型里每条会话都带一个真实时间戳，展示由 whenLabel 现算（不再各写各的字符串）：
+     1 小时内给「N 分钟前」，超过 1 小时给年月日（与按月分档同口径，都用 UTC 串）。 */
+  var HOUR = 3600000;
+  function atTime(iso){ return new Date(iso).getTime(); }
+  function agoMin(min){ return NOW - min*60000; }
+  function whenLabel(ts){
+    var diff = NOW - ts;
+    if(diff < 60000) return "刚刚";
+    if(diff < HOUR) return Math.round(diff/60000) + " 分钟前";
+    return new Date(ts).toISOString().slice(0,10);
+  }
+  var DATES = ["2026-08-30","2026-08-28","2026-08-25","2026-08-21","2026-08-18","2026-08-14","2026-08-11",
+    "2026-08-07","2026-08-04","2026-08-01","2026-07-29","2026-07-25"];
+  function mk(id, title, agent, state, at, dir){
+    return { id:id, title:title, agent:agent, state:state, at:at, dir:dir };
   }
   var SESSIONS = [
-    mk("s1","修复登录超时","codex","running","2 分钟前","work-api"),
-    mk("s2","迁移数据库","omp","waiting_permission","8 分钟前","work-api"),
-    mk("s3","补充分页测试","omp","idle","12 分钟前","work-api"),
-    mk("s4","重构鉴权模块","codex","idle","昨天 17:20","work-api"),
-    mk("s5",null,"codex","idle","周五","work-api"),
-    mk("s6","周报草稿","omp","idle","昨天 09:12","site"),
-    mk("s7",null,"codex","idle","周五","site"),
-    mk("s8","失败的实验","omp","failed","周三","site"),
-    mk("s9","老接口清理","codex","idle","8 月 22 日","site"),
-    mk("s10","老会话","codex","idle","9 月 10 日","unsorted"),
-    mk("s11","建库初期的测试","omp","idle","9 月 02 日","unsorted")
+    mk("s1","修复登录超时","codex","running",agoMin(2),"work-api"),
+    mk("s2","迁移数据库","omp","waiting_permission",agoMin(8),"work-api"),
+    mk("s3","补充分页测试","omp","idle",agoMin(12),"work-api"),
+    mk("s4","重构鉴权模块","codex","idle",atTime("2026-09-17T17:20:00"),"work-api"),
+    mk("s5",null,"codex","idle",atTime("2026-09-11T10:05:00"),"work-api"),
+    mk("s6","周报草稿","omp","idle",atTime("2026-09-17T09:12:00"),"site"),
+    mk("s7",null,"codex","idle",atTime("2026-09-11T15:40:00"),"site"),
+    mk("s8","失败的实验","omp","failed",atTime("2026-09-16T11:02:00"),"site"),
+    mk("s9","老接口清理","codex","idle",atTime("2026-08-22T14:30:00"),"site"),
+    mk("s10","老会话","codex","idle",atTime("2026-09-10T16:20:00"),"unsorted"),
+    mk("s11","建库初期的测试","omp","idle",atTime("2026-09-02T09:30:00"),"unsorted")
   ];
   (function(){
-    for(var i=0;i<23;i++){
+    for(var i=0;i<90;i++){
       var st = (i%11===3) ? "failed" : (i%7===5 ? "closed" : "idle");
       var dir = (i%4===0) ? "work-api" : ((i%4===1) ? "site" : ((i%4===2) ? "d4" : ((i%4===3) ? "d5" : "d6")));
-      SESSIONS.push(mk("g"+i, POOL[i] + (i>=POOL.length?"（续）":""), i%3===0?"codex":"omp", st,
-        DATES[i%DATES.length], dir));
+      SESSIONS.push(mk("g"+i, POOL[i%POOL.length] + (i>=POOL.length?"（续）":""), i%3===0?"codex":"omp", st,
+        atTime(DATES[i%DATES.length] + "T" + (10 + i%5) + ":" + String((10 + i%4*12) % 60).padStart(2,"0") + ":00"), dir));
     }
   })();
+  /* 会话一律按时间倒序（详情页分页、卡片与左栏列表都按这个顺序） */
+  SESSIONS.sort(function(a,b){ return b.at - a.at; });
 
   var FILES = {
     "src/auth/session.ts": { status:"M", add:12, del:4, diff:[
@@ -901,28 +999,30 @@
   };
   /* 在线与“正在追平”合并为一个状态；追平/重连/离线通过对话区下方的状态条表达 */
   var CONN = {
-    online:       { tone:"ok",   badge:"● 在线", strip:null },
-    syncing:      { tone:"ok",   badge:"● 在线", strip:["正在补齐离线期间的事件…（本地内容可能还没追平）", ""] },
-    reconnecting: { tone:"warn", badge:"● 正在重连", strip:["连接断开，正在重连。下面是最后已知内容。", "warn"] },
-    offline:      { tone:"warn", badge:"● 离线",   strip:["已离线。下面是 2 分钟前同步到的内容。", "warn"] },
-    revoked:      { block:["这台设备已被移除","你可以在电脑上撤销这台设备。撤销后需要重新配对才能再次使用。","去重新配对","#/pair/S0"] },
-    identity:     { block:["这台电脑的身份密钥已变化","网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是这条连接被人拦截过。确认之前不要继续。","回电脑终端确认","#/pair/S0"] },
-    incompatible: { block:["网页端与这台电脑版本不兼容","当前网页版本与 Daemon 的协议版本没有交集，需要刷新页面或升级其中一端。","刷新页面",null] },
-    replaced:     { block:["已在另一个标签页连接","同一台设备同时只保留一条连接。接管后，本页面会重新建立连接，另一个标签页会停止重连。","接管连接",null] },
-    unpaired:     { block:["这台浏览器还没有配对","先与电脑完成一次配对，才能看到这台电脑上的会话。","去配对","#/pair/S4"] }
+    online:       { tone:"ok",   strip:null },
+    syncing:      { tone:"ok",   strip:["正在补齐离线期间的事件…（本地内容可能还没追平）", ""] },
+    reconnecting: { tone:"warn", chip:"正在重连", strip:["连接断开，正在重连。下面是最后已知内容。", "warn"] },
+    offline:      { tone:"warn", chip:"离线", strip:["已离线。下面是 2 分钟前同步到的内容。", "warn"] },
+    revoked:      { chip:"已被移除", block:["这台设备已被移除","你可以在电脑上撤销这台设备。撤销后需要重新配对才能再次使用。","去重新配对","#/pair/S0"] },
+    identity:     { chip:"密钥已变化", block:["这台电脑的身份密钥已变化","网页不会自动接受新的密钥。请先在电脑上确认：是换了电脑，还是这条连接被人拦截过。确认之前不要继续。","回电脑终端确认","#/pair/S0"] },
+    incompatible: { chip:"版本不兼容", block:["网页端与这台电脑版本不兼容","当前网页版本与 Daemon 的协议版本没有交集，需要刷新页面或升级其中一端。","刷新页面",null] },
+    replaced:     { chip:"已在别处接管", block:["已在另一个标签页连接","同一台设备同时只保留一条连接。接管后，本页面会重新建立连接，另一个标签页会停止重连。","接管连接",null] },
+    unpaired:     { chip:"未配对", block:["这台浏览器还没有配对","先与电脑完成一次配对，才能看到这台电脑上的会话。","去配对","#/pair/S4"] }
   };
   var A = {
     route:"#/dirs", conn:"online", clearArmed:false,
     iconStyle:"solid", iconSem:"target",
     pair:"S4", pairLeft:PAIR_TTL, pairPoll:6, pairTimer:null,
     scene:"normal", offline:false, dev:false, hl:true,
-    filter:"all", query:"", month:"all",
+    filter:"all", query:"", page:1,
     chatScenario:"running", ctx:"mid", permSet:{},
     session:"s1", shown:15, left:true, right:true, selFile:"src/auth/session.ts",
     modelSel:{}, modeSel:{}, openPick:null, open:{}, keys:[],
     agents:[{ id:"codex", state:"running", desc:"当前 turn：正在调整空闲超时" },
              { id:"omp",   state:"idle",    desc:"14:28 用于跑测试，之后断开" }],
-    canCreate:true, creating:null, createResult:"ok", newAgent:"codex", newErr:null, seq:0,
+    canCreate:true, creating:null, creatingNewDir:false, createResult:"ok", newAgent:"codex", newErr:null, seq:0,
+    newDir:"", newDirId:null, mkdirCase:"ok", dirPickOpen:false,
+    browsePath:"", pickKind:"existing", newFolderOpen:false, newFolderName:"",
     degradeDemo:true
   };
 
@@ -932,7 +1032,6 @@
   function toast(m){ var t=$("toast"); t.textContent=m; t.classList.add("show");
     clearTimeout(t._x); t._x=setTimeout(function(){ t.classList.remove("show"); },1800); }
   function hash(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))|0; return h; }
-  function monthKey(ts){ return new Date(ts).toISOString().slice(0,7); }
   function fmtTok(n){
     if(n===null||n===undefined) return "—";
     if(n>=1000000) return (n/1000000).toFixed(1)+"M";
@@ -953,16 +1052,42 @@
     }
     return out;
   }
+  var _meas=null;
+  /* 量一段文本的宽度：块级元素（详情页那一行）自身宽度就等于可用宽度，拿它跟 scrollWidth 比永远比不出来。 */
+  function textWidth(txt, ref){
+    if(!_meas){
+      _meas=document.createElement("span");
+      _meas.style.cssText="position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap";
+      document.body.appendChild(_meas);
+    }
+    var cs=getComputedStyle(ref);
+    _meas.style.font=cs.font; _meas.style.letterSpacing=cs.letterSpacing;
+    _meas.textContent=txt;
+    return _meas.getBoundingClientRect().width;
+  }
   function fitPaths(){
     var els = document.querySelectorAll(".dpath[data-full]");
     for(var i=0;i<els.length;i++){
-      var el=els[i], cands=pathCandidates(el.dataset.name||"", el.dataset.full, el.dataset.keep==="1");
-      var best="";
-      if(el.clientWidth>0){
-        for(var j=0;j<cands.length;j++){ el.textContent=cands[j];
-          if(el.scrollWidth<=el.clientWidth+1){ best=cands[j]; break; } }
+      var el=els[i], row=el.parentNode;
+      /* 这一格能占多宽 = 整行宽度 − 其它子元素；flex-grow 的那些（spacer）不占固定宽度，
+         它们让出来的空间才是路径能用的——之前把 spacer 也算进去，可用宽度恒为 0，路径永远是空的。 */
+      var used=0, grow=0, kids=row.children, k;
+      for(k=0;k<kids.length;k++){
+        if(kids[k]===el) continue;
+        var cs2=getComputedStyle(kids[k]), w=kids[k].getBoundingClientRect().width;
+        if((parseFloat(cs2.flexGrow)||0)>0){ grow += w; continue; }
+        used += w + (parseFloat(cs2.marginLeft)||0) + (parseFloat(cs2.marginRight)||0);
       }
-      el.textContent=best; el.title=best;
+      var rs=getComputedStyle(row);
+      var gap=(parseFloat(rs.columnGap)||0)*Math.max(0, kids.length-1);
+      var avail=Math.max(0, (grow>0 ? grow : row.clientWidth - used - gap) - 8);
+      var cands=pathCandidates(el.dataset.name||"", el.dataset.full, el.dataset.keep==="1");
+      var best="";
+      for(var j=0;j<cands.length;j++){
+        if(textWidth(cands[j], el) <= avail){ best=cands[j]; break; }
+      }
+      el.textContent=best;
+      el.title=best || (el.dataset.full||"");
     }
   }
   var _rz; window.addEventListener("resize", function(){ clearTimeout(_rz); _rz=setTimeout(fitPaths,120); });
@@ -1236,10 +1361,10 @@
     }
 
     /* 其他会话：简版内容，保证切换后不是空白 */
-    out += userMsg("（这个会话的最近一条输入）", s.when) +
-      agentMsg("这是 `"+s.agent+"` 在 `"+(dirName(s.dir))+"` 下的一个会话。对话内容按会话分别加载。", s.when) +
-      fold("g.think","think","🧠","思考","done","示例思考内容。",null,s.when) +
-      fold("g.read","tool","📄","src/auth/session.ts","done","",null,s.when,
+    out += userMsg("（这个会话的最近一条输入）", whenLabel(s.at)) +
+      agentMsg("这是 `"+s.agent+"` 在 `"+(dirName(s.dir))+"` 下的一个会话。对话内容按会话分别加载。", whenLabel(s.at)) +
+      fold("g.think","think","🧠","思考","done","示例思考内容。",null,whenLabel(s.at)) +
+      fold("g.read","tool","📄","src/auth/session.ts","done","",null,whenLabel(s.at),
         {rows:[["kind","read"],["位置","src/auth/session.ts:1-80"],["内容","80 行"]]});
     if(s.state==="waiting_permission") out += permCard(s);
     return out;
@@ -1372,6 +1497,89 @@
 
   /* ==================== 视图：目录页 ==================== */
   var MAX_ROWS = 5;
+  function dirById(id){ return DIRS.concat(EXTRA_DIRS).filter(function(d){ return d.id===id; })[0]; }
+  /* 远端节点上的目录树（原型假数据）：Windows 可能有多个盘，所以根是「此电脑」+ 盘符列表；
+     已登记目录都在 D: 上，另外补几层让浏览看起来像真的磁盘。真实实现里这些来自服务端的目录列举。 */
+  var NODE_DRIVES = ["C:\\", "D:\\", "E:\\"];
+  var NODE_DRIVE_LABELS = { "c:\\":"系统盘", "d:\\":"本地磁盘", "e:\\":"移动磁盘" };
+  var NODE_PATHS = [
+    "C:\\Users","C:\\Users\\dev","C:\\Users\\dev\\Desktop","C:\\Users\\dev\\Documents","C:\\Program Files",
+    "D:\\work","D:\\work\\api","D:\\work\\api\\src","D:\\work\\api\\tests","D:\\work\\infra","D:\\work\\infra\\deploy",
+    "D:\\personal","D:\\personal\\site","D:\\personal\\notes","D:\\personal\\blog","D:\\personal\\api",
+    "D:\\tmp","D:\\tmp\\sandbox","D:\\archive","D:\\archive\\old",
+    "E:\\media","E:\\backup","E:\\backup\\2025"
+  ];
+  /* 路径工具：统一成 Windows 反斜杠；盘符根保留尾分隔符（否则 "D:" 会被判成相对路径）；"" = 此电脑。 */
+  function normPath(p){
+    var s = String(p||"").replace(/[\\\/]+/g, "\\").replace(/\\+$/,"");
+    if(/^[A-Za-z]:$/.test(s)) s += "\\";
+    return s;
+  }
+  function joinPath(dir, name){
+    var d = normPath(dir);
+    return (/[\\\/]$/.test(d) ? d : d+"\\") + name;
+  }
+  function dirNameOf(p){
+    var s = normPath(p), i = s.lastIndexOf("\\");
+    return i<0 ? s : s.slice(i+1);
+  }
+  function parentOf(p){
+    var s = normPath(p);
+    if(s==="") return null;
+    if(/^[A-Za-z]:\\?$/.test(s)) return "";   /* 盘符根的上一级是「此电脑」 */
+    var i = s.lastIndexOf("\\");
+    return i<=0 ? null : s.slice(0,i)+"\\";
+  }
+  function isBrowsable(p){
+    var s = normPath(p);
+    if(s==="") return true;
+    var low = s.toLowerCase();
+    for(var i=0;i<NODE_DRIVES.length;i++){ if(low.indexOf(NODE_DRIVES[i].toLowerCase())===0) return true; }
+    return false;
+  }
+  function driveLabel(p){ return NODE_DRIVE_LABELS[String(p).toLowerCase()] || ""; }
+  function childPaths(p){
+    if(normPath(p)==="") return NODE_DRIVES.slice();
+    var d = normPath(p);
+    var prefix = (/[\\\/]$/.test(d) ? d : d+"\\"), low = prefix.toLowerCase();
+    return NODE_PATHS.filter(function(x){
+      if(x.toLowerCase().indexOf(low)!==0) return false;
+      var rest = x.slice(prefix.length);
+      return rest.length>0 && rest.indexOf("\\")<0;
+    });
+  }
+  function crumbs(p){
+    var out=[{ name:"此电脑", path:"" }];
+    if(normPath(p)==="") return out;
+    var prefix="";
+    normPath(p).split(/[\\\/]+/).filter(Boolean).forEach(function(seg, i){
+      prefix = i===0 ? seg+"\\" : joinPath(prefix, seg);
+      out.push({ name: i===0 ? seg+"\\" : seg, path: prefix });
+    });
+    return out;
+  }
+  function isAbsPath(p){ return /^[A-Za-z]:[\\\/]/.test(p) || /^[\\\/]{1,2}/.test(p); }
+  function registeredByPath(p){
+    var all = DIRS.concat(EXTRA_DIRS), low = normPath(p).toLowerCase();
+    for(var i=0;i<all.length;i++){ if(all[i].path && normPath(all[i].path).toLowerCase()===low) return all[i]; }
+    return null;
+  }
+  /* 顶部「新建」的目录情形：这台电脑能不能为这次创建新建目录由控制台模拟；
+     在弹窗里新建的文件夹必然属于「会先新建」那一支。 */
+  function dirCaseKind(){
+    if(A.mkdirCase==="blocked") return "blocked";
+    return A.pickKind==="create" ? "missing" : "exists";
+  }
+  /* 顶部入口：与目录层级的「新建」不同——它要指定目录，目录还不存在时这一步会在电脑上新建它。 */
+  function newDirButton(cls){
+    if(!A.canCreate) return "";
+    cls = cls || "btn sm primary";
+    if(A.creating){
+      return '<button class="'+cls+'" disabled><span class="spin"></span> ' +
+        (A.creatingNewDir ? '正在新建目录…' : '创建中…') + '</button>';
+    }
+    return '<button class="'+cls+'" data-new-dir>⊕ 新建</button>';
+  }
   function dirsData(){ return A.scene==="many" ? DIRS.slice(0,3).concat(EXTRA_DIRS) : DIRS; }
   function sessData(){
     if(A.scene!=="many") return SESSIONS;
@@ -1397,7 +1605,7 @@
       '<span class="title'+(s.title?"":" noname")+'">'+name+'</span>' +
       '<span class="stword">'+stword+'</span>' +
       '<span class="agent">'+esc(s.agent)+'</span>' +
-      '<span class="when">'+esc(opts.full ? s.when : s.when)+'</span></div>';
+      '<span class="when">'+esc(whenLabel(s.at))+'</span></div>';
   }
   function viewDirs(){
     var dirs = dirsData(), sess = sessData();
@@ -1405,7 +1613,10 @@
     if(A.scene==="nodirs"){
       return '<div class="toolbar"><div class="search"><span>🔍</span><input value="'+esc(A.query)+'" data-q readonly placeholder="搜索目录或会话" /></div></div>' +
         '<div class="scroll"><div class="wrap"><div class="blank"><h2>还没有可用的目录</h2>' +
-        '<p>目录需要先在电脑上用 <code>acp-remote</code> 注册，注册后会出现在这里。</p></div></div></div>';
+        '<p>目录可以事先在电脑上用 <code>acp-remote</code> 登记；也可以现在直接指定一个电脑上的绝对目录来创建会话——' +
+        '那个目录还不存在时会在电脑上一并新建。</p>' +
+        (A.canCreate ? '<div style="margin-top:16px">'+newDirButton("btn primary")+'</div>' : '') +
+        '</div></div></div>';
     }
     var html="", any=false;
     dirs.forEach(function(dir){
@@ -1415,7 +1626,6 @@
       any=true;
       var active = all.filter(function(s){ return s.state==="running"||s.state==="queued"; }).length;
       var waiting= all.filter(function(s){ return s.state==="waiting_permission"||s.state==="waiting_input"; }).length;
-      var newest = all.length ? all[0].when : null;
       var collapsed = A.open["d-"+dir.id] === true;
       html += '<section class="card'+(collapsed?" collapsed":"")+'">' +
         '<div class="dhead"><span class="caret" data-toggle="d-'+dir.id+'">▾</span>' +
@@ -1423,22 +1633,20 @@
         ((nameCount[dir.name]>1 && dir.path)
           ? '<span class="dpath" data-full="'+esc(dir.path)+'" data-name="'+esc(dir.name)+'"></span>' : '') +
         '<span class="chip-count">'+all.length+' 个</span>' +
-        (newest?'<span class="dwhen">最近 '+esc(newest)+'</span>':'') +
         (active?'<span class="badge ok">● 运行中 '+active+'</span>':'') +
         (waiting?'<span class="badge warn">⏸ 待处理 '+waiting+'</span>':'') +
         '<span class="spacer"></span>' +
         (A.canCreate && dir.path
           ? '<button class="linkbtn add" data-new="'+dir.id+'"'+(A.creating?" disabled":"")+'>' +
             (A.creating?'<span class="spin"></span> 创建中':'⊕ 新建')+'</button>' : '') +
-        (all.length?'<button class="linkbtn more" data-all="'+dir.id+'">查看全部 '+all.length+' 个 ›</button>':'') +
+        (all.length?'<button class="linkbtn more" data-all="'+dir.id+'">查看全部 ›</button>':'') +
         '</div><div class="dbody">';
       if(!all.length) html += '<div class="emptyline">这个目录还没有会话</div>';
       else if(!rows.length) html += '<div class="emptyline">没有符合条件的会话</div>';
       else {
         rows.slice(0,MAX_ROWS).forEach(function(s){ html += dirRow(s); });
         if(rows.length>MAX_ROWS)
-          html += '<div class="footline"><button class="linkbtn more" data-all="'+dir.id+'">还有 '+
-            (rows.length-MAX_ROWS)+' 个更早的会话 · 查看全部 ›</button></div>';
+          html += '<div class="footline"><button class="linkbtn more" data-all="'+dir.id+'">查看全部 ›</button></div>';
       }
       html += '</div></section>';
     });
@@ -1451,52 +1659,63 @@
         '<div class="seg" data-seg="filter"><button data-f="all" class="'+(A.filter==="all"?"on":"")+'">全部</button>' +
         '<button data-f="running" class="'+(A.filter==="running"?"on":"")+'">运行中</button>' +
         '<button data-f="waiting" class="'+(A.filter==="waiting"?"on":"")+'">待处理</button></div>' +
-        '<span class="spacer"></span><span class="syncinfo'+(A.offline?" off":"")+'">'+
-        (A.offline?'● 离线 · 2 分钟前同步':'已同步 14:33')+'</span></div>' +
+        '<span class="spacer"></span>' +
+        newDirButton() + '</div>' +
       '<div class="scroll"><div class="wrap">'+top+'<div class="stack">'+html+'</div></div></div>';
   }
 
+  /* 跳到某一页：页码夹到 1..pageCount，只有真的换页才重画（避免在已替换的节点上重画），跳完滚回顶部 */
+  function goToPage(n){
+    var pages = A.pageCount || 1;
+    if(isNaN(n)) return;
+    var p = Math.min(pages, Math.max(1, n));
+    if(p === A.page) return;
+    A.page = p;
+    render();
+    var sc = document.querySelector(".scroll"); if(sc) sc.scrollTop = 0;
+  }
   /* ==================== 视图：目录详情 ==================== */
+  /* 只按时间（新→旧）列会话，每页 PAGE_SIZE 条；底部一行左边「新建」、右边翻页（可输入页码跳转）。 */
+  var PAGE_SIZE = 10;
+  function footbarHtml(dir, pages){
+    var left = (A.canCreate && dir.path)
+      ? '<button class="btn primary" data-new="'+dir.id+'"'+(A.creating?" disabled":"")+'>' +
+        (A.creating?'<span class="spin"></span> 创建中…':'⊕ 新建')+'</button>' +
+        '<span class="hint">将在你的电脑上启动一个 Agent 进程</span>'
+      : '<button class="btn" disabled>⊕ 新建</button>' +
+        '<span class="hint">这台设备没有创建会话的权限，需要电脑端授予</span>';
+    /* 翻页区不重复总数——目录名旁边已经显示了 */
+    var right = pages <= 1 ? ''
+      : '<span class="pager">' +
+          '<button class="btn sm" data-pagedir="-1"'+(A.page>1?"":" disabled")+'>‹ 上一页</button>' +
+          '<span class="pinfo">第 <input id="pageInput" class="pageinput" type="text" inputmode="numeric" value="'+A.page+
+            '" aria-label="页码（回车跳转）" title="输入页码后回车跳转" /> / '+pages+' 页</span>' +
+          '<button class="btn sm" data-pagedir="1"'+(A.page<pages?"":" disabled")+'>下一页 ›</button>' +
+        '</span>';
+    return '<div class="footbar">'+left+'<span class="spacer"></span>'+right+'</div>';
+  }
   function viewDirDetail(id){
-    var dir = DIRS.concat(EXTRA_DIRS).filter(function(d){ return d.id===id; })[0];
+    var dir = dirById(id);
     if(!dir) { location.hash="#/dirs"; return ""; }
-    var all = sessData().filter(function(s){ return s.dir===id; });
-    var rows = all.filter(passFilter).filter(function(s){ return passQuery(dir,s); });
-    var buckets=[], seen={};
-    rows.forEach(function(s){ var k=monthKey(NOW); if(!seen[k]){ seen[k]={key:k,items:[]}; buckets.push(seen[k]); } seen[k].items.push(s); });
-    buckets.sort(function(a,b){ return a.key<b.key?1:-1; });
-    var shown = buckets.filter(function(b){ return A.month==="all" || b.key===A.month; });
-    var shownCount = shown.reduce(function(a,b){ return a+b.items.length; }, 0);
-    var body = !rows.length
-      ? '<div class="blank"><h2>没有符合条件的会话</h2><p>换个关键词，或把筛选切回「全部」。</p></div>'
-      : shown.map(function(b){
-          return '<div class="bucket">'+b.key+' <span class="n">'+b.items.length+' 个</span></div>' +
-            b.items.map(function(s){ return dirRow(s,{full:true}); }).join(""); }).join("");
-    return '<div class="toolbar"><div class="search"><span>🔍</span>' +
-        '<input data-q value="'+esc(A.query)+'" placeholder="在此目录内搜索" /></div>' +
-        '<div class="seg" data-seg="filter">' +
-        '<button data-f="all" class="'+(A.filter==="all"?"on":"")+'">全部</button>' +
-        '<button data-f="running" class="'+(A.filter==="running"?"on":"")+'">运行中</button>' +
-        '<button data-f="waiting" class="'+(A.filter==="waiting"?"on":"")+'">待处理</button></div>' +
-        '<span class="spacer"></span><span class="syncinfo">'+(A.filter==="all"&&A.month==="all"?"":("当前显示 "+shownCount+" / "+rows.length+" 个"))+'</span></div>' +
-      '<div class="scroll"><div class="wrap">' +
+    var all = sessData().filter(function(s){ return s.dir===id; });   /* 已按时间倒序 */
+    var pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+    A.pageCount = pages;
+    if(A.page > pages) A.page = pages;
+    if(A.page < 1) A.page = 1;
+    var pageRows = all.slice((A.page-1)*PAGE_SIZE, A.page*PAGE_SIZE);
+    var body = !all.length
+      ? '<div class="blank"><h2>这个目录还没有会话</h2><p>在这里或电脑上新建一个会话，它会出现在这里。</p></div>'
+      : pageRows.map(function(s){ return dirRow(s,{full:true}); }).join("");
+    return '<div class="scroll"><div class="wrap">' +
       '<div class="pagehead"><a class="backlink" data-go="#/dirs">‹ 目录</a>' +
         '<h1 class="pagetitle">'+esc(dir.name)+'<span class="chip-count">'+all.length+' 个会话</span></h1>' +
-        (dir.path?'<div class="pathline"><span class="dpath" data-full="'+esc(dir.path)+'" data-keep="1"></span></div>':'') +
+        (dir.path?'<div class="dirinfo"><div class="drow"><span class="dk">路径</span>' +
+          '<span class="dpath" data-full="'+esc(dir.path)+'" data-keep="1"></span></div></div>':'') +
       '</div>' +
       (A.offline?'<div class="notice warn" style="margin:14px 0"><span>⚠</span><span>连接已断开，下面是 2 分钟前同步到的内容。</span></div>':'') +
-      '<div class="seg" style="margin-bottom:14px" data-seg="month"><button data-m="all" class="'+(A.month==="all"?"on":"")+'">全部</button>' +
-        buckets.map(function(b){ return '<button data-m="'+b.key+'" class="'+(A.month===b.key?"on":"")+'">'+b.key+'</button>'; }).join("") +
-      '</div>' + body +
-      (rows.length?'<div class="endline">已显示全部 '+rows.length+' 个会话</div>':'') +
-      '<div class="footbar">' +
-        (A.canCreate && dir.path
-          ? '<button class="btn primary" data-new="'+dir.id+'"'+(A.creating?" disabled":"")+'>' +
-            (A.creating?'<span class="spin"></span> 创建中…':'⊕ 在此目录新建会话')+'</button>' +
-            '<span class="hint">将在你的电脑上启动一个 Agent 进程</span>'
-          : '<button class="btn" disabled>⊕ 在此目录新建会话</button>' +
-            '<span class="hint">这台设备没有创建会话的权限，需要电脑端授予</span>') +
-      '</div></div></div>';
+      body +
+      footbarHtml(dir, pages) +
+      '</div></div>';
   }
 
   /* ==================== 视图：对话页 ==================== */
@@ -1550,7 +1769,7 @@
       '<div style="flex:1">'+list.map(function(x){
         return '<div class="srow'+(x.id===s.id?" on":"")+'" data-session="'+x.id+'">' +
           '<span class="dot '+x.state+'"></span><span class="t'+(x.title?"":" noname")+'">'+
-          (x.title?esc(x.title):"未命名会话")+'</span><span class="w">'+esc(x.when)+'</span></div>'; }).join("") +
+          (x.title?esc(x.title):"未命名会话")+'</span><span class="w">'+esc(whenLabel(x.at))+'</span></div>'; }).join("") +
       (rest>0?'<div class="pager">已显示 '+list.length+' / '+(list.length+rest)+
         '<button class="btn sm" id="more" style="margin-left:auto">加载更多（还有 '+rest+' 个）</button></div>'
         :'<div class="pager">已显示该目录全部会话</div>')+'</div>' +
@@ -1565,7 +1784,7 @@
 
     var mid = '<section class="col" id="mid" style="background:var(--bg)">' +
       '<div class="convhead"><span class="ttl">'+esc(s.title||"未命名会话")+'</span>'+chip+
-        '<span class="sub">'+esc(s.agent)+' · '+esc(dir?dir.name:"")+'</span><span class="spacer"></span>'+
+        '<span class="sub">'+esc(s.agent)+'</span><span class="spacer"></span>'+
         agentChip()+'</div>' +
       ((connInfo().strip) ? '<div class="connstrip'+(connInfo().strip[1]?" warn":"")+'">' +
         '<span class="spin"></span>'+esc(connInfo().strip[0])+'</div>' : '') +
@@ -1779,9 +1998,11 @@
     $("devBadge").style.display = A.dev ? "" : "none";
     document.body.classList.toggle("nohl", !A.hl);
     var c = connInfo();
-    $("connBadge").className = "badge " + (c.tone ? c.tone : "danger");
-    $("connBadge").textContent = c.badge || c.block[0];
+    /* 连接状态统一在设备标识这一个胶囊里表达：圆点给颜色，重连/离线/阻断时再补一个短词 */
+    $("hostchip").className = "hostchip" + (c.tone==="warn" ? " warn" : (c.tone ? "" : " danger"));
     $("hostDot").style.background = c.tone==="warn" ? "var(--warn)" : (c.tone ? "var(--ok)" : "var(--danger)");
+    var st = $("hostState");
+    if(c.chip){ st.textContent = c.chip; st.style.display = ""; } else { st.textContent = ""; st.style.display = "none"; }
 
     var app = $("app");
     if(h.indexOf("#/pair")===0){
@@ -1830,12 +2051,24 @@
     var q = app.querySelector("[data-q]");
     if(q) q.oninput=function(){ A.query=this.value; render(); app.querySelector("[data-q]").focus(); };
 
+    /* 详情页翻页：上一页/下一页用相对方向（按钮上的数字不会因为页码一变就过期）；
+       页码输入框回车/失焦时跳转，非法或越界的值原地纠正、不重画。 */
+    var pi = app.querySelector("#pageInput");
+    if(pi){
+      var commitPage = function(){
+        var n = parseInt(this.value, 10);
+        if(isNaN(n)){ this.value = A.page; return; }
+        var p = Math.min(A.pageCount || 1, Math.max(1, n));
+        this.value = p;
+        goToPage(p);
+      };
+      pi.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); commitPage.call(this); } };
+      pi.onchange=commitPage;
+    }
+
     var seg = app.querySelector('[data-seg="filter"]');
     if(seg) seg.onclick=function(ev){ var b=ev.target.closest("[data-f]"); if(!b) return;
       A.filter=b.dataset.f; render(); };
-    var mseg = app.querySelector('[data-seg="month"]');
-    if(mseg) mseg.onclick=function(ev){ var b=ev.target.closest("[data-m]"); if(!b) return;
-      A.month=b.dataset.m; render(); };
 
     var more=$("more"); if(more) more.onclick=function(){ A.shown+=15; render(); };
 
@@ -1849,11 +2082,20 @@
       if(tg){ var k=tg.dataset.toggle; A.open[k]=!A.open[k]; render(); return; }
 
       var all = t.closest("[data-all]");
-      if(all){ A.query=""; A.filter="all"; A.month="all"; location.hash="#/dir/"+all.dataset.all; return; }
+      if(all){ A.query=""; A.filter="all"; A.page=1; location.hash="#/dir/"+all.dataset.all; return; }
+
+      var nd = t.closest("[data-new-dir]");
+      if(nd){ if(!A.canCreate){ toast("这台设备没有创建会话的权限"); return; }
+        if(A.creating){ toast("正在创建，请稍候"); return; }
+        A.newDirId=null; A.newDir=""; A.dirPickOpen=false; A.newErr=null; openModal(); return; }
 
       var nb = t.closest("[data-new]");
       if(nb){ if(!A.canCreate){ toast("这台设备没有创建会话的权限"); return; }
-        if(A.creating){ toast("正在创建，请稍候"); return; } openModal(nb.dataset.new); return; }
+        if(A.creating){ toast("正在创建，请稍候"); return; }
+        A.newDirId=nb.dataset.new; A.newDir=""; A.dirPickOpen=false; A.newErr=null; openModal(); return; }
+
+      var pb = t.closest("[data-pagedir]");
+      if(pb){ if(pb.disabled) return; goToPage(A.page + (+pb.dataset.pagedir)); return; }
 
       var pr = t.closest("[data-pair]");
       if(pr){ var v=pr.dataset.pair; if(v==="GODIRS"){ location.hash="#/dirs"; return; } location.hash="#/pair/"+v; return; }
@@ -1950,14 +2192,59 @@
   }
 
   /* ==================== 新建会话弹层 ==================== */
-  function openModal(dirId){
-    var dir = DIRS.concat(EXTRA_DIRS).filter(function(d){ return d.id===dirId; })[0];
-    if(!dir) return;
-    var list = AGENT_PROFILES;
+  /* 两种入口：目录层级进来时目录已知（不需要指定）；顶部「新建」进来时要指定目录，
+     而且允许指定电脑上还没有的目录——那种情况下创建会话会先新建目录。 */
+  function dirPath(){ return (A.newDir||"").trim(); }
+  /* 目录分支提示：路径为空（还没指定）时没有分支可讲。 */
+  function dirBranchNotice(path){
+    if(!path) return "";
+    var kind = dirCaseKind();
+    /* 形状不合法的路径不该再谈存不存在：它在到达文件系统之前就会被拒。 */
+    if(!isAbsPath(path) || path.indexOf("..")>=0)
+      return '<div class="notice warn"><span>⚠</span><span><b>'+esc(path)+'</b> 不是可用的目录：必须是绝对路径，' +
+        '且不能包含「..」。提交会被服务端以参数类错误（<code>protocol.schema_invalid</code>）拒绝，不创建会话。</span></div>';
+    if(kind==="blocked")
+      return '<div class="notice warn"><span>⚠</span><span>这台电脑无法新建 <b>'+esc(path)+
+        '</b>：父目录不存在，或没有写入权限。提交会明确失败（服务端不可用类错误 <code>internal.unavailable</code>），' +
+        '不新建目录、不创建会话，也不会留下半成品。</span></div>';
+    if(kind==="missing")
+      return '<div class="notice info"><span>ⓘ</span><span>这台电脑上还没有 <b>'+esc(path)+
+        '</b>。创建会话时会先在电脑上新建这个目录，再在它下面启动 Agent。' +
+        '新建出来的目录不登记到目录列表，因此这个会话按「未分组」呈现。</span></div>';
+    return '<div class="notice info"><span>ⓘ</span><span>将使用电脑上的 <b>'+esc(path)+
+      '</b>。它不在已登记目录里，因此这个会话按「未分组」呈现。</span></div>';
+  }
+  /* 目录那一块：目录 / 路径 两行。目录已知（从目录卡片进来）时只显示上下文；
+     顶部入口时「目录」那一行里放「选择文件夹」控件，右边显示选中的文件夹名，完整路径在下一行。 */
+  function modalDirBlock(){
+    var fixed = A.newDirId ? dirById(A.newDirId) : null;
+    var path = dirPath();
+    if(fixed){
+      return '<div class="dirinfo">' +
+        '<div class="drow"><span class="dk">目录</span><span class="dv">'+esc(fixed.name)+'</span></div>' +
+        '<div class="drow"><span class="dk">路径</span><span class="dv mono">'+esc(fixed.path||"—")+'</span></div>' +
+      '</div>';
+    }
+    var name = path ? dirNameOf(path) : "";
+    return '<div class="dirinfo">' +
+        '<div class="drow"><span class="dk">目录</span><span class="dv"><span class="filec">' +
+          '<button class="filecbtn" data-dirpickopen>选择文件夹</button>' +
+          '<span class="filecval'+(name?"":" ph")+'" id="mDirVal">'+esc(name||"未选择任何文件")+'</span>' +
+        '</span></span></div>' +
+        '<div class="drow"><span class="dk">路径</span><span class="dv mono">'+esc(path||"—")+'</span></div>' +
+        '<div class="hint">点「选择文件夹」浏览这台电脑上的目录并选中一层；也可以在里面新建文件夹——' +
+        '新建出来的目录，创建会话时会先在电脑上建它。</div>' +
+      '</div>' +
+      '<div id="mDirNotice">'+dirBranchNotice(path)+'</div>';
+  }
+  function openModal(){
+    var fixed = A.newDirId ? dirById(A.newDirId) : null;
+    if(A.newDirId && !fixed) return;
+    var path = fixed ? "" : dirPath();
+    var where = fixed ? (fixed.path || fixed.name) : path;
     $("mBody").innerHTML =
-      '<div style="font-size:13px;color:var(--ink-2);margin-bottom:14px">目录 '+esc(dir.name)+
-      (dir.path?' · '+esc(dir.path):'')+'</div>' +
-      '<div class="field"><label>选择 Agent</label><div class="agents">'+list.map(function(a){
+      modalDirBlock() +
+      '<div class="field"><label>选择 Agent</label><div class="agents">'+AGENT_PROFILES.map(function(a){
         return '<div class="agentopt'+(A.newAgent===a.id?" on":"")+'" data-agent="'+a.id+'"><span class="radio"></span>' +
           '<span><span style="font-weight:600">'+esc(a.name)+'</span>'+
           (a.def?' <span style="font-size:11.5px;color:var(--ink-3)">默认</span>':'')+
@@ -1966,40 +2253,147 @@
       '<div class="notice info"><span>ⓘ</span><span>只列出这台电脑上<b>已配置</b>的 Agent。新增或配置必须在电脑上完成，' +
       '凭据不会进入浏览器。 会话标题会在你发出第一条消息后由 Agent 自动设置。</span></div>' +
       (A.newAgent?'<div class="notice warn" style="margin-top:10px"><span>⚠</span><span>将在你的电脑上启动一个 '+
-        esc(A.newAgent)+' 进程，工作目录 '+esc(dir.name)+'。</span></div>':'') +
+        esc(A.newAgent)+' 进程，工作目录 '+esc(where||"—")+'。</span></div>':'') +
       (A.newErr?'<div class="errbox">'+A.newErr+'</div>':'');
     $("mFoot").innerHTML = '<button class="btn" id="mCancel">取消</button>' +
       '<button class="btn primary" id="mOk">创建会话</button>';
     $("modal").classList.add("open");
     $("mCancel").onclick=closeModal;
-    $("mOk").onclick=function(){ submitNew(dir); };
+    $("mOk").onclick=submitNew;
     $("mBody").onclick=function(ev){
-      var o=ev.target.closest("[data-agent]");
-      if(o){ A.newAgent=o.dataset.agent; A.newErr=null; openModal(dirId); $("modal").classList.add("open"); }
+      var t=ev.target;
+      if(t.closest("[data-dirpickopen]")){ A.newErr=null; openDirPicker(); return; }
+      var o=t.closest("[data-agent]");
+      if(o){ A.newAgent=o.dataset.agent; A.newErr=null; openModal(); }
     };
   }
-  function closeModal(){ $("modal").classList.remove("open"); }
-  function submitNew(dir){
-    if(!A.newAgent){ A.newErr="请先选择一个 Agent。"; openModal(dir.id); $("modal").classList.add("open"); return; }
-    A.creating=dir.id; A.newErr=null; closeModal(); render();
+  function closeModal(){ $("modal").classList.remove("open"); closeDirPicker(); }
+  function submitNew(){
+    var fixed = A.newDirId ? dirById(A.newDirId) : null;
+    var path = fixed ? "" : dirPath();
+    if(!fixed && !path){
+      A.newErr="请先选择目录：点「选择文件夹」浏览这台电脑上的目录，选中一层。";
+      A.dirPickOpen=true; openModal(); return;
+    }
+    if(path && (!isAbsPath(path) || path.indexOf("..")>=0)){
+      A.newErr="服务端拒绝了这个目录：必须是绝对路径，且不能包含「..」（参数类错误 <code>protocol.schema_invalid</code>）。" +
+        '<br>没有创建会话，也没有触碰电脑上的文件系统。';
+      openModal(); return;
+    }
+    if(!A.newAgent){ A.newErr="请先选择一个 Agent。"; openModal(); return; }
+    if(path && dirCaseKind()==="blocked"){
+      A.newErr="无法在这个目录创建会话：父目录不存在，或没有写入权限（服务端不可用类错误 <code>internal.unavailable</code>）。" +
+        '<br>没有新建目录，也没有创建会话。';
+      openModal(); return;
+    }
+    /* 这一步是顶部入口独有的：指定的目录在电脑上还不存在时要先新建它，再启动 Agent。 */
+    var willCreateDir = !!path && dirCaseKind()==="missing";
+    A.creating = fixed ? fixed.id : path; A.creatingNewDir = willCreateDir;
+    A.newErr=null; closeModal(); render();
+    if(willCreateDir) setTimeout(function(){ A.creatingNewDir=false; render(); }, 600);
     setTimeout(function(){
       if(A.createResult==="ok"){
         A.seq++;
         var id="ns-"+A.seq;
-        SESSIONS.unshift(mk(id, null, A.newAgent, "idle", "刚刚", dir.id));
-        A.creating=null; render();
+        SESSIONS.unshift(mk(id, null, A.newAgent, "idle", NOW, fixed ? fixed.id : "unsorted"));
+        A.creating=null; A.creatingNewDir=false; render();
+        if(willCreateDir) toast("已在电脑上新建目录 "+path);
         A.session=id; location.hash="#/chat/"+id;
       } else {
-        A.creating=null; render();
+        A.creating=null; A.creatingNewDir=false; render();
         A.newErr = A.createResult==="cred"
           ? "缺少 "+A.newAgent+" 需要的凭据（openai / api_key），请在电脑上配置后重试。"
           : "Agent 启动失败："+A.newAgent+" 没有在超时内完成 initialize。<br>脱敏摘要：stdio 通道提前关闭。";
-        openModal(dir.id); $("modal").classList.add("open");
+        openModal();
       }
     }, 1200);
   }
   $("mX").onclick=closeModal;
 
+  /* ==================== 「选择文件夹」弹窗（顶部入口用） ==================== */
+  /* 浏览远端节点上的目录来选：面包屑 + 这一层的子目录 + 上一级；也可以在当前位置新建文件夹
+     （新建的文件夹在创建会话时才真的建，所以走「会先新建」那一支）。 */
+  function openDirPicker(){
+    A.dirPickOpen=true; A.pickKind="existing"; A.newFolderOpen=false; A.newFolderName="";
+    A.browsePath = (isAbsPath(A.newDir) && isBrowsable(A.newDir)) ? normPath(A.newDir) : "";
+    paintDirPicker();
+    $("dirPick").classList.add("open");
+  }
+  function closeDirPicker(){ A.dirPickOpen=false; $("dirPick").classList.remove("open"); }
+  function paintDirPicker(){
+    var here = isBrowsable(A.browsePath) ? normPath(A.browsePath) : "";
+    A.browsePath = here;
+    var atComputer = (here === "");
+    /* 面包屑（第一段是「此电脑」）+ 上一级 */
+    $("dpCrumb").innerHTML = crumbs(here).map(function(c,i){
+      return (i? '<span class="sep">›</span>' : '') +
+        '<button data-crumb="'+esc(c.path)+'">'+esc(c.name)+'</button>';
+    }).join("") + '<span class="spacer"></span>' +
+      (parentOf(here) !== null ? '<button class="dpup" data-up>↑ 上一级</button>' : '');
+    /* 这一层：此电脑下面列盘符，盘符下面列子目录；已登记的目录就地标出来 */
+    var kids = childPaths(here);
+    $("dpList").innerHTML = kids.length ? kids.map(function(p){
+      var reg = registeredByPath(p);
+      return '<button class="diropt" data-enter="'+esc(p)+'">' +
+        '<span class="dn">'+esc(atComputer ? p : dirNameOf(p))+'</span>' +
+        '<span class="da">'+(reg ? '已登记' : (atComputer ? esc(driveLabel(p)) : ''))+'</span>' +
+        '<span class="ch">›</span></button>';
+    }).join("") : '<div class="dpempty">这一层没有子文件夹</div>';
+    /* 新建文件夹：只有进了某个盘之后才能建 */
+    $("dpNewRow").innerHTML = atComputer ? '' : (A.newFolderOpen
+      ? '<div class="dpnew"><input id="dpNewName" type="text" value="'+esc(A.newFolderName)+'" placeholder="新文件夹的名字" />' +
+        '<button class="btn sm primary" id="dpNewOk">新建并选择</button>' +
+        '<button class="btn sm" id="dpNewCancel">取消</button></div>'
+      : '<button class="diropt other" data-newfolder><span class="dn">＋ 新建文件夹…</span>' +
+        '<span class="da">在这里新建一个文件夹；创建会话时会先在电脑上建它</span></button>');
+    $("dpCur").textContent = atComputer ? "此电脑（先选一个盘）" : ("当前位置：" + here);
+    $("dpOk").disabled = atComputer;   /* 此电脑本身不是一个目录，不能选 */
+    bindDirPicker();
+  }
+  function bindDirPicker(){
+    $("dpCrumb").onclick=function(ev){
+      var c=ev.target.closest("[data-crumb]");
+      if(c){ A.browsePath=c.dataset.crumb; paintDirPicker(); return; }
+      if(ev.target.closest("[data-up]")){
+        var up=parentOf(A.browsePath);
+        if(up){ A.browsePath=up; paintDirPicker(); }
+      }
+    };
+    $("dpList").onclick=function(ev){
+      var e=ev.target.closest("[data-enter]");
+      if(e){ A.browsePath=e.dataset.enter; paintDirPicker(); }
+    };
+    $("dpNewRow").onclick=function(ev){
+      if(ev.target.closest("[data-newfolder]")){
+        A.newFolderOpen=true; A.newFolderName=""; paintDirPicker();
+        var i=$("dpNewName"); if(i) i.focus();
+        return;
+      }
+      if(ev.target.closest("#dpNewCancel")){ A.newFolderOpen=false; paintDirPicker(); }
+    };
+    var nn=$("dpNewName");
+    if(nn){
+      nn.oninput=function(){ A.newFolderName=this.value; };
+      nn.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); createFolderAndPick(); } };
+    }
+    if($("dpNewOk")) $("dpNewOk").onclick=createFolderAndPick;
+  }
+  function createFolderAndPick(){
+    var name=(A.newFolderName||"").trim();
+    if(!name || /[\\\/:]/.test(name)){ toast("文件夹名字不能为空，也不能含 \\ / :"); return; }
+    A.pickKind="create";
+    applyDirPicker(joinPath(A.browsePath, name));
+  }
+  function applyDirPicker(path){
+    var p = normPath(path);
+    if(!p) return;                     /* 此电脑本身不是目录，选不了 */
+    A.newDir=p; A.newDirId=null;
+    A.newErr=null; closeDirPicker(); openModal();
+  }
+  $("dpX").onclick=closeDirPicker;
+  $("dpCancel").onclick=closeDirPicker;
+  /* 「选择此文件夹」= 选当前所在的那一层（浏览到哪一层就选哪一层，跟系统文件夹选择器一致）。 */
+  $("dpOk").onclick=function(){ A.pickKind="existing"; applyDirPicker(A.browsePath); };
   /* ==================== 控制台 ==================== */
   $("consoleHead").onclick=function(){ $("console").classList.toggle("collapsed"); };
   $("navRow").onclick=function(ev){ var b=ev.target.closest("[data-go]"); if(b) location.hash=b.dataset.go; };
@@ -2015,6 +2409,11 @@
   $("scenarioSel").onchange=function(){ A.chatScenario=this.value; render(); };
   $("ctxSel").onchange=function(){ A.ctx=this.value; render(); };
   $("createSel").onchange=function(){ A.createResult=this.value; };
+  /* 控制台只决定「这台电脑能不能为这次创建新建目录」。 */
+  $("mkdirSel").onchange=function(){ A.mkdirCase=this.value;
+    if(A.dirPickOpen) paintDirPicker();
+    else if($("modal").classList.contains("open") && !A.newDirId) openModal();
+  };
   $("cbDeg").onchange=function(){ A.degradeDemo=this.checked; render(); };
   $("cbHl").onchange=function(){ A.hl=this.checked; render(); };
   $("cbDev").onchange=function(){ A.dev=this.checked; render(); };
@@ -2026,7 +2425,6 @@
   $("hostScrim").onclick=closeHost;
   $("hostClose").onclick=closeHost;
   $("hostchip").onclick=openHost;
-  $("connBadge").onclick=openHost;
   $("hostBody").onclick=function(ev){
     var go=ev.target.closest("[data-hostgo]");
     if(go){ closeHost(); if(go.dataset.hostgo) location.hash=go.dataset.hostgo; return; }
@@ -2040,12 +2438,14 @@
     else if(a==="clear-yes"){ A.clearArmed=false; A.conn="unpaired"; render(); renderHost();
       toast("本机数据已清除；下次使用需要重新配对"); }
   };
-  document.addEventListener("keydown",function(e){ if(e.key==="Escape"){ closeModal(); closeDx(); closeHost();
+  document.addEventListener("keydown",function(e){ if(e.key==="Escape"){
+    if(A.dirPickOpen){ closeDirPicker(); return; }   /* 弹窗开着时先关弹窗，不关底下的新建弹层 */
+    closeModal(); closeDx(); closeHost();
     $("drawer").classList.remove("open"); $("scrim").classList.remove("open"); } });
   document.addEventListener("click",function(ev){
     if(!ev.target.closest(".pick") && !ev.target.closest(".ctx") && A.openPick){ A.openPick=null; render(); }
   });
-  window.addEventListener("hashchange", function(){ A.month="all"; A.query=""; render(); });
+  window.addEventListener("hashchange", function(){ A.page=1; A.query=""; render(); });
 
   if(!location.hash) location.hash="#/dirs";
   render();

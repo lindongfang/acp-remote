@@ -41,16 +41,96 @@ function active(){
   return st==="running"||st==="queued"||st==="waiting_permission"||st==="waiting_input";
 }
 function isClosed(){ return turnState()==="closed"; }
-function stateChip(){
-  var st=turnState();
-  if(st==="running"||st==="queued") return '<span class="ab-badge ok">● 运行中</span>';
-  if(st==="waiting_permission") return '<span class="ab-badge warn">⏸ 等待授权</span>';
-  if(st==="waiting_input") return '<span class="ab-badge warn">⏸ 等待回复</span>';
-  if(st==="failed") return '<span class="ab-badge danger">✕ 失败</span>';
-  if(st==="closed") return '<span class="ab-badge">○ 已关闭</span>';
-  return '<span class="ab-badge">○ 空闲</span>';
-}
 function dirById(id){ return DIRS.filter(function(d){ return d.id===id; })[0]; }
+/* 远端节点上的目录树（原型假数据）：Windows 可能有多个盘，所以根是「此电脑」+ 盘符列表；
+   已登记目录都在 D: 上，另外补几层让浏览看起来像真的磁盘。真实实现里这些来自服务端的目录列举。 */
+var NODE_DRIVES = ["C:\\", "D:\\", "E:\\"];
+var NODE_DRIVE_LABELS = { "c:\\":"系统盘", "d:\\":"本地磁盘", "e:\\":"移动磁盘" };
+var NODE_PATHS = [
+  "C:\\Users","C:\\Users\\dev","C:\\Users\\dev\\Desktop","C:\\Users\\dev\\Documents","C:\\Program Files",
+  "D:\\work","D:\\work\\api","D:\\work\\api\\src","D:\\work\\api\\tests","D:\\work\\infra","D:\\work\\infra\\deploy",
+  "D:\\personal","D:\\personal\\site","D:\\personal\\notes","D:\\personal\\blog","D:\\personal\\api",
+  "D:\\tmp","D:\\tmp\\sandbox","D:\\archive","D:\\archive\\old",
+  "E:\\media","E:\\backup","E:\\backup\\2025"
+];
+/* 路径工具：统一成 Windows 反斜杠；盘符根保留尾分隔符（否则 "D:" 会被判成相对路径）；"" = 此电脑。 */
+function normPath(p){
+  var s = String(p||"").replace(/[\\\/]+/g, "\\").replace(/\\+$/,"");
+  if(/^[A-Za-z]:$/.test(s)) s += "\\";
+  return s;
+}
+function joinPath(dir, name){
+  var d = normPath(dir);
+  return (/[\\\/]$/.test(d) ? d : d+"\\") + name;
+}
+function dirNameOf(p){ var s=normPath(p), i=s.lastIndexOf("\\"); return i<0 ? s : s.slice(i+1); }
+function parentOf(p){
+  var s = normPath(p);
+  if(s==="") return null;
+  if(/^[A-Za-z]:\\?$/.test(s)) return "";   /* 盘符根的上一级是「此电脑」 */
+  var i = s.lastIndexOf("\\");
+  return i<=0 ? null : s.slice(0,i)+"\\";
+}
+function isBrowsable(p){
+  var s = normPath(p);
+  if(s==="") return true;
+  var low = s.toLowerCase();
+  for(var i=0;i<NODE_DRIVES.length;i++){ if(low.indexOf(NODE_DRIVES[i].toLowerCase())===0) return true; }
+  return false;
+}
+function driveLabel(p){ return NODE_DRIVE_LABELS[String(p).toLowerCase()] || ""; }
+function childPaths(p){
+  if(normPath(p)==="") return NODE_DRIVES.slice();
+  var d = normPath(p);
+  var prefix = (/[\\\/]$/.test(d) ? d : d+"\\"), low = prefix.toLowerCase();
+  return NODE_PATHS.filter(function(x){
+    if(x.toLowerCase().indexOf(low)!==0) return false;
+    var rest = x.slice(prefix.length);
+    return rest.length>0 && rest.indexOf("\\")<0;
+  });
+}
+function crumbs(p){
+  var out=[{ name:"此电脑", path:"" }];
+  if(normPath(p)==="") return out;
+  var prefix="";
+  normPath(p).split(/[\\\/]+/).filter(Boolean).forEach(function(seg, i){
+    prefix = i===0 ? seg+"\\" : joinPath(prefix, seg);
+    out.push({ name: i===0 ? seg+"\\" : seg, path: prefix });
+  });
+  return out;
+}
+function isAbsPath(p){ return /^[A-Za-z]:[\\\/]/.test(p) || /^[\\\/]{1,2}/.test(p); }
+function registeredByPath(p){
+  var low = normPath(p).toLowerCase();
+  for(var i=0;i<DIRS.length;i++){ if(DIRS[i].path && normPath(DIRS[i].path).toLowerCase()===low) return DIRS[i]; }
+  return null;
+}
+/* 顶部「新建」的目录情形：这台电脑能不能为这次创建新建目录由控制台模拟；
+   在弹窗里新建的文件夹必然属于「会先新建」那一支。 */
+function dirCaseKind(){
+  if(A.mkdirCase==="blocked") return "blocked";
+  return A.pickKind==="create" ? "missing" : "exists";
+}
+/* 目录分支提示：路径为空（还没指定）时没有分支可讲。 */
+function dirBranchNotice(path){
+  if(!path) return "";
+  var kind = dirCaseKind();
+  /* 形状不合法的路径不该再谈存不存在：它在到达文件系统之前就会被拒。 */
+  if(!isAbsPath(path) || path.indexOf("..")>=0)
+    return '<div class="notice warn"><span>⚠</span><span><b>'+esc(path)+'</b> 不是可用的目录：必须是绝对路径，' +
+      '且不能包含「..」。提交会被服务端以参数类错误（protocol.schema_invalid）拒绝，不创建会话。</span></div>';
+  if(kind==="blocked")
+    return '<div class="notice warn"><span>⚠</span><span>这台电脑无法新建 <b>'+esc(path)+
+      '</b>：父目录不存在，或没有写入权限。提交会明确失败（服务端不可用类错误 internal.unavailable），' +
+      '不新建目录、不创建会话，也不会留下半成品。</span></div>';
+  if(kind==="missing")
+    return '<div class="notice info"><span>ⓘ</span><span>这台电脑上还没有 <b>'+esc(path)+
+      '</b>。创建会话时会先在电脑上新建这个目录，再在它下面启动 Agent。' +
+      '新建出来的目录不登记到目录列表，因此这个会话按「未分组」呈现。</span></div>';
+  return '<div class="notice info"><span>ⓘ</span><span>将使用电脑上已存在的 <b>'+esc(path)+
+    '</b>。它不在已登记目录里，因此这个会话按「未分组」呈现。</span></div>';
+}
+function dirPath(){ return (A.newDir||"").trim(); }
 function mdInlinePlain(t){ return esc(t); }
 function passFilter(s){
   if(A.filter==="running") return s.state==="running"||s.state==="queued";
@@ -97,8 +177,26 @@ function themeBtnHtml(){
   return '<button class="ab-btn" data-ic="orange" data-act="theme" title="切换白天 / 黑夜" aria-label="切换白天或黑夜模式">' +
     themeGlyph() + '</button>';
 }
+/* 目录页顶栏：左边是设备标识（连接状态也在这一个胶囊里表达），点它打开「主机与连接」；
+   右边是「新建」（底色/文案参考桌面端主按钮）与主题。原来那个 ⋯ 已被设备标识取代。 */
+function dirsAppbar(){
+  var c = CONN[A.conn] || CONN.online;
+  var tone = c.tone==="warn" ? " warn" : (c.tone ? "" : " danger");
+  var dot = c.tone==="warn" ? "var(--warn)" : (c.tone ? "var(--ok)" : "var(--danger)");
+  return '<div class="appbar">' +
+    '<button class="devchip'+tone+'" data-act="host" aria-label="'+esc(HOSTNAME)+'（点此打开主机与连接）">' +
+      '<span class="dot" style="background:'+dot+'"></span>' +
+      '<span class="nm">'+esc(HOSTNAME)+'</span>' +
+      (c.chip ? '<span class="st">'+esc(c.chip)+'</span>' : '') +
+      '<span class="caret" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 10 12 15.2 17.5 10"/></svg></span>' +
+    '</button>' +
+    '<div style="flex:1;min-width:0"></div>' +
+    '<button class="ab-new" data-act="newdir">⊕ 新建</button>' +
+    themeBtnHtml() + '</div>';
+}
 function viewDirs(){
-  var h = appbar('目录', HOSTNAME + ' · 点此打开主机与连接', '<button class="ab-btn" data-act="host">⋯</button>', false);
+  var h = dirsAppbar();
   var body = '<div class="scroll">';
   var q = A.query;
   var matched = DIRS.filter(function(d){
@@ -108,6 +206,8 @@ function viewDirs(){
     return d.name.toLowerCase().indexOf(q)>=0 || any;
   });
   if(!matched.length){ body += '<div class="blank"><h2>没有匹配的结果</h2><p>换个关键词。</p></div>'; }
+  var nameCount = {};
+  DIRS.forEach(function(d){ nameCount[d.name] = (nameCount[d.name]||0) + 1; });
   matched.forEach(function(dir){
     var all = SESSIONS.filter(function(s){ return s.dir===dir.id; });
     var rows = all.filter(passFilter);
@@ -117,13 +217,15 @@ function viewDirs(){
     body += '<div class="card'+(collapsed?" collapsed":"")+'"><div class="dhead">' +
       '<span class="caret" data-toggle="d-'+dir.id+'">▼</span>' +
       '<span class="dicon">▤</span><span class="dname">'+esc(dir.name)+'</span>' +
+      /* 同名目录靠路径尾段区分（与桌面一致）：没有别名之后这是唯一的区分手段 */
+      ((nameCount[dir.name]>1 && dir.path) ? '<span class="dpath">'+esc((parentOf(dir.path)||dir.path).replace(/[\\\/]+$/,""))+'</span>' : '') +
       (active0?'<span class="chip flat" style="color:var(--ok);background:var(--ok-soft)">运行中 '+active0+'</span>':'') +
       '<span class="chip flat">'+all.length+' 个会话</span></div><div class="dbody">' +
       rows.slice(0,3).map(function(s){ return srow(s); }).join("") +
       (!all.length ? '<div style="padding:10px 12px;color:var(--ink-3);font-size:13px">这个目录还没有会话</div>' : '') +
       '<div class="cardacts">' +
-        (all.length>3 ? '<button class="linkbtn" data-all="'+dir.id+'">查看全部 '+all.length+' 个 ›</button>' : '<span></span>') +
-        '<button class="linkbtn" data-new="'+dir.id+'">⊕ 新建会话</button>' +
+        (all.length>3 ? '<button class="linkbtn" data-all="'+dir.id+'">查看全部 ›</button>' : '<span></span>') +
+        '<button class="linkbtn add" data-new="'+dir.id+'">⊕ 新建</button>' +
       '</div></div></div>';
   });
   body += '</div>';
@@ -141,53 +243,66 @@ function srow(s){
   var st = s.state==="waiting_permission" ? '<span class="st">待授权</span>' : '';
   return '<div class="srow'+(s.id===A.session?" on":"")+'" data-session="'+s.id+'">' +
     '<span class="dot '+s.state+'"></span><span class="t'+(s.title?"":" noname")+'">'+name+'</span>'+st+
-    '<span class="w">'+esc(s.when)+'</span></div>';
+    '<span class="w">'+esc(whenLabel(s.at))+'</span></div>';
 }
 
+/* 跳到某一页：页码夹到 1..pageCount，只有真的换页才重画，跳完滚回顶部 */
+function goToPage(n){
+  var pages = A.pageCount || 1;
+  if(isNaN(n)) return;
+  var p = Math.min(pages, Math.max(1, n));
+  if(p === A.page) return;
+  A.page = p;
+  render();
+  var sc = document.querySelector(".scroll"); if(sc) sc.scrollTop = 0;
+}
+/* 详情页：只按时间（新→旧）列会话，每页 PAGE_SIZE 条、可翻页；不再按月分组，也没有筛选。 */
+var PAGE_SIZE = 10;
+/* 翻页区不重复总数——顶栏目录名旁边已经显示了 */
+function pagerHtml(pages){
+  if(pages <= 1) return '';
+  return '<div class="pagerbar">' +
+    '<button class="btn" data-pagedir="-1"'+(A.page>1?"":" disabled")+'>‹ 上一页</button>' +
+    '<span class="pinfo">第 <input id="pageInput" class="pageinput" type="text" inputmode="numeric" value="'+A.page+
+      '" aria-label="页码（回车跳转）" title="输入页码后回车跳转" /> / '+pages+' 页</span>' +
+    '<button class="btn" data-pagedir="1"'+(A.page<pages?"":" disabled")+'>下一页 ›</button>' +
+  '</div>';
+}
 function viewDirDetail(id){
   var dir = dirById(id);
   if(!dir) return viewDirs();
-  var all = SESSIONS.filter(function(s){ return s.dir===id; });
-  var rows = all.filter(passFilter);
-  var h = appbar(dir.name, (dir.path||"") + ' · ' + rows.length + ' 个会话', '', true);
+  var all = SESSIONS.filter(function(s){ return s.dir===id; });   /* 已按时间倒序 */
+  var pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+  A.pageCount = pages;
+  if(A.page > pages) A.page = pages;
+  if(A.page < 1) A.page = 1;
+  var pageRows = all.slice((A.page-1)*PAGE_SIZE, A.page*PAGE_SIZE);
+  var h = appbar(esc(dir.name) + '<span class="chip">'+all.length+' 个会话</span>', '', '', true);
   var body = '<div class="scroll">';
-  /* 月份分档（横向滚动的分段控件，触屏比下拉合适） */
-  var months = [];
-  rows.forEach(function(s){ var m = monthLabel(s.when); if(months.indexOf(m)<0) months.push(m); });
-  if(rows.length > 6 && months.length > 1){
-    body += '<div class="segbar">' +
-      '<button data-month="all" class="'+(A.month==="all"?"on":"")+'">全部</button>' +
-      months.map(function(m){ return '<button data-month="'+esc(m)+'" class="'+(A.month===m?"on":"")+'">'+esc(m)+'</button>'; }).join("") +
-      '</div>';
+  /* 路径单独一行、与新建弹层同一档字体 */
+  if(dir.path) body += '<div class="pathline"><div class="dirinfo"><div class="drow"><span class="dk">路径</span>' +
+    '<span class="dpath">'+esc(dir.path)+'</span></div></div></div>';
+  if(!all.length){
+    body += '<div class="blank"><h2>这个目录还没有会话</h2><p>在这里或电脑上新建一个会话，它会出现在这里。</p></div>';
+  } else {
+    body += pageRows.map(function(s){ return srow(s); }).join("");
+    body += pagerHtml(pages);
   }
-  var shown = A.month==="all" ? rows : rows.filter(function(s){ return monthLabel(s.when)===A.month; });
-  if(!rows.length) body += '<div class="blank"><h2>没有符合条件的会话</h2></div>';
-  else if(!shown.length) body += '<div class="blank"><h2>这个月没有会话</h2></div>';
-  else {
-    var last = null;
-    shown.forEach(function(s){
-      var m = monthLabel(s.when);
-      if(m !== last){ body += '<div style="padding:14px 4px 6px;font-size:12px;color:var(--ink-3);font-weight:600">'+esc(m)+'</div>'; last = m; }
-      body += srow(s);
-    });
-    body += '<div style="padding:16px 0;text-align:center;font-size:12px;color:var(--ink-3)">已显示全部 '+rows.length+' 个会话</div>';
-  }
-  body += '<div style="padding:6px 0 20px"><button class="btn block primary" data-new="'+dir.id+'">⊕ 在此目录新建会话</button>' +
+  body += '<div style="padding:6px 0 20px"><button class="btn block primary" data-new="'+dir.id+'">⊕ 新建</button>' +
     '<p class="hint" style="text-align:center;margin-top:8px">将在你的电脑上启动一个 Agent 进程</p></div>';
   body += '</div>';
   return h + body;
-}
-function monthLabel(when){
-  if(/今天|昨天|分钟前|刚刚/.test(when)) return "今天";
-  var m = /(\\d+)月(\\d+)日/.exec(when);
-  return m ? (m[1]+"月") : when;
 }
 
 function viewSessions(){
   var s = cur(), dir = dirById(s.dir);
   var list = SESSIONS.filter(function(x){ return x.dir===s.dir; });
-  var h = appbar('本目录的会话', (dir?dir.name:"") + (dir&&dir.path?' · '+dir.path:''), '', true);
-  return h + '<div class="scroll"><div class="search"><span>🔍</span>' +
+  var h = appbar('本目录的会话', dir?dir.name:'', '', true);
+  /* 目录路径与别处同一档（原来塞在 appbar 副标题里，又小又淡） */
+  return h + '<div class="scroll">' +
+    (dir&&dir.path ? '<div class="pathline"><div class="dirinfo"><div class="drow"><span class="dk">路径</span>' +
+      '<span class="dpath">'+esc(dir.path)+'</span></div></div></div>' : '') +
+    '<div class="search"><span>🔍</span>' +
     '<input placeholder="在本目录内搜索" /></div>' +
     list.map(function(x){ return srow(x); }).join("") +
     '<div style="padding:14px 0"><button class="btn block" data-new="'+s.dir+'">⊕ 新建会话</button></div></div>';
@@ -218,9 +333,9 @@ function streamHTML(s){
       degCard("warn","原文未同步（超出单条上限）",
         '<span class="mono">file.changed · src/legacy/report.ts</span><br>diff 正文未随事件下发。',"bigdiff","查看原因") : "");
   } else {
-    out += userMsg("（这个会话的最近一条输入）", s.when) +
-      agentMsg("这是 `"+s.agent+"` 在 "+(dirById(s.dir)?dirById(s.dir).name:"")+" 下的会话。", s.when) +
-      fold("g.think","think","🧠","思考","done","示例思考内容。",null,s.when);
+    out += userMsg("（这个会话的最近一条输入）", whenLabel(s.at)) +
+      agentMsg("这是 `"+s.agent+"` 在 "+(dirById(s.dir)?dirById(s.dir).name:"")+" 下的会话。", whenLabel(s.at)) +
+      fold("g.think","think","🧠","思考","done","示例思考内容。",null,whenLabel(s.at));
     if(s.state==="waiting_permission") out += permCard(s);
   }
   /* 「跳到你最近的输入」胶囊：滚动离开用户消息时浮出（移动端需手动吸附到底部） */
@@ -230,9 +345,11 @@ function streamHTML(s){
 
 function chatPane(s){
   var c = CONN[A.conn] || CONN.online;
-  var head = appbar(esc(s.title||"未命名会话"),
-    esc(s.agent)+' · '+(dirById(s.dir)?dirById(s.dir).name:""),
-    stateChip()+'<button class="ab-btn" data-act="sessions">☰</button>');
+  /* 会话页顶栏只留四样：返回、会话标题、agent 标识、主题（颜色）切换。
+     标题与 agent 同一行，靠字级与胶囊区分（agent 用与详情页个数相同的小胶囊）。 */
+  var head = appbar(esc(s.title||"未命名会话") + '<span class="chip">'+esc(s.agent)+'</span>',
+    '',
+    '');
   var strip = c.strip ? '<div class="connstrip'+(c.strip[1]?" warn":"")+'"><span class="spin"></span>'+
     esc(c.strip[0])+'</div>' : '';
   var body = '<div class="scroll" id="stream">'+streamHTML(s)+
@@ -320,12 +437,29 @@ function viewPair(){
 
 /* ============ sheet（底部全屏层） ============ */
 var sheetState = { type:null, key:null, sec:{} };
+/* 弹层（底部面板）也要占一条历史记录：这样系统返回/右划（以及右边缘左右划的手势）会先关掉弹层，
+   而不是把用户带出应用。用计数而不是布尔——面板可以在开着的时候再开一个（例如主机面板里点进别的面板）。 */
+var sheetGuards = 0;
+var pendingNav = null;   /* 弹层里的跳转：等弹层那条记录出栈后再执行，避免两次导航互相打架 */
+function pushSheetGuard(){ history.pushState({ acprSheet:true }, "", location.href); sheetGuards++; }
+function flushPendingNav(){ if(!pendingNav) return; var h = pendingNav; pendingNav = null; if(h) location.hash = h; }
+/* 弹层里的链接（比如主机面板的阻断操作）：先关弹层，等它的历史记录回退落地再跳目标。 */
+function closeSheetAndGo(h){ pendingNav = h; closeSheet(); }
+
 function openSheet(type, key){
   sheetState.type = type; sheetState.key = key || null; sheetState.sec = {};
   paintSheet();
   $("sheet").classList.add("open"); $("scrim").classList.add("open");
+  pushSheetGuard();
 }
-function closeSheet(){ $("sheet").classList.remove("open"); $("scrim").classList.remove("open"); }
+function closeSheet(){
+  if(!$("sheet").classList.contains("open")){ flushPendingNav(); return; }
+  $("sheet").classList.remove("open"); $("scrim").classList.remove("open"); closeDirPicker();
+  /* 清掉弹层状态：否则「返回」会一直以为弹层还开着（关过一次之后返回就永久失效了） */
+  sheetState.type = null; sheetState.key = null;
+  if(sheetGuards > 0){ sheetGuards--; history.back(); }   /* 吃掉它自己那条记录 */
+  else flushPendingNav();
+}
 function paintSheet(){
   var t = sheetState.type, h = "";
   if(t==="dx"){
@@ -396,11 +530,33 @@ function hostSheet(){
   }
   return h;
 }
+/* 新建会话弹层：目录层级进来时目录已知（不需要指定）；顶部「新建」进来时要指定目录，
+   而且允许指定电脑上还没有的目录——那种情况下创建会话会先新建目录。
+   两种入口都在「目录 / 路径」两行里呈现，字体样式一致。 */
 function newSessionSheet(){
-  var dir = dirById(A.creating || cur().dir);
-  return '<div class="kvbox" style="margin-bottom:16px"><div class="kvrow"><span class="k">目录</span>' +
-    '<span class="v">'+esc(dir?dir.name:"")+'</span></div>' +
-    (dir&&dir.path?'<div class="kvrow"><span class="k">路径</span><span class="v">'+esc(dir.path)+'</span></div>':'')+'</div>' +
+  var fixed = sheetState.key ? dirById(sheetState.key) : null;
+  var path = dirPath();
+  var head;
+  if(fixed){
+    head = '<div class="dirinfo">' +
+      '<div class="drow"><span class="dk">目录</span><span class="dv">'+esc(fixed.name)+'</span></div>' +
+      '<div class="drow"><span class="dk">路径</span><span class="dv mono">'+esc(fixed.path||"—")+'</span></div>' +
+    '</div>';
+  } else {
+    var name = path ? dirNameOf(path) : "";
+    head = '<div class="dirinfo">' +
+      '<div class="drow"><span class="dk">目录</span><span class="dv"><span class="filec">' +
+        '<button class="filecbtn" data-dirpickopen>选择文件夹</button>' +
+        '<span class="filecval'+(name?"":" ph")+'" id="shDirVal">'+esc(name||"未选择任何文件")+'</span>' +
+      '</span></span></div>' +
+      '<div class="drow"><span class="dk">路径</span><span class="dv mono">'+esc(path||"—")+'</span></div>' +
+      '<div class="hint">点「选择文件夹」浏览这台电脑上的目录并选中一层；也可以在里面新建文件夹——' +
+      '新建出来的目录，创建会话时会先在电脑上建它。</div>' +
+    '</div>' +
+    '<div id="shDirNotice">'+dirBranchNotice(path)+'</div>';
+  }
+  var where = fixed ? (fixed.path || fixed.name) : path;
+  return head +
     '<h2 style="margin-bottom:10px">选择 Agent</h2>' +
     AGENT_PROFILES.map(function(a){
       return '<div class="agentopt'+(A.newAgent===a.id?" on":"")+'" data-agent="'+a.id+'">' +
@@ -409,7 +565,7 @@ function newSessionSheet(){
     }).join("") +
     '<div class="notice info"><span>ⓘ</span><span>会话标题会在你发出第一条消息后由 Agent 自动设置。</span></div>' +
     (A.newAgent?'<div class="notice warn"><span>⚠</span><span>将在你的电脑上启动一个 '+esc(A.newAgent)+
-      ' 进程。</span></div>':'') +
+      ' 进程，工作目录 '+esc(where||"—")+'。</span></div>':'') +
     (A.newErr?'<div class="errbox">'+A.newErr+'</div>':'') +
     '<button class="btn block primary" style="margin-top:14px" data-act="create">创建会话</button>';
 }
@@ -510,7 +666,7 @@ function bind(){
     var all = t.closest("[data-all]");
     if(all){ location.hash = "#/dir/"+all.dataset.all; return; }
     var nw = t.closest("[data-new]");
-    if(nw){ A.creating = nw.dataset.new; openSheet("new"); return; }
+    if(nw){ A.newDir=""; A.dirPickOpen=false; A.newErr=null; openSheet("new", nw.dataset.new); return; }
     var ag = t.closest("[data-agent]");
     if(ag){ A.newAgent = ag.dataset.agent; A.newErr = null; paintSheet(); return; }
     var sk = t.closest("[data-seckey]");
@@ -527,8 +683,8 @@ function bind(){
     if(pm){ A.permSet[pm.dataset.sess] = pm.dataset.perm; render(); toast("授权已提交，等待终态事件"); return; }
     var tb = t.closest("[data-tab]");
     if(tb){ A.tab = tb.dataset.tab; render(); return; }
-    var mt = t.closest("[data-month]");
-    if(mt){ A.month = mt.dataset.month; render(); return; }
+    var mt = t.closest("[data-pagedir]");
+    if(mt){ if(mt.disabled) return; goToPage(A.page + (+mt.dataset.pagedir)); return; }
     var ss = t.closest("[data-session]");
     if(ss){ A.session = ss.dataset.session; A.tab = "chat"; location.hash = "#/chat/"+ss.dataset.session; return; }
     var ft = t.closest("[data-f]");
@@ -546,15 +702,35 @@ function bind(){
   });
   var pill = f.querySelector("#jumpPill");
   if(pill){ pill.onclick = jumpToUser; }
+  /* 详情页翻页：上一页/下一页用相对方向；页码输入框回车/失焦时跳转，非法或越界的值原地纠正、不重画 */
+  var pi = f.querySelector("#pageInput");
+  if(pi){
+    var commitPage = function(){
+      var n = parseInt(this.value, 10);
+      if(isNaN(n)){ this.value = A.page; return; }
+      var p = Math.min(A.pageCount || 1, Math.max(1, n));
+      this.value = p;
+      goToPage(p);
+    };
+    pi.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); commitPage.call(this); } };
+    pi.onchange=commitPage;
+  }
   var stEl = f.querySelector("#stream");
   if(stEl){ stEl.addEventListener("scroll", updateJump); }
   requestAnimationFrame(updateJump);
   if(sheetState.type) paintSheet();
 }
 function handleAct(a){
-  if(a==="back"){ if(sheetState.type){ closeSheet(); return; } history.length > 1 ? history.back() : (location.hash="#/dirs"); return; }
+  if(a==="back"){
+    if($("sheet").classList.contains("open")){ closeSheet(); return; }
+    /* 用应用内路由栈判定「有没有上一页」：没有就回目录页，而不是退出应用 */
+    if(A.navStack.length >= 2){ A.navStack.pop(); location.hash = A.navStack[A.navStack.length-1]; return; }
+    location.hash = "#/dirs"; return;
+  }
   if(a==="theme"){ applyTheme(effTheme() === "dark" ? "light" : "dark"); render(); return; }
   if(a==="host"){ openSheet("host"); return; }
+  /* 顶部「新建」：要自己指定目录（可以是电脑上还没有的目录）。 */
+  if(a==="newdir"){ A.newDir=""; A.dirPickOpen=false; A.newErr=null; openSheet("new", null); return; }
   if(a==="sessions"){ location.hash="#/sessions"; return; }
   if(a==="send"){
     if(isClosed()){ toast("会话已关闭"); return; }
@@ -574,13 +750,35 @@ function handleAct(a){
     toast("本机数据已清除；下次使用需要重新配对"); return; }
   if(a==="create"){
     if(A.creating) return;
-    var dirId = A.creating;
-    closeSheet(); A.creating = "busy"; render();
+    var fixed = sheetState.key ? dirById(sheetState.key) : null;
+    var path = fixed ? "" : dirPath();
+    if(!fixed && !path){
+      A.newErr = "请先选择目录：点「选择文件夹」浏览这台电脑上的目录，选中一层。";
+      paintSheet(); return;
+    }
+    if(path && (!isAbsPath(path) || path.indexOf("..")>=0)){
+      A.newErr = "服务端拒绝了这个目录：必须是绝对路径，且不能包含「..」（参数类错误 protocol.schema_invalid）。" +
+        "没有创建会话，也没有触碰电脑上的文件系统。";
+      paintSheet(); return;
+    }
+    if(!A.newAgent){ A.newErr = "请先选择一个 Agent。"; paintSheet(); return; }
+    if(path && dirCaseKind()==="blocked"){
+      A.newErr = "无法在这个目录创建会话：父目录不存在，或没有写入权限（服务端不可用类错误 internal.unavailable）。" +
+        "没有新建目录，也没有创建会话。";
+      paintSheet(); return;
+    }
+    /* 这一步是顶部入口独有的：指定的目录在电脑上还不存在时要先新建它，再启动 Agent。 */
+    var willCreateDir = !!path && dirCaseKind()==="missing";
+    var target = fixed ? fixed.id : "unsorted";
+    closeSheet();
+    A.creating = true; A.newErr = null;
+    if(willCreateDir) toast("正在电脑上新建目录 " + path);
     setTimeout(function(){
       A.seq++; var id = "ns-"+A.seq;
-      SESSIONS.unshift(mk(id, null, A.newAgent, "idle", "刚刚", dirId));
+      SESSIONS.unshift(mk(id, null, A.newAgent, "idle", NOW, target));
       A.creating = null; A.session = id; A.tab = "chat";
       location.hash = "#/chat/"+id; render();
+      if(willCreateDir) toast("已在电脑上新建目录 " + path);
     }, 1100);
     return;
   }
@@ -601,6 +799,7 @@ function openPickSheet(title, headHtml, bodyHtml, onPick){
     onPick(p.dataset.pick); closeSheet(); render();
   };
   $("sheet").classList.add("open"); $("scrim").classList.add("open");
+  pushSheetGuard();
   $("sheetClose").textContent = "取消";
 }
 function pickRows(refs, currentId){
@@ -636,18 +835,144 @@ function pickHead(title){
 }
 
 /* ============ 交互与控制台 ============ */
+/* 弹层自己的交互：`#sheet` 是 `#frame` 的兄弟节点，`bind()` 挂在 `#frame` 上的那套委托看不到它，
+   因此这里单独委托一次（弹层里的 Agent 选择、`data-act` 与分区折叠此前都点不动）。
+   `[data-pick]` 仍由 `openPickSheet` 自己的处理器负责。 */
+$("sheetBody").addEventListener("click", function(ev){
+  var t = ev.target;
+  var go = t.closest("[data-go]");
+  if(go){ var h = go.dataset.go; if(h) closeSheetAndGo(h); else closeSheet(); return; }
+  if(t.closest("[data-dirpickopen]")){ A.newErr = null; openDirPicker(); return; }
+  var ag = t.closest("[data-agent]");
+  if(ag){ A.newAgent = ag.dataset.agent; A.newErr = null; paintSheet(); return; }
+  var act = t.closest("[data-act]");
+  if(act){ handleAct(act.dataset.act); return; }
+  var sk = t.closest("[data-seckey]");
+  if(sk){ sheetState.sec[sk.dataset.seckey] = !sheetState.sec[sk.dataset.seckey]; paintSheet(); return; }
+});
+
+/* 系统返回 / 右划：弹层开着就只关弹层（这条记录已经被系统弹掉了，不要再退一层） */
+window.addEventListener("popstate", function(){
+  if($("sheet").classList.contains("open")){
+    if(sheetGuards > 0) sheetGuards--;
+    closeSheet();
+    return;
+  }
+  flushPendingNav();
+});
+
+/* ============ 「选择文件夹」弹窗（顶部入口用） ============ */
+/* 浏览远端节点上的目录来选：面包屑 + 这一层的子目录 + 上一级；也可以在当前位置新建文件夹
+   （新建的文件夹在创建会话时才真的建，所以走「会先新建」那一支）。 */
+function openDirPicker(){
+  A.dirPickOpen = true; A.pickKind = "existing"; A.newFolderOpen = false; A.newFolderName = "";
+  A.browsePath = (isAbsPath(A.newDir) && isBrowsable(A.newDir)) ? normPath(A.newDir) : "";
+  paintDirPicker();
+  $("dirPick").classList.add("open");
+}
+function closeDirPicker(){ A.dirPickOpen = false; $("dirPick").classList.remove("open"); }
+function paintDirPicker(){
+  var here = isBrowsable(A.browsePath) ? normPath(A.browsePath) : "";
+  A.browsePath = here;
+  var atComputer = (here === "");
+  /* 面包屑（第一段是「此电脑」；盘符根上一层就是它）+ 上一级 */
+  $("dpCrumb").innerHTML = crumbs(here).map(function(c,i){
+    return (i? '<span class="sep">›</span>' : '') +
+      '<button data-crumb="'+esc(c.path)+'">'+esc(c.name)+'</button>';
+  }).join("") + (parentOf(here) !== null ? '<button class="dpup" data-up>↑ 上一级</button>' : '');
+  /* 这一层：此电脑下面列盘符，盘符下面列子目录；已登记的目录就地标出来 */
+  var kids = childPaths(here);
+  $("dpList").innerHTML = kids.length ? kids.map(function(p){
+    var reg = registeredByPath(p);
+    return '<button class="diropt" data-enter="'+esc(p)+'">' +
+      '<span class="dn">'+esc(atComputer ? p : dirNameOf(p))+'</span>' +
+      '<span class="da">'+(reg ? '已登记' : (atComputer ? esc(driveLabel(p)) : ''))+'</span>' +
+      '<span class="ch">›</span></button>';
+  }).join("") : '<div class="dpempty">这一层没有子文件夹</div>';
+  /* 新建文件夹：只有进了某个盘之后才能建 */
+  $("dpNewRow").innerHTML = atComputer ? '' : (A.newFolderOpen
+    ? '<div class="dpnew"><input id="dpNewName" type="text" value="'+esc(A.newFolderName)+'" placeholder="新文件夹的名字" />' +
+      '<button class="btn sm primary" id="dpNewOk">新建并选择</button>' +
+      '<button class="btn sm" id="dpNewCancel">取消</button></div>'
+    : '<button class="diropt other" data-newfolder><span class="dn">＋ 新建文件夹…</span>' +
+      '<span class="da">在这里新建一个文件夹；创建会话时会先在电脑上建它</span></button>');
+  $("dpCur").textContent = atComputer ? "此电脑（先选一个盘）" : ("当前位置：" + here);
+  $("dpOk").disabled = atComputer;   /* 此电脑本身不是一个目录，不能选 */
+  bindDirPicker();
+}
+function bindDirPicker(){
+  $("dpCrumb").onclick = function(ev){
+    var c = ev.target.closest("[data-crumb]");
+    if(c){ A.browsePath = c.dataset.crumb; paintDirPicker(); return; }
+    if(ev.target.closest("[data-up]")){
+      var up = parentOf(A.browsePath);
+      if(up){ A.browsePath = up; paintDirPicker(); }
+    }
+  };
+  $("dpList").onclick = function(ev){
+    var e = ev.target.closest("[data-enter]");
+    if(e){ A.browsePath = e.dataset.enter; paintDirPicker(); }
+  };
+  $("dpNewRow").onclick = function(ev){
+    if(ev.target.closest("[data-newfolder]")){
+      A.newFolderOpen = true; A.newFolderName = ""; paintDirPicker();
+      var i = $("dpNewName"); if(i) i.focus();
+      return;
+    }
+    if(ev.target.closest("#dpNewCancel")){ A.newFolderOpen = false; paintDirPicker(); }
+  };
+  var nn = $("dpNewName");
+  if(nn){
+    nn.oninput = function(){ A.newFolderName = this.value; };
+    nn.onkeydown = function(e){ if(e.key==="Enter"){ e.preventDefault(); createFolderAndPick(); } };
+  }
+  if($("dpNewOk")) $("dpNewOk").onclick = createFolderAndPick;
+}
+function createFolderAndPick(){
+  var name = (A.newFolderName||"").trim();
+  if(!name || /[\\\/:]/.test(name)){ toast("文件夹名字不能为空，也不能含 \\ / :"); return; }
+  A.pickKind = "create";
+  applyDirPicker(joinPath(A.browsePath, name));
+}
+function applyDirPicker(path){
+  var p = normPath(path);
+  if(!p) return;                       /* 此电脑本身不是目录，选不了 */
+  A.newDir = p;
+  A.newErr = null;
+  closeDirPicker();
+  if(sheetState.type === "new") paintSheet();
+}
+$("dpCancel").onclick = closeDirPicker;
+/* 「选择此文件夹」= 选当前所在的那一层（浏览到哪一层就选哪一层，跟系统文件夹选择器一致）。 */
+$("dpOk").onclick = function(){ A.pickKind = "existing"; applyDirPicker(A.browsePath); };
+
 $("sheetClose").onclick = closeSheet;
 $("scrim").onclick = closeSheet;
-document.addEventListener("keydown", function(e){ if(e.key==="Escape") closeSheet(); });
+document.addEventListener("keydown", function(e){ if(e.key==="Escape"){
+  if(A.dirPickOpen){ closeDirPicker(); return; }   /* 弹窗开着时先关弹窗，不关底下的新建弹层 */
+  closeSheet(); } });
 $("consoleHead").onclick = function(){ $("console").classList.toggle("collapsed"); };
 $("navRow").onclick = function(e){ var b = e.target.closest("[data-go]"); if(b) location.hash = b.dataset.go; };
 $("connSel").onchange = function(){ A.conn = this.value; A.clearArmed = false; render(); };
 $("scenSel").onchange = function(){ A.chatScenario = this.value; render(); };
 $("ctxSel").onchange  = function(){ A.ctx = this.value; render(); };
+/* 控制台只决定「这台电脑能不能为这次创建新建目录」。 */
+$("mkdirSel").onchange = function(){ A.mkdirCase = this.value;
+  if(A.dirPickOpen) paintDirPicker();
+  else if(sheetState.type === "new" && !sheetState.key) paintSheet(); };
 $("cbDeg").onchange    = function(){ A.degradeDemo = this.checked; render(); };
-window.addEventListener("hashchange", function(){ A.query=""; A.filter="all"; render(); });
+/* 应用内路由栈：判定「有没有上一页」只看我们自己走过的路由。
+   直接打开深链（分享链接/通知/图标进入某会话）时 history.length 也 >1——那是标签页的初始条目，
+   照它判定会把用户带出应用（实测会落到 about:blank），所以不能再用 history.length。 */
+function trackRoute(h){
+  var st = A.navStack;
+  if(st.length >= 2 && st[st.length-2] === h){ st.pop(); return; }   /* 这是回退 */
+  if(st[st.length-1] !== h) st.push(h);
+}
+window.addEventListener("hashchange", function(){ trackRoute(location.hash || "#/dirs"); A.query=""; A.filter="all"; A.page=1; render(); });
 
 if(!location.hash) location.hash = "#/dirs";
+A.navStack = [location.hash || "#/dirs"];   /* 起点：当前这一页就是栈底 */
 render();
 setTimeout(function(){
   var st = $("stream");
