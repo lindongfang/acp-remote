@@ -266,9 +266,9 @@ function compositionWithoutNetwork(): Composition {
   } as unknown as PlatformPorts;
   return createComposition({
     platform,
-    // 配对入口的前置校验（`pairing-origin-secure-context`）：本文件用的是 `https://…` 形态的来源，
-    // jsdom 的全局默认（`http://localhost`、无 `isSecureContext`）会先被判成非安全上下文，
-    // 于是所有配对路径都停在环境校验处——这里注入与本文件载荷一致的事实。
+    // 配对入口的前置校验（`pairing-origin-secure-context`）：本套件跑在 vitest 的 `environment: "node"`
+    // 下——没有 `globalThis.isSecureContext`（默认替身因此判成非安全上下文），也没有真实地址栏；而本文件
+    // 用的是 `https://…` 形态的来源与载荷，因此这里注入与本文件载荷一致的环境事实。
     secureContext: () => true,
     origin: () => ORIGIN,
     // 一次请求都不该发出：配对内容在校验阶段就被挡下。
