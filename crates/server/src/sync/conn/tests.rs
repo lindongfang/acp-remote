@@ -28,6 +28,8 @@
 //! | feature 交集（排序去重） | `selected_features_are_the_sorted_intersection` |
 //! | 出站队列双上限与序号账本 | `the_message_high_water_is_reported_without_consuming_a_sequence`、`the_byte_budget_triggers_before_the_message_count` |
 //! | 持续过慢的判定口径（§14 的两级背压） | `the_saturation_clock_survives_jitter_and_clears_only_below_the_low_water_mark`、`a_connection_that_stays_at_high_water_is_closed_after_the_grace`、`a_transient_burst_that_drains_does_not_trip_the_slow_consumer_watchdog`、`a_heartbeat_send_at_high_water_defers_instead_of_closing` |
+//! | 写路径有期限、对端不读时连接被有界收尾（delta spec 的第一个 Scenario） | `a_peer_that_never_reads_is_finalized_within_a_bounded_time` |
+//! | 写卡住期间判据仍被检查（delta spec 的第二个 Scenario） | `a_stuck_write_still_lets_the_session_judgments_run` |
 //! | §14 的认证前固定上限 | `the_sixth_in_flight_handshake_from_one_address_is_refused`（单 IP 在途握手 5 条）、`the_eleventh_authentication_attempt_from_one_address_is_rate_limited`（单 IP 新认证尝试 10 次/分钟）、`the_first_message_window_is_five_seconds_not_the_whole_fifteen`（首条消息 5 秒）、`an_oversized_client_hello_is_rejected_before_the_handshake`（hello 32 KiB）、`the_node_concurrent_connection_cap_refuses_the_extra_connection`（单节点 256 条） |
 //!
 //! 一处**刻意的测试手法**：心跳节奏 / 90 秒静默 / 30 秒慢消费者宽限 / 单节点并发 256 条用
@@ -37,6 +39,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1193,6 +1196,27 @@ async fn assert_eventually(mut condition: impl FnMut() -> bool, message: &str) {
     assert!(condition(), "{message}");
 }
 
+/// 在**有界**预算内轮询一个条件，失败时报出实测耗时。
+///
+/// [`assert_eventually`] 的预算固定为 [`IO_TIMEOUT`]（10 秒）——那对「链路恢复」够用，但「写路径必须
+/// 在宽限量级内被收尾」这类断言要证明的是**上界**，只有固定预算才说明得了「它没有被无限期拖着」。
+/// 与 `node_link/conn/tests.rs` 的同名 helper 逐条同构。
+async fn assert_eventually_within(
+    budget: Duration,
+    mut condition: impl FnMut() -> bool,
+    message: &str,
+) {
+    let started = Instant::now();
+    while !condition() {
+        assert!(
+            started.elapsed() < budget,
+            "等待超时（预算 {budget:?}，实测 {:?}）：{message}",
+            started.elapsed()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // 正常四消息握手
 // ---------------------------------------------------------------------------------------------
@@ -2167,6 +2191,222 @@ async fn a_transient_burst_that_drains_does_not_trip_the_slow_consumer_watchdog(
     );
     let _ = client.ping_round_trip(0x58).await;
     assert_eq!(harness.conn.registry().active(), 1, "连接必须保持可用");
+    harness.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 写路径的期限：对端不读时连接被有界收尾，且写卡住期间判据仍被检查
+// ---------------------------------------------------------------------------------------------
+
+/// 「持续饱和」用例的填充串字节数：32 KiB（与 `node_link/conn/tests.rs` 的同名常量逐条同构）。
+///
+/// **必须给足**，否则判定落到调度竞态上。队列判定是**条数 + 字节**双维度（`conn::registry` 的
+/// `consumed`）：进入是「条数 ≥ 2,000 或字节 ≥ 8 MiB」，退出是「条数 < 1,000 **且** 字节 < 4 MiB」。
+/// 小的填充串让字节维度不参与判定，于是「有没有脱离饱和」完全取决于**内核能替对端吸走多少条**——对端
+/// 一个字节都不读时，内核仍会先把 socket 缓冲吸满（本机 loopback 实测与整个队列同量级）。32 KiB 之后
+/// **字节**成为唯一绑定维度：队列顶到 8 MiB，内核即使把 socket 缓冲吸满也只带走几百 KB～几 MB，占用
+/// 不会掉到 4 MiB 之下 ⇒ 饱和段连续累计，判定只描述队列状态、不描述内核缓冲大小。顺带说清「填满
+/// socket」这一侧的形态：约 10～30 次这种大小的写就能填满 socket 缓冲，因此**写任务**在毫秒量级就停在
+/// 它那一帧上。
+const PRESSURE_FILLER_SATURATION_BYTES: usize = 32 * 1024;
+
+/// 「对端持续推流」的压力源：一个**独立 OS 线程**不停往会话的待发送队列投递填充消息。
+///
+/// 为什么是线程而不是 tokio 任务：投递循环在「队列还没到目标水位」时**不含任何 await**——换成 tokio
+/// 任务会一直占着运行时线程（`#[tokio::test]` 默认单线程运行时），会话与写任务都得不到执行权；而
+/// `target = Some(n)` 的形态又恰恰要求「生产者一直跑、会话照常推进」。线程与运行时并行执行，队列在
+/// 会话/写任务消费一条之后立刻被补上，两半的推进因此都不被生产者拖住。这与
+/// `node_link/conn/tests.rs` 的 [`OutboundPressure`] 同形（那里的补充理由是本用例要压「会话几乎不让出
+/// 执行权」；本侧的理由是单线程运行时下的公平性）。
+///
+/// - `target = Some(n)`：只在队列少于 `n` 条时投递，**从不触发高水位**（`saturated_for()` 保持
+///   `None`，tick 于是会走到心跳判定）；
+/// - `target = None`：一直投递到高水位，队列持续饱和（tick 走到慢消费者判定）。
+struct OutboundPressure {
+    sent: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OutboundPressure {
+    /// 由调用方给出填充消息 body 的压力源（内容只编码一次，线程里复用）。
+    fn spawn_with_filler(
+        handle: Arc<ConnectionHandle>,
+        target: Option<u64>,
+        filler: Value,
+    ) -> Self {
+        let sent = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let counter = Arc::clone(&sent);
+        let flag = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                let has_room = match target {
+                    Some(target) => handle.pending().messages < target,
+                    None => true,
+                };
+                if has_room {
+                    // 填充消息的 body 内容不参与任何断言（对端不读），`control.ping` 只提供一个合法的
+                    // 信封判别符；这里**不**走对端的 schema 校验，因此 filler 形状无关紧要。
+                    match handle.send(MessageType::ControlPing, &filler) {
+                        Ok(()) => {
+                            counter.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                        // 会话已结束（接收端被丢弃）：队列再没人消费，压力源收工。
+                        Err(SendFault::Closed) => break,
+                        // 高水位（`target = None` 时的常态）：让出 CPU 后立刻重试。
+                        Err(_) => {}
+                    }
+                }
+                std::thread::yield_now();
+            }
+        });
+        Self {
+            sent,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// 压力源已成功入队的填充消息数（用例据此断言队列确实被持续撑住，而不是只灌了一次）。
+    fn sent(&self) -> u64 {
+        self.sent.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for OutboundPressure {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// 「对端一个字节都不读」必须在**有界时间**内把连接收尾（delta spec 的第一个 Scenario）。
+///
+/// 与 `node_link/conn/tests.rs` 的同名用例逐条同构（`design.md` D6：两侧同构只改写路径）：慢客户端 +
+/// 32 KiB 填充串压力源，但压力源按**条数**停在 `UNSATURATED_QUEUE_MESSAGES`（200 条，约 6.25 MiB）
+/// 处——**从不**触发高水位（`mark_saturated` 只在容量判定拒绝投递时调用），`saturated_for()` 因此保持
+/// `None`——慢消费者看门狗**没有**判据可用。能收尾这条连接的只剩「每帧写期限」（与宽限同窗口，本用例
+/// 注入 `GRACE`），这正是本用例的判别力：把写期限去掉或调到极大，它会变红；「看门狗顺手断开」不会让它
+/// 变绿。
+///
+/// 收尾判据取**从注册表摘除**：写期限到期时写任务已丢弃写半边，按规格不再发任何后续帧（含 close
+/// 帧），因此这里断言的是「连接从注册表消失」，而不是「连接还在注册表里但什么都不做」。
+#[tokio::test]
+async fn a_peer_that_never_reads_is_finalized_within_a_bounded_time() {
+    const GRACE: Duration = Duration::from_millis(1_500);
+    // 32 KiB × 200 ≈ 6.25 MiB：低于 8 MiB 的字节高水位，也远不到 2,000 条的条数高水位 ⇒ 队列常驻非空
+    // 但从不饱和（`saturated_for()` 为 `None`，看门狗无从判定）。
+    const UNSATURATED_QUEUE_MESSAGES: u64 = 200;
+
+    let harness = Harness::with_tuning(
+        SyncConfig::default(),
+        Tuning {
+            // 心跳节奏取远大于本用例窗口的值：不让服务端 ping 混进队列水位。静默窗口取远大于收尾预算的
+            // 值：这条连接不是被静默判定收尾的。
+            windows: Some((Duration::from_secs(300), Duration::from_secs(90), GRACE)),
+            connection_cap: None,
+        },
+    )
+    .await;
+    let _ = harness.approved_device_pairing(&["session.read"]).await;
+
+    let mut slow = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
+    let _ = authenticated(&mut slow, DEVICE_ID, DEVICE_ORIGIN, false).await;
+    let handle = harness
+        .conn
+        .registry()
+        .handles()
+        .pop()
+        .expect("已认证连接必须已登记");
+    // 认证完成后一个字节都不再读：socket 缓冲很快被写任务填满，那一帧于是停在写期限上。
+    let pressure = OutboundPressure::spawn_with_filler(
+        Arc::clone(&handle),
+        Some(UNSATURATED_QUEUE_MESSAGES),
+        json!({ "padding": "x".repeat(PRESSURE_FILLER_SATURATION_BYTES) }),
+    );
+    assert_eventually(
+        || pressure.sent() >= 1,
+        "压力源必须真的投过消息（否则本用例什么都没证明）",
+    )
+    .await;
+    assert!(
+        !handle.saturated(),
+        "队列必须**不**饱和：本条收尾只能由写期限产生（看门狗没有判据）"
+    );
+
+    assert_eventually_within(
+        // 写期限与慢消费者宽限同窗口：宽限 + 收尾余量（收尾无需等到下一拍 tick——写任务结束会立刻
+        // 唤醒会话的 `select!`）。
+        GRACE + Duration::from_millis(1_000),
+        || harness.conn.registry().active() == 0,
+        "对端一个字节都不读时，连接必须在有界时间内被收尾，而不是一直停在「已连接」",
+    )
+    .await;
+
+    drop(pressure);
+    drop(slow);
+    harness.stop().await;
+}
+
+/// 写路径卡住期间，会话的判据（这里是静默判定）**仍被按窗口检查**（delta spec 的第二个 Scenario）。
+///
+/// 与 `node_link/conn/tests.rs` 的同名用例逐条同构：形态同样是「慢客户端 + 32 KiB 填充串压力源把队列
+/// 顶在字节高水位」，但两个窗口被拉开：静默窗口取 `SILENCE`（0.6 秒），写期限/看门狗窗口取
+/// `WRITE_WINDOW`（30 秒）。写卡住时若会话的 `select!` 仍在推进，静默判定必然先到；若写路径把会话卡住
+/// （例如把写内联回 `select!` 分支里 await），这条判定永远等不到执行——本用例因此是「写任务在推进、
+/// 判据在跑」与「整体停摆」的判别器。
+///
+/// 断言写成对**行为**的断言：连接在静默窗口量级内被收尾（从注册表摘除），而这个时间远小于写期限与
+/// 看门狗窗口（30 秒）——收尾只可能来自静默判定，不可能来自写期限或看门狗。（收尾预算含关闭路径的
+/// `CLOSE_DRAIN_BUDGET`：写卡住时排空按预算走满，因此给到 6 秒，仍远小于 30 秒。）
+#[tokio::test]
+async fn a_stuck_write_still_lets_the_session_judgments_run() {
+    const SILENCE: Duration = Duration::from_millis(600);
+    const WRITE_WINDOW: Duration = Duration::from_secs(30);
+
+    let harness = Harness::with_tuning(
+        SyncConfig::default(),
+        Tuning {
+            windows: Some((Duration::from_secs(300), SILENCE, WRITE_WINDOW)),
+            connection_cap: None,
+        },
+    )
+    .await;
+    let _ = harness.approved_device_pairing(&["session.read"]).await;
+
+    let mut slow = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
+    let _ = authenticated(&mut slow, DEVICE_ID, DEVICE_ORIGIN, false).await;
+    let handle = harness
+        .conn
+        .registry()
+        .handles()
+        .pop()
+        .expect("已认证连接必须已登记");
+    let pressure = OutboundPressure::spawn_with_filler(
+        Arc::clone(&handle),
+        None,
+        json!({ "padding": "x".repeat(PRESSURE_FILLER_SATURATION_BYTES) }),
+    );
+    assert_eventually(
+        || handle.saturated(),
+        "压力源必须把队列顶到高水位（写路径确实落后，否则本用例什么都没证明）",
+    )
+    .await;
+
+    // 静默窗口 + 一拍 tick + 关闭路径预算（排空与 join 各 2 秒），远小于写期限/看门狗窗口 30 秒。
+    assert_eventually_within(
+        SILENCE + Duration::from_millis(5_500),
+        || harness.conn.registry().active() == 0,
+        "写卡住期间静默判定仍必须按窗口生效（收尾远早于写期限/看门狗窗口）",
+    )
+    .await;
+
+    drop(pressure);
+    drop(slow);
     harness.stop().await;
 }
 

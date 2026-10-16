@@ -3,6 +3,14 @@
 //! [`WsConnection`] 只做帧级工作：把 text/binary 帧原样交给上层（是否拒绝 binary 由 `server::node_link`
 //! 按 §2.1 决定），按 `max_message_bytes` 在**分配大缓冲前**以 `1009` 拒绝超限消息，并提供 `close(code, reason)`。
 //!
+//! 一条连接可以经 [`WsConnection::split`] 拆成 [`WsReader`] 与 [`WsWriter`] 两半，**读半边只判定、写半边
+//! 只动作**。拆分的动机在会话侧（`node_link::conn::session`）：写路径要有期限、且不能让心跳/静默/慢消费者
+//! 看门狗跟着写一起停摆，因此写半边必须能交给一个独立的写任务；共享一个 `WebSocket` 的另一条路是
+//! `Arc<Mutex<WebSocket>>`，那会让 `recv` 与写互相阻塞，比要修的缺口更糟。超限就是这条分离的直接后果：
+//! [`WsReader::recv`] 仍**判定**超限（返回 [`WsError::MessageTooLarge`]），但 1009 close 帧改由调用方经
+//! [`WsWriter::close`] 发出（[`MESSAGE_TOO_LARGE_CLOSE`] 给出 code 与原因）——读半边没有写能力，而
+//! 「超限按 1009 关闭」是既有契约。未拆分的 [`WsConnection::recv`] 保留原有的「自己发 1009」行为。
+//!
 //! 「分配前拒绝」由底层 tungstenite 的 `max_frame_size` 保证：它解析帧头后就拒绝，早于任何 payload 分配
 //! （升级响应在 [`crate::transport::net::route`] 里把 `max_frame_size`/`max_message_size` 设为同一上限）。
 //! 该错误从 `axum` 冒泡出来时只带文本，因此判定集中在 [`message_too_large`] 一处，并有回归用例固定
@@ -17,9 +25,17 @@ use axum::extract::ws::Message;
 use axum::extract::ws::Utf8Bytes;
 use axum::extract::ws::WebSocket;
 use axum::extract::ws::close_code;
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt as _, StreamExt as _};
 
 /// 超限关闭时随 `1009` 给出的原因（协议未规定文本，这里只用于诊断，不含任何业务数据）。
 const MESSAGE_TOO_LARGE_REASON: &str = "message too large";
+
+/// 超限消息的关闭参数（`1009` + 原因）。
+///
+/// [`WsReader::recv`] 只判定超限，close 帧由调用方发出（读半边没有写能力）：调用方拿本常量调用
+/// [`WsWriter::close`]，与未拆分连接里 [`WsConnection::recv`] 自己发的那一帧同值。
+pub const MESSAGE_TOO_LARGE_CLOSE: (u16, &str) = (close_code::SIZE, MESSAGE_TOO_LARGE_REASON);
 
 /// tungstenite 对「帧/消息超过配置上限」的错误文本片段（`CapacityError::MessageTooLong`，0.29）。
 ///
@@ -39,7 +55,10 @@ pub enum WsMessage {
 /// 帧级错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WsError {
-    /// 单条消息超过 `max_message_bytes`：连接已按 `1009` 关闭。
+    /// 单条消息超过 `max_message_bytes`：这条连接必须按 `1009` 关闭。
+    ///
+    /// 未拆分的 [`WsConnection::recv`] 自己发这一帧；拆分后的 [`WsReader::recv`] 只判定，close 帧由
+    /// 调用方经 [`WsWriter::close`] 发出（参数见 [`MESSAGE_TOO_LARGE_CLOSE`]）。
     MessageTooLarge,
     /// 传输/协议层错误；文本只用于诊断，不含业务数据。
     Transport(String),
@@ -108,43 +127,30 @@ impl WsConnection {
     /// 接收下一条帧。
     ///
     /// 返回 `None` 表示连接已结束（对端关闭或流终止）；返回 `Some(Err(WsError::MessageTooLarge))` 表示
-    /// 对端发来的消息超过上限，连接已按 `1009` 关闭。ping/pong 由底层自动应答，不上交。
+    /// 对端发来的消息超过上限，连接**已由本方法**按 `1009` 关闭。ping/pong 由底层自动应答，不上交。
+    ///
+    /// 拆分后的读半边是 [`WsReader`]，它只判定超限、不自己发 1009（见 [`WsReader::recv`]）。
     pub async fn recv(&mut self) -> Option<Result<WsMessage, WsError>> {
-        loop {
-            match self.inner.recv().await {
-                None => return None,
-                Some(Ok(Message::Text(text))) => {
-                    return Some(Ok(WsMessage::Text(text.as_str().to_owned())));
-                }
-                Some(Ok(Message::Binary(bytes))) => return Some(Ok(WsMessage::Binary(bytes))),
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-                Some(Ok(Message::Close(_))) => return None,
-                Some(Err(error)) => {
-                    if message_too_large(&error, self.max_message_bytes) {
-                        self.send_close(close_code::SIZE, MESSAGE_TOO_LARGE_REASON)
-                            .await;
-                        return Some(Err(WsError::MessageTooLarge));
-                    }
-                    return Some(Err(WsError::Transport(error.to_string())));
-                }
+        match read_frame(&mut self.inner, self.max_message_bytes).await {
+            FrameRead::Message(message) => Some(Ok(message)),
+            FrameRead::Closed => None,
+            FrameRead::TooLarge => {
+                let (code, reason) = MESSAGE_TOO_LARGE_CLOSE;
+                self.send_close(code, reason).await;
+                Some(Err(WsError::MessageTooLarge))
             }
+            FrameRead::Transport(detail) => Some(Err(WsError::Transport(detail))),
         }
     }
 
     /// 发送一条文本帧。
     pub async fn send_text(&mut self, text: impl Into<String>) -> Result<(), WsError> {
-        self.inner
-            .send(Message::Text(Utf8Bytes::from(text.into())))
-            .await
-            .map_err(|error| WsError::Transport(error.to_string()))
+        send_text_frame(&mut self.inner, text.into()).await
     }
 
     /// 发送一条 binary 帧。
     pub async fn send_binary(&mut self, bytes: Bytes) -> Result<(), WsError> {
-        self.inner
-            .send(Message::Binary(bytes))
-            .await
-            .map_err(|error| WsError::Transport(error.to_string()))
+        send_binary_frame(&mut self.inner, bytes).await
     }
 
     /// 以给定 close code 关闭连接（`code` 必须是协议允许的取值，例如 `1009`/`4400`/`4401`/`4408`/`4410`/`4429`）。
@@ -154,12 +160,141 @@ impl WsConnection {
 
     /// 发送 close 帧；发送失败表示对端已经断开，此时直接放弃（连接随 `self` 一起关闭）。
     async fn send_close(&mut self, code: u16, reason: &str) {
-        let frame = CloseFrame {
-            code,
-            reason: Utf8Bytes::from(reason),
-        };
-        let _ = self.inner.send(Message::Close(Some(frame))).await;
+        send_close_frame(&mut self.inner, code, reason).await;
     }
+
+    /// 把连接拆成读半边与写半边。
+    ///
+    /// 两半各自被单独 poll：写半边因此可以交给一个独立的写任务（`node_link::conn::session` 的每连接写
+    /// 任务），读半边与判据留在会话任务里。`futures_util` 是本 crate 为这一形态新增的直接依赖：它只提供
+    /// `StreamExt::split`（`Arc<Mutex<WebSocket>>` 的共享写法会让 `recv` 与写互相阻塞，见模块文档）。
+    pub fn split(self) -> (WsReader, WsWriter) {
+        let (sink, stream) = self.inner.split();
+        (
+            WsReader {
+                inner: stream,
+                max_message_bytes: self.max_message_bytes,
+            },
+            WsWriter { inner: sink },
+        )
+    }
+}
+
+/// 一条已拆分连接的**读半边**：只做帧级判定，不做任何关闭动作。
+///
+/// 帧级语义与 [`WsConnection::recv`] 逐条一致，唯一差别是超限时**只判定**（返回
+/// [`WsError::MessageTooLarge`]）而**不**发 1009 close 帧——读半边没有写能力。关闭动作由调用方经
+/// [`WsWriter::close`] 发出（[`MESSAGE_TOO_LARGE_CLOSE`] 给出 code 与原因）。
+pub struct WsReader {
+    inner: SplitStream<WebSocket>,
+    max_message_bytes: usize,
+}
+
+impl WsReader {
+    /// 接收下一条帧。
+    ///
+    /// 返回 `None` 表示连接已结束（对端关闭或流终止）；返回 `Some(Err(WsError::MessageTooLarge))` 表示
+    /// 对端发来的消息超过上限（**本方法不发 close 帧**，调用方按 `1009` 关闭）；ping/pong 由底层自动
+    /// 应答，不上交。
+    pub async fn recv(&mut self) -> Option<Result<WsMessage, WsError>> {
+        match read_frame(&mut self.inner, self.max_message_bytes).await {
+            FrameRead::Message(message) => Some(Ok(message)),
+            FrameRead::Closed => None,
+            FrameRead::TooLarge => Some(Err(WsError::MessageTooLarge)),
+            FrameRead::Transport(detail) => Some(Err(WsError::Transport(detail))),
+        }
+    }
+}
+
+/// 一条已拆分连接的**写半边**：只做动作（写帧/关闭），不做判定。
+pub struct WsWriter {
+    inner: SplitSink<WebSocket, Message>,
+}
+
+impl WsWriter {
+    /// 发送一条文本帧。
+    pub async fn send_text(&mut self, text: impl Into<String>) -> Result<(), WsError> {
+        send_text_frame(&mut self.inner, text.into()).await
+    }
+
+    /// 发送 close 帧（`1009` 与协议级 close 都由调用方经这里发出）。
+    ///
+    /// 发送失败表示对端已经断开，此时直接放弃——连接随写半边一起关闭。
+    pub async fn close(&mut self, code: u16, reason: &str) {
+        send_close_frame(&mut self.inner, code, reason).await;
+    }
+}
+
+/// 一帧的读结果。
+///
+/// 把「判定」与「动作」分开：超限（[`FrameRead::TooLarge`]）只描述对端违反了上限，是否发 `1009` 由
+/// 调用方决定（未拆分连接自己发、拆分后的读半边交给写半边）。
+enum FrameRead {
+    Message(WsMessage),
+    TooLarge,
+    Closed,
+    Transport(String),
+}
+
+/// 从流里取下一帧：text/binary 上交、ping/pong 由底层自动应答不上交、对端关闭返回
+/// [`FrameRead::Closed`]、超限返回 [`FrameRead::TooLarge`]（**不**在此发 close 帧）。
+///
+/// 拆分成两半之前（[`WebSocket`]）与之后（[`SplitStream<WebSocket>`]）走同一条路径，语义因此不会漂移。
+async fn read_frame<S>(stream: &mut S, max_message_bytes: usize) -> FrameRead
+where
+    S: futures_util::Stream<Item = Result<Message, Error>> + Unpin,
+{
+    loop {
+        match stream.next().await {
+            None => return FrameRead::Closed,
+            Some(Ok(Message::Text(text))) => {
+                return FrameRead::Message(WsMessage::Text(text.as_str().to_owned()));
+            }
+            Some(Ok(Message::Binary(bytes))) => {
+                return FrameRead::Message(WsMessage::Binary(bytes));
+            }
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            Some(Ok(Message::Close(_))) => return FrameRead::Closed,
+            Some(Err(error)) => {
+                if message_too_large(&error, max_message_bytes) {
+                    return FrameRead::TooLarge;
+                }
+                return FrameRead::Transport(error.to_string());
+            }
+        }
+    }
+}
+
+/// 发送一条文本帧（未拆分的连接与写半边共用）。
+async fn send_text_frame<S>(sink: &mut S, text: String) -> Result<(), WsError>
+where
+    S: futures_util::Sink<Message, Error = Error> + Unpin,
+{
+    sink.send(Message::Text(Utf8Bytes::from(text)))
+        .await
+        .map_err(|error| WsError::Transport(error.to_string()))
+}
+
+/// 发送一条 binary 帧（未拆分的连接与写半边共用）。
+async fn send_binary_frame<S>(sink: &mut S, bytes: Bytes) -> Result<(), WsError>
+where
+    S: futures_util::Sink<Message, Error = Error> + Unpin,
+{
+    sink.send(Message::Binary(bytes))
+        .await
+        .map_err(|error| WsError::Transport(error.to_string()))
+}
+
+/// 发送 close 帧；发送失败表示对端已经断开，此时直接放弃（连接随写半边一起关闭）。
+async fn send_close_frame<S>(sink: &mut S, code: u16, reason: &str)
+where
+    S: futures_util::Sink<Message, Error = Error> + Unpin,
+{
+    let frame = CloseFrame {
+        code,
+        reason: Utf8Bytes::from(reason),
+    };
+    let _ = sink.send(Message::Close(Some(frame))).await;
 }
 
 /// 判定一个帧级错误是否由「超过本连接配置的单条上限」触发。
