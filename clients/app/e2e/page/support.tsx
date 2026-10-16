@@ -288,6 +288,15 @@ export type ScenarioOptions = FakeHostOptions & {
    * 仍是生产代码。
    */
   readonly fetch?: FetchLike;
+  /**
+   * 环境事实：本页是否处于安全上下文（`CompositionInputs.secureContext`）；缺省不注入、用生产实现。
+   *
+   * 与 `fetch` 同一理由注入：e2e 页面由 http 提供、二维码夹具的 `canonicalOrigin` 是 `https://…`，
+   * 要验「安全上下文不成立时明确失败」必须能把这条事实造出来。
+   */
+  readonly secureContext?: () => boolean;
+  /** 环境事实：本页实际来源（`CompositionInputs.origin`）；缺省不注入、用生产实现。 */
+  readonly origin?: () => string;
 };
 
 /**
@@ -357,14 +366,16 @@ export async function mountScenario(options: ScenarioOptions): Promise<Mounted> 
   registerRoutes([...(options.extraRoutes ?? []), options.route]);
   mountRoute(options.route);
 
-  // 配对 HTTPS 面：用例给了替身就用它，否则回到生产 `fetch`（组合根的缺省）。
-  // 分两支构造而不是写 `fetch: options.fetch`：`exactOptionalPropertyTypes` 下显式传
-  // `undefined` 与「不传」不是一回事，混在一支里会让「缺省即生产实现」变成类型错误。
-  const composition = createComposition(
-    options.fetch === undefined
-      ? { openSocket: host.openSocket }
-      : { openSocket: host.openSocket, fetch: options.fetch },
-  );
+  // 配对 HTTPS 面：用例给了替身就用它，否则回到生产 `fetch`（组合根的缺省）。环境事实
+  // （安全上下文 / 当前来源）同属可注入的一次性能力：给了就注入，没给就让组合根读浏览器全局
+  // ——用条件展开而不是 `options.fetch`，因为 `exactOptionalPropertyTypes` 下显式传
+  // `undefined` 与「不传」不是一回事。
+  const composition = createComposition({
+    openSocket: host.openSocket,
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    ...(options.secureContext === undefined ? {} : { secureContext: options.secureContext }),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
+  });
   const root = createRoot(container);
   root.render(createElement(HarnessLayout, { composition }));
 

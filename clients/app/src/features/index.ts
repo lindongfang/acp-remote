@@ -168,6 +168,9 @@ export {
   applyPollResult,
   applyScannedNodeLink,
   applyScannedQr,
+  canonicalOriginOf,
   initialPairingPageModel,
+  insecureContextFailure,
   kindMismatchFailure,
+  originMismatchFailure,
 } from "./pairing-model";

@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{Nullable, RawObject, Text, Uuid, ValueError};
 
-/// Sync v1 的错误码（34 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
+/// Sync v1 的错误码（35 个，顺序即 `docs/SYNC_PROTOCOL.md` §12.2 与 registry 的顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     /// `protocol.invalid_json`
@@ -38,6 +38,8 @@ pub enum ErrorCode {
     AuthDeviceRevoked,
     /// `auth.origin_mismatch`
     AuthOriginMismatch,
+    /// `auth.insecure_context`
+    AuthInsecureContext,
     /// `auth.proof_invalid`
     AuthProofInvalid,
     /// `authorization.scope_denied`
@@ -86,7 +88,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 sync 列表逐条相等。
-    pub const ALL: [ErrorCode; 34] = [
+    pub const ALL: [ErrorCode; 35] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -99,6 +101,7 @@ impl ErrorCode {
         ErrorCode::AuthDeviceUnknown,
         ErrorCode::AuthDeviceRevoked,
         ErrorCode::AuthOriginMismatch,
+        ErrorCode::AuthInsecureContext,
         ErrorCode::AuthProofInvalid,
         ErrorCode::AuthorizationScopeDenied,
         ErrorCode::PairingAlreadyClaimed,
@@ -154,6 +157,7 @@ impl ErrorCode {
             ErrorCode::AuthDeviceUnknown => "auth.device_unknown",
             ErrorCode::AuthDeviceRevoked => "auth.device_revoked",
             ErrorCode::AuthOriginMismatch => "auth.origin_mismatch",
+            ErrorCode::AuthInsecureContext => "auth.insecure_context",
             ErrorCode::AuthProofInvalid => "auth.proof_invalid",
             ErrorCode::AuthorizationScopeDenied => "authorization.scope_denied",
             ErrorCode::PairingAlreadyClaimed => "pairing.already_claimed",

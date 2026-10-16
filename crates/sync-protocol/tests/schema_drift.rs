@@ -472,8 +472,8 @@ fn error_codes_and_retryable_match_registry() {
 
     assert_eq!(
         declared.len(),
-        34,
-        "v1 的 sync 错误码应为 34 个（registry 有 {} 个）",
+        35,
+        "v1 的 sync 错误码应为 35 个（registry 有 {} 个）",
         registered.len()
     );
     assert_eq!(

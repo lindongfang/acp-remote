@@ -127,8 +127,11 @@ import {
   applyPollResult,
   applyScannedNodeLink,
   applyScannedQr,
+  canonicalOriginOf,
   initialPairingPageModel,
+  insecureContextFailure,
   kindMismatchFailure,
+  originMismatchFailure,
   pairedHostRecordFor,
   pairedHostWriteFailure,
   publicErrorForCloseoutFailure,
@@ -1249,7 +1252,10 @@ export class ClientStore {
     await this.#beginPairing(text, kind);
   }
 
-  /** 结构校验 → 类型校验 → claim → 首次轮询。校验不过时在这里收口，绝不发请求。 */
+  /**
+   * 结构校验 → 安全上下文 → 来源一致 → 类型校验 → claim → 首次轮询。任一校验不过都在这里收口，
+   * 绝不发请求（design D1 的顺序：环境事实在前，需要载荷的类型校验在最后）。
+   */
   async #beginPairing(text: string, expectedKind: PairingKind): Promise<void> {
     const wiring = this.#pairing;
     if (wiring === null) return;
@@ -1263,6 +1269,32 @@ export class ClientStore {
         pairing: applyPairingFailure(this.#state.pairing, publicErrorForQrInput(error)),
       });
       return;
+    }
+
+    // 环境事实（design D1）：读完载荷之后、发任何请求之前，把「这一页根本不该配对」的
+    // 两条前置条件收口。顺序是**安全上下文 → 来源一致 → 载荷类型**，类型校验保持在最后
+    // （它需要已读出的载荷）：用户看到的第一条原因因此是最根本的那条，也不存在第二条绕过路径。
+    if (!wiring.isSecureContext()) {
+      this.#commit({
+        ...this.#state,
+        pairing: applyPairingFailure(this.#state.pairing, insecureContextFailure()),
+      });
+      return;
+    }
+
+    // 来源一致（design D4）：二维码声明的 `canonicalOrigin` 必须与本页实际来源一致。两侧
+    // 过**同一条**归一化口径（§3.2 的 `canonicalOriginOf`）再逐字比较，不新造字符串比较；
+    // node-link 载荷没有 `canonicalOrigin`，来源一致不适用于它（它由下面的类型校验收口）。
+    if (read.kind === "sync") {
+      const declaredOrigin = canonicalOriginOf(read.qr.canonicalOrigin);
+      const currentOrigin = canonicalOriginOf(wiring.currentOrigin());
+      if (declaredOrigin === null || declaredOrigin !== currentOrigin) {
+        this.#commit({
+          ...this.#state,
+          pairing: applyPairingFailure(this.#state.pairing, originMismatchFailure()),
+        });
+        return;
+      }
     }
 
     // 类型校验（design D2/D3）：载荷的类型由组合根在读取时标注，这里只把它与**路由声明的**类型

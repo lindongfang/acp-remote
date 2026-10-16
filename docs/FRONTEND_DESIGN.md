@@ -3,6 +3,7 @@
 > 状态：编码前客户端约束  
 > 版本：0.5
 > 修订记录（2026-10-16，`node-link-pair-route`）：§4.1 登记新增路由 `/node-link/pair`（与 `/pair` 共用同一入口主体）与「两类配对入口互不混淆」的口径，并记下该路径与协议保留前缀的关系；§9 追加两条入口区分用例。  
+> 修订记录（2026-10-16，`pairing-origin-secure-context`）：§4.5 把「来源与 secure context 校验尚未实现」改写成实绩——配对入口在读载荷之后、发任何请求之前依次校验安全上下文、来源一致与载荷类型，环境事实经组合根注入，失败码为 `auth.origin_mismatch` / 新增的 `auth.insecure_context`。  
 > 修订记录（2026-10-16，`frontend-sync-wiring`）：§4.1 写回「主机连接与首次配对」的实绩与两处未闭合边界；§4.5 写回配对秘密的清理口径与尚未实现的来源校验；§5 补阻断态的封闭成因词表与「与普通断网可分、阻断后结构性停止自动重连」；§9 写回前端级验收证据，并如实登记尚未执行的真实 Daemon 浏览器级端到端验收。  
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4）：§4.3 把分发图示的托管位置由 `/ui` 改为**根目录**，写回「静态资源嵌入二进制」的裁定、理由与代价（含发布构建缺产物即拒绝启动）；§11 的「静态资源嵌入二进制还是作为旁路资源安装」待决项按该节的结项规则结项，其余条目不变。  
 > 修订记录（2026-10-12）：§4.1 补对话页口径（时间线与结构化卡片、输入与提交、取消、授权与提问应答的可用边界、模型与模式、变更文件右栏边界、宽窄两形态）；§6 明确「呈现覆盖由客户端自持」——协议的事件类型词表只决定解析，客户端自己的覆盖集合决定呈现，未被覆盖的已知事件一律走降级卡片，没有第三种结果。  
@@ -201,7 +202,7 @@ PWA 不需要独立云服务器。`[决定]`（2026-10-15，`sync-ui-hosting`）
 - 浏览器清理站点数据、切换浏览器 profile 或不支持所需密码学能力时，视为设备密钥丢失，需要重新配对。
 - PWA 的设备身份强度不得描述为等同于 iOS Keychain 或 Android Keystore。
 
-`[实现现状]`（2026-10-16，`frontend-sync-wiring`）配对秘密的清理口径落在组合根与 store 上（`clients/app/src/composition.ts`、`src/features/pairing-model.ts`、`src/features/client-store.ts`）：秘密经二维码内容进入（配对页粘贴的整段内容，或经地址片段自动读入），组合根 `takePairingFragment` **先读后清**——只对 `data=` 形态调 `history.replaceState`，且新地址保留 pathname 与 search（其余形态的片段既不解析也不清除，避免清掉别人的语义），因此秘密不留在地址历史里；读到的载荷只活在 `ClientStore` 的**私有**会话字段里，已批准或进入终态时立即丢弃。`ClientState` 是可导出、可快照的公开状态，其中没有承载秘密的槽位，秘密因此不进缓存摘要、可导出状态与出站 URL。**未实现（相邻项）**：[SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §7.1 还要求 PWA 校验「当前 origin 与 secure context」，本变更只校验了过期时间与字段长度，来源与 secure context 校验尚未实现。
+`[实现现状]`（2026-10-16，`frontend-sync-wiring`）配对秘密的清理口径落在组合根与 store 上（`clients/app/src/composition.ts`、`src/features/pairing-model.ts`、`src/features/client-store.ts`）：秘密经二维码内容进入（配对页粘贴的整段内容，或经地址片段自动读入），组合根 `takePairingFragment` **先读后清**——只对 `data=` 形态调 `history.replaceState`，且新地址保留 pathname 与 search（其余形态的片段既不解析也不清除，避免清掉别人的语义），因此秘密不留在地址历史里；读到的载荷只活在 `ClientStore` 的**私有**会话字段里，已批准或进入终态时立即丢弃。`ClientState` 是可导出、可快照的公开状态，其中没有承载秘密的槽位，秘密因此不进缓存摘要、可导出状态与出站 URL。来源与 secure context 校验已一并落地（`pairing-origin-secure-context`）：配对入口（唯一入口 `ClientStore.#beginPairing`）在读完载荷之后、发任何请求之前，依次校验**安全上下文 → 来源一致 → 载荷类型**，任一条不过都明确失败且**一个 claim/status 都不发**。环境事实（是否安全上下文、当前来源）经组合根 `CompositionInputs` 注入（默认读浏览器全局 `isSecureContext` 与 `location.origin`，与 `fetch` 同属一次性能力的注入面，不动 `src/platform/**` 的冻结成员表）；来源比较复用 §3.2 的 canonical origin 口径（浏览器 `URL.origin`），不另造字符串比较。失败码取自封闭词表：来源不符复用既有的 `auth.origin_mismatch`，非安全上下文用新增的 `auth.insecure_context`（已按 §6/§9 的同步清单登记 `compatibility/errors/v1/errors.json`、`schemas/sync/v1/common.schema.json` 的 enum 与 `docs/SYNC_PROTOCOL.md` §12.2）。非安全上下文明确拒绝，不回退到可导出形式的密钥、也不静默降级。
 
 完整决策和信任边界见 [ADR-0001](./adr/0001-pwa-identity-and-secure-transport.md)。Noise 不进入第一阶段，仅保留为未来不可信中继场景的可选 Transport Profile。
 

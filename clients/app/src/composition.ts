@@ -36,6 +36,9 @@
  *   这里的接线拿到网络（`HttpPairingTransport`）、地址栏（读片段并**立即**清除）、本地存储
  *   （已配对主机记录）与时钟（轮询节奏）。页面与组件因此不碰这些能力；
  *   配对完成后同一条装配路径（`adoptPairedHost`）把连接建起来，不会出现第二份连接装配。
+ * - 环境事实：配对入口的「安全上下文」与「来源一致」两条校验经 `CompositionInputs` 的
+ *   `secureContext` / `origin` 注入（缺省读浏览器全局 `isSecureContext` 与 `location.origin`）。
+ *   它们与 `fetch` 同属一次性能力的注入面，因此**不**占 `src/platform/**` 的冻结成员表（design D2）。
  */
 
 import {
@@ -785,6 +788,16 @@ export interface CompositionInputs {
   /** 配对 HTTPS 面；缺省全局 `fetch`。 */
   readonly fetch?: FetchLike;
   /**
+   * 环境事实：本页是否处于安全上下文（design D2）；缺省读浏览器全局 `isSecureContext`。
+   *
+   * 与 `fetch` 同属「一次性能力」的注入面（而不是有状态的平台端口）：非安全上下文与跨来源
+   * 这两个形态在正常测试环境里造不出来，必须可注入才能写成断言；`src/platform/**` 的成员表
+   * 是冻结的装配面，环境事实因此不走平台端口。
+   */
+  readonly secureContext?: () => boolean;
+  /** 环境事实：本页实际来源（§3.2 的 canonical origin）；缺省读浏览器全局 `location.origin`。 */
+  readonly origin?: () => string;
+  /**
    * 五个端口的覆盖入口；每一项缺省即用本文件的生产实现。
    *
    * 这是组合根作为**唯一装配点**该有的接缝：退避定时、随机源与摘要在这里可被替身接管，
@@ -828,6 +841,8 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
   const platform = inputs.platform ?? openPlatform();
   const openSocket = inputs.openSocket ?? openWebSocket;
   const fetchImpl = inputs.fetch ?? defaultFetch;
+  const secureContext = inputs.secureContext ?? defaultSecureContext;
+  const currentOrigin = inputs.origin ?? defaultOrigin;
 
   const clock = inputs.ports?.clock ?? clockPort;
   const random = inputs.ports?.random ?? randomPort;
@@ -879,6 +894,9 @@ export function createComposition(inputs: CompositionInputs = {}): Composition {
     schedule: (delayMs, task) => clock.schedule(delayMs, task),
     // 每次轮询换新的 nonce（§7.3）：随机源只由组合根持有（CSPRNG 端口）。
     nextRequestNonce: () => encodeBase64Url(random.bytes(32)),
+    // 环境事实（design D2）：缺省读浏览器全局，入口据此校验安全上下文与来源一致。
+    isSecureContext: secureContext,
+    currentOrigin,
   };
 
   const store = new ClientStore({
@@ -1078,3 +1096,14 @@ const defaultFetch: FetchLike = async (url, init) => {
     json: () => response.json() as Promise<unknown>,
   };
 };
+
+/**
+ * 默认环境事实：`isSecureContext` 是页面自己的安全上下文判定（PWA 形态即 https 或 loopback）。
+ *
+ * 惰性读全局、不在装配期取值：测试环境下 `globalThis` 上可能没有这两个成员，而只有在入口
+ * 真正做校验时（注入替身或真实浏览器）才会被调用。
+ */
+const defaultSecureContext = (): boolean => globalThis.isSecureContext === true;
+
+/** 默认环境事实：本页实际来源——`location.origin` 本身就是 §3.2 的 canonical origin 形态。 */
+const defaultOrigin = (): string => globalThis.location?.origin ?? "";

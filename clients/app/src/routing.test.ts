@@ -266,6 +266,11 @@ function compositionWithoutNetwork(): Composition {
   } as unknown as PlatformPorts;
   return createComposition({
     platform,
+    // 配对入口的前置校验（`pairing-origin-secure-context`）：本套件跑在 vitest 的 `environment: "node"`
+    // 下——没有 `globalThis.isSecureContext`（默认替身因此判成非安全上下文），也没有真实地址栏；而本文件
+    // 用的是 `https://…` 形态的来源与载荷，因此这里注入与本文件载荷一致的环境事实。
+    secureContext: () => true,
+    origin: () => ORIGIN,
     // 一次请求都不该发出：配对内容在校验阶段就被挡下。
     fetch: async () => {
       throw new Error("本用例的配对内容应在结构校验阶段失败，不应发出任何请求");

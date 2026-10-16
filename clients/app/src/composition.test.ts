@@ -248,6 +248,11 @@ function setup(
       fetches.push({ url, method: init.method, body: init.body });
       return respond(url, init);
     },
+    // 环境事实（design D2）：配对入口据此校验安全上下文与来源一致。夹具二维码的
+    // `canonicalOrigin` 是 `ORIGIN`，因此替身默认「安全上下文 + 来源等于 ORIGIN」，
+    // 让这些用例判的是配对链路的接线而不是环境前置条件（后者由 pairing-model.test.ts 覆盖）。
+    secureContext: () => true,
+    origin: () => ORIGIN,
   });
   return { composition, sockets, cache, lifecycle, clock, fetches };
 }

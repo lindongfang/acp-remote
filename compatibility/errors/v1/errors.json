@@ -17,6 +17,7 @@
         { "code": "auth.device_unknown", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "auth.device_revoked", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "auth.origin_mismatch", "retryable": false, "details": null, "delivery": "mvp" },
+        { "code": "auth.insecure_context", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "auth.proof_invalid", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "authorization.scope_denied", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "pairing.already_claimed", "retryable": false, "details": null, "delivery": "mvp" },

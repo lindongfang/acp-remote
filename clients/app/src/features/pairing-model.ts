@@ -160,6 +160,20 @@ export interface PairingWiring {
   schedule(delayMs: number, task: () => void): () => void;
   /** 每次轮询换新的 `requestNonce`（base64url-32 字节）；随机源只由组合根持有。 */
   nextRequestNonce(): string;
+  /**
+   * 环境事实：本页是否处于安全上下文（`isSecureContext`；PWA 形态即 https 或 loopback）。
+   *
+   * 与网络、时钟一样由组合根从 `CompositionInputs` 注入（design D2）：非安全上下文在正常
+   * 测试环境里造不出来，必须可注入才能写成断言；`src/platform/**` 的成员表是冻结的装配面，
+   * 因此这类一次性环境事实不走平台端口。
+   */
+  isSecureContext(): boolean;
+  /**
+   * 环境事实：本页实际来源（§3.2 的 canonical origin；生产实现取 `location.origin`）。
+   *
+   * 与 {@link isSecureContext} 同一注入面：入口据此校验二维码声明的 `canonicalOrigin`。
+   */
+  currentOrigin(): string;
 }
 
 /** 状态轮询的节奏：§7.3 的状态查询可安全重复，两秒足以让「电脑上确认」后只剩一个窗口的延迟。 */
@@ -313,6 +327,54 @@ export function kindMismatchFailure(expected: PairingKind, actual: PairingKind):
 }
 
 /**
+ * 本页不在安全上下文（design D1/D3/D5）：明确失败，**不**回退到可导出形式的密钥、也不静默降级。
+ *
+ * 码取新增的 `auth.insecure_context`（封闭词表按 §6/§9 的同步清单登记，见
+ * `compatibility/errors/v1/errors.json`）。文案沿用词表里的建议动作，只说清环境不满足与下一步，
+ * 不回显任何载荷内容；`details` 一律留空（同 {@link kindMismatchFailure}）。
+ */
+export function insecureContextFailure(): PublicError {
+  return {
+    code: "auth.insecure_context",
+    message:
+      PAIRING_ERROR_HINTS["auth.insecure_context"] ??
+      "当前页面不在安全上下文（https 或 loopback）中：配对与设备密钥都要求安全上下文，请改用 https 打开本页后再配对。",
+    retryable: false,
+    details: {},
+  };
+}
+
+/**
+ * §3.2 的 canonical origin：小写 scheme、浏览器规范化 hostname 与显式有效 port，不含
+ * path/query/fragment 与尾部 `/`，默认端口省略。
+ *
+ * 复用浏览器自己的 `URL.origin`（与 `location.origin`、身份绑定检查同一条口径），因此这里
+ * **不**新造字符串比较；解析不出合法来源时返回 `null`，由调用方落成明确失败而不是抛异常。
+ */
+export function canonicalOriginOf(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 二维码声明的来源与本页实际来源不符（design D1/D3/D4）：**复用**既有的 `auth.origin_mismatch`。
+ *
+ * 入口的前置校验与事后的身份绑定（{@link publicErrorForTransportFailure}）落到同一条码与文案上；
+ * 文案来自封闭词表的建议动作，不回显任何载荷内容，`details` 留空。
+ */
+export function originMismatchFailure(): PublicError {
+  return {
+    code: "auth.origin_mismatch",
+    message: PAIRING_ERROR_HINTS["auth.origin_mismatch"] ?? "这个二维码来自另一个地址：请确认扫码对象。",
+    retryable: false,
+    details: {},
+  };
+}
+
+/**
  * 配对是否**正在进行**（内容已读到、还没走到终态）。
  *
  * 进行中意味着「这一刻持有一份含 `pairingSecret` 的二维码载荷」，因此这一段时间里
@@ -379,12 +441,7 @@ export function publicErrorForTransportFailure(error: unknown): PublicError {
   const originMismatch =
     typeof error === "object" && error !== null && "kind" in error && error.kind === "origin_mismatch";
   if (originMismatch) {
-    return {
-      code: "auth.origin_mismatch",
-      message: PAIRING_ERROR_HINTS["auth.origin_mismatch"] ?? "这个二维码来自另一个地址：请确认扫码对象。",
-      retryable: false,
-      details: {},
-    };
+    return originMismatchFailure();
   }
   return {
     code: "internal.unavailable",
@@ -460,6 +517,8 @@ export const PAIRING_ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> =
   "pairing.consumed": "二维码已被使用：请在电脑上重新生成。",
   "pairing.already_claimed": "这台电脑已经登记过本设备，可直接尝试连接。",
   "auth.origin_mismatch": "这个二维码来自另一个地址：身份不得跨来源迁移，请确认扫码对象。",
+  "auth.insecure_context":
+    "当前页面不在安全上下文（https 或 loopback）中：配对与设备密钥都要求安全上下文，请改用 https 打开本页后再配对。",
   "authorization.scope_denied": "电脑端没有授予本设备所需权限：请在电脑上调整权限后重试。",
   "protocol.invalid_json": "这段内容不是二维码里的配对载荷：请重新复制完整的二维码内容。",
   "protocol.schema_invalid": "这段内容不是本版本的配对载荷：请在电脑上重新生成二维码后重试。",
