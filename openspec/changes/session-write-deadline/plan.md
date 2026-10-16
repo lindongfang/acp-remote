@@ -16,6 +16,7 @@
 ### WP1 —— 传输层拆分与 node_link 写任务
 
 - 写范围：`crates/server/Cargo.toml`（新增 `futures-util`）、`crates/server/src/transport/net/ws.rs`（读写半边拆分；`recv` 的 1009 关闭改为返回判定）、`crates/server/src/node_link/conn/session.rs`（写任务、`write_now` 改为投递、模块文档改写）、`crates/server/src/node_link/conn/tests.rs`（回归：对端不读 ⇒ 有界收尾；写卡住期间判定仍被检查）。
+- 写范围的**检视期扩展**（第一轮检视提出、已接受）：根 `Cargo.toml` 的 `[workspace.dependencies]` 增加 `futures-util`（版本口径只在根，crate 侧用 `workspace = true`）与 `docs/MODULE_ARCHITECTURE.md` §3.1 的依赖登记（必要性/许可证/维护状态/被否决的替代方案）。理由：本仓库的依赖版本口径与选型结论有唯一来源，内联写死版本会让它落在来源之外；该扩展不改变任何行为。
 - 依赖：无（首个包）。
 - 验证：本地可跑的最小集在隔离区**不可执行**（无 `target/`）；由主 Agent 按 PV1/PV5 验证。
 

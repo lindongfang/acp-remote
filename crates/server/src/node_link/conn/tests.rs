@@ -37,6 +37,8 @@
 //! | 瞬时突发后回落不得断开、不影响其他连接 | `a_transient_burst_that_drains_does_not_disconnect_the_connection` |
 //! | 持续饱和的判定必须成立、且不拖住其他连接 | `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment`、`a_continuously_saturated_connection_does_not_stall_its_peer`、`a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog`（Scenario「真正持续过慢仍被断开」的两点：既被断开、其他连接不受影响） |
 //! | 持续饱和的连接仍会被断开 | `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` |
+//! | 写路径有期限、对端不读时连接被有界收尾 | `a_peer_that_never_reads_is_finalized_within_a_bounded_time` |
+//! | 写卡住期间心跳/静默/看门狗仍被按窗口检查 | `a_stuck_write_still_lets_the_session_judgments_run`、`a_busy_outbound_queue_does_not_starve_the_heartbeat`、`inbound_silence_still_closes_a_connection_with_a_busy_outbound_queue` |
 //! | 饱和期间心跳不停（不得因心跳停摆走静默关闭） | `the_tick_keeps_the_heartbeat_while_the_connection_is_saturated`、`a_heartbeat_deferred_by_the_high_water_mark_is_not_fatal` |
 //! | 饱和恢复后重新读取快照与事件批次 | `a_recovered_connection_resumes_catalog_batches_and_event_delivery` |
 //! | 审计与日志边界 | `handshake_completes_and_enters_the_business_phase`、`an_invalid_proof_is_closed_with_4401_and_audited` |
@@ -1395,6 +1397,26 @@ async fn assert_eventually(mut condition: impl FnMut() -> bool, message: &str) {
     }
 }
 
+/// 在**有界**预算内轮询一个条件，失败时报出实测耗时。
+///
+/// [`assert_eventually`] 的预算固定为 [`IO_TIMEOUT`]（10 秒）——那对「链路恢复」够用，但「写路径必须
+/// 在宽限量级内被收尾」这类断言要证明的是**上界**，只有固定预算才说明得了「它没有被无限期拖着」。
+async fn assert_eventually_within(
+    budget: Duration,
+    mut condition: impl FnMut() -> bool,
+    message: &str,
+) {
+    let started = Instant::now();
+    while !condition() {
+        assert!(
+            started.elapsed() < budget,
+            "等待超时（预算 {budget:?}，实测 {:?}）：{message}",
+            started.elapsed()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // R38/R39：认证前的消息准入
 // ---------------------------------------------------------------------------------------------
@@ -2360,8 +2382,8 @@ async fn a_transient_burst_that_drains_does_not_disconnect_the_connection() {
 /// **判据取规格实际用的那个量**：慢消费者看门狗的唯一判据是 `saturated_for() >= slow_consumer`
 /// （`session.rs` 的 `tick_action`）——「当前饱和段已持续的时长」。因此本用例断言「观测到一个
 /// 饱和段连续累计到宽限之上」，同时对照组一直在正常往来（R81 的另一半）。它**不断言**每一轮
-/// 占用都在低水位之上：会话的 `send_text` 只把数据交给内核（`transport/net/ws.rs` 没有写期限），
-/// 只要内核还吸得下、占用就会往下走，把「内核吸收了多少」当成常量正是下面那条记录的共同病根。
+/// 占用都在低水位之上：出站帧只交给每连接的写任务（`conn::session` 的写任务），写任务再把数据交给
+/// 内核，只要内核还吸得下、占用就会往下走，把「内核吸收了多少」当成常量正是下面那条记录的共同病根。
 ///
 /// **四次失败的口径（都记下来，避免再走）**：①断言「占用必须始终在低水位之上」；②把形状换成压力源
 /// 持续补货、并把上限抬到 schema 默认的 2,000 条（低水位 1,000 条）；③改成只看「单段连续时长」。
@@ -2375,17 +2397,25 @@ async fn a_transient_burst_that_drains_does_not_disconnect_the_connection() {
 /// 本版（④）把**字节**变成绑定维度，两个方向一起堵。填充串取
 /// [`PRESSURE_FILLER_SATURATION_BYTES`]（32 KiB）：①队列常驻 8 MiB（≈254 条，远不到 1,000 条的条数
 /// 低水位），内核吸走几百 KB～几 MB 也压不到 4 MiB 的字节低水位之下，段不会被清零；②填满 socket 只需
-/// 约 10～30 次 32 KiB 写（旧形状要约 1,850 次 4 字节写），写路径在毫秒量级就停住、远早于宽限（窗口内
-/// 实测占用恒为 254 条 / 8,372,508 B、一次都没往下走，就是「写路径已停」的直接证据）。判定因此只
-/// 描述队列状态，不描述内核缓冲大小。
+/// 约 10～30 次 32 KiB 写（旧形状要约 1,850 次 4 字节写），写任务在毫秒量级就停住（旧实现则是会话停在
+/// `send_text` 上）——④ 记录的「窗口内实测占用恒为 254 条 / 8,372,508 B、一次都没往下走」正是「写
+/// 路径已停、队列再没人消费」的直接证据。判定因此只描述队列状态，不描述内核缓冲大小。
 ///
-/// 「段 ≥ 宽限」与「连接还在」为什么能同时成立：对端不读、socket 缓冲吸满之后，会话停在
-/// `send_text` 上，`select!` 里的 tick 同样得不到轮询，宽限判定根本没机会执行（`transport/net/ws.rs`
-/// 没有写期限，这个缺口记在 `conn::session` 的模块文档里）。④ 的填充串让「吸满」在毫秒内完成，
-/// 所以这个状态在窗口内是稳定的，而不是靠运气。本用例只看「不拖住对端」。
+/// **写路径有期限之后（本变更）这条记录的条件变了**：对端不读、socket 缓冲吸满之后，停住的只是**写
+/// 任务**（`conn::session` 的写任务，每帧有与宽限同窗口的写期限），会话的 `select!` 照常轮询读半边与
+/// tick，因此宽限判定会**真的执行**：这条慢连接会在宽限量级被有界收尾（写期限或看门狗先到，见新增的
+/// `a_peer_that_never_reads_is_finalized_within_a_bounded_time`）。本用例只看「不拖住对端」，因此收尾
+/// 之后仍成立的两条断言照旧：断言的饱和段计时取自句柄（`slow_handle` 由用例持有，注册表摘除不影响
+/// 它），对照组全程可用。
 ///
-/// 这里**不**断言「该连接被断开」：断开判定由「队列持续饱和、写路径没卡住」的
-/// `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 与句柄级的
+/// 「段 ≥ 宽限」与「对端不受影响」为什么能同时成立：宽度窗口内对照组持续正常往来，而被测连接的饱和段
+/// 由句柄口径累计（句子里的 `saturated_for()` 不依赖连接是否还在）。本用例因此**不**断言「该连接还在
+/// 注册表里」——修复后它会被有界收尾，`active() == 2` 那条旧断言随缺口一起作废；「被有界收尾」的判据
+/// 归上面那条新用例。
+///
+/// 这里**也不**断言「该连接被断开」：断开判定由「队列持续饱和」的
+/// `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog`、写期限的
+/// `a_peer_that_never_reads_is_finalized_within_a_bounded_time` 与句柄级的
 /// `a_slow_consumer_that_never_recovers_keeps_its_saturation_segment` 覆盖，本用例只看「不拖住对端」。
 #[tokio::test]
 async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
@@ -2442,8 +2472,9 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
     // `saturated_for() >= slow_consumer`（`session.rs` 的 `tick_action`），即「当前饱和段已持续的
     // 时长」。因此这里断言「观测到一个饱和段连续累计到宽限之上」，而**不断言**每一轮占用都在
     // 低水位之上——后者把「内核吸收了多少」当成常量，是平台相关的量（前两版修法在 Linux CI 上
-    // 反复失败正是如此）。会话的 `send_text` 只把数据交给内核：只要某一刻压力源没补上、占用掉到
-    // 低水位之下，判定就会断一次，随后重新建立；那不影响看门狗，因为断开用的是「单段连续时长」。
+    // 反复失败正是如此）。出站帧只交给写任务（写任务再把数据交给内核）：只要某一刻压力源没补上、
+    // 占用掉到低水位之下，判定就会断一次，随后重新建立；那不影响看门狗，因为断开用的是「单段连续
+    // 时长」。句柄由本用例持有，注册表摘除（修复后会在宽限量级发生）不影响这里的口径。
     let deadline = Instant::now() + 2 * GRACE;
     let mut longest: std::time::Duration = std::time::Duration::ZERO;
     let mut observed_saturated = false;
@@ -2472,10 +2503,21 @@ async fn a_continuously_saturated_connection_does_not_stall_its_peer() {
         "必须观测到一个饱和段连续累计到宽限之上（实际 {:?}）——看门狗的判据正是这个量",
         longest
     );
-    assert_eq!(
-        harness.conn.registry().active(),
-        2,
-        "两条连接都必须还在（慢连接从未被判定为拖住对端）"
+    // 修复后写路径有期限、tick 也不再被写拖住：这条慢连接会在宽限量级被有界收尾（判据见新增的
+    // `a_peer_that_never_reads_is_finalized_within_a_bounded_time`），所以这里不再断言「两条连接都还
+    // 在」（那条断言正是缺口留下的）。本用例只看「不拖住对端」：对照组仍在注册表里、仍能往来。
+    let healthy_id = healthy
+        .connection_id
+        .as_deref()
+        .expect("认证后必须有 connectionId");
+    assert!(
+        harness
+            .conn
+            .registry()
+            .handles()
+            .iter()
+            .any(|handle| handle.connection_id().as_str() == healthy_id),
+        "持续饱和的慢连接不得拖住对照组：对照组必须仍在注册表里"
     );
     healthy.ping_round_trip(0xa2).await;
 
@@ -2546,10 +2588,11 @@ const PRESSURE_FILLER_DEFAULT_BYTES: usize = 4;
 ///
 /// 32 KiB 之后**字节**成为唯一绑定维度：队列顶到 8 MiB（≈254 条，远不到 1,000 条的低水位），内核
 /// 即使把 socket 缓冲吸满也只带走几百 KB～几 MB，占用不会掉到 4 MiB 之下 ⇒ 饱和段连续累计，判定只
-/// 描述队列状态、不描述内核缓冲大小。顺带把「顶满反而被看门狗断开」那个方向也堵住：填满 socket 只需
-/// 约 10～30 次这种大小的写，写路径在毫秒量级就停在 `send_text` 上、远早于宽限（详见用例文档）。
+/// 描述队列状态、不描述内核缓冲大小。顺带说清「填满 socket」这一侧的形态：约 10～30 次这种大小的写就能
+/// 填满 socket 缓冲，因此**写任务**在毫秒量级就停在它那一帧上（旧实现是会话停在 `send_text` 上）。判据
+/// 已不再依赖「写卡住」这一点（写路径现在有期限）：本常量只负责让队列的**字节**维度成为绑定维度。
 /// `saturate_with` 的旧注释里那句「需要足够大的消息把 socket 缓冲填满」说的就是这个量，但它当时只用
-/// 在句柄口径的 helper 上，没有接到本用例的压力源上。
+/// 在句柄口径的 helper 上，没有接到用例的压力源上。
 const PRESSURE_FILLER_SATURATION_BYTES: usize = 32 * 1024;
 
 /// 「对端持续推流」的用例里等 close 帧的预算：慢消费者宽限（用例里 1.5 秒）+ 关闭前排空已入队消息的
@@ -2792,20 +2835,26 @@ async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog(
     let handle = other_handle(&harness, &healthy);
     let pressure = OutboundPressure::spawn(Arc::clone(&handle), None);
 
+    // 前提检查必须在收尾**之前**：关闭序列会按 `CLOSE_DRAIN_BUDGET` 把已入队的帧交给写任务写完，队列
+    // 因此被排空——收尾之后再读 `saturated()` 只会看到 `false`（它描述的是此刻的队列状态，不是「曾经
+    // 饱和过」的粘性标志）。这里要证明的正是前提：压力源确实把队列顶到了高水位、慢消费者看门狗**有**
+    // 判据可用（`tick_action` 只看 `saturated_for()`），否则本用例什么都没证明。
+    assert_eventually(
+        || handle.saturated(),
+        "压力源必须把队列顶到高水位（`saturated_for()` 建立起持续的饱和段），否则本用例什么都没证明",
+    )
+    .await;
+    assert!(
+        pressure.sent() >= 10,
+        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
+        pressure.sent()
+    );
+
     client.step("出站队列持续饱和时的慢消费者看门狗");
     assert_eq!(
         client.expect_close_within(CLOSE_WAIT_BUDGET).await,
         close::NORMAL,
         "持续高水位必须在慢消费者宽限后断开"
-    );
-    assert!(
-        handle.saturated(),
-        "压力源必须让队列一直处于高水位（`saturated_for()` 持续为 Some）"
-    );
-    assert!(
-        pressure.sent() >= 10,
-        "压力源必须真的持续往队列里投递，实际只投了 {} 条",
-        pressure.sent()
     );
 
     // ③ 对照组不受影响：同 Owner 上的另一条连接仍在正常往来（Scenario 的后半句）。
@@ -2818,6 +2867,139 @@ async fn a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog(
         "断开一条不能拖垮其他连接：注册表必须只剩对照组那条",
     )
     .await;
+    harness.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 写路径的期限：对端不读时连接被有界收尾，且写卡住期间判据仍被检查
+// ---------------------------------------------------------------------------------------------
+
+/// 「对端一个字节都不读」必须在**有界时间**内把连接收尾（delta spec 的第一个 Scenario）。
+///
+/// 形态与 [`a_continuously_saturated_connection_does_not_stall_its_peer`] 相同（慢客户端 + 32 KiB 填充串
+/// 压力源），但压力源按**条数**停在 `UNSATURATED_QUEUE_MESSAGES`（200 条，约 6.4 MiB）处：**从不**触发
+/// 高水位（`mark_saturated` 只在容量判定拒绝投递时调用），`saturated_for()` 因此保持 `None`——慢消费者
+/// 看门狗**没有**判据可用。能收尾这条连接的只剩「每帧写期限」（与宽限同窗口，本用例注入 `GRACE`），这
+/// 正是本用例的判别力：把写期限去掉或调到极大，它会变红；「看门狗顺手断开」不会让它变绿。
+///
+/// 收尾判据取**从注册表摘除**：写期限到期时写任务已丢弃写半边，按规格不再发任何后续帧（含 close
+/// 帧），因此这里断言的是「连接从注册表消失」，而不是「连接还在注册表里但什么都不做」。
+#[tokio::test]
+async fn a_peer_that_never_reads_is_finalized_within_a_bounded_time() {
+    const GRACE: Duration = Duration::from_millis(1_500);
+    // 32 KiB × 200 ≈ 6.4 MiB：低于 8 MiB 的字节高水位，也远不到 2,000 条的条数高水位 ⇒ 队列常驻非空
+    // 但从不饱和（`saturated_for()` 为 `None`，看门狗无从判定）。
+    const UNSATURATED_QUEUE_MESSAGES: u64 = 200;
+
+    let harness = Harness::start_with_test_windows(
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
+        NodeLinkConfig {
+            public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+            max_pending_queue_messages: 2_000,
+            // 心跳取 schema 上限：本用例只看写路径的收尾，不让 ping 混进队列水位。
+            heartbeat_interval_ms: 300_000,
+            ..NodeLinkConfig::default()
+        },
+        // 静默窗口取远大于收尾预算的值：这条连接不是被静默判定收尾的。
+        Duration::from_secs(90),
+        GRACE,
+    )
+    .await;
+    let _ = harness.approved_pairing().await;
+
+    let mut slow = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
+    let handle = harness.conn.registry().handles()[0].clone();
+    // 认证完成后一个字节都不再读：socket 缓冲很快被写任务填满，那一帧于是停在写期限上。
+    let pressure = OutboundPressure::spawn_with_filler(
+        Arc::clone(&handle),
+        Some(UNSATURATED_QUEUE_MESSAGES),
+        json!({ "padding": "x".repeat(PRESSURE_FILLER_SATURATION_BYTES) }),
+    );
+    assert_eventually(
+        || pressure.sent() >= 1,
+        "压力源必须真的投过消息（否则本用例什么都没证明）",
+    )
+    .await;
+    assert!(
+        !handle.saturated(),
+        "队列必须**不**饱和：本条收尾只能由写期限产生（看门狗没有判据）"
+    );
+
+    assert_eventually_within(
+        // 写期限与慢消费者宽限同窗口：宽限 + 收尾余量（收尾无需等到下一拍 tick——写任务结束会立刻
+        // 唤醒会话的 `select!`）。
+        GRACE + Duration::from_millis(1_000),
+        || harness.conn.registry().active() == 0,
+        "对端一个字节都不读时，连接必须在有界时间内被收尾，而不是一直停在「已连接」",
+    )
+    .await;
+
+    drop(pressure);
+    drop(slow);
+    harness.stop().await;
+}
+
+/// 写路径卡住期间，会话的判据（这里是 90 秒静默判定）**仍被按窗口检查**（delta spec 的第二个
+/// Scenario）。
+///
+/// 形态同样是「慢客户端 + 32 KiB 填充串压力源把队列顶在字节高水位」，但两个窗口被拉开：静默窗口取
+/// `SILENCE`（0.6 秒），写期限/看门狗窗口取 `WRITE_WINDOW`（30 秒）。写卡住时若会话的 `select!` 仍在
+/// 推进，静默判定必然先到；若写路径把会话卡住（例如把写内联回 `select!` 分支里 await），这条判定永远
+/// 等不到执行——本用例因此是「写任务在推进、判据在跑」与「整体停摆」的判别器。
+///
+/// 断言写成对**行为**的断言：连接在静默窗口量级内被收尾（从注册表摘除），而这个时间远小于写期限与
+/// 看门狗窗口（30 秒）——收尾只可能来自静默判定，不可能来自写期限或看门狗。（收尾预算含关闭路径的
+/// `CLOSE_DRAIN_BUDGET`：写卡住时排空按预算走满，因此给到 6 秒，仍远小于 30 秒。）
+#[tokio::test]
+async fn a_stuck_write_still_lets_the_session_judgments_run() {
+    const SILENCE: Duration = Duration::from_millis(600);
+    const WRITE_WINDOW: Duration = Duration::from_secs(30);
+
+    let harness = Harness::start_with_test_windows(
+        TestWorld::with_store(Arc::new(FixedStore::new(
+            TEST_SERVER_EPOCH,
+            STORE_HEAD_SEQUENCE,
+        ))),
+        NodeLinkConfig {
+            public_origin: Some(TEST_PUBLIC_ORIGIN.to_owned()),
+            max_pending_queue_messages: 2_000,
+            heartbeat_interval_ms: 300_000,
+            ..NodeLinkConfig::default()
+        },
+        SILENCE,
+        WRITE_WINDOW,
+    )
+    .await;
+    let _ = harness.approved_pairing().await;
+
+    let mut slow = Client::connect(harness.addr).await;
+    let _ = authenticated(&mut slow, ACCESS_NODE, false).await;
+    let handle = harness.conn.registry().handles()[0].clone();
+    let pressure = OutboundPressure::spawn_with_filler(
+        Arc::clone(&handle),
+        None,
+        json!({ "padding": "x".repeat(PRESSURE_FILLER_SATURATION_BYTES) }),
+    );
+    assert_eventually(
+        || handle.saturated(),
+        "压力源必须把队列顶到高水位（写路径确实落后，否则本用例什么都没证明）",
+    )
+    .await;
+
+    // 静默窗口 + 一拍 tick + 关闭路径预算（排空与 join 各 2 秒），远小于写期限/看门狗窗口 30 秒。
+    assert_eventually_within(
+        SILENCE + Duration::from_millis(5_500),
+        || harness.conn.registry().active() == 0,
+        "写卡住期间静默判定仍必须按窗口生效（收尾远早于写期限/看门狗窗口）",
+    )
+    .await;
+
+    drop(pressure);
+    drop(slow);
     harness.stop().await;
 }
 

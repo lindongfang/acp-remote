@@ -1,8 +1,11 @@
 //! 一条 WSS 连接的会话驱动：握手状态机、信封/序号、心跳与每连接发送队列
 //! （`docs/NODE_LINK_PROTOCOL.md` §2/§12.2，`design.md` D2/D3/D9）。
 //!
-//! 一条连接 = 一个任务 = 一个 [`Session`]：握手与业务阶段都在同一任务里推进（不 spawn 子任务），
-//! 因此取消路径只有一条——`peer.shutdown`、对端关闭、致命协议错误或关闭请求，任一发生即结束整个会话。
+//! 一条连接 = 一个 [`Session`]（读半边 + 判据）+ 一个写任务（写半边）：握手与业务阶段都在会话任务里
+//! 推进，写半边则交给一个由会话**拥有**的写任务（[`WriterTask`]）。写任务存在的唯一理由是让判据不被
+//! 写路径拖住——见下节「写路径与写任务」。取消路径因此有两条：会话自身由 `peer.shutdown`、对端关闭、
+//! 致命协议错误或关闭请求结束；写任务由会话的关闭请求结束，超预算仍未结束则被取消（`abort`）——它由
+//! [`Session`] 持有并关闭，绝不是 detached 任务。
 //!
 //! 阶段划分（`node.hello → node.challenge → node.proof → node.ready`）：
 //!
@@ -42,9 +45,31 @@
 //! 节拍轮询到。「持续饱和 → 断开」因此在真实连接上可达：队列持续顶在高水位、出站分支每轮都就绪时，
 //! 看门狗仍在宽限后断开——用例
 //! `a_permanently_saturated_queue_still_reaches_the_slow_consumer_watchdog` 在真实连接上锁定了它。
-//! 仍存在的**相邻**缺口不在 tick 的调度上，而在写路径：对端一个字节都不读、socket 缓冲被填满时会话
-//! 阻塞在 `send_text`（`transport/net/ws.rs` 没有写期限），整个 `select!` 都得不到轮询——那是传输层
-//! 写期限的问题，不在本模块。
+//!
+//! **写路径与写任务**：判据要真的有机会执行，光有 tick 的调度口径还不够——写路径本身也必须**不会**把
+//! 会话任务卡住。因此连接在 [`Session`] 构造时就经 [`WsConnection::split`] 拆成读/写半边
+//! （`transport/net/ws.rs`）：读半边与判据留在会话任务里，写半边交给每连接一个写任务（[`WriterTask`]，
+//! `tokio::spawn` 出来的任务其所有者就是 [`Session`]）。写任务串行消费一个命令通道（帧 / close），
+//! 同一时刻至多一帧在写、帧序由单写者保证；出站帧由 `Event::Outbound` 交给它，会话**不再** await
+//! socket 写。于是对端一个字节都不读、socket 缓冲被填满时：写任务停在它那一帧上，而会话的 `select!`
+//! 照常轮询读半边与 tick——判据在最需要它的时候仍然成立。
+//!
+//! **每帧写期限**：写任务对每一帧用与慢消费者看门狗**同一个窗口**（`SLOW_CONSUMER_GRACE`）的
+//! `timeout`。到期即该连接的最终处置：半截帧不可恢复，因此不重试、不续写，**也不再发任何后续帧**
+//! （含 close 帧——在一个可能已经残缺的数据帧之后再发帧是畸形帧），记一条
+//! `event = "node_link.write_deadline"` 后直接丢弃写半边并结束写任务。会话侧据此以
+//! `Ending::TransportClosed` 收尾（不再发 close 帧）。这只是兜底：窗口内看门狗/静默判定仍会先给出
+//! 分级处置。
+//!
+//! **关闭顺序**：关闭 = 有界的三步。①会话按 `CLOSE_DRAIN_BUDGET` 把已入队消息交给写任务（撤销推送
+//! 必须先送达）；②发关闭请求（带 close code/reason），写任务按 FIFO 写完已入队的帧后**在预算内**尽力
+//! 发 close 帧并结束；③会话有界地 join 写任务（`CLOSE_DRAIN_BUDGET`），超时则放弃等待并 `abort` 它
+//! ——写半边随任务一起被丢弃，socket 随之关闭。取消路径不依赖某个特定的关闭顺序：命令发送端被丢弃
+//! 时，写任务写完已入队的帧后同样会结束。
+//!
+//! 关闭请求因此**不会**插队到「正在推进的帧」之前：它按 FIFO 排在已交给写任务的帧之后，撤销推送才
+//! 能真的先送达。写卡住时的有界性由第③步保证——`abort` 是比「放弃那一帧」更强的放弃：之后不再发任何
+//! 帧（与写期限到期同一口径，避免在一个可能残缺的数据帧之后再发帧）。
 //!
 //! 另注：`crate::sync::conn::session` 的同一处分支仍是 `} else if now >= next_ping {`——饱和期间它连自己
 //! `control.ping` 也不发（只对撞上高水位的投递做推迟）。本模块的规格明确要求饱和期间心跳照发，因此
@@ -79,7 +104,8 @@ use node_link_protocol::error::{ErrorCode, Ping, Pong};
 use node_link_protocol::handshake::{NodeChallenge, NodeHello, NodeProof, NodeReady};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::Instant as TokioInstant;
 use tracing::{debug, info, warn};
 
@@ -90,6 +116,7 @@ use crate::node_link::conn::wire::{self, Inbound};
 use crate::node_link::conn::{
     AUTH_ATTEMPTS_PER_MINUTE, AUTH_WINDOW, HANDSHAKE_TIMEOUT, MAX_TRACKED_IPS, close,
 };
+use crate::transport::net::ws::{MESSAGE_TOO_LARGE_CLOSE, WsReader, WsWriter};
 use crate::transport::net::{
     PeerInfo, RateLimit, RequestOrigin, SlidingWindowLimiter, WsConnection, WsError, WsHandler,
     WsMessage,
@@ -341,8 +368,11 @@ impl HandshakeState {
 /// 一条连接的会话。
 struct Session {
     conn: Arc<NodeLinkConn>,
-    /// 连接本体：`WsConnection::close` 消费所有权，因此会话持有 `Option`，关闭即 `take`（绝不二次关闭）。
-    connection: Option<WsConnection>,
+    /// 连接读半边：帧级读与判据都靠它，因此它留在会话任务里（写半边在 [`WriterTask`] 里）。
+    /// `WsReader::recv` 不自发 close 帧，会话持有 `Option` 只为在收尾时「丢弃即关闭」。
+    reader: Option<WsReader>,
+    /// 每连接写任务（写半边 + 所有者凭证，见模块文档「写路径与写任务」）。
+    writer: Option<WriterTask>,
     peer: PeerInfo,
     limits: SessionLimits,
     handshake: HandshakeState,
@@ -368,9 +398,13 @@ enum Flow {
 impl Session {
     fn new(conn: Arc<NodeLinkConn>, connection: WsConnection, peer: PeerInfo) -> Self {
         let limits = SessionLimits::negotiate(&conn.config);
+        // 读写半边在此拆开：写半边交给写任务，会话只留读半边与判据（模块文档「写路径与写任务」）。
+        let (reader, writer) = connection.split();
+        let writer = WriterTask::spawn(writer, conn.windows.slow_consumer);
         Self {
             conn,
-            connection: Some(connection),
+            reader: Some(reader),
+            writer: Some(writer),
             peer,
             limits,
             handshake: HandshakeState::default(),
@@ -380,6 +414,14 @@ impl Session {
     }
 
     async fn run(mut self) {
+        self.serve().await;
+        // 写任务由本会话持有：无论会话从哪条路径结束，都在这里按预算有界地收尾（拥有关闭顺序与取消
+        // 路径，见模块文档「关闭顺序」）。
+        self.finish_writer().await;
+    }
+
+    /// 会话主体（握手 → 业务）；结束方式由各阶段自己决定，收尾统一交给 [`Session::run`]。
+    async fn serve(&mut self) {
         let client_ip = self.peer.client_ip;
         // ① 认证尝试限流（§2.5：10 次/分钟/IP，键是接入层给出的真实对端地址）。
         if let RateLimit::Denied { retry_after } = self.conn.auth_limit.check(client_ip) {
@@ -440,7 +482,10 @@ impl Session {
         let deadline = TokioInstant::now() + HANDSHAKE_TIMEOUT;
         loop {
             let shutdown = self.peer.shutdown.clone();
-            let Some(connection) = self.connection.as_mut() else {
+            let Some(reader) = self.reader.as_mut() else {
+                return Flow::Finished;
+            };
+            let Some(writer) = self.writer.as_mut() else {
                 return Flow::Finished;
             };
             tokio::select! {
@@ -455,10 +500,21 @@ impl Session {
                     self.close(close::TIMEOUT, "handshake timeout").await;
                     return Flow::Finished;
                 }
-                frame = connection.recv() => {
+                end = &mut writer.done => {
+                    // 写任务已结束（写期限到期或写半边报错）：连接不再可用，会话随之结束。原因由写任务
+                    // 自己记日志，这里只登记「会话是被这条路结束的」。
+                    debug!(event = "node_link.write_task_ended", reason = ?end, "the write task ended during the handshake");
+                    return Flow::Finished;
+                }
+                frame = reader.recv() => {
                     match frame {
                         None => return Flow::Finished,
-                        Some(Err(WsError::MessageTooLarge)) => return Flow::Finished,
+                        Some(Err(WsError::MessageTooLarge)) => {
+                            // 读半边只判定超限（它没有写能力），1009 的关闭帧经写任务发出。
+                            let (code, reason) = MESSAGE_TOO_LARGE_CLOSE;
+                            self.close(code, reason).await;
+                            return Flow::Finished;
+                        }
                         Some(Err(WsError::Transport(detail))) => {
                             debug!(event = "node_link.transport_closed", detail = %detail, "the connection ended");
                             return Flow::Finished;
@@ -899,8 +955,12 @@ impl Session {
         // 跨轮次保留，不在每轮重建，否则持续的出站流量会让它「每轮被唤醒都重新睡满一个周期」，
         // 永远凑不满一个周期）与**优先于出站投递**（`biased` 里排在 `outbound` 之前，否则只要出站
         // 队列每轮都就绪，它连被轮询的机会都没有）。两者合起来才保证心跳、静默超时与慢消费者
-        // 看门狗在连接繁忙时仍按固定节奏被检查。
+        // 看门狗在连接繁忙时仍按固定节奏被检查。写路径已不在这条 `select!` 里（模块文档「写路径与
+        // 写任务」）：出站帧只是投给写任务，会话因此不会被写卡住。
         let mut next_tick = TokioInstant::now() + SESSION_TICK;
+        // 写任务从这里开始记账：`node.ready` 已入队，账本句柄必须先于它到达写任务（同一条命令通道，
+        // FIFO 保证顺序）。
+        self.attach_writer(&handle);
         let ending = loop {
             // 关闭请求（撤销传播等）：先排空已入队消息，再发 close 帧。
             if let Some((code, reason)) = handle.close_request() {
@@ -908,8 +968,11 @@ impl Session {
             }
             let event = {
                 let shutdown = self.peer.shutdown.clone();
-                let Some(connection) = self.connection.as_mut() else {
+                let Some(reader) = self.reader.as_mut() else {
                     break Ending::Close(close::UNAVAILABLE, "the connection is already closed");
+                };
+                let Some(writer) = self.writer.as_mut() else {
+                    break Ending::Close(close::UNAVAILABLE, "the write task already ended");
                 };
                 let requested = handle.close_signal.notified();
                 let outbound = receiver.recv();
@@ -920,7 +983,8 @@ impl Session {
                     () = shutdown.wait() => Event::Shutdown,
                     () = tick => Event::Tick,
                     Some(outbound) = outbound => Event::Outbound(outbound),
-                    frame = connection.recv() => Event::Frame(frame),
+                    end = &mut writer.done => Event::WriterEnded(end.ok()),
+                    frame = reader.recv() => Event::Frame(frame),
                 }
             };
             match event {
@@ -931,10 +995,23 @@ impl Session {
                 }
                 Event::Shutdown => break Ending::Close(close::NORMAL, "daemon shutdown"),
                 Event::Outbound(outbound) => {
-                    handle.consumed(&outbound);
-                    if self.write_now(&outbound.text).await.is_err() {
-                        break Ending::Close(close::NORMAL, "the connection ended");
+                    // 帧交给写任务（不再 await socket 写）：写卡住只影响写任务，判据照常被轮询。
+                    if !self.hand_outbound(outbound) {
+                        break Ending::TransportClosed("the write task ended");
                     }
+                }
+                Event::WriterEnded(end) => {
+                    debug!(
+                        event = "node_link.write_task_ended",
+                        reason = ?end,
+                        "the write task ended while the session was running"
+                    );
+                    // 写任务不是被本会话的关闭请求结束的（那条路径只在收尾时走，且会话已退出循环）：
+                    // 写期限到期时它已经丢弃写半边，因此这里只结束会话、不再发任何帧。
+                    break Ending::TransportClosed(match end {
+                        Some(WriteEnd::Deadline) => "the write path exceeded its deadline",
+                        _ => "the connection ended",
+                    });
                 }
                 Event::Frame(frame) => match frame {
                     None => {
@@ -944,7 +1021,10 @@ impl Session {
                         );
                     }
                     Some(Err(WsError::MessageTooLarge)) => {
-                        // 传输层已按 §2.5 发过 1009 close 帧，这里不再发第二个：直接放弃连接。
+                        // §2.5：读半边只判定超限（它没有写能力），1009 的关闭帧经写任务发出——它排在
+                        // 已交给写任务的帧之后（FIFO），因此这里只入队、不再发第二个 close 帧。
+                        let (code, reason) = MESSAGE_TOO_LARGE_CLOSE;
+                        self.close(code, reason).await;
                         break Ending::TransportClosed(
                             "a message exceeded the connection limit (1009)",
                         );
@@ -1056,16 +1136,29 @@ impl Session {
             reason = close_reason,
             "the node-link connection is closing"
         );
-        // 先把已入队的消息写完（撤销推送必须先送达），再发 close 帧。
-        self.drain(&mut receiver).await;
-        self.conn
-            .registry
-            .unregister(handle.connection_id().as_str());
-        if let Ending::Close(code, reason) = ending {
-            self.close(code, reason).await;
-        } else {
-            // 传输层已关闭（1009 或流已终止）：放弃连接，不重复发 close 帧。
-            self.connection.take();
+        // 关闭顺序（模块文档「关闭顺序」）：先按预算把已入队消息交给写任务（撤销推送必须先送达），再发
+        // close 命令；写任务由 `Session::run` 按预算有界 join。
+        match ending {
+            Ending::Close(code, reason) => {
+                self.drain(&mut receiver).await;
+                self.conn
+                    .registry
+                    .unregister(handle.connection_id().as_str());
+                self.close(code, reason).await;
+            }
+            Ending::TransportClosed(_) => {
+                // 这条分支只表示「本层不再自己发 close 帧」，两种来路要分开看：
+                //
+                // - 1009 超限：close 帧（`WriteCommand::Close(1009, …)`）在 break **之前**已由
+                //   [`Session::close`] 入队，写任务会先写完**已交给它的**帧、再在 join 预算内尽力把这一帧
+                //   发出去（FIFO，排在已入队帧之后）。socket 因此要等写任务结束，耗时 ≤ `CLOSE_DRAIN_BUDGET`；
+                // - 流已终止（读半边报错/对端结束）与写期限到期：写半边已结束或已不可信，**不再发任何 close
+                //   帧**，排空也没有意义（写半边已丢弃）。读半边在这里被丢弃，socket 随之关闭。
+                self.conn
+                    .registry
+                    .unregister(handle.connection_id().as_str());
+                self.reader.take();
+            }
         }
     }
 
@@ -1199,31 +1292,79 @@ impl Session {
         self.write_now(&text).await
     }
 
-    /// 直接写一帧（连接已关闭时返回错误，不 panic）。
+    /// 把一帧交给写任务（连接/写任务已结束时返回错误，不 panic）。
+    ///
+    /// 命令通道是无界的：投递**不会**阻塞会话——写卡住只体现在写任务那一侧（模块文档「写路径与写
+    /// 任务」）。
     async fn write_now(&mut self, text: &str) -> Result<(), SendFault> {
-        match self.connection.as_mut() {
-            Some(connection) => connection
-                .send_text(text.to_owned())
-                .await
+        match self.writer.as_ref() {
+            Some(writer) => writer
+                .commands
+                .send(WriteCommand::Frame(text.to_owned()))
                 .map_err(|_| SendFault::Closed),
             None => Err(SendFault::Closed),
         }
     }
 
-    /// 关闭连接（`WsConnection::close` 消费所有权，因此 `take` 一次；重复调用是 no-op）。
-    async fn close(&mut self, code: u16, reason: &'static str) {
-        if let Some(connection) = self.connection.take() {
-            connection.close(code, reason).await;
+    /// 把一条已入队的出站帧交给写任务（写任务写出后递减队列账本）。
+    ///
+    /// 返回 `false` 表示写任务已结束（它的命令接收端被丢弃）。
+    fn hand_outbound(&self, outbound: Outbound) -> bool {
+        match self.writer.as_ref() {
+            Some(writer) => writer
+                .commands
+                .send(WriteCommand::Outbound(outbound))
+                .is_ok(),
+            None => false,
         }
     }
 
-    /// 排空已入队消息（预算内尽力而为；对端已断开时立即结束）。
+    /// 把队列账本句柄交给写任务（认证后调用一次；必须先于任何 `Outbound` 命令到达）。
+    fn attach_writer(&self, handle: &Arc<ConnectionHandle>) {
+        if let Some(writer) = self.writer.as_ref() {
+            let _ = writer
+                .commands
+                .send(WriteCommand::Attach(Arc::clone(handle)));
+        }
+    }
+
+    /// 向写任务发出关闭请求（重复调用不会改变目标：第一条到达的关闭请求即结束写任务）。
+    ///
+    /// 写任务按 FIFO 写完已入队的帧后**在预算内**尽力发 close 帧并结束；本方法不等待（有界 join 在
+    /// [`Session::finish_writer`]）。
+    async fn close(&mut self, code: u16, reason: &'static str) {
+        if let Some(writer) = self.writer.as_ref() {
+            let _ = writer.commands.send(WriteCommand::Close { code, reason });
+        }
+    }
+
+    /// 有界地收尾写任务：先在预算内 join（写任务收到关闭请求后会尽力发 close 帧并结束），超时则放弃
+    /// 等待并 `abort` 它——写半边随任务一起被丢弃，socket 随之关闭（取消路径，绝不留 detached 任务）。
+    async fn finish_writer(&mut self) {
+        let Some(mut writer) = self.writer.take() else {
+            return;
+        };
+        // 先丢掉命令发送端：即使关闭路径没来得及发关闭请求，写任务写完已入队的帧后也会因通道关闭而
+        // 结束（取消路径不依赖某个特定的关闭顺序）。
+        drop(writer.commands);
+        let joined = tokio::time::timeout(CLOSE_DRAIN_BUDGET, &mut writer.handle).await;
+        if joined.is_err() {
+            warn!(
+                event = "node_link.write_task_abandoned",
+                "the write task did not end within the close drain budget; it is cancelled"
+            );
+            writer.handle.abort();
+        }
+    }
+
+    /// 排空已入队消息（预算内尽力而为）：把它们交给写任务（写任务按 FIFO 写出），对端/写任务已结束
+    /// 时立即结束。
     async fn drain(&mut self, receiver: &mut mpsc::Receiver<Outbound>) {
         let deadline = TokioInstant::now() + CLOSE_DRAIN_BUDGET;
         loop {
             match tokio::time::timeout_at(deadline, receiver.recv()).await {
                 Ok(Some(outbound)) => {
-                    if self.write_now(&outbound.text).await.is_err() {
+                    if !self.hand_outbound(outbound) {
                         return;
                     }
                 }
@@ -1364,21 +1505,174 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    /// 会话被取消时连带取消写任务：所有者消失即取消是**必要条件**——会话 future 未必跑到
+    /// [`Session::run`] 的 [`Session::finish_writer`]（`listener.rs` 的 `abort`、以及 panic 展开都会在
+    /// `run` 完成前丢掉会话 future），而 `tokio::task::JoinHandle` 一旦被 drop 就 **detach**，写任务会
+    /// 带着一个已经没有所有者的连接继续跑下去（违反 `AGENTS.md` §8「异步任务必须有所有者、不能遗留
+    /// detached task」）。
+    ///
+    /// 正常路径下 [`Session::finish_writer`] 已经 `take` 过 `writer`（无论走完有界 join 还是超时
+    /// `abort`），因此这里拿到的通常是 `None`，是 no-op——不改变既有的有界 join 行为。
+    fn drop(&mut self) {
+        if let Some(writer) = self.writer.take() {
+            writer.handle.abort();
+        }
+    }
+}
+
 /// `select!` 的事件源（把借用收在一处，避免在 `select!` 里调用 `&mut self` 方法）。
 enum Event {
     CloseRequested,
     Shutdown,
     Outbound(Outbound),
+    /// 写任务已结束（`None` = 任务没来得及报告就结束了）。
+    WriterEnded(Option<WriteEnd>),
     Frame(Option<Result<WsMessage, WsError>>),
     Tick,
 }
 
-/// 会话的结束方式：本层发 close 帧，或传输层已经关闭（1009 超限/流终止）——后者不得再发 close 帧。
+/// 会话的结束方式：本层发 close 帧，或传输层已经关闭（1009 超限/流终止/写期限到期）——后者不得再发
+/// close 帧。
 enum Ending {
     /// 本层以该 close code 与原因关闭。
     Close(u16, &'static str),
-    /// 传输层已关闭连接（不重复发 close 帧）。
+    /// 传输层（或写任务）已关闭连接（不重复发 close 帧）。
     TransportClosed(&'static str),
+}
+
+/// 写任务的一条命令（同一时刻至多一帧在写、帧序由单写者保证：命令通道是 FIFO 的）。
+enum WriteCommand {
+    /// 握手阶段的帧（不含队列账本）。
+    Frame(String),
+    /// 认证后从待发送队列取出的帧：写任务在写出前记账（[`ConnectionHandle::consumed`]）。
+    Outbound(Outbound),
+    /// 队列账本句柄（认证完成时投递一次，**先于**任何 [`WriteCommand::Outbound`] 到达）。
+    Attach(Arc<ConnectionHandle>),
+    /// 关闭请求：写任务写完已入队的帧后**在预算内**尽力发 close 帧并结束。
+    Close { code: u16, reason: &'static str },
+}
+
+/// 写任务的结束原因（会话据此决定收尾方式）。
+#[derive(Debug, Clone, Copy)]
+enum WriteEnd {
+    /// 已按关闭请求发出 close 帧（或对端早已断开）后正常结束。
+    Closed,
+    /// 某一帧超过写期限：整条连接的最终处置——写半边已被丢弃，不再重试、也不再有后续帧（含 close）。
+    Deadline,
+    /// 写半边报错（对端已断开等）。
+    TransportClosed,
+    /// 命令通道被关闭，写任务在没有关闭请求的情况下结束（会话侧的取消路径）。
+    Abandoned,
+}
+
+/// 每连接的写任务：拥有写半边，串行消费命令通道。
+///
+/// 所有者是 [`Session`]（[`Session::finish_writer`] 有界 join，超时 `abort`）；取消路径有两条——关闭
+/// 请求命令，或命令发送端被丢弃。写任务绝不 detach（`AGENTS.md` §8）。
+struct WriterTask {
+    /// 命令通道（无界：投递永远不会阻塞会话，积压由队列账本的水位判定体现）。
+    commands: mpsc::UnboundedSender<WriteCommand>,
+    /// 结束原因；写任务结束时必然被填充（`Err` = 任务没报告就结束了）。
+    done: oneshot::Receiver<WriteEnd>,
+    /// 所有者凭证（join/abort 用）。
+    handle: JoinHandle<()>,
+}
+
+impl WriterTask {
+    /// 起一个写任务（每连接一个）。`frame_deadline` 是每帧的写期限（§2.5 的慢消费者宽限，见模块文档
+    /// 「每帧写期限」）。
+    fn spawn(writer: WsWriter, frame_deadline: Duration) -> Self {
+        let (commands, receiver) = mpsc::unbounded_channel();
+        let (done_sender, done) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let end = write_loop(writer, receiver, frame_deadline).await;
+            let _ = done_sender.send(end);
+        });
+        Self {
+            commands,
+            done,
+            handle,
+        }
+    }
+}
+
+/// 写任务主体：串行消费命令通道（帧 / 关闭请求），见 [`WriterTask`] 与模块文档的「写路径与写任务」。
+async fn write_loop(
+    mut writer: WsWriter,
+    mut commands: mpsc::UnboundedReceiver<WriteCommand>,
+    frame_deadline: Duration,
+) -> WriteEnd {
+    // 队列账本句柄：`Attach` 到达前不记账（认证前的帧本来就不在队列里）。
+    let mut handle: Option<Arc<ConnectionHandle>> = None;
+    while let Some(command) = commands.recv().await {
+        match command {
+            WriteCommand::Attach(attached) => handle = Some(attached),
+            WriteCommand::Frame(text) => {
+                if let Some(end) =
+                    write_frame(&mut writer, text, frame_deadline, handle.as_ref()).await
+                {
+                    return end;
+                }
+            }
+            WriteCommand::Outbound(outbound) => {
+                // 记账口径与改造前一致：会话（现在由写任务代劳）**取出即记账**，不等写出完成。
+                if let Some(attached) = handle.as_ref() {
+                    attached.consumed(&outbound);
+                }
+                if let Some(end) =
+                    write_frame(&mut writer, outbound.text, frame_deadline, handle.as_ref()).await
+                {
+                    return end;
+                }
+            }
+            WriteCommand::Close { code, reason } => {
+                // 尽力发 close 帧：预算内没发出去（对端不读）也直接放弃——连接随写半边一起关闭。
+                let _ = tokio::time::timeout(CLOSE_DRAIN_BUDGET, writer.close(code, reason)).await;
+                return WriteEnd::Closed;
+            }
+        }
+    }
+    WriteEnd::Abandoned
+}
+
+/// 写一帧（带写期限）。返回 `Some(end)` 表示写任务应就此结束。
+///
+/// 期限到期是**最终处置**：半截帧不可恢复，因此不重试、不续写，也**不再发任何后续帧**（含 close 帧
+/// ——在可能残缺的数据帧之后再发帧是畸形帧）；写半边随写任务结束被丢弃。
+async fn write_frame(
+    writer: &mut WsWriter,
+    text: String,
+    frame_deadline: Duration,
+    handle: Option<&Arc<ConnectionHandle>>,
+) -> Option<WriteEnd> {
+    let started = Instant::now();
+    match tokio::time::timeout(frame_deadline, writer.send_text(text)).await {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => {
+            debug!(
+                event = "node_link.transport_closed",
+                detail = %error,
+                "the connection ended while writing a frame"
+            );
+            Some(WriteEnd::TransportClosed)
+        }
+        Err(_) => {
+            let connection_id = match handle {
+                Some(handle) => handle.connection_id().as_str(),
+                None => "unattached",
+            };
+            warn!(
+                event = "node_link.write_deadline",
+                connection_id = connection_id,
+                waited_ms = started.elapsed().as_millis() as u64,
+                deadline_ms = frame_deadline.as_millis() as u64,
+                reason = "the frame could not be flushed within the slow-consumer grace",
+                "the write path exceeded its deadline; the connection is closed"
+            );
+            Some(WriteEnd::Deadline)
+        }
+    }
 }
 
 /// 协商失败的错误映射（§2.3/§11.3）。

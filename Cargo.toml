@@ -118,6 +118,20 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["loggin
 # `rustls-pemfile 2` 已被上游归档（GitHub archived，README 明确指向本模块），因此改登记它的后继 API；
 # 该 crate 本就是 rustls 的传递依赖，不引入新的传递依赖（旧接口与其 `base64` 依赖都绕开了）。
 rustls-pki-types = { version = "1", features = ["std"] }
+# WebSocket 读写半边拆分（`session-write-deadline` 变更 WP1；消费方是 `server::transport::net::ws` 的
+# `WsConnection::split`，设计见 `crates/server/src/node_link/conn/session.rs` 模块文档「写路径与写任务」）：
+# 只用到 `StreamExt::split`，把一条 `WebSocket` 拆成可分别 poll 的 `SplitSink`/`SplitStream`，好让写半边
+# 交给每连接的写任务、判据不再被 socket 写拖住。
+# - 必要性：读写分离是把「写卡住拖住会话判据」这个缺口修掉的最小代价；
+# - 维护状态：`rust-lang/futures-rs`（Apache-2.0 OR MIT）随生态持续发版，`futures-util 0.3.34` 已是
+#   axum 0.8.9 与 `tokio-tungstenite 0.29`（HTTP/WS 栈）的传递依赖，本次只是把已有节点提为直接依赖，
+#   **不新增依赖树节点**，也不抬高 MSRV（该栈本就与解析到的同一版本一起构建）；
+# - 落选候选：手写只含 `split` 语义的薄封装（等于自己再实现一遍 `BiLock`/`split`，还要自行保证两半的
+#   `poll` 安全）；`Arc<Mutex<WebSocket>>` 共享 socket（会在每帧上持锁、让 `recv` 与写互相阻塞，比缺口
+#   本身更糟）。
+# features 取最小集：`sink` 门控 `StreamExt::split` 与 `SinkExt` 本身，`alloc` 是 `split` 依赖的
+# `BiLock` 的第二道门；`std`/`async-await` 等本处用不到（feature 是加法的，其余由 axum 那侧统一开启）。
+futures-util = { version = "0.3", default-features = false, features = ["sink", "alloc"] }
 # 测试用自签证书的生成（仅 dev-dependency，供 `crates/server/tests` 的 TLS `direct` 用例现算 ECDSA P-256
 # 自签证书与私钥）：因此仓库里不提交任何私钥材料，`.gitleaks.toml` 不需要为此新增允许清单条目。
 # 实际启用的依赖链只有 `pem`/`ring`/`rustls-pki-types`/`time`/`yasna`（`zeroize`/`x509-parser`/`aws-lc-rs` 为可选、未启用）；启用链新增的解析节点是

@@ -2026,6 +2026,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "core",
+ "futures-util",
  "identity-auth",
  "nix",
  "node-link-protocol",
