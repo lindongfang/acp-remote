@@ -1,5 +1,5 @@
 //! 前端构建产物的**嵌入资源表**：入口文档、按路径查资源、枚举资源与构建版本，以及发布构建的失败关闭
-//! （`openspec/changes/sync-ui-hosting/design.md` D2/D3，`specs/ui-asset-hosting/spec.md` 的
+//! （`openspec/changes/archive/2026-10-15-sync-ui-hosting/design.md` D2/D3，`specs/ui-asset-hosting/spec.md` 的
 //! 「根目录入口与单页回退」与「前端构建版本与 Daemon 可检查关联」）。
 //!
 //! **为什么嵌入而不是运行期读磁盘**：产物随二进制一起发布，运行期零 IO、零路径解析。更关键的是安全面：

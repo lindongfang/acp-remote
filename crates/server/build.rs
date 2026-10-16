@@ -1,5 +1,5 @@
 //! `server` 的构建脚本：在**编译期**判定本次构建嵌入真实前端产物还是树内占位入口，并把选择以 `cfg`
-//! 传进 crate（`openspec/changes/sync-ui-hosting/design.md` D2；消费方是
+//! 传进 crate（`openspec/changes/archive/2026-10-15-sync-ui-hosting/design.md` D2；消费方是
 //! `crate::transport::net::ui`）。
 //!
 //! **为什么在这里选，而不是让 `#[folder]` 直接指向 `clients/app/dist`**：`#[derive(RustEmbed)]` 的

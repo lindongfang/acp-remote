@@ -34,7 +34,7 @@
 //!
 //! 与本模块的 wire 权威：`docs/SYNC_PROTOCOL.md`（§3 传输、§4 信封、§5 协商、§8 认证、§12 错误、
 //! §13 心跳、§14 限额、§15 安全）。行为范围以
-//! `openspec/changes/sync-server-connection/specs/sync-device-auth/spec.md` 为准。
+//! `openspec/changes/archive/2026-10-15-sync-server-connection/specs/sync-device-auth/spec.md` 为准。
 
 pub mod command;
 pub mod conn;

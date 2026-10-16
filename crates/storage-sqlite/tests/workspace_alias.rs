@@ -1,6 +1,6 @@
 //! `storage-sqlite` 的 v6 目录归属列 `owned_session.workspace_alias`：写入、读回与投影。
 //!
-//! 权威是 `docs/CORE_PORTS_AND_STORAGE.md` §7.2/§7.3 与 `openspec/changes/sync-workspaces-and-create/`
+//! 权威是 `docs/CORE_PORTS_AND_STORAGE.md` §7.2/§7.3 与 `openspec/changes/archive/2026-10-03-sync-workspaces-and-create/`
 //! 的 `storage-schema-v2-migration` / `workspace-resolution` 增量（`design.md` D1/D6）。本文件**不**复述
 //! `migration.rs` 已有的 v1 → v6 连续升级保留性与 `resume_columns.rs` 的恢复两列判据，只补目录归属列
 //! 自己的维度：

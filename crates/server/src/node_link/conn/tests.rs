@@ -2116,7 +2116,7 @@ async fn a_shape_invalid_envelope_that_consumed_the_sequence_does_not_strand_the
 /// 而 `serde_json` 的递归上限是 128、检查又在**进入容器时先自减再判零**，因此实际只能解析嵌套 127 层
 /// 的帧——深度 65..=127 的帧可解析（推进），深度 ≥128 的帧即便文本是合法 JSON 也解析不出序号（不推进）。
 /// 规格的例外条款把它登记为**已知残留**：
-/// `openspec/changes/node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的「只有读不出
+/// `openspec/changes/archive/2026-10-16-node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的「只有读不出
 /// 「本连接的下一个序号」的帧才不推进：文本不是合法 JSON、连接字段不成对或缺席、`connectionId` 属于别的
 /// 连接、序号非规范十进制 / 超 `2^63-1` / 不等于期望值，**以及嵌套深度超过解析器递归上限**（按文本重解析
 /// 读不出序号）。最后一种是**已知残留**」。

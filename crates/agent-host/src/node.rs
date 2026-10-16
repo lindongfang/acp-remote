@@ -1,6 +1,6 @@
 //! profile 进程的连接生命周期（节点级 `agent.connected` / `agent.disconnected`）。
 //!
-//! 归属与语义（`openspec/changes/sync-scope-and-pwa-client/specs/local-agent-host/spec.md`、
+//! 归属与语义（`openspec/changes/archive/2026-10-07-sync-scope-and-pwa-client/specs/local-agent-host/spec.md`、
 //! `design.md` D6）：
 //!
 //! - 生命周期归属于 **profile 的进程**，不是任何单个会话：同一 profile 的进程被多个会话复用时

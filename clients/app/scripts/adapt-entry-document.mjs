@@ -2,7 +2,7 @@
 /**
  * 把 `expo export --platform web` 产出的入口文档（`clients/app/dist/index.html`）从内联样式形态改成
  * 同源外部样式表形态，并写出那两张样式表。这是变更 `ui-csp-inline-styles` 的前端侧落点
- * （`openspec/changes/ui-csp-inline-styles/design.md` 的 D1/D2）。
+ * （`openspec/changes/archive/2026-10-16-ui-csp-inline-styles/design.md` 的 D1/D2）。
  *
  * ## 为什么得在构建期改入口文档
  *

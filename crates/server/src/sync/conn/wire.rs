@@ -21,7 +21,7 @@
 //! type/body/信封形状都不影响对端已经用掉的序号。因此只要帧文本能读出「与本连接相同的 `connectionId`」
 //! 与「规范十进制、不超过 v1 上界、正好等于期望值的 `connectionSequence`」，**每一条消息级拒绝都推进
 //! 期望序号**（[`sequence_after_rejection`]）：一个显式拒绝不得让连接之后全部错位，否则连接退化成只出
-//! 不进的哑管道（`openspec/changes/sync-server-connection/specs/sync-device-auth/spec.md` 的
+//! 不进的哑管道（`openspec/changes/archive/2026-10-15-sync-server-connection/specs/sync-device-auth/spec.md` 的
 //! 「协议错误码与入站序号推进」）。
 
 use sync_protocol::common::{DecimalString, RawObject, Uuid};

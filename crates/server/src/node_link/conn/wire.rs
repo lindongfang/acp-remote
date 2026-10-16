@@ -26,7 +26,7 @@
 //! 期望序号**（[`sequence_after_rejection`]）：无论拒绝码是 `type_unsupported`、`schema_invalid` 还是
 //! `invalid_json`，一个显式拒绝不得让连接之后全部错位——否则对端其后每条消息都被判
 //! `nodelink.protocol.sequence_invalid` 且永不推进，连接退化成只出不进的哑管道
-//! （`openspec/changes/node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的
+//! （`openspec/changes/archive/2026-10-16-node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的
 //! 「每次消息级拒绝都推进入站期望序号」）。
 //!
 //! 不记账的只有**读不出该序号**的帧：文本不是合法 JSON、连接字段不成对或缺席、`connectionId` 属于别的
@@ -285,7 +285,7 @@ pub(crate) fn judge(
 ///
 /// 条件命中时，无论拒绝码是 `type_unsupported`、`schema_invalid` 还是 `invalid_json`，都必须推进：帧已经
 /// 在 wire 上占用了对端的下一个序号
-/// （`openspec/changes/node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的
+/// （`openspec/changes/archive/2026-10-16-node-link-malformed-sequence/specs/node-link-owner-server/spec.md` 的
 /// 「每次消息级拒绝都推进入站期望序号」），不推进会让对端其后每条消息都被判
 /// `nodelink.protocol.sequence_invalid` 且永不推进，连接退化成只出不进的哑管道。已知 type 的路径
 /// （`POST_MVP` 与路由拒绝）用同一口径，只是那时序号已经由 `Envelope` 解出、不需要重读帧。

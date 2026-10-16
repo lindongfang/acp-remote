@@ -1,4 +1,4 @@
-//! 前端静态面的组合根接线用例（`openspec/changes/sync-ui-hosting/tasks.md` 的 3.1–3.3）。
+//! 前端静态面的组合根接线用例（`openspec/changes/archive/2026-10-15-sync-ui-hosting/tasks.md` 的 3.1–3.3）。
 //!
 //! 与 `sync_ingress_tests` 同一个理由：这些用例**经真实组合根**跑（`NetIngress::start`，与
 //! `crate::daemon::run` 是同一个装配点），只调 `register_static` 会让「组合根忘了注册静态面」「注册顺序

@@ -113,7 +113,7 @@ const ACCEPT_RETRY_BACKOFF: Duration = Duration::from_millis(100);
 /// 关闭序列里等待后台任务自行退出的时间上限。
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// 静态面的注册路径（`openspec/changes/sync-ui-hosting/design.md` D1）：根路径。它同时是「未命中嵌入资源
+/// 静态面的注册路径（`openspec/changes/archive/2026-10-15-sync-ui-hosting/design.md` D1）：根路径。它同时是「未命中嵌入资源
 /// 且不属于协议族」的请求的单页回退落点，因此这里只有这一个字面量。
 const STATIC_UI_PATH: &str = "/";
 
