@@ -310,12 +310,19 @@ fn ac1_digest(label: &str) -> acp_core::model::Digest {
     acp_core::model::Digest::new(&encoded).expect("32 字节摘要")
 }
 
-/// 本机建一条 owned 会话（脚本化后端；E2E 的会话来源，不经 wire）。
+/// 本机建一条 owned 会话并**落账**（§6 第 20 条的三笔时序：受理 → 执行 → 落账；E2E 的会话来源，
+/// 不经 wire），返回会话标识文本。
+///
+/// 受理提交只落幂等记录——会话行与终态在**落账提交**里同批落盘，而本文件的用例都要求这条会话真实
+/// 存在（`session.list`、快照与事件回放都要列得到它），因此创建后必须再结算一次（与生产适配层同形）。
+/// 终态结果原文只是形状占位：本文件不读它。
 async fn local_session(host: &HostNode) -> String {
-    host.core()
+    let request_id = acp_core::model::RequestId::new(&uuid_text()).expect("request id 规范");
+    let prepared = match host
+        .core()
         .create_session(
             &acp_core::model::Actor::LocalCli,
-            acp_core::model::RequestId::new(&uuid_text()).expect("request id 规范"),
+            request_id.clone(),
             ac1_digest("acp-remote/sync-commands-e2e/session-create"),
             acp_core::model::CreateSessionRequest::new(
                 acp_core::model::AgentRef::try_new(
@@ -331,8 +338,26 @@ async fn local_session(host: &HostNode) -> String {
         )
         .await
         .expect("本机会话创建")
-        .as_str()
-        .to_owned()
+    {
+        acp_core::ports::SessionCreateAdmission::Prepared(prepared) => prepared,
+        other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+    };
+    let result = acp_core::model::CommandResult::from_json_text(r#"{"sessionId":"projected"}"#)
+        .expect("result object");
+    assert!(
+        host.core()
+            .settle_session_create(
+                &acp_core::model::Actor::LocalCli,
+                &request_id,
+                acp_core::model::CommandStatus::Completed,
+                Some(result),
+                None,
+            )
+            .await
+            .expect("落账"),
+        "落账必须真的写入"
+    );
+    prepared.session.as_str().to_owned()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1011,6 +1036,889 @@ async fn session_create_rejects_both_directory_sources_at_once() {
         before,
         "二选一被拒时不得创建会话：{refused}"
     );
+
+    host.stop().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// 变更③（`session-create-settle-order`）：`session.create` 的三笔时序、失败分类与窗口期事件
+//
+// 被测层与替身边界：本组用例跑在**真实**的 Sync 面上（真实 loopback listener、真实 SQLite、真实
+// `Authority`、真实 broker 与真实命令面路由）；唯一被替换的是 **Agent 子进程**那一层
+// （`support::sync` 的 `ScriptedBackends`）——它在本次判据的边界之外（本组要钉的是「后端报告了哪一类
+// 失败」之下**协议面**的结论：可证明 ⇒ `failed`、说不清 ⇒ `uncertain`、失败零会话行、窗口期事件按序
+// 落库再广播）。后端自己的分类（spawn 失败 ⇒ `SessionNotEstablished`）属 `crates/agent-host`，由
+// `-p agent-host` 与 `-p server` 的用例覆盖。后端的行为脚本（失败注入 / 窗口期事件注入 / 调用计数 /
+// 终止记录）见 `support::sync::ScriptedScript`。
+// ---------------------------------------------------------------------------------------------
+
+/// `session.create` 的 payload：目录走「客户端提供的目录」这一支（本机数据目录是合法目录），
+/// 因此不需要先登记 workspace alias——与本组用例的判据无关。
+fn create_payload(host: &HostNode) -> Value {
+    json!({
+        "agentId": AGENT,
+        "workspacePath": host.data_dir().display().to_string(),
+    })
+}
+
+/// 认证并建立**实时屏障**（`sync.subscribe(null)` → `sync.reset_required` → 快照 → `sync.caught_up`
+/// → `sync.ack`）：只有越过屏障的连接才会收到实时 `event` 帧。
+async fn connect_with_live_events(host: &HostNode, device: &Device) -> SyncClient {
+    let mut client = connect_authenticated(host, device).await;
+    client.step("订阅并建立实时屏障");
+    client.subscribe(None).await;
+    let reset = client.expect_type("sync.reset_required").await;
+    assert_eq!(reset["body"]["reason"], json!("initial_sync"), "{reset}");
+    client.snapshot_request("initial_sync").await;
+    let _snapshot = client.expect_snapshot().await;
+    let caught_up = client.expect_type("sync.caught_up").await;
+    client.ack(caught_up["body"]["cursor"].clone()).await;
+    client
+}
+
+/// 一次命令交换收到的帧：该 `requestId` 的 `command.result`（按到达顺序）与途中的 `event` 帧。
+struct Exchange {
+    results: Vec<Value>,
+    events: Vec<Value>,
+}
+
+impl Exchange {
+    /// 首次响应（`accepted` 或 `rejected`）。
+    fn first(&self) -> &Value {
+        self.results.first().expect("必须收到首次响应")
+    }
+
+    /// 终态响应（`command.result` 的最后一条；调用方已等到终态）。
+    fn terminal(&self) -> &Value {
+        self.results.last().expect("必须收到终态响应")
+    }
+
+    /// 该请求的终态事件帧（`causationRequestId` 指回它，且事件类型是三个 `command.*` 之一）。
+    fn terminal_event(&self, request: &str) -> &Value {
+        self.events
+            .iter()
+            .find(|event| {
+                event["causationRequestId"] == json!(request)
+                    && matches!(
+                        event["eventType"].as_str(),
+                        Some("command.completed" | "command.failed" | "command.uncertain")
+                    )
+            })
+            .unwrap_or_else(|| panic!("广播里必须有 `{request}` 的终态事件：{:?}", self.events))
+    }
+}
+
+/// 读到该 `requestId` 的**终态** `command.result` 为止，把途中的 `event` 帧按到达顺序收下来
+/// （`SyncClient::expect_command_result` 会把它们丢掉，而本组用例要逐条看它们）。
+async fn exchange_until_terminal(client: &mut SyncClient, request_id: &str) -> Exchange {
+    let deadline = tokio::time::Instant::now() + support::sync::MESSAGE_TIMEOUT;
+    let mut exchange = Exchange {
+        results: Vec::new(),
+        events: Vec::new(),
+    };
+    loop {
+        let message = client.take().await;
+        if message["type"] == json!("command.result")
+            && message["body"]["requestId"] == json!(request_id)
+        {
+            let body = message["body"].clone();
+            let terminal = !matches!(body["status"].as_str(), Some("accepted") | Some("rejected"));
+            exchange.results.push(body);
+            if terminal {
+                return exchange;
+            }
+        } else if message["type"] == json!("event") {
+            exchange.events.push(message["body"].clone());
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "超时：`{request_id}` 的终态没有在期限内到达"
+        );
+    }
+}
+
+/// 继续收帧直到 `ready` 为真。
+///
+/// 为什么需要：实时扇出与终态观察者是两条独立的任务，因此「终态 `command.result` 先于该会话的实时
+/// `event` 帧到达」是**允许**的（终态那条由观察者轮询持久记录后推送）。断言事件序列之前必须先确认
+/// 期待的事件都到齐了，否则一批正常的实现会被判成丢事件。
+async fn drain_until(
+    client: &mut SyncClient,
+    exchange: &mut Exchange,
+    ready: impl Fn(&Exchange) -> bool,
+) {
+    let deadline = tokio::time::Instant::now() + support::sync::MESSAGE_TIMEOUT;
+    while !ready(exchange) {
+        let message = client.take().await;
+        if message["type"] == json!("event") {
+            exchange.events.push(message["body"].clone());
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "超时：期待的事件没有在期限内到齐（已收到 {:?}）",
+            exchange.events
+        );
+    }
+}
+
+/// 直接读库：`owned_command` 里该 `requestId` 的
+/// `(status, session_id, terminal_event_id, error_code)`；`None` = 没有这一行。
+async fn stored_command(
+    host: &HostNode,
+    request_id: &str,
+) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
+    let mut connection = raw_connection(host).await;
+    let row = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT status, session_id, terminal_event_id, error_code FROM owned_command \
+         WHERE request_id = ?1",
+    )
+    .bind(request_id)
+    .fetch_optional(&mut connection)
+    .await
+    .expect("读 owned_command");
+    drop(connection);
+    row
+}
+
+/// 直接读库：该会话有没有一条会话行。
+async fn session_row_exists(host: &HostNode, session_id: &str) -> bool {
+    let mut connection = raw_connection(host).await;
+    let row: Option<i64> =
+        sqlx::query_scalar::<_, i64>("SELECT 1 FROM owned_session WHERE session_id = ?1")
+            .bind(session_id)
+            .fetch_optional(&mut connection)
+            .await
+            .expect("读 owned_session");
+    drop(connection);
+    row.is_some()
+}
+
+/// 直接读库：某会话的 `owned_event` 行，按**会话内序号**升序的
+/// `(eventId, eventType, sessionSequence)`（`session_sequence` 是 INTEGER 列，因此按整数取）。
+async fn stored_session_events(host: &HostNode, session_id: &str) -> Vec<(String, String, i64)> {
+    let mut connection = raw_connection(host).await;
+    let rows = sqlx::query_as::<_, (String, String, i64)>(
+        "SELECT event_id, event_type, session_sequence FROM owned_event \
+         WHERE session_id = ?1 ORDER BY session_sequence ASC",
+    )
+    .bind(session_id)
+    .fetch_all(&mut connection)
+    .await
+    .expect("读 owned_event");
+    drop(connection);
+    rows
+}
+
+/// 直接读库：**会话级**事件行（`session_id` 非空）的条数。
+async fn session_scoped_event_count(host: &HostNode) -> i64 {
+    let mut connection = raw_connection(host).await;
+    let count: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM owned_event WHERE session_id IS NOT NULL",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .expect("统计会话级事件");
+    drop(connection);
+    count
+}
+
+/// 4.1 ①②：后端**可证明**未建立会话时，客户端先收到 `accepted`、再收到终态 `failed`；那条失败在库里
+/// **零会话行**。
+///
+/// 变红点：①受理不先回 `accepted`（例如把失败直接冒泡成 `rejected`，或只在终态回一条结果）⇒ 首次
+/// 响应的 status 断言红；②终态不是 `failed`（例如按旧形状把可证明的失败报成 `uncertain`，或反过来
+/// 把 `uncertain` 当 `failed`）⇒ status 与广播事件类型两条同时红；③失败留下会话行或把窗口期排队的
+/// 事件冲进库里 ⇒ `owned_session`/`owned_event` 的条数断言红；④错误码不是既有的
+/// `internal.unavailable` ⇒ 错误码断言红。
+#[tokio::test]
+async fn a_failed_create_is_observed_as_accepted_then_failed_with_zero_session_rows() {
+    let host = HostNode::start("sync-create-failed", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    // 后端在失败**之前**已经送出过三条件（真实 Agent 建会话期间就会产出 `session/update`）：失败路径
+    // 必须把窗口期队列一并作废，一条事件行都不留。
+    host.script().emit_window_events(3);
+    // `SessionNotEstablished` = 可证明 Agent 侧未产生会话（spawn 失败 / 明确拒绝 / 请求未发出）。
+    host.script()
+        .fail_create(acp_core::model::UnavailableKind::SessionNotEstablished);
+    let mut client = connect_with_live_events(&host, &device).await;
+
+    let rows_before = session_row_count(&host).await;
+    assert_eq!(rows_before, 0, "前提：本机还没有任何会话行");
+
+    let request = uuid_text();
+    client.step("session.create（可证明未建立会话）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let mut exchange = exchange_until_terminal(&mut client, &request).await;
+
+    // ① 首次响应是 `accepted`：`result` 与 `terminalEventId` 均为 `null`，`acceptedAt` 非空。
+    let accepted = exchange.first();
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert_eq!(accepted["result"], Value::Null, "accepted 不得带业务结果");
+    assert_eq!(
+        accepted["terminalEventId"],
+        Value::Null,
+        "accepted 没有终态事件"
+    );
+    assert!(
+        accepted["acceptedAt"].is_string(),
+        "accepted 必须带首次接受时间：{accepted}"
+    );
+
+    // ② 随后是终态 `failed`：错误码是既有的 `internal.unavailable`，成因落在 `message` 上
+    //    （design D4：不新增错误码）。
+    let terminal = exchange.terminal();
+    assert_eq!(terminal["status"], json!("failed"), "{terminal}");
+    assert_eq!(
+        terminal["error"]["code"],
+        json!("internal.unavailable"),
+        "{terminal}"
+    );
+    assert!(
+        terminal["error"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()),
+        "成因必须落在 message 里：{terminal}"
+    );
+    assert_eq!(
+        terminal["result"],
+        Value::Null,
+        "失败不得携带业务结果：{terminal}"
+    );
+    let terminal_event = terminal["terminalEventId"]
+        .as_str()
+        .expect("failed 是终态，必须带 terminalEventId")
+        .to_owned();
+
+    // ③ 终态是**持久化并广播**的事件，不是凭空一条回包：实时扇出里能收到该 requestId 的终态事件，
+    //    事件类型是 `command.failed`，eventId 与回包里的 terminalEventId 相同。
+    drain_until(&mut client, &mut exchange, |exchange| {
+        exchange
+            .events
+            .iter()
+            .any(|event| event["causationRequestId"] == json!(request))
+    })
+    .await;
+    let event_frame = exchange.terminal_event(&request);
+    assert_eq!(
+        event_frame["eventType"],
+        json!("command.failed"),
+        "{event_frame}"
+    );
+    assert_eq!(
+        event_frame["eventId"],
+        json!(terminal_event),
+        "{event_frame}"
+    );
+
+    // ④ 失败零会话行：**按会话标识**断言到具体那一行（标识取自后端实际收到的 `create` 参数），而不是
+    //    只看总数——同时也没有它的任何事件行（三条件随失败作废）。
+    let created = host.script().created();
+    assert_eq!(created.len(), 1, "后端恰好被要求建立一条会话：{created:?}");
+    assert!(
+        !session_row_exists(&host, &created[0]).await,
+        "失败的那条会话不得有会话行：{}",
+        created[0]
+    );
+    assert!(
+        stored_session_events(&host, &created[0]).await.is_empty(),
+        "失败的那条会话不得有事件行：{}",
+        created[0]
+    );
+    assert_eq!(
+        session_row_count(&host).await,
+        rows_before,
+        "后端失败 MUST 零会话行"
+    );
+    assert_eq!(
+        session_scoped_event_count(&host).await,
+        0,
+        "失败路径不得留下任何会话级事件（窗口期队列随失败作废）"
+    );
+    // ⑤ 持久记录是这一组断言的另一面：终态写在**受理那一次的幂等行**上，且不指向会话行。
+    let record = stored_command(&host, &request)
+        .await
+        .expect("受理已经落盘，必须有该 requestId 的持久记录");
+    assert_eq!(record.0, "failed", "持久终态必须是 failed：{record:?}");
+    assert_eq!(record.1, None, "failed 的记录不得指向会话行：{record:?}");
+    assert_eq!(
+        record.2.as_deref(),
+        Some(terminal_event.as_str()),
+        "回包的 terminalEventId 必须是落库的那条事件：{record:?}"
+    );
+    assert_eq!(
+        record.3.as_deref(),
+        Some("internal.unavailable"),
+        "{record:?}"
+    );
+    // ⑥ 失败来自后端调用之内（不是被前置拒绝）：`create` 恰好被派发一次。
+    assert_eq!(
+        host.script().create_calls(),
+        1,
+        "失败必须发生在后端调用之内"
+    );
+
+    host.stop().await;
+}
+
+/// 4.1 ①②的对照组：**说不清**的后端失败必须终结为 `uncertain`，不得报 `failed`，同样零会话行。
+///
+/// 与上一条成对，两条一起把「可证明 / 说不清」这个判据在协议面钉成**双向**可证伪：实现若一律报
+/// `failed`，本条红；若一律报 `uncertain`，上一条红。
+///
+/// 变红点：①终态是 `failed`（把「说不清」谎报成「什么也没发生」）⇒ status 与广播事件类型同时红；
+/// ②失败留下会话行或事件行 ⇒ `owned_session`/`owned_event` 的条数断言红。
+#[tokio::test]
+async fn an_unprovable_create_failure_ends_as_uncertain_with_zero_session_rows() {
+    let host = HostNode::start("sync-create-uncertain", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    // `IoError` 一类**不能证明** Agent 侧没有产生会话（请求可能已发出）⇒ 终态是 `uncertain`。
+    host.script()
+        .fail_create(acp_core::model::UnavailableKind::IoError);
+    let mut client = connect_with_live_events(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.create（说不清的后端失败）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let mut exchange = exchange_until_terminal(&mut client, &request).await;
+
+    assert_eq!(exchange.first()["status"], json!("accepted"));
+    let terminal = exchange.terminal();
+    assert_eq!(terminal["status"], json!("uncertain"), "{terminal}");
+    assert_eq!(
+        terminal["error"]["code"],
+        json!("command.uncertain"),
+        "说不清的成因取 core 的「无法确认」码：{terminal}"
+    );
+    assert_eq!(
+        terminal["result"],
+        Value::Null,
+        "不确定的命令不得有结果：{terminal}"
+    );
+    let terminal_event = terminal["terminalEventId"]
+        .as_str()
+        .expect("uncertain 是终态，必须带 terminalEventId")
+        .to_owned();
+
+    drain_until(&mut client, &mut exchange, |exchange| {
+        exchange
+            .events
+            .iter()
+            .any(|event| event["causationRequestId"] == json!(request))
+    })
+    .await;
+    let event_frame = exchange.terminal_event(&request);
+    assert_eq!(
+        event_frame["eventType"],
+        json!("command.uncertain"),
+        "终态事件类型必须与判据一致：{event_frame}"
+    );
+    assert_eq!(
+        event_frame["eventId"],
+        json!(terminal_event),
+        "{event_frame}"
+    );
+
+    let created = host.script().created();
+    assert_eq!(created.len(), 1, "后端恰好被要求建立一条会话：{created:?}");
+    assert!(
+        !session_row_exists(&host, &created[0]).await,
+        "说不清的失败也不得留下会话行：{}",
+        created[0]
+    );
+    assert!(
+        stored_session_events(&host, &created[0]).await.is_empty(),
+        "说不清的失败也不得留下事件行：{}",
+        created[0]
+    );
+    assert_eq!(session_row_count(&host).await, 0, "说不清也必须零会话行");
+    assert_eq!(
+        session_scoped_event_count(&host).await,
+        0,
+        "失败路径不得留下任何会话级事件"
+    );
+    let record = stored_command(&host, &request)
+        .await
+        .expect("受理已经落盘，必须有该 requestId 的持久记录");
+    assert_eq!(record.0, "uncertain", "{record:?}");
+    assert_eq!(record.1, None, "{record:?}");
+    assert_eq!(record.3.as_deref(), Some("command.uncertain"), "{record:?}");
+    assert_eq!(host.script().create_calls(), 1);
+
+    host.stop().await;
+}
+
+/// 4.1 ③：同一 `requestId` 重发必须拿到**首次的终态**、不产生第二个会话、不派发第二次创建。
+///
+/// 用**成功**路径而不是失败路径做这一条：失败路径两侧都是零会话行，「不产生第二个会话」在那里恒真
+/// （观察不到差别）；成功路径下会话行数从 1 变 2、后端调用数从 1 变 2 都能被看见。
+///
+/// 变红点：①重发被当成新命令（再派发一次创建）⇒ 后端 `create` 调用数变 2、会话行变 2 条；②重发回
+/// 一条新的 `accepted`（而不是首次终态）⇒ 重发交换里 `command.result` 的条数/首条 status 断言红；
+/// ③重发覆盖了首次记录（新的 terminalEventId 或新的会话标识）⇒ 与首次逐字段比对的两条断言红。
+#[tokio::test]
+async fn resending_the_same_request_id_returns_the_first_terminal_without_a_second_dispatch() {
+    let host = HostNode::start("sync-create-replay", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    let payload = create_payload(&host);
+    client.step("首次 session.create");
+    client
+        .command(&request, "session.create", None, payload.clone())
+        .await;
+    let first_round = exchange_until_terminal(&mut client, &request).await;
+    // 首次：恰好两条 `command.result`（`accepted` → 终态）。
+    assert_eq!(
+        first_round.results.len(),
+        2,
+        "首次提交必须先 `accepted` 再终态：{:?}",
+        first_round.results
+    );
+    assert_eq!(
+        first_round.first()["status"],
+        json!("accepted"),
+        "{:?}",
+        first_round.results
+    );
+    let terminal = first_round.terminal();
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    let session = terminal["result"]["sessionId"]
+        .as_str()
+        .expect("completed 必须给出新会话标识")
+        .to_owned();
+    let terminal_event = terminal["terminalEventId"]
+        .as_str()
+        .expect("completed 是终态，必须带 terminalEventId")
+        .to_owned();
+    let accepted_at = terminal["acceptedAt"].clone();
+    assert_eq!(host.script().create_calls(), 1, "首次创建恰好派发一次");
+    assert_eq!(
+        host.script().created(),
+        vec![session.clone()],
+        "终态给出的会话标识必须是 core 交给后端的那一个"
+    );
+    assert_eq!(session_row_count(&host).await, 1, "首次创建恰好一条会话行");
+
+    // 重发：同 `requestId` + 同 payload（幂等键是 `(deviceId, requestId)`，指纹必须一致）。
+    client.step("同一 requestId 重发");
+    client
+        .command(&request, "session.create", None, payload)
+        .await;
+    let replay_round = exchange_until_terminal(&mut client, &request).await;
+    // 重发的**首次**响应就是首次终态（不得再回一条 `accepted`）。
+    assert_eq!(
+        replay_round.results.len(),
+        1,
+        "重发必须直接回首次终态（不得再受理一次）：{:?}",
+        replay_round.results
+    );
+    let replayed = replay_round.first();
+    assert_eq!(replayed["status"], json!("completed"), "{replayed}");
+    assert_eq!(
+        replayed["terminalEventId"],
+        json!(terminal_event),
+        "重发必须回**首次**的 terminalEventId：{replayed}"
+    );
+    assert_eq!(
+        replayed["acceptedAt"], accepted_at,
+        "重发的 acceptedAt 必须是首次接受时间：{replayed}"
+    );
+    assert_eq!(
+        replayed["result"]["sessionId"],
+        json!(session),
+        "重发必须回首次建立的会话：{replayed}"
+    );
+    // 零新增副作用：后端只被派发一次、本机只有那一条会话行。
+    assert_eq!(
+        host.script().create_calls(),
+        1,
+        "重发 MUST NOT 派发第二次创建"
+    );
+    assert_eq!(
+        session_row_count(&host).await,
+        1,
+        "重发 MUST NOT 产生第二个会话"
+    );
+
+    host.stop().await;
+}
+
+/// 4.1 ④：崩溃窗口（受理已落盘、落账未发生）经启动恢复终结为 `uncertain`，且本机没有该会话的会话行。
+///
+/// 窗口直接经用例面构造（`create_session` 返回 `Prepared` 之后**不结算**），因为崩溃窗口的持久形状
+/// 就是「有一条 `accepted`、`session_id` 为空的幂等记录，没有会话行」——协议面造不出它（命令面在
+/// `create_session` 返回之前不会回 `accepted`）。
+///
+/// 变红点：①恢复走「有会话分支」或把该记录当已终结 ⇒ `command.status` 的 `state` 不是 `uncertain`；
+/// ②恢复自动重试（再派发一次创建）⇒ 后端 `create` 调用数变 2；③恢复顺手补建会话行 ⇒ `owned_session`
+/// 的断言红；④终态事件没有落库/没有指向该请求 ⇒ `owned_command` 的四列断言与事件行断言红。
+#[tokio::test]
+async fn the_crash_window_recovers_as_uncertain_without_a_session_row() {
+    let host = HostNode::start("sync-create-crash", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    // 受理（actor 与 Sync 面同源：`Actor::Device`，因此之后能凭 `command.status` 读到它）之后**不结算**。
+    let request = uuid_text();
+    let actor = acp_core::model::Actor::Device {
+        device: acp_core::model::DeviceId::new(&device.id()).expect("device id 规范"),
+    };
+    let prepared = match host
+        .core()
+        .create_session(
+            &actor,
+            acp_core::model::RequestId::new(&request).expect("request id 规范"),
+            ac1_digest("acpr-remote/sync-commands-e2e/crash-window"),
+            acp_core::model::CreateSessionRequest::new(
+                acp_core::model::AgentRef::try_new(
+                    acp_core::model::AgentId::new(AGENT).expect("agent id"),
+                    "Codex",
+                )
+                .expect("agent ref"),
+                None,
+                None,
+                acp_core::model::ResourceOrigin::Local,
+            ),
+            None,
+        )
+        .await
+        .expect("本机会话受理")
+    {
+        acp_core::ports::SessionCreateAdmission::Prepared(prepared) => prepared,
+        other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+    };
+
+    // 窗口期的持久形状：只有幂等记录（会话标识为空），没有会话行。
+    let window = stored_command(&host, &request)
+        .await
+        .expect("受理必须落幂等记录");
+    assert_eq!(window.0, "accepted", "受理后命令停在 accepted：{window:?}");
+    assert_eq!(window.1, None, "受理不得写会话行：{window:?}");
+    assert!(
+        !session_row_exists(&host, prepared.session.as_str()).await,
+        "受理阶段不得有该会话的会话行：{prepared:?}"
+    );
+    assert_eq!(session_row_count(&host).await, 0, "受理不得建会话行");
+    assert_eq!(host.script().create_calls(), 1, "受理派发了一次创建");
+
+    // 启动恢复（组合根在取得单实例锁、开始监听之前调用的那一步）。
+    let recovered = host
+        .core()
+        .recover_unsettled(
+            &acp_core::model::Actor::LocalCli,
+            acp_core::ports::ReplayLimit::default(),
+        )
+        .await
+        .expect("启动恢复");
+    assert_eq!(recovered, 1, "恢复必须终结那条 accepted 记录");
+
+    // 协议级观察：`command.status`（§11.4）读到该命令的终态。`uncertain` 是终态之一，且必须指向持久
+    // 终态事件（`owned_command` 的 CHECK 也这么要求）。
+    let status_request = uuid_text();
+    client.step("command.status（恢复之后重查）");
+    client
+        .command(
+            &status_request,
+            "command.status",
+            None,
+            json!({ "targetRequestId": request }),
+        )
+        .await;
+    let queried = client.expect_command_result(&status_request).await;
+    assert_eq!(queried["status"], json!("completed"), "{queried}");
+    let status = &queried["result"];
+    assert_eq!(
+        status["state"],
+        json!("uncertain"),
+        "崩溃窗口的终态必须是 uncertain：{status}"
+    );
+    assert_eq!(
+        status["error"]["code"],
+        json!("command.uncertain"),
+        "成因是 core 的「无法确认」码：{status}"
+    );
+    assert_eq!(
+        status["result"],
+        Value::Null,
+        "没有会话行时不得有结果：{status}"
+    );
+    let terminal_event = status["terminalEventId"]
+        .as_str()
+        .expect("uncertain 必须带 terminalEventId")
+        .to_owned();
+
+    // 本机没有该会话的会话行，也没有它的任何事件行。
+    assert!(
+        !session_row_exists(&host, prepared.session.as_str()).await,
+        "崩溃窗口不得留下会话行：{prepared:?}"
+    );
+    assert_eq!(session_row_count(&host).await, 0, "崩溃窗口不得留下会话行");
+    assert!(
+        stored_session_events(&host, prepared.session.as_str())
+            .await
+            .is_empty(),
+        "崩溃窗口不得留下该会话的事件行"
+    );
+    // 持久记录与协议回包同源，且**没有自动重试**（恢复不重新派发创建）。
+    let persisted = stored_command(&host, &request).await.expect("持久记录");
+    assert_eq!(persisted.0, "uncertain", "{persisted:?}");
+    assert_eq!(persisted.1, None, "{persisted:?}");
+    assert_eq!(
+        persisted.2.as_deref(),
+        Some(terminal_event.as_str()),
+        "{persisted:?}"
+    );
+    assert_eq!(
+        persisted.3.as_deref(),
+        Some("command.uncertain"),
+        "{persisted:?}"
+    );
+    assert_eq!(
+        host.script().create_calls(),
+        1,
+        "恢复 MUST NOT 自动重试创建（不得再派发一次）"
+    );
+
+    host.stop().await;
+}
+
+/// 4.2 ⑤：会话行落账之前到达的后端事件不丢、不重，且在落账后按**到达顺序**落库并广播。
+///
+/// 变红点：①窗口期事件被丢（例如超限之前就丢弃、或失败关闭误触发）⇒ 会话级事件条数与序号连续两条
+/// 断言红；②落账后没有 flush（事件留在内存里）⇒ 条数断言与落库断言同时红；③重排（例如按 view 或
+/// eventId 排序、或并发 flush 交错）⇒ `currentModeId` 的顺序断言与「落库 eventId 序列 = 广播序列」
+/// 断言红；④重复写库（同一事件两条行）⇒ `owned_event` 的 `session_sequence` 唯一索引会直接报错，
+/// 条数断言也红。
+#[tokio::test]
+async fn window_events_are_stored_and_broadcast_in_arrival_order() {
+    let host = HostNode::start("sync-create-window", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    // 后端在 `create` 返回**之前**送出四条事件：那一刻会话行还没有落账（窗口期）。
+    let windowed = ["m0", "m1", "m2", "m3"];
+    host.script().emit_window_events(windowed.len());
+    let mut client = connect_with_live_events(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.create（后端在窗口期产出四条事件）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let mut exchange = exchange_until_terminal(&mut client, &request).await;
+    assert_eq!(exchange.first()["status"], json!("accepted"));
+    let terminal = exchange.terminal();
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    let session = terminal["result"]["sessionId"]
+        .as_str()
+        .expect("completed 必须给出新会话标识")
+        .to_owned();
+    let terminal_event = terminal["terminalEventId"]
+        .as_str()
+        .expect("completed 必须带 terminalEventId")
+        .to_owned();
+    // 前提：后端确实被要求建立**这一条**会话（事件序列的断言因此指向真实的会话槽位）。
+    assert_eq!(
+        host.script().created(),
+        vec![session.clone()],
+        "终态给出的会话标识必须是 core 交给后端的那一个"
+    );
+
+    // 收齐该会话的全部实时事件（终态那条 + 窗口期四条）。
+    drain_until(&mut client, &mut exchange, |exchange| {
+        exchange
+            .events
+            .iter()
+            .filter(|event| event["sessionId"] == json!(session))
+            .count()
+            > windowed.len()
+    })
+    .await;
+    let broadcast: Vec<&Value> = exchange
+        .events
+        .iter()
+        .filter(|event| event["sessionId"] == json!(session))
+        .collect();
+    assert_eq!(
+        broadcast.len(),
+        windowed.len() + 1,
+        "该会话必须恰有「终态 + 窗口期四条」这么多事件：{broadcast:?}"
+    );
+
+    // ① 广播：会话内序号连续，且终态事件占 1（会话行与终态在**同一次**落账提交里，窗口期事件在它
+    //    之后按到达顺序写库）。
+    let sequences: Vec<&str> = broadcast
+        .iter()
+        .map(|event| {
+            event["sessionSequence"]
+                .as_str()
+                .expect("会话级事件必须带会话内序号")
+        })
+        .collect();
+    assert_eq!(
+        sequences,
+        vec!["1", "2", "3", "4", "5"],
+        "广播的会话内序号必须连续且按到达顺序：{broadcast:?}"
+    );
+    assert_eq!(
+        broadcast[0]["eventId"],
+        json!(terminal_event),
+        "会话内序号 1 必须是回包指向的那条终态事件：{broadcast:?}"
+    );
+    assert_eq!(
+        broadcast[0]["eventType"],
+        json!("command.completed"),
+        "{broadcast:?}"
+    );
+    // 正文顺序 = 到达顺序（重排会在这里变红；不重不丢由条数与序号连续性一并钉住）。
+    let modes: Vec<&str> = broadcast
+        .iter()
+        .skip(1)
+        .map(|event| {
+            event["payload"]["view"]["currentModeId"]
+                .as_str()
+                .expect("mode 事件的 view 必须带 currentModeId")
+        })
+        .collect();
+    assert_eq!(
+        modes, windowed,
+        "窗口期事件必须按到达顺序广播：{broadcast:?}"
+    );
+
+    // ② 落库：与广播**逐条相同**（同一条事件、同一个 eventId、同一个会话内序号、同一个顺序）。
+    let stored = stored_session_events(&host, &session).await;
+    let stored_ids: Vec<String> = stored
+        .iter()
+        .map(|(event_id, _, _)| event_id.clone())
+        .collect();
+    let broadcast_ids: Vec<String> = broadcast
+        .iter()
+        .map(|event| event["eventId"].as_str().expect("eventId").to_owned())
+        .collect();
+    assert_eq!(
+        stored_ids, broadcast_ids,
+        "落库 eventId 序列必须与广播序列逐条相同（落库 {stored:?}）"
+    );
+    let stored_sequences: Vec<i64> = stored.iter().map(|(_, _, sequence)| *sequence).collect();
+    assert_eq!(
+        stored_sequences,
+        vec![1, 2, 3, 4, 5],
+        "落库的会话内序号必须连续且一条不重：{stored:?}"
+    );
+    let stored_types: Vec<String> = stored
+        .iter()
+        .map(|(_, event_type, _)| event_type.clone())
+        .collect();
+    assert_eq!(
+        stored_types,
+        vec![
+            "command.completed".to_owned(),
+            "session.mode.changed".to_owned(),
+            "session.mode.changed".to_owned(),
+            "session.mode.changed".to_owned(),
+            "session.mode.changed".to_owned(),
+        ],
+        "落库形状必须是「终态事件 + 窗口期四条」：{stored:?}"
+    );
+
+    host.stop().await;
+}
+
+/// 4.2 ⑥：窗口期事件超过 `WINDOW_EVENT_QUEUE_LIMIT` 时走**失败关闭**——命令终结为 `uncertain`、零会话
+/// 行、且后端被要求**终止**（`SessionBackendFactory::terminate_agent`）。
+///
+/// 变红点：①超限仍然 `completed`（把半个会话报成建成）⇒ 终态 status 断言红；②超限静默丢事件、只把
+/// 命令报成 `uncertain` 但不结束该 Agent ⇒ 脚本后端记录到的 `terminate_agent` 调用为空、条数断言红；
+/// ③超限路径顺手建了会话行或写下了已入队的事件 ⇒ `owned_session`/`owned_event` 的条数断言红（被终止
+/// 的那条会话标识从后端记录里取得，因此这是对**具体会话**的断言，不是只看总数）。
+#[tokio::test]
+async fn a_window_event_overflow_closes_the_backend_and_ends_the_create_as_uncertain() {
+    let host = HostNode::start("sync-create-overflow", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    // 第 `LIMIT + 1` 条越界：不再入队，由结算路径失败关闭。
+    host.script()
+        .emit_window_events(acp_core::broker::WINDOW_EVENT_QUEUE_LIMIT + 1);
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.create（窗口期事件超限）");
+    client
+        .command(&request, "session.create", None, create_payload(&host))
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert_eq!(accepted["result"], Value::Null, "{accepted}");
+    let terminal = client.expect_command_result(&request).await;
+
+    // ① 超限意味着无法确认会话是否已建立：终态是 `uncertain`，不是 `completed`。
+    assert_eq!(terminal["status"], json!("uncertain"), "{terminal}");
+    assert_eq!(
+        terminal["error"]["code"],
+        json!("command.uncertain"),
+        "{terminal}"
+    );
+    assert_eq!(
+        terminal["result"],
+        Value::Null,
+        "没有会话行时不得有结果：{terminal}"
+    );
+    assert!(
+        terminal["terminalEventId"].is_string(),
+        "uncertain 必须指向持久终态事件：{terminal}"
+    );
+
+    // ② 后端被要求**终止**该 Agent 运行时（core 不持进程句柄，只关端点不足以让事件源停下）。
+    let terminated = host.script().terminated();
+    assert_eq!(
+        terminated.len(),
+        1,
+        "超限必须恰好要求终止一次：{terminated:?}"
+    );
+    let terminated_session = terminated[0].clone();
+    assert_eq!(
+        host.script().created(),
+        vec![terminated_session.clone()],
+        "被终止的必须是后端实际被要求建立的那条会话：{terminated:?}"
+    );
+
+    // ③ 零会话行：被终止的那条会话没有会话行，也没有任何事件行。
+    assert_eq!(
+        session_row_count(&host).await,
+        0,
+        "失败关闭 MUST 零会话行：{terminated:?}"
+    );
+    assert!(
+        !session_row_exists(&host, &terminated_session).await,
+        "被终止的会话不得有会话行：{terminated_session}"
+    );
+    assert!(
+        stored_session_events(&host, &terminated_session)
+            .await
+            .is_empty(),
+        "被终止的会话不得有事件行：{terminated_session}"
+    );
+    assert_eq!(
+        session_scoped_event_count(&host).await,
+        0,
+        "失败关闭不得写任何会话级事件"
+    );
+
+    // ④ 持久记录：终态落在该命令的幂等行上，且不指向会话行。
+    let record = stored_command(&host, &request).await.expect("持久记录");
+    assert_eq!(record.0, "uncertain", "{record:?}");
+    assert_eq!(record.1, None, "{record:?}");
+    assert_eq!(record.3.as_deref(), Some("command.uncertain"), "{record:?}");
+    // ⑤ 超限发生在**执行之后**的结算路径上：创建本身只被派发一次。
+    assert_eq!(host.script().create_calls(), 1);
 
     host.stop().await;
 }

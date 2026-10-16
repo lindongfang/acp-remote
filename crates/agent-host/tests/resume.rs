@@ -431,8 +431,12 @@ async fn an_agent_refusal_sends_one_resume_request_and_no_new_session() {
         .await,
     );
     assert!(
-        matches!(error, PortError::InvalidRequest(_)),
-        "Agent 拒绝恢复必须明确失败：{error}"
+        matches!(
+            error,
+            PortError::Unavailable(UnavailableKind::SessionNotEstablished)
+        ),
+        "Agent 拒绝恢复必须明确失败，且属于**可证明未产生会话**的一类（`resume` 的端口映射把它收敛成\
+         `SessionNotEstablished`）：{error}"
     );
 
     let rows = dumped_requests(&params_dump);

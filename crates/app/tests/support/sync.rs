@@ -856,7 +856,8 @@ pub fn signature_of(base64url_text: &str) -> P1363Signature {
 /// ① **Agent 后端与目录替身**：本用例不启动真实 Agent 子进程（`agent.connected`/`agent.disconnected`
 ///   是唯一会被真实提交的节点级事件，见 [`HostNode::emit_agent_lifecycle`]）；
 /// ② **`ScriptedBackends`**：`create`/`open`/`resume` 都不启动进程，`prompt` 只把脚本事件暂存，
-///   由用例显式释放（`release_events`）来制造一条**实时**事件；
+///    由用例显式释放（`release_events`）来制造一条**实时**事件；它同时执行 [`ScriptedScript`] 的行为
+///    脚本（`create` 失败注入、窗口期事件注入、调用计数与终止记录）；
 /// ③ **`OwnerReachability` 替身**（恒 `false`）：`sync_visible_sessions` 的 imported 分支要求调用方
 ///   给出它，而本用例不产生 imported 会话（import 需要 `import.add`，与本次判据无关），恒不可达
 ///   因此 imported 清单为空——这是一个**已知且被断言收窄**的替身，不是被测行为。
@@ -878,6 +879,8 @@ pub struct HostNode {
     sync_registry: Arc<server::sync::conn::ConnectionRegistry>,
     /// 脚本端点暂存的后端事件。
     parked: Arc<ParkedEvents>,
+    /// 脚本化后端的行为脚本（失败注入、窗口期事件注入与后端调用计数）。
+    script: Arc<ScriptedScript>,
     /// 宿主名（`daemon.public_origin` 的 authority）。
     host_name: String,
     shutdown: server::transport::net::ShutdownHandle,
@@ -929,8 +932,93 @@ impl ParkedEvents {
     }
 }
 
+/// 脚本化后端的**行为脚本**（`session-create-settle-order` 的失败与窗口期观测口）。
+///
+/// 默认取值是「建立成功、窗口期不产事件、终止是空操作」——其余 Sync 用例的行为因此逐字不变；
+/// 只有显式调过 [`ScriptedScript::fail_create`] / [`ScriptedScript::emit_window_events`] 的用例才会
+/// 走到失败与窗口期那两条路径。
+#[derive(Default)]
+pub struct ScriptedScript {
+    /// 此后每一次 `create` 的失败类别；`None` = 正常建立。
+    ///
+    /// 存 [`acp_core::model::UnavailableKind`]（`Copy`）而不是 `PortError`：后者不实现 `Clone`，而每
+    /// 一轮 `create` 都必须现造一个错误值（真实后端每次失败也都是新的错误值）。
+    failure: std::sync::Mutex<Option<acp_core::model::UnavailableKind>>,
+    /// 此后每一次 `create` 在返回之前推进 sink 的事件条数（窗口期事件的注入点）。
+    window_events: std::sync::Mutex<usize>,
+    /// `create` 的调用次数（「同 `requestId` 重发不派发第二次创建」的观测口）。
+    creates: std::sync::atomic::AtomicUsize,
+    /// 交给 `create` 的会话标识（按调用顺序）：失败路径下它就是「那一条**不该**有会话行的会话」。
+    created: std::sync::Mutex<Vec<String>>,
+    /// 收到 `terminate_agent` 的会话标识（窗口期超限失败关闭的观测口）。
+    terminated: std::sync::Mutex<Vec<String>>,
+}
+
+impl ScriptedScript {
+    /// 让此后每一次 `create` 都以该类别失败：`SessionNotEstablished` = 可证明 Agent 侧未产生会话
+    /// （终态 `failed`），其余取值 = 说不清（终态 `uncertain`）。
+    pub fn fail_create(&self, kind: acp_core::model::UnavailableKind) {
+        *self.failure.lock().expect("用例内互斥量不会中毒") = Some(kind);
+    }
+
+    /// 让此后每一次 `create` 在**返回之前**向该会话的 sink 推 `count` 条事件。
+    ///
+    /// 这是「受理已落盘、会话行尚未落账」那一刻到达的后端事件（真实后端在建会话期间就会产出
+    /// `session/update`）：core 把它们排队，落账提交之后按到达顺序写库再广播。
+    pub fn emit_window_events(&self, count: usize) {
+        *self.window_events.lock().expect("用例内互斥量不会中毒") = count;
+    }
+
+    fn failure(&self) -> Option<acp_core::model::UnavailableKind> {
+        *self.failure.lock().expect("用例内互斥量不会中毒")
+    }
+
+    fn window_events(&self) -> usize {
+        *self.window_events.lock().expect("用例内互斥量不会中毒")
+    }
+
+    /// `create` 已被调用几次（幂等重发的观测口，按后端收到的调用计数）。
+    pub fn create_calls(&self) -> usize {
+        self.creates.load(Ordering::SeqCst)
+    }
+
+    /// 交给 `create` 的会话标识（按调用顺序）：「失败零会话行」因此能断言到**具体会话**，而不是只看总数。
+    pub fn created(&self) -> Vec<String> {
+        self.created.lock().expect("用例内互斥量不会中毒").clone()
+    }
+
+    /// 已收到 `SessionBackendFactory::terminate_agent` 的会话标识（按调用顺序）。
+    pub fn terminated(&self) -> Vec<String> {
+        self.terminated
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .clone()
+    }
+}
+
+/// 窗口期注入的一条后端事件（`session.mode.changed`）。
+///
+/// view 里只写 `currentModeId`：`version` 是会话版本（§10.3），由 core 在提交时按当时的会话版本补齐，
+/// 这里自己编一个可能与落库版本不一致的取值只会让提交失败——那不是本夹具要测的东西。
+fn window_event(index: usize) -> acp_core::model::EndpointEvent {
+    use acp_core::model::{EndpointEvent, EventKind, EventPayload, EventType, Timestamp, ViewJson};
+    EndpointEvent::new(
+        EventKind::State,
+        EventType::new("session.mode.changed").expect("合法事件类型"),
+        EventPayload::new(
+            ViewJson::new(&format!(r#"{{"currentModeId":"m{index}"}}"#))
+                .expect("view 是 JSON object"),
+            None,
+        ),
+        None,
+        None,
+        Timestamp::new("2026-10-14T10:00:00.000Z").expect("规范时间戳"),
+    )
+}
+
 struct ScriptedBackends {
     parked: Arc<ParkedEvents>,
+    script: Arc<ScriptedScript>,
 }
 
 struct ScriptedCatalog;
@@ -1007,9 +1095,9 @@ fn scripted_events(marker: &str) -> Vec<acp_core::model::EndpointEvent> {
 
 /// 脚本化 `create` 建立的 ACP 会话标识（可预测：与 `support::owner` 同款）。
 ///
-/// **它必须存在**：`Broker::create_session` 只在 `SessionEndpoint::agent_session_id()` 非 `None` 时
-/// 才写「恢复列 + 目录归属」（`agent_session_id`/`workspace_cwd`/`workspace_alias` 的同一条 `UPDATE`），
-/// 因此返回 `None` 会让 `owned_session.workspace_alias` 永远落不了盘，目录来源的用例就断言不到落库事实。
+/// **它必须非空**：ACP 会话标识是恢复流程（`session.resume`）的输入，而它由 `session.create` 的**落账
+/// 提交**（`StateChange::SettleCreate`）与终态同批落盘——返回 `None` 会让「ACP 会话标识已落库」这条
+/// 断言（以及依赖它的恢复用例）观察不到任何东西。
 fn scripted_agent_session_id(
     session: &acp_core::model::SessionId,
 ) -> acp_core::model::AgentSessionId {
@@ -1019,12 +1107,37 @@ fn scripted_agent_session_id(
 
 #[async_trait::async_trait]
 impl SessionBackendFactory for ScriptedBackends {
+    /// 替身不持有进程：终止本身是成功的空操作，但**记录**这一次调用——窗口期超限的失败关闭
+    /// （终态 `uncertain` + 零会话行 + 「后端被要求终止」）只有在这里才能被协议级用例观察到。
+    async fn terminate_agent(&self, session: &acp_core::model::SessionId) -> Result<(), PortError> {
+        self.script
+            .terminated
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .push(session.as_str().to_owned());
+        Ok(())
+    }
+
     async fn create(
         &self,
         session: &acp_core::model::SessionId,
         _request: acp_core::model::CreateSessionRequest,
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
+        self.script.creates.fetch_add(1, Ordering::SeqCst);
+        self.script
+            .created
+            .lock()
+            .expect("用例内互斥量不会中毒")
+            .push(session.as_str().to_owned());
+        // 窗口期事件**先于**失败注入：真实后端在 `session/new` 之后可能已经送出过 `session/update`，
+        // 然后建会话才失败——那条路径必须一样零会话行、且一条事件行都不留。
+        for index in 0..self.script.window_events() {
+            sink.send(window_event(index));
+        }
+        if let Some(kind) = self.script.failure() {
+            return Err(PortError::Unavailable(kind));
+        }
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
@@ -1221,9 +1334,11 @@ impl HostNode {
         ));
 
         let parked = Arc::new(ParkedEvents::default());
+        let script = Arc::new(ScriptedScript::default());
         let backends: Arc<dyn acp_core::ports::SessionBackendFactory> =
             Arc::new(ScriptedBackends {
                 parked: Arc::clone(&parked),
+                script: Arc::clone(&script),
             });
         let catalog: Arc<dyn acp_core::ports::AgentCatalog> = Arc::new(ScriptedCatalog);
         // 实时扇出的接收端先在这里取走，再装进发布分叉（与 `NetIngress::start` 的接线顺序一致）。
@@ -1367,6 +1482,7 @@ impl HostNode {
             addr,
             sync_registry,
             parked,
+            script,
             host_name,
             shutdown,
             tasks,
@@ -1422,6 +1538,11 @@ impl HostNode {
     /// 脚本端点暂存的事件。
     pub fn parked(&self) -> &Arc<ParkedEvents> {
         &self.parked
+    }
+
+    /// 脚本化后端的行为脚本（失败注入、窗口期事件注入、后端调用计数）。
+    pub fn script(&self) -> &Arc<ScriptedScript> {
+        &self.script
     }
 
     /// 真实存储（用例对持久化事实做独立只读复核）。
@@ -1544,12 +1665,13 @@ impl HostNode {
             addr: _,
             sync_registry,
             parked,
+            script,
             host_name: _,
             shutdown,
             tasks,
             _temp,
         } = self;
-        let _ = (&store, &sync_registry, &parked);
+        let _ = (&store, &sync_registry, &parked, &script);
         shutdown.trigger();
         for (name, mut handle) in tasks {
             match tokio::time::timeout(Duration::from_secs(10), &mut handle).await {
@@ -1568,6 +1690,7 @@ impl HostNode {
         drop(authority);
         drop(store);
         drop(parked);
+        drop(script);
         drop(sync_registry);
         drop(root);
     }

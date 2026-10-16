@@ -1159,6 +1159,54 @@ fn ac1_digest(label: &str) -> acp_core::model::Digest {
     acp_core::model::Digest::new(&encoded).expect("32 字节摘要")
 }
 
+/// 建一条本机 owned 会话并**落账**（§6 第 20 条的三笔时序：受理 → 执行 → 落账），返回新会话的标识。
+///
+/// 本文件的用例都要求这条会话**真实存在**（`session.prompt` 要有会话行、`owned_session` 的列要可读），
+/// 而受理提交只落幂等记录——会话行与终态在**落账提交**里同批落盘，因此 helper 在 `create_session`
+/// 之后必须再调一次 `settle_session_create`（与生产适配层的做法同形）。终态结果的原文只是形状占位：
+/// 本文件对会话的断言都不读它。
+async fn ac1_create_and_settle(
+    composition: &app::compose::Composition,
+    fingerprint: acp_core::model::Digest,
+    request: acp_core::model::CreateSessionRequest,
+) -> acp_core::model::SessionId {
+    use acp_core::model::{Actor, CommandResult, CommandStatus};
+
+    let request_id = composition.ids().request_id();
+    let prepared = match composition
+        .use_cases()
+        .create_session(
+            &Actor::LocalCli,
+            request_id.clone(),
+            fingerprint,
+            request,
+            None,
+        )
+        .await
+        .expect("session.create（会惰性拉起真实 fake ACP 子进程）")
+    {
+        acp_core::ports::SessionCreateAdmission::Prepared(prepared) => prepared,
+        other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+    };
+    let result =
+        CommandResult::from_json_text(r#"{"sessionId":"projected"}"#).expect("result object");
+    assert!(
+        composition
+            .use_cases()
+            .settle_session_create(
+                &Actor::LocalCli,
+                &request_id,
+                CommandStatus::Completed,
+                Some(result),
+                None,
+            )
+            .await
+            .expect("落账"),
+        "落账必须真的写入"
+    );
+    prepared.session
+}
+
 /// R30–R35（`specs/core-derived-events/spec.md` §「Agent 连接状态是节点级生命周期」）+ AC1：
 /// profile 进程**建立**（真实 ACP 子进程、经组合根自己的装配）时产生一次 `agent.connected`，它经
 /// `compose.rs` 的接线 → `Broker::commit_node_event` **落库**，`owned_event.session_id` 为空。
@@ -1212,11 +1260,18 @@ fn ac1_the_composition_root_persists_node_level_events_without_session_identity(
             CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
         let request_id = composition.ids().request_id();
         let fingerprint: Digest = ac1_digest("ac1-session-create");
-        let session = composition
+        // 本用例只观察**节点级**事件，因此这里**刻意不结算**本次创建（受理的窗口期一直开着，没有会话
+        // 行、也没有终态）：结算会写下 `command.completed`，那是一条会话级投递，会污染下面
+        // 「会话级扇出队列应恰为空」的断言。窗口期里到达的事件留在队列里不落盘，正是本用例要的现场。
+        let session = match composition
             .use_cases()
             .create_session(&Actor::LocalCli, request_id, fingerprint, request, None)
             .await
-            .expect("session.create（会拉起真实 fake ACP 子进程）");
+            .expect("session.create（会拉起真实 fake ACP 子进程）")
+        {
+            acp_core::ports::SessionCreateAdmission::Prepared(prepared) => prepared.session,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        };
         assert_eq!(
             session.as_str().len(),
             36,
@@ -1395,17 +1450,12 @@ async fn ac1_prompt_once(
     )
     .expect("workspace");
     let request = CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
-    let session = composition
-        .use_cases()
-        .create_session(
-            &Actor::LocalCli,
-            composition.ids().request_id(),
-            ac1_digest(&format!("ac1-session-{label}")),
-            request,
-            None,
-        )
-        .await
-        .expect("session.create（会惰性拉起真实 fake ACP 子进程）");
+    let session = ac1_create_and_settle(
+        composition,
+        ac1_digest(&format!("ac1-session-{label}")),
+        request,
+    )
+    .await;
 
     let prompt = ClientCommand {
         actor: Actor::LocalCli,
@@ -1843,8 +1893,7 @@ fn ac1_dumped_request_rows(path: &std::path::Path) -> Vec<Value> {
 #[test]
 fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical() {
     use acp_core::model::{
-        Actor, AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin,
-        WorkspaceAlias,
+        AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin, WorkspaceAlias,
     };
 
     support::block_on(async {
@@ -1912,20 +1961,13 @@ fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical
         .expect("workspace");
         let request =
             CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
-        let session = composition
-            .use_cases()
-            .create_session(
-                &Actor::LocalCli,
-                composition.ids().request_id(),
-                ac1_digest("ac1-cwd-session-create"),
-                request,
-                None,
-            )
-            .await
-            .expect("session.create（会拉起真实 fake ACP 子进程）");
+        let session =
+            ac1_create_and_settle(&composition, ac1_digest("ac1-cwd-session-create"), request)
+                .await;
 
-        // ① 持久化侧：真实 SQLite 的 `owned_session.workspace_cwd`。创建提交写入时该列为 `NULL`，
-        //    两列提交紧随其后（组合根 runtime 上的异步落库），因此按 15 s 上限轮询到非空再断言。
+        // ① 持久化侧：真实 SQLite 的 `owned_session.workspace_cwd`。受理提交只落幂等记录，会话行
+        //    （含这一列）与终态在**同一次落账提交**里落盘；落账由组合根 runtime 上的异步提交任务完成，
+        //    因此按 15 s 上限轮询到非空再断言。
         let pool = ac1_ro_pool(&data_dir).await;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let persisted: String = loop {
@@ -1941,7 +1983,7 @@ fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "超时：会话 {session} 的 owned_session.workspace_cwd 未落盘（创建时的两列提交缺失）"
+                "超时：会话 {session} 的 owned_session.workspace_cwd 未落盘（落账提交缺失）"
             );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         };

@@ -297,7 +297,9 @@ async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
     let collector = Collector::new();
 
     // ① 明确且可区分的不可用原因：既不是 `InvalidRequest`（请求非法），也不是
-    //    `KeystoreUnavailable`（凭据不可用）或 `Busy`（繁忙/超时），而是 IO 类不可用。
+    //    `KeystoreUnavailable`（凭据不可用）或 `Busy`（繁忙/超时），而是
+    //    `SessionNotEstablished`——会话建立路径上「可证明 Agent 侧没有产生会话」的那一档
+    //    （`session.create` 据此把终态判为 `failed` 而不是 `uncertain`）。
     let failure = match create(&host, "agent-missing", &session, &collector).await {
         Ok(_) => panic!("程序不存在时 spawn 必须失败，而不是给出可用端点"),
         Err(error) => error,
@@ -308,8 +310,8 @@ async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
     };
     assert_eq!(
         kind,
-        UnavailableKind::IoError,
-        "spawn 失败的不可用原因必须精确到 IO"
+        UnavailableKind::SessionNotEstablished,
+        "spawn 失败必须精确到「可证明未建立会话」"
     );
 
     // ② 无进程副作用：没有半启动的 runtime 留在目录里，也没有留下任何会话映射。
@@ -330,7 +332,8 @@ async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
         "spawn 失败不得留下会话映射（`open` 必须报未知会话）"
     );
 
-    // ③ 重试不被毒化：第二次 `create` 仍是干净的 `Unavailable(IoError)`，而不是 `Conflict` 之类的二次错误。
+    // ③ 重试不被毒化：第二次 `create` 仍是干净的 `Unavailable(SessionNotEstablished)`，而不是
+    //    `Conflict` 之类的二次错误。
     let retried = match create(&host, "agent-missing", &session, &collector).await {
         Ok(_) => panic!("第二次 create 同样必须失败"),
         Err(error) => error,
@@ -341,7 +344,7 @@ async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
     };
     assert_eq!(
         retried_kind,
-        UnavailableKind::IoError,
+        UnavailableKind::SessionNotEstablished,
         "上一次 spawn 失败不得毒化后续重试"
     );
 
@@ -1176,12 +1179,72 @@ async fn acpr_prefixed_credential_name_is_refused_before_spawn() {
     )
     .await;
     assert!(
-        matches!(outcome, Err(PortError::InvalidRequest(_))),
-        "`ACPR_` 前缀的注入名必须被静态拒绝（参数类错误，而不是启动失败）"
+        matches!(
+            outcome,
+            Err(PortError::Unavailable(
+                UnavailableKind::SessionNotEstablished
+            ))
+        ),
+        "`ACPR_` 前缀的注入名必须被静态拒绝，且这次拒绝是**可证明未产生会话**的一类（`create` 的\
+         端口映射把它收敛成 `SessionNotEstablished`，public 错误仍取 `internal.unavailable`）"
     );
     assert!(
         !dump.exists(),
         "拒绝必须发生在 spawn 之前（子进程不得启动）"
+    );
+    host.shutdown_all().await;
+    let _ = std::fs::remove_file(&dump);
+}
+
+/// `session-create-settle-order`：窗口期事件队列超限的失败关闭要求「结束该 Agent」，不是只关端点。
+///
+/// `SessionBackendFactory::terminate_agent` 是那条要求在本仓的端口面：调用之后该运行时**不在运行目录
+/// 里**（此后按 `AgentId` 复用取不到它）、进程树被回收、已被关掉的端点不再接受写入，而再次创建启动的
+/// 是**新一代**进程。它同时固定「幂等：没有运行时是成功的空操作」。
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminate_agent_ends_the_runtime_and_the_next_create_spawns_a_new_generation() {
+    const SECOND: &str = "22222222-2222-4222-8222-222222222222";
+    let (profile, dump) = dumping_profile("agent-1", "terminate");
+    let host = host(vec![profile], FakeCredentials::ok());
+    let agent = AgentId::new("agent-1").expect("id");
+    let session = SessionId::new(SESSION).expect("session");
+    let collector = Collector::new();
+    let endpoint = create(&host, "agent-1", &session, &collector)
+        .await
+        .expect("create");
+    assert!(runtime_running(&host, &agent), "创建成功后进程在跑");
+    assert_eq!(runtime_generation(&host, &agent), Some(1));
+
+    host.terminate_agent(&session).await.expect("terminate");
+
+    assert!(
+        !runtime_running(&host, &agent),
+        "结束之后该运行时不得仍在运行（不得再被复用）"
+    );
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        None,
+        "运行时必须已从运行目录里摘掉"
+    );
+    let stale = endpoint.prompt(prompt("残端"), support::timestamp()).await;
+    assert!(
+        stale.is_err(),
+        "被结束的端点必须拒绝写入，而不是看起来还活着：{stale:?}"
+    );
+    // 幂等：同一个会话没有运行时是成功的空操作。
+    host.terminate_agent(&session)
+        .await
+        .expect("terminate again");
+
+    // 再次创建：新的一代（不得复用被结束的那个运行时）。
+    let second = SessionId::new(SECOND).expect("session");
+    let _endpoint = create(&host, "agent-1", &second, &Collector::new())
+        .await
+        .expect("re-create");
+    assert_eq!(
+        runtime_generation(&host, &agent),
+        Some(2),
+        "被结束的运行时不得被复用：下一次创建必须拉起新一代进程"
     );
     host.shutdown_all().await;
     let _ = std::fs::remove_file(&dump);

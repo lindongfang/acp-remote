@@ -40,8 +40,8 @@ use acp_core::ports::{
     ImportedSessionRecord, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
     PendingInteractionOrigin, PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef,
     RemoteDeliveryStore, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment,
-    SessionQuery, SessionStore, StateChange, StoreHealth, SyncEventRecord, SyncReplaySlice,
-    TurnChange, TurnUpdate,
+    SessionQuery, SessionStore, SettledSession, StateChange, StoreHealth, SyncEventRecord,
+    SyncReplaySlice, TurnChange, TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -1171,60 +1171,61 @@ impl SqliteStore {
         // `event_type ∈ {command.completed, command.failed, command.uncertain}` 且
         // `causation = requestId` 的事件定位既有 `owned_command` 行（§10.1/§11.2）。
         // 定位必须在写事件之前完成，否则重发的终态块会把事件重复追加一遍。
+        //
+        // §6 第 20 条：定位按提交形状分三条，**都只认 `accepted` 行**（终态是幂等的：重复投递按重放
+        // 回既有结果，不改行、不追加事件）：
+        // ① `SettleCreate`：会话行与终态同批落盘，因此目标行是受理提交写的**尚无会话**那一行
+        //    （`session_id IS NULL`），本事务稍后回填它的 `session_id`；
+        // ② 其它带会话的终态提交（`session.resume`、prompt 等）：`(session_id, request_id)`；
+        // ③ `session` 为 `None`（`session.create` 的失败终态、启动恢复）：`request_id + session_id IS NULL`。
+        // ②③ 命中多行即整事务 `InvalidRequest`（同一 `requestId` 在多条 actor 下各有一行，不猜）。
+        let settlement = matches!(&commit.state, Some(StateChange::SettleCreate(_)));
         let terminal_request = match (&commit.idempotency, &commit.command_terminal) {
             (None, Some(_)) => {
-                let session = commit.session.clone().ok_or(PortError::InvalidRequest(
-                    "a command terminal requires a session id",
-                ))?;
                 let request =
                     terminal_request_of(&commit.events).ok_or(PortError::InvalidRequest(
                         "a command terminal requires its terminal event with causation = requestId",
                     ))?;
-                let rows = sqlx::query(&format!(
-                    "SELECT {COMMAND_COLUMNS} FROM owned_command \
-                     WHERE session_id = ?1 AND request_id = ?2 LIMIT 2"
-                ))
-                .bind(session.as_str())
-                .bind(request.as_str())
-                .fetch_all(&mut *tx)
-                .await
-                .db()?;
-                match rows.len() {
-                    0 => {
-                        return Err(PortError::NotFound(EntityRef::Command {
-                            session: Some(session),
-                            request,
-                        }));
-                    }
-                    1 => {
-                        let row = &rows[0];
-                        let status: CommandStatus =
-                            decode(&text(row, "status")?, "owned_command.status")?;
-                        if status != CommandStatus::Accepted {
-                            // 同一终态块被重复投递：不追加事件、不改行，按重放回既有结果。
-                            let record = command_record_from_row(row)?;
-                            let (version, origin_epoch) =
-                                match session_version_and_epoch(&mut tx, &session).await? {
-                                    Some((version, epoch)) => (version, Some(epoch)),
-                                    None => (Version::new(0), None),
-                                };
-                            drop(tx);
-                            return Ok(CommitOutcome {
-                                session_id: Some(session),
-                                origin_epoch,
-                                version,
-                                appended: Vec::new(),
-                                replayed: Some(IdempotentReplay { record }),
-                            });
-                        }
-                        Some(request)
-                    }
-                    _ => {
+                let session = commit.session.clone();
+                let located = if settlement {
+                    if session.is_none() {
                         return Err(PortError::InvalidRequest(
-                            "request id is ambiguous within the session",
+                            "a settle-create commit requires a session id",
                         ));
                     }
+                    locate_unsessioned_command(&mut tx, &request).await?
+                } else {
+                    match session.as_ref() {
+                        Some(session) => locate_session_command(&mut tx, session, &request).await?,
+                        None => locate_unsessioned_command(&mut tx, &request).await?,
+                    }
+                };
+                let Some(row) = located else {
+                    return Err(PortError::NotFound(EntityRef::Command { session, request }));
+                };
+                let status: CommandStatus = decode(&text(&row, "status")?, "owned_command.status")?;
+                if status != CommandStatus::Accepted {
+                    // 同一终态块被重复投递：不追加事件、不改行，按重放回既有结果。
+                    let record = command_record_from_row(&row)?;
+                    let (version, origin_epoch) = match record.session().cloned() {
+                        Some(session) => {
+                            match session_version_and_epoch(&mut tx, &session).await? {
+                                Some((version, epoch)) => (version, Some(epoch)),
+                                None => (Version::new(0), None),
+                            }
+                        }
+                        None => (Version::new(0), None),
+                    };
+                    drop(tx);
+                    return Ok(CommitOutcome {
+                        session_id: record.session().cloned(),
+                        origin_epoch,
+                        version,
+                        appended: Vec::new(),
+                        replayed: Some(IdempotentReplay { record }),
+                    });
                 }
+                Some(request)
             }
             _ => None,
         };
@@ -1240,31 +1241,44 @@ impl SqliteStore {
                         "session creation must not carry a session id or an expected version",
                     ));
                 }
-                let epoch = commit
-                    .origin_epoch
-                    .clone()
-                    .ok_or(PortError::InvalidRequest(
-                        "session creation requires an origin epoch",
-                    ))?;
+                let epoch = committed_epoch(&commit.origin_epoch)?;
                 let id_text = new_uuid();
                 let id = SessionId::new(&id_text)
                     .map_err(|_| PortError::InvalidRequest("generated session id is malformed"))?;
-                sqlx::query(
-                    "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, \
-                     origin_epoch, current_mode_id, current_mode_name, version, created_at, \
-                     updated_at, closed_at) \
-                     VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, NULL)",
+                insert_session_row(
+                    &mut tx, &id_text, &new.title, &new.agent, &epoch, &commit.at,
                 )
-                .bind(&id_text)
-                .bind(new.title.as_deref())
-                .bind(new.agent.agent_id().as_str())
-                .bind(new.agent.name())
-                .bind(epoch.as_str())
-                .bind(commit.at.as_str())
-                .execute(&mut *tx)
-                .await
-                .db()?;
+                .await?;
                 session_id = Some(id);
+                origin_epoch = Some(epoch);
+                version = Version::new(1);
+            }
+            Some(StateChange::SettleCreate(settled)) => {
+                // §6 第 20 条：core 已分配会话标识，存储层**采用**它（`CommitOutcome.session_id` 原样
+                // 回传），并把 ACP 会话标识 / 创建时 cwd / 目录别名与终态在同一次提交里落盘。
+                if commit.session.as_ref() != Some(&settled.session) {
+                    return Err(PortError::InvalidRequest(
+                        "a settle-create commit must carry the settled session id",
+                    ));
+                }
+                if commit.expected_version.is_some()
+                    || commit.idempotency.is_some()
+                    || commit.command_terminal.is_none()
+                {
+                    return Err(PortError::InvalidRequest(
+                        "a settle-create commit carries exactly the row, the idempotency backfill \
+                         and the command terminal",
+                    ));
+                }
+                let epoch = committed_epoch(&commit.origin_epoch)?;
+                insert_created_session_row(&mut tx, settled, &epoch, &commit.at).await?;
+                // 回填受理行的 `session_id`：终态定位（本函数的 ①）与启动恢复都按会话标识找它，
+                // 回填前那两处定位不到。行必须在 `apply_terminal` **之前**回填（后者的条件更新按
+                // 会话标识过滤）。
+                if let Some(request) = &terminal_request {
+                    backfill_command_session(&mut tx, request, &settled.session).await?;
+                }
+                session_id = Some(settled.session.clone());
                 origin_epoch = Some(epoch);
                 version = Version::new(1);
             }
@@ -1624,9 +1638,6 @@ impl SqliteStore {
             write_command(&mut tx, &idem, commit.command_terminal.as_ref()).await?;
         }
         if let Some(request) = &terminal_request {
-            let session = session_id.as_ref().ok_or(PortError::InvalidRequest(
-                "a command terminal requires a session id",
-            ))?;
             let terminal = commit
                 .command_terminal
                 .as_ref()
@@ -1636,7 +1647,10 @@ impl SqliteStore {
             let event = terminal_event_id.as_ref().ok_or(PortError::InvalidRequest(
                 "the terminal chunk must contain its command terminal event",
             ))?;
-            apply_terminal(&mut tx, session, request, terminal, event).await?;
+            // §6 第 20 条：条件更新按 `(session_id IS ?, request_id, status = 'accepted')` 定位——
+            // `session_id` 为 `None` 时命中的是「尚无会话」的受理行（`session.create` 的失败终态与
+            // 启动恢复；`SettleCreate` 的目标行在上面已经回填过会话标识）。
+            apply_terminal(&mut tx, session_id.as_ref(), request, terminal, event).await?;
         }
 
         // ---- §7.5 ⑥：容量超限时先按 ①②③ 清理，仍超限则拒绝本次写入（事务回滚，不发布事件）。
@@ -1836,18 +1850,168 @@ fn terminal_request_of(events: &[acp_core::model::PendingEvent]) -> Option<Reque
         .and_then(|event| event.causation.clone())
 }
 
+/// §6 第 20 条：按 `(session_id, request_id)` 定位既有命令行。
+///
+/// **不按状态过滤**：已经终结的行必须能被找到并按**重放**回答（同一终态块重复投递不追加事件、不改行），
+/// 因此这里只负责定位与「命中多行即失败关闭」（同一 `requestId` 在多条 actor 下各有一行，不猜是哪一条）。
+async fn locate_session_command(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    session: &SessionId,
+    request: &RequestId,
+) -> Result<Option<SqliteRow>, PortError> {
+    let rows = sqlx::query(&format!(
+        "SELECT {COMMAND_COLUMNS} FROM owned_command \
+         WHERE session_id = ?1 AND request_id = ?2 LIMIT 2"
+    ))
+    .bind(session.as_str())
+    .bind(request.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .db()?;
+    single_row(rows, "request id is ambiguous within the session")
+}
+
+/// §6 第 20 条：定位**尚无会话**的行（`session_id IS NULL`）——`session.create` 的失败终态、启动恢复
+/// 与落账提交（回填之前）都走这一条。命中多行即失败关闭（同上：不猜）。
+async fn locate_unsessioned_command(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    request: &RequestId,
+) -> Result<Option<SqliteRow>, PortError> {
+    let rows = sqlx::query(&format!(
+        "SELECT {COMMAND_COLUMNS} FROM owned_command \
+         WHERE request_id = ?1 AND session_id IS NULL LIMIT 2"
+    ))
+    .bind(request.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .db()?;
+    single_row(rows, "request id is ambiguous across actors")
+}
+
+fn single_row(
+    rows: Vec<SqliteRow>,
+    ambiguous: &'static str,
+) -> Result<Option<SqliteRow>, PortError> {
+    let mut rows = rows.into_iter();
+    match (rows.next(), rows.next()) {
+        (None, _) => Ok(None),
+        (Some(row), None) => Ok(Some(row)),
+        (Some(_), Some(_)) => Err(PortError::InvalidRequest(ambiguous)),
+    }
+}
+
+/// §6 第 20 条：落账提交把受理行的 `session_id` 回填成新建的会话（终态提交与启动恢复都按它定位）。
+///
+/// 条件更新只认「尚无会话且仍是 `accepted`」那一行：回填 0 行说明受理行不在预期形状上（别的路径已经
+/// 动过它），整事务失败关闭而不是把终态写到别的行上。
+async fn backfill_command_session(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    request: &RequestId,
+    session: &SessionId,
+) -> Result<(), PortError> {
+    let affected = sqlx::query(
+        "UPDATE owned_command SET session_id = ?1 \
+         WHERE request_id = ?2 AND session_id IS NULL AND status = 'accepted'",
+    )
+    .bind(session.as_str())
+    .bind(request.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?
+    .rows_affected();
+    if affected != 1 {
+        return Err(PortError::InvalidRequest(
+            "the accepted session.create row could not be bound to the created session",
+        ));
+    }
+    Ok(())
+}
+
+/// 落账/创建提交要求的 origin epoch。
+fn committed_epoch(epoch: &Option<OriginEpoch>) -> Result<OriginEpoch, PortError> {
+    epoch.clone().ok_or(PortError::InvalidRequest(
+        "session creation requires an origin epoch",
+    ))
+}
+
+/// 建一行 owned 会话（`state = 'idle'`、`version = 1`、两个时间戳都取本次提交的 `at`）。
+async fn insert_session_row(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    id_text: &str,
+    title: &Option<String>,
+    agent: &acp_core::model::AgentRef,
+    epoch: &OriginEpoch,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    sqlx::query(
+        "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, \
+         origin_epoch, current_mode_id, current_mode_name, version, created_at, \
+         updated_at, closed_at) \
+         VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, NULL)",
+    )
+    .bind(id_text)
+    .bind(title.as_deref())
+    .bind(agent.agent_id().as_str())
+    .bind(agent.name())
+    .bind(epoch.as_str())
+    .bind(at.as_str())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    Ok(())
+}
+
+/// `session.create` 的落账建行（§6 第 20 条）：标识由 core 分配、存储层采用，ACP 会话标识 / 创建时
+/// cwd / 目录别名与它同一行落盘（三条 `CASE`-窄写的旧路径不再参与创建）。
+async fn insert_created_session_row(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    settled: &SettledSession,
+    epoch: &OriginEpoch,
+    at: &Timestamp,
+) -> Result<(), PortError> {
+    sqlx::query(
+        "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, \
+         origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at, \
+         closed_at, agent_session_id, workspace_cwd, workspace_alias) \
+         VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, NULL, ?7, ?8, ?9)",
+    )
+    .bind(settled.session.as_str())
+    .bind(settled.title.as_deref())
+    .bind(settled.agent.agent_id().as_str())
+    .bind(settled.agent.name())
+    .bind(epoch.as_str())
+    .bind(at.as_str())
+    .bind(
+        settled
+            .agent_session_id
+            .as_ref()
+            .map(AgentSessionId::as_str),
+    )
+    .bind(settled.workspace_cwd.as_deref())
+    .bind(settled.workspace_alias.as_deref())
+    .execute(&mut **tx)
+    .await
+    .db()?;
+    Ok(())
+}
+
 /// 把既有 `accepted` 行推进到终态（§11.2）。
 ///
 /// `terminal_at`/`result`/`error` 为 `None` 表示**保持既有列不变**：终态块无法重发接受时的结果，
 /// 用 `COALESCE` 而不是覆盖，避免把接受期写入的列清空。
+///
+/// `session` 为 `None` 时按 `session_id IS NULL` 定位（§6 第 20 条的「尚无会话」形状：`session.create`
+/// 的失败终态与启动恢复）。
 async fn apply_terminal(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
-    session: &SessionId,
+    session: Option<&SessionId>,
     request: &RequestId,
     terminal: &acp_core::model::CommandTerminalRecord,
     terminal_event: &EventId,
 ) -> Result<(), PortError> {
     let (error_code, error_message, error_details, retryable) = error_columns(terminal.error());
+    // `session_id IS ?9`：`IS` 与 `=` 的唯一区别就是 NULL 参与比较时的取值（`NULL IS NULL` 为真），
+    // 因此同一个条件能同时表达「按会话定位」与「按尚无会话定位」，不必写两条语句。
     let affected = sqlx::query(
         "UPDATE owned_command SET status = ?1, \
          terminal_at = COALESCE(?2, terminal_at), terminal_event_id = ?3, \
@@ -1856,7 +2020,7 @@ async fn apply_terminal(
          error_message = COALESCE(?6, error_message), \
          error_details_json = COALESCE(?7, error_details_json), \
          retryable = COALESCE(?8, retryable) \
-         WHERE session_id = ?9 AND request_id = ?10 AND status = 'accepted'",
+         WHERE session_id IS ?9 AND request_id = ?10 AND status = 'accepted'",
     )
     .bind(terminal.status().as_str())
     .bind(terminal.terminal_at().map(Timestamp::as_str))
@@ -1866,7 +2030,7 @@ async fn apply_terminal(
     .bind(error_message)
     .bind(error_details)
     .bind(retryable)
-    .bind(session.as_str())
+    .bind(session.map(SessionId::as_str))
     .bind(request.as_str())
     .execute(&mut **tx)
     .await

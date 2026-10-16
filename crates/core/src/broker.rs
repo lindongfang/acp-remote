@@ -22,6 +22,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 
@@ -36,21 +37,22 @@ use crate::model::{
     ConflictKind, CreateSessionRequest, Digest, ElicitationAction, ElicitationValues,
     EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
     InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue, MessageId,
-    ModeId, ModeRef, NodeId, NodeKind, NodeState, OriginEventRef, OwnedSessionRef, PendingEvent,
-    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
-    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
-    ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord, SessionReference,
-    SessionState, StoredPolicy, Timestamp, TurnId, TurnState, UnavailableKind, Version, ViewJson,
+    ModeId, ModeRef, NodeId, NodeKind, NodeState, OriginEpoch, OriginEventRef, OwnedSessionRef,
+    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
+    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef,
+    RequestId, Resolution, ResourceOrigin, ResumeSessionRequest, Sequence, SessionId,
+    SessionRecoveryRecord, SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp,
+    TurnId, TurnState, UnavailableKind, Version, ViewJson, WorkspaceRef,
     decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
     object_members as json_members, top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
     EventSink, ExportStore, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator,
-    IdempotencyRecord, InteractionResolved, ModeChange, NewSession, NewTurn, OwnedCommit,
-    PendingInteractionWrite, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch,
-    ReplayLimit, SessionBackendFactory, SessionEndpoint, SessionStore, SessionUpdate, StateChange,
-    TrustStore, TurnChange, TurnUpdate,
+    IdempotencyRecord, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
+    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore,
+    ReplayBatch, ReplayLimit, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
+    SessionStore, SessionUpdate, SettledSession, StateChange, TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -516,6 +518,21 @@ struct Slot {
     /// 边界：**有界**（每会话一条记录）、随会话生命周期（会话槽位是它的唯一持有者），新命令直接覆盖旧值；
     /// 它不参与任何授权或幂等判定，只影响 `origin_kind`/`causation` 两个字段的取值。
     command_scope: Mutex<Option<CommandScope>>,
+    /// **会话行尚未落账**（`session.create` 的窗口期，§6 第 20 条）。
+    ///
+    /// `true` 期间到达的后端事件只能排队（见 `Slot::pending`），**不得**提交：那一刻 `owned_session`
+    /// 还没有这一行，落盘会写出引用不存在会话的事件。窗口由 [`Broker::settle_session_create`] 关闭
+    /// （落账提交成功后按序 flush 队列），或由它的失败关闭路径一并作废。
+    unaccounted: AtomicBool,
+    /// 窗口期队列是否已超限（见 [`WINDOW_EVENT_QUEUE_LIMIT`]）。超限之后不再入队，由结算路径**失败关闭**：
+    /// 结束该 Agent 运行时并把命令终结为 `uncertain`（`sync-session-create` 的「超限走失败关闭」）。
+    window_overflowed: AtomicBool,
+    /// 该会话已被**围栏**：失败关闭已经执行（Agent 运行时被结束、窗口期队列被作废），因此这个会话
+    /// 永远不会落账、也永远不会有消费者。此后到达的事件**直接丢弃**，不得再缓冲。
+    ///
+    /// 为什么不用 [`Self::window_overflowed`] 代替：那个标志在落账提交期间也可能被并发的入队置位，
+    /// 而那条竞态下会话会正常落账——按它丢弃会让已落账会话静默丢事件。围栏只在失败关闭那一步闭合。
+    fenced: AtomicBool,
 }
 
 /// 一条已提交 delta 的折叠输入（只来自 delta 的 view，`agent.message.delta` 专用）。
@@ -530,7 +547,47 @@ struct DeltaFragment {
 
 impl Slot {
     fn push_event(&self, event: EndpointEvent) {
-        lock(&self.pending).push(event);
+        // 已围栏（失败关闭执行完毕）的会话永远不会落账、也没有消费者：直接丢弃，不再缓冲。
+        if self.fenced.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut pending = lock(&self.pending);
+        // 窗口期（会话行尚未落账）的队列**有界**：超限不再入队、标记失败关闭（`settle_session_create`
+        // 会结束该后端端点并把命令终结为 `uncertain`）。已入队的事件一律保留——超限的后果是显式失败，
+        // 不是让已有事件悄悄消失。
+        if self.unaccounted.load(Ordering::SeqCst) && pending.len() >= WINDOW_EVENT_QUEUE_LIMIT {
+            self.window_overflowed.store(true, Ordering::SeqCst);
+            return;
+        }
+        pending.push(event);
+    }
+
+    /// 进入窗口期（`session.create` 调用后端**之前**）：此后事件只入队，不得提交。
+    fn hold_unaccounted(&self) {
+        self.unaccounted.store(true, Ordering::SeqCst);
+    }
+
+    /// 离开窗口期：落账提交成功（队列随后由结算路径按序落盘并广播），或该会话根本不会落账。
+    fn release_unaccounted(&self) {
+        self.unaccounted.store(false, Ordering::SeqCst);
+    }
+
+    fn is_unaccounted(&self) -> bool {
+        self.unaccounted.load(Ordering::SeqCst)
+    }
+
+    fn window_overflowed(&self) -> bool {
+        self.window_overflowed.load(Ordering::SeqCst)
+    }
+
+    /// 闭合围栏：失败关闭已经执行，此后到达的事件直接丢弃（见 [`Slot::fenced`]）。
+    fn fence(&self) {
+        self.fenced.store(true, Ordering::SeqCst);
+    }
+
+    /// 取走并清空窗口期队列（作废路径专用：会话行不会存在，这些事件没有归属）。
+    fn take_pending(&self) -> Vec<EndpointEvent> {
+        std::mem::take(&mut *lock(&self.pending))
     }
 
     fn running_turn(&self) -> Option<TurnId> {
@@ -630,7 +687,35 @@ pub struct Broker {
     deps: BrokerDeps,
     config: BrokerConfig,
     slots: Mutex<HashMap<String, Arc<Slot>>>,
+    /// `session.create` 的**窗口期**状态（§6 第 20 条）：后端已建立会话、会话行尚未落账，落账所需的
+    /// 全部取值只能停在内存里（受理行此刻的 `session_id` 仍为 `NULL`，靠它找不到会话）。
+    ///
+    /// 键是 `(actor, requestId)`——与幂等键同口径（§6 第 6 条）。条目在后端成功返回后写入、在
+    /// [`Broker::settle_session_create`] 里取走；适配层对每个 `Prepared` 都必须结算一次，未结算的条目
+    /// 会一直留到进程退出（那条命令停在 `accepted`，由启动恢复终结为 `uncertain`）。
+    prepared: Mutex<HashMap<String, PreparedCreate>>,
 }
+
+/// 窗口期状态：落账提交（[`StateChange::SettleCreate`]）的全部输入，外加会话行的两个时间戳来源。
+#[derive(Clone)]
+struct PreparedCreate {
+    /// 会话行的全部创建期取值（`agent_session_id` 在后端成功返回后已补齐）。
+    settled: SettledSession,
+    /// 落账提交的时间戳：会话行的 `created_at`/`updated_at` 与投影给适配层的摘要里的两个时间戳
+    /// 都是它（同一个值 ⇒ 回归给客户端的摘要与之后读路径看到的行**同源**）。
+    at: Timestamp,
+    /// 该会话的 origin epoch（core 在受理之后分配，落账提交随行落盘）。
+    epoch: OriginEpoch,
+}
+
+/// 窗口期（会话行落账之前）事件队列的上限（§6 第 20 条）。
+///
+/// 取值理由：窗口的存活时间只有「后端 `create` 返回到适配层完成一次结算」，正常是毫秒级的少量
+/// 通知（`session/new` 成功后 Agent 的初始 `session/update`）；256 条远高于任何正常取值，又把异常
+/// 或恶意 Agent 在这段窗口里的内存占用钉在几十 KB 量级。超限不再入队，并由结算路径失败关闭
+/// （结束该 Agent 运行时 + 把命令终结为 `uncertain`），不静默丢事件；失败关闭之后该槽位被**围栏**，
+/// 此后到达的事件直接丢弃（见 [`Slot::fenced`]）。
+pub const WINDOW_EVENT_QUEUE_LIMIT: usize = 256;
 
 impl Broker {
     pub fn new(deps: BrokerDeps, config: BrokerConfig) -> Self {
@@ -638,6 +723,7 @@ impl Broker {
             deps,
             config,
             slots: Mutex::new(HashMap::new()),
+            prepared: Mutex::new(HashMap::new()),
         }
     }
 
@@ -685,6 +771,9 @@ impl Broker {
                     abandoned: Mutex::new(Vec::new()),
                     file_changes: Mutex::new(Vec::new()),
                     command_scope: Mutex::new(None),
+                    unaccounted: AtomicBool::new(false),
+                    window_overflowed: AtomicBool::new(false),
+                    fenced: AtomicBool::new(false),
                 })
             })
             .clone()
@@ -1622,36 +1711,65 @@ impl Broker {
         self.outcome_version(&receipt, before, &command).await
     }
 
-    /// `session.create`（Node Link 命令，§12.7）。返回 Owner 分配的 `SessionId`。
+    /// `session.create`（Node Link 命令，§12.7；Sync §11.5）。三笔时序：**受理 → 执行 → 落账**。
+    ///
+    /// - **受理**：只落该命令的幂等记录（`session_id` 为 `NULL`、无会话行），此后本机**查不到**这个会话；
+    /// - **执行**：`SessionBackendFactory::create`（唯一可能 spawn 的副作用）。这段时间里到达的后端事件
+    ///   在会话槽位里排队（有界，见 [`WINDOW_EVENT_QUEUE_LIMIT`]），不落盘——那一刻会话行还不存在；
+    /// - **落账**：由 [`Broker::settle_session_create`] 在**同一次提交**里写会话行（含 ACP 会话标识、
+    ///   core 自己解析的 cwd、目录别名）、回填幂等行的 `session_id` 并写终态。
     ///
     /// 幂等键是协议维度的 `(actor, requestId)`（§6 第 6 条），`requestId` 与 `request_fingerprint`
-    /// 由适配层给出（Node Link 的 `requestId` 与 ACPR-CJ1 后的 payload 摘要）。**创建会话与幂等行在
-    /// 同一次提交**：崩溃窗口里留下的是 `accepted` 行 + 已存在的会话，启动恢复按 §6 第 16 条把它终结为
-    /// `uncertain`（不重复创建）。
+    /// 由适配层给出。同键重发**不派发第二次创建**：命中既有记录时返回 [`SessionCreateAdmission::InFlight`]
+    /// （仍是 `accepted`，此刻行里的 `session_id` 还是 `NULL`，因此重放不能靠它判断）或
+    /// [`SessionCreateAdmission::Settled`]（已终结，回首次结果）；键相同而
+    /// `command`/`kind`/指纹/`expected_version` 任一不同 → `Conflict(IdempotencyConflict)`。
     ///
-    /// 同键重试（含重启后）由存储层按幂等行重放：本次**不**创建第二个会话、也**不**开第二个后端端点，
-    /// 返回首次结果的 `SessionId`；键相同而 `command`/`kind`/指纹/`expected_version` 任一不同 →
-    /// `Conflict(IdempotencyConflict)`（§6 第 6 条）。
+    /// **后端失败零会话行**：失败时不建会话行，只把该命令终结掉——可证明 Agent 侧未产生会话时为
+    /// `failed`，说不清时为 `uncertain`（[`create_failure_status`]），并原样上抛后端错误供适配层回包。
     pub async fn create_session(
         &self,
         actor: &Actor,
         request: &RequestId,
         request_fingerprint: &Digest,
         create: CreateSessionRequest,
-    ) -> Result<SessionId, PortError> {
+        ownership: Option<WorkspaceRef>,
+    ) -> Result<SessionCreateAdmission, PortError> {
         self.authorize(actor, "session.create", None, request)
             .await
             .map_err(Denied::into_port_error)?;
+        // ① 受理之前把**可能失败**的本地步骤全部做完：受理一旦落盘，再出现本地失败就会留下一条
+        //    `accepted` 行（既无终态也无资源），那正是本变更要消灭的形状。
+        let workspace_cwd = create
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.canonical_path().to_owned());
+        let workspace = check_workspace_ownership(&create, ownership)?;
         let at = self.now();
-        let origin_epoch = self.deps.ids.origin_epoch();
+        let session = self.deps.ids.session_id();
+        let settled = SettledSession {
+            session: session.clone(),
+            title: None,
+            agent: create.agent.clone(),
+            // ACP 会话标识要到后端成功返回之后才知道（见下面）；此刻先按「未取得」占位，
+            // 落账提交前一定已被补齐。
+            agent_session_id: None,
+            workspace_cwd,
+            // 目录归属**只**以别名落列（`owned_session.workspace_alias`）：展示名不落库，读路径按别名
+            // 关联目录记录（`SessionStore::list` 的 LEFT JOIN）取得；本次的归属投影（别名 + 展示名）
+            // 留在内存里供摘要用，两者同源由 `check_workspace_ownership` 保证。
+            workspace_alias: workspace
+                .as_ref()
+                .map(|workspace| workspace.alias().as_str().to_owned()),
+        };
+        let summary = created_summary(&settled, &at, workspace.as_ref())?;
+        let epoch = self.deps.ids.origin_epoch();
         let commit = OwnedCommit {
             session: None,
             at: at.clone(),
             expected_version: None,
-            state: Some(StateChange::Create(NewSession {
-                title: None,
-                agent: create.agent.clone(),
-            })),
+            // 受理提交**只落幂等行**：不建会话行、不改任何状态（§6 第 20 条）。
+            state: None,
             turns: Vec::new(),
             events: Vec::new(),
             interactions: Vec::new(),
@@ -1661,80 +1779,58 @@ impl Broker {
                 request: request.clone(),
                 command: "session.create".to_owned(),
                 kind: CommandKind::Mutation,
-                // 目标会话在本次提交的事务内才分配，装配方预知不了：存储层把新会话 id 写进这一行
-                // （§6 第 20 条），使终态提交与启动恢复都能按 `(session, requestId)` 定位它。
+                // 受理期没有目标会话（会话标识由 core 分配，落账提交才回填这一列）：幂等比对因此不拿
+                // 行里的会话标识与它比（§6 第 6 条、第 20 条）。
                 session: None,
                 expected_version: None,
                 request_fingerprint: request_fingerprint.clone(),
-                accepted_at: at,
+                accepted_at: at.clone(),
             }),
             command_terminal: None,
-            origin_epoch: Some(origin_epoch),
+            origin_epoch: None,
         };
         let outcome = self.commit_owned(commit).await?;
-        let Some(session) = outcome.session_id else {
-            return Err(PortError::InvalidRequest(
-                "commit 未返回新建会话的 sessionId",
-            ));
-        };
-        if outcome.replayed.is_some() {
-            // 同键重试（或并发重复）：首次结果已存在，副作用只发生一次。
-            return Ok(session);
+        if let Some(replayed) = outcome.replayed {
+            // 同键：既有持久记录就是首次结果。仍是 `accepted` ⇒ **窗口期重发**（并发或重试）：回受理态、
+            // 不派发第二次创建、不碰首次记录；已终结 ⇒ 回首次终态。两者都不再打开后端端点。
+            return Ok(match replayed.record.status() {
+                CommandStatus::Accepted => SessionCreateAdmission::InFlight,
+                _ => SessionCreateAdmission::Settled(Box::new(replayed.record)),
+            });
         }
+        // ② 执行：窗口期从这里开始——后端一返回事件就可能到达，而那时会话行还没落盘。
         let slot = self.owned_slot(&session);
+        slot.hold_unaccounted();
         let sink = self.sink(&session);
-        // 两列的落盘取值必须在 `create` 消费掉请求之前取出：`workspace_cwd` 来自 core **自己**已解析
-        // 的结果（不依赖后端回报），`workspace_alias` 是同一次解析用掉的**别名原文**（目录归属的权威
-        // 投影来源，`design.md` D1）——**客户端提供的目录没有别名**，此时写 `NULL` 即「未分组」，
-        // 不得用空串或占位别名代替；`agent_session_id` 来自后端对 `session/new` 的实际响应。
-        let workspace_cwd = create
-            .workspace
-            .as_ref()
-            .map(|workspace| workspace.canonical_path().to_owned());
-        let workspace_alias = create
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.alias())
-            .map(|alias| alias.as_str().to_owned());
-        let endpoint: Arc<dyn SessionEndpoint> = self
-            .deps
-            .backends
-            .create(&session, create, sink)
-            .await?
-            .into();
-        // 恢复所需的两个取值与目录别名在 `factory.create` 成功返回后**紧接着**落盘（§6 第 20 条、
-        // §5.2）：不等适配层的终态提交——那样会让回归给 Access 的 `sessionMeta.version` 与落盘值
-        // 错开，而且终态提交拿不到 core 解析出的 cwd。`agent_session_id()` 为 `None`（未取得标识）时
-        // **三列都不写**：该会话不被当作可恢复会话，`NULL` 就是「没有可用于恢复的数据」（§3.6），
-        // 目录归属同理为「未分组」。别名此后**只读**：恢复路径不读也不改它。
-        if let Some(agent_session_id) = endpoint.agent_session_id().cloned() {
-            let at = self.now();
-            let commit = OwnedCommit {
-                session: Some(session.clone()),
-                at,
-                expected_version: None,
-                state: Some(StateChange::Update(SessionUpdate {
-                    state: None,
-                    mode: ModeChange::Unchanged,
-                    title: None,
-                    closed_at: None,
-                    interaction: None,
-                    agent_session_id: Some(agent_session_id),
-                    workspace_cwd,
-                    workspace_alias,
-                })),
-                turns: Vec::new(),
-                events: Vec::new(),
-                interactions: Vec::new(),
-                compacted: Vec::new(),
-                idempotency: None,
-                command_terminal: None,
-                origin_epoch: None,
+        let endpoint: Arc<dyn SessionEndpoint> =
+            match self.deps.backends.create(&session, create, sink).await {
+                Ok(endpoint) => endpoint.into(),
+                Err(error) => {
+                    // ③ 失败：零会话行 + 明确的终态（可证明 ⇒ `failed`，说不清 ⇒ `uncertain`）。
+                    //    窗口期队列里的事件随失败一起作废：那个会话不会存在，它们没有归属。
+                    slot.release_unaccounted();
+                    slot.take_pending();
+                    self.commit_create_failure(actor, request, &error).await;
+                    return Err(error);
+                }
             };
-            self.commit_owned(commit).await?;
-        }
+        // `agent_session_id` 只来自后端对 `session/new` 的实际响应；未取得时 `None`（不写占位值）。
+        let agent_session_id = endpoint.agent_session_id().cloned();
         *lock(&slot.endpoint) = Some(endpoint);
-        Ok(session)
+        let settled = SettledSession {
+            agent_session_id: agent_session_id.clone(),
+            ..settled
+        };
+        let prepared = PreparedSessionCreate {
+            session: session.clone(),
+            summary,
+            agent_session_id,
+        };
+        lock(&self.prepared).insert(
+            prepared_key(actor, request),
+            PreparedCreate { settled, at, epoch },
+        );
+        Ok(SessionCreateAdmission::Prepared(Box::new(prepared)))
     }
 
     /// `session.resume`（§5.1、§12.7）：进程不在的 owned 会话的恢复入口。
@@ -1811,16 +1907,24 @@ impl Broker {
         Ok(session.clone())
     }
 
-    /// `session.create` 的终态提交（§6 第 20 条、§12.7）。返回本次是否真的写入了终态。
+    /// `session.create` 的**落账提交**（§6 第 20 条、§12.7）。返回本次是否真的写入了终态。
     ///
-    /// `status` 必须是终态：`completed` 必须带 `result` 且不带 `error`，其余必须带 `error`（形状由
-    /// [`CommandTerminalRecord::try_new`] 校验）。**幂等 no-op** 的两种情况：该 `(actor, requestId)`
-    /// 没有持久记录（创建在幂等行落盘前就失败），或记录已经终结（首次结果不覆盖）。
+    /// 两条形状，按内存里的窗口期状态（[`PreparedCreate`]）分流：
     ///
-    /// 只终结 `command == "session.create"` 的持久记录：该 `(actor, requestId)` 记着别的命令时是
-    /// 适配层误用（wire 不可达），显式 `InvalidRequest`，不把那条命令的幂等行改写成创建的终态。
+    /// - **有窗口期状态**（[`SessionCreateAdmission::Prepared`] 之后必须调一次）：在**同一次提交**里
+    ///   落地会话行（含 core 分配的标识、ACP 会话标识、创建时 cwd 与目录别名）、回填幂等行的
+    ///   `session_id` 并写终态；提交成功后把窗口期排队的事件**按序**落盘再广播（§6.1 的「先持久化
+    ///   成功再广播」因此第一次端到端成立）。`status` 只接受 `completed`/`uncertain`：会话已经建立，
+    ///   报 `failed` 就是撒谎（`failed` 只用于「可证明未产生会话」那条路径，那时没有窗口期状态）。
+    /// - **无窗口期状态**（后端失败路径的兜底重试、或 `create` 在幂等行落盘失败后适配层的结算调用）：
+    ///   与旧口径同形——定位仍然 `accepted` 的记录，按 [`OwnedCommit::command_terminal`] 的「尚无会话」
+    ///   形状写终态；`status` 只接受 `failed`/`uncertain`（没有会话行，`completed` 说不通）。
+    ///
+    /// **幂等 no-op** 的三种情况保持不变：该 `(actor, requestId)` 没有持久记录、记录已经终结（首次结果
+    /// 不覆盖）、该 `(actor, requestId)` 记着别的命令（`InvalidRequest`，不把别的命令改写成创建的终态）。
     ///
     /// 落盘失败（`Unavailable`）不报成功：行仍是 `accepted`，由启动恢复按 §6 第 16 条终结为 `uncertain`。
+    /// 那时窗口期状态**保留**（会话行没有落盘），重试可以再走一遍落账。
     pub async fn settle_session_create(
         &self,
         actor: &Actor,
@@ -1832,6 +1936,100 @@ impl Broker {
         if !status.is_terminal() {
             return Err(PortError::InvalidRequest("命令终态必须是终止态"));
         }
+        let key = prepared_key(actor, request);
+        let prepared = lock(&self.prepared).get(&key).cloned();
+        let Some(prepared) = prepared else {
+            return self
+                .settle_session_create_without_window(actor, request, status, result, error)
+                .await;
+        };
+        if status == CommandStatus::Failed {
+            return Err(PortError::InvalidRequest(
+                "会话已经建立：不得以 failed 终结（那是「可证明未产生会话」那条路径的形状）",
+            ));
+        }
+        let session = prepared.settled.session.clone();
+        let slot = self.owned_slot(&session);
+        let _guard = slot.gate.guard().await;
+        if slot.window_overflowed() {
+            // 失败关闭（`sync-session-create` 的「窗口期事件不丢不重、超限走失败关闭」）：窗口期队列
+            // 超限意味着这个后端不能再被信任。顺序与 `agent-host` 的「超限结束」同源：先结束该 Agent
+            // 的运行时（`SessionBackendFactory::terminate_agent`：摘掉运行目录、让未完成请求明确失败、
+            // 回收进程树），再作废那些没有归属的事件，最后让命令**明确失败**——不是让事件悄悄消失。
+            //
+            // **队列上界保持**（不 `release_unaccounted`）：该会话永远不会落账，因此没有消费者；若在这里
+            // 解除上界，仍在发事件的 Agent 会让队列无界增长（该会话也没有会话行，组合根的合并窗口不会
+            // 枚举到它）。保持有界意味着超限之后的事件继续被界拦住并丢弃。
+            //
+            // 更彻底一步：**围栏**。失败关闭之后这个会话不可能再落账，因此此后到达的任何事件（含终止
+            // 宽限期里未完成 turn 的尾巴）直接丢弃，不再缓冲——否则它们会占满上界并永久滞留（没有消费
+            // 者，槽位也不随会话删除）。
+            self.terminate_overflowed_agent(&slot, &session).await;
+            slot.take_pending();
+            slot.fence();
+            lock(&self.prepared).remove(&key);
+            let error = PublicError::coded(
+                "command.uncertain",
+                "窗口期事件队列超限，无法确认会话是否已建立",
+                false,
+            )
+            .map_err(PortError::from)?;
+            let written = self
+                .commit_create_terminal(actor, request, CommandStatus::Uncertain, None, Some(error))
+                .await?;
+            return Ok(written);
+        }
+        // 落账提交用**准备期**那个时间戳（[`PreparedCreate::at`]），不再另取时钟：会话行的
+        // `created_at`/`updated_at`、投影给适配层的摘要里的两个时间戳与终态的 `terminal_at` 因此是同
+        // 一个值，「回归给客户端的摘要」与之后读路径看到的行逐字段同源（`PreparedCreate::at` 的约定）。
+        let at = prepared.at.clone();
+        let terminal: CommandTerminalRecord =
+            CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
+        let event = create_terminal_event(actor, request, status, terminal.error())?;
+        let commit = OwnedCommit {
+            session: Some(session.clone()),
+            at,
+            expected_version: None,
+            state: Some(StateChange::SettleCreate(prepared.settled.clone())),
+            turns: Vec::new(),
+            events: vec![event],
+            interactions: Vec::new(),
+            compacted: Vec::new(),
+            // 幂等行已在受理提交里写过：本次只**回填**它的 `session_id`（存储层按
+            // `request_id + session_id IS NULL + status = 'accepted'` 定位并回填）。
+            idempotency: None,
+            command_terminal: Some(terminal),
+            origin_epoch: Some(prepared.epoch.clone()),
+        };
+        match self.commit_owned(commit).await {
+            Ok(outcome) => {
+                // §6.1：先落盘成功、再广播；窗口期的事件按到达顺序落盘并广播（同一个会话槽位门内，
+                // 因此与并发的 flush 不会交错、也不会重复）。
+                self.publish(&outcome.appended);
+                slot.release_unaccounted();
+                self.flush_locked(&slot, &session).await?;
+                lock(&self.prepared).remove(&key);
+                Ok(true)
+            }
+            Err(PortError::Unavailable(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// 没有窗口期状态时的 `settle_session_create`：只终结「尚无会话」的持久记录（见上）。
+    ///
+    /// 服务两个场景：① `create_session` 在后端失败时**已经**写好了终态（那次调用是幂等 no-op，适配层
+    /// 的结算调用因此落在这一支）；② 窗口期状态已丢失（进程重启），该 `requestId` 的 `accepted` 记录由
+    /// 适配层或恢复路径再结一次时也能被终结。**后端失败的终态本身**落盘失败时不在这里补——那条窗口由
+    /// 启动恢复按 §6 第 16 条把该行终结为 `uncertain`（命令因此不会停在只有受理记录的状态）。
+    async fn settle_session_create_without_window(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
         let Some(record) = self.deps.store.find_request(request, actor).await? else {
             return Ok(false);
         };
@@ -1843,35 +2041,40 @@ impl Broker {
         if record.status().is_terminal() {
             return Ok(false);
         }
-        let Some(session) = record.session().cloned() else {
+        if record.session().is_some() {
+            // `session.create` 的会话行与终态在**同一次提交**里落盘：只剩 `accepted` 却已带会话行是
+            // 自相矛盾的持久事实（只能经库被篡改到达），不猜、不覆盖。
             return Err(PortError::Corrupt(
-                "session.create 的持久记录缺少目标会话（§6 第 20 条）",
+                "session.create 的 accepted 记录带会话行（§6 第 20 条）",
             ));
-        };
+        }
+        if status == CommandStatus::Completed {
+            return Err(PortError::InvalidRequest(
+                "没有会话行时不得以 completed 终结 session.create",
+            ));
+        }
+        self.commit_create_terminal(actor, request, status, result, error)
+            .await
+    }
+
+    /// 「尚无会话」形状的 `session.create` 终态提交：不建会话行、终态事件只拿全局序号（§6 第 20 条）。
+    ///
+    /// 三种情况都用它：落账路径的失败关闭（窗口期队列超限）、`create_session` 的后端失败终态，以及
+    /// 适配层在「失败终态本身没落盘」时的兜底结算。
+    async fn commit_create_terminal(
+        &self,
+        actor: &Actor,
+        request: &RequestId,
+        status: CommandStatus,
+        result: Option<CommandResult>,
+        error: Option<PublicError>,
+    ) -> Result<bool, PortError> {
         let at = self.now();
         let terminal =
             CommandTerminalRecord::try_new(status, Some(at.clone()), None, result, error)?;
-        let (event_type, view) = match status {
-            CommandStatus::Completed => {
-                ("command.completed", view_command_completed(request, None)?)
-            }
-            CommandStatus::Failed => ("command.failed", view_command_failed(request, None)?),
-            _ => (
-                "command.uncertain",
-                view_command_uncertain(request, "无法确认会话是否已创建")?,
-            ),
-        };
-        let event = pending_event(
-            event_type,
-            EventKind::Structured,
-            view,
-            None,
-            Some(request.clone()),
-            StoredPolicy::Durable,
-            Some(actor),
-        )?;
+        let event = create_terminal_event(actor, request, status, terminal.error())?;
         let commit = OwnedCommit {
-            session: Some(session.clone()),
+            session: None,
             at,
             expected_version: None,
             state: None,
@@ -1883,8 +2086,6 @@ impl Broker {
             command_terminal: Some(terminal),
             origin_epoch: None,
         };
-        let slot = self.owned_slot(&session);
-        let _guard = slot.gate.guard().await;
         match self.commit_owned(commit).await {
             Ok(outcome) => {
                 self.publish(&outcome.appended);
@@ -1893,6 +2094,48 @@ impl Broker {
             Err(PortError::Unavailable(_)) => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    /// 后端失败的终态（§6 第 20 条）：**零会话行**，只终结命令。
+    ///
+    /// 分类见 [`create_failure_status`]（可证明 ⇒ `failed`，说不清 ⇒ `uncertain`）。**尽力而为**：
+    /// 落盘失败时命令停在 `accepted`，由启动恢复终结为 `uncertain`（§6 第 16 条）；调用方拿到的仍是
+    /// 后端的原错误（适配层按既有映射回包，终态的成因由 message 承担）。
+    async fn commit_create_failure(&self, actor: &Actor, request: &RequestId, error: &PortError) {
+        let status = create_failure_status(error);
+        let Ok(public) = self.create_failure_error(status, error) else {
+            return;
+        };
+        let _ = self
+            .commit_create_terminal(actor, request, status, None, Some(public))
+            .await;
+    }
+
+    /// 后端失败的成因 → 终态 `error`：`failed` 直接用端口错误的公开映射（`internal.unavailable` 一类，
+    /// design D4 不新增错误码）；`uncertain` 取 core 自己的「无法确认」码（与启动恢复同口径），成因放进
+    /// message。
+    fn create_failure_error(
+        &self,
+        status: CommandStatus,
+        error: &PortError,
+    ) -> Result<PublicError, PortError> {
+        let cause = self.port_error_public(error)?;
+        if status == CommandStatus::Failed {
+            return Ok(cause);
+        }
+        PublicError::coded("command.uncertain", cause.message(), false).map_err(PortError::from)
+    }
+
+    /// 结束一个窗口期已超限的后端所属的 Agent 运行时（`sync-session-create`「超限走失败关闭」复用
+    /// `local-agent-host` 的「超限结束的失败关闭顺序」）。
+    ///
+    /// 走端口 `SessionBackendFactory::terminate_agent`：core 不持进程句柄，只关端点不足以让事件源停下
+    /// （Agent 仍会把 `session/update` 送进队列），也不足以让「该运行时不得再被复用」成立。失败不改变
+    /// 结论——命令照样终结为 `uncertain`，只是该运行时可能活到进程退出为止。
+    async fn terminate_overflowed_agent(&self, slot: &Slot, session: &SessionId) {
+        // 先摘掉本槽位的端点绑定（此后 core 不再经它写入），再要求后端结束该运行时。
+        let _ = lock(&slot.endpoint).take();
+        let _ = self.deps.backends.terminate_agent(session).await;
     }
 
     /// `session.resume` 的终态提交（§5.1、§12.7）。返回本次是否真的写入了终态。
@@ -2109,7 +2352,13 @@ impl Broker {
     }
 
     /// 落盘一批后端事件。按**终态事件**切批，保证 §6.10 的"不跨 turn 边界、不延迟终态事件"。
+    ///
+    /// 窗口期（会话行尚未落账）只入队、不提交：那时 `owned_session` 还没有这一行，落盘会写出引用不存在
+    /// 会话的事件。队列由 [`Broker::settle_session_create`] 在落账提交之后按序驱动（同一个串行门）。
     async fn flush_locked(&self, slot: &Slot, session: &SessionId) -> Result<(), PortError> {
+        if slot.is_unaccounted() {
+            return Ok(());
+        }
         let buffered: Vec<EndpointEvent> = {
             let mut pending = lock(&slot.pending);
             std::mem::take(&mut *pending)
@@ -3555,7 +3804,7 @@ impl Broker {
             .as_ref()
             .map(|state| match state {
                 StateChange::Update(update) => update.interaction.is_some(),
-                StateChange::Create(_) => false,
+                StateChange::Create(_) | StateChange::SettleCreate(_) => false,
             })
             .unwrap_or(false);
         if resolving && !commit.interactions.is_empty() {
@@ -3724,6 +3973,11 @@ impl Broker {
                 // `local.unavailable`。
                 UnavailableKind::BackendUnsupported => {
                     ("command.unsupported", "后端不支持该操作", false)
+                }
+                // 「后端可证明没有建立会话」（进程未能启动、请求未发出即失败、Agent 明确拒绝）：
+                // 成因由 message 承担，错误码复用既有的 `internal.unavailable`（design D4，不新增码）。
+                UnavailableKind::SessionNotEstablished => {
+                    ("internal.unavailable", "后端未能建立会话", true)
                 }
                 UnavailableKind::Busy
                 | UnavailableKind::StorageFull
@@ -4123,6 +4377,139 @@ fn revalidate_resume_workspace(workspace_cwd: &str) -> Result<(), PortError> {
     Ok(())
 }
 
+/// 窗口期状态的键：与幂等键同口径的 `(actor, requestId)`（§6 第 6 条、第 20 条）。
+fn prepared_key(actor: &Actor, request: &RequestId) -> String {
+    format!(
+        "{}|{}|{}",
+        actor.kind().as_str(),
+        actor.id_text(),
+        request.as_str()
+    )
+}
+
+/// 目录归属（`WorkspaceRef`）与已解析 workspace 的一致性校验（§3.1、`design.md` D1）。
+///
+/// 别名与展示名必须**同源**：落进 `owned_session.workspace_alias` 的是归属里的别名，投影给适配层的
+/// 会话摘要用的也是同一个 `WorkspaceRef`。因此这里既不接受「解析出别名却没有归属投影」，也不接受
+/// 「两者的别名不同」——两种组装错误都失败关闭，而不是猜一个别名写库。
+fn check_workspace_ownership(
+    create: &CreateSessionRequest,
+    ownership: Option<WorkspaceRef>,
+) -> Result<Option<WorkspaceRef>, PortError> {
+    let resolved = create
+        .workspace
+        .as_ref()
+        .and_then(|workspace| workspace.alias());
+    match (resolved, ownership.as_ref()) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(PortError::InvalidRequest(
+            "本次解析没有别名，不得给出目录归属投影",
+        )),
+        (Some(_), None) => Err(PortError::InvalidRequest(
+            "已解析的目录别名必须带上目录归属投影",
+        )),
+        (Some(alias), Some(owned)) if alias == owned.alias() => Ok(ownership),
+        (Some(_), Some(_)) => Err(PortError::InvalidRequest(
+            "目录归属的别名与本次解析结果不一致",
+        )),
+    }
+}
+
+/// 落账后的会话摘要：适配层投影终态结果（Node Link 的 `SessionCreateResult.sessionMeta`、Sync 的
+/// `session` 资源）用它，因此**必须**与 `SessionStore::list` 对同一行给出的摘要逐字段同源——
+/// `state` 恒为 `idle`、`version` 恒为 1、两个时间戳都是落账提交的 `at`、目录归属就是落进
+/// `owned_session.workspace_alias` 的那个别名（展示名按别名关联目录记录，与本函数取的是同一个）。
+///
+/// 目录归属按**归属投影**（`WorkspaceRef`）而非 `SettledSession::workspace_alias` 取：别名是落库的
+/// 唯一取值，而展示名不落库（读路径按别名关联目录记录），因此摘要要同源就必须拿本次解析用的那份
+/// 投影。两者的别名必然相同——`check_workspace_ownership` 已比对过，不同即失败关闭。
+fn created_summary(
+    settled: &SettledSession,
+    at: &Timestamp,
+    workspace: Option<&WorkspaceRef>,
+) -> Result<SessionSummary, PortError> {
+    SessionSummary::try_new(
+        settled.session.clone(),
+        settled.title.clone(),
+        settled.agent.clone(),
+        SessionState::Idle,
+        ResourceOrigin::Local,
+        None,
+        Version::new(1),
+        at.clone(),
+        at.clone(),
+        workspace.cloned(),
+    )
+    .map_err(PortError::from)
+}
+
+/// `session.create` 的失败分类（§6 第 20 条、`sync-session-create` 的终态判据）：可证明 Agent 侧未
+/// 产生会话 ⇒ `failed`；说不清 ⇒ `uncertain`。
+///
+/// 判据落在适配器映射出的**具名错误**上（`local-agent-host`「可证明与无法证明可区分」）：进程未能
+/// 启动、请求未发出即失败、Agent 对会话建立请求明确返回错误，一律收敛成
+/// [`UnavailableKind::SessionNotEstablished`]；其余错误（短请求超时、请求发出后掉线、协议破坏、会话
+/// 已建立之后才失败）都不能证明没有副作用。默认走 `uncertain` 是**保守**方向：宁可让客户端知道
+/// 「说不清」，也不声称「什么也没发生」。
+fn create_failure_status(error: &PortError) -> CommandStatus {
+    match error {
+        PortError::Unavailable(UnavailableKind::SessionNotEstablished) => CommandStatus::Failed,
+        _ => CommandStatus::Uncertain,
+    }
+}
+
+/// `session.create` 终态事件的唯一构造点（§10.1 的三个 `command.*` 终态类型）。
+///
+/// 成因取自**结构化错误本身**（`code`/`message`/`retryable`/`details`）：终态的成因由 `message` 承担
+/// （design D4），不写死文案（`view_command_failed` 是 turn 失败的旧口径，仍保留给那条路径）。
+fn create_terminal_event(
+    actor: &Actor,
+    request: &RequestId,
+    status: CommandStatus,
+    error: Option<&PublicError>,
+) -> Result<PendingEvent, PortError> {
+    let (event_type, view) = match status {
+        CommandStatus::Completed => ("command.completed", view_command_completed(request, None)?),
+        CommandStatus::Failed => ("command.failed", view_command_failed_error(request, error)?),
+        CommandStatus::Uncertain => (
+            "command.uncertain",
+            view_command_uncertain(
+                request,
+                error.map_or("无法确认会话是否已建立", PublicError::message),
+            )?,
+        ),
+        _ => return Err(PortError::InvalidRequest("命令终态必须是终止态")),
+    };
+    pending_event(
+        event_type,
+        EventKind::Structured,
+        view,
+        None,
+        Some(request.clone()),
+        StoredPolicy::Durable,
+        Some(actor),
+    )
+}
+
+/// `command.failed` 的 view（`SYNC_PROTOCOL.md` §10.1）：与 [`view_command_failed`] 同形，但成因取自
+/// 传进来的结构化错误，而不是固定文案。
+fn view_command_failed_error(
+    request: &RequestId,
+    error: Option<&PublicError>,
+) -> Result<ViewJson, PortError> {
+    let error = error.ok_or(PortError::InvalidRequest(
+        "command.failed 必须携带结构化错误",
+    ))?;
+    view(format!(
+        r#"{{"requestId":"{}","error":{{"code":"{}","message":{},"retryable":{},"details":{}}}}}"#,
+        request.as_str(),
+        error.code(),
+        json_text(error.message()),
+        error.retryable(),
+        error.details().as_str()
+    ))
+}
+
 fn view_command_completed(
     request: &RequestId,
     result: Option<&str>,
@@ -4424,10 +4811,28 @@ pub(crate) mod test_support {
         pub(crate) catalog_agents: Mutex<Vec<AgentDescriptor>>,
         /// `SessionEndpoint::agent_session_id` 的返回值（默认 `None` = 未取得标识，即 R7 的情形）。
         pub(crate) agent_session_id: Mutex<Option<AgentSessionId>>,
+        /// 被 `SessionEndpoint::close` 结束过的端点（按会话标识、调用顺序）。
+        ///
+        /// 窗口期超限的失败关闭**不**走它：那里结束的是整个 Agent 运行时
+        /// （`SessionBackendFactory::terminate_agent`），端点只是随之失效。保留它是为了断言「这条超限
+        /// 路径没有被退回成只关端点」。
+        pub(crate) closed_endpoints: Mutex<Vec<String>>,
+        /// 被 `SessionBackendFactory::terminate_agent` 要求结束的 Agent 运行时（按会话标识、调用顺序）。
+        ///
+        /// core 不持进程句柄，「结束该 Agent」必须经这条端口方法落到 `agent-host` 的目录层，因此它是
+        /// 窗口期超限失败关闭的可观察证据。
+        pub(crate) terminated_agents: Mutex<Vec<String>>,
         /// 后继后端收到的恢复请求（断言「未调用后端」与「传的就是持久化取值」）。
         pub(crate) resume_requests: Mutex<Vec<ResumeSessionRequest>>,
         /// `resume` 的脚本化错误（先进先出弹出；空 = 成功返回端点）。
         pub(crate) resume_errors: Mutex<VecDeque<PortError>>,
+        /// `create` 的调用次数（断言「同键重发不派发第二次创建」）。
+        pub(crate) create_calls: AtomicUsize,
+        /// `create` 的脚本化错误（先进先出弹出；空 = 成功返回端点）。
+        ///
+        /// 用它钉「后端失败」那条路径：错误类别决定终态（`Unavailable(SessionNotEstablished)` ⇒
+        /// `failed`，其余 ⇒ `uncertain`），见 `session.create` 的失败分类。
+        pub(crate) create_errors: Mutex<VecDeque<PortError>>,
         /// `load_recovery` 的调用次数（断言「授权先于本机读取」：未授权时不得读会话行）。
         pub(crate) recovery_reads: AtomicUsize,
     }
@@ -4606,6 +5011,15 @@ pub(crate) mod test_support {
             self.prompts.load(Ordering::SeqCst)
         }
 
+        pub(crate) fn create_calls(&self) -> usize {
+            self.create_calls.load(Ordering::SeqCst)
+        }
+
+        /// 让下一次 `SessionBackendFactory::create` 以该错误失败（先进先出；空 = 成功）。
+        pub(crate) fn push_create_error(&self, error: PortError) {
+            lock(&self.create_errors).push_back(error);
+        }
+
         pub(crate) fn prompt_trace(&self) -> Vec<String> {
             lock(&self.prompt_trace).clone()
         }
@@ -4754,9 +5168,18 @@ pub(crate) mod test_support {
             state.sessions.insert(id.as_str().to_owned(), session);
         }
 
-        /// 让后端在下次 `create`/`resume` 时暴露这个 ACP 会话标识（默认 `None` = 未取得，即 R7 的情形）。
+        /// 让后端在下次 `create`/`resume` 时暴露这个 ACP 会话标识（默认 `None` = 未取得标识，即 R7 的情形）。
         pub(crate) fn set_agent_session_id(&self, id: AgentSessionId) {
             *lock(&self.agent_session_id) = Some(id);
+        }
+
+        /// 已被 `SessionEndpoint::close` 结束的端点（按会话标识、调用顺序）。
+        pub(crate) fn closed_endpoints(&self) -> Vec<String> {
+            lock(&self.closed_endpoints).clone()
+        }
+
+        pub(crate) fn terminated_agents(&self) -> Vec<String> {
+            lock(&self.terminated_agents).clone()
         }
 
         /// 直接写会话的两列恢复数据（模拟既有行的 `NULL` 时传 `None`）。
@@ -4834,6 +5257,10 @@ pub(crate) mod test_support {
     }
 
     impl IdGenerator for TestIds {
+        fn session_id(&self) -> SessionId {
+            SessionId::new(&self.next_text()).expect("uuid")
+        }
+
         fn turn_id(&self) -> TurnId {
             TurnId::new(&self.next_text()).expect("uuid")
         }
@@ -4961,6 +5388,63 @@ pub(crate) mod test_support {
                     state
                         .sessions
                         .insert(session_id.as_str().to_owned(), session);
+                    created = Some(session_id);
+                }
+                Some(StateChange::SettleCreate(settled)) => {
+                    // §6 第 20 条：会话标识由 core 分配、存储层**采用**；ACP 会话标识、创建时 cwd 与
+                    // 目录别名在同一次提交里随行落盘（真存储的列语义逐条对齐）。
+                    if commit.session.as_ref() != Some(&settled.session) {
+                        return Err(PortError::InvalidRequest(
+                            "SettleCreate 的 session 必须等于载荷里的会话标识",
+                        ));
+                    }
+                    if commit.expected_version.is_some() {
+                        return Err(PortError::InvalidRequest(
+                            "SettleCreate 不得带 expected_version",
+                        ));
+                    }
+                    if commit.idempotency.is_some() {
+                        return Err(PortError::InvalidRequest(
+                            "SettleCreate 不得再写幂等行（只回填它的 session_id）",
+                        ));
+                    }
+                    let session_id = settled.session.clone();
+                    let epoch = commit
+                        .origin_epoch
+                        .clone()
+                        .ok_or(PortError::InvalidRequest(
+                            "SettleCreate 必须带 origin_epoch",
+                        ))?;
+                    let session = Session::try_new(
+                        session_id.clone(),
+                        OwnedSessionRef::new(session_id.clone()),
+                        settled.title.clone(),
+                        settled.agent.clone(),
+                        SessionState::Idle,
+                        ResourceOrigin::Local,
+                        None,
+                        Version::from(1),
+                        at.clone(),
+                        at.clone(),
+                        None,
+                    )?;
+                    state.epochs.insert(session_id.as_str().to_owned(), epoch);
+                    state
+                        .sessions
+                        .insert(session_id.as_str().to_owned(), session);
+                    if settled.agent_session_id.is_some() || settled.workspace_cwd.is_some() {
+                        let columns = state
+                            .recoveries
+                            .entry(session_id.as_str().to_owned())
+                            .or_default();
+                        columns.agent_session_id = settled.agent_session_id.clone();
+                        columns.workspace_cwd = settled.workspace_cwd.clone();
+                    }
+                    if let Some(alias) = settled.workspace_alias.as_ref() {
+                        state
+                            .workspace_aliases
+                            .insert(session_id.as_str().to_owned(), WorkspaceAlias::new(alias)?);
+                    }
                     created = Some(session_id);
                 }
                 Some(StateChange::Update(update)) => {
@@ -5239,27 +5723,44 @@ pub(crate) mod test_support {
                     .ok_or(PortError::InvalidRequest(
                         "终态提交缺少 command.* 事件的 causation",
                     ))?;
-                let key = state
-                    .commands
-                    .iter()
-                    .find(|(_, record)| {
-                        record.request() == &request && record.session() == commit.session.as_ref()
+                // §6 第 20 条：终态定位按提交形状分三条（与 `storage-sqlite` 逐条同口径）——
+                // `SettleCreate` 定位的是**尚无会话**的受理行（本次提交回填它的 `session_id`）；
+                // 其余带会话的提交按 `(session_id, request_id)`；`session` 为 `None` 时按
+                // `request_id + session_id IS NULL`（`session.create` 的失败终态与启动恢复）。
+                let settlement = matches!(commit.state, Some(StateChange::SettleCreate(_)));
+                let expected = if settlement {
+                    None
+                } else {
+                    commit.session.as_ref()
+                };
+                let mut matched = state.commands.iter().filter(|(_, record)| {
+                    record.request() == &request && record.session() == expected
+                });
+                let key = matched.next().map(|(key, _)| key.clone());
+                if matched.next().is_some() {
+                    // 命中多行即失败关闭（不得猜）：同一 `requestId` 在多条 actor 下各有一行。
+                    return Err(PortError::InvalidRequest("request id is ambiguous"));
+                }
+                let key = key.ok_or_else(|| {
+                    PortError::NotFound(EntityRef::Command {
+                        session: commit.session.clone(),
+                        request: request.clone(),
                     })
-                    .map(|(key, _)| key.clone())
-                    .ok_or_else(|| {
-                        PortError::NotFound(EntityRef::Command {
-                            session: commit.session.clone(),
-                            request: request.clone(),
-                        })
-                    })?;
+                })?;
                 let existing = state
                     .commands
                     .get(&key)
                     .cloned()
                     .ok_or(PortError::InvalidRequest("命令行消失"))?;
                 let terminal_event = appended.last().map(|event| event.id.clone());
+                // `SettleCreate` 在本事务里回填受理行的 `session_id`（真存储同口径地 UPDATE 那一列），
+                // 因此终态行落到本次会话上；其余形状保持既有会话（`None` 就是「尚无会话」）。
+                let command_session = commit
+                    .session
+                    .clone()
+                    .or_else(|| existing.session().cloned());
                 let updated = CommandRecord::try_new(
-                    existing.session().cloned(),
+                    command_session,
                     existing.request().clone(),
                     existing.command(),
                     existing.kind(),
@@ -6372,12 +6873,21 @@ pub(crate) mod test_support {
 
     #[async_trait]
     impl SessionBackendFactory for FakeBackend {
+        async fn terminate_agent(&self, session: &SessionId) -> Result<(), PortError> {
+            lock(&self.world.terminated_agents).push(session.as_str().to_owned());
+            Ok(())
+        }
+
         async fn create(
             &self,
             session: &SessionId,
             _request: CreateSessionRequest,
             sink: EventSink,
         ) -> Result<Box<dyn SessionEndpoint>, PortError> {
+            self.world.create_calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = lock(&self.world.create_errors).pop_front() {
+                return Err(error);
+            }
             // 后端现在直接拿到 core 分配的 id（§5.1），不再自己造引用。
             Ok(Box::new(FakeEndpoint {
                 world: self.world.clone(),
@@ -6529,6 +7039,10 @@ pub(crate) mod test_support {
         }
 
         async fn close(&self) -> Result<(), PortError> {
+            lock(&self.world.closed_endpoints).push(match &self.reference {
+                SessionReference::Owned(owned) => owned.session_id.as_str().to_owned(),
+                SessionReference::Remote(remote) => remote.session_id.as_str().to_owned(),
+            });
             Ok(())
         }
     }
@@ -7043,6 +7557,284 @@ mod tests {
         let after = harness.world.command(&request).expect("幂等行");
         assert_eq!(after.command(), "session.prompt");
         assert_eq!(after.status(), before.status(), "既有命令的终态不得被改写");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // §6 第 20 条：窗口期（会话行落账之前）到达的后端事件
+    // -----------------------------------------------------------------------------------------
+
+    /// `session.create` 的请求（本组用例共用一个 Agent，workspace 为空 = 未分组）。
+    fn window_create_request() -> CreateSessionRequest {
+        CreateSessionRequest::new(
+            AgentRef::try_new(AgentId::new("agent-1").expect("agent id"), "Agent One")
+                .expect("agent ref"),
+            None,
+            None,
+            ResourceOrigin::Local,
+        )
+    }
+
+    /// 受理一条 `session.create` 并断言拿到 `Prepared`：窗口期从这里开始——后端已建立、会话行未落账。
+    fn prepared_create(
+        harness: &Harness,
+        request: &RequestId,
+        seed: char,
+    ) -> Box<PreparedSessionCreate> {
+        match block_on(harness.broker.create_session(
+            &harness.actor(),
+            request,
+            &digest(seed),
+            window_create_request(),
+            None,
+        ))
+        .expect("session.create 受理")
+        {
+            SessionCreateAdmission::Prepared(prepared) => prepared,
+            other => panic!("首次受理必须返回 Prepared，得到 {other:?}"),
+        }
+    }
+
+    /// 落账一次创建（`completed` + 适配层投影的结果原文），返回是否真的写入了终态。
+    fn settle_window(harness: &Harness, request: &RequestId) -> bool {
+        let result =
+            CommandResult::from_json_text(r#"{"sessionId":"projected"}"#).expect("result object");
+        block_on(harness.broker.settle_session_create(
+            &harness.actor(),
+            request,
+            CommandStatus::Completed,
+            Some(result),
+            None,
+        ))
+        .expect("落账")
+    }
+
+    /// 某会话已广播的事件类型（按发布顺序；只取 owned 的会话级投递）。
+    fn published_types_of(harness: &Harness, session: &SessionId) -> Vec<String> {
+        harness
+            .world
+            .published()
+            .into_iter()
+            .filter_map(|delivery| match delivery {
+                CommittedDelivery::Owned(event) if event.session.as_ref() == Some(session) => {
+                    Some(event.event_type.as_str().to_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 窗口期第 1 态（`sync-session-create`「会话行落账前的事件不丢」）：落账之前到达的事件只在会话
+    /// 槽位里排队——驱动合并窗口也不写库、不广播；落账提交成功后按到达顺序落库并广播。
+    #[test]
+    fn window_events_queue_until_the_settlement_commit() {
+        let harness = Harness::new(BrokerConfig::default());
+        let request = harness.request(21);
+        let prepared = prepared_create(&harness, &request, 'W');
+        let sink = harness.broker.sink(&prepared.session);
+        for mode in ["plan", "code"] {
+            sink.send(endpoint_event(
+                EventKind::State,
+                "session.mode.changed",
+                &format!(r#"{{"currentModeId":"{mode}"}}"#),
+            ));
+        }
+
+        // 落账前：驱动一次合并窗口也只有排队——那一刻 `owned_session` 还没有这一行，落盘会写出引用
+        // 不存在会话的事件，因此既不得写库、也不得广播。
+        block_on(harness.broker.pump(&prepared.session)).expect("pump");
+        assert!(
+            harness.world.session(&prepared.session).is_none(),
+            "受理不建会话行（§6 第 20 条）"
+        );
+        assert!(
+            harness.world.events(&prepared.session).is_empty(),
+            "落账前到达的事件不得落库"
+        );
+        assert_eq!(
+            harness.world.publish_count(),
+            0,
+            "落账前不得广播任何事件（先持久化成功再广播）"
+        );
+
+        assert!(settle_window(&harness, &request), "落账必须真的写入");
+        assert!(
+            harness.world.session(&prepared.session).is_some(),
+            "落账提交建会话行"
+        );
+        assert_eq!(
+            harness
+                .world
+                .events(&prepared.session)
+                .iter()
+                .map(|event| event.event_type.as_str().to_owned())
+                .collect::<Vec<String>>(),
+            vec![
+                "command.completed".to_owned(),
+                "session.mode.changed".to_owned(),
+                "session.mode.changed".to_owned()
+            ],
+            "落账提交之后，窗口期排队的两个事件按到达顺序落库"
+        );
+        assert_eq!(
+            published_types_of(&harness, &prepared.session),
+            vec![
+                "command.completed".to_owned(),
+                "session.mode.changed".to_owned(),
+                "session.mode.changed".to_owned()
+            ],
+            "广播顺序与落库顺序一致"
+        );
+        assert!(
+            harness.world.published_after_commit(),
+            "每条投递都必须发生在它落盘之后（§6.1）"
+        );
+    }
+
+    /// 窗口期第 2 态（`sync-session-create`「顺序正确、不丢不重」）：窗口期到达的**多条**事件在落账后
+    /// 逐条落库——会话内序号连续、eventId 序列与广播序列都与到达顺序逐条相同，一条不多也一条不少。
+    #[test]
+    fn window_events_keep_their_arrival_order_without_loss_or_duplication() {
+        let harness = Harness::new(BrokerConfig::default());
+        let request = harness.request(22);
+        let prepared = prepared_create(&harness, &request, 'X');
+        let sink = harness.broker.sink(&prepared.session);
+        let modes = ["plan", "code", "review", "debug"];
+        for mode in modes {
+            sink.send(endpoint_event(
+                EventKind::State,
+                "session.mode.changed",
+                &format!(r#"{{"currentModeId":"{mode}"}}"#),
+            ));
+        }
+
+        assert!(settle_window(&harness, &request), "落账必须真的写入");
+        let stored = harness.world.events(&prepared.session);
+        let windowed: Vec<&CommittedEvent> = stored
+            .iter()
+            .filter(|event| event.event_type.as_str() == "session.mode.changed")
+            .collect();
+        assert_eq!(
+            windowed.len(),
+            modes.len(),
+            "窗口期的四条事件必须一条不少地落库"
+        );
+        // 会话内序号连续：落账提交带的那条终态事件占 1，其后逐条 +1（不跳号、不重号）。
+        let sequences: Vec<u64> = windowed
+            .iter()
+            .map(|event| {
+                event
+                    .session_sequence
+                    .expect("会话级事件必须有会话内序号")
+                    .get()
+            })
+            .collect();
+        assert_eq!(sequences, vec![2, 3, 4, 5], "落库序号必须连续且按到达顺序");
+        // 正文取值顺序 = 到达顺序（不重不丢）。
+        let views: Vec<String> = windowed
+            .iter()
+            .map(|event| stored_view(&harness, event))
+            .collect();
+        for (index, mode) in modes.iter().enumerate() {
+            assert!(
+                views[index].contains(&format!(r#""currentModeId":"{mode}""#)),
+                "第 {index} 条落库事件必须是到达顺序里的 `{mode}`：{views:?}"
+            );
+        }
+        // 广播顺序与落库顺序逐条一致（同一条事件、同一个 eventId）。
+        let stored_ids: Vec<String> = windowed
+            .iter()
+            .map(|event| event.id.as_str().to_owned())
+            .collect();
+        let published_ids: Vec<String> = harness
+            .world
+            .published()
+            .into_iter()
+            .filter_map(|delivery| match delivery {
+                CommittedDelivery::Owned(event)
+                    if event.session.as_ref() == Some(&prepared.session) =>
+                {
+                    Some(event.id.as_str().to_owned())
+                }
+                _ => None,
+            })
+            .filter(|id| stored_ids.contains(id))
+            .collect();
+        assert_eq!(published_ids, stored_ids, "广播顺序必须与落库顺序逐条相同");
+    }
+
+    /// 窗口期第 3 态（`sync-session-create`「超限走失败关闭」）：超过 [`WINDOW_EVENT_QUEUE_LIMIT`] 时
+    /// 不再入队，结算路径**结束该后端**并把命令终结为 `uncertain`——不静默丢事件，也不留下半个会话：
+    /// 库里既没有该会话的会话行，也没有它的任何事件行。
+    #[test]
+    fn a_window_event_overflow_closes_the_backend_and_ends_the_create_as_uncertain() {
+        let harness = Harness::new(BrokerConfig::default());
+        let request = harness.request(23);
+        let prepared = prepared_create(&harness, &request, 'Y');
+        let sink = harness.broker.sink(&prepared.session);
+        for index in 0..WINDOW_EVENT_QUEUE_LIMIT {
+            sink.send(endpoint_event(
+                EventKind::State,
+                "session.mode.changed",
+                &format!(r#"{{"currentModeId":"m{index}"}}"#),
+            ));
+        }
+        assert!(
+            harness.world.closed_endpoints().is_empty(),
+            "入队到上限为止还不算超限：不得提前结束后端"
+        );
+        // 第 `LIMIT + 1` 条：越界，不再入队并标记失败关闭。
+        sink.send(endpoint_event(
+            EventKind::State,
+            "session.mode.changed",
+            r#"{"currentModeId":"overflow"}"#,
+        ));
+
+        assert!(
+            settle_window(&harness, &request),
+            "失败关闭也要把命令终结掉（不是幂等 no-op）"
+        );
+        assert_eq!(
+            harness.world.terminated_agents(),
+            vec![prepared.session.as_str().to_owned()],
+            "超限必须**结束该 Agent 运行时**（`SessionBackendFactory::terminate_agent`），而不是只关端点"
+        );
+        assert!(
+            harness.world.closed_endpoints().is_empty(),
+            "结束该 Agent 走 `terminate_agent`；端点关闭由该后端自己的回收路径完成，core 不再单独关它"
+        );
+        let record = harness.world.command(&request).expect("终态记录");
+        assert_eq!(
+            record.status(),
+            CommandStatus::Uncertain,
+            "超限意味着无法确认会话是否已建立：不得报 `completed`"
+        );
+        assert_eq!(
+            record.error().map(PublicError::code),
+            Some("command.uncertain"),
+            "成因由 `command.uncertain` 承担"
+        );
+        assert!(
+            harness.world.session(&prepared.session).is_none(),
+            "失败关闭不得留下会话行"
+        );
+        assert!(
+            harness.world.events(&prepared.session).is_empty(),
+            "失败关闭不得留下该会话的任何事件行（既不落盘已入队的事件，也不静默少写）"
+        );
+        // 队列上界在失败关闭之后**保持**，且槽位被围栏：该会话永远不会落账，因此没有消费者；若在这里
+        // 解除上界，仍在发事件的 Agent 会让队列无界增长。再灌 `LIMIT + 8` 条，断言一条都没被缓冲。
+        for index in 0..(WINDOW_EVENT_QUEUE_LIMIT + 8) {
+            sink.send(endpoint_event(
+                EventKind::State,
+                "session.mode.changed",
+                &format!(r#"{{"currentModeId":"after{index}"}}"#),
+            ));
+        }
+        let slot = harness.broker.owned_slot(&prepared.session);
+        assert!(
+            super::lock(&slot.pending).is_empty(),
+            "失败关闭之后到达的事件必须直接丢弃（不得缓冲成永久滞留的队列）"
+        );
     }
 
     /// §3.6/§5.2：恢复数据走**窄读取**；会话不存在、或任一列为 `NULL` 时是 `None`（`NULL` 不是错误，

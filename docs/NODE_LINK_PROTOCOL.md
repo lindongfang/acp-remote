@@ -3,6 +3,7 @@
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 `node-link-client`（含出站重连管理器）与 Access facade 仍待落地。  
 > 版本：1.0  
 > 修订记录（2026-10-16，`pairing-model`）：**删除节点配对的短验证码**——§9.2 的 domain 表与 §9.4 的字段集合删除 `acp-remote/node-link-pairing-sas/v1` 一行与 SAS 计算规则，§8.2 与 §13.2 的确认仪式去掉 SAS（本机界面仍显示节点名、类型、指纹与待授予的 `grant.*`），机器资产（`compatibility/transcripts/v1/transcripts.json` 与节点侧固定向量）同步删除。**设备方向不再有授权维度**——§3.4 与 §10 的措辞收窄为「设备通过认证即可执行本节点命令」，`pack.*`/`preset.*` 两类词汇（设备授权包与配对预设）删除，跨节点导出授权 `grant.*`、Export `scopes` 与 Import `grants` 边界不变。Node Link 面的这次修订**不改 wire**：本节列出的都是节点配对仪式与词汇表口径，消息形状、握手、catalog、resource、command 与 `fixtures/node-link/v1/` 的其余向量不变（仅删除 `transcripts/pairing-sas.json` 与 `manifest.json` 的对应条目；§12.7 的 `session.create` 仍只接受 `workspaceAlias`、请求不得携带任意 Owner 路径）。  
+> 修订记录（2026-10-16，`session-create-settle-order`，无 wire 变更）：§12.5 明确判定「该命令有没有产生业务副作用」以**资源行是否已提交**为准（对 `session.create` 即会话行），MUST NOT 用「该 `requestId` 是否存在持久记录」代替（受理记录在受理阶段就已存在），并补上「可证明未产生副作用 ⇒ `failed`」与崩溃窗口（受理与落账之间崩溃的受理记录由启动恢复结 `uncertain`）；§12.7 的结果契约补「受理只落幂等记录、会话行 + 会话标识回填 + 终态必须同一次提交、后端失败不留会话行」，`failed`/`uncertain` 的分类与 `command.status` 的重放口径随之改写。消息形状、错误码登记与 fixture 未变。  
 > 修订记录（2026-10-12，文档登记，无 wire 变更，`pwa-conversation-ui` 变更）：§12.7 与 §17 登记「Node Link 面无结构化历史」这一**尚未实现**的已知缺口——本次变更将在 Sync 面新增历史条目读取（`session.read` 的 `history` include 与 `beforeHistory` 游标，与它同批落地），该读取只在 Sync 面生效，本面不登记对应的 feature，经本面展示的 imported 会话在客户端侧对结构化历史显式降级。wire schema、消息族、错误码登记、§11.3 feature 表与 `fixtures/node-link/v1/` 均不变。  
 > 修订记录（2026-09-27，v1 内合同修订，未实现未发布，`node-trust-export-ids` 变更）：§8.2 的信任记录新增 `exportIds`（按节点收窄可见 Export 的白名单）——可见性三条件、清单只能收窄、`export.revoke` 不级联清理清单条目、只在配对确认时填报（无配对后修改入口，属已知限制）、v3 及更早的库升级到 v4 后既有节点行清单为空（不得默认放权）。Node Link wire 与 fixture 不变：`exportIds` 不进握手/catalog/resource/command，消息形状与错误码登记均未动；并写明重新配对（同一 `nodeId` 再次经 `node.pair.begin`/claim/`node.pair.confirm` 落定，含密钥变化后的重新配对）在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效；并明确该关闭与 `node.revoke` 的**语义与关闭码不同**：重新配对**不**推送 `node.trust.revoked`、以 `1000`（正常关闭）关闭并给出说明「信任已重新确认、请重连以重取 catalog」的 close reason，因此 §15 的「撤销即停」不适用、该节点仍按 §15 自动重连；只有 `node.revoke` 才推送 `node.trust.revoked` 并以 `4410` 关闭、停止重连。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
@@ -592,7 +593,8 @@ resource.attach → resource.attached → resource.subscribe
 - `command.terminal` 的 `completed` 必须携带非空 `result`（与 Sync 的 `command.result` 允许 `result` 为 `null` 不同）：该差异是有意的，因为 Node Link 的 `session.create` 必须回传 `SessionCreateResult`（§12.7）。core 只保留 `Option<CommandResult>`，**非空由本协议的适配层（`server::node_link`）在映射期保证**并由契约测试覆盖。
 - session-scoped command 必须携带当前 `attachmentId`/`attachmentGeneration`；generation 过期返回 `nodelink.resource.attach_generation_stale`，Access 必须重新 attach 后再重试。该错误码不登记 `details`：Access 已知自己发出与当前持有的 generation，动作固定（重新 attach 后重试），归因靠发生错误的帧自带的 `attachmentId`，回显代际数值不改变任何分支。
 - 同一 `(ownerNodeId, accessNodeId, requestId)` 的重复提交必须返回首次结果；`command`、`sessionRef`、`expectedVersion` 或解码后的 `payload` 语义不同则返回 `nodelink.command.idempotency_conflict`。
-- 不能确认副作用是否发生时，Owner 必须写入 `uncertain` 终态，Access 不得自动重试产生第二次副作用。
+- 判定「该命令有没有产生业务副作用」MUST 以**资源行是否已提交**为准（对 `session.create` 即会话行），MUST NOT 以「该 `requestId` 是否存在持久记录」代替——受理记录在受理阶段就已经存在，用它当替身会把可证明的失败误报成 `uncertain`。
+- 不能确认副作用是否发生时，Owner 必须写入 `uncertain` 终态，Access 不得自动重试产生第二次副作用；能证明未产生副作用（进程未能启动、请求未发出、Agent 明确返回错误，或本机解析失败）时，Owner MUST 写入 `failed` 终态并给出结构化错误，MUST NOT 用 `uncertain` 代替。受理与落账之间崩溃留下的受理记录由启动恢复终结为 `uncertain`（`CORE_PORTS_AND_STORAGE.md` §6 第 16 条）；此后 Access 以 `command.status` 重查得到的就是该 `uncertain` 终态，Owner 不猜测成功或失败，也不重新派发。
 
 ### 12.6 控制与错误消息
 
@@ -636,7 +638,7 @@ resource.attach → resource.attached → resource.subscribe
 
 `session.create` 的结果契约：
 
-- Owner 先回 `command.accepted`，此时 `result` 必须为 `null`（创建是异步的）；会话创建完成后发 `command.terminal`。
+- Owner 先回 `command.accepted`，此时 `result` 必须为 `null`（创建是异步的）；会话创建完成后发 `command.terminal`。受理只落该命令的幂等记录（会话标识为空、MUST NOT 因此创建会话行，MUST NOT 因受理派发第二次创建）；会话行、它的会话标识回填与终态 MUST 在同一次提交内落盘，后端失败时 MUST NOT 留下会话行。
 - `status = "completed"` 时 `terminal.result` 必须是 `SessionCreateResult`：
 
 ```json
@@ -646,11 +648,11 @@ resource.attach → resource.attached → resource.subscribe
 }
 ```
 
-（非规范示例：新建会话在创建流程内的第二次提交完成后，可见版本为 `2`；上面这帧展示的是结果形状，不是可复现的终态取值。）
+（非规范示例：新建会话的落账提交完成后，可见版本为 `1`（`CORE_PORTS_AND_STORAGE.md` §5.2：新建行的 `version` 只有一个取值）；上面这帧展示的是结果形状，不是可复现的终态取值。）
 
 - `sessionId` 由 Owner 生成并写入自身事件日志；Access 不得改写、重编号或本地顶替。Access 用该 `remoteSessionRef` 发起 `resource.attach`（§12.4），成功后才提交该会话的其他命令。
-- `status = "failed"` 时 `terminal.error` 给出 `PublicError`（例如 `nodelink.export.not_granted`、`nodelink.command.unsupported_field`）；`status = "uncertain"` 表示崩溃窗口内无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
-- 注记（`node-link-owner` 的修复轮次）：幂等行落盘前失败（如 Owner 存储写失败）的 `session.create` **不是持久首次结果**——Owner 在那一轮仍会发一帧本地 `command.terminal`，但同 `requestId` 的 `command.status` 重查回 `nodelink.command.not_found`，重试也可以创建出另一个会话、得到与首次尝试不同的结果。因此 `failed` 只对同一 `requestId` 可复现的确定类失败（授权拒绝、本机 workspace 解析失败）成立；Access 不得把落盘失败类的 `failed` 当成可稳定重放的终止事实（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条）。
+- 终态类别按「Agent 侧是否可证明未产生会话」判定（证据口径见 §12.5）：进程未能启动、请求未发出、Agent 明确返回错误，或本机解析失败 ⇒ `status = "failed"` 并给出结构化 `terminal.error`（例如 `nodelink.internal.unavailable`、`nodelink.export.not_granted`），MUST NOT 用 `uncertain` 代替；短请求超时、请求发出后连接断开、会话已建立之后才失败，或崩溃窗口 ⇒ `status = "uncertain"` 表示无法确认会话是否已创建，Access **不得**自动重试 `session.create`，必须向调用方返回显式错误，由用户决定是否以新 `requestId` 重试。
+- 注记（`node-link-owner` 的修复轮次，`session-create-settle-order` 变更补充分类）：幂等行落盘前失败（如 Owner 存储写失败）的 `session.create` **不是持久首次结果**——Owner 在那一轮仍会发一帧本地 `command.terminal`，但同 `requestId` 的 `command.status` 重查回 `nodelink.command.not_found`，重试也可以创建出另一个会话、得到与首次尝试不同的结果。因此 `failed` 分两类，Access MUST NOT 混用：① **落盘前失败**（授权拒绝、本机 workspace 解析失败）只有本地帧、没有持久记录，重查回 `nodelink.command.not_found`；② **幂等行已落盘、可证明 Agent 侧未产生会话**（进程未能启动、请求未发出、Agent 明确返回错误）的 `failed` 是**已持久化**的终态（零会话行），同一 `requestId` 重查回同一 `failed`。落盘失败类（如存储写失败）不属于这两类，Access 不得把它的 `failed` 当成可稳定重放的终止事实（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条）。
 
 `session.resume` 的硬约束：
 

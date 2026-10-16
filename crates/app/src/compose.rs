@@ -609,6 +609,7 @@ macro_rules! uuid_id {
 }
 
 uuid_id! {
+    session_id -> acp_core::model::SessionId,
     turn_id -> acp_core::model::TurnId,
     interaction_id -> acp_core::model::InteractionId,
     pairing_id -> acp_core::model::PairingId,

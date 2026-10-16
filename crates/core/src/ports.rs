@@ -107,6 +107,17 @@ pub trait SessionBackendFactory: Send + Sync {
         request: ResumeSessionRequest,
         sink: EventSink,
     ) -> Result<Box<dyn SessionEndpoint>, PortError>;
+
+    /// 结束该会话所属的 Agent 运行时（进程树与映射一并回收），此后该运行时**不得再被复用**。
+    ///
+    /// 唯一调用方是「窗口期事件队列超限」的失败关闭（`SYNC_PROTOCOL.md` §11.5 的
+    /// `session.create`：超限复用 `local-agent-host` 的「超限结束的失败关闭顺序」）：那时端点已经
+    /// 不可信任，光关端点不足以让调用方看到「这个 Agent 已经不在运行」——事件源还在、进程树还在。
+    /// 顺序与 [`Self::resume`] 的「本次拉起才回收」相反，这里**就是**要结束它：先把运行时从运行目录
+    /// 里摘掉（此后按 `AgentId` 复用取不到它），再让未完成请求以明确结果结束，最后回收进程树。
+    ///
+    /// 幂等：该会话没有任何运行时（已结束、从未建立、或本实现不持有进程）时是成功的空操作。
+    async fn terminate_agent(&self, session: &SessionId) -> Result<(), PortError>;
 }
 
 #[async_trait]
@@ -149,6 +160,47 @@ pub trait SessionEndpoint: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------------------------
+// §4 用例面：`session.create` 的受理结果
+// ---------------------------------------------------------------------------------------------
+
+/// `session.create` 的**准备结果**：后端已经建立会话，但**会话行尚未落账**（§6 第 20 条）。
+///
+/// 它的存在是为了解开「终态结果读会话行、而会话行与终态必须同一次提交」这个环：会话行要落盘的取值
+/// 在**调后端之前**就已定稿（标识、cwd、别名），`agent_session_id` 在后端成功返回后补齐，因此适配层
+/// 不必回读存储就能投影自己的结果（Node Link 的 `SessionCreateResult`、Sync 的会话摘要）；投影完成后
+/// 由适配层调 `settle_session_create` **一次**落账（会话行 + 幂等行回填 + 终态）。
+///
+/// 拿到本值的调用方**必须**把本次命令结算掉（`Completed` 或 `Uncertain`）：窗口期到达的后端事件在
+/// [`WINDOW_EVENT_QUEUE_LIMIT`](crate::broker::WINDOW_EVENT_QUEUE_LIMIT) 的界内排队，落账后按序写库
+/// 再广播；不结算就意味着这条命令停在 `accepted`，只能由启动恢复终结为 `uncertain`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedSessionCreate {
+    /// 本次创建的会话标识（core 分配；落账提交采用它）。
+    pub session: SessionId,
+    /// 落账后的会话摘要——与 `SessionStore::list` **同一投影口径**（`state`/`version`/目录归属的取值
+    /// 都是落账提交将写入的那些），因此适配层的终态结果与之后的读路径必然一致。
+    pub summary: SessionSummary,
+    /// ACP 会话标识；`None` = 后端未取得标识（不写占位值，§3.6）。
+    pub agent_session_id: Option<AgentSessionId>,
+}
+
+/// `create_session` 的受理结果（§6 第 20 条、`sync-session-create`「重复 requestId 不产生第二个会话」）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionCreateAdmission {
+    /// 首次受理、且后端已成功建立：调用方据此投影终态结果，再调 `settle_session_create` 落账。
+    Prepared(Box<PreparedSessionCreate>),
+    /// 同 `(actor, requestId)` 的受理记录已存在、尚未落账（窗口期与并发重发）。
+    ///
+    /// 调用方**不得**再派发第二次创建、**不得**改写首次记录：这正是「重复 requestId 不产生第二个会话」
+    /// 的 core 侧语义——受理行的 `session_id` 此刻仍为 `NULL`，因此重放不能靠行里的会话标识判断，而是
+    /// 靠本节这个结论。它对应的持久事实是「行仍是 `accepted`」；进程崩溃时该行由启动恢复终结为
+    /// `uncertain`（§6 第 16 条）。
+    InFlight,
+    /// 同键的命令已经终结：返回**首次结果**（幂等重放），不得覆盖。
+    Settled(Box<CommandRecord>),
+}
+
+// ---------------------------------------------------------------------------------------------
 // §5.2 持久化
 // ---------------------------------------------------------------------------------------------
 
@@ -162,7 +214,23 @@ pub trait SessionEndpoint: Send + Sync {
 pub enum StateChange {
     /// 新建 owned 会话：`OwnedCommit.session` 必须为 `None`、`expected_version` 必须为 `None`、
     /// `origin_epoch` 必须为 `Some`；`SessionId` 由存储层在创建事务内分配并回传。
+    ///
+    /// 只有**不经 core 用例**的提交方使用它。`session.create` 的落账走
+    /// [`StateChange::SettleCreate`]：会话标识必须由 core 在调用后端**之前**分配（§3.1、§6 第 20 条），
+    /// 因此存储层不得再为那条路径现分配。
     Create(NewSession),
+    /// `session.create` 的**落账提交**（§6 第 20 条）：会话行（含 core 分配的标识、ACP 会话标识、
+    /// 创建时的规范化 cwd 与目录别名）、幂等行 `session_id` 的**回填**与终态在**同一次事务**里完成。
+    ///
+    /// 提交形状（存储层逐条校验，任一不满足即整事务 `InvalidRequest`）：`OwnedCommit.session` 必须等于
+    /// [`SettledSession::session`]；`expected_version` 必须为 `None`；`origin_epoch` 必须为 `Some`；
+    /// `idempotency` 必须为 `None`（幂等行已在受理提交里写过，本次只回填它的 `session_id`）；
+    /// `command_terminal` 必须为 `Some`，且 `events` 里带 `causation = requestId` 的那条
+    /// `command.completed`/`command.uncertain` 就是它的终态事件。
+    ///
+    /// 后端失败时**不得**用本形状：那时没有会话行可建，终态走 [`OwnedCommit::command_terminal`] 的
+    /// 「尚无会话」形状（`session` 为 `None`、无 `state`）。
+    SettleCreate(SettledSession),
     /// 已有会话的状态修改：`version` 在同一事务内 +1。
     Update(SessionUpdate),
 }
@@ -171,6 +239,25 @@ pub enum StateChange {
 pub struct NewSession {
     pub title: Option<String>,
     pub agent: AgentRef,
+}
+
+/// `session.create` 落账提交的会话行取值（§6 第 20 条、`local-agent-host`「会话创建时暴露 ACP
+/// 会话标识」）。四个可选/必填分量都来自 core：标识由 [`crate::ports::IdGenerator::session_id`] 分配
+/// （**不是**存储层现分配），三个列取自 core 自己的解析结果与后端回报（存储层只落列）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledSession {
+    /// core 已分配的会话标识；存储层**采用**它建行（`CommitOutcome.session_id` 原样回传它）。
+    pub session: SessionId,
+    pub title: Option<String>,
+    pub agent: AgentRef,
+    /// `owned_session.agent_session_id`：ACP 会话标识（`SessionEndpoint::agent_session_id()`）。
+    /// `None` = 未取得标识（启动失败、超时、Agent 返回错误），此时不写占位值（§3.6）。
+    pub agent_session_id: Option<AgentSessionId>,
+    /// `owned_session.workspace_cwd`：core **自己**已解析的规范化绝对路径（不依赖后端回报）。
+    pub workspace_cwd: Option<String>,
+    /// `owned_session.workspace_alias`：同一次解析用掉的**别名原文**（目录归属的唯一投影来源）；
+    /// 目录来源是客户端提供的路径时没有别名，写 `None` 即「未分组」。
+    pub workspace_alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,16 +282,18 @@ pub struct SessionUpdate {
     /// 受影响行数为 0 时存储层在同一事务内回读：行存在且 `state <> 'pending'` →
     /// `PortError::Conflict(AlreadyResolved)`；无行 → `PortError::NotFound`。
     pub interaction: Option<InteractionResolved>,
-    /// `owned_session.agent_session_id`：`None` = 不改该列。只在 `session.create` 里由 core 用
-    /// `SessionEndpoint::agent_session_id()` 的返回值写入一次，此后只读（恢复流程只读这两列）。
-    pub agent_session_id: Option<AgentSessionId>,
-    /// `owned_session.workspace_cwd`：`None` = 不改该列。只在 `session.create` 里由 core 用自己已
-    /// 解析的 `ResolvedWorkspace::canonical_path()` 写入一次（**不依赖后端回报**），此后只读。
-    pub workspace_cwd: Option<String>,
-    /// `owned_session.workspace_alias`：`None` = 不改该列。与 `workspace_cwd` 在**同一次提交**里写入，
-    /// 取值是本次创建解析使用的**别名原文**（`ResolvedWorkspace::alias()`，不依赖后端回报），此后只读。
-    /// 来源是客户端提供的目录时该次解析**没有别名**，本列因此保持 `NULL`（「未分组」）。
+    /// `owned_session.agent_session_id`：`None` = 不改该列。
     ///
+    /// `session.create` 不再经本列写入（它在 [`StateChange::SettleCreate`] 那条落账提交里一次建全），
+    /// 此后只读（恢复流程只读这两列）；保留本列是为了不经 core 的提交方仍能按列语义写它。
+    pub agent_session_id: Option<AgentSessionId>,
+    /// `owned_session.workspace_cwd`：`None` = 不改该列。语义同
+    /// [`SessionUpdate::agent_session_id`]：`session.create` 走落账提交，本列只服务其它提交方。
+    pub workspace_cwd: Option<String>,
+    /// `owned_session.workspace_alias`：`None` = 不改该列。语义同
+    /// [`SessionUpdate::agent_session_id`]：`session.create` 走落账提交，本列只服务其它提交方。
+    ///
+    /// 来源是客户端提供的目录时该次解析**没有别名**，本列因此保持 `NULL`（「未分组」）。
     /// 写入后**只有读取路径**消费它（`SessionStore::list` 投影出 `SessionSummary::workspace`）；
     /// 恢复流程既不读也不改它（`SessionRecoveryRecord` 里没有这一项，§3.6）。`None` 语义为「未分组」，
     /// MUST NOT 由 `workspace_cwd` 反查别名补齐（`design.md` D1）。
@@ -290,7 +379,11 @@ pub struct PendingInteractionWrite {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnedCommit {
     /// `None` = 非会话级事件（如 `device.revoked`）：`session_sequence` 与 origin cursor 均为 NULL，
-    /// 只分配 `global_sequence`。
+    /// 只分配 `global_sequence`。`session.create` 的**失败终态**提交也是这个形状——那时没有会话行，
+    /// 终态事件只拿全局序号（§6 第 20 条）。
+    ///
+    /// [`StateChange::SettleCreate`] 时必须为 `Some`，且等于载荷里的 `session`（本提交的事件按该会话
+    /// 归属，因此与「会话行同批落盘」不矛盾：行在同一事务里先建）。
     pub session: Option<SessionId>,
     pub at: Timestamp,
     pub expected_version: Option<Version>,
@@ -312,6 +405,13 @@ pub struct OwnedCommit {
     /// **终态提交**（本字段为 `Some`）不含 `requestId`，因此存储层用同一批次里 `command.*`
     /// 终态事件的 `causation` 定位 `owned_command` 行；`terminal_event` 由存储层回填为该事件的
     /// `event_id`，并把 `terminal_at`/`result`/`error` 写进该行（`None` = 不改既有列）。
+    ///
+    /// 定位规则按提交形状分三条（§6 第 20 条）：`session` 为 `Some` 且 `state` 是
+    /// [`StateChange::SettleCreate`] 时，行仍是受理提交写的**尚无会话**那一行（`session_id IS NULL`），
+    /// 存储层先按 `request_id + session_id IS NULL + status = 'accepted'` 定位并**回填**本次的会话标识，
+    /// 再写终态；`session` 为 `Some` 的其它形状按 `(session_id, request_id)` 定位；`session` 为 `None`
+    /// 时按 `request_id + session_id IS NULL + status = 'accepted'` 定位（`session.create` 的失败终态与
+    /// 启动恢复都走这一条）。命中多行即整事务 `InvalidRequest`（不得猜），命中 0 行即 `NotFound`。
     pub command_terminal: Option<CommandTerminalRecord>,
     /// 新建会话时由 core 生成并传入；存储层只校验“已有 epoch 时必须一致”。
     pub origin_epoch: Option<OriginEpoch>,
@@ -1276,10 +1376,16 @@ pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
-/// id 分配（§3.1）：`TurnId`/`InteractionId`/`PairingId`/`OriginEpoch`/`RequestId` 由本 trait 分配；
-/// `SessionId`/`EventId` 由存储层在提交事务内分配（`SessionStore::commit`），`AttachmentId` 由
-/// `AttachmentStore::put` 分配并返回——它们**不**在这里，以免出现两个来源。
+/// id 分配（§3.1）：`SessionId`/`TurnId`/`InteractionId`/`PairingId`/`OriginEpoch`/`RequestId`/
+/// `MessageId` 由本 trait 分配；`EventId` 由存储层在提交事务内分配（`SessionStore::commit`），
+/// `AttachmentId` 由 `AttachmentStore::put` 分配并返回——它们**不**在这里，以免出现两个来源。
+///
+/// `SessionId` 必须由 core 在调用 `SessionBackendFactory::create` **之前**分配（§6 第 20 条）：后端
+/// 要拿它构造引用，而落账提交那时才把会话行落盘——存储层因此**采用**这个 id，不再自己现分配。
 pub trait IdGenerator: Send + Sync {
+    /// 新建 owned 会话的标识（`session.create` 的落账提交采用它建行，§5.2 的
+    /// [`StateChange::SettleCreate`]、§6 第 20 条）。
+    fn session_id(&self) -> SessionId;
     fn turn_id(&self) -> TurnId;
     fn interaction_id(&self) -> InteractionId;
     fn pairing_id(&self) -> PairingId;

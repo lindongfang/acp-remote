@@ -372,6 +372,10 @@ impl TestIds {
 }
 
 impl IdGenerator for TestIds {
+    fn session_id(&self) -> acp_core::model::SessionId {
+        acp_core::model::SessionId::new(&self.next()).expect("session id")
+    }
+
     fn turn_id(&self) -> acp_core::model::TurnId {
         acp_core::model::TurnId::new(&self.next()).expect("turn id")
     }
