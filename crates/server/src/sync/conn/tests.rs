@@ -2361,21 +2361,26 @@ async fn a_peer_that_never_reads_is_finalized_within_a_bounded_time() {
 ///
 /// 与 `node_link/conn/tests.rs` 的同名用例逐条同构：形态同样是「慢客户端 + 32 KiB 填充串压力源把队列
 /// 顶在字节高水位」，但两个窗口被拉开：静默窗口取 `SILENCE`（0.6 秒），写期限/看门狗窗口取
-/// `WRITE_WINDOW`（30 秒）。写卡住时若会话的 `select!` 仍在推进，静默判定必然先到；若写路径把会话卡住
+/// `WRITE_WINDOW`（300 秒）。写卡住时若会话的 `select!` 仍在推进，静默判定必然先到；若写路径把会话卡住
 /// （例如把写内联回 `select!` 分支里 await），这条判定永远等不到执行——本用例因此是「写任务在推进、
 /// 判据在跑」与「整体停摆」的判别器。
 ///
 /// 断言写成对**行为**的断言：连接在静默窗口量级内被收尾（从注册表摘除），而这个时间远小于写期限与
-/// 看门狗窗口（30 秒）——收尾只可能来自静默判定，不可能来自写期限或看门狗。
+/// 看门狗窗口（300 秒）——收尾只可能来自静默判定，不可能来自写期限或看门狗。
 ///
-/// 收尾预算取 12 秒：合法路径的最坏情形是静默判定（第 2 拍 tick，本机 ≈1.0–1.1 秒）+ 关闭路径按预算
-/// 走满的 `CLOSE_DRAIN_BUDGET`（2 秒）+ 收尾本身，本机约 3.5 秒，CI 慢跑器/并发下实测 7.54 秒——12 秒
-/// 对慢跑器仍留数倍余量，而它仍**远小于**写期限/看门狗窗口（30 秒）与本用例注入的静默窗口（0.6 秒；
-/// 生产 90 秒）这两条竞争成因，因此「收尾只可能来自静默判定」这层判别力不变。
+/// 收尾预算取 60 秒（= `SILENCE` 0.6 秒 + 59.4 秒收尾余量）：合法路径的最坏情形是静默判定（第 2 拍
+/// tick，tick = 500ms，见 `session.rs` 的 `SESSION_TICK`）≈1.0–1.1 秒 + 关闭路径按预算走满的
+/// `CLOSE_DRAIN_BUDGET`（排空与 join，各 2 秒）+ 收尾本身。已观测实测量级：本机 ≈3.5 秒；CI 慢跑器
+/// 7.54 秒；2026-10-16 同一次 push 与 PR 事件各触发一条完整工作流、两条并行跑时实测 16.30 秒与 29.68 秒。
+/// 新预算 60 秒 ≈ 2× 已观测最差实测（29.7 秒）、≈17× 本机合法路径（3.5 秒）。写期限/看门狗窗口
+/// `WRITE_WINDOW` 取 300 秒，与新预算之间是 5× 间距（改动前是 30s vs 12s = 2.5×），因此判别力
+/// 「预算 ≪ 写窗口」更强而不是更弱：29.68 秒这类实测值不再可能贴到写窗口，「收尾只可能来自静默判定」
+/// 这层判别力不变。本次只改窗口与预算数值，不改断言条件、不改压力源，也不改同文件其它用例里
+/// `GRACE + Duration::from_secs(8)` 的预算。
 #[tokio::test]
 async fn a_stuck_write_still_lets_the_session_judgments_run() {
     const SILENCE: Duration = Duration::from_millis(600);
-    const WRITE_WINDOW: Duration = Duration::from_secs(30);
+    const WRITE_WINDOW: Duration = Duration::from_secs(300);
 
     let harness = Harness::with_tuning(
         SyncConfig::default(),
@@ -2406,11 +2411,12 @@ async fn a_stuck_write_still_lets_the_session_judgments_run() {
     )
     .await;
 
-    // 预算 12 秒（静默窗口 0.6 秒 + 11.4 秒收尾余量）：合法路径最坏 = 静默判定（第 2 拍 tick
+    // 预算 60 秒（静默窗口 0.6 秒 + 59.4 秒收尾余量）：合法路径最坏 = 静默判定（第 2 拍 tick
     // ≈1.0–1.1 秒）+ 关闭路径按预算走满的 `CLOSE_DRAIN_BUDGET`（排空与 join，各 2 秒）+ 收尾，本机
-    // ≈3.5 秒、CI 慢跑器实测 7.54 秒。12 秒仍远小于写期限/看门狗窗口 30 秒，收尾只可能来自静默判定。
+    // ≈3.5 秒、CI 慢跑器实测 7.54 秒；负载翻倍时实测 16.30 秒与 29.68 秒。60 秒仍远小于写期限/看门狗
+    // 窗口 300 秒（5× 间距），收尾只可能来自静默判定。
     assert_eventually_within(
-        SILENCE + Duration::from_millis(11_400),
+        SILENCE + Duration::from_millis(59_400),
         || harness.conn.registry().active() == 0,
         "写卡住期间静默判定仍必须按窗口生效（收尾远早于写期限/看门狗窗口）",
     )
