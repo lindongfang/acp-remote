@@ -10,7 +10,7 @@ use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{
-    Base64Url, BoundedU64, DecimalString, FeatureList, NonEmptyText, UIntAtLeast, Uuid, ValueError,
+    Base64Url, BoundedU64, DecimalString, FeatureList, UIntAtLeast, Uuid, ValueError,
 };
 
 /// 客户端形态（`clientKind`）。
@@ -125,45 +125,6 @@ pub struct ClientProof {
     pub device_proof: Base64Url<64>,
 }
 
-/// `scopes`：非空、去重的 scope 名列表。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Scopes(Vec<NonEmptyText<128>>);
-
-impl Scopes {
-    pub fn as_slice(&self) -> &[NonEmptyText<128>] {
-        &self.0
-    }
-
-    fn validate(&self) -> Result<(), ValueError> {
-        for (index, scope) in self.0.iter().enumerate() {
-            if self.0[index + 1..]
-                .iter()
-                .any(|other| other.as_str() == scope.as_str())
-            {
-                return Err(ValueError::RepeatedItem {
-                    field: "scopes",
-                    value: scope.as_str().to_owned(),
-                });
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Serialize for Scopes {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Scopes {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let scopes = Self(Vec::<NonEmptyText<128>>::deserialize(deserializer)?);
-        scopes.validate().map_err(DeError::custom)?;
-        Ok(scopes)
-    }
-}
-
 /// `auth.authenticated` 的 `limits`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -177,12 +138,16 @@ pub struct Limits {
 }
 
 /// `auth.authenticated` 的 body。
+///
+/// 认证结果只陈述事实与本次连接的参数：设备方向没有授权维度（`pairing-model` 删除设备权限层），
+/// 因此 body 不再有授权集合字段——通过认证即可执行任何业务命令。`deny_unknown_fields` 与
+/// `schemas/sync/v1/auth.schema.json` 的 `authenticated.body.additionalProperties: false` 同口径：
+/// 携带 `scopes` 键的消息被拒，不再有"半套"设备授权字段。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Authenticated {
     #[serde(rename = "deviceId")]
     pub device_id: Uuid,
-    pub scopes: Scopes,
     #[serde(rename = "serverEpoch")]
     pub server_epoch: Uuid,
     #[serde(rename = "headGlobalSequence")]

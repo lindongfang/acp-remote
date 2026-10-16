@@ -1,4 +1,4 @@
-//! 配对状态机（合同 §4）：创建、认领校验、落定、过期与重启终结、SAS 与状态视图。
+//! 配对状态机（合同 §4）：创建、认领校验、落定、过期与重启终结、状态视图。
 //!
 //! 入口只做纯计算与内存态变更：持久化事实由调用方以快照入参提供、以领域值返回，由调用方组装
 //! `core::ports` 的写集（`PairingWrite`/`PairingClaimWrite`/`PairingSettlementWrite`/`ExpiryWrite`）
@@ -13,20 +13,20 @@ use crate::authority::Authority;
 use crate::error::PairingError;
 use crate::state::PairingMaterial;
 use crate::transcript::{
-    NodeLinkPairingProof, NodeLinkPairingSas, NodeLinkPairingStatus, SyncPairingProof,
-    SyncPairingSas, SyncPairingStatus,
+    NodeLinkPairingProof, NodeLinkPairingStatus, SyncPairingProof, SyncPairingStatus,
 };
 use crate::types::{
     CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
     Completion, IdentityFact, PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PairingDecision,
     PairingDraft, PairingProof, PairingRequestId, PairingRequestMaterial, PairingSpec,
-    PairingStatusView, RequestedCapabilities, Sas, at_or_after, is_unconfirmed,
+    PairingStatusView, RequestedCapabilities, at_or_after, is_unconfirmed,
 };
 
 impl Authority {
     /// 创建一个配对：登记请求集合、绑定、有效期与内存 secret；返回待落库的记录草稿。
     ///
     /// `expires_at` 由调用方按「不超过 5 分钟」算出后传入，本方法只复核上界（收窄可以、延长不行）。
+    /// 请求集合必须与目标族一致：设备配对不得携带任何集合（设备没有授权维度），节点配对只带 grant。
     pub fn begin_pairing(
         &self,
         pairing_id: &PairingId,
@@ -83,64 +83,6 @@ impl Authority {
             server_nonce,
             pairing_request_id,
         })
-    }
-
-    /// SAS 派生（合同 §4.4）：本机在批准界面上展示的 6 位短验证码。
-    ///
-    /// 只在「已认领且尚未落定」的窗口内有意义（secret 还在内存、请求方身份已固定）；
-    /// 过期、已落定或 secret 已被清除时返回错误，**不**以占位值代替。本机结果只用于本地展示，
-    /// 绝不当作对端结果下发（合同 §4.4）。
-    pub async fn pairing_sas(
-        &self,
-        pairing: &PairingRecord,
-        peer: &ClaimedPairing,
-    ) -> Result<Sas, PairingError> {
-        if pairing.state() != PairingState::PendingConfirmation {
-            return Err(PairingError::WrongState);
-        }
-        if at_or_after(&self.now(), pairing.expires_at()) {
-            return Err(PairingError::Expired);
-        }
-        let material = self
-            .state()
-            .material(pairing.id())
-            .cloned()
-            .ok_or(PairingError::SecretUnavailable)?;
-        let host_public_key = self
-            .node_public_key()
-            .await
-            .map_err(|_| PairingError::SecretUnavailable)?;
-        let secret = material.secret;
-        let transcript = match (pairing.target(), &peer.peer) {
-            (PairingTarget::Device, PeerIdentity::Device(device)) => {
-                let canonical_origin = CanonicalOrigin::parse(&peer.host_binding)?;
-                SyncPairingSas {
-                    host_id: self.local_node().clone(),
-                    device_id: device.clone(),
-                    pairing_id: pairing.id().clone(),
-                    canonical_origin,
-                    host_public_key,
-                    device_public_key: peer.public_key.clone(),
-                    client_nonce: peer.client_nonce.clone(),
-                    server_nonce: material.server_nonce,
-                    pairing_request_id: material.pairing_request_id,
-                }
-                .transcript()?
-            }
-            (PairingTarget::Node, PeerIdentity::Node(node)) => NodeLinkPairingSas {
-                owner_node_id: self.local_node().clone(),
-                access_node_id: node.clone(),
-                pairing_id: pairing.id().clone(),
-                owner_public_key: host_public_key,
-                access_public_key: peer.public_key.clone(),
-                client_nonce: peer.client_nonce.clone(),
-                server_nonce: material.server_nonce,
-                pairing_request_id: material.pairing_request_id,
-            }
-            .transcript()?,
-            _ => return Err(PairingError::ClaimMismatch),
-        };
-        crate::transcript::derive_sas(&transcript, &secret).map_err(PairingError::from)
     }
 
     /// 认领校验：结构 → 状态/过期 → 绑定 → 集合 → HMAC 的唯一入口。
@@ -358,14 +300,13 @@ impl Authority {
             .collect()
     }
 
-    /// 状态视图：`created` 阶段只暴露状态与过期时间；已认领后按调用方传入的 SAS 展示。
+    /// 状态视图：`created` 阶段只暴露状态与过期时间；已认领后展示对端元数据与请求集合。
     ///
     /// 非批准态一旦过期，状态字段按 `Expired` 返回（`rejected`/`created` 不再表现为「有效状态」）。
     pub fn pairing_status(
         &self,
         pairing: &PairingRecord,
         peer: Option<&ClaimedPairing>,
-        sas: Option<crate::types::Sas>,
     ) -> PairingStatusView {
         let expired = !matches!(
             pairing.state(),
@@ -385,7 +326,6 @@ impl Authority {
             public_key_fingerprint: claimed
                 .then(|| peer.map(|peer| peer.public_key.fingerprint()))
                 .flatten(),
-            sas: if claimed { sas } else { None },
             requested: claimed.then(|| RequestedCapabilities {
                 scopes: pairing.requested_scopes().clone(),
                 grants: pairing.requested_grants().clone(),

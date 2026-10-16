@@ -7,7 +7,7 @@
 use super::*;
 use crate::sync::subscribe::NegotiatedFeatures;
 use crate::sync::subscribe::fixture::{self, DEVICE, EPOCH, Frame, REMOTE_SESSION, SESSION, World};
-use acp_core::model::{Actor, ScopeSet};
+use acp_core::model::Actor;
 
 /// 明细资源名（六类 session-scoped 明细）：快照里**一个都不许出现**（§9.4）。
 const DETAIL_RESOURCES: [&str; 6] = [
@@ -20,11 +20,12 @@ const DETAIL_RESOURCES: [&str; 6] = [
 ];
 
 /// 组装并下发一次快照，返回对端收到的全部帧。
-async fn snapshot(world: &World, features: &[&str], scopes: &[&str]) -> Vec<Frame> {
+///
+/// 设备 actor 只由标识构成（设备方向没有授权集合），因此没有 scopes 参数。
+async fn snapshot(world: &World, features: &[&str]) -> Vec<Frame> {
     let (handle, mut receiver) = fixture::connection(DEVICE);
     let actor = Actor::Device {
         device: acp_core::model::DeviceId::new(DEVICE).expect("device id"),
-        scopes: ScopeSet::try_from_iter(scopes.iter().copied()).expect("scopes"),
     };
     let negotiated = NegotiatedFeatures::new(features.iter().map(|f| (*f).to_owned()).collect());
     let reachable = |_: &RemoteSessionRef| true;
@@ -81,12 +82,7 @@ fn items<'a>(frames: &'a [Frame], resource: &str) -> Option<&'a serde_json::Valu
 #[tokio::test]
 async fn a_full_snapshot_has_three_chunks_in_index_order() {
     let world = world_with_catalog();
-    let frames = snapshot(
-        &world,
-        &[LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE],
-        &["session.list"],
-    )
-    .await;
+    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE]).await;
     let begin = fixture::bodies(&frames, "sync.snapshot_begin");
     assert_eq!(begin.len(), 1, "先发 begin");
     assert_eq!(begin[0]["chunkCount"], 3, "协商目录 feature 时是三个资源");
@@ -145,7 +141,7 @@ async fn a_full_snapshot_has_three_chunks_in_index_order() {
 #[tokio::test]
 async fn without_the_catalog_feature_only_sessions_are_sent() {
     let world = world_with_catalog();
-    let frames = snapshot(&world, &[REMOTE_ORIGIN_FEATURE], &["session.list"]).await;
+    let frames = snapshot(&world, &[REMOTE_ORIGIN_FEATURE]).await;
     assert_eq!(
         fixture::bodies(&frames, "sync.snapshot_begin")[0]["chunkCount"],
         1
@@ -170,7 +166,7 @@ async fn an_empty_session_set_still_sends_one_chunk() {
     // 未协商目录 feature 的设备：`chunkCount` 只能是 1——空会话集合也照发一个空数组
     // （`chunkCount: 0` 是形状错误）。
     let world = World::new();
-    let frames = snapshot(&world, &[], &["session.list"]).await;
+    let frames = snapshot(&world, &[]).await;
     let chunks = fixture::bodies(&frames, "sync.snapshot_chunk");
     assert_eq!(
         chunks.len(),
@@ -185,7 +181,7 @@ async fn an_empty_session_set_still_sends_one_chunk() {
     );
 
     // 协商了目录 feature 时是 3 块：目录资源**是空数组**（目录为空仍然下发），与会话是否为空无关。
-    let catalog = snapshot(&world, &[LOCAL_CATALOG_FEATURE], &["session.list"]).await;
+    let catalog = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
     assert_eq!(fixture::bodies(&catalog, "sync.snapshot_chunk").len(), 3);
     assert_eq!(
         items(&catalog, "workspaces")
@@ -200,12 +196,7 @@ async fn an_empty_session_set_still_sends_one_chunk() {
 #[tokio::test]
 async fn detail_resources_never_reach_the_snapshot() {
     let world = world_with_catalog();
-    let frames = snapshot(
-        &world,
-        &[LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE],
-        &["session.list"],
-    )
-    .await;
+    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE, REMOTE_ORIGIN_FEATURE]).await;
     for frame in &frames {
         if frame.kind != "sync.snapshot_chunk" {
             continue;
@@ -228,7 +219,7 @@ async fn detail_resources_never_reach_the_snapshot() {
 #[tokio::test]
 async fn the_digest_covers_the_exact_frame_bytes() {
     let world = world_with_catalog();
-    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE], &["session.list"]).await;
+    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
     let chunk_texts: Vec<&str> = frames
         .iter()
         .filter(|frame| frame.kind == "sync.snapshot_chunk")
@@ -257,7 +248,7 @@ async fn the_digest_covers_the_exact_frame_bytes() {
 
     // 反例二：同一份资源再发一次会得到新的 messageId/出站序号，摘要因此不同——这就是"重新序列化不能
     // 替代原帧字节"在服务端一侧的表现。
-    let again = snapshot(&world, &[LOCAL_CATALOG_FEATURE], &["session.list"]).await;
+    let again = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
     let again_declared = fixture::bodies(&again, "sync.snapshot_end")[0]["snapshotDigest"]
         .as_str()
         .expect("snapshotDigest");
@@ -267,7 +258,7 @@ async fn the_digest_covers_the_exact_frame_bytes() {
 #[tokio::test]
 async fn imported_sessions_follow_the_remote_origin_gate() {
     let world = world_with_catalog();
-    let gated = snapshot(&world, &[REMOTE_ORIGIN_FEATURE], &["session.list"]).await;
+    let gated = snapshot(&world, &[REMOTE_ORIGIN_FEATURE]).await;
     assert_eq!(
         items(&gated, "sessions")
             .expect("sessions")
@@ -277,7 +268,7 @@ async fn imported_sessions_follow_the_remote_origin_gate() {
         2
     );
 
-    let ungated = snapshot(&world, &[], &["session.list"]).await;
+    let ungated = snapshot(&world, &[]).await;
     let sessions = items(&ungated, "sessions").expect("sessions");
     assert_eq!(
         sessions.as_array().expect("数组").len(),
@@ -303,7 +294,7 @@ async fn the_workspace_key_has_three_states() {
         None,
     ));
 
-    let grouped = snapshot(&world, &[LOCAL_CATALOG_FEATURE], &["session.list"]).await;
+    let grouped = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
     let sessions = items(&grouped, "sessions").expect("sessions");
     assert_eq!(
         sessions[0]["workspace"]["alias"], "project",
@@ -319,7 +310,7 @@ async fn the_workspace_key_has_three_states() {
         "协商了目录 feature 时键必须在场"
     );
 
-    let ungated = snapshot(&world, &[], &["session.list"]).await;
+    let ungated = snapshot(&world, &[]).await;
     let sessions = items(&ungated, "sessions").expect("sessions");
     assert!(
         sessions[0].get("workspace").is_none(),
@@ -332,7 +323,7 @@ async fn the_canonical_path_never_leaves_the_host() {
     let world = World::new();
     let path = fixture::workspace_path();
     world.seed_workspace("project", "Project", &path);
-    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE], &["session.list"]).await;
+    let frames = snapshot(&world, &[LOCAL_CATALOG_FEATURE]).await;
     for frame in &frames {
         assert!(
             !frame.text.contains(&path),
@@ -346,12 +337,13 @@ async fn the_canonical_path_never_leaves_the_host() {
     );
 }
 
+/// 设备方向不再有授权过滤：一台**没有任何授权集合**的已认证设备照常读到全部自有会话
+/// （`pairing-model` 删除设备权限层；旧实现会以 `authorization.scope_denied` 拒绝）。
 #[tokio::test]
-async fn a_device_without_the_observe_scope_reads_no_session() {
+async fn a_device_without_any_scope_still_reads_every_session() {
     let world = world_with_catalog();
     let actor = Actor::Device {
         device: acp_core::model::DeviceId::new(DEVICE).expect("device id"),
-        scopes: ScopeSet::empty(),
     };
     let negotiated = NegotiatedFeatures::new(Vec::new());
     let reachable = |_: &RemoteSessionRef| true;
@@ -360,12 +352,19 @@ async fn a_device_without_the_observe_scope_reads_no_session() {
         features: &negotiated,
         reachable: &reachable,
     };
-    let error = plan(&world.core, inputs, &fixture::cursor(EPOCH, 7))
+    let plan = plan(&world.core, inputs, &fixture::cursor(EPOCH, 7))
         .await
-        .expect_err("无权设备不得读取任何会话");
+        .expect("已认证设备必须能读取会话清单");
+    let (handle, mut receiver) = fixture::connection(DEVICE);
+    send(&handle, &plan).expect("快照可下发");
+    let frames = fixture::frames(&mut receiver);
     assert!(
-        matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
-        "与 session.list 同一授权口径，得到 {error:?}"
+        !items(&frames, "sessions")
+            .expect("sessions 资源")
+            .as_array()
+            .expect("items 是数组")
+            .is_empty(),
+        "无授权集合的设备仍必须看到自己的会话"
     );
 }
 

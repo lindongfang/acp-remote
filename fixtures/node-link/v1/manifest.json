@@ -287,7 +287,6 @@
   "transcriptVectors": [
     "transcripts/pairing-proof.json",
     "transcripts/pairing-owner-proof.json",
-    "transcripts/pairing-sas.json",
     "transcripts/pairing-status.json",
     "transcripts/challenge.json",
     "transcripts/node-proof.json",

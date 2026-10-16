@@ -49,7 +49,7 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 
 - 一个节点可以直接管理本地 Agent，也可以通过 Node Link 导入其他节点导出的 Agent；同一节点可以同时承担 Owner 和 Access 角色。
 - 每个 Agent/会话的 Owner Node 是该资源的唯一权威；默认 `no-content-cache`，Access Node 不复制远程会话正文，可持久化的字段清单见 [`CORE_PORTS_AND_STORAGE.md`](docs/CORE_PORTS_AND_STORAGE.md) §7。
-- 手机、电脑、Zed、PWA 和 CLI 是客户端形态，不是固定权限角色；能力由 principal scope、Export Policy 和端到端 capability 决定。
+- 手机、电脑、Zed、PWA 和 CLI 是客户端形态，不是固定权限角色；能力由已认证的设备/节点身份、Export grant 与端到端 capability 的交集决定。
 - Node Link 首个纵向切片必须支持受 `remote-work`、已导出 Agent 和 workspace template 约束的远程 `session.create`（Zed `session/new` 的映射规则见 [`ACP_COMPATIBILITY_MATRIX.md`](docs/ACP_COMPATIBILITY_MATRIX.md) §6）；当前 PWA MVP 可以不展示创建入口。
 - Zed 是可选客户端，项目不得与 Zed 强绑定。
 - 对直接管理的 Agent，Owner Node Daemon 是其唯一 ACP Client，负责 Codex、Oh My Pi 等 Agent 的生命周期；Access Node 通过 Node Link 访问，不直接接管远程 Agent stdio。
@@ -94,7 +94,8 @@ ACP Remote 是运行在用户控制节点上的本地优先 ACP 中转站：
 - Node/设备 wire signature 固定为 64-byte P1363 `r || s` + 无填充 base64url；签名/HMAC 不直接使用普通 JSON，必须使用对应协议定义的域分离长度前缀 transcript。
 - 一个 PWA 设备身份只绑定一个 canonical origin；Origin 变化必须重新配对，禁止通过导出私钥实现跨 Origin 迁移。
 - 每个新 WSS 连接完整执行 challenge-response，不引入长期 bearer session/refresh token。
-- 每个业务命令都要根据已认证设备及其 scope 授权。
+- 通过设备认证即可执行业务命令：设备方向不再有授权维度——配对不授予授权，设备记录不保存授权集合，命令面不按 scope 判定；设备撤销立即生效仍是执行前提的一部分。
+- 跨节点 Export 授权（`grant.*`）、`local.*` 本地管理能力永不远程授予、以及「配对确认必须由本机用户完成」这三条边界不因上一条放宽。
 - 私钥和 token 不得写入日志、协议错误、测试快照或普通 SQLite 字段。
 - 使用经过审查的密码学协议和实现，不自行设计加密算法。
 - Noise 不进入第一阶段；只有经单独 ADR 接受后才能新增为可选 Transport Profile。
@@ -164,7 +165,7 @@ core use_cases   -> core ports + core model
 - 慢客户端不能阻塞 Broker 或 Agent；断开后依靠 cursor 重放。
 - 协议变更必须说明向前/向后兼容策略，并增加 fixture 或契约测试。
 - Rust 和 TypeScript 必须消费同一 manifest，不能各自复制一套测试样例；Sync wire 变更要同步维护的文件清单见 §9。
-- 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant/pack 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
+- 错误码、feature ID、命令名等封闭词汇表只能有一处机器定义：错误码在 `compatibility/errors/v1/errors.json`，feature ID 在 `compatibility/features/v1/features.json`，命令与 grant 在 `compatibility/commands/v1/commands.json`；新增或修改时必须同步更新对应 schema enum 或协议文档表格、`compatibility/transcripts/v1/transcripts.json`（涉及签名/HMAC 字段时）与相应 fixture，并让 `npm run check` 通过。
 - transcript domain 与字段 tag 表由 `compatibility/transcripts/v1/transcripts.json` 机器登记；`fixtures/*/v1/transcripts/` 的固定向量必须能由该表从 `input` 重新编码得到，否则视为实现或表格错误。
 
 ### Node Link

@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "9a3d7f52-c81b-4e69-a034-6f2d8b1c7e05",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "57",
+  "body": {
+    "requestId": "5b8f2c17-49d6-4a83-8e70-3c1a9d4f6b28",
+    "command": "session.create",
+    "payload": {
+      "agentId": "claude-code"
+    }
+  }
+}

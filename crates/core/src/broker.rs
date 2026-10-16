@@ -819,10 +819,12 @@ impl Broker {
     // §6.5 授权
     // -----------------------------------------------------------------------------------------
 
-    /// 所有用例入口的第一步：按 actor 的 scope/grant 与 Export 交集判定（§6.5）。
+    /// 所有用例入口的第一步：按 actor 的授权面判定（§6.5）。
     ///
     /// - `LocalCli`：本地管理入口，访问控制由 `LOCAL_ADMIN_PROTOCOL.md` §2.2 的 OS 用户边界保证。
-    /// - `Device`：`scopes` 是展开后的独立 scope（等于命令名），必须含该命令。
+    /// - `Device`：**通过设备认证即可执行任何业务命令**——设备不再有授权维度，因此这里没有逐命令的
+    ///   scope 判定（`AGENTS.md` §4 的安全不变量：配对不授予授权、设备记录不保存授权集合）。认证本身
+    ///   与撤销即时生效由连接层负责（`SYNC_PROTOCOL.md` §8），不是本函数的事。
     /// - `Node`：Access 侧要求本地 `ImportRecord.grants` 覆盖该命令；Owner 侧要求某个未撤销
     ///   `ExportRecord` 既覆盖该命令、又覆盖目标会话的 agent。两者任一成立即通过。
     /// - `PairingClaimant`：**任何命令都不授权**（design D12：认领方只存在于配对通道，且那里不经
@@ -836,7 +838,8 @@ impl Broker {
     ) -> Result<(), Denied> {
         let allowed = match actor {
             Actor::LocalCli => true,
-            Actor::Device { scopes, .. } => scopes.contains(command),
+            // 设备方向没有命令级授权判定：`command` 在这里只用于 `Actor::Node` 的 grant 判定与审计。
+            Actor::Device { .. } => true,
             // 查不到 Export/Import（或存储失败）时**失败关闭**：不能证明授权即拒绝（§6.5）。
             Actor::Node { node, .. } => self
                 .node_allowed(node, command, session)
@@ -1682,7 +1685,8 @@ impl Broker {
         let sink = self.sink(&session);
         // 两列的落盘取值必须在 `create` 消费掉请求之前取出：`workspace_cwd` 来自 core **自己**已解析
         // 的结果（不依赖后端回报），`workspace_alias` 是同一次解析用掉的**别名原文**（目录归属的权威
-        // 投影来源，`design.md` D1），`agent_session_id` 来自后端对 `session/new` 的实际响应。
+        // 投影来源，`design.md` D1）——**客户端提供的目录没有别名**，此时写 `NULL` 即「未分组」，
+        // 不得用空串或占位别名代替；`agent_session_id` 来自后端对 `session/new` 的实际响应。
         let workspace_cwd = create
             .workspace
             .as_ref()
@@ -1690,7 +1694,8 @@ impl Broker {
         let workspace_alias = create
             .workspace
             .as_ref()
-            .map(|workspace| workspace.alias().as_str().to_owned());
+            .and_then(|workspace| workspace.alias())
+            .map(|alias| alias.as_str().to_owned());
         let endpoint: Arc<dyn SessionEndpoint> = self
             .deps
             .backends
@@ -6678,26 +6683,17 @@ mod tests {
     use crate::model::{
         AcpRaw, AgentId, AgentRef, AgentSessionId, CachePolicy, DeviceId, EventId, ExportId,
         ExportRecord, ExportTemplate, Fingerprint, GrantSet, InteractionKind, InteractionOption,
-        ModeState, NodeRecord, PairingId, PendingInteraction, ResourceOrigin, ScopeSet, TemplateId,
+        ModeState, NodeRecord, PairingId, PendingInteraction, ResourceOrigin, TemplateId,
         WorkspaceAlias, WorkspaceAliasEntry,
     };
 
-    fn device_without_scopes() -> Actor {
+    /// 一个已认证的设备主体（§10.1 的「按诱发命令的执行者分类」断言与授权回归都用它）。
+    ///
+    /// 设备不再有授权集合（`pairing-model` 删除设备权限层），构造因此不需要任何 scope：命令的执行前提
+    /// 只有「该连接已通过设备认证」，而认证发生在连接层、不在 broker 判定。
+    fn device_actor() -> Actor {
         Actor::Device {
             device: DeviceId::new(&uuid_text(40)).expect("uuid"),
-            scopes: ScopeSet::empty(),
-        }
-    }
-
-    /// 一个已授权某条命令范围的设备（用于 §10.1 的「按诱发命令的执行者分类」断言）。
-    fn device_actor(scope: &str) -> Actor {
-        Actor::Device {
-            device: DeviceId::new(&uuid_text(43)).expect("uuid"),
-            scopes: {
-                let mut scopes = ScopeSet::empty();
-                scopes.insert(scope).expect("insert scope");
-                scopes
-            },
         }
     }
 
@@ -7263,10 +7259,13 @@ mod tests {
         let conflict = block_on(harness.broker.submit_mutation(&actor, &changed)).expect("submit");
         assert_eq!(rejection_code(&conflict), "command.idempotency_conflict");
 
-        // 不同 actor 用同一 requestId → 视为独立命令（幂等键是协议维度的 `(actor, requestId)`）。
-        let other = Actor::Device {
-            device: DeviceId::new(&uuid_text(41)).expect("uuid"),
-            scopes: ScopeSet::empty(),
+        // 不同 actor 用同一 requestId → 视为独立命令（幂等键是协议维度的 `(actor, requestId)`）：
+        // 这条命令不与上一条冲突，而是走自己的授权判定。设备方向已无命令级判定，因此这里用一个**未授
+        // 任何 grant** 的节点主体，它得到的仍是自己的 `authorization.scope_denied`（而不是
+        // `command.idempotency_conflict`）——两者的区别正是本用例要钉住的。
+        let other = Actor::Node {
+            node: NodeId::new(&uuid_text(41)).expect("uuid"),
+            access_node: NodeId::new(&uuid_text(42)).expect("uuid"),
         };
         let mut foreign = command.clone();
         foreign.actor = other.clone();
@@ -7968,18 +7967,30 @@ mod tests {
         assert_eq!(harness.world.audits().len(), 0, "成功的解析不写审计拒绝行");
     }
 
-    /// §6.5：授权在 core 判定，Scope 不足即拒绝，并记 `authorization.denied`。
+    /// §6.5：设备方向**没有**命令级授权判定——通过认证即可执行任何业务命令（`pairing-model` 删除设备
+    /// 权限层；`AGENTS.md` §4 的安全不变量）。本用例的判别力在于：主体是一个**从未被授予任何 scope** 的
+    /// 设备，而命令照常落到后端；旧实现会以 `authorization.scope_denied` 拒绝并且一次都不派发。
     #[test]
-    fn authorization_denied_for_device_without_scope() {
+    fn authenticated_device_executes_without_any_scope() {
         let harness = Harness::new(BrokerConfig::default());
-        let actor = device_without_scopes();
+        harness.world.push_script(Script::new(vec![endpoint_event(
+            EventKind::Delta,
+            "agent.message.delta",
+            &turn_view("running"),
+        )]));
+        let actor = device_actor();
         let command = prompt_command(&actor, &harness.session, &harness.request(1), 'A');
         let receipt = block_on(harness.broker.submit_mutation(&actor, &command)).expect("submit");
-        assert_eq!(rejection_code(&receipt), "authorization.scope_denied");
-        assert_eq!(harness.world.commit_count(), 0, "拒绝不落盘");
-        assert_eq!(harness.world.prompt_count(), 0);
-        let audits = harness.world.audits();
-        assert_eq!(audits.len(), 1);
+        assert!(
+            matches!(receipt, CommandReceipt::Accepted { .. }),
+            "已认证设备不得因缺少 scope 被拒，得到 {receipt:?}"
+        );
+        assert_eq!(harness.world.prompt_count(), 1, "命令必须真的派发到后端");
+        assert_eq!(
+            harness.world.audits().len(),
+            0,
+            "没有拒绝就没有 authorization.denied 行"
+        );
     }
 
     /// §6 第 13 条 / §9 判据 15：Agent 的权限请求必须在**同一提交**里同时落事件与 pending 交互行；
@@ -8291,7 +8302,7 @@ mod tests {
         let mode = EventType::new("session.mode.changed").expect("event type");
         let completed = EventType::new("command.completed").expect("event type");
         let revoked = EventType::new("device.revoked").expect("event type");
-        let device = device_actor("session.prompt");
+        let device = device_actor();
         let node = Actor::Node {
             node: NodeId::new(&uuid_text(44)).expect("node"),
             access_node: NodeId::new(&uuid_text(45)).expect("access node"),
@@ -8394,7 +8405,7 @@ mod tests {
             ),
             endpoint_event(EventKind::State, "turn.completed", &turn_view("completed")),
         ]));
-        let device = device_actor("session.prompt");
+        let device = device_actor();
         let request = harness.request(1);
         let command = prompt_command(&device, &harness.session, &request, 'A');
         assert!(matches!(
@@ -8563,7 +8574,7 @@ mod tests {
             "agent.message.delta",
             &turn_view("running"),
         )]));
-        let device_a = device_actor("session.prompt");
+        let device_a = device_actor();
         let prompt_request = harness.request(1);
         let prompt = prompt_command(&device_a, &harness.session, &prompt_request, 'A');
         assert!(matches!(

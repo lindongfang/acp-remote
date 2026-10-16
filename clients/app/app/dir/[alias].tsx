@@ -135,8 +135,6 @@ export default function DirectoryDetailRoute(): ReactElement {
 
       <DirectoryDetail
         model={store.directoryDetail(alias)}
-        createEntry={entry}
-        canCreate={entry.permission.kind === "granted"}
         query={state.directoryDetailQuery}
         lastSyncedAtMs={state.lastSyncedAtMs}
         onQueryChange={(next) => {
@@ -158,8 +156,12 @@ export default function DirectoryDetailRoute(): ReactElement {
           model={entry}
           selectedAgentId={agentId}
           onSelectAgent={setAgentId}
-          onSubmit={(selected) => {
-            const outcome = store.submitCreateSession({ workspaceAlias: alias, agentId: selected });
+          onSubmit={({ agentId: selected, directoryPath }) => {
+            const outcome = store.submitCreateSession({
+              directoryAlias: alias,
+              agentId: selected,
+              ...(directoryPath === "" ? {} : { directoryPath }),
+            });
             if (!outcome.ok) setAgentId(null);
           }}
           onDismissUncertain={() => {

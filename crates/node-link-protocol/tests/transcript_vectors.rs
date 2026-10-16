@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 const MANIFEST: &str = "fixtures/node-link/v1/manifest.json";
 const FIXTURE_ROOT: &str = "fixtures/node-link/v1/";
 const PROTOCOL: &str = "node_link";
-const POSITIVE_EXPECTED: usize = 6;
+const POSITIVE_EXPECTED: usize = 5;
 const TRANSCRIPT_NEGATIVES_EXPECTED: usize = 5;
 const PUBLIC_KEY_NEGATIVES_EXPECTED: usize = 2;
 

@@ -62,7 +62,6 @@ const EARLIER_PAGE = [messageItem({ id: "m-1", createdAt: "2026-10-01T00:00:01.0
 function storeFixture(connectionId: string | null): ReturnType<typeof storeWith> {
   return storeWith({
     resources: resources({ sessions: [session({ id: SESSION_ID, state: "running" })], agents: [] }),
-    scopes: ["session.read"],
     connectionId,
   });
 }

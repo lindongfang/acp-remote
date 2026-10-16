@@ -2,6 +2,7 @@
 
 > 状态：编码前原始设计（Draft）  
 > 版本：0.3  
+> 修订记录（2026-10-16，`pairing-model`）：删除两套配对短验证码（§11.2/§11.7 的展示与派生规则改为两条设备侧密码学校验：用二维码里固定的主机公钥验证认领响应的 `hostProof`，已批准响应的主机公钥必须与二维码逐字节相同）；删除设备权限层（§1/§3.4/§8/§9/§11.4/§17 的「按 Actor 的 scope 授权」「设备记录保存命令 scope」「设备是否拥有该命令 scope」改为「通过设备认证即可执行，设备方向没有授权维度」，§11.4 的设备记录示例去掉 `scopes` 并改名）；`session.create` 在 Sync 面允许客户端提交绝对目录（§8）。跨节点 `grant.*`/Export `scopes`/Import grants 与设备认证、撤销、速率上限不变。
 > 修订记录（2026-09-18）：配对有效期改为固定 5 分钟；PWA 首版明确不展示会话创建入口；移除与 Sync/Node Link 已冻结取值冲突的旧叙述。  
 > 日期：2026-09-18
 > 用途：记录项目最初的产品边界、架构选择、安全模型和发布方式，作为后续设计与编码的基线。
@@ -10,14 +11,14 @@
 
 ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent Client Protocol）中转站。节点可以直接连接 Codex、Oh My Pi 等本地 Agent，也可以通过另一个 ACP Remote 节点访问远程 Agent。
 
-项目不实现 Agent 推理，也不替代具体 Agent。手机、电脑、Zed 和 PWA 都只是不同形态的访问端；核心模型不再以设备形态区分能力，而以资源归属、节点身份、principal 和 scope 决定权限。
+项目不实现 Agent 推理，也不替代具体 Agent。手机、电脑、Zed 和 PWA 都只是不同形态的访问端；核心模型不再以设备形态区分能力，而以资源归属、节点身份与设备认证状态决定能力，跨节点能力再由 Export policy 与 `grant.*` 约束。
 
 核心目标：
 
 - 一个 ACP Remote 节点可以导出它直接管理的 Agent，也可以导入其他节点导出的 Agent。
 - 本地或远程 Zed 可以连接就近 ACP Remote 的本地 ACP facade，再访问资源归属节点上的 Agent。
 - PWA、手机、桌面 App 和 CLI 可以查看会话、继续对话、处理通知并控制被授权的能力。
-- 会话创建不再与“电脑/手机”绑定；是否允许创建由 Owner Node 的 Export Policy 和调用 principal scope 决定。
+- 会话创建不再与“电脑/手机”绑定；是否允许创建由 Owner Node 的 Export Policy（跨节点导入的资源）或该设备自身的认证状态（本机自己的设备）决定。
 - Agent、workspace、凭据、会话和事件日志始终由资源归属节点负责。
 - 项目不与 Zed 强绑定；Zed 只是可选的 ACP 客户端。
 - 项目不使用应用级云服务器或持久化云中继。
@@ -69,7 +70,7 @@ ACP Remote 是一个运行在用户控制节点上的、有状态的 ACP（Agent
 
 ### 3.3 访问客户端
 
-Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除和管理能力按 scope 决定；Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`，当前 PWA MVP 可以不展示创建入口。
+Zed、CLI、PWA、手机 App 和桌面 App 都是客户端形态，不是固定权限角色。它们可以按授权查看消息、继续对话、取消 turn、处理权限/elicitation、选择模型或模式。会话创建、删除与管理能力：本机自己的设备通过认证即可执行（设备方向没有授权维度）；跨节点能力由 Export Policy 与 `grant.*` 决定。Node Link 首个纵向切片支持供 Zed 使用的受限远程 `session.create`；PWA 按 `FRONTEND_DESIGN.md` §2.2/§9 在目录内提供创建入口。
 
 ### 3.4 Zed
 
@@ -78,7 +79,7 @@ Zed 不是系统核心，也不是会话所有者。它是一个可选 ACP Clien
 - 可以通过本地 `acp-remote acp-stdio` 接入 Daemon。
 - 可以访问当前节点本地拥有或从其他节点导入的 Agent/会话。
 - 可以继续已有会话。
-- 是否允许 Zed 创建会话由本地 principal scope 与 Owner Export Policy 的交集决定。
+- 是否允许 Zed 创建会话由本地授权（[`[[imports]].grants`](./CONFIG_REFERENCE.md) 描述的 Access 侧授权）与 Owner Export Policy 的交集决定。
 
 ### 3.5 前端交付策略
 
@@ -306,13 +307,13 @@ Daemon：
 
 UI 客户端和 Access Node 使用受约束的业务命令，而不是向 Owner Node 直接发送任意 ACP JSON-RPC。
 
-命令名、类别、`scope`、`pack`、`grant`、`transport` 与首阶段交付状态以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为唯一来源，本文不重复维护命令清单；命令信封、`requestId`、`command.result` 与 payload 字段以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11 为准。
+命令名、类别、`scope`、`grant`、`transport` 与首阶段交付状态以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为唯一来源，本文不重复维护命令清单；命令信封、`requestId`、`command.result` 与 payload 字段以 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11 为准。
 
 Daemon 立即返回接受、排队或拒绝状态；实际执行结果通过事件流发送。
 
-命令名不等于权限：每条命令仍按当前连接 Actor 的 scope 和 Owner Export Policy 重新授权，逐命令的 scope/pack/grant 对照表见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2。原始 workspace 路径选择、Agent/Provider 配置、设备与 Export 管理、Node key 轮换和审计导出只能由 Owner Node 本地管理入口执行，永不远程授予，清单见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.3。
+命令名不等于权限：设备方向以「该连接已通过设备认证且设备未撤销」为执行前提（设备没有授权维度，配对不授予授权），跨节点方向另按 Owner Export Policy 与 `grant.*` 授权；逐命令的对照表见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2。原始 workspace 路径选择、Agent/Provider 配置、设备与 Export 管理、Node key 轮换和审计导出只能由 Owner Node 本地管理入口执行，永不远程授予，清单见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.3。
 
-远程 `session.create` 只能选择已发布的 Agent 与 workspace template，禁止提交 `cwd`、`mcpServers`、绝对路径或任何 Provider/MCP 凭据。
+跨节点的远程 `session.create` 只能选择已发布的 Agent 与 workspace template，禁止提交 `cwd`、`mcpServers`、绝对路径或任何 Provider/MCP 凭据；本机自己的设备在 Sync 面可以提交一个绝对目录，但必须先通过本机的绝对路径与存在性校验，且本机规范化后的路径不得回显给对端（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §12.3）。
 
 ## 9. 模型与模式选择
 
@@ -417,10 +418,10 @@ hostPublicKey        P-256 public key
 - 二维码固定 5 分钟过期（与 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §14 的固定 v1 常量一致，不作为配置项）。
 - 新配对使旧的未完成配对失效。
 - 客户端扫码后生成自己的长期设备密钥。
-- 服务节点本地入口显示设备名称、指纹和短验证码，并要求用户确认。
-- 客户端显示相同验证码，降低二维码转发攻击风险。
+- 服务节点本地入口显示设备名称与指纹，并要求用户确认（节点方向另显示待授予的 `grant.*`）。
+- 配对不派生也不显示短验证码：设备侧对「此后长期使用的主机公钥」的信任由两条密码学校验确立——用二维码里**固定的**主机公钥验证认领响应的 `hostProof`，且已批准响应里的主机公钥必须与二维码**逐字节相同**（[SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）。
 - `pairingSecret` 只作为短期配对状态凭据：设备首次 WSS 认证成功时立即清除，未完成、拒绝或未连接的 pairing 最迟在原过期时间清除；不得延长或转成长期 bearer token。
-- PWA 使用 `pairingSecret` 对规范 transcript 计算 HMAC-SHA256 proof；短验证码使用独立 domain tag 派生。
+- PWA 使用 `pairingSecret` 对规范 transcript 计算 HMAC-SHA256 proof（认领与状态两条 domain）；不派生、不展示短验证码。
 - 所有签名/HMAC transcript 使用固定字段顺序的长度前缀二进制编码，不直接签名普通 JSON。
 
 ### 11.3 后续连接
@@ -441,7 +442,7 @@ hostPublicKey        P-256 public key
 
 每个新 WSS 连接都使用新 nonce 完整执行 challenge-response，不签发长期 bearer session/refresh token；认证状态随连接关闭而失效。
 
-### 11.4 设备记录与权限
+### 11.4 设备记录与命令前提
 
 服务节点保存：
 
@@ -454,32 +455,19 @@ hostPublicKey        P-256 public key
   "keyAlgorithm": "ECDSA_P256_SHA256",
   "signatureEncoding": "P1363_BASE64URL",
   "publicKey": "<base64url-65-bytes>",
-  "scopes": [
-    "session.list",
-    "session.read",
-    "command.status",
-    "session.mode.list",
-    "session.config.list",
-    "session.prompt",
-    "session.cancel",
-    "elicitation.respond",
-    "session.mode.set",
-    "session.config.set",
-    "permission.resolve"
-  ],
   "createdAt": "...",
   "revokedAt": null
 }
 ```
 
-设备记录与 wire 只保存独立的命令 scope；`pack.*`、`preset.*` 和 `grant.*` 都是授权管理的输入形式，配对时展开为 scope 后再落库。逐命令的 scope、pack、grant 对照表以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2 为唯一权威来源，命令名集合以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准。
+设备记录与 wire 都**不保存任何授权集合**（设备配对不授予授权，设备方向没有授权维度）；`grant.*` 是唯一的授权管理输入形式，落到节点信任记录与 Export 前展开为它直接列出的命令名集合，配对请求中出现任何授权集合字段一律被拒绝。逐命令的对照表以 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §10.2 为唯一权威来源，命令名集合以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准。
 
 每条消息必须检查：
 
 - 连接是否完成双向认证。
 - `deviceId` 是否匹配当前连接身份。
-- 设备是否已撤销。
-- 设备是否拥有该命令 scope。
+- 设备是否已撤销（撤销判定以持久化记录为准，进程内连接状态不得让已撤销设备继续可用）。
+- 目标的会话状态、workspace 边界与命令 schema 是否满足（设备方向不再有命令级 scope 判定）。
 - `requestId` 是否已经处理。
 - 连接消息计数器是否有效，防止重放。
 
@@ -516,7 +504,7 @@ acp-remote device revoke-all
 
 ### 11.7 节点配对
 
-Node pairing 与设备 pairing 使用相同的“一次性引导、长期公钥信任、每连接 challenge-response”原则，但必须使用不同 key purpose、record type 和 transcript domain。Owner Node 本地确认 Access Node 指纹、SAS、Export 和初始 grant；后续无需重复扫码。Node 配对不信任 Access Node 的下游节点，第一阶段禁止 imported Agent 再导出。
+Node pairing 与设备 pairing 使用相同的“一次性引导、长期公钥信任、每连接 challenge-response”原则，但必须使用不同 key purpose、record type 和 transcript domain。Owner Node 本地确认 Access Node 指纹、Export 和初始 `grant.*`（不显示短验证码，理由见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) §5.1）；后续无需重复扫码。Node 配对不信任 Access Node 的下游节点，第一阶段禁止 imported Agent 再导出。
 
 需要重新扫码的情况：
 
@@ -719,7 +707,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 按"什么时候必须解决"分类（2026-09-18，避免重复评估）：
 
 - **开工前必须**：#6 —— 已完成（结果见上）。它决定密码学依赖选型，选错会导致 `identity-auth` 返工。
-- **必须固化为常驻回归测试（不是一次性探针）**：#4 的 Windows Job Object 行为（父→孙进程、杀父后孙停止、关 Job 句柄后孙停止）与 #6 的密码学向量与畸形输入（transcript 重编码、P1363 验签、HMAC、SAS、33 字节压缩点与指纹不一致）。两者目前只有未提交的探针记录；实现变更必须把它们带进 CI 可跑的测试，否则视为未完成（约束落在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §3 与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.5）。
+- **必须固化为常驻回归测试（不是一次性探针）**：#4 的 Windows Job Object 行为（父→孙进程、杀父后孙停止、关 Job 句柄后孙停止）与 #6 的密码学向量与畸形输入（transcript 重编码、P1363 验签、HMAC、33 字节压缩点与指纹不一致）。两者目前只有未提交的探针记录；实现变更必须把它们带进 CI 可跑的测试，否则视为未完成（约束落在 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md) §3 与 [MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md) §4.5）。
 - **首切片验收前必须**：#3（Zed 对非本端发起的 turn 的展示；用假 ACP agent 即可预验，不依赖本仓库代码）、#1/#2（需要真实的 Codex/OMP，用于填写能力兼容报告；不阻塞编码，因为矩阵中这些能力本就是 `conditional_mvp` + `advertise_if_end_to_end`，代码只需如实协商）。
 - **实现期验证**：#4、#5、#8、#9 —— 需要可运行的程序、真机或发布流程。
 - **设计项，不是验证项**：#7 —— 首切片的 endpoint 由配置与 Import 记录给出，不需要发现机制；到阶段三"多 endpoint 自动连接"时才需要设计。
@@ -742,7 +730,7 @@ Windows 是当前 Daemon/CLI、节点配对、进程树管理和首个 Node Link
 13. npm 只负责分发，Rust 二进制负责实际运行。
 14. 第一阶段保持无应用云服务器的本地优先设计。
 15. 遵守 ACP 兼容性不变量：只增强传输与协调能力，不削弱、曲解或静默丢弃 ACP 原生能力。
-16. 设备形态不决定权限；权限来自 principal、scope、Export Policy 与实际端到端 capability 的交集。
+16. 设备形态不决定权限；本机自己的设备通过认证即可执行命令（没有设备级授权维度），跨节点能力来自 Export Policy、`grant.*` 与实际端到端 capability 的交集。
 17. 节点配对不产生传递信任；第一阶段 imported Agent 不得再次经 Node Link 导出。
 
 ## 18. 外部参考

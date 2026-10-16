@@ -122,9 +122,9 @@ pub fn transcript_features(selected: &[String]) -> FeatureList {
 /// 当次持久事实 → `PeerTrust`（`IDENTITY_AND_AUTH_CONTRACT.md` §5.1 的握手输入）。
 ///
 /// 凭据状态按设备信任行的三态映射：`active` → `Active`；`revoked` → `Revoked`；`pending` 与「无信任行」
-/// 都按 `Unknown` 处理（配对批准写下的行是 `active`，`pending` 行尚未建立信任）。`scopes` 取自设备行，
-/// 是授权与 `auth.authenticated.scopes` 的共同来源；`node_kind`/`grants` 对设备不适用
-/// （`PeerIdentity::Device` 的 `IdentityFact` 只带 scopes）。
+/// 都按 `Unknown` 处理（配对批准写下的行是 `active`，`pending` 行尚未建立信任）。设备侧**没有授权
+/// 集合**（`pairing-model` 删除设备权限层），因此这里既不取、也不填任何 scope 字段：`node_kind`/`grants`
+/// 同样对设备不适用。
 pub fn peer_trust(view: &SyncDeviceHandshakeView, device: &DeviceId) -> PeerTrust {
     let credential = match view.device.as_ref().map(DeviceRecord::state) {
         Some(DeviceState::Active) => CredentialStatus::Active,
@@ -142,11 +142,6 @@ pub fn peer_trust(view: &SyncDeviceHandshakeView, device: &DeviceId) -> PeerTrus
             .as_ref()
             .map(|pairing| pairing.host_binding().to_owned()),
         node_kind: None,
-        scopes: view
-            .device
-            .as_ref()
-            .map(|row| row.scopes().clone())
-            .unwrap_or_default(),
         grants: acp_core::model::GrantSet::empty(),
     }
 }
@@ -307,7 +302,6 @@ mod tests {
         assert!(trust.public_key.is_none());
         assert!(trust.host_binding.is_none());
         assert_eq!(trust.node_kind, None);
-        assert!(trust.scopes.is_empty());
         assert_eq!(trust.grants.iter().count(), 0);
         assert_eq!(trust.peer, PeerIdentity::Device(device.clone()));
 
@@ -333,7 +327,7 @@ mod tests {
             CredentialStatus::Unknown
         );
 
-        // active 设备：scopes 取自信任行。
+        // active 设备：凭据状态为 `Active`，且**没有**任何授权集合可填。
         let active = view(
             Some(record(DeviceState::Active)),
             None,
@@ -341,10 +335,6 @@ mod tests {
         );
         let trust = peer_trust(&active, &device);
         assert_eq!(trust.credential, CredentialStatus::Active);
-        assert_eq!(
-            trust.scopes.iter().collect::<Vec<_>>(),
-            vec!["session.read"]
-        );
         assert_eq!(
             pending_pairing(&active)
                 .map(|record| record.id().as_str().to_owned())
@@ -385,12 +375,11 @@ mod tests {
     }
 
     fn record(state: DeviceState) -> DeviceRecord {
-        use acp_core::model::{Fingerprint, ScopeSet, Timestamp};
+        use acp_core::model::{Fingerprint, Timestamp};
         DeviceRecord::try_new(
             DeviceId::new("2ae1c07c-9242-46e9-a9d2-4ec58c130f49").expect("device"),
             "Test Phone",
             Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
-            ScopeSet::try_from_iter(["session.read"]).expect("scopes"),
             state,
             Timestamp::new("2026-09-18T09:12:03.412Z").expect("timestamp"),
             None,

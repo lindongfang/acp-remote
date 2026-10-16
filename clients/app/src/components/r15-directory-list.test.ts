@@ -32,7 +32,6 @@ import { DirectoryDetail } from "./DirectoryDetail";
 import { DirectoryList } from "./DirectoryList";
 import { DIRECTORY_EMPTY_COPY, buildDirectoryPageModel } from "../features/directory-model";
 import type { DirectoryDetailModel, DirectoryPageModel, SessionRowModel } from "../features/directory-model";
-import { CREATE_DENIED_NOTE, buildCreateSessionEntryModel } from "../features/create-session-model";
 import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session, storeWith } from "../features/testing/fixtures";
 
 const SESSIONS = [
@@ -46,15 +45,13 @@ const SESSIONS = [
  *
  * 新 props 都带上：搜索框与筛选段只有传了回调才呈现，缺省（不传）就是既有调用点的样子。
  * `sessionsByAlias` 缺省不带这一键（`exactOptionalPropertyTypes` 不允许显式传 `undefined`），
- * 等价于「不列内联会话行」。
+ * 等价于「不列内联会话行」。`onCreateSession` 是**必填**（入口恒可用），因此无条件传入。
  */
 function renderDirectoryList(
   model: DirectoryPageModel,
   options: {
     readonly sessionsByAlias?: ReadonlyMap<string, readonly SessionRowModel[]>;
     readonly query?: string;
-    readonly createPermissionNote?: string | null;
-    readonly onCreateSession?: (alias: string) => void;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -66,9 +63,8 @@ function renderDirectoryList(
       filter: "all",
       onFilterChange: () => undefined,
       onOpenSession: () => undefined,
-      createPermissionNote: options.createPermissionNote ?? null,
+      onCreateSession: () => undefined,
       ...(options.sessionsByAlias === undefined ? {} : { sessionsByAlias: options.sessionsByAlias }),
-      ...(options.onCreateSession === undefined ? {} : { onCreateSession: options.onCreateSession }),
     }),
   );
 }
@@ -93,16 +89,8 @@ function renderDirectoryDetail(model: DirectoryDetailModel): string {
   return renderToStaticMarkup(
     createElement(DirectoryDetail, {
       model,
-      createEntry: buildCreateSessionEntryModel({
-        directoryAlias: "work-api",
-        scopes: ["session.create"],
-        agents: [],
-        record: null,
-        connectionOnline: true,
-      }),
       onOpenSession: () => undefined,
       onCreateSession: () => undefined,
-      canCreate: true,
     }),
   );
 }
@@ -295,7 +283,6 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
   it("内联行与详情页的查询词/月份互不影响，且搜索/筛选不发任何命令", () => {
     const { store, gateway } = storeWith({
       resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      scopes: ["session.list"],
     });
     const before = [...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id);
 
@@ -393,31 +380,21 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(noSessions[0]).not.toContain("open-directory-all");
   });
 
-  it("无创建会话权限：呈现提示条；有权限时不呈现（缺省不留痕）", () => {
-    // 权限只由 scopes 决定（与目录别名无关）——这里就按页面那条取数路径拿权限模型。
-    const deniedStore = storeWith({
-      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      scopes: ["session.list"],
-    }).store;
-    const deniedEntry = deniedStore.createEntry("");
-    expect(deniedEntry.permission.kind).toBe("denied");
-
-    const denied = renderDirectoryList(deniedStore.directoryPage(), {
-      createPermissionNote: deniedEntry.permission.note,
-    });
-    expect(denied).toContain('data-create-permission-note="true"');
-    expect(denied).toContain(CREATE_DENIED_NOTE);
-
-    // 有权限时页面传 `null`（组件的缺省也是不留痕）。
-    const grantedEntry = storeWith({
-      resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
-      scopes: ["session.create"],
-    }).store.createEntry("");
-    expect(grantedEntry.permission.kind).toBe("granted");
-
-    const granted = renderDirectoryList(deniedStore.directoryPage());
-    expect(granted).not.toContain("data-create-permission-note");
-    expect(granted).not.toContain(CREATE_DENIED_NOTE);
+  it("创建入口恒可用：每个目录项都呈现「⊕ 新建」，且不出现任何权限文案", () => {
+    // 设备不再有创建会话的权限维度：`auth.authenticated` 根本没有授权集合字段，
+    // 入口因此不依赖任何 scope 就无条件呈现。
+    const { store } = storeWith({ resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }) });
+    const html = renderDirectoryList(store.directoryPage());
+    const cards = cardSegments(html);
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      // 反例：入口若因权限被摘掉，这里每张卡片都会缺 `create-session` → 断言变红。
+      expect(card).toContain('data-action="create-session"');
+    }
+    // 反例：权限门控若残留，页面上会出现提示条或那句「需要电脑端授予」。
+    expect(html).not.toContain("data-create-permission-note");
+    expect(html).not.toContain("需要电脑端授予");
+    expect(html).not.toContain("没有创建会话的权限");
   });
 
   it("断连且有上次同步时刻：来源旁给出同步时间；从未同步过时不编造时间", () => {
@@ -509,14 +486,14 @@ describe("R15 目录项：最近活动时间与目录内创建入口", () => {
     expect(withSessions[0]).toContain('data-directory-latest-at="2026-10-02T08:00:00.000Z"');
   });
 
-  it("目录内创建入口：调用方给了回调才呈现；不给时不留痕", () => {
+  it("每个目录项都呈现一处目录内创建入口（必填 props 后不再有「不给回调」的分支）", () => {
     const model = buildDirectoryPageModel({
       resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
       connection: "online",
       lastSyncedAtMs: null,
     });
 
-    const granted = renderDirectoryList(model, { onCreateSession: () => undefined });
+    const granted = renderDirectoryList(model);
     expect(granted.match(/data-action="create-session"/g)).toHaveLength(2);
     expect(granted).toContain("⊕ 新建");
     // 新入口不得把 `data-directory-alias` 再挂一份（R15-1 数它的个数）。
@@ -525,11 +502,6 @@ describe("R15 目录项：最近活动时间与目录内创建入口", () => {
     for (const card of cardSegments(granted)) {
       expect(card.match(/data-action="create-session"/g)).toHaveLength(1);
     }
-
-    // 缺省（未持有 `session.create` 时页面就是这样传的）→ 入口不呈现，且不留别痕迹。
-    const denied = renderDirectoryList(model);
-    expect(denied).not.toContain('data-action="create-session"');
-    expect(denied).not.toContain("⊕ 新建");
   });
 });
 

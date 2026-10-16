@@ -114,14 +114,21 @@ export interface PairingTransport {
    * 明确失败、在 node-link 入口是已读到的内容，那是入口的判定（design D2/D3）。
    */
   readQrPayload(text: string): PairingQrRead;
-  /** 提交 claim（设备首次声明配对，`proof` 由设备私钥签名）。 */
+  /**
+   * 提交 claim（设备首次声明配对，`proof` 由设备私钥签名）。
+   *
+   * 认领响应携带主机证明 `hostProof`，实现 MUST 用二维码里**固定**的主机公钥验证它（§7.2），
+   * 且 MUST NOT 用响应自带的材料「自证」。缺材料或验签失败都返回明确错误，调用方据此既不进行
+   * 轮询，也不写入任何已配对主机记录（design D2 的 L1）。
+   */
   claim(input: { readonly qr: PairingQrPayload; readonly canonicalOrigin: string }): Promise<PublicError | null>;
   /**
    * 轮询状态。
    *
-   * 已批准时**必须**同时返回主机身份材料：缺材料、材料形状不符或主机标识与二维码不是同一台
-   * 一律返回 `kind: "error"`，而不是「已批准」——没有公钥的已配对记录会让此后**每次**连接
-   * 都进「主机身份变化」阻断态，比在配对当场明确失败更难诊断（design D2）。
+   * 已批准时**必须**同时返回主机身份材料：缺材料、材料形状不符、主机标识与二维码不是同一台，
+   * 或主机公钥与二维码里那把**不是逐字节相同**，都一律返回 `kind: "error"`，而不是「已批准」——
+   * 已批准响应没有任何主机签名，因此那把公钥只能靠这条比对来确立；放水会让此后**每次**连接
+   * 都进「主机身份变化」阻断态，比在配对当场明确失败更难诊断（design D2 的 L3）。
    *
    * `requestNonce` 每次轮询必须换新（§7.3 的 schema 要求）。
    */
@@ -519,7 +526,6 @@ export const PAIRING_ERROR_HINTS: Readonly<Partial<Record<ErrorCode, string>>> =
   "auth.origin_mismatch": "这个二维码来自另一个地址：身份不得跨来源迁移，请确认扫码对象。",
   "auth.insecure_context":
     "当前页面不在安全上下文（https 或 loopback）中：配对与设备密钥都要求安全上下文，请改用 https 打开本页后再配对。",
-  "authorization.scope_denied": "电脑端没有授予本设备所需权限：请在电脑上调整权限后重试。",
   "protocol.invalid_json": "这段内容不是二维码里的配对载荷：请重新复制完整的二维码内容。",
   "protocol.schema_invalid": "这段内容不是本版本的配对载荷：请在电脑上重新生成二维码后重试。",
 };

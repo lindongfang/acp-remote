@@ -85,7 +85,6 @@ describe("R19 断连时仍列出已配置 Agent", () => {
           session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "running" }),
         ],
       }),
-      scopes: ["session.list"],
     });
 
     const panel = store.hostPanel();
@@ -96,7 +95,7 @@ describe("R19 断连时仍列出已配置 Agent", () => {
   });
 
   it("对照：收到 agent.connected 覆盖层后，该 Agent 才是已连接", () => {
-    const { store } = storeWith({ resources: resources({ agents: AGENTS }), scopes: ["session.list"] });
+    const { store } = storeWith({ resources: resources({ agents: AGENTS }) });
     store.apply({
       kind: "event",
       event: eventMessage({

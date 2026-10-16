@@ -1,12 +1,12 @@
-//! Sync 命令面协议级端到端验收（变更② 任务 5.1–5.4）。
+//! Sync 命令面协议级端到端验收（变更② 任务 5.1–5.4；`pairing-model` 的 8.2/8.3）。
 //!
 //! 驱动方式：脚本化 fake Sync 客户端（`support::sync`）经**真实 loopback listener**（`/sync/v1` 的
 //! WSS 升级）走完「配对 claim → 本机确认 → status approved → 四消息握手」，然后在**真实** Daemon 上
 //! 派发命令：真实 SQLite、真实 `identity_auth::Authority`、真实本机管理通道与真实组合根装配
 //! （`server::sync` 的订阅面 + 命令面组合路由 + 终态观察者）。
 //!
-//! 证据口径：每条断言都指向**可观察事实**（收到的帧、事件库水位、会话列表）。「未授权零副作用」用
-//! **事件库全局水位未推进**证明，而不是「没收到错误」。
+//! 证据口径：每条断言都指向**可观察事实**（收到的帧、错误码、事件库水位、会话列表、直接读库的落库列）。
+//! 「被拒的命令零副作用」用**不写会话行**与**事件库水位未推进**证明，而不是「没收到错误」。
 
 mod support;
 
@@ -17,13 +17,9 @@ use support::sync::{DeviceKey, HostNode, SyncClient, nonce_text, uuid_text};
 const HOST: &str = "sync-commands.example.invalid";
 /// 设备名（`deviceName`）。
 const DEVICE_NAME: &str = "Test Phone";
-/// 主设备请求的 scope（覆盖观察、交互与创建三类，足以走完全部命令面用例）。
-const SCOPES: [&str; 4] = [
-    "session.list",
-    "session.prompt",
-    "session.create",
-    "command.status",
-];
+/// 已删掉的授权集合与短验证码词汇（`pairing-model` 删除设备权限层）：设备配对不提交也不分配任何
+/// 授权集合，这组键出现在配对状态或 `auth.authenticated` 的任何层级都让对应用例变红。
+const REMOVED_AUTHORIZATION_KEYS: [&str; 5] = ["sas", "scopes", "grants", "packs", "presets"];
 /// 脚本化 agent selector（`support::sync` 的脚本后端按它供数）。
 const AGENT: &str = "codex";
 
@@ -103,12 +99,15 @@ async fn post_json(host: &HostNode, path: &str, body: &Value) -> HttpReply {
     }
 }
 
-/// 走完「device.pair.begin → claim → device.pair.confirm → status approved」，返回设备记录。
-async fn pair_and_approve(host: &HostNode, device: &Device, scopes: &[&str]) -> Value {
+/// 走完「device.pair.begin → claim → device.pair.confirm → status approved」，返回已批准的状态响应。
+///
+/// 设备配对不授予任何授权（`pairing-model` 删除设备权限层），因此本脚手架**没有** scope/grant 参数：
+/// `device.pair.begin` 只收 `expiresInMs`、`confirm` 只收 `pairingId`。
+async fn pair_and_approve(host: &HostNode, device: &Device) -> Value {
     let begin = host
         .admin(
             server::local_admin::Method::DevicePairBegin,
-            json!({ "requestedPacks": [], "requestedScopes": scopes, "expiresInMs": null }),
+            json!({ "expiresInMs": null }),
         )
         .await;
     let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
@@ -137,7 +136,7 @@ async fn pair_and_approve(host: &HostNode, device: &Device, scopes: &[&str]) -> 
     let confirmed = host
         .admin(
             server::local_admin::Method::DevicePairConfirm,
-            json!({ "pairingId": ticket["pairingId"], "scopes": scopes }),
+            json!({ "pairingId": pairing_id.as_str() }),
         )
         .await;
     assert_eq!(
@@ -148,7 +147,7 @@ async fn pair_and_approve(host: &HostNode, device: &Device, scopes: &[&str]) -> 
 
     let status = json!({
         "protocolVersion": 1,
-        "pairingId": ticket["pairingId"],
+        "pairingId": pairing_id.as_str(),
         "hostId": host.host_id(),
         "deviceId": device.id(),
         "pairingRequestId": replied.body["pairingRequestId"],
@@ -168,6 +167,15 @@ async fn pair_and_approve(host: &HostNode, device: &Device, scopes: &[&str]) -> 
         "确认之后 status 必须是 approved：{}",
         replied.body
     );
+    // 已批准响应只承载协议事实与两侧的非秘密元数据（`pairingRequestId`/`status`/`expiresAt`/
+    // `device`/`host`）：设备配对不再派生短验证码、也不再分配任何授权集合。
+    for removed in REMOVED_AUTHORIZATION_KEYS {
+        assert!(
+            !support::sync::contains_key_deep(&replied.body, removed),
+            "`{removed}` 不得出现在配对状态响应里：{}",
+            replied.body
+        );
+    }
     replied.body
 }
 
@@ -336,7 +344,7 @@ async fn local_session(host: &HostNode) -> String {
 async fn a_query_command_completes_on_the_real_listener() {
     let host = HostNode::start("sync-cmd-query", HOST).await;
     let device = Device::new();
-    pair_and_approve(&host, &device, &SCOPES).await;
+    pair_and_approve(&host, &device).await;
     let session = local_session(&host).await;
     let mut client = connect_authenticated(&host, &device).await;
 
@@ -370,7 +378,7 @@ async fn a_query_command_completes_on_the_real_listener() {
 async fn a_prompt_is_accepted_and_then_completes_with_its_terminal_event() {
     let host = HostNode::start("sync-cmd-prompt", HOST).await;
     let device = Device::new();
-    pair_and_approve(&host, &device, &SCOPES).await;
+    pair_and_approve(&host, &device).await;
     let session = local_session(&host).await;
     let mut client = connect_authenticated(&host, &device).await;
 
@@ -437,48 +445,87 @@ async fn a_prompt_is_accepted_and_then_completes_with_its_terminal_event() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// 5.3：边界（未授权零副作用 / 幂等重发 / session.resume 不支持）
+// 5.3：边界（无授权集合照常受理 / 幂等重发 / session.resume 不支持）
 // ---------------------------------------------------------------------------------------------
 
-/// 5.3：未持 scope 的设备派发 mutation 得 `authorization.scope_denied`，且**零副作用**。
+/// 5.3（`pairing-model` 改写）：设备方向不再有命令级授权判定——**没有任何授权集合**的已认证设备
+/// 派发 mutation 照常被受理，并产生它应有的副作用（Agent 后端真的被派发一次）。
+///
+/// 变红点：实现若仍按授权（例如拿空 scope 集合）判拒，第一条回复会是 `rejected`
+/// （`authorization.scope_denied`）而不是 `accepted`；实现若受理却不下发到后端，`release` 会返回 0。
 #[tokio::test]
-async fn an_unauthorized_device_gets_scope_denied_without_side_effects() {
-    let host = HostNode::start("sync-cmd-scope", HOST).await;
+async fn an_authenticated_device_without_any_authorization_set_is_still_accepted() {
+    let host = HostNode::start("sync-cmd-no-scope", HOST).await;
     let device = Device::new();
-    // 该设备只被授予观察类 scope：`session.prompt`（interact）不在其中。
-    pair_and_approve(&host, &device, &["session.list"]).await;
+    // 配对不给设备分配任何授权集合（`pairing-model` 删除设备权限层）：参数面里根本没有可提交
+    // scope/grant 的位置，因此这台设备**只能**是「零授权集合」的。
+    pair_and_approve(&host, &device).await;
     let session = local_session(&host).await;
-    let mut client = connect_authenticated(&host, &device).await;
 
-    let watermark = host.head().await;
+    let mut client = SyncClient::connect_plain(host.addr(), host.host_name(), &host.origin()).await;
+    let authenticated = client
+        .authenticate(
+            &host.host_id(),
+            &device.key,
+            &supported_features(),
+            &device.client_nonce,
+        )
+        .await;
+    assert_eq!(
+        authenticated["type"],
+        json!("auth.authenticated"),
+        "{authenticated}"
+    );
+    // 认证事实里没有任何授权集合：设备方向没有可用来判拒的维度。
+    for absent in REMOVED_AUTHORIZATION_KEYS {
+        assert!(
+            !support::sync::contains_key_deep(&authenticated["body"], absent),
+            "`{absent}` 不得出现在 auth.authenticated 里：{authenticated}"
+        );
+    }
+
+    let marker = "marker-no-scope-7b31";
     let request = uuid_text();
-    client.step("未授权 prompt");
+    client.step("无授权集合的设备派发 prompt");
     client
         .command(
             &request,
             "session.prompt",
             Some(&session),
-            json!({ "content": [{ "type": "text", "text": "不该到达 Agent" }] }),
+            json!({ "content": [{ "type": "text", "text": marker }] }),
         )
         .await;
-    let result = client.expect_command_result(&request).await;
 
+    // ① 受理：首次回复是 `accepted`，而不是 `authorization.scope_denied` 的 `rejected`。
+    let accepted = client.expect_command_result(&request).await;
     assert_eq!(
-        result["error"]["code"],
-        json!("authorization.scope_denied"),
-        "{result}"
+        accepted["status"],
+        json!("accepted"),
+        "已认证设备必须被受理：{accepted}"
     );
+    assert_eq!(accepted["result"], Value::Null, "accepted 不得带业务结果");
+    assert_eq!(accepted["terminalEventId"], Value::Null);
+
+    // ② 副作用真的发生了：脚本后端被派发一次，因此恰好有一份事件可以释放（被拒的命令不会有）。
+    let released = host.parked().release(marker);
     assert_eq!(
-        result["terminalEventId"],
-        Value::Null,
-        "被拒的命令没有终态事件"
+        released, 2,
+        "命令必须真的到达 Agent 后端（否则等于零副作用）：{released}"
     );
-    // 零副作用：事件库的全局水位**没有**被这条命令推进。
-    let after = host.head().await;
-    assert_eq!(
-        after.global_sequence, watermark.global_sequence,
-        "未授权命令不得写入任何事件：{watermark:?} → {after:?}"
+    host.broker()
+        .pump(&acp_core::model::SessionId::new(&session).expect("session id"))
+        .await
+        .expect("事件落盘");
+
+    // ③ 终态照常到达，且带该 request 的唯一 terminal event id。
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    assert!(
+        terminal["terminalEventId"].is_string(),
+        "终态必须带 terminalEventId：{terminal}"
     );
+
+    host.stop().await;
 }
 
 /// 5.3：同一 `requestId` 重发只产生一个副作用（会话只有一个 turn）。
@@ -486,7 +533,7 @@ async fn an_unauthorized_device_gets_scope_denied_without_side_effects() {
 async fn the_same_request_id_produces_only_one_turn() {
     let host = HostNode::start("sync-cmd-idem", HOST).await;
     let device = Device::new();
-    pair_and_approve(&host, &device, &SCOPES).await;
+    pair_and_approve(&host, &device).await;
     let session = local_session(&host).await;
     let mut client = connect_authenticated(&host, &device).await;
 
@@ -525,7 +572,7 @@ async fn the_same_request_id_produces_only_one_turn() {
 async fn session_resume_is_unsupported_on_the_sync_face() {
     let host = HostNode::start("sync-cmd-resume", HOST).await;
     let device = Device::new();
-    pair_and_approve(&host, &device, &SCOPES).await;
+    pair_and_approve(&host, &device).await;
     let session = local_session(&host).await;
     let mut client = connect_authenticated(&host, &device).await;
 
@@ -561,7 +608,7 @@ async fn session_resume_is_unsupported_on_the_sync_face() {
 async fn exceeding_the_command_quota_is_retryable_and_side_effect_free() {
     let host = HostNode::start("sync-cmd-rate", HOST).await;
     let device = Device::new();
-    pair_and_approve(&host, &device, &SCOPES).await;
+    pair_and_approve(&host, &device).await;
     let mut client = connect_authenticated(&host, &device).await;
 
     client.step("发满观察族额度");
@@ -597,4 +644,373 @@ async fn exceeding_the_command_quota_is_retryable_and_side_effect_free() {
         limited["body"]["details"]["retryAfterMs"].is_number(),
         "限流必须给出 retryAfterMs：{limited}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 8.3：`session.create` 的目录来源分支（Sync 面允许客户端提供目录，`pairing-model`）
+// ---------------------------------------------------------------------------------------------
+
+/// 本机登记一个 workspace alias（`session.create` 的别名来源；真实本地管理通道）。
+async fn register_workspace(host: &HostNode, alias: &str) {
+    host.admin(
+        server::local_admin::Method::WorkspaceSelect,
+        json!({
+            "alias": alias,
+            "displayName": "Project One",
+            "rootPath": host.data_dir().display().to_string(),
+        }),
+    )
+    .await;
+}
+
+/// 打开同一 data dir 的原始 SQL 连接（只读复核用；与 `HostNode::drop_earliest_events` 同一手法）。
+async fn raw_connection(host: &HostNode) -> sqlx::SqliteConnection {
+    let config = storage_sqlite::migrate::StorageConfig::new(host.data_dir());
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(config.database_path())
+        .create_if_missing(false)
+        .busy_timeout(std::time::Duration::from_secs(10));
+    sqlx::Connection::connect_with(&options)
+        .await
+        .expect("打开同一 data_dir 的原始 SQL 连接")
+}
+
+/// 直接读库：该会话的 `(agent_session_id, workspace_alias)`。外层 `None` = 没有这一行。
+///
+/// 目录归属的**权威来源只有** `owned_session.workspace_alias`（`storage-sqlite` 的
+/// `workspace_from_row` 也按它投影摘要），因此「来源是路径时它是 `NULL`」在这里是落库事实，不经过
+/// 任何投影推断。
+async fn stored_session_columns(
+    host: &HostNode,
+    session_id: &str,
+) -> Option<(Option<String>, Option<String>)> {
+    let mut connection = raw_connection(host).await;
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT agent_session_id, workspace_alias FROM owned_session WHERE session_id = ?1",
+        )
+        .bind(session_id)
+        .fetch_optional(&mut connection)
+        .await
+        .expect("读 owned_session 的两列");
+    drop(connection);
+    row
+}
+
+/// 等到该会话的「恢复列 + 目录归属」那一笔提交落盘再返回：三者由**同一条** `UPDATE` 写入
+/// （`agent_session_id`/`workspace_cwd`/`workspace_alias`），因此 `agent_session_id` 非 `NULL` 就是
+/// 「目录归属已经写定」的判据——读在它之前会让断言不到东西（也可能放过写错值的实现）。
+async fn await_session_columns(
+    host: &HostNode,
+    session_id: &str,
+) -> (Option<String>, Option<String>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Some(columns) = stored_session_columns(host, session_id).await {
+            if columns.0.is_some() {
+                return columns;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "超时：会话 {session_id} 的「恢复列 + 目录归属」那一笔提交未落盘（该行不存在或 \
+             `agent_session_id` 仍为 `NULL`）"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// 直接读库：`owned_session` 的行数（「被拒的 `session.create` 不创建会话」的证据）。
+async fn session_row_count(host: &HostNode) -> i64 {
+    let mut connection = raw_connection(host).await;
+    let count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM owned_session")
+        .fetch_one(&mut connection)
+        .await
+        .expect("统计 owned_session");
+    drop(connection);
+    count
+}
+
+/// 派发一条必然被拒的 `session.create`（`sessionId` 禁止：会话尚不存在），返回被拒的终态。
+///
+/// 三类断言一起做：`status = rejected`、给定的错误码、**不写会话行**（零副作用）。
+async fn rejected_session_create(
+    host: &HostNode,
+    client: &mut SyncClient,
+    payload: Value,
+    code: &str,
+    why: &str,
+) -> Value {
+    let before = session_row_count(host).await;
+    let request = uuid_text();
+    client.step(why);
+    client
+        .command(&request, "session.create", None, payload)
+        .await;
+    let rejected = client.expect_command_result(&request).await;
+    assert_eq!(rejected["status"], json!("rejected"), "{why}：{rejected}");
+    assert_eq!(rejected["error"]["code"], json!(code), "{why}：{rejected}");
+    assert_eq!(
+        rejected["terminalEventId"],
+        Value::Null,
+        "{why}：被拒的命令没有终态事件：{rejected}"
+    );
+    assert_eq!(
+        session_row_count(host).await,
+        before,
+        "{why}：被拒的 session.create 不得创建会话行"
+    );
+    rejected
+}
+
+/// 8.3：`workspacePath` 成功路径——会话建成，且**来源是路径**时落库的 `workspace_alias` 是 `NULL`。
+///
+/// 变红点：实现若把客户端目录也当别名来源（例如拿路径末段或规范化结果造一个别名）或写成空串占位，
+/// 那条 `UPDATE` 会把非 `NULL` 写进 `workspace_alias`，直接读库的断言与摘要里的未分组断言同时变红。
+#[tokio::test]
+async fn session_create_with_a_client_supplied_path_is_created_without_a_workspace_alias() {
+    let host = HostNode::start("sync-create-path", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let directory = host.data_dir().display().to_string();
+    let request = uuid_text();
+    client.step("session.create（客户端提供的目录）");
+    client
+        .command(
+            &request,
+            "session.create",
+            None,
+            json!({ "agentId": AGENT, "workspacePath": directory }),
+        )
+        .await;
+
+    // ① 先 `accepted`（创建与幂等行已落盘），再 `completed` 带新会话的摘要。
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    assert_eq!(accepted["result"], Value::Null, "accepted 不得带业务结果");
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    let session = terminal["result"]["sessionId"]
+        .as_str()
+        .expect("completed 必须给出新会话标识")
+        .to_owned();
+
+    // ② 读路径：协商了 `core.local-catalog.v1`，摘要里 `workspace` 键必须在、值为 `null`（未分组）。
+    let summary = terminal["result"]["session"]
+        .as_object()
+        .expect("completed 必须携带会话摘要");
+    assert!(
+        summary.contains_key("workspace"),
+        "协商了目录 feature 时 `workspace` 键必须存在（未分组是 `null`，不是缺席）：{terminal}"
+    );
+    assert_eq!(
+        summary["workspace"],
+        Value::Null,
+        "客户端提供的目录不产生别名，摘要必须是未分组：{terminal}"
+    );
+
+    // ③ 落库事实：`workspace_alias` 是 SQL `NULL`（`agent_session_id` 非空 = 那笔提交确实跑了）。
+    let (agent_session_id, workspace_alias) = await_session_columns(&host, &session).await;
+    assert!(
+        agent_session_id.is_some(),
+        "前提：目录归属那一笔提交已落盘（否则本用例断言不到任何东西）"
+    );
+    assert_eq!(
+        workspace_alias, None,
+        "来源是路径的会话必须以 SQL `NULL` 落库（不得用空串、路径末段或占位别名）"
+    );
+
+    host.stop().await;
+}
+
+/// 8.3：别名来源的对照——`workspaceAlias` 成功时该会话带着**别名原文**落库。
+///
+/// 这条挡的是「实现永远写 `NULL`」这种错误：那种实现能让「路径 → `NULL`」恒真，但会让本用例变红；
+/// 反过来，本用例能过而「路径 → `NULL`」不过，说明目录来源真的被区分了。
+#[tokio::test]
+async fn session_create_with_a_registered_alias_records_that_alias() {
+    let host = HostNode::start("sync-create-alias", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    register_workspace(&host, "project.one").await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let request = uuid_text();
+    client.step("session.create（本机已登记的别名）");
+    client
+        .command(
+            &request,
+            "session.create",
+            None,
+            json!({ "agentId": AGENT, "workspaceAlias": "project.one" }),
+        )
+        .await;
+    let accepted = client.expect_command_result(&request).await;
+    assert_eq!(accepted["status"], json!("accepted"), "{accepted}");
+    let terminal = client.expect_command_result(&request).await;
+    assert_eq!(terminal["status"], json!("completed"), "{terminal}");
+    let session = terminal["result"]["sessionId"]
+        .as_str()
+        .expect("completed 必须给出新会话标识")
+        .to_owned();
+    assert_eq!(
+        terminal["result"]["session"]["workspace"]["alias"],
+        json!("project.one"),
+        "别名来源必须投影出别名（不是未分组）：{terminal}"
+    );
+
+    let (agent_session_id, workspace_alias) = await_session_columns(&host, &session).await;
+    assert!(
+        agent_session_id.is_some(),
+        "前提：目录归属那一笔提交已落盘（否则本用例断言不到任何东西）"
+    );
+    assert_eq!(
+        workspace_alias,
+        Some("project.one".to_owned()),
+        "别名来源必须以别名原文落库（不得只写 cwd、也不得省略）"
+    );
+
+    host.stop().await;
+}
+
+/// 8.3：别名未登记 → **参数类**错误（`protocol.schema_invalid`），且不创建会话。
+#[tokio::test]
+async fn session_create_with_an_unregistered_alias_is_a_parameter_error() {
+    let host = HostNode::start("sync-create-bad-alias", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    rejected_session_create(
+        &host,
+        &mut client,
+        json!({ "agentId": AGENT, "workspaceAlias": "never.registered" }),
+        "protocol.schema_invalid",
+        "未登记别名",
+    )
+    .await;
+
+    host.stop().await;
+}
+
+/// 8.3：形状非法的目录是**参数类**错误，且判定发生在文件系统访问**之前**。
+///
+/// 两条输入刻意选成「先查文件系统就会得到别的东西」的形状，因此错误的**分类**本身把判定顺序钉住：
+/// - 相对路径且该目录不存在——先查文件系统会回 `internal.unavailable`（不存在），错误码会变红；
+/// - 含 `..` 且该路径**存在**（指向数据目录的父目录）——先查文件系统会一路走通并真的创建会话，
+///   于是错误码与「不创建会话行」两条同时变红。
+#[tokio::test]
+async fn session_create_with_a_malformed_workspace_path_is_a_parameter_error() {
+    let host = HostNode::start("sync-create-shape", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let parent_reference = format!("{}/..", host.data_dir().display());
+    for (why, path) in [
+        ("相对路径", "not-an-absolute-directory".to_owned()),
+        ("含 `..`", parent_reference),
+    ] {
+        let rejected = rejected_session_create(
+            &host,
+            &mut client,
+            json!({ "agentId": AGENT, "workspacePath": path.as_str() }),
+            "protocol.schema_invalid",
+            why,
+        )
+        .await;
+        // 客户端自己提交的目录不得被回显为对端可见字段（`workspace-resolution` 的「路径不泄漏」）：
+        // 明文与「作为 JSON 字符串出现」两种渲染都不得命中（Windows 路径含反斜杠，会被转义）。
+        let rendered = rejected.to_string();
+        let as_json_string = serde_json::to_string(&path).expect("路径可序列化");
+        for form in [path.as_str(), as_json_string.as_str()] {
+            assert!(
+                !rendered.contains(form),
+                "{why}：错误响应不得回显客户端提交的目录（{form}）：{rejected}"
+            );
+        }
+    }
+
+    host.stop().await;
+}
+
+/// 8.3：形式合法（绝对、无 `..`）但本机解析不了 → **服务端不可用类**错误（`internal.unavailable`）。
+///
+/// 与上一条构成分类的两侧：形状合法时必须真的去解析，因此「不存在的绝对路径」不能被报成形状错误；
+/// 「存在但不是目录」也不能被当成目录接受。
+#[tokio::test]
+async fn session_create_with_an_unresolvable_workspace_path_is_unavailable() {
+    let host = HostNode::start("sync-create-missing", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    for (why, path) in [
+        (
+            "目录不存在",
+            host.data_dir()
+                .join("not-created-subdirectory")
+                .display()
+                .to_string(),
+        ),
+        // 真实存在的**文件**（本机 `acp-remote` 可执行文件）：形式合法，但不是目录。
+        ("不是目录", env!("CARGO_BIN_EXE_acp-remote").to_owned()),
+    ] {
+        rejected_session_create(
+            &host,
+            &mut client,
+            json!({ "agentId": AGENT, "workspacePath": path }),
+            "internal.unavailable",
+            why,
+        )
+        .await;
+    }
+
+    host.stop().await;
+}
+
+/// 8.3：目录引用**二选一**——同时给出别名与客户端目录时必须在**解码**阶段被拒，不创建会话。
+///
+/// 给的别名是本机已登记的（否则这条会因「别名未登记」而通过，什么也没验证）：实现若漏掉 `oneOf`，
+/// 它会照常创建会话，于是错误帧断言与「不创建会话行」两条同时变红。
+#[tokio::test]
+async fn session_create_rejects_both_directory_sources_at_once() {
+    let host = HostNode::start("sync-create-both", HOST).await;
+    let device = Device::new();
+    pair_and_approve(&host, &device).await;
+    register_workspace(&host, "project.one").await;
+    let mut client = connect_authenticated(&host, &device).await;
+
+    let before = session_row_count(&host).await;
+    let request = uuid_text();
+    client.step("同时给出别名与客户端目录");
+    client
+        .command(
+            &request,
+            "session.create",
+            None,
+            json!({
+                "agentId": AGENT,
+                "workspaceAlias": "project.one",
+                "workspacePath": host.data_dir().display().to_string(),
+            }),
+        )
+        .await;
+    // payload 是 closed object 且目录来源是 schema 的 `oneOf`：形状问题在**解码**阶段被拒，回复是
+    // 带 `correlationId` 的 `error` 帧（§4.2），不是 `command.result`。
+    let refused = client.expect_error().await;
+    assert_eq!(
+        refused["body"]["code"],
+        json!("protocol.schema_invalid"),
+        "{refused}"
+    );
+    assert_eq!(
+        session_row_count(&host).await,
+        before,
+        "二选一被拒时不得创建会话：{refused}"
+    );
+
+    host.stop().await;
 }

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use acpr_transcript::table::TableError;
 use serde_json::Value;
 
-/// registry 在仓库中的相对路径（12 个 domain 的机器登记）。
+/// registry 在仓库中的相对路径（transcript domain 的机器登记）。
 pub const REGISTRY_PATH: &str = "compatibility/transcripts/v1/transcripts.json";
 
 /// 仓库根下的路径。集成测试的 cwd 不保证是仓库根，因此一律用 `CARGO_MANIFEST_DIR` 定位。

@@ -164,7 +164,8 @@ pub(crate) fn import(record: &ImportRecord) -> JsonObject {
     ])
 }
 
-/// `device.list` 的 `DeviceRecord`（§5.3）：含 `pending` 与 `revoked` 记录。
+/// `device.list` 的 `DeviceRecord`（§5.3）：含 `pending` 与 `revoked` 记录，**不含授权集合**
+/// （设备权限层已删除：配对不授予授权，设备记录也不保存授权集合）。
 pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
     object(vec![
         ("deviceId", text(record.device_id().as_str())),
@@ -173,7 +174,6 @@ pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
             "publicKeyFingerprint",
             text(record.public_key_fingerprint().as_str()),
         ),
-        ("scopes", string_array(record.scopes().iter())),
         ("state", text(record.state().as_str())),
         ("createdAt", timestamp(record.created_at())),
         ("lastSeenAt", optional_timestamp(record.last_seen_at())),

@@ -6,7 +6,7 @@
 //! |---|---|
 //! | `append` 复用写集的列与取值编码（列清单不动） | `round_trip_preserves_every_column` |
 //! | `(target_kind, target_id)` 的编解码 | `every_target_kind_round_trips` |
-//! | `(actor_kind, actor_id)` 的编解码（审计列没有设备 scopes） | `device_actor_keeps_its_id_but_not_scopes` |
+//! | `(actor_kind, actor_id)` 的编解码（审计列只有归因、设备没有授权集合） | `device_actor_round_trips_by_id_only` |
 //! | `since`/`until` 含端点、时间区间过滤 | `time_window_includes_both_endpoints` |
 //! | 无匹配条件（含 `since > until`）不是错误 | `unmatched_filters_return_empty_results`、`reversed_time_window_returns_no_rows` |
 //! | `actions` 多值过滤（空 = 不过滤） | `actions_filter_accepts_multiple_values` |
@@ -23,7 +23,7 @@ mod support;
 
 use acp_core::model::{
     Actor, AuditAction, AuditOutcome, AuditRecord, DeviceId, Digest, EntityRef, ExportId, ImportId,
-    InteractionId, NodeId, PairingId, PortError, RequestId, ScopeSet, SessionId, Timestamp, TurnId,
+    InteractionId, NodeId, PairingId, PortError, RequestId, SessionId, Timestamp, TurnId,
     UnavailableKind,
 };
 use acp_core::ports::{AuditQuery, AuditStore, RetentionPolicy, SessionStore};
@@ -258,42 +258,31 @@ async fn every_target_kind_round_trips() {
 }
 
 #[tokio::test]
-async fn device_actor_keeps_its_id_but_not_scopes() {
+async fn device_actor_round_trips_by_id_only() {
     let (_dir, store) = open("audit-device-actor").await;
-    let scopes = ScopeSet::try_from_iter(["session.list", "session.read"]).expect("scopes");
     let written = record(
         T0,
         AuditAction::DeviceAuthenticated,
         Actor::Device {
             device: DeviceId::new(DEVICE).expect("device id"),
-            scopes: scopes.clone(),
         },
         EntityRef::Device(DeviceId::new(DEVICE).expect("device id")),
     );
     store.append(written).await.expect("append audit");
 
-    // §7.3 的审计列只有 `(actor_kind, actor_id)`：设备 scopes 不在表里，读回是空集合。
-    // 审计只记录归因，授权由 core 判定，因此这是投影而不是缺陷。
+    // §7.3 的审计列只有 `(actor_kind, actor_id)`；设备方向也没有任何授权集合维度，因此读回与写入逐字
+    // 相等——归因只记录主体，授权不在持久层判定。
     let records = all(&store).await;
     assert_eq!(
         records[0].actor(),
         &Actor::Device {
             device: DeviceId::new(DEVICE).expect("device id"),
-            scopes: ScopeSet::empty(),
         }
     );
     assert_eq!(
         records[0].actor().device_id().expect("device id").as_str(),
         DEVICE
     );
-    assert!(
-        !records[0]
-            .actor()
-            .scopes()
-            .expect("device scopes")
-            .contains("session.read")
-    );
-    assert!(scopes.contains("session.read"), "原记录不受影响");
     store.close().await;
 }
 

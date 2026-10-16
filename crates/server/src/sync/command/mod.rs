@@ -18,13 +18,12 @@
 //!
 //! ## 五条硬规则
 //!
-//! 1. **授权先于读取**（[`CommandRoute::authorize`]）：每条业务命令在读会话行、触碰文件系统、启动进程
-//!    **之前**按设备 scope 判定。被拒时回 `authorization.scope_denied` 且零副作用；判定只取决于
-//!    **设备行 + 命令名**，因此「未授权设备对不存在的会话派发命令」得到的仍是授权拒绝——错误类型不
-//!    随会话是否存在而变，否则该错误码就成了会话是否存在的预言机。授权点是
-//!    [`acp_core::broker::Broker::authorize`] 这**唯一**一处（`Actor::Device` 分支即
-//!    `scopes.contains(command)`），本层不自己写 scope 判定，用例内部还会再授权一次（同一次调用、
-//!    同一判定，成功路径不产生审计行）。
+//! 1. **前提先于读取**（[`CommandRoute::authorize`]）：每条业务命令在读会话行、触碰文件系统、启动进程
+//!    **之前**先落定「本连接已通过设备认证」这条前提——设备行必须存在（缺失即认证类失败关闭），判定只
+//!    取决于设备是否存在，与命令名、会话是否存在无关，因此错误类型不构成会话是否存在的预言机。设备
+//!    方向**没有**命令级授权判定（`pairing-model` 删除设备权限层）；[`acp_core::broker::Broker::authorize`]
+//!    仍是 core 侧唯一判定点（设备主体恒通过、节点主体按 Export/grant 判定），本层不重写那份判定，
+//!    用例内部还会再走一次（同一次调用、同一判定，成功路径不产生审计行）。
 //! 2. **结果超限显式失败**（[`CommandRoute::too_large`]）：查询结果在**入队前**按编码后字节数判定，
 //!    超过本连接的单条消息上限时回 `resource.result_too_large`。**绝不**截断后当完整结果返回
 //!    （§11.5 末段）。
@@ -65,7 +64,7 @@ use acp_core::model::{
     ConfigOptionId, ConfigValue as CoreConfigValue, ConflictKind,
     ElicitationAction as CoreElicitationAction, ElicitationValues, InteractionId, ModeId,
     PortError, PromptContentBlock, PublicError as CorePublicError, ReadInclude as CoreReadInclude,
-    RequestId as CoreRequestId, Timestamp as CoreTimestamp, TurnId, Version,
+    RequestId as CoreRequestId, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
 };
 use acp_core::use_cases::UseCases;
 use identity_auth::Authority;
@@ -73,7 +72,7 @@ use sha2::Digest as _;
 use sync_protocol::command::{
     Command, CommandName, CommandPayload, CommandResult, CommandResultPayload, CommandState,
     ElicitationAction as WireElicitationAction, IncludeResource as WireReadInclude,
-    SessionCreateResult,
+    SessionCreateResult, SessionCreateWorkspace,
 };
 use sync_protocol::common::{
     ConfigOptionValue as WireConfigValue, Nullable, PublicError, RawObject,
@@ -297,16 +296,16 @@ impl CommandRoute {
             .unwrap_or_default()
     }
 
-    /// **授权**：本连接设备当前的持久化信任行 → `Actor::Device` → [`Broker::authorize`]。
+    /// 本连接的**已认证前提**：该设备在本机必须有一条持久信任行。
     ///
-    /// 这是「授权先于读取」的落地点：本函数之上没有任何会话行读取、文件系统访问或进程启动，因此被拒的
-    /// 命令**零副作用**；而判定输入只有设备行与命令名，会话是否存在完全不参与判定（错误类型不泄露会话
-    /// 是否存在）。设备行读不到（认证后被删除、接线错误）一律失败关闭为授权拒绝，不凭握手自报值继续。
+    /// 设备方向不再有命令级授权判定（`pairing-model` 删除设备权限层：配对不授予授权、设备记录不保存
+    /// 授权集合），因此本函数只把「已认证」这条前提落成**持久事实**——行不存在（认证后被删除、接线
+    /// 错误）即失败关闭，不凭握手自报值继续。判定发生在任何会话行读取、文件系统访问与进程启动之前，
+    /// 且只取决于设备是否存在（与命令名、会话是否存在无关），因此错误类型既不泄露会话是否存在，也
+    /// 不构成第二条可见性判定路径。
     ///
-    /// 授权拒绝在**适配层**发生（先于任何业务用例调用），mutation 路径（WP3）因此与查询路径共用同一条
-    /// 前置判定。代价是成功路径上 `Broker::authorize` 会被调用两次（一次这里、一次在用例内）：`Device`
-    /// 分支是纯判定、不写审计，因此这只是一次廉价的重复判定，换来的是「适配层不必信任每个用例内部的
-    /// 顺序」这一条可审计性质。
+    /// `Broker::authorize` 仍走一次：它是 core 侧唯一判定点（设备主体恒通过，节点主体仍按 Export/grant
+    /// 判定），本层不重写那份判定，成功路径不产生审计。
     async fn authorize(&self, handle: &ConnectionHandle, command: &Command) -> Option<Actor> {
         let view = match self
             .core
@@ -325,12 +324,12 @@ impl CommandRoute {
                     handle,
                     command,
                     "the device state cannot be read",
-                    ErrorCode::AuthorizationScopeDenied,
+                    ErrorCode::InternalUnavailable,
                 );
                 return None;
             }
         };
-        let Some(device) = view.device.as_ref() else {
+        if view.device.is_none() {
             warn!(
                 event = "sync.command_device_missing",
                 device_id = handle.device_id().as_str(),
@@ -339,14 +338,13 @@ impl CommandRoute {
             self.deny(
                 handle,
                 command,
-                "the device is not allowed to send commands",
-                ErrorCode::AuthorizationScopeDenied,
+                "the device is not known to this host",
+                ErrorCode::AuthDeviceUnknown,
             );
             return None;
-        };
+        }
         let actor = Actor::Device {
             device: handle.device_id().clone(),
-            scopes: device.scopes().clone(),
         };
         if let Err(error) = self.authorize_actor(&actor, command).await {
             debug!(
@@ -354,13 +352,13 @@ impl CommandRoute {
                 device_id = handle.device_id().as_str(),
                 command = command.command.as_str(),
                 error = ?error,
-                "the device is not allowed to send this command"
+                "the command is not allowed for this actor"
             );
             self.deny(
                 handle,
                 command,
-                "the device is not allowed to send this command",
-                ErrorCode::AuthorizationScopeDenied,
+                "the command cannot be served",
+                ErrorCode::InternalUnavailable,
             );
             return None;
         }
@@ -855,15 +853,23 @@ impl CommandRoute {
             );
             return RouteOutcome::Claimed;
         };
-        let Ok(alias) = acp_core::model::WorkspaceAlias::new(create.workspace_alias.as_str())
-        else {
-            self.deny(
-                handle,
-                &command,
-                "the workspaceAlias is not a symbol name",
-                ErrorCode::ProtocolSchemaInvalid,
-            );
-            return RouteOutcome::Claimed;
+        // 目录来源是 `workspaceAlias` / `workspacePath` 的二选一（`SessionCreateWorkspace` 已在解码层
+        // 钉死"恰好一个"）。别名方向的形状校验在这里做（不触碰文件系统）；路径方向的形状与文件系统
+        // 校验都在 core 的解析路径里（先形状、后 IO），因此分类与该用例同源。
+        let workspace = match &create.workspace {
+            SessionCreateWorkspace::Alias(alias) => {
+                let Ok(alias) = acp_core::model::WorkspaceAlias::new(alias.as_str()) else {
+                    self.deny(
+                        handle,
+                        &command,
+                        "the workspaceAlias is not a symbol name",
+                        ErrorCode::ProtocolSchemaInvalid,
+                    );
+                    return RouteOutcome::Claimed;
+                };
+                WorkspaceSource::Alias(alias)
+            }
+            SessionCreateWorkspace::Path(path) => WorkspaceSource::Path(path.as_str().to_owned()),
         };
         let request = acp_core::model::CreateSessionRequest::new(
             agent,
@@ -873,25 +879,22 @@ impl CommandRoute {
         );
         let session = match self
             .core
-            .create_session(actor, request_id.clone(), fingerprint, request, Some(alias))
+            .create_session(
+                actor,
+                request_id.clone(),
+                fingerprint,
+                request,
+                Some(workspace),
+            )
             .await
         {
             Ok(session) => session,
             Err(error) => {
-                // 别名未登记与「未持 scope」在协议里是**同一个**拒绝（§11.5）：两者都以
-                // `authorization.scope_denied` 回复，否则调用方能借「别名不存在」与「无权限」的差异
-                // 探测本机登记状态（core 的 `create_session` 文档把这条写成明确的对齐要求）。
-                let rejection = match &error {
-                    PortError::InvalidRequest(reason)
-                        if *reason == "workspace alias is not registered on this node" =>
-                    {
-                        Rejection::Code(
-                            ErrorCode::AuthorizationScopeDenied,
-                            "the workspace alias is not available to this device",
-                        )
-                    }
-                    other => port_rejection(other),
-                };
+                // 失败分类按 §11.5 的增量：别名未登记、目录形状不合法都是**参数类**错误
+                // （`protocol.schema_invalid`），形式合法但本机解析不了是 `internal.unavailable`。
+                // 两者都不再用 `authorization.scope_denied` 表达——该错误码保留给节点侧 grant 与本地通道，
+                // 设备方向已没有授权维度（`pairing-model`）。
+                let rejection = port_rejection(&error);
                 let (code, text, details) = rejection.into_parts();
                 let Some(error) = public_error(code, text, details) else {
                     return self.encoding_fault(handle);
@@ -1451,10 +1454,10 @@ pub(crate) fn core_request_id(id: &Uuid) -> Option<CoreRequestId> {
 
 /// 端口错误 → 拒绝。
 ///
-/// `Broker::authorize` 的拒绝经 `Denied::into_port_error()` 变成
-/// `PortError::InvalidRequest("authorization.scope_denied")`（core 的 `PortError` 没有"禁止"变体），
-/// 因此这条**必须先判**：把它映射成 `protocol.schema_invalid` 会让一台未授权设备把授权拒绝看成形状
-/// 错误，正是 2.2 要避免的错误类型漂移。
+/// `authorization.scope_denied`（节点侧 grant 与本地通道的拒绝）必须先判：把它映射成
+/// `protocol.schema_invalid` 会让一个未被授权的**节点**主体把授权拒绝看成形状错误，正是 2.2 要避免的
+/// 错误类型漂移。设备方向已不产生该错误码（`pairing-model`：设备不再有授权维度），因此这一臂服务的是
+/// core 其它调用方与用例内部的节点判定。
 ///
 /// 保留窗口之前的游标同理必须先判：core 用 `InvalidRequest("history cursor precedes the retained
 /// window")` 表达「该游标早于仍可读的下界」（`storage-sqlite` 的 `read_session`），而 §11.5 要求对端看到
@@ -1483,9 +1486,18 @@ pub(crate) fn port_rejection(error: &PortError) -> Rejection {
 }
 
 /// `PortError::InvalidRequest` 的静态文本 → schema 类拒绝的说明（未知细分取通用说明）。
+///
+/// 目录类细分只回**字段名与规则**，不回显任何路径原文（`sync-workspace-catalog` 的「错误响应不回显
+/// 路径」：客户端自己提供的目录也不得成为对端可见字段）。
 fn schema_hint(reason: &str) -> &'static str {
     match reason {
         "cursor" => "the cursor is not valid for this session",
+        "workspace alias is not registered on this node" => {
+            "the workspaceAlias is not registered on this node"
+        }
+        "the workspace path must be an absolute path without parent references" => {
+            "the workspacePath must be an absolute path without parent references"
+        }
         _ => "the request does not match the v1 schema",
     }
 }

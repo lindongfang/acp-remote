@@ -122,6 +122,11 @@
       "valid": true
     },
     {
+      "fixture": "valid/command-session-create-workspace-path.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": true
+    },
+    {
       "fixture": "valid/command-result-session-create-accepted.json",
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": true
@@ -142,6 +147,18 @@
       "schema": "../../../schemas/sync/v1/message.schema.json",
       "valid": false,
       "expectedKeyword": "additionalProperties"
+    },
+    {
+      "fixture": "invalid/command-session-create-with-both-workspace-keys.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
+    },
+    {
+      "fixture": "invalid/command-session-create-without-workspace.json",
+      "schema": "../../../schemas/sync/v1/message.schema.json",
+      "valid": false,
+      "expectedKeyword": "oneOf"
     },
     {
       "fixture": "valid/auth-client-hello-session-create.json",
@@ -795,7 +812,6 @@
     "transcripts/host-challenge.json",
     "transcripts/pairing-proof.json",
     "transcripts/pairing-host-proof.json",
-    "transcripts/pairing-sas.json",
     "transcripts/pairing-status.json",
     "transcripts/device-proof.json",
     "transcripts/invalid/bad-codec-version.json",

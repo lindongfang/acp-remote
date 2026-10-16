@@ -4,12 +4,12 @@
 //! 一条连接一份 [`ConnectionState`]（键是 `connectionId`），由 `conn::session` 串行驱动：本模块的
 //! `route` 对同一条连接从不并发调用，因此状态机不需要额外的每连接锁（只用一个表锁保护映射本身）。
 //!
-//! ## 三个判定点
+//! ## 两个判定点
 //!
-//! 1. **观察授权**（`session.list`）：core 是唯一判定点（`Broker::authorize` 对 `Actor::Device` 的语义
-//!    是 `scopes.contains(command)`），本层不自己拼 scope 判定，也不在 core 之外维护第二份可见性策略。
-//!    拒绝一律回 `authorization.scope_denied`（消息级，连接保持可用）——与 `sync_visible_sessions` 的
-//!    授权口径逐字相同，因此"设备无权读会话"与"设备无权同步"不会给出两种不同的结论。
+//! 1. **已认证前提**（`UseCases::sync_device_handshake_view` 的持久信任行）：本连接声称的设备必须在
+//!    本机有信任行，这是订阅面唯一的准入判定；缺失时以认证类失败关闭（`auth.device_unknown`）且不读
+//!    任何会话/事件。设备方向**没有**可见性过滤（`pairing-model` 删除设备权限层）：投递集合就是
+//!    core 给出的那一页全部，目录与 Agent 资源对任何已认证设备都完整，本层不维护第二份过滤策略。
 //! 2. **cursor 判定**（[`cursor`]）：四种拒绝原因可区分、绝不钳制到 head；序号超出 v1 序号域时不落进
 //!    这四种里任何一种，而按协议错误（`protocol.schema_invalid`，§3.3）拒绝。
 //! 3. **屏障与恢复位置**：`sync.subscribe` 提交的 cursor 是**唯一**的恢复位置（§9.5：服务端保存的
@@ -37,8 +37,8 @@
 //!   协商的 `maxReplayEventsPerBatch`）→ 按 `globalSequence` 升序的 `event` 帧 → `sync.caught_up`；
 //! - 屏障建立之后才允许实时事件进队（[`crate::sync::fanout`] 以「屏障已建立」为闸），因此重放期间
 //!   到达的事件**排在屏障之后**、绝不越过序号更早的已持久化事件；
-//! - 权限过滤（设备 scope 判定在 core 的 `Broker::authorize`）造成的序号空洞合法且不报错，屏障游标
-//!   高于该段即可由客户端 ACK（§9.5）；
+//! - 同一设备能看到它的全部自有会话与其事件（设备方向不再有按授权的过滤，也就不会再由过滤产生
+//!   序号空洞）；
 //! - 读面失败（含 [`PortError::Corrupt`]）与该帧组装不出来时**显式失败关闭**：`internal.unavailable`
 //!   （retryable）+ 可见诊断，绝不伪造 `kind`/`deviceId`/`nodeId`、也绝不静默跳过；
 //! - 高水位停读由出站账本负责（[`ConnectionHandle::saturated`]）：停读信号传到本层即中断本批重放，
@@ -70,7 +70,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use acp_core::broker::{Broker, Denied};
+use acp_core::broker::Broker;
 use acp_core::model::{
     Actor, CommittedEvent, DeviceId, EventOrigin as CoreEventOrigin, GlobalCursor, NodeId,
     PortError, RemoteSessionRef, Sequence,
@@ -132,10 +132,10 @@ struct ConnectionState {
     features: NegotiatedFeatures,
     /// 该连接的设备 actor（`sync_replay` 的授权入参；屏障建立时一并记下，实时扇出复用同一份）。
     ///
-    /// **必须是同一个 actor**：实时与重放走同一个 `session.list` 授权判定，两处各建一个 actor 会让
-    /// "同一设备在两条路径上可见性不同"成为可能（scope 在连接期内可能被撤销，见 `put_device`）。
+    /// **必须是同一个 actor**：实时与重放走同一个判定，两处各建一个 actor 会让"同一设备在两条路径上
+    /// 可见性不同"成为可能。设备方向没有授权集合（`pairing-model` 删除设备权限层），因此 actor 只由
+    /// 设备标识构成，不存在"连接期内 scope 被撤销"这一档。
     device: Option<acp_core::model::DeviceId>,
-    scopes: acp_core::model::ScopeSet,
     /// 已发给对端的最高游标（`sync.caught_up` 的屏障）：`sync.ack` 的上限（§9.5）。
     barrier: Option<GlobalCursor>,
     /// 本连接的设备 ACK 最大值（单调不减；只服务诊断与保留策略，**不**决定恢复位置）。
@@ -196,8 +196,8 @@ impl SubscribeRoute {
     /// 自己推进，实时循环碰它会 interleaving 出"实时事件越过序号更早的已持久化事件"的帧序
     /// （4.3/4.8 的判据）。句柄不在注册表里的条目一并跳过（连接已结束）。
     ///
-    /// 每项带该连接的设备 actor：`sync_replay` 的授权入参（与重放路径同一个 actor、同一道
-    /// `session.list` 授权，因此实时与重放的可见性判定不可能给出两种结论）。
+    /// 每项带该连接的设备 actor：`sync_replay` 的授权入参（与重放路径同一个 actor、同一道判定，
+    /// 因此实时与重放的可见性判定不可能给出两种结论）。
     pub fn live_targets(
         &self,
         registry: &ConnectionRegistry,
@@ -214,7 +214,6 @@ impl SubscribeRoute {
                     handle,
                     Actor::Device {
                         device: device.clone(),
-                        scopes: state.scopes.clone(),
                     },
                 ))
             })
@@ -333,21 +332,11 @@ impl SubscribeRoute {
             return self.schema_invalid(session, message).await;
         };
         let submitted = SubmittedCursor::from_decoded(Ok(request.cursor.as_ref().cloned()));
+        // 设备行的存在性是本连接可用的前提（`pairing-model`：设备方向没有可见性/授权过滤，
+        // 因此「已认证」这条前提由 `device_context` 的持久事实一次性落定，不再有第二道判定）。
         let Some((actor, head)) = self.device_context(session, message).await else {
             return RouteOutcome::Claimed;
         };
-        // 观察授权（`session.list`）：core 是唯一判定点（与 `sync_visible_sessions` 同口径）。
-        if let Err(error) = self.observe(&actor).await {
-            debug!(
-                event = "sync.subscribe_denied",
-                device_id = session.device_id().as_str(),
-                error = ?error,
-                "the device is not allowed to observe the session list"
-            );
-            return self
-                .deny(session, message, ErrorCode::AuthorizationScopeDenied)
-                .await;
-        }
         let decision = cursor::decide(&submitted, &head);
         self.apply_cursor_decision(session, message, decision, &head, &actor)
             .await
@@ -433,22 +422,11 @@ impl SubscribeRoute {
 
     /// 组装并下发整条快照，然后按 §9.4 继续（屏障之后的事件与 `sync.caught_up`）。
     async fn send_snapshot(&self, session: &ConnectionHandle, message: &Envelope) -> RouteOutcome {
+        // 与 `sync.subscribe` 同一道前提：设备行必须存在（缺失即失败关闭），此后没有任何按设备
+        // 授权的过滤——目录与 Agent 资源对任何已认证设备都是完整的（`sync-workspace-catalog` 增量）。
         let Some((actor, head)) = self.device_context(session, message).await else {
             return RouteOutcome::Claimed;
         };
-        // 与 `sync.subscribe` 同一道闸：观察授权先于任何读取（`workspaces`/`profiles` 是本机管理读面，
-        // 以 `Actor::LocalCli` 代读，因此设备侧的授权只能在这里判）。core 是唯一判定点。
-        if let Err(error) = self.observe(&actor).await {
-            debug!(
-                event = "sync.snapshot_denied",
-                device_id = session.device_id().as_str(),
-                error = ?error,
-                "the device is not allowed to observe the session list"
-            );
-            return self
-                .deny(session, message, ErrorCode::AuthorizationScopeDenied)
-                .await;
-        }
         let features = self.features(session);
         let owner = Arc::clone(&self.owner);
         let reachable =
@@ -803,17 +781,16 @@ impl SubscribeRoute {
                 return None;
             }
         };
-        let Some(device) = view.device.as_ref() else {
+        if view.device.is_none() {
             warn!(
                 event = "sync.device_missing",
                 device_id = session.device_id().as_str(),
                 "the authenticated device has no persisted trust row"
             );
             return None;
-        };
+        }
         Some(Actor::Device {
             device: session.device_id().clone(),
-            scopes: device.scopes().clone(),
         })
     }
 
@@ -853,31 +830,21 @@ impl SubscribeRoute {
                 return None;
             }
         };
-        let Some(device) = view.device.as_ref() else {
+        if view.device.is_none() {
             warn!(
                 event = "sync.device_missing",
                 device_id = session.device_id().as_str(),
                 "the authenticated device has no persisted trust row"
             );
             let _ = self
-                .deny(session, message, ErrorCode::AuthorizationScopeDenied)
+                .deny(session, message, ErrorCode::AuthDeviceUnknown)
                 .await;
             return None;
-        };
+        }
         let actor = Actor::Device {
             device: session.device_id().clone(),
-            scopes: device.scopes().clone(),
         };
         Some((actor, view.head))
-    }
-
-    /// 观察授权（`session.list`）：core 是唯一判定点（`Actor::Device` 分支即 `scopes.contains()`）。
-    async fn observe(&self, actor: &Actor) -> Result<(), PortError> {
-        let request = self.core.ids().request_id();
-        self.broker
-            .authorize(actor, "session.list", None, &request)
-            .await
-            .map_err(Denied::into_port_error)
     }
 
     /// 本连接协商出的 feature（未登记时为空集：两个门控都关闭）。
@@ -906,17 +873,16 @@ impl SubscribeRoute {
 
     /// 记下该连接的设备 actor（`live_targets` 的授权入参），**不与屏障闭合混为一谈**。
     ///
-    /// `sync_replay` 的授权判定用同一个 actor、同一道 `session.list`，因此实时与重放的可见性判定
-    /// 不可能给出两种结论。actor 在连接刚进入订阅时就已确定；屏障则必须等重放真正读到 head 才闭合
-    /// （§9.3 的顺序不变量），两者生命周期不同，故分开记账。
+    /// `sync_replay` 的判定用同一个 actor，因此实时与重放的可见性不可能给出两种结论。actor 在连接刚
+    /// 进入订阅时就已确定；屏障则必须等重放真正读到 head 才闭合（§9.3 的顺序不变量），两者生命周期
+    /// 不同，故分开记账。
     fn note_connection_actor(&self, session: &ConnectionHandle, actor: Option<&Actor>) {
-        if let Some(Actor::Device { device, scopes }) = actor {
+        if let Some(Actor::Device { device }) = actor {
             let mut states = lock(&self.states);
             let state = states
                 .entry(session.connection_id().as_str().to_owned())
                 .or_default();
             state.device = Some(device.clone());
-            state.scopes = scopes.clone();
         }
     }
 
@@ -1027,7 +993,11 @@ impl SubscribeRoute {
         RouteOutcome::Claimed
     }
 
-    /// `authorization.scope_denied`（消息级拒绝，连接保持可用）。
+    /// 认证类拒绝（消息级拒绝，连接保持可用）：本连接声称的设备在本机没有信任行。
+    ///
+    /// 设备方向的失败分类只有「服务端暂时不可用（读面失败）」与「该设备未知」两种，两者都不依赖
+    /// 会话是否存在——`authorization.scope_denied` 已不由设备方向产生（`pairing-model`：设备不再有
+    /// 授权维度，该错误码保留给节点侧 grant 与本地通道）。
     async fn deny(
         &self,
         session: &ConnectionHandle,
@@ -1036,11 +1006,11 @@ impl SubscribeRoute {
     ) -> RouteOutcome {
         let body = error_body(
             code,
-            "the device is not allowed to observe this host",
+            "the device is not known to this host",
             RawObject::empty(),
             Some(message.message_id().clone()),
         );
-        self.send_error(session, body, "scope_denied");
+        self.send_error(session, body, "device_unknown");
         RouteOutcome::Claimed
     }
 

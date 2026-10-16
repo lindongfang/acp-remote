@@ -32,9 +32,9 @@ export interface CommandGateway {
   dispatch(command: CommandMessage): void;
 }
 
-/** 认证结果（scopes 决定创建会话入口是否可用，R16）。 */
+/** 认证结果（`deviceId` / `serverEpoch` / 限额；wire 上没有授权集合，创建入口也不依据它做任何判定）。 */
 export interface AuthenticatedGateway {
-  /** 本次连接授予的 scopes；未认证为 `null`。 */
+  /** 本次连接的认证结果；未认证为 `null`。 */
   readonly authenticatedInfo: AuthenticatedInfo | null;
 }
 

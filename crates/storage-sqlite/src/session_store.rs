@@ -29,10 +29,10 @@ use acp_core::model::{
     ConflictKind, DeviceId, Digest, EntityRef, EventId, EventKind, EventOrigin, EventPayload,
     GlobalCursor, ImportId, InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef,
     NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError,
-    RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, ScopeSet, Sequence,
-    ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState,
-    SessionSummary, StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
-    WorkspaceAlias, WorkspaceRef,
+    RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence, ServerEpoch,
+    Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary,
+    StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceAlias,
+    WorkspaceRef,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
@@ -337,8 +337,8 @@ pub(crate) fn actor_key(actor: &Actor) -> (ActorKind, String) {
 
 /// 从 `owned_command` 的 `(actor_kind, actor_id)` 还原 `Actor`。
 ///
-/// `owned_command` 只存 §7.3 冻结的两列，因此还原是**有损**的：设备 scopes 不在表里（授权由 core 判定，
-/// 存储不参与），这里给 `ScopeSet::empty()`；Node 的复合键按 `"{node}/{access_node}"` 拆回。
+/// `owned_command` 只存 §7.3 冻结的两列，因此还原只可能给出归因：设备记录不再有授权集合列，这里没有
+/// 任何集合要补；Node 的复合键按 `"{node}/{access_node}"` 拆回。
 ///
 /// `pairing_claimant` 在此**明确失败**：`owned_command.actor_kind` 的 CHECK 只有 `device`/`node`/`cli`
 /// （认领方永不提交命令，design D12），真读到这一行说明库被外部改写——按列值损坏处理，不猜一个 actor。
@@ -346,7 +346,6 @@ fn actor_from_columns(kind: ActorKind, id: &str) -> Result<Actor, StorageError> 
     match kind {
         ActorKind::Device => Ok(Actor::Device {
             device: decode(id, "owned_command.actor_id")?,
-            scopes: ScopeSet::empty(),
         }),
         ActorKind::Node => {
             let (node, access_node) = id.split_once('/').ok_or(StorageError::ColumnValue {

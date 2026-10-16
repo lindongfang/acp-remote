@@ -7,7 +7,7 @@
 use acpr_transcript::table::{DomainSpec, FieldSpec, FieldType, Proof};
 
 /// docs/SYNC_PROTOCOL.md §6.3 的登记表，顺序与 registry 一致。
-pub const DOMAINS: [DomainSpec; 6] = [
+pub const DOMAINS: [DomainSpec; 5] = [
     DomainSpec {
         domain: "acp-remote/pairing-proof/v1",
         proof: Proof::Hmac,
@@ -67,62 +67,6 @@ pub const DOMAINS: [DomainSpec; 6] = [
     DomainSpec {
         domain: "acp-remote/pairing-host-proof/v1",
         proof: Proof::Signature,
-        fields: &[
-            FieldSpec {
-                tag: 1,
-                name: "protocolVersion",
-                ty: FieldType::U16be,
-            },
-            FieldSpec {
-                tag: 2,
-                name: "hostId",
-                ty: FieldType::Uuid16,
-            },
-            FieldSpec {
-                tag: 3,
-                name: "deviceId",
-                ty: FieldType::Uuid16,
-            },
-            FieldSpec {
-                tag: 4,
-                name: "pairingId",
-                ty: FieldType::Uuid16,
-            },
-            FieldSpec {
-                tag: 6,
-                name: "canonicalOrigin",
-                ty: FieldType::Utf8,
-            },
-            FieldSpec {
-                tag: 7,
-                name: "hostPublicKey",
-                ty: FieldType::Sec1_65,
-            },
-            FieldSpec {
-                tag: 8,
-                name: "devicePublicKey",
-                ty: FieldType::Sec1_65,
-            },
-            FieldSpec {
-                tag: 9,
-                name: "clientNonce",
-                ty: FieldType::Bytes32,
-            },
-            FieldSpec {
-                tag: 10,
-                name: "serverNonce",
-                ty: FieldType::Bytes32,
-            },
-            FieldSpec {
-                tag: 13,
-                name: "pairingRequestId",
-                ty: FieldType::Uuid16,
-            },
-        ],
-    },
-    DomainSpec {
-        domain: "acp-remote/pairing-sas/v1",
-        proof: Proof::Hmac,
         fields: &[
             FieldSpec {
                 tag: 1,

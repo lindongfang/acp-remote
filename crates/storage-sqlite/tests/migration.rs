@@ -204,6 +204,41 @@ async fn insert_command_row(pool: &sqlx::SqlitePool, actor_kind: &str) -> Result
     Ok(result.rows_affected())
 }
 
+/// 往 `owned_device` 插一行设备（§7.3 的列子集）。合成的「v8 之前」形状里这张表还有 `scopes_json`，
+/// 它由随后的 `ALTER TABLE ADD COLUMN ... DEFAULT '[]'` 补上；v8 段的 `DROP COLUMN` 会重写行，因此
+/// 「有数据的设备行在升级后逐列保留」必须由用例显式断言——空表证明不了这一点。
+async fn insert_device_row(
+    pool: &sqlx::SqlitePool,
+    device_id: &str,
+    last_seen_at: Option<&str>,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "INSERT INTO owned_device (device_id, display_name, public_key, fingerprint, state, \
+         created_at, last_seen_at, revoked_at, revoke_reason) \
+         VALUES (?1, 'phone', zeroblob(65), ?2, 'active', ?3, ?4, NULL, NULL)",
+    )
+    .bind(device_id)
+    .bind("b".repeat(64))
+    .bind(AT)
+    .bind(last_seen_at)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// `owned_device` 的行快照（按 §7.3 的列序；`scopes_json` 已随 v8 删除，故不在其中）。`hex(public_key)`
+/// 让 BLOB 也逐字节可比——升级只应把这一列删掉，其余列的值一字不动。
+async fn device_rows(pool: &sqlx::SqlitePool) -> Vec<String> {
+    texts(
+        pool,
+        "SELECT device_id || '|' || display_name || '|' || hex(public_key) || '|' || fingerprint \
+         || '|' || state || '|' || created_at || '|' || COALESCE(last_seen_at, '∅') || '|' || \
+         COALESCE(revoked_at, '∅') || '|' || COALESCE(revoke_reason, '∅') \
+         FROM owned_device ORDER BY device_id",
+    )
+    .await
+}
+
 /// **已经是当前版本**的库连续两次启动后必须逐一字节不变（§9.1 的幂等判据）。
 ///
 /// 起点是空目录新建出来的当前版本库：v2 之后的旧夹具不再代表「当前形状」，因此「已是最新版则不重写」
@@ -237,7 +272,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 7);
+        assert_eq!(store.metadata().owned_schema_version, 8);
         assert_eq!(store.metadata().imported_schema_version, 3);
         store.close().await;
 
@@ -424,7 +459,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     assert_eq!(store.metadata().imported_schema_version, 3);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
@@ -780,7 +815,7 @@ async fn v7_upgrade_carries_interaction_rows_and_a_leading_event_sequence() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database with interaction rows must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -895,7 +930,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -960,16 +995,30 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     pool.close().await;
 }
 
+/// 合成旧形状时回过一次 `owned_device.scopes_json`（`ALTER TABLE ADD COLUMN` 会把列声明文本写进
+/// `sqlite_master`）。v8 段删掉它之后，DDL 必须等于「把那段声明文本去掉的旧文本」：这既证明删列真的
+/// 发生了，也证明其余文本一字未动——重跑 12-step 重建会按规范格式把整张表重排，文本就会不同。
+fn without_scopes_column(ddl: &str) -> String {
+    let at = ddl
+        .find("scopes_json")
+        .expect("合成的旧形状必须带 scopes_json 列");
+    let start = ddl[..at].rfind(',').expect("列声明前的逗号");
+    let after = at + "scopes_json".len();
+    let end = ddl[after..].find(',').map_or(after, |index| after + index);
+    format!("{}{}", &ddl[..start], &ddl[end..])
+}
+
 ///
 /// §7.2/R13/R19：**v3 → v4 只给 `owned_node` 追加一列，v4 → v5/v6 只给 `owned_session` 追加三列**。
 ///
 /// 夹具 `fixtures/storage/v2/` 里没有 v3 形状的文件（那是历史资产的忠实副本，本次不改夹具），因此本用例
-/// 在测试里现场造一个 v3 库：先在新建库（当前形状）上写入既有节点行与审计行，再把 v4/v5/v6 才有的列
+/// 在测试里现场造一个 v3 库：先在新建库（当前形状）上写入既有节点行、审计行与两行设备行（覆盖
+/// `last_seen_at` 的 `NULL`/非 `NULL`），再把 v4/v5/v6 才有的列
 /// （`owned_node.export_ids_json` 与 `owned_session.agent_session_id`/`workspace_cwd`/`workspace_alias`）
-/// `DROP` 掉并把两个版本键降到 3——它对升级段而言就是「有节点行、没有清单列、没有恢复列、没有目录归属列」
-/// 的 v3 库。
+/// `DROP` 掉、把 v8 才删的 `owned_device.scopes_json` 补回，并把两个版本键降到 3——它对升级段而言就是
+///「有节点行、没有清单列、没有恢复列、没有目录归属列、带 scopes_json 的设备表」的 v3 库。
 ///
-/// 三条判据：
+/// 四条判据：
 ///
 /// 1. 既有节点行的 `export_ids_json` 为 `'[]'`（`NOT NULL` 由默认值满足，**不得默认放权**），其余列逐字不变；
 /// 2. owned/imported 两族每张表的列名/顺序/类型/`NOT NULL`/默认值与**新建库**逐项相等（两组追加列
@@ -977,6 +1026,8 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
 /// 3. 除 `owned_node`（v4 段）与 `owned_session`（v5/v6 两段）外每条表的 DDL 文本逐字节不变，且
 ///    `PRAGMA user_version` 为 6、两族版本键为 6/3——`file_version < 3` 的守卫因此是真的：v3 库不会重跑
 ///    v2/v3 那两段 12-step 重建。
+/// 4. 设备行逐列保留：v8 段只删 `scopes_json`，`DROP COLUMN` 重写整张表，行里其余列必须逐字节不变
+///    （两行覆盖 `last_seen_at` 的 `NULL`/非 `NULL`），且升级后设备表不再有 `scopes_json` 列。
 ///
 /// 第 3 条的判别力来自「同名表的 12-step 重建文本与新建库文本不同」，用例用 `owned_audit` 直接断言这一点
 /// （`rebuild_text_differs_from_the_fresh_text`），因此它不是一个永远成立的空断言。
@@ -990,7 +1041,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     created.close().await;
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
 
-    // 造 v3 库：现有库里已经有真的行（节点行 + 审计行），再去掉 v4/v5 才有的列、把版本降到 3。
+    // 造 v3 库：现有库里已经有真的行（节点行 + 审计行 + 设备行），再去掉 v4/v5 才有的列、把版本降到 3。
     let pool = raw_write_pool(&path).await;
     sqlx::query(
         r#"INSERT INTO owned_node (node_id, kind, display_name, fingerprint, grants_json, state,
@@ -1017,6 +1068,19 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             .await
             .expect("rewind owned_session to its v3 shape");
     }
+    // 设备行必须在补回 `scopes_json` **之前**落库：`ALTER TABLE ADD COLUMN ... DEFAULT '[]'` 会给既有行
+    // 填上该列，v8 段的 `DROP COLUMN` 又会重写它们——空表因此证明不了「有数据的设备行逐列保留」。
+    // 两行覆盖 `last_seen_at` 为 `NULL` 与非 `NULL` 两种。
+    insert_device_row(&pool, FIXTURE_DEVICE_ONE, None)
+        .await
+        .expect("seed a device row with no last_seen_at");
+    insert_device_row(&pool, FIXTURE_DEVICE_TWO, Some(DEVICE_SEEN_AT))
+        .await
+        .expect("seed a device row with a last_seen_at");
+    sqlx::query("ALTER TABLE owned_device ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]'")
+        .execute(&pool)
+        .await
+        .expect("把 owned_device 补回 v8 之前就有的 scopes_json（v8 段只删这一列，合成的旧形状必须带上它）");
     sqlx::query("PRAGMA user_version = 3")
         .execute(&pool)
         .await
@@ -1046,6 +1110,13 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             "造出来的库必须真的没有 {column} 列"
         );
     }
+    assert!(
+        column_names(&pool, "owned_device")
+            .await
+            .contains(&"scopes_json".to_owned()),
+        "合成的旧形状必须真的带 scopes_json 列"
+    );
+    let devices_before = device_rows(&pool).await;
     let mut ddl_before = Vec::new();
     for table in TABLES {
         ddl_before.push((*table, table_ddl(&pool, table).await));
@@ -1055,7 +1126,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -1095,6 +1166,19 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         ints(&pool, "SELECT audit_id FROM owned_audit ORDER BY audit_id").await,
         vec![1],
         "升级不得动既有审计行"
+    );
+
+    // 设备行逐列保留：v8 段只删 `scopes_json`，`DROP COLUMN` 重写整张表，行里其余列必须逐字节不变。
+    assert_eq!(
+        device_rows(&pool).await,
+        devices_before,
+        "升级后设备行必须逐列逐字节不变"
+    );
+    assert!(
+        !column_names(&pool, "owned_device")
+            .await
+            .contains(&"scopes_json".to_owned()),
+        "升级后设备表不得再有 scopes_json 列"
     );
 
     // ② 两族列清单（名称/顺序/类型/NOT NULL/默认值）与新建库逐项相等。
@@ -1161,8 +1245,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     );
     fresh_pool.close().await;
 
-    // ③ 除 owned_node（v4 段）、owned_session（v5/v6 两段）与 v7 段重建的两张事件表外每条表的 DDL
-    // 逐字节不变（v3 库不得重跑 v2/v3 那两段 12-step 重建）。
+    // ③ 除 owned_node（v4 段）、owned_session（v5/v6 两段）、v7 段重建的两张事件表，以及 v8 段只删一列的
+    // `owned_device` 外，每条表的 DDL 逐字节不变（v3 库不得重跑 v2/v3 那两段 12-step 重建）。
     for (table, ddl) in ddl_before {
         let after = table_ddl(&pool, table).await;
         match table {
@@ -1180,6 +1264,11 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
             }
             "owned_event" => assert_event_check_widened(&after),
             "owned_interaction" => assert_interaction_still_references_events(&after),
+            "owned_device" => assert_eq!(
+                after,
+                without_scopes_column(&ddl),
+                "owned_device 只应被删掉 scopes_json 列（v8 段按设计删它、不做 12-step 重建）：{after}"
+            ),
             _ => assert_eq!(
                 after, ddl,
                 "升级不得重写 {table} 的 DDL（那意味着重跑了重建段）"
@@ -1192,7 +1281,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
 /// §7.2/R13/R16：**v4 → v6 只给 `owned_session` 末尾追加三个可空列**（v5 两列 + v6 的 `workspace_alias`）。
 ///
 /// 造 v4 库的手法与上一条同款：新建当前形状的库 → 写入一条真的 owned 会话行（除追加的三列外列列有值）
-/// → `DROP` 掉才有的三列并把版本键降到 4。三条判据：
+/// 与两行设备行（覆盖 `last_seen_at` 的 `NULL`/非 `NULL`）→ `DROP` 掉才有的三列、把 v8 才删的
+/// `owned_device.scopes_json` 补回，并把版本键降到 4。四条判据：
 ///
 /// 1. 既有会话行的其余列逐字节不变，三列都是 `NULL`（不是空串、不是占位别名/路径）；
 /// 2. `NULL` 不被任何读取路径补齐、推导或以别名解析结果替换——`load_recovery` 对这条会话返回
@@ -1200,6 +1290,8 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
 ///    （= 未分组）；
 /// 3. 除 `owned_session` 外每条表的 DDL 文本逐字节不变（v4 库不得重跑任何 12-step 重建），
 ///    `PRAGMA user_version` 与两族版本键为 6/6/3；两族列清单与新建库逐项相等。
+/// 4. 设备行逐列保留：v8 段只删 `scopes_json`，`DROP COLUMN` 重写整张表，行里其余列必须逐字节不变
+///    （两行覆盖 `last_seen_at` 的 `NULL`/非 `NULL`），且升级后设备表不再有 `scopes_json` 列。
 #[tokio::test]
 async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let dir = temp_dir("migrate-from-v4");
@@ -1210,7 +1302,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
     let session = SessionId::new(FIXTURE_SESSION).expect("fixture session id");
 
-    // 造 v4 库：写入一条真的会话行，再去掉 v5 才有的两列、把版本降到 4。
+    // 造 v4 库：写入一条真的会话行与两行设备行，再去掉 v5 才有的三列、把版本降到 4。
     let pool = raw_write_pool(&path).await;
     sqlx::query(
         r#"INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, origin_epoch,
@@ -1230,6 +1322,18 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
             .await
             .expect("rewind owned_session to its v4 shape");
     }
+    // 设备行必须在补回 `scopes_json` **之前**落库（同 v3 路径，v8 段的 `DROP COLUMN` 会重写该表）：
+    // 两行覆盖 `last_seen_at` 为 `NULL` 与非 `NULL` 两种。
+    insert_device_row(&pool, FIXTURE_DEVICE_ONE, None)
+        .await
+        .expect("seed a device row with no last_seen_at");
+    insert_device_row(&pool, FIXTURE_DEVICE_TWO, Some(DEVICE_SEEN_AT))
+        .await
+        .expect("seed a device row with a last_seen_at");
+    sqlx::query("ALTER TABLE owned_device ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]'")
+        .execute(&pool)
+        .await
+        .expect("把 owned_device 补回 v8 之前就有的 scopes_json（v8 段只删这一列，合成的旧形状必须带上它）");
     sqlx::query("PRAGMA user_version = 4")
         .execute(&pool)
         .await
@@ -1252,6 +1356,13 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
             "造出来的库必须真的没有 {column} 列"
         );
     }
+    assert!(
+        column_names(&pool, "owned_device")
+            .await
+            .contains(&"scopes_json".to_owned()),
+        "合成的旧形状必须真的带 scopes_json 列"
+    );
+    let devices_before = device_rows(&pool).await;
     let mut ddl_before = Vec::new();
     for table in TABLES {
         ddl_before.push((*table, table_ddl(&pool, table).await));
@@ -1261,7 +1372,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     assert_eq!(store.metadata().imported_schema_version, 3);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
@@ -1327,6 +1438,19 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         "三列不得被空串（或任何占位值）填上"
     );
 
+    // 设备行逐列保留：v8 段只删 `scopes_json`，`DROP COLUMN` 重写整张表，行里其余列必须逐字节不变。
+    assert_eq!(
+        device_rows(&pool).await,
+        devices_before,
+        "升级后设备行必须逐列逐字节不变"
+    );
+    assert!(
+        !column_names(&pool, "owned_device")
+            .await
+            .contains(&"scopes_json".to_owned()),
+        "升级后设备表不得再有 scopes_json 列"
+    );
+
     // 两族列清单（名称/顺序/类型/NOT NULL/默认值）与新建库逐项相等。
     let fresh_dir = temp_dir("migrate-fresh-columns-v4");
     let fresh_store = SqliteStore::open(StorageConfig::new(&fresh_dir), &at())
@@ -1350,8 +1474,8 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     }
     fresh_pool.close().await;
 
-    // ③ 除 owned_session（v5/v6 两段）与 v7 段重建的两张事件表外每条表的 DDL 逐字节不变
-    // （v4 库不得重跑 v2/v3 那两段 12-step 重建）。
+    // ③ 除 owned_session（v5/v6 两段）、v7 段重建的两张事件表与 v8 段只删一列的 `owned_device` 外，
+    // 每条表的 DDL 逐字节不变（v4 库不得重跑 v2/v3 那两段 12-step 重建）。
     for (table, ddl) in ddl_before {
         let after = table_ddl(&pool, table).await;
         match table {
@@ -1365,6 +1489,11 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
             }
             "owned_event" => assert_event_check_widened(&after),
             "owned_interaction" => assert_interaction_still_references_events(&after),
+            "owned_device" => assert_eq!(
+                after,
+                without_scopes_column(&ddl),
+                "owned_device 只应被删掉 scopes_json 列（v8 段按设计删它、不做 12-step 重建）：{after}"
+            ),
             _ => assert_eq!(
                 after, ddl,
                 "升级不得重写 {table} 的 DDL（那意味着重跑了重建段）"
@@ -1649,7 +1778,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 }
@@ -1783,6 +1912,10 @@ const FIXTURE_ACKED_ORIGIN_SEQUENCE: i64 = 5;
 const FIXTURE_LOCAL_SEQUENCE: i64 = 1;
 /// 配对 id（`pairing_claimant` 审计行的 `actor_id`；column 上无 CHECK，但保持与产品同形状）。
 const FIXTURE_PAIRING: &str = "99999999-9999-4999-8999-999999999999";
+/// 合成 v3/v4 旧形状时落进 `owned_device` 的设备行（覆盖 `last_seen_at` 为 `NULL` 与非 `NULL`）。
+const FIXTURE_DEVICE_ONE: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const FIXTURE_DEVICE_TWO: &str = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const DEVICE_SEEN_AT: &str = "2026-09-18T03:00:00.000Z";
 
 /// 重建 `fixtures/storage/v2/from-v1.sqlite3`（**v1 形状**的升级输入）。默认忽略；重建方式：
 ///

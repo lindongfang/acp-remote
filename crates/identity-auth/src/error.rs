@@ -52,7 +52,7 @@ pub enum ProofError {
 /// 配对状态机错误（内部决策用；对端可见分类见 [`super::pairing::ClaimRejection`]）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PairingError {
-    #[error("目标与请求集合不一致：设备配对不得带 grants、节点配对不得带 scopes")]
+    #[error("目标与集合不一致：设备配对不得携带任何集合、节点配对不得携带 scopes")]
     CapabilityKindMismatch,
     #[error("配对有效期非法：必须为正且不超过 5 分钟")]
     InvalidWindow,

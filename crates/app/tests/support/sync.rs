@@ -135,6 +135,21 @@ pub fn recompute_digest(chunk_frames: &[String]) -> String {
     base64url(&hasher.finalize())
 }
 
+/// 在任意层级查找一个键（对象与数组都递归）。
+///
+/// 用于「某个键**不得**出现」这类检查：授权集合（`scopes`/`grants`/`packs`/`presets`）与短验证码
+/// （`sas`）在下行消息里可能被塞进嵌套块（`statusResponse.device`、`auth.authenticated.body`），
+/// 只查顶层会漏掉它们。
+pub fn contains_key_deep(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|entry| contains_key_deep(entry, key))
+        }
+        Value::Array(items) => items.iter().any(|item| contains_key_deep(item, key)),
+        _ => false,
+    }
+}
+
 /// 一次收到的快照（三类资源的 chunk 帧文本与声明值，供用例逐步断言）。
 #[derive(Debug)]
 pub struct ReceivedSnapshot {
@@ -951,6 +966,10 @@ pub const SCRIPTED_AGENT_ID: &str = "codex";
 struct ScriptedEndpoint {
     sink: acp_core::ports::EventSink,
     parked: Arc<ParkedEvents>,
+    /// Agent 侧会话标识：真实后端（`agent-host`）从 `session/new` 的响应里取，**不编造**；这里的
+    /// `create` 分支给一个由会话标识派生的可预测取值（见 [`scripted_agent_session_id`]），`open`
+    /// 分支为 `None`（与 `support::owner` 同款），`resume` 带回归属方的持久化取值。
+    agent_session_id: Option<acp_core::model::AgentSessionId>,
 }
 
 /// 脚本：一条 `agent.message.delta` + 一条 `turn.completed`（真实 Agent 的产出形状）。
@@ -986,17 +1005,30 @@ fn scripted_events(marker: &str) -> Vec<acp_core::model::EndpointEvent> {
     ]
 }
 
+/// 脚本化 `create` 建立的 ACP 会话标识（可预测：与 `support::owner` 同款）。
+///
+/// **它必须存在**：`Broker::create_session` 只在 `SessionEndpoint::agent_session_id()` 非 `None` 时
+/// 才写「恢复列 + 目录归属」（`agent_session_id`/`workspace_cwd`/`workspace_alias` 的同一条 `UPDATE`），
+/// 因此返回 `None` 会让 `owned_session.workspace_alias` 永远落不了盘，目录来源的用例就断言不到落库事实。
+fn scripted_agent_session_id(
+    session: &acp_core::model::SessionId,
+) -> acp_core::model::AgentSessionId {
+    acp_core::model::AgentSessionId::new(&format!("acp-{}", &session.as_str()[..8]))
+        .expect("会话标识非空、无 NUL、长度合规")
+}
+
 #[async_trait::async_trait]
 impl SessionBackendFactory for ScriptedBackends {
     async fn create(
         &self,
-        _session: &acp_core::model::SessionId,
+        session: &acp_core::model::SessionId,
         _request: acp_core::model::CreateSessionRequest,
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
+            Some(scripted_agent_session_id(session)),
         )))
     }
 
@@ -1008,19 +1040,20 @@ impl SessionBackendFactory for ScriptedBackends {
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
+            None,
         )))
     }
 
     async fn resume(
         &self,
-        session: &acp_core::model::SessionId,
+        _session: &acp_core::model::SessionId,
         request: acp_core::model::ResumeSessionRequest,
         sink: acp_core::ports::EventSink,
     ) -> Result<Box<dyn acp_core::ports::SessionEndpoint>, PortError> {
-        let _ = (session, request);
         Ok(Box::new(ScriptedEndpoint::attach(
             sink,
             Arc::clone(&self.parked),
+            Some(request.agent_session_id.clone()),
         )))
     }
 }
@@ -1032,7 +1065,7 @@ impl acp_core::ports::SessionEndpoint for ScriptedEndpoint {
     }
 
     fn agent_session_id(&self) -> Option<&acp_core::model::AgentSessionId> {
-        None
+        self.agent_session_id.as_ref()
     }
 
     async fn prompt(
@@ -1542,8 +1575,16 @@ impl HostNode {
 
 impl ScriptedEndpoint {
     /// 建端点并把它挂上暂存表的 sink（否则 `ParkedEvents::release` 没有出口）。
-    fn attach(sink: acp_core::ports::EventSink, parked: Arc<ParkedEvents>) -> Self {
+    fn attach(
+        sink: acp_core::ports::EventSink,
+        parked: Arc<ParkedEvents>,
+        agent_session_id: Option<acp_core::model::AgentSessionId>,
+    ) -> Self {
         parked.attach(&sink);
-        Self { sink, parked }
+        Self {
+            sink,
+            parked,
+            agent_session_id,
+        }
     }
 }

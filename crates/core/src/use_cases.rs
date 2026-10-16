@@ -30,7 +30,7 @@ use crate::model::{
     PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
     ProviderRef, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
     ResourceOrigin, SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
-    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord,
+    UnavailableKind, Version, WorkspaceAlias, WorkspaceRecord, WorkspaceSource,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
@@ -95,11 +95,11 @@ pub struct NodeLinkHandshakeView {
 /// 与 [`NodeLinkHandshakeView`] **同形但少一项**：Sync 设备握手不带 `catalogRevision`（`identity-auth`
 /// 的 `hello` 只对 Node Link 分支要求它），因此本视图也不读 `AuditStore::watermark()`。
 ///
-/// 四个字段都是本次握手需要且只需要的持久事实：该设备的信任行（凭据状态与当前 scopes，即 `PeerTrust`
-/// 的 `credential`/`scopes` 的来源）、已绑定的验签公钥（`TrustStore::peer_key`，`verify_proof` 唯一接受
-/// 的密钥来源）、最近一次配对（登记方宣告的 `host_binding` 与是否待消费）、本机全局水位
-/// （`SessionStore::head()`，同时携带 `server_epoch` 与 `global_sequence`）。视图不包含任何秘密材料：
-/// pairing secret 只在身份状态机内存里。
+/// 四个字段都是本次握手需要且只需要的持久事实：该设备的信任行（凭据状态的来源，即 `PeerTrust`
+/// 的 `credential`；设备没有授权维度，因此没有集合字段）、已绑定的验签公钥（`TrustStore::peer_key`，
+/// `verify_proof` 唯一接受的密钥来源）、最近一次配对（登记方宣告的 `host_binding` 与是否待消费）、
+/// 本机全局水位（`SessionStore::head()`，同时携带 `server_epoch` 与 `global_sequence`）。视图不包含任何
+/// 秘密材料：pairing secret 只在身份状态机内存里。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SyncDeviceHandshakeView {
     /// 该设备的信任行；未知设备为 `None`（未知设备照常签发挑战，见 §8.2/§8.3：挑战照常签发、
@@ -270,31 +270,37 @@ impl UseCases {
         self.broker.submit_mutation(actor, &command).await
     }
 
-    /// `session.create`（Node Link，§12.7）：先把 workspace 别名解析成本机规范化绝对路径，
+    /// `session.create`（Node Link §12.7 / Sync §11.5）：先把目录来源解析成本机规范化绝对路径，
     /// 再以客户端 `requestId` 为幂等键创建 owned 会话并打开其后端端点（§11.9）。
     ///
-    /// `request_id`/`request_fingerprint` 由适配层给出：Node Link 的幂等键是
-    /// `(ownerNodeId, accessNodeId, requestId)`，其中前两项就是本进程的 `Actor::Node` 对端；
-    /// 指纹是 ACPR-CJ1 之后的解码 payload 摘要（§6 第 6 条）。core 不自造 requestId——否则同一
-    /// 次重试会得到第二个幂等键，重启后就会重复创建。
+    /// `request_id`/`request_fingerprint` 由适配层给出：幂等键是
+    /// `(actor, requestId)`（Node Link 的 actor 即本进程的 `Actor::Node` 对端），指纹是 ACPR-CJ1
+    /// 之后的解码 payload 摘要（§6 第 6 条）。core 不自造 requestId——否则同一次重试会得到第二个
+    /// 幂等键，重启后就会重复创建。
     ///
-    /// `workspace_alias` 是该请求在 Export 中声明的别名——「是否在该 Export 的别名集合内」由
-    /// `server::node_link` 校验（`nodelink.export.not_granted`，参数类）；本层只负责本机解析：
-    /// 已声明但本机解析失败 MUST 返回 [`UnavailableKind::IoError`]，**不得**降级为参数错误。
+    /// `workspace` 是本次的目录来源（[`WorkspaceSource`]），两种来源的解析与失败分类：
+    ///
+    /// - [`WorkspaceSource::Alias`]：该请求声明的是别名——「是否在该 Export 的别名集合内」由
+    ///   `server::node_link` 校验（`nodelink.export.not_granted`，参数类）；本层只负责本机解析，
+    ///   **未在本机登记**是参数类错误，**已登记但解析失败** MUST 返回
+    ///   [`UnavailableKind::IoError`]、**不得**降级为参数错误；
+    /// - [`WorkspaceSource::Path`]（仅 Sync 面）：客户端提供的目录，见 [`resolve_client_workspace`]。
     ///
     /// UNC/网络路径允许使用；core 不持日志设施，因此「网络路径」的结构化警告由接入层在解析成功
     /// 后记录，本层不因它改变授权模型（`design.md` D6）。
     ///
-    /// 解析成功时，**别名原文与该次解析得到的规范化路径一起**落进该会话行（`design.md` D1/D6）：
-    /// 别名是目录归属的权威投影来源，路径是恢复流程的权威取值，二者独立保存、互不推导。目录归属
-    /// 的读取与展示名关联都在读路径（`SessionStore::list`），本方法不投影任何引用。
+    /// 解析成功时，**别名原文（若有）与该次解析得到的规范化路径一起**落进该会话行（`design.md`
+    /// D1/D6、`workspace-resolution`）：别名是目录归属的权威投影来源，路径是恢复流程的权威取值，
+    /// 二者独立保存、互不推导；目录来源是客户端提供的目录时**没有别名**，该会话呈现为「未分组」。
+    /// 目录归属的读取与展示名关联都在读路径（`SessionStore::list`），本方法不投影任何引用，也不
+    /// 把客户端提供的目录登记进 workspace 目录表。
     pub async fn create_session(
         &self,
         actor: &Actor,
         request_id: RequestId,
         request_fingerprint: Digest,
         mut request: CreateSessionRequest,
-        workspace_alias: Option<WorkspaceAlias>,
+        workspace: Option<WorkspaceSource>,
     ) -> Result<SessionId, PortError> {
         // 授权先于任何本机读取与文件系统访问（与其余用例入口同款；broker 内部还会再授权一次，
         // 对本地 actor 恒成功、不重复写审计）。否则未授权调用方能借解析结果的差异探测「别名是否
@@ -303,15 +309,21 @@ impl UseCases {
             .authorize(actor, "session.create", None, &request_id)
             .await
             .map_err(Denied::into_port_error)?;
-        if let Some(alias) = workspace_alias {
-            let record = self
-                .config
-                .workspace(&alias)
-                .await?
-                .ok_or(PortError::InvalidRequest(
-                    "workspace alias is not registered on this node",
-                ))?;
-            request.workspace = Some(resolve_workspace(&alias, record.canonical_path())?);
+        match workspace {
+            Some(WorkspaceSource::Alias(alias)) => {
+                let record =
+                    self.config
+                        .workspace(&alias)
+                        .await?
+                        .ok_or(PortError::InvalidRequest(
+                            "workspace alias is not registered on this node",
+                        ))?;
+                request.workspace = Some(resolve_workspace(&alias, record.canonical_path())?);
+            }
+            Some(WorkspaceSource::Path(path)) => {
+                request.workspace = Some(resolve_client_workspace(&path)?);
+            }
+            None => {}
         }
         self.broker
             .create_session(actor, &request_id, &request_fingerprint, request)
@@ -397,16 +409,17 @@ impl UseCases {
     /// 分别调 `SessionStore::list` 与 `RemoteDeliveryStore::list_sessions` 再自行拼接，就会出现**第二条
     /// 可见性判定路径**（`MODULE_ARCHITECTURE.md` §5 的单一判定点原则）。
     ///
-    /// **为什么也不走 [`UseCases::require_local`]**：本入口服务的是入站设备的快照读取，它带 `actor`，可见性
-    /// 由 `Broker::authorize` 按设备 scope（`session.list`）判定；`require_local` 只服务本机 CLI 的管理读面，
-    /// 把设备读取塞进那条守卫既会放开本机管理面、又会让设备侧失去 scope 判定（§10.2 的命令级 scope）。
+    /// **为什么也不走 [`UseCases::require_local`]**：本入口服务的是入站设备的快照读取，它带 `actor`；
+    /// `require_local` 只服务本机 CLI 的管理读面，把设备读取塞进那条守卫会放开本机管理面。设备方向已经
+    /// 没有可见性过滤（`pairing-model`：设备不再有授权维度），因此 `actor` 在这里只用来区分「已认证设备」
+    /// 与其它主体（节点仍要按 Export/grant 判定）。
     ///
     /// 本入口因此：
     ///
     /// 1. 先按 `session.list` 走 `Broker::authorize`——与 [`UseCases::list_sessions`] **逐字同口径**
-    ///    （同一个命令名、同一个 broker 判定、同一个 `authorization.scope_denied`）：本层不写任何 scope
-    ///    判定。设备侧的会话可见性开关就是它（`session.list` 在设备 scope 面上），授权先于本层的任何读取，
-    ///    未授权时不读会话/索引存储、也不返回任何会话；
+    ///    （同一个命令名、同一个 broker 判定、同一个 `authorization.scope_denied`）：本层不写任何授权
+    ///    判定。设备主体恒通过（设备不再有 scope 面），节点主体仍按 `grant.observe` 判定；授权先于本层的
+    ///    任何读取，未授权时不读会话/索引存储、也不返回任何会话；
     /// 2. 自有条目直接取 `SessionStore::list`：`workspace` 因此取自该会话行**持久化**的
     ///    `workspace_alias`（§3.6 的决定原文，含「不得按 `workspace_cwd` 反查」）——本层不重算归属；
     /// 3. `include_imported` 为真时才取 `RemoteDeliveryStore::list_sessions` 的行并投影成**同一形状**的
@@ -461,17 +474,19 @@ impl UseCases {
     ///
     /// **守卫与 [`UseCases::sync_visible_sessions`] 逐字同口径**：先按 `session.list` 走
     /// `Broker::authorize`（同一个命令名、同一个 broker 判定、同一个 `authorization.scope_denied`——本层
-    /// 不写任何 scope 判定）。授权**先于**本层的任何读取，因此无权设备连一次只读视图都不会开，一条事件
-    /// 也读不出（不是「读出来再丢掉」）。**为什么在 [`UseCases::require_local`] 之外**：与
-    /// `sync_visible_sessions` 同一条理由——本入口服务的是**入站设备**的读取，可见性只能是设备 scope
+    /// 不写任何授权判定）。授权**先于**本层的任何读取，因此无权主体连一次只读视图都不会开，一条事件
+    /// 也读不出（不是「读出来再丢掉」）。设备主体恒通过（设备不再有授权维度）、节点主体仍按
+    /// `grant.observe` 判定。**为什么在 [`UseCases::require_local`] 之外**：与
+    /// `sync_visible_sessions` 同一条理由——本入口服务的是**入站对端**的读取
     /// （`require_local` 保护的是本机 CLI/桌面入口的管理读面，放宽它会连带打开 `devices`/
     /// `profiles`/`workspaces` 那一批，风险面远大于需求）。
     ///
     /// 本层**不**投影：`event` 帧的每个字段都由 [`SyncReplaySlice`] 的条目承载（core 不做 JSON
     /// 序列化，`MODULE_ARCHITECTURE.md` §8），因此不另立用例级类型；`remoteOrigin` 是唯一例外——本读面
     /// 只返回 owned 事件，按 §9.6 它恒为 `null`（imported 事件的跳数与来源由投递层的 imported 路径另行
-    /// 投影）。按 scope 过滤事件（以及由此产生的合法序号空洞）与四类 cursor 判定都是投递层的事：
-    /// `server::sync` 的投递面负责把本层给出的这一页变成「可见事件 + `sync.caught_up`」，本层只如实给出
+    /// 投影）。**设备方向的投递集合就是本层给出的这一页全部**：不再有按授权的可见性过滤
+    /// （`pairing-model`），因此也不会再由过滤产生序号空洞；四类 cursor 判定仍是投递层的事：
+    /// `server::sync` 的投递面负责把本层给出的这一页变成「事件 + `sync.caught_up`」，本层只如实给出
     /// 存储上按 `global_sequence` 升序的一页。
     ///
     /// **返回错误即要求投递层显式失败关闭**：存储行得不出唯一设备/节点 id 时（见
@@ -741,24 +756,22 @@ impl UseCases {
 
     /// 写入设备记录（`device.add` 与身份层共用）：状态与审计同一事务（§11.2 第 6 条）。
     ///
-    /// 只有「已存行的 scopes 发生变化」才写 `device.scopes_changed`：没有登记「设备新建」类安全动作，
-    /// 由配对确认路径负责写 `pairing.approved`。
+    /// **不写任何授权相关审计**：设备记录不再有授权集合（`pairing-model` 删除设备权限层），因此
+    /// `device.scopes_changed` 这条安全动作不可能再发生（`AuditAction` 里保留它只为读回升级前的库里的
+    /// 历史行）。设备新建也没有对应的安全动作——它由 `device.add` 这类本机管理操作发起，而「涉及已登记
+    /// 安全动作的写集才必须带审计」；与身份建立相关的那两条留痕分别是
+    /// [`UseCases::record_device_connected`]（`device.authenticated`）与配对落定
+    /// （`pairing.approved`）。
     pub async fn put_device(&self, actor: &Actor, record: DeviceRecord) -> Result<(), PortError> {
         self.require_local(actor)?;
         let at = self.clock.now();
-        let existing = self.trust.device(record.device_id()).await?;
-        let audits = match &existing {
-            Some(old) if old.scopes() != record.scopes() => vec![self.pending_audit(
-                actor,
-                AuditAction::DeviceScopesChanged,
-                k_device(record.device_id()),
-            )],
-            _ => Vec::new(),
-        };
         self.trust
             .put_device(DeviceWrite {
                 record,
-                context: WriteContext { at, audit: audits },
+                context: WriteContext {
+                    at,
+                    audit: Vec::new(),
+                },
             })
             .await
     }
@@ -1125,17 +1138,15 @@ impl UseCases {
             .await?
             .ok_or_else(|| PortError::NotFound(k_device(device_id)))?;
         let at = self.clock.now();
-        // 归因取**持久化** scopes（而不是调用方自报）：本入口没有 actor 参数，审计行的 actor 只能由
-        // 选中这一行的读取本身给出。
+        // 归因只由**持久化**身份给出（本入口没有 actor 参数）：设备行里的 id 即主体，设备方向不再有
+        // 任何授权集合，因此审计行的 actor 就是一个裸 `Actor::Device`。
         let actor = Actor::Device {
             device: device_id.clone(),
-            scopes: existing.scopes().clone(),
         };
         let record = DeviceRecord::try_new(
             existing.device_id().clone(),
             existing.display_name(),
             existing.public_key_fingerprint().clone(),
-            existing.scopes().clone(),
             existing.state(),
             existing.created_at().clone(),
             Some(at.clone()),
@@ -1176,14 +1187,13 @@ impl UseCases {
     /// **持久化**记录读出。`require_local` 保护的是本机 CLI 的**管理读面**（`devices`/`device`/…），这里
     /// 不需要它、也不得为它放宽它。
     ///
-    /// **已知设备**：读出该设备的信任行，归因取 `Actor::Device { device: 该行 id, scopes: 该行持久化的
-    /// scopes }`——scopes 一律取持久化值，**不得**取握手自报值（`sync-device-auth`「认证失败的审计留痕」
-    /// 要求 actor 归因取持久化身份）。除该行外零读取，且**零写入**：留痕不推进 `last_seen_at`、不改状态，
-    /// 该行原样留在存储里。
+    /// **已知设备**：读出该设备的信任行，归因取 `Actor::Device { device: 该行 id }`——身份取**持久化**
+    /// 值，**不得**取握手自报值（`sync-device-auth`「认证失败的审计留痕」要求 actor 归因取持久化身份）。
+    /// 设备方向不再有授权集合，因此 actor 里也没有任何集合字段可填。除该行外零读取，且**零写入**：留痕不
+    /// 推进 `last_seen_at`、不改状态，该行原样留在存储里。
     ///
-    /// **未知设备**：**同样写出这一行**，归因取 `Actor::Device { device: device_id.clone(), scopes:
-    /// ScopeSet::empty() }`。空集是这里唯一可用且**不来自握手自报值**的取值：没有持久行可读，编造任何
-    /// scopes 都等于把对端自报的能力写进审计。**设备未知时不得返回 `NotFound`**（这一点与
+    /// **未知设备**：**同样写出这一行**，归因取 `Actor::Device { device: device_id.clone() }`（没有任何
+    /// 集合字段可以从自报值里编造出来）。**设备未知时不得返回 `NotFound`**（这一点与
     /// [`UseCases::record_device_connected`] 刻意不同，那个入口的整行写集要求行存在）：未配对设备发起握手
     /// 并失败是最常见的失败场景，正是本入口存在的主要理由；返回 `NotFound` 会让调用方无处留痕，而
     /// 「未知 → 错误 / 已知 → 成功」的响应差异还会变成一个**设备存在性预言机**（`sync-device-auth`「未知
@@ -1194,16 +1204,11 @@ impl UseCases {
     /// 直接用 `AuditStore::append` 追加即可。成功路径的 `device.authenticated` 由
     /// [`UseCases::record_device_connected`] 的收尾写集承担，两者**不得互相替代**。
     pub async fn record_device_auth_failure(&self, device_id: &DeviceId) -> Result<(), PortError> {
-        // 归因取**持久化**身份：能读到设备行就用该行的 scopes；读不到也不回退到任何自报值，而是用空集。
-        let actor = match self.trust.device(device_id).await? {
-            Some(row) => Actor::Device {
-                device: device_id.clone(),
-                scopes: row.scopes().clone(),
-            },
-            None => Actor::Device {
-                device: device_id.clone(),
-                scopes: crate::model::ScopeSet::empty(),
-            },
+        // 归因只由 id 给出：设备方向没有集合字段，因此这里的 actor 形状与「该 id 有没有持久行」无关，
+        // 也就不必读那一行——审计行的 actor_kind/actor_id 两列在两种情形下逐字相同（未知设备不得因
+        // 差异被区分出来）。
+        let actor = Actor::Device {
+            device: device_id.clone(),
         };
         let at = self.clock.now();
         let record = AuditRecord::try_new(
@@ -2032,6 +2037,41 @@ fn resolve_workspace(alias: &WorkspaceAlias, path: &str) -> Result<ResolvedWorks
     ResolvedWorkspace::try_new(alias.clone(), text.to_owned()).map_err(PortError::from)
 }
 
+/// 客户端提供的目录 → 已解析的 workspace（**没有别名**，仅 Sync 面）。
+///
+/// 失败分类是 `sync-session-create`「目录校验与失败分类」的增量要求，与 [`resolve_workspace`]
+/// 刻意不同（那里的输入是本机**已登记**的目录，因此任何失败都是本机配置问题）：
+///
+/// - **形状不合法**（空、相对路径、含 `..` 组件）是**参数类**错误（`InvalidRequest`）且判定顺序
+///   在文件系统访问**之前**——形状非法的输入 MUST NOT 触碰文件系统；
+/// - **形式合法但解析不了**（不存在、不是目录、`canonicalize` 失败、权限不足）是**服务端不可用类**
+///   （[`UnavailableKind::IoError`]），不得降级为参数错误。
+///
+/// 两类都不创建会话、不启动进程、不回退到任何替代目录。本函数**不查**别名登记表、也**不登记**新目录：
+/// 未登记目录不得因此被接受为别名（`workspace-resolution`），解析结果因此没有别名，该会话呈现为
+/// 「未分组」。返回值只带规范化路径，路径本身不得进事件、错误 `details` 或审计前像。
+fn resolve_client_workspace(path: &str) -> Result<ResolvedWorkspace, PortError> {
+    let candidate = std::path::Path::new(path);
+    if path.is_empty()
+        || !candidate.is_absolute()
+        || candidate
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(PortError::InvalidRequest(
+            "the workspace path must be an absolute path without parent references",
+        ));
+    }
+    let io = || PortError::Unavailable(UnavailableKind::IoError);
+    let metadata = std::fs::metadata(candidate).map_err(|_| io())?;
+    if !metadata.is_dir() {
+        return Err(io());
+    }
+    let canonical = std::fs::canonicalize(candidate).map_err(|_| io())?;
+    let text = canonical.to_str().ok_or_else(io)?;
+    ResolvedWorkspace::at_path(text.to_owned()).map_err(PortError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -2332,7 +2372,8 @@ mod tests {
         }
     }
 
-    /// §4/§6.5：查询命令也走授权，且不产生副作用；`LocalCli` 是本地管理入口。
+    /// §4/§6.5：查询命令也走同一个入口，且不产生副作用；`LocalCli` 是本地管理入口，设备方向则没有命令级
+    /// 授权判定（`pairing-model`：通过认证即可执行）。
     #[test]
     fn query_command_is_authorized_without_side_effects() {
         let fixture = fixture();
@@ -2358,22 +2399,19 @@ mod tests {
         ));
         assert_eq!(fixture.world.commit_count(), 0, "查询不落盘");
 
-        let denied = Actor::Device {
+        // 设备方向没有命令级授权判定（`pairing-model`）：同一个查询对一台从未被授予任何 scope 的已认证
+        // 设备照常被接受，同样不落盘、也不写任何拒绝审计。旧实现会以 `authorization.scope_denied` 拒绝它。
+        let device = Actor::Device {
             device: DeviceId::new(&uuid_text(41)).expect("uuid"),
-            scopes: ScopeSet::empty(),
         };
-        let error = block_on(fixture.use_cases.submit_command(&denied, command)).expect_err("拒绝");
-        assert!(
-            matches!(error, PortError::InvalidRequest(reason) if reason == "authorization.scope_denied"),
-            "拒绝必须来自 core 的 scope 判定"
-        );
-        let audits = fixture.world.audits();
-        assert_eq!(audits.len(), 1, "拒绝记一条审计");
-        assert_eq!(
-            audits[0].action(),
-            crate::model::AuditAction::AuthorizationDenied
-        );
-        assert_eq!(audits[0].outcome(), crate::model::AuditOutcome::Denied);
+        let accepted =
+            block_on(fixture.use_cases.submit_command(&device, command)).expect("submit");
+        assert!(matches!(
+            accepted,
+            CommandReceipt::Accepted { turn: None, .. }
+        ));
+        assert_eq!(fixture.world.commit_count(), 0, "查询不落盘");
+        assert!(fixture.world.audits().is_empty(), "没有拒绝就没有审计行");
     }
 
     /// §4：`session.list` 返回 core 类型（wire 投影留给适配器）。
@@ -2436,14 +2474,13 @@ mod tests {
 
     /// Sync WP1（任务 1.3）：快照的 `sessions` 资源来源把**自有与已导入合并**后交给设备——自有条目排在
     /// 前、`workspace` 取会话行持久化的别名；imported 条目按调用方传入的 feature 协商结果纳入、`workspace`
-    /// 恒为 `None`（表里没有该列，不得推导）、`online` 取调用方传入的可达性事实；无 `session.list` 的设备
-    /// 一行也拿不到。
+    /// 恒为 `None`（表里没有该列，不得推导）、`online` 取调用方传入的可达性事实。设备不再有授权维度，
+    /// 因此任何已认证设备都拿得到自己的全部会话（`pairing-model`）。
     #[test]
     fn sync_visible_sessions_merges_owned_and_imported() {
         let fixture = fixture();
         let actor = Actor::Device {
             device: DeviceId::new(&uuid_text(241)).expect("device"),
-            scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
         };
 
         // 第二条自有会话：带一条**持久化**的目录别名（`workspace` 的唯一来源）。
@@ -2618,29 +2655,38 @@ mod tests {
         assert_eq!(narrowed.len(), 1);
         assert_eq!(narrowed[0].session_id(), &owned);
 
-        // 设备 scope 不含 `session.list`：整个入口失败关闭，一行也不返回。
-        let denied = Actor::Device {
+        // 设备方向不再有按授权的可见性过滤（`pairing-model`）：一台从未被授予任何 scope 的已认证设备
+        // 拿到的仍是同一份完整清单（自有 + 已导入），一行不少——这与旧实现「无 scope 即失败关闭」相反，
+        // 因此本断言可独立变红。
+        let same_device = Actor::Device {
             device: DeviceId::new(&uuid_text(246)).expect("device"),
-            scopes: ScopeSet::empty(),
         };
-        let error = block_on(
-            fixture
-                .use_cases
-                .sync_visible_sessions(&denied, query, |_| true),
-        )
-        .expect_err("无权设备不得读取任何会话");
-        assert!(
-            matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
-            "与 list_sessions 同一授权口径，得到 {error:?}"
-        );
+        let all = block_on(fixture.use_cases.sync_visible_sessions(
+            &same_device,
+            query.clone(),
+            |reference| reference == &remote,
+        ))
+        .expect("已认证设备必须读得到全部会话");
+        let mut all_ids: Vec<&str> = all
+            .iter()
+            .map(|summary| summary.session_id().as_str())
+            .collect();
+        let mut sessions_ids: Vec<&str> = sessions
+            .iter()
+            .map(|summary| summary.session_id().as_str())
+            .collect();
+        all_ids.sort_unstable();
+        sessions_ids.sort_unstable();
+        assert_eq!(all_ids, sessions_ids, "设备维度不得再过滤任何会话：{all:?}");
     }
 
     /// 1.6（Sync 事件读面）：`SYNC_PROTOCOL.md` §10.1 的 `event` 帧所需的字段由
     /// [`UseCases::sync_replay`] 如实带回——**五个** `origin.kind` 原样往返、`origin.deviceId` 只经
     /// `causation` 回查**设备命令行**得到、`origin.nodeId` 只经同一条 `causation` 回查**节点命令行**
     /// 得到（两者互斥，其余来源即便带同一个 causation 也不回填）、`causationRequestId` 原样（含
-    /// `None`）；窗口按 `global_sequence` 升序、严格在 `after` 之后、受 `limit` 限制；无 `session.list`
-    /// 授权时失败关闭且**一次读都不发生**。
+    /// `None`）；窗口按 `global_sequence` 升序、严格在 `after` 之后、受 `limit` 限制。设备不再有授权维度
+    /// （`pairing-model`），因此这一页对任何已认证设备都照常给出；未授权的主体（节点方向）仍失败关闭且
+    /// **一次读都不发生**。
     #[test]
     fn sync_replay_roundtrips_origin_and_requires_session_list_scope() {
         let fixture = fixture();
@@ -2684,7 +2730,6 @@ mod tests {
             idempotency: Some(IdempotencyRecord {
                 actor: Actor::Device {
                     device: device.clone(),
-                    scopes: ScopeSet::empty(),
                 },
                 request: request.clone(),
                 command: "session.prompt".to_owned(),
@@ -2727,7 +2772,6 @@ mod tests {
 
         let actor = Actor::Device {
             device: DeviceId::new(&uuid_text(311)).expect("device"),
-            scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
         };
         let slice = block_on(
             fixture
@@ -2835,21 +2879,23 @@ mod tests {
             "一页取满 limit 条即停，续读由调用方按最后一条的 globalSequence 发起"
         );
 
-        // 设备 scope 不含 `session.list`：失败关闭，且**连读视图都不开**（不是「读出来再丢掉」）。
+        // 授权**先于**读取：未获授权的主体连一次只读视图都不开、一条事件也读不出（不是「读出来再丢掉」）。
+        // 设备方向已无授权判定，因此这条守卫的判别力现在落在节点面——设备侧的对应判据是上面的「同一个
+        // 读面对任何已认证设备都照常给出这一页」（`pairing-model`）。
         let reads = fixture
             .world
             .read_views
             .load(std::sync::atomic::Ordering::SeqCst);
-        let denied = Actor::Device {
-            device: DeviceId::new(&uuid_text(312)).expect("device"),
-            scopes: ScopeSet::empty(),
+        let denied = Actor::Node {
+            node: NodeId::new(&uuid_text(312)).expect("node"),
+            access_node: NodeId::new(&uuid_text(313)).expect("access node"),
         };
         let error = block_on(
             fixture
                 .use_cases
                 .sync_replay(&denied, None, ReplayLimit::new(10)),
         )
-        .expect_err("无 session.list 授权的设备不得读取任何事件");
+        .expect_err("未授权的节点主体不得读取任何事件");
         assert!(
             matches!(&error, PortError::InvalidRequest(code) if *code == "authorization.scope_denied"),
             "与 sync_visible_sessions/list_sessions 同一授权口径，得到 {error:?}"
@@ -2908,7 +2954,6 @@ mod tests {
 
         let authorized = Actor::Device {
             device: DeviceId::new(&uuid_text(324)).expect("device"),
-            scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
         };
 
         // ① `causation` 为空：连回查的键都没有。
@@ -3032,12 +3077,16 @@ mod tests {
             .expect("自己的命令可见");
         assert_eq!(record.status(), crate::model::CommandStatus::Completed);
 
+        // 幂等键是协议维度的 `(actor, requestId)`：别的设备看不到这条命令。设备方向不再有命令级授权
+        // 判定，因此这里的差别只来自**归因**（而不是「未授权即拒绝」）。
         let other = Actor::Device {
             device: DeviceId::new(&uuid_text(42)).expect("uuid"),
-            scopes: ScopeSet::empty(),
         };
-        let hidden = block_on(fixture.use_cases.command_status(&other, request)).expect_err("拒绝");
-        assert!(matches!(hidden, PortError::InvalidRequest(_)));
+        let hidden = block_on(fixture.use_cases.command_status(&other, request)).expect("status");
+        assert!(
+            hidden.is_none(),
+            "别的设备不得看到这条命令，得到 {hidden:?}"
+        );
     }
 
     /// §11.9：别名 → 规范化绝对路径；相对路径、含 `..` 的输入、不存在路径与非目录一律 `IoError`。
@@ -3046,7 +3095,7 @@ mod tests {
         let alias = WorkspaceAlias::new("repo").expect("alias");
         let root = temp_dir(&format!("acpr-ws-{}", uuid_text(11)));
         let resolved = resolve_workspace(&alias, root.to_str().expect("path")).expect("resolve");
-        assert_eq!(resolved.alias(), &alias);
+        assert_eq!(resolved.alias(), Some(&alias));
         assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());
 
         let file = root.join("notes.txt");
@@ -3126,7 +3175,7 @@ mod tests {
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(alias),
+            Some(WorkspaceSource::Alias(alias)),
         ))
         .expect("create");
 
@@ -3193,7 +3242,7 @@ mod tests {
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(alias.clone()),
+            Some(WorkspaceSource::Alias(alias.clone())),
         ))
         .expect("create");
         (session, alias, dir)
@@ -3593,16 +3642,16 @@ mod tests {
     }
 
     /// §5.1：授权先于一切本机读取——未授权时既不读会话行也不触碰文件系统，且与会话是否存在
-    /// 不可区分。
+    /// 不可区分。设备方向已无授权判定（`pairing-model`），因此这条守卫的判别力落在节点面。
     #[test]
     fn resume_session_authorizes_before_reading_the_session_row() {
         let (fixture, _workspace, _) = resume_fixture("resume-denied");
-        let device = Actor::Device {
-            device: crate::model::DeviceId::new(&uuid_text(52)).expect("device"),
-            scopes: ScopeSet::empty(),
+        let node = Actor::Node {
+            node: crate::model::NodeId::new(&uuid_text(52)).expect("node"),
+            access_node: crate::model::NodeId::new(&uuid_text(53)).expect("access node"),
         };
         let error = block_on(fixture.use_cases.resume_session(
-            &device,
+            &node,
             resume_request_id(7),
             digest('R'),
             fixture.session.clone(),
@@ -3862,7 +3911,9 @@ mod tests {
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(WorkspaceAlias::new("ghost").expect("alias")),
+            Some(WorkspaceSource::Alias(
+                WorkspaceAlias::new("ghost").expect("alias"),
+            )),
         ))
         .expect_err("unregistered alias must be rejected");
         assert!(matches!(error, PortError::InvalidRequest(_)));
@@ -3889,13 +3940,111 @@ mod tests {
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(alias),
+            Some(WorkspaceSource::Alias(alias)),
         ))
         .expect_err("a missing workspace directory must fail");
         assert!(matches!(
             error,
             PortError::Unavailable(UnavailableKind::IoError)
         ));
+    }
+
+    /// Sync 面的目录来源分类（`sync-session-create`「目录校验与失败分类」）：**形状**不合法是参数类
+    /// 错误且不触碰文件系统（用一个**不存在**但形状合法的路径反证「先形状、后 IO」的顺序——它得到
+    /// 的是不可用类而不是参数类），形式合法但解析不了才是服务端不可用类。
+    #[test]
+    fn resolve_client_workspace_classifies_shape_and_resolution_failures_apart() {
+        // 形状不合法：相对路径、含 `..`、空串——都在文件系统访问之前拒绝，因此与路径是否存在无关。
+        for shape in ["relative/repo", "../repo", ""] {
+            assert!(
+                matches!(
+                    resolve_client_workspace(shape),
+                    Err(PortError::InvalidRequest(_))
+                ),
+                "{shape} 必须以参数类错误拒绝"
+            );
+        }
+        // 含 `..` 的**绝对**路径同样属于形状错误（不能靠「先看存在性」蒙混过去：它确实存在）。
+        let parent_ref = std::env::temp_dir().join("sub").join("..");
+        assert!(matches!(
+            resolve_client_workspace(parent_ref.to_str().expect("path")),
+            Err(PortError::InvalidRequest(_))
+        ));
+        // 形式合法但不存在：不可用类（若实现顺序颠倒成「先 metadata」，上面那条断言仍会绿，而这条会红）。
+        let missing = std::env::temp_dir().join(format!("acpr-absent-{}", uuid_text(13)));
+        assert!(matches!(
+            resolve_client_workspace(missing.to_str().expect("path")),
+            Err(PortError::Unavailable(UnavailableKind::IoError))
+        ));
+        // 形式合法但是文件而不是目录：同样是不可用类。
+        let file = std::env::temp_dir().join(format!("acpr-file-{}", uuid_text(14)));
+        std::fs::write(&file, b"not a directory").expect("write file");
+        assert!(matches!(
+            resolve_client_workspace(file.to_str().expect("path")),
+            Err(PortError::Unavailable(UnavailableKind::IoError))
+        ));
+        let _ = std::fs::remove_file(&file);
+        // 形式合法且是目录：解析成功，且**没有别名**（未登记目录不得因此被接受为别名）。
+        let dir = temp_dir(&format!("acpr-client-path-{}", std::process::id()));
+        let resolved = resolve_client_workspace(dir.to_str().expect("path")).expect("resolve");
+        assert!(resolved.alias().is_none());
+        assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());
+        let _ = std::fs::remove_dir_all(&*dir);
+    }
+
+    /// Sync 面的目录来源**不落盘别名**（`workspace-resolution`：别名只在解析出别名时写入）：会话行
+    /// 的规范化路径照常落盘，归属则呈现为「未分组」，且目录**不被登记**进 workspace 目录表。
+    #[test]
+    fn create_session_with_a_client_directory_persists_the_path_without_an_alias() {
+        let fixture = fixture();
+        fixture.world.set_agent_session_id(
+            crate::model::AgentSessionId::new("acp-session-client-path").expect("agent session id"),
+        );
+        let dir = temp_dir(&format!("acpr-client-create-{}", std::process::id()));
+        let canonical = std::fs::canonicalize(&*dir)
+            .expect("canonicalize")
+            .to_str()
+            .expect("path")
+            .to_owned();
+        let before = block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
+            .expect("workspaces")
+            .len();
+
+        let created = block_on(fixture.use_cases.create_session(
+            &Actor::LocalCli,
+            create_session_request_id(),
+            digest('A'),
+            create_request(),
+            Some(WorkspaceSource::Path(canonical.clone())),
+        ))
+        .expect("create");
+
+        let state = lock(&fixture.world.state);
+        assert_eq!(
+            state
+                .recoveries
+                .get(created.as_str())
+                .and_then(|columns| columns.workspace_cwd.clone()),
+            Some(canonical),
+            "规范化路径按本次解析结果落盘"
+        );
+        assert!(
+            !state.workspace_aliases.contains_key(created.as_str()),
+            "客户端提供的目录不得落盘别名（未分组）"
+        );
+        drop(state);
+        assert!(
+            projected_workspace(&fixture, &created).is_none(),
+            "归属投影是「未分组」，MUST NOT 按路径反查别名补齐"
+        );
+        assert_eq!(
+            block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
+                .expect("workspaces")
+                .len(),
+            before,
+            "客户端提供的目录不得被登记进 workspace 目录表"
+        );
+        let _ = std::fs::remove_dir_all(&*dir);
     }
 
     /// §11.6：`import.remove` 只走一次写集（管理行 + 关联行 + 交付索引 + 命令引用），
@@ -4248,6 +4397,7 @@ mod tests {
 
     /// §5.1：授权先于 workspace 解析。未授权的 `session.create` 必须得到授权类错误，而不是
     /// 「别名已登记但目录缺失」的 `Unavailable(IoError)`——否则本机登记状态与文件系统成为预言机。
+    /// 设备方向已无授权判定（`pairing-model`），因此这条守卫的判别力落在节点面。
     #[test]
     fn create_session_authorizes_before_resolving_the_workspace() {
         let fixture = fixture();
@@ -4267,16 +4417,16 @@ mod tests {
         .expect("workspace record");
         block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
 
-        let actor = Actor::Device {
-            device: DeviceId::new(&uuid_text(51)).expect("device"),
-            scopes: ScopeSet::empty(),
+        let actor = Actor::Node {
+            node: NodeId::new(&uuid_text(51)).expect("node"),
+            access_node: NodeId::new(&uuid_text(53)).expect("access node"),
         };
         let error = block_on(fixture.use_cases.create_session(
             &actor,
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(alias.clone()),
+            Some(WorkspaceSource::Alias(alias.clone())),
         ))
         .expect_err("an unauthorized actor must be denied");
         match error {
@@ -4437,7 +4587,6 @@ mod tests {
             id.clone(),
             "phone",
             crate::model::Fingerprint::new(&"b".repeat(64)).expect("fingerprint"),
-            ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
             state,
             crate::broker::test_support::ts(30),
             last_seen_at,
@@ -4480,7 +4629,7 @@ mod tests {
         assert_eq!(
             view.device.as_ref().map(DeviceRecord::state),
             Some(DeviceState::Active),
-            "信任行（凭据状态与 scopes 的来源）只能来自该设备自己的行"
+            "信任行（凭据状态的来源）只能来自该设备自己的行"
         );
         assert_eq!(view.public_key, Some(key), "验签公钥只能来自持久化信任");
         assert_eq!(
@@ -4557,25 +4706,20 @@ mod tests {
         assert_eq!(&first.context.at, &now, "状态列与写集 at 同源");
         // 除 `last_seen_at` 外的每一列都必须原样透传：本层不重造记录、不改状态、不碰撤销时间。
         assert_eq!(first.record.display_name(), "phone");
-        assert_eq!(
-            first.record.scopes(),
-            &ScopeSet::try_from_iter(["session.list"]).expect("scopes")
-        );
         assert_eq!(first.record.state(), DeviceState::Active);
         assert_eq!(
             first.record.created_at(),
             &crate::broker::test_support::ts(30)
         );
         assert_eq!(first.record.revoked_at(), None);
-        // 审计：动作、目标与归因（actor 的 scopes 取**持久化**值）。
+        // 审计：动作、目标与归因（设备方向没有授权集合，actor 因此只有 id）。
         assert_eq!(first.context.audit.len(), 1, "收尾写集恰好一条审计");
         let audit = &first.context.audit[0];
         assert_eq!(audit.action, AuditAction::DeviceAuthenticated);
         assert_eq!(audit.target, EntityRef::Device(device.clone()));
         assert!(
-            matches!(&audit.actor, Actor::Device { device: id, scopes }
-                if id == &device && scopes == &ScopeSet::try_from_iter(["session.list"]).expect("scopes")),
-            "归因是该设备本身，scopes 取持久化值"
+            matches!(&audit.actor, Actor::Device { device: id } if id == &device),
+            "归因是该设备本身"
         );
 
         // 已有更早的 `last_seen_at`：本层照常提交 `Some(now)`（第二次调用拿 `ts(1)`），**不得**改用
@@ -4635,29 +4779,21 @@ mod tests {
         );
     }
 
-    /// Sync WP1（任务 1.5）：**已知**设备认证失败写出 `device.auth_failed`——动作/目标/结果正确，归因取
-    /// **持久化**的设备行（id + scopes），且这条留痕零写入（不推进 `last_seen_at`、不改状态）。
+    /// Sync WP1（任务 1.5）：**已知**设备认证失败写出 `device.auth_failed`——动作/目标/结果正确、归因是该
+    /// 设备本身，且这条留痕零写入（既不推进 `last_seen_at`、也不改状态）。
     ///
-    /// 该行刻意取一组比 `hello` 可能自报的取值更**具体**的 scopes：本入口根本没有 scopes 入参，这个值只能
-    /// 来自持久化行——归因若取自握手自报值就不可能逐字等于它（同款字段见 [`device_record`]）。
+    /// 设备方向不再有授权集合（`pairing-model`），归因因此只剩 id：本入口不读设备行、也不依赖行里的任何
+    /// 其它内容（这正是它不必读那一行的原因），写出的一行与「已知/未知」无关。
     #[test]
-    fn record_device_auth_failure_attributes_a_known_device_from_persistence() {
+    fn record_device_auth_failure_writes_one_row_attributed_to_the_device() {
         let (fixture, trust) = fixture_with_device_trust();
         let device = DeviceId::new(&uuid_text(231)).expect("device");
-        let persisted = ScopeSet::try_from_iter(["session.list", "session.read"]).expect("scopes");
-        trust.devices.lock().expect("lock").push(
-            DeviceRecord::try_new(
-                device.clone(),
-                "phone",
-                crate::model::Fingerprint::new(&"b".repeat(64)).expect("fingerprint"),
-                persisted.clone(),
-                DeviceState::Active,
-                crate::broker::test_support::ts(30),
-                None,
-                None,
-            )
-            .expect("device record"),
-        );
+        trust.devices.lock().expect("lock").push(device_record(
+            &device,
+            DeviceState::Active,
+            None,
+            None,
+        ));
 
         block_on(fixture.use_cases.record_device_auth_failure(&device)).expect("留痕");
 
@@ -4671,9 +4807,8 @@ mod tests {
         assert_eq!(record.local_principal_ref(), None);
         assert_eq!(record.detail_digest(), None, "细分失败原因不进审计行");
         assert!(
-            matches!(record.actor(), Actor::Device { device: id, scopes }
-                if id == &device && scopes == &persisted),
-            "归因取持久化 id 与 scopes，得到 {:?}",
+            matches!(record.actor(), Actor::Device { device: id } if id == &device),
+            "归因是该设备本身，得到 {:?}",
             record.actor()
         );
         assert!(
@@ -4682,10 +4817,11 @@ mod tests {
         );
     }
 
-    /// Sync WP1（任务 1.5）：**未知**设备的认证失败同样留痕——不是 `NotFound`、不是零写入；归因只按自报的
-    /// `deviceId`、scopes 取空集（不取自握手的任何自报值）。它与已知设备返回**同一个** `Ok`、写出形状相同
-    /// 的一行，因此响应里没有可用于探测设备是否存在的差异；这是本入口与 [`UseCases::record_device_connected`]
-    /// 「行不存在即 `NotFound`」的刻意差异（那个入口要写整行，本入口只追加一行审计）。
+    /// Sync WP1（任务 1.5）：**未知**设备的认证失败同样留痕——不是 `NotFound`、不是零写入；归因只按
+    /// `deviceId`（设备方向没有授权集合，所以不存在「取自握手的自报能力」的余地）。它与已知设备返回
+    /// **同一个** `Ok`、写出形状相同的一行，因此响应里没有可用于探测设备是否存在的差异；这是本入口与
+    /// [`UseCases::record_device_connected`]「行不存在即 `NotFound`」的刻意差异（那个入口要写整行，本入口
+    /// 只追加一行审计）。
     #[test]
     fn record_device_auth_failure_records_an_unknown_device_without_self_reported_values() {
         let (fixture, trust) = fixture_with_device_trust();
@@ -4715,9 +4851,8 @@ mod tests {
         assert_eq!(record.local_principal_ref(), None);
         assert_eq!(record.detail_digest(), None);
         assert!(
-            matches!(record.actor(), Actor::Device { device: id, scopes }
-                if id == &unknown && scopes.is_empty()),
-            "未知设备只能按自报 id 归因、scopes 取空集而不是任何自报能力，得到 {:?}",
+            matches!(record.actor(), Actor::Device { device: id } if id == &unknown),
+            "未知设备只能按自报 id 归因，得到 {:?}",
             record.actor()
         );
         assert!(
@@ -5342,7 +5477,6 @@ mod tests {
         };
         let device = Actor::Device {
             device: DeviceId::new(&uuid_text(63)).expect("device"),
-            scopes: ScopeSet::empty(),
         };
         seed_pairing(
             &fixture.world,
@@ -5449,7 +5583,6 @@ mod tests {
         };
         let device = Actor::Device {
             device: DeviceId::new(&uuid_text(69)).expect("device"),
-            scopes: ScopeSet::empty(),
         };
         for denied in [&other, &device] {
             let error = block_on(fixture.use_cases.pairing_channel_view(denied, &pairing))
@@ -5529,7 +5662,6 @@ mod tests {
         let device = DeviceId::new(&uuid_text(71)).expect("device");
         let actor = Actor::Device {
             device: device.clone(),
-            scopes: ScopeSet::empty(),
         };
         let pairing = PairingId::new(&uuid_text(72)).expect("pairing");
         seed_pairing(
@@ -5625,7 +5757,6 @@ mod tests {
         // 类别对但 id 不同 / 类别不同：对端不符。
         let wrong_device = Actor::Device {
             device: DeviceId::new(&uuid_text(93)).expect("device"),
-            scopes: ScopeSet::empty(),
         };
         assert!(matches!(
             block_on(fixture.use_cases.consume_pairing(&wrong_device, &pairing)),
@@ -5652,7 +5783,6 @@ mod tests {
         let device = DeviceId::new(&uuid_text(101)).expect("device");
         let actor = Actor::Device {
             device: device.clone(),
-            scopes: ScopeSet::empty(),
         };
         let pending = PairingId::new(&uuid_text(102)).expect("pairing");
         seed_pairing(

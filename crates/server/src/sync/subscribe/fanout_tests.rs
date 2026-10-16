@@ -158,7 +158,7 @@ async fn fan_out_one(
 #[tokio::test]
 async fn a_live_event_is_delivered_after_the_barrier() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let (route, registry, mut receiver) = bar_connection(&world, &[]).await;
 
@@ -188,7 +188,7 @@ async fn a_live_event_is_delivered_after_the_barrier() {
 #[tokio::test]
 async fn a_connection_without_a_barrier_receives_no_live_event() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let route = Arc::new(world.route(Arc::new(Reachability(true))));
     let (handle, mut receiver) = fixture::connection(DEVICE);
@@ -221,7 +221,7 @@ async fn a_connection_without_a_barrier_receives_no_live_event() {
 #[tokio::test]
 async fn a_read_failure_skips_the_event_instead_of_forging_it() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let (route, registry, mut receiver) = bar_connection(&world, &[]).await;
 

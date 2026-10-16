@@ -25,8 +25,8 @@
  * - **最近活动时间**：`latestActivityAt` 由 feature 层取该目录下会话 `updatedAt` 的**最大值**
  *   （卡片不做任何比较，只把值画出来）；`null`/缺省表示该目录没有会话，**不呈现**该元素，
  *   也不拿当前时间顶替。
- * - **「⊕ 新建」**：`onCreate` 为 `null`/缺省时不呈现（是否呈现由调用方按权限决定，
- *   卡片刻意不认权限——判定留在 feature 层）。
+ * - **「⊕ 新建」**：`onCreate` 为 `null`/缺省时不呈现。设备不再有创建会话的权限维度后，
+ *   页面无条件给出回调，卡片刻意不认权限——判定本就不该在这里。
  */
 
 import type { ReactElement, ReactNode } from "react";
@@ -46,7 +46,7 @@ export interface DirectoryCardProps {
   readonly onOpen: () => void;
   /** 「查看全部 N 个 ›」入口；`null` 表示不呈现（是否呈现由调用方按内联上限决定）。 */
   readonly onOpenAll: (() => void) | null;
-  /** 「⊕ 新建」入口；`null`/缺省表示不呈现（调用方按权限决定）。 */
+  /** 「⊕ 新建」入口；`null`/缺省表示不呈现（页面无条件给出，不再有权限维度）。 */
   readonly onCreate?: (() => void) | null;
   readonly children?: ReactNode;
 }
@@ -277,8 +277,8 @@ export function DirectoryCard({
             {formatLatestActivity(latestActivityAt)}
           </Text>
         )}
-        {/* 目录内创建会话：与详情页的创建入口共用同一条命令与同一份权限判定，
-            因此这里只是个入口回调——是否给出由调用方按权限决定。 */}
+        {/* 目录内创建会话：与详情页的创建入口共用同一条命令；设备不再有创建权限维度，
+            因此这里只是个入口回调——页面无条件给出。 */}
         {onCreate === null ? null : (
           <Pressable
             role="button"

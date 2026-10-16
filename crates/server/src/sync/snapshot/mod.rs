@@ -42,7 +42,8 @@ use crate::sync::subscribe::NegotiatedFeatures;
 
 /// 组装一次快照所需的调用方判定（本模块不自己决定这三件事）。
 pub struct SnapshotInputs<'a> {
-    /// 设备侧 actor：`sessions` 资源的授权（`session.list`）与 scope 过滤都在 core 内完成。
+    /// 设备侧 actor：只用于区分「已认证设备」与其它主体（设备方向没有可见性过滤，节点主体仍按
+    /// Export/grant 判定，判定在 core 内完成）。
     pub actor: &'a Actor,
     /// 本次连接的 feature 协商结果（目录资源与 imported 会话的门控）。
     pub features: &'a NegotiatedFeatures,
@@ -116,8 +117,8 @@ pub async fn plan(
     let Some(wire_barrier) = wire_cursor(cursor) else {
         return Err(PortError::Corrupt("snapshot cursor"));
     };
-    // `sessions`：自有 + 已导入（已导入仅在协商 `resource.remote-origin.v1` 时纳入）、已按设备 scope
-    // 过滤。授权判定在 core（`Broker::authorize("session.list")`），本层不重算。
+    // `sessions`：自有 + 已导入（已导入仅在协商 `resource.remote-origin.v1` 时纳入）；设备方向不再有
+    // 按授权的过滤，本层因此只做投影，不重算任何可见性。
     let include_imported = inputs.features.contains(REMOTE_ORIGIN_FEATURE);
     let query = SyncSessionQuery {
         include_imported,

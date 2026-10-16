@@ -645,12 +645,13 @@ impl World {
     }
 
     /// 预置一条设备信任行（`sync_device_handshake_view` 的唯一读面）。
-    pub(crate) fn seed_device(&self, device: &str, scopes: &[&str]) {
+    ///
+    /// 设备不再有授权集合（`pairing-model` 删除设备权限层），因此没有 scopes 参数。
+    pub(crate) fn seed_device(&self, device: &str) {
         let record = DeviceRecord::try_new(
             acp_core::model::DeviceId::new(device).expect("device id"),
             "Test Phone",
             acp_core::model::Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
-            acp_core::model::ScopeSet::try_from_iter(scopes.iter().copied()).expect("scopes"),
             DeviceState::Active,
             timestamp("2026-09-18T09:12:03.412Z"),
             None,

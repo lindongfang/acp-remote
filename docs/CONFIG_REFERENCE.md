@@ -1,8 +1,9 @@
 # ACP Remote 配置参考
 
 > 状态：编码前基线
-> 版本：0.11
-> 日期：2026-10-15
+> 版本：0.12
+> 日期：2026-10-16
+> 修订记录（2026-10-16，0.12，`pairing-model`）：§9 的 Import 说明去掉「本地客户端能做什么由设备 scope 决定」这一口径（设备权限层已删除：已认证设备即可执行本节点命令，设备方向没有授权维度），远程侧仍由 Import 的 `grants` 与 Owner 的 Export 决定。**配置键名、类型与默认值均未变**（仍以本节为唯一权威）；限流与协议上限仍是固定 v1 常量。
 > 修订记录（2026-09-18）：补充 `daemon.tls.*`、`daemon.local_admin.endpoint`、`logging.*` 与 Owner 侧 `[[exports]]`（原先只有 Access 侧 `[[imports]]`）；明确限流与协议上限是固定 v1 常量而非配置键。
 > 修订记录（2026-09-18，0.3）：`[[exports]].grants` 更名为 `scopes`，与 Node Link Export 模型及本地通道 `ExportView` 同名同义（Access 侧 `[[imports]].grants` 是另一概念，不变）。
 > 修订记录（2026-09-18，0.4）：新增 `storage.audit_retention_days`（默认 365），审计清理排在容量顺序最后。
@@ -189,7 +190,7 @@ grants = ["grant.observe", "grant.interact"]
 ```
 
 - `grant.*` 取值以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准；有效权限是 `Owner grant ∩ Access local grant ∩ runtime capability`。
-- 本地客户端能做什么由 Access 自己的设备 scope 决定，Import 记录只描述远程侧授权。
+- 本地客户端能做什么由 Access 节点自己的设备信任决定（设备通过认证即可执行本节点命令，设备方向没有授权维度），Import 记录只描述远程侧授权。
 
 ### `exports`（Owner 侧）
 

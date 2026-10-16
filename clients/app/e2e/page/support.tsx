@@ -149,6 +149,15 @@ export function expectNone(haystack: string, needles: readonly string[], detail:
   for (const needle of needles) expectAbsent(haystack, needle, detail);
 }
 
+/**
+ * 创建入口的权限门控类文案。
+ *
+ * 设备方向不再有「创建会话的权限」这一维度：这些说法（连同 `data-create-permission-note` 之类的
+ * 标记）一个都不该再出现。词表放在这里而不是各用例文件各写一份，是为了让目录页、目录详情页与
+ * 创建弹层三处的负向断言查的是**同一份**词表——各写一份的结果必然是慢慢只剩一处还在查。
+ */
+export const PERMISSION_GATE_VOCABULARY = ["创建权限", "创建会话的权限", "电脑端授予"] as const;
+
 /** 一条检查的结果。 */
 export interface CheckResult {
   readonly name: string;

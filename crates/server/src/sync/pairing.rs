@@ -96,7 +96,6 @@ use identity_auth::{
     ClaimedPairing, ClientKind, P1363Signature, PAIRING_MAX_FAILURES, PairingError, PairingProof,
     PairingRequestMaterial, RequestedCapabilities, SyncPairingHostProof, SyncPairingStatus,
 };
-use sync_protocol::auth::Scopes;
 use sync_protocol::common::{
     Base64Url, NonEmptyText, Nullable, ProtocolVersionV1, RawObject, Timestamp, Uuid,
 };
@@ -354,11 +353,13 @@ impl PairingHttp {
                         ErrorCode::AuthOriginMismatch,
                         ORIGIN_MISMATCH_MESSAGE,
                     ),
-                    // 集合越界在 Sync 面不可达（请求集合恒等于登记集合，见上面 `requested` 的说明）；仍然
-                    // 具名映射而不是与证明失败混同，以免将来它变得可达时对外语义错位。
+                    // 集合越界在 Sync 面不可达（claim 载荷没有集合字段，且登记值恒为空集，见上面 `requested`
+                    // 的说明）；仍然具名映射而不是与证明失败混同，以免将来它变得可达时对外语义错位。
+                    // 用 `protocol.schema_invalid` 而不是 `authorization.scope_denied`：后者保留给节点侧
+                    // grant 与本地通道，设备方向不产生它（`pairing-model`）。
                     ClaimRejection::CapabilitiesExceedRegistered => (
-                        StatusCode::FORBIDDEN,
-                        ErrorCode::AuthorizationScopeDenied,
+                        StatusCode::BAD_REQUEST,
+                        ErrorCode::ProtocolSchemaInvalid,
                         "the claim requests capabilities outside the registered set",
                     ),
                     // 结构（与目标族不符）、证明无效、失败计数达上限：统一 401，响应不区分是哪一个。
@@ -515,7 +516,7 @@ impl PairingHttp {
         let peer_view = view.peer.as_ref().map(|peer| claimed_pairing(record, peer));
         let state = self
             .authority
-            .pairing_status(record, peer_view.as_ref(), None)
+            .pairing_status(record, peer_view.as_ref())
             .state;
         let status = status_token(&self.authority, &input.pairing, state);
         // ⑥ 证明校验：本机仍持有该配对的 secret 时一律先验 proof（终态也一样），失败 → 401（§7.3）。
@@ -568,8 +569,10 @@ impl PairingHttp {
             .verify_sync_pairing_status(&status, &input.proof)
     }
 
-    /// 组装 `statusResponse`（§7.3）：`approved` 带设备的非秘密元数据（标识、展示名、已授予的 scope）与
-    /// 本节点身份材料，不签发任何凭据；其余状态只带状态与过期时间。
+    /// 组装 `statusResponse`（§7.3）：`approved` 带该设备的**非秘密元数据**（标识、展示名）与本节点
+    /// 身份材料（`hostId` 与主机公钥），不签发任何凭据、**不返回任何授权集合**（设备权限层已删除）；
+    /// 其余状态只带状态与过期时间。主机公钥是本机身份材料的原文，客户端据此与配对载荷里的那把逐字节
+    /// 比对（响应本身没有主机签名）。
     async fn status_body(
         &self,
         record: &PairingRecord,
@@ -582,8 +585,8 @@ impl PairingHttp {
             let PeerIdentity::Device(device_id) = peer.id() else {
                 return None;
             };
-            // 设备行是「授予的 scope」与展示名的唯一来源（`owned_device`，确认事务创建）；本入口是未认证
-            // 的窄读面，不带 `require_local`（`design.md` D2）。
+            // 设备行是展示名的唯一来源（`owned_device`，确认事务创建）；本入口是未认证的窄读面，
+            // 不带 `require_local`（`design.md` D2）。
             let device = self
                 .core
                 .sync_device_handshake_view(device_id)
@@ -595,7 +598,6 @@ impl PairingHttp {
                 Some(DeviceBlock {
                     device_id: Uuid::parse(device.device_id().as_str()).ok()?,
                     name: NonEmptyText::parse(device.display_name()).ok()?,
-                    scopes: wire_scopes(device.scopes())?,
                 }),
                 Some(HostBlock {
                     host_id: Uuid::parse(self.authority.local_node().as_str()).ok()?,
@@ -796,9 +798,10 @@ impl StatusInput {
     }
 }
 
-/// 持久化的对端行 → 状态机的对端视图（唯一用途：`verify_claim` 的幂等比对输入与状态视图的 SAS 入参）。
+/// 持久化的对端行 → 状态机的对端视图（唯一用途：`verify_claim` 的幂等比对与状态视图的入参）。
 ///
-/// `requested` 取配对行登记的集合：与 [`ClaimFields`] 的构造同源。
+/// `requested` 取配对行登记的集合：与 [`ClaimFields`] 的构造同源（设备方向的登记值恒为空集，
+/// 本协议不派生短验证码，因此这里也没有任何 SAS 材料）。
 fn claimed_pairing(record: &PairingRecord, peer: &PairingPeer) -> ClaimedPairing {
     ClaimedPairing {
         pairing: record.id().clone(),
@@ -1049,15 +1052,6 @@ fn base64url_text<const BYTES: usize>(value: &Base64Url<BYTES>) -> String {
     encode_base64url(value.as_bytes())
 }
 
-/// `auth`/`status` 响应里的 `scopes` 形状。
-///
-/// `Scopes` 只提供反序列化这一条构造路径（它自己承担去重与非空文本校验），因此这里经一次 JSON 往返：
-/// 失败即本机接线错误（例如 scope 名超过 128 字符），调用方按内部不可用失败关闭。
-fn wire_scopes(scopes: &acp_core::model::ScopeSet) -> Option<Scopes> {
-    let text = serde_json::to_string(&scopes.iter().collect::<Vec<&str>>()).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
 /// 限流拒绝（§14/§12.2）：`retryAfterMs` 是 `resource.rate_limited` 唯一登记的 `details` 字段。
 fn rate_limited(retry_after: Duration) -> HttpResponse {
     let correlation = correlation_id();
@@ -1296,11 +1290,7 @@ mod tests {
                 .router()
                 .handle(admin_request(
                     Method::DevicePairBegin,
-                    json!({
-                        "requestedPacks": [],
-                        "requestedScopes": ["session.list"],
-                        "expiresInMs": expires_in_ms,
-                    }),
+                    json!({"expiresInMs": expires_in_ms}),
                 ))
                 .await;
             let result = success(&response);
@@ -1367,13 +1357,13 @@ mod tests {
         }
 
         /// 本机用户确认该配对（`device.pair.confirm`，`approved`）。
-        async fn approve(&self, pairing: &Pairing, scopes: Value) {
+        async fn approve(&self, pairing: &Pairing) {
             let response = self
                 .world
                 .router()
                 .handle(admin_request(
                     Method::DevicePairConfirm,
-                    json!({"pairingId": pairing.id, "scopes": scopes}),
+                    json!({"pairingId": pairing.id}),
                 ))
                 .await;
             let _ = success(&response);
@@ -2228,15 +2218,19 @@ mod tests {
             "未批准的状态必须不带 device/host（§7.3）"
         );
 
-        // ② approved：设备非秘密元数据 + 已授予的 scope + 本节点身份材料。
-        harness.approve(&pending, json!(["session.list"])).await;
+        // ② approved：设备的非秘密元数据 + 本节点身份材料（**不含任何授权集合**）。
+        harness.approve(&pending).await;
         let approved = query_status(&harness, &pending, &request_id, &nonce_text(0x22)).await;
         assert_eq!(approved.status, 200);
         let body = approved.json();
         assert_eq!(body["status"], json!("approved"));
         assert_eq!(body["device"]["deviceId"], json!(DEVICE));
         assert_eq!(body["device"]["name"], json!("Zhang's Phone"));
-        assert_eq!(body["device"]["scopes"], json!(["session.list"]));
+        assert!(
+            body["device"].get("scopes").is_none(),
+            "已批准响应不得返回任何授权集合：{}",
+            body["device"]
+        );
         assert_eq!(body["host"]["hostId"], json!(HOST));
         assert_eq!(
             body["host"]["hostPublicKey"]
@@ -2277,21 +2271,14 @@ mod tests {
         //    （与连接面的收尾同口径：actor 归因取 `owned_device` 的持久记录，不取自对端自报值）。
         let consumed = harness.begin().await;
         let consumed_id = claimed(&harness, &consumed, 0x27).await;
-        harness.approve(&consumed, json!(["session.list"])).await;
-        let scopes = harness
-            .world
-            .trust
-            .device(DEVICE)
-            .expect("批准后必须存在设备行")
-            .scopes()
-            .clone();
+        harness.approve(&consumed).await;
+        // 设备 actor 只由 id 构成（设备不再有授权集合），与连接面的收尾同口径。
         let consumed_record = harness
             .world
             .core
             .consume_pairing(
                 &Actor::Device {
                     device: device(DEVICE),
-                    scopes,
                 },
                 &pairing_id(&consumed.id),
             )

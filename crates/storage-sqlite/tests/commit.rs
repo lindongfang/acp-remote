@@ -39,7 +39,6 @@ fn actor() -> Actor {
     Actor::Device {
         device: acp_core::model::DeviceId::new("55555555-5555-4555-8555-555555555555")
             .expect("device id"),
-        scopes: acp_core::model::ScopeSet::empty(),
     }
 }
 

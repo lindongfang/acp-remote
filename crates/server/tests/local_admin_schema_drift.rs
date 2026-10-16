@@ -379,7 +379,7 @@ fn fixtures_behave_as_declared() {
                         "envAllowlist",
                         "default",
                     ],
-                    "valid/request-device-pair-confirm.json" => &["pairingId", "scopes"],
+                    "valid/request-device-pair-confirm.json" => &["pairingId"],
                     // §5.7 的方法只登记了名字，无参数（`{}`）。
                     "valid/request-node-rotate-key-begin.json" => &[],
                     other => panic!("未登记的请求 fixture：{other}"),

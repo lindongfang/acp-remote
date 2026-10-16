@@ -203,6 +203,7 @@ pub struct SessionUpdate {
     pub workspace_cwd: Option<String>,
     /// `owned_session.workspace_alias`：`None` = 不改该列。与 `workspace_cwd` 在**同一次提交**里写入，
     /// 取值是本次创建解析使用的**别名原文**（`ResolvedWorkspace::alias()`，不依赖后端回报），此后只读。
+    /// 来源是客户端提供的目录时该次解析**没有别名**，本列因此保持 `NULL`（「未分组」）。
     ///
     /// 写入后**只有读取路径**消费它（`SessionStore::list` 投影出 `SessionSummary::workspace`）；
     /// 恢复流程既不读也不改它（`SessionRecoveryRecord` 里没有这一项，§3.6）。`None` 语义为「未分组」，

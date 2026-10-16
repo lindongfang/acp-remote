@@ -14,7 +14,7 @@
 //!   `delivery = mvp` 的五条（本切片实现），逐条常量在此登记并有契约测试比对。
 
 use acp_core::model::{
-    GrantSet, NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity, ScopeSet,
+    GrantSet, NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity,
 };
 use acp_core::use_cases::NodeLinkHandshakeView;
 use identity_auth::{ConnectionBinding, CredentialStatus, FeatureList, NodeEndpoint, PeerTrust};
@@ -144,7 +144,6 @@ pub fn peer_trust(view: &NodeLinkHandshakeView, node: &NodeId) -> PeerTrust {
             .as_ref()
             .map(|pairing| pairing.host_binding().to_owned()),
         node_kind: view.node.as_ref().map(NodeRecord::kind),
-        scopes: ScopeSet::empty(),
         grants,
     }
 }
@@ -213,7 +212,7 @@ fn origin_authority(origin: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_core::model::{PairingId, PairingTarget};
+    use acp_core::model::{PairingId, PairingTarget, ScopeSet};
     use node_link_protocol::common::{Base64Url, NodeKind as WireNodeKind, Uuid};
 
     fn hello(supported: &[&str], required: &[&str]) -> NodeHello {

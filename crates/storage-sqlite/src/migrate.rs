@@ -14,12 +14,12 @@ use sqlx::{Executor, Sqlite};
 
 use crate::error::StorageError;
 
-/// §7.2：`PRAGMA user_version` = 文件格式版本（v7：`owned_event.origin_kind` 的 CHECK 从四值扩到五值
-/// ——新增 `node`；v6 追加的目录归属列 `workspace_alias` 与 v5 的两列保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 7;
-/// §7.2：`meta.owned_schema_version` 的已知版本（v7 只动 `owned_event` 的 CHECK）。
-pub const OWNED_SCHEMA_VERSION: i64 = 7;
-/// §7.2：`meta.imported_schema_version` 的已知版本（v5/v6/v7 都只动 owned 家族）。
+/// §7.2：`PRAGMA user_version` = 文件格式版本（v8：删除 `owned_device.scopes_json` —— 设备不再有授权
+/// 集合；v7 追加的 `owned_event.origin_kind` 第五取值、v6 追加的目录归属列与 v5 的两列保持不变）。
+pub const FILE_FORMAT_VERSION: i64 = 8;
+/// §7.2：`meta.owned_schema_version` 的已知版本（v8 只删 `owned_device` 的一列）。
+pub const OWNED_SCHEMA_VERSION: i64 = 8;
+/// §7.2：`meta.imported_schema_version` 的已知版本（v5–v8 都只动 owned 家族）。
 pub const IMPORTED_SCHEMA_VERSION: i64 = 3;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
@@ -203,7 +203,6 @@ CREATE TABLE IF NOT EXISTS owned_device (
   display_name  TEXT NOT NULL,
   public_key    BLOB NOT NULL,                 -- 65 字节 SEC1 未压缩 P-256
   fingerprint   TEXT NOT NULL,                 -- 64 字符小写 hex = SHA-256(public_key)
-  scopes_json   TEXT NOT NULL,                 -- 展开后的 scope（= 命令名）数组，空集合写 '[]'
   state         TEXT NOT NULL CHECK (state IN ('pending','active','revoked')),
   created_at    TEXT NOT NULL,
   last_seen_at  TEXT,
@@ -750,6 +749,25 @@ INSERT INTO owned_interaction (interaction_id, session_id, kind, request_event, 
 DROP TABLE owned_interaction_stage;
 "#;
 
+/// §7.2 的 v7 → v8 升级：删除 `owned_device.scopes_json`（设备不再有授权集合）。
+///
+/// **只删一列，不做 12-step 表重建**：重建的唯一理由是改既有 CHECK（v2 → v3 的先例），而这一列既不在任何
+/// CHECK / 索引 / 外键 / 生成列里，也没有表引用 `owned_device`，因此 `ALTER TABLE DROP COLUMN` 足够；
+/// 它同样把列从表的列顺序里去掉，升级库与新建库的 `pragma table_info` 因此逐项相等（§9 判据 18/28）。
+///
+/// **为什么值直接丢弃而不是留空**：留存旧值等于让「设备权限」这一维度以数据形式继续存在——升级库里的
+/// 旧 scope 集合不再有任何语义，却会被任何读原始库的人（含未来的读取路径）当成授权来源。设备记录不再
+/// 有授权集合（`AGENTS.md` §4 的安全不变量），因此这里连同取值一起删除。
+///
+/// **本段不动任何审计 CHECK**：`device.scopes_changed` 作为**历史取值**保留在 `owned_audit`/
+/// `imported_audit` 的 `action` CHECK 里——升级前的库可能已经有这类行，收缩 CHECK 会让这些行写不回去、
+/// 读不出来（`core::model::AuditAction` 与 `docs/SECURITY_DESIGN.md` §14.2 同款保留并标注「不再产生」）。
+///
+/// 本段不碰 `imported_*`（imported 家族版本保持 3），也不碰任何行与序号。
+const V8_UPGRADE_OWNED: &str = r#"
+ALTER TABLE owned_device DROP COLUMN scopes_json;
+"#;
+
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
 ///
 /// 配置加载属 `app`；本结构只承载 `storage-sqlite` 需要知道的部分（`storage.flush_interval_ms` 不在
@@ -1058,9 +1076,10 @@ fn expect_ok(results: Vec<String>) -> Result<(), StorageError> {
 /// 打开不产生任何 DDL、行级或版本写入（§9.1 的逐字节幂等）。
 ///
 /// 事务内每段升级另有自己的版本守卫（`file_version < N`，见函数体），因此老库连续升级、而「已经比某段
-/// 新」的库不会重跑那一段的 12-step 重建。v4 段另外只作用于**升级前就存在**的 `owned_node`（v1 库没有
-/// 这张表，它由 DDL 常量直接建成当前形状）；v5/v6 两段的追加对象 `owned_session` 与 v7 段的重建对象
-/// `owned_event` 是「升级库 vs 新建库」的判据本身，走升级分支即必然已存在（v1 起每代都有这两张表）。
+/// 新」的库不会重跑那一段的 12-step 重建。v4/v8 两段另外只作用于**升级前就存在**的表（`owned_node`/
+/// `owned_device`；v1 库没有这两张表，它们由 DDL 常量直接建成当前形状）；v5/v6 两段的追加对象
+/// `owned_session` 与 v7 段的重建对象 `owned_event` 是「升级库 vs 新建库」的判据本身，走升级分支即必然
+/// 已存在（v1 起每代都有这两张表）。
 pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, StorageError> {
     let mut tx = write.begin_with("BEGIN IMMEDIATE").await?;
 
@@ -1073,9 +1092,11 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         });
     }
     let new_database = !table_exists(&mut *tx, "owned_session").await?;
-    // v4 段只给**升级前就存在**的 `owned_node` 追加列：v1 库没有这张表，它由下面的 DDL 常量按**当前
-    // 形状**（已含 `export_ids_json`）建出来，那时再 `ALTER TABLE ADD COLUMN` 就是重复列。
+    // v4 段只给**升级前就存在**的 `owned_node` 追加列、v8 段只从**升级前就存在**的 `owned_device` 删列：
+    // v1 库没有这两张表，它们由下面的 DDL 常量按**当前形状**建出来（已含 `export_ids_json`、已不含
+    // `scopes_json`），那时再 `ALTER TABLE` 就是重复列或缺失列。
     let owned_node_pre_existing = table_exists(&mut *tx, "owned_node").await?;
+    let owned_device_pre_existing = table_exists(&mut *tx, "owned_device").await?;
     // v5/v6 两段的追加对象是 `owned_session`，而它正是「库是升级库还是新建库」的判据：走升级分支就说明它
     // 在 DDL 常量执行前已经存在（v1 起每代都有这张表），因此这两段不再单独探测。
 
@@ -1101,11 +1122,12 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
     }
 
     if !new_database && file_version < FILE_FORMAT_VERSION {
-        // v1 → v2 → v3 → v4 → v5 → v6 → v7（§7.2 的连续升级）：两张审计表的 CHECK 扩宽、`imported_import`
-        // 的拆分与 `owned_event.origin_kind` 的扩宽必须在同一个事务里完成，否则会留下「新建库可写新取值、
-        // 升级库不可写」的不一致状态（§11.8 第 7 条）。SQLite 不能修改既有 CHECK，因此 v2/v3 两段与 v7 段
-        // 都是 12-step 表重建，且把全部行（含 `audit_id`/`global_sequence`）一起搬过去；v4 段只往
-        // `owned_node` 加列、v5/v6 两段只往 `owned_session` 加列（都不重建）。
+        // v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8（§7.2 的连续升级）：两张审计表的 CHECK 扩宽、`imported_import`
+        // 的拆分、`owned_event.origin_kind` 的扩宽与 `owned_device` 的删列必须在同一个事务里完成，否则会留下
+        // 「新建库可写新取值、升级库不可写」或「列形状不一致」的状态（§11.8 第 7 条）。SQLite 不能修改既有
+        // CHECK，因此 v2/v3 两段与 v7 段都是 12-step 表重建，且把全部行（含 `audit_id`/`global_sequence`）
+        // 一起搬过去；v4 段只往 `owned_node` 加列、v5/v6 两段只往 `owned_session` 加列、v8 段只从
+        // `owned_device` 删一列（都不重建）。
         //
         // 每段都有自己的版本守卫（`file_version < N`）：升级判据是 `file_version < FILE_FORMAT_VERSION`，
         // 不守卫的段会在「文件格式已经比该段新、但仍低于最新版」时重复执行那些 12-step 重建——例如
@@ -1133,6 +1155,9 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
         }
         if file_version < 7 {
             sqlx::raw_sql(V7_UPGRADE_OWNED).execute(&mut *tx).await?;
+        }
+        if file_version < 8 && owned_device_pre_existing {
+            sqlx::raw_sql(V8_UPGRADE_OWNED).execute(&mut *tx).await?;
         }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;

@@ -7,8 +7,9 @@
 //! schema 与 Rust 类型的逐条相等由既有 `tests/schema_drift.rs` 承担。本文件**不重复**整套门禁，只补
 //! `session.resume` 特有的三条断言：
 //!
-//! 1. 该命令在机器词表里的 `kind`/`grant`/`pack`/`transport`/`delivery` 取值（R27：按
-//!    `grant.remote-work` 判定授权、不新增授权维度；D6：`pack: null` 只落在 node_link-only 命令上）；
+//! 1. 该命令在机器词表里的 `kind`/`grant`/`scope`/`transport`/`delivery` 取值（R27：按
+//!    `grant.remote-work` 判定授权、不新增授权维度；授权包维度 `pack` 已随 `pairing-model` 从命令
+//!    词表删除，因此该行**不含** `pack` 键）；
 //! 2. `payload` 恒为 `{}`——**任何**键都在解码边界被拒（R34）；
 //! 3. `expectedVersion` 必须 `null`、`sessionRef`/`attachmentId`/`attachmentGeneration` 必须非 `null`
 //!    （R27/R34 的 session-scoped 与版本规则）。
@@ -83,8 +84,8 @@ fn the_command_catalog_row_matches_the_wire_contract() {
         "scope 是命令名本身（不是新的一类权限）"
     );
     assert!(
-        row["pack"].is_null(),
-        "D6：transport 不含 sync 的命令允许 pack = null（本命令只在 node_link 上可达）"
+        row.get("pack").is_none(),
+        "授权包维度已随 pairing-model 从命令词表删除：本行必须**不含** `pack` 键（不是 pack = null）"
     );
     assert_eq!(
         row["transport"],

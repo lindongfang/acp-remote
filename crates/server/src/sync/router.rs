@@ -264,7 +264,7 @@ mod tests {
     /// 带一条本地会话与一条 imported 索引行的世界（两个可选资源各有一个来源）。
     fn world_with_optional_resources() -> World {
         let world = World::new();
-        world.seed_device(DEVICE, &["session.list"]);
+        world.seed_device(DEVICE);
         world.store.set_head(cursor(EPOCH, 7));
         world.seed_workspace("project", "Project", &fixture::workspace_path());
         world.store.push_session(fixture::core_session(

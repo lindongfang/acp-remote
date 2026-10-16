@@ -656,10 +656,8 @@ fn config_option_requires_current_value_to_match_kind() {
 
 #[test]
 fn client_command_validates_family_session_and_version() {
-    let scopes = ScopeSet::try_from_iter(["session.prompt"]).expect("scopes");
     let actor = Actor::Device {
         device: DeviceId::from_str(UUID_B).expect("device"),
-        scopes,
     };
     let command = ClientCommand {
         actor,
@@ -1465,13 +1463,11 @@ fn actor_exposes_the_storage_identity_columns() {
     let device = DeviceId::from_str(UUID_B).expect("device");
     let actor = Actor::Device {
         device: device.clone(),
-        scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
     };
     assert_eq!(actor.kind(), ActorKind::Device);
     assert_eq!(actor.kind().as_str(), "device");
     assert_eq!(actor.id_text(), UUID_B);
     assert_eq!(actor.device_id(), Some(&device));
-    assert_eq!(actor.scopes().map(ScopeSet::len), Some(1));
 
     let node = NodeId::from_str(UUID_A).expect("node");
     let access = NodeId::from_str(UUID_C).expect("access");
@@ -1486,7 +1482,6 @@ fn actor_exposes_the_storage_identity_columns() {
         "composite idempotency key"
     );
     assert_eq!(node_actor.node_ids(), Some((&node, &access)));
-    assert!(node_actor.scopes().is_none());
 
     let cli = Actor::LocalCli;
     assert!(cli.is_local_cli());
@@ -1496,8 +1491,8 @@ fn actor_exposes_the_storage_identity_columns() {
     assert_eq!(ActorKind::from_str("local_cli"), Err(InvalidValue::Field));
 }
 
-/// design D12：配对认领方是第四个 `Actor` 变体，且绑定一个配对——它既不带 scopes，也不是设备/节点，
-/// 只靠 `pairing()` 让用例面判定授权。
+/// design D12：配对认领方是第四个 `Actor` 变体，且绑定一个配对——它既不是设备/节点，也不带任何授权
+/// 集合，只靠 `pairing()` 让用例面判定授权。
 #[test]
 fn pairing_claimant_actor_is_bound_to_one_pairing() {
     let pairing = PairingId::from_str(UUID_C).expect("pairing");
@@ -1508,7 +1503,6 @@ fn pairing_claimant_actor_is_bound_to_one_pairing() {
     assert_eq!(claimant.kind().as_str(), "pairing_claimant");
     assert_eq!(claimant.id_text(), UUID_C, "审计行的 actor_id 即该配对 id");
     assert_eq!(claimant.pairing(), Some(&pairing));
-    assert!(claimant.scopes().is_none());
     assert!(claimant.device_id().is_none());
     assert!(claimant.node_ids().is_none());
     assert!(!claimant.is_local_cli());
@@ -1527,7 +1521,6 @@ fn device_record_ties_revocation_state_to_timestamp() {
         device.clone(),
         "Zhang's Phone",
         fingerprint(),
-        ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
         DeviceState::Active,
         ts(T0),
         Some(ts(T1)),
@@ -1545,7 +1538,6 @@ fn device_record_ties_revocation_state_to_timestamp() {
             device.clone(),
             "Phone",
             fingerprint(),
-            ScopeSet::empty(),
             DeviceState::Active,
             ts(T0),
             None,
@@ -1558,7 +1550,6 @@ fn device_record_ties_revocation_state_to_timestamp() {
             device,
             &"n".repeat(129),
             fingerprint(),
-            ScopeSet::empty(),
             DeviceState::Pending,
             ts(T0),
             None,
@@ -1880,6 +1871,11 @@ fn audit_record_carries_no_content_and_closed_action_set() {
     assert_eq!(
         AuditAction::from_str("node.auth_failed").expect("action"),
         AuditAction::NodeAuthFailed
+    );
+    assert_eq!(
+        AuditAction::from_str("device.scopes_changed").expect("action"),
+        AuditAction::DeviceScopesChanged,
+        "历史取值必须仍可按 token 解码：升级前的库可能有这类审计行"
     );
     assert_eq!(
         AuditAction::from_str("something.else"),
@@ -2427,7 +2423,16 @@ fn local_config_values_enforce_their_invariants() {
         workspace.canonical_path().to_owned(),
     )
     .expect("resolved");
-    assert_eq!(resolved.alias(), workspace.alias());
+    assert_eq!(resolved.alias(), Some(workspace.alias()));
+    assert_eq!(resolved.canonical_path(), workspace.canonical_path());
+    // 客户端提供的目录：没有别名（`workspace-resolution`「别名只在解析出别名时写入」），
+    // 形状口径与 `try_new` 逐条相同。
+    let client_path = ResolvedWorkspace::at_path(workspace.canonical_path().to_owned())
+        .expect("client directory");
+    assert!(client_path.alias().is_none());
+    assert_eq!(client_path.canonical_path(), workspace.canonical_path());
+    assert!(ResolvedWorkspace::at_path("relative/path".to_owned()).is_err());
+    assert!(ResolvedWorkspace::at_path(String::new()).is_err());
     assert!(
         ResolvedWorkspace::try_new(
             WorkspaceAlias::new("acp-remote").expect("alias"),

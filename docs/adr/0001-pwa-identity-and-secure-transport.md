@@ -2,12 +2,13 @@
 
 - 状态：已接受
 - 日期：2026-09-17
+- 修订记录（2026-10-16，`pairing-model`）：**删掉短验证码（SAS）并删除设备权限层**——决策与 Profile 不再含「设备权限」这一维度（设备通过认证即可执行业务命令，撤销整台设备立即生效，跨节点能力仍由 Owner Export grant 约束）；首次配对改为「设备用二维码里固定的主机公钥验证认领响应的 `hostProof`」＋「已批准响应的主机公钥必须与二维码逐字节相同」两条密码学校验，不再派生或展示 SAS。理由（信任锚是配对载荷带外携带主机公钥 + 一次性配对秘密 + 认领 HMAC）与保留边界见 [SECURITY_DESIGN.md](../SECURITY_DESIGN.md) §5.1、§10。
 - 修订记录（2026-09-18）：配对阶段的 proof 与 SAS 为 **HMAC-SHA256**，不是双方 ECDSA 签名（以 [SYNC_PROTOCOL.md](../SYNC_PROTOCOL.md) §7 与 `fixtures/sync/v1/transcripts/pairing-*.json` 的 `hmacSha256` 固定向量为准）；ECDSA P-256 只用于每次 WSS 连接的 challenge-response。下文“首次配对”第 5 步已按此订正。
 - 决策范围：第一阶段 PWA，以及后续 Android/iOS/桌面网络客户端的默认安全 Profile
 
 ## 背景
 
-ACP Remote 不使用应用级云中继，PWA 直接连接一个 ACP Remote 服务节点。页面、Service Worker、WebCrypto、摄像头和 WebSocket 都需要可信 secure context。网络可达和 Tailscale 身份不能替代 ACP Remote 自己的设备身份与权限。本 ADR 只约束 PWA/设备到节点的 Sync 连接；节点间 Node Link 使用独立身份与 transcript。
+ACP Remote 不使用应用级云中继，PWA 直接连接一个 ACP Remote 服务节点。页面、Service Worker、WebCrypto、摄像头和 WebSocket 都需要可信 secure context。网络可达和 Tailscale 身份不能替代 ACP Remote 自己的设备/节点身份与授权判定。本 ADR 只约束 PWA/设备到节点的 Sync 连接；节点间 Node Link 使用独立身份与 transcript。
 
 原设计建议使用 Noise 同时完成双向认证与应用层加密。但 PWA 即使使用 Noise，仍需要 HTTPS 才能满足浏览器安全要求；在 WSS 内再实现 Noise 会引入浏览器 WASM、密钥处理、跨语言互操作、framing 和实现审计成本。
 
@@ -18,8 +19,10 @@ ACP Remote 不使用应用级云中继，PWA 直接连接一个 ACP Remote 服�
 ```text
 可信 HTTPS/WSS
 + ECDSA P-256 设备签名 challenge-response
-+ Daemon 设备权限与撤销
++ 设备认证与整台设备撤销
 ```
+
+设备方向**没有授权维度**：通过认证即可执行本节点的业务命令，设备记录不保存授权集合，配对确认页也没有权限栏；边界由「本机用户确认过这台设备」与撤销决定。跨节点的能力上限仍由 Owner Export grant 约束，`local.*` 本地管理能力永不远程授予。
 
 该 Profile 适用于：
 
@@ -100,7 +103,7 @@ repeated(fieldTag, byteLength, rawBytes)
 ```
 
 - 字符串使用 UTF-8，整数使用固定宽度 big-endian，无可选空白和隐式默认值。
-- 每种用途使用不同 `domainTag`，至少包括 pairing proof、pairing SAS、host challenge 和 device proof。
+- 每种用途使用不同 `domainTag`，至少包括 pairing proof、配对状态 HMAC、host challenge 和 device proof。
 - 具体 field tag、整数宽度、上限和测试向量由 `SYNC_PROTOCOL.md` 定义。
 - 未进入规范 transcript 的字段不能参与安全决策。
 
@@ -110,8 +113,8 @@ repeated(fieldTag, byteLength, rawBytes)
 2. 二维码包含 HTTPS endpoint、`hostId`、host public key 与一次性配对数据。
 3. PWA 确认 `window.isSecureContext`，生成不可导出的设备密钥。
 4. PWA 使用 `pairingSecret` 对规范 pairing transcript 计算 HMAC-SHA256 proof，Daemon 验证后才接受设备公钥。
-5. 双方各自用 `pairingSecret` 对包含 Host/设备公钥及随机 nonce 的规范 transcript 计算 HMAC-SHA256 证明，并使用独立 domain tag 从 HMAC-SHA256 结果派生相同的短验证码；用户在服务节点本地确认。配对阶段不使用 ECDSA 签名，`hostProof`/`deviceProof` 的 ECDSA P-256 签名只用于 WSS challenge-response。
-6. Daemon 保存 device public key 与 scopes；为支持 `approved` 状态的可靠轮询，`pairingSecret` 只保留到该设备首次 WSS 认证成功或原过期时间，随后立即清除。它不得延长、复用或转成长期 bearer token。
+5. 双方各自用 `pairingSecret` 对包含 Host/设备公钥及随机 nonce 的规范 transcript 计算 HMAC-SHA256 证明（认领与状态两条 domain），用户在服务节点本地入口确认。配对阶段不使用 ECDSA 签名，`hostProof`/`deviceProof` 的 ECDSA P-256 签名只用于 WSS challenge-response。设备侧对「此后长期使用的主机公钥」的信任由两条密码学校验确立：用二维码里**固定的**主机公钥验证认领响应的 `hostProof`，以及已批准响应里的主机公钥与二维码里的那把**逐字节相同**（状态响应不含任何主机签名）。**不派生、不展示、不校验短验证码**——理由与信任锚见 [SECURITY_DESIGN.md](../SECURITY_DESIGN.md) §5.1。
+6. Daemon 保存 device public key（**设备记录不保存任何授权集合**：配对不授予授权）；为支持 `approved` 状态的可靠轮询，`pairingSecret` 只保留到该设备首次 WSS 认证成功或原过期时间，随后立即清除。它不得延长、复用或转成长期 bearer token。
 
 二维码若使用 URL，秘密数据放在 fragment 而不是 query；PWA 读取后立即从地址栏和历史条目中清除。完整字段、规范编码和错误码在 Sync Protocol 中定义。
 
@@ -123,10 +126,10 @@ repeated(fieldTag, byteLength, rawBytes)
 client.hello
   -> server.challenge + host signature
   -> client.proof + device signature
-  -> server.authenticated + scopes
+  -> server.authenticated
 ```
 
-签名 transcript 至少绑定协议域、版本、`hostId`、`deviceId`、client/server nonce、连接标识和 Web Origin，防止重放、跨主机与跨协议使用。认证后仍对每个业务命令执行 scope、撤销状态和 `requestId` 检查。
+签名 transcript 至少绑定协议域、版本、`hostId`、`deviceId`、client/server nonce、连接标识和 Web Origin，防止重放、跨主机与跨协议使用。认证后仍对每个业务命令检查设备认证状态（连接是否已认证、设备是否已撤销）与 `requestId`；设备方向不再有命令级授权判定（配对不授予授权），跨节点方向仍按 Owner Export grant 判定。
 
 默认 Profile 不给每条业务消息重复签名；认证后的 WSS 连接负责传输机密性与完整性。消息 sequence/counter、ACK 和 `requestId` 继续承担排序、恢复和业务幂等职责。
 
@@ -156,7 +159,7 @@ client.hello
 
 ### 只依赖 TLS 或 Tailscale 身份
 
-不采用。它不能提供稳定的 ACP Remote 设备 ID、细粒度 scope、撤销和 endpoint-independent host identity。
+不采用。它不能提供稳定的 ACP Remote 设备 ID、跨节点 Export grant、撤销和 endpoint-independent host identity。
 
 ### Bearer token 作为长期设备身份
 
@@ -189,7 +192,7 @@ client.hello
 1. Android Chrome、iOS Safari 和桌面浏览器的 secure context、Service Worker、Camera 与 WSS。
 2. P-256 不可导出 `CryptoKey` 在 IndexedDB 中跨刷新和浏览器重启持久化。
 3. Rust 与 WebCrypto 的 P1363 签名、长度前缀 transcript 和固定测试向量互操作。
-4. pairing secret 过期、单次使用、短验证码和本机确认。
+4. pairing secret 过期、单次使用和本机确认；设备侧另验证「认领响应的 `hostProof` 由二维码里固定的主机公钥验证通过」与「已批准响应的主机公钥与二维码逐字节相同」两条失败关闭路径（不再有短验证码）。
 5. challenge 重放、错误设备、设备撤销、Host key 变化和错误 Origin 全部失败。
 6. Tailscale Serve 与至少一种非 Tailscale HTTPS Provider 均可工作。
 7. 同一 PWA 在 Origin 变化后不能读取或迁移旧私钥，并进入重新配对流程。

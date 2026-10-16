@@ -50,7 +50,6 @@ let schemaCount = 0;
 let fixtureCount = 0;
 let reencodedCount = 0;
 let negativeCount = 0;
-let sasCount = 0;
 
 // Registry lookups: domain specs per protocol, plus the tag -> {name, type} table of each
 // protocol (the two tag tables are independent; a tag's meaning never crosses protocols).
@@ -514,26 +513,6 @@ async function checkTranscriptVector(vectorPath, protocol) {
       }
     }
   }
-  // SAS (SYNC_PROTOCOL.md §7.2 / NODE_LINK_PROTOCOL.md §9.4): first 4 bytes of the HMAC output
-  // as u32be, modulo 1_000_000, zero-padded to six digits.
-  if (expected.sas !== undefined) {
-    if (typeof expected.hmacSha256 !== "string") {
-      errors.push(`${label}: expected.sas present without hmacSha256`);
-    } else {
-      const mac = Buffer.from(expected.hmacSha256, "base64url");
-      if (mac.length !== 32) {
-        errors.push(`${label}: hmacSha256 is ${mac.length} bytes, expected 32`);
-      } else {
-        const sas = String(mac.readUInt32BE(0) % 1_000_000).padStart(6, "0");
-        sasCount += 1;
-        if (!/^[0-9]{6}$/.test(String(expected.sas))) {
-          errors.push(`${label}: expected.sas ${expected.sas} is not six decimal digits`);
-        } else if (sas !== expected.sas) {
-          errors.push(`${label}: SAS mismatch, expected ${expected.sas}, recomputed ${sas}`);
-        }
-      }
-    }
-  }
   if (typeof expected.p1363Signature === "string") {
     if (typeof expected.publicKey !== "string") {
       errors.push(`${label}: p1363Signature present without publicKey`);
@@ -556,7 +535,107 @@ async function checkTranscriptVector(vectorPath, protocol) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 已删除词汇的禁词扫描（`pairing-model`：两套 SAS 与整个设备权限层一起删除）
+//
+// 删除资产本身不会让任何既有判据失败，因此这里把「不得回潮」写成判据：登记表、固定向量、schema 与
+// fixture 里再出现这些词汇都会红——这才是删除后的独立断言，而不是「删了就绿」。
+//
+// 范围限于本仓库自有的机器资产（ACP 上游快照不是我们的词汇表，不参与）。判定分两类：
+// - 键名与取值：`sas`/`pack`/`packs`/`presets`/`requestedPacks`/`requestedScopes` 作为键名或字符串
+//   取值出现即失败；`pack.*`/`preset.*` 形态的取值同样失败；`…-sas/v1` 形态的 domain 值失败。
+// - 字段位置：`scopes` 在 Node Link/Export 面仍是合法词汇（grant 集合），只有**设备方向**的
+//   `scopes` 被删，因此那两处按位置断言（属性与 `required` 两处都查）。
+// ---------------------------------------------------------------------------------------------
+
+const ownedAssetRoots = [
+  join(root, "compatibility"),
+  join(root, "schemas", "sync"),
+  join(root, "schemas", "node-link"),
+  join(root, "schemas", "local-admin"),
+  join(root, "schemas", "transcripts"),
+  join(root, "fixtures", "sync"),
+  join(root, "fixtures", "node-link"),
+  join(root, "fixtures", "local-admin"),
+];
+
+const removedVocabulary = new Set(["sas", "pack", "packs", "presets", "requestedPacks", "requestedScopes"]);
+const removedValueShape = /^(pack|preset)\./;
+const sasDomainShape = /[-/]sas\/v1$/;
+
+// 递归收集 JSON 里全部对象键与字符串叶子（附路径）：键名与取值都要看，避免漏判嵌套位置。
+function vocabulary(value, path = "$", found = []) {
+  if (typeof value === "string") {
+    found.push([path, value]);
+    return found;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) vocabulary(item, `${path}[${index}]`, found);
+    return found;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value)) {
+      found.push([`${path}.${key}`, key]);
+      vocabulary(child, `${path}.${key}`, found);
+    }
+  }
+  return found;
+}
+
+// 断言 `pointer` 指向的对象里不再有字段 `name`：三处都查——对象自己携带该成员（fixture 的形态）、
+// 它作为 `properties` 的键（schema 的形态）、它出现在 `required` 里（两种形态都可能）。位置不存在即
+// 失败：那说明这段判据的位置口径已经过期，不能静默通过。
+function assertFieldRemoved(label, path, pointer, name) {
+  const document = readJson(path);
+  const parent = pointer.reduce((value, part) => value?.[part], document);
+  if (!parent || typeof parent !== "object") {
+    errors.push(`${label}: ${relative(root, path)} 的 ${pointer.join("/")} 不存在（判据的位置口径已过期）`);
+    return;
+  }
+  if (Object.hasOwn(parent, name)) {
+    errors.push(`${label}: ${relative(root, path)} 的 ${pointer.join("/")} 仍携带字段 ${name}`);
+  }
+  if (parent.properties && Object.hasOwn(parent.properties, name)) {
+    errors.push(`${label}: ${relative(root, path)} 的 ${pointer.join("/")}.properties 仍声明 ${name}`);
+  }
+  if (Array.isArray(parent.required) && parent.required.includes(name)) {
+    errors.push(`${label}: ${relative(root, path)} 的 ${pointer.join("/")}.required 仍要求 ${name}`);
+  }
+}
+
+// 设备方向被删除的字段位置（schema 与 fixture 各一处；fixture 的指针直接指向承载对象）。
+const removedDeviceFields = [
+  ["设备配对状态不再返回授权集合", "schemas/sync/v1/pairing.schema.json", ["$defs", "statusResponse", "properties", "device"], "scopes"],
+  ["设备认证结果不携带授权集合", "schemas/sync/v1/auth.schema.json", ["$defs", "authenticated", "properties", "body"], "scopes"],
+  ["设备配对状态 fixture", "fixtures/sync/v1/valid/pairing-status-response.json", ["device"], "scopes"],
+  ["设备认证 fixture", "fixtures/sync/v1/valid/auth-authenticated.json", ["body"], "scopes"],
+  ["本地管理设备配对确认 fixture", "fixtures/local-admin/v1/valid/request-device-pair-confirm.json", ["params"], "scopes"],
+];
+
+function scanRemovedVocabulary() {
+  for (const directory of ownedAssetRoots) {
+    for (const path of walkJson(directory)) {
+      const document = readJson(path);
+      if (!document) continue;
+      for (const [keyPath, text] of vocabulary(document)) {
+        const where = `${relative(root, path)} 的 ${keyPath}`;
+        if (removedVocabulary.has(text)) {
+          errors.push(`${where}: 已删除的设备授权/短验证码词汇 ${text} 不得再出现`);
+        } else if (removedValueShape.test(text)) {
+          errors.push(`${where}: 已删除的 ${text} 词汇不得再出现`);
+        } else if (sasDomainShape.test(text)) {
+          errors.push(`${where}: 已删除的短验证码 domain ${text} 不得再出现`);
+        }
+      }
+    }
+  }
+  for (const [label, path, pointer, name] of removedDeviceFields) {
+    assertFieldRemoved(label, join(root, path), pointer, name);
+  }
+}
+
 loadTranscriptRegistry();
+scanRemovedVocabulary();
 await checkRoots();
 
 async function checkRoots() {
@@ -632,6 +711,6 @@ if (errors.length > 0) {
     `contract assets OK: ${schemaCount} schemas, ${fixtureCount} fixture files, ` +
       `${reencodedCount} transcript vectors re-encoded from input, ` +
       `${negativeCount} negative vectors rejected as declared, ` +
-      `${sasCount} SAS values recomputed`,
+      `无 SAS/设备授权词汇残留`,
   );
 }

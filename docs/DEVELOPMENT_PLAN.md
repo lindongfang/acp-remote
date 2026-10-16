@@ -35,7 +35,7 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 实现纯状态机 `identity-auth`、平台适配 `identity-keystore`，覆盖 Node/Device 长期身份、一次性配对、每条新 WSS 连接的 challenge-response、scope 展开、撤销和 nonce 重放防护。密钥职责与端口签名以[身份与认证合同](IDENTITY_AND_AUTH_CONTRACT.md)为准。
 
-验收：现有 transcript 固定向量、P1363 签名、HMAC、SAS 及畸形输入成为常驻测试；节点和设备身份不可混用；错误权限、重复 claim、过期及密钥变化均失败关闭；私钥不进入普通 SQLite 字段、日志或协议错误。
+验收：现有 transcript 固定向量、P1363 签名、HMAC 及畸形输入成为常驻测试；节点和设备身份不可混用；错误权限、重复 claim、过期及密钥变化均失败关闭；私钥不进入普通 SQLite 字段、日志或协议错误。
 
 ### 4. Daemon、CLI 与本地管理通道
 
@@ -59,9 +59,9 @@ Rust workspace 已包含 `acpr-transcript`、`acpr-wire`、`core`、`storage-sql
 
 在 Node Link 闭环后实现 `server::sync` 的设备认证、snapshot、事件、ACK、补发和命令终态；建立 TypeScript + Expo/React Native 通用工程，首个交付只构建 Daemon 本地托管的 Web/PWA。客户端状态、平台 adapter 与功能范围以[前端设计](FRONTEND_DESIGN.md)为准。
 
-本切片的 Sync 合同现在**包含** `session.create`（feature `core.session-create.v1`）与本机 workspace/Agent 目录（feature `core.local-catalog.v1`）：命令目录与 `schemas/sync/v1/command.schema.json`（node-link schema 无 `pack` 约束、无需变更）、`sync-protocol` 的 `CommandName`/payload/result、授权镜像的 `pack.create-session` 与固定向量都已就位，客户端在目录内提交 `{ workspaceAlias, agentId }` 即可创建会话。合同就位**不等于**能力可用：`server::sync`（快照组装、命令处理、授权判定与终态投递）仍属本切片待实现部分，上述合同只冻结它要消费的形状。
+本切片的 Sync 合同现在**包含** `session.create`（feature `core.session-create.v1`）与本机 workspace/Agent 目录（feature `core.local-catalog.v1`）：命令目录与 `schemas/sync/v1/command.schema.json`（node-link schema 无 `pack` 约束、无需变更）、`sync-protocol` 的 `CommandName`/payload/result、授权镜像（`grant.*` → 命令名集合）与固定向量都已就位，客户端在目录内提交 `{ workspaceAlias, agentId }` 即可创建会话。合同就位**不等于**能力可用：`server::sync`（快照组装、命令处理、授权判定与终态投递）仍属本切片待实现部分，上述合同只冻结它要消费的形状。
 
-验收：PWA 能配对、浏览本机目录、查看和继续已有会话，展示流式及关键结构化事件、处理权限请求、取消 turn、查看与切换模型；重连从已 ACK cursor 恢复且不重复显示或执行命令。在已登记目录内提交 `session.create` 能收到 `accepted` → `completed { sessionId, session }` 的终态，未持 `session.create` scope 的设备被服务端以 `authorization.scope_denied` 拒绝且无副作用。Owner 离线时只显示可用元数据，不把输入误报为已发送。
+验收：PWA 能配对、浏览本机目录、查看和继续已有会话，展示流式及关键结构化事件、处理权限请求、取消 turn、查看与切换模型；重连从已 ACK cursor 恢复且不重复显示或执行命令。在已登记目录内提交 `session.create` 能收到 `accepted` → `completed { sessionId, session }` 的终态，未登记别名或形状非法的目录被以参数类错误拒绝且无副作用（不启动进程、不写会话行、不分配会话标识）。Owner 离线时只显示可用元数据，不把输入误报为已发送。
 
 ### 8. 稳定性、兼容性与发布
 

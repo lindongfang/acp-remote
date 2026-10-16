@@ -63,11 +63,15 @@ export interface PairingStatusRequest {
   readonly proof: Base64Url32;
 }
 
-/** `statusResponse.device`（仅在 `status = "approved"` 时出现）。 */
+/**
+ * `statusResponse.device`（仅在 `status = "approved"` 时出现）。
+ *
+ * 只有设备非秘密元数据：schema 的 `additionalProperties: false` 里没有授权集合字段
+ * （设备方向没有授权维度），因此这里 MUST NOT 出现任何 scope。
+ */
 export interface PairingApprovedDevice {
   readonly deviceId: Uuid;
   readonly name: string;
-  readonly scopes: readonly string[];
 }
 
 /** `statusResponse.host`（仅在 `status = "approved"` 时出现）。 */

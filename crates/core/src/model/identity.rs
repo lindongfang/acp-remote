@@ -86,7 +86,10 @@ macro_rules! name_set {
 }
 
 name_set!(
-    /// 展开后的命令级 scope 集合（等于命令名，`SECURITY_DESIGN.md` §10.2）。`pack.*`/`preset.*` 必须先展开。
+    /// 展开后的命令级 scope 集合（等于命令名，`SECURITY_DESIGN.md` §10.2）。
+    ///
+    /// 设备权限层已删除（`pairing-model`）：本类型只剩配对方向的历史形状（配对请求与落定的集合字段，
+    /// 按合同必须为空），不再参与任何逐命令授权判定——设备通过认证即可执行命令。
     ScopeSet,
     is_scope_name,
     InvalidValue::ScopeName
@@ -113,11 +116,12 @@ token_enum!(
     }
 );
 
-/// 一次调用的身份（§3.5）。授权只在 core 判定，因此 scope/节点身份随 actor 一起传入。
+/// 一次调用的身份（§3.5）。授权只在 core 判定；设备不再有授权维度，节点身份仍随 actor 一起传入。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Actor {
-    /// 已认证的 Sync 设备及其当前 scopes。
-    Device { device: DeviceId, scopes: ScopeSet },
+    /// 已认证的 Sync 设备。**不带任何授权集合**：设备通过认证即可执行业务命令，配对不授予授权
+    /// （`AGENTS.md` §4 的安全不变量）。
+    Device { device: DeviceId },
     /// Node Link 对端。`node` 是主 principal，`access_node` 是该连接的 Access 端点；两者共同构成
     /// §6 第 6 条要求的 `(ownerNodeId, accessNodeId)` 幂等键。
     Node { node: NodeId, access_node: NodeId },
@@ -146,7 +150,7 @@ impl Actor {
     /// pairing_claimant → 该配对 id（认领方在配对内是唯一的）。
     pub fn id_text(&self) -> String {
         match self {
-            Self::Device { device, .. } => device.as_str().to_owned(),
+            Self::Device { device } => device.as_str().to_owned(),
             Self::Node { node, access_node } => {
                 format!("{}/{}", node.as_str(), access_node.as_str())
             }
@@ -155,18 +159,10 @@ impl Actor {
         }
     }
 
-    /// 设备 scopes；非设备 actor 返回 `None`（Node 的授权由 grant ∩ Export 决定）。
-    pub fn scopes(&self) -> Option<&ScopeSet> {
-        match self {
-            Self::Device { scopes, .. } => Some(scopes),
-            Self::Node { .. } | Self::LocalCli | Self::PairingClaimant { .. } => None,
-        }
-    }
-
     /// 设备标识。
     pub fn device_id(&self) -> Option<&DeviceId> {
         match self {
-            Self::Device { device, .. } => Some(device),
+            Self::Device { device } => Some(device),
             Self::Node { .. } | Self::LocalCli | Self::PairingClaimant { .. } => None,
         }
     }
@@ -203,12 +199,14 @@ token_enum!(
 );
 
 /// 设备记录（`device.list` 与配对结果共用）。
+///
+/// **不含授权集合**：设备通过认证即可执行业务命令，配对不授予授权（`AGENTS.md` §4）。设备行的落库列里
+/// 也没有对应的列（`docs/CORE_PORTS_AND_STORAGE.md` §7.3：`scopes_json` 已随 v8 迁移删除）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRecord {
     device_id: DeviceId,
     display_name: String,
     public_key_fingerprint: Fingerprint,
-    scopes: ScopeSet,
     state: DeviceState,
     created_at: Timestamp,
     last_seen_at: Option<Timestamp>,
@@ -222,7 +220,6 @@ impl DeviceRecord {
         device_id: DeviceId,
         display_name: &str,
         public_key_fingerprint: Fingerprint,
-        scopes: ScopeSet,
         state: DeviceState,
         created_at: Timestamp,
         last_seen_at: Option<Timestamp>,
@@ -236,7 +233,6 @@ impl DeviceRecord {
             device_id,
             display_name: display_name.to_owned(),
             public_key_fingerprint,
-            scopes,
             state,
             created_at,
             last_seen_at,
@@ -257,11 +253,6 @@ impl DeviceRecord {
     /// 公钥指纹（64 字符小写十六进制）。
     pub fn public_key_fingerprint(&self) -> &Fingerprint {
         &self.public_key_fingerprint
-    }
-
-    /// 展开后的 scopes。
-    pub fn scopes(&self) -> &ScopeSet {
-        &self.scopes
     }
 
     /// 状态。
@@ -929,6 +920,11 @@ fn normalized_export_ids(mut export_ids: Vec<ExportId>) -> Vec<ExportId> {
 
 token_enum!(
     /// 审计动作的闭合枚举（`SECURITY_DESIGN.md` §14.2）。
+    ///
+    /// **`DeviceScopesChanged` 是只读的历史取值**：设备不再有授权集合（`pairing-model` 删除设备权限层），
+    /// 因此本二进制**不再产生**它（唯一的产生点是 `put_device` 的「scopes 变化」分支，已删除）。保留该
+    /// 取值是因为升级前的库可能仍有这类审计行——v8 的 12-step 重建要整行搬移它们，读面也按 token 解码
+    /// 归因；删除它会同时让历史审计行写不回去、读不出来（§11.3 的审计保留）。
     AuditAction {
         PairingCreated => "pairing.created",
         PairingClaimed => "pairing.claimed",

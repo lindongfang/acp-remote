@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "type": "command",
+  "messageId": "e2b5c7d9-3f41-4a6e-8b02-9c7d5e1f3a48",
+  "connectionId": "2de54db7-74ae-4c21-88e3-05df0dc2e637",
+  "connectionSequence": "55",
+  "body": {
+    "requestId": "a8f1d3e5-6c24-4b97-9e30-5d8a1c6f2b74",
+    "command": "session.create",
+    "payload": {
+      "agentId": "claude-code",
+      "workspacePath": "/home/dev/projects/work-api"
+    }
+  }
+}

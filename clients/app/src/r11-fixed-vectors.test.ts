@@ -433,7 +433,6 @@ async function authenticate(harness: Harness, input: HandshakeInput, hostProof: 
     connectionSequence: "1",
     body: {
       deviceId: input.deviceId,
-      scopes: ["session.list", "session.read"],
       serverEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13",
       headGlobalSequence: "10",
       heartbeatIntervalMs: 30000,

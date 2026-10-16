@@ -1,4 +1,4 @@
-//! 12 个 transcript domain 的输入类型与装配（`docs/SYNC_PROTOCOL.md` §6.3、
+//! 10 个 transcript domain 的输入类型与装配（`docs/SYNC_PROTOCOL.md` §6.3、
 //! `docs/NODE_LINK_PROTOCOL.md` §9.3/§9.4，机器登记见 `compatibility/transcripts/v1/transcripts.json`）。
 //!
 //! 设计（`design.md` D2）：每个 domain 一个输入结构，`transcript()` 按**协议 crate 导出的表**装配
@@ -16,7 +16,7 @@ use acpr_transcript::table::{DomainSpec, domain_spec, encode_transcript};
 use crate::error::{ProofError, TranscriptError};
 use crate::types::{
     CanonicalOrigin, ChallengeId, ClientKind, NodeEndpoint, P1363Signature, PROTOCOL_VERSION,
-    PairingProof, PairingRequestId, PairingSecret, Sas,
+    PairingProof, PairingRequestId, PairingSecret,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -303,14 +303,6 @@ pub(crate) fn add_seconds(
     timestamp_from_unix_seconds(base + seconds)
 }
 
-/// 由 SAS transcript 与 pairing secret 派生 6 位短验证码（合同 §4.4 的唯一入口）。
-///
-/// 双方各自计算：这里只接受**已装配的 transcript 字节**，不提供「取对端结果」的路径。
-pub fn derive_sas(transcript: &[u8], secret: &PairingSecret) -> Result<Sas, ProofError> {
-    let output = hmac_sha256(secret.as_bytes(), transcript)?;
-    Sas::from_hmac_output(&output).map_err(ProofError::Transcript)
-}
-
 /// HMAC-SHA256（常量时间比较由 [`verify_hmac`] 承担）。
 pub(crate) fn hmac_sha256(key: &[u8], transcript: &[u8]) -> Result<[u8; 32], ProofError> {
     use hmac::{KeyInit as _, Mac as _};
@@ -353,11 +345,6 @@ pub(crate) fn verify_signature(
         .map_err(|_| ProofError::Signature)?;
     key.verify(transcript, &parsed)
         .map_err(|_| ProofError::Signature)
-}
-
-/// 从 HMAC 输出派生 6 位 SAS（合同 §4.4）。
-pub(crate) fn sas_from_hmac(output: &[u8]) -> Result<Sas, TranscriptError> {
-    Sas::from_hmac_output(output)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -470,47 +457,6 @@ impl SyncPairingHostProof {
     ) -> Result<(), ProofError> {
         let transcript = self.transcript()?;
         verify_signature(host_public_key, &transcript, signature)
-    }
-}
-
-domain_input! {
-    /// Sync 配对 SAS（`acp-remote/pairing-sas/v1`，HMAC-SHA256）。
-    pub struct SyncPairingSas {
-        host_id: NodeId,
-        device_id: DeviceId,
-        pairing_id: PairingId,
-        canonical_origin: CanonicalOrigin,
-        host_public_key: PeerPublicKey,
-        device_public_key: PeerPublicKey,
-        client_nonce: Nonce,
-        server_nonce: Nonce,
-        pairing_request_id: PairingRequestId,
-    }
-    domain SYNC_DOMAINS, "acp-remote/pairing-sas/v1";
-    tags [
-        2 => host_id,
-        3 => device_id,
-        4 => pairing_id,
-        6 => canonical_origin,
-        7 => host_public_key,
-        8 => device_public_key,
-        9 => client_nonce,
-        10 => server_nonce,
-        13 => pairing_request_id,
-    ];
-}
-
-impl SyncPairingSas {
-    /// HMAC 输出（固定向量直接断言该值）。
-    pub fn hmac(&self, secret: &PairingSecret) -> Result<[u8; 32], ProofError> {
-        let transcript = self.transcript()?;
-        hmac_sha256(secret.as_bytes(), &transcript)
-    }
-
-    /// 6 位短验证码：由双方各自计算，宿主不下发本机结果冒充对端结果。
-    pub fn sas(&self, secret: &PairingSecret) -> Result<Sas, ProofError> {
-        let output = self.hmac(secret)?;
-        sas_from_hmac(&output).map_err(ProofError::Transcript)
     }
 }
 
@@ -692,45 +638,6 @@ impl NodeLinkPairingOwnerProof {
     ) -> Result<(), ProofError> {
         let transcript = self.transcript()?;
         verify_signature(owner_public_key, &transcript, signature)
-    }
-}
-
-domain_input! {
-    /// Node Link 配对 SAS（`acp-remote/node-link-pairing-sas/v1`，HMAC-SHA256）。
-    pub struct NodeLinkPairingSas {
-        owner_node_id: NodeId,
-        access_node_id: NodeId,
-        pairing_id: PairingId,
-        owner_public_key: PeerPublicKey,
-        access_public_key: PeerPublicKey,
-        client_nonce: Nonce,
-        server_nonce: Nonce,
-        pairing_request_id: PairingRequestId,
-    }
-    domain NODE_LINK_DOMAINS, "acp-remote/node-link-pairing-sas/v1";
-    tags [
-        2 => owner_node_id,
-        3 => access_node_id,
-        4 => pairing_id,
-        7 => owner_public_key,
-        8 => access_public_key,
-        9 => client_nonce,
-        10 => server_nonce,
-        13 => pairing_request_id,
-    ];
-}
-
-impl NodeLinkPairingSas {
-    /// HMAC 输出。
-    pub fn hmac(&self, secret: &PairingSecret) -> Result<[u8; 32], ProofError> {
-        let transcript = self.transcript()?;
-        hmac_sha256(secret.as_bytes(), &transcript)
-    }
-
-    /// 6 位短验证码。
-    pub fn sas(&self, secret: &PairingSecret) -> Result<Sas, ProofError> {
-        let output = self.hmac(secret)?;
-        sas_from_hmac(&output).map_err(ProofError::Transcript)
     }
 }
 

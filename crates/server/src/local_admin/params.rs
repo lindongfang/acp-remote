@@ -19,7 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use acp_core::model::{
     AgentId, AuditAction, CachePolicy, ConflictKind, DeviceId, ExportId, ExportRecord,
     ExportTemplate, GrantSet, ImportId, NodeId, PairingId, PairingRecord, PairingState, PortError,
-    ProviderRefKind, ScopeSet, TemplateId, Timestamp, WorkspaceAlias, WorkspaceAliasEntry,
+    ProviderRefKind, TemplateId, Timestamp, WorkspaceAlias, WorkspaceAliasEntry,
 };
 use identity_auth::{PairingError, authorization};
 use serde_json::Value;
@@ -626,31 +626,18 @@ pub fn audit_export(params: &JsonObject) -> Result<AuditExport, AdminError> {
 /// `device.pair.begin` 的已校验参数（§5.3）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevicePairBegin {
-    /// 展开后的独立 scope 集合（`pack.*` 已按 `SECURITY_DESIGN.md` §10.2 展开；不含包名）。
-    pub scopes: ScopeSet,
     /// 请求的有效期（毫秒）；`None` = 用满 5 分钟窗口，只能收窄。
     pub expires_in_ms: Option<u64>,
 }
 
-/// `device.pair.begin`（§5.3）：`requestedPacks`/`requestedScopes` 可为空，`expiresInMs` 可空。
+/// `device.pair.begin`（§5.3）：只接受 `expiresInMs`（可空）。
 ///
-/// 取值域**只**允许 `pack.*` 与命令名（§5.3 的原文）；`preset.*` 不在本方法的输入域内——CLI 若要提供
-/// 预设，应先在本机把它展开成 packs，而不是把它当作 pack 名传进来（展开只经
-/// `identity_auth::authorization` 这一份词表）。
+/// 设备配对**不提交任何授权词汇**（`pairing-model` 删除设备权限层）：配对不授予授权，因此
+/// `requestedPacks`/`requestedScopes` 之类的键不再是本方法的输入，出现即 `local.invalid_params`
+/// （`params` 是 closed object）。授权展开只剩跨节点的导出授权（`node.pair.*` 的 `requestedGrants`）。
 pub fn device_pair_begin(params: &JsonObject) -> Result<DevicePairBegin, AdminError> {
-    reject_unknown_fields(
-        params,
-        &["requestedPacks", "requestedScopes", "expiresInMs"],
-    )?;
-    let packs = strings(params, "requestedPacks")?;
-    let requested = strings(params, "requestedScopes")?;
-    let scopes = authorization::expand_device_request(&packs, &requested).map_err(|_| {
-        invalid_params(
-            "device.pair.begin: `requestedPacks`/`requestedScopes` must name known packs or command scopes",
-        )
-    })?;
+    reject_unknown_fields(params, &["expiresInMs"])?;
     Ok(DevicePairBegin {
-        scopes,
         expires_in_ms: pairing_window(params)?,
     })
 }
@@ -716,17 +703,16 @@ pub fn node_pair_begin(params: &JsonObject) -> Result<NodePairBegin, AdminError>
 pub struct DevicePairConfirm {
     /// 配对目标。
     pub pairing_id: PairingId,
-    /// 用户确认的最终 scope 集合（不是请求值；必须完整展示后确认）。
-    pub scopes: ScopeSet,
 }
 
-/// `device.pair.confirm`（§5.3）：`{ pairingId, scopes }`；设备配对不带 grants（未知字段即拒绝）。
+/// `device.pair.confirm`（§5.3）：只接受 `{ pairingId }`。
+///
+/// 设备配对不授予授权，因此确认**不接受**任何授权集合参数（`scopes` 之类出现即
+/// `local.invalid_params`）；节点配对的 `grants`/`exportIds` 不受影响（`node.pair.confirm`）。
 pub fn device_pair_confirm(params: &JsonObject) -> Result<DevicePairConfirm, AdminError> {
-    reject_unknown_fields(params, &["pairingId", "scopes"])?;
+    reject_unknown_fields(params, &["pairingId"])?;
     let pairing_id = pairing_id_field(params)?;
-    let scopes = ScopeSet::try_from_iter(strings(params, "scopes")?)
-        .map_err(|error| from_invalid("parameter `scopes`", error))?;
-    Ok(DevicePairConfirm { pairing_id, scopes })
+    Ok(DevicePairConfirm { pairing_id })
 }
 
 /// `node.pair.confirm` 的已校验参数（§5.4）。

@@ -35,7 +35,7 @@ pub(crate) struct ChallengeRecord {
     pub expires_at: Timestamp,
 }
 
-/// 一次配对的内存材料：secret 与其派生 SAS 需要的本机 nonce / 请求标识。
+/// 一次配对的内存材料：secret 与其配套的本机 nonce / 请求标识。
 ///
 /// 三者同生同灭（同一把锁、同一张表）：重启后一起丢失，这就是「重启后未确认配对全部终结」的
 /// 物理依据，不需要额外的持久化字段。
@@ -72,7 +72,7 @@ impl State {
         self.secrets.get(pairing.as_str()).map(|m| m.secret)
     }
 
-    /// 取配对内存材料（SAS 派生需要本机 nonce 与请求标识）。
+    /// 取配对内存材料（认领响应与主机证明需要本机 nonce 与请求标识）。
     pub fn material(&self, pairing: &PairingId) -> Option<&PairingMaterial> {
         self.secrets.get(pairing.as_str())
     }

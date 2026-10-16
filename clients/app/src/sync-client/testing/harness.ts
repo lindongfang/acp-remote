@@ -353,7 +353,6 @@ export function makeAuthenticated(input: {
     connectionSequence: input.serverConnectionSequence ?? "1",
     body: {
       deviceId: input.deviceId ?? "2ae1c07c-9242-46e9-a9d2-4ec58c130f49",
-      scopes: ["session.list", "session.read"],
       serverEpoch: input.serverEpoch ?? "00384a03-bc90-4095-b65d-82fb8cc47e13",
       headGlobalSequence: "2318",
       heartbeatIntervalMs: 30000,

@@ -3,8 +3,9 @@
  *
  * `session.read` 的 `before`/`limit`/`beforeHistory`/`include` 里的 `history` **只**在 Sync
  * 传输面生效（`design.md` D3、D11）；Node Link 面的同名命令不含这些键。`session.create` 的
- * `payload` **只**允许 `workspaceAlias` 与 `agentId` 两个引用（`design.md` D8 /
- * `pwa-web-client` 的「会话创建是受限入口」）。
+ * `payload` **只**允许 `agentId` 与目录引用两类字段：目录引用由 `workspaceAlias`（已登记别名）
+ * 与 `workspacePath`（客户端提供的绝对目录）**恰好一个**给出（`design.md` D4 /
+ * `pwa-web-client` 的「会话创建入口与载荷」）。
  *
  * `session.resume` 只经 Node Link 接受，因此不在本镜像的 `CommandName` 里。
  */
@@ -61,17 +62,26 @@ export interface SessionListCommand extends CommandEnvelope {
 }
 
 /**
- * `$defs.sessionCreate`：Sync 面 `body` 顶层不含 `sessionId`；`payload` 是精确两键对象，
- * 多写 `cwd`/`exportId`/`templateParams`/绝对路径/MCP 配置/凭据即编译失败。
+ * `$defs.sessionCreate` 的 payload（Sync 面）。
+ *
+ * 两个键：`agentId`（必填，本机已配置的 Agent 标识）与目录引用。目录引用由 `workspaceAlias`
+ * （本机已登记 workspace 的别名）与 `workspacePath`（客户端提供的**绝对**目录）**恰好一个**
+ * 给出——同时给出或都不给出一律被服务端以 `protocol.schema_invalid` 拒绝，客户端 MUST NOT
+ * 猜测以哪一个为准。
+ */
+export type SessionCreatePayload =
+  | { readonly workspaceAlias: string; readonly agentId: string }
+  | { readonly workspacePath: string; readonly agentId: string };
+
+/**
+ * `$defs.sessionCreate`：Sync 面 `body` 顶层不含 `sessionId`；`payload` 只允许 `agentId` 与
+ * 目录引用两类字段，多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即编译失败。
  */
 export interface SessionCreateCommand extends CommandEnvelope {
   readonly body: {
     readonly requestId: Uuid;
     readonly command: "session.create";
-    readonly payload: {
-      readonly workspaceAlias: string;
-      readonly agentId: string;
-    };
+    readonly payload: SessionCreatePayload;
   };
 }
 

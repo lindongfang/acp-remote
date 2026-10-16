@@ -25,6 +25,7 @@ import { AGENTS, DIRS_ROUTE, WORKSPACES_WITH_PATHS, sessionsForBothDirectories }
 import { SYNC_WS_PATH, openWebSocket } from "../../../src/sync-client";
 import {
   CANONICAL_ORIGIN,
+  DEVICE_ID,
   expectEqual,
   expectThat,
   mountRootLayout,
@@ -43,7 +44,7 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     workspaces: WORKSPACES_WITH_PATHS,
     sessions: sessionsForBothDirectories(),
     agents: AGENTS,
-    scopes: ["session.list", "session.read", "session.create"],
+    authenticate: true,
     tamperHostProof: false,
     deliverSnapshot: true,
     barrierGlobalSequence: "10",
@@ -142,7 +143,10 @@ const checks: readonly Check[] = [
         expectThat(state?.resources !== null, "快照应已验证并进入 ClientStore");
         expectEqual(state?.resources?.workspaces.length ?? 0, 2, "快照里的目录数");
         expectEqual(state?.resources?.sessions.length ?? 0, 2, "快照里的会话数");
-        expectEqual(state?.scopes?.length ?? 0, 3, "认证授予的 scopes");
+        // 设备方向已没有 scope 集合可断言（本次变更删掉了设备权限维度）：这里改验**认证事实真的
+        // 落地了**——`deviceId` 只由 `auth.authenticated` 的 body 写入，握手停在挑战或验签失败时
+        // 它恒为 `null`。因此这条断言同时守住「认证报文被消费」与「认证报文里那些事实没有丢」。
+        expectEqual(state?.deviceId ?? null, DEVICE_ID, "认证事实里的设备标识（auth.authenticated 的 deviceId）");
 
         // 选择器链路：store → 模型 → 页面。
         //

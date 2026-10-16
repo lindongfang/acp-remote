@@ -64,6 +64,10 @@ async fn rewind_to_v5(dir: &std::path::Path) -> std::path::PathBuf {
         .execute(&pool)
         .await
         .expect("回退 owned_session 的目录归属列");
+    sqlx::query("ALTER TABLE owned_device ADD COLUMN scopes_json TEXT NOT NULL DEFAULT '[]'")
+        .execute(&pool)
+        .await
+        .expect("把 owned_device 补回 v8 之前就有的 scopes_json（v8 段只删这一列）");
     sqlx::query("PRAGMA user_version = 5")
         .execute(&pool)
         .await
@@ -220,7 +224,7 @@ async fn v5_database_upgrades_to_v6_by_appending_a_null_workspace_alias_column()
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v5 database must upgrade to v6");
-    assert_eq!(store.metadata().owned_schema_version, 7);
+    assert_eq!(store.metadata().owned_schema_version, 8);
     assert_eq!(store.metadata().imported_schema_version, 3);
     let summaries = store
         .list(SessionQuery {

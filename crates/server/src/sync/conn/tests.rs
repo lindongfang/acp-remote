@@ -254,7 +254,6 @@ impl TrustStore for SyncTrust {
             device,
             record.display_name(),
             fingerprint,
-            record.scopes().clone(),
             record.state(),
             record.created_at().clone(),
             Self::advance_last_seen(
@@ -528,18 +527,17 @@ impl Harness {
     }
 
     /// 本机用户登记一次设备配对并走到 `approved`（§7：begin → claim → confirm）。
-    async fn approved_device_pairing(&self, scopes: &[&str]) -> String {
+    ///
+    /// 设备方向不提交任何授权词汇（`pairing-model` 删除设备权限层）：begin 只给窗口，confirm 只给
+    /// `pairingId`。
+    async fn approved_device_pairing(&self) -> String {
         let begin = success(
             &self
                 .world
                 .router()
                 .handle(admin_request(
                     Method::DevicePairBegin,
-                    json!({
-                        "requestedPacks": [],
-                        "requestedScopes": scopes,
-                        "expiresInMs": null,
-                    }),
+                    json!({"expiresInMs": null}),
                 ))
                 .await,
         );
@@ -563,14 +561,13 @@ impl Harness {
                 .router()
                 .handle(admin_request(
                     Method::DevicePairConfirm,
-                    json!({"pairingId": pairing, "scopes": scopes}),
+                    json!({"pairingId": pairing}),
                 ))
                 .await,
         );
-        assert_eq!(
-            confirmed["scopes"],
-            json!(scopes),
-            "确认后的 scope 集合必须逐条回显"
+        assert!(
+            confirmed.get("scopes").is_none(),
+            "确认结果不得带授权集合：{confirmed}"
         );
         // 批准把对端公钥转入 `owned_peer_key`（§11.6 第 4 条）：存储层对设备分支也这么做，
         // `FakeTrust::approve_device` 漏了这一步（见 [`SyncTrust::device_keys`]），这里补上等价事实。
@@ -1229,7 +1226,7 @@ async fn assert_eventually_within(
 #[tokio::test]
 async fn handshake_completes_and_enters_the_business_phase() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
 
     let challenge = prepare_challenge(&mut client, DEVICE_ID).await;
@@ -1286,7 +1283,11 @@ async fn handshake_completes_and_enters_the_business_phase() {
     assert_eq!(authenticated["connectionId"], json!(connection_id));
     assert_eq!(authenticated["connectionSequence"], json!("1"));
     assert_eq!(authenticated["body"]["deviceId"], json!(DEVICE_ID));
-    assert_eq!(authenticated["body"]["scopes"], json!(["session.read"]));
+    assert!(
+        authenticated["body"].get("scopes").is_none(),
+        "认证响应不再下发任何设备授权集合：{}",
+        authenticated["body"]
+    );
     assert_eq!(
         authenticated["body"]["serverEpoch"],
         json!(TEST_SERVER_EPOCH)
@@ -1326,7 +1327,7 @@ async fn handshake_completes_and_enters_the_business_phase() {
 #[tokio::test]
 async fn the_first_authentication_consumes_the_pairing_and_advances_last_seen() {
     let harness = Harness::new().await;
-    let pairing = harness.approved_device_pairing(&["session.read"]).await;
+    let pairing = harness.approved_device_pairing().await;
     assert!(
         harness.device_row(DEVICE_ID).last_seen_at().is_none(),
         "批准只创建信任行，不写 last_seen_at"
@@ -1392,7 +1393,7 @@ async fn the_first_authentication_consumes_the_pairing_and_advances_last_seen() 
 #[tokio::test]
 async fn a_business_message_before_hello_is_closed_with_4401() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     client.step("认证前发 sync.subscribe");
     let text = json!({
@@ -1422,7 +1423,7 @@ async fn a_business_message_before_hello_is_closed_with_4401() {
 #[tokio::test]
 async fn a_duplicate_hello_is_closed_with_4401() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = prepare_challenge(&mut client, DEVICE_ID).await;
     client.step("第二条 hello");
@@ -1437,7 +1438,7 @@ async fn a_duplicate_hello_is_closed_with_4401() {
 #[tokio::test]
 async fn the_first_message_window_is_five_seconds_not_the_whole_fifteen() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     // 计时起点在连接之前：服务端窗口从会话任务开始（WS 升级完成后）起算，客户端起点晚于它就会吃掉余量。
     let started = Instant::now();
     let mut client = Client::try_connect(
@@ -1469,7 +1470,7 @@ async fn the_first_message_window_is_five_seconds_not_the_whole_fifteen() {
 #[tokio::test]
 async fn the_handshake_still_has_fifteen_seconds_after_the_hello() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     // 计时起点在连接之前（与 `the_first_message_window...` 同一理由：窗口从服务端会话任务开始起算）。
     let started = Instant::now();
     let mut client = Client::try_connect(
@@ -1503,7 +1504,7 @@ async fn the_handshake_still_has_fifteen_seconds_after_the_hello() {
 #[tokio::test]
 async fn an_oversized_client_hello_is_rejected_before_the_handshake() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
 
     // 判据量的是信封 `body` 的原始 UTF-8 字节数，因此 padding 放进 body。上限在**任何类型化解码之前**
@@ -1570,7 +1571,7 @@ async fn the_node_concurrent_connection_cap_refuses_the_extra_connection() {
         },
     )
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
 
     // ① 第一条连接占住并发配额（它甚至还没发 hello：配额覆盖「已建立的连接」）。
     let mut first = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
@@ -1615,7 +1616,7 @@ async fn the_node_concurrent_connection_cap_refuses_the_extra_connection() {
 async fn a_binary_frame_is_closed_with_4400() {
     // ① 认证前。
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     client.step("认证前 binary 帧");
     client.send_binary(b"not-json").await;
@@ -1625,7 +1626,7 @@ async fn a_binary_frame_is_closed_with_4400() {
 
     // ② 认证后。
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
     client.step("认证后 binary 帧");
@@ -1652,7 +1653,7 @@ async fn a_binary_frame_is_closed_with_4400() {
 #[tokio::test]
 async fn the_endpoint_rejects_another_subprotocol() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let client = Client::try_connect(
         harness.addr,
         Some(DEVICE_ORIGIN),
@@ -1669,7 +1670,7 @@ async fn the_endpoint_rejects_another_subprotocol() {
 #[tokio::test]
 async fn the_sixth_in_flight_handshake_from_one_address_is_refused() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     // 五条只升级、不发任何帧的连接占满配额。
     let mut clients = Vec::new();
     for _ in 0..MAX_IN_FLIGHT_HANDSHAKES_PER_IP {
@@ -1719,7 +1720,7 @@ async fn the_sixth_in_flight_handshake_from_one_address_is_refused() {
 #[tokio::test]
 async fn the_eleventh_authentication_attempt_from_one_address_is_rate_limited() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     for _ in 0..10 {
         let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
         let _ = prepare_challenge(&mut client, DEVICE_ID).await;
@@ -1762,7 +1763,7 @@ async fn the_eleventh_authentication_attempt_from_one_address_is_rate_limited() 
 #[tokio::test]
 async fn an_origin_that_differs_from_the_binding_is_refused() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some("https://other.example.test")).await;
     client.step("来源与绑定不一致");
     send_hello(&mut client, DEVICE_ID, &declared_features(), &[]).await;
@@ -1777,7 +1778,7 @@ async fn an_origin_that_differs_from_the_binding_is_refused() {
 #[tokio::test]
 async fn a_missing_origin_is_refused() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, None).await;
     client.step("无来源");
     send_hello(&mut client, DEVICE_ID, &declared_features(), &[]).await;
@@ -1790,7 +1791,7 @@ async fn a_missing_origin_is_refused() {
 #[tokio::test]
 async fn a_non_https_origin_is_refused() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some("http://127.0.0.1:8765")).await;
     client.step("http 来源");
     send_hello(&mut client, DEVICE_ID, &declared_features(), &[]).await;
@@ -1807,7 +1808,7 @@ async fn a_non_https_origin_is_refused() {
 #[tokio::test]
 async fn an_unknown_device_gets_a_challenge_and_fails_as_proof_invalid() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     client.step("未知设备握手");
     let challenge = prepare_challenge(&mut client, UNKNOWN_DEVICE).await;
@@ -1850,7 +1851,7 @@ async fn an_unknown_device_gets_a_challenge_and_fails_as_proof_invalid() {
 #[tokio::test]
 async fn a_revoked_device_is_closed_with_4410() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     harness.revoke_device(DEVICE_ID).await;
 
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
@@ -1883,7 +1884,7 @@ async fn a_revoked_device_is_closed_with_4410() {
 #[tokio::test]
 async fn a_new_connection_replaces_the_previous_one() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let before = harness.device_row(DEVICE_ID);
 
     let mut first = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
@@ -1912,9 +1913,9 @@ async fn a_new_connection_replaces_the_previous_one() {
     );
     let after = harness.device_row(DEVICE_ID);
     assert_eq!(after.state(), DeviceState::Active, "4411 不撤销设备");
-    assert_eq!(
-        after.scopes().iter().collect::<Vec<_>>(),
-        vec!["session.read"]
+    assert!(
+        after.last_seen_at().is_some(),
+        "顶替只推进 lastSeenAt，不改写信任行的其它列"
     );
     assert_eq!(
         after.created_at().as_str(),
@@ -1948,7 +1949,7 @@ async fn a_new_connection_replaces_the_previous_one() {
 #[tokio::test]
 async fn revocation_requests_the_close_of_the_active_connection() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
 
@@ -1995,7 +1996,7 @@ async fn heartbeat_round_trip_keeps_the_connection_alive() {
         Duration::from_secs(30),
     )
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let auth_message = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
     assert_eq!(
@@ -2032,7 +2033,7 @@ async fn silence_beyond_the_window_is_closed_with_4408() {
         Duration::from_secs(30),
     )
     .await;
-    let pairing = harness.approved_device_pairing(&["session.read"]).await;
+    let pairing = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
     let started = Instant::now();
@@ -2073,7 +2074,7 @@ async fn a_connection_that_stays_at_high_water_is_closed_after_the_grace() {
         },
     )
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
 
@@ -2139,7 +2140,7 @@ async fn a_transient_burst_that_drains_does_not_trip_the_slow_consumer_watchdog(
         },
     )
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
 
@@ -2312,7 +2313,7 @@ async fn a_peer_that_never_reads_is_finalized_within_a_bounded_time() {
         },
     )
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
 
     let mut slow = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut slow, DEVICE_ID, DEVICE_ORIGIN, false).await;
@@ -2384,7 +2385,7 @@ async fn a_stuck_write_still_lets_the_session_judgments_run() {
         },
     )
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
 
     let mut slow = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut slow, DEVICE_ID, DEVICE_ORIGIN, false).await;
@@ -2449,7 +2450,7 @@ fn protocol_constants_are_not_configurable() {
 #[tokio::test]
 async fn a_hello_without_a_common_version_is_closed_with_4406() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     client.step("无公共版本");
     let text = json!({
@@ -2478,7 +2479,7 @@ async fn a_hello_without_a_common_version_is_closed_with_4406() {
 #[tokio::test]
 async fn an_envelope_version_other_than_v1_is_closed_with_4406() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     client.step("信封版本 2");
     let text = json!({
@@ -2498,7 +2499,7 @@ async fn an_envelope_version_other_than_v1_is_closed_with_4406() {
 #[tokio::test]
 async fn a_missing_required_feature_is_reported_with_details_and_closed() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     client.step("必需 feature 未满足");
     send_hello(
@@ -2522,7 +2523,7 @@ async fn a_missing_required_feature_is_reported_with_details_and_closed() {
 #[tokio::test]
 async fn selected_features_are_the_sorted_intersection() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     send_hello(
         &mut client,
@@ -2557,7 +2558,7 @@ async fn authenticated_echoes_the_negotiated_limits_and_never_raises_them() {
         max_replay_events_per_batch: u64::MAX,
     })
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let auth_message = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
     assert_eq!(
@@ -2578,7 +2579,7 @@ async fn authenticated_echoes_the_negotiated_limits_and_never_raises_them() {
         max_replay_events_per_batch: 10,
     })
     .await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let auth_message = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
     assert_eq!(
@@ -2597,7 +2598,7 @@ async fn authenticated_echoes_the_negotiated_limits_and_never_raises_them() {
 #[tokio::test]
 async fn envelope_sequence_and_type_violations_are_rejected_without_closing() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
 
@@ -2654,7 +2655,7 @@ async fn envelope_sequence_and_type_violations_are_rejected_without_closing() {
 #[tokio::test]
 async fn an_unknown_message_type_is_rejected_as_type_unsupported_and_keeps_the_sequence() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
 
@@ -2684,7 +2685,7 @@ async fn an_unknown_message_type_is_rejected_as_type_unsupported_and_keeps_the_s
 #[tokio::test]
 async fn a_schema_invalid_envelope_that_consumed_the_sequence_does_not_strand_the_connection() {
     let harness = Harness::new().await;
-    let _ = harness.approved_device_pairing(&["session.read"]).await;
+    let _ = harness.approved_device_pairing().await;
     let mut client = Client::connect(harness.addr, Some(DEVICE_ORIGIN)).await;
     let _ = authenticated(&mut client, DEVICE_ID, DEVICE_ORIGIN, false).await;
 

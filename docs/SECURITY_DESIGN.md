@@ -3,6 +3,7 @@
 > 状态：编码前安全基线（Draft）  
 > 版本：0.5
 > 日期：2026-10-16  
+> 修订记录（2026-10-16，`pairing-model`）：配对只保留两条密码学校验（用配对载荷里的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节一致），**短验证码（SAS）两套全部删除**——§5 新增 §5.1 说明「为什么本协议不需要短验证码」，§9.3 的 pairing secret 用途、§9.4 的确认页展示项与 §18.1 的测试项随之收窄；**设备权限层删除**——§2.1/§2.2、§3 的 `security-metadata` 行、§4.2 的设备条目、§5 的威胁控制、§7.1/§7.2、§8、§9.4、§9.5、§10.1、§10.2 与 §12.3 改为「通过设备认证即可执行业务命令，设备不再有授权维度」，§10.2 的表格去掉「所属 pack」列、`pack.*`/`preset.*` 两类词汇删除；**保留**设备认证与每连接 challenge-response、配对确认只能由本机用户完成、撤销立即关闭连接、速率与各项上限、跨节点 `grant.*`/Export `scopes`/Import grants。威胁模型与信任边界没有放宽——删 SAS 的前提是 §5.1 写明的两条密码学要求已由 `pwa-web-client` 承担。  
 > 修订记录（2026-10-16，`ui-csp-inline-styles`）：§11.1 的 `[实现现状]` 按实绩改写——前端内联样式形态已移除（入口文档把 reset 外置为同源 `/entry-reset.css`，并以**必须保持为空**的同源 `/rnw-stylesheet.css` 承载 `react-native-web` 的运行时样式表），样式改由**同源外部样式表**交付，CSP 取值**仍未放宽**（`insertRule` 不是 CSP 的检查点，既不得写成「阻止了样式注入」，也不得写成「放宽了基线」）。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4）：§11.1 加 `[实现现状]`——静态面的 CSP **由响应头下发**（取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线）并带四个与配对端点同取值的头，基线未被放宽（产物里的内联样式仍被拒）；§13.4 登记同包发布的静态资源属 `public-artifact` 类别（静态面只交付公开构建产物）；§16.3 写回「嵌入二进制 + 同包发布 + `daemon.status.uiBuildVersion` 可检查」与发布构建缺产物即拒绝启动。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-14，`sync-server-connection` WP7）：§9.4 与 §9.5 各加一段 `[实现现状]`——§9.4 写回 Sync 连接面的 Origin 校验实绩（来源三形态不折叠、逐字比较、`Absent` 与非 `https` 一律拒绝、`HostPolicy` 的已知偏差）与配对/认证只覆盖到「认证完成」的边界（业务命令级授权未接线）；§9.5 写回设备撤销传播实绩（`4410` 持久提交后经组合根 `ConnectionCloser` 关闭真实连接注册表、拒绝后续认证）与仍未落地项（Access 出站重连、设备侧 scope 缩减关连接）。威胁模型与信任边界**未变**。  
@@ -29,8 +30,8 @@
 
 ### 2.1 必须保证
 
-- 只有已配对、未撤销且具有对应 scope 的设备或节点可以访问被授权资源。
-- 远程主体创建会话时只能使用 Owner Node 显式导出的 Agent 与 workspace template，不能提交任意 Owner 路径。
+- 只有已配对、未撤销的设备或节点可以访问本节点资源：设备通过认证即可执行本节点的全部业务命令（设备方向不再有授权维度，见 §10），节点仍受 Owner Export grant 约束。
+- 跨节点远程主体创建会话时只能使用 Owner Node 显式导出的 Agent 与 workspace template，不能提交任意 Owner 路径（Node Link 面）；本机自己的设备在 Sync 面可以提交会话目录，但受 §12.3 的绝对路径、存在性与规范化校验约束。
 - Access Node 不能扩大 Owner Export grant，也不能取得 Provider/MCP 凭据。
 - 节点配对不产生传递信任；第一阶段 imported Agent 不允许再次通过 Node Link 导出。
 - 网络路径、Tailnet 成员身份或同一 LAN 不能代替应用身份。
@@ -64,7 +65,7 @@
 |---|---|---|
 | `secret` | Node/Device 私钥、Provider token、pairing secret、TLS private key | 不同步、不记录；平台安全存储或明确失败关闭 |
 | `sensitive-content` | prompt、回复、终端、diff、文件内容、ACP `rawJson`、附件 | 仅授权设备可读；受保留期、配额和渲染隔离约束 |
-| `security-metadata` | node/device public key、Export grant、scopes、撤销时间、Node fingerprint、审计结果 | 完整性优先；只向有权主体暴露必要字段 |
+| `security-metadata` | node/device public key、Export grant、节点信任记录与 Export 的授权集合（`grant.*` 展开值）、撤销时间、Node fingerprint、审计结果 | 完整性优先；只向有权主体暴露必要字段 |
 | `operational-metadata` | session title、Agent/model、时间、错误码、sequence | 仍可能泄露项目活动；按授权过滤和日志最小化 |
 | `public-artifact` | PWA 静态资源、公开 schema、fixture、公钥算法信息 | 必须有发布完整性，不能包含生产 secret |
 
@@ -86,7 +87,7 @@
 
 ### 4.2 有限信任主体
 
-- 已配对设备：只信任其持有设备私钥，不信任其超出 scopes 的行为。
+- 已配对设备：只信任其持有设备私钥与「本机用户已确认这台设备」这一事实。设备方向不再有授权维度（没有可越出的 scope 集合）：认证通过即可执行本节点全部业务命令，边界由本机确认与撤销（而非 scope）决定，见 §10.1。
 - 已配对 Access Node：只信任其持有 Node 私钥并遵守 Export grant；不自动信任其本地客户端或下游节点。
 - ACP Agent 子进程：信任它按 ACP 交互，但其输出、错误、扩展字段和资源消耗不可信。
 - 反向代理：只信任 TLS 终止与转发；其身份 Header 不产生 ACP Remote 权限。
@@ -107,16 +108,16 @@
 
 | 威胁 | 主要控制 |
 |---|---|
-| 未配对设备连接 | WSS + Device challenge-response + scopes |
+| 未配对设备连接 | WSS + Device challenge-response（认证即业务命令的执行前提） |
 | 未配对/已撤销节点连接 | WSS + Node challenge-response + Export grant + revocation |
 | Tailnet/LAN 内横向访问 | 应用身份独立于网络身份；Daemon 默认 loopback |
 | Node 冒充或 endpoint 替换 | QR 固定 Node public key；每次连接验证 Node proof |
-| 二维码转发/截获 | 短期单次 secret、Node proof、双方独立 SAS、本机确认 |
+| 二维码转发/截获 | 短期单次 secret、配对载荷带外携带主机公钥、认领 HMAC、Host proof、本机确认（§5.1） |
 | 握手和命令重放 | fresh nonce、connection ID/sequence、`requestId` 幂等 |
 | 已撤销设备继续使用 | 撤销检查、立即关闭连接、后续认证失败 |
 | CSWSH/CSRF/DNS rebinding | HTTPS、Origin/Host allowlist、同源接口、loopback 管理通道保护 |
 | XSS 和 Agent 内容注入 | CSP、无第三方脚本、结构化渲染、HTML 禁用/清洗、`rawJson` 文本化 |
-| 越权命令 | 服务端逐命令 scope + 状态 + workspace 检查 |
+| 越权命令 | 服务端逐命令校验「已通过设备认证 + 会话状态 + workspace 边界」；跨节点命令另按 Owner Export grant ∩ 本地授权判定 |
 | Access Node 权限转授过宽 | Owner grant ∩ Access local grant；Owner 最终授权；审计 `viaNodeId` |
 | 节点循环和能力洗白 | 第一阶段单 hop；imported Agent 禁止再次导出；来源链检查 |
 | 重复 prompt/审批 | durable idempotency、Session Actor、interaction first-writer-wins |
@@ -124,6 +125,19 @@
 | 磁盘耗尽和超大输出 | TTL、配额、截断标识、存储失败关闭 |
 | 日志或错误泄露 | 数据分类、字段 allowlist、默认脱敏 |
 | npm/二进制篡改 | 锁定构建、平台包映射、checksum、provenance、最小发布权限 |
+
+### 5.1 `[决定]` 为什么本协议不需要短验证码（SAS）
+
+**决策句**：ACP Remote 的配对与认证**不派生、不在 wire 上返回、不展示也不校验短验证码**。信任锚是「配对载荷**带外**携带主机公钥与一次性配对秘密 + 认领阶段以配对秘密计算的 HMAC」——教科书里 SAS 所防的公钥替换已经由这条锚承担；而对本流程里剩下的两种现实威胁（配对载荷在带外被整条替换、配对秘密泄露），SAS **完全无效**。设备侧的主机信任因此由两条密码学要求确立，不需要人眼比对。
+
+理由：
+
+- SAS 在教科书里的职责是「公钥经不可信通道交换时被替换」的带外校验。本协议的二维码/URL **带外**携带 `hostId` 与主机公钥，且认领与状态请求都必须用一次性配对秘密算出正确的 HMAC 才会被受理（`SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §13.2），因此攻击者即使能改写通道，也无法在不掌握配对秘密的前提下让设备接受另一把主机公钥。这条锚的强度不依赖人眼比数字。
+- SAS 能核对的只是「载荷里那把公钥」，**不是**「设备最终落盘的那把」。设备此后长期使用的主机公钥必须靠两条设备侧校验确立：用配对载荷里的主机公钥验证认领响应的 `hostProof`，以及已批准响应里的主机公钥与载荷**逐字节相同**（状态响应不含任何主机签名，只能靠比对）。两条都失败关闭、都不需要人参与，要求见能力规格 `pwa-web-client`。
+- 对剩下的两种现实威胁，SAS 无效：① 配对载荷在带外被**整条替换**——真主机那次配对从未被认领，真主机终端上根本没有可比对的数字，用户比的是攻击者主机算出的数字；② 配对秘密泄露——持有者能算出同一个数字。
+- 删除 SAS 不降低任何已承诺的安全属性：它剩下的作用只是「不依赖代码正确性的人眼检查点」，属纵深而非安全依据；保留它反而会让「已经比对过」的错觉掩盖第 2 条那个真正的缺口。
+
+**明确保留**的仪式与边界（不因本条放宽）：配对确认仍必须由**本机用户**在电脑上完成（发起配对 + 按一次 y）；设备认证仍是每连接 challenge-response；设备撤销仍立即关闭活动连接；速率与各项上限不变。删除 SAS 的实施范围（两套 transcript domain 与固定向量、配对状态字段、本地管理方法字段、CLI 参数与展示项）见 `SYNC_PROTOCOL.md` §7.2、`NODE_LINK_PROTOCOL.md` §9.2/§9.4 与 `LOCAL_ADMIN_PROTOCOL.md`。
 
 ## 6. 信任边界与数据流
 
@@ -151,7 +165,7 @@ Local clients -> Access Node -> Node Link/WSS -> Owner Node -> AgentHost -> ACP 
 - TLS 必须在 Daemon 或同机可信 Provider 终止。
 - 配置必须声明 canonical public origin、允许的 Host 和可信代理地址。
 - 除明确配置的同机代理外，不信任 `Forwarded`、`X-Forwarded-*` 或供应商身份 Header。
-- 不根据源 IP、`.ts.net` 后缀、Tailnet 用户或客户端证书自动增加 scopes。
+- 不根据源 IP、`.ts.net` 后缀、Tailnet 用户或客户端证书自动增加授权（设备方向没有可增加的授权维度，节点方向只能是 Owner 显式授予的 grant）。
 - 不能默认无认证监听 `0.0.0.0` 或 `[::]`。
 
 ### 7.2 反向代理
@@ -162,7 +176,7 @@ Local clients -> Access Node -> Node Link/WSS -> Owner Node -> AgentHost -> ACP 
 - 保留 WebSocket message 边界和 `Origin`。
 - 不缓存 pairing、认证、Sync API 或敏感响应。
 - 限制 Host，拒绝任意 Host 转发和 DNS rebinding。
-- 不注入能够改变 ACP Remote Actor/scopes 的身份 Header。
+- 不注入能够改变 ACP Remote Actor 或授权判定的身份 Header。
 
 TLS 在其他机器或云服务终止时，默认 Profile 不再提供客户端到 Daemon 的端到端机密性，第一阶段不视为正式支持部署。
 
@@ -190,7 +204,7 @@ Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管
 - `acp-facade` 通过 stdio 服务 Zed，不开放远程 TCP 管理面。
 - 本地 IPC 只允许启动 Daemon 的 OS 用户访问；授权依据是"调用方是同一 OS 用户"，不新增本地 token，也不复用设备/节点身份。
 - 本地管理请求/响应编码由该 adapter 自己拥有，不复用 Sync 或 Node Link DTO。
-- Sync/Node Link scope 不能映射到任意原始路径选择、Provider credential 读取或未显式导出的 Agent/MCP 配置。
+- 设备认证与 Export grant 都不能映射到 Provider credential 读取或未显式导出的 Agent/MCP 配置；Sync 面的设备可以提交会话目录（受 §12.3 的路径校验），Node Link 面仍不得让请求携带任意 Owner 路径。
 - IPC endpoint 建立失败（ACL/权限不符、路径被占用、socket 被替换为符号链接）时正式模式拒绝启动，不得降级为无管理通道或临时无认证 endpoint。
 
 ## 9. 身份、密钥与配对
@@ -202,7 +216,7 @@ Provider/MCP 配置、原始 workspace 路径、Node/Device 管理和 Export 管
 | TLS private key | endpoint TLS | 由 Daemon或同机 Provider 管理 |
 | Node identity key | Sync `hostProof`（wire 字段名 `hostId`/`hostPublicKey`/`hostProof`）与 Node Link `nodeProof`、稳定节点身份和节点配对 | 长期；丢失后所有设备/节点重新配对 |
 | Device identity key | Device proof | 每安装/origin 独立；撤销或数据清理后失效 |
-| pairing secret | 首次 claim、状态查询和 SAS | 单次、短期，最迟到原 expiresAt |
+| pairing secret | 首次 claim 与状态查询（配对认领 HMAC、状态 HMAC） | 单次、短期，最迟到原 expiresAt |
 | TLS session key | 当前连接机密性/完整性 | 单连接临时，由 TLS 产生 |
 
 Node/Device identity key 不用于业务内容加密，TLS key 不作为长期身份。
@@ -236,11 +250,11 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 
 ### 9.4 配对和认证
 
-- 精确状态、HMAC、SAS、transcript 和 challenge-response 以 Sync Protocol 为准（节点侧以 Node Link 为准）；`identity-auth` 一侧的状态机边界、握手入口、nonce/重放与授权展开见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)。
+- 精确状态、HMAC、transcript 和 challenge-response 以 Sync Protocol 为准（节点侧以 Node Link 为准）；`identity-auth` 一侧的状态机边界、握手入口、nonce/重放与授权展开见 [IDENTITY_AND_AUTH_CONTRACT.md](./IDENTITY_AND_AUTH_CONTRACT.md)。
 - Device/Node pairing 只能由目标节点本地管理入口创建和确认。
-- 配对 UI 必须显示设备名称、key fingerprint、SAS、请求 scopes 和过期时间。
+- 配对 UI 必须显示设备名称、key fingerprint 与过期时间；节点方向另显示待授予的 `grant.*`。设备方向没有可展示的授权集合，也不展示短验证码（理由见 §5.1）。
 - 用户确认前设备记录不能获得 active 权限。
-- 配对授予的 scope 是**设备级**的，不是配对瞬间的资源快照。`session.create`（设备授权包 `pack.create-session`，只含这一个命令名，且不进任何预设、必须被显式请求）就是这条规则的样板：它的判定以「该 workspace 当前是否已登记、该 Agent 当前是否已配置」为准，因此**一次授予覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent，新登记的资源自动进入已授权范围，无需重新授权**。配对确认页必须原样展示这句副作用，不能只列 scope 名称。撤销该 scope 或撤销设备立即使后续命令被拒（见 §10.2）。
+- 设备配对不授予任何授权：设备记录不保存 scope 集合，配对确认页也没有权限栏，通过认证的设备即可执行本节点全部业务命令（§10.1）。`session.create` 因此不再有「设备级授权 vs 资源快照」的语义——它的判定只剩本机的资源校验（已登记别名，或客户端提交的绝对目录，见 `SYNC_PROTOCOL.md` §11.5）；跨节点方向仍按 Owner 的 `grant.remote-work` 判定。
 - 每个新 WSS 完整认证，不签发长期 bearer session/refresh token。
 - Node identity 变化进入 `identity_changed`，不能自动接受。
 
@@ -257,7 +271,7 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 ### 9.5 撤销与轮换
 
 - 撤销设备必须提交持久状态后立即关闭其 active connection。
-- scope 缩减立即作用于后续命令；高风险缩减应主动关闭连接并要求重新认证，以刷新客户端显示。
+- 授权缩减（节点方向的 `grant.*` 与信任记录的 `exportIds`）立即作用于后续命令；高风险缩减应主动关闭连接并要求重新认证，以刷新客户端显示。设备方向没有可缩减的授权集合——设备只有「已批准」与「已撤销」两态。
 - 怀疑 Device key 泄露时撤销该设备并重新配对。
 - 怀疑 Node key 泄露时生成新 Node identity、撤销所有设备/节点信任并重新配对；不能用普通 endpoint 更新掩盖 key 变化。
 - TLS 证书轮换不改变 Node identity；Node key 轮换不应由 TLS 证书更新自动触发。
@@ -275,41 +289,45 @@ Node/Device identity key 不用于业务内容加密，TLS key 不作为长期�
 
 ## 10. 授权模型
 
-### 10.1 Scope 是服务端能力
+### 10.1 授权是服务端判定
 
-- UI 隐藏按钮不是授权。
-- 每条命令根据当前连接 Actor、最新设备记录、session 状态和 workspace 边界重新检查。
-- scope 名称与命令名一致，词表与归类以 `compatibility/commands/v1/commands.json` 为唯一来源；未知 scope 不自动产生权限。
-- 设备只能看见其 scopes 允许的 snapshot/event；过滤后的 sequence 空洞不能泄露内容。
-- 授权失败不能把目标是否存在泄露给无权设备。
+- UI 隐藏按钮不是授权，隐藏入口也不是拒绝。
+- 每条命令根据当前连接 Actor、最新设备记录（是否已撤销）、session 状态和 workspace 边界重新检查。设备方向的唯一前提是「该连接已通过设备认证」——设备配对不授予授权，因此不存在命令级授权判定。
+- 命令的 `scope` 字段在 `compatibility/commands/v1/commands.json` 中与命令名同值，是命令词表的登记副本，不是设备侧的判定依据；设备方向不接受任何授权词汇（`pack.*`、`preset.*` 与 scope 在配对请求或命令参数中出现即被拒绝）。
+- 授权词汇只剩跨节点导出授权 `grant.*`：其名称与命令名的对应关系以 `compatibility/commands/v1/commands.json` 为唯一来源，未知或拼错的名称在展开时显式拒绝，不自动产生权限（见 §10.2）。
+- 已认证设备看到本节点全部快照与事件（不再按授权过滤）；仍可能出现的 sequence 空洞只来自保留策略（已压缩或已清理的事件），客户端不得据此推断隐藏内容。
+- 认证类拒绝 MUST 先于本机读取：不能把目标会话或资源是否存在泄露给未认证或已撤销的连接。
 
-### 10.2 命令、scope、pack 与 grant
+### 10.2 命令与授权词汇
 
-授权词汇分四层，同一概念只用一个写法：**命令 scope**（wire 与数据库保存的最小授权单位，等于命令名）、**设备授权包 `pack.*`**（Owner 配对界面上的分组）、**配对预设 `preset.*`**（一组 pack 的默认值）、**跨节点导出授权 `grant.*`**（Owner 授予 Access Node 的能力上限）。完整清单与机器可读定义在 `compatibility/commands/v1/commands.json`；下表是该文件的权威展开。
+授权词汇只剩两层，同一概念只用一个写法：**命令 scope**（`compatibility/commands/v1/commands.json` 中与命令名同值的登记字段，设备方向不再按它判定）与**跨节点导出授权 `grant.*`**（Owner 授予 Access Node 的能力上限）。设备授权包 `pack.*` 与配对预设 `preset.*` 已随设备权限层删除——设备配对不授予任何授权，wire、设备记录、本地管理方法与配对 UI 都不再出现这两类名称。完整清单与机器可读定义在 `compatibility/commands/v1/commands.json`；下表是该文件的权威展开。
 
-| 命令 | 类别 | 所需 scope | 所属 pack | 对应 grant | 首阶段 |
-|---|---|---|---|---|---|
-| `session.list` | query | `session.list` | `pack.observe` | `grant.observe` | mvp |
-| `session.read` | query | `session.read` | `pack.observe` | `grant.observe` | mvp |
-| `command.status` | query | `command.status` | `pack.observe` | `grant.observe` | mvp |
-| `session.mode.list` | query | `session.mode.list` | `pack.observe` | `grant.observe` | conditional_mvp |
-| `session.config.list` | query | `session.config.list` | `pack.observe` | `grant.observe` | conditional_mvp |
-| `session.prompt` | mutation | `session.prompt` | `pack.interact` | `grant.interact` | mvp |
-| `session.cancel` | mutation | `session.cancel` | `pack.interact` | `grant.interact` | mvp |
-| `elicitation.respond` | mutation | `elicitation.respond` | `pack.interact` | `grant.interact` | conditional_mvp |
-| `session.mode.set` | mutation | `session.mode.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
-| `session.config.set` | mutation | `session.config.set` | `pack.configure-session` | `grant.configure-session` | conditional_mvp |
-| `permission.resolve` | mutation | `permission.resolve` | `pack.approve` | `grant.approve` | mvp |
-| `session.create` | mutation | `session.create` | `pack.create-session` | `grant.remote-work` | mvp（Node Link 与 Sync 共用命令名，payload 不同） |
-| `session.resume` | mutation | `session.resume` | 无（仅 Node Link） | `grant.remote-work` | conditional_mvp（取决于目标 Agent 的 `sessionCapabilities.resume`） |
+| 命令 | 类别 | 所需 scope | 对应 grant | 首阶段 |
+|---|---|---|---|---|
+| `session.list` | query | `session.list` | `grant.observe` | mvp |
+| `session.read` | query | `session.read` | `grant.observe` | mvp |
+| `command.status` | query | `command.status` | `grant.observe` | mvp |
+| `session.mode.list` | query | `session.mode.list` | `grant.observe` | conditional_mvp |
+| `session.config.list` | query | `session.config.list` | `grant.observe` | conditional_mvp |
+| `session.prompt` | mutation | `session.prompt` | `grant.interact` | mvp |
+| `session.cancel` | mutation | `session.cancel` | `grant.interact` | mvp |
+| `elicitation.respond` | mutation | `elicitation.respond` | `grant.interact` | conditional_mvp |
+| `session.mode.set` | mutation | `session.mode.set` | `grant.configure-session` | conditional_mvp |
+| `session.config.set` | mutation | `session.config.set` | `grant.configure-session` | conditional_mvp |
+| `permission.resolve` | mutation | `permission.resolve` | `grant.approve` | mvp |
+| `session.create` | mutation | `session.create` | `grant.remote-work` | mvp（Node Link 与 Sync 共用命令名，payload 不同） |
+| `session.resume` | mutation | `session.resume` | `grant.remote-work` | conditional_mvp（仅 Node Link；Sync 收到返回 `command.unsupported`） |
 
-- 查询类命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`）全部归 `pack.observe`，因此断线恢复所需的 `command.status` 不需要额外授权。
-- `session.create` 是设备/Access principal 的 scope，同时要求 Owner 侧 `grant.remote-work`。**Sync 面已暴露该入口**：设备侧 scope 来自配对时显式请求的 `pack.create-session`（该包不进任何预设），payload 只接受本机已登记 workspace 的别名与已配置 Agent 的标识 `{ workspaceAlias, agentId }`——没有 Export 概念，因此 `exportId`、`templateParams`、`cwd`、绝对路径、MCP 配置与凭据一律不被接受。Node Link 侧仍额外要求 `exportId` 与 Export 发布的 workspace template，形状见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.7；两个面共用同一套命令名、幂等与终态语义。Node Link 首个纵向切片必须实现它以支持 Zed `session/new`。
-- **`session.create` 的授权是设备级而不是资源级，因此有明确副作用**：判定以「该资源当前是否已登记（workspace）或已配置（Agent）」为准，而不是以配对时的快照为准。授予 `session.create` scope **覆盖该节点当时及此后新增的全部已登记 workspace 与已配置 Agent；新登记的资源无需重新授权即自动进入已授权范围**。这条语义不得只隐含在 scope 名称之下——配对确认页与设备管理 UI 必须原样展示它。撤销该 scope 或撤销设备立即使后续创建被拒且无副作用（不启动进程、不写会话行、不分配会话标识）。
-- `session.resume` 同样只归 `grant.remote-work`（不新增授权维度），它的 payload 是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录一律取自 Owner 自身的持久化记录，不接受客户端提供。目标 Agent 未宣告 `sessionCapabilities.resume` 时显式失败，不降级为新建会话。
-- 配对预设：`preset.remote-control` = `pack.observe` + `pack.interact` + `pack.configure-session` + `pack.approve`；`preset.read-only` = `pack.observe`。配对确认页必须完整展示最终 scopes，不能用含糊的“完全访问”替代。
-- 设备记录与 wire 只保存独立 scopes，不保存 pack 或 preset 名称；`pack.*`、`preset.*`、`grant.*` 都是授权管理的输入形式，落到 wire 前必须展开。
-- `pack.approve` 单独分组是为了让风险在配对和设备管理 UI 中清晰可见，不是为了削弱远程控制；跨节点的 `grant.interact` 不包含审批，审批必须显式授予 `grant.approve`。远程客户端可以选择 Agent 当前 permission request 明确提供、且 Owner 本地策略允许的任一 option；如果 Agent 明确说明某个 option 会形成持久授权，客户端必须展示该持续范围。客户端不能伪造新 option，也不能在请求之外修改 Owner 的全局沙箱或权限策略。
+- 「所需 scope」列是**登记副本**，不是设备侧的授权判定：设备方向对任何命令都没有 scope 前提，认证通过即可执行。
+- 五条查询命令（`session.list`、`session.read`、`command.status`、`session.mode.list`、`session.config.list`）在设备方向无需任何授权；断线恢复所需的 `command.status` 因此始终可用。节点方向它们仍归 `grant.observe`。
+- `session.create` 经两个传输面暴露，前提与载荷不同：
+  - **Sync 面**以「该连接已通过设备认证」为唯一前提（不再有设备侧授权判定）。payload 只允许 `agentId`（必填）与目录引用二者之一：已登记别名 `workspaceAlias`，或客户端提交的**绝对**目录 `workspacePath`（1..=4096 字节）；两者恰好出现一个，同时出现或都不出现，以及出现任何其它键（含 `exportId`、`templateParams`、MCP 配置或凭据字段）一律以 `protocol.schema_invalid` 拒绝且不创建会话。
+  - **Sync 面的目录校验**：形状不合法（相对路径、含 `..`、别名未在本机登记）以参数类错误拒绝，且不触碰文件系统；形式合法但无法解析（目录被删除、被换成文件、规范化失败、权限不足）以 `internal.unavailable` 拒绝。两类都不得创建会话、不得启动 Agent 进程、不得回退到任何替代目录；解析得到的规范化路径不得回显给对端（§12.3）。
+  - **Node Link 面**仍额外要求 `exportId`、Export 发布的 workspace template 与 Owner 的 `grant.remote-work`，且**请求不得携带任意 Owner 路径**（只允许 `workspaceAlias`），形状见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.7。两个面共用同一套命令名、幂等与终态语义。
+- `session.resume` 只归 `grant.remote-work`（不新增授权维度），它的 payload 是空对象：恢复所需的 Agent、ACP 会话标识与创建时目录一律取自 Owner 自身的持久化记录，不接受客户端提供。目标 Agent 未宣告 `sessionCapabilities.resume` 时显式失败，不降级为新建会话。
+- 节点方向的配对确认页与 Export 管理 UI 必须完整展示最终 `grant.*` 集合，不能用含糊的「完全访问」替代；设备方向的配对确认页没有权限栏——设备方向没有可授予的授权。
+- 节点信任记录与 Export 只保存 `grant.*` 展开后的命令名集合；`grant.*` 是唯一的授权管理输入形式，落到 wire 与记录前必须展开。设备记录不保存任何授权集合。
+- `grant.approve` 单独分组是为了让审批风险在 Export 与节点配对 UI 中清晰可见，不是为了削弱远程控制：跨节点的 `grant.interact` 不包含审批，审批必须显式授予 `grant.approve`。远程客户端可以选择 Agent 当前 permission request 明确提供、且 Owner 本地策略允许的任一 option；如果 Agent 明确说明某个 option 会形成持久授权，客户端必须展示该持续范围。客户端不能伪造新 option，也不能在请求之外修改 Owner 的全局沙箱或权限策略。
 
 ### 10.3 本地管理能力（永不远程授予）
 
@@ -406,10 +424,10 @@ local.audit.export         本地审计导出（不含会话正文）
 
 ### 12.3 Workspace
 
-- 原始 workspace 路径只能由 Owner Node 本地管理入口选择。
-- 远程主体只能选择 Export 发布的 workspace alias/template，不能构造任意绝对路径、追加目录或修改 Agent 沙箱。
+- 原始 workspace 路径的登记只能由 Owner Node 本地管理入口完成（`local.workspace.select`）。唯一例外是 Sync 面的 `session.create` 可以携带本机自己的设备提交的绝对目录；它必须先通过本节的路径校验与规范化，且不得被当作「别名」登记（见 §10.2 与 `SYNC_PROTOCOL.md` §11.5）。
+- 跨节点远程主体只能选择 Export 发布的 workspace alias/template，不能构造任意绝对路径、追加目录或修改 Agent 沙箱；Node Link 面的请求不得携带任意 Owner 路径。
 - 文件路径展示和下载必须重新检查其属于会话授权边界；不能只依赖客户端传来的 path。
-- 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。可判定规则（权威实现归 core，见 `CORE_PORTS_AND_STORAGE.md` §11.9）：只接受**绝对路径**；写入与使用前都必须存在且是**目录**；`canonicalize` 后的结果才是持久权威值；拒绝相对路径与含 `..` 的输入；UNC/网络路径允许但记一次结构化警告；路径与规范化结果**不得**出现在 catalog、事件、错误 `details` 或对端可见的任何输出里。
+- 规范化路径后再比较，处理 symlink、junction、大小写、UNC 和 `..`。可判定规则（权威实现归 core，见 `CORE_PORTS_AND_STORAGE.md` §11.9）：只接受**绝对路径**；写入与使用前都必须存在且是**目录**；`canonicalize` 后的结果才是持久权威值；拒绝相对路径与含 `..` 的输入；UNC/网络路径允许但记一次结构化警告；路径与规范化结果**不得**出现在 catalog、事件、错误 `details` 或对端可见的任何输出里——口径是「不得泄漏**客户端尚未知道的**宿主路径」：客户端自己提交的目录因此不构成泄漏，但它同样 MUST NOT 被回显为对端可见字段。
 - Agent 的实际文件/命令权限仍由 Agent sandbox 和用户配置控制；ACP Remote 不能虚报更严格隔离。
 
 ## 13. 持久化与本地数据保护
@@ -472,7 +490,7 @@ local.audit.export         本地审计导出（不含会话正文）
 
 ```text
 pairing.created / claimed / approved / rejected / expired
-device.authenticated / auth_failed / revoked / scopes_changed
+device.authenticated / auth_failed / revoked / scopes_changed   # scopes_changed 为历史取值，本版本不再产生（见下方 [决定]）
 node.paired / node.authenticated / node.auth_failed / node.trust_revoked / node.identity_changed
 export.created / revoked
 import.added / removed
@@ -481,6 +499,8 @@ authorization.denied
 rate_limit.triggered
 storage.integrity_failed
 ```
+
+`[决定]`（2026-10-16，`pairing-model` 变更）`device.scopes_changed` 标注为**只读的历史取值**：设备不再有授权集合（删除了设备权限层，设备通过认证即可执行命令），本版本**不再产生**该动作。保留它是因为升级前的库可能已有这类审计行——两张审计表的 `action` CHECK 仍接纳它，收缩取值会让历史行写不回去、读不出来（`CORE_PORTS_AND_STORAGE.md` §7.2 的 v8 段与 §11.6 第 1 条）。
 
 `[决定]`（2026-09-26）新增 `node.authenticated`/`node.auth_failed` 两类：节点握手是安全动作，成功与失败都要留痕，而此前节点侧只有 `node.paired`/`node.trust_revoked`/`node.identity_changed`，握手的成败只能靠误用其它取值表达。首次认证把已批准配对推进到 `consumed` 时**不另设动作**——那次转移随该写集记录 `node.authenticated`（设备为 `device.authenticated`）；配对的认领方也会出现在审计里（`actor_kind = 'pairing_claimant'`），落库时两张审计表的 `actor_kind`/`action` CHECK 必须同步扩宽（12-step 表重建，见 `CORE_PORTS_AND_STORAGE.md` §7.2/§11.8）。
 
@@ -543,7 +563,7 @@ storage.integrity_failed
 | 场景 | 响应 |
 |---|---|
 | 客户端设备丢失 | Owner/Access Node 执行 `device revoke`，关闭连接；必要时检查审计记录 |
-| Device key 怀疑泄露 | 撤销该 device ID，清除 scopes，重新配对为新设备 |
+| Device key 怀疑泄露 | 撤销该 device ID，重新配对为新设备 |
 | Node key 丢失 | 生成新 Node identity，所有设备和节点重新配对 |
 | Node key 怀疑泄露 | 停止远程入口、轮换 Node key、撤销全部设备/节点信任、检查本地系统 |
 | TLS key/证书泄露 | 轮换证书和 TLS key；Node identity 保持不变但检查是否存在中间人窗口 |
@@ -560,8 +580,8 @@ storage.integrity_failed
 
 - Sync schema 正反 fixture、重复键、尺寸、深度和恶意 JSON。
 - transcript/HMAC/P1363 Rust-WebCrypto 互操作与错误向量（Rust 侧已在 `p256` 上对 12 个固定向量与 20 个畸形输入验证通过，见 `INITIAL_DESIGN.md` §16 第 6 条；实现阶段必须把同一批向量固化成 Rust 测试，而不是依赖一次性验证）。
-- pairing 并发 claim、过期、重放、SAS、拒绝和 secret 清理。
-- Node mismatch、Origin mismatch、错误 device/node、撤销和 scope 缩减。
+- pairing 并发 claim、过期、重放、拒绝和 secret 清理。
+- Node mismatch、Origin mismatch、错误 device/node、设备撤销和节点授权（`grant.*`/`exportIds`）缩减。
 - Export grant 交集、Access Node 越权、循环导出和 Node Link 重放。
 - `requestId` 重试、payload 冲突、崩溃窗口和 `uncertain`。
 - snapshot barrier、ACK 越界、sequence 回退和慢客户端。

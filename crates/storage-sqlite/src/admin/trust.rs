@@ -26,7 +26,7 @@ use acp_core::model::PairingSettlement;
 use acp_core::model::{
     Actor, ConflictKind, DeviceRecord, DeviceState, EntityRef, ExportId, Fingerprint, GrantSet,
     NodeId, NodeKind, NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState,
-    PairingTarget, PeerIdentity, PeerPublicKey, PortError, ScopeSet, Timestamp,
+    PairingTarget, PeerIdentity, PeerPublicKey, PortError, Timestamp,
 };
 use acp_core::ports::{
     DeviceRevocation, DeviceWrite, ExpiryWrite, NodeConnectedWrite, NodeRevocation, NodeWrite,
@@ -42,7 +42,9 @@ use crate::session_store::{Db, SqliteStore, blob, decode, decode_opt, opt_text, 
 
 /// `owned_device` 的读列（顺序无关；集中一处便于与 §7.3 对照）。
 /// `public_key` 参与读取：设备记录的指纹列必须与它派生出的指纹一致（见 `device_from_row`）。
-const DEVICE_COLUMNS: &str = "device_id, display_name, public_key, fingerprint, scopes_json, state, \
+/// **没有 scope 列**：设备记录不再有授权集合（`pairing-model` 删除设备权限层，v8 迁移删掉了
+/// `owned_device.scopes_json`）。
+const DEVICE_COLUMNS: &str = "device_id, display_name, public_key, fingerprint, state, \
      created_at, last_seen_at, revoked_at";
 
 /// `owned_node` 的读列。
@@ -77,10 +79,6 @@ fn device_from_row(row: &SqliteRow) -> Result<DeviceRecord, StorageError> {
         decode(&text(row, "device_id")?, "owned_device.device_id")?,
         &text(row, "display_name")?,
         fingerprint,
-        acp_core::model::ScopeSet::try_from_iter(decode_strings(
-            &text(row, "scopes_json")?,
-            "owned_device.scopes_json is not a JSON array",
-        )?)?,
         decode(&text(row, "state")?, "owned_device.state")?,
         decode(&text(row, "created_at")?, "owned_device.created_at")?,
         decode_opt(opt_text(row, "last_seen_at")?, "owned_device.last_seen_at")?,
@@ -854,11 +852,16 @@ impl TrustStore for SqliteStore {
                     // 过期不创建信任，也不把行推进到 approved。
                     return Err(PortError::Conflict(ConflictKind::Expired));
                 }
-                if !is_subset(granted_scopes.iter(), record.requested_scopes().iter())
-                    || !is_subset(granted_grants.iter(), record.requested_grants().iter())
-                {
+                if !granted_scopes.is_empty() {
+                    // 两个方向都不携带 scope（设备不再有授权维度、节点只带 grants）：非空集合是构造错误，
+                    // 与 grants 超出请求集合同款**显式拒绝**，不得静默丢弃。
                     return Err(PortError::InvalidRequest(
-                        "granted sets must not exceed the requested sets",
+                        "a pairing settlement must not carry a scope set",
+                    ));
+                }
+                if !is_subset(granted_grants.iter(), record.requested_grants().iter()) {
+                    return Err(PortError::InvalidRequest(
+                        "granted grants must not exceed the requested grants",
                     ));
                 }
                 match record.target() {
@@ -875,7 +878,7 @@ impl TrustStore for SqliteStore {
                                 "a device pairing must not carry export ids",
                             ));
                         }
-                        approve_device(&mut tx, &peer, granted_scopes, &write.context.at).await?;
+                        approve_device(&mut tx, &peer, &write.context.at).await?;
                     }
                     PairingTarget::Node => {
                         // 可见清单的校验与写入必须在同一事务（`design.md` D4）：分两次调用会出现
@@ -1201,10 +1204,12 @@ fn is_subset<'a>(
 /// secret 的 HMAC/proof 且本机用户确认），因此这里只要求指纹与既有身份材料一致（同一 `deviceId`
 /// 不得换绑公钥，§11.6 第 1 条），撤销时间与原因由 upsert 一并清空（状态回到 `active`）。撤销的
 /// 审计行不因复活消失（§11.3 的 tombstone 语义）。
+///
+/// **不接收任何授权集合**：设备配对不授予授权（设备记录根本没有 scope 列），落定的 scope 集合由
+/// `settle_pairing` 在进入本函数之前就以「必须为空」拒绝。
 async fn approve_device(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     peer: &PairingPeer,
-    granted_scopes: &ScopeSet,
     at: &Timestamp,
 ) -> Result<(), PortError> {
     let device_id = match peer.id() {
@@ -1227,7 +1232,6 @@ async fn approve_device(
         device_id.clone(),
         peer.display_name(),
         fingerprint,
-        granted_scopes.clone(),
         DeviceState::Active,
         at.clone(),
         None,
@@ -1338,18 +1342,21 @@ async fn validate_export_ids(
 /// 不能用标量 `max(a, b)` 代替：SQLite 的标量 `max` 在任一参数为 NULL 时返回 NULL，旧值为空时会把
 /// 首次写入的新时间错成 NULL。`revoke_reason`/`revoked_at` 恒为 NULL（撤销只走 `revoke_device`，
 /// `put_device` 拒绝 `revoked` 记录）。
+///
+/// 列清单里**没有**授权集合（v8 迁移删掉了 `owned_device.scopes_json`）：设备通过认证即可执行命令，
+/// 配对不授予授权，因此设备行没有任何集合列要写。
 async fn upsert_device(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     record: &DeviceRecord,
     public_key: &[u8],
 ) -> Result<(), StorageError> {
     sqlx::query(
-        "INSERT INTO owned_device (device_id, display_name, public_key, fingerprint, scopes_json, \
+        "INSERT INTO owned_device (device_id, display_name, public_key, fingerprint, \
          state, created_at, last_seen_at, revoked_at, revoke_reason) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL) \
          ON CONFLICT(device_id) DO UPDATE SET display_name = excluded.display_name, \
          public_key = excluded.public_key, fingerprint = excluded.fingerprint, \
-         scopes_json = excluded.scopes_json, state = excluded.state, \
+         state = excluded.state, \
          last_seen_at = CASE WHEN excluded.last_seen_at IS NULL THEN last_seen_at \
          WHEN last_seen_at IS NULL THEN excluded.last_seen_at \
          WHEN excluded.last_seen_at > last_seen_at THEN excluded.last_seen_at \
@@ -1361,7 +1368,6 @@ async fn upsert_device(
     .bind(record.display_name())
     .bind(public_key.to_vec())
     .bind(record.public_key_fingerprint().as_str())
-    .bind(encode_strings(record.scopes().iter().map(str::to_owned)))
     .bind(record.state().as_str())
     .bind(record.created_at().as_str())
     .bind(record.last_seen_at().map(Timestamp::as_str))

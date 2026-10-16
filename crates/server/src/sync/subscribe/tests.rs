@@ -91,7 +91,7 @@ fn at_text(text_epoch: &str, sequence: &str) -> serde_json::Value {
 #[tokio::test]
 async fn cursor_faults_are_distinguishable_and_never_clamped() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     // 保留窗口下界 6：序号 3 已早于窗口。
     world.store.set_window_low(6);
@@ -236,7 +236,7 @@ async fn an_unrepresentable_sequence_is_a_protocol_error_on_both_paths() {
     const ABOVE_U64: &str = "18446744073709551616";
 
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let mut harness = Harness::new(&world, &[]);
 
@@ -318,7 +318,7 @@ async fn an_unrepresentable_sequence_is_a_protocol_error_on_both_paths() {
 #[tokio::test]
 async fn first_sync_walks_reset_then_snapshot_then_caught_up() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     world.seed_workspace("project", "Project", &fixture::workspace_path());
     world
@@ -373,7 +373,7 @@ async fn first_sync_walks_reset_then_snapshot_then_caught_up() {
 #[tokio::test]
 async fn cache_incompatible_reset_is_confirmed_once_per_connection() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let mut harness = Harness::new(&world, &[]);
 
@@ -407,7 +407,7 @@ async fn cache_incompatible_reset_is_confirmed_once_per_connection() {
 #[tokio::test]
 async fn ack_is_monotonic_and_bounded_by_the_sent_barrier() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let mut harness = Harness::new(&world, &[]);
 
@@ -469,7 +469,7 @@ async fn ack_is_monotonic_and_bounded_by_the_sent_barrier() {
 #[tokio::test]
 async fn resubscribe_starts_from_the_submitted_cursor_not_the_stored_ack() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     world.store.push_sync_event(fixture::sync_event(
         "da702ba1-f49f-4e16-a677-a7744dfedba6",
@@ -522,7 +522,7 @@ async fn resubscribe_starts_from_the_submitted_cursor_not_the_stored_ack() {
 #[tokio::test]
 async fn a_valid_cursor_replays_events_then_announces_the_barrier() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     // 序号 6、7 两条在游标 5 之后可见的事件（`agent` 来源：不带身份字段）。
     for (id, sequence) in [
@@ -583,7 +583,7 @@ async fn a_valid_cursor_replays_events_then_announces_the_barrier() {
 #[tokio::test]
 async fn an_event_committed_after_the_snapshot_head_is_still_delivered() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     world
         .store
@@ -663,7 +663,7 @@ async fn an_event_committed_after_the_snapshot_head_is_still_delivered() {
 #[tokio::test]
 async fn a_large_window_is_delivered_in_batches_without_repeating_or_reordering() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 4));
     for sequence in 1..=4u64 {
         world.store.push_sync_event(fixture::agent_event(sequence));
@@ -710,7 +710,7 @@ async fn a_large_window_is_delivered_in_batches_without_repeating_or_reordering(
 #[tokio::test]
 async fn a_live_event_arriving_mid_replay_is_not_delivered_before_the_barrier() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 4));
     for sequence in 1..=4u64 {
         world.store.push_sync_event(fixture::agent_event(sequence));
@@ -755,7 +755,7 @@ async fn a_live_event_arriving_mid_replay_is_not_delivered_before_the_barrier() 
 #[tokio::test]
 async fn a_connection_is_not_a_live_target_while_the_replay_is_still_running() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 4));
     for sequence in 1..=4u64 {
         world.store.push_sync_event(fixture::agent_event(sequence));
@@ -796,7 +796,7 @@ async fn a_connection_is_not_a_live_target_while_the_replay_is_still_running() {
 #[tokio::test]
 async fn filtered_gaps_are_legal_and_the_barrier_advances_past_them() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 9));
     // 序号 2、5、9 三条可见；3/4、6/7/8 对该设备不可见（模拟权限过滤造成的空洞）。
     for sequence in [2u64, 5, 9] {
@@ -845,7 +845,7 @@ async fn the_origin_shape_follows_the_negotiated_event_origin_feature() {
     }
 
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 2));
     // 序号 1：`device` 来源（带非空 `deviceId`、`nodeId` 恒为 `null`）。
     world.store.push_sync_event(fixture::sync_event(
@@ -903,7 +903,7 @@ async fn the_origin_shape_follows_the_negotiated_event_origin_feature() {
 #[tokio::test]
 async fn an_unattributable_history_row_fails_closed_instead_of_forging_an_identity() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     world
         .store
@@ -931,11 +931,15 @@ async fn an_unattributable_history_row_fails_closed_instead_of_forging_an_identi
     );
 }
 
-/// 设备 scope 不含 `session.list`：整个订阅面失败关闭，不回任何资源（任务 4.6 的授权前置）。
+/// 本机没有该设备的信任行：整个订阅面认证类失败关闭，不回任何资源。
+///
+/// 设备方向不再有授权过滤（`pairing-model` 删除设备权限层），因此订阅面的唯一准入判定就是
+/// 「持久信任行存在」；这条用例把旧的「无 scope 被拒」换成它——旧实现在这里会给出
+/// `authorization.scope_denied`，而该错误码已不由设备方向产生。
 #[tokio::test]
-async fn a_device_without_the_observe_scope_is_denied() {
+async fn a_device_without_a_trust_row_is_denied() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.prompt"]);
+    // 故意不 seed_device：连接声称的设备在本机没有信任行。
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let mut harness = Harness::new(&world, &[crate::sync::snapshot::LOCAL_CATALOG_FEATURE]);
 
@@ -943,10 +947,10 @@ async fn a_device_without_the_observe_scope_is_denied() {
         .send("sync.subscribe", subscribe_body(serde_json::Value::Null))
         .await;
     assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0].code(), Some("authorization.scope_denied"));
+    assert_eq!(frames[0].code(), Some("auth.device_unknown"));
     assert!(
         fixture::bodies(&frames, "sync.reset_required").is_empty(),
-        "无权设备连重置都不该拿到"
+        "失败关闭的连接不该拿到重置"
     );
 
     let frames = harness
@@ -955,7 +959,7 @@ async fn a_device_without_the_observe_scope_is_denied() {
             serde_json::json!({ "reason": "initial_sync" }),
         )
         .await;
-    assert_eq!(frames[0].code(), Some("authorization.scope_denied"));
+    assert_eq!(frames[0].code(), Some("auth.device_unknown"));
     assert!(fixture::bodies(&frames, "sync.snapshot_chunk").is_empty());
 }
 
@@ -963,7 +967,7 @@ async fn a_device_without_the_observe_scope_is_denied() {
 #[tokio::test]
 async fn connection_state_is_reclaimed_when_the_connection_ends() {
     let world = World::new();
-    world.seed_device(DEVICE, &["session.list"]);
+    world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
     let route = Arc::new(world.route(Arc::new(Reachability(true))));
 
@@ -1019,7 +1023,7 @@ async fn the_raw_payload_gate_applies_on_the_replay_path() {
 
     for (features, expect_container) in [(&[][..], false), (&["acp.raw-payload.v1"][..], true)] {
         let world = World::new();
-        world.seed_device(DEVICE, &["session.list"]);
+        world.seed_device(DEVICE);
         world.store.set_head(fixture::cursor(EPOCH, 6));
         world.store.push_sync_event(event_with_raw_payload());
         let mut harness = Harness::new(&world, features);

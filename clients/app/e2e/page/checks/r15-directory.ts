@@ -20,6 +20,9 @@
  *   把无命中画成「本机没有目录」在这里必红。
  * - 选择器一律**属性型**（`[data-directory-alias]` 等 `data-*` 锚点），不依赖 RNW 把 `role`
  *   映射成哪个标签：`role="listitem"` 目前渲染成 `li`，但那是渲染器的实现细节，不是契约。
+ * - 「创建入口不再有权限维度」既查**呈现**也查**痕迹**：每个目录项恒有一个入口且都不是禁用态，
+ *   同时目录页全文不得出现权限提示条/不可用说明的标记或「电脑端授予」类说法——把提示条藏进
+ *   别的容器、或只改文案不改标记，都会被这两条中的一条抓住。
  */
 
 import {
@@ -34,6 +37,7 @@ import {
 import {
   CANONICAL_ORIGIN,
   CheckFailure,
+  PERMISSION_GATE_VOCABULARY,
   click,
   domHtml,
   domText,
@@ -56,7 +60,7 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     workspaces: WORKSPACES_WITH_PATHS,
     sessions: sessionsForBothDirectories(),
     agents: AGENTS,
-    scopes: ["session.list", "session.read", "session.create"],
+    authenticate: true,
     tamperHostProof: false,
     deliverSnapshot: true,
     barrierGlobalSequence: "10",
@@ -544,37 +548,45 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-20 目录页的创建权限：无 session.create 时给出提示条且卡片上没有创建入口；有权限时相反",
+    name: "R15-20 目录页的创建入口不再有权限维度：每个目录项恒有一个入口、没有权限提示条，且点得开弹层",
     async run() {
-      // 无权限：入口**不呈现**（不是呈现成禁用），说明由页面顶部的提示条承担。
-      await withScenario(baseScenario({ scopes: ["session.list", "session.read"] }), async (container) => {
-        await waitForDirectoryList(container);
-        const note = query(container, "[data-create-permission-note]");
-        expectThat(note !== null, "无创建权限时目录页必须给出提示条（不能只把入口藏起来）");
-        expectThat(
-          textOf(note).includes("电脑端"),
-          `提示条必须说明需要电脑端授予，实际 ${JSON.stringify(textOf(note))}`,
-        );
-        expectEqual(
-          queryAll(container, '[data-action="create-session"]').length,
-          0,
-          "无创建权限时不得呈现任何目录级创建入口",
-        );
-        // 提示条不得顶掉目录项本身。
-        expectEqual(queryAll(container, "[data-directory-alias]").length, 2, "提示条不影响目录项");
-      });
-
-      // 有权限：不留提示条，且**每个**目录项各有一个创建入口（挂在卡片上，不是页面级的一个）。
       await withScenario(baseScenario(), async (container) => {
         await waitForDirectoryList(container);
-        expectThat(
-          query(container, "[data-create-permission-note]") === null,
-          "有创建权限时不得留提示条",
-        );
+
+        // 入口是**呈现出来的**（不是藏起来），且不是禁用态：设备不再有创建会话的权限维度，
+        // 因此没有任何判定能让它不可用。把门控加回来（禁用、或按权限不呈现）→ 这两条变红。
         expectEqual(
           queryAll(container, '[data-action="create-session"]').length,
           2,
-          "有创建权限时每个目录项各有一个创建入口",
+          "每个目录项各有一个「⊕ 新建」入口（入口恒可用）",
+        );
+        for (const entry of queryAll(container, '[data-action="create-session"]')) {
+          expectEqual(
+            entry.hasAttribute("disabled"),
+            false,
+            `目录项创建入口不得是禁用态（${entry.getAttribute("data-directory-alias") ?? "?"}）`,
+          );
+        }
+
+        // 权限痕迹必须**一处都没有**：提示条、说明条与「电脑端授予」类说法都随权限维度一起消失。
+        expectThat(
+          query(container, "[data-create-permission-note]") === null,
+          "目录页不得再呈现创建权限提示条",
+        );
+        expectThat(
+          query(container, "[data-create-entry-unavailable]") === null,
+          "目录页不得再把创建入口呈现成「不可用并给出说明」",
+        );
+        expectNone(domText(container), PERMISSION_GATE_VOCABULARY, "目录页出现了权限门控类文案");
+
+        // 点得开：入口真的接到弹层（不是画了一个按钮）。
+        click(query(container, '[data-action="create-session"]'), "第一个目录项的创建入口");
+        await waitFor(() => query(container, "[data-create-sheet]") !== null, "创建弹层打开");
+        expectEqual(queryAll(container, "[data-create-sheet]").length, 1, "同一时刻只有一个创建弹层");
+        // 副作用说明仍在（spec「创建入口的副作用说明」）：它曾与权限态成对出现，现在恒在。
+        expectThat(
+          textOf(query(container, "[data-create-note]")).includes("Agent 进程"),
+          "创建弹层必须说明会在电脑上启动一个 Agent 进程",
         );
       });
     },

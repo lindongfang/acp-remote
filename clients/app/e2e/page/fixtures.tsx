@@ -25,6 +25,12 @@ import type { StagedResources } from "../../src/sync-client";
 /** 违规路径片段：出现在任何一处渲染结果里都判红。 */
 export const SECRET_FRAGMENTS = ["D:\\", "secret", "vault", "repo-x", "repo-y", "\\work"] as const;
 
+/**
+ * 只代表**真实宿主路径**的片段（不含示例盘符）：创建弹层的目录提示会渲染 `如 D:\work\api` 这样的
+ * **示例**，因此那一处只能按这一份子集判泄漏——目录页/详情页没有目录输入，仍用 {@link SECRET_FRAGMENTS} 全表。
+ */
+export const HOST_PATH_FRAGMENTS = ["secret", "vault", "repo-x", "repo-y"] as const;
+
 /** 两条同名目录，各自带一个**不存在于协议**的路径字段。 */
 export const WORKSPACES_WITH_PATHS = [
   { alias: "alpha", displayName: "api", path: "D:\\secret\\vault\\repo-x", root: "D:\\secret\\vault" },

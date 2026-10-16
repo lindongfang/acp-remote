@@ -422,18 +422,37 @@ impl SecretValue {
     }
 }
 
-/// 已解析的 workspace（§11.9）：符号名 + 规范化后的本机绝对路径。
+/// 已解析的 workspace（§11.9）：**可选**符号名 + 规范化后的本机绝对路径。
+///
+/// 别名只在**解析出别名**时存在（`workspace-resolution` 的「创建时别名的持久化与投影来源」）：
+/// 目录来源是本机已登记别名时带上别名原文，来源是客户端提供的目录（仅 Sync 面）时**没有别名**，
+/// 该会话的目录归属因此是「未分组」。别名与路径任一缺席都不得由另一项推导补齐——因此这里没有
+/// 空串或占位别名，`None` 就是「本次解析没有别名」。
 ///
 /// 路径只能存进 [`super::CreateSessionRequest`] 并交给后端，不得进事件、不得随 Node Link/Sync 下发。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedWorkspace {
-    alias: WorkspaceAlias,
+    alias: Option<WorkspaceAlias>,
     canonical_path: String,
 }
 
 impl ResolvedWorkspace {
-    /// 构造。路径必须是绝对路径形状（`canonicalize` 与目录判定由用例层的解析路径完成）。
+    /// 按**本机已登记别名**构造。路径必须是绝对路径形状（`canonicalize` 与目录判定由用例层的
+    /// 解析路径完成）。
     pub fn try_new(alias: WorkspaceAlias, canonical_path: String) -> Result<Self, InvalidValue> {
+        Self::checked(Some(alias), canonical_path)
+    }
+
+    /// 按**客户端提供的目录**构造（没有别名）。形状口径与 [`Self::try_new`] 逐条相同；目录是否
+    /// 已登记与本构造器无关——未登记目录不得因此被接受为别名。
+    pub fn at_path(canonical_path: String) -> Result<Self, InvalidValue> {
+        Self::checked(None, canonical_path)
+    }
+
+    fn checked(
+        alias: Option<WorkspaceAlias>,
+        canonical_path: String,
+    ) -> Result<Self, InvalidValue> {
         require_bounded(&canonical_path, 1, 4096)?;
         if !no_nul(&canonical_path) || !Path::new(&canonical_path).is_absolute() {
             return Err(InvalidValue::Field);
@@ -444,13 +463,28 @@ impl ResolvedWorkspace {
         })
     }
 
-    /// 符号名。
-    pub fn alias(&self) -> &WorkspaceAlias {
-        &self.alias
+    /// 符号名；`None` = 本次解析没有别名（目录由客户端提供），会话的目录归属是「未分组」。
+    pub fn alias(&self) -> Option<&WorkspaceAlias> {
+        self.alias.as_ref()
     }
 
     /// 规范化后的本机绝对路径。
     pub fn canonical_path(&self) -> &str {
         &self.canonical_path
     }
+}
+
+/// `session.create` 的目录来源（`workspace-resolution` 的「解析归属与后端输入」）。
+///
+/// 两种来源的失败分类不同（见 `UseCases::create_session`）：**别名未在本机登记**是参数类错误
+/// （客户端可修正），**目录形状非法**（相对路径、含 `..`）同样是参数类错误且不触碰文件系统，
+/// 而**形式合法却解析不了**（目录被删除、被换成文件、`canonicalize` 失败、权限不足）是服务端
+/// 不可用类。目录来源只经 Sync 面出现（Node Link 面的请求不得携带任意 Owner 路径）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceSource {
+    /// 本机已登记的 workspace 别名（Node Link 与 Sync 的 `workspaceAlias`）。
+    Alias(WorkspaceAlias),
+    /// 客户端提供的目录原文（仅 Sync 面的 `workspacePath`）：本层只校验形状与文件系统事实，
+    /// **不查**登记表、也**不登记**新目录。
+    Path(String),
 }

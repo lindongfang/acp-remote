@@ -610,38 +610,66 @@ fn acp_stdio_reports_the_missing_facade_and_keeps_stdout_clean() {
     daemon.stop();
 }
 
-/// R64/R66：配对仪式的非交互门禁（缺 `--sas`/`--fingerprint` 即失败，不调用任何方法）与到期处理。
+/// R64/R66（`pairing-model` 按新参数面改写）：设备配对只接受 `--fingerprint`/`--expires-in-ms`；
+/// 被删掉的授权词汇与短验证码开关必须报用法错误；非交互缺 `--fingerprint` 时在 begin 之前失败。
 #[test]
 fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
     let mut daemon = Daemon::configure("cli-pairing", "");
     daemon.start();
 
-    // 非交互且缺两个值：必须在 begin 之前失败（不创建任何配对状态）。
+    // 删掉的授权词汇与短验证码开关：clap 必须在**调用任何方法之前**报用法错误（非零退出 + 一行含
+    // `code` 的 JSON），不得静默忽略；stdout 里不得出现 pairingUrl（说明没走到 begin）。
+    for args in [
+        vec!["device", "pair", "--sas", "481502"],
+        vec!["device", "pair", "--request", "session.read"],
+        vec!["device", "pair", "--pack", "pack.read"],
+        vec!["node", "pair", "--sas", "481502"],
+        vec!["node", "pair", "--request", "session.read"],
+        vec!["node", "pair", "--pack", "pack.read"],
+    ] {
+        let run = run_cli(
+            "pair-removed-flags",
+            Some(daemon.config_path()),
+            &args,
+            Stdin::Null,
+        );
+        assert_failure_contract(&run, "local.invalid_request", &[]);
+        assert!(
+            !run.stdout.contains("https://"),
+            "{args:?} 必须在 begin 之前失败，不得打印 pairingUrl：{}",
+            run.stdout
+        );
+    }
+
+    // 非交互且缺 `--fingerprint`：不存在「无参数自动确认」，必须在 begin 之前失败。
     let run = run_cli(
         "pair-missing",
         Some(daemon.config_path()),
-        &["device", "pair", "--request", "session.read"],
+        &["device", "pair"],
         Stdin::Null,
     );
     assert_failure_contract(&run, "local.invalid_request", &[]);
+    assert!(
+        !run.stdout.contains("https://"),
+        "非交互缺指纹时不得走到 begin（不打印 pairingUrl）：{}",
+        run.stdout
+    );
 
-    // 只给一个也不行。
+    // 只给有效期、仍缺指纹：同样在 begin 之前失败。
     let run = run_cli(
         "pair-half",
         Some(daemon.config_path()),
-        &[
-            "device",
-            "pair",
-            "--request",
-            "session.read",
-            "--sas",
-            "000000",
-        ],
+        &["device", "pair", "--expires-in-ms", "60000"],
         Stdin::Null,
     );
     assert_failure_contract(&run, "local.invalid_request", &[]);
+    assert!(
+        !run.stdout.contains("https://"),
+        "非交互缺指纹时不得走到 begin（未创建任何配对状态）：{}",
+        run.stdout
+    );
 
-    // 两个都给（本机非交互路径）但没有人认领：收窄有效期后以 `local.expired` 结束（轮询与到期由 CLI 负责）。
+    // 指纹齐全（本机非交互路径）但没有人认领：收窄有效期后以 `local.expired` 结束（轮询与到期由 CLI 负责）。
     let fingerprint = "0".repeat(64);
     let run = run_cli(
         "pair-expired",
@@ -649,10 +677,6 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         &[
             "device",
             "pair",
-            "--request",
-            "session.read",
-            "--sas",
-            "000000",
             "--fingerprint",
             &fingerprint,
             "--expires-in-ms",
@@ -680,8 +704,6 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
             "https://owner.example.invalid/#s=x",
             "--display-name",
             "Node",
-            "--sas",
-            "000000",
             "--fingerprint",
             &fingerprint,
         ],
