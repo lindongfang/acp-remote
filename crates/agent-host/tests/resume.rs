@@ -31,8 +31,10 @@ use acp_core::model::{
 };
 use acp_core::ports::{SessionBackendFactory, SessionEndpoint};
 use agent_host::{AgentHost, HostConfig, runtime_running};
-use serde_json::Value;
-use support::{Collector, FAKE_AGENT, FakeCredentials, TempFile, TestClock, TestIds, profile_with};
+use support::{
+    Collector, FAKE_AGENT, FakeCredentials, TempFile, TestClock, TestIds, dump_count,
+    dumped_requests, params_of, profile_with,
+};
 
 /// R12-2：旧绑定尚未让出时再次恢复（单一会话标识）。
 const RESUME_TWICE_SESSION: &str = "33333333-3333-4333-8333-333333333333";
@@ -97,54 +99,6 @@ fn contrast_workspace() -> String {
     let root = std::env::temp_dir().join("acpr-tp2-contrast-workspace");
     let _ = std::fs::create_dir_all(&root);
     root.to_string_lossy().into_owned()
-}
-
-/// `--dump-request-params <path>` 的记录行（每行一条 `{"method":…,"params":…}`）。
-///
-/// 这条通道经**真实子进程**写出，因此它同时闭合了 fake child `main` 的 `params` 接线：若该接线被改成
-/// `dump_inbound(&args, method, None)`，这里的 `params` 会全变成 `null`，本文件的断言立即失败
-fn dumped_requests(path: &std::path::Path) -> Vec<Value> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str::<Value>(line)
-                .unwrap_or_else(|error| panic!("dump 行不是 JSON：{line}（{error}）"))
-        })
-        .collect()
-}
-
-/// dump 行里某个方法的 `params`（非 `null`），并断言该行的键集合恰为 `{method, params}`。
-fn params_of<'a>(rows: &'a [Value], method: &str) -> &'a Value {
-    let matched: Vec<&Value> = rows
-        .iter()
-        .filter(|row| row["method"] == serde_json::Value::String(method.to_owned()))
-        .collect();
-    assert!(!matched.is_empty(), "dump 里必须出现 {method}：{rows:?}");
-    let params = &matched[0]["params"];
-    assert!(
-        !params.is_null(),
-        "{method} 的 params 不得为 null（fake child 的 params 接线退化）：{rows:?}"
-    );
-    for row in matched {
-        let mut keys: Vec<&str> = row
-            .as_object()
-            .expect("dump 行是 JSON object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        keys.sort_unstable();
-        assert_eq!(keys, ["method", "params"], "dump 行的键集合必须恰为两键");
-    }
-    params
-}
-
-/// 某个方法在 dump 里出现的次数。
-fn dump_count(rows: &[Value], method: &str) -> usize {
-    rows.iter()
-        .filter(|row| row["method"] == serde_json::Value::String(method.to_owned()))
-        .count()
 }
 
 /// 等心跳文件出现。

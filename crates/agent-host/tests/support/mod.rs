@@ -70,6 +70,110 @@ impl Drop for TempFile {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// `--dump-request-params` 线级读行（`resume.rs` 与 `cwd_form.rs` 共用；只此一处实现）
+// ---------------------------------------------------------------------------------------------
+
+/// `--dump-request-params <path>` 的记录行（每行一条 `{"method":…,"params":…}`）。
+///
+/// 这条通道经**真实子进程**（[`FAKE_AGENT`]）写出，因此它同时闭合了 fake child `main` 的 `params`
+/// 接线：若该接线被改成 `dump_inbound(&args, method, None)`，这里的 `params` 会全变成 `null`。
+///
+/// 行必须**立刻**可解析：调用方应先用 [`wait_for_dumped_method`] 等到目标方法出现，再读完整文件。
+pub fn dumped_requests(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .unwrap_or_else(|error| panic!("dump 行不是 JSON：{line}（{error}）"))
+        })
+        .collect()
+}
+
+/// 轮询 `--dump-request-params` 文件，直到出现 `method` 的行（子进程**异步**写出），超时上限由调用方给出。
+///
+/// 返回值是**按行宽松解析**的结果：轮询期间读到的最后一行可能只写了一半（另一个请求正在追加），
+/// 这种行在轮询阶段被跳过，不构成失败；调用方随后用 [`params_of`] 断言目标行，缺行时得到的是
+/// 「dump 里必须出现 X」这样的真实失败信息，而不是一个「超时」。
+///
+/// 超时后返回**当时读到的行**（可能不含 `method`）：断言失败信息因此带上实际线级内容。
+pub async fn wait_for_dumped_method(
+    path: &std::path::Path,
+    method: &str,
+    timeout: std::time::Duration,
+) -> Vec<serde_json::Value> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let rows: Vec<serde_json::Value> = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .collect();
+        if rows
+            .iter()
+            .any(|row| row["method"] == serde_json::Value::String(method.to_owned()))
+        {
+            return rows;
+        }
+        if std::time::Instant::now() >= deadline {
+            return rows;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// dump 行里某个方法的 `params`（非 `null`），并断言该行的键集合恰为 `{method, params}`。
+pub fn params_of<'a>(rows: &'a [serde_json::Value], method: &str) -> &'a serde_json::Value {
+    let matched: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|row| row["method"] == serde_json::Value::String(method.to_owned()))
+        .collect();
+    assert!(!matched.is_empty(), "dump 里必须出现 {method}：{rows:?}");
+    let params = &matched[0]["params"];
+    assert!(
+        !params.is_null(),
+        "{method} 的 params 不得为 null（fake child 的 params 接线退化）：{rows:?}"
+    );
+    for row in matched {
+        let mut keys: Vec<&str> = row
+            .as_object()
+            .expect("dump 行是 JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["method", "params"], "dump 行的键集合必须恰为两键");
+    }
+    params
+}
+
+/// 某个方法在 dump 里出现的次数。
+pub fn dump_count(rows: &[serde_json::Value], method: &str) -> usize {
+    rows.iter()
+        .filter(|row| row["method"] == serde_json::Value::String(method.to_owned()))
+        .count()
+}
+
+/// 断言 `params` 对象的键集合恰为给定的（排序后）集合——用来抓「悄悄多发了字段」。
+pub fn assert_param_keys(params: &serde_json::Value, expected: &[&str]) {
+    let mut keys: Vec<&str> = params
+        .as_object()
+        .unwrap_or_else(|| panic!("params 必须是 JSON object：{params}"))
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        keys, expected,
+        "出站 params 的键集合必须恰为期望集合（不新增字段）：{params}"
+    );
+}
+
 /// 造一个指向 fake child 的 `LaunchSpec`（环境只留必要的进程项）。
 #[must_use]
 pub fn launch_spec(args: &[&str]) -> LaunchSpec {
