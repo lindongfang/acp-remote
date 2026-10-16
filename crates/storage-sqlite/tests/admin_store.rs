@@ -1,6 +1,6 @@
 //! WP6：管理 store（`TrustStore`/`ExportStore`/`LocalConfigStore`）与失败关闭的行为用例。
 //!
-//! 逐条对应 `openspec/changes/admin-state-persistence-v2/specs/` 的场景：
+//! 逐条对应 `openspec/changes/archive/2026-09-23-admin-state-persistence-v2/specs/` 的场景：
 //!
 //! | 规格 | 用例 |
 //! |---|---|

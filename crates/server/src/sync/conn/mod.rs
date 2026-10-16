@@ -20,7 +20,7 @@
 //! `connectionId`）各自定义。
 //!
 //! 唯一权威：`docs/SYNC_PROTOCOL.md` §3.1/§3.2/§4/§5/§8/§12/§13/§14/§15，行为范围以
-//! `openspec/changes/sync-server-connection/specs/sync-device-auth/spec.md` 的八条要求为准。
+//! `openspec/changes/archive/2026-10-15-sync-server-connection/specs/sync-device-auth/spec.md` 的八条要求为准。
 
 pub mod handshake;
 pub mod limits;

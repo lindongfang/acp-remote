@@ -15,7 +15,7 @@
 //! conn.ws_handler())`。
 //!
 //! 唯一权威：`docs/NODE_LINK_PROTOCOL.md` §2/§11.3/§12.2/§14，行为范围以
-//! `openspec/changes/node-link-owner/specs/node-link-owner-server/spec.md` 的 R36–R50、R79–R81、
+//! `openspec/changes/archive/2026-09-27-node-link-owner/specs/node-link-owner-server/spec.md` 的 R36–R50、R79–R81、
 //! R32（衔接侧）、R82/R83（连接侧）为准。
 
 pub mod handshake;

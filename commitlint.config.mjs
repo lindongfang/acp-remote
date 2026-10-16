@@ -57,7 +57,7 @@ export const SCOPES = [
   // 历史兼容项，**不是**交付面边界：`test` 本是上面 `TYPES` 里的类型而非 scope，
   // 历史提交 `3484541 docs(test): 订正 R25 覆盖分档与判别式注释` 把它误用成了 scope。
   // 该提交已进入 `main` 且经评估不再改写（改写会连带改变其后 10 个后继提交的 SHA，
-  // 并使 openspec/changes/session-resume/ 下多份已入库报告的证据引用悬空），
+  // 并使 openspec/changes/archive/2026-10-02-session-resume/ 下多份已入库报告的证据引用悬空），
   // 因此在这里收录以让 CI `commits` job 能通过。**新增提交不要用它**：
   // 只改测试请用 `test(<交付面>)`，例如 `test(core)`、`test(storage)`。
   "test",

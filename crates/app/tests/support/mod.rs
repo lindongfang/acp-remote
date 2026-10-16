@@ -1,6 +1,6 @@
 //! WP4a 集成测试的公共部分：真实二进制 + 独立临时数据目录。
 //!
-//! 口径（`openspec/changes/daemon-cli-and-local-admin/specs/daemon-lifecycle/spec.md`）：
+//! 口径（`openspec/changes/archive/2026-09-25-daemon-cli-and-local-admin/specs/daemon-lifecycle/spec.md`）：
 //!
 //! - 每个用例一个独立 `dataDir`（与独立的 `XDG_RUNTIME_DIR`）：R1「全新数据目录」可判定，且并行用例互不干扰；
 //! - 用**真实二进制**（`CARGO_BIN_EXE_acp-remote`）而不是进程内直接调用：单实例锁、endpoint 创建、

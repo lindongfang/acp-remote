@@ -23,7 +23,7 @@
 //!   处理器前产生的 413/Host 400 不带 §13.1 要求的四个安全头。
 //!
 //! 唯一权威：`docs/NODE_LINK_PROTOCOL.md` §13（配对 HTTP）与 §2.5（固定限流），行为范围以
-//! `openspec/changes/node-link-owner/specs/node-link-pairing-http/spec.md` 的 R19–R35 为准。
+//! `openspec/changes/archive/2026-09-27-node-link-owner/specs/node-link-pairing-http/spec.md` 的 R19–R35 为准。
 
 pub mod catalog;
 pub mod command;

@@ -2,8 +2,9 @@
 //!
 //! 每个用例都启动**真实二进制**（`CARGO_BIN_EXE_acp-remote`）并使用独立临时 `dataDir`：
 //! 单实例锁、endpoint 创建、进程退出码、关闭序列顺序只有跨进程才能验证（`support/mod.rs` 的模块注释）。
-//! R 号引用 `openspec/changes/daemon-cli-and-local-admin/plan.md` §4.1 与
-//! `specs/daemon-lifecycle/spec.md` 的验收条目。
+//! R 号（R1–R16）见 `openspec/changes/archive/2026-09-25-daemon-cli-and-local-admin/tasks.md` 的 2.14
+//! 完成条件（该变更的归档产物里没有单独的 `plan.md`——本仓库的规划 `plan` artifact 是后来才加入
+//! schema 的），验收条目见 `specs/daemon-lifecycle/spec.md`。
 
 mod support;
 

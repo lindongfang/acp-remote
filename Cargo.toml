@@ -170,7 +170,7 @@ rcgen = "0.14"
 # `compression`（产物已由前端构建压缩，多一层解压换不来收益）。
 # 依赖选型的核验证据按 `AGENTS.md` §9 的映射由 `docs/MODULE_ARCHITECTURE.md` §3.1 承接（该节对每一批
 # 新增依赖都有 `[决定]` 条目）：本节给的是可自足的判据，§3.1 的条目作为 `sync-ui-hosting` 变更的落地项
-# 写在 `openspec/changes/sync-ui-hosting/tasks.md` 的 4.6。
+# 写在 `openspec/changes/archive/2026-10-15-sync-ui-hosting/tasks.md` 的 4.6。
 rust-embed = { version = "8.13", features = ["debug-embed"] }
 
 [workspace.lints.rust]

@@ -1,7 +1,7 @@
 //! Sync 命令面：`command` 帧的解码分派、**授权前置**、五条查询命令的同步完成、结果超限的显式失败、
 //! 按（设备，命令族）计数的命令限流与查询类命令的连接期去重
 //! （`docs/SYNC_PROTOCOL.md` §11/§12.2/§14；变更 `sync-server-commands` 的任务 2.1–2.6，
-//! 行为范围以 `openspec/changes/sync-server-commands/specs/sync-command-handling/spec.md` 为准）。
+//! 行为范围以 `openspec/changes/archive/2026-10-16-sync-server-commands/specs/sync-command-handling/spec.md` 为准）。
 //!
 //! ## 管线顺序（§11.2 的「命令处理建议顺序」）
 //!

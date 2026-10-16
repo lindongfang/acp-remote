@@ -89,7 +89,7 @@ HTTPS/WSS + JSON text messages + ECDSA P-256 challenge-response
 
 原生客户端可以连接已配置的多个 endpoint，但每个 endpoint 都必须证明同一个已配对 Host identity。PWA 身份只绑定一个 canonical origin。
 
-实现状态（`openspec/changes/sync-server-connection`，截至本修订）：本节所定义的传输面**已在 Daemon 侧落地**——`/sync/v1` 与 subprotocol 常量的唯一来源是 `crates/server/src/sync/conn/mod.rs`（`WS_PATH`/`WS_SUBPROTOCOL`，后者与 `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol` 同源），路由注册与绑定 listener 在组合根 `crates/app/src/daemon.rs` 的 `register_sync_paths`（`register_ws`）。接入层按 §3.2 归一化请求来源并把三形态（`Known`/`Absent`/不可归一化）传给连接面；binary 帧关闭连接、不进入协议逻辑（`crates/server/src/sync/conn/session.rs`）。§3.2 的「非浏览器原生客户端可以没有 HTTP `Origin`，此时 transcript 中使用空字节串」一条**在 Sync 面未被采用**：`identity-auth` 对 `SyncDevice` 强制要求 `canonical_origin` 为 `Some`，因此无来源（`Absent`）与非 `https://` 来源一律走拒绝路径，不以空字节串放行（详见 §8.1 的实现状态注记）。
+实现状态（`openspec/changes/archive/2026-10-15-sync-server-connection`，截至本修订）：本节所定义的传输面**已在 Daemon 侧落地**——`/sync/v1` 与 subprotocol 常量的唯一来源是 `crates/server/src/sync/conn/mod.rs`（`WS_PATH`/`WS_SUBPROTOCOL`，后者与 `compatibility/errors/v1/errors.json` 的 `protocols.sync.subprotocol` 同源），路由注册与绑定 listener 在组合根 `crates/app/src/daemon.rs` 的 `register_sync_paths`（`register_ws`）。接入层按 §3.2 归一化请求来源并把三形态（`Known`/`Absent`/不可归一化）传给连接面；binary 帧关闭连接、不进入协议逻辑（`crates/server/src/sync/conn/session.rs`）。§3.2 的「非浏览器原生客户端可以没有 HTTP `Origin`，此时 transcript 中使用空字节串」一条**在 Sync 面未被采用**：`identity-auth` 对 `SyncDevice` 强制要求 `canonical_origin` 为 `Some`，因此无来源（`Absent`）与非 `https://` 来源一律走拒绝路径，不以空字节串放行（详见 §8.1 的实现状态注记）。
 
 ### 3.2 Origin 与 Host 检查
 
@@ -390,7 +390,7 @@ https://work-pc.example.ts.net/pair#data=<base64url-json>
 
 `expiresAt` 是毫秒精度 UTC RFC 3339 字符串，不是 Unix 秒数；PWA 必须验证当前 origin、secure context、过期时间和字段长度，读取后立即用 `history.replaceState` 清除 fragment。fragment、secret 和完整 QR payload 不得进入日志或 analytics。
 
-实现状态（`openspec/changes/pairing-origin-secure-context`，截至本修订）：本条要求的 PWA 侧校验**已在前端落地**。配对入口是唯一入口 `clients/app/src/features/client-store.ts` 的 `#beginPairing`：它读完载荷之后、发任何请求之前依次校验安全上下文、来源一致与载荷类型（类型校验保持在最后，因为它需要已读出的载荷）。环境事实（是否安全上下文、当前来源）经组合根 `CompositionInputs` 注入，默认实现读浏览器全局 `isSecureContext` 与 `location.origin`；来源比较复用 §3.2 的 canonical origin 口径（浏览器 `URL.origin`），与身份绑定检查同一条口径。失败码取自 §12.2 的封闭词表：来源不符复用既有的 `auth.origin_mismatch`，非安全上下文用新增的 `auth.insecure_context`；两条都明确失败，且一个 claim/status 请求都不发。
+实现状态（`openspec/changes/archive/2026-10-16-pairing-origin-secure-context`，截至本修订）：本条要求的 PWA 侧校验**已在前端落地**。配对入口是唯一入口 `clients/app/src/features/client-store.ts` 的 `#beginPairing`：它读完载荷之后、发任何请求之前依次校验安全上下文、来源一致与载荷类型（类型校验保持在最后，因为它需要已读出的载荷）。环境事实（是否安全上下文、当前来源）经组合根 `CompositionInputs` 注入，默认实现读浏览器全局 `isSecureContext` 与 `location.origin`；来源比较复用 §3.2 的 canonical origin 口径（浏览器 `URL.origin`），与身份绑定检查同一条口径。失败码取自 §12.2 的封闭词表：来源不符复用既有的 `auth.origin_mismatch`，非安全上下文用新增的 `auth.insecure_context`；两条都明确失败，且一个 claim/status 请求都不发。
 
 所有 pairing HTTP 响应必须包含：
 
@@ -508,7 +508,7 @@ consumed
 
 错误 body 使用与第 12 节一致的 `code/message/retryable/correlationId/details` 结构。网络响应丢失后，客户端可以使用相同 claim 内容重试；如果服务端已接受同一 device/client nonce，应返回原 pairing request，而不是创建第二条记录。不同 claim 内容则返回 `409 pairing.already_claimed`。
 
-实现状态（`openspec/changes/sync-server-connection`，截至本修订）：§7.0–§7.4 的 HTTP 面**已落地**，实现与唯一入口在 `crates/server/src/sync/pairing.rs`（`CLAIM_PATH`/`STATUS_PATH` 与四个安全响应头常量同源，由组合根 `crates/app/src/daemon.rs` 的 `register_sync_paths` 注册到共享 listener）。已覆盖的实绩：claim 的五项原子校验与「先校验、后提交」的写入时序（失败时配对状态、对端行与信任记录一个字节都不改）、同内容重复 claim 幂等返回原结果而不同内容返回 `409`、`status` 的 proof 校验与一律 200、四个安全响应头同时出现在处理器自身与接入层预处理响应（413/405/Host 400）上、claim 按来源真实连接地址 10 次/分钟与 status 按 `pairingId` 60 次/分钟的固定限流（不可信转发头不参与计数）。
+实现状态（`openspec/changes/archive/2026-10-15-sync-server-connection`，截至本修订）：§7.0–§7.4 的 HTTP 面**已落地**，实现与唯一入口在 `crates/server/src/sync/pairing.rs`（`CLAIM_PATH`/`STATUS_PATH` 与四个安全响应头常量同源，由组合根 `crates/app/src/daemon.rs` 的 `register_sync_paths` 注册到共享 listener）。已覆盖的实绩：claim 的五项原子校验与「先校验、后提交」的写入时序（失败时配对状态、对端行与信任记录一个字节都不改）、同内容重复 claim 幂等返回原结果而不同内容返回 `409`、`status` 的 proof 校验与一律 200、四个安全响应头同时出现在处理器自身与接入层预处理响应（413/405/Host 400）上、claim 按来源真实连接地址 10 次/分钟与 status 按 `pairingId` 60 次/分钟的固定限流（不可信转发头不参与计数）。
 
 仍**未实现**或已知偏差（如实登记，不得当作已落地）：
 
@@ -633,7 +633,7 @@ v1 对每个 `(hostId, deviceId)` 只保留一条 active WSS：
 
 ACK 首先属于连接；服务端可以保存设备 ACK 的最大值用于保留策略和诊断，但新连接恢复位置以客户端在 `sync.subscribe` 明确提交的本地 durable cursor 为准，不能由服务端最大 ACK 擅自推进。
 
-实现状态（`openspec/changes/sync-server-connection`，截至本修订）：§8.1–§8.5 的认证面**已落地**，实现集中在 `crates/server/src/sync/conn/`（`mod.rs` 的常量、`handshake.rs` 的纯函数、`session.rs` 的会话驱动、`registry.rs` 的连接注册表与出站账本）。已覆盖的实绩：
+实现状态（`openspec/changes/archive/2026-10-15-sync-server-connection`，截至本修订）：§8.1–§8.5 的认证面**已落地**，实现集中在 `crates/server/src/sync/conn/`（`mod.rs` 的常量、`handshake.rs` 的纯函数、`session.rs` 的会话驱动、`registry.rs` 的连接注册表与出站账本）。已覆盖的实绩：
 
 - 四消息握手经 `identity-auth` 的 `SyncDevice` 入口完成双向 challenge-response；**未知设备照常签发结构完整的挑战**，失败推迟到 proof 阶段并统一为 `auth.proof_invalid`（不用错误类别区分设备是否存在）。
 - 来源绑定：来源与设备记录的 canonical origin **逐字**比较；不一致、无来源（`Absent`）、非 `https://` 来源一律拒绝（`auth.origin_mismatch`）；transcript 的 `canonicalOrigin` 取服务端判定值，不取 body 自报值。
@@ -913,7 +913,7 @@ remoteOrigin = {
 
 imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner 侧投影携带目录引用为止。Access Node MUST NOT 用自己的 workspace 集合为 imported 会话猜测归属，也不得按本机规范化路径反查。
 
-实现状态（`openspec/changes/sync-server-connection`，截至本修订）：§9.1–§9.5 的订阅、重放、快照与 ACK 面**已落地**，`crates/server/src/sync/subscribe/`（cursor 判定、`MessageRoute` 分派、`event` 帧装配与实时扇出）与 `crates/server/src/sync/snapshot/`（清单资源组装、分块下发与 `snapshotDigest`）。已覆盖的实绩：
+实现状态（`openspec/changes/archive/2026-10-15-sync-server-connection`，截至本修订）：§9.1–§9.5 的订阅、重放、快照与 ACK 面**已落地**，`crates/server/src/sync/subscribe/`（cursor 判定、`MessageRoute` 分派、`event` 帧装配与实时扇出）与 `crates/server/src/sync/snapshot/`（清单资源组装、分块下发与 `snapshotDigest`）。已覆盖的实绩：
 
 - cursor 判定（§9.2）：`null` 走首次同步；格式非法、`epoch_mismatch`、`beyond_head`、`cursor_expired` 四种 `sync.cursor_invalid` 的 `details.reason` 可区分且互不混用；**不得钳制到 head**（越界 cursor 不按 head 续投）。超出 §3.3 序号上界（`2^63−1`）或 64 位承载范围的取值是**协议错误**（`protocol.schema_invalid`），不折叠为任一 `reason`。
 - 增量重放（§9.3）：从 cursor 之后按 `globalSequence` 升序投递 `event` 帧，随后 `sync.caught_up`；重放期间到达的实时事件排在屏障之后，绝不越过序号更早的已持久化事件；权限过滤造成的序号空洞合法且不报错，屏障游标高于该段即可 ACK。事件正文经 `core::use_cases::sync_replay`（`session.list` 授权）读出并原样顺带 `origin_kind`/身份字段与 `causation`——`deviceId` 仅在 `device` 类事件非空，取值经 `causation` 回查诱发命令的 actor，不得由「有没有会话」推断。

@@ -476,7 +476,7 @@ impl Context {
     ///   `serve_connection` 在写回响应后**自行结束该连接**（`CloseReason::ShutdownRequested`），排空因此
     ///   不为它等待（它可能仍短暂留在集合里，但不再占用排空预算）。CLI 侧何时释放 runtime 不再是排空判据；
     ///   权威行为见
-    ///   `openspec/changes/daemon-shutdown-drain/specs/daemon-lifecycle/spec.md` 的「关闭时的连接排空」。
+    ///   `openspec/changes/archive/2026-10-16-daemon-shutdown-drain/specs/daemon-lifecycle/spec.md` 的「关闭时的连接排空」。
     ///
     /// 判定：就其记载的目的（让 Daemon 及时看到对端 EOF、避免排空等满宽限）而言，本函数**已冗余**。
     /// 之所以保留：删除属于行为变更，仍需另行验证释放句柄对关闭序列其余步骤（收尾、进程退出路径）
