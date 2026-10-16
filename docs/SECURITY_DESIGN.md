@@ -2,7 +2,8 @@
 
 > 状态：编码前安全基线（Draft）  
 > 版本：0.5
-> 日期：2026-10-15  
+> 日期：2026-10-16  
+> 修订记录（2026-10-16，`ui-csp-inline-styles`）：§11.1 的 `[实现现状]` 按实绩改写——前端内联样式形态已移除（入口文档把 reset 外置为同源 `/entry-reset.css`，并以**必须保持为空**的同源 `/rnw-stylesheet.css` 承载 `react-native-web` 的运行时样式表），样式改由**同源外部样式表**交付，CSP 取值**仍未放宽**（`insertRule` 不是 CSP 的检查点，既不得写成「阻止了样式注入」，也不得写成「放宽了基线」）。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-15，`sync-ui-hosting` WP4）：§11.1 加 `[实现现状]`——静态面的 CSP **由响应头下发**（取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线）并带四个与配对端点同取值的头，基线未被放宽（产物里的内联样式仍被拒）；§13.4 登记同包发布的静态资源属 `public-artifact` 类别（静态面只交付公开构建产物）；§16.3 写回「嵌入二进制 + 同包发布 + `daemon.status.uiBuildVersion` 可检查」与发布构建缺产物即拒绝启动。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-14，`sync-server-connection` WP7）：§9.4 与 §9.5 各加一段 `[实现现状]`——§9.4 写回 Sync 连接面的 Origin 校验实绩（来源三形态不折叠、逐字比较、`Absent` 与非 `https` 一律拒绝、`HostPolicy` 的已知偏差）与配对/认证只覆盖到「认证完成」的边界（业务命令级授权未接线）；§9.5 写回设备撤销传播实绩（`4410` 持久提交后经组合根 `ConnectionCloser` 关闭真实连接注册表、拒绝后续认证）与仍未落地项（Access 出站重连、设备侧 scope 缩减关连接）。威胁模型与信任边界**未变**。  
 > 修订记录（2026-10-02）：§9.4 新增「配对授予的 scope 是设备级而非资源快照」的显式规则，并写出 `session.create` 的设备级副作用；§10.2 把 `session.create` 归入新设备授权包 `pack.create-session`（不进任何预设），声明 Sync 面已暴露该入口与其 `{ workspaceAlias, agentId }` payload；§10.3 区分两个传输面的 workspace 引用边界；§11.2 把目录展示名列为按不可信内容渲染。  
@@ -344,7 +345,7 @@ local.audit.export         本地审计导出（不含会话正文）
 - 可用时启用 Trusted Types；不支持的平台仍必须通过安全组件和 sanitizer 保证相同内容边界。
 - production source map 不得公开包含本地路径、secret 或未发布源信息；是否发布独立调试符号由发布流程决定。
 
-`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的内联 `<style id="expo-reset">` 会落到 `default-src 'self'` 而被拒（页面样式可能异常），该冲突交 `frontend-sync-wiring` 在前端侧解决（外置样式或显式放行）。
+`[实现现状]`（2026-10-15，`sync-ui-hosting`）PWA 静态资源由 Daemon 同源托管在根路径，其 CSP **由响应头下发**（不依赖文档内的 `<meta>` 元标记——元标记约束不了 `frame-ancestors` 之类的指令），取值逐字等于 `FRONTEND_DESIGN.md` §4.5 的基线 `default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`。与它一起下发的还有与两个配对端点同取值的 `cache-control: no-store`、`pragma: no-cache`、`referrer-policy: no-referrer`、`x-content-type-options: nosniff`；实现见 `crates/server/src/transport/net/static_ui.rs`，经接入层的「每路径默认响应头」缝下发，因此 Host 边界在静态 path 上的 400 也带这些头。**基线未被放宽**：产物里的两条内联 `<style>`（`expo-reset` 与 `react-native-web` 的运行时样式表）已由前端侧移除（`ui-csp-inline-styles`）——入口文档把 reset 外置成同源 `/entry-reset.css`，并在 bundle 之前声明一个**必须保持为空**的同源 `/rnw-stylesheet.css`，`react-native-web` 于模块求值期复用该 `<link>` 的 `sheet`、把它运行时生成的原子类 `insertRule` 进去；因此样式现在由**同源外部样式表**交付，CSP 取值一字未动。**口径要说准**：`insertRule` 本身**不是** CSP 的检查点——向一个受允的同源样式表写入规则既不能被描述成「CSP 阻止了样式注入」，也不能被描述成「放宽了 CSP」；样式文本的来源仍是同源 bundle（`script-src 'self'` 已信任），这条控制在原内联形态下本就已失效，本次只是消除冲突。裁定与判据见 `openspec/changes/ui-csp-inline-styles/design.md`（D1/D3/R4）。
 
 ### 11.2 不可信内容渲染
 

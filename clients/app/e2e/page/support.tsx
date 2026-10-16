@@ -63,7 +63,10 @@ export const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 
 declare global {
   interface Window {
-    /** 页面级错误收集器：由 `run-e2e.mjs` 注入的 bootstrap 建立；未注入时为 `undefined`。 */
+    /**
+     * 页面级错误收集器：由 `run-e2e.mjs` 的入口文档以外部脚本（`/page-errors.js`）建立的
+     * bootstrap 收集；未注入时为 `undefined`。
+     */
     __pageErrors?: readonly unknown[];
   }
 }
@@ -87,7 +90,8 @@ declare global {
  *
  * 页面错误（未捕获异常 / 未处理的 promise 拒绝）不会让用例直接变红，只会让它**超时**：
  * 握手里某一跳抛错时页面停在原状态，用例报的是「等待 X 超时」，真正的原因却只躺在
- * `window.__pageErrors` 里没人看。收集器由 `run-e2e.mjs` 的 HTML 注入。
+ * `window.__pageErrors` 里没人看。收集器由 `run-e2e.mjs` 的入口文档引入——形态是**同源外部脚本**
+ * （`/page-errors.js`），因为本页按生产口径带 `script-src 'self'`，内联脚本会被内核拒掉。
  */
 function pageSnapshot(): string {
   const errors = (window.__pageErrors ?? []).map((entry) => String(entry));

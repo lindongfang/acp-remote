@@ -41,8 +41,8 @@ use crate::transport::net::route::apply_default_headers;
 
 /// 内容安全策略基线（`docs/FRONTEND_DESIGN.md` §4.5 的原文，逐字；`docs/SECURITY_DESIGN.md` §11.1）。
 ///
-/// 不得由本层放宽：前端当前的内联 `<style>` 会落到 `default-src 'self'` 而被拒，该冲突登记在变更报告里
-/// 交给 `frontend-sync-wiring` 处理（`design.md` D4），放行 `unsafe-inline` 只会掩盖它，并同时打开
+/// 不得由本层放宽：前端的内联 `<style>` 形态已由前端侧移除（入口文档改用同源外部样式表，
+/// `ui-csp-inline-styles`），CSP 取值不变；放行 `unsafe-inline` 只会掩盖这类冲突，并同时打开
 /// XSS 面（Agent 产生的内容按不可信输入渲染）。
 pub(crate) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 

@@ -38,3 +38,4 @@ default-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; ba
 - `clients/app`（样式策略与构建产物）。
 - `crates/server/src/transport/net/static_ui.rs`（CSP 的唯一定义处）：**预期不改**；若结论必须是改 CSP，先按 `AGENTS.md` §2 请求确认并同步 `docs/SECURITY_DESIGN.md`。
 - `docs/FRONTEND_DESIGN.md`、`README.md` 的前端现状；现象与实测已记在 `openspec/changes/frontend-sync-wiring/plan.md` 的「真机验收记录」。
+- `docs/SECURITY_DESIGN.md` §11.1 的 `[实现现状]`：它现在断言「产物里的内联 `<style id="expo-reset">` 会落到 `default-src 'self'` 而被拒（页面样式可能异常），该冲突交 `frontend-sync-wiring` 在前端侧解决」——本变更落地后这句不再成立（基线仍未放宽，但内联样式形态已移除），须按实绩改写。

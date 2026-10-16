@@ -16,6 +16,18 @@
  *   属性；原始 HTML 只作为**不可信文本**出现（不产生元素），地址不进任何可加载/可导航位置，
  *   且 `window.__pwned` 仍是 `undefined`
  *   （脚本真的没执行——只看「渲染出文本」证明不了这一点）。
+ *
+ *   登记：本页现在按生产口径带 CSP（取值为 `e2e/run-e2e.mjs` 的 `STATIC_HEADERS`，其中
+ *   `script-src 'self'` 不含 `unsafe-inline`），因此 `window.__pwned` 这条**运行时**断言由
+ *   浏览器内核保证：夹具 `RICH_TEXT` 里的两条执行路径——`<script>window.__pwned = true</script>`
+ *   （经 innerHTML 插入本就不执行）与 `<img … onerror="window.__pwned = true">`（内联事件属性被
+ *   `script-src` 拦下，且远端图又被回落到 `default-src 'self'` 的 `img-src` 一并拦下）——内联事件
+ *   属性与远端图都不是渲染器能选择执行与否的东西，内核会连它们一起挡掉；即使渲染器真的把这段
+ *   HTML 注进 DOM，这条断言也不可能变红。
+ *   判别力因此改由同用例的 DOM 断言承担：条目里 `script`/`img`/`iframe` 计数为 0、没有
+ *   `onerror`/`src` 属性、原始 HTML 只作为文本出现（渲染器一旦把它当标记解析，这几条就红）。
+ *   保留这条运行时断言，是因为在**不带 CSP** 的面上（本地静态服务或将来别的托管形态）它仍是
+ *   唯一的运行时证据，而它的夹具与断言在那一面上同样成立。
  */
 
 import {
