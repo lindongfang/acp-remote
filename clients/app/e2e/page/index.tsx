@@ -14,13 +14,25 @@ import { CONVERSATION_INTERACTION_CHECKS } from "./checks/conversation-interacti
 import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
 import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
+import { UI_STYLESHEET_CHECKS } from "./checks/ui-stylesheet";
 import { runChecks } from "./support";
 import type { CheckResult } from "./support";
 
 /**
- * 检查顺序：先跑组合根接线（它是其它所有用例的前提），再跑各条需求各自的用例。
+ * 检查顺序：**样式形态最前**，其次是组合根接线，然后才是各条需求各自的用例。
  *
- * 组合根在最前面还有一个实际好处：它失败时后面每一条都会失败，输出里一眼看得出
+ * 样式检查（`checks/ui-stylesheet.ts`）放最前有两条理由：
+ *
+ * 1. 它是本页在既定 CSP 下**能不能有样式**的前提，而本目录的其它检查**大多**靠 DOM 断言
+ *    （属性、文本、卡片数）——样式整表失效时那些断言**照样通过**，「页面一片白板」也能报全绿。
+ *    唯一的例外是 R15-16（`checks/r15-directory-detail.ts`）：它读
+ *    `getComputedStyle(toolbar).flexDirection`（宽档 `row` / 窄档 `column`），样式整表失效时
+ *    窄档那条断言**会**红，所以「只有样式检查能看出白板」这句话不适用于它。
+ *    把它排第一条，失败时输出第一行就是它，不会被后面一长串「通过」淹没。
+ * 2. 它不依赖任何别的检查集铺垫（自带假主机场景），也不改变共享起点：与 CR-1 一样只预置
+ *    「已配对」记录、只挂自己的容器，卸载时 dispose 的是它自己的组合根。
+ *
+ * 组合根在其次还有一个实际好处：它失败时后面每一条都会失败，输出里一眼看得出
  * 「不是需求没实现，是运行时没起来」。
  *
  * R15 的目录页与目录详情页分成两个文件（各自一个检查集），共用同一套 `data-*` 口径与
@@ -43,6 +55,7 @@ import type { CheckResult } from "./support";
  * 而它验的是「打开 node-link 二维码落在可用入口」与「两类内容喂错入口都明确失败」。
  */
 const ALL_CHECKS = [
+  ...UI_STYLESHEET_CHECKS,
   ...COMPOSITION_CHECKS,
   ...R15_CHECKS,
   ...R15_DETAIL_CHECKS,
