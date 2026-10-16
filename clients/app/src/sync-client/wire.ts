@@ -29,6 +29,7 @@ import type {
   ErrorCode,
   ErrorMessage,
   EventMessage,
+  EventOriginKind,
   SyncAck,
   SyncCaughtUp,
   SyncResetRequired,
@@ -97,9 +98,9 @@ const POST_AUTH_TYPES: Record<string, true> = {
   "event": true,
   "command": true,
   "command.result": true,
-  "error": true,
   "control.ping": true,
   "control.pong": true,
+  // `error` 不在此表：它是 preAuthBase 与 postAuthBase 的 oneOf，单独判定（见 decodeWireMessage）。
 };
 
 /** 认证前消息：这些**不得**带 `connectionId`（`$defs.preAuthBase`）。 */
@@ -152,12 +153,20 @@ const STATUS_RECORD_STATES: Record<string, true> = {
   rejected: true,
 };
 
-/** `$defs.eventOrigin.kind`。 */
-const EVENT_ORIGIN_KINDS: Record<string, true> = {
+/**
+ * `$defs.eventOrigin.kind` 的运行期投影。
+ *
+ * 声明为 `Record<EventOriginKind, true>`：`EventOriginKind` 已被
+ * `clients/app/src/protocol/contract.test.ts` 的编译期镜像钉在
+ * `schemas/sync/v1/event.schema.json` 的 enum 上，因此本表与 schema 之间形成
+ * 「schema → 类型 → 运行期词表」的闭合链——类型新增取值而本表未跟上会直接编译失败。
+ */
+const EVENT_ORIGIN_KINDS: Record<EventOriginKind, true> = {
   agent: true,
   device: true,
   daemon: true,
   local_cli: true,
+  node: true,
 };
 
 /** `event.body.eventType` 是开放字符串（未知类型走降级卡片），但必须非空。 */
@@ -252,6 +261,21 @@ export function decodeWireMessage(text: string): WireDecodeResult {
   } else if (type in PRE_AUTH_TYPES) {
     if ("connectionId" in parsed || "connectionSequence" in parsed) {
       return reject("envelope_violation", `${type} 是认证前消息，不得带 connectionId/connectionSequence`);
+    }
+  } else if (type === "error") {
+    // `schemas/sync/v1/error.schema.json#/$defs/error` 是 preAuthBase 与 postAuthBase 的 `oneOf`：
+    // 认证前省略 connectionId 与 connectionSequence（`docs/SYNC_PROTOCOL.md` §4.1），
+    // 认证后两者都必填。因此这里要求两键**同时出现或同时缺席**。
+    const hasConnectionId = "connectionId" in parsed;
+    const hasConnectionSequence = "connectionSequence" in parsed;
+    if (hasConnectionId !== hasConnectionSequence) {
+      return reject("envelope_violation", "error 的 connectionId 与 connectionSequence 必须同时出现或同时缺席");
+    }
+    if (hasConnectionId) {
+      if (!isUuid(parsed["connectionId"])) return reject("envelope_violation", "error 的 connectionId 不是 UUID");
+      if (!isDecimalString(parsed["connectionSequence"])) {
+        return reject("envelope_violation", "error 的 connectionSequence 不是 decimalString");
+      }
     }
   }
 
@@ -468,6 +492,15 @@ function decodeEvent(parsed: JsonObject, body: unknown): WireDecodeResult {
     const originDeviceId = origin["deviceId"];
     if (originDeviceId !== null && !isUuid(originDeviceId)) {
       return reject("field_type", "event.origin.deviceId 既非 null 也非 UUID");
+    }
+    // schema 的 `if/then`：`kind: "node"` 时 nodeId 必填且为非空 UUID，deviceId 必须为 null。
+    // 这是 `docs/SYNC_PROTOCOL.md` §10.1 的唯一配对规则；其余四种 kind 不新增任何身份字段必填性
+    // （未协商 core.event-origin.v1 的连接收到的冻结形状不含 nodeId 键，且发送方不得产生
+    // `{kind: "device", deviceId: null}` 但接收方不得拒绝它）。
+    if (originKind === "node") {
+      if (!("nodeId" in origin)) return reject("missing_field", "event.origin.kind=node 缺 nodeId");
+      if (!isUuid(origin["nodeId"])) return reject("field_type", "event.origin.nodeId 不是非空 UUID");
+      if (originDeviceId !== null) return reject("field_type", "event.origin.kind=node 时 deviceId 必须为 null");
     }
     const remoteOrigin = inner["remoteOrigin"];
     if (remoteOrigin !== null && !isObject(remoteOrigin)) {
