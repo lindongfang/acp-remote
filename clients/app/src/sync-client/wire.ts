@@ -117,13 +117,14 @@ const RESET_REASONS: Record<string, true> = {
   cache_incompatible: true,
 };
 
-/** `$defs.commandName`。 */
+/** `$defs.commandName`：只含 `transport` 包含 `sync` 的命令（与 `commands.json` 同集合，13 条）。 */
 const COMMAND_NAMES: Record<string, true> = {
   "session.list": true,
   "session.read": true,
   "command.status": true,
   "session.mode.list": true,
   "session.config.list": true,
+  "workspace.browse": true,
   "session.prompt": true,
   "session.cancel": true,
   "elicitation.respond": true,
@@ -382,8 +383,18 @@ function decodeSnapshotChunk(parsed: JsonObject, body: unknown): WireDecodeResul
     }
     for (const item of items) {
       if (!isObject(item)) return reject("field_type", "snapshot 元素不是对象");
-      if (resource === "workspaces" && !hasKeys(item, ["alias", "displayName"])) {
-        return reject("field_type", "workspaces 元素缺 alias/displayName");
+      if (resource === "workspaces") {
+        if (!hasKeys(item, ["alias", "displayName"])) {
+          return reject("field_type", "workspaces 元素缺 alias/displayName");
+        }
+        // `path` 是 feature `core.workspace-path.v1` 门控下的**可选**键：缺席表示未协商或未下发。
+        // 它一旦在场就必须是非空字符串——schema 里没有 `null` 这一档，`null`（或空串）说明对端把
+        // 「路径不可见」编码成了显式空值，客户端按 protocol.schema_invalid 拒收整条 chunk，
+        // 不得静默读成「这个目录没有路径」。
+        const path = item["path"];
+        if (path !== undefined && !isNonEmptyString(path)) {
+          return reject("field_type", "workspaces 元素的 path 既非缺席也非非空字符串");
+        }
       }
       if (resource === "agents" && !hasKeys(item, ["agentId", "displayName", "default"])) {
         return reject("field_type", "agents 元素缺 agentId/displayName/default");

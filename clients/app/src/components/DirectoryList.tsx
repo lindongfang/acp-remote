@@ -1,24 +1,27 @@
 /**
  * 目录列表（R15）。
  *
- * ## 三条 MUST 在渲染上的落点
+ * ## 卡片与卡体
  *
- * - **只显示展示名与别名**：一行里只有 `displayName` 与 `alias` 两段文字，加上三项会话汇总。
- *   组件**没有**任何接收路径的 props，因此「顺手把 path 也显示出来」没有表达方式；
- *   内联会话行同理，只渲染 `SessionRow`（它只有标题、Agent、状态与时间）。
- * - **同名以别名区分**：`alias` 始终渲染（不放在「同名时才显示」的分支里）——
- *   那种分支正是路径消歧得以藏身的地方。
- * - **两种空态可区分**：`EmptyState` 的 `kind` 取自 `DirectoryEmptyState`，且标题与指引
- *   来自两套不同的词表。
+ * - **卡片头**由 `DirectoryCard` 按原型的槽位渲染（折叠箭头、目录图标、展示名、同名消歧的
+ *   路径尾段、计数胶囊、运行中/待处理徽标、弹性空白、`⊕ 新建`、`查看全部 ›`）。
+ * - **卡体是缩进树**：本组件只把内联会话行（`SessionRow`）或那一行「这个目录还没有会话」
+ *   交给卡片的 `children`，缩进与左边线由卡片负责。
  *
- * ## 三种「空」互不冒充（design D5）
+ * ## 路径与别名
+ *
+ * 目录项上唯一的路径来源是 `DirectoryRowModel.pathTail`（feature 层已按「同名才给」判定过：
+ * 展示名唯一时为 `null`）。组件**不**拼接、不规范化和不反查路径，也没有从别名或展示名推出
+ * 路径的表达方式。别名不进界面：它**只**作为根节点的 `data-directory-alias`（路由与命令引用
+ * 的内部标识、e2e 的锚点），本组件不把它渲染成任何文字。
+ *
+ * ## 三种「空」互不冒充
  *
  * - `empty/no_directories`、`empty/directories_without_sessions` → `EmptyState`（带 `data-empty-state`）；
- *   其中「目录存在但无会话」这一支**还要在其下照常列出目录项**（design D1-1）：
- *   空态指引写着「在下面选一个目录进入详情页」，列表就必须真的存在，否则指引指向空处。
- *   列表容器仍是同一个 `data-directory-list="directories"`，卡片也仍是同一份渲染；
- *   `no_directories` 时 `model.directories` 是空数组 → 不呈现列表（spec：一个目录都没有时
- *   MUST NOT 呈现任何目录项）。
+ *   其中「目录存在但无会话」这一支**还要在其下照常列出目录项**：空态指引写着「在下面选一个
+ *   目录进入详情页」，列表就必须真的存在，否则指引指向空处。列表容器仍是同一个
+ *   `data-directory-list="directories"`，卡片也仍是同一份渲染；`no_directories` 时
+ *   `model.directories` 是空数组 → 不呈现列表。
  * - `no_match`（有快照、有目录，但当前查询/筛选没有命中）→ **另一处**呈现「没有匹配的结果」，
  *   **不占用** `data-empty-state`（否则会污染 R15-4 的空态负向断言）；
  * - `loading`（从未同步过）→ 等待同步，同样不占用任何一种空态。
@@ -30,12 +33,15 @@
  * - **筛选段**：`SegmentControl`，取值 `all`/`running`/`pending`，同样受控。
  * - **内联会话行**：`sessionsByAlias` 由页面从 store 取（只依赖快照，与详情页的查询词/月份无关），
  *   每个目录项只列前 `MAX_INLINE_SESSIONS` 条（原型 `MAX_ROWS = 5`）。
- * - **进入详情页的两条路径**（design D1/D3）：卡片**标题**（`data-action="open-directory"`，
- *   与会话数无关）与**「查看全部 N 个 ›」**（`data-action="open-directory-all"`，只有该目录有
- *   会话时才给出；N 是目录项的 `counts.total`，全量口径而非内联行数）。两者都走
- *   `onOpenDirectory`，动作取值可区分是为了让消费方能分别断言。
+ * - **进入详情页的两条路径**（与卡片头一一对应）：**展示名**（`data-action="open-directory"`，
+ *   与会话数无关）与**「查看全部 ›」**（`data-action="open-directory-all"`，只有该目录有会话时
+ *   才给出）。两者都走 `onOpenDirectory`，动作取值可区分是为了让消费方能分别断言。
  * - **目录内创建**：`onCreateSession(alias)`（**必填**）；每个目录项恒呈现「⊕ 新建」——
  *   设备不再有创建会话的权限维度，因此组件不做也不接受任何权限判定或说明。
+ * - **工具条右端的顶部创建入口**：`onCreateSessionToBrowse()`（**可选**，缺省不呈现），画在搜索框与
+ *   筛选段右边（原型工具条的位置就是那里）。它与卡头上的「⊕ 新建」是两个可区分的控件：前者目录未知、
+ *   后者目录已定（`onCreateSession(alias)`）。它**不**受「空态/加载中不呈现搜索框与筛选段」的约束——
+ *   一个目录都没登记或还在等第一份快照时，它恰恰是目录页上唯一的创建路径。
  * - **折叠**：每个目录项**各自**的局部状态，翻转一个别名不影响其它目录项。
  * - **同步时间**：`lastSyncedAtMs` 非 `null` 才画；从未成功替换过快照时为 `null`，
  *   此时绝不编造时刻（spec「从未成功同步」MUST NOT）。
@@ -54,12 +60,15 @@ import { SegmentControl } from "./SegmentControl";
 import { SessionRow } from "./SessionRow";
 import type { Palette } from "./theme";
 import {
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
+  breakpoints,
   fontFamily,
   fontSize,
+  fontWeight,
   palettes,
   radius,
   spacing,
@@ -70,8 +79,13 @@ import {
 /** 内联会话行的展示上限（原型 `MAX_ROWS = 5`）。 */
 const MAX_INLINE_SESSIONS = 5;
 
-/** 宽屏断点（design D7）：可用宽度不小于它时目录卡片并排，否则单列。 */
-const WIDE_BREAKPOINT = 720;
+/**
+ * 宽屏断点（design D7）：可用宽度不小于它时目录卡片并排，否则单列。
+ *
+ * 取值来自 `theme.ts` 的 `breakpoints.wide`（D7/D10 要求这个数只在一处出现），
+ * 本组件不再自己写一次字面量。
+ */
+const WIDE_BREAKPOINT = breakpoints.wide;
 
 /** 筛选段的取值与文案（spec：全部 / 运行中 / 待处理）。 */
 const FILTER_OPTIONS = [
@@ -87,10 +101,18 @@ export interface DirectoryListProps {
   /**
    * 在该目录内创建会话（页面负责打开弹层与提交）。
    *
-   * **必填**：设备不再有创建会话的权限维度，目录项上的创建入口恒可用（spec「入口不因权限不可用」），
-   * 因此调用方没有「因为权限而不给回调」这个选项，组件也不再承接任何权限说明。
+   * **必填**：设备不再有创建会话的权限维度，目录项上的创建入口恒可用，因此调用方没有
+   * 「因为权限而不给回调」这个选项，组件也不再承接任何权限说明。
    */
   readonly onCreateSession: (alias: string) => void;
+  /**
+   * **顶部**创建入口（目录未知：「⊕ 新建」）：页面据此打开「逐层浏览并选定一层」那条链路。
+   *
+   * 可选：缺省不呈现该入口（本组件的其它消费方不带这条路径）。它画在工具条**右端**（原型的
+   * 工具条就是这个位置），与每张卡头上的「⊕ 新建」是两个可区分的控件——后者的目录已经定了
+   * （`onCreateSession(alias)`），前者的目录还没定。
+   */
+  readonly onCreateSessionToBrowse?: (() => void) | undefined;
   /**
    * 内联会话行的来源：按目录别名分组的会话行（页面从 store 取）。
    * 缺省空 Map，等价于「只呈现目录项、不列会话行」。
@@ -136,6 +158,23 @@ function buildStyles(colors: Palette) {
       alignItems: "center",
       gap: spacing.sm,
     },
+    // 顶部创建入口：贴近工具条右端（原型那里是 `spacer` + `⊕ 新建`）。搜索框的 `flexGrow` 先吃掉
+    // 余量，`marginLeft: auto` 管的是窄屏换行后这一行只剩入口时它仍贴右端。
+    createEntry: {
+      marginLeft: "auto",
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      borderRadius: radius.sm,
+      backgroundColor: colors.accentSoft,
+      borderWidth: 1,
+      borderColor: colors.accent,
+    },
+    createEntryText: {
+      color: colors.accentInk,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.md,
+      fontWeight: fontWeight.medium,
+    },
     search: {
       flexGrow: 1,
       flexShrink: 1,
@@ -164,13 +203,25 @@ function buildStyles(colors: Palette) {
     sessions: {
       flexDirection: "column",
     },
+    // 卡体里的「这个目录还没有会话」一行：与卡片同一处缩进（缩进本身在卡片的卡体上）。
+    emptyLine: {
+      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.lg,
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    // 空态与「没有匹配的结果」都是原型 `.blank` 那一块：虚线边框、居中。
     blank: {
+      alignItems: "center",
       backgroundColor: colors.panel,
       borderWidth: 1,
+      borderStyle: "dashed",
       borderColor: colors.line,
       borderRadius: radius.md,
-      padding: spacing.md,
-      gap: spacing.xs,
+      paddingVertical: spacing.xl,
+      paddingHorizontal: spacing.xl,
+      gap: spacing.sm,
     },
     blankTitle: {
       color: colors.ink,
@@ -179,9 +230,10 @@ function buildStyles(colors: Palette) {
       fontWeight: "600",
     },
     blankText: {
-      color: colors.ink2,
+      color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
+      textAlign: "center",
     },
     loading: {
       color: colors.ink2,
@@ -199,6 +251,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
     model,
     onOpenDirectory,
     onCreateSession,
+    onCreateSessionToBrowse,
     sessionsByAlias,
     query = "",
     onQueryChange,
@@ -216,9 +269,34 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
    */
   const [collapsedAliases, setCollapsedAliases] = useState<readonly string[]>([]);
 
+  /**
+   * 工具条右端的**顶部创建入口**（页面给了回调才画）。
+   *
+   * 它的出现**不**跟搜索框/筛选段走：那两者受「有没有可搜索/可筛选的内容」约束，而入口通向的是
+   * 「逐层浏览主机目录」这条路——还没拿到快照、一个目录都没登记时它反而是页面上唯一的创建路径
+   * （原型同样把 `⊕ 新建` 画在主工具栏里，与列表是否为空无关）。
+   */
+  const createEntry =
+    onCreateSessionToBrowse === undefined ? null : (
+      <Pressable
+        role="button"
+        style={styles.createEntry}
+        dataSet={{ action: "create-session-browse" }}
+        onPress={onCreateSessionToBrowse}
+      >
+        <Text style={styles.createEntryText}>⊕ 新建</Text>
+      </Pressable>
+    );
+
   if (model.kind === "loading") {
     return (
       <View style={styles.page} dataSet={{ route: "dirs" }}>
+        {/* 还没有内容可搜索/可筛选，因此只有那一行工具条与它的入口（见 `createEntry`）。 */}
+        {createEntry === null ? null : (
+          <View style={styles.toolbar} dataSet={{ directoryToolbar: "true" }}>
+            {createEntry}
+          </View>
+        )}
         <Text style={styles.loading} dataSet={{ directoryState: "loading" }}>
           尚未收到第一份快照，正在等待同步……
         </Text>
@@ -241,6 +319,10 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
   /**
    * 一项目录卡片。`ready` 与「目录存在但无会话」的 `empty` 共用这一份渲染：两种分支下卡片的
    * 形状、属性与入口**不会分叉**——空态里那张卡片与别处的卡片是同一个东西。
+   *
+   * 卡体只有两种：内联会话行，或那一行「这个目录还没有会话」。后者只在**该目录一条会话都没有**
+   * 时呈现（`counts.total === 0`）——「没有会话数据源」与「这个目录没有会话」是两回事，
+   * 前者只是不列行，不冒充后者的文案。
    */
   const renderDirectoryCard = (directory: DirectoryRowModel): ReactElement => {
     const collapsed = collapsedAliases.includes(directory.alias);
@@ -250,9 +332,9 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         key={directory.alias}
         displayName={directory.displayName}
         alias={directory.alias}
+        // 同名消歧尾段：逐字来自服务端下发的路径，且只在同名时非 `null`（feature 层判定）。
+        pathTail={directory.pathTail}
         counts={directory.counts}
-        // 最近活动时间由模型给出（该目录下会话 `updatedAt` 的最大值）；无会话为 `null`。
-        latestActivityAt={directory.latestActivityAt}
         collapsed={collapsed}
         onToggleCollapsed={() => {
           // 只翻转本项的别名：其它目录项的折叠态不受影响（spec 场景「目录项折叠」）。
@@ -262,11 +344,11 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
               : [...collapsedAliases, directory.alias],
           );
         }}
-        // 标题入口：无论该目录有多少会话都可用（0 会话的目录同样可达详情页，spec 场景）。
+        // 展示名入口：无论该目录有多少会话都可用（0 会话的目录同样可达详情页，spec 场景）。
         onOpen={() => {
           onOpenDirectory(directory.alias);
         }}
-        // 「查看全部 N 个 ›」：只要该目录有会话就给出（原型同此），否则会呈现「查看全部 0 个」。
+        // 「查看全部 ›」：只要该目录有会话就给出，否则会呈现一个通向空页面的入口。
         onOpenAll={
           directory.counts.total === 0
             ? null
@@ -279,7 +361,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
           onCreateSession(directory.alias);
         }}
       >
-        {inline.length === 0 ? null : (
+        {inline.length > 0 ? (
           <View role="list" style={styles.sessions}>
             {inline.map((row) =>
               // `exactOptionalPropertyTypes`：`onOpenSession` 缺省时不能显式传 `undefined`。
@@ -296,7 +378,9 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
               ),
             )}
           </View>
-        )}
+        ) : directory.counts.total === 0 ? (
+          <Text style={styles.emptyLine}>这个目录还没有会话</Text>
+        ) : null}
       </DirectoryCard>
     );
   };
@@ -329,11 +413,12 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         )}
       </View>
 
-      {/* 空态下没有可搜索/可筛选的内容，因此不呈现工具条；「搜索无结果」时**必须**呈现，
-          否则用户没有把关键词或筛选改回去的入口。 */}
-      {model.kind === "empty" ? null : (
-        <View style={styles.toolbar}>
-          {onQueryChange === undefined ? null : (
+      {/* 空态下没有可搜索/可筛选的内容，因此不呈现搜索框与筛选段；「搜索无结果」时**必须**呈现，
+          否则用户没有把关键词或筛选改回去的入口。顶部创建入口不跟这条约束走（见上面 `createEntry`），
+          它一个目录都没登记时更该在，所以只要它在，工具条这一行就画出来。 */}
+      {model.kind === "empty" && createEntry === null ? null : (
+        <View style={styles.toolbar} dataSet={{ directoryToolbar: "true" }}>
+          {model.kind === "empty" || onQueryChange === undefined ? null : (
             <TextInput
               value={query}
               onChangeText={onQueryChange}
@@ -346,7 +431,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
               dataSet={{ directorySearch: "true", directorySearchValue: query }}
             />
           )}
-          {onFilterChange === undefined ? null : (
+          {model.kind === "empty" || onFilterChange === undefined ? null : (
             <SegmentControl
               label="筛选"
               value={filter}
@@ -354,6 +439,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
               onChange={onFilterChange}
             />
           )}
+          {createEntry}
         </View>
       )}
 
@@ -361,7 +447,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
         <>
           {/* 空态标记与文案保持既有取值（`data-empty-state` 仍只在这一支出现）；
               其下**照常**列出已登记的目录项：指引写着「在下面选一个目录进入详情页」，
-              列表就必须真的存在（design D1-1）。`no_directories` 时 `directories` 是空数组，
+              列表就必须真的存在。`no_directories` 时 `directories` 是空数组，
               因此不呈现列表，也就没有任何目录项。 */}
           <EmptyState
             kind={model.empty}

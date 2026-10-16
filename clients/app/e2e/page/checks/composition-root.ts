@@ -184,7 +184,7 @@ const checks: readonly Check[] = [
         //
         // 等待条件必须用**只有真实页面才发**的属性：`[data-route="dirs"]` 同时被占位
         // `RuntimeUnavailable` 命中，用它等待可能在首帧占位时就成立。这里用
-        // `[data-connection-state]`（`ConnectionBadge`，占位不发）。
+        // `[data-connection-state]`（`HostConnectionPanel` 的面板头发，占位不发）。
         await waitFor(
           () => query(mounted.container, "[data-connection-state]") !== null,
           "阻断态下真实页面渲染",
@@ -209,7 +209,7 @@ const checks: readonly Check[] = [
           "记录非法时状态机停在 unpaired",
         );
         // 状态机断言看的是 store，可能先于 React 首帧满足；DOM 断言前先等真实页面渲染。
-        // 等待条件用 `[data-connection-state]`（`ConnectionBadge`）而不是
+        // 等待条件用 `[data-connection-state]`（`HostConnectionPanel` 的面板头）而不是
         // `[data-route="dirs"]`：后者同时被占位 `RuntimeUnavailable` 命中，
         // 等待会在首帧占位时就成立，后续断言便与 `start()` 的 resolve 形成竞态。
         await waitFor(

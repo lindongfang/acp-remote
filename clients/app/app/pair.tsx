@@ -22,6 +22,13 @@
  * 结构校验、claim、轮询、落盘与「已配对后触发连接」都在 `ClientStore` 与组合根里
  * （`store.submitPairingQrText` / `store.startPairingFromAddress`）：本页不碰 `fetch`、
  * 不读地址栏、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。
+ *
+ * ## 配对页呈现自己的头部（共享外壳下的例外）
+ *
+ * 共享外壳装在根布局里（`design.md` D1），由 `usePathname()` 判定配对入口不呈现全局顶栏
+ * （`shell-model.ts` 的 `isPairingPath`）——本页因此**自己**呈现页头：一条离开本页的入口，
+ * 使「不显示顶栏」不等于「丢掉了返回根路径的能力」。本页不再自建导航条，也不画第二个
+ * 连接状态徽标：配对本就发生在建立连接之前，状态由配对面板自己的阶段呈现。
  */
 
 import { useRouter } from "expo-router";
@@ -29,9 +36,53 @@ import { useEffect } from "react";
 import type { ReactElement } from "react";
 
 import { PairingPanel, RuntimeUnavailable } from "../src/components";
+import type { Palette } from "../src/components/theme";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  fontFamily,
+  fontSize,
+  palettes,
+  radius,
+  spacing,
+  useTheme,
+} from "../src/components/theme";
 import { initialPairingPageModel } from "../src/features/pairing-model";
 import type { PairingKind } from "../src/features/pairing-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
+
+/** 页面级布局（与目录页、目录详情页同一份骨架，只是内容居中）。 */
+function buildStyles(colors: Palette) {
+  return StyleSheet.create({
+    page: {
+      flex: 1,
+      gap: spacing.md,
+      padding: spacing.lg,
+      backgroundColor: colors.bg,
+    },
+    head: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "baseline",
+      gap: spacing.md,
+    },
+    back: {
+      alignSelf: "flex-start",
+      paddingVertical: spacing.xs,
+      paddingHorizontal: spacing.sm,
+      borderRadius: radius.sm,
+    },
+    backText: {
+      color: colors.accent,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+  });
+}
+
+const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
 /**
  * 配对入口的页面主体，两类入口**共用**（design D4：复用同一组件、以类型参数区分，不复制一套 UI）。
@@ -44,6 +95,7 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
   const store = useClientStore();
   const state = useClientState();
   const router = useRouter();
+  const theme = useTheme();
 
   // 二维码地址直接打开这一页时，片段里带着配对内容：读一次（并立即清除片段）即进入与本页
   // 对应的流程。依赖只有 `store` 与 `kind`：组合根异步装配完成后才可用，而片段只读一次
@@ -54,13 +106,22 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
 
   if (store === null || state === null) return <RuntimeUnavailable route="pair" />;
 
+  const styles = theme.dark ? STYLES.dark : STYLES.light;
+
   return (
-    <main>
-      <nav>
-        <button type="button" data-action="back-to-dirs" onClick={() => router.back()}>
-          返回目录
-        </button>
-      </nav>
+    <View role="main" style={styles.page}>
+      {/* 本页自己的头部：全局顶栏在配对入口不呈现，离开本页的入口因此必须在这里。 */}
+      <View style={styles.head} dataSet={{ routeHeader: "pair" }}>
+        <Pressable
+          role="button"
+          style={styles.back}
+          dataSet={{ action: "back-to-dirs" }}
+          onPress={() => router.back()}
+        >
+          <Text style={styles.backText}>‹ 目录</Text>
+        </Pressable>
+      </View>
+
       <PairingPanel
         model={store.pairingPage()}
         onSubmit={(text) => {
@@ -70,7 +131,7 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
           store.setPairing(initialPairingPageModel());
         }}
       />
-    </main>
+    </View>
   );
 }
 

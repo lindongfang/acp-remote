@@ -1,6 +1,12 @@
 /**
  * 模型与模式分节（spec「模型与模式的呈现与切换」；`design.md` D5 的配置面）。
  *
+ * ## 形态：胶囊 + 弹层（原型 `.pick`）
+ *
+ * 两节各是一个胶囊（`模型 <当前值> ▾` / `模式 <当前值> ▾`），点开是弹层：可选项、分节状态与
+ * 说明都在弹层里。弹层内容**始终在 DOM**（收起时只 `display: none`），因此「未提供时不展示
+ * 虚假可选项」「切换中当前值不变」这些判定在静置的渲染结果里就断言得到。
+ *
  * ## 组件不做判定
  *
  * 「当前值 / 可选项 / 切换中 / 未提供」四态与「未提供时不展示可点选项」这条 MUST 都在
@@ -18,11 +24,16 @@
  * `disabled`：把选项藏起来会让用户以为「这个会话没有可选项」。
  */
 
+import { useState } from "react";
 import type { ReactElement } from "react";
 
-import type { ConversationSettingsModel, SettingsChoice, SettingsSectionModel } from "../features/conversation-settings-model";
+import type {
+  ConversationSettingsModel,
+  SettingsChoice,
+  SettingsSectionModel,
+} from "../features/conversation-settings-model";
 import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radius, spacing, useTheme, zIndex } from "./theme";
 
 export interface ConversationSettingsPanelProps {
   readonly settings: ConversationSettingsModel;
@@ -40,39 +51,75 @@ const SECTION_STATE_LABELS: Readonly<Record<SettingsSectionModel["state"], strin
   not_loaded: "尚未加载",
 };
 
+/** 分节的说明文案（胶囊上的「模型」「模式」）。 */
+const SECTION_KICKERS: Readonly<Record<"model" | "mode", string>> = {
+  model: "模型",
+  mode: "模式",
+};
+
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
     panel: {
-      gap: spacing.md,
-      padding: spacing.md,
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "flex-start",
+      gap: spacing.sm,
+    },
+    section: {
+      position: "relative",
+    },
+    pill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.xs,
+      paddingVertical: spacing.xs,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: radius.lg,
+      backgroundColor: colors.panel2,
+    },
+    kicker: {
+      color: colors.ink2,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    value: {
+      color: colors.ink,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+      fontWeight: "600",
+    },
+    caret: {
+      color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+    },
+    popover: {
+      // 弹层浮在胶囊**上方**（原型 `.pick .pop`：`position:absolute;bottom:calc(100% + 6px)`），
+      // 因此展开不会把输入区推下去。收起时 `display:none`，布局没有变化。
+      position: "absolute",
+      left: 0,
+      bottom: "100%",
+      gap: spacing.xs,
+      minWidth: 220,
+      marginBottom: spacing.xs,
+      padding: spacing.sm,
       borderWidth: 1,
       borderColor: colors.line,
       borderRadius: radius.md,
       backgroundColor: colors.panel,
+      zIndex: zIndex.topBar,
     },
-    section: {
-      gap: spacing.xs,
-      paddingBottom: spacing.sm,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.line2,
+    popoverHidden: {
+      display: "none",
     },
     head: {
       flexDirection: "row",
       flexWrap: "wrap",
       alignItems: "baseline",
       gap: spacing.sm,
-    },
-    kicker: {
-      color: colors.ink3,
-      fontFamily: fontFamily.mono,
-      fontSize: fontSize.xs,
-    },
-    value: {
-      color: colors.ink,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.md,
-      fontWeight: "600",
     },
     state: {
       paddingHorizontal: spacing.sm,
@@ -88,9 +135,7 @@ function buildStyles(colors: Palette) {
       backgroundColor: colors.warnSoft,
     },
     choices: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: spacing.sm,
+      gap: spacing.xs,
     },
     choice: {
       paddingVertical: spacing.xs,
@@ -166,7 +211,7 @@ function ChoiceButton({
   );
 }
 
-/** 一个分节（模型或模式）。 */
+/** 一个分节（模型或模式）：胶囊 + 弹层。 */
 function SettingsSection({
   name,
   section,
@@ -180,6 +225,7 @@ function SettingsSection({
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
+  const [open, setOpen] = useState(false);
 
   return (
     <View
@@ -192,30 +238,47 @@ function SettingsSection({
         settingsConfigId: section.configId ?? "none",
       }}
     >
-      <View style={styles.head}>
-        <Text style={styles.kicker}>{name === "model" ? "模型" : "模式"}</Text>
+      <Pressable
+        role="button"
+        style={styles.pill}
+        dataSet={{ action: "toggle-settings-popover", settingsPill: name, settingsPillOpen: String(open) }}
+        onPress={() => {
+          setOpen(!open);
+        }}
+      >
+        <Text style={styles.kicker}>{SECTION_KICKERS[name]}</Text>
         <Text style={styles.value} dataSet={{ settingsCurrentName: section.currentName ?? "none" }}>
           {section.currentName ?? "未提供"}
         </Text>
-        <Text
-          style={section.state === "switching" ? [styles.state, styles.stateSwitching] : styles.state}
-          dataSet={{ settingsStateLabel: section.state }}
-        >
-          {SECTION_STATE_LABELS[section.state]}
-        </Text>
-      </View>
+        <Text style={styles.caret}>▾</Text>
+      </Pressable>
 
-      <View style={styles.choices}>
-        {section.choices.map((choice) => (
-          <ChoiceButton key={choice.id} section={section} choice={choice} onSelect={onSelect} testKey={testKey} />
-        ))}
-      </View>
+      {/* 弹层内容始终在 DOM：收起只是 `display: none`（与原型 `.pick .pop` 同一形态）。 */}
+      <View
+        style={open ? styles.popover : [styles.popover, styles.popoverHidden]}
+        dataSet={{ settingsPopover: name, settingsPopoverOpen: String(open) }}
+      >
+        <View style={styles.head}>
+          <Text
+            style={section.state === "switching" ? [styles.state, styles.stateSwitching] : styles.state}
+            dataSet={{ settingsStateLabel: section.state }}
+          >
+            {SECTION_STATE_LABELS[section.state]}
+          </Text>
+        </View>
 
-      {section.notice === null ? null : (
-        <Text style={styles.notice} dataSet={{ settingsNotice: section.state }}>
-          {section.notice}
-        </Text>
-      )}
+        <View style={styles.choices}>
+          {section.choices.map((choice) => (
+            <ChoiceButton key={choice.id} section={section} choice={choice} onSelect={onSelect} testKey={testKey} />
+          ))}
+        </View>
+
+        {section.notice === null ? null : (
+          <Text style={styles.notice} dataSet={{ settingsNotice: section.state }}>
+            {section.notice}
+          </Text>
+        )}
+      </View>
     </View>
   );
 }

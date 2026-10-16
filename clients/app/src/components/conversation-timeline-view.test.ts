@@ -1,6 +1,6 @@
 /**
- * WP5 · 对话时间线的呈现（spec「对话页按时间线呈现消息与结构化条目」「Agent 产生的富文本按
- * 不可信输入渲染」；design D1/D5/D6/D8）。
+ * WP7 · 对话时间线的呈现（spec「对话页按时间线呈现消息与结构化条目」「Agent 产生的富文本按
+ * 不可信输入渲染」「结构化条目的展开收起与右栏联动」；design D1/D5/D6/D8/D10）。
  *
  * ## 判别力从哪来
  *
@@ -14,6 +14,14 @@
  *   渲染结果里没有 `<script`、没有 `<img`、也没有链接的 `href`。
  * - **授权边界**：只有亲历且拿到可选项的请求才渲染应答按钮；历史读到的待处理项、
  *   已被其它设备处理的、本设备已提交待确认的，一律**没有**可点按钮。
+ * - **条目形态**：用户气泡与 Agent 气泡是两档（`class` 集合不同）；终端输出是一张代码卡
+ *   （语言条 + 复制）；进行中的轮次带运行指示、失败的轮次是一条失败条。
+ * - **折叠默认值由状态决定**：进行中的工具调用 `data-entry-expanded="true"`、已完成的
+ *   `"false"`；同一份条目换成另一个状态就换默认值（不看它在列表里的位置）。
+ * - **显式覆盖只影响本条**：给同状态的两条里的一条写覆盖值，另一条的有效值不变。
+ * - **收起不丢内容**：收起时正文仍在 DOM 里（`display: none`），因此「内容消失」与「收起」是
+ *   两件事。
+ * - **联动到右栏**：时间线上带文件标识的条目与右栏改动清单共用同一个选中值。
  */
 
 import { createElement } from "react";
@@ -21,6 +29,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ConversationStream } from "./index";
+import type { ConversationStreamProps } from "./index";
 import type { ConversationPageModel } from "../features/conversation-model";
 import type { ClientStore } from "../features/client-store";
 import { SESSION_HISTORY_FEATURE } from "../sync-client";
@@ -38,14 +47,15 @@ import {
   session,
 } from "../features/testing/fixtures";
 
-/** 渲染对话页正文。 */
-function renderPage(model: ConversationPageModel): string {
+/** 渲染对话页正文（可注入折叠覆盖值、选中项与回调）。 */
+function renderPage(model: ConversationPageModel, extra: Partial<ConversationStreamProps> = {}): string {
   return renderToStaticMarkup(
     createElement(ConversationStream, {
       model,
       onLoadEarlier: () => undefined,
       onOpenDiagnostics: () => undefined,
       onAnswerInteraction: () => undefined,
+      ...extra,
     }),
   );
 }
@@ -80,6 +90,28 @@ function tagContaining(html: string, marker: string): string {
   const at = html.indexOf(marker);
   expect(at, `渲染结果里没有 ${marker}`).toBeGreaterThanOrEqual(0);
   return html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
+}
+
+/** 标签原文里某个属性的值（读判别值用；缺席即判红）。 */
+function attributeOf(tag: string, name: string): string {
+  const match = new RegExp(`${name}="([^"]*)"`).exec(tag);
+  expect(match, `${name} 不在 ${tag} 里`).not.toBeNull();
+  return match?.[1] ?? "";
+}
+
+/** 标签原文里的 `class` 属性（两档样式的机器证据：同一档就是同一个样式集合）。 */
+function classOf(tag: string): string {
+  return attributeOf(tag, "class");
+}
+
+/** 卡片条目的键：它最早那条记录的 `eventId`（`features/conversation-timeline.ts` 的 `cardEntry`）。 */
+function foldKey(eventId: string): string {
+  return `event:${eventId}`;
+}
+
+/** 某个折叠块的有效展开值（`data-fold-entry` → `data-entry-expanded`）。 */
+function foldExpanded(html: string, entryKey: string): string {
+  return attributeOf(tagContaining(html, `data-fold-entry="${entryKey}"`), "data-entry-expanded");
 }
 
 /** 每类卡片各注入一条事件（`eventId` 各不相同）。 */
@@ -238,7 +270,11 @@ describe("对话时间线：消息与结构化条目同一条时间线", () => {
     expect(tagContaining(html, 'data-message-id="m-1"').startsWith("<li")).toBe(true);
     expect(tagContaining(html, 'data-timeline-card="turn"').startsWith("<li")).toBe(true);
     // 反例：若消息与卡片各画一块列表，下面这条「同容器」断言会红。
-    expect(html.indexOf('data-message-id="m-1"')).toBeLessThan(html.indexOf("</ul>"));
+    // `</ul>` 从时间线容器往后找：页面上还有别的列表（对话页左栏的同目录会话列表也是一个
+    // `<ul>`），从文档开头找会撞上它。
+    expect(html.indexOf('data-message-id="m-1"')).toBeLessThan(
+      html.indexOf("</ul>", html.indexOf('data-timeline="entries"')),
+    );
   });
 
   it("按时间排序：早于消息的结构化条目排在消息之前", () => {
@@ -347,6 +383,8 @@ describe("对话时间线：正文按不可信输入渲染", () => {
     expect(html).toContain('data-code-block="true"');
     expect(html).toContain('data-code-language="stdout"');
     expect(html).toContain('data-action="copy-code"');
+    // 终端块默认收起（它不是「进行中」），但正文仍在 DOM 里：收起不等于内容消失。
+    expect(foldExpanded(html, foldKey("dddddddd-0000-4000-8000-000000000204"))).toBe("false");
   });
 
   it("流式增量是易失呈现：读取结果到达后同一 messageId 只留一处", () => {
@@ -380,6 +418,244 @@ describe("对话时间线：正文按不可信输入渲染", () => {
   });
 });
 
+describe("对话时间线：条目形态与原型对齐", () => {
+  it("用户消息与 Agent 气泡是两档样式（靠右的用户气泡 vs 另一个气泡档）", () => {
+    const { store: client, gateway } = store();
+    client.loadSession(ONLINE_SESSION_ID);
+    client.apply({
+      kind: "command_result",
+      result: readResult({
+        requestId: lastDispatch(gateway).body.requestId,
+        sessionId: ONLINE_SESSION_ID,
+        messages: [
+          messageItem({ id: "m-user", createdAt: "2026-10-01T00:00:01.000Z", role: "user", text: "先修那条" }),
+          messageItem({ id: "m-agent", createdAt: "2026-10-01T00:00:02.000Z", role: "agent", text: "好，从 `session.ts` 开始看。" }),
+        ],
+      }),
+    });
+    const html = renderPage(pageOf(client));
+
+    const userEntry = tagContaining(html, 'data-message-id="m-user"');
+    const agentEntry = tagContaining(html, 'data-message-id="m-agent"');
+    expect(userEntry.startsWith("<li")).toBe(true);
+    expect(agentEntry.startsWith("<li")).toBe(true);
+    // 反例：两条气泡共用一档样式（用户那条不再靠右）→ 这里相等。
+    expect(classOf(userEntry)).not.toBe(classOf(agentEntry));
+
+    // 气泡本体也是两档：用户气泡（右对齐 + 强调底色）与 Agent 气泡（面板底色）样式集合不同。
+    const userBubble = tagContaining(html.slice(html.indexOf('data-message-id="m-user"')), 'data-message-text="true"');
+    const agentBubble = tagContaining(
+      html.slice(html.indexOf('data-message-id="m-agent"')),
+      'data-message-text="true"',
+    );
+    expect(classOf(userBubble)).not.toBe(classOf(agentBubble));
+
+    expect(userEntry).toContain('data-message-channel="user"');
+    expect(agentEntry).toContain('data-message-channel="agent"');
+    expect(html).toContain('data-message-who="user"');
+    expect(html).toContain('data-message-who="agent"');
+    expect(html).toContain("你");
+    expect(html).toContain("Agent");
+  });
+
+  it("进行中的轮次带运行指示，失败的轮次是一条失败条", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "turn.started",
+      eventId: "dddddddd-0000-4000-8000-000000000206",
+      globalSequence: "36",
+      view: { turnId: "turn-run", state: "running" },
+    });
+    applyEvent(client, {
+      eventType: "turn.failed",
+      eventId: "dddddddd-0000-4000-8000-000000000207",
+      globalSequence: "37",
+      view: {
+        turnId: "turn-fail",
+        state: "failed",
+        error: { code: "session.busy", message: "Agent 进程异常退出", retryable: true, details: {} },
+      },
+    });
+    const html = renderPage(pageOf(client));
+
+    expect(html).toContain('data-turn-running="true"');
+    expect(html).toContain("Agent 正在输出");
+    expect(html).toContain('data-turn-state="failed"');
+    expect(html).toContain('data-turn-failure="true"');
+    expect(html).toContain('data-turn-error="session.busy"');
+    expect(html).toContain('data-turn-error-retryable="true"');
+    expect(html).toContain("轮次失败：Agent 进程异常退出");
+  });
+});
+
+describe("对话时间线：结构化条目的展开收起（D10）", () => {
+  it("默认展开值由条目状态决定：进行中的展开，已落地的收起", () => {
+    const { store: client } = store();
+    let sequence = 40;
+    const apply = (eventId: string, eventType: string, view: Record<string, unknown>, toolCallId: string): void => {
+      sequence += 1;
+      applyEvent(client, {
+        eventType,
+        eventId,
+        globalSequence: String(sequence),
+        view: { toolCallId, turnId: "turn-1", title: "读取 src/a.ts", ...view },
+      });
+    };
+    apply("dddddddd-0000-4000-8000-000000000301", "tool.call.started", { state: "in_progress" }, "tool-open");
+    apply("dddddddd-0000-4000-8000-000000000302", "tool.call.completed", { state: "completed" }, "tool-done");
+    const html = renderPage(pageOf(client), { onToggleTimelineEntry: () => undefined });
+
+    // 同一条时间线、同一个回调：默认值只跟着条目自己的状态走（进行中 → 展开）。
+    expect(foldExpanded(html, foldKey("dddddddd-0000-4000-8000-000000000301"))).toBe("true");
+    expect(foldExpanded(html, foldKey("dddddddd-0000-4000-8000-000000000302"))).toBe("false");
+    // 表头是显式操作入口，并带上该条目的键与当前有效值（页面据此写覆盖值）。
+    expect(html).toContain('data-action="toggle-timeline-entry"');
+    expect(html).toContain(`data-entry-key="${foldKey("dddddddd-0000-4000-8000-000000000301")}"`);
+  });
+
+  it("思考在流出时展开、落地后收起；计划有进行中的一步时展开", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "agent.thought.delta",
+      eventId: "dddddddd-0000-4000-8000-000000000303",
+      globalSequence: "45",
+      view: { messageId: "th-1", turnId: "turn-1", deltaIndex: "0", text: "先看关闭路径" },
+    });
+    applyEvent(client, {
+      eventType: "session.plan.changed",
+      eventId: "dddddddd-0000-4000-8000-000000000304",
+      globalSequence: "46",
+      view: { entries: [{ content: "改超时", priority: "high", status: "in_progress" }] },
+    });
+    applyEvent(client, {
+      eventType: "session.plan.changed",
+      eventId: "dddddddd-0000-4000-8000-000000000305",
+      globalSequence: "47",
+      view: { entries: [{ content: "改超时", priority: "high", status: "completed" }] },
+    });
+    const streaming = renderPage(pageOf(client));
+
+    expect(foldExpanded(streaming, "message:th-1")).toBe("true");
+    expect(foldExpanded(streaming, foldKey("dddddddd-0000-4000-8000-000000000304"))).toBe("true");
+    expect(foldExpanded(streaming, foldKey("dddddddd-0000-4000-8000-000000000305"))).toBe("false");
+
+    // 增量流结束（`agent.message.completed`）后同一条思考的默认值变成「收起」。
+    applyEvent(client, {
+      eventType: "agent.message.completed",
+      eventId: "dddddddd-0000-4000-8000-000000000306",
+      globalSequence: "48",
+      view: { messageId: "th-1", turnId: "turn-1", content: [] },
+    });
+    expect(foldExpanded(renderPage(pageOf(client)), "message:th-1")).toBe("false");
+  });
+
+  it("显式覆盖只影响本条：同状态的两条里被指定的那条收起", () => {
+    const { store: client } = store();
+    let sequence = 50;
+    const apply = (eventId: string, toolCallId: string): void => {
+      sequence += 1;
+      applyEvent(client, {
+        eventType: "tool.call.started",
+        eventId,
+        globalSequence: String(sequence),
+        view: { toolCallId, turnId: "turn-1", title: "读取 src/a.ts", state: "in_progress" },
+      });
+    };
+    const first = "dddddddd-0000-4000-8000-000000000401";
+    const second = "dddddddd-0000-4000-8000-000000000402";
+    apply(first, "tool-a");
+    apply(second, "tool-b");
+    const model = pageOf(client);
+
+    // 两条都是「进行中」，默认都展开。
+    const defaults = renderPage(model);
+    expect(foldExpanded(defaults, foldKey(first))).toBe("true");
+    expect(foldExpanded(defaults, foldKey(second))).toBe("true");
+
+    // 只对第一条写显式覆盖 → 只有它收起，同状态的另一条不变。
+    const overridden = renderPage(model, { expandedTimelineEntries: { [foldKey(first)]: false } });
+    expect(foldExpanded(overridden, foldKey(first))).toBe("false");
+    expect(foldExpanded(overridden, foldKey(second))).toBe("true");
+
+    // 显式展开也能覆盖默认收起（例如终端块）。
+    applyEvent(client, {
+      eventType: "terminal.output",
+      eventId: "dddddddd-0000-4000-8000-000000000403",
+      globalSequence: "60",
+      view: { terminalId: "term-open", chunkIndex: "0", stream: "stdout", text: "ok", truncated: false },
+    });
+    const opened = renderPage(pageOf(client), { expandedTimelineEntries: { [foldKey("dddddddd-0000-4000-8000-000000000403")]: true } });
+    expect(foldExpanded(opened, foldKey("dddddddd-0000-4000-8000-000000000403"))).toBe("true");
+  });
+
+  it("回调缺省时表头不是可点控件（不是点了没反应的按钮）", () => {
+    const { store: client } = store();
+    applyEvent(client, {
+      eventType: "tool.call.started",
+      eventId: "dddddddd-0000-4000-8000-000000000404",
+      globalSequence: "61",
+      view: { toolCallId: "tool-x", turnId: "turn-1", title: "读取 src/a.ts", state: "in_progress" },
+    });
+    const html = renderPage(pageOf(client));
+
+    expect(html).toContain('data-fold-entry="event:dddddddd-0000-4000-8000-000000000404"');
+    expect(html).not.toContain('data-action="toggle-timeline-entry"');
+  });
+});
+
+describe("对话时间线：从条目联动到右栏", () => {
+  const changeId = "11111111-0000-4000-8000-0000000000d1";
+
+  /** 注入一条 `file.changed`（带相对化展示路径）。 */
+  function applyFileChanged(client: ClientStore): void {
+    applyEvent(client, {
+      eventType: "file.changed",
+      eventId: "dddddddd-0000-4000-8000-000000000501",
+      globalSequence: "70",
+      view: {
+        changeId,
+        kind: "update",
+        displayPath: "src/auth/session.ts",
+        summary: "替换 1 行",
+        addedLines: "2",
+        deletedLines: "1",
+        outsideWorkspace: false,
+      },
+    });
+  }
+
+  it("带文件标识的条目被选中时，时间线与右栏指向同一处改动", () => {
+    const { store: client } = store();
+    applyFileChanged(client);
+    const html = renderPage(pageOf(client), {
+      selectedChangeId: changeId,
+      onSelectChange: () => undefined,
+      onOpenChangeDiagnostics: () => undefined,
+    });
+
+    // 时间线条目与右栏行都标出「同一处改动被选中」。
+    expect(attributeOf(tagContaining(html, `data-change-id="${changeId}"`), "data-change-selected")).toBe("true");
+    expect(
+      attributeOf(tagContaining(html, `data-file-change="${changeId}"`), "data-file-change-selected"),
+    ).toBe("true");
+    // 两个入口（时间线条目 + 右栏行）都上抛同一个 `changeId`。
+    expect(html.match(/data-action="select-file-change"/g) ?? []).toHaveLength(2);
+  });
+
+  it("没有选中时两处都不标出选中；回调缺省时不渲染可点入口", () => {
+    const { store: client } = store();
+    applyFileChanged(client);
+    const html = renderPage(pageOf(client));
+
+    expect(attributeOf(tagContaining(html, `data-change-id="${changeId}"`), "data-change-selected")).toBe("false");
+    expect(
+      attributeOf(tagContaining(html, `data-file-change="${changeId}"`), "data-file-change-selected"),
+    ).toBe("false");
+    // 反例：回调缺省却仍画出可点路径 → 这里不为 0。
+    expect(html.match(/data-action="select-file-change"/g) ?? []).toHaveLength(0);
+  });
+});
+
 describe("对话时间线：授权与提问的可用边界", () => {
   it("亲历的请求：按请求下发的可选项渲染应答按钮", () => {
     const { store: client } = interactionStore();
@@ -402,6 +678,48 @@ describe("对话时间线：授权与提问的可用边界", () => {
     expect(html).toContain('data-answer-option="allow-once"');
     expect(html).toContain('data-answer-option="reject"');
     expect(html).toContain("允许一次");
+  });
+
+  it("授权按钮按 kind 分三档底色，未知取值退到中性档（不冒充拒绝）", () => {
+    const { store: client } = interactionStore();
+    applyEvent(client, {
+      eventType: "permission.requested",
+      eventId: "dddddddd-0000-4000-8000-00000000020e",
+      globalSequence: "44",
+      view: {
+        interactionId: "perm-tiers",
+        title: "运行 npm test",
+        options: [
+          { optionId: "once", label: "允许一次", kind: "allow_once" },
+          { optionId: "always", label: "始终允许", kind: "allow_always" },
+          { optionId: "reject", label: "拒绝", kind: "reject_once" },
+          { optionId: "reject-always", label: "始终拒绝", kind: "reject_always" },
+          { optionId: "future", label: "未来的选项", kind: "some_future_kind" },
+        ],
+      },
+    });
+    const html = renderPage(pageOf(client));
+
+    // 底色就是 RNW 生成的原子 class（`r-backgroundColor-*`）：颜色相同即同一个 class，退化成
+    // 同一档就会退化成同一个 class，因此这条断言能拦住「三个按钮一个样」。
+    const backgroundClassOf = (optionId: string): string => {
+      const match = /r-backgroundColor-[a-z0-9]+/.exec(classOf(tagContaining(html, `data-answer-option="${optionId}"`)));
+      expect(match, `${optionId} 的按钮没有背景色 class`).not.toBeNull();
+      return match?.[0] ?? "";
+    };
+
+    const once = backgroundClassOf("once");
+    const always = backgroundClassOf("always");
+    const reject = backgroundClassOf("reject");
+    // 三档互不相同：accent / warn / danger。三者合成一档时其中一条必然变红。
+    expect(once).not.toBe(always);
+    expect(always).not.toBe(reject);
+    expect(once).not.toBe(reject);
+    // 两条拒绝取值合到同一档（原型只有 `.p-reject` 一个拒绝档）。
+    expect(backgroundClassOf("reject-always")).toBe(reject);
+    // 未知取值确定性降级：不与拒绝档同色，也不冒充允许的两档。
+    const future = backgroundClassOf("future");
+    expect([once, always, reject]).not.toContain(future);
   });
 
   it("仅从历史读到的待处理项：不可操作、有说明、没有应答按钮", () => {

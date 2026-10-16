@@ -1,23 +1,31 @@
 /**
- * R15「目录详情按月分档、目录内搜索与按宽度自适应」的浏览器级验证（详情页那一半）。
+ * R15「目录详情按时间倒序分页」的浏览器级验证（详情页那一半）。
  *
  * 与 `r15-directory.ts` 同一套装配：真实路由组件 `app/dir/[alias].tsx` → 真实
  * `DirectoryDetail` → `src/features/directory-model.ts`，数据来自真实快照管线。
  * 三个共用机关（`withScenario` / `waitForDirectoryList` / `typeIntoInput`）从那里导入，
- * 不复制第二份——两页的搜索框、卸载纪律必须逐字一致。
+ * 不复制第二份——两页的输入框、卸载纪律必须逐字一致。
  *
  * ## 判别力
  *
- * - 「三种空互不冒充」：别名不在快照里（`unknown_directory`）与「目录里没有会话」
- *   （`sessions="empty"`）是两个分支，而「搜索/月份没命中」是**第三支**
- *   （`data-directory-detail-no-match`）——任一支被合并进另一支，对应用例必红。
- * - 「按会话自身时间分档」：断言的是月份档的**取值与顺序**（`["all","2026-10","2026-09"]`）与
- *   切档前后 `shown`/`total` 的差；把「当前时间」当成所有会话的档、或把两个月的会话并档，
- *   在这里都会红。
- * - 「切换月份只改 shown」：断言切档后 `data-directory-shown` 变小而 `data-directory-total`
- *   不变——两个数字同源或口径互换都会在这里红。
- * - 「目录页的查询词不进入详情页」：同一次挂载里先在目录页敲查询词、再进入详情页，
- *   断言详情页的查询词为空且呈现该目录的**全部**会话。
+ * - 「两种空互不冒充」：别名不在快照里（`unknown_directory`）与「目录里没有会话」
+ *   （`sessions="empty"`）是两个分支——任一支被合并进另一支，对应用例必红；详情页没有查询词
+ *   与月份档，因此**不存在**「数据在、只是被筛掉了」的第三支（旧的 `data-directory-detail-no-match`
+ *   随旧规格一并移除）。
+ * - 「页头」：会话数芯片断言的是**全部**会话数而不是本页条数；路径断言的是与快照 `workspaces`
+ *   条目上的 `path` **逐字相同**的字符串，未下发时整行不呈现（拿展示名拼一段路径的实现必红）。
+ * - 「分页」：页码、总页数、每页固定条数与切片集合都取 `data-*`；各页的会话集合互不相同，
+ *   改错 offset、改错方向或按月份/查询再滤一遍都会撞上别的页。
+ * - 「非法页码在提交时就地纠正」：在**第 2 页**敲非数字，先断言**输入期间**输入框里就是原文
+ *   （`abc`）、页码与列表一个都没动，再按回车，断言输入框被回填成 2、列表逐字不变且会话行
+ *   没有重挂——把非数字一律当第一页的实现会在这里红；每个 `input` 事件都提交并回写纠正值的
+ *   实现（输入框永远清不空）在第一段就红。
+ * - 「清空重输」：把输入框清空后重新敲 `1`，断言清空期间它真的是空的（每键都提交的实现会立刻
+ *   把纠正值写回），回车后落到第 1 页而不是被残留数字拼成 `21` 再夹到最后一页。
+ * - 「失焦也提交」：敲 `99` 后不失焦整段不动，派发 `focusout` 后越界值夹到边界。
+ * - 「只有一页不呈现翻页」：断言翻页区与页码输入的锚点**都缺席**，而不是「渲染成禁用」。
+ * - 「翻页后回到页首」：把挂载容器变成真的可滚动区，断言翻页前滚动位置确实 > 0（否则用例假绿），
+ *   翻页后归零。
  * - 「窄视口」：先断言两档的布局方向真的换了（`flex-direction` 由 `row` 变 `column`），
  *   再比对两档的 `data-*` 集合逐项相同——宽度覆盖没生效时前置断言就会红，不会变成
  *   「拿同一条渲染路径自证」。
@@ -34,12 +42,11 @@
  *
  * 因此替身改成把路由组件当**子元素**渲染（`createElement(current.component, { key: current.path })`），
  * 于是 R15-21（两条入口都进入**该目录**的详情页）、R15-22（返回目录页后查询词仍在）、
- * R15-23/R15-24（零会话的两种情形都能进入详情页）四条用例可以真的走一遍跨路由。
+ * R15-23/R15-24（零会话的两种情形都能进入详情页）、R15-25（再进入同一个目录时页码复位）
+ * 四条用例可以真的走一遍跨路由。
  *
  * `key` 是必要的：同类型路由之间切换（`/dir/alpha` → `/dir/beta`）时若不重挂，上一屏的局部
  * 状态会被带进下一屏（实测：在 alpha 选过的 Agent 会在 beta 的弹层里仍处于选中态）。
- * 目录页 ↔ 详情页是类型切换，两种写法都能重挂——所以 `key` 不是那两条用例的前提，但它是
- * 「每个路由一屏」这条替身语义的一部分。
  *
  * 仍未覆盖：真实 expo-router 的 URL 同步与浏览器历史——替身只提供 `push`/`back` 的内存栈。
  */
@@ -48,9 +55,9 @@ import {
   AGENTS,
   DIRECTORY_ROUTES,
   DIRS_ROUTE,
-  SECRET_FRAGMENTS,
   SESSION_ALPHA,
   SESSION_BETA,
+  WORKSPACES,
   WORKSPACES_WITH_PATHS,
   dirRoute,
   seriesSessionId,
@@ -59,10 +66,10 @@ import {
 } from "../fixtures";
 import {
   CANONICAL_ORIGIN,
+  CheckFailure,
   click,
-  domHtml,
+  domText,
   expectEqual,
-  expectNone,
   expectThat,
   mountScenario,
   query,
@@ -72,6 +79,21 @@ import {
 } from "../support";
 import type { Check, ScenarioOptions } from "../support";
 import { typeIntoInput, waitForDirectoryList, withScenario } from "./r15-directory";
+
+/**
+ * 夹具里 alpha 目录的服务端下发路径（`WORKSPACES_WITH_PATHS[0].path`，逐字）。
+ *
+ * 夹具按 open object 声明（协议镜像之外多带的 `root`/`cwd` 字段故意留着），因此这里按运行时
+ * 收窄读出那一个字符串：宁可抛错说「夹具没有下发路径」，也不要在断言里读到一个未校验的形状。
+ */
+function fixturePathOf(entry: unknown): string {
+  if (typeof entry !== "object" || entry === null || !("path" in entry) || typeof entry.path !== "string") {
+    throw new Error("夹具 WORKSPACES_WITH_PATHS[0] 没有下发 path，无法断言逐字透传");
+  }
+  return entry.path;
+}
+
+const ALPHA_PATH = fixturePathOf(WORKSPACES_WITH_PATHS[0]);
 
 /** 详情页场景：默认进入 alpha 的详情页，其余与目录页的场景同源。 */
 function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions {
@@ -95,6 +117,23 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
 const WIDE_VIEWPORT_WIDTH = 1200;
 const NARROW_VIEWPORT_WIDTH = 360;
 
+/**
+ * `count` 条 `alpha` 下的会话，每条比上一条早一分钟（最新在前）。
+ *
+ * 倒序即编号顺序，于是「第 N 页是哪几条」在断言里是可预期的：第 1 页是 `会话 1`…`会话 10`，
+ * 第 3 页是 `会话 21`…`会话 25`。
+ */
+function alphaSeries(count: number) {
+  const base = Date.parse("2026-10-05T09:00:00.000Z");
+  return sessionSeries({
+    alias: "alpha",
+    idPrefix: "aaaaaaaa",
+    titles: Array.from({ length: count }, (_, index) => `会话 ${String(index + 1)}`),
+    at: Array.from({ length: count }, (_, index) => new Date(base - index * 60_000).toISOString()),
+    states: Array.from({ length: count }, (_, index) => (index % 3 === 0 ? "running" : "idle")),
+  });
+}
+
 /** 等到真正的详情页模型渲染出来（占位 `RuntimeUnavailable` 也发 `data-route`，不能拿它等）。 */
 async function waitForDirectoryDetail(container: HTMLElement): Promise<void> {
   await waitFor(
@@ -108,25 +147,84 @@ function rowIdsOf(container: HTMLElement): readonly string[] {
   return queryAll(container, "[data-session-id]").map((node) => node.getAttribute("data-session-id") ?? "");
 }
 
-/** 详情的「当前显示 N / M」两个数字（经 `dataSet` 原样进 DOM）。 */
-function shownTotalOf(container: HTMLElement): readonly (string | null)[] {
-  const shown = query(container, "[data-directory-shown]");
-  const total = query(container, "[data-directory-total]");
+/** 会话数芯片上的数字（「N 个会话」的那个 N，取自视图模型的 `total`）。 */
+function chipOf(container: HTMLElement): string | null {
+  return query(container, "[data-directory-session-count]")?.getAttribute("data-directory-session-count") ?? null;
+}
+
+/** 页码输入框的**机器锚点**：恒是模型给出的生效页码（正在编辑时它与 DOM 里的当前值不同）。 */
+function pageValueOf(container: HTMLElement): string | null {
+  return (
+    query(container, "[data-directory-detail-page-input]")?.getAttribute("data-directory-detail-page-value") ??
+    null
+  );
+}
+
+/**
+ * 页码输入框在 DOM 里的当前值。
+ *
+ * 输入期间是用户敲进去的**原文**（这一轮输入真的进了草稿），提交后被 React 写回成生效页码
+ * （这一轮提交真的被纠正过）——两段都能拿它当同步点。
+ */
+function pageInputDomValueOf(container: HTMLElement): string {
+  const node = query(container, "[data-directory-detail-page-input]");
+  return node instanceof HTMLInputElement ? node.value : "";
+}
+
+/** 翻页区的三个机器事实：当前页、总页数、输入框回填值。 */
+function pagerFactsOf(container: HTMLElement): readonly (string | null)[] {
+  const pager = query(container, "[data-directory-detail-pager]");
   return [
-    shown?.getAttribute("data-directory-shown") ?? null,
-    total?.getAttribute("data-directory-total") ?? null,
+    pager?.getAttribute("data-directory-page") ?? null,
+    pager?.getAttribute("data-directory-page-count") ?? null,
+    pageValueOf(container),
   ];
+}
+
+/** 翻到某一页：点「下一页」直到当前页等于 `page`（用例只关心最终落在哪一页）。 */
+async function turnToPage(container: HTMLElement, page: number, label: string): Promise<void> {
+  click(query(container, '[data-action="page-next"]'), label);
+  await waitFor(
+    () => query(container, "[data-directory-detail-pager]")?.getAttribute("data-directory-page") === String(page),
+    label,
+  );
+}
+
+/**
+ * 在页码输入框上按一次回车（`onSubmitEditing` 是第一条提交路径）。
+ *
+ * `TextInput`（RNW）把 `onSubmitEditing` 挂在**原生 `keydown`** 上：`key === "Enter"`、未按住
+ * shift、非多行时调用它，随后（`blurOnSubmit` 缺省 = 非多行）再排一次
+ * `setTimeout(hostNode.blur, 0)`——所以「回车」实际会走提交回调两次，第二次是那次迟到的失焦。
+ * 用例因此在回车之后立刻收尾，不让它落进下一次输入中间（见 R15-14 的分段说明）。
+ */
+function pressEnter(container: HTMLElement, selector: string, detail: string): void {
+  const node = query(container, selector);
+  if (node === null) throw new CheckFailure(`${detail}：找不到输入框 ${selector}`);
+  node.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+}
+
+/**
+ * 让输入框失焦（`onBlur` 是第二条提交路径）。
+ *
+ * React 的 `onBlur` 监听的是原生 **`focusout`**，这里直接派发它：真实失焦与它走的是同一条
+ * 路径，但不依赖用例先 `focus()`、也不依赖容器窗口拿到系统焦点（headless 下不保证）。
+ */
+function blurInput(container: HTMLElement, selector: string, detail: string): void {
+  const node = query(container, selector);
+  if (node === null) throw new CheckFailure(`${detail}：找不到输入框 ${selector}`);
+  node.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
 }
 
 const checks: readonly Check[] = [
   {
-    name: "R15-5 目录详情页同样不泄露路径，且列出该目录下的会话",
+    name: "R15-5 目录详情页头：展示名 + 会话数芯片 + 逐字路径；别名不出现在界面上",
     async run() {
       const mounted = await mountScenario(baseScenario({ route: dirRoute("alpha") }));
       try {
         // 等待条件必须用只有真实 `DirectoryDetail` 才发的属性：`[data-route="dir-detail"]`
         // 同时被占位 `RuntimeUnavailable` 命中，用它等待会在首帧占位时就成立，
-        // 随后的「展示名 / 别名」断言便与 `start()` 的 resolve 形成竞态。
+        // 随后的断言便与 `start()` 的 resolve 形成竞态。
         // `data-directory-alias` 只在真实详情页算出模型后出现（占位不发）。
         await waitForDirectoryDetail(mounted.container);
         expectEqual(
@@ -134,16 +232,43 @@ const checks: readonly Check[] = [
           "api",
           "详情页的目录展示名",
         );
-        expectEqual(textOf(query(mounted.container, "[data-directory-alias-label]")), "alpha", "详情页的别名");
+        // 芯片说的是**全部**会话数（不是本页条数）。
+        expectEqual(chipOf(mounted.container), "1", "会话数芯片的数字");
+        expectEqual(
+          textOf(query(mounted.container, "[data-directory-session-count]")),
+          "1 个会话",
+          "会话数芯片的文案",
+        );
+        // 路径逐字等于快照 `workspaces` 条目上的 `path` 键：不拼接、不规范化的证据就在这里。
+        expectEqual(
+          query(mounted.container, "[data-directory-path]")?.getAttribute("data-directory-path") ?? null,
+          ALPHA_PATH,
+          "路径逐字来自服务端下发",
+        );
+        expectThat(domText(mounted.container).includes(ALPHA_PATH), "下发的路径必须真的呈现出来");
+        // 别名不得作为界面元素出现（它只留在机器锚点上）。
+        expectThat(
+          query(mounted.container, "[data-directory-alias-label]") === null,
+          "详情页不得再呈现别名标签",
+        );
+        expectThat(!domText(mounted.container).includes("alpha"), "渲染出的文字里不得出现目录别名");
         expectEqual(queryAll(mounted.container, "[data-session-id]").length, 1, "详情页应列出该目录下的会话");
-        expectNone(domHtml(mounted.container), SECRET_FRAGMENTS, "详情页渲染结果泄露了本机路径");
       } finally {
         await mounted.unmount();
       }
+
+      // 对照：快照没下发路径（`WORKSPACES` 的条目没有 `path` 键）时，路径行整行不呈现，
+      // 更不得用展示名/别名拼一段看起来像路径的文本。
+      await withScenario(baseScenario({ workspaces: WORKSPACES, route: dirRoute("alpha") }), async (container) => {
+        await waitForDirectoryDetail(container);
+        expectThat(query(container, "[data-directory-path]") === null, "未下发路径时不得呈现路径行");
+        expectThat(!domText(container).includes("\\"), "未下发路径时文字里不得出现路径分隔符");
+        expectThat(!/[A-Za-z]:[\\/]/.test(domText(container)), "未下发路径时不得编造盘符");
+      });
     },
   },
   {
-    name: "R15-6 目录存在但没有会话：详情页必须呈现「还没有会话」，不得说成「链接失效」",
+    name: "R15-6 目录存在但没有会话：详情页必须呈现「还没有会话」，不得说成「链接失效」，也不呈现翻页",
     async run() {
       await withScenario(baseScenario({ sessions: [], route: dirRoute("alpha") }), async (container) => {
         // 同 R15-5：等待条件不能是 `[data-route="dir-detail"]`（占位也发它），
@@ -157,11 +282,20 @@ const checks: readonly Check[] = [
           query(container, '[data-directory-detail-state="unknown_directory"]') === null,
           "目录存在时不得呈现「链接失效」",
         );
+        // 一条会话都没有时总页数是 1：翻页区与页码输入都不得出现。
+        expectThat(
+          query(container, "[data-directory-detail-pager]") === null,
+          "只有一页时不得呈现翻页区",
+        );
+        expectThat(
+          query(container, "[data-directory-detail-page-input]") === null,
+          "只有一页时不得呈现页码输入",
+        );
       });
     },
   },
   {
-    name: "R15-7 别名失效：详情页呈现「不在目录列表里」，不得说成「还没有会话」",
+    name: "R15-7 别名失效：详情页呈现「不在目录列表里」，不得说成「还没有会话」，且仍能返回",
     async run() {
       await withScenario(baseScenario({ route: dirRoute("ghost") }), async (container) => {
         await waitFor(
@@ -172,181 +306,247 @@ const checks: readonly Check[] = [
           query(container, '[data-directory-sessions="empty"]') === null,
           "别名失效时不得呈现「还没有会话」",
         );
-      });
-    },
-  },
-  {
-    name: "R15-13 目录详情按月分档：档取值与顺序按会话自身时间，切档只改 shown 不改 total",
-    async run() {
-      // 两条十月、一条九月：档的取值与顺序都取自会话**自身**的时间，
-      // 按「当前时间」归档只会剩一档，断言两个档的取值时必红。
-      const sessions = sessionSeries({
-        alias: "alpha",
-        idPrefix: "aaaaaaaa",
-        titles: ["十月甲", "十月乙", "九月丙"],
-        at: [
-          "2026-10-05T09:00:00.000Z",
-          "2026-10-04T09:00:00.000Z",
-          "2026-09-20T09:00:00.000Z",
-        ],
-        states: ["running", "idle", "waiting_input"],
-      });
-      await withScenario(baseScenario({ sessions }), async (container) => {
-        await waitForDirectoryDetail(container);
-        const monthOptions = queryAll(container, '[data-segment="月份"] [data-segment-option]');
-        expectEqual(
-          monthOptions.map((node) => node.getAttribute("data-segment-option")),
-          ["all", "2026-10", "2026-09"],
-          "月份档的取值与顺序（档之间按时间倒序）",
-        );
-        expectEqual(
-          monthOptions.map((node) => node.textContent),
-          ["全部", "2026-10", "2026-09"],
-          "月份档的文案",
-        );
-        expectEqual(shownTotalOf(container), ["3", "3"], "默认呈现全部月份");
-        expectEqual(rowIdsOf(container), [0, 1, 2].map((index) => seriesSessionId("aaaaaaaa", index)), "档内按时间倒序");
-
-        click(query(container, '[data-segment="月份"] [data-segment-option="2026-09"]'), "「2026-09」月份档");
-        await waitFor(
-          () => shownTotalOf(container)[0] === "1",
-          "切到九月档后 shown 变小",
-        );
-        // shown 随档变，total 是「查询命中后的会话总数」，与档无关。
-        expectEqual(shownTotalOf(container), ["1", "3"], "切档后 当前显示 N / M");
-        expectEqual(rowIdsOf(container), [seriesSessionId("aaaaaaaa", 2)], "九月档只包含九月的会话");
-        expectEqual(
-          query(container, '[data-segment="月份"] [data-segment-option="2026-09"]')
-            ?.getAttribute("data-segment-selected"),
-          "true",
-          "被选中的月份档",
-        );
-
-        click(query(container, '[data-segment="月份"] [data-segment-option="all"]'), "「全部」月份档");
-        await waitFor(() => shownTotalOf(container)[0] === "3", "切回全部月份");
-        expectEqual(rowIdsOf(container), [0, 1, 2].map((index) => seriesSessionId("aaaaaaaa", index)), "切回后重新列出全部会话");
-      });
-    },
-  },
-  {
-    name: "R15-14 目录内搜索只在本目录命中；无命中是第三种呈现，不占用 sessions=empty",
-    async run() {
-      const sessions = [
-        ...sessionSeries({
-          alias: "alpha",
-          idPrefix: "aaaaaaaa",
-          titles: ["部署检查", "回滚预案"],
-          at: ["2026-10-05T09:00:00.000Z", "2026-10-04T09:00:00.000Z"],
-          states: ["running", "idle"],
-        }),
-        ...sessionSeries({
-          alias: "beta",
-          idPrefix: "bbbbbbbb",
-          titles: ["beta 专属会话"],
-          at: ["2026-10-03T09:00:00.000Z"],
-        }),
-      ];
-      await withScenario(baseScenario({ sessions }), async (container) => {
-        await waitForDirectoryDetail(container);
-        expectEqual(shownTotalOf(container), ["2", "2"], "进入详情页时呈现该目录的全部会话");
-
-        // 命中：只按标题匹配，且 shown 与 total 一起跟着查询走。
-        typeIntoInput(container, "[data-directory-detail-search]", "回滚", "详情页搜索框");
-        await waitFor(() => shownTotalOf(container)[0] === "1", "按标题搜索后的 shown");
-        expectEqual(shownTotalOf(container), ["1", "1"], "命中一条时 当前显示 N / M");
-        expectEqual(rowIdsOf(container), [seriesSessionId("aaaaaaaa", 1)], "只剩标题命中的那一条");
-        expectEqual(
-          textOf(query(container, '[data-session-id] [data-session-title="true"]')),
-          "回滚预案",
-          "命中行的标题",
-        );
-        expectEqual(
-          query(container, "[data-directory-detail-search]")
-            ?.getAttribute("data-directory-detail-search-value"),
-          "回滚",
-          "受控搜索框回读到的查询词",
-        );
-
-        // 无命中：另一条会话属于别的目录，在本目录的搜索框里必须一条都不命中。
-        typeIntoInput(container, "[data-directory-detail-search]", "beta 专属会话", "详情页搜索框");
-        await waitFor(
-          () => query(container, '[data-directory-detail-no-match="true"]') !== null,
-          "目录内搜索无命中的呈现",
-        );
-        expectEqual(shownTotalOf(container), ["0", "0"], "无命中时的 当前显示 N / M");
-        expectEqual(rowIdsOf(container).length, 0, "无命中时不得剩下任何会话行");
+        // 别名是路由与命令引用的内部标识，界面上不得露出来：提示文案只说「这个目录」。
+        // 反例：把提示写回「目录「ghost」不在…」时这条会红。
         expectThat(
-          query(container, '[data-directory-sessions="empty"]') === null,
-          "「没有符合条件的会话」不得被画成「这个目录里还没有会话」",
+          !domText(container).includes("ghost"),
+          "失效别名的详情页不得把别名写进界面文字",
         );
+        // 自建导航删掉之后，返回入口只在这个页头里：失效别名下它也必须可用，否则用户走进死路。
         expectThat(
-          textOf(query(container, '[data-directory-detail-no-match="true"]')).includes("没有符合条件的会话"),
-          "无命中的文案必须说的是「没有符合条件的会话」",
+          query(container, '[data-action="back-to-dirs"]') !== null,
+          "失效别名的详情页必须仍有返回入口",
         );
       });
     },
   },
   {
-    name: "R15-15 两页的查询词彼此独立：目录页的查询词不进入详情页，详情页的查询词/月份也不改变目录页",
+    name: "R15-13 目录详情平铺分页：每页固定条数、最新的一页在最前，并呈现当前页码与总页数",
     async run() {
-      // 本目录这两条会话的时间分属两个月，因此「月份档泄漏到目录页」也能被下面的内联行数抓住。
-      const sessions = [
-        ...sessionSeries({
-          alias: "alpha",
-          idPrefix: "aaaaaaaa",
-          titles: ["部署检查", "九月归档"],
-          at: ["2026-10-05T09:00:00.000Z", "2026-09-20T09:00:00.000Z"],
-          states: ["running", "idle"],
-        }),
-        ...sessionSeries({
-          alias: "beta",
-          idPrefix: "bbbbbbbb",
-          titles: ["文档整理"],
-          at: ["2026-10-03T09:00:00.000Z"],
-          states: ["waiting_input"],
-        }),
-      ];
+      // 25 条会话：三页（10/10/5），各页的会话集合互不相同。
+      await withScenario(baseScenario({ sessions: alphaSeries(25) }), async (container) => {
+        await waitForDirectoryDetail(container);
+        // 第 1 页是最新的十条（夹具里编号越小越新）。
+        expectEqual(
+          rowIdsOf(container),
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((index) => seriesSessionId("aaaaaaaa", index)),
+          "第 1 页的十条会话",
+        );
+        expectEqual(chipOf(container), "25", "会话数芯片是全部会话数，不是本页条数");
+        expectEqual(pagerFactsOf(container), ["1", "3", "1"], "第 1 页的 页码/总页数/输入框回填值");
+        // 边界：第 1 页的「上一页」不可用，「下一页」可用。
+        expectEqual(
+          query(container, '[data-action="page-prev"]')?.hasAttribute("disabled") ?? null,
+          true,
+          "第 1 页的「上一页」必须不可用",
+        );
+        expectEqual(
+          query(container, '[data-action="page-next"]')?.hasAttribute("disabled") ?? null,
+          false,
+          "第 1 页的「下一页」必须可用",
+        );
 
-      // (1) 目录页的查询词写的是 `directoryQuery`，详情页读的是 `directoryDetailQuery`：前者
-      // 即使命中了这个目录里的会话，也不得改变详情页呈现的内容。
-      // 这里直接写 store 而不是先在目录页打字再导航：要断的是**渲染读的是哪个字段**，
-      // 直接写入才能把「同一个值」同时放进两个字段的对照里（跨路由的那条路径由 R15-21/R15-22 覆盖）。
+        // 翻到第 2 页：换一批会话、页码跟着走，芯片（全部会话数）不变。
+        await turnToPage(container, 2, "翻到第 2 页");
+        expectEqual(
+          rowIdsOf(container),
+          [10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map((index) => seriesSessionId("aaaaaaaa", index)),
+          "第 2 页的十条会话",
+        );
+        expectEqual(pagerFactsOf(container), ["2", "3", "2"], "第 2 页的 页码/总页数/输入框回填值");
+        expectEqual(chipOf(container), "25", "翻页不得改变会话数芯片");
+
+        // 最后一页不满也照常呈现，且「下一页」在边界上不可用。
+        await turnToPage(container, 3, "翻到第 3 页");
+        expectEqual(
+          rowIdsOf(container),
+          [20, 21, 22, 23, 24].map((index) => seriesSessionId("aaaaaaaa", index)),
+          "第 3 页（最后一页不满）的会话",
+        );
+        expectEqual(
+          query(container, '[data-action="page-next"]')?.hasAttribute("disabled") ?? null,
+          true,
+          "最后一页的「下一页」必须不可用",
+        );
+
+        // 回到上一页：内容回到该页的十条。
+        click(query(container, '[data-action="page-prev"]'), "「上一页」");
+        await waitFor(
+          () => query(container, "[data-directory-detail-pager]")?.getAttribute("data-directory-page") === "2",
+          "回到第 2 页",
+        );
+        expectEqual(
+          rowIdsOf(container),
+          [10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map((index) => seriesSessionId("aaaaaaaa", index)),
+          "回到第 2 页后重新列出该页的十条",
+        );
+      });
+    },
+  },
+  {
+    name: "R15-14 非法页码只在提交时就地纠正：输入期间不重画列表，清空重输也走得通",
+    async run() {
+      // 三段各自「输入 → 提交」后立刻收尾，中途不再敲键：RNW 的 `TextInput` 在回车提交后会
+      // 自己排一次 `setTimeout(() => hostNode.blur(), 0)`（见 `pressEnter` 的说明），紧挨着敲键
+      // 会让那次失焦带着新草稿提交，把用例想观测的「输入期间」提前结束。
+
+      // 第一段：草稿只在输入里长，回车才提交——「清空重输」是这条用例的落点。
+      await withScenario(baseScenario({ sessions: alphaSeries(25) }), async (container) => {
+        await waitForDirectoryDetail(container);
+        await turnToPage(container, 2, "翻到第 2 页");
+        const secondPage = rowIdsOf(container);
+        const firstRowBefore = query(container, "[data-session-id]");
+        expectEqual(secondPage.length, 10, "第 2 页的条数");
+
+        // 输入期间：输入框里就是敲进去的原文，页码与列表一个都没动。
+        // 反例（本轮修复前 `onChangeText` 直连提交）：第一个字符就把纠正值写回 DOM，输入框
+        // 里根本看不到 `abc`（它就是 2），下面这条等待会超时。
+        typeIntoInput(container, "[data-directory-detail-page-input]", "abc", "页码输入框");
+        await waitFor(() => pageInputDomValueOf(container) === "abc", "输入期间输入框里应是原文");
+        expectEqual(pagerFactsOf(container), ["2", "3", "2"], "输入期间不得提交页码");
+        expectEqual(rowIdsOf(container), secondPage, "输入期间列表内容不得变");
+        // 比「id 集合相同」更强：会话行**没有重挂**（同一个 DOM 节点还在原位），也就是没有重画。
+        expectEqual(
+          query(container, "[data-session-id]") === firstRowBefore,
+          true,
+          "输入期间会话行不得重挂",
+        );
+
+        // 清空重输：输入框必须真的能空着（每键都提交的实现会立刻把纠正值写回，永远清不空），
+        // 接着敲的 `1` 也不能被残留数字拼成 `21`。
+        typeIntoInput(container, "[data-directory-detail-page-input]", "", "页码输入框");
+        await waitFor(() => pageInputDomValueOf(container) === "", "输入框必须能被清空");
+        typeIntoInput(container, "[data-directory-detail-page-input]", "1", "页码输入框");
+        await waitFor(() => pageInputDomValueOf(container) === "1", "清空后重新敲入的原文");
+        expectEqual(pagerFactsOf(container), ["2", "3", "2"], "清空重输期间页码仍是第 2 页");
+        expectEqual(rowIdsOf(container), secondPage, "清空重输期间列表内容不得变");
+
+        // 回车提交「1」：落到第 1 页（反例：清不空时这里提交的是 `21`，会被夹到最后一页）。
+        pressEnter(container, "[data-directory-detail-page-input]", "页码输入框");
+        await waitFor(
+          () => query(container, "[data-directory-detail-pager]")?.getAttribute("data-directory-page") === "1",
+          "回车后落到第 1 页",
+        );
+        expectEqual(pagerFactsOf(container), ["1", "3", "1"], "回车后 页码/总页数/输入框回填值");
+        expectEqual(
+          rowIdsOf(container),
+          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((index) => seriesSessionId("aaaaaaaa", index)),
+          "回车后呈现第 1 页的十条",
+        );
+      });
+
+      // 第二段：非数字在回车后就地纠正回**当前生效页**，且列表逐字不变、会话行不重挂。
+      await withScenario(baseScenario({ sessions: alphaSeries(25) }), async (container) => {
+        await waitForDirectoryDetail(container);
+        await turnToPage(container, 2, "翻到第 2 页");
+        const secondPage = rowIdsOf(container);
+        const firstRowBefore = query(container, "[data-session-id]");
+
+        typeIntoInput(container, "[data-directory-detail-page-input]", "abc", "页码输入框");
+        await waitFor(() => pageInputDomValueOf(container) === "abc", "输入期间输入框里应是原文");
+        pressEnter(container, "[data-directory-detail-page-input]", "页码输入框");
+        // 等待条件取 DOM 里的**输入值**：它被回填成 2 才说明这次提交真的被处理过
+        // （否则下面「列表没变」只是「事件没生效」的假象）。
+        await waitFor(() => pageInputDomValueOf(container) === "2", "非数字被就地纠正回当前页");
+        expectEqual(pageValueOf(container), "2", "非数字提交后输入框回填的值");
+        expectEqual(pagerFactsOf(container), ["2", "3", "2"], "非数字不得翻页");
+        expectEqual(rowIdsOf(container), secondPage, "非数字不得重画列表");
+        expectEqual(
+          query(container, "[data-session-id]") === firstRowBefore,
+          true,
+          "非数字不得重挂会话行",
+        );
+      });
+
+      // 第三段：**失焦**是第二条提交路径（原型把 `commitPage` 也挂在 `onchange` 上）：不提交
+      // 就整段不动，提交后越界值夹到范围边界，输入框与列表同时落到那里。
+      await withScenario(baseScenario({ sessions: alphaSeries(25) }), async (container) => {
+        await waitForDirectoryDetail(container);
+        await turnToPage(container, 2, "翻到第 2 页");
+        const secondPage = rowIdsOf(container);
+
+        typeIntoInput(container, "[data-directory-detail-page-input]", "99", "页码输入框");
+        await waitFor(() => pageInputDomValueOf(container) === "99", "失焦前输入框里应是原文");
+        expectEqual(pagerFactsOf(container), ["2", "3", "2"], "失焦前不得提交页码");
+        expectEqual(rowIdsOf(container), secondPage, "失焦前列表内容不得变");
+        blurInput(container, "[data-directory-detail-page-input]", "页码输入框");
+        await waitFor(() => pageInputDomValueOf(container) === "3", "越界数字被夹到边界");
+        expectEqual(pagerFactsOf(container), ["3", "3", "3"], "越界后 页码/总页数/输入框回填值");
+        expectEqual(
+          rowIdsOf(container),
+          [20, 21, 22, 23, 24].map((index) => seriesSessionId("aaaaaaaa", index)),
+          "越界后呈现最后一页",
+        );
+      });
+    },
+  },
+  {
+    name: "R15-15 只有一页时不呈现翻页；目录页的查询词与筛选也不进入详情页",
+    async run() {
+      // 3 条会话：一页即可放下 → 上/下一页与页码输入都不得呈现。
+      await withScenario(baseScenario({ sessions: alphaSeries(3) }), async (container) => {
+        await waitForDirectoryDetail(container);
+        expectEqual(rowIdsOf(container).length, 3, "一页放得下时全部会话都在");
+        expectEqual(chipOf(container), "3", "会话数芯片");
+        expectThat(query(container, "[data-directory-detail-pager]") === null, "只有一页时不得呈现翻页区");
+        expectThat(
+          query(container, '[data-action="page-prev"]') === null,
+          "只有一页时不得呈现「上一页」",
+        );
+        expectThat(
+          query(container, '[data-action="page-next"]') === null,
+          "只有一页时不得呈现「下一页」",
+        );
+        expectThat(
+          query(container, "[data-directory-detail-page-input]") === null,
+          "只有一页时不得呈现页码输入",
+        );
+        // 详情页没有目录内搜索、也没有月份分段控件（两个需求都已从规格里移除）。
+        expectThat(
+          query(container, "[data-directory-detail-search]") === null,
+          "详情页不得再呈现目录内搜索框",
+        );
+        expectThat(query(container, '[data-segment="月份"]') === null, "详情页不得再呈现月份分段控件");
+      });
+
+      // 目录页的查询词只属于目录页：写进去之后详情页的**模型与渲染**都一个样。
+      const sessions = alphaSeries(3);
       const detail = await mountScenario(baseScenario({ sessions }));
       try {
         await waitForDirectoryDetail(detail.container);
-        // 「部署」只命中 alpha 的第一条会话：若目录页的字段泄漏进详情页，下面的 total 会从 2 变 1。
-        detail.composition?.store.setDirectoryQuery("部署");
-        // 切一次月份档：既是同步点（这次渲染一定发生在上面那次写入之后），
-        // 也让详情页真的重绘了一遍。
-        click(query(detail.container, '[data-segment="月份"] [data-segment-option="2026-09"]'), "九月档");
-        await waitFor(
-          () => shownTotalOf(detail.container)[0] === "1",
-          "切到九月档",
-        );
+        const before = rowIdsOf(detail.container);
+        // 「会话 1」只命中 alpha 的第一条：若目录页的查询词漏进详情页，这里会从 3 变 1。
+        detail.composition?.store.setDirectoryQuery("会话 1");
+        // 模型层直接读（时序无关）：详情模型只吃「快照 + 别名 + 页码」。
+        const model = detail.composition?.store.directoryDetail("alpha");
+        expectThat(model?.kind === "ready", "详情模型已就绪");
         expectEqual(
-          query(detail.container, "[data-directory-detail-search]")
-            ?.getAttribute("data-directory-detail-search-value"),
-          "",
-          "目录页的查询词不得进入详情页的搜索框",
+          model?.kind === "ready" ? model.sessions.length : -1,
+          3,
+          "目录页的查询词不得改变详情模型的行数",
         );
-        expectEqual(shownTotalOf(detail.container), ["1", "2"], "详情页的 shown/total 只由它自己的字段决定");
-        expectEqual(rowIdsOf(detail.container), [seriesSessionId("aaaaaaaa", 1)], "九月档只剩九月那一条");
+        // 渲染层：仓库写入会触发页面重渲染，重渲染后的行集合仍与之前逐字相同。
+        expectEqual(rowIdsOf(detail.container), before, "目录页的查询词不得改变详情页的会话行");
+        expectEqual(chipOf(detail.container), "3", "详情页的芯片只由它自己的模型决定");
       } finally {
         await detail.unmount();
       }
 
-      // (2) 反向：详情页的查询词与月份档写的是另外两个字段，不得改变目录页的搜索框与内联会话行。
-      const dirs = await mountScenario(baseScenario({ route: DIRS_ROUTE, sessions }));
+      // 反向：详情页翻到的页码不进入目录页，目录页的内联会话行一条不少。
+      // alpha 有 25 条（三页）：页码一旦泄漏过来，内联行会变成「第 2 页那一段」而不是同一批。
+      const dirs = await mountScenario(baseScenario({ route: DIRS_ROUTE, sessions: alphaSeries(25) }));
       try {
         await waitForDirectoryList(dirs.container);
-        dirs.composition?.store.setDirectoryDetailQuery("部署");
-        dirs.composition?.store.setDirectoryDetailMonth("2026-10");
-        // 用目录页自己的查询词做一次**可见**的改动，既是同步点也是对照：
-        // 「归档」只命中 alpha 的九月会话，而详情页那两个值（查询「部署」、月份 2026-10）
-        // 一旦泄漏就会被它挡掉。
-        typeIntoInput(dirs.container, "[data-directory-search]", "归档", "目录页搜索框");
+        const before = queryAll(dirs.container, "[data-session-id]").map((node) =>
+          node.getAttribute("data-session-id"),
+        );
+        expectThat(before.length > 0, "前置：目录页一开始列出 alpha 的内联会话行");
+        dirs.composition?.store.setDirectoryDetailPage("alpha", "2");
+        // 用目录页自己的查询词做一次**可见**的改动，既是同步点也是对照：「会话」只命中
+        // alpha（它的会话标题命中），0 会话的 beta 被筛掉。
+        typeIntoInput(dirs.container, "[data-directory-search]", "会话", "目录页搜索框");
         await waitFor(
-          () => query(dirs.container, '[data-directory-search-value="归档"]') !== null,
+          () => query(dirs.container, '[data-directory-search-value="会话"]') !== null,
           "目录页自己的查询词生效",
         );
         expectEqual(
@@ -357,11 +557,9 @@ const checks: readonly Check[] = [
           "目录页的目录集合只由它自己的查询词决定",
         );
         expectEqual(
-          queryAll(dirs.container, "[data-session-id]").map((node) =>
-            node.getAttribute("data-session-id"),
-          ),
-          [0, 1].map((index) => seriesSessionId("aaaaaaaa", index)),
-          "目录页的内联会话行不得被详情页的查询词或月份档挡住",
+          queryAll(dirs.container, "[data-session-id]").map((node) => node.getAttribute("data-session-id")),
+          before,
+          "目录页的内联会话行不得被详情页的页码（以及它带出的切片）改变",
         );
       } finally {
         await dirs.unmount();
@@ -369,34 +567,26 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-16 窄视口：会话行、三项汇总与创建入口一个不少，data-* 集合与宽视口逐项相同",
+    name: "R15-16 窄视口：会话行、会话数芯片、创建入口与翻页一个不少，data-* 集合与宽视口逐项相同",
     async run() {
-      const sessions = sessionSeries({
-        alias: "alpha",
-        idPrefix: "aaaaaaaa",
-        titles: ["部署检查", "回滚预案"],
-        at: ["2026-10-05T09:00:00.000Z", "2026-10-04T09:00:00.000Z"],
-        states: ["running", "waiting_input"],
-      });
+      const sessions = alphaSeries(25);
       const wide = await factsAtViewportWidth(WIDE_VIEWPORT_WIDTH, baseScenario({ sessions }));
       const narrow = await factsAtViewportWidth(NARROW_VIEWPORT_WIDTH, baseScenario({ sessions }));
 
-      // 前置：两档真的走了不同的布局分支（`flex-direction` 由 row 变 column）。
+      // 前置：两档真的走了不同的布局分支（底栏的 `flex-direction` 由 row 变 column）。
       // 视口覆盖没生效时这里就会红，读作「这条用例没有在测窄屏」，而不是被测行为回退。
-      expectEqual(wide.toolbarDirection, "row", "宽档必须走宽屏布局");
-      expectEqual(narrow.toolbarDirection, "column", "窄档必须走单列布局");
+      expectEqual(wide.footbarDirection, "row", "宽档必须走宽屏布局");
+      expectEqual(narrow.footbarDirection, "column", "窄档必须走单列布局");
 
       // 信息集合：两档的 `data-*` 锚点逐项相同，一个都不少、一个也不多。
       expectEqual(narrow.dataAttributes, wide.dataAttributes, "两档的 data-* 集合必须完全相同");
-      expectEqual(
-        narrow.rowIds,
-        [0, 1].map((index) => seriesSessionId("aaaaaaaa", index)),
-        "窄档仍然呈现目录里的会话行",
-      );
-      expectEqual(narrow.counts, wide.counts, "两档的三项汇总数字相同");
-      expectEqual(narrow.counts, ["2", "1", "1"], "三项汇总（会话数/运行中/待处理）");
+      expectEqual(narrow.rowIds.length, 10, "窄档仍然呈现当前页的会话行");
+      expectEqual(narrow.rowIds, wide.rowIds, "两档呈现的是同一页的同一批会话");
+      expectEqual(narrow.chip, "25", "窄档仍然呈现会话数芯片");
       expectThat(narrow.hasCreateEntry, "窄档仍然呈现创建会话的入口");
       expectThat(narrow.hasCreateSideEffect, "窄档仍然呈现创建会话的副作用说明");
+      expectThat(narrow.hasPager, "窄档仍然呈现翻页（MUST NOT 因宽度不足改变判定结果）");
+      expectEqual(narrow.pagerFacts, ["1", "3", "1"], "窄档的 页码/总页数/输入框回填值");
     },
   },
   {
@@ -429,7 +619,7 @@ const checks: readonly Check[] = [
           `同步时刻应是快照替换时的 epoch 毫秒，实际 ${JSON.stringify(epochMs)}`,
         );
         expectEqual(
-          textOf(query(mounted.container, '[data-synced-at]')),
+          textOf(query(mounted.container, "[data-synced-at]")),
           `已同步 ${new Date(Number(epochMs)).toISOString().slice(0, 16).replace("T", " ")} UTC`,
           "同步时刻的展示文本（与目录页同一套文案）",
         );
@@ -438,13 +628,11 @@ const checks: readonly Check[] = [
       }
 
       // 从未成功替换过快照：详情页停在等待同步，一个同步时刻都不得出现。
+      // 等待条件用详情页自己的 loading 锚点：占位 `RuntimeUnavailable` 不发它，因此它出现即
+      // 「真实组件已渲染」——自建导航与连接状态徽标移除后，这一页不再有别的同步点可用。
       await withScenario(baseScenario({ deliverSnapshot: false }), async (container) => {
         await waitFor(
-          () => query(container, '[data-connection-state="replaying"]') !== null,
-          "连接已认证并订阅（尚未追平）",
-        );
-        expectThat(
-          query(container, '[data-directory-detail-state="loading"]') !== null,
+          () => query(container, '[data-directory-detail-state="loading"]') !== null,
           "从未同步过时详情页呈现等待同步的状态",
         );
         expectThat(
@@ -455,52 +643,30 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R15-18 已选月份档被查询挤掉时，生效月份回落到「全部」而不是「无选中 + 空列表」",
+    name: "R15-18 翻页后回到页首：内容滚动位置回到该页顶部",
     async run() {
-      const sessions = sessionSeries({
-        alias: "alpha",
-        idPrefix: "aaaaaaaa",
-        titles: ["十月甲", "十月乙", "九月丙"],
-        at: [
-          "2026-10-05T09:00:00.000Z",
-          "2026-10-04T09:00:00.000Z",
-          "2026-09-20T09:00:00.000Z",
-        ],
-        states: ["running", "idle", "waiting_input"],
-      });
-      await withScenario(baseScenario({ sessions }), async (container) => {
-        await waitForDirectoryDetail(container);
-        click(query(container, '[data-segment="月份"] [data-segment-option="2026-09"]'), "「2026-09」月份档");
-        await waitFor(() => shownTotalOf(container)[0] === "1", "切到九月档");
-        expectEqual(shownTotalOf(container), ["1", "3"], "切档后的 当前显示 N / M");
+      const mounted = await mountScenario(baseScenario({ sessions: alphaSeries(25) }));
+      try {
+        await waitForDirectoryDetail(mounted.container);
+        // 把挂载容器变成唯一可滚动的祖先（外壳不在本替身里）：滚动位置于是有一个可断言的落点。
+        const scroller = mounted.container;
+        scroller.style.height = "220px";
+        scroller.style.overflowY = "auto";
+        await waitFor(() => scroller.scrollHeight > scroller.clientHeight, "列表比容器高（可滚动）");
+        expectEqual(pagerFactsOf(scroller)[0], "1", "前置：停在第一页");
 
-        // 「十月」把九月从月份档里挤掉（`months` 由查询命中的行算出），而已选的月份还是
-        // 「2026-09」。生效的月份必须回落到「全部」：否则月份组会没有任何一项被选中，
-        // 而列表又是空的——用户既看不懂也退不出来。
-        typeIntoInput(container, "[data-directory-detail-search]", "十月", "详情页搜索框");
-        await waitFor(() => shownTotalOf(container)[0] === "2", "查询后呈现十月命中的两条");
-        expectEqual(shownTotalOf(container), ["2", "2"], "回落之后呈现的就是查询命中的两条");
-        expectEqual(
-          rowIdsOf(container),
-          [0, 1].map((index) => seriesSessionId("aaaaaaaa", index)),
-          "呈现的是十月那两条",
-        );
-        expectEqual(
-          queryAll(container, '[data-segment="月份"] [data-segment-option="2026-09"]').length,
-          0,
-          "九月档已不在月份档列表里",
-        );
-        expectEqual(
-          query(container, '[data-segment="月份"] [data-segment-option="all"]')
-            ?.getAttribute("data-segment-selected"),
-          "true",
-          "月份档消失后，「全部」必须是生效且被选中的那一项",
-        );
-        expectThat(
-          query(container, "[data-directory-detail-no-match]") === null,
-          "回落之后不是「没有符合条件的会话」",
-        );
-      });
+        // 先真的翻一次页（第 1 → 2 页），再模拟「用户往下滚了一段」。
+        await turnToPage(scroller, 2, "翻到第 2 页");
+        scroller.scrollTop = 120;
+        expectThat(scroller.scrollTop > 0, "前置：滚动位置必须真的离开顶部，否则本用例假绿");
+
+        // 再翻一页：内容回到该页顶部。
+        await turnToPage(scroller, 3, "翻到第 3 页");
+        await waitFor(() => scroller.scrollTop === 0, "翻页后内容回到该页顶部");
+        expectEqual(scroller.scrollTop, 0, "翻页后的滚动位置");
+      } finally {
+        await mounted.unmount();
+      }
     },
   },
   {
@@ -520,11 +686,11 @@ const checks: readonly Check[] = [
             () => query(container, '[data-route="dir-detail"][data-directory-alias="alpha"]') !== null,
             "标题入口进入 alpha 的详情页",
           );
-          // 进入的是**那一个**目录：别名与它名下的会话都要对得上（走错目录/没带参数都会红）。
+          // 进入的是**那一个**目录：展示名与它名下的会话都要对得上（走错目录/没带参数都会红）。
           expectEqual(
-            textOf(query(container, "[data-directory-alias-label]")),
-            "alpha",
-            "详情页的别名",
+            textOf(query(container, "[data-directory-display-name]")),
+            "api",
+            "详情页的目录展示名",
           );
           expectEqual(rowIdsOf(container), [SESSION_ALPHA], "详情页列出的是 alpha 名下的会话");
 
@@ -678,12 +844,16 @@ const checks: readonly Check[] = [
           await waitForDirectoryList(container);
           const beta = query(container, '[data-directory-alias="beta"]');
           expectThat(beta !== null, "0 会话的目录也要作为目录项呈现");
+          // 0 会话时只有「会话 0」那一个徽标在（原型的运行中/待处理徽标只在非零时渲染）。
           expectEqual(
-            ["total", "active", "pending"].map((kind) =>
-              textOf(query(beta, `[data-directory-count="${kind}"]`)),
-            ),
-            ["0", "0", "0"],
-            "beta 的三项汇总为零",
+            textOf(query(beta, '[data-directory-count="total"]')),
+            "0",
+            "beta 的会话数为零",
+          );
+          expectEqual(
+            ["active", "pending"].map((kind) => textOf(query(beta, `[data-directory-count="${kind}"]`))),
+            ["", ""],
+            "零值时不呈现运行中/待处理的徽标",
           );
           expectThat(
             query(beta, '[data-action="open-directory"]') !== null,
@@ -719,18 +889,93 @@ const checks: readonly Check[] = [
       );
     },
   },
+  {
+    name: "R15-25 跨路由：从第 2 页返回、再进入同一个目录时页码复位到第一页",
+    async run() {
+      // alpha 有 25 条（三页）、beta 一条：页码是**单份**的 store 状态，不复位就会带进下一屏。
+      const sessions = [
+        ...alphaSeries(25),
+        ...sessionSeries({
+          alias: "beta",
+          idPrefix: "bbbbbbbb",
+          titles: ["文档整理"],
+          at: ["2026-10-03T09:00:00.000Z"],
+          states: ["waiting_input"],
+        }),
+      ];
+      await withScenario(
+        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES, sessions }),
+        async (container) => {
+          await waitForDirectoryList(container);
+
+          click(
+            query(container, '[data-directory-alias="alpha"] [data-action="open-directory"]'),
+            "进入 alpha 的详情页",
+          );
+          await waitForDirectoryDetail(container);
+          expectEqual(pagerFactsOf(container), ["1", "3", "1"], "首次进入 alpha 的页码");
+          await turnToPage(container, 2, "翻到第 2 页");
+          const secondPage = rowIdsOf(container);
+
+          click(query(container, '[data-action="back-to-dirs"]'), "返回目录");
+          await waitForDirectoryList(container);
+
+          // 先从另一个目录进一次（页码同样必须复位），再回到 alpha：不能是「上一次那页」。
+          click(
+            query(container, '[data-directory-alias="beta"] [data-action="open-directory"]'),
+            "进入 beta 的详情页",
+          );
+          await waitFor(
+            () => query(container, '[data-route="dir-detail"][data-directory-alias="beta"]') !== null,
+            "beta 的详情页",
+          );
+          expectEqual(chipOf(container), "1", "beta 只有一条会话");
+          expectThat(
+            query(container, "[data-directory-detail-pager]") === null,
+            "beta 只有一页，不呈现翻页",
+          );
+
+          click(query(container, '[data-action="back-to-dirs"]'), "返回目录");
+          await waitForDirectoryList(container);
+          click(
+            query(container, '[data-directory-alias="alpha"] [data-action="open-directory"]'),
+            "再次进入 alpha 的详情页",
+          );
+          await waitForDirectoryDetail(container);
+
+          // 反例：不复位页码时会停在上一次的第 2 页（`secondPage`），第 1 页的十条一条都不在。
+          await waitFor(
+            () =>
+              query(container, "[data-directory-detail-pager]")?.getAttribute("data-directory-page") === "1",
+            "再次进入 alpha 时回到第 1 页",
+          );
+          expectEqual(
+            rowIdsOf(container),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((index) => seriesSessionId("aaaaaaaa", index)),
+            "再次进入时呈现第 1 页",
+          );
+          expectThat(
+            rowIdsOf(container).join(",") !== secondPage.join(","),
+            "前置：第 1 页与第 2 页必须是不同的会话集合",
+          );
+        },
+      );
+    },
+  },
 ];
 
 /** 一次挂载里读到的、与宽度无关的全部事实。 */
 interface DetailFacts {
   /** 渲染结果里每条 `data-*` 的 `名字=值`（同步时刻只记名字：它是挂载那一刻的 epoch）。 */
   readonly dataAttributes: readonly string[];
-  /** 工具条的 `flex-direction`：`row` = 宽屏分支，`column` = 窄屏分支。 */
-  readonly toolbarDirection: string;
+  /** 底栏的 `flex-direction`：`row` = 宽屏分支，`column` = 窄屏分支。 */
+  readonly footbarDirection: string;
   readonly rowIds: readonly string[];
-  readonly counts: readonly string[];
+  readonly chip: string | null;
+  readonly pagerFacts: readonly (string | null)[];
   readonly hasCreateEntry: boolean;
   readonly hasCreateSideEffect: boolean;
+  readonly hasPager: boolean;
 }
 
 function detailFactsOf(container: HTMLElement): DetailFacts {
@@ -742,16 +987,16 @@ function detailFactsOf(container: HTMLElement): DetailFacts {
       entries.push(`${name}=${value}`);
     }
   }
-  const toolbar = query(container, "[data-directory-detail-search]")?.parentElement ?? null;
+  const pager = query(container, "[data-directory-detail-pager]");
   return {
     dataAttributes: entries.sort(),
-    toolbarDirection: toolbar === null ? "" : getComputedStyle(toolbar).flexDirection,
+    footbarDirection: pager === null ? "" : getComputedStyle(pager.parentElement ?? pager).flexDirection,
     rowIds: rowIdsOf(container),
-    counts: ["total", "active", "pending"].map((kind) =>
-      textOf(query(container, `[data-directory-count="${kind}"]`)),
-    ),
+    chip: chipOf(container),
+    pagerFacts: pagerFactsOf(container),
     hasCreateEntry: query(container, '[data-action="open-create-sheet"]') !== null,
     hasCreateSideEffect: query(container, "[data-create-side-effect]") !== null,
+    hasPager: pager !== null,
   };
 }
 

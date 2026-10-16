@@ -1,6 +1,6 @@
 /**
- * 对话页输入区（spec「输入与提交只支持文本且以终态为准」「取消当前轮次以终态为准」；
- * `design.md` D6/D10）。
+ * 对话页输入区（spec「输入与提交只支持文本且以终态为准」「取消当前轮次以终态为准」
+ * 「未上报的上下文不得以零冒充」；`design.md` D6/D10）。
  *
  * ## 三态与「提交不等于完成」
  *
@@ -8,6 +8,20 @@
  * （`submission` / `cancel`）：**本组件不构造命令、不本地置态**。因此「提交后立刻显示已发送」
  * 在这里没有表达方式——`submission.kind` 为 `pending_confirmation` 时只能说「等待服务端确认」，
  * `cancel.kind` 为 `requested` 时只能说「取消请求已提交，等待终态」。
+ *
+ * ## 回车提交 / Shift+回车换行
+ *
+ * 回车走 `onKeyPress`（RNW 把宿主的 `keydown` 原样交给它，因此 `nativeEvent` 上读得到
+ * `key`/`shiftKey`，`preventDefault()` 也拦得住换行）。判定收敛在 {@link composerKeyAction}：
+ * **不可提交**（会话已关闭 / 来源离线 / 空草稿 / 没接线回调）时回车被拦下且**不派发任何命令**，
+ * 连换行也不插入——「回车」在这里没有第三条含义。
+ *
+ * ## 上下文胶囊与告警条
+ *
+ * 上下文占用是**胶囊 + 明细**（`ContextUsageBar`，未上报时不给数字），占用告警条由
+ * {@link contextWarningOf} 给出：只有 `known` 且占比达到阈值才出现，未上报与零窗口都**不**触发
+ * ——没有数字就没有可推算的占比（R17）。未上报也不禁用任何交互。阈值（60 / 85 两档）与胶囊
+ * 共用 `src/domain/context-usage.ts` 的一处定义，本组件不再自带数字。
  *
  * ## 附件不受支持是显式说明
  *
@@ -22,18 +36,47 @@
 
 import type { ReactElement } from "react";
 
-import type { CancelPresentation, ConversationInputModel, SubmissionPresentation } from "../features/conversation-input-model";
-import type { Palette } from "./theme";
-import { Pressable, StyleSheet, Text, TextInput, View, fontFamily, fontSize, palettes, radius, spacing, useTheme } from "./theme";
+import type { ContextUsageView } from "../domain";
+import { CONTEXT_CRIT_THRESHOLD_PERCENT } from "../domain";
+import type {
+  CancelPresentation,
+  ConversationInputModel,
+  SubmissionPresentation,
+} from "../features/conversation-input-model";
+import type { ConversationSettingsModel } from "../features/conversation-settings-model";
+import { ContextUsageBar } from "./ContextUsageBar";
+import { ConversationSettingsPanel } from "./ConversationSettingsPanel";
+import type { Palette, TextInputProps } from "./theme";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  fontFamily,
+  fontSize,
+  palettes,
+  radius,
+  spacing,
+  useTheme,
+} from "./theme";
 
 export interface ConversationComposerProps {
   readonly input: ConversationInputModel;
+  /** 上下文用量：胶囊 + 明细；缺省时不呈现上下文条。 */
+  readonly usage?: ContextUsageView | null;
+  /** 模型与模式：胶囊 + 弹层；缺省时不呈现（对话页一律传模型给的那一份）。 */
+  readonly settings?: ConversationSettingsModel | null;
   /** 草稿变化（页面写进仓库；草稿只在内存）。 */
   readonly onDraftChange?: ((text: string) => void) | undefined;
   /** 提交当前草稿（页面负责派发 `session.prompt`）；缺省时提交按钮不可点。 */
   readonly onSubmit?: ((draft: string) => void) | undefined;
   /** 取消当前轮次（页面负责派发 `session.cancel`）；缺省时取消按钮不可点。 */
   readonly onCancel?: (() => void) | undefined;
+  /** 切换模型（`configId` 与取值由设置模型给出）。 */
+  readonly onSelectModel?: ((configId: string, value: string) => void) | undefined;
+  /** 切换模式。 */
+  readonly onSelectMode?: ((modeId: string) => void) | undefined;
 }
 
 /** 输入区的状态文案：三态措辞互不相同。 */
@@ -50,6 +93,59 @@ const STATE_PLACEHOLDERS: Readonly<Record<ConversationInputModel["state"], strin
   closed: "会话已关闭",
 };
 
+/** 提示行里的状态补充；`editable` 不需要额外措辞。 */
+const STATE_HINTS: Readonly<Partial<Record<ConversationInputModel["state"], string>>> = {
+  in_progress: "进行中 · 按钮变为停止",
+  closed: "会话已关闭",
+};
+
+/**
+ * 输入区上方的占用告警条（原型 `ctxWarn`）。
+ *
+ * 只有 `known` 才判得出占比：未上报与窗口为零时**不**呈现告警条，也**不**由客户端推算一个
+ * 占比出来（R17 的两条场景）。阈值取 {@link CONTEXT_CRIT_THRESHOLD_PERCENT}——原型在
+ * `ctxWarn()` 与 `ctxChip()` 里把 85 各写了一次，这里与胶囊共用同一处定义
+ * （`src/domain/context-usage.ts`）。
+ */
+export function contextWarningOf(usage: ContextUsageView | null | undefined): string | null {
+  if (usage === null || usage === undefined) return null;
+  if (usage.kind !== "known") return null;
+  if (usage.percent < CONTEXT_CRIT_THRESHOLD_PERCENT) return null;
+  return (
+    `上下文已用 ${usage.percent.toFixed(0)}%。继续发送时 Agent 可能截断较早的内容，建议先开个新会话。` +
+    "这是 Agent 的行为，网页端只做提示。"
+  );
+}
+
+/** 输入框按键的处理方式。 */
+export type ComposerKeyAction =
+  /** 与本输入区无关的键：原样交给输入框。 */
+  | "ignore"
+  /** Shift+回车：换行（不提交、不拦截）。 */
+  | "newline"
+  /** 回车且可提交：提交当前草稿。 */
+  | "submit"
+  /** 回车但**不可**提交：拦下换行，且不派发任何命令。 */
+  | "blocked";
+
+/**
+ * 回车的判定（`shiftKey` 一起给，因为「回车提交」与「Shift+回车换行」是同一个按键的两支）。
+ *
+ * `submittable` 由调用方按模型的 `canSubmit`、草稿是否为空与回调是否接线算出——判定只有这一处，
+ * 组件里不再写第二个 `if`。
+ */
+export function composerKeyAction(
+  submittable: boolean,
+  key: { readonly key?: string; readonly shiftKey?: boolean },
+): ComposerKeyAction {
+  if (key.key !== "Enter") return "ignore";
+  if (key.shiftKey === true) return "newline";
+  return submittable ? "submit" : "blocked";
+}
+
+/** `onKeyPress` 的签名（类型从 `theme.ts` 的 `TextInputProps` 取，不直接把 react-native 引进组件）。 */
+type ComposerKeyPress = NonNullable<TextInputProps["onKeyPress"]>;
+
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
@@ -60,6 +156,27 @@ function buildStyles(colors: Palette) {
       borderColor: colors.line,
       borderRadius: radius.md,
       backgroundColor: colors.panel,
+    },
+    warnBar: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      gap: spacing.sm,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.danger,
+      borderRadius: radius.sm,
+      backgroundColor: colors.dangerSoft,
+      color: colors.danger,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.sm,
+    },
+    bar: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      gap: spacing.sm,
     },
     head: {
       flexDirection: "row",
@@ -73,29 +190,34 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
       fontWeight: "600",
     },
-    input: {
-      minHeight: 64,
+    inputRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "flex-end",
+      gap: spacing.sm,
       paddingVertical: spacing.sm,
       paddingHorizontal: spacing.md,
       borderWidth: 1,
       borderColor: colors.line,
-      borderRadius: radius.sm,
+      borderRadius: radius.md,
       backgroundColor: colors.panel2,
+    },
+    input: {
+      flexGrow: 1,
+      flexShrink: 1,
+      minWidth: 0,
+      minHeight: 44,
+      paddingVertical: spacing.xs,
+      paddingHorizontal: 0,
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
     },
     inputClosed: {
       color: colors.ink3,
-      backgroundColor: colors.panel2,
-    },
-    row: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.sm,
     },
     primary: {
+      flexShrink: 0,
       paddingVertical: spacing.xs,
       paddingHorizontal: spacing.lg,
       borderWidth: 1,
@@ -117,6 +239,7 @@ function buildStyles(colors: Palette) {
       color: colors.ink3,
     },
     stop: {
+      flexShrink: 0,
       paddingVertical: spacing.xs,
       paddingHorizontal: spacing.md,
       borderWidth: 1,
@@ -130,6 +253,12 @@ function buildStyles(colors: Palette) {
       fontSize: fontSize.sm,
       fontWeight: "600",
     },
+    hintRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      gap: spacing.lg,
+    },
     note: {
       color: colors.ink2,
       fontFamily: fontFamily.sans,
@@ -137,6 +266,26 @@ function buildStyles(colors: Palette) {
     },
     hint: {
       color: colors.ink3,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+    },
+    kbd: {
+      paddingHorizontal: spacing.xs,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderRadius: 4,
+      backgroundColor: colors.panel2,
+      color: colors.ink2,
+      fontFamily: fontFamily.mono,
+      fontSize: fontSize.xs,
+    },
+    hintWarn: {
+      color: colors.warn,
+      fontFamily: fontFamily.sans,
+      fontSize: fontSize.xs,
+    },
+    hintDanger: {
+      color: colors.danger,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xs,
     },
@@ -257,16 +406,56 @@ function CancelLine({ cancel }: { readonly cancel: CancelPresentation }): ReactE
 /** 输入区。 */
 export function ConversationComposer({
   input,
+  usage,
+  settings,
   onDraftChange,
   onSubmit,
   onCancel,
+  onSelectModel,
+  onSelectMode,
 }: ConversationComposerProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
   const closed = input.state === "closed";
+  const warning = contextWarningOf(usage);
+  // 提交闸门只有这一处：模型的 `canSubmit`（会话关闭 / 连接离线 / imported 来源都在模型里变成假）
+  // 加上「草稿非空」与「回调已接线」。仓库侧 `submitPrompt` 还会再拦一次，不靠组件记得禁用。
+  const submittable = input.canSubmit && input.draft.trim().length > 0;
+
+  const onKeyPress: ComposerKeyPress = (event) => {
+    // RNW 把宿主 `keydown` 原样交给 `onKeyPress`：`nativeEvent` 上读得到 `key` 与 `shiftKey`。
+    const native = event.nativeEvent as { readonly key?: string; readonly shiftKey?: boolean };
+    const action = composerKeyAction(submittable && onSubmit !== undefined, native);
+    if (action === "ignore" || action === "newline") return;
+    // 回车一律不落换行（原型同样在 keydown 上 preventDefault）：提交与「不可提交」两支都不该
+    // 往草稿里塞一个换行——后者正是「不得产生副作用」的那一条。
+    event.preventDefault();
+    if (action === "blocked") return;
+    onSubmit?.(input.draft);
+  };
 
   return (
     <View style={styles.composer} dataSet={{ composer: input.state, composerDraftInMemoryOnly: String(input.draftInMemoryOnly) }}>
+      {/* 接近上限的告警条：只有已上报且达到阈值才出现（未上报 / 零窗口不推算占比）。 */}
+      {warning === null ? null : (
+        <Text role="alert" style={styles.warnBar} dataSet={{ contextWarning: "true" }}>
+          {warning}
+        </Text>
+      )}
+
+      <View style={styles.bar} dataSet={{ composerBar: "true" }}>
+        {/* 上下文胶囊 + 明细（未上报时不给数字）；未上报不影响任何交互。 */}
+        {usage === null || usage === undefined ? null : <ContextUsageBar usage={usage} />}
+        {/* 模型 / 模式胶囊与弹层。 */}
+        {settings === null || settings === undefined ? null : (
+          <ConversationSettingsPanel
+            settings={settings}
+            onSelectModel={onSelectModel}
+            onSelectMode={onSelectMode}
+          />
+        )}
+      </View>
+
       <View style={styles.head}>
         <Text style={styles.state} dataSet={{ composerState: input.state }}>
           {STATE_LABELS[input.state]}
@@ -277,19 +466,20 @@ export function ConversationComposer({
         </Text>
       </View>
 
-      <TextInput
-        value={input.draft}
-        editable={!closed}
-        multiline
-        placeholder={STATE_PLACEHOLDERS[input.state]}
-        style={closed ? [styles.input, styles.inputClosed] : styles.input}
-        dataSet={{ composerInput: input.state }}
-        onChangeText={(text) => {
-          onDraftChange?.(text);
-        }}
-      />
+      <View style={styles.inputRow}>
+        <TextInput
+          value={input.draft}
+          editable={!closed}
+          multiline
+          placeholder={STATE_PLACEHOLDERS[input.state]}
+          style={closed ? [styles.input, styles.inputClosed] : styles.input}
+          dataSet={{ composerInput: input.state }}
+          onChangeText={(text: string) => {
+            onDraftChange?.(text);
+          }}
+          onKeyPress={onKeyPress}
+        />
 
-      <View style={styles.row}>
         <Pressable
           role="button"
           // 闸门是模型给的 `canSubmit`：关闭 / 离线 / imported 来源都会在这里变为不可点
@@ -324,6 +514,22 @@ export function ConversationComposer({
           {input.disabledReason ?? "当前不能提交。"}
         </Text>
       )}
+
+      {/* 提示行：按键口径与状态补充（原型 `.hint`）。 */}
+      <View style={styles.hintRow} dataSet={{ composerHint: "true" }}>
+        <Text style={styles.hint} dataSet={{ composerKeys: "enter-submits" }}>
+          <Text style={styles.kbd}>Enter</Text> 发送 · <Text style={styles.kbd}>Shift</Text>+
+          <Text style={styles.kbd}>Enter</Text> 换行
+        </Text>
+        {STATE_HINTS[input.state] === undefined ? null : (
+          <Text
+            style={input.state === "closed" ? styles.hintDanger : styles.hintWarn}
+            dataSet={{ composerStateHint: input.state }}
+          >
+            {STATE_HINTS[input.state]}
+          </Text>
+        )}
+      </View>
 
       <SubmissionLine submission={input.submission} />
       <CancelLine cancel={input.cancel} />

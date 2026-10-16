@@ -4,39 +4,43 @@
  * 目录是列表的主要组织单位（R15）：本页只做三件事——取模型、渲染共享组件、把点击上抛给路由。
  * 任何数据判定都在 `src/features/` 里，页面里没有业务分支。
  *
+ * **本页不自建导航、也不自建连接状态徽标**：顶栏（标识、设备胶囊、主题开关、帮助入口）由根布局
+ * 装配的共享外壳承担，连接状态只由那一个设备胶囊表达。此前这里另有一条自建导航与第二个状态
+ * 徽标，两者都是「路由自行拼出的重复表达」——同一状态有两处判据，必然漂移。
+ * 本页因此只剩下目录内容本身、**顶部创建入口**与涉及创建链路的那两块。顶部创建入口是
+ * `DirectoryList` 工具条右端的那一个（本页只把回调交给它）——它不是页面自建的一行，位置由列表
+ * 组件按原型给出。
+ *
  * 搜索框与筛选段是**受控**的：值来自 store 的 `directoryQuery`/`directoryFilter`，输入回到同名
  * setter。两者都只是 UI 状态，不发任何命令（spec「搜索与筛选不依赖在线查询」）。
  *
- * 目录卡片的创建入口与详情页的创建入口是**同一条**链路：同一个 `CreateSessionSheet`、同一份
- * `store.createEntry(alias)`、同一条 `store.submitCreateSession(...)`。弹层的开关不落在本页：
- * 它由 store 的 `createSheetAlias` 派生（见下方 `sheetAlias`），因此目录页与详情页不可能各持
- * 一个布尔量。创建入口**没有**权限维度（设备权限层已删除），因此这里不再读任何 scope。
+ * ## 两条创建路径共用同一份状态
+ *
+ * - **目录层级入口**（卡片/详情页的 `⊕ 新建`）：目录已知 → 弹层呈现「目录/路径两行」，
+ *   载荷用该目录的别名（`openCreateSheet(alias)`）；
+ * - **顶部入口**（目录列表工具条右端的 `⊕ 新建`）：目录未知 → 弹层呈现「选择文件夹控件 + 已选路径 + 说明」，
+ *   目录由 `DirectoryPicker` 逐层浏览或从已登记目录里选出来（`openCreateSheetToBrowse()`）。
+ *
+ * 两条路径的弹层开关与浏览/选择状态都只有**一份**（住在 store 里），因此同一时刻不可能出现两个弹层、
+ * 两个选择器，页面也不各持一个布尔量。选择器与弹层一样在这里渲染：它的开关是跨路由存活的单份状态，
+ * 任何一条渲染弹层的路由都要能把它画出来。
  */
 
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
 import {
-  ConnectionBadge,
   CreateSessionSheet,
   DirectoryList,
+  DirectoryPicker,
   HostConnectionPanel,
   RuntimeUnavailable,
 } from "../src/components";
 import type { Palette } from "../src/components/theme";
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  fontFamily,
-  fontSize,
-  palettes,
-  radius,
-  spacing,
-  useTheme,
-} from "../src/components/theme";
+import { StyleSheet, View, palettes, spacing, useTheme } from "../src/components/theme";
+import { CREATE_SHEET_BROWSE_KEY } from "../src/features/create-session-model";
+import type { DirectorySelection } from "../src/features/create-session-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时），渲染路径上不再新建样式对象。 */
@@ -47,25 +51,6 @@ function buildStyles(colors: Palette) {
       gap: spacing.md,
       padding: spacing.lg,
       backgroundColor: colors.bg,
-    },
-    nav: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.sm,
-    },
-    navButton: {
-      paddingVertical: 6,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel,
-    },
-    navText: {
-      color: colors.ink2,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
     },
   });
 }
@@ -88,6 +73,33 @@ export default function DirectoriesRoute(): ReactElement {
     store.closeCreateSheet();
   }, [store]);
 
+  // 选择器的回调定住身份：选择器挂载时按 `initialPath` 请求初始层，依赖里带 `onBrowse`，
+  // 每次渲染换一个新函数会让那次请求反复重跑。
+  const onBrowse = useCallback(
+    (path: string | null) => {
+      if (store !== null) store.browseDirectory(path);
+    },
+    [store],
+  );
+  const onCreateFolder = useCallback(
+    (name: string) => {
+      if (store !== null) store.createFolderInBrowse(name);
+    },
+    [store],
+  );
+  const onConfirmSelection = useCallback(
+    (selection: DirectorySelection) => {
+      if (store !== null) store.selectBrowsedDirectory(selection);
+    },
+    [store],
+  );
+  const onCancelPicker = useCallback(() => {
+    if (store !== null) store.closeDirectoryPicker();
+  }, [store]);
+  const onOpenBrowseSheet = useCallback(() => {
+    if (store !== null) store.openCreateSheetToBrowse();
+  }, [store]);
+
   if (store === null || state === null) return <RuntimeUnavailable route="dirs" />;
 
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -96,48 +108,24 @@ export default function DirectoriesRoute(): ReactElement {
   /**
    * 要呈现的创建弹层：`null` 表示本页不呈现。
    *
-   * 唯一来源是 store 的 `createSheetAlias`——本页不另持开关，详情页呈现的那一份也是它。
-   * 再要求这个别名落在**本机已登记的目录**里（别名全集取自快照，**不**经过查询/筛选）：
-   * 否则打开弹层后再敲一个查询词，会把正在提交或等待用户处理的弹层卸掉。
+   * 唯一来源是 store 的两支单份状态——顶部入口（`createSheetBrowses`）或某个**已登记目录**
+   * （`createSheetAlias`）。后者再要求这个别名落在本机已登记的目录里（别名全集取自快照，
+   * **不**经过查询/筛选）：否则打开弹层后再敲一个查询词，会把正在提交或等待用户处理的弹层卸掉。
    */
+  const browseSheet = state.createSheetBrowses;
   const requestedSheetAlias = state.createSheetAlias;
   const sheetAlias =
     state.resources?.workspaces.find((workspace) => workspace.alias === requestedSheetAlias)?.alias ?? null;
+  const entry = browseSheet ? store.createEntry(null) : sheetAlias === null ? null : store.createEntry(sheetAlias);
+  // 提交状态按弹层的机器键读写（已登记目录用别名，顶部入口用 `CREATE_SHEET_BROWSE_KEY`）。
+  const sheetKey = browseSheet ? CREATE_SHEET_BROWSE_KEY : sheetAlias;
+  const directoryBlock = entry !== null && entry.directory.kind === "browse" ? entry.directory : null;
 
   return (
     <View role="main" style={styles.page}>
-      <View role="navigation" style={styles.nav}>
-        <Pressable
-          role="button"
-          style={styles.navButton}
-          dataSet={{ action: "open-hosts" }}
-          onPress={() => {
-            router.push("/hosts");
-          }}
-        >
-          <Text style={styles.navText}>主机与连接</Text>
-        </Pressable>
-        <Pressable
-          role="button"
-          style={styles.navButton}
-          dataSet={{ action: "open-pairing" }}
-          onPress={() => {
-            router.push("/pair");
-          }}
-        >
-          <Text style={styles.navText}>配对</Text>
-        </Pressable>
-        <ConnectionBadge
-          panel={store.hostPanel()}
-          onOpenHosts={() => {
-            router.push("/hosts");
-          }}
-        />
-      </View>
-
       <DirectoryList
         model={page}
-        // 内联会话行只依赖快照：与详情页的查询词/月份无关（store 的选择器保证）。
+        // 内联会话行只依赖快照：与详情页的查询词/页码无关（store 的选择器保证）。
         sessionsByAlias={store.directoryPageSessions()}
         query={state.directoryQuery}
         onQueryChange={(query) => {
@@ -158,25 +146,32 @@ export default function DirectoriesRoute(): ReactElement {
         onCreateSession={(alias: string) => {
           store.openCreateSheet(alias);
         }}
+        // **顶部**创建入口：目录未知，由用户浏览/选择一层。它画在目录列表工具条的右端（原型的位置），
+        // 与卡片上的目录内入口是两条不同的路径。
+        onCreateSessionToBrowse={onOpenBrowseSheet}
       />
 
       <HostConnectionPanel model={store.hostPanel()} />
 
-      {sheetAlias === null ? null : (
+      {entry === null ? null : (
         <CreateSessionSheet
-          model={store.createEntry(sheetAlias)}
+          model={entry}
           selectedAgentId={agentId}
           onSelectAgent={setAgentId}
-          onSubmit={({ agentId: selected, directoryPath }) => {
+          onOpenDirectoryPicker={() => {
+            store.openDirectoryPicker();
+          }}
+          onSubmit={({ agentId: selected, directoryPath, createIfMissing }) => {
             const outcome = store.submitCreateSession({
-              directoryAlias: sheetAlias,
+              directoryAlias: browseSheet ? null : sheetAlias,
               agentId: selected,
-              ...(directoryPath === "" ? {} : { directoryPath }),
+              directoryPath,
+              createIfMissing,
             });
             if (!outcome.ok) setAgentId(null);
           }}
           onDismissUncertain={() => {
-            const requestId = state.createRequestIds.get(sheetAlias);
+            const requestId = sheetKey === null ? undefined : state.createRequestIds.get(sheetKey);
             if (requestId !== undefined) store.dismissUncertain(requestId);
           }}
           onClose={() => {
@@ -184,6 +179,23 @@ export default function DirectoriesRoute(): ReactElement {
           }}
         />
       )}
+
+      {/* 目录选择器与弹层共用一份状态：开关在 store 上，任何渲染弹层的路由都要能画出它。
+          「不能逐层浏览」的说明口径同样取自弹层模型的目录块（`unavailable`）：未连上主机时说
+          「还没连上」，只有已连上却没协商到该能力才说「服务端没有提供」。目录块不是浏览形态
+          （本页的弹层来自某个已登记别名）时给不出更准的事实，按后者呈现。 */}
+      {state.directoryBrowse.open ? (
+        <DirectoryPicker
+          initialPath={directoryBlock === null ? null : directoryBlock.initialPath}
+          registeredDirectories={store.registeredDirectories()}
+          browser={store.directoryBrowser()}
+          unavailable={directoryBlock?.unavailable ?? undefined}
+          onBrowse={onBrowse}
+          onCreateFolder={onCreateFolder}
+          onConfirm={onConfirmSelection}
+          onCancel={onCancelPicker}
+        />
+      ) : null}
     </View>
   );
 }

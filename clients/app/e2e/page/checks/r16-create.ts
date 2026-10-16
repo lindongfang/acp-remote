@@ -5,36 +5,52 @@
  *
  * `src/features/create-session-model.ts` 的 `assertCreateSessionRefs` 只校验**本模块内部**
  * 构造出来的对象；它拦不住「命令信封里多带了一个字段」。因此本文件抓的是
- * `FakeHost.sent` 里那条**帧原文**：点击真实的提交按钮 → 真实的 `ClientStore.submitCreateSession`
- * → 真实的 `buildCreateSessionCommand` → 真实的 socket `send`，再对那串 JSON 文本做断言。
+ * `FakeHost.sent` 里那条**帧原文**：点击真实的提交按钮 → 真实的
+ * `ClientStore.submitCreateSession` → 真实的 `buildCreateSessionCommand` → 真实的 socket `send`，
+ * 再对那串 JSON 文本做断言。
  *
  * ## 负向为主
  *
- * - 载荷键集必须**恰好**是 `{agentId}` 加**一个**目录引用（`workspaceAlias` 或 `workspacePath`）；
+ * - 载荷键集必须**恰好**是规范允许的三类之一：`{agentId, workspaceAlias}`、
+ *   `{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
  * - 帧原文里不得出现 MCP、凭据类字段名或值；
- * - **入口不再有权限维度**：入口不是禁用态、目录页与详情页都没有权限提示条/「不可用」说明、
- *   也没有「电脑端授予」类文案，且认证与否都不改变它——把门控加回来即红。
+ * - **目录不由用户手工输入**：弹层里没有目录输入框，路径逐字来自服务端（快照或浏览结果）；
+ * - **别名不出现在界面文本里**（只作 `data-*` 机器标识）；
+ * - **服务端不支持浏览时明确说明**并保留「选已登记目录」这条路，且一条浏览命令都不发；
+ * - **不能浏览的原因分岔**：「还没连上主机」与「已连上却没协商到该能力」是两条文案与两个锚点取值，
+ *   未协商 MUST NOT 被写成「服务端没有提供该能力」（未认证起点没有快照，`selectedFeatures` 为空
+ *   只是「还没协商」）；
+ * - **入口不再有权限维度**：认证与否都不改变它——把门控加回来即红。
+ *
+ * ## 目录浏览的两条场景
+ *
+ * 假主机协商的 feature 里**没有** `core.workspace-browse.v1`，因此：
+ *
+ * - 「服务端不支持浏览」那一条走的是**完全真实**的链路（真实握手 → 真实快照 → 真实组件）；
+ * - 「支持浏览」那一条由用例注入一次协商结果（`store.apply` 一条 `authenticated`），浏览结果则经
+ *   `FakeHost.completeHeldCommand` 从**真实 socket** 投递（wire 解码、结果归并、渲染都走生产代码）。
+ *   目的是把「逐层选定 / 已登记标注 / 新建一层目录 → createIfMissing」这三条规格场景在浏览器里钉住。
  */
 
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { CreateSessionSheet } from "../../../src/components";
+import { WORKSPACE_BROWSE_FEATURE } from "../../../src/features/create-session-model";
 
 import {
   AGENTS,
-  DIRECTORY_ROUTES,
   DIRS_ROUTE,
-  HOST_PATH_FRAGMENTS,
+  WORKSPACES,
   WORKSPACES_WITH_PATHS,
   dirRoute,
   sessionsForBothDirectories,
 } from "../fixtures";
 import {
   CANONICAL_ORIGIN,
+  DEVICE_ID,
   PERMISSION_GATE_VOCABULARY,
   click,
-  domHtml,
   domText,
   expectAbsent,
   expectEqual,
@@ -46,10 +62,10 @@ import {
   textOf,
   waitFor,
 } from "../support";
-import type { Check, ScenarioOptions } from "../support";
+import type { Check, Mounted, ScenarioOptions } from "../support";
 import { typeIntoInput } from "./r15-directory";
 
-/** 创建弹层只出现在目录详情页；场景里没有任何授权设置可给（设备方向已无权限维度）。 */
+/** 创建弹层只出现在目录页与目录详情页；场景里没有任何授权设置可给（设备方向已无权限维度）。 */
 function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions {
   return {
     canonicalOrigin: CANONICAL_ORIGIN,
@@ -68,10 +84,10 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
 }
 
 /**
- * 打开创建弹层并选好 Agent。
+ * 打开目录详情页的创建弹层并选好 Agent。
  *
- * 返回弹层根节点与「选 Agent 之前」提交按钮的禁用状态——它是 R16-1 的对照：
- * 若按钮在任何时候都禁用，后面的「确实发出了帧」就毫无意义。
+ * 返回「选 Agent 之前」提交按钮的禁用状态——它是对照：若按钮在任何时候都禁用，
+ * 后面的「确实发出了帧」就毫无意义。
  */
 async function openSheetWithAgent(
   container: HTMLElement,
@@ -95,14 +111,21 @@ async function openSheetWithAgent(
   return { sheet, disabledBeforeSelect };
 }
 
+/** 一帧出站 JSON 的 `body`（先确证是对象、非数组，再按记录读键——不做内联类型断言）。 */
+function frameBody(text: string): Record<string, unknown> | null {
+  const parsed: unknown = JSON.parse(text);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed) || !("body" in parsed)) return null;
+  const body: unknown = parsed.body;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  // 上面已确证形状，这里只是补上索引签名：按记录读键，键名由调用点的断言把关。
+  return body as Record<string, unknown>;
+}
+
 /** 出站 `session.create` 帧原文；没发出去返回 `null`。 */
 function createFrame(sent: readonly string[]): string | null {
   for (const text of sent) {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== "object" || parsed === null) continue;
-    const body = (parsed as { body?: unknown }).body;
-    if (typeof body !== "object" || body === null) continue;
-    if ((body as { command?: unknown }).command !== "session.create") continue;
+    const body = frameBody(text);
+    if (body === null || body["command"] !== "session.create") continue;
     return text;
   }
   return null;
@@ -118,15 +141,25 @@ function createFrame(sent: readonly string[]): string | null {
 function createPayloadOf(sent: readonly string[]): Record<string, unknown> | null {
   const frame = createFrame(sent);
   if (frame === null) return null;
-  const parsed: unknown = JSON.parse(frame);
-  if (typeof parsed !== "object" || parsed === null || !("body" in parsed)) return null;
-  const body: unknown = parsed["body"];
-  if (typeof body !== "object" || body === null || !("payload" in body)) return null;
+  const body = frameBody(frame);
+  if (body === null) return null;
   const payload: unknown = body["payload"];
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
   // 到这里「是对象、非数组」已逐层查过，缺的只是索引签名：按记录读键值，键名由断言把关。
-  const record = payload as Record<string, unknown>;
-  return record;
+  return payload as Record<string, unknown>;
+}
+
+/** 出站 `workspace.browse` 帧的请求路径（按发送顺序）。 */
+function browsePaths(sent: readonly string[]): readonly unknown[] {
+  const paths: unknown[] = [];
+  for (const text of sent) {
+    const body = frameBody(text);
+    if (body === null || body["command"] !== "workspace.browse") continue;
+    const payload: unknown = body["payload"];
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) continue;
+    paths.push((payload as Record<string, unknown>)["path"]);
+  }
+  return paths;
 }
 
 /** 载荷里**不得**出现的字段名与凭据/路径样式（出现即判红）。 */
@@ -146,19 +179,14 @@ const FORBIDDEN_IN_PAYLOAD = [
 ] as const;
 
 /**
- * 用户在创建弹层里**手工输入**的目录（R16-2：目录引用走 `workspacePath` 那一支）。
- *
- * 浏览器拿不到宿主路径，因此这是 `workspacePath` 的唯一来源；用固定的字面量才能在帧原文里
- * 逐字断言「载荷带的就是用户输入的这一份」。取值刻意避开 `fixtures.ts` 的
- * `SECRET_FRAGMENTS`（那是「快照里的路径不得被渲染出来」那批断言用的），免得两件事看起来像一件。
- */
-const USER_DIRECTORY_PATH = "C:\\projects\\api";
-
-/**
  * 一次「创建入口有没有被权限挡住」的观测：全部取自**真实组件**渲染出来的 DOM。
  *
  * 比较两个场景（认证 / 未认证）的这份观测，就是在比「入口的门控条件是否与认证有关」——
  * 设备方向已没有权限维度，两者必须逐项相同。
+ *
+ * 这份观测**刻意只收门控事实**，尤其**不**收「选中 Agent 之后提交按钮可点」：未认证起点没有快照，
+ * 目录块退回「顶部入口」形态、目录还没定下来，那时提交按钮的 `disabled` 只反映「目录还没选」，
+ * 与本用例要证的权限门控无关。两个起点因此不在这条上比对（认证起点单独的完整链路见 R16-1/R16-4/R16-5）。
  */
 interface CreateGateObservation {
   /** 弹层里出现的权限门控类文案（空数组 = 一处都没有）。 */
@@ -169,15 +197,51 @@ interface CreateGateObservation {
   readonly permissionMarkers: number;
   /** 未选 Agent 时提交按钮是否禁用（禁用只该由「还没选 Agent」造成）。 */
   readonly disabledWithoutAgent: boolean;
-  /** 选中 Agent 后提交按钮是否禁用（入口不该因权限/认证而不可点）。 */
-  readonly disabledWithAgent: boolean;
   /** 入口旁的副作用说明文本。 */
   readonly effectNote: string;
+  /** 弹层里的文本输入框数量（目录不由用户手工输入，因此恒为 0）。 */
+  readonly inputs: number;
+}
+
+/**
+ * 目录选择器与弹层之间的那条边界：等一条出站浏览请求。
+ *
+ * `sent` 每次重新取（假主机的 `sent` 是快照数组），因此传一个取值函数而不是数组。
+ */
+async function waitForBrowseRequest(sent: () => readonly string[], count: number): Promise<void> {
+  await waitFor(() => browsePaths(sent()).length >= count, `第 ${count} 条 workspace.browse 请求`);
+}
+
+/**
+ * 用例注入一次协商结果：假主机只协商两条必需 feature。
+ *
+ * 这是**浏览器级**用例唯一一处非真实输入（真实链路上这来自 `auth.server_challenge`），
+ * 浏览结果本身仍经真实 socket 投递。
+ */
+function negotiateBrowse(mounted: Mounted): void {
+  const store = mounted.composition?.store;
+  expectThat(store !== undefined, "组合根未装配");
+  store.apply({
+    kind: "authenticated",
+    info: {
+      deviceId: DEVICE_ID,
+      serverEpoch: "00384a03-bc90-4095-b65d-82fb8cc47e13",
+      headGlobalSequence: "10",
+      heartbeatIntervalMs: 30000,
+      limits: { maxMessageBytes: 1048576, maxPromptBytes: 262144, maxReplayEventsPerBatch: 500 },
+    },
+    selectedFeatures: ["core.command-status.v1", "core.event-ack.v1", WORKSPACE_BROWSE_FEATURE],
+  });
+  expectEqual(
+    store.state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE),
+    true,
+    "协商结果应已写入仓库",
+  );
 }
 
 const checks: readonly Check[] = [
   {
-    name: "R16-1 创建载荷恰好是两个引用：断言的是实际发出的那一帧字节",
+    name: "R16-1 目录已知的入口：目录/路径两行逐字来自服务端，载荷恰好是 agentId 与 workspaceAlias",
     async run() {
       const mounted = await mountScenario(baseScenario());
       try {
@@ -190,6 +254,23 @@ const checks: readonly Check[] = [
           "选中 Agent 后提交按钮应可点",
         );
 
+        // 目录块是「已知目录」那一形态：展示名与路径各一行，路径逐字是快照下发的那一份。
+        expectEqual(
+          query(sheet, '[data-create-directory-block="known"]') !== null,
+          true,
+          "目录已知时应呈现目录/路径两行",
+        );
+        expectEqual(textOf(query(sheet, "[data-create-directory-name]")), "api", "目录行是展示名");
+        expectEqual(
+          textOf(query(sheet, "[data-create-directory-path]")),
+          "D:\\secret\\vault\\repo-x",
+          "路径行逐字呈现服务端下发的路径",
+        );
+        // 反例：把别名当展示名渲染（或干脆拿别名顶路径）时，文本里会出现 alpha。
+        expectEqual(domText(sheet).includes("alpha"), false, "弹层文本里不得出现目录别名");
+        // 目录不由用户手工输入：弹层里没有任何文本输入框。
+        expectEqual(queryAll(sheet, "input").length, 0, "弹层不得呈现目录输入框");
+
         click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
         await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "发出 session.create 帧");
         const frame = createFrame(mounted.host?.sent ?? []);
@@ -200,129 +281,52 @@ const checks: readonly Check[] = [
         expectEqual(
           Object.keys(payload).sort(),
           ["agentId", "workspaceAlias"],
-          "载荷的键集必须恰好是两个引用",
+          "目录已知时载荷的键集必须恰好是两个引用",
         );
         expectEqual(payload["workspaceAlias"], "alpha", "载荷里的目录引用");
         expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
 
-        // MUST NOT：帧**原文**里不得携带 Owner 路径或 Provider/MCP 凭据。
+        // MUST NOT：帧**原文**里不得携带 Provider/MCP 凭据，也不得凭空多带一条宿主路径。
         expectNone(frame ?? "", FORBIDDEN_IN_PAYLOAD, "session.create 帧里出现了越界字段名");
         expectAbsent(frame ?? "", "D:", "session.create 帧里出现了本机盘符路径");
         expectAbsent(frame ?? "", "secret", "session.create 帧里出现了敏感片段");
-        // 对照：弹层渲染**只**含提示语里的示例目录（`D:\work\api`），不得出现本机已登记目录的真实路径。
-        // 目录输入由用户自己填写，服务端不回显任何宿主路径——因此这里按「真实路径片段」判，而不是按盘符。
-        expectNone(domHtml(mounted.container), HOST_PATH_FRAGMENTS, "创建弹层渲染泄露了本机路径");
-        expectEqual(
-          textOf(query(sheet, "[data-create-sheet-title]")).includes("alpha"),
-          true,
-          "创建弹层标题应给出目录别名",
-        );
       } finally {
         await mounted.unmount();
       }
     },
   },
   {
-    name: "R16-2 没有任何授权设置时入口可用且无权限痕迹：填了目录就发 workspacePath，载荷恰好一个目录引用",
+    name: "R16-2 快照没下发路径时：路径行呈现「—」，MUST NOT 用别名或展示名拼一段像路径的文本",
     async run() {
-      const mounted = await mountScenario(baseScenario());
+      // 同一页的第二种场景：workspaces 只带协议字段（`path` 缺席）。
+      const mounted = await mountScenario(baseScenario({ workspaces: WORKSPACES }));
       try {
-        await waitFor(
-          () => query(mounted.container, '[data-action="open-create-sheet"]') !== null,
-          "目录详情页渲染",
-        );
-        // 入口**不是禁用态**：设备不再有创建会话的权限维度（spec「入口不因权限不可用」）。
-        // 场景里也没有任何授权设置可给——`auth.authenticated` 的 body 早已不含 scope 集合。
-        const entryButton = query(mounted.container, '[data-action="open-create-sheet"]');
-        expectThat(entryButton !== null, "目录详情页必须有创建会话入口");
-        expectEqual(entryButton.hasAttribute("disabled"), false, "创建入口不得是禁用态");
-
-        // 权限痕迹一处都不许有：提示条、「不可用并给出说明」的呈现、以及「电脑端授予」类文案。
-        // 把门控加回来（哪怕只是把提示条藏进别的容器）→ 这三条中的一条变红。
-        expectThat(
-          query(mounted.container, "[data-create-permission-note]") === null,
-          "目录详情页不得再呈现创建权限提示条",
-        );
-        expectThat(
-          query(mounted.container, '[data-create-entry-unavailable="true"]') === null,
-          "创建入口不得再呈现成「不可用并给出说明」",
-        );
-        expectNone(domText(mounted.container), PERMISSION_GATE_VOCABULARY, "目录详情页出现了权限门控类文案");
-        // 副作用说明照常呈现（spec「创建入口的副作用说明」）：它曾与权限态成对出现，现在恒在。
-        expectThat(
-          textOf(query(mounted.container, "[data-create-side-effect]")).includes("Agent 进程"),
-          "入口旁必须说明会在电脑上启动一个 Agent 进程",
-        );
-
-        // 入口接的是弹层（不是画了一个按钮）：点开，弹层里同样不许有权限痕迹。
-        click(entryButton, "创建入口");
-        await waitFor(() => query(mounted.container, "[data-create-sheet]") !== null, "创建弹层打开");
-        const sheet = query(mounted.container, "[data-create-sheet]");
-        expectThat(sheet !== null, "创建弹层必须渲染出来");
-        expectThat(
-          query(mounted.container, "[data-create-permission]") === null,
-          "创建弹层不得再带权限标识",
-        );
-        expectNone(domText(sheet), PERMISSION_GATE_VOCABULARY, "创建弹层出现了权限门控类文案");
-
-        // 在目录输入框里填一个电脑上的绝对目录：目录引用必须走 `workspacePath`。
-        click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "Agent codex-a");
-        await waitFor(
-          () =>
-            query(mounted.container, 'button[data-agent-id="codex-a"]')?.getAttribute("data-selected") ===
-            "true",
-          "Agent 被选中",
-        );
-        typeIntoInput(
-          mounted.container,
-          "[data-create-directory]",
-          USER_DIRECTORY_PATH,
-          "创建弹层的目录输入框",
-        );
-        // 受控输入真的吃下了这份值再提交：否则「载荷里是用户输入的那一份」可能只是它渲染前的占位。
-        await waitFor(
-          () =>
-            query(mounted.container, "[data-create-directory]")?.getAttribute("data-create-directory-value") ===
-            USER_DIRECTORY_PATH,
-          "目录输入框接受了用户输入的路径",
-        );
-        click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
-        await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "发出 session.create 帧");
-        const payload = createPayloadOf(mounted.host?.sent ?? []);
-        expectThat(payload !== null, "点击提交后必须真的发出一帧带对象载荷的 session.create");
-        // 目录引用**恰好一个**：别名与路径同时给出（或都不给）都会被服务端按结构错误拒，
-        // 键集相等在这里当场判红。
-        expectEqual(
-          Object.keys(payload).sort(),
-          ["agentId", "workspacePath"],
-          "填了目录时载荷恰好是 agentId + workspacePath（不是两者都给）",
-        );
-        expectEqual(payload["workspacePath"], USER_DIRECTORY_PATH, "载荷里的目录必须是用户输入的那一个");
-        expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
+        const { sheet } = await openSheetWithAgent(mounted.container, "codex-a");
+        expectEqual(textOf(query(sheet, "[data-create-directory-name]")), "api", "目录行仍是展示名");
+        const pathText = textOf(query(sheet, "[data-create-directory-path]"));
+        expectEqual(pathText, "—", "未下发路径时呈现「—」");
+        // 反例：用别名或展示名冒充路径时，这一段会变成 alpha/api 之类的文本。
+        expectEqual(pathText.includes("alpha"), false, "不得用别名冒充路径");
+        expectEqual(pathText.includes("api"), false, "不得用展示名冒充路径");
       } finally {
         await mounted.unmount();
       }
     },
   },
   {
-    name: "R16-3 认证与否都不构成创建门控：两种起点都不出现「被拒绝」的呈现，选中 Agent 即可提交",
+    name: "R16-3 认证与否都不构成创建门控：两种起点都不出现「被拒绝」的呈现，认证起点选中 Agent 即可提交",
     async run() {
       /**
        * 观测一个起点下的创建入口：模型由**真实** ClientStore 在浏览器里算出（`store.createEntry`），
        * 再交给真实组件渲染，断的是页面看到的东西。
        *
-       * 两个起点都要看：设备方向已没有权限维度，认证与否都不该改变入口的可提交性——把门控重新
+       * 两个起点都要看：设备方向已没有权限维度，认证与否都不该改变入口的门控事实——把门控重新
        * 挂到认证（或别处）上，其中一个起点就会与另一个不一致。
        */
       const observe = async (authenticate: boolean, label: string): Promise<CreateGateObservation> => {
         const mounted = await mountScenario(baseScenario({ authenticate }));
         try {
           // 取模型前必须先等**该场景的握手真的走到那一步**，否则读到的可能只是「什么都还没发生」。
-          // 认证的场景等 `state.deviceId`——它是 `auth.authenticated` 的直接后果；设备方向已没有
-          // scope 集合可等（那正是本次变更删掉的东西）。未认证的场景服务端不下发认证，因此以
-          // 「客户端确实签出了设备证明」为握手走完的标志。
-          // 旧写法等的是 `[data-route="dir-detail"]`——它同时被占位 `RuntimeUnavailable` 命中，
-          // 于是这条等待在首帧占位时就成立，两个场景都可能读到「什么都还没发生」，断言随机变红。
           if (authenticate) {
             await waitFor(
               () => mounted.composition?.store.state.deviceId !== null,
@@ -365,19 +369,45 @@ const checks: readonly Check[] = [
           const deniedReasons = queryAll(host, "[data-create-denied-reason]").length;
           const permissionMarkers = queryAll(host, "[data-create-permission]").length;
           const effectNote = textOf(query(host, "[data-create-note]"));
+          const inputs = queryAll(host, "input").length;
           const disabledWithoutAgent = buttonWithoutAgent.hasAttribute("disabled");
 
-          // 选中 Agent 之后必须可点：这就是「入口不因权限/认证不可用」的可观察形式。
-          render("codex-a");
-          await waitFor(
-            () => (submitButton()?.hasAttribute("disabled") ?? true) === false,
-            `${label}：选中 Agent 后提交按钮必须可点`,
-          );
-          const disabledWithAgent = submitButton()?.hasAttribute("disabled") ?? true;
+          // 认证起点有快照 → 目录块是「已知目录」那一形态、目录已经定下来，因此选中 Agent 之后必须
+          // 可点：这就是「入口不因权限/认证不可用」的可观察形式。
+          //
+          // 未认证起点**不**在这里断言这件事：它没有快照，目录块退回「顶部入口」形态、目录还没定，
+          // 提交按钮的禁用只反映「目录还没选」，与权限门控无关（把它算进观测会让两个起点在这条上
+          // 必然不等，而那条不等并不说明门控回来了）。
+          if (authenticate) {
+            render("codex-a");
+            await waitFor(
+              () => (submitButton()?.hasAttribute("disabled") ?? true) === false,
+              `${label}：选中 Agent 后提交按钮必须可点`,
+            );
+          } else {
+            // 未认证 / 没有快照时 `selectedFeatures` 是空的，但那只是「还没协商」：说明文字必须说
+            // 「还没连上主机」，而不是断言服务端不支持浏览（那句只在已连上却没协商到该能力时成立）。
+            expectThat(
+              query(host, '[data-create-browse-unavailable="offline"]') !== null,
+              `${label}：不能逐层浏览的原因应说明「还没连上主机」`,
+            );
+            expectEqual(
+              domText(host).includes("服务端没有提供目录浏览能力"),
+              false,
+              `${label}：未协商不得写成「服务端没有提供该能力」`,
+            );
+          }
 
           root.unmount();
           host.remove();
-          return { gatingText, deniedReasons, permissionMarkers, disabledWithoutAgent, disabledWithAgent, effectNote };
+          return {
+            gatingText,
+            deniedReasons,
+            permissionMarkers,
+            disabledWithoutAgent,
+            effectNote,
+            inputs,
+          };
         } finally {
           await mounted.unmount();
         }
@@ -388,13 +418,14 @@ const checks: readonly Check[] = [
         expectEqual(observation.gatingText, [], `${label}：弹层出现了权限门控类文案`);
         expectEqual(observation.deniedReasons, 0, `${label}：不得出现「被拒绝」的入口呈现`);
         expectEqual(observation.permissionMarkers, 0, `${label}：不得出现权限标识`);
+        expectEqual(observation.inputs, 0, `${label}：弹层不得呈现目录输入框`);
         expectThat(
           observation.effectNote.includes("Agent 进程"),
           `${label}：副作用说明必须呈现（${JSON.stringify(observation.effectNote)}）`,
         );
-        // 禁用只由「还没选 Agent」造成：未选时禁用、选中后可用。
+        // 禁用只由「还没选 Agent」造成（提交按钮「呈现出来而不是被藏起来」由 `observe` 里的
+        // 非空断言把关，两个起点各跑一次）。
         expectEqual(observation.disabledWithoutAgent, true, `${label}：未选 Agent 时提交按钮应禁用`);
-        expectEqual(observation.disabledWithAgent, false, `${label}：选中 Agent 后提交按钮必须可点`);
       };
 
       const authenticated = await observe(true, "认证");
@@ -406,65 +437,84 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R16-4 目录卡片的创建入口：弹层属于被点的那一项，同一时刻只有一个，提交载荷仍是两个引用",
+    name: "R16-4 服务端不支持浏览：顶部入口明确说明并保留已登记目录，载荷仍恰好两个引用",
     async run() {
-      const mounted = await mountScenario(
-        baseScenario({ route: DIRS_ROUTE, extraRoutes: DIRECTORY_ROUTES }),
-      );
+      const mounted = await mountScenario(baseScenario({ route: DIRS_ROUTE }));
       try {
+        // 这条用例的前提是「**已连上**（认证与追平都完成）却没协商到该能力」：先等连接真的走到在线，
+        // 否则说明文字会落到「还没连上」那一支，与用例名里的口径不符（那种起点由 R16-3 覆盖）。
         await waitFor(
-          () => queryAll(mounted.container, "[data-directory-alias]").length === 2,
-          "目录页渲染出两条目录",
+          () => query(mounted.container, '[data-connection-state="online"]') !== null,
+          "连接已到在线",
         );
-        // **每个**目录项各有一个创建入口：一个都没有 = 入口没接线；只有一个 = 入口被挂成了
-        // 页面级按钮而不是卡片上的那一个。入口不再有任何权限维度，因此它恒在、恒可用。
+        await waitFor(() => queryAll(mounted.container, "[data-directory-alias]").length === 2, "目录页渲染出两条目录");
+        // 顶部入口落在**目录列表工具条右端**（原型的位置），不是列表上方单独一行：这条按 DOM 包含
+        // 关系量（工具条的机器锚点 `data-directory-toolbar` 由 `DirectoryList` 发出）。
+        expectThat(
+          query(mounted.container, '[data-directory-toolbar] [data-action="create-session-browse"]') !== null,
+          "顶部创建入口必须画在目录列表的工具条里",
+        );
+        // 顶部入口与卡片入口是**两个**不同的控件：卡片入口属于被点的目录，顶部入口的目录还没定。
         expectEqual(
           queryAll(mounted.container, '[data-action="create-session"]').length,
           2,
           "每个目录项各有一个「⊕ 新建」入口",
         );
-
-        click(
-          query(mounted.container, '[data-directory-alias="alpha"] [data-action="create-session"]'),
-          "alpha 的卡片创建入口",
-        );
+        click(query(mounted.container, '[data-action="create-session-browse"]'), "顶部新建入口");
         await waitFor(() => query(mounted.container, "[data-create-sheet]") !== null, "创建弹层打开");
-        expectEqual(
-          queryAll(mounted.container, "[data-create-sheet]").length,
-          1,
-          "同一时刻只有一个创建弹层",
-        );
-        expectEqual(
-          query(mounted.container, "[data-create-sheet]")?.getAttribute("data-create-sheet") ?? null,
-          "alpha",
-          "弹层绑定的是被点的那一项",
-        );
-        expectThat(
-          textOf(query(mounted.container, "[data-create-sheet-title]")).includes("alpha"),
-          "弹层标题必须给出被点目录的别名",
-        );
 
-        // 弹层开着时点**另一个**目录项的入口：换的是同一个弹层，不是再叠一个。
-        click(
-          query(mounted.container, '[data-directory-alias="beta"] [data-action="create-session"]'),
-          "beta 的卡片创建入口",
-        );
-        await waitFor(
-          () => query(mounted.container, "[data-create-sheet]")?.getAttribute("data-create-sheet") === "beta",
-          "弹层切换到 beta",
-        );
+        const sheet = query(mounted.container, "[data-create-sheet]");
+        expectThat(sheet !== null, "创建弹层必须渲染出来");
         expectEqual(
-          queryAll(mounted.container, "[data-create-sheet]").length,
-          1,
-          "切换后仍然只有一个创建弹层",
-        );
-
-        // 提交：断言的是实际发出的那一帧字节（与 R16-1 同一手法）。
-        expectEqual(
-          query(mounted.container, '[data-action="submit-create"]')?.hasAttribute("disabled") ?? false,
+          query(mounted.container, '[data-create-directory-block="browse"]') !== null,
           true,
-          "未选 Agent 时提交按钮应禁用",
+          "顶部入口呈现「选择文件夹 + 已选路径 + 说明」那一形态",
         );
+        // 假主机没协商 `core.workspace-browse.v1`：入口必须**明确说明**该能力不可用。
+        // 锚点带**原因**：这个场景是「已连上（在线）却没协商到该能力」——正是「服务端没有提供」那一支。
+        expectThat(
+          query(mounted.container, '[data-create-browse-unavailable="unsupported"]') !== null,
+          "不支持浏览时入口必须说明该能力不可用",
+        );
+        expectEqual(
+          query(mounted.container, '[data-action="open-directory-picker"]')?.getAttribute("data-picker-supported") ?? null,
+          "false",
+          "控件应标出浏览能力不可用",
+        );
+        expectEqual(queryAll(sheet, "input").length, 0, "不得退化成手工输入目录路径");
+
+        // 保留下来的那条路：从已登记目录里选一个。
+        click(query(mounted.container, '[data-action="open-directory-picker"]'), "选择已登记的目录");
+        await waitFor(() => query(mounted.container, '[data-directory-picker="open"]') !== null, "选择器打开");
+        expectThat(
+          query(mounted.container, '[data-browse-unsupported="unsupported"]') !== null,
+          "选择器里同样要说明浏览能力不可用",
+        );
+        // 反例：静默失败时这里既没有说明、也没有可选项（列表为空）。
+        expectEqual(
+          queryAll(mounted.container, '[data-action="choose-registered-directory"]').length,
+          2,
+          "已登记目录集合必须作为回退选项摆出来",
+        );
+        // 一条浏览命令都不许发：发了必然被 feature 门控拒（服务端在触碰文件系统之前就回错误）。
+        expectEqual(browsePaths(mounted.host?.sent ?? []).length, 0, "不支持浏览时不得派发 workspace.browse");
+
+        click(
+          query(mounted.container, '[data-action="choose-registered-directory"][data-registered-alias="beta"]'),
+          "回退列表里的 beta",
+        );
+        await waitFor(() => query(mounted.container, "[data-directory-picker]") === null, "选择器关闭");
+        await waitFor(
+          () =>
+            query(mounted.container, '[data-create-directory-notice="registered"]') !== null,
+          "分支提示说明该目录已登记",
+        );
+        expectEqual(
+          textOf(query(mounted.container, "[data-create-selected-name]")),
+          "api",
+          "已选目录呈现展示名",
+        );
+
         click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "Agent codex-a");
         await waitFor(
           () => query(mounted.container, 'button[data-agent-id="codex-a"]')?.getAttribute("data-selected") === "true",
@@ -472,34 +522,147 @@ const checks: readonly Check[] = [
         );
         click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
         await waitFor(() => createFrame(mounted.host?.sent ?? []) !== null, "发出 session.create 帧");
-        const frame = createFrame(mounted.host?.sent ?? []);
-        expectThat(frame !== null, "点击提交后必须真的发出一帧 session.create");
         const payload = createPayloadOf(mounted.host?.sent ?? []);
         expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
         expectEqual(
           Object.keys(payload).sort(),
           ["agentId", "workspaceAlias"],
-          "目录卡片发起的创建，载荷仍恰好是两个引用",
+          "从已登记目录选出来的目录引用走别名，键集恰好两个",
         );
-        // 目录引用是**被点的那一项**，不是页面第一次渲染时的那一个。
-        expectEqual(payload["workspaceAlias"], "beta", "载荷里的目录引用");
-        expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
-        expectNone(frame ?? "", FORBIDDEN_IN_PAYLOAD, "session.create 帧里出现了越界字段名");
-        expectAbsent(frame ?? "", "D:", "session.create 帧里出现了本机盘符路径");
+        expectEqual(payload["workspaceAlias"], "beta", "载荷里的目录引用是选中的那一项");
+        expectNone(createFrame(mounted.host?.sent ?? []) ?? "", FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "R16-5 协商到浏览能力：逐层选定、已登记标注、新建一层目录 → 载荷恰好三个键",
+    async run() {
+      const mounted = await mountScenario(
+        baseScenario({ route: DIRS_ROUTE, holdCommands: ["workspace.browse"] }),
+      );
+      const sent = (): readonly string[] => mounted.host?.sent ?? [];
+      try {
+        await waitFor(() => query(mounted.container, '[data-action="create-session-browse"]') !== null, "目录页渲染");
+        // 目录浏览要在浏览器里被验，就得先把它协商出来（假主机只协商两条必需 feature）。
+        negotiateBrowse(mounted);
 
-        // 进入详情页时弹层复位：上一条弹层不会被带到下一屏（同一时刻因此永远只有一个）。
-        click(
-          query(mounted.container, '[data-directory-alias="beta"] [data-action="open-directory"]'),
-          "beta 的卡片标题入口",
-        );
+        click(query(mounted.container, '[data-action="create-session-browse"]'), "顶部新建入口");
+        await waitFor(() => query(mounted.container, '[data-action="open-directory-picker"]') !== null, "弹层打开");
+        click(query(mounted.container, '[data-action="open-directory-picker"]'), "选择文件夹");
+        await waitFor(() => query(mounted.container, '[data-directory-picker="open"]') !== null, "选择器打开");
+
+        // 打开即请求**根列表**（`path: null`）。
+        await waitForBrowseRequest(sent, 1);
+        expectEqual(browsePaths(sent()), [null], "第一层请求是根列表");
+        // 根列表来自服务端：这一层由假主机经真实 socket 投递。
+        mounted.host?.completeHeldCommand("workspace.browse", {
+          result: {
+            path: null,
+            entries: [{ name: "D:", path: "D:\\", registered: false }],
+            truncated: false,
+          },
+        });
         await waitFor(
-          () => query(mounted.container, '[data-route="dir-detail"][data-directory-alias="beta"]') !== null,
-          "进入 beta 的详情页",
+          () => queryAll(mounted.container, '[data-action="enter-directory"]').length === 1,
+          "根列表渲染出盘符条目",
         );
+        expectEqual(
+          textOf(query(mounted.container, '[data-action="confirm-directory"]')),
+          "选择此文件夹",
+          "根层不可选，但仍呈现该控件",
+        );
+        expectEqual(
+          query(mounted.container, '[data-action="confirm-directory"]')?.hasAttribute("disabled") ?? false,
+          true,
+          "根列表本身不是目录，「选择此文件夹」应禁用",
+        );
+
+        // 逐层进入：第二层的请求路径就是条目的服务端路径（客户端不拼路径）。
+        click(query(mounted.container, '[data-action="enter-directory"]'), "进入 D:");
+        await waitForBrowseRequest(sent, 2);
+        expectEqual(browsePaths(sent()), [null, "D:\\"], "第二层请求的父路径逐字来自服务端条目");
+        mounted.host?.completeHeldCommand("workspace.browse", {
+          result: {
+            path: "D:\\",
+            entries: [
+              { name: "work", path: "D:\\work", registered: false },
+              { name: "kept", path: "D:\\kept", registered: true },
+            ],
+            truncated: false,
+          },
+        });
         await waitFor(
-          () => query(mounted.container, "[data-create-sheet]") === null,
-          "进入详情页后弹层已复位",
+          () => queryAll(mounted.container, '[data-action="enter-directory"]').length === 2,
+          "这一层渲染出两个子目录",
         );
+        // 已登记的目录被就地标注（spec 场景「已登记目录被标注」）。
+        const entries = queryAll(mounted.container, '[data-action="enter-directory"]');
+        const kept = entries.find((node) => node.getAttribute("data-entry-path") === "D:\\kept");
+        expectThat(kept !== undefined, "这一层必须包含 kept 条目");
+        expectEqual(kept.getAttribute("data-entry-registered"), "true", "已登记目录必须被标注");
+        expectThat(domText(kept).includes("已登记"), "已登记目录的标注必须是可见文本");
+        expectEqual(
+          entries.find((node) => node.getAttribute("data-entry-path") === "D:\\work")?.getAttribute("data-entry-registered"),
+          "false",
+          "未登记的目录不得被标成已登记",
+        );
+
+        // 在当前层新建一层目录：候选路径 = 服务端回显的当前层 + 用户输入的名字。
+        const work = queryAll(mounted.container, '[data-action="enter-directory"]').find(
+          (node) => node.getAttribute("data-entry-path") === "D:\\work",
+        );
+        click(work ?? null, "进入 work");
+        await waitForBrowseRequest(sent, 3);
+        mounted.host?.completeHeldCommand("workspace.browse", {
+          result: { path: "D:\\work", entries: [], truncated: false },
+        });
+        await waitFor(() => query(mounted.container, '[data-action="open-new-folder"]') !== null, "这一层可新建文件夹");
+        click(query(mounted.container, '[data-action="open-new-folder"]'), "新建文件夹");
+        // RNW 的 `onPress` 到 DOM 更新要一个 tick：点完必须等下一条锚点真的出现，再往里输入
+        // （全仓 e2e 的既有写法，`typeIntoInput` 找不到节点时只会抛一句读不出原因的错）。
+        await waitFor(
+          () => query(mounted.container, "[data-browse-folder-name]") !== null,
+          "新建文件夹输入框",
+        );
+        typeIntoInput(mounted.container, "[data-browse-folder-name]", "api", "新文件夹名字");
+        await waitFor(
+          () => query(mounted.container, "[data-browse-folder-name]")?.getAttribute("data-browse-folder-name-value") === "api",
+          "输入框吃下了这份名字",
+        );
+        click(query(mounted.container, '[data-action="create-folder"]'), "新建并选择");
+        await waitFor(() => query(mounted.container, '[data-directory-picker]') === null, "选择器关闭");
+        await waitFor(
+          () => query(mounted.container, '[data-create-directory-notice="will_create"]') !== null,
+          "弹层说明会先在主机上新建这个目录",
+        );
+        expectEqual(
+          textOf(query(mounted.container, "[data-create-directory-path]")),
+          "D:\\work\\api",
+          "已选路径是父层回显与名字拼出的候选路径",
+        );
+        expectEqual(textOf(query(mounted.container, "[data-create-selected-name]")), "api", "已选目录的名字");
+
+        click(query(mounted.container, 'button[data-agent-id="codex-a"]'), "Agent codex-a");
+        await waitFor(
+          () => query(mounted.container, 'button[data-agent-id="codex-a"]')?.getAttribute("data-selected") === "true",
+          "Agent 被选中",
+        );
+        click(query(mounted.container, '[data-action="submit-create"]'), "提交创建");
+        await waitFor(() => createFrame(sent()) !== null, "发出 session.create 帧");
+        const payload = createPayloadOf(sent());
+        expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
+        // 三键：目录引用走路径那一支，并显式带上「不存在则先创建」。
+        expectEqual(
+          Object.keys(payload).sort(),
+          ["agentId", "createIfMissing", "workspacePath"],
+          "新建目录的载荷恰好是 agentId + workspacePath + createIfMissing",
+        );
+        expectEqual(payload["workspacePath"], "D:\\work\\api", "载荷里的路径是选定的那一层");
+        expectEqual(payload["createIfMissing"], true, "新建的目录必须带上建目录开关");
+        expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
+        expectNone(createFrame(sent()) ?? "", FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
       } finally {
         await mounted.unmount();
       }

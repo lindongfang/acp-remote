@@ -27,6 +27,7 @@ import { Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
 
+import { Shell } from "../src/components/shell/Shell";
 import { createComposition } from "../src/composition";
 import type { Composition } from "../src/composition";
 import { ClientStoreProvider } from "../src/features/runtime";
@@ -52,7 +53,11 @@ export default function RootLayout(): ReactElement {
 
   return (
     <ClientStoreProvider store={runtime?.store ?? null}>
-      <Stack screenOptions={{ headerShown: false }} />
+      {/* 共享外壳（design D1）：一份外壳装在这里，「开发模式横幅 → 顶栏 → 路由内容 →
+          抽屉/遮罩/提示」的装配顺序只有这一处；路由不各自拼导航。 */}
+      <Shell>
+        <Stack screenOptions={{ headerShown: false }} />
+      </Shell>
     </ClientStoreProvider>
   );
 }

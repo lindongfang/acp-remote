@@ -14,6 +14,7 @@ import { CONVERSATION_INTERACTION_CHECKS } from "./checks/conversation-interacti
 import { CONVERSATION_CONTENT_CHECKS } from "./checks/conversation-content";
 import { PAIRING_FIRST_RUN_CHECKS } from "./checks/pairing-first-run";
 import { PAIRING_KIND_CHECKS } from "./checks/pairing-kinds";
+import { UI_SHELL_CHECKS } from "./checks/ui-shell";
 import { UI_STYLESHEET_CHECKS } from "./checks/ui-stylesheet";
 import { runChecks } from "./support";
 import type { CheckResult } from "./support";
@@ -34,6 +35,11 @@ import type { CheckResult } from "./support";
  *
  * 组合根在其次还有一个实际好处：它失败时后面每一条都会失败，输出里一眼看得出
  * 「不是需求没实现，是运行时没起来」。
+ *
+ * 共享外壳（`checks/ui-shell.ts`）夹在这两者之间：外壳是**全部路由的共同外层**，它渲染不出来时
+ * 后面的路由用例会连带失败，因此与样式检查同属「页面骨架」这一层、排在需求用例之前；它自带场景
+ * （真实握手 + 已认证连接），不依赖别的检查集铺垫，也不占用 `mountRootLayout` 的唯一一次挂载
+ * （那是 CR-1 的）。
  *
  * R15 的目录页与目录详情页分成两个文件（各自一个检查集），共用同一套 `data-*` 口径与
  * 夹具来源；两者之间没有顺序依赖，放在一起只是让同一需求的用例连成一段输出。
@@ -56,6 +62,7 @@ import type { CheckResult } from "./support";
  */
 const ALL_CHECKS = [
   ...UI_STYLESHEET_CHECKS,
+  ...UI_SHELL_CHECKS,
   ...COMPOSITION_CHECKS,
   ...R15_CHECKS,
   ...R15_DETAIL_CHECKS,

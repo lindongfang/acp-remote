@@ -18,6 +18,7 @@
  */
 
 import { createElement } from "react";
+import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,8 +28,9 @@ import { CodeBlock } from "./CodeBlock";
  * 深浅色：`useTheme()` 读 `react-native-web` 的 `useColorScheme()`，这里把它换成受测试控制的
  * 取值。被替换的**只有**这一个函数——`theme.ts` 的 token 与真实 `StyleSheet` 都照旧走。
  *
- * 顺带一提：正因为这个替换，`useTheme()` 不再触发 React 的 hook 调度，本文件才可以直接调用
- * `CodeBlock({...})` 拿到元素树、进而核对复制入口上抛的载荷。
+ * 注意：`useTheme()` 现在还会**订阅主题偏好**（`useThemePreference()`，一个 React hook），因此
+ * 不能在渲染之外直接调用组件函数；要核对复制入口上抛的载荷时，用下面的 `captureCodeBlock`
+ * 在一次真实渲染里把元素树截下来。
  */
 const scheme = vi.hoisted(() => ({ current: "light" as "light" | "dark" }));
 
@@ -79,6 +81,24 @@ function renderCodeBlock(props: {
   readonly index?: number;
 }): string {
   return renderToStaticMarkup(createElement(CodeBlock, props));
+}
+
+/**
+ * 取 `CodeBlock` 的**元素树**：静态 HTML 里看不到 `onPress`，因此「复制入口上抛了什么载荷」这类
+ * 断言必须拿到元素而不是字符串。
+ *
+ * 为什么不能直接写 `CodeBlock({...})`：`useTheme()` 会订阅主题偏好，那是一个 React hook，
+ * 在渲染之外调用会抛 `Invalid hook call`。这里借一次真实渲染把元素截下来——`CodeBlock` 的 hook
+ * 落到 `Capture` 的 fiber 上，顺序与它在渲染里被调用时一致（每次渲染恰好一次）。
+ */
+function captureCodeBlock(props: Parameters<typeof CodeBlock>[0]): unknown {
+  let captured: unknown = null;
+  function Capture(): ReactElement {
+    captured = CodeBlock(props);
+    return createElement("div");
+  }
+  renderToStaticMarkup(createElement(Capture));
+  return captured;
 }
 
 interface ElementLike {
@@ -184,7 +204,7 @@ describe("代码块：复制入口与序号锚点", () => {
   it("复制入口上抛正文与语言标记（回调缺省时按钮仍在）", () => {
     const payloads: (readonly [string, string])[] = [];
     const withCallback = findCopyButtonProps(
-      CodeBlock({
+      captureCodeBlock({
         code: "const a = 1;",
         language: "typescript",
         onCopy: (code, language) => {
@@ -197,10 +217,10 @@ describe("代码块：复制入口与序号锚点", () => {
     expect(payloads).toEqual([["const a = 1;", "typescript"]]);
 
     // 缺省（页面还没接平台能力）时按钮仍然渲染，只是没有落点。
-    const withoutCallback = findCopyButtonProps(CodeBlock({ code: "const a = 1;" }));
+    const withoutCallback = findCopyButtonProps(captureCodeBlock({ code: "const a = 1;" }));
     expect(withoutCallback).not.toBeUndefined();
     expect(withoutCallback?.onPress).not.toBeUndefined();
-    expect(findCopyButtonProps(CodeBlock({}))).not.toBeUndefined();
+    expect(findCopyButtonProps(captureCodeBlock({}))).not.toBeUndefined();
   });
 });
 

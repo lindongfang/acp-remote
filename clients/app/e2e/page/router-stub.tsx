@@ -10,7 +10,8 @@
  *
  * ## 它替掉了什么、没替掉什么
  *
- * 替掉：路由表查找、`push` / `back`、`useLocalSearchParams` 的参数来源。
+ * 替掉：路由表查找、`push` / `back`、`useLocalSearchParams` 的参数来源、`usePathname` 的当前路径
+ * （共享外壳据此判定是否呈现全局顶栏，见 `src/components/shell/Shell.tsx`）。
  * **没替掉**：组合根、连接状态机、`ClientStore`、全部 feature 判定与展示组件——
  * 它们一行都没有被替身碰到，仍然是 `app/` 与 `src/` 里的真实代码。
  *
@@ -133,4 +134,16 @@ export function useRouter(): {
 export function useLocalSearchParams<T extends Record<string, string>>(): T {
   useSyncExternalStore(subscribe, getVersion, getVersion);
   return (current?.params ?? {}) as T;
+}
+
+/**
+ * `usePathname()`：当前路由的路径。
+ *
+ * 真实实现从链接状态里取地址栏的 pathname（查询串与片段都不进路径），这里取替身自己的当前条目
+ * ——两者在「同一个 URL 路径对应同一个取值」上一致；尚未挂任何路由时按根路径 `"/"` 处理。
+ * 订阅方式与 `useLocalSearchParams` 相同：`navigate`/`goBack` 会让用它判定的组件重新渲染。
+ */
+export function usePathname(): string {
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  return current?.path ?? "/";
 }

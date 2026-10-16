@@ -13,7 +13,7 @@ export type {
   DirectorySessionCounts,
   DirectoryEmptyState,
 } from "./directory";
-export { buildDirectoryViews, DIRECTION_EMPTY_STATES } from "./directory";
+export { buildDirectoryViews, DIRECTION_EMPTY_STATES, workspacePathOf } from "./directory";
 
 export type {
   SessionSummaryView,
@@ -40,6 +40,13 @@ export type {
 } from "./conversation";
 export { buildSessionReadPageView, buildContextUsageView, contextUsageLabel } from "./conversation";
 
+export type { ContextUsageLevel } from "./context-usage";
+export {
+  CONTEXT_CRIT_THRESHOLD_PERCENT,
+  CONTEXT_WARN_THRESHOLD_PERCENT,
+  contextUsageLevel,
+} from "./context-usage";
+
 export type {
   InteractionAnswer,
   InteractionAvailability,
@@ -52,9 +59,13 @@ export { ELICITATION_ANSWERS, INTERACTION_UNAVAILABLE_LABELS, buildInteractionAv
 
 export type {
   ConfigChangedTimelineCard,
+  DiffLineKind,
+  DiffLineView,
+  DiffUnavailableReason,
   ElicitationRequestedTimelineCard,
   ElicitationResolvedTimelineCard,
   FileChangedTimelineCard,
+  FileDiffView,
   ModeChangedTimelineCard,
   PermissionRequestedTimelineCard,
   PermissionResolvedTimelineCard,
@@ -70,6 +81,7 @@ export type {
   TurnTimelineCard,
 } from "./timeline";
 export {
+  FILE_DIFF_UNAVAILABLE_LABELS,
   buildTimelineCard,
   compareTimelinePosition,
   groupStructuredRecords,

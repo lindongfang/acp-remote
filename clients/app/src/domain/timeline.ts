@@ -304,10 +304,11 @@ export interface PlanTimelineCard {
 }
 
 /**
- * 文件改动卡片：**只有**结构化统计与相对化路径（D8）。
+ * 文件改动卡片：结构化统计、相对化路径（D8）与**结构化差异区**（本变更新增）。
  *
  * `addedLines`/`deletedLines`/`outsideWorkspace` 在视图里是可选的——「判定不出时省略而不是
- * 填零」，因此这里是 `string | null` 而不是 `0`。客户端 MUST NOT 为了填满这里去解析 ACP 原文。
+ * 填零」，因此这里是 `string | null` 而不是 `0`。`diff` 的三种形态同样互斥且都可缺席
+ * （见 {@link FileDiffView}）。客户端 MUST NOT 为了填满这里去解析 ACP 原文。
  */
 export interface FileChangedTimelineCard {
   readonly kind: "file_changed";
@@ -319,6 +320,84 @@ export interface FileChangedTimelineCard {
   readonly addedLines: string | null;
   readonly deletedLines: string | null;
   readonly outsideWorkspace: boolean;
+  /** 差异区：有差异行 / 有不可用标记 / 两者都没有（`null`，即「只有统计」）。 */
+  readonly diff: FileDiffView | null;
+}
+
+/** 差异行的一档（`$defs.file.changed.diffLines[].kind`，闭集）。 */
+export type DiffLineKind = "added" | "deleted" | "context";
+
+/** 一行结构化差异；`text` 是行内容，按**不可信文本**呈现（不解析、不拼成 HTML）。 */
+export interface DiffLineView {
+  readonly kind: DiffLineKind;
+  readonly text: string;
+}
+
+/** 差异行未随事件下发时的原因（`$defs.file.changed.diffUnavailable.reason`，闭集）。 */
+export type DiffUnavailableReason = "size_limit";
+
+/**
+ * 右栏差异区的三种形态，**结构性互斥**：
+ *
+ * - `lines`：服务端随事件下发了结构化差异行，客户端逐行呈现并区分档位；
+ * - `unavailable`：服务端明确说明为什么没有差异行（例如超出单条上限）；
+ * - `null`（整个字段缺席）：两者都没有，保持「只有统计」的形态。
+ *
+ * 三态之间没有第三种可能：判别键 `kind` 只有一个，而「都没有」由字段本身缺席表达——
+ * 因此「有统计却渲染出一片空白的差异区」在类型上就写不出来。
+ */
+export type FileDiffView =
+  | { readonly kind: "lines"; readonly lines: readonly DiffLineView[] }
+  | { readonly kind: "unavailable"; readonly reason: DiffUnavailableReason };
+
+/**
+ * `diffUnavailable.reason` → 呈现文案（与 `INTERACTION_UNAVAILABLE_LABELS` 同一做法：
+ * 词表取值封闭，文案与取值一一对应地放在一处）。
+ */
+export const FILE_DIFF_UNAVAILABLE_LABELS: Readonly<Record<DiffUnavailableReason, string>> = {
+  size_limit: "这一处的差异行超过单条上限，未随事件下发；完整原文可在诊断里查看。",
+};
+
+/** `diffLines[].kind` 的闭集词表：未知取值即形状违规，不当作上下文行吞下。 */
+const DIFF_LINE_KINDS: Readonly<Record<string, DiffLineKind>> = {
+  added: "added",
+  deleted: "deleted",
+  context: "context",
+};
+
+/** `diffUnavailable.reason` 的闭集词表：未知取值同上。 */
+const DIFF_UNAVAILABLE_REASONS: Readonly<Record<string, DiffUnavailableReason>> = { size_limit: "size_limit" };
+
+/**
+ * 读结构化差异区（`$defs.file.changed` 的 `diffLines` / `diffUnavailable`）。
+ *
+ * 两个键在 schema 里互斥且都可缺席（未协商 `core.file-diff.v1`、或差异行超限时都不下发）。
+ * 形状不合规**不**伪造成另一种形态：返回 `null`（「两者都没有」），因为客户端 MUST NOT
+ * 解析 `acp.rawJson` 补齐差异、也 MUST NOT 用占位行假装完整——这正是本函数不碰 `acp` 的原因。
+ * `diffLines` 在场但形状不合规时同样得到 `null`，而不是回落去读互斥的那个标记。
+ */
+function fileDiffField(view: Readonly<Record<string, unknown>>): FileDiffView | null {
+  const value = view["diffLines"];
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null;
+    const lines: DiffLineView[] = [];
+    for (const item of value) {
+      if (typeof item !== "object" || item === null) return null;
+      const record = item as Readonly<Record<string, unknown>>;
+      const kind = typeof record["kind"] === "string" ? DIFF_LINE_KINDS[record["kind"]] : undefined;
+      const text = record["text"];
+      if (kind === undefined || typeof text !== "string") return null;
+      lines.push({ kind, text });
+    }
+    return { kind: "lines", lines };
+  }
+
+  const marker = view["diffUnavailable"];
+  if (typeof marker !== "object" || marker === null) return null;
+  const reason = (marker as Readonly<Record<string, unknown>>)["reason"];
+  if (typeof reason !== "string") return null;
+  const known = DIFF_UNAVAILABLE_REASONS[reason];
+  return known === undefined ? null : { kind: "unavailable", reason: known };
 }
 
 /** 模式变更卡片。 */
@@ -436,6 +515,7 @@ export function buildTimelineCard(
         addedLines: viewText(view, "addedLines"),
         deletedLines: viewText(view, "deletedLines"),
         outsideWorkspace: view["outsideWorkspace"] === true,
+        diff: fileDiffField(view),
       };
     }
     case "session.mode.changed": {

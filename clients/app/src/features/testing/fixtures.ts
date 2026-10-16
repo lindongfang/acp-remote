@@ -26,7 +26,15 @@ import type { InteractionView } from "../../domain/interaction";
 import { ClientStore } from "../client-store";
 import type { SyncGateway } from "../ports";
 
-/** 目录项带路径字段：违规输入的样子。 */
+/**
+ * 目录项带路径字段：`core.workspace-path.v1` 协商后快照条目的样子。
+ *
+ * 镜像里这个可选键**已经在了**（`protocol/common.ts` 的 `WorkspaceCatalogEntry.path?: string`，
+ * 快照 `workspaces` 的元素类型就是它）；这里仍按 open object（双断言）声明，是因为条目还刻意带了
+ * 一个协议之外的 `root` 键（多带的键是文件头说的那类负向断言的原料）：
+ * `as const satisfies readonly WorkspaceCatalogEntry[]` 会把这个多余属性判成错（TS2353），
+ * 装不下这一形状。消费方一律经 `workspacePathOf` 逐字读取。
+ */
 export const WORKSPACES_WITH_PATHS = [
   { alias: "work-api", displayName: "api", path: "D:\\work\\api", root: "D:\\work" },
   { alias: "personal-api", displayName: "api", path: "D:\\personal\\api", root: "D:\\personal" },
@@ -68,8 +76,9 @@ export function session(input: {
 /**
  * 跨月夹具：两条 `work-api` 下的会话分属 2026-09 与 2026-10。
  *
- * 月份分档必须取材于**每个会话自身**的 `updatedAt`；若实现误用「当前时间」统一分档，
- * 这两条会落进同一档，`directory-filter.test.ts` 的「两个月份档」断言随之变红。
+ * 详情页是一条**按时间倒序的平铺列表**（规格「目录详情按时间倒序分页」替换了旧的月份分档），
+ * 因此这两个月份的会话必须落在同一条列表里、十月那条排在前面；若实现还按月份分档或按档过滤，
+ * `directory-filter.test.ts` 的「跨月的会话落在同一条列表里」与最近活动时间断言会随之变红。
  */
 export const CROSS_MONTH_SESSIONS: readonly SessionSummary[] = [
   session({
@@ -185,6 +194,13 @@ export interface StoreFixture {
 export function storeWith(input: {
   readonly resources: StagedResources | null;
   readonly connectionId?: string | null;
+  /**
+   * 注入的时钟；缺省是一个固定时刻（`1_700_000_000_000`）。
+   *
+   * 相对时间由视图模型按注入的 `nowMs` 算出（D3），因此要断言「几分钟前 / 年月日」的用例传入
+   * 一份与会话时刻相配的时钟，而不是去打桩全局 `Date`。
+   */
+  readonly now?: () => number;
 }): StoreFixture {
   const gateway = recordingGateway(input);
   let counter = 0;
@@ -196,7 +212,7 @@ export function storeWith(input: {
         return `00000000-0000-4000-8000-${counter.toString().padStart(12, "0")}`;
       },
     },
-    now: () => 1_700_000_000_000,
+    now: input.now ?? (() => 1_700_000_000_000),
     // `??` 会把「显式传 null（未连接）」当成缺省，因此这里区分 undefined 与 null。
     identity: { connectionId: input.connectionId === undefined ? "2de54db7-74ae-4c21-88e3-05df0dc2e637" : input.connectionId },
   });
@@ -281,8 +297,13 @@ export const TEST_SERVER_EPOCH = "00384a03-bc90-4095-b65d-82fb8cc47e13";
 export function onlineStore(input: {
   readonly resources?: StagedResources;
   readonly features?: readonly string[];
+  /** 注入的时钟；见 {@link storeWith}。 */
+  readonly now?: () => number;
 }): StoreFixture {
-  const { store, gateway } = storeWith({ resources: input.resources ?? resources({}) });
+  const { store, gateway } = storeWith({
+    resources: input.resources ?? resources({}),
+    ...(input.now === undefined ? {} : { now: input.now }),
+  });
   // 发一次认证结果，带上服务端在 `auth.server_challenge` 里选中的 feature。
   store.apply({
     kind: "authenticated",

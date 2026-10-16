@@ -256,10 +256,13 @@ export const SUPPORTED_FEATURES = [
   "acp.raw-payload.v1",
   "core.command-status.v1",
   "core.event-ack.v1",
+  "core.file-diff.v1",
   "core.local-catalog.v1",
   "core.session-create.v1",
   "core.session-history.v1",
   "core.snapshot.v1",
+  "core.workspace-browse.v1",
+  "core.workspace-path.v1",
   "resource.remote-origin.v1",
 ] as const;
 

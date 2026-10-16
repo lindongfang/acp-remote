@@ -16,8 +16,6 @@ export { EmptyState } from "./EmptyState";
 export type { DegradedEventCardProps } from "./DegradedEventCard";
 export { DegradedEventCard } from "./DegradedEventCard";
 
-export type { ConnectionBadgeProps } from "./ConnectionBadge";
-export { ConnectionBadge } from "./ConnectionBadge";
 export type { ContextUsageBarProps } from "./ContextUsageBar";
 export { ContextUsageBar } from "./ContextUsageBar";
 export type { ConversationStreamProps, ConversationSecondaryView } from "./ConversationStream";
@@ -40,6 +38,8 @@ export type { InteractionAnswerButtonsProps } from "./InteractionAnswering";
 export { InteractionAnswerButtons, InteractionAvailabilityNote } from "./InteractionAnswering";
 export type { CreateSessionSheetProps } from "./CreateSessionSheet";
 export { CreateSessionSheet } from "./CreateSessionSheet";
+export type { DirectoryPickerProps } from "./DirectoryPicker";
+export { DirectoryPicker } from "./DirectoryPicker";
 export type { DiagnosticsDrawerProps } from "./DiagnosticsDrawer";
 export { DiagnosticsDrawer } from "./DiagnosticsDrawer";
 export type { DirectoryDetailProps } from "./DirectoryDetail";
