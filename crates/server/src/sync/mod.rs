@@ -6,6 +6,13 @@
 //!   传播、心跳与静默超时、close code 映射、连接注册表与有界出站队列）；
 //! - [`subscribe`]：订阅面——`sync.subscribe` 的 cursor 判定与 `sync.reset_required`、
 //!   `sync.snapshot_request`、`sync.ack`（累积、单调不减、不得越过已发送游标）；
+//! - [`event`]：事件腿——把持久化 `payload.view` 交给一次形状判定并折成显式枚举（[`event::project`]；
+//!   判定只影响诊断、绝不影响「这一条是否下发」），按协商结果做 `acp.raw-payload.v1`（原文容器）与
+//!   `core.file-diff.v1`（`file.changed` 视图的 `diffLines`/`diffUnavailable` 两个键）两道门控
+//!   （[`event::frame`]）。真实投递腿是实时扇出与增量重放：两条腿各自调 `event::frame`
+//!   （[`subscribe::fanout`] / [`subscribe::SubscribeRoute::advance`]），再经**既有**那条有界出站队列
+//!   投递（§10.1/§10.3）；`event` 模块的公开入口 [`event::deliver`]（判定 → 诊断 → 装配 → 入队）
+//!   今天只有用例调用，生产链路不经过它；
 //! - [`command`]：命令面——`command` 帧的构造校验、§14 的按设备限流、授权判定与六条查询命令
 //!   （§11.3；`workspace.browse` 是其中的第六条）的 `command.result` 投影；
 //! - [`router`]：[`router::SyncRoutes`]——连接只有一个路由槽，本组合件把订阅面与命令面按序链起来，并把
@@ -15,15 +22,14 @@
 //! - [`pairing`]：两条配对 HTTP 端点（`POST /sync/v1/pairing/claim`、`POST /sync/v1/pairing/status`）的
 //!   判定、四个安全响应头与按来源/`pairingId` 的固定限流（§7.1–§7.4、§14）。
 //!
-//! 尚未落地（与本变更的其他工作包对应）：事件投递腿（`event` 帧的装配与实时扇出）——它需要一个能给出
-//! `origin`/`causationRequestId` 的 core 事件读面（见 [`subscribe`] 的模块文档）。本模块**只**声明已经
-//! 存在的子模块，不由占位符预支。
+//! 本模块**只**声明已经存在的子模块，不由占位符预支。
 //!
 //! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §5）：本模块是入站适配器，调用面是
 //! `core` 的公开面 + `sync-protocol`/`identity-auth` 的公开面。**当前的过渡形态**：[`subscribe`]
-//! 今天还**直连** `core::broker`——`Broker::authorize` 是观察授权的唯一判定点，`Broker::replay` 读事件
-//! 重放的一致性视图。按 §4.9，adapter 只应调用 `core::use_cases`；其中**事件重放读面**待 core 提供
-//! `UseCases::sync_replay`（任务 1.6，在途）后即收拢到用例面，`Broker::replay` 的直连届时移除。
+//! 今天还**直连** `core::broker` 的公开面——`Broker::authorize` 的授权判定与 `Broker::replay` 的保留
+//! 窗口探测。按 §4.9，adapter 只应调用 `core::use_cases`；**事件投递已收拢到用例面**
+//! （`UseCases::sync_replay`，任务 1.6 已落地）：`Broker::replay` 的直连只剩保留窗口探测一处
+//! （`reset_required` 的唯一来源，该结论不在 `sync_replay` 的判定范围内，见 [`subscribe`] 的模块文档）。
 //! 其余的 core 调用面都走用例（`sync_device_handshake_view`、`sync_visible_sessions`、
 //! `workspaces`/`profiles`、`ids`）。
 //!
