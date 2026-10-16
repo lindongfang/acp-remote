@@ -154,11 +154,20 @@ export type { AgentRowModel, HostIdentityModel, HostPanelModel } from "./host-pa
 export { CONNECTION_STATE_LABELS, UNKNOWN_STATE_NOTE, buildHostPanelModel } from "./host-panel-model";
 
 // ── 配对 ────────────────────────────────────────────────────────────────────
-export type { PairingPageModel, PairingPhase, PairingPollResult, PairingTransport } from "./pairing-model";
+export type {
+  PairingKind,
+  PairingPageModel,
+  PairingPhase,
+  PairingPollResult,
+  PairingQrRead,
+  PairingTransport,
+} from "./pairing-model";
 export {
   PAIRING_ERROR_HINTS,
   applyClaiming,
   applyPollResult,
+  applyScannedNodeLink,
   applyScannedQr,
   initialPairingPageModel,
+  kindMismatchFailure,
 } from "./pairing-model";

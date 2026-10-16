@@ -16,19 +16,31 @@
  * - 主机公钥取自**已批准响应**：二维码里的那份与响应里的那份刻意不同，抄错来源（或只取
  *   `deviceId` 的旧口径）会让「记录三字段」这条断言变红。
  * - 「不尽力解析」：`readQrPayload` 抛错时断言 claim / poll / 定时器三处计数都还是 0。
+ * - 「两类入口互不混淆」：载荷类型与入口声明的类型不一致时，同样断言 claim / poll / 定时器
+ *   三处计数为 0，且失败文案说清是哪一类喂给了哪一类（去掉类型校验 → 另一类流程接手 → 变红）。
+ * - 「端点过形状正则但解析不了」：`wss://h:999999/…`、`wss://%zz/…` 这类端点会被校验层照收，
+ *   因此断言入口呈现落到 `failed`（码 `protocol.schema_invalid`，有可执行的下一步）而不是抛异常
+ *   或停在 `idle`（把 `new URL` 的解析放回求值中途 → 用例红）。
  * - 「不停在等待扫码」：断言状态机落到 `disconnected`（已配对），而不是 `unpaired`。
  */
 
 import { describe, expect, it } from "vitest";
 
 import { ClientStore } from "./client-store";
-import type { PairingPollResult, PairingTransport, PairingWiring } from "./pairing-model";
+import type {
+  PairingKind,
+  PairingPollResult,
+  PairingQrRead,
+  PairingTransport,
+  PairingWiring,
+} from "./pairing-model";
 import {
   PAIRING_POLL_INTERVAL_MS,
   PairingQrInvalidError,
   applyPairingCloseoutFailure,
   applyPairingFailure,
   applyPollResult,
+  applyScannedNodeLink,
   initialPairingPageModel,
   isPairingInFlight,
   pairedHostRecordFor,
@@ -37,7 +49,7 @@ import {
   publicErrorForTransportFailure,
 } from "./pairing-model";
 import type { PairedHostRecord } from "../sync-client";
-import type { PairingQrPayload, PublicError } from "../protocol";
+import type { NodeLinkQrPayload, PairingQrPayload, PublicError } from "../protocol";
 
 const ORIGIN = "https://work-pc.example.ts.net";
 const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
@@ -62,12 +74,36 @@ const QR: PairingQrPayload = {
   expiresAt: "2026-10-18T00:10:00.000Z",
 };
 
+/**
+ * 一份 node-link 配对载荷（`NODE_LINK_PROTOCOL.md` §13.1）：字段齐全、端点形状与字段长度合规。
+ *
+ * 与 {@link QR} 用同一份 `pairingSecret`：两条「互不混淆」用例都断言它不出现在公开状态里。
+ */
+const NODE_LINK_QR: NodeLinkQrPayload = {
+  pairingProtocol: "acp-remote-nodelink-v1",
+  ownerNodeId: HOST_ID,
+  ownerPublicKey: QR_HOST_PUBLIC_KEY,
+  endpoint: "wss://work-pc.example.ts.net/node-link/v1",
+  pairingId: "2bc8b944-2a4f-46a7-8c31-b2c40923f60a",
+  pairingSecret: QR_SECRET,
+  expiresAt: "2026-10-18T00:10:00.000Z",
+};
+
 const APPROVED: PairingPollResult = {
   kind: "approved",
   deviceId: DEVICE_ID,
   hostId: HOST_ID,
   hostPublicKey: APPROVED_HOST_PUBLIC_KEY,
 };
+
+/**
+ * 端点的形状正则（`src/composition.ts` 的 `NODE_LINK_ENDPOINT_PATTERN`，与
+ * `schemas/node-link/v1/pairing.schema.json` 的 `$defs.endpoint` 逐字相同）：组合根据此判端点是否合法。
+ *
+ * 本文件里只用来**证明**下面那组端点确实「过得了校验层」，否则用例会退化成「随便一个非法端点」——
+ * 换成正则也拦得住的形状就失去判别力。
+ */
+const NODE_LINK_ENDPOINT_PATTERN = /^wss:\/\/[^/?#]+\/node-link\/v1$/;
 
 /**
  * 平台层的「来源不符」错误（`SecureStorageError` 的结构化形状，`kind: "origin_mismatch"`）。
@@ -99,6 +135,8 @@ class RecordingPairingWiring implements PairingWiring {
   fragment: string | null = null;
   /** 交给 `readQrPayload` 的原文：证明片段内容真的被读到了。 */
   readText: string | null = null;
+  /** `readQrPayload` 的返回值（缺省是 sync 的 `QR`）：用来验「载荷类型与入口声明的类型不一致」。 */
+  readResult: PairingQrRead | null = null;
   readError: unknown = null;
   claimError: PublicError | null = null;
   /** `claim` **抛出**（而不是返回 `PublicError`）：网络不可达、来源不符等都走这一支。 */
@@ -112,10 +150,10 @@ class RecordingPairingWiring implements PairingWiring {
   #nonceCounter = 0;
 
   readonly transport: PairingTransport = {
-    readQrPayload: (text: string): PairingQrPayload => {
+    readQrPayload: (text: string): PairingQrRead => {
       this.readText = text;
       if (this.readError !== null) throw this.readError;
-      return QR;
+      return this.readResult ?? { kind: "sync", qr: QR };
     },
     claim: async (input: { readonly qr: PairingQrPayload; readonly canonicalOrigin: string }) => {
       this.order.push("claim");
@@ -204,7 +242,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     wiring.results = [{ kind: "pending_confirmation" }, APPROVED];
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     expect(store.pairingPage().phase).toBe("claiming");
     // 还没批准：状态机不动（仍是未配对），也就不该拿去连接。
     expect(store.state.connection.state).toBe("unpaired");
@@ -259,7 +297,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     ];
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     await wiring.runScheduledPoll();
 
     const page = store.pairingPage();
@@ -279,7 +317,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     wiring.claimError = { code: "pairing.expired", message: "这次配对二维码已过期。", retryable: false, details: {} };
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
 
     expect(store.pairingPage().phase).toBe("failed");
     expect(store.pairingPage().error?.code).toBe("pairing.expired");
@@ -293,7 +331,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     wiring.claimThrows = new OriginMismatchError();
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
 
     const page = store.pairingPage();
     // 反例：若 `claim` 的拒绝直接冒泡（没有收口），阶段会停在 `claiming` → 断言变红。
@@ -312,7 +350,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     expect(store.state.connection.state).toBe("unpaired");
 
     // 会话真的结束了：同一次页面会话里可以立刻重试（否则这次提交会被提前 return）。
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     expect(wiring.claims).toHaveLength(2);
   });
 
@@ -321,7 +359,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     wiring.pollThrows = new Error("Failed to fetch");
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     await wiring.runScheduledPoll();
 
     const page = store.pairingPage();
@@ -337,7 +375,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     expect(wiring.scheduled).toHaveLength(0);
     expect(wiring.written).toHaveLength(0);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     expect(wiring.claims).toHaveLength(2);
   });
 
@@ -347,7 +385,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     wiring.writeError = new Error("QuotaExceededError");
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     await wiring.runScheduledPoll();
 
     expect(store.pairingPage().phase).toBe("failed");
@@ -364,7 +402,7 @@ describe("配对链路：结构校验 → 认领 → 轮询 → 已配对", () =
     const store = storeWithPairing(wiring);
 
     // 反例：若 `onPaired` 的拒绝直接冒泡，这一句 await 会抛出（未处理拒绝）→ 用例变红。
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
     await wiring.runScheduledPoll();
 
     // 已配对记录已经落盘、连接机已经推进——收口失败不回退这些结果。
@@ -416,7 +454,7 @@ describe("配对链路：输入入口（粘贴 / 地址片段）", () => {
       wiring.readError = scenario.error;
       const store = storeWithPairing(wiring);
 
-      await store.submitPairingQrText("{");
+      await store.submitPairingQrText("{", "sync");
 
       expect(store.pairingPage().phase, scenario.name).toBe("failed");
       expect(store.pairingPage().error?.code, scenario.name).toBe(scenario.code);
@@ -441,7 +479,7 @@ describe("配对链路：输入入口（粘贴 / 地址片段）", () => {
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
 
-    await store.startPairingFromAddress();
+    await store.startPairingFromAddress("sync");
 
     // 片段内容真的被交给了校验（真实实现读它就等于清掉它：`composition.test.ts` 钉这一条）。
     expect(wiring.readText).toBe(`data=${QR_SECRET}`);
@@ -449,7 +487,7 @@ describe("配对链路：输入入口（粘贴 / 地址片段）", () => {
     expect(wiring.claims).toHaveLength(1);
 
     // 再进一次页面不会重放：片段已经被读走（没有可读内容时不动作）。
-    await store.startPairingFromAddress();
+    await store.startPairingFromAddress("sync");
     expect(wiring.claims).toHaveLength(1);
     expect(wiring.readText).toBe(`data=${QR_SECRET}`);
   });
@@ -458,7 +496,7 @@ describe("配对链路：输入入口（粘贴 / 地址片段）", () => {
     const wiring = new RecordingPairingWiring();
     const store = storeWithPairing(wiring);
 
-    await store.startPairingFromAddress();
+    await store.startPairingFromAddress("sync");
 
     expect(store.pairingPage().phase).toBe("idle");
     expect(wiring.claims).toHaveLength(0);
@@ -469,8 +507,8 @@ describe("配对链路：输入入口（粘贴 / 地址片段）", () => {
     wiring.results = [{ kind: "pending_confirmation" }];
     const store = storeWithPairing(wiring);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
 
     expect(wiring.claims).toHaveLength(1);
     expect(wiring.scheduled).toHaveLength(1);
@@ -479,11 +517,137 @@ describe("配对链路：输入入口（粘贴 / 地址片段）", () => {
   it("未装配配对链路：提交明确失败，而不是静默无操作", async () => {
     const store = storeWithPairing(undefined);
 
-    await store.submitPairingQrText(JSON.stringify(QR));
+    await store.submitPairingQrText(JSON.stringify(QR), "sync");
 
     expect(store.pairingPage().phase).toBe("failed");
     expect(store.pairingPage().error?.code).toBe("internal.unavailable");
     expect(store.pairingPage().error?.message).toContain("配对链路未装配");
+  });
+});
+
+describe("两类配对入口互不混淆（design D2/D3）", () => {
+  /**
+   * 载荷类型与**路由声明的**入口类型不一致：读载荷之后、发任何请求之前停住。
+   *
+   * `read` 是组合根会标注出来的读取结果（真实实现里由 `readQrPayload` 按 `pairingProtocol` 判定），
+   * 这里直接给出两类的组合，因此用例判的是**入口**的取舍，而不是解析器。
+   */
+  const CASES: readonly {
+    readonly name: string;
+    readonly entry: PairingKind;
+    readonly read: PairingQrRead;
+    readonly foreign: string;
+  }[] = [
+    {
+      name: "sync 入口收到 node-link 载荷",
+      entry: "sync",
+      read: { kind: "node-link", qr: NODE_LINK_QR },
+      foreign: "node-link",
+    },
+    {
+      name: "node-link 入口收到 sync 载荷",
+      entry: "node-link",
+      read: { kind: "sync", qr: QR },
+      foreign: "设备（sync）",
+    },
+  ];
+
+  for (const scenario of CASES) {
+    it(`${scenario.name}：明确失败，且一个请求都不发`, async () => {
+      const wiring = new RecordingPairingWiring();
+      wiring.readResult = scenario.read;
+      wiring.results = [{ kind: "pending_confirmation" }];
+      const store = storeWithPairing(wiring);
+
+      await store.submitPairingQrText("任意内容", scenario.entry);
+
+      const page = store.pairingPage();
+      expect(page.phase).toBe("failed");
+      expect(page.error?.code).toBe("protocol.schema_invalid");
+      // 文案说清「哪一类喂给了哪一类」，但不回显载荷内容（它可能含一次性配对秘密）。
+      expect(page.error?.message).toContain(scenario.foreign);
+      expect(page.error?.message).not.toContain(QR_SECRET);
+      // 反例：去掉类型校验 → 另一类流程接手，这三处的计数不再是 0。
+      expect(wiring.claims).toHaveLength(0);
+      expect(wiring.polls).toHaveLength(0);
+      expect(wiring.scheduled).toHaveLength(0);
+      // 没有会话残留：换一段内容可以立刻重试。
+      expect(isPairingInFlight(page)).toBe(false);
+      expect(page.canRestart).toBe(true);
+    });
+  }
+
+  it("node-link 载荷在 node-link 入口：只呈现公开信息，不发请求、不留秘密", async () => {
+    const wiring = new RecordingPairingWiring();
+    wiring.readResult = { kind: "node-link", qr: NODE_LINK_QR };
+    const store = storeWithPairing(wiring);
+
+    await store.submitPairingQrText(`data=${QR_SECRET}`, "node-link");
+
+    const page = store.pairingPage();
+    // 已读到内容（不是 `failed`、也不是停在 `idle` 什么都没发生）。
+    expect(page.phase).toBe("node_link_scanned");
+    // §13.1：HTTP 来源由 `endpoint` 的 host 派生；对端标识是 owner 节点。
+    expect(page.host).toEqual({ address: "https://work-pc.example.ts.net", hostId: HOST_ID });
+    expect(page.error).toBeNull();
+    // 本客户端不是 node-link 配对的参与方：一个请求都不发，也不安排轮询。
+    expect(wiring.claims).toHaveLength(0);
+    expect(wiring.polls).toHaveLength(0);
+    expect(wiring.scheduled).toHaveLength(0);
+    // 入口保持可用（输入仍在可用态），且含秘密的载荷不进公开状态。
+    expect(isPairingInFlight(page)).toBe(false);
+    expect(JSON.stringify(store.state)).not.toContain(QR_SECRET);
+    // 再提交一次仍是同一结果：没有第二条会话，也不补发任何请求。
+    await store.submitPairingQrText(`data=${QR_SECRET}`, "node-link");
+    expect(store.pairingPage().phase).toBe("node_link_scanned");
+    expect(wiring.claims).toHaveLength(0);
+  });
+
+  /**
+   * 「过形状正则、但 `new URL` 解析不了」的端点：端口越界、主机里的非法百分号转义。
+   *
+   * 组合根按 {@link NODE_LINK_ENDPOINT_PATTERN} 判端点合法性，那条正则比 `new URL` 宽松，
+   * 因此这几个端点会被**照收**，失败点只在派生 https 来源那一步。
+   */
+  const UNPARSABLE_ENDPOINTS: readonly string[] = [
+    "wss://work-pc.example.ts.net:999999/node-link/v1",
+    "wss://work-pc.example.ts.net:70000/node-link/v1",
+    "wss://%zz/node-link/v1",
+  ];
+
+  it("端点过形状正则但派生不出地址：落到明确失败态，不抛异常、也不停在 idle", async () => {
+    const idle = initialPairingPageModel();
+    for (const endpoint of UNPARSABLE_ENDPOINTS) {
+      // 前提证据：这些端点确实过得了形状正则（否则本用例判的就不是「校验层放行」这一幕）。
+      expect(NODE_LINK_ENDPOINT_PATTERN.test(endpoint), endpoint).toBe(true);
+
+      // 纯函数层：不抛异常，也不停在上一状态。
+      const direct = applyScannedNodeLink(idle, { ...NODE_LINK_QR, endpoint });
+      expect(direct.phase, endpoint).toBe("failed");
+      expect(direct.error?.code, endpoint).toBe("protocol.schema_invalid");
+      expect(direct.host, endpoint).toBeNull();
+      // 有可执行的下一步（`canRestart`），因而与「停在 idle」可分。
+      expect(direct.canRestart, endpoint).toBe(true);
+
+      // 用例层：同一条路径（读载荷成功 → 入口呈现）——明确失败，且一个请求都不发。
+      const wiring = new RecordingPairingWiring();
+      wiring.readResult = { kind: "node-link", qr: { ...NODE_LINK_QR, endpoint } };
+      const store = storeWithPairing(wiring);
+
+      // 反例：解析放到 `#commit(...)` 的求值里 → 异常穿出 `submitPairingQrText`（这里会变红）。
+      await store.submitPairingQrText(`data=${QR_SECRET}`, "node-link");
+
+      const page = store.pairingPage();
+      expect(page.phase, endpoint).toBe("failed");
+      expect(page.error?.code, endpoint).toBe("protocol.schema_invalid");
+      expect(page.error?.message.length ?? 0, endpoint).toBeGreaterThan(0);
+      expect(isPairingInFlight(page), endpoint).toBe(false);
+      expect(wiring.claims, endpoint).toHaveLength(0);
+      expect(wiring.polls, endpoint).toHaveLength(0);
+      expect(wiring.scheduled, endpoint).toHaveLength(0);
+      // 含秘密的载荷不进公开状态。
+      expect(JSON.stringify(store.state), endpoint).not.toContain(QR_SECRET);
+    }
   });
 });
 
@@ -508,6 +672,8 @@ describe("配对页状态机（纯函数）", () => {
         applyPairingFailure(idle, { code: "pairing.expired", message: "已过期", retryable: false, details: {} }),
       ),
     ).toBe(false);
+    // node-link 入口读到内容后**不**算进行中：它不持有会话、也不发请求，输入因此保持可用。
+    expect(isPairingInFlight(applyScannedNodeLink(idle, NODE_LINK_QR))).toBe(false);
   });
 
   it("失败与终态都允许重来，且已批准的结果带上设备标识", () => {

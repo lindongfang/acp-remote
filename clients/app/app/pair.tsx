@@ -30,18 +30,27 @@ import type { ReactElement } from "react";
 
 import { PairingPanel, RuntimeUnavailable } from "../src/components";
 import { initialPairingPageModel } from "../src/features/pairing-model";
+import type { PairingKind } from "../src/features/pairing-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
 
-export default function PairRoute(): ReactElement {
+/**
+ * 配对入口的页面主体，两类入口**共用**（design D4：复用同一组件、以类型参数区分，不复制一套 UI）。
+ *
+ * `kind` 是**本页路由声明的期望类型**（design D2），随片段的读取与粘贴的提交一起交给 store：
+ * 载荷类型与它不一致时 store 明确失败且不发任何请求。`app/node-link/pair.tsx` 用
+ * `kind="node-link"` 复用这一份主体，因此两类入口的展示与提交流程只有一份实现。
+ */
+export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): ReactElement {
   const store = useClientStore();
   const state = useClientState();
   const router = useRouter();
 
-  // 二维码地址直接打开这一页时，片段里带着配对内容：读一次（并立即清除片段）即进入认领流程。
-  // 依赖只有 `store`：组合根异步装配完成后才可用，而片段只读一次（读完已被清除）。
+  // 二维码地址直接打开这一页时，片段里带着配对内容：读一次（并立即清除片段）即进入与本页
+  // 对应的流程。依赖只有 `store` 与 `kind`：组合根异步装配完成后才可用，而片段只读一次
+  // （读完已被清除），`kind` 是这一份主体的常量参数。
   useEffect(() => {
-    void store?.startPairingFromAddress();
-  }, [store]);
+    void store?.startPairingFromAddress(kind);
+  }, [store, kind]);
 
   if (store === null || state === null) return <RuntimeUnavailable route="pair" />;
 
@@ -55,7 +64,7 @@ export default function PairRoute(): ReactElement {
       <PairingPanel
         model={store.pairingPage()}
         onSubmit={(text) => {
-          void store.submitPairingQrText(text);
+          void store.submitPairingQrText(text, kind);
         }}
         onRestart={() => {
           store.setPairing(initialPairingPageModel());
@@ -63,4 +72,8 @@ export default function PairRoute(): ReactElement {
       />
     </main>
   );
+}
+
+export default function PairRoute(): ReactElement {
+  return <PairingRouteBody kind="sync" />;
 }

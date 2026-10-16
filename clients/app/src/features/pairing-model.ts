@@ -24,9 +24,16 @@
  * 即弃：载荷由调用方持有在**私有**字段里，绝不进任何状态快照，也不落日志与地址历史
  * （§7.1 读取后立即清 fragment；§7.3 成功或终态后清除内存中的 secret）。
  * 视图模型 `PairingPageModel` 里因此没有任何可以承载秘密的槽位。
+ *
+ * ## 两类入口：类型由路由声明，入口只校验
+ *
+ * 本机生成两类配对二维码：sync 设备配对（`/pair#data=…`）与 node-link 配对
+ * （`/node-link/pair#data=…`，`NODE_LINK_PROTOCOL.md` §13.1）。两类入口共用这一套状态机与视图
+ * 模型，`PairingKind` 因此是**入口的入参**（由路由给出），而载荷类型由组合根在读取时标注；
+ * 入口只把两者对上（`kindMismatchFailure`），不靠载荷形状猜（design D2/D3）。
  */
 
-import type { ErrorCode, PairingQrPayload, PublicError } from "../protocol";
+import type { ErrorCode, NodeLinkQrPayload, PairingQrPayload, PublicError } from "../protocol";
 import type { PairedHostRecord } from "../sync-client";
 
 /** 配对阶段。`approved` 之后进入已配对（连接状态机由 `pair_succeeded` 接手）。 */
@@ -39,7 +46,22 @@ export type PairingPhase =
   | "rejected"
   | "expired"
   | "consumed"
+  /** 已读到 node-link 配对内容：本客户端不是它的参与方，只呈现对端信息（见 `applyScannedNodeLink`）。 */
+  | "node_link_scanned"
   | "failed";
+
+/** 两类配对入口（design D2）：由**路由**声明，入口据此校验载荷类型，而不是从载荷形状去猜。 */
+export type PairingKind = "sync" | "node-link";
+
+/**
+ * 二维码内容读出的结果：载荷 + 它的类型。
+ *
+ * 类型由组合根在读取时标注（`readQrPayload`），因此「这是哪一类配对内容」是读出的事实，
+ * 不是入口对载荷形状的猜测。入口把它的 `kind` 与路由声明的 {@link PairingKind} 对上。
+ */
+export type PairingQrRead =
+  | { readonly kind: "sync"; readonly qr: PairingQrPayload }
+  | { readonly kind: "node-link"; readonly qr: NodeLinkQrPayload };
 
 /** 配对页模型。 */
 export interface PairingPageModel {
@@ -82,13 +104,16 @@ export type PairingPollResult =
 /** 配对传输端口：由组合根用 HTTPS 实现（`fetch`），feature 层不接触网络 API。 */
 export interface PairingTransport {
   /**
-   * 二维码内容 → `pairing.qr` 载荷。
+   * 二维码内容 → 载荷 + 它的**类型**（design D3 的读取口）。
    *
-   * 接受二维码地址、地址片段与 base64url 载荷三种**容器**形态；**载荷**校验只有一套，
-   * 任何不符（JSON 非法、协议版本不符、字段缺失或长度不符、来源形状非法、已过期）
+   * 接受二维码地址、地址片段与 base64url 载荷三种**容器**形态；**载荷**校验按类型各一套，
+   * 任何不符（JSON 非法、协议版本不符、字段缺失或长度不符、来源/端点形状非法、已过期）
    * 都以 `PairingQrInvalidError` 明确失败，绝不尽力解析。
+   *
+   * 这里只**标注**类型，不判定「入口是否接受它」：同一份 node-link 内容在 sync 入口是
+   * 明确失败、在 node-link 入口是已读到的内容，那是入口的判定（design D2/D3）。
    */
-  readQrPayload(text: string): PairingQrPayload;
+  readQrPayload(text: string): PairingQrRead;
   /** 提交 claim（设备首次声明配对，`proof` 由设备私钥签名）。 */
   claim(input: { readonly qr: PairingQrPayload; readonly canonicalOrigin: string }): Promise<PublicError | null>;
   /**
@@ -168,6 +193,9 @@ const GUIDANCE: Readonly<Record<PairingPhase, string>> = {
   rejected: "电脑端拒绝了这次配对请求。如需继续，请在电脑上重新发起并扫码。",
   expired: "这次配对二维码已过期。请在电脑上重新生成二维码后再扫。",
   consumed: "这次配对二维码已被使用过。请在电脑上重新生成一个新的二维码。",
+  node_link_scanned:
+    "已读到 node-link 配对内容。本页只呈现对端信息，不代替节点完成配对：" +
+    "node-link 由节点之间配对，请到节点的界面上继续。",
   failed: "配对未完成。请按下面的原因处理后重试。",
 };
 
@@ -209,10 +237,89 @@ export function applyClaiming(current: PairingPageModel): PairingPageModel {
 }
 
 /**
+ * node-link 载荷 → 入口呈现（design D2/D3）。
+ *
+ * 本客户端没有 node-link 配对面：§13.2/§13.3 的 claim 与 status 由节点发起，浏览器不是它的参与方。
+ * 因此这里只把载荷里**公开**的对端信息读给入口（端点 host 派生的 https 来源 + owner 节点标识），
+ * 停在入口——不代替任何一方发请求，也不把含 `pairingSecret` 的载荷留在仓库里（它用到即弃）。
+ *
+ * 与 {@link applyScannedQr} 刻意分开：那是 sync 载荷（`canonicalOrigin` / `hostId`），
+ * 且紧接着就进入认领流程；这里是另一类载荷的另一套呈现口径。
+ *
+ * 端点派生不出 https 来源时（见 {@link nodeLinkAddressOf}）落到 `failed`，而不是抛异常：
+ * 异常会从调用方 `#commit(...)` 的求值中途穿出，页面停在上一状态。
+ */
+export function applyScannedNodeLink(
+  current: PairingPageModel,
+  qr: NodeLinkQrPayload,
+): PairingPageModel {
+  // §13.1：node-link 的 HTTP origin 由 `endpoint` 的 host 加 `https` 得到（claim/status 的目标来源）。
+  const address = nodeLinkAddressOf(qr.endpoint);
+  if (address === null) {
+    // 明确失败：码取 `protocol.schema_invalid`（与结构校验同族——这份载荷对本客户端不可用），
+    // `details` 留空（同 `publicErrorForQrInput`，不外溢载荷内容）。
+    return applyPairingFailure(current, {
+      code: "protocol.schema_invalid",
+      message: "node-link 配对载荷的端点无法解析出地址：请在节点上重新生成二维码后重试。",
+      retryable: false,
+      details: {},
+    });
+  }
+  return modelFor("node_link_scanned", {
+    ...current,
+    host: { address, hostId: qr.ownerNodeId },
+  });
+}
+
+/**
+ * §13.1 的 `endpoint`（`wss://<host>/node-link/v1`）→ 它派生的 https 来源；派生不出来时返回 `null`。
+ *
+ * 组合根按 `schemas/node-link/v1/pairing.schema.json` 的 `$defs.endpoint`
+ * （`^wss://[^/?#]+/node-link/v1$`）校验端点形状。那条正则比 `new URL` **宽松**：端口越界
+ * （`wss://h:999999/node-link/v1`）与主机里的非法百分号转义（`wss://%zz/node-link/v1`）都能过正则，
+ * 却会让 `new URL` 抛出。异常若在这里冒泡，就会从调用方 `client-store` 的 `#commit(...)` 求值中途
+ * 穿出——页面停在上一状态（`idle`，既没有失败态、也没有可执行的下一步），与「非法输入落到可断言的
+ * 明确失败」相矛盾。
+ *
+ * 因此这里**防御式**解析，把抛出的端点收敛成 `null`，由调用方落成明确失败态。
+ */
+function nodeLinkAddressOf(endpoint: string): string | null {
+  try {
+    return `https://${new URL(endpoint).host}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 两类载荷/入口在文案里的名字（只用于说清「哪一类」，不回显任何载荷内容）。 */
+const KIND_LABELS: Readonly<Record<PairingKind, string>> = {
+  sync: "设备（sync）",
+  "node-link": "node-link",
+};
+
+/**
+ * 载荷类型与入口声明的类型不一致（design D2）：明确失败，且**在读载荷之后、发任何请求之前**。
+ *
+ * 文案只说清两类名字，不回显内容（它可能含一次性配对秘密）；`details` 一律留空（同
+ * `publicErrorForQrInput`）。码取 `protocol.schema_invalid`：这份内容对本入口而言不是合法载荷。
+ */
+export function kindMismatchFailure(expected: PairingKind, actual: PairingKind): PublicError {
+  return {
+    code: "protocol.schema_invalid",
+    message: `这段内容是 ${KIND_LABELS[actual]} 配对载荷，不是本入口的 ${KIND_LABELS[expected]} 配对载荷：请重新确认二维码。`,
+    retryable: false,
+    details: {},
+  };
+}
+
+/**
  * 配对是否**正在进行**（内容已读到、还没走到终态）。
  *
  * 进行中意味着「这一刻持有一份含 `pairingSecret` 的二维码载荷」，因此这一段时间里
  * 不接受第二次提交（否则会出现两条并行的 claim 与轮询），页面也据此禁用输入。
+ *
+ * `node_link_scanned` **不**算进行中：本客户端不为 node-link 载荷保留任何会话（它不发请求，
+ * 载荷用到即弃），因此入口保持可用——输入框可继续接受内容与提交。
  */
 export function isPairingInFlight(model: PairingPageModel): boolean {
   return model.phase === "awaiting_qr" || model.phase === "claiming" || model.phase === "pending_confirmation";
