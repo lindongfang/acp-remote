@@ -8,7 +8,17 @@
 
 ### Requirement: CLI 子命令映射与薄客户端约束
 
-CLI SHALL 提供 §5.8 映射表中的全部子命令，底层调用 MUST 与映射表一致，且 MUST NOT 自造管理方法。`agent configure` 与 `provider configure` MUST NOT 存在；`agent list` 只读。CLI MUST 只做参数解析、展示与轮询。
+CLI SHALL 提供 §5.8 映射表中的全部子命令，底层调用 MUST 与映射表一致，且 MUST NOT 自造管理方法。`export create|list|revoke` 与 `import add|list|remove` MUST NOT 存在。`node pair` MUST NOT 接受 `--grant`/`--export-id`/`--display-name`。CLI MUST 只做参数解析、展示与轮询。
+
+#### Scenario: Export/Import 命令已删除
+
+- **WHEN** 执行 `acp-remote export create` 或 `acp-remote import add`
+- **THEN** 参数解析失败并以非零退出，不调用任何本地方法
+
+#### Scenario: node pair 不携带授权参数
+
+- **WHEN** 执行 `acp-remote node pair --grant grant.observe`
+- **THEN** 参数解析失败并以非零退出
 
 #### Scenario: 子命令经本地通道调用对应方法
 
