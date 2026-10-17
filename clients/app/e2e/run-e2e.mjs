@@ -122,7 +122,10 @@ async function bundlePage() {
     platform: "browser",
     target: "es2022",
     jsx: "automatic",
-    define: { "process.env.NODE_ENV": '"development"' },
+    // `global` 是 Expo 在生产 bundle 里提供的 shim；react-native-web 的 Animated 在模块求值期
+    // 读取 `global.RN$Bridgeless`。本 runner 自己用 esbuild 打包、没有那层 shim，因此在这里补上
+    // 等价定义，让 e2e 与生产环境的全局形态一致（不是放宽生产代码）。
+    define: { "process.env.NODE_ENV": '"development"', global: "globalThis" },
     plugins: [
       {
         name: "tp4-expo-router-stub",

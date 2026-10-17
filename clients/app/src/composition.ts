@@ -32,10 +32,10 @@
  * - `onEvent` 单向流向 `store.apply`；**何时**重连由 `shouldAutoReconnect` 判定，
  *   组合根只执行结论，不自己判断。
  * - `pagehide` 时断开连接，未完成的暂存快照随之丢弃（§9.4）。
- * - 配对链路：`ClientStore` 的配对用例（`submitPairingQrText` / `startPairingFromAddress`）经
- *   这里的接线拿到网络（`HttpPairingTransport`）、地址栏（读片段并**立即**清除）、本地存储
- *   （已配对主机记录）与时钟（轮询节奏）。页面与组件因此不碰这些能力；
- *   配对完成后同一条装配路径（`adoptPairedHost`）把连接建起来，不会出现第二份连接装配。
+ * - 配对链路：`ClientStore` 的配对用例（`startPairingFromAddress`）经这里的接线拿到网络
+ *   （`HttpPairingTransport`）、地址栏（读片段并**立即**清除）、本地存储（已配对主机记录）
+ *   与时钟（轮询节奏与到期定时）。页面与组件因此不碰这些能力；配对完成后同一条装配路径
+ *   （`adoptPairedHost`）把连接建起来，不会出现第二份连接装配。
  * - 环境事实：配对入口的「安全上下文」与「来源一致」两条校验经 `CompositionInputs` 的
  *   `secureContext` / `origin` 注入（缺省读浏览器全局 `isSecureContext` 与 `location.origin`）。
  *   它们与 `fetch` 同属一次性能力的注入面，因此**不**占 `src/platform/**` 的冻结成员表（design D2）。
@@ -795,7 +795,7 @@ function readSyncQrPayload(payload: Record<string, unknown>, now: number): Pairi
     throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
   }
   if (expiresAt <= now) {
-    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码已过期");
+    throw new PairingQrInvalidError("pairing.expired", "二维码已过期");
   }
   return qr;
 }
@@ -829,7 +829,7 @@ function readNodeLinkQrPayload(payload: Record<string, unknown>, now: number): N
     throw new PairingQrInvalidError("protocol.schema_invalid", "二维码过期时间不是时间戳");
   }
   if (expiresAt <= now) {
-    throw new PairingQrInvalidError("protocol.schema_invalid", "二维码已过期");
+    throw new PairingQrInvalidError("pairing.expired", "二维码已过期");
   }
   return qr;
 }

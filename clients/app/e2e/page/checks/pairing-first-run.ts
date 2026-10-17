@@ -1,32 +1,41 @@
 /**
- * WP4：从「未配对」出发的**真实配对链路**（浏览器级）。
+ * PW：从「未配对」出发的**真实配对链路**（浏览器级）。
  *
- * 本目录其余的用例都从「已配对」起步（理由见 `../support.tsx` 的文件头）。这里的两条从
- * **未配对**起步，走的是生产代码：`app/pair.tsx` → `PairingPanel` 的粘贴入口 → 真实 DOM
- * 事件 → `ClientStore.submitPairingQrText` → 组合根的 `HttpPairingTransport`
+ * 本目录其余的用例都从「已配对」起步（理由见 `../support.tsx` 的文件头）。这里的用例从
+ * **未配对**起步，走的是生产代码：二维码地址的片段挂到 `location.hash` 上打开 `/pair` →
+ * `app/pair.tsx` → `PairingPanel` 的固定状态页 → `ClientStore.startPairingFromAddress`
+ * 读取并**立即清除**片段 → 组合根的 `HttpPairingTransport`
  * （`/sync/v1/pairing/claim` 与 `/sync/v1/pairing/status`）→ 已批准的主机材料写进真实
- * IndexedDB（`paired-host/<origin>`）→ 装配连接并触发连接 → 真实握手进入 `online`。
+ * IndexedDB（`paired-host/<origin>`）→ 装配连接并触发连接 → 真实握手进入 `online` →
+ * 1.6 秒后 `router.replace("/")` 自动进入目录页。
  *
- * 被替身顶掉的只有**传输**两头：配对 HTTPS 面（`fetch`，e2e 环境里 `https://` 来源不可达）
- * 与 socket（假主机）。配对状态机、结构校验、落盘、连接装配、握手验签、快照管线全部是生产代码。
+ * 页面**没有**输入框、粘贴框、提交按钮：地址片段是唯一入口（design D1），因此起点一律是
+ * 「先把片段挂到 `location.hash`，再挂载页面」。被替身顶掉的只有**传输**两头：配对 HTTPS 面
+ * （`fetch`，e2e 环境里 `https://` 来源不可达）与 socket（假主机）。配对状态机、结构校验、
+ * 落盘、连接装配、握手验签、快照管线全部是生产代码。
  *
  * ## 判别力：每条断言在实现被回退时都会红
  *
- * - **PW-1** 正向链路的每一跳都有独立锚点：端点路径、认领正文里的设备材料、状态查询正文里的
- *   `pairingRequestId` 与每次都换的 `requestNonce`、落盘摘要、出站 URL 路径。认领响应由
+ * - **PW-1** 正向链路的每一跳都有独立锚点：端点路径、认领正文里的设备材料、片段清除、状态查询
+ *   正文里的 `pairingRequestId` 与每次都换的 `requestNonce`、pending 阶段的主机地址与 `m:ss`
+ *   倒计时、已批准阶段的设备标识、落盘摘要、自动落点 `/`、出站 URL 路径。认领响应由
  *   **二维码里那把**钥匙签（`signPairingClaimHostProof`），因此「验签用错了钥匙/没验」这条
  *   在此**不**会红——那是 PW-3 的位置。
- * - **PW-2**「配对入口」用**真实输入与真实点击**：删掉输入框（`[data-pairing-entry]`）→
- *   找不到元素红；把提交按钮的启用条件写死为可用（或与输入脱钩）→ 「输入非空后才可用」红；
- *   入口没有接到 store（点了什么都不发生）→ 「非法内容被明确拒绝」超时红。
+ * - **PW-2** 没有载荷时**不发请求**：把「读不到片段」实现成继续认领 → `recordingFetch` 出现请求；
+ *   把无载荷页实现成输入框 → `[data-pairing-input]` 存在；把无载荷当成载荷错误 → 锚点不是
+ *   `no_payload`。
  * - **PW-3** / **PW-4** 用假主机**故意**产出被篡改的响应（真 Daemon 无法诚实地产出这种响应，
  *   这正是它们存在的理由）：认领响应换一把钥匙签、已批准响应换一个公钥。两条都断言
- *   **明确失败**（失败态 + 错误码）、不落盘、不建连接，并断言**停止轮询**——
+ *   **明确失败**（阶段 + 错误码 + 固定标题）、不落盘、不建连接，并断言**停止轮询**——
  *   「没有成功」不构成证据：把验签去掉、把逐字节比对改成宽松比较，两条都会在这些断言上红。
+ * - **PW-5** 倒计时归零：`expiresAt` 只比一个轮询周期多一点，假主机永远回「等待确认」。页面必须
+ *   先呈现 pending、再由**绝对截止时间**推进到 `expired`（不是固定 300 秒），并且此后不再发出
+ *   状态查询。把到期定时器删掉、或以「页面打开时刻 + 5 分钟」计时，这条都会红。
  */
 
 import {
   AGENTS,
+  DIRS_ROUTE,
   PAIR_ROUTE,
   WORKSPACES_WITH_PATHS,
   sessionsForBothDirectories,
@@ -36,33 +45,35 @@ import type { FakeHostIdentity } from "../fake-host";
 import { encodeBase64Url } from "../../../src/sync-client";
 import { PAIRING_POLL_INTERVAL_MS } from "../../../src/features/pairing-model";
 import { openPlatform } from "../../../src/platform";
+import { currentPath } from "../router-stub";
 import {
   CANONICAL_ORIGIN,
   HOST_ID,
-  click,
+  domText,
   expectEqual,
   expectThat,
   mountScenario,
   query,
   seedDeviceIdentity,
-  textOf,
   waitFor,
 } from "../support";
 import type { Check, ScenarioOptions } from "../support";
 import type { FetchLike, PairingHttpResponse } from "../../../src/composition";
-import { typeIntoInput } from "./r15-directory";
 
 /**
- * 配对页的四个锚点选择器。
+ * 配对页的锚点选择器。
  *
- * 每次现查而不是缓存元素：这些节点的可用性（禁用与否）本身就被断言。选择器只写一处，
- * 免得各调用点各写一份、慢慢走样。
+ * 每次现查而不是缓存元素：容器里的节点会随阶段整棵替换。选择器只写一处，免得各调用点各写
+ * 一份、慢慢走样。输入框时代的 `[data-pairing-input]` / 提交按钮已删除，这里也不再引用。
  */
 const PAIRING_SELECTOR = {
+  root: '[data-route="pair"]',
   entry: '[data-pairing-entry="true"]',
-  input: "[data-pairing-input]",
-  submit: '[data-action="submit-pairing-qr"]',
   phase: "[data-pairing-phase]",
+  countdown: '[data-pairing-countdown="true"]',
+  host: '[data-pairing-host="true"]',
+  hostAddress: "[data-host-address]",
+  deviceId: "[data-pairing-device-id]",
 } as const;
 
 /** 一次配对会话的固定标识（固定值才能逐字断言它进了请求正文）。 */
@@ -80,8 +91,11 @@ const CLAIM_SERVER_NONCE = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 /** 已配对主机记录在本地缓存里的键前缀（`src/composition.ts` 的 `PAIRED_HOST_KEY_PREFIX`）。 */
 const PAIRED_HOST_KEY_PREFIX = "paired-host/";
 
-/** 等待状态轮询的余量：配对节奏是 2 秒一档，两次查询之后再等重连与握手。 */
+/** 等待状态轮询与握手完成的余量：配对节奏是 2 秒一档，两次查询之后再等重连与握手。 */
 const PAIRING_WAIT_MS = 20_000;
+
+/** `m:ss`（分钟没有上限；页面每秒按绝对截止时间重算）。 */
+const COUNTDOWN_PATTERN = /^\d+:\d{2}$/;
 
 /** 当前配对阶段（`PairingPanel` 的 `data-pairing-phase`）；没渲染出来时返回 `null`。 */
 function phaseOf(container: HTMLElement): string | null {
@@ -92,6 +106,15 @@ function phaseOf(container: HTMLElement): string | null {
 async function storedPairedHost(): Promise<string | null> {
   const hit = await openPlatform().localCache.get(`${PAIRED_HOST_KEY_PREFIX}${CANONICAL_ORIGIN}`, Date.now());
   return hit !== null && hit.entry.kind === "local" ? hit.entry.summary : null;
+}
+
+/**
+ * 打开配对地址：真实地址栏里秘密只在**片段**中（`SYNC_PROTOCOL.md` §7.1），
+ * 因此与扫码打开同一条路径——把二维码地址的 `#…` 部分挂到 `location.hash` 上，
+ * 再挂载页面让组合根读取并立即清除它。
+ */
+function openPairingAddress(text: string): void {
+  globalThis.location.hash = text.slice(text.indexOf("#"));
 }
 
 /** 场景缺省：与 `composition-root.ts` 的 `baseScenario` 同口径，起点换成配对页。 */
@@ -131,12 +154,14 @@ interface PairingHttpFake {
  * 两次状态而不是一次就批准：「请到电脑上确认」是用户真会看到的阶段（也是页面必须能渲染的
  * 一帧），一次就批准会让它在 e2e 里永远观测不到。
  *
- * ## 两个可**故意**调错的地方（真 Daemon 调不出来）
+ * ## 可**故意**调错的地方（真 Daemon 调不出来）
  *
  * - `claimSigner`：认领响应的 `hostProof` 由它签。缺省与二维码同一把钥匙；换成另一把，签出来的
  *   仍是形状合法的 64 字节 P1363 签名，只有钥匙不对——客户端只可能因为「验签不过」而拒。
  * - `approvedHostPublicKey`：已批准响应回落的主机公钥。缺省与二维码逐字节相同；换一个即
  *   §7.3 的负向分支（状态响应没有主机签名，比对是唯一依据）。
+ * - `alwaysPending`：状态永远回「等待本机确认」。PW-5 用它让「过期」只能由页面的绝对截止时间
+ *   推进，而不是由某次状态响应宣布。
  *
  * 认领响应的被签 transcript 覆盖**认领请求本身**的字段，因此它必须现编
  * （`signPairingClaimHostProof`）——写死一条签名只会在客户端换了 nonce 时变成噪声。
@@ -148,6 +173,8 @@ function pairingHttpFake(input: {
   readonly claimSigner: FakeHostIdentity;
   /** 「已批准」响应回落的主机公钥；缺省 = `qrHostPublicKey`（逐字节一致）。 */
   readonly approvedHostPublicKey?: string;
+  /** 状态永远停在「等待本机确认」（PW-5 的过期用例）。 */
+  readonly alwaysPending?: boolean;
 }): PairingHttpFake {
   const requests: { url: string; body: Record<string, unknown> }[] = [];
   let statusPolls = 0;
@@ -185,7 +212,9 @@ function pairingHttpFake(input: {
       );
     }
     statusPolls += 1;
-    if (statusPolls === 1) return json({ status: "pending_confirmation" }, 200);
+    if (input.alwaysPending === true || statusPolls === 1) {
+      return json({ status: "pending_confirmation" }, 200);
+    }
     return json(
       {
         status: "approved",
@@ -203,7 +232,7 @@ function pairingHttpFake(input: {
   return { fetch: fetchImpl, requests };
 }
 
-/** 只记账、不应答的配对面：用于断言「结构校验不过时一个请求都不发」。 */
+/** 只记账、不应答的配对面：用于断言「一个配对请求都不发」。 */
 function recordingFetch(): { readonly fetch: FetchLike; readonly urls: string[] } {
   const urls: string[] = [];
   return {
@@ -216,10 +245,12 @@ function recordingFetch(): { readonly fetch: FetchLike; readonly urls: string[] 
 }
 
 /**
- * 用户粘贴的那段二维码内容：形式与协议 §7.1 的二维码一字不差
+ * 一段 sync 设备配对二维码地址：形式与协议 §7.1 的二维码一字不差
  * （`https://<origin>/pair#data=<base64url-json>`，秘密在**片段**里）。
+ *
+ * `expiresInMs` 是相对**现在**的截止时间；PW-5 用它把窗口缩到比一个轮询周期多一点。
  */
-function pairingQrText(hostPublicKey: string): string {
+function pairingQrText(hostPublicKey: string, expiresInMs = 600_000): string {
   const payload = {
     pairingProtocol: "acp-remote-pairing-v1",
     hostId: HOST_ID,
@@ -227,31 +258,44 @@ function pairingQrText(hostPublicKey: string): string {
     canonicalOrigin: CANONICAL_ORIGIN,
     pairingId: PAIRING_ID,
     pairingSecret: PAIRING_SECRET,
-    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
   };
   return `${CANONICAL_ORIGIN}/pair#data=${encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)))}`;
 }
 
 const checks: readonly Check[] = [
   {
-    name: "PW-1 从「未配对」走真实配对链路：输入内容 → 认领 → 已批准 → 落盘主机材料 → 建立连接并在线",
+    name: "PW-1 打开配对地址即走真实链路：自动认领 → 等待确认（主机地址与倒计时）→ 已批准 → 约 1.6 秒后自动进目录 → 连接在线",
     async run() {
       const device = await seedDeviceIdentity();
       // **一把钥匙贯穿全程**：二维码里那把 = 认领响应 `hostProof` 的签名者 = 已批准响应回落的
-      // 公钥 = 假主机握手的钥匙。本次变更后这三处必须是同一把（§7.2 用载荷里的公钥验认领证明；
-      // §7.3 已批准响应的公钥与载荷逐字节相同），因此「落盘拿了哪一份」不再靠两把不同的钥匙来
-      // 区分——换一把只会让 claim 或握手当场失败，那是 PW-3 / PW-4 的位置。
+      // 公钥 = 假主机握手的钥匙（§7.2 用载荷里的公钥验认领证明；§7.3 已批准响应的公钥与载荷
+      // 逐字节相同）。换一把只会让 claim 或握手当场失败，那是 PW-3 / PW-4 的位置。
       const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
       const http = pairingHttpFake({
         qrHostPublicKey: identity.publicKeyBase64Url,
         claimSigner: identity,
       });
 
+      // 起点是真实二维码地址：片段先挂到地址栏上，页面按它读到内容（与扫码打开同一条路径）。
+      openPairingAddress(pairingQrText(identity.publicKeyBase64Url));
+
       const mounted = await mountScenario(
-        baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
+        baseScenario({
+          seedPaired: false,
+          identity,
+          fetch: http.fetch,
+          // 自动跳转的落点是目录页根路由 `/`；没注册它，替身会静默忽略这次导航。
+          extraRoutes: [DIRS_ROUTE],
+        }),
       );
       try {
-        await waitFor(() => query(mounted.container, PAIRING_SELECTOR.entry) !== null, "配对页渲染出配对入口");
+        // 等**真实页锚点**，不能等 `[data-route="pair"]`：store 未装配时 `RuntimeUnavailable`
+        // 占位也带这个属性，拿它当「页面已渲染」会先在占位上通过。
+        await waitFor(
+          () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
+          "配对页渲染出来（data-pairing-entry 锚点）",
+        );
 
         // 起点真的是「未配对」：没有预置记录（否则后面每一步都可能在它上面走捷径）。
         expectEqual(
@@ -260,14 +304,9 @@ const checks: readonly Check[] = [
           "未配对起点的连接状态",
         );
         expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "未配对时不得建立任何连接");
-        expectEqual(phaseOf(mounted.container), "idle", "配对页的初始阶段");
 
-        // ① 入口可用：打字 → 提交（真实 DOM 事件，与用户操作同路径）。
-        typeIntoInput(mounted.container, PAIRING_SELECTOR.input, pairingQrText(identity.publicKeyBase64Url), "配对入口");
-        click(query(mounted.container, PAIRING_SELECTOR.submit), "配对提交按钮");
-
-        // 认领：端点与载荷都取自**真实请求**。
-        await waitFor(() => http.requests.length > 0, "发出认领请求");
+        // ① 地址片段是唯一入口：页面挂载后自动读取并认领，没有任何输入/提交动作。
+        await waitFor(() => http.requests.length > 0, "打开配对地址后自动发出认领请求");
         const claim = http.requests[0];
         expectEqual(claim?.url ?? null, `${CANONICAL_ORIGIN}/sync/v1/pairing/claim`, "认领请求的端点");
         expectEqual(claim?.body["pairingId"] ?? null, PAIRING_ID, "认领正文的配对标识（取自二维码）");
@@ -284,12 +323,8 @@ const checks: readonly Check[] = [
           typeof claim?.body["proof"] === "string" && (claim.body["proof"] as string).length >= 43,
           "认领正文必须带一段真实的 HMAC 证明",
         );
-
-        // 进行中：输入被禁用（这一刻内存里持有一份含配对秘密的载荷，不再接受第二次提交）。
-        await waitFor(
-          () => (query(mounted.container, PAIRING_SELECTOR.input) as HTMLInputElement | null)?.disabled === true,
-          "配对进行中禁用输入",
-        );
+        // §7.1：片段读完即清——秘密不得留在地址历史里。
+        expectEqual(globalThis.location.hash, "", "配对地址的片段读取后被清除");
 
         // ② 状态轮询：先「等待本机确认」，再「已批准」——两个阶段都必须由真实轮询推出来。
         await waitFor(
@@ -297,21 +332,30 @@ const checks: readonly Check[] = [
           "状态查询进入「等待本机确认」",
           PAIRING_WAIT_MS,
         );
-        // 「等待本机确认」这一刻页面上必须有两件事：二维码解析出来的主机地址，以及去电脑确认的提示。
+        // 「等待本机确认」这一刻页面上必须有三件事：二维码解析出来的主机地址（卡片）、
+        // 由载荷 `expiresAt` 推出的剩余有效期、以及固定的进行中文案。
+        expectThat(query(mounted.container, PAIRING_SELECTOR.host) !== null, "等待确认阶段呈现主机卡片");
         expectEqual(
-          query(mounted.container, "[data-host-address]")?.getAttribute("data-host-address") ?? null,
+          query(mounted.container, PAIRING_SELECTOR.hostAddress)?.getAttribute("data-host-address") ?? null,
           CANONICAL_ORIGIN,
           "等待确认阶段呈现的主机地址（取自二维码）",
         );
+        const countdown = query(mounted.container, PAIRING_SELECTOR.countdown);
+        expectThat(countdown !== null, "等待确认阶段必须呈现剩余有效期");
+        const countdownText = countdown.textContent ?? "";
         expectThat(
-          query(mounted.container, '[data-pairing-awaiting-desktop="true"]') !== null,
-          "等待确认阶段必须提示用户到电脑上确认",
+          COUNTDOWN_PATTERN.test(countdownText),
+          `倒计时的文本必须是 m:ss（实际 ${JSON.stringify(countdownText)}）`,
         );
+
         await waitFor(
           () => phaseOf(mounted.container) === "approved",
           "状态查询进入「已批准」",
           PAIRING_WAIT_MS,
         );
+        // 自动跳转的计时起点：从页面进入 `approved` 那一刻算（下面还要做落盘与请求断言，
+        // 不能把那段耗时算进 1.6 秒里）。
+        const approvedAt = Date.now();
 
         const polls = http.requests.filter((request) => request.url.endsWith("/pairing/status"));
         expectEqual(polls.length, 2, "状态查询次数（一次待确认、一次已批准）");
@@ -331,7 +375,7 @@ const checks: readonly Check[] = [
         );
         // 已批准阶段：页面显示的就是状态响应给出的设备标识（不是本地编的）。
         expectEqual(
-          query(mounted.container, "[data-pairing-device-id]")?.getAttribute("data-pairing-device-id") ?? null,
+          query(mounted.container, PAIRING_SELECTOR.deviceId)?.getAttribute("data-pairing-device-id") ?? null,
           device.deviceId,
           "已批准阶段呈现的设备标识",
         );
@@ -347,14 +391,26 @@ const checks: readonly Check[] = [
           "落盘记录的主机公钥（与二维码里那把逐字节相同）",
         );
 
-        // ④ 配对完成即触发连接：不是「停在等待扫码」，也不止一次装配。
-        // `onPaired` 是异步收口（读设备身份后才装配），因此先等连接真的被建起来。
+        // ④ 已批准后自动进目录（design D4）：不留用户点击，也不等连接先 online。
+        // 落点是目录页根路由 `/`，不是 `/dirs`。给 1.6 秒留出真实时钟的余量：跳转必须**不是**
+        // 立即发生的（那会让用户看不到过渡），也不能拖到数秒之后。
+        await waitFor(
+          () => currentPath() === "/",
+          "已批准约 1.6 秒后自动进入目录页（根路由）",
+          PAIRING_WAIT_MS,
+        );
+        const redirectElapsed = Date.now() - approvedAt;
+        expectThat(
+          redirectElapsed >= 1_200 && redirectElapsed <= 4_000,
+          `自动跳转发生在约 1.6 秒之后（实测 ${redirectElapsed}ms）`,
+        );
+
+        // ⑤ 配对完成即触发连接：在线意味着握手用**落盘的那把公钥**验签通过。
         await waitFor(
           () => (mounted.host?.socketUrls.length ?? 0) >= 1,
           "配对完成后建立连接",
           PAIRING_WAIT_MS,
         );
-        // 在线意味着握手用**落盘的那把公钥**验签通过（取错来源或没落盘都会进阻断态）。
         await waitFor(
           () => mounted.composition?.store.state.connection.state === "online",
           "配对后进入在线（握手用落盘的公钥验签通过）",
@@ -366,69 +422,58 @@ const checks: readonly Check[] = [
         // 否则常量被改回 `/sync` 时两边一起变、断言不会红）。
         const first = socketUrls[0];
         expectEqual(first === undefined ? null : new URL(first).pathname, "/sync/v1", "出站连接 URL 的路径");
-        // 配对链路结束后输入回到可用（页面不在「进行中」）。
-        await waitFor(
-          () => (query(mounted.container, PAIRING_SELECTOR.input) as HTMLInputElement | null)?.disabled === false,
-          "配对结束后输入恢复可用",
-        );
       } finally {
         await mounted.unmount();
       }
     },
   },
   {
-    name: "PW-2 配对入口的存在与可用性：空输入禁用提交、非空即启用、提交真的进 store 且非法内容不发请求",
+    name: "PW-2 没有配对内容时不发请求：idle、固定无载荷页、没有输入框、没有已配对记录",
     async run() {
       const http = recordingFetch();
+      // 直接访问 `/pair`（或刷新后片段已清）：地址里没有任何配对内容。
+      globalThis.location.hash = "";
       const mounted = await mountScenario(baseScenario({ seedPaired: false, fetch: http.fetch }));
       try {
-        await waitFor(() => query(mounted.container, PAIRING_SELECTOR.entry) !== null, "配对页渲染出配对入口");
-
-        // 存在性：入口、输入框、提交按钮三者都要在（删掉输入框即红）。
-        const input = query(mounted.container, PAIRING_SELECTOR.input) as HTMLInputElement | null;
-        expectThat(input !== null, "配对入口必须有二维码内容输入框");
-        expectThat(query(mounted.container, PAIRING_SELECTOR.submit) !== null, "配对入口必须有提交按钮");
-        // 可用性：空输入时输入框可输入、提交按钮禁用（把启用条件写死为「总是可用」即红）。
-        expectEqual(input?.disabled ?? true, false, "空输入时输入框仍应可输入");
-        expectEqual(
-          (query(mounted.container, PAIRING_SELECTOR.submit) as HTMLButtonElement | null)?.disabled ?? false,
-          true,
-          "空输入时提交按钮必须禁用",
-        );
-
-        // 打字之后才可用：证明启用条件接的是**真实输入**，不是恒真/恒假。
-        typeIntoInput(mounted.container, PAIRING_SELECTOR.input, "把这一段贴进来", "配对入口");
         await waitFor(
-          () => (query(mounted.container, PAIRING_SELECTOR.submit) as HTMLButtonElement | null)?.disabled === false,
-          "输入非空后提交按钮可用",
+          () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
+          "配对页渲染出来（data-pairing-entry 锚点）",
+        );
+        await waitFor(() => phaseOf(mounted.container) === "idle", "没有片段时进入 idle");
+        expectThat(
+          query(mounted.container, '[data-pairing-failure="no_payload"]') !== null,
+          "无载荷必须呈现专门的失败类别（no_payload）",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "配对页根节点必须存在");
+        expectThat(
+          domText(root).includes("这个地址里没有配对信息"),
+          "无载荷页必须给出固定标题「这个地址里没有配对信息」",
         );
 
-        // 提交真的进了 store 的校验路径：非法内容被明确呈现为失败，而不是点了没反应。
-        click(query(mounted.container, PAIRING_SELECTOR.submit), "配对提交按钮");
-        await waitFor(
-          () => query(mounted.container, '[data-pairing-error="protocol.schema_invalid"]') !== null,
-          "非法内容被明确拒绝",
+        // 页面不再是入口：输入框与提交按钮都已删除（有它们就说明第二套入口回来了）。
+        expectEqual(
+          query(mounted.container, "[data-pairing-input]"),
+          null,
+          "配对页不得再提供输入框",
         );
         expectEqual(
-          query(mounted.container, "[data-pairing-phase]")?.getAttribute("data-pairing-phase") ?? null,
-          "failed",
-          "非法内容的配对阶段",
+          query(mounted.container, '[data-action="submit-pairing-qr"]'),
+          null,
+          "配对页不得再提供提交按钮",
         );
-        // 不尽力解析：结构校验不过时一个配对请求都不发。
-        expectEqual(http.urls.length, 0, "结构校验不过时不得发出任何配对请求");
-        // 粘进来的一次性的秘密不留在这个组件里。
-        expectEqual(
-          (query(mounted.container, PAIRING_SELECTOR.input) as HTMLInputElement | null)?.value ?? null,
-          "",
-          "提交后输入框必须被清空",
-        );
+
+        // 没有可读内容时不发起任何配对请求，也不写入任何已配对记录。
+        expectEqual(http.urls.length, 0, "没有载荷时一个配对请求都不发");
+        expectEqual(await storedPairedHost(), null, "没有载荷时不得写入已配对主机记录");
+        expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "没有载荷时不得建立连接");
       } finally {
         await mounted.unmount();
       }
     },
   },
   {
-    name: "PW-3 认领响应由别的钥匙签：明确失败（auth.proof_invalid）、停止轮询、不落盘、不建连接",
+    name: "PW-3 认领响应由别的钥匙签：明确失败（auth.proof_invalid / 固定标题）、停止轮询、不落盘、不建连接",
     async run() {
       // 二维码里那把（也是握手要用的那把）与**签认领证明的那把**是两把钥匙：证明的长度、字母表
       // 都合法，只有钥匙不对。客户端只可能因为「验签不过」而拒——这正是本用例要抓的那一步。
@@ -444,19 +489,13 @@ const checks: readonly Check[] = [
         qrHostPublicKey: identity.publicKeyBase64Url,
         claimSigner: rogue,
       });
+      openPairingAddress(pairingQrText(identity.publicKeyBase64Url));
       const mounted = await mountScenario(
         baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
       );
       try {
-        await waitFor(() => query(mounted.container, PAIRING_SELECTOR.entry) !== null, "配对页渲染出配对入口");
-        typeIntoInput(
-          mounted.container,
-          PAIRING_SELECTOR.input,
-          pairingQrText(identity.publicKeyBase64Url),
-          "配对入口",
-        );
-        click(query(mounted.container, PAIRING_SELECTOR.submit), "配对提交按钮");
-        await waitFor(() => http.requests.length > 0, "发出认领请求");
+        // 片段是唯一入口：不需要任何输入/点击，页面自己发出认领。
+        await waitFor(() => http.requests.length > 0, "打开配对地址后自动发出认领请求");
 
         // ① 明确失败：阶段进 `failed`，且错误码是**验签失败**那一支。形状不符（`protocol.schema_invalid`）
         // 与验签不过（`auth.proof_invalid`）是两个分支，断言具体的码才分得清「拒绝」与「没读懂」。
@@ -465,9 +504,21 @@ const checks: readonly Check[] = [
           "验签不过时配对进入明确失败",
           PAIRING_WAIT_MS,
         );
-        const failure = query(mounted.container, '[data-pairing-error="auth.proof_invalid"]');
-        expectThat(failure !== null, "失败态必须带验签失败的错误码（auth.proof_invalid）");
-        expectThat(textOf(failure).length > 0, "失败态必须给出可读的失败原因");
+        expectThat(
+          query(mounted.container, '[data-pairing-error="auth.proof_invalid"]') !== null,
+          "失败态必须带验签失败的错误码（auth.proof_invalid）",
+        );
+        // 固定文案在标题/说明里：`data-pairing-error` 只是一个空的诊断码节点，不再承载可读文本。
+        expectThat(
+          query(mounted.container, '[data-pairing-failure="request_failed"]') !== null,
+          "验签失败落到「请求未能完成」这一固定呈现",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "失败页的根节点必须存在");
+        expectThat(
+          domText(root).includes("配对请求未能完成"),
+          "失败页必须呈现固定标题「配对请求未能完成」",
+        );
 
         // ② 不落盘：一条已配对主机记录都不许写（写下去就等于信任了一把不是二维码带来的钥匙）。
         expectEqual(await storedPairedHost(), null, "验签失败时不得写入任何已配对主机记录");
@@ -489,7 +540,7 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "PW-4 已批准响应的主机公钥与二维码差一个字节：明确失败（protocol.schema_invalid）且不落盘、不建连接",
+    name: "PW-4 已批准响应的主机公钥与二维码差一个字节：明确失败（protocol.schema_invalid / unrecognized）且不落盘、不建连接",
     async run() {
       const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
       // 只翻**末字节**：长度、字母表、前 64 字节都不变，因此「形状检查」一定放行——它抓的是
@@ -505,19 +556,11 @@ const checks: readonly Check[] = [
         claimSigner: identity,
         approvedHostPublicKey: mismatched,
       });
+      openPairingAddress(pairingQrText(identity.publicKeyBase64Url));
       const mounted = await mountScenario(
         baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
       );
       try {
-        await waitFor(() => query(mounted.container, PAIRING_SELECTOR.entry) !== null, "配对页渲染出配对入口");
-        typeIntoInput(
-          mounted.container,
-          PAIRING_SELECTOR.input,
-          pairingQrText(identity.publicKeyBase64Url),
-          "配对入口",
-        );
-        click(query(mounted.container, PAIRING_SELECTOR.submit), "配对提交按钮");
-
         // 先走到「等待本机确认」：认领这一跳是**通过**的（同一把钥匙签、验签过），否则这一条验的
         // 就不是「已批准」那一跳了。
         await waitFor(
@@ -532,9 +575,21 @@ const checks: readonly Check[] = [
           "公钥不一致时配对进入明确失败",
           PAIRING_WAIT_MS,
         );
-        const failure = query(mounted.container, '[data-pairing-error="protocol.schema_invalid"]');
-        expectThat(failure !== null, "失败态必须带「已批准响应材料不可用」的错误码");
-        expectThat(textOf(failure).length > 0, "失败态必须给出可读的失败原因");
+        expectThat(
+          query(mounted.container, '[data-pairing-error="protocol.schema_invalid"]') !== null,
+          "失败态必须带「已批准响应材料不可用」的错误码",
+        );
+        // 结构/材料不符归到「无法识别这个地址」这一固定呈现（design D6）。
+        expectThat(
+          query(mounted.container, '[data-pairing-failure="unrecognized"]') !== null,
+          "公钥不一致落到「无法识别」这一固定呈现",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "失败页的根节点必须存在");
+        expectThat(
+          domText(root).includes("无法识别这个地址"),
+          "失败页必须呈现固定标题「无法识别这个地址」",
+        );
 
         // 不落盘、不建连接。
         expectEqual(await storedPairedHost(), null, "公钥不一致时不得写入任何已配对主机记录");
@@ -547,6 +602,66 @@ const checks: readonly Check[] = [
         const polls = http.requests.filter((request) => request.url.endsWith("/pairing/status"));
         expectEqual(polls.length, 2, "公钥不一致失败后不得再发出状态查询");
         expectEqual(phaseOf(mounted.container), "failed", "等过轮询窗口后阶段仍是明确失败");
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  },
+  {
+    name: "PW-5 倒计时归零：先到等待确认，再按绝对截止时间进入「地址已过期」并停止轮询",
+    async run() {
+      // 截止时间必须**晚于一次状态轮询**（2 秒）才观测得到 `pending_confirmation`，
+      // 又要在本用例的窗口内归零；留出挂载与认领的余量，取 3.5 秒。
+      const expiryWindowMs = 3_500;
+      const identity: FakeHostIdentity = await createFakeHostIdentity(HOST_ID);
+      // 假主机**永远**回「等待本机确认」：过期只能由页面的绝对截止时间推进，
+      // 不能靠某次状态响应「宣布」（那正是本用例要排除的实现）。
+      const http = pairingHttpFake({
+        qrHostPublicKey: identity.publicKeyBase64Url,
+        claimSigner: identity,
+        alwaysPending: true,
+      });
+      openPairingAddress(pairingQrText(identity.publicKeyBase64Url, expiryWindowMs));
+      const mounted = await mountScenario(
+        baseScenario({ seedPaired: false, identity, fetch: http.fetch }),
+      );
+      try {
+        await waitFor(
+          () => phaseOf(mounted.container) === "pending_confirmation",
+          "第一次状态查询进入等待确认",
+          PAIRING_WAIT_MS,
+        );
+
+        // 归零 → 终态 `expired`：不是 `failed`，因此没有 `data-pairing-failure` 锚点。
+        await waitFor(
+          () => phaseOf(mounted.container) === "expired",
+          "倒计时归零后进入「地址已过期」",
+          10_000,
+        );
+        expectEqual(
+          query(mounted.container, "[data-pairing-failure]"),
+          null,
+          "过期是终态，不得被呈现成「本侧失败」",
+        );
+        const root = query(mounted.container, PAIRING_SELECTOR.root);
+        expectThat(root !== null, "过期页的根节点必须存在");
+        expectThat(
+          domText(root).includes("配对地址已过期"),
+          "过期页必须呈现固定标题「配对地址已过期」",
+        );
+
+        // 此后至少等过一个轮询周期：到期回调取消了轮询，status 请求数不再增加。
+        const pollsAtExpiry = http.requests.filter((request) => request.url.endsWith("/pairing/status")).length;
+        const { promise: pollWindow, resolve: windowElapsed } = Promise.withResolvers<void>();
+        setTimeout(windowElapsed, PAIRING_POLL_INTERVAL_MS + 500);
+        await pollWindow;
+        expectEqual(
+          http.requests.filter((request) => request.url.endsWith("/pairing/status")).length,
+          pollsAtExpiry,
+          "过期后不得再发出状态查询",
+        );
+        expectEqual(await storedPairedHost(), null, "过期时不得写入任何已配对主机记录");
+        expectEqual(mounted.host?.socketUrls.length ?? -1, 0, "过期时不得建立连接");
       } finally {
         await mounted.unmount();
       }

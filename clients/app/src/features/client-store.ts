@@ -154,13 +154,14 @@ import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
 import type { PairingKind, PairingPageModel, PairingPollResult, PairingQrRead, PairingWiring } from "./pairing-model";
 import {
+  PAIRING_ERROR_HINTS,
   PAIRING_POLL_INTERVAL_MS,
   applyClaiming,
+  applyNoPayload,
   applyPairingCloseoutFailure,
   applyPairingFailure,
   applyPollResult,
   applyScannedNodeLink,
-  applyScannedQr,
   canonicalOriginOf,
   initialPairingPageModel,
   insecureContextFailure,
@@ -614,7 +615,10 @@ export interface ClientStoreOptions {
  */
 interface PairingSession {
   readonly qr: PairingQrPayload;
+  /** 取消在途的状态轮询。 */
   cancel: (() => void) | null;
+  /** 取消按载荷 `expiresAt` 安排的到期回调（design D3）。 */
+  expiryCancel: (() => void) | null;
 }
 
 type Listener = () => void;
@@ -1598,27 +1602,18 @@ export class ClientStore {
   }
 
   /**
-   * 配对页的主用例（页面进页时调用一次）：地址片段里有配对内容就读取并**立即清除**该片段，
-   * 然后进入与 `kind` 对应的流程；没有内容时不动状态——页面停在输入入口等用户粘贴。
+   * 配对页的**唯一**入口（页面进页时调用一次）：地址片段里有配对内容就读取并**立即清除**该片段，
+   * 然后进入与 `kind` 对应的流程；没有内容时呈现「这个地址里没有配对信息」。
    *
    * `kind` 是**路由**声明的期望类型（design D2）：载荷与它不一致时明确失败，绝不交给另一类流程。
    * 片段读取与清除都在组合根（地址栏是平台能力，`AGENTS.md` §6），本方法只消费它的结果。
+   *
+   * 会话进行中再次进入本方法（例如开发模式下 effect 重跑）时不覆盖当前状态：片段此时已被清除，
+   * 若按「无载荷」重写，会把正在等待确认的页面误切回 `idle`。
    */
   async startPairingFromAddress(kind: PairingKind): Promise<void> {
-    const text = this.#pairing?.takeQrTextFromFragment() ?? null;
-    if (text === null) return;
-    await this.#beginPairing(text, kind);
-  }
-
-  /**
-   * 粘贴入口：一段二维码内容（地址 / 片段 / 载荷）→ 结构校验 → 认领 → 轮询 → 已配对。
-   *
-   * `kind` 同 {@link startPairingFromAddress}：由本页的路由声明，用于把「喂错内容」变成明确失败。
-   * 结构校验不过时**明确失败且不发任何请求**（不尽力解析）；配对进行中重复提交被忽略，
-   * 否则会出现两条并行的 claim 与轮询。
-   */
-  async submitPairingQrText(text: string, kind: PairingKind): Promise<void> {
-    if (this.#pairing === null) {
+    const wiring = this.#pairing;
+    if (wiring === null) {
       this.#commit({
         ...this.#state,
         pairing: applyPairingFailure(this.#state.pairing, {
@@ -1631,6 +1626,11 @@ export class ClientStore {
       return;
     }
     if (this.#pairingSession !== null) return;
+    const text = wiring.takeQrTextFromFragment();
+    if (text === null) {
+      this.#commit({ ...this.#state, pairing: applyNoPayload(this.#state.pairing, kind) });
+      return;
+    }
     await this.#beginPairing(text, kind);
   }
 
@@ -1659,7 +1659,11 @@ export class ClientStore {
     if (!wiring.isSecureContext()) {
       this.#commit({
         ...this.#state,
-        pairing: applyPairingFailure(this.#state.pairing, insecureContextFailure()),
+        pairing: applyPairingFailure(
+          this.#state.pairing,
+          insecureContextFailure(),
+          "insecure_context",
+        ),
       });
       return;
     }
@@ -1673,7 +1677,11 @@ export class ClientStore {
       if (declaredOrigin === null || declaredOrigin !== currentOrigin) {
         this.#commit({
           ...this.#state,
-          pairing: applyPairingFailure(this.#state.pairing, originMismatchFailure()),
+          pairing: applyPairingFailure(
+            this.#state.pairing,
+            originMismatchFailure(),
+            "origin_mismatch",
+          ),
         });
         return;
       }
@@ -1688,6 +1696,7 @@ export class ClientStore {
         pairing: applyPairingFailure(
           this.#state.pairing,
           kindMismatchFailure(expectedKind, read.kind),
+          "kind_mismatch",
         ),
       });
       return;
@@ -1702,18 +1711,30 @@ export class ClientStore {
     }
 
     const qr = read.qr;
-    // 载荷从这一刻起由私有字段持有；`applyScannedQr` 只把**公开**的主机出示信息写进状态。
-    this.#pairingSession = { qr, cancel: null };
-    this.#commit({ ...this.#state, pairing: applyClaiming(applyScannedQr(this.#state.pairing, qr)) });
+    // 载荷从这一刻起由私有字段持有；`applyClaiming` 一次写入**公开**的对端信息与绝对截止时间。
+    const session: PairingSession = { qr, cancel: null, expiryCancel: null };
+    this.#pairingSession = session;
+    this.#commit({ ...this.#state, pairing: applyClaiming(this.#state.pairing, qr) });
+
+    // 到期定时器（design D3）：用载荷里的绝对 `expiresAt` 安排一次回调，归零即停止轮询并进入
+    // 过期页。服务端仍是过期判定的权威；这里只保证页面不会在本地过期之后继续查询。
+    const remaining = Math.max(0, Date.parse(qr.expiresAt) - this.#now());
+    session.expiryCancel = wiring.schedule(remaining, () => {
+      this.#expirePairing(qr);
+    });
 
     // 传输层的两次 await 都必须在本方法里收口：端口约定用返回值表达业务失败，但**抛出**
     // （网络不可达、响应不是 JSON、设备身份绑在另一个来源）同样是真实结果。让它冒泡会留下
-    // 一个非 null 的 `#pairingSession`：`isPairingInFlight` 恒真 → 输入框一直禁用、重复提交被
-    // 提前 return、`canRestart` 为 false、被取消的定时器也不会重排——页面里没有任何恢复路径。
+    // 一个非 null 的 `#pairingSession`：后续进入本方法会被提前 return、定时器也不会取消，
+    // 页面里没有任何恢复路径。
     let claimError: PublicError | null;
     try {
       claimError = await wiring.transport.claim({ qr, canonicalOrigin: qr.canonicalOrigin });
     } catch (error) {
+      // 到期定时器可能已经结束会话并提交了 `expired`（claim 在途时到期）：此时迟到的失败
+      // 只是这次请求没能完成，不能把页面从 `expired` 覆盖成 `failed`——与 `#pollOnce` 的
+      // catch 同一收口：会话已不在就保持现状。
+      if (this.#pairingSession === null) return;
       this.#endPairing();
       this.#commit({
         ...this.#state,
@@ -1728,6 +1749,27 @@ export class ClientStore {
       return;
     }
     this.#schedulePoll(qr);
+  }
+
+  /**
+   * 到期回调：会话仍是同一次配对时结束它并落到 `expired`。
+   *
+   * 状态迁移与秘密生命周期都属于仓库，页面只负责显示倒计时；因此即使页面标签被挂起、
+   * 每秒刷新没有跑，这里也会按绝对时间把状态推进过去。
+   */
+  #expirePairing(qr: PairingQrPayload): void {
+    const session = this.#pairingSession;
+    if (session === null || session.qr.pairingId !== qr.pairingId) return;
+    this.#endPairing();
+    this.#commit({
+      ...this.#state,
+      pairing: applyPairingFailure(this.#state.pairing, {
+        code: "pairing.expired",
+        message: PAIRING_ERROR_HINTS["pairing.expired"] ?? "二维码已过期：请在电脑上重新生成。",
+        retryable: false,
+        details: {},
+      }),
+    });
   }
 
   /** 安排下一次状态轮询；会话已被取代时不再安排。 */
@@ -1751,10 +1793,10 @@ export class ClientStore {
     if (wiring === null || session === null || session.qr.pairingId !== qr.pairingId) return;
     session.cancel = null;
 
-    // 与 `claim` 同样必须收口：轮询抛出时留下「进行中」的状态会让输入框一直禁用、
+    // 与 `claim` 同样必须收口：轮询抛出时留下「进行中」的状态会让页面一直停在转圈、
     // 也不会有下一次轮询。策略与 claim 一致——**失败即结束**（见 `#endPairing` 的注释）：
-    // 页面因此拿到可读、可重试的 `failed`（输入框解禁、出现「重新扫码」），
-    // 而不是把含秘密的载荷无限期留在内存里等一个可能永远不会好的网络。
+    // 页面因此拿到固定的「配对请求未能完成」，而不是把含秘密的载荷无限期留在内存里等一个
+    // 可能永远不会好的网络。
     let result: PairingPollResult;
     try {
       result = await wiring.transport.poll({ qr, requestNonce: wiring.nextRequestNonce() });
@@ -1817,16 +1859,17 @@ export class ClientStore {
     // 连接机要求 `unpaired --pair_started--> pairing --pair_succeeded--> disconnected`，
     // 之后组合根才被允许发起连接：跳过这两步，页面会一直停在「未配对」。
     this.pairSucceeded();
-    // 收口交给组合根：装配连接并触发一次连接（MUST NOT 停在等待扫码）。
+    // 收口交给组合根：装配连接并触发一次连接（MUST NOT 停在读地址阶段）。
     try {
       await wiring.onPaired(record);
     } catch (error) {
-      // 记录已落盘、连接机已推进、页面已显示「已配对」——收口失败只意味着这条连接没起来，
-      // 因此**不**回退配对结果（那会与主机面板刚显示的主机身份自相矛盾），只把可读原因补上；
-      // 异常也不冒泡成未处理拒绝（这里的调用方是 `void store.submitPairingQrText(...)`）。
-      // 原因走**收口专用**的映射，而不是 `claim` / `poll` 用的通用文案：这一页的阶段仍是
-      // `approved`，引导语说着「配对已完成」，通用文案的「配对请求未能完成」会与它正面对撞。
-      // 恢复路径仍在：连接机此刻是 `disconnected`，组合根的退避重连会再试一次。
+      // 记录已落盘、连接机已推进、页面已显示「已通过审批，正在进入目录」——收口失败只意味着
+      // 这条连接没起来，因此**不**回退配对结果（那会与主机面板刚显示的主机身份自相矛盾），
+      // 只把可读原因补上；异常也不冒泡成未处理拒绝（这里的调用方是
+      // `void store.startPairingFromAddress(...)`）。原因走**收口专用**的映射，而不是
+      // `claim` / `poll` 用的通用文案：这一页的呈现仍是「配对已完成」，通用文案的
+      // 「配对请求未能完成」会与它正面对撞。恢复路径仍在：连接机此刻是 `disconnected`，
+      // 组合根的退避重连会再试一次；页面照常自动进入目录。
       this.#commit({
         ...this.#state,
         pairing: applyPairingCloseoutFailure(this.#state.pairing, publicErrorForCloseoutFailure(error)),
@@ -1835,16 +1878,16 @@ export class ClientStore {
   }
 
   /**
-   * 结束这次配对：取消在途轮询并丢掉含秘密的载荷（§7.3）。
+   * 结束这次配对：取消在途轮询与到期定时器，并丢掉含秘密的载荷（§7.3）。
    *
    * 传输层**拒绝**（`claim` / `poll` 抛出）时选择「失败即结束」而不是「重排一次轮询」：
    * 端口用返回值区分业务失败，抛出只说明「这次请求没能完成」，仓库据此分不出「偶发断网」
    * 与「确定性拒绝」；重排还要求一份重试预算，且会把含 `pairingSecret` 的载荷无限期留在
-   * 内存里。结束会话反而保证页面立刻拿到可读、可重试的 `failed`（输入框解禁、有重新扫码
-   * 入口），而重试一次配对的成本只是一次粘贴。
+   * 内存里。结束会话反而保证页面立刻拿到固定的失败原因，而恢复路径是电脑重新生成地址。
    */
   #endPairing(): void {
     this.#pairingSession?.cancel?.();
+    this.#pairingSession?.expiryCancel?.();
     this.#pairingSession = null;
   }
 

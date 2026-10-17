@@ -1,26 +1,33 @@
 /**
- * WP1：两类配对入口（`/pair` 与 `/node-link/pair`）的浏览器级断言。
+ * 两类配对入口（`/pair` 与 `/node-link/pair`）的浏览器级断言。
  *
- * 跑的是**真实页面**：`app/node-link/pair.tsx` / `app/pair.tsx` → 共用的配对入口主体 →
- * 真实 `ClientStore` → 生产组合根（片段读取与清除、结构校验、类型校验）。被替身顶掉的只有
- * 配对 HTTPS 面（`fetch`）：e2e 环境里 `https://` 来源不可达，因此它同时兼作「发过哪些请求」的账本。
+ * 跑的是**真实页面**：`app/node-link/pair.tsx` / `app/pair.tsx` → 共用的配对页主体 →
+ * 真实 `ClientStore` → 生产组合根（片段读取与清除、结构校验、环境前置条件、类型校验）。
+ * 起点一律是「二维码地址的片段挂到 `location.hash` 上再挂载页面」——地址片段是唯一入口，
+ * 页面没有输入框与提交按钮。被替身顶掉的只有配对 HTTPS 面（`fetch`）：e2e 环境里
+ * `https://` 来源不可达，因此它同时兼作「发过哪些请求」的账本。
  *
- * ## 这两条覆盖什么
+ * ## 这几条覆盖什么
  *
- * - **NL-1**：打开 node-link 二维码的地址（`/node-link/pair#data=…`）落到**可用的**配对入口
- *   ——阶段是「已读到 node-link 内容」（不是 `failed`、也不是没动过），对端地址/主机信息可读，
- *   输入可提交，且本客户端不为它发任何请求（claim/status 由节点发起，浏览器不是参与方）。
+ * - **NL-1**：打开 node-link 二维码的地址（`/node-link/pair#data=…`）落到**只呈现对端信息**的
+ *   info 状态——阶段是「已读到 node-link 内容」（不是 `failed`、也不是没动过），对端地址可读，
+ *   不显示倒计时，且本客户端不为它发任何请求（claim/status 由节点发起，浏览器不是参与方）；
+ *   片段读取后被清除。
  * - **NL-2**：两类入口**互不混淆**——把 node-link 内容喂给 sync 入口、把 sync 内容喂给 node-link
- *   入口，两处都明确失败，且一个请求都不发。
+ *   入口，两处都明确失败（`kind_mismatch` + 固定标题「这不是本入口的配对地址」），文案指出被喂入
+ *   的类别名，且一个请求都不发。
+ * - **NL-3**：环境前置条件——非安全上下文与来源不符各自落到 `insecure_context` /
+ *   `origin_mismatch` 的固定呈现，一个请求都不发。
  *
  * ## 判别力：每条断言在实现被回退时都会红
  *
  * - 删掉 `app/node-link/pair.tsx`（或把路径写错，例如放到 `node-link/pairing.tsx`）：
- *   `../fixtures` 对它的 import 解析不到 → 页面包构建失败 → 本文件两条都红。
+ *   `../fixtures` 对它的 import 解析不到 → 页面包构建失败 → 本文件全部红。
  * - 去掉入口的类型校验（`#beginPairing` 不再比对 `read.kind` 与路由声明的类型）：sync 入口会把
  *   node-link 载荷交给认领流程（账本出现请求 → NL-2 红），node-link 入口会把 sync 载荷当己方内容
  *   呈现（阶段不是 `failed` → NL-2 红）。
  * - 只在路由里加一个空页面（不接 store）：`[data-pairing-entry]` 与对端地址都渲染不出来 → NL-1 红。
+ * - 把「读到 node-link 内容」实现成失败或输入入口：NL-1 的阶段/锚点断言立刻红。
  */
 
 import {
@@ -35,26 +42,24 @@ import { encodeBase64Url } from "../../../src/sync-client";
 import {
   CANONICAL_ORIGIN,
   HOST_ID,
-  click,
+  domText,
   expectAbsent,
   expectEqual,
   expectThat,
   mountScenario,
   query,
-  textOf,
   waitFor,
 } from "../support";
 import type { Check, ScenarioOptions } from "../support";
 import type { RouteEntry } from "../router-stub";
 import type { FetchLike } from "../../../src/composition";
-import { typeIntoInput } from "./r15-directory";
 
-/** 配对页的三个锚点选择器（与 `pairing-first-run.ts` 同一口径）。 */
+/** 配对页的锚点选择器（与 `pairing-first-run.ts` 同一口径）。 */
 const PAIRING_SELECTOR = {
+  root: '[data-route="pair"]',
   entry: '[data-pairing-entry="true"]',
-  input: "[data-pairing-input]",
-  submit: '[data-action="submit-pairing-qr"]',
   phase: "[data-pairing-phase]",
+  countdown: '[data-pairing-countdown="true"]',
 } as const;
 
 /** 一次配对会话的固定标识（固定值才能逐字断言它没进任何请求正文）。 */
@@ -82,7 +87,7 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     route: PAIR_ROUTE,
     // 环境事实（design D2）：e2e 页面由 http 提供、二维码夹具的 `canonicalOrigin` 是 `https://…`；
     // 注入「安全上下文 + 来源等于夹具来源」让两条前置校验成立，NL-1/NL-2 才判得到它们各自要判的
-    // 那一幕（入口可用性 / 类型互不混淆），而不是先被环境前置条件拦下。
+    // 那一幕（读到 node-link / 类型互不混淆），而不是先被环境前置条件拦下。
     secureContext: () => true,
     origin: () => CANONICAL_ORIGIN,
     ...overrides,
@@ -102,6 +107,15 @@ function recordingFetch(): { readonly fetch: FetchLike; readonly urls: string[] 
 /** 当前配对阶段（`data-pairing-phase`）；没渲染出来时返回 `null`。 */
 function phaseOf(container: HTMLElement): string | null {
   return query(container, PAIRING_SELECTOR.phase)?.getAttribute("data-pairing-phase") ?? null;
+}
+
+/**
+ * 打开配对地址：把二维码地址的 `#…` 部分挂到 `location.hash` 上，再挂载页面。
+ *
+ * 地址片段是唯一入口（design D1），与扫码打开同一条路径（组合根读片段并立即清除）。
+ */
+function openPairingAddress(text: string): void {
+  globalThis.location.hash = text.slice(text.indexOf("#"));
 }
 
 /**
@@ -166,14 +180,12 @@ const CONFUSION_CASES: readonly {
 
 const checks: readonly Check[] = [
   {
-    name: "NL-1 node-link 二维码打开的是可用配对入口：地址可读、输入可提交、一个请求都不发",
+    name: "NL-1 node-link 二维码打开的是只读的对端信息页：地址可读、不显示倒计时、一个请求都不发",
     async run() {
       const identity = await createFakeHostIdentity(HOST_ID);
       const text = nodeLinkQrText(identity.publicKeyBase64Url);
       const http = recordingFetch();
-      // 真实地址栏形态：二维码地址里的片段先挂到 `location.hash` 上，页面按它读到内容
-      // （与扫码打开同一条路径：组合根读片段并立即清除）。
-      globalThis.location.hash = text.slice(text.indexOf("#"));
+      openPairingAddress(text);
 
       const mounted = await mountScenario(
         baseScenario({ seedPaired: false, fetch: http.fetch, route: NODE_LINK_PAIR_ROUTE }),
@@ -181,11 +193,12 @@ const checks: readonly Check[] = [
       try {
         await waitFor(
           () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
-          "node-link 配对页渲染出配对入口",
+          "node-link 配对页渲染出来（data-pairing-entry 锚点）",
         );
-
-        // 落在**可用**的入口：已读到 node-link 内容（不是 `failed`，也不是停在 `idle` 什么都没发生）。
-        expectEqual(phaseOf(mounted.container), "node_link_scanned", "node-link 二维码打开后的配对阶段");
+        await waitFor(
+          () => phaseOf(mounted.container) === "node_link_scanned",
+          "读到 node-link 内容（不是 failed、也不是没动过）",
+        );
 
         // 地址/主机信息可读：§13.1 的 HTTP 来源（endpoint 的 host 加 https）与 owner 节点标识。
         expectEqual(
@@ -193,20 +206,11 @@ const checks: readonly Check[] = [
           "https://work-pc.example.ts.net",
           "node-link 入口呈现的对端地址（取自 endpoint）",
         );
-
-        // 输入可提交：输入框未被禁用，且输入非空后提交按钮可用（与 sync 入口同一套判定）。
-        const input = query(mounted.container, PAIRING_SELECTOR.input) as HTMLInputElement | null;
-        expectThat(input !== null, "node-link 配对入口必须有二维码内容输入框");
-        expectEqual(input?.disabled ?? true, false, "读到 node-link 内容后输入框仍应可输入");
+        // 浏览器不是 node-link 配对的参与方：不显示 sync 的审批窗口倒计时。
         expectEqual(
-          (query(mounted.container, PAIRING_SELECTOR.submit) as HTMLButtonElement | null)?.disabled ?? false,
-          true,
-          "空输入时提交按钮必须禁用",
-        );
-        typeIntoInput(mounted.container, PAIRING_SELECTOR.input, text, "node-link 配对入口");
-        await waitFor(
-          () => (query(mounted.container, PAIRING_SELECTOR.submit) as HTMLButtonElement | null)?.disabled === false,
-          "输入非空后提交按钮可用",
+          query(mounted.container, PAIRING_SELECTOR.countdown),
+          null,
+          "node-link 入口不得显示倒计时",
         );
         expectThat(
           query(mounted.container, "[data-pairing-error]") === null,
@@ -222,47 +226,40 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "NL-2 两类入口互不混淆：交叉喂错内容都明确失败，且一个请求都不发",
+    name: "NL-2 两类入口互不混淆：交叉喂错内容都明确失败（kind_mismatch），且一个请求都不发",
     async run() {
       const identity = await createFakeHostIdentity(HOST_ID);
       for (const scenario of CONFUSION_CASES) {
         const http = recordingFetch();
-        // 这一条走**粘贴**入口：起点不能带着上一轮的片段（否则页面会先按片段读一次内容）。
-        globalThis.location.hash = "";
+        // 片段是该入口收到的**另一类**载荷：页面读它、校验类型，然后在发请求之前停住。
+        openPairingAddress(scenario.text(identity.publicKeyBase64Url));
         const mounted = await mountScenario(
           baseScenario({ seedPaired: false, fetch: http.fetch, route: scenario.route }),
         );
         try {
           await waitFor(
-            () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
-            `${scenario.name}：渲染出配对入口`,
-          );
-          // 起点：这一页还没有读到任何内容（地址栏里没有片段）。
-          expectEqual(phaseOf(mounted.container), "idle", `${scenario.name}：入口的初始阶段`);
-
-          typeIntoInput(
-            mounted.container,
-            PAIRING_SELECTOR.input,
-            scenario.text(identity.publicKeyBase64Url),
-            scenario.name,
-          );
-          click(query(mounted.container, PAIRING_SELECTOR.submit), `${scenario.name}：提交按钮`);
-
-          await waitFor(
-            () => phaseOf(mounted.container) === "failed",
+            () => query(mounted.container, '[data-pairing-failure="kind_mismatch"]') !== null,
             `${scenario.name}：明确失败（而不是误入另一类流程）`,
           );
-          expectEqual(
-            query(mounted.container, '[data-pairing-error="protocol.schema_invalid"]') !== null,
-            true,
-            `${scenario.name}：失败态带自己的码`,
+          expectEqual(phaseOf(mounted.container), "failed", `${scenario.name}：失败阶段`);
+
+          const root = query(mounted.container, PAIRING_SELECTOR.root);
+          expectThat(root !== null, `${scenario.name}：失败页根节点必须存在`);
+          // 固定标题 + 类别名：文案说清「哪一类喂给了哪一类」，但不回显载荷内容。
+          const panelText = domText(root);
+          expectThat(
+            panelText.includes("这不是本入口的配对地址"),
+            `${scenario.name}：必须呈现固定标题「这不是本入口的配对地址」`,
           );
-          // 文案说清「哪一类喂给了哪一类」；它不含载荷内容（一次性配对秘密不落呈现）。
-          const message = textOf(query(mounted.container, "[data-pairing-error]"));
-          expectThat(message.includes(scenario.foreign), `${scenario.name}：失败文案要指出喂错的是哪一类`);
-          expectAbsent(message, PAIRING_SECRET, `${scenario.name}：失败文案不得回显配对秘密`);
+          expectThat(
+            panelText.includes(scenario.foreign),
+            `${scenario.name}：文案要指出喂入的是哪一类（${scenario.foreign}）`,
+          );
+          expectAbsent(panelText, PAIRING_SECRET, `${scenario.name}：失败文案不得回显配对秘密`);
+
           // 反例：去掉类型校验 → 一类内容会被另一类流程接手，这里会出现认领或状态查询请求。
           expectEqual(http.urls.length, 0, `${scenario.name}：一个配对请求都不发`);
+          expectEqual(globalThis.location.hash, "", `${scenario.name}：片段读取后被清除`);
         } finally {
           await mounted.unmount();
         }
@@ -272,60 +269,67 @@ const checks: readonly Check[] = [
   /**
    * 环境前置条件（`SYNC_PROTOCOL.md` §7.1 的「当前 origin 与 secure context」）：
    * 只有把环境事实造出来才验得到——页面由 http 提供、二维码夹具是 https 来源，生产默认两条
-   * 都成立，因此这里注入替身把两条各破一次。
+   * 都成立，因此这里注入替身把两条各破一次。起点同样是地址片段。
    */
   {
     name: "NL-3 环境前置条件：非安全上下文与来源不符都明确失败，且一个请求都不发",
     async run() {
       const identity = await createFakeHostIdentity(HOST_ID);
-      const cases: readonly { readonly name: string; readonly env: Partial<ScenarioOptions>; readonly code: string }[] = [
-        { name: "非安全上下文", env: { secureContext: () => false }, code: "auth.insecure_context" },
+      const cases: readonly {
+        readonly name: string;
+        readonly env: Partial<ScenarioOptions>;
+        readonly code: string;
+        readonly failure: string;
+        readonly title: string;
+      }[] = [
+        {
+          name: "非安全上下文",
+          env: { secureContext: () => false },
+          code: "auth.insecure_context",
+          failure: "insecure_context",
+          title: "需要 HTTPS 才能配对",
+        },
         {
           name: "来源不符",
           env: { origin: () => "https://other-host.example.ts.net" },
           code: "auth.origin_mismatch",
+          failure: "origin_mismatch",
+          title: "这个地址属于另一台电脑",
         },
       ];
 
       for (const scenario of cases) {
         const http = recordingFetch();
-        // 走**粘贴**入口：起点不携带任何片段，避免页面先按片段读一次内容。
-        globalThis.location.hash = "";
+        // 走**地址片段**入口：与扫码打开同一条路径，页面读完载荷后先判环境事实。
+        openPairingAddress(syncQrText(identity.publicKeyBase64Url));
         const mounted = await mountScenario(
           baseScenario({ seedPaired: false, fetch: http.fetch, route: PAIR_ROUTE, ...scenario.env }),
         );
         try {
+          // 明确失败、且失败态带自己的码与固定呈现（两条前置条件各自可区分）。
           await waitFor(
-            () => query(mounted.container, PAIRING_SELECTOR.entry) !== null,
-            `${scenario.name}：渲染出配对入口`,
-          );
-          // 起点：还没读到任何内容。
-          expectEqual(phaseOf(mounted.container), "idle", `${scenario.name}：入口的初始阶段`);
-
-          typeIntoInput(
-            mounted.container,
-            PAIRING_SELECTOR.input,
-            syncQrText(identity.publicKeyBase64Url),
-            scenario.name,
-          );
-          click(query(mounted.container, PAIRING_SELECTOR.submit), `${scenario.name}：提交按钮`);
-
-          // 明确失败、且失败态带自己的码（两条前置条件各自可区分）。
-          await waitFor(
-            () => phaseOf(mounted.container) === "failed",
+            () => query(mounted.container, `[data-pairing-failure="${scenario.failure}"]`) !== null,
             `${scenario.name}：明确失败（而不是误入认领流程）`,
           );
-          expectEqual(
+          expectEqual(phaseOf(mounted.container), "failed", `${scenario.name}：失败阶段`);
+          expectThat(
             query(mounted.container, `[data-pairing-error="${scenario.code}"]`) !== null,
-            true,
             `${scenario.name}：失败态带自己的码`,
           );
-          const message = textOf(query(mounted.container, "[data-pairing-error]"));
-          expectThat(message.length > 0, `${scenario.name}：失败文案必须可读`);
+
+          const root = query(mounted.container, PAIRING_SELECTOR.root);
+          expectThat(root !== null, `${scenario.name}：失败页根节点必须存在`);
+          // 固定文案在标题/说明里；`data-pairing-error` 只是一个空的诊断码节点。
+          const panelText = domText(root);
+          expectThat(
+            panelText.includes(scenario.title),
+            `${scenario.name}：必须呈现固定标题「${scenario.title}」`,
+          );
           // 文案不回显载荷内容（一次性配对秘密不得落呈现）。
-          expectAbsent(message, PAIRING_SECRET, `${scenario.name}：失败文案不得回显配对秘密`);
+          expectAbsent(panelText, PAIRING_SECRET, `${scenario.name}：失败文案不得回显配对秘密`);
           // 反例：去掉任一条环境前置判定 → 会走到认领，这里就会出现请求。
           expectEqual(http.urls.length, 0, `${scenario.name}：一个配对请求都不发`);
+          expectEqual(globalThis.location.hash, "", `${scenario.name}：片段读取后被清除`);
         } finally {
           await mounted.unmount();
         }

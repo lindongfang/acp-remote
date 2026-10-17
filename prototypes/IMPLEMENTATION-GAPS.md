@@ -19,13 +19,13 @@
 |---|---|---|
 | 合同（目录字段 / Sync `session.create` / Agent 目录 / 快照范围 / **目录路径下发 / 目录浏览 / 结构化差异行**） | **已落地** | `openspec/specs/` 的 `sync-workspace-catalog`、`sync-session-create`、`sync-snapshot-scope`、`sync-event-projection`、`core-derived-events`、`workspace-resolution`，以及变更 `sync-path-browse-and-diff-delivery` 的增量规格（其中的 `sync-workspace-browse` 是本变更新增的能力，尚未并入 `openspec/specs/`）；`compatibility/commands/v1/commands.json`（14 条命令，13 条走 sync 传输，含 `workspace.browse` 且归 `grant.observe`）；`compatibility/features/v1/features.json`（含 `core.workspace-browse.v1`/`core.file-diff.v1`；目录条目的 `path` 始终随快照下发，`core.workspace-path.v1` 已不在机器登记表里）；`schemas/sync/v1/**` 与 `fixtures/sync/v1/**` |
 | 前端工程与逻辑层（配对状态机、连接 12 态、快照/重放、事件去重、命令幂等、目录模型、创建链路、对话读取与翻页、降级卡片与诊断、主机面板、imported 不落盘） | **已落地** | `clients/app/src/**`，含单测与浏览器 E2E（`clients/app/e2e/page/checks/`） |
-| 前端**视觉与交互层** | **已落地** | 共享外壳（`src/components/shell/`，装在 `app/_layout.tsx`；`/pair` 与 `/node-link/pair` 按原型隐藏全局顶栏、改呈现自己的头部）+ 目录页、目录详情、对话页、`hosts` 与配对路由 + 创建与文件夹弹层（`CreateSessionSheet.tsx`、`DirectoryPicker.tsx`）；`src/components/` 下**已没有**不带 `StyleSheet` 的组件（含 `ContextUsageBar`、`DiagnosticsDrawer`、`DegradedEventCard`、`PairingPanel` 四个原裸标记组件） |
+| 前端**视觉与交互层** | **已落地** | 共享外壳（`src/components/shell/`，装在 `app/_layout.tsx`；`/pair` 与 `/node-link/pair` 隐藏全局顶栏、不绘制页头与返回——桌面原型本来就没有页头，移动原型的「标题栏 + 主题按钮」是登记的有意偏离）+ 目录页、目录详情、对话页、`hosts` 与配对路由 + 创建与文件夹弹层（`CreateSessionSheet.tsx`、`DirectoryPicker.tsx`）；`src/components/` 下**已没有**不带 `StyleSheet` 的组件（含 `ContextUsageBar`、`DiagnosticsDrawer`、`DegradedEventCard`、`PairingPanel` 四个原裸标记组件） |
 | `server::sync` | **已落地**（认证、订阅与投递、快照、配对 HTTP 与业务命令面，含 `workspace.browse`、路径下发与 `diffLines` 投影）；**残留见 §3.1** | `crates/server/src/sync/**`（`conn`/`subscribe`/`snapshot`/`event`/`command`/`pairing`/`router`） |
 | 前端静态资源托管（原 `/ui` 项） | **已落地** | Daemon **根路径**同源托管、产物嵌入二进制、发布构建缺产物拒绝启动（`server::transport::net::ui`、`crates/server/build.rs`）；`docs/FRONTEND_DESIGN.md §4.3` |
-| 真实浏览器 + 真实 Daemon 的端到端 | **已完成**（2026-10-16 逐条实测） | `README.md` 的「仓库当前状态」；记录见归档的 `openspec/changes/archive/2026-10-16-frontend-sync-wiring/plan.md` 的「真机验收记录」。**注意**：`docs/FRONTEND_DESIGN.md §9` 的注记仍写「尚未执行」，两处口径不一致（见 §5） |
+| 真实浏览器 + 真实 Daemon 的端到端 | **已完成**（2026-10-16 逐条实测） | `README.md` 的「仓库当前状态」；记录见归档的 `openspec/changes/archive/2026-10-16-frontend-sync-wiring/plan.md` 的「真机验收记录」；`docs/FRONTEND_DESIGN.md §9` 已同步为「已执行」 |
 
 一句话：**原型里的四个页面、共享外壳与创建链路都已经落进 `clients/app`；今天剩下的缺口不在三个页面本身**——它们在
-①配对页的「已批准后自动进入目录」与主机面板的信息/动作集合；②移动原型那一套导航形态（已登记的有意偏离）；③PWA 安装与 i18n
+①主机面板的信息/动作集合；②移动原型那一套导航形态（已登记的有意偏离）；③PWA 安装与 i18n
 （已登记为非目标）；④服务端两处**如实降级**（`session.read` 的三类明细、imported 事件回源投递）与 `acp_facade`、
 `node-link-client` 两个尚未开始的切片。
 
@@ -128,32 +128,39 @@ think / tool / perm 三类，上下文用量是**输入区的胶囊 + 弹层**�
 - 面板的**三个动作**：「立即重连」、「重新配对」、「清除数据」及其二次确认。重新配对今天经配对路由
   （`/pair`）本身进入，面板里没有入口；平台层的清除能力（`secure-storage` / `local-cache`）已存在，只是没有界面。
 
-### 2.4 配对页（已按实现重画，剩一处行为缺口）
+### 2.4 配对页（已对齐）
 
-已落地：二维码内容**粘贴**入口与结构校验（扫码属可选增强）、「安全上下文 → 来源一致 → 载荷类型」三道前置校验
-（`pairing-origin-secure-context`）、两条密码学校验（用配对载荷里的主机公钥验 `hostProof`；已批准响应的公钥与
-载荷逐字节比对）、已批准后落盘 `paired-host/<canonicalOrigin>` 并触发连接、失败原因的封闭词表；页面阶段覆盖
-`idle / awaiting_qr / claiming / pending_confirmation / approved / rejected / expired / consumed / failed`。
+已落地：配对页只接受**地址片段**作为入口（打开带 `#data=` 的配对地址即进入流程，读到片段后立即清除；`/pair`
+的 sync 载荷据此自动开始认领，`/node-link/pair` 的 node-link 载荷只呈现对端信息、不发起 claim/status），页内
+没有输入框、粘贴入口、提交按钮或「重新扫码」，也不绘制页头与页内返回，全局顶栏仍不呈现；「安全上下文 → 来源
+一致 → 载荷类型」三道前置校验（`pairing-origin-secure-context`）、两条密码学校验（用配对载荷里的主机公钥验
+`hostProof`；已批准响应的公钥与载荷逐字节比对）、已批准后落盘 `paired-host/<canonicalOrigin>` 并触发连接、
+失败原因的封闭词表；页面阶段覆盖 `reading / idle / claiming / pending_confirmation / approved / rejected /
+expired / consumed / node_link_scanned / failed`。配对进行中按载荷的 `expiresAt` 显示真实剩余有效期 `m:ss`，
+归零或打开即过期进入「地址已过期」并停止轮询；审批通过后约 1.6 秒自动替换到目录页（路由 `/`），不以连接已在线为前提，
+连接装配失败仍进目录、由设备胶囊表达断开与重连。失败页九类固定文案（被拒绝、已过期、已被使用、无法识别、
+来源不一致、非安全上下文、请求未能完成、载荷类型与入口不匹配、没有载荷）都没有按钮，不渲染后端 `message`；
+其中**没有载荷**（直接访问或刷新后片段已清）与**载荷类型与入口不匹配**是原型未画到的两条分支，各有专用标题
+与说明，且都不发任何请求。配对页复用当前主题调色板，但页内不提供主题切换。
 
-两个原型（桌面与移动）的 `#/pair` 现在按「浏览器里打开配对 URL 即开始」设计：进入页面就是居中的配对中状态
-（转圈 + 5 分钟倒计时，每 2 秒轮询审批），页面没有输入框、顶部返回入口、步骤条或右侧说明；审批通过后自动
-进入目录，未通过 / 过期 / 已用 / 无法识别 / 来源不一致 / 非安全上下文 / 请求失败只显示原因，失败页不提供
-进入目录的按钮。原型的 18 个陈列态、6 位 SAS 人工核对与「这台设备申请了这些权限」清单都已删除——它们不是
-产品行为（设备方向没有授权维度）。
+两个原型（桌面与移动）的 `#/pair` 都按「浏览器里打开配对 URL 即开始」设计：进入页面就是居中的配对中状态
+（转圈 + 剩余有效期倒计时，原型按 5 分钟展示，每 2 秒轮询审批），页面没有输入框、顶部返回入口、步骤条或
+右侧说明；审批通过后自动进入目录，未通过 / 过期 / 已用 / 无法识别 / 来源不一致 / 非安全上下文 / 请求失败只
+显示原因，失败页不提供进入目录的按钮。原型的 18 个陈列态、6 位 SAS 人工核对与「这台设备申请了这些权限」清单
+都已删除——它们不是产品行为（设备方向没有授权维度）。
 
-**仍缺**：
+上一版在此处登记的三条缺口**已全部落地**，不再是缺口：
 
-- **已批准后自动进入目录**：原型按目标行为画成「短暂显示正在进入目录，然后跳目录页」；实现目前在 `approved`
-  阶段停在配对页显示「配对已完成，正在建立同步连接」，**没有导航**。要落地需在配对入口观察
-  `pairing.phase === "approved"` 后切到目录页（`/node-link/pair` 复用同一主体，需同时决定它的落点）。
-- **页面入口形态**：原型没有输入框（打开 URL 即开始）；实现已支持打开带片段的地址自动开始
-  （`startPairingFromAddress`），但配对页仍保留「粘贴二维码内容」入口（design D3 的 v1 取舍）。要让实现完全
-  符合原型，需要产品决策是否移除粘贴入口；在移除前这一处会与原型不同。
-- **5 分钟倒计时**：原型在配对中显示倒计时并在归零后进入「地址已过期」；实现的配对载荷本身带 `expiresAt`
-  （`schemas/sync/v1/pairing.schema.json`），但 `PairingPageModel` 没有把它带进视图，因此页面上没有实时倒计时。
-  要落地只需把该字段投影到页面模型并按截止时间刷新。
-- 主机指纹与「完成总结卡」不再属于配对页：配对页没有凭据输入，实现也只在主机面板给出地址、主机 ID、本机
-  设备 ID 与 Agent 列表。若要展示指纹，应补在主机面板（见 §2.3），不要在配对页加回凭据类信息。
+- **已批准后自动进入目录**：实现按原型显示短暂过渡并在约 1.6 秒后以替换历史条目的方式进入目录页；`/node-link/pair`
+  复用同一主体但不跳转、不显示倒计时。
+- **页面入口形态**：页内粘贴入口与「重新扫码」已删除，地址片段是唯一入口；没有载荷时按入口类型给不同标题
+  （`NO_PAYLOAD_COPY`）——`/pair` 呈现「这个地址里没有配对信息」，`/node-link/pair` 呈现「这个地址里没有节点
+  配对信息」，两者都指引用电脑重新生成的地址打开，而不是等待用户粘贴。
+- **倒计时**：`expiresAt` 已投影到页面模型并按截止时间每秒刷新；归零即停止轮询并进入过期页，打开时已过期则
+  一个请求都不发。这是真实剩余有效期，不是固定从页面打开数 300 秒。
+
+主机指纹与「完成总结卡」不属于配对页：配对页没有凭据输入，实现也只在主机面板给出地址、主机 ID、本机
+设备 ID 与 Agent 列表。若要展示指纹，应补在主机面板（见 §2.3），不要在配对页加回凭据类信息。
 
 ### 2.5 新建会话弹层与文件夹浏览（已对齐）
 
@@ -246,22 +253,22 @@ Daemon 在**根路径**同源托管 PWA 产物：入口文档、单页应用回�
 - 手机后台挂起与恢复体验（`docs/INITIAL_DESIGN.md` §16 未验证项 5）。
 - PWA WebCrypto P-256 / IndexedDB 的实际浏览器支持矩阵与验收结果，以及 §11 里其余仍未收口的暂缓项
   （`docs/FRONTEND_DESIGN.md` §11）。
-- **权威文档之间的一处口径冲突待核对**（本文件不判定）：`README.md` 的「仓库当前状态」记「真实 Daemon 的浏览器级
-  端到端验收已完成（2026-10-16 实测）」，而 `docs/FRONTEND_DESIGN.md` §9 的注记仍写「尚未执行」。按
-  `docs/WORKFLOW.md` 的 E2E 口径，这一条只能由权威文档给出结论。
+- ~~**权威文档之间的一处口径冲突待核对**：`README.md` 与 `docs/FRONTEND_DESIGN.md §9` 对真实 Daemon 的浏览器级
+  端到端验收是否已执行的口径不一致。~~ 2026-10-17 复核：`FRONTEND_DESIGN.md §9` 已写明该验收**已执行**（2026-10-16
+  逐条实测，记录见归档的 `frontend-sync-wiring/plan.md`），本文件此处不再登记冲突。
 
 ---
 
 ## 6. 剩余工作的建议顺序
 
 ```text
-① 配对页收口：实现补「已批准后自动进入目录」，并确认是否移除配对页的粘贴入口（原型已按打开 URL 即配对画）
-② 主机与连接面板补信息与动作：指纹与说明、本版本边界、立即重连 / 重新配对 / 清除数据（二次确认）
-③ 服务端如实降级的三项收口：session.read 三类明细、imported 事件回源投递、Owner 可达性的真实数据源
-④ Node Link 面的结构化历史（协议侧既有缺口，客户端已对 imported 显式降级）
-⑤ PWA 安装（manifest / service worker）、i18n、移动原型那套导航形态            ← 均已被登记为非目标
+① 主机与连接面板补信息与动作：指纹与说明、本版本边界、立即重连 / 重新配对 / 清除数据（二次确认）
+② 服务端如实降级的三项收口：session.read 三类明细、imported 事件回源投递、Owner 可达性的真实数据源
+③ Node Link 面的结构化历史（协议侧既有缺口，客户端已对 imported 显式降级）
+④ PWA 安装（manifest / service worker）、i18n、移动原型那套导航形态            ← 均已被登记为非目标
 ```
 
-说明：①—⑤ 都是**增量**，不再有「必须先等某个前置变更」的阻塞——三页与外壳已经落地，`server::sync` 与根路径静态
-托管也已落地，真实 Daemon 的浏览器级端到端验收已记录为完成（出处见 §0 与 §5）。②③ 的判据仍以 `docs/` 的权威
-文档与各变更的 specs 为准，本文件只记「还剩什么」。
+说明：①—④ 都是**增量**，不再有「必须先等某个前置变更」的阻塞——三页与外壳已经落地（配对页的入口、倒计时、
+通过后自动进目录与失败页呈现也已对齐原型；移动原型的页头与主题按钮是 §0 表登记的有意偏离），`server::sync` 与根路径静态托管也已落地，真实 Daemon 的浏览器级
+端到端验收已记录为完成（出处见 §0 与 §5）。①② 的判据仍以 `docs/` 的权威文档与各变更的 specs 为准，本文件
+只记「还剩什么」。
