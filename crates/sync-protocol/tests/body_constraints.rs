@@ -335,7 +335,7 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
 
     // imported 事件的 eventId 必须等于 remoteOrigin.originEventId（docs §9.6 / §10.1）。
     let matching = format!(
-        "{{\"ownerNodeId\":\"{SERVER_EPOCH}\",\"exportId\":\"export-laptop-zed\",\"originEpoch\":\"{TURN_ID}\",\"originEventId\":\"{EVENT_ID}\",\"originSequence\":\"900\"}}"
+        "{{\"ownerNodeId\":\"{SERVER_EPOCH}\",\"originEpoch\":\"{TURN_ID}\",\"originEventId\":\"{EVENT_ID}\",\"originSequence\":\"900\"}}"
     );
     let imported_ok: Result<EventBody, String> = decode(
         "event",
@@ -364,7 +364,7 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
         "imported 事件的 eventId 必须等于 remoteOrigin.originEventId"
     );
 
-    let incomplete = "{\"ownerNodeId\":\"00384a03-bc90-4095-b65d-82fb8cc47e13\",\"exportId\":\"exp-1\",\"originEventId\":\"3a4b5c6d-7e80-4192-a3b4-c5d6e7f8091a\",\"originSequence\":\"9\"}";
+    let incomplete = "{\"ownerNodeId\":\"00384a03-bc90-4095-b65d-82fb8cc47e13\",\"originEventId\":\"3a4b5c6d-7e80-4192-a3b4-c5d6e7f8091a\",\"originSequence\":\"9\"}";
     assert!(
         decode::<EventBody>(
             "event",
@@ -520,15 +520,15 @@ fn session_summary_origin_block_is_discriminated_by_kind() {
     assert!(local.is_ok(), "本节点会话只带 kind：{local:?}");
 
     let remote: Result<SessionSummary, String> = parse(&format!(
-        "{{\"kind\":\"remote\",\"ownerNodeId\":\"{SERVER_EPOCH}\",\"exportId\":\"export-laptop-zed\",\"originEpoch\":\"{TURN_ID}\",\"online\":true}}"
+        "{{\"kind\":\"remote\",\"ownerNodeId\":\"{SERVER_EPOCH}\",\"originEpoch\":\"{TURN_ID}\",\"online\":true}}"
     ));
-    assert!(remote.is_ok(), "imported 会话的四种字段必需：{remote:?}");
+    assert!(remote.is_ok(), "imported 会话的必需字段齐全：{remote:?}");
 
     let remote_incomplete: Result<SessionSummary, String> =
         parse("{\"kind\":\"remote\",\"online\":true}");
     assert!(
         remote_incomplete.is_err(),
-        "remote 形状缺 ownerNodeId/exportId/originEpoch 必须被拒"
+        "remote 形状缺 ownerNodeId/originEpoch 必须被拒"
     );
 
     let local_extra: Result<SessionSummary, String> = parse("{\"kind\":\"local\",\"online\":true}");

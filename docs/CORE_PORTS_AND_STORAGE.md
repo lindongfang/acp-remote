@@ -501,7 +501,6 @@ pub trait RemoteDeliveryStore: Send + Sync {
     /// 同时持有两个 trait 的调用点写 UFCS）。
     async fn find_remote_request(&self, session: &RemoteSessionRef, request: &RequestId) -> Result<Option<RemoteCommandRef>, PortError>;
     /// 删除该 import 名下的交付索引与命令引用；**不删除审计行**（`SECURITY_DESIGN.md` §11.5 要求保留审计）。
-    async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError>;
     async fn prune(&self, policy: RetentionPolicy, at: Timestamp) -> Result<PruneReport, PortError>;
 }
 ```

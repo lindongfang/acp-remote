@@ -38,12 +38,6 @@
         "node.pair.reject",
         "node.list",
         "node.revoke",
-        "export.create",
-        "export.list",
-        "export.revoke",
-        "import.add",
-        "import.list",
-        "import.remove",
         "node.rotate-key.begin",
         "audit.export"
       ]

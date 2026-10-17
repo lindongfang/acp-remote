@@ -173,14 +173,12 @@ u32be length | payload(length bytes)
 |---|---|---|
 | `local.agent.configure` | `agent.list`（只读；Agent 声明由配置文件提供） | `core::use_cases` 本地配置族 |
 | `local.device.manage` | `device.pair.begin`、`device.pair.status`、`device.pair.confirm`、`device.pair.reject`、`device.list`、`device.revoke`、`node.pair.begin`、`node.pair.status`、`node.pair.confirm`、`node.pair.reject`、`node.list`、`node.revoke` | `DeviceManagement` |
-| `local.export.manage` | `export.create`、`export.list`、`export.revoke`、`import.add`、`import.list`、`import.remove` | `ExportManagement`（写入）与 `RemoteCatalogQueries`（读取） |
 | `local.node.rotate-key` | `node.rotate-key.begin`（`post_mvp`，§5.7） | `DeviceManagement`（与 `node.rotate-key.*` 消息同批定义） |
 | `local.audit.export` | `audit.export` | 审计仓储的本地读取端口（不经业务用例） |
 
 补充说明：
 
 - `daemon.status`、`daemon.stop` 不对应任何 `local.*` 能力：它们是没有 scope 判定的 daemon 生命周期调用，由组合根回答。
-- `import.add|list|remove` 是 `local.export.manage` 的对偶面（本节点作为 Access 时的 Import 记录管理），沿用同一本地能力名，不新增第 8 个能力；将来若要独立授予必须改 `SECURITY_DESIGN.md` §10.3 与 `compatibility/commands/v1/commands.json`。
 - 本表是 ADR-0004 决策 3 的三个 use case 名的展开：身份、Export 与远程目录相关方法走 `DeviceManagement`／`ExportManagement`／`RemoteCatalogQueries`；本地配置与 daemon 生命周期方法分别走本地配置族与组合根，不引入第二套管理语义。
 
 ### 5.2 Daemon 生命周期与本地配置
@@ -368,90 +366,6 @@ peerPublicKeyFingerprint string | null
 - `params`：`{ nodeId }`
 - `result`：`{ nodeId, revokedAt }`
 - 撤销后该节点不得再建立 Node Link 连接，本地必须停止重连并关闭 active connection（`SECURITY_DESIGN.md` §9.5）。
-
-### 5.5 Export 与 Import 管理（`local.export.manage`）
-
-`ExportView`（`export.create`、`export.list` 共用）：
-
-```text
-exportId              string    # ^[A-Za-z0-9._-]{1,128}$
-displayName           string    # ≤128
-agentIds              string[]  # Export 内的 Agent selector；首切片恰好 1 项
-workspaceDirectories  { directoryId: string }[]   # ^[0-9a-f]{32}$；首切片恰好 1 项
-defaultWorkspaceDirectory string    # 必须是 workspaceDirectories 之一的 directoryId
-templates             ExportTemplate[]                          # 首切片恰好 1 项
-defaultTemplateId     string    # 必须是 templates 之一的 templateId
-scopes                string[]  # grant.* 子集（与 NODE_LINK_PROTOCOL.md §10 的 Export 模型同名同义），取值以该表为准
-cachePolicy           "no-content-cache"   # v1 固定值
-createdAt             timestamp
-revokedAt             timestamp | null
-```
-
-`ExportTemplate`：
-
-```text
-templateId     string    # ^[A-Za-z0-9._-]{1,128}$（与 schemas/node-link/v1/common.schema.json 的 templateId 一致）
-displayName    string    # ≤128
-workspaceDirectory string    # 必须是 Export 的 workspaceDirectories 之一
-params         TemplateParam[]
-```
-
-`TemplateParam`：
-
-```text
-name     string                                  # ^[A-Za-z_][A-Za-z0-9_]{0,63}$（权威：schemas/node-link/v1/common.schema.json#/$defs/workspaceTemplateParam）
-type     "string" | "boolean" | "integer"
-required boolean
-pattern  string | null                           # 仅 type = "string" 时非 null，≤512 字符
-enum     string[] | null                         # 非空；成员只能是 string（v1 wire 如此，非 string 类型的枚举不在 v1）
-```
-
-`ImportRecord`（与 `CONFIG_REFERENCE.md` §9 的 `[[imports]]` 同名同义）：
-
-```text
-importId      string    # ^[A-Za-z0-9._-]{1,128}$
-ownerEndpoint string    # wss:// 端点
-ownerNodeId   UUID
-exportIds     string[]
-grants        string[]
-```
-
-#### `export.create`
-
-- `params`：`ExportView` 去掉 `createdAt` 与 `revokedAt` 后的全部字段，均为必需；`templates` 与 `workspaceDirectories` 的非空与 `default*` 一致性校验不通过 → `local.invalid_params`。**首切片的 template 不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）：`params` 非空 → `local.invalid_params`（有参 template 属 `post_mvp`，不能静默忽略）。每个 `workspaceDirectories[].directoryId` 必须已在本机目录表记录（否则 `local.not_found`），Export 只引用标识、不复制路径（`CORE_PORTS_AND_STORAGE.md` §11.9）。
-- `result`：`{ export: ExportView }`，`revokedAt` 为 `null`。
-- `exportId` 已存在 → `local.conflict`。
-- `capabilityCeilingRef` 与 catalog 条目的 `agents[].capabilitiesRef` 由 Owner 在发布时填充，不出现在本地方法里：本地端点不需要跨节点不透明引用（`NODE_LINK_PROTOCOL.md` §12.3）。
-- Export 的创建、修改与撤销永远不通过 Node Link 暴露（`NODE_LINK_PROTOCOL.md` §10）。
-
-#### `export.list`
-
-- `params`：`{}`
-- `result`：`{ exports: ExportView[] }`，包含已撤销项（`revokedAt` 非 `null`）。
-
-#### `export.revoke`
-
-- `params`：`{ exportId }`
-- `result`：`{ exportId, revokedAt }`
-- 语义：立即拒绝该 Export 的新命令与订阅，向已连接的 Access Node 发送 `export.revoked`（`NODE_LINK_PROTOCOL.md` §12.3），Access 侧删除对应 Import 引用、无正文索引与内存内容。必须在持久状态提交后才返回。
-
-#### `import.add`
-
-- `params`：`{ importId, ownerEndpoint, ownerNodeId, exportIds, grants }`
-- `result`：`{ import: ImportRecord }`
-- 前置条件：`ownerNodeId` 必须是已配对且 `kind = "owner"` 的节点；`exportIds` 必须存在于该 Owner 的**当前 Node Link 连接上的 catalog 快照**（`NODE_LINK_PROTOCOL.md` §12.3）。两类失败必须区分：**没有可用的 catalog 快照**（未连接、连接已断或首切片尚无快照）→ `local.unavailable`（可重试，不是「不存在」）；有快照但确实没有该 `exportId` → `local.not_found`。`grants` 必须是 `commands.json` 的 `grant.*` 子集且不超过对应 Export 的 `scopes`（违反 `local.invalid_params`）。
-- 有效权限仍是 `Owner grant ∩ Access local grant ∩ runtime capability`，本方法只写本地 Import 记录，不修改远程侧授权（`SECURITY_DESIGN.md` §9.6）。
-
-#### `import.list`
-
-- `params`：`{}`
-- `result`：`{ imports: ImportRecord[] }`
-
-#### `import.remove`
-
-- `params`：`{ importId }`
-- `result`：`{}`
-- 必须同时删除该 Import 的本地无正文索引与内存内容（`SECURITY_DESIGN.md` §13.4）；不存在 → `local.not_found`。
 
 ### 5.6 审计导出（`local.audit.export`）
 

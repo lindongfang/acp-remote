@@ -60,7 +60,7 @@ fn valid_submit() -> Value {
     fixture_body(RESUME_SUBMIT_FIXTURE)
 }
 
-/// R27：`session.resume` 在机器词表里的登记必须与 wire 一致，且**授权维度不新增**。
+/// R27：`session.resume` 在机器词表里的登记必须与 wire 一致。
 #[test]
 fn the_command_catalog_row_matches_the_wire_contract() {
     let catalog = support::read_json(&repo_path(COMMAND_CATALOG));
@@ -73,11 +73,6 @@ fn the_command_catalog_row_matches_the_wire_contract() {
         .clone();
 
     assert_eq!(row["kind"], Value::String("mutation".to_owned()));
-    assert_eq!(
-        row["grant"],
-        Value::String("grant.remote-work".to_owned()),
-        "R27：按 grant.remote-work 判定授权，不新增授权维度"
-    );
     assert_eq!(
         row["scope"],
         Value::String("session.resume".to_owned()),
@@ -93,19 +88,6 @@ fn the_command_catalog_row_matches_the_wire_contract() {
         "session.resume 只经 Node Link 接受（不得出现在 sync transport 上）"
     );
     assert_eq!(row["delivery"], Value::String("conditional_mvp".to_owned()));
-
-    // `grant.remote-work` 的会员表必须同时包含 `session.create` 与 `session.resume`。
-    let memberships = catalog["grants"]
-        .as_object()
-        .expect("grants 表")
-        .get("grant.remote-work")
-        .and_then(Value::as_array)
-        .expect("grant.remote-work 会员")
-        .clone();
-    assert!(
-        memberships.contains(&Value::String("session.resume".to_owned())),
-        "grant.remote-work 必须覆盖 session.resume：{memberships:?}"
-    );
 
     // Rust 侧的枚举与词表不得漂移。
     assert_eq!(CommandName::SessionResume.as_str(), "session.resume");

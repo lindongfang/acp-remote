@@ -7,8 +7,7 @@
 //! 命令名的唯一机器来源是 `compatibility/commands/v1/commands.json`：[`CommandName`] 是它 `transport`
 //! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即两个面共有的 12 条之后多出只经
 //! Node Link 接受的 `session.resume`；Sync 面共接受 13 条，比本镜像多出只走 Sync 的 `workspace.browse`；
-//! `session.create` 两个面同名，但 payload 不同——本面的
-//! `{ agentId, exportId, directoryId, templateParams? }` 含跨节点 Export 概念，Sync 面是
+//! `session.create` 两个面同名，但 payload 不同——本面是 `{ agentId, directoryId }`，Sync 面是
 //! `{ agentId, directoryId 或 workspacePath（恰好一个） }`，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
@@ -27,22 +26,18 @@
 //!
 //! - `session.create` 的 `cwd`/`mcpServers`/绝对路径/凭据字段、以及 `session.resume` 的**任何**键都由
 //!   `additionalProperties: false` 拒绝（未知键是形状错误），因此不需要白名单；
-//! - `templateParams` 的键是否属于该 Export 声明的 template 由 Owner 在应用前校验（§12.7），本层只校验
-//!   它是 object 且顶层键数 ≤ 32；
 //! - `attachmentGeneration` 是否过期、重复提交的幂等性、`expectedVersion` 冲突判定都是会话状态机。
 
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use serde::de::{DeserializeOwned, Error as DeError, IgnoredAny};
+use serde::de::{DeserializeOwned, Error as DeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use crate::common::{
-    AgentId, DecimalString, ExportId, NonEmptyText, Nullable, PublicError, RawObject,
-    RemoteSessionRef, SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError,
-    DirectoryId, deserialize_optional_non_null,
+    AgentId, DecimalString, NonEmptyText, Nullable, PublicError, RawObject, RemoteSessionRef,
+    SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError, DirectoryId,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`
@@ -404,54 +399,6 @@ impl<'de> Deserialize<'de> for ConfigValue {
     }
 }
 
-/// `sessionCreatePayload`（`command.schema.json#/$defs/sessionCreatePayload`）的 `templateParams`。
-///
-/// 开放扩展点：schema 只要求 `type: object` + `maxProperties: 32` + `additionalProperties: true`，
-/// 键必须来自该 Export 声明的 template 由 Owner 在应用前校验（§12.7），未知键以
-/// `nodelink.command.unsupported_field` 拒绝——那是状态机，不在本层。
-///
-/// 取值原文按 [`RawObject`] 保真（不重新解析再序列化）；这里只在反序列化期数一次顶层键。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TemplateParams(RawObject);
-
-/// `templateParams` 的 `maxProperties`。
-const MAX_TEMPLATE_PARAMS: usize = 32;
-
-impl TemplateParams {
-    /// 原始 JSON 对象（键与值的字节原样）。
-    pub fn as_object(&self) -> &RawObject {
-        &self.0
-    }
-}
-
-impl Serialize for TemplateParams {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for TemplateParams {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Box::<RawValue>::deserialize(deserializer)?;
-        // 只收键名（`IgnoredAny` 不物化值），JSON object 之外的字面量在这里就会失败。
-        let keys: HashMap<String, IgnoredAny> = serde_json::from_str(raw.get()).map_err(|_| {
-            DeError::custom(ValueError::Shape {
-                field: "templateParams",
-                expected: "object（键必须来自 Export template 声明）",
-            })
-        })?;
-        if keys.len() > MAX_TEMPLATE_PARAMS {
-            return Err(DeError::custom(ValueError::TooManyItems {
-                field: "templateParams",
-                max: MAX_TEMPLATE_PARAMS,
-                actual: keys.len(),
-            }));
-        }
-        let object = RawObject::parse(raw.get()).map_err(DeError::custom)?;
-        Ok(Self(object))
-    }
-}
-
 /// `sessionList`（`command.schema.json#/$defs/submitSessionList`）的 `payload`：schema 要求空 object
 /// （§12.7 的 `{}`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -669,7 +616,7 @@ pub struct PermissionResolve {
     pub option_id: NonEmptyText<128>,
 }
 
-/// `session.create` 的 `payload`（`command.schema.json#/$defs/sessionCreatePayload`）：只允许这四个键。
+/// `session.create` 的 `payload`（`command.schema.json#/$defs/sessionCreatePayload`）：只允许这两个键。
 ///
 /// `cwd`/`mcpServers`/绝对路径/凭据字段由 `additionalProperties: false` 在这里就被拒（未知键），
 /// Owner 侧再以 `nodelink.command.unsupported_field` 回复 `command.rejected` 并保证不创建会话、
@@ -681,17 +628,8 @@ pub struct PermissionResolve {
 pub struct SessionCreate {
     #[serde(rename = "agentId")]
     pub agent_id: AgentId,
-    #[serde(rename = "exportId")]
-    pub export_id: ExportId,
     #[serde(rename = "directoryId")]
     pub directory_id: DirectoryId,
-    #[serde(
-        rename = "templateParams",
-        default,
-        deserialize_with = "deserialize_optional_non_null",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub template_params: Option<TemplateParams>,
 }
 
 /// `session.resume` 的 `payload`（`command.schema.json#/$defs/submitSessionResume`）：只允许空 object。
@@ -821,7 +759,7 @@ impl CommandPayload {
             .map(CommandPayload::PermissionResolve),
             CommandName::SessionCreate => parse_payload(
                 payload,
-                "{ agentId, exportId, directoryId, templateParams? }（sessionCreate 的 payload）",
+                "{ agentId, directoryId }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
             CommandName::SessionResume => {
@@ -1332,7 +1270,6 @@ mod tests {
         "command": "session.resume",
         "sessionRef": {
             "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-            "exportId": "export-main",
             "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
         },
         "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",
@@ -1352,7 +1289,6 @@ mod tests {
             "result": {
                 "remoteSessionRef": {
                     "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-                    "exportId": "export-main",
                     "sessionId": "9f1c2d3e-4a5b-4c6d-8e7f-90a1b2c3d4e5"
                 },
                 "sessionMeta": { "state": "idle", "version": "4" }

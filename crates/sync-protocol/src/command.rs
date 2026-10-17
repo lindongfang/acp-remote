@@ -51,8 +51,8 @@ pub type RequestId = Uuid;
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
-/// `{ agentId, directoryId | workspacePath（恰好一个）, createIfMissing? }`（`exportId`/
-/// `templateParams` 是跨节点 Export 概念，见 `docs/SYNC_PROTOCOL.md` §11.5）。
+/// `{ agentId, directoryId | workspacePath（恰好一个）, createIfMissing? }`（`templateParams` 等
+/// 跨节点概念不属于 Sync 面，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 ///
 /// `workspace.browse` 只经 Sync 面接受（它是本机目录的逐层浏览查询，Node Link 的请求不得携带任意
 /// Owner 路径，因此不在 Node Link 的命令枚举里）。
@@ -322,7 +322,7 @@ pub struct WorkspaceBrowseResult {
 /// `directoryId` 对应本机 `owned_directory` 已记录的行，`workspacePath` 是客户端提供的绝对
 /// 目录（浏览器拿不到宿主路径，因此这一来源就是一次文本输入），`agentId` 对应本机已配置的 Agent
 /// profile。规范化路径、目录追加、MCP 配置与凭据都不在 wire 上，因此 `deny_unknown_fields` 会把
-/// `cwd`/`exportId`/`templateParams` 之类的键直接拒成 [`ValueError::Shape`]——与 schema 的
+/// `cwd`/`templateParams` 之类的键直接拒成 [`ValueError::Shape`]——与 schema 的
 /// `additionalProperties: false` 同口径。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCreate {
@@ -1578,8 +1578,7 @@ mod tests {
             r#"{"workspacePath":"/home/dev/projects/work-api","agentId":"claude-code","createIfMissing":null}"#,
             // cwd 与目录追加不是授权输入（SECURITY_DESIGN.md §12.3）。
             r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","cwd":"C:\\repo"}"#,
-            // 跨节点 Export 概念在 Sync 面不存在。
-            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","exportId":"export-laptop-zed"}"#,
+            // 跨节点模板概念在 Sync 面不存在。
             r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","templateParams":{}}"#,
             // 凭据与 MCP 配置同样不进入 wire。
             r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","mcpServers":{}}"#,

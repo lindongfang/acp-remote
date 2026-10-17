@@ -40,12 +40,6 @@ pub enum ErrorCode {
     AuthNodeRevoked,
     /// `nodelink.auth.catalog_revision_invalid`
     AuthCatalogRevisionInvalid,
-    /// `nodelink.export.not_found`
-    ExportNotFound,
-    /// `nodelink.export.revoked`
-    ExportRevoked,
-    /// `nodelink.export.not_granted`
-    ExportNotGranted,
     /// `nodelink.resource.attach_generation_stale`
     ResourceAttachGenerationStale,
     /// `nodelink.resource.snapshot_unavailable`
@@ -70,7 +64,7 @@ pub enum ErrorCode {
 
 impl ErrorCode {
     /// 与 `compatibility/errors/v1/errors.json` 的 node_link 列表逐条相等。
-    pub const ALL: [ErrorCode; 24] = [
+    pub const ALL: [ErrorCode; 21] = [
         ErrorCode::ProtocolInvalidJson,
         ErrorCode::ProtocolSchemaInvalid,
         ErrorCode::ProtocolMessageTooLarge,
@@ -82,9 +76,6 @@ impl ErrorCode {
         ErrorCode::AuthNodeUnknown,
         ErrorCode::AuthNodeRevoked,
         ErrorCode::AuthCatalogRevisionInvalid,
-        ErrorCode::ExportNotFound,
-        ErrorCode::ExportRevoked,
-        ErrorCode::ExportNotGranted,
         ErrorCode::ResourceAttachGenerationStale,
         ErrorCode::ResourceSnapshotUnavailable,
         ErrorCode::ResourceOwnerUnavailable,
@@ -125,9 +116,6 @@ impl ErrorCode {
             ErrorCode::AuthNodeUnknown => "nodelink.auth.node_unknown",
             ErrorCode::AuthNodeRevoked => "nodelink.auth.node_revoked",
             ErrorCode::AuthCatalogRevisionInvalid => "nodelink.auth.catalog_revision_invalid",
-            ErrorCode::ExportNotFound => "nodelink.export.not_found",
-            ErrorCode::ExportRevoked => "nodelink.export.revoked",
-            ErrorCode::ExportNotGranted => "nodelink.export.not_granted",
             ErrorCode::ResourceAttachGenerationStale => "nodelink.resource.attach_generation_stale",
             ErrorCode::ResourceSnapshotUnavailable => "nodelink.resource.snapshot_unavailable",
             ErrorCode::ResourceOwnerUnavailable => "nodelink.resource.owner_unavailable",

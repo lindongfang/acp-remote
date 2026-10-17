@@ -1,7 +1,7 @@
 //! Catalog 家族的消息 body（`schemas/node-link/v1/catalog.schema.json`，`docs/NODE_LINK_PROTOCOL.md` §12.3）。
 //!
 //! 信封（`postAuthBase` 的 `connectionId`/`connectionSequence`、`type` 与版本校验）在 `envelope` 层；
-//! 这里只有七个消息的 `body`，以及它们引用的 `common.schema.json#/$defs` 值对象。
+//! 这里只有 catalog 消息的 `body`，以及它们引用的 `common.schema.json#/$defs` 值对象。
 
 use std::fmt;
 use std::str::FromStr;
@@ -9,104 +9,88 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{
-    Base64Url, DecimalString, ExportEntry, ExportId, Nullable, Text, Timestamp, Uuid, ValueError,
+    AgentEntry, AgentId, Base64Url, DecimalString, DirectoryEntry, DirectoryId, Nullable,
+    SessionState, Text, Timestamp, Uuid, ValueError,
 };
 
-/// schema 对 `catalog.snapshot.exports`、`catalog.changed.added`/`updated`/`removed` 的 `maxItems`。
+/// schema 对 catalog 各列表的 `maxItems`。
 const MAX_BATCH_ITEMS: usize = 500;
 
-/// Export 条目批次（schema 的 `maxItems: 500`）。
-///
-/// `catalog.snapshot.exports`、`catalog.changed.added`/`updated` 三个字段逐条同形、同一上限，共用本
-/// 类型；越限时 [`ValueError::TooManyItems`] 的字段名取其规范名 `exports`。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExportEntryList(Vec<ExportEntry>);
-
-impl ExportEntryList {
-    pub fn new(entries: Vec<ExportEntry>) -> Result<Self, ValueError> {
-        let list = Self(entries);
-        list.validate()?;
-        Ok(list)
-    }
-
-    pub fn as_slice(&self) -> &[ExportEntry] {
-        &self.0
-    }
-
-    fn validate(&self) -> Result<(), ValueError> {
-        if self.0.len() > MAX_BATCH_ITEMS {
-            return Err(ValueError::TooManyItems {
-                field: "exports",
-                max: MAX_BATCH_ITEMS,
-                actual: self.0.len(),
-            });
-        }
-        Ok(())
-    }
+/// `catalog.session`：会话的目录/Agent/状态投影，不含任何正文。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogSession {
+    #[serde(rename = "sessionId")]
+    pub session_id: Uuid,
+    #[serde(rename = "agentId")]
+    pub agent_id: AgentId,
+    pub state: SessionState,
+    pub version: DecimalString,
+    #[serde(rename = "createdAt")]
+    pub created_at: Timestamp,
+    #[serde(rename = "workspaceDirectoryId")]
+    pub workspace_directory_id: Nullable<DirectoryId>,
 }
 
-impl Serialize for ExportEntryList {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
-    }
-}
+macro_rules! list_type {
+    ($(#[$meta:meta])* $name:ident, $item:ty, $field:literal) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct $name(Vec<$item>);
 
-impl<'de> Deserialize<'de> for ExportEntryList {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let list = Self(Vec::<ExportEntry>::deserialize(deserializer)?);
-        list.validate().map_err(serde::de::Error::custom)?;
-        Ok(list)
-    }
-}
+        impl $name {
+            pub fn new(items: Vec<$item>) -> Result<Self, ValueError> {
+                let list = Self(items);
+                if list.0.len() > MAX_BATCH_ITEMS {
+                    return Err(ValueError::TooManyItems {
+                        field: $field,
+                        max: MAX_BATCH_ITEMS,
+                        actual: list.0.len(),
+                    });
+                }
+                Ok(list)
+            }
 
-/// `catalog.changed.removed`：被移除的 Export id（schema 的 `maxItems: 500` + `uniqueItems: true`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExportIdList(Vec<ExportId>);
-
-impl ExportIdList {
-    pub fn new(export_ids: Vec<ExportId>) -> Result<Self, ValueError> {
-        let list = Self(export_ids);
-        list.validate()?;
-        Ok(list)
-    }
-
-    pub fn as_slice(&self) -> &[ExportId] {
-        &self.0
-    }
-
-    fn validate(&self) -> Result<(), ValueError> {
-        if self.0.len() > MAX_BATCH_ITEMS {
-            return Err(ValueError::TooManyItems {
-                field: "removed",
-                max: MAX_BATCH_ITEMS,
-                actual: self.0.len(),
-            });
-        }
-        for (index, export_id) in self.0.iter().enumerate() {
-            if self.0[index + 1..].contains(export_id) {
-                return Err(ValueError::RepeatedItem {
-                    field: "removed",
-                    value: export_id.as_str().to_owned(),
-                });
+            pub fn as_slice(&self) -> &[$item] {
+                &self.0
             }
         }
-        Ok(())
-    }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.0.serialize(serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Self::new(Vec::<$item>::deserialize(deserializer)?)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+    };
 }
 
-impl Serialize for ExportIdList {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
-    }
-}
+list_type!(
+    /// `catalog.snapshot.agents`：本机配置声明的 Agent（schema 的 `maxItems: 500`）。
+    AgentEntryList,
+    AgentEntry,
+    "agents"
+);
 
-impl<'de> Deserialize<'de> for ExportIdList {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let list = Self(Vec::<ExportId>::deserialize(deserializer)?);
-        list.validate().map_err(serde::de::Error::custom)?;
-        Ok(list)
-    }
-}
+list_type!(
+    /// `catalog.snapshot.directories`：本机已登记的目录（schema 的 `maxItems: 500`）。
+    DirectoryEntryList,
+    DirectoryEntry,
+    "directories"
+);
+
+list_type!(
+    /// `catalog.snapshot.sessions`：本机会话投影（schema 的 `maxItems: 500`）。
+    CatalogSessionList,
+    CatalogSession,
+    "sessions"
+);
 
 /// `catalog.subscribe`（Access → Owner）：`null` 表示首次获取完整视图，非空表示请求增量。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,34 +100,16 @@ pub struct CatalogSubscribe {
     pub known_revision: Nullable<DecimalString>,
 }
 
-/// `catalog.snapshot`（Owner → Access）：当前可见 Export 的完整视图。
+/// `catalog.snapshot`（Owner → Access）：本机全部资源清单，不按 Export/授权集合过滤。
 ///
-/// `exports` 超过连接 limits 时按 limits 分批分成多条消息，批次内条目顺序必须稳定（§12.3）。
+/// 三类列表超过连接 limits 时按 limits 分批分成多条消息，批次内条目顺序必须稳定（§12.3）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogSnapshot {
     pub revision: DecimalString,
-    pub exports: ExportEntryList,
-}
-
-/// `catalog.changed`（Owner → Access，`post_mvp`）：增量更新，Access 按 `revision` 去重。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CatalogChanged {
-    pub revision: DecimalString,
-    pub added: ExportEntryList,
-    pub updated: ExportEntryList,
-    pub removed: ExportIdList,
-}
-
-/// `export.revoked`（Owner → Access）：立即生效，拒绝该 Export 的新命令与订阅。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ExportRevoked {
-    #[serde(rename = "exportId")]
-    pub export_id: ExportId,
-    #[serde(rename = "revokedAt")]
-    pub revoked_at: Timestamp,
+    pub agents: AgentEntryList,
+    pub directories: DirectoryEntryList,
+    pub sessions: CatalogSessionList,
 }
 
 /// `node.trust.revoked`（Owner → Access）：撤回该 Access Node 的长期信任。

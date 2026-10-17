@@ -142,7 +142,7 @@ pub struct Limits {
 /// 认证结果只陈述事实与本次连接的参数：设备方向没有授权维度（`pairing-model` 删除设备权限层），
 /// 因此 body 不再有授权集合字段——通过认证即可执行任何业务命令。`deny_unknown_fields` 与
 /// `schemas/sync/v1/auth.schema.json` 的 `authenticated.body.additionalProperties: false` 同口径：
-/// 携带 `scopes` 键的消息被拒，不再有"半套"设备授权字段。
+/// 携带 `scopes` 键的消息被拒，设备与节点配对都不携带授权集合。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Authenticated {

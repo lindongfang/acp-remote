@@ -388,7 +388,7 @@ retention and cache hints
 createdAt / revokedAt
 ```
 
-`WorkspaceTemplate.params[]` 的每一项是 `{ name, type, required, pattern, enum }`：`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，每项 template 至多 32 个 param；`type ∈ string|boolean|integer`，`pattern` 只对 `string` 生效且 ≤512 字符，`enum` 为 `null` 或成员全为 string 的非空数组（v1 的 wire 如此，非 string 类型的枚举不在 v1）——空数组不合法，表示「不限制取值」用 `null`。机器权威是 [`schemas/node-link/v1/common.schema.json`](../schemas/node-link/v1/common.schema.json) 的 `workspaceTemplateParam`；`docs/LOCAL_ADMIN_PROTOCOL.md` §5.5 的本地副本必须与它同形，不得放宽或收紧。
+`WorkspaceTemplate.params[]` 的每一项是 `{ name, type, required, pattern, enum }`：`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，每项 template 至多 32 个 param；`type ∈ string|boolean|integer`，`pattern` 只对 `string` 生效且 ≤512 字符，`enum` 为 `null` 或成员全为 string 的非空数组（v1 的 wire 如此，非 string 类型的枚举不在 v1）——空数组不合法，表示「不限制取值」用 `null`。机器权威是 [`schemas/node-link/v1/common.schema.json`](../schemas/node-link/v1/common.schema.json) 的 `workspaceTemplateParam`。
 
 `[决定]`（2026-09-23）**首切片的 workspace template 必须零参数**（`params = []`）：
 
@@ -455,7 +455,6 @@ Node Link 握手交换：
 | `node-link.raw-acp.v1` | `resource.event.payload.acp` 携带 ACP raw document 并保真 | mvp | 否 |
 | `node-link.command-status.v1` | `command.status` 查询与 `command.terminal` 重查 | mvp | 否 |
 | `node-link.session-create.v1` | `command.submit{command:"session.create"}`（Zed `session/new` 的映射） | mvp | 否 |
-| `node-link.export-revoke.v1` | `export.revoked` 与撤销后立即拒命令 | mvp | 否 |
 | `node-link.node-rotation.v1` | `node.rotate-key.*`（只登记 ID 与消息名） | post_mvp | 否 |
 
 - feature ID 语法、排序与 transcript 编码与 `SYNC_PROTOCOL.md` §5.2 相同：`[a-z0-9.-]`、去重后按 UTF-8 字节升序、`negotiatedFeatures` 以 NUL 分隔。
@@ -879,9 +878,6 @@ nodelink.auth.proof_invalid
 nodelink.auth.node_unknown
 nodelink.auth.node_revoked
 nodelink.auth.catalog_revision_invalid
-nodelink.export.not_found
-nodelink.export.revoked
-nodelink.export.not_granted
 nodelink.resource.attach_generation_stale
 nodelink.resource.snapshot_unavailable
 nodelink.resource.owner_unavailable
@@ -903,7 +899,6 @@ nodelink.internal.unavailable
 | code | 登记字段（`details`） |
 |---|---|
 | `nodelink.protocol.feature_required` | `features`（必需） |
-| `nodelink.export.not_granted` | `parameter`（可选） |
 | `nodelink.resource.rate_limited` | `retryAfterMs`（可选） |
 | `nodelink.command.unsupported_field` | `field`（必需） |
 

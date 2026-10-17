@@ -105,7 +105,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["requestId", "command", "payload"],
-      "description": "Sync 面的 session.create：body 顶层不得携带 sessionId（会话尚不存在）。payload 必须给出 agentId，并且 directoryId 与 workspacePath **恰好出现一个**——两个都给或都不给都按 protocol.schema_invalid 拒绝。可选键 createIfMissing 是显式的「目录不存在则先创建」开关，它与 directoryId **互斥**（已记录的目录必然已存在），两者同时出现时同样按 protocol.schema_invalid 拒绝，且不查询目录表、不触碰文件系统。出现 cwd、exportId、templateParams、MCP 配置或凭据字段时同样按 protocol.schema_invalid 拒绝，不得创建会话或部分应用参数。",
+      "description": "Sync 面的 session.create：body 顶层不得携带 sessionId（会话尚不存在）。payload 必须给出 agentId，并且 directoryId 与 workspacePath **恰好出现一个**——两个都给或都不给都按 protocol.schema_invalid 拒绝。可选键 createIfMissing 是显式的「目录不存在则先创建」开关，它与 directoryId **互斥**（已记录的目录必然已存在），两者同时出现时同样按 protocol.schema_invalid 拒绝，且不查询目录表、不触碰文件系统。出现 cwd、templateParams、MCP 配置或凭据字段时同样按 protocol.schema_invalid 拒绝，不得创建会话或部分应用参数。",
       "properties": {
         "requestId": { "$ref": "#/$defs/requestId" },
         "command": { "const": "session.create" },

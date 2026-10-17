@@ -10,7 +10,6 @@ const syncDocPath = resolve(root, "docs", "SYNC_PROTOCOL.md");
 const securityDocPath = resolve(root, "docs", "SECURITY_DESIGN.md");
 const localAdminDocPath = resolve(root, "docs", "LOCAL_ADMIN_PROTOCOL.md");
 const localAdminSchemaPath = resolve(root, "schemas", "local-admin", "v1", "envelope.schema.json");
-const coreBrokerPath = resolve(root, "crates", "core", "src", "broker.rs");
 
 const errors = [];
 
@@ -93,38 +92,6 @@ function vocabulary(value, path = "$", found = []) {
     }
   }
   return found;
-}
-
-// `crates/core/src/broker.rs::required_grant` 是 commands.json 的**手工镜像**（core 无 serde，读不了
-// JSON），而 Node actor 的 Export/Import 交集判定依赖它。镜像漂移等于授权漂移，因此这里按源码解析
-// match 臂逐条比对：`"a" | "b" => "grant.x"`。解析失败即报错——形状变了必须同步改本门禁。
-function parseRequiredGrant(text) {
-  const start = text.indexOf("pub fn required_grant(");
-  if (start < 0) {
-    errors.push("crates/core/src/broker.rs: missing required_grant");
-    return undefined;
-  }
-  const tail = text.slice(start);
-  const stop = tail.indexOf("_ => return None,");
-  if (stop < 0) {
-    errors.push("crates/core/src/broker.rs: required_grant has no `_ => return None` arm (gate parser out of date)");
-    return undefined;
-  }
-  const arms = tail.slice(tail.indexOf("match command {"), stop);
-  const mirrored = new Map();
-  const armPattern = /((?:"[0-9a-z_.]+"\s*\|?\s*)+)=>\s*"([a-z0-9_.-]+)"/g;
-  for (const match of arms.matchAll(armPattern)) {
-    const names = [...match[1].matchAll(/"([0-9a-z_.]+)"/g)].map((name) => name[1]);
-    for (const name of names) {
-      if (mirrored.has(name)) errors.push(`crates/core/src/broker.rs: ${name} appears in two grant arms`);
-      mirrored.set(name, match[2]);
-    }
-  }
-  if (mirrored.size === 0) {
-    errors.push("crates/core/src/broker.rs: required_grant parsed to zero arms (gate parser out of date)");
-    return undefined;
-  }
-  return mirrored;
 }
 
 // 本地管理通道的封闭词表：方法名与本地错误码。它们**不属于** commands.json（那些是 WSS 业务命令），
@@ -227,10 +194,6 @@ if (catalog) {
     errors.push(`commands.json: 设备授权词汇（pack/preset/sas）与设备方向请求字段必须已删除，实际仍有 ${reappeared.join("、")}`);
   }
 
-  // `grants` 是命令条目的唯一授权分组：每条命令必须恰好被一个导出授权覆盖（设备方向不再有分组）。
-  const referenced = new Set(Object.values(catalog.grants ?? {}).flat());
-  compareSets("commands.json grants", referenced, names);
-
   const nodeLinkTransport = (catalog.commands ?? []).filter((c) => (c.transport ?? []).includes("node_link"));
   if (nodeLinkTransport.length === 0) errors.push("commands.json: no node_link transport commands");
   const syncTransport = (catalog.commands ?? []).filter((c) => (c.transport ?? []).includes("sync"));
@@ -267,25 +230,6 @@ if (catalog) {
     // **只按编号前缀定位**，判据仍是「节内表格的命令名与登记表相等」。改标题不会误伤这条判据，
     // 删掉整节或改编号仍会失败。
     compareSets("docs/SECURITY_DESIGN.md §10.2", tableCommands(securityDoc, "### 10.2 "), names);
-  }
-
-  const broker = readText(coreBrokerPath);
-  if (broker) {
-    const mirrored = parseRequiredGrant(broker);
-    if (mirrored) {
-      compareSets("crates/core/src/broker.rs required_grant", new Set(mirrored.keys()), names);
-      for (const command of catalog.commands ?? []) {
-        const grant = mirrored.get(command.name);
-        if (grant !== undefined && command.grant !== undefined && grant !== command.grant) {
-          errors.push(
-            `crates/core/src/broker.rs: ${command.name} maps to ${grant} but commands.json declares ${command.grant}`,
-          );
-        }
-        if (command.grant !== undefined && !(command.grant in (catalog.grants ?? {}))) {
-          errors.push(`commands.json: ${command.name} declares unregistered grant ${command.grant}`);
-        }
-      }
-    }
   }
 
   const localAdminDoc = readText(localAdminDocPath);

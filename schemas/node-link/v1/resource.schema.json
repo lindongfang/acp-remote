@@ -171,7 +171,6 @@
                 "reason": {
                   "enum": [
                     "client_request",
-                    "export_revoked",
                     "owner_unavailable"
                   ]
                 }

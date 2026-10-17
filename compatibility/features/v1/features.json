@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-09-18",
+  "revision": "2026-10-17",
   "description": "ACP Remote feature ID 机器登记 v1：Sync 与 Node Link 的封闭 feature 词表。协议文档 §5.2 / §11.3 的 feature 表、fixture 里出现的 feature ID 与本文件由 scripts/check-features.mjs 断言逐一相等；新增或删除 feature 必须先改本文件。required 表示协议要求每次协商都必须选中该 feature（产品必须支持由 delivery 表达）。",
   "protocols": {
     "sync": {
@@ -32,7 +32,7 @@
         },
         {
           "id": "resource.remote-origin.v1",
-          "description": "imported 资源来源承载（§9.6：ownerNodeId/exportId/origin cursor/online）",
+          "description": "imported 资源来源承载（§9.6：ownerNodeId/origin cursor/online）",
           "delivery": "mvp",
           "required": false
         },
@@ -98,12 +98,6 @@
         {
           "id": "node-link.session-create.v1",
           "description": "command.submit{command:\"session.create\"}（Zed session/new 的映射）",
-          "delivery": "mvp",
-          "required": false
-        },
-        {
-          "id": "node-link.export-revoke.v1",
-          "description": "export.revoked 与撤销后立即拒命令",
           "delivery": "mvp",
           "required": false
         },

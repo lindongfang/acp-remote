@@ -73,8 +73,6 @@ pub enum OriginBlock {
     Remote {
         #[serde(rename = "ownerNodeId")]
         owner_node_id: Uuid,
-        #[serde(rename = "exportId")]
-        export_id: NonEmptyText<256>,
         #[serde(rename = "originEpoch")]
         origin_epoch: Uuid,
         online: bool,
@@ -98,7 +96,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
             ) -> Result<Self::Value, A::Error> {
                 let mut kind: Option<String> = None;
                 let mut owner_node_id: Option<Uuid> = None;
-                let mut export_id: Option<NonEmptyText<256>> = None;
                 let mut origin_epoch: Option<Uuid> = None;
                 let mut online: Option<bool> = None;
                 while let Some(key) = access.next_key::<String>()? {
@@ -115,12 +112,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
                             }
                             owner_node_id = Some(access.next_value()?);
                         }
-                        "exportId" => {
-                            if export_id.is_some() {
-                                return Err(DeError::duplicate_field("exportId"));
-                            }
-                            export_id = Some(access.next_value()?);
-                        }
                         "originEpoch" => {
                             if origin_epoch.is_some() {
                                 return Err(DeError::duplicate_field("originEpoch"));
@@ -136,7 +127,7 @@ impl<'de> Deserialize<'de> for OriginBlock {
                         other => {
                             return Err(DeError::unknown_field(
                                 other,
-                                &["kind", "ownerNodeId", "exportId", "originEpoch", "online"],
+                                &["kind", "ownerNodeId", "originEpoch", "online"],
                             ));
                         }
                     }
@@ -145,7 +136,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
                 match kind.as_deref() {
                     Some("local") => {
                         if owner_node_id.is_some()
-                            || export_id.is_some()
                             || origin_epoch.is_some()
                             || online.is_some()
                         {
@@ -159,7 +149,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
                     Some("remote") => Ok(OriginBlock::Remote {
                         owner_node_id: owner_node_id
                             .ok_or_else(|| DeError::missing_field("ownerNodeId"))?,
-                        export_id: export_id.ok_or_else(|| DeError::missing_field("exportId"))?,
                         origin_epoch: origin_epoch
                             .ok_or_else(|| DeError::missing_field("originEpoch"))?,
                         online: online.ok_or_else(|| DeError::missing_field("online"))?,
@@ -183,8 +172,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
 pub struct RemoteOrigin {
     #[serde(rename = "ownerNodeId")]
     pub owner_node_id: Uuid,
-    #[serde(rename = "exportId")]
-    pub export_id: NonEmptyText<256>,
     #[serde(rename = "originEpoch")]
     pub origin_epoch: Uuid,
     #[serde(rename = "originEventId")]

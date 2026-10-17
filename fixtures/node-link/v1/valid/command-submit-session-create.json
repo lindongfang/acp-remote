@@ -13,11 +13,7 @@
     "expectedVersion": null,
     "payload": {
       "agentId": "company-agent",
-      "exportId": "export-main",
-      "directoryId": "0123456789abcdef0123456789abcdef",
-      "templateParams": {
-        "branch": "main"
-      }
+      "directoryId": "0123456789abcdef0123456789abcdef"
     }
   }
 }

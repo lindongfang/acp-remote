@@ -105,10 +105,9 @@
     },
     "session.origin.online_changed": {
       "type": "object",
-      "required": ["ownerNodeId", "exportId", "originEpoch", "online"],
+      "required": ["ownerNodeId", "originEpoch", "online"],
       "properties": {
-        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
-        "exportId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "ownerNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
         "originEpoch": { "$ref": "common.schema.json#/$defs/uuid" },
         "online": { "type": "boolean" }
       },

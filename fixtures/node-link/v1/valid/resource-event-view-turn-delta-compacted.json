@@ -10,7 +10,6 @@
     "originSequence": "2321",
     "sessionRef": {
       "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-      "exportId": "export-main",
       "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
     },
     "eventType": "turn.delta_compacted",

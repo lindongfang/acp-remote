@@ -35,8 +35,6 @@ pub enum MessageType {
     NodeReady,
     CatalogSubscribe,
     CatalogSnapshot,
-    CatalogChanged,
-    ExportRevoked,
     NodeTrustRevoked,
     NodeRotateKeyRequest,
     NodeRotateKeyResult,
@@ -74,15 +72,13 @@ pub enum AuthState {
 
 impl MessageType {
     /// 与 schema 的 `type` 常量逐条相等的完整集合。
-    pub const ALL: [MessageType; 29] = [
+    pub const ALL: [MessageType; 27] = [
         MessageType::NodeHello,
         MessageType::NodeChallenge,
         MessageType::NodeProof,
         MessageType::NodeReady,
         MessageType::CatalogSubscribe,
         MessageType::CatalogSnapshot,
-        MessageType::CatalogChanged,
-        MessageType::ExportRevoked,
         MessageType::NodeTrustRevoked,
         MessageType::NodeRotateKeyRequest,
         MessageType::NodeRotateKeyResult,
@@ -114,8 +110,6 @@ impl MessageType {
             MessageType::NodeReady => "node.ready",
             MessageType::CatalogSubscribe => "catalog.subscribe",
             MessageType::CatalogSnapshot => "catalog.snapshot",
-            MessageType::CatalogChanged => "catalog.changed",
-            MessageType::ExportRevoked => "export.revoked",
             MessageType::NodeTrustRevoked => "node.trust.revoked",
             MessageType::NodeRotateKeyRequest => "node.rotate-key.request",
             MessageType::NodeRotateKeyResult => "node.rotate-key.result",
