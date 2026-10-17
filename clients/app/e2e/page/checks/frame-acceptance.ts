@@ -52,7 +52,16 @@
  * 解码 → 账本 → 归并 → 渲染」，不是「页面碰巧画了点什么」。
  */
 
-import { AGENTS, SESSION_ALPHA, WORKSPACES, emptyReadResult, sessionRoute, sessionSummary, wireEvent } from "../fixtures";
+import {
+  AGENTS,
+  DIRECTORY_ID_ALPHA,
+  SESSION_ALPHA,
+  WORKSPACES,
+  emptyReadResult,
+  sessionRoute,
+  sessionSummary,
+  wireEvent,
+} from "../fixtures";
 import type { FakeHost } from "../fake-host";
 import {
   CANONICAL_ORIGIN,
@@ -159,7 +168,7 @@ function baseScenario(): ScenarioOptions {
   return {
     canonicalOrigin: CANONICAL_ORIGIN,
     workspaces: WORKSPACES,
-    sessions: [sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "running" })],
+    sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "running" })],
     agents: AGENTS,
     authenticate: true,
     tamperHostProof: false,

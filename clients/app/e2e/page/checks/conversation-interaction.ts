@@ -27,6 +27,9 @@
  */
 
 import {
+  DIRECTORY_ID_ALPHA,
+  DIRECTORY_ID_BETA,
+  DIRECTORY_PATH_ALPHA,
   SESSION_ALPHA,
   SESSION_BETA,
   WORKSPACES_WITH_PATHS,
@@ -42,6 +45,7 @@ import {
   CheckFailure,
   click,
   domText,
+  expectAbsent,
   expectEqual,
   expectNone,
   expectThat,
@@ -276,7 +280,7 @@ const checks: readonly Check[] = [
       await withSessionPage(
         sessionScenario({
           holdCommands: ["permission.resolve"],
-          sessions: [sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "waiting_permission" })],
+          sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "waiting_permission" })],
           events: [
             wireEvent({
               globalSequence: 11,
@@ -549,14 +553,14 @@ const checks: readonly Check[] = [
       const SIBLING_B = "aaaaaaaa-0000-4000-8000-00000000aa03";
       await withSessionPage(
         sessionScenario({
-          // 两条同名目录都带路径（`alpha` 的那条就是左栏目录上下文的来源）。
+          // 两条同尾段目录都带路径（`alpha` 的那条就是左栏目录上下文的来源）。
           workspaces: WORKSPACES_WITH_PATHS,
           sessions: [
-            sessionSummary({ id: SESSION_ALPHA, alias: "alpha", title: "部署脚本", state: "running" }),
-            sessionSummary({ id: SIBLING_A, alias: "alpha", title: "登录流程", state: "idle" }),
-            sessionSummary({ id: SIBLING_B, alias: "alpha", title: "缓存清理", state: "idle" }),
+            sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, title: "部署脚本", state: "running" }),
+            sessionSummary({ id: SIBLING_A, directoryId: DIRECTORY_ID_ALPHA, title: "登录流程", state: "idle" }),
+            sessionSummary({ id: SIBLING_B, directoryId: DIRECTORY_ID_ALPHA, title: "缓存清理", state: "idle" }),
             // 别的目录的那条：左栏**只**列同目录会话，它一次都不该出现。
-            sessionSummary({ id: SESSION_BETA, alias: "beta", title: "别处的会话", state: "idle" }),
+            sessionSummary({ id: SESSION_BETA, directoryId: DIRECTORY_ID_BETA, title: "别处的会话", state: "idle" }),
           ],
           readResult: (sessionId) =>
             readPage({
@@ -572,16 +576,17 @@ const checks: readonly Check[] = [
           // 目录上下文：展示名 + **逐字**路径 + 进详情页的入口。
           expectEqual(
             query(container, "[data-sidebar-directory]")?.getAttribute("data-sidebar-directory"),
-            "alpha",
+            DIRECTORY_ID_ALPHA,
             "左栏的目录引用",
           );
           expectEqual(textOf(query(container, "[data-sidebar-directory-name]")), "api", "目录展示名取自快照的目录条目");
           expectEqual(
             query(container, "[data-sidebar-directory-path]")?.getAttribute("data-sidebar-directory-path"),
-            "D:\\secret\\vault\\repo-x",
+            DIRECTORY_PATH_ALPHA,
             "路径逐字来自服务端下发的引用",
           );
           expectThat(query(container, '[data-action="open-directory"]') !== null, "必须给出进入该目录详情页的入口");
+          expectAbsent(domText(container), DIRECTORY_ID_ALPHA, "左栏可见文本里出现了目录标识");
           expectThat(query(container, "[data-sidebar-search]") !== null, "必须有目录内搜索框");
 
           // 只列同目录会话，且当前会话被标记为选中。
@@ -641,7 +646,10 @@ const checks: readonly Check[] = [
             "左栏底部必须有新建会话入口",
           );
           click(query(container, '[data-action="create-session-in-directory"]'), "在目录内新建会话");
-          await waitFor(() => query(container, '[data-create-sheet="alpha"]') !== null, "创建弹层打开");
+          await waitFor(
+            () => query(container, `[data-create-sheet="${DIRECTORY_ID_ALPHA}"]`) !== null,
+            "创建弹层打开",
+          );
         },
       );
     },
@@ -754,7 +762,7 @@ const checks: readonly Check[] = [
 
       // 已关闭的会话：回车 MUST NOT 发出任何命令，也不改变输入区的状态说明。
       const closed = await enterRoute(
-        sessionScenario({ sessions: [sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "closed" })] }),
+        sessionScenario({ sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "closed" })] }),
       );
       try {
         await waitFor(() => query(closed.container, '[data-composer="closed"]') !== null, "已关闭的输入区");

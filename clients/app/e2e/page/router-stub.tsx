@@ -28,7 +28,7 @@
  * `TypeError: Cannot read properties of undefined (reading 'length')` 并把整棵树卸载
  * （实测：点击目录项后容器 `innerHTML` 变空、`[data-route]` 一个都不剩）。
  * 因此这里 `createElement(current.component, { key: current.path })`：hooks 归路由组件自己，
- * 槽位不会串；`key` 取路径则让**同类型**路由之间切换（`/dir/alpha` → `/dir/beta`）强制重挂，
+ * 槽位不会串；`key` 取路径则让**同类型**路由之间切换（`/dir/<directoryId>` 之间）强制重挂，
  * 上一屏的局部状态（页面上选中的 Agent）不会被带进下一屏——真实 expo-router 的栈里
  * 每屏都是一个新实例。
  */

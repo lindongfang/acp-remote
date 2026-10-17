@@ -1,19 +1,21 @@
 /**
  * 用例共享的快照夹具与路由条目。
  *
- * ## 为什么夹具刻意携带违规字段
+ * ## 目录身份：`directoryId` + `path`
  *
- * `path` / `root` 是**协议里不存在**的字段（`WorkspaceRef` 只有 alias + displayName）。
- * 把它们塞进快照的 workspaces chunk，是为了让「不泄露本机路径」这条 MUST NOT 有一条
- * **能红**的用例：如果哪天有人在目录行里顺手渲染了 `directory.path`，
- * 负向断言会立刻抓住它，而不是靠「模型对象里没有这个键」蒙混过去。
+ * 快照的目录条目现在是协议里的 `{ directoryId, path }`（`WorkspaceCatalogEntry`，schema 明确
+ * `additionalProperties: false`）：`directoryId` 是不透明标识，只用于路由、命令载荷与键；`path`
+ * 是服务端下发的逐字路径，展示名与同名消歧段都由它派生（见 `src/domain/directory.ts`）。
+ *
+ * 因此夹具**只含协议字段**：旧形状（`alias`/`displayName`，或已删除的独立路径 feature）会被
+ * 真实解码边界拒收，夹具不能再用它们。
  */
 
 import type { ReactElement } from "react";
 
-import type { SessionSummary, WorkspaceRef } from "../../src/protocol";
+import type { SessionSummary, WorkspaceCatalogEntry } from "../../src/protocol";
 import DirectoriesRoute from "../../app/index";
-import DirectoryDetailRoute from "../../app/dir/[alias]";
+import DirectoryDetailRoute from "../../app/dir/[directoryId]";
 import HostsRoute from "../../app/hosts";
 import NodeLinkPairRoute from "../../app/node-link/pair";
 import PairRoute from "../../app/pair";
@@ -23,30 +25,42 @@ import type { StagedResources } from "../../src/sync-client";
 
 
 /** 违规路径片段：出现在任何一处渲染结果里都判红。 */
-export const SECRET_FRAGMENTS = ["D:\\", "secret", "vault", "repo-x", "repo-y", "\\work"] as const;
+export const SECRET_FRAGMENTS = ["D:\\", "secret", "vault", "\\work"] as const;
 
 /**
  * 只代表**真实宿主路径**的片段（不含示例盘符）：创建弹层的目录提示会渲染 `如 D:\work\api` 这样的
  * **示例**，因此那一处只能按这一份子集判泄漏——目录页/详情页没有目录输入，仍用 {@link SECRET_FRAGMENTS} 全表。
  */
-export const HOST_PATH_FRAGMENTS = ["secret", "vault", "repo-x", "repo-y"] as const;
+export const HOST_PATH_FRAGMENTS = ["secret", "vault", "\\work"] as const;
 
 /**
- * 两条同名目录，`path` 是协议字段（已登记！），另多带一个**不存在于协议**的 `root` 字段。
+ * 两条目录标识：32 位十六进制（与协议 `directoryId` 的形状一致）。
  *
- * 这个 `root` 是刻意的：协议里没有它，因此本条夹具能证明「渲染只取协议内的字段」——
- * 镜像（`WorkspaceCatalogEntry`）装不下它，所以这里按 open object 断言（见 `domain/directory.ts`）。
+ * 它们只作路由参数、命令载荷与 `data-directory-id` 锚点；任何界面文本里都不得出现。
  */
-export const WORKSPACES_WITH_PATHS = [
-  { alias: "alpha", displayName: "api", path: "D:\\secret\\vault\\repo-x", root: "D:\\secret\\vault" },
-  { alias: "beta", displayName: "api", path: "D:\\secret\\vault\\repo-y", root: "D:\\secret\\vault" },
-] as unknown as readonly WorkspaceRef[];
+export const DIRECTORY_ID_ALPHA = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+export const DIRECTORY_ID_BETA = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
 
-/** 只含协议字段的同名目录（对照：不带违规字段时行为必须一致）。 */
+/**
+ * 两条**同尾段**的目录路径：展示名都是 `api`，靠更多路径段 `alpha` / `beta` 消歧。
+ *
+ * 这是本轮保留的「同名目录」夹具：展示名与消歧段都逐字取自路径，因此断言可以逐字比对。
+ */
+export const DIRECTORY_PATH_ALPHA = "D:\\secret\\vault\\alpha\\api";
+export const DIRECTORY_PATH_BETA = "D:\\secret\\vault\\beta\\api";
+
+/**
+ * 两条同名目录：身份字段就是协议里的 `{ directoryId, path }`。
+ *
+ * `WORKSPACES_WITH_PATHS` 是历史名字（路径现在始终随条目下发），与 {@link WORKSPACES} 是同一份
+ * 协议形状；保留两个导出只为既有调用点不必为改名而改。
+ */
 export const WORKSPACES = [
-  { alias: "alpha", displayName: "api" },
-  { alias: "beta", displayName: "api" },
-] as const satisfies readonly WorkspaceRef[];
+  { directoryId: DIRECTORY_ID_ALPHA, path: DIRECTORY_PATH_ALPHA },
+  { directoryId: DIRECTORY_ID_BETA, path: DIRECTORY_PATH_BETA },
+] as const satisfies readonly WorkspaceCatalogEntry[];
+
+export const WORKSPACES_WITH_PATHS: readonly WorkspaceCatalogEntry[] = WORKSPACES;
 
 
 /** 两条同名 Agent（`R19` 的同名区分与 `R16` 的候选来源）。 */
@@ -71,7 +85,7 @@ export const SESSION_BETA = "aaaaaaaa-0000-4000-8000-00000000bb01";
  */
 export function sessionSummary(input: {
   readonly id: string;
-  readonly alias: string;
+  readonly directoryId: string;
   readonly state: SessionSummary["state"];
   /** 呈现标题；缺省 `会话 <id 末两位>`。 */
   readonly title?: string;
@@ -97,7 +111,7 @@ export function sessionSummary(input: {
     version: "1",
     createdAt: at,
     updatedAt: at,
-    workspace: { alias: input.alias, displayName: input.alias },
+    workspace: { directoryId: input.directoryId },
   };
 }
 
@@ -109,7 +123,7 @@ export function sessionSummary(input: {
  * 与相对时间文案同源）与详情页按页取片时的倒序——两条路径都按会话**自身**的时间排序。
  */
 export function sessionSeries(input: {
-  readonly alias: string;
+  readonly directoryId: string;
   readonly idPrefix: string;
   readonly titles: readonly string[];
   /** 与 `titles` 等长的 ISO 时间；应逐条递减（最新在前），与实际快照的顺序一致。 */
@@ -124,7 +138,7 @@ export function sessionSeries(input: {
   return input.titles.map((title, index) =>
     sessionSummary({
       id: seriesSessionId(input.idPrefix, index),
-      alias: input.alias,
+      directoryId: input.directoryId,
       title,
       updatedAt: input.at[index] ?? "",
       state: input.states?.[index] ?? "idle",
@@ -140,8 +154,8 @@ export function seriesSessionId(idPrefix: string, index: number): string {
 /** 两条目录各一条会话：alpha 运行中（运行中 +1），beta 等待输入（待处理 +1）。 */
 export function sessionsForBothDirectories(): readonly SessionSummary[] {
   return [
-    sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "running" }),
-    sessionSummary({ id: SESSION_BETA, alias: "beta", state: "waiting_input" }),
+    sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "running" }),
+    sessionSummary({ id: SESSION_BETA, directoryId: DIRECTORY_ID_BETA, state: "waiting_input" }),
   ];
 }
 
@@ -178,12 +192,12 @@ export const NODE_LINK_PAIR_ROUTE: RouteEntry = {
  */
 export const HOSTS_ROUTE: RouteEntry = { path: "/hosts", component: HostsRoute as RouteComponent, params: {} };
 
-/** 目录详情路由。 */
-export function dirRoute(alias: string): RouteEntry {
+/** 目录详情路由（`/dir/<directoryId>`）。 */
+export function dirRoute(directoryId: string): RouteEntry {
   return {
-    path: `/dir/${alias}`,
+    path: `/dir/${directoryId}`,
     component: DirectoryDetailRoute as RouteComponent,
-    params: { alias },
+    params: { directoryId },
   };
 }
 
@@ -206,7 +220,10 @@ type RouteComponent = () => ReactElement;
  * 因此漏给 `extraRoutes` 的红法是一个 10 秒的等待超时，而不是「路由没注册」这种一眼能看懂的
  * 失败。`registerRoutes` 每条用例整表替换（不跨用例残留），所以这里必须显式给出。
  */
-export const DIRECTORY_ROUTES: readonly RouteEntry[] = [dirRoute("alpha"), dirRoute("beta")];
+export const DIRECTORY_ROUTES: readonly RouteEntry[] = [
+  dirRoute(DIRECTORY_ID_ALPHA),
+  dirRoute(DIRECTORY_ID_BETA),
+];
 
 /**
  * 一条 `event` 消息原文。

@@ -31,6 +31,7 @@
  */
 
 import {
+  DIRECTORY_ID_ALPHA,
   SESSION_ALPHA,
   historyItem,
   readMessage,
@@ -84,8 +85,8 @@ const EVENT_FILE_CHANGED_UNAVAILABLE = "f0000000-0000-4000-8000-000000000113";
 
 /** 未下发的差异正文（只会作为**不可信原文**出现在诊断槽位里）。 */
 const RAW_DIFF = [
-  "--- a/D:\\secret\\vault\\app.ts",
-  "+++ b/D:\\secret\\vault\\app.ts",
+  "--- a/D:\\secret\\raw-diff-only\\app.ts",
+  "+++ b/D:\\secret\\raw-diff-only\\app.ts",
   "@@ -1,2 +1,3 @@",
   "-DIFF_BODY_LINE_REMOVED",
   "+DIFF_BODY_LINE_ADDED",
@@ -288,7 +289,11 @@ const checks: readonly Check[] = [
 
           // MUST NOT：未展开诊断时，差异正文（含绝对路径）一个片段都不得出现。
           expectNone(domText(container), DIFF_MARKERS, "未展开诊断时页面上出现了未下发的差异正文");
-          expectAbsent(domHtml(container), "D:\\secret", "右栏呈现了未下发的差异正文里的本机路径");
+          expectAbsent(
+            domHtml(filesColumn),
+            "D:\\secret\\raw-diff-only",
+            "右栏呈现了未下发的差异正文里的本机路径",
+          );
           expectEqual(
             queryAll(container, "[data-change-diagnostics]").length,
             0,
@@ -329,7 +334,7 @@ const checks: readonly Check[] = [
         sessions: [
           sessionSummary({
             id: SESSION_ALPHA,
-            alias: "alpha",
+            directoryId: DIRECTORY_ID_ALPHA,
             state: "idle",
             origin: { kind: "remote", ownerNodeId: OTHER_NODE, exportId: "export-1", originEpoch: ORIGIN_EPOCH, online: false },
           }),
