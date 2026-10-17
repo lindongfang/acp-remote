@@ -36,8 +36,9 @@ import type {
   WorkspaceBrowseResult,
 } from "./command";
 import type { AuthAuthenticated } from "./auth";
+import type { WorkspaceRef } from "./common";
 import type { EventOriginKind, FileChangedDiff, FileChangedFields } from "./event";
-import type { SnapshotItemHistory } from "./sync";
+import type { SnapshotItemHistory, SnapshotItemWorkspaces } from "./sync";
 
 /**
  * include 词表的**编译期**镜像：`SessionReadInclude` 的每个取值都必须在这里登记。
