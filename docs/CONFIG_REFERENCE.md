@@ -32,14 +32,14 @@
 | daemon / sync / node_link / sessions / storage / terminal / identity / dev_mode / logging 启动参数 | 用户配置文件，经 CLI 参数覆盖 | 启动时读取并校验；v1 不提供文件监听或通用热重载，修改后重启生效 |
 | Agent profile | 用户配置文件 `[agent]` | 每次启动读取并校验；改配置后重启生效 |
 | 目录标识 → 本机路径 | SQLite 管理记录 | 由成功的会话创建自动记录；已有会话不迁移目录 |
-| 设备/节点信任、Export、Import | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
+| 设备/节点信任 | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
 | Node 私钥 | 平台 keystore | 身份密钥；Provider/MCP 凭据由 Agent 自己持有，不进入本系统 |
 
 - SQLite 的管理状态由运行中的 Daemon 单一写入；CLI 经本地 IPC 请求修改，不自行写库、不回写 TOML。持久化边界与升级规则见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.2/§7.3/§7.4 与 §11。
 - §7 的 `[agent]` 是 Agent 列表的唯一权威：每次启动读取，非法条目让启动失败关闭；旧库中的 profile 不会自动搬运，需在配置中重新声明。
-- §9 的 TOML 片段是**管理记录的说明性表示**，不是用户配置文件支持的输入；启动配置中出现 `imports`/`exports` 必须明确拒绝并指向本地管理命令，不能忽略它们或据此创建信任。这样旧配置无法在重启时复活已撤销的 Export 或已删除的 Import。
+- §9 说明 `imports`/`exports` 不是配置输入；启动配置中出现它们必须明确拒绝。这样旧配置无法在重启时复活已撤销的信任或已删除的绑定。
 - workspace 路径、信任与授权集合不接受启动参数覆盖；keystore 不可用或 SQLite 写入失败时管理方法返回明确失败，不能仅在内存修改后报告成功。
-- 重启加载已提交的管理记录，重建 Agent catalog、Export 与 Import 路由；撤销状态始终优先。恢复完成前不开放业务接入。
+重建 Agent catalog 与节点信任路由；撤销状态始终优先。
 
 ## 1. `daemon`
 
@@ -125,7 +125,7 @@
 | `storage.attachment_dir` | `<data_dir>/attachments` | 内容寻址的附件目录（`CORE_PORTS_AND_STORAGE.md` §7.1）；权限与数据库目录相同，见 `SECURITY_DESIGN.md` §13.2 |
 | `storage.audit_retention_days` | `365` | 审计记录（`owned_audit`/`imported_audit`）保留期；容量清理时审计排在最后，超限优先拒绝写入而不是丢审计 |
 
-Access Node 的 `no-content-cache` 不是配置项：它由 Export 固定，Access 侧没有可关闭的开关（`NODE_LINK_PROTOCOL.md` §10、`SECURITY_DESIGN.md` §13.4）。
+它固定由 Owner 的 `no-content-cache` 策略决定
 
 ### 5.1 备份与拷贝
 
@@ -165,60 +165,9 @@ codex = "C:/tools/codex-acp.exe"
 | `identity.keystore` | enum | `"platform"` | `platform` 使用平台安全存储：Windows 当前档位是 DPAPI（当前用户 scope）包裹私钥、签名在进程内完成，macOS 是 Keychain，Linux 是 Secret Service；不可导出的硬件保护档位（CNG/TPM）需单独 ADR（`SECURITY_DESIGN.md` §9.2/§20）。`ephemeral` 仅允许显式开发模式 |
 | `identity.fail_closed_on_missing_keystore` | boolean | `true` | 平台 keystore 不可用时正式模式拒绝启动；`false` 只能出现在开发模式配置中 |
 
-## 9. `imports` / `exports`
+## 9. 节点信任（无 `imports` / `exports`）
 
-Access Node 侧每个 Import 一条记录（由 `acp-remote import add` 请求 Daemon 写入 SQLite，不由用户手改）。下例仅为管理记录的 TOML 表示，不是启动配置输入：
-
-```toml
-[[imports]]
-import_id = "imp-1"
-owner_endpoint = "wss://owner.example.ts.net/node-link/v1"
-owner_node_id = "bdb2ec20-f98c-4d87-b789-e540d527ef87"
-export_ids = ["exp-work"]
-grants = ["grant.observe", "grant.interact"]
-```
-
-- `grant.*` 取值以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准；有效权限是 `Owner grant ∩ Access local grant ∩ runtime capability`。
-- 本地客户端能做什么由 Access 节点自己的设备信任决定（设备通过认证即可执行本节点命令，设备方向没有授权维度），Import 记录只描述远程侧授权。
-
-### `exports`（Owner 侧）
-
-Owner Node 的 Export 由本地管理入口写入 SQLite（`local.export.manage`，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5），同样不由用户手改。下例仅为管理记录的 TOML 表示：
-
-```toml
-[[exports]]
-export_id = "exp-work"
-display_name = "公司 Agent"
-agent_ids = ["codex"]
-default_workspace_directory = "0123456789abcdef0123456789abcdef"
-default_template_id = "default"
-scopes = ["grant.observe", "grant.interact", "grant.remote-work"]
-cache_policy = "no-content-cache"
-
-[[exports.workspace_directories]]
-alias = "company-agent-default"
-display_name = "公司默认工作区"
-
-[[exports.templates]]
-template_id = "default"
-display_name = "默认"
-directory_id = "0123456789abcdef0123456789abcdef"
-# 首切片 template 必须无参数（NODE_LINK_PROTOCOL.md §10）。下面这段 params 是 post_mvp 的
-# 说明性表示，不是首切片的合法输入；有参 template 需要先定「谁提供值」与「影响什么」。
-# [[exports.templates.params]]
-# name = "branch"
-# type = "string"
-# required = false
-# pattern = "^[a-zA-Z0-9._/-]{1,128}$"
-# enum = []
-```
-
-- `cache_policy` 在 v1 固定为 `no-content-cache`；管理写入拒绝其他值，启动加载发现非法持久值则失败关闭，不允许绕过 Owner 的内容策略。
-- `export_id`、`agent_ids`、`workspace_directories`、`templates` 与 `scopes` 一起构成 `session.create` 参数（`agentId`/`exportId`/`directoryId`/`templateParams`）的唯一可引用集合；未列出的取值一律拒绝（`nodelink.export.not_granted` 或 `nodelink.command.unsupported_field`）。`scopes` 与 Node Link Export 模型的同名字段同义（`NODE_LINK_PROTOCOL.md` §10）；Access 侧 `[[imports]].grants` 是另一概念（本节点自己的授权子集），不随此改名。
-- `default_workspace_directory` 必须出现在同一条目的 `workspace_directories` 中，`default_template_id` 必须出现在 `templates` 中；首切片恰好一个目录与一个 template，且该 template **不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）。
-- `[[exports.workspace_directories]].directory_id` 必须已在本机目录表记录：`export.create` 必须校验每个标识（否则 `local.not_found`），Export 只引用标识、**不复制路径**（`SECURITY_DESIGN.md` §12.3）。
-- `templates.params[].type` ∈ `string|boolean|integer`；`pattern` 只对 `string` 生效；`enum` 为空数组表示不限制取值。`session.create.payload.templateParams` 的键必须来自这里。
-- 原始目录路径与 Provider/MCP 凭据不出现在本文件：目录由成功的会话创建记录；Provider/MCP 凭据由 Agent 自己持有。
+配对成功后节点信任记录即表达「该节点可使用本机全部资源」，不存在 `[[imports]]`/`[[exports]]` 配置或等价的管理记录。启动配置里出现这两个表必须明确拒绝。
 
 ## 10. `dev_mode`
 

@@ -65,7 +65,7 @@ ADR-0004 只给出架构决策，其“结果”段遗留的“请求/响应编�
   - Windows：`GetNamedPipeClientProcessId` 取客户端进程，`OpenProcessToken` + `GetTokenInformation(TokenUser)` 取 SID，与 Daemon 进程的用户 SID 比对。
   - Unix：`SO_PEERCRED` 取对端 `uid`，与 Daemon 的有效 `uid` 比对。
 - 凭据不一致时：不发送任何 frame，立即关闭连接，并记一条 `SECURITY_DESIGN.md` §14.2 的 `authorization.denied` 审计事件。
-- 不引入本地 token、不复用设备或节点身份、不开放 loopback HTTP 管理面（ADR-0004 决策 4、7）。本通道不进入远程攻击面，也不受设备 scope 或 Export grant 影响。
+- 不引入本地 token、不复用设备或节点身份、不开放 loopback HTTP 管理面（ADR-0004 决策 4、7）。本通道不进入远程攻击面，也不受节点配对授权影响。
 
 ## 3. Framing
 
@@ -115,7 +115,7 @@ u32be length | payload(length bytes)
 **断线与崩溃**
 
 - CLI 进程退出或连接 EOF：facade 结束该 attachment 上的全部 ACP 会话绑定，并把本端发起的 pending 权限/elicitation 请求标记为「上游已断开」。
-- 上游断开**不得**代答权限请求，也不得按 Export grant 自动允许/拒绝（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）：Owner 侧的 `permission.requested` 保持 pending，直到新连接重新送达并得到真实答复。
+- 上游断开**不得**代答权限请求，也不得按任何节点授权自动允许/拒绝（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）：Owner 侧的 `permission.requested` 保持 pending，直到新连接重新送达并得到真实答复。
 - 已经在运行的 turn **不因**上游断开而取消：它由 Owner/Agent 继续，事件照常先持久化再广播（`AGENTS.md` §4）。
 
 **重连与幂等**
@@ -179,7 +179,7 @@ u32be length | payload(length bytes)
 补充说明：
 
 - `daemon.status`、`daemon.stop` 不对应任何 `local.*` 能力：它们是没有 scope 判定的 daemon 生命周期调用，由组合根回答。
-- 本表是 ADR-0004 决策 3 的三个 use case 名的展开：身份、Export 与远程目录相关方法走 `DeviceManagement`／`ExportManagement`／`RemoteCatalogQueries`；本地配置与 daemon 生命周期方法分别走本地配置族与组合根，不引入第二套管理语义。
+- 本表是 ADR-0004 决策 3 的三个 use case 名的展开：身份与节点相关方法走 `DeviceManagement`；本地配置与 daemon 生命周期方法分别走本地配置族与组合根，不引入第二套管理语义。
 
 ### 5.2 Daemon 生命周期与本地配置
 
@@ -200,7 +200,7 @@ uptimeMs      integer
 dataDir       string                 # 绝对路径
 listen        string[]               # 实际监听地址
 publicOrigin  string | null
-counts        { devices: integer, nodes: integer, exports: integer, imports: integer }
+counts        { devices: integer, nodes: integer }
 agents        { agentId: string, available: boolean }[]
 links         { nodeId: UUID, state: "connected" | "connecting" | "offline", lastConnectedAt: timestamp | null, nextRetryAt: timestamp | null }[]
 uiBuildVersion string | null         # 本次二进制嵌入并托管的前端构建版本
@@ -208,7 +208,7 @@ uiBuildVersion string | null         # 本次二进制嵌入并托管的前端�
 
 - `uiBuildVersion` 是本次二进制**嵌入并被托管**的前端构建版本（`FRONTEND_DESIGN.md` §4.3 的「版本可检查地关联」）：取值与浏览器拿到的静态资源出自**同一份**嵌入资源表（前端构建钩子写入产物的 `build-version.json`，见 `clients/app/scripts/write-build-version.mjs`），不是 Daemon 自己算的产物哈希。`null` 表示**版本缺失**（占位入口，或产物没有可识别的版本文件），是显式缺失语义而不是「未知」或空串——不编造版本。它是 `result` 里的一个**字段**，**不改变**本文件的方法集与 §6 的本地错误码集合。
 
-- `links` 是组合根持有的运行时状态（`NODE_LINK_PROTOCOL.md` §15 的连接策略），**不是**持久记录；它解释 `import.add`/`session.create` 为何返回 `local.unavailable`。未配对或已撤销的节点不出现在 `links` 里。
+它解释 `session.create` 为何可能返回 `local.unavailable`。
 
 - 由组合根回答，不经 `core::use_cases`；`daemon start` 不经过本通道（ADR-0004 决策 1）。
 - Daemon 未运行时由 CLI 在进程内回答，见 §7。
@@ -304,8 +304,8 @@ nodeId                  UUID
 displayName             string              # ≤128
 kind                    "access" | "owner"  # 该记录代表的对端角色：access = 我们信任的 Access Node；owner = 我们导入的 Owner Node
 nodePublicKeyFingerprint string             # 同 DeviceRecord 的指纹规则
-grants                  string[]            # grant.* 子集
-exportIds               string[]            # 该节点可见 Export 的白名单（去重、字典序；空数组 = 看不到任何 Export；语义见 NODE_LINK_PROTOCOL.md §8.2）
+
+
 state                   "pending" | "paired" | "revoked"
 ownerEndpoint           string | null       # kind = "owner" 时为 wss:// 端点
 createdAt               timestamp
@@ -321,7 +321,7 @@ revokedAt               timestamp | null
 mode            "owner" | "access"
 pairingUrl      string | null   # mode = "owner" 时必须为 null；mode = "access" 时为用户提供的 Owner 二维码 URL
 displayName     string          # ≤128，本节点在对端界面上的展示名（nodeName）
-requestedGrants string[]        # mode = "access" 时携带，取值限于 commands.json 的 grant.*
+
 ```
 
 - `mode = "owner"`：本节点创建一次性配对并返回二维码 URL，claim 之前不知道对端身份。
@@ -345,11 +345,11 @@ peerPublicKeyFingerprint string | null
 
 #### `node.pair.confirm`
 
-- `params`：`{ pairingId, grants: string[], exportIds: string[] }`——`exportIds` 是**必填**字段（取值可以是空数组）；缺少该字段 → `local.invalid_params`，且不创建信任。`schemas/local-admin/v1/envelope.schema.json` 只把 `params`/`result` 建模为通用对象（逐方法形状由本文拥有），因此「必填」由 Daemon 在运行期强制，不写进 JSON Schema。
-- `result`：`{ nodeId, grants, exportIds, confirmedAt }`——`exportIds` 回显本次填报的最终清单。
-- 只有 Owner 侧本地确认才创建信任记录并分配初始 `grant.*`（`NODE_LINK_PROTOCOL.md` §13.2）；必须在持久状态提交后才返回。
-- `exportIds` 是「该节点可见 Export」的白名单，**只能收窄**：可见性 = `NODE_LINK_PROTOCOL.md` §8.2 的三个条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`）。每个 `exportId` 必须本机存在且未撤销，否则 `local.not_found`；其 `scopes` 必须与本次 `grants` 有交集，否则 `local.invalid_params`。三类失败（缺少字段、不存在/已撤销、与 `grants` 不相交）都不创建信任、不推进配对状态、不写审计。空清单合法，等于该节点看不到任何 Export（即使 `scopes` 与 `grants` 相交）。
-- 清单只在确认时填报，没有配对后修改入口（已知限制，见 `NODE_LINK_PROTOCOL.md` §8.2）：改清单只能重新配对——要么先 `node.revoke` 再重新配对，要么直接重新配对；两种做法都在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效。`export.revoke` 不级联清理清单条目。v3 及更早的库升级到 v4 后既有节点行的清单为空，这类配对需要在本机重新确认才能恢复可见（`NODE_LINK_PROTOCOL.md` §8.2 的升级副作用）。
+- `params`：`{ pairingId }`；任何授权集合字段出现即 `local.invalid_params`，且不创建信任。
+- `result`：`{ nodeId, confirmedAt }`。
+- 只有 Owner 侧本地确认才创建信任记录；配对即完全信任（`local.*` 除外），必须在持久状态提交后才返回。
+
+
 
 #### `node.pair.reject`
 
@@ -405,17 +405,17 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 | `agent list` | 本地方法 | `agent.list` | 只读：打印配置文件解析出的 id、命令、argv、默认标记与可执行文件是否存在 |
 | `device pair` | 本地方法 ×3 | `device.pair.begin` → `device.pair.status`（轮询）→ `device.pair.confirm` | 多步流程见下；参数只有 `--fingerprint`（非交互确认）与 `--expires-in-ms`——设备方向没有授权词汇 |
 | `device list` / `device revoke` | 本地方法 | 1:1 | |
-| `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id` 与非交互的 `--fingerprint` |
+| `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--fingerprint` |
 | `node list` / `node revoke` | 本地方法 | 1:1 | |
 | `acp-stdio` | channel `0x02` | stdin/stdout 字节泵 | 不进管理信封；会话语义见 §3.1 |
 
-**首切片不提供 `session create`**，`session list` 标为 `post_mvp`：业务命令（`session.*`、`permission.resolve` 等）在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `sync` 与 `node_link`，**本地通道不承载业务命令**；本地会话的唯一入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`，不经 wire 命令）。若要给 CLI 加会话语义，必须先决定是否为命令引入 `local` transport（那时需同步 `commands.json`、`broker::required_grant` 镜像与那条“四处一致”门禁），**不得**在本地通道另造同名方法。
+**首切片不提供 `session create`**，`session list` 标为 `post_mvp`：业务命令（`session.*`、`permission.resolve` 等）在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `sync` 与 `node_link`，**本地通道不承载业务命令**；本地会话的唯一入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`，不经 wire 命令）。若要给 CLI 加会话语义，必须先决定是否为命令引入 `local` transport（那时需同步 `commands.json`与那条“四处一致”门禁），**不得**在本地通道另造同名方法。
 
-**配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间（节点方向另显示待授予的 `grant.*`）；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
+**配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
 
 1. `begin`：拿到 `pairingId` 与 `pairingUrl`，打印 URL 与二维码（如终端支持）；
-2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间，节点方向另展示待授予的 `grant.*`；
-3. 用户输入确认后调 `confirm`：设备方向**不提交任何授权集合**，节点方向把用户确认过的 `grants` 与本次点名的 `--export-id` 清单作为最终集合提交。
+2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间；
+两个方向都不提交任何授权集合。
 
 示例（交互式设备配对）：
 
@@ -432,17 +432,17 @@ https://home.example.invalid/sync/v1/pairing#…（含 pairing secret，只在�
 已配对：deviceId=2ae1c07c-…
 ```
 
-节点方向多一行待授予的 `grant.*`（授权只存在于跨节点方向）：
+节点方向与设备方向相同，不展示授权集合：
 
 ```text
-$ acp-remote node pair --mode owner --display-name my-node --grant grant.session.read --export-id export-1
+$ acp-remote node pair --mode owner
 …
 节点已认领：
   名称            my-node
   指纹            cd34…（64 位 hex）
-  待授予 grants   grant.session.read
+
   过期            2026-09-23T14:31:00.000Z
-确认授予以上 grants（1 项）？[y/N]: y
+确认与本机记录该节点（配对即完全信任）？[y/N]: y
 已配对：nodeId=7f30a1b2-…
 ```
 
@@ -463,8 +463,8 @@ $ acp-remote device pair --fingerprint ab12…（64 位 hex）
 | `local.unsupported` | 未知 `method`，或方法在当前 delivery 阶段尚未实现 | 否 |
 | `local.invalid_request` | 信封非法：`id` 缺失/非 UUID/重复、`method` 缺失或命名非法、`params` 不是 object | 否 |
 | `local.invalid_params` | 方法参数非法：缺字段、类型不符、越界或出现未知字段 | 否 |
-| `local.not_found` | 目标 `deviceId`/`nodeId`/`pairingId`/`exportId`/`importId` 不存在，或引用的目录标识未在本机目录表记录 | 否 |
-| `local.conflict` | 目标存在但当前状态不允许该操作（pairing 已确认、`exportId` 已存在、输出文件已存在） | 否 |
+| `local.not_found` | 目标 `deviceId`/`nodeId`/`pairingId` 不存在，或引用的目录标识未在本机目录表记录 | 否 |
+| `local.conflict` | 目标存在但当前状态不允许该操作（pairing 已确认、输出文件已存在） | 否 |
 | `local.expired` | `pairingId` 已过期或已被拒绝 | 否 |
 | `local.remote_error` | `node.pair.*` 对 Owner 的 HTTPS 调用失败或返回错误（`NODE_LINK_PROTOCOL.md` §13.4） | 视远端状态 |
 | `local.unavailable` | Daemon 正在关闭、存储不可用、keystore 不可用或依赖未就绪 | 是 |
@@ -482,10 +482,10 @@ $ acp-remote device pair --fingerprint ab12…（64 位 hex）
 - **连接中断**：CLI 必须报错退出，不得降级为直接读写 SQLite。重试由用户显式发起，且：
   - `*.list`、`*.status` 幂等，可安全重复；
   - `device.pair.begin`、`node.pair.begin` 每次调用创建新配对，旧配对自然过期，不构成第二次接受；
-  - `export.create`、`import.add` 重试得到 `local.conflict`；`*.revoke`、`*.remove` 重试得到 `local.not_found`；
+- 配对确认重试得到 `local.conflict`；
   - CLI 不得自动重试任何 mutation 方法。
 - **endpoint 创建失败**（权限不符、路径被占用、socket 被替换为符号链接、目录权限不符、旧 socket 仍存活）→ 正式模式拒绝启动，不得降级为“无管理通道”或临时暴露无认证 endpoint（ADR-0004 决策 8、`SECURITY_DESIGN.md` §8）。
-- **撤销与关闭顺序**：`device.revoke`、`node.revoke`、`export.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；节点方向的 `node.pair.confirm` 在信任行提交后同样关闭该节点的活动连接（收窄/重新授权自下一次握手生效，`NODE_LINK_PROTOCOL.md` §8.2）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
+- **撤销与关闭顺序**：`device.revoke`、`node.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；节点方向的 `node.pair.confirm` 在信任行提交后同样关闭该节点的活动连接（收窄/重新授权自下一次握手生效，`NODE_LINK_PROTOCOL.md` §8.2）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
 - **审计与日志**：拒绝连接、`SECURITY_DESIGN.md` §14.2 类别覆盖的安全动作（配对批准/拒绝、撤销、凭据配置等）记对应审计事件；**方法失败只记结构化日志**——§14.2 的封闭类别里没有「方法失败」，不得复用 `authorization.denied` 把参数错误与 scope 拒绝混为一谈。日志遵守 §14.1 的允许字段。
 
 ## 8. 版本与演进
