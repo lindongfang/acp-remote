@@ -1,7 +1,7 @@
 //! 身份、信任与审计（`docs/CORE_PORTS_AND_STORAGE.md` §3.5）。
 //!
-//! 形状来源：`LOCAL_ADMIN_PROTOCOL.md` §5.3（`DeviceRecord`）、§5.4（`NodeRecord`）、§5.5（Export/Import）、
-//! `SECURITY_DESIGN.md` §10.2（scope 与 grant 的取值族）、§14.2（审计动作的闭合枚举）。
+//! 形状来源：`LOCAL_ADMIN_PROTOCOL.md` §5.3（`DeviceRecord`）、§5.4（`NodeRecord`）、
+//! `SECURITY_DESIGN.md` §14.2（审计动作的闭合枚举）。
 //!
 //! `PairingRecord`/`PairingClaim`/`PairingSettlement` 在合同里标为 `[open]`（只有方法级的 `params`/`result`）。
 //! 本文件按 §5.3/§5.4 的配对方法与 `SYNC_PROTOCOL.md` §7.0 的状态机给出**首个实现**的记录形状，并把
@@ -11,96 +11,14 @@
 //! 凭据（Provider secret、Node key、pairing secret）**不在此层**：表与模型最多保存引用与指纹
 //! （`SECURITY_DESIGN.md` §13.1）。
 
-use std::collections::BTreeSet;
-
 use super::error::InvalidValue;
 use super::ids::{
-    DeviceId, EntityRef, ExportId, Fingerprint, NodeId, PairingId, is_endpoint, is_grant_name,
-    is_scope_name, require_bounded,
+    DeviceId, EntityRef, Fingerprint, NodeId, PairingId, is_endpoint, require_bounded,
 };
 use super::scalars::{Digest, Nonce, Timestamp};
 use sha2::Digest as _;
 use std::fmt;
 use std::str::FromStr;
-
-/// 生成一个「名称集合」：逐项校验、去重、按字典序迭代（scope 与 grant 各自的取值族不同）。
-macro_rules! name_set {
-    ($(#[$meta:meta])* $name:ident, $check:path, $invalid:expr) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Default, PartialEq, Eq)]
-        pub struct $name(BTreeSet<String>);
-
-        impl $name {
-            /// 空集合。
-            pub fn empty() -> Self {
-                Self::default()
-            }
-
-            /// 逐项校验并去重。
-            pub fn try_from_iter<I, S>(items: I) -> Result<Self, InvalidValue>
-            where
-                I: IntoIterator<Item = S>,
-                S: AsRef<str>,
-            {
-                let mut set = Self::empty();
-                for item in items {
-                    set.insert(item.as_ref())?;
-                }
-                Ok(set)
-            }
-
-            /// 插入一个名称；重复插入返回 `false`，非法名称返回具名错误。
-            pub fn insert(&mut self, name: &str) -> Result<bool, InvalidValue> {
-                if !($check)(name) {
-                    return Err($invalid);
-                }
-                Ok(self.0.insert(name.to_owned()))
-            }
-
-            /// 是否包含该名称。
-            pub fn contains(&self, name: &str) -> bool {
-                self.0.contains(name)
-            }
-
-            /// 是否为空。
-            pub fn is_empty(&self) -> bool {
-                self.0.is_empty()
-            }
-
-            /// 元素个数。
-            pub fn len(&self) -> usize {
-                self.0.len()
-            }
-
-            /// 按字典序迭代（天然去重）。
-            pub fn iter(&self) -> impl Iterator<Item = &str> + '_ {
-                self.0.iter().map(String::as_str)
-            }
-
-            /// 取出底层名称。
-            pub fn into_strings(self) -> impl Iterator<Item = String> {
-                self.0.into_iter()
-            }
-        }
-    };
-}
-
-name_set!(
-    /// 展开后的命令级 scope 集合（等于命令名，`SECURITY_DESIGN.md` §10.2）。
-    ///
-    /// 设备权限层已删除（`pairing-model`）：本类型只剩配对方向的历史形状（配对请求与落定的集合字段，
-    /// 按合同必须为空），不再参与任何逐命令授权判定——设备通过认证即可执行命令。
-    ScopeSet,
-    is_scope_name,
-    InvalidValue::ScopeName
-);
-
-name_set!(
-    /// `grant.*` 集合（Export scopes 与 Node grants）。
-    GrantSet,
-    is_grant_name,
-    InvalidValue::GrantName
-);
 
 token_enum!(
     /// 调用者类别。
@@ -295,18 +213,14 @@ token_enum!(
 
 /// 节点记录（`node.list` 与配对结果共用）。
 ///
-/// `export_ids` 是 Owner 侧信任记录点名的 Export 清单（`LOCAL_ADMIN_PROTOCOL.md` §5.4 的 `exportIds`，
-/// 用户 2026-09-27 裁决的收窄型白名单）：空清单表示该节点看不到任何 Export，且清单只能收窄可见性，
-/// 不能放宽 `scopes ∩ grants`。构造器把它归一化为去重、字典序的清单（与 `GrantSet`/`ScopeSet` 的集合
-/// 语义同款）。
+/// 节点信任不携带授权集合：配对即信任该节点的全部业务命令（`local.*` 除外），见
+/// `docs/SECURITY_DESIGN.md` 的威胁模型。本类型只描述身份、角色与凭据状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeRecord {
     node_id: NodeId,
     display_name: String,
     kind: NodeKind,
     node_public_key_fingerprint: Fingerprint,
-    grants: GrantSet,
-    export_ids: Vec<ExportId>,
     state: NodeState,
     owner_endpoint: Option<String>,
     created_at: Timestamp,
@@ -316,16 +230,13 @@ pub struct NodeRecord {
 
 impl NodeRecord {
     /// 构造。`display_name` ≤128 字符；`revoked_at` 与 `state = revoked` 一致；
-    /// `owner_endpoint` 仅在 `kind = owner` 时存在，且必须是 `wss://` 端点；
-    /// `export_ids` 去重并按字典序排序（空清单合法）。
+    /// `owner_endpoint` 仅在 `kind = owner` 时存在，且必须是 `wss://` 端点。
     #[allow(clippy::too_many_arguments)] // 与 §5.4 的记录字段一一对应
     pub fn try_new(
         node_id: NodeId,
         display_name: &str,
         kind: NodeKind,
         node_public_key_fingerprint: Fingerprint,
-        grants: GrantSet,
-        export_ids: Vec<ExportId>,
         state: NodeState,
         owner_endpoint: Option<String>,
         created_at: Timestamp,
@@ -352,8 +263,6 @@ impl NodeRecord {
             display_name: display_name.to_owned(),
             kind,
             node_public_key_fingerprint,
-            grants,
-            export_ids: normalized_export_ids(export_ids),
             state,
             owner_endpoint,
             created_at,
@@ -380,16 +289,6 @@ impl NodeRecord {
     /// 公钥指纹。
     pub fn node_public_key_fingerprint(&self) -> &Fingerprint {
         &self.node_public_key_fingerprint
-    }
-
-    /// `grant.*` 集合。
-    pub fn grants(&self) -> &GrantSet {
-        &self.grants
-    }
-
-    /// 该节点可见的 Export 清单（去重、字典序；空清单 = 看不到任何 Export）。
-    pub fn export_ids(&self) -> &[ExportId] {
-        &self.export_ids
     }
 
     /// 状态。
@@ -463,8 +362,6 @@ pub struct PairingRecord {
     target: PairingTarget,
     state: PairingState,
     display_name: Option<String>,
-    requested_scopes: ScopeSet,
-    requested_grants: GrantSet,
     secret_digest: Digest,
     host_binding: String,
     created_at: Timestamp,
@@ -478,16 +375,13 @@ impl PairingRecord {
     /// 构造。`display_name` ≤128 字符；`host_binding` 非空且 ≤2048 字符（与 endpoint 上限同口径）；
     /// 时间戳与状态必须自洽：
     /// `claimed_at` 非空 ⟺ 状态不是 `created`；`approved_at` 非空 ⟺ 状态是 `approved`/`consumed`；
-    /// `terminal_at` 非空 ⟺ 状态是 `rejected`/`expired`/`consumed`；
-    /// 设备配对不带 grants、节点配对不带 scopes。
+    /// `terminal_at` 非空 ⟺ 状态是 `rejected`/`expired`/`consumed`。
     #[allow(clippy::too_many_arguments)] // 与配对状态机的时间戳一一对应
     pub fn try_new(
         id: PairingId,
         target: PairingTarget,
         state: PairingState,
         display_name: Option<String>,
-        requested_scopes: ScopeSet,
-        requested_grants: GrantSet,
         secret_digest: Digest,
         host_binding: &str,
         created_at: Timestamp,
@@ -511,22 +405,11 @@ impl PairingRecord {
         if terminal_at.is_some() != state.is_terminal() {
             return Err(InvalidValue::Field);
         }
-        match target {
-            PairingTarget::Device if !requested_grants.is_empty() => {
-                return Err(InvalidValue::Field);
-            }
-            PairingTarget::Node if !requested_scopes.is_empty() => {
-                return Err(InvalidValue::Field);
-            }
-            PairingTarget::Device | PairingTarget::Node => {}
-        }
         Ok(Self {
             id,
             target,
             state,
             display_name,
-            requested_scopes,
-            requested_grants,
             secret_digest,
             host_binding: host_binding.to_owned(),
             created_at,
@@ -555,16 +438,6 @@ impl PairingRecord {
     /// 对端在后面声明的展示名（claim 之前为 `None`）。
     pub fn display_name(&self) -> Option<&str> {
         self.display_name.as_deref()
-    }
-
-    /// claim 请求的 scopes（仅设备配对）。
-    pub fn requested_scopes(&self) -> &ScopeSet {
-        &self.requested_scopes
-    }
-
-    /// claim 请求的 grants（仅节点配对）。
-    pub fn requested_grants(&self) -> &GrantSet {
-        &self.requested_grants
     }
 
     /// pairing secret 的摘要。
@@ -789,32 +662,12 @@ impl PairingPeer {
 pub struct PairingClaim {
     pairing: PairingId,
     peer: PairingPeer,
-    requested_scopes: ScopeSet,
-    requested_grants: GrantSet,
 }
 
 impl PairingClaim {
-    /// 构造。设备配对不得携带 grants，节点配对不得携带 scopes。
-    pub fn try_new(
-        pairing: PairingId,
-        peer: PairingPeer,
-        requested_scopes: ScopeSet,
-        requested_grants: GrantSet,
-    ) -> Result<Self, InvalidValue> {
-        match (
-            peer.id(),
-            requested_scopes.is_empty(),
-            requested_grants.is_empty(),
-        ) {
-            (PeerIdentity::Device(_), _, false) => Err(InvalidValue::Field),
-            (PeerIdentity::Node(_), false, _) => Err(InvalidValue::Field),
-            (PeerIdentity::Device(_) | PeerIdentity::Node(_), _, _) => Ok(Self {
-                pairing,
-                peer,
-                requested_scopes,
-                requested_grants,
-            }),
-        }
+    /// 构造。
+    pub fn try_new(pairing: PairingId, peer: PairingPeer) -> Result<Self, InvalidValue> {
+        Ok(Self { pairing, peer })
     }
 
     /// 目标配对。
@@ -826,59 +679,21 @@ impl PairingClaim {
     pub fn peer(&self) -> &PairingPeer {
         &self.peer
     }
-
-    /// 请求的 scopes（仅设备配对）。
-    pub fn requested_scopes(&self) -> &ScopeSet {
-        &self.requested_scopes
-    }
-
-    /// 请求的 grants（仅节点配对）。
-    pub fn requested_grants(&self) -> &GrantSet {
-        &self.requested_grants
-    }
 }
 
 /// 本地确认的结果（`TrustStore::settle_pairing`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairingSettlement {
-    /// 批准：`granted_*` 是用户确认的最终集合（不是请求值）。
-    Approved {
-        granted_scopes: ScopeSet,
-        granted_grants: GrantSet,
-        /// 该节点可见的 Export 清单（`LOCAL_ADMIN_PROTOCOL.md` §5.4 的 `exportIds`；已去重、字典序，
-        /// 空集合 = 看不到任何 Export）。设备配对恒为空集合。
-        granted_export_ids: Vec<ExportId>,
-    },
+    /// 批准：只创建信任记录，不携带任何授权集合或 Export 清单。
+    Approved,
     /// 拒绝：可选简短原因（≤256 字符），不进审计正文。
     Rejected { reason: Option<String> },
 }
 
 impl PairingSettlement {
-    /// 批准。点名的 Export 清单默认空（节点配对由调用方经
-    /// [`PairingSettlement::with_granted_export_ids`] 附上，设备配对没有这一面）。
-    pub fn approved(granted_scopes: ScopeSet, granted_grants: GrantSet) -> Self {
-        Self::Approved {
-            granted_scopes,
-            granted_grants,
-            granted_export_ids: Vec::new(),
-        }
-    }
-
-    /// 在已批准的结果上附上本次点名的 Export 清单（归一化为去重、字典序）；
-    /// 非批准结果原样返回（`exportIds` 只属于批准）。
-    pub fn with_granted_export_ids(self, export_ids: Vec<ExportId>) -> Self {
-        match self {
-            Self::Approved {
-                granted_scopes,
-                granted_grants,
-                ..
-            } => Self::Approved {
-                granted_scopes,
-                granted_grants,
-                granted_export_ids: normalized_export_ids(export_ids),
-            },
-            other => other,
-        }
+    /// 批准。
+    pub fn approved() -> Self {
+        Self::Approved
     }
 
     /// 拒绝。
@@ -893,29 +708,19 @@ impl PairingSettlement {
 
     /// 是否批准。
     pub fn is_approved(&self) -> bool {
-        matches!(self, Self::Approved { .. })
+        matches!(self, Self::Approved)
     }
 
     /// 校验（拒绝原因的字段是公有的，读取路径应调用一次）。
     pub fn validate(&self) -> Result<(), InvalidValue> {
         match self {
-            Self::Approved { .. } => Ok(()),
+            Self::Approved => Ok(()),
             Self::Rejected { reason } => match reason {
                 Some(reason) => require_bounded(reason, 0, 256),
                 None => Ok(()),
             },
         }
     }
-}
-
-/// 归一化 Export 清单：去重并按字典序排序（`ExportId` 有全序，排序即稳定序）。
-///
-/// 空输入合法（= 看不到任何 Export）；重复项静默去重（集合语义与 `GrantSet`/`ScopeSet` 同款），
-/// 因此落盘、回显与可见性判定三处永远看到同一份清单。
-fn normalized_export_ids(mut export_ids: Vec<ExportId>) -> Vec<ExportId> {
-    export_ids.sort();
-    export_ids.dedup();
-    export_ids
 }
 
 token_enum!(
@@ -925,6 +730,9 @@ token_enum!(
     /// 因此本二进制**不再产生**它（唯一的产生点是 `put_device` 的「scopes 变化」分支，已删除）。保留该
     /// 取值是因为升级前的库可能仍有这类审计行——v8 的 12-step 重建要整行搬移它们，读面也按 token 解码
     /// 归因；删除它会同时让历史审计行写不回去、读不出来（§11.3 的审计保留）。
+    ///
+    /// `ExportCreated`/`ExportRevoked`/`ImportAdded`/`ImportRemoved` 同理：Export/Import 整族已删除，
+    /// 本二进制不再产生这四种动作，但 v11 之前的审计行仍必须可读。
     AuditAction {
         PairingCreated => "pairing.created",
         PairingClaimed => "pairing.claimed",

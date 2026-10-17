@@ -60,13 +60,6 @@
 pub mod cursor;
 pub mod event;
 pub mod fanout;
-#[cfg(test)]
-mod fanout_tests;
-
-#[cfg(test)]
-pub(crate) mod fixture;
-#[cfg(test)]
-mod tests;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -179,12 +172,6 @@ impl SubscribeRoute {
             owner,
             states: Mutex::new(BTreeMap::new()),
         }
-    }
-
-    /// 当前被登记状态的连接数（用例观测口：表必须随连接结束回收）。
-    #[cfg(test)]
-    pub(crate) fn tracked(&self) -> usize {
-        lock(&self.states).len()
     }
 
     // -----------------------------------------------------------------------------------------

@@ -29,8 +29,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acp_core::model::{
     AcpRaw, CommittedDelivery, CommittedEvent, EntityRef, EventPayload as CoreEventPayload,
-    ExportId, InteractionKind, NodeId, OriginCursor as CoreOriginCursor, PortError,
-    RawUnavailableReason, SessionId, SessionState as CoreSessionState,
+    InteractionKind, NodeId, OriginCursor as CoreOriginCursor, PortError, RawUnavailableReason,
+    SessionId, SessionState as CoreSessionState,
 };
 use acp_core::ports::{EventPublisher, ReplayLimit};
 use acp_core::use_cases::{NodeLinkEvent, NodeLinkReplay, UseCases};
@@ -52,7 +52,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::node_link::conn::{ConnectionHandle, ConnectionRegistry, MessageRoute, RouteOutcome};
-use crate::node_link::{catalog, link_error};
+use crate::node_link::link_error;
 use crate::transport::net::Shutdown;
 
 /// 扇出链路自己的有界队列容量（每连接队列之外的第二道；满了只丢这一条并记日志，broker 绝不被阻塞）。
@@ -79,7 +79,6 @@ struct ConnectionState {
 struct Attachment {
     id: Uuid,
     generation: u64,
-    export: ExportId,
     session: SessionId,
     /// wire 上的 `remoteSessionRef`（回包与事件映射共用同一份）。
     remote: RemoteSessionRef,
@@ -159,25 +158,16 @@ impl ResourceRoute {
         if targets.is_empty() {
             return;
         }
-        // 正文按 (accessNodeId, exportId) 取回一次，供同一事件的所有目标复用（同一会话可能被不同的
-        // Export 导出，各自的可见性独立判定）。
-        let mut payloads: BTreeMap<(String, String), Option<WireEventPayload>> = BTreeMap::new();
+        // 正文按 accessNodeId 取回一次，供同一事件的所有目标复用。
+        let mut payloads: BTreeMap<String, Option<WireEventPayload>> = BTreeMap::new();
         for (key, handle, attachment) in targets {
-            let cache_key = (
-                handle.node_id().as_str().to_owned(),
-                attachment.export.as_str().to_owned(),
-            );
+            let cache_key = handle.node_id().as_str().to_owned();
             let payload = match payloads.get(&cache_key) {
                 Some(cached) => cached.clone(),
                 None => {
                     let fetched = match self
                         .core
-                        .node_link_event_payload(
-                            handle.node_id(),
-                            &attachment.export,
-                            &attachment.session,
-                            &event.id,
-                        )
+                        .node_link_event_payload(handle.node_id(), &attachment.session, &event.id)
                         .await
                     {
                         Ok(Some(payload)) => wire_payload(&payload),
@@ -334,29 +324,15 @@ impl ResourceRoute {
         // ① 复合身份的本机分量复核：`ownerNodeId` 必须是本机（Owner）——否则这个 `remoteSessionRef`
         //    指向的是另一个 Owner 的会话，本机不签发任何 attachment；与「会话不存在」同码，不泄露差别。
         if !self.owner_matches(remote) {
-            return self.protocol_error(handle, ErrorCode::ExportNotFound, message);
+            return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
         }
-        let (Some(export), Some(session)) = (
-            export_id(remote.export_id.as_str()),
-            session_id(remote.session_id.as_str()),
-        ) else {
-            return self.protocol_error(handle, ErrorCode::ExportNotFound, message);
+        let Some(session) = session_id(remote.session_id.as_str()) else {
+            return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
         };
-        // ② 可见性复核（`catalog::visible_exports` 是唯一判定点）：未知/未配对的节点、未导出的 Export、
-        //    已撤销的 Export、与该节点 grants 不相交的 Export，以及不在该节点 `exportIds` 清单内的
-        //    Export 都在这里被挡住。
-        match catalog::export_is_visible(&self.core, handle.node_id(), &export).await {
-            Ok(true) => {}
-            Ok(false) => {
-                return self.protocol_error(handle, ErrorCode::ExportNotGranted, message);
-            }
-            Err(error) => return self.fault(handle, &error, message),
-        }
-        // ③ 会话归属复核（core 的会话绑定只读入口同时校验对端是已配对的 access 行、Export 未撤销、
-        //    会话的 Agent 属于该 Export）。
+        // ③ 会话归属复核（core 的会话绑定只读入口校验对端是已配对的 access 行、会话存在）。
         let view = match self
             .core
-            .node_link_session_view(handle.node_id(), &export, &session)
+            .node_link_session_view(handle.node_id(), &session)
             .await
         {
             Ok(view) => view,
@@ -383,7 +359,6 @@ impl ResourceRoute {
                 Attachment {
                     id: attachment_id.clone(),
                     generation,
-                    export: export.clone(),
                     session: session.clone(),
                     remote: remote.clone(),
                 },
@@ -465,7 +440,7 @@ impl ResourceRoute {
     ) -> RouteOutcome {
         let view = match self
             .core
-            .node_link_session_view(handle.node_id(), &attachment.export, &attachment.session)
+            .node_link_session_view(handle.node_id(), &attachment.session)
             .await
         {
             Ok(view) => view,
@@ -651,12 +626,7 @@ impl ResourceRoute {
     ) -> Option<PendingInteraction> {
         let payload = self
             .core
-            .node_link_event_payload(
-                handle.node_id(),
-                &attachment.export,
-                &attachment.session,
-                &pending.origin_event,
-            )
+            .node_link_event_payload(handle.node_id(), &attachment.session, &pending.origin_event)
             .await
             .ok()
             .flatten()?;
@@ -683,13 +653,7 @@ impl ResourceRoute {
         let limit = ReplayLimit::new(handle.limits().resource_snapshot_batch_size());
         let replay = match self
             .core
-            .node_link_replay(
-                handle.node_id(),
-                &attachment.export,
-                &attachment.session,
-                Some(cursor),
-                limit,
-            )
+            .node_link_replay(handle.node_id(), &attachment.session, Some(cursor), limit)
             .await
         {
             Ok(replay) => replay,
@@ -750,16 +714,13 @@ impl ResourceRoute {
         request: &Ack,
         message: &Envelope,
     ) -> RouteOutcome {
-        let (Some(export), Some(session)) = (
-            export_id(request.session_ref.export_id.as_str()),
-            session_id(request.session_ref.session_id.as_str()),
-        ) else {
+        let Some(session) = session_id(request.session_ref.session_id.as_str()) else {
             return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
         };
         let Some(cursor) = core_cursor(&request.cursor) else {
             return self.protocol_error(handle, ErrorCode::ProtocolSchemaInvalid, message);
         };
-        // ① 归属：`sessionRef` 必须指向本连接当前 attachment 所属的会话（含 export 与 owner 一致）。
+        // ① 归属：`sessionRef` 必须指向本连接当前 attachment 所属的会话（owner 一致）。
         //    owner 分量先判：`ownerNodeId` 不等于本机时，这个 `sessionRef` 就不等于本连接 attachment 的
         //    sessionRef（§12.4：「`sessionRef` 不属于本连接」→ `sequence_invalid`），因此与「没有
         //    attachment」「epoch 不符」同码，一律不记账。
@@ -768,13 +729,13 @@ impl ResourceRoute {
         }
         //    存在性：本连接当前必须真的持有该会话的 attachment（没有 attachment 与 epoch 不符同码，
         //    一律不记账）。
-        if self.attachment_for(handle, &export, &session).is_none() {
+        if self.attachment_for(handle, &session).is_none() {
             return self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message);
         }
         // ② epoch 必须与该会话当前 origin epoch 一致。
         let head = match self
             .core
-            .node_link_session_view(handle.node_id(), &export, &session)
+            .node_link_session_view(handle.node_id(), &session)
             .await
         {
             Ok(view) => view.head,
@@ -836,20 +797,11 @@ impl ResourceRoute {
             .cloned()
     }
 
-    /// 本连接上属于 `(export, session)` 的当前 attachment。
-    fn attachment_for(
-        &self,
-        handle: &ConnectionHandle,
-        export: &ExportId,
-        session: &SessionId,
-    ) -> Option<Attachment> {
+    /// 本连接上该会话的当前 attachment。
+    fn attachment_for(&self, handle: &ConnectionHandle, session: &SessionId) -> Option<Attachment> {
         let state = lock(&self.states);
         let state = state.get(handle.connection_id().as_str())?;
-        state
-            .attachments
-            .get(session.as_str())
-            .filter(|attachment| &attachment.export == export)
-            .cloned()
+        state.attachments.get(session.as_str()).cloned()
     }
 
     /// WP6（`design.md` D7/D8）的 additive seam：session-scoped 命令复核「当前 attachment」。
@@ -874,35 +826,6 @@ impl ResourceRoute {
             .map(|attachment| attachment.remote.clone())
     }
 
-    /// WP6（`design.md` D7、R77）的 additive seam：撤销 Export 后清除内存中的 attachment 与订阅，并
-    /// 返回受影响的 `connectionId`。
-    ///
-    /// 清除是「旧连接不得继续取资源」的内存面（授权面由逐消息的持久化复核保证）；调用方（撤销传播）用
-    /// 返回的 id 从连接注册表解析句柄并推送 `export.revoked`。已结束连接的条目顺带回收，与扇出路径的
-    /// 惰性回收同一标准。
-    pub fn revoke_export(&self, export: &ExportId) -> Vec<String> {
-        let mut states = lock(&self.states);
-        let mut affected = Vec::new();
-        for (key, state) in states.iter_mut() {
-            let sessions: Vec<String> = state
-                .attachments
-                .iter()
-                .filter(|(_, attachment)| &attachment.export == export)
-                .map(|(session, _)| session.clone())
-                .collect();
-            if sessions.is_empty() {
-                continue;
-            }
-            affected.push(key.clone());
-            for session in sessions {
-                state.attachments.remove(&session);
-                state.subscriptions.remove(&session);
-            }
-        }
-        affected.sort();
-        affected
-    }
-
     /// 可恢复的协议拒绝（连接保持可用）。
     fn protocol_error(
         &self,
@@ -911,8 +834,6 @@ impl ResourceRoute {
         message: &Envelope,
     ) -> RouteOutcome {
         let text = match code {
-            ErrorCode::ExportNotFound => "the requested session is not exported to this node",
-            ErrorCode::ExportNotGranted => "the requested session is not granted to this node",
             ErrorCode::ResourceAttachGenerationStale => {
                 "the attachment is not the current one; attach again before subscribing"
             }
@@ -933,14 +854,11 @@ impl ResourceRoute {
         message: &Envelope,
     ) -> RouteOutcome {
         match error {
-            PortError::NotFound(EntityRef::Export(_) | EntityRef::Session(_)) => {
-                self.protocol_error(handle, ErrorCode::ExportNotFound, message)
-            }
-            PortError::InvalidRequest("export.not_granted") => {
-                self.protocol_error(handle, ErrorCode::ExportNotGranted, message)
+            PortError::NotFound(EntityRef::Session(_)) => {
+                self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message)
             }
             PortError::InvalidRequest("authorization.scope_denied") => {
-                self.protocol_error(handle, ErrorCode::ExportNotGranted, message)
+                self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message)
             }
             PortError::InvalidRequest("nodelink.origin_epoch_mismatch") => {
                 self.protocol_error(handle, ErrorCode::ProtocolSequenceInvalid, message)
@@ -1260,10 +1178,6 @@ fn core_cursor(cursor: &OriginCursor) -> Option<CoreOriginCursor> {
     })
 }
 
-fn export_id(text: &str) -> Option<ExportId> {
-    ExportId::new(text).ok()
-}
-
 fn session_id(text: &str) -> Option<SessionId> {
     SessionId::new(text).ok()
 }
@@ -1288,6 +1202,3 @@ fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
-
-#[cfg(test)]
-mod tests;

@@ -10,11 +10,10 @@
 //!   的 `DOMAINS`，编解码来自叶子 crate `acpr-transcript`；本 crate 不复制常量、不手拼字节。
 //!
 //! 模块划分：`types`（值对象与事实）、`transcript`（10 个 domain 的输入与编解码/验签/HMAC 入口）、
-//! `pairing`（配对状态机）、`handshake`（逐连接挑战-证明）、`authorization`（授权词表展开）、
+//! `pairing`（配对状态机）、`handshake`（逐连接挑战-证明）、
 //! `port`（keystore 与熵源端口）、`state`（内存态：配对 secret、挑战缓存、失败计数）。
 
 mod authority;
-pub mod authorization;
 pub mod error;
 pub mod handshake;
 pub mod pairing;
@@ -27,9 +26,9 @@ pub mod types;
 // 只依赖本 crate 就能写出 `IdentityKeystore`，而不需要为了签名类型反向依赖 `core`
 // （`docs/MODULE_ARCHITECTURE.md` §5 的依赖矩阵不允许 `identity-keystore -> core`）。
 pub use acp_core::model::{
-    AuditAction, DeviceId, Digest, Fingerprint, GrantSet, InvalidValue, NodeId, NodeKind, Nonce,
+    AuditAction, DeviceId, Digest, Fingerprint, InvalidValue, NodeId, NodeKind, Nonce,
     PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement, PairingState,
-    PairingTarget, PeerIdentity, PeerPublicKey, ScopeSet, Timestamp,
+    PairingTarget, PeerIdentity, PeerPublicKey, Timestamp,
 };
 
 pub use authority::Authority;
@@ -54,5 +53,5 @@ pub use types::{
     HandshakeFailureClass, IdentityFact, NodeEndpoint, P1363Signature, PAIRING_MAX_FAILURES,
     PAIRING_MAX_SECONDS, PROTOCOL_VERSION, PairingDecision, PairingDraft, PairingProof,
     PairingRequestId, PairingRequestMaterial, PairingSecret, PairingSpec, PairingStatusView,
-    PeerTrust, RequestedCapabilities,
+    PeerTrust,
 };

@@ -105,7 +105,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["requestId", "command", "payload"],
-      "description": "Sync 面的 session.create：body 顶层不得携带 sessionId（会话尚不存在）。payload 必须给出 agentId，并且 workspaceAlias 与 workspacePath **恰好出现一个**——两个都给或都不给都按 protocol.schema_invalid 拒绝。可选键 createIfMissing 是显式的「目录不存在则先创建」开关，它与 workspaceAlias **互斥**（别名解析出的目录必然已存在），两者同时出现时同样按 protocol.schema_invalid 拒绝，且不解析别名、不触碰文件系统。出现 cwd、exportId、templateParams、MCP 配置或凭据字段时同样按 protocol.schema_invalid 拒绝，不得创建会话或部分应用参数。",
+      "description": "Sync 面的 session.create：body 顶层不得携带 sessionId（会话尚不存在）。payload 必须给出 agentId，并且 directoryId 与 workspacePath **恰好出现一个**——两个都给或都不给都按 protocol.schema_invalid 拒绝。可选键 createIfMissing 是显式的「目录不存在则先创建」开关，它与 directoryId **互斥**（已记录的目录必然已存在），两者同时出现时同样按 protocol.schema_invalid 拒绝，且不查询目录表、不触碰文件系统。出现 cwd、templateParams、MCP 配置或凭据字段时同样按 protocol.schema_invalid 拒绝，不得创建会话或部分应用参数。",
       "properties": {
         "requestId": { "$ref": "#/$defs/requestId" },
         "command": { "const": "session.create" },
@@ -113,12 +113,12 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["agentId"],
-          "oneOf": [{ "required": ["workspaceAlias"] }, { "required": ["workspacePath"] }],
-          "not": { "required": ["workspaceAlias", "createIfMissing"] },
+          "oneOf": [{ "required": ["directoryId"] }, { "required": ["workspacePath"] }],
+          "not": { "required": ["directoryId", "createIfMissing"] },
           "properties": {
-            "workspaceAlias": { "type": "string", "minLength": 1, "maxLength": 128, "description": "本机已登记 workspace 的别名。它是目录来源之一；**已登记**目录的规范化路径只在客户端协商 `core.workspace-path.v1` 时随快照 `workspaces` 条目的 `path` 键下发（docs/SYNC_PROTOCOL.md §9.4），本命令的结果、其余下行 wire、缓存与错误 `details` 都不含它。" },
+            "directoryId": { "$ref": "common.schema.json#/$defs/directoryId" },
             "workspacePath": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "客户端提供的**绝对**路径（浏览器拿不到宿主路径，因此这一来源就是一次文本输入）。本机校验它存在、是目录，并以 `canonicalize` 的结果为权威值；形状校验（相对路径、含 `..`）与解析失败由本机的用例分类，不在 schema 里判定。客户端自己提出的路径不算「泄漏宿主路径」。" },
-            "createIfMissing": { "type": "boolean", "description": "显式的「目录不存在则先创建」开关：为真且目标目录不存在时，本机先创建它（连同缺失的父层）再启动 Agent。缺席即假（行为与引入本键之前完全一致：目录不存在即失败）。它与 workspaceAlias 互斥；按它创建出的目录不会被登记成 workspace 别名，该会话的目录归属因此是「未分组」。" },
+            "createIfMissing": { "type": "boolean", "description": "显式的「目录不存在则先创建」开关：为真且目标目录不存在时，本机先创建它（连同缺失的父层）再启动 Agent。缺席即假（行为与引入本键之前完全一致：目录不存在即失败）。它与 directoryId 互斥；按它创建出的目录与成功的会话在同一次提交里记录，会话因此获得目录归属。" },
             "agentId": { "type": "string", "minLength": 1, "maxLength": 128, "description": "本机已配置的 Agent profile 标识。" }
           }
         }

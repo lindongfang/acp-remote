@@ -20,13 +20,12 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    DeviceId, ExportId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey,
-    Timestamp,
+    DeviceId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey, Timestamp,
 };
 use base64::Engine as _;
 use identity_auth::{
     Authority, CanonicalOrigin, ClaimedPairing, IdentityError, KeystoreError, NodeEndpoint,
-    PairingSecret, RequestedCapabilities,
+    PairingSecret,
 };
 
 use crate::local_admin::error::{AdminError, LocalErrorCode};
@@ -60,10 +59,6 @@ pub trait ConnectionCloser: Send + Sync {
     /// 这不是撤销：该节点仍然 paired，对端应当重连并在新连接上重取 catalog，因此实现**不得**推送
     /// `node.trust.revoked`、也不得以 4410 关闭（见 trait 文档）。
     async fn close_node_after_reauth(&self, node: &NodeId);
-
-    /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`NODE_LINK_PROTOCOL.md` §12.3 的
-    /// `export.revoked`；没有连接时是 no-op）。推送失败不回滚已提交的撤销；授权面不依赖该推送。
-    async fn export_revoked(&self, export: &ExportId);
 }
 
 /// 没有连接表时的 no-op 实现（测试替身与未装配连接表时的默认值；生产装配在组合根给出真实实现）。
@@ -76,14 +71,13 @@ impl ConnectionCloser for NoConnections {
     async fn close_node(&self, _node: &NodeId) {}
 
     async fn close_node_after_reauth(&self, _node: &NodeId) {}
-
-    async fn export_revoked(&self, _export: &ExportId) {}
 }
 
 /// 配对方法与 `identity-auth` 状态机之间的注入口。
 pub struct PairingSessions {
     authority: Arc<Authority>,
     public_origin: Option<String>,
+    node_name: Option<String>,
     closer: Arc<dyn ConnectionCloser>,
 }
 
@@ -93,11 +87,13 @@ impl PairingSessions {
     pub fn new(
         authority: Arc<Authority>,
         public_origin: Option<String>,
+        node_name: Option<String>,
         closer: Arc<dyn ConnectionCloser>,
     ) -> Self {
         Self {
             authority,
             public_origin,
+            node_name,
             closer,
         }
     }
@@ -105,6 +101,11 @@ impl PairingSessions {
     /// 配对状态机（组合根同时用它跑重启终结与过期扫描；配对方法用它取得记录草稿与落定结果）。
     pub fn authority(&self) -> &Authority {
         &self.authority
+    }
+
+    /// 本机配置的展示名（`[node] name`）；缺失时调用方回落 nodeId 前缀。
+    pub fn node_name(&self) -> Option<&str> {
+        self.node_name.as_deref()
     }
 
     /// 本机 canonical origin。
@@ -219,11 +220,6 @@ impl PairingSessions {
     pub async fn close_node_after_reauth(&self, node: &NodeId) {
         self.closer.close_node_after_reauth(node).await;
     }
-
-    /// `export.revoke` 提交后通知持有该 Export 的活跃连接（`export.revoked`）。
-    pub async fn export_revoked(&self, export: &ExportId) {
-        self.closer.export_revoked(export).await;
-    }
 }
 
 impl std::fmt::Debug for PairingSessions {
@@ -305,10 +301,6 @@ pub fn claimed_pairing(record: &PairingRecord, peer: &PairingPeer) -> ClaimedPai
         public_key: peer.public_key().clone(),
         host_binding: peer.host_binding().to_owned(),
         client_nonce: peer.client_nonce().clone(),
-        requested: RequestedCapabilities {
-            scopes: record.requested_scopes().clone(),
-            grants: record.requested_grants().clone(),
-        },
     }
 }
 
@@ -650,6 +642,7 @@ mod tests {
         PairingSessions::new(
             authority,
             origin.map(str::to_owned),
+            None,
             Arc::new(NoConnections),
         )
     }

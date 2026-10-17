@@ -173,30 +173,6 @@
 - **WHEN** Agent 在 stderr 上输出任意文本
 - **THEN** 该文本不作为 ACP 消息被解析、转发或回传
 
-### Requirement: profile 来源与凭据注入边界
-
-系统 SHALL 只按本机配置端口提供的 profile 启动 Agent 进程（参数数组、不经 shell 拼接），并只注入 `env_allowlist` 与 profile 环境绑定声明的交集加必要进程环境；凭据值 MUST 只在启动前经凭据解析端口取得，引用失效或 keystore 不可用时 MUST 失败关闭；Node/Device 私钥与 token MUST NOT 出现在子进程环境、日志、事件或错误消息中；profile MUST 来自本机配置端口，MUST NOT 读取启动配置文件。
-
-#### Scenario: 白名单是注入上限
-
-- **WHEN** 一个 profile 的绑定集合包含不在其环境白名单内的变量名
-- **THEN** 该变量不被解析也不被注入，白名单内且已绑定的变量按绑定注入
-
-#### Scenario: 引用失效时失败关闭
-
-- **WHEN** 启动前解析发现某个凭据绑定不可用
-- **THEN** 进程不启动并返回不可用错误，磁盘、事件与日志中没有任何凭据值
-
-#### Scenario: 不注入节点与设备密钥
-
-- **WHEN** 任意 profile 成功启动
-- **THEN** 子进程环境中不存在 ACP Remote 的 Node 或 Device 私钥与 token，日志与错误消息中同样没有
-
-#### Scenario: 不使用启动配置文件中的 profile
-
-- **WHEN** 启动配置文件里存在与库内 profile 同名或同命令的条目
-- **THEN** profile 只来自注入的配置端口（本 crate 不读任何配置文件），同名文件条目不会成为 profile 来源，且目录查询确实经由该端口取 profile
-
 ### Requirement: 空闲回收与进程关闭顺序
 
 系统 SHALL 只在该 Agent 没有任何进行中的 turn 且空闲时长超过配置的会话空闲超时（`0` 表示不因空闲关闭）时关闭其进程；关闭 MUST 按顺序停止写入、结束未完成请求、等待关闭 grace（5 s）后强制终止完整进程树，并确保不遗留无所有者的后台任务。
@@ -353,3 +329,27 @@
 
 - **WHEN** 运行平台不产生 verbatim 前缀（例如类 Unix）
 - **THEN** 发往 Agent 的工作目录参数与 core 交给后端的值逐字节相同
+
+### Requirement: profile 来源与环境注入边界
+
+系统 SHALL 只按启动配置声明的 profile 启动 Agent 进程（命令与 argv 原样传递、不经 shell 拼接），并在启动前清空环境、只注入 `PATH`、`HOME`、`USERPROFILE`、`SystemRoot`、`TEMP`、`TMP` 六个必要变量（Daemon 进程中存在时原样取值，缺失时跳过）。系统 MUST NOT 注入 Provider 凭据或任何白名单之外的变量，MUST 继续静态拒绝 `ACPR_*` / `ACP_REMOTE_*` 前缀的名字；Node/Device 私钥与 token MUST NOT 出现在子进程环境、日志、事件或错误消息中。
+
+#### Scenario: 环境恰为必要变量
+
+- **WHEN** 一个 profile 成功启动
+- **THEN** 子进程环境中只出现上述六个变量（存在者），没有凭据，也没有 `ACPR_*` 或 `ACP_REMOTE_*`
+
+#### Scenario: 不注入节点与设备密钥
+
+- **WHEN** 任意 profile 成功启动
+- **THEN** 子进程环境中不存在 ACP Remote 的 Node 或 Device 私钥与 token，日志与错误消息中同样没有
+
+#### Scenario: 保留前缀被拒绝
+
+- **WHEN** 配置或启动路径试图引入一个以 `ACPR_` 或 `ACP_REMOTE_` 开头的环境变量名
+- **THEN** 启动前失败关闭，不启动进程
+
+#### Scenario: profile 来自启动配置
+
+- **WHEN** 配置文件声明了某个 Agent 并启动 Daemon
+- **THEN** Agent 进程的命令与 argv 与该声明逐项一致；运行期没有任何命令能改写这份声明

@@ -244,7 +244,6 @@ impl Authority {
             PeerIdentity::Node(node) => IdentityFact::Node {
                 node: node.clone(),
                 kind: trust.node_kind.ok_or(HandshakeError::TrustKind)?,
-                grants: trust.grants.clone(),
             },
         };
         Ok(Authenticated {

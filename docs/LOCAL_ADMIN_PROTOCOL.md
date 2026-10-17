@@ -65,7 +65,7 @@ ADR-0004 只给出架构决策，其“结果”段遗留的“请求/响应编�
   - Windows：`GetNamedPipeClientProcessId` 取客户端进程，`OpenProcessToken` + `GetTokenInformation(TokenUser)` 取 SID，与 Daemon 进程的用户 SID 比对。
   - Unix：`SO_PEERCRED` 取对端 `uid`，与 Daemon 的有效 `uid` 比对。
 - 凭据不一致时：不发送任何 frame，立即关闭连接，并记一条 `SECURITY_DESIGN.md` §14.2 的 `authorization.denied` 审计事件。
-- 不引入本地 token、不复用设备或节点身份、不开放 loopback HTTP 管理面（ADR-0004 决策 4、7）。本通道不进入远程攻击面，也不受设备 scope 或 Export grant 影响。
+- 不引入本地 token、不复用设备或节点身份、不开放 loopback HTTP 管理面（ADR-0004 决策 4、7）。本通道不进入远程攻击面，也不受节点配对授权影响。
 
 ## 3. Framing
 
@@ -115,7 +115,7 @@ u32be length | payload(length bytes)
 **断线与崩溃**
 
 - CLI 进程退出或连接 EOF：facade 结束该 attachment 上的全部 ACP 会话绑定，并把本端发起的 pending 权限/elicitation 请求标记为「上游已断开」。
-- 上游断开**不得**代答权限请求，也不得按 Export grant 自动允许/拒绝（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）：Owner 侧的 `permission.requested` 保持 pending，直到新连接重新送达并得到真实答复。
+- 上游断开**不得**代答权限请求，也不得按任何节点授权自动允许/拒绝（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）：Owner 侧的 `permission.requested` 保持 pending，直到新连接重新送达并得到真实答复。
 - 已经在运行的 turn **不因**上游断开而取消：它由 Owner/Agent 继续，事件照常先持久化再广播（`AGENTS.md` §4）。
 
 **重连与幂等**
@@ -161,7 +161,7 @@ u32be length | payload(length bytes)
 3. 未知 `method` → `local.unsupported`；这使新增方法成为向后兼容变更。
 4. `params` 缺字段、类型不符或出现未知字段 → `local.invalid_params`；信封本身非法（`id`/`method` 缺失或命名非法、`params` 不是 object）→ `local.invalid_request`。
 5. 每个请求恰好一个响应；v1 不定义服务端主动通知，ACP 流不受此约束。
-6. `error.message` 是简短英文描述，只用于本地日志与 CLI 输出，不含 secret、凭据值、堆栈或完整敏感路径；`result` 永不回显凭据值（§5.2 `provider.configure`）。
+6. `error.message` 是简短英文描述，只用于本地日志与 CLI 输出，不含 secret、凭据值、堆栈或完整敏感路径；`result` 永不回显凭据值（§5.2 `daemon.status`/`agent.list`）。
 
 ## 5. 方法集（v1）
 
@@ -171,19 +171,15 @@ u32be length | payload(length bytes)
 
 | `local.*` 能力 | 方法 | 承载层 |
 |---|---|---|
-| `local.workspace.select` | `workspace.select` | `core::use_cases` 本地配置族 |
-| `local.agent.configure` | `agent.configure` | `core::use_cases` 本地配置族 |
-| `local.provider.configure` | `provider.configure` | `core::use_cases` 本地配置族（凭据落平台 keystore） |
+| `local.agent.configure` | `agent.list`（只读；Agent 声明由配置文件提供） | `core::use_cases` 本地配置族 |
 | `local.device.manage` | `device.pair.begin`、`device.pair.status`、`device.pair.confirm`、`device.pair.reject`、`device.list`、`device.revoke`、`node.pair.begin`、`node.pair.status`、`node.pair.confirm`、`node.pair.reject`、`node.list`、`node.revoke` | `DeviceManagement` |
-| `local.export.manage` | `export.create`、`export.list`、`export.revoke`、`import.add`、`import.list`、`import.remove` | `ExportManagement`（写入）与 `RemoteCatalogQueries`（读取） |
 | `local.node.rotate-key` | `node.rotate-key.begin`（`post_mvp`，§5.7） | `DeviceManagement`（与 `node.rotate-key.*` 消息同批定义） |
 | `local.audit.export` | `audit.export` | 审计仓储的本地读取端口（不经业务用例） |
 
 补充说明：
 
 - `daemon.status`、`daemon.stop` 不对应任何 `local.*` 能力：它们是没有 scope 判定的 daemon 生命周期调用，由组合根回答。
-- `import.add|list|remove` 是 `local.export.manage` 的对偶面（本节点作为 Access 时的 Import 记录管理），沿用同一本地能力名，不新增第 8 个能力；将来若要独立授予必须改 `SECURITY_DESIGN.md` §10.3 与 `compatibility/commands/v1/commands.json`。
-- 本表是 ADR-0004 决策 3 的三个 use case 名的展开：身份、Export 与远程目录相关方法走 `DeviceManagement`／`ExportManagement`／`RemoteCatalogQueries`；本地配置与 daemon 生命周期方法分别走本地配置族与组合根，不引入第二套管理语义。
+- 本表是 ADR-0004 决策 3 的三个 use case 名的展开：身份与节点相关方法走 `DeviceManagement`；本地配置与 daemon 生命周期方法分别走本地配置族与组合根，不引入第二套管理语义。
 
 ### 5.2 Daemon 生命周期与本地配置
 
@@ -204,7 +200,7 @@ uptimeMs      integer
 dataDir       string                 # 绝对路径
 listen        string[]               # 实际监听地址
 publicOrigin  string | null
-counts        { devices: integer, nodes: integer, exports: integer, imports: integer }
+counts        { devices: integer, nodes: integer }
 agents        { agentId: string, available: boolean }[]
 links         { nodeId: UUID, state: "connected" | "connecting" | "offline", lastConnectedAt: timestamp | null, nextRetryAt: timestamp | null }[]
 uiBuildVersion string | null         # 本次二进制嵌入并托管的前端构建版本
@@ -212,7 +208,7 @@ uiBuildVersion string | null         # 本次二进制嵌入并托管的前端�
 
 - `uiBuildVersion` 是本次二进制**嵌入并被托管**的前端构建版本（`FRONTEND_DESIGN.md` §4.3 的「版本可检查地关联」）：取值与浏览器拿到的静态资源出自**同一份**嵌入资源表（前端构建钩子写入产物的 `build-version.json`，见 `clients/app/scripts/write-build-version.mjs`），不是 Daemon 自己算的产物哈希。`null` 表示**版本缺失**（占位入口，或产物没有可识别的版本文件），是显式缺失语义而不是「未知」或空串——不编造版本。它是 `result` 里的一个**字段**，**不改变**本文件的方法集与 §6 的本地错误码集合。
 
-- `links` 是组合根持有的运行时状态（`NODE_LINK_PROTOCOL.md` §15 的连接策略），**不是**持久记录；它解释 `import.add`/`session.create` 为何返回 `local.unavailable`。未配对或已撤销的节点不出现在 `links` 里。
+它解释 `session.create` 为何可能返回 `local.unavailable`。
 
 - 由组合根回答，不经 `core::use_cases`；`daemon start` 不经过本通道（ADR-0004 决策 1）。
 - Daemon 未运行时由 CLI 在进程内回答，见 §7。
@@ -224,52 +220,19 @@ uiBuildVersion string | null         # 本次二进制嵌入并托管的前端�
 - 响应在关闭序列开始时发出；CLI 随后等待锁释放与连接关闭。关闭顺序按 `SECURITY_DESIGN.md` §12.1 与 `AGENTS.md` §7。
 - 响应写回后由**服务端结束该连接**：发出 `daemon.stop` 的这条连接不会再收到任何响应，也不进入关闭序列的连接排空等待。这与「关闭序列进行中**新**请求以 `local.unavailable` 失败关闭」是两件事、互不覆盖——后者约束关闭开始后到达的新请求，本条约束的是**发出 `daemon.stop` 的连接自身**（它的语义是请求关闭，不是新请求）。
 
-#### `workspace.select`（`local.workspace.select`）
+#### `agent.list`（`local.agent.configure`，只读）
 
-- `params`：
-
-```text
-alias       string    # ^[a-z0-9][a-z0-9._-]{0,63}$，发布给 Export 的符号名
-                      # （权威：schemas/node-link/v1/common.schema.json#/$defs/workspaceAlias；本地不得比 wire 宽）
-displayName string    # ≤128
-rootPath    string    # 绝对路径；必须已存在且是目录
-```
-
-- `result`：`{ workspace: { alias, displayName, rootPath, createdAt } }`（字段同名同类型）。
-- 同一 `alias` 再次调用是更新；`rootPath` 不存在或不是目录 → `local.invalid_params`。原始路径只能由此方法选择，远程主体永远提交不了绝对路径（`SECURITY_DESIGN.md` §12.3）。
-- **路径校验规则（可判定，与 `CORE_PORTS_AND_STORAGE.md` §11.9 同一口径）**：`rootPath` 必须是绝对路径且存在且是**目录**；写入前先 `canonicalize`（解析 symlink/junction/大小写/`.`与`..`）并把**规范化结果**作为持久权威值（`owned_workspace.canonical_path`），拒绝相对路径与含 `..` 的输入；UNC/网络路径允许，但写入时记一次结构化警告（离线与凭证风险）。会话创建时对已存路径重做一次同样的校验（目录可能已被删/被换成文件）。
-
-#### `agent.configure`（`local.agent.configure`）
-
-- `params`：
+- `params`：`{}`
+- `result`：
 
 ```text
-agentId      string    # 1..=128 字符；作为 agentId 跨节点传输（NODE_LINK_PROTOCOL.md §12.3），不得比 wire 更严
-displayName  string    # ≤128
-command      string    # 可执行文件路径或名字，不经 shell 拼接
-args         string[]
-envAllowlist string[]  # 环境变量名白名单，是上限而非提示
-default      boolean
+agents { agentId: string, command: string, args: string[], default: boolean,
+         resolvedPath: string, exists: boolean }[]
 ```
 
-- `result`：`{ agent: { agentId, displayName, default } }`。
-- 对应 `CONFIG_REFERENCE.md` §7 的 `[[agents.profiles]]`；未列出的环境变量不得注入子进程（`SECURITY_DESIGN.md` §12.2）。
-- 变更只影响后续启动的 Agent 进程；已在运行的会话保持其现有进程，除非用户显式结束该会话。
-
-#### `provider.configure`（`local.provider.configure`）
-
-- `params`：
-
-```text
-providerId  string                          # ^[A-Za-z0-9._-]{1,64}$
-kind        "provider" | "mcp"
-displayName string                          # ≤128
-values      { <fieldName>: string }         # 字段名 ^[A-Za-z0-9._-]{1,64}$，至少 1 项
-```
-
-- `values` 只承载凭据字段：键是字段名，值是凭据文本（`string`）。非凭据的 MCP 启动配置（命令、参数、URL）走 `agent.configure` 的 profile，不进入 `values`。
-- `result`：`{ provider: { providerId, kind, configuredFields: string[] } }`——只回字段名，**永不回显 `values`**。
-- 凭据一律存入平台 keystore（`SECURITY_DESIGN.md` §9.2），不得写入 SQLite、普通 TOML/JSON、日志或错误消息；keystore 不可用时正式模式返回 `local.unavailable`，不得降级为明文存储。
+- Agent 声明来自配置文件 `[agent]`（`CONFIG_REFERENCE.md` §7），本方法只读取配置解析结果与可执行文件探测结果，不写任何状态、不启动进程。
+- `resolvedPath` 是命令解析后的路径（带路径分隔符时为原值，否则在 `PATH` 中查找）；找不到时仍返回解析尝试的结果且 `exists = false`。
+- `agent.configure` 与 `provider.configure` 已删除：调用它们一律返回 `local.unsupported`。
 
 ### 5.3 设备配对与信任（`local.device.manage`）
 
@@ -341,8 +304,8 @@ nodeId                  UUID
 displayName             string              # ≤128
 kind                    "access" | "owner"  # 该记录代表的对端角色：access = 我们信任的 Access Node；owner = 我们导入的 Owner Node
 nodePublicKeyFingerprint string             # 同 DeviceRecord 的指纹规则
-grants                  string[]            # grant.* 子集
-exportIds               string[]            # 该节点可见 Export 的白名单（去重、字典序；空数组 = 看不到任何 Export；语义见 NODE_LINK_PROTOCOL.md §8.2）
+
+
 state                   "pending" | "paired" | "revoked"
 ownerEndpoint           string | null       # kind = "owner" 时为 wss:// 端点
 createdAt               timestamp
@@ -358,7 +321,7 @@ revokedAt               timestamp | null
 mode            "owner" | "access"
 pairingUrl      string | null   # mode = "owner" 时必须为 null；mode = "access" 时为用户提供的 Owner 二维码 URL
 displayName     string          # ≤128，本节点在对端界面上的展示名（nodeName）
-requestedGrants string[]        # mode = "access" 时携带，取值限于 commands.json 的 grant.*
+
 ```
 
 - `mode = "owner"`：本节点创建一次性配对并返回二维码 URL，claim 之前不知道对端身份。
@@ -382,11 +345,11 @@ peerPublicKeyFingerprint string | null
 
 #### `node.pair.confirm`
 
-- `params`：`{ pairingId, grants: string[], exportIds: string[] }`——`exportIds` 是**必填**字段（取值可以是空数组）；缺少该字段 → `local.invalid_params`，且不创建信任。`schemas/local-admin/v1/envelope.schema.json` 只把 `params`/`result` 建模为通用对象（逐方法形状由本文拥有），因此「必填」由 Daemon 在运行期强制，不写进 JSON Schema。
-- `result`：`{ nodeId, grants, exportIds, confirmedAt }`——`exportIds` 回显本次填报的最终清单。
-- 只有 Owner 侧本地确认才创建信任记录并分配初始 `grant.*`（`NODE_LINK_PROTOCOL.md` §13.2）；必须在持久状态提交后才返回。
-- `exportIds` 是「该节点可见 Export」的白名单，**只能收窄**：可见性 = `NODE_LINK_PROTOCOL.md` §8.2 的三个条件（未撤销 ∧ `export.scopes ∩ grants ≠ ∅` ∧ `exportId ∈ exportIds`）。每个 `exportId` 必须本机存在且未撤销，否则 `local.not_found`；其 `scopes` 必须与本次 `grants` 有交集，否则 `local.invalid_params`。三类失败（缺少字段、不存在/已撤销、与 `grants` 不相交）都不创建信任、不推进配对状态、不写审计。空清单合法，等于该节点看不到任何 Export（即使 `scopes` 与 `grants` 相交）。
-- 清单只在确认时填报，没有配对后修改入口（已知限制，见 `NODE_LINK_PROTOCOL.md` §8.2）：改清单只能重新配对——要么先 `node.revoke` 再重新配对，要么直接重新配对；两种做法都在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效。`export.revoke` 不级联清理清单条目。v3 及更早的库升级到 v4 后既有节点行的清单为空，这类配对需要在本机重新确认才能恢复可见（`NODE_LINK_PROTOCOL.md` §8.2 的升级副作用）。
+- `params`：`{ pairingId }`；任何授权集合字段出现即 `local.invalid_params`，且不创建信任。
+- `result`：`{ nodeId, confirmedAt }`。
+- 只有 Owner 侧本地确认才创建信任记录；配对即完全信任（`local.*` 除外），必须在持久状态提交后才返回。
+
+
 
 #### `node.pair.reject`
 
@@ -403,90 +366,6 @@ peerPublicKeyFingerprint string | null
 - `params`：`{ nodeId }`
 - `result`：`{ nodeId, revokedAt }`
 - 撤销后该节点不得再建立 Node Link 连接，本地必须停止重连并关闭 active connection（`SECURITY_DESIGN.md` §9.5）。
-
-### 5.5 Export 与 Import 管理（`local.export.manage`）
-
-`ExportView`（`export.create`、`export.list` 共用）：
-
-```text
-exportId              string    # ^[A-Za-z0-9._-]{1,128}$
-displayName           string    # ≤128
-agentIds              string[]  # Export 内的 Agent selector；首切片恰好 1 项
-workspaceAliases      { alias: string, displayName: string }[]   # alias ^[A-Za-z0-9._-]{1,64}$；首切片恰好 1 项
-defaultWorkspaceAlias string    # 必须是 workspaceAliases 之一的 alias
-templates             ExportTemplate[]                          # 首切片恰好 1 项
-defaultTemplateId     string    # 必须是 templates 之一的 templateId
-scopes                string[]  # grant.* 子集（与 NODE_LINK_PROTOCOL.md §10 的 Export 模型同名同义），取值以该表为准
-cachePolicy           "no-content-cache"   # v1 固定值
-createdAt             timestamp
-revokedAt             timestamp | null
-```
-
-`ExportTemplate`：
-
-```text
-templateId     string    # ^[A-Za-z0-9._-]{1,128}$（与 schemas/node-link/v1/common.schema.json 的 templateId 一致）
-displayName    string    # ≤128
-workspaceAlias string    # 必须是 Export 的 workspaceAliases 之一
-params         TemplateParam[]
-```
-
-`TemplateParam`：
-
-```text
-name     string                                  # ^[A-Za-z_][A-Za-z0-9_]{0,63}$（权威：schemas/node-link/v1/common.schema.json#/$defs/workspaceTemplateParam）
-type     "string" | "boolean" | "integer"
-required boolean
-pattern  string | null                           # 仅 type = "string" 时非 null，≤512 字符
-enum     string[] | null                         # 非空；成员只能是 string（v1 wire 如此，非 string 类型的枚举不在 v1）
-```
-
-`ImportRecord`（与 `CONFIG_REFERENCE.md` §9 的 `[[imports]]` 同名同义）：
-
-```text
-importId      string    # ^[A-Za-z0-9._-]{1,128}$
-ownerEndpoint string    # wss:// 端点
-ownerNodeId   UUID
-exportIds     string[]
-grants        string[]
-```
-
-#### `export.create`
-
-- `params`：`ExportView` 去掉 `createdAt` 与 `revokedAt` 后的全部字段，均为必需；`templates` 与 `workspaceAliases` 的非空与 `default*` 一致性校验不通过 → `local.invalid_params`。**首切片的 template 不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）：`params` 非空 → `local.invalid_params`（有参 template 属 `post_mvp`，不能静默忽略）。每个 `workspaceAliases[].alias` 必须已在 `owned_workspace` 建立（否则 `local.not_found`），Export 只引用符号名、不复制路径（`CORE_PORTS_AND_STORAGE.md` §11.9）。
-- `result`：`{ export: ExportView }`，`revokedAt` 为 `null`。
-- `exportId` 已存在 → `local.conflict`。
-- `capabilityCeilingRef` 与 catalog 条目的 `agents[].capabilitiesRef` 由 Owner 在发布时填充，不出现在本地方法里：本地端点不需要跨节点不透明引用（`NODE_LINK_PROTOCOL.md` §12.3）。
-- Export 的创建、修改与撤销永远不通过 Node Link 暴露（`NODE_LINK_PROTOCOL.md` §10）。
-
-#### `export.list`
-
-- `params`：`{}`
-- `result`：`{ exports: ExportView[] }`，包含已撤销项（`revokedAt` 非 `null`）。
-
-#### `export.revoke`
-
-- `params`：`{ exportId }`
-- `result`：`{ exportId, revokedAt }`
-- 语义：立即拒绝该 Export 的新命令与订阅，向已连接的 Access Node 发送 `export.revoked`（`NODE_LINK_PROTOCOL.md` §12.3），Access 侧删除对应 Import 引用、无正文索引与内存内容。必须在持久状态提交后才返回。
-
-#### `import.add`
-
-- `params`：`{ importId, ownerEndpoint, ownerNodeId, exportIds, grants }`
-- `result`：`{ import: ImportRecord }`
-- 前置条件：`ownerNodeId` 必须是已配对且 `kind = "owner"` 的节点；`exportIds` 必须存在于该 Owner 的**当前 Node Link 连接上的 catalog 快照**（`NODE_LINK_PROTOCOL.md` §12.3）。两类失败必须区分：**没有可用的 catalog 快照**（未连接、连接已断或首切片尚无快照）→ `local.unavailable`（可重试，不是「不存在」）；有快照但确实没有该 `exportId` → `local.not_found`。`grants` 必须是 `commands.json` 的 `grant.*` 子集且不超过对应 Export 的 `scopes`（违反 `local.invalid_params`）。
-- 有效权限仍是 `Owner grant ∩ Access local grant ∩ runtime capability`，本方法只写本地 Import 记录，不修改远程侧授权（`SECURITY_DESIGN.md` §9.6）。
-
-#### `import.list`
-
-- `params`：`{}`
-- `result`：`{ imports: ImportRecord[] }`
-
-#### `import.remove`
-
-- `params`：`{ importId }`
-- `result`：`{}`
-- 必须同时删除该 Import 的本地无正文索引与内存内容（`SECURITY_DESIGN.md` §13.4）；不存在 → `local.not_found`。
 
 ### 5.6 审计导出（`local.audit.export`）
 
@@ -523,25 +402,20 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 | `daemon start` | 不经本地通道 | CLI 进程自身 | 单实例锁失败必须给明确错误，不得强杀进程（§7） |
 | `daemon stop` / `daemon status` | 本地方法 | `daemon.stop` / `daemon.status` | 由组合根回答，不经用例层 |
 | `doctor` | 本地方法 + CLI 侧检查 | `daemon.status` + 本地检查 | 离线时在 CLI 进程内完成（ADR-0004 决策 1）；**不新增方法**（不得自造 `daemon.doctor`） |
-| `workspace select` | 本地方法 | `workspace.select` | 以 `--alias`、`--display-name`、`--root-path` 提供 §5.2 的三个参数；路径仅发送到本机 Daemon，不能放入 Export 或 Node Link 载荷 |
-| `agent configure` | 本地方法 | `agent.configure` | 以 `--file <path>` 读取与 §5.2 `params` 同形的 JSON；文件不得包含凭据值，CLI 不自行写入 profile 或启动配置 |
-| `provider configure` | 本地方法 | `provider.configure` | 以 `--provider-id`、`--kind`、`--display-name`、可重复的 `--field <name>` 指定非秘密字段；`values` 由 CLI 在交互终端逐项无回显读取，不接受凭据值作为命令行参数或普通文件输入；无交互终端时明确失败 |
+| `agent list` | 本地方法 | `agent.list` | 只读：打印配置文件解析出的 id、命令、argv、默认标记与可执行文件是否存在 |
 | `device pair` | 本地方法 ×3 | `device.pair.begin` → `device.pair.status`（轮询）→ `device.pair.confirm` | 多步流程见下；参数只有 `--fingerprint`（非交互确认）与 `--expires-in-ms`——设备方向没有授权词汇 |
 | `device list` / `device revoke` | 本地方法 | 1:1 | |
-| `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id` 与非交互的 `--fingerprint` |
+| `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--fingerprint` |
 | `node list` / `node revoke` | 本地方法 | 1:1 | |
-| `export create` | 本地方法 | `export.create` | 参数多且有嵌套结构：以 `--file <path>` 传一份 JSON，不用长串 flags；校验失败分别映射为 `local.invalid_params` / `local.conflict` |
-| `export list` / `export revoke` | 本地方法 | 1:1 | |
-| `import add\|list\|remove` | 本地方法 | 1:1 | `import add` 依赖当前 Node Link 连接上的 catalog 快照（§5.5） |
 | `acp-stdio` | channel `0x02` | stdin/stdout 字节泵 | 不进管理信封；会话语义见 §3.1 |
 
-**首切片不提供 `session create`**，`session list` 标为 `post_mvp`：业务命令（`session.*`、`permission.resolve` 等）在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `sync` 与 `node_link`，**本地通道不承载业务命令**；本地会话的唯一入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`，不经 wire 命令）。若要给 CLI 加会话语义，必须先决定是否为命令引入 `local` transport（那时需同步 `commands.json`、`broker::required_grant` 镜像与那条“四处一致”门禁），**不得**在本地通道另造同名方法。
+**首切片不提供 `session create`**，`session list` 标为 `post_mvp`：业务命令（`session.*`、`permission.resolve` 等）在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `sync` 与 `node_link`，**本地通道不承载业务命令**；本地会话的唯一入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`，不经 wire 命令）。若要给 CLI 加会话语义，必须先决定是否为命令引入 `local` transport（那时需同步 `commands.json`与那条“四处一致”门禁），**不得**在本地通道另造同名方法。
 
-**配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间（节点方向另显示待授予的 `grant.*`）；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
+**配对流程（安全仪式）**：`SECURITY_DESIGN.md` §9.4 要求确认界面显示名称、指纹与过期时间；`SYNC_PROTOCOL.md` §7.0 要求确认只能经本地入口。因此 `device pair` / `node pair` 的 CLI 流程固定为：
 
 1. `begin`：拿到 `pairingId` 与 `pairingUrl`，打印 URL 与二维码（如终端支持）；
-2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间，节点方向另展示待授予的 `grant.*`；
-3. 用户输入确认后调 `confirm`：设备方向**不提交任何授权集合**，节点方向把用户确认过的 `grants` 与本次点名的 `--export-id` 清单作为最终集合提交。
+2. 轮询 `status`：未认领时继续等（有效期 5 分钟，到期报 `local.expired`）；认领后**必须**展示名称、指纹与过期时间；
+两个方向都不提交任何授权集合。
 
 示例（交互式设备配对）：
 
@@ -558,17 +432,17 @@ https://home.example.invalid/sync/v1/pairing#…（含 pairing secret，只在�
 已配对：deviceId=2ae1c07c-…
 ```
 
-节点方向多一行待授予的 `grant.*`（授权只存在于跨节点方向）：
+节点方向与设备方向相同，不展示授权集合：
 
 ```text
-$ acp-remote node pair --mode owner --display-name my-node --grant grant.session.read --export-id export-1
+$ acp-remote node pair --mode owner
 …
 节点已认领：
   名称            my-node
   指纹            cd34…（64 位 hex）
-  待授予 grants   grant.session.read
+
   过期            2026-09-23T14:31:00.000Z
-确认授予以上 grants（1 项）？[y/N]: y
+确认与本机记录该节点（配对即完全信任）？[y/N]: y
 已配对：nodeId=7f30a1b2-…
 ```
 
@@ -589,8 +463,8 @@ $ acp-remote device pair --fingerprint ab12…（64 位 hex）
 | `local.unsupported` | 未知 `method`，或方法在当前 delivery 阶段尚未实现 | 否 |
 | `local.invalid_request` | 信封非法：`id` 缺失/非 UUID/重复、`method` 缺失或命名非法、`params` 不是 object | 否 |
 | `local.invalid_params` | 方法参数非法：缺字段、类型不符、越界或出现未知字段 | 否 |
-| `local.not_found` | 目标 `deviceId`/`nodeId`/`pairingId`/`exportId`/`importId` 不存在，或引用的 workspace alias 未在 `owned_workspace` 建立 | 否 |
-| `local.conflict` | 目标存在但当前状态不允许该操作（pairing 已确认、`exportId` 已存在、输出文件已存在） | 否 |
+| `local.not_found` | 目标 `deviceId`/`nodeId`/`pairingId` 不存在，或引用的目录标识未在本机目录表记录 | 否 |
+| `local.conflict` | 目标存在但当前状态不允许该操作（pairing 已确认、输出文件已存在） | 否 |
 | `local.expired` | `pairingId` 已过期或已被拒绝 | 否 |
 | `local.remote_error` | `node.pair.*` 对 Owner 的 HTTPS 调用失败或返回错误（`NODE_LINK_PROTOCOL.md` §13.4） | 视远端状态 |
 | `local.unavailable` | Daemon 正在关闭、存储不可用、keystore 不可用或依赖未就绪 | 是 |
@@ -608,10 +482,10 @@ $ acp-remote device pair --fingerprint ab12…（64 位 hex）
 - **连接中断**：CLI 必须报错退出，不得降级为直接读写 SQLite。重试由用户显式发起，且：
   - `*.list`、`*.status` 幂等，可安全重复；
   - `device.pair.begin`、`node.pair.begin` 每次调用创建新配对，旧配对自然过期，不构成第二次接受；
-  - `export.create`、`import.add` 重试得到 `local.conflict`；`*.revoke`、`*.remove` 重试得到 `local.not_found`；
+- 配对确认重试得到 `local.conflict`；
   - CLI 不得自动重试任何 mutation 方法。
 - **endpoint 创建失败**（权限不符、路径被占用、socket 被替换为符号链接、目录权限不符、旧 socket 仍存活）→ 正式模式拒绝启动，不得降级为“无管理通道”或临时暴露无认证 endpoint（ADR-0004 决策 8、`SECURITY_DESIGN.md` §8）。
-- **撤销与关闭顺序**：`device.revoke`、`node.revoke`、`export.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；节点方向的 `node.pair.confirm` 在信任行提交后同样关闭该节点的活动连接（收窄/重新授权自下一次握手生效，`NODE_LINK_PROTOCOL.md` §8.2）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
+- **撤销与关闭顺序**：`device.revoke`、`node.revoke` 在持久状态提交后立即生效并关闭对应 active connection（`SECURITY_DESIGN.md` §9.5）；节点方向的 `node.pair.confirm` 在信任行提交后同样关闭该节点的活动连接（收窄/重新授权自下一次握手生效，`NODE_LINK_PROTOCOL.md` §8.2）；Daemon 关闭按停止接入 → 取消任务 → 关闭 Agent → 刷新存储 → 清理进程树的顺序执行（`SECURITY_DESIGN.md` §12.1）。
 - **审计与日志**：拒绝连接、`SECURITY_DESIGN.md` §14.2 类别覆盖的安全动作（配对批准/拒绝、撤销、凭据配置等）记对应审计事件；**方法失败只记结构化日志**——§14.2 的封闭类别里没有「方法失败」，不得复用 `authorization.denied` 把参数错误与 scope 拒绝混为一谈。日志遵守 §14.1 的允许字段。
 
 ## 8. 版本与演进

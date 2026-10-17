@@ -14,7 +14,6 @@
     "origin": { "kind": "agent", "deviceId": null, "nodeId": null },
     "remoteOrigin": {
       "ownerNodeId": "1f0d5c4b-3a29-4877-9615-0e1d2c3b4a59",
-      "exportId": "export-laptop-zed",
       "originEpoch": "2a1b0c9d-8e7f-4a6b-b5c4-3d2e1f0a9b87",
       "originEventId": "aa0e5b6c-9d3f-4a1e-8f2b-5c7d9e1f2a3b",
       "originSequence": "900"

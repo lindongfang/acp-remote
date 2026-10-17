@@ -3,7 +3,7 @@
 //! 方法名有两层校验：
 //!
 //! 1. **语法**：匹配 `^[a-z][a-z0-9]*(\.[a-z0-9]+(-[a-z0-9]+)*)*$`（§4 的表格）。不匹配属信封非法 → `local.invalid_request`。
-//! 2. **在集内**：必须是本枚举的 25 个方法之一。语法合法但不在集内 → `local.unsupported`
+//! 2. **在集内**：必须是本枚举的 17 个方法之一。语法合法但不在集内 → `local.unsupported`
 //!    （§4 规则 3：「未知 method → local.unsupported；这使新增方法成为向后兼容变更」）。
 //!
 //! 枚举与 schema 的 `methodName.enum` 由常驻漂移测试断言逐项相等，本文件不复制第二份词表。
@@ -15,12 +15,8 @@ pub enum Method {
     DaemonStatus,
     /// `daemon.stop`
     DaemonStop,
-    /// `workspace.select`（`local.workspace.select`）
-    WorkspaceSelect,
-    /// `agent.configure`（`local.agent.configure`）
-    AgentConfigure,
-    /// `provider.configure`（`local.provider.configure`）
-    ProviderConfigure,
+    /// `agent.list`（只读诊断）
+    AgentList,
     /// `device.pair.begin`（`local.device.manage`）
     DevicePairBegin,
     /// `device.pair.status`（`local.device.manage`）
@@ -45,18 +41,6 @@ pub enum Method {
     NodeList,
     /// `node.revoke`（`local.device.manage`）
     NodeRevoke,
-    /// `export.create`（`local.export.manage`）
-    ExportCreate,
-    /// `export.list`（`local.export.manage`）
-    ExportList,
-    /// `export.revoke`（`local.export.manage`）
-    ExportRevoke,
-    /// `import.add`（`local.export.manage`）
-    ImportAdd,
-    /// `import.list`（`local.export.manage`）
-    ImportList,
-    /// `import.remove`（`local.export.manage`）
-    ImportRemove,
     /// `node.rotate-key.begin`（`local.node.rotate-key`，`post_mvp`；§5.7：字段定义落地前调用回
     /// `local.unsupported`，不得自行填充 `params`/`result`）
     NodeRotateKeyBegin,
@@ -65,14 +49,11 @@ pub enum Method {
 }
 
 impl Method {
-    /// 全部 25 个方法，顺序与 §5.1 的能力对应表一致（`node.rotate-key.begin` 是 §5.1 第 6 行
-    /// `local.node.rotate-key` 的方法，因此排在 `import.remove` 与 `audit.export` 之间）。
-    pub const ALL: [Self; 25] = [
+    /// 全部 17 个方法，顺序与 §5.1 的能力对应表一致。
+    pub const ALL: [Self; 17] = [
         Self::DaemonStatus,
         Self::DaemonStop,
-        Self::WorkspaceSelect,
-        Self::AgentConfigure,
-        Self::ProviderConfigure,
+        Self::AgentList,
         Self::DevicePairBegin,
         Self::DevicePairStatus,
         Self::DevicePairConfirm,
@@ -85,12 +66,6 @@ impl Method {
         Self::NodePairReject,
         Self::NodeList,
         Self::NodeRevoke,
-        Self::ExportCreate,
-        Self::ExportList,
-        Self::ExportRevoke,
-        Self::ImportAdd,
-        Self::ImportList,
-        Self::ImportRemove,
         Self::NodeRotateKeyBegin,
         Self::AuditExport,
     ];
@@ -100,9 +75,7 @@ impl Method {
         match self {
             Self::DaemonStatus => "daemon.status",
             Self::DaemonStop => "daemon.stop",
-            Self::WorkspaceSelect => "workspace.select",
-            Self::AgentConfigure => "agent.configure",
-            Self::ProviderConfigure => "provider.configure",
+            Self::AgentList => "agent.list",
             Self::DevicePairBegin => "device.pair.begin",
             Self::DevicePairStatus => "device.pair.status",
             Self::DevicePairConfirm => "device.pair.confirm",
@@ -115,12 +88,6 @@ impl Method {
             Self::NodePairReject => "node.pair.reject",
             Self::NodeList => "node.list",
             Self::NodeRevoke => "node.revoke",
-            Self::ExportCreate => "export.create",
-            Self::ExportList => "export.list",
-            Self::ExportRevoke => "export.revoke",
-            Self::ImportAdd => "import.add",
-            Self::ImportList => "import.list",
-            Self::ImportRemove => "import.remove",
             Self::NodeRotateKeyBegin => "node.rotate-key.begin",
             Self::AuditExport => "audit.export",
         }
@@ -166,7 +133,7 @@ mod tests {
 
     #[test]
     fn all_methods_round_trip_through_their_wire_name() {
-        assert_eq!(Method::ALL.len(), 25);
+        assert_eq!(Method::ALL.len(), 17);
         for method in Method::ALL {
             assert_eq!(Method::from_name(method.as_str()), Some(method));
             assert!(is_method_name(method.as_str()), "{}", method.as_str());

@@ -226,19 +226,19 @@ fn qr_payload_carries_the_owner_endpoint_and_secret() {
 
 #[test]
 fn http_error_reuses_the_registered_error_codes() {
-    let ok = "{\"code\":\"nodelink.export.revoked\",\"message\":\"x\",\"retryable\":false,\"correlationId\":null,\"details\":{}}";
+    let ok = "{\"code\":\"nodelink.auth.node_unknown\",\"message\":\"x\",\"retryable\":false,\"correlationId\":null,\"details\":{}}";
     let parsed: HttpError =
         serde_json::from_str(ok).expect("配对 HTTP 错误体与 link.error body 同形状");
     assert!(parsed.correlation_id.is_null());
     assert_eq!(parsed.details.get(), "{}");
 
-    let unknown_code = ok.replace("nodelink.export.revoked", "nodelink.export.nonexistent");
+    let unknown_code = ok.replace("nodelink.auth.node_unknown", "nodelink.auth.nonexistent");
     assert!(
         serde_json::from_str::<HttpError>(&unknown_code).is_err(),
         "未登记的错误码必须被拒（与 WSS link.error body 共用同一枚举）"
     );
 
-    let missing_key = "{\"code\":\"nodelink.export.revoked\",\"message\":\"x\",\"retryable\":false,\"details\":{}}";
+    let missing_key = "{\"code\":\"nodelink.auth.node_unknown\",\"message\":\"x\",\"retryable\":false,\"details\":{}}";
     assert!(
         serde_json::from_str::<HttpError>(missing_key).is_err(),
         "correlationId 是 required（可 null）：键缺失必须被拒"

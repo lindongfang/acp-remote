@@ -25,9 +25,7 @@
       "enum": [
         "daemon.status",
         "daemon.stop",
-        "workspace.select",
-        "agent.configure",
-        "provider.configure",
+        "agent.list",
         "device.pair.begin",
         "device.pair.status",
         "device.pair.confirm",
@@ -40,12 +38,6 @@
         "node.pair.reject",
         "node.list",
         "node.revoke",
-        "export.create",
-        "export.list",
-        "export.revoke",
-        "import.add",
-        "import.list",
-        "import.remove",
         "node.rotate-key.begin",
         "audit.export"
       ]

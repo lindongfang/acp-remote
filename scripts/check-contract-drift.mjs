@@ -271,7 +271,7 @@ function checkPorts() {
     );
   }
 
-  if (traits < 10 || methods < 60 || types < 3) {
+  if (traits < 10 || methods < 56 || types < 3) {
     errors.push(
       `contract drift: 端口提取结果异常（trait ${traits} / 方法 ${methods} / 类型 ${types}），门禁解析规则可能已过期`,
     );

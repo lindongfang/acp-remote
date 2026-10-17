@@ -99,10 +99,6 @@ pub enum HostError {
         name: String,
     },
 
-    /// 凭据解析失败。
-    #[error("凭据解析失败")]
-    CredentialUnavailable,
-
     /// 组合根注入的 id/时钟不可用（UUID 生成失败等）。
     #[error("标识分配失败")]
     IdUnavailable,
@@ -129,9 +125,6 @@ impl HostError {
             Self::DuplicateSession { .. } => PortError::Conflict(ConflictKind::AlreadyExists),
             Self::UnknownSession => PortError::InvalidRequest("no endpoint for this session"),
             Self::SessionClosed => PortError::InvalidRequest("session endpoint is closed"),
-            Self::CredentialUnavailable => {
-                PortError::Unavailable(UnavailableKind::KeystoreUnavailable)
-            }
             Self::NotRunning | Self::AgentExited { .. } => {
                 PortError::Unavailable(UnavailableKind::IoError)
             }
@@ -147,7 +140,7 @@ impl HostError {
             | Self::ShutdownPending => PortError::InvalidRequest("agent protocol error"),
             Self::InvalidEnvName => PortError::InvalidRequest("invalid environment variable name"),
             Self::EnvNotAllowed { .. } => {
-                PortError::InvalidRequest("credential variable is not allow-listed")
+                PortError::InvalidRequest("reserved environment variable name")
             }
             Self::InvalidResolution | Self::InvalidPrompt => {
                 PortError::InvalidRequest("invalid agent-host request")
@@ -177,7 +170,6 @@ impl HostError {
             | Self::NotRunning
             | Self::CapabilityNotDeclared { .. }
             | Self::AgentRejected { .. }
-            | Self::CredentialUnavailable
             | Self::EnvNotAllowed { .. }
             | Self::InvalidEnvName => true,
             Self::Timeout { .. }
@@ -258,7 +250,7 @@ mod tests {
     /// `session_establishment_failures_are_classified` 单独钉死。
     #[test]
     fn to_port_error_is_pinned_per_variant() {
-        let cases: [(&str, HostError, Shape); 20] = [
+        let cases: [(&str, HostError, Shape); 19] = [
             (
                 "UnknownProfile",
                 HostError::UnknownProfile,
@@ -355,11 +347,6 @@ mod tests {
                 Shape::InvalidRequest,
             ),
             (
-                "CredentialUnavailable",
-                HostError::CredentialUnavailable,
-                Shape::Unavailable(UnavailableKind::KeystoreUnavailable),
-            ),
-            (
                 "IdUnavailable",
                 HostError::IdUnavailable,
                 Shape::Unavailable(UnavailableKind::IoError),
@@ -408,7 +395,7 @@ mod tests {
     /// `uncertain` 处理）。
     #[test]
     fn session_establishment_failures_are_classified() {
-        let provable: [(&str, HostError); 8] = [
+        let provable: [(&str, HostError); 7] = [
             ("UnknownProfile", HostError::UnknownProfile),
             (
                 "SpawnFailed",
@@ -430,7 +417,6 @@ mod tests {
                     message: "cannot create session".to_owned(),
                 },
             ),
-            ("CredentialUnavailable", HostError::CredentialUnavailable),
             (
                 "EnvNotAllowed",
                 HostError::EnvNotAllowed {

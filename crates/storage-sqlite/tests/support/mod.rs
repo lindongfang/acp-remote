@@ -297,3 +297,15 @@ pub async fn measured_storage_bytes(pool: &SqlitePool) -> u64 {
         .expect("measure storage");
     u64::try_from(total).unwrap_or(0)
 }
+
+/// 表是否存在（夹具版本可能没有最新表；只用于「未来版本库不得被改写」这类不关心缺失表的快照）。
+pub async fn table_exists(pool: &SqlitePool, table: &str) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .expect("read sqlite_master")
+        > 0
+}

@@ -82,21 +82,16 @@ impl<'de> Deserialize<'de> for EventType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DetachReason {
     ClientRequest,
-    ExportRevoked,
     OwnerUnavailable,
 }
 
 impl DetachReason {
-    pub const ALL: [DetachReason; 3] = [
-        DetachReason::ClientRequest,
-        DetachReason::ExportRevoked,
-        DetachReason::OwnerUnavailable,
-    ];
+    pub const ALL: [DetachReason; 2] =
+        [DetachReason::ClientRequest, DetachReason::OwnerUnavailable];
 
     pub fn as_str(self) -> &'static str {
         match self {
             DetachReason::ClientRequest => "client_request",
-            DetachReason::ExportRevoked => "export_revoked",
             DetachReason::OwnerUnavailable => "owner_unavailable",
         }
     }

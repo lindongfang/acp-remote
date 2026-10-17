@@ -10,12 +10,6 @@
       "$ref": "#/$defs/catalogSnapshot"
     },
     {
-      "$ref": "#/$defs/catalogChanged"
-    },
-    {
-      "$ref": "#/$defs/exportRevoked"
-    },
-    {
       "$ref": "#/$defs/nodeTrustRevoked"
     },
     {
@@ -102,103 +96,34 @@
               "additionalProperties": false,
               "required": [
                 "revision",
-                "exports"
+                "agents",
+                "directories",
+                "sessions"
               ],
               "properties": {
                 "revision": {
                   "$ref": "common.schema.json#/$defs/decimalString"
                 },
-                "exports": {
+                "agents": {
                   "type": "array",
                   "maxItems": 500,
                   "items": {
-                    "$ref": "common.schema.json#/$defs/exportEntry"
+                    "$ref": "common.schema.json#/$defs/agentEntry"
                   }
-                }
-              }
-            }
-          }
-        }
-      ],
-      "unevaluatedProperties": false
-    },
-    "catalogChanged": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/postAuthBase"
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "const": "catalog.changed"
-            },
-            "body": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "revision",
-                "added",
-                "updated",
-                "removed"
-              ],
-              "properties": {
-                "revision": {
-                  "$ref": "common.schema.json#/$defs/decimalString"
                 },
-                "added": {
+                "directories": {
                   "type": "array",
                   "maxItems": 500,
                   "items": {
-                    "$ref": "common.schema.json#/$defs/exportEntry"
+                    "$ref": "common.schema.json#/$defs/directoryEntry"
                   }
                 },
-                "updated": {
+                "sessions": {
                   "type": "array",
                   "maxItems": 500,
                   "items": {
-                    "$ref": "common.schema.json#/$defs/exportEntry"
+                    "$ref": "common.schema.json#/$defs/catalogSession"
                   }
-                },
-                "removed": {
-                  "type": "array",
-                  "maxItems": 500,
-                  "uniqueItems": true,
-                  "items": {
-                    "$ref": "common.schema.json#/$defs/exportId"
-                  }
-                }
-              }
-            }
-          }
-        }
-      ],
-      "unevaluatedProperties": false
-    },
-    "exportRevoked": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/postAuthBase"
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "const": "export.revoked"
-            },
-            "body": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "exportId",
-                "revokedAt"
-              ],
-              "properties": {
-                "exportId": {
-                  "$ref": "common.schema.json#/$defs/exportId"
-                },
-                "revokedAt": {
-                  "$ref": "common.schema.json#/$defs/timestamp"
                 }
               }
             }

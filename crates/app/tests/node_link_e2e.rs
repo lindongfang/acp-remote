@@ -21,864 +21,11 @@ mod support;
 
 use serde_json::{Value, json};
 use server::local_admin::Method;
-use support::nodelink::{AccessKey, NodeLinkClient, PairingTicket};
+use support::nodelink::{AccessKey, NodeLinkClient};
 use support::owner::OwnerNode;
 
 /// 本用例扮演的 Access Node 标识。
 const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-/// 可见的 Export（`scopes` 与节点 grants 有交集，且是本次确认点名的唯一一条）。
-const EXPORT_VISIBLE: &str = "export.visible";
-/// 不可见的 Export（`scopes` 与节点 grants 不相交）。
-const EXPORT_HIDDEN: &str = "export.hidden";
-/// 可见性被清单收窄的 Export：`scopes` 与节点 grants **相交**，但本次确认没有点名它
-/// （`design.md` D1 的条件③）。
-const EXPORT_NARROWED: &str = "export.narrowed";
-/// 注册的 workspace alias（`session.create` 只能带别名，不能带路径）。
-const WORKSPACE_ALIAS: &str = "project.one";
-/// Agent selector。
-const AGENT: &str = "codex";
-/// 本地确认授予的 grants（也是 Export 的 `scopes` 取值域）。
-const GRANTS: [&str; 3] = ["grant.observe", "grant.interact", "grant.remote-work"];
-
-/// 一次完整的配对准备（Owner 侧的 profile/workspace/Export + 配对开始 + claim + 本地确认 + status）。
-struct Chain {
-    owner: OwnerNode,
-    access: AccessKey,
-    ticket: PairingTicket,
-}
-
-impl Chain {
-    /// 走到「status approved」为止（不含 WSS 握手）。
-    async fn up_to_approval(label: &str) -> Self {
-        let owner = OwnerNode::start(label).await;
-        let access = AccessKey::new(ACCESS_NODE);
-        // ① 本机注册：workspace alias + agent profile + 两个 Export。
-        let workspace_root = owner.data_dir();
-        owner
-            .admin(
-                Method::WorkspaceSelect,
-                json!({
-                    "alias": WORKSPACE_ALIAS,
-                    "displayName": "Project One",
-                    "rootPath": workspace_root.display().to_string(),
-                }),
-            )
-            .await;
-        owner
-            .admin(
-                Method::AgentConfigure,
-                json!({
-                    "agentId": AGENT,
-                    "displayName": "Codex",
-                    "command": env!("CARGO_BIN_EXE_acp-remote"),
-                    "args": [],
-                    "envAllowlist": [],
-                    "default": true,
-                }),
-            )
-            .await;
-        for (export_id, scopes) in [
-            (EXPORT_VISIBLE, GRANTS.to_vec()),
-            (EXPORT_HIDDEN, vec!["grant.approve"]),
-            // 第三条的 scopes 与节点 grants 相交：它能被排除只能来自确认时点名的清单。
-            (EXPORT_NARROWED, GRANTS.to_vec()),
-        ] {
-            owner
-                .admin(
-                    Method::ExportCreate,
-                    json!({
-                        "exportId": export_id,
-                        "displayName": format!("Export {export_id}"),
-                        "agentIds": [AGENT],
-                        "workspaceAliases": [
-                            { "alias": WORKSPACE_ALIAS, "displayName": "Project One" },
-                        ],
-                        "defaultWorkspaceAlias": WORKSPACE_ALIAS,
-                        "templates": [
-                            {
-                                "templateId": "tpl.default",
-                                "displayName": "Default",
-                                "workspaceAlias": WORKSPACE_ALIAS,
-                                "params": [],
-                            },
-                        ],
-                        "defaultTemplateId": "tpl.default",
-                        "scopes": scopes,
-                        "cachePolicy": "no-content-cache",
-                    }),
-                )
-                .await;
-        }
-
-        // ②③ 配对开始（二维码）+ Access 侧 claim（HMAC proof），并验证 Owner 证明。
-        let (ticket, body) = begin_and_claim(&owner, &access, 0x41).await;
-        let pairing_id = ticket.pairing_id.clone();
-
-        // ④ 本地确认（真实的 local_admin 入口）：`exportIds` 是必需参数，本例只点名 `EXPORT_VISIBLE`，
-        // 因此 `EXPORT_NARROWED`（scopes 相交）也必须对该节点不可见。
-        let confirmed = owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({
-                    "pairingId": pairing_id,
-                    "grants": GRANTS,
-                    "exportIds": [EXPORT_VISIBLE],
-                }),
-            )
-            .await;
-        assert_eq!(
-            confirmed["nodeId"],
-            json!(ACCESS_NODE),
-            "确认必须创建该 Access Node 的信任记录"
-        );
-        assert_eq!(
-            confirmed["exportIds"],
-            json!([EXPORT_VISIBLE]),
-            "confirm 的 result 必须回显本次点名的清单"
-        );
-
-        // ⑤ status approved（同一 secret 的 HMAC 证明）。
-        let pairing_request_id = body["pairingRequestId"]
-            .as_str()
-            .expect("pairingRequestId")
-            .to_owned();
-        let server_nonce = body["serverNonce"]
-            .as_str()
-            .expect("serverNonce")
-            .to_owned();
-        let status = support::nodelink::status_request(
-            &ticket,
-            &access,
-            &pairing_request_id,
-            &support::nodelink::nonce_text(0x42),
-        );
-        let reply = support::nodelink::post_json(
-            owner.addr,
-            server::node_link::STATUS_PATH,
-            &serde_json::to_vec(&status).expect("status 可序列化"),
-        )
-        .await;
-        assert_eq!(reply.status, 200, "status 一律 200");
-        let body = reply.json();
-        assert_eq!(body["status"], json!("approved"), "{body}");
-        assert_eq!(body["node"]["accessNodeId"], json!(ACCESS_NODE), "{body}");
-
-        // 配对材料由 ticket（secret/endpoint/owner 公钥）承载；`pairingRequestId`/`serverNonce` 只用于
-        // 出 status 请求，取到即用完，不必在 Chain 上留字段。
-        let _ = (&pairing_request_id, &server_nonce);
-        Self {
-            owner,
-            access,
-            ticket,
-        }
-    }
-
-    /// 同一 Access 身份对同一 Owner **再**走一次配对（不 `node.revoke`），并用 `export_ids` 在本机确认。
-    ///
-    /// 返回本次配对的 ticket（重新握手要用它取 Owner 身份材料）与 `confirm` 的 result。
-    /// `nonce_seed` 必须与首次配对不同，避免两个配对共用同一个 client nonce。
-    async fn repair_and_confirm(
-        &self,
-        export_ids: Value,
-        nonce_seed: u8,
-    ) -> (PairingTicket, Value) {
-        let (ticket, _claim) = begin_and_claim(&self.owner, &self.access, nonce_seed).await;
-        let confirmed = self
-            .owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({
-                    "pairingId": ticket.pairing_id.clone(),
-                    "grants": GRANTS,
-                    "exportIds": export_ids,
-                }),
-            )
-            .await;
-        (ticket, confirmed)
-    }
-
-    /// 在真实 loopback listener 上完成 WSS 握手（含 `catalogRevision` 验签）。
-    async fn connect(&self) -> NodeLinkClient {
-        let mut client = NodeLinkClient::connect_plain(self.owner.addr).await;
-        support::nodelink::handshake(
-            &mut client,
-            &self.access,
-            &self.ticket,
-            &support::nodelink::nonce_text(0x41),
-        )
-        .await;
-        client
-    }
-}
-
-/// 配对准备（②③）：`node.pair.begin --mode owner` → Access 侧 claim（HMAC proof）→ 验 Owner 证明。
-///
-/// 返回本次配对的 ticket 与 claim 响应体（`pairingRequestId`/`serverNonce` 供 status 用）。
-async fn begin_and_claim(
-    owner: &OwnerNode,
-    access: &AccessKey,
-    nonce_seed: u8,
-) -> (PairingTicket, Value) {
-    let begin = owner
-        .admin(
-            Method::NodePairBegin,
-            json!({
-                "mode": "owner",
-                "pairingUrl": null,
-                "displayName": "Owner Node",
-                "requestedGrants": GRANTS,
-            }),
-        )
-        .await;
-    let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
-    let pairing_url = begin["pairingUrl"].as_str().expect("pairingUrl");
-    let ticket = support::nodelink::ticket_from_url(pairing_url, &pairing_id);
-
-    let client_nonce = support::nodelink::nonce_text(nonce_seed);
-    let claim = support::nodelink::claim_request(&ticket, access, &client_nonce);
-    let reply = support::nodelink::post_json(
-        owner.addr,
-        server::node_link::CLAIM_PATH,
-        &serde_json::to_vec(&claim).expect("claim 可序列化"),
-    )
-    .await;
-    assert_eq!(
-        reply.status,
-        201,
-        "合法 claim 必须返回 201：{}",
-        String::from_utf8_lossy(&reply.body)
-    );
-    let body = reply.json();
-    support::nodelink::verify_owner_proof(&ticket, &body, access, &client_nonce);
-    (ticket, body)
-}
-
-/// 主人的 `session.create` 请求（`payload` 只允许四个键，禁带 `cwd`/`mcpServers`）。
-fn session_create_body(request_id: &str, export_id: &str, alias: &str) -> Value {
-    json!({
-        "requestId": request_id,
-        "command": "session.create",
-        "sessionRef": null,
-        "attachmentId": null,
-        "attachmentGeneration": null,
-        "expectedVersion": null,
-        "payload": {
-            "agentId": AGENT,
-            "exportId": export_id,
-            "workspaceAlias": alias,
-        },
-    })
-}
-
-/// `session.prompt`（session-scoped：必须带代际）。
-fn session_prompt_body(request_id: &str, session: &Value, attachment: &Value, text: &str) -> Value {
-    json!({
-        "requestId": request_id,
-        "command": "session.prompt",
-        "sessionRef": session.clone(),
-        "attachmentId": attachment["attachmentId"],
-        "attachmentGeneration": attachment["attachmentGeneration"],
-        "expectedVersion": null,
-        "payload": { "content": [ { "type": "text", "text": text } ] },
-    })
-}
-
-/// 主链：配对 → 握手 → catalog → session.create → attach/subscribe → event/ack → 终态 → R61 → 撤销。
-#[test]
-fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
-    support::block_on(async {
-        let chain = Chain::up_to_approval("e2e").await;
-        let owner = &chain.owner;
-        let mut client = chain.connect().await;
-
-        // ① catalog.snapshot：可见性 = 未撤销 ∧ scopes ∩ 节点 grants ≠ ∅ ∧ 在确认点名的清单内。
-        client.step("catalog.subscribe");
-        client
-            .send("catalog.subscribe", json!({ "knownRevision": null }))
-            .await;
-        let snapshot = client.expect("catalog.snapshot").await;
-        let exports = snapshot["body"]["exports"]
-            .as_array()
-            .expect("exports 数组");
-        let ids: Vec<&str> = exports
-            .iter()
-            .map(|entry| entry["exportId"].as_str().expect("exportId"))
-            .collect();
-        assert_eq!(
-            ids,
-            vec![EXPORT_VISIBLE],
-            "可见集必须只含同时满足三个条件的 Export：{snapshot}"
-        );
-        assert!(
-            !ids.contains(&EXPORT_HIDDEN),
-            "与节点 grants 不相交的 Export 不得出现在 catalog 里"
-        );
-        assert!(
-            !ids.contains(&EXPORT_NARROWED),
-            "清单外的 Export 不得出现在 catalog 里（即使 scopes ∩ grants 非空）"
-        );
-
-        // ② session.create 正常路径：accepted(result = null) → terminal(SessionCreateResult)。
-        let create_request = support::nodelink::uuid_text();
-        client.step("session.create");
-        client
-            .send(
-                "command.submit",
-                session_create_body(&create_request, EXPORT_VISIBLE, WORKSPACE_ALIAS),
-            )
-            .await;
-        let accepted = client.expect("command.accepted").await;
-        assert_eq!(accepted["body"]["requestId"], json!(create_request));
-        assert_eq!(accepted["body"]["command"], json!("session.create"));
-        assert_eq!(
-            accepted["body"]["result"],
-            Value::Null,
-            "`session.create` 的 accepted 必须是 result = null"
-        );
-        let terminal = client.expect("command.terminal").await;
-        assert_eq!(terminal["body"]["requestId"], json!(create_request));
-        assert_eq!(terminal["body"]["terminal"]["status"], json!("completed"));
-        let result = &terminal["body"]["terminal"]["result"];
-        let session = result["remoteSessionRef"].clone();
-        assert_eq!(
-            session["ownerNodeId"],
-            json!(owner.owner_node_id().as_str()),
-            "Owner 必须回自己的 node id（传错会让全部 attach/ack 被拒）"
-        );
-        assert_eq!(session["exportId"], json!(EXPORT_VISIBLE));
-        assert_eq!(result["sessionMeta"]["state"], json!("idle"));
-        let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
-
-        // ③ 幂等重试：同 requestId + 同 payload → 直接回首次结果；同 requestId 换 payload →
-        // `idempotency_conflict`（不能因为重试而创建第二个会话）。
-        client.step("idempotent retry");
-        client
-            .send(
-                "command.submit",
-                session_create_body(&create_request, EXPORT_VISIBLE, WORKSPACE_ALIAS),
-            )
-            .await;
-        let replay = client.expect("command.terminal").await;
-        assert_eq!(
-            replay["body"]["terminal"]["result"]["remoteSessionRef"]["sessionId"],
-            json!(session_id),
-            "同键重试必须回首次结果（不创建第二个会话）：{replay}"
-        );
-        // 换一个「同样合法、但语义不同」的 payload：显式给空的 `templateParams`（§12.7 允许空参数集，
-        // 但它属于被指纹的 payload 字节），因此必须命中冲突而不是回首次结果。
-        client.step("idempotency conflict");
-        let mut drifted = session_create_body(&create_request, EXPORT_VISIBLE, WORKSPACE_ALIAS);
-        drifted["payload"]["templateParams"] = json!({});
-        client.send("command.submit", drifted).await;
-        let conflict = client.expect("command.rejected").await;
-        assert_eq!(
-            conflict["body"]["requestId"],
-            json!(create_request),
-            "冲突判定必须针对同一 requestId：{conflict}"
-        );
-        assert_eq!(
-            conflict["body"]["error"]["code"],
-            json!("nodelink.command.idempotency_conflict"),
-            "同 requestId 换语义必须冲突：{conflict}"
-        );
-
-        // ④ 拒绝路径：禁带字段 → unsupported_field；未知 workspaceAlias → not_granted。
-        client.step("forbidden field");
-        let mut forbidden = session_create_body(
-            &support::nodelink::uuid_text(),
-            EXPORT_VISIBLE,
-            WORKSPACE_ALIAS,
-        );
-        forbidden["payload"]["cwd"] = json!("/tmp/attacker");
-        client.send("command.submit", forbidden).await;
-        let rejected = client.expect("command.rejected").await;
-        assert_eq!(
-            rejected["body"]["error"]["code"],
-            json!("nodelink.command.unsupported_field")
-        );
-        assert_eq!(rejected["body"]["error"]["details"]["field"], json!("cwd"));
-
-        client.step("unknown workspace alias");
-        client
-            .send(
-                "command.submit",
-                session_create_body(
-                    &support::nodelink::uuid_text(),
-                    EXPORT_VISIBLE,
-                    "not.registered",
-                ),
-            )
-            .await;
-        let rejected = client.expect("command.rejected").await;
-        assert_eq!(
-            rejected["body"]["error"]["code"],
-            json!("nodelink.export.not_granted")
-        );
-        assert_eq!(
-            rejected["body"]["error"]["details"]["parameter"],
-            json!("workspaceAlias")
-        );
-
-        // ④b 清单外的 Export 不能经 `resource.attach` 进入（与 catalog 同一个判定点）：即使给出的是一个
-        // 合法会话的 `sessionRef`，把 `exportId` 换成清单外的那个也会被可见性复核挡住。
-        client.step("resource.attach on a narrowed export");
-        let mut narrowed = session.clone();
-        narrowed["exportId"] = json!(EXPORT_NARROWED);
-        client
-            .send("resource.attach", json!({ "remoteSessionRef": narrowed }))
-            .await;
-        let refused = client.expect("link.error").await;
-        assert_eq!(
-            refused["body"]["code"],
-            json!("nodelink.export.not_granted"),
-            "清单外的 Export 与「与 grants 不相交」同一个判定点、同一个错误码：{refused}"
-        );
-
-        // ⑤ resource.attach → 新 generation；旧代际被拒。
-
-        client.step("resource.attach");
-        client
-            .send("resource.attach", json!({ "remoteSessionRef": session }))
-            .await;
-        let attached = client.expect("resource.attached").await;
-        let attachment = json!({
-            "attachmentId": attached["body"]["attachmentId"],
-            "attachmentGeneration": attached["body"]["attachmentGeneration"],
-        });
-
-        // ⑥ resource.subscribe(cursor = null) → 快照（只有元数据）。
-        client.step("resource.subscribe");
-        client
-            .send(
-                "resource.subscribe",
-                json!({
-                    "attachmentId": attachment["attachmentId"],
-                    "attachmentGeneration": attachment["attachmentGeneration"],
-                    "cursor": null,
-                }),
-            )
-            .await;
-        let begin = client.expect("resource.snapshot_begin").await;
-        let chunk = client.expect("resource.snapshot_chunk").await;
-        let end = client.expect("resource.snapshot_end").await;
-        assert_eq!(
-            begin["body"]["snapshotId"], end["body"]["snapshotId"],
-            "快照的 snapshotId 必须首尾一致"
-        );
-        assert_eq!(begin["body"]["chunkCount"], json!(1));
-        assert_eq!(end["body"]["chunkCount"], json!(1));
-        assert!(
-            end["body"]["snapshotDigest"]
-                .as_str()
-                .is_some_and(|digest| !digest.is_empty()),
-            "快照必须以非空 digest 收尾：{end}"
-        );
-        assert_eq!(chunk["body"]["resource"], json!("session_meta"));
-        assert_eq!(chunk["body"]["chunkIndex"], json!("0"));
-        let items = chunk["body"]["items"].as_array().expect("items 数组");
-        assert_eq!(items.len(), 1, "会话快照只承载 session_meta：{chunk}");
-        assert_eq!(items[0]["sessionRef"], session);
-        assert_eq!(items[0]["sessionMeta"]["state"], json!("idle"));
-        assert!(
-            !chunk.to_string().contains("\"content\""),
-            "快照不得携带正文：{chunk}"
-        );
-        let cursor = end["body"]["cursor"].clone();
-
-        // ⑦ resource.ack（累计水位；无响应，只能靠后续 ping 证明连接仍然健康）。
-        client.step("resource.ack");
-        client
-            .send(
-                "resource.ack",
-                json!({ "sessionRef": session, "cursor": cursor }),
-            )
-            .await;
-        ping(&mut client, 0x51).await;
-
-        // ⑧ 事件扇出 + 终态推送：accepted 先回，后端事件稍后由用例释放，终态经观察循环推送。
-        let ok_marker = "marker-ok-4f2a";
-        let prompt_request = support::nodelink::uuid_text();
-        client.step("session.prompt");
-        client
-            .send(
-                "command.submit",
-                session_prompt_body(&prompt_request, &session, &attachment, ok_marker),
-            )
-            .await;
-        // turn 尚未结束（脚本端点暂存了事件），因此回复是 `command.accepted` 而不是终态。
-        let accepted = client.expect("command.accepted").await;
-        assert_eq!(accepted["body"]["requestId"], json!(prompt_request));
-        assert_eq!(accepted["body"]["command"], json!("session.prompt"));
-        let accepted_turn = accepted["body"]["result"]["turnId"]
-            .as_str()
-            .expect("active turn 的 accepted 必须带 turnId")
-            .to_owned();
-        // 会话状态机先行的两条事件（submit 落 `turn.queued`、派发落 `turn.started`）。
-        let lifecycle = client.collect(std::time::Duration::from_millis(300)).await;
-        let lifecycle_types: Vec<&str> = lifecycle
-            .iter()
-            .filter(|message| message["type"] == json!("resource.event"))
-            .map(|message| message["body"]["eventType"].as_str().unwrap_or("<无>"))
-            .collect();
-        assert_eq!(
-            lifecycle_types,
-            vec!["turn.queued", "turn.started"],
-            "会话状态必须先走 queued → running：{lifecycle:?}"
-        );
-        assert!(
-            !lifecycle
-                .iter()
-                .any(|message| message.to_string().contains(ok_marker)),
-            "释放之前不得有正文事件：{lifecycle:?}"
-        );
-
-        // 释放后端事件（模拟 Agent 稍后产出），再驱动合并窗口落盘 + 广播。
-        assert_eq!(owner.release_events(ok_marker), 2, "delta + turn 终态");
-        owner
-            .broker
-            .pump(&session_key(&session_id))
-            .await
-            .expect("提交后端事件");
-        let event = client.expect("resource.event").await;
-        assert_eq!(event["body"]["eventType"], json!("agent.message.delta"));
-        assert_eq!(event["body"]["sessionRef"]["sessionId"], json!(session_id));
-        assert_eq!(
-            event["body"]["sessionRef"]["ownerNodeId"],
-            json!(owner.owner_node_id().as_str())
-        );
-        assert!(
-            event["body"]["payload"]["view"]
-                .to_string()
-                .contains(ok_marker),
-            "事件正文必须是本次 prompt 的内容：{event}"
-        );
-        assert!(
-            event["body"]["payload"].get("acp").is_none(),
-            "view-only 事件不得伪造 ACP 原文：{event}"
-        );
-        // 终态：turn 结束后由命令路由的终态观察循环推给提交方连接。
-        let terminal = client.expect("command.terminal").await;
-        assert_eq!(terminal["body"]["requestId"], json!(prompt_request));
-        assert_eq!(terminal["body"]["terminal"]["status"], json!("completed"));
-        assert_eq!(
-            terminal["body"]["terminal"]["result"]["turnId"],
-            json!(accepted_turn),
-            "终态结果必须回本次 turn（与 accepted 的 turnId 一致）：{terminal}"
-        );
-        assert!(
-            terminal["body"]["terminal"]["terminalEventId"].is_string(),
-            "终态必须带 terminalEventId：{terminal}"
-        );
-        client
-            .send(
-                "resource.ack",
-                json!({
-                    "sessionRef": session,
-                    "cursor": {
-                        "originEpoch": event["body"]["originEpoch"],
-                        "originSequence": event["body"]["originSequence"],
-                    },
-                }),
-            )
-            .await;
-        ping(&mut client, 0x52).await;
-
-        // ⑨ R61：broker 提交失败时连接上不出现对应的 `resource.event`（故障注入）。
-        //
-        // 注入点只让「带 marker 的那一批」失败（＝ agent.message.delta 那批），§6.9 规定失败批次一律不发布。
-        // 该批属于**在跑的** turn，因此 §6 第 9 条之后：同一个 turn 的终态批也不得照常
-        // 落盘——broker 把该 turn 终结为 `turn.failed`、把命令置为 `uncertain`（正文缺块的 turn 不报完成），
-        // 迟到的事件与终态被丢弃（而不是被记到下一个 turn 上）。
-        let fault_marker = "marker-fault-9c11";
-        let fault_request = support::nodelink::uuid_text();
-        client.step("faulted prompt");
-        client
-            .send(
-                "command.submit",
-                session_prompt_body(&fault_request, &session, &attachment, fault_marker),
-            )
-            .await;
-        let accepted = client.expect("command.accepted").await;
-        assert_eq!(accepted["body"]["requestId"], json!(fault_request));
-        owner.fail_commits_with(Some(fault_marker));
-        assert_eq!(owner.release_events(fault_marker), 2, "delta + turn 终态");
-        owner
-            .broker
-            .pump(&session_key(&session_id))
-            .await
-            .expect("写失败按 §6.9 收口为「不发布」，不向调用方冒泡");
-        assert!(
-            owner
-                .rejected_commits
-                .load(std::sync::atomic::Ordering::SeqCst)
-                >= 1,
-            "故障必须真的命中一次 commit"
-        );
-        owner.fail_commits_with(None);
-        // 连接仍然可用（后面的撤销推送还要走它），且失败批次的事件一条也没有出现。
-        ping(&mut client, 0x53).await;
-        let after_fault = client.collect(std::time::Duration::from_millis(500)).await;
-        assert!(
-            !after_fault
-                .iter()
-                .any(|message| message.to_string().contains(fault_marker)),
-            "提交失败的事件批次不得出现在连接上：{after_fault:?}"
-        );
-        assert!(
-            !after_fault
-                .iter()
-                .any(|message| message["body"]["eventType"] == json!("agent.message.delta")),
-            "失败的 delta 批次不得有任何一条到达：{after_fault:?}"
-        );
-        let failed_turn = after_fault
-            .iter()
-            .find(|message| message["body"]["eventType"] == json!("turn.failed"))
-            .cloned()
-            .unwrap_or_else(|| panic!("正文缺块的 turn 必须显式失败：{after_fault:?}"));
-        assert_eq!(
-            failed_turn["body"]["sessionRef"]["sessionId"],
-            json!(session_id)
-        );
-        // 同一个 turn 不得再出现 `turn.completed`（本连接上还有前面正常轮次的事件，因此按 turnId 比对）。
-        let abandoned_turn = failed_turn["body"]["payload"]["view"]["turnId"].clone();
-        assert!(
-            !after_fault.iter().any(|message| {
-                message["body"]["payload"]["view"]["turnId"] == abandoned_turn
-                    && message["body"]["eventType"] == json!("turn.completed")
-            }),
-            "正文缺块的 turn 不得以 completed 收尾：{after_fault:?}"
-        );
-        // 终态可能已经被上面那 500 ms 收走（观察循环 250 ms 一跳），两条路径都接受。
-        let terminal = match after_fault
-            .iter()
-            .find(|message| message["type"] == json!("command.terminal"))
-        {
-            Some(terminal) => terminal.clone(),
-            None => client.expect("command.terminal").await,
-        };
-        assert_eq!(terminal["body"]["requestId"], json!(fault_request));
-        assert_eq!(
-            terminal["body"]["terminal"]["status"],
-            json!("uncertain"),
-            "正文缺块的命令不能报 completed：{terminal}"
-        );
-        assert_eq!(
-            terminal["body"]["terminal"]["error"]["code"],
-            json!("nodelink.command.uncertain"),
-            "{terminal}"
-        );
-
-        // ⑩ export.revoke：受影响连接收到 export.revoked，之后的命令被拒。
-        owner
-            .admin(Method::ExportRevoke, json!({ "exportId": EXPORT_VISIBLE }))
-            .await;
-        let revoked = client.expect("export.revoked").await;
-        assert_eq!(revoked["body"]["exportId"], json!(EXPORT_VISIBLE));
-        client.step("command after export revoke");
-        client
-            .send(
-                "command.submit",
-                session_prompt_body(
-                    &support::nodelink::uuid_text(),
-                    &session,
-                    &attachment,
-                    "marker-after-revoke",
-                ),
-            )
-            .await;
-        let rejected = client.expect("command.rejected").await;
-        assert_eq!(
-            rejected["body"]["error"]["code"],
-            json!("nodelink.export.not_granted"),
-            "撤销后同一 Export 上的命令必须被拒：{rejected}"
-        );
-
-        // ⑪ node.revoke：推送 node.trust.revoked 并以 4410 关闭连接。
-        owner
-            .admin(Method::NodeRevoke, json!({ "nodeId": ACCESS_NODE }))
-            .await;
-        let revoked = client.expect("node.trust.revoked").await;
-        assert_eq!(revoked["body"]["revokedNodeId"], json!(ACCESS_NODE));
-        assert_eq!(
-            client.close_code().await,
-            4410,
-            "节点撤销必须以 4410 关闭连接"
-        );
-
-        chain.owner.stop().await;
-    });
-}
-
-/// 同一节点在**不撤销**的情况下重新配对并把清单收窄时，早已建立的 attachment 必须随连接作废。
-///
-/// 这条路径（`node.pair.begin → claim → node.pair.confirm`）不经过 `node.revoke`，而 `approve_node` 对
-/// 「同一 `nodeId` 已有 `paired` 行」没有状态守卫，因此清单可以被静默改写。可见性只在适配器
-/// （`node_link::catalog`）与 core 的 Owner 侧命令授权上判定：若确认不落到**连接边界**，这条连接会继续
-/// 按旧清单收到该 Export 的 `resource.event`（本用例的负向对照就是删掉 `node_reauth` 的调用）。
-///
-/// 关闭语义也是用例的一部分：收窄不是撤销，必须以 **1000（正常关闭）**关闭、且全程不给对端
-/// `node.trust.revoked`——合规客户端把 4410 与那条消息都读成「停止重连」（`NODE_LINK_PROTOCOL.md`
-/// §15、§14.2），复用撤销路径会把「重连取新 catalog」变成「已被撤销、不再重连」。
-#[test]
-fn a_narrowing_repair_closes_the_live_attachment() {
-    support::block_on(async {
-        let chain = Chain::up_to_approval("e2e-repair").await;
-        let owner = &chain.owner;
-        let mut client = chain.connect().await;
-
-        // ① 重新配对之前：本次点名清单里的 Export 可见（与主链同一个三条件判定点）。
-        client.step("catalog.subscribe");
-        client
-            .send("catalog.subscribe", json!({ "knownRevision": null }))
-            .await;
-        let snapshot = client.expect("catalog.snapshot").await;
-        let visible: Vec<&str> = snapshot["body"]["exports"]
-            .as_array()
-            .expect("exports 数组")
-            .iter()
-            .map(|entry| entry["exportId"].as_str().expect("exportId"))
-            .collect();
-        assert_eq!(visible, vec![EXPORT_VISIBLE], "收窄之前：{snapshot}");
-
-        // ② 在该 Export 上建立一条**活的** attachment：会话 → attach → subscribe → 收到一条正文事件。
-        client.step("session.create");
-        client
-            .send(
-                "command.submit",
-                session_create_body(
-                    &support::nodelink::uuid_text(),
-                    EXPORT_VISIBLE,
-                    WORKSPACE_ALIAS,
-                ),
-            )
-            .await;
-        let _ = client.expect("command.accepted").await;
-        let terminal = client.expect("command.terminal").await;
-        assert_eq!(terminal["body"]["terminal"]["status"], json!("completed"));
-        let session = terminal["body"]["terminal"]["result"]["remoteSessionRef"].clone();
-        let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
-
-        client.step("resource.attach");
-        client
-            .send("resource.attach", json!({ "remoteSessionRef": session }))
-            .await;
-        let attached = client.expect("resource.attached").await;
-        let attachment = json!({
-            "attachmentId": attached["body"]["attachmentId"],
-            "attachmentGeneration": attached["body"]["attachmentGeneration"],
-        });
-
-        client.step("resource.subscribe");
-        client
-            .send(
-                "resource.subscribe",
-                json!({
-                    "attachmentId": attachment["attachmentId"],
-                    "attachmentGeneration": attachment["attachmentGeneration"],
-                    "cursor": null,
-                }),
-            )
-            .await;
-        let _ = client.expect("resource.snapshot_begin").await;
-        let _ = client.expect("resource.snapshot_chunk").await;
-        let _ = client.expect("resource.snapshot_end").await;
-
-        let marker = "marker-before-repair-71bd";
-        client.step("session.prompt");
-        client
-            .send(
-                "command.submit",
-                session_prompt_body(
-                    &support::nodelink::uuid_text(),
-                    &session,
-                    &attachment,
-                    marker,
-                ),
-            )
-            .await;
-        let _ = client.expect("command.accepted").await;
-        assert_eq!(owner.release_events(marker), 2, "delta + turn 终态");
-        owner
-            .broker
-            .pump(&session_key(&session_id))
-            .await
-            .expect("提交后端事件");
-        // 会话状态机先行的 `turn.queued`/`turn.started` 也走 `resource.event`，因此要等到带本次 marker 的
-        // 正文事件才算「这条 attachment 真的在收事件」。
-        loop {
-            let candidate = client.expect("resource.event").await;
-            if candidate["body"]["payload"]["view"]
-                .to_string()
-                .contains(marker)
-            {
-                break;
-            }
-        }
-
-        // ③ 用更窄的清单（空 = 无可见）重新配对同一节点并确认：全程不 revoke。
-        let (ticket, confirmed) = chain.repair_and_confirm(json!([]), 0x71).await;
-        assert_eq!(
-            confirmed["nodeId"],
-            json!(ACCESS_NODE),
-            "重新配对必须落在同一节点身份上（没有 revoke、也没有新 nodeId）：{confirmed}"
-        );
-        assert_eq!(
-            confirmed["exportIds"],
-            json!([]),
-            "本次确认的清单必须如实回显（空清单 = 看不到任何 Export）：{confirmed}"
-        );
-
-        // ④ 授权变化必须落到连接边界：既有连接被关闭，新连接上的判定全部按已提交的信任行重算。
-        // 但该节点并未撤销，因此这里**既没有** `node.trust.revoked` 推送，**也不用** 4410：关闭是以
-        // 1000（正常关闭）发出的「重连取新 catalog」信号。若确认不作废连接，这条连接会继续收到该 Export
-        // 的 `resource.event`——超时即「连接仍然活着」就是那个缺口。
-        client.step("repair close");
-        let code = tokio::time::timeout(std::time::Duration::from_secs(10), client.close_code())
-            .await
-            .expect(
-                "重新配对确认后既有连接必须被关闭（超时 = 连接仍然活着，收窄后的清单没有生效）",
-            );
-        assert_eq!(
-            code, 1000,
-            "重新配对不是撤销：必须以正常关闭（1000）发出，不能复用 4410「节点已撤销」"
-        );
-        // 全程不得出现撤销通知：`close_code` 把 close 帧之前的文本帧收进待取队列，因此「队列里没有
-        // `node.trust.revoked`」就是「对端在关闭前没收到撤销推送」的可观察等价断言（撤销路径会先 send
-        // 再 close，会话排空已入队消息后才发 close 帧，所以这条消息只能出现在这里）。
-        let revoked_notifications: Vec<&Value> = client
-            .pending()
-            .iter()
-            .filter(|message| message["type"] == json!("node.trust.revoked"))
-            .collect();
-        assert!(
-            revoked_notifications.is_empty(),
-            "重新配对不是撤销：对端不得收到 node.trust.revoked（收到就会停止重连）：{revoked_notifications:?}"
-        );
-
-        // ⑤ 同一身份重新握手：按已提交的空清单重算，catalog 为空（旧 attachment 无法在空清单下复活）。
-        let mut fresh = NodeLinkClient::connect_plain(owner.addr).await;
-        support::nodelink::handshake(
-            &mut fresh,
-            &chain.access,
-            &ticket,
-            &support::nodelink::nonce_text(0x73),
-        )
-        .await;
-        fresh.step("catalog.subscribe after repair");
-        fresh
-            .send("catalog.subscribe", json!({ "knownRevision": null }))
-            .await;
-        let snapshot = fresh.expect("catalog.snapshot").await;
-        assert_eq!(
-            snapshot["body"]["exports"],
-            json!([]),
-            "空清单必须对新连接立即生效：{snapshot}"
-        );
-        drop(fresh);
-
-        chain.owner.stop().await;
-    });
-}
 
 /// TLS `direct` 轮次：自签证书 + rustls，走完同一批配对/握手步骤（配对 HTTP 也在 TLS 之上）。
 #[test]
@@ -897,8 +44,6 @@ fn tls_direct_terminates_the_same_handshake() {
                 json!({
                     "mode": "owner",
                     "pairingUrl": null,
-                    "displayName": "Owner Node",
-                    "requestedGrants": GRANTS,
                 }),
             )
             .await;
@@ -927,10 +72,7 @@ fn tls_direct_terminates_the_same_handshake() {
 
         // ② 本地确认 + status approved。
         owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({ "pairingId": pairing_id, "grants": GRANTS, "exportIds": [] }),
-            )
+            .admin(Method::NodePairConfirm, json!({ "pairingId": pairing_id }))
             .await;
         let status = support::nodelink::status_request(
             &ticket,
@@ -956,12 +98,9 @@ fn tls_direct_terminates_the_same_handshake() {
             .await;
         let snapshot = client.expect("catalog.snapshot").await;
         assert_eq!(
-            snapshot["body"]["exports"]
-                .as_array()
-                .expect("exports")
-                .len(),
-            0,
-            "本用例没有创建 Export，快照因此是空集（握手与 catalog 都跑在 TLS 上）"
+            snapshot["body"]["agents"].as_array().expect("agents").len(),
+            1,
+            "catalog 快照必须携带配置声明的 Agent（握手与 catalog 都跑在 TLS 上）"
         );
         owner.stop().await;
     });
@@ -1027,20 +166,6 @@ impl Drop for TestCertificate {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
-}
-
-/// `link.ping` 往返：证明连接在拒绝/失败之后仍然处于合法状态。
-async fn ping(client: &mut NodeLinkClient, seed: u8) {
-    let nonce = support::nodelink::nonce_text_16(seed);
-    client.step("link.ping");
-    client.send("link.ping", json!({ "nonce": nonce })).await;
-    let pong = client.expect("link.pong").await;
-    assert_eq!(pong["body"]["nonce"], json!(nonce));
-}
-
-/// `remoteSessionRef.sessionId` → `SessionId`。
-fn session_key(session_id: &str) -> acp_core::model::SessionId {
-    acp_core::model::SessionId::new(session_id).expect("sessionId 是规范 uuid 文本")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1142,8 +267,8 @@ fn ac1_config_with_scenario(
         "[daemon]\ndata_dir = {dir:?}\n[identity]\nkeystore = \"ephemeral\"\n\
          [dev_mode]\nenabled = true\n\
          [storage]\npersist_deltas = true\n\
-         [[agents.profiles]]\nagent_id = \"codex\"\ndisplay_name = \"Codex\"\n\
-         command = \"{command}\"\nargs = [\"--scenario\", \"{scenario}\"]\nenv_allowlist = []\ndefault = true\n",
+         [agent]\ndefault = \"codex\"\n\
+         codex = [\"{command}\", \"--scenario\", \"{scenario}\"]\n",
         dir = data_dir.display(),
     );
     app::Config::from_toml(&text).expect("AC1 配置合法")
@@ -1218,7 +343,6 @@ async fn ac1_create_and_settle(
 fn ac1_the_composition_root_persists_node_level_events_without_session_identity() {
     use acp_core::model::{
         Actor, AgentId, AgentRef, CreateSessionRequest, Digest, ResolvedWorkspace, ResourceOrigin,
-        WorkspaceAlias,
     };
 
     support::block_on(async {
@@ -1242,20 +366,12 @@ fn ac1_the_composition_root_persists_node_level_events_without_session_identity(
             "组合根必须已接线 NodeEvents（否则节点级事件在 core 之前被丢弃）"
         );
 
-        // 种子导入 profile（fake ACP Agent），随后创建会话：`SessionBackendFactory::create` 会**惰性**
-        // 拉起真实子进程并完成 initialize，由此产生本进程实例唯一的一次 `agent.connected`。
-        assert_eq!(
-            composition.seed_if_needed().await.expect("种子导入"),
-            app::compose::SeedOutcome::Imported { count: 1 }
-        );
-
         let agent =
             AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
-        let workspace = ResolvedWorkspace::try_new(
-            WorkspaceAlias::new("project.one").expect("alias"),
-            data_dir.display().to_string(),
-        )
-        .expect("workspace");
+        let path = data_dir.display().to_string();
+        let workspace =
+            ResolvedWorkspace::try_new(acp_core::model::derive_directory_id(&path), path)
+                .expect("workspace");
         let request =
             CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
         let request_id = composition.ids().request_id();
@@ -1439,16 +555,14 @@ async fn ac1_prompt_once(
 ) -> acp_core::model::SessionId {
     use acp_core::model::{
         Actor, AgentId, AgentRef, ClientCommand, CommandKind, CommandPayload, CreateSessionRequest,
-        PromptContentBlock, ResolvedWorkspace, ResourceOrigin, ViewJson, WorkspaceAlias,
+        PromptContentBlock, ResolvedWorkspace, ResourceOrigin, ViewJson,
     };
 
     let agent =
         AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
-    let workspace = ResolvedWorkspace::try_new(
-        WorkspaceAlias::new("project.one").expect("alias"),
-        data_dir.display().to_string(),
-    )
-    .expect("workspace");
+    let path = data_dir.display().to_string();
+    let workspace = ResolvedWorkspace::try_new(acp_core::model::derive_directory_id(&path), path)
+        .expect("workspace");
     let request = CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
     let session = ac1_create_and_settle(
         composition,
@@ -1526,10 +640,6 @@ async fn ac1_composition_with_scenario(
     )
     .await
     .expect("组合根装配");
-    assert_eq!(
-        composition.seed_if_needed().await.expect("种子导入"),
-        app::compose::SeedOutcome::Imported { count: 1 }
-    );
     // 扇出接收端交回调用方持有：消费者缺席时队列满会丢弃（`EVENT_QUEUE_CAPACITY`），本节只断言落库，
     // 但保有接收端才是组合根在生产里的形态（`daemon` 把接收端交给 `ResourceRoute`）。
     (composition, fanout)
@@ -1856,10 +966,8 @@ fn ac1_config_with_request_dump(
     let text = format!(
         "[daemon]\ndata_dir = {dir:?}\n[identity]\nkeystore = \"ephemeral\"\n\
          [dev_mode]\nenabled = true\n\
-         [[agents.profiles]]\nagent_id = \"codex\"\ndisplay_name = \"Codex\"\n\
-         command = \"{command}\"\n\
-         args = [\"--scenario\", \"normal\", \"--dump-request-params\", {dump:?}]\n\
-         env_allowlist = []\ndefault = true\n",
+         [agent]\ndefault = \"codex\"\n\
+         codex = [\"{command}\", \"--scenario\", \"normal\", \"--dump-request-params\", {dump:?}]\n",
         dir = data_dir.display(),
     );
     app::Config::from_toml(&text).expect("cwd 用例配置合法")
@@ -1893,7 +1001,7 @@ fn ac1_dumped_request_rows(path: &std::path::Path) -> Vec<Value> {
 #[test]
 fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical() {
     use acp_core::model::{
-        AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin, WorkspaceAlias,
+        AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin,
     };
 
     support::block_on(async {
@@ -1946,16 +1054,11 @@ fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical
         )
         .await
         .expect("组合根装配");
-        assert_eq!(
-            composition.seed_if_needed().await.expect("种子导入"),
-            app::compose::SeedOutcome::Imported { count: 1 }
-        );
-
         // `ResolvedWorkspace` 直接给 canonical 原文：core 不重新解析，落盘与交给后端的是同一个取值。
         let agent =
             AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
         let workspace = ResolvedWorkspace::try_new(
-            WorkspaceAlias::new("project.one").expect("alias"),
+            acp_core::model::derive_directory_id(&canonical),
             canonical.clone(),
         )
         .expect("workspace");

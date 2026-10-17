@@ -38,7 +38,7 @@
         { "code": "resource.rate_limited", "retryable": true, "details": { "type": "object", "required": [], "additionalProperties": true, "properties": { "retryAfterMs": { "type": "integer", "minimum": 0, "maximum": 3600000 } } }, "delivery": "mvp" },
         { "code": "resource.backpressure", "retryable": true, "details": null, "delivery": "mvp" },
         { "code": "resource.result_too_large", "retryable": false, "details": null, "delivery": "mvp" },
-        { "code": "resource.remote_unavailable", "retryable": true, "details": { "type": "object", "required": ["reason"], "additionalProperties": true, "properties": { "ownerNodeId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }, "exportId": { "type": "string", "minLength": 1, "maxLength": 128 }, "reason": { "enum": ["owner_offline", "export_revoked"] } } }, "delivery": "mvp" },
+        { "code": "resource.remote_unavailable", "retryable": true, "details": { "type": "object", "required": ["reason"], "additionalProperties": true, "properties": { "ownerNodeId": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" }, "reason": { "enum": ["owner_offline"] } } }, "delivery": "mvp" },
         { "code": "internal.unavailable", "retryable": true, "details": null, "delivery": "mvp" }
       ],
       "closeCodes": [
@@ -70,9 +70,6 @@
         { "code": "nodelink.auth.node_unknown", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "nodelink.auth.node_revoked", "retryable": false, "details": null, "delivery": "mvp" },
         { "code": "nodelink.auth.catalog_revision_invalid", "retryable": false, "details": null, "delivery": "mvp" },
-        { "code": "nodelink.export.not_found", "retryable": false, "details": null, "delivery": "mvp" },
-        { "code": "nodelink.export.revoked", "retryable": false, "details": null, "delivery": "mvp" },
-        { "code": "nodelink.export.not_granted", "retryable": false, "details": { "type": "object", "required": [], "additionalProperties": true, "properties": { "parameter": { "type": "string", "minLength": 1, "maxLength": 128 } } }, "delivery": "mvp" },
         { "code": "nodelink.resource.attach_generation_stale", "retryable": true, "details": null, "delivery": "mvp" },
         { "code": "nodelink.resource.snapshot_unavailable", "retryable": true, "details": null, "delivery": "mvp" },
         { "code": "nodelink.resource.owner_unavailable", "retryable": true, "details": null, "delivery": "mvp" },

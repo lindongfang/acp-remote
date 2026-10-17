@@ -934,8 +934,6 @@ pub struct SessionModeChanged {
 pub struct SessionOriginOnlineChanged {
     #[serde(rename = "ownerNodeId")]
     pub owner_node_id: Uuid,
-    #[serde(rename = "exportId")]
-    pub export_id: NonEmptyText<256>,
     #[serde(rename = "originEpoch")]
     pub origin_epoch: Uuid,
     pub online: bool,

@@ -408,23 +408,34 @@ function decodeSnapshotChunk(parsed: JsonObject, body: unknown): WireDecodeResul
     for (const item of items) {
       if (!isObject(item)) return reject("field_type", "snapshot 元素不是对象");
       if (resource === "workspaces") {
-        if (!hasKeys(item, ["alias", "displayName"])) {
-          return reject("field_type", "workspaces 元素缺 alias/displayName");
+        if (!hasKeys(item, ["directoryId", "path"])) {
+          return reject("field_type", "workspaces 元素缺 directoryId/path");
         }
-        // `path` 是 feature `core.workspace-path.v1` 门控下的**可选**键：缺席表示未协商或未下发。
-        // 它一旦在场就必须是非空字符串——schema 里没有 `null` 这一档，`null`（或空串）说明对端把
-        // 「路径不可见」编码成了显式空值，客户端按 protocol.schema_invalid 拒收整条 chunk，
-        // 不得静默读成「这个目录没有路径」。
-        const path = item["path"];
-        if (path !== undefined && !isNonEmptyString(path)) {
-          return reject("field_type", "workspaces 元素的 path 既非缺席也非非空字符串");
+        if (!isNonEmptyString(item["directoryId"]) || !isNonEmptyString(item["path"])) {
+          return reject("field_type", "workspaces 元素的 directoryId/path 必须是非空字符串");
         }
       }
       if (resource === "agents" && !hasKeys(item, ["agentId", "displayName", "default"])) {
         return reject("field_type", "agents 元素缺 agentId/displayName/default");
       }
     }
-    return { ok: true, message: message as SyncSnapshotChunk };
+    const normalized = items.map((item) => {
+      if (!isObject(item)) return item;
+      if (resource === "workspaces") {
+        const directoryId = String(item["directoryId"]);
+        const path = String(item["path"]);
+        const displayName = path.split(/[\\/]/).filter(Boolean).at(-1) ?? directoryId;
+        return { ...item, alias: directoryId, displayName };
+      }
+      if (resource === "sessions" && isObject(item["workspace"])) {
+        const directoryId = item["workspace"]["directoryId"];
+        if (typeof directoryId === "string") {
+          return { ...item, workspace: { ...item["workspace"], alias: directoryId, displayName: directoryId } };
+        }
+      }
+      return item;
+    });
+    return { ok: true, message: { ...message, body: { ...inner, items: normalized } } as unknown as SyncSnapshotChunk };
   });
 }
 

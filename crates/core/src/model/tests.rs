@@ -3,7 +3,6 @@
 //!
 //! 这里的断言只依赖公开 API（含 crate 内部可见的模块路径），不依赖进程 cwd，也不读写数据库。
 
-use std::path::Path;
 use std::str::FromStr;
 
 use super::*;
@@ -110,14 +109,6 @@ fn uuid_ids_accept_canonical_and_reject_everything_else() {
 
 #[test]
 fn spec_ids_follow_their_own_patterns() {
-    assert!(ExportId::new("acp.raw-payload_v1").is_ok());
-    assert_eq!(ExportId::new("has space"), Err(InvalidValue::ExportId));
-    assert_eq!(ExportId::new(""), Err(InvalidValue::ExportId));
-    assert_eq!(ExportId::new(&"a".repeat(129)), Err(InvalidValue::ExportId));
-
-    assert!(ImportId::new("office-1").is_ok());
-    assert_eq!(ImportId::new("office/1"), Err(InvalidValue::ImportId));
-
     assert!(WorkspaceAlias::new("work-pc.1").is_ok());
     // alias 必须以小写字母或数字开头（大写与 `-` 开头都不行）。
     assert_eq!(
@@ -184,11 +175,6 @@ fn entity_ref_exposes_kind_and_target_id_for_storage_columns() {
         request: request_id(),
     };
     assert_eq!(detached.target_id(), UUID_C);
-
-    assert_eq!(
-        EntityRef::Export(ExportId::new("exp").expect("export id")).to_string(),
-        "export:exp"
-    );
 
     // §3.1：`Provider(String)` 的 token 必须能作审计/仓储的 `target_kind` 与 `target_id` 落库。
     let provider = EntityRef::Provider("openai".to_owned());
@@ -1361,11 +1347,7 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
     );
 
     let owner = NodeId::from_str(UUID_C).expect("node");
-    let remote = RemoteSessionRef::new(
-        owner.clone(),
-        ExportId::new("exp").expect("export"),
-        session_id(),
-    );
+    let remote = RemoteSessionRef::new(owner.clone(), session_id());
     let delivery = CommittedDelivery::Imported {
         session: remote,
         origin: OriginEventRef::new(owner, epoch, EventId::from_str(UUID_B).expect("event id")),
@@ -1379,11 +1361,7 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
 
     // origin 必须属于该会话的 Owner。
     let foreign = CommittedDelivery::Imported {
-        session: RemoteSessionRef::new(
-            NodeId::from_str(UUID_A).expect("node"),
-            ExportId::new("exp").expect("export"),
-            session_id(),
-        ),
+        session: RemoteSessionRef::new(NodeId::from_str(UUID_A).expect("node"), session_id()),
         origin: OriginEventRef::new(
             NodeId::from_str(UUID_B).expect("node"),
             OriginEpoch::from_str(UUID_C).expect("epoch"),
@@ -1421,42 +1399,6 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
 }
 
 // ---------------------------------------------------------------- §3.5 身份/信任/审计
-
-#[test]
-fn scope_and_grant_sets_validate_and_dedup() {
-    let mut scopes = ScopeSet::empty();
-    assert!(scopes.insert("session.prompt").expect("insert"));
-    assert!(!scopes.insert("session.prompt").expect("re-insert"));
-    assert_eq!(scopes.len(), 1);
-    assert!(scopes.contains("session.prompt"));
-    assert_eq!(
-        scopes.insert("Session.Prompt"),
-        Err(InvalidValue::ScopeName)
-    );
-    assert_eq!(
-        ScopeSet::try_from_iter(["a b"]),
-        Err(InvalidValue::ScopeName)
-    );
-    assert!(ScopeSet::default().is_empty());
-    let set = ScopeSet::try_from_iter(["session.list", "session.read"]).expect("scopes");
-    assert_eq!(
-        set.iter().collect::<Vec<_>>(),
-        vec!["session.list", "session.read"]
-    );
-
-    let grants =
-        GrantSet::try_from_iter(["grant.observe", "grant.configure-session"]).expect("grants");
-    assert_eq!(grants.len(), 2);
-    assert_eq!(
-        GrantSet::try_from_iter(["observe"]),
-        Err(InvalidValue::GrantName)
-    );
-    assert_eq!(
-        GrantSet::try_from_iter(["grant."]),
-        Err(InvalidValue::GrantName)
-    );
-    assert!(scopes.insert("local.device.manage").is_ok());
-}
 
 #[test]
 fn actor_exposes_the_storage_identity_columns() {
@@ -1568,8 +1510,6 @@ fn node_record_requires_owner_endpoint_only_for_owner_kind() {
             "Work PC",
             kind,
             fingerprint(),
-            GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-            Vec::new(),
             NodeState::Paired,
             endpoint.map(str::to_owned),
             ts(T0),
@@ -1590,55 +1530,6 @@ fn node_record_requires_owner_endpoint_only_for_owner_kind() {
     let owner = build(NodeKind::Owner, Some("wss://owner.example")).expect("owner record");
     assert_eq!(owner.kind(), NodeKind::Owner);
     assert_eq!(owner.owner_endpoint(), Some("wss://owner.example"));
-    assert_eq!(owner.grants().len(), 1);
-    assert!(
-        owner.export_ids().is_empty(),
-        "未点名任何 Export 时清单为空（空清单合法）"
-    );
-}
-
-/// `exportIds` 是收窄型白名单（`design.md` D1 的条件③）：清单归一化为去重、字典序，空集合合法，
-/// 且与 `GrantSet`/`ScopeSet` 同款地静默去重（集合语义）。
-#[test]
-fn node_record_normalizes_the_nominated_export_ids() {
-    let build = |export_ids: Vec<&str>| {
-        NodeRecord::try_new(
-            NodeId::from_str(UUID_C).expect("node"),
-            "Work PC",
-            NodeKind::Access,
-            fingerprint(),
-            GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-            export_ids
-                .into_iter()
-                .map(|id| ExportId::new(id).expect("export id"))
-                .collect(),
-            NodeState::Paired,
-            None,
-            ts(T0),
-            None,
-            None,
-        )
-        .expect("节点记录")
-    };
-    let names = |record: &NodeRecord| -> Vec<String> {
-        record
-            .export_ids()
-            .iter()
-            .map(|id| id.as_str().to_owned())
-            .collect()
-    };
-
-    assert!(build(Vec::new()).export_ids().is_empty(), "空清单合法");
-    assert_eq!(
-        names(&build(vec!["export-b", "export-a"])),
-        vec!["export-a", "export-b"],
-        "清单按字典序排序（与落盘、回显同一份顺序）"
-    );
-    assert_eq!(
-        names(&build(vec!["export-b", "export-a", "export-b"])),
-        vec!["export-a", "export-b"],
-        "重复项按集合语义去重"
-    );
 }
 
 /// 配对登记方宣告的绑定（设备为 canonical origin，节点为本机 endpoint）。
@@ -1656,8 +1547,6 @@ fn pairing_record_state_machine_matches_timestamps() {
             PairingTarget::Device,
             state,
             None,
-            ScopeSet::empty(),
-            GrantSet::empty(),
             digest(),
             HOST_BINDING,
             ts(T0),
@@ -1701,25 +1590,6 @@ fn pairing_record_state_machine_matches_timestamps() {
     );
     let consumed = build(PairingState::Consumed, Some(T0), Some(T1), Some(T2)).expect("consumed");
     assert!(consumed.state().is_terminal());
-    // 设备配对不得携带 grants。
-    assert_eq!(
-        PairingRecord::try_new(
-            id.clone(),
-            PairingTarget::Device,
-            PairingState::Created,
-            None,
-            ScopeSet::empty(),
-            GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-            digest(),
-            HOST_BINDING,
-            ts(T0),
-            ts(T2),
-            None,
-            None,
-            None,
-        ),
-        Err(InvalidValue::Field)
-    );
     // 绑定是配对的事实之一：空值不是合法绑定（§11.2 第 1 条要求认领时逐字回显）。
     assert_eq!(
         PairingRecord::try_new(
@@ -1727,8 +1597,6 @@ fn pairing_record_state_machine_matches_timestamps() {
             PairingTarget::Device,
             PairingState::Created,
             None,
-            ScopeSet::empty(),
-            GrantSet::empty(),
             digest(),
             "",
             ts(T0),
@@ -1762,25 +1630,9 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
     );
 
     let pairing = PairingId::from_str(UUID_B).expect("pairing");
-    let claim = PairingClaim::try_new(
-        pairing.clone(),
-        peer.clone(),
-        ScopeSet::empty(),
-        GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-    )
-    .expect("node claim");
+    let claim = PairingClaim::try_new(pairing.clone(), peer.clone()).expect("node claim");
     assert_eq!(claim.pairing(), &pairing);
-    assert_eq!(claim.requested_grants().len(), 1);
-    // 节点配对不得携带 scopes。
-    assert_eq!(
-        PairingClaim::try_new(
-            pairing.clone(),
-            peer.clone(),
-            ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
-            GrantSet::empty(),
-        ),
-        Err(InvalidValue::Field)
-    );
+    assert_eq!(claim.peer().id(), peer.id());
 
     // 对端绑定是 claim 的回显值（设备为 `canonicalOrigin`、节点为 `endpoint`），空值不合法。
     assert_eq!(
@@ -1803,46 +1655,14 @@ fn pairing_claim_and_peer_are_typed_and_consistent() {
     )
     .expect("peer");
     assert!(
-        PairingClaim::try_new(
-            pairing,
-            device_peer,
-            ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
-            GrantSet::empty()
-        )
-        .is_ok()
+        PairingClaim::try_new(pairing, device_peer).is_ok(),
+        "设备与节点配对都只携带身份，不带任何授权集合"
     );
 
-    let settlement = PairingSettlement::approved(
-        ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
-        GrantSet::empty(),
-    );
+    let settlement = PairingSettlement::approved();
     assert!(settlement.is_approved());
     settlement.validate().expect("settlement");
-    // 点名清单只属于批准：`approved` 默认空，`with_granted_export_ids` 归一化为去重、字典序。
-    assert_eq!(
-        settlement,
-        PairingSettlement::Approved {
-            granted_scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
-            granted_grants: GrantSet::empty(),
-            granted_export_ids: Vec::new(),
-        }
-    );
-    let nominated = settlement.with_granted_export_ids(vec![
-        ExportId::new("export-b").expect("export id"),
-        ExportId::new("export-a").expect("export id"),
-        ExportId::new("export-b").expect("export id"),
-    ]);
-    assert_eq!(
-        nominated,
-        PairingSettlement::Approved {
-            granted_scopes: ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
-            granted_grants: GrantSet::empty(),
-            granted_export_ids: vec![
-                ExportId::new("export-a").expect("export id"),
-                ExportId::new("export-b").expect("export id"),
-            ],
-        }
-    );
+    assert_eq!(settlement, PairingSettlement::Approved);
     let rejected = PairingSettlement::rejected(Some("user said no")).expect("rejected");
     assert!(!rejected.is_approved());
     assert_eq!(
@@ -1916,219 +1736,6 @@ fn audit_record_carries_no_content_and_closed_action_set() {
 // ---------------------------------------------------------------- §3.5 Export/Import
 
 #[test]
-fn export_record_checks_defaults_and_uniqueness() {
-    let alias = WorkspaceAlias::new("work-pc").expect("alias");
-    let other = WorkspaceAlias::new("second").expect("alias");
-    let template_workspace = alias.clone();
-    let template = ExportTemplate::try_new(
-        TemplateId::new("tpl.1").expect("template id"),
-        "Default",
-        template_workspace,
-        vec![
-            TemplateParam::try_new(
-                ParamName::new("branch").expect("param"),
-                TemplateParamType::String,
-                true,
-                Some("^[a-z]+$".to_owned()),
-                None,
-            )
-            .expect("param"),
-        ],
-    )
-    .expect("template");
-
-    let build = |aliases: Vec<WorkspaceAliasEntry>,
-                 default_alias: WorkspaceAlias,
-                 templates: Vec<ExportTemplate>,
-                 default_template: TemplateId| {
-        ExportRecord::try_new(
-            ExportId::new("exp").expect("export id"),
-            "My Export",
-            vec![AgentId::new("codex").expect("agent")],
-            aliases,
-            default_alias,
-            templates,
-            default_template,
-            GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-            CachePolicy::NoContentCache,
-            ts(T0),
-            None,
-        )
-    };
-
-    let entry = WorkspaceAliasEntry::try_new(alias.clone(), "Work PC").expect("entry");
-    let record = build(
-        vec![entry.clone()],
-        alias.clone(),
-        vec![template.clone()],
-        TemplateId::new("tpl.1").expect("template id"),
-    )
-    .expect("export record");
-    assert_eq!(record.export_id().as_str(), "exp");
-    assert_eq!(record.agent_ids().len(), 1);
-    assert_eq!(record.workspace_aliases().len(), 1);
-    assert_eq!(record.default_workspace_alias(), &alias);
-    assert_eq!(record.templates().len(), 1);
-    assert_eq!(record.cache_policy(), CachePolicy::NoContentCache);
-    assert!(!record.is_revoked());
-    assert!(record.revoked_at().is_none());
-
-    // 空集合、重复项、默认值不在集合内都必须失败。
-    assert_eq!(
-        build(
-            Vec::new(),
-            alias.clone(),
-            vec![template.clone()],
-            TemplateId::new("tpl.1").expect("id")
-        ),
-        Err(InvalidValue::Empty)
-    );
-    assert_eq!(
-        build(
-            vec![entry.clone(), entry.clone()],
-            alias.clone(),
-            vec![template.clone()],
-            TemplateId::new("tpl.1").expect("id")
-        ),
-        Err(InvalidValue::Field)
-    );
-    assert_eq!(
-        build(
-            vec![entry.clone()],
-            other.clone(),
-            vec![template.clone()],
-            TemplateId::new("tpl.1").expect("id")
-        ),
-        Err(InvalidValue::Field)
-    );
-    assert_eq!(
-        build(
-            vec![entry.clone()],
-            alias.clone(),
-            vec![template.clone()],
-            TemplateId::new("tpl.2").expect("id")
-        ),
-        Err(InvalidValue::Field)
-    );
-    // template 的 workspaceAlias 必须已声明。
-    let stray = ExportTemplate::try_new(
-        TemplateId::new("tpl.2").expect("id"),
-        "Stray",
-        other,
-        Vec::new(),
-    )
-    .expect("template");
-    assert_eq!(
-        build(
-            vec![entry],
-            alias.clone(),
-            vec![stray],
-            TemplateId::new("tpl.2").expect("id")
-        ),
-        Err(InvalidValue::Field)
-    );
-    // 参数名重复。
-    let param = TemplateParam::try_new(
-        ParamName::new("p").expect("param"),
-        TemplateParamType::Boolean,
-        false,
-        None,
-        None,
-    )
-    .expect("param");
-    assert_eq!(
-        ExportTemplate::try_new(
-            TemplateId::new("tpl.3").expect("id"),
-            "Dup",
-            alias,
-            vec![param.clone(), param],
-        ),
-        Err(InvalidValue::Field)
-    );
-    // pattern 只允许 string；enum 成员类型必须一致且非空。
-    assert_eq!(
-        TemplateParam::try_new(
-            ParamName::new("p").expect("param"),
-            TemplateParamType::Integer,
-            false,
-            Some("x".to_owned()),
-            None,
-        ),
-        Err(InvalidValue::Field)
-    );
-    assert_eq!(
-        TemplateParam::try_new(
-            ParamName::new("p").expect("param"),
-            TemplateParamType::String,
-            false,
-            None,
-            Some(vec![TemplateParamValue::Integer(1)]),
-        ),
-        Err(InvalidValue::Field)
-    );
-    assert_eq!(
-        TemplateParam::try_new(
-            ParamName::new("p").expect("param"),
-            TemplateParamType::String,
-            false,
-            None,
-            Some(Vec::new()),
-        ),
-        Err(InvalidValue::Empty)
-    );
-}
-
-#[test]
-fn import_record_requires_wss_endpoint_and_unique_exports() {
-    let export = ExportId::new("exp").expect("export id");
-    let record = ImportRecord::try_new(
-        ImportId::new("office").expect("import id"),
-        "wss://owner.example/node-link/v1",
-        NodeId::from_str(UUID_C).expect("node"),
-        vec![export.clone()],
-        GrantSet::try_from_iter(["grant.observe"]).expect("grants"),
-    )
-    .expect("import record");
-    assert_eq!(record.import_id().as_str(), "office");
-    assert_eq!(record.owner_node_id().as_str(), UUID_C);
-    assert_eq!(record.export_ids(), std::slice::from_ref(&export));
-    assert_eq!(record.grants().len(), 1);
-
-    assert_eq!(
-        ImportRecord::try_new(
-            ImportId::new("office").expect("import id"),
-            "https://owner.example",
-            NodeId::from_str(UUID_C).expect("node"),
-            vec![export.clone()],
-            GrantSet::empty(),
-        ),
-        Err(InvalidValue::Endpoint)
-    );
-    assert_eq!(
-        ImportRecord::try_new(
-            ImportId::new("office").expect("import id"),
-            "wss://owner.example",
-            NodeId::from_str(UUID_C).expect("node"),
-            vec![export.clone(), export],
-            GrantSet::empty(),
-        ),
-        Err(InvalidValue::Field)
-    );
-    assert_eq!(
-        ImportRecord::try_new(
-            ImportId::new("office").expect("import id"),
-            "wss://owner.example",
-            NodeId::from_str(UUID_C).expect("node"),
-            Vec::new(),
-            GrantSet::empty(),
-        ),
-        Err(InvalidValue::Empty)
-    );
-}
-
-// ---------------------------------------------------------------- §3.6 后端/能力
-
-#[test]
 fn capability_set_dedups_and_template_selection_validates_keys() {
     let set: CapabilitySet = [
         Capability::try_new("tool.call", None).expect("capability"),
@@ -2180,7 +1787,6 @@ fn capability_set_dedups_and_template_selection_validates_keys() {
     assert_eq!(descriptor.origin.online(), None);
     let remote = ResourceOrigin::Remote {
         owner_node_id: NodeId::from_str(UUID_C).expect("node"),
-        export_id: ExportId::new("exp").expect("export"),
         origin_epoch: OriginEpoch::from_str(UUID_B).expect("epoch"),
         online: true,
     };
@@ -2210,8 +1816,8 @@ fn port_error_and_kinds_are_wired_to_the_model_errors() {
         PortError::Unavailable(UnavailableKind::StorageFull).to_string(),
         "unavailable: storage_full"
     );
-    assert_eq!(ConflictKind::ALL.len(), 9);
-    assert_eq!(UnavailableKind::ALL.len(), 9);
+    assert_eq!(ConflictKind::ALL.len(), 8);
+    assert_eq!(UnavailableKind::ALL.len(), 8);
     assert_eq!(ConflictKind::AlreadyResolved.as_str(), "already_resolved");
     assert_eq!(
         UnavailableKind::RemoteUnavailable.as_str(),
@@ -2297,291 +1903,20 @@ fn peer_public_key_is_validated_at_construction_and_derives_its_fingerprint() {
 }
 
 #[test]
-fn local_config_values_enforce_their_invariants() {
-    let binding =
-        ProviderEnvBinding::try_new("openai", "api_key", "OPENAI_API_KEY").expect("binding");
-    assert_eq!(binding.name(), "OPENAI_API_KEY");
-    // 保留前缀与非法变量名都不可构造。
-    assert!(ProviderEnvBinding::try_new("openai", "api_key", "ACP_REMOTE_TOKEN").is_err());
-    assert!(ProviderEnvBinding::try_new("openai", "api_key", "1BAD").is_err());
-    // Provider 标识有独立模式（^[A-Za-z0-9._-]{1,64}$）。
-    assert!(ProviderEnvBinding::try_new(&"a".repeat(65), "api_key", "KEY").is_err());
-
-    let profile = AgentProfile::try_new(
-        AgentId::new("codex").expect("agent id"),
-        "Codex CLI",
-        "codex",
-        vec!["--profile".to_owned(), "work".to_owned()],
-        vec!["OPENAI_API_KEY".to_owned()],
-        vec![binding.clone()],
-        true,
-        ts(T0),
-        ts(T1),
-    )
-    .expect("profile");
+fn agent_profile_is_a_bounded_command_declaration() {
+    let id = AgentId::new("omp").expect("agent id");
+    let profile =
+        AgentProfile::try_new(id.clone(), "omp", vec!["acp".to_owned()], true).expect("profile");
+    assert_eq!(profile.id(), &id);
+    assert_eq!(profile.display_name(), "omp");
+    assert_eq!(profile.command(), "omp");
+    assert_eq!(profile.args(), ["acp"]);
     assert!(profile.is_default());
-    assert_eq!(profile.env()[0].name(), "OPENAI_API_KEY");
-
-    // 绑定必须落在白名单内。
-    assert!(
-        AgentProfile::try_new(
-            AgentId::new("codex").expect("agent id"),
-            "Codex CLI",
-            "codex",
-            Vec::new(),
-            Vec::new(),
-            vec![binding.clone()],
-            false,
-            ts(T0),
-            ts(T1),
-        )
-        .is_err()
-    );
-    // 白名单本身不得含保留名或重复项。
-    assert!(
-        AgentProfile::try_new(
-            AgentId::new("codex").expect("agent id"),
-            "Codex CLI",
-            "codex",
-            Vec::new(),
-            vec!["ACP_REMOTE_TOKEN".to_owned()],
-            Vec::new(),
-            false,
-            ts(T0),
-            ts(T1),
-        )
-        .is_err()
-    );
-    assert!(
-        AgentProfile::try_new(
-            AgentId::new("codex").expect("agent id"),
-            "Codex CLI",
-            "codex",
-            Vec::new(),
-            vec!["KEY".to_owned(), "KEY".to_owned()],
-            Vec::new(),
-            false,
-            ts(T0),
-            ts(T1),
-        )
-        .is_err()
-    );
-
-    let workspace = WorkspaceRecord::try_new(
-        WorkspaceAlias::new("acp-remote").expect("alias"),
-        "Repo",
-        if cfg!(windows) {
-            "C:\\Project\\acp-remote"
-        } else {
-            "/srv/acp-remote"
-        },
-        ts(T0),
-        ts(T1),
-    )
-    .expect("workspace");
-    assert!(Path::new(workspace.canonical_path()).is_absolute());
-    assert!(
-        WorkspaceRecord::try_new(
-            WorkspaceAlias::new("acp-remote").expect("alias"),
-            "Repo",
-            "relative/path",
-            ts(T0),
-            ts(T1),
-        )
-        .is_err()
-    );
-
-    let reference = ProviderRef::try_new(
-        "openai",
-        ProviderRefKind::Provider,
-        "OpenAI",
-        vec!["api_key".to_owned()],
-        "keystore://provider/openai/1",
-        1,
-        ts(T1),
-    )
-    .expect("provider ref");
-    assert_eq!(reference.version(), 1);
-    assert_eq!(reference.kind().as_str(), "provider");
-    assert!(
-        ProviderRef::try_new(
-            "openai",
-            ProviderRefKind::Provider,
-            "OpenAI",
-            vec!["api_key".to_owned()],
-            "keystore://provider/openai/1",
-            0,
-            ts(T1),
-        )
-        .is_err()
-    );
-
-    assert!(SeedState::unseeded().seeded_at().is_none());
-    assert!(SeedState::try_new(false, Some(ts(T0))).is_err());
-    assert!(
-        SeedState::try_new(true, Some(ts(T0)))
-            .expect("seeded")
-            .is_seeded()
-    );
-
-    let secret = SecretValue::new("s3cret".to_owned());
-    assert_eq!(secret.len(), 6);
-    assert_eq!(secret.expose_secret(), "s3cret");
-
-    let resolved = ResolvedWorkspace::try_new(
-        WorkspaceAlias::new("acp-remote").expect("alias"),
-        workspace.canonical_path().to_owned(),
-    )
-    .expect("resolved");
-    assert_eq!(resolved.alias(), Some(workspace.alias()));
-    assert_eq!(resolved.canonical_path(), workspace.canonical_path());
-    // 客户端提供的目录：没有别名（`workspace-resolution`「别名只在解析出别名时写入」），
-    // 形状口径与 `try_new` 逐条相同。
-    let client_path = ResolvedWorkspace::at_path(workspace.canonical_path().to_owned())
-        .expect("client directory");
-    assert!(client_path.alias().is_none());
-    assert_eq!(client_path.canonical_path(), workspace.canonical_path());
-    assert!(ResolvedWorkspace::at_path("relative/path".to_owned()).is_err());
-    assert!(ResolvedWorkspace::at_path(String::new()).is_err());
-    assert!(
-        ResolvedWorkspace::try_new(
-            WorkspaceAlias::new("acp-remote").expect("alias"),
-            "relative/path".to_owned(),
-        )
-        .is_err()
-    );
-
-    // §3.7：Sync 快照 `workspaces` 的条目。`path` 的 `None` 是「该键缺席」（未协商
-    // `core.workspace-path.v1`），在场时必须是绝对路径形状且与记录同口径。
-    let entry =
-        WorkspaceCatalogEntry::try_new(workspace.alias().clone(), workspace.display_name(), None)
-            .expect("catalog entry without path");
-    assert_eq!(entry.alias(), workspace.alias());
-    assert_eq!(entry.display_name(), workspace.display_name());
-    assert!(entry.path().is_none());
-    let entry = WorkspaceCatalogEntry::try_new(
-        workspace.alias().clone(),
-        workspace.display_name(),
-        Some(workspace.canonical_path()),
-    )
-    .expect("catalog entry with path");
-    assert_eq!(entry.path(), Some(workspace.canonical_path()));
-    assert!(
-        WorkspaceCatalogEntry::try_new(
-            workspace.alias().clone(),
-            workspace.display_name(),
-            Some("relative/path"),
-        )
-        .is_err()
-    );
-    assert!(
-        WorkspaceCatalogEntry::try_new(workspace.alias().clone(), "", None).is_err(),
-        "显示名的下界与 WorkspaceRecord 相同"
-    );
-
-    // 建目录开关只可能挂在客户端提供的目录上：别名没有对应的变体，因此「别名 + 开关」不可表达——
-    // 这一点由类型保证，不靠运行时判定。三种来源各自携带什么按变体直接匹配（`WorkspaceSource` 不提供
-    // 路径/开关访问器，避免多出一条与变体形状同义的间接层）。
-    assert!(matches!(
-        WorkspaceSource::Alias(workspace.alias().clone()),
-        WorkspaceSource::Alias(alias) if &alias == workspace.alias()
-    ));
-    assert!(matches!(
-        WorkspaceSource::Path("D:\\work".to_owned()),
-        WorkspaceSource::Path(path) if path == "D:\\work"
-    ));
-    assert!(matches!(
-        WorkspaceSource::PathWithCreate("D:\\work".to_owned()),
-        WorkspaceSource::PathWithCreate(path) if path == "D:\\work"
-    ));
-
-    // §3.7：同一条 profile 内不得重复绑定同一个 `(provider_id, field)`。
-    assert!(
-        AgentProfile::try_new(
-            AgentId::new("codex").expect("agent id"),
-            "Codex CLI",
-            "codex",
-            Vec::new(),
-            vec!["OPENAI_API_KEY".to_owned()],
-            vec![binding.clone(), binding.clone()],
-            false,
-            ts(T0),
-            ts(T1),
-        )
-        .is_err()
-    );
-    // §3.7：`command` 有长度上界且不得含 NUL；每个 `arg` 同样不得含 NUL。
-    let profile_with = |command: &str, args: Vec<String>| {
-        AgentProfile::try_new(
-            AgentId::new("codex").expect("agent id"),
-            "Codex CLI",
-            command,
-            args,
-            Vec::new(),
-            Vec::new(),
-            false,
-            ts(T0),
-            ts(T1),
-        )
-    };
-    assert!(
-        profile_with(&"c".repeat(1025), Vec::new()).is_err(),
-        "command 超过上界必须被拒"
-    );
-    assert!(
-        profile_with("co\0dex", Vec::new()).is_err(),
-        "command 含 NUL 必须被拒"
-    );
-    assert!(
-        profile_with("codex", vec!["--profile\0x".to_owned()]).is_err(),
-        "arg 含 NUL 必须被拒"
-    );
-    // §3.7：`configured_fields` 必须各自是合法字段名且不重复。
-    assert!(
-        ProviderRef::try_new(
-            "openai",
-            ProviderRefKind::Provider,
-            "OpenAI",
-            vec!["api_key".to_owned(), "api_key".to_owned()],
-            "keystore://provider/openai/1",
-            1,
-            ts(T1),
-        )
-        .is_err(),
-        "重复的 configured_fields 必须被拒"
-    );
-    assert!(
-        ProviderRef::try_new(
-            "openai",
-            ProviderRefKind::Provider,
-            "OpenAI",
-            vec!["api key".to_owned()],
-            "keystore://provider/openai/1",
-            1,
-            ts(T1),
-        )
-        .is_err(),
-        "非法字段名必须被拒"
-    );
-    assert!(
-        ProviderRef::try_new(
-            &"p".repeat(65),
-            ProviderRefKind::Provider,
-            "OpenAI",
-            vec!["api_key".to_owned()],
-            "keystore://provider/openai/1",
-            1,
-            ts(T1),
-        )
-        .is_err(),
-        "超长 Provider id 必须被拒"
-    );
-    // §3.7：环境变量名有独立模式（`is_env_name`），超长即被拒。
-    assert!(ProviderEnvBinding::try_new("openai", "api_key", &"A".repeat(200)).is_err());
+    assert!(AgentProfile::try_new(id.clone(), "", Vec::new(), false).is_err());
+    assert!(AgentProfile::try_new(id.clone(), "omp", vec![String::new()], false).is_err());
+    assert!(AgentProfile::try_new(id, "omp", vec!["a\0b".to_owned()], false).is_err());
 }
 
-/// §3.1：`AgentSessionId` 是非空、≤512 字符、无 NUL 的 newtype；非法输入是具名错误
-/// （与「未取得标识」的 `None` 可区分——`None` 不是空串）。
 #[test]
 fn agent_session_id_is_bounded_and_nul_free() {
     assert_eq!(
@@ -2610,40 +1945,29 @@ fn agent_session_id_is_bounded_and_nul_free() {
     ));
 }
 
-/// §3.1：`WorkspaceRef` 只承载 `{ alias, displayName }`；`display_name` 走仓库对「展示名」类字段的
-/// 统一口径 `require_bounded(1, 128)`（与 `WorkspaceRecord::display_name` / `AgentRef` 相同）——
-/// 只数 Unicode 字符数，**不**查 NUL，NUL 校验只施加于路径与命令行类字段。
+/// §3.1：`WorkspaceRef` 只承载 `{ directoryId }`；标识必须是 32 字符小写十六进制。
 #[test]
-fn workspace_ref_bounds_the_display_name_and_keeps_both_fields() {
-    let alias = WorkspaceAlias::new("acp-remote").expect("alias");
+fn workspace_ref_carries_only_the_directory_id() {
+    let directory_id = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("directory id");
 
-    let workspace = WorkspaceRef::try_new(alias.clone(), "Repo").expect("workspace ref");
-    assert_eq!(workspace.alias(), &alias);
-    assert_eq!(workspace.alias().as_str(), "acp-remote");
-    assert_eq!(workspace.display_name(), "Repo");
+    let workspace = WorkspaceRef::new(directory_id.clone());
+    assert_eq!(workspace.directory_id(), &directory_id);
+    assert_eq!(
+        workspace.directory_id().as_str(),
+        "0123456789abcdef0123456789abcdef"
+    );
 
     assert_eq!(
-        WorkspaceRef::try_new(alias.clone(), ""),
-        Err(InvalidValue::Empty)
+        DirectoryId::new("0123456789ABCDEF0123456789abcdef"),
+        Err(InvalidValue::DirectoryId)
     );
     assert_eq!(
-        WorkspaceRef::try_new(alias.clone(), &"r".repeat(129)),
-        Err(InvalidValue::TooLong { max: 128 })
+        DirectoryId::new("0123456789abcdef"),
+        Err(InvalidValue::DirectoryId)
     );
     assert_eq!(
-        WorkspaceRef::try_new(alias.clone(), &"r".repeat(128))
-            .expect("上限内")
-            .display_name()
-            .chars()
-            .count(),
-        128
-    );
-    // 现行口径下展示名不查 NUL（NUL 只作用于路径/命令行字段）：构造成功，原文往返。
-    assert_eq!(
-        WorkspaceRef::try_new(alias, "Re\0po")
-            .expect("与 WorkspaceRecord 同口径")
-            .display_name(),
-        "Re\0po"
+        DirectoryId::new("0123456789abcdef0123456789abcdeg"),
+        Err(InvalidValue::DirectoryId)
     );
 }
 

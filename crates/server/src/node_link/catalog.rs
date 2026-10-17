@@ -1,32 +1,30 @@
 //! Node Link 的 catalog 投影与 `catalog.subscribe` 处理（`design.md` D4/D7、`NODE_LINK_PROTOCOL.md`
 //! §12.3）。
 //!
-//! 三条边界：
+//! 两条边界：
 //!
 //! - **实时投影，不做缓存副本**：每次 `catalog.subscribe` 都按当次持久化记录重新投影（core 的
-//!   `node_link_catalog_view`），因此撤销不需要等任何推送就立即生效（D7 的推送只负责「立即通知」）；
-//! - **可见性只有一个判定点**：[`visible_exports`] 是「哪些 Export 对该 Access 可见」的**唯一**实现
-//!   （`node-trust-export-ids/design.md` D1 的三条件：未撤销、`export.scopes ∩ 该节点信任记录 grants
-//!   ≠ ∅`、`exportId ∈ 该节点的 exportIds` 清单）。撤销也在这里生效——已撤销的 Export 不进 catalog；
-//! - **零参数 template 是发布前置**：首切片发布的 template 必须是 `params = []`（§12.3）。带参数的
-//!   Export 无法在本切片内忠实发布，因此整个投影**失败关闭**（回 `internal.unavailable` 并记日志），
-//!   既不静默丢弃该 Export，也不发布一个违反 MUST 的条目。
+//!   `node_link_catalog_view`），因此撤销不需要等任何推送就立即生效；
+//! - **没有 Export/授权集合过滤**：已配对且未撤销的节点看到同一份 Agent/目录/会话清单。
 //!
 //! 不读时钟、不查 SQLite、不调用平级 adapter：全部持久事实经 `core::use_cases` 取得。
 
+use std::str::FromStr as _;
 use std::sync::Arc;
 
-use acp_core::model::{ExportRecord, NodeRecord};
+use acp_core::model::SessionSummary;
 use acp_core::use_cases::NodeLinkCatalogView;
-use node_link_protocol::catalog::{CatalogSnapshot, CatalogSubscribe, ExportEntryList};
+use node_link_protocol::catalog::{
+    AgentEntryList, CatalogSession, CatalogSessionList, CatalogSnapshot, CatalogSubscribe,
+    DirectoryEntryList,
+};
 use node_link_protocol::common::{
-    ExportAgent, ExportEntry, ExportId, GrantList, GrantName, NoContentCache, NonEmptyText,
-    OpaqueRef, WorkspaceAlias, WorkspaceAliasEntry, WorkspaceTemplate,
+    AgentEntry, DecimalString, DirectoryEntry, DirectoryId, NonEmptyText, Nullable, OpaqueRef,
+    SessionState, Timestamp, Uuid,
 };
 use node_link_protocol::envelope::{Envelope, MessageType};
 use node_link_protocol::error::ErrorCode;
 use serde::de::DeserializeOwned;
-use std::str::FromStr as _;
 use tracing::{debug, warn};
 
 use crate::node_link::conn::{ConnectionHandle, MessageRoute, RouteOutcome, SendFault};
@@ -55,8 +53,6 @@ impl MessageRoute for CatalogRoute {
                 .reject(session, ErrorCode::ProtocolSchemaInvalid, message)
                 .await;
         };
-        // `knownRevision` 非空时同样回完整快照（`catalog.changed` 属 post_mvp），因此本层只记录它，
-        // 不据此裁剪投影。
         debug!(
             event = "node_link.catalog_subscribe",
             access_node_id = session.node_id().as_str(),
@@ -77,8 +73,13 @@ impl MessageRoute for CatalogRoute {
                     .await;
             }
         };
-        let entries = match project(&view) {
-            Ok(entries) => entries,
+        match project(&view) {
+            Ok(snapshot) => {
+                if let Err(fault) = session.send(MessageType::CatalogSnapshot, &snapshot) {
+                    self.report_send_fault(session, fault);
+                }
+                RouteOutcome::Claimed
+            }
             Err(fault) => {
                 warn!(
                     event = "node_link.catalog_projection_failed",
@@ -86,99 +87,14 @@ impl MessageRoute for CatalogRoute {
                     fault = fault.as_str(),
                     "the catalog projection cannot be published as-is"
                 );
-                return self
-                    .fail(session, ErrorCode::InternalUnavailable, message)
-                    .await;
+                self.fail(session, ErrorCode::InternalUnavailable, message)
+                    .await
             }
-        };
-        self.send_batches(session, &view, entries).await;
-        RouteOutcome::Claimed
+        }
     }
 }
 
 impl CatalogRoute {
-    /// 按协商批次大小分批发送（`catalogSnapshotBatchSize`；schema 的 `maxItems` 也是 500，限额只会更小）。
-    ///
-    /// 慢连接（高水位）时**停止**继续发送：调用方不能被一个慢连接拖住，剩余批次留给重连后的
-    /// 重新订阅（§2.5：先停读快照批次，持续过慢由会话的慢消费者看门狗断开）。
-    ///
-    /// 这个暂停**不是锁存**：`session.saturated()` 是每批现算的活判定（高水位进入、低水位退出，迟滞
-    /// 口径见 `conn::registry`），因此一旦该连接把队列排到低水位之下，饱和状态即被清除，其后每一次
-    /// `catalog.subscribe` 都会重新发出**全部分批**。把饱和当成「曾经慢过」的粘性标志会让这条连接
-    /// 永久停读快照批次。
-    async fn send_batches(
-        &self,
-        session: &ConnectionHandle,
-        view: &NodeLinkCatalogView,
-        entries: Vec<ExportEntry>,
-    ) {
-        let revision =
-            match node_link_protocol::common::DecimalString::parse(&view.revision.to_string()) {
-                Ok(revision) => revision,
-                Err(_) => {
-                    warn!(
-                        event = "node_link.catalog_revision_invalid",
-                        access_node_id = session.node_id().as_str(),
-                        "the catalog revision is not a decimal string"
-                    );
-                    return;
-                }
-            };
-        let batch_size = session.limits().catalog_snapshot_batch_size() as usize;
-        let batch_size = batch_size.max(1);
-        if entries.is_empty() {
-            // 没有可见 Export 时仍回一条空快照：对端需要知道「当前视图为空」，而不是等一个永不到来的批次。
-            if let Err(fault) = session.send(
-                MessageType::CatalogSnapshot,
-                &CatalogSnapshot {
-                    revision,
-                    exports: ExportEntryList::new(Vec::new()).expect("空批次合法"),
-                },
-            ) {
-                self.report_send_fault(session, fault);
-            }
-            return;
-        }
-        let total = entries.len();
-        for (index, batch) in entries.chunks(batch_size).enumerate() {
-            if index > 0 && session.saturated() {
-                debug!(
-                    event = "node_link.catalog_batch_paused",
-                    access_node_id = session.node_id().as_str(),
-                    pending_messages = session.pending().messages,
-                    "the connection is above the queue high water mark; the remaining batches are deferred"
-                );
-                return;
-            }
-            let body = CatalogSnapshot {
-                revision: revision.clone(),
-                exports: match ExportEntryList::new(batch.to_vec()) {
-                    Ok(list) => list,
-                    Err(_) => {
-                        warn!(
-                            event = "node_link.catalog_batch_invalid",
-                            access_node_id = session.node_id().as_str(),
-                            "a catalog batch exceeds the schema item limit"
-                        );
-                        return;
-                    }
-                },
-            };
-            if let Err(fault) = session.send(MessageType::CatalogSnapshot, &body) {
-                self.report_send_fault(session, fault);
-                return;
-            }
-        }
-        debug!(
-            event = "node_link.catalog_snapshot_sent",
-            access_node_id = session.node_id().as_str(),
-            revision = view.revision,
-            exports = total,
-            "the catalog snapshot was queued"
-        );
-    }
-
-    /// 投递失败的处置：高水位由会话的慢消费者看门狗负责，连接已结束则无需再做任何事。
     fn report_send_fault(&self, session: &ConnectionHandle, fault: SendFault) {
         match fault {
             SendFault::HighWater | SendFault::Closed => debug!(
@@ -195,7 +111,6 @@ impl CatalogRoute {
         }
     }
 
-    /// 消息级拒绝（连接保持可用）。
     async fn reject(
         &self,
         session: &ConnectionHandle,
@@ -211,7 +126,6 @@ impl CatalogRoute {
         RouteOutcome::Claimed
     }
 
-    /// 内部故障：显式回 `link.error`（不静默），连接保持可用。
     async fn fail(
         &self,
         session: &ConnectionHandle,
@@ -251,643 +165,86 @@ impl CatalogRoute {
     }
 }
 
-/// 可见性策略（`node-trust-export-ids/design.md` D1 的三条件，唯一的过滤点）：
-///
-/// ① 该 Export 未撤销；② `export.scopes ∩ 该节点信任记录 grants ≠ ∅`；
-/// ③ `exportId ∈ 该节点信任记录的 exportIds`（收窄型白名单，空清单 = 看不到任何 Export）。
-///
-/// 清单只能收窄不放宽：条件③ 只能删条目，不能绕过条件②。结果按 `exportId` 升序（批次内顺序稳定，
-/// 同一份投影在多次订阅里逐条一致）；节点信任行缺失或未配对时可见集为空（连接层已保证认证，这里只是
-/// 失败关闭）。
-pub(crate) fn visible_exports<'a>(
-    node: Option<&NodeRecord>,
-    exports: &'a [ExportRecord],
-) -> Vec<&'a ExportRecord> {
-    let Some(node) = node.filter(|row| row.state() == acp_core::model::NodeState::Paired) else {
-        return Vec::new();
-    };
-    let mut visible: Vec<&ExportRecord> = exports
-        .iter()
-        .filter(|export| !export.is_revoked())
-        .filter(|export| intersects(export, node))
-        .filter(|export| is_nominated(export, node))
-        .collect();
-    visible.sort_by(|left, right| left.export_id().as_str().cmp(right.export_id().as_str()));
-    visible
-}
-
-/// `export.scopes ∩ node.grants` 是否非空。
-fn intersects(export: &ExportRecord, node: &NodeRecord) -> bool {
-    export
-        .scopes()
-        .iter()
-        .any(|scope| node.grants().contains(scope))
-}
-
-/// 该 Export 是否被这条信任记录点名（`exportId ∈ node.exportIds`）。
-fn is_nominated(export: &ExportRecord, node: &NodeRecord) -> bool {
-    node.export_ids()
-        .iter()
-        .any(|allowed| allowed == export.export_id())
-}
-
-/// 单个 Export 是否对该 Access 节点可见（[`visible_exports`] 的单项形式，供 `resource.attach` 复用）。
-///
-/// 可见性只有一个判定点：这里的实现直接复用 [`visible_exports`]，因此 catalog 与 resource 不可能
-/// 对同一个 Export 给出不同结论。未知/未配对的节点、已撤销的 Export、与 grants 不相交的 Export，以及
-/// **不在该节点 `exportIds` 清单内**的 Export 都返回 `Ok(false)`；`Err` 只表示读视图失败（内部故障，
-/// 调用方按 `internal.unavailable` 处置）。
-pub(crate) async fn export_is_visible(
-    core: &acp_core::use_cases::UseCases,
-    node: &acp_core::model::NodeId,
-    export: &acp_core::model::ExportId,
-) -> Result<bool, acp_core::model::PortError> {
-    let view = core.node_link_catalog_view(node).await?;
-    Ok(visible_exports(view.node.as_ref(), &view.exports)
-        .iter()
-        .any(|record| record.export_id() == export))
-}
-
 /// 投影失败的原因（只用于结构化日志；对端一律看到 `internal.unavailable`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProjectionFault {
-    /// 某条导出记录的字段超出了 wire 的取值域（本机数据与协议不一致）。
+    /// 字段超出 wire 的取值域，或列表超过 schema 的 `maxItems`。
     Field,
-    /// 某个 template 带参数：首切片只能发布 `params = []`（§12.3）。
-    ParametricTemplate,
 }
 
 impl ProjectionFault {
     fn as_str(self) -> &'static str {
         match self {
             Self::Field => "field_out_of_range",
-            Self::ParametricTemplate => "parametric_template",
         }
     }
 }
 
-/// 把 core 的 Export 记录投影成 wire 条目（全字段，含首切片约束校验）。
-///
-/// 两处**派生的不透明引用**（`NODE_LINK_PROTOCOL.md` §12.3 只要求形状，内容由 Owner 定义：
-/// `LOCAL_ADMIN_PROTOCOL.md` §5.5 明说它们「不出现在本地方法里」而由 Owner 在发布时填充）：
-/// `agents[].capabilitiesRef` 取 `agentId`、`capabilityCeilingRef` 取 `exportId`。两者都是稳定、
-/// 对端只能原样回传的不透明串；本切片没有别的语义来源，因此不编造（见 WP5 handoff 的 G3 结论）。
-fn project(view: &NodeLinkCatalogView) -> Result<Vec<ExportEntry>, ProjectionFault> {
-    let mut entries = Vec::new();
-    for export in visible_exports(view.node.as_ref(), &view.exports) {
-        entries.push(project_entry(view, export)?);
-    }
-    Ok(entries)
+/// 把 core 的持久事实投影成 wire 快照（Agent / 目录 / 会话三类，均不含正文与路径）。
+fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFault> {
+    let revision =
+        DecimalString::parse(&view.revision.to_string()).map_err(|_| ProjectionFault::Field)?;
+    let agents = view
+        .agents
+        .iter()
+        .map(|descriptor| {
+            let agent_id = descriptor.agent.agent_id();
+            Ok(AgentEntry {
+                agent_id: node_link_protocol::common::AgentId::parse(agent_id.as_str())
+                    .map_err(|_| ProjectionFault::Field)?,
+                name: NonEmptyText::<128>::parse(descriptor.agent.name())
+                    .map_err(|_| ProjectionFault::Field)?,
+                capabilities_ref: OpaqueRef::parse(agent_id.as_str())
+                    .map_err(|_| ProjectionFault::Field)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ProjectionFault>>()?;
+    let directories = view
+        .directories
+        .iter()
+        .map(|record| {
+            Ok(DirectoryEntry {
+                directory_id: DirectoryId::parse(record.directory_id().as_str())
+                    .map_err(|_| ProjectionFault::Field)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ProjectionFault>>()?;
+    let sessions = view
+        .sessions
+        .iter()
+        .map(project_session)
+        .collect::<Result<Vec<_>, ProjectionFault>>()?;
+    Ok(CatalogSnapshot {
+        revision,
+        agents: AgentEntryList::new(agents).map_err(|_| ProjectionFault::Field)?,
+        directories: DirectoryEntryList::new(directories).map_err(|_| ProjectionFault::Field)?,
+        sessions: CatalogSessionList::new(sessions).map_err(|_| ProjectionFault::Field)?,
+    })
 }
 
-fn project_entry(
-    view: &NodeLinkCatalogView,
-    export: &ExportRecord,
-) -> Result<ExportEntry, ProjectionFault> {
-    let agents = export
-        .agent_ids()
-        .iter()
-        .map(|agent| {
-            // 名字来自本机 Agent 目录；目录里查不到（Agent 已被移除）时退回 agentId——它是
-            // 稳定值，不编造展示名。
-            let name = view
-                .agents
-                .iter()
-                .find(|descriptor| descriptor.agent.agent_id() == agent)
-                .map(|descriptor| descriptor.agent.name().to_owned())
-                .unwrap_or_else(|| agent.as_str().to_owned());
-            Ok(ExportAgent {
-                agent_id: node_link_protocol::common::AgentId::parse(agent.as_str())
+fn project_session(summary: &SessionSummary) -> Result<CatalogSession, ProjectionFault> {
+    Ok(CatalogSession {
+        session_id: Uuid::parse(summary.session_id().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
+        agent_id: node_link_protocol::common::AgentId::parse(summary.agent().agent_id().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
+        state: SessionState::from_str(summary.state().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
+        version: DecimalString::parse(&summary.version().get().to_string())
+            .map_err(|_| ProjectionFault::Field)?,
+        created_at: Timestamp::parse(summary.created_at().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
+        workspace_directory_id: match summary.workspace() {
+            Some(workspace) => Nullable::value(
+                DirectoryId::parse(workspace.directory_id().as_str())
                     .map_err(|_| ProjectionFault::Field)?,
-                name: NonEmptyText::<128>::parse(&name).map_err(|_| ProjectionFault::Field)?,
-                capabilities_ref: OpaqueRef::parse(agent.as_str())
-                    .map_err(|_| ProjectionFault::Field)?,
-            })
-        })
-        .collect::<Result<Vec<_>, ProjectionFault>>()?;
-    let workspace_aliases = export
-        .workspace_aliases()
-        .iter()
-        .map(|entry| {
-            Ok(WorkspaceAliasEntry {
-                alias: WorkspaceAlias::parse(entry.alias().as_str())
-                    .map_err(|_| ProjectionFault::Field)?,
-                display_name: NonEmptyText::<128>::parse(entry.display_name())
-                    .map_err(|_| ProjectionFault::Field)?,
-            })
-        })
-        .collect::<Result<Vec<_>, ProjectionFault>>()?;
-    let mut templates = Vec::with_capacity(export.templates().len());
-    for template in export.templates() {
-        if !template.params().is_empty() {
-            return Err(ProjectionFault::ParametricTemplate);
-        }
-        templates.push(WorkspaceTemplate {
-            template_id: node_link_protocol::common::TemplateId::parse(
-                template.template_id().as_str(),
-            )
-            .map_err(|_| ProjectionFault::Field)?,
-            display_name: NonEmptyText::<128>::parse(template.display_name())
-                .map_err(|_| ProjectionFault::Field)?,
-            workspace_alias: WorkspaceAlias::parse(template.workspace_alias().as_str())
-                .map_err(|_| ProjectionFault::Field)?,
-            params: Vec::new(),
-        });
-    }
-    let scopes = export
-        .scopes()
-        .iter()
-        .map(GrantName::from_str)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ProjectionFault::Field)?;
-    Ok(ExportEntry {
-        export_id: ExportId::parse(export.export_id().as_str())
-            .map_err(|_| ProjectionFault::Field)?,
-        display_name: NonEmptyText::<128>::parse(export.display_name())
-            .map_err(|_| ProjectionFault::Field)?,
-        agents,
-        workspace_aliases,
-        default_workspace_alias: WorkspaceAlias::parse(export.default_workspace_alias().as_str())
-            .map_err(|_| ProjectionFault::Field)?,
-        templates,
-        scopes: GrantList::new(scopes).map_err(|_| ProjectionFault::Field)?,
-        capability_ceiling_ref: OpaqueRef::parse(export.export_id().as_str())
-            .map_err(|_| ProjectionFault::Field)?,
-        cache_policy: NoContentCache,
-        revoked: export.is_revoked(),
+            ),
+            None => Nullable::null(),
+        },
     })
 }
 
 /// 解码消息 body（`Envelope` 的 body 是原始字节；失败按 schema 错误处理）。
 fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
     serde_json::from_str(message.body().get()).ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::local_admin::test_support::{FakeIds, TestWorld, test_public_key};
-    use crate::node_link::conn::registry::Outbound;
-    use crate::node_link::conn::{NodeLinkConfig, SessionLimits};
-    use acp_core::model::NodeState;
-    use node_link_protocol::common::{DecimalString, Uuid};
-    use node_link_protocol::envelope::ConnectionFields;
-    use serde_json::{Value, json};
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::sync::Arc;
-    use tokio::sync::mpsc;
-
-    fn timestamp(text: &str) -> acp_core::model::Timestamp {
-        acp_core::model::Timestamp::new(text).expect("固定时间戳")
-    }
-
-    fn node(grants: &[&str], export_ids: &[&str], state: NodeState) -> NodeRecord {
-        // `revoked_at` 与 `Revoked` 必须成对成立（模型不变量）。
-        let revoked_at =
-            (state == NodeState::Revoked).then(|| timestamp("2026-06-01T00:00:00.000Z"));
-        NodeRecord::try_new(
-            acp_core::model::NodeId::new("2ae1c07c-9242-46e9-a9d2-4ec58c130f49").expect("node id"),
-            "Office Access",
-            acp_core::model::NodeKind::Access,
-            test_public_key().fingerprint(),
-            acp_core::model::GrantSet::try_from_iter(grants.iter().copied()).expect("grants"),
-            export_ids
-                .iter()
-                .map(|id| acp_core::model::ExportId::new(id).expect("export id"))
-                .collect(),
-            state,
-            None,
-            timestamp("2026-01-01T00:00:00.000Z"),
-            None,
-            revoked_at,
-        )
-        .expect("节点记录")
-    }
-
-    /// 该节点点名了全部三个测试 Export（默认夹具：可见性只由 grants 与撤销状态区分）。
-    fn node_with_all_test_exports(grants: &[&str], state: NodeState) -> NodeRecord {
-        node(grants, &[E1, E2, E3], state)
-    }
-
-    fn export(id: &str, scopes: &[&str], revoked: bool) -> ExportRecord {
-        let alias = acp_core::model::WorkspaceAlias::new("project").expect("alias");
-        ExportRecord::try_new(
-            acp_core::model::ExportId::new(id).expect("export id"),
-            "Project Export",
-            vec![acp_core::model::AgentId::new("codex").expect("agent id")],
-            vec![
-                acp_core::model::WorkspaceAliasEntry::try_new(alias.clone(), "Project")
-                    .expect("alias entry"),
-            ],
-            alias.clone(),
-            vec![
-                acp_core::model::ExportTemplate::try_new(
-                    acp_core::model::TemplateId::new("template-1").expect("template id"),
-                    "Template",
-                    alias,
-                    Vec::new(),
-                )
-                .expect("template"),
-            ],
-            acp_core::model::TemplateId::new("template-1").expect("template id"),
-            acp_core::model::GrantSet::try_from_iter(scopes.iter().copied()).expect("scopes"),
-            acp_core::model::CachePolicy::NoContentCache,
-            timestamp("2026-01-01T00:00:00.000Z"),
-            revoked.then(|| timestamp("2026-02-01T00:00:00.000Z")),
-        )
-        .expect("Export 记录")
-    }
-
-    /// R51/R52 的可见性规则：**E2 与节点 grants 不相交即不可见**（2026-09-26 裁决的 (b)）。
-    #[test]
-    fn visibility_requires_a_non_empty_scopes_intersection_with_the_node_grants() {
-        let paired = node_with_all_test_exports(&["grant.observe"], NodeState::Paired);
-        let visible = export(
-            "11111111-1111-4111-8111-111111111111",
-            &["grant.observe", "grant.interact"],
-            false,
-        );
-        // E2：scopes 与该节点 grants 不相交（同一条 Export 对另一个节点可见与否只由 grants 决定）。
-        let disjoint = export(
-            "22222222-2222-4222-8222-222222222222",
-            &["grant.remote-work"],
-            false,
-        );
-        let exports = vec![visible.clone(), disjoint.clone()];
-        let kept = visible_exports(Some(&paired), &exports);
-        assert_eq!(kept.len(), 1, "只有相交的那一条可见");
-        assert_eq!(kept[0].export_id(), visible.export_id());
-
-        // 空 scopes、空 grants 都是不相交：空集与任何集合的交集为空。
-        assert!(
-            visible_exports(
-                Some(&node_with_all_test_exports(&[], NodeState::Paired)),
-                &exports
-            )
-            .is_empty()
-        );
-        assert!(
-            visible_exports(
-                Some(&node_with_all_test_exports(
-                    &["grant.observe"],
-                    NodeState::Paired
-                )),
-                &[export("33333333-3333-4333-8333-333333333333", &[], false)]
-            )
-            .is_empty()
-        );
-    }
-
-    /// R51/R52 的两条边界：已撤销的 Export 不进 catalog；节点行不存在或未配对时可见集为空。
-    #[test]
-    fn visibility_drops_revoked_exports_and_requires_a_paired_node() {
-        let paired = node_with_all_test_exports(&["grant.observe"], NodeState::Paired);
-        let live = export(
-            "11111111-1111-4111-8111-111111111111",
-            &["grant.observe"],
-            false,
-        );
-        let revoked = export(
-            "00000000-0000-4000-8000-000000000000",
-            &["grant.observe"],
-            true,
-        );
-        let exports = vec![revoked, live.clone()];
-        let kept = visible_exports(Some(&paired), &exports);
-        assert_eq!(kept.len(), 1, "已撤销的条目必须被过滤");
-        assert_eq!(kept[0].export_id(), live.export_id());
-
-        assert!(
-            visible_exports(None, &exports).is_empty(),
-            "未配对节点看不到任何 Export"
-        );
-        assert!(
-            visible_exports(
-                Some(&node_with_all_test_exports(
-                    &["grant.observe"],
-                    NodeState::Revoked
-                )),
-                &exports
-            )
-            .is_empty()
-        );
-    }
-
-    /// `design.md` D1 的条件③（收窄型白名单）：清单只能删可见条目，不能放宽条件②；空清单 = 空可见集；
-    /// 清单内但已撤销的 Export 仍不可见，且清单本身不被清理。
-    #[test]
-    fn visibility_narrows_to_the_nominated_export_ids_without_widening() {
-        let e1 = export(E1, &["grant.observe"], false);
-        let e2 = export(E2, &["grant.observe"], false);
-        let disjoint = export(E3, &["grant.remote-work"], false);
-        let exports = vec![e1.clone(), e2.clone(), disjoint];
-
-        // 只点名 E1：E2 虽然符合条件①②也不可见（收窄）。
-        let narrowed = visible_exports(
-            Some(&node(&["grant.observe"], &[E1], NodeState::Paired)),
-            &exports,
-        );
-        assert_eq!(
-            narrowed.len(),
-            1,
-            "清单外的 Export 必须被过滤：{narrowed:?}"
-        );
-        assert_eq!(narrowed[0].export_id(), e1.export_id());
-
-        // 空清单：一个都看不到（即使 scopes ∩ grants 非空）。
-        assert!(
-            visible_exports(
-                Some(&node(&["grant.observe"], &[], NodeState::Paired)),
-                &exports
-            )
-            .is_empty(),
-            "空清单 = 空可见集（不得默认放权）"
-        );
-
-        // 清单不能放宽条件②：点名了 E3 但 E3 与该节点 grants 不相交 → 仍不可见。
-        assert!(
-            visible_exports(
-                Some(&node(&["grant.observe"], &[E3], NodeState::Paired)),
-                &exports
-            )
-            .is_empty(),
-            "清单只能收窄：点名不能绕过 scopes ∩ grants"
-        );
-
-        // 清单内但已撤销：仍不可见（条件①优先），且清单条目本身不被级联清理。
-        let node_row = node(&["grant.observe"], &[E1, E2], NodeState::Paired);
-        let revoked_but_nominated = export(E2, &["grant.observe"], true);
-        let exports = [revoked_but_nominated, e1.clone()];
-        let kept = visible_exports(Some(&node_row), &exports);
-        assert_eq!(kept.len(), 1, "已撤销者即使被点名也不可见");
-        assert_eq!(kept[0].export_id(), e1.export_id());
-        assert_eq!(
-            node_row.export_ids(),
-            [
-                acp_core::model::ExportId::new(E1).expect("export id"),
-                acp_core::model::ExportId::new(E2).expect("export id")
-            ]
-            .as_slice(),
-            "可见性判定不得改写信任行的清单"
-        );
-    }
-
-    // ---------------------------------------------------------------------------------------------
-    // 路由层用例：真实 `ConnectionHandle` 的出站队列 + 端口替身世界（与 `resource/tests.rs` 同一模式）
-    // ---------------------------------------------------------------------------------------------
-
-    /// 测试扮演的 Access Node（与本模块 `node()` 构造的信任行同源）。
-    const ACCESS_NODE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-    const CONNECTION: &str = "5ae1c07c-9242-46e9-a9d2-4ec58c130f4c";
-    const MESSAGE_ID: &str = "6ae1c07c-9242-46e9-a9d2-4ec58c130f4d";
-    const E1: &str = "11111111-1111-4111-8111-111111111111";
-    const E2: &str = "22222222-2222-4222-8222-222222222222";
-    const E3: &str = "33333333-3333-4333-8333-333333333333";
-
-    /// 一条已配对的 Access 连接（`grant.observe`）+ 可配的协商批次大小 + 真实路由。
-    struct Fixture {
-        world: TestWorld,
-        handle: Arc<ConnectionHandle>,
-        outbound: mpsc::Receiver<Outbound>,
-    }
-
-    impl Fixture {
-        /// 默认可见集为空（用例自己 `seed_export`）。
-        fn new(catalog_snapshot_batch_size: u64) -> Self {
-            let world = TestWorld::new();
-            world.trust.seed_node(node_with_all_test_exports(
-                &["grant.observe"],
-                NodeState::Paired,
-            ));
-            let (handle, outbound) = ConnectionHandle::new(
-                Uuid::parse(CONNECTION).expect("connection id"),
-                acp_core::model::NodeId::new(ACCESS_NODE).expect("node id"),
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                SessionLimits::negotiate(&NodeLinkConfig {
-                    catalog_snapshot_batch_size,
-                    ..NodeLinkConfig::default()
-                }),
-                Arc::new(FakeIds::default()),
-            );
-            Self {
-                world,
-                handle,
-                outbound,
-            }
-        }
-
-        fn route(&self) -> CatalogRoute {
-            CatalogRoute::new(Arc::clone(&self.world.core))
-        }
-
-        /// 认证后 `catalog.subscribe` 的信封（连接字段按 §2.2 必需）。
-        fn envelope(&self, body: Value) -> Envelope {
-            Envelope::new(
-                MessageType::CatalogSubscribe,
-                Uuid::parse(MESSAGE_ID).expect("message id"),
-                Some(ConnectionFields {
-                    connection_id: Uuid::parse(CONNECTION).expect("connection id"),
-                    connection_sequence: DecimalString::parse("1").expect("sequence"),
-                }),
-                serde_json::value::RawValue::from_string(body.to_string()).expect("body"),
-            )
-            .expect("信封")
-        }
-
-        /// 发一条 `catalog.subscribe` 并排空出站队列（只看本轮新增的那几帧）。
-        async fn subscribe(&mut self, route: &CatalogRoute) -> Vec<Value> {
-            let envelope = self.envelope(json!({ "knownRevision": null }));
-            assert_eq!(
-                route.route(&self.handle, &envelope).await,
-                RouteOutcome::Claimed
-            );
-            let mut frames = Vec::new();
-            while let Ok(outbound) = self.outbound.try_recv() {
-                frames.push(serde_json::from_str::<Value>(&outbound.text).expect("帧是合法 JSON"));
-            }
-            frames
-        }
-    }
-
-    /// 一帧 `catalog.snapshot` 里按顺序的 `exportId`。
-    fn export_ids(frame: &Value) -> Vec<&str> {
-        frame["body"]["exports"]
-            .as_array()
-            .expect("exports 是数组")
-            .iter()
-            .map(|entry| entry["exportId"].as_str().expect("exportId"))
-            .collect()
-    }
-
-    /// （F1）：路由级投影只含与该节点 grants 相交的 Export，且条目字段齐全。
-    #[tokio::test]
-    async fn the_catalog_snapshot_carries_every_field_of_the_visible_export_only() {
-        let mut fixture = Fixture::new(500);
-        fixture
-            .world
-            .exports
-            .seed_export(export(E1, &["grant.observe", "grant.interact"], false));
-        // E2 的 scopes 与该节点 grants（`grant.observe`）不相交 → 同一个节点看不到它。
-        fixture
-            .world
-            .exports
-            .seed_export(export(E2, &["grant.remote-work"], false));
-        fixture.world.audit.set_watermark(7);
-        let route = fixture.route();
-
-        let frames = fixture.subscribe(&route).await;
-        assert_eq!(frames.len(), 1, "可见集只有一条 → 只回一帧");
-        assert_eq!(frames[0]["type"], "catalog.snapshot");
-        assert_eq!(
-            frames[0]["body"]["revision"], "7",
-            "catalogRevision 是审计写集水位（`AuditStore::watermark`）"
-        );
-        let entries = frames[0]["body"]["exports"].as_array().expect("exports");
-        assert_eq!(entries.len(), 1, "不相交的 Export 不进快照");
-        let entry = &entries[0];
-        assert_eq!(entry["exportId"], E1);
-        assert_eq!(entry["displayName"], "Project Export");
-        assert_eq!(entry["agents"][0]["agentId"], "codex");
-        assert_eq!(
-            entry["agents"][0]["name"], "Codex",
-            "名字来自本机 Agent 目录"
-        );
-        assert_eq!(entry["agents"][0]["capabilitiesRef"], "codex");
-        assert_eq!(entry["workspaceAliases"][0]["alias"], "project");
-        assert_eq!(entry["workspaceAliases"][0]["displayName"], "Project");
-        assert_eq!(entry["defaultWorkspaceAlias"], "project");
-        assert_eq!(entry["templates"][0]["templateId"], "template-1");
-        assert_eq!(entry["templates"][0]["displayName"], "Template");
-        assert_eq!(entry["templates"][0]["workspaceAlias"], "project");
-        assert_eq!(
-            entry["templates"][0]["params"],
-            json!([]),
-            "首切片 template 零参数（§12.3）"
-        );
-        // `GrantSet` 按字典序迭代，因此顺序是稳定的模型事实。
-        assert_eq!(entry["scopes"], json!(["grant.interact", "grant.observe"]));
-        assert_eq!(entry["capabilityCeilingRef"], E1);
-        assert_eq!(entry["cachePolicy"], "no-content-cache");
-        assert_eq!(entry["revoked"], false);
-    }
-
-    /// （F1）：协商批次=2、可见 3 条 → 恰好两帧，批次内与批次间都按 `exportId` 升序稳定。
-    #[tokio::test]
-    async fn the_catalog_snapshot_is_batched_by_the_negotiated_size_in_a_stable_order() {
-        let mut fixture = Fixture::new(2);
-        // 种子顺序刻意与 `exportId` 顺序不同：投影顺序不能取决于记录的插入顺序。
-        fixture
-            .world
-            .exports
-            .seed_export(export(E3, &["grant.observe"], false));
-        fixture
-            .world
-            .exports
-            .seed_export(export(E1, &["grant.observe"], false));
-        fixture
-            .world
-            .exports
-            .seed_export(export(E2, &["grant.observe"], false));
-        let route = fixture.route();
-
-        let first = fixture.subscribe(&route).await;
-        assert_eq!(first.len(), 2, "3 条可见 Export 按批次 2 切成两帧");
-        assert!(
-            first
-                .iter()
-                .all(|frame| frame["type"] == "catalog.snapshot")
-        );
-        assert_eq!(
-            first.iter().map(export_ids).collect::<Vec<_>>(),
-            vec![vec![E1, E2], vec![E3]]
-        );
-        // 两次订阅给出逐帧一致的顺序（接收方按帧序拼接，顺序因此是协议事实）。
-        let second = fixture.subscribe(&route).await;
-        assert_eq!(
-            second.iter().map(export_ids).collect::<Vec<_>>(),
-            first.iter().map(export_ids).collect::<Vec<_>>()
-        );
-    }
-
-    /// （F1）：空可见集仍回**一帧**空快照——对端需要知道「当前视图为空」，而不是等一个永不到来
-    /// 的批次。
-    #[tokio::test]
-    async fn an_empty_visible_set_yields_exactly_one_empty_snapshot() {
-        let mut fixture = Fixture::new(500);
-        fixture
-            .world
-            .exports
-            .seed_export(export(E1, &["grant.remote-work"], false));
-        let route = fixture.route();
-
-        let frames = fixture.subscribe(&route).await;
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0]["type"], "catalog.snapshot");
-        assert_eq!(frames[0]["body"]["exports"], json!([]));
-    }
-
-    /// `design.md` D1 的条件③（路由层）：信任行只点名 E1 时，E2/E3 即使 scopes 相交也不进快照；
-    /// 空清单给出一个空快照（而不是省略帧）。
-    #[tokio::test]
-    async fn the_catalog_snapshot_narrows_to_the_nominated_export_ids() {
-        let mut fixture = Fixture::new(500);
-        for id in [E1, E2, E3] {
-            fixture
-                .world
-                .exports
-                .seed_export(export(id, &["grant.observe"], false));
-        }
-        // 覆盖同一 `(nodeId, kind)` 的信任行：只点名 E1。
-        fixture
-            .world
-            .trust
-            .seed_node(node(&["grant.observe"], &[E1], NodeState::Paired));
-        let route = fixture.route();
-
-        let frames = fixture.subscribe(&route).await;
-        assert_eq!(frames.len(), 1);
-        assert_eq!(
-            export_ids(&frames[0]),
-            vec![E1],
-            "清单外的 Export 必须从快照里消失（即使 scopes 相交）"
-        );
-
-        // 空清单：仍然回一帧空快照。
-        fixture
-            .world
-            .trust
-            .seed_node(node(&["grant.observe"], &[], NodeState::Paired));
-        let frames = fixture.subscribe(&route).await;
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0]["body"]["exports"], json!([]));
-    }
-
-    /// 批次内顺序稳定：按 `exportId` 升序，与记录顺序无关。
-    #[test]
-    fn visibility_is_sorted_by_export_id() {
-        let paired = node_with_all_test_exports(&["grant.observe"], NodeState::Paired);
-        let exports = vec![
-            export(
-                "33333333-3333-4333-8333-333333333333",
-                &["grant.observe"],
-                false,
-            ),
-            export(
-                "11111111-1111-4111-8111-111111111111",
-                &["grant.observe"],
-                false,
-            ),
-        ];
-        let kept: Vec<&str> = visible_exports(Some(&paired), &exports)
-            .iter()
-            .map(|record| record.export_id().as_str())
-            .collect();
-        assert_eq!(
-            kept,
-            [
-                "11111111-1111-4111-8111-111111111111",
-                "33333333-3333-4333-8333-333333333333"
-            ]
-        );
-    }
 }

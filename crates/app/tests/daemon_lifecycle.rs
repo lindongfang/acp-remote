@@ -22,28 +22,16 @@ use support::{Daemon, Stdin, failure_code, params, params_of, run_cli, run_start
 /// （`design.md` 决策 6：「profile 存在且 command 可解析」）。
 fn seed_profile(agent_id: &str, default: bool) -> String {
     format!(
-        r#"[[agents.profiles]]
-agent_id = "{agent_id}"
-display_name = "{agent_id} (seed)"
-command = "{command}"
-args = []
-env_allowlist = []
-default = {default}
+        r#"[agent]
+{default_line}{agent_id} = ["{command}"]
 "#,
+        default_line = if default {
+            format!("default = \"{agent_id}\"\n")
+        } else {
+            String::new()
+        },
         command = env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/"),
     )
-}
-
-/// `agent.configure` 的参数（用真实可执行文件，保证 `available` 为 `true`）。
-fn agent_params(agent_id: &str) -> server::local_admin::JsonObject {
-    params_of(json!({
-        "agentId": agent_id,
-        "displayName": agent_id,
-        "command": env!("CARGO_BIN_EXE_acp-remote"),
-        "args": [],
-        "envAllowlist": [],
-        "default": false,
-    }))
 }
 
 /// R1/R2/R5：全新数据目录 → 取锁、生成 16 字符小写 hex 的 instanceId、创建可用 endpoint、
@@ -128,8 +116,6 @@ fn a_fresh_start_takes_the_lock_creates_the_endpoint_and_imports_the_seeds() {
     // `local_configuration_survives_a_restart_and_seeds_are_not_reimported` 判定）。
     assert_eq!(status["counts"]["devices"], json!(0));
     assert_eq!(status["counts"]["nodes"], json!(0));
-    assert_eq!(status["counts"]["exports"], json!(0));
-    assert_eq!(status["counts"]["imports"], json!(0));
     assert_eq!(
         status["agents"],
         json!([{ "agentId": "codex", "available": true }])
@@ -226,100 +212,48 @@ fn an_explicit_endpoint_configuration_is_refused_before_any_side_effect() {
     assert!(daemon.log().is_empty(), "配置阶段失败不得写日志文件");
 }
 
-/// R6/R7：重启不覆盖运行期本地变更，也不重复导入种子。
+/// R6/R7：Agent 列表每次启动都从配置读取；重启不保留已删除的声明。
 #[test]
 fn local_configuration_survives_a_restart_and_seeds_are_not_reimported() {
-    let mut daemon = Daemon::configure("restart", &seed_profile("codex", true));
+    let command = env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/");
+    let agents = format!(
+        "[agent]\ndefault = \"codex\"\ncodex = [\"{command}\"]\nhelper = [\"{command}\"]\n"
+    );
+    let mut daemon = Daemon::configure("restart", &agents);
     daemon.start();
-
-    // 运行期新增第二个 profile（不是种子；模拟 CLI 的 `agent.configure`）。
-    let added = daemon.ok_value(Method::AgentConfigure, agent_params("helper"));
-    assert_eq!(added["agent"]["agentId"], json!("helper"));
     let before = daemon.ok_value(Method::DaemonStatus, params());
     assert_eq!(
         before["agents"],
         json!([
             { "agentId": "codex", "available": true },
             { "agentId": "helper", "available": true }
-        ]),
-        "运行期新增的 profile 必须立刻可见"
+        ])
     );
-
     assert!(daemon.stop().success());
 
-    // 用**同一份配置与数据目录**重启：种子导入必须被「已初始化」标记挡住。
+    // 重启时配置是唯一权威：删掉一个声明，列表随之收紧。
     let mut second = daemon.configure_in("second", &seed_profile("codex", true));
     second.start();
-    assert_eq!(
-        second.log_events("daemon.seed_skipped").len(),
-        1,
-        "重启必须跳过种子导入：{}",
-        second.log()
-    );
     let after = second.ok_value(Method::DaemonStatus, params());
     assert_eq!(
         after["agents"],
-        json!([
-            { "agentId": "codex", "available": true },
-            { "agentId": "helper", "available": true }
-        ]),
-        "运行期本地变更必须保留，种子不得覆盖"
+        json!([{ "agentId": "codex", "available": true }]),
+        "Agent 列表必须来自本次启动的配置"
     );
     assert!(second.stop().success());
 }
 
-/// R8/R9：`daemon.status.counts` 与持久记录一致（用 `export.list`/`device.list`/`import.list` 交叉验证）。
+/// R8/R9：`daemon.status.counts` 与持久记录一致（用 `device.list` 交叉验证）。
 #[test]
 fn status_counts_follow_persisted_records() {
     let mut daemon = Daemon::configure("counts", &seed_profile("codex", true));
     daemon.start();
 
-    let workspace_root = daemon.root().join("workspace");
-    std::fs::create_dir_all(&workspace_root).expect("工作区目录");
-    daemon.ok(
-        Method::WorkspaceSelect,
-        params_of(json!({
-            "alias": "project",
-            "displayName": "Project",
-            "rootPath": workspace_root.display().to_string(),
-        })),
-    );
-    daemon.ok(
-        Method::ExportCreate,
-        params_of(json!({
-            "exportId": "export-1",
-            "displayName": "Export One",
-            "agentIds": ["codex"],
-            "workspaceAliases": [{ "alias": "project", "displayName": "Project" }],
-            "defaultWorkspaceAlias": "project",
-            "templates": [{
-                "templateId": "template-1",
-                "displayName": "Template One",
-                "workspaceAlias": "project",
-                "params": [],
-            }],
-            "defaultTemplateId": "template-1",
-            "scopes": ["grant.session.read"],
-            "cachePolicy": "no-content-cache",
-        })),
-    );
-
     let status = daemon.ok_value(Method::DaemonStatus, params());
-    let exports = daemon.ok_value(Method::ExportList, params());
     let devices = daemon.ok_value(Method::DeviceList, params());
-    let imports = daemon.ok_value(Method::ImportList, params());
-    assert_eq!(
-        status["counts"]["exports"].as_u64().expect("exports"),
-        exports["exports"].as_array().expect("exports 数组").len() as u64
-    );
-    assert_eq!(status["counts"]["exports"], json!(1));
     assert_eq!(
         status["counts"]["devices"].as_u64().expect("devices"),
         devices["devices"].as_array().expect("devices 数组").len() as u64
-    );
-    assert_eq!(
-        status["counts"]["imports"].as_u64().expect("imports"),
-        imports["imports"].as_array().expect("imports 数组").len() as u64
     );
     assert_eq!(status["counts"]["nodes"], json!(0));
 
@@ -501,7 +435,7 @@ fn stop_is_accepted_first_and_requests_during_shutdown_are_unavailable() {
     let mut observed_closed = false;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline && !observed_unavailable {
-        match held.try_call(Method::AgentConfigure, agent_params("ghost")) {
+        match held.try_call(Method::AgentList, params()) {
             Ok(response) => match outcome_of(&response) {
                 ClientOutcome::Failure { code, .. } => {
                     assert_eq!(code, "local.unavailable");
@@ -945,4 +879,64 @@ fn stop_cleans_up_even_when_the_drain_budget_is_spent() {
         daemon.log()
     );
     held.close();
+}
+
+/// 配置没有 `[agent]`、旧库又有 profile 时必须记录 `daemon.agents_discarded` 与条数（v10 迁移已删表）。
+#[test]
+fn discarded_legacy_agents_are_reported_at_startup() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let daemon = Daemon::configure("agents-discarded", "");
+    let storage = storage_sqlite::migrate::StorageConfig::new(daemon.data_dir().to_path_buf());
+    let at = acp_core::model::Timestamp::new("2026-10-17T00:00:00.000Z").expect("timestamp");
+    let store = runtime
+        .block_on(storage_sqlite::session_store::SqliteStore::open(
+            storage.clone(),
+            &at,
+        ))
+        .expect("create database");
+    runtime.block_on(store.close());
+    let pool = runtime
+        .block_on(sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(storage.database_path())
+                .create_if_missing(false),
+        ))
+        .expect("raw pool");
+    runtime
+        .block_on(
+            sqlx::raw_sql(
+                "CREATE TABLE owned_agent_profile (agent_id TEXT PRIMARY KEY);
+         INSERT INTO owned_agent_profile (agent_id) VALUES ('old-a'), ('old-b');
+         UPDATE meta SET value = '9' WHERE key = 'owned_schema_version';
+         PRAGMA user_version = 9;",
+            )
+            .execute(&pool),
+        )
+        .expect("seed v9");
+    runtime.block_on(pool.close());
+
+    let mut daemon = daemon;
+    daemon.start();
+    let events = daemon.log_events("daemon.agents_discarded");
+    assert_eq!(events.len(), 1, "{}", daemon.log());
+    assert_eq!(events[0]["count"], json!(2), "{}", daemon.log());
+    assert!(daemon.stop().success());
+}
+
+/// 非法 `[agent]` 条目在启动时失败关闭：stderr 指出键名与规则，不回显命令原文。
+#[test]
+fn invalid_agent_configuration_fails_closed_without_echoing_the_command() {
+    let daemon = Daemon::configure(
+        "invalid-agent",
+        "[agent]\nbad = \"\"\nleaky = [\"secret-command-value\", \"\"]\n",
+    );
+    let (status, _stdout, stderr) = run_start_once(daemon.config_path());
+    assert!(!status.success(), "非法 [agent] 必须拒绝启动：{stderr}");
+    assert_eq!(failure_code(&stderr), "local.invalid_params");
+    assert!(stderr.contains("agent."), "错误必须指出键名：{stderr}");
+    assert!(
+        !stderr.contains("secret-command-value"),
+        "错误不得回显命令原文：{stderr}"
+    );
+    assert!(!daemon.data_dir().exists(), "配置阶段失败不得创建数据目录");
 }

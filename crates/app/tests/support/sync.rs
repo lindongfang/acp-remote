@@ -1043,6 +1043,21 @@ impl acp_core::ports::AgentCatalog for ScriptedCatalog {
     ) -> Result<acp_core::model::CapabilitySet, PortError> {
         Ok(acp_core::model::CapabilitySet::empty())
     }
+
+    async fn profile(
+        &self,
+        _id: &acp_core::model::AgentId,
+    ) -> Result<Option<acp_core::model::AgentProfile>, PortError> {
+        Ok(Some(
+            acp_core::model::AgentProfile::try_new(
+                acp_core::model::AgentId::new(SCRIPTED_AGENT).expect("agent id"),
+                env!("CARGO_BIN_EXE_acp-remote"),
+                Vec::new(),
+                true,
+            )
+            .expect("profile"),
+        ))
+    }
 }
 
 /// 脚本化 agent selector（`agent.configure` 与快照 `agents` chunk 都按它断言）。
@@ -1298,8 +1313,10 @@ impl HostNode {
             "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{host_name}\"\n\
              listen = \"127.0.0.1:0\"\n\
              [identity]\nkeystore = \"ephemeral\"\n\
-             [dev_mode]\nenabled = true\nallow_plaintext = true\n",
+             [dev_mode]\nenabled = true\nallow_plaintext = true\n\
+             [agent]\ndefault = \"codex\"\ncodex = [\"{}\"]\n",
             data_dir.display().to_string().replace('\\', "/"),
+            env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/"),
         );
         let config = app::Config::from_toml(&config_text).expect("测试配置必须合法");
         let clock: Arc<dyn acp_core::ports::Clock> = Arc::new(app::clock::SystemClock::new());
@@ -1311,7 +1328,6 @@ impl HostNode {
         );
         let sessions: Arc<dyn acp_core::ports::SessionStore> = store.clone();
         let deliveries: Arc<dyn acp_core::ports::RemoteDeliveryStore> = store.clone();
-        let exports: Arc<dyn acp_core::ports::ExportStore> = store.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
         let local_config: Arc<dyn acp_core::ports::LocalConfigStore> = store.clone();
@@ -1351,7 +1367,6 @@ impl HostNode {
                 store: Arc::clone(&sessions),
                 deliveries: Arc::clone(&deliveries),
                 backends,
-                exports: Arc::clone(&exports),
                 trust: Arc::clone(&trust),
                 publisher,
                 clock: Arc::clone(&clock),
@@ -1364,7 +1379,6 @@ impl HostNode {
             broker: Arc::clone(&broker),
             store: sessions,
             deliveries,
-            exports,
             trust,
             audit: Arc::clone(&audit),
             config: local_config,
@@ -1465,6 +1479,7 @@ impl HostNode {
             pairing: Arc::new(server::local_admin::PairingSessions::new(
                 Arc::clone(&authority),
                 config.public_origin.clone(),
+                config.node_name.clone(),
                 Arc::new(app::compose::NodeLinkCloser::new(
                     Arc::clone(node_link.command()),
                     Arc::clone(&sync_registry),

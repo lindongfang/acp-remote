@@ -1,4 +1,4 @@
-//! 管理状态（设备/节点/配对/身份材料、Export/Import、本地配置）的 SQLite 实现。
+//! 管理状态（设备/节点/配对/身份材料、本地配置）的 SQLite 实现。
 //!
 //! 权威是 `docs/CORE_PORTS_AND_STORAGE.md`：§5.3 的端口形状、§7.3/§7.4 的表结构、§9 判据 23–29 与
 //! §11.2/§11.6 的写集语义。三条硬规则贯穿本目录：
@@ -18,14 +18,11 @@
 //! 是不是本机产生的」不可判定。
 
 pub(crate) mod audit;
-pub(crate) mod export;
 pub(crate) mod local_config;
 pub(crate) mod trust;
 
 use acp_core::model::{Digest, NodeId, PortError, Timestamp};
 use acp_core::ports::PendingAudit;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
 use crate::error::StorageError;
@@ -119,77 +116,3 @@ pub(crate) async fn enforce_capacity_gate(
 // ---------------------------------------------------------------------------------------------
 // 集合字段（§11.1 的 `*_json`）
 // ---------------------------------------------------------------------------------------------
-
-/// 把一组文本编码成 JSON 数组文本（空集合自然得到 `[]`）。
-pub(crate) fn encode_strings(values: impl IntoIterator<Item = String>) -> String {
-    Value::Array(values.into_iter().map(Value::String).collect()).to_string()
-}
-
-/// 解析 `*_json` 的字符串数组。文本非法说明库被外部改写 → 损坏（不静默取空集合）。
-pub(crate) fn decode_strings(
-    text: &str,
-    column: &'static str,
-) -> Result<Vec<String>, StorageError> {
-    serde_json::from_str(text).map_err(|_| StorageError::Corrupt(column))
-}
-
-/// workspace alias 声明（`aliases_json`，§11.7 的 `[{alias,displayName}]`）。
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AliasJson {
-    pub alias: String,
-    #[serde(rename = "displayName")]
-    pub display_name: String,
-}
-
-/// Export template 的参数声明（`templates_json` 的嵌套元素）。
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ParamJson {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub ty: String,
-    pub required: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pattern: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enum_values: Option<Vec<Value>>,
-}
-
-/// Export template（`templates_json`）。
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TemplateJson {
-    pub template_id: String,
-    pub display_name: String,
-    pub workspace_alias: String,
-    pub params: Vec<ParamJson>,
-}
-
-/// profile 的凭据绑定（`provider_env_json`）。
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct BindingJson {
-    pub provider_id: String,
-    pub field: String,
-    pub name: String,
-}
-
-/// 编码任意集合字段：序列化失败只可能是形状错误（本适配器自己构造的 DTO），因此映射成 `InvalidRequest`
-/// 而不是 panic。
-pub(crate) fn encode_value<T: Serialize>(
-    value: &T,
-    what: &'static str,
-) -> Result<String, StorageError> {
-    serde_json::to_value(value)
-        .map(|value| value.to_string())
-        .map_err(|_| StorageError::InvalidRequest(what))
-}
-
-/// 解码集合字段；形状不符按损坏处理。
-pub(crate) fn decode_value<T: for<'de> Deserialize<'de>>(
-    text: &str,
-    column: &'static str,
-) -> Result<T, StorageError> {
-    serde_json::from_str(text).map_err(|_| StorageError::Corrupt(column))
-}

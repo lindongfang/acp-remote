@@ -6,18 +6,9 @@
 
 mod support;
 
-use std::path::Path;
-
 use app::lock::{LockRecord, LockState, lock_path, probe, read_record, record_path};
 use serde_json::{Value, json};
 use support::{CliRun, Daemon, Stdin, create_owner_only_dir, dir_entries, run_cli};
-
-/// 一份与 `agent.configure`/`export.create` 同形的 JSON 文件（写入用例自己的临时目录）。
-fn write_file(root: &Path, name: &str, content: &str) -> std::path::PathBuf {
-    let path = root.join(name);
-    std::fs::write(&path, content).expect("写文件");
-    path
-}
 
 /// 失败时 stderr 必须是**恰好一行**含 `code` 的 JSON，且 stdout 只有人类可读说明（R62/R63）。
 fn assert_failure_contract(run: &CliRun, code: &str, forbidden: &[&str]) {
@@ -214,34 +205,8 @@ fn daemon_stop_waits_for_the_lock_and_the_process_exit() {
 #[test]
 fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
     let daemon = Daemon::configure("cli-offline", "");
-    let root = daemon.root();
-    let empty = write_file(root, "empty.json", "{}");
-    let empty = empty.display().to_string();
-    let profile = write_file(
-        root,
-        "profile.json",
-        r#"{"agentId":"a","displayName":"A","command":"c","args":[],"envAllowlist":[],"default":false}"#,
-    );
-    let profile = profile.display().to_string();
 
     let cases: Vec<Vec<String>> = vec![
-        vec![
-            "workspace".into(),
-            "select".into(),
-            "--alias".into(),
-            "ws".into(),
-            "--display-name".into(),
-            "W".into(),
-            "--root-path".into(),
-            root.display().to_string(),
-        ],
-        vec!["agent".into(), "configure".into(), "--file".into(), profile],
-        vec![
-            "agent".into(),
-            "configure".into(),
-            "--file".into(),
-            empty.clone(),
-        ],
         vec!["device".into(), "list".into()],
         vec![
             "device".into(),
@@ -256,36 +221,6 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
             "--node-id".into(),
             "2ae1c07c-0000-4000-8000-000000000001".into(),
         ],
-        vec![
-            "export".into(),
-            "create".into(),
-            "--file".into(),
-            empty.clone(),
-        ],
-        vec!["export".into(), "list".into()],
-        vec![
-            "export".into(),
-            "revoke".into(),
-            "--export-id".into(),
-            "e".into(),
-        ],
-        vec![
-            "import".into(),
-            "add".into(),
-            "--import-id".into(),
-            "i".into(),
-            "--owner-endpoint".into(),
-            "wss://o.example.invalid".into(),
-            "--owner-node-id".into(),
-            "2ae1c07c-0000-4000-8000-000000000001".into(),
-        ],
-        vec!["import".into(), "list".into()],
-        vec![
-            "import".into(),
-            "remove".into(),
-            "--import-id".into(),
-            "i".into(),
-        ],
     ];
     for args in cases {
         let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -297,32 +232,6 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
         );
         assert_failure_contract(&run, "local.unavailable", &[]);
     }
-
-    // `provider configure` 在非交互环境**先**失败（不读凭据、不调用方法，R69）。
-    let run = run_cli(
-        "provider-offline",
-        Some(daemon.config_path()),
-        &[
-            "provider",
-            "configure",
-            "--provider-id",
-            "openai",
-            "--kind",
-            "provider",
-            "--display-name",
-            "OpenAI",
-            "--field",
-            "api_key",
-        ],
-        Stdin::Bytes(b"sk-should-not-be-read\n".to_vec()),
-    );
-    assert_failure_contract(&run, "local.invalid_request", &["sk-should-not-be-read"]);
-    assert!(
-        !run.stdout.contains("（不回显）: ") && !run.stderr.contains("（不回显）: "),
-        "非交互环境不得进入凭据提示：stdout={} stderr={}",
-        run.stdout,
-        run.stderr
-    );
 
     // 用法错误也是非零 + 一行 JSON（且不得出现 self-made 子命令）。
     for args in [
@@ -341,27 +250,6 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
 fn management_commands_use_the_local_channel_and_report_method_failures() {
     let mut daemon = Daemon::configure("cli-online", "");
     daemon.start();
-
-    // workspace select：CLI 只发参数，Daemon 侧 canonicalize 并持久化；展示的是方法返回值。
-    let run = run_cli(
-        "workspace",
-        Some(daemon.config_path()),
-        &[
-            "workspace",
-            "select",
-            "--alias",
-            "ws",
-            "--display-name",
-            "工作区",
-            "--root-path",
-            &daemon.root().display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    run.assert_success();
-    let parsed: Value = serde_json::from_str(run.stdout.trim()).expect("result JSON");
-    assert_eq!(parsed["workspace"]["alias"], json!("ws"));
-    assert_eq!(parsed["workspace"]["displayName"], json!("工作区"));
 
     // 方法级失败：`local.not_found` 必须按双通道形态输出，且不回显数据目录路径。
     let data_dir = daemon.data_dir().display().to_string();
@@ -383,149 +271,6 @@ fn management_commands_use_the_local_channel_and_report_method_failures() {
         run.stderr
     );
 
-    // export.revoke 的 `local.not_found` 走同一条出口。
-    let run = run_cli(
-        "export-not-found",
-        Some(daemon.config_path()),
-        &["export", "revoke", "--export-id", "missing-export"],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.not_found", &[&data_dir]);
-
-    daemon.stop();
-}
-
-/// R67：`--file` 的两种错误码映射（`local.invalid_params` / `local.conflict`），`agent configure` 的文件
-/// 不得含凭据值。
-#[test]
-fn file_inputs_map_validation_errors_like_the_method_side() {
-    let mut daemon = Daemon::configure("cli-files", "");
-    daemon.start();
-    let config = daemon.config_path().to_path_buf();
-    let root = daemon.root().to_path_buf();
-
-    // agent.configure：合法文件 → 成功；未知字段（含凭据字段 `values`）→ local.invalid_params。
-    let ok = write_file(
-        &root,
-        "agent-ok.json",
-        r#"{"agentId":"codex-local","displayName":"Codex","command":"acp-remote","args":[],"envAllowlist":[],"default":false}"#,
-    );
-    let run = run_cli(
-        "agent-ok",
-        Some(&config),
-        &["agent", "configure", "--file", &ok.display().to_string()],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("codex-local"), "{}", run.stdout);
-
-    for (name, body) in [
-        (
-            "agent-credentials.json",
-            r#"{"agentId":"a","displayName":"A","command":"c","args":[],"envAllowlist":[],"default":false,"values":{"api_key":"sk-secret"}}"#,
-        ),
-        (
-            "agent-unknown.json",
-            r#"{"agentId":"a","displayName":"A","command":"c","args":[],"envAllowlist":[],"default":false,"extra":1}"#,
-        ),
-    ] {
-        let path = write_file(&root, name, body);
-        let run = run_cli(
-            name,
-            Some(&config),
-            &["agent", "configure", "--file", &path.display().to_string()],
-            Stdin::Null,
-        );
-        assert_failure_contract(&run, "local.invalid_params", &["sk-secret"]);
-    }
-    let broken = write_file(&root, "agent-broken.json", "{ not json");
-    let run = run_cli(
-        "agent-broken",
-        Some(&config),
-        &[
-            "agent",
-            "configure",
-            "--file",
-            &broken.display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.invalid_params", &[]);
-
-    // export.create：先把别名 `ws` 建好（方法侧要求 alias 已在 owned_workspace 里），再验证三种映射。
-    let run = run_cli(
-        "export-workspace",
-        Some(&config),
-        &[
-            "workspace",
-            "select",
-            "--alias",
-            "ws",
-            "--display-name",
-            "工作区",
-            "--root-path",
-            &root.display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    run.assert_success();
-    let export = write_file(
-        &root,
-        "export.json",
-        r#"{"exportId":"exp-1","displayName":"Export One","agentIds":["codex-local"],
-"workspaceAliases":[{"alias":"ws","displayName":"工作区"}],"defaultWorkspaceAlias":"ws",
-"templates":[{"templateId":"tpl-1","displayName":"Tpl","workspaceAlias":"ws","params":[]}],
-"defaultTemplateId":"tpl-1","scopes":["grant.session.read"],"cachePolicy":"no-content-cache"}"#,
-    );
-    let run = run_cli(
-        "export-ok",
-        Some(&config),
-        &["export", "create", "--file", &export.display().to_string()],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("exp-1"), "{}", run.stdout);
-
-    let run = run_cli(
-        "export-conflict",
-        Some(&config),
-        &["export", "create", "--file", &export.display().to_string()],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.conflict", &[]);
-
-    let incomplete = write_file(&root, "export-incomplete.json", r#"{"exportId":"exp-2"}"#);
-    let run = run_cli(
-        "export-invalid",
-        Some(&config),
-        &[
-            "export",
-            "create",
-            "--file",
-            &incomplete.display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.invalid_params", &[]);
-
-    // 列表命令走本地通道并展示 result（Import 为空即为空数组）。
-    let run = run_cli(
-        "export-list",
-        Some(&config),
-        &["export", "list"],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("exp-1"), "{}", run.stdout);
-    let run = run_cli(
-        "import-list",
-        Some(&config),
-        &["import", "list"],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("imports"), "{}", run.stdout);
-
     daemon.stop();
 }
 
@@ -533,8 +278,8 @@ fn file_inputs_map_validation_errors_like_the_method_side() {
 #[test]
 fn doctor_completes_offline_and_combines_status_when_running() {
     let daemon = Daemon::configure("cli-doctor", "");
-    // 数据目录连都不存在：离线结论仍然要给出，且不得创建任何东西。
     create_owner_only_dir(daemon.data_dir());
+    // 数据目录连都不存在：离线结论仍然要给出，且不得创建任何东西。
     let before = dir_entries(daemon.data_dir());
     let run = run_cli(
         "doctor-offline",
@@ -626,6 +371,9 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
         vec!["node", "pair", "--sas", "481502"],
         vec!["node", "pair", "--request", "session.read"],
         vec!["node", "pair", "--pack", "pack.read"],
+        vec!["node", "pair", "--grant", "grant.observe"],
+        vec!["node", "pair", "--export-id", "export-1"],
+        vec!["node", "pair", "--display-name", "Node"],
     ] {
         let run = run_cli(
             "pair-removed-flags",
@@ -702,8 +450,6 @@ fn pairing_requires_exact_non_interactive_values_and_honours_expiry() {
             "access",
             "--pairing-url",
             "https://owner.example.invalid/#s=x",
-            "--display-name",
-            "Node",
             "--fingerprint",
             &fingerprint,
         ],

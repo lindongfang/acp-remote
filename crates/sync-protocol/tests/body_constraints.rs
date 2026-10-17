@@ -138,7 +138,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"Project One\"}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":\"D:/src/project\"}]",
         ),
     );
     assert!(
@@ -152,7 +152,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"Project One\",\"path\":\"D:/src/project\"}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":\"D:/src/project\"}]",
         ),
     );
     assert!(
@@ -165,7 +165,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"path\":null}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":null}]",
         ),
     );
     assert!(null_path.is_err(), "workspaces item 的 path 不得为 null");
@@ -195,7 +195,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"canonicalPath\":\"C:/src/p\"}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":\"C:/src/p\",\"alias\":\"p\"}]",
         ),
     );
     assert!(unknown_key.is_err(), "workspaces item 的未登记键必须被拒");
@@ -224,7 +224,7 @@ fn session_summary_workspace_keeps_absent_null_and_value_apart() {
         ("", "absent"),
         (",\"workspace\":null", "null"),
         (
-            ",\"workspace\":{\"alias\":\"project.1\",\"displayName\":\"Project One\"}",
+            ",\"workspace\":{\"directoryId\":\"0123456789abcdef0123456789abcdef\"}",
             "value",
         ),
     ] {
@@ -242,8 +242,8 @@ fn session_summary_workspace_keeps_absent_null_and_value_apart() {
                 "显式 null 的键不得在往返中被压成缺席：{reserialized}"
             ),
             _ => assert_eq!(
-                reserialized["workspace"]["alias"],
-                serde_json::json!("project.1"),
+                reserialized["workspace"]["directoryId"],
+                serde_json::json!("0123456789abcdef0123456789abcdef"),
                 "带引用的形态必须原样往返：{reserialized}"
             ),
         }
@@ -335,7 +335,7 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
 
     // imported 事件的 eventId 必须等于 remoteOrigin.originEventId（docs §9.6 / §10.1）。
     let matching = format!(
-        "{{\"ownerNodeId\":\"{SERVER_EPOCH}\",\"exportId\":\"export-laptop-zed\",\"originEpoch\":\"{TURN_ID}\",\"originEventId\":\"{EVENT_ID}\",\"originSequence\":\"900\"}}"
+        "{{\"ownerNodeId\":\"{SERVER_EPOCH}\",\"originEpoch\":\"{TURN_ID}\",\"originEventId\":\"{EVENT_ID}\",\"originSequence\":\"900\"}}"
     );
     let imported_ok: Result<EventBody, String> = decode(
         "event",
@@ -364,7 +364,7 @@ fn event_origin_and_remote_origin_follow_the_event_schema() {
         "imported 事件的 eventId 必须等于 remoteOrigin.originEventId"
     );
 
-    let incomplete = "{\"ownerNodeId\":\"00384a03-bc90-4095-b65d-82fb8cc47e13\",\"exportId\":\"exp-1\",\"originEventId\":\"3a4b5c6d-7e80-4192-a3b4-c5d6e7f8091a\",\"originSequence\":\"9\"}";
+    let incomplete = "{\"ownerNodeId\":\"00384a03-bc90-4095-b65d-82fb8cc47e13\",\"originEventId\":\"3a4b5c6d-7e80-4192-a3b4-c5d6e7f8091a\",\"originSequence\":\"9\"}";
     assert!(
         decode::<EventBody>(
             "event",
@@ -520,15 +520,15 @@ fn session_summary_origin_block_is_discriminated_by_kind() {
     assert!(local.is_ok(), "本节点会话只带 kind：{local:?}");
 
     let remote: Result<SessionSummary, String> = parse(&format!(
-        "{{\"kind\":\"remote\",\"ownerNodeId\":\"{SERVER_EPOCH}\",\"exportId\":\"export-laptop-zed\",\"originEpoch\":\"{TURN_ID}\",\"online\":true}}"
+        "{{\"kind\":\"remote\",\"ownerNodeId\":\"{SERVER_EPOCH}\",\"originEpoch\":\"{TURN_ID}\",\"online\":true}}"
     ));
-    assert!(remote.is_ok(), "imported 会话的四种字段必需：{remote:?}");
+    assert!(remote.is_ok(), "imported 会话的必需字段齐全：{remote:?}");
 
     let remote_incomplete: Result<SessionSummary, String> =
         parse("{\"kind\":\"remote\",\"online\":true}");
     assert!(
         remote_incomplete.is_err(),
-        "remote 形状缺 ownerNodeId/exportId/originEpoch 必须被拒"
+        "remote 形状缺 ownerNodeId/originEpoch 必须被拒"
     );
 
     let local_extra: Result<SessionSummary, String> = parse("{\"kind\":\"local\",\"online\":true}");

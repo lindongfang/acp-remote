@@ -8,7 +8,7 @@
     "requestId": "5f2a91c4-8d3b-4e77-b0a6-1c4d9e8f2a35",
     "command": "session.create",
     "payload": {
-      "workspaceAlias": "work-api",
+      "directoryId": "0123456789abcdef0123456789abcdef",
       "agentId": "claude-code"
     }
   }

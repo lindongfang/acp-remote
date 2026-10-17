@@ -67,11 +67,6 @@
       "valid": true
     },
     {
-      "fixture": "valid/export-revoked.json",
-      "schema": "../../../schemas/node-link/v1/message.schema.json",
-      "valid": true
-    },
-    {
       "fixture": "valid/pairing-claim-request.json",
       "schema": "../../../schemas/node-link/v1/pairing.schema.json",
       "valid": true
@@ -183,11 +178,6 @@
     },
     {
       "fixture": "valid/catalog-subscribe.json",
-      "schema": "../../../schemas/node-link/v1/message.schema.json",
-      "valid": true
-    },
-    {
-      "fixture": "valid/catalog-changed.json",
       "schema": "../../../schemas/node-link/v1/message.schema.json",
       "valid": true
     },

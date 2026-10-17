@@ -19,7 +19,7 @@
         "version": "42",
         "createdAt": "2026-09-17T11:00:00.000Z",
         "updatedAt": "2026-09-17T12:11:01.000Z",
-        "workspace": { "alias": "project.1", "displayName": "Project One" }
+        "workspace": { "directoryId": "0123456789abcdef0123456789abcdef" }
       },
       {
         "sessionId": "7f95ef32-c687-45ef-b59f-9263ef60bb88",
@@ -41,7 +41,6 @@
         "origin": {
           "kind": "remote",
           "ownerNodeId": "1f0d5c4b-3a29-4877-9615-0e1d2c3b4a59",
-          "exportId": "export-laptop-zed",
           "originEpoch": "2a1b0c9d-8e7f-4a6b-b5c4-3d2e1f0a9b87",
           "online": true
         },

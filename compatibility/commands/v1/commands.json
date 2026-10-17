@@ -1,35 +1,25 @@
 {
   "schemaVersion": 1,
-  "revision": "2026-09-18",
+  "revision": "2026-10-17",
   "commands": [
-    { "name": "session.list", "kind": "query", "scope": "session.list", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.read", "kind": "query", "scope": "session.read", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "command.status", "kind": "query", "scope": "command.status", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.mode.list", "kind": "query", "scope": "session.mode.list", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
-    { "name": "session.config.list", "kind": "query", "scope": "session.config.list", "grant": "grant.observe", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
-    { "name": "workspace.browse", "kind": "query", "scope": "workspace.browse", "grant": "grant.observe", "transport": ["sync"], "delivery": "mvp" },
-    { "name": "session.prompt", "kind": "mutation", "scope": "session.prompt", "grant": "grant.interact", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.cancel", "kind": "mutation", "scope": "session.cancel", "grant": "grant.interact", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "elicitation.respond", "kind": "mutation", "scope": "elicitation.respond", "grant": "grant.interact", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
-    { "name": "session.mode.set", "kind": "mutation", "scope": "session.mode.set", "grant": "grant.configure-session", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
-    { "name": "session.config.set", "kind": "mutation", "scope": "session.config.set", "grant": "grant.configure-session", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
-    { "name": "permission.resolve", "kind": "mutation", "scope": "permission.resolve", "grant": "grant.approve", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.create", "kind": "mutation", "scope": "session.create", "grant": "grant.remote-work", "transport": ["sync", "node_link"], "delivery": "mvp" },
-    { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "grant": "grant.remote-work", "transport": ["node_link"], "delivery": "conditional_mvp" }
+    { "name": "session.list", "kind": "query", "scope": "session.list", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "session.read", "kind": "query", "scope": "session.read", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "command.status", "kind": "query", "scope": "command.status", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "session.mode.list", "kind": "query", "scope": "session.mode.list", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "session.config.list", "kind": "query", "scope": "session.config.list", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "workspace.browse", "kind": "query", "scope": "workspace.browse", "transport": ["sync"], "delivery": "mvp" },
+    { "name": "session.prompt", "kind": "mutation", "scope": "session.prompt", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "session.cancel", "kind": "mutation", "scope": "session.cancel", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "elicitation.respond", "kind": "mutation", "scope": "elicitation.respond", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "session.mode.set", "kind": "mutation", "scope": "session.mode.set", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "session.config.set", "kind": "mutation", "scope": "session.config.set", "transport": ["sync", "node_link"], "delivery": "conditional_mvp" },
+    { "name": "permission.resolve", "kind": "mutation", "scope": "permission.resolve", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "session.create", "kind": "mutation", "scope": "session.create", "transport": ["sync", "node_link"], "delivery": "mvp" },
+    { "name": "session.resume", "kind": "mutation", "scope": "session.resume", "transport": ["node_link"], "delivery": "conditional_mvp" }
   ],
-  "grants": {
-    "grant.observe": ["session.list", "session.read", "command.status", "session.mode.list", "session.config.list", "workspace.browse"],
-    "grant.interact": ["session.prompt", "session.cancel", "elicitation.respond"],
-    "grant.configure-session": ["session.mode.set", "session.config.set"],
-    "grant.approve": ["permission.resolve"],
-    "grant.remote-work": ["session.create", "session.resume"]
-  },
   "localCapabilities": [
-    "local.workspace.select",
     "local.agent.configure",
-    "local.provider.configure",
     "local.device.manage",
-    "local.export.manage",
     "local.node.rotate-key",
     "local.audit.export"
   ]

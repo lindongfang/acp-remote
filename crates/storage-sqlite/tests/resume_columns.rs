@@ -44,7 +44,7 @@ fn at() -> Timestamp {
 ///
 /// 与既有 `migration.rs` 的 v4 构造手法同源（`DROP COLUMN` + `PRAGMA user_version` + `meta` 回写 +
 /// `wal_checkpoint(TRUNCATE)`），**不新增 `fixtures/storage/v4/` 夹具**，避免与 WP4 的夹具族所有权纠缠。
-/// v6 追加的 `workspace_alias`（目录归属）也必须一起去掉——否则 v5 段加完两列、v6 段再加一列时，
+/// v6 追加的 `workspace_directory_id`（目录归属）也必须一起去掉——否则 v5 段加完两列、v6 段再加一列时，
 /// `ADD COLUMN` 会撞上「duplicate column」。本文件的判据仍只看**恢复两列**。
 async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
     let store = SqliteStore::open(StorageConfig::new(dir), &at())
@@ -53,7 +53,11 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
     store.close().await;
     let path = dir.join(DATABASE_FILE);
     let pool = raw_write_pool(&path).await;
-    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+    for column in [
+        "agent_session_id",
+        "workspace_cwd",
+        "workspace_directory_id",
+    ] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -232,7 +236,7 @@ async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_own
     // 追加列紧跟在最后一个既有列之后（SQLite 的追加渲染形状）。
     assert!(
         ddl_after.contains(&format!(
-            "{head_before}, agent_session_id TEXT, workspace_cwd TEXT, workspace_alias TEXT)"
+            "{head_before}, agent_session_id TEXT, workspace_cwd TEXT, workspace_directory_id TEXT)"
         )),
         "三列必须紧跟既有列追加：{ddl_after}"
     );
@@ -246,7 +250,7 @@ async fn v6_appends_the_recovery_and_workspace_columns_instead_of_rebuilding_own
     );
     assert_eq!(columns_after[12].0, "agent_session_id");
     assert_eq!(columns_after[13].0, "workspace_cwd");
-    assert_eq!(columns_after[14].0, "workspace_alias");
+    assert_eq!(columns_after[14].0, "workspace_directory_id");
     assert_eq!(
         (
             &columns_after[12].1,
@@ -593,7 +597,7 @@ async fn two_consecutive_opens_leave_the_schema_byte_identical() {
             && name == "owned_session"
             && sql.contains("agent_session_id")
             && sql.contains("workspace_cwd")
-            && sql.contains("workspace_alias")),
+            && sql.contains("workspace_directory_id")),
         "owned_session 的 DDL 必须含追加的三列：{schema:?}"
     );
     // 再开第三次仍不重写任何文本。

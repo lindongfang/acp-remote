@@ -33,8 +33,8 @@ use acp_core::model::{
     ViewJson,
 };
 use acp_core::ports::{
-    AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, ExportStore,
-    HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView,
+    AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, HistoryPage,
+    HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView,
     RemoteDeliveryStore, ReplayLimit, RetentionPolicy, SessionBackendFactory, SessionEndpoint,
     SessionQuery, SessionStore, StoreHealth, TrustStore, TurnAccepted,
 };
@@ -118,9 +118,10 @@ impl OwnerNode {
         let data_dir = root.join("data");
         super::create_owner_only_dir(&data_dir);
         let config_text = format!(
-            "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{}\"\nlisten = \"127.0.0.1:0\"\n{daemon_extra}",
+            "[daemon]\ndata_dir = \"{}\"\npublic_origin = \"https://{}\"\nlisten = \"127.0.0.1:0\"\n[agent]\ndefault = \"codex\"\ncodex = [\"{}\", \"acp\"]\n{daemon_extra}",
             data_dir.display().to_string().replace('\\', "/"),
             nodelink::PUBLIC_HOST,
+            env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/"),
         );
         let config = app::Config::from_toml(&config_text).expect("测试配置合法");
         let clock: Arc<dyn Clock> = Arc::new(app::clock::SystemClock::new());
@@ -144,7 +145,6 @@ impl OwnerNode {
             recovery_reads: Arc::clone(&recovery_reads),
         });
         let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
-        let exports: Arc<dyn ExportStore> = store.clone();
         let trust: Arc<dyn TrustStore> = store.clone();
         let audit: Arc<dyn AuditStore> = store.clone();
         let local_config: Arc<dyn LocalConfigStore> = store.clone();
@@ -178,7 +178,6 @@ impl OwnerNode {
                 store: Arc::clone(&sessions),
                 deliveries: Arc::clone(&deliveries),
                 backends,
-                exports: Arc::clone(&exports),
                 trust: Arc::clone(&trust),
                 publisher,
                 clock: Arc::clone(&clock),
@@ -191,7 +190,6 @@ impl OwnerNode {
             broker: Arc::clone(&broker),
             store: Arc::clone(&sessions),
             deliveries,
-            exports,
             trust,
             audit: Arc::clone(&audit),
             config: local_config,
@@ -256,6 +254,7 @@ impl OwnerNode {
             pairing: Arc::new(PairingSessions::new(
                 Arc::clone(&authority),
                 config.public_origin.clone(),
+                config.node_name.clone(),
                 // 本 harness 只注册 Node Link 的 path（Sync 的 path 由 `register_sync_paths` 注册），
                 // 因此设备侧的 Sync 连接表恒空——`device.revoke` 的关闭数因此恒为 0。
                 Arc::new(app::compose::NodeLinkCloser::new(
@@ -582,6 +581,13 @@ impl AgentCatalog for ScriptedCatalog {
 
     async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
         Ok(CapabilitySet::empty())
+    }
+
+    async fn profile(
+        &self,
+        _id: &acp_core::model::AgentId,
+    ) -> Result<Option<acp_core::model::AgentProfile>, PortError> {
+        Ok(None)
     }
 }
 

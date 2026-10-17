@@ -10,7 +10,6 @@
     "selectedFeatures": [
       "node-link.command-status.v1",
       "node-link.core.v1",
-      "node-link.export-revoke.v1",
       "node-link.raw-acp.v1",
       "node-link.session-create.v1"
     ],

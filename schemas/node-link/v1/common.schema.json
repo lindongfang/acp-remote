@@ -56,21 +56,15 @@
       "uniqueItems": true,
       "items": { "$ref": "#/$defs/featureId" }
     },
-    "exportId": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9._-]+$"
-    },
     "agentId": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128
     },
-    "workspaceAlias": {
+    "directoryId": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-      "description": "Owner 发布的 workspace 符号名；不是路径，绝对路径在语法上无法通过。"
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "由规范化绝对路径派生（`sha256(path)` 前 16 字节的小写十六进制）的目录标识；不是路径。"
     },
     "opaqueRef": {
       "type": "string",
@@ -87,21 +81,6 @@
       "minLength": 1,
       "maxLength": 128
     },
-    "grantName": {
-      "enum": [
-        "grant.observe",
-        "grant.interact",
-        "grant.configure-session",
-        "grant.approve",
-        "grant.remote-work"
-      ],
-      "description": "跨节点导出授权，取值与 compatibility/commands/v1/commands.json 的 grants 键完全一致。"
-    },
-    "grantList": {
-      "type": "array",
-      "uniqueItems": true,
-      "items": { "$ref": "#/$defs/grantName" }
-    },
     "originCursor": {
       "type": "object",
       "additionalProperties": false,
@@ -114,11 +93,43 @@
     "remoteSessionRef": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ownerNodeId", "exportId", "sessionId"],
+      "required": ["ownerNodeId", "sessionId"],
       "properties": {
         "ownerNodeId": { "$ref": "#/$defs/uuid" },
-        "exportId": { "$ref": "#/$defs/exportId" },
         "sessionId": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "agentEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentId", "name", "capabilitiesRef"],
+      "properties": {
+        "agentId": { "$ref": "#/$defs/agentId" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "capabilitiesRef": { "$ref": "#/$defs/opaqueRef" }
+      }
+    },
+    "directoryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directoryId"],
+      "properties": {
+        "directoryId": { "$ref": "#/$defs/directoryId" }
+      }
+    },
+    "catalogSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "agentId", "state", "version", "createdAt", "workspaceDirectoryId"],
+      "properties": {
+        "sessionId": { "$ref": "#/$defs/uuid" },
+        "agentId": { "$ref": "#/$defs/agentId" },
+        "state": { "$ref": "#/$defs/sessionState" },
+        "version": { "$ref": "#/$defs/decimalString" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "workspaceDirectoryId": {
+          "oneOf": [{ "$ref": "#/$defs/directoryId" }, { "type": "null" }]
+        }
       }
     },
     "sessionState": {
@@ -164,82 +175,6 @@
         "payloadDigest": { "$ref": "#/$defs/base64url32" }
       }
     },
-    "exportAgent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["agentId", "name", "capabilitiesRef"],
-      "properties": {
-        "agentId": { "$ref": "#/$defs/agentId" },
-        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "capabilitiesRef": { "$ref": "#/$defs/opaqueRef" }
-      }
-    },
-    "workspaceAliasEntry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["alias", "displayName"],
-      "properties": {
-        "alias": { "$ref": "#/$defs/workspaceAlias" },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }
-      }
-    },
-    "workspaceTemplateParam": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "type", "required", "pattern", "enum"],
-      "description": "session.create.payload.templateParams 的键与取值约束来源，见 docs/NODE_LINK_PROTOCOL.md §10。",
-      "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$" },
-        "type": { "enum": ["string", "boolean", "integer"] },
-        "required": { "type": "boolean" },
-        "pattern": {
-          "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 512 }, { "type": "null" }]
-        },
-        "enum": {
-          "oneOf": [{ "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string" } }, { "type": "null" }]
-        }
-      }
-    },
-    "workspaceTemplate": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["templateId", "displayName", "workspaceAlias", "params"],
-      "properties": {
-        "templateId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._-]+$" },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "workspaceAlias": { "$ref": "#/$defs/workspaceAlias" },
-        "params": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/workspaceTemplateParam" } }
-      }
-    },
-    "exportEntry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["exportId", "displayName", "agents", "workspaceAliases", "defaultWorkspaceAlias", "templates", "scopes", "capabilityCeilingRef", "cachePolicy", "revoked"],
-      "properties": {
-        "exportId": { "$ref": "#/$defs/exportId" },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "agents": {
-          "type": "array",
-          "maxItems": 1024,
-          "items": { "$ref": "#/$defs/exportAgent" }
-        },
-        "workspaceAliases": {
-          "type": "array",
-          "maxItems": 1024,
-          "items": { "$ref": "#/$defs/workspaceAliasEntry" }
-        },
-        "defaultWorkspaceAlias": { "$ref": "#/$defs/workspaceAlias" },
-        "templates": {
-          "type": "array",
-          "maxItems": 64,
-          "items": { "$ref": "#/$defs/workspaceTemplate" }
-        },
-        "scopes": { "$ref": "#/$defs/grantList" },
-        "capabilityCeilingRef": { "$ref": "#/$defs/opaqueRef" },
-        "cachePolicy": { "const": "no-content-cache" },
-        "revoked": { "type": "boolean" }
-      }
-    },
     "errorCode": {
       "type": "string",
       "description": "唯一来源是 compatibility/errors/v1/errors.json 的 node_link 列表（docs/NODE_LINK_PROTOCOL.md §14.1）；错误码只能向后兼容地增加，增加时必须同时更新 registry、本 enum 与文档。",
@@ -255,9 +190,6 @@
         "nodelink.auth.node_unknown",
         "nodelink.auth.node_revoked",
         "nodelink.auth.catalog_revision_invalid",
-        "nodelink.export.not_found",
-        "nodelink.export.revoked",
-        "nodelink.export.not_granted",
         "nodelink.resource.attach_generation_stale",
         "nodelink.resource.snapshot_unavailable",
         "nodelink.resource.owner_unavailable",

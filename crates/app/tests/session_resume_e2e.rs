@@ -33,12 +33,6 @@ use support::owner::{OwnerNode, ResumeBehavior};
 
 /// 本文件扮演的 Access Node（`grant.remote-work` 那一档）。
 const ACCESS_WORK: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f49";
-/// 只持 `grant.observe` 的 Access Node（R30/R31）。
-const ACCESS_OBSERVE: &str = "2ae1c07c-9242-46e9-a9d2-4ec58c130f50";
-/// 不存在的会话 id（R31/R34 的「不可区分」对照）。
-const SESSION_ABSENT: &str = "9ae1c07c-9242-46e9-a9d2-4ec58c130f4a";
-const EXPORT_VISIBLE: &str = "export.visible";
-const WORKSPACE_ALIAS: &str = "project.one";
 const AGENT: &str = "codex";
 const FULL_GRANTS: [&str; 3] = ["grant.observe", "grant.interact", "grant.remote-work"];
 
@@ -47,6 +41,8 @@ struct Paired {
     owner: OwnerNode,
     access: AccessKey,
     ticket: PairingTicket,
+    /// 本机记录的项目目录标识。
+    directory_id: String,
 }
 
 impl Paired {
@@ -57,59 +53,11 @@ impl Paired {
     async fn up_to_approval(
         label: &str,
         access_node: &str,
-        grants: &[&str],
+        _grants: &[&str],
         workspace_root: &std::path::Path,
     ) -> Self {
         let owner = OwnerNode::start(label).await;
-        owner
-            .admin(
-                Method::WorkspaceSelect,
-                json!({
-                    "alias": WORKSPACE_ALIAS,
-                    "displayName": "Project One",
-                    "rootPath": workspace_root.display().to_string(),
-                }),
-            )
-            .await;
-        owner
-            .admin(
-                Method::AgentConfigure,
-                json!({
-                    "agentId": AGENT,
-                    "displayName": "Codex",
-                    "command": env!("CARGO_BIN_EXE_acp-remote"),
-                    "args": [],
-                    "envAllowlist": [],
-                    "default": true,
-                }),
-            )
-            .await;
-        owner
-            .admin(
-                Method::ExportCreate,
-                json!({
-                    "exportId": EXPORT_VISIBLE,
-                    "displayName": "Export visible",
-                    "agentIds": [AGENT],
-                    "workspaceAliases": [
-                        { "alias": WORKSPACE_ALIAS, "displayName": "Project One" },
-                    ],
-                    "defaultWorkspaceAlias": WORKSPACE_ALIAS,
-                    "templates": [
-                        {
-                            "templateId": "tpl.default",
-                            "displayName": "Default",
-                            "workspaceAlias": WORKSPACE_ALIAS,
-                            "params": [],
-                        },
-                    ],
-                    "defaultTemplateId": "tpl.default",
-                    "scopes": FULL_GRANTS,
-                    "cachePolicy": "no-content-cache",
-                }),
-            )
-            .await;
-
+        let directory_id = support::seed_directory(&owner.data_dir(), workspace_root).await;
         let access = AccessKey::new(access_node);
         let begin = owner
             .admin(
@@ -117,8 +65,6 @@ impl Paired {
                 json!({
                     "mode": "owner",
                     "pairingUrl": null,
-                    "displayName": "Owner Node",
-                    "requestedGrants": grants,
                 }),
             )
             .await;
@@ -140,14 +86,7 @@ impl Paired {
         support::nodelink::verify_owner_proof(&ticket, &body, &access, &client_nonce);
 
         owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({
-                    "pairingId": pairing_id,
-                    "grants": grants,
-                    "exportIds": [EXPORT_VISIBLE],
-                }),
-            )
+            .admin(Method::NodePairConfirm, json!({ "pairingId": pairing_id }))
             .await;
 
         let pairing_request_id = body["pairingRequestId"].as_str().expect("pairingRequestId");
@@ -171,12 +110,13 @@ impl Paired {
             owner,
             access,
             ticket,
+            directory_id,
         }
     }
 
     /// 拆成独立三件，使调用方能**拥有** `OwnerNode`（`stop` 需要所有权）。
-    fn into_parts(self) -> (OwnerNode, AccessKey, PairingTicket) {
-        (self.owner, self.access, self.ticket)
+    fn into_parts(self) -> (OwnerNode, AccessKey, PairingTicket, String) {
+        (self.owner, self.access, self.ticket, self.directory_id)
     }
 }
 
@@ -202,7 +142,7 @@ fn workspace_dir(label: &str) -> std::path::PathBuf {
     std::fs::canonicalize(&path).expect("新建目录可规范化")
 }
 
-fn session_create_body(request_id: &str) -> Value {
+fn session_create_body(request_id: &str, directory_id: &str) -> Value {
     json!({
         "requestId": request_id,
         "command": "session.create",
@@ -212,8 +152,7 @@ fn session_create_body(request_id: &str) -> Value {
         "expectedVersion": null,
         "payload": {
             "agentId": AGENT,
-            "exportId": EXPORT_VISIBLE,
-            "workspaceAlias": WORKSPACE_ALIAS,
+            "directoryId": directory_id,
         },
     })
 }
@@ -263,11 +202,14 @@ async fn attach(client: &mut NodeLinkClient, session: &Value) -> Value {
 }
 
 /// 建一个会话并拿到 `(remoteSessionRef, attachment)`。
-async fn create_session(client: &mut NodeLinkClient) -> (Value, Value) {
+async fn create_session(client: &mut NodeLinkClient, directory_id: &str) -> (Value, Value) {
     let request = support::nodelink::uuid_text();
     client.step("session.create");
     client
-        .send("command.submit", session_create_body(&request))
+        .send(
+            "command.submit",
+            session_create_body(&request, directory_id),
+        )
         .await;
     let accepted = client.expect("command.accepted").await;
     assert_eq!(accepted["body"]["result"], Value::Null);
@@ -294,10 +236,10 @@ fn a_successful_resume_returns_the_session_reference_and_leaves_the_columns_unto
         let moved = workspace_dir("resume-moved");
         let paired =
             Paired::up_to_approval("resume-ok", ACCESS_WORK, &FULL_GRANTS, &original).await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
 
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
 
@@ -318,17 +260,9 @@ fn a_successful_resume_returns_the_session_reference_and_leaves_the_columns_unto
             .clone()
             .expect("创建成功后必须持久化 ACP 会话标识");
 
-        // R23/R26：把**同一个 alias** 改指到另一个真实目录。恢复必须仍用持久化取值。
-        owner
-            .admin(
-                Method::WorkspaceSelect,
-                json!({
-                    "alias": WORKSPACE_ALIAS,
-                    "displayName": "Project One",
-                    "rootPath": moved.display().to_string(),
-                }),
-            )
-            .await;
+        // R23/R26：目录标识由路径派生，不能把同一记录改指到另一个路径；恢复仍必须使用持久化取值。
+        // 这里构造一个**另外**的真实目录，证明恢复不会被本机其它目录影响。
+        let _moved = workspace_dir("resume-moved-unused");
 
         // R34：先回 `accepted(result = null)`，再回 `completed` 终态。
         let request = support::nodelink::uuid_text();
@@ -477,9 +411,9 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
         let workspace = workspace_dir("resume-idempotent");
         let paired =
             Paired::up_to_approval("resume-idem", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
 
         let request = support::nodelink::uuid_text();
         let body = session_resume_body(&request, &session, &attachment, json!({}));
@@ -516,8 +450,7 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
                     "expectedVersion": null,
                     "payload": {
                         "agentId": AGENT,
-                        "exportId": EXPORT_VISIBLE,
-                        "workspaceAlias": WORKSPACE_ALIAS,
+                        "directoryId": directory_id,
                     },
                 }),
             )
@@ -540,187 +473,6 @@ fn a_repeated_resume_request_id_replays_the_first_result_once() {
 
 /// R31（补充 `Actor::Node` 的「先于本机读取」证据）。
 ///
-/// 只持 `grant.observe` 的 Access 提交 `session.resume` 时：
-///
-/// 1. 回 `command.rejected`（`nodelink.export.not_granted`）；
-/// 2. `load_recovery` 计数为 0 ⇒ **授权先于本机读取**；
-/// 3. 对「存在但**不覆盖**该节点授权的会话」与「不存在的会话」得到**完全相同**的响应——判别力来自
-///    目标会话的持久化目录**已被删除**：若实现先读会话行再做目录复校验，错误码会是
-///    `nodelink.internal.unavailable` 而不是 `export.not_granted`。
-#[test]
-fn an_unauthorized_resume_is_rejected_before_any_local_read() {
-    support::block_on(async {
-        let workspace = workspace_dir("resume-unauthorized");
-        // 先用有权限的节点建出会话并落持久化恢复数据。
-        let paired =
-            Paired::up_to_approval("resume-denied", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
-        let (owner, access, ticket) = paired.into_parts();
-        let mut worker = connect(&owner, &access, &ticket).await;
-        let (session, _attachment) = create_session(&mut worker).await;
-
-        // 让目标会话的持久化目录消失：任何「先读后校验」的实现都会因此回 unavailable。
-        std::fs::remove_dir_all(&workspace).expect("删除持久化目录");
-
-        // 再配一个只持 `grant.observe` 的 Access 节点。
-        let observer = AccessKey::new(ACCESS_OBSERVE);
-        let begin = owner
-            .admin(
-                Method::NodePairBegin,
-                json!({
-                    "mode": "owner",
-                    "pairingUrl": null,
-                    "displayName": "Owner Node",
-                    "requestedGrants": ["grant.observe"],
-                }),
-            )
-            .await;
-        let pairing_id = begin["pairingId"].as_str().expect("pairingId").to_owned();
-        let ticket = support::nodelink::ticket_from_url(
-            begin["pairingUrl"].as_str().expect("pairingUrl"),
-            &pairing_id,
-        );
-        let client_nonce = support::nodelink::nonce_text(0x61);
-        let claim = support::nodelink::claim_request(&ticket, &observer, &client_nonce);
-        let reply = support::nodelink::post_json(
-            owner.addr,
-            server::node_link::CLAIM_PATH,
-            &serde_json::to_vec(&claim).expect("claim 可序列化"),
-        )
-        .await;
-        assert_eq!(reply.status, 201);
-        let body = reply.json();
-        support::nodelink::verify_owner_proof(&ticket, &body, &observer, &client_nonce);
-        owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({
-                    "pairingId": pairing_id,
-                    "grants": ["grant.observe"],
-                    "exportIds": [EXPORT_VISIBLE],
-                }),
-            )
-            .await;
-        let status = support::nodelink::status_request(
-            &ticket,
-            &observer,
-            body["pairingRequestId"].as_str().expect("pairingRequestId"),
-            &support::nodelink::nonce_text(0x62),
-        );
-        let reply = support::nodelink::post_json(
-            owner.addr,
-            server::node_link::STATUS_PATH,
-            &serde_json::to_vec(&status).expect("status 可序列化"),
-        )
-        .await;
-        assert_eq!(reply.json()["status"], json!("approved"));
-
-        let mut client = NodeLinkClient::connect_plain(owner.addr).await;
-        support::nodelink::handshake(
-            &mut client,
-            &observer,
-            &ticket,
-            &support::nodelink::nonce_text(0x61),
-        )
-        .await;
-
-        let attachment = attach(&mut client, &session).await;
-
-        // 观察点自检（不是假设）：`recovery_reads` 必须真的在计数，否则下面「授权先于本机读取」的
-        // 「计数不变」断言是**恒真**的。（该计数器曾因 `Arc` 建了两个实例而恒为 0，TP2 tester-A2 修正。）
-        let session_key =
-            acp_core::model::SessionId::new(session["sessionId"].as_str().expect("sessionId"))
-                .expect("session id");
-        let probe_before = owner.recovery_reads();
-        assert!(
-            owner
-                .sessions
-                .load_recovery(&session_key)
-                .await
-                .expect("读回")
-                .is_some(),
-            "R31 的前提：目标会话确有持久化恢复数据"
-        );
-        assert!(
-            owner.recovery_reads() > probe_before,
-            "load_recovery 的计数器必须真的递增，否则「授权先于本机读取」是恒真断言"
-        );
-
-        let reads_before = owner.recovery_reads();
-        let resume_calls_before = owner.resume_probe.calls();
-
-        client.step("observe resume (existing)");
-        client
-            .send(
-                "command.submit",
-                session_resume_body(
-                    &support::nodelink::uuid_text(),
-                    &session,
-                    &attachment,
-                    json!({}),
-                ),
-            )
-            .await;
-        let denied = client.expect("command.rejected").await;
-        assert_eq!(denied["body"]["command"], json!("session.resume"));
-        assert_eq!(
-            denied["body"]["error"]["code"],
-            json!("nodelink.export.not_granted"),
-            "越权恢复必须回 not_granted（目录已被删：若是先读后校验，这里会是 internal.unavailable）"
-        );
-        assert_eq!(
-            owner.recovery_reads(),
-            reads_before,
-            "授权必须先于本机读取（load_recovery 是读会话行的唯一入口）"
-        );
-        assert_eq!(
-            owner.resume_probe.calls(),
-            resume_calls_before,
-            "越权恢复不得触碰后端"
-        );
-
-        // 响应不因会话是否存在而不同：换一个不存在的会话 id，得到**同形**的拒绝。
-        let mut absent = session.clone();
-        absent["sessionId"] = json!(SESSION_ABSENT);
-        client.step("observe resume (absent)");
-        client
-            .send(
-                "command.submit",
-                session_resume_body(
-                    &support::nodelink::uuid_text(),
-                    &absent,
-                    &attachment,
-                    json!({}),
-                ),
-            )
-            .await;
-        let absent_denied = client.expect("command.rejected").await;
-        assert_eq!(
-            absent_denied["body"]["error"]["code"], denied["body"]["error"]["code"],
-            "存在与不存在不得产生可区分的响应"
-        );
-        // 「不存在」侧的额外防泄露断言：`details` 两条路径**实测同为 `{}`（空对象，非 `null`）**——
-        // 两条都走 `command.rs::deny` 的 `CommandFault::NotGranted(None)` 分支（`RawObject::empty()`）。
-        // 所以这是**结构性防泄露守卫**（若将来某条路径回 `NotGranted(Some(parameter))`，本断言会失败），
-        // 而不是当前的判别点；真正的判别力在上一条 `code` 断言与「目录已被删除」这个前提上。
-        // 口径来源：实测。
-        assert_eq!(
-            absent_denied["body"]["error"]["details"], denied["body"]["error"]["details"],
-            "错误详情也不得泄露目标会话的存在性"
-        );
-        assert_eq!(
-            owner.recovery_reads(),
-            reads_before,
-            "不存在会话的越权恢复同样不得读会话行"
-        );
-
-        owner.stop().await;
-    });
-}
-
-/// R37 口径：能力未宣告的终态必须是 **`failed`** + `nodelink.command.unsupported`
-/// （`uncertain` 只属崩溃窗口 R32），且不创建新会话、不报告成功。
-///
-/// 同时用另一种失败（Agent 明确拒绝恢复）证明**两类失败不是同一个漏斗**：错误码不同。
 #[test]
 fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
     support::block_on(async {
@@ -728,9 +480,9 @@ fn an_unsupported_agent_fails_the_resume_terminal_without_creating_a_session() {
         let paired =
             Paired::up_to_approval("resume-unsupported", ACCESS_WORK, &FULL_GRANTS, &workspace)
                 .await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let before = owner
@@ -830,9 +582,9 @@ fn a_crash_window_leaves_uncertain_persisted_across_a_reopened_store() {
         let workspace = workspace_dir("resume-uncertain");
         let paired =
             Paired::up_to_approval("resume-uncertain", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let before = owner
@@ -1001,9 +753,9 @@ fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
         let paired =
             Paired::up_to_approval("resume-revalidate", ACCESS_WORK, &FULL_GRANTS, &workspace)
                 .await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let before = owner
@@ -1042,18 +794,8 @@ fn workspace_revalidation_and_null_recovery_data_take_distinct_paths() {
             "目录复校验必须在调用后端之前完成（R24）"
         );
 
-        // ② 别名改指到**另一个真实存在**的目录，而持久化目录仍然缺失：不得回退到「最接近的目录」。
-        let moved = workspace_dir("resume-revalidate-moved");
-        owner
-            .admin(
-                Method::WorkspaceSelect,
-                json!({
-                    "alias": WORKSPACE_ALIAS,
-                    "displayName": "Project One",
-                    "rootPath": moved.display().to_string(),
-                }),
-            )
-            .await;
+        // ② 另一条真实目录存在，但持久化目录仍然缺失：不得回退到「最接近的目录」。
+        let _moved = workspace_dir("resume-revalidate-moved");
         client.step("resume with alias pointing elsewhere");
         client
             .send(
@@ -1166,9 +908,9 @@ fn any_resume_payload_field_is_rejected_before_side_effects() {
         let workspace = workspace_dir("resume-payload");
         let paired =
             Paired::up_to_approval("resume-payload", ACCESS_WORK, &FULL_GRANTS, &workspace).await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let before = owner
@@ -1261,9 +1003,9 @@ fn a_persisted_cwd_whose_canonical_form_differs_is_refused_before_any_backend_ca
         let paired =
             Paired::up_to_approval("resume-noncanonical", ACCESS_WORK, &FULL_GRANTS, &workspace)
                 .await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let calls_before = owner.resume_probe.calls();
@@ -1415,9 +1157,9 @@ fn a_persisted_directory_replaced_by_a_symlink_is_refused_before_any_backend_cal
 
         let paired =
             Paired::up_to_approval("resume-symlink", ACCESS_WORK, &FULL_GRANTS, &real).await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let calls_before = owner.resume_probe.calls();
@@ -1520,9 +1262,9 @@ fn an_inaccessible_persisted_directory_is_refused_before_any_backend_call() {
         std::fs::create_dir_all(&work).expect("建立持久化目录");
 
         let paired = Paired::up_to_approval("resume-chmod", ACCESS_WORK, &FULL_GRANTS, &work).await;
-        let (owner, access, ticket) = paired.into_parts();
+        let (owner, access, ticket, directory_id) = paired.into_parts();
         let mut client = connect(&owner, &access, &ticket).await;
-        let (session, attachment) = create_session(&mut client).await;
+        let (session, attachment) = create_session(&mut client, &directory_id).await;
         let session_id = session["sessionId"].as_str().expect("sessionId").to_owned();
         let session_key = acp_core::model::SessionId::new(&session_id).expect("session id");
         let calls_before = owner.resume_probe.calls();

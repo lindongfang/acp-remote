@@ -13,14 +13,13 @@
     "negotiatedFeatures": [
       "node-link.command-status.v1",
       "node-link.core.v1",
-      "node-link.export-revoke.v1",
       "node-link.raw-acp.v1",
       "node-link.session-create.v1"
     ]
   },
   "expected": {
-    "transcriptBase64url": "QUNQUgEAIWFjcC1yZW1vdGUvbm9kZS1saW5rLWNoYWxsZW5nZS92MQAIAAEAAAACAAEAAgAAABAAAQIDBAVGB4gJCgsMDQ4PAAMAAAAQEBESExQVRheYGRobHB0eHwAGAAAACAAAAAAAAAAqAAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACgAAACAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-PwALAAAAEEBBQkNERUZHiElKS0xNTk8ADAAAAHlub2RlLWxpbmsuY29tbWFuZC1zdGF0dXMudjEAbm9kZS1saW5rLmNvcmUudjEAbm9kZS1saW5rLmV4cG9ydC1yZXZva2UudjEAbm9kZS1saW5rLnJhdy1hY3AudjEAbm9kZS1saW5rLnNlc3Npb24tY3JlYXRlLnYx",
-    "transcriptSha256Hex": "e48777aeef69c11fa47ae42dae8d0a32f2134406c06ad729ac7bb0241ee7a388",
+    "transcriptBase64url": "QUNQUgEAIWFjcC1yZW1vdGUvbm9kZS1saW5rLWNoYWxsZW5nZS92MQAIAAEAAAACAAEAAgAAABAAAQIDBAVGB4gJCgsMDQ4PAAMAAAAQEBESExQVRheYGRobHB0eHwAGAAAACAAAAAAAAAAqAAkAAAAgAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8ACgAAACAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-PwALAAAAEEBBQkNERUZHiElKS0xNTk8ADAAAAF5ub2RlLWxpbmsuY29tbWFuZC1zdGF0dXMudjEAbm9kZS1saW5rLmNvcmUudjEAbm9kZS1saW5rLnJhdy1hY3AudjEAbm9kZS1saW5rLnNlc3Npb24tY3JlYXRlLnYx",
+    "transcriptSha256Hex": "fdb4cdda29cb0f4fcd5bce53bc0f00a7f47811a0efdddbb169d9de1cb392e84e",
     "publicKey": "BG1C7G0Jmvz40KI6ZLjCB4_g5EC8ECzTRVWU6w0tjgIAEfkJqm0DLZX8aVyyMhZbkcA4cCkBCjzw1MlN0RnxBGo",
     "privateJwk": {
       "crv": "P-256",
@@ -33,6 +32,6 @@
       "x": "bULsbQma_PjQojpkuMIHj-DkQLwQLNNFVZTrDS2OAgA",
       "y": "EfkJqm0DLZX8aVyyMhZbkcA4cCkBCjzw1MlN0RnxBGo"
     },
-    "p1363Signature": "zYaaF6eKvSWQ2ozqvVQaVYVYPO4ytlDmpfBNr2Rrvuyvnf88zysPF2Wz8tGuBZwBbqxou4DMav7wkl9ew5POgg"
+    "p1363Signature": "eFPGapcjlDybO92-obOQJefMlxTz6tXozVfwriLKMYE3o8O4Q794gGzP9TsFvaLiW661Q4ccO3vwVlst5uWDpw"
   }
 }

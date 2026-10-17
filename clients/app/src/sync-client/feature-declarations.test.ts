@@ -42,7 +42,6 @@ function syncRegistryFeatures(): readonly RegistryFeature[] {
  * 它们是**客户端广告、服务端可选**的能力，客户端据此在协商命中后才请求/呈现对应数据。
  */
 const NEW_SYNC_FEATURES = [
-  "core.workspace-path.v1",
   "core.workspace-browse.v1",
   "core.file-diff.v1",
 ] as const;

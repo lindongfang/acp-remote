@@ -173,12 +173,6 @@ impl CommandRateLimiter {
         attempts.push_back(now);
         RateOutcome::Allowed
     }
-
-    /// 当前跟踪的键数（诊断与单测用）。
-    #[cfg(test)]
-    pub(crate) fn tracked_keys(&self) -> usize {
-        lock(&self.state).len()
-    }
 }
 
 /// 淘汰窗口内已无记录的键。

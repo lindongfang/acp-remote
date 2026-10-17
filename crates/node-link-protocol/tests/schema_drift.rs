@@ -11,7 +11,7 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use node_link_protocol::common::{GrantName, TranscriptDomain};
+use node_link_protocol::common::TranscriptDomain;
 use node_link_protocol::envelope::MessageType;
 use node_link_protocol::error::ErrorCode;
 
@@ -195,27 +195,6 @@ fn error_codes_and_retryable_match_registry() {
             "错误码及其 retryable 必须与 registry 逐条相等"
         );
     }
-}
-
-#[test]
-fn grant_names_match_the_command_catalog() {
-    let catalog = support::read_json(&support::repo_path(
-        "compatibility/commands/v1/commands.json",
-    ));
-    let grants = catalog["grants"]
-        .as_object()
-        .expect("commands.json 的 grants");
-
-    // JSON object 的键序不是合同的一部分，schema 的 `enum` 顺序才是——这里比较集合，枚举顺序与取值
-    // 的字面量由 `common.rs` 的单测钉住。
-    let registered: BTreeSet<&str> = grants.keys().map(String::as_str).collect();
-    let declared: BTreeSet<&str> = GrantName::ALL.iter().map(|grant| grant.as_str()).collect();
-
-    assert_eq!(
-        declared, registered,
-        "grant 词表的唯一来源是 commands.json：Rust 枚举必须与它逐条相等"
-    );
-    assert_eq!(declared.len(), 5, "grant 词表的项数变化");
 }
 
 #[test]

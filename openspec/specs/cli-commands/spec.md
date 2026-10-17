@@ -8,12 +8,27 @@
 
 ### Requirement: CLI 子命令映射与薄客户端约束
 
-CLI SHALL 提供 `LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表中的全部子命令（`daemon start|stop|status`、`workspace select`、`agent configure`、`provider configure`、`device pair|list|revoke`、`node pair|list|revoke`、`export create|list|revoke`、`import add|list|remove`、`doctor`、`acp-stdio`），且每个子命令的底层调用 MUST 与该表一致，不得自造管理方法（如不得新增 `daemon.doctor`）。CLI MUST 只做参数解析、展示与轮询：不复制业务规则、不自行读写 SQLite、不启动第二套核心；首切片 MUST NOT 提供 `session create`/`session list`。CLI MUST NOT 自动重试任何 mutation 方法；连接中断时报错退出，重试由用户显式发起。
+CLI SHALL 提供 §5.8 映射表中的全部子命令，底层调用 MUST 与映射表一致，且 MUST NOT 自造管理方法。`export create|list|revoke` 与 `import add|list|remove` MUST NOT 存在。`node pair` MUST NOT 接受 `--grant`/`--export-id`/`--display-name`。CLI MUST 只做参数解析、展示与轮询。
+
+#### Scenario: Export/Import 命令已删除
+
+- **WHEN** 执行 `acp-remote export create` 或 `acp-remote import add`
+- **THEN** 参数解析失败并以非零退出，不调用任何本地方法
+
+#### Scenario: node pair 不携带授权参数
+
+- **WHEN** 执行 `acp-remote node pair --grant grant.observe`
+- **THEN** 参数解析失败并以非零退出
 
 #### Scenario: 子命令经本地通道调用对应方法
 
-- **WHEN** Daemon 运行时执行 `workspace select --alias ws --display-name 工作区 --root-path <绝对目录>`
-- **THEN** CLI 经本地通道调用 `workspace.select` 并展示结果；CLI 进程不打开 SQLite
+- **WHEN** Daemon 运行时执行 `agent list`
+- **THEN** CLI 经本地通道调用 `agent.list` 并展示结果；CLI 进程不打开 SQLite
+
+#### Scenario: 不再存在目录登记命令
+
+- **WHEN** 执行 `acp-remote workspace select …` 或查看 `acp-remote --help`
+- **THEN** 命令以非零退出码报告未知子命令，帮助输出里不出现 `workspace` 命令组
 
 #### Scenario: Daemon 未运行时管理命令明确失败
 
@@ -43,20 +58,6 @@ CLI SHALL 提供 `LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表中的全部子命令�
 - **WHEN** 以 `--fingerprint` 执行配对且它与 `status` 返回值逐字一致
 - **THEN** 调用 confirm；不匹配时以非零退出、不调用 confirm、不修改任何状态
 
-### Requirement: 结构化输入与凭据交互
-
-`agent configure` 与 `export create` SHALL 以 `--file <path>` 读取与方法 `params` 同形的 JSON；文件校验失败的错误码映射 MUST 与方法侧一致（`local.invalid_params`/`local.conflict`），`agent configure` 的文件不得包含凭据值。`provider configure` 的非秘密字段经命令行参数给出，凭据值 MUST 由 CLI 在交互终端逐项无回显读取，不接受凭据值作为命令行参数或普通文件输入；无交互终端时明确失败。
-
-#### Scenario: 凭据无回显录入
-
-- **WHEN** 在交互终端执行 `provider configure --provider-id openai --kind provider --display-name OpenAI --field api_key`
-- **THEN** CLI 逐项无回显读取凭据值并随方法调用发送；凭据值不出现在命令行参数、shell 历史可见位置、文件或输出中
-
-#### Scenario: 非交互环境拒绝凭据录入
-
-- **WHEN** 在无交互终端的环境执行 `provider configure`
-- **THEN** CLI 以非零退出码明确失败，不读取凭据、不调用方法
-
 ### Requirement: `doctor` 与 `acp-stdio`
 
 `doctor` SHALL 组合 `daemon.status`（Daemon 运行时）与 CLI 侧本地检查，Daemon 离线时在 CLI 进程内完成，不新增任何管理方法。`acp-stdio` SHALL 只做 stdin/stdout ↔ 本地通道 channel `0x02` 的字节泵，不进入管理信封、不内嵌 core/storage/agent-host；Daemon 未运行或正在关闭时 MUST 以明确错误退出，不得自行打开数据库或启动第二套核心。
@@ -70,3 +71,17 @@ CLI SHALL 提供 `LOCAL_ADMIN_PROTOCOL.md` §5.8 映射表中的全部子命令�
 
 - **WHEN** Daemon 未运行，Zed 或其他调用方启动 `acp-remote acp-stdio`
 - **THEN** 进程以非零退出码与明确错误结束，stderr 给出可判定的原因；不创建数据库句柄、不启动核心组件
+
+### Requirement: 结构化输入（无凭据交互）
+
+`export create` SHALL 以 `--file <path>` 读取与方法 `params` 同形的 JSON；文件校验失败的错误码映射 MUST 与方法侧一致（`local.invalid_params`/`local.conflict`）。CLI MUST NOT 接受 Provider/MCP 凭据值：凭据由 Agent 自己持有；`provider configure` 命令与其交互式无回显录入一并删除。
+
+#### Scenario: 结构化文件输入
+
+- **WHEN** 执行 `export create --file export.json`
+- **THEN** CLI 读取文件并调用 `export.create`；校验失败时按方法侧错误码报告
+
+#### Scenario: 凭据命令已删除
+
+- **WHEN** 执行 `provider configure`
+- **THEN** CLI 以非零退出码报告未知子命令，不读取任何凭据

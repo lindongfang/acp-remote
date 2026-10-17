@@ -19,13 +19,9 @@ const CREDENTIAL_VALUE: &str = "wp4a-secret-value-should-never-be-exported";
 
 fn seed_profile() -> String {
     format!(
-        r#"[[agents.profiles]]
-agent_id = "codex"
-display_name = "Codex (seed)"
-command = "{command}"
-args = []
-env_allowlist = ["OPENAI_API_KEY"]
-default = true
+        r#"[agent]
+default = "codex"
+codex = "{command}"
 "#,
         command = env!("CARGO_BIN_EXE_acp-remote").replace('\\', "/"),
     )
@@ -37,44 +33,10 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
     let mut daemon = Daemon::configure("audit-export", &seed_profile());
     daemon.start();
 
-    // 产生两类审计行：provider.configured（含 keystore 写入）与 export.created。
+    // 产生 pairing.created 审计行。
     daemon.ok(
-        Method::ProviderConfigure,
-        params_of(json!({
-            "providerId": "openai",
-            "kind": "provider",
-            "displayName": "OpenAI",
-            "values": { "api_key": CREDENTIAL_VALUE },
-        })),
-    );
-    let workspace_root = daemon.root().join("workspace");
-    std::fs::create_dir_all(&workspace_root).expect("工作区目录");
-    daemon.ok(
-        Method::WorkspaceSelect,
-        params_of(json!({
-            "alias": "project",
-            "displayName": "Project",
-            "rootPath": workspace_root.display().to_string(),
-        })),
-    );
-    daemon.ok(
-        Method::ExportCreate,
-        params_of(json!({
-            "exportId": "export-1",
-            "displayName": "Export One",
-            "agentIds": ["codex"],
-            "workspaceAliases": [{ "alias": "project", "displayName": "Project" }],
-            "defaultWorkspaceAlias": "project",
-            "templates": [{
-                "templateId": "template-1",
-                "displayName": "Template One",
-                "workspaceAlias": "project",
-                "params": [],
-            }],
-            "defaultTemplateId": "template-1",
-            "scopes": ["grant.session.read"],
-            "cachePolicy": "no-content-cache",
-        })),
+        Method::DevicePairBegin,
+        params_of(json!({ "expiresInMs": null })),
     );
 
     let output_path = daemon.root().join("audit-export.jsonl");
@@ -117,7 +79,7 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
         lines.len() as u64,
         "recordCount 必须等于文件行数"
     );
-    assert!(lines.len() >= 2, "至少两条审计行：{text}");
+    assert!(!lines.is_empty(), "至少一条审计行：{text}");
 
     // 每行都是合法 JSON 对象，含文档化的字段，且正文/凭据一概不出现。
     let mut actions: Vec<String> = Vec::new();
@@ -135,11 +97,7 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
         assert!(record["targetId"].is_string(), "{line}");
     }
     assert!(
-        actions.contains(&"provider.configured".to_owned()),
-        "{actions:?}"
-    );
-    assert!(
-        actions.contains(&"export.created".to_owned()),
+        actions.contains(&"pairing.created".to_owned()),
         "{actions:?}"
     );
     assert!(
@@ -178,13 +136,12 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
             "format": "csv",
             "since": null,
             "until": null,
-            "categories": ["provider.configured"],
+            "categories": ["pairing.created"],
         })),
     );
     assert_eq!(filtered["recordCount"], json!(1));
     let csv = std::fs::read_to_string(&filtered_path).expect("CSV 导出存在");
-    assert!(csv.contains("provider.configured"), "{csv}");
-    assert!(!csv.contains("export.created"), "{csv}");
+    assert!(csv.contains("pairing.created"), "{csv}");
 
     assert!(daemon.stop().success());
 }

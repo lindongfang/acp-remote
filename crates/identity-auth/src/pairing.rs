@@ -19,27 +19,23 @@ use crate::types::{
     CanonicalOrigin, ClaimFields, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing,
     Completion, IdentityFact, PAIRING_MAX_FAILURES, PAIRING_MAX_SECONDS, PairingDecision,
     PairingDraft, PairingProof, PairingRequestId, PairingRequestMaterial, PairingSpec,
-    PairingStatusView, RequestedCapabilities, at_or_after, is_unconfirmed,
+    PairingStatusView, at_or_after, is_unconfirmed,
 };
 
 impl Authority {
-    /// 创建一个配对：登记请求集合、绑定、有效期与内存 secret；返回待落库的记录草稿。
+    /// 创建一个配对：登记绑定、有效期与内存 secret；返回待落库的记录草稿。
     ///
     /// `expires_at` 由调用方按「不超过 5 分钟」算出后传入，本方法只复核上界（收窄可以、延长不行）。
-    /// 请求集合必须与目标族一致：设备配对不得携带任何集合（设备没有授权维度），节点配对只带 grant。
+    /// 设备与节点配对都不携带任何授权集合。
     pub fn begin_pairing(
         &self,
         pairing_id: &PairingId,
         spec: &PairingSpec,
-        requested: &RequestedCapabilities,
         display_name: Option<&str>,
         created_at: &Timestamp,
         expires_at: &Timestamp,
     ) -> Result<PairingDraft, PairingError> {
         let target = spec.target();
-        if !requested.matches_target(target) {
-            return Err(PairingError::CapabilityKindMismatch);
-        }
         let created = crate::transcript::unix_seconds(created_at)?;
         let expires = crate::transcript::unix_seconds(expires_at)?;
         if expires <= created || expires - created > PAIRING_MAX_SECONDS {
@@ -56,8 +52,6 @@ impl Authority {
             target,
             PairingState::Created,
             display_name.map(str::to_owned),
-            requested.scopes.clone(),
-            requested.grants.clone(),
             secret.digest()?,
             spec.host_binding(),
             created_at.clone(),
@@ -120,15 +114,6 @@ impl Authority {
         if fields.host_binding != pairing.host_binding() {
             return Ok(ClaimOutcome::Rejected(ClaimRejection::BindingMismatch));
         }
-        let registered = RequestedCapabilities {
-            scopes: pairing.requested_scopes().clone(),
-            grants: pairing.requested_grants().clone(),
-        };
-        if !fields.requested.within(&registered) {
-            return Ok(ClaimOutcome::Rejected(
-                ClaimRejection::CapabilitiesExceedRegistered,
-            ));
-        }
         // 证明：内存 secret（重启后必然缺失 → 该配对已不可认领）。
         let Some(secret) = self.state().secret(&fields.pairing) else {
             return Ok(ClaimOutcome::Rejected(ClaimRejection::NotClaimable));
@@ -148,7 +133,6 @@ impl Authority {
             public_key: fields.public_key.clone(),
             host_binding: fields.host_binding.clone(),
             client_nonce: fields.client_nonce.clone(),
-            requested: fields.requested.clone(),
         })))
     }
 
@@ -204,7 +188,7 @@ impl Authority {
         Ok(())
     }
 
-    /// 落定：批准或拒绝。批准要求状态为 `pending_confirmation`、未过期，且最终集合不超出请求值。
+    /// 落定：批准或拒绝。批准要求状态为 `pending_confirmation` 且未过期。
     ///
     /// **不在落定时清除 secret**（合同 §4.3）：批准后的配对仍要被 `pairing-status` 之类的
     /// HMAC 证明使用，直到「首次认证成功」才提前清除（见 [`Authority::complete`]）；
@@ -221,36 +205,16 @@ impl Authority {
         at: &Timestamp,
     ) -> Result<PairingSettlement, PairingError> {
         match decision {
-            PairingDecision::Approve {
-                granted_scopes,
-                granted_grants,
-            } => {
+            PairingDecision::Approve => {
                 if pairing.state() != PairingState::PendingConfirmation {
                     return Err(PairingError::WrongState);
                 }
                 if at_or_after(at, pairing.expires_at()) {
                     return Err(PairingError::Expired);
                 }
-                let granted = RequestedCapabilities {
-                    scopes: granted_scopes.clone(),
-                    grants: granted_grants.clone(),
-                };
-                if !granted.matches_target(pairing.target()) {
-                    return Err(PairingError::CapabilityKindMismatch);
-                }
-                let requested = RequestedCapabilities {
-                    scopes: pairing.requested_scopes().clone(),
-                    grants: pairing.requested_grants().clone(),
-                };
-                if !granted.within(&requested) {
-                    return Err(PairingError::CapabilitiesExceedRequested);
-                }
                 // **不**在这里置位「已批准」（design D3：内存态绝不超前于已提交状态）：置位由
                 // [`Authority::mark_pairing_approved`] 在调用方**提交成功之后**完成。
-                Ok(PairingSettlement::approved(
-                    granted_scopes.clone(),
-                    granted_grants.clone(),
-                ))
+                Ok(PairingSettlement::approved())
             }
             PairingDecision::Reject { reason } => {
                 if !matches!(
@@ -326,10 +290,6 @@ impl Authority {
             public_key_fingerprint: claimed
                 .then(|| peer.map(|peer| peer.public_key.fingerprint()))
                 .flatten(),
-            requested: claimed.then(|| RequestedCapabilities {
-                scopes: pairing.requested_scopes().clone(),
-                grants: pairing.requested_grants().clone(),
-            }),
             peer: claimed
                 .then(|| peer.map(|peer| peer.peer.clone()))
                 .flatten(),
@@ -455,12 +415,6 @@ impl ClaimedPairing {
             &self.host_binding,
             self.client_nonce.clone(),
         )?;
-        PairingClaim::try_new(
-            self.pairing.clone(),
-            peer,
-            self.requested.scopes.clone(),
-            self.requested.grants.clone(),
-        )
-        .map_err(PairingError::from)
+        PairingClaim::try_new(self.pairing.clone(), peer).map_err(PairingError::from)
     }
 }

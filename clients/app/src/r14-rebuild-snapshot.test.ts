@@ -259,7 +259,7 @@ function sessionItem(sessionId: string, title: string): Record<string, unknown> 
     version: "1",
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
-    workspace: { alias: "work-api", displayName: "api" },
+    workspace: { directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" },
   };
 }
 
@@ -328,7 +328,7 @@ describe("R14：重建快照时未完成的暂存内容不得覆盖已完成状�
       const completedAt = cursor("10");
       const completedChunks = [
         chunkText({ snapshotId: completedId, chunkIndex: "0", resource: "sessions", items: [sessionItem("5d73cd10-a465-43cd-b3f1-704e2d49e99e", COMPLETED_TITLE)] }),
-        chunkText({ snapshotId: completedId, chunkIndex: "1", resource: "workspaces", items: [{ alias: "work-api", displayName: "api" }] }),
+        chunkText({ snapshotId: completedId, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }] }),
         chunkText({ snapshotId: completedId, chunkIndex: "2", resource: "agents", items: [{ agentId: "codex-a", displayName: "codex", default: true }] }),
       ];
       socket.deliver(snapshotBegin(completedId, completedAt));
@@ -382,7 +382,7 @@ describe("R14：重建快照时未完成的暂存内容不得覆盖已完成状�
       const rebuiltAt = cursor("20");
       const rebuiltChunks = [
         chunkText({ snapshotId: rebuiltId, chunkIndex: "0", resource: "sessions", items: [sessionItem("7c93de21-b576-4cf2-a1f0-815c26e5aff00", "重建后的会话")] }),
-        chunkText({ snapshotId: rebuiltId, chunkIndex: "1", resource: "workspaces", items: [{ alias: "work-api", displayName: "api" }] }),
+        chunkText({ snapshotId: rebuiltId, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }] }),
         chunkText({ snapshotId: rebuiltId, chunkIndex: "2", resource: "agents", items: [{ agentId: "codex-a", displayName: "codex", default: true }] }),
       ];
       socket.deliver(snapshotBegin(rebuiltId, rebuiltAt));

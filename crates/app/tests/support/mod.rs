@@ -863,3 +863,45 @@ pub fn dir_entries(path: &Path) -> Vec<String> {
     names.sort();
     names
 }
+
+/// 直接向运行中的 Daemon 数据库插入一条目录记录（测试夹具）。
+///
+/// A 之后目录只能由成功的会话创建自动记录；导出用例只需要「目录已记录」这一事实，因此在测试里直接
+/// 写表比先建一条会话更小、更稳定。返回派生标识，供 wire 断言使用。
+pub async fn seed_directory(data_dir: &Path, path: &Path) -> String {
+    let canonical = std::fs::canonicalize(path).expect("目录可规范化");
+    let text = canonical.to_str().expect("路径是 UTF-8");
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(text.as_bytes());
+    let mut directory_id = String::with_capacity(32);
+    for byte in &digest[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(directory_id, "{byte:02x}");
+    }
+    let database = data_dir.join("acp-remote.sqlite3");
+    let url = format!("sqlite://{}", database.display());
+    let pool = sqlx::SqlitePool::connect(&url)
+        .await
+        .expect("打开测试数据库");
+    sqlx::query(
+        "INSERT INTO owned_directory (directory_id, canonical_path, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?3) ON CONFLICT(directory_id) DO NOTHING",
+    )
+    .bind(&directory_id)
+    .bind(text)
+    .bind("2026-09-18T09:00:00.000Z")
+    .execute(&pool)
+    .await
+    .expect("写入目录记录");
+    pool.close().await;
+    directory_id
+}
+
+/// [`seed_directory`] 的同步入口（`#[test]` 用例的本地管理通道是同步客户端）。
+pub fn seed_directory_blocking(data_dir: &Path, path: &Path) -> String {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("测试 runtime")
+        .block_on(seed_directory(data_dir, path))
+}

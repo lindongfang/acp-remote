@@ -73,8 +73,6 @@ pub enum OriginBlock {
     Remote {
         #[serde(rename = "ownerNodeId")]
         owner_node_id: Uuid,
-        #[serde(rename = "exportId")]
-        export_id: NonEmptyText<256>,
         #[serde(rename = "originEpoch")]
         origin_epoch: Uuid,
         online: bool,
@@ -98,7 +96,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
             ) -> Result<Self::Value, A::Error> {
                 let mut kind: Option<String> = None;
                 let mut owner_node_id: Option<Uuid> = None;
-                let mut export_id: Option<NonEmptyText<256>> = None;
                 let mut origin_epoch: Option<Uuid> = None;
                 let mut online: Option<bool> = None;
                 while let Some(key) = access.next_key::<String>()? {
@@ -115,12 +112,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
                             }
                             owner_node_id = Some(access.next_value()?);
                         }
-                        "exportId" => {
-                            if export_id.is_some() {
-                                return Err(DeError::duplicate_field("exportId"));
-                            }
-                            export_id = Some(access.next_value()?);
-                        }
                         "originEpoch" => {
                             if origin_epoch.is_some() {
                                 return Err(DeError::duplicate_field("originEpoch"));
@@ -136,7 +127,7 @@ impl<'de> Deserialize<'de> for OriginBlock {
                         other => {
                             return Err(DeError::unknown_field(
                                 other,
-                                &["kind", "ownerNodeId", "exportId", "originEpoch", "online"],
+                                &["kind", "ownerNodeId", "originEpoch", "online"],
                             ));
                         }
                     }
@@ -144,11 +135,7 @@ impl<'de> Deserialize<'de> for OriginBlock {
 
                 match kind.as_deref() {
                     Some("local") => {
-                        if owner_node_id.is_some()
-                            || export_id.is_some()
-                            || origin_epoch.is_some()
-                            || online.is_some()
-                        {
+                        if owner_node_id.is_some() || origin_epoch.is_some() || online.is_some() {
                             return Err(DeError::custom(ValueError::Shape {
                                 field: "originBlock",
                                 expected: "local 分支只允许 kind",
@@ -159,7 +146,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
                     Some("remote") => Ok(OriginBlock::Remote {
                         owner_node_id: owner_node_id
                             .ok_or_else(|| DeError::missing_field("ownerNodeId"))?,
-                        export_id: export_id.ok_or_else(|| DeError::missing_field("exportId"))?,
                         origin_epoch: origin_epoch
                             .ok_or_else(|| DeError::missing_field("originEpoch"))?,
                         online: online.ok_or_else(|| DeError::missing_field("online"))?,
@@ -183,8 +169,6 @@ impl<'de> Deserialize<'de> for OriginBlock {
 pub struct RemoteOrigin {
     #[serde(rename = "ownerNodeId")]
     pub owner_node_id: Uuid,
-    #[serde(rename = "exportId")]
-    pub export_id: NonEmptyText<256>,
     #[serde(rename = "originEpoch")]
     pub origin_epoch: Uuid,
     #[serde(rename = "originEventId")]
@@ -404,42 +388,29 @@ pub enum SessionState {
     Closed,
 }
 
-/// `common.schema.json#/$defs/workspaceRef`：本机已登记目录的**引用**（会话摘要用）。
+/// `common.schema.json#/$defs/workspaceRef`：已记录目录的**引用**（会话摘要用）。
 ///
-/// wire 上只有别名与展示名。规范化路径**不在**这里重复：它只出现在快照 `workspaces` 资源的条目上
-/// （[`WorkspaceCatalogEntry`]，`docs/SYNC_PROTOCOL.md` §9.4/§10.3），需要它的客户端按 `alias` 在同一
-/// 份快照里查表。展示名取自 `owned_workspace.display_name`，登记已删除时回退为别名本身。
+/// wire 上只有不透明目录标识。规范化路径**不在**这里重复：它只出现在快照 `workspaces` 资源的条目上
+/// （[`WorkspaceCatalogEntry`]，`docs/SYNC_PROTOCOL.md` §9.4/§10.3），需要它的客户端按标识在同一
+/// 份快照里查表。客户端 MUST NOT 解析、拼接或由标识反推路径。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRef {
-    pub alias: NonEmptyText<64>,
-    #[serde(rename = "displayName")]
-    pub display_name: NonEmptyText<128>,
+    #[serde(rename = "directoryId")]
+    pub directory_id: NonEmptyText<32>,
 }
 
 /// `common.schema.json#/$defs/workspaceCatalogEntry`：快照 `workspaces` 资源的元素。
 ///
-/// 比 [`WorkspaceRef`] 多一个**可选**的规范化路径键：`path` 只在客户端协商了
-/// `core.workspace-path.v1` 时出现，未协商时 MUST 缺席（不是 `null`、不是空串），使只协商
-/// `core.local-catalog.v1` 的旧客户端仍能通过自己的封闭形状校验（`docs/SYNC_PROTOCOL.md` §9.4）。
-/// 取值是服务端已登记的规范化权威值（`canonicalize` 的结果剥掉平台 verbatim 前缀），客户端 MUST NOT
-/// 拼接、规范化或反查它。
+/// `path` 是已记录目录的规范化权威值（`canonicalize` 的结果剥掉平台 verbatim 前缀），与
+/// `directoryId` **成对**下发；客户端 MUST NOT 拼接、规范化或反查它。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceCatalogEntry {
-    pub alias: NonEmptyText<64>,
-    #[serde(rename = "displayName")]
-    pub display_name: NonEmptyText<128>,
-    /// 三态与 [`SessionSummary::workspace`] 同源：`None` = 键缺席（未协商路径能力）；
-    /// `Some(..)` = 键在且是非空路径。它没有 `null` 分支，因此用
-    /// [`deserialize_optional_non_null`] 而不是 `Option<Nullable<..>>`。
-    #[serde(
-        rename = "path",
-        default,
-        deserialize_with = "deserialize_optional_non_null",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub path: Option<NonEmptyText<4096>>,
+    #[serde(rename = "directoryId")]
+    pub directory_id: NonEmptyText<32>,
+    /// 已记录目录的规范化路径（始终在场）。
+    pub path: NonEmptyText<4096>,
 }
 
 /// `common.schema.json#/$defs/agentCatalogEntry`：本机已配置 Agent 的目录条目。

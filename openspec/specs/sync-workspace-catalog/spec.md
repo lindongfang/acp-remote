@@ -6,47 +6,19 @@
 
 ## Requirements
 
-### Requirement: 会话摘要携带目录归属引用
-
-系统 SHALL 在 Sync 的会话摘要投影中携带 `workspace` 字段，取值为 `{ alias, displayName }` 或 `null`（`null` 表示原型的「未分组」）。该引用 MUST 在会话创建时按当时解析使用的别名确定并随会话持久化；投影 MUST NOT 依据当前规范化路径反查解析表、拼接或推导该引用。
-
-#### Scenario: 已在已登记目录中创建的会话
-
-- **WHEN** 一个会话创建时使用了本机已登记的 workspace 别名
-- **THEN** 其会话摘要的 `workspace` 为该别名当前的 `{ alias, displayName }`，与登记值一致
-
-#### Scenario: 没有目录归属的会话
-
-- **WHEN** 一个会话没有可用的持久化别名（创建时未解析出别名，或它早于本能力落地）
-- **THEN** 其会话摘要的 `workspace` 为 `null`，系统不为其猜测、补齐或反查任何别名
-
-#### Scenario: 目录重指向后归属不漂移
-
-- **WHEN** 同一别名被重新指向另一个本机目录后，读取此前用该别名创建的会话摘要
-- **THEN** `workspace` 仍是该别名的 `{ alias, displayName }`，不变成 `null`，也不出现任何路径信息
-
-#### Scenario: 别名已从本机删除时归属仍稳定
-
-- **WHEN** 会话的持久化别名在本机 workspace 登记表中已不存在
-- **THEN** `workspace.alias` 仍为该别名，`displayName` 回退为该别名本身；归属不变成 `null`，也不因缺少登记而反查路径
-
-#### Scenario: imported 会话的归属
-
-- **WHEN** 读取一条 imported（远程来源）会话的摘要
-- **THEN** 其 `workspace` 为 `null`，直到提供该会话的 Owner 侧投影携带目录引用为止；系统 MUST NOT 用本机 workspace 集合为它猜测归属
 ### Requirement: 目录与 Agent 目录随快照下发
 
-系统 SHALL 在 `sync.snapshot_*` 中提供两个新增资源：`workspaces`（元素为 `{ alias, displayName }`，协商 `core.workspace-path.v1` 时另含一个规范化路径字段）与 `agents`（元素为 `{ agentId, displayName, default }`）。客户端 MUST 能仅凭一次快照渲染目录页与创建选择器，MUST NOT 需要额外的在线查询命令才能获得这两份目录。目录路径只出现在 `workspaces` 资源这一处，会话摘要的目录引用 MUST NOT 重复携带它——需要路径的客户端按引用里的别名在同一份快照内查表。
+系统 SHALL 在 `sync.snapshot_*` 中提供两个资源：`workspaces`（元素为 `{ directoryId, path }`）与 `agents`（元素为 `{ agentId, displayName, default }`）。`workspaces` 的条目集合 MUST 等于本节点记录过的目录（即曾成功创建过会话的目录），MUST NOT 需要任何人工登记步骤。客户端 MUST 能仅凭一次快照渲染目录页与创建选择器，MUST NOT 需要额外的在线查询命令。目录路径只出现在 `workspaces` 资源这一处，会话摘要的目录引用 MUST NOT 重复携带它——需要路径的客户端按 `directoryId` 在同一份快照内查表。
 
 #### Scenario: 首次同步获得完整目录
 
 - **WHEN** 一个已认证设备完成首次订阅并接收完整快照
-- **THEN** 快照包含当前全部已登记的 workspace 与已配置的 Agent，且元素只含本条列出的字段
+- **THEN** 快照包含本节点记录过的全部目录与配置中的全部 Agent，且元素只含本条列出的字段
 
 #### Scenario: 空目录仍出现在快照中
 
-- **WHEN** 一个已登记 workspace 下没有任何会话
-- **THEN** 它仍出现在 `workspaces` 资源中，使客户端能渲染空目录而不是把它当作不存在
+- **WHEN** 一个已记录目录下没有任何会话
+- **THEN** 它仍出现在 `workspaces` 资源中，使客户端能渲染该目录并说明其中没有会话
 
 #### Scenario: 离线渲染不依赖在线查询
 
@@ -55,12 +27,41 @@
 
 #### Scenario: 路径只在目录资源里出现一次
 
-- **WHEN** 检查一次协商了 `core.workspace-path.v1` 的完整快照
+- **WHEN** 检查一次完整快照
 - **THEN** 规范化路径只出现在 `workspaces` 的条目上，会话摘要的目录引用里 MUST NOT 出现它
 
-### Requirement: 目录资源的协商与下发范围
+#### Scenario: 目录由会话自动出现
 
-两个新增资源 SHALL 受 feature `core.local-catalog.v1` 门控：客户端未协商该 feature 时 MUST NOT 收到它们，也 MUST NOT 收到空数组占位；`body.requiredFeatures` 含该 feature 而对方未协商时，接收方 MUST 返回 `protocol.feature_required`。会话摘要的 `workspace` 字段 SHALL 是同一 feature 门控下的可选字段：未协商该 feature 的客户端 MUST NOT 在会话摘要中收到该字段（SKIP），且它 MUST NOT 出现在摘要的必填集合中，以免旧客户端因未知字段拒绝整条消息。`workspaces` 条目上的规范化路径字段 SHALL 另受 feature `core.workspace-path.v1` 门控，未协商时该键缺席（不是 `null`、不是空串）。目录资源不再按设备授权过滤：任何已认证设备都收到本节点完整的已登记目录与已配置 Agent 集合。
+- **WHEN** 在一个此前从未使用过的目录里成功创建了一个会话
+- **THEN** 该目录以 `{ directoryId, path }` 出现在下一次快照（或对应的增量替换）中，无需任何登记命令
+
+### Requirement: 会话摘要携带目录标识引用
+
+系统 SHALL 在 Sync 的会话摘要投影中携带 `workspace` 字段，取值为 `{ directoryId }` 或 `null`（`null` 表示「未分组」）。`directoryId` MUST 是目录资源条目的同一个不透明标识；该引用 MUST 在会话创建时按当时解析得到的目录 id 确定并随会话持久化，投影 MUST NOT 依据当前规范化路径反查目录表、拼接或推导该引用。客户端 MUST NOT 解析、拼接或由目录 id 反推出路径。
+
+#### Scenario: 已在已登记目录中创建的会话
+
+- **WHEN** 一个会话创建时使用了一个本机已记录的目录（`directoryId`）
+- **THEN** 其会话摘要的 `workspace` 为 `{ directoryId }`，且与 `workspaces` 资源里的同一条目一致
+
+#### Scenario: 没有目录归属的会话
+
+- **WHEN** 一个会话没有持久化的目录 id（例如目录解析失败，或它早于本能力落地且没有可用路径）
+- **THEN** 其会话摘要的 `workspace` 为 `null`，系统不为其猜测、补齐或反查任何目录
+
+#### Scenario: 目录记录被清理后归属仍稳定
+
+- **WHEN** 会话的持久化 `directoryId` 在本机目录表中已不存在
+- **THEN** `workspace` 仍是该 `directoryId`，不变成 `null`，也不按路径反查或替换为其它目录
+
+#### Scenario: imported 会话的归属
+
+- **WHEN** 读取一条 imported（远程来源）会话的摘要
+- **THEN** 其 `workspace` 为 `null`，直到提供该会话的 Owner 侧投影携带目录引用为止；系统 MUST NOT 用本机目录集合为它猜测归属
+
+### Requirement: 目录资源的协商与路径成对下发
+
+两个资源 SHALL 受 feature `core.local-catalog.v1` 门控：客户端未协商该 feature 时 MUST NOT 收到它们，也 MUST NOT 收到空数组占位；`body.requiredFeatures` 含该 feature 而对方未协商时，接收方 MUST 返回 `protocol.feature_required`。会话摘要的 `workspace` 字段 SHALL 是同一 feature 门控下的可选字段：未协商该 feature 的客户端 MUST NOT 在会话摘要中收到该字段（SKIP），且它 MUST NOT 出现在摘要的必填集合中。目录条目里的路径字段 MUST 始终与 `directoryId` 一起下发——路径不再由独立 feature 门控（`core.workspace-path.v1` 已撤销）。目录资源不再按设备授权过滤：任何已认证设备都收到本节点完整记录的目录与配置中的 Agent 集合。
 
 #### Scenario: 未协商时不发送该资源
 
@@ -72,31 +73,31 @@
 - **WHEN** 一台未协商 `core.local-catalog.v1` 的旧客户端接收会话摘要
 - **THEN** 摘要中不出现 `workspace` 字段（不是 `null`，而是该字段缺席），整条消息仍能通过该客户端自己的 schema 校验
 
-#### Scenario: 未协商路径能力时键缺席
+#### Scenario: 路径与目录标识成对出现
 
-- **WHEN** 一台协商了 `core.local-catalog.v1`、但未协商 `core.workspace-path.v1` 的客户端接收快照
-- **THEN** `workspaces` 的条目里不出现路径键（不是空串、不是 `null`），整条消息仍通过该客户端自己的 schema 校验
+- **WHEN** 一台协商了 `core.local-catalog.v1` 的客户端接收快照
+- **THEN** 每个 `workspaces` 条目同时含 `directoryId` 与 `path` 两个键，不存在只有其中一个的形态
 
 #### Scenario: 已认证设备收到完整目录
 
 - **WHEN** 一台已认证设备协商了 `core.local-catalog.v1`
-- **THEN** 它收到的快照含本节点全部已登记目录与已配置 Agent，不因设备维度而缺少任何条目
+- **THEN** 它收到的快照含本节点记录过的全部目录与配置中的全部 Agent，不因设备维度而缺少任何条目
 
-### Requirement: 目录路径只下发给协商该能力的设备
+### Requirement: 目录路径只随目录条目下发
 
-规范化路径 MUST NOT 出现在除 `workspaces` 资源条目以外的一切对端可见输出中，包括会话摘要、事件载荷、错误 `details`、`command.result` 与审计记录的前像。`workspaces` 条目上的路径字段 SHALL 只在客户端协商了 `core.workspace-path.v1` 时下发，且其取值 SHALL 是已登记目录的规范化权威值。客户端自己提交的目录 MUST NOT 被回显为任何对端可见字段。目录浏览只返回它必然要给客户端的那一层条目（见 `sync-workspace-browse`），不得借该命令泄漏其它层的路径。
+规范化路径 MUST NOT 出现在除 `workspaces` 资源条目以外的一切对端可见输出中，包括会话摘要、事件载荷、错误 `details`、`command.result` 与审计记录的前像。条目里的 `path` SHALL 是已记录目录的规范化权威值。客户端自己提交的目录 MUST NOT 被回显为任何对端可见字段。目录浏览只返回它必然要给客户端的那一层条目（见 `sync-workspace-browse`），不得借该命令泄漏其它层的路径。
 
-#### Scenario: 未协商时不出现路径
+#### Scenario: 事件与错误都不含路径
 
-- **WHEN** 一台未协商 `core.workspace-path.v1` 的客户端接收快照、事件与命令结果
-- **THEN** 这些输出中的任何字段都不含本机规范化路径明文或它的分段
+- **WHEN** 一次会话创建成功或失败后检查广播事件、错误载荷与审计记录
+- **THEN** 任何字段（含摘要计算的输入）都不包含本机规范化路径明文，客户端自己提供的目录也不被回显
 
-#### Scenario: 未登记的目录路径不出现在任何输出中
+#### Scenario: 客户端提交的目录不被回显
 
-- **WHEN** 检查一次协商了路径能力的完整快照与其后的事件与命令结果
-- **THEN** 只出现已登记目录的路径，客户端自己提交过的目录不被回显
+- **WHEN** 一次 `session.create` 携带客户端提供的绝对目录并成功
+- **THEN** 快照里出现的只是该目录被记录后的条目，命令结果与错误载荷里不出现被提交的路径原文
 
 #### Scenario: 错误响应不回显路径
 
 - **WHEN** 一次目录相关请求因形状或解析失败被拒
-- **THEN** 错误 `details` 只含别名或字段名，不含任何路径明文
+- **THEN** 错误 `details` 只含 `directoryId` 或字段名，不含任何路径明文

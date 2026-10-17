@@ -4,10 +4,7 @@
 //! 这里**不**做校验（校验在 [`crate::local_admin::params`]）、不读时钟、不接触存储；导出给
 //! `result` 的字段集合与 §5.2–§5.5 的表格逐项对应，未知字段不会被凭空造出来。
 
-use acp_core::model::{
-    AgentProfile, DeviceRecord, ExportId, ExportRecord, ImportRecord, NodeRecord, TemplateParam,
-    TemplateParamValue, Timestamp, WorkspaceRecord,
-};
+use acp_core::model::{DeviceRecord, NodeRecord, Timestamp};
 use serde_json::Value;
 
 use crate::local_admin::envelope::JsonObject;
@@ -31,145 +28,11 @@ pub(crate) fn timestamp(value: &Timestamp) -> Value {
     text(value.as_str())
 }
 
-/// 字符串数组。
-pub(crate) fn string_array<'a>(items: impl IntoIterator<Item = &'a str>) -> Value {
-    Value::Array(items.into_iter().map(text).collect())
-}
-
-/// `workspace.select` 的 result 内层（§5.2）：`{ alias, displayName, rootPath, createdAt }`。
-pub(crate) fn workspace(record: &WorkspaceRecord) -> JsonObject {
-    object(vec![
-        ("alias", text(record.alias().as_str())),
-        ("displayName", text(record.display_name())),
-        ("rootPath", text(record.canonical_path())),
-        ("createdAt", timestamp(record.created_at())),
-    ])
-}
-
-/// `agent.configure` 的 result 内层（§5.2）：`{ agentId, displayName, default }`。
-pub(crate) fn agent(profile: &AgentProfile) -> JsonObject {
-    object(vec![
-        ("agentId", text(profile.id().as_str())),
-        ("displayName", text(profile.display_name())),
-        ("default", Value::Bool(profile.is_default())),
-    ])
-}
-
-/// `provider.configure` 的 result 内层（§5.2）：只回字段名，**永不回显 `values`**。
-pub(crate) fn provider(provider_id: &str, kind: &str, configured_fields: &[String]) -> JsonObject {
-    object(vec![
-        ("providerId", text(provider_id)),
-        ("kind", text(kind)),
-        (
-            "configuredFields",
-            Value::Array(configured_fields.iter().map(text).collect()),
-        ),
-    ])
-}
-
-/// `export.create`／`export.list` 的 `ExportView`（§5.5）。
-pub(crate) fn export(record: &ExportRecord) -> JsonObject {
-    object(vec![
-        ("exportId", text(record.export_id().as_str())),
-        ("displayName", text(record.display_name())),
-        (
-            "agentIds",
-            Value::Array(
-                record
-                    .agent_ids()
-                    .iter()
-                    .map(|id| text(id.as_str()))
-                    .collect(),
-            ),
-        ),
-        (
-            "workspaceAliases",
-            Value::Array(
-                record
-                    .workspace_aliases()
-                    .iter()
-                    .map(|entry| {
-                        Value::Object(object(vec![
-                            ("alias", text(entry.alias().as_str())),
-                            ("displayName", text(entry.display_name())),
-                        ]))
-                    })
-                    .collect(),
-            ),
-        ),
-        (
-            "defaultWorkspaceAlias",
-            text(record.default_workspace_alias().as_str()),
-        ),
-        (
-            "templates",
-            Value::Array(
-                record
-                    .templates()
-                    .iter()
-                    .map(|template| {
-                        Value::Object(object(vec![
-                            ("templateId", text(template.template_id().as_str())),
-                            ("displayName", text(template.display_name())),
-                            ("workspaceAlias", text(template.workspace_alias().as_str())),
-                            (
-                                "params",
-                                Value::Array(
-                                    template
-                                        .params()
-                                        .iter()
-                                        .map(|param| Value::Object(template_param(param)))
-                                        .collect(),
-                                ),
-                            ),
-                        ]))
-                    })
-                    .collect(),
-            ),
-        ),
-        (
-            "defaultTemplateId",
-            text(record.default_template_id().as_str()),
-        ),
-        ("scopes", string_array(record.scopes().iter())),
-        ("cachePolicy", text(record.cache_policy().as_str())),
-        ("createdAt", timestamp(record.created_at())),
-        (
-            "revokedAt",
-            match record.revoked_at() {
-                Some(at) => timestamp(at),
-                None => Value::Null,
-            },
-        ),
-    ])
-}
-
-/// `import.list` 的 `ImportRecord`（§5.5，与 `CONFIG_REFERENCE.md` §9 的 `[[imports]]` 同名同义）。
-pub(crate) fn import(record: &ImportRecord) -> JsonObject {
-    object(vec![
-        ("importId", text(record.import_id().as_str())),
-        ("ownerEndpoint", text(record.owner_endpoint())),
-        ("ownerNodeId", text(record.owner_node_id().as_str())),
-        (
-            "exportIds",
-            Value::Array(
-                record
-                    .export_ids()
-                    .iter()
-                    .map(|id| text(id.as_str()))
-                    .collect(),
-            ),
-        ),
-        ("grants", string_array(record.grants().iter())),
-    ])
-}
-
 /// `device.list` 的 `DeviceRecord`（§5.3）：含 `pending` 与 `revoked` 记录，**不含授权集合**
 /// （设备权限层已删除：配对不授予授权，设备记录也不保存授权集合）。
 pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
     object(vec![
         ("deviceId", text(record.device_id().as_str())),
-        ("displayName", text(record.display_name())),
         (
             "publicKeyFingerprint",
             text(record.public_key_fingerprint().as_str()),
@@ -185,17 +48,10 @@ pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
 pub(crate) fn node(record: &NodeRecord) -> JsonObject {
     object(vec![
         ("nodeId", text(record.node_id().as_str())),
-        ("displayName", text(record.display_name())),
         ("kind", text(record.kind().as_str())),
         (
             "nodePublicKeyFingerprint",
             text(record.node_public_key_fingerprint().as_str()),
-        ),
-        ("grants", string_array(record.grants().iter())),
-        // §5.4 的 exportIds：该节点可见的 Export 清单（空清单如实输出 []，不隐藏，与运维视角一致）。
-        (
-            "exportIds",
-            string_array(record.export_ids().iter().map(ExportId::as_str)),
         ),
         ("state", text(record.state().as_str())),
         (
@@ -220,35 +76,4 @@ pub(crate) fn optional_timestamp(value: Option<&Timestamp>) -> Value {
         Some(at) => timestamp(at),
         None => Value::Null,
     }
-}
-
-fn template_param(param: &TemplateParam) -> JsonObject {
-    object(vec![
-        ("name", text(param.name().as_str())),
-        ("type", text(param.ty().as_str())),
-        ("required", Value::Bool(param.required())),
-        (
-            "pattern",
-            match param.pattern() {
-                Some(pattern) => text(pattern),
-                None => Value::Null,
-            },
-        ),
-        (
-            "enum",
-            match param.enum_values() {
-                Some(values) => Value::Array(
-                    values
-                        .iter()
-                        .map(|value| match value {
-                            TemplateParamValue::String(text) => Value::String(text.clone()),
-                            TemplateParamValue::Boolean(flag) => Value::Bool(*flag),
-                            TemplateParamValue::Integer(number) => Value::from(*number),
-                        })
-                        .collect(),
-                ),
-                None => Value::Null,
-            },
-        ),
-    ])
 }

@@ -14,16 +14,15 @@ fixture 中的密钥、签名、nonce、ID 和内容全部是公开测试数据�
 | `valid/node-hello.json` | `message.schema.json` | 认证前信封（省略 `connectionId`/`connectionSequence`）、`role=access`、feature 列表 |
 | `valid/node-challenge.json` | `message.schema.json` | Owner 版本选择、`connectionId`、`nodeProof` |
 | `valid/node-ready.json` | `message.schema.json` | 认证后信封、`limits` 全字段、`serverEpoch` |
-| `valid/catalog-snapshot.json` | `message.schema.json` | `exportEntry` 全字段（含 `grant.*` scopes 与 `no-content-cache`） |
+| `valid/catalog-snapshot.json` | `message.schema.json` | `agents`/`directories`/`sessions` 三类资源清单 |
 | `valid/resource-attached.json` | `message.schema.json` | `attachmentId`/`attachmentGeneration`（十进制字符串）/`sessionMeta` |
 | `valid/resource-event.json` | `message.schema.json` | origin 三元组、`payload.view` 开放扩展点、`payload.acp` 的 `rawJson`/`byteLength`/`sha256` |
 | `valid/resource-ack.json` | `message.schema.json` | origin cursor 累计 ACK |
-| `valid/command-submit-session-create.json` | `message.schema.json` | `session.create` 的四个合法键与 `templateParams` |
+| `valid/command-submit-session-create.json` | `message.schema.json` | `session.create` 的 `agentId` + `directoryId` |
 | `valid/command-submit-session-resume.json` | `message.schema.json` | `session.resume` 的空对象 payload 与会话范围字段（`sessionRef`/`attachmentId`/`attachmentGeneration` 非 `null`、`expectedVersion` 为 `null`） |
 | `valid/command-submit-session-prompt.json` | `message.schema.json` | session 范围命令携带 `attachmentId`/`attachmentGeneration` |
 | `valid/command-terminal.json` | `message.schema.json` | `terminal.status=completed` 时 `result` 为非空 object、`error=null` |
 | `valid/command-terminal-session-resume-completed.json` | `message.schema.json` | `session.resume` 成功终态的 `result` 是 `sessionResumeResult`（`remoteSessionRef` + `sessionMeta`） |
-| `valid/export-revoked.json` | `message.schema.json` | Export 撤销通知 |
 | `valid/pairing-claim-request.json` | `pairing.schema.json` | claim 请求与 HMAC `proof` 形状 |
 | `valid/pairing-status-approved.json` | `pairing.schema.json` | `status=approved` 时返回 `node` 与 `owner` |
 | `invalid/session-create-with-cwd.json` | `message.schema.json` | `session.create` payload 出现 `cwd`（`additionalProperties`） |

@@ -272,7 +272,7 @@ pub struct StatusRequest {
 ///
 /// 设备方向没有授权维度（`pairing-model` 删除设备权限层）：设备块只承载非秘密元数据，
 /// `schemas/sync/v1/pairing.schema.json` 的 `device.additionalProperties: false` 使携带
-/// `scopes` 键的响应被拒。
+/// `scopes` 键的响应被拒（配对不携带任何授权集合）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeviceBlock {

@@ -1,18 +1,9 @@
 //! 启动描述：profile → 可执行的 `LaunchSpec`。
 //!
-//! 这一层是「凭据注入边界」的落点（`docs/MODULE_ARCHITECTURE.md` §4.5、`docs/SECURITY_DESIGN.md`
-//! §12.2/§13.1）：
-//!
-//! - 参数以**数组**传递，永不经过 shell 拼接；
-//! - profile 只来自 [`LocalConfigStore`]，绝不读启动配置文件；
-//! - 环境变量 = 凭据解析端口给出的绑定（端口本身已保证是 `env_allowlist ∩ 绑定` 的交集）加必要的进程环境；
-//! - 引用失效、keystore 不可用、或解析结果与「`env_allowlist ∩ 绑定` 的期望集合」不一致（漏给变量）
-//!   一律**失败关闭**，不静默跳过变量后继续启动；
 //! - Node/Device 密钥不进入这里——本 crate 根本不持有它们，子进程环境会先被清空，且 `ACPR_` 前缀的
 //!   注入名在这里被**静态拒绝**（不依赖运行时的环境清空）。
 
-use acp_core::model::{AgentId, AgentProfile};
-use acp_core::ports::{CredentialResolver, LocalConfigStore};
+use acp_core::model::AgentProfile;
 
 use crate::error::HostError;
 
@@ -57,81 +48,19 @@ const NECESSARY_ENV: &[&str] = &["PATH", "HOME", "USERPROFILE", "SystemRoot", "T
 const RESERVED_ENV_PREFIXES: &[&str] = &["ACPR_", "ACP_REMOTE_"];
 
 /// 解析一个 profile 的启动描述。
-pub async fn resolve_launch(
-    config: &dyn LocalConfigStore,
-    credentials: &dyn CredentialResolver,
-    agent: &AgentId,
-) -> Result<(AgentProfile, LaunchSpec), HostError> {
-    let profile = config
-        .profile(agent)
-        .await
-        .map_err(|error| HostError::SpawnFailed {
-            detail: format!("读取 profile 失败：{error}"),
-        })?
-        .ok_or(HostError::UnknownProfile)?;
-
-    // 凭据解析在启动之前完成；失败关闭，绝不「少注入几个变量继续跑」。
-    let resolved = credentials
-        .resolve_env(&profile)
-        .await
-        .map_err(|_| HostError::CredentialUnavailable)?;
-
-    let mut env: Vec<(String, String)> = Vec::with_capacity(resolved.len() + NECESSARY_ENV.len());
-    for (name, value) in resolved {
-        validate_env_name(&name)?;
-        // 白名单是**上限**而不是提示：端口已经保证交集，这里再核一次（纵深防御）。
-        // 端口实现出错时宁可失败关闭，也不把未列入白名单的变量注入子进程。
-        if !profile
-            .env_allowlist()
-            .iter()
-            .any(|allowed| allowed == &name)
-        {
-            return Err(HostError::EnvNotAllowed { name });
-        }
-        if env.iter().any(|(existing, _)| existing == &name) {
-            // 端口契约不允许重复；真出现时宁可失败也不猜哪个生效。
-            return Err(HostError::SpawnFailed {
-                detail: "凭据解析返回了重复的环境变量名".to_owned(),
-            });
-        }
-        env.push((name, value.expose_secret().to_owned()));
-    }
-
-    // 期望集合：profile 里**已绑定且在白名单内**的变量必须全部出现在解析结果中。
-    // 端口契约（`core::ports::CredentialResolver`）要求返回值恰为这个交集，且「不得静默跳过该变量后
-    // 继续启动」；这里按期望集合复核，端口少给一个变量也会失败关闭，而不是带着半个环境启动。
-    // 必须在必要进程环境注入**之前**校对：必要的进程环境不得冒充某个绑定变量。
-    for name in profile
-        .env()
-        .iter()
-        .map(|binding| binding.name())
-        .filter(|name| {
-            profile
-                .env_allowlist()
-                .iter()
-                .any(|allowed| allowed == name)
-        })
-    {
-        if !env.iter().any(|(existing, _)| existing == name) {
-            return Err(HostError::CredentialUnavailable);
-        }
-    }
-
+pub fn resolve_launch(profile: &AgentProfile) -> Result<LaunchSpec, HostError> {
+    let mut env: Vec<(String, String)> = Vec::with_capacity(NECESSARY_ENV.len());
     for name in NECESSARY_ENV {
-        if env.iter().any(|(existing, _)| existing == name) {
-            continue;
-        }
+        validate_env_name(name)?;
         if let Ok(value) = std::env::var(name) {
             env.push(((*name).to_owned(), value));
         }
     }
-
-    let spec = LaunchSpec {
+    Ok(LaunchSpec {
         program: profile.command().to_owned(),
         args: profile.args().to_vec(),
         env,
-    };
-    Ok((profile, spec))
+    })
 }
 
 /// 环境变量名必须合法，且不得使用 ACP Remote 自己的注入前缀。

@@ -9,8 +9,8 @@
     "chunkIndex": "1",
     "resource": "workspaces",
     "items": [
-      { "alias": "project.1", "displayName": "Project One" },
-      { "alias": "scratch", "displayName": "scratch" }
+      { "directoryId": "0123456789abcdef0123456789abcdef", "path": "D:\\work\\api" },
+      { "directoryId": "fedcba9876543210fedcba9876543210", "path": "D:\\work\\scratch" }
     ]
   }
 }

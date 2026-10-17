@@ -35,7 +35,7 @@ export interface DirectoryView {
   readonly id: DirectoryId;
   /** 展示名；同名允许，由别名（`id`）区分。 */
   readonly displayName: string;
-  /** 别名，wire 上的唯一标识；`session.create` 的 `workspaceAlias` 即取此值。 */
+  /** 别名，wire 上的唯一标识；`session.create` 的 `directoryId` 即取此值。 */
   readonly alias: string;
   /**
    * 服务端下发的逐字路径；未协商 `core.workspace-path.v1` 时该键**缺席**，这里为 `null`。

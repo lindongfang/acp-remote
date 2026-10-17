@@ -5,7 +5,7 @@
 //!
 //! 判别力（为什么这几条断言能抓住旧实现）：
 //! - 旧实现在 `title == Some(None)` 时**替换**整条 `UPDATE`，换成只写 `title` 的窄语句；因此
-//!   ① 版本不递增、② `updated_at` 不前进、③ 同一提交里的 `state`/`current_mode_*`/`workspace_alias`
+//!   ① 版本不递增、② `updated_at` 不前进、③ 同一提交里的 `state`/`current_mode_*`/`workspace_directory_id`
 //!   等列被静默丢弃——三条断言各自都会失败；
 //! - 该批次还带一条 `session.mode.changed`（`SYNC_PROTOCOL.md` §10.3 要求注入会话 `version`，
 //!   由 core 在提交前按「含 `StateChange` ⇒ 当前版本 + 1」填充）。旧实现的未递增返回值会让 core 的
@@ -115,7 +115,7 @@ struct Row {
     state: String,
     mode_id: Option<String>,
     mode_name: Option<String>,
-    workspace_alias: Option<String>,
+    workspace_directory_id: Option<String>,
     version: i64,
     updated_at: String,
 }
@@ -125,7 +125,7 @@ async fn row(dir: &std::path::Path, session: &SessionId) -> Row {
     let pool = raw_pool(&path).await;
     let record = sqlx::query(
         "SELECT title, agent_session_id, workspace_cwd, state, current_mode_id, \
-         current_mode_name, workspace_alias, version, updated_at \
+         current_mode_name, workspace_directory_id, version, updated_at \
          FROM owned_session WHERE session_id = ?1",
     )
     .bind(session.as_str())
@@ -143,8 +143,11 @@ async fn row(dir: &std::path::Path, session: &SessionId) -> Row {
             .expect("current_mode_id"),
         mode_name: sqlx::Row::try_get::<Option<String>, _>(&record, "current_mode_name")
             .expect("current_mode_name"),
-        workspace_alias: sqlx::Row::try_get::<Option<String>, _>(&record, "workspace_alias")
-            .expect("workspace_alias"),
+        workspace_directory_id: sqlx::Row::try_get::<Option<String>, _>(
+            &record,
+            "workspace_directory_id",
+        )
+        .expect("workspace_directory_id"),
         version: sqlx::Row::try_get::<i64, _>(&record, "version").expect("version"),
         updated_at: sqlx::Row::try_get::<String, _>(&record, "updated_at").expect("updated_at"),
     };
@@ -173,7 +176,7 @@ fn session_update_with(
         agent_session_id: agent_session_id
             .map(|id| acp_core::model::AgentSessionId::new(id).expect("agent session id")),
         workspace_cwd: workspace_cwd.map(str::to_owned),
-        workspace_alias: Some("office.main".to_owned()),
+        workspace_directory_id: Some("0123456789abcdef0123456789abcdef".to_owned()),
         interaction: None,
     }
 }
@@ -211,7 +214,10 @@ async fn setting_a_title_writes_it_and_bumps_the_version() {
     assert_eq!(row.updated_at, at(1).as_str(), "权威更新时间取 commit.at");
     assert_eq!(row.state, "waiting_input");
     assert_eq!(row.mode_id.as_deref(), Some("code"));
-    assert_eq!(row.workspace_alias.as_deref(), Some("office.main"));
+    assert_eq!(
+        row.workspace_directory_id.as_deref(),
+        Some("0123456789abcdef0123456789abcdef")
+    );
     store.close().await;
 }
 
@@ -221,7 +227,7 @@ async fn setting_a_title_writes_it_and_bumps_the_version() {
 /// 1. 提交**成功**——旧实现返回未递增的版本会让 core 判为版本漂移 → `PortError::Corrupt` 并整批丢事件；
 /// 2. `CommitOutcome.version` 恰好是「当前 + 1」，且落盘版本与它相同（core 的比对判据）；
 /// 3. `updated_at` 前进到 `commit.at`（目录排序按它，D7）；
-/// 4. 同一提交里的 `state`/`current_mode_*`/`workspace_alias` 不被吞掉（旧实现的窄语句丢弃它们）；
+/// 4. 同一提交里的 `state`/`current_mode_*`/`workspace_directory_id` 不被吞掉（旧实现的窄语句丢弃它们）；
 /// 5. 该事件的 view 按 §10.3 注入的就是那个递增后的版本，且事件真的落盘。
 #[tokio::test]
 async fn clearing_a_title_bumps_the_version_and_keeps_the_rest_of_the_batch() {
@@ -282,8 +288,8 @@ async fn clearing_a_title_bumps_the_version_and_keeps_the_rest_of_the_batch() {
     );
     assert_eq!(row.mode_name.as_deref(), Some("Code"));
     assert_eq!(
-        row.workspace_alias.as_deref(),
-        Some("office.main"),
+        row.workspace_directory_id.as_deref(),
+        Some("0123456789abcdef0123456789abcdef"),
         "同批的目录归属列不得被吞掉"
     );
 
@@ -369,7 +375,7 @@ async fn clearing_a_title_with_a_mode_change_writes_both_columns() {
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
                 interaction: None,
             })),
             vec![mode_changed(2)],

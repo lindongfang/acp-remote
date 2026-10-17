@@ -23,15 +23,14 @@ use crate::model::{
     AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
     CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
     ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType, ExportId,
-    ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
-    LocalCursor, MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
-    OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
-    PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
-    PromptRequest, ProviderRef, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest,
-    SecretValue, SeedState, Sequence, ServerEpoch, SessionId, SessionRecoveryRecord,
-    SessionReference, SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId,
-    TurnState, Version, WorkspaceAlias, WorkspaceRecord,
+    Digest, DirectoryId, DirectoryRecord, EndpointEvent, EntityRef, EventId, EventOrigin,
+    EventPayload, EventType, GlobalCursor, InteractionId, InteractionResolution, LocalCursor,
+    MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
+    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
+    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
+    PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, Sequence, ServerEpoch,
+    SessionId, SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState,
+    SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -74,6 +73,7 @@ pub struct TurnAccepted {
 #[async_trait]
 pub trait AgentCatalog: Send + Sync {
     async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError>;
+    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError>;
     async fn agent_capabilities(&self, agent: &AgentRef) -> Result<CapabilitySet, PortError>;
 }
 
@@ -255,9 +255,9 @@ pub struct SettledSession {
     pub agent_session_id: Option<AgentSessionId>,
     /// `owned_session.workspace_cwd`：core **自己**已解析的规范化绝对路径（不依赖后端回报）。
     pub workspace_cwd: Option<String>,
-    /// `owned_session.workspace_alias`：同一次解析用掉的**别名原文**（目录归属的唯一投影来源）；
+    /// `owned_session.workspace_directory_id`：同一次解析用掉的**别名原文**（目录归属的唯一投影来源）；
     /// 目录来源是客户端提供的路径时没有别名，写 `None` 即「未分组」。
-    pub workspace_alias: Option<String>,
+    pub workspace_directory_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -290,14 +290,14 @@ pub struct SessionUpdate {
     /// `owned_session.workspace_cwd`：`None` = 不改该列。语义同
     /// [`SessionUpdate::agent_session_id`]：`session.create` 走落账提交，本列只服务其它提交方。
     pub workspace_cwd: Option<String>,
-    /// `owned_session.workspace_alias`：`None` = 不改该列。语义同
+    /// `owned_session.workspace_directory_id`：`None` = 不改该列。语义同
     /// [`SessionUpdate::agent_session_id`]：`session.create` 走落账提交，本列只服务其它提交方。
     ///
     /// 来源是客户端提供的目录时该次解析**没有别名**，本列因此保持 `NULL`（「未分组」）。
     /// 写入后**只有读取路径**消费它（`SessionStore::list` 投影出 `SessionSummary::workspace`）；
     /// 恢复流程既不读也不改它（`SessionRecoveryRecord` 里没有这一项，§3.6）。`None` 语义为「未分组」，
     /// MUST NOT 由 `workspace_cwd` 反查别名补齐（`design.md` D1）。
-    pub workspace_alias: Option<String>,
+    pub workspace_directory_id: Option<String>,
 }
 
 /// 交互的一次解析（`InteractionResolution` + 解析者，供 `owned_interaction` 的
@@ -606,7 +606,7 @@ pub trait SessionStore: Send + Sync {
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
 
     /// 会话列表。返回的每个 [`SessionSummary`] 的 `workspace` **必须**取自该会话行持久化的
-    /// `owned_session.workspace_alias`（展示名按别名关联目录记录取得，取不到时回退为别名本身）；
+    /// `owned_session.workspace_directory_id`（展示名按别名关联目录记录取得，取不到时回退为别名本身）；
     /// 别名为 `NULL` 时就是 `None`（未分组）。
     ///
     /// 实现 MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，
@@ -631,7 +631,7 @@ pub trait SessionStore: Send + Sync {
     /// 可投影形状，§3.6）。会话行不存在，或任一列为 `NULL`（该会话没有可用于恢复的数据）时返回
     /// `Ok(None)`——`NULL` 不是错误，也不得被推导或补齐。
     ///
-    /// 本方法**不读 `workspace_alias`**：恢复一律以持久化的 cwd 原文为权威，不按别名重解析，目录归属
+    /// 本方法**不读 `workspace_directory_id`**：恢复一律以持久化的 cwd 原文为权威，不按别名重解析，目录归属
     /// 是投影期的事（§3.6、`design.md` D1）。
     async fn load_recovery(
         &self,
@@ -793,8 +793,6 @@ pub struct ImportedSessionRecord {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportedSessionQuery {
-    /// 只返回这些 import 名下的会话；`None` = 不按 import 过滤。
-    pub imports: Option<Vec<ImportId>>,
     /// 只返回这些远程会话；`None` = 不按会话过滤。
     pub only: Option<Vec<RemoteSessionRef>>,
     /// 返回行数上限；`None` = 不限。
@@ -811,12 +809,6 @@ pub struct RemoteCommandRef {
     pub terminal_at: Option<Timestamp>,
     pub terminal_event: Option<EventId>,
     pub error: Option<PublicError>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DropReport {
-    pub delivery_index_removed: u64,
-    pub command_refs_removed: u64,
 }
 
 #[async_trait]
@@ -856,9 +848,6 @@ pub trait RemoteDeliveryStore: Send + Sync {
         session: &RemoteSessionRef,
         request: &RequestId,
     ) -> Result<Option<RemoteCommandRef>, PortError>;
-
-    /// 删除该 import 名下的交付索引与命令引用；**不删除审计行**（`SECURITY_DESIGN.md` §11.5）。
-    async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError>;
 
     async fn prune(&self, policy: RetentionPolicy, at: Timestamp)
     -> Result<PruneReport, PortError>;
@@ -921,7 +910,7 @@ pub struct StoreHealth {
 }
 
 // ---------------------------------------------------------------------------------------------
-// §5.3 信任、Export、审计与附件
+// §5.3 信任、审计与附件
 // ---------------------------------------------------------------------------------------------
 
 /// 撤销原因。v1 的 `device.revoke`/`node.revoke` 只传 id，因此调用方填 `UserRequested`；
@@ -1016,7 +1005,7 @@ pub struct PairingClaimWrite {
     pub context: WriteContext,
 }
 
-/// 落定配对（§11.6）：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、
+/// 落定配对（§11.6）：单事务完成状态/过期检查、固定 peer、创建信任记录、
 /// 更新配对状态并写审计。peer 公钥从配对的对端行读回，不由调用方重复提供。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PairingSettlementWrite {
@@ -1060,66 +1049,10 @@ pub struct NodeConnectedWrite {
     pub context: WriteContext,
 }
 
-/// 写入/更新一个 Export（§11.6）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExportWrite {
-    pub record: ExportRecord,
-    pub context: WriteContext,
-}
-
-/// 撤销一个 Export（§11.6）：先提交再发送 `export.revoked`，发送失败不撤销数据库决定。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExportRevocation {
-    pub export: ExportId,
-    pub context: WriteContext,
-}
-
-/// 添加一个 Import（§11.6）：管理行 + 全部关联行一次提交。
-///
-/// `exports` 是本次写入的关联集合，**必须**等于 `record.export_ids()`（两处不得分歧，否则存储层返回
-/// `InvalidRequest`）；同一 `(owner_node_id, export_id)` 只能属于一个 Import，冲突返回
-/// `PortError::Conflict(DuplicateOwnership)`。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImportWrite {
-    pub record: ImportRecord,
-    pub exports: Vec<ExportId>,
-    pub context: WriteContext,
-}
-
-/// 完整移除一个 Import（§11.6）：同一事务删除管理行、关联行、`imported_session` 及其级联
-/// （交付索引、命令引用），**审计保留**。提交后由组合根停止连接/重连并清空内存正文。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImportRemoval {
-    pub import: ImportId,
-    pub context: WriteContext,
-}
-
-/// 写入一个 Agent profile（§11.6）。`put_profile` 是唯一写入默认 profile 的入口：至多一个
-/// `default = true`，切换默认必须是一次调用的原子写集。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProfileWrite {
-    pub profile: AgentProfile,
-    pub context: WriteContext,
-}
-
 /// 写入一个 workspace 记录（§11.6）。
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkspaceWrite {
-    pub record: WorkspaceRecord,
-    pub context: WriteContext,
-}
-
-/// 写入一个 Provider 引用（§11.6）：只记字段名、keystore 引用与版本。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderRefWrite {
-    pub reference: ProviderRef,
-    pub context: WriteContext,
-}
-
-/// 种子导入（§11.6）：`profiles` 与「已初始化」标记在同一事务里提交（空列表也写标记）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct SeedWrite {
-    pub profiles: Vec<AgentProfile>,
+pub struct DirectoryWrite {
+    pub record: DirectoryRecord,
     pub context: WriteContext,
 }
 
@@ -1186,68 +1119,15 @@ pub trait TrustStore: Send + Sync {
     async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError>;
 }
 
-/// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。
-#[async_trait]
-pub trait ExportStore: Send + Sync {
-    async fn export(&self, id: &ExportId) -> Result<Option<ExportRecord>, PortError>;
-
-    async fn exports(&self) -> Result<Vec<ExportRecord>, PortError>;
-
-    async fn import(&self, id: &ImportId) -> Result<Option<ImportRecord>, PortError>;
-
-    async fn imports(&self) -> Result<Vec<ImportRecord>, PortError>;
-
-    async fn put_export(&self, write: ExportWrite) -> Result<(), PortError>;
-
-    async fn revoke_export(&self, write: ExportRevocation) -> Result<(), PortError>;
-
-    async fn add_import(&self, write: ImportWrite) -> Result<(), PortError>;
-
-    /// 完整移除（§11.6）：管理行 + 关联行 + 交付索引 + 命令引用；审计保留。
-    ///
-    /// 与 `RemoteDeliveryStore::drop_import`（连接级清空交付索引）不是同一件事，两者不得串联充当完整删除。
-    async fn remove_import(&self, write: ImportRemoval) -> Result<(), PortError>;
-}
-
-/// 本地配置存储（§11.6）：profile、workspace、Provider 引用与首次初始化标记。
+/// 本地配置存储（§11.6）：只承载目录记录；Agent 声明来自启动配置。
 #[async_trait]
 pub trait LocalConfigStore: Send + Sync {
-    async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError>;
+    async fn directories(&self) -> Result<Vec<DirectoryRecord>, PortError>;
 
-    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError>;
-
-    async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError>;
-
-    async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError>;
-
-    async fn workspace(&self, alias: &WorkspaceAlias)
-    -> Result<Option<WorkspaceRecord>, PortError>;
-
-    async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError>;
-
-    async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError>;
-
-    async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError>;
-
-    /// 首次初始化标记：`seeded = false` 时启动流程才能导入种子。
-    async fn seed_state(&self) -> Result<SeedState, PortError>;
-
-    /// 种子导入与「已初始化」标记同一事务提交（空列表也写标记）。
-    async fn mark_seeded(&self, write: SeedWrite) -> Result<(), PortError>;
-}
-
-/// 凭据解析（§11.6）：把 profile 的凭据绑定解析成子进程环境变量。
-///
-/// 由组合根用平台 keystore 实现并注入 `agent-host`（`agent-host` 不依赖 `identity-auth`）。
-#[async_trait]
-pub trait CredentialResolver: Send + Sync {
-    /// 解析启动子进程所需的全部环境变量。只允许解析 profile 的 `env` 绑定与 `env_allowlist` 的交集；
-    /// 未绑定、未列入白名单或引用失效（keystore 不可用 / 字段不存在）→
-    /// `Unavailable(KeystoreUnavailable)`，**失败关闭**：不得静默跳过该变量后继续启动。
-    async fn resolve_env(
+    async fn directory(
         &self,
-        profile: &AgentProfile,
-    ) -> Result<Vec<(String, SecretValue)>, PortError>;
+        directory_id: &DirectoryId,
+    ) -> Result<Option<DirectoryRecord>, PortError>;
 }
 
 /// 审计查询条件；`actions` 为空 = 不按动作过滤。
@@ -1271,8 +1151,8 @@ pub trait AuditStore: Send + Sync {
     /// 管理写集的变更水位（`docs/NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）：只增不减的
     /// 审计自增序号。
     ///
-    /// 取值必须是该库**曾经写入过的最大审计序号**，不得随清理回退——Export/信任写集各自追加一行审计，
-    /// 因此它正是「Export 与信任写集的变更点」，且在重启与保留期清理之后仍然单调。
+    /// 取值必须是该库**曾经写入过的最大审计序号**，不得随清理回退——信任写集各自追加一行审计，
+    /// 因此它是写集的变更点，且在重启与保留期清理之后仍然单调。
     async fn watermark(&self) -> Result<u64, PortError>;
 }
 

@@ -7,7 +7,7 @@
       "valid": true
     },
     {
-      "fixture": "valid/request-agent-configure.json",
+      "fixture": "valid/request-agent-list.json",
       "schema": "../../../schemas/local-admin/v1/envelope.schema.json",
       "valid": true
     },

@@ -37,8 +37,7 @@ import type {
 } from "./command";
 import type { AuthAuthenticated } from "./auth";
 import type { EventOriginKind, FileChangedDiff, FileChangedFields } from "./event";
-import type { SnapshotItemHistory, SnapshotItemWorkspaces } from "./sync";
-import type { WorkspaceRef } from "./common";
+import type { SnapshotItemHistory } from "./sync";
 
 /**
  * include 词表的**编译期**镜像：`SessionReadInclude` 的每个取值都必须在这里登记。
@@ -67,7 +66,7 @@ const HISTORY_KEY_MIRROR: Record<keyof SnapshotItemHistory, true> = {
 
 /**
  * 联合型的**全部**键（`keyof` 对联合取交集，因此不能用它枚举 XOR 联合的键：两侧独有的键会互相
- * 消掉，正是本文件最需要盯住的那两个——`workspaceAlias`/`workspacePath`）。
+ * 消掉，正是本文件最需要盯住的那两个——`directoryId`/`workspacePath`）。
  */
 type UnionKeys<T> = T extends unknown ? keyof T : never;
 
@@ -101,7 +100,7 @@ const COMMAND_NAME_MIRROR: Record<CommandName, true> = {
  */
 const SESSION_CREATE_PAYLOAD_MIRROR: Record<UnionKeys<SessionCreatePayload>, true> = {
   agentId: true,
-  workspaceAlias: true,
+  directoryId: true,
   workspacePath: true,
   createIfMissing: true,
 };
@@ -126,23 +125,6 @@ const FILE_CHANGED_FIELD_MIRROR: Record<keyof FileChangedFields, true> = {
 const FILE_CHANGED_DIFF_KEY_MIRROR: Record<keyof FileChangedDiff, true> = {
   diffLines: true,
   diffUnavailable: true,
-};
-
-/** `WorkspaceCatalogEntry` 的键集合的编译期镜像（`path` 是唯一可选键）。 */
-const WORKSPACE_CATALOG_KEY_MIRROR: Record<keyof SnapshotItemWorkspaces, true> = {
-  alias: true,
-  displayName: true,
-  path: true,
-};
-
-/**
- * `WorkspaceRef`（会话摘要的目录引用）的键集合的编译期镜像。
- *
- * 它必须**只有**两个键：路径只随快照的 `workspaces` 条目下发，MUST NOT 复制到会话摘要里。
- */
-const WORKSPACE_REF_KEY_MIRROR: Record<keyof WorkspaceRef, true> = {
-  alias: true,
-  displayName: true,
 };
 
 /**
@@ -576,9 +558,9 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect(payload.additionalProperties).toBe(false);
     expect(Object.keys(payload.properties).sort()).toEqual(Object.keys(SESSION_CREATE_PAYLOAD_MIRROR).sort());
     // 目录来源**恰好一个**：schema 用两支 oneOf 各要一个键表达，镜像用联合的两支表达同一件事。
-    expect(payload.oneOf).toEqual([{ required: ["workspaceAlias"] }, { required: ["workspacePath"] }]);
-    // `createIfMissing` 与 `workspaceAlias` 互斥（镜像里前者只出现在 workspacePath 那一支）。
-    expect(payload.not).toEqual({ required: ["workspaceAlias", "createIfMissing"] });
+    expect(payload.oneOf).toEqual([{ required: ["directoryId"] }, { required: ["workspacePath"] }]);
+    // `createIfMissing` 与 `directoryId` 互斥（镜像里前者只出现在 workspacePath 那一支）。
+    expect(payload.not).toEqual({ required: ["directoryId", "createIfMissing"] });
     expect(payload.properties["createIfMissing"]).toMatchObject({ type: "boolean" });
     expect(payload.properties["workspacePath"]).toMatchObject({ type: "string", maxLength: 4096 });
   });
@@ -641,7 +623,7 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
     expect([...names].sort()).toEqual(Object.keys(COMMAND_NAME_MIRROR).sort());
   });
 
-  it("快照 workspaces 条目是 workspaceCatalogEntry：path 可选且非 null，workspaceRef 仍是两键", () => {
+  it("快照 workspaces 条目是 workspaceCatalogEntry：directoryId + path，workspaceRef 只有 directoryId", () => {
     const syncSchema = readSchema("sync.schema.json");
     const item = defs(syncSchema)["snapshotItem.workspaces"] as { $ref: string };
     expect(item.$ref).toBe("common.schema.json#/$defs/workspaceCatalogEntry");
@@ -652,16 +634,16 @@ describe("AC3：protocol 镜像与 schema 逐项对应", () => {
       additionalProperties: boolean;
       properties: Record<string, unknown>;
     };
-    expect(catalog.required).toEqual(["alias", "displayName"]);
+    expect(catalog.required).toEqual(["directoryId", "path"]);
     expect(catalog.additionalProperties).toBe(false);
-    expect(Object.keys(catalog.properties).sort()).toEqual(Object.keys(WORKSPACE_CATALOG_KEY_MIRROR).sort());
-    // schema 的 `path` **没有** `null` 这一档：未协商 feature `core.workspace-path.v1` 时该键缺席。
+    expect(Object.keys(catalog.properties).sort()).toEqual(["directoryId", "path"]);
+    // `path` 是必需的规范化路径，没有 `null` 这一档。
     expect(catalog.properties["path"]).toMatchObject({ type: "string", minLength: 1, maxLength: 4096 });
 
-    // 会话摘要的目录引用仍是封闭两键：路径不在那里重复（镜像的 `WorkspaceRef` 也只有两键）。
+    // 会话摘要的目录引用只有 directoryId：路径不在那里重复。
     const ref = defs(commonSchema)["workspaceRef"] as { required: string[]; properties: Record<string, unknown> };
-    expect(ref.required).toEqual(["alias", "displayName"]);
-    expect(Object.keys(ref.properties).sort()).toEqual(Object.keys(WORKSPACE_REF_KEY_MIRROR).sort());
+    expect(ref.required).toEqual(["directoryId"]);
+    expect(Object.keys(ref.properties).sort()).toEqual(["directoryId"]);
   });
 
   it("workspace.browse 的请求与结果形状与镜像一致", () => {

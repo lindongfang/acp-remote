@@ -161,25 +161,15 @@
       "additionalProperties": false,
       "required": [
         "agentId",
-        "exportId",
-        "workspaceAlias"
+        "directoryId"
       ],
-      "description": "session.create 只允许这四个键。出现 cwd、mcpServers、任何绝对路径或凭据字段时必须返回 command.rejected + nodelink.command.unsupported_field，且不得创建会话或部分应用参数。",
+      "description": "session.create 只允许这两个键。出现 cwd、mcpServers、任何绝对路径或凭据字段时必须返回 command.rejected + nodelink.command.unsupported_field，且不得创建会话或部分应用参数。",
       "properties": {
         "agentId": {
           "$ref": "common.schema.json#/$defs/agentId"
         },
-        "exportId": {
-          "$ref": "common.schema.json#/$defs/exportId"
-        },
-        "workspaceAlias": {
-          "$ref": "common.schema.json#/$defs/workspaceAlias"
-        },
-        "templateParams": {
-          "type": "object",
-          "additionalProperties": true,
-          "maxProperties": 32,
-          "description": "开放扩展点：只能携带 Export template 声明的键；Owner 在应用前按 template 校验，未知键按 nodelink.command.unsupported_field 拒绝。"
+        "directoryId": {
+          "$ref": "common.schema.json#/$defs/directoryId"
         }
       }
     },

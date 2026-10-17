@@ -15,7 +15,7 @@ use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::common::{
-    Base64Url, GrantList, NodeName, ProtocolVersionV1, Timestamp, Uuid, ValueError,
+    Base64Url, NodeName, ProtocolVersionV1, Timestamp, Uuid, ValueError,
     deserialize_optional_non_null,
 };
 
@@ -322,14 +322,13 @@ pub struct StatusRequest {
     pub proof: Base64Url<32>,
 }
 
-/// `statusResponse.node`：只在 `status = "approved"` 时出现，给出被批准的 Access Node 与授予的 grants。
+/// `statusResponse.node`：只在 `status = "approved"` 时出现，给出被批准的 Access Node。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeBlock {
     #[serde(rename = "accessNodeId")]
     pub access_node_id: Uuid,
     pub name: NodeName,
-    pub scopes: GrantList,
 }
 
 /// `statusResponse.owner`：只在 `status = "approved"` 时出现，给出 Owner 身份与公开密钥。

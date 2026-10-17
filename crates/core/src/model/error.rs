@@ -29,13 +29,11 @@ pub enum ConflictKind {
     AlreadyExists,
     /// 对端身份材料与已绑定值不一致：不得换绑公钥、不得把已撤销身份改回活动（§11.6）。
     IdentityMismatch,
-    /// 同一 `(owner_node_id, export_id)` 已归属另一个 Import（§11.6）。
-    DuplicateOwnership,
 }
 
 impl ConflictKind {
     /// 全部取值，顺序即声明顺序（供存储层与测试穷举，不参与 wire 编码）。
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::VersionMismatch,
         Self::AlreadyResolved,
         Self::AlreadyClaimed,
@@ -44,7 +42,6 @@ impl ConflictKind {
         Self::IdempotencyConflict,
         Self::AlreadyExists,
         Self::IdentityMismatch,
-        Self::DuplicateOwnership,
     ];
 
     /// 稳定的下划线标记，用于日志与持久层分支，不是 wire 错误码。
@@ -58,7 +55,6 @@ impl ConflictKind {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::AlreadyExists => "already_exists",
             Self::IdentityMismatch => "identity_mismatch",
-            Self::DuplicateOwnership => "duplicate_ownership",
         }
     }
 }
@@ -82,10 +78,8 @@ pub enum UnavailableKind {
     RemoteUnavailable,
     /// Owner Node 离线（Node Link usage）。
     OwnerOffline,
-    /// Export 已撤销。
-    ExportRevoked,
-    /// 平台 keystore 不可用或引用失效（§11.6 的 `CredentialResolver` 失败关闭；由本地管理适配器
-    /// 映射为 `local.unavailable`）。
+    /// 平台 keystore 不可用或引用失效（节点/设备身份失败关闭；由本地管理适配器映射为
+    /// `local.unavailable`）。
     KeystoreUnavailable,
     /// 后端不支持该操作（不是临时故障）：目标 Agent 未宣告该操作所需的能力，或该会话没有该操作
     /// 所需的持久化数据（§2）。`port_error_public` 取既有码 `command.unsupported`；Node Link 适配器
@@ -104,13 +98,12 @@ pub enum UnavailableKind {
 
 impl UnavailableKind {
     /// 全部取值，顺序即声明顺序。
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Busy,
         Self::StorageFull,
         Self::IoError,
         Self::RemoteUnavailable,
         Self::OwnerOffline,
-        Self::ExportRevoked,
         Self::KeystoreUnavailable,
         Self::BackendUnsupported,
         Self::SessionNotEstablished,
@@ -124,7 +117,6 @@ impl UnavailableKind {
             Self::IoError => "io_error",
             Self::RemoteUnavailable => "remote_unavailable",
             Self::OwnerOffline => "owner_offline",
-            Self::ExportRevoked => "export_revoked",
             Self::KeystoreUnavailable => "keystore_unavailable",
             Self::BackendUnsupported => "backend_unsupported",
             Self::SessionNotEstablished => "session_not_established",
@@ -179,12 +171,10 @@ impl From<Infallible> for PortError {
 pub enum InvalidValue {
     /// 不是 canonical 小写 UUID 文本。
     Uuid,
-    /// `ExportId` 不匹配 `^[A-Za-z0-9._-]{1,128}$`。
-    ExportId,
-    /// `ImportId` 不匹配 `^[A-Za-z0-9._-]{1,128}$`。
-    ImportId,
     /// `WorkspaceAlias` 不匹配 `^[a-z0-9][a-z0-9._-]{0,63}$`。
     WorkspaceAlias,
+    /// `DirectoryId` 不是 32 字符小写十六进制。
+    DirectoryId,
     /// `TemplateId` 不匹配 `^[A-Za-z0-9._-]{1,64}$`。
     TemplateId,
     /// `AgentId` 为空或超过 128 个字符。
@@ -195,8 +185,6 @@ pub enum InvalidValue {
     EventType,
     /// scope 名不匹配 `^[a-z][a-z0-9._-]{0,127}$`。
     ScopeName,
-    /// grant 名不匹配 `^grant\.[a-z][a-z0-9._-]{0,63}$`。
-    GrantName,
     /// `PublicError.code` 不匹配 `^[a-z][a-z0-9._-]{0,127}$`。
     ErrorCode,
     /// `Sequence` 超过 `2^63-1`。
@@ -240,15 +228,13 @@ impl InvalidValue {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Uuid => "id is not a canonical lowercase UUID",
-            Self::ExportId => "export id must match ^[A-Za-z0-9._-]{1,128}$",
-            Self::ImportId => "import id must match ^[A-Za-z0-9._-]{1,128}$",
             Self::WorkspaceAlias => "workspace alias must match ^[a-z0-9][a-z0-9._-]{0,63}$",
+            Self::DirectoryId => "directory id must be 32 lowercase hex characters",
             Self::TemplateId => "template id must match ^[A-Za-z0-9._-]{1,64}$",
             Self::AgentId => "agent id must be 1..=128 characters",
             Self::AgentSessionId => "agent session id must be 1..=512 characters without NUL",
             Self::EventType => "event type must match ^[a-z0-9_.-]{1,128}$",
             Self::ScopeName => "scope name must match ^[a-z][a-z0-9._-]{0,127}$",
-            Self::GrantName => "grant name must match ^grant\\.[a-z][a-z0-9._-]{0,63}$",
             Self::ErrorCode => "code must match ^[a-z][a-z0-9._-]{0,127}$",
             Self::SequenceRange => "sequence exceeds 2^63-1",
             Self::Digest => "digest must be 32 bytes of canonical unpadded base64url",

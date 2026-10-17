@@ -2,15 +2,13 @@
 
 > 状态：wire 基线（Draft）已冻结；`sync-protocol` crate 已实现 v1 的全部 18 个消息类型——信封与消息类型分派，`auth`/`sync`/`control`/`error`/`event`/`command` 六个家族的 body——33 个事件视图定义（`event.payload.view` 的类型化投影），以及配对 HTTPS 载荷（二维码、claim、status、HTTP 错误体）。**服务端（Daemon 侧）已落地的面**：§3.1 的 WSS 端点与 subprotocol、§7 的配对 HTTP、§8 的设备认证（握手、来源绑定、单设备替换、撤销传播、心跳与 close code 映射）、§9.1–§9.5 的 cursor 判定、增量重放与实时投递、快照组装与摘要、累计 ACK。**尚未落地**：`server::acp_facade`、§9.6 的 imported 事件回源投递、§9.4 的三类明细资源（`turns`/`pending_interactions`/`capabilities`）与 imported 会话明细（详见各节的实现状态注记）。会话状态机、保留窗口与授权判定的核心实现位于 `core`/`server` crate，本文仍是 wire 的权威来源。  
 > 协议版本：1  
-> 修订记录（2026-10-17，`sync-path-browse-and-diff-delivery`）：**已登记目录的规范化路径随目录资源下发**——§9.4 的 `workspaces` 条目（`workspaceCatalogEntry`）新增**可选**键 `path`（feature `core.workspace-path.v1` 门控：未协商时该键缺席，不是 `null`、不是空串），会话摘要的 `workspace` 引用仍是 `workspaceRef` 的两个键，§10.3 的口径由「路径不得出现在任何对端可见输出」改写为「路径的可见面**只有两处**、且都受 feature 门控：协商 `core.workspace-path.v1` 后随快照 `workspaces` 条目下发**已登记**目录的规范化路径，协商 `core.workspace-browse.v1` 后由 `workspace.browse` 的 `command.result` 给出该层直接子目录的绝对路径与逐字回显的父路径」。**新增目录浏览查询命令** `workspace.browse`（§11.5：请求只含父路径 `path`——绝对路径或 `null`（根列表），结果只含该层的直接子目录的名称/绝对路径/是否已登记与一个截断标记；形状非法是参数类错误且不触碰文件系统，形式合法但不可达是服务端不可用类错误），归入 §11.5 的 `grant.observe`（命令目录 13→14 条、Sync 命令 12→13 条）。**`session.create` 新增显式建目录开关** `createIfMissing`（与 `workspaceAlias` 互斥；`feature core.session-create.v1` 的描述同步修正）。**`file.changed` 视图携带结构化差异行** `diffLines` 与不可用标记 `diffUnavailable`（feature `core.file-diff.v1` 门控，§10.2/§10.3）。§5.2 登记三条新 feature，§14 新增两条固定 v1 上限。  
-> 修订记录（2026-10-16，`pairing-model`）：**删除两套短验证码**——§6.1/§6.3 删去 `acp-remote/pairing-sas/v1` domain 与 `pairing SAS` 字段集合；§7.2 改为两条设备侧密码学校验（用配对载荷里固定的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节相同），不再派生或展示 SAS；§7.3 的 `approved` 响应不再返回授权集合；§17 的固定向量判据去掉 SAS 重算。**删除设备权限层**——§7.0 的确认不再分配授权；§8.4 的 `auth.authenticated` 不再携带设备 scope 集合；§9.2/§9.3/§9.4 不再按设备授权过滤事件、会话与目录资源；§11.1/§11.3/§11.4/§11.5 改为「已认证即执行前提」，并把 `session.create` 的 Sync 面载荷放开为「`workspaceAlias` 或客户端提交的绝对目录 `workspacePath`，二者取一」（Node Link 面仍只允许别名、且请求不得携带任意 Owner 路径）；§12.1 的示例错误码换掉设备 scope 拒绝；§14 的「命令族」改为服务端自持的 v1 常量（不再取自 `commands.json` 的 `packs`）；§15 的逐命令 scope 授权改为认证状态与幂等校验。**保留**：设备认证与每连接 challenge-response、撤销传播与速率上限、配对确认必须由本机用户完成、跨节点 `grant.*`/Export `scopes`/Import grants。  
+> 修订记录（2026-10-16，`pairing-model`）：**删除两套短验证码**——§6.1/§6.3 删去 `acp-remote/pairing-sas/v1` domain 与 `pairing SAS` 字段集合；§7.2 改为两条设备侧密码学校验（用配对载荷里固定的主机公钥验证认领响应的 `hostProof`、已批准响应的主机公钥与载荷逐字节相同），不再派生或展示 SAS；§7.3 的 `approved` 响应不再返回授权集合；§17 的固定向量判据去掉 SAS 重算。**删除设备权限层**——§7.0 的确认不再分配授权；§8.4 的 `auth.authenticated` 不再携带设备 scope 集合；§9.2/§9.3/§9.4 不再按设备授权过滤事件、会话与目录资源；§11.1/§11.3/§11.4/§11.5 改为「已认证即执行前提」，并把 `session.create` 的 Sync 面载荷放开为「`directoryId` 或客户端提交的绝对目录 `workspacePath`，二者取一」（Node Link 面仍只允许别名、且请求不得携带任意 Owner 路径）；§12.1 的示例错误码换掉设备 scope 拒绝；§14 的「命令族」改为服务端自持的 v1 常量（不再取自 `commands.json` 的 `packs`）；§15 的逐命令 scope 授权改为认证状态与幂等校验。**保留**：设备认证与每连接 challenge-response、撤销传播与速率上限、配对确认必须由本机用户完成、跨节点 `grant.*`/Export `scopes`/Import grants。  
 > 修订记录（2026-10-16，`session-create-settle-order`，无 wire 变更）：`session.create` 的落账时序改为**三笔**（受理只落幂等记录 → 执行 → 会话行 + 标识回填 + 终态在**同一次提交**，失败零会话行）——§11.2 的「结果语义固定如下」补上资源行与终态同事务、以及崩溃窗口只有受理记录（**没有**会话行）的形状，命令处理顺序块的注记同步；§11.5 的 `session.create` 行与正文改写为「先受理再执行」并给出**两面一致**的终态判据（可证明 Agent 侧未产生会话 ⇒ `failed`、复用既有码 `internal.unavailable`；说不清 ⇒ `uncertain`），`引用失败与解析失败的分类` 不变（引用/解析失败仍是接受前的拒绝、零副作用）。错误码、feature、schema 与 fixture 均未变。  
 > 修订记录（2026-09-18）：新增 §3.3 ACPR-CJ1 规范 JSON（`payloadDigest` 前像）；§4.1 明确认证前省略 `connectionId`/`connectionSequence`；§4.2 明确未知命令名返回 `command.unsupported`；§11.5 的 `command` 枚举只含 `transport` 含 `sync` 的命令；§14 把限流与若干上限固定为 v1 常量；§17 改为列出全部五个检查脚本与覆盖门禁；§12.2 新增 `details` 登记表并为 `protocol.feature_required`/`state.version_conflict`/`resource.rate_limited` 登记机器可读字段（兼容新增）；§10.2 新增 `turn.delta_compacted` 与 `agent.message.delta` 的可选 `block`，并写明 `deltaIndex` 的分配规则、收尾事件的生成与压缩后的重放语义（对齐 `CORE_PORTS_AND_STORAGE.md` §6 第 14/15 条）；§11.5 与 §10.2 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
-> 修订记录（2026-10-02）：`session.create` 经 Sync 暴露（feature `core.session-create.v1`）——§11.3 把它移入可授予集合并写明双层授权与设备级判定，§11.5 给出 Sync 面的 `{ workspaceAlias, agentId }` payload、`accepted`/`completed` 终态与失败分类，§16.2 说明它是可选 feature 引入而非 major version；§5.2 新增 `core.session-create.v1` 与 `core.local-catalog.v1` 两条 feature。本次不新增任何错误码（映射见 §11.5）。
+> 修订记录（2026-10-02）：`session.create` 经 Sync 暴露（feature `core.session-create.v1`）——§11.3 把它移入可授予集合并写明双层授权与设备级判定，§11.5 给出 Sync 面的 `{ <目录标识>, agentId }` payload、`accepted`/`completed` 终态与失败分类，§16.2 说明它是可选 feature 引入而非 major version；§5.2 新增 `core.session-create.v1` 与 `core.local-catalog.v1` 两条 feature。本次不新增任何错误码（映射见 §11.5）。
 > 修订记录（2026-10-14）：`event.body.origin` 增加第五个产生者类型 `kind = "node"`（由另一个节点经 Node Link 下发命令、在**本机**事件库落库的事件）与身份字段 `nodeId`，两者由 feature `core.event-origin.v1` 协商启用——§10.1 给出 `origin` 的两种形状（未协商时仍是冻结的 `{kind, deviceId}` 两个键）、`kind` 取值表的新行、唯一一条配对规则（`node` 必须带非空 `nodeId` 且 `deviceId` 为 `null`）与"经 feature 协商启用、不是加性变更"的理由；§9.6 同步 kind 枚举，§5.2 登记 `core.event-origin.v1`，§16.1/§16.2 把这次扩展归入 feature 协商并说明它为什么不需要 major version。机器资产同步：`schemas/sync/v1/event.schema.json` 的 enum、可选字段与 `if`/`then`（`origin.required` 保持 `kind`/`deviceId`），`compatibility/features/v1/features.json`，`fixtures/sync/v1/` 的固定向量（既有事件夹具补 `"nodeId": null`，新增 `kind = "node"` 的正例、两条 `node` 形状反例与一条未协商形状 `{kind, deviceId}` 的正例）。
 > 修订记录（2026-10-14，`sync-server-connection` WP7 文档写回，无 wire 变更）：按 Daemon 侧实绩写入四节实现状态注记——§3.1（端点与 subprotocol 已可用、来源三形态的传递、binary 帧关闭）、§7.4（配对 HTTP 五项原子校验/幂等/status 一律 200/四个安全响应头/固定限流，并如实登记「证明失败 5 次失效只在内存」与本地确认入口在本机管理通道两项未落地）、§8.5（四消息握手、来源绑定、认证前固定上限、单设备替换与撤销传播、心跳与静默超时、出站账本双上限、close code 映射，并如实登记业务命令面未接线）、§9.6 末与 §9 末（cursor 判定、增量重放与 barrier、快照与摘要、ACK 已落地，§9.6 末条的 imported 回源投递**仍是计划**并注明缺口的接缝）。wire 形状、schema 与 fixture 均未变。
 > 修订记录（2026-10-15，`sync-server-commands` 文档写回，无 wire 变更）：按 Daemon 侧实绩写入 §9.4/§9 末与 §10.3 的实现状态注记——业务命令面（§11.2 的五态 `command.result`、§11.3 的五条查询、§11.4 的 `command.status`、§11.5 的 12 条 Sync 命令）已接线并覆盖 mutation 的接受/幂等/版本冲突/终态观察者与 `session.create`；同时**如实登记本期降级**：`session.read` 的 `turns`/`pending_interactions`/`capabilities` 三类与 imported 会话明细一律回 `capability.unsupported_by_broker`（§9.4 说明「客户端 MUST NOT 当成会话无内容或已到最早一条」），§11.5 的 `session.read` 行同步标注。wire 形状、schema 与 fixture 均未变。
-> 日期：2026-10-17（2026-09-18 基线；2026-10-02 追加 `session.create` 与本机目录 feature；2026-10-14 追加 `origin` 的 `node` 与 `nodeId`（feature `core.event-origin.v1`）并写回连接面实绩；同日按 `sync-server-commands` 的实绩写回命令面与明细降级；2026-10-17 追加目录路径下发、`workspace.browse`、`session.create` 的建目录开关与结构化差异行（feature `core.workspace-path.v1`/`core.workspace-browse.v1`/`core.file-diff.v1`））
 > 适用范围：Daemon 与 PWA，以及后续 Android、iOS 和网络桌面客户端
 
 ## 1. 文档职责
@@ -69,7 +67,7 @@ Sync Protocol 提供适合客户端消费的公共视图，但公共视图不是
 - 不宣称网络或外部 Agent 副作用“恰好一次”；崩溃窗口无法确认时必须返回 `uncertain`，不得自动重复派发。
 - 慢客户端不得阻塞 Agent、Broker 或其他客户端。
 
-当前 Sync v1 baseline 通过 feature `resource.remote-origin.v1` 定义 imported resource 的承载方式：`ownerNodeId`、`exportId`、origin cursor、在线状态和 `no-content-cache` 全部由第 9.6 节规定。未协商该 feature 时不得把远程资源暴露给客户端，也不得把远程资源伪装成本地权威会话。协商后 snapshot、replay 和 `session.read` 的正文必须在线回源 Owner，客户端不得持久化正文与 `acp.rawJson`。
+当前 Sync v1 baseline 通过 feature `resource.remote-origin.v1` 定义 imported resource 的承载方式：`ownerNodeId`、origin cursor、在线状态和 `no-content-cache` 全部由第 9.6 节规定。未协商该 feature 时不得把远程资源暴露给客户端，也不得把远程资源伪装成本地权威会话。协商后 snapshot、replay 和 `session.read` 的正文必须在线回源 Owner，客户端不得持久化正文与 `acp.rawJson`。
 
 ## 3. Transport Profile
 
@@ -191,16 +189,15 @@ Feature ID 使用小写 ASCII、点分层级。取值集合是**封闭词表**�
 | `core.command-status.v1` | 命令终态查询与 `command.result` 的终态字段 | mvp | 否 |
 | `core.event-ack.v1` | 客户端 ACK 与断线续传（`sync.ack`） | mvp | 否 |
 | `acp.raw-payload.v1` | 事件携带 ACP 原文（`rawAcp.rawJson` 保真，见 §10.3） | mvp | 否 |
-| `resource.remote-origin.v1` | imported 资源来源承载（§9.6：`ownerNodeId`/`exportId`/origin cursor/`online`） | mvp | 否 |
-| `core.local-catalog.v1` | 本机 workspace 目录与 Agent profile 随快照下发（§9.4 的 `workspaces`/`agents` 资源、§10.3 的 `workspaceRef`/`agentCatalogEntry`），以及 `SessionSummary` 的可选 `workspace` 字段；`session.create` 的选择器由它供数。`workspaces` 条目上的规范化路径键由 `core.workspace-path.v1` 另门控 | mvp | 否 |
-| `core.session-create.v1` | Sync 面 `session.create`（§11.5 的目录来源二选一 payload——`workspaceAlias` 或客户端提供的 `workspacePath`——加必填 `agentId`，以及可选的「目录不存在则先创建」开关 `createIfMissing`；`completed { sessionId, session }` 终态结果） | mvp | 否 |
+| `resource.remote-origin.v1` | imported 资源来源承载（§9.6：`ownerNodeId`/origin cursor/`online`） | mvp | 否 |
+| `core.local-catalog.v1` | 本机目录与 Agent profile 随快照下发（§9.4 的 `workspaces`/`agents` 资源、§10.3 的 `workspaceRef`/`agentCatalogEntry`），以及 `SessionSummary` 的可选 `workspace` 字段；`session.create` 的选择器由它供数。目录条目始终同时带 `directoryId` 与 `path` | mvp | 否 |
+| `core.session-create.v1` | Sync 面 `session.create`（§11.5 的目录来源二选一 payload——`directoryId` 或客户端提供的 `workspacePath`——加必填 `agentId`，以及可选的「目录不存在则先创建」开关 `createIfMissing`；`completed { sessionId, session }` 终态结果） | mvp | 否 |
 | `core.session-history.v1` | Sync 面按会话读取结构化历史条目：§11.5 的 `include` 取值 `history`、`beforeHistory` 序号游标与结果里的 `history`/`historyHasEarlier`，条目类型集合见 §10.2、明细资源口径见 §9.4 | mvp | 否 |
 | `core.event-origin.v1` | 事件帧 `origin` 的身份字段 `nodeId` 与产生者类型 `node`（§10.1） | mvp | 否 |
-| `core.workspace-path.v1` | 已登记目录的规范化路径随快照 `workspaces` 条目的可选键 `path` 下发（§9.4）：未协商时该键缺席，会话摘要的目录引用仍只有两个键 | mvp | 否 |
 | `core.workspace-browse.v1` | Sync 面逐层浏览节点目录的查询命令 `workspace.browse`（§11.5 的请求/结果形状与失败分类、§14 的单层条目上限） | mvp | 否 |
 | `core.file-diff.v1` | `file.changed` 视图携带结构化差异行 `diffLines` 与不可用标记 `diffUnavailable`（§10.3）：未协商时该键缺席 | mvp | 否 |
 
-- 本表的十二个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
+- 本表的十一个 feature 构成 v1 baseline，实现必须全部支持（`delivery = mvp`）。
 - `必需` 列为"是"表示协议要求每次协商都必须选中该 feature；Sync v1 没有这种 feature，必需性由客户端按自身需要声明。
 - 客户端发送支持列表和必需列表。
 - 服务端返回已选择的交集。
@@ -364,7 +361,7 @@ approved
 - 一条 pairing 只允许从 `created` 成功 claim 一次；并发 claim 只有一个可以成功。
 - `claimed` 只用于服务端事务和审计，外部正常看到的是 `pending_confirmation`。
 - 电脑端确认必须通过本地 CLI、loopback UI 或其他已授权电脑入口完成，不提供给未认证的远程 PWA。
-- 电脑确认时**不授予任何授权**：设备方向没有授权维度（设备权限层已删除），配对确认页也没有权限栏。PWA 不能在 claim 中申请、扩大或以任何方式影响授权；claim 载荷出现任何授权集合字段（scope、`pack.*`、`preset.*`、grant）MUST 被拒绝。
+- 电脑确认时**不授予任何授权**：设备方向没有授权维度（设备权限层已删除），配对确认页也没有权限栏。PWA 不能在 claim 中申请、扩大或以任何方式影响授权；claim 载荷出现任何授权集合字段 MUST 被拒绝。
 - `approved` 后创建设备记录，但 pairing 在该设备首次 WSS 认证成功前保持可查询。
 - 首次 WSS 认证成功后原子转为 `consumed`；此后二维码不能再次创建设备。
 - 过期判断以 Daemon 时钟为权威。PWA 的本地时间检查只用于提前提示，不能延长有效期。
@@ -815,7 +812,6 @@ agents
 
 六类 session-scoped 明细资源 `messages`、`turns`、`pending_interactions`、`config_options`、`capabilities`、`history` **MUST NOT 进入快照**，无论会话的 `origin.kind` 是 `local` 还是 `remote`——本节此前只对 imported 会话作此豁免，现已收窄为全部会话，口径与 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) §12.4「正文绝不入快照」一致。会话明细一律由 `session.read` 在线按会话内序号或复合游标分页取得（见第 11.5 节），快照因此只随会话**条数**增长，与消息总量无关。`resource` 取这六个值之一的 chunk 按 `protocol.schema_invalid` 拒绝——它不在 `$defs/snapshotResource` 的封闭词表内，`sync.snapshot_chunk` 因此没有 `history` 这种资源可下发（结构化历史条目同样只在客户端按会话在线读取时下发）。
 
-设备方向不再有按授权的读取过滤；snapshot 里出现的规范化路径只限于 `workspaces` 条目上受 `core.workspace-path.v1` 门控的那一个键，客户端自己提交的目录仍 MUST NOT 被回显为对端可见字段（`SECURITY_DESIGN.md` §12.3；唯一例外是 §11.5 的只读目录浏览 `workspace.browse` 逐字回显本次请求的父路径，它不进入快照），未协商对应 feature 的客户端 MUST NOT 收到门控资源。
 
 Snapshot item 的最低 schema：
 
@@ -828,18 +824,16 @@ Snapshot item 的最低 schema：
 | `config_options` | `sessionId`, `configOptions`, `version`；**只经 `session.read` 返回，不进快照** |
 | `capabilities` | `sessionId`, `agentCapabilities`, `brokerAdditions`；**只经 `session.read` 返回，不进快照** |
 | `history` | `eventId`, `eventType`, `sessionSequence`, `createdAt`, `view`；`acp` 可选（`rawAcp` 的原文或不可用说明）；**只经 `session.read` 返回，不进快照** |
-| `workspaces` | `alias`, `displayName`；受 feature `core.local-catalog.v1` 门控；可选 `path`（已登记目录的规范化路径）受 feature `core.workspace-path.v1` 门控 |
+| `workspaces` | `directoryId`, `path`；受 feature `core.local-catalog.v1` 门控 |
 | `agents` | `agentId`, `displayName`, `default`；受 feature `core.local-catalog.v1` 门控 |
 
 `agent` 至少包含稳定 `agentId` 和展示用 `name`；不得包含 Provider credential。上表中标为「不进快照」的六类元素形状由 `session.read` 的结果直接复用（`command.schema.json#/$defs/sessionReadResult.resources` 引用同一批 `snapshotItem.*` 定义），因此会话明细只有一套值对象，不得为快照与回源发明两套语义。
 
-`workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。目录元素只含本表列出的字段。已登记但没有任何会话的 workspace 仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。目录资源不按设备授权过滤：任何已认证设备都收到本节点完整的已登记目录与已配置 Agent 集合；本次不新增任何授权词汇。
+`workspaces` 与 `agents` 是 `core.local-catalog.v1` 门控下的目录资源：客户端未协商该 feature 时服务端 MUST NOT 发送这两个资源，连空数组占位也不得发送。`workspaces` 的每个条目是 `{ directoryId, path }`：`directoryId` 是 32 字符小写十六进制的不透明标识，`path` 是已记录目录的规范化路径，两者**始终成对**下发。目录由成功的会话创建自动记录；已记录但没有任何会话的目录仍出现在 `workspaces` 里，客户端据此渲染空目录而不是把它当作不存在。目录资源不按设备授权过滤：任何已认证设备都收到本节点完整的目录与已配置 Agent 集合；本次不新增任何授权词汇。
 
-`workspaces` 条目的可选键 `path` 是本节点已登记目录的**规范化**路径（`canonicalize` 的结果剥掉平台 verbatim 前缀的形式），受 feature `core.workspace-path.v1` 门控：
 
-- **未协商该 feature 时该键 MUST 缺席**——不是 `null`，也不是空串。条目是 `additionalProperties: false` 的封闭对象（`schemas/sync/v1/common.schema.json#/$defs/workspaceCatalogEntry`），因此只协商 `core.local-catalog.v1` 的旧客户端必须收到与本变更前逐字节相同的条目，否则它会按 `protocol.schema_invalid` 拒收整条消息。
-- 路径的可见面**只有两处**：本键（快照 `workspaces` 条目）与只读目录浏览 `workspace.browse` 的 `command.result`（§11.5）；除这两处之外，会话摘要的 `workspace` 引用仍是 `workspaceRef` 的两个键（§10.3），事件载荷、错误 `details`、其余 `command.result` 与审计记录的前像一律不含它。客户端需要路径时按引用里的 `alias` 在同一份快照内查表。
-- 客户端 MUST NOT 拼接、规范化或反查该值；它回传这一形式时服务端**重新** `canonicalize` 并以自己的结果为准（§11.5）。
+- 路径的可见面**只有两处**：快照 `workspaces` 条目与只读目录浏览 `workspace.browse` 的 `command.result`（§11.5）；会话摘要的 `workspace` 引用只有 `{ directoryId }`（§10.3），事件载荷、错误 `details`、其余 `command.result` 与审计记录的前像一律不含路径。客户端需要路径时按 `directoryId` 在同一份快照内查表。
+- 客户端 MUST NOT 拼接、规范化、解析或反查这些值。
 
 `origin` 区分本地与 imported 会话（见第 9.6 节）。imported 会话的正文始终由 Owner 权威，客户端拿到 `origin.kind = "remote"` 的摘要后必须用 `session.read` 在线回源 Owner；本地会话的明细同样只经 `session.read` 现取，两者在 wire 上没有区别。
 
@@ -885,11 +879,11 @@ Access Node 可以向已协商 feature `resource.remote-origin.v1` 的客户端�
 
 ```text
 origin = { kind: "local" }
-       | { kind: "remote", ownerNodeId: UUID, exportId: string, originEpoch: UUID, online: boolean }
+       | { kind: "remote", ownerNodeId: UUID, originEpoch: UUID, online: boolean }
 ```
 
 - `kind` 为 `local` 时表示该会话由本节点拥有并持久化正文。
-- `kind` 为 `remote` 时表示该会话由 `ownerNodeId` 拥有、经 `exportId` 导出；`originEpoch` 是该**会话**在 `ownerNodeId` 上的 origin epoch（会话首次持久化写入时生成，不是节点级 epoch）；`online` 反映最近一次已知的 Owner 可达性。
+- `kind` 为 `remote` 时表示该会话由 `ownerNodeId` 拥有；`originEpoch` 是该**会话**在 `ownerNodeId` 上的 origin epoch（会话首次持久化写入时生成，不是节点级 epoch）；`online` 反映最近一次已知的 Owner 可达性。
 - `origin` 是 `SessionSummary` 的必填字段，形状见第 10.3 节。
 
 事件 body 增加必填 `remoteOrigin`，非 imported 事件固定为 `null`：
@@ -897,7 +891,7 @@ origin = { kind: "local" }
 ```text
 remoteOrigin = {
   ownerNodeId: UUID,
-  exportId: string,
+
   originEpoch: UUID,
   originEventId: UUID,
   originSequence: decimal string
@@ -1005,7 +999,7 @@ imported 会话的 `workspace` 固定为 `null`，直到提供该会话的 Owner
   - 未协商：`origin` 的形状与引入该 feature 之前**完全一致**（只有 `kind` 与 `deviceId` 两个键，`nodeId` 既不出现也不能被要求），且服务端 MUST NOT 投递 `kind = "node"` 的事件——服务端 MUST NOT 因客户端版本伪造或降级 `kind`（尤其不得把 `node` 写成 `device`）。
 
   协商与未协商两种形状都在 v1 内合法（schema 只要求 `kind`/`deviceId`），客户端按自身协商结果解释 `origin`。
-- `remoteOrigin` 是必填字段；本地事件为 `null`，imported 事件必须为带 `ownerNodeId`、`exportId`、`originEpoch`、`originEventId`、`originSequence` 的对象，且 `eventId` 等于 `originEventId`。
+- `remoteOrigin` 是必填字段；本地事件为 `null`，imported 事件必须为带 `ownerNodeId`、`originEpoch`、`originEventId`、`originSequence` 的对象，且 `eventId` 等于 `originEventId`。
 - `createdAt` 是 Daemon 持久化时间，不使用客户端时间决定顺序。
 - `payload.view` 是公共结构化视图。
 - `payload.acp` 在事件来源或语义与 ACP 消息相关时存在，内容视为不可信。
@@ -1117,7 +1111,7 @@ device.revoked
 | `session.plan.changed` | `entries: { content: string, priority: "high"|"medium"|"low", status: "pending"|"in_progress"|"completed" }[]` |
 | `session.commands.changed` | `commands: { name: string, description: string }[]` |
 | `session.usage.changed` | `used: decimal string`, `size: decimal string` |
-| `session.origin.online_changed` | `ownerNodeId: UUID`, `exportId: string`, `originEpoch: UUID`, `online: boolean` |
+| `session.origin.online_changed` | `ownerNodeId: UUID`, `originEpoch: UUID`, `online: boolean` |
 | `turn.queued`, `turn.started`, `turn.completed`, `turn.cancelled` | `turnId`, `state` |
 | `turn.failed` | `turnId`, `state: "failed"`, `error: PublicError` |
 | `turn.delta_compacted` | `turnId`, `deltaCount: decimal string`——**只承载收据，不复制正文**；终态正文见 `agent.message.completed`。**不带** delta 摘要：客户端察觉 delta 丢失靠的是 §9.4 的「会话内 `sessionSequence` 无空洞」，那比一个自算摘要更强，而 ACPR-CJ1 摘要需要密码学依赖、Broker 层不允许持有（`CORE_PORTS_AND_STORAGE.md` §2） |
@@ -1184,7 +1178,7 @@ SessionSummary {
   agent: { agentId: string, name: string },
   state: "idle" | "queued" | "running" | "waiting_input" | "waiting_permission" | "failed" | "closed",
   origin: { kind: "local" }
-        | { kind: "remote", ownerNodeId: UUID, exportId: string, originEpoch: UUID, online: boolean },
+        | { kind: "remote", ownerNodeId: UUID, originEpoch: UUID, online: boolean },
   currentMode: ModeRef | null,
   version: decimal string,
   createdAt: timestamp,
@@ -1215,9 +1209,7 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 
 `workspace` 是 feature `core.local-catalog.v1` 门控下的**可选**字段，刻意不在 `SessionSummary` 的必填集合中：该 schema 是 `additionalProperties: false`，未协商该 feature 的客户端收到 `null`（而不是键缺席）会把整条摘要判为非法。因此键在场时的三态含义是——缺席＝未协商、`null`＝未分组、`WorkspaceRef`＝归属该目录。`WorkspaceRef` 是第 9.4 节 `workspaces` 资源的**引用形**（两个键），资源条目的形状是 `WorkspaceCatalogEntry`；同一个值对象不得在两处定义出不同形态。
 
-`WorkspaceRef` 与 `AgentCatalogEntry` 的公共字段都只承载**引用**：别名（或标识）是稳定主键，`displayName` 是用户输入、按不可信内容转义渲染。`workspaces` 的元素（`WorkspaceCatalogEntry`）比 `WorkspaceRef` 多一个受 `core.workspace-path.v1` 门控的可选路径键（第 9.4 节），**会话摘要里不重复携带它**。
 
-规范化路径是派生权威值。路径在对端可见输出里的面**只有两处**：(1) 快照 `workspaces` 条目的 `path` 键——只在客户端协商了 `core.workspace-path.v1` 时携带**已登记**目录的规范化路径；(2) 只读目录浏览 `workspace.browse` 的 `command.result`——只在客户端协商了 `core.workspace-browse.v1` 时逐字回显客户端本次请求的父路径（请求根列表时回显 `null`）并给出该层**直接子目录**的名称、绝对路径与是否已登记。除这两处之外，路径 MUST NOT 出现在 `SessionSummary`、`agents` item、事件载荷、错误 `details`、其余 `command.result` 或审计记录的前像中的任何字段；客户端自己提交的目录也不被回显为对端可见字段（见 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 12.3 节）——第 (2) 处逐字回显的请求父路径是这条禁令里的受控例外，回显的是客户端自己刚刚提交的那一个路径本身与由它派生的下一层，不是任何已登记目录的规范化路径，也不得借该命令泄漏其它层的路径（第 11.5 节；口径与 `sync-workspace-browse` 的「结果 SHALL 含该请求的父路径」一致）。会话的目录归属按创建时解析使用的别名持久化，不随同一别名重指向新目录而漂移；该别名已从本机登记表删除时 `alias` 保持不变、`displayName` 回退为别名本身。
 
 `AgentContentBlock` v1 的公共 view 支持：
 
@@ -1260,7 +1252,7 @@ PublicError { code: string, message: string, retryable: boolean, details: object
 - `payload` 必须是 command-specific object，不能为 `null`、array 或任意 ACP JSON-RPC。
 - 重复 request 的 command、session、`expectedVersion` 和经明确 DTO 解码后的 payload 语义必须与首次一致，否则返回 `command.idempotency_conflict`；不得用 JSON 对象键顺序判断是否相同。
 - `expectedVersion` 用于有并发覆盖风险的 mutation；不适用时省略。
-- 服务端按设备认证状态（连接已认证、设备未撤销）、会话范围、当前状态和命令 schema 再次校验，不能依赖客户端 UI；设备方向不再有命令级授权判定，跨节点面另有 Export grant 交集（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）。
+跨节点面由连接认证与本机资源边界约束（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）。
 
 ### 11.2 Command Result
 
@@ -1325,7 +1317,7 @@ schema -> authenticated device -> state/version
 -> session actor -> Agent -> durable events -> broadcast
 ```
 
-（跨节点面在 `authenticated device` 与 `state/version` 之间另有一次 Owner Export grant 交集判定，见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)；Sync 面的设备方向没有授权层。）会创建资源的 mutation（第 11.5 节的 `session.create`）不改变这条顺序、只改变落盘的组合方式：`durable accept` 仍只落幂等记录（资源标识为空），资源行、它的资源标识回填与本命令的终态合并在执行结束后的**同一次提交**里完成；执行失败的那一次提交只写终态、**零资源行**。
+（跨节点面与 Sync 面同一顺序：认证先于任何业务读取与执行）
 
 ### 11.3 首批命令
 
@@ -1352,16 +1344,14 @@ Sync v1 尚未定义，或仅允许 Node 本地管理入口：
 ```text
 session.delete
 session.resume
-local.workspace.select
 local.agent.configure
-local.provider.configure
 local.device.manage
-local.export.manage
+
 local.node.rotate-key
 local.audit.export
 ```
 
-`session.create` 在两个传输面同名，但前提与载荷不同。**Sync 面**以「该连接已通过设备认证」为唯一前提——设备权限层已删除，因此不再有设备侧 scope 判定，也不要求 Owner 侧的 `grant.remote-work`（提交方就是本机自己的设备）。payload 只允许 `agentId`、目录引用二者之一（本机已登记的别名 `workspaceAlias`，或客户端提交的**绝对**目录 `workspacePath`）与一个可选的显式布尔开关 `createIfMissing`（「目录不存在则先创建」）；没有 Export 概念，因此不接受 `exportId`、`templateParams`、MCP 配置或凭据字段，出现任何其它键一律 `protocol.schema_invalid`。`createIfMissing` 与 `workspaceAlias` **互斥**（别名解析出的目录必然已存在），两者同时出现同样按 `protocol.schema_invalid` 拒绝——不解析别名、不触碰文件系统。本机按既有口径校验生效的目录来源（绝对路径、存在且为目录、以 `canonicalize` 结果为权威值）：形状非法（相对路径、含 `..`、别名未在本机登记）以参数类错误拒绝且不触碰文件系统；形式合法但无法解析（目录被删除、被换成文件、规范化失败、权限不足）以 `internal.unavailable` 拒绝；两类都不创建会话、不启动 Agent 进程、不回退到任何替代目录。开关为真且目录不存在时本机**先创建它**（连同缺失的父层）再启动 Agent，创建失败（父层不可达、无写权限、路径上已有非目录成分）同样以 `internal.unavailable` 拒绝；按它创建出的目录**不会**被登记成 workspace 别名，因此该会话的目录归属是「未分组」，已创建的目录在后续失败时也**不删除**。**Node Link 面**仍额外要求 `exportId`、Export 发布的 workspace template 与 Owner 的 `grant.remote-work`，且请求不得携带任意 Owner 路径（只允许 `workspaceAlias`，也不接受 `createIfMissing`）。命令名与 grant 的权威映射以 `compatibility/commands/v1/commands.json` 和 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 10.2 节的表为准，本节只声明 Sync 面接受哪些命令名；第 11.5 节表首列是 Sync v1 接受的完整命令集合。
+`session.create` 在两个传输面同名，但前提与载荷不同。**Sync 面**以「该连接已通过设备认证」为唯一前提——设备权限层已删除，因此不再有 scope 或 grant 判定（提交方就是本机自己的设备）。payload 只允许 `agentId`、目录引用二者之一（本机已记录的目录标识 `directoryId`，或客户端提交的**绝对**目录 `workspacePath`）与一个可选的显式布尔开关 `createIfMissing`（「目录不存在则先创建」）；不接受 `templateParams`、MCP 配置或凭据字段，出现任何其它键一律 `protocol.schema_invalid`。`createIfMissing` 与 `directoryId` **互斥**（别名解析出的目录必然已存在），两者同时出现同样按 `protocol.schema_invalid` 拒绝——不解析别名、不触碰文件系统。本机按既有口径校验生效的目录来源（绝对路径、存在且为目录、以 `canonicalize` 结果为权威值）：形状非法（相对路径、含 `..`、别名未在本机登记）以参数类错误拒绝且不触碰文件系统；形式合法但无法解析（目录被删除、被换成文件、规范化失败、权限不足）以 `internal.unavailable` 拒绝；两类都不创建会话、不启动 Agent 进程、不回退到任何替代目录。开关为真且目录不存在时本机**先创建它**（连同缺失的父层）再启动 Agent，创建失败（父层不可达、无写权限、路径上已有非目录成分）同样以 `internal.unavailable` 拒绝；按它创建出的目录**不会**被登记成 workspace 别名，因此该会话的目录归属是「未分组」，已创建的目录在后续失败时也**不删除**。**Node Link 面**仍额外要求 `exportId`、Export 发布的 workspace template 与 Owner 的 `grant.remote-work`，且请求不得携带任意 Owner 路径（只允许 `directoryId`，也不接受 `createIfMissing`）。命令名与 grant 的权威映射以 `compatibility/commands/v1/commands.json` 和 [SECURITY_DESIGN.md](./SECURITY_DESIGN.md) 第 10.2 节的表为准，本节只声明 Sync 面接受哪些命令名；第 11.5 节表首列是 Sync v1 接受的完整命令集合。
 
 未知命令返回 `command.unsupported`。底层 Agent 不支持的已知能力返回 `capability.unsupported_by_agent`，Broker 无法表达时返回 `capability.unsupported_by_broker`，不能伪装成功。
 
@@ -1415,14 +1405,14 @@ local.audit.export
 | `session.mode.set` | mutation | 必须 | `{ modeId }`，body `expectedVersion` 必须存在 | `session.mode.changed` 后 `command.completed` |
 | `session.config.set` | mutation | 必须 | `{ configId, value }`，body `expectedVersion` 必须存在 | 先发 `session.config.changed`，再发 `command.completed` |
 | `permission.resolve` | mutation | 必须 | `{ interactionId, optionId }` | `permission.resolved` 后 `command.completed` |
-| `session.create` | mutation | 禁止（会话尚不存在） | 只允许四个键：`agentId`（必填）、`workspaceAlias`（本机已登记目录的别名）、`workspacePath`（客户端提交的绝对目录，1..=4096 字符）与可选的布尔键 `createIfMissing`（显式的「目录不存在则先创建」开关）；`workspaceAlias` 与 `workspacePath` **恰好出现一个**，且 `createIfMissing` 与 `workspaceAlias` **互斥**（同时出现即 `protocol.schema_invalid`）；出现任何其它键（`cwd`、`exportId`、`templateParams`、MCP 配置或凭据字段）一律 `protocol.schema_invalid` | `accepted { result: null, terminalEventId: null }` → `completed { sessionId, session: SessionSummary }` 并附唯一 `terminalEventId`；目录形状非法（相对路径、含 `..`、别名未登记）以参数类错误拒绝且不触碰文件系统，形式合法但本机解析失败以 `internal.unavailable` 拒绝，两者都是**接受前**的拒绝（零副作用）；`createIfMissing` 为真且目录不存在时先创建它（连同缺失的父层）再启动 Agent，创建失败以 `internal.unavailable` 拒绝且不启动 Agent、不留会话行，按它创建出的目录不登记成别名（该会话的目录归属是「未分组」）且在后续失败时**不删除**；受理只落该命令的幂等记录（会话标识为空、不写会话行），会话行与终态在**同一次提交**里落盘，因此已接受的创建按「能否证明 Agent 侧未产生会话」终结——进程未能启动、Agent 明确返回错误、请求未发出 ⇒ `failed`（复用既有错误码 `internal.unavailable`，成因写在终态 `message` 里，不新增错误码），短请求超时、请求发出后连接断开、会话已建立之后才失败或崩溃窗口 ⇒ `uncertain`；上述接受前的拒绝与**建立失败**的 `failed`/`uncertain` 终态都零会话行、不下发会话标识；只有「会话确实已建立、仅终态结果无法投影」那一档 `uncertain` 例外——那时会话行与 `uncertain` 终态在**同一次提交**里落盘（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条），仍然不下发会话标识。同一 `requestId` 重发返回首次结果，不产生第二个会话 |
+| `session.create` | mutation | 禁止（会话尚不存在） | 只允许四个键：`agentId`（必填）、`directoryId`（本机已记录目录的标识）、`workspacePath`（客户端提交的绝对目录，1..=4096 字符）与可选的布尔键 `createIfMissing`（显式的「目录不存在则先创建」开关）；`directoryId` 与 `workspacePath` **恰好出现一个**，且 `createIfMissing` 与 `directoryId` **互斥**（同时出现即 `protocol.schema_invalid`）；出现任何其它键（`cwd`、`templateParams`、MCP 配置或凭据字段）一律 `protocol.schema_invalid` | `accepted { result: null, terminalEventId: null }` → `completed { sessionId, session: SessionSummary }` 并附唯一 `terminalEventId`；目录形状非法（相对路径、含 `..`、别名未登记）以参数类错误拒绝且不触碰文件系统，形式合法但本机解析失败以 `internal.unavailable` 拒绝，两者都是**接受前**的拒绝（零副作用）；`createIfMissing` 为真且目录不存在时先创建它（连同缺失的父层）再启动 Agent，创建失败以 `internal.unavailable` 拒绝且不启动 Agent、不留会话行，按它创建出的目录不登记成别名（该会话的目录归属是「未分组」）且在后续失败时**不删除**；受理只落该命令的幂等记录（会话标识为空、不写会话行），会话行与终态在**同一次提交**里落盘，因此已接受的创建按「能否证明 Agent 侧未产生会话」终结——进程未能启动、Agent 明确返回错误、请求未发出 ⇒ `failed`（复用既有错误码 `internal.unavailable`，成因写在终态 `message` 里，不新增错误码），短请求超时、请求发出后连接断开、会话已建立之后才失败或崩溃窗口 ⇒ `uncertain`；上述接受前的拒绝与**建立失败**的 `failed`/`uncertain` 终态都零会话行、不下发会话标识；只有「会话确实已建立、仅终态结果无法投影」那一档 `uncertain` 例外——那时会话行与 `uncertain` 终态在**同一次提交**里落盘（`CORE_PORTS_AND_STORAGE.md` §6 第 20 条），仍然不下发会话标识。同一 `requestId` 重发返回首次结果，不产生第二个会话 |
 | `session.resume` | mutation | 仅 Node Link（经 `sessionRef`） | `{}` | 仅 Node Link（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md)）；`accepted` 的 `result` 为 `null`，成功终态为 `completed SessionResumeResult`（`remoteSessionRef` + `sessionMeta`）；目标 Agent 未宣告 `sessionCapabilities.resume` 时以 `nodelink.command.unsupported` 失败；Sync v1 收到返回 `command.unsupported` |
 
 本表首列是 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 的完整命令集合（14 条），也是 `SECURITY_DESIGN.md` 第 10.2 节的展开来源。`schemas/sync/v1/command.schema.json` 的 `command` 枚举包含其中 `transport` 含 `sync` 的 13 条；`session.resume` 只经 Node Link 接受，Sync v1 收到时按 §4.2 返回 `command.unsupported`，不出现在该枚举里。`schemas/node-link/v1/command.schema.json` 的枚举包含 `transport` 含 `node_link` 的全部 13 条。任一处增删命令名都必须同步修改 `commands.json`、两个协议 schema、`SECURITY_DESIGN.md` 第 10.2 节与本节。
 
-`session.create` 在两个传输面同名但 payload 不同，本表是 Sync 面的形状；Node Link 面仍额外要求 `exportId`，并允许可选的 `templateParams`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 第 12.7 节），但**不接受** `createIfMissing`——跨节点面只引用 Owner 已发布的 template，不得由请求方指定「先创建」。两个面共用同一套命令名、幂等与终态语义：先受理再执行（受理即持久化幂等记录，客户端拿到的首次响应是 `accepted`，其 `result` 与 `terminalEventId` 均为 `null`），最终以 `completed`/`failed`/`uncertain` 之一终结，同一 `requestId` 重发必须返回首次结果。`session.create` 的受理只写幂等记录（会话标识为空、不写会话行）：Agent 侧返回后的一次提交里落账——成功时写会话行（含 ACP 会话标识、core 自己解析的 cwd 与目录别名）、回填幂等行的会话标识并写 `completed`，失败时只写终态、**零会话行**。`session.create` 的 `accepted` 必须携带 `result: null`——这是服务端语义要求（与 `command.status` 的 `acceptedAt` 同类），schema 的 `accepted` 分支不对 `result` 取值做约束，因此客户端不得依赖它在 wire 上被强制。
+`session.create` 在两个传输面同名但 payload 不同，本表是 Sync 面的形状；Node Link 面的 payload 是 `{ agentId, directoryId }`（见 [NODE_LINK_PROTOCOL.md](./NODE_LINK_PROTOCOL.md) 第 12.7 节），同样**不接受** `createIfMissing`。两个面共用同一套命令名、幂等与终态语义：先受理再执行（受理即持久化幂等记录，客户端拿到的首次响应是 `accepted`，其 `result` 与 `terminalEventId` 均为 `null`），最终以 `completed`/`failed`/`uncertain` 之一终结，同一 `requestId` 重发必须返回首次结果。`session.create` 的受理只写幂等记录（会话标识为空、不写会话行）：Agent 侧返回后的一次提交里落账——成功时写会话行（含 ACP 会话标识、core 自己解析的 cwd 与目录别名）、回填幂等行的会话标识并写 `completed`，失败时只写终态、**零会话行**。`session.create` 的 `accepted` 必须携带 `result: null`——这是服务端语义要求（与 `command.status` 的 `acceptedAt` 同类），schema 的 `accepted` 分支不对 `result` 取值做约束，因此客户端不得依赖它在 wire 上被强制。
 
-`createIfMissing` 是**显式**开关而不是「路径不存在就默默创建」：后者会把一次笔误变成一棵被建出来的目录树（design D4）。它取布尔值、缺席即假，键在场时只接受 `true`/`false`（没有 `null` 分支）；它与 `workspaceAlias` 互斥，两者同时出现按 `protocol.schema_invalid` 拒绝且不解析别名、不触碰文件系统。开关为真且目录不存在时先创建（含缺失的父层）再启动 Agent；路径上已存在非目录成分或创建失败（父层不可达、无写权限）按服务端不可用类错误（`internal.unavailable`）拒绝，不覆盖、不删除已有内容，也不启动 Agent。系统 **MUST NOT** 在后续失败时删除已创建的目录——删除要区分「哪些层是这次建的」，而误删用户目录的代价远高于留下一个空目录；按它创建出的目录也不成为已登记别名，该会话的目录归属因此是「未分组」。
+`createIfMissing` 是**显式**开关而不是「路径不存在就默默创建」：后者会把一次笔误变成一棵被建出来的目录树（design D4）。它取布尔值、缺席即假，键在场时只接受 `true`/`false`（没有 `null` 分支）；它与 `directoryId` 互斥，两者同时出现按 `protocol.schema_invalid` 拒绝且不解析别名、不触碰文件系统。开关为真且目录不存在时先创建（含缺失的父层）再启动 Agent；路径上已存在非目录成分或创建失败（父层不可达、无写权限）按服务端不可用类错误（`internal.unavailable`）拒绝，不覆盖、不删除已有内容，也不启动 Agent。系统 **MUST NOT** 在后续失败时删除已创建的目录——删除要区分「哪些层是这次建的」，而误删用户目录的代价远高于留下一个空目录；按它创建出的目录也不成为已登记别名，该会话的目录归属因此是「未分组」。
 
 `workspace.browse` 是 Sync 面的目录浏览查询，只经 Sync 接受（Node Link 的请求不得携带任意 Owner 路径）：
 
@@ -1433,7 +1423,6 @@ local.audit.export
 - **只读、无副作用**：不写任何登记、缓存或会话状态，不改变本机 workspace 登记表，也不为被查看的目录补出任何后续权限或别名；一次浏览完成不产生审计记录，审计动作词表不因此扩张（design D6）。经它选定但未登记的目录创建的会话，其目录归属仍是「未分组」。
 - **条目上限**：单层条目数上限是固定 v1 常量（§14）；超过上限时只返回上限内的条目并把 `truncated` 置真——不得静默丢弃，也不得因超限而整次失败。结果本身超过单条消息上限时按本节末的既有规则返回 `resource.result_too_large`，不得截断后伪装成完整结果。
 
-`session.create` 端到端能力由 feature `core.session-create.v1` 协商：未选中时服务端按 §4.2/§12.2 返回 `protocol.feature_required`，不得静默接受。`workspaceAlias` 与 `agentId` 的可选来源（目录页与 Agent 选择器）由 `core.local-catalog.v1` 的快照资源供数；`workspacePath` 由客户端自己输入（浏览器拿不到宿主绝对路径，界面形态与失败提示由 [FRONTEND_DESIGN.md](./FRONTEND_DESIGN.md) 定义）。路径的可见面**只有两处**：(1) 快照 `workspaces` 条目的 `path` 键（受 `core.workspace-path.v1` 门控，第 9.4 节，携带**已登记**目录的规范化路径）；(2) 上文 `workspace.browse` 的 `command.result`（受 `core.workspace-browse.v1` 门控，`path` 逐字回显本次请求的父路径、`entries` 给出该层直接子目录的绝对路径）。除此之外的下行 wire、缓存、错误 `details` 与其余 `command.result` 任何情况下都不得含路径——客户端自己提交的路径不得被回显为对端可见字段（`SECURITY_DESIGN.md` 第 12.3 节），第 (2) 处逐字回显的请求父路径是其受控例外（第 10.3 节同一口径）。
 
 `session.read` 是会话明细的唯一入口（第 9.4 节：六类明细资源不进快照），因此它在 Sync 面带分页参数：
 
@@ -1554,9 +1543,9 @@ internal.unavailable
 | `sync.cursor_invalid` | `reason`（必需） |
 | `state.version_conflict` | `expectedVersion`（可选）、`currentVersion`（必需） |
 | `resource.rate_limited` | `retryAfterMs`（可选） |
-| `resource.remote_unavailable` | `ownerNodeId`（可选）、`exportId`（可选）、`reason`（必需） |
+| `resource.remote_unavailable` | `ownerNodeId`（可选）、`reason`（必需） |
 
-未在上表列出的 code **不登记任何** `details` 字段：发送方必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`sync.cursor_invalid.reason ∈ {malformed, epoch_mismatch, beyond_head, cursor_expired}`；`resource.remote_unavailable.reason ∈ {owner_offline, export_revoked}`；`protocol.feature_required.features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被协商的那些）；`resource.rate_limited.retryAfterMs` 是建议退避毫秒数；`state.version_conflict` 的两个版本号都是十进制字符串。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§4.2），新增字段按 §16.1 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
+未在上表列出的 code **不登记任何** `details` 字段：发送方必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`sync.cursor_invalid.reason ∈ {malformed, epoch_mismatch, beyond_head, cursor_expired}`；`resource.remote_unavailable.reason ∈ {owner_offline}`；`protocol.feature_required.features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被协商的那些）；`resource.rate_limited.retryAfterMs` 是建议退避毫秒数；`state.version_conflict` 的两个版本号都是十进制字符串。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§4.2），新增字段按 §16.1 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。`resource.remote_unavailable` 只用于 `origin.kind = "remote"` 的会话正文回源失败，本节点资源不得返回该错误码。
 
 错误码可以向后兼容地增加。客户端遇到未知错误码时按 `retryable` 和 code 首段做保守处理，并展示通用错误。
 
@@ -1648,7 +1637,7 @@ v1 默认上限：
 - **新增固定上限的取值理由**：单层条目数 128 与差异行 400 行 / 64 KiB 按单条消息 1 MiB 反推——128 条目录条目在「路径接近 4,096 字符上限、JSON 要求转义反斜杠」的最坏情形下约 0.8 MiB，400 行差异在单行不超过 4,096 字符、合计不超过 64 KiB 时转义后的体积同样留在同一条消息内；超限时两者都**显式降级**（目录浏览置 `truncated` 并只回上限内条目、差异行改为 `diffUnavailable`），而不是让请求失败或下发被截断的内容。
 - 目录浏览的条目数上限与差异行上限都**不得**导致整次失败：前者按 §11.5 回上限内条目并置 `truncated: true`，后者按 §10.3 改为只带统计并标记 `diffUnavailable`。只有当结果整体超过单条消息上限时才回 `resource.result_too_large`（§11.5）。
 - 超过单消息上限应在分配大对象前拒绝。
-- 限流所用的「命令族」是**服务端自持的 v1 常量**：每个命令名恰好属于一个族，覆盖关系由服务端测试断言；命令名与 `grant` 的封闭词表仍以 `compatibility/commands/v1/commands.json` 为唯一来源，但**族不再取自该文件的 `packs`**（设备授权包已随设备权限层删除）。数值不变：单设备 120 次/分钟、窗口 1 分钟，连续超限以 `4429` 关闭连接。
+- 限流所用的「命令族」是**服务端自持的 v1 常量**：每个命令名恰好属于一个族，覆盖关系由服务端测试断言；命令名的封闭词表仍以 `compatibility/commands/v1/commands.json` 为唯一来源。数值不变：单设备 120 次/分钟、窗口 1 分钟，连续超限以 `4429` 关闭连接。
 - 超过本节速率时返回 `resource.rate_limited`（`retryable = true`），并在连续超限时以 `4429` 关闭连接；客户端应遵守 `details.retryAfterMs`（存在时）退避后再重试，不得立即重发。
 - attachment、大型 diff 和完整终端输出不内嵌绕过限制；未来使用单独的受授权内容接口或 binary feature。
 - 待发送队列达到高水位后先停止读取新的 replay batch；持续过慢则发送 `resource.backpressure` 并断开。
@@ -1657,12 +1646,12 @@ v1 默认上限：
 
 ## 15. 安全处理要求
 
-- 每个业务命令在当前连接身份下重新校验「连接已通过设备认证且设备未撤销」、会话状态、版本与幂等；设备方向没有命令级授权判定，跨节点面另按 Owner Export grant ∩ 本地授权判定。
+- 每个业务命令在当前连接身份下重新校验「连接已通过设备认证且设备未撤销」、会话状态、版本与幂等；设备方向没有命令级授权判定，跨节点面由连接认证与本机资源边界约束。
 - 设备撤销后立即关闭所有对应连接，并拒绝后续认证。
 - 配对 secret、私钥、HMAC、签名输入中的秘密和完整认证 payload 不得记录日志。
 - nonce 必须单次连接使用；服务端在认证完成或超时后清除 pending challenge。
 - 比较 HMAC、固定 hash 和其他秘密派生值时使用 constant-time compare。
-- JSON schema 验证发生在进入 Broker 之前；设备认证（Sync 面）与 Export grant 交集判定（跨节点面）都发生在业务用例执行之前。
+- JSON schema 验证发生在进入 Broker 之前；设备认证（Sync 面）与 节点认证（Node Link 面）都发生在业务用例执行之前。
 - Agent 生成的 Markdown、HTML、终端、diff 和工具输出始终是不可信数据。
 - `Origin`、Host key、device key 与设备认证状态都是独立检查，任一通过不能替代其他检查。
 - TLS channel 不使用应用长期 signing key 做加密；身份密钥和连接临时密钥保持分离。
@@ -1683,7 +1672,6 @@ v1 默认上限：
 - 改变排序、ACK、cursor 或幂等语义。
 - 改变 transcript codec、算法、domain 或 field tag。
 - 引入 binary framing、压缩、附件传输或不同 Transport Profile。
-- 增加 `session.create`、imported resource origin（feature `resource.remote-origin.v1`，见第 9.6 节）、本机 workspace/Agent 目录（feature `core.local-catalog.v1`）、事件 `origin` 的身份字段与产生者类型（feature `core.event-origin.v1`，见第 10.1 节）、已登记目录的路径下发与目录浏览（feature `core.workspace-path.v1`/`core.workspace-browse.v1`，见第 9.4/11.5 节）、结构化差异行（feature `core.file-diff.v1`，见第 10.3 节）等能力需要新 feature/schema；授权由设备认证（Sync 面）与 Owner Export Policy（跨节点面）决定，不能再按手机/电脑形态硬编码。`session.create`、本机目录、`origin` 的两项扩展、目录路径与浏览、差异行都已按此条以**可选 feature** 引入（`core.session-create.v1`、`core.local-catalog.v1`、`core.event-origin.v1`、`core.workspace-path.v1`、`core.workspace-browse.v1`、`core.file-diff.v1`，见第 5.2 节）：未协商的客户端行为与引入前完全一致（`origin` 仍是 `{kind, deviceId}` 两个键、也收不到 `kind = "node"` 的事件，`workspaces` 条目仍只有两个键，`file.changed` 只有统计，提交新命令返回 `protocol.feature_required`），既有字段含义、排序与幂等语义都没有变化，因此不需要 major version。
 
 ### 16.3 数据迁移
 

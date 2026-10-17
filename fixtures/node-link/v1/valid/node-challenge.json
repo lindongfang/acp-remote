@@ -10,11 +10,10 @@
     "selectedFeatures": [
       "node-link.command-status.v1",
       "node-link.core.v1",
-      "node-link.export-revoke.v1",
       "node-link.raw-acp.v1",
       "node-link.session-create.v1"
     ],
     "catalogRevision": "42",
-    "nodeProof": "zYaaF6eKvSWQ2ozqvVQaVYVYPO4ytlDmpfBNr2Rrvuyvnf88zysPF2Wz8tGuBZwBbqxou4DMav7wkl9ew5POgg"
+    "nodeProof": "eFPGapcjlDybO92-obOQJefMlxTz6tXozVfwriLKMYE3o8O4Q794gGzP9TsFvaLiW661Q4ccO3vwVlst5uWDpw"
   }
 }

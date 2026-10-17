@@ -7,11 +7,11 @@
 mod support;
 
 use acp_core::model::{
-    ActorKind, AuditAction, AuditOutcome, CachePolicy, CommandKind, CommandStatus, DeviceState,
+    ActorKind, AuditAction, AuditOutcome, CommandKind, CommandStatus, DeviceState,
     ElicitationAction, ElicitationValues, EventKind, EventOrigin, InteractionId, InteractionKind,
     InteractionResolution, NodeKind, NodeState, PairingState, PairingTarget,
-    PermissionDecisionKind, ProviderRefKind, RawUnavailableReason, SessionId, SessionState,
-    StoredPolicy, Timestamp, TurnState,
+    PermissionDecisionKind, RawUnavailableReason, SessionId, SessionState, StoredPolicy, Timestamp,
+    TurnState,
 };
 use acp_core::ports::{InteractionResolved, ModeChange, SessionStore, SessionUpdate, StateChange};
 use support::*;
@@ -181,7 +181,7 @@ async fn ddl_enum_lists_match_the_core_enums() {
     store.close().await;
 
     let pool = raw_pool(&dir.join("acp-remote.sqlite3")).await;
-    let cases: [(&str, &str, Vec<String>); 30] = [
+    let cases: [(&str, &str, Vec<String>); 27] = [
         (
             "owned_session",
             "state",
@@ -305,28 +305,11 @@ async fn ddl_enum_lists_match_the_core_enums() {
             "peer_kind",
             tokens(PairingTarget::ALL, PairingTarget::as_str),
         ),
-        (
-            "owned_provider_ref",
-            "kind",
-            tokens(ProviderRefKind::ALL, ProviderRefKind::as_str),
-        ),
         // v2 管理表的 `revoke_reason` 是 `core::ports::RevokeReason` 的落库标记（token 属 storage-sqlite，
         // 见 `src/admin/trust.rs` 的 `revoke_token()`）。core 侧没有 `ALL`/`as_str`，也不为测试新增公开
         // API，因此期望值锚在 §7.3 的合同文本；行为面由 `admin_store.rs` 的 KeyChanged 回归覆盖。
         ("owned_device", "revoke_reason", revoke_reason_tokens()),
         ("owned_node", "revoke_reason", revoke_reason_tokens()),
-        // `cache_policy` 是等值 CHECK（单值）；期望值来自 `core::model::CachePolicy`，因此同时断言
-        // 「DDL 是单值」与「与 core 当前取值一致」——core 增加第二取值而 DDL 仍单值时本用例即失败。
-        (
-            "owned_export",
-            "cache_policy",
-            tokens(CachePolicy::ALL, CachePolicy::as_str),
-        ),
-        (
-            "imported_import",
-            "cache_policy",
-            tokens(CachePolicy::ALL, CachePolicy::as_str),
-        ),
     ];
     for (table, column, expected) in cases {
         let sql = table_sql(&pool, table).await;
@@ -407,7 +390,7 @@ async fn elicitation_decline_round_trips() {
                 closed_at: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
                 interaction: Some(InteractionResolved {
                     interaction: InteractionId::new(INTERACTION).expect("interaction id"),
                     resolution: InteractionResolution::elicitation(

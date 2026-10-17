@@ -30,17 +30,16 @@
 | 数据 | 唯一持久化权威 | 写入与生效时机 |
 |---|---|---|
 | daemon / sync / node_link / sessions / storage / terminal / identity / dev_mode / logging 启动参数 | 用户配置文件，经 CLI 参数覆盖 | 启动时读取并校验；v1 不提供文件监听或通用热重载，修改后重启生效 |
-| Agent profile | SQLite 管理记录 | `agent.configure` 提交后供后续 Agent 进程使用；已有进程不变 |
-| workspace alias → 本机路径 | SQLite 管理记录 | `workspace.select` 提交后供新建会话使用；已有会话不迁移目录 |
-| 设备/节点信任、Export、Import | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
-| Provider/MCP 凭据、Node 私钥 | 平台 keystore | 普通配置与 SQLite 只保存非秘密标识/引用；凭据修改只影响后续使用该配置启动的进程 |
+| Agent profile | 用户配置文件 `[agent]` | 每次启动读取并校验；改配置后重启生效 |
+| 目录标识 → 本机路径 | SQLite 管理记录 | 由成功的会话创建自动记录；已有会话不迁移目录 |
+| 设备/节点信任 | SQLite 管理记录 | 本地管理操作提交后生效；撤销按安全协议立即阻断相应访问 |
+| Node 私钥 | 平台 keystore | 身份密钥；Provider/MCP 凭据由 Agent 自己持有，不进入本系统 |
 
 - SQLite 的管理状态由运行中的 Daemon 单一写入；CLI 经本地 IPC 请求修改，不自行写库、不回写 TOML。持久化边界与升级规则见 [CORE_PORTS_AND_STORAGE.md](./CORE_PORTS_AND_STORAGE.md) §7.2/§7.3/§7.4 与 §11。
-- §7 的 `[[agents.profiles]]` 是**首次初始化种子**：在管理配置首次初始化的单次事务中导入全部合法 profile，并记录初始化完成标记；空列表也记录完成。任一项非法则整批失败。已有同 ID 管理记录与种子不一致时显式报错，不覆盖、不合并。
-- 初始化完成后，数据库是 profile 的唯一权威；重启不再导入种子。配置文件仍含 profile 时给出不含参数值的提示，后续修改应使用 `agent.configure`；不能因删空数据库中的某一条 profile 就再次导入它。
-- §9 的 TOML 片段是**管理记录的说明性表示**，不是用户配置文件支持的输入；启动配置中出现 `imports`/`exports` 必须明确拒绝并指向本地管理命令，不能忽略它们或据此创建信任。这样旧配置无法在重启时复活已撤销的 Export 或已删除的 Import。
+- §7 的 `[agent]` 是 Agent 列表的唯一权威：每次启动读取，非法条目让启动失败关闭；旧库中的 profile 不会自动搬运，需在配置中重新声明。
+- §9 说明 `imports`/`exports` 不是配置输入；启动配置中出现它们必须明确拒绝。这样旧配置无法在重启时复活已撤销的信任或已删除的绑定。
 - workspace 路径、信任与授权集合不接受启动参数覆盖；keystore 不可用或 SQLite 写入失败时管理方法返回明确失败，不能仅在内存修改后报告成功。
-- 重启加载已提交的管理记录，重建 Agent catalog、Export 与 Import 路由；撤销状态始终优先。恢复完成前不开放业务接入。
+重建 Agent catalog 与节点信任路由；撤销状态始终优先。
 
 ## 1. `daemon`
 
@@ -126,7 +125,7 @@
 | `storage.attachment_dir` | `<data_dir>/attachments` | 内容寻址的附件目录（`CORE_PORTS_AND_STORAGE.md` §7.1）；权限与数据库目录相同，见 `SECURITY_DESIGN.md` §13.2 |
 | `storage.audit_retention_days` | `365` | 审计记录（`owned_audit`/`imported_audit`）保留期；容量清理时审计排在最后，超限优先拒绝写入而不是丢审计 |
 
-Access Node 的 `no-content-cache` 不是配置项：它由 Export 固定，Access 侧没有可关闭的开关（`NODE_LINK_PROTOCOL.md` §10、`SECURITY_DESIGN.md` §13.4）。
+它固定由 Owner 的 `no-content-cache` 策略决定
 
 ### 5.1 备份与拷贝
 
@@ -140,33 +139,23 @@ SQLite 在 WAL 模式下把最近的写入放在主库文件旁边的 `-wal` 与
 | `terminal.keep_head_bytes` | `131072` | 截断时保留的头部（128 KiB） |
 | `terminal.keep_tail_bytes` | `917504` | 截断时保留的尾部（896 KiB），必须带截断标识 |
 
-## 7. `agents`
+## 7. `[agent]`（Agent 声明）
 
 ```toml
-[[agents.profiles]]
-agent_id = "codex"
-command = "codex-acp"
-args = []
-env_allowlist = ["PATH", "HOME"]     # 只传递列出的环境变量，不含任何 ACP Remote 密钥
-default = true
+[node]
+name = "家里的台式机"          # 可选：本机节点展示名（1..=128 字符，不进请求体）
 
-# 凭据到环境变量的显式绑定：值从平台 keystore 读取，永不落本文件（见下方"凭据注入"）。
-# name 必须同时出现在 env_allowlist 里；provider_id 必须已由 local.provider.configure 建立。
-[[agents.profiles.env]]
-provider_id = "openai"
-field = "api_key"
-name = "OPENAI_API_KEY"
-
-[[agents.profiles]]
-agent_id = "omp"
-command = "omp"
-args = ["acp"]
+[agent]
+default = "omp"                # 可选；缺省则没有默认 Agent
+omp   = ["C:/tools/omp.exe", "acp"]   # 值 = 单条命令字符串，或完整 argv 数组
+codex = "C:/tools/codex-acp.exe"
 ```
 
-- `agent_id` 是稳定标识，进入 `SessionSummary.agent.agentId`；启动 profile 与 capability 差异按 `MODULE_ARCHITECTURE.md` §9 只作为数据，不在核心堆积 Agent 名称判断。
-- 环境变量白名单是上限而非提示：未列出的变量不得注入子进程（`SECURITY_DESIGN.md` §12.2）。
-- **凭据注入**：`env` 绑定只说“哪个 Provider 字段写进哪个环境变量名”，**值**由平台 keystore 持有，启动子进程时经 `CredentialResolver` 解析（`CORE_PORTS_AND_STORAGE.md` §5.3）。未绑定、未列入 `env_allowlist` 或 keystore 不可用 → 启动失败关闭，不得静默跳过；Node/Device 私钥与 pairing secret 永不注入。
-- workspace、Provider/MCP 凭据值不在本文件：它们由本地管理入口（`local.workspace.select`、`local.provider.configure`）在 Daemon 内维护。
+- `[agent]` 每次启动读取，是 Agent 列表的**唯一权威**；id 就是键名，进入 `SessionSummary.agent.agentId`。
+- 值是命令字符串或非空 argv 数组（首项为可执行文件）。空命令、argv 含空串、非法 id、`default` 指向未声明项都会让 `daemon start` 失败关闭，错误只指出键名与规则，不回显命令原文。
+- 子进程环境在 `env_clear()` 后只注入固定的一组必要变量：`PATH`、`HOME`、`USERPROFILE`、`SystemRoot`、`TEMP`、`TMP`（宿主缺失时跳过）；不再有 `env_allowlist` 或 Provider 凭据绑定。`ACPR_*` / `ACP_REMOTE_*` 前缀永不注入。
+- Provider/MCP 凭据由 Agent 自己持有；本系统不保存、不注入、不代管。Node 私钥与 pairing secret 也不进入子进程。
+- **升级说明（v10，不可逆）**：升级会删除 `owned_agent_profile` 与 `owned_provider_ref`；Agent 不会从旧库自动搬运。若配置没有 `[agent]` 且旧库存在 profile，启动日志记录 `daemon.agents_discarded` 与条数，并提示“请在配置的 `[agent]` 中重新声明”。
 - Agent 进程的启动/短请求/关闭超时、单条 ACP 消息上限、stderr 缓冲上限、空闲回收规则都是**固定 v1 常量**（不是本文件的配置键）：见 `SECURITY_DESIGN.md` §12.2 的表；只有会话空闲回收复用本文档 §4 的 `sessions.idle_timeout_ms`。
 
 ## 8. `identity`
@@ -176,60 +165,9 @@ args = ["acp"]
 | `identity.keystore` | enum | `"platform"` | `platform` 使用平台安全存储：Windows 当前档位是 DPAPI（当前用户 scope）包裹私钥、签名在进程内完成，macOS 是 Keychain，Linux 是 Secret Service；不可导出的硬件保护档位（CNG/TPM）需单独 ADR（`SECURITY_DESIGN.md` §9.2/§20）。`ephemeral` 仅允许显式开发模式 |
 | `identity.fail_closed_on_missing_keystore` | boolean | `true` | 平台 keystore 不可用时正式模式拒绝启动；`false` 只能出现在开发模式配置中 |
 
-## 9. `imports` / `exports`
+## 9. 节点信任（无 `imports` / `exports`）
 
-Access Node 侧每个 Import 一条记录（由 `acp-remote import add` 请求 Daemon 写入 SQLite，不由用户手改）。下例仅为管理记录的 TOML 表示，不是启动配置输入：
-
-```toml
-[[imports]]
-import_id = "imp-1"
-owner_endpoint = "wss://owner.example.ts.net/node-link/v1"
-owner_node_id = "bdb2ec20-f98c-4d87-b789-e540d527ef87"
-export_ids = ["exp-work"]
-grants = ["grant.observe", "grant.interact"]
-```
-
-- `grant.*` 取值以 [`compatibility/commands/v1/commands.json`](../compatibility/commands/v1/commands.json) 为准；有效权限是 `Owner grant ∩ Access local grant ∩ runtime capability`。
-- 本地客户端能做什么由 Access 节点自己的设备信任决定（设备通过认证即可执行本节点命令，设备方向没有授权维度），Import 记录只描述远程侧授权。
-
-### `exports`（Owner 侧）
-
-Owner Node 的 Export 由本地管理入口写入 SQLite（`local.export.manage`，见 [LOCAL_ADMIN_PROTOCOL.md](./LOCAL_ADMIN_PROTOCOL.md) §5），同样不由用户手改。下例仅为管理记录的 TOML 表示：
-
-```toml
-[[exports]]
-export_id = "exp-work"
-display_name = "公司 Agent"
-agent_ids = ["codex"]
-default_workspace_alias = "company-agent-default"
-default_template_id = "default"
-scopes = ["grant.observe", "grant.interact", "grant.remote-work"]
-cache_policy = "no-content-cache"
-
-[[exports.workspace_aliases]]
-alias = "company-agent-default"
-display_name = "公司默认工作区"
-
-[[exports.templates]]
-template_id = "default"
-display_name = "默认"
-workspace_alias = "company-agent-default"
-# 首切片 template 必须无参数（NODE_LINK_PROTOCOL.md §10）。下面这段 params 是 post_mvp 的
-# 说明性表示，不是首切片的合法输入；有参 template 需要先定「谁提供值」与「影响什么」。
-# [[exports.templates.params]]
-# name = "branch"
-# type = "string"
-# required = false
-# pattern = "^[a-zA-Z0-9._/-]{1,128}$"
-# enum = []
-```
-
-- `cache_policy` 在 v1 固定为 `no-content-cache`；管理写入拒绝其他值，启动加载发现非法持久值则失败关闭，不允许绕过 Owner 的内容策略。
-- `export_id`、`agent_ids`、`workspace_aliases`、`templates` 与 `scopes` 一起构成 `session.create` 参数（`agentId`/`exportId`/`workspaceAlias`/`templateParams`）的唯一可引用集合；未列出的取值一律拒绝（`nodelink.export.not_granted` 或 `nodelink.command.unsupported_field`）。`scopes` 与 Node Link Export 模型的同名字段同义（`NODE_LINK_PROTOCOL.md` §10）；Access 侧 `[[imports]].grants` 是另一概念（本节点自己的授权子集），不随此改名。
-- `default_workspace_alias` 必须出现在同一条目的 `workspace_aliases` 中，`default_template_id` 必须出现在 `templates` 中；首切片恰好一个 workspace alias 与一个 template，且该 template **不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）。
-- `[[exports.workspace_aliases]].alias` 就是本机 `owned_workspace.alias`（同一命名空间）：`export.create` 必须校验每个 alias 已在 `local.workspace.select` 建立，Export 只引用符号名、**不复制路径**（`SECURITY_DESIGN.md` §12.3）。
-- `templates.params[].type` ∈ `string|boolean|integer`；`pattern` 只对 `string` 生效；`enum` 为空数组表示不限制取值。`session.create.payload.templateParams` 的键必须来自这里。
-- 原始 workspace 路径与 Provider/MCP 凭据不出现在本文件：它们由 `local.workspace.select`、`local.provider.configure` 在 Daemon 内维护（`SECURITY_DESIGN.md` §12.3）。
+配对成功后节点信任记录即表达「该节点可使用本机全部资源」，不存在 `[[imports]]`/`[[exports]]` 配置或等价的管理记录。启动配置里出现这两个表必须明确拒绝。
 
 ## 10. `dev_mode`
 

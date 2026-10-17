@@ -100,11 +100,10 @@
         "node": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["accessNodeId", "name", "scopes"],
+          "required": ["accessNodeId", "name"],
           "properties": {
             "accessNodeId": { "$ref": "common.schema.json#/$defs/uuid" },
-            "name": { "$ref": "common.schema.json#/$defs/nodeName" },
-            "scopes": { "$ref": "common.schema.json#/$defs/grantList" }
+            "name": { "$ref": "common.schema.json#/$defs/nodeName" }
           }
         },
         "owner": {

@@ -37,22 +37,22 @@ use crate::model::{
     ConflictKind, CreateSessionRequest, Digest, ElicitationAction, ElicitationValues,
     EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
     InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue, MessageId,
-    ModeId, ModeRef, NodeId, NodeKind, NodeState, OriginEpoch, OriginEventRef, OwnedSessionRef,
-    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
-    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef,
-    RequestId, Resolution, ResourceOrigin, ResumeSessionRequest, Sequence, SessionId,
-    SessionRecoveryRecord, SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp,
-    TurnId, TurnState, UnavailableKind, Version, ViewJson, WorkspaceRef,
-    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
-    object_members as json_members, top_level_member,
+    ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef, PendingEvent,
+    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
+    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
+    ResourceOrigin, ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord,
+    SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp, TurnId, TurnState,
+    UnavailableKind, Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
+    encode_json_string as json_text, insert_string_member_front, object_members as json_members,
+    top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
-    EventSink, ExportStore, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator,
-    IdempotencyRecord, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
-    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore,
-    ReplayBatch, ReplayLimit, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
-    SessionStore, SessionUpdate, SettledSession, StateChange, TrustStore, TurnChange, TurnUpdate,
+    EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
+    InteractionResolved, ModeChange, NewTurn, OwnedCommit, PendingInteractionWrite,
+    PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
+    SessionBackendFactory, SessionCreateAdmission, SessionEndpoint, SessionStore, SessionUpdate,
+    SettledSession, StateChange, TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -118,28 +118,6 @@ pub fn command_name(payload: &CommandPayload) -> &'static str {
 /// payload 变体 → 命令类别。payload 与 `ClientCommand.kind` 必须一致（不一致即 `InvalidRequest`）。
 pub fn command_kind(payload: &CommandPayload) -> CommandKind {
     payload.family()
-}
-
-/// 命令 → 覆盖它的 grant（`compatibility/commands/v1/commands.json` 在 core 里的**手工镜像**）。
-///
-/// core 读不了 JSON（不依赖 serde），而 Node actor 的 Export/Import 交集判定（§6.5）必须知道
-/// `grant.*` 覆盖哪些命令名。增删命令必须同时改 `commands.json` 与本表；集成层应对二者加漂移门禁。
-pub fn required_grant(command: &str) -> Option<&'static str> {
-    let grant = match command {
-        "session.list"
-        | "session.read"
-        | "command.status"
-        | "session.mode.list"
-        | "session.config.list"
-        | "workspace.browse" => "grant.observe",
-        "session.prompt" | "session.cancel" | "elicitation.respond" => "grant.interact",
-        "session.mode.set" | "session.config.set" => "grant.configure-session",
-        "permission.resolve" => "grant.approve",
-        "session.create" => "grant.remote-work",
-        "session.resume" => "grant.remote-work",
-        _ => return None,
-    };
-    Some(grant)
 }
 
 /// 只放内存、**不得**进入任何提交的事件类型（`INITIAL_DESIGN.md` §10.3「心跳、typing、presence：
@@ -275,9 +253,7 @@ pub struct BrokerDeps {
     pub store: Arc<dyn SessionStore>,
     pub deliveries: Arc<dyn RemoteDeliveryStore>,
     pub backends: Arc<dyn SessionBackendFactory>,
-    pub exports: Arc<dyn ExportStore>,
-    /// 节点信任记录：`Actor::Node` 的 Owner 侧授权需要「该 Access 信任行已配对且 grants 含所需 grant」
-    /// （§6.5），因此授权判定不能只靠 Export 记录。
+    /// 节点信任记录：Node Link 准入需要「该 Access 信任行已配对且未撤销」的持久事实。
     pub trust: Arc<dyn TrustStore>,
     pub publisher: Arc<dyn EventPublisher>,
     pub clock: Arc<dyn Clock>,
@@ -743,9 +719,8 @@ impl Broker {
         match reference {
             SessionReference::Owned(owned) => format!("owned:{}", owned.session_id.as_str()),
             SessionReference::Remote(remote) => format!(
-                "remote:{}:{}:{}",
+                "remote:{}:{}",
                 remote.owner_node_id.as_str(),
-                remote.export_id.as_str(),
                 remote.session_id.as_str()
             ),
         }
@@ -913,136 +888,25 @@ impl Broker {
     /// 所有用例入口的第一步：按 actor 的授权面判定（§6.5）。
     ///
     /// - `LocalCli`：本地管理入口，访问控制由 `LOCAL_ADMIN_PROTOCOL.md` §2.2 的 OS 用户边界保证。
-    /// - `Device`：**通过设备认证即可执行任何业务命令**——设备不再有授权维度，因此这里没有逐命令的
-    ///   scope 判定（`AGENTS.md` §4 的安全不变量：配对不授予授权、设备记录不保存授权集合）。认证本身
-    ///   与撤销即时生效由连接层负责（`SYNC_PROTOCOL.md` §8），不是本函数的事。
-    /// - `Node`：Access 侧要求本地 `ImportRecord.grants` 覆盖该命令；Owner 侧要求某个未撤销
-    ///   `ExportRecord` 既覆盖该命令、又覆盖目标会话的 agent。两者任一成立即通过。
+    /// - `Device`：**通过设备认证即可执行任何业务命令**——设备不再有授权维度。认证本身与撤销即时
+    ///   生效由连接层负责（`SYNC_PROTOCOL.md` §8），不是本函数的事。
+    /// - `Node`：与设备方向同一规则——已配对且未撤销的节点即可执行本节点命令。`local.*` 永不出现在
+    ///   远程命令面，因此这里不存在需要逐命令展开的授权集合。
     /// - `PairingClaimant`：**任何命令都不授权**（design D12：认领方只存在于配对通道，且那里不经
     ///   broker 授权）；命中即失败关闭并记一条 `authorization.denied`。
     pub async fn authorize(
         &self,
         actor: &Actor,
-        command: &str,
+        _command: &str,
         session: Option<&SessionId>,
         request: &RequestId,
     ) -> Result<(), Denied> {
-        let allowed = match actor {
-            Actor::LocalCli => true,
-            // 设备方向没有命令级授权判定：`command` 在这里只用于 `Actor::Node` 的 grant 判定与审计。
-            Actor::Device { .. } => true,
-            // 查不到 Export/Import（或存储失败）时**失败关闭**：不能证明授权即拒绝（§6.5）。
-            Actor::Node { node, .. } => self
-                .node_allowed(node, command, session)
-                .await
-                .unwrap_or(false),
-            // 配对认领方没有 scope/grant 面：不给任何命令授权（见方法文档）。
-            Actor::PairingClaimant { .. } => false,
-        };
-        if allowed {
+        if !matches!(actor, Actor::PairingClaimant { .. }) {
             return Ok(());
         }
         let denied = Denied::scope_denied();
         self.audit_denial(actor, session, request).await;
         Err(denied)
-    }
-
-    /// `Actor::Node` 的判定：Access 侧与 Owner 侧各有一条路径，任一成立即通过。
-    ///
-    /// Access 侧（本节点是 `node` 的**客户端**）：本地 `ImportRecord.grants` 覆盖该命令。
-    ///
-    /// Owner 侧（本节点是导出方）：有效权限是「Export grant ∩ 该 Access 信任记录 grant ∩ 该信任记录
-    /// 点名的 Export 清单」的交集——信任记录必须是已配对的 `access` 行且其 `grants` 含该命令所需的
-    /// grant；同时某个未撤销 `ExportRecord` 必须覆盖该命令（`scopes` 含该 grant）、与该节点的信任
-    /// 记录 grants 相交（`export.scopes ∩ node.grants ≠ ∅`）并**在该节点的 `export_ids` 内**
-    /// （与 Node Link 目录层的可见性口径同源，用户 2026-09-27 裁决的收窄型白名单）；此外**会话命令**
-    /// 还必须落在覆盖目标会话 agent 的 Export 上。
-    ///
-    /// 清单只收窄不放宽：空清单（或目标 Export 不在清单内）时即使 `scopes ∩ grants` 非空也不授权——
-    /// 与 Node Link 目录层（适配器的唯一可见性判定点）用同一份信任记录、同一份清单，因此两处对同一个
-    /// Export 不会给出不同结论。
-    ///
-    /// 无会话命令（`session.list`/`command.status`/`session.create`）没有目标会话可比对 agent，
-    /// 因此 Owner 侧按「该节点是否与某个覆盖该命令的 Export 有关联」判定；`session.list` 的结果过滤
-    /// 与 `session.create` 的参数校验仍由 `server::node_link` 按其单点可见性策略完成，本层只判授权。
-    async fn node_allowed(
-        &self,
-        node: &NodeId,
-        command: &str,
-        session: Option<&SessionId>,
-    ) -> Result<bool, PortError> {
-        let Some(grant) = required_grant(command) else {
-            return Ok(false);
-        };
-        // Access 侧：本地 Import 的 grants 覆盖该命令。
-        for import in self.deps.exports.imports().await? {
-            if import.owner_node_id() == node && import.grants().contains(grant) {
-                return Ok(true);
-            }
-        }
-        // 节点信任记录：Owner 侧的有效权限是「Export grant ∩ 该 Access 信任记录 grant」的交集，
-        // 因此信任行缺失/未配对或 grants 不含该命令所需的 grant 时直接失败关闭（不因为某个 Export
-        // 恰好覆盖就放行）。
-        let trust = self
-            .deps
-            .trust
-            .node(node, NodeKind::Access)
-            .await?
-            .filter(|row| row.state() == NodeState::Paired);
-        let Some(trust) = trust else {
-            return Ok(false);
-        };
-        if !trust.grants().contains(grant) {
-            return Ok(false);
-        }
-        // Owner 侧：某个未撤销 Export 覆盖该命令；会话命令还必须覆盖目标会话的 agent。
-        let agent = match session {
-            Some(session) => self
-                .deps
-                .store
-                .load(session)
-                .await?
-                .map(|snapshot| snapshot.session.agent().clone()),
-            None => None,
-        };
-        if session.is_some() && agent.is_none() {
-            return Ok(false);
-        }
-        for export in self.deps.exports.exports().await? {
-            if export.revoked_at().is_some() || !export.scopes().contains(grant) {
-                continue;
-            }
-            if export
-                .scopes()
-                .iter()
-                .all(|scope| !trust.grants().contains(scope))
-            {
-                // 与该节点信任记录不相交的 Export 不是它的授权来源（Node Link 的可见性口径）。
-                continue;
-            }
-            if !trust
-                .export_ids()
-                .iter()
-                .any(|allowed| allowed == export.export_id())
-            {
-                // 清单外的 Export 不是它的授权来源（清单只收窄；空清单时这里恒 continue）。
-                continue;
-            }
-            match &agent {
-                Some(agent) => {
-                    if export
-                        .agent_ids()
-                        .iter()
-                        .any(|id| id.as_str() == agent.agent_id().as_str())
-                    {
-                        return Ok(true);
-                    }
-                }
-                // 无会话命令：与该节点有关联且覆盖该命令的 Export 存在即通过。
-                None => return Ok(true),
-            }
-        }
-        Ok(false)
     }
 
     /// 审计拒绝（§3.5 的 `authorization.denied`）；审计失败不改变授权判定。
@@ -1194,7 +1058,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             }))
         };
         let turns = vec![TurnChange::Create(NewTurn {
@@ -1339,7 +1203,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1413,7 +1277,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1628,7 +1492,7 @@ impl Broker {
             }),
             agent_session_id: None,
             workspace_cwd: None,
-            workspace_alias: None,
+            workspace_directory_id: None,
         });
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -1758,12 +1622,12 @@ impl Broker {
             // 落账提交前一定已被补齐。
             agent_session_id: None,
             workspace_cwd,
-            // 目录归属**只**以别名落列（`owned_session.workspace_alias`）：展示名不落库，读路径按别名
+            // 目录归属**只**以别名落列（`owned_session.workspace_directory_id`）：展示名不落库，读路径按别名
             // 关联目录记录（`SessionStore::list` 的 LEFT JOIN）取得；本次的归属投影（别名 + 展示名）
             // 留在内存里供摘要用，两者同源由 `check_workspace_ownership` 保证。
-            workspace_alias: workspace
+            workspace_directory_id: workspace
                 .as_ref()
-                .map(|workspace| workspace.alias().as_str().to_owned()),
+                .map(|workspace| workspace.directory_id().as_str().to_owned()),
         };
         let summary = created_summary(&settled, &at, workspace.as_ref())?;
         let epoch = self.deps.ids.origin_epoch();
@@ -2661,7 +2525,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             }))
         } else {
             None
@@ -2803,7 +2667,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: next.turn.clone(),
@@ -2868,7 +2732,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.turn.clone(),
@@ -2998,7 +2862,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.clone(),
@@ -3289,7 +3153,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 }));
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
                 events.extend(
@@ -3957,8 +3821,7 @@ impl Broker {
                 | ConflictKind::Expired
                 | ConflictKind::Consumed
                 | ConflictKind::AlreadyExists
-                | ConflictKind::IdentityMismatch
-                | ConflictKind::DuplicateOwnership => ("internal.unavailable", "状态冲突", false),
+                | ConflictKind::IdentityMismatch => ("internal.unavailable", "状态冲突", false),
             },
             PortError::InvalidRequest(_) => ("protocol.schema_invalid", "请求不合法", false),
             PortError::Corrupt(_) => ("internal.unavailable", "存储不可用", true),
@@ -3985,8 +3848,7 @@ impl Broker {
                 UnavailableKind::Busy
                 | UnavailableKind::StorageFull
                 | UnavailableKind::IoError
-                | UnavailableKind::OwnerOffline
-                | UnavailableKind::ExportRevoked => {
+                | UnavailableKind::OwnerOffline => {
                     ("internal.unavailable", "存储或后端不可用", true)
                 }
             },
@@ -4392,7 +4254,7 @@ fn prepared_key(actor: &Actor, request: &RequestId) -> String {
 
 /// 目录归属（`WorkspaceRef`）与已解析 workspace 的一致性校验（§3.1、`design.md` D1）。
 ///
-/// 别名与展示名必须**同源**：落进 `owned_session.workspace_alias` 的是归属里的别名，投影给适配层的
+/// 别名与展示名必须**同源**：落进 `owned_session.workspace_directory_id` 的是归属里的别名，投影给适配层的
 /// 会话摘要用的也是同一个 `WorkspaceRef`。因此这里既不接受「解析出别名却没有归属投影」，也不接受
 /// 「两者的别名不同」——两种组装错误都失败关闭，而不是猜一个别名写库。
 fn check_workspace_ownership(
@@ -4402,16 +4264,17 @@ fn check_workspace_ownership(
     let resolved = create
         .workspace
         .as_ref()
-        .and_then(|workspace| workspace.alias());
+        .map(|workspace| workspace.directory_id());
     match (resolved, ownership.as_ref()) {
         (None, None) => Ok(None),
         (None, Some(_)) => Err(PortError::InvalidRequest(
             "本次解析没有别名，不得给出目录归属投影",
         )),
+        // 客户端提供的目录也会派生 directoryId，但没有登记记录；没有归属投影是合法状态。
         (Some(_), None) => Err(PortError::InvalidRequest(
-            "已解析的目录别名必须带上目录归属投影",
+            "已解析的目录必须带上目录归属投影",
         )),
-        (Some(alias), Some(owned)) if alias == owned.alias() => Ok(ownership),
+        (Some(alias), Some(owned)) if alias == owned.directory_id() => Ok(ownership),
         (Some(_), Some(_)) => Err(PortError::InvalidRequest(
             "目录归属的别名与本次解析结果不一致",
         )),
@@ -4421,9 +4284,9 @@ fn check_workspace_ownership(
 /// 落账后的会话摘要：适配层投影终态结果（Node Link 的 `SessionCreateResult.sessionMeta`、Sync 的
 /// `session` 资源）用它，因此**必须**与 `SessionStore::list` 对同一行给出的摘要逐字段同源——
 /// `state` 恒为 `idle`、`version` 恒为 1、两个时间戳都是落账提交的 `at`、目录归属就是落进
-/// `owned_session.workspace_alias` 的那个别名（展示名按别名关联目录记录，与本函数取的是同一个）。
+/// `owned_session.workspace_directory_id` 的那个别名（展示名按别名关联目录记录，与本函数取的是同一个）。
 ///
-/// 目录归属按**归属投影**（`WorkspaceRef`）而非 `SettledSession::workspace_alias` 取：别名是落库的
+/// 目录归属按**归属投影**（`WorkspaceRef`）而非 `SettledSession::workspace_directory_id` 取：别名是落库的
 /// 唯一取值，而展示名不落库（读路径按别名关联目录记录），因此摘要要同源就必须拿本次解析用的那份
 /// 投影。两者的别名必然相同——`check_workspace_ownership` 已比对过，不同即失败关闭。
 fn created_summary(
@@ -4644,21 +4507,19 @@ pub(crate) mod test_support {
     use crate::model::{
         ActorKind, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId,
         AttachmentGeneration, AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId,
-        DeviceRecord, EventId, ExportId, ExportRecord, ImportId, ImportRecord, ModeState, NodeId,
-        NodeKind, NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord,
-        PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
-        ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
-        WorkspaceAlias, WorkspaceRecord, WorkspaceRef,
+        DeviceRecord, DirectoryId, DirectoryRecord, EventId, ModeState, NodeId, NodeKind,
+        NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
+        PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ResourceOrigin,
+        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceRef,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
-        DeviceWrite, DropReport, ExpiryWrite, ExportRevocation, ExportWrite, IdempotentReplay,
-        ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
-        NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite, OwnedEventRecord,
-        PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
-        PairingWrite, PendingInteractionOrigin, ProfileWrite, ProviderRefWrite, PruneReport,
-        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, SyncEventRecord,
-        SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted, WorkspaceWrite,
+        DeviceWrite, ExpiryWrite, IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord,
+        LocalConfigStore, NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite,
+        OwnedEventRecord, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
+        PairingSettlementWrite, PairingWrite, PendingInteractionOrigin, PruneReport,
+        RemoteCommandRef, RetentionPolicy, SessionQuery, StoreHealth, SyncEventRecord,
+        SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -4789,16 +4650,9 @@ pub(crate) mod test_support {
         pub(crate) modes: Mutex<Option<ModeState>>,
         /// 适配器 `prompt` 返回的接受结果里的 turn 标识（测试可改写，默认全零占位值）。
         pub(crate) accepted_turn: Mutex<Option<TurnId>>,
-        pub(crate) exports: Mutex<Vec<ExportRecord>>,
-        pub(crate) imports: Mutex<Vec<ImportRecord>>,
-        pub(crate) profiles: Mutex<Vec<AgentProfile>>,
-        pub(crate) workspaces: Mutex<Vec<WorkspaceRecord>>,
-        pub(crate) provider_refs: Mutex<Vec<ProviderRef>>,
-        pub(crate) seed: Mutex<Option<SeedState>>,
+        pub(crate) workspaces: Mutex<Vec<DirectoryRecord>>,
         /// 管理写集实际携带的审计动作（断言「审计随写集提交」而不是事后补写）。
         pub(crate) write_audits: Mutex<Vec<AuditAction>>,
-        /// `drop_import` 的调用次数（断言完整移除不再串联连接级清空）。
-        pub(crate) drop_import_calls: AtomicUsize,
         pub(crate) imported_sessions: Mutex<Vec<ImportedSessionRecord>>,
         pub(crate) acked: Mutex<Vec<OriginCursor>>,
         pub(crate) attachments: Mutex<Vec<AttachmentRef>>,
@@ -4851,7 +4705,7 @@ pub(crate) mod test_support {
 
     impl FakeWorld {
         /// 读取路径上的目录归属（§3.6/§5.2、`design.md` D1）：**只**按会话行持久化的
-        /// `workspace_alias` 取值，展示名按别名查目录记录（storage 侧那条 LEFT JOIN 的等价物），
+        /// `workspace_directory_id` 取值，展示名按别名查目录记录（storage 侧那条 LEFT JOIN 的等价物），
         /// 目录记录不存在时回退为别名本身——因此目录被删除/改名都不影响既有会话的归属。
         ///
         /// 本函数**不**看 `workspace_cwd`：`NULL` 就是未分组，任何情况下都不按路径反查别名。
@@ -4860,19 +4714,8 @@ pub(crate) mod test_support {
             state: &WorldState,
             session: &SessionId,
         ) -> Option<WorkspaceRef> {
-            let alias = state.workspace_aliases.get(session.as_str())?;
-            let display_name = lock(&self.workspaces)
-                .iter()
-                .find(|record| record.alias() == alias)
-                .map_or_else(
-                    || alias.as_str().to_owned(),
-                    |record| record.display_name().to_owned(),
-                );
-            // 取值来自已校验的 `WorkspaceRecord.display_name`（或别名原文），构造不会失败。
-            Some(
-                WorkspaceRef::try_new(alias.clone(), &display_name)
-                    .expect("目录引用的展示名已由值对象校验过"),
-            )
+            let directory_id = state.workspace_directories.get(session.as_str())?;
+            Some(WorkspaceRef::new(directory_id.clone()))
         }
     }
 
@@ -4881,10 +4724,10 @@ pub(crate) mod test_support {
         pub(crate) sessions: HashMap<String, Session>,
         /// 会话 id → `owned_session` 的两列恢复数据（§3.6 的窄读取源）。
         pub(crate) recoveries: HashMap<String, RecoveryColumns>,
-        /// 会话 id → `owned_session.workspace_alias`（目录归属的**唯一**来源；缺席 = `NULL` = 未分组）。
+        /// 会话 id → `owned_session.workspace_directory_id`（目录归属的**唯一**来源；缺席 = `NULL` = 未分组）。
         ///
         /// 与 `sessions`/`recoveries` 分开存，和 storage 侧一样：别名不是聚合的状态，恢复流程也不读它。
-        pub(crate) workspace_aliases: HashMap<String, WorkspaceAlias>,
+        pub(crate) workspace_directories: HashMap<String, DirectoryId>,
         pub(crate) turns: HashMap<String, Vec<Turn>>,
         pub(crate) events: Vec<CommittedEvent>,
         pub(crate) commands: HashMap<String, CommandRecord>,
@@ -4990,6 +4833,9 @@ pub(crate) mod test_support {
     impl FakeWorld {
         pub(crate) fn new() -> Arc<Self> {
             Arc::new(Self::default())
+        }
+        pub(crate) fn directories(&self) -> &Mutex<Vec<DirectoryRecord>> {
+            &self.workspaces
         }
 
         pub(crate) fn fail_commit_at(&self, index: usize) {
@@ -5344,6 +5190,10 @@ pub(crate) mod test_support {
             Ok(lock(&self.world.catalog_agents).clone())
         }
 
+        async fn profile(&self, _id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
+            Ok(None)
+        }
+
         async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
             Ok(CapabilitySet::empty())
         }
@@ -5443,10 +5293,10 @@ pub(crate) mod test_support {
                         columns.agent_session_id = settled.agent_session_id.clone();
                         columns.workspace_cwd = settled.workspace_cwd.clone();
                     }
-                    if let Some(alias) = settled.workspace_alias.as_ref() {
+                    if let Some(alias) = settled.workspace_directory_id.as_ref() {
                         state
-                            .workspace_aliases
-                            .insert(session_id.as_str().to_owned(), WorkspaceAlias::new(alias)?);
+                            .workspace_directories
+                            .insert(session_id.as_str().to_owned(), DirectoryId::new(alias)?);
                     }
                     created = Some(session_id);
                 }
@@ -5527,11 +5377,11 @@ pub(crate) mod test_support {
                             columns.workspace_cwd = Some(workspace_cwd);
                         }
                     }
-                    // §5.2：`workspace_alias` 同为窄写列，`None` = 不改；写入后只被读路径消费。
-                    if let Some(alias) = update.workspace_alias.clone() {
+                    // §5.2：`workspace_directory_id` 同为窄写列，`None` = 不改；写入后只被读路径消费。
+                    if let Some(alias) = update.workspace_directory_id.clone() {
                         state
-                            .workspace_aliases
-                            .insert(session_id.as_str().to_owned(), WorkspaceAlias::new(&alias)?);
+                            .workspace_directories
+                            .insert(session_id.as_str().to_owned(), DirectoryId::new(&alias)?);
                     }
                 }
                 None => {}
@@ -6461,17 +6311,6 @@ pub(crate) mod test_support {
             Ok(None)
         }
 
-        async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError> {
-            self.world.drop_import_calls.fetch_add(1, Ordering::SeqCst);
-            let mut receipts = lock(&self.world.receipts);
-            let before = receipts.len();
-            receipts.retain(|receipt| receipt.session.export_id.as_str() != import.as_str());
-            Ok(DropReport {
-                delivery_index_removed: (before - receipts.len()) as u64,
-                command_refs_removed: 0,
-            })
-        }
-
         async fn prune(
             &self,
             _policy: RetentionPolicy,
@@ -6481,59 +6320,6 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) struct FakeExports {
-        pub(crate) world: Arc<FakeWorld>,
-    }
-
-    #[async_trait]
-    impl ExportStore for FakeExports {
-        async fn put_export(&self, write: ExportWrite) -> Result<(), PortError> {
-            lock(&self.world.exports).push(write.record);
-            Ok(())
-        }
-
-        async fn export(&self, id: &ExportId) -> Result<Option<ExportRecord>, PortError> {
-            Ok(lock(&self.world.exports)
-                .iter()
-                .find(|export| export.export_id() == id)
-                .cloned())
-        }
-
-        async fn exports(&self) -> Result<Vec<ExportRecord>, PortError> {
-            Ok(lock(&self.world.exports).clone())
-        }
-
-        async fn revoke_export(&self, _write: ExportRevocation) -> Result<(), PortError> {
-            Ok(())
-        }
-
-        async fn add_import(&self, write: ImportWrite) -> Result<(), PortError> {
-            lock(&self.world.write_audits)
-                .extend(write.context.audit.iter().map(|audit| audit.action));
-            lock(&self.world.imports).push(write.record);
-            Ok(())
-        }
-
-        async fn import(&self, id: &ImportId) -> Result<Option<ImportRecord>, PortError> {
-            Ok(lock(&self.world.imports)
-                .iter()
-                .find(|import| import.import_id() == id)
-                .cloned())
-        }
-
-        async fn imports(&self) -> Result<Vec<ImportRecord>, PortError> {
-            Ok(lock(&self.world.imports).clone())
-        }
-
-        async fn remove_import(&self, write: ImportRemoval) -> Result<(), PortError> {
-            lock(&self.world.write_audits)
-                .extend(write.context.audit.iter().map(|audit| audit.action));
-            lock(&self.world.imports).retain(|import| import.import_id() != &write.import);
-            Ok(())
-        }
-    }
-
-    /// 信任端口在本切片只被 `use_cases` 透传；这里给最小实现（记录写集携带的审计动作）。
     pub(crate) struct FakeTrust {
         pub(crate) world: Arc<FakeWorld>,
     }
@@ -6703,8 +6489,6 @@ pub(crate) mod test_support {
                         record.target(),
                         PairingState::Consumed,
                         record.display_name().map(str::to_owned),
-                        record.requested_scopes().clone(),
-                        record.requested_grants().clone(),
                         record.secret_digest().clone(),
                         record.host_binding(),
                         record.created_at().clone(),
@@ -6737,76 +6521,18 @@ pub(crate) mod test_support {
 
     #[async_trait]
     impl LocalConfigStore for FakeLocalConfig {
-        async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(lock(&self.world.profiles).clone())
-        }
-
-        async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
-            Ok(lock(&self.world.profiles)
-                .iter()
-                .find(|profile| profile.id() == id)
-                .cloned())
-        }
-
-        async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError> {
-            let mut profiles = lock(&self.world.profiles);
-            if write.profile.is_default() {
-                profiles.retain(|profile| !profile.is_default());
-            }
-            profiles.retain(|profile| profile.id() != write.profile.id());
-            profiles.push(write.profile);
-            Ok(())
-        }
-
-        async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError> {
+        async fn directories(&self) -> Result<Vec<DirectoryRecord>, PortError> {
             Ok(lock(&self.world.workspaces).clone())
         }
 
-        async fn workspace(
+        async fn directory(
             &self,
-            alias: &WorkspaceAlias,
-        ) -> Result<Option<WorkspaceRecord>, PortError> {
+            directory_id: &DirectoryId,
+        ) -> Result<Option<DirectoryRecord>, PortError> {
             Ok(lock(&self.world.workspaces)
                 .iter()
-                .find(|record| record.alias() == alias)
+                .find(|record| record.directory_id() == directory_id)
                 .cloned())
-        }
-
-        async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError> {
-            let mut records = lock(&self.world.workspaces);
-            records.retain(|record| record.alias() != write.record.alias());
-            records.push(write.record);
-            Ok(())
-        }
-
-        async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError> {
-            Ok(lock(&self.world.provider_refs).clone())
-        }
-
-        async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError> {
-            let mut refs = lock(&self.world.provider_refs);
-            refs.retain(|reference| reference.id() != write.reference.id());
-            refs.push(write.reference);
-            Ok(())
-        }
-
-        async fn seed_state(&self) -> Result<SeedState, PortError> {
-            let world = lock(&self.world.seed);
-            match &*world {
-                Some(state) => Ok(state.clone()),
-                None => Ok(SeedState::unseeded()),
-            }
-        }
-
-        async fn mark_seeded(&self, write: SeedWrite) -> Result<(), PortError> {
-            let mut profiles = lock(&self.world.profiles);
-            for profile in write.profiles {
-                profiles.retain(|existing| existing.id() != profile.id());
-                profiles.push(profile);
-            }
-            *lock(&self.world.seed) =
-                Some(SeedState::try_new(true, Some(write.context.at)).expect("seeded"));
-            Ok(())
         }
     }
 
@@ -7078,9 +6804,6 @@ pub(crate) mod test_support {
                     backends: Arc::new(FakeBackend {
                         world: world.clone(),
                     }),
-                    exports: Arc::new(FakeExports {
-                        world: world.clone(),
-                    }),
                     trust: Arc::new(FakeTrust {
                         world: world.clone(),
                     }),
@@ -7198,10 +6921,8 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use crate::model::{
-        AcpRaw, AgentId, AgentRef, AgentSessionId, CachePolicy, DeviceId, EventId, ExportId,
-        ExportRecord, ExportTemplate, Fingerprint, GrantSet, InteractionKind, InteractionOption,
-        ModeState, NodeRecord, PairingId, PendingInteraction, ResourceOrigin, TemplateId,
-        WorkspaceAlias, WorkspaceAliasEntry,
+        AcpRaw, AgentId, AgentRef, AgentSessionId, DeviceId, EventId, InteractionKind,
+        InteractionOption, ModeState, NodeId, PairingId, PendingInteraction, ResourceOrigin,
     };
 
     /// 一个已认证的设备主体（§10.1 的「按诱发命令的执行者分类」断言与授权回归都用它）。
@@ -7269,7 +6990,6 @@ mod tests {
         let harness = Harness::new(BrokerConfig::default());
         let remote = RemoteSessionRef::new(
             NodeId::new(&uuid_text(11)).expect("node"),
-            ExportId::new("export.one").expect("export"),
             SessionId::new(&uuid_text(12)).expect("session"),
         );
         let origin = OriginEventRef::new(
@@ -8055,12 +7775,11 @@ mod tests {
         assert_eq!(rejection_code(&conflict), "command.idempotency_conflict");
 
         // 不同 actor 用同一 requestId → 视为独立命令（幂等键是协议维度的 `(actor, requestId)`）：
-        // 这条命令不与上一条冲突，而是走自己的授权判定。设备方向已无命令级判定，因此这里用一个**未授
-        // 任何 grant** 的节点主体，它得到的仍是自己的 `authorization.scope_denied`（而不是
+        // 这条命令不与上一条冲突，而是走自己的授权判定。设备与节点方向都已无命令级判定，因此这里用
+        // 配对认领方（它永远不得提交命令），它得到的仍是自己的 `authorization.scope_denied`（而不是
         // `command.idempotency_conflict`）——两者的区别正是本用例要钉住的。
-        let other = Actor::Node {
-            node: NodeId::new(&uuid_text(41)).expect("uuid"),
-            access_node: NodeId::new(&uuid_text(42)).expect("uuid"),
+        let other = Actor::PairingClaimant {
+            pairing: PairingId::new(&uuid_text(41)).expect("uuid"),
         };
         let mut foreign = command.clone();
         foreign.actor = other.clone();
@@ -8993,7 +8712,7 @@ mod tests {
                 }),
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -9140,52 +8859,6 @@ mod tests {
         assert_eq!(EventOrigin::ALL.len(), 5, "§7.3 的 CHECK 是五值");
     }
 
-    /// 一套能让 `Actor::Node` 通过 Owner 侧授权（§6.5）的最小 Export + 信任记录：信任行 grants 含
-    /// `grant.interact`（`session.prompt` 所需）且点名该 Export；Export 未撤销、scopes 与信任行相交并
-    /// 覆盖该会话的 agent。
-    fn seed_node_owner_grant(harness: &Harness, node: &NodeId, agent: &AgentId) {
-        let export_id = ExportId::new("export-node").expect("export id");
-        let alias = WorkspaceAlias::new("project").expect("alias");
-        let export = ExportRecord::try_new(
-            export_id.clone(),
-            "team export",
-            vec![agent.clone()],
-            vec![WorkspaceAliasEntry::try_new(alias.clone(), "Project").expect("alias entry")],
-            alias.clone(),
-            vec![
-                ExportTemplate::try_new(
-                    TemplateId::new("coding").expect("template id"),
-                    "Coding",
-                    alias.clone(),
-                    Vec::new(),
-                )
-                .expect("template"),
-            ],
-            TemplateId::new("coding").expect("template id"),
-            GrantSet::try_from_iter(["grant.interact"]).expect("grants"),
-            CachePolicy::NoContentCache,
-            ts(0),
-            None,
-        )
-        .expect("export record");
-        let trust = NodeRecord::try_new(
-            node.clone(),
-            "office access",
-            NodeKind::Access,
-            Fingerprint::new(&"a".repeat(64)).expect("fingerprint"),
-            GrantSet::try_from_iter(["grant.interact"]).expect("grants"),
-            vec![export_id],
-            NodeState::Paired,
-            None,
-            ts(0),
-            None,
-            None,
-        )
-        .expect("node record");
-        harness.world.exports.lock().expect("exports").push(export);
-        harness.world.nodes.lock().expect("nodes").push(trust);
-    }
-
     /// §10.1 的验收口径（**设备驱动**）：turn 生命周期事件记 `origin_kind='device'` **且** `causation`
     /// 等于该 prompt 的 requestId；turn 内由 Agent 产出的增量仍是 `agent`，但**照样带**该 causation
     /// （两者表达不同的事实，不得互相替代）。
@@ -9298,8 +8971,6 @@ mod tests {
     fn node_command_records_the_node_origin() {
         let harness = Harness::new(BrokerConfig::default());
         let node = NodeId::new(&uuid_text(120)).expect("node");
-        let agent = AgentId::new("agent-1").expect("agent id");
-        seed_node_owner_grant(&harness, &node, &agent);
         let actor = Actor::Node {
             node: node.clone(),
             access_node: NodeId::new(&uuid_text(121)).expect("access node"),
@@ -9473,9 +9144,6 @@ mod tests {
                 backends: Arc::new(FakeBackend {
                     world: world.clone(),
                 }),
-                exports: Arc::new(FakeExports {
-                    world: world.clone(),
-                }),
                 trust: Arc::new(FakeTrust {
                     world: world.clone(),
                 }),
@@ -9513,9 +9181,6 @@ mod tests {
             broker: broker.clone(),
             store,
             deliveries: Arc::new(FakeDeliveries {
-                world: world.clone(),
-            }),
-            exports: Arc::new(FakeExports {
                 world: world.clone(),
             }),
             trust: Arc::new(FakeTrust {
@@ -9822,7 +9487,7 @@ mod tests {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 })),
                 turns: vec![TurnChange::Create(NewTurn {
                     turn: turn.clone(),
@@ -10240,7 +9905,7 @@ mod tests {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: Vec::new(),
             events: vec![event],
@@ -10413,7 +10078,6 @@ mod tests {
         let harness = Harness::new(BrokerConfig::default());
         let remote = RemoteSessionRef::new(
             NodeId::new(&uuid_text(11)).expect("node"),
-            ExportId::new("export.one").expect("export"),
             SessionId::new(&uuid_text(12)).expect("session"),
         );
         let event_type = EventType::new("agent.message.delta").expect("event type");
@@ -11104,14 +10768,5 @@ mod tests {
         let _ = harness.submit_prompt(1, 'I');
         let session = harness.world.session(&harness.session).expect("会话");
         assert!(session.title().is_none(), "R9：显式置空 → 未命名会话");
-    }
-
-    /// R9：创建时标题为空，且没有任何客户端路径能写标题（命令目录里没有重命名会话的命令）。
-    #[test]
-    fn a_freshly_created_session_has_no_title_and_no_rename_command_exists() {
-        assert!(
-            !required_grant("session.rename").is_some(),
-            "R9：不得存在重命名会话的命令（`required_grant` 是命令目录的手工镜像）"
-        );
     }
 }

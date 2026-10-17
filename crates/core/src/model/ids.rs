@@ -77,11 +77,6 @@ pub(crate) fn is_uuid(text: &str) -> bool {
     })
 }
 
-/// `^[A-Za-z0-9._-]{1,128}$`（`ExportId`/`ImportId`）
-pub(crate) fn is_spec_id(text: &str) -> bool {
-    charset_ok(text, 1, 128, ascii_alnum, spec_rest)
-}
-
 /// `^[a-z0-9][a-z0-9._-]{0,63}$`
 pub(crate) fn is_workspace_alias(text: &str) -> bool {
     charset_ok(text, 1, 64, lower_alnum, lower_spec_rest)
@@ -106,14 +101,6 @@ pub(crate) fn is_scope_name(text: &str) -> bool {
         |byte| byte.is_ascii_lowercase(),
         lower_spec_rest,
     )
-}
-
-/// `^grant\.[a-z][a-z0-9._-]{0,63}$`
-pub(crate) fn is_grant_name(text: &str) -> bool {
-    match text.strip_prefix("grant.") {
-        Some(rest) => charset_ok(rest, 1, 64, lower_alnum, lower_spec_rest),
-        None => false,
-    }
 }
 
 /// `^[a-z][a-z0-9._-]{0,127}$`（`PublicError.code` 与 wire 错误码同族）
@@ -149,19 +136,15 @@ fn check_uuid(text: &str) -> Result<(), InvalidValue> {
     }
 }
 
-fn check_export_id(text: &str) -> Result<(), InvalidValue> {
-    if is_spec_id(text) {
+fn check_directory_id(text: &str) -> Result<(), InvalidValue> {
+    if text.len() == 32
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         Ok(())
     } else {
-        Err(InvalidValue::ExportId)
-    }
-}
-
-fn check_import_id(text: &str) -> Result<(), InvalidValue> {
-    if is_spec_id(text) {
-        Ok(())
-    } else {
-        Err(InvalidValue::ImportId)
+        Err(InvalidValue::DirectoryId)
     }
 }
 
@@ -278,15 +261,34 @@ newtype!(
     check_uuid
 );
 newtype!(
-    /// Export 标识：`^[A-Za-z0-9._-]{1,128}$`，**不是** UUID（`NODE_LINK_PROTOCOL.md` §12.3）。
-    ExportId,
-    check_export_id
+    /// 目录标识：由规范化绝对路径派生的 32 字符小写十六进制摘要。
+    DirectoryId,
+    check_directory_id
 );
-newtype!(
-    /// Import 标识：`^[A-Za-z0-9._-]{1,128}$`，Access 本地为主键（`LOCAL_ADMIN_PROTOCOL.md` §5.5）。
-    ImportId,
-    check_import_id
-);
+
+impl DirectoryId {
+    /// 由 [`derive_directory_id`] 已经算好的摘要构造（无校验失败的可能）。
+    pub(crate) fn from_lower_hex(text: String) -> Self {
+        debug_assert!(text.len() == 32 && check_directory_id(&text).is_ok());
+        Self(text)
+    }
+}
+
+/// 由**已规范化**的绝对路径派生目录标识：`sha256(path)` 前 16 字节的小写十六进制。
+///
+/// 尺寸与编码由 `design.md` D1 固定：32 个 hex 字符。调用方 MUST 传入 `canonicalize` 的权威取值，
+/// 不得传入客户端提交的原文——否则同一目录会得到不同标识。
+pub fn derive_directory_id(canonical_path: &str) -> DirectoryId {
+    use sha2::{Digest as _, Sha256};
+    let digest = Sha256::digest(canonical_path.as_bytes());
+    let mut text = String::with_capacity(32);
+    for byte in &digest[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(text, "{byte:02x}");
+    }
+    DirectoryId::from_lower_hex(text)
+}
+
 newtype!(
     /// workspace 符号名：`^[a-z0-9][a-z0-9._-]{0,63}$`，不构成路径。
     WorkspaceAlias,
@@ -418,39 +420,27 @@ impl ModeRef {
     }
 }
 
-/// workspace 目录引用：`{ alias, displayName }`（`schemas/sync/v1/common.schema.json#/$defs/workspaceRef`）。
+/// 会话摘要的目录引用：`{ directoryId }`（`schemas/sync/v1/common.schema.json#/$defs/workspaceRef`）。
 ///
-/// **只承载引用，不承载路径**：`canonical_path` 是本机规范化绝对路径（§3.6/§5.1 的禁令），因此本类型
-/// 没有路径字段，投影期也无从泄漏。`displayName` 是用户在 `local.workspace.select` 登记的原文，属
-/// 「不可信输入」类：按有界文本校验，渲染责任在接收端（`SECURITY_DESIGN.md` §11.2）。
+/// **只承载标识，不承载路径**：`canonical_path` 是本机规范化绝对路径（§3.6/§5.1 的禁令），因此本类型
+/// 没有路径字段，投影期也无从泄漏。客户端 MUST NOT 解析、拼接或由标识反推路径。
 ///
-/// 目录归属**只**来自会话行上持久化的 `workspace_alias`；`NULL` 就是「未分组」，MUST NOT 反向按
-/// `workspace_cwd` 解析别名来补齐（`workspace-resolution` 的创建时持久化要求）。
+/// 目录归属**只**来自会话行上持久化的 `workspace_directory_id`；`NULL` 就是「未分组」，MUST NOT 反向按
+/// `workspace_cwd` 解析目录来补齐（`workspace-resolution` 的创建时持久化要求）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorkspaceRef {
-    alias: WorkspaceAlias,
-    display_name: String,
+    directory_id: DirectoryId,
 }
 
 impl WorkspaceRef {
-    /// 构造。`display_name` 非空、≤128 字符（与 `WorkspaceRecord::display_name` 同口径，§3.7：
-    /// 仓库对「展示名」类字段只做字符数校验，NUL 校验只施加于路径与命令行类字段）。
-    pub fn try_new(alias: WorkspaceAlias, display_name: &str) -> Result<Self, InvalidValue> {
-        require_bounded(display_name, 1, 128)?;
-        Ok(Self {
-            alias,
-            display_name: display_name.to_owned(),
-        })
+    /// 构造。
+    pub fn new(directory_id: DirectoryId) -> Self {
+        Self { directory_id }
     }
 
-    /// workspace 符号名（稳定主键；不是路径）。
-    pub fn alias(&self) -> &WorkspaceAlias {
-        &self.alias
-    }
-
-    /// 展示名（目录改名会传播到既有会话的投影取值；目录被删除时回退为别名本身）。
-    pub fn display_name(&self) -> &str {
-        &self.display_name
+    /// 目录标识（稳定主键；不是路径）。
+    pub fn directory_id(&self) -> &DirectoryId {
+        &self.directory_id
     }
 }
 
@@ -467,20 +457,18 @@ impl OwnedSessionRef {
     }
 }
 
-/// imported 会话引用：`ownerNodeId + exportId + sessionId`（`NODE_LINK_PROTOCOL.md` §7）。
+/// imported 会话引用：`ownerNodeId + sessionId`（`NODE_LINK_PROTOCOL.md` §7）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RemoteSessionRef {
     pub owner_node_id: NodeId,
-    pub export_id: ExportId,
     pub session_id: SessionId,
 }
 
 impl RemoteSessionRef {
     /// 构造。
-    pub fn new(owner_node_id: NodeId, export_id: ExportId, session_id: SessionId) -> Self {
+    pub fn new(owner_node_id: NodeId, session_id: SessionId) -> Self {
         Self {
             owner_node_id,
-            export_id,
             session_id,
         }
     }
@@ -552,8 +540,10 @@ pub enum EntityRef {
     Pairing(PairingId),
     Device(DeviceId),
     Node(NodeId),
-    Export(ExportId),
-    Import(ImportId),
+    /// 只用于读取升级前的历史审计行（`export.*` 动作）：Export 已整族删除，本二进制不再产生它。
+    Export(String),
+    /// 只用于读取升级前的历史审计行（`import.*` 动作）：Import 已整族删除，本二进制不再产生它。
+    Import(String),
     /// 本地 Provider 引用（`provider.configured` 审计的目标；§11.6）。
     ///
     /// `ProviderRef.id` 是 `^[A-Za-z0-9._-]{1,64}$` 的引用名（不是凭据，也不是 UUID）。
@@ -590,8 +580,8 @@ impl EntityRef {
             Self::Pairing(id) => id.as_str().to_owned(),
             Self::Device(id) => id.as_str().to_owned(),
             Self::Node(id) => id.as_str().to_owned(),
-            Self::Export(id) => id.as_str().to_owned(),
-            Self::Import(id) => id.as_str().to_owned(),
+            Self::Export(id) => id.clone(),
+            Self::Import(id) => id.clone(),
             Self::Provider(id) => id.clone(),
         }
     }

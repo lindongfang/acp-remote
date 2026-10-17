@@ -1931,7 +1931,7 @@ export class ClientStore {
       if (createIfMissing) {
         return { ok: false, reason: "已登记的目录必然存在，不能对它启用「不存在则先创建」。" };
       }
-      refs = { workspaceAlias: registeredAlias, agentId: input.agentId };
+      refs = { directoryId: registeredAlias, agentId: input.agentId };
     }
     assertCreateSessionRefs(refs);
 

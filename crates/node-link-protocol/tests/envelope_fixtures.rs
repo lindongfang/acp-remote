@@ -11,8 +11,7 @@ mod support;
 use std::collections::HashSet;
 
 use node_link_protocol::catalog::{
-    CatalogChanged, CatalogSnapshot, CatalogSubscribe, ExportRevoked, NodeRotateKeyRequest,
-    NodeRotateKeyResult, NodeTrustRevoked,
+    CatalogSnapshot, CatalogSubscribe, NodeRotateKeyRequest, NodeRotateKeyResult, NodeTrustRevoked,
 };
 use node_link_protocol::command::{
     CommandAccepted, CommandRejected, CommandStatus, CommandSubmit, CommandTerminal,
@@ -30,7 +29,7 @@ const FIXTURE_ROOT: &str = "fixtures/node-link/v1/";
 const MANIFEST: &str = "fixtures/node-link/v1/manifest.json";
 const PAIRING_SCHEMA_SUFFIX: &str = "schemas/node-link/v1/pairing.schema.json";
 
-const EXPECTED_VALID_MESSAGE_CASES: usize = 40;
+const EXPECTED_VALID_MESSAGE_CASES: usize = 38;
 const EXPECTED_ENVELOPE_REJECTED: usize = 1;
 const EXPECTED_BODY_REJECTED: usize = 10;
 const EXPECTED_SKIPPED_PAIRING: usize = 2;
@@ -47,8 +46,6 @@ enum TypedBody {
     NodeReady(Box<NodeReady>),
     CatalogSubscribe(Box<CatalogSubscribe>),
     CatalogSnapshot(Box<CatalogSnapshot>),
-    CatalogChanged(Box<CatalogChanged>),
-    ExportRevoked(Box<ExportRevoked>),
     NodeTrustRevoked(Box<NodeTrustRevoked>),
     NodeRotateKeyRequest(Box<NodeRotateKeyRequest>),
     NodeRotateKeyResult(Box<NodeRotateKeyResult>),
@@ -81,8 +78,6 @@ impl TypedBody {
             MessageType::NodeReady => TypedBody::NodeReady(Box::new(parse(body)?)),
             MessageType::CatalogSubscribe => TypedBody::CatalogSubscribe(Box::new(parse(body)?)),
             MessageType::CatalogSnapshot => TypedBody::CatalogSnapshot(Box::new(parse(body)?)),
-            MessageType::CatalogChanged => TypedBody::CatalogChanged(Box::new(parse(body)?)),
-            MessageType::ExportRevoked => TypedBody::ExportRevoked(Box::new(parse(body)?)),
             MessageType::NodeTrustRevoked => TypedBody::NodeTrustRevoked(Box::new(parse(body)?)),
             MessageType::NodeRotateKeyRequest => {
                 TypedBody::NodeRotateKeyRequest(Box::new(parse(body)?))
@@ -126,8 +121,6 @@ impl TypedBody {
             TypedBody::NodeReady(body) => serde_json::to_string(body),
             TypedBody::CatalogSubscribe(body) => serde_json::to_string(body),
             TypedBody::CatalogSnapshot(body) => serde_json::to_string(body),
-            TypedBody::CatalogChanged(body) => serde_json::to_string(body),
-            TypedBody::ExportRevoked(body) => serde_json::to_string(body),
             TypedBody::NodeTrustRevoked(body) => serde_json::to_string(body),
             TypedBody::NodeRotateKeyRequest(body) => serde_json::to_string(body),
             TypedBody::NodeRotateKeyResult(body) => serde_json::to_string(body),

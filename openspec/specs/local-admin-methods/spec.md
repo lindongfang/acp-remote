@@ -70,36 +70,17 @@
 
 ### Requirement: 节点配对建立与本地确认
 
-`node.pair.begin mode = "owner"` SHALL 在本节点创建一次性配对并返回二维码 URL；`node.pair.confirm` MUST 在持久提交后才返回，只有 Owner 侧本地确认才创建信任记录并分配初始 `grant.*`。本切片 `mode = "access"`（需对 Owner 的 HTTPS claim）与 `node.rotate-key.begin` MUST 返回 `local.unsupported`，不得自行填充参数形状或伪造 claim。
+`node.pair.begin mode = "owner"` SHALL 在本节点创建一次性配对并返回二维码 URL；`node.pair.confirm` MUST 在持久提交后才返回，只有 Owner 侧本地确认才创建信任记录。节点展示名 MUST 来自本机配置 `[node] name`，MUST NOT 取自请求体；配对请求 MUST NOT 携带 `grants`、`scopes` 或其他授权集合。本切片 `mode = "access"` 与 `node.rotate-key.begin` MUST 返回 `local.unsupported`。
 
 #### Scenario: Owner 模式节点配对
 
-- **WHEN** 以 `mode = "owner"` 调用 `node.pair.begin`，对端 claim 后经 `node.pair.status` 观察，本机用户确认后调用 `node.pair.confirm`
-- **THEN** confirm 提交成功后节点记录为 `paired` 并带初始 grants；拒绝或过期路径不创建信任
+- **WHEN** 以 `mode = "owner"` 调用 `node.pair.begin`，对端 claim 后本机用户确认
+- **THEN** confirm 提交成功后节点记录为 `paired`，不含任何授权集合
 
 #### Scenario: access 模式明确不支持
 
 - **WHEN** 本切片内以 `mode = "access"` 调用 `node.pair.begin`，或调用 `node.rotate-key.begin`
 - **THEN** 返回 `local.unsupported`，无状态变更、无对外网络请求
-
-### Requirement: 节点配对可见清单的填报与校验
-
-`node.pair.confirm` 的 `params` MUST 携带 `exportIds`（该节点可见的 Export 集合；可为空数组，表示看不到任何 Export）——缺少该字段 MUST 以 `local.invalid_params` 拒绝，不创建信任。每个 `exportId` MUST 在本机存在且未撤销（否则 `local.not_found`），且其 `scopes` 与本次 `grants` 有交集（否则 `local.invalid_params`）；三类失败都 MUST NOT 创建信任记录、推进配对状态或写审计。`node.pair.confirm` 的 `result` 与 `node.list` 的 `NodeRecord` SHALL 回显 `exportIds`。清单 MUST NOT 放宽可见性：有效可见集仍是「未撤销 ∧ `scopes ∩ grants ≠ ∅` ∧ 在 `exportIds` 内」的交集。
-
-#### Scenario: 确认时填报可见清单
-
-- **WHEN** 本机用户确认配对时给出 `grants` 与两个存在的未撤销 `exportIds`（E1、E2）
-- **THEN** 信任记录带上该清单，`node.list` 与 confirm 的 `result` 回显同样的集合，对端随后只能看到这两个 Export
-
-#### Scenario: 空清单仍然建立信任
-
-- **WHEN** 本机用户确认配对时给出空 `exportIds`
-- **THEN** 信任记录创建成功（对端可连接、可握手），但该节点看不到任何 Export；该结果 MUST NOT 被当作配对失败
-
-#### Scenario: 无效清单条目拒绝确认
-
-- **WHEN** 确认时给出的 `exportId` 在本机不存在或已撤销，或者其 `scopes` 与本次 `grants` 不相交
-- **THEN** 分别以 `local.not_found` / `local.invalid_params` 失败，且不创建信任记录、不推进配对状态、不写审计
 
 ### Requirement: 节点撤销与重新配对的连接语义
 
@@ -109,25 +90,6 @@
 
 - **WHEN** 某节点已 `paired` 且存在活动的 Node Link 连接与已建立的 attachment，本机用户再次对同一 `nodeId` 完成 `node.pair.confirm`（携带更窄的 `exportIds`，例如空数组）
 - **THEN** 提交后该节点的活动连接 MUST 立即被关闭，关闭码为 `1000` 且不带 `node.trust.revoked` 通知；对端按 `NODE_LINK_PROTOCOL.md` §15 的重连规则重新握手，新连接上的可见集按已提交的清单重算（因此它看不到被移出清单的 Export），而该节点的信任记录仍为 `paired`（重新配对不是撤销）
-
-### Requirement: Export 与 Import 管理方法
-
-`export.create` SHALL 校验 `ExportView` 全部必填字段：首切片 `agentIds`/`workspaceAliases`/`templates` 恰好 1 项、`default*` 一致性、`templates[].params` 必须为空（非空返回 `local.invalid_params`）、每个 `workspaceAliases[].alias` 必须已在本地 workspace 建立（否则 `local.not_found`）；`exportId` 已存在返回 `local.conflict`。`export.revoke` MUST 在持久提交后才返回。`import.add` 在本切片无 Node Link catalog 快照，MUST 返回 `local.unavailable`；`import.list`/`import.remove` 正常作用于本地记录，`import.remove` 不存在时返回 `local.not_found`。Export 的创建、修改与撤销 MUST NOT 经任何远程协议暴露。
-
-#### Scenario: 创建 Export 成功
-
-- **WHEN** workspace 已建立，以合法单 Agent、单 workspace alias、无参数 template 调用 `export.create`
-- **THEN** result 返回完整 `ExportView`（`revokedAt` 为 `null`），记录持久化
-
-#### Scenario: 有参数 template 被拒绝
-
-- **WHEN** `export.create` 的 `templates[].params` 非空
-- **THEN** 返回 `local.invalid_params`，不得静默忽略参数
-
-#### Scenario: import.add 无快照时明确不可重试语义
-
-- **WHEN** 本切片内调用 `import.add`（无论参数是否合法）
-- **THEN** 返回 `local.unavailable`（可重试语义），不创建 Import 记录
 
 ### Requirement: 审计导出方法
 
@@ -156,3 +118,22 @@
 
 - **WHEN** 发生凭据校验拒绝连接、方法失败、设备/节点/Export 撤销与配对批准
 - **THEN** 每类都产生 `SECURITY_DESIGN.md` §14.2 对应类别的审计事件，日志与审计不含 §14.1 禁止的字段
+
+### Requirement: 本地配置方法（只读 agent.list）
+
+系统 SHALL 提供只读的 `agent.list`，返回配置解析出的 Agent（`agentId`、`command`、`args`、`default`、解析路径、文件是否存在），不写任何状态、不启动进程。`agent.configure` 与 `provider.configure` MUST NOT 存在于 v1 方法集：调用它们一律返回 `local.unsupported`，且不产生任何状态变更。目录不再由本通道维护：MUST NOT 存在 `workspace.select` 或任何等价方法，目录只能由成功的会话创建自动记录。
+
+#### Scenario: workspace 管理方法已不存在
+
+- **WHEN** 旧客户端或脚本调用 `workspace.select`
+- **THEN** 返回 `local.unsupported`，不产生任何写入
+
+#### Scenario: agent.list 只读
+
+- **WHEN** 调用 `agent.list`
+- **THEN** 返回配置中的 Agent 列表与可执行文件探测结果，且没有任何子进程被创建
+
+#### Scenario: 已删除的配置方法
+
+- **WHEN** 调用 `agent.configure` 或 `provider.configure`
+- **THEN** 返回 `local.unsupported`，配置、SQLite 与 keystore 都不改变

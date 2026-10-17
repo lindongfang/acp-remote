@@ -2,7 +2,7 @@
 //!
 //! 这些类型**不进** `core::model`：它们要么是本层的过程状态（配对草稿、认领结果、挑战记录），
 //! 要么是 wire 边界的结构化输入。core 已有的值对象（`NodeId`/`DeviceId`/`PairingId`/`NodeKind`/
-//! `PeerIdentity`/`PeerPublicKey`/`ScopeSet`/`GrantSet`/`Nonce`/`Digest`/`Timestamp` 与
+//! `PeerIdentity`/`PeerPublicKey`/`Nonce`/`Digest`/`Timestamp` 与
 //! `PairingRecord`/`PairingPeer`/`PairingClaim`/`PairingSettlement`/`PairingTarget`）直接复用，不重复定义。
 
 use std::fmt;
@@ -10,8 +10,8 @@ use std::str::FromStr;
 
 use acp_core::model::InvalidValue;
 use acp_core::model::{
-    AuditAction, DeviceId, Digest, Fingerprint, GrantSet, NodeId, NodeKind, Nonce, PairingId,
-    PairingRecord, PairingState, PairingTarget, PeerIdentity, PeerPublicKey, ScopeSet, Timestamp,
+    AuditAction, DeviceId, Digest, Fingerprint, NodeId, NodeKind, Nonce, PairingId, PairingRecord,
+    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, Timestamp,
 };
 
 use crate::error::TranscriptError;
@@ -370,49 +370,6 @@ impl PairingSpec {
     }
 }
 
-/// 配对上请求的集合：设备侧不带任何集合，节点侧只允许 `grants`。
-///
-/// 设备不再有授权维度（`pairing-model` 删除设备权限层），因此设备方向提交任何集合字段
-/// ——无论是 `scopes` 还是 `grants`——都属于方向错误，必须被拒绝。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RequestedCapabilities {
-    /// 请求的 scope（任何方向都必须为空：设备没有授权维度、节点只带 grant）。
-    pub scopes: ScopeSet,
-    /// 请求的 grant（仅节点配对）。
-    pub grants: GrantSet,
-}
-
-impl RequestedCapabilities {
-    /// 空集合。
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    /// 是否为空。
-    pub fn is_empty(&self) -> bool {
-        self.scopes.is_empty() && self.grants.is_empty()
-    }
-
-    /// 与目标族是否一致：设备不得带任何集合，节点不得带 scopes。
-    pub fn matches_target(&self, target: PairingTarget) -> bool {
-        match target {
-            PairingTarget::Device => self.scopes.is_empty() && self.grants.is_empty(),
-            PairingTarget::Node => self.scopes.is_empty(),
-        }
-    }
-
-    /// 请求集合是否不超出 `registered`（登记值是本机承诺的上限）。
-    pub fn within(&self, registered: &Self) -> bool {
-        self.scopes
-            .iter()
-            .all(|name| registered.scopes.contains(name))
-            && self
-                .grants
-                .iter()
-                .all(|name| registered.grants.contains(name))
-    }
-}
-
 /// 配对的创建结果：待落库的记录草稿 + 只在内存的 secret 与本机配对材料。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingDraft {
@@ -443,13 +400,8 @@ pub struct PairingRequestMaterial {
 /// 本地确认（批准/拒绝）的决策。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairingDecision {
-    /// 批准：`granted_*` 是用户确认的最终集合。
-    Approve {
-        /// 最终 scope（必须为空：设备没有授权维度、节点只带 grant）。
-        granted_scopes: ScopeSet,
-        /// 最终 grant（仅节点配对，且不得超过登记与请求值）。
-        granted_grants: GrantSet,
-    },
+    /// 批准：只创建信任记录，不携带任何授权集合。
+    Approve,
     /// 拒绝：可选简短原因（≤256 字符）。
     Reject {
         /// 原因（不进审计正文）。
@@ -507,8 +459,6 @@ pub struct ClaimFields {
     pub public_key: PeerPublicKey,
     /// 对端 nonce。
     pub client_nonce: Nonce,
-    /// 请求集合（不得超过登记值）。
-    pub requested: RequestedCapabilities,
     /// 配对证明（HMAC-SHA256，32 字节）。
     pub proof: PairingProof,
 }
@@ -562,8 +512,6 @@ pub struct ClaimedPairing {
     pub host_binding: String,
     /// 首次认领的对端 nonce。
     pub client_nonce: Nonce,
-    /// 首次认领的请求集合。
-    pub requested: RequestedCapabilities,
 }
 
 impl ClaimedPairing {
@@ -574,7 +522,6 @@ impl ClaimedPairing {
             && self.client_nonce == fields.client_nonce
             && self.public_key == fields.public_key
             && self.pairing == fields.pairing
-            && self.requested == fields.requested
     }
 }
 
@@ -649,8 +596,6 @@ pub struct PeerTrust {
     pub host_binding: Option<String>,
     /// 该对端在本机的节点角色（`NodeRecord.kind`；设备侧为 `None`）。
     pub node_kind: Option<NodeKind>,
-    /// 节点侧当前 grant（设备侧没有授权维度，因此没有对应的集合字段）。
-    pub grants: GrantSet,
 }
 
 impl PeerTrust {
@@ -662,7 +607,6 @@ impl PeerTrust {
             credential: CredentialStatus::Unknown,
             host_binding: None,
             node_kind: None,
-            grants: GrantSet::empty(),
         }
     }
 }
@@ -675,14 +619,12 @@ pub enum IdentityFact {
         /// 设备标识。
         device: DeviceId,
     },
-    /// 节点主体及其 grant。
+    /// 节点主体（没有授权集合：已配对节点可执行本节点命令）。
     Node {
         /// 节点标识。
         node: NodeId,
         /// 该对端在本机的角色。
         kind: NodeKind,
-        /// 该节点的 grant。
-        grants: GrantSet,
     },
 }
 
@@ -750,8 +692,6 @@ pub struct PairingStatusView {
     pub display_name: Option<String>,
     /// 对端公钥指纹（认领后才有）。
     pub public_key_fingerprint: Option<Fingerprint>,
-    /// 请求集合（认领后才有）。
-    pub requested: Option<RequestedCapabilities>,
     /// 对端身份（认领后才有）。
     pub peer: Option<PeerIdentity>,
     /// 过期时间（始终可见）。

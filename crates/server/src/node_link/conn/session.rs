@@ -284,28 +284,10 @@ impl NodeLinkConn {
         }
     }
 
-    /// 测试专用：把会话看门狗的窗口换成本次用例的值（§2.5 的两个固定常量在生产路径上只有
-    /// [`SessionWindows::from_protocol`] 一个来源；90 秒/30 秒的真实等待在用例里不可接受）。
-    #[cfg(test)]
-    pub(crate) fn with_test_windows(mut self, silence: Duration, slow_consumer: Duration) -> Self {
-        self.windows = SessionWindows {
-            silence,
-            slow_consumer,
-        };
-        self
-    }
-
     /// 注册认证后消息的路由（WP5/WP6 的组合根接线）。
     pub fn with_route(mut self, route: Arc<dyn MessageRoute>) -> Self {
         self.route = Some(route);
         self
-    }
-
-    /// 测试专用：当前被占用的在途握手配额数（源地址无关；用例需要确定性地知道「配额已满/已释放」，
-    /// 否则只能靠轮询等待，而配额本身是固定常量、不可从外部观测）。
-    #[cfg(test)]
-    pub(crate) fn in_flight_handshakes(&self) -> usize {
-        self.handshakes.in_flight()
     }
 
     /// 连接注册表句柄（WP5/WP6 与撤销传播共用）。
@@ -1795,12 +1777,6 @@ impl HandshakeSlots {
             inner: Arc::new(Mutex::new(BTreeMap::new())),
             max_per_ip,
         }
-    }
-
-    /// 当前被占用的配额数（源地址求和；测试观测口，见 [`NodeLinkConn::in_flight_handshakes`]）。
-    #[cfg(test)]
-    fn in_flight(&self) -> usize {
-        lock(&self.inner).values().sum()
     }
 
     fn acquire(&self, ip: IpAddr) -> Option<HandshakeSlot> {

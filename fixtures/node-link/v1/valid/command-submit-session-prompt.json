@@ -9,7 +9,6 @@
     "command": "session.prompt",
     "sessionRef": {
       "ownerNodeId": "00010203-0405-4607-8809-0a0b0c0d0e0f",
-      "exportId": "export-main",
       "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
     },
     "attachmentId": "7b0c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b",

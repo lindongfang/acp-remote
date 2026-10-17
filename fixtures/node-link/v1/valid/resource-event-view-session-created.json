@@ -10,11 +10,10 @@
     "originSequence": "2320",
     "sessionRef": {
       "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-      "exportId": "export-main",
       "sessionId": "5d73cd10-a465-43cd-b3f1-704e2d49e99e"
     },
     "eventType": "session.created",
-    "payloadDigest": "SAxGF3lLibgpmK4CA3ttkHR1uIJoMCjlcAHnLxTg1Ok",
+    "payloadDigest": "kUyoXOqq1xVUxi15o4Ratw2YrM-0P-gRr6lDMHVlSqM",
     "createdAt": "2026-09-18T09:12:09.500Z",
     "payload": {
       "view": {
@@ -29,7 +28,6 @@
           "origin": {
             "kind": "remote",
             "ownerNodeId": "bdb2ec20-f98c-4d87-b789-e540d527ef87",
-            "exportId": "export-main",
             "originEpoch": "c1d2e3f4-5061-4728-8394-95a6b7c8d9e0",
             "online": true
           },

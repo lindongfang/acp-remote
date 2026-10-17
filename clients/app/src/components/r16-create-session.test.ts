@@ -4,7 +4,7 @@
  * 逐条 MUST NOT 的负向用例：
  *
  * - **载荷恰好三类键集** → 别名、浏览选定的路径、会先新建的路径各一条：键集分别是
- *   `{agentId, workspaceAlias}`、`{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
+ *   `{agentId, directoryId}`、`{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
  *   对越界载荷（`cwd`/`path`/`mcpServers`/`token`）、「目录引用不唯一」与「别名 + createIfMissing」
  *   构造违规输入，断言 `assertCreateSessionRefs` 抛错；并断言实际派发的命令 JSON 里只有那三类键、
  *   不含任何凭据字面量。
@@ -208,16 +208,16 @@ function browseTo(
 }
 
 describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目录开关", () => {
-  it("别名载荷：键恰好是 agentId 与 workspaceAlias", () => {
+  it("别名载荷：键恰好是 agentId 与 directoryId", () => {
     const command = buildCreateSessionCommand({
-      refs: { workspaceAlias: ALIAS, agentId: "claude" },
+      refs: { directoryId: ALIAS, agentId: "claude" },
       requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d",
       messageId: "bbbbbbbb-1111-4111-8111-000000000009",
       connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
     });
 
     const payload = command.body.payload as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(["agentId", "workspaceAlias"]);
+    expect(Object.keys(payload).sort()).toEqual(["agentId", "directoryId"]);
     // 反例：若命令里带了任何凭据字面量，这里会出现它们，断言变红。
     const serialized = JSON.stringify(command);
     expect(serialized).not.toMatch(/token|password|apiKey|mcp|exportId|templateParams/i);
@@ -232,7 +232,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     });
 
     const payload = command.body.payload as Record<string, unknown>;
-    // 反例：把路径塞进 workspaceAlias（或反过来丢弃它）→ 键集与取值都会红。
+    // 反例：把路径塞进 directoryId（或反过来丢弃它）→ 键集与取值都会红。
     expect(Object.keys(payload).sort()).toEqual(["agentId", "workspacePath"]);
     expect(payload["workspacePath"]).toBe("D:\\work\\api");
     // 缺席即假：显式给 `false` 与不给，发出的载荷逐字相同（不凭空多一个键）。
@@ -256,17 +256,17 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
 
   it("越界载荷、「目录引用不唯一」与「别名 + 建目录开关」一律被拒绝", () => {
     const violations: readonly Record<string, unknown>[] = [
-      { workspaceAlias: ALIAS, agentId: "claude", cwd: "D:\\work\\api" },
-      { workspaceAlias: ALIAS, agentId: "claude", path: "/home/dev/api" },
-      { workspaceAlias: ALIAS, agentId: "claude", exportId: "node-1" },
-      { workspaceAlias: ALIAS, agentId: "claude", mcpServers: { fs: {} } },
-      { workspaceAlias: ALIAS, agentId: "claude", token: "sk-xxx" },
-      { workspaceAlias: ALIAS, agentId: "claude", templateParams: { a: 1 } },
+      { directoryId: ALIAS, agentId: "claude", cwd: "D:\\work\\api" },
+      { directoryId: ALIAS, agentId: "claude", path: "/home/dev/api" },
+      { directoryId: ALIAS, agentId: "claude", exportId: "node-1" },
+      { directoryId: ALIAS, agentId: "claude", mcpServers: { fs: {} } },
+      { directoryId: ALIAS, agentId: "claude", token: "sk-xxx" },
+      { directoryId: ALIAS, agentId: "claude", templateParams: { a: 1 } },
       // 目录引用必须**恰好一个**：两个都给，或都不给。
-      { workspaceAlias: ALIAS, workspacePath: "D:\\work\\api", agentId: "claude" },
+      { directoryId: ALIAS, workspacePath: "D:\\work\\api", agentId: "claude" },
       { agentId: "claude" },
       // 别名解析出的目录必然已存在，因此建目录开关与它互斥。
-      { workspaceAlias: ALIAS, agentId: "claude", createIfMissing: true },
+      { directoryId: ALIAS, agentId: "claude", createIfMissing: true },
       // 开关不是布尔。
       { workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: "yes" },
     ];
@@ -276,8 +276,8 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
       expect(() => assertCreateSessionRefs(payload)).toThrow();
     }
     // 对照：三种合法载荷仍然通过（证明断言不是「一律拒绝」）。
-    expect(assertCreateSessionRefs({ workspaceAlias: ALIAS, agentId: "claude" })).toEqual({
-      workspaceAlias: ALIAS,
+    expect(assertCreateSessionRefs({ directoryId: ALIAS, agentId: "claude" })).toEqual({
+      directoryId: ALIAS,
       agentId: "claude",
     });
     expect(assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude" })).toEqual({
@@ -299,7 +299,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
 
     // 1) 目录已知（卡片/详情页入口）：别名引用。
     expect(store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" }).ok).toBe(true);
-    expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "workspaceAlias"]);
+    expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "directoryId"]);
 
     // 2) 顶部入口浏览到一个**已存在**的目录：路径引用，不带建目录开关。
     browseTo(store, gateway, "D:\\work", [{ name: "api", path: "D:\\work\\api", registered: true }]);
@@ -540,8 +540,8 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     expect(store.submitCreateSession({ directoryAlias: null, agentId: "claude", directoryPath: "", createIfMissing: false }).ok).toBe(
       true,
     );
-    expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "workspaceAlias"]);
-    expect(createPayloadAt(gateway, 0)["workspaceAlias"]).toBe("work-api");
+    expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "directoryId"]);
+    expect(createPayloadAt(gateway, 0)["directoryId"]).toBe("work-api");
   });
 });
 

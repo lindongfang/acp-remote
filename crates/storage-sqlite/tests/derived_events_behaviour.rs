@@ -247,7 +247,7 @@ impl Fixture {
                             AgentSessionId::new(AGENT_SESSION_ID).expect("agent session id"),
                         ),
                         workspace_cwd: Some(root.to_owned()),
-                        workspace_alias: None,
+                        workspace_directory_id: None,
                     })),
                     turns: Vec::new(),
                     events: Vec::new(),
@@ -262,7 +262,6 @@ impl Fixture {
         }
         let stored: Arc<dyn SessionStore> = store.clone();
         let deliveries: Arc<dyn acp_core::ports::RemoteDeliveryStore> = store.clone();
-        let exports: Arc<dyn acp_core::ports::ExportStore> = store.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
         let broker = Arc::new(Broker::new(
@@ -270,7 +269,6 @@ impl Fixture {
                 store: stored,
                 deliveries,
                 backends: Arc::new(UntouchedBackends),
-                exports,
                 trust,
                 publisher: Arc::new(Recorder::default()),
                 clock: Arc::new(MonotonicClock::new()),
@@ -1660,7 +1658,7 @@ async fn unchanged_mode_without_a_title_keeps_it_and_still_advances_the_version(
             interaction: None,
             agent_session_id: None,
             workspace_cwd: None,
-            workspace_alias: None,
+            workspace_directory_id: None,
         })),
         turns: Vec::new(),
         events: Vec::new(),
@@ -1722,18 +1720,6 @@ async fn the_command_catalog_has_no_rename_entry() {
             || name.contains("info.set")),
         "R9：命令目录中不得存在任何修改会话标题的命令，实际 {names:?}"
     );
-    // ② core 的授权镜像里也没有这条命令（`required_grant` 是命令目录的手工镜像）。
-    assert!(
-        acp_core::broker::required_grant("session.rename").is_none(),
-        "R9：core 不得为任何重命名命令登记授权"
-    );
-    // ③ 命令目录里的每一条都在 core 的镜像里（守卫：命令名与镜像不得漂移，避免 ② 变成空转）。
-    for name in &names {
-        assert!(
-            acp_core::broker::required_grant(name).is_some(),
-            "R9：命令目录的命令 {name} 必须在 core 的授权镜像里"
-        );
-    }
 }
 
 /// `TP2-R9-STORE-UNCHANGED-CLEAR`：`ModeChange::Unchanged` 下显式置空标题仍写版本、时间与同批其它列。
@@ -1759,7 +1745,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -1790,7 +1776,7 @@ async fn unchanged_mode_title_clear_writes_every_column_in_the_batch() {
                     AgentSessionId::new(AGENT_SESSION_ID).expect("agent session id"),
                 ),
                 workspace_cwd: Some("/tmp/tp2-unchanged".to_owned()),
-                workspace_alias: Some("tp2.unchanged".to_owned()),
+                workspace_directory_id: Some("tp2.unchanged".to_owned()),
             })),
             turns: Vec::new(),
             events: Vec::new(),

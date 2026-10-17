@@ -48,20 +48,6 @@
 - **WHEN** 库中存在状态为待确认且有效期早于启动时刻的配对
 - **THEN** 恢复流程把该配对终结为过期并写入过期审计，已批准的配对与信任记录不受影响
 
-### Requirement: Export 与 Import 的归属与完整移除
-
-系统 SHALL 在创建或更新 Export、添加 Import 时于同一事务校验并写入管理行与全部关联行；同一对端 Export MUST 只归属一个 Import，重复归属显式冲突。完整移除 Import SHALL 在同一事务删除管理行、关联行与对应的无正文交付索引和命令引用，但 MUST 保留审计行。
-
-#### Scenario: 同一 Export 归属冲突被拒
-
-- **WHEN** 一个 Import 写集把已被别的 Import 占用的对端 Export 关联到自己名下
-- **THEN** 调用返回重复归属冲突，两个 Import 的管理行与关联行都不变
-
-#### Scenario: 完整移除后审计仍在
-
-- **WHEN** 一个 Import 被完整移除
-- **THEN** 该 Import 的管理行、关联行、交付索引与命令引用都不再存在，而此前产生的审计行仍可按时间与类别查询到
-
 ### Requirement: 管理审计的取值闭合与无内容
 
 系统 SHALL 只允许已登记的安全动作取值写入审计；涉及已登记安全动作的管理写集 MUST 至少携带一条成功或失败/拒绝审计，且审计行 MUST 不含会话正文、凭据、pairing secret、QR payload 或本机路径明文。
@@ -75,25 +61,6 @@
 
 - **WHEN** 一次管理写集因约束冲突或审计不可写而失败
 - **THEN** 对应的失败或拒绝审计只含动作、actor、目标、结果与可选摘要，不含任何内容明文或凭据
-
-### Requirement: 撤销与删除后的写入不得复活资源
-
-系统 SHALL 把 Export 撤销与 Import 完整移除视为终态：`put_export` MUST NOT 清除已撤销 Export 的 `revoked_at`，也 MUST NOT 经普通写入让已撤销的 Export 重新可用；撤销时间与撤销审计 MUST 只由 `revoke_export` 产生。失去 Import 的 imported 写路径（写入 imported 会话元数据或提交交付收据）MUST 在同一写事务内先确认该 `(ownerNodeId, exportId)` 仍归属某个 Import，否则 MUST 失败关闭并返回 `NotFound(Export(exportId))`：MUST NOT 重建会话行、交付索引或命令引用，MUST NOT 推进 `local_sequence`。
-
-#### Scenario: 已撤销 Export 不能被后续写入清除撤销标记
-
-- **WHEN** 一个 Export 已被撤销（库内 `revoked_at` 非空），随后同一 `exportId` 的 `put_export` 写集携带未撤销记录
-- **THEN** 调用返回 `Conflict(AlreadyExists)`，库内该行仍保留首次撤销时间，该 Export 仍不可用，也不写入该写集携带的状态与审计
-
-#### Scenario: 撤销只能经 export.revoke 落库
-
-- **WHEN** 一个 `put_export` 写集携带 `revoked_at` 非空的记录（无论库内该 Export 是否已撤销）
-- **THEN** 调用返回 `InvalidRequest` 且整事务零写入，撤销时间与 `export.revoked` 审计只能由 `revoke_export` 产生
-
-#### Scenario: 完整移除后的迟到回调不能重建索引
-
-- **WHEN** 一个 Import 被完整移除后，携带其 `(ownerNodeId, exportId)` 的迟到会话同步（`upsert_session`）或迟到的交付收据（`commit_receipt`）到达
-- **THEN** 两者都返回 `NotFound(Export(exportId))`，`imported_session`、`imported_delivery_index` 与 `imported_command_ref` 保持为空，且不产生新的 `local_sequence`
 
 ### Requirement: 设备与节点记录的活动时间只前进
 
