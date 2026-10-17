@@ -25,11 +25,14 @@
 //! 本模块**只**声明已经存在的子模块，不由占位符预支。
 //!
 //! 依赖纪律（`docs/MODULE_ARCHITECTURE.md` §4.9、`AGENTS.md` §5）：本模块是入站适配器，调用面是
-//! `core` 的公开面 + `sync-protocol`/`identity-auth` 的公开面。**当前的过渡形态**：[`subscribe`]
-//! 今天还**直连** `core::broker` 的公开面——`Broker::authorize` 的授权判定与 `Broker::replay` 的保留
-//! 窗口探测。按 §4.9，adapter 只应调用 `core::use_cases`；**事件投递已收拢到用例面**
-//! （`UseCases::sync_replay`，任务 1.6 已落地）：`Broker::replay` 的直连只剩保留窗口探测一处
-//! （`reset_required` 的唯一来源，该结论不在 `sync_replay` 的判定范围内，见 [`subscribe`] 的模块文档）。
+//! `core` 的公开面 + `sync-protocol`/`identity-auth` 的公开面。**当前的过渡形态**：[`subscribe`] 与
+//! [`command`] 今天还**直连** `core::broker` 的公开面——[`subscribe`] 一处（`Broker::replay`，用于
+//! 保留窗口探测），[`command`] 两处（`Broker::authorize` 是观察授权的唯一判定点、`Broker::session_version`
+//! 是 `session.config.list` 结果的 `version` 来源）。按 §4.9，adapter 只应调用 `core::use_cases`；
+//! **事件投递已收拢到用例面**（`UseCases::sync_replay`，任务 1.6 已落地）：`Broker::replay` 的直连只剩
+//! 保留窗口探测一处（`reset_required` 的唯一来源，该结论不在 `sync_replay` 的判定范围内，见
+//! [`subscribe`] 的模块文档）；[`command`] 的两处都收窄到「已按同一命令名授权之后」的读，不构成
+//! 第二条可见性判定路径（见 [`command`] 的模块文档）。
 //! 其余的 core 调用面都走用例（`sync_device_handshake_view`、`sync_visible_sessions`、
 //! `workspaces`/`profiles`、`ids`）。
 //!
