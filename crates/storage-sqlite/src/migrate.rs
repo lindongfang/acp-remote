@@ -720,10 +720,7 @@ ALTER TABLE owned_device DROP COLUMN scopes_json;
 /// 这些目录的 `created_at` 取会话创建时间、`last_used_at` 取本次升级时间。
 ///
 /// 单事务、失败整体回滚；`ALTER TABLE ... RENAME COLUMN` 不触发 12-step 重建。
-async fn v9_upgrade_owned(
-    tx: &mut Transaction<'_, Sqlite>,
-    at: &str,
-) -> Result<(), StorageError> {
+async fn v9_upgrade_owned(tx: &mut Transaction<'_, Sqlite>, at: &str) -> Result<(), StorageError> {
     if table_exists(&mut **tx, "owned_workspace").await? {
         let rows = sqlx::query(
             "SELECT alias, canonical_path, created_at, updated_at FROM owned_workspace",
@@ -1471,9 +1468,10 @@ async fn column_exists<'e, E>(executor: E, table: &str, column: &str) -> Result<
 where
     E: Executor<'e, Database = Sqlite>,
 {
-    let rows: Vec<String> = sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))
-        .fetch_all(executor)
-        .await?;
+    let rows: Vec<String> =
+        sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .fetch_all(executor)
+            .await?;
     Ok(rows.iter().any(|name| name == column))
 }
 

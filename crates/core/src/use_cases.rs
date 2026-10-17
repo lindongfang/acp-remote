@@ -22,26 +22,25 @@ use crate::model::{
     Actor, AgentDescriptor, AgentProfile, AgentRef, AttachmentGeneration, AttachmentId,
     AuditAction, AuditOutcome, AuditRecord, CapabilitySet, ClientCommand, CommandKind,
     CommandReceipt, CommandRecord, CommandResult, CommandStatus, ConfigOption, ConfigOptionId,
-    ConfigValue, ConflictKind, CreateSessionRequest, DeviceId, DeviceRecord, Digest,
-    ElicitationAction, ElicitationValues, EntityRef, EventId, EventPayload, EventType,
-    GlobalCursor, InteractionId, InteractionResolution,
-    LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor,
-    OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement,
-    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
-    PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
-    ResourceOrigin, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
-    UnavailableKind, Version, DirectoryId, WorkspaceCatalogEntry, DirectoryRecord, WorkspaceRef,
-    WorkspaceSource,
+    ConfigValue, ConflictKind, CreateSessionRequest, DeviceId, DeviceRecord, Digest, DirectoryId,
+    DirectoryRecord, ElicitationAction, ElicitationValues, EntityRef, EventId, EventPayload,
+    EventType, GlobalCursor, InteractionId, InteractionResolution, LocalCursor, ModeId, ModeState,
+    NodeId, NodeKind, NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef,
+    PairingClaim, PairingId, PairingRecord, PairingSettlement, PairingState, PairingTarget,
+    PeerIdentity, PeerPublicKey, PendingInteraction, PortError, PublicError, RemoteSessionRef,
+    RequestId, Resolution, ResolvedWorkspace, ResourceOrigin, Sequence, SessionId,
+    SessionReference, SessionSummary, Timestamp, UnavailableKind, Version, WorkspaceCatalogEntry,
+    WorkspaceRef, WorkspaceSource,
 };
 use crate::ports::{
     AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, AuditStore, Clock,
     DeliveryIndexEntry, DeviceRevocation, DeviceWrite, DirectoryBrowser, DirectoryListing,
-    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedSessionQuery, ImportedSessionRecord,
-    LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
-    PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionQuery, SessionStore,
-    StoreHealth, SyncReplaySlice, TrustRecordRef, TrustStore, WriteContext,
+    ExpiryWrite, HistoryPage, HistoryQuery, IdGenerator, ImportedSessionQuery,
+    ImportedSessionRecord, LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite,
+    PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
+    PairingWrite, PendingAudit, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
+    RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionQuery, SessionStore, StoreHealth,
+    SyncReplaySlice, TrustRecordRef, TrustStore, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -1438,8 +1437,7 @@ impl UseCases {
         access_node: &NodeId,
         session: &SessionId,
     ) -> Result<NodeLinkSessionView, PortError> {
-        self.node_link_session_access(access_node, session)
-            .await?;
+        self.node_link_session_access(access_node, session).await?;
         let slice = self
             .store
             .read_view()
@@ -1472,8 +1470,7 @@ impl UseCases {
         after: Option<OriginCursor>,
         limit: ReplayLimit,
     ) -> Result<NodeLinkReplay, PortError> {
-        self.node_link_session_access(access_node, session)
-            .await?;
+        self.node_link_session_access(access_node, session).await?;
         let slice = self
             .store
             .read_view()
@@ -1519,8 +1516,7 @@ impl UseCases {
         session: &SessionId,
         event: &EventId,
     ) -> Result<Option<EventPayload>, PortError> {
-        self.node_link_session_access(access_node, session)
-            .await?;
+        self.node_link_session_access(access_node, session).await?;
         self.store
             .read_view()
             .await?
@@ -2171,9 +2167,9 @@ mod tests {
 
     use super::*;
     use crate::broker::test_support::{
-        FakeAttachments, FakeDeliveries, FakeLocalConfig, FakeStore, FakeTrust,
-        FakeWorld, TestAudit, TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest,
-        lock, prompt_command, ts, uuid_text,
+        FakeAttachments, FakeDeliveries, FakeLocalConfig, FakeStore, FakeTrust, FakeWorld,
+        TestAudit, TestCatalog, TestClock, TestIds, TestPublisher, block_on, digest, lock,
+        prompt_command, ts, uuid_text,
     };
     use crate::broker::{Broker, BrokerConfig, BrokerDeps, QueuePolicy};
     use crate::model::{
@@ -3285,7 +3281,12 @@ mod tests {
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        fixture.world.directories().lock().expect("lock").push(record);
+        fixture
+            .world
+            .directories()
+            .lock()
+            .expect("lock")
+            .push(record);
 
         let request = create_session_request_id();
         let created = create_and_settle(
@@ -3368,7 +3369,12 @@ mod tests {
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        fixture.world.directories().lock().expect("lock").push(record);
+        fixture
+            .world
+            .directories()
+            .lock()
+            .expect("lock")
+            .push(record);
         (alias, path)
     }
 
@@ -3478,20 +3484,15 @@ mod tests {
             .expect("cwd");
 
         let moved = temp_dir(&format!("acpr-ws-moved-{}", std::process::id()));
-        fixture
-            .world
-            .directories()
-            .lock()
-            .expect("lock")
-            .push(
-                DirectoryRecord::try_new(
-                    alias.clone(),
-                    moved.to_str().expect("path"),
-                    crate::broker::test_support::ts(1),
-                    crate::broker::test_support::ts(1),
-                )
-                .expect("workspace record"),
-            );
+        fixture.world.directories().lock().expect("lock").push(
+            DirectoryRecord::try_new(
+                alias.clone(),
+                moved.to_str().expect("path"),
+                crate::broker::test_support::ts(1),
+                crate::broker::test_support::ts(1),
+            )
+            .expect("workspace record"),
+        );
 
         assert_eq!(
             projected_workspace(&fixture, &created).as_deref(),
@@ -4317,7 +4318,12 @@ mod tests {
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        fixture.world.directories().lock().expect("lock").push(record);
+        fixture
+            .world
+            .directories()
+            .lock()
+            .expect("lock")
+            .push(record);
 
         let error = block_on(fixture.use_cases.create_session(
             &Actor::LocalCli,
@@ -4371,7 +4377,10 @@ mod tests {
         // 形式合法且是目录：解析成功，且**没有别名**（未登记目录不得因此被接受为别名）。
         let dir = temp_dir(&format!("acpr-client-path-{}", std::process::id()));
         let resolved = resolve_client_workspace(dir.to_str().expect("path")).expect("resolve");
-        assert_eq!(resolved.directory_id().as_str(), resolved.directory_id().as_str());
+        assert_eq!(
+            resolved.directory_id().as_str(),
+            resolved.directory_id().as_str()
+        );
         assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());
         let _ = std::fs::remove_dir_all(&*dir);
     }
@@ -5180,7 +5189,12 @@ mod tests {
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        fixture.world.directories().lock().expect("lock").push(record);
+        fixture
+            .world
+            .directories()
+            .lock()
+            .expect("lock")
+            .push(record);
 
         let actor = Actor::PairingClaimant {
             pairing: PairingId::new(&uuid_text(51)).expect("pairing"),
@@ -5679,12 +5693,8 @@ mod tests {
         ));
         let session = fixture.session.clone();
 
-        let view = block_on(
-            fixture
-                .use_cases
-                .node_link_session_view(&node, &session),
-        )
-        .expect("会话视图");
+        let view =
+            block_on(fixture.use_cases.node_link_session_view(&node, &session)).expect("会话视图");
         assert_eq!(view.session.session_id(), &session);
         assert_eq!(view.head.origin_sequence.get(), 0, "尚无事件的会话序列为 0");
         assert!(view.pending_interactions.is_empty());
@@ -5803,11 +5813,11 @@ mod tests {
         // 正文读取按会话归属收窄：事件存在但不属于该会话时为 `None`。
         let other_session = SessionId::new(&uuid_text(998)).expect("session");
         assert!(
-            block_on(fixture.use_cases.node_link_event_payload(
-                &node,
-                &other_session,
-                &first
-            ))
+            block_on(
+                fixture
+                    .use_cases
+                    .node_link_event_payload(&node, &other_session, &first)
+            )
             .is_err(),
             "会话不存在时正文读取失败关闭（先过归属前置）"
         );
@@ -5821,8 +5831,6 @@ mod tests {
             .is_some()
         );
     }
-
-
 
     fn node_link_auth_audit_is_narrow() {
         let fixture = fixture();
@@ -5931,7 +5939,6 @@ mod tests {
             "未提交过的 requestId 没有记录"
         );
     }
-
 
     fn pairing_channel_accepts_only_the_bound_claimant() {
         let fixture = fixture();

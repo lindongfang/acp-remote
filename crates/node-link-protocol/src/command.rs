@@ -36,8 +36,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use crate::common::{
-    AgentId, DecimalString, NonEmptyText, Nullable, PublicError, RawObject, RemoteSessionRef,
-    SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError, DirectoryId,
+    AgentId, DecimalString, DirectoryId, NonEmptyText, Nullable, PublicError, RawObject,
+    RemoteSessionRef, SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`

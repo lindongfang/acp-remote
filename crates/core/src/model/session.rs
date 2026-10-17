@@ -24,9 +24,9 @@ use super::elicitation::{ElicitationAction, ElicitationValues};
 use super::error::InvalidValue;
 use super::identity::Actor;
 use super::ids::{
-    AgentRef, ConfigOptionId, EventId, InteractionId, ModeId, ModeRef, NodeId,
-    OriginEpoch, OwnedSessionRef, RemoteSessionRef, RequestId, SessionId, TurnId, WorkspaceRef,
-    is_error_code, is_scope_name, require_bounded,
+    AgentRef, ConfigOptionId, EventId, InteractionId, ModeId, ModeRef, NodeId, OriginEpoch,
+    OwnedSessionRef, RemoteSessionRef, RequestId, SessionId, TurnId, WorkspaceRef, is_error_code,
+    is_scope_name, require_bounded,
 };
 use super::scalars::{Digest, GlobalCursor, Timestamp, Version};
 

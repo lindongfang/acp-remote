@@ -53,7 +53,11 @@ async fn rewind_to_v4(dir: &std::path::Path) -> std::path::PathBuf {
     store.close().await;
     let path = dir.join(DATABASE_FILE);
     let pool = raw_write_pool(&path).await;
-    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
+    for column in [
+        "agent_session_id",
+        "workspace_cwd",
+        "workspace_directory_id",
+    ] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await

@@ -596,7 +596,12 @@ mod tests {
     #[test]
     fn syntactically_valid_names_outside_the_set_are_unsupported() {
         // §4 规则 3：语法合法但不在 v1 方法集里 → `local.unsupported`（新 CLI 连上旧 Daemon 的兼容路径）。
-        for name in ["daemon.doctor", "device.rotate-key.begin", "agent.configure", "provider.configure"] {
+        for name in [
+            "daemon.doctor",
+            "device.rotate-key.begin",
+            "agent.configure",
+            "provider.configure",
+        ] {
             let payload = format!(
                 r#"{{"v":1,"id":"5b1f0c2e-8a4d-4b6f-9c31-0d2a7e5f4b10","method":"{name}","params":{{}}}}"#
             );

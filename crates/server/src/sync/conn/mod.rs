@@ -28,7 +28,6 @@ pub mod registry;
 pub mod session;
 mod wire;
 
-
 pub use handshake::{
     NegotiationFault, PROTOCOL_VERSION, SUPPORTED_FEATURES, connection_binding, negotiate_features,
     negotiated_version, peer_trust, pending_pairing, transcript_features, wire_features,

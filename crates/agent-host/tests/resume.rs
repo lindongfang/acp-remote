@@ -32,8 +32,8 @@ use acp_core::model::{
 use acp_core::ports::{SessionBackendFactory, SessionEndpoint};
 use agent_host::{AgentHost, HostConfig, runtime_running};
 use support::{
-    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, dump_count,
-    dumped_requests, params_of, profile_with,
+    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, dump_count, dumped_requests, params_of,
+    profile_with,
 };
 
 /// R12-2：旧绑定尚未让出时再次恢复（单一会话标识）。

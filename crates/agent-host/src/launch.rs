@@ -5,7 +5,6 @@
 
 use acp_core::model::AgentProfile;
 
-
 use crate::error::HostError;
 
 /// 交给进程监督层的启动描述。`supervisor` 不读 profile、不解析凭据、不知道白名单。
@@ -63,7 +62,6 @@ pub fn resolve_launch(profile: &AgentProfile) -> Result<LaunchSpec, HostError> {
         env,
     })
 }
-
 
 /// 环境变量名必须合法，且不得使用 ACP Remote 自己的注入前缀。
 ///

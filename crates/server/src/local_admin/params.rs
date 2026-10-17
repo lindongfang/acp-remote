@@ -578,4 +578,3 @@ pub fn map_pairing_error(operation: &str, error: PairingError) -> AdminError {
         ),
     }
 }
-

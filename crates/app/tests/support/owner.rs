@@ -33,8 +33,8 @@ use acp_core::model::{
     ViewJson,
 };
 use acp_core::ports::{
-    AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink,
-    HistoryPage, HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView,
+    AgentCatalog, AttachmentStore, AuditStore, Clock, CommitOutcome, EventSink, HistoryPage,
+    HistoryQuery, IdGenerator, LocalConfigStore, OwnedCommit, PruneReport, ReadView,
     RemoteDeliveryStore, ReplayLimit, RetentionPolicy, SessionBackendFactory, SessionEndpoint,
     SessionQuery, SessionStore, StoreHealth, TrustStore, TurnAccepted,
 };
@@ -144,7 +144,7 @@ impl OwnerNode {
             rejected: Arc::clone(&rejected_commits),
             recovery_reads: Arc::clone(&recovery_reads),
         });
-        let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
+        let deliveries: Arc<dyn RemoteDeliveryStore> = store.clone();
         let trust: Arc<dyn TrustStore> = store.clone();
         let audit: Arc<dyn AuditStore> = store.clone();
         let local_config: Arc<dyn LocalConfigStore> = store.clone();
@@ -177,7 +177,7 @@ impl OwnerNode {
             BrokerDeps {
                 store: Arc::clone(&sessions),
                 deliveries: Arc::clone(&deliveries),
-                backends,
+                backends,
                 trust: Arc::clone(&trust),
                 publisher,
                 clock: Arc::clone(&clock),
@@ -189,7 +189,7 @@ impl OwnerNode {
         let core = Arc::new(UseCases::new(UseCaseDeps {
             broker: Arc::clone(&broker),
             store: Arc::clone(&sessions),
-            deliveries,
+            deliveries,
             trust,
             audit: Arc::clone(&audit),
             config: local_config,

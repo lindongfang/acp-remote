@@ -135,10 +135,7 @@ impl<'de> Deserialize<'de> for OriginBlock {
 
                 match kind.as_deref() {
                     Some("local") => {
-                        if owner_node_id.is_some()
-                            || origin_epoch.is_some()
-                            || online.is_some()
-                        {
+                        if owner_node_id.is_some() || origin_epoch.is_some() || online.is_some() {
                             return Err(DeError::custom(ValueError::Shape {
                                 field: "originBlock",
                                 expected: "local 分支只允许 kind",

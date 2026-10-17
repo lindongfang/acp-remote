@@ -281,7 +281,6 @@ fn management_commands_use_the_local_channel_and_report_method_failures() {
         run.stderr
     );
 
-
     daemon.stop();
 }
 

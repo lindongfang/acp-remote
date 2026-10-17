@@ -67,12 +67,11 @@ use std::time::{Duration, Instant};
 use acp_core::model::{
     Actor, AgentId, AgentRef, AuditAction, AuditOutcome, ClientCommand, CommandKind,
     CommandPayload as CorePayload, CommandReceipt, CommandRecord, CommandStatus as CoreStatus,
-    ConfigOptionId, ConfigValue as CoreConfigValue, CreateSessionRequest,
-    ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef,
-    InteractionId, ModeId, NodeId, NodeState, PortError,
-    PromptContentBlock, ReadInclude, RequestId as CoreRequestId, ResourceOrigin, SessionId,
-    TemplateSelection, Timestamp as CoreTimestamp, TurnId, Version, DirectoryId,
-    WorkspaceSource,
+    ConfigOptionId, ConfigValue as CoreConfigValue, CreateSessionRequest, DirectoryId,
+    ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef, InteractionId,
+    ModeId, NodeId, NodeState, PortError, PromptContentBlock, ReadInclude,
+    RequestId as CoreRequestId, ResourceOrigin, SessionId, TemplateSelection,
+    Timestamp as CoreTimestamp, TurnId, Version, WorkspaceSource,
 };
 use acp_core::ports::{PreparedSessionCreate, SessionCreateAdmission, SessionQuery};
 use acp_core::use_cases::{NodeLinkCatalogView, UseCases};
@@ -85,8 +84,8 @@ use node_link_protocol::command::{
     IncludeResource as WireInclude, SessionCreate, Terminal, TerminalStatus,
 };
 use node_link_protocol::common::{
-    Nullable, PublicError, RawObject, RemoteSessionRef,
-    SessionCreateResult, SessionMeta, SessionResumeResult, Text, Timestamp as WireTimestamp, Uuid,
+    Nullable, PublicError, RawObject, RemoteSessionRef, SessionCreateResult, SessionMeta,
+    SessionResumeResult, Text, Timestamp as WireTimestamp, Uuid,
 };
 use node_link_protocol::envelope::{Envelope, MessageType};
 use node_link_protocol::error::ErrorCode;
@@ -1070,10 +1069,7 @@ impl CommandRoute {
             .resume_session(&actor, request.clone(), fingerprint, target.session.clone())
             .await
         {
-            Ok(session) => match self
-                .session_resume_result(handle.node_id(), &session)
-                .await
-            {
+            Ok(session) => match self.session_resume_result(handle.node_id(), &session).await {
                 Ok(result) => LocalOutcome::Completed(CommandResultPayload::SessionResume(result)),
                 Err(error) => {
                     // 会话确实已恢复：不能用 `failed` 撒谎（那会让 Access 以为没有恢复，而 Owner 侧
@@ -2552,4 +2548,3 @@ fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
-

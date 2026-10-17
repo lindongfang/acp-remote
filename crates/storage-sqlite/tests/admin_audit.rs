@@ -22,9 +22,8 @@
 mod support;
 
 use acp_core::model::{
-    Actor, AuditAction, AuditOutcome, AuditRecord, DeviceId, Digest, EntityRef,
-    InteractionId, NodeId, PairingId, PortError, RequestId, SessionId, Timestamp, TurnId,
-    UnavailableKind,
+    Actor, AuditAction, AuditOutcome, AuditRecord, DeviceId, Digest, EntityRef, InteractionId,
+    NodeId, PairingId, PortError, RequestId, SessionId, Timestamp, TurnId, UnavailableKind,
 };
 use acp_core::ports::{AuditQuery, AuditStore, RetentionPolicy, SessionStore};
 use storage_sqlite::migrate::{DATABASE_FILE, StorageConfig};

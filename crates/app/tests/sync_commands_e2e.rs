@@ -702,14 +702,16 @@ async fn stored_session_columns(
     session_id: &str,
 ) -> Option<(Option<String>, Option<String>)> {
     let mut connection = raw_connection(host).await;
-    let row: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT agent_session_id, workspace_directory_id FROM owned_session WHERE session_id = ?1",
-        )
-        .bind(session_id)
-        .fetch_optional(&mut connection)
-        .await
-        .expect("读 owned_session 的两列");
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as::<
+        _,
+        (Option<String>, Option<String>),
+    >(
+        "SELECT agent_session_id, workspace_directory_id FROM owned_session WHERE session_id = ?1",
+    )
+    .bind(session_id)
+    .fetch_optional(&mut connection)
+    .await
+    .expect("读 owned_session 的两列");
     drop(connection);
     row
 }
@@ -823,9 +825,7 @@ async fn session_create_with_a_client_supplied_path_is_created_without_a_workspa
         "协商了目录 feature 时 `workspace` 键必须存在：{terminal}"
     );
     let canonical = std::fs::canonicalize(host.data_dir()).expect("可规范化");
-    let expected_id = acp_core::model::derive_directory_id(
-        canonical.to_str().expect("UTF-8"),
-    );
+    let expected_id = acp_core::model::derive_directory_id(canonical.to_str().expect("UTF-8"));
     assert_eq!(
         summary["workspace"]["directoryId"],
         json!(expected_id.as_str()),

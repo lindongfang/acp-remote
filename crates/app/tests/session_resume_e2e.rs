@@ -92,10 +92,7 @@ impl Paired {
         support::nodelink::verify_owner_proof(&ticket, &body, &access, &client_nonce);
 
         owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({ "pairingId": pairing_id }),
-            )
+            .admin(Method::NodePairConfirm, json!({ "pairingId": pairing_id }))
             .await;
 
         let pairing_request_id = body["pairingRequestId"].as_str().expect("pairingRequestId");
@@ -215,7 +212,10 @@ async fn create_session(client: &mut NodeLinkClient, directory_id: &str) -> (Val
     let request = support::nodelink::uuid_text();
     client.step("session.create");
     client
-        .send("command.submit", session_create_body(&request, directory_id))
+        .send(
+            "command.submit",
+            session_create_body(&request, directory_id),
+        )
         .await;
     let accepted = client.expect("command.accepted").await;
     assert_eq!(accepted["body"]["result"], Value::Null);

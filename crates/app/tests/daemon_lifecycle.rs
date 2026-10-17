@@ -888,19 +888,24 @@ fn discarded_legacy_agents_are_reported_at_startup() {
     let daemon = Daemon::configure("agents-discarded", "");
     let storage = storage_sqlite::migrate::StorageConfig::new(daemon.data_dir().to_path_buf());
     let at = acp_core::model::Timestamp::new("2026-10-17T00:00:00.000Z").expect("timestamp");
-    let store = runtime.block_on(storage_sqlite::session_store::SqliteStore::open(storage.clone(), &at))
+    let store = runtime
+        .block_on(storage_sqlite::session_store::SqliteStore::open(
+            storage.clone(),
+            &at,
+        ))
         .expect("create database");
     runtime.block_on(store.close());
-    let pool = runtime.block_on(sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(storage.database_path())
-            .create_if_missing(false),
-    ))
-    .expect("raw pool");
+    let pool = runtime
+        .block_on(sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(storage.database_path())
+                .create_if_missing(false),
+        ))
+        .expect("raw pool");
     runtime
         .block_on(
             sqlx::raw_sql(
-        "CREATE TABLE owned_agent_profile (agent_id TEXT PRIMARY KEY);
+                "CREATE TABLE owned_agent_profile (agent_id TEXT PRIMARY KEY);
          INSERT INTO owned_agent_profile (agent_id) VALUES ('old-a'), ('old-b');
          UPDATE meta SET value = '9' WHERE key = 'owned_schema_version';
          PRAGMA user_version = 9;",

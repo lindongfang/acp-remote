@@ -4,9 +4,7 @@
 //! 这里**不**做校验（校验在 [`crate::local_admin::params`]）、不读时钟、不接触存储；导出给
 //! `result` 的字段集合与 §5.2–§5.5 的表格逐项对应，未知字段不会被凭空造出来。
 
-use acp_core::model::{
-    AgentProfile, DeviceRecord, NodeRecord, Timestamp, DirectoryRecord,
-};
+use acp_core::model::{AgentProfile, DeviceRecord, DirectoryRecord, NodeRecord, Timestamp};
 use serde_json::Value;
 
 use crate::local_admin::envelope::JsonObject;
@@ -39,7 +37,6 @@ pub(crate) fn string_array<'a>(items: impl IntoIterator<Item = &'a str>) -> Valu
 pub(crate) fn workspace(record: &DirectoryRecord) -> JsonObject {
     object(vec![
         ("alias", text(record.directory_id().as_str())),
-
         ("rootPath", text(record.canonical_path())),
         ("createdAt", timestamp(record.created_at())),
     ])
@@ -71,7 +68,6 @@ pub(crate) fn provider(provider_id: &str, kind: &str, configured_fields: &[Strin
 pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
     object(vec![
         ("deviceId", text(record.device_id().as_str())),
-
         (
             "publicKeyFingerprint",
             text(record.public_key_fingerprint().as_str()),
@@ -87,7 +83,6 @@ pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
 pub(crate) fn node(record: &NodeRecord) -> JsonObject {
     object(vec![
         ("nodeId", text(record.node_id().as_str())),
-
         ("kind", text(record.kind().as_str())),
         (
             "nodePublicKeyFingerprint",

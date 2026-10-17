@@ -173,4 +173,3 @@ pub fn pending_pairing(view: &SyncDeviceHandshakeView) -> Option<PairingRecord> 
         .filter(|pairing| pairing.state() == PairingState::Approved)
         .cloned()
 }
-

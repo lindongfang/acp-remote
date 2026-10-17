@@ -13,9 +13,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use acp_core::model::{
-    DeviceId, NodeId, Nonce, PairingId, PeerPublicKey, Timestamp,
-};
+use acp_core::model::{DeviceId, NodeId, Nonce, PairingId, PeerPublicKey, Timestamp};
 use acp_core::ports::Clock;
 use async_trait::async_trait;
 use identity_auth::{
@@ -171,7 +169,6 @@ pub fn nonce_from_hex(text: &str) -> Nonce {
     bytes.extend_from_slice(&seed);
     Nonce::new(&acpr_transcript::encode_base64url(&bytes)).expect("nonce 文本必须规范")
 }
-
 
 /// 可推进的注入时钟。
 #[derive(Debug, Default)]

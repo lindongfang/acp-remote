@@ -86,10 +86,8 @@ pub enum DetachReason {
 }
 
 impl DetachReason {
-    pub const ALL: [DetachReason; 2] = [
-        DetachReason::ClientRequest,
-        DetachReason::OwnerUnavailable,
-    ];
+    pub const ALL: [DetachReason; 2] =
+        [DetachReason::ClientRequest, DetachReason::OwnerUnavailable];
 
     pub fn as_str(self) -> &'static str {
         match self {

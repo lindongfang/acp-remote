@@ -163,4 +163,3 @@ impl SessionLimits {
 fn clamp(value: u64, min: u64, ceiling: u64) -> u64 {
     value.max(min).min(ceiling.max(min))
 }
-

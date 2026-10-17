@@ -19,7 +19,7 @@ use node_link_protocol::catalog::{
     DirectoryEntryList,
 };
 use node_link_protocol::common::{
-    AgentEntry, DecimalString, DirectoryEntry, DirectoryId, Nullable, NonEmptyText, OpaqueRef,
+    AgentEntry, DecimalString, DirectoryEntry, DirectoryId, NonEmptyText, Nullable, OpaqueRef,
     SessionState, Timestamp, Uuid,
 };
 use node_link_protocol::envelope::{Envelope, MessageType};
@@ -182,7 +182,8 @@ impl ProjectionFault {
 
 /// 把 core 的持久事实投影成 wire 快照（Agent / 目录 / 会话三类，均不含正文与路径）。
 fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFault> {
-    let revision = DecimalString::parse(&view.revision.to_string()).map_err(|_| ProjectionFault::Field)?;
+    let revision =
+        DecimalString::parse(&view.revision.to_string()).map_err(|_| ProjectionFault::Field)?;
     let agents = view
         .agents
         .iter()
@@ -223,13 +224,16 @@ fn project(view: &NodeLinkCatalogView) -> Result<CatalogSnapshot, ProjectionFaul
 
 fn project_session(summary: &SessionSummary) -> Result<CatalogSession, ProjectionFault> {
     Ok(CatalogSession {
-        session_id: Uuid::parse(summary.session_id().as_str()).map_err(|_| ProjectionFault::Field)?,
+        session_id: Uuid::parse(summary.session_id().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
         agent_id: node_link_protocol::common::AgentId::parse(summary.agent().agent_id().as_str())
             .map_err(|_| ProjectionFault::Field)?,
-        state: SessionState::from_str(summary.state().as_str()).map_err(|_| ProjectionFault::Field)?,
+        state: SessionState::from_str(summary.state().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
         version: DecimalString::parse(&summary.version().get().to_string())
             .map_err(|_| ProjectionFault::Field)?,
-        created_at: Timestamp::parse(summary.created_at().as_str()).map_err(|_| ProjectionFault::Field)?,
+        created_at: Timestamp::parse(summary.created_at().as_str())
+            .map_err(|_| ProjectionFault::Field)?,
         workspace_directory_id: match summary.workspace() {
             Some(workspace) => Nullable::value(
                 DirectoryId::parse(workspace.directory_id().as_str())
@@ -244,4 +248,3 @@ fn project_session(summary: &SessionSummary) -> Result<CatalogSession, Projectio
 fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
     serde_json::from_str(message.body().get()).ok()
 }
-

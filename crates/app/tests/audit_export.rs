@@ -34,7 +34,10 @@ fn audit_export_writes_the_real_file_and_reports_matching_count_and_digest() {
     daemon.start();
 
     // 产生 pairing.created 审计行。
-    daemon.ok(Method::DevicePairBegin, params_of(json!({ "expiresInMs": null })));
+    daemon.ok(
+        Method::DevicePairBegin,
+        params_of(json!({ "expiresInMs": null })),
+    );
 
     let output_path = daemon.root().join("audit-export.jsonl");
     let result = daemon.ok_value(

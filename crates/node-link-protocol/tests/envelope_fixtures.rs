@@ -11,8 +11,7 @@ mod support;
 use std::collections::HashSet;
 
 use node_link_protocol::catalog::{
-    CatalogSnapshot, CatalogSubscribe, NodeRotateKeyRequest,
-    NodeRotateKeyResult, NodeTrustRevoked,
+    CatalogSnapshot, CatalogSubscribe, NodeRotateKeyRequest, NodeRotateKeyResult, NodeTrustRevoked,
 };
 use node_link_protocol::command::{
     CommandAccepted, CommandRejected, CommandStatus, CommandSubmit, CommandTerminal,

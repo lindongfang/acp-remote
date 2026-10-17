@@ -28,13 +28,11 @@ use std::time::Duration;
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent,
-    DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch,
-    Timestamp, UnavailableKind,
+    DeviceId, EndpointEvent, EntityRef, NodeId, PortError, ServerEpoch, Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
-    AgentCatalog, AttachmentStore, AuditStore, Clock, EventPublisher,
-    IdGenerator, LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory,
-    SessionStore,
+    AgentCatalog, AttachmentStore, AuditStore, Clock, EventPublisher, IdGenerator,
+    LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory, SessionStore,
 };
 use acp_core::ports::{RemoteDeliveryStore, TrustStore};
 use acp_core::use_cases::{UseCaseDeps, UseCases};
@@ -756,7 +754,6 @@ impl ConnectionCloser for NodeLinkCloser {
             "重新配对：已关闭既有连接，等待对端重连取新 catalog"
         );
     }
-
 }
 
 /// `OwnerReachability`：Sync 面的 Owner 可达性（`sync_visible_sessions` 与快照里 `origin.online` 的输入）。
@@ -881,9 +878,7 @@ pub fn forked_publisher_with_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_core::model::{
-        AgentId, EventId, EventType, Sequence, SessionId,
-    };
+    use acp_core::model::{AgentId, EventId, EventType, Sequence, SessionId};
     use server::local_admin::{
         AdminOutcome, DaemonControl, DaemonStatus, LocalAdminDeps, LocalAdminHandler,
         LocalAdminRouter, NoConnections, PairingSessions, decode_request,
@@ -1083,5 +1078,4 @@ mod tests {
             .close()
             .await;
     }
-
 }

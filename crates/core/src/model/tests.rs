@@ -1361,10 +1361,7 @@ fn committed_event_and_delivery_keep_session_sequences_consistent() {
 
     // origin 必须属于该会话的 Owner。
     let foreign = CommittedDelivery::Imported {
-        session: RemoteSessionRef::new(
-            NodeId::from_str(UUID_A).expect("node"),
-            session_id(),
-        ),
+        session: RemoteSessionRef::new(NodeId::from_str(UUID_A).expect("node"), session_id()),
         origin: OriginEventRef::new(
             NodeId::from_str(UUID_B).expect("node"),
             OriginEpoch::from_str(UUID_C).expect("epoch"),
@@ -1908,8 +1905,8 @@ fn peer_public_key_is_validated_at_construction_and_derives_its_fingerprint() {
 #[test]
 fn agent_profile_is_a_bounded_command_declaration() {
     let id = AgentId::new("omp").expect("agent id");
-    let profile = AgentProfile::try_new(id.clone(), "omp", vec!["acp".to_owned()], true)
-        .expect("profile");
+    let profile =
+        AgentProfile::try_new(id.clone(), "omp", vec!["acp".to_owned()], true).expect("profile");
     assert_eq!(profile.id(), &id);
     assert_eq!(profile.display_name(), "omp");
     assert_eq!(profile.command(), "omp");
@@ -1951,12 +1948,14 @@ fn agent_session_id_is_bounded_and_nul_free() {
 /// §3.1：`WorkspaceRef` 只承载 `{ directoryId }`；标识必须是 32 字符小写十六进制。
 #[test]
 fn workspace_ref_carries_only_the_directory_id() {
-    let directory_id =
-        DirectoryId::new("0123456789abcdef0123456789abcdef").expect("directory id");
+    let directory_id = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("directory id");
 
     let workspace = WorkspaceRef::new(directory_id.clone());
     assert_eq!(workspace.directory_id(), &directory_id);
-    assert_eq!(workspace.directory_id().as_str(), "0123456789abcdef0123456789abcdef");
+    assert_eq!(
+        workspace.directory_id().as_str(),
+        "0123456789abcdef0123456789abcdef"
+    );
 
     assert_eq!(
         DirectoryId::new("0123456789ABCDEF0123456789abcdef"),

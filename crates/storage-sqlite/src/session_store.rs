@@ -27,22 +27,21 @@ use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
     ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin,
-    EventPayload,
-    GlobalCursor, InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef,
-    NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError,
-    RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence, ServerEpoch,
-    Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary,
-    StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
+    EventPayload, GlobalCursor, InteractionOption, InteractionResolution, LocalCursor, ModeId,
+    ModeRef, NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError,
+    PublicError, RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence,
+    ServerEpoch, Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState,
+    SessionSummary, StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
     WorkspaceRef,
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
-    HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery,
-    ImportedSessionRecord, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
-    PendingInteractionOrigin, PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef,
-    RemoteDeliveryStore, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment,
-    SessionQuery, SessionStore, SettledSession, StateChange, StoreHealth, SyncEventRecord,
-    SyncReplaySlice, TurnChange, TurnUpdate,
+    HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord,
+    ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord, PendingInteractionOrigin,
+    PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef, RemoteDeliveryStore, ReplayBatch,
+    ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment, SessionQuery, SessionStore,
+    SettledSession, StateChange, StoreHealth, SyncEventRecord, SyncReplaySlice, TurnChange,
+    TurnUpdate,
 };
 
 use crate::error::StorageError;
@@ -109,8 +108,9 @@ impl SqliteStore {
     }
     /// v10 升级时被删除的旧 Agent profile 行数（用于启动提示；没有迁移记录即 0）。
     pub async fn discarded_agent_profiles(&self) -> Result<u64, StorageError> {
-        let Some(value) = migrate::read_meta_row(&self.pools.write, migrate::META_DISCARDED_AGENT_PROFILES)
-            .await?
+        let Some(value) =
+            migrate::read_meta_row(&self.pools.write, migrate::META_DISCARDED_AGENT_PROFILES)
+                .await?
         else {
             return Ok(0);
         };
@@ -118,7 +118,6 @@ impl SqliteStore {
             .parse()
             .map_err(|_| StorageError::Corrupt("discarded_agent_profiles"))
     }
-
 
     /// §7.1/§7.2：打开（必要时创建）数据库、设置 PRAGMA、跑 `quick_check` 与 migration。
     ///
@@ -3237,7 +3236,8 @@ impl RemoteDeliveryStore for SqliteStore {
         .bind(session.session_id.as_str())
         .bind(receipt.origin.origin_event_id.as_str())
         .fetch_optional(&mut *tx)
-        .await.db()?;
+        .await
+        .db()?;
         if let Some(local) = duplicate {
             return Ok(ReceiptOutcome {
                 local_sequence: cursor(local, "imported_delivery_index.local_sequence")?,

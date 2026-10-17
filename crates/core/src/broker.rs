@@ -37,22 +37,22 @@ use crate::model::{
     ConflictKind, CreateSessionRequest, Digest, ElicitationAction, ElicitationValues,
     EndpointEvent, EntityRef, EventKind, EventOrigin, EventPayload, EventType, GlobalCursor,
     InteractionId, InteractionKind, InteractionResolution, LocalCursor, MemberValue, MessageId,
-    ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef,
-    PendingEvent, PendingInteraction, PermissionDecision, PermissionDecisionKind,
-    PersistencePolicy, PortError, PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef,
-    RequestId, Resolution, ResourceOrigin, ResumeSessionRequest, Sequence, SessionId,
-    SessionRecoveryRecord, SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp,
-    TurnId, TurnState, UnavailableKind, Version, ViewJson, WorkspaceRef,
-    decode_json_string as json_string, encode_json_string as json_text, insert_string_member_front,
-    object_members as json_members, top_level_member,
+    ModeId, ModeRef, OriginEpoch, OriginEventRef, OwnedSessionRef, PendingEvent,
+    PendingInteraction, PermissionDecision, PermissionDecisionKind, PersistencePolicy, PortError,
+    PromptContentBlock, PromptRequest, PublicError, RemoteSessionRef, RequestId, Resolution,
+    ResourceOrigin, ResumeSessionRequest, Sequence, SessionId, SessionRecoveryRecord,
+    SessionReference, SessionState, SessionSummary, StoredPolicy, Timestamp, TurnId, TurnState,
+    UnavailableKind, Version, ViewJson, WorkspaceRef, decode_json_string as json_string,
+    encode_json_string as json_text, insert_string_member_front, object_members as json_members,
+    top_level_member,
 };
 use crate::ports::{
     AuditStore, Clock, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt, EventPublisher,
-    EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator,
-    IdempotencyRecord, InteractionResolved, ModeChange, NewTurn, OwnedCommit,
-    PendingInteractionWrite, PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore,
-    ReplayBatch, ReplayLimit, SessionBackendFactory, SessionCreateAdmission, SessionEndpoint,
-    SessionStore, SessionUpdate, SettledSession, StateChange, TrustStore, TurnChange, TurnUpdate,
+    EventSink, HistoryInclude, HistoryPage, HistoryQuery, IdGenerator, IdempotencyRecord,
+    InteractionResolved, ModeChange, NewTurn, OwnedCommit, PendingInteractionWrite,
+    PreparedSessionCreate, ReadView, ReceiptOutcome, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
+    SessionBackendFactory, SessionCreateAdmission, SessionEndpoint, SessionStore, SessionUpdate,
+    SettledSession, StateChange, TrustStore, TurnChange, TurnUpdate,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -4507,19 +4507,17 @@ pub(crate) mod test_support {
     use crate::model::{
         ActorKind, AgentDescriptor, AgentId, AgentProfile, AgentRef, AgentSessionId,
         AttachmentGeneration, AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId,
-        DeviceRecord, EventId, ModeState, NodeId,
-        NodeKind, NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord,
-        PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction,
-        ResourceOrigin, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
-        DirectoryId, DirectoryRecord, WorkspaceRef,
+        DeviceRecord, DirectoryId, DirectoryRecord, EventId, ModeState, NodeId, NodeKind,
+        NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingState,
+        PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ResourceOrigin,
+        ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn, WorkspaceRef,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
         DeviceWrite, ExpiryWrite, IdempotentReplay, ImportedSessionQuery, ImportedSessionRecord,
-        LocalConfigStore,
-        NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite, OwnedEventRecord,
-        PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
-        PairingWrite, PendingInteractionOrigin, PruneReport,
+        LocalConfigStore, NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite,
+        OwnedEventRecord, PairingClaimOutcome, PairingClaimWrite, PairingConsumption,
+        PairingSettlementWrite, PairingWrite, PendingInteractionOrigin, PruneReport,
         RemoteCommandRef, RetentionPolicy, SessionQuery, StoreHealth, SyncEventRecord,
         SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted,
     };
@@ -4840,7 +4838,6 @@ pub(crate) mod test_support {
         pub(crate) fn directories(&self) -> &Mutex<Vec<DirectoryRecord>> {
             &self.workspaces
         }
-
 
         pub(crate) fn fail_commit_at(&self, index: usize) {
             lock(&self.state).fail_at = Some(index);
@@ -5194,10 +5191,7 @@ pub(crate) mod test_support {
             Ok(lock(&self.world.catalog_agents).clone())
         }
 
-        async fn profile(
-            &self,
-            _id: &AgentId,
-        ) -> Result<Option<AgentProfile>, PortError> {
+        async fn profile(&self, _id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
             Ok(None)
         }
 
@@ -10777,7 +10771,4 @@ mod tests {
         let session = harness.world.session(&harness.session).expect("会话");
         assert!(session.title().is_none(), "R9：显式置空 → 未命名会话");
     }
-
-
-
 }

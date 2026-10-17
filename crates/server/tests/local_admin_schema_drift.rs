@@ -56,9 +56,7 @@ const FIXTURES: &[Fixture] = &[
     },
     Fixture {
         path: "valid/request-agent-list.json",
-        content: include_str!(
-            "../../../fixtures/local-admin/v1/valid/request-agent-list.json"
-        ),
+        content: include_str!("../../../fixtures/local-admin/v1/valid/request-agent-list.json"),
         valid: true,
         keyword: None,
         expectation: Expectation::RequestDecodes,

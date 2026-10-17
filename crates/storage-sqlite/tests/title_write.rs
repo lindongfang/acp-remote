@@ -143,8 +143,11 @@ async fn row(dir: &std::path::Path, session: &SessionId) -> Row {
             .expect("current_mode_id"),
         mode_name: sqlx::Row::try_get::<Option<String>, _>(&record, "current_mode_name")
             .expect("current_mode_name"),
-        workspace_directory_id: sqlx::Row::try_get::<Option<String>, _>(&record, "workspace_directory_id")
-            .expect("workspace_directory_id"),
+        workspace_directory_id: sqlx::Row::try_get::<Option<String>, _>(
+            &record,
+            "workspace_directory_id",
+        )
+        .expect("workspace_directory_id"),
         version: sqlx::Row::try_get::<i64, _>(&record, "version").expect("version"),
         updated_at: sqlx::Row::try_get::<String, _>(&record, "updated_at").expect("updated_at"),
     };
@@ -211,7 +214,10 @@ async fn setting_a_title_writes_it_and_bumps_the_version() {
     assert_eq!(row.updated_at, at(1).as_str(), "权威更新时间取 commit.at");
     assert_eq!(row.state, "waiting_input");
     assert_eq!(row.mode_id.as_deref(), Some("code"));
-    assert_eq!(row.workspace_directory_id.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+    assert_eq!(
+        row.workspace_directory_id.as_deref(),
+        Some("0123456789abcdef0123456789abcdef")
+    );
     store.close().await;
 }
 

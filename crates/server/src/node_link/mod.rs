@@ -31,7 +31,6 @@ pub mod conn;
 pub mod pairing;
 pub mod resource;
 
-
 pub use catalog::CatalogRoute;
 pub use command::CommandRoute;
 pub use conn::{

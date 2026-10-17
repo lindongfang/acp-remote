@@ -100,7 +100,6 @@ impl AgentProfile {
     }
 }
 
-
 /// 本机目录记录（§11.6、`design.md` D7）。路径只在本节点可读，不进入 Node Link catalog。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryRecord {
@@ -197,7 +196,10 @@ pub struct ResolvedWorkspace {
 impl ResolvedWorkspace {
     /// 按**已记录目录**构造。路径必须是绝对路径形状，且标识必须等于由该路径派生的值
     /// （`canonicalize` 与目录判定由用例层的解析路径完成）。
-    pub fn try_new(directory_id: DirectoryId, canonical_path: String) -> Result<Self, InvalidValue> {
+    pub fn try_new(
+        directory_id: DirectoryId,
+        canonical_path: String,
+    ) -> Result<Self, InvalidValue> {
         Self::checked(directory_id, canonical_path)
     }
 
@@ -207,10 +209,7 @@ impl ResolvedWorkspace {
         Self::checked(directory_id, canonical_path)
     }
 
-    fn checked(
-        directory_id: DirectoryId,
-        canonical_path: String,
-    ) -> Result<Self, InvalidValue> {
+    fn checked(directory_id: DirectoryId, canonical_path: String) -> Result<Self, InvalidValue> {
         require_bounded(&canonical_path, 1, 4096)?;
         if !no_nul(&canonical_path) || !Path::new(&canonical_path).is_absolute() {
             return Err(InvalidValue::Field);

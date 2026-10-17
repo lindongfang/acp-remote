@@ -151,7 +151,7 @@ impl From<&super::DevicePair> for PairArgs {
         Self {
             mode: None,
             pairing_url: None,
-            
+
             fingerprint: args.fingerprint.clone(),
             expires_in_ms: args.expires_in_ms,
         }
@@ -409,10 +409,7 @@ async fn settle_claim<M: PairCalls + Send>(
         ));
     }
     calls
-        .call(
-            target.confirm(),
-            confirm_params(pairing_id),
-        )
+        .call(target.confirm(), confirm_params(pairing_id))
         .await
 }
 
@@ -579,4 +576,3 @@ fn text_array_field(result: &JsonObject, key: &str) -> Result<Vec<String>, Failu
         })
         .collect()
 }
-

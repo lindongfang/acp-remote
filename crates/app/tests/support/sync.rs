@@ -1327,7 +1327,7 @@ impl HostNode {
                 .expect("打开真实存储"),
         );
         let sessions: Arc<dyn acp_core::ports::SessionStore> = store.clone();
-        let deliveries: Arc<dyn acp_core::ports::RemoteDeliveryStore> = store.clone();
+        let deliveries: Arc<dyn acp_core::ports::RemoteDeliveryStore> = store.clone();
         let trust: Arc<dyn acp_core::ports::TrustStore> = store.clone();
         let audit: Arc<dyn acp_core::ports::AuditStore> = store.clone();
         let local_config: Arc<dyn acp_core::ports::LocalConfigStore> = store.clone();
@@ -1366,7 +1366,7 @@ impl HostNode {
             acp_core::broker::BrokerDeps {
                 store: Arc::clone(&sessions),
                 deliveries: Arc::clone(&deliveries),
-                backends,
+                backends,
                 trust: Arc::clone(&trust),
                 publisher,
                 clock: Arc::clone(&clock),
@@ -1378,7 +1378,7 @@ impl HostNode {
         let core = Arc::new(UseCases::new(UseCaseDeps {
             broker: Arc::clone(&broker),
             store: sessions,
-            deliveries,
+            deliveries,
             trust,
             audit: Arc::clone(&audit),
             config: local_config,

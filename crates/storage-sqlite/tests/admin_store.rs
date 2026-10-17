@@ -36,16 +36,16 @@ use sqlx::SqlitePool;
 
 use acp_core::model::{
     Actor, AgentId, AgentProfile, AuditAction, AuditOutcome, ConflictKind, DeviceId, DeviceRecord,
-    DeviceState, Digest, EntityRef, EventId, EventType, Fingerprint, NodeId, NodeKind, NodeRecord,
-    NodeState, Nonce, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingSettlement,
-    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PortError, Sequence, SessionId,
-    Timestamp, UnavailableKind, DirectoryId, DirectoryRecord,
+    DeviceState, Digest, DirectoryId, DirectoryRecord, EntityRef, EventId, EventType, Fingerprint,
+    NodeId, NodeKind, NodeRecord, NodeState, Nonce, OriginEpoch, PairingId, PairingPeer,
+    PairingRecord, PairingSettlement, PairingState, PairingTarget, PeerIdentity, PeerPublicKey,
+    PortError, Sequence, SessionId, Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
-    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ImportedSessionRecord, LocalConfigStore,
-    NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption,
-    PairingSettlementWrite, PairingWrite, PendingAudit, WriteContext,
-    RemoteDeliveryStore, RevokeReason, SessionStore, TrustRecordRef, TrustStore,
+    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ImportedSessionRecord,
+    LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimWrite,
+    PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit, RemoteDeliveryStore,
+    RevokeReason, SessionStore, TrustRecordRef, TrustStore, WriteContext,
 };
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
@@ -281,11 +281,7 @@ fn device_claim_with(id: &DeviceId, host_binding: &str) -> PairingClaimWrite {
         nonce("client-nonce"),
     )
     .expect("pairing peer");
-    let claim = acp_core::model::PairingClaim::try_new(
-        pairing_id(),
-        peer,
-    )
-    .expect("claim");
+    let claim = acp_core::model::PairingClaim::try_new(pairing_id(), peer).expect("claim");
     PairingClaimWrite {
         claim,
         context: context(
@@ -345,11 +341,7 @@ fn node_claim(id: &NodeId) -> PairingClaimWrite {
         nonce("node-client-nonce"),
     )
     .expect("pairing peer");
-    let claim = acp_core::model::PairingClaim::try_new(
-        pairing_id(),
-        peer,
-    )
-    .expect("claim");
+    let claim = acp_core::model::PairingClaim::try_new(pairing_id(), peer).expect("claim");
     PairingClaimWrite {
         claim,
         context: context(
@@ -445,7 +437,6 @@ fn node_record_with_connected(
     .expect("node record")
 }
 
-
 fn absolute_path(name: &str) -> String {
     std::env::temp_dir()
         .join("acpr-admin-store")
@@ -513,7 +504,6 @@ async fn approve_device(store: &SqliteStore, id: &DeviceId, minute: u32) -> Trus
         .await
         .expect("settle pairing")
 }
-
 
 /// 节点配对批准（§11.6 第 4 条）：写下对端的 `access` 信任行并绑定身份材料。认证时间**不**在这一步写
 /// ——`last_connected_at` 是认证收尾的职责（§11.6 第 8/9 条）。
@@ -1152,11 +1142,7 @@ async fn only_a_fresh_pairing_can_lift_a_revocation() {
                     nonce("re-pair-nonce"),
                 )
                 .expect("peer");
-                acp_core::model::PairingClaim::try_new(
-                    pairing.clone(),
-                    peer,
-                )
-                .expect("claim")
+                acp_core::model::PairingClaim::try_new(pairing.clone(), peer).expect("claim")
             },
             context: context(6, Vec::new()),
         })
@@ -2193,11 +2179,7 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                         nonce("late-nonce"),
                     )
                     .expect("peer");
-                    acp_core::model::PairingClaim::try_new(
-                        stale.clone(),
-                        peer,
-                    )
-                    .expect("claim")
+                    acp_core::model::PairingClaim::try_new(stale.clone(), peer).expect("claim")
                 },
                 context: context(6, Vec::new()),
             })
@@ -2838,7 +2820,10 @@ async fn directory_records_stay_local_and_keep_created_at() {
 
     let directories = store.directories().await.expect("directories");
     assert_eq!(directories.len(), 1);
-    assert_eq!(directories[0].directory_id(), &workspace_directory("project"));
+    assert_eq!(
+        directories[0].directory_id(),
+        &workspace_directory("project")
+    );
     assert_eq!(directories[0].canonical_path(), absolute_path("project"));
     assert_eq!(directories[0].created_at(), &at(1));
 
@@ -2918,7 +2903,11 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
 
     let error = store
         .put_node(NodeWrite {
-            record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+            record: node_record(
+                NodeKind::Access,
+                peer_public_key().fingerprint(),
+                NodeState::Paired,
+            ),
             public_key: peer_public_key(),
             context: context(
                 1,
@@ -2952,7 +2941,11 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
     // 触发器移除后同一写集成功（证明失败来自审计写入，而不是这条写集本身非法）。
     store
         .put_node(NodeWrite {
-            record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+            record: node_record(
+                NodeKind::Access,
+                peer_public_key().fingerprint(),
+                NodeState::Paired,
+            ),
             public_key: peer_public_key(),
             context: context(1, Vec::new()),
         })
@@ -3138,7 +3131,11 @@ async fn fail_closed_store_rejects_every_admin_write_path() {
     assert!(matches!(
         store
             .put_node(NodeWrite {
-                record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+                record: node_record(
+                    NodeKind::Access,
+                    peer_public_key().fingerprint(),
+                    NodeState::Paired
+                ),
                 public_key: peer_public_key(),
                 context: context(5, Vec::new()),
             })
@@ -3171,7 +3168,11 @@ async fn capacity_limit_refuses_new_admin_writes_without_deleting_trust() {
     assert_unavailable(
         store
             .put_node(NodeWrite {
-                record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+                record: node_record(
+                    NodeKind::Access,
+                    peer_public_key().fingerprint(),
+                    NodeState::Paired,
+                ),
                 public_key: peer_public_key(),
                 context: context(3, Vec::new()),
             })

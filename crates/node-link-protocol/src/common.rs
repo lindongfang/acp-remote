@@ -468,7 +468,10 @@ mod tests {
     #[test]
     fn pattern_strings_reject_out_of_domain_values() {
         assert!(DirectoryId::parse("0123456789abcdef0123456789abcdef").is_ok());
-        assert!(DirectoryId::parse("0123456789ABCDEF0123456789abcdef").is_err(), "必须小写十六进制");
+        assert!(
+            DirectoryId::parse("0123456789ABCDEF0123456789abcdef").is_err(),
+            "必须小写十六进制"
+        );
         assert!(DirectoryId::parse("0123456789abcdef").is_err());
         assert!(DirectoryId::parse("/abs/path").is_err(), "标识不是路径");
         assert!(DirectoryId::parse(&"g".repeat(32)).is_err());

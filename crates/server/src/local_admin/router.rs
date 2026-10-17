@@ -18,14 +18,13 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    Actor, AgentProfile, Fingerprint, NodeKind, PairingId, PairingRecord, PairingState,
-    PairingTarget, PeerIdentity, Timestamp, DirectoryRecord,
+    Actor, AgentProfile, DirectoryRecord, Fingerprint, NodeKind, PairingId, PairingRecord,
+    PairingState, PairingTarget, PeerIdentity, Timestamp,
 };
 use acp_core::ports::{AuditQuery, AuditStore, Clock, TrustRecordRef};
 use acp_core::use_cases::UseCases;
 use identity_auth::{
-    IdentityKeystore, KeystoreError, PairingDecision, PairingSpec,
-    SecretBytes, SecretPurpose,
+    IdentityKeystore, KeystoreError, PairingDecision, PairingSpec, SecretBytes, SecretPurpose,
 };
 use serde_json::Value;
 
@@ -130,7 +129,10 @@ impl LocalAdminRouter {
                 Value::Object(object(vec![
                     ("agentId", text(profile.id().as_str())),
                     ("command", text(profile.command())),
-                    ("args", Value::Array(profile.args().iter().map(text).collect())),
+                    (
+                        "args",
+                        Value::Array(profile.args().iter().map(text).collect()),
+                    ),
                     ("default", Value::Bool(profile.is_default())),
                 ]))
             })
@@ -349,8 +351,7 @@ impl LocalAdminRouter {
     /// `node.pair.begin`（§5.4）：只有 `mode = "owner"` 落地；`mode = "access"` 固定不支持。
     async fn node_pair_begin(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         const OPERATION: &str = "node.pair.begin";
-        let params::NodePairBegin::Owner = params::node_pair_begin(params)?
-        else {
+        let params::NodePairBegin::Owner = params::node_pair_begin(params)? else {
             // §5.4：`mode = "access"` 需要对 Owner 执行 HTTPS claim，本切片未落地。这里不构造任何
             // HTTP 调用、不写任何状态，也不另行填充参数形状（与 §5.7 的 `node.rotate-key.begin` 同款）。
             return Err(AdminError::new(
@@ -831,4 +832,3 @@ fn map_keystore_error(error: KeystoreError) -> AdminError {
         ),
     }
 }
-

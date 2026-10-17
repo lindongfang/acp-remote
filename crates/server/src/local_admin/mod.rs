@@ -30,7 +30,6 @@ pub(crate) mod pairing;
 pub(crate) mod params;
 pub mod router;
 
-
 pub(crate) mod view;
 
 pub use daemon::{

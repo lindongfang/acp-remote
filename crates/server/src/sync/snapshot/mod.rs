@@ -149,9 +149,7 @@ pub async fn plan(
         // 规范化路径只在协商了 `core.workspace-path.v1` 时出现（`include_path` 就是本连接的那个协商
         // 结果），未协商时该键**缺席**——条目是 `additionalProperties: false` 的封闭对象，只协商
         // `core.local-catalog.v1` 的旧客户端因此仍收到与本变更前逐字节相同的两个键。
-        let catalog = core
-            .sync_workspace_catalog(&Actor::LocalCli, true)
-            .await?;
+        let catalog = core.sync_workspace_catalog(&Actor::LocalCli, true).await?;
         let items = catalog
             .iter()
             .map(wire_workspace)
@@ -307,9 +305,9 @@ fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessi
     let agent = summary.agent();
     let workspace = if catalog {
         Some(match summary.workspace() {
-            Some(reference) => Nullable::value(wire_workspace_ref(
-                reference.directory_id().as_str(),
-            )?),
+            Some(reference) => {
+                Nullable::value(wire_workspace_ref(reference.directory_id().as_str())?)
+            }
             None => Nullable::null(),
         })
     } else {
@@ -394,4 +392,3 @@ fn wire_state(state: CoreSessionState) -> WireSessionState {
         CoreSessionState::Closed => WireSessionState::Closed,
     }
 }
-

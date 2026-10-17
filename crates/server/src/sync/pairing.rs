@@ -1131,4 +1131,3 @@ fn secure(response: HttpResponse) -> HttpResponse {
     }
     response
 }
-

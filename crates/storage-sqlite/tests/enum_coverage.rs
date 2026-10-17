@@ -7,10 +7,11 @@
 mod support;
 
 use acp_core::model::{
-    ActorKind, AuditAction, AuditOutcome, CommandKind, CommandStatus, DeviceState, ElicitationAction, ElicitationValues, EventKind, EventOrigin, InteractionId, InteractionKind,
+    ActorKind, AuditAction, AuditOutcome, CommandKind, CommandStatus, DeviceState,
+    ElicitationAction, ElicitationValues, EventKind, EventOrigin, InteractionId, InteractionKind,
     InteractionResolution, NodeKind, NodeState, PairingState, PairingTarget,
-    PermissionDecisionKind, RawUnavailableReason, SessionId, SessionState,
-    StoredPolicy, Timestamp, TurnState,
+    PermissionDecisionKind, RawUnavailableReason, SessionId, SessionState, StoredPolicy, Timestamp,
+    TurnState,
 };
 use acp_core::ports::{InteractionResolved, ModeChange, SessionStore, SessionUpdate, StateChange};
 use support::*;

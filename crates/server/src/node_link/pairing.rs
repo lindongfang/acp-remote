@@ -36,8 +36,7 @@ use identity_auth::{
     PairingProof, PairingRequestMaterial,
 };
 use node_link_protocol::common::{
-    Base64Url, NodeName, Nullable, ProtocolVersionV1, RawObject, Timestamp,
-    Uuid,
+    Base64Url, NodeName, Nullable, ProtocolVersionV1, RawObject, Timestamp, Uuid,
 };
 use node_link_protocol::error::{Body as ErrorBody, ErrorCode};
 use node_link_protocol::pairing::{

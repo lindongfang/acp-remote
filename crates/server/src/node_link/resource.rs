@@ -29,8 +29,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use acp_core::model::{
     AcpRaw, CommittedDelivery, CommittedEvent, EntityRef, EventPayload as CoreEventPayload,
-    InteractionKind, NodeId, OriginCursor as CoreOriginCursor, PortError,
-    RawUnavailableReason, SessionId, SessionState as CoreSessionState,
+    InteractionKind, NodeId, OriginCursor as CoreOriginCursor, PortError, RawUnavailableReason,
+    SessionId, SessionState as CoreSessionState,
 };
 use acp_core::ports::{EventPublisher, ReplayLimit};
 use acp_core::use_cases::{NodeLinkEvent, NodeLinkReplay, UseCases};
@@ -167,11 +167,7 @@ impl ResourceRoute {
                 None => {
                     let fetched = match self
                         .core
-                        .node_link_event_payload(
-                            handle.node_id(),
-                            &attachment.session,
-                            &event.id,
-                        )
+                        .node_link_event_payload(handle.node_id(), &attachment.session, &event.id)
                         .await
                     {
                         Ok(Some(payload)) => wire_payload(&payload),
@@ -630,11 +626,7 @@ impl ResourceRoute {
     ) -> Option<PendingInteraction> {
         let payload = self
             .core
-            .node_link_event_payload(
-                handle.node_id(),
-                &attachment.session,
-                &pending.origin_event,
-            )
+            .node_link_event_payload(handle.node_id(), &attachment.session, &pending.origin_event)
             .await
             .ok()
             .flatten()?;
@@ -661,12 +653,7 @@ impl ResourceRoute {
         let limit = ReplayLimit::new(handle.limits().resource_snapshot_batch_size());
         let replay = match self
             .core
-            .node_link_replay(
-                handle.node_id(),
-                &attachment.session,
-                Some(cursor),
-                limit,
-            )
+            .node_link_replay(handle.node_id(), &attachment.session, Some(cursor), limit)
             .await
         {
             Ok(replay) => replay,
@@ -1191,7 +1178,6 @@ fn core_cursor(cursor: &OriginCursor) -> Option<CoreOriginCursor> {
     })
 }
 
-
 fn session_id(text: &str) -> Option<SessionId> {
     SessionId::new(text).ok()
 }
@@ -1216,4 +1202,3 @@ fn decode<T: DeserializeOwned>(message: &Envelope) -> Option<T> {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
-

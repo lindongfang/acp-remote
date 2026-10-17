@@ -9,12 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use acp_core::model::Digest;
 use acp_core::model::{
-    AgentId, AgentProfile, ConfigValue, ResolvedWorkspace,
-    DirectoryId, DirectoryRecord, Timestamp,
+    AgentId, AgentProfile, ConfigValue, DirectoryId, DirectoryRecord, ResolvedWorkspace, Timestamp,
 };
-use acp_core::ports::{
-    Clock, EventSink, IdGenerator, NodeEventSink,
-};
+use acp_core::ports::{Clock, EventSink, IdGenerator, NodeEventSink};
 
 use agent_host::LaunchSpec;
 

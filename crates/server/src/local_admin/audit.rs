@@ -185,4 +185,3 @@ fn csv_field(value: Option<&Value>) -> String {
     };
     format!("\"{}\"", text.replace('"', "\"\""))
 }
-

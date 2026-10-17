@@ -309,7 +309,6 @@ fn approve_requires_pending_state() {
     assert_eq!(claimed.display_name, "Test Phone");
 }
 
-
 fn reject_produces_no_trust() {
     // R11 / 场景「拒绝不产生信任」。
     let created = create_device_pairing();
@@ -350,11 +349,7 @@ fn expiry_blocks_settlement() {
     let pending = pending_record(&created.draft.record);
     created.clock.set(AFTER_WINDOW);
     assert_eq!(
-        authority.settle(
-            &pending,
-            &PairingDecision::Approve,
-            &ts(AFTER_WINDOW)
-        ),
+        authority.settle(&pending, &PairingDecision::Approve, &ts(AFTER_WINDOW)),
         Err(PairingError::Expired)
     );
 }
@@ -394,11 +389,7 @@ fn approved_pairing_is_not_terminated_after_restart() {
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
     authority
-        .settle(
-            &pending,
-            &PairingDecision::Approve,
-            &ts(CREATED),
-        )
+        .settle(&pending, &PairingDecision::Approve, &ts(CREATED))
         .expect("批准必须成功");
     // 已批准（终态）的配对不在「重启后不可恢复」集合里。
     let approved = approved_record(&pending);
@@ -493,11 +484,7 @@ fn first_authentication_consumes_the_approved_pairing_once() {
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
     authority
-        .settle(
-            &pending,
-            &PairingDecision::Approve,
-            &ts(CREATED),
-        )
+        .settle(&pending, &PairingDecision::Approve, &ts(CREATED))
         .expect("批准必须成功");
     // 置位发生在**提交成功之后**（design D3）：在置位之前，本用例必须先证明「内存不超前」。
     assert_eq!(
@@ -551,11 +538,7 @@ fn approved_pairing_keeps_its_material_until_first_auth() {
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
     let settlement = authority
-        .settle(
-            &pending,
-            &PairingDecision::Approve,
-            &ts(CREATED),
-        )
+        .settle(&pending, &PairingDecision::Approve, &ts(CREATED))
         .expect("批准必须成功");
     assert!(settlement.is_approved());
     assert!(
@@ -632,11 +615,7 @@ fn approved_secret_is_cleared_at_expiry_even_if_never_authenticated() {
     let authority = &created.authority;
     let pending = pending_record(&created.draft.record);
     authority
-        .settle(
-            &pending,
-            &PairingDecision::Approve,
-            &ts(CREATED),
-        )
+        .settle(&pending, &PairingDecision::Approve, &ts(CREATED))
         .expect("批准必须成功");
     let approved = approved_record(&pending);
     // `Approved` 不是终态（core 的终态为 rejected/expired/consumed），因此它会被返回、
@@ -849,7 +828,6 @@ fn node_spec() -> PairingSpec {
         kind: NodeKind::Owner,
     }
 }
-
 
 /// 一个已创建的 Node Link 配对（对端将是 Access Node）。
 fn create_node_pairing() -> Created {

@@ -1024,7 +1024,11 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     insert_audit_row(&pool, 1, "node.paired", "node", FIXTURE_NODE)
         .await
         .expect("seed a node.paired audit row");
-    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
+    for column in [
+        "agent_session_id",
+        "workspace_cwd",
+        "workspace_directory_id",
+    ] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -1199,7 +1203,11 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
                 "owned_node 必须删除授权列：{after}"
             ),
             "owned_session" => {
-                for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
+                for column in [
+                    "agent_session_id",
+                    "workspace_cwd",
+                    "workspace_directory_id",
+                ] {
                     assert!(
                         after.contains(column),
                         "owned_session 必须带上追加列 {column}：{after}"
@@ -1260,7 +1268,11 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     .execute(&pool)
     .await
     .expect("seed a session row without the recovery columns");
-    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
+    for column in [
+        "agent_session_id",
+        "workspace_cwd",
+        "workspace_directory_id",
+    ] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -1292,7 +1304,11 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         .expect("checkpoint");
 
     assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 4);
-    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
+    for column in [
+        "agent_session_id",
+        "workspace_cwd",
+        "workspace_directory_id",
+    ] {
         assert!(
             !column_names(&pool, "owned_session")
                 .await
@@ -1422,7 +1438,11 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         let after = table_ddl(&pool, table).await;
         match table {
             "owned_session" => {
-                for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
+                for column in [
+                    "agent_session_id",
+                    "workspace_cwd",
+                    "workspace_directory_id",
+                ] {
                     assert!(
                         after.contains(column),
                         "owned_session 必须带上追加列 {column}：{after}"
@@ -2158,18 +2178,25 @@ async fn v10_to_v11_drops_export_import_and_merges_imported_sessions() {
     store.close().await;
 
     let pool = raw_pool(&path).await;
-    assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, FILE_FORMAT_VERSION);
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        FILE_FORMAT_VERSION
+    );
     for table in ["owned_export", "imported_import", "imported_import_export"] {
         assert!(!table_exists(&pool, table).await, "{table} must be dropped");
     }
     for column in ["grants_json", "export_ids_json"] {
         assert!(
-            !column_names(&pool, "owned_node").await.contains(&column.to_owned()),
+            !column_names(&pool, "owned_node")
+                .await
+                .contains(&column.to_owned()),
             "owned_node.{column} must be dropped"
         );
     }
     assert!(
-        !column_names(&pool, "imported_session").await.contains(&"export_id".to_owned()),
+        !column_names(&pool, "imported_session")
+            .await
+            .contains(&"export_id".to_owned()),
         "imported_session.export_id must be dropped"
     );
     assert_eq!(
@@ -2259,8 +2286,14 @@ async fn v9_to_v10_drops_the_agent_and_provider_tables_and_records_the_count() {
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
     )
     .await;
-    assert!(!tables.iter().any(|name| name == "owned_agent_profile"), "{tables:?}");
-    assert!(!tables.iter().any(|name| name == "owned_provider_ref"), "{tables:?}");
+    assert!(
+        !tables.iter().any(|name| name == "owned_agent_profile"),
+        "{tables:?}"
+    );
+    assert!(
+        !tables.iter().any(|name| name == "owned_provider_ref"),
+        "{tables:?}"
+    );
     let audit_rows = scalar_i64(&pool, "SELECT COUNT(*) FROM owned_audit").await;
     assert!(audit_rows >= 0, "审计表仍可读");
     pool.close().await;

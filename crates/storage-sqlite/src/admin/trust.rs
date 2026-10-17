@@ -24,8 +24,9 @@ use sqlx::sqlite::SqliteRow;
 
 use acp_core::model::PairingSettlement;
 use acp_core::model::{
-    Actor, ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, NodeId, NodeKind, NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState,
-    PairingTarget, PeerIdentity, PeerPublicKey, PortError, Timestamp,
+    Actor, ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, NodeId, NodeKind,
+    NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState, PairingTarget,
+    PeerIdentity, PeerPublicKey, PortError, Timestamp,
 };
 use acp_core::ports::{
     DeviceRevocation, DeviceWrite, ExpiryWrite, NodeConnectedWrite, NodeRevocation, NodeWrite,

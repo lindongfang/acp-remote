@@ -6,8 +6,8 @@
 mod support;
 
 use acp_core::model::{
-    Digest, EntityRef, EventId, EventType, LocalCursor, NodeId, OriginCursor, OriginEpoch, PortError,
-    Sequence, SessionId, Timestamp,
+    Digest, EntityRef, EventId, EventType, LocalCursor, NodeId, OriginCursor, OriginEpoch,
+    PortError, Sequence, SessionId, Timestamp,
 };
 use acp_core::ports::{
     DeliveryReceipt, ImportedSessionQuery, RemoteDeliveryStore, ReplayLimit, RetentionPolicy,

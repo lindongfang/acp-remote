@@ -185,8 +185,16 @@ async fn v8_database_upgrades_to_v9_and_backfills_directory_ids() {
     assert_eq!(directories.len(), 2, "同路径的两个别名合并为一条目录行");
     let shared_id = directory_id(&shared);
     let orphan_id = directory_id(&orphan);
-    assert!(directories.iter().any(|record| record.directory_id() == &shared_id));
-    assert!(directories.iter().any(|record| record.directory_id() == &orphan_id));
+    assert!(
+        directories
+            .iter()
+            .any(|record| record.directory_id() == &shared_id)
+    );
+    assert!(
+        directories
+            .iter()
+            .any(|record| record.directory_id() == &orphan_id)
+    );
 
     let summaries = store
         .list(SessionQuery {
@@ -216,8 +224,18 @@ async fn v8_database_upgrades_to_v9_and_backfills_directory_ids() {
     store.close().await;
 
     let pool = raw_pool(&path).await;
-    assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, FILE_FORMAT_VERSION);
-    assert_eq!(meta_rows(&pool).await.iter().find(|(key, _)| key == "owned_schema_version").map(|(_, value)| value.as_str()), Some(OWNED_SCHEMA_VERSION.to_string().as_str()));
+    assert_eq!(
+        scalar_i64(&pool, "PRAGMA user_version").await,
+        FILE_FORMAT_VERSION
+    );
+    assert_eq!(
+        meta_rows(&pool)
+            .await
+            .iter()
+            .find(|(key, _)| key == "owned_schema_version")
+            .map(|(_, value)| value.as_str()),
+        Some(OWNED_SCHEMA_VERSION.to_string().as_str())
+    );
     assert!(
         !schema_sql(&pool)
             .await
@@ -317,7 +335,10 @@ async fn the_written_directory_id_round_trips_verbatim_and_an_unwritten_row_stay
     store.close().await;
 
     let pool = raw_pool(&path).await;
-    assert_eq!(quoted_directory(&pool, session.as_str()).await, format!("'{identifier}'"));
+    assert_eq!(
+        quoted_directory(&pool, session.as_str()).await,
+        format!("'{identifier}'")
+    );
     pool.close().await;
 }
 
@@ -371,7 +392,10 @@ async fn a_mode_change_commit_also_persists_the_workspace_directory_id() {
         .expect("重开");
     let snapshot = store.load(&session).await.expect("读取").expect("会话存在");
     assert_eq!(
-        snapshot.session.current_mode().map(|mode| mode.mode_id().as_str()),
+        snapshot
+            .session
+            .current_mode()
+            .map(|mode| mode.mode_id().as_str()),
         Some("code")
     );
     let workspace = store
@@ -392,10 +416,16 @@ async fn a_mode_change_commit_also_persists_the_workspace_directory_id() {
         .expect("窄读取")
         .expect("两列都已写入");
     assert_eq!(
-        recovery.agent_session_id.as_ref().map(AgentSessionId::as_str),
+        recovery
+            .agent_session_id
+            .as_ref()
+            .map(AgentSessionId::as_str),
         Some("acp-session-1")
     );
-    assert_eq!(recovery.workspace_cwd.as_deref(), Some(absolute_path("set-mode").as_str()));
+    assert_eq!(
+        recovery.workspace_cwd.as_deref(),
+        Some(absolute_path("set-mode").as_str())
+    );
     store.close().await;
 
     let pool = raw_pool(&path).await;

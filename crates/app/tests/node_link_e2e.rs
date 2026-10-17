@@ -80,10 +80,7 @@ fn tls_direct_terminates_the_same_handshake() {
 
         // ② 本地确认 + status approved。
         owner
-            .admin(
-                Method::NodePairConfirm,
-                json!({ "pairingId": pairing_id }),
-            )
+            .admin(Method::NodePairConfirm, json!({ "pairingId": pairing_id }))
             .await;
         let status = support::nodelink::status_request(
             &ticket,
@@ -394,11 +391,9 @@ fn ac1_the_composition_root_persists_node_level_events_without_session_identity(
         let agent =
             AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
         let path = data_dir.display().to_string();
-        let workspace = ResolvedWorkspace::try_new(
-            acp_core::model::derive_directory_id(&path),
-            path,
-        )
-        .expect("workspace");
+        let workspace =
+            ResolvedWorkspace::try_new(acp_core::model::derive_directory_id(&path), path)
+                .expect("workspace");
         let request =
             CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
         let request_id = composition.ids().request_id();
@@ -588,11 +583,8 @@ async fn ac1_prompt_once(
     let agent =
         AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
     let path = data_dir.display().to_string();
-    let workspace = ResolvedWorkspace::try_new(
-        acp_core::model::derive_directory_id(&path),
-        path,
-    )
-    .expect("workspace");
+    let workspace = ResolvedWorkspace::try_new(acp_core::model::derive_directory_id(&path), path)
+        .expect("workspace");
     let request = CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
     let session = ac1_create_and_settle(
         composition,

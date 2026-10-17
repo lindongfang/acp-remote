@@ -16,9 +16,7 @@ use acp_core::ports::{AgentCatalog, SessionBackendFactory, SessionEndpoint};
 use agent_host::{
     AgentHost, HostConfig, limits, runtime_generation, runtime_running, spawn_idle_sweep,
 };
-use support::{
-    Collector, FAKE_AGENT, TestClock, TestIds, profile_with,
-};
+use support::{Collector, FAKE_AGENT, TestClock, TestIds, profile_with};
 
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
@@ -236,7 +234,6 @@ async fn availability_is_per_entry() {
         .collect();
     assert!(availability.contains(&("agent-good".to_owned(), true)));
     assert!(availability.contains(&("agent-missing".to_owned(), false)));
-
 }
 
 /// spawn 本身失败（profile 指向的程序不存在）：必须是**明确的不可用类**错误，且不留任何副作用。
@@ -246,13 +243,11 @@ async fn availability_is_per_entry() {
 /// 「进程无法启动时返回明确不可用」的三个可观察结果。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
-    let host = host(
-        vec![profile_with(
-            "agent-missing",
-            "acpr-does-not-exist-anywhere",
-            &["--scenario", "normal"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-missing",
+        "acpr-does-not-exist-anywhere",
+        &["--scenario", "normal"],
+    )]);
     let agent = AgentId::new("agent-missing").expect("id");
     let session = SessionId::new(SESSION).expect("session");
     let collector = Collector::new();
@@ -353,7 +348,6 @@ async fn child_environment_is_exactly_the_launch_spec() {
     let _ = std::fs::remove_file(&dump);
 }
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_reclaim_needs_timeout_and_never_fires_for_zero() {
     let (profile, dump) = dumping_profile("agent-1", "idle");
@@ -401,13 +395,11 @@ async fn idle_reclaim_needs_timeout_and_never_fires_for_zero() {
 /// 白名单是注入上限：端口即使返回了白名单外的变量，也必须在 spawn 之前失败关闭。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_reclaim_also_applies_to_processes_without_sessions() {
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "normal"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "normal"],
+    )]);
     let agent = AgentId::new("agent-1").expect("id");
     let _ = host
         .agent_capabilities(&agent_ref("agent-1"))
@@ -823,13 +815,11 @@ async fn open_unknown_session_is_an_explicit_error() {
 /// 进程已退出、运行时还留在目录里的窗口：`open` 不得把死 supervisor 当成活跃端点复活。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn open_refuses_a_runtime_whose_process_has_exited() {
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "crash-on-prompt"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "crash-on-prompt"],
+    )]);
     let agent = AgentId::new("agent-1").expect("id");
     let session = SessionId::new(SESSION).expect("session");
     let endpoint = create(&host, "agent-1", &session, &Collector::new())
@@ -963,8 +953,6 @@ async fn idle_sweep_task_converges_on_shutdown_all() {
     let _ = handle.await;
     let _ = std::fs::remove_file(&dump);
 }
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminate_agent_ends_the_runtime_and_the_next_create_spawns_a_new_generation() {

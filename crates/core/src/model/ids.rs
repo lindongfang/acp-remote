@@ -149,7 +149,6 @@ fn check_uuid(text: &str) -> Result<(), InvalidValue> {
     }
 }
 
-
 fn check_directory_id(text: &str) -> Result<(), InvalidValue> {
     if text.len() == 32
         && text

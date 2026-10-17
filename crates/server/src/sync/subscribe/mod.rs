@@ -61,7 +61,6 @@ pub mod cursor;
 pub mod event;
 pub mod fanout;
 
-
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 

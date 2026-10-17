@@ -23,15 +23,14 @@ use crate::model::{
     AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
     CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
     ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType,
-    GlobalCursor, InteractionId, InteractionResolution,
-    LocalCursor, MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
-    OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
-    PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
-    PromptRequest, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest,
-    Sequence, ServerEpoch, SessionId, SessionRecoveryRecord,
-    SessionReference, SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId,
-    TurnState, Version, DirectoryId, DirectoryRecord,
+    Digest, DirectoryId, DirectoryRecord, EndpointEvent, EntityRef, EventId, EventOrigin,
+    EventPayload, EventType, GlobalCursor, InteractionId, InteractionResolution, LocalCursor,
+    MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor, OriginEpoch,
+    OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement,
+    PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError, PromptRequest,
+    PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest, Sequence, ServerEpoch,
+    SessionId, SessionRecoveryRecord, SessionReference, SessionSnapshot, SessionState,
+    SessionSummary, Timestamp, Turn, TurnId, TurnState, Version,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -1125,8 +1124,10 @@ pub trait TrustStore: Send + Sync {
 pub trait LocalConfigStore: Send + Sync {
     async fn directories(&self) -> Result<Vec<DirectoryRecord>, PortError>;
 
-    async fn directory(&self, directory_id: &DirectoryId)
-    -> Result<Option<DirectoryRecord>, PortError>;
+    async fn directory(
+        &self,
+        directory_id: &DirectoryId,
+    ) -> Result<Option<DirectoryRecord>, PortError>;
 }
 
 /// 审计查询条件；`actions` 为空 = 不按动作过滤。

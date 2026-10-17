@@ -20,8 +20,7 @@
 use std::sync::Arc;
 
 use acp_core::model::{
-    DeviceId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey,
-    Timestamp,
+    DeviceId, NodeId, PairingId, PairingPeer, PairingRecord, PairingState, PeerPublicKey, Timestamp,
 };
 use base64::Engine as _;
 use identity_auth::{
@@ -60,7 +59,6 @@ pub trait ConnectionCloser: Send + Sync {
     /// 这不是撤销：该节点仍然 paired，对端应当重连并在新连接上重取 catalog，因此实现**不得**推送
     /// `node.trust.revoked`、也不得以 4410 关闭（见 trait 文档）。
     async fn close_node_after_reauth(&self, node: &NodeId);
-
 }
 
 /// 没有连接表时的 no-op 实现（测试替身与未装配连接表时的默认值；生产装配在组合根给出真实实现）。
@@ -222,7 +220,6 @@ impl PairingSessions {
     pub async fn close_node_after_reauth(&self, node: &NodeId) {
         self.closer.close_node_after_reauth(node).await;
     }
-
 }
 
 impl std::fmt::Debug for PairingSessions {

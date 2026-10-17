@@ -6,18 +6,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use acp_core::model::{
-    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest,
-    InteractionResolution, NodeId, OriginEpoch, OwnedSessionRef, PermissionDecision,
-    PermissionDecisionKind, PortError, PromptContentBlock, RemoteSessionRef, ResourceOrigin,
-    ResumeSessionRequest, SessionId, SessionReference, UnavailableKind,
+    AgentId, AgentProfile, AgentRef, AgentSessionId, CreateSessionRequest, InteractionResolution,
+    NodeId, OriginEpoch, OwnedSessionRef, PermissionDecision, PermissionDecisionKind, PortError,
+    PromptContentBlock, RemoteSessionRef, ResourceOrigin, ResumeSessionRequest, SessionId,
+    SessionReference, UnavailableKind,
 };
 use acp_core::ports::{AgentCatalog, SessionBackendFactory, SessionEndpoint};
 use agent_host::runtime_running;
 use agent_host::{AgentHost, HostConfig, NodeEventError};
 use serde_json::Value;
 use support::{
-    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, digest_of,
-    profile, profile_with,
+    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, digest_of, profile, profile_with,
 };
 
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
@@ -165,13 +164,11 @@ fn assert_raw_fidelity(event: &acp_core::model::EndpointEvent) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn updates_are_mapped_with_structured_content_and_raw_fidelity() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "chunked-updates"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "chunked-updates"],
+    )]);
     let endpoint = create(&host, SESSION, &collector).await;
     endpoint
         .prompt(prompt("你好"), support::timestamp())
@@ -305,13 +302,11 @@ async fn turn_terminal_event_is_produced_exactly_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prompt_is_accepted_immediately_and_turn_completes_later() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "no-response"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "no-response"],
+    )]);
     let endpoint = create(&host, SESSION, &collector).await;
     let accepted = tokio::time::timeout(
         Duration::from_secs(2),
@@ -339,13 +334,11 @@ async fn prompt_is_accepted_immediately_and_turn_completes_later() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cancel_finishes_only_its_own_turn_and_releases_the_session() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "no-response"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "no-response"],
+    )]);
     let first = create(&host, SESSION, &collector).await;
     let second = create(&host, OTHER_SESSION, &collector).await;
     first
@@ -382,13 +375,11 @@ async fn cancel_finishes_only_its_own_turn_and_releases_the_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permission_request_waits_for_external_resolution_and_returns_the_same_option() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "permission-request"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "permission-request"],
+    )]);
     let endpoint = create(&host, SESSION, &collector).await;
     endpoint
         .prompt(prompt("改文件"), support::timestamp())
@@ -462,13 +453,11 @@ async fn permission_request_waits_for_external_resolution_and_returns_the_same_o
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn elicitation_is_delivered_and_resolved_without_auto_answering() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "elicitation"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "elicitation"],
+    )]);
     let endpoint = create(&host, SESSION, &collector).await;
     endpoint
         .prompt(prompt("请提问"), support::timestamp())
@@ -511,18 +500,16 @@ async fn capabilities_are_negotiated_truthfully_and_gate_unsupported_calls() {
     assert!(capabilities.is_empty(), "未宣告任何能力时必须是空集合");
 
     // 宣告了能力：只放进真正宣告的路径。
-    let declared = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "normal",
-                "--capabilities",
-                "{\"loadSession\":true,\"promptCapabilities\":{\"image\":true}}",
-            ],
-        )],
-    );
+    let declared = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "normal",
+            "--capabilities",
+            "{\"loadSession\":true,\"promptCapabilities\":{\"image\":true}}",
+        ],
+    )]);
     let capabilities = declared
         .agent_capabilities(&agent_ref())
         .await
@@ -652,13 +639,11 @@ async fn session_mapping_covers_create_open_and_unknown_references() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_failed_is_reported_once_when_the_agent_crashes_mid_turn() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "crash-on-prompt"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "crash-on-prompt"],
+    )]);
     let endpoint = create(&host, CRASH_SESSION, &collector).await;
     endpoint
         .prompt(prompt("会崩"), support::timestamp())
@@ -691,19 +676,17 @@ async fn turn_failed_is_reported_once_when_the_agent_crashes_mid_turn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn undeclared_capability_is_refused_without_sending_anything() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "normal",
-                "--no-modes",
-                "--no-config-options",
-                "--exit-on-config-write",
-            ],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "normal",
+            "--no-modes",
+            "--no-config-options",
+            "--exit-on-config-write",
+        ],
+    )]);
     let endpoint = create(&host, GATE_SESSION, &collector).await;
     let agent = AgentId::new("agent-1").expect("id");
     // 未宣告模式：返回空结果（不编造候选），且 set_mode 显式拒绝。
@@ -734,13 +717,11 @@ async fn undeclared_capability_is_refused_without_sending_anything() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unknown_content_block_stays_structured() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "unknown-content-block"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "unknown-content-block"],
+    )]);
     let endpoint = create(&host, BLOCK_SESSION, &collector).await;
     endpoint
         .prompt(prompt("未来块"), support::timestamp())
@@ -816,13 +797,11 @@ const STDERR_NOISE_MARKER: &str = "ACPR-STDERR-PROTOCOL-NOISE-MARKER";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stderr_protocol_messages_never_reach_the_endpoint() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "stderr-protocol-noise"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "stderr-protocol-noise"],
+    )]);
     let endpoint = create(&host, OTHER_SESSION, &collector).await;
     // ① 请求本身成功（stderr 噪声不得拦住 stdout 上的正常路径）。
     endpoint
@@ -894,13 +873,11 @@ async fn create_exposes_the_acp_session_id_verbatim() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_session_new_yields_no_endpoint_and_no_identifier() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "session-new-error"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "session-new-error"],
+    )]);
     let error = outcome_error(
         host.create(
             &session_id(SESSION),
@@ -942,20 +919,18 @@ async fn resume_restores_an_interactive_endpoint_when_the_capability_is_declared
     let collector = Collector::new();
     let dumps = TempFile::new("acpr-fake-acp-resume.requests");
     let dump_path = dumps.to_string_lossy().into_owned();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "resume-ok",
-                "--capabilities",
-                "{\"sessionCapabilities\":{\"resume\":{}}}",
-                "--dump-requests",
-                &dump_path,
-            ],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "resume-ok",
+            "--capabilities",
+            "{\"sessionCapabilities\":{\"resume\":{}}}",
+            "--dump-requests",
+            &dump_path,
+        ],
+    )]);
     let session = session_id(RESUME_SESSION);
     let endpoint = host
         .resume(
@@ -1010,20 +985,18 @@ async fn undeclared_resume_capability_is_refused_without_sending_the_request() {
     let heartbeat = TempFile::new("acpr-fake-acp-undeclared-resume.heartbeat");
     let dump_path = dumps.to_string_lossy().into_owned();
     let heartbeat_path = heartbeat.to_string_lossy().into_owned();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "normal",
-                "--heartbeat-file",
-                &heartbeat_path,
-                "--dump-requests",
-                &dump_path,
-            ],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "normal",
+            "--heartbeat-file",
+            &heartbeat_path,
+            "--dump-requests",
+            &dump_path,
+        ],
+    )]);
     let error = outcome_error(
         host.resume(
             &session_id(RESUME_REFUSED_SESSION),
@@ -1090,22 +1063,20 @@ async fn agent_refusal_of_resume_fails_explicitly() {
     let heartbeat = TempFile::new("acpr-fake-acp-resume-error.heartbeat");
     let dump_path = dumps.to_string_lossy().into_owned();
     let heartbeat_path = heartbeat.to_string_lossy().into_owned();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "resume-error",
-                "--capabilities",
-                "{\"sessionCapabilities\":{\"resume\":{}}}",
-                "--heartbeat-file",
-                &heartbeat_path,
-                "--dump-requests",
-                &dump_path,
-            ],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "resume-error",
+            "--capabilities",
+            "{\"sessionCapabilities\":{\"resume\":{}}}",
+            "--heartbeat-file",
+            &heartbeat_path,
+            "--dump-requests",
+            &dump_path,
+        ],
+    )]);
     let error = outcome_error(
         host.resume(
             &session_id(RESUME_REFUSED_SESSION),
@@ -1157,18 +1128,16 @@ async fn agent_refusal_of_resume_fails_explicitly() {
 async fn repeated_resume_leaves_a_single_dispatching_binding() {
     let first = Collector::new();
     let second = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "resume-ok",
-                "--capabilities",
-                "{\"sessionCapabilities\":{\"resume\":{}}}",
-            ],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "resume-ok",
+            "--capabilities",
+            "{\"sessionCapabilities\":{\"resume\":{}}}",
+        ],
+    )]);
     let session = session_id(REPEATED_RESUME_SESSION);
     let request = resume_request("acp-session-restored", &persisted_workspace_cwd());
     let stale = host
@@ -1209,9 +1178,7 @@ async fn repeated_resume_leaves_a_single_dispatching_binding() {
 // -------------------------------------------------------------------------------------------
 
 /// 一个带节点级事件收集器的 host；收集器的 sink 在现场回读「运行时是否仍被当作在运行」。
-fn host_with_node_events(
-    profiles: Vec<AgentProfile>,
-) -> (Arc<AgentHost>, Collector) {
+fn host_with_node_events(profiles: Vec<AgentProfile>) -> (Arc<AgentHost>, Collector) {
     let node = Collector::new();
     let host = Arc::new(
         AgentHost::new(
@@ -1235,8 +1202,7 @@ async fn wait_for_node_event(collector: &Collector, event_type: &str) -> bool {
 /// 首次建立时上报一次连接；同一进程被多个会话复用**不得**产生第二条连接。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_process_reports_connect_once_and_reuse_adds_nothing() {
-    let (host, node) =
-        host_with_node_events(vec![profile("agent-1", FAKE_AGENT)]);
+    let (host, node) = host_with_node_events(vec![profile("agent-1", FAKE_AGENT)]);
 
     let first = Collector::new();
     let _endpoint = create(&host, SESSION, &first).await;
@@ -1281,18 +1247,16 @@ async fn profile_process_reports_connect_once_and_reuse_adds_nothing() {
 /// 后续复用不产生第二条。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capability_probe_spawn_reports_connect_once() {
-    let (host, node) = host_with_node_events(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &[
-                "--scenario",
-                "normal",
-                "--capabilities",
-                r#"{"loadSession":true}"#,
-            ],
-        )],
-    );
+    let (host, node) = host_with_node_events(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &[
+            "--scenario",
+            "normal",
+            "--capabilities",
+            r#"{"loadSession":true}"#,
+        ],
+    )]);
     let _ = host.agent_capabilities(&agent_ref()).await;
     assert!(wait_for_node_event(&node, "agent.connected").await);
     let _ = host.agent_capabilities(&agent_ref()).await;
@@ -1303,8 +1267,7 @@ async fn capability_probe_spawn_reports_connect_once() {
 /// 空闲回收终止进程时同样上报一次断开。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_reclaim_reports_disconnect_once() {
-    let (host, node) =
-        host_with_node_events(vec![profile("agent-1", FAKE_AGENT)]);
+    let (host, node) = host_with_node_events(vec![profile("agent-1", FAKE_AGENT)]);
     let collector = Collector::new();
     let _endpoint = create(&host, SESSION, &collector).await;
     assert!(wait_for_node_event(&node, "agent.connected").await);
@@ -1324,13 +1287,11 @@ async fn idle_reclaim_reports_disconnect_once() {
 /// 自然退出（Agent 自己结束）同样上报断开，且恰好一次。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn natural_exit_reports_disconnect_once() {
-    let (host, node) = host_with_node_events(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "crash-on-prompt"],
-        )],
-    );
+    let (host, node) = host_with_node_events(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "crash-on-prompt"],
+    )]);
     let collector = Collector::new();
     let endpoint = create(&host, SESSION, &collector).await;
     assert!(wait_for_node_event(&node, "agent.connected").await);
@@ -1364,13 +1325,11 @@ async fn natural_exit_reports_disconnect_once() {
 /// `runtime_running(...)` 必须不是 `true`（`true` 就是 spec 禁止的「已断开但仍被当作存活」窗口）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversize_exit_reports_disconnect_after_the_exit_verdict() {
-    let (host, node) = host_with_node_events(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "huge-line"],
-        )],
-    );
+    let (host, node) = host_with_node_events(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "huge-line"],
+    )]);
     let collector = Collector::new();
     let endpoint = create(&host, SESSION, &collector).await;
     assert!(
@@ -1416,13 +1375,11 @@ async fn oversize_exit_reports_disconnect_after_the_exit_verdict() {
 /// 未拒绝 `initialize` 的进程（协商失败即被回收）**不上报**连接，因此也不上报断开。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_initialize_reports_neither_connect_nor_disconnect() {
-    let (host, node) = host_with_node_events(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "initialize-error"],
-        )],
-    );
+    let (host, node) = host_with_node_events(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "initialize-error"],
+    )]);
     let collector = Collector::new();
     let result = host
         .create(
@@ -1490,13 +1447,11 @@ async fn unbound_node_events_are_visible_not_silently_dropped() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn typed_diff_elements_are_delivered_with_the_tool_call() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "chunked-updates"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "chunked-updates"],
+    )]);
     let endpoint = create(&host, SESSION, &collector).await;
     endpoint
         .prompt(prompt("编辑"), support::timestamp())
@@ -1576,13 +1531,11 @@ async fn typed_diff_elements_are_delivered_with_the_tool_call() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn diff_slice_is_byte_identical_and_acp_raw_matches_its_digest() {
     let collector = Collector::new();
-    let host = host(
-        vec![profile_with(
-            "agent-1",
-            FAKE_AGENT,
-            &["--scenario", "chunked-updates"],
-        )],
-    );
+    let host = host(vec![profile_with(
+        "agent-1",
+        FAKE_AGENT,
+        &["--scenario", "chunked-updates"],
+    )]);
     let endpoint = create(&host, SESSION, &collector).await;
     endpoint
         .prompt(prompt("编辑"), support::timestamp())

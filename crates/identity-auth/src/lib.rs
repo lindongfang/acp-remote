@@ -26,9 +26,9 @@ pub mod types;
 // 只依赖本 crate 就能写出 `IdentityKeystore`，而不需要为了签名类型反向依赖 `core`
 // （`docs/MODULE_ARCHITECTURE.md` §5 的依赖矩阵不允许 `identity-keystore -> core`）。
 pub use acp_core::model::{
-    AuditAction, DeviceId, Digest, Fingerprint, InvalidValue, NodeId, NodeKind, Nonce, PairingClaim,
-    PairingId, PairingPeer, PairingRecord, PairingSettlement, PairingState, PairingTarget,
-    PeerIdentity, PeerPublicKey, Timestamp,
+    AuditAction, DeviceId, Digest, Fingerprint, InvalidValue, NodeId, NodeKind, Nonce,
+    PairingClaim, PairingId, PairingPeer, PairingRecord, PairingSettlement, PairingState,
+    PairingTarget, PeerIdentity, PeerPublicKey, Timestamp,
 };
 
 pub use authority::Authority;

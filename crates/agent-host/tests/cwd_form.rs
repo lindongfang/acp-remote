@@ -28,8 +28,8 @@ use acp_core::ports::SessionBackendFactory;
 use agent_host::{AgentHost, HostConfig};
 use serde_json::{Value, json};
 use support::{
-    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, assert_param_keys,
-    dump_count, params_of, profile_with, wait_for_dumped_method,
+    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, assert_param_keys, dump_count, params_of,
+    profile_with, wait_for_dumped_method,
 };
 
 /// dump 文件由子进程**异步**写出：等到目标方法出现的上限取宽松值（慢机器上不闪红；真失败仍由断言兜住）。
@@ -47,9 +47,7 @@ const PERSISTED_ACP_SESSION: &str = "acp-session-cwd-form";
 
 fn host(agent_args: &[&str]) -> Arc<AgentHost> {
     Arc::new(AgentHost::new(
-        Arc::new(vec![profile_with(
-            "agent-1", FAKE_AGENT, agent_args,
-        )]),
+        Arc::new(vec![profile_with("agent-1", FAKE_AGENT, agent_args)]),
         HostConfig::default(),
         Arc::new(TestIds::new()),
         Arc::new(TestClock::new()),

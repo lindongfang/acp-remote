@@ -18,9 +18,7 @@ use acp_core::model::EndpointEvent;
 use acp_core::ports::SessionBackendFactory;
 use agent_host::{AgentHost, HostConfig};
 use serde_json::Value;
-use support::{
-    Collector, FAKE_AGENT, TestClock, TestIds, profile_with, timestamp,
-};
+use support::{Collector, FAKE_AGENT, TestClock, TestIds, profile_with, timestamp};
 
 /// §10.3 要求 `turnId`、且**由适配器产出**的事件类型 → 除 `turnId` 外的最低字段。
 const TURN_SCOPED: &[(&str, &[&str])] = &[

@@ -18,9 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use acp_core::model::{
-    Actor, DeviceId, NodeId, Nonce, PairingId, PeerIdentity, PeerPublicKey,
-};
+use acp_core::model::{Actor, DeviceId, NodeId, Nonce, PairingId, PeerIdentity, PeerPublicKey};
 use acp_core::ports::{AuditQuery, TrustRecordRef};
 use acp_core::use_cases::UseCases;
 use base64::Engine as _;
@@ -723,11 +721,7 @@ async fn approve_device(
         .expect("读配对")
         .expect("配对必须已落库");
     let settlement = authority
-        .settle(
-            &record,
-            &PairingDecision::Approve,
-            &authority.now(),
-        )
+        .settle(&record, &PairingDecision::Approve, &authority.now())
         .expect("批准配对");
     let reference = core
         .settle_pairing(&Actor::LocalCli, &pairing_id, settlement)

@@ -13,9 +13,7 @@
 //! - **feature 词表只有一个来源**：`compatibility/features/v1/features.json` 的 `node_link` 子集中
 //!   `delivery = mvp` 的五条（本切片实现），逐条常量在此登记并有契约测试比对。
 
-use acp_core::model::{
-    NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity,
-};
+use acp_core::model::{NodeId, NodeKind, NodeRecord, NodeState, PairingRecord, PeerIdentity};
 use acp_core::use_cases::NodeLinkHandshakeView;
 use identity_auth::{ConnectionBinding, CredentialStatus, FeatureList, NodeEndpoint, PeerTrust};
 use node_link_protocol::common::{FeatureId, FeatureList as WireFeatureList};
