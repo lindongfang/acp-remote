@@ -22,7 +22,7 @@
 mod support;
 
 use acp_core::model::{
-    Actor, AuditAction, AuditOutcome, AuditRecord, DeviceId, Digest, EntityRef, ExportId, ImportId,
+    Actor, AuditAction, AuditOutcome, AuditRecord, DeviceId, Digest, EntityRef,
     InteractionId, NodeId, PairingId, PortError, RequestId, SessionId, Timestamp, TurnId,
     UnavailableKind,
 };
@@ -144,7 +144,7 @@ async fn watermark_is_monotonic_across_retention_cleanup() {
             .append(cli_record(
                 at_text,
                 AuditAction::ExportCreated,
-                EntityRef::Export(ExportId::new(EXPORT).expect("export id")),
+                EntityRef::Export(EXPORT.to_owned()),
             ))
             .await
             .expect("append audit");
@@ -236,8 +236,8 @@ async fn every_target_kind_round_trips() {
         EntityRef::Pairing(PairingId::new(PAIRING).expect("pairing id")),
         EntityRef::Device(DeviceId::new(DEVICE).expect("device id")),
         EntityRef::Node(node_id()),
-        EntityRef::Export(ExportId::new(EXPORT).expect("export id")),
-        EntityRef::Import(ImportId::new(IMPORT).expect("import id")),
+        EntityRef::Export(EXPORT.to_owned()),
+        EntityRef::Import(IMPORT.to_owned()),
         EntityRef::Provider("openai.primary".to_owned()),
     ];
     for target in &targets {
@@ -512,8 +512,8 @@ async fn actor_and_target_filters_match_the_stored_columns() {
 #[tokio::test]
 async fn combined_filters_and_limit_compose_as_a_conjunction() {
     let (_dir, store) = open("audit-combined-filters").await;
-    let export = EntityRef::Export(ExportId::new(EXPORT).expect("export id"));
-    let other_export = EntityRef::Export(ExportId::new("export-two").expect("export id"));
+    let export = EntityRef::Export(EXPORT.to_owned());
+    let other_export = EntityRef::Export("export-two".to_owned());
     let node_actor = Actor::Node {
         node: node_id(),
         access_node: access_node_id(),

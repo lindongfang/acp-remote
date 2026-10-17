@@ -19,11 +19,11 @@ use crate::error::StorageError;
 /// §7.2：`PRAGMA user_version` = 文件格式版本（v9：目录标识与 `owned_directory` 表；v8 的
 /// `owned_device.scopes_json` 删除、v7 的 `owned_event.origin_kind` 第五取值、v6 的目录归属列与
 /// v5 的两列保持不变）。
-pub const FILE_FORMAT_VERSION: i64 = 10;
+pub const FILE_FORMAT_VERSION: i64 = 11;
 /// §7.2：`meta.owned_schema_version` 的已知版本（v9 新增 `owned_directory` 并改目录归属列语义）。
-pub const OWNED_SCHEMA_VERSION: i64 = 10;
+pub const OWNED_SCHEMA_VERSION: i64 = 11;
 /// §7.2：`meta.imported_schema_version` 的已知版本（v5–v8 都只动 owned 家族）。
-pub const IMPORTED_SCHEMA_VERSION: i64 = 3;
+pub const IMPORTED_SCHEMA_VERSION: i64 = 4;
 
 /// §7.1：单文件 `<data_dir>/acp-remote.sqlite3`。
 pub const DATABASE_FILE: &str = "acp-remote.sqlite3";
@@ -224,14 +224,12 @@ CREATE TABLE IF NOT EXISTS owned_node (
   kind           TEXT NOT NULL CHECK (kind IN ('access','owner')),
   display_name   TEXT NOT NULL,
   fingerprint    TEXT NOT NULL,
-  grants_json    TEXT NOT NULL,                -- LOCAL_ADMIN_PROTOCOL.md §5.4 的 grants[]
   state          TEXT NOT NULL CHECK (state IN ('pending','paired','revoked')),
   owner_endpoint TEXT,                         -- 仅 kind = 'owner' 非空
   created_at     TEXT NOT NULL,
   last_connected_at TEXT,
   revoked_at     TEXT,
   revoke_reason  TEXT CHECK (revoke_reason IN ('user_requested','key_changed','compromised')),
-  export_ids_json TEXT NOT NULL DEFAULT '[]',  -- LOCAL_ADMIN_PROTOCOL.md §5.4 的 exportIds[]
   PRIMARY KEY (node_id, kind),
   CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
   CHECK ((kind = 'owner') = (owner_endpoint IS NOT NULL)),
@@ -258,8 +256,6 @@ CREATE TABLE IF NOT EXISTS owned_pairing (
   target_kind         TEXT NOT NULL CHECK (target_kind IN ('device','node')),
   state               TEXT NOT NULL CHECK (state IN ('created','claimed','pending_confirmation','approved','rejected','expired','consumed')),
   display_name        TEXT,
-  requested_scopes_json TEXT NOT NULL,
-  requested_grants_json TEXT NOT NULL,
   secret_digest       TEXT NOT NULL,
   host_binding        TEXT NOT NULL,           -- 设备：canonical origin；节点：owner endpoint
   created_at          TEXT NOT NULL,
@@ -269,10 +265,7 @@ CREATE TABLE IF NOT EXISTS owned_pairing (
   terminal_at         TEXT,
   CHECK ((state = 'created') = (claimed_at IS NULL)),
   CHECK ((state IN ('approved','consumed')) = (approved_at IS NOT NULL)),
-  CHECK ((state IN ('rejected','expired','consumed')) = (terminal_at IS NOT NULL)),
-  -- 设备配对不对带 grants、节点配对不得带 scopes（§3.5）；空集合固定写 '[]'
-  CHECK (target_kind <> 'device' OR requested_grants_json = '[]'),
-  CHECK (target_kind <> 'node'   OR requested_scopes_json = '[]')
+  CHECK ((state IN ('rejected','expired','consumed')) = (terminal_at IS NOT NULL))
 ) STRICT;
 
 -- 每个配对最多一个 peer；claim 之后不能换人（配对行条件更新与唯一主键共同保证）。
@@ -289,19 +282,6 @@ CREATE TABLE IF NOT EXISTS owned_pairing_peer (
   CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*')
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS owned_export (
-  export_id        TEXT PRIMARY KEY,
-  display_name     TEXT NOT NULL,
-  agent_ids_json   TEXT NOT NULL,              -- Export 内 Agent selector；首切片恰好 1 项
-  aliases_json     TEXT NOT NULL,              -- [{alias,displayName}]
-  default_alias    TEXT NOT NULL,
-  templates_json   TEXT NOT NULL,              -- ExportTemplate[]
-  default_template TEXT NOT NULL,
-  scopes_json      TEXT NOT NULL,              -- grant.* 子集
-  cache_policy     TEXT NOT NULL CHECK (cache_policy = 'no-content-cache'),
-  created_at       TEXT NOT NULL,
-  revoked_at       TEXT
-) STRICT;
 -- 路径不进入 Node Link catalog（§11.1）：它只随 Sync 快照的 `workspaces` 条目下发（已记录目录的
 -- 规范化路径），命令行日志、审计记录与错误 details 仍不含路径。
 CREATE TABLE IF NOT EXISTS owned_directory (
@@ -317,21 +297,8 @@ CREATE TABLE IF NOT EXISTS owned_directory (
 /// 列集合是合同冻结的**黄金列清单**：`tests/imported.rs` 用 `PRAGMA table_info` 与之逐项比对
 /// （`owned_audit`/`imported_audit` 的列清单在 `tests/commit.rs`），新增列即失败（§9.6/§9.14）。
 pub const IMPORTED_SCHEMA_V1: &str = r#"
-CREATE TABLE IF NOT EXISTS imported_import (
-  import_id     TEXT PRIMARY KEY,
-  owner_node_id TEXT NOT NULL,
-  display_name  TEXT,
-  endpoint_ref  TEXT,
-  cache_policy  TEXT NOT NULL CHECK (cache_policy = 'no-content-cache'),
-  owner_server_epoch TEXT,
-  created_at    TEXT NOT NULL,
-  removed_at    TEXT,
-  grants_json   TEXT NOT NULL                -- grant.* 子集；无可信来源时写 '[]'（该 Import 保持不可用）
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS imported_session (
   owner_node_id  TEXT NOT NULL,
-  export_id      TEXT NOT NULL,
   session_id     TEXT NOT NULL,
   title          TEXT,
   agent_id       TEXT, agent_name TEXT,
@@ -346,12 +313,11 @@ CREATE TABLE IF NOT EXISTS imported_session (
   attachment_id TEXT,
   attachment_generation INTEGER,
   updated_at     TEXT NOT NULL,
-  PRIMARY KEY (owner_node_id, export_id, session_id)
+  PRIMARY KEY (owner_node_id, session_id)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imported_delivery_index (
   owner_node_id   TEXT NOT NULL,
-  export_id       TEXT NOT NULL,
   session_id      TEXT NOT NULL,
   origin_event_id TEXT NOT NULL,
   origin_epoch    TEXT NOT NULL,
@@ -360,25 +326,25 @@ CREATE TABLE IF NOT EXISTS imported_delivery_index (
   event_type      TEXT NOT NULL,
   payload_digest  TEXT NOT NULL,
   received_at     TEXT NOT NULL,
-  PRIMARY KEY (owner_node_id, export_id, session_id, origin_event_id),
-  UNIQUE (owner_node_id, export_id, session_id, local_sequence),
-  UNIQUE (owner_node_id, export_id, session_id, origin_epoch, origin_sequence),
-  FOREIGN KEY (owner_node_id, export_id, session_id)
-    REFERENCES imported_session(owner_node_id, export_id, session_id) ON DELETE CASCADE
+  PRIMARY KEY (owner_node_id, session_id, origin_event_id),
+  UNIQUE (owner_node_id, session_id, local_sequence),
+  UNIQUE (owner_node_id, session_id, origin_epoch, origin_sequence),
+  FOREIGN KEY (owner_node_id, session_id)
+    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imported_command_ref (
-  owner_node_id  TEXT NOT NULL, export_id TEXT NOT NULL, session_id TEXT NOT NULL,
+  owner_node_id  TEXT NOT NULL, session_id TEXT NOT NULL,
   request_id     TEXT NOT NULL,
   command        TEXT NOT NULL,
   status         TEXT NOT NULL CHECK (status IN ('accepted','completed','failed','rejected','uncertain')),
   accepted_at    TEXT,
   terminal_at    TEXT, terminal_event_id TEXT,
   error_code     TEXT, retryable INTEGER,
-  PRIMARY KEY (owner_node_id, export_id, session_id, request_id),
+  PRIMARY KEY (owner_node_id, session_id, request_id),
   CHECK (status = 'rejected' OR accepted_at IS NOT NULL),
-  FOREIGN KEY (owner_node_id, export_id, session_id)
-    REFERENCES imported_session(owner_node_id, export_id, session_id) ON DELETE CASCADE
+  FOREIGN KEY (owner_node_id, session_id)
+    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS imported_audit (
@@ -401,16 +367,6 @@ CREATE TABLE IF NOT EXISTS imported_audit (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 
--- v1 的 imported_import.export_id 与 UNIQUE (owner_node_id, export_id) 移除，改为关联表：
--- 一个 Import 可关联多个 Export，但同一 (owner_node_id, export_id) 只归一个 Import。
-CREATE TABLE IF NOT EXISTS imported_import_export (
-  import_id     TEXT NOT NULL REFERENCES imported_import(import_id) ON DELETE CASCADE,
-  owner_node_id TEXT NOT NULL,
-  export_id     TEXT NOT NULL,
-  added_at      TEXT NOT NULL,
-  PRIMARY KEY (import_id, export_id),
-  UNIQUE (owner_node_id, export_id)
-) STRICT;
 "#;
 
 /// §7.2 的 v1 → v2 升级：`owned_audit` 的 12-step 表重建（§11.8 第 7 条）。
@@ -494,6 +450,15 @@ CREATE INDEX IF NOT EXISTS imported_audit_at ON imported_audit(at);
 
 CREATE TABLE imported_import_export_pending AS
   SELECT import_id, owner_node_id, export_id, created_at AS added_at FROM imported_import;
+
+CREATE TABLE IF NOT EXISTS imported_import_export (
+  import_id     TEXT NOT NULL REFERENCES imported_import(import_id) ON DELETE CASCADE,
+  owner_node_id TEXT NOT NULL,
+  export_id     TEXT NOT NULL,
+  added_at      TEXT NOT NULL,
+  PRIMARY KEY (import_id, export_id),
+  UNIQUE (owner_node_id, export_id)
+) STRICT;
 
 CREATE TABLE imported_import_v2 (
   import_id     TEXT PRIMARY KEY,
@@ -855,6 +820,176 @@ const V10_UPGRADE_OWNED: &str = r#"
 DROP TABLE IF EXISTS owned_agent_profile;
 DROP TABLE IF EXISTS owned_provider_ref;
 "#;
+
+/// §7.2 的 v10 → v11 升级：删除 Export/Import 与节点授权列，imported 家族按 Owner 节点寻址。
+///
+/// 迁移规则（单事务，失败整体回滚）：
+/// - 删除 `owned_export`、`imported_import`、`imported_import_export`；
+/// - 12-step 重建 `owned_node`（去掉 `grants_json`/`export_ids_json`）；
+/// - 重建 imported 三表：主键改为 `(owner_node_id, session_id)`。同一 Owner 下跨 Export 的重复会话合并，
+///   保留最新 origin cursor / `updated_at` 的那一行，`next_local_sequence` 取组内最大值（不回退）；
+///   交付索引与命令引用只保留获胜 Export 的行，因此不会产生孤儿索引。
+async fn v11_upgrade_storage(tx: &mut Transaction<'_, Sqlite>) -> Result<(), StorageError> {
+    // owned_node：去掉 grants_json/export_ids_json（v3/v4 等历史形状可能只有其中一列）。
+    if column_exists(&mut **tx, "owned_node", "grants_json").await?
+        || column_exists(&mut **tx, "owned_node", "export_ids_json").await?
+    {
+        sqlx::raw_sql(
+            r#"
+CREATE TABLE owned_node_v11 (
+  node_id        TEXT NOT NULL,
+  kind           TEXT NOT NULL CHECK (kind IN ('access','owner')),
+  display_name   TEXT NOT NULL,
+  fingerprint    TEXT NOT NULL,
+  state          TEXT NOT NULL CHECK (state IN ('pending','paired','revoked')),
+  owner_endpoint TEXT,
+  created_at     TEXT NOT NULL,
+  last_connected_at TEXT,
+  revoked_at     TEXT,
+  revoke_reason  TEXT CHECK (revoke_reason IN ('user_requested','key_changed','compromised')),
+  PRIMARY KEY (node_id, kind),
+  CHECK (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+  CHECK ((kind = 'owner') = (owner_endpoint IS NOT NULL)),
+  CHECK ((state = 'revoked') = (revoked_at IS NOT NULL)),
+  CHECK ((state = 'revoked') = (revoke_reason IS NOT NULL))
+) STRICT;
+INSERT INTO owned_node_v11 (node_id, kind, display_name, fingerprint, state, owner_endpoint,
+                            created_at, last_connected_at, revoked_at, revoke_reason)
+  SELECT node_id, kind, display_name, fingerprint, state, owner_endpoint,
+         created_at, last_connected_at, revoked_at, revoke_reason FROM owned_node;
+DROP TABLE owned_node;
+ALTER TABLE owned_node_v11 RENAME TO owned_node;
+CREATE INDEX IF NOT EXISTS owned_node_role ON owned_node(kind, state);
+"#,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // imported 家族：只有在还是带 export_id 的旧形状时才重建。
+    if column_exists(&mut **tx, "imported_session", "export_id").await? {
+        sqlx::raw_sql(
+            r#"
+CREATE TABLE imported_session_v11 (
+  owner_node_id  TEXT NOT NULL,
+  session_id     TEXT NOT NULL,
+  title          TEXT,
+  agent_id       TEXT, agent_name TEXT,
+  state          TEXT,
+  version        INTEGER,
+  created_at     TEXT,
+  last_origin_epoch   TEXT,
+  last_origin_sequence INTEGER,
+  acked_origin_epoch  TEXT,
+  acked_origin_sequence INTEGER,
+  next_local_sequence INTEGER NOT NULL DEFAULT 1,
+  attachment_id TEXT,
+  attachment_generation INTEGER,
+  updated_at     TEXT NOT NULL,
+  PRIMARY KEY (owner_node_id, session_id)
+) STRICT;
+
+CREATE TABLE imported_winner AS
+  SELECT owner_node_id, export_id, session_id FROM (
+    SELECT owner_node_id, export_id, session_id,
+      ROW_NUMBER() OVER (
+        PARTITION BY owner_node_id, session_id
+        ORDER BY last_origin_sequence DESC, updated_at DESC, export_id ASC
+      ) AS rn
+    FROM imported_session
+  ) WHERE rn = 1;
+
+INSERT INTO imported_session_v11 (
+  owner_node_id, session_id, title, agent_id, agent_name, state, version, created_at,
+  last_origin_epoch, last_origin_sequence, acked_origin_epoch, acked_origin_sequence,
+  next_local_sequence, attachment_id, attachment_generation, updated_at)
+  SELECT s.owner_node_id, s.session_id, s.title, s.agent_id, s.agent_name, s.state, s.version,
+         s.created_at, s.last_origin_epoch, s.last_origin_sequence, s.acked_origin_epoch,
+         s.acked_origin_sequence,
+         (SELECT MAX(x.next_local_sequence) FROM imported_session x
+           WHERE x.owner_node_id = s.owner_node_id AND x.session_id = s.session_id),
+         s.attachment_id, s.attachment_generation, s.updated_at
+  FROM imported_session s
+  JOIN imported_winner w
+    ON w.owner_node_id = s.owner_node_id AND w.export_id = s.export_id
+   AND w.session_id = s.session_id;
+
+CREATE TABLE imported_delivery_index_saved AS
+  SELECT d.owner_node_id, d.session_id, d.origin_event_id, d.origin_epoch, d.origin_sequence,
+         d.local_sequence, d.event_type, d.payload_digest, d.received_at
+  FROM imported_delivery_index d
+  JOIN imported_winner w
+    ON w.owner_node_id = d.owner_node_id AND w.export_id = d.export_id
+   AND w.session_id = d.session_id;
+
+CREATE TABLE imported_command_ref_saved AS
+  SELECT c.owner_node_id, c.session_id, c.request_id, c.command, c.status, c.accepted_at,
+         c.terminal_at, c.terminal_event_id, c.error_code, c.retryable
+  FROM imported_command_ref c
+  JOIN imported_winner w
+    ON w.owner_node_id = c.owner_node_id AND w.export_id = c.export_id
+   AND w.session_id = c.session_id;
+
+DROP TABLE imported_delivery_index;
+DROP TABLE imported_command_ref;
+DROP TABLE imported_session;
+ALTER TABLE imported_session_v11 RENAME TO imported_session;
+
+CREATE TABLE imported_delivery_index (
+  owner_node_id   TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  origin_event_id TEXT NOT NULL,
+  origin_epoch    TEXT NOT NULL,
+  origin_sequence INTEGER NOT NULL,
+  local_sequence  INTEGER NOT NULL,
+  event_type      TEXT NOT NULL,
+  payload_digest  TEXT NOT NULL,
+  received_at     TEXT NOT NULL,
+  PRIMARY KEY (owner_node_id, session_id, origin_event_id),
+  UNIQUE (owner_node_id, session_id, local_sequence),
+  UNIQUE (owner_node_id, session_id, origin_epoch, origin_sequence),
+  FOREIGN KEY (owner_node_id, session_id)
+    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE imported_command_ref (
+  owner_node_id  TEXT NOT NULL, session_id TEXT NOT NULL,
+  request_id     TEXT NOT NULL,
+  command        TEXT NOT NULL,
+  status         TEXT NOT NULL CHECK (status IN ('accepted','completed','failed','rejected','uncertain')),
+  accepted_at    TEXT,
+  terminal_at    TEXT, terminal_event_id TEXT,
+  error_code     TEXT, retryable INTEGER,
+  PRIMARY KEY (owner_node_id, session_id, request_id),
+  CHECK (status = 'rejected' OR accepted_at IS NOT NULL),
+  FOREIGN KEY (owner_node_id, session_id)
+    REFERENCES imported_session(owner_node_id, session_id) ON DELETE CASCADE
+) STRICT;
+
+INSERT INTO imported_delivery_index
+  SELECT owner_node_id, session_id, origin_event_id, origin_epoch, origin_sequence,
+         local_sequence, event_type, payload_digest, received_at
+  FROM imported_delivery_index_saved;
+INSERT INTO imported_command_ref
+  SELECT owner_node_id, session_id, request_id, command, status, accepted_at,
+         terminal_at, terminal_event_id, error_code, retryable
+  FROM imported_command_ref_saved;
+DROP TABLE imported_delivery_index_saved;
+DROP TABLE imported_command_ref_saved;
+DROP TABLE imported_winner;
+"#,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    sqlx::raw_sql(
+        "DROP TABLE IF EXISTS imported_import_export;\nDROP TABLE IF EXISTS imported_import;\nDROP TABLE IF EXISTS owned_export;",
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
 
 /// §7.5 的存储配置键。默认值逐项对应合同表格。
 ///
@@ -1261,6 +1396,9 @@ pub async fn migrate(write: &SqlitePool, at: &str) -> Result<StoreMetadata, Stor
             .execute(&mut *tx)
             .await?;
         }
+        if file_version < 11 {
+            v11_upgrade_storage(&mut tx).await?;
+        }
         restore_sequences(&mut tx, &sequences).await?;
         mark_schema_versions(&mut tx).await?;
     }
@@ -1327,6 +1465,16 @@ where
             .fetch_one(executor)
             .await?;
     Ok(count > 0)
+}
+
+async fn column_exists<'e, E>(executor: E, table: &str, column: &str) -> Result<bool, StorageError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let rows: Vec<String> = sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .fetch_all(executor)
+        .await?;
+    Ok(rows.iter().any(|name| name == column))
 }
 
 /// §7.2：重建前需要保留的 `sqlite_sequence` 现值（`(表名, seq)`）。

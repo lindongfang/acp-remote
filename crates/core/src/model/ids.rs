@@ -77,86 +77,7 @@ pub(crate) fn is_uuid(text: &str) -> bool {
     })
 }
 
-/// `^[A-Za-z0-9._-]{1,128}//! 标识、引用与实体定位（`docs/CORE_PORTS_AND_STORAGE.md` §3.1）。
-//!
-//! 所有 ID 都是 newtype，只能通过构造校验得到合法值：UUID 类要求 canonical 小写文本，字符串类要求各自的
-//! 字符集与长度上限。非法输入返回 [`InvalidValue`]（`PortError::InvalidRequest` 的来源）。
-
-use std::fmt;
-use std::str::FromStr;
-
-use super::config::no_nul;
-use super::error::InvalidValue;
-
-// ---------------------------------------------------------------- 校验谓词
-
-/// 字符数（Unicode code point），与 JSON Schema 的 `minLength`/`maxLength` 口径一致。
-pub(crate) fn char_count(text: &str) -> usize {
-    text.chars().count()
-}
-
-/// `min..=max` 字符数校验，区分“空”与“过长”两种具名错误。
-pub(crate) fn require_bounded(text: &str, min: usize, max: usize) -> Result<(), InvalidValue> {
-    let count = char_count(text);
-    if count < min {
-        Err(InvalidValue::Empty)
-    } else if count > max {
-        Err(InvalidValue::TooLong { max })
-    } else {
-        Ok(())
-    }
-}
-
-/// ASCII 字符集模式：`first` 约束首字节，`rest` 约束其余字节。
-pub(crate) fn charset_ok(
-    text: &str,
-    min: usize,
-    max: usize,
-    first: fn(u8) -> bool,
-    rest: fn(u8) -> bool,
-) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.len() < min || bytes.len() > max {
-        return false;
-    }
-    match bytes.split_first() {
-        Some((head, tail)) => first(*head) && tail.iter().all(|byte| rest(*byte)),
-        None => false,
-    }
-}
-
-fn ascii_alnum(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-}
-
-fn spec_rest(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-}
-
-fn lower_alnum(byte: u8) -> bool {
-    byte.is_ascii_lowercase() || byte.is_ascii_digit()
-}
-
-fn lower_spec_rest(byte: u8) -> bool {
-    lower_alnum(byte) || matches!(byte, b'.' | b'_' | b'-')
-}
-
-/// `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
-pub(crate) fn is_uuid(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.len() != 36 {
-        return false;
-    }
-    bytes.iter().enumerate().all(|(index, byte)| {
-        if matches!(index, 8 | 13 | 18 | 23) {
-            *byte == b'-'
-        } else {
-            matches!(byte, b'0'..=b'9' | b'a'..=b'f')
-        }
-    })
-}
-
-（spec id 的通用形状）
+/// `^[A-Za-z0-9._-]{1,128}$`（spec id 的通用形状）
 pub(crate) fn is_spec_id(text: &str) -> bool {
     charset_ok(text, 1, 128, ascii_alnum, spec_rest)
 }
@@ -227,6 +148,7 @@ fn check_uuid(text: &str) -> Result<(), InvalidValue> {
         Err(InvalidValue::Uuid)
     }
 }
+
 
 fn check_directory_id(text: &str) -> Result<(), InvalidValue> {
     if text.len() == 32

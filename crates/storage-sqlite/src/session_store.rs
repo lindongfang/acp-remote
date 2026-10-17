@@ -28,7 +28,7 @@ use acp_core::model::{
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
     ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin,
     EventPayload,
-    GlobalCursor, ImportId, InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef,
+    GlobalCursor, InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef,
     NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError,
     RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence, ServerEpoch,
     Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary,
@@ -37,7 +37,7 @@ use acp_core::model::{
 };
 use acp_core::ports::{
     AckOutcome, AttachmentRef, AttachmentStore, CommitOutcome, DeliveryIndexEntry, DeliveryReceipt,
-    DropReport, HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery,
+    HistoryPage, HistoryQuery, IdempotentReplay, ImportedSessionQuery,
     ImportedSessionRecord, ModeChange, NewTurn, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
     PendingInteractionOrigin, PruneReport, ReadView, ReceiptOutcome, RemoteCommandRef,
     RemoteDeliveryStore, ReplayBatch, ReplayLimit, ResetReason, RetentionPolicy, SessionAttachment,
@@ -876,10 +876,10 @@ fn command_record_from_row(row: &SqliteRow) -> Result<CommandRecord, StorageErro
 const TURN_COLUMNS: &str =
     "turn_id, session_id, state, queue_index, causation, started_at, ended_at";
 const INTERACTION_COLUMNS: &str = "interaction_id, kind, session_id, created_at";
-const IMPORTED_SESSION_COLUMNS: &str = "owner_node_id, export_id, session_id, title, agent_id, \
+const IMPORTED_SESSION_COLUMNS: &str = "owner_node_id, session_id, title, agent_id, \
      agent_name, state, version, created_at, last_origin_epoch, last_origin_sequence, \
      acked_origin_epoch, acked_origin_sequence, attachment_id, attachment_generation, updated_at";
-const DELIVERY_INDEX_COLUMNS: &str = "owner_node_id, export_id, session_id, origin_event_id, \
+const DELIVERY_INDEX_COLUMNS: &str = "owner_node_id, session_id, origin_event_id, \
      origin_epoch, origin_sequence, local_sequence, event_type, payload_digest, received_at";
 
 const INSERT_EVENT: &str = "INSERT INTO owned_event (global_sequence, session_id, session_sequence, \
@@ -3210,52 +3210,17 @@ impl ReadView for SqlReadView {
 // RemoteDeliveryStore：imported 家族的唯一写入口，且**无正文**（§7.4）
 // ---------------------------------------------------------------------------------------------
 
-/// §11.2 第 5 条 + §7.4：imported 写路径的归属前置——`(owner_node_id, export_id)` MUST 仍归属某个 Import。
-///
-/// `remove_import` 在同一事务删掉管理行、`imported_import_export` 关联行与对应的 `imported_session`
-/// （级联交付索引与命令引用），因此**关联行缺失就是「该 Import 已被完整移除（或从未添加）」**；此时
-/// 在途回调必须被拒绝，不能把已经删掉的会话行与交付索引重新写回来。
-///
-/// 错误定位取 `EntityRef::Export`：调用方只持有 `RemoteSessionRef`（`ownerNodeId`/`exportId`/
-/// `sessionId`），关联行已删时回推不出 `importId`（也不能拿审计行当权威），而 `Export` 变体恰好表达
-/// 「这个对端 Export 在本机不再归属任何 Import」。
-///
-/// 已知边界：同一 `(owner_node_id, export_id)` 被重新导入后，关联行会再次存在，本判定无法区分旧连接
-/// 与旧导入的迟到回调（需要导入实例标识或连接代际，v1 未实现）。
-async fn ensure_import_owns<'e, E>(executor: E, session: &RemoteSessionRef) -> Result<(), PortError>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
-{
-    let owned: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM imported_import_export WHERE owner_node_id = ?1 AND export_id = ?2",
-    )
-    .bind(session.owner_node_id.as_str())
-    .bind(session.export_id.as_str())
-    .fetch_optional(executor)
-    .await
-    .db()?;
-    if owned.is_none() {
-        return Err(PortError::NotFound(EntityRef::Export(
-            session.export_id.clone(),
-        )));
-    }
-    Ok(())
-}
-
 #[async_trait]
 impl RemoteDeliveryStore for SqliteStore {
     async fn commit_receipt(&self, receipt: DeliveryReceipt) -> Result<ReceiptOutcome, PortError> {
         self.writable()?;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
         let session = &receipt.session;
-        // §11.2 第 5 条：失去 Import 的在途回调必须被拒绝，不能重建（或继续写入）已删除的交付索引。
-        ensure_import_owns(&mut *tx, session).await?;
         let next: Option<i64> = sqlx::query_scalar(
             "SELECT next_local_sequence FROM imported_session \
-             WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
+             WHERE owner_node_id = ?1 AND session_id = ?2",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .fetch_optional(&mut *tx)
         .await
@@ -3266,10 +3231,9 @@ impl RemoteDeliveryStore for SqliteStore {
         // §9.5：同一 `origin_event_id` 重发只产生一行、不新增 `local_sequence`。
         let duplicate: Option<i64> = sqlx::query_scalar(
             "SELECT local_sequence FROM imported_delivery_index \
-             WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3 AND origin_event_id = ?4",
+             WHERE owner_node_id = ?1 AND session_id = ?2 AND origin_event_id = ?3",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .bind(receipt.origin.origin_event_id.as_str())
         .fetch_optional(&mut *tx)
@@ -3292,12 +3256,11 @@ impl RemoteDeliveryStore for SqliteStore {
         .db()?;
         let allocated = global_next.max(session_next);
         sqlx::query(
-            "INSERT INTO imported_delivery_index (owner_node_id, export_id, session_id, \
+            "INSERT INTO imported_delivery_index (owner_node_id, session_id, \
              origin_event_id, origin_epoch, origin_sequence, local_sequence, event_type, \
-             payload_digest, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             payload_digest, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .bind(receipt.origin.origin_event_id.as_str())
         .bind(receipt.origin.origin_epoch.as_str())
@@ -3313,14 +3276,13 @@ impl RemoteDeliveryStore for SqliteStore {
             "UPDATE imported_session SET next_local_sequence = ?1, last_origin_epoch = ?2, \
              last_origin_sequence = CASE WHEN last_origin_sequence IS NULL OR \
              last_origin_sequence < ?3 THEN ?3 ELSE last_origin_sequence END, updated_at = ?4 \
-             WHERE owner_node_id = ?5 AND export_id = ?6 AND session_id = ?7",
+             WHERE owner_node_id = ?5 AND session_id = ?6",
         )
         .bind(allocated + 1)
         .bind(receipt.origin.origin_epoch.as_str())
         .bind(storable(receipt.origin_sequence.get())?)
         .bind(receipt.at.as_str())
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .execute(&mut *tx)
         .await
@@ -3363,7 +3325,7 @@ impl RemoteDeliveryStore for SqliteStore {
         self.writable()?;
         let affected = sqlx::query(
             "UPDATE imported_session SET acked_origin_epoch = ?1, acked_origin_sequence = ?2, \
-             updated_at = ?3 WHERE owner_node_id = ?4 AND export_id = ?5 AND session_id = ?6 \
+             updated_at = ?3 WHERE owner_node_id = ?4 AND session_id = ?5 \
              AND (acked_origin_epoch IS NULL OR acked_origin_epoch <> ?1 \
                   OR acked_origin_sequence IS NULL OR acked_origin_sequence < ?2)",
         )
@@ -3371,7 +3333,6 @@ impl RemoteDeliveryStore for SqliteStore {
         .bind(storable(cursor_value.origin_sequence.get())?)
         .bind(at.as_str())
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .execute(&self.pools.write)
         .await
@@ -3387,11 +3348,10 @@ impl RemoteDeliveryStore for SqliteStore {
         let existing = self.load_ack(session).await?;
         if existing.is_none() {
             let present: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM imported_session WHERE owner_node_id = ?1 AND export_id = ?2 \
-                 AND session_id = ?3",
+                "SELECT 1 FROM imported_session WHERE owner_node_id = ?1 \
+                 AND session_id = ?2",
             )
             .bind(session.owner_node_id.as_str())
-            .bind(session.export_id.as_str())
             .bind(session.session_id.as_str())
             .fetch_optional(&self.pools.read)
             .await
@@ -3414,10 +3374,9 @@ impl RemoteDeliveryStore for SqliteStore {
     ) -> Result<Option<OriginCursor>, PortError> {
         let row = sqlx::query(
             "SELECT acked_origin_epoch, acked_origin_sequence FROM imported_session \
-             WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
+             WHERE owner_node_id = ?1 AND session_id = ?2",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .fetch_optional(&self.pools.read)
         .await
@@ -3445,15 +3404,11 @@ impl RemoteDeliveryStore for SqliteStore {
         self.writable()?;
         let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
         let session = &record.session;
-        // §11.2 第 5 条：Import 被完整移除后，迟到回调 MUST NOT 重建 `imported_session`（会话行一旦
-        // 重建，`commit_receipt` 的复合外键就重新成立，交付索引会被跟着写回）。
-        ensure_import_owns(&mut *tx, session).await?;
         let stored_epoch: Option<String> = sqlx::query_scalar(
             "SELECT last_origin_epoch FROM imported_session \
-             WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3",
+             WHERE owner_node_id = ?1 AND session_id = ?2",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .fetch_optional(&mut *tx)
         .await
@@ -3466,12 +3421,12 @@ impl RemoteDeliveryStore for SqliteStore {
             None => (None, None),
         };
         sqlx::query(
-            "INSERT INTO imported_session (owner_node_id, export_id, session_id, title, agent_id, \
+            "INSERT INTO imported_session (owner_node_id, session_id, title, agent_id, \
              agent_name, state, version, created_at, last_origin_epoch, last_origin_sequence, \
              acked_origin_epoch, acked_origin_sequence, next_local_sequence, attachment_id, \
              attachment_generation, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?16) \
-             ON CONFLICT(owner_node_id, export_id, session_id) DO UPDATE SET \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?14, ?15) \
+             ON CONFLICT(owner_node_id, session_id) DO UPDATE SET \
              title = excluded.title, agent_id = excluded.agent_id, agent_name = excluded.agent_name, \
              state = excluded.state, version = excluded.version, created_at = excluded.created_at, \
              last_origin_epoch = excluded.last_origin_epoch, \
@@ -3483,7 +3438,6 @@ impl RemoteDeliveryStore for SqliteStore {
              updated_at = excluded.updated_at",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .bind(record.title.as_deref())
         .bind(agent_id)
@@ -3531,22 +3485,20 @@ impl RemoteDeliveryStore for SqliteStore {
                 .is_some_and(|epoch| epoch.as_str() != stored)
         {
             sqlx::query(
-                "DELETE FROM imported_delivery_index WHERE owner_node_id = ?1 AND export_id = ?2 \
-                 AND session_id = ?3",
+                "DELETE FROM imported_delivery_index WHERE owner_node_id = ?1 \
+                 AND session_id = ?2",
             )
             .bind(session.owner_node_id.as_str())
-            .bind(session.export_id.as_str())
             .bind(session.session_id.as_str())
             .execute(&mut *tx)
             .await
             .db()?;
             sqlx::query(
                 "UPDATE imported_session SET acked_origin_epoch = NULL, \
-                 acked_origin_sequence = NULL WHERE owner_node_id = ?1 AND export_id = ?2 \
-                 AND session_id = ?3",
+                 acked_origin_sequence = NULL WHERE owner_node_id = ?1 \
+                 AND session_id = ?2",
             )
             .bind(session.owner_node_id.as_str())
-            .bind(session.export_id.as_str())
             .bind(session.session_id.as_str())
             .execute(&mut *tx)
             .await
@@ -3560,9 +3512,7 @@ impl RemoteDeliveryStore for SqliteStore {
         &self,
         query: ImportedSessionQuery,
     ) -> Result<Vec<ImportedSessionRecord>, PortError> {
-        if query.imports.as_ref().is_some_and(|list| list.is_empty())
-            || query.only.as_ref().is_some_and(|list| list.is_empty())
-        {
+        if query.only.as_ref().is_some_and(|list| list.is_empty()) {
             return Ok(Vec::new());
         }
         if query.limit == Some(0) {
@@ -3574,17 +3524,14 @@ impl RemoteDeliveryStore for SqliteStore {
             for reference in only {
                 let row = sqlx::query(&format!(
                     "SELECT {IMPORTED_SESSION_COLUMNS} FROM imported_session \
-                     WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3"
+                     WHERE owner_node_id = ?1 AND session_id = ?2"
                 ))
                 .bind(reference.owner_node_id.as_str())
-                .bind(reference.export_id.as_str())
                 .bind(reference.session_id.as_str())
                 .fetch_optional(&self.pools.read)
                 .await
                 .db()?;
-                if let Some(row) = row
-                    && self.import_matches(&row, query.imports.as_deref()).await?
-                {
+                if let Some(row) = row {
                     records.push(imported_session_from_row(&row)?);
                 }
                 if query
@@ -3597,24 +3544,11 @@ impl RemoteDeliveryStore for SqliteStore {
             return Ok(records);
         }
         let mut sql = format!("SELECT {IMPORTED_SESSION_COLUMNS} FROM imported_session");
-        let mut binds: Vec<String> = Vec::new();
-        if let Some(imports) = &query.imports {
-            sql.push_str(&format!(
-                " WHERE (owner_node_id, export_id) IN (SELECT owner_node_id, export_id \
-                 FROM imported_import_export WHERE import_id IN ({}))",
-                placeholders(imports.len())
-            ));
-            binds.extend(imports.iter().map(|id| id.as_str().to_owned()));
-        }
-        sql.push_str(" ORDER BY updated_at DESC, owner_node_id ASC, export_id ASC, session_id ASC");
+        sql.push_str(" ORDER BY updated_at DESC, owner_node_id ASC, session_id ASC");
         if let Some(limit) = query.limit {
             sql.push_str(&format!(" LIMIT {limit}"));
         }
-        let mut statement = sqlx::query(&sql);
-        for value in &binds {
-            statement = statement.bind(value.as_str());
-        }
-        let rows = statement.fetch_all(&self.pools.read).await.db()?;
+        let rows = sqlx::query(&sql).fetch_all(&self.pools.read).await.db()?;
         let mut records = Vec::with_capacity(rows.len());
         for row in &rows {
             records.push(imported_session_from_row(row)?);
@@ -3630,10 +3564,9 @@ impl RemoteDeliveryStore for SqliteStore {
         let row = sqlx::query(
             "SELECT request_id, command, status, accepted_at, terminal_at, terminal_event_id, \
              error_code, retryable FROM imported_command_ref \
-             WHERE owner_node_id = ?1 AND export_id = ?2 AND session_id = ?3 AND request_id = ?4",
+             WHERE owner_node_id = ?1 AND session_id = ?2 AND request_id = ?3",
         )
         .bind(session.owner_node_id.as_str())
-        .bind(session.export_id.as_str())
         .bind(session.session_id.as_str())
         .bind(request.as_str())
         .fetch_optional(&self.pools.read)
@@ -3643,61 +3576,6 @@ impl RemoteDeliveryStore for SqliteStore {
             return Ok(None);
         };
         Ok(Some(remote_command_from_row(&row)?))
-    }
-
-    async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError> {
-        self.writable()?;
-        let mut tx = self.pools.write.begin_with("BEGIN IMMEDIATE").await.db()?;
-        // v2 起 Import 与 Export 的归属在 `imported_import_export`（一个 Import 可关联多个 Export），
-        // 管理行自身不再携带 `export_id`。
-        let exists: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM imported_import WHERE import_id = ?1")
-                .bind(import.as_str())
-                .fetch_optional(&mut *tx)
-                .await
-                .db()?;
-        if exists.is_none() {
-            return Err(PortError::NotFound(EntityRef::Import(import.clone())));
-        }
-        let pairs: Vec<(String, String)> = sqlx::query_as(
-            "SELECT owner_node_id, export_id FROM imported_import_export WHERE import_id = ?1",
-        )
-        .bind(import.as_str())
-        .fetch_all(&mut *tx)
-        .await
-        .db()?;
-        // §5.2：只删交付索引与命令引用；`imported_audit` 保留（`SECURITY_DESIGN.md` §11.5）。
-        //
-        // 这里**不**写 `imported_import.removed_at`：§11.6 把「用户移除 Import」的完整删除划给
-        // `ImportRemoval` 写集，连接级清空只拥有这两张表的删除权威；而且本 crate 不读系统时间，
-        // 没有可以写进该列的值（旧实现把 `owner_node_id` 绑进这一列）。
-        let mut delivery_index_removed = 0;
-        let mut command_refs_removed = 0;
-        for (owner_node_id, export_id) in pairs {
-            delivery_index_removed += sqlx::query(
-                "DELETE FROM imported_delivery_index WHERE owner_node_id = ?1 AND export_id = ?2",
-            )
-            .bind(&owner_node_id)
-            .bind(&export_id)
-            .execute(&mut *tx)
-            .await
-            .db()?
-            .rows_affected();
-            command_refs_removed += sqlx::query(
-                "DELETE FROM imported_command_ref WHERE owner_node_id = ?1 AND export_id = ?2",
-            )
-            .bind(&owner_node_id)
-            .bind(&export_id)
-            .execute(&mut *tx)
-            .await
-            .db()?
-            .rows_affected();
-        }
-        tx.commit().await.db()?;
-        Ok(DropReport {
-            delivery_index_removed,
-            command_refs_removed,
-        })
     }
 
     /// §7.5 的容量清理对 imported 家族的对应物：交付索引与命令引用是**索引元数据**（无正文），
@@ -3759,37 +3637,6 @@ impl RemoteDeliveryStore for SqliteStore {
     }
 }
 
-impl SqliteStore {
-    /// `list_sessions` 的 `imports` 过滤：`Some([])` 已在入口处理，这里只判成员资格。
-    async fn import_matches(
-        &self,
-        row: &SqliteRow,
-        imports: Option<&[ImportId]>,
-    ) -> Result<bool, StorageError> {
-        let Some(imports) = imports else {
-            return Ok(true);
-        };
-        let owner = text(row, "owner_node_id")?;
-        let export = text(row, "export_id")?;
-        let matched: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM imported_import_export WHERE owner_node_id = ?1 AND export_id = ?2 \
-             AND import_id IN (SELECT value FROM json_each(?3))",
-        )
-        .bind(&owner)
-        .bind(&export)
-        .bind(
-            imports
-                .iter()
-                .map(|id| format!("\"{}\"", id.as_str()))
-                .collect::<Vec<_>>()
-                .join(","),
-        )
-        .fetch_optional(&self.pools.read)
-        .await?;
-        Ok(matched.is_some())
-    }
-}
-
 fn sequence_from(value: i64, column: &'static str) -> Result<Sequence, StorageError> {
     sequence(value, column)
 }
@@ -3800,10 +3647,6 @@ fn delivery_index_from_row(row: &SqliteRow) -> Result<DeliveryIndexEntry, Storag
             decode(
                 &text(row, "owner_node_id")?,
                 "imported_delivery_index.owner_node_id",
-            )?,
-            decode(
-                &text(row, "export_id")?,
-                "imported_delivery_index.export_id",
             )?,
             decode(
                 &text(row, "session_id")?,
@@ -3852,7 +3695,6 @@ fn imported_session_from_row(row: &SqliteRow) -> Result<ImportedSessionRecord, S
         &text(row, "owner_node_id")?,
         "imported_session.owner_node_id",
     )?;
-    let export_id = decode(&text(row, "export_id")?, "imported_session.export_id")?;
     let session_id = decode(&text(row, "session_id")?, "imported_session.session_id")?;
     let agent = match (opt_text(row, "agent_id")?, opt_text(row, "agent_name")?) {
         (Some(id), Some(name)) => {
@@ -3894,7 +3736,7 @@ fn imported_session_from_row(row: &SqliteRow) -> Result<ImportedSessionRecord, S
         _ => None,
     };
     Ok(ImportedSessionRecord {
-        session: RemoteSessionRef::new(owner_node_id, export_id, session_id),
+        session: RemoteSessionRef::new(owner_node_id, session_id),
         origin_epoch: decode_opt(
             opt_text(row, "last_origin_epoch")?,
             "imported_session.last_origin_epoch",

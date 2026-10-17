@@ -1,4 +1,4 @@
-//! 管理状态（设备/节点/配对/身份材料、Export/Import、本地配置）的 SQLite 实现。
+//! 管理状态（设备/节点/配对/身份材料、本地配置）的 SQLite 实现。
 //!
 //! 权威是 `docs/CORE_PORTS_AND_STORAGE.md`：§5.3 的端口形状、§7.3/§7.4 的表结构、§9 判据 23–29 与
 //! §11.2/§11.6 的写集语义。三条硬规则贯穿本目录：
@@ -18,7 +18,6 @@
 //! 是不是本机产生的」不可判定。
 
 pub(crate) mod audit;
-pub(crate) mod export;
 pub(crate) mod local_config;
 pub(crate) mod trust;
 

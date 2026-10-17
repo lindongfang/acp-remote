@@ -1,4 +1,4 @@
-//! WP6：管理 store（`TrustStore`/`ExportStore`/`LocalConfigStore`）与失败关闭的行为用例。
+//! WP6：管理 store（`TrustStore`/`LocalConfigStore`）与失败关闭的行为用例。
 //!
 //! 逐条对应 `openspec/changes/archive/2026-09-23-admin-state-persistence-v2/specs/` 的场景：
 //!
@@ -35,18 +35,14 @@ use std::path::Path;
 use sqlx::SqlitePool;
 
 use acp_core::model::{
-    Actor, AgentId, AgentProfile, AuditAction, AuditOutcome, CachePolicy, ConflictKind, DeviceId,
-    DeviceRecord, DeviceState, Digest, EntityRef, EventId, EventType, ExportId, ExportRecord,
-    ExportTemplate, Fingerprint, GrantSet, ImportId, ImportRecord, NodeId, NodeKind, NodeRecord,
+    Actor, AgentId, AgentProfile, AuditAction, AuditOutcome, ConflictKind, DeviceId, DeviceRecord,
+    DeviceState, Digest, EntityRef, EventId, EventType, Fingerprint, NodeId, NodeKind, NodeRecord,
     NodeState, Nonce, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingSettlement,
-    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PortError,
-    ScopeSet, Sequence, SessionId, TemplateId, TemplateParam,
-    TemplateParamType, Timestamp, UnavailableKind, DirectoryId, DirectoryRecord,
-    WorkspaceDirectoryEntry,
+    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PortError, Sequence, SessionId,
+    Timestamp, UnavailableKind, DirectoryId, DirectoryRecord,
 };
 use acp_core::ports::{
-    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
-    ExportWrite, ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore,
+    DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ImportedSessionRecord, LocalConfigStore,
     NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption,
     PairingSettlementWrite, PairingWrite, PendingAudit, WriteContext,
     RemoteDeliveryStore, RevokeReason, SessionStore, TrustRecordRef, TrustStore,
@@ -261,8 +257,6 @@ fn device_pairing(expires: u32) -> PairingRecord {
         PairingTarget::Device,
         PairingState::Created,
         None,
-        ScopeSet::empty(),
-        GrantSet::empty(),
         digest(PAIRING_SECRET),
         HOST_BINDING,
         at(0),
@@ -290,8 +284,6 @@ fn device_claim_with(id: &DeviceId, host_binding: &str) -> PairingClaimWrite {
     let claim = acp_core::model::PairingClaim::try_new(
         pairing_id(),
         peer,
-        ScopeSet::empty(),
-        GrantSet::empty(),
     )
     .expect("claim");
     PairingClaimWrite {
@@ -314,8 +306,6 @@ fn node_pairing() -> PairingRecord {
         PairingTarget::Node,
         PairingState::Created,
         None,
-        ScopeSet::empty(),
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
         digest(PAIRING_SECRET),
         NODE_ENDPOINT,
         at(0),
@@ -334,8 +324,6 @@ fn node_pairing_with_id(pairing: PairingId, display_name: &str) -> PairingRecord
         PairingTarget::Node,
         PairingState::Created,
         Some(display_name.to_owned()),
-        ScopeSet::empty(),
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
         digest(PAIRING_SECRET),
         NODE_ENDPOINT,
         at(0),
@@ -345,15 +333,6 @@ fn node_pairing_with_id(pairing: PairingId, display_name: &str) -> PairingRecord
         None,
     )
     .expect("pairing record")
-}
-
-/// `owned_node.export_ids_json` 的列文本（按 `node_id` 取，行必须存在）。
-async fn export_ids_json(pool: &SqlitePool, node: &NodeId) -> String {
-    sqlx::query_scalar("SELECT export_ids_json FROM owned_node WHERE node_id = ?1")
-        .bind(node.as_str())
-        .fetch_one(pool)
-        .await
-        .expect("owned_node.export_ids_json")
 }
 
 /// 节点配对的认领：对端（Access 节点）回显登记时的 endpoint。
@@ -369,8 +348,6 @@ fn node_claim(id: &NodeId) -> PairingClaimWrite {
     let claim = acp_core::model::PairingClaim::try_new(
         pairing_id(),
         peer,
-        ScopeSet::empty(),
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
     )
     .expect("claim");
     PairingClaimWrite {
@@ -389,7 +366,7 @@ fn node_claim(id: &NodeId) -> PairingClaimWrite {
 /// 设备配对的批准落定：**不带任何授权集合**（设备配对不授予授权，非空 scope 集合会被拒绝；见
 /// `a_pairing_settlement_must_not_carry_a_scope_set`）。
 fn approved_settlement() -> PairingSettlement {
-    PairingSettlement::approved(ScopeSet::empty(), GrantSet::empty())
+    PairingSettlement::approved()
 }
 
 /// 不含凭据绑定的 profile：默认唯一性、种子与失败关闭用例只关心 profile 行本身。
@@ -416,8 +393,6 @@ fn node_record(kind: NodeKind, fingerprint: Fingerprint, state: NodeState) -> No
         "peer node",
         kind,
         fingerprint,
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-        Vec::new(),
         state,
         match kind {
             NodeKind::Owner => Some("wss://owner.example/acpr".to_owned()),
@@ -458,8 +433,6 @@ fn node_record_with_connected(
         "peer node",
         kind,
         fingerprint,
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-        Vec::new(),
         NodeState::Paired,
         match kind {
             NodeKind::Owner => Some("wss://owner.example/acpr".to_owned()),
@@ -473,60 +446,6 @@ fn node_record_with_connected(
 }
 
 
-fn export_record() -> ExportRecord {
-    export_record_with(EXPORT)
-}
-
-fn export_record_with(id: &str) -> ExportRecord {
-    export_record_with_revocation(id, None)
-}
-
-/// 带 `revoked_at` 的 Export 记录：`put_export` MUST 拒绝携带它的写入（撤销只走 `revoke_export`）。
-fn export_record_with_revocation(id: &str, revoked_at: Option<Timestamp>) -> ExportRecord {
-    export_record_with_scopes(id, &["grant.remote-work"], revoked_at)
-}
-
-/// 自定义 `scopes` 的 Export 记录：`exportIds` 校验用例需要「与本次 grants 相交」与「不相交」两种输入。
-fn export_record_with_scopes(
-    id: &str,
-    scopes: &[&str],
-    revoked_at: Option<Timestamp>,
-) -> ExportRecord {
-    let directory = workspace_directory("project");
-    ExportRecord::try_new(
-        ExportId::new(id).expect("export id"),
-        "team export",
-        vec![AgentId::new("omp-default").expect("agent id")],
-        vec![WorkspaceDirectoryEntry::try_new(directory.clone()).expect("directory")],
-        directory.clone(),
-        vec![
-            ExportTemplate::try_new(
-                TemplateId::new("coding").expect("template id"),
-                "Coding",
-                directory,
-                vec![
-                    TemplateParam::try_new(
-                        acp_core::model::ParamName::new("model").expect("param name"),
-                        TemplateParamType::String,
-                        true,
-                        None,
-                        None,
-                    )
-                    .expect("param"),
-                ],
-            )
-            .expect("template"),
-        ],
-        TemplateId::new("coding").expect("template id"),
-        GrantSet::try_from_iter(scopes.iter().copied()).expect("grants"),
-        CachePolicy::NoContentCache,
-        at(4),
-        revoked_at,
-    )
-    .expect("export record")
-}
-
-/// 平台无关的绝对路径（`WorkspaceRecord` 只接受绝对路径形状；Windows 上 `/srv/...` 不是绝对路径）。
 fn absolute_path(name: &str) -> String {
     std::env::temp_dir()
         .join("acpr-admin-store")
@@ -551,25 +470,6 @@ async fn seed_directory(pool: &sqlx::SqlitePool, name: &str, created_at: Timesta
     .execute(pool)
     .await
     .expect("seed directory");
-}
-
-fn import_record(id: &str, exports: Vec<ExportId>) -> ImportRecord {
-    ImportRecord::try_new(
-        ImportId::new(id).expect("import id"),
-        "wss://owner.example/acpr",
-        owner_node_id(),
-        exports,
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-    )
-    .expect("import record")
-}
-
-fn remote_export() -> ExportId {
-    ExportId::new(EXPORT).expect("export id")
-}
-
-fn second_export() -> ExportId {
-    ExportId::new(SECOND_EXPORT).expect("export id")
 }
 
 async fn open(dir: &Path) -> SqliteStore {
@@ -614,6 +514,7 @@ async fn approve_device(store: &SqliteStore, id: &DeviceId, minute: u32) -> Trus
         .expect("settle pairing")
 }
 
+
 /// 节点配对批准（§11.6 第 4 条）：写下对端的 `access` 信任行并绑定身份材料。认证时间**不**在这一步写
 /// ——`last_connected_at` 是认证收尾的职责（§11.6 第 8/9 条）。
 async fn approve_node(store: &SqliteStore, peer: &NodeId, minute: u32) -> TrustRecordRef {
@@ -638,10 +539,7 @@ async fn approve_node(store: &SqliteStore, peer: &NodeId, minute: u32) -> TrustR
     store
         .settle_pairing(PairingSettlementWrite {
             pairing: pairing_id(),
-            settlement: PairingSettlement::approved(
-                ScopeSet::empty(),
-                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-            ),
+            settlement: PairingSettlement::approved(),
             context: context(
                 minute,
                 vec![audit(
@@ -676,8 +574,6 @@ async fn create_and_claim_node_pairing(store: &SqliteStore, peer: &NodeId, recor
             nonce("node-client-nonce"),
         )
         .expect("pairing peer"),
-        ScopeSet::empty(),
-        GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
     )
     .expect("claim");
     claim.context = context(1, Vec::new());
@@ -1060,10 +956,7 @@ async fn node_pairing_approval_persists_access_trust() {
         store
             .settle_pairing(PairingSettlementWrite {
                 pairing: pairing_id(),
-                settlement: PairingSettlement::approved(
-                    ScopeSet::empty(),
-                    GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-                ),
+                settlement: PairingSettlement::approved(),
                 context: context(
                     2,
                     vec![audit(
@@ -1089,10 +982,6 @@ async fn node_pairing_approval_persists_access_trust() {
     );
     assert_eq!(row.state(), NodeState::Paired);
     assert_eq!(row.owner_endpoint(), None);
-    assert_eq!(
-        row.grants().iter().collect::<Vec<_>>(),
-        ["grant.remote-work"]
-    );
     assert_eq!(
         row.node_public_key_fingerprint(),
         &peer_public_key().fingerprint()
@@ -1139,420 +1028,6 @@ async fn node_pairing_approval_persists_access_trust() {
 
 /// `node.pair.confirm` 的 `exportIds`（`design.md` D2/D4）：清单经 `ALTER TABLE` 追加的列落盘，并被
 /// 归一化为去重 + 字典序；空集合编成 `'[]'`，读回（`node.list`/`node` 的路径）得到同一份集合。
-#[tokio::test]
-async fn node_pairing_approval_stores_the_nominated_export_ids() {
-    let dir = temp_dir("admin-node-export-ids");
-    let store = open(&dir).await;
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    for record in [
-        export_record_with(EXPORT),
-        export_record_with(SECOND_EXPORT),
-    ] {
-        store
-            .put_export(ExportWrite {
-                record,
-                context: context(4, Vec::new()),
-            })
-            .await
-            .expect("put export");
-    }
-    let peer = peer_node_id();
-    create_and_claim_node_pairing(&store, &peer, node_pairing()).await;
-
-    // 输入故意乱序且带重复：落盘与回读必须都是去重 + 字典序。
-    store
-        .settle_pairing(PairingSettlementWrite {
-            pairing: pairing_id(),
-            settlement: PairingSettlement::approved(
-                ScopeSet::empty(),
-                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-            )
-            .with_granted_export_ids(vec![
-                second_export(),
-                remote_export(),
-                second_export(),
-            ]),
-            context: context(
-                2,
-                vec![audit(
-                    AuditAction::NodePaired,
-                    EntityRef::Node(peer.clone()),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("approve node pairing with a nominated list");
-
-    let row = store
-        .node(&peer, NodeKind::Access)
-        .await
-        .expect("node")
-        .expect("node row");
-    assert_eq!(
-        row.export_ids(),
-        [remote_export(), second_export()].as_slice(),
-        "读回必须与落盘同序（去重 + 字典序）"
-    );
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        export_ids_json(&pool, &peer).await,
-        r#"["export-one","export-two"]"#,
-        "列文本必须是有类型 JSON 数组文本（空集合固定 '[]'）"
-    );
-    assert_eq!(audit_rows(&pool, AuditAction::NodePaired).await, 1);
-
-    // 空清单同样合法：落盘 `'[]'`（= 该节点看不到任何 Export），配对照常建立。
-    let other = NodeId::new("88888888-8888-4888-8888-888888888888").expect("node id");
-    let empty_pairing = PairingId::new("aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa").expect("pairing id");
-    create_and_claim_node_pairing(
-        &store,
-        &other,
-        node_pairing_with_id(
-            empty_pairing.clone(),
-            "88888888-8888-4888-8888-888888888888",
-        ),
-    )
-    .await;
-    store
-        .settle_pairing(PairingSettlementWrite {
-            pairing: empty_pairing,
-            settlement: PairingSettlement::approved(
-                ScopeSet::empty(),
-                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-            ),
-            context: context(3, Vec::new()),
-        })
-        .await
-        .expect("空清单必须合法（空清单 = 看不到任何 Export，而不是配对失败）");
-    assert!(
-        store
-            .node(&other, NodeKind::Access)
-            .await
-            .expect("node")
-            .expect("node row")
-            .export_ids()
-            .is_empty()
-    );
-    assert_eq!(
-        export_ids_json(&pool, &other).await,
-        "[]",
-        "空集合必须固定编成 '[]'"
-    );
-
-    // 撤销清单内的 Export 不级联清理条目（`design.md` D1 的条件③与「重新上架得到新 id」口径）。
-    store
-        .revoke_export(ExportRevocation {
-            export: remote_export(),
-            context: context(5, Vec::new()),
-        })
-        .await
-        .expect("revoke export");
-    assert_eq!(
-        store
-            .node(&peer, NodeKind::Access)
-            .await
-            .expect("node")
-            .expect("node row")
-            .export_ids(),
-        [remote_export(), second_export()].as_slice(),
-        "撤销不级联清理清单（条目保留，可见性由「未撤销」条件自然失效）"
-    );
-    assert!(
-        store
-            .export(&remote_export())
-            .await
-            .expect("export")
-            .expect("export row")
-            .is_revoked(),
-        "Export 自身的撤销照常落盘"
-    );
-    pool.close().await;
-    store.close().await;
-}
-
-/// `design.md` D4 的三类失败与「失败零写入」：非法条目以具名错误拒绝，且不创建信任行、不推进配对状态、
-/// 不写审计（整事务回滚）。错误分类与适配层的 `local.not_found` / `local.invalid_params` 一一对应。
-#[tokio::test]
-async fn node_pairing_approval_rejects_invalid_export_ids_without_writing() {
-    let dir = temp_dir("admin-node-export-ids-invalid");
-    let store = open(&dir).await;
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    // 两条已存在的 Export：一条已撤销、一条 scopes 与本次 grants 不相交。
-    store
-        .put_export(ExportWrite {
-            record: export_record_with(EXPORT),
-            context: context(4, Vec::new()),
-        })
-        .await
-        .expect("put export");
-    store
-        .put_export(ExportWrite {
-            record: export_record_with_scopes(SECOND_EXPORT, &["grant.observe"], None),
-            context: context(4, Vec::new()),
-        })
-        .await
-        .expect("put export with disjoint scopes");
-    store
-        .revoke_export(ExportRevocation {
-            export: remote_export(),
-            context: context(4, Vec::new()),
-        })
-        .await
-        .expect("revoke the first export");
-
-    // (清单, 断言)；三类失败各自对应一个具名错误。
-    type ErrorAssertion = fn(PortError);
-    let cases: [(Vec<ExportId>, ErrorAssertion); 3] = [
-        (
-            vec![ExportId::new("export-never-created").expect("export id")],
-            |error| match error {
-                PortError::NotFound(EntityRef::Export(id)) => {
-                    assert_eq!(id.as_str(), "export-never-created");
-                }
-                other => panic!("不存在的 id 必须是 NotFound(Export)，得到 {other}"),
-            },
-        ),
-        (vec![remote_export()], |error| match error {
-            PortError::NotFound(EntityRef::Export(id)) => assert_eq!(id.as_str(), EXPORT),
-            other => panic!("已撤销的 id 必须是 NotFound(Export)，得到 {other}"),
-        }),
-        (vec![second_export()], |error| {
-            assert_invalid_request(
-                error,
-                "granted export ids must intersect the granted grants",
-            );
-        }),
-    ];
-
-    for (index, (export_ids, assert_error)) in cases.into_iter().enumerate() {
-        let peer = peer_node_id();
-        let pairing =
-            PairingId::new(&format!("bbbbbbbb-1111-4111-8111-{index:012}")).expect("pairing id");
-        create_and_claim_node_pairing(
-            &store,
-            &peer,
-            node_pairing_with_id(pairing.clone(), peer.as_ref()),
-        )
-        .await;
-
-        let error = store
-            .settle_pairing(PairingSettlementWrite {
-                pairing: pairing.clone(),
-                settlement: PairingSettlement::approved(
-                    ScopeSet::empty(),
-                    GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-                )
-                .with_granted_export_ids(export_ids),
-                context: context(
-                    2,
-                    vec![audit(
-                        AuditAction::NodePaired,
-                        EntityRef::Node(peer.clone()),
-                        AuditOutcome::Success,
-                    )],
-                ),
-            })
-            .await
-            .expect_err("非法清单必须拒绝落定");
-        assert_error(error);
-
-        assert!(
-            store.nodes().await.expect("nodes").is_empty(),
-            "失败路径不得创建信任行"
-        );
-        assert_eq!(
-            store
-                .pairing(&pairing)
-                .await
-                .expect("pairing")
-                .expect("pairing row")
-                .state(),
-            PairingState::PendingConfirmation,
-            "失败路径不得推进配对状态"
-        );
-        let pool = raw_pool(&path).await;
-        assert_eq!(
-            scalar_i64(&pool, "SELECT COUNT(*) FROM owned_node WHERE node_id = ?1").await,
-            0,
-            "失败路径不得写节点行"
-        );
-        assert_eq!(
-            audit_rows(&pool, AuditAction::NodePaired).await,
-            0,
-            "失败路径不得写审计"
-        );
-        assert_eq!(
-            scalar_i64(&pool, "SELECT COUNT(*) FROM owned_pairing").await,
-            index as i64 + 1,
-            "失败路径不得动既有配对行"
-        );
-        pool.close().await;
-    }
-    store.close().await;
-}
-
-/// 设备配对的落定不接受 `exportIds`：与「设备配对必须不带 grants」同一处、同一口径的显式拒绝
-/// （清单只属于节点配对；授权相关字段不得被静默丢弃），且失败零写入零审计。
-#[tokio::test]
-async fn a_device_pairing_must_not_carry_export_ids() {
-    let dir = temp_dir("admin-device-export-ids");
-    let store = open(&dir).await;
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store
-        .create_pairing(PairingWrite {
-            record: device_pairing(30),
-            context: context(0, Vec::new()),
-        })
-        .await
-        .expect("create pairing");
-    store
-        .claim_pairing(device_claim(&device_id()))
-        .await
-        .expect("claim pairing");
-
-    let error = store
-        .settle_pairing(PairingSettlementWrite {
-            pairing: pairing_id(),
-            settlement: approved_settlement()
-                .with_granted_export_ids(vec![ExportId::new(EXPORT).expect("export id")]),
-            context: context(
-                2,
-                vec![audit(
-                    AuditAction::PairingApproved,
-                    EntityRef::Pairing(pairing_id()),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect_err("设备配对带清单必须拒绝落定");
-    assert_invalid_request(error, "a device pairing must not carry export ids");
-
-    assert!(
-        store.devices().await.expect("devices").is_empty(),
-        "失败路径不得创建信任行"
-    );
-    assert!(
-        store
-            .peer_key(&PeerIdentity::Device(device_id()))
-            .await
-            .expect("peer key")
-            .is_none(),
-        "失败路径不得写身份材料"
-    );
-    assert_eq!(
-        store
-            .pairing(&pairing_id())
-            .await
-            .expect("pairing")
-            .expect("pairing row")
-            .state(),
-        PairingState::PendingConfirmation,
-        "失败路径不得推进配对状态"
-    );
-
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_device").await,
-        0,
-        "失败路径不得写设备行"
-    );
-    assert_eq!(
-        audit_rows(&pool, AuditAction::PairingApproved).await,
-        0,
-        "失败路径不得写审计"
-    );
-    pool.close().await;
-    store.close().await;
-}
-
-/// 设备配对的落定不接受非空 `ScopeSet`：设备不再有授权维度（`AGENTS.md` §4），非空集合是构造错误、
-/// 必须**显式拒绝**而非静默丢弃（`trust.rs` 的 `InvalidRequest` 分支），且失败零写入零审计。同处也
-/// 断言设备表已无 `scopes_json` 列（v8 迁移的读/写投影）。
-#[tokio::test]
-async fn a_pairing_settlement_must_not_carry_a_scope_set() {
-    let dir = temp_dir("admin-device-scope-set");
-    let store = open(&dir).await;
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store
-        .create_pairing(PairingWrite {
-            record: device_pairing(30),
-            context: context(0, Vec::new()),
-        })
-        .await
-        .expect("create pairing");
-    store
-        .claim_pairing(device_claim(&device_id()))
-        .await
-        .expect("claim pairing");
-
-    let error = store
-        .settle_pairing(PairingSettlementWrite {
-            pairing: pairing_id(),
-            settlement: PairingSettlement::approved(
-                ScopeSet::try_from_iter(["session.list"]).expect("scopes"),
-                GrantSet::empty(),
-            ),
-            context: context(
-                2,
-                vec![audit(
-                    AuditAction::PairingApproved,
-                    EntityRef::Pairing(pairing_id()),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect_err("带 scope 集合的设备配对落定必须拒绝");
-    assert_invalid_request(error, "a pairing settlement must not carry a scope set");
-
-    assert!(
-        store.devices().await.expect("devices").is_empty(),
-        "失败路径不得创建信任行"
-    );
-    assert!(
-        store
-            .peer_key(&PeerIdentity::Device(device_id()))
-            .await
-            .expect("peer key")
-            .is_none(),
-        "失败路径不得写身份材料"
-    );
-    assert_eq!(
-        store
-            .pairing(&pairing_id())
-            .await
-            .expect("pairing")
-            .expect("pairing row")
-            .state(),
-        PairingState::PendingConfirmation,
-        "失败路径不得推进配对状态"
-    );
-
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_device").await,
-        0,
-        "失败路径不得写设备行"
-    );
-    assert_eq!(
-        audit_rows(&pool, AuditAction::PairingApproved).await,
-        0,
-        "失败路径不得写审计"
-    );
-    assert!(
-        !column_names(&pool, "owned_device")
-            .await
-            .contains(&"scopes_json".to_owned()),
-        "设备表不得再有授权集合列（v8 已删）"
-    );
-    pool.close().await;
-    store.close().await;
-}
-
-/// §11.2 第 1 条回归：claim 必须逐字回显登记时宣告的本机绑定；回显别的机器一律以身份不匹配拒绝，
-/// 且不推进状态、不写对端行。
 #[tokio::test]
 async fn claim_with_a_foreign_host_binding_is_rejected() {
     let dir = temp_dir("admin-pairing-binding");
@@ -1653,8 +1128,6 @@ async fn only_a_fresh_pairing_can_lift_a_revocation() {
                 PairingTarget::Device,
                 PairingState::Created,
                 None,
-                ScopeSet::empty(),
-                GrantSet::empty(),
                 digest(PAIRING_SECRET),
                 HOST_BINDING,
                 at(5),
@@ -1682,8 +1155,6 @@ async fn only_a_fresh_pairing_can_lift_a_revocation() {
                 acp_core::model::PairingClaim::try_new(
                     pairing.clone(),
                     peer,
-                    ScopeSet::empty(),
-                    GrantSet::empty(),
                 )
                 .expect("claim")
             },
@@ -1750,8 +1221,6 @@ async fn only_a_fresh_node_pairing_can_lift_a_node_revocation() {
             "office access",
             NodeKind::Access,
             fingerprint,
-            GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-            Vec::new(),
             NodeState::Paired,
             None,
             at(1),
@@ -1807,10 +1276,7 @@ async fn only_a_fresh_node_pairing_can_lift_a_node_revocation() {
     store
         .settle_pairing(PairingSettlementWrite {
             pairing: pairing_id(),
-            settlement: PairingSettlement::approved(
-                ScopeSet::empty(),
-                GrantSet::try_from_iter(["grant.remote-work"]).expect("grants"),
-            ),
+            settlement: PairingSettlement::approved(),
             context: context(7, Vec::new()),
         })
         .await
@@ -2296,8 +1762,6 @@ async fn record_node_connected_advances_the_access_row_once_forward() {
         approved.display_name(),
         approved.kind(),
         approved.node_public_key_fingerprint().clone(),
-        approved.grants().clone(),
-        approved.export_ids().to_vec(),
         approved.state(),
         approved.owner_endpoint().map(str::to_owned),
         approved.created_at().clone(),
@@ -2699,8 +2163,6 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                 PairingTarget::Device,
                 PairingState::Created,
                 None,
-                ScopeSet::empty(),
-                GrantSet::empty(),
                 digest(PAIRING_SECRET),
                 HOST_BINDING,
                 at(0),
@@ -2734,8 +2196,6 @@ async fn expired_pairing_is_refused_on_claim_and_terminated_by_restart_sweep() {
                     acp_core::model::PairingClaim::try_new(
                         stale.clone(),
                         peer,
-                        ScopeSet::empty(),
-                        GrantSet::empty(),
                     )
                     .expect("claim")
                 },
@@ -3368,473 +2828,6 @@ async fn timestamps_are_advanced_never_erased() {
 
 /// spec：同一 Export 归属冲突被拒；写集内部两处集合分歧被拒（实现偏差 3）。
 #[tokio::test]
-async fn import_ownership_is_exclusive_and_write_set_divergence_is_rejected() {
-    let dir = temp_dir("admin-import-ownership");
-    let store = open(&dir).await;
-    store
-        .put_export(ExportWrite {
-            record: export_record(),
-            context: context(
-                4,
-                vec![audit(
-                    AuditAction::ExportCreated,
-                    EntityRef::Export(remote_export()),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("put export");
-    let round_trip = store
-        .export(&remote_export())
-        .await
-        .expect("export")
-        .expect("export row");
-    assert_eq!(round_trip, export_record());
-    assert_eq!(
-        store.exports().await.expect("exports"),
-        vec![export_record()]
-    );
-
-    store
-        .add_import(ImportWrite {
-            record: import_record(IMPORT, vec![remote_export()]),
-            exports: vec![remote_export()],
-            context: context(
-                5,
-                vec![audit(
-                    AuditAction::ImportAdded,
-                    EntityRef::Import(ImportId::new(IMPORT).expect("import id")),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("add import");
-    assert_eq!(
-        store
-            .import(&ImportId::new(IMPORT).expect("import id"))
-            .await
-            .expect("import"),
-        Some(import_record(IMPORT, vec![remote_export()]))
-    );
-
-    // 同一 `(owner_node_id, export_id)` 不能再归属另一个 Import。
-    assert_conflict(
-        store
-            .add_import(ImportWrite {
-                record: import_record(OTHER_IMPORT, vec![remote_export()]),
-                exports: vec![remote_export()],
-                context: context(6, Vec::new()),
-            })
-            .await
-            .expect_err("duplicate ownership must conflict"),
-        ConflictKind::DuplicateOwnership,
-    );
-    // 同一 import id 再次登记显式冲突，不静默合并。
-    assert_conflict(
-        store
-            .add_import(ImportWrite {
-                record: import_record(IMPORT, vec![remote_export()]),
-                exports: vec![remote_export()],
-                context: context(6, Vec::new()),
-            })
-            .await
-            .expect_err("a repeated import id must conflict"),
-        ConflictKind::AlreadyExists,
-    );
-    // `exports` 与 `record.export_ids()` 分歧：写集自相矛盾 → `InvalidRequest`。
-    assert_invalid_request(
-        store
-            .add_import(ImportWrite {
-                record: import_record(OTHER_IMPORT, vec![remote_export()]),
-                exports: Vec::new(),
-                context: context(6, Vec::new()),
-            })
-            .await
-            .expect_err("a divergent write set must be refused"),
-        "ImportWrite.exports must equal record.export_ids()",
-    );
-
-    assert_eq!(store.imports().await.expect("imports").len(), 1);
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store.close().await;
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_import").await,
-        1
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_import_export").await,
-        1
-    );
-    assert_eq!(audit_rows(&pool, AuditAction::ImportAdded).await, 1);
-    pool.close().await;
-}
-
-/// spec：完整移除与连接级清空都不删审计；两者都清掉交付索引与命令引用。
-#[tokio::test]
-async fn full_import_removal_and_connection_drop_both_keep_audit() {
-    let dir = temp_dir("admin-import-removal");
-    let store = open(&dir).await;
-    store
-        .put_export(ExportWrite {
-            record: export_record(),
-            context: context(4, Vec::new()),
-        })
-        .await
-        .expect("put export");
-    store
-        .add_import(ImportWrite {
-            record: import_record(IMPORT, vec![remote_export()]),
-            exports: vec![remote_export()],
-            context: context(
-                5,
-                vec![audit(
-                    AuditAction::ImportAdded,
-                    EntityRef::Import(ImportId::new(IMPORT).expect("import id")),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("add import");
-    // 一条 imported 会话 + 一条交付索引；命令引用与 imported 审计由 raw SQL 落库（无对应写端口）。
-    let session = acp_core::model::RemoteSessionRef::new(
-        owner_node_id(),
-        remote_export(),
-        SessionId::new(REMOTE_SESSION).expect("session id"),
-    );
-    store
-        .upsert_session(
-            ImportedSessionRecord {
-                session: session.clone(),
-                origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH).expect("epoch")),
-                title: Some("imported".to_owned()),
-                agent: None,
-                state: None,
-                version: None,
-                created_at: Some(at(4)),
-                last_origin_sequence: None,
-                acked: None,
-                attachment: None,
-                updated_at: at(5),
-            },
-            at(5),
-        )
-        .await
-        .expect("upsert imported session");
-    store
-        .commit_receipt(DeliveryReceipt {
-            session: session.clone(),
-            origin: acp_core::model::OriginEventRef::new(
-                owner_node_id(),
-                OriginEpoch::new(ORIGIN_EPOCH).expect("epoch"),
-                EventId::new("99999999-9999-4999-8999-999999999999").expect("event id"),
-            ),
-            origin_sequence: Sequence::new(1).expect("sequence"),
-            event_type: EventType::new("resource.event").expect("event type"),
-            payload_digest: digest("remote-payload"),
-            at: at(5),
-        })
-        .await
-        .expect("commit receipt");
-
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    let raw = raw_write_pool(&path).await;
-    sqlx::query(
-        "INSERT INTO imported_command_ref (owner_node_id, export_id, session_id, request_id, \
-         command, status, accepted_at) VALUES (?1, ?2, ?3, 'req-1', 'session.prompt', \
-         'accepted', ?4)",
-    )
-    .bind(OWNER_NODE)
-    .bind(EXPORT)
-    .bind(REMOTE_SESSION)
-    .bind(at(5).as_str())
-    .execute(&raw)
-    .await
-    .expect("insert command ref");
-    sqlx::query(
-        "INSERT INTO imported_audit (at, action, actor_kind, actor_id, outcome, target_kind, \
-         target_id, owner_node_id, export_id) VALUES (?1, 'device.authenticated', 'cli', 'cli', \
-         'success', 'import', ?2, ?3, ?4)",
-    )
-    .bind(at(5).as_str())
-    .bind(IMPORT)
-    .bind(OWNER_NODE)
-    .bind(EXPORT)
-    .execute(&raw)
-    .await
-    .expect("insert imported audit");
-    raw.close().await;
-
-    // 连接级清空：只删交付索引与命令引用。
-    let report = store
-        .drop_import(&ImportId::new(IMPORT).expect("import id"))
-        .await
-        .expect("drop import");
-    assert!(report.delivery_index_removed >= 1);
-    assert_eq!(report.command_refs_removed, 1);
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_delivery_index").await,
-        0
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_command_ref").await,
-        0
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
-        1,
-        "连接级清空不删审计"
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_import").await,
-        1
-    );
-    pool.close().await;
-
-    // 完整移除：管理行、关联行、会话行与其级联一并消失，审计保留。
-    store
-        .remove_import(ImportRemoval {
-            import: ImportId::new(IMPORT).expect("import id"),
-            context: context(
-                7,
-                vec![audit(
-                    AuditAction::ImportRemoved,
-                    EntityRef::Import(ImportId::new(IMPORT).expect("import id")),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("remove import");
-    assert!(
-        store
-            .import(&ImportId::new(IMPORT).expect("import id"))
-            .await
-            .expect("import")
-            .is_none()
-    );
-    store.close().await;
-
-    let pool = raw_pool(&path).await;
-    for table in [
-        "imported_import",
-        "imported_import_export",
-        "imported_session",
-        "imported_delivery_index",
-        "imported_command_ref",
-    ] {
-        assert_eq!(
-            scalar_i64(&pool, &format!("SELECT COUNT(*) FROM {table}")).await,
-            0,
-            "{table} must be empty after a full removal"
-        );
-    }
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
-        1,
-        "完整移除保留审计"
-    );
-    assert_eq!(audit_rows(&pool, AuditAction::ImportAdded).await, 1);
-    assert_eq!(audit_rows(&pool, AuditAction::ImportRemoved).await, 1);
-    pool.close().await;
-
-    // 第二个 Import 直接完整移除（不经连接级清空）：交付索引与命令引用必须由 `remove_import`
-    // 自己带走，否则「完整移除后交付索引与命令引用都不存在」就只是前一步的假象。
-    let store = open(&dir).await;
-    store
-        .put_export(ExportWrite {
-            record: export_record_with(SECOND_EXPORT),
-            context: context(6, Vec::new()),
-        })
-        .await
-        .expect("put second export");
-    store
-        .add_import(ImportWrite {
-            record: import_record(OTHER_IMPORT, vec![second_export()]),
-            exports: vec![second_export()],
-            context: context(6, Vec::new()),
-        })
-        .await
-        .expect("add second import");
-    let second_session = acp_core::model::RemoteSessionRef::new(
-        owner_node_id(),
-        second_export(),
-        SessionId::new(SECOND_SESSION).expect("session id"),
-    );
-    store
-        .upsert_session(
-            ImportedSessionRecord {
-                session: second_session.clone(),
-                origin_epoch: Some(OriginEpoch::new(ORIGIN_EPOCH).expect("epoch")),
-                title: None,
-                agent: None,
-                state: None,
-                version: None,
-                created_at: Some(at(6)),
-                last_origin_sequence: None,
-                acked: None,
-                attachment: None,
-                updated_at: at(6),
-            },
-            at(6),
-        )
-        .await
-        .expect("upsert second session");
-    store
-        .commit_receipt(DeliveryReceipt {
-            session: second_session,
-            origin: acp_core::model::OriginEventRef::new(
-                owner_node_id(),
-                OriginEpoch::new(ORIGIN_EPOCH).expect("epoch"),
-                EventId::new("aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa").expect("event id"),
-            ),
-            origin_sequence: Sequence::new(1).expect("sequence"),
-            event_type: EventType::new("resource.event").expect("event type"),
-            payload_digest: digest("remote-payload-two"),
-            at: at(6),
-        })
-        .await
-        .expect("commit second receipt");
-    let raw = raw_write_pool(&path).await;
-    sqlx::query(
-        "INSERT INTO imported_command_ref (owner_node_id, export_id, session_id, request_id, \
-         command, status, accepted_at) VALUES (?1, ?2, ?3, 'req-2', 'session.prompt', \
-         'accepted', ?4)",
-    )
-    .bind(OWNER_NODE)
-    .bind(SECOND_EXPORT)
-    .bind(SECOND_SESSION)
-    .bind(at(6).as_str())
-    .execute(&raw)
-    .await
-    .expect("insert second command ref");
-    raw.close().await;
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_delivery_index").await,
-        1,
-        "第二个 Import 的交付索引已落库"
-    );
-    pool.close().await;
-    store
-        .remove_import(ImportRemoval {
-            import: ImportId::new(OTHER_IMPORT).expect("import id"),
-            context: context(7, Vec::new()),
-        })
-        .await
-        .expect("remove second import");
-    store.close().await;
-    let pool = raw_pool(&path).await;
-    for table in [
-        "imported_import",
-        "imported_import_export",
-        "imported_session",
-        "imported_delivery_index",
-        "imported_command_ref",
-    ] {
-        assert_eq!(
-            scalar_i64(&pool, &format!("SELECT COUNT(*) FROM {table}")).await,
-            0,
-            "{table} must be empty after removing both imports"
-        );
-    }
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM imported_audit").await,
-        1,
-        "完整移除保留审计"
-    );
-    pool.close().await;
-}
-
-/// 规格：撤销是终态（admin-state-persistence「撤销与删除后的写入不得复活资源」）。
-///
-/// `put_export` 不是 `export.update`：已撤销的 Export MUST NOT 被普通写入复活，撤销时间 MUST 只由
-/// `revoke_export` 写入且不被后续写入覆盖；携带 `revoked_at` 的记录 MUST 被直接拒绝。
-#[tokio::test]
-async fn export_revocation_is_terminal_for_plain_writes() {
-    let dir = temp_dir("admin-export-revocation-terminal");
-    let store = open(&dir).await;
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store
-        .put_export(ExportWrite {
-            record: export_record(),
-            context: context(4, Vec::new()),
-        })
-        .await
-        .expect("put export");
-    store
-        .revoke_export(ExportRevocation {
-            export: remote_export(),
-            context: context(5, Vec::new()),
-        })
-        .await
-        .expect("revoke export");
-
-    let pool = raw_pool(&path).await;
-    let revoked = table_snapshot(&pool, "owned_export").await;
-    assert!(
-        revoked.iter().all(|row| row.contains(at(5).as_str())),
-        "撤销时间必须落库：{revoked:?}"
-    );
-
-    // 传入未撤销记录 → Conflict(AlreadyExists)，库内该行逐行不变（含首次撤销时间）。
-    assert_conflict(
-        store
-            .put_export(ExportWrite {
-                record: export_record(),
-                context: context(6, Vec::new()),
-            })
-            .await
-            .expect_err("a revoked export must not be resurrected by a plain write"),
-        ConflictKind::AlreadyExists,
-    );
-    assert_eq!(
-        table_snapshot(&pool, "owned_export").await,
-        revoked,
-        "被拒的写入不得清除撤销时间或改动其他列"
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_export").await,
-        1
-    );
-    pool.close().await;
-
-    // 携带 `revoked_at` 的记录 → InvalidRequest（撤销只走 `revoke_export`），且整事务零写入。
-    assert_invalid_request(
-        store
-            .put_export(ExportWrite {
-                record: export_record_with_revocation(EXPORT, Some(at(7))),
-                context: context(7, Vec::new()),
-            })
-            .await
-            .expect_err("put_export must not be used to revoke"),
-        "use export.revoke to revoke an export",
-    );
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        table_snapshot(&pool, "owned_export").await,
-        revoked,
-        "参数类拒绝必须零写入"
-    );
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_audit").await,
-        0,
-        "夹具未携带审计，拒绝路径不得写入审计"
-    );
-    pool.close().await;
-    store.close().await;
-}
-
-// ---------------------------------------------------------------------------------------------
-// 本地配置（§11.6 第 8/9 条，§11.8）
-// ---------------------------------------------------------------------------------------------
-
-/// spec：默认 profile 唯一且切换原子（调用返回后恰好一个默认）。
-#[tokio::test]
 async fn directory_records_stay_local_and_keep_created_at() {
     let dir = temp_dir("admin-workspace");
     let store = open(&dir).await;
@@ -3849,14 +2842,6 @@ async fn directory_records_stay_local_and_keep_created_at() {
     assert_eq!(directories[0].canonical_path(), absolute_path("project"));
     assert_eq!(directories[0].created_at(), &at(1));
 
-    // 对端可见的 Export 侧只出现目录标识，不出现规范化路径或其片段。
-    store
-        .put_export(ExportWrite {
-            record: export_record(),
-            context: context(4, Vec::new()),
-        })
-        .await
-        .expect("put export");
     store.close().await;
     let pool = raw_pool(&path).await;
     // canonical path 只允许落在本机的 `owned_directory.canonical_path`：Export（对端可见）与审计都不含它。
@@ -3864,20 +2849,6 @@ async fn directory_records_stay_local_and_keep_created_at() {
         columns_containing(&pool, &absolute_path("project")).await,
         vec!["owned_directory.canonical_path".to_owned()],
         "规范化路径只能出现在本机目录行里"
-    );
-    let export_side: Vec<String> = sqlx::query_scalar(
-        "SELECT COALESCE(aliases_json, '') || COALESCE(templates_json, '') || COALESCE(default_alias, '') \
-         FROM owned_export",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("export side");
-    assert!(
-        export_side.iter().all(
-            |text| text.contains(workspace_directory("project").as_str())
-                && !text.contains(&absolute_path("project"))
-        ),
-        "对端可见的 Export 侧只出现目录标识，不出现规范化路径"
     );
     pool.close().await;
 }
@@ -3946,13 +2917,14 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
     .expect("install trigger");
 
     let error = store
-        .put_export(ExportWrite {
-            record: export_record(),
+        .put_node(NodeWrite {
+            record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+            public_key: peer_public_key(),
             context: context(
                 1,
                 vec![audit(
-                    AuditAction::ImportAdded,
-                    EntityRef::Provider("openai".to_owned()),
+                    AuditAction::NodePaired,
+                    EntityRef::Node(node_id()),
                     AuditOutcome::Success,
                 )],
             ),
@@ -3963,7 +2935,7 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
         matches!(error, PortError::Backend(_)),
         "约束/触发器失败必须给出具名错误，got {error}"
     );
-    assert!(store.exports().await.expect("exports").is_empty());
+    assert!(store.nodes().await.expect("nodes").is_empty());
     sqlx::query("DROP TRIGGER block_audit")
         .execute(&raw)
         .await
@@ -3979,13 +2951,14 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
 
     // 触发器移除后同一写集成功（证明失败来自审计写入，而不是这条写集本身非法）。
     store
-        .put_export(ExportWrite {
-            record: export_record(),
+        .put_node(NodeWrite {
+            record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+            public_key: peer_public_key(),
             context: context(1, Vec::new()),
         })
         .await
         .expect("the same write set succeeds without the trigger");
-    assert_eq!(store.exports().await.expect("exports").len(), 1);
+    assert_eq!(store.nodes().await.expect("nodes").len(), 1);
     store.close().await;
 }
 
@@ -4164,23 +3137,13 @@ async fn fail_closed_store_rejects_every_admin_write_path() {
     ));
     assert!(matches!(
         store
-            .put_export(ExportWrite {
-                record: export_record(),
+            .put_node(NodeWrite {
+                record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+                public_key: peer_public_key(),
                 context: context(5, Vec::new()),
             })
             .await
-            .expect_err("export write must be refused"),
-        PortError::Corrupt(_)
-    ));
-    assert!(matches!(
-        store
-            .add_import(ImportWrite {
-                record: import_record(IMPORT, vec![remote_export()]),
-                exports: vec![remote_export()],
-                context: context(5, Vec::new()),
-            })
-            .await
-            .expect_err("import write must be refused"),
+            .expect_err("node write must be refused"),
         PortError::Corrupt(_)
     ));
     // 只读查询仍可用。
@@ -4207,8 +3170,9 @@ async fn capacity_limit_refuses_new_admin_writes_without_deleting_trust() {
 
     assert_unavailable(
         store
-            .put_export(ExportWrite {
-                record: export_record(),
+            .put_node(NodeWrite {
+                record: node_record(NodeKind::Access, peer_public_key().fingerprint(), NodeState::Paired),
+                public_key: peer_public_key(),
                 context: context(3, Vec::new()),
             })
             .await
@@ -4244,7 +3208,7 @@ async fn capacity_limit_refuses_new_admin_writes_without_deleting_trust() {
 
     let pool = raw_pool(&path).await;
     assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_export").await,
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_node").await,
         0,
         "被拒绝的写集不得留下任何行"
     );

@@ -24,8 +24,7 @@ use sqlx::sqlite::SqliteRow;
 
 use acp_core::model::PairingSettlement;
 use acp_core::model::{
-    Actor, ConflictKind, DeviceRecord, DeviceState, EntityRef, ExportId, Fingerprint, GrantSet,
-    NodeId, NodeKind, NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState,
+    Actor, ConflictKind, DeviceRecord, DeviceState, EntityRef, Fingerprint, NodeId, NodeKind, NodeRecord, NodeState, PairingId, PairingPeer, PairingRecord, PairingState,
     PairingTarget, PeerIdentity, PeerPublicKey, PortError, Timestamp,
 };
 use acp_core::ports::{
@@ -48,13 +47,12 @@ const DEVICE_COLUMNS: &str = "device_id, display_name, public_key, fingerprint, 
      created_at, last_seen_at, revoked_at";
 
 /// `owned_node` 的读列。
-const NODE_COLUMNS: &str = "node_id, kind, display_name, fingerprint, grants_json, state, \
-     owner_endpoint, created_at, last_connected_at, revoked_at, export_ids_json";
+const NODE_COLUMNS: &str = "node_id, kind, display_name, fingerprint, state, \
+     owner_endpoint, created_at, last_connected_at, revoked_at";
 
 /// `owned_pairing` 的读列。
-const PAIRING_COLUMNS: &str = "pairing_id, target_kind, state, display_name, requested_scopes_json, \
-     requested_grants_json, secret_digest, host_binding, created_at, expires_at, claimed_at, \
-     approved_at, terminal_at";
+const PAIRING_COLUMNS: &str = "pairing_id, target_kind, state, display_name, secret_digest, \
+     host_binding, created_at, expires_at, claimed_at, approved_at, terminal_at";
 
 /// `owned_pairing_peer` 的读列（不含绑定：该列只在 `owned_pairing` 上）。
 const PAIRING_PEER_COLUMNS: &str = "peer_kind, peer_id, display_name, public_key, fingerprint, \
@@ -93,17 +91,6 @@ fn node_from_row(row: &SqliteRow) -> Result<NodeRecord, StorageError> {
         &text(row, "display_name")?,
         decode(&text(row, "kind")?, "owned_node.kind")?,
         decode(&text(row, "fingerprint")?, "owned_node.fingerprint")?,
-        acp_core::model::GrantSet::try_from_iter(decode_strings(
-            &text(row, "grants_json")?,
-            "owned_node.grants_json is not a JSON array",
-        )?)?,
-        decode_strings(
-            &text(row, "export_ids_json")?,
-            "owned_node.export_ids_json is not a JSON array",
-        )?
-        .into_iter()
-        .map(|id| decode(&id, "owned_node.export_ids_json"))
-        .collect::<Result<Vec<ExportId>, _>>()?,
         decode(&text(row, "state")?, "owned_node.state")?,
         opt_text(row, "owner_endpoint")?,
         decode(&text(row, "created_at")?, "owned_node.created_at")?,
@@ -129,14 +116,6 @@ fn pairing_from_row(row: &SqliteRow) -> Result<PairingRecord, StorageError> {
         decode(&text(row, "target_kind")?, "owned_pairing.target_kind")?,
         decode(&text(row, "state")?, "owned_pairing.state")?,
         opt_text(row, "display_name")?,
-        acp_core::model::ScopeSet::try_from_iter(decode_strings(
-            &text(row, "requested_scopes_json")?,
-            "owned_pairing.requested_scopes_json is not a JSON array",
-        )?)?,
-        acp_core::model::GrantSet::try_from_iter(decode_strings(
-            &text(row, "requested_grants_json")?,
-            "owned_pairing.requested_grants_json is not a JSON array",
-        )?)?,
         decode(&text(row, "secret_digest")?, "owned_pairing.secret_digest")?,
         &host_binding,
         decode(&text(row, "created_at")?, "owned_pairing.created_at")?,
@@ -559,8 +538,7 @@ impl TrustStore for SqliteStore {
 
     /// §11.6 第 5 条：按 NodeId 撤销，同一事务覆盖两种角色（`owned_peer_key` 作为 tombstone 保留）。
     ///
-    /// 撤销只改 `state`/`revoked_at`/`revoke_reason`，**不**清理 `export_ids_json`：清单不随撤销级联清理
-    /// （可见性由撤销状态本身挡住，撤销后的行仍保留当初点名的清单）。
+    /// 撤销只改 `state`/`revoked_at`/`revoke_reason`；节点信任不再有授权清单。
     async fn revoke_node(&self, write: NodeRevocation) -> Result<(), PortError> {
         self.writable()?;
         let mut tx = self
@@ -610,16 +588,13 @@ impl TrustStore for SqliteStore {
             .db()?;
         sqlx::query(
             "INSERT INTO owned_pairing (pairing_id, target_kind, state, display_name, \
-             requested_scopes_json, requested_grants_json, secret_digest, host_binding, created_at, \
-             expires_at, claimed_at, approved_at, terminal_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             secret_digest, host_binding, created_at, expires_at, claimed_at, approved_at, terminal_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(record.id().as_str())
         .bind(record.target().as_str())
         .bind(record.state().as_str())
         .bind(record.display_name())
-        .bind(encode_strings(record.requested_scopes().iter().map(str::to_owned)))
-        .bind(encode_strings(record.requested_grants().iter().map(str::to_owned)))
         .bind(record.secret_digest().as_str())
         // §7.3：设备写 canonical origin，节点写本机在该配对中的 endpoint；认领时必须被逐字回显。
         .bind(record.host_binding())
@@ -683,18 +658,6 @@ impl TrustStore for SqliteStore {
         if write.context.at.as_str() >= record.expires_at().as_str() {
             return Err(PortError::Conflict(ConflictKind::Expired));
         }
-        // claim 只能请求不超过登记时的集合（登记值才是本机承诺的上限）。
-        if !is_subset(
-            claim.requested_scopes().iter(),
-            record.requested_scopes().iter(),
-        ) || !is_subset(
-            claim.requested_grants().iter(),
-            record.requested_grants().iter(),
-        ) {
-            return Err(PortError::InvalidRequest(
-                "claim requests more than the registered pairing",
-            ));
-        }
         let peer_id = peer.id().id_text().to_owned();
         let peer_kind = peer.id().kind();
         let public_key = peer.public_key().as_bytes().to_vec();
@@ -750,8 +713,6 @@ impl TrustStore for SqliteStore {
             record.target(),
             PairingState::PendingConfirmation,
             Some(peer.display_name().to_owned()),
-            record.requested_scopes().clone(),
-            record.requested_grants().clone(),
             record.secret_digest().clone(),
             record.host_binding(),
             record.created_at().clone(),
@@ -843,55 +804,17 @@ impl TrustStore for SqliteStore {
                 tx.commit().await.db()?;
                 return Ok(peer_ref);
             }
-            PairingSettlement::Approved {
-                granted_scopes,
-                granted_grants,
-                granted_export_ids,
-            } => {
+            PairingSettlement::Approved => {
                 if write.context.at.as_str() >= record.expires_at().as_str() {
                     // 过期不创建信任，也不把行推进到 approved。
                     return Err(PortError::Conflict(ConflictKind::Expired));
                 }
-                if !granted_scopes.is_empty() {
-                    // 两个方向都不携带 scope（设备不再有授权维度、节点只带 grants）：非空集合是构造错误，
-                    // 与 grants 超出请求集合同款**显式拒绝**，不得静默丢弃。
-                    return Err(PortError::InvalidRequest(
-                        "a pairing settlement must not carry a scope set",
-                    ));
-                }
-                if !is_subset(granted_grants.iter(), record.requested_grants().iter()) {
-                    return Err(PortError::InvalidRequest(
-                        "granted grants must not exceed the requested grants",
-                    ));
-                }
                 match record.target() {
                     PairingTarget::Device => {
-                        if !granted_grants.is_empty() {
-                            return Err(PortError::InvalidRequest(
-                                "a device pairing must not carry grants",
-                            ));
-                        }
-                        // 清单是节点配对独有的授权面（`PairingDecision` 不含它），设备方向带上非空清单是
-                        // 构造错误：授权相关字段不得被静默丢弃，因此与上面 grants 同款显式拒绝。
-                        if !granted_export_ids.is_empty() {
-                            return Err(PortError::InvalidRequest(
-                                "a device pairing must not carry export ids",
-                            ));
-                        }
                         approve_device(&mut tx, &peer, &write.context.at).await?;
                     }
                     PairingTarget::Node => {
-                        // 可见清单的校验与写入必须在同一事务（`design.md` D4）：分两次调用会出现
-                        // 「校验通过后该 Export 刚好被撤销、写进一条永不生效的清单」。
-                        validate_export_ids(&mut tx, granted_grants, granted_export_ids).await?;
-                        approve_node(
-                            &mut tx,
-                            &peer,
-                            granted_grants,
-                            granted_export_ids,
-                            &write.context.at,
-                        )
-                        .await?;
+                        approve_node(&mut tx, &peer, &write.context.at).await?;
                     }
                 }
                 let approved = sqlx::query(
@@ -1078,8 +1001,6 @@ impl TrustStore for SqliteStore {
             record.target(),
             PairingState::Consumed,
             record.display_name().map(str::to_owned),
-            record.requested_scopes().clone(),
-            record.requested_grants().clone(),
             record.secret_digest().clone(),
             record.host_binding(),
             record.created_at().clone(),
@@ -1188,15 +1109,6 @@ fn peer_matches_actor(actor: &Actor, peer: &PeerIdentity) -> bool {
     }
 }
 
-/// `left ⊆ right`（两边都是去重集合；用于校验请求/授予集合不得超过登记值）。
-fn is_subset<'a>(
-    left: impl Iterator<Item = &'a str>,
-    right: impl Iterator<Item = &'a str>,
-) -> bool {
-    let right: Vec<&str> = right.collect();
-    left.into_iter().all(|item| right.contains(&item))
-}
-
 /// 配对批准（设备）：写设备行并把 peer 公钥转入 `owned_peer_key`（§11.6 第 4 条）。
 ///
 /// 与 `put_device` 的差别只有一处：**本路径允许复活已撤销的身份**。§11.2 第 2 条的规则是「已撤销身份
@@ -1250,14 +1162,9 @@ async fn approve_device(
 /// 与 `put_node` 的差别同上：**本路径允许复活已撤销的身份**（§11.2 第 2 条把「按协议重新配对」定为
 /// 唯一的恢复入口，本路径即该入口）；指纹必须与既绑定材料及既有角色行一致，撤销时间与原因由
 /// upsert 清空，撤销审计保留。
-///
-/// `granted_export_ids` 是本次确认点名的 Export 清单（已在校验后）：它随信任行一起挂盘，成为该节点
-/// 可见性的第三个条件（收窄型白名单，空清单 = 看不到任何 Export）。
 async fn approve_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     peer: &PairingPeer,
-    granted_grants: &GrantSet,
-    granted_export_ids: &[ExportId],
     at: &Timestamp,
 ) -> Result<(), PortError> {
     let node_id = match peer.id() {
@@ -1280,8 +1187,6 @@ async fn approve_node(
         peer.display_name(),
         NodeKind::Access,
         fingerprint,
-        granted_grants.clone(),
-        granted_export_ids.to_vec(),
         NodeState::Paired,
         None,
         at.clone(),
@@ -1290,50 +1195,6 @@ async fn approve_node(
     )?;
     upsert_node(tx, &record).await?;
     bind_peer_key(tx, "node", node_id.as_str(), peer.public_key(), at).await?;
-    Ok(())
-}
-
-/// §11.6 第 4 条 + `design.md` D4：配对落定事务内对点名清单逐项校验。
-///
-/// 三条规则（顺序即失败优先级）：
-///
-/// 1. 每个 id 必须能在 `owned_export` 里查到**且未撤销**，否则 `NotFound(EntityRef::Export)`
-///    （适配层映射 `local.not_found`）；撤销是终态，不复用旧记录；
-/// 2. 每个 id 的 `scopes` 与本次 `granted_grants` 必须有交集，否则 `InvalidRequest`
-///    （适配层映射 `local.invalid_params`）——否则会写下一条永远不会生效的清单；
-/// 3. 空清单合法且不查任何 Export（= 该节点看不到任何 Export，方案 A 的预期语义）。
-///
-/// 与其它写集校验同款：任何一项不满足都直接返回错误，调用方（`settle_pairing`）因此不会提交事务
-/// ——不创建信任行、不推进配对状态、不写审计。
-async fn validate_export_ids(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    granted_grants: &GrantSet,
-    granted_export_ids: &[ExportId],
-) -> Result<(), PortError> {
-    for export in granted_export_ids {
-        let row =
-            sqlx::query("SELECT scopes_json, revoked_at FROM owned_export WHERE export_id = ?1")
-                .bind(export.as_str())
-                .fetch_optional(&mut **tx)
-                .await
-                .db()?;
-        let Some(row) = row else {
-            return Err(PortError::NotFound(EntityRef::Export(export.clone())));
-        };
-        if opt_text(&row, "revoked_at")?.is_some() {
-            // 已撤销的 Export 等同不存在（可见性同样要求未撤销）。
-            return Err(PortError::NotFound(EntityRef::Export(export.clone())));
-        }
-        let scopes = GrantSet::try_from_iter(decode_strings(
-            &text(&row, "scopes_json")?,
-            "owned_export.scopes_json is not a JSON array",
-        )?)?;
-        if !scopes.iter().any(|scope| granted_grants.contains(scope)) {
-            return Err(PortError::InvalidRequest(
-                "granted export ids must intersect the granted grants",
-            ));
-        }
-    }
     Ok(())
 }
 
@@ -1380,39 +1241,33 @@ async fn upsert_device(
 /// 节点角色行的 upsert。`last_connected_at` 同 `owned_device.last_seen_at`：只推进、不倒退、不抹掉
 /// （三分支 `CASE`，任一侧为空时保留非空的那一侧）。
 ///
-/// `export_ids_json` 直接取记录里已归一化的清单（去重、字典序，空集合自然编成 `'[]'`）——读写都经
-/// `NodeRecord` 的构造校验，不在此处另写一套去重/排序。
+/// 节点信任不携带授权集合：列清单里没有 grants/exportIds（v11 删除）。
 async fn upsert_node(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     record: &NodeRecord,
 ) -> Result<(), StorageError> {
     sqlx::query(
-        "INSERT INTO owned_node (node_id, kind, display_name, fingerprint, grants_json, state, \
-         owner_endpoint, created_at, last_connected_at, revoked_at, revoke_reason, export_ids_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, ?10) \
+        "INSERT INTO owned_node (node_id, kind, display_name, fingerprint, state, \
+         owner_endpoint, created_at, last_connected_at, revoked_at, revoke_reason) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, NULL) \
          ON CONFLICT(node_id, kind) DO UPDATE SET display_name = excluded.display_name, \
-         fingerprint = excluded.fingerprint, grants_json = excluded.grants_json, \
+         fingerprint = excluded.fingerprint, \
          state = excluded.state, owner_endpoint = excluded.owner_endpoint, \
          last_connected_at = CASE WHEN excluded.last_connected_at IS NULL THEN last_connected_at \
          WHEN last_connected_at IS NULL THEN excluded.last_connected_at \
          WHEN excluded.last_connected_at > last_connected_at THEN excluded.last_connected_at \
          ELSE last_connected_at END, \
          revoked_at = excluded.revoked_at, \
-         revoke_reason = excluded.revoke_reason, \
-         export_ids_json = excluded.export_ids_json",
+         revoke_reason = excluded.revoke_reason",
     )
     .bind(record.node_id().as_str())
     .bind(record.kind().as_str())
     .bind(record.display_name())
     .bind(record.node_public_key_fingerprint().as_str())
-    .bind(encode_strings(record.grants().iter().map(str::to_owned)))
     .bind(record.state().as_str())
     .bind(record.owner_endpoint())
     .bind(record.created_at().as_str())
     .bind(record.last_connected_at().map(Timestamp::as_str))
-    .bind(encode_strings(
-        record.export_ids().iter().map(|id| id.as_str().to_owned()),
-    ))
     .execute(&mut **tx)
     .await
     .map(|_| ())
