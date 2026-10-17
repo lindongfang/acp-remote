@@ -32,7 +32,7 @@ use acp_core::model::{
 use acp_core::ports::{SessionBackendFactory, SessionEndpoint};
 use agent_host::{AgentHost, HostConfig, runtime_running};
 use support::{
-    Collector, FAKE_AGENT, FakeCredentials, TempFile, TestClock, TestIds, dump_count,
+    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, dump_count,
     dumped_requests, params_of, profile_with,
 };
 
@@ -45,8 +45,7 @@ const RESUME_LINE_SESSION: &str = "55555555-5555-4555-8555-555555555555";
 
 fn host(profiles: Vec<AgentProfile>) -> Arc<AgentHost> {
     Arc::new(AgentHost::new(
-        Arc::new(support::FakeConfig::new(profiles)),
-        Arc::new(FakeCredentials::ok()),
+        Arc::new(profiles),
         HostConfig::default(),
         Arc::new(TestIds::new()),
         Arc::new(TestClock::new()),

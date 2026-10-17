@@ -4,7 +4,7 @@
 //!
 //! | 端口 / 注入口 | 具体实现 |
 //! | --- | --- |
-//! | `SessionStore` / `RemoteDeliveryStore` / `ExportStore` / `TrustStore` / `LocalConfigStore` / `AttachmentStore` / `AuditStore` | `storage_sqlite::SqliteStore`（一次 `open` 得到同一实例） |
+//! | `SessionStore` / `RemoteDeliveryStore` / `TrustStore` / `LocalConfigStore` / `AttachmentStore` / `AuditStore` | `storage_sqlite::SqliteStore`（一次 `open` 得到同一实例） |
 //! | `AgentCatalog` / `SessionBackendFactory` | `agent_host::AgentHost`（本机 Agent 的目录与端点；本切片不接空闲回收任务） |
 //! | `CredentialResolver` | [`KeystoreCredentialResolver`]（keystore 条目命名与 `provider.configure` 同规则） |
 //! | `Clock` | [`crate::clock::SystemClock`] |
@@ -28,11 +28,11 @@ use std::time::Duration;
 use acp_core::broker::{Broker, BrokerConfig, BrokerDeps};
 use acp_core::model::{
     Actor, AgentProfile, AuditAction, AuditOutcome, AuditRecord, CommittedDelivery, CommittedEvent,
-    DeviceId, EndpointEvent, EntityRef, ExportId, NodeId, PortError, SecretValue, ServerEpoch,
+    DeviceId, EndpointEvent, EntityRef, ExportId, NodeId, PortError, ServerEpoch,
     Timestamp, UnavailableKind,
 };
 use acp_core::ports::{
-    AgentCatalog, AttachmentStore, AuditStore, Clock, CredentialResolver, EventPublisher,
+    AgentCatalog, AttachmentStore, AuditStore, Clock, EventPublisher,
     IdGenerator, LocalConfigStore, NodeEventSink, RetentionPolicy, SessionBackendFactory,
     SessionStore,
 };
@@ -76,17 +76,9 @@ pub enum ComposeError {
     /// 打开（必要时迁移）存储失败。
     #[error("打开或迁移存储失败")]
     Store(#[source] StorageError),
-    /// 首次种子导入失败。
-    #[error("首次种子导入失败")]
-    Seed(#[source] PortError),
-    /// 种子条目本身非法（键名/序号级说明，不含配置值）。
-    #[error("`[[agents.profiles]]` 第 {index} 项非法：{reason}")]
-    InvalidSeed {
-        /// 条目序号（从 1 开始）。
-        index: usize,
-        /// 简短原因。
-        reason: &'static str,
-    },
+    /// 组合根调用用例失败。
+    #[error("本地用例失败")]
+    Port(#[source] PortError),
     /// 本节点身份不可用。
     #[error("本节点身份不可用")]
     Identity(#[source] IdentityUnavailable),
@@ -115,13 +107,7 @@ impl ComposeError {
                     storage_error_token(source)
                 )
             }
-            Self::Seed(source) => format!(
-                "the first-time seed import failed: {}",
-                port_error_token(source)
-            ),
-            Self::InvalidSeed { index, reason } => {
-                format!("agent profile seed #{index} is invalid: {reason}")
-            }
+            Self::Port(source) => format!("a local use case failed: {}", port_error_token(source)),
             Self::Identity(_) => "this node's identity is not usable".to_owned(),
             Self::KeystoreUnavailable => "no platform keystore backend is available".to_owned(),
             Self::StoreStillShared => "the store is still shared at shutdown time".to_owned(),
@@ -159,18 +145,6 @@ pub fn storage_error_token(error: &StorageError) -> &'static str {
         StorageError::StorageFull => "storage_full",
         StorageError::ColumnValue { .. } => "column_value",
     }
-}
-
-/// 首次种子导入的结果（用于启动日志）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SeedOutcome {
-    /// 首次初始化：导入了 `count` 个 profile 并提交「已初始化」标记（同一事务）。
-    Imported {
-        /// profile 数量（可以为 0：空种子也写标记）。
-        count: usize,
-    },
-    /// 已经初始化过：不再导入，SQLite 是唯一权威。
-    AlreadySeeded,
 }
 
 /// 组合根持有的全部具体实现。
@@ -217,6 +191,19 @@ impl Composition {
                 .await
                 .map_err(ComposeError::Store)?,
         );
+        if config.agents.is_empty() {
+            match store.discarded_agent_profiles().await {
+                Ok(count) if count > 0 => tracing::warn!(
+                    event = "daemon.agents_discarded",
+                    count,
+                    "配置未声明任何 Agent；旧库中的 profile 已随 v10 迁移删除，请在配置的 [agent] 中重新声明"
+                ),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(event = "daemon.agents_discarded_unreadable", error = ?error)
+                }
+            }
+        }
         // 同一个 `SqliteStore` 实例实现七个端口：每个端口一次显式向上转型（`Arc<SqliteStore>` →
         // `Arc<dyn …>`），不在字段位置依赖隐式强制转换。
         let session_store: Arc<dyn SessionStore> = store.clone();
@@ -233,10 +220,6 @@ impl Composition {
             .await
             .map_err(ComposeError::Identity)?;
         let ids: Arc<dyn IdGenerator> = Arc::new(UuidIdGenerator);
-        let credentials: Arc<dyn CredentialResolver> = Arc::new(KeystoreCredentialResolver::new(
-            Arc::clone(&keystore),
-            Arc::clone(&local_config),
-        ));
         let authority = Arc::new(Authority::new(
             identity.node_id().clone(),
             identity.key().clone(),
@@ -245,8 +228,7 @@ impl Composition {
             Arc::clone(&clock),
         ));
         let host = Arc::new(AgentHost::new(
-            Arc::clone(&local_config),
-            credentials,
+            Arc::new(config.agents.clone()),
             // 本切片不接 `sessions.idle_timeout_ms`（「已知但未接线」）与客户端能力宣告
             // （`HostConfig::default()` = `ClientCapabilities::none()`：没有可作答的上游客户端，不虚报能力）。
             HostConfig::default(),
@@ -278,8 +260,8 @@ impl Composition {
             broker: Arc::clone(&broker),
             store: session_store,
             deliveries,
-            exports: export_store,
             trust: trust_store,
+            exports: export_store,
             audit: audit_store,
             config: local_config,
             attachments,
@@ -422,48 +404,6 @@ impl Composition {
         Arc::clone(&self.store)
     }
 
-    /// 首次种子导入（`CONFIG_REFERENCE.md` 的「配置与管理状态的权威」）。
-    ///
-    /// - 未初始化：把配置文件里的 profile 与「已初始化」标记**同一事务**提交（空种子也写标记）；
-    /// - 已初始化：不再导入，SQLite 是唯一权威；配置文件仍含 profile 时只记一条不含参数值的提示。
-    pub async fn seed_if_needed(&self) -> Result<SeedOutcome, ComposeError> {
-        let actor = Actor::LocalCli;
-        let state = self
-            .use_cases
-            .seed_state(&actor)
-            .await
-            .map_err(ComposeError::Seed)?;
-        if state.is_seeded() {
-            if !self.config.seeds.is_empty() {
-                tracing::warn!(
-                    event = "daemon.seed_skipped",
-                    configured_seeds = self.config.seeds.len(),
-                    "管理存储已初始化：配置文件里的 profile 不再导入，请改用 `agent.configure`"
-                );
-            }
-            return Ok(SeedOutcome::AlreadySeeded);
-        }
-        let profiles = self
-            .config
-            .seeds
-            .iter()
-            .enumerate()
-            .map(|(index, seed)| {
-                seed.to_profile(&self.started_at)
-                    .map_err(|error| ComposeError::InvalidSeed {
-                        index: index + 1,
-                        reason: seed_invalid_reason(&error),
-                    })
-            })
-            .collect::<Result<Vec<AgentProfile>, _>>()?;
-        let count = profiles.len();
-        self.use_cases
-            .mark_seeded(&actor, profiles)
-            .await
-            .map_err(ComposeError::Seed)?;
-        Ok(SeedOutcome::Imported { count })
-    }
-
     /// 关闭存储：释放本对象持有的共享句柄后执行 `SqliteStore::close()`（含 `wal_checkpoint(TRUNCATE)`）。
     ///
     /// **调用方必须先释放其它持有者**（连接处理器、`DaemonControl`、周期任务、审计写任务、Agent 宿主）：
@@ -536,15 +476,6 @@ impl Composition {
 async fn futures_join(handles: Vec<tokio::task::JoinHandle<()>>) {
     for handle in handles {
         let _ = handle.await;
-    }
-}
-
-/// 种子条目非法的**静态原因**（不回显配置值）。
-fn seed_invalid_reason(error: &ConfigError) -> &'static str {
-    match error {
-        ConfigError::Invalid { detail } if detail.contains("agent_id") => "invalid agentId",
-        ConfigError::Invalid { detail } if detail.contains("env") => "invalid env binding",
-        _ => "not a valid agent profile",
     }
 }
 
@@ -649,85 +580,6 @@ impl EventPublisher for LoggingPublisher {
             ),
         }
     }
-}
-
-/// `CredentialResolver`：把 profile 的凭据绑定解析成子进程环境变量。
-///
-/// 命名与 `provider.configure`（`server::local_admin::router`）**同规则**：
-///
-/// - 条目标签 = `<ProviderRef.keystore_ref>.<fieldName>`，而 `keystore_ref` 由 `provider.configure` 写为
-///   `sha256(providerId)` 前 16 个小写 hex 字符 + `@v<version>`；
-/// - 因此本实现**读回** `ProviderRef`（SQLite 只保存非秘密引用），不自行重算摘要，避免两处口径漂移。
-///
-/// 失败一律 `Unavailable(KeystoreUnavailable)`（失败关闭）：绑定名不在白名单、Provider 引用或字段不存在、
-/// keystore 不可用、值不是 UTF-8，都不得静默跳过该变量后继续启动 Agent。
-pub struct KeystoreCredentialResolver {
-    keystore: Arc<dyn IdentityKeystore>,
-    config: Arc<dyn LocalConfigStore>,
-}
-
-impl KeystoreCredentialResolver {
-    /// 装配。
-    pub fn new(keystore: Arc<dyn IdentityKeystore>, config: Arc<dyn LocalConfigStore>) -> Self {
-        Self { keystore, config }
-    }
-}
-
-/// 凭据失败：不区分成因（调用方只应知道「凭据不可用」），且**不回显字段值或标签**。
-fn credentials_unavailable() -> PortError {
-    PortError::Unavailable(UnavailableKind::KeystoreUnavailable)
-}
-
-#[async_trait::async_trait]
-impl CredentialResolver for KeystoreCredentialResolver {
-    async fn resolve_env(
-        &self,
-        profile: &AgentProfile,
-    ) -> Result<Vec<(String, SecretValue)>, PortError> {
-        if profile.env().is_empty() {
-            return Ok(Vec::new());
-        }
-        let references = self.config.provider_refs().await?;
-        let mut resolved = Vec::with_capacity(profile.env().len());
-        for binding in profile.env() {
-            // 白名单是注入上限（`SECURITY_DESIGN.md` §12.2）：绑定名不在白名单内即失败关闭。
-            // `AgentProfile::try_new` 已保证不会出现这种状态，这里复查以防外部改写的库。
-            if !profile
-                .env_allowlist()
-                .iter()
-                .any(|name| name == binding.name())
-            {
-                return Err(credentials_unavailable());
-            }
-            let reference = references
-                .iter()
-                .find(|reference| reference.id() == binding.provider_id())
-                .ok_or_else(credentials_unavailable)?;
-            if !reference
-                .configured_fields()
-                .iter()
-                .any(|field| field == binding.field())
-            {
-                return Err(credentials_unavailable());
-            }
-            let label = provider_secret_label(reference.keystore_ref(), binding.field());
-            let secret = self
-                .keystore
-                .get_secret(SecretPurpose::ProviderCredential, &label)
-                .await
-                .map_err(|_| credentials_unavailable())?
-                .ok_or_else(credentials_unavailable)?;
-            let value =
-                String::from_utf8(secret.into_bytes()).map_err(|_| credentials_unavailable())?;
-            resolved.push((binding.name().to_owned(), SecretValue::new(value)));
-        }
-        Ok(resolved)
-    }
-}
-
-/// 某个字段的 keystore 标签：`<keystore_ref>.<fieldName>`（与 `provider.configure` 的写入规则同形）。
-pub fn provider_secret_label(keystore_ref: &str, field: &str) -> String {
-    format!("{keystore_ref}.{field}")
 }
 
 /// 连接级拒绝的审计落地（`LOCAL_ADMIN_PROTOCOL.md` §2.2、`SECURITY_DESIGN.md` §14.2）。
@@ -1043,7 +895,7 @@ pub fn forked_publisher_with_sync(
 mod tests {
     use super::*;
     use acp_core::model::{
-        AgentId, EventId, EventType, ProviderEnvBinding, ProviderRefKind, Sequence, SessionId,
+        AgentId, EventId, EventType, Sequence, SessionId,
     };
     use server::local_admin::{
         AdminOutcome, DaemonControl, DaemonStatus, LocalAdminDeps, LocalAdminHandler,
@@ -1224,156 +1076,6 @@ mod tests {
 
     /// 凭据解析：写入用的条目命名（`provider.configure`）与解析侧标签**同规则**，且字段缺失或条目
     /// 被删除时失败关闭。
-    #[tokio::test]
-    async fn credentials_resolve_through_the_shared_keystore_layout() {
-        let dir = TempDir::new("credentials");
-        let composition =
-            Composition::assemble(dev_config(&dir.path, ""), Arc::new(LoggingPublisher))
-                .await
-                .expect("装配");
-        let keystore = Arc::clone(composition.keystore());
-        let clock = Arc::clone(composition.clock());
-        let store = composition.audit_store();
-
-        let router = LocalAdminRouter::new(LocalAdminDeps {
-            daemon: Arc::new(TestDaemonControl),
-            core: Arc::clone(composition.use_cases()),
-            keystore: Arc::clone(&keystore),
-            audit: Arc::clone(&store),
-            clock: Arc::clone(&clock),
-            pairing: Arc::new(PairingSessions::new(
-                Arc::clone(composition.authority()),
-                None,
-                Arc::new(NoConnections),
-            )),
-        });
-        let payload = serde_json::to_vec(&serde_json::json!({
-            "v": 1,
-            "id": "2ae1c07c-0000-4000-8000-000000000001",
-            "method": "provider.configure",
-            "params": {
-                "providerId": "openai.primary",
-                "kind": "provider",
-                "displayName": "OpenAI",
-                "values": { "api_key": "s3cret-value" },
-            },
-        }))
-        .expect("编码请求");
-        let response = router
-            .handle(decode_request(&payload).expect("信封合法"))
-            .await;
-        match response.outcome() {
-            AdminOutcome::Success { .. } => {}
-            other => panic!("provider.configure 必须成功，实际 {other:?}"),
-        }
-
-        // 解析侧：读回持久引用，按 `<keystore_ref>.<field>` 取秘密值。
-        let resolver = KeystoreCredentialResolver::new(
-            Arc::clone(&keystore),
-            Arc::clone(&composition.attachments()) as Arc<dyn LocalConfigStore>,
-        );
-        let stored = composition
-            .use_cases()
-            .provider_refs(&Actor::LocalCli)
-            .await
-            .expect("读回引用");
-        assert_eq!(stored.len(), 1);
-        let reference = &stored[0];
-        assert_eq!(reference.kind(), ProviderRefKind::Provider);
-        assert_eq!(
-            reference.keystore_ref().len(),
-            "0123456789abcdef@v1".len(),
-            "`sha256(providerId)[..16]@v<version>`"
-        );
-        assert_eq!(
-            provider_secret_label(reference.keystore_ref(), "api_key"),
-            format!("{}.api_key", reference.keystore_ref()),
-            "字段条目标签 = `<ref>.<field>`"
-        );
-
-        let profile = |agent: &str, provider: &str, field: &str| {
-            AgentProfile::try_new(
-                AgentId::new(agent).expect("agent id"),
-                "Codex",
-                "codex",
-                Vec::new(),
-                vec!["OPENAI_API_KEY".to_owned()],
-                vec![ProviderEnvBinding::try_new(provider, field, "OPENAI_API_KEY").expect("绑定")],
-                true,
-                clock.now(),
-                clock.now(),
-            )
-            .expect("profile")
-        };
-        let resolved = resolver
-            .resolve_env(&profile("codex", "openai.primary", "api_key"))
-            .await
-            .expect("可解析");
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].0, "OPENAI_API_KEY");
-        assert_eq!(resolved[0].1.expose_secret(), "s3cret-value");
-
-        // 未配置的字段 → 失败关闭（不回退、不跳过）。
-        assert!(matches!(
-            resolver
-                .resolve_env(&profile("codex", "openai.primary", "org"))
-                .await,
-            Err(PortError::Unavailable(UnavailableKind::KeystoreUnavailable))
-        ));
-        // 未登记的 Provider → 失败关闭。
-        assert!(
-            resolver
-                .resolve_env(&profile("codex", "unknown.provider", "api_key"))
-                .await
-                .is_err()
-        );
-
-        // 条目被删除后仍然失败关闭（keystore 不可用/引用失效不得静默跳过变量）。
-        keystore
-            .delete_secret(
-                SecretPurpose::ProviderCredential,
-                &provider_secret_label(reference.keystore_ref(), "api_key"),
-            )
-            .await
-            .expect("删除条目");
-        assert!(
-            resolver
-                .resolve_env(&profile("codex", "openai.primary", "api_key"))
-                .await
-                .is_err()
-        );
-
-        // 未绑定凭据的 profile 返回空集合（不取值、不失败）。
-        let plain = AgentProfile::try_new(
-            AgentId::new("omp").expect("agent id"),
-            "OMP",
-            "omp",
-            Vec::new(),
-            vec!["PATH".to_owned()],
-            Vec::new(),
-            false,
-            clock.now(),
-            clock.now(),
-        )
-        .expect("profile");
-        assert!(
-            resolver
-                .resolve_env(&plain)
-                .await
-                .expect("空集合")
-                .is_empty()
-        );
-
-        // 关闭：先释放本用例持有的句柄（连接处理器与 router 已用完即弃）。
-        drop(resolver);
-        drop(router);
-        drop(store);
-        drop(keystore);
-        composition.close().await.expect("可关闭");
-    }
-
-    /// `Composition::close` 必须真的完成检查点，而不是静默跳过：仍有共享句柄时上报错误。
-    #[tokio::test]
     async fn a_shared_store_handle_blocks_the_checkpoint() {
         let dir = TempDir::new("shared");
         let composition =
@@ -1395,83 +1097,4 @@ mod tests {
             .await;
     }
 
-    /// 首次种子导入只提交一次；已初始化后不再导入（R5–R7 的组合根部分）。
-    #[tokio::test]
-    async fn seeding_imports_once_and_never_reimports() {
-        let dir = TempDir::new("seed");
-        let seeds =
-            "[[agents.profiles]]\nagent_id = \"codex\"\ncommand = \"codex-acp\"\ndefault = true\n";
-        let composition =
-            Composition::assemble(dev_config(&dir.path, seeds), Arc::new(LoggingPublisher))
-                .await
-                .expect("装配");
-        assert_eq!(
-            composition.seed_if_needed().await.expect("首次导入"),
-            SeedOutcome::Imported { count: 1 }
-        );
-        let profiles = composition
-            .use_cases()
-            .profiles(&Actor::LocalCli)
-            .await
-            .expect("读回 profile");
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(profiles[0].id().as_str(), "codex");
-        assert!(profiles[0].is_default());
-
-        // 第二次调用（等价于重启）不再导入。
-        assert_eq!(
-            composition.seed_if_needed().await.expect("幂等"),
-            SeedOutcome::AlreadySeeded
-        );
-        assert_eq!(
-            composition
-                .use_cases()
-                .profiles(&Actor::LocalCli)
-                .await
-                .expect("读回 profile")
-                .len(),
-            1
-        );
-
-        // 运行期改动是权威：重启（新建组合根）不覆盖它。
-        let renamed = AgentProfile::try_new(
-            AgentId::new("codex").expect("agent id"),
-            "Codex Two",
-            "codex-acp",
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            true,
-            composition.clock().now(),
-            composition.clock().now(),
-        )
-        .expect("profile");
-        composition
-            .use_cases()
-            .put_profile(&Actor::LocalCli, renamed)
-            .await
-            .expect("运行期改动");
-        composition.close().await.expect("可关闭");
-
-        let restarted =
-            Composition::assemble(dev_config(&dir.path, seeds), Arc::new(LoggingPublisher))
-                .await
-                .expect("重启装配");
-        assert_eq!(
-            restarted.seed_if_needed().await.expect("重启"),
-            SeedOutcome::AlreadySeeded
-        );
-        let profiles = restarted
-            .use_cases()
-            .profiles(&Actor::LocalCli)
-            .await
-            .expect("读回 profile");
-        assert_eq!(profiles.len(), 1);
-        assert_eq!(
-            profiles[0].display_name(),
-            "Codex Two",
-            "配置文件里的种子不得覆盖运行期的本地改动"
-        );
-        restarted.close().await.expect("可关闭");
-    }
 }

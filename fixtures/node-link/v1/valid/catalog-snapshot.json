@@ -17,18 +17,17 @@
             "capabilitiesRef": "capabilities-3f2a"
           }
         ],
-        "workspaceAliases": [
+        "workspaceDirectories": [
           {
-            "alias": "company-agent-default",
-            "displayName": "Company Agent (default)"
+            "directoryId": "0123456789abcdef0123456789abcdef"
           }
         ],
-        "defaultWorkspaceAlias": "company-agent-default",
+        "defaultWorkspaceDirectory": "0123456789abcdef0123456789abcdef",
         "templates": [
           {
             "templateId": "default",
             "displayName": "Default",
-            "workspaceAlias": "company-agent-default",
+            "workspaceDirectory": "0123456789abcdef0123456789abcdef",
             "params": [
               {
                 "name": "branch",

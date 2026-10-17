@@ -51,7 +51,7 @@ pub type RequestId = Uuid;
 /// 与该 registry 一致（也是 `docs/SYNC_PROTOCOL.md` §11.5 首列去掉 `session.resume` 的结果）。
 ///
 /// `session.create` 与 Node Link 面同名，但 payload 不同：Sync 侧是
-/// `{ agentId, workspaceAlias | workspacePath（恰好一个）, createIfMissing? }`（`exportId`/
+/// `{ agentId, directoryId | workspacePath（恰好一个）, createIfMissing? }`（`exportId`/
 /// `templateParams` 是跨节点 Export 概念，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 ///
 /// `workspace.browse` 只经 Sync 面接受（它是本机目录的逐层浏览查询，Node Link 的请求不得携带任意
@@ -310,16 +310,16 @@ pub struct WorkspaceBrowseResult {
 
 /// `sessionCreate`（`command.schema.json#/$defs/sessionCreate`）的 `payload`。
 ///
-/// schema 要求 `agentId` 必填，且 `workspaceAlias` 与 `workspacePath` **恰好出现一个**（`oneOf`）；
+/// schema 要求 `agentId` 必填，且 `directoryId` 与 `workspacePath` **恰好出现一个**（`oneOf`）；
 /// 目录来源是 [`SessionCreateWorkspace`] 的二选一，因此"两个都给"或"都不给"在构造与反序列化两侧
 /// 都不可能成立。
 ///
 /// [`create_if_missing`](Self::create_if_missing) 是可选的显式「目录不存在则先创建」开关：缺席即
 /// 假（行为与引入该键之前完全一致），只有客户端提供的目录才可能与它同时出现——它与
-/// `workspaceAlias` **互斥**（别名解析出的目录必然已存在），同时给出时按 schema 的 `not` 在
+/// `directoryId` **互斥**（已记录的目录必然已存在），同时给出时按 schema 的 `not` 在
 /// 反序列化期被拒。
 ///
-/// `workspaceAlias` 对应本机 `owned_workspace` 已登记的行，`workspacePath` 是客户端提供的绝对
+/// `directoryId` 对应本机 `owned_directory` 已记录的行，`workspacePath` 是客户端提供的绝对
 /// 目录（浏览器拿不到宿主路径，因此这一来源就是一次文本输入），`agentId` 对应本机已配置的 Agent
 /// profile。规范化路径、目录追加、MCP 配置与凭据都不在 wire 上，因此 `deny_unknown_fields` 会把
 /// `cwd`/`exportId`/`templateParams` 之类的键直接拒成 [`ValueError::Shape`]——与 schema 的
@@ -332,11 +332,11 @@ pub struct SessionCreate {
     pub create_if_missing: Option<bool>,
 }
 
-/// `session.create` 的目录来源：本机已登记别名或客户端提供的绝对路径，**恰好一个**。
+/// `session.create` 的目录来源：本机已记录的目录标识或客户端提供的绝对路径，**恰好一个**。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionCreateWorkspace {
-    /// `workspaceAlias`：本机已登记 workspace 的别名（schema 的 `maxLength: 128`）。
-    Alias(NonEmptyText<128>),
+    /// `directoryId`：本机已记录目录的 32 字符小写十六进制标识（schema 的 `pattern`）。
+    Directory(NonEmptyText<32>),
     /// `workspacePath`：客户端提供的**绝对**路径（schema 的 `maxLength: 4096`）。本机校验它存在、
     /// 是目录，并以 `canonicalize` 的结果为权威值；形状校验与解析失败由本机用例分类，不在本层判定。
     Path(NonEmptyText<4096>),
@@ -347,7 +347,9 @@ impl Serialize for SessionCreate {
         let mut map = serializer.serialize_map(Some(3))?;
         map.serialize_entry("agentId", &self.agent_id)?;
         match &self.workspace {
-            SessionCreateWorkspace::Alias(alias) => map.serialize_entry("workspaceAlias", alias)?,
+            SessionCreateWorkspace::Directory(directory_id) => {
+                map.serialize_entry("directoryId", directory_id)?
+            }
             SessionCreateWorkspace::Path(path) => map.serialize_entry("workspacePath", path)?,
         }
         if let Some(create_if_missing) = self.create_if_missing {
@@ -366,11 +368,11 @@ struct RawSessionCreate {
     #[serde(rename = "agentId")]
     agent_id: NonEmptyText<128>,
     #[serde(
-        rename = "workspaceAlias",
+        rename = "directoryId",
         default,
         deserialize_with = "deserialize_optional_non_null"
     )]
-    workspace_alias: Option<NonEmptyText<128>>,
+    directory_id: Option<NonEmptyText<32>>,
     #[serde(
         rename = "workspacePath",
         default,
@@ -378,7 +380,7 @@ struct RawSessionCreate {
     )]
     workspace_path: Option<NonEmptyText<4096>>,
     /// 建目录开关：键缺席即 `None`（默认假），键在场时只接受 `true`/`false`（没有 `null` 分支）。
-    /// 保留「键在不在」这一维，才能与 `workspaceAlias` 互斥（`Some(false)` 也算同时出现）。
+    /// 保留「键在不在」这一维，才能与 `directoryId` 互斥（`Some(false)` 也算同时出现）。
     #[serde(
         rename = "createIfMissing",
         default,
@@ -391,23 +393,24 @@ impl TryFrom<RawSessionCreate> for SessionCreate {
     type Error = ValueError;
 
     fn try_from(raw: RawSessionCreate) -> Result<Self, Self::Error> {
-        let workspace = match (raw.workspace_alias, raw.workspace_path) {
-            (Some(alias), None) => SessionCreateWorkspace::Alias(alias),
+        let workspace = match (raw.directory_id, raw.workspace_path) {
+            (Some(directory_id), None) => SessionCreateWorkspace::Directory(directory_id),
             (None, Some(path)) => SessionCreateWorkspace::Path(path),
             _ => {
                 return Err(ValueError::Shape {
                     field: "payload",
-                    expected: "workspaceAlias 与 workspacePath 必须恰好给出一个（command.schema.json#/$defs/sessionCreate 的 oneOf）",
+                    expected: "directoryId 与 workspacePath 必须恰好给出一个（command.schema.json#/$defs/sessionCreate 的 oneOf）",
                 });
             }
         };
-        // 别名解析出的目录必然已存在，因此「不存在则先创建」与它同时出现是形状错误
+        // 已记录的目录必然已存在，因此「不存在则先创建」与它同时出现是形状错误
         // （command.schema.json#/$defs/sessionCreate.payload 的 `not`）；值是不是 true 都算同时出现。
-        if matches!(workspace, SessionCreateWorkspace::Alias(_)) && raw.create_if_missing.is_some()
+        if matches!(workspace, SessionCreateWorkspace::Directory(_))
+            && raw.create_if_missing.is_some()
         {
             return Err(ValueError::Shape {
                 field: "payload",
-                expected: "createIfMissing 不得与 workspaceAlias 同时出现（command.schema.json#/$defs/sessionCreate.payload 的 not）",
+                expected: "createIfMissing 不得与 directoryId 同时出现（command.schema.json#/$defs/sessionCreate.payload 的 not）",
             });
         }
         Ok(Self {
@@ -873,7 +876,7 @@ impl CommandPayload {
             }
             CommandName::SessionCreate => parse_payload(
                 payload,
-                "{ agentId, workspaceAlias | workspacePath（恰好一个） }（sessionCreate 的 payload）",
+                "{ agentId, directoryId | workspacePath（恰好一个） }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
             CommandName::WorkspaceBrowse => parse_payload(
@@ -1525,19 +1528,19 @@ mod tests {
 
     #[test]
     fn session_create_accepts_exactly_one_directory_source_plus_agent() {
-        // 别名来源。
-        let by_alias: Command = serde_json::from_str(&body(
+        // 目录标识来源。
+        let by_id: Command = serde_json::from_str(&body(
             "session.create",
             "",
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code"}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code"}"#,
         ))
-        .expect("别名 + agentId 必须接受");
+        .expect("目录标识 + agentId 必须接受");
         assert_eq!(
-            by_alias.payload,
+            by_id.payload,
             CommandPayload::SessionCreate(SessionCreate {
                 agent_id: NonEmptyText::parse("claude-code").expect("非空"),
-                workspace: SessionCreateWorkspace::Alias(
-                    NonEmptyText::parse("work-api").expect("非空")
+                workspace: SessionCreateWorkspace::Directory(
+                    NonEmptyText::parse("0123456789abcdef0123456789abcdef").expect("非空")
                 ),
                 create_if_missing: None,
             })
@@ -1563,27 +1566,27 @@ mod tests {
 
         for rejected in [
             // oneOf：两个目录键都给或都不给都必须被拒。
-            r#"{"agentId":"claude-code","workspaceAlias":"work-api","workspacePath":"/home/dev/projects/work-api"}"#,
+            r#"{"agentId":"claude-code","directoryId":"0123456789abcdef0123456789abcdef","workspacePath":"/home/dev/projects/work-api"}"#,
             r#"{"agentId":"claude-code"}"#,
             // 目录键可缺失但不可为 null（它们不是可空字段）。
-            r#"{"agentId":"claude-code","workspaceAlias":null}"#,
+            r#"{"agentId":"claude-code","directoryId":null}"#,
             r#"{"agentId":"claude-code","workspacePath":null}"#,
             // 建目录开关与别名互斥：值是不是 true 都算「同时出现」（schema 的 not）。
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code","createIfMissing":true}"#,
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code","createIfMissing":false}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","createIfMissing":true}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","createIfMissing":false}"#,
             // 建目录开关是布尔键，没有 null 分支。
             r#"{"workspacePath":"/home/dev/projects/work-api","agentId":"claude-code","createIfMissing":null}"#,
             // cwd 与目录追加不是授权输入（SECURITY_DESIGN.md §12.3）。
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code","cwd":"C:\\repo"}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","cwd":"C:\\repo"}"#,
             // 跨节点 Export 概念在 Sync 面不存在。
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code","exportId":"export-laptop-zed"}"#,
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code","templateParams":{}}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","exportId":"export-laptop-zed"}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","templateParams":{}}"#,
             // 凭据与 MCP 配置同样不进入 wire。
-            r#"{"workspaceAlias":"work-api","agentId":"claude-code","mcpServers":{}}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code","mcpServers":{}}"#,
             // 空串不满足取值域；agentId 必填。
-            r#"{"workspaceAlias":"","agentId":"claude-code"}"#,
+            r#"{"directoryId":"","agentId":"claude-code"}"#,
             r#"{"workspacePath":"","agentId":"claude-code"}"#,
-            r#"{"workspaceAlias":"work-api"}"#,
+            r#"{"directoryId":"0123456789abcdef0123456789abcdef"}"#,
         ] {
             assert!(
                 serde_json::from_str::<Command>(&body("session.create", "", rejected)).is_err(),
@@ -1649,7 +1652,7 @@ mod tests {
 
         // 顶层 sessionId 由 `additionalProperties: false` 拒绝（不是被静默忽略）。
         let with_session = format!(
-            r#"{{"requestId":"{REQUEST}","command":"session.create","sessionId":"{SESSION}","payload":{{"workspaceAlias":"work-api","agentId":"claude-code"}}}}"#
+            r#"{{"requestId":"{REQUEST}","command":"session.create","sessionId":"{SESSION}","payload":{{"directoryId":"0123456789abcdef0123456789abcdef","agentId":"claude-code"}}}}"#
         );
         assert!(serde_json::from_str::<Command>(&with_session).is_err());
     }

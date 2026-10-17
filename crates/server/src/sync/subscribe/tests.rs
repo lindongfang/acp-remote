@@ -320,7 +320,7 @@ async fn first_sync_walks_reset_then_snapshot_then_caught_up() {
     let world = World::new();
     world.seed_device(DEVICE);
     world.store.set_head(fixture::cursor(EPOCH, 7));
-    world.seed_workspace("project", "Project", &fixture::workspace_path());
+    world.seed_directory(&fixture::workspace_path());
     world
         .store
         .push_session(fixture::core_session(SESSION, "本地会话", None));

@@ -41,9 +41,7 @@ pub const GRANTS: &[(&str, &[&str])] = &[
 
 /// 7 项本地管理能力：永不远程授予，也不参与任何展开（`SECURITY_DESIGN.md` §10.3）。
 pub const LOCAL_CAPABILITIES: &[&str] = &[
-    "local.workspace.select",
     "local.agent.configure",
-    "local.provider.configure",
     "local.device.manage",
     "local.export.manage",
     "local.node.rotate-key",

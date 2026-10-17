@@ -34,7 +34,6 @@ const EXPORT_HIDDEN: &str = "export.hidden";
 /// （`design.md` D1 的条件③）。
 const EXPORT_NARROWED: &str = "export.narrowed";
 /// 注册的 workspace alias（`session.create` 只能带别名，不能带路径）。
-const WORKSPACE_ALIAS: &str = "project.one";
 /// Agent selector。
 const AGENT: &str = "codex";
 /// 本地确认授予的 grants（也是 Export 的 `scopes` 取值域）。
@@ -45,6 +44,8 @@ struct Chain {
     owner: OwnerNode,
     access: AccessKey,
     ticket: PairingTicket,
+    /// 本机记录的项目目录标识。
+    directory_id: String,
 }
 
 impl Chain {
@@ -54,29 +55,7 @@ impl Chain {
         let access = AccessKey::new(ACCESS_NODE);
         // ① 本机注册：workspace alias + agent profile + 两个 Export。
         let workspace_root = owner.data_dir();
-        owner
-            .admin(
-                Method::WorkspaceSelect,
-                json!({
-                    "alias": WORKSPACE_ALIAS,
-                    "displayName": "Project One",
-                    "rootPath": workspace_root.display().to_string(),
-                }),
-            )
-            .await;
-        owner
-            .admin(
-                Method::AgentConfigure,
-                json!({
-                    "agentId": AGENT,
-                    "displayName": "Codex",
-                    "command": env!("CARGO_BIN_EXE_acp-remote"),
-                    "args": [],
-                    "envAllowlist": [],
-                    "default": true,
-                }),
-            )
-            .await;
+        let directory_id = support::seed_directory(&owner.data_dir(), &workspace_root).await;
         for (export_id, scopes) in [
             (EXPORT_VISIBLE, GRANTS.to_vec()),
             (EXPORT_HIDDEN, vec!["grant.approve"]),
@@ -90,15 +69,13 @@ impl Chain {
                         "exportId": export_id,
                         "displayName": format!("Export {export_id}"),
                         "agentIds": [AGENT],
-                        "workspaceAliases": [
-                            { "alias": WORKSPACE_ALIAS, "displayName": "Project One" },
-                        ],
-                        "defaultWorkspaceAlias": WORKSPACE_ALIAS,
+                        "workspaceDirectories": [{ "directoryId": directory_id }],
+                        "defaultWorkspaceDirectory": directory_id,
                         "templates": [
                             {
                                 "templateId": "tpl.default",
                                 "displayName": "Default",
-                                "workspaceAlias": WORKSPACE_ALIAS,
+                                "workspaceDirectory": directory_id,
                                 "params": [],
                             },
                         ],
@@ -170,6 +147,7 @@ impl Chain {
             owner,
             access,
             ticket,
+            directory_id,
         }
     }
 
@@ -265,7 +243,7 @@ fn session_create_body(request_id: &str, export_id: &str, alias: &str) -> Value 
         "payload": {
             "agentId": AGENT,
             "exportId": export_id,
-            "workspaceAlias": alias,
+            "directoryId": alias,
         },
     })
 }
@@ -307,15 +285,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         assert_eq!(
             ids,
             vec![EXPORT_VISIBLE],
-            "可见集必须只含同时满足三个条件的 Export：{snapshot}"
-        );
-        assert!(
-            !ids.contains(&EXPORT_HIDDEN),
-            "与节点 grants 不相交的 Export 不得出现在 catalog 里"
-        );
-        assert!(
-            !ids.contains(&EXPORT_NARROWED),
-            "清单外的 Export 不得出现在 catalog 里（即使 scopes ∩ grants 非空）"
+            "catalog 只包含对该节点可见的 Export：{snapshot}"
         );
 
         // ② session.create 正常路径：accepted(result = null) → terminal(SessionCreateResult)。
@@ -324,7 +294,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         client
             .send(
                 "command.submit",
-                session_create_body(&create_request, EXPORT_VISIBLE, WORKSPACE_ALIAS),
+                session_create_body(&create_request, EXPORT_VISIBLE, &chain.directory_id),
             )
             .await;
         let accepted = client.expect("command.accepted").await;
@@ -355,7 +325,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         client
             .send(
                 "command.submit",
-                session_create_body(&create_request, EXPORT_VISIBLE, WORKSPACE_ALIAS),
+                session_create_body(&create_request, EXPORT_VISIBLE, &chain.directory_id),
             )
             .await;
         let replay = client.expect("command.terminal").await;
@@ -367,7 +337,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         // 换一个「同样合法、但语义不同」的 payload：显式给空的 `templateParams`（§12.7 允许空参数集，
         // 但它属于被指纹的 payload 字节），因此必须命中冲突而不是回首次结果。
         client.step("idempotency conflict");
-        let mut drifted = session_create_body(&create_request, EXPORT_VISIBLE, WORKSPACE_ALIAS);
+        let mut drifted = session_create_body(&create_request, EXPORT_VISIBLE, &chain.directory_id);
         drifted["payload"]["templateParams"] = json!({});
         client.send("command.submit", drifted).await;
         let conflict = client.expect("command.rejected").await;
@@ -387,7 +357,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         let mut forbidden = session_create_body(
             &support::nodelink::uuid_text(),
             EXPORT_VISIBLE,
-            WORKSPACE_ALIAS,
+            &chain.directory_id,
         );
         forbidden["payload"]["cwd"] = json!("/tmp/attacker");
         client.send("command.submit", forbidden).await;
@@ -398,14 +368,14 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         );
         assert_eq!(rejected["body"]["error"]["details"]["field"], json!("cwd"));
 
-        client.step("unknown workspace alias");
+        client.step("unknown directory id");
         client
             .send(
                 "command.submit",
                 session_create_body(
                     &support::nodelink::uuid_text(),
                     EXPORT_VISIBLE,
-                    "not.registered",
+                    "ffffffffffffffffffffffffffffffff",
                 ),
             )
             .await;
@@ -416,7 +386,7 @@ fn the_controlled_path_runs_end_to_end_and_revocation_propagates() {
         );
         assert_eq!(
             rejected["body"]["error"]["details"]["parameter"],
-            json!("workspaceAlias")
+            json!("directoryId")
         );
 
         // ④b 清单外的 Export 不能经 `resource.attach` 进入（与 catalog 同一个判定点）：即使给出的是一个
@@ -738,7 +708,11 @@ fn a_narrowing_repair_closes_the_live_attachment() {
             .iter()
             .map(|entry| entry["exportId"].as_str().expect("exportId"))
             .collect();
-        assert_eq!(visible, vec![EXPORT_VISIBLE], "收窄之前：{snapshot}");
+        assert_eq!(
+            visible,
+            vec![EXPORT_VISIBLE],
+            "catalog 不再按 Export 过滤：{snapshot}"
+        );
 
         // ② 在该 Export 上建立一条**活的** attachment：会话 → attach → subscribe → 收到一条正文事件。
         client.step("session.create");
@@ -748,7 +722,7 @@ fn a_narrowing_repair_closes_the_live_attachment() {
                 session_create_body(
                     &support::nodelink::uuid_text(),
                     EXPORT_VISIBLE,
-                    WORKSPACE_ALIAS,
+                    &chain.directory_id,
                 ),
             )
             .await;
@@ -869,10 +843,16 @@ fn a_narrowing_repair_closes_the_live_attachment() {
             .send("catalog.subscribe", json!({ "knownRevision": null }))
             .await;
         let snapshot = fresh.expect("catalog.snapshot").await;
+        let ids: Vec<&str> = snapshot["body"]["exports"]
+            .as_array()
+            .expect("exports 数组")
+            .iter()
+            .map(|entry| entry["exportId"].as_str().expect("exportId"))
+            .collect();
         assert_eq!(
-            snapshot["body"]["exports"],
-            json!([]),
-            "空清单必须对新连接立即生效：{snapshot}"
+            ids,
+            Vec::<&str>::new(),
+            "catalog 按已提交的空清单重算：{snapshot}"
         );
         drop(fresh);
 
@@ -1142,8 +1122,8 @@ fn ac1_config_with_scenario(
         "[daemon]\ndata_dir = {dir:?}\n[identity]\nkeystore = \"ephemeral\"\n\
          [dev_mode]\nenabled = true\n\
          [storage]\npersist_deltas = true\n\
-         [[agents.profiles]]\nagent_id = \"codex\"\ndisplay_name = \"Codex\"\n\
-         command = \"{command}\"\nargs = [\"--scenario\", \"{scenario}\"]\nenv_allowlist = []\ndefault = true\n",
+         [agent]\ndefault = \"codex\"\n\
+         codex = [\"{command}\", \"--scenario\", \"{scenario}\"]\n",
         dir = data_dir.display(),
     );
     app::Config::from_toml(&text).expect("AC1 配置合法")
@@ -1218,7 +1198,6 @@ async fn ac1_create_and_settle(
 fn ac1_the_composition_root_persists_node_level_events_without_session_identity() {
     use acp_core::model::{
         Actor, AgentId, AgentRef, CreateSessionRequest, Digest, ResolvedWorkspace, ResourceOrigin,
-        WorkspaceAlias,
     };
 
     support::block_on(async {
@@ -1242,18 +1221,12 @@ fn ac1_the_composition_root_persists_node_level_events_without_session_identity(
             "组合根必须已接线 NodeEvents（否则节点级事件在 core 之前被丢弃）"
         );
 
-        // 种子导入 profile（fake ACP Agent），随后创建会话：`SessionBackendFactory::create` 会**惰性**
-        // 拉起真实子进程并完成 initialize，由此产生本进程实例唯一的一次 `agent.connected`。
-        assert_eq!(
-            composition.seed_if_needed().await.expect("种子导入"),
-            app::compose::SeedOutcome::Imported { count: 1 }
-        );
-
         let agent =
             AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
+        let path = data_dir.display().to_string();
         let workspace = ResolvedWorkspace::try_new(
-            WorkspaceAlias::new("project.one").expect("alias"),
-            data_dir.display().to_string(),
+            acp_core::model::derive_directory_id(&path),
+            path,
         )
         .expect("workspace");
         let request =
@@ -1439,14 +1412,15 @@ async fn ac1_prompt_once(
 ) -> acp_core::model::SessionId {
     use acp_core::model::{
         Actor, AgentId, AgentRef, ClientCommand, CommandKind, CommandPayload, CreateSessionRequest,
-        PromptContentBlock, ResolvedWorkspace, ResourceOrigin, ViewJson, WorkspaceAlias,
+        PromptContentBlock, ResolvedWorkspace, ResourceOrigin, ViewJson,
     };
 
     let agent =
         AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
+    let path = data_dir.display().to_string();
     let workspace = ResolvedWorkspace::try_new(
-        WorkspaceAlias::new("project.one").expect("alias"),
-        data_dir.display().to_string(),
+        acp_core::model::derive_directory_id(&path),
+        path,
     )
     .expect("workspace");
     let request = CreateSessionRequest::new(agent, Some(workspace), None, ResourceOrigin::Local);
@@ -1526,10 +1500,6 @@ async fn ac1_composition_with_scenario(
     )
     .await
     .expect("组合根装配");
-    assert_eq!(
-        composition.seed_if_needed().await.expect("种子导入"),
-        app::compose::SeedOutcome::Imported { count: 1 }
-    );
     // 扇出接收端交回调用方持有：消费者缺席时队列满会丢弃（`EVENT_QUEUE_CAPACITY`），本节只断言落库，
     // 但保有接收端才是组合根在生产里的形态（`daemon` 把接收端交给 `ResourceRoute`）。
     (composition, fanout)
@@ -1856,10 +1826,8 @@ fn ac1_config_with_request_dump(
     let text = format!(
         "[daemon]\ndata_dir = {dir:?}\n[identity]\nkeystore = \"ephemeral\"\n\
          [dev_mode]\nenabled = true\n\
-         [[agents.profiles]]\nagent_id = \"codex\"\ndisplay_name = \"Codex\"\n\
-         command = \"{command}\"\n\
-         args = [\"--scenario\", \"normal\", \"--dump-request-params\", {dump:?}]\n\
-         env_allowlist = []\ndefault = true\n",
+         [agent]\ndefault = \"codex\"\n\
+         codex = [\"{command}\", \"--scenario\", \"normal\", \"--dump-request-params\", {dump:?}]\n",
         dir = data_dir.display(),
     );
     app::Config::from_toml(&text).expect("cwd 用例配置合法")
@@ -1893,7 +1861,7 @@ fn ac1_dumped_request_rows(path: &std::path::Path) -> Vec<Value> {
 #[test]
 fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical() {
     use acp_core::model::{
-        AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin, WorkspaceAlias,
+        AgentId, AgentRef, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin,
     };
 
     support::block_on(async {
@@ -1946,16 +1914,11 @@ fn ac1_the_agent_receives_a_stripped_cwd_while_the_persisted_cwd_stays_canonical
         )
         .await
         .expect("组合根装配");
-        assert_eq!(
-            composition.seed_if_needed().await.expect("种子导入"),
-            app::compose::SeedOutcome::Imported { count: 1 }
-        );
-
         // `ResolvedWorkspace` 直接给 canonical 原文：core 不重新解析，落盘与交给后端的是同一个取值。
         let agent =
             AgentRef::try_new(AgentId::new("codex").expect("agentId"), "Codex").expect("agent ref");
         let workspace = ResolvedWorkspace::try_new(
-            WorkspaceAlias::new("project.one").expect("alias"),
+            acp_core::model::derive_directory_id(&canonical),
             canonical.clone(),
         )
         .expect("workspace");

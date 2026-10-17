@@ -19,7 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use acp_core::model::{
     AgentId, AuditAction, CachePolicy, ConflictKind, DeviceId, ExportId, ExportRecord,
     ExportTemplate, GrantSet, ImportId, NodeId, PairingId, PairingRecord, PairingState, PortError,
-    ProviderRefKind, TemplateId, Timestamp, WorkspaceAlias, WorkspaceAliasEntry,
+    TemplateId, Timestamp, DirectoryId, WorkspaceDirectoryEntry,
 };
 use identity_auth::{PairingError, authorization};
 use serde_json::Value;
@@ -210,191 +210,6 @@ pub fn daemon_stop(params: &JsonObject) -> Result<Option<u64>, AdminError> {
 
 // ---------------------------------------------------------------------------------------------
 // workspace.select / agent.configure / provider.configure（§5.2）
-// ---------------------------------------------------------------------------------------------
-
-/// `workspace.select` 的已校验参数：`root_path` 是 **canonicalize 后**的持久权威值。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceSelect {
-    /// 符号名（发布给 Export 的名字）。
-    pub alias: WorkspaceAlias,
-    /// 展示名。
-    pub display_name: String,
-    /// 规范化后的绝对目录路径。
-    pub canonical_path: String,
-}
-
-/// `workspace.select`（§5.2）：`alias`/`displayName`/`rootPath`。
-pub fn workspace_select(params: &JsonObject) -> Result<WorkspaceSelect, AdminError> {
-    reject_unknown_fields(params, &["alias", "displayName", "rootPath"])?;
-    let alias_text = string(params, "alias")?;
-    let alias = WorkspaceAlias::new(&alias_text)
-        .map_err(|error| from_invalid("parameter `alias`", error))?;
-    let display_name = display_name(params, "displayName")?;
-    let root_path = string(params, "rootPath")?;
-    let canonical_path = canonical_workspace_path(&root_path)?;
-    Ok(WorkspaceSelect {
-        alias,
-        display_name,
-        canonical_path,
-    })
-}
-
-/// §5.2 的路径规则：绝对、不含 `..`、已存在且是目录；写入前 `canonicalize`，持久值取规范化结果。
-///
-/// 校验顺序固定（绝对 → 无 `..` → 存在 → 是目录），因此拒绝原因可判定、不依赖平台错误文本。
-fn canonical_workspace_path(text: &str) -> Result<String, AdminError> {
-    let path = Path::new(text);
-    if text.is_empty() || !path.is_absolute() {
-        return Err(invalid_params(
-            "parameter `rootPath` must be an absolute path",
-        ));
-    }
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(invalid_params("parameter `rootPath` must not contain `..`"));
-    }
-    let metadata = std::fs::metadata(path)
-        .map_err(|_| invalid_params("parameter `rootPath` must be an existing directory"))?;
-    if !metadata.is_dir() {
-        return Err(invalid_params("parameter `rootPath` must be a directory"));
-    }
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|_| invalid_params("parameter `rootPath` cannot be canonicalized"))?;
-    // 规范路径必须是可用 UTF-8：core 的 `WorkspaceRecord` 与 wire 都是文本。
-    canonical
-        .to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| invalid_params("parameter `rootPath` must be a UTF-8 path"))
-}
-
-/// `agent.configure` 的已校验参数（§5.2）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentConfigure {
-    /// profile 标识（1..=128 字符，跨节点传输时不得比 wire 更严）。
-    pub agent_id: AgentId,
-    /// 展示名。
-    pub display_name: String,
-    /// 可执行文件路径或名字（不经 shell 拼接）。
-    pub command: String,
-    /// 逐项传给子进程的参数（不拼接）。
-    pub args: Vec<String>,
-    /// 环境变量名白名单（注入上限）。
-    pub env_allowlist: Vec<String>,
-    /// 是否设为默认 profile。
-    pub default: bool,
-}
-
-/// `agent.configure`（§5.2）：六个字段都是必需字段。
-pub fn agent_configure(params: &JsonObject) -> Result<AgentConfigure, AdminError> {
-    reject_unknown_fields(
-        params,
-        &[
-            "agentId",
-            "displayName",
-            "command",
-            "args",
-            "envAllowlist",
-            "default",
-        ],
-    )?;
-    let agent_id_text = string(params, "agentId")?;
-    let agent_id =
-        AgentId::new(&agent_id_text).map_err(|error| from_invalid("parameter `agentId`", error))?;
-    Ok(AgentConfigure {
-        agent_id,
-        display_name: display_name(params, "displayName")?,
-        command: string(params, "command")?,
-        args: strings(params, "args")?,
-        env_allowlist: strings(params, "envAllowlist")?,
-        default: boolean(params, "default")?,
-    })
-}
-
-/// `provider.configure` 的已校验参数（§5.2）：`values` **只承载凭据值**，保持客户端给出的顺序。
-#[derive(Clone, PartialEq, Eq)]
-pub struct ProviderConfigure {
-    /// Provider 标识。
-    pub provider_id: String,
-    /// 类别。
-    pub kind: ProviderRefKind,
-    /// 展示名。
-    pub display_name: String,
-    /// 字段名 → 凭据文本（至少 1 项）。
-    pub values: Vec<(String, String)>,
-}
-
-/// 手写 `Debug`：`values` 持有**明文凭据**，derive 出来的实现会让任何一句
-/// `tracing::debug!(?configure)` 把它写进日志（`SECURITY_DESIGN.md` §14.2 与 core 对秘密的既有口径都
-/// 不允许）。这里只输出字段名与计数，值一律不打印。
-impl std::fmt::Debug for ProviderConfigure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProviderConfigure")
-            .field("provider_id", &self.provider_id)
-            .field("kind", &self.kind)
-            .field("display_name", &self.display_name)
-            .field(
-                "credential_fields",
-                &self
-                    .values
-                    .iter()
-                    .map(|(field, _)| field.as_str())
-                    .collect::<Vec<_>>(),
-            )
-            .finish()
-    }
-}
-
-/// `provider.configure`（§5.2）：`values` 至少 1 项，字段名 `^[A-Za-z0-9._-]{1,64}$`，值非空字符串。
-///
-/// 值非空的理由是可判定性：keystore 的 Provider 凭据条目要求长度 ≥1，空值只会在端口层报错；
-/// 这里提前判定为参数非法，避免把「参数写错」报成「keystore 不可用」。
-pub fn provider_configure(params: &JsonObject) -> Result<ProviderConfigure, AdminError> {
-    reject_unknown_fields(params, &["providerId", "kind", "displayName", "values"])?;
-    let provider_id = spec_name(params, "providerId", 64)?;
-    let kind_text = string(params, "kind")?;
-    let kind = kind_text
-        .parse::<ProviderRefKind>()
-        .map_err(|_| invalid_params("parameter `kind` must be `provider` or `mcp`"))?;
-    let display_name = display_name(params, "displayName")?;
-    let values = object(params, "values")?;
-    if values.is_empty() {
-        return Err(invalid_params(
-            "parameter `values` must contain at least one credential field",
-        ));
-    }
-    let mut fields = Vec::with_capacity(values.len());
-    for (field, raw) in values {
-        require_spec_name(field, 64, &format!("parameter `values` field `{field}`"))?;
-        let secret = raw.as_str().ok_or_else(|| {
-            invalid_params(format!("parameter `values.{field}` must be a string"))
-        })?;
-        if secret.is_empty() {
-            return Err(invalid_params(format!(
-                "parameter `values.{field}` must not be empty"
-            )));
-        }
-        fields.push((field.clone(), secret.to_owned()));
-    }
-    Ok(ProviderConfigure {
-        provider_id,
-        kind,
-        display_name,
-        values: fields,
-    })
-}
-
-// ---------------------------------------------------------------------------------------------
-// export.* / import.*（§5.5）
-// ---------------------------------------------------------------------------------------------
-
-/// `export.create`（§5.5）：`ExportView` 去掉 `createdAt`/`revokedAt` 后的全部字段，均为必需。
-///
-/// 首切片约束在此判定：`agentIds`/`workspaceAliases`/`templates` 恰好 1 项、`templates[].params`
-/// 必须为空、`cachePolicy` 固定 `no-content-cache`；`default*` 一致性由 `ExportRecord` 的不变式
-/// 兜底（core 只有一份定义）。
 pub fn export_create(
     params: &JsonObject,
     created_at: Timestamp,
@@ -405,8 +220,8 @@ pub fn export_create(
             "exportId",
             "displayName",
             "agentIds",
-            "workspaceAliases",
-            "defaultWorkspaceAlias",
+            "workspaceDirectories",
+            "defaultWorkspaceDirectory",
             "templates",
             "defaultTemplateId",
             "scopes",
@@ -430,30 +245,30 @@ pub fn export_create(
         .map(|text| AgentId::new(text).map_err(|error| from_invalid("parameter `agentIds`", error)))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let aliases_raw = array(params, "workspaceAliases")?;
+    let aliases_raw = array(params, "workspaceDirectories")?;
     if aliases_raw.len() != 1 {
         return Err(invalid_params(
-            "parameter `workspaceAliases` must contain exactly one entry in this slice",
+            "parameter `workspaceDirectories` must contain exactly one entry in this slice",
         ));
     }
-    let mut workspace_aliases = Vec::with_capacity(aliases_raw.len());
+    let mut workspace_directories = Vec::with_capacity(aliases_raw.len());
     for (index, entry) in aliases_raw.iter().enumerate() {
         let entry = entry.as_object().ok_or_else(|| {
-            invalid_params(format!("`workspaceAliases[{index}]` must be an object"))
+            invalid_params(format!("`workspaceDirectories[{index}]` must be an object"))
         })?;
-        reject_unknown_fields(entry, &["alias", "displayName"])?;
-        let alias_text = string(entry, "alias")?;
-        let alias = WorkspaceAlias::new(&alias_text)
-            .map_err(|error| from_invalid(&format!("`workspaceAliases[{index}].alias`"), error))?;
-        workspace_aliases.push(
-            WorkspaceAliasEntry::try_new(alias, &display_name(entry, "displayName")?)
-                .map_err(|error| from_invalid("`workspaceAliases`", error))?,
+        reject_unknown_fields(entry, &["directoryId"])?;
+        let alias_text = string(entry, "directoryId")?;
+        let alias = DirectoryId::new(&alias_text)
+            .map_err(|error| from_invalid(&format!("`workspaceDirectories[{index}].alias`"), error))?;
+        workspace_directories.push(
+            WorkspaceDirectoryEntry::try_new(alias)
+                .map_err(|error| from_invalid("`workspaceDirectories`", error))?,
         );
     }
 
-    let default_alias_text = string(params, "defaultWorkspaceAlias")?;
-    let default_workspace_alias = WorkspaceAlias::new(&default_alias_text)
-        .map_err(|error| from_invalid("parameter `defaultWorkspaceAlias`", error))?;
+    let default_alias_text = string(params, "defaultWorkspaceDirectory")?;
+    let default_workspace_directory = DirectoryId::new(&default_alias_text)
+        .map_err(|error| from_invalid("parameter `defaultWorkspaceDirectory`", error))?;
 
     let templates_raw = array(params, "templates")?;
     if templates_raw.len() != 1 {
@@ -468,14 +283,14 @@ pub fn export_create(
             .ok_or_else(|| invalid_params(format!("`templates[{index}]` must be an object")))?;
         reject_unknown_fields(
             entry,
-            &["templateId", "displayName", "workspaceAlias", "params"],
+            &["templateId", "displayName", "workspaceDirectory", "params"],
         )?;
         let template_id_text = string(entry, "templateId")?;
         let template_id = TemplateId::new(&template_id_text)
             .map_err(|error| from_invalid(&format!("`templates[{index}].templateId`"), error))?;
-        let workspace_alias_text = string(entry, "workspaceAlias")?;
-        let workspace_alias = WorkspaceAlias::new(&workspace_alias_text).map_err(|error| {
-            from_invalid(&format!("`templates[{index}].workspaceAlias`"), error)
+        let workspace_directory_text = string(entry, "workspaceDirectory")?;
+        let workspace_directory = DirectoryId::new(&workspace_directory_text).map_err(|error| {
+            from_invalid(&format!("`templates[{index}].workspaceDirectory`"), error)
         })?;
         // §5.5：首切片的 template 不得声明参数（有参 template 属 `post_mvp`，不能静默忽略）。
         if !array(entry, "params")?.is_empty() {
@@ -487,7 +302,7 @@ pub fn export_create(
             ExportTemplate::try_new(
                 template_id,
                 &display_name(entry, "displayName")?,
-                workspace_alias,
+                workspace_directory,
                 Vec::new(),
             )
             .map_err(|error| from_invalid(&format!("`templates[{index}]`"), error))?,
@@ -512,8 +327,8 @@ pub fn export_create(
         export_id,
         &display,
         agent_ids,
-        workspace_aliases,
-        default_workspace_alias,
+        workspace_directories,
+        default_workspace_directory,
         templates,
         default_template_id,
         scopes,
@@ -1042,259 +857,17 @@ mod tests {
             );
         }
     }
-
-    // ---------------------------------------------------------------- workspace.select
-
-    #[test]
-    fn workspace_select_canonicalizes_an_existing_directory() {
-        let directory = temp_directory();
-        let select = workspace_select(&params(json!({
-            "alias": "project.1",
-            "displayName": "Project One",
-            "rootPath": directory.to_str().expect("utf-8"),
-        })))
-        .expect("合法目录必须通过");
-        assert_eq!(select.alias.as_str(), "project.1");
-        assert_eq!(select.display_name, "Project One");
-        let expected = fs::canonicalize(&directory).expect("可规范化");
-        assert_eq!(select.canonical_path, expected.to_str().expect("utf-8"));
-        fs::remove_dir_all(&directory).ok();
-    }
-
-    #[test]
-    fn workspace_select_rejects_relative_parented_missing_and_file_paths() {
-        let directory = temp_directory();
-        let file = directory.join("plain.txt");
-        fs::write(&file, b"x").expect("可写");
-
-        let relative = workspace_select(&params(json!({
-            "alias": "a", "displayName": "A", "rootPath": "relative/path",
-        })))
-        .expect_err("相对路径必须被拒");
-        assert_eq!(code_of(relative), LocalErrorCode::InvalidParams);
-
-        let parented = workspace_select(&params(json!({
-            "alias": "a",
-            "displayName": "A",
-            "rootPath": format!("{}/../{}", directory.to_str().expect("utf-8"), "sub"),
-        })))
-        .expect_err("含 `..` 必须被拒");
-        assert_eq!(code_of(parented), LocalErrorCode::InvalidParams);
-
-        let missing = workspace_select(&params(json!({
-            "alias": "a",
-            "displayName": "A",
-            "rootPath": directory.join("missing").to_str().expect("utf-8"),
-        })))
-        .expect_err("不存在的目录必须被拒");
-        assert_eq!(code_of(missing), LocalErrorCode::InvalidParams);
-
-        let not_a_directory = workspace_select(&params(json!({
-            "alias": "a",
-            "displayName": "A",
-            "rootPath": file.to_str().expect("utf-8"),
-        })))
-        .expect_err("文件不是目录");
-        assert_eq!(code_of(not_a_directory), LocalErrorCode::InvalidParams);
-
-        fs::remove_dir_all(&directory).ok();
-    }
-
-    #[test]
-    fn workspace_select_checks_alias_and_display_name_shapes() {
-        let directory = temp_directory();
-        let root = directory.to_str().expect("utf-8").to_owned();
-        for alias in ["Project", "", "alias/with/slash", "-alias"] {
-            assert_eq!(
-                code_of(
-                    workspace_select(&params(json!({
-                        "alias": alias, "displayName": "A", "rootPath": root,
-                    })))
-                    .expect_err(alias)
-                ),
-                LocalErrorCode::InvalidParams,
-                "alias={alias}"
-            );
-        }
-        for display in [String::new(), "x".repeat(MAX_DISPLAY_NAME_CHARS + 1)] {
-            assert_eq!(
-                code_of(
-                    workspace_select(&params(json!({
-                        "alias": "a", "displayName": display, "rootPath": root,
-                    })))
-                    .expect_err(&display)
-                ),
-                LocalErrorCode::InvalidParams
-            );
-        }
-        assert!(
-            workspace_select(&params(json!({
-                "alias": "a", "displayName": "A", "rootPath": root, "extra": 1,
-            })))
-            .is_err()
-        );
-        assert!(
-            workspace_select(&params(json!({
-                "alias": "a", "displayName": "A", "rootPath": root,
-            })))
-            .is_ok()
-        );
-        // `^[a-z0-9][a-z0-9._-]{0,63}$` 允许首字符是数字（权威：node-link 的 workspaceAlias）。
-        assert!(
-            workspace_select(&params(json!({
-                "alias": "9alias", "displayName": "A", "rootPath": root,
-            })))
-            .is_ok()
-        );
-        fs::remove_dir_all(&directory).ok();
-    }
-
-    // ---------------------------------------------------------------- agent.configure
-
-    #[test]
-    fn agent_configure_requires_all_six_fields() {
-        let complete = json!({
-            "agentId": "codex",
-            "displayName": "Codex",
-            "command": "codex",
-            "args": ["--acp"],
-            "envAllowlist": ["OPENAI_API_KEY"],
-            "default": true,
-        });
-        let configure = agent_configure(&params(complete.clone())).expect("完整参数必须通过");
-        assert_eq!(configure.agent_id.as_str(), "codex");
-        assert_eq!(configure.args, vec!["--acp".to_owned()]);
-        assert_eq!(configure.env_allowlist, vec!["OPENAI_API_KEY".to_owned()]);
-        assert!(configure.default);
-
-        for missing in [
-            "agentId",
-            "displayName",
-            "command",
-            "args",
-            "envAllowlist",
-            "default",
-        ] {
-            let mut incomplete = complete.clone();
-            incomplete.as_object_mut().expect("object").remove(missing);
-            assert_eq!(
-                code_of(agent_configure(&params(incomplete)).expect_err(missing)),
-                LocalErrorCode::InvalidParams,
-                "缺少 {missing}"
-            );
-        }
-
-        for agent_id in [String::new(), "x".repeat(129)] {
-            let mut wrong = complete.clone();
-            wrong["agentId"] = json!(agent_id);
-            assert_eq!(
-                code_of(agent_configure(&params(wrong)).expect_err(&agent_id)),
-                LocalErrorCode::InvalidParams
-            );
-        }
-
-        let mut wrong_type = complete.clone();
-        wrong_type["args"] = json!([1]);
-        assert_eq!(
-            code_of(agent_configure(&params(wrong_type)).expect_err("args 元素必须是字符串")),
-            LocalErrorCode::InvalidParams
-        );
-
-        let mut unknown = complete;
-        unknown["unknown"] = json!(1);
-        assert_eq!(
-            code_of(agent_configure(&params(unknown)).expect_err("未知字段")),
-            LocalErrorCode::InvalidParams
-        );
-    }
-
-    // ---------------------------------------------------------------- provider.configure
-
-    #[test]
-    fn provider_configure_validates_ids_fields_and_values() {
-        let configure = provider_configure(&params(json!({
-            "providerId": "openai.primary",
-            "kind": "provider",
-            "displayName": "OpenAI",
-            "values": { "api_key": "s3cret", "org": "acme" },
-        })))
-        .expect("合法参数必须通过");
-        assert_eq!(configure.kind, ProviderRefKind::Provider);
-        assert_eq!(
-            configure.values,
-            vec![
-                ("api_key".to_owned(), "s3cret".to_owned()),
-                ("org".to_owned(), "acme".to_owned()),
-            ]
-        );
-
-        for rejected in [
-            json!({ "providerId": "bad id", "kind": "provider", "displayName": "A", "values": {"k": "v"} }),
-            json!({ "providerId": &"a".repeat(65), "kind": "provider", "displayName": "A", "values": {"k": "v"} }),
-            json!({ "providerId": "p", "kind": "other", "displayName": "A", "values": {"k": "v"} }),
-            json!({ "providerId": "p", "kind": "provider", "displayName": "", "values": {"k": "v"} }),
-            json!({ "providerId": "p", "kind": "provider", "displayName": "A", "values": {} }),
-            json!({ "providerId": "p", "kind": "provider", "displayName": "A", "values": {"bad field": "v"} }),
-            json!({ "providerId": "p", "kind": "provider", "displayName": "A", "values": {"k": ""} }),
-            json!({ "providerId": "p", "kind": "provider", "displayName": "A", "values": { "k": 1 } }),
-            json!({ "providerId": "p", "kind": "mcp" }),
-        ] {
-            assert_eq!(
-                code_of(
-                    provider_configure(&params(rejected.clone())).expect_err(&rejected.to_string())
-                ),
-                LocalErrorCode::InvalidParams,
-                "{rejected}"
-            );
-        }
-        assert_eq!(
-            provider_configure(&params(json!({
-                "providerId": "p", "kind": "mcp", "displayName": "P", "values": { "k": "v" },
-            })))
-            .expect("mcp 也是合法 kind")
-            .kind,
-            ProviderRefKind::Mcp
-        );
-    }
-
-    /// 手写 `Debug` 只输出字段名与计数：`values` 是明文凭据，任何 `tracing::debug!(?configure)` 都不允许
-    /// 把它写进日志（`SECURITY_DESIGN.md` §14.2）。
-    #[test]
-    fn provider_configure_debug_prints_credential_field_names_but_never_values() {
-        let configure = provider_configure(&params(json!({
-            "providerId": "openai.primary",
-            "kind": "provider",
-            "displayName": "OpenAI",
-            "values": { "api_key": "s3cret", "org": "acme" },
-        })))
-        .expect("合法参数必须通过");
-        let printed = format!("{configure:?}");
-        assert!(printed.contains("api_key"), "{printed}");
-        assert!(printed.contains("org"), "{printed}");
-        assert!(printed.contains("openai.primary"), "{printed}");
-        assert!(
-            !printed.contains("s3cret"),
-            "凭据值不得出现在 Debug 输出里：{printed}"
-        );
-        assert!(
-            !printed.contains("acme"),
-            "凭据值不得出现在 Debug 输出里：{printed}"
-        );
-    }
-
-    // ---------------------------------------------------------------- export.create
-
     fn valid_export_params() -> serde_json::Value {
         json!({
             "exportId": "export-1",
             "displayName": "Export One",
             "agentIds": ["codex"],
-            "workspaceAliases": [{ "alias": "project", "displayName": "Project" }],
-            "defaultWorkspaceAlias": "project",
+            "workspaceDirectories": [{ "directoryId": "0123456789abcdef0123456789abcdef" }],
+            "defaultWorkspaceDirectory": "0123456789abcdef0123456789abcdef",
             "templates": [{
                 "templateId": "template-1",
                 "displayName": "Template One",
-                "workspaceAlias": "project",
+                "workspaceDirectory": "0123456789abcdef0123456789abcdef",
                 "params": [],
             }],
             "defaultTemplateId": "template-1",
@@ -1313,7 +886,7 @@ mod tests {
             export_create(&params(valid_export_params()), created_at()).expect("合法参数必须通过");
         assert_eq!(record.export_id().as_str(), "export-1");
         assert_eq!(record.agent_ids().len(), 1);
-        assert_eq!(record.workspace_aliases().len(), 1);
+        assert_eq!(record.workspace_directories().len(), 1);
         assert_eq!(record.templates().len(), 1);
         assert!(record.templates()[0].params().is_empty());
         assert_eq!(record.scopes().len(), 1);
@@ -1328,14 +901,14 @@ mod tests {
         let mut no_agent = valid_export_params();
         no_agent["agentIds"] = json!([]);
         let mut two_aliases = valid_export_params();
-        two_aliases["workspaceAliases"] = json!([
+        two_aliases["workspaceDirectories"] = json!([
             { "alias": "project", "displayName": "Project" },
             { "alias": "other", "displayName": "Other" },
         ]);
         let mut two_templates = valid_export_params();
         two_templates["templates"] = json!([
-            { "templateId": "t1", "displayName": "T1", "workspaceAlias": "project", "params": [] },
-            { "templateId": "t2", "displayName": "T2", "workspaceAlias": "project", "params": [] },
+            { "templateId": "t1", "displayName": "T1", "workspaceDirectory": "project", "params": [] },
+            { "templateId": "t2", "displayName": "T2", "workspaceDirectory": "project", "params": [] },
         ]);
         let mut with_params = valid_export_params();
         with_params["templates"][0]["params"] = json!([
@@ -1344,11 +917,11 @@ mod tests {
         let mut bad_cache_policy = valid_export_params();
         bad_cache_policy["cachePolicy"] = json!("content-cache");
         let mut unknown_alias = valid_export_params();
-        unknown_alias["defaultWorkspaceAlias"] = json!("other");
+        unknown_alias["defaultWorkspaceDirectory"] = json!("other");
         let mut unknown_template = valid_export_params();
         unknown_template["defaultTemplateId"] = json!("other");
         let mut template_alias_mismatch = valid_export_params();
-        template_alias_mismatch["templates"][0]["workspaceAlias"] = json!("other");
+        template_alias_mismatch["templates"][0]["workspaceDirectory"] = json!("other");
         let mut bad_scope = valid_export_params();
         bad_scope["scopes"] = json!(["session.read"]);
         let mut unknown_field = valid_export_params();
@@ -1362,11 +935,11 @@ mod tests {
         for (label, rejected) in [
             ("agentIds 恰好 1 项", two_agents),
             ("agentIds 非空", no_agent),
-            ("workspaceAliases 恰好 1 项", two_aliases),
+            ("workspaceDirectories 恰好 1 项", two_aliases),
             ("templates 恰好 1 项", two_templates),
             ("params 必须为空", with_params),
             ("cachePolicy 固定值", bad_cache_policy),
-            ("defaultWorkspaceAlias 一致性", unknown_alias),
+            ("defaultWorkspaceDirectory 一致性", unknown_alias),
             ("defaultTemplateId 一致性", unknown_template),
             (
                 "template 的 alias 必须在 aliases 内",

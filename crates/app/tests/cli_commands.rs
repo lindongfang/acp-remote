@@ -217,31 +217,8 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
     let root = daemon.root();
     let empty = write_file(root, "empty.json", "{}");
     let empty = empty.display().to_string();
-    let profile = write_file(
-        root,
-        "profile.json",
-        r#"{"agentId":"a","displayName":"A","command":"c","args":[],"envAllowlist":[],"default":false}"#,
-    );
-    let profile = profile.display().to_string();
 
     let cases: Vec<Vec<String>> = vec![
-        vec![
-            "workspace".into(),
-            "select".into(),
-            "--alias".into(),
-            "ws".into(),
-            "--display-name".into(),
-            "W".into(),
-            "--root-path".into(),
-            root.display().to_string(),
-        ],
-        vec!["agent".into(), "configure".into(), "--file".into(), profile],
-        vec![
-            "agent".into(),
-            "configure".into(),
-            "--file".into(),
-            empty.clone(),
-        ],
         vec!["device".into(), "list".into()],
         vec![
             "device".into(),
@@ -298,32 +275,6 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
         assert_failure_contract(&run, "local.unavailable", &[]);
     }
 
-    // `provider configure` 在非交互环境**先**失败（不读凭据、不调用方法，R69）。
-    let run = run_cli(
-        "provider-offline",
-        Some(daemon.config_path()),
-        &[
-            "provider",
-            "configure",
-            "--provider-id",
-            "openai",
-            "--kind",
-            "provider",
-            "--display-name",
-            "OpenAI",
-            "--field",
-            "api_key",
-        ],
-        Stdin::Bytes(b"sk-should-not-be-read\n".to_vec()),
-    );
-    assert_failure_contract(&run, "local.invalid_request", &["sk-should-not-be-read"]);
-    assert!(
-        !run.stdout.contains("（不回显）: ") && !run.stderr.contains("（不回显）: "),
-        "非交互环境不得进入凭据提示：stdout={} stderr={}",
-        run.stdout,
-        run.stderr
-    );
-
     // 用法错误也是非零 + 一行 JSON（且不得出现 self-made 子命令）。
     for args in [
         vec!["daemon", "doctor"],
@@ -341,27 +292,6 @@ fn management_commands_fail_clearly_when_the_daemon_is_not_running() {
 fn management_commands_use_the_local_channel_and_report_method_failures() {
     let mut daemon = Daemon::configure("cli-online", "");
     daemon.start();
-
-    // workspace select：CLI 只发参数，Daemon 侧 canonicalize 并持久化；展示的是方法返回值。
-    let run = run_cli(
-        "workspace",
-        Some(daemon.config_path()),
-        &[
-            "workspace",
-            "select",
-            "--alias",
-            "ws",
-            "--display-name",
-            "工作区",
-            "--root-path",
-            &daemon.root().display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    run.assert_success();
-    let parsed: Value = serde_json::from_str(run.stdout.trim()).expect("result JSON");
-    assert_eq!(parsed["workspace"]["alias"], json!("ws"));
-    assert_eq!(parsed["workspace"]["displayName"], json!("工作区"));
 
     // 方法级失败：`local.not_found` 必须按双通道形态输出，且不回显数据目录路径。
     let data_dir = daemon.data_dir().display().to_string();
@@ -399,83 +329,22 @@ fn management_commands_use_the_local_channel_and_report_method_failures() {
 /// 不得含凭据值。
 #[test]
 fn file_inputs_map_validation_errors_like_the_method_side() {
-    let mut daemon = Daemon::configure("cli-files", "");
+    let mut daemon = Daemon::configure("cli-files", "[agent]\ncodex-local = \"acp-remote\"\n");
     daemon.start();
     let config = daemon.config_path().to_path_buf();
     let root = daemon.root().to_path_buf();
 
-    // agent.configure：合法文件 → 成功；未知字段（含凭据字段 `values`）→ local.invalid_params。
-    let ok = write_file(
-        &root,
-        "agent-ok.json",
-        r#"{"agentId":"codex-local","displayName":"Codex","command":"acp-remote","args":[],"envAllowlist":[],"default":false}"#,
-    );
-    let run = run_cli(
-        "agent-ok",
-        Some(&config),
-        &["agent", "configure", "--file", &ok.display().to_string()],
-        Stdin::Null,
-    );
-    run.assert_success();
-    assert!(run.stdout.contains("codex-local"), "{}", run.stdout);
-
-    for (name, body) in [
-        (
-            "agent-credentials.json",
-            r#"{"agentId":"a","displayName":"A","command":"c","args":[],"envAllowlist":[],"default":false,"values":{"api_key":"sk-secret"}}"#,
-        ),
-        (
-            "agent-unknown.json",
-            r#"{"agentId":"a","displayName":"A","command":"c","args":[],"envAllowlist":[],"default":false,"extra":1}"#,
-        ),
-    ] {
-        let path = write_file(&root, name, body);
-        let run = run_cli(
-            name,
-            Some(&config),
-            &["agent", "configure", "--file", &path.display().to_string()],
-            Stdin::Null,
-        );
-        assert_failure_contract(&run, "local.invalid_params", &["sk-secret"]);
-    }
-    let broken = write_file(&root, "agent-broken.json", "{ not json");
-    let run = run_cli(
-        "agent-broken",
-        Some(&config),
-        &[
-            "agent",
-            "configure",
-            "--file",
-            &broken.display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    assert_failure_contract(&run, "local.invalid_params", &[]);
-
-    // export.create：先把别名 `ws` 建好（方法侧要求 alias 已在 owned_workspace 里），再验证三种映射。
-    let run = run_cli(
-        "export-workspace",
-        Some(&config),
-        &[
-            "workspace",
-            "select",
-            "--alias",
-            "ws",
-            "--display-name",
-            "工作区",
-            "--root-path",
-            &root.display().to_string(),
-        ],
-        Stdin::Null,
-    );
-    run.assert_success();
+    // export.create：先直接记录目录（A 之后目录只能由成功的会话创建写入），再验证三种映射。
+    let directory_id = support::seed_directory_blocking(&daemon.data_dir(), &root);
     let export = write_file(
         &root,
         "export.json",
-        r#"{"exportId":"exp-1","displayName":"Export One","agentIds":["codex-local"],
-"workspaceAliases":[{"alias":"ws","displayName":"工作区"}],"defaultWorkspaceAlias":"ws",
-"templates":[{"templateId":"tpl-1","displayName":"Tpl","workspaceAlias":"ws","params":[]}],
-"defaultTemplateId":"tpl-1","scopes":["grant.session.read"],"cachePolicy":"no-content-cache"}"#,
+        &format!(
+            r#"{{"exportId":"exp-1","displayName":"Export One","agentIds":["codex-local"],
+"workspaceDirectories":[{{"directoryId":"{directory_id}"}}],"defaultWorkspaceDirectory":"{directory_id}",
+"templates":[{{"templateId":"tpl-1","displayName":"Tpl","workspaceDirectory":"{directory_id}","params":[]}}],
+"defaultTemplateId":"tpl-1","scopes":["grant.session.read"],"cachePolicy":"no-content-cache"}}"#
+        ),
     );
     let run = run_cli(
         "export-ok",

@@ -39,18 +39,17 @@ use acp_core::model::{
     DeviceRecord, DeviceState, Digest, EntityRef, EventId, EventType, ExportId, ExportRecord,
     ExportTemplate, Fingerprint, GrantSet, ImportId, ImportRecord, NodeId, NodeKind, NodeRecord,
     NodeState, Nonce, OriginEpoch, PairingId, PairingPeer, PairingRecord, PairingSettlement,
-    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PortError, ProviderEnvBinding,
-    ProviderRef, ProviderRefKind, ScopeSet, Sequence, SessionId, TemplateId, TemplateParam,
-    TemplateParamType, Timestamp, UnavailableKind, WorkspaceAlias, WorkspaceAliasEntry,
-    WorkspaceRecord,
+    PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PortError,
+    ScopeSet, Sequence, SessionId, TemplateId, TemplateParam,
+    TemplateParamType, Timestamp, UnavailableKind, DirectoryId, DirectoryRecord,
+    WorkspaceDirectoryEntry,
 };
 use acp_core::ports::{
     DeliveryReceipt, DeviceRevocation, DeviceWrite, ExpiryWrite, ExportRevocation, ExportStore,
     ExportWrite, ImportRemoval, ImportWrite, ImportedSessionRecord, LocalConfigStore,
     NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimWrite, PairingConsumption,
-    PairingSettlementWrite, PairingWrite, PendingAudit, ProfileWrite, ProviderRefWrite,
-    RemoteDeliveryStore, RevokeReason, SeedWrite, SessionStore, TrustRecordRef, TrustStore,
-    WorkspaceWrite, WriteContext,
+    PairingSettlementWrite, PairingWrite, PendingAudit, WriteContext,
+    RemoteDeliveryStore, RevokeReason, SessionStore, TrustRecordRef, TrustStore,
 };
 use storage_sqlite::error::StorageError;
 use storage_sqlite::migrate::StorageConfig;
@@ -473,36 +472,6 @@ fn node_record_with_connected(
     .expect("node record")
 }
 
-fn profile(id: &str, default: bool, minute: u32) -> AgentProfile {
-    AgentProfile::try_new(
-        AgentId::new(id).expect("agent id"),
-        "Oh My Pi",
-        "omp",
-        vec!["--stdio".to_owned()],
-        Vec::new(),
-        Vec::new(),
-        default,
-        at(minute),
-        at(minute),
-    )
-    .expect("profile")
-}
-
-/// 带凭据绑定的 profile（必须引用已登记的 Provider 字段）。
-fn bound_profile(id: &str, default: bool, minute: u32) -> AgentProfile {
-    AgentProfile::try_new(
-        AgentId::new(id).expect("agent id"),
-        "Oh My Pi",
-        "omp",
-        vec!["--stdio".to_owned()],
-        vec!["OPENAI_API_KEY".to_owned()],
-        vec![ProviderEnvBinding::try_new("openai", "api_key", "OPENAI_API_KEY").expect("binding")],
-        default,
-        at(minute),
-        at(minute),
-    )
-    .expect("profile")
-}
 
 fn export_record() -> ExportRecord {
     export_record_with(EXPORT)
@@ -523,17 +492,18 @@ fn export_record_with_scopes(
     scopes: &[&str],
     revoked_at: Option<Timestamp>,
 ) -> ExportRecord {
+    let directory = workspace_directory("project");
     ExportRecord::try_new(
         ExportId::new(id).expect("export id"),
         "team export",
         vec![AgentId::new("omp-default").expect("agent id")],
-        vec![WorkspaceAliasEntry::try_new(workspace_alias("project"), "Project").expect("alias")],
-        workspace_alias("project"),
+        vec![WorkspaceDirectoryEntry::try_new(directory.clone()).expect("directory")],
+        directory.clone(),
         vec![
             ExportTemplate::try_new(
                 TemplateId::new("coding").expect("template id"),
                 "Coding",
-                workspace_alias("project"),
+                directory,
                 vec![
                     TemplateParam::try_new(
                         acp_core::model::ParamName::new("model").expect("param name"),
@@ -565,8 +535,22 @@ fn absolute_path(name: &str) -> String {
         .into_owned()
 }
 
-fn workspace_alias(text: &str) -> WorkspaceAlias {
-    WorkspaceAlias::new(text).expect("workspace alias")
+fn workspace_directory(name: &str) -> DirectoryId {
+    acp_core::model::derive_directory_id(&absolute_path(name))
+}
+
+async fn seed_directory(pool: &sqlx::SqlitePool, name: &str, created_at: Timestamp) {
+    let path = absolute_path(name);
+    sqlx::query(
+        "INSERT INTO owned_directory (directory_id, canonical_path, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?3)",
+    )
+    .bind(workspace_directory(name).as_str())
+    .bind(&path)
+    .bind(created_at.as_str())
+    .execute(pool)
+    .await
+    .expect("seed directory");
 }
 
 fn import_record(id: &str, exports: Vec<ExportId>) -> ImportRecord {
@@ -3851,406 +3835,21 @@ async fn export_revocation_is_terminal_for_plain_writes() {
 
 /// spec：默认 profile 唯一且切换原子（调用返回后恰好一个默认）。
 #[tokio::test]
-async fn default_profile_switch_is_atomic_and_unique() {
-    let dir = temp_dir("admin-profile-default");
-    let store = open(&dir).await;
-    store
-        .put_profile(ProfileWrite {
-            profile: profile("agent-a", true, 1),
-            context: context(1, Vec::new()),
-        })
-        .await
-        .expect("first profile");
-    store
-        .put_profile(ProfileWrite {
-            profile: profile("agent-b", true, 2),
-            context: context(2, Vec::new()),
-        })
-        .await
-        .expect("switch default");
-
-    let profiles = store.profiles().await.expect("profiles");
-    assert_eq!(profiles.len(), 2);
-    assert_eq!(
-        profiles.iter().filter(|entry| entry.is_default()).count(),
-        1,
-        "至多一个默认 profile"
-    );
-    assert!(
-        store
-            .profile(&AgentId::new("agent-b").expect("agent id"))
-            .await
-            .expect("profile")
-            .expect("profile row")
-            .is_default()
-    );
-    assert!(
-        !store
-            .profile(&AgentId::new("agent-a").expect("agent id"))
-            .await
-            .expect("profile")
-            .expect("profile row")
-            .is_default()
-    );
-
-    // 取消默认同样是一次原子写集：库内不会残留两个默认。
-    store
-        .put_profile(ProfileWrite {
-            profile: profile("agent-b", false, 3),
-            context: context(3, Vec::new()),
-        })
-        .await
-        .expect("clear default");
-    assert_eq!(
-        store
-            .profiles()
-            .await
-            .expect("profiles")
-            .iter()
-            .filter(|entry| entry.is_default())
-            .count(),
-        0
-    );
-
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store.close().await;
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(
-            &pool,
-            "SELECT COUNT(*) FROM owned_agent_profile WHERE is_default = 1"
-        )
-        .await,
-        0
-    );
-    pool.close().await;
-}
-
-/// spec：非法绑定在写入时被拒（引用了未登记 Provider 或其未配置字段）。
-#[tokio::test]
-async fn profile_bindings_must_reference_registered_provider_fields() {
-    let dir = temp_dir("admin-profile-binding");
-    let store = open(&dir).await;
-    store
-        .put_provider_ref(ProviderRefWrite {
-            reference: ProviderRef::try_new(
-                "openai",
-                ProviderRefKind::Provider,
-                "OpenAI",
-                vec!["api_key".to_owned()],
-                "keychain:acpr/openai",
-                1,
-                at(1),
-            )
-            .expect("provider ref"),
-            context: context(
-                1,
-                vec![audit(
-                    AuditAction::ProviderConfigured,
-                    EntityRef::Provider("openai".to_owned()),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("put provider ref");
-
-    // 合法绑定：provider 已登记且字段在 configured_fields 内。
-    store
-        .put_profile(ProfileWrite {
-            profile: bound_profile("agent-a", true, 1),
-            context: context(1, Vec::new()),
-        })
-        .await
-        .expect("registered binding");
-
-    // 未登记的 Provider。
-    let unknown_provider = AgentProfile::try_new(
-        AgentId::new("agent-b").expect("agent id"),
-        "Other",
-        "omp",
-        Vec::new(),
-        vec!["OTHER_KEY".to_owned()],
-        vec![ProviderEnvBinding::try_new("unknown", "api_key", "OTHER_KEY").expect("binding")],
-        false,
-        at(2),
-        at(2),
-    )
-    .expect("profile");
-    assert_invalid_request(
-        store
-            .put_profile(ProfileWrite {
-                profile: unknown_provider,
-                context: context(2, Vec::new()),
-            })
-            .await
-            .expect_err("an unregistered provider must be refused"),
-        "profile references an unregistered provider",
-    );
-
-    // 已登记 Provider 但没有该字段。
-    let unknown_field = AgentProfile::try_new(
-        AgentId::new("agent-c").expect("agent id"),
-        "Other",
-        "omp",
-        Vec::new(),
-        vec!["OTHER_KEY".to_owned()],
-        vec![ProviderEnvBinding::try_new("openai", "token", "OTHER_KEY").expect("binding")],
-        false,
-        at(2),
-        at(2),
-    )
-    .expect("profile");
-    assert_invalid_request(
-        store
-            .put_profile(ProfileWrite {
-                profile: unknown_field,
-                context: context(2, Vec::new()),
-            })
-            .await
-            .expect_err("an unconfigured field must be refused"),
-        "profile references an unconfigured provider field",
-    );
-
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store.close().await;
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_agent_profile").await,
-        1
-    );
-    assert_eq!(audit_rows(&pool, AuditAction::ProviderConfigured).await, 1);
-    pool.close().await;
-}
-
-/// spec：空种子也标记已初始化；重复打开忽略种子且不产生新的写入。
-#[tokio::test]
-async fn seed_marks_initialized_once_and_ignores_later_seeds() {
-    let dir = temp_dir("admin-seed");
-    let store = open(&dir).await;
-    assert!(!store.seed_state().await.expect("seed state").is_seeded());
-
-    store
-        .mark_seeded(SeedWrite {
-            profiles: Vec::new(),
-            context: context(1, Vec::new()),
-        })
-        .await
-        .expect("empty seed");
-    let state = store.seed_state().await.expect("seed state");
-    assert!(state.is_seeded());
-    assert_eq!(state.seeded_at(), Some(&at(1)));
-    assert!(store.profiles().await.expect("profiles").is_empty());
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store.close().await;
-
-    let pool = raw_pool(&path).await;
-    let before_profiles = table_snapshot(&pool, "owned_agent_profile").await;
-    let before_meta = table_snapshot(&pool, "meta").await;
-    pool.close().await;
-
-    // 已初始化：非空种子被忽略，且**不产生新的写入**（profile、workspace、Provider 与标记都不变）。
-    let reopened = open(&dir).await;
-    reopened
-        .mark_seeded(SeedWrite {
-            profiles: vec![profile("agent-a", true, 2)],
-            context: context(2, Vec::new()),
-        })
-        .await
-        .expect("a later seed is ignored");
-    assert!(reopened.profiles().await.expect("profiles").is_empty());
-    assert!(
-        !reopened
-            .workspaces()
-            .await
-            .expect("workspaces")
-            .iter()
-            .any(|row| row.alias() == &workspace_alias("project"))
-    );
-    let state = reopened.seed_state().await.expect("seed state");
-    assert_eq!(state.seeded_at(), Some(&at(1)), "初始化时间保持库内值");
-    reopened.close().await;
-
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        table_snapshot(&pool, "owned_agent_profile").await,
-        before_profiles
-    );
-    assert_eq!(table_snapshot(&pool, "meta").await, before_meta);
-    assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_provider_ref").await,
-        0
-    );
-    pool.close().await;
-}
-
-/// spec：引用版本推进——不递增不被接受，递增后落库的是新引用（旧值不混合）。
-#[tokio::test]
-async fn provider_reference_version_must_advance() {
-    let dir = temp_dir("admin-provider-version");
-    let store = open(&dir).await;
-    let reference = |keystore: &str, version: u64, minute: u32| {
-        ProviderRef::try_new(
-            "openai",
-            ProviderRefKind::Provider,
-            "OpenAI",
-            vec!["api_key".to_owned()],
-            keystore,
-            version,
-            at(minute),
-        )
-        .expect("provider ref")
-    };
-    store
-        .put_provider_ref(ProviderRefWrite {
-            reference: reference("keychain:acpr/openai-v1", 1, 1),
-            context: context(1, Vec::new()),
-        })
-        .await
-        .expect("first reference");
-    assert_conflict(
-        store
-            .put_provider_ref(ProviderRefWrite {
-                reference: reference("keychain:acpr/openai-v1", 1, 2),
-                context: context(2, Vec::new()),
-            })
-            .await
-            .expect_err("a non-advancing version must be refused"),
-        ConflictKind::VersionMismatch,
-    );
-    store
-        .put_provider_ref(ProviderRefWrite {
-            reference: reference("keychain:acpr/openai-v2", 2, 3),
-            context: context(3, Vec::new()),
-        })
-        .await
-        .expect("advancing reference");
-
-    let refs = store.provider_refs().await.expect("provider refs");
-    assert_eq!(refs.len(), 1);
-    assert_eq!(refs[0].version(), 2);
-    assert_eq!(refs[0].keystore_ref(), "keychain:acpr/openai-v2");
-    assert_eq!(refs[0].configured_fields(), ["api_key".to_owned()]);
-
-    // `EntityRef::Provider` 必须原样落到审计列：`target_kind = 'provider'`、`target_id` = 引用 id。
-    // 这条映射没有表级 CHECK 兜底（`owned_audit.target_kind` 是自由文本），写错不会被库拒绝。
-    store
-        .put_provider_ref(ProviderRefWrite {
-            reference: reference("keychain:acpr/openai-v3", 3, 4),
-            context: context(
-                4,
-                vec![audit(
-                    AuditAction::ProviderConfigured,
-                    EntityRef::Provider("openai".to_owned()),
-                    AuditOutcome::Success,
-                )],
-            ),
-        })
-        .await
-        .expect("a reference with its audit");
-
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
-    store.close().await;
-    let pool = raw_pool(&path).await;
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM owned_provider_ref")
-            .fetch_one(&pool)
-            .await
-            .expect("provider row count"),
-        1
-    );
-    // 引用行只记字段名/引用/版本，不存在承载凭据值的列。
-    let columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('owned_provider_ref') ORDER BY cid")
-            .fetch_all(&pool)
-            .await
-            .expect("columns");
-    assert_eq!(
-        columns,
-        [
-            "provider_id",
-            "kind",
-            "display_name",
-            "configured_fields_json",
-            "keystore_ref",
-            "version",
-            "updated_at",
-        ]
-    );
-    // Provider 审计的目标列：`Provider(String)` 的 kind/target_id 必须逐字落库。
-    assert_eq!(
-        sqlx::query_scalar::<_, String>(
-            "SELECT target_kind FROM owned_audit WHERE action = 'provider.configured'"
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("provider audit target_kind"),
-        ["provider"]
-    );
-    assert_eq!(
-        sqlx::query_scalar::<_, String>(
-            "SELECT target_id FROM owned_audit WHERE action = 'provider.configured'"
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("provider audit target_id"),
-        ["openai"]
-    );
-    pool.close().await;
-}
-
-/// spec：workspace 记录是本机私有数据（别名 + 规范化路径），`created_at` 不被改写；
-/// 规范化路径不出现在 Export（对端可见）侧。
-#[tokio::test]
-async fn workspace_records_stay_local_and_keep_created_at() {
+async fn directory_records_stay_local_and_keep_created_at() {
     let dir = temp_dir("admin-workspace");
     let store = open(&dir).await;
-    let record = WorkspaceRecord::try_new(
-        workspace_alias("project"),
-        "Project",
-        &absolute_path("project"),
-        at(1),
-        at(1),
-    )
-    .expect("workspace record");
-    store
-        .put_workspace(WorkspaceWrite {
-            record: record.clone(),
-            context: context(1, Vec::new()),
-        })
-        .await
-        .expect("put workspace");
-    assert_eq!(
-        store
-            .workspace(&workspace_alias("project"))
-            .await
-            .expect("workspace"),
-        Some(record)
-    );
-    store
-        .put_workspace(WorkspaceWrite {
-            record: WorkspaceRecord::try_new(
-                workspace_alias("project"),
-                "Project (renamed)",
-                &absolute_path("project"),
-                at(1),
-                at(2),
-            )
-            .expect("workspace record"),
-            context: context(2, Vec::new()),
-        })
-        .await
-        .expect("update workspace");
-    let updated = store
-        .workspace(&workspace_alias("project"))
-        .await
-        .expect("workspace")
-        .expect("workspace row");
-    assert_eq!(updated.display_name(), "Project (renamed)");
-    assert_eq!(updated.created_at(), &at(1), "created_at 保持库内值");
-    assert_eq!(updated.updated_at(), &at(2));
+    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
+    let raw = raw_write_pool(&path).await;
+    seed_directory(&raw, "project", at(1)).await;
+    raw.close().await;
 
-    // 对端可见的 Export 侧只出现别名，不出现规范化路径或其片段。
+    let directories = store.directories().await.expect("directories");
+    assert_eq!(directories.len(), 1);
+    assert_eq!(directories[0].directory_id(), &workspace_directory("project"));
+    assert_eq!(directories[0].canonical_path(), absolute_path("project"));
+    assert_eq!(directories[0].created_at(), &at(1));
+
+    // 对端可见的 Export 侧只出现目录标识，不出现规范化路径或其片段。
     store
         .put_export(ExportWrite {
             record: export_record(),
@@ -4258,15 +3857,13 @@ async fn workspace_records_stay_local_and_keep_created_at() {
         })
         .await
         .expect("put export");
-    assert_eq!(store.workspaces().await.expect("workspaces").len(), 1);
-    let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
     store.close().await;
     let pool = raw_pool(&path).await;
-    // canonical path 只允许落在本机的 `owned_workspace.canonical_path`：Export（对端可见）与审计都不含它。
+    // canonical path 只允许落在本机的 `owned_directory.canonical_path`：Export（对端可见）与审计都不含它。
     assert_eq!(
         columns_containing(&pool, &absolute_path("project")).await,
-        vec!["owned_workspace.canonical_path".to_owned()],
-        "规范化路径只能出现在本机 workspace 行里"
+        vec!["owned_directory.canonical_path".to_owned()],
+        "规范化路径只能出现在本机目录行里"
     );
     let export_side: Vec<String> = sqlx::query_scalar(
         "SELECT COALESCE(aliases_json, '') || COALESCE(templates_json, '') || COALESCE(default_alias, '') \
@@ -4277,10 +3874,10 @@ async fn workspace_records_stay_local_and_keep_created_at() {
     .expect("export side");
     assert!(
         export_side.iter().all(
-            |text| text.contains(&workspace_alias("project").to_string())
+            |text| text.contains(workspace_directory("project").as_str())
                 && !text.contains(&absolute_path("project"))
         ),
-        "对端可见的 Export 侧只出现别名，不出现规范化路径"
+        "对端可见的 Export 侧只出现目录标识，不出现规范化路径"
     );
     pool.close().await;
 }
@@ -4291,43 +3888,6 @@ async fn no_secret_material_lands_in_any_column() {
     let dir = temp_dir("admin-secrets");
     let store = open(&dir).await;
     approve_device(&store, &device_id(), 2).await;
-    store
-        .put_provider_ref(ProviderRefWrite {
-            reference: ProviderRef::try_new(
-                "openai",
-                ProviderRefKind::Provider,
-                "OpenAI",
-                vec!["api_key".to_owned()],
-                "keychain:acpr/openai",
-                1,
-                at(2),
-            )
-            .expect("provider ref"),
-            context: context(2, Vec::new()),
-        })
-        .await
-        .expect("put provider ref");
-    store
-        .put_profile(ProfileWrite {
-            profile: profile("agent-a", true, 2),
-            context: context(2, Vec::new()),
-        })
-        .await
-        .expect("put profile");
-    store
-        .put_workspace(WorkspaceWrite {
-            record: WorkspaceRecord::try_new(
-                workspace_alias("project"),
-                "Project",
-                &absolute_path("project"),
-                at(2),
-                at(2),
-            )
-            .expect("workspace record"),
-            context: context(2, Vec::new()),
-        })
-        .await
-        .expect("put workspace");
     store
         .revoke_device(DeviceRevocation {
             device: device_id(),
@@ -4386,15 +3946,8 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
     .expect("install trigger");
 
     let error = store
-        .put_workspace(WorkspaceWrite {
-            record: WorkspaceRecord::try_new(
-                workspace_alias("project"),
-                "Project",
-                &absolute_path("project"),
-                at(1),
-                at(1),
-            )
-            .expect("workspace record"),
+        .put_export(ExportWrite {
+            record: export_record(),
             context: context(
                 1,
                 vec![audit(
@@ -4410,7 +3963,7 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
         matches!(error, PortError::Backend(_)),
         "约束/触发器失败必须给出具名错误，got {error}"
     );
-    assert!(store.workspaces().await.expect("workspaces").is_empty());
+    assert!(store.exports().await.expect("exports").is_empty());
     sqlx::query("DROP TRIGGER block_audit")
         .execute(&raw)
         .await
@@ -4426,20 +3979,13 @@ async fn a_failed_audit_write_rolls_back_the_whole_write_set() {
 
     // 触发器移除后同一写集成功（证明失败来自审计写入，而不是这条写集本身非法）。
     store
-        .put_workspace(WorkspaceWrite {
-            record: WorkspaceRecord::try_new(
-                workspace_alias("project"),
-                "Project",
-                &absolute_path("project"),
-                at(1),
-                at(1),
-            )
-            .expect("workspace record"),
+        .put_export(ExportWrite {
+            record: export_record(),
             context: context(1, Vec::new()),
         })
         .await
         .expect("the same write set succeeds without the trigger");
-    assert_eq!(store.workspaces().await.expect("workspaces").len(), 1);
+    assert_eq!(store.exports().await.expect("exports").len(), 1);
     store.close().await;
 }
 
@@ -4583,20 +4129,6 @@ async fn approve_settlement_retry(store: &SqliteStore) {
 async fn fail_closed_store_rejects_every_admin_write_path() {
     let dir = temp_dir("admin-fail-closed");
     let store = open(&dir).await;
-    store
-        .put_workspace(WorkspaceWrite {
-            record: WorkspaceRecord::try_new(
-                workspace_alias("project"),
-                "Project",
-                &absolute_path("project"),
-                at(1),
-                at(1),
-            )
-            .expect("workspace record"),
-            context: context(1, Vec::new()),
-        })
-        .await
-        .expect("put workspace");
     let path = dir.join(storage_sqlite::migrate::DATABASE_FILE);
     store.close().await;
     corrupt_last_page(&path);
@@ -4620,33 +4152,6 @@ async fn fail_closed_store_rejects_every_admin_write_path() {
     assert!(health.read_only && !health.integrity_ok);
 
     // 管理写路径全部被拒。
-    assert!(matches!(
-        store
-            .put_workspace(WorkspaceWrite {
-                record: WorkspaceRecord::try_new(
-                    workspace_alias("other"),
-                    "Other",
-                    &absolute_path("other"),
-                    at(5),
-                    at(5),
-                )
-                .expect("workspace record"),
-                context: context(5, Vec::new()),
-            })
-            .await
-            .expect_err("workspace write must be refused"),
-        PortError::Corrupt(_)
-    ));
-    assert!(matches!(
-        store
-            .put_profile(ProfileWrite {
-                profile: profile("agent-a", true, 5),
-                context: context(5, Vec::new()),
-            })
-            .await
-            .expect_err("profile write must be refused"),
-        PortError::Corrupt(_)
-    ));
     assert!(matches!(
         store
             .create_pairing(PairingWrite {
@@ -4678,18 +4183,8 @@ async fn fail_closed_store_rejects_every_admin_write_path() {
             .expect_err("import write must be refused"),
         PortError::Corrupt(_)
     ));
-    assert!(matches!(
-        store
-            .mark_seeded(SeedWrite {
-                profiles: vec![profile("agent-a", true, 5)],
-                context: context(5, Vec::new()),
-            })
-            .await
-            .expect_err("seed write must be refused"),
-        PortError::Corrupt(_)
-    ));
     // 只读查询仍可用。
-    assert_eq!(store.workspaces().await.expect("workspaces").len(), 1);
+    assert!(store.directories().await.expect("directories").is_empty());
     store.close().await;
 }
 
@@ -4712,15 +4207,8 @@ async fn capacity_limit_refuses_new_admin_writes_without_deleting_trust() {
 
     assert_unavailable(
         store
-            .put_workspace(WorkspaceWrite {
-                record: WorkspaceRecord::try_new(
-                    workspace_alias("project"),
-                    "Project",
-                    &absolute_path("project"),
-                    at(3),
-                    at(3),
-                )
-                .expect("workspace record"),
+            .put_export(ExportWrite {
+                record: export_record(),
                 context: context(3, Vec::new()),
             })
             .await
@@ -4756,7 +4244,7 @@ async fn capacity_limit_refuses_new_admin_writes_without_deleting_trust() {
 
     let pool = raw_pool(&path).await;
     assert_eq!(
-        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_workspace").await,
+        scalar_i64(&pool, "SELECT COUNT(*) FROM owned_export").await,
         0,
         "被拒绝的写集不得留下任何行"
     );

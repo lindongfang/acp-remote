@@ -8,8 +8,8 @@
 //! 含 `node_link` 的 13 条命令的镜像（顺序与该 registry 一致，即两个面共有的 12 条之后多出只经
 //! Node Link 接受的 `session.resume`；Sync 面共接受 13 条，比本镜像多出只走 Sync 的 `workspace.browse`；
 //! `session.create` 两个面同名，但 payload 不同——本面的
-//! `{ agentId, exportId, workspaceAlias, templateParams? }` 含跨节点 Export 概念，Sync 面是
-//! `{ agentId, workspaceAlias 或 workspacePath（恰好一个） }`，见 `docs/SYNC_PROTOCOL.md` §11.5）。
+//! `{ agentId, exportId, directoryId, templateParams? }` 含跨节点 Export 概念，Sync 面是
+//! `{ agentId, directoryId 或 workspacePath（恰好一个） }`，见 `docs/SYNC_PROTOCOL.md` §11.5）。
 //!
 //! 校验只发生在反序列化，且只执行 schema 能判定的结构：
 //!
@@ -42,7 +42,7 @@ use serde_json::value::RawValue;
 use crate::common::{
     AgentId, DecimalString, ExportId, NonEmptyText, Nullable, PublicError, RawObject,
     RemoteSessionRef, SessionCreateResult, SessionResumeResult, Timestamp, Uuid, ValueError,
-    WorkspaceAlias, deserialize_optional_non_null,
+    DirectoryId, deserialize_optional_non_null,
 };
 
 /// `requestId`（`command.schema.json#/$defs/requestId`）：该 def 是 `common.schema.json#/$defs/uuid`
@@ -675,16 +675,16 @@ pub struct PermissionResolve {
 /// Owner 侧再以 `nodelink.command.unsupported_field` 回复 `command.rejected` 并保证不创建会话、
 /// 不部分应用参数（§12.7）。
 ///
-/// `workspace_alias` 是符号名而不是路径：它的 pattern 让绝对路径在语法上就无法通过。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `directory_id` 是不透明目录标识而不是路径：它的 pattern 让绝对路径在语法上无法通过。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCreate {
     #[serde(rename = "agentId")]
     pub agent_id: AgentId,
     #[serde(rename = "exportId")]
     pub export_id: ExportId,
-    #[serde(rename = "workspaceAlias")]
-    pub workspace_alias: WorkspaceAlias,
+    #[serde(rename = "directoryId")]
+    pub directory_id: DirectoryId,
     #[serde(
         rename = "templateParams",
         default,
@@ -821,7 +821,7 @@ impl CommandPayload {
             .map(CommandPayload::PermissionResolve),
             CommandName::SessionCreate => parse_payload(
                 payload,
-                "{ agentId, exportId, workspaceAlias, templateParams? }（sessionCreate 的 payload）",
+                "{ agentId, exportId, directoryId, templateParams? }（sessionCreate 的 payload）",
             )
             .map(CommandPayload::SessionCreate),
             CommandName::SessionResume => {

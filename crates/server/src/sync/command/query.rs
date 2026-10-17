@@ -633,8 +633,10 @@ pub(super) fn wire_session(
     let workspace = if catalog {
         Some(match summary.workspace() {
             Some(reference) => Nullable::value(WireWorkspaceRef {
-                alias: NonEmptyText::<64>::parse(reference.alias().as_str()).ok()?,
-                display_name: NonEmptyText::<128>::parse(reference.display_name()).ok()?,
+                directory_id: NonEmptyText::<32>::parse(
+                    reference.directory_id().as_str(),
+                )
+                .ok()?,
             }),
             None => Nullable::null(),
         })

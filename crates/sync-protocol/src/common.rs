@@ -404,42 +404,29 @@ pub enum SessionState {
     Closed,
 }
 
-/// `common.schema.json#/$defs/workspaceRef`：本机已登记目录的**引用**（会话摘要用）。
+/// `common.schema.json#/$defs/workspaceRef`：已记录目录的**引用**（会话摘要用）。
 ///
-/// wire 上只有别名与展示名。规范化路径**不在**这里重复：它只出现在快照 `workspaces` 资源的条目上
-/// （[`WorkspaceCatalogEntry`]，`docs/SYNC_PROTOCOL.md` §9.4/§10.3），需要它的客户端按 `alias` 在同一
-/// 份快照里查表。展示名取自 `owned_workspace.display_name`，登记已删除时回退为别名本身。
+/// wire 上只有不透明目录标识。规范化路径**不在**这里重复：它只出现在快照 `workspaces` 资源的条目上
+/// （[`WorkspaceCatalogEntry`]，`docs/SYNC_PROTOCOL.md` §9.4/§10.3），需要它的客户端按标识在同一
+/// 份快照里查表。客户端 MUST NOT 解析、拼接或由标识反推路径。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRef {
-    pub alias: NonEmptyText<64>,
-    #[serde(rename = "displayName")]
-    pub display_name: NonEmptyText<128>,
+    #[serde(rename = "directoryId")]
+    pub directory_id: NonEmptyText<32>,
 }
 
 /// `common.schema.json#/$defs/workspaceCatalogEntry`：快照 `workspaces` 资源的元素。
 ///
-/// 比 [`WorkspaceRef`] 多一个**可选**的规范化路径键：`path` 只在客户端协商了
-/// `core.workspace-path.v1` 时出现，未协商时 MUST 缺席（不是 `null`、不是空串），使只协商
-/// `core.local-catalog.v1` 的旧客户端仍能通过自己的封闭形状校验（`docs/SYNC_PROTOCOL.md` §9.4）。
-/// 取值是服务端已登记的规范化权威值（`canonicalize` 的结果剥掉平台 verbatim 前缀），客户端 MUST NOT
-/// 拼接、规范化或反查它。
+/// `path` 是已记录目录的规范化权威值（`canonicalize` 的结果剥掉平台 verbatim 前缀），与
+/// `directoryId` **成对**下发；客户端 MUST NOT 拼接、规范化或反查它。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceCatalogEntry {
-    pub alias: NonEmptyText<64>,
-    #[serde(rename = "displayName")]
-    pub display_name: NonEmptyText<128>,
-    /// 三态与 [`SessionSummary::workspace`] 同源：`None` = 键缺席（未协商路径能力）；
-    /// `Some(..)` = 键在且是非空路径。它没有 `null` 分支，因此用
-    /// [`deserialize_optional_non_null`] 而不是 `Option<Nullable<..>>`。
-    #[serde(
-        rename = "path",
-        default,
-        deserialize_with = "deserialize_optional_non_null",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub path: Option<NonEmptyText<4096>>,
+    #[serde(rename = "directoryId")]
+    pub directory_id: NonEmptyText<32>,
+    /// 已记录目录的规范化路径（始终在场）。
+    pub path: NonEmptyText<4096>,
 }
 
 /// `common.schema.json#/$defs/agentCatalogEntry`：本机已配置 Agent 的目录条目。

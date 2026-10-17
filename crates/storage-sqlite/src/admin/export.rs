@@ -25,7 +25,7 @@ use sqlx::sqlite::SqliteRow;
 use acp_core::model::{
     AgentId, ConflictKind, EntityRef, ExportRecord, ExportTemplate, GrantSet, ImportId,
     ImportRecord, ParamName, PortError, TemplateParam, TemplateParamType, TemplateParamValue,
-    Timestamp, WorkspaceAliasEntry,
+    Timestamp, WorkspaceDirectoryEntry,
 };
 use acp_core::ports::{ExportRevocation, ExportStore, ExportWrite, ImportRemoval, ImportWrite};
 
@@ -61,10 +61,7 @@ fn export_from_row(row: &SqliteRow) -> Result<ExportRecord, StorageError> {
     )?
     .into_iter()
     .map(|entry| {
-        WorkspaceAliasEntry::try_new(
-            decode(&entry.alias, "owned_export.aliases_json.alias")?,
-            &entry.display_name,
-        )
+        WorkspaceDirectoryEntry::try_new(decode(&entry.alias, "owned_export.aliases_json.alias")?)
         .map_err(StorageError::from)
     })
     .collect::<Result<Vec<_>, _>>()?;
@@ -110,8 +107,8 @@ fn template_from_json(template: TemplateJson) -> Result<ExportTemplate, StorageE
         )?,
         &template.display_name,
         decode(
-            &template.workspace_alias,
-            "owned_export.templates_json.workspace_alias",
+            &template.workspace_directory,
+            "owned_export.templates_json.workspace_directory",
         )?,
         params,
     )
@@ -171,7 +168,7 @@ fn export_templates_json(record: &ExportRecord) -> Result<String, StorageError> 
         .map(|template| TemplateJson {
             template_id: template.template_id().as_str().to_owned(),
             display_name: template.display_name().to_owned(),
-            workspace_alias: template.workspace_alias().as_str().to_owned(),
+            workspace_directory: template.workspace_directory().as_str().to_owned(),
             params: template
                 .params()
                 .iter()
@@ -192,11 +189,11 @@ fn export_templates_json(record: &ExportRecord) -> Result<String, StorageError> 
 
 fn export_aliases_json(record: &ExportRecord) -> Result<String, StorageError> {
     let aliases: Vec<AliasJson> = record
-        .workspace_aliases()
+        .workspace_directories()
         .iter()
         .map(|entry| AliasJson {
-            alias: entry.alias().as_str().to_owned(),
-            display_name: entry.display_name().to_owned(),
+            alias: entry.directory_id().as_str().to_owned(),
+            display_name: String::new(),
         })
         .collect();
     encode_value(&aliases, "export aliases are not encodable")
@@ -362,7 +359,7 @@ impl ExportStore for SqliteStore {
             record.agent_ids().iter().map(|id| id.as_str().to_owned()),
         ))
         .bind(export_aliases_json(&record)?)
-        .bind(record.default_workspace_alias().as_str())
+        .bind(record.default_workspace_directory().as_str())
         .bind(export_templates_json(&record)?)
         .bind(record.default_template_id().as_str())
         .bind(encode_strings(record.scopes().iter().map(str::to_owned)))

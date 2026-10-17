@@ -14,7 +14,7 @@
     "payload": {
       "agentId": "company-agent",
       "exportId": "export-main",
-      "workspaceAlias": "company-agent-default",
+      "directoryId": "0123456789abcdef0123456789abcdef",
       "cwd": "/home/dev/company-agent"
     }
   }

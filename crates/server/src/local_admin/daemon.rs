@@ -297,7 +297,6 @@ mod tests {
         assert_eq!(json["listen"], Value::Array(vec![]));
         assert_eq!(json["publicOrigin"], Value::Null);
         assert_eq!(json["counts"]["devices"], Value::from(2u64));
-        assert_eq!(json["counts"]["imports"], Value::from(0u64));
         assert_eq!(json["agents"][0]["agentId"], Value::from("codex"));
         assert_eq!(json["agents"][0]["available"], Value::Bool(true));
         assert_eq!(json["links"][0]["state"], Value::from("offline"));

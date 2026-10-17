@@ -1124,14 +1124,37 @@ async fn command_client(
     }
 }
 
-/// 本机 workspace 登记表与审计表的行数（浏览「无副作用」的判据）。
+/// 本机目录表与审计表的行数（浏览「无副作用」的判据）。
 async fn table_rows(core: &UseCases) -> (usize, usize) {
-    let workspaces = core.workspaces(&Actor::LocalCli).await.expect("登记表可读");
+    let directories = core
+        .directories(&Actor::LocalCli)
+        .await
+        .expect("目录表可读");
     let audit = core
         .audit(&Actor::LocalCli, AuditQuery::default())
         .await
         .expect("审计表可读");
-    (workspaces.len(), audit.len())
+    (directories.len(), audit.len())
+}
+
+/// 测试夹具：直接写一条目录记录（A 之后目录只能由成功的会话创建写入）。
+async fn seed_directory_row(harness: &Harness, id: &str, path: &str) {
+    let database = harness._temp.0.join("data").join("acp-remote.sqlite3");
+    let url = format!("sqlite://{}", database.display());
+    let pool = sqlx::SqlitePool::connect(&url)
+        .await
+        .expect("打开测试数据库");
+    sqlx::query(
+        "INSERT INTO owned_directory (directory_id, canonical_path, created_at, last_used_at) \
+         VALUES (?1, ?2, ?3, ?3) ON CONFLICT(directory_id) DO NOTHING",
+    )
+    .bind(id)
+    .bind(path)
+    .bind("2026-10-17T09:00:00.000Z")
+    .execute(&pool)
+    .await
+    .expect("写入目录记录");
+    pool.close().await;
 }
 
 /// 一次真实浏览：逐层返回**直接**子目录（不含文件、不含更深层），并回显请求的父路径。
@@ -1158,23 +1181,12 @@ async fn a_workspace_browse_round_trip_has_no_registration_or_audit_side_effect(
     std::fs::create_dir_all(tree.0.join("beta").join("deeper")).expect("建更深的层");
     std::fs::write(tree.0.join("note.txt"), b"content").expect("写文件");
 
-    // 先把 `beta` 登记成一个 workspace：结果里它必须带 `registered: true`，而登记表本身不得被改动。
-    let at = acp_core::model::Timestamp::new("2026-10-17T09:00:00.000Z").expect("时间戳");
-    harness
-        .core
-        .put_workspace(
-            &Actor::LocalCli,
-            acp_core::model::WorkspaceRecord::try_new(
-                acp_core::model::WorkspaceAlias::new("beta").expect("别名"),
-                "Beta",
-                tree.0.join("beta").to_str().expect("路径是 UTF-8"),
-                at.clone(),
-                at,
-            )
-            .expect("workspace 记录"),
-        )
-        .await
-        .expect("登记 workspace");
+    // 先把 `beta` 记录成一个目录：结果里它必须带 `registered: true`，而目录表本身不得被改动。
+    let beta_path = tree.0.join("beta");
+    let canonical = std::fs::canonicalize(&beta_path).expect("可规范化");
+    let beta_text = canonical.to_str().expect("路径是 UTF-8");
+    let beta_id = acp_core::model::derive_directory_id(beta_text);
+    seed_directory_row(&harness, beta_id.as_str(), beta_text).await;
 
     let before = table_rows(&harness.core).await;
     assert_eq!(

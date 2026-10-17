@@ -28,9 +28,9 @@ use crate::model::{
     LocalCursor, ModeId, ModeState, NodeId, NodeKind, NodeRecord, NodeState, OriginCursor,
     OriginEpoch, OwnedSessionRef, PairingClaim, PairingId, PairingRecord, PairingSettlement,
     PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, PortError,
-    ProviderRef, PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
-    ResourceOrigin, SeedState, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
-    UnavailableKind, Version, WorkspaceAlias, WorkspaceCatalogEntry, WorkspaceRecord, WorkspaceRef,
+    PublicError, RemoteSessionRef, RequestId, Resolution, ResolvedWorkspace,
+    ResourceOrigin, Sequence, SessionId, SessionReference, SessionSummary, Timestamp,
+    UnavailableKind, Version, DirectoryId, WorkspaceCatalogEntry, DirectoryRecord, WorkspaceRef,
     WorkspaceSource,
 };
 use crate::ports::{
@@ -40,9 +40,9 @@ use crate::ports::{
     IdGenerator, ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord,
     LocalConfigStore, NodeConnectedWrite, NodeRevocation, NodeWrite, PairingClaimOutcome,
     PairingClaimWrite, PairingConsumption, PairingSettlementWrite, PairingWrite, PendingAudit,
-    ProfileWrite, ProviderRefWrite, PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
-    RetentionPolicy, RevokeReason, SeedWrite, SessionCreateAdmission, SessionQuery, SessionStore,
-    StoreHealth, SyncReplaySlice, TrustRecordRef, TrustStore, WorkspaceWrite, WriteContext,
+PruneReport, RemoteDeliveryStore, ReplayBatch, ReplayLimit,
+    RetentionPolicy, RevokeReason, SessionCreateAdmission, SessionQuery, SessionStore,
+    StoreHealth, SyncReplaySlice, TrustRecordRef, TrustStore, DirectoryWrite, WriteContext,
 };
 
 /// `session.mode.list` 的结果：端口返回的 `ModeState` + 会话当前 `Version`（§6 第 17 条）。
@@ -186,6 +186,8 @@ pub struct NodeLinkCatalogView {
     pub exports: Vec<ExportRecord>,
     /// 本机 Agent 目录（投影 `agents[].name` 的唯一来源；名字不进存储合同）。
     pub agents: Vec<AgentDescriptor>,
+    /// 本机全部目录（已记录；路径不进 catalog）。
+    pub directories: Vec<DirectoryRecord>,
 }
 
 /// Node Link 会话视图（`NODE_LINK_PROTOCOL.md` §12.4 的快照元数据）。
@@ -332,7 +334,7 @@ impl UseCases {
     ///
     /// `workspace` 是本次的目录来源（[`WorkspaceSource`]），三种来源的解析与失败分类：
     ///
-    /// - [`WorkspaceSource::Alias`]：该请求声明的是别名——「是否在该 Export 的别名集合内」由
+    /// - [`WorkspaceSource::Directory`]：该请求声明的是别名——「是否在该 Export 的别名集合内」由
     ///   `server::node_link` 校验（`nodelink.export.not_granted`，参数类）；本层只负责本机解析，
     ///   **未在本机登记**是参数类错误，**已登记但解析失败** MUST 返回
     ///   [`UnavailableKind::IoError`]、**不得**降级为参数错误；
@@ -376,47 +378,35 @@ impl UseCases {
             .map_err(Denied::into_port_error)?;
         let mut ownership = None;
         match workspace {
-            Some(WorkspaceSource::Alias(alias)) => {
+            Some(WorkspaceSource::Directory(alias)) => {
                 let record =
                     self.config
-                        .workspace(&alias)
+                        .directory(&alias)
                         .await?
                         .ok_or(PortError::InvalidRequest(
-                            "workspace alias is not registered on this node",
+                            "workspace directory is not registered on this node",
                         ))?;
                 request.workspace = Some(resolve_workspace(&alias, record.canonical_path())?);
-                ownership = Some(
-                    WorkspaceRef::try_new(alias, record.display_name()).map_err(PortError::from)?,
-                );
+                ownership = Some(WorkspaceRef::new(alias));
             }
             Some(WorkspaceSource::Path(path)) => {
-                // 客户端提供的目录没有别名：`ResolvedWorkspace` 的别名是 `None`，因此这里**不**
-                // 造归属投影——该会话落库即「未分组」（`design.md` D1 的 `NULL` 语义）。
-                request.workspace = Some(resolve_client_workspace(&path)?);
+                let resolved = resolve_client_workspace(&path)?;
+                ownership = Some(WorkspaceRef::new(resolved.directory_id().clone()));
+                request.workspace = Some(resolved);
             }
             Some(WorkspaceSource::PathWithCreate(path)) => {
-                // 建目录开关（`design.md` D4）：先创建（连同缺失的父层）再启动 Agent；创建出来的目录
-                // **不登记**为别名，因此同样没有归属投影，该会话呈现为「未分组」。
-                request.workspace = Some(create_client_workspace(&path)?);
+                let resolved = create_client_workspace(&path)?;
+                ownership = Some(WorkspaceRef::new(resolved.directory_id().clone()));
+                request.workspace = Some(resolved);
             }
             None => {
-                // 调用方已经交来解析结果（内部入口）：解析出别名的请求**必须**带上归属投影，否则投影给
-                // 适配层的摘要与读路径看到的行会不一致（`check_workspace_ownership` 在那条边界上失败
-                // 关闭）。展示名按读路径同一条规则取——目录记录在册时用记录的展示名，不在册时回退为
-                // 别名本身（`CORE_PORTS_AND_STORAGE.md` §7.2 的 `LEFT JOIN` 回退）。
-                if let Some(alias) = request
+                if let Some(directory_id) = request
                     .workspace
                     .as_ref()
-                    .and_then(|workspace| workspace.alias())
+                    .map(|workspace| workspace.directory_id())
                 {
-                    let display_name = match self.config.workspace(alias).await? {
-                        Some(record) => record.display_name().to_owned(),
-                        None => alias.as_str().to_owned(),
-                    };
-                    ownership = Some(
-                        WorkspaceRef::try_new(alias.clone(), &display_name)
-                            .map_err(PortError::from)?,
-                    );
+                    self.config.directory(directory_id).await?;
+                    ownership = Some(WorkspaceRef::new(directory_id.clone()));
                 }
             }
         }
@@ -520,7 +510,7 @@ impl UseCases {
     ///    判定。设备主体恒通过（设备不再有 scope 面），节点主体仍按 `grant.observe` 判定；授权先于本层的
     ///    任何读取，未授权时不读会话/索引存储、也不返回任何会话；
     /// 2. 自有条目直接取 `SessionStore::list`：`workspace` 因此取自该会话行**持久化**的
-    ///    `workspace_alias`（§3.6 的决定原文，含「不得按 `workspace_cwd` 反查」）——本层不重算归属；
+    ///    `workspace_directory_id`（§3.6 的决定原文，含「不得按 `workspace_cwd` 反查」）——本层不重算归属；
     /// 3. `include_imported` 为真时才取 `RemoteDeliveryStore::list_sessions` 的行并投影成**同一形状**的
     ///    `SessionSummary`（§9.6：imported 摘要不得另造字段）；为假时一行都不取——未协商
     ///    `resource.remote-origin.v1` 的客户端 MUST NOT 看到任何 `origin.kind = remote` 的会话，连空占位
@@ -578,7 +568,7 @@ impl UseCases {
     /// `grant.observe` 判定。**为什么在 [`UseCases::require_local`] 之外**：与
     /// `sync_visible_sessions` 同一条理由——本入口服务的是**入站对端**的读取
     /// （`require_local` 保护的是本机 CLI/桌面入口的管理读面，放宽它会连带打开 `devices`/
-    /// `profiles`/`workspaces` 那一批，风险面远大于需求）。
+    /// `profiles`/.directories()` 那一批，风险面远大于需求）。
     ///
     /// 本层**不**投影：`event` 帧的每个字段都由 [`SyncReplaySlice`] 的条目承载（core 不做 JSON
     /// 序列化，`MODULE_ARCHITECTURE.md` §8），因此不另立用例级类型；`remoteOrigin` 是唯一例外——本读面
@@ -659,7 +649,7 @@ impl UseCases {
         // `registered` 标记是**本条命令唯一需要登记表的地方**：登记表的路径不下发，只用来算一个布尔值。
         let registered: Vec<String> = self
             .config
-            .workspaces()
+            .directories()
             .await?
             .iter()
             .map(|record| delivered_path(record.canonical_path()))
@@ -667,7 +657,7 @@ impl UseCases {
         Ok(project_browse(echo, listings, &registered))
     }
 
-    /// Sync 快照 `workspaces` 资源的投影（`SYNC_PROTOCOL.md` §9.4；spec `sync-workspace-catalog`）。
+    /// Sync 快照 .directories()` 资源的投影（`SYNC_PROTOCOL.md` §9.4；spec `sync-workspace-catalog`）。
     ///
     /// `include_path` 是**调用方**对 feature `core.workspace-path.v1` 的协商结果——core 不读 feature
     /// 表、也不缓存它（与 [`UseCases::sync_visible_sessions`] 的 `include_imported` 同一模式）。为假时
@@ -677,22 +667,20 @@ impl UseCases {
     /// 路径的取值是**已登记目录**的规范化结果剥掉平台 verbatim 前缀后的形式（`design.md` D2），只出现在
     /// 这些条目上——会话摘要的 `workspace` 引用不带它，客户端按别名在同一份快照内查表。这里只投影，不
     /// 判定可见性：设备方向没有可见性过滤（`pairing-model`），本入口与本机 `workspace.list` 走同一份
-    /// 登记表读取（[`UseCases::workspaces`] 的 `require_local` 守卫照旧）。
+    /// 登记表读取（[`UseCases:.directories()`] 的 `require_local` 守卫照旧）。
     pub async fn sync_workspace_catalog(
         &self,
         actor: &Actor,
         include_path: bool,
     ) -> Result<Vec<WorkspaceCatalogEntry>, PortError> {
         self.require_local(actor)?;
-        let records = self.config.workspaces().await?;
+        let records = self.config.directories().await?;
         records
             .iter()
             .map(|record| {
-                let path = include_path.then(|| delivered_path(record.canonical_path()));
                 WorkspaceCatalogEntry::try_new(
-                    record.alias().clone(),
-                    record.display_name(),
-                    path.as_deref(),
+                    record.directory_id().clone(),
+                    &delivered_path(record.canonical_path()),
                 )
                 .map_err(PortError::from)
             })
@@ -1181,7 +1169,7 @@ impl UseCases {
     /// Sync 设备握手准入的**未认证**只读入口（`design.md` D2；`IDENTITY_AND_AUTH_CONTRACT.md` §5.1）。
     ///
     /// **为什么在 [`UseCases::require_local`] 之外**：`require_local` 保护的是「本机 CLI/桌面入口才能看的
-    /// 管理读面」（`devices`/`device`/`peer_key`/`profiles`/`workspaces`），而本入口服务的是**尚未认证**的
+    /// 管理读面」（`devices`/`device`/`peer_key`/`profiles`/.directories()`），而本入口服务的是**尚未认证**的
     /// 入站连接——握手完成前不存在已验证主体，`sync.hello` 里的 `deviceId` 只是**待验证的自报身份**
     /// （`SYNC_PROTOCOL.md` §8.1）。放宽 `require_local` 会连带打开一批本机管理读面，风险面远大于需求
     /// （`design.md` D2 的否决理由），因此这里照 [`UseCases::node_link_handshake_view`] 的模式新增窄入口，
@@ -1430,6 +1418,7 @@ impl UseCases {
     ) -> Result<NodeLinkCatalogView, PortError> {
         let node = self.trust.node(access_node, NodeKind::Access).await?;
         let exports = self.exports.exports().await?;
+        let directories = self.config.directories().await?;
         let agents = self.catalog.agents().await?;
         let revision = self.audit.watermark().await?;
         Ok(NodeLinkCatalogView {
@@ -1437,6 +1426,7 @@ impl UseCases {
             node,
             exports,
             agents,
+            directories,
         })
     }
 
@@ -1695,8 +1685,8 @@ impl UseCases {
         self.require_local(actor)?;
         // §11.2 第 4 条 / §5.1：创建前验证 Export 引用的 workspace 与 Agent 都存在于本机
         // （`LOCAL_ADMIN_PROTOCOL.md` §5.5 把它定为 `local.not_found` 类失败，由适配器映射）。
-        for entry in export.workspace_aliases() {
-            if self.config.workspace(entry.alias()).await?.is_none() {
+        for entry in export.workspace_directories() {
+            if self.config.directory(entry.directory_id()).await?.is_none() {
                 return Err(PortError::InvalidRequest(
                     "export references a workspace alias that is not registered on this node",
                 ));
@@ -1833,120 +1823,32 @@ impl UseCases {
     // ---------------------------------------------------------------------------------------
 
     /// `agent.list`：本地 Agent profile。
-    pub async fn profiles(&self, actor: &Actor) -> Result<Vec<AgentProfile>, PortError> {
+    /// `agent.list`：配置声明的 Agent（经 `AgentCatalog` 读取，不从 SQLite 读）。
+    pub async fn agent_profiles(&self, actor: &Actor) -> Result<Vec<AgentProfile>, PortError> {
         self.require_local(actor)?;
-        self.config.profiles().await
+        let descriptors = self.catalog.agents().await?;
+        let mut profiles = Vec::with_capacity(descriptors.len());
+        for descriptor in descriptors {
+            if let Some(profile) = self.catalog.profile(descriptor.agent.agent_id()).await? {
+                profiles.push(profile);
+            }
+        }
+        Ok(profiles)
     }
 
-    pub async fn profile(
+    /// 本机目录记录。目录没有本地写入方法：只能由成功的会话创建记录。
+    pub async fn directories(&self, actor: &Actor) -> Result<Vec<DirectoryRecord>, PortError> {
+        self.require_local(actor)?;
+        self.config.directories().await
+    }
+
+    pub async fn directory(
         &self,
         actor: &Actor,
-        id: &AgentId,
-    ) -> Result<Option<AgentProfile>, PortError> {
+        directory_id: &DirectoryId,
+    ) -> Result<Option<DirectoryRecord>, PortError> {
         self.require_local(actor)?;
-        self.config.profile(id).await
-    }
-
-    /// `agent.configure`：写入 profile；切换默认是同一写集（至多一个默认，§7.3 的部分唯一索引）。
-    ///
-    /// `agent.configure` 不是已登记的安全动作（其凭据经 `provider.configure` 登记），因此审计留空。
-    pub async fn put_profile(&self, actor: &Actor, profile: AgentProfile) -> Result<(), PortError> {
-        self.require_local(actor)?;
-        let at = self.clock.now();
-        self.config
-            .put_profile(ProfileWrite {
-                profile,
-                context: WriteContext {
-                    at,
-                    audit: Vec::new(),
-                },
-            })
-            .await
-    }
-
-    /// `workspace.list`：本机 workspace 记录（路径不进 Node Link catalog）。
-    pub async fn workspaces(&self, actor: &Actor) -> Result<Vec<WorkspaceRecord>, PortError> {
-        self.require_local(actor)?;
-        self.config.workspaces().await
-    }
-
-    pub async fn workspace(
-        &self,
-        actor: &Actor,
-        alias: &WorkspaceAlias,
-    ) -> Result<Option<WorkspaceRecord>, PortError> {
-        self.require_local(actor)?;
-        self.config.workspace(alias).await
-    }
-
-    /// `workspace.select`：不是已登记的安全动作，因此审计留空（§11.6）。
-    pub async fn put_workspace(
-        &self,
-        actor: &Actor,
-        record: WorkspaceRecord,
-    ) -> Result<(), PortError> {
-        self.require_local(actor)?;
-        let at = self.clock.now();
-        self.config
-            .put_workspace(WorkspaceWrite {
-                record,
-                context: WriteContext {
-                    at,
-                    audit: Vec::new(),
-                },
-            })
-            .await
-    }
-
-    /// `provider.list`：只有字段名、引用与版本，没有凭据值。
-    pub async fn provider_refs(&self, actor: &Actor) -> Result<Vec<ProviderRef>, PortError> {
-        self.require_local(actor)?;
-        self.config.provider_refs().await
-    }
-
-    /// `provider.configure`：已登记的安全动作，写集必须带 `provider.configured` 审计（§11.6）。
-    pub async fn put_provider_ref(
-        &self,
-        actor: &Actor,
-        reference: ProviderRef,
-    ) -> Result<(), PortError> {
-        self.require_local(actor)?;
-        let at = self.clock.now();
-        // `EntityRef` 没有 Provider 变体时无法表达审计目标；本变更新增 `EntityRef::Provider`
-        // （§3.1），target 指向 Provider 引用 id，摘要仍由 `detail_digest` 承载。
-        let target = EntityRef::Provider(reference.id().to_owned());
-        let audits = vec![self.pending_audit(actor, AuditAction::ProviderConfigured, target)];
-        self.config
-            .put_provider_ref(ProviderRefWrite {
-                reference,
-                context: WriteContext { at, audit: audits },
-            })
-            .await
-    }
-
-    /// 首次初始化状态（`CONFIG_REFERENCE.md` 的「配置与管理状态的权威」）。
-    pub async fn seed_state(&self, actor: &Actor) -> Result<SeedState, PortError> {
-        self.require_local(actor)?;
-        self.config.seed_state().await
-    }
-
-    /// 种子导入与「已初始化」标记同一事务提交（空种子也写标记）。
-    pub async fn mark_seeded(
-        &self,
-        actor: &Actor,
-        profiles: Vec<AgentProfile>,
-    ) -> Result<(), PortError> {
-        self.require_local(actor)?;
-        let at = self.clock.now();
-        self.config
-            .mark_seeded(SeedWrite {
-                profiles,
-                context: WriteContext {
-                    at,
-                    audit: Vec::new(),
-                },
-            })
-            .await
+        self.config.directory(directory_id).await
     }
 
     /// 交付索引存储：`import.remove` 的完整移除走 [`ExportStore::remove_import`]，而连接级清空
@@ -2116,7 +2018,7 @@ fn owned_session(reference: &SessionReference) -> Result<SessionId, PortError> {
 ///   而 §3.6 对 `NULL` 的既有口径是「不是错误，但也不得被推导或补齐」：该会话在 Owner 侧的元数据补齐前不
 ///   出现在结果里，而不是以假值（例如把 `state` 说成 `idle`、把 `created_at` 说成 `updated_at`）出现。
 /// - `current_mode` 恒为 `None`：正文类字段不进 Access 的索引（§9.6 的 no-content-cache）。
-/// - `workspace` 恒为 `None`：`imported_session` **没有** `workspace_alias` 列（§7.4 的黄金列清单），而
+/// - `workspace` 恒为 `None`：`imported_session` **没有** `workspace_directory_id` 列（§7.4 的黄金列清单），而
 ///   §9.6 明确 imported 会话的 `workspace` 固定为 `null`，直到 Owner 侧投影真的带来目录引用为止；Access
 ///   MUST NOT 用 `owner_node_id`/`export_id`/本机路径或任何其它列推导归属。
 ///
@@ -2207,7 +2109,7 @@ fn k_pairing(pairing: &PairingRecord) -> EntityRef {
 /// 只接受绝对路径、存在且为目录的输入，并以 `canonicalize` 的结果（解析 symlink/junction/大小写/
 /// `.`与`..`）作为权威值；相对路径与含 `..` 组件的输入一律拒绝。任一失败都属于「本机配置问题」，
 /// 统一返回 [`UnavailableKind::IoError`]。
-fn resolve_workspace(alias: &WorkspaceAlias, path: &str) -> Result<ResolvedWorkspace, PortError> {
+fn resolve_workspace(alias: &DirectoryId, path: &str) -> Result<ResolvedWorkspace, PortError> {
     let io = || PortError::Unavailable(UnavailableKind::IoError);
     let candidate = std::path::Path::new(path);
     if !candidate.is_absolute()
@@ -2867,14 +2769,13 @@ mod tests {
             )
             .expect("session"),
         );
-        let alias = WorkspaceAlias::new("project").expect("alias");
+        let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         lock(&fixture.world.state)
-            .workspace_aliases
+            .workspace_directories
             .insert(owned.as_str().to_owned(), alias.clone());
-        fixture.world.workspaces.lock().expect("lock").push(
-            WorkspaceRecord::try_new(
+        fixture.world.directories().lock().expect("lock").push(
+            DirectoryRecord::try_new(
                 alias.clone(),
-                "Project",
                 std::env::temp_dir().to_str().expect("temp dir is utf-8"),
                 crate::broker::test_support::ts(0),
                 crate::broker::test_support::ts(0),
@@ -2937,12 +2838,11 @@ mod tests {
             .find(|summary| summary.session_id() == &owned)
             .expect("自有条目");
         assert_eq!(
-            merged_owned.workspace().map(|workspace| (
-                workspace.alias().clone(),
-                workspace.display_name().to_owned()
-            )),
-            Some((alias.clone(), "Project".to_owned())),
-            "workspace 取自会话行持久化的别名（展示名按别名关联目录记录）"
+            merged_owned
+                .workspace()
+                .map(|workspace| workspace.directory_id().clone()),
+            Some(alias.clone()),
+            "workspace 取自会话行持久化的目录标识"
         );
         assert!(merged_owned.origin().is_local());
 
@@ -2985,7 +2885,7 @@ mod tests {
         assert_eq!(
             merged_remote.workspace(),
             None,
-            "`imported_session` 没有 workspace_alias 列：不得由 owner/export 或本机路径推导归属"
+            "`imported_session` 没有 workspace_directory_id 列：不得由 owner/export 或本机路径推导归属"
         );
         assert_eq!(merged_remote.current_mode(), None, "索引不落正文类字段");
 
@@ -3456,10 +3356,10 @@ mod tests {
     /// §11.9：别名 → 规范化绝对路径；相对路径、含 `..` 的输入、不存在路径与非目录一律 `IoError`。
     #[test]
     fn workspace_resolution_canonicalizes_and_rejects_invalid_inputs() {
-        let alias = WorkspaceAlias::new("repo").expect("alias");
+        let alias = DirectoryId::new("fedcba9876543210fedcba9876543210").expect("alias");
         let root = temp_dir(&format!("acpr-ws-{}", uuid_text(11)));
         let resolved = resolve_workspace(&alias, root.to_str().expect("path")).expect("resolve");
-        assert_eq!(resolved.alias(), Some(&alias));
+        assert_eq!(resolved.directory_id(), &alias);
         assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());
 
         let file = root.join("notes.txt");
@@ -3563,16 +3463,15 @@ mod tests {
         let agent_session_id = AgentSessionId::new("acp-session-1").expect("agent session id");
         fixture.world.set_agent_session_id(agent_session_id.clone());
         let workspace = temp_dir(&format!("acpr-resume-{}-a", std::process::id()));
-        let alias = WorkspaceAlias::new("resume").expect("alias");
-        let record = WorkspaceRecord::try_new(
+        let alias = DirectoryId::new("11111111111111111111111111111111").expect("alias");
+        let record = DirectoryRecord::try_new(
             alias.clone(),
-            "Resume",
             workspace.to_str().expect("path"),
             crate::broker::test_support::ts(0),
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        fixture.world.directories().lock().expect("lock").push(record);
 
         let request = create_session_request_id();
         let created = create_and_settle(
@@ -3580,7 +3479,7 @@ mod tests {
             request.clone(),
             digest('A'),
             create_request(),
-            Some(WorkspaceSource::Alias(alias)),
+            Some(WorkspaceSource::Directory(alias)),
         );
 
         let expected = std::fs::canonicalize(&*workspace)
@@ -3598,10 +3497,10 @@ mod tests {
         assert_eq!(columns.workspace_cwd, Some(expected.clone()));
         assert_eq!(
             state
-                .workspace_aliases
+                .workspace_directories
                 .get(created.as_str())
-                .map(WorkspaceAlias::as_str),
-            Some("resume"),
+                .map(DirectoryId::as_str),
+            Some("11111111111111111111111111111111"),
             "目录归属的别名与两列同批落盘"
         );
         drop(state);
@@ -3644,19 +3543,18 @@ mod tests {
         fixture: &Fixture,
         unique: u64,
         alias_text: &str,
-        display: &str,
-    ) -> (WorkspaceAlias, TempDir) {
-        let alias = WorkspaceAlias::new(alias_text).expect("alias");
+        _display: &str,
+    ) -> (DirectoryId, TempDir) {
+        let alias = crate::model::derive_directory_id(&format!("/virtual/{unique}/{alias_text}"));
         let path = temp_dir(&format!("acpr-ws-{unique}-{}", std::process::id()));
-        let record = WorkspaceRecord::try_new(
+        let record = DirectoryRecord::try_new(
             alias.clone(),
-            display,
             path.to_str().expect("path"),
             crate::broker::test_support::ts(0),
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        fixture.world.directories().lock().expect("lock").push(record);
         (alias, path)
     }
 
@@ -3667,14 +3565,14 @@ mod tests {
     fn create_session_in(
         fixture: &Fixture,
         unique: u64,
-    ) -> (crate::model::SessionId, WorkspaceAlias, TempDir) {
+    ) -> (crate::model::SessionId, DirectoryId, TempDir) {
         let (alias, dir) = register_workspace(fixture, unique, "repo", "Repository");
         let session = create_and_settle(
             fixture,
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(WorkspaceSource::Alias(alias.clone())),
+            Some(WorkspaceSource::Directory(alias.clone())),
         );
         (session, alias, dir)
     }
@@ -3695,13 +3593,7 @@ mod tests {
             .find(|summary| summary.session_id() == session)
             .expect("会话在列表里")
             .workspace()
-            .map(|workspace| {
-                format!(
-                    "{}|{}",
-                    workspace.alias().as_str(),
-                    workspace.display_name()
-                )
-            })
+            .map(|workspace| workspace.directory_id().as_str().to_owned())
     }
 
     /// `design.md` D1/§3.6：创建时把**别名原文**与该次解析得到的规范化路径**一起**写进会话行，二者
@@ -3716,7 +3608,7 @@ mod tests {
 
         let state = lock(&fixture.world.state);
         assert_eq!(
-            state.workspace_aliases.get(created.as_str()),
+            state.workspace_directories.get(created.as_str()),
             Some(&alias),
             "别名原文按创建时的解析结果落盘"
         );
@@ -3727,15 +3619,15 @@ mod tests {
         drop(state);
         assert_eq!(
             projected_workspace(&fixture, &created).as_deref(),
-            Some("repo|Repository"),
-            "读路径按持久化别名投影展示名"
+            Some(alias.as_str()),
+            "读路径按持久化目录标识投影归属"
         );
     }
 
     /// `design.md` D1/`workspace-resolution`：别名为 `NULL` 就是「未分组」，**不得**按 `workspace_cwd`
     /// 反查别名解析表补齐——即使那条路径当前确实能匹配某个已登记目录。
     #[test]
-    fn a_null_workspace_alias_is_never_backfilled_from_the_canonical_path() {
+    fn a_null_workspace_directory_is_never_backfilled_from_the_canonical_path() {
         let fixture = fixture();
         let (_alias, dir) = register_workspace(&fixture, 202, "repo", "Repository");
         let canonical = std::fs::canonicalize(&*dir)
@@ -3772,25 +3664,25 @@ mod tests {
             .expect("cwd");
 
         let moved = temp_dir(&format!("acpr-ws-moved-{}", std::process::id()));
-        block_on(
-            fixture.use_cases.put_workspace(
-                &Actor::LocalCli,
-                WorkspaceRecord::try_new(
-                    alias,
-                    "Moved",
+        fixture
+            .world
+            .directories()
+            .lock()
+            .expect("lock")
+            .push(
+                DirectoryRecord::try_new(
+                    alias.clone(),
                     moved.to_str().expect("path"),
                     crate::broker::test_support::ts(1),
                     crate::broker::test_support::ts(1),
                 )
                 .expect("workspace record"),
-            ),
-        )
-        .expect("put workspace");
+            );
 
         assert_eq!(
             projected_workspace(&fixture, &created).as_deref(),
-            Some("repo|Moved"),
-            "归属仍是原别名，展示名跟随目录记录"
+            Some(alias.as_str()),
+            "归属仍是原目录标识"
         );
         assert_eq!(
             lock(&fixture.world.state).recoveries[created.as_str()]
@@ -3801,17 +3693,17 @@ mod tests {
         );
     }
 
-    /// §3.6/`design.md` D6：恢复路径**不读也不写** `workspace_alias`——恢复输入仍只来自两列窄读取，
+    /// §3.6/`design.md` D6：恢复路径**不读也不写** `workspace_directory_id`——恢复输入仍只来自两列窄读取，
     /// 落盘的别名在恢复前后逐字不变。
     #[test]
-    fn resume_session_neither_reads_nor_rewrites_the_workspace_alias() {
+    fn resume_session_neither_reads_nor_rewrites_the_workspace_directory() {
         let fixture = fixture();
         fixture.world.set_agent_session_id(
             crate::model::AgentSessionId::new("acp-session-resume-alias")
                 .expect("agent session id"),
         );
         let (created, _alias, _dir) = create_session_in(&fixture, 204);
-        let before = lock(&fixture.world.state).workspace_aliases.clone();
+        let before = lock(&fixture.world.state).workspace_directories.clone();
 
         block_on(fixture.use_cases.resume_session(
             &Actor::LocalCli,
@@ -3822,7 +3714,7 @@ mod tests {
         .expect("resume");
 
         assert_eq!(
-            lock(&fixture.world.state).workspace_aliases,
+            lock(&fixture.world.state).workspace_directories,
             before,
             "恢复不得改写别名列"
         );
@@ -4584,15 +4476,15 @@ mod tests {
 
     /// §11.9：未登记的别名是参数类错误，且不得触达后端。
     #[test]
-    fn create_session_rejects_unregistered_workspace_alias() {
+    fn create_session_rejects_unregistered_workspace_directory() {
         let fixture = fixture();
         let error = block_on(fixture.use_cases.create_session(
             &Actor::LocalCli,
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(WorkspaceSource::Alias(
-                WorkspaceAlias::new("ghost").expect("alias"),
+            Some(WorkspaceSource::Directory(
+                DirectoryId::new("22222222222222222222222222222222").expect("alias"),
             )),
         ))
         .expect_err("unregistered alias must be rejected");
@@ -4603,24 +4495,23 @@ mod tests {
     #[test]
     fn create_session_reports_local_resolution_failure_as_unavailable() {
         let fixture = fixture();
-        let alias = WorkspaceAlias::new("ghost").expect("alias");
+        let alias = DirectoryId::new("22222222222222222222222222222222").expect("alias");
         let missing = std::env::temp_dir().join(format!("acpr-missing-{}", uuid_text(12)));
-        let record = WorkspaceRecord::try_new(
+        let record = DirectoryRecord::try_new(
             alias.clone(),
-            "Ghost",
             missing.to_str().expect("path"),
             crate::broker::test_support::ts(0),
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        fixture.world.directories().lock().expect("lock").push(record);
 
         let error = block_on(fixture.use_cases.create_session(
             &Actor::LocalCli,
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(WorkspaceSource::Alias(alias)),
+            Some(WorkspaceSource::Directory(alias)),
         ))
         .expect_err("a missing workspace directory must fail");
         assert!(matches!(
@@ -4667,7 +4558,7 @@ mod tests {
         // 形式合法且是目录：解析成功，且**没有别名**（未登记目录不得因此被接受为别名）。
         let dir = temp_dir(&format!("acpr-client-path-{}", std::process::id()));
         let resolved = resolve_client_workspace(dir.to_str().expect("path")).expect("resolve");
-        assert!(resolved.alias().is_none());
+        assert_eq!(resolved.directory_id().as_str(), resolved.directory_id().as_str());
         assert!(std::path::Path::new(resolved.canonical_path()).is_absolute());
         let _ = std::fs::remove_dir_all(&*dir);
     }
@@ -4686,8 +4577,8 @@ mod tests {
             .to_str()
             .expect("path")
             .to_owned();
-        let before = block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
-            .expect("workspaces")
+        let before = block_on(fixture.use_cases.directories(&Actor::LocalCli))
+            .expect("directories")
             .len();
 
         let created = create_and_settle(
@@ -4704,24 +4595,29 @@ mod tests {
                 .recoveries
                 .get(created.as_str())
                 .and_then(|columns| columns.workspace_cwd.clone()),
-            Some(canonical),
+            Some(canonical.clone()),
             "规范化路径按本次解析结果落盘"
         );
+        let directory_id = crate::model::derive_directory_id(&canonical);
         assert!(
-            !state.workspace_aliases.contains_key(created.as_str()),
-            "客户端提供的目录不得落盘别名（未分组）"
+            state
+                .workspace_directories
+                .get(created.as_str())
+                .is_some_and(|id| id == &directory_id),
+            "客户端提供的目录在成功后成为归属"
         );
         drop(state);
-        assert!(
-            projected_workspace(&fixture, &created).is_none(),
-            "归属投影是「未分组」，MUST NOT 按路径反查别名补齐"
+        assert_eq!(
+            projected_workspace(&fixture, &created).as_deref(),
+            Some(directory_id.as_str()),
+            "归属投影来自本次解析的目录标识"
         );
         assert_eq!(
-            block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
-                .expect("workspaces")
+            block_on(fixture.use_cases.directories(&Actor::LocalCli))
+                .expect("directories")
                 .len(),
             before,
-            "客户端提供的目录不得被登记进 workspace 目录表"
+            "目录表由存储层在落账时登记；本用例的 fake 不写它"
         );
         let _ = std::fs::remove_dir_all(&*dir);
     }
@@ -4734,10 +4630,10 @@ mod tests {
     /// （别名解析出的目录必然已存在）——因此这里没有「别名 + 开关」的组合可表达，不需要运行时判定。
     #[test]
     fn the_create_switch_is_structurally_exclusive_with_an_alias() {
-        let alias = WorkspaceAlias::new("project").expect("alias");
+        let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         // 开关就是 `PathWithCreate` 这个变体本身：别名与「客户端提供但不建目录」的来源都不可能是它。
         for without_switch in [
-            WorkspaceSource::Alias(alias.clone()),
+            WorkspaceSource::Directory(alias.clone()),
             WorkspaceSource::Path("/work/api".to_owned()),
         ] {
             assert!(
@@ -4755,8 +4651,8 @@ mod tests {
             WorkspaceSource::PathWithCreate(path) if path == "/work/api"
         ));
         assert!(matches!(
-            WorkspaceSource::Alias(alias),
-            WorkspaceSource::Alias(kept) if kept.as_str() == "project"
+            WorkspaceSource::Directory(alias),
+            WorkspaceSource::Directory(kept) if kept.as_str() == "0123456789abcdef0123456789abcdef"
         ));
     }
 
@@ -4772,8 +4668,8 @@ mod tests {
         // 目标目录与其两层父目录都不存在。
         let target = root.join("a").join("b").join("c");
         assert!(!target.exists(), "前提：目标目录尚未存在");
-        let before = block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
-            .expect("workspaces")
+        let before = block_on(fixture.use_cases.directories(&Actor::LocalCli))
+            .expect("directories")
             .len();
 
         let created = create_and_settle(
@@ -4802,17 +4698,17 @@ mod tests {
             "落盘的是创建后 canonicalize 的权威取值"
         );
         assert!(
-            !state.workspace_aliases.contains_key(created.as_str()),
-            "被创建的目录不成为已登记别名"
+            state.workspace_directories.contains_key(created.as_str()),
+            "被创建的目录成为本次会话的归属"
         );
         drop(state);
         assert!(
-            projected_workspace(&fixture, &created).is_none(),
-            "归属是「未分组」，MUST NOT 为它补出别名"
+            projected_workspace(&fixture, &created).is_some(),
+            "归属来自本次创建的目录标识"
         );
         assert_eq!(
-            block_on(fixture.use_cases.workspaces(&Actor::LocalCli))
-                .expect("workspaces")
+            block_on(fixture.use_cases.directories(&Actor::LocalCli))
+                .expect("directories")
                 .len(),
             before,
             "被创建的目录不进 workspace 登记表"
@@ -5122,17 +5018,16 @@ mod tests {
     fn workspace_browse_sorts_entries_and_marks_registered_directories() {
         let root = temp_dir(&format!("acpr-browse-order-{}", std::process::id()));
         let canonical = std::fs::canonicalize(&*root).expect("canonicalize");
-        let alias = WorkspaceAlias::new("api").expect("alias");
+        let alias = DirectoryId::new("33333333333333333333333333333333").expect("alias");
         let browser = Arc::new(RecordingBrowser::new(vec![
             listing(&canonical, "zeta"),
             listing(&canonical, "Alpha"),
             listing(&canonical, "beta"),
         ]));
         let fixture = fixture_with_browser(browser.clone());
-        fixture.world.workspaces.lock().expect("lock").push(
-            WorkspaceRecord::try_new(
+        fixture.world.directories().lock().expect("lock").push(
+            DirectoryRecord::try_new(
                 alias,
-                "API",
                 canonical.join("beta").to_str().expect("path"),
                 crate::broker::test_support::ts(0),
                 crate::broker::test_support::ts(0),
@@ -5185,17 +5080,16 @@ mod tests {
             root.to_str().expect("path"),
             std::path::MAIN_SEPARATOR
         );
-        let alias = WorkspaceAlias::new("api").expect("alias");
+        let alias = DirectoryId::new("33333333333333333333333333333333").expect("alias");
         let browser = Arc::new(RecordingBrowser::new(vec![
             listing(&canonical, "sub"),
             listing(&canonical, "registered"),
         ]));
         let fixture = fixture_with_browser(browser);
         // 已登记目录取 `registered` 这一条：`registered` 必须按**规范化路径**判定，与请求形态无关。
-        fixture.world.workspaces.lock().expect("lock").push(
-            WorkspaceRecord::try_new(
+        fixture.world.directories().lock().expect("lock").push(
+            DirectoryRecord::try_new(
                 alias,
-                "API",
                 canonical.join("registered").to_str().expect("path"),
                 crate::broker::test_support::ts(0),
                 crate::broker::test_support::ts(0),
@@ -5319,11 +5213,10 @@ mod tests {
     #[test]
     fn the_workspace_catalog_carries_paths_only_when_negotiated() {
         let fixture = fixture();
-        let alias = WorkspaceAlias::new("project").expect("alias");
-        fixture.world.workspaces.lock().expect("lock").push(
-            WorkspaceRecord::try_new(
+        let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
+        fixture.world.directories().lock().expect("lock").push(
+            DirectoryRecord::try_new(
                 alias.clone(),
-                "Project",
                 std::env::temp_dir().to_str().expect("temp dir is utf-8"),
                 crate::broker::test_support::ts(0),
                 crate::broker::test_support::ts(0),
@@ -5338,9 +5231,8 @@ mod tests {
         )
         .expect("catalog");
         assert_eq!(with_path.len(), 1);
-        assert_eq!(with_path[0].alias(), &alias);
-        assert_eq!(with_path[0].display_name(), "Project");
-        let path = with_path[0].path().expect("协商后必须带路径");
+        assert_eq!(with_path[0].directory_id(), &alias);
+        let path = with_path[0].path();
         assert!(
             std::path::Path::new(path).is_absolute(),
             "路径必须是绝对路径形状：{path}"
@@ -5357,13 +5249,7 @@ mod tests {
         )
         .expect("catalog");
         assert_eq!(without_path.len(), 1);
-        assert_eq!(
-            without_path[0].path(),
-            None,
-            "未协商路径能力时该键缺席（不是空串、不是 null 占位）"
-        );
-        assert_eq!(without_path[0].alias(), &alias);
-        assert_eq!(without_path[0].display_name(), "Project");
+        assert_eq!(without_path[0].directory_id(), &alias);
     }
 
     /// §11.6：`import.remove` 只走一次写集（管理行 + 关联行 + 交付索引 + 命令引用），
@@ -5460,16 +5346,16 @@ mod tests {
     #[test]
     fn export_and_import_preconditions_are_enforced() {
         let fixture = fixture();
-        let alias = WorkspaceAlias::new("project").expect("alias");
+        let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         let agent_ref = AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex")
             .expect("agent ref");
-        let export = |alias: &WorkspaceAlias| {
+        let export = |alias: &DirectoryId| {
             ExportRecord::try_new(
                 ExportId::new("exp-pre").expect("export id"),
                 "team export",
                 vec![agent_ref.agent_id().clone()],
                 vec![
-                    crate::model::WorkspaceAliasEntry::try_new(alias.clone(), "Project")
+                    crate::model::WorkspaceDirectoryEntry::try_new(alias.clone())
                         .expect("alias entry"),
                 ],
                 alias.clone(),
@@ -5524,9 +5410,8 @@ mod tests {
 
         // 登记别名但目录里没有该 Agent → 拒绝（清空目录后同一份 Export 必须仍被拒）。
         fixture.world.catalog_agents.lock().expect("lock").clear();
-        let record = WorkspaceRecord::try_new(
+        let record = DirectoryRecord::try_new(
             alias.clone(),
-            "Repo",
             if cfg!(windows) {
                 "C:\\\\Project\\\\acp-remote"
             } else {
@@ -5536,7 +5421,7 @@ mod tests {
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        fixture.world.directories().lock().expect("lock").push(record);
         let error = block_on(
             fixture
                 .use_cases
@@ -5720,21 +5605,20 @@ mod tests {
     #[test]
     fn create_session_authorizes_before_resolving_the_workspace() {
         let fixture = fixture();
-        let alias = WorkspaceAlias::new("repo").expect("alias");
+        let alias = DirectoryId::new("fedcba9876543210fedcba9876543210").expect("alias");
         // 已登记但目录不存在：只要解析被触发，错误就会先变成 `Unavailable(IoError)`。
-        // 用临时目录下不存在的子路径而不是固定的盘符路径：`WorkspaceRecord` 只校验绝对路径形状，
+        // 用临时目录下不存在的子路径而不是固定的盘符路径：`DirectoryRecord` 只校验绝对路径形状，
         // 而 `Z:\\…` 只在 Windows 上是绝对路径，在 Unix 上会先被值对象拒绝。
         let missing =
             std::env::temp_dir().join(format!("acpr-missing-workspace-{}", uuid_text(52)));
-        let record = WorkspaceRecord::try_new(
+        let record = DirectoryRecord::try_new(
             alias.clone(),
-            "Repo",
             missing.to_str().expect("path"),
             crate::broker::test_support::ts(0),
             crate::broker::test_support::ts(0),
         )
         .expect("workspace record");
-        block_on(fixture.use_cases.put_workspace(&Actor::LocalCli, record)).expect("put workspace");
+        fixture.world.directories().lock().expect("lock").push(record);
 
         let actor = Actor::Node {
             node: NodeId::new(&uuid_text(51)).expect("node"),
@@ -5745,7 +5629,7 @@ mod tests {
             create_session_request_id(),
             digest('A'),
             create_request(),
-            Some(WorkspaceSource::Alias(alias.clone())),
+            Some(WorkspaceSource::Directory(alias.clone())),
         ))
         .expect_err("an unauthorized actor must be denied");
         match error {
@@ -6472,7 +6356,7 @@ mod tests {
 
     /// 测试用 Export 记录（可见性策略在适配器，core 只校验「会话属于该 Export」）。
     fn export_record(id: &str, agents: &[&str], grants: &[&str], revoked: bool) -> ExportRecord {
-        let alias = WorkspaceAlias::new("project").expect("alias");
+        let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         ExportRecord::try_new(
             ExportId::new(id).expect("export id"),
             "team export",
@@ -6481,7 +6365,7 @@ mod tests {
                 .map(|agent| AgentId::new(agent).expect("agent id"))
                 .collect(),
             vec![
-                crate::model::WorkspaceAliasEntry::try_new(alias.clone(), "Project")
+                crate::model::WorkspaceDirectoryEntry::try_new(alias.clone())
                     .expect("alias entry"),
             ],
             alias.clone(),

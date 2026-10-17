@@ -353,6 +353,13 @@ impl AgentCatalog for EmptyCatalog {
         Ok(Vec::new())
     }
 
+    async fn profile(
+        &self,
+        _id: &acp_core::model::AgentId,
+    ) -> Result<Option<acp_core::model::AgentProfile>, PortError> {
+        Ok(None)
+    }
+
     async fn agent_capabilities(
         &self,
         _agent: &acp_core::model::AgentRef,

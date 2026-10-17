@@ -2,13 +2,13 @@
 
 > 状态：Node Link v1 wire 标准已冻结；`node-link-protocol` crate 已实现 §9.3/§9.4 的 transcript domain/tag 表（含固定向量测试）、v1 的全部 29 个消息类型的类型化 body（握手、catalog、resource、command、error）与信封分派，以及配对 HTTPS 载荷。Owner 侧的节点状态机（attachment 当前性、origin cursor 单调性、命令幂等与 `uncertain`、Export 可见性与授权、撤销传播）已由 `server::node_link` 落地（切片 5，`node-link-owner`）；Access 侧的出站客户端 `node-link-client`（含出站重连管理器）与 Access facade 仍待落地。  
 > 版本：1.0  
-> 修订记录（2026-10-16，`pairing-model`）：**删除节点配对的短验证码**——§9.2 的 domain 表与 §9.4 的字段集合删除 `acp-remote/node-link-pairing-sas/v1` 一行与 SAS 计算规则，§8.2 与 §13.2 的确认仪式去掉 SAS（本机界面仍显示节点名、类型、指纹与待授予的 `grant.*`），机器资产（`compatibility/transcripts/v1/transcripts.json` 与节点侧固定向量）同步删除。**设备方向不再有授权维度**——§3.4 与 §10 的措辞收窄为「设备通过认证即可执行本节点命令」，`pack.*`/`preset.*` 两类词汇（设备授权包与配对预设）删除，跨节点导出授权 `grant.*`、Export `scopes` 与 Import `grants` 边界不变。Node Link 面的这次修订**不改 wire**：本节列出的都是节点配对仪式与词汇表口径，消息形状、握手、catalog、resource、command 与 `fixtures/node-link/v1/` 的其余向量不变（仅删除 `transcripts/pairing-sas.json` 与 `manifest.json` 的对应条目；§12.7 的 `session.create` 仍只接受 `workspaceAlias`、请求不得携带任意 Owner 路径）。  
+> 修订记录（2026-10-16，`pairing-model`）：**删除节点配对的短验证码**——§9.2 的 domain 表与 §9.4 的字段集合删除 `acp-remote/node-link-pairing-sas/v1` 一行与 SAS 计算规则，§8.2 与 §13.2 的确认仪式去掉 SAS（本机界面仍显示节点名、类型、指纹与待授予的 `grant.*`），机器资产（`compatibility/transcripts/v1/transcripts.json` 与节点侧固定向量）同步删除。**设备方向不再有授权维度**——§3.4 与 §10 的措辞收窄为「设备通过认证即可执行本节点命令」，`pack.*`/`preset.*` 两类词汇（设备授权包与配对预设）删除，跨节点导出授权 `grant.*`、Export `scopes` 与 Import `grants` 边界不变。Node Link 面的这次修订**不改 wire**：本节列出的都是节点配对仪式与词汇表口径，消息形状、握手、catalog、resource、command 与 `fixtures/node-link/v1/` 的其余向量不变（仅删除 `transcripts/pairing-sas.json` 与 `manifest.json` 的对应条目；§12.7 的 `session.create` 仍只接受 `workspaceDirectory`、请求不得携带任意 Owner 路径）。  
 > 修订记录（2026-10-16，`session-create-settle-order`，无 wire 变更）：§12.5 明确判定「该命令有没有产生业务副作用」以**资源行是否已提交**为准（对 `session.create` 即会话行），MUST NOT 用「该 `requestId` 是否存在持久记录」代替（受理记录在受理阶段就已存在），并补上「可证明未产生副作用 ⇒ `failed`」与崩溃窗口（受理与落账之间崩溃的受理记录由启动恢复结 `uncertain`）；§12.7 的结果契约补「受理只落幂等记录、会话行 + 会话标识回填 + 终态必须同一次提交、后端失败不留会话行」，`failed`/`uncertain` 的分类与 `command.status` 的重放口径随之改写。消息形状、错误码登记与 fixture 未变。  
 > 修订记录（2026-10-12，文档登记，无 wire 变更，`pwa-conversation-ui` 变更）：§12.7 与 §17 登记「Node Link 面无结构化历史」这一**尚未实现**的已知缺口——本次变更将在 Sync 面新增历史条目读取（`session.read` 的 `history` include 与 `beforeHistory` 游标，与它同批落地），该读取只在 Sync 面生效，本面不登记对应的 feature，经本面展示的 imported 会话在客户端侧对结构化历史显式降级。wire schema、消息族、错误码登记、§11.3 feature 表与 `fixtures/node-link/v1/` 均不变。  
 > 修订记录（2026-09-27，v1 内合同修订，未实现未发布，`node-trust-export-ids` 变更）：§8.2 的信任记录新增 `exportIds`（按节点收窄可见 Export 的白名单）——可见性三条件、清单只能收窄、`export.revoke` 不级联清理清单条目、只在配对确认时填报（无配对后修改入口，属已知限制）、v3 及更早的库升级到 v4 后既有节点行清单为空（不得默认放权）。Node Link wire 与 fixture 不变：`exportIds` 不进握手/catalog/resource/command，消息形状与错误码登记均未动；并写明重新配对（同一 `nodeId` 再次经 `node.pair.begin`/claim/`node.pair.confirm` 落定，含密钥变化后的重新配对）在落定后立即关闭该节点的活动连接，收窄因此自下一次握手后的新连接生效；并明确该关闭与 `node.revoke` 的**语义与关闭码不同**：重新配对**不**推送 `node.trust.revoked`、以 `1000`（正常关闭）关闭并给出说明「信任已重新确认、请重连以重取 catalog」的 close reason，因此 §15 的「撤销即停」不适用、该节点仍按 §15 自动重连；只有 `node.revoke` 才推送 `node.trust.revoked` 并以 `4410` 关闭、停止重连。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布，`node-link-owner` 的 WP6 修复轮次）：§12.7 补注本切片的**结果投影范围**——`session.read`/`session.mode.list`/`session.config.list` 回 `nodelink.command.unsupported`（结果投影属 Access facade 的正文切片），Owner 不得返回被裁剪的结果。wire schema、消息与错误码登记未变。  
 > 修订记录（2026-09-26，v1 内合同修订，未实现未发布）：`node.challenge` 增加必需字段 `catalogRevision`(decimal string)——§9.3/§9.4 的两个连接 transcript domain 都含 tag 6 `catalogRevision`，而此前的握手消息不带该字段，Access 无法在首次连接上验证 `nodeProof` 或构造自己的 proof（design.md D13 的用户裁决 A）；§8.2 明确首阶段 Export 可见性只取「未撤销且 `export.scopes ∩` 信任记录 `grants ≠ ∅`」，`exportIds` 维度推后（用户裁决 (b)，与 `node-link-owner` 的 R51/R52 一致）（其中 `exportIds` 推后一条已被 2026-09-27 的修订取代，见上一条）。  
-> 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceAlias`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
+> 修订记录（2026-09-18，v1 内合同修订，未实现未发布）：`resource.event`/`resource.ack` 增加必需 `sessionRef`；§6 无正文索引增加 `sessionId`；`command.accepted`/`command.rejected`/`command.terminal` 增加必需 `command`；`session.create` 补齐结果契约（`SessionCreateResult`）；`payloadDigest`/`snapshotDigest` 前像改为 ACPR-CJ1 与 SYNC §9.4 规则；`payload` 允许只带 `acp`；握手阶段 `link.error` 允许省略 `connectionId`/`connectionSequence`；新增错误码 `nodelink.resource.rate_limited` 与 §2.5 固定限流；Export 增加 `defaultWorkspaceDirectory`/`templates`；新增 §11.4 事件类型共享合同；§14.1 新增 `details` 登记表并为 `nodelink.protocol.feature_required`/`nodelink.export.not_granted`/`nodelink.resource.rate_limited`/`nodelink.command.unsupported_field` 登记机器可读字段（兼容新增）；§12.7 的 `elicitation.respond` 增加 `decline` 动作并把 `submit` 的 `values` 放宽为 `object|null`（对齐 ACP 的 `accept`/`decline`/`cancel`，兼容新增）。  
 > 日期：2026-09-18  
 > 上位产品设计：[INITIAL_DESIGN.md](./INITIAL_DESIGN.md)  
 > 模块边界：[MODULE_ARCHITECTURE.md](./MODULE_ARCHITECTURE.md)  
@@ -379,8 +379,8 @@ displayName
 agent selectors
 allowed session selectors
 allowed workspace aliases/templates
-defaultWorkspaceAlias      # 必须出现在 allowed workspace aliases 内
-templates                  # WorkspaceTemplate[]：{ templateId, displayName, workspaceAlias, params[] }
+defaultWorkspaceDirectory # 必须出现在 allowed workspace directories 内
+templates                  # WorkspaceTemplate[]：{ templateId, displayName, workspaceDirectory, params[] }
 defaultTemplateId          # 必须出现在 templates 内
 scopes            # grant.* 子集
 capability ceiling
@@ -395,7 +395,7 @@ createdAt / revokedAt
 - 原因：参数的**来源**与**用途**两端都未定义。来源侧：`session/new` 不携带这些键（[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6 同时禁止从 `_meta` 之类未导出字段偷渡），而 template 本身只有约束、没有默认值，因此任何 `required = true` 的参数在 Access 侧都无法填入；用途侧：参数到了 Owner 之后影响什么（环境变量？workspace 准备？初始 prompt？）没有任何文档定义，`owned_workspace` 也只有一个固定路径、没有模板准备步骤。
 - 因此首切片：Owner 发布的 template `params` 必须为空数组；Access 只在**声明了参数**的 Export 上返回明确不支持（`nodelink.command.unsupported_field`），**不得**静默忽略参数。
 - 有参 template 属 `post_mvp`：启用前必须先在本节定义「值由谁提供」与「影响什么」两侧语义（可能需要新 feature 与 ADR），并按 §2.3 的兼容流程登记。
-- 参数存在时的 wire 校验规则（键集、`type`/`pattern`/`enum`）仍然有效，供 `post_mvp` 与跨版本兼容使用；`session.create.payload.templateParams` 的键必须来自被选 template 的 `params`，未知键返回 `nodelink.command.unsupported_field`，类型或约束不符返回 `nodelink.export.not_granted`。首切片恰好发布一个 workspace alias 与一个 template，两者分别由 `defaultWorkspaceAlias` 与 `defaultTemplateId` 指定。
+- 参数存在时的 wire 校验规则（键集、`type`/`pattern`/`enum`）仍然有效，供 `post_mvp` 与跨版本兼容使用；`session.create.payload.templateParams` 的键必须来自被选 template 的 `params`，未知键返回 `nodelink.command.unsupported_field`，类型或约束不符返回 `nodelink.export.not_granted`。首切片恰好发布一个 workspace alias 与一个 template，两者分别由 `defaultWorkspaceDirectory` 与 `defaultTemplateId` 指定。
 
 第一阶段 `cachePolicy` 固定为 `no-content-cache`；字段保留是为了以后协商更严格或经 ADR 接受的缓存模式，而不是允许 Access 自行选择正文缓存。
 
@@ -415,7 +415,7 @@ createdAt / revokedAt
 - Export 的创建、修改与撤销属于 Owner 本地管理能力 `local.export.manage`，永不远程授予：Access Node 不能通过 Node Link 修改自己的 scopes 或 Export 定义。
 - 设备类型不是授权依据。手机、电脑和 Zed 背后的 Access Node 都可以获得不同 grant 组合。Node Link 首个纵向切片必须实现 `grant.remote-work` 所需的 `session.create`，以便 Access Node 的 ACP facade 正确处理 Zed `session/new`；PWA UI 首版可以不展示创建入口。
 
-远程创建会话时，调用方只能引用 Owner 发布的 `workspaceAlias` 或 template 参数，不能提交任意 Owner 绝对路径（§12.7）。Provider/MCP 凭据仍保留在 Owner Node。
+远程创建会话时，调用方只能引用 Owner 发布的 `workspaceDirectory` 或 template 参数，不能提交任意 Owner 绝对路径（§12.7）。Provider/MCP 凭据仍保留在 Owner Node。
 
 ## 11. 能力协商
 
@@ -531,9 +531,9 @@ export 条目字段（`catalog.snapshot.exports[]` 与 `catalog.changed.added/up
 | `exportId` | string（`^[A-Za-z0-9._-]{1,128}$`） | 必需 | Owner 侧 Export 标识，跨节点唯一 |
 | `displayName` | string ≤128 | 必需 | 展示名，不含凭据 |
 | `agents` | array | 必需 | 每项 `{ agentId, name, capabilitiesRef }` |
-| `workspaceAliases` | array | 必需 | 每项 `{ alias, displayName }`；`alias` 是可出现在 `session.create` 的符号名 |
-| `defaultWorkspaceAlias` | string（`^[a-z0-9][a-z0-9._-]{0,63}$`） | 必需 | 必须是 `workspaceAliases[].alias` 之一；Access 的 `session/new` 映射用它填 `session.create.workspaceAlias` |
-| `templates` | array | 必需 | 每项 `{ templateId, displayName, workspaceAlias, params[] }`；`params[]` 每项 `{ name, type, required, pattern, enum }`，`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，`type ∈ string\|boolean\|integer`，`pattern` 可为 `null`（≤512 字符），`enum` 可为 `null` 或成员全为 string 的非空数组（`schemas/node-link/v1/common.schema.json` 的 `workspaceTemplateParam` 是机器权威）。**首切片的 template 必须 `params = []`**（§10 的 `[决定]`）：参数的来源与用途都未定义，有参 template 属 `post_mvp` |
+| `workspaceDirectories` | array | 必需 | 每项 `{ directoryId }`；`directoryId` 是可出现在 `session.create` 的目录标识 |
+| `defaultWorkspaceDirectory` | string（`^[0-9a-f]{32}$`） | 必需 | 必须是 `workspaceDirectories[].directoryId` 之一；Access 的 `session/new` 映射用它填 `session.create.directoryId` |
+| `templates` | array | 必需 | 每项 `{ templateId, displayName, workspaceDirectory, params[] }`；`params[]` 每项 `{ name, type, required, pattern, enum }`，`name` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，`type ∈ string\|boolean\|integer`，`pattern` 可为 `null`（≤512 字符），`enum` 可为 `null` 或成员全为 string 的非空数组（`schemas/node-link/v1/common.schema.json` 的 `workspaceTemplateParam` 是机器权威）。**首切片的 template 必须 `params = []`**（§10 的 `[决定]`）：参数的来源与用途都未定义，有参 template 属 `post_mvp` |
 | `scopes` | array | 必需 | `grant.*` 子集，取值限于 §10 表 |
 | `capabilityCeilingRef` | string（`^[A-Za-z0-9._-]{1,128}$`） | 必需 | Owner 侧能力上限的不透明引用；节点不得跨节点解释其内容 |
 | `cachePolicy` | const `"no-content-cache"` | 必需 | v1 固定值 |
@@ -622,7 +622,7 @@ resource.attach → resource.attached → resource.subscribe
 | `session.mode.set` | `{ "modeId": string }`，body 的 `expectedVersion` 必须存在 |
 | `session.config.set` | `{ "configId": string, "value": … }`，body 的 `expectedVersion` 必须存在 |
 | `permission.resolve` | `{ "interactionId": UUID, "optionId": string }` |
-| `session.create` | `{ "agentId": string, "exportId": string, "workspaceAlias": string, "templateParams": object（可选） }` |
+| `session.create` | `{ "agentId": string, "exportId": string, "directoryId": string, "templateParams": object（可选） }` |
 | `session.resume` | `{}`（空 object；出现任何键即以 `nodelink.command.unsupported_field` 拒绝） |
 
 `session.read` 在两个传输面同名但载荷不同：Sync 侧的 payload 另有可选的 `before`（`(createdAt, messageId)` 复合游标）与 `limit`，本面一律没有这两个键。Node Link 侧不提供分页不是遗漏，而是本协议的有意边界——本面的会话正文受 §12.4 的 `no-content-cache` 硬约束，Access 侧根本不保留正文，没有可翻页的副本。代价与理由见 [SYNC_PROTOCOL.md](./SYNC_PROTOCOL.md) §11.5。
@@ -632,8 +632,8 @@ resource.attach → resource.attached → resource.subscribe
 `session.create` 的硬约束：
 
 - 只允许上述四个键；`payload` 出现 `cwd`、`mcpServers`、任何绝对路径、任何凭据字段（例如 `apiKey`、`token`、`env`、`credential`）时，Owner **必须**以 `command.rejected` 回复，`error.code = "nodelink.command.unsupported_field"`，`details.field` 必须给出被拒的字段名，且不得创建会话或部分应用参数。
-- `agentId`/`exportId`/`workspaceAlias` 必须同时存在于该 Access 可见的 Export（§12.3）与 `grant.remote-work` 的授权范围内；未导出的 Agent、未知 alias 或不属于该 Export 的组合返回 `nodelink.export.not_granted`，拒绝时可给出 `details.parameter` 指明被拒的参数名。
-- `workspaceAlias` 是符号名（`^[a-z0-9][a-z0-9._-]{0,63}$`），不构成路径；绝对路径在语法上就无法通过该 pattern。
+- `agentId`/`exportId`/`directoryId` 必须同时存在于该 Access 可见的 Export（§12.3）与 `grant.remote-work` 的授权范围内；未导出的 Agent、未知目录标识或不属于该 Export 的组合返回 `nodelink.export.not_granted`，拒绝时可给出 `details.parameter` 指明被拒的参数名。
+- `directoryId` 是 32 字符小写十六进制的不透明标识（`^[0-9a-f]{32}$`），不构成路径；绝对路径在语法上就无法通过该 pattern。
 - `templateParams` 只能携带 Export template 声明的键；Owner 必须在应用前按 template 校验，未知键按 `nodelink.command.unsupported_field` 拒绝。**首切片 template 零参数**（§10）：`templateParams` 必须省略或为空对象；收到声明了参数的 Export 时 Access/Owner 都要明确拒绝，不得静默忽略。
 - `session.create` 的 `sessionRef`/`attachmentId`/`attachmentGeneration`/`expectedVersion` 必须为 `null`；创建成功后 Access 通过 `resource.attach` 取得 attachment，再提交其他会话范围命令。
 
@@ -907,7 +907,7 @@ nodelink.internal.unavailable
 | `nodelink.resource.rate_limited` | `retryAfterMs`（可选） |
 | `nodelink.command.unsupported_field` | `field`（必需） |
 
-未在上表列出的 code **不登记任何** `details` 字段：所有 `link.error`、`command.rejected` 与配对 HTTP 错误响应的 `details` 必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被选择的那些）；`field` 是被拒的 `command.submit.payload` 字段名（例如 `cwd`、`mcpServers`，见 §2.4/§12.7）；`parameter` 是被拒的 Export 参数名（例如未导出的 `agentId`、未知 `workspaceAlias`，见 §17 第 12 条）；`retryAfterMs` 是建议退避毫秒数。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§2.4），新增字段按 §8 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。
+未在上表列出的 code **不登记任何** `details` 字段：所有 `link.error`、`command.rejected` 与配对 HTTP 错误响应的 `details` 必须送 `{}`。字段的取值域由 registry 的 `details` 片段约束：`features` 是 1..64 个 feature ID 的排序去重列表（`requiredFeatures` 中未被选择的那些）；`field` 是被拒的 `command.submit.payload` 字段名（例如 `cwd`、`mcpServers`，见 §2.4/§12.7）；`parameter` 是被拒的 Export 参数名（例如未导出的 `agentId`、未知 `workspaceDirectory`，见 §17 第 12 条）；`retryAfterMs` 是建议退避毫秒数。每个登记字段都要标注 `必需` 或 `可选`，与 registry 的 `required` 逐一对应。`details` 始终是开放扩展点（接收方必须忽略未知字段，§2.4），新增字段按 §8 的兼容变更登记。上表与 `compatibility/errors/v1/errors.json` 的 `details` 片段逐条相等，由 `npm run check` 的 `check:errors` 断言。
 
 ### 14.2 WebSocket Close Code
 
@@ -999,6 +999,6 @@ Node Link 是项目的第一个纵向切片，先于 PWA：
 9. 循环导入/再次导出被拒绝。
 10. Owner 离线时会话正文不可用，prompt 不进入伪 accepted 状态。
 11. Access Node 重启后可凭无正文交付索引和 origin cursor 从 Owner 重建投递，不产生第二份会话正文数据库。
-12. Zed `session/new` 的必填绝对 `cwd` 不作为拒绝理由，也不改变 Owner 选定的 workspace；Access facade 对未导出的 Agent/Export 明确拒绝。直接向 Node Link `session.create.payload` 注入未知 `workspaceAlias` 或 `cwd` 等原始路径字段时，Owner 分别以 `nodelink.export.not_granted` / `nodelink.command.unsupported_field` 拒绝，且不创建会话（§12.7、[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）。
+12. Zed `session/new` 的必填绝对 `cwd` 不作为拒绝理由，也不改变 Owner 选定的 workspace；Access facade 对未导出的 Agent/Export 明确拒绝。直接向 Node Link `session.create.payload` 注入未知 `workspaceDirectory` 或 `cwd` 等原始路径字段时，Owner 分别以 `nodelink.export.not_granted` / `nodelink.command.unsupported_field` 拒绝，且不创建会话（§12.7、[ACP_COMPATIBILITY_MATRIX.md](./ACP_COMPATIBILITY_MATRIX.md) §6）。
 13. 旧 attachment 的延迟 frame 在重连后被拒绝（`nodelink.resource.attach_generation_stale`），不能命中新 generation 的 SessionEndpoint。
 14. 六个 transcript domain 的固定向量在 Rust 与 WebCrypto 两侧产生逐字节一致的 transcript、签名与 HMAC（§9.5）。

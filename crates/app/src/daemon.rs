@@ -226,9 +226,6 @@ impl DaemonError {
         match self {
             // 「目标存在但当前状态不允许该操作」：此处目标是单实例锁。
             Self::AlreadyRunning => LocalErrorCode::Conflict.as_str(),
-            Self::Compose(ComposeError::InvalidSeed { .. }) => {
-                LocalErrorCode::InvalidParams.as_str()
-            }
             Self::Compose(_) | Self::Lock(_) | Self::Endpoint(_) | Self::StoreClose(_) => {
                 LocalErrorCode::Unavailable.as_str()
             }
@@ -505,7 +502,7 @@ impl AppDaemonControl {
 
     /// `agents`：profile 存在且 `command` 可解析（`design.md` 决策 6 的本切片口径）。
     async fn agents(&self) -> Vec<DaemonAgent> {
-        match self.core.profiles(&Actor::LocalCli).await {
+        match self.core.agent_profiles(&Actor::LocalCli).await {
             Ok(profiles) => profiles
                 .iter()
                 .map(|profile| DaemonAgent {
@@ -1497,27 +1494,13 @@ pub async fn run(loaded: Loaded) -> Result<(), DaemonError> {
     let composition = Composition::assemble(config, publisher)
         .await
         .map_err(DaemonError::Compose)?;
-    match composition.seed_if_needed().await {
-        Ok(crate::compose::SeedOutcome::Imported { count }) => tracing::info!(
-            event = "daemon.seed_imported",
-            profiles = count,
-            "首次初始化：种子 profile 与「已初始化」标记已同一事务提交"
-        ),
-        Ok(crate::compose::SeedOutcome::AlreadySeeded) => {
-            tracing::debug!(
-                event = "daemon.seed_skipped",
-                "管理存储已初始化：跳过种子导入"
-            )
-        }
-        Err(error) => return Err(DaemonError::Compose(error)),
-    }
 
     // §6 第 16 条：启动恢复在取锁与开始监听**之前**（`LocalCli`）。
     let recovered = composition
         .use_cases()
         .recover_unsettled(&Actor::LocalCli, acp_core::ports::ReplayLimit::default())
         .await
-        .map_err(|error| DaemonError::Compose(ComposeError::Seed(error)))?;
+        .map_err(|error| DaemonError::Compose(ComposeError::Port(error)))?;
     if recovered > 0 {
         tracing::warn!(
             event = "daemon.recovered_unsettled",

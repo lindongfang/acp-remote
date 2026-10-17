@@ -138,7 +138,7 @@ use acp_core::model::{
     NodeKind, NodeRecord, NodeState, OriginCursor, OriginEpoch, OwnedSessionRef,
     PendingInteraction, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session, SessionSnapshot,
     SessionState, SessionSummary, TemplateId, Timestamp, Version,
-    WorkspaceAlias as CoreWorkspaceAlias, WorkspaceAliasEntry as CoreWorkspaceAliasEntry,
+    DirectoryId as CoreDirectoryId, WorkspaceDirectoryEntry as CoreWorkspaceDirectoryEntry,
 };
 use acp_core::ports::{
     CommitOutcome, HistoryPage, HistoryQuery, NodeLinkSlice, OwnedCommit, OwnedEventRecord,
@@ -455,18 +455,17 @@ impl Fixture {
                 "Project Export",
                 vec![AgentId::new("codex").expect("agent id")],
                 vec![
-                    CoreWorkspaceAliasEntry::try_new(
-                        CoreWorkspaceAlias::new("project").expect("alias"),
-                        "Project",
+                    CoreWorkspaceDirectoryEntry::try_new(
+                        CoreDirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                     )
                     .expect("alias entry"),
                 ],
-                CoreWorkspaceAlias::new("project").expect("alias"),
+                CoreDirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                 vec![
                     ExportTemplate::try_new(
                         TemplateId::new("template-1").expect("template id"),
                         "Template",
-                        CoreWorkspaceAlias::new("project").expect("alias"),
+                        CoreDirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                         Vec::new(),
                     )
                     .expect("template"),
@@ -718,18 +717,17 @@ async fn an_export_disjoint_from_the_node_grants_is_not_granted() {
             "Project Export",
             vec![AgentId::new("codex").expect("agent id")],
             vec![
-                CoreWorkspaceAliasEntry::try_new(
-                    CoreWorkspaceAlias::new("project").expect("alias"),
-                    "Project",
+                CoreWorkspaceDirectoryEntry::try_new(
+                    CoreDirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                 )
                 .expect("alias entry"),
             ],
-            CoreWorkspaceAlias::new("project").expect("alias"),
+            CoreDirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
             vec![
                 ExportTemplate::try_new(
                     TemplateId::new("template-1").expect("template id"),
                     "Template",
-                    CoreWorkspaceAlias::new("project").expect("alias"),
+                    CoreDirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                     Vec::new(),
                 )
                 .expect("template"),

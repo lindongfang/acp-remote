@@ -162,7 +162,7 @@ pub(crate) struct ParamJson {
 pub(crate) struct TemplateJson {
     pub template_id: String,
     pub display_name: String,
-    pub workspace_alias: String,
+    pub workspace_directory: String,
     pub params: Vec<ParamJson>,
 }
 

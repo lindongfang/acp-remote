@@ -161,7 +161,7 @@ u32be length | payload(length bytes)
 3. 未知 `method` → `local.unsupported`；这使新增方法成为向后兼容变更。
 4. `params` 缺字段、类型不符或出现未知字段 → `local.invalid_params`；信封本身非法（`id`/`method` 缺失或命名非法、`params` 不是 object）→ `local.invalid_request`。
 5. 每个请求恰好一个响应；v1 不定义服务端主动通知，ACP 流不受此约束。
-6. `error.message` 是简短英文描述，只用于本地日志与 CLI 输出，不含 secret、凭据值、堆栈或完整敏感路径；`result` 永不回显凭据值（§5.2 `provider.configure`）。
+6. `error.message` 是简短英文描述，只用于本地日志与 CLI 输出，不含 secret、凭据值、堆栈或完整敏感路径；`result` 永不回显凭据值（§5.2 `daemon.status`/`agent.list`）。
 
 ## 5. 方法集（v1）
 
@@ -171,9 +171,7 @@ u32be length | payload(length bytes)
 
 | `local.*` 能力 | 方法 | 承载层 |
 |---|---|---|
-| `local.workspace.select` | `workspace.select` | `core::use_cases` 本地配置族 |
-| `local.agent.configure` | `agent.configure` | `core::use_cases` 本地配置族 |
-| `local.provider.configure` | `provider.configure` | `core::use_cases` 本地配置族（凭据落平台 keystore） |
+| `local.agent.configure` | `agent.list`（只读；Agent 声明由配置文件提供） | `core::use_cases` 本地配置族 |
 | `local.device.manage` | `device.pair.begin`、`device.pair.status`、`device.pair.confirm`、`device.pair.reject`、`device.list`、`device.revoke`、`node.pair.begin`、`node.pair.status`、`node.pair.confirm`、`node.pair.reject`、`node.list`、`node.revoke` | `DeviceManagement` |
 | `local.export.manage` | `export.create`、`export.list`、`export.revoke`、`import.add`、`import.list`、`import.remove` | `ExportManagement`（写入）与 `RemoteCatalogQueries`（读取） |
 | `local.node.rotate-key` | `node.rotate-key.begin`（`post_mvp`，§5.7） | `DeviceManagement`（与 `node.rotate-key.*` 消息同批定义） |
@@ -224,52 +222,19 @@ uiBuildVersion string | null         # 本次二进制嵌入并托管的前端�
 - 响应在关闭序列开始时发出；CLI 随后等待锁释放与连接关闭。关闭顺序按 `SECURITY_DESIGN.md` §12.1 与 `AGENTS.md` §7。
 - 响应写回后由**服务端结束该连接**：发出 `daemon.stop` 的这条连接不会再收到任何响应，也不进入关闭序列的连接排空等待。这与「关闭序列进行中**新**请求以 `local.unavailable` 失败关闭」是两件事、互不覆盖——后者约束关闭开始后到达的新请求，本条约束的是**发出 `daemon.stop` 的连接自身**（它的语义是请求关闭，不是新请求）。
 
-#### `workspace.select`（`local.workspace.select`）
+#### `agent.list`（`local.agent.configure`，只读）
 
-- `params`：
-
-```text
-alias       string    # ^[a-z0-9][a-z0-9._-]{0,63}$，发布给 Export 的符号名
-                      # （权威：schemas/node-link/v1/common.schema.json#/$defs/workspaceAlias；本地不得比 wire 宽）
-displayName string    # ≤128
-rootPath    string    # 绝对路径；必须已存在且是目录
-```
-
-- `result`：`{ workspace: { alias, displayName, rootPath, createdAt } }`（字段同名同类型）。
-- 同一 `alias` 再次调用是更新；`rootPath` 不存在或不是目录 → `local.invalid_params`。原始路径只能由此方法选择，远程主体永远提交不了绝对路径（`SECURITY_DESIGN.md` §12.3）。
-- **路径校验规则（可判定，与 `CORE_PORTS_AND_STORAGE.md` §11.9 同一口径）**：`rootPath` 必须是绝对路径且存在且是**目录**；写入前先 `canonicalize`（解析 symlink/junction/大小写/`.`与`..`）并把**规范化结果**作为持久权威值（`owned_workspace.canonical_path`），拒绝相对路径与含 `..` 的输入；UNC/网络路径允许，但写入时记一次结构化警告（离线与凭证风险）。会话创建时对已存路径重做一次同样的校验（目录可能已被删/被换成文件）。
-
-#### `agent.configure`（`local.agent.configure`）
-
-- `params`：
+- `params`：`{}`
+- `result`：
 
 ```text
-agentId      string    # 1..=128 字符；作为 agentId 跨节点传输（NODE_LINK_PROTOCOL.md §12.3），不得比 wire 更严
-displayName  string    # ≤128
-command      string    # 可执行文件路径或名字，不经 shell 拼接
-args         string[]
-envAllowlist string[]  # 环境变量名白名单，是上限而非提示
-default      boolean
+agents { agentId: string, command: string, args: string[], default: boolean,
+         resolvedPath: string, exists: boolean }[]
 ```
 
-- `result`：`{ agent: { agentId, displayName, default } }`。
-- 对应 `CONFIG_REFERENCE.md` §7 的 `[[agents.profiles]]`；未列出的环境变量不得注入子进程（`SECURITY_DESIGN.md` §12.2）。
-- 变更只影响后续启动的 Agent 进程；已在运行的会话保持其现有进程，除非用户显式结束该会话。
-
-#### `provider.configure`（`local.provider.configure`）
-
-- `params`：
-
-```text
-providerId  string                          # ^[A-Za-z0-9._-]{1,64}$
-kind        "provider" | "mcp"
-displayName string                          # ≤128
-values      { <fieldName>: string }         # 字段名 ^[A-Za-z0-9._-]{1,64}$，至少 1 项
-```
-
-- `values` 只承载凭据字段：键是字段名，值是凭据文本（`string`）。非凭据的 MCP 启动配置（命令、参数、URL）走 `agent.configure` 的 profile，不进入 `values`。
-- `result`：`{ provider: { providerId, kind, configuredFields: string[] } }`——只回字段名，**永不回显 `values`**。
-- 凭据一律存入平台 keystore（`SECURITY_DESIGN.md` §9.2），不得写入 SQLite、普通 TOML/JSON、日志或错误消息；keystore 不可用时正式模式返回 `local.unavailable`，不得降级为明文存储。
+- Agent 声明来自配置文件 `[agent]`（`CONFIG_REFERENCE.md` §7），本方法只读取配置解析结果与可执行文件探测结果，不写任何状态、不启动进程。
+- `resolvedPath` 是命令解析后的路径（带路径分隔符时为原值，否则在 `PATH` 中查找）；找不到时仍返回解析尝试的结果且 `exists = false`。
+- `agent.configure` 与 `provider.configure` 已删除：调用它们一律返回 `local.unsupported`。
 
 ### 5.3 设备配对与信任（`local.device.manage`）
 
@@ -412,8 +377,8 @@ peerPublicKeyFingerprint string | null
 exportId              string    # ^[A-Za-z0-9._-]{1,128}$
 displayName           string    # ≤128
 agentIds              string[]  # Export 内的 Agent selector；首切片恰好 1 项
-workspaceAliases      { alias: string, displayName: string }[]   # alias ^[A-Za-z0-9._-]{1,64}$；首切片恰好 1 项
-defaultWorkspaceAlias string    # 必须是 workspaceAliases 之一的 alias
+workspaceDirectories  { directoryId: string }[]   # ^[0-9a-f]{32}$；首切片恰好 1 项
+defaultWorkspaceDirectory string    # 必须是 workspaceDirectories 之一的 directoryId
 templates             ExportTemplate[]                          # 首切片恰好 1 项
 defaultTemplateId     string    # 必须是 templates 之一的 templateId
 scopes                string[]  # grant.* 子集（与 NODE_LINK_PROTOCOL.md §10 的 Export 模型同名同义），取值以该表为准
@@ -427,7 +392,7 @@ revokedAt             timestamp | null
 ```text
 templateId     string    # ^[A-Za-z0-9._-]{1,128}$（与 schemas/node-link/v1/common.schema.json 的 templateId 一致）
 displayName    string    # ≤128
-workspaceAlias string    # 必须是 Export 的 workspaceAliases 之一
+workspaceDirectory string    # 必须是 Export 的 workspaceDirectories 之一
 params         TemplateParam[]
 ```
 
@@ -453,7 +418,7 @@ grants        string[]
 
 #### `export.create`
 
-- `params`：`ExportView` 去掉 `createdAt` 与 `revokedAt` 后的全部字段，均为必需；`templates` 与 `workspaceAliases` 的非空与 `default*` 一致性校验不通过 → `local.invalid_params`。**首切片的 template 不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）：`params` 非空 → `local.invalid_params`（有参 template 属 `post_mvp`，不能静默忽略）。每个 `workspaceAliases[].alias` 必须已在 `owned_workspace` 建立（否则 `local.not_found`），Export 只引用符号名、不复制路径（`CORE_PORTS_AND_STORAGE.md` §11.9）。
+- `params`：`ExportView` 去掉 `createdAt` 与 `revokedAt` 后的全部字段，均为必需；`templates` 与 `workspaceDirectories` 的非空与 `default*` 一致性校验不通过 → `local.invalid_params`。**首切片的 template 不得声明参数**（`NODE_LINK_PROTOCOL.md` §10）：`params` 非空 → `local.invalid_params`（有参 template 属 `post_mvp`，不能静默忽略）。每个 `workspaceDirectories[].directoryId` 必须已在本机目录表记录（否则 `local.not_found`），Export 只引用标识、不复制路径（`CORE_PORTS_AND_STORAGE.md` §11.9）。
 - `result`：`{ export: ExportView }`，`revokedAt` 为 `null`。
 - `exportId` 已存在 → `local.conflict`。
 - `capabilityCeilingRef` 与 catalog 条目的 `agents[].capabilitiesRef` 由 Owner 在发布时填充，不出现在本地方法里：本地端点不需要跨节点不透明引用（`NODE_LINK_PROTOCOL.md` §12.3）。
@@ -523,9 +488,7 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 | `daemon start` | 不经本地通道 | CLI 进程自身 | 单实例锁失败必须给明确错误，不得强杀进程（§7） |
 | `daemon stop` / `daemon status` | 本地方法 | `daemon.stop` / `daemon.status` | 由组合根回答，不经用例层 |
 | `doctor` | 本地方法 + CLI 侧检查 | `daemon.status` + 本地检查 | 离线时在 CLI 进程内完成（ADR-0004 决策 1）；**不新增方法**（不得自造 `daemon.doctor`） |
-| `workspace select` | 本地方法 | `workspace.select` | 以 `--alias`、`--display-name`、`--root-path` 提供 §5.2 的三个参数；路径仅发送到本机 Daemon，不能放入 Export 或 Node Link 载荷 |
-| `agent configure` | 本地方法 | `agent.configure` | 以 `--file <path>` 读取与 §5.2 `params` 同形的 JSON；文件不得包含凭据值，CLI 不自行写入 profile 或启动配置 |
-| `provider configure` | 本地方法 | `provider.configure` | 以 `--provider-id`、`--kind`、`--display-name`、可重复的 `--field <name>` 指定非秘密字段；`values` 由 CLI 在交互终端逐项无回显读取，不接受凭据值作为命令行参数或普通文件输入；无交互终端时明确失败 |
+| `agent list` | 本地方法 | `agent.list` | 只读：打印配置文件解析出的 id、命令、argv、默认标记与可执行文件是否存在 |
 | `device pair` | 本地方法 ×3 | `device.pair.begin` → `device.pair.status`（轮询）→ `device.pair.confirm` | 多步流程见下；参数只有 `--fingerprint`（非交互确认）与 `--expires-in-ms`——设备方向没有授权词汇 |
 | `device list` / `device revoke` | 本地方法 | 1:1 | |
 | `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id` 与非交互的 `--fingerprint` |
@@ -589,7 +552,7 @@ $ acp-remote device pair --fingerprint ab12…（64 位 hex）
 | `local.unsupported` | 未知 `method`，或方法在当前 delivery 阶段尚未实现 | 否 |
 | `local.invalid_request` | 信封非法：`id` 缺失/非 UUID/重复、`method` 缺失或命名非法、`params` 不是 object | 否 |
 | `local.invalid_params` | 方法参数非法：缺字段、类型不符、越界或出现未知字段 | 否 |
-| `local.not_found` | 目标 `deviceId`/`nodeId`/`pairingId`/`exportId`/`importId` 不存在，或引用的 workspace alias 未在 `owned_workspace` 建立 | 否 |
+| `local.not_found` | 目标 `deviceId`/`nodeId`/`pairingId`/`exportId`/`importId` 不存在，或引用的目录标识未在本机目录表记录 | 否 |
 | `local.conflict` | 目标存在但当前状态不允许该操作（pairing 已确认、`exportId` 已存在、输出文件已存在） | 否 |
 | `local.expired` | `pairingId` 已过期或已被拒绝 | 否 |
 | `local.remote_error` | `node.pair.*` 对 Owner 的 HTTPS 调用失败或返回错误（`NODE_LINK_PROTOCOL.md` §13.4） | 视远端状态 |

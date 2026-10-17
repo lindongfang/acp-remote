@@ -18,8 +18,8 @@ use acp_core::model::{
     EventPayload, ExportTemplate, GlobalCursor, GrantSet, NodeKind, NodeRecord,
     OriginCursor as CoreOriginCursor, OriginEpoch, OwnedSessionRef, PromptRequest,
     ResumeSessionRequest, Sequence, ServerEpoch, Session, SessionRecoveryRecord, SessionReference,
-    SessionState, SessionSummary, TemplateId, WorkspaceAlias,
-    WorkspaceAliasEntry as CoreAliasEntry,
+    SessionState, SessionSummary, TemplateId, DirectoryId,
+    WorkspaceDirectoryEntry as CoreAliasEntry,
 };
 use acp_core::ports::{
     AgentCatalog, AuditQuery, CommitOutcome, EventSink, HistoryPage, HistoryQuery, NodeLinkSlice,
@@ -633,6 +633,13 @@ impl AgentCatalog for TestCatalog {
         )])
     }
 
+    async fn profile(
+        &self,
+        _id: &AgentId,
+    ) -> Result<Option<acp_core::model::AgentProfile>, PortError> {
+        Ok(None)
+    }
+
     async fn agent_capabilities(
         &self,
         _agent: &AgentRef,
@@ -774,20 +781,19 @@ impl Fixture {
                 vec![AgentId::new("codex").expect("agent id")],
                 vec![
                     CoreAliasEntry::try_new(
-                        WorkspaceAlias::new("project").expect("alias"),
-                        "Project",
+                        DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                     )
                     .expect("alias entry"),
                     // 第二个合法 alias：幂等冲突用例要拿「同样合法、但语义不同」的 payload 对比。
-                    CoreAliasEntry::try_new(WorkspaceAlias::new("alt").expect("alias"), "Alt")
+                    CoreAliasEntry::try_new(DirectoryId::new("fedcba9876543210fedcba9876543210").expect("alias"))
                         .expect("alias entry"),
                 ],
-                WorkspaceAlias::new("project").expect("alias"),
+                DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                 vec![
                     ExportTemplate::try_new(
                         TemplateId::new("template-1").expect("template id"),
                         "Template",
-                        WorkspaceAlias::new("project").expect("alias"),
+                        DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                         Vec::new(),
                     )
                     .expect("template"),
@@ -803,11 +809,10 @@ impl Fixture {
         if seed_workspace {
             // 本机必须登记这些 alias（core 把它们解析成规范化绝对路径），路径取真实存在的临时目录。
             let path = std::env::temp_dir();
-            for alias in ["project", "alt"] {
-                config_store.seed_workspace(
-                    acp_core::model::WorkspaceRecord::try_new(
-                        WorkspaceAlias::new(alias).expect("alias"),
-                        "Project",
+            for alias in ["0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"] {
+                config_store.seed_directory(
+                    acp_core::model::DirectoryRecord::try_new(
+                        DirectoryId::new(alias).expect("alias"),
                         path.to_str().expect("临时目录是 UTF-8"),
                         ts("2026-09-18T09:00:00.000Z"),
                         ts("2026-09-18T09:00:00.000Z"),
@@ -1188,7 +1193,7 @@ fn forbidden_session_create_fields_are_recognised_before_the_typed_decode() {
     let allowed = json!({
         "agentId": "codex",
         "exportId": EXPORT,
-        "workspaceAlias": "project",
+        "directoryId": "0123456789abcdef0123456789abcdef",
     });
 
     for (payload, expected) in [
@@ -1199,14 +1204,14 @@ fn forbidden_session_create_fields_are_recognised_before_the_typed_decode() {
         ),
         (json!({ "agentId": "codex", "apiKey": "x" }), Some("apiKey")),
         (
-            json!({ "agentId": "codex", "exportId": EXPORT, "workspaceAlias": "C:/tmp" }),
-            Some("workspaceAlias"),
+            json!({ "agentId": "codex", "exportId": EXPORT, "directoryId": "C:/tmp" }),
+            Some("directoryId"),
         ),
         (
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
                 "templateParams": { "k": 1 },
             }),
             Some("templateParams"),
@@ -1271,8 +1276,8 @@ fn forbidden_session_resume_fields_are_recognised_before_the_typed_decode() {
         (json!({ "agentId": "codex" }), Some("agentId")),
         (json!({ "agentSessionId": "acp-1" }), Some("agentSessionId")),
         (
-            json!({ "workspaceAlias": "project" }),
-            Some("workspaceAlias"),
+            json!({ "directoryId": "0123456789abcdef0123456789abcdef" }),
+            Some("directoryId"),
         ),
         (json!({ "templateParams": {} }), Some("templateParams")),
     ] {
@@ -1486,8 +1491,8 @@ fn the_error_registry_maps_core_codes_without_inventing_new_ones() {
         "details.field 是 `nodelink.command.unsupported_field` 的必需字段"
     );
     assert_eq!(
-        parameter_details("workspaceAlias").get(),
-        r#"{"parameter":"workspaceAlias"}"#
+        parameter_details("directoryId").get(),
+        r#"{"parameter":"directoryId"}"#
     );
     assert_eq!(
         rate_limit_details(Duration::from_millis(1_500)).get(),
@@ -1554,7 +1559,7 @@ async fn session_create_null_rules_and_expected_version_are_enforced_at_the_wire
         json!({
             "agentId": "codex",
             "exportId": EXPORT,
-            "workspaceAlias": "project",
+            "directoryId": "0123456789abcdef0123456789abcdef",
         }),
     );
     body["sessionRef"] = json!({
@@ -1671,7 +1676,7 @@ async fn session_create_forbidden_fields_are_rejected_without_creating_a_session
 
 /// 未知 `workspaceAlias` 回 `not_granted` 并带 `details.parameter`，不创建会话。
 #[tokio::test]
-async fn session_create_with_an_unknown_workspace_alias_is_rejected_with_the_parameter() {
+async fn session_create_with_an_unknown_workspace_directory_is_rejected_with_the_parameter() {
     let mut fixture = Fixture::new().await;
     let route = fixture.route();
 
@@ -1684,7 +1689,7 @@ async fn session_create_with_an_unknown_workspace_alias_is_rejected_with_the_par
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "other",
+                "directoryId": "ffffffffffffffffffffffffffffffff",
             }),
         ),
     )
@@ -1694,7 +1699,7 @@ async fn session_create_with_an_unknown_workspace_alias_is_rejected_with_the_par
     assert_eq!(error_code(rejected[0]), "nodelink.export.not_granted");
     assert_eq!(
         rejected[0]["body"]["error"]["details"]["parameter"],
-        "workspaceAlias"
+        "directoryId"
     );
 
     // 未导出的 agent 走同一条判定。
@@ -1707,7 +1712,7 @@ async fn session_create_with_an_unknown_workspace_alias_is_rejected_with_the_par
             json!({
                 "agentId": "claude",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
             }),
         ),
     )
@@ -1737,7 +1742,7 @@ async fn session_create_with_template_parameters_is_rejected() {
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
                 "templateParams": { "name": "value" },
             }),
         ),
@@ -1765,7 +1770,7 @@ async fn session_create_with_template_parameters_is_rejected() {
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
                 "templateParams": {},
             }),
         ),
@@ -1796,7 +1801,7 @@ async fn session_create_returns_accepted_then_the_composite_result() {
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
             }),
         ),
     )
@@ -1877,7 +1882,7 @@ async fn a_repeated_session_create_request_replays_the_first_result() {
         json!({
             "agentId": "codex",
             "exportId": EXPORT,
-            "workspaceAlias": "project",
+            "directoryId": "0123456789abcdef0123456789abcdef",
         }),
     );
 
@@ -1920,7 +1925,7 @@ async fn a_repeated_session_create_request_replays_the_first_result() {
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "alt",
+                "directoryId": "fedcba9876543210fedcba9876543210",
             }),
         ),
     )
@@ -1949,7 +1954,7 @@ async fn a_session_create_crash_window_becomes_uncertain_after_recovery() {
         json!({
             "agentId": "codex",
             "exportId": EXPORT,
-            "workspaceAlias": "project",
+            "directoryId": "0123456789abcdef0123456789abcdef",
         }),
     );
     // 直接提交**受理**提交（不经过适配层的落账提交），模拟崩溃后的现场：只有幂等行、没有会话行。
@@ -2054,7 +2059,7 @@ async fn a_session_create_that_provably_did_not_establish_a_session_fails() {
         json!({
             "agentId": "codex",
             "exportId": EXPORT,
-            "workspaceAlias": "project",
+            "directoryId": "0123456789abcdef0123456789abcdef",
         }),
     );
 
@@ -2135,7 +2140,7 @@ async fn a_session_create_that_cannot_prove_the_outcome_is_uncertain() {
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
             }),
         ),
     )
@@ -2181,7 +2186,7 @@ async fn the_accepted_session_create_and_its_terminal_each_leave_one_log_line() 
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
             }),
         ),
     )
@@ -3365,7 +3370,7 @@ async fn the_same_request_id_with_a_different_command_conflicts() {
             json!({
                 "agentId": "codex",
                 "exportId": EXPORT,
-                "workspaceAlias": "project",
+                "directoryId": "0123456789abcdef0123456789abcdef",
             }),
             None,
         ),

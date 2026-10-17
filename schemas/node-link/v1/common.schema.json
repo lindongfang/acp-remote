@@ -67,10 +67,10 @@
       "minLength": 1,
       "maxLength": 128
     },
-    "workspaceAlias": {
+    "directoryId": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-      "description": "Owner 发布的 workspace 符号名；不是路径，绝对路径在语法上无法通过。"
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "由规范化绝对路径派生（`sha256(path)` 前 16 字节的小写十六进制）的目录标识；不是路径。"
     },
     "opaqueRef": {
       "type": "string",
@@ -174,13 +174,12 @@
         "capabilitiesRef": { "$ref": "#/$defs/opaqueRef" }
       }
     },
-    "workspaceAliasEntry": {
+    "workspaceDirectoryEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["alias", "displayName"],
+      "required": ["directoryId"],
       "properties": {
-        "alias": { "$ref": "#/$defs/workspaceAlias" },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }
+        "directoryId": { "$ref": "#/$defs/directoryId" }
       }
     },
     "workspaceTemplateParam": {
@@ -203,18 +202,18 @@
     "workspaceTemplate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["templateId", "displayName", "workspaceAlias", "params"],
+      "required": ["templateId", "displayName", "workspaceDirectory", "params"],
       "properties": {
         "templateId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._-]+$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "workspaceAlias": { "$ref": "#/$defs/workspaceAlias" },
+        "workspaceDirectory": { "$ref": "#/$defs/directoryId" },
         "params": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/workspaceTemplateParam" } }
       }
     },
     "exportEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["exportId", "displayName", "agents", "workspaceAliases", "defaultWorkspaceAlias", "templates", "scopes", "capabilityCeilingRef", "cachePolicy", "revoked"],
+      "required": ["exportId", "displayName", "agents", "workspaceDirectories", "defaultWorkspaceDirectory", "templates", "scopes", "capabilityCeilingRef", "cachePolicy", "revoked"],
       "properties": {
         "exportId": { "$ref": "#/$defs/exportId" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -223,12 +222,12 @@
           "maxItems": 1024,
           "items": { "$ref": "#/$defs/exportAgent" }
         },
-        "workspaceAliases": {
+        "workspaceDirectories": {
           "type": "array",
           "maxItems": 1024,
-          "items": { "$ref": "#/$defs/workspaceAliasEntry" }
+          "items": { "$ref": "#/$defs/workspaceDirectoryEntry" }
         },
-        "defaultWorkspaceAlias": { "$ref": "#/$defs/workspaceAlias" },
+        "defaultWorkspaceDirectory": { "$ref": "#/$defs/directoryId" },
         "templates": {
           "type": "array",
           "maxItems": 64,

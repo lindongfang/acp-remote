@@ -25,7 +25,7 @@ use serde_json::Value;
 use server::local_admin::{JsonObject, LocalErrorCode, Method};
 
 use crate::client::{ClientError, ClientOutcome, LocalAdminClient, outcome_of};
-use crate::config::{Config, ConfigError, Loaded, config_path_from_env};
+use crate::config::{ConfigError, Loaded, config_path_from_env, load_for_cli};
 use crate::lock::{self, LockState};
 
 pub(crate) mod input;
@@ -61,20 +61,10 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
-    /// 本地工作区符号名（`workspace.select`）。
-    Workspace {
-        #[command(subcommand)]
-        command: WorkspaceCommand,
-    },
-    /// Agent profile（`agent.configure`）。
+    /// Agent 列表（`agent.list`，只读）。
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
-    },
-    /// Provider 凭据（`provider.configure`）。
-    Provider {
-        #[command(subcommand)]
-        command: ProviderCommand,
     },
     /// 设备配对与信任（`device.pair.*`、`device.list`、`device.revoke`）。
     Device {
@@ -120,60 +110,9 @@ struct DaemonStop {
 }
 
 #[derive(Debug, Subcommand)]
-enum WorkspaceCommand {
-    /// 建立或更新工作区别名（`workspace.select`）。
-    Select(WorkspaceSelect),
-}
-
-/// `workspace select`：§5.8 明写以 `--alias`/`--display-name`/`--root-path` 提供 §5.2 的三个参数。
-#[derive(Debug, Args)]
-struct WorkspaceSelect {
-    /// 发布给 Export 的符号名（`^[a-z0-9][a-z0-9._-]{0,63}$`）。
-    #[arg(long, value_name = "ALIAS")]
-    alias: String,
-    /// 展示名（≤128 字符）。
-    #[arg(long, value_name = "NAME")]
-    display_name: String,
-    /// 绝对路径；必须已存在且是目录（路径只发送到本机 Daemon）。
-    #[arg(long, value_name = "PATH")]
-    root_path: PathBuf,
-}
-
-#[derive(Debug, Subcommand)]
 enum AgentCommand {
-    /// 建立或更新 Agent profile（`agent.configure`）。
-    Configure(AgentConfigure),
-}
-
-/// `agent configure --file`：文件与 §5.2 的 `params` 同形。
-#[derive(Debug, Args)]
-struct AgentConfigure {
-    /// 与 `agent.configure` 的 `params` 同形的 JSON 对象（不得含凭据值）。
-    #[arg(long, value_name = "PATH")]
-    file: PathBuf,
-}
-
-#[derive(Debug, Subcommand)]
-enum ProviderCommand {
-    /// 写入 Provider 凭据（`provider.configure`）：非秘密字段走 flags，凭据值在交互终端逐项无回显录入。
-    Configure(ProviderConfigure),
-}
-
-/// `provider configure`：**没有**承载凭据值的 flag（凭据值不得作为命令行参数或文件输入）。
-#[derive(Debug, Args)]
-struct ProviderConfigure {
-    /// Provider 标识（`^[A-Za-z0-9._-]{1,64}$`）。
-    #[arg(long, value_name = "ID")]
-    provider_id: String,
-    /// 类别（`provider` | `mcp`，由方法侧校验）。
-    #[arg(long, value_name = "KIND")]
-    kind: String,
-    /// 展示名（≤128 字符）。
-    #[arg(long, value_name = "NAME")]
-    display_name: String,
-    /// 凭据字段名（可重复；值由 CLI 无回显读取）。
-    #[arg(long = "field", value_name = "NAME", required = true)]
-    fields: Vec<String>,
+    /// 列出配置声明的 Agent（`agent.list`，只读）。
+    List,
 }
 
 #[derive(Debug, Subcommand)]
@@ -332,23 +271,9 @@ fn dispatch(cli: Cli) -> Result<(), Failure> {
             DaemonCommand::Stop(args) => daemon_stop(&mut context, &args),
             DaemonCommand::Status => daemon_status(&mut context),
         },
-        Command::Workspace {
-            command: WorkspaceCommand::Select(args),
-        } => call_once(
-            &mut context,
-            Method::WorkspaceSelect,
-            workspace_select_params(&args),
-        ),
         Command::Agent {
-            command: AgentCommand::Configure(args),
-        } => call_once(
-            &mut context,
-            Method::AgentConfigure,
-            agent_configure_params(&args)?,
-        ),
-        Command::Provider {
-            command: ProviderCommand::Configure(args),
-        } => provider_configure(&mut context, &args),
+            command: AgentCommand::List,
+        } => call_once(&mut context, Method::AgentList, JsonObject::new()),
         Command::Device { command } => match command {
             DeviceCommand::Pair(args) => pairing::run(
                 &mut context,
@@ -416,7 +341,7 @@ impl Context {
     /// 加载配置（`--config` → `ACP_REMOTE_CONFIG` → 平台默认位置）。
     fn resolve(config: Option<PathBuf>) -> Result<Self, Failure> {
         let path = config.or_else(config_path_from_env);
-        let loaded = Config::load(path.as_deref())
+        let loaded = load_for_cli(path.as_deref())
             .map_err(|error| Failure::local(code_for_config_error(&error), error.to_string()))?;
         Ok(Self {
             loaded,
@@ -519,35 +444,6 @@ impl Context {
 // 参数 → `params`（kebab-case flags → camelCase wire 字段的唯一翻译点）
 // ---------------------------------------------------------------------------------------------
 
-fn workspace_select_params(args: &WorkspaceSelect) -> JsonObject {
-    let mut params = JsonObject::new();
-    params.insert("alias".to_owned(), Value::from(args.alias.as_str()));
-    params.insert(
-        "displayName".to_owned(),
-        Value::from(args.display_name.as_str()),
-    );
-    params.insert(
-        "rootPath".to_owned(),
-        Value::from(args.root_path.to_string_lossy().into_owned()),
-    );
-    params
-}
-
-/// `agent configure --file`：文件即 `params`；顶层字段名必须是 §5.2 的六个（凭据值没有字段可承载）。
-fn agent_configure_params(args: &AgentConfigure) -> Result<JsonObject, Failure> {
-    input::read_params_file(
-        &args.file,
-        &[
-            "agentId",
-            "displayName",
-            "command",
-            "args",
-            "envAllowlist",
-            "default",
-        ],
-    )
-}
-
 /// `export create --file`：文件即 `params`（嵌套结构由方法侧校验）。
 fn export_create_params(args: &ExportCreate) -> Result<JsonObject, Failure> {
     input::read_params_file(&args.file, &[])
@@ -613,38 +509,6 @@ pub(crate) fn strings(items: &[String]) -> Value {
             .map(|item| Value::from(item.as_str()))
             .collect(),
     )
-}
-
-/// `provider configure` 的 `values`：字段名 → 凭据值（值只来自终端录入）。
-fn provider_configure_params(args: &ProviderConfigure, values: &[(String, String)]) -> JsonObject {
-    let mut params = JsonObject::new();
-    params.insert(
-        "providerId".to_owned(),
-        Value::from(args.provider_id.as_str()),
-    );
-    params.insert("kind".to_owned(), Value::from(args.kind.as_str()));
-    params.insert(
-        "displayName".to_owned(),
-        Value::from(args.display_name.as_str()),
-    );
-    let mut map = JsonObject::new();
-    for (field, value) in values {
-        map.insert(field.clone(), Value::from(value.as_str()));
-    }
-    params.insert("values".to_owned(), Value::Object(map));
-    params
-}
-
-/// 逐项读取凭据值（保持 `--field` 给出的顺序）。
-pub(crate) fn provider_values(
-    fields: &[String],
-    prompt: &mut dyn input::SecretPrompt,
-) -> Result<Vec<(String, String)>, Failure> {
-    let mut values = Vec::with_capacity(fields.len());
-    for field in fields {
-        values.push((field.clone(), prompt.read_secret(field)?));
-    }
-    Ok(values)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -840,18 +704,6 @@ fn call_outcome(
     Ok(outcome_of(&response))
 }
 
-/// `provider configure`：无回显逐项录入凭据后调用 `provider.configure`。
-fn provider_configure(context: &mut Context, args: &ProviderConfigure) -> Result<(), Failure> {
-    // 无交互终端时**先**明确失败：不读取凭据、不调用方法（R69）。
-    let mut prompt = input::TerminalPrompt::new()?;
-    let values = provider_values(&args.fields, &mut prompt)?;
-    call_once(
-        context,
-        Method::ProviderConfigure,
-        provider_configure_params(args, &values),
-    )
-}
-
 // ---------------------------------------------------------------------------------------------
 // 输出与错误出口
 // ---------------------------------------------------------------------------------------------
@@ -993,11 +845,9 @@ mod tests {
     use clap::CommandFactory as _;
 
     /// §5.8 映射表第一列的子命令与第二列的分组（唯一权威：`docs/LOCAL_ADMIN_PROTOCOL.md` §5.8）。
-    const DOCUMENTED: [(&str, &[&str]); 8] = [
+    const DOCUMENTED: [(&str, &[&str]); 6] = [
         ("daemon", &["start", "stop", "status"]),
-        ("workspace", &["select"]),
-        ("agent", &["configure"]),
-        ("provider", &["configure"]),
+        ("agent", &["list"]),
         ("device", &["pair", "list", "revoke"]),
         ("node", &["pair", "list", "revoke"]),
         ("export", &["create", "list", "revoke"]),
@@ -1127,16 +977,6 @@ mod tests {
     /// kebab-case flags → camelCase `params`：字段名与 §5.2/§5.6 的 wire 形状逐条对应。
     #[test]
     fn flags_map_onto_the_documented_wire_field_names() {
-        let workspace = workspace_select_params(&WorkspaceSelect {
-            alias: "ws".to_owned(),
-            display_name: "工作区".to_owned(),
-            root_path: PathBuf::from("/tmp/ws"),
-        });
-        assert_eq!(
-            Value::Object(workspace),
-            serde_json::json!({ "alias": "ws", "displayName": "工作区", "rootPath": "/tmp/ws" })
-        );
-
         let stop = stop_params(&DaemonStop {
             grace_ms: Some(1500),
         });
@@ -1182,25 +1022,6 @@ mod tests {
                 "ownerNodeId": "00000000-0000-4000-8000-000000000001",
                 "exportIds": ["E"],
                 "grants": ["grant.session.read"],
-            })
-        );
-
-        let provider = provider_configure_params(
-            &ProviderConfigure {
-                provider_id: "openai".to_owned(),
-                kind: "provider".to_owned(),
-                display_name: "OpenAI".to_owned(),
-                fields: vec!["api_key".to_owned()],
-            },
-            &[("api_key".to_owned(), "sk-x".to_owned())],
-        );
-        assert_eq!(
-            Value::Object(provider),
-            serde_json::json!({
-                "providerId": "openai",
-                "kind": "provider",
-                "displayName": "OpenAI",
-                "values": { "api_key": "sk-x" },
             })
         );
 

@@ -5,8 +5,6 @@
 //! - **每个 Agent 一个进程与一个 Job/进程组**：结束某个 Agent 不影响其它 Agent。监督者由本结构持有。
 //! - 每个监督者拥有自己的任务集（读 stdout、读 stderr、退出监视、写出、turn 等待、进站路由），
 //!   关闭时统一 join；本模块不创建 detached task。
-//! - 目录查询（[`AgentCatalog::agents`]）**不做 spawn、不消费凭据值**：它只探测「凭据能否解析」，
-//!   而探测本身会从 keystore 取值（端口没有 `is_resolvable()` 之类的只读接口）。
 //! - 空闲回收**破坏运行时与映射**：命中的运行时在同一临界区被移出目录、其会话映射被清空，
 //!   `open()` 随后必须显式失败（不得把已结束的进程当作活跃端点）；可用性语义不随运行状态变化。
 //! - 能力协商按**进程代**缓存：进程换了，缓存即失效。
@@ -23,8 +21,7 @@ use acp_core::model::{
     SessionReference, UnavailableKind,
 };
 use acp_core::ports::{
-    AgentCatalog, Clock, CredentialResolver, EventSink, IdGenerator, LocalConfigStore,
-    SessionBackendFactory, SessionEndpoint,
+    AgentCatalog, Clock, EventSink, IdGenerator, SessionBackendFactory, SessionEndpoint,
 };
 use acp_protocol::Envelope;
 use acp_protocol::capability::AgentCapabilities;
@@ -235,8 +232,8 @@ impl AgentRuntime {
 
 /// 实现 [`AgentCatalog`] 与 [`SessionBackendFactory`] 的本地 Agent 组合层。
 pub struct AgentHost {
-    config: Arc<dyn LocalConfigStore>,
-    credentials: Arc<dyn CredentialResolver>,
+    /// 启动配置声明的 Agent（唯一权威；运行期没有写入路径）。
+    profiles: Arc<Vec<AgentProfile>>,
     host_config: HostConfig,
     ids: Arc<dyn IdGenerator>,
     clock: Arc<dyn Clock>,
@@ -265,15 +262,13 @@ impl AgentHost {
     /// 构造（组合根装配本机实现）。
     #[must_use]
     pub fn new(
-        config: Arc<dyn LocalConfigStore>,
-        credentials: Arc<dyn CredentialResolver>,
+        profiles: Arc<Vec<AgentProfile>>,
         host_config: HostConfig,
         ids: Arc<dyn IdGenerator>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
-            config,
-            credentials,
+            profiles,
             host_config,
             ids,
             clock,
@@ -352,8 +347,13 @@ impl AgentHost {
             runtime.supervisor.shutdown().await;
         }
 
-        let (_profile, spec) =
-            launch::resolve_launch(self.config.as_ref(), self.credentials.as_ref(), agent).await?;
+        let profile = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id() == agent)
+            .cloned()
+            .ok_or(HostError::UnknownProfile)?;
+        let spec = launch::resolve_launch(&profile)?;
         let (supervisor, incoming) = Supervisor::start(spec).await?;
         let generation = {
             let mut generations = lock(&self.generations);
@@ -664,20 +664,25 @@ fn route(runtime: &AgentRuntime, envelope: &Envelope) {
 #[async_trait::async_trait]
 impl AgentCatalog for AgentHost {
     async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError> {
-        let profiles = self.config.profiles().await?;
-        let mut descriptors = Vec::with_capacity(profiles.len());
-        for profile in profiles {
-            // 可用性只做只读探测：命令能解析 + 凭据能解析。**不做 spawn、不消费凭据值**
-            // （解析本身会从 keystore 取值）。可用性**不**随运行状态变化：回收或进程崩溃后仍由这两项决定。
-            let available = command_resolves(profile.command())
-                && self.credentials.resolve_env(&profile).await.is_ok();
+        let mut descriptors = Vec::with_capacity(self.profiles.len());
+        for profile in self.profiles.iter() {
+            // 可用性只做只读探测：命令能解析。**不做 spawn**。可用性不随运行状态变化。
+            let available = command_resolves(profile.command());
             descriptors.push(AgentDescriptor::new(
-                agent_ref(&profile)?,
+                agent_ref(profile)?,
                 available,
                 ResourceOrigin::Local,
             ));
         }
         Ok(descriptors)
+    }
+
+    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
+        Ok(self
+            .profiles
+            .iter()
+            .find(|profile| profile.id() == id)
+            .cloned())
     }
 
     async fn agent_capabilities(&self, agent: &AgentRef) -> Result<CapabilitySet, PortError> {

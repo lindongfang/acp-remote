@@ -8,47 +8,31 @@
 
 ### Requirement: 版本常量、migration 执行时序与连续升级
 
-系统 SHALL 把文件格式版本与 owned 家族表结构版本推进到 6，imported 家族表结构版本保持 3。
+系统 SHALL 把文件格式版本与 owned 家族表结构版本推进到 9，imported 家族表结构版本保持 3。
 
-migration MUST 在单实例锁之后、开始监听之前执行，单事务、失败整体回滚、可重复打开；v1/v2/v3/v4/v5 库 MUST 经对应段连续升级到 v6，序号只回填一次、中间版本不单独落盘。
+migration MUST 在单实例锁之后、开始监听之前执行，单事务、失败整体回滚、可重复打开；v1/v2/v3/v4/v5/v6/v7/v8 库 MUST 经对应段连续升级到 v9，序号只回填一次、中间版本不单独落盘。
 
 连续两次打开后 `user_version`、两族版本键与库内每条 DDL 文本 MUST 逐字节相同；升级库与新建库的 owned 家族列清单 MUST 逐项相等。
 
 #### Scenario: 连续两次打开 schema 文本不变
 
 - **WHEN** 用同一个数据目录连续打开并关闭存储两次
-- **THEN** 文件格式版本与 owned 家族表结构版本都为 6（imported 家族为 3），且库内每条表与索引的 SQL 文本逐字节相同
+- **THEN** 文件格式版本与 owned 家族表结构版本都为 9（imported 家族为 3），且库内每条表与索引的 SQL 文本逐字节相同
 
 #### Scenario: 升级中途失败整体回滚
 
-- **WHEN** 一次 v5 到 v6（或更早版本连续升级）在事务中途失败
+- **WHEN** 一次 v8 到 v9（或更早版本连续升级）在事务中途失败
 - **THEN** 库保持升级前的版本与内容不变，重开后可再次尝试升级，且不产生半张已改结构的表
 
 #### Scenario: 升级库与新建库的 owned 列清单相等
 
 - **WHEN** 分别打开升级库与新建库并读取 owned 家族的列清单
-- **THEN** 两边的列名、顺序、类型与 `NOT NULL`/默认值逐项相等（`export_ids_json`、恢复两列与 `workspace_alias` 按各自追加顺序位于末尾）
+- **THEN** 两边的列名、顺序、类型与 `NOT NULL`/默认值逐项相等（`export_ids_json`、恢复两列与目录归属列按各自追加顺序位于末尾）
 
 #### Scenario: v2 到 v3 升级保留审计并扩展词表
 
-- **WHEN** 一个含既有审计行的 v2 库升级到 v3（并继续升级到 v6）
+- **WHEN** 一个含既有审计行的 v2 库升级到 v3（并继续升级到 v9）
 - **THEN** 全部审计行与 `audit_id`/序列原样保留，升级后 `actor_kind = 'pairing_claimant'` 与 `action = 'node.authenticated'`/`'node.auth_failed'` 可写入，旧词表之外的取值仍被拒绝，`owned_command` 的 `actor_kind` CHECK 保持三值不变
-
-### Requirement: v6 的 workspace_alias 列追加与列语义
-
-v6 相对 v5 的唯一差异是 `owned_session` 末尾新增一列 `workspace_alias`（TEXT，可空，无默认值）——该列只做追加，MUST NOT 触发 12-step 表重建（重建只用于改既有 CHECK）。
-
-该列只在会话创建流程中写入：既有会话行 MUST 保持 `NULL`，且 `NULL` MUST 被解释为「该会话没有目录归属」，MUST NOT 被任何读取路径补全、推导或按规范化路径反查别名。
-
-#### Scenario: v5 到 v6 升级保留既有会话行且新列为空
-
-- **WHEN** 一个含 owned 会话行（v5 形状，没有目录归属列）的库升级到 v6
-- **THEN** 每行其余列逐字节不变，`workspace_alias` 为 `NULL`，且这些会话的目录归属被解释为「未分组」而不是被反查补齐
-
-#### Scenario: 新列写入后可读回且不推导
-
-- **WHEN** 一个新建会话在其创建流程中写入 `workspace_alias`，随后重新打开存储读取该行
-- **THEN** 该取值按写入时的字节原样读回；另一条没有写入该列的会话行读回仍为 `NULL`，不出现空串、别名猜测或占位路径
 
 ### Requirement: v3/v4/v5 段升级的列追加与既有行保留
 
@@ -145,21 +129,61 @@ imported 家族的表列 SHALL 与冻结的黄金列清单逐项相等，任何�
 - **WHEN** 对一条已带有 `agent_session_id` 与 `workspace_cwd` 的会话执行恢复
 - **THEN** 恢复成功或失败后，这两列的字节都与恢复前相同，不出现用别名、新解析路径或新会话标识覆盖已存取值
 
-### Requirement: 会话目录归属列的写入与解释
+### Requirement: 会话目录归属列的写入与解释（目录标识）
 
-存储层 SHALL 在 owned 会话创建流程中写入 `workspace_alias`：只在解析出别名时写入，且 MUST 写入别名原文，MUST NOT 写入任何由规范化路径派生的取值（含路径末段）。恢复流程 MUST NOT 读取或改写该列。该列为 `NULL` 时 MUST 被解释为「该会话没有目录归属」，MUST NOT 被任何读取路径按 `workspace_cwd` 反查 `owned_workspace` 补齐，也 MUST NOT 用空串或占位别名代替。
+存储层 SHALL 在 owned 会话创建流程中写入 `workspace_directory_id`：只在本次创建解析出目录标识时写入，且 MUST 写入该标识原文，MUST NOT 写入路径或由路径派生的其它文本。恢复流程 MUST NOT 读取或改写该列。该列为 `NULL` 时 MUST 被解释为「该会话没有目录归属」，MUST NOT 被任何读取路径按 `workspace_cwd` 反查目录表补齐，也 MUST NOT 用空串或占位值代替。
 
-#### Scenario: 写入别名原文
+#### Scenario: 写入目录标识原文
 
-- **WHEN** 一个会话创建请求携带已登记且解析成功的 workspace 别名
-- **THEN** 该会话行的 `workspace_alias` 与请求中的别名原文逐字节相同
+- **WHEN** 一个会话创建请求携带已记录的目录标识并解析成功
+- **THEN** 该会话行的 `workspace_directory_id` 与请求中的标识逐字节相同
 
 #### Scenario: 恢复不改写目录归属
 
-- **WHEN** 对一条已带 `workspace_alias` 的会话执行恢复
-- **THEN** 恢复前后该列的字节相同，不出现用别名解析结果或新登记值覆盖已存取值
+- **WHEN** 对一条已带 `workspace_directory_id` 的会话执行恢复
+- **THEN** 恢复前后该列的字节相同，不出现用目录表或新创建结果覆盖已存取值
 
 #### Scenario: NULL 不被路径反查补齐
 
-- **WHEN** 一条会话行的 `workspace_alias` 为 `NULL`，而其 `workspace_cwd` 与某个已登记 workspace 的规范化路径相同
-- **THEN** 读取该会话得到的目录归属仍为「未分组」，不产生任何别名
+- **WHEN** 一条会话行的 `workspace_directory_id` 为 `NULL`，而其 `workspace_cwd` 与某个已记录目录的规范化路径相同
+- **THEN** 读取该会话得到的目录归属仍为「未分组」，不产生任何目录归属
+
+### Requirement: v9 的目录表与目录归属列
+
+v9 相对 v8 的差异是：新增 `owned_directory(directory_id PRIMARY KEY, canonical_path UNIQUE NOT NULL, created_at NOT NULL, last_used_at NOT NULL)`，并用 `ALTER TABLE ... RENAME COLUMN` 把 `owned_session.workspace_alias` 改名为 `workspace_directory_id`（不触发 12-step 表重建）。`owned_workspace` 表在 v9 删除。
+
+迁移 MUST 从既有 `owned_workspace` 行与既有会话行的 `workspace_cwd` 生成目录行，使升级后不存在「会话引用了目录表里没有的 id」的行；目录标识由规范化路径派生，MUST 与运行期派生规则一致。
+
+#### Scenario: v8 升级保留历史会话并归组
+
+- **WHEN** 一个含已登记目录与既有会话行的 v8 库升级到 v9
+- **THEN** 每条会话行的其余列逐字节不变，`workspace_directory_id` 等于由该会话原目录路径派生的标识
+
+#### Scenario: 原先未分组的会话被归组
+
+- **WHEN** 一条 v8 会话行的 `workspace_alias` 为 `NULL`，但 `workspace_cwd` 非空
+- **THEN** 升级后该目录被记录，且该会话的 `workspace_directory_id` 非空
+
+#### Scenario: 标识由规范化路径派生
+
+- **WHEN** 两个既有目录的 `canonical_path` 只有大小写差异（或指向同一目录的链接写法）
+- **THEN** 升级后它们合并为同一条目录行，且没有任何会话引用一个不存在的标识
+
+### Requirement: v10 删除 Agent 与 Provider 管理表
+
+`owned_schema_version` MUST 从 v9 推进到 v10，并在同一事务内删除 `owned_agent_profile` 与 `owned_provider_ref`；既有审计行 MUST 保留。迁移 MUST 在删除前记录 profile 行数（供启动日志 `daemon.agents_discarded`），失败时整体回滚且版本不前进。
+
+#### Scenario: v9 升级到 v10
+
+- **WHEN** 一个含 `owned_agent_profile` 行的 v9 库打开
+- **THEN** 两张表被删除、审计行不变、版本变为 v10，且记录被删除的 profile 条数
+
+#### Scenario: 升级失败回滚
+
+- **WHEN** v10 迁移在中途失败
+- **THEN** 两张表与版本保持 v9，不留下半升级状态
+
+#### Scenario: 连续两次打开
+
+- **WHEN** 已升级到 v10 的库再次打开
+- **THEN** 不再执行迁移，schema 与行逐字节不变

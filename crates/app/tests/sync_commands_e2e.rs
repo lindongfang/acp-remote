@@ -675,17 +675,9 @@ async fn exceeding_the_command_quota_is_retryable_and_side_effect_free() {
 // 8.3：`session.create` 的目录来源分支（Sync 面允许客户端提供目录，`pairing-model`）
 // ---------------------------------------------------------------------------------------------
 
-/// 本机登记一个 workspace alias（`session.create` 的别名来源；真实本地管理通道）。
-async fn register_workspace(host: &HostNode, alias: &str) {
-    host.admin(
-        server::local_admin::Method::WorkspaceSelect,
-        json!({
-            "alias": alias,
-            "displayName": "Project One",
-            "rootPath": host.data_dir().display().to_string(),
-        }),
-    )
-    .await;
+/// 直接记录一个本机目录（`session.create` 的目录来源）。
+async fn register_workspace(host: &HostNode) -> String {
+    support::seed_directory(&host.data_dir(), &host.data_dir()).await
 }
 
 /// 打开同一 data dir 的原始 SQL 连接（只读复核用；与 `HostNode::drop_earliest_events` 同一手法）。
@@ -700,9 +692,9 @@ async fn raw_connection(host: &HostNode) -> sqlx::SqliteConnection {
         .expect("打开同一 data_dir 的原始 SQL 连接")
 }
 
-/// 直接读库：该会话的 `(agent_session_id, workspace_alias)`。外层 `None` = 没有这一行。
+/// 直接读库：该会话的 `(agent_session_id, workspace_directory_id)`。外层 `None` = 没有这一行。
 ///
-/// 目录归属的**权威来源只有** `owned_session.workspace_alias`（`storage-sqlite` 的
+/// 目录归属的**权威来源只有** `owned_session.workspace_directory_id`（`storage-sqlite` 的
 /// `workspace_from_row` 也按它投影摘要），因此「来源是路径时它是 `NULL`」在这里是落库事实，不经过
 /// 任何投影推断。
 async fn stored_session_columns(
@@ -712,7 +704,7 @@ async fn stored_session_columns(
     let mut connection = raw_connection(host).await;
     let row: Option<(Option<String>, Option<String>)> =
         sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT agent_session_id, workspace_alias FROM owned_session WHERE session_id = ?1",
+            "SELECT agent_session_id, workspace_directory_id FROM owned_session WHERE session_id = ?1",
         )
         .bind(session_id)
         .fetch_optional(&mut connection)
@@ -723,7 +715,7 @@ async fn stored_session_columns(
 }
 
 /// 等到该会话的「恢复列 + 目录归属」那一笔提交落盘再返回：三者由**同一条** `UPDATE` 写入
-/// （`agent_session_id`/`workspace_cwd`/`workspace_alias`），因此 `agent_session_id` 非 `NULL` 就是
+/// （`agent_session_id`/`workspace_cwd`/`workspace_directory_id`），因此 `agent_session_id` 非 `NULL` 就是
 /// 「目录归属已经写定」的判据——读在它之前会让断言不到东西（也可能放过写错值的实现）。
 async fn await_session_columns(
     host: &HostNode,
@@ -788,12 +780,12 @@ async fn rejected_session_create(
     rejected
 }
 
-/// 8.3：`workspacePath` 成功路径——会话建成，且**来源是路径**时落库的 `workspace_alias` 是 `NULL`。
+/// 8.3：`workspacePath` 成功路径——会话建成，且**来源是路径**时落库的 `workspace_directory_id` 是 `NULL`。
 ///
 /// 变红点：实现若把客户端目录也当别名来源（例如拿路径末段或规范化结果造一个别名）或写成空串占位，
-/// 那条 `UPDATE` 会把非 `NULL` 写进 `workspace_alias`，直接读库的断言与摘要里的未分组断言同时变红。
+/// 那条 `UPDATE` 会把非 `NULL` 写进 `workspace_directory_id`，直接读库的断言与摘要里的未分组断言同时变红。
 #[tokio::test]
-async fn session_create_with_a_client_supplied_path_is_created_without_a_workspace_alias() {
+async fn session_create_with_a_client_supplied_path_is_created_without_a_workspace_directory_id() {
     let host = HostNode::start("sync-create-path", HOST).await;
     let device = Device::new();
     pair_and_approve(&host, &device).await;
@@ -822,29 +814,34 @@ async fn session_create_with_a_client_supplied_path_is_created_without_a_workspa
         .expect("completed 必须给出新会话标识")
         .to_owned();
 
-    // ② 读路径：协商了 `core.local-catalog.v1`，摘要里 `workspace` 键必须在、值为 `null`（未分组）。
+    // ② 读路径：协商了 `core.local-catalog.v1`，摘要里 `workspace` 键必须在、且带派生标识。
     let summary = terminal["result"]["session"]
         .as_object()
         .expect("completed 必须携带会话摘要");
     assert!(
         summary.contains_key("workspace"),
-        "协商了目录 feature 时 `workspace` 键必须存在（未分组是 `null`，不是缺席）：{terminal}"
+        "协商了目录 feature 时 `workspace` 键必须存在：{terminal}"
+    );
+    let canonical = std::fs::canonicalize(host.data_dir()).expect("可规范化");
+    let expected_id = acp_core::model::derive_directory_id(
+        canonical.to_str().expect("UTF-8"),
     );
     assert_eq!(
-        summary["workspace"],
-        Value::Null,
-        "客户端提供的目录不产生别名，摘要必须是未分组：{terminal}"
+        summary["workspace"]["directoryId"],
+        json!(expected_id.as_str()),
+        "客户端提供的目录在成功后被记录并成为归属：{terminal}"
     );
 
-    // ③ 落库事实：`workspace_alias` 是 SQL `NULL`（`agent_session_id` 非空 = 那笔提交确实跑了）。
-    let (agent_session_id, workspace_alias) = await_session_columns(&host, &session).await;
+    // ③ 落库事实：目录标识与恢复列一起落盘。
+    let (agent_session_id, workspace_id) = await_session_columns(&host, &session).await;
     assert!(
         agent_session_id.is_some(),
         "前提：目录归属那一笔提交已落盘（否则本用例断言不到任何东西）"
     );
     assert_eq!(
-        workspace_alias, None,
-        "来源是路径的会话必须以 SQL `NULL` 落库（不得用空串、路径末段或占位别名）"
+        workspace_id,
+        Some(expected_id.as_str().to_owned()),
+        "来源是路径的会话必须以派生标识落库（不得用空串或占位值）"
     );
 
     host.stop().await;
@@ -859,7 +856,7 @@ async fn session_create_with_a_registered_alias_records_that_alias() {
     let host = HostNode::start("sync-create-alias", HOST).await;
     let device = Device::new();
     pair_and_approve(&host, &device).await;
-    register_workspace(&host, "project.one").await;
+    let directory_id = register_workspace(&host).await;
     let mut client = connect_authenticated(&host, &device).await;
 
     let request = uuid_text();
@@ -869,7 +866,7 @@ async fn session_create_with_a_registered_alias_records_that_alias() {
             &request,
             "session.create",
             None,
-            json!({ "agentId": AGENT, "workspaceAlias": "project.one" }),
+            json!({ "agentId": AGENT, "directoryId": directory_id }),
         )
         .await;
     let accepted = client.expect_command_result(&request).await;
@@ -881,20 +878,20 @@ async fn session_create_with_a_registered_alias_records_that_alias() {
         .expect("completed 必须给出新会话标识")
         .to_owned();
     assert_eq!(
-        terminal["result"]["session"]["workspace"]["alias"],
-        json!("project.one"),
-        "别名来源必须投影出别名（不是未分组）：{terminal}"
+        terminal["result"]["session"]["workspace"]["directoryId"],
+        json!(directory_id),
+        "目录来源必须投影出目录标识（不是未分组）：{terminal}"
     );
 
-    let (agent_session_id, workspace_alias) = await_session_columns(&host, &session).await;
+    let (agent_session_id, workspace_id) = await_session_columns(&host, &session).await;
     assert!(
         agent_session_id.is_some(),
         "前提：目录归属那一笔提交已落盘（否则本用例断言不到任何东西）"
     );
     assert_eq!(
-        workspace_alias,
-        Some("project.one".to_owned()),
-        "别名来源必须以别名原文落库（不得只写 cwd、也不得省略）"
+        workspace_id,
+        Some(directory_id),
+        "目录标识必须按创建时的解析结果落库（不得只写 cwd、也不得省略）"
     );
 
     host.stop().await;
@@ -911,7 +908,7 @@ async fn session_create_with_an_unregistered_alias_is_a_parameter_error() {
     rejected_session_create(
         &host,
         &mut client,
-        json!({ "agentId": AGENT, "workspaceAlias": "never.registered" }),
+        json!({ "agentId": AGENT, "directoryId": "ffffffffffffffffffffffffffffffff" }),
         "protocol.schema_invalid",
         "未登记别名",
     )
@@ -1005,7 +1002,7 @@ async fn session_create_rejects_both_directory_sources_at_once() {
     let host = HostNode::start("sync-create-both", HOST).await;
     let device = Device::new();
     pair_and_approve(&host, &device).await;
-    register_workspace(&host, "project.one").await;
+    let directory_id = register_workspace(&host).await;
     let mut client = connect_authenticated(&host, &device).await;
 
     let before = session_row_count(&host).await;
@@ -1018,7 +1015,7 @@ async fn session_create_rejects_both_directory_sources_at_once() {
             None,
             json!({
                 "agentId": AGENT,
-                "workspaceAlias": "project.one",
+                "directoryId": directory_id,
                 "workspacePath": host.data_dir().display().to_string(),
             }),
         )

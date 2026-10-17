@@ -26,12 +26,13 @@ use acp_core::broker::HISTORY_ENTRY_EVENT_TYPES;
 use acp_core::model::{
     AcpRaw, Actor, ActorKind, AgentId, AgentRef, AgentSessionId, AttachmentGeneration,
     AttachmentId, CommandRecord, CommandResult, CommandStatus, CommittedDelivery, CommittedEvent,
-    ConflictKind, DeviceId, Digest, EntityRef, EventId, EventKind, EventOrigin, EventPayload,
+    ConflictKind, DeviceId, Digest, DirectoryId, EntityRef, EventId, EventKind, EventOrigin,
+    EventPayload,
     GlobalCursor, ImportId, InteractionOption, InteractionResolution, LocalCursor, ModeId, ModeRef,
     NodeId, OriginCursor, OriginEpoch, OriginEventRef, PendingInteraction, PortError, PublicError,
     RawUnavailableReason, RemoteSessionRef, RequestId, ResourceOrigin, Sequence, ServerEpoch,
     Session, SessionId, SessionRecoveryRecord, SessionSnapshot, SessionState, SessionSummary,
-    StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson, WorkspaceAlias,
+    StoredPolicy, Timestamp, Turn, TurnId, UnavailableKind, Version, ViewJson,
     WorkspaceRef,
 };
 use acp_core::ports::{
@@ -58,19 +59,16 @@ const SESSION_COLUMNS: &str = "session_id, title, agent_id, agent_name, state, o
      current_mode_id, current_mode_name, version, created_at, updated_at, closed_at";
 
 /// 返回 [`SessionSummary`] 的三条读路径（`list`/`read_session`/`node_link_slice`）的读列：
-/// `SESSION_COLUMNS` 加上**持久化的目录别名**与**按别名关联到的展示名**。
+/// `SESSION_COLUMNS` 加上**持久化的目录标识**。
 ///
-/// 归属的唯一来源是 `owned_session.workspace_alias`；展示名按别名 LEFT JOIN `owned_workspace` 取得，
-/// 接不上时回退为别名本身。`MUST NOT` 按 `workspace_cwd` 反查别名——`NULL` 就是未分组
-/// （`design.md` D1/D6）。JOIN 留在本 crate（两张表都是 owned 家族），不上浮到 core。
+/// 归属的唯一来源是 `owned_session.workspace_directory_id`；`MUST NOT` 按 `workspace_cwd` 反查目录表
+/// ——`NULL` 就是未分组（`design.md` D1/D6）。
 const SESSION_SUMMARY_COLUMNS: &str = "s.session_id, s.title, s.agent_id, s.agent_name, s.state, \
      s.origin_epoch, s.current_mode_id, s.current_mode_name, s.version, s.created_at, \
-     s.updated_at, s.closed_at, s.workspace_alias, w.display_name AS workspace_display_name";
+     s.updated_at, s.closed_at, s.workspace_directory_id";
 
-/// [`SESSION_SUMMARY_COLUMNS`] 的 FROM 子句。列一律带表前缀：`created_at`/`updated_at` 在
-/// `owned_workspace` 上同名，不加前缀会让 `ORDER BY` 与读列变成歧义列。
-const SESSION_SUMMARY_FROM: &str = "owned_session s \
-     LEFT JOIN owned_workspace w ON w.alias = s.workspace_alias";
+/// [`SESSION_SUMMARY_COLUMNS`] 的 FROM 子句。
+const SESSION_SUMMARY_FROM: &str = "owned_session s";
 
 /// `owned_command` 的读列。
 const COMMAND_COLUMNS: &str = "actor_kind, actor_id, request_id, session_id, command, kind, \
@@ -109,6 +107,18 @@ impl SqliteStore {
     pub(crate) fn pools(&self) -> &Pools {
         &self.pools
     }
+    /// v10 升级时被删除的旧 Agent profile 行数（用于启动提示；没有迁移记录即 0）。
+    pub async fn discarded_agent_profiles(&self) -> Result<u64, StorageError> {
+        let Some(value) = migrate::read_meta_row(&self.pools.write, migrate::META_DISCARDED_AGENT_PROFILES)
+            .await?
+        else {
+            return Ok(0);
+        };
+        value
+            .parse()
+            .map_err(|_| StorageError::Corrupt("discarded_agent_profiles"))
+    }
+
 
     /// §7.1/§7.2：打开（必要时创建）数据库、设置 PRAGMA、跑 `quick_check` 与 migration。
     ///
@@ -471,28 +481,18 @@ fn mode_from_row(row: &SqliteRow) -> Result<Option<ModeRef>, StorageError> {
 
 /// 摘要里的目录归属（`SessionSummary.workspace`）。
 ///
-/// 权威来源**只有** `owned_session.workspace_alias`：`NULL` 就是「未分组」（`None`），不按
-/// `owned_session.workspace_cwd` 反查别名解析表补齐——否则同一别名重指向后既有会话的归属会漂移
-/// （`design.md` D1/D6、`workspace-resolution` 的「不按路径反查归属」）。
-///
-/// 展示名由 [`SESSION_SUMMARY_FROM`] 的 LEFT JOIN 按别名关联 `owned_workspace` 取得；**关联不上**
-/// （目录被删除）时回退为**别名本身**——别名仍被携带，分组因此不消失，且不泄漏规范化路径。
+/// 权威来源**只有** `owned_session.workspace_directory_id`：`NULL` 就是「未分组」（`None`），不按
+/// `owned_session.workspace_cwd` 反查目录表补齐（`design.md` D1/D6、`workspace-resolution` 的
+/// 「不按路径反查归属」）。
 fn workspace_from_row(row: &SqliteRow) -> Result<Option<WorkspaceRef>, StorageError> {
-    let Some(alias) = opt_text(row, "workspace_alias")? else {
+    let Some(directory_id) = opt_text(row, "workspace_directory_id")? else {
         return Ok(None);
     };
-    let alias = WorkspaceAlias::new(&alias).map_err(|_| StorageError::ColumnValue {
-        column: "owned_session.workspace_alias",
-        expected: "workspace alias",
+    let directory_id = DirectoryId::new(&directory_id).map_err(|_| StorageError::ColumnValue {
+        column: "owned_session.workspace_directory_id",
+        expected: "directory id",
     })?;
-    let display_name =
-        opt_text(row, "workspace_display_name")?.unwrap_or_else(|| alias.as_str().to_owned());
-    let reference =
-        WorkspaceRef::try_new(alias, &display_name).map_err(|_| StorageError::ColumnValue {
-            column: "owned_workspace.display_name",
-            expected: "workspace display name",
-        })?;
-    Ok(Some(reference))
+    Ok(Some(WorkspaceRef::new(directory_id)))
 }
 
 fn session_summary_from_row(row: &SqliteRow) -> Result<SessionSummary, StorageError> {
@@ -1334,7 +1334,7 @@ impl SqliteStore {
                          closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
                          agent_session_id = CASE WHEN ?5 IS NULL THEN agent_session_id ELSE ?5 END, \
                          workspace_cwd = CASE WHEN ?6 IS NULL THEN workspace_cwd ELSE ?6 END, \
-                         workspace_alias = CASE WHEN ?7 IS NULL THEN workspace_alias ELSE ?7 END, \
+                         workspace_directory_id = CASE WHEN ?7 IS NULL THEN workspace_directory_id ELSE ?7 END, \
                          title = CASE WHEN ?9 THEN NULL WHEN ?8 IS NULL THEN title ELSE ?8 END, \
                          version = version + 1, updated_at = ?3 \
                          WHERE session_id = ?4 RETURNING version"
@@ -1345,7 +1345,7 @@ impl SqliteStore {
                          closed_at = CASE WHEN ?2 IS NULL THEN closed_at ELSE ?2 END, \
                          agent_session_id = CASE WHEN ?7 IS NULL THEN agent_session_id ELSE ?7 END, \
                          workspace_cwd = CASE WHEN ?8 IS NULL THEN workspace_cwd ELSE ?8 END, \
-                         workspace_alias = CASE WHEN ?9 IS NULL THEN workspace_alias ELSE ?9 END, \
+                         workspace_directory_id = CASE WHEN ?9 IS NULL THEN workspace_directory_id ELSE ?9 END, \
                          title = CASE WHEN ?11 THEN NULL WHEN ?10 IS NULL THEN title ELSE ?10 END, \
                          version = version + 1, updated_at = ?3, \
                          current_mode_id = ?5, current_mode_name = ?6 \
@@ -1363,7 +1363,7 @@ impl SqliteStore {
                 let query = query
                     .bind(update.agent_session_id.as_ref().map(AgentSessionId::as_str))
                     .bind(update.workspace_cwd.as_deref())
-                    .bind(update.workspace_alias.as_deref());
+                    .bind(update.workspace_directory_id.as_deref());
                 // R9（`design.md` D7）：标题是**两层可选**——`None` = 不改该列，`Some(None)` = 显式置空，
                 // `Some(Some(text))` = 写入该标题。SQLite 的 `?N IS NULL` 区分不了「不改」与「置空」，因此
                 // 借一条按真值判定的**哨兵**参数 `?9`（`ModeChange::Set` 下是 `?11`）把「不改」编码成
@@ -1972,7 +1972,7 @@ async fn insert_created_session_row(
     sqlx::query(
         "INSERT INTO owned_session (session_id, title, agent_id, agent_name, state, \
          origin_epoch, current_mode_id, current_mode_name, version, created_at, updated_at, \
-         closed_at, agent_session_id, workspace_cwd, workspace_alias) \
+         closed_at, agent_session_id, workspace_cwd, workspace_directory_id) \
          VALUES (?1, ?2, ?3, ?4, 'idle', ?5, NULL, NULL, 1, ?6, ?6, NULL, ?7, ?8, ?9)",
     )
     .bind(settled.session.as_str())
@@ -1988,10 +1988,27 @@ async fn insert_created_session_row(
             .map(AgentSessionId::as_str),
     )
     .bind(settled.workspace_cwd.as_deref())
-    .bind(settled.workspace_alias.as_deref())
+    .bind(settled.workspace_directory_id.as_deref())
     .execute(&mut **tx)
     .await
     .db()?;
+    // 目录记录与成功的会话在**同一次提交**里写入（`design.md` D2）：`INSERT ... ON CONFLICT DO NOTHING`
+    // 让并发创建同一目录时幂等，且不改写既有的 `created_at`。
+    if let (Some(directory_id), Some(cwd)) =
+        (&settled.workspace_directory_id, &settled.workspace_cwd)
+    {
+        sqlx::query(
+            "INSERT INTO owned_directory (directory_id, canonical_path, created_at, last_used_at) \
+             VALUES (?1, ?2, ?3, ?3) ON CONFLICT(directory_id) DO UPDATE SET \
+             last_used_at = excluded.last_used_at",
+        )
+        .bind(directory_id)
+        .bind(cwd)
+        .bind(at.as_str())
+        .execute(&mut **tx)
+        .await
+        .db()?;
+    }
     Ok(())
 }
 

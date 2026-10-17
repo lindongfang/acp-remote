@@ -76,7 +76,7 @@ use acp_core::model::{
     OriginCursor, OriginEpoch, OwnedSessionRef, PairingId, PairingPeer, PairingState, PeerIdentity,
     PortError, RequestId, ResourceOrigin, Sequence, ServerEpoch, Session, SessionId,
     SessionSnapshot, SessionState, SessionSummary, TemplateId, Timestamp as TimestampText, Version,
-    ViewJson, WorkspaceAlias, WorkspaceAliasEntry,
+    ViewJson, DirectoryId, WorkspaceDirectoryEntry,
 };
 use acp_core::ports::{
     AuditQuery, AuditStore as _, CommitOutcome, EventPublisher as _, HistoryPage, HistoryQuery,
@@ -3622,15 +3622,15 @@ fn resume_export(id: &str) -> ExportRecord {
         "Project Export",
         vec![AgentId::new("codex").expect("agent id")],
         vec![
-            WorkspaceAliasEntry::try_new(WorkspaceAlias::new("project").expect("alias"), "Project")
+            WorkspaceDirectoryEntry::try_new(DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"))
                 .expect("alias entry"),
         ],
-        WorkspaceAlias::new("project").expect("alias"),
+        DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
         vec![
             ExportTemplate::try_new(
                 TemplateId::new("template-1").expect("template id"),
                 "Template",
-                WorkspaceAlias::new("project").expect("alias"),
+                DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias"),
                 Vec::new(),
             )
             .expect("template"),

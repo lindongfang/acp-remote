@@ -879,33 +879,34 @@ impl CommandRoute {
             );
             return RouteOutcome::Claimed;
         };
-        // 目录来源是 `workspaceAlias` / `workspacePath` 的二选一（`SessionCreateWorkspace` 已在解码层
-        // 钉死"恰好一个"）。别名方向的形状校验在这里做（不触碰文件系统）；路径方向的形状与文件系统
+        // 目录来源是 `directoryId` / `workspacePath` 的二选一（`SessionCreateWorkspace` 已在解码层
+        // 钉死"恰好一个"）。标识方向的形状校验在这里做（不触碰文件系统）；路径方向的形状与文件系统
         // 校验都在 core 的解析路径里（先形状、后 IO），因此分类与该用例同源。
         let workspace = match &create.workspace {
-            SessionCreateWorkspace::Alias(alias) => {
-                // `createIfMissing` 与别名**互斥**（`sync-session-create`：别名解析出的目录必然已存在），
+            SessionCreateWorkspace::Directory(directory_id) => {
+                // `createIfMissing` 与目录标识**互斥**（`sync-session-create`：已记录的目录必然已存在），
                 // wire 的 schema 已用 `not` 在解码期拒掉这种组合。这里再核一次不变量：`SessionCreate` 的
                 // 字段是公开的，构造侧（或将来多一条入口）把两者凑在一起时 MUST NOT 被当成合法输入。
                 if create.create_if_missing.is_some() {
                     self.deny(
                         handle,
                         &command,
-                        "createIfMissing is not allowed with workspaceAlias",
+                        "createIfMissing is not allowed with directoryId",
                         ErrorCode::ProtocolSchemaInvalid,
                     );
                     return RouteOutcome::Claimed;
                 }
-                let Ok(alias) = acp_core::model::WorkspaceAlias::new(alias.as_str()) else {
+                let Ok(directory_id) = acp_core::model::DirectoryId::new(directory_id.as_str())
+                else {
                     self.deny(
                         handle,
                         &command,
-                        "the workspaceAlias is not a symbol name",
+                        "the directoryId is not a directory id",
                         ErrorCode::ProtocolSchemaInvalid,
                     );
                     return RouteOutcome::Claimed;
                 };
-                WorkspaceSource::Alias(alias)
+                WorkspaceSource::Directory(directory_id)
             }
             // `createIfMissing` 缺席即假（行为与引入该键之前完全一致）：缺了开关的路径来源要求该目录
             // 已存在；显式 `true` 才走「先创建（连同缺失的父层）再启动 Agent」那一支。两种来源的解析与

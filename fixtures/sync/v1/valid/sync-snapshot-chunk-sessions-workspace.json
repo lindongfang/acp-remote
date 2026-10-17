@@ -19,7 +19,7 @@
         "version": "42",
         "createdAt": "2026-09-17T11:00:00.000Z",
         "updatedAt": "2026-09-17T12:11:01.000Z",
-        "workspace": { "alias": "project.1", "displayName": "Project One" }
+        "workspace": { "directoryId": "0123456789abcdef0123456789abcdef" }
       },
       {
         "sessionId": "7f95ef32-c687-45ef-b59f-9263ef60bb88",

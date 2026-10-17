@@ -55,9 +55,9 @@ const FIXTURES: &[Fixture] = &[
         expectation: Expectation::RequestDecodes,
     },
     Fixture {
-        path: "valid/request-agent-configure.json",
+        path: "valid/request-agent-list.json",
         content: include_str!(
-            "../../../fixtures/local-admin/v1/valid/request-agent-configure.json"
+            "../../../fixtures/local-admin/v1/valid/request-agent-list.json"
         ),
         valid: true,
         keyword: None,
@@ -356,7 +356,7 @@ fn fixtures_behave_as_declared() {
                     .unwrap_or_else(|error| panic!("{} 应可解码：{error:?}", fixture.path));
                 let expected_method = match fixture.path {
                     "valid/request-daemon-status.json" => "daemon.status",
-                    "valid/request-agent-configure.json" => "agent.configure",
+                    "valid/request-agent-list.json" => "agent.list",
                     "valid/request-device-pair-confirm.json" => "device.pair.confirm",
                     "valid/request-node-rotate-key-begin.json" => "node.rotate-key.begin",
                     other => panic!("未登记的请求 fixture：{other}"),
@@ -371,14 +371,7 @@ fn fixtures_behave_as_declared() {
                 // 无参数方法必须是 `{}`（§4 的表格）。
                 let expected_params: &[&str] = match fixture.path {
                     "valid/request-daemon-status.json" => &[],
-                    "valid/request-agent-configure.json" => &[
-                        "agentId",
-                        "displayName",
-                        "command",
-                        "args",
-                        "envAllowlist",
-                        "default",
-                    ],
+                    "valid/request-agent-list.json" => &[],
                     "valid/request-device-pair-confirm.json" => &["pairingId"],
                     // §5.7 的方法只登记了名字，无参数（`{}`）。
                     "valid/request-node-rotate-key-begin.json" => &[],

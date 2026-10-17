@@ -222,28 +222,31 @@
       }
     },
     "workspaceRef": {
-      "description": "会话摘要的目录**引用**（`core.local-catalog.v1` 门控下的可选字段）：两个键固定不变，路径**不**在这里重复——需要路径的客户端按 `alias` 在同一份快照的 `workspaces` 条目里查表（见本文件的 `workspaceCatalogEntry`）。",
+      "description": "会话摘要的目录**引用**（`core.local-catalog.v1` 门控下的可选字段）：只有不透明目录标识，路径**不**在这里重复——需要路径的客户端按 `directoryId` 在同一份快照的 `workspaces` 条目里查表（见本文件的 `workspaceCatalogEntry`）。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["alias", "displayName"],
+      "required": ["directoryId"],
       "properties": {
-        "alias": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 }
+        "directoryId": { "$ref": "#/$defs/directoryId" }
       }
     },
+    "directoryId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "由规范化绝对路径派生（`sha256(path)` 前 16 字节的小写十六进制）的目录标识。客户端 MUST NOT 解析、拼接或由它反推路径。"
+    },
     "workspaceCatalogEntry": {
-      "description": "`snapshotItem.workspaces` 的单个元素（`docs/SYNC_PROTOCOL.md` §9.4）。它比 `workspaceRef` 多一个**可选**路径键 `path`：该键只在客户端协商了 `core.workspace-path.v1` 时出现，未协商时 MUST **缺席**（不是 `null`，也不是空串），使只协商 `core.local-catalog.v1` 的旧客户端仍能通过自己的封闭形状校验。会话摘要的目录引用仍是 `workspaceRef`（两个键），路径不在那里重复。",
+      "description": "`snapshotItem.workspaces` 的单个元素（`docs/SYNC_PROTOCOL.md` §9.4）。`directoryId` 与 `path` 始终成对出现；会话摘要的目录引用仍是 `workspaceRef`（只有标识），路径不在那里重复。",
       "type": "object",
       "additionalProperties": false,
-      "required": ["alias", "displayName"],
+      "required": ["directoryId", "path"],
       "properties": {
-        "alias": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "directoryId": { "$ref": "#/$defs/directoryId" },
         "path": {
           "type": "string",
           "minLength": 1,
           "maxLength": 4096,
-          "description": "已登记目录的**规范化**路径：`canonicalize` 的结果剥掉平台 verbatim 前缀后的形式。客户端 MUST NOT 拼接、规范化或反查它，回传该形式时服务端会重新规范化并以自己的结果为准。它只出现在本条目上（`docs/SYNC_PROTOCOL.md` §9.4、§10.3）。"
+          "description": "已记录目录的**规范化**路径：`canonicalize` 的结果剥掉平台 verbatim 前缀后的形式。客户端 MUST NOT 拼接、规范化或反查它，回传该形式时服务端会重新规范化并以自己的结果为准。它只出现在本条目上（`docs/SYNC_PROTOCOL.md` §9.4、§10.3）。"
         }
       }
     },

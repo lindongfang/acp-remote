@@ -162,7 +162,7 @@
       "required": [
         "agentId",
         "exportId",
-        "workspaceAlias"
+        "directoryId"
       ],
       "description": "session.create 只允许这四个键。出现 cwd、mcpServers、任何绝对路径或凭据字段时必须返回 command.rejected + nodelink.command.unsupported_field，且不得创建会话或部分应用参数。",
       "properties": {
@@ -172,8 +172,8 @@
         "exportId": {
           "$ref": "common.schema.json#/$defs/exportId"
         },
-        "workspaceAlias": {
-          "$ref": "common.schema.json#/$defs/workspaceAlias"
+        "directoryId": {
+          "$ref": "common.schema.json#/$defs/directoryId"
         },
         "templateParams": {
           "type": "object",

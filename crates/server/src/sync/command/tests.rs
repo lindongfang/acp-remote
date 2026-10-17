@@ -936,6 +936,15 @@ impl DirectoryBrowser for FakeDirectories {
 }
 
 /// 命令面用例的端口替身世界（`UseCases`/`Broker`/`Authority` 共享同一批实例，与组合根同形）。
+/// 测试目录的固定路径与派生标识（同一 `name` 在用例间一致）。
+fn test_directory(name: &str) -> (acp_core::model::DirectoryId, String) {
+    let path = std::env::temp_dir().join(format!("acpr-sync-create-{name}"));
+    std::fs::create_dir_all(&path).expect("临时目录可建");
+    let canonical = std::fs::canonicalize(&path).expect("可规范化");
+    let text = canonical.to_str().expect("临时目录是 UTF-8").to_owned();
+    (acp_core::model::derive_directory_id(&text), text)
+}
+
 struct CommandWorld {
     core: Arc<UseCases>,
     broker: Arc<Broker>,
@@ -1049,18 +1058,18 @@ impl CommandWorld {
         }
     }
 
-    /// 登记一个本机 workspace 别名（`session.create` 的 `workspaceAlias` 前提：core 按登记表解析，
-    /// 未登记是**受理之前**的参数类失败）。
-    fn seed_workspace(&self, alias: &str) {
-        self.config.seed_workspace(
-            acp_core::model::WorkspaceRecord::try_new(
-                acp_core::model::WorkspaceAlias::new(alias).expect("alias"),
-                "Project",
-                std::env::temp_dir().to_str().expect("临时目录是 UTF-8"),
+    /// 记录一个本机目录（`session.create` 的 `directoryId` 前提：core 按目录表解析，
+    /// 未记录是**受理之前**的参数类失败）。
+    fn seed_workspace(&self, name: &str) {
+        let (directory_id, path) = test_directory(name);
+        self.config.seed_directory(
+            acp_core::model::DirectoryRecord::try_new(
+                directory_id,
+                &path,
                 timestamp("2026-09-18T09:00:00.000Z"),
                 timestamp("2026-09-18T09:00:00.000Z"),
             )
-            .expect("workspace 记录"),
+            .expect("目录记录"),
         );
     }
 
@@ -2842,10 +2851,18 @@ async fn workspace_browse_without_a_parent_returns_the_root_list() {
 async fn workspace_browse_completes_with_the_layer_and_marks_registered_directories() {
     let world = CommandWorld::new();
     world.seed_device(DEVICE);
-    world.seed_workspace("project");
-    // `CommandWorld::seed_workspace` 把该别名登记在 `std::env::temp_dir()` 上：与它同路径的那条条目
-    // 因此必须被判为已登记（`registered` 只反映登记状态，不产生登记副作用）。
+    // 与下面那条条目同路径的目录记录。
     let registered = std::env::temp_dir().to_string_lossy().into_owned();
+    let directory_id = acp_core::model::derive_directory_id(&registered);
+    world.config.seed_directory(
+        acp_core::model::DirectoryRecord::try_new(
+            directory_id,
+            &registered,
+            timestamp("2026-09-18T09:00:00.000Z"),
+            timestamp("2026-09-18T09:00:00.000Z"),
+        )
+        .expect("目录记录"),
+    );
     let layer = TempLayer::new("layer");
     world.directories.seed_layer(vec![
         listing(&format!("{registered}-zeta"), "zeta"),
@@ -3762,12 +3779,12 @@ fn negotiate_session_create(route: &CommandRoute, handle: &ConnectionHandle) {
 }
 
 /// `session.create` 的 body（Sync 面形状：payload 只有 `workspaceAlias` 与 `agentId`）。
-fn create_body(request: &str, alias: &str) -> serde_json::Value {
+fn create_body(request: &str, name: &str) -> serde_json::Value {
     command_body(
         request,
         "session.create",
         None,
-        serde_json::json!({ "workspaceAlias": alias, "agentId": "codex" }),
+        serde_json::json!({ "directoryId": test_directory(name).0.as_str(), "agentId": "codex" }),
     )
 }
 
@@ -4289,7 +4306,7 @@ async fn a_session_create_with_both_an_alias_and_the_switch_is_schema_invalid() 
         "session.create",
         None,
         serde_json::json!({
-            "workspaceAlias": "project",
+            "directoryId": test_directory("project").0.as_str(),
             "agentId": "codex",
             "createIfMissing": true,
         }),

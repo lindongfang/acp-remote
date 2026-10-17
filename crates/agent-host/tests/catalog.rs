@@ -12,29 +12,19 @@ use acp_core::model::{
     AgentId, AgentProfile, AgentRef, OwnedSessionRef, PortError, ResourceOrigin, SessionId,
     SessionReference, UnavailableKind,
 };
-use acp_core::ports::{AgentCatalog, LocalConfigStore, SessionBackendFactory, SessionEndpoint};
+use acp_core::ports::{AgentCatalog, SessionBackendFactory, SessionEndpoint};
 use agent_host::{
     AgentHost, HostConfig, limits, runtime_generation, runtime_running, spawn_idle_sweep,
 };
 use support::{
-    Collector, FAKE_AGENT, FakeConfig, FakeCredentials, TestClock, TestIds, profile_with,
-    profile_with_env_vars,
+    Collector, FAKE_AGENT, TestClock, TestIds, profile_with,
 };
 
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
-fn host(profiles: Vec<AgentProfile>, credentials: FakeCredentials) -> Arc<AgentHost> {
-    host_with_config(Arc::new(FakeConfig::new(profiles)), credentials)
-}
-
-/// 用给定的配置端口造 host（需要额外断言端口调用次数时用）。
-fn host_with_config(
-    config: Arc<dyn LocalConfigStore>,
-    credentials: FakeCredentials,
-) -> Arc<AgentHost> {
+fn host(profiles: Vec<AgentProfile>) -> Arc<AgentHost> {
     Arc::new(AgentHost::new(
-        config,
-        Arc::new(credentials),
+        Arc::new(profiles),
         HostConfig::default(),
         Arc::new(TestIds::new()),
         Arc::new(TestClock::new()),
@@ -193,7 +183,7 @@ fn prompt(text: &str) -> acp_core::model::PromptRequest {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn catalog_query_never_spawns_a_process() {
     let (profile, dump) = dumping_profile("agent-1", "catalog");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
 
     let descriptors = host.agents().await.expect("agents");
     assert_eq!(descriptors.len(), 1);
@@ -220,7 +210,7 @@ async fn catalog_query_never_spawns_a_process() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn availability_is_per_entry_and_credentials_fail_closed() {
+async fn availability_is_per_entry() {
     let good = {
         // 守卫（第二个返回值）绑定到本用例的作用域：即使 `agents()` 真的启动了子进程写出了该文件，
         // 也会在用例结束时被删掉（design D2：守卫的生命周期要覆盖整个测试体）。
@@ -232,7 +222,7 @@ async fn availability_is_per_entry_and_credentials_fail_closed() {
         "acpr-does-not-exist-anywhere",
         &["--scenario", "normal"],
     );
-    let catalog = host(vec![good, missing], FakeCredentials::ok());
+    let catalog = host(vec![good, missing]);
 
     let descriptors = catalog.agents().await.expect("agents");
     let availability: Vec<(String, bool)> = descriptors
@@ -247,34 +237,6 @@ async fn availability_is_per_entry_and_credentials_fail_closed() {
     assert!(availability.contains(&("agent-good".to_owned(), true)));
     assert!(availability.contains(&("agent-missing".to_owned(), false)));
 
-    // 凭据引用失效：只让**该条目**不可用，且启动必须失败关闭（进程不启动）。
-    let (broken_profile, broken_env) = dumping_profile("agent-broken", "broken");
-    let broken = host(vec![broken_profile], FakeCredentials::failing());
-    let descriptors = broken.agents().await.expect("agents");
-    assert!(!descriptors[0].available, "凭据不可用时条目必须不可用");
-    let error = broken
-        .create(
-            &SessionId::new(SESSION).expect("session"),
-            CreateSessionRequest::new(
-                agent_ref("agent-broken"),
-                Some(support::workspace()),
-                None,
-                ResourceOrigin::Local,
-            ),
-            Collector::new().sink(),
-        )
-        .await;
-    let error = match error {
-        Ok(_) => panic!("凭据失败时不得启动进程"),
-        Err(error) => error,
-    };
-    assert!(matches!(error, PortError::Unavailable(_)));
-    assert!(
-        !broken_env.exists(),
-        "凭据解析失败必须在 spawn 之前失败关闭（进程不得启动）"
-    );
-    let _ = std::fs::remove_file(&broken_env);
-    broken.shutdown_all().await;
 }
 
 /// spawn 本身失败（profile 指向的程序不存在）：必须是**明确的不可用类**错误，且不留任何副作用。
@@ -290,7 +252,6 @@ async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
             "acpr-does-not-exist-anywhere",
             &["--scenario", "normal"],
         )],
-        FakeCredentials::ok(),
     );
     let agent = AgentId::new("agent-missing").expect("id");
     let session = SessionId::new(SESSION).expect("session");
@@ -354,7 +315,7 @@ async fn spawn_failure_is_explicit_unavailable_without_side_effects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn child_environment_is_exactly_the_launch_spec() {
     let (profile, dump) = dumping_profile("agent-1", "env");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let collector = Collector::new();
     let _endpoint = host
         .create(
@@ -375,25 +336,15 @@ async fn child_environment_is_exactly_the_launch_spec() {
         .lines()
         .filter_map(|line| line.split('=').next().map(str::to_owned))
         .collect();
-    // 允许的集合恰好是「白名单里的凭据绑定 + 必要的进程环境」。
-    let allowed: BTreeSet<String> = [
-        "FAKE_TOKEN",
-        "PATH",
-        "SystemRoot",
-        "TEMP",
-        "TMP",
-        "HOME",
-        "USERPROFILE",
-    ]
-    .iter()
-    .map(|name| (*name).to_owned())
-    .collect();
-    let unexpected: Vec<&String> = names.difference(&allowed).collect();
-    assert!(
-        unexpected.is_empty(),
-        "子进程环境不得包含未注入的变量：{unexpected:?}"
-    );
-    assert!(names.contains("FAKE_TOKEN"), "白名单内的凭据必须注入");
+    // 允许的集合恰好是固定的一组必要进程环境（缺失项跳过）。
+    let necessary = ["PATH", "HOME", "USERPROFILE", "SystemRoot", "TEMP", "TMP"];
+    let expected: BTreeSet<String> = necessary
+        .iter()
+        .filter(|name| std::env::var_os(name).is_some())
+        .map(|name| (*name).to_owned())
+        .collect();
+    assert_eq!(names, expected, "子进程环境必须与固定规则逐项相等");
+    assert!(!names.contains("FAKE_TOKEN"), "不得再注入任何凭据变量");
     // 注：这里曾有 4 条 `!names.contains("ACPR_*")` 断言，但父进程环境里根本没有那些名字（恒真，
     // 给不出任何安全感），已删除。「不得注入节点/设备密钥」由启动边界的**静态拒绝**覆盖：
     // `acpr_prefixed_credential_name_is_refused_before_spawn` 与 `launch.rs` 的单元测试。
@@ -402,62 +353,11 @@ async fn child_environment_is_exactly_the_launch_spec() {
     let _ = std::fs::remove_file(&dump);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn profile_selection_ignores_startup_configuration_files() {
-    // 启动配置文件（同名条目）必须**不被使用**：profile 只来自 `LocalConfigStore`。
-    let config_path = support::TempFile::new(&format!(
-        "acpr-agent-host-config-{}.json",
-        std::process::id()
-    ));
-    std::fs::write(
-        &config_path,
-        r#"{"agents":{"agent-1":{"command":"acpr-from-config-file","args":[]}}}"#,
-    )
-    .expect("写配置文件");
-
-    let (profile, dump) = dumping_profile("agent-1", "config");
-    // 可证伪的接缝是**注入的配置端口**：目录查询与启动都必须调用它（计数会变）。
-    let config = Arc::new(FakeConfig::new(vec![profile]));
-    let calls_before = config.profiles_calls();
-    let host = host_with_config(
-        Arc::clone(&config) as Arc<dyn LocalConfigStore>,
-        FakeCredentials::ok(),
-    );
-
-    let descriptors = host.agents().await.expect("agents");
-    assert_eq!(descriptors.len(), 1);
-    assert!(
-        config.profiles_calls() > calls_before,
-        "目录查询必须经由注入的配置端口取 profile（否则本用例不可证伪）"
-    );
-
-    let collector = Collector::new();
-    let _endpoint = create(
-        &host,
-        "agent-1",
-        &SessionId::new(SESSION).expect("session"),
-        &collector,
-    )
-    .await
-    .expect("create");
-    // 启动必须使用端口给的 profile：fake child 只有在我们注入的 profile 里才会写出快照。
-    assert!(
-        dump.exists(),
-        "必须使用 LocalConfigStore 的 profile（配置文件的同名条目不得生效）"
-    );
-    // 补充断言（本身很弱：快照里只有环境变量，命令名不会出现）；真正的反证是上面的端口调用计数。
-    let dumped = std::fs::read_to_string(&dump).expect("环境快照");
-    assert!(!dumped.contains("acpr-from-config-file"));
-    drop(_endpoint);
-    host.shutdown_all().await;
-    let _ = std::fs::remove_file(&dump);
-    let _ = std::fs::remove_file(&config_path);
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_reclaim_needs_timeout_and_never_fires_for_zero() {
     let (profile, dump) = dumping_profile("agent-1", "idle");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let session = SessionId::new(SESSION).expect("session");
     let collector = Collector::new();
@@ -500,32 +400,6 @@ async fn idle_reclaim_needs_timeout_and_never_fires_for_zero() {
 
 /// 白名单是注入上限：端口即使返回了白名单外的变量，也必须在 spawn 之前失败关闭。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn credential_variable_outside_the_allowlist_is_refused_before_spawn() {
-    let (profile, dump) = dumping_profile("agent-1", "leak");
-    let host = host(vec![profile], FakeCredentials::leaking());
-    let outcome = host
-        .create(
-            &SessionId::new(SESSION).expect("session"),
-            CreateSessionRequest::new(
-                agent_ref("agent-1"),
-                Some(support::workspace()),
-                None,
-                ResourceOrigin::Local,
-            ),
-            Collector::new().sink(),
-        )
-        .await;
-    assert!(outcome.is_err(), "白名单外的凭据变量必须被拒绝");
-    assert!(
-        !dump.exists(),
-        "拒绝必须发生在 spawn 之前（子进程不得启动）"
-    );
-    let _ = std::fs::remove_file(&dump);
-    host.shutdown_all().await;
-}
-
-/// 只协商过能力、没有会话的进程同样要按空闲超时回收（会话不是回收的必要条件）。
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_reclaim_also_applies_to_processes_without_sessions() {
     let host = host(
         vec![profile_with(
@@ -533,7 +407,6 @@ async fn idle_reclaim_also_applies_to_processes_without_sessions() {
             FAKE_AGENT,
             &["--scenario", "normal"],
         )],
-        FakeCredentials::ok(),
     );
     let agent = AgentId::new("agent-1").expect("id");
     let _ = host
@@ -556,7 +429,7 @@ async fn idle_reclaim_also_applies_to_processes_without_sessions() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reclaim_invalidates_runtime_and_session_mappings() {
     let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "reclaim");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let session = SessionId::new(SESSION).expect("session");
     let collector = Collector::new();
@@ -618,7 +491,7 @@ async fn reclaim_invalidates_runtime_and_session_mappings() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_clock_covers_outbound_session_activity() {
     let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "activity");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let endpoint = create(
         &host,
@@ -675,7 +548,7 @@ async fn idle_clock_covers_outbound_session_activity() {
 async fn idle_clock_is_refreshed_by_set_mode_without_declared_modes() {
     let (profile, dump, heartbeat) =
         dumping_heartbeat_profile_with("agent-1", "activity-set-mode", &["--no-modes"]);
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let endpoint = create(
         &host,
@@ -730,7 +603,7 @@ async fn idle_clock_is_refreshed_by_set_mode_without_declared_modes() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_clock_is_refreshed_by_set_config() {
     let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "activity-set-config");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let endpoint = create(
         &host,
@@ -775,7 +648,7 @@ async fn idle_clock_is_refreshed_by_set_config() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_clock_is_refreshed_by_cancel_turn() {
     let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "activity-cancel");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let endpoint = create(
         &host,
@@ -817,7 +690,7 @@ async fn idle_clock_is_refreshed_by_cancel_turn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn closed_session_does_not_block_idle_reclaim() {
     let (profile, dump, heartbeat) = dumping_heartbeat_profile("agent-1", "closed");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let endpoint = create(
         &host,
@@ -865,7 +738,7 @@ async fn exited_runtime_is_rebuilt_as_a_new_generation() {
         FAKE_AGENT,
         &["--scenario", "crash-on-prompt", "--dump-env", &dump_text],
     );
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let session = SessionId::new(SESSION).expect("session");
     let first = create(&host, "agent-1", &session, &Collector::new())
@@ -927,7 +800,7 @@ async fn exited_runtime_is_rebuilt_as_a_new_generation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn open_unknown_session_is_an_explicit_error() {
     let (profile, dump) = dumping_profile("agent-1", "open-unknown");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let unknown = SessionId::new("99999999-9999-4999-8999-999999999999").expect("session");
 
@@ -956,7 +829,6 @@ async fn open_refuses_a_runtime_whose_process_has_exited() {
             FAKE_AGENT,
             &["--scenario", "crash-on-prompt"],
         )],
-        FakeCredentials::ok(),
     );
     let agent = AgentId::new("agent-1").expect("id");
     let session = SessionId::new(SESSION).expect("session");
@@ -984,7 +856,7 @@ async fn open_refuses_a_runtime_whose_process_has_exited() {
 async fn shutdown_agent_closes_one_agent_without_touching_others() {
     let (profile_a, dump_a) = dumping_profile("agent-a", "shutdown-a");
     let (profile_b, dump_b) = dumping_profile("agent-b", "shutdown-b");
-    let host = host(vec![profile_a, profile_b], FakeCredentials::ok());
+    let host = host(vec![profile_a, profile_b]);
     let agent_a = AgentId::new("agent-a").expect("id");
     let agent_b = AgentId::new("agent-b").expect("id");
     let _ = host
@@ -1037,7 +909,7 @@ async fn shutdown_agent_closes_one_agent_without_touching_others() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_sweep_task_converges_on_shutdown_all() {
     let (profile, dump) = dumping_profile("agent-1", "sweep");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     // 超时给得足够大：本轮我们只关心「关闭后不再有进程」，不关心具体调度时序。
     let handle = spawn_idle_sweep(Arc::clone(&host), Duration::from_secs(3600));
@@ -1092,120 +964,13 @@ async fn idle_sweep_task_converges_on_shutdown_all() {
     let _ = std::fs::remove_file(&dump);
 }
 
-/// 凭据端口漏给一个「已绑定且在白名单内」的变量：必须在 spawn 之前失败关闭。
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dropped_allowlisted_credential_variable_fails_before_spawn() {
-    let dump = env_path("dropped");
-    let _ = std::fs::remove_file(&dump);
-    let dump_text = dump.to_string_lossy().into_owned();
-    // 两个白名单内的绑定，凭据端口故意只返回其中一个。
-    let profile = profile_with_env_vars(
-        "agent-1",
-        FAKE_AGENT,
-        &["--scenario", "normal", "--dump-env", &dump_text],
-        &["FAKE_TOKEN", "FAKE_DROPPED"],
-    );
-    let host = host(vec![profile], FakeCredentials::dropping("FAKE_DROPPED"));
-    let outcome = create(
-        &host,
-        "agent-1",
-        &SessionId::new(SESSION).expect("session"),
-        &Collector::new(),
-    )
-    .await;
-    assert!(
-        matches!(outcome, Err(PortError::Unavailable(_))),
-        "漏给白名单内的绑定变量必须失败关闭"
-    );
-    assert!(
-        !dump.exists(),
-        "拒绝必须发生在 spawn 之前（子进程不得启动）"
-    );
-    host.shutdown_all().await;
-    let _ = std::fs::remove_file(&dump);
-}
 
-/// 期望集合校验必须在 `NECESSARY_ENV` 注入**之前**：绑定名恰好是 `PATH` 的凭据被漏给时，
-/// 宿主机上的 `PATH` 不得冒充它把校验糊过去（否则会带着半个环境启动）。
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dropped_credential_bound_to_a_necessary_env_name_fails_before_spawn() {
-    let dump = env_path("dropped-path");
-    let _ = std::fs::remove_file(&dump);
-    let dump_text = dump.to_string_lossy().into_owned();
-    let profile = profile_with_env_vars(
-        "agent-1",
-        FAKE_AGENT,
-        &["--scenario", "normal", "--dump-env", &dump_text],
-        &["PATH"],
-    );
-    let host = host(vec![profile], FakeCredentials::dropping("PATH"));
-    let outcome = create(
-        &host,
-        "agent-1",
-        &SessionId::new(SESSION).expect("session"),
-        &Collector::new(),
-    )
-    .await;
-    assert!(
-        matches!(outcome, Err(PortError::Unavailable(_))),
-        "漏给绑定到 `PATH` 的凭据必须失败关闭（宿主机 `PATH` 不得冒充凭据）"
-    );
-    assert!(
-        !dump.exists(),
-        "拒绝必须发生在 spawn 之前（子进程不得启动）"
-    );
-    host.shutdown_all().await;
-    let _ = std::fs::remove_file(&dump);
-}
 
-/// `ACPR_` 前缀的注入名（节点/设备密钥类）在启动前静态拒绝，不依赖 `env_clear` 兜底。
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acpr_prefixed_credential_name_is_refused_before_spawn() {
-    let dump = env_path("acpr-prefix");
-    let _ = std::fs::remove_file(&dump);
-    let dump_text = dump.to_string_lossy().into_owned();
-    let profile = profile_with_env_vars(
-        "agent-1",
-        FAKE_AGENT,
-        &["--scenario", "normal", "--dump-env", &dump_text],
-        &["ACPR_NODE_KEY"],
-    );
-    let host = host(vec![profile], FakeCredentials::ok());
-    let outcome = create(
-        &host,
-        "agent-1",
-        &SessionId::new(SESSION).expect("session"),
-        &Collector::new(),
-    )
-    .await;
-    assert!(
-        matches!(
-            outcome,
-            Err(PortError::Unavailable(
-                UnavailableKind::SessionNotEstablished
-            ))
-        ),
-        "`ACPR_` 前缀的注入名必须被静态拒绝，且这次拒绝是**可证明未产生会话**的一类（`create` 的\
-         端口映射把它收敛成 `SessionNotEstablished`，public 错误仍取 `internal.unavailable`）"
-    );
-    assert!(
-        !dump.exists(),
-        "拒绝必须发生在 spawn 之前（子进程不得启动）"
-    );
-    host.shutdown_all().await;
-    let _ = std::fs::remove_file(&dump);
-}
-
-/// `session-create-settle-order`：窗口期事件队列超限的失败关闭要求「结束该 Agent」，不是只关端点。
-///
-/// `SessionBackendFactory::terminate_agent` 是那条要求在本仓的端口面：调用之后该运行时**不在运行目录
-/// 里**（此后按 `AgentId` 复用取不到它）、进程树被回收、已被关掉的端点不再接受写入，而再次创建启动的
-/// 是**新一代**进程。它同时固定「幂等：没有运行时是成功的空操作」。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminate_agent_ends_the_runtime_and_the_next_create_spawns_a_new_generation() {
     const SECOND: &str = "22222222-2222-4222-8222-222222222222";
     let (profile, dump) = dumping_profile("agent-1", "terminate");
-    let host = host(vec![profile], FakeCredentials::ok());
+    let host = host(vec![profile]);
     let agent = AgentId::new("agent-1").expect("id");
     let session = SessionId::new(SESSION).expect("session");
     let collector = Collector::new();

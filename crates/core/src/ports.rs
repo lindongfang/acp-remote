@@ -28,10 +28,10 @@ use crate::model::{
     LocalCursor, MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
     OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
     PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
-    PromptRequest, ProviderRef, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest,
-    SecretValue, SeedState, Sequence, ServerEpoch, SessionId, SessionRecoveryRecord,
+    PromptRequest, PublicError, RemoteSessionRef, RequestId, ResumeSessionRequest,
+    Sequence, ServerEpoch, SessionId, SessionRecoveryRecord,
     SessionReference, SessionSnapshot, SessionState, SessionSummary, Timestamp, Turn, TurnId,
-    TurnState, Version, WorkspaceAlias, WorkspaceRecord,
+    TurnState, Version, DirectoryId, DirectoryRecord,
 };
 
 /// `replay`/`local_replay` 的单批上限（`SYNC_PROTOCOL.md` §14：`maxReplayEventsPerBatch` 默认 500）。
@@ -74,6 +74,7 @@ pub struct TurnAccepted {
 #[async_trait]
 pub trait AgentCatalog: Send + Sync {
     async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError>;
+    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError>;
     async fn agent_capabilities(&self, agent: &AgentRef) -> Result<CapabilitySet, PortError>;
 }
 
@@ -255,9 +256,9 @@ pub struct SettledSession {
     pub agent_session_id: Option<AgentSessionId>,
     /// `owned_session.workspace_cwd`：core **自己**已解析的规范化绝对路径（不依赖后端回报）。
     pub workspace_cwd: Option<String>,
-    /// `owned_session.workspace_alias`：同一次解析用掉的**别名原文**（目录归属的唯一投影来源）；
+    /// `owned_session.workspace_directory_id`：同一次解析用掉的**别名原文**（目录归属的唯一投影来源）；
     /// 目录来源是客户端提供的路径时没有别名，写 `None` 即「未分组」。
-    pub workspace_alias: Option<String>,
+    pub workspace_directory_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -290,14 +291,14 @@ pub struct SessionUpdate {
     /// `owned_session.workspace_cwd`：`None` = 不改该列。语义同
     /// [`SessionUpdate::agent_session_id`]：`session.create` 走落账提交，本列只服务其它提交方。
     pub workspace_cwd: Option<String>,
-    /// `owned_session.workspace_alias`：`None` = 不改该列。语义同
+    /// `owned_session.workspace_directory_id`：`None` = 不改该列。语义同
     /// [`SessionUpdate::agent_session_id`]：`session.create` 走落账提交，本列只服务其它提交方。
     ///
     /// 来源是客户端提供的目录时该次解析**没有别名**，本列因此保持 `NULL`（「未分组」）。
     /// 写入后**只有读取路径**消费它（`SessionStore::list` 投影出 `SessionSummary::workspace`）；
     /// 恢复流程既不读也不改它（`SessionRecoveryRecord` 里没有这一项，§3.6）。`None` 语义为「未分组」，
     /// MUST NOT 由 `workspace_cwd` 反查别名补齐（`design.md` D1）。
-    pub workspace_alias: Option<String>,
+    pub workspace_directory_id: Option<String>,
 }
 
 /// 交互的一次解析（`InteractionResolution` + 解析者，供 `owned_interaction` 的
@@ -606,7 +607,7 @@ pub trait SessionStore: Send + Sync {
     async fn load(&self, session: &SessionId) -> Result<Option<SessionSnapshot>, PortError>;
 
     /// 会话列表。返回的每个 [`SessionSummary`] 的 `workspace` **必须**取自该会话行持久化的
-    /// `owned_session.workspace_alias`（展示名按别名关联目录记录取得，取不到时回退为别名本身）；
+    /// `owned_session.workspace_directory_id`（展示名按别名关联目录记录取得，取不到时回退为别名本身）；
     /// 别名为 `NULL` 时就是 `None`（未分组）。
     ///
     /// 实现 MUST NOT 按 `owned_session.workspace_cwd` 反查别名解析表来补出归属：`NULL` 就是未分组，
@@ -631,7 +632,7 @@ pub trait SessionStore: Send + Sync {
     /// 可投影形状，§3.6）。会话行不存在，或任一列为 `NULL`（该会话没有可用于恢复的数据）时返回
     /// `Ok(None)`——`NULL` 不是错误，也不得被推导或补齐。
     ///
-    /// 本方法**不读 `workspace_alias`**：恢复一律以持久化的 cwd 原文为权威，不按别名重解析，目录归属
+    /// 本方法**不读 `workspace_directory_id`**：恢复一律以持久化的 cwd 原文为权威，不按别名重解析，目录归属
     /// 是投影期的事（§3.6、`design.md` D1）。
     async fn load_recovery(
         &self,
@@ -1094,32 +1095,10 @@ pub struct ImportRemoval {
     pub context: WriteContext,
 }
 
-/// 写入一个 Agent profile（§11.6）。`put_profile` 是唯一写入默认 profile 的入口：至多一个
-/// `default = true`，切换默认必须是一次调用的原子写集。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProfileWrite {
-    pub profile: AgentProfile,
-    pub context: WriteContext,
-}
-
 /// 写入一个 workspace 记录（§11.6）。
 #[derive(Debug, Clone, PartialEq)]
-pub struct WorkspaceWrite {
-    pub record: WorkspaceRecord,
-    pub context: WriteContext,
-}
-
-/// 写入一个 Provider 引用（§11.6）：只记字段名、keystore 引用与版本。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderRefWrite {
-    pub reference: ProviderRef,
-    pub context: WriteContext,
-}
-
-/// 种子导入（§11.6）：`profiles` 与「已初始化」标记在同一事务里提交（空列表也写标记）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct SeedWrite {
-    pub profiles: Vec<AgentProfile>,
+pub struct DirectoryWrite {
+    pub record: DirectoryRecord,
     pub context: WriteContext,
 }
 
@@ -1209,45 +1188,13 @@ pub trait ExportStore: Send + Sync {
     async fn remove_import(&self, write: ImportRemoval) -> Result<(), PortError>;
 }
 
-/// 本地配置存储（§11.6）：profile、workspace、Provider 引用与首次初始化标记。
+/// 本地配置存储（§11.6）：只承载目录记录；Agent 声明来自启动配置。
 #[async_trait]
 pub trait LocalConfigStore: Send + Sync {
-    async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError>;
+    async fn directories(&self) -> Result<Vec<DirectoryRecord>, PortError>;
 
-    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError>;
-
-    async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError>;
-
-    async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError>;
-
-    async fn workspace(&self, alias: &WorkspaceAlias)
-    -> Result<Option<WorkspaceRecord>, PortError>;
-
-    async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError>;
-
-    async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError>;
-
-    async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError>;
-
-    /// 首次初始化标记：`seeded = false` 时启动流程才能导入种子。
-    async fn seed_state(&self) -> Result<SeedState, PortError>;
-
-    /// 种子导入与「已初始化」标记同一事务提交（空列表也写标记）。
-    async fn mark_seeded(&self, write: SeedWrite) -> Result<(), PortError>;
-}
-
-/// 凭据解析（§11.6）：把 profile 的凭据绑定解析成子进程环境变量。
-///
-/// 由组合根用平台 keystore 实现并注入 `agent-host`（`agent-host` 不依赖 `identity-auth`）。
-#[async_trait]
-pub trait CredentialResolver: Send + Sync {
-    /// 解析启动子进程所需的全部环境变量。只允许解析 profile 的 `env` 绑定与 `env_allowlist` 的交集；
-    /// 未绑定、未列入白名单或引用失效（keystore 不可用 / 字段不存在）→
-    /// `Unavailable(KeystoreUnavailable)`，**失败关闭**：不得静默跳过该变量后继续启动。
-    async fn resolve_env(
-        &self,
-        profile: &AgentProfile,
-    ) -> Result<Vec<(String, SecretValue)>, PortError>;
+    async fn directory(&self, directory_id: &DirectoryId)
+    -> Result<Option<DirectoryRecord>, PortError>;
 }
 
 /// 审计查询条件；`actions` 为空 = 不按动作过滤。

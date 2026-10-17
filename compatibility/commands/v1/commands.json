@@ -25,9 +25,7 @@
     "grant.remote-work": ["session.create", "session.resume"]
   },
   "localCapabilities": [
-    "local.workspace.select",
     "local.agent.configure",
-    "local.provider.configure",
     "local.device.manage",
     "local.export.manage",
     "local.node.rotate-key",

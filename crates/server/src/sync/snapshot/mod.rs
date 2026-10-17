@@ -149,9 +149,8 @@ pub async fn plan(
         // 规范化路径只在协商了 `core.workspace-path.v1` 时出现（`include_path` 就是本连接的那个协商
         // 结果），未协商时该键**缺席**——条目是 `additionalProperties: false` 的封闭对象，只协商
         // `core.local-catalog.v1` 的旧客户端因此仍收到与本变更前逐字节相同的两个键。
-        let include_path = inputs.features.contains(WORKSPACE_PATH_FEATURE);
         let catalog = core
-            .sync_workspace_catalog(&Actor::LocalCli, include_path)
+            .sync_workspace_catalog(&Actor::LocalCli, true)
             .await?;
         let items = catalog
             .iter()
@@ -164,7 +163,7 @@ pub async fn plan(
             index,
             SnapshotItems::Workspaces(items),
         )?);
-        let profiles = core.profiles(&Actor::LocalCli).await?;
+        let profiles = core.agent_profiles(&Actor::LocalCli).await?;
         let items = profiles
             .iter()
             .map(wire_agent)
@@ -256,7 +255,6 @@ pub const LOCAL_CATALOG_FEATURE: &str = "core.local-catalog.v1";
 ///
 /// 未协商时该键**缺席**（不是 `null`、不是空串）：条目是 `additionalProperties: false` 的封闭对象，
 /// 只协商 `core.local-catalog.v1` 的旧客户端多收到一个键就会拒收整条消息（§9.4）。
-pub const WORKSPACE_PATH_FEATURE: &str = "core.workspace-path.v1";
 
 /// `resource.remote-origin.v1` 的门控（已导入会话与其来源信息）。
 pub const REMOTE_ORIGIN_FEATURE: &str = "resource.remote-origin.v1";
@@ -310,8 +308,7 @@ fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessi
     let workspace = if catalog {
         Some(match summary.workspace() {
             Some(reference) => Nullable::value(wire_workspace_ref(
-                reference.alias().as_str(),
-                reference.display_name(),
+                reference.directory_id().as_str(),
             )?),
             None => Nullable::null(),
         })
@@ -366,19 +363,14 @@ fn wire_session(summary: &CoreSessionSummary, catalog: bool) -> Option<WireSessi
 /// **快照侧**可见面（§9.4/§12.3）；会话摘要的目录引用仍是 `workspaceRef` 的两个键。
 fn wire_workspace(entry: &CoreWorkspaceCatalogEntry) -> Option<WireWorkspaceCatalogEntry> {
     Some(WireWorkspaceCatalogEntry {
-        alias: NonEmptyText::<64>::parse(entry.alias().as_str()).ok()?,
-        display_name: NonEmptyText::<128>::parse(entry.display_name()).ok()?,
-        path: match entry.path() {
-            Some(path) => Some(NonEmptyText::<4096>::parse(path).ok()?),
-            None => None,
-        },
+        directory_id: NonEmptyText::<32>::parse(entry.directory_id().as_str()).ok()?,
+        path: NonEmptyText::<4096>::parse(entry.path()).ok()?,
     })
 }
 
-fn wire_workspace_ref(alias: &str, display_name: &str) -> Option<WireWorkspaceRef> {
+fn wire_workspace_ref(directory_id: &str) -> Option<WireWorkspaceRef> {
     Some(WireWorkspaceRef {
-        alias: NonEmptyText::<64>::parse(alias).ok()?,
-        display_name: NonEmptyText::<128>::parse(display_name).ok()?,
+        directory_id: NonEmptyText::<32>::parse(directory_id).ok()?,
     })
 }
 

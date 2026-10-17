@@ -15,12 +15,8 @@ pub enum Method {
     DaemonStatus,
     /// `daemon.stop`
     DaemonStop,
-    /// `workspace.select`（`local.workspace.select`）
-    WorkspaceSelect,
-    /// `agent.configure`（`local.agent.configure`）
-    AgentConfigure,
-    /// `provider.configure`（`local.provider.configure`）
-    ProviderConfigure,
+    /// `agent.list`（只读诊断）
+    AgentList,
     /// `device.pair.begin`（`local.device.manage`）
     DevicePairBegin,
     /// `device.pair.status`（`local.device.manage`）
@@ -65,14 +61,12 @@ pub enum Method {
 }
 
 impl Method {
-    /// 全部 25 个方法，顺序与 §5.1 的能力对应表一致（`node.rotate-key.begin` 是 §5.1 第 6 行
+    /// 全部 24 个方法，顺序与 §5.1 的能力对应表一致（`node.rotate-key.begin` 是 §5.1 第 6 行
     /// `local.node.rotate-key` 的方法，因此排在 `import.remove` 与 `audit.export` 之间）。
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 23] = [
         Self::DaemonStatus,
         Self::DaemonStop,
-        Self::WorkspaceSelect,
-        Self::AgentConfigure,
-        Self::ProviderConfigure,
+        Self::AgentList,
         Self::DevicePairBegin,
         Self::DevicePairStatus,
         Self::DevicePairConfirm,
@@ -100,9 +94,7 @@ impl Method {
         match self {
             Self::DaemonStatus => "daemon.status",
             Self::DaemonStop => "daemon.stop",
-            Self::WorkspaceSelect => "workspace.select",
-            Self::AgentConfigure => "agent.configure",
-            Self::ProviderConfigure => "provider.configure",
+            Self::AgentList => "agent.list",
             Self::DevicePairBegin => "device.pair.begin",
             Self::DevicePairStatus => "device.pair.status",
             Self::DevicePairConfirm => "device.pair.confirm",
@@ -166,7 +158,7 @@ mod tests {
 
     #[test]
     fn all_methods_round_trip_through_their_wire_name() {
-        assert_eq!(Method::ALL.len(), 25);
+        assert_eq!(Method::ALL.len(), 23);
         for method in Method::ALL {
             assert_eq!(Method::from_name(method.as_str()), Some(method));
             assert!(is_method_name(method.as_str()), "{}", method.as_str());

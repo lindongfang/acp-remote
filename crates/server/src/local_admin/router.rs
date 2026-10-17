@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use acp_core::model::{
     Actor, AgentProfile, ExportId, Fingerprint, GrantSet, NodeKind, PairingId, PairingRecord,
-    PairingState, PairingTarget, PeerIdentity, ProviderRef, ScopeSet, Timestamp, WorkspaceRecord,
+    PairingState, PairingTarget, PeerIdentity, ScopeSet, Timestamp, DirectoryRecord,
 };
 use acp_core::ports::{AuditQuery, AuditStore, Clock, TrustRecordRef};
 use acp_core::use_cases::UseCases;
@@ -36,7 +36,7 @@ use crate::local_admin::error::{AdminError, LocalErrorCode};
 use crate::local_admin::handler::LocalAdminHandler;
 use crate::local_admin::method::Method;
 use crate::local_admin::pairing::{self, PairingSessions};
-use crate::local_admin::params::{self, ProviderConfigure};
+use crate::local_admin::params;
 use crate::local_admin::view::{self, object, string_array, text, timestamp};
 
 /// [`LocalAdminRouter`] 的组合根注入口。
@@ -76,9 +76,7 @@ impl LocalAdminRouter {
         match method {
             Method::DaemonStatus => self.daemon_status(params).await,
             Method::DaemonStop => self.daemon_stop(params).await,
-            Method::WorkspaceSelect => self.workspace_select(params).await,
-            Method::AgentConfigure => self.agent_configure(params).await,
-            Method::ProviderConfigure => self.provider_configure(params).await,
+            Method::AgentList => self.agent_list(params).await,
             Method::ExportCreate => self.export_create(params).await,
             Method::ExportList => self.export_list(params).await,
             Method::ExportRevoke => self.export_revoke(params).await,
@@ -124,202 +122,27 @@ impl LocalAdminRouter {
     }
 
     // -----------------------------------------------------------------------------------------
-    // 本地配置族（§5.2）
-    // -----------------------------------------------------------------------------------------
-
-    async fn workspace_select(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
-        let select = params::workspace_select(params)?;
-        let actor = Actor::LocalCli;
-        let previous = self
+    async fn agent_list(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
+        params::reject_unknown_fields(params, &[])?;
+        let profiles = self
             .deps
             .core
-            .workspace(&actor, &select.alias)
+            .agent_profiles(&Actor::LocalCli)
             .await
-            .map_err(|error| params::map_port_error("workspace.select", error))?;
-        let now = self.deps.clock.now();
-        // 同一 alias 再次调用是更新：`createdAt` 保持首次写入值，`updatedAt` 用本次调用时间。
-        let created_at = previous
-            .as_ref()
-            .map_or_else(|| now.clone(), |record| record.created_at().clone());
-        let record = WorkspaceRecord::try_new(
-            select.alias,
-            &select.display_name,
-            &select.canonical_path,
-            created_at,
-            now,
-        )
-        .map_err(|error| params::invalid_params(format!("workspace.select: {error}")))?;
-        let result = object(vec![("workspace", Value::Object(view::workspace(&record)))]);
-        self.deps
-            .core
-            .put_workspace(&actor, record)
-            .await
-            .map_err(|error| params::map_port_error("workspace.select", error))?;
-        Ok(result)
-    }
-
-    async fn agent_configure(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
-        let configure = params::agent_configure(params)?;
-        let actor = Actor::LocalCli;
-        let previous = self
-            .deps
-            .core
-            .profile(&actor, &configure.agent_id)
-            .await
-            .map_err(|error| params::map_port_error("agent.configure", error))?;
-        let now = self.deps.clock.now();
-        let created_at = previous
-            .as_ref()
-            .map_or_else(|| now.clone(), |profile| profile.created_at().clone());
-        // 凭据到环境变量的绑定（`ProviderEnvBinding`）只能由种子配置导入，`agent.configure` 的
-        // params 不承载它（§5.2）：更新时保留既有绑定，避免一次 profile 编辑静默清空凭据注入；
-        // 若新的 `envAllowlist` 不再包含某个绑定名，`AgentProfile::try_new` 会拒绝整次写入
-        // （白名单是注入上限，不允许留下越界的绑定）。
-        let env = previous
-            .as_ref()
-            .map_or_else(Vec::new, |profile| profile.env().to_vec());
-        let profile = AgentProfile::try_new(
-            configure.agent_id,
-            &configure.display_name,
-            &configure.command,
-            configure.args,
-            configure.env_allowlist,
-            env,
-            configure.default,
-            created_at,
-            now,
-        )
-        .map_err(|error| params::invalid_params(format!("agent.configure: {error}")))?;
-        let result = object(vec![("agent", Value::Object(view::agent(&profile)))]);
-        self.deps
-            .core
-            .put_profile(&actor, profile)
-            .await
-            .map_err(|error| params::map_port_error("agent.configure", error))?;
-        Ok(result)
-    }
-
-    async fn provider_configure(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
-        let configure = params::provider_configure(params)?;
-        let actor = Actor::LocalCli;
-        let now = self.deps.clock.now();
-
-        let references = self
-            .deps
-            .core
-            .provider_refs(&actor)
-            .await
-            .map_err(|error| params::map_port_error("provider.configure", error))?;
-        let previous = references
+            .map_err(|error| params::map_port_error("agent.list", error))?;
+        let entries = profiles
             .iter()
-            .find(|reference| {
-                reference.id() == configure.provider_id && reference.kind() == configure.kind
+            .map(|profile| {
+                Value::Object(object(vec![
+                    ("agentId", text(profile.id().as_str())),
+                    ("command", text(profile.command())),
+                    ("args", Value::Array(profile.args().iter().map(text).collect())),
+                    ("default", Value::Bool(profile.is_default())),
+                ]))
             })
-            .cloned();
-        // §11.2 第 7 条：换绑必须递增 version；版本同时进入 keystore 标签，使「先写新条目、再提交
-        // SQLite 引用」的提交顺序成立（提交失败时旧引用仍指向完整的旧条目）。
-        let version = previous
-            .as_ref()
-            .map_or(1, |reference| reference.version() + 1);
-        let keystore_ref = provider_keystore_ref(&configure.provider_id, version);
-        let labels = self.write_credentials(&keystore_ref, &configure).await?;
-
-        let reference = match ProviderRef::try_new(
-            &configure.provider_id,
-            configure.kind,
-            &configure.display_name,
-            configure
-                .values
-                .iter()
-                .map(|(field, _)| field.clone())
-                .collect(),
-            &keystore_ref,
-            version,
-            now,
-        ) {
-            Ok(reference) => reference,
-            Err(error) => {
-                self.discard_credentials(&labels).await;
-                return Err(params::invalid_params(format!(
-                    "provider.configure: {error}"
-                )));
-            }
-        };
-        if let Err(error) = self.deps.core.put_provider_ref(&actor, reference).await {
-            // 引用未提交：本次写入的条目无引用者，尽力清理（清理失败只记日志，不改变错误码）。
-            self.discard_credentials(&labels).await;
-            return Err(params::map_port_error("provider.configure", error));
-        }
-
-        // 新引用已提交，旧版本的条目才可清理（§11.6 第 7 条）。
-        if let Some(previous) = previous {
-            let stale: Vec<String> = previous
-                .configured_fields()
-                .iter()
-                .map(|field| provider_secret_label(previous.keystore_ref(), field))
-                .collect();
-            self.discard_credentials(&stale).await;
-        }
-
-        Ok(object(vec![(
-            "provider",
-            Value::Object(view::provider(
-                &configure.provider_id,
-                configure.kind.as_str(),
-                &configure
-                    .values
-                    .iter()
-                    .map(|(field, _)| field.clone())
-                    .collect::<Vec<_>>(),
-            )),
-        )]))
+            .collect();
+        Ok(object(vec![("agents", Value::Array(entries))]))
     }
-
-    /// 把 `values` 里的凭据值逐项写入 keystore（先写新版本条目）；任一项失败即回滚本次已写入的条目。
-    async fn write_credentials(
-        &self,
-        keystore_ref: &str,
-        configure: &ProviderConfigure,
-    ) -> Result<Vec<String>, AdminError> {
-        let mut written = Vec::with_capacity(configure.values.len());
-        for (field, secret) in &configure.values {
-            let label = provider_secret_label(keystore_ref, field);
-            let value = SecretBytes::new(secret.as_bytes());
-            if let Err(error) = self
-                .deps
-                .keystore
-                .put_secret(SecretPurpose::ProviderCredential, &label, &value)
-                .await
-            {
-                self.discard_credentials(&written).await;
-                return Err(map_keystore_error(error));
-            }
-            written.push(label);
-        }
-        Ok(written)
-    }
-
-    /// 尽力删除给定条目（回滚或清理旧版本用）。失败只记结构化日志：新引用已经有效，
-    /// 残留条目是无引用者，不得把「清理失败」报成方法失败（§11.6 第 7 条）。
-    async fn discard_credentials(&self, labels: &[String]) {
-        for label in labels {
-            if let Err(error) = self
-                .deps
-                .keystore
-                .delete_secret(SecretPurpose::ProviderCredential, label)
-                .await
-            {
-                tracing::warn!(
-                    error = %error,
-                    "local admin keystore entry cleanup failed"
-                );
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Export/Import（§5.5）
-    // -----------------------------------------------------------------------------------------
 
     async fn export_create(&self, params: &JsonObject) -> Result<JsonObject, AdminError> {
         let actor = Actor::LocalCli;
@@ -338,12 +161,12 @@ impl LocalAdminRouter {
             ));
         }
         // §5.5：每个 alias 必须已在 `owned_workspace` 建立（Export 只引用符号名，不复制路径）。
-        for entry in record.workspace_aliases() {
-            let alias = entry.alias().clone();
+        for entry in record.workspace_directories() {
+            let alias = entry.directory_id().clone();
             if self
                 .deps
                 .core
-                .workspace(&actor, &alias)
+                .directory(&actor, &alias)
                 .await
                 .map_err(|error| params::map_port_error("export.create", error))?
                 .is_none()
@@ -1223,7 +1046,7 @@ mod tests {
     use crate::local_admin::envelope::{AdminOutcome, RequestId, decode_request};
     use crate::local_admin::method::Method;
     use crate::local_admin::test_support::TestWorld;
-    use acp_core::model::{AgentId, ProviderEnvBinding};
+    use acp_core::model::AgentId;
 
     fn request(method: Method, params: serde_json::Value) -> AdminRequest {
         let bytes = serde_json::to_vec(&json!({
@@ -1257,17 +1080,17 @@ mod tests {
     }
 
     fn export_params(world: &TestWorld) -> serde_json::Value {
-        world.write_workspace("project", "Project");
+        let directory_id = world.write_directory("project");
         json!({
             "exportId": "export-1",
             "displayName": "Export One",
             "agentIds": ["codex"],
-            "workspaceAliases": [{ "alias": "project", "displayName": "Project" }],
-            "defaultWorkspaceAlias": "project",
+            "workspaceDirectories": [{ "directoryId": directory_id.as_str() }],
+            "defaultWorkspaceDirectory": directory_id.as_str(),
             "templates": [{
                 "templateId": "template-1",
                 "displayName": "Template One",
-                "workspaceAlias": "project",
+                "workspaceDirectory": directory_id.as_str(),
                 "params": [],
             }],
             "defaultTemplateId": "template-1",
@@ -1351,374 +1174,6 @@ mod tests {
         assert_eq!(code, LocalErrorCode::Unavailable);
         assert!(message.contains("shutting down"), "{message}");
     }
-
-    #[tokio::test]
-    async fn workspace_select_persists_the_canonical_path_and_keeps_created_at() {
-        let world = TestWorld::new();
-        let router = world.router();
-        let directory = world.temporary_directory();
-        let root = directory.to_str().expect("utf-8").to_owned();
-
-        let first = result_of(
-            &router
-                .handle(request(
-                    Method::WorkspaceSelect,
-                    json!({ "alias": "project", "displayName": "P", "rootPath": root }),
-                ))
-                .await,
-        );
-        let canonical = std::fs::canonicalize(&directory).expect("可规范化");
-        assert_eq!(first["workspace"]["alias"], json!("project"));
-        assert_eq!(
-            first["workspace"]["rootPath"],
-            json!(canonical.to_str().expect("utf-8"))
-        );
-        assert_eq!(first["workspace"]["createdAt"], json!(world.clock_text()));
-        assert_eq!(
-            world.config.workspace_path("project").as_deref(),
-            canonical.to_str()
-        );
-
-        world.clock.set("2026-09-18T10:00:00.000Z");
-        let second = result_of(
-            &router
-                .handle(request(
-                    Method::WorkspaceSelect,
-                    json!({ "alias": "project", "displayName": "P2", "rootPath": root }),
-                ))
-                .await,
-        );
-        assert_eq!(
-            second["workspace"]["createdAt"],
-            json!("2026-09-18T09:12:03.412Z"),
-            "同一 alias 是更新，createdAt 保持首次写入值"
-        );
-        assert_eq!(world.config.profile_count(), 0);
-
-        let (code, _) = error_of(
-            &router
-                .handle(request(
-                    Method::WorkspaceSelect,
-                    json!({ "alias": "project", "displayName": "P", "rootPath": "relative" }),
-                ))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::InvalidParams);
-        std::fs::remove_dir_all(&directory).ok();
-    }
-
-    #[tokio::test]
-    async fn workspace_select_maps_storage_failures() {
-        let world = TestWorld::new();
-        world
-            .config
-            .fail_next_workspace_lookup(PortError::Unavailable(
-                acp_core::model::UnavailableKind::IoError,
-            ));
-        let router = world.router();
-        let directory = world.temporary_directory();
-        let (code, _) = error_of(
-            &router
-                .handle(request(
-                    Method::WorkspaceSelect,
-                    json!({
-                        "alias": "project",
-                        "displayName": "P",
-                        "rootPath": directory.to_str().expect("utf-8"),
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::Unavailable);
-        std::fs::remove_dir_all(&directory).ok();
-    }
-
-    #[tokio::test]
-    async fn agent_configure_writes_the_profile_and_reports_the_result_shape() {
-        let world = TestWorld::new();
-        let router = world.router();
-        let params = json!({
-            "agentId": "codex",
-            "displayName": "Codex",
-            "command": "codex",
-            "args": ["--acp"],
-            "envAllowlist": ["OPENAI_API_KEY"],
-            "default": true,
-        });
-        let result = result_of(
-            &router
-                .handle(request(Method::AgentConfigure, params.clone()))
-                .await,
-        );
-        assert_eq!(
-            result["agent"],
-            json!({
-                "agentId": "codex",
-                "displayName": "Codex",
-                "default": true,
-            })
-        );
-        assert_eq!(world.config.profile_count(), 1);
-        assert_eq!(world.config.profile_default("codex"), Some(true));
-
-        // 语法合法的 agentId 但缺少必需字段 → 参数错误，不产生写入。
-        let mut missing = params;
-        missing.as_object_mut().expect("object").remove("command");
-        let (code, _) = error_of(
-            &router
-                .handle(request(Method::AgentConfigure, missing))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::InvalidParams);
-        assert_eq!(world.config.profile_count(), 1, "校验失败不得写入");
-    }
-
-    #[tokio::test]
-    async fn provider_configure_writes_credentials_to_the_keystore_only() {
-        let world = TestWorld::new();
-        let router = world.router();
-        let params = json!({
-            "providerId": "openai.primary",
-            "kind": "provider",
-            "displayName": "OpenAI",
-            "values": { "api_key": "s3cret-value", "org": "acme" },
-        });
-        let response = router
-            .handle(request(Method::ProviderConfigure, params.clone()))
-            .await;
-        let result = result_of(&response);
-        assert_eq!(result["provider"]["providerId"], json!("openai.primary"));
-        assert_eq!(result["provider"]["kind"], json!("provider"));
-        assert_eq!(
-            result["provider"]["configuredFields"],
-            json!(["api_key", "org"])
-        );
-
-        // result 与整条响应里都不得出现凭据值（§4 规则 6、§5.2）。
-        let encoded = String::from_utf8(response.encode().expect("可编码")).expect("utf-8");
-        assert!(!encoded.contains("s3cret-value"), "{encoded}");
-        assert!(!encoded.contains("acme"), "{encoded}");
-
-        // 凭据只进 keystore；SQLite 侧只有字段名、引用与版本。
-        let label = format!("{}@v1.api_key", sha256_hex_prefix("openai.primary"));
-        assert_eq!(
-            world.keystore.secret(&label).as_deref(),
-            Some("s3cret-value")
-        );
-        assert_eq!(
-            world
-                .keystore
-                .secret(&format!("{}@v1.org", sha256_hex_prefix("openai.primary")))
-                .as_deref(),
-            Some("acme")
-        );
-        let recorded = world.config.provider_ref("openai.primary");
-        let (fields, keystore_ref, version) = recorded.expect("引用已提交");
-        assert_eq!(fields, vec!["api_key".to_owned(), "org".to_owned()]);
-        assert_eq!(
-            keystore_ref,
-            format!("{}@v1", sha256_hex_prefix("openai.primary"))
-        );
-        assert_eq!(version, 1);
-        assert!(!keystore_ref.contains("s3cret-value"));
-
-        // 再次配置：version 递增、新标签写入、旧标签清理。
-        let result = result_of(
-            &router
-                .handle(request(
-                    Method::ProviderConfigure,
-                    json!({
-                        "providerId": "openai.primary",
-                        "kind": "provider",
-                        "displayName": "OpenAI",
-                        "values": { "api_key": "rotated" },
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(result["provider"]["configuredFields"], json!(["api_key"]));
-        assert_eq!(
-            world
-                .keystore
-                .secret(&format!(
-                    "{}@v2.api_key",
-                    sha256_hex_prefix("openai.primary")
-                ))
-                .as_deref(),
-            Some("rotated")
-        );
-        assert!(
-            world.keystore.secret(&label).is_none(),
-            "新引用提交后旧版本条目被清理"
-        );
-        assert_eq!(
-            world.config.provider_ref("openai.primary").expect("引用").2,
-            2
-        );
-    }
-
-    #[tokio::test]
-    async fn provider_configure_rejects_bad_params_and_unavailable_keystore() {
-        let world = TestWorld::new();
-        let router = world.router();
-        for rejected in [
-            json!({ "providerId": "p", "kind": "provider", "displayName": "P", "values": {} }),
-            json!({ "providerId": "p", "kind": "other", "displayName": "P", "values": {"k": "v"} }),
-        ] {
-            let (code, _) = error_of(
-                &router
-                    .handle(request(Method::ProviderConfigure, rejected.clone()))
-                    .await,
-            );
-            assert_eq!(code, LocalErrorCode::InvalidParams, "{rejected}");
-        }
-        assert!(world.keystore.is_empty(), "参数非法不得写 keystore");
-
-        world.keystore.set_available(false);
-        let (code, message) = error_of(
-            &router
-                .handle(request(
-                    Method::ProviderConfigure,
-                    json!({
-                        "providerId": "p",
-                        "kind": "provider",
-                        "displayName": "P",
-                        "values": {"k": "v"},
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::Unavailable);
-        assert!(message.contains("keystore"), "{message}");
-        assert!(world.config.provider_ref("p").is_none(), "不得落库");
-        assert!(world.keystore.is_empty(), "不得降级为明文存储");
-    }
-
-    #[tokio::test]
-    async fn agent_configure_preserves_existing_provider_env_bindings() {
-        let world = TestWorld::new();
-        let router = world.router();
-        // 种子 profile（只能由配置文件导入）带凭据到环境变量的绑定。
-        world.config.seed_profile(
-            AgentProfile::try_new(
-                AgentId::new("codex").expect("agent id"),
-                "Codex",
-                "codex",
-                vec![],
-                vec!["OPENAI_API_KEY".to_owned()],
-                vec![
-                    ProviderEnvBinding::try_new("openai.primary", "api_key", "OPENAI_API_KEY")
-                        .expect("binding"),
-                ],
-                true,
-                world.clock.now(),
-                world.clock.now(),
-            )
-            .expect("种子 profile"),
-        );
-
-        let result = result_of(
-            &router
-                .handle(request(
-                    Method::AgentConfigure,
-                    json!({
-                        "agentId": "codex",
-                        "displayName": "Codex Two",
-                        "command": "codex",
-                        "args": ["--acp"],
-                        "envAllowlist": ["OPENAI_API_KEY"],
-                        "default": true,
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(result["agent"]["displayName"], json!("Codex Two"));
-        let stored = world.config.profile("codex").expect("profile");
-        assert_eq!(
-            stored.env().len(),
-            1,
-            "更新 profile 不得静默清空凭据注入绑定"
-        );
-
-        // 缩短白名单会与既有绑定冲突：整次写入被拒（白名单是注入上限）。
-        let (code, _) = error_of(
-            &router
-                .handle(request(
-                    Method::AgentConfigure,
-                    json!({
-                        "agentId": "codex",
-                        "displayName": "Codex Three",
-                        "command": "codex",
-                        "args": [],
-                        "envAllowlist": [],
-                        "default": true,
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::InvalidParams);
-        assert_eq!(
-            world
-                .config
-                .profile("codex")
-                .expect("profile")
-                .display_name(),
-            "Codex Two",
-            "被拒的写入不得部分生效"
-        );
-    }
-
-    #[tokio::test]
-    async fn provider_configure_rolls_back_credentials_when_a_later_step_fails() {
-        // ① 第二个字段写 keystore 失败：第一个字段的条目必须被回滚，且不写引用。
-        let world = TestWorld::new();
-        let router = world.router();
-        let rollback_label = format!("{}@v1.org", sha256_hex_prefix("openai.primary"));
-        world.keystore.fail_put_for(&rollback_label);
-        let (code, _) = error_of(
-            &router
-                .handle(request(
-                    Method::ProviderConfigure,
-                    json!({
-                        "providerId": "openai.primary",
-                        "kind": "provider",
-                        "displayName": "OpenAI",
-                        "values": { "api_key": "s3cret", "org": "acme" },
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::Unavailable);
-        assert!(world.keystore.is_empty(), "已写入的条目必须回滚");
-        assert!(world.config.provider_ref("openai.primary").is_none());
-
-        // ② keystore 写入成功但引用提交失败：同样回滚本次条目，错误码来自 PortError 映射。
-        let world = TestWorld::new();
-        world
-            .config
-            .fail_next_provider_ref(PortError::Backend(Box::new(std::io::Error::other(
-                "INSERT INTO owned_provider_ref failed at D:\\secret\\db.sqlite",
-            ))));
-        let router = world.router();
-        let (code, message) = error_of(
-            &router
-                .handle(request(
-                    Method::ProviderConfigure,
-                    json!({
-                        "providerId": "openai.primary",
-                        "kind": "provider",
-                        "displayName": "OpenAI",
-                        "values": { "api_key": "s3cret" },
-                    }),
-                ))
-                .await,
-        );
-        assert_eq!(code, LocalErrorCode::Internal);
-        assert!(!message.contains("db.sqlite"), "{message}");
-        assert!(world.keystore.is_empty(), "引用未提交的条目必须清理");
-        assert!(world.config.provider_ref("openai.primary").is_none());
-    }
-
     #[tokio::test]
     async fn export_create_requires_registered_aliases_and_a_free_id() {
         let world = TestWorld::new();
@@ -1729,12 +1184,12 @@ mod tests {
             "exportId": "export-1",
             "displayName": "Export One",
             "agentIds": ["codex"],
-            "workspaceAliases": [{ "alias": "project", "displayName": "Project" }],
-            "defaultWorkspaceAlias": "project",
+            "workspaceDirectories": [{ "directoryId": "0123456789abcdef0123456789abcdef" }],
+            "defaultWorkspaceDirectory": "0123456789abcdef0123456789abcdef",
             "templates": [{
                 "templateId": "template-1",
                 "displayName": "Template One",
-                "workspaceAlias": "project",
+                "workspaceDirectory": "0123456789abcdef0123456789abcdef",
                 "params": [],
             }],
             "defaultTemplateId": "template-1",
@@ -1747,7 +1202,7 @@ mod tests {
                 .await,
         );
         assert_eq!(code, LocalErrorCode::NotFound);
-        assert!(message.contains("project"), "{message}");
+        assert!(message.contains("not registered"), "{message}");
         assert_eq!(world.exports.count(), 0);
 
         let params = export_params(&world);
@@ -1775,7 +1230,7 @@ mod tests {
         let world = TestWorld::new();
         world.exports.seed_revoked("export-old");
         let router = world.router();
-        world.write_workspace("project", "Project");
+        world.write_directory("project");
         let created = result_of(
             &router
                 .handle(request(Method::ExportCreate, export_params(&world)))
@@ -2132,10 +1587,7 @@ mod tests {
         for (method, params) in [
             (Method::DaemonStatus, json!({})),
             (Method::ImportAdd, json!({})),
-            (
-                Method::WorkspaceSelect,
-                json!({"alias": "a", "displayName": "A"}),
-            ),
+            (Method::AgentList, json!({})),
         ] {
             let response = router.handle(request(method, params)).await;
             assert_eq!(
@@ -2889,7 +2341,7 @@ mod tests {
         assert_eq!(listed["nodes"][0]["exportIds"], json!([]));
         assert_eq!(listed["nodes"][0]["ownerEndpoint"], json!(null));
         assert_eq!(listed["nodes"][0]["lastConnectedAt"], json!(null));
-        assert_eq!(listed["nodes"][0]["displayName"], json!("Access Node"));
+        assert_eq!(listed["nodes"][0]["displayName"], json!(null));
         let node = world.trust.nodes_of(NODE_ID);
         assert_eq!(node.len(), 1);
         assert_eq!(node[0].state(), NodeState::Paired);

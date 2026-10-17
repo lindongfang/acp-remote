@@ -22,13 +22,13 @@ use std::time::Duration;
 
 use acp_core::model::{
     AgentId, AgentRef, AgentSessionId, CreateSessionRequest, ResolvedWorkspace, ResourceOrigin,
-    ResumeSessionRequest, SessionId, WorkspaceAlias,
+    ResumeSessionRequest, SessionId,
 };
 use acp_core::ports::SessionBackendFactory;
 use agent_host::{AgentHost, HostConfig};
 use serde_json::{Value, json};
 use support::{
-    Collector, FAKE_AGENT, FakeCredentials, TempFile, TestClock, TestIds, assert_param_keys,
+    Collector, FAKE_AGENT, TempFile, TestClock, TestIds, assert_param_keys,
     dump_count, params_of, profile_with, wait_for_dumped_method,
 };
 
@@ -47,10 +47,9 @@ const PERSISTED_ACP_SESSION: &str = "acp-session-cwd-form";
 
 fn host(agent_args: &[&str]) -> Arc<AgentHost> {
     Arc::new(AgentHost::new(
-        Arc::new(support::FakeConfig::new(vec![profile_with(
+        Arc::new(vec![profile_with(
             "agent-1", FAKE_AGENT, agent_args,
-        )])),
-        Arc::new(FakeCredentials::ok()),
+        )]),
         HostConfig::default(),
         Arc::new(TestIds::new()),
         Arc::new(TestClock::new()),
@@ -76,7 +75,7 @@ fn dump_file(label: &str) -> TempFile {
 /// 用给定的 canonical path **原文**构造 workspace（core 落盘的正是这个字符串）。
 fn workspace(canonical_path: &str) -> ResolvedWorkspace {
     ResolvedWorkspace::try_new(
-        WorkspaceAlias::new("demo").expect("alias"),
+        acp_core::model::derive_directory_id(canonical_path),
         canonical_path.to_owned(),
     )
     .expect("workspace（canonical path 必须是绝对路径形状）")

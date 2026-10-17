@@ -88,7 +88,7 @@ pub(crate) fn cursor(text_epoch: &str, value: u64) -> GlobalCursor {
 pub(crate) fn core_session(
     id: &str,
     title: &str,
-    workspace: Option<(&str, &str)>,
+    workspace: Option<&str>,
 ) -> SessionSummary {
     SessionSummary::try_new(
         SessionId::new(id).expect("session id"),
@@ -104,12 +104,10 @@ pub(crate) fn core_session(
         Version::from(3),
         timestamp("2026-09-17T12:10:00.123Z"),
         timestamp("2026-09-17T12:11:00.123Z"),
-        workspace.map(|(alias, display_name)| {
-            acp_core::model::WorkspaceRef::try_new(
-                acp_core::model::WorkspaceAlias::new(alias).expect("alias"),
-                display_name,
+        workspace.map(|directory_id| {
+            acp_core::model::WorkspaceRef::new(
+                acp_core::model::DirectoryId::new(directory_id).expect("directory id"),
             )
-            .expect("workspace ref")
         }),
     )
     .expect("session summary")
@@ -619,7 +617,7 @@ impl World {
             audit: audit_port,
             config: Arc::new(config.clone()),
             attachments: Arc::new(NotTouched),
-            catalog: Arc::new(FakeCatalog::default()),
+            catalog: Arc::new(FakeCatalog::with_config(config.clone())),
             clock: clock_port,
             ids,
         }));
@@ -661,33 +659,28 @@ impl World {
         self.trust.seed_device(record);
     }
 
-    /// 预置一条 workspace 记录（`workspaces` 资源的唯一来源；`canonical_path` 只在快照条目上、且只在
-    /// 客户端协商了 `core.workspace-path.v1` 时进快照）。
-    pub(crate) fn seed_workspace(&self, alias: &str, display_name: &str, path: &str) {
-        self.config.seed_workspace(
-            acp_core::model::WorkspaceRecord::try_new(
-                acp_core::model::WorkspaceAlias::new(alias).expect("alias"),
-                display_name,
+    /// 预置一条目录记录（`workspaces` 资源的唯一来源），返回其标识。
+    pub(crate) fn seed_directory(&self, path: &str) -> acp_core::model::DirectoryId {
+        let directory_id = acp_core::model::derive_directory_id(path);
+        self.config.seed_directory(
+            acp_core::model::DirectoryRecord::try_new(
+                directory_id.clone(),
                 path,
                 timestamp("2026-09-17T12:10:00.123Z"),
                 timestamp("2026-09-17T12:10:00.123Z"),
             )
-            .expect("workspace 记录"),
+            .expect("目录记录"),
         );
+        directory_id
     }
     /// 预置一条 Agent profile（`agents` 资源的唯一来源）。
     pub(crate) fn seed_agent(&self, id: &str, display_name: &str, default: bool) {
         self.config.seed_profile(
             AgentProfile::try_new(
                 acp_core::model::AgentId::new(id).expect("agent id"),
-                display_name,
                 "/usr/bin/codex",
                 Vec::new(),
-                Vec::new(),
-                Vec::new(),
                 default,
-                timestamp("2026-09-17T12:10:00.123Z"),
-                timestamp("2026-09-17T12:10:00.123Z"),
             )
             .expect("agent profile"),
         );

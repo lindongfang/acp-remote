@@ -21,7 +21,7 @@ use acp_core::use_cases::NodeLinkCatalogView;
 use node_link_protocol::catalog::{CatalogSnapshot, CatalogSubscribe, ExportEntryList};
 use node_link_protocol::common::{
     ExportAgent, ExportEntry, ExportId, GrantList, GrantName, NoContentCache, NonEmptyText,
-    OpaqueRef, WorkspaceAlias, WorkspaceAliasEntry, WorkspaceTemplate,
+    OpaqueRef, DirectoryId, WorkspaceDirectoryEntry, WorkspaceTemplate,
 };
 use node_link_protocol::envelope::{Envelope, MessageType};
 use node_link_protocol::error::ErrorCode;
@@ -365,14 +365,12 @@ fn project_entry(
             })
         })
         .collect::<Result<Vec<_>, ProjectionFault>>()?;
-    let workspace_aliases = export
-        .workspace_aliases()
+    let workspace_directories = export
+        .workspace_directories()
         .iter()
         .map(|entry| {
-            Ok(WorkspaceAliasEntry {
-                alias: WorkspaceAlias::parse(entry.alias().as_str())
-                    .map_err(|_| ProjectionFault::Field)?,
-                display_name: NonEmptyText::<128>::parse(entry.display_name())
+            Ok(WorkspaceDirectoryEntry {
+                directory_id: DirectoryId::parse(entry.directory_id().as_str())
                     .map_err(|_| ProjectionFault::Field)?,
             })
         })
@@ -389,7 +387,7 @@ fn project_entry(
             .map_err(|_| ProjectionFault::Field)?,
             display_name: NonEmptyText::<128>::parse(template.display_name())
                 .map_err(|_| ProjectionFault::Field)?,
-            workspace_alias: WorkspaceAlias::parse(template.workspace_alias().as_str())
+            workspace_directory: DirectoryId::parse(template.workspace_directory().as_str())
                 .map_err(|_| ProjectionFault::Field)?,
             params: Vec::new(),
         });
@@ -406,8 +404,8 @@ fn project_entry(
         display_name: NonEmptyText::<128>::parse(export.display_name())
             .map_err(|_| ProjectionFault::Field)?,
         agents,
-        workspace_aliases,
-        default_workspace_alias: WorkspaceAlias::parse(export.default_workspace_alias().as_str())
+        workspace_directories,
+        default_workspace_directory: DirectoryId::parse(export.default_workspace_directory().as_str())
             .map_err(|_| ProjectionFault::Field)?,
         templates,
         scopes: GrantList::new(scopes).map_err(|_| ProjectionFault::Field)?,
@@ -470,13 +468,13 @@ mod tests {
     }
 
     fn export(id: &str, scopes: &[&str], revoked: bool) -> ExportRecord {
-        let alias = acp_core::model::WorkspaceAlias::new("project").expect("alias");
+        let alias = acp_core::model::DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         ExportRecord::try_new(
             acp_core::model::ExportId::new(id).expect("export id"),
             "Project Export",
             vec![acp_core::model::AgentId::new("codex").expect("agent id")],
             vec![
-                acp_core::model::WorkspaceAliasEntry::try_new(alias.clone(), "Project")
+                acp_core::model::WorkspaceDirectoryEntry::try_new(alias.clone())
                     .expect("alias entry"),
             ],
             alias.clone(),
@@ -749,16 +747,16 @@ mod tests {
         assert_eq!(entry["displayName"], "Project Export");
         assert_eq!(entry["agents"][0]["agentId"], "codex");
         assert_eq!(
-            entry["agents"][0]["name"], "Codex",
+            entry["agents"][0]["name"], "codex",
             "名字来自本机 Agent 目录"
         );
         assert_eq!(entry["agents"][0]["capabilitiesRef"], "codex");
-        assert_eq!(entry["workspaceAliases"][0]["alias"], "project");
-        assert_eq!(entry["workspaceAliases"][0]["displayName"], "Project");
-        assert_eq!(entry["defaultWorkspaceAlias"], "project");
+        let directory_id = "0123456789abcdef0123456789abcdef";
+        assert_eq!(entry["workspaceDirectories"][0]["directoryId"], directory_id);
+        assert_eq!(entry["defaultWorkspaceDirectory"], directory_id);
         assert_eq!(entry["templates"][0]["templateId"], "template-1");
         assert_eq!(entry["templates"][0]["displayName"], "Template");
-        assert_eq!(entry["templates"][0]["workspaceAlias"], "project");
+        assert_eq!(entry["templates"][0]["workspaceDirectory"], directory_id);
         assert_eq!(
             entry["templates"][0]["params"],
             json!([]),

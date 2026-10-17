@@ -19,7 +19,7 @@ use acp_core::ports::SessionBackendFactory;
 use agent_host::{AgentHost, HostConfig};
 use serde_json::Value;
 use support::{
-    Collector, FAKE_AGENT, FakeCredentials, TestClock, TestIds, profile_with, timestamp,
+    Collector, FAKE_AGENT, TestClock, TestIds, profile_with, timestamp,
 };
 
 /// §10.3 要求 `turnId`、且**由适配器产出**的事件类型 → 除 `turnId` 外的最低字段。
@@ -70,12 +70,11 @@ const NOT_EXERCISED: &[&str] = &[
 
 fn host(scenario: &str) -> std::sync::Arc<AgentHost> {
     std::sync::Arc::new(AgentHost::new(
-        std::sync::Arc::new(support::FakeConfig::new(vec![profile_with(
+        std::sync::Arc::new(vec![profile_with(
             "agent-1",
             FAKE_AGENT,
             &["--scenario", scenario],
-        )])),
-        std::sync::Arc::new(FakeCredentials::ok()),
+        )]),
         HostConfig::default(),
         std::sync::Arc::new(TestIds::new()),
         std::sync::Arc::new(TestClock::new()),

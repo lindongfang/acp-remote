@@ -88,17 +88,12 @@ fn is_ascii_ref(text: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
-/// `^[a-z0-9][a-z0-9._-]{0,63}$`：workspace 符号名，不是路径。
-fn is_workspace_alias(text: &str) -> bool {
-    let mut bytes = text.bytes();
-    match bytes.next() {
-        Some(first) if first.is_ascii_lowercase() || first.is_ascii_digit() => {}
-        _ => return false,
-    }
-    text.len() <= 64
-        && bytes.all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
-        })
+/// `^[0-9a-f]{32}$`：由规范化路径派生的目录标识（不是路径）。
+fn is_directory_id(text: &str) -> bool {
+    text.len() == 32
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// `^[A-Za-z_][A-Za-z0-9_]{0,63}$`：模板参数名。
@@ -136,10 +131,10 @@ pattern_string!(
     128
 );
 pattern_string!(
-    /// `common.schema.json#/$defs/workspaceAlias`：`^[a-z0-9][a-z0-9._-]{0,63}$`，不是路径。
-    WorkspaceAlias,
-    is_workspace_alias,
-    64
+    /// `common.schema.json#/$defs/directoryId`：`^[0-9a-f]{32}$`，不透明标识、不是路径。
+    DirectoryId,
+    is_directory_id,
+    32
 );
 pattern_string!(
     /// `workspaceTemplateParam.name`：`^[A-Za-z_][A-Za-z0-9_]{0,63}$`。
@@ -513,13 +508,12 @@ pub struct ExportAgent {
     pub capabilities_ref: OpaqueRef,
 }
 
-/// `common.schema.json#/$defs/workspaceAliasEntry`。
+/// `common.schema.json#/$defs/workspaceDirectoryEntry`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkspaceAliasEntry {
-    pub alias: WorkspaceAlias,
-    #[serde(rename = "displayName")]
-    pub display_name: NonEmptyText<128>,
+pub struct WorkspaceDirectoryEntry {
+    #[serde(rename = "directoryId")]
+    pub directory_id: DirectoryId,
 }
 
 /// `workspaceTemplateParam.type`。
@@ -634,7 +628,7 @@ pub struct WorkspaceTemplateParam {
 pub struct WorkspaceTemplate {
     pub template_id: TemplateId,
     pub display_name: NonEmptyText<128>,
-    pub workspace_alias: WorkspaceAlias,
+    pub workspace_directory: DirectoryId,
     pub params: Vec<WorkspaceTemplateParam>,
 }
 
@@ -647,8 +641,8 @@ struct RawWorkspaceTemplate {
     template_id: TemplateId,
     #[serde(rename = "displayName")]
     display_name: NonEmptyText<128>,
-    #[serde(rename = "workspaceAlias")]
-    workspace_alias: WorkspaceAlias,
+    #[serde(rename = "workspaceDirectory")]
+    workspace_directory: DirectoryId,
     params: Vec<WorkspaceTemplateParam>,
 }
 
@@ -666,7 +660,7 @@ impl TryFrom<RawWorkspaceTemplate> for WorkspaceTemplate {
         Ok(Self {
             template_id: raw.template_id,
             display_name: raw.display_name,
-            workspace_alias: raw.workspace_alias,
+            workspace_directory: raw.workspace_directory,
             params: raw.params,
         })
     }
@@ -686,14 +680,14 @@ impl Serialize for WorkspaceTemplate {
         struct Out<'a> {
             template_id: &'a TemplateId,
             display_name: &'a NonEmptyText<128>,
-            workspace_alias: &'a WorkspaceAlias,
+            workspace_directory: &'a DirectoryId,
             params: &'a Vec<WorkspaceTemplateParam>,
         }
-        // `TemplateId`/`WorkspaceAlias` 等 newtype 的 `Serialize` 已是字符串，字段名由 `Out` 负责。
+        // `TemplateId`/`DirectoryId` 等 newtype 的 `Serialize` 已是字符串，字段名由 `Out` 负责。
         Out {
             template_id: &self.template_id,
             display_name: &self.display_name,
-            workspace_alias: &self.workspace_alias,
+            workspace_directory: &self.workspace_directory,
             params: &self.params,
         }
         .serialize(serializer)
@@ -733,8 +727,8 @@ pub struct ExportEntry {
     pub export_id: ExportId,
     pub display_name: NonEmptyText<128>,
     pub agents: Vec<ExportAgent>,
-    pub workspace_aliases: Vec<WorkspaceAliasEntry>,
-    pub default_workspace_alias: WorkspaceAlias,
+    pub workspace_directories: Vec<WorkspaceDirectoryEntry>,
+    pub default_workspace_directory: DirectoryId,
     pub templates: Vec<WorkspaceTemplate>,
     pub scopes: GrantList,
     pub capability_ceiling_ref: OpaqueRef,
@@ -754,10 +748,10 @@ struct RawExportEntry {
     #[serde(rename = "displayName")]
     display_name: NonEmptyText<128>,
     agents: Vec<ExportAgent>,
-    #[serde(rename = "workspaceAliases")]
-    workspace_aliases: Vec<WorkspaceAliasEntry>,
-    #[serde(rename = "defaultWorkspaceAlias")]
-    default_workspace_alias: WorkspaceAlias,
+    #[serde(rename = "workspaceDirectories")]
+    workspace_directories: Vec<WorkspaceDirectoryEntry>,
+    #[serde(rename = "defaultWorkspaceDirectory")]
+    default_workspace_directory: DirectoryId,
     templates: Vec<WorkspaceTemplate>,
     scopes: GrantList,
     #[serde(rename = "capabilityCeilingRef")]
@@ -774,8 +768,8 @@ impl TryFrom<RawExportEntry> for ExportEntry {
         for (field, actual, max) in [
             ("agents", raw.agents.len(), MAX_EXPORT_AGENTS),
             (
-                "workspaceAliases",
-                raw.workspace_aliases.len(),
+                "workspaceDirectories",
+                raw.workspace_directories.len(),
                 MAX_EXPORT_ALIASES,
             ),
             ("templates", raw.templates.len(), MAX_EXPORT_TEMPLATES),
@@ -788,8 +782,8 @@ impl TryFrom<RawExportEntry> for ExportEntry {
             export_id: raw.export_id,
             display_name: raw.display_name,
             agents: raw.agents,
-            workspace_aliases: raw.workspace_aliases,
-            default_workspace_alias: raw.default_workspace_alias,
+            workspace_directories: raw.workspace_directories,
+            default_workspace_directory: raw.default_workspace_directory,
             templates: raw.templates,
             scopes: raw.scopes,
             capability_ceiling_ref: raw.capability_ceiling_ref,
@@ -814,8 +808,8 @@ impl Serialize for ExportEntry {
             export_id: &'a ExportId,
             display_name: &'a NonEmptyText<128>,
             agents: &'a Vec<ExportAgent>,
-            workspace_aliases: &'a Vec<WorkspaceAliasEntry>,
-            default_workspace_alias: &'a WorkspaceAlias,
+            workspace_directories: &'a Vec<WorkspaceDirectoryEntry>,
+            default_workspace_directory: &'a DirectoryId,
             templates: &'a Vec<WorkspaceTemplate>,
             scopes: &'a GrantList,
             capability_ceiling_ref: &'a OpaqueRef,
@@ -826,8 +820,8 @@ impl Serialize for ExportEntry {
             export_id: &self.export_id,
             display_name: &self.display_name,
             agents: &self.agents,
-            workspace_aliases: &self.workspace_aliases,
-            default_workspace_alias: &self.default_workspace_alias,
+            workspace_directories: &self.workspace_directories,
+            default_workspace_directory: &self.default_workspace_directory,
             templates: &self.templates,
             scopes: &self.scopes,
             capability_ceiling_ref: &self.capability_ceiling_ref,
@@ -938,12 +932,11 @@ mod tests {
         assert!(ExportId::parse("has/slash").is_err());
         assert!(ExportId::parse(&"a".repeat(129)).is_err());
 
-        assert!(WorkspaceAlias::parse("default").is_ok());
-        assert!(WorkspaceAlias::parse("a").is_ok());
-        assert!(WorkspaceAlias::parse("A").is_err(), "必须小写开头");
-        assert!(WorkspaceAlias::parse("_leading").is_err());
-        assert!(WorkspaceAlias::parse("/abs/path").is_err(), "别名不是路径");
-        assert!(WorkspaceAlias::parse(&format!("a{}", "b".repeat(64))).is_err());
+        assert!(DirectoryId::parse("0123456789abcdef0123456789abcdef").is_ok());
+        assert!(DirectoryId::parse("0123456789ABCDEF0123456789abcdef").is_err(), "必须小写十六进制");
+        assert!(DirectoryId::parse("0123456789abcdef").is_err());
+        assert!(DirectoryId::parse("/abs/path").is_err(), "标识不是路径");
+        assert!(DirectoryId::parse(&"g".repeat(32)).is_err());
 
         assert!(TemplateParamName::parse("_private1").is_ok());
         assert!(TemplateParamName::parse("1leading").is_err());
@@ -985,8 +978,8 @@ mod tests {
             export_id: ExportId::parse("export-laptop-zed").expect("exportId"),
             display_name: NonEmptyText::parse("Laptop").expect("name"),
             agents: vec![agent; MAX_EXPORT_AGENTS + 1],
-            workspace_aliases: Vec::new(),
-            default_workspace_alias: WorkspaceAlias::parse("default").expect("alias"),
+            workspace_directories: Vec::new(),
+            default_workspace_directory: DirectoryId::parse("0123456789abcdef0123456789abcdef").expect("directory id"),
             templates: Vec::new(),
             scopes: GrantList::new(vec![GrantName::Observe]).expect("grants"),
             capability_ceiling_ref: OpaqueRef::parse("ceiling-1").expect("opaqueRef"),
@@ -1022,7 +1015,7 @@ mod tests {
         let template = WorkspaceTemplate {
             template_id: TemplateId::parse("tmpl.v1").expect("templateId"),
             display_name: NonEmptyText::parse("Default").expect("name"),
-            workspace_alias: WorkspaceAlias::parse("default").expect("alias"),
+            workspace_directory: DirectoryId::parse("0123456789abcdef0123456789abcdef").expect("directory id"),
             params: vec![param; MAX_TEMPLATE_PARAMS + 1],
         };
         let serialized = serde_json::to_string(&template).expect("可序列化");

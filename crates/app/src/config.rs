@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use acp_core::model::{AgentId, AgentProfile, ProviderEnvBinding};
+use acp_core::model::{AgentId, AgentProfile};
 use serde::Deserialize;
 use server::sync::conn::SyncConfig;
 use server::sync::conn::limits::{
@@ -116,48 +116,80 @@ pub enum LogFormat {
     Json,
 }
 
-/// `[[agents.profiles]]` 的一条种子（`CONFIG_REFERENCE.md` §7）。
-///
-/// 配置里是「首次初始化种子」：只在管理存储尚未初始化时导入一次，之后 SQLite 是唯一权威。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SeedProfile {
-    /// Agent selector。
-    pub agent_id: AgentId,
-    /// 展示名。配置文件示例未给出该键，缺省时回落为 `agent_id`（见 `RAW_PROFILE_DISPLAY_NAME` 注记）。
-    pub display_name: String,
-    /// 可执行文件路径或名字（不经 shell 拼接）。
-    pub command: String,
-    /// 逐项传给子进程的参数。
-    pub args: Vec<String>,
-    /// 环境变量白名单（注入集合的上限）。
-    pub env_allowlist: Vec<String>,
-    /// 凭据到环境变量的绑定（值来自平台 keystore，永不落配置文件）。
-    pub env: Vec<ProviderEnvBinding>,
-    /// 是否为默认 profile（全库至多一个）。
-    pub default: bool,
-}
-
-impl SeedProfile {
-    /// 以给定时间戳构造 `core` 的 `AgentProfile`（种子导入用）。
-    pub fn to_profile(&self, at: &acp_core::model::Timestamp) -> Result<AgentProfile, ConfigError> {
-        AgentProfile::try_new(
-            self.agent_id.clone(),
-            &self.display_name,
-            &self.command,
-            self.args.clone(),
-            self.env_allowlist.clone(),
-            self.env.clone(),
-            self.default,
-            at.clone(),
-            at.clone(),
-        )
-        .map_err(|error| ConfigError::Invalid {
-            detail: format!(
-                "`[[agents.profiles]]` 第 `{}` 项非法：{error}",
-                self.agent_id
-            ),
-        })
+/// `[agent]` 表的解析结果：键即 `agentId`，值是非空命令字符串或完整 argv 数组；可选 `default`。
+fn parse_agents(
+    raw: Option<std::collections::BTreeMap<String, toml::Value>>,
+) -> Result<Vec<AgentProfile>, ConfigError> {
+    let Some(table) = raw else {
+        return Ok(Vec::new());
+    };
+    let default = match table.get("default") {
+        None => None,
+        Some(toml::Value::String(name)) => Some(name.clone()),
+        Some(_) => {
+            return Err(ConfigError::Invalid {
+                detail: "`agent.default` 必须是字符串".to_owned(),
+            });
+        }
+    };
+    let mut profiles = Vec::new();
+    for (key, value) in &table {
+        if key == "default" {
+            continue;
+        }
+        let id = AgentId::new(key).map_err(|_| ConfigError::Invalid {
+            detail: format!("`agent.{key}` 不是合法的 agentId"),
+        })?;
+        let (command, args) = match value {
+            toml::Value::String(command) => (command.clone(), Vec::new()),
+            toml::Value::Array(items) => {
+                if items.is_empty() {
+                    return Err(ConfigError::Invalid {
+                        detail: format!("`agent.{key}` 的 argv 不得为空"),
+                    });
+                }
+                let mut parts = Vec::with_capacity(items.len());
+                for item in items {
+                    let toml::Value::String(part) = item else {
+                        return Err(ConfigError::Invalid {
+                            detail: format!("`agent.{key}` 的 argv 只能包含字符串"),
+                        });
+                    };
+                    if part.is_empty() {
+                        return Err(ConfigError::Invalid {
+                            detail: format!("`agent.{key}` 的 argv 不得包含空串"),
+                        });
+                    }
+                    parts.push(part.clone());
+                }
+                let command = parts.remove(0);
+                (command, parts)
+            }
+            _ => {
+                return Err(ConfigError::Invalid {
+                    detail: format!("`agent.{key}` 必须是命令字符串或 argv 数组"),
+                });
+            }
+        };
+        profiles.push(
+            AgentProfile::try_new(id, &command, args, false).map_err(|_| ConfigError::Invalid {
+                detail: format!("`agent.{key}` 的命令或 argv 非法"),
+            })?,
+        );
     }
+    match default {
+        None => {}
+        Some(name) => {
+            let index = profiles
+                .iter()
+                .position(|profile| profile.id().as_str() == name)
+                .ok_or_else(|| ConfigError::Invalid {
+                    detail: format!("`agent.default` 指向未声明的 `agent.{name}`"),
+                })?;
+            profiles[index] = profiles[index].clone().with_default(true);
+        }
+    }
+    Ok(profiles)
 }
 
 /// 已解析并校验的启动配置。
@@ -189,8 +221,10 @@ pub struct Config {
     pub flush_interval_ms: u64,
     /// 存储参数（`storage.*` 的已接线部分）。
     pub storage: SqliteStorageConfig,
-    /// 首次种子导入的 profile。
-    pub seeds: Vec<SeedProfile>,
+    /// `[node] name`：本节点展示名（可选）。
+    pub node_name: Option<String>,
+    /// `[agent]` 表解析出的 Agent 声明（唯一权威）。
+    pub agents: Vec<AgentProfile>,
     /// `identity.keystore`。
     pub keystore: KeystoreChoice,
     /// `identity.fail_closed_on_missing_keystore`。
@@ -345,10 +379,15 @@ impl Config {
         {
             unwired.push(key.to_owned());
         }
-        let seeds = match raw.agents {
-            Some(agents) => agents.into_seed_profiles()?,
-            None => Vec::new(),
-        };
+        let node_name = raw.node.and_then(|node| node.name);
+        if let Some(name) = &node_name {
+            if name.is_empty() || name.chars().count() > 128 {
+                return Err(ConfigError::Invalid {
+                    detail: "`node.name` 必须是 1..=128 字符".to_owned(),
+                });
+            }
+        }
+        let agents = parse_agents(raw.agent)?;
 
         let identity_section = raw.identity.unwrap_or_default();
         let keystore = match identity_section.keystore.as_deref() {
@@ -416,7 +455,8 @@ impl Config {
             tls,
             flush_interval_ms,
             storage,
-            seeds,
+            node_name,
+            agents,
             keystore,
             fail_closed_on_missing_keystore,
             logging,
@@ -529,7 +569,8 @@ struct RawConfig {
     sessions: Option<RawSessions>,
     storage: Option<RawStorage>,
     terminal: Option<RawTerminal>,
-    agents: Option<RawAgents>,
+    node: Option<RawNode>,
+    agent: Option<std::collections::BTreeMap<String, toml::Value>>,
     identity: Option<RawIdentity>,
     dev_mode: Option<RawDevMode>,
     logging: Option<RawLogging>,
@@ -774,92 +815,8 @@ impl RawTerminal {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawAgents {
-    profiles: Option<Vec<RawProfile>>,
-}
-
-impl RawAgents {
-    fn into_seed_profiles(self) -> Result<Vec<SeedProfile>, ConfigError> {
-        self.profiles
-            .unwrap_or_default()
-            .into_iter()
-            .enumerate()
-            .map(|(index, profile)| profile.into_seed(index))
-            .collect()
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawProfile {
-    agent_id: Option<String>,
-    /// `CONFIG_REFERENCE.md` §7 的示例没有给出该键，而 `AgentProfile` 要求 1..=128 的展示名：
-    /// 缺省时回落为 `agent_id`（`agent.configure` 之后以 SQLite 里的值为准）。
-    display_name: Option<String>,
-    command: Option<String>,
-    args: Option<Vec<String>>,
-    env_allowlist: Option<Vec<String>>,
-    default: Option<bool>,
-    env: Option<Vec<RawBinding>>,
-}
-
-impl RawProfile {
-    fn into_seed(self, index: usize) -> Result<SeedProfile, ConfigError> {
-        let detail = |what: &str| ConfigError::Invalid {
-            detail: format!("`[[agents.profiles]]` 第 {} 项缺少 `{what}`", index + 1),
-        };
-        let agent_id =
-            AgentId::new(&self.agent_id.ok_or_else(|| detail("agent_id"))?).map_err(|error| {
-                ConfigError::Invalid {
-                    detail: format!(
-                        "`[[agents.profiles]]` 第 {} 项 `agent_id` 非法：{error}",
-                        index + 1
-                    ),
-                }
-            })?;
-        let display_name = self
-            .display_name
-            .unwrap_or_else(|| agent_id.as_str().to_owned());
-        let env = self
-            .env
-            .unwrap_or_default()
-            .into_iter()
-            .map(|binding| binding.into_binding(index))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(SeedProfile {
-            agent_id,
-            display_name,
-            command: self.command.ok_or_else(|| detail("command"))?,
-            args: self.args.unwrap_or_default(),
-            env_allowlist: self.env_allowlist.unwrap_or_default(),
-            env,
-            default: self.default.unwrap_or(false),
-        })
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawBinding {
-    provider_id: Option<String>,
-    field: Option<String>,
+struct RawNode {
     name: Option<String>,
-}
-
-impl RawBinding {
-    fn into_binding(self, index: usize) -> Result<ProviderEnvBinding, ConfigError> {
-        let missing = |what: &str| ConfigError::Invalid {
-            detail: format!("`[[agents.profiles.env]]` 第 {} 项缺少 `{what}`", index + 1),
-        };
-        ProviderEnvBinding::try_new(
-            &self.provider_id.ok_or_else(|| missing("provider_id"))?,
-            &self.field.ok_or_else(|| missing("field"))?,
-            &self.name.ok_or_else(|| missing("name"))?,
-        )
-        .map_err(|error| ConfigError::Invalid {
-            detail: format!("`[[agents.profiles.env]]` 第 {} 项非法：{error}", index + 1),
-        })
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -961,7 +918,8 @@ mod tests {
         assert!(config.fail_closed_on_missing_keystore);
         assert_eq!(config.logging, LoggingConfig::default());
         assert_eq!(config.dev_mode, DevMode::default());
-        assert!(config.seeds.is_empty());
+        assert!(config.agents.is_empty());
+        assert!(config.node_name.is_none());
         // `sync.*` 三个键已接线：默认值来自 `CONFIG_REFERENCE.md` §2（与协议层的 §14 默认值同源，不在这
         // 里另写一份字面量），因此空配置下它们既生效、也不进「已知但未接线」清单。
         assert_eq!(config.sync, SyncConfig::default());
@@ -1014,17 +972,12 @@ file = "{root}/acpr.log"
 enabled = true
 ephemeral_identity = true
 
-[[agents.profiles]]
-agent_id = "codex"
-command = "codex-acp"
-args = ["--acp"]
-env_allowlist = ["OPENAI_API_KEY"]
-default = true
+[node]
+name = "work-pc"
 
-[[agents.profiles.env]]
-provider_id = "openai"
-field = "api_key"
-name = "OPENAI_API_KEY"
+[agent]
+default = "codex"
+codex = ["codex-acp", "--acp"]
 "#
         ))
         .expect("合法配置必须可解析");
@@ -1048,18 +1001,14 @@ name = "OPENAI_API_KEY"
         assert_eq!(config.logging.level, tracing::Level::DEBUG);
         assert_eq!(config.logging.format, LogFormat::Json);
         assert!(config.dev_mode.enabled && config.dev_mode.ephemeral_identity);
-        assert_eq!(config.seeds.len(), 1);
-        let seed = &config.seeds[0];
-        assert_eq!(seed.agent_id.as_str(), "codex");
-        assert_eq!(
-            seed.display_name, "codex",
-            "示例缺 display_name 时回落为 agent_id"
-        );
-        assert_eq!(seed.command, "codex-acp");
-        assert_eq!(seed.args, vec!["--acp".to_owned()]);
-        assert_eq!(seed.env.len(), 1);
-        assert_eq!(seed.env[0].name(), "OPENAI_API_KEY");
-        assert!(seed.default);
+        assert_eq!(config.node_name.as_deref(), Some("work-pc"));
+        assert_eq!(config.agents.len(), 1);
+        let agent = &config.agents[0];
+        assert_eq!(agent.id().as_str(), "codex");
+        assert_eq!(agent.display_name(), "codex");
+        assert_eq!(agent.command(), "codex-acp");
+        assert_eq!(agent.args(), ["--acp"]);
+        assert!(agent.is_default());
     }
 
     #[test]
@@ -1289,8 +1238,10 @@ allow_plaintext = true
             "[identity]\nkeystore = \"dpapi\"\n",
             "[logging]\nlevel = \"verbose\"\n",
             "[logging]\nformat = \"xml\"\n",
-            "[[agents.profiles]]\ncommand = \"codex\"\n",
-            "[[agents.profiles]]\nagent_id = \"codex\"\n",
+            "[agent]\na = \"\"\n",
+            "[agent]\ndefault = \"ghost\"\na = \"cmd\"\n",
+            "[agent]\na = [\"cmd\", \"\"]\n",
+            "[agent]\na = [\"cmd\", 1]\n",
         ] {
             assert!(parse(text).is_err(), "必须拒绝：{text}");
         }
@@ -1315,4 +1266,9 @@ allow_plaintext = true
         assert_eq!(config.keystore, KeystoreChoice::Ephemeral);
         assert!(!config.fail_closed_on_missing_keystore);
     }
+}
+
+/// CLI 的配置加载入口：CLI 只调用组合根提供的加载器，不自行解析 TOML 或复制校验规则。
+pub(crate) fn load_for_cli(path: Option<&std::path::Path>) -> Result<Loaded, ConfigError> {
+    Config::load(path)
 }

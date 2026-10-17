@@ -216,10 +216,10 @@ impl AuditStore for FakeAudit {
 #[derive(Clone, Default)]
 pub(crate) struct FakeConfig {
     profiles: Arc<Mutex<BTreeMap<String, AgentProfile>>>,
-    workspaces: Arc<Mutex<BTreeMap<String, WorkspaceRecord>>>,
-    providers: Arc<Mutex<Vec<ProviderRef>>>,
+    directories: Arc<Mutex<BTreeMap<String, DirectoryRecord>>>,
+
     failure: Arc<Mutex<Option<PortError>>>,
-    provider_failure: Arc<Mutex<Option<PortError>>>,
+
 }
 
 impl FakeConfig {
@@ -230,23 +230,25 @@ impl FakeConfig {
             .insert(profile.id().as_str().to_owned(), profile);
     }
 
-    pub(crate) fn seed_workspace(&self, record: WorkspaceRecord) {
-        self.workspaces
-            .lock()
-            .expect("配置锁")
-            .insert(record.alias().as_str().to_owned(), record);
+    pub(crate) fn seed_directory(&self, record: DirectoryRecord) {
+        self.directories.lock().expect("配置锁").insert(record.directory_id().as_str().to_owned(), record);
     }
 
-    pub(crate) fn workspace_path(&self, alias: &str) -> Option<String> {
-        self.workspaces
-            .lock()
-            .expect("配置锁")
-            .get(alias)
-            .map(|record| record.canonical_path().to_owned())
+    pub(crate) fn directory_path(&self, directory_id: &str) -> Option<String> {
+        self.directories.lock().expect("配置锁").get(directory_id).map(|record| record.canonical_path().to_owned())
     }
 
     pub(crate) fn profile(&self, agent_id: &str) -> Option<AgentProfile> {
         self.profiles.lock().expect("配置锁").get(agent_id).cloned()
+    }
+
+    pub(crate) fn all_profiles(&self) -> Vec<AgentProfile> {
+        self.profiles
+            .lock()
+            .expect("配置锁")
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn profile_count(&self) -> usize {
@@ -257,105 +259,25 @@ impl FakeConfig {
         self.profile(agent_id).map(|profile| profile.is_default())
     }
 
-    /// 已提交的 Provider 引用：`(configured_fields, keystore_ref, version)`。
-    pub(crate) fn provider_ref(&self, provider_id: &str) -> Option<(Vec<String>, String, u64)> {
-        self.providers
-            .lock()
-            .expect("配置锁")
-            .iter()
-            .find(|reference| reference.id() == provider_id)
-            .map(|reference| {
-                (
-                    reference.configured_fields().to_vec(),
-                    reference.keystore_ref().to_owned(),
-                    reference.version(),
-                )
-            })
-    }
-
     pub(crate) fn fail_next_workspace_lookup(&self, error: PortError) {
         *self.failure.lock().expect("配置锁") = Some(error);
-    }
-
-    /// 让下一次 Provider 引用提交失败（用于覆盖「引用未提交 → 清理本次 keystore 条目」分支）。
-    pub(crate) fn fail_next_provider_ref(&self, error: PortError) {
-        *self.provider_failure.lock().expect("配置锁") = Some(error);
     }
 }
 
 #[async_trait::async_trait]
 impl LocalConfigStore for FakeConfig {
-    async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError> {
-        Ok(self
-            .profiles
-            .lock()
-            .expect("配置锁")
-            .values()
-            .cloned()
-            .collect())
+    async fn directories(&self) -> Result<Vec<DirectoryRecord>, PortError> {
+        Ok(self.directories.lock().expect("配置锁").values().cloned().collect())
     }
 
-    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
-        Ok(self.profile(id.as_str()))
-    }
-
-    async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError> {
-        self.seed_profile(write.profile);
-        Ok(())
-    }
-
-    async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError> {
-        Ok(self
-            .workspaces
-            .lock()
-            .expect("配置锁")
-            .values()
-            .cloned()
-            .collect())
-    }
-
-    async fn workspace(
+    async fn directory(
         &self,
-        alias: &WorkspaceAlias,
-    ) -> Result<Option<WorkspaceRecord>, PortError> {
+        directory_id: &DirectoryId,
+    ) -> Result<Option<DirectoryRecord>, PortError> {
         if let Some(error) = self.failure.lock().expect("配置锁").take() {
             return Err(error);
         }
-        Ok(self
-            .workspaces
-            .lock()
-            .expect("配置锁")
-            .get(alias.as_str())
-            .cloned())
-    }
-
-    async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError> {
-        self.seed_workspace(write.record);
-        Ok(())
-    }
-
-    async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError> {
-        Ok(self.providers.lock().expect("配置锁").clone())
-    }
-
-    async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError> {
-        if let Some(error) = self.provider_failure.lock().expect("配置锁").take() {
-            return Err(error);
-        }
-        let mut providers = self.providers.lock().expect("配置锁");
-        providers.retain(|reference| {
-            !(reference.id() == write.reference.id() && reference.kind() == write.reference.kind())
-        });
-        providers.push(write.reference);
-        Ok(())
-    }
-
-    async fn seed_state(&self) -> Result<SeedState, PortError> {
-        unreachable!("{NOT_TOUCHED}")
-    }
-
-    async fn mark_seeded(&self, _write: SeedWrite) -> Result<(), PortError> {
-        unreachable!("{NOT_TOUCHED}")
+        Ok(self.directories.lock().expect("配置锁").get(directory_id.as_str()).cloned())
     }
 }
 
@@ -412,18 +334,18 @@ impl FakeExports {
             "Old Export",
             vec![AgentId::new("codex").expect("agent id")],
             vec![
-                WorkspaceAliasEntry::try_new(
-                    WorkspaceAlias::new("project").expect("alias"),
-                    "Project",
+                WorkspaceDirectoryEntry::try_new(
+                    DirectoryId::new("0123456789abcdef0123456789abcdef")
+                        .expect("directory id"),
                 )
-                .expect("alias entry"),
+                .expect("directory entry"),
             ],
-            WorkspaceAlias::new("project").expect("alias"),
+            DirectoryId::new("0123456789abcdef0123456789abcdef").expect("directory id"),
             vec![
                 ExportTemplate::try_new(
                     TemplateId::new("template-1").expect("template id"),
                     "Template",
-                    WorkspaceAlias::new("project").expect("alias"),
+                    DirectoryId::new("0123456789abcdef0123456789abcdef").expect("directory id"),
                     Vec::new(),
                 )
                 .expect("template"),
@@ -540,8 +462,8 @@ impl ExportStore for FakeExports {
             record.export_id().clone(),
             record.display_name(),
             record.agent_ids().to_vec(),
-            record.workspace_aliases().to_vec(),
-            record.default_workspace_alias().clone(),
+            record.workspace_directories().to_vec(),
+            record.default_workspace_directory().clone(),
             record.templates().to_vec(),
             record.default_template_id().clone(),
             record.scopes().clone(),
@@ -785,23 +707,50 @@ impl DaemonControl for FakeDaemon {
 #[derive(Clone, Default)]
 pub(crate) struct FakeCatalog {
     agents: Vec<AgentRef>,
+    config: FakeConfig,
 }
 
 impl FakeCatalog {
     fn with_agents(agents: Vec<AgentRef>) -> Self {
-        Self { agents }
+        Self {
+            agents,
+            config: FakeConfig::default(),
+        }
+    }
+
+    pub(crate) fn with_config(config: FakeConfig) -> Self {
+        Self {
+            agents: Vec::new(),
+            config,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl AgentCatalog for FakeCatalog {
     async fn agents(&self) -> Result<Vec<AgentDescriptor>, PortError> {
-        Ok(self
-            .agents
-            .iter()
-            .cloned()
-            .map(|agent| AgentDescriptor::new(agent, true, ResourceOrigin::Local))
-            .collect())
+        let mut descriptors = Vec::new();
+        for profile in self.config.all_profiles() {
+            descriptors.push(AgentDescriptor::new(
+                AgentRef::try_new(profile.id().clone(), profile.display_name())
+                    .map_err(PortError::from)?,
+                true,
+                ResourceOrigin::Local,
+            ));
+        }
+        for agent in &self.agents {
+            if !descriptors
+                .iter()
+                .any(|descriptor| descriptor.agent.agent_id() == agent.agent_id())
+            {
+                descriptors.push(AgentDescriptor::new(agent.clone(), true, ResourceOrigin::Local));
+            }
+        }
+        Ok(descriptors)
+    }
+
+    async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
+        Ok(self.config.profile(id.as_str()))
     }
 
     async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
@@ -2154,6 +2103,15 @@ impl TestWorld {
         let exports = FakeExports::default().with_clock(clock.clone());
         let audit = FakeAudit::default();
         let config = FakeConfig::default();
+        config.seed_profile(
+            AgentProfile::try_new(
+                AgentId::new("codex").expect("agent id"),
+                "acp-remote",
+                Vec::new(),
+                true,
+            )
+            .expect("profile"),
+        );
         let authority = Arc::new(Authority::new(
             NodeId::new("bdb2ec20-f98c-4d87-b789-e540d527ef87").expect("本机 node id"),
             KeyHandle::new("node-identity").expect("key handle"),
@@ -2224,11 +2182,8 @@ impl TestWorld {
             audit,
             config: Arc::new(config.clone()),
             attachments: Arc::new(NotTouched),
-            catalog: Arc::new(FakeCatalog::with_agents(vec![
-                AgentRef::try_new(AgentId::new("codex").expect("agent id"), "Codex")
-                    .expect("agent ref"),
-            ])),
             clock,
+            catalog: Arc::new(FakeCatalog::with_config(config.clone())),
             ids: Arc::new(FakeIds::default()),
         })
     }
@@ -2290,17 +2245,21 @@ impl TestWorld {
         path
     }
 
-    /// 建立一条 workspace 记录（`export.create` 的 alias 前置条件）。
-    pub(crate) fn write_workspace(&self, alias: &str, display_name: &str) {
-        let record = WorkspaceRecord::try_new(
-            WorkspaceAlias::new(alias).expect("alias"),
-            display_name,
-            &std::env::temp_dir().to_string_lossy(),
+    /// 记录一个本机目录（`export.create` 的前置条件），返回其标识。
+    pub(crate) fn write_directory(&self, name: &str) -> DirectoryId {
+        let path = std::env::temp_dir().join(format!("acpr-dir-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("目录可建");
+        let text = path.to_string_lossy().into_owned();
+        let directory_id = acp_core::model::derive_directory_id(&text);
+        let record = DirectoryRecord::try_new(
+            directory_id.clone(),
+            &text,
             timestamp(NOW),
             timestamp(NOW),
         )
-        .expect("workspace 记录");
-        self.config.seed_workspace(record);
+        .expect("目录记录");
+        self.config.seed_directory(record);
+        directory_id
     }
 }
 

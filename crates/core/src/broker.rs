@@ -1194,7 +1194,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             }))
         };
         let turns = vec![TurnChange::Create(NewTurn {
@@ -1339,7 +1339,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1413,7 +1413,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 });
                 self.apply_state(&session, state, command).await?;
             }
@@ -1628,7 +1628,7 @@ impl Broker {
             }),
             agent_session_id: None,
             workspace_cwd: None,
-            workspace_alias: None,
+            workspace_directory_id: None,
         });
         let commit = OwnedCommit {
             session: Some(session.clone()),
@@ -1758,12 +1758,12 @@ impl Broker {
             // 落账提交前一定已被补齐。
             agent_session_id: None,
             workspace_cwd,
-            // 目录归属**只**以别名落列（`owned_session.workspace_alias`）：展示名不落库，读路径按别名
+            // 目录归属**只**以别名落列（`owned_session.workspace_directory_id`）：展示名不落库，读路径按别名
             // 关联目录记录（`SessionStore::list` 的 LEFT JOIN）取得；本次的归属投影（别名 + 展示名）
             // 留在内存里供摘要用，两者同源由 `check_workspace_ownership` 保证。
-            workspace_alias: workspace
+            workspace_directory_id: workspace
                 .as_ref()
-                .map(|workspace| workspace.alias().as_str().to_owned()),
+                .map(|workspace| workspace.directory_id().as_str().to_owned()),
         };
         let summary = created_summary(&settled, &at, workspace.as_ref())?;
         let epoch = self.deps.ids.origin_epoch();
@@ -2661,7 +2661,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             }))
         } else {
             None
@@ -2803,7 +2803,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: next.turn.clone(),
@@ -2868,7 +2868,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.turn.clone(),
@@ -2998,7 +2998,7 @@ impl Broker {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: vec![TurnChange::Update(TurnUpdate {
                 turn: turn.clone(),
@@ -3289,7 +3289,7 @@ impl Broker {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 }));
                 // §6 第 16 条：已有已提交 delta 却没有 completed 的 turn，必须补写。
                 events.extend(
@@ -4392,7 +4392,7 @@ fn prepared_key(actor: &Actor, request: &RequestId) -> String {
 
 /// 目录归属（`WorkspaceRef`）与已解析 workspace 的一致性校验（§3.1、`design.md` D1）。
 ///
-/// 别名与展示名必须**同源**：落进 `owned_session.workspace_alias` 的是归属里的别名，投影给适配层的
+/// 别名与展示名必须**同源**：落进 `owned_session.workspace_directory_id` 的是归属里的别名，投影给适配层的
 /// 会话摘要用的也是同一个 `WorkspaceRef`。因此这里既不接受「解析出别名却没有归属投影」，也不接受
 /// 「两者的别名不同」——两种组装错误都失败关闭，而不是猜一个别名写库。
 fn check_workspace_ownership(
@@ -4402,16 +4402,17 @@ fn check_workspace_ownership(
     let resolved = create
         .workspace
         .as_ref()
-        .and_then(|workspace| workspace.alias());
+        .map(|workspace| workspace.directory_id());
     match (resolved, ownership.as_ref()) {
         (None, None) => Ok(None),
         (None, Some(_)) => Err(PortError::InvalidRequest(
             "本次解析没有别名，不得给出目录归属投影",
         )),
+        // 客户端提供的目录也会派生 directoryId，但没有登记记录；没有归属投影是合法状态。
         (Some(_), None) => Err(PortError::InvalidRequest(
-            "已解析的目录别名必须带上目录归属投影",
+            "已解析的目录必须带上目录归属投影",
         )),
-        (Some(alias), Some(owned)) if alias == owned.alias() => Ok(ownership),
+        (Some(alias), Some(owned)) if alias == owned.directory_id() => Ok(ownership),
         (Some(_), Some(_)) => Err(PortError::InvalidRequest(
             "目录归属的别名与本次解析结果不一致",
         )),
@@ -4421,9 +4422,9 @@ fn check_workspace_ownership(
 /// 落账后的会话摘要：适配层投影终态结果（Node Link 的 `SessionCreateResult.sessionMeta`、Sync 的
 /// `session` 资源）用它，因此**必须**与 `SessionStore::list` 对同一行给出的摘要逐字段同源——
 /// `state` 恒为 `idle`、`version` 恒为 1、两个时间戳都是落账提交的 `at`、目录归属就是落进
-/// `owned_session.workspace_alias` 的那个别名（展示名按别名关联目录记录，与本函数取的是同一个）。
+/// `owned_session.workspace_directory_id` 的那个别名（展示名按别名关联目录记录，与本函数取的是同一个）。
 ///
-/// 目录归属按**归属投影**（`WorkspaceRef`）而非 `SettledSession::workspace_alias` 取：别名是落库的
+/// 目录归属按**归属投影**（`WorkspaceRef`）而非 `SettledSession::workspace_directory_id` 取：别名是落库的
 /// 唯一取值，而展示名不落库（读路径按别名关联目录记录），因此摘要要同源就必须拿本次解析用的那份
 /// 投影。两者的别名必然相同——`check_workspace_ownership` 已比对过，不同即失败关闭。
 fn created_summary(
@@ -4646,9 +4647,9 @@ pub(crate) mod test_support {
         AttachmentGeneration, AttachmentId, AuditRecord, CapabilitySet, ConfigOption, DeviceId,
         DeviceRecord, EventId, ExportId, ExportRecord, ImportId, ImportRecord, ModeState, NodeId,
         NodeKind, NodeRecord, OriginCursor, OriginEpoch, PairingId, PairingPeer, PairingRecord,
-        PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction, ProviderRef,
-        ResourceOrigin, SeedState, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
-        WorkspaceAlias, WorkspaceRecord, WorkspaceRef,
+        PairingState, PairingTarget, PeerIdentity, PeerPublicKey, PendingInteraction,
+        ResourceOrigin, ServerEpoch, Session, SessionSnapshot, SessionSummary, Turn,
+        DirectoryId, DirectoryRecord, WorkspaceRef,
     };
     use crate::ports::{
         AckOutcome, AgentCatalog, AttachmentRef, AttachmentStore, AuditQuery, DeviceRevocation,
@@ -4656,9 +4657,9 @@ pub(crate) mod test_support {
         ImportRemoval, ImportWrite, ImportedSessionQuery, ImportedSessionRecord, LocalConfigStore,
         NodeConnectedWrite, NodeLinkSlice, NodeRevocation, NodeWrite, OwnedEventRecord,
         PairingClaimOutcome, PairingClaimWrite, PairingConsumption, PairingSettlementWrite,
-        PairingWrite, PendingInteractionOrigin, ProfileWrite, ProviderRefWrite, PruneReport,
-        RemoteCommandRef, RetentionPolicy, SeedWrite, SessionQuery, StoreHealth, SyncEventRecord,
-        SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted, WorkspaceWrite,
+        PairingWrite, PendingInteractionOrigin, PruneReport,
+        RemoteCommandRef, RetentionPolicy, SessionQuery, StoreHealth, SyncEventRecord,
+        SyncReplaySlice, TrustRecordRef, TrustStore, TurnAccepted, DirectoryWrite,
     };
 
     pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -4792,9 +4793,7 @@ pub(crate) mod test_support {
         pub(crate) exports: Mutex<Vec<ExportRecord>>,
         pub(crate) imports: Mutex<Vec<ImportRecord>>,
         pub(crate) profiles: Mutex<Vec<AgentProfile>>,
-        pub(crate) workspaces: Mutex<Vec<WorkspaceRecord>>,
-        pub(crate) provider_refs: Mutex<Vec<ProviderRef>>,
-        pub(crate) seed: Mutex<Option<SeedState>>,
+        pub(crate) workspaces: Mutex<Vec<DirectoryRecord>>,
         /// 管理写集实际携带的审计动作（断言「审计随写集提交」而不是事后补写）。
         pub(crate) write_audits: Mutex<Vec<AuditAction>>,
         /// `drop_import` 的调用次数（断言完整移除不再串联连接级清空）。
@@ -4851,7 +4850,7 @@ pub(crate) mod test_support {
 
     impl FakeWorld {
         /// 读取路径上的目录归属（§3.6/§5.2、`design.md` D1）：**只**按会话行持久化的
-        /// `workspace_alias` 取值，展示名按别名查目录记录（storage 侧那条 LEFT JOIN 的等价物），
+        /// `workspace_directory_id` 取值，展示名按别名查目录记录（storage 侧那条 LEFT JOIN 的等价物），
         /// 目录记录不存在时回退为别名本身——因此目录被删除/改名都不影响既有会话的归属。
         ///
         /// 本函数**不**看 `workspace_cwd`：`NULL` 就是未分组，任何情况下都不按路径反查别名。
@@ -4860,19 +4859,8 @@ pub(crate) mod test_support {
             state: &WorldState,
             session: &SessionId,
         ) -> Option<WorkspaceRef> {
-            let alias = state.workspace_aliases.get(session.as_str())?;
-            let display_name = lock(&self.workspaces)
-                .iter()
-                .find(|record| record.alias() == alias)
-                .map_or_else(
-                    || alias.as_str().to_owned(),
-                    |record| record.display_name().to_owned(),
-                );
-            // 取值来自已校验的 `WorkspaceRecord.display_name`（或别名原文），构造不会失败。
-            Some(
-                WorkspaceRef::try_new(alias.clone(), &display_name)
-                    .expect("目录引用的展示名已由值对象校验过"),
-            )
+            let directory_id = state.workspace_directories.get(session.as_str())?;
+            Some(WorkspaceRef::new(directory_id.clone()))
         }
     }
 
@@ -4881,10 +4869,10 @@ pub(crate) mod test_support {
         pub(crate) sessions: HashMap<String, Session>,
         /// 会话 id → `owned_session` 的两列恢复数据（§3.6 的窄读取源）。
         pub(crate) recoveries: HashMap<String, RecoveryColumns>,
-        /// 会话 id → `owned_session.workspace_alias`（目录归属的**唯一**来源；缺席 = `NULL` = 未分组）。
+        /// 会话 id → `owned_session.workspace_directory_id`（目录归属的**唯一**来源；缺席 = `NULL` = 未分组）。
         ///
         /// 与 `sessions`/`recoveries` 分开存，和 storage 侧一样：别名不是聚合的状态，恢复流程也不读它。
-        pub(crate) workspace_aliases: HashMap<String, WorkspaceAlias>,
+        pub(crate) workspace_directories: HashMap<String, DirectoryId>,
         pub(crate) turns: HashMap<String, Vec<Turn>>,
         pub(crate) events: Vec<CommittedEvent>,
         pub(crate) commands: HashMap<String, CommandRecord>,
@@ -4991,6 +4979,10 @@ pub(crate) mod test_support {
         pub(crate) fn new() -> Arc<Self> {
             Arc::new(Self::default())
         }
+        pub(crate) fn directories(&self) -> &Mutex<Vec<DirectoryRecord>> {
+            &self.workspaces
+        }
+
 
         pub(crate) fn fail_commit_at(&self, index: usize) {
             lock(&self.state).fail_at = Some(index);
@@ -5344,6 +5336,13 @@ pub(crate) mod test_support {
             Ok(lock(&self.world.catalog_agents).clone())
         }
 
+        async fn profile(
+            &self,
+            _id: &AgentId,
+        ) -> Result<Option<AgentProfile>, PortError> {
+            Ok(None)
+        }
+
         async fn agent_capabilities(&self, _agent: &AgentRef) -> Result<CapabilitySet, PortError> {
             Ok(CapabilitySet::empty())
         }
@@ -5443,10 +5442,10 @@ pub(crate) mod test_support {
                         columns.agent_session_id = settled.agent_session_id.clone();
                         columns.workspace_cwd = settled.workspace_cwd.clone();
                     }
-                    if let Some(alias) = settled.workspace_alias.as_ref() {
+                    if let Some(alias) = settled.workspace_directory_id.as_ref() {
                         state
-                            .workspace_aliases
-                            .insert(session_id.as_str().to_owned(), WorkspaceAlias::new(alias)?);
+                            .workspace_directories
+                            .insert(session_id.as_str().to_owned(), DirectoryId::new(alias)?);
                     }
                     created = Some(session_id);
                 }
@@ -5527,11 +5526,11 @@ pub(crate) mod test_support {
                             columns.workspace_cwd = Some(workspace_cwd);
                         }
                     }
-                    // §5.2：`workspace_alias` 同为窄写列，`None` = 不改；写入后只被读路径消费。
-                    if let Some(alias) = update.workspace_alias.clone() {
+                    // §5.2：`workspace_directory_id` 同为窄写列，`None` = 不改；写入后只被读路径消费。
+                    if let Some(alias) = update.workspace_directory_id.clone() {
                         state
-                            .workspace_aliases
-                            .insert(session_id.as_str().to_owned(), WorkspaceAlias::new(&alias)?);
+                            .workspace_directories
+                            .insert(session_id.as_str().to_owned(), DirectoryId::new(&alias)?);
                     }
                 }
                 None => {}
@@ -6737,76 +6736,18 @@ pub(crate) mod test_support {
 
     #[async_trait]
     impl LocalConfigStore for FakeLocalConfig {
-        async fn profiles(&self) -> Result<Vec<AgentProfile>, PortError> {
-            Ok(lock(&self.world.profiles).clone())
-        }
-
-        async fn profile(&self, id: &AgentId) -> Result<Option<AgentProfile>, PortError> {
-            Ok(lock(&self.world.profiles)
-                .iter()
-                .find(|profile| profile.id() == id)
-                .cloned())
-        }
-
-        async fn put_profile(&self, write: ProfileWrite) -> Result<(), PortError> {
-            let mut profiles = lock(&self.world.profiles);
-            if write.profile.is_default() {
-                profiles.retain(|profile| !profile.is_default());
-            }
-            profiles.retain(|profile| profile.id() != write.profile.id());
-            profiles.push(write.profile);
-            Ok(())
-        }
-
-        async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, PortError> {
+        async fn directories(&self) -> Result<Vec<DirectoryRecord>, PortError> {
             Ok(lock(&self.world.workspaces).clone())
         }
 
-        async fn workspace(
+        async fn directory(
             &self,
-            alias: &WorkspaceAlias,
-        ) -> Result<Option<WorkspaceRecord>, PortError> {
+            directory_id: &DirectoryId,
+        ) -> Result<Option<DirectoryRecord>, PortError> {
             Ok(lock(&self.world.workspaces)
                 .iter()
-                .find(|record| record.alias() == alias)
+                .find(|record| record.directory_id() == directory_id)
                 .cloned())
-        }
-
-        async fn put_workspace(&self, write: WorkspaceWrite) -> Result<(), PortError> {
-            let mut records = lock(&self.world.workspaces);
-            records.retain(|record| record.alias() != write.record.alias());
-            records.push(write.record);
-            Ok(())
-        }
-
-        async fn provider_refs(&self) -> Result<Vec<ProviderRef>, PortError> {
-            Ok(lock(&self.world.provider_refs).clone())
-        }
-
-        async fn put_provider_ref(&self, write: ProviderRefWrite) -> Result<(), PortError> {
-            let mut refs = lock(&self.world.provider_refs);
-            refs.retain(|reference| reference.id() != write.reference.id());
-            refs.push(write.reference);
-            Ok(())
-        }
-
-        async fn seed_state(&self) -> Result<SeedState, PortError> {
-            let world = lock(&self.world.seed);
-            match &*world {
-                Some(state) => Ok(state.clone()),
-                None => Ok(SeedState::unseeded()),
-            }
-        }
-
-        async fn mark_seeded(&self, write: SeedWrite) -> Result<(), PortError> {
-            let mut profiles = lock(&self.world.profiles);
-            for profile in write.profiles {
-                profiles.retain(|existing| existing.id() != profile.id());
-                profiles.push(profile);
-            }
-            *lock(&self.world.seed) =
-                Some(SeedState::try_new(true, Some(write.context.at)).expect("seeded"));
-            Ok(())
         }
     }
 
@@ -7201,7 +7142,7 @@ mod tests {
         AcpRaw, AgentId, AgentRef, AgentSessionId, CachePolicy, DeviceId, EventId, ExportId,
         ExportRecord, ExportTemplate, Fingerprint, GrantSet, InteractionKind, InteractionOption,
         ModeState, NodeRecord, PairingId, PendingInteraction, ResourceOrigin, TemplateId,
-        WorkspaceAlias, WorkspaceAliasEntry,
+        DirectoryId, WorkspaceDirectoryEntry,
     };
 
     /// 一个已认证的设备主体（§10.1 的「按诱发命令的执行者分类」断言与授权回归都用它）。
@@ -8993,7 +8934,7 @@ mod tests {
                 }),
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -9145,12 +9086,12 @@ mod tests {
     /// 覆盖该会话的 agent。
     fn seed_node_owner_grant(harness: &Harness, node: &NodeId, agent: &AgentId) {
         let export_id = ExportId::new("export-node").expect("export id");
-        let alias = WorkspaceAlias::new("project").expect("alias");
+        let alias = DirectoryId::new("0123456789abcdef0123456789abcdef").expect("alias");
         let export = ExportRecord::try_new(
             export_id.clone(),
             "team export",
             vec![agent.clone()],
-            vec![WorkspaceAliasEntry::try_new(alias.clone(), "Project").expect("alias entry")],
+            vec![WorkspaceDirectoryEntry::try_new(alias.clone()).expect("alias entry")],
             alias.clone(),
             vec![
                 ExportTemplate::try_new(
@@ -9822,7 +9763,7 @@ mod tests {
                     interaction: None,
                     agent_session_id: None,
                     workspace_cwd: None,
-                    workspace_alias: None,
+                    workspace_directory_id: None,
                 })),
                 turns: vec![TurnChange::Create(NewTurn {
                     turn: turn.clone(),
@@ -10240,7 +10181,7 @@ mod tests {
                 interaction: None,
                 agent_session_id: None,
                 workspace_cwd: None,
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: Vec::new(),
             events: vec![event],

@@ -48,29 +48,7 @@ impl Claimed {
         let owner = OwnerNode::start(label).await;
         let access = AccessKey::new(ACCESS_NODE);
         let workspace_root = owner.data_dir();
-        owner
-            .admin(
-                Method::WorkspaceSelect,
-                json!({
-                    "alias": WORKSPACE_ALIAS,
-                    "displayName": "Project One",
-                    "rootPath": workspace_root.display().to_string(),
-                }),
-            )
-            .await;
-        owner
-            .admin(
-                Method::AgentConfigure,
-                json!({
-                    "agentId": AGENT,
-                    "displayName": "Codex",
-                    "command": env!("CARGO_BIN_EXE_acp-remote"),
-                    "args": [],
-                    "envAllowlist": [],
-                    "default": true,
-                }),
-            )
-            .await;
+        let directory_id = support::seed_directory(&owner.data_dir(), &workspace_root).await;
         for (export_id, scopes) in [
             (EXPORT_VISIBLE, GRANTS.to_vec()),
             (EXPORT_DISJOINT, vec!["grant.approve"]),
@@ -82,13 +60,13 @@ impl Claimed {
                         "exportId": export_id,
                         "displayName": format!("Export {export_id}"),
                         "agentIds": [AGENT],
-                        "workspaceAliases": [{ "alias": WORKSPACE_ALIAS, "displayName": "Project One" }],
-                        "defaultWorkspaceAlias": WORKSPACE_ALIAS,
+                        "workspaceDirectories": [{ "directoryId": directory_id }],
+                        "defaultWorkspaceDirectory": directory_id,
                         "templates": [
                             {
                                 "templateId": "tpl.default",
                                 "displayName": "Default",
-                                "workspaceAlias": WORKSPACE_ALIAS,
+                                "workspaceDirectory": directory_id,
                                 "params": [],
                             },
                         ],

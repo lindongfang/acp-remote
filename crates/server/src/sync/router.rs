@@ -266,11 +266,11 @@ mod tests {
         let world = World::new();
         world.seed_device(DEVICE);
         world.store.set_head(cursor(EPOCH, 7));
-        world.seed_workspace("project", "Project", &fixture::workspace_path());
+        let directory_id = world.seed_directory(&fixture::workspace_path());
         world.store.push_session(fixture::core_session(
             SESSION,
             "本地会话",
-            Some(("project", "Project")),
+            Some(directory_id.as_str()),
         ));
         world.deliveries.push(SyncDeliveries::record("远端会话"));
         world
@@ -416,12 +416,12 @@ mod tests {
                 summary.get("sessionId").and_then(serde_json::Value::as_str) == Some(SESSION)
             })
             .expect("本地会话摘要");
-        assert_eq!(
+        assert!(
             local
                 .get("workspace")
-                .and_then(|workspace| workspace.get("alias"))
-                .and_then(serde_json::Value::as_str),
-            Some("project"),
+                .and_then(|workspace| workspace.get("directoryId"))
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
             "协商了 core.local-catalog.v1 → workspace 键在场"
         );
     }

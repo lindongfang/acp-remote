@@ -6,7 +6,7 @@
 
 use acp_core::model::{
     AgentProfile, DeviceRecord, ExportId, ExportRecord, ImportRecord, NodeRecord, TemplateParam,
-    TemplateParamValue, Timestamp, WorkspaceRecord,
+    TemplateParamValue, Timestamp, DirectoryRecord,
 };
 use serde_json::Value;
 
@@ -37,10 +37,10 @@ pub(crate) fn string_array<'a>(items: impl IntoIterator<Item = &'a str>) -> Valu
 }
 
 /// `workspace.select` 的 result 内层（§5.2）：`{ alias, displayName, rootPath, createdAt }`。
-pub(crate) fn workspace(record: &WorkspaceRecord) -> JsonObject {
+pub(crate) fn workspace(record: &DirectoryRecord) -> JsonObject {
     object(vec![
-        ("alias", text(record.alias().as_str())),
-        ("displayName", text(record.display_name())),
+        ("alias", text(record.directory_id().as_str())),
+
         ("rootPath", text(record.canonical_path())),
         ("createdAt", timestamp(record.created_at())),
     ])
@@ -71,7 +71,7 @@ pub(crate) fn provider(provider_id: &str, kind: &str, configured_fields: &[Strin
 pub(crate) fn export(record: &ExportRecord) -> JsonObject {
     object(vec![
         ("exportId", text(record.export_id().as_str())),
-        ("displayName", text(record.display_name())),
+
         (
             "agentIds",
             Value::Array(
@@ -86,20 +86,20 @@ pub(crate) fn export(record: &ExportRecord) -> JsonObject {
             "workspaceAliases",
             Value::Array(
                 record
-                    .workspace_aliases()
+                    .workspace_directories()
                     .iter()
                     .map(|entry| {
                         Value::Object(object(vec![
-                            ("alias", text(entry.alias().as_str())),
-                            ("displayName", text(entry.display_name())),
+                            ("alias", text(entry.directory_id().as_str())),
+                            
                         ]))
                     })
                     .collect(),
             ),
         ),
         (
-            "defaultWorkspaceAlias",
-            text(record.default_workspace_alias().as_str()),
+            "defaultDirectoryId",
+            text(record.default_workspace_directory().as_str()),
         ),
         (
             "templates",
@@ -111,7 +111,7 @@ pub(crate) fn export(record: &ExportRecord) -> JsonObject {
                         Value::Object(object(vec![
                             ("templateId", text(template.template_id().as_str())),
                             ("displayName", text(template.display_name())),
-                            ("workspaceAlias", text(template.workspace_alias().as_str())),
+                            ("workspaceAlias", text(template.workspace_directory().as_str())),
                             (
                                 "params",
                                 Value::Array(
@@ -169,7 +169,7 @@ pub(crate) fn import(record: &ImportRecord) -> JsonObject {
 pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
     object(vec![
         ("deviceId", text(record.device_id().as_str())),
-        ("displayName", text(record.display_name())),
+
         (
             "publicKeyFingerprint",
             text(record.public_key_fingerprint().as_str()),
@@ -185,7 +185,7 @@ pub(crate) fn device(record: &DeviceRecord) -> JsonObject {
 pub(crate) fn node(record: &NodeRecord) -> JsonObject {
     object(vec![
         ("nodeId", text(record.node_id().as_str())),
-        ("displayName", text(record.display_name())),
+
         ("kind", text(record.kind().as_str())),
         (
             "nodePublicKeyFingerprint",

@@ -138,7 +138,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"Project One\"}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":\"D:/src/project\"}]",
         ),
     );
     assert!(
@@ -152,7 +152,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"Project One\",\"path\":\"D:/src/project\"}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":\"D:/src/project\"}]",
         ),
     );
     assert!(
@@ -165,7 +165,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"path\":null}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":null}]",
         ),
     );
     assert!(null_path.is_err(), "workspaces item 的 path 不得为 null");
@@ -195,7 +195,7 @@ fn catalog_snapshot_resources_enforce_their_item_shape() {
         "sync.snapshot_chunk",
         &chunk(
             "workspaces",
-            "[{\"alias\":\"project.1\",\"displayName\":\"P\",\"canonicalPath\":\"C:/src/p\"}]",
+            "[{\"directoryId\":\"0123456789abcdef0123456789abcdef\",\"path\":\"C:/src/p\",\"alias\":\"p\"}]",
         ),
     );
     assert!(unknown_key.is_err(), "workspaces item 的未登记键必须被拒");
@@ -224,7 +224,7 @@ fn session_summary_workspace_keeps_absent_null_and_value_apart() {
         ("", "absent"),
         (",\"workspace\":null", "null"),
         (
-            ",\"workspace\":{\"alias\":\"project.1\",\"displayName\":\"Project One\"}",
+            ",\"workspace\":{\"directoryId\":\"0123456789abcdef0123456789abcdef\"}",
             "value",
         ),
     ] {
@@ -242,8 +242,8 @@ fn session_summary_workspace_keeps_absent_null_and_value_apart() {
                 "显式 null 的键不得在往返中被压成缺席：{reserialized}"
             ),
             _ => assert_eq!(
-                reserialized["workspace"]["alias"],
-                serde_json::json!("project.1"),
+                reserialized["workspace"]["directoryId"],
+                serde_json::json!("0123456789abcdef0123456789abcdef"),
                 "带引用的形态必须原样往返：{reserialized}"
             ),
         }

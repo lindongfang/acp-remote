@@ -6,7 +6,7 @@
 use super::error::InvalidValue;
 use super::identity::GrantSet;
 use super::ids::{
-    AgentId, ExportId, ImportId, NodeId, TemplateId, WorkspaceAlias, is_endpoint, is_template_id,
+    AgentId, ExportId, ImportId, NodeId, TemplateId, DirectoryId, is_endpoint, is_template_id,
     require_bounded,
 };
 use super::scalars::Timestamp;
@@ -34,32 +34,23 @@ fn check_param_name(text: &str) -> Result<(), InvalidValue> {
     }
 }
 
-/// workspace alias 与展示名（`workspaceAliases[]`）。
+/// workspace directory_id 与展示名（`workspaceAliases[]`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceAliasEntry {
-    alias: WorkspaceAlias,
-    display_name: String,
+pub struct WorkspaceDirectoryEntry {
+    directory_id: DirectoryId,
 }
 
-impl WorkspaceAliasEntry {
-    /// 构造。`display_name` 1..=128 字符。
-    pub fn try_new(alias: WorkspaceAlias, display_name: &str) -> Result<Self, InvalidValue> {
-        require_bounded(display_name, 1, 128)?;
-        Ok(Self {
-            alias,
-            display_name: display_name.to_owned(),
-        })
+impl WorkspaceDirectoryEntry {
+    /// 构造。
+    pub fn try_new(directory_id: DirectoryId) -> Result<Self, InvalidValue> {
+        Ok(Self { directory_id })
     }
 
-    /// 符号名（不构成路径）。
-    pub fn alias(&self) -> &WorkspaceAlias {
-        &self.alias
+    /// 目录标识。
+    pub fn directory_id(&self) -> &DirectoryId {
+        &self.directory_id
     }
 
-    /// 展示名。
-    pub fn display_name(&self) -> &str {
-        &self.display_name
-    }
 }
 
 token_enum!(
@@ -163,7 +154,7 @@ impl TemplateParam {
 pub struct ExportTemplate {
     template_id: TemplateId,
     display_name: String,
-    workspace_alias: WorkspaceAlias,
+    workspace_directory: DirectoryId,
     params: Vec<TemplateParam>,
 }
 
@@ -172,7 +163,7 @@ impl ExportTemplate {
     pub fn try_new(
         template_id: TemplateId,
         display_name: &str,
-        workspace_alias: WorkspaceAlias,
+        workspace_directory: DirectoryId,
         params: Vec<TemplateParam>,
     ) -> Result<Self, InvalidValue> {
         require_bounded(display_name, 1, 128)?;
@@ -187,7 +178,7 @@ impl ExportTemplate {
         Ok(Self {
             template_id,
             display_name: display_name.to_owned(),
-            workspace_alias,
+            workspace_directory,
             params,
         })
     }
@@ -202,9 +193,9 @@ impl ExportTemplate {
         &self.display_name
     }
 
-    /// 绑定的 workspace alias（必须是所属 Export 的 aliases 之一）。
-    pub fn workspace_alias(&self) -> &WorkspaceAlias {
-        &self.workspace_alias
+    /// 绑定的 workspace directory_id（必须是所属 Export 的 aliases 之一）。
+    pub fn workspace_directory(&self) -> &DirectoryId {
+        &self.workspace_directory
     }
 
     /// 参数声明。
@@ -215,16 +206,16 @@ impl ExportTemplate {
 
 /// Export 记录（§3.5，形状与 `LOCAL_ADMIN_PROTOCOL.md` §5.5 的 `ExportView` 一致）。
 ///
-/// 不变式：`agent_ids`/`workspace_aliases`/`templates` 非空且各自不重复；
-/// `default_workspace_alias` 必须是 `workspace_aliases` 之一；`default_template_id` 必须是 `templates` 之一；
-/// 每个 template 的 `workspace_alias` 必须已声明。撤销状态由 `revoked_at` 表达（`export.list` 包含已撤销项）。
+/// 不变式：`agent_ids`/`workspace_directories`/`templates` 非空且各自不重复；
+/// `default_workspace_directory` 必须是 `workspace_directories` 之一；`default_template_id` 必须是 `templates` 之一；
+/// 每个 template 的 `workspace_directory` 必须已声明。撤销状态由 `revoked_at` 表达（`export.list` 包含已撤销项）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportRecord {
     export_id: ExportId,
     display_name: String,
     agent_ids: Vec<AgentId>,
-    workspace_aliases: Vec<WorkspaceAliasEntry>,
-    default_workspace_alias: WorkspaceAlias,
+    workspace_directories: Vec<WorkspaceDirectoryEntry>,
+    default_workspace_directory: DirectoryId,
     templates: Vec<ExportTemplate>,
     default_template_id: TemplateId,
     scopes: GrantSet,
@@ -240,8 +231,8 @@ impl ExportRecord {
         export_id: ExportId,
         display_name: &str,
         agent_ids: Vec<AgentId>,
-        workspace_aliases: Vec<WorkspaceAliasEntry>,
-        default_workspace_alias: WorkspaceAlias,
+        workspace_directories: Vec<WorkspaceDirectoryEntry>,
+        default_workspace_directory: DirectoryId,
         templates: Vec<ExportTemplate>,
         default_template_id: TemplateId,
         scopes: GrantSet,
@@ -258,20 +249,20 @@ impl ExportRecord {
                 return Err(InvalidValue::Field);
             }
         }
-        if workspace_aliases.is_empty() || templates.is_empty() {
+        if workspace_directories.is_empty() || templates.is_empty() {
             return Err(InvalidValue::Empty);
         }
-        for (index, entry) in workspace_aliases.iter().enumerate() {
-            if workspace_aliases[..index]
+        for (index, entry) in workspace_directories.iter().enumerate() {
+            if workspace_directories[..index]
                 .iter()
-                .any(|other| other.alias() == entry.alias())
+                .any(|other| other.directory_id() == entry.directory_id())
             {
                 return Err(InvalidValue::Field);
             }
         }
-        if !workspace_aliases
+        if !workspace_directories
             .iter()
-            .any(|entry| entry.alias() == &default_workspace_alias)
+            .any(|entry| entry.directory_id() == &default_workspace_directory)
         {
             return Err(InvalidValue::Field);
         }
@@ -282,9 +273,9 @@ impl ExportRecord {
             {
                 return Err(InvalidValue::Field);
             }
-            if !workspace_aliases
+            if !workspace_directories
                 .iter()
-                .any(|entry| entry.alias() == template.workspace_alias())
+                .any(|entry| entry.directory_id() == template.workspace_directory())
             {
                 return Err(InvalidValue::Field);
             }
@@ -299,8 +290,8 @@ impl ExportRecord {
             export_id,
             display_name: display_name.to_owned(),
             agent_ids,
-            workspace_aliases,
-            default_workspace_alias,
+            workspace_directories,
+            default_workspace_directory,
             templates,
             default_template_id,
             scopes,
@@ -325,14 +316,14 @@ impl ExportRecord {
         &self.agent_ids
     }
 
-    /// workspace alias 声明。
-    pub fn workspace_aliases(&self) -> &[WorkspaceAliasEntry] {
-        &self.workspace_aliases
+    /// workspace directory_id 声明。
+    pub fn workspace_directories(&self) -> &[WorkspaceDirectoryEntry] {
+        &self.workspace_directories
     }
 
-    /// 默认 workspace alias。
-    pub fn default_workspace_alias(&self) -> &WorkspaceAlias {
-        &self.default_workspace_alias
+    /// 默认 workspace directory_id。
+    pub fn default_workspace_directory(&self) -> &DirectoryId {
+        &self.default_workspace_directory
     }
 
     /// template 声明。

@@ -71,7 +71,7 @@ use acp_core::model::{
     ElicitationAction as CoreElicitationAction, ElicitationValues, EntityRef,
     ExportId as CoreExportId, ExportRecord, InteractionId, ModeId, NodeId, NodeState, PortError,
     PromptContentBlock, ReadInclude, RequestId as CoreRequestId, ResourceOrigin, SessionId,
-    TemplateSelection, Timestamp as CoreTimestamp, TurnId, Version, WorkspaceAlias,
+    TemplateSelection, Timestamp as CoreTimestamp, TurnId, Version, DirectoryId,
     WorkspaceSource,
 };
 use acp_core::ports::{PreparedSessionCreate, SessionCreateAdmission, SessionQuery};
@@ -721,7 +721,7 @@ impl CommandRoute {
         let Ok(agent) = AgentRef::try_new(agent_id, &agent_name) else {
             return self.reject_schema(handle, message, "the agent name is out of range");
         };
-        let Ok(alias) = WorkspaceAlias::new(payload.workspace_alias.as_str()) else {
+        let Ok(alias) = DirectoryId::new(payload.directory_id.as_str()) else {
             return self.reject_schema(handle, message, "the workspaceAlias is not a symbol name");
         };
         let Ok(template) =
@@ -742,7 +742,7 @@ impl CommandRoute {
                 request.clone(),
                 fingerprint,
                 create,
-                Some(WorkspaceSource::Alias(alias)),
+                Some(WorkspaceSource::Directory(alias)),
             )
             .await
         {
@@ -993,11 +993,11 @@ impl CommandRoute {
             return Err("agentId");
         }
         if !export
-            .workspace_aliases()
+            .workspace_directories()
             .iter()
-            .any(|entry| entry.alias().as_str() == payload.workspace_alias.as_str())
+            .any(|entry| entry.directory_id().as_str() == payload.directory_id.as_str())
         {
-            return Err("workspaceAlias");
+            return Err("directoryId");
         }
         Ok(())
     }
@@ -2270,7 +2270,7 @@ fn forbidden_payload_field(body: &str) -> Option<(Uuid, CommandName, String)> {
         CommandName::SessionCreate => {
             !matches!(
                 key,
-                "agentId" | "exportId" | "workspaceAlias" | "templateParams"
+                "agentId" | "exportId" | "directoryId" | "templateParams"
             ) || match key {
                 "templateParams" => !is_empty_object(value),
                 _ => value.as_str().is_some_and(is_absolute_path),

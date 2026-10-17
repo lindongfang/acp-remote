@@ -225,53 +225,6 @@ mod tests {
             sink.contents()
         );
     }
-
-    /// 假终端读取器：断言 `provider configure` 是**逐项**读取，且值原样进入 `values`。
-    struct FakePrompt {
-        values: Vec<String>,
-        asked: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl SecretPrompt for FakePrompt {
-        fn read_secret(&mut self, field: &str) -> Result<String, Failure> {
-            self.asked
-                .lock()
-                .expect("问询记录锁")
-                .push(field.to_owned());
-            if self.values.is_empty() {
-                return Err(Failure::local(
-                    LocalErrorCode::Internal,
-                    "假读取器没有更多值",
-                ));
-            }
-            Ok(self.values.remove(0))
-        }
-    }
-
-    #[test]
-    fn credentials_are_read_one_field_at_a_time_and_never_trimmed() {
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let mut prompt = FakePrompt {
-            values: vec!["sk-one".to_owned(), " sk-two ".to_owned()],
-            asked: Arc::clone(&asked),
-        };
-        let fields = ["api_key".to_owned(), "base_url".to_owned()];
-        let values = crate::cli::provider_values(&fields, &mut prompt).expect("逐项读取");
-        assert_eq!(
-            asked.lock().expect("锁").clone(),
-            vec!["api_key", "base_url"]
-        );
-        assert_eq!(
-            values,
-            vec![
-                ("api_key".to_owned(), "sk-one".to_owned()),
-                ("base_url".to_owned(), " sk-two ".to_owned())
-            ],
-            "凭据值原样发送，不做 trim/规范化"
-        );
-    }
-
-    #[test]
     fn a_non_object_file_and_an_unregistered_field_are_rejected_with_invalid_params() {
         let dir = temp_dir();
         let array = dir.join("array.json");

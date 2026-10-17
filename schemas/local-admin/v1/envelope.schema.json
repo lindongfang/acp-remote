@@ -25,9 +25,7 @@
       "enum": [
         "daemon.status",
         "daemon.stop",
-        "workspace.select",
-        "agent.configure",
-        "provider.configure",
+        "agent.list",
         "device.pair.begin",
         "device.pair.status",
         "device.pair.confirm",

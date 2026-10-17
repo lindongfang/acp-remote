@@ -5,17 +5,15 @@
 //! 未被本 crate 消费的端口方法一律 `todo!()`：真被调用时测试会立刻炸掉，而不是给出看似合理的空结果。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use acp_core::model::Digest;
 use acp_core::model::{
-    AgentId, AgentProfile, ConfigValue, ProviderEnvBinding, ProviderRef, ResolvedWorkspace,
-    SecretValue, Timestamp, WorkspaceAlias, WorkspaceRecord,
+    AgentId, AgentProfile, ConfigValue, ResolvedWorkspace,
+    DirectoryId, DirectoryRecord, Timestamp,
 };
 use acp_core::ports::{
-    Clock, CredentialResolver, EventSink, IdGenerator, LocalConfigStore, NodeEventSink,
-    ProfileWrite, ProviderRefWrite, SeedWrite, WorkspaceWrite,
+    Clock, EventSink, IdGenerator, NodeEventSink,
 };
 
 use agent_host::LaunchSpec;
@@ -416,214 +414,20 @@ pub fn profile(agent: &str, command: &str) -> AgentProfile {
 /// 同上，但使用给定的 fake child 参数（场景、`--dump-env`、`--capabilities` 等）。
 #[must_use]
 pub fn profile_with(agent: &str, command: &str, args: &[&str]) -> AgentProfile {
-    profile_with_env_vars(agent, command, args, &["FAKE_TOKEN"])
-}
-
-/// 同上，但白名单与凭据绑定集合由 `vars` 给定（每个变量一条绑定）。
-#[must_use]
-pub fn profile_with_env_vars(
-    agent: &str,
-    command: &str,
-    args: &[&str],
-    vars: &[&str],
-) -> AgentProfile {
     AgentProfile::try_new(
         AgentId::new(agent).expect("agent id"),
-        &format!("Agent {agent}"),
         command,
         args.iter().map(|arg| (*arg).to_owned()).collect(),
-        vars.iter().map(|name| (*name).to_owned()).collect(),
-        vars.iter()
-            // `(provider_id, field)` 不得重复：用变量名当字段名，这样多变量 profile 也合法。
-            .map(|name| ProviderEnvBinding::try_new("fake", name, name).expect("binding"))
-            .collect(),
         false,
-        timestamp(),
-        timestamp(),
     )
     .expect("profile")
-}
-
-/// fake `LocalConfigStore`：只实现 profile 相关方法。
-#[derive(Debug, Default)]
-pub struct FakeConfig {
-    profiles: Vec<AgentProfile>,
-    /// `profiles()` 被调用的次数：用来证明目录查询**确实**经由注入端口取 profile。
-    profiles_calls: AtomicUsize,
-}
-
-impl FakeConfig {
-    /// 用给定 profile 构造。
-    #[must_use]
-    pub fn new(profiles: Vec<AgentProfile>) -> Self {
-        Self {
-            profiles,
-            profiles_calls: AtomicUsize::new(0),
-        }
-    }
-
-    /// `profiles()` 至今被调用的次数。
-    #[must_use]
-    pub fn profiles_calls(&self) -> usize {
-        self.profiles_calls.load(Ordering::SeqCst)
-    }
-}
-
-#[async_trait::async_trait]
-impl LocalConfigStore for FakeConfig {
-    async fn profiles(&self) -> Result<Vec<AgentProfile>, acp_core::model::PortError> {
-        self.profiles_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(self.profiles.clone())
-    }
-
-    async fn profile(
-        &self,
-        id: &AgentId,
-    ) -> Result<Option<AgentProfile>, acp_core::model::PortError> {
-        Ok(self
-            .profiles
-            .iter()
-            .find(|profile| profile.id() == id)
-            .cloned())
-    }
-
-    async fn put_profile(&self, _write: ProfileWrite) -> Result<(), acp_core::model::PortError> {
-        todo!("测试 fake 未实现 put_profile")
-    }
-
-    async fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, acp_core::model::PortError> {
-        todo!("测试 fake 未实现 workspaces")
-    }
-
-    async fn workspace(
-        &self,
-        _alias: &acp_core::model::WorkspaceAlias,
-    ) -> Result<Option<WorkspaceRecord>, acp_core::model::PortError> {
-        todo!("测试 fake 未实现 workspace")
-    }
-
-    async fn put_workspace(
-        &self,
-        _write: WorkspaceWrite,
-    ) -> Result<(), acp_core::model::PortError> {
-        todo!("测试 fake 未实现 put_workspace")
-    }
-
-    async fn provider_refs(&self) -> Result<Vec<ProviderRef>, acp_core::model::PortError> {
-        todo!("测试 fake 未实现 provider_refs")
-    }
-
-    async fn put_provider_ref(
-        &self,
-        _write: ProviderRefWrite,
-    ) -> Result<(), acp_core::model::PortError> {
-        todo!("测试 fake 未实现 put_provider_ref")
-    }
-
-    async fn seed_state(&self) -> Result<acp_core::model::SeedState, acp_core::model::PortError> {
-        todo!("测试 fake 未实现 seed_state")
-    }
-
-    async fn mark_seeded(&self, _write: SeedWrite) -> Result<(), acp_core::model::PortError> {
-        todo!("测试 fake 未实现 mark_seeded")
-    }
-}
-
-/// fake `CredentialResolver`：按 profile 的绑定给出固定值；可配置为失败。
-#[derive(Debug, Default)]
-pub struct FakeCredentials {
-    fail: bool,
-    /// 故意返回一个不在白名单里的变量（用于验证「白名单是上限」的纵深防御）。
-    leak: bool,
-    /// 故意**不**返回这个已绑定且在白名单内的变量（用于验证「期望集合必须完整」的纵深防御）。
-    drop_name: Option<String>,
-}
-
-impl FakeCredentials {
-    /// 正常解析。
-    #[must_use]
-    pub fn ok() -> Self {
-        Self {
-            fail: false,
-            leak: false,
-            drop_name: None,
-        }
-    }
-
-    /// 一律失败（模拟 keystore 不可用或引用失效）。
-    #[must_use]
-    pub fn failing() -> Self {
-        Self {
-            fail: true,
-            leak: false,
-            drop_name: None,
-        }
-    }
-
-    /// 返回一个白名单外的变量（模拟端口实现出错）。
-    #[must_use]
-    pub fn leaking() -> Self {
-        Self {
-            fail: false,
-            leak: true,
-            drop_name: None,
-        }
-    }
-
-    /// 故意漏掉一个「已绑定且在白名单内」的变量（模拟端口违反「不得静默跳过变量」的契约）。
-    #[must_use]
-    pub fn dropping(name: &str) -> Self {
-        Self {
-            fail: false,
-            leak: false,
-            drop_name: Some(name.to_owned()),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl CredentialResolver for FakeCredentials {
-    async fn resolve_env(
-        &self,
-        profile: &AgentProfile,
-    ) -> Result<Vec<(String, SecretValue)>, acp_core::model::PortError> {
-        if self.fail {
-            return Err(acp_core::model::PortError::Unavailable(
-                acp_core::model::UnavailableKind::KeystoreUnavailable,
-            ));
-        }
-        if self.leak {
-            return Ok(vec![(
-                "NOT_ALLOW_LISTED".to_owned(),
-                SecretValue::new("fake-secret-value".to_owned()),
-            )]);
-        }
-        // 白名单是上限：绑定不在白名单里就不注入（与真实端口契约一致）。
-        Ok(profile
-            .env()
-            .iter()
-            .filter(|binding| {
-                profile
-                    .env_allowlist()
-                    .iter()
-                    .any(|name| name == binding.name())
-            })
-            .filter(|binding| self.drop_name.as_deref() != Some(binding.name()))
-            .map(|binding| {
-                (
-                    binding.name().to_owned(),
-                    SecretValue::new("fake-secret-value".to_owned()),
-                )
-            })
-            .collect())
-    }
 }
 
 /// 一个存在的 workspace（ 需要已解析的 cwd）。
 #[must_use]
 pub fn workspace() -> ResolvedWorkspace {
     ResolvedWorkspace::try_new(
-        WorkspaceAlias::new("demo").expect("alias"),
+        acp_core::model::derive_directory_id(&std::env::temp_dir().to_string_lossy().into_owned()),
         std::env::temp_dir().to_string_lossy().into_owned(),
     )
     .expect("workspace")

@@ -102,33 +102,9 @@ async fn post_json(host: &HostNode, path: &str, body: &Value) -> HttpReply {
     }
 }
 
-/// 本机登记一次 workspace alias（快照 `workspaces` chunk 的投影来源；真实本地管理通道）。
-async fn register_workspace(host: &HostNode, alias: &str) {
-    host.admin(
-        server::local_admin::Method::WorkspaceSelect,
-        json!({
-            "alias": alias,
-            "displayName": "Project One",
-            "rootPath": host.data_dir().display().to_string(),
-        }),
-    )
-    .await;
-}
-
-/// 本机登记一个 agent profile（快照 `agents` chunk 的投影来源）。
-async fn register_agent(host: &HostNode) {
-    host.admin(
-        server::local_admin::Method::AgentConfigure,
-        json!({
-            "agentId": AGENT,
-            "displayName": "Codex",
-            "command": env!("CARGO_BIN_EXE_acp-remote"),
-            "args": [],
-            "envAllowlist": [],
-            "default": true,
-        }),
-    )
-    .await;
+/// 直接记录一个本机目录（快照 `workspaces` chunk 的投影来源）。
+async fn register_workspace(host: &HostNode, _alias: &str) {
+    support::seed_directory(&host.data_dir(), &host.data_dir()).await;
 }
 
 /// 走完「device.pair.begin → claim → device.pair.confirm → status approved」。
@@ -515,7 +491,6 @@ async fn the_main_chain_runs_snapshot_digest_recompute_and_ack() {
     // 一个本地会话（`sessions` chunk）与一条**真实**的节点级事件（`agent.connected`，
     // 经 `Broker::commit_node_event` 落库——因此事件库里 head > 0，快照屏障游标可断言）。
     register_workspace(&host, "project.one").await;
-    register_agent(&host).await;
     // 水位取样在**本地会话落账之后**：落账提交自身也会追加一条终态事件（推进水位），若把它夹在两次
     // 读数之间，下面的断言就会被它顺带满足，不再证明「节点级事件推进水位」这件事。
     let session_id = local_session(&host, "acp-remote/sync-e2e/session-create").await;
@@ -900,7 +875,6 @@ async fn resubscribing_with_an_older_cursor_replays_from_that_cursor() {
     let host = HostNode::start("sync-older-cursor", HOST).await;
     let device = Device::new();
     pair_and_approve(&host, &device).await;
-    register_agent(&host).await;
     local_session(&host, "acp-remote/sync-e2e/replay-session").await;
     let older_head = host.head().await;
 

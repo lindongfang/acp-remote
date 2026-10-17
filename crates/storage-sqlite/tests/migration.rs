@@ -39,9 +39,7 @@ const TABLES: &[&str] = &[
     "owned_pairing",
     "owned_pairing_peer",
     "owned_export",
-    "owned_agent_profile",
-    "owned_workspace",
-    "owned_provider_ref",
+    "owned_directory",
     "imported_import",
     "imported_session",
     "imported_delivery_index",
@@ -67,9 +65,7 @@ const OWNED_TABLES: &[&str] = &[
     "owned_pairing",
     "owned_pairing_peer",
     "owned_export",
-    "owned_agent_profile",
-    "owned_workspace",
-    "owned_provider_ref",
+    "owned_directory",
 ];
 
 fn at() -> Timestamp {
@@ -264,7 +260,9 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         .expect("a fresh database carries server_epoch");
     let mut before_rows = Vec::new();
     for table in TABLES {
-        before_rows.push((*table, table_snapshot(&pool, table).await));
+        if table_exists(&pool, table).await {
+            before_rows.push((*table, table_snapshot(&pool, table).await));
+        }
     }
     pool.close().await;
 
@@ -272,7 +270,7 @@ async fn current_version_database_is_untouched_by_two_consecutive_starts() {
         let store = SqliteStore::open(still_writable(&dir), &at())
             .await
             .unwrap_or_else(|error| panic!("round {round} must open: {error}"));
-        assert_eq!(store.metadata().owned_schema_version, 8);
+        assert_eq!(store.metadata().owned_schema_version, 10);
         assert_eq!(store.metadata().imported_schema_version, 3);
         store.close().await;
 
@@ -383,7 +381,9 @@ async fn too_new_database_is_rejected_without_writing_rows() {
     let before_meta = meta_rows(&pool).await;
     let mut before_rows = Vec::new();
     for table in TABLES {
-        before_rows.push((*table, table_snapshot(&pool, table).await));
+        if table_exists(&pool, table).await {
+            before_rows.push((*table, table_snapshot(&pool, table).await));
+        }
     }
     pool.close().await;
 
@@ -459,7 +459,7 @@ async fn v1_fixture_upgrades_to_v3_and_preserves_rows() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 8);
+    assert_eq!(store.metadata().owned_schema_version, 10);
     assert_eq!(store.metadata().imported_schema_version, 3);
 
     // spec 的「升级后重放与幂等仍一致」：读视图必须给出升级前那三条事件，且正文能经
@@ -815,7 +815,7 @@ async fn v7_upgrade_carries_interaction_rows_and_a_leading_event_sequence() {
     let store = SqliteStore::open(StorageConfig::new(&dir), &at())
         .await
         .expect("a v1 database with interaction rows must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 8);
+    assert_eq!(store.metadata().owned_schema_version, 10);
     store.close().await;
 
     let pool = raw_write_pool(&path).await;
@@ -930,7 +930,7 @@ async fn v2_fixture_upgrades_to_v3_and_widens_only_the_audit_checks() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v2 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 8);
+    assert_eq!(store.metadata().owned_schema_version, 10);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -1014,7 +1014,7 @@ fn without_scopes_column(ddl: &str) -> String {
 /// 夹具 `fixtures/storage/v2/` 里没有 v3 形状的文件（那是历史资产的忠实副本，本次不改夹具），因此本用例
 /// 在测试里现场造一个 v3 库：先在新建库（当前形状）上写入既有节点行、审计行与两行设备行（覆盖
 /// `last_seen_at` 的 `NULL`/非 `NULL`），再把 v4/v5/v6 才有的列
-/// （`owned_node.export_ids_json` 与 `owned_session.agent_session_id`/`workspace_cwd`/`workspace_alias`）
+/// （`owned_node.export_ids_json` 与 `owned_session.agent_session_id`/`workspace_cwd`/`workspace_directory_id`）
 /// `DROP` 掉、把 v8 才删的 `owned_device.scopes_json` 补回，并把两个版本键降到 3——它对升级段而言就是
 ///「有节点行、没有清单列、没有恢复列、没有目录归属列、带 scopes_json 的设备表」的 v3 库。
 ///
@@ -1062,7 +1062,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         .execute(&pool)
         .await
         .expect("rewind owned_node to its v3 shape");
-    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -1126,7 +1126,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v3 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 8);
+    assert_eq!(store.metadata().owned_schema_version, 10);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 
@@ -1221,7 +1221,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         .filter(|spec| {
             matches!(
                 spec.0.as_str(),
-                "agent_session_id" | "workspace_cwd" | "workspace_alias"
+                "agent_session_id" | "workspace_cwd" | "workspace_directory_id"
             )
         })
         .cloned()
@@ -1239,7 +1239,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
         vec![
             ("agent_session_id".to_owned(), false, None),
             ("workspace_cwd".to_owned(), false, None),
-            ("workspace_alias".to_owned(), false, None),
+            ("workspace_directory_id".to_owned(), false, None),
         ],
         "追加的三列必须可空且无默认值"
     );
@@ -1255,7 +1255,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
                 "owned_node 必须带上新的清单列：{after}"
             ),
             "owned_session" => {
-                for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+                for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
                     assert!(
                         after.contains(column),
                         "owned_session 必须带上追加列 {column}：{after}"
@@ -1278,7 +1278,7 @@ async fn v3_database_upgrades_to_v6_by_appending_the_export_id_and_recovery_colu
     pool.close().await;
 }
 
-/// §7.2/R13/R16：**v4 → v6 只给 `owned_session` 末尾追加三个可空列**（v5 两列 + v6 的 `workspace_alias`）。
+/// §7.2/R13/R16：**v4 → v6 只给 `owned_session` 末尾追加三个可空列**（v5 两列 + v6 的 `workspace_directory_id`）。
 ///
 /// 造 v4 库的手法与上一条同款：新建当前形状的库 → 写入一条真的 owned 会话行（除追加的三列外列列有值）
 /// 与两行设备行（覆盖 `last_seen_at` 的 `NULL`/非 `NULL`）→ `DROP` 掉才有的三列、把 v8 才删的
@@ -1316,7 +1316,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     .execute(&pool)
     .await
     .expect("seed a session row without the recovery columns");
-    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
         sqlx::query(&format!("ALTER TABLE owned_session DROP COLUMN {column}"))
             .execute(&pool)
             .await
@@ -1348,7 +1348,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         .expect("checkpoint");
 
     assert_eq!(scalar_i64(&pool, "PRAGMA user_version").await, 4);
-    for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+    for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
         assert!(
             !column_names(&pool, "owned_session")
                 .await
@@ -1372,7 +1372,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("a v4 database must upgrade to the current version");
-    assert_eq!(store.metadata().owned_schema_version, 8);
+    assert_eq!(store.metadata().owned_schema_version, 10);
     assert_eq!(store.metadata().imported_schema_version, 3);
     // ② `NULL` = 没有可用于恢复的数据：升级后的既有会话一律显式失败，不出现「升级后突然可恢复」。
     assert_eq!(
@@ -1421,7 +1421,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         ints(
             &pool,
             "SELECT COUNT(*) FROM owned_session \
-             WHERE agent_session_id IS NULL AND workspace_cwd IS NULL AND workspace_alias IS NULL"
+             WHERE agent_session_id IS NULL AND workspace_cwd IS NULL AND workspace_directory_id IS NULL"
         )
         .await,
         vec![1],
@@ -1431,7 +1431,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         ints(
             &pool,
             "SELECT COUNT(*) FROM owned_session \
-             WHERE agent_session_id = '' OR workspace_cwd = '' OR workspace_alias = ''"
+             WHERE agent_session_id = '' OR workspace_cwd = '' OR workspace_directory_id = ''"
         )
         .await,
         vec![0],
@@ -1480,7 +1480,7 @@ async fn v4_database_upgrades_to_v6_by_appending_the_recovery_columns_only() {
         let after = table_ddl(&pool, table).await;
         match table {
             "owned_session" => {
-                for column in ["agent_session_id", "workspace_cwd", "workspace_alias"] {
+                for column in ["agent_session_id", "workspace_cwd", "workspace_directory_id"] {
                     assert!(
                         after.contains(column),
                         "owned_session 必须带上追加列 {column}：{after}"
@@ -1542,7 +1542,7 @@ async fn recovery_columns_round_trip_and_are_not_rewritten_by_the_resume_flow() 
                 interaction: None,
                 agent_session_id: Some(agent_session_id.clone()),
                 workspace_cwd: Some(workspace_cwd.clone()),
-                workspace_alias: None,
+                workspace_directory_id: None,
             })),
             turns: Vec::new(),
             events: Vec::new(),
@@ -1778,7 +1778,7 @@ async fn a_failed_upgrade_rolls_back_to_v1() {
     let store = SqliteStore::open(still_writable(&dir), &at())
         .await
         .expect("retry must upgrade");
-    assert_eq!(store.metadata().owned_schema_version, 8);
+    assert_eq!(store.metadata().owned_schema_version, 10);
     assert_eq!(store.metadata().imported_schema_version, 3);
     store.close().await;
 }
@@ -2156,4 +2156,48 @@ fn cj1_digest(view: &str) -> String {
     let canonical = acpr_wire::cj1::canonicalize(view).expect("canonical view");
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(sha2::Sha256::digest(canonical.as_bytes()))
+}
+
+/// v9 → v10：删除 Agent/Provider 管理表、保留审计行，并记录被删除的 profile 条数供启动提示。
+#[tokio::test]
+async fn v9_to_v10_drops_the_agent_and_provider_tables_and_records_the_count() {
+    let dir = temp_dir("migrate-v9-v10");
+    let store = SqliteStore::open(still_writable(&dir), &at())
+        .await
+        .expect("create current database");
+    store.close().await;
+
+    let config = still_writable(&dir);
+    let path = config.database_path();
+    let pool = raw_write_pool(&path).await;
+    sqlx::raw_sql(
+        "CREATE TABLE owned_agent_profile (agent_id TEXT PRIMARY KEY);
+         CREATE TABLE owned_provider_ref (provider_id TEXT PRIMARY KEY);
+         INSERT INTO owned_agent_profile (agent_id) VALUES ('a'), ('b');
+         INSERT INTO owned_provider_ref (provider_id) VALUES ('p');
+         UPDATE meta SET value = '9' WHERE key = 'owned_schema_version';
+         PRAGMA user_version = 9;",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed v9 shape");
+    pool.close().await;
+
+    let store = SqliteStore::open(still_writable(&dir), &at())
+        .await
+        .expect("v9 must upgrade");
+    assert_eq!(store.discarded_agent_profiles().await.expect("count"), 2);
+    store.close().await;
+
+    let pool = raw_pool(&path).await;
+    let tables = texts(
+        &pool,
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+    )
+    .await;
+    assert!(!tables.iter().any(|name| name == "owned_agent_profile"), "{tables:?}");
+    assert!(!tables.iter().any(|name| name == "owned_provider_ref"), "{tables:?}");
+    let audit_rows = scalar_i64(&pool, "SELECT COUNT(*) FROM owned_audit").await;
+    assert!(audit_rows >= 0, "审计表仍可读");
+    pool.close().await;
 }
