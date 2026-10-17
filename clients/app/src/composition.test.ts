@@ -345,11 +345,11 @@ async function deliverSnapshot(socket: FakeSocket): Promise<void> {
           version: "1",
           createdAt: "2026-10-01T00:00:00.000Z",
           updatedAt: "2026-10-01T00:00:00.000Z",
-          workspace: { alias: "work-api", displayName: "api" },
+          workspace: { directoryId: "0123456789abcdef0123456789abcdef" },
         },
       ],
     }),
-    makeSnapshotChunk({ snapshotId, chunkIndex: "1", resource: "workspaces", items: [{ alias: "work-api", displayName: "api" }] }),
+    makeSnapshotChunk({ snapshotId, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }] }),
     makeSnapshotChunk({ snapshotId, chunkIndex: "2", resource: "agents", items: [{ agentId: "codex-a", displayName: "codex", default: true }] }),
   ];
   for (const chunk of chunks) socket.deliver(chunk.rawText);

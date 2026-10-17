@@ -706,10 +706,10 @@ function snapshotTexts(snapshotId: string, title: string): readonly string[] {
         version: "1",
         createdAt: "2026-10-01T00:00:00.000Z",
         updatedAt: "2026-10-01T00:00:00.000Z",
-        workspace: { alias: "work-api", displayName: "api" },
+        workspace: { directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" },
       },
     ]),
-    chunk("1", "workspaces", [{ alias: "work-api", displayName: "api" }]),
+    chunk("1", "workspaces", [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }]),
     chunk("2", "agents", [{ agentId: "codex-a", displayName: "codex", default: true }]),
   ];
 }

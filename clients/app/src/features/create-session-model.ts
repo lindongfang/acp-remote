@@ -4,10 +4,10 @@
  * ## 载荷为什么可以是「精确列出」而不是「至少列出」
  *
  * `schemas/sync/v1/command.schema.json#/$defs/sessionCreate` 的 `payload` 只允许 `agentId`、
- * **一个**目录引用（`workspaceAlias`（已登记别名）或 `workspacePath`（绝对目录），二者恰好一个）
+ * **一个**目录引用（`directoryId`（已登记别名）或 `workspacePath`（绝对目录），二者恰好一个）
  * 与可选的 `createIfMissing`（显式的「目录不存在则先创建」开关）三类字段。
  * 多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即被服务端按 `protocol.schema_invalid` 拒绝；
- * `createIfMissing` 与 `workspaceAlias` 同时出现同样被拒（别名解析出的目录必然已存在）。
+ * `createIfMissing` 与 `directoryId` 同时出现同样被拒（别名解析出的目录必然已存在）。
  * 因此本模块的 `CreateSessionRefs` 是精确形状，并配一条**运行期**断言 `assertCreateSessionRefs`：
  * 类型系统保护编译期，断言保护「从别处拼出来的对象」这一路（例如后续有人从 JSON 里读回 payload 再转发）。
  *
@@ -48,7 +48,7 @@ import type { AgentCatalogEntryView } from "../domain";
 
 /** 提交载荷的两个引用：目录引用（别名或绝对目录）+ Agent 标识，另可带「不存在则先创建」。**只有这三项**。 */
 export type CreateSessionRefs =
-  | { readonly workspaceAlias: string; readonly agentId: string; readonly createIfMissing?: never }
+  | { readonly directoryId: string; readonly agentId: string; readonly createIfMissing?: never }
   | { readonly workspacePath: string; readonly agentId: string; readonly createIfMissing?: boolean };
 
 /** 载荷越界：出现了相对路径、目录追加、MCP 配置或凭据字段。 */
@@ -60,8 +60,8 @@ export class CreateSessionPayloadViolation extends Error {
 }
 
 /** 载荷允许出现的键；`agentId` 之外只允许一个目录引用键，另加可选的建目录开关。 */
-const ALLOWED_PAYLOAD_KEYS: readonly string[] = ["workspaceAlias", "workspacePath", "agentId", "createIfMissing"];
-const DIRECTORY_REF_KEYS: readonly string[] = ["workspaceAlias", "workspacePath"];
+const ALLOWED_PAYLOAD_KEYS: readonly string[] = ["directoryId", "workspacePath", "agentId", "createIfMissing"];
+const DIRECTORY_REF_KEYS: readonly string[] = ["directoryId", "workspacePath"];
 
 /**
  * 运行期校验：载荷**恰好**是 `agentId` 加一个目录引用（可带 `createIfMissing`）。
@@ -85,7 +85,7 @@ export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   }
   const present = DIRECTORY_REF_KEYS.filter((key) => record[key] !== undefined);
   if (present.length !== 1) {
-    throw new CreateSessionPayloadViolation("目录引用必须恰好给出一个（workspaceAlias 或 workspacePath）");
+    throw new CreateSessionPayloadViolation("目录引用必须恰好给出一个（directoryId 或 workspacePath）");
   }
   const agentId = record["agentId"];
   if (typeof agentId !== "string" || agentId.length === 0) {
@@ -100,11 +100,11 @@ export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   if (typeof value !== "string" || value.length === 0) {
     throw new CreateSessionPayloadViolation(`${String(key)} 缺失或为空`);
   }
-  if (key === "workspaceAlias") {
+  if (key === "directoryId") {
     if (createIfMissing !== undefined) {
-      throw new CreateSessionPayloadViolation("createIfMissing 与 workspaceAlias 互斥（别名指向的目录必然已存在）");
+      throw new CreateSessionPayloadViolation("createIfMissing 与 directoryId 互斥（别名指向的目录必然已存在）");
     }
-    return { workspaceAlias: value, agentId };
+    return { directoryId: value, agentId };
   }
   // 缺席即假：只有显式为真才把键写进载荷，因此「不建目录」那一支的键集与引入本键之前逐字相同。
   return createIfMissing === true
@@ -205,7 +205,7 @@ export interface DirectoryCrumbModel {
 /**
  * 选定结果：两条来源各自对应一种目录引用。
  *
- * - `registered`：从已登记目录集合里选中的一项 → 载荷用 `workspaceAlias`；
+ * - `registered`：从已登记目录集合里选中的一项 → 载荷用 `directoryId`；
  * - `path`：浏览选定的绝对路径（或「在当前层新建」构造出的候选路径）→ 载荷用 `workspacePath`。
  *
  * 两者的路径/名字都逐字来自服务端下发（`path` 那一支的 `name` 在新建时来自用户输入）。

@@ -345,19 +345,14 @@ describe("解码：命令词表与快照 workspaces 的可选 path", () => {
     expect(decodeWireMessage(unknown)).toMatchObject({ ok: false, reason: "field_type" });
   });
 
-  it("workspaces 条目的 path 可缺席、可非空字符串，但不得为 null 或空串", () => {
-    // 未协商 feature `core.workspace-path.v1`：该键缺席（不是 null、不是空串）。
-    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API" }]))).toMatchObject({ ok: true });
-    // 已协商：规范化路径随条目下发。
-    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: "/home/u/api" }]))).toMatchObject({
-      ok: true,
-    });
-    // 反例：把「路径不可见」编码成显式空值——schema 里没有这一档，整条 chunk 因此被拒。
-    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: null }]))).toMatchObject({
+  it("workspaces 条目要求非空 directoryId 与路径字符串", () => {
+    expect(decodeWireMessage(chunkWith([{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }]))).toMatchObject({ ok: true });
+    // 反例：把路径编码成显式空值或 null——schema 里没有这两档，整条 chunk 因此被拒。
+    expect(decodeWireMessage(chunkWith([{ directoryId: "0123456789abcdef0123456789abcdef", path: null }]))).toMatchObject({
       ok: false,
       reason: "field_type",
     });
-    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: "" }]))).toMatchObject({
+    expect(decodeWireMessage(chunkWith([{ directoryId: "0123456789abcdef0123456789abcdef", path: "" }]))).toMatchObject({
       ok: false,
       reason: "field_type",
     });
