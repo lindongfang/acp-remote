@@ -2,32 +2,22 @@
 
 ## Why
 
-**用户原始要求**：
+根 `schemas/sync/v1/`、`fixtures/sync/v1/` 与 Rust 端（`sync-protocol`、`server::sync`、`core`）已经使用新的目录身份：快照 `workspaces` 条目是 `{ directoryId, path }`，会话摘要的 `workspace` 是 `{ directoryId } | null`，`session.create` 的目录引用是 `directoryId` 或 `workspacePath`。
 
-> 作为另一个变更修复。
+归档变更 `2026-10-17-directory-auto-registration` 的 `tasks.md` 把前端 WP4 标成已完成，但 `clients/app` 仍停在旧模型：协议镜像按 `alias` + `displayName` 解码、`/dir/[alias]` 路由仍在、`session.create` 仍发 `workspaceAlias`、`core.workspace-path.v1` 仍在客户端 feature 广告里。`clients/app npm run check` 因此有 6 条失败：`src/protocol/contract.test.ts` 2 条、`src/sync-client/wire-fixtures.test.ts` 3 条、`src/sync-client/feature-declarations.test.ts` 1 条。
 
-上一轮落地配对页时，整仓门禁暴露出两组**与配对页无关**的既有失败：
-
-1. `clients/app` 的协议镜像仍停在旧的目录模型（`alias` + `displayName`），而根 `schemas/`、`fixtures/` 与 Rust 端已经改成 `directoryId` + `path`。`npm run check` 因此有 6 条失败：`src/protocol/contract.test.ts` 2 条、`src/sync-client/wire-fixtures.test.ts` 3 条、`src/sync-client/feature-declarations.test.ts` 1 条。
-2. Rust 工作区存在既有的 `cargo fmt --check` 差异（例如 `crates/storage-sqlite/tests/workspace_alias.rs`），`npm run verify` 在格式门禁就停下。
-
-归档变更 `2026-10-17-directory-auto-registration` 的 `tasks.md` 把前端 WP4 标成已完成，但代码从未迁移：前端仍按别名渲染目录、`/dir/[alias]` 路由仍在、`session.create` 仍发 `workspaceAlias`、`core.workspace-path.v1` 仍在客户端 feature 广告里。结果是“规范与合同资产已经前进、实现停在旧模型”。本变更按该归档变更的 WP4 把前端补齐，并只做机械格式化修复 Rust 基线；它不引入新的产品行为。
+本变更按归档变更的 WP4 把前端补齐，不引入新的产品行为，也不改协议、schema、Rust 或存储。
 
 ## What Changes
 
-- 前端协议镜像改为当前 wire 形状：
-  - `WorkspaceRef` = `{ directoryId }`；
-  - `WorkspaceCatalogEntry` = `{ directoryId, path }`（`path` 始终在场，不再受 feature 门控）；
-  - 会话摘要的 `workspace` = `{ directoryId } | null`。
-- 前端目录模型改为 `directoryId` 唯一标识；展示名由服务端下发的路径尾段派生，同名时用更多路径段消歧；目录标识只作为路由与命令引用，MUST NOT 出现在界面文本里。
-- 目录详情路由由 `/dir/[alias]` 改为 `/dir/[directoryId]`，路由参数、链接与测试同步。
-- 目录页搜索改为匹配展示名与会话标题，不再提“别名”（目录模型里已经没有别名）。
-- 创建会话的目录引用改为 `directoryId` 或 `workspacePath`；`createIfMissing` 与 `directoryId` 互斥。已记录目录的选择器、浏览回退与提交载荷同步。
-- 客户端 feature 广告移除 `core.workspace-path.v1`；`core.workspace-browse.v1`、`core.session-create.v1`、`core.local-catalog.v1` 不变。`feature-declarations.test.ts` 增加“该 feature 已撤销”的负向断言。
-- e2e 夹具与 R15/R16/路由用例改用 `{ directoryId, path }` 与会话 `{ directoryId }`；期望的展示名改为路径尾段派生值。
-- `cargo fmt` 修复既有 Rust 格式差异；同时清理基线恢复后遗留的未用代码/导入，并让 `UseCases::sync_workspace_catalog` 去掉已撤销的 `include_path` 参数（`path` 已始终下发）。不改变任何 Rust 业务语义。
-- 修改 `pwa-web-client` 的搜索要求：去掉别名匹配，明确目录标识不参与搜索。
-- 同步 `docs/FRONTEND_DESIGN.md` 中仍写“别名/旧路由”的现行口径（如存在）。
+- 前端协议镜像改为当前 wire 形状：`WorkspaceRef = { directoryId }`、`WorkspaceCatalogEntry = { directoryId, path }`；会话摘要 `workspace` 仍为可选/可空，但只含目录标识。
+- 目录模型改为 `directoryId` 唯一标识；展示名由服务端下发的路径尾段派生，同名时用更多路径段消歧；目录标识只作为路由与命令引用，MUST NOT 出现在界面文本里。
+- 目录详情路由由 `/dir/[alias]` 改为 `/dir/[directoryId]`；路由参数、链接与测试同步。
+- 目录页搜索改为匹配展示名与会话标题，不再提“别名”；规范增量同时明确目录标识不参与搜索。
+- 创建会话的目录引用改为 `directoryId` 或 `workspacePath`；`createIfMissing` 与 `directoryId` 互斥。
+- 客户端 feature 广告移除 `core.workspace-path.v1`；`feature-declarations.test.ts` 增加“该 feature 已撤销”的负向断言。
+- e2e 夹具与 R15/R16/路由用例改用 `{ directoryId, path }` 与会话 `{ directoryId }`；期望展示名改为路径尾段派生值。
+- 同步 `docs/FRONTEND_DESIGN.md`、`docs/SYNC_PROTOCOL.md`、`docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md` 与缺口清单中仍写旧目录身份/旧 feature 的现行口径。
 
 ## Capabilities
 
@@ -43,9 +33,8 @@
 
 - **前端**：`clients/app/src/protocol/**`、`clients/app/src/sync-client/**`、`clients/app/src/domain/**`、`clients/app/src/features/**`、`clients/app/src/components/**`、`clients/app/app/dir/**`、`clients/app/src/routing.test.ts` 与相关单测。
 - **e2e**：`clients/app/e2e/page/**` 的夹具、R15/R16/路由断言。
-- **Rust**：仅 `cargo fmt` 的格式变化；无生产逻辑、schema、wire 或存储变更。
-- **文档**：`docs/FRONTEND_DESIGN.md`、`README.md`、`prototypes/IMPLEMENTATION-GAPS.md`（如仍有旧目录身份口径）。
-- **用户可见**：目录仍以路径尾段命名；目录标识不显示；路由地址里的目录段从别名变成目录标识；搜索不再命中别名。
+- **文档**：`docs/FRONTEND_DESIGN.md`、`docs/SYNC_PROTOCOL.md`、`docs/CORE_PORTS_AND_STORAGE.md`、`docs/MODULE_ARCHITECTURE.md`、`prototypes/IMPLEMENTATION-GAPS.md`、`README.md`（如仍有旧前端口径）。
+- **Rust**：无变更。
 
 ## 非目标
 
@@ -53,7 +42,6 @@
 - 不新增目录登记、重命名、删除或手工分组。
 - 不改变目录页/详情页/对话页的视觉形态；只把身份与数据来源换到当前合同。
 - 不重新设计目录浏览或创建会话的产品行为；只对齐字段名与载荷。
-- 不重构与目录身份无关的前端模块。
 
 ## 硬约束
 
@@ -70,4 +58,4 @@
 3. `/dir/<directoryId>` 可打开；旧 `/dir/<alias>` 不再作为产品路由；路由测试与 e2e 同步。
 4. `session.create` 载荷与 `command.schema.json` 一致；`workspace.browse` 回退选择仍可用。
 5. 客户端 feature 广告与 `compatibility/features/v1/features.json` 一致，`core.workspace-path.v1` 不再被广告。
-6. `npm run verify` 全绿（含 `cargo fmt --check`）；`clients/app npm run check` 全绿；`node e2e/run-e2e.mjs` 全绿。
+6. `npm run verify`、`clients/app npm run check`、`node e2e/run-e2e.mjs` 全部通过。
