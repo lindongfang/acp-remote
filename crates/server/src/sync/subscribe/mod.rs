@@ -50,8 +50,9 @@
 //! ## 依赖
 //!
 //! 本模块调用 `core::use_cases`（`sync_device_handshake_view`/`sync_replay`/`sync_visible_sessions`/
-//! `workspaces`/`profiles`/`ids`）与 `core::broker` 的公开面（`Broker::authorize`/`Broker::replay`）以及
-//! `sync-protocol` 的 DTO；不 import `storage-sqlite`、不调用 `server::node_link`、不依赖 `app`
+//! `workspaces`/`profiles`/`ids`）与 `core::broker` 的公开面（只 `Broker::replay` 一处——保留窗口探测；
+//! 授权判定由命令面直连，本模块不做）以及 `sync-protocol` 的 DTO；不 import `storage-sqlite`、
+//! 不调用 `server::node_link`、不依赖 `app`
 //! （`AGENTS.md` §5、`docs/MODULE_ARCHITECTURE.md` §4.9）。**事件投递只走 `UseCases::sync_replay`**
 //! （任务 1.6 落地后收拢）：`Broker::replay` 的直连只剩保留窗口探测一处（`reset_required` 的唯一来源，
 //! 该结论不在 `sync_replay` 的判定范围内，见 `ReadView::sync_replay` 的口径注释）。
@@ -596,9 +597,9 @@ impl SubscribeRoute {
     ///    （`details.reason` 取同一词表的对应值）与主动的 `sync.reset_required`。这一步**先于**任何
     ///    事件读取——被拒的游标绝不进入"从下界开始读"那条钳制分支。
     /// 2. **读到的每一页都按 `globalSequence` 升序投递**：同一批内存储层已排序，跨批由 `next` 续读游标
-    ///    保证单调（每批的 `next` 停在本批最后一条）。权限过滤（`Broker::authorize` 的设备 scope 判定）
-    ///    造成的序号空洞**合法且不报错**（§9.1/§10.1 的 spec）：跳过的序号不进 `event` 帧、不回错误，
-    ///    屏障游标高于该段即可由客户端 ACK。
+    ///    保证单调（每批的 `next` 停在本批最后一条）。设备方向不按授权过滤事件（§9.2 的 `scope: machine`
+    ///    只是订阅范围），仍可能出现的序号空洞只来自保留策略（已压缩或已清理的事件）——这类空洞
+    ///    **合法且不报错**：跳过的序号不进 `event` 帧、不回错误，屏障游标高于该段即可由客户端 ACK。
     /// 3. **空读才是屏障**：读不出更多事件时把本批的 `head` 记为屏障并发 `sync.caught_up`。屏障**之后**
     ///    才允许实时事件进队（实时扇出以"屏障已建立"为闸，见 [`crate::sync::fanout`]），因此重放期间
     ///    到达的事件排在屏障之后、不会越过序号更早的已持久化事件。
