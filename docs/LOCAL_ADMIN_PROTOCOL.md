@@ -493,9 +493,6 @@ categories string[]                # SECURITY_DESIGN.md §14.2 的审计类别�
 | `device list` / `device revoke` | 本地方法 | 1:1 | |
 | `node pair` | 本地方法 ×3 | `node.pair.begin`（`mode = owner\|access`）→ `node.pair.status` → `node.pair.confirm` | 两个方向的差异见下；参数为 `--mode`/`--pairing-url`/`--display-name`/`--grant`/`--export-id` 与非交互的 `--fingerprint` |
 | `node list` / `node revoke` | 本地方法 | 1:1 | |
-| `export create` | 本地方法 | `export.create` | 参数多且有嵌套结构：以 `--file <path>` 传一份 JSON，不用长串 flags；校验失败分别映射为 `local.invalid_params` / `local.conflict` |
-| `export list` / `export revoke` | 本地方法 | 1:1 | |
-| `import add\|list\|remove` | 本地方法 | 1:1 | `import add` 依赖当前 Node Link 连接上的 catalog 快照（§5.5） |
 | `acp-stdio` | channel `0x02` | stdin/stdout 字节泵 | 不进管理信封；会话语义见 §3.1 |
 
 **首切片不提供 `session create`**，`session list` 标为 `post_mvp`：业务命令（`session.*`、`permission.resolve` 等）在 `compatibility/commands/v1/commands.json` 里的 transport 只有 `sync` 与 `node_link`，**本地通道不承载业务命令**；本地会话的唯一入口是 `acp-remote acp-stdio`（Zed → `server::acp_facade` → `core::use_cases::create_session`，不经 wire 命令）。若要给 CLI 加会话语义，必须先决定是否为命令引入 `local` transport（那时需同步 `commands.json`、`broker::required_grant` 镜像与那条“四处一致”门禁），**不得**在本地通道另造同名方法。

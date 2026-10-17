@@ -437,8 +437,6 @@ workspace select
 
 device pair|list|revoke
 node pair|list|revoke
-export create|list|revoke
-import add|list|remove
 
 acp-stdio
 doctor
