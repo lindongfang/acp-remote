@@ -6,7 +6,7 @@
  * - 路径只逐字取自服务端下发 → 快照里带上 `path`/`root`，断言渲染结果里只有**尾段**、
  *   没有整条路径、父段、盘符或任何分隔符（客户端拼接的路径一定带分隔符，因此这条能红）；
  * - 展示名唯一时不呈现路径 → 换一份展示名唯一的目录，断言连尾段锚点都不出现；
- * - 别名不出现在界面上 → 断言别名标签锚点与别名的可见文本都不在，而 `data-directory-alias`
+ * - 目录标识不出现在界面上 → 断言标识标签锚点与标识的可见文本都不在，而 `data-directory-id`
  *   仍每项恰好一处（它只作路由与命令引用的内部标识）；
  * - 两种空态可区分 → 两段文案与 `data-empty-state` 都不同；
  * - 断连仍可渲染并标注来源 → 断连时目录行仍在，且标注「来自上次同步」；
@@ -14,7 +14,7 @@
  * - 空态指引指向列表 → 有目录时空态与目录列表**同时**呈现（含目录项），一个目录都没有时
  *   不得出现任何目录项；
  * - 每个目录项都可进入详情页 → 展示名入口**与会话数无关**，且与「查看全部 ›」的动作取值
- *   可区分（`[data-directory-alias]` 仍每项恰好一处）；
+ *   可区分（`[data-directory-id]` 仍每项恰好一处）；
  * - 三项汇总由会话摘要得出 → 会话总数胶囊恒在，运行中/待处理徽标只在非零时追加；
  * - 会话行五字段 → 圆点（带 `data-session-state`）、标题、状态词、Agent、相对时间；
  *   等待授权/等待输入各出现对应状态词，其余状态只留圆点；
@@ -43,25 +43,25 @@ import type { SessionStateView } from "../domain/session-summary";
 import { DIRECTORY_EMPTY_COPY, buildDirectoryPageModel } from "../features/directory-model";
 import type { DirectoryDetailModel, DirectoryPageModel, SessionRowModel } from "../features/directory-model";
 import { WORKSPACES, WORKSPACES_WITH_PATHS, resources, session, storeWith } from "../features/testing/fixtures";
-import type { WorkspaceRef } from "../protocol";
+import type { WorkspaceCatalogEntry } from "../protocol";
 
 const SESSIONS = [
   session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" }),
   session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "waiting_permission" }),
-  session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", alias: "personal-api" }),
+  session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", directoryId: "personal-api" }),
 ];
 
 /**
  * 渲染目录页。点击回调在渲染测试里不会被触发。
  *
  * 新 props 都带上：搜索框与筛选段只有传了回调才呈现，缺省（不传）就是既有调用点的样子。
- * `sessionsByAlias` 缺省不带这一键（`exactOptionalPropertyTypes` 不允许显式传 `undefined`），
+ * `sessionsByDirectoryId` 缺省不带这一键（`exactOptionalPropertyTypes` 不允许显式传 `undefined`），
  * 等价于「不列内联会话行」。`onCreateSession` 是**必填**（入口恒可用），因此无条件传入。
  */
 function renderDirectoryList(
   model: DirectoryPageModel,
   options: {
-    readonly sessionsByAlias?: ReadonlyMap<string, readonly SessionRowModel[]>;
+    readonly sessionsByDirectoryId?: ReadonlyMap<string, readonly SessionRowModel[]>;
     readonly query?: string;
     /** 顶部创建入口（工具条右端）的回调；**缺省不传** = 该入口不呈现（既有调用点的样子）。 */
     readonly onCreateSessionToBrowse?: () => void;
@@ -81,21 +81,21 @@ function renderDirectoryList(
       ...(options.onCreateSessionToBrowse === undefined
         ? {}
         : { onCreateSessionToBrowse: options.onCreateSessionToBrowse }),
-      ...(options.sessionsByAlias === undefined ? {} : { sessionsByAlias: options.sessionsByAlias }),
+      ...(options.sessionsByDirectoryId === undefined ? {} : { sessionsByDirectoryId: options.sessionsByDirectoryId }),
     }),
   );
 }
 
 /**
- * 把渲染结果按**卡片根节点**切成一段一段：每段的起点就是该项根节点上的 `data-directory-alias="`。
+ * 把渲染结果按**卡片根节点**切成一段一段：每段的起点就是该项根节点上的 `data-directory-id="`。
  *
  * 用**前瞻**切分（而不是把那个属性本身当分隔符吃掉），于是段内还能继续断言「这一项上一共有几处
- * 别名」——别名一旦被顺手挂到标题入口或「⊕ 新建」按钮上，段内计数就 > 1。逐段断言才能表达
+ * 目录标识」——标识一旦被顺手挂到标题入口或「⊕ 新建」按钮上，段内计数就 > 1。逐段断言才能表达
  * 「**这一项**有没有那个入口/那个数字」：整页 `toContain` 分不清「A 项有、B 项没有」。
  * 段数即目录项数。
  */
 function cardSegments(html: string): readonly string[] {
-  return html.split(/(?=data-directory-alias=")/).slice(1);
+  return html.split(/(?=data-directory-id=")/).slice(1);
 }
 
 /** 把渲染结果按**会话行根节点**切开：段数即会话行数（同一手法，见 `cardSegments`）。 */
@@ -125,7 +125,7 @@ function renderSingleSessionRow(state: SessionStateView, title: string | null = 
     }),
   });
   const html = renderDirectoryList(store.directoryPage(), {
-    sessionsByAlias: store.directoryPageSessions(),
+    sessionsByDirectoryId: store.directoryPageSessions(),
   });
   // 只列了一条会话，且它在 `work-api` 的卡片里——卡片头在它**之前**，因此段内只剩这一行本身
   // （段尾可能带上后面那张零会话卡片的卡片头，但那里面没有状态词）。
@@ -174,7 +174,7 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
     expect(html.match(/data-directory-display-name="api"/g)).toHaveLength(2);
   });
 
-  it("别名不再作为界面元素：只以根节点的属性出现，MUST NOT 出现在可见文本里", () => {
+  it("目录标识不再作为界面元素：只以根节点的属性出现，MUST NOT 出现在可见文本里", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
@@ -183,10 +183,10 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
       }),
     );
 
-    // `data-directory-alias` 仍是路由与命令引用的机器锚点：每项恰好一处。
-    expect(html.match(/data-directory-alias="/g)).toHaveLength(2);
-    // 反例：别名标签或别名的可见文本一旦回来（这就是「别名呈现在界面上」），下面三条变红。
-    expect(html).not.toContain("data-directory-alias-label");
+    // `data-directory-id` 仍是路由与命令引用的机器锚点：每项恰好一处。
+    expect(html.match(/data-directory-id="/g)).toHaveLength(2);
+    // 反例：标识标签或标识的可见文本一旦回来（这就是「目录标识呈现在界面上」），下面三条变红。
+    expect(html).not.toContain("data-directory-id-label");
     expect(html).not.toContain(">work-api<");
     expect(html).not.toContain(">personal-api<");
   });
@@ -194,13 +194,13 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
   it("展示名唯一时不呈现任何路径片段", () => {
     // 单独造一份**展示名唯一**的目录：feature 层据「同名才给尾段」把 `pathTail` 判成 `null`。
     const solo = [
-      { alias: "solo", displayName: "solo-api", path: "E:\\secret\\solo-api" },
-    ] as unknown as readonly WorkspaceRef[];
+      { directoryId: "solo", path: "E:\\secret\\solo-api" },
+    ] as const satisfies readonly WorkspaceCatalogEntry[];
 
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({
-          sessions: [session({ id: "aaaaaaaa-0000-4000-8000-000000000009", alias: "solo" })],
+          sessions: [session({ id: "aaaaaaaa-0000-4000-8000-000000000009", directoryId: "solo" })],
           workspaces: solo,
         }),
         connection: "online",
@@ -216,7 +216,7 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
     expect(html).toContain('data-directory-display-name="solo-api"');
   });
 
-  it("没有下发路径时（未协商该 feature）不呈现任何路径片段", () => {
+  it("同名消歧只呈现路径段：整条路径与分隔符都不出现", () => {
     const html = renderDirectoryList(
       buildDirectoryPageModel({
         resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }),
@@ -225,7 +225,13 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
       }),
     );
 
-    expect(html).not.toContain("data-directory-path-tail");
+    // 两条目录的尾段都是 `api`，消歧段分别是父目录那一段。
+    expect(html).toContain('data-directory-path-tail="work"');
+    expect(html).toContain('data-directory-path-tail="personal"');
+    // 反例：把整条路径（或父段、盘符）当成文本呈现时下面逐条变红。
+    expect(html).not.toContain("D:\\work\\api");
+    expect(html).not.toContain("D:\\personal\\api");
+    expect(html).not.toContain("D:");
     expect(html).not.toContain("\\");
   });
 
@@ -240,8 +246,8 @@ describe("R15 目录项：路径只逐字取自服务端下发", () => {
 
     const cards = cardSegments(html);
     expect(cards).toHaveLength(2);
-    const workApi = cards.find((card) => card.startsWith('data-directory-alias="work-api"')) ?? "";
-    const personalApi = cards.find((card) => card.startsWith('data-directory-alias="personal-api"')) ?? "";
+    const workApi = cards.find((card) => card.startsWith('data-directory-id="work-api"')) ?? "";
+    const personalApi = cards.find((card) => card.startsWith('data-directory-id="personal-api"')) ?? "";
 
     expect(countsOf(workApi)).toEqual(["2", "1", "1"]);
     expect(countsOf(personalApi)).toEqual(["1", "", ""]);
@@ -266,7 +272,7 @@ describe("R15 断连时目录仍可渲染", () => {
     expect(html).toContain('data-content-origin="last_sync"');
     expect(html).toContain("内容来自上次同步");
     // 反例：断连时不渲染目录项，这里会是空列表，断言变红。
-    expect(html).toContain('data-directory-alias="work-api"');
+    expect(html).toContain('data-directory-id="work-api"');
   });
 
   it("对照：在线时标注为本次同步（证明上一条不是因为标注写死）", () => {
@@ -337,9 +343,9 @@ describe("R15 两种空态可区分", () => {
     expect(html).toContain(DIRECTORY_EMPTY_COPY.directories_without_sessions.guidance);
     // ……指引下方的**列表也必须真的在**，否则指引指向空处。
     expect(html).toContain('data-directory-list="directories"');
-    expect(html.match(/data-directory-alias="/g)).toHaveLength(2);
+    expect(html.match(/data-directory-id="/g)).toHaveLength(2);
     expect(html.indexOf(DIRECTORY_EMPTY_COPY.directories_without_sessions.guidance)).toBeLessThan(
-      html.indexOf('data-directory-alias="'),
+      html.indexOf('data-directory-id="'),
     );
     // 每个目录项都带展示名入口 → 零会话的机器上仍能进入某个详情页（死路的另一半修复）。
     expect(html.match(/data-action="open-directory"/g)).toHaveLength(2);
@@ -363,7 +369,7 @@ describe("R15 两种空态可区分", () => {
     expect(html).toContain('data-empty-state="no_directories"');
     // 反例：若空态无条件渲染列表容器，这里会出现空的 `data-directory-list`（消费者会误以为有列表）。
     expect(html).not.toContain("data-directory-list");
-    expect(html).not.toContain("data-directory-alias");
+    expect(html).not.toContain("data-directory-id");
     expect(html).not.toContain('data-action="open-directory"');
   });
 });
@@ -373,7 +379,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     // 生产路径：模型与会话行都经 ClientStore 取（与页面同一条取数路径）。
     const { store } = storeWith({ resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }) });
     const html = renderDirectoryList(store.directoryPage(), {
-      sessionsByAlias: store.directoryPageSessions(),
+      sessionsByDirectoryId: store.directoryPageSessions(),
     });
 
     expect(html).toContain('data-session-id="aaaaaaaa-0000-4000-8000-000000000001"');
@@ -382,8 +388,8 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     expect(html).toContain('data-session-state="running"');
     expect(html).toContain('data-session-updated-at=');
     // 反例：会话行一旦带上路径（或任何本地拼出的片段），这里会变红。
-    expect(html).not.toContain("data-directory-path-tail");
-    expect(html).not.toContain("\\");
+    expect(html).not.toContain("D:\\work\\api");
+    expect(html).not.toContain("D:");
   });
 
   it("会话时间渲染的是模型给的相对文案（「20 分钟前」），不是组件自算的日期切片", () => {
@@ -402,7 +408,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     });
 
     const html = renderDirectoryList(store.directoryPage(), {
-      sessionsByAlias: store.directoryPageSessions(nowMs),
+      sessionsByDirectoryId: store.directoryPageSessions(nowMs),
     });
 
     // 精确值仍原样进 `data-*`（排序与逐字断言用它），与「渲染哪个文案」是两回事。
@@ -444,7 +450,8 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     const before = [...(store.directoryPageSessions().get("work-api") ?? [])].map((row) => row.id);
 
     // 目录页的查询/筛选都是 store 的 UI 状态，改它们**只在**目录页模型上生效。
-    store.setDirectoryQuery("work-api");
+    // 查询词命中两个目录的展示名 `api`，再叠加 running 就只剩 work-api。
+    store.setDirectoryQuery("api");
     store.setDirectoryFilter("running");
 
     // 反例：若内联行也过一遍目录页的查询/筛选（或借道别的选择器），这里会被滤掉。
@@ -452,7 +459,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
 
     // 对照：目录页**模型**确实吃到了那两个 UI 状态——否则上一条断言可能只是「什么都没发生」。
     const page = store.directoryPage();
-    expect(page.kind === "ready" ? page.directories.map((directory) => directory.alias) : []).toEqual([
+    expect(page.kind === "ready" ? page.directories.map((directory) => directory.directoryId) : []).toEqual([
       "work-api",
     ]);
 
@@ -494,7 +501,7 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     const withMany = { resources: resources({ sessions: many, workspaces: WORKSPACES }) };
     const model = buildDirectoryPageModel({ ...withMany, connection: "online", lastSyncedAtMs: null });
     const html = renderDirectoryList(model, {
-      sessionsByAlias: storeWith(withMany).store.directoryPageSessions(),
+      sessionsByDirectoryId: storeWith(withMany).store.directoryPageSessions(),
     });
 
     expect(html).toContain("查看全部 ›");
@@ -528,12 +535,12 @@ describe("R15 目录页：内联会话行 / 搜索无结果 / 查看全部", () 
     const cards = cardSegments(html);
     expect(cards).toHaveLength(2);
     for (const card of cards) {
-      // 每个目录项**恰好一处**展示名入口；`data-directory-alias` 也只在这里的根节点出现一次。
+      // 每个目录项**恰好一处**展示名入口；`data-directory-id` 也只在这里的根节点出现一次。
       expect(card.match(/data-action="open-directory"/g)).toHaveLength(1);
-      expect(card.match(/data-directory-alias="/g)).toHaveLength(1);
+      expect(card.match(/data-directory-id="/g)).toHaveLength(1);
     }
     // 反例：若展示名入口被实现成「有会话才可点」，0 会话那一项就没有入口，断言变红。
-    const noSessions = cards.filter((card) => !card.startsWith('data-directory-alias="work-api"'));
+    const noSessions = cards.filter((card) => !card.startsWith('data-directory-id="work-api"'));
     expect(noSessions).toHaveLength(1);
     expect(noSessions[0]).toContain('data-action="open-directory"');
     expect(noSessions[0]).not.toContain("open-directory-all");
@@ -641,14 +648,14 @@ describe("R15 目录项：不再呈现最近活动时间 + 目录内创建入口
     });
 
     const html = renderDirectoryList(store.directoryPage(), {
-      sessionsByAlias: store.directoryPageSessions(),
+      sessionsByDirectoryId: store.directoryPageSessions(),
     });
 
     // 反例：把目录行的活动时间加回来（属性或「最近 …」文案）都会在这里红。
     expect(html).not.toContain("data-directory-latest-at");
     expect(html).not.toContain("最近");
     // 对照：那一项仍然渲染出会话行与会话数——不是「谁都没渲染」。
-    expect(html).toContain('data-directory-alias="work-api"');
+    expect(html).toContain('data-directory-id="work-api"');
     expect(html).toContain('data-session-id="cccccccc-0000-4000-8000-000000000005"');
   });
 
@@ -662,8 +669,8 @@ describe("R15 目录项：不再呈现最近活动时间 + 目录内创建入口
     const granted = renderDirectoryList(model);
     expect(granted.match(/data-action="create-session"/g)).toHaveLength(2);
     expect(granted).toContain("⊕ 新建");
-    // 新入口不得把 `data-directory-alias` 再挂一份（R15 数它的个数）。
-    expect(granted.match(/data-directory-alias="/g)).toHaveLength(2);
+    // 新入口不得把 `data-directory-id` 再挂一份（R15 数它的个数）。
+    expect(granted.match(/data-directory-id="/g)).toHaveLength(2);
     // 每个目录项各一处：入口是卡片级的，不会因为内联会话行多出几份。
     for (const card of cardSegments(granted)) {
       expect(card.match(/data-action="create-session"/g)).toHaveLength(1);
@@ -679,12 +686,12 @@ describe("R15 目录详情：链接失效与「目录存在但无会话」是两
 
     expect(html).toContain('data-directory-sessions="empty"');
     expect(html).toContain("这个目录里还没有会话");
-    // 反例：若详情模型把「有目录但无会话」当成别名失效，这里渲染的是告警，断言变红。
+    // 反例：若详情模型把「有目录但无会话」当成目录标识失效，这里渲染的是告警，断言变红。
     expect(html).not.toContain('data-directory-detail-state="unknown_directory"');
     expect(html).not.toContain("可能已被删除");
   });
 
-  it("对照：别名不在快照里才是「链接已失效」——两种呈现互不冒充", () => {
+  it("对照：目录标识不在快照里才是「链接已失效」——两种呈现互不冒充", () => {
     const { store } = storeWith({ resources: resources({ sessions: [], workspaces: WORKSPACES }) });
     const html = renderDirectoryDetail(store.directoryDetail("not-there"));
 

@@ -3,10 +3,10 @@
  *
  * ## 判别力从哪来
  *
- * 断言的是**渲染后的 HTML 字符串**而不是模型字段：「别名不呈现」「路径要么逐字呈现、要么整行
- * 不呈现」这类要求只有落到「哪一段文字出现在同一份渲染结果里」才是真的。为此本文件把渲染结果
- * 里**所有标签剥掉**再断言文本（见 `textContentOf`）：`data-directory-alias` 之类的机器锚点
- * 本来就带着别名，只有文本层才能回答「用户看得见别名吗」。
+ * 断言的是**渲染后的 HTML 字符串**而不是模型字段：「目录标识不呈现」「路径逐字呈现且不派生」
+ * 这类要求只有落到「哪一段文字出现在同一份渲染结果里」才是真的。为此本文件把渲染结果
+ * 里**所有标签剥掉**再断言文本（见 `textContentOf`）：`data-directory-id` 之类的机器锚点
+ * 本来就带着目录标识，只有文本层才能回答「用户看得见目录标识吗」。
  *
  * `renderToStaticMarkup` 没有事件、也没有布局引擎，因此这里**不**断言交互与滚动：
  * 「点上一页/下一页」「输入期间列表不重画、回车与失焦才提交（非法页码就地纠正）」
@@ -89,8 +89,8 @@ function isDisabled(tag: string): boolean {
 /**
  * 渲染结果的**可见文本**：剥掉全部标签与实体后剩下的文字。
  *
- * 别名、路径这类「该不该让用户看见」的要求必须在文本层判定——机器锚点（`data-directory-alias`）
- * 本来就带别名，拿整串 HTML 断言只会得到自相矛盾的结论。
+ * 目录标识、路径这类「该不该让用户看见」的要求必须在文本层判定——机器锚点（`data-directory-id`）
+ * 本来就带目录标识，拿整串 HTML 断言只会得到自相矛盾的结论。
  */
 function textContentOf(html: string): string {
   return html
@@ -147,7 +147,7 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
 
     expect(html).toContain('data-directory-sessions="empty"');
     expect(html).toContain("这个目录里还没有会话");
-    // 反例：把「还没有会话」当成别名失效，下面两条会各自变红。
+    // 反例：把「还没有会话」当成目录标识失效，下面两条会各自变红。
     expect(html).not.toContain("可能已被删除");
     expect(html).not.toContain("data-directory-detail-state");
     // 一条会话都没有时总页数是 1：翻页控件（含页码输入）不得呈现。
@@ -167,18 +167,18 @@ describe("R15 目录详情：两种「空」互不冒充", () => {
     expect(html).not.toContain("data-directory-detail-state");
   });
 
-  it("对照：别名不在快照里才是「链接已失效」——与上面两种在文案与标记上都不同", () => {
+  it("对照：目录标识不在快照里才是「链接已失效」——与上面两种在文案与标记上都不同", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("not-there"));
 
     expect(html).toContain('data-directory-detail-state="unknown_directory"');
     expect(html).toContain("可能已被删除");
-    // 提示里**不得**出现别名（它只作机器锚点）：反例是把文案写回「目录「not-there」不在…」。
+    // 提示里**不得**出现目录标识（它只作机器锚点）：反例是把文案写回「目录「not-there」不在…」。
     expect(textContentOf(html)).not.toContain("not-there");
     expect(textContentOf(html)).toContain("这个目录不在最近一次同步的目录列表里");
     expect(html).not.toContain("这个目录里还没有会话");
     expect(html).not.toContain("data-directory-sessions");
-    // 失效别名下也要有离开本页的入口：自建导航删掉后，返回按钮只在这里（见组件内的页头）。
+    // 失效标识下也要有离开本页的入口：自建导航删掉后，返回按钮只在这里（见组件内的页头）。
     expect(html).toContain('data-action="back-to-dirs"');
   });
 
@@ -216,28 +216,27 @@ describe("R15 目录详情：页头（返回 + 标题 + 会话数芯片 + 路径
     expect(html.indexOf("D:\\work\\api", labelAt), "路径值必须出现在标签之后").toBeGreaterThanOrEqual(0);
   });
 
-  it("别名不呈现：它只作为路由与命令引用的内部标识留在机器锚点上", () => {
+  it("目录标识不呈现：它只作为路由与命令引用的内部标识留在机器锚点上", () => {
     const { store } = storeWith({
       resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES_WITH_PATHS }),
     });
     const html = renderDetail(store.directoryDetail("work-api"));
 
-    // 反例：把别名再当标题/副标题渲染出来时，下面两条会红（`data-directory-alias-label` 是旧锚点）。
+    // 反例：把目录标识再当标题/副标题渲染出来时，下面两条会红（`data-directory-id-label` 是旧锚点）。
     expect(textContentOf(html)).not.toContain("work-api");
-    expect(html).not.toContain("data-directory-alias-label");
-    // 别名仍在机器锚点上：路由与命令引用需要它，R15 的既有断言也靠它选节点。
-    expect(html).toContain('data-directory-alias="work-api"');
+    expect(html).not.toContain("data-directory-id-label");
+    // 目录标识仍在机器锚点上：路由与命令引用需要它，R15 的既有断言也靠它选节点。
+    expect(html).toContain('data-directory-id="work-api"');
   });
 
-  it("未协商路径（快照条目没有 `path` 键）时整行不呈现，也不用展示名拼一段看起来像路径的文本", () => {
+  it("路径始终呈现：逐字来自快照条目的 `path`，不拼接也不替代", () => {
     const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
     const html = renderDetail(store.directoryDetail("work-api"));
 
-    expect(html).not.toContain("data-directory-path");
-    expect(textContentOf(html)).not.toContain("路径");
-    // 反例：拿展示名/别名拼路径的实现会在这里露出盘符或分隔符。
-    expect(textContentOf(html)).not.toMatch(/[A-Za-z]:[\\/]/);
-    expect(textContentOf(html)).not.toContain("\\");
+    expect(html).toContain('data-directory-path="D:\\work\\api"');
+    expect(textContentOf(html)).toContain("路径");
+    // DOM 里的文本逐字是那一段路径。
+    expect(textContentOf(html)).toContain("D:\\work\\api");
   });
 });
 
@@ -325,7 +324,7 @@ describe("R15 目录详情：断连时标注上次同步时刻", () => {
     return buildDirectoryDetailModel({
       resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }),
       connection,
-      alias: "work-api",
+      directoryId: "work-api",
       ownerLabelOf: () => "另一台电脑",
       nowMs: 1_700_000_000_000,
     });
@@ -421,7 +420,7 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     const html = renderDetail(store.directoryDetail("work-api"));
 
     expect(html).toContain('data-route="dir-detail"');
-    expect(html).toContain('data-directory-alias="work-api"');
+    expect(html).toContain('data-directory-id="work-api"');
     expect(html).toContain('data-directory-display-name="api"');
     expect(html).toContain('data-content-origin="last_sync"');
     expect(html).toContain('data-directory-sessions="list"');
@@ -436,7 +435,7 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     expect(html).not.toContain("需要电脑端授予");
     // 三项汇总徽标已随本变更移除（它是旧详情页的呈现，原型上只有「N 个会话」芯片）。
     expect(html).not.toContain("data-directory-count");
-    // ready 分支不呈现「别名失效 / 等待同步」这两个状态标记。
+    // ready 分支不呈现「目录标识失效 / 等待同步」这两个状态标记。
     expect(html).not.toContain("data-directory-detail-state");
 
     // 列表语义仍在：容器 role="list" 渲染成 `<ul>`，会话行 role="listitem" 渲染成 `<li>`。
@@ -445,12 +444,19 @@ describe("R15 目录详情：既有 data-* 与列表语义逐一保留", () => {
     expect(html).toContain("<li");
   });
 
-  it("没有服务端下发的路径时，渲染结果里不出现任何路径片段", () => {
-    const { store } = storeWith({ resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES }) });
+  it("只呈现快照里的逐字路径：不派生父目录，也不漏出快照之外的键", () => {
+    const { store } = storeWith({
+      resources: resources({ sessions: DETAIL_SESSIONS, workspaces: WORKSPACES_WITH_PATHS }),
+    });
     const html = renderDetail(store.directoryDetail("work-api"));
 
-    // 反例：组件若从别名派生「父目录」或把 cwd 之类的字段漏出来，下面两条会变红。
-    expect(html).not.toContain("\\");
-    expect(html).not.toMatch(/[A-Za-z]:[\\/]/);
+    // `path` 必填且逐字呈现：那一整串只来自快照条目。
+    expect(html).toContain('data-directory-path="D:\\work\\api"');
+    expect(textContentOf(html)).toContain("D:\\work\\api");
+    // 反例：组件若从目录标识派生「父目录」，或把快照之外的多余键（夹具里的 `root`、
+    // 将来可能出现的 `cwd`）漏出来，去掉那条逐字路径后仍会留下反斜杠片段/盘符路径。
+    const withoutPath = textContentOf(html).split("D:\\work\\api").join("");
+    expect(withoutPath).not.toContain("\\");
+    expect(withoutPath).not.toMatch(/[A-Za-z]:[\\/]/);
   });
 });

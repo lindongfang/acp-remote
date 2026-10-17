@@ -12,8 +12,9 @@ export type {
   DirectoryListState,
   DirectorySessionCounts,
   DirectoryEmptyState,
+  DirectoryNames,
 } from "./directory";
-export { buildDirectoryViews, DIRECTION_EMPTY_STATES, workspacePathOf } from "./directory";
+export { buildDirectoryViews, directoryNamesOf, DIRECTION_EMPTY_STATES } from "./directory";
 
 export type {
   SessionSummaryView,

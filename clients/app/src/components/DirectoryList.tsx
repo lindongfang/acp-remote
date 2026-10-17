@@ -8,11 +8,11 @@
  * - **卡体是缩进树**：本组件只把内联会话行（`SessionRow`）或那一行「这个目录还没有会话」
  *   交给卡片的 `children`，缩进与左边线由卡片负责。
  *
- * ## 路径与别名
+ * ## 路径与目录标识
  *
  * 目录项上唯一的路径来源是 `DirectoryRowModel.pathTail`（feature 层已按「同名才给」判定过：
- * 展示名唯一时为 `null`）。组件**不**拼接、不规范化和不反查路径，也没有从别名或展示名推出
- * 路径的表达方式。别名不进界面：它**只**作为根节点的 `data-directory-alias`（路由与命令引用
+ * 展示名唯一时为 `null`）。组件**不**拼接、不规范化和不反查路径，也没有从目录标识或展示名推出
+ * 路径的表达方式。目录标识不进界面：它**只**作为根节点的 `data-directory-id`（路由与命令引用
  * 的内部标识、e2e 的锚点），本组件不把它渲染成任何文字。
  *
  * ## 三种「空」互不冒充
@@ -31,18 +31,18 @@
  * - **搜索框**：受控（`query` + `onQueryChange`），判定在 feature 层（`buildDirectoryPageModel`），
  *   组件只把值画出来、把输入上抛；缺省不呈现（没有消费者的输入框是坏的）。
  * - **筛选段**：`SegmentControl`，取值 `all`/`running`/`pending`，同样受控。
- * - **内联会话行**：`sessionsByAlias` 由页面从 store 取（只依赖快照，与详情页的查询词/月份无关），
+ * - **内联会话行**：`sessionsByDirectoryId` 由页面从 store 取（只依赖快照，与详情页的查询词/月份无关），
  *   每个目录项只列前 `MAX_INLINE_SESSIONS` 条（原型 `MAX_ROWS = 5`）。
  * - **进入详情页的两条路径**（与卡片头一一对应）：**展示名**（`data-action="open-directory"`，
  *   与会话数无关）与**「查看全部 ›」**（`data-action="open-directory-all"`，只有该目录有会话时
  *   才给出）。两者都走 `onOpenDirectory`，动作取值可区分是为了让消费方能分别断言。
- * - **目录内创建**：`onCreateSession(alias)`（**必填**）；每个目录项恒呈现「⊕ 新建」——
+ * - **目录内创建**：`onCreateSession(directoryId)`（**必填**）；每个目录项恒呈现「⊕ 新建」——
  *   设备不再有创建会话的权限维度，因此组件不做也不接受任何权限判定或说明。
  * - **工具条右端的顶部创建入口**：`onCreateSessionToBrowse()`（**可选**，缺省不呈现），画在搜索框与
  *   筛选段右边（原型工具条的位置就是那里）。它与卡头上的「⊕ 新建」是两个可区分的控件：前者目录未知、
- *   后者目录已定（`onCreateSession(alias)`）。它**不**受「空态/加载中不呈现搜索框与筛选段」的约束——
- *   一个目录都没登记或还在等第一份快照时，它恰恰是目录页上唯一的创建路径。
- * - **折叠**：每个目录项**各自**的局部状态，翻转一个别名不影响其它目录项。
+ *   后者目录已定（`onCreateSession(directoryId)`）。它**不**受「空态/加载中不呈现搜索框与筛选段」的约束——
+ *   一个目录都没记录或还在等第一份快照时，它恰恰是目录页上唯一的创建路径。
+ * - **折叠**：每个目录项**各自**的局部状态，翻转一个目录标识不影响其它目录项。
  * - **同步时间**：`lastSyncedAtMs` 非 `null` 才画；从未成功替换过快照时为 `null`，
  *   此时绝不编造时刻（spec「从未成功同步」MUST NOT）。
  *
@@ -97,27 +97,27 @@ const FILTER_OPTIONS = [
 export interface DirectoryListProps {
   readonly model: DirectoryPageModel;
   /** 进入某个目录详情（页面负责导航）。 */
-  readonly onOpenDirectory: (alias: string) => void;
+  readonly onOpenDirectory: (directoryId: string) => void;
   /**
    * 在该目录内创建会话（页面负责打开弹层与提交）。
    *
    * **必填**：设备不再有创建会话的权限维度，目录项上的创建入口恒可用，因此调用方没有
    * 「因为权限而不给回调」这个选项，组件也不再承接任何权限说明。
    */
-  readonly onCreateSession: (alias: string) => void;
+  readonly onCreateSession: (directoryId: string) => void;
   /**
    * **顶部**创建入口（目录未知：「⊕ 新建」）：页面据此打开「逐层浏览并选定一层」那条链路。
    *
    * 可选：缺省不呈现该入口（本组件的其它消费方不带这条路径）。它画在工具条**右端**（原型的
    * 工具条就是这个位置），与每张卡头上的「⊕ 新建」是两个可区分的控件——后者的目录已经定了
-   * （`onCreateSession(alias)`），前者的目录还没定。
+   * （`onCreateSession(directoryId)`），前者的目录还没定。
    */
   readonly onCreateSessionToBrowse?: (() => void) | undefined;
   /**
-   * 内联会话行的来源：按目录别名分组的会话行（页面从 store 取）。
+   * 内联会话行的来源：按目录标识分组的会话行（页面从 store 取）。
    * 缺省空 Map，等价于「只呈现目录项、不列会话行」。
    */
-  readonly sessionsByAlias?: ReadonlyMap<string, readonly SessionRowModel[]>;
+  readonly sessionsByDirectoryId?: ReadonlyMap<string, readonly SessionRowModel[]>;
   /** 受控搜索框的当前值；缺省 `""`。 */
   readonly query?: string;
   /** 搜索框的输入回调；缺省不呈现搜索框。 */
@@ -252,7 +252,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
     onOpenDirectory,
     onCreateSession,
     onCreateSessionToBrowse,
-    sessionsByAlias,
+    sessionsByDirectoryId,
     query = "",
     onQueryChange,
     filter = "all",
@@ -267,13 +267,13 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
    * 折叠是**视图内部**的临时状态：它不需要跨页存活（查询与筛选需要，因此那两个值住在
    * store 里），也不改变任何数据判定——所以留在这里，而不是又开一个 store 字段。
    */
-  const [collapsedAliases, setCollapsedAliases] = useState<readonly string[]>([]);
+  const [collapsedDirectoryIds, setCollapsedDirectoryIds] = useState<readonly string[]>([]);
 
   /**
    * 工具条右端的**顶部创建入口**（页面给了回调才画）。
    *
    * 它的出现**不**跟搜索框/筛选段走：那两者受「有没有可搜索/可筛选的内容」约束，而入口通向的是
-   * 「逐层浏览主机目录」这条路——还没拿到快照、一个目录都没登记时它反而是页面上唯一的创建路径
+   * 「逐层浏览主机目录」这条路——还没拿到快照、一个目录都没记录时它反而是页面上唯一的创建路径
    * （原型同样把 `⊕ 新建` 画在主工具栏里，与列表是否为空无关）。
    */
   const createEntry =
@@ -325,40 +325,40 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
    * 前者只是不列行，不冒充后者的文案。
    */
   const renderDirectoryCard = (directory: DirectoryRowModel): ReactElement => {
-    const collapsed = collapsedAliases.includes(directory.alias);
-    const inline = (sessionsByAlias?.get(directory.alias) ?? []).slice(0, MAX_INLINE_SESSIONS);
+    const collapsed = collapsedDirectoryIds.includes(directory.directoryId);
+    const inline = (sessionsByDirectoryId?.get(directory.directoryId) ?? []).slice(0, MAX_INLINE_SESSIONS);
     return (
       <DirectoryCard
-        key={directory.alias}
+        key={directory.directoryId}
         displayName={directory.displayName}
-        alias={directory.alias}
+        directoryId={directory.directoryId}
         // 同名消歧尾段：逐字来自服务端下发的路径，且只在同名时非 `null`（feature 层判定）。
         pathTail={directory.pathTail}
         counts={directory.counts}
         collapsed={collapsed}
         onToggleCollapsed={() => {
-          // 只翻转本项的别名：其它目录项的折叠态不受影响（spec 场景「目录项折叠」）。
-          setCollapsedAliases(
-            collapsedAliases.includes(directory.alias)
-              ? collapsedAliases.filter((item) => item !== directory.alias)
-              : [...collapsedAliases, directory.alias],
+          // 只翻转本项的目录标识：其它目录项的折叠态不受影响（spec 场景「目录项折叠」）。
+          setCollapsedDirectoryIds(
+            collapsedDirectoryIds.includes(directory.directoryId)
+              ? collapsedDirectoryIds.filter((item) => item !== directory.directoryId)
+              : [...collapsedDirectoryIds, directory.directoryId],
           );
         }}
         // 展示名入口：无论该目录有多少会话都可用（0 会话的目录同样可达详情页，spec 场景）。
         onOpen={() => {
-          onOpenDirectory(directory.alias);
+          onOpenDirectory(directory.directoryId);
         }}
         // 「查看全部 ›」：只要该目录有会话就给出，否则会呈现一个通向空页面的入口。
         onOpenAll={
           directory.counts.total === 0
             ? null
             : () => {
-                onOpenDirectory(directory.alias);
+                onOpenDirectory(directory.directoryId);
               }
         }
         // 目录内创建：入口恒可用（页面无条件给出回调）。
         onCreate={() => {
-          onCreateSession(directory.alias);
+          onCreateSession(directory.directoryId);
         }}
       >
         {inline.length > 0 ? (
@@ -415,7 +415,7 @@ export function DirectoryList(props: DirectoryListProps): ReactElement {
 
       {/* 空态下没有可搜索/可筛选的内容，因此不呈现搜索框与筛选段；「搜索无结果」时**必须**呈现，
           否则用户没有把关键词或筛选改回去的入口。顶部创建入口不跟这条约束走（见上面 `createEntry`），
-          它一个目录都没登记时更该在，所以只要它在，工具条这一行就画出来。 */}
+          它一个目录都没记录时更该在，所以只要它在，工具条这一行就画出来。 */}
       {model.kind === "empty" && createEntry === null ? null : (
         <View style={styles.toolbar} dataSet={{ directoryToolbar: "true" }}>
           {model.kind === "empty" || onQueryChange === undefined ? null : (

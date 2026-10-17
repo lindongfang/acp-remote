@@ -300,8 +300,9 @@ describe("command.status 记录收窄", () => {
   });
 });
 
-describe("解码：命令词表与快照 workspaces 的可选 path", () => {
+describe("解码：命令词表与快照 workspaces 的目录身份", () => {
   const REQUEST_ID = "4c4dafda-dd98-442e-8d55-252b75bac72d";
+  const DIRECTORY_ID = "0123456789abcdef0123456789abcdef";
 
   /** 形状正确、只有 `body` 可换的命令帧信封。 */
   const COMMAND_ENVELOPE = {
@@ -345,14 +346,38 @@ describe("解码：命令词表与快照 workspaces 的可选 path", () => {
     expect(decodeWireMessage(unknown)).toMatchObject({ ok: false, reason: "field_type" });
   });
 
-  it("workspaces 条目要求非空 directoryId 与路径字符串", () => {
-    expect(decodeWireMessage(chunkWith([{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }]))).toMatchObject({ ok: true });
-    // 反例：把路径编码成显式空值或 null——schema 里没有这两档，整条 chunk 因此被拒。
-    expect(decodeWireMessage(chunkWith([{ directoryId: "0123456789abcdef0123456789abcdef", path: null }]))).toMatchObject({
+  it("workspaces 条目必须是 directoryId + 非空 path，旧 alias/displayName 形状被拒", () => {
+    // 当前合同：`directoryId` 与非空的规范化 `path` 成对出现。
+    expect(decodeWireMessage(chunkWith([{ directoryId: DIRECTORY_ID, path: "/home/u/api" }]))).toMatchObject({
+      ok: true,
+    });
+    // 旧形状（只有 alias/displayName，没有 directoryId）：必填键缺失，整条 chunk 被拒。
+    expect(decodeWireMessage(chunkWith([{ alias: "api", displayName: "API", path: "/home/u/api" }]))).toMatchObject({
+      ok: false,
+      reason: "missing_field",
+    });
+    // 旧键混进新形状同样拒收（`additionalProperties: false` 的口径）。
+    expect(
+      decodeWireMessage(
+        chunkWith([{ directoryId: DIRECTORY_ID, alias: "api", displayName: "API", path: "/home/u/api" }]),
+      ),
+    ).toMatchObject({ ok: false, reason: "field_type" });
+    // 缺 path：没有路径就无法派生展示名，整条 chunk 被拒。
+    expect(decodeWireMessage(chunkWith([{ directoryId: DIRECTORY_ID }]))).toMatchObject({
+      ok: false,
+      reason: "missing_field",
+    });
+    // 反例：把「路径不可见」编码成显式空值——schema 里没有这一档，整条 chunk 因此被拒。
+    expect(decodeWireMessage(chunkWith([{ directoryId: DIRECTORY_ID, path: null }]))).toMatchObject({
       ok: false,
       reason: "field_type",
     });
-    expect(decodeWireMessage(chunkWith([{ directoryId: "0123456789abcdef0123456789abcdef", path: "" }]))).toMatchObject({
+    expect(decodeWireMessage(chunkWith([{ directoryId: DIRECTORY_ID, path: "" }]))).toMatchObject({
+      ok: false,
+      reason: "field_type",
+    });
+    // `directoryId` 同样必须是非空字符串。
+    expect(decodeWireMessage(chunkWith([{ directoryId: "", path: "/home/u/api" }]))).toMatchObject({
       ok: false,
       reason: "field_type",
     });

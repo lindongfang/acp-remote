@@ -30,7 +30,7 @@ const HEADER = {
   title: "修复登录超时",
   agentName: "Claude",
   state: "running" as const,
-  directoryAlias: "work-api",
+  directoryId: "work-api",
   originOfflineLabel: null,
 };
 

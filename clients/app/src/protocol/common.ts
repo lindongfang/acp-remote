@@ -158,31 +158,28 @@ export interface RemoteOrigin {
 }
 
 /**
- * `$defs.workspaceRef`：会话摘要的目录**引用**只有别名与展示名两个键，路径不在这里重复
- * ——需要路径的客户端按 `alias` 在同一份快照的 `workspaces` 条目里查表
+ * `$defs.workspaceRef`：会话摘要的目录**引用**只有不透明标识 `directoryId`，路径不在这里重复
+ * ——需要路径的客户端按 `directoryId` 在同一份快照的 `workspaces` 条目里查表
  * （`WorkspaceCatalogEntry`，`docs/SYNC_PROTOCOL.md` §9.4）。
+ *
+ * `directoryId` 由服务端按规范化绝对路径派生，客户端 MUST NOT 解析、拼接或由它反推路径。
  */
 export interface WorkspaceRef {
-  readonly alias: string;
-  readonly displayName: string;
+  readonly directoryId: string;
 }
 
 /**
  * `$defs.workspaceCatalogEntry`：快照 `workspaces` 资源的单个元素（§9.4）。
  *
- * 它比 `WorkspaceRef` 只多一个路径键，且那个键是**可选而非可空**的：
+ * `directoryId` 与 `path` **始终成对出现**（二者都是必填键，没有 feature 门控）：
  *
- * - 只在客户端协商了 feature `core.workspace-path.v1` 时出现；未协商时 MUST **缺席** ——
- *   不是 `null`，也不是空串。因此这里写成可选属性 `path?: string` 而不是
- *   `path: string | null`：把 `null` 写进类型会让「用显式 null 冒充未协商」在编译期成立，
- *   而服务端对该形状一律按 `protocol.schema_invalid` 拒收整条快照；
- * - 取值是已登记目录的**规范化**路径（`canonicalize` 的结果剥掉平台 verbatim 前缀），
+ * - `directoryId` 是会话摘要引用的同一个不透明标识；
+ * - `path` 是已登记目录的**规范化**路径（`canonicalize` 的结果剥掉平台 verbatim 前缀），
  *   客户端 MUST NOT 拼接、规范化或反查它，回传时服务端会重新规范化并以自己的结果为准。
  */
 export interface WorkspaceCatalogEntry {
-  readonly alias: string;
-  readonly displayName: string;
-  readonly path?: string;
+  readonly directoryId: string;
+  readonly path: string;
 }
 
 /** `$defs.agentCatalogEntry`：快照 `agents` 资源的元素形状。 */

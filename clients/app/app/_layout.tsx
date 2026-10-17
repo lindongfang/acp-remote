@@ -19,7 +19,7 @@
  * ## 路由形态
  *
  * 下方的 `Stack` 是 Expo Router 默认的 Web 链接：路由按文件约定走**正常路径**
- * （`/`、`/pair`、`/hosts`、`/dir/<alias>`、`/session/<id>`），地址里的片段不参与路由命中，
+ * （`/`、`/pair`、`/hosts`、`/dir/<directoryId>`、`/session/<id>`），地址里的片段不参与路由命中，
  * 只承载配对二维码的内容（design D4）。核实方式与产物证据见 `src/routing.test.ts` 的文件头。
  */
 

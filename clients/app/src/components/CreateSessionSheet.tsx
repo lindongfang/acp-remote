@@ -12,7 +12,7 @@
  *    （还没连上主机 / 服务端未提供该能力，见 `BROWSE_UNAVAILABLE_NOTICES`）——未协商不等于服务端不支持。
  * 3. **入口恒可用**：设备不再有创建会话的权限维度，因此这里**没有**任何权限门控，也不再出现
  *    「需要由电脑端授予」类说明。副作用说明照常呈现（`CREATE_EFFECT_NOTE`）。
- * 4. **列表里不出现别名**：目录块呈现展示名与路径（别名只作机器标识，见根节点的 `data-create-sheet`）。
+ * 4. **列表里不出现目录标识**：目录块呈现派生展示名与路径（标识只作机器标识，见根节点的 `data-create-sheet`）。
  * 5. **创建中与终态分别呈现**：`creating` 分支显示「创建中」且按钮禁用（不接受重复提交）；
  *    失败分支把**参数类**与**服务端不可用类**分开说明（`CREATE_FAILURE_NOTES`）。
  * 6. **结果不确定显眼且不被自动消解**：`uncertain` 分支是一个独立的、醒目的区块，
@@ -54,8 +54,8 @@ import {
 /**
  * 提交时要带上的三样东西：选中的 Agent、用户看到的那个目录路径、以及是否允许「不存在则先创建」。
  *
- * `directoryPath` 留空表示「用入口所属的那个**已登记目录**」（别名引用）；顶部入口在回退列表里
- * 选中一项时同样留空——别名不在表单载荷里，而是由仓库从它自己的单份浏览状态里读。
+ * `directoryPath` 留空表示「用入口所属的那个**已记录目录**」（目录标识引用）；顶部入口在回退列表里
+ * 选中一项时同样留空——目录标识不在表单载荷里，而是由仓库从它自己的单份浏览状态里读。
  */
 export interface CreateSessionSubmit {
   readonly agentId: string;
@@ -89,7 +89,7 @@ export interface CreateSessionSheetProps {
  * `dataSet`），消费方按**属性**取这段文字，不必依赖 RNW 的标签映射。
  *
  * 文案与原型一致（就是「新建会话」四个字）：目录的展示名与路径在下方的目录块里，标题里不再复述——
- * 别名也因此没有出现在标题里的机会。
+ * 目录标识也因此没有出现在标题里的机会。
  */
 const TITLE_PROPS = { role: "heading", "aria-level": 2 } as unknown as TextProps;
 
@@ -416,12 +416,12 @@ export function CreateSessionSheet({
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
 
-  // 顶部入口的选定结果：目录引用由它给出（已登记目录用别名，选定的路径用 `workspacePath`）。
+  // 顶部入口的选定结果：目录引用由它给出（已记录目录用 `directoryId`，选定的路径用 `workspacePath`）。
   // 目录块先取成局部常量：下面按 `kind` 分支时 narrowing 只依赖这一个不可变绑定。
   const directory = model.directory;
   const selection = directory.kind === "browse" ? directory.selection : null;
   const picked = selection !== null && selection.kind === "path" ? selection : null;
-  // 留空 = 用入口所属的已登记目录（或回退列表里选中的那一项）——别名不在表单载荷里。
+  // 留空 = 用入口所属的已记录目录（或回退列表里选中的那一项）——目录标识不在表单载荷里。
   const directoryPath = picked === null ? "" : picked.path;
   const createIfMissing = picked !== null && picked.willCreate;
   const selectedName =
@@ -459,8 +459,8 @@ export function CreateSessionSheet({
           </View>
           <View style={styles.dirRow}>
             <Text style={styles.dirKey}>路径</Text>
-            <Text style={styles.dirPath} dataSet={{ createDirectoryPath: directory.path ?? "" }}>
-              {directory.path ?? "—"}
+            <Text style={styles.dirPath} dataSet={{ createDirectoryPath: directory.path }}>
+              {directory.path}
             </Text>
           </View>
         </View>

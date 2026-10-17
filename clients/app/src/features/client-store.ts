@@ -78,13 +78,13 @@ import {
   buildSessionReadPageView,
   buildTimelineCard,
   compareTimelinePosition,
+  directoryNamesOf,
   mergeStructuredRecords,
   positionOf,
   recordFromEvent,
   recordFromHistoryItem,
   recordGroupOf,
   viewText,
-  workspacePathOf,
 } from "../domain";
 import type { AgentConnectionOverlay } from "../domain/agent-catalog";
 import type { ConnectionIdentity, IdentifierSource, SyncGateway } from "./ports";
@@ -144,7 +144,12 @@ import type {
   DirectoryPageModel,
   SessionRowModel,
 } from "./directory-model";
-import { buildDirectoryDetailModel, buildDirectoryPageModel, buildSessionRowsByAlias, correctPageNumber } from "./directory-model";
+import {
+  buildDirectoryDetailModel,
+  buildDirectoryPageModel,
+  buildSessionRowsByDirectoryId,
+  correctPageNumber,
+} from "./directory-model";
 import type { HostIdentityModel, HostPanelModel } from "./host-panel-model";
 import { buildHostPanelModel } from "./host-panel-model";
 import type { PairingKind, PairingPageModel, PairingPollResult, PairingQrRead, PairingWiring } from "./pairing-model";
@@ -263,14 +268,14 @@ export interface ClientState {
   readonly createRequestIds: ReadonlyMap<string, Uuid>;
   /** 结果不确定的 `requestId`：保留到用户主动处理，不随时间或重连清除。 */
   readonly uncertainRequestIds: readonly Uuid[];
-  readonly createSheetAlias: string | null;
+  readonly createSheetDirectoryId: string | null;
   /**
    * 顶部入口打开的创建弹层（没有已知目录，目录由浏览/选择给出）。
    *
-   * 与 `createSheetAlias` **互斥**、共同构成「弹层是否打开」这**一个**判据的两支：三个写入方
+   * 与 `createSheetDirectoryId` **互斥**、共同构成「弹层是否打开」这**一个**判据的两支：三个写入方
    * （`openCreateSheet` / `openCreateSheetToBrowse` / `closeCreateSheet`）每次都同时设置两者，
-   * 因此不存在「两边都开着」或「都关着却还渲染弹层」的中间态。之所以不把它塞进 `createSheetAlias`
-   * 的取值域，是因为那个字段的语义是「入口所属的已登记目录别名」，而顶部入口根本没有别名。
+   * 因此不存在「两边都开着」或「都关着却还渲染弹层」的中间态。之所以不把它塞进 `createSheetDirectoryId`
+   * 的取值域，是因为那个字段的语义是「入口所属的已记录目录标识」，而顶部入口根本没有目录。
    */
   readonly createSheetBrowses: boolean;
   /** 目录浏览选择器（`workspace.browse`）的状态：单份、跨路由存活。 */
@@ -289,11 +294,11 @@ export interface ClientState {
   /**
    * 上面那个页码属于**哪个目录**；`null` 表示它不属于任何目录（没有生效值）。
    *
-   * 页码是单份状态，而它的含义与目录绑定：`directoryDetail(alias)` 只在两者对得上时才采用这个值，
+   * 页码是单份状态，而它的含义与目录绑定：`directoryDetail(directoryId)` 只在两者对得上时才采用这个值，
    * 换一个目录立刻按第一页渲染——**首帧**就是对的，不必等挂载后的复位（复位晚一帧时，用户会先看到
    * 上一个目录的页码被渲染出来再被跳回去）。
    */
-  readonly directoryDetailAlias: string | null;
+  readonly directoryDetailDirectoryId: string | null;
   /** 对话页窄屏的次级视图（D5）；三栏内容始终在 DOM，未选中的栏只隐藏。 */
   readonly conversationSecondaryView: ConversationSecondaryView;
   /** 对话页左栏的目录内搜索词；只影响左栏列表，不改中栏当前会话。 */
@@ -329,14 +334,14 @@ export function initialClientState(): ClientState {
     commands: new Map(),
     createRequestIds: new Map(),
     uncertainRequestIds: [],
-    createSheetAlias: null,
+    createSheetDirectoryId: null,
     createSheetBrowses: false,
     directoryBrowse: initialDirectoryBrowseState(),
     diagnosticsEventId: null,
     directoryQuery: "",
     directoryFilter: "all",
     directoryDetailPage: "",
-    directoryDetailAlias: null,
+    directoryDetailDirectoryId: null,
     conversationSecondaryView: DEFAULT_CONVERSATION_SECONDARY_VIEW,
     conversationSidebarQuery: "",
     conversationSidebarLimit: CONVERSATION_SIDEBAR_BATCH_SIZE,
@@ -1038,14 +1043,14 @@ export class ClientStore {
    *
    * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
    */
-  directoryDetail(alias: string, nowMs?: number): DirectoryDetailModel {
+  directoryDetail(directoryId: string, nowMs?: number): DirectoryDetailModel {
     return buildDirectoryDetailModel({
       resources: this.#state.resources,
       connection: this.#state.connection.state,
-      alias,
+      directoryId,
       ownerLabelOf: this.#ownerLabelOf,
       nowMs: nowMs ?? this.#now(),
-      pageInput: this.#state.directoryDetailAlias === alias ? this.#state.directoryDetailPage : "",
+      pageInput: this.#state.directoryDetailDirectoryId === directoryId ? this.#state.directoryDetailPage : "",
     });
   }
 
@@ -1058,7 +1063,7 @@ export class ClientStore {
    * @param nowMs 相对时间的基准；缺省读本仓库注入的时钟（{@link nowMs}）。
    */
   directoryPageSessions(nowMs?: number): ReadonlyMap<string, readonly SessionRowModel[]> {
-    return buildSessionRowsByAlias({
+    return buildSessionRowsByDirectoryId({
       resources: this.#state.resources,
       ownerLabelOf: this.#ownerLabelOf,
       nowMs: nowMs ?? this.#now(),
@@ -1073,20 +1078,23 @@ export class ClientStore {
   /**
    * 创建弹层模型（R16）。入口没有权限维度：创建入口恒可用。
    *
-   * @param alias 入口所属的已登记目录别名；顶部入口（目录由浏览/选择给出）传 `null`。
-   *   别名不在快照里时目录块退回浏览/选择形态——别名只是机器标识，不拿它当展示名。
+   * @param directoryId 入口所属的已记录目录标识；顶部入口（目录由浏览/选择给出）传 `null`。
+   *   标识不在快照里时目录块退回浏览/选择形态——标识只是机器标识，不拿它当展示名。
    */
-  createEntry(alias: string | null): CreateSessionEntryModel {
-    const sheetKey = alias ?? CREATE_SHEET_BROWSE_KEY;
+  createEntry(directoryId: string | null): CreateSessionEntryModel {
+    const sheetKey = directoryId ?? CREATE_SHEET_BROWSE_KEY;
     const requestId = this.#state.createRequestIds.get(sheetKey);
+    const workspaces = this.#state.resources?.workspaces ?? [];
     const workspace =
-      alias === null ? undefined : this.#state.resources?.workspaces.find((item) => item.alias === alias);
+      directoryId === null ? undefined : workspaces.find((item) => item.directoryId === directoryId);
+    const derived =
+      directoryId === null ? undefined : directoryNamesOf(workspaces).get(directoryId);
     return buildCreateSessionEntryModel({
-      directoryAlias: alias,
+      directoryId,
       knownDirectory:
         workspace === undefined
           ? null
-          : { displayName: workspace.displayName, path: workspacePathOf(workspace) },
+          : { displayName: derived?.displayName ?? workspace.path, path: workspace.path },
       browsingSupported: this.#state.selectedFeatures.includes(WORKSPACE_BROWSE_FEATURE),
       selection: this.#state.directoryBrowse.selection,
       agents: this.agentCatalog(),
@@ -1114,7 +1122,7 @@ export class ClientStore {
       title: titleOf(summary),
       agentName: summary?.agent.name ?? "",
       state: summary?.state ?? "idle",
-      directoryAlias: summary?.workspace?.alias ?? null,
+      directoryId: summary?.workspace?.directoryId ?? null,
       originOfflineLabel: originOfflineLabelOf(summary, this.#ownerLabelOf),
     };
     const origin: "local" | { readonly kind: "remote"; readonly online: boolean } =
@@ -1317,10 +1325,10 @@ export class ClientStore {
    * 三个写入方都从这里或 {@link openCreateSheetToBrowse} 走，因此「弹层是否打开」永远只有一处判据。
    * 同时复位浏览状态：换一个目录入口就是新一次创建，上一次的选定不该被带过来。
    */
-  openCreateSheet(alias: string): void {
+  openCreateSheet(directoryId: string): void {
     this.#commit({
       ...this.#state,
-      createSheetAlias: alias,
+      createSheetDirectoryId: directoryId,
       createSheetBrowses: false,
       directoryBrowse: initialDirectoryBrowseState(),
     });
@@ -1335,7 +1343,7 @@ export class ClientStore {
   openCreateSheetToBrowse(): void {
     this.#commit({
       ...this.#state,
-      createSheetAlias: null,
+      createSheetDirectoryId: null,
       createSheetBrowses: true,
       directoryBrowse: initialDirectoryBrowseState(),
     });
@@ -1343,10 +1351,10 @@ export class ClientStore {
 
   /** 关闭创建弹层（连带关闭并复位它的目录选择器：选定只在一次弹层会话里有效）。 */
   closeCreateSheet(): void {
-    if (this.#state.createSheetAlias === null && !this.#state.createSheetBrowses) return;
+    if (this.#state.createSheetDirectoryId === null && !this.#state.createSheetBrowses) return;
     this.#commit({
       ...this.#state,
-      createSheetAlias: null,
+      createSheetDirectoryId: null,
       createSheetBrowses: false,
       directoryBrowse: initialDirectoryBrowseState(),
     });
@@ -1484,12 +1492,14 @@ export class ClientStore {
     });
   }
 
-  /** 本机已登记的目录（快照 `workspaces`）：不支持浏览时的回退选择，路径未下发时为 `null`。 */
+  /** 本机已记录的目录（快照 `workspaces`）：不支持浏览时的回退选择。 */
   registeredDirectories(): readonly RegisteredDirectoryModel[] {
-    return (this.#state.resources?.workspaces ?? []).map((workspace) => ({
-      alias: workspace.alias,
-      displayName: workspace.displayName,
-      path: workspacePathOf(workspace),
+    const workspaces = this.#state.resources?.workspaces ?? [];
+    const names = directoryNamesOf(workspaces);
+    return workspaces.map((workspace) => ({
+      directoryId: workspace.directoryId,
+      displayName: names.get(workspace.directoryId)?.displayName ?? workspace.path,
+      path: workspace.path,
     }));
   }
 
@@ -1523,19 +1533,19 @@ export class ClientStore {
    *
    * 纠正**在提交时**完成，且回落值是**当前生效页**：因此敲一段非数字不会把列表换掉（规格
    * 「列表内容不因一次非法输入而重画」——纠正后的值就是原来的值），越界数字则夹紧到边界。
-   * 存回状态的也是纠正后的字符串，于是输入框的回填与列表永远一致。持有者同时记为 `alias`：
+   * 存回状态的也是纠正后的字符串，于是输入框的回填与列表永远一致。持有者同时记为目录标识：
    * 这个页码从此只属于这个目录（见 `directoryDetail`）。
    *
-   * @param alias 正在看的目录：页数与生效页码都取决于它（`total` 是**该目录**的行数）。
+   * @param directoryId 正在看的目录：页数与生效页码都取决于它（`total` 是**该目录**的行数）。
    */
-  setDirectoryDetailPage(alias: string, requested: string): void {
-    const model = this.directoryDetail(alias);
+  setDirectoryDetailPage(directoryId: string, requested: string): void {
+    const model = this.directoryDetail(directoryId);
     const current = model.kind === "ready" ? model.page : 1;
     const pageCount = model.kind === "ready" ? model.pageCount : 1;
     this.#commit({
       ...this.#state,
       directoryDetailPage: String(correctPageNumber({ requested, pageCount, fallback: current })),
-      directoryDetailAlias: alias,
+      directoryDetailDirectoryId: directoryId,
     });
   }
 
@@ -1578,7 +1588,7 @@ export class ClientStore {
     this.#commit({
       ...this.#state,
       directoryDetailPage: "",
-      directoryDetailAlias: null,
+      directoryDetailDirectoryId: null,
     });
   }
 
@@ -1890,19 +1900,19 @@ export class ClientStore {
    * 四道闸门，任一不过即**不发命令**：
    * 1. 已建立连接（命令信封需要 `connectionId`）；
    * 2. Agent 必须在本机已配置的目录里（快照 `agents`），不是「用户输入什么就发什么」；
-   * 3. 目录引用必须能定下来（入口别名、选定结果，或表单带回来的路径，三者都不为空）；
+   * 3. 目录引用必须能定下来（入口目录标识、选定结果，或表单带回来的路径，三者都不为空）；
    * 4. 载荷恰好是 `agentId` 加一个目录引用（加可选的 `createIfMissing`，由 `assertCreateSessionRefs` 把关）。
    *
    * 目录**不再有权限门控**（设备权限层已删除）：入口与提交都不看任何 scope。
    * `directoryPath` 是表单带回来的那一份（顶部入口选定/新建出来的路径，逐字是用户看到的那一份）；
-   * 别名不跟着表单走，而是从本仓库的浏览器状态里读——顶部入口在回退列表里选中的那一项就是它。
+   * 目录标识不跟着表单走，而是从本仓库的浏览器状态里读——顶部入口在回退列表里选中的那一项就是它。
    * 两者都换算成 `session.create` 的两个合法形状之一，含 `createIfMissing` 的那一支只跟路径搭配。
    *
-   * `createRequestIds` 一律以**弹层的机器键**为键（已登记目录用别名，顶部入口用
+   * `createRequestIds` 一律以**弹层的机器键**为键（已记录目录用目录标识，顶部入口用
    * `CREATE_SHEET_BROWSE_KEY`）：用户改目录不改弹层，因此提交状态不会与界面失联。
    */
   submitCreateSession(input: {
-    readonly directoryAlias: string | null;
+    readonly directoryId: string | null;
     readonly agentId: string;
     readonly directoryPath?: string;
     readonly createIfMissing?: boolean;
@@ -1910,28 +1920,28 @@ export class ClientStore {
     const connectionId = this.#identity.connectionId;
     if (connectionId === null) return NOT_CONNECTED;
 
-    const entry = this.createEntry(input.directoryAlias);
+    const entry = this.createEntry(input.directoryId);
     if (!entry.agents.some((agent) => agent.id === input.agentId)) {
       return { ok: false, reason: "所选 Agent 不在本机已配置的 Agent 目录里" };
     }
     const path = input.directoryPath ?? "";
     const createIfMissing = input.createIfMissing === true;
     const selected = this.#state.directoryBrowse.selection;
-    const registeredAlias =
-      input.directoryAlias ?? (selected !== null && selected.kind === "registered" ? selected.alias : null);
+    const registeredDirectoryId =
+      input.directoryId ?? (selected !== null && selected.kind === "registered" ? selected.directoryId : null);
     let refs: CreateSessionRefs;
     if (path.length > 0) {
       refs = createIfMissing
         ? { workspacePath: path, agentId: input.agentId, createIfMissing: true }
         : { workspacePath: path, agentId: input.agentId };
     } else {
-      if (registeredAlias === null) {
-        return { ok: false, reason: "还没有选定目录：先浏览并选中一层，或改用已登记的目录。" };
+      if (registeredDirectoryId === null) {
+        return { ok: false, reason: "还没有选定目录：先浏览并选中一层，或改用已记录的目录。" };
       }
       if (createIfMissing) {
-        return { ok: false, reason: "已登记的目录必然存在，不能对它启用「不存在则先创建」。" };
+        return { ok: false, reason: "已记录的目录必然存在，不能对它启用「不存在则先创建」。" };
       }
-      refs = { directoryId: registeredAlias, agentId: input.agentId };
+      refs = { directoryId: registeredDirectoryId, agentId: input.agentId };
     }
     assertCreateSessionRefs(refs);
 
@@ -1939,7 +1949,7 @@ export class ClientStore {
     const commands = new Map(this.#state.commands);
     commands.set(requestId, createCommand({ requestId, command: "session.create" }));
     const createRequestIds = new Map(this.#state.createRequestIds);
-    createRequestIds.set(input.directoryAlias ?? CREATE_SHEET_BROWSE_KEY, requestId);
+    createRequestIds.set(input.directoryId ?? CREATE_SHEET_BROWSE_KEY, requestId);
     this.#commit({ ...this.#state, commands, createRequestIds });
 
     this.#sync.dispatch(

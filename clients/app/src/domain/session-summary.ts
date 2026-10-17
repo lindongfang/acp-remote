@@ -48,8 +48,8 @@ export interface SessionSummaryView {
   readonly agentId: string;
   readonly state: SessionStateView;
   readonly origin: SessionOriginView;
-  /** 目录归属：别名或 `null`（未登记目录的会话不归入任何目录项）。 */
-  readonly directoryAlias: string | null;
+  /** 目录归属：目录标识或 `null`（未登记目录的会话不归入任何目录项）；标识不进界面文本。 */
+  readonly directoryId: string | null;
   readonly updatedAt: Timestamp;
   readonly createdAt: Timestamp;
 }
@@ -77,7 +77,7 @@ export function buildSessionSummaryView(
       summary.origin.kind === "local"
         ? { kind: "local" }
         : { kind: "remote", online: summary.origin.online, ownerLabel },
-    directoryAlias: summary.workspace?.alias ?? null,
+    directoryId: summary.workspace?.directoryId ?? null,
     updatedAt: summary.updatedAt,
     createdAt: summary.createdAt,
   };

@@ -409,7 +409,13 @@ function decodeSnapshotChunk(parsed: JsonObject, body: unknown): WireDecodeResul
       if (!isObject(item)) return reject("field_type", "snapshot 元素不是对象");
       if (resource === "workspaces") {
         if (!hasKeys(item, ["directoryId", "path"])) {
-          return reject("field_type", "workspaces 元素缺 directoryId/path");
+          return reject("missing_field", "workspaces 元素缺 directoryId/path");
+        }
+        // 旧形状（`alias`/`displayName`）与「路径不可见」的显式空值都按
+        // `protocol.schema_invalid` 拒收整条 chunk：`workspaceCatalogEntry` 只认
+        // `directoryId` 与非空的规范化 `path`，客户端不得猜测或补全缺失的身份。
+        if ("alias" in item || "displayName" in item) {
+          return reject("field_type", "workspaces 元素仍是旧 alias/displayName 形状");
         }
         if (!isNonEmptyString(item["directoryId"]) || !isNonEmptyString(item["path"])) {
           return reject("field_type", "workspaces 元素的 directoryId/path 必须是非空字符串");

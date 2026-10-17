@@ -342,7 +342,7 @@ describe("CRITICAL-1：socket 级 burst 下的多 chunk 快照", () => {
         snapshotId: SNAPSHOT_ID,
         chunkIndex: "1",
         resource: "workspaces",
-        items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }],
+        items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }],
       }),
       makeSnapshotChunk({
         snapshotId: SNAPSHOT_ID,

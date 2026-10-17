@@ -4,7 +4,7 @@
  * `session.read` 的 `before`/`limit`/`beforeHistory`/`include` 里的 `history` **只**在 Sync
  * 传输面生效（`design.md` D3、D11）；Node Link 面的同名命令不含这些键。`session.create` 的
  * `payload` **只**允许 `agentId`、目录引用与建目录开关三类字段：目录引用由 `directoryId`
- * （已登记别名）与 `workspacePath`（客户端提供的绝对目录）**恰好一个**给出，可选的
+ * （已记录目录的标识）与 `workspacePath`（客户端提供的绝对目录）**恰好一个**给出，可选的
  * `createIfMissing` 只与 `workspacePath` 相容（`design.md` D4 / `pwa-web-client` 的
  * 「会话创建入口与载荷」）。`workspace.browse` 是只读的逐层目录列举（feature
  * `core.workspace-browse.v1` 门控，§11.5）。
@@ -105,13 +105,13 @@ export interface WorkspaceBrowseCommand extends CommandEnvelope {
  * `$defs.sessionCreate` 的 payload（Sync 面）。
  *
  * `agentId`（必填，本机已配置的 Agent 标识）与目录引用：目录引用由 `directoryId`
- * （本机已登记目录的 `directoryId`）与 `workspacePath`（客户端提供的**绝对**目录）**恰好一个**
+ * （本机已记录目录的标识）与 `workspacePath`（客户端提供的**绝对**目录）**恰好一个**
  * 给出——同时给出或都不给出一律被服务端以 `protocol.schema_invalid` 拒绝，客户端 MUST NOT
  * 猜测以哪一个为准。
  *
  * 可选的 `createIfMissing` 是显式的「目录不存在则先创建」开关，它与 `directoryId`
- * **互斥**（别名解析出的目录必然已存在）：联合型把它钉在 `workspacePath` 那一支上，
- * 另一支把该键声明成 `never`，因此「别名 + createIfMissing」这种形状在编译期就无法构造。
+ * **互斥**（已记录的目录必然已存在）：联合型把它钉在 `workspacePath` 那一支上，
+ * 另一支把该键声明成 `never`，因此「目录标识 + createIfMissing」这种形状在编译期就无法构造。
  */
 export type SessionCreatePayload =
   | {

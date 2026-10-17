@@ -37,7 +37,7 @@ import type * as ReactNative from "react-native";
 import * as ReactNativeWeb from "react-native-web";
 
 /**
- * `dataSet` 是 react-native-web 的转发表成员（`data-directory-alias` 这类 `data-*` 属性由它
+ * `dataSet` 是 react-native-web 的转发表成员（`data-directory-id` 这类 `data-*` 属性由它
  * 生成），但没有进入 `react-native` 的公开类型——`expo/types/react-native-web.d.ts` 的 web 补丁
  * 也没加它。本变更把 `data-*` 当作 e2e 的唯一机器证据，因此这里补上宿主元素的这一项：
  * `Pressable` 的 props 继承 `ViewProps`，而 `Text` 的 props 在类型里是独立的一支，需要各自声明。
