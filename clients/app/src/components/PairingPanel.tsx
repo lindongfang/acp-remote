@@ -1,38 +1,40 @@
 /**
- * 配对面板（首次配对 + 重新配对入口）。
+ * 配对面板（`docs/FRONTEND_DESIGN.md` §4.1）。
  *
- * 页面**没有**任何凭据、MCP 配置或路径输入：设备私钥由 `src/platform/` 生成且不可导出，
- * 这些配置只能在电脑上完成。本组件只呈现配对状态机的结果，并提供唯一的输入入口——
- * 粘贴一段二维码内容（design D3 的取舍：v1 用粘贴而不是扫码，不需要摄像头也不必新增解码依赖）。
+ * ## 页面只有一个入口，也只有一个来源
  *
- * ## 组件不判定、不解析
+ * 配对内容只从浏览器地址片段进入（`/pair#data=…` 或 `/node-link/pair#data=…`）；本组件
+ * **没有**输入框、粘贴框、提交按钮或「重新扫码」入口。它只是状态页：渲染 `ClientStore`
+ * 产出的固定呈现（`PairingPresentation`），不判定、不解析、不发请求。
  *
- * 输入框只把**文本**交给 `onSubmit`（页面转给 `ClientStore`），结构校验、claim、轮询与落盘
- * 都在 store 与组合根里。提交后立刻清空输入框：粘进来的内容含一次性的配对秘密，
- * 不留在组件状态里，也不出现在呈现上。
+ * ## 只渲染固定文案
  *
- * ## 迁移到样式基座（`design.md` D1/D7）
+ * 标题、说明、警示、色调与是否显示倒计时全部来自模型；后端错误 `message` 与任何载荷内容
+ * 都没有进入页面的通道。`data-pairing-error` 锚点仍带错误码，供诊断与测试使用。
  *
- * 形态取自原型的配对页舞台：标题、引导语、录入行、主机信息与终态说明各占一块。
- * **字段与 `data-*` 锚点一个都没有变**（`data-route`、`data-pairing-phase`、`data-pairing-guidance`、
- * `data-pairing-entry`、`data-pairing-input`、`data-action="submit-pairing-qr"`、`data-pairing-host`、
- * `data-host-address`、`data-pairing-awaiting-desktop`、`data-pairing-device-id`、
- * `data-pairing-error`、`data-action="restart-pairing"`），取值也原样。
+ * ## 转圈与倒计时
  *
- * 可点控件一律 `role="button"`（RNW 据此渲染 `<button>`，`disabled` 也随之成为原生属性）。
+ * 进行中状态画一个居中转圈；圆环内是载荷 `expiresAt` 推出的剩余有效期（`m:ss`，每秒重算）。
+ * 归零只显示 `0:00`，状态迁移由 `ClientStore` 的到期定时器负责，页面不自行改状态。
+ * 动画用 React Native `Animated`（`useNativeDriver: false`），不用 CSS keyframes。
+ *
+ * ## 主题
+ *
+ * 颜色一律来自 `useTheme()` 的当前调色板（浅/深各建一次样式表）；本页不提供页内主题切换，
+ * 也不绘制页头与返回入口——共享外壳在配对路径隐藏全局顶栏，本页就是这个例外下的全部内容。
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import type * as ReactNative from "react-native";
+// @ts-expect-error `react-native-web` 不发布类型声明；运行时绑定与 `./theme` 同一取舍。
+import * as ReactNativeWeb from "react-native-web";
 
 import type { PairingPageModel } from "../features/pairing-model";
-import { isPairingInFlight } from "../features/pairing-model";
-import type { Palette, TextInputProps } from "./theme";
+import type { Palette } from "./theme";
 import {
-  Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
   fontFamily,
   fontSize,
@@ -43,94 +45,69 @@ import {
   useTheme,
 } from "./theme";
 
+/** 运行时取 `react-native-web` 的动画实现，类型取 `react-native` 的公开声明。 */
+const Animated: typeof ReactNative.Animated = ReactNativeWeb.Animated;
+const Easing: typeof ReactNative.Easing = ReactNativeWeb.Easing;
+
 export interface PairingPanelProps {
   readonly model: PairingPageModel;
-  /** 提交一段二维码内容（地址 / 片段 / 载荷）。 */
-  readonly onSubmit: (text: string) => void;
-  readonly onRestart: () => void;
 }
-
-/**
- * 配对输入框的类型面。
- *
- * 配对进行中要**真的**禁用输入（这一刻内存里持有一份含配对秘密的载荷，不再接受第二次提交），
- * 而 RNW 的 `TextInput` 正是把 `disabled` 原样交给宿主 `<input>`（浏览器级用例按原生
- * `disabled` 属性判定它）——但 `react-native` 的公开类型没有这一项。这与 `theme.ts` 为
- * `dataSet` 补声明是同一类取舍：本组件只用到这一处，因此把断言收敛在这里，而不是从组件
- * 文件去改全局类型。
- */
-type PairingInputProps = TextInputProps & { readonly disabled?: boolean };
-const PairingInput = TextInput as unknown as (props: PairingInputProps) => ReactElement;
 
 /** 按调色板建样式表：浅/深各建一次（模块加载时）。 */
 function buildStyles(colors: Palette) {
   return StyleSheet.create({
-    panel: {
-      alignSelf: "center",
-      width: "100%",
-      maxWidth: 560,
+    stage: {
+      alignItems: "center",
       gap: spacing.md,
-      padding: spacing.xl,
-      borderWidth: 1,
+      width: "100%",
+    },
+    ringBox: {
+      width: 112,
+      height: 112,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    ring: {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      borderRadius: 56,
+      borderWidth: 4,
       borderColor: colors.line,
-      borderRadius: radius.md,
-      backgroundColor: colors.panel,
-      boxShadow: colors.shadow,
+    },
+    ringCount: {
+      color: colors.ink,
+      fontFamily: fontFamily.mono,
+      fontSize: fontSize.xl,
+      fontWeight: fontWeight.value,
     },
     title: {
       color: colors.ink,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.xl,
       fontWeight: fontWeight.medium,
+      textAlign: "center",
     },
-    guidance: {
+    lede: {
+      maxWidth: 560,
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.md,
+      textAlign: "center",
     },
-    entry: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      gap: spacing.sm,
-    },
-    input: {
-      flexGrow: 1,
-      flexShrink: 1,
-      minWidth: 240,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
-      color: colors.ink,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.md,
-    },
-    submit: {
-      flexShrink: 0,
-      paddingVertical: spacing.sm,
-      paddingHorizontal: spacing.lg,
-      borderWidth: 1,
-      borderColor: colors.accent,
-      borderRadius: radius.sm,
-      backgroundColor: colors.accentSoft,
-    },
-    submitDisabled: {
-      borderColor: colors.line,
-      backgroundColor: colors.panel2,
-    },
-    submitText: {
-      color: colors.accentInk,
+    note: {
+      maxWidth: 560,
+      color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
-      fontWeight: fontWeight.medium,
+      textAlign: "center",
     },
-    submitTextDisabled: {
-      color: colors.ink3,
-    },
-    host: {
+    card: {
+      alignSelf: "center",
+      width: "100%",
+      maxWidth: 420,
       gap: spacing.xs,
       padding: spacing.md,
       borderWidth: 1,
@@ -138,57 +115,57 @@ function buildStyles(colors: Palette) {
       borderRadius: radius.sm,
       backgroundColor: colors.panel2,
     },
-    hostRow: {
+    cardRow: {
       flexDirection: "row",
       alignItems: "baseline",
       gap: spacing.md,
     },
-    hostKey: {
+    cardKey: {
       minWidth: 74,
       color: colors.ink3,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    hostValue: {
+    cardValue: {
       flexShrink: 1,
       color: colors.ink2,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.sm,
       fontWeight: fontWeight.value,
     },
-    awaiting: {
-      color: colors.warn,
-      backgroundColor: colors.warnSoft,
-      borderRadius: radius.sm,
-      padding: spacing.md,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
     deviceId: {
       color: colors.ink3,
       fontFamily: fontFamily.mono,
       fontSize: fontSize.xs,
+      textAlign: "center",
     },
-    error: {
+    glyph: {
+      fontSize: 40,
+      lineHeight: 44,
+      textAlign: "center",
+    },
+    glyphDanger: {
       color: colors.danger,
-      backgroundColor: colors.dangerSoft,
-      borderWidth: 1,
-      borderColor: colors.danger,
-      borderRadius: radius.sm,
+    },
+    glyphWarning: {
+      color: colors.warn,
+    },
+    warning: {
+      flexDirection: "row",
+      alignItems: "baseline",
+      maxWidth: 560,
+      gap: spacing.sm,
       padding: spacing.md,
+      borderRadius: radius.sm,
+      backgroundColor: colors.warnSoft,
+    },
+    warningMark: {
+      color: colors.warn,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
     },
-    restart: {
-      alignSelf: "flex-start",
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.md,
-      borderWidth: 1,
-      borderColor: colors.line,
-      borderRadius: radius.sm,
-      backgroundColor: colors.panel2,
-    },
-    restartText: {
+    warningText: {
+      flexShrink: 1,
       color: colors.ink2,
       fontFamily: fontFamily.sans,
       fontSize: fontSize.sm,
@@ -198,101 +175,170 @@ function buildStyles(colors: Palette) {
 
 const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
 
+/** `expiresAtMs` + 当前时刻 → `m:ss`；`null` 表示没有可显示的截止时间。 */
+function formatRemaining(expiresAtMs: number | null, nowMs: number): string | null {
+  if (expiresAtMs === null) return null;
+  // 向上取整：还剩不足一秒时仍显示 0:01，真正归零才显示 0:00（与服务端判定同一时刻）。
+  const totalSeconds = Math.ceil(Math.max(0, expiresAtMs - nowMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 /** 配对面板。 */
-export function PairingPanel({ model, onSubmit, onRestart }: PairingPanelProps): ReactElement {
+export function PairingPanel({ model }: PairingPanelProps): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
-  const [pasted, setPasted] = useState("");
-  // 进行中（内容已读到、还没到终态）：这一刻仓库里持有一份含 `pairingSecret` 的载荷，
-  // 因此不再接受第二次提交，输入也随之禁用——避免两条并行的 claim 与轮询。
-  const inFlight = isPairingInFlight(model);
-  const canSubmit = !inFlight && pasted.trim().length > 0;
+  const { presentation } = model;
+
+  // 转到环形：只在进度态运行；动画值归零，离开进度态时没有残留的旋转。
+  const spin = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (presentation.kind !== "progress") return;
+    spin.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 1_100,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+    };
+  }, [presentation.kind, spin]);
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
+
+  // 倒计时：每秒用绝对截止时间重算，不累加、也不猜时长。
+  const countdownActive = presentation.countdown && model.expiresAtMs !== null;
+  const [countdown, setCountdown] = useState<string | null>(() =>
+    formatRemaining(model.expiresAtMs, Date.now()),
+  );
+  useEffect(() => {
+    if (!countdownActive) {
+      setCountdown(null);
+      return;
+    }
+    const tick = (): void => {
+      setCountdown(formatRemaining(model.expiresAtMs, Date.now()));
+    };
+    tick();
+    const timer = setInterval(tick, 1_000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [countdownActive, model.expiresAtMs]);
+
+  /** 主机出示信息（只在等待确认与 node-link 的对端信息里呈现）。 */
+  const hostCard = (): ReactElement | null => {
+    if (model.host === null) return null;
+    return (
+      <View style={styles.card} dataSet={{ pairingHost: "true" }}>
+        <View style={styles.cardRow}>
+          <Text style={styles.cardKey}>地址</Text>
+          <Text style={styles.cardValue} dataSet={{ hostAddress: model.host.address }}>
+            {model.host.address}
+          </Text>
+        </View>
+        <View style={styles.cardRow}>
+          <Text style={styles.cardKey}>主机 ID</Text>
+          <Text style={styles.cardValue}>{model.host.hostId ?? "未知"}</Text>
+        </View>
+      </View>
+    );
+  };
+
+  /** 固定呈现 → 居中舞台。 */
+  const stage = (): ReactElement => {
+    if (presentation.kind === "progress") {
+      const showCountdown = presentation.countdown && countdown !== null;
+      return (
+        <>
+          <View style={styles.ringBox} role="status" aria-label="配对中">
+            <Animated.View
+              style={[
+                styles.ring,
+                { borderTopColor: theme.colors.accent, transform: [{ rotate }] },
+              ]}
+            />
+            {showCountdown ? (
+              <Text style={styles.ringCount} dataSet={{ pairingCountdown: "true" }}>
+                {countdown}
+              </Text>
+            ) : null}
+          </View>
+          <Text role="heading" style={styles.title}>
+            {presentation.title}
+          </Text>
+          <Text style={styles.lede}>{presentation.lede}</Text>
+          {presentation.note === null ? null : <Text style={styles.note}>{presentation.note}</Text>}
+          {model.phase === "pending_confirmation" ? hostCard() : null}
+          {model.deviceId === null ? null : (
+            <Text style={styles.deviceId} dataSet={{ pairingDeviceId: model.deviceId }}>
+              本机设备 ID：{model.deviceId}
+            </Text>
+          )}
+        </>
+      );
+    }
+
+    if (presentation.kind === "info") {
+      return (
+        <>
+          <Text role="heading" style={styles.title}>
+            {presentation.title}
+          </Text>
+          <Text style={styles.lede}>{presentation.lede}</Text>
+          {presentation.note === null ? null : <Text style={styles.note}>{presentation.note}</Text>}
+          {hostCard()}
+        </>
+      );
+    }
+
+    // 失败页：glyph + 固定标题/说明/警示。不呈现主机卡片、不提供任何按钮。
+    const danger = presentation.tone === "danger";
+    return (
+      <>
+        <Text
+          style={[styles.glyph, danger ? styles.glyphDanger : styles.glyphWarning]}
+          aria-hidden={true}
+        >
+          {danger ? "✕" : "⚠"}
+        </Text>
+        <Text role="heading" style={styles.title}>
+          {presentation.title}
+        </Text>
+        <Text style={styles.lede}>{presentation.lede}</Text>
+        {presentation.warning === null ? null : (
+          <View style={styles.warning}>
+            <Text style={styles.warningMark}>⚠</Text>
+            <Text style={styles.warningText}>{presentation.warning}</Text>
+          </View>
+        )}
+      </>
+    );
+  };
 
   return (
     <View
       role="region"
       aria-label="与这台电脑配对"
-      style={styles.panel}
-      dataSet={{ route: "pair", pairingPhase: model.phase }}
+      style={styles.stage}
+      dataSet={{
+        route: "pair",
+        pairingPhase: model.phase,
+        // 「配对页已渲染」的锚点：不再是输入入口，但 e2e/外壳用例仍以它定位本页。
+        pairingEntry: "true",
+        ...(model.failure === null ? {} : { pairingFailure: model.failure }),
+      }}
     >
-      <Text role="heading" style={styles.title}>
-        与这台电脑配对
-      </Text>
-      <Text style={styles.guidance} dataSet={{ pairingGuidance: "true" }}>
-        {model.guidance}
-      </Text>
-
-      <View style={styles.entry} dataSet={{ pairingEntry: "true" }}>
-        <PairingInput
-          value={pasted}
-          disabled={inFlight}
-          placeholder="粘贴二维码内容"
-          aria-label="配对二维码内容"
-          style={styles.input}
-          dataSet={{ pairingInput: "true" }}
-          onChangeText={(text: string) => {
-            setPasted(text);
-          }}
-        />
-        <Pressable
-          role="button"
-          disabled={!canSubmit}
-          style={canSubmit ? styles.submit : [styles.submit, styles.submitDisabled]}
-          dataSet={{ action: "submit-pairing-qr" }}
-          onPress={() => {
-            onSubmit(pasted.trim());
-            setPasted("");
-          }}
-        >
-          <Text style={canSubmit ? styles.submitText : [styles.submitText, styles.submitTextDisabled]}>
-            开始配对
-          </Text>
-        </Pressable>
-      </View>
-
-      {model.host === null ? null : (
-        <View style={styles.host} dataSet={{ pairingHost: "true" }}>
-          <View style={styles.hostRow}>
-            <Text style={styles.hostKey}>地址</Text>
-            <Text style={styles.hostValue} dataSet={{ hostAddress: model.host.address }}>
-              {model.host.address}
-            </Text>
-          </View>
-          <View style={styles.hostRow}>
-            <Text style={styles.hostKey}>主机 ID</Text>
-            <Text style={styles.hostValue}>{model.host.hostId ?? "未知"}</Text>
-          </View>
-        </View>
-      )}
-
-      {model.awaitingDesktopConfirmation ? (
-        <Text style={styles.awaiting} dataSet={{ pairingAwaitingDesktop: "true" }}>
-          请到电脑上确认这次配对请求。
-        </Text>
-      ) : null}
-
-      {model.deviceId === null ? null : (
-        <Text style={styles.deviceId} dataSet={{ pairingDeviceId: model.deviceId }}>
-          本机设备 ID：{model.deviceId}
-        </Text>
-      )}
-
+      {stage()}
+      {/* 错误码仍保留为诊断锚点；`message` 一律不渲染（固定文案才是页面内容）。 */}
       {model.error === null ? null : (
-        <Text role="alert" style={styles.error} dataSet={{ pairingError: model.error.code }}>
-          {model.error.message}
-        </Text>
+        <View role="alert" dataSet={{ pairingError: model.error.code }} />
       )}
-
-      {model.canRestart ? (
-        <Pressable
-          role="button"
-          style={styles.restart}
-          dataSet={{ action: "restart-pairing" }}
-          onPress={onRestart}
-        >
-          <Text style={styles.restartText}>重新扫码</Text>
-        </Pressable>
-      ) : null}
     </View>
   );
 }

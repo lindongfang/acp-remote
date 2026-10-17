@@ -36,10 +36,19 @@
 import type { ErrorCode, NodeLinkQrPayload, PairingQrPayload, PublicError } from "../protocol";
 import type { PairedHostRecord } from "../sync-client";
 
-/** 配对阶段。`approved` 之后进入已配对（连接状态机由 `pair_succeeded` 接手）。 */
+/**
+ * 配对阶段。
+ *
+ * - `reading`：页面刚挂载、还没读地址片段。它与「没有载荷」刻意分开，避免首帧把
+ *   「还没读地址」误呈现成失败（design D2）。
+ * - `idle`：读完了、地址里没有配对内容（`no_payload`）。
+ * - `approved` 之后进入已配对（连接状态机由 `pair_succeeded` 接手）。
+ *
+ * 地址片段是唯一入口（design D1）：输入框时代的「等待粘贴」阶段已删除。
+ */
 export type PairingPhase =
+  | "reading"
   | "idle"
-  | "awaiting_qr"
   | "claiming"
   | "pending_confirmation"
   | "approved"
@@ -49,6 +58,40 @@ export type PairingPhase =
   /** 已读到 node-link 配对内容：本客户端不是它的参与方，只呈现对端信息（见 `applyScannedNodeLink`）。 */
   | "node_link_scanned"
   | "failed";
+
+/**
+ * 本客户端这一侧的失败类别（design D6）。
+ *
+ * 与四种终态（`rejected` / `expired` / `consumed` 与 `node_link_scanned`）分开：那些是主机或载荷
+ * 类型给出的结论，这里回答的是「为什么本页没能把配对推进下去」。每一类对应一套固定文案。
+ */
+export type PairingFailureKind =
+  | "no_payload"
+  | "unrecognized"
+  | "kind_mismatch"
+  | "origin_mismatch"
+  | "insecure_context"
+  | "request_failed";
+
+/**
+ * 配对页的固定呈现（design D2/D6）：组件只渲染这一份内容，不再按 `phase` 自行分支文案。
+ *
+ * 文案是产品口径的固定文本（原型 S0–S8），因此后端错误 `message` 与任何载荷内容都没有
+ * 进入页面的通道；`error.code` 仍留在模型上，供诊断与 `data-pairing-error` 锚点使用。
+ */
+export interface PairingPresentation {
+  /** `progress` 居中转圈；`failure` 失败页；`info` 只呈现对端信息。 */
+  readonly kind: "progress" | "failure" | "info";
+  readonly title: string;
+  readonly lede: string;
+  /** 标题下方的补充说明；没有时为 `null`。 */
+  readonly note: string | null;
+  /** 失败/提示页的警示条；没有时为 `null`。 */
+  readonly warning: string | null;
+  readonly tone: "neutral" | "warning" | "danger";
+  /** progress 时是否在圆环内显示剩余有效期。 */
+  readonly countdown: boolean;
+}
 
 /** 两类配对入口（design D2）：由**路由**声明，入口据此校验载荷类型，而不是从载荷形状去猜。 */
 export type PairingKind = "sync" | "node-link";
@@ -66,18 +109,20 @@ export type PairingQrRead =
 /** 配对页模型。 */
 export interface PairingPageModel {
   readonly phase: PairingPhase;
-  /** 扫码得到的主机出示信息；`null` 表示尚未扫码。 */
+  /** 本页路由声明的配对类型；决定「没有载荷」等文案的类别名。 */
+  readonly kind: PairingKind;
+  /** 读到的对端信息；`null` 表示还没有可呈现的对端。 */
   readonly host: { readonly address: string; readonly hostId: string | null } | null;
   /** 已批准时的本机设备标识（wire 上的 `deviceId`）。 */
   readonly deviceId: string | null;
-  /** 是否必须由用户在电脑上确认（`pending_confirmation`）。 */
-  readonly awaitingDesktopConfirmation: boolean;
-  /** 失败/被拒时的结构化原因。 */
+  /** 配对载荷的绝对截止时间（毫秒）；node-link 与无载荷为 `null`。 */
+  readonly expiresAtMs: number | null;
+  /** 本客户端这一侧的失败类别；非失败阶段为 `null`。 */
+  readonly failure: PairingFailureKind | null;
+  /** 失败/被拒时的结构化原因（只供诊断与锚点，不直接渲染 `message`）。 */
   readonly error: PublicError | null;
-  /** 当前阶段的下一步指引；各阶段文案互不相同。 */
-  readonly guidance: string;
-  /** 是否可以重新开始（重试/重新扫码）。 */
-  readonly canRestart: boolean;
+  /** 页面唯一渲染来源：固定标题/说明/警示/色调/是否显示倒计时。 */
+  readonly presentation: PairingPresentation;
 }
 
 /** 已批准结果：设备元数据**与**主机身份材料（§7.3：`approved` 响应两者强制给出）。 */
@@ -161,7 +206,7 @@ export interface PairingWiring {
    * 落盘成功才允许把设备当作已配对——否则后续握手没有可用的信任根。
    */
   rememberPairedHost(record: PairedHostRecord): Promise<void>;
-  /** 已配对后的收口：装配同步连接并触发一次连接（MUST NOT 停在等待扫码）。 */
+  /** 已配对后的收口：装配同步连接并触发一次连接（MUST NOT 停在读地址阶段）。 */
   onPaired(record: PairedHostRecord): Promise<void>;
   /** 安排下一次状态轮询；返回取消函数。 */
   schedule(delayMs: number, task: () => void): () => void;
@@ -187,16 +232,23 @@ export interface PairingWiring {
 export const PAIRING_POLL_INTERVAL_MS = 2_000;
 
 /**
- * 二维码内容结构校验失败。
+ * 二维码内容校验失败。
  *
- * `code` 取自机器登记的错误码表（`protocol.invalid_json` / `protocol.schema_invalid`），
- * 因此页面呈现的原因与协议词表同源；`message` 只说**哪一项**不合法，绝不回显内容或秘密。
+ * `code` 取自机器登记的错误码表（`protocol.invalid_json` / `protocol.schema_invalid`，以及
+ * 打开时已过期用的 `pairing.expired`），因此页面呈现的原因与协议词表同源；
+ * `message` 只说**哪一项**不合法，绝不回显内容或秘密。
  */
 export class PairingQrInvalidError extends Error {
-  readonly code: Extract<ErrorCode, "protocol.invalid_json" | "protocol.schema_invalid">;
+  readonly code: Extract<
+    ErrorCode,
+    "protocol.invalid_json" | "protocol.schema_invalid" | "pairing.expired"
+  >;
 
   constructor(
-    code: Extract<ErrorCode, "protocol.invalid_json" | "protocol.schema_invalid">,
+    code: Extract<
+      ErrorCode,
+      "protocol.invalid_json" | "protocol.schema_invalid" | "pairing.expired"
+    >,
     message: string,
   ) {
     super(message);
@@ -205,57 +257,244 @@ export class PairingQrInvalidError extends Error {
   }
 }
 
-const GUIDANCE: Readonly<Record<PairingPhase, string>> = {
-  idle: "在电脑上打开「添加设备」，用本页面扫描它出示的二维码。",
-  awaiting_qr: "把摄像头对准电脑上的配对二维码，或粘贴二维码内容。",
-  claiming: "正在向这台电脑声明本设备，请稍候。",
-  pending_confirmation: "请到电脑上确认这台设备的配对请求。确认后本页会自动继续。",
-  approved: "配对已完成，正在建立同步连接。",
-  rejected: "电脑端拒绝了这次配对请求。如需继续，请在电脑上重新发起并扫码。",
-  expired: "这次配对二维码已过期。请在电脑上重新生成二维码后再扫。",
-  consumed: "这次配对二维码已被使用过。请在电脑上重新生成一个新的二维码。",
-  node_link_scanned:
-    "已读到 node-link 配对内容。本页只呈现对端信息，不代替节点完成配对：" +
-    "node-link 由节点之间配对，请到节点的界面上继续。",
-  failed: "配对未完成。请按下面的原因处理后重试。",
+/**
+ * 「没有配对信息」的标题与说明按入口类型分开：node-link 入口不是 sync 设备配对，
+ * 说「没有节点配对信息」比复用 sync 的措辞更准确（design D8）。
+ */
+const NO_PAYLOAD_COPY: Readonly<Record<PairingKind, { readonly title: string; readonly lede: string }>> = {
+  sync: {
+    title: "这个地址里没有配对信息",
+    lede: "配对信息只随电脑生成的配对地址传入；当前地址里没有可读的配对内容。",
+  },
+  "node-link": {
+    title: "这个地址里没有节点配对信息",
+    lede: "节点配对信息只随节点生成的配对地址传入；当前地址里没有可读的配对内容。",
+  },
 };
 
+/** 「没有载荷」之外的本侧失败类别 → 固定文案（原型 S5–S8）。 */
+const FAILURE_COPY: Readonly<
+  Record<
+    Exclude<PairingFailureKind, "no_payload" | "kind_mismatch">,
+    { readonly title: string; readonly lede: string; readonly warning: string }
+  >
+> = {
+  unrecognized: {
+    title: "无法识别这个地址",
+    lede: "地址里的配对信息不完整或已被破坏，本页没有发出任何请求。",
+    warning: "常见原因：链接在复制时被截断，或者二维码识别不完整。",
+  },
+  origin_mismatch: {
+    title: "这个地址属于另一台电脑",
+    lede: "这个配对地址来自另一个来源，而一个浏览器身份只绑定一个地址，不能跨来源迁移。",
+    warning: "请确认扫码对象：打开这台电脑自己的配对地址。",
+  },
+  insecure_context: {
+    title: "需要 HTTPS 才能配对",
+    lede: "当前页面不是安全上下文（https 或 loopback），浏览器不提供配对所需的加密能力。",
+    warning: "请改用 https 打开本页后再配对；不能在这里降级成不安全的连接。",
+  },
+  request_failed: {
+    title: "配对请求未能完成",
+    lede:
+      "没能把配对请求送到这台电脑（网络或本地存储不可用）。本页已经结束这次配对，可以安全地重新开始。",
+    warning: "重新打开配对地址只会重新走一次流程，不会产生第二条配对记录。",
+  },
+};
 
-/** 配对页初始状态。 */
-export function initialPairingPageModel(): PairingPageModel {
-  return {
-    phase: "idle",
-    host: null,
-    deviceId: null,
-    awaitingDesktopConfirmation: false,
-    error: null,
-    guidance: GUIDANCE.idle,
-    canRestart: false,
-  };
+/** 类型不匹配的固定兜底说明：只在调用点没有给出本地构造的消息时使用。 */
+const KIND_MISMATCH_LEDE = "地址里的配对内容与这个入口不匹配：请由电脑重新生成对应入口的配对地址。";
+
+/**
+ * 阶段 + 失败类别 → 固定呈现（原型 S0–S8）。
+ *
+ * 这是文案的**唯一**来源：组件不再按阶段另行分支。失败页不渲染 `error.message`，
+ * 因此后端消息或载荷内容没有进入页面的通道。
+ */
+function presentationFor(
+  phase: PairingPhase,
+  kind: PairingKind,
+  failure: PairingFailureKind | null,
+  error: PublicError | null,
+): PairingPresentation {
+  switch (phase) {
+    case "reading":
+      return {
+        kind: "progress",
+        title: "配对中",
+        lede: "正在读取配对地址里的配对信息…",
+        note: null,
+        warning: null,
+        tone: "neutral",
+        countdown: false,
+      };
+    case "claiming":
+      return {
+        kind: "progress",
+        title: "配对中",
+        lede: "正在向这台电脑声明本设备，请稍候。",
+        note: "正在连接这台电脑…",
+        warning: null,
+        tone: "neutral",
+        countdown: true,
+      };
+    case "pending_confirmation":
+      return {
+        kind: "progress",
+        title: "配对中",
+        lede: "正在等待这台电脑确认这次配对请求。通过后会自动进入目录，不需要再操作本页。",
+        note: "正在等待电脑确认…",
+        warning: null,
+        tone: "neutral",
+        countdown: true,
+      };
+    case "approved":
+      return {
+        kind: "progress",
+        title: "已通过审批，正在进入目录",
+        lede: "配对已完成，正在建立同步连接并载入目录…",
+        note: "正在连接这台电脑…",
+        warning: null,
+        tone: "neutral",
+        countdown: false,
+      };
+    case "rejected":
+      return {
+        kind: "failure",
+        title: "审批未通过",
+        lede: "电脑端没有批准这次配对请求。本页没有获得任何访问能力，也没有留下可用的主机记录。",
+        note: null,
+        warning: "如需继续，请在电脑上重新发起配对，再用新的地址打开本页。",
+        tone: "danger",
+        countdown: false,
+      };
+    case "expired":
+      return {
+        kind: "failure",
+        title: "配对地址已过期",
+        lede: "这次配对地址已经超过有效期（5 分钟），或者被电脑端作废。",
+        note: null,
+        warning: "请在电脑上重新发起配对，再用新的地址打开本页。",
+        tone: "warning",
+        countdown: false,
+      };
+    case "consumed":
+      return {
+        kind: "failure",
+        title: "这个配对地址已经被使用",
+        lede: "每个配对地址只能成功使用一次。再次打开不会建立第二条连接。",
+        note: null,
+        warning: "请在电脑上重新生成一个配对地址。",
+        tone: "warning",
+        countdown: false,
+      };
+    case "node_link_scanned":
+      return {
+        kind: "info",
+        title: "已读到 node-link 配对内容",
+        lede: "本页只呈现对端信息。node-link 由节点之间配对，浏览器不是它的参与方。",
+        note: "请到节点的界面上继续完成配对。",
+        warning: null,
+        tone: "neutral",
+        countdown: false,
+      };
+    // `idle` 只与「没有配对内容」一起出现；`failed` 的类别决定其余失败文案。
+    case "idle":
+    case "failed": {
+      const kindFailure = phase === "idle" ? "no_payload" : (failure ?? "request_failed");
+      if (kindFailure === "no_payload") {
+        const copy = NO_PAYLOAD_COPY[kind];
+        return {
+          kind: "failure",
+          title: copy.title,
+          lede: copy.lede,
+          note: null,
+          warning: "请用电脑重新生成的配对地址打开本页。",
+          tone: "warning",
+          countdown: false,
+        };
+      }
+      if (kindFailure === "kind_mismatch") {
+        return {
+          kind: "failure",
+          title: "这不是本入口的配对地址",
+          // 消息由 `kindMismatchFailure` 本地构造，只含两个类别名，不含任何载荷内容。
+          lede: error?.message ?? KIND_MISMATCH_LEDE,
+          note: null,
+          warning: "请由电脑重新生成对应入口的配对地址后再打开本页。",
+          tone: "warning",
+          countdown: false,
+        };
+      }
+      const copy = FAILURE_COPY[kindFailure];
+      return {
+        kind: "failure",
+        title: copy.title,
+        lede: copy.lede,
+        note: null,
+        warning: copy.warning,
+        tone: "warning",
+        countdown: false,
+      };
+    }
+  }
+}
+
+/** 配对页初始状态：还没读地址片段（`reading`），先呈现与「配对中」一致的进度。 */
+export function initialPairingPageModel(kind: PairingKind = "sync"): PairingPageModel {
+  return modelFor("reading", { kind });
 }
 
 /** 阶段 → 模型（唯一的组装点，避免各分支各写一份文案）。 */
 function modelFor(phase: PairingPhase, overrides: Partial<PairingPageModel>): PairingPageModel {
+  const kind = overrides.kind ?? "sync";
+  const failure = overrides.failure ?? null;
+  const error = overrides.error ?? null;
   return {
     phase,
+    kind,
     host: overrides.host ?? null,
     deviceId: overrides.deviceId ?? null,
-    awaitingDesktopConfirmation: phase === "pending_confirmation",
-    error: overrides.error ?? null,
-    guidance: GUIDANCE[phase],
-    canRestart: phase === "rejected" || phase === "expired" || phase === "consumed" || phase === "failed",
+    expiresAtMs: overrides.expiresAtMs ?? null,
+    failure,
+    error,
+    presentation: presentationFor(phase, kind, failure, error),
   };
 }
 
-/** 二维码载荷 → 主机出示信息（只取地址与主机标识，不展示也不推导任何路径）。 */
-export function applyScannedQr(current: PairingPageModel, qr: PairingQrPayload): PairingPageModel {
-  return modelFor("awaiting_qr", { ...current, host: { address: qr.canonicalOrigin, hostId: qr.hostId } });
+/**
+ * 读到 sync 载荷、claim 即将发出：一次写入对端信息与截止时间。
+ *
+ * 截止时间取载荷里的绝对 `expiresAt`（不是「现在 + 5 分钟」）：页面可以在二维码生成一段时间后
+ * 才被打开，倒计时必须反映真实剩余时间（design D3）。
+ */
+export function applyClaiming(current: PairingPageModel, qr: PairingQrPayload): PairingPageModel {
+  return modelFor("claiming", {
+    ...current,
+    host: { address: qr.canonicalOrigin, hostId: qr.hostId },
+    expiresAtMs: Date.parse(qr.expiresAt),
+    failure: null,
+    error: null,
+  });
 }
 
-/** claim 已发出。 */
-export function applyClaiming(current: PairingPageModel): PairingPageModel {
-  return modelFor("claiming", current);
+/**
+ * 地址里没有配对内容（直接访问 `/pair`，或刷新后片段已被清除）。
+ *
+ * 这不是「非法输入」：页面明确呈现「没有配对信息」并指引用户用电脑重新生成的地址打开，
+ * 不发任何请求，也不保留上一轮的对端信息。
+ */
+export function applyNoPayload(_current: PairingPageModel, kind: PairingKind): PairingPageModel {
+  return modelFor("idle", {
+    kind,
+    host: null,
+    deviceId: null,
+    expiresAtMs: null,
+    failure: "no_payload",
+    error: null,
+  });
 }
+
 
 /**
  * node-link 载荷 → 入口呈现（design D2/D3）。
@@ -264,8 +503,8 @@ export function applyClaiming(current: PairingPageModel): PairingPageModel {
  * 因此这里只把载荷里**公开**的对端信息读给入口（端点 host 派生的 https 来源 + owner 节点标识），
  * 停在入口——不代替任何一方发请求，也不把含 `pairingSecret` 的载荷留在仓库里（它用到即弃）。
  *
- * 与 {@link applyScannedQr} 刻意分开：那是 sync 载荷（`canonicalOrigin` / `hostId`），
- * 且紧接着就进入认领流程；这里是另一类载荷的另一套呈现口径。
+ * 与 sync 载荷（`canonicalOrigin` / `hostId`，紧接着进入认领流程）刻意分开：
+ * 这里是另一类载荷的另一套呈现口径，且不显示倒计时（`expiresAtMs` 为 `null`）。
  *
  * 端点派生不出 https 来源时（见 {@link nodeLinkAddressOf}）落到 `failed`，而不是抛异常：
  * 异常会从调用方 `#commit(...)` 的求值中途穿出，页面停在上一状态。
@@ -289,6 +528,11 @@ export function applyScannedNodeLink(
   return modelFor("node_link_scanned", {
     ...current,
     host: { address, hostId: qr.ownerNodeId },
+    deviceId: null,
+    // 浏览器不参与 node-link 配对，也没有需要等待的 claim：不显示倒计时。
+    expiresAtMs: null,
+    failure: null,
+    error: null,
   });
 }
 
@@ -381,27 +625,38 @@ export function originMismatchFailure(): PublicError {
   };
 }
 
-/**
- * 配对是否**正在进行**（内容已读到、还没走到终态）。
- *
- * 进行中意味着「这一刻持有一份含 `pairingSecret` 的二维码载荷」，因此这一段时间里
- * 不接受第二次提交（否则会出现两条并行的 claim 与轮询），页面也据此禁用输入。
- *
- * `node_link_scanned` **不**算进行中：本客户端不为 node-link 载荷保留任何会话（它不发请求，
- * 载荷用到即弃），因此入口保持可用——输入框可继续接受内容与提交。
- */
-export function isPairingInFlight(model: PairingPageModel): boolean {
-  return model.phase === "awaiting_qr" || model.phase === "claiming" || model.phase === "pending_confirmation";
+/** 错误码 → 本侧失败类别（显式 reason 缺省时的分类，design D6）。 */
+function failureKindFor(code: ErrorCode): PairingFailureKind {
+  if (code === "auth.origin_mismatch" || code === "auth.host_mismatch") return "origin_mismatch";
+  if (code === "auth.insecure_context") return "insecure_context";
+  if (code.startsWith("protocol.")) return "unrecognized";
+  return "request_failed";
 }
 
 /**
- * 明确失败：结构校验不过、claim 被拒、已配对记录写不进去，都落到 `failed` 阶段并带上原因。
+ * 明确失败：结构校验不过、claim/poll 被拒、已配对记录写不进去，都落到失败阶段并带上原因。
  *
- * 与「四种非成功终态」分开：那些是**主机的**判定（拒绝/过期/已用），这里是本客户端这一侧
- * 明确的失败，措辞与可执行的下一步不同。
+ * 先按错误码决定阶段：`pairing.expired` → `expired`；`pairing.consumed` /
+ * `pairing.already_claimed` → `consumed`；其余 → `failed`。失败类别优先取调用点显式
+ * 传入的 `reason`（类型不匹配、环境前置条件都在调用点就知道是哪一类），否则按错误码分类。
+ * 这样 `kind_mismatch` 不会被混成 `unrecognized`（design D6）。
  */
-export function applyPairingFailure(current: PairingPageModel, error: PublicError): PairingPageModel {
-  return modelFor("failed", { ...current, error });
+export function applyPairingFailure(
+  current: PairingPageModel,
+  error: PublicError,
+  reason?: PairingFailureKind,
+): PairingPageModel {
+  if (error.code === "pairing.expired") {
+    return modelFor("expired", { ...current, failure: null, error });
+  }
+  if (error.code === "pairing.consumed" || error.code === "pairing.already_claimed") {
+    return modelFor("consumed", { ...current, failure: null, error });
+  }
+  return modelFor("failed", {
+    ...current,
+    failure: reason ?? failureKindFor(error.code),
+    error,
+  });
 }
 
 /**
@@ -409,7 +664,8 @@ export function applyPairingFailure(current: PairingPageModel, error: PublicErro
  *
  * 与 {@link applyPairingFailure} 刻意分开：这里**不**把阶段退回 `failed`——配对本身已经成功，
  * 已配对记录也已经写好，声称「配对未完成」会与主机面板已经显示的主机身份自相矛盾；
- * 失败的只是「把同步连接装配起来」这一步。因此只补上可读原因，阶段与可重来性都保持不变。
+ * 失败的只是「把同步连接装配起来」这一步。因此只补上可读原因，阶段与呈现都保持不变
+ * （仍是 `approved` 的「正在进入目录」进度）。
  */
 export function applyPairingCloseoutFailure(current: PairingPageModel, error: PublicError): PairingPageModel {
   return modelFor(current.phase, { ...current, error });
@@ -504,17 +760,23 @@ export function pairedHostRecordFor(
   return { hostId: approved.hostId, publicKeyBase64Url: approved.hostPublicKey, canonicalOrigin };
 }
 
-/** 轮询结果 → 阶段。四种非成功结果各自落到自己的阶段上。 */
+/** 轮询结果 → 阶段。终态与错误都走各自的固定呈现。 */
 export function applyPollResult(current: PairingPageModel, result: PairingPollResult): PairingPageModel {
   switch (result.kind) {
     case "pending_confirmation":
-      return modelFor("pending_confirmation", current);
+      return modelFor("pending_confirmation", { ...current, failure: null, error: null });
     case "approved":
-      return modelFor("approved", { ...current, deviceId: result.deviceId });
+      return modelFor("approved", {
+        ...current,
+        deviceId: result.deviceId,
+        failure: null,
+        error: null,
+      });
     case "terminal":
-      return modelFor(result.status, { ...current, error: result.error });
+      return modelFor(result.status, { ...current, failure: null, error: result.error });
     case "error":
-      return modelFor("failed", { ...current, error: result.error });
+      // 与 claim 相同的分类：`pairing.expired`/`consumed` 走终态，其余按错误码归到本侧失败。
+      return applyPairingFailure(current, result.error);
   }
 }
 

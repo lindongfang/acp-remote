@@ -12,23 +12,21 @@
  *
  * 配对是 HTTPS 面（`schemas/sync/v1/pairing.schema.json`）：传输端口由组合根用 `fetch`
  * 实现，本页只呈现状态机产出的模型。设备私钥由 `src/platform/` 生成且不可导出，
- * MCP 配置与 Agent 凭据一律在电脑上配置——因此本页没有**凭据**输入项。
- *
- * 唯一的输入是**一次性**的二维码内容（design D3 的粘贴入口）：它由 store 校验后立即用于
- * claim 与轮询，不进页面状态；地址片段里的那一份读完即被清除（§7.1）。
+ * MCP 配置与 Agent 凭据一律在电脑上配置——因此本页没有**凭据**输入项，也没有输入框：
+ * 地址片段是**唯一**入口（design D1）。
  *
  * ## 页面不解析、不读地址栏
  *
- * 结构校验、claim、轮询、落盘与「已配对后触发连接」都在 `ClientStore` 与组合根里
- * （`store.submitPairingQrText` / `store.startPairingFromAddress`）：本页不碰 `fetch`、
- * 不读地址栏、不写任何存储（`AGENTS.md` §6：平台能力只由更外层装配）。
+ * 结构校验、claim、轮询、落盘、到期定时与「已配对后触发连接」都在 `ClientStore` 与组合根里
+ * （`store.startPairingFromAddress`）：本页不碰 `fetch`、不读地址栏、不写任何存储
+ * （`AGENTS.md` §6：平台能力只由更外层装配）。
  *
- * ## 配对页呈现自己的头部（共享外壳下的例外）
+ * ## 页面不绘制外壳
  *
  * 共享外壳装在根布局里（`design.md` D1），由 `usePathname()` 判定配对入口不呈现全局顶栏
- * （`shell-model.ts` 的 `isPairingPath`）——本页因此**自己**呈现页头：一条离开本页的入口，
- * 使「不显示顶栏」不等于「丢掉了返回根路径的能力」。本页不再自建导航条，也不画第二个
- * 连接状态徽标：配对本就发生在建立连接之前，状态由配对面板自己的阶段呈现。
+ * （`shell-model.ts` 的 `isPairingPath`）。本页因此也不再自建页头或返回入口：配对页就是
+ * 一个居中的状态舞台（design D5）。审批通过后短暂呈现过渡，约 1.6 秒后自动 `replace` 到
+ * 目录页（`app/index.tsx`，路由 `/`）——恢复路径由电脑重新生成的配对地址给出，而不是页内按钮。
  */
 
 import { useRouter } from "expo-router";
@@ -36,66 +34,38 @@ import { useEffect } from "react";
 import type { ReactElement } from "react";
 
 import { PairingPanel, RuntimeUnavailable } from "../src/components";
-import type { Palette } from "../src/components/theme";
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  fontFamily,
-  fontSize,
-  palettes,
-  radius,
-  spacing,
-  useTheme,
-} from "../src/components/theme";
-import { initialPairingPageModel } from "../src/features/pairing-model";
+import { StyleSheet, View, spacing } from "../src/components/theme";
 import type { PairingKind } from "../src/features/pairing-model";
 import { useClientState, useClientStore } from "../src/features/runtime";
 
-/** 页面级布局（与目录页、目录详情页同一份骨架，只是内容居中）。 */
-function buildStyles(colors: Palette) {
-  return StyleSheet.create({
-    page: {
-      flex: 1,
-      gap: spacing.md,
-      padding: spacing.lg,
-      backgroundColor: colors.bg,
-    },
-    head: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "baseline",
-      gap: spacing.md,
-    },
-    back: {
-      alignSelf: "flex-start",
-      paddingVertical: spacing.xs,
-      paddingHorizontal: spacing.sm,
-      borderRadius: radius.sm,
-    },
-    backText: {
-      color: colors.accent,
-      fontFamily: fontFamily.sans,
-      fontSize: fontSize.sm,
-    },
-  });
-}
+/** 已批准后停留在这里的过渡时长（design D4 / 原型 S1）。 */
+const APPROVED_REDIRECT_MS = 1_600;
 
-const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.dark) };
+/**
+ * 页面骨架：只有一块居中的舞台。
+ *
+ * 配色由共享外壳与 `PairingPanel` 承担，本页不设背景色，也不提供主题切换（design D5）。
+ */
+const STYLES = StyleSheet.create({
+  page: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+});
 
 /**
  * 配对入口的页面主体，两类入口**共用**（design D4：复用同一组件、以类型参数区分，不复制一套 UI）。
  *
- * `kind` 是**本页路由声明的期望类型**（design D2），随片段的读取与粘贴的提交一起交给 store：
+ * `kind` 是**本页路由声明的期望类型**（design D2），随片段的读取交给 store：
  * 载荷类型与它不一致时 store 明确失败且不发任何请求。`app/node-link/pair.tsx` 用
- * `kind="node-link"` 复用这一份主体，因此两类入口的展示与提交流程只有一份实现。
+ * `kind="node-link"` 复用这一份主体，因此两类入口的展示流程只有一份实现。
  */
 export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): ReactElement {
   const store = useClientStore();
   const state = useClientState();
   const router = useRouter();
-  const theme = useTheme();
 
   // 二维码地址直接打开这一页时，片段里带着配对内容：读一次（并立即清除片段）即进入与本页
   // 对应的流程。依赖只有 `store` 与 `kind`：组合根异步装配完成后才可用，而片段只读一次
@@ -104,33 +74,29 @@ export function PairingRouteBody({ kind }: { readonly kind: PairingKind }): Reac
     void store?.startPairingFromAddress(kind);
   }, [store, kind]);
 
-  if (store === null || state === null) return <RuntimeUnavailable route="pair" />;
+  const page = store?.pairingPage() ?? null;
+  const approvedSync = page !== null && page.phase === "approved" && page.kind === "sync";
 
-  const styles = theme.dark ? STYLES.dark : STYLES.light;
+  // 审批通过后自动进目录（design D4）：不等连接进入 online，也不要求用户再点一次。
+  // 阶段变化或卸载时清理，避免离开页面后仍发生一次导航。
+  useEffect(() => {
+    if (!approvedSync) return;
+    const timer = setTimeout(() => {
+      // 目录页就是根路由：`app/index.tsx` 匹配 `/`（`DIRS_ROUTE.path === "/"`）。
+      router.replace("/");
+    }, APPROVED_REDIRECT_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [approvedSync, router]);
+
+  if (store === null || state === null || page === null) {
+    return <RuntimeUnavailable route="pair" />;
+  }
 
   return (
-    <View role="main" style={styles.page}>
-      {/* 本页自己的头部：全局顶栏在配对入口不呈现，离开本页的入口因此必须在这里。 */}
-      <View style={styles.head} dataSet={{ routeHeader: "pair" }}>
-        <Pressable
-          role="button"
-          style={styles.back}
-          dataSet={{ action: "back-to-dirs" }}
-          onPress={() => router.back()}
-        >
-          <Text style={styles.backText}>‹ 目录</Text>
-        </Pressable>
-      </View>
-
-      <PairingPanel
-        model={store.pairingPage()}
-        onSubmit={(text) => {
-          void store.submitPairingQrText(text, kind);
-        }}
-        onRestart={() => {
-          store.setPairing(initialPairingPageModel());
-        }}
-      />
+    <View role="main" style={STYLES.page}>
+      <PairingPanel model={page} />
     </View>
   );
 }

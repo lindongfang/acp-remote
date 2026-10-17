@@ -5,17 +5,20 @@
  *
  * 真实配对**在运行时可达**（本登记此前写作「不可达」，已按当前事实改写）：
  *
- * - 配对页有粘贴入口（`app/pair.tsx` → `src/components/PairingPanel.tsx` 的
- *   `[data-pairing-entry]` / `[data-pairing-input]`），提交一段二维码内容即进入认领；
- * - 认领与轮询由 `ClientStore` 的 `submitPairingQrText` / `startPairingFromAddress` 驱动，
+ * - 配对页只从**地址片段**取内容（`/pair#data=…` 或 `/node-link/pair#data=…`）：
+ *   `app/pair.tsx` → `src/components/PairingPanel.tsx` 的固定状态页，页面挂载后由
+ *   `ClientStore.startPairingFromAddress` 读取并立即清除片段，随后自动认领——页面没有输入框、
+ *   粘贴框、提交按钮或页内返回；
+ * - 认领与轮询由 `ClientStore.startPairingFromAddress` 驱动，
  *   网络面是 `src/composition.ts` 的 `HttpPairingTransport`（`POST /sync/v1/pairing/claim`
  *   与 `/sync/v1/pairing/status`）——两者都有生产调用方；
  * - 已批准时 `poll` 的 `approved` 分支返回主机标识与主机公钥，`rememberPairedHost` 把它写进
  *   `paired-host/<origin>`（`src/composition.ts` 的 `PAIRED_HOST_KEY_PREFIX`），随后
- *   `onPaired` 装配连接并触发一次连接。
+ *   `onPaired` 装配连接并触发一次连接；页面约 1.6 秒后自动 `replace` 到目录页根路由 `/`。
  *
  * 这条链路的浏览器级证据是 `checks/pairing-first-run.ts` 的 PW-1：它从**未配对**出发，
- * 在真实 DOM 上点输入与提交，走完认领 → 等待本机确认 → 已批准 → 落盘 → 连接在线。
+ * 把二维码地址的片段挂到 `location.hash` 上再打开配对页，走完自动认领 → 等待本机确认 →
+ * 已批准 → 落盘 → 自动进入目录页 → 连接在线。
  *
  * ## 那为什么多数用例仍然预置「已配对」
  *
@@ -27,7 +30,8 @@
  * 预置写的是**真实**平台端口（`openPlatform()` 的真实 IndexedDB）里的同一份记录，
  * 读取它的也是**真实**的 `createComposition().start()`：被跳过的只有配对页与 HTTPS 轮询面，
  * 其后的握手、验签、快照、命令全部走生产代码。需要「未配对」起点的用例用
- * `ScenarioOptions.seedPaired: false`（PW-1 / PW-2 就是）。
+ * `ScenarioOptions.seedPaired: false`（`pairing-first-run.ts` 的 PW-1…PW-5 与
+ * `pairing-kinds.ts` 的 NL-1…NL-3 就是）。
  */
 
 import { createElement, useEffect, useState } from "react";
@@ -296,7 +300,8 @@ export type ScenarioOptions = FakeHostOptions & {
    * 是否预置「已配对」记录；缺省 `true`（多数用例的起点，见文件头）。
    *
    * `false` = 从**未配对**出发：只预置设备身份，`start()` 因此停在 `unpaired`，
-   * 后面的「已配对」只能由真实配对链路（认领 → 批准 → 落盘）挣来——PW-1 / PW-2 用它。
+   * 后面的「已配对」只能由真实配对链路（打开携带片段的配对地址 → 认领 → 批准 → 落盘）挣来
+   * ——`pairing-first-run.ts` 与 `pairing-kinds.ts` 用它。
    */
   readonly seedPaired?: boolean;
   /** 预置的主机身份；缺省新建一把。未配对起点用它把「已批准」响应的公钥与宿主钥对上。 */

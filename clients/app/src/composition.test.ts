@@ -30,7 +30,7 @@ import { describe, expect, it } from "vitest";
 import { PairingPanel } from "./components";
 import { createComposition } from "./composition";
 import type { Composition, CompositionPorts, FetchLike, PairingHttpResponse } from "./composition";
-import { PAIRING_POLL_INTERVAL_MS, isPairingInFlight } from "./features/pairing-model";
+import { PAIRING_POLL_INTERVAL_MS } from "./features/pairing-model";
 import type { PairingTransport } from "./features/pairing-model";
 import type { PairingQrPayload } from "./protocol";
 import { decodeBase64Url, encodeBase64Url } from "./sync-client";
@@ -724,7 +724,7 @@ describe("组合根：配对 HTTPS 面按 §7.2/§7.3 的路径与形状发请�
         },
       });
       await context.composition.start();
-      await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+      await enterPairingFromAddress(context, pairingUrl());
 
       const page = context.composition.store.pairingPage();
       // 反例：若 claim 跳过验签（或拿响应自带材料「自证」），这里会走到 pending_confirmation/approved。
@@ -993,6 +993,28 @@ function stubAddressBar(hash: string): { readonly replaced: string[]; restore():
   };
 }
 
+/**
+ * 用真实组合根 + 假地址栏驱动**唯一入口**，并在读完片段后恢复全局地址栏。
+ *
+ * `pairingUrl()` 已是完整配对地址，直接取它的片段；其余文本表示「片段里承载的内容本身」，
+ * 这里按 base64url 编码后放进 `data=`——两种形态都经过组合根真实的 `takeQrTextFromFragment`。
+ */
+async function enterPairingFromAddress(
+  context: Harness,
+  text: string,
+  kind: "sync" | "node-link" = "sync",
+): Promise<void> {
+  const fragment = text.includes("#data=")
+    ? text.slice(text.indexOf("#data=") + 1)
+    : `data=${encodeBase64Url(new TextEncoder().encode(text))}`;
+  const addressBar = stubAddressBar(`#${fragment}`);
+  try {
+    await context.composition.store.startPairingFromAddress(kind);
+  } finally {
+    addressBar.restore();
+  }
+}
+
 describe("组合根：配对完成 → 写入已配对主机记录 → 触发连接（§7.3 / design D2/D3）", () => {
   it("已批准：记录含主机标识 / 主机公钥 / 规范化来源，且立刻连接（不等第二次入口）", async () => {
     const context = setup({ fetch: successfulPairingFetch() });
@@ -1001,7 +1023,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
     expect(context.sockets.sockets).toHaveLength(0);
     expect(context.composition.store.state.connection.state).toBe("unpaired");
 
-    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+    await enterPairingFromAddress(context, pairingUrl());
     expect(context.composition.store.pairingPage().phase).toBe("claiming");
 
     // 轮询节奏由注入的假时钟驱动：推进一个窗口才有第一次状态查询（否则页面会空转打服务端）。
@@ -1033,7 +1055,7 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
 
     // 2.5 已配对并触发连接：状态机离开 unpaired，出站地址指向刚配对的那台主机。
     // 连接机把「开始一次连接尝试」与「socket 打开」并成一步（`authenticating`），
-    // 因此这里断言它不在未配对侧；停在等待扫码（`unpaired`）或没触发连接（0 条 socket）都会红。
+    // 因此这里断言它不在未配对侧；仍停在 `unpaired`（没开始配对）或没触发连接（0 条 socket）都会红。
     expect(context.composition.store.state.connection.state).toBe("authenticating");
     expect(context.sockets.sockets).toHaveLength(1);
     expect(context.sockets.urls[0]?.startsWith("wss://work-pc.example.ts.net")).toBe(true);
@@ -1053,18 +1075,52 @@ describe("组合根：配对完成 → 写入已配对主机记录 → 触发连
       ["协议版本不符", pairingUrl({ pairingProtocol: "acp-remote-pairing-v2" })],
       ["字段缺失", pairingUrl({ hostId: undefined })],
       ["字段长度不符", pairingUrl({ pairingSecret: "AQID" })],
-      ["不是二维码内容", "把这一段贴进来"],
+      ["内容不是 JSON", "把这一段贴进来"],
     ] as const) {
-      await context.composition.store.submitPairingQrText(text, "sync");
+      await enterPairingFromAddress(context, text);
       const page = context.composition.store.pairingPage();
       expect(page.phase, name).toBe("failed");
+      // 「不是 JSON」与「结构不符」各自保留自己的码；其余（协议版本、字段、长度）是结构错误。
+      const jsonLike = name === "JSON 非法" || name === "内容不是 JSON";
       expect(page.error?.code, name).toBe(
-        name === "JSON 非法" ? "protocol.invalid_json" : "protocol.schema_invalid",
+        jsonLike ? "protocol.invalid_json" : "protocol.schema_invalid",
       );
       // 反例：尽力解析（补字段、放过版本、把任意文本当 JSON）会走到 claim → 这里会出现请求。
       expect(context.fetches, name).toHaveLength(0);
     }
     expect(context.sockets.sockets).toHaveLength(0);
+    context.composition.dispose();
+  });
+
+  it("打开时已过期：直接进入过期页，且一个 claim 都不发", async () => {
+    const context = setup({ fetch: successfulPairingFetch() });
+    await context.composition.start();
+
+    await enterPairingFromAddress(context, pairingUrl({ expiresAt: new Date(0).toISOString() }));
+
+    const page = context.composition.store.pairingPage();
+    // 反例：过期码仍按结构错误处理 → 阶段是 `failed`、标题是「无法识别这个地址」→ 两条变红。
+    expect(page.phase).toBe("expired");
+    expect(page.error?.code).toBe("pairing.expired");
+    expect(page.presentation.title).toBe("配对地址已过期");
+    // 「打开即过期」不发任何请求，也不留下定时器或记录。
+    expect(context.fetches).toHaveLength(0);
+    expect([...context.cache.entries.keys()]).toEqual([]);
+    expect(context.sockets.sockets).toHaveLength(0);
+    context.composition.dispose();
+  });
+
+  it("直接打开 /pair（无片段）：呈现无载荷，且一个配对请求都不发", async () => {
+    const context = setup({ fetch: successfulPairingFetch() });
+    await context.composition.start();
+
+    await context.composition.store.startPairingFromAddress("sync");
+
+    const page = context.composition.store.pairingPage();
+    expect(page.phase).toBe("idle");
+    expect(page.failure).toBe("no_payload");
+    expect(page.presentation.title).toBe("这个地址里没有配对信息");
+    expect(context.fetches).toHaveLength(0);
     context.composition.dispose();
   });
 
@@ -1152,7 +1208,7 @@ describe("组合根：配对成功但收口失败（连接没起来）的页面�
       },
     });
 
-    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+    await enterPairingFromAddress(context, pairingUrl());
     await advanceUntil(
       context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",
@@ -1165,25 +1221,26 @@ describe("组合根：配对成功但收口失败（连接没起来）的页面�
       "收口失败的原因落到页面",
     );
 
-    // 配对本身成功了：记录已落盘、连接机已推进到「已配对」——原因句必须承认这一点。
+    // 配对本身成功了：记录已落盘、连接机已推进到「已配对」——呈现必须承认这一点。
     expect(context.cache.entries.has(`paired-host/${ORIGIN}`)).toBe(true);
     const page = context.composition.store.pairingPage();
     expect(page.phase).toBe("approved");
     expect(context.composition.store.state.connection.state).toBe("disconnected");
     const notice = page.error?.message ?? "";
-    expect(notice).toContain("配对已完成");
+    expect(page.error?.code).toBe("internal.unavailable");
+    expect(notice.length).toBeGreaterThan(0);
     expect(notice).not.toContain(PLATFORM_FAILURE);
 
-    const markup = renderToStaticMarkup(
-      createElement(PairingPanel, { model: page, onSubmit: () => {}, onRestart: () => {} }),
-    );
-    // 引导语就是 `approved` 的那一条，且与原因句同屏：两句说的都是「配对成了」。
-    expect(page.guidance).toContain("配对已完成");
-    expect(markup).toContain(page.guidance);
-    expect(markup).toContain(notice);
+    const markup = renderToStaticMarkup(createElement(PairingPanel, { model: page }));
+    // 呈现仍是 approved 的进度：标题与说明说的都是「配对成了、正在进目录」。
+    expect(page.presentation.kind).toBe("progress");
+    expect(page.presentation.title).toBe("已通过审批，正在进入目录");
+    expect(page.presentation.lede).toContain("配对已完成");
+    expect(markup).toContain(page.presentation.title);
+    expect(markup).toContain(page.presentation.lede);
     expect(markup).toContain('data-pairing-error="internal.unavailable"');
-    // 反例：若收口路径继续复用通用文案，同一屏上会同时出现引导语「配对已完成…」与原因句
-    // 「配对请求未能完成」两句互相否定的话 → 下面这两条变红。
+    // 固定文案之外不渲染 `error.message`；也不会出现通用失败页的「配对请求未能完成」。
+    expect(markup).not.toContain(notice);
     expect(markup).not.toContain("配对请求未能完成");
     expect(markup).not.toContain(PLATFORM_FAILURE);
     context.composition.dispose();
@@ -1191,7 +1248,7 @@ describe("组合根：配对成功但收口失败（连接没起来）的页面�
 });
 
 describe("组合根：配对请求被拒绝时收口（不把状态留在「进行中」）", () => {
-  it("claim 的 `fetch` 抛出（断网）：落到可重试的失败态，输入解禁，且能立刻重试成功", async () => {
+  it("claim 的 `fetch` 抛出（断网）：落到请求失败的固定呈现，且能立刻重试成功", async () => {
     let claims = 0;
     const context = setup({
       fetch: async (_url, init): Promise<PairingHttpResponse> => {
@@ -1206,22 +1263,21 @@ describe("组合根：配对请求被拒绝时收口（不把状态留在「进�
     });
     await context.composition.start();
 
-    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+    await enterPairingFromAddress(context, pairingUrl());
 
     const failed = context.composition.store.pairingPage();
     // 反例：若 `claim` 的拒绝直接冒泡（没有收口），阶段会停在 `claiming` → 断言变红。
     expect(failed.phase).toBe("failed");
+    expect(failed.failure).toBe("request_failed");
+    expect(failed.presentation.title).toBe("配对请求未能完成");
     expect(failed.error?.code).toBe("internal.unavailable");
     expect(failed.error?.retryable).toBe(true);
-    // 这两条就是 `PairingPanel` 的「输入框解禁 + 显示重新扫码入口」判据。
-    expect(isPairingInFlight(failed)).toBe(false);
-    expect(failed.canRestart).toBe(true);
     // 没有连接被建立，也没有任何已配对记录被写入。
     expect(context.sockets.sockets).toHaveLength(0);
     expect([...context.cache.entries.keys()]).toEqual([]);
 
     // 会话真的结束了：同一次页面会话里可以立刻重试，且这次走到了轮询。
-    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+    await enterPairingFromAddress(context, pairingUrl());
     expect(context.composition.store.pairingPage().phase).toBe("claiming");
     await advanceUntil(
       context,
@@ -1266,7 +1322,7 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
     context.clock.advanceBy(RECONNECT_MAX_WINDOW_MS);
     expect(context.sockets.sockets).toHaveLength(1);
 
-    await context.composition.store.submitPairingQrText(pairingUrl(), "sync");
+    await enterPairingFromAddress(context, pairingUrl());
     await advanceUntil(
       context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",
@@ -1309,7 +1365,7 @@ describe("组合根：从阻断态重新配对后真的建立连接（design D2 
     });
     await startBlockedOnMissingHostKey(context);
 
-    await context.composition.store.submitPairingQrText(pairingUrl({ hostId: NEW_HOST_ID }), "sync");
+    await enterPairingFromAddress(context, pairingUrl({ hostId: NEW_HOST_ID }));
     await advanceUntil(
       context,
       () => context.composition.store.pairingPage().phase === "pending_confirmation",

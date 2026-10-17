@@ -165,19 +165,21 @@ export { CONNECTION_STATE_LABELS, UNKNOWN_STATE_NOTE, buildHostPanelModel } from
 
 // ── 配对 ────────────────────────────────────────────────────────────────────
 export type {
+  PairingFailureKind,
   PairingKind,
   PairingPageModel,
   PairingPhase,
   PairingPollResult,
+  PairingPresentation,
   PairingQrRead,
   PairingTransport,
 } from "./pairing-model";
 export {
   PAIRING_ERROR_HINTS,
   applyClaiming,
+  applyNoPayload,
   applyPollResult,
   applyScannedNodeLink,
-  applyScannedQr,
   canonicalOriginOf,
   initialPairingPageModel,
   insecureContextFailure,
