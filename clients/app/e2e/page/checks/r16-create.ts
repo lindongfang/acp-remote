@@ -11,11 +11,11 @@
  *
  * ## 负向为主
  *
- * - 载荷键集必须**恰好**是规范允许的三类之一：`{agentId, workspaceAlias}`、
+ * - 载荷键集必须**恰好**是规范允许的三类之一：`{agentId, directoryId}`、
  *   `{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
  * - 帧原文里不得出现 MCP、凭据类字段名或值；
  * - **目录不由用户手工输入**：弹层里没有目录输入框，路径逐字来自服务端（快照或浏览结果）；
- * - **别名不出现在界面文本里**（只作 `data-*` 机器标识）；
+ * - **目录标识不出现在界面文本里**（只作 `data-*` 机器标识与路由参数）；
  * - **服务端不支持浏览时明确说明**并保留「选已登记目录」这条路，且一条浏览命令都不发；
  * - **不能浏览的原因分岔**：「还没连上主机」与「已连上却没协商到该能力」是两条文案与两个锚点取值，
  *   未协商 MUST NOT 被写成「服务端没有提供该能力」（未认证起点没有快照，`selectedFeatures` 为空
@@ -40,8 +40,10 @@ import { WORKSPACE_BROWSE_FEATURE } from "../../../src/features/create-session-m
 
 import {
   AGENTS,
+  DIRECTORY_ID_ALPHA,
+  DIRECTORY_ID_BETA,
+  DIRECTORY_PATH_ALPHA,
   DIRS_ROUTE,
-  WORKSPACES,
   WORKSPACES_WITH_PATHS,
   dirRoute,
   sessionsForBothDirectories,
@@ -78,7 +80,7 @@ function baseScenario(overrides: Partial<ScenarioOptions> = {}): ScenarioOptions
     barrierGlobalSequence: "10",
     events: [],
     readResult: () => ({ sessionId: "", resources: { messages: [] }, hasEarlier: false }),
-    route: dirRoute("alpha"),
+    route: dirRoute(DIRECTORY_ID_ALPHA),
     ...overrides,
   };
 }
@@ -134,7 +136,7 @@ function createFrame(sent: readonly string[]): string | null {
 /**
  * 出站 `session.create` 帧里的 `payload`，逐层收窄后按记录返回；形状不符返回 `null`。
  *
- * 为什么返回原样的键值、而不是给载荷下一句 `{ workspaceAlias: string }` 之类的断言：本文件的
+ * 为什么返回原样的键值、而不是给载荷下一句 `{ directoryId: string }` 之类的断言：本文件的
  * 断言要证明的正是**实际发出的那个对象**有哪些键、值是什么；先把形状断言一遍再读，读到的只会
  * 是那句断言的回声。这里只逐层确认「是对象、不是数组」（`null` 由调用点断言）。
  */
@@ -162,11 +164,10 @@ function browsePaths(sent: readonly string[]): readonly unknown[] {
   return paths;
 }
 
-/** 载荷里**不得**出现的字段名与凭据/路径样式（出现即判红）。 */
+/** 载荷里**不得**出现的字段名与凭据/路径样式（出现即判红）；`directoryId` / `workspacePath` 是规范键。 */
 const FORBIDDEN_IN_PAYLOAD = [
-  "path",
   "cwd",
-  "directory",
+  "directoryPath",
   "mcp",
   "MCP",
   "credential",
@@ -241,7 +242,7 @@ function negotiateBrowse(mounted: Mounted): void {
 
 const checks: readonly Check[] = [
   {
-    name: "R16-1 目录已知的入口：目录/路径两行逐字来自服务端，载荷恰好是 agentId 与 workspaceAlias",
+    name: "R16-1 目录已知的入口：目录/路径两行逐字来自服务端，载荷恰好是 agentId 与 directoryId",
     async run() {
       const mounted = await mountScenario(baseScenario());
       try {
@@ -263,11 +264,11 @@ const checks: readonly Check[] = [
         expectEqual(textOf(query(sheet, "[data-create-directory-name]")), "api", "目录行是展示名");
         expectEqual(
           textOf(query(sheet, "[data-create-directory-path]")),
-          "D:\\secret\\vault\\repo-x",
+          DIRECTORY_PATH_ALPHA,
           "路径行逐字呈现服务端下发的路径",
         );
-        // 反例：把别名当展示名渲染（或干脆拿别名顶路径）时，文本里会出现 alpha。
-        expectEqual(domText(sheet).includes("alpha"), false, "弹层文本里不得出现目录别名");
+        // 反例：把目录标识当展示名渲染（或写进目录块）时，文本里会出现那一串 32 位标识。
+        expectAbsent(domText(sheet), DIRECTORY_ID_ALPHA, "弹层文本里不得出现目录标识");
         // 目录不由用户手工输入：弹层里没有任何文本输入框。
         expectEqual(queryAll(sheet, "input").length, 0, "弹层不得呈现目录输入框");
 
@@ -280,10 +281,10 @@ const checks: readonly Check[] = [
         expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
         expectEqual(
           Object.keys(payload).sort(),
-          ["agentId", "workspaceAlias"],
+          ["agentId", "directoryId"],
           "目录已知时载荷的键集必须恰好是两个引用",
         );
-        expectEqual(payload["workspaceAlias"], "alpha", "载荷里的目录引用");
+        expectEqual(payload["directoryId"], DIRECTORY_ID_ALPHA, "载荷里的目录引用");
         expectEqual(payload["agentId"], "codex-a", "载荷里的 Agent 引用");
 
         // MUST NOT：帧**原文**里不得携带 Provider/MCP 凭据，也不得凭空多带一条宿主路径。
@@ -296,18 +297,23 @@ const checks: readonly Check[] = [
     },
   },
   {
-    name: "R16-2 快照没下发路径时：路径行呈现「—」，MUST NOT 用别名或展示名拼一段像路径的文本",
+    name: "R16-2 目录块只呈现路径：目录行是路径尾段，路径行逐字来自快照条目",
     async run() {
-      // 同一页的第二种场景：workspaces 只带协议字段（`path` 缺席）。
-      const mounted = await mountScenario(baseScenario({ workspaces: WORKSPACES }));
+      const mounted = await mountScenario(baseScenario());
       try {
         const { sheet } = await openSheetWithAgent(mounted.container, "codex-a");
-        expectEqual(textOf(query(sheet, "[data-create-directory-name]")), "api", "目录行仍是展示名");
-        const pathText = textOf(query(sheet, "[data-create-directory-path]"));
-        expectEqual(pathText, "—", "未下发路径时呈现「—」");
-        // 反例：用别名或展示名冒充路径时，这一段会变成 alpha/api 之类的文本。
-        expectEqual(pathText.includes("alpha"), false, "不得用别名冒充路径");
-        expectEqual(pathText.includes("api"), false, "不得用展示名冒充路径");
+        expectEqual(textOf(query(sheet, "[data-create-directory-name]")), "api", "目录行是路径尾段");
+        expectEqual(
+          textOf(query(sheet, "[data-create-directory-path]")),
+          DIRECTORY_PATH_ALPHA,
+          "路径行逐字来自协议条目",
+        );
+        // 反例：用目录标识或展示名冒充路径时，这一段会变成那串标识 / `api`。
+        expectAbsent(textOf(query(sheet, "[data-create-directory-path]")), DIRECTORY_ID_ALPHA, "不得用目录标识冒充路径");
+        expectThat(
+          textOf(query(sheet, "[data-create-directory-path]")) !== "api",
+          "不得用展示名冒充路径",
+        );
       } finally {
         await mounted.unmount();
       }
@@ -339,7 +345,7 @@ const checks: readonly Check[] = [
             );
           }
 
-          const entry = mounted.composition?.store.createEntry("alpha");
+          const entry = mounted.composition?.store.createEntry(DIRECTORY_ID_ALPHA);
           if (entry === undefined) throw new Error("组合根未装配");
           const host = document.createElement("div");
           document.body.append(host);
@@ -447,7 +453,10 @@ const checks: readonly Check[] = [
           () => query(mounted.container, '[data-connection-state="online"]') !== null,
           "连接已到在线",
         );
-        await waitFor(() => queryAll(mounted.container, "[data-directory-alias]").length === 2, "目录页渲染出两条目录");
+        await waitFor(
+          () => queryAll(mounted.container, "[data-directory-id]").length === 2,
+          "目录页渲染出两条目录",
+        );
         // 顶部入口落在**目录列表工具条右端**（原型的位置），不是列表上方单独一行：这条按 DOM 包含
         // 关系量（工具条的机器锚点 `data-directory-toolbar` 由 `DirectoryList` 发出）。
         expectThat(
@@ -500,7 +509,10 @@ const checks: readonly Check[] = [
         expectEqual(browsePaths(mounted.host?.sent ?? []).length, 0, "不支持浏览时不得派发 workspace.browse");
 
         click(
-          query(mounted.container, '[data-action="choose-registered-directory"][data-registered-alias="beta"]'),
+          query(
+            mounted.container,
+            `[data-action="choose-registered-directory"][data-registered-directory-id="${DIRECTORY_ID_BETA}"]`,
+          ),
           "回退列表里的 beta",
         );
         await waitFor(() => query(mounted.container, "[data-directory-picker]") === null, "选择器关闭");
@@ -526,10 +538,10 @@ const checks: readonly Check[] = [
         expectThat(payload !== null, "session.create 帧里必须带一个对象载荷");
         expectEqual(
           Object.keys(payload).sort(),
-          ["agentId", "workspaceAlias"],
-          "从已登记目录选出来的目录引用走别名，键集恰好两个",
+          ["agentId", "directoryId"],
+          "从已登记目录选出来的目录引用走标识，键集恰好两个",
         );
-        expectEqual(payload["workspaceAlias"], "beta", "载荷里的目录引用是选中的那一项");
+        expectEqual(payload["directoryId"], DIRECTORY_ID_BETA, "载荷里的目录引用是选中的那一项");
         expectNone(createFrame(mounted.host?.sent ?? []) ?? "", FORBIDDEN_IN_PAYLOAD, "帧里出现了越界字段名");
       } finally {
         await mounted.unmount();

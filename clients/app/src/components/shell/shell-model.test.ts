@@ -36,7 +36,14 @@ describe("顶栏判据（只有 usePathname() 一处）", () => {
   });
 
   it("其它路径都呈现顶栏；前缀相同但不是配对入口的路径不误判", () => {
-    for (const path of ["/", "/hosts", "/dir/alpha", "/session/abc", "/pairing", "/pairs"]) {
+    for (const path of [
+      "/",
+      "/hosts",
+      "/dir/0123456789abcdef0123456789abcdef",
+      "/session/abc",
+      "/pairing",
+      "/pairs",
+    ]) {
       expect(isPairingPath(path), path).toBe(false);
       expect(showsGlobalTopBar(path), path).toBe(true);
     }

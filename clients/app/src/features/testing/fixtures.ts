@@ -18,7 +18,7 @@ import type {
   SnapshotItemHistory,
   SnapshotItemMessages,
   SnapshotItemPendingInteractions,
-  WorkspaceRef,
+  WorkspaceCatalogEntry,
 } from "../../protocol";
 import type { CompletedSnapshot, StagedResources } from "../../sync-client";
 import { SESSION_HISTORY_FEATURE } from "../../sync-client";
@@ -27,30 +27,28 @@ import { ClientStore } from "../client-store";
 import type { SyncGateway } from "../ports";
 
 /**
- * 目录项带路径字段：`core.workspace-path.v1` 协商后快照条目的样子。
+ * 目录条目夹具：`{ directoryId, path }`（当前合同）。
  *
- * 镜像里这个可选键**已经在了**（`protocol/common.ts` 的 `WorkspaceCatalogEntry.path?: string`，
- * 快照 `workspaces` 的元素类型就是它）；这里仍按 open object（双断言）声明，是因为条目还刻意带了
- * 一个协议之外的 `root` 键（多带的键是文件头说的那类负向断言的原料）：
- * `as const satisfies readonly WorkspaceCatalogEntry[]` 会把这个多余属性判成错（TS2353），
- * 装不下这一形状。消费方一律经 `workspacePathOf` 逐字读取。
+ * 这里仍按 open object（双断言）声明，是因为条目还刻意带了一个协议之外的 `root` 键（多带的键是
+ * 文件头说的那类负向断言的原料）：`as const satisfies readonly WorkspaceCatalogEntry[]` 会把这个
+ * 多余属性判成错（TS2353），装不下这一形状。消费方只读 `directoryId` 与 `path`。
  */
 export const WORKSPACES_WITH_PATHS = [
-  { alias: "work-api", displayName: "api", path: "D:\\work\\api", root: "D:\\work" },
-  { alias: "personal-api", displayName: "api", path: "D:\\personal\\api", root: "D:\\personal" },
-] as unknown as readonly WorkspaceRef[];
+  { directoryId: "work-api", path: "D:\\work\\api", root: "D:\\work" },
+  { directoryId: "personal-api", path: "D:\\personal\\api", root: "D:\\personal" },
+] as unknown as readonly WorkspaceCatalogEntry[];
 
-/** 两条同名目录（展示名相同，别名不同）。 */
+/** 两条尾段相同的目录（展示名都由路径尾段派生为 `api`）。 */
 export const WORKSPACES = [
-  { alias: "work-api", displayName: "api" },
-  { alias: "personal-api", displayName: "api" },
-] as const satisfies readonly WorkspaceRef[];
+  { directoryId: "work-api", path: "D:\\work\\api" },
+  { directoryId: "personal-api", path: "D:\\personal\\api" },
+] as const satisfies readonly WorkspaceCatalogEntry[];
 
 /** 会话摘要构造器。 */
 export function session(input: {
   readonly id: string;
   readonly state?: SessionSummary["state"];
-  readonly alias?: string | null;
+  readonly directoryId?: string | null;
   readonly title?: string | null;
   readonly origin?: SessionSummary["origin"];
   /** 摘要里的当前模式；只在清单与 `session.mode.changed` 都缺席时才轮到它（回落链最末）。 */
@@ -58,7 +56,7 @@ export function session(input: {
   readonly createdAt?: string;
   readonly updatedAt?: string;
 }): SessionSummary {
-  const alias = input.alias === undefined ? "work-api" : input.alias;
+  const directoryId = input.directoryId === undefined ? "work-api" : input.directoryId;
   return {
     sessionId: input.id,
     title: input.title === undefined ? `会话 ${input.id.slice(-4)}` : input.title,
@@ -69,7 +67,7 @@ export function session(input: {
     version: "1",
     createdAt: input.createdAt ?? "2026-10-01T00:00:00.000Z",
     updatedAt: input.updatedAt ?? "2026-10-01T00:00:00.000Z",
-    workspace: alias === null ? null : { alias, displayName: alias },
+    workspace: directoryId === null ? null : { directoryId },
   };
 }
 
@@ -111,28 +109,28 @@ export const ACTIVITY_SESSIONS: readonly SessionSummary[] = [
     id: "ffffffff-0000-4000-8000-000000000001",
     title: "早先的一次提交",
     state: "idle",
-    alias: "work-api",
+    directoryId: "work-api",
     updatedAt: "2026-09-30T23:00:00.000Z",
   }),
   session({
     id: "ffffffff-0000-4000-8000-000000000002",
     title: "最晚的一次提交",
     state: "running",
-    alias: "work-api",
+    directoryId: "work-api",
     updatedAt: "2026-10-02T08:00:00.000Z",
   }),
   session({
     id: "ffffffff-0000-4000-8000-000000000003",
     title: "最早的一次提交",
     state: "idle",
-    alias: "work-api",
+    directoryId: "work-api",
     updatedAt: "2026-08-15T01:00:00.000Z",
   }),
   session({
     id: "ffffffff-0000-4000-8000-000000000004",
     title: "别的目录的跨年会话",
     state: "idle",
-    alias: "personal-api",
+    directoryId: "personal-api",
     updatedAt: "2026-12-31T23:59:59.000Z",
   }),
 ];
@@ -140,7 +138,7 @@ export const ACTIVITY_SESSIONS: readonly SessionSummary[] = [
 /** 默认快照资源：两个同名目录、两条会话、两个同名 Agent。 */
 export function resources(input: {
   readonly sessions?: readonly SessionSummary[];
-  readonly workspaces?: readonly WorkspaceRef[];
+  readonly workspaces?: readonly WorkspaceCatalogEntry[];
   readonly agents?: StagedResources["agents"];
 }): StagedResources {
   return {

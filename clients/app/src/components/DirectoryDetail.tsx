@@ -8,7 +8,7 @@
  *
  * ## 两种「空」互不冒充
  *
- * - **别名不在快照里** → `data-directory-detail-state="unknown_directory"`，文案说的是链接失效；
+ * - **目录标识不在快照里** → `data-directory-detail-state="unknown_directory"`，文案说的是链接失效；
  * - **目录在，但一条会话都没有** → `data-directory-sessions="empty"`，文案说的是「还没有会话」。
  *
  * 详情页没有查询词与月份档（规格用「目录详情按时间倒序分页」替换了旧的月份分档与目录内搜索），
@@ -37,8 +37,8 @@
  *
  * ## 路径只来自服务端下发（`DirectoryRowModel.path`）
  *
- * 路径逐字取自快照条目上的 `path` 键，未下发时为 `null`——此时**不呈现**路径行，也 MUST NOT
- * 用别名或展示名拼一段看起来像路径的文本。组件不做任何字符串加工：超宽时交给
+ * 路径逐字取自快照条目上的 `path` 键（必填），与展示名一样来自服务端下发的同一条条目。
+ * MUST NOT 用目录标识或展示名拼一段看起来像路径的文本。组件不做任何字符串加工：超宽时交给
  * `numberOfLines`（CSS 省略号）处理，DOM 里的文本仍是那一段逐字路径。
  *
  * ## 响应式
@@ -400,11 +400,11 @@ export function DirectoryDetail({
 
   if (model.kind === "unknown_directory") {
     return (
-      <View style={styles.root} dataSet={{ route: "dir-detail", directoryAlias: model.alias }}>
+      <View style={styles.root} dataSet={{ route: "dir-detail", directoryId: model.directoryId }}>
         {back}
         {/*
-          文案里**不出现别名**：别名只是路由与命令引用的内部标识，界面上不得露出来
-          （同名目录靠服务端下发的路径尾段消歧）。这里也不改用展示名——别名不在快照里时，
+          文案里**不出现目录标识**：它只是路由与命令引用的内部标识，界面上不得露出来
+          （同名目录靠路径派生的消歧段区分）。这里也不改用展示名——标识不在快照里时，
           展示名根本无从取得，`undefined` 会渲染出一个空的引号。
         */}
         <Text role="alert" style={styles.alert} dataSet={{ directoryDetailState: "unknown_directory" }}>
@@ -433,7 +433,7 @@ export function DirectoryDetail({
     onPageChange(requested);
   };
 
-  // 页头：返回 / 标题 + 会话数芯片 / 路径。别名不呈现（它只是路由与命令引用的内部标识）。
+  // 页头：返回 / 标题 + 会话数芯片 / 路径。目录标识不呈现（它只是路由与命令引用的内部标识）。
   const head = (
     <View style={styles.head}>
       {back}
@@ -445,20 +445,18 @@ export function DirectoryDetail({
           {`${String(model.total)} 个会话`}
         </Text>
       </View>
-      {/* 路径逐字取自快照下发的引用；没下发（未协商或键缺席）时不呈现这一行，也不用别名顶替。 */}
-      {directory.path === null ? null : (
-        <View style={styles.pathRow} dataSet={{ directoryPath: directory.path }}>
-          <Text style={styles.pathLabel}>路径</Text>
-          <Text style={styles.pathValue} numberOfLines={1}>
-            {directory.path}
-          </Text>
-        </View>
-      )}
+      {/* 路径逐字取自快照下发的同一条目录条目；始终在场，不做任何拼接或替代。 */}
+      <View style={styles.pathRow} dataSet={{ directoryPath: directory.path }}>
+        <Text style={styles.pathLabel}>路径</Text>
+        <Text style={styles.pathValue} numberOfLines={1}>
+          {directory.path}
+        </Text>
+      </View>
     </View>
   );
 
   return (
-    <View style={styles.root} dataSet={{ route: "dir-detail", directoryAlias: directory.alias }}>
+    <View style={styles.root} dataSet={{ route: "dir-detail", directoryId: directory.directoryId }}>
       {head}
 
       <View style={styles.originRow}>

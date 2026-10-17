@@ -4,10 +4,10 @@
  * ## 载荷为什么可以是「精确列出」而不是「至少列出」
  *
  * `schemas/sync/v1/command.schema.json#/$defs/sessionCreate` 的 `payload` 只允许 `agentId`、
- * **一个**目录引用（`directoryId`（已登记别名）或 `workspacePath`（绝对目录），二者恰好一个）
+ * **一个**目录引用（`directoryId`（已记录目录的标识）或 `workspacePath`（绝对目录），二者恰好一个）
  * 与可选的 `createIfMissing`（显式的「目录不存在则先创建」开关）三类字段。
  * 多写 `cwd`/`exportId`/`templateParams`/MCP 配置/凭据即被服务端按 `protocol.schema_invalid` 拒绝；
- * `createIfMissing` 与 `directoryId` 同时出现同样被拒（别名解析出的目录必然已存在）。
+ * `createIfMissing` 与 `directoryId` 同时出现同样被拒（已记录的目录必然已存在）。
  * 因此本模块的 `CreateSessionRefs` 是精确形状，并配一条**运行期**断言 `assertCreateSessionRefs`：
  * 类型系统保护编译期，断言保护「从别处拼出来的对象」这一路（例如后续有人从 JSON 里读回 payload 再转发）。
  *
@@ -15,7 +15,7 @@
  *
  * 浏览器拿不到宿主路径，客户端也不许拼接、规范化或反查它。因此浏览/选择出来的目录**一律**逐字来自
  * 服务端：`workspace.browse` 的结果条目（名称 + 绝对路径 + 是否已登记）与快照 `workspaces` 条目的
- * 别名/展示名。唯一由客户端算出来的路径是「在当前层新建一层目录」的候选路径——它由**服务端回显的
+ * 目录标识与逐字路径。唯一由客户端算出来的路径是「在当前层新建一层目录」的候选路径——它由**服务端回显的
  * 当前层**加**用户输入的那一段名字**构成（见 {@link buildCreateFolderPath}），既不做规范化，也不
  * 去反查父层是否存在；那一段名字不合规时直接明确拒绝，不构造、不提交。
  *
@@ -46,7 +46,7 @@ import type { CommandRecord, CommandState } from "../state";
 import { isTerminalState, mayDisplayAsAccepted, shouldPresentUncertain } from "../state";
 import type { AgentCatalogEntryView } from "../domain";
 
-/** 提交载荷的两个引用：目录引用（别名或绝对目录）+ Agent 标识，另可带「不存在则先创建」。**只有这三项**。 */
+/** 提交载荷的两个引用：目录引用（目录标识或绝对目录）+ Agent 标识，另可带「不存在则先创建」。**只有这三项**。 */
 export type CreateSessionRefs =
   | { readonly directoryId: string; readonly agentId: string; readonly createIfMissing?: never }
   | { readonly workspacePath: string; readonly agentId: string; readonly createIfMissing?: boolean };
@@ -69,9 +69,9 @@ const DIRECTORY_REF_KEYS: readonly string[] = ["directoryId", "workspacePath"];
  * 存在的理由不是「类型已经保证了」——它保证的是**本模块内部**写出来的对象；
  * 断言拦的是「对象来自别处」（从 JSON 读回、从缓存恢复、从 UI 事件里解出来的字段）。
  *
- * 目录引用必须**恰好一个**：同时给出别名与路径、或两者都不给，都在这里当场失败——
+ * 目录引用必须**恰好一个**：同时给出目录标识与路径、或两者都不给，都在这里当场失败——
  * 与 `sync-session-create` 的「目录引用二选一」同一条口径（不猜以哪一个为准）。
- * `createIfMissing` 只在**路径**那一支成立，且缺席即假：拿别名加这个开关一律拒绝，
+ * `createIfMissing` 只在**路径**那一支成立，且缺席即假：拿目录标识加这个开关一律拒绝，
  * 不猜测调用方想建哪个目录。
  */
 export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
@@ -102,7 +102,7 @@ export function assertCreateSessionRefs(payload: unknown): CreateSessionRefs {
   }
   if (key === "directoryId") {
     if (createIfMissing !== undefined) {
-      throw new CreateSessionPayloadViolation("createIfMissing 与 directoryId 互斥（别名指向的目录必然已存在）");
+      throw new CreateSessionPayloadViolation("createIfMissing 与 directoryId 互斥（已记录的目录必然已存在）");
     }
     return { directoryId: value, agentId };
   }
@@ -169,21 +169,21 @@ export const WORKSPACE_BROWSE_FEATURE = "core.workspace-browse.v1";
 export type BrowseUnavailableReason = "offline" | "unsupported";
 
 /**
- * 顶部入口的创建弹层没有已登记别名，它自己的状态键。
+ * 顶部入口的创建弹层没有已记录目录，它自己的状态键。
  *
  * 用法只有两处：`data-create-sheet` 的取值，以及 `createRequestIds` 的键（提交状态要挂在一个稳定的
- * 键上，且不能与任何别名相撞）。别名由服务端下发、取值域不设形状约束，因此这里用一个别名生成规则下
- * 不会出现的字面量（含 `@`）。
+ * 键上，且不能与任何目录标识相撞）。目录标识是 32 位十六进制，因此含 `@` 的字面量不会与它相撞。
  */
 export const CREATE_SHEET_BROWSE_KEY = "@browse";
 
-/** 已登记目录:逐字来自快照 `workspaces`（不支持浏览时的回退选择，也是「已登记」提示的来源）。 */
+/** 已记录目录：`directoryId` 与逐字路径来自快照 `workspaces`（不支持浏览时的回退选择）。 */
 export interface RegisteredDirectoryModel {
-  readonly alias: string;
-  /** 展示名（同名目录由别名区分，别名只作机器标识、不作界面文本）。 */
+  /** 目录标识：只作机器标识与路由/命令引用，MUST NOT 呈现为界面文本。 */
+  readonly directoryId: string;
+  /** 由服务端下发的路径派生的展示名。 */
   readonly displayName: string;
-  /** 服务端下发的逐字路径；未协商 `core.workspace-path.v1` 时为 `null`（MUST NOT 用别名顶替）。 */
-  readonly path: string | null;
+  /** 服务端下发的逐字路径。 */
+  readonly path: string;
 }
 
 /** 浏览到的一层里的一个子目录：名称与路径都逐字来自服务端下发的条目。 */
@@ -205,7 +205,7 @@ export interface DirectoryCrumbModel {
 /**
  * 选定结果：两条来源各自对应一种目录引用。
  *
- * - `registered`：从已登记目录集合里选中的一项 → 载荷用 `directoryId`；
+ * - `registered`：从已记录目录集合里选中的一项 → 载荷用 `directoryId`；
  * - `path`：浏览选定的绝对路径（或「在当前层新建」构造出的候选路径）→ 载荷用 `workspacePath`。
  *
  * 两者的路径/名字都逐字来自服务端下发（`path` 那一支的 `name` 在新建时来自用户输入）。
@@ -213,15 +213,15 @@ export interface DirectoryCrumbModel {
 export type DirectorySelection =
   | {
       readonly kind: "registered";
-      readonly alias: string;
+      readonly directoryId: string;
       readonly displayName: string;
-      readonly path: string | null;
+      readonly path: string;
     }
   | {
       readonly kind: "path";
       readonly path: string;
       readonly name: string;
-      /** 该目录已是本机登记的目录（只影响提示口径，不改变目录引用用哪一支）。 */
+      /** 该目录已是本机记录的目录（只影响提示口径，不改变目录引用用哪一支）。 */
       readonly registered: boolean;
       /** 该目录在主机上还不存在，提交时要先新建它（载荷的 `createIfMissing`）。 */
       readonly willCreate: boolean;
@@ -231,10 +231,10 @@ export type DirectorySelection =
 export type CreateDirectoryBlock =
   | {
       readonly kind: "known";
-      /** 展示名（别名只作机器标识，模型里不带它——它不会成为界面文本）。 */
+      /** 由路径派生的展示名（目录标识只作机器标识，模型里不带它——它不会成为界面文本）。 */
       readonly displayName: string;
-      /** 服务端下发的逐字路径；未下发时为 `null`（界面呈现「—」）。 */
-      readonly path: string | null;
+      /** 服务端下发的逐字路径。 */
+      readonly path: string;
     }
   | {
       readonly kind: "browse";
@@ -255,7 +255,7 @@ export type CreateDirectoryNotice =
   | { readonly kind: "unselected" }
   | { readonly kind: "will_create"; readonly path: string }
   | { readonly kind: "unregistered"; readonly path: string }
-  | { readonly kind: "registered"; readonly displayName: string; readonly path: string | null };
+  | { readonly kind: "registered"; readonly displayName: string; readonly path: string };
 
 /** 分支提示的文案；四类各一条，由模型给出（组件不另写一套判断）。 */
 export function createDirectoryNoticeText(notice: CreateDirectoryNotice): string {
@@ -667,17 +667,17 @@ export interface CreateSessionEntryModel {
 
 /** 构造创建弹层模型的输入（全部来自快照、浏览状态与命令记录）。 */
 export interface CreateSessionEntryInput {
-  /** 入口所属的已登记目录别名；顶部入口为 `null`（目录由浏览/选择给出）。 */
-  readonly directoryAlias: string | null;
+  /** 入口所属的已记录目录标识；顶部入口为 `null`（目录由浏览/选择给出）。 */
+  readonly directoryId: string | null;
   /**
-   * 该别名的展示名与逐字路径（快照 `workspaces` 里的那一项）；别名不在快照里时为 `null`。
+   * 该标识对应的展示名与逐字路径（快照 `workspaces` 里的那一项）；标识不在快照里时为 `null`。
    *
-   * 为 `null` 时目录块退回**浏览/选择**形态：别名只是机器标识，拿它当展示名会把别名写成界面文本，
-   * 编一段名字或路径更是规格明确禁止的。
+   * 为 `null` 时目录块退回**浏览/选择**形态：目录标识只是机器标识，拿它当展示名会把标识写成
+   * 界面文本，编一段名字或路径更是规格明确禁止的。
    */
   readonly knownDirectory: {
     readonly displayName: string;
-    readonly path: string | null;
+    readonly path: string;
   } | null;
   /** 服务端是否提供了目录浏览能力。 */
   readonly browsingSupported: boolean;
@@ -737,7 +737,7 @@ export function buildCreateSessionEntryModel(input: CreateSessionEntryInput): Cr
       ? "unsupported"
       : "offline";
   const directory: CreateDirectoryBlock =
-    input.directoryAlias !== null && input.knownDirectory !== null
+    input.directoryId !== null && input.knownDirectory !== null
       ? {
           kind: "known",
           displayName: input.knownDirectory.displayName,
@@ -751,7 +751,7 @@ export function buildCreateSessionEntryModel(input: CreateSessionEntryInput): Cr
           notice: noticeFor(input.selection),
         };
   return {
-    sheetKey: input.directoryAlias ?? CREATE_SHEET_BROWSE_KEY,
+    sheetKey: input.directoryId ?? CREATE_SHEET_BROWSE_KEY,
     directory,
     effectNote: CREATE_EFFECT_NOTE,
     agents: input.agents,

@@ -90,18 +90,18 @@ export default function SessionRoute(): ReactElement {
   /**
    * 要呈现的创建弹层：`null` 表示本页不呈现。
    *
-   * 唯一来源是 store 的 `createSheetAlias`（本页不另持开关）；本页只认**本会话所属目录**那一个
-   * ——左栏的「⊕ 新建会话」就是在这个目录里创建，因此弹层与列表是同一个目录上下文。再要求该别名
-   * 落在本机已登记的目录里（别名全集取自快照）：否则左栏的目录引用已经失效时，弹层会画在一个
+   * 唯一来源是 store 的 `createSheetDirectoryId`（本页不另持开关）；本页只认**本会话所属目录**那一个
+   * ——左栏的「⊕ 新建会话」就是在这个目录里创建，因此弹层与列表是同一个目录上下文。再要求该标识
+   * 落在本机已记录的目录里（标识全集取自快照）：否则左栏的目录引用已经失效时，弹层会画在一个
    * 不存在的目录上。
    */
-  const requestedSheetAlias = state.createSheetAlias;
-  const directoryAlias = model.header.directoryAlias;
-  const sheetAlias =
-    directoryAlias !== null &&
-    requestedSheetAlias === directoryAlias &&
-    (state.resources?.workspaces.some((workspace) => workspace.alias === requestedSheetAlias) ?? false)
-      ? requestedSheetAlias
+  const requestedSheetDirectoryId = state.createSheetDirectoryId;
+  const directoryId = model.header.directoryId;
+  const sheetDirectoryId =
+    directoryId !== null &&
+    requestedSheetDirectoryId === directoryId &&
+    (state.resources?.workspaces.some((workspace) => workspace.directoryId === requestedSheetDirectoryId) ?? false)
+      ? requestedSheetDirectoryId
       : null;
 
   return (
@@ -156,8 +156,8 @@ export default function SessionRoute(): ReactElement {
         selectedChangeId={selectedChangeId}
         onSelectChange={setSelectedChangeId}
         // 左栏：目录上下文、同目录会话、目录内搜索（只影响左栏）、继续加载与目录内新建。
-        onOpenDirectory={(alias) => {
-          router.push(`/dir/${encodeURIComponent(alias)}`);
+        onOpenDirectory={(directoryId) => {
+          router.push(`/dir/${encodeURIComponent(directoryId)}`);
         }}
         onOpenSession={(otherSessionId) => {
           router.push(`/session/${encodeURIComponent(otherSessionId)}`);
@@ -168,8 +168,8 @@ export default function SessionRoute(): ReactElement {
         onLoadMoreSidebar={() => {
           store.loadMoreSidebarSessions();
         }}
-        onCreateSession={(alias) => {
-          store.openCreateSheet(alias);
+        onCreateSession={(directoryId) => {
+          store.openCreateSheet(directoryId);
         }}
         // 会话头的 Agent 胶囊沿用主机面板的同一份连接事件覆盖层（覆盖层缺席即「状态未知」）。
         hostPanel={store.hostPanel()}
@@ -214,20 +214,20 @@ export default function SessionRoute(): ReactElement {
       />
 
       {/* 左栏底部的「⊕ 新建会话」落在这里：弹层的开关是 store 的**单份**状态
-          （`createSheetAlias`），只有它落在本会话所属目录上时才呈现——目录页与详情页呈现的
+          （`createSheetDirectoryId`），只有它落在本会话所属目录上时才呈现——目录页与详情页呈现的
           也是它。提交载荷原样上抛（目录里的「先建目录」那类附加键因此不必在本页重复一遍）。 */}
-      {sheetAlias === null ? null : (
+      {sheetDirectoryId === null ? null : (
         <CreateSessionSheet
-          model={store.createEntry(sheetAlias)}
+          model={store.createEntry(sheetDirectoryId)}
           selectedAgentId={agentId}
           onSelectAgent={setAgentId}
           onSubmit={(input) => {
-            // 目录别名由本页给出（页面用的那个目录上下文），载荷里的其余键原样上抛。
-            const outcome = store.submitCreateSession({ ...input, directoryAlias: sheetAlias });
+            // 目录标识由本页给出（页面用的那个目录上下文），载荷里的其余键原样上抛。
+            const outcome = store.submitCreateSession({ ...input, directoryId: sheetDirectoryId });
             if (!outcome.ok) setAgentId(null);
           }}
           onDismissUncertain={() => {
-            const requestId = state.createRequestIds.get(sheetAlias);
+            const requestId = state.createRequestIds.get(sheetDirectoryId);
             if (requestId !== undefined) store.dismissUncertain(requestId);
           }}
           onClose={() => {

@@ -259,7 +259,7 @@ function sessionItem(sessionId: string, title: string): Record<string, unknown> 
     version: "1",
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
-    workspace: { directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" },
+    workspace: { directoryId: "0123456789abcdef0123456789abcdef" },
   };
 }
 

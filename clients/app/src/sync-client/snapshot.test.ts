@@ -48,7 +48,7 @@ describe("R14：快照验证通过后才产出可提交结果", () => {
 
     const chunks = [
       makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM }),
-      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }] }),
+      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }] }),
       makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "2", resource: "agents", items: [{ agentId: "claude", displayName: "Claude", default: true }] }),
     ];
     for (const chunk of chunks) {
@@ -64,7 +64,7 @@ describe("R14：快照验证通过后才产出可提交结果", () => {
     );
 
     expect(verified.resources.sessions).toHaveLength(1);
-    expect(verified.resources.workspaces).toEqual([{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }]);
+    expect(verified.resources.workspaces).toEqual([{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }]);
     expect(verified.resources.agents).toEqual([{ agentId: "claude", displayName: "Claude", default: true }]);
     expect(staging.hasPending).toBe(false);
   });
@@ -289,7 +289,7 @@ describe("CRITICAL-1：burst 投递下的 chunk 摄入", () => {
 
     const chunks = [
       makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM }),
-      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }] }),
+      makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }] }),
       makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "2", resource: "agents", items: [{ agentId: "claude", displayName: "Claude", default: true }] }),
     ];
     // 不逐个 await：模拟同一条 WSS 上的背靠背投递。
@@ -315,7 +315,7 @@ describe("CRITICAL-1：burst 投递下的 chunk 摄入", () => {
     const staging = new SnapshotStaging(digest);
     staging.begin(makeSnapshotBegin({ snapshotId: SNAPSHOT_ID, chunkCount: 2 }));
     const first = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "0", resource: "sessions", items: SESSIONS_ITEM });
-    const second = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "/home/u/api" }] });
+    const second = makeSnapshotChunk({ snapshotId: SNAPSHOT_ID, chunkIndex: "1", resource: "workspaces", items: [{ directoryId: "0123456789abcdef0123456789abcdef", path: "D:\\work\\api" }] });
     await staging.acceptChunk(first.rawText, first.message);
     await staging.acceptChunk(second.rawText, second.message);
 

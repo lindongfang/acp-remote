@@ -34,7 +34,7 @@ import type {
   SessionReadPageView,
   SessionStateView,
 } from "../domain";
-import { buildContextUsageView, workspacePathOf } from "../domain";
+import { buildContextUsageView, directoryNamesOf } from "../domain";
 import type { WorkspaceRef } from "../protocol";
 import type { ReadCursor, StagedResources } from "../sync-client";
 import type { ConversationInputModel } from "./conversation-input-model";
@@ -42,7 +42,7 @@ import type { ConversationSettingsModel } from "./conversation-settings-model";
 import type { FileChangeView, TimelineEntry } from "./conversation-timeline";
 import type { DegradedEventModel } from "./degradation-model";
 import type { SessionRowModel } from "./directory-model";
-import { buildSessionRowsByAlias } from "./directory-model";
+import { buildSessionRowsByDirectoryId } from "./directory-model";
 
 /** 一次用量事件的两项计数（`$defs.session.usage.changed`）。 */
 export interface UsageReading {
@@ -99,7 +99,8 @@ export interface ConversationHeaderModel {
   readonly title: string;
   readonly agentName: string;
   readonly state: SessionStateView;
-  readonly directoryAlias: string | null;
+  /** 会话所属目录的标识；只用于导航与键，MUST NOT 呈现为界面文本。 */
+  readonly directoryId: string | null;
   /** imported 会话来源离线时的标注；本节点自有会话为 `null`。 */
   readonly originOfflineLabel: string | null;
 }
@@ -202,12 +203,12 @@ const ABSENT_SIDEBAR: ConversationSidebarModel = {
   rows: [],
 };
 
-/** 对话页左栏的目录上下文（展示名 + 逐字路径；`alias` 是进入目录详情页的入口）。 */
+/** 对话页左栏的目录上下文（由路径派生的展示名 + 逐字路径；`directoryId` 是进入详情页的入口）。 */
 export interface ConversationSidebarDirectoryModel {
-  readonly alias: string;
+  readonly directoryId: string;
   readonly displayName: string;
-  /** 服务端下发的逐字路径；未协商 `core.workspace-path.v1` 或该键缺席时为 `null`。 */
-  readonly path: string | null;
+  /** 服务端下发的逐字路径。 */
+  readonly path: string;
 }
 
 /**
@@ -242,6 +243,10 @@ export const CONVERSATION_SIDEBAR_BATCH_SIZE = 15;
 export const CONVERSATION_NO_DIRECTORY_NOTICE =
   "这个会话没有目录归属：它没有可用的目录引用，因此这里列不出同目录会话。";
 
+/** 会话引用的目录不在最近一次同步的目录列表里（无从派生展示名）时的说明。 */
+export const CONVERSATION_UNKNOWN_DIRECTORY_NOTICE =
+  "这个会话所属的目录不在最近一次同步的目录列表里，因此这里列不出目录上下文与同目录会话。";
+
 /** 对话页模型。 */
 export interface ConversationPageModel {
   readonly header: ConversationHeaderModel;
@@ -264,9 +269,9 @@ export interface ConversationPageModel {
 /**
  * 左栏模型（对话页）：目录上下文 + 同目录会话列表 + 已呈现数与总数。
  *
- * 数据只从**快照资源**来（与目录页共用 `buildSessionRowsByAlias` 这一条行投影），因此本函数
- * 没有命令出口——「只读快照、不派发新命令」在结构上成立。目录上下文里的路径同样只可能是
- * 服务端下发的那一个字符串（`workspacePathOf`），不拼接、不反查。
+ * 数据只从**快照资源**来（与目录页共用 `buildSessionRowsByDirectoryId` 这一条行投影），因此本函数
+ * 没有命令出口——「只读快照、不派发新命令」在结构上成立。目录上下文里的展示名由服务端下发的路径
+ * 派生（与目录页同一份口径），路径逐字透传，不拼接、不反查。
  */
 export function buildConversationSidebar(input: {
   readonly resources: StagedResources | null;
@@ -295,23 +300,36 @@ export function buildConversationSidebar(input: {
     };
   }
 
-  // 展示名优先取快照目录条目（与目录页同一份值）；目录未登记时回落到会话摘要自己带的那个
-  // （两者都是服务端下发的字符串，不是一个由本地拼出来的替代品）。路径只在快照条目上下发，
-  // 因此目录未登记时没有路径可呈现，而不是拿展示名去拼一段。
-  const registered = input.resources?.workspaces.find((item) => item.alias === workspace.alias) ?? null;
+  // 展示名与路径都来自快照目录条目：展示名由同一份快照的 `path` 派生（与目录页一致）。
+  // 目录未出现在最近一次快照里时无从派生展示名，MUST NOT 退回目录标识或编一段文本。
+  const workspaces = input.resources?.workspaces ?? [];
+  const registered = workspaces.find((item) => item.directoryId === workspace.directoryId);
+  if (registered === undefined) {
+    return {
+      directory: null,
+      notice: CONVERSATION_UNKNOWN_DIRECTORY_NOTICE,
+      query: input.query,
+      total: 0,
+      shown: 0,
+      canLoadMore: false,
+      selectedSessionId: input.sessionId,
+      rows: [],
+    };
+  }
+  const derived = directoryNamesOf(workspaces).get(registered.directoryId);
   const directory: ConversationSidebarDirectoryModel = {
-    alias: workspace.alias,
-    displayName: registered?.displayName ?? workspace.displayName,
-    path: registered === null ? null : workspacePathOf(registered),
+    directoryId: registered.directoryId,
+    displayName: derived?.displayName ?? registered.path,
+    path: registered.path,
   };
 
   const needle = input.query.trim().toLowerCase();
   const rowsOfDirectory =
-    buildSessionRowsByAlias({
+    buildSessionRowsByDirectoryId({
       resources: input.resources,
       ownerLabelOf: input.ownerLabelOf,
       nowMs: input.nowMs,
-    }).get(directory.alias) ?? [];
+    }).get(directory.directoryId) ?? [];
   const matched = rowsOfDirectory.filter((row) => needle.length === 0 || row.title.toLowerCase().includes(needle));
   const rows = matched.slice(0, Math.max(1, input.limit));
 

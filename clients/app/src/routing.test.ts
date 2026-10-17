@@ -12,7 +12,7 @@
  *    服务端对非保留路径回退入口文档（`crates/server/src/transport/net/static_ui.rs` 的 `resolve`）——
  *    因此页面路径由客户端路由决定，不需要服务端为每条路由备一份文件。
  * 2. `expo export` 生成的类型化路由（`clients/app/.expo/types/router.d.ts`）里 href 是
- *    `/`、`/pair`、`/hosts`、`/dir/[alias]`、`/session/[id]`，没有片段形态。
+ *    `/`、`/pair`、`/hosts`、`/dir/[directoryId]`、`/session/[id]`，没有片段形态。
  * 3. `expo-router` 的 Web 链接实现（`build/fork/useLinking.js`）在初态与 `popstate` 时都从
  *    `location.pathname + location.search + location.hash` 取地址，但**路由匹配只用 `pathname`**：
  *    `build/fork/getStateFromPath-forks.js` 的 `getUrlWithReactNavigationConcessions` 用 URL 解析把
@@ -64,6 +64,8 @@ const ORIGIN = "https://work-pc.example.ts.net";
 const QR_DATA_MARKER = "data=";
 const HOST_ID = "bdb2ec20-f98c-4d87-b789-e540d527ef87";
 const SESSION_ID = "5d73cd10-a465-43cd-b3f1-704e2d49e99e";
+/** 目录标识的样例（32 位小写十六进制，与 `$defs.directoryId` 一致）。 */
+const DIRECTORY_ID = "0123456789abcdef0123456789abcdef";
 
 /**
  * 页面 ↔ 路由路径 ↔ 文件。
@@ -81,7 +83,7 @@ const PAGES = [
     file: "node-link/pair.tsx",
   },
   { page: "主机与连接页", route: "/hosts", sample: "/hosts", file: "hosts.tsx" },
-  { page: "目录详情页", route: "/dir/[alias]", sample: "/dir/work-api", file: "dir/[alias].tsx" },
+  { page: "目录详情页", route: "/dir/[directoryId]", sample: `/dir/${DIRECTORY_ID}`, file: "dir/[directoryId].tsx" },
   { page: "会话页", route: "/session/[id]", sample: `/session/${SESSION_ID}`, file: "session/[id].tsx" },
 ] as const;
 
@@ -289,7 +291,7 @@ describe("3.2 路由清单：页面路径由 app/ 下的路由文件提供", () 
   it("每个页头注释写的路径与它的路由一致（不再写成片段形态）", () => {
     for (const { page, route, file } of PAGES) {
       const head = readFileSync(join(ROUTE_ROOT, file), "utf8").slice(0, 400);
-      const display = route.replace("[alias]", "<alias>").replace("[id]", "<id>");
+      const display = route.replace("[directoryId]", "<directoryId>").replace("[id]", "<id>");
       expect(head, page).toContain(`路由 \`${display}\``);
     }
   });
@@ -415,7 +417,7 @@ describe("3.4 其余页面（目录页 / 主机页 / 目录详情 / 会话页）
       // 页面文件真的在磁盘上（可达性的锚点：文件不在就不可达），并落在自己的路径上。
       expect(files, page).toContain(file);
       expect(routePathOf(file), page).toBe(route);
-      expect(routeKeyOf(sample), page).toBe(route.replace("[alias]", "work-api").replace("[id]", SESSION_ID));
+      expect(routeKeyOf(sample), page).toBe(route.replace("[directoryId]", DIRECTORY_ID).replace("[id]", SESSION_ID));
       expect(routeKeyOf(`${sample}${qrFragment({ hostId: HOST_ID })}`), page).toBe(routeKeyOf(sample));
     }
   });

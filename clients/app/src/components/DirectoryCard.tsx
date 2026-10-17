@@ -9,15 +9,15 @@
  * 折叠箭头 → 目录图标 → 展示名（进入详情页的入口）→ 同名时的路径尾段 → 计数胶囊 →
  * 运行中徽标 → 待处理徽标 → 弹性空白 → `⊕ 新建` → `查看全部 ›`。
  *
- * - **别名不进界面**：卡片只把 `alias` 挂在根节点的 `data-directory-alias` 上（路由与命令引用的
+ * - **目录标识不进界面**：卡片只把 `directoryId` 挂在根节点的 `data-directory-id` 上（路由与命令引用的
  *   内部标识、e2e 的锚点），**不**渲染成任何文字。相邻目录是否同名由别的槽位（路径尾段）区分。
  * - **路径尾段只逐字搬运**：`pathTail` 由 feature 层判定并在「同名」时给出（展示名唯一或没有
  *   下发路径时为 `null`）。卡片不拼、不规范化、也不从展示名或别名反推它——因此「展示名唯一时
  *   MUST NOT 呈现路径」这条不需要卡片再判断一次。
  * - **三项汇总由会话摘要得出**（断连时仍可呈现）：计数胶囊恒呈现会话总数；运行中与待处理
  *   徽标只在**非零**时追加（原型同此），零值不占槽位。
- * - **别名只出现一次**：`data-directory-alias` 只在根节点这**一个**元素上，子元素（含标题入口与
- *   「⊕ 新建」）不再重复——e2e 的 `[data-directory-alias]` 计数才不会因标签迁移而失真。
+ * - **目录标识只出现一次**：`data-directory-id` 只在根节点这**一个**元素上，子元素（含标题入口与
+ *   「⊕ 新建」）不再重复——e2e 的 `[data-directory-id]` 计数才不会因标签迁移而失真。
  *
  * ## 两个进入详情页的入口
  *
@@ -40,10 +40,10 @@ import { Pressable, StyleSheet, Text, View, fontFamily, fontSize, palettes, radi
 export interface DirectoryCardProps {
   readonly displayName: string;
   /**
-   * 别名：**只**作路由与命令引用的内部标识（渲染成根节点的 `data-directory-alias`），
+   * 目录标识：**只**作路由与命令引用的内部标识（渲染成根节点的 `data-directory-id`），
    * MUST NOT 呈现为界面文字。
    */
-  readonly alias: string;
+  readonly directoryId: string;
   /**
    * 同名目录的消歧尾段（逐字取自服务端下发的路径，feature 层已判定「同名才给」）；
    * 展示名唯一或没有下发路径时为 `null`，此时**不呈现**任何路径片段。
@@ -212,7 +212,7 @@ const STYLES = { light: buildStyles(palettes.light), dark: buildStyles(palettes.
 /** 一个目录项。 */
 export function DirectoryCard({
   displayName,
-  alias,
+  directoryId,
   pathTail,
   counts,
   collapsed,
@@ -230,7 +230,7 @@ export function DirectoryCard({
     <View
       role="listitem"
       style={styles.card}
-      dataSet={{ directoryAlias: alias, directoryCollapsed: String(collapsed) }}
+      dataSet={{ directoryId, directoryCollapsed: String(collapsed) }}
     >
       <View style={styles.head}>
         <Pressable
@@ -247,7 +247,7 @@ export function DirectoryCard({
           <Text style={styles.iconGlyph}>▤</Text>
         </View>
         {/* 展示名是进入详情页的入口，且**与会话数无关**（0 会话的目录也点得进去）。
-            `data-directory-alias` 不挂在这里：它只在卡片根节点出现一次（R15 数它的个数）。 */}
+            `data-directory-id` 不挂在这里：它只在卡片根节点出现一次（R15 数它的个数）。 */}
         <Pressable
           role="button"
           style={styles.nameButton}

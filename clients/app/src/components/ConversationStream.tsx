@@ -132,7 +132,7 @@ export interface ConversationStreamProps {
   /** 链接被点选时上抛的目标。 */
   readonly onLinkPress?: ((href: string) => void) | undefined;
   /** 左栏「全部 ›」：进入当前会话所属目录的详情页。 */
-  readonly onOpenDirectory?: ((alias: string) => void) | undefined;
+  readonly onOpenDirectory?: ((directoryId: string) => void) | undefined;
   /** 左栏会话行：打开同目录的另一个会话。 */
   readonly onOpenSession?: ((sessionId: string) => void) | undefined;
   /** 左栏目录内搜索词变化（**只**影响左栏列表）。 */
@@ -140,7 +140,7 @@ export interface ConversationStreamProps {
   /** 左栏「加载更多」：再呈现一批同目录会话。 */
   readonly onLoadMoreSidebar?: (() => void) | undefined;
   /** 左栏底部的「⊕ 新建会话」：在该目录内创建会话。 */
-  readonly onCreateSession?: ((alias: string) => void) | undefined;
+  readonly onCreateSession?: ((directoryId: string) => void) | undefined;
   /**
    * 主机与连接面板模型：会话头的 Agent 胶囊**沿用同一份**连接事件覆盖层
    * （`agents` 列表本体来自快照，连接状态是可选覆盖层；覆盖层缺席时每行是「状态未知」）。
@@ -755,11 +755,11 @@ function Sidebar({
   onCreateSession,
 }: {
   readonly model: ConversationSidebarModel;
-  readonly onOpenDirectory: ((alias: string) => void) | undefined;
+  readonly onOpenDirectory: ((directoryId: string) => void) | undefined;
   readonly onOpenSession: ((sessionId: string) => void) | undefined;
   readonly onQueryChange: ((query: string) => void) | undefined;
   readonly onLoadMore: (() => void) | undefined;
-  readonly onCreateSession: ((alias: string) => void) | undefined;
+  readonly onCreateSession: ((directoryId: string) => void) | undefined;
 }): ReactElement {
   const theme = useTheme();
   const styles = theme.dark ? STYLES.dark : STYLES.light;
@@ -780,25 +780,23 @@ function Sidebar({
       )}
 
       {directory === null ? null : (
-        <View style={styles.sidebarHead} dataSet={{ sidebarDirectory: directory.alias }}>
+        <View style={styles.sidebarHead} dataSet={{ sidebarDirectory: directory.directoryId }}>
           <View style={styles.sidebarDirRow}>
             <View style={styles.sidebarDirNames}>
               <Text style={styles.sidebarName} dataSet={{ sidebarDirectoryName: directory.displayName }}>
                 {directory.displayName}
               </Text>
-              {/* 路径逐字来自服务端下发的引用；没下发时不呈现这一行（也不用展示名拼一段）。 */}
-              {directory.path === null ? null : (
-                <Text style={styles.sidebarPath} numberOfLines={1} dataSet={{ sidebarDirectoryPath: directory.path }}>
-                  {directory.path}
-                </Text>
-              )}
+              {/* 路径逐字来自快照目录条目，始终在场。 */}
+              <Text style={styles.sidebarPath} numberOfLines={1} dataSet={{ sidebarDirectoryPath: directory.path }}>
+                {directory.path}
+              </Text>
             </View>
             <Pressable
               role="button"
               style={styles.linkButton}
-              dataSet={{ action: "open-directory", directoryAlias: directory.alias }}
+              dataSet={{ action: "open-directory", directoryId: directory.directoryId }}
               onPress={() => {
-                onOpenDirectory?.(directory.alias);
+                onOpenDirectory?.(directory.directoryId);
               }}
             >
               <Text style={styles.linkButtonText}>全部 ›</Text>
@@ -869,9 +867,9 @@ function Sidebar({
           <Pressable
             role="button"
             style={styles.linkButton}
-            dataSet={{ action: "create-session-in-directory", directoryAlias: directory.alias }}
+            dataSet={{ action: "create-session-in-directory", directoryId: directory.directoryId }}
             onPress={() => {
-              onCreateSession(directory.alias);
+              onCreateSession(directory.directoryId);
             }}
           >
             <Text style={styles.linkButtonText}>⊕ 新建会话</Text>

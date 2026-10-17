@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SessionSummary } from "../protocol";
 import { UNTITLED_SESSION_LABEL } from "../domain";
-import { buildDirectoryDetailModel, buildSessionRowsByAlias, formatRelativeTime } from "./directory-model";
+import { buildDirectoryDetailModel, buildSessionRowsByDirectoryId, formatRelativeTime } from "./directory-model";
 import { ONLINE_SESSION_ID, WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
 
 /** 会话时刻与几个基准时刻：`NOW` 与它相差 30 秒 / 5 分钟 / 3 天。 */
@@ -66,7 +66,7 @@ describe("会话行的时间字段由模型给出相对文案", () => {
   ];
 
   it("行上同时给出精确时刻与相对文案（组件只渲染后者）", () => {
-    const rows = buildSessionRowsByAlias({
+    const rows = buildSessionRowsByDirectoryId({
       resources: resources({ sessions }),
       ownerLabelOf: () => "工作站",
       nowMs: AT_MS + 5 * 60_000,
@@ -81,7 +81,7 @@ describe("会话行的时间字段由模型给出相对文案", () => {
 
   it("只改时钟就得到与时间差一致的文案（同一份会话数据）", () => {
     const at = (nowMs: number): readonly string[] =>
-      (buildSessionRowsByAlias({ resources: resources({ sessions }), ownerLabelOf: () => "工作站", nowMs }).get("work-api") ?? [])
+      (buildSessionRowsByDirectoryId({ resources: resources({ sessions }), ownerLabelOf: () => "工作站", nowMs }).get("work-api") ?? [])
         .map((row) => row.updatedAtLabel);
 
     expect(at(AT_MS)).toEqual(["刚刚", "2026-10-01"]);
@@ -115,7 +115,7 @@ describe("三处（目录页 / 详情页 / 对话页左栏）共用同一个相�
     const model = buildDirectoryDetailModel({
       resources: resources({ sessions }),
       connection: "online",
-      alias: "work-api",
+      directoryId: "work-api",
       ownerLabelOf: () => "工作站",
       nowMs: AT_MS + 30_000,
     });

@@ -6,47 +6,47 @@
  *
  * 1. **MUST NOT 依赖额外的在线查询命令**：注入一个「任何 `dispatch` 都记账」的替身，
  *    走完目录页的完整读取路径后断言**一次都没有派发**。
- * 2. **同名目录不合并 / 路径逐字透传且只在同名时给尾段 / 两种空态可区分 / 断连仍可渲染**。
+ * 2. **同名目录不合并 / 展示名取路径尾段且只在同名时给消歧段 / 两种空态可区分 / 断连仍可渲染**。
  *
- * 判别力来源：反例（拿展示名拼一段路径、展示名唯一却给出尾段、让目录页发 `session.list`）会让
- * 「`path` 只在服务端下发时非 null」「`pathTail` 只在同名时非 null」与「`dispatches` 为空」
+ * 判别力来源：反例（拿展示名拼一段路径、展示名唯一却给出消歧段、让目录页发 `session.list`）会让
+ * 「`path` 逐字来自快照」「`pathTail` 只在同名时非 null」与「`dispatches` 为空」
  * 这几条断言变红；对照用例（用户意图确实会派发）证明派发通道本身是通的，不是被误伤。
  */
 
 import { describe, expect, it } from "vitest";
 
-import type { CommandMessage, SessionSummary, WorkspaceRef } from "../protocol";
+import type { CommandMessage, SessionSummary, WorkspaceCatalogEntry } from "../protocol";
 import type { CompletedSnapshot, StagedResources } from "../sync-client";
 import { ClientStore } from "./client-store";
 import type { SyncGateway } from "./ports";
 import { buildDirectoryDetailModel, buildDirectoryPageModel } from "./directory-model";
 
 /**
- * 带路径字段的目录项：`core.workspace-path.v1` 协商后快照条目的样子。
+ * 目录项夹具：`{ directoryId, path }` 的当前形状。
  *
  * 协议的 TypeScript 镜像还没带上这个可选键（该键由变更 `sync-path-browse-and-diff-delivery`
  * 的合同侧交付），因此这里按 open object 声明。**多带的字段（`root`/`cwd`）必须被丢掉**：
  * 模型只认 `path` 这一个服务端下发的键。
  */
 const WORKSPACES_WITH_PATHS = [
-  { alias: "work-api", displayName: "api", path: "D:\\work\\api", root: "D:\\work", cwd: "D:\\work\\api" },
-  { alias: "personal-api", displayName: "api", path: "D:\\personal\\api", root: "D:\\personal" },
-  { alias: "notes", displayName: "notes", path: "/home/dev/notes" },
-] as unknown as readonly WorkspaceRef[];
+  { directoryId: "work-api", path: "D:\\work\\api", root: "D:\\work", cwd: "D:\\work\\api" },
+  { directoryId: "personal-api", path: "D:\\personal\\api", root: "D:\\personal" },
+  { directoryId: "notes", path: "/home/dev/notes" },
+] as unknown as readonly WorkspaceCatalogEntry[];
 
 const WORKSPACES = [
-  { alias: "work-api", displayName: "api" },
-  { alias: "personal-api", displayName: "api" },
-  { alias: "notes", displayName: "notes" },
-] as const satisfies readonly WorkspaceRef[];
+  { directoryId: "work-api", path: "D:\\work\\api" },
+  { directoryId: "personal-api", path: "D:\\personal\\api" },
+  { directoryId: "notes", path: "/home/dev/notes" },
+] as const satisfies readonly WorkspaceCatalogEntry[];
 
 /** 一条会话摘要（`currentMode`/`version` 等字段必须齐备，与 wire 一致）。 */
 function session(input: {
   readonly id: string;
   readonly state: SessionSummary["state"];
-  readonly alias?: string | null;
+  readonly directoryId?: string | null;
 }): SessionSummary {
-  const alias = input.alias === undefined ? "work-api" : input.alias;
+  const directoryId = input.directoryId === undefined ? "work-api" : input.directoryId;
   return {
     sessionId: input.id,
     title: `会话 ${input.id.slice(-4)}`,
@@ -57,14 +57,14 @@ function session(input: {
     version: "1",
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
-    workspace: alias === null ? null : { alias, displayName: alias },
+    workspace: directoryId === null ? null : { directoryId },
   };
 }
 
 const SESSIONS = [
   session({ id: "aaaaaaaa-0000-4000-8000-000000000001", state: "running" }),
   session({ id: "aaaaaaaa-0000-4000-8000-000000000002", state: "waiting_permission" }),
-  session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", alias: "personal-api" }),
+  session({ id: "aaaaaaaa-0000-4000-8000-000000000003", state: "idle", directoryId: "personal-api" }),
 ];
 
 const RESOURCES: StagedResources = {
@@ -129,8 +129,8 @@ function storeWith(resources: StagedResources): { store: ClientStore; gateway: R
 }
 
 describe("R15 目录项：展示名、路径与消歧尾段", () => {
-  it("展示名唯一时不呈现路径：`pathTail` 为 null（哪怕路径已下发）", () => {
-    const single = [{ alias: "notes", displayName: "notes", path: "/home/dev/notes" }] as unknown as readonly WorkspaceRef[];
+  it("展示名唯一时不呈现消歧段：`pathTail` 为 null", () => {
+    const single = [{ directoryId: "notes", path: "/home/dev/notes" }] as const satisfies readonly WorkspaceCatalogEntry[];
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: single, agents: [] },
       connection: "online",
@@ -161,13 +161,13 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
     // 路径本身逐字来自快照（不规范化、不拼接；`root`/`cwd` 这类多带的键不进模型）。
     expect(sameName.map((row) => row.path)).toEqual(["D:\\work\\api", "D:\\personal\\api"]);
 
-    // 对照：这一份快照里唯一命名的那个目录即使有路径，也不给尾段。
-    const unique = model.directories.find((row) => row.alias === "notes");
+    // 对照：这一份快照里唯一命名的那个目录即使有路径，也不给消歧段。
+    const unique = model.directories.find((row) => row.directoryId === "notes");
     expect(unique?.path).toBe("/home/dev/notes");
     expect(unique?.pathTail).toBeNull();
   });
 
-  it("同名但未下发路径：`path` 与 `pathTail` 都是 null，不拿展示名拼一段路径", () => {
+  it("路径始终在场：同名目录的 path 与消歧段都逐字来自快照", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
       connection: "online",
@@ -175,13 +175,15 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
     });
     if (model.kind !== "empty") throw new Error(`期望 empty，实际是 ${model.kind}`);
 
-    for (const row of model.directories) {
-      expect(row.path).toBeNull();
-      expect(row.pathTail).toBeNull();
-    }
+    expect(model.directories.map((row) => row.path)).toEqual([
+      "D:\\work\\api",
+      "D:\\personal\\api",
+      "/home/dev/notes",
+    ]);
+    expect(model.directories.map((row) => row.pathTail)).toEqual(["work", "personal", null]);
   });
 
-  it("同名目录不被合并：两个别名各自成项", () => {
+  it("同名目录不被合并：两个目录标识各自成项", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
       connection: "online",
@@ -192,7 +194,7 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
     if (model.kind !== "ready") return;
     const sameName = model.directories.filter((item) => item.displayName === "api");
     // 反例：若按展示名去重，这里会只剩一项，断言变红。
-    expect(sameName.map((item) => item.alias)).toEqual(["work-api", "personal-api"]);
+    expect(sameName.map((item) => item.directoryId)).toEqual(["work-api", "personal-api"]);
   });
 
   it("三项汇总由会话摘要得出：断连时仍然给出", () => {
@@ -204,7 +206,7 @@ describe("R15 目录项：展示名、路径与消歧尾段", () => {
 
     expect(offline.kind).toBe("ready");
     if (offline.kind !== "ready") return;
-    const workApi = offline.directories.find((item) => item.alias === "work-api");
+    const workApi = offline.directories.find((item) => item.directoryId === "work-api");
     // 两条会话属于 work-api：一条 running（运行中 1）、一条 waiting_permission（待处理 1）。
     expect(workApi?.counts).toEqual({ total: 2, active: 1, pending: 1 });
     // 反例：断连时不给出汇总（而不是给 0），这里会变 null，断言变红。
@@ -232,17 +234,17 @@ describe("R15 两种空态可区分", () => {
     if (model.kind !== "empty") return;
 
     // 反例（本次要关掉的死路）：空态不带目录项，于是指引里的「在下面选一个目录」指向不存在的列表。
-    expect(model.directories.map((row) => row.alias)).toEqual(["work-api", "personal-api", "notes"]);
+    expect(model.directories.map((row) => row.directoryId)).toEqual(["work-api", "personal-api", "notes"]);
     for (const row of model.directories) {
       // 零会话下每一项的汇总恒为零（这是 `directories_without_sessions` 的定义），活动时间不编造。
       expect(row.counts).toEqual({ total: 0, active: 0, pending: 0 });
       expect(row.latestActivityAt).toBeNull();
     }
-    // 展示名与别名照常呈现：空态列表里的项仍要能区分同名目录。
+    // 展示名照常呈现：空态列表里的项仍要能区分同名目录。
     expect(model.directories.map((row) => row.displayName)).toEqual(["api", "api", "notes"]);
   });
 
-  it("空态列出的目录项与列表页其余项同一套键（含路径槽位，未下发时是 null）", () => {
+  it("空态列出的目录项与列表页其余项同一套键（含路径与消歧段）", () => {
     const model = buildDirectoryPageModel({
       resources: { sessions: [], workspaces: WORKSPACES_WITH_PATHS, agents: [] },
       connection: "online",
@@ -253,8 +255,8 @@ describe("R15 两种空态可区分", () => {
     expect(model.directories).toHaveLength(3);
     for (const row of model.directories) {
       expect(Object.keys(row).sort()).toEqual([
-        "alias",
         "counts",
+        "directoryId",
         "displayName",
         "latestActivityAt",
         "path",
@@ -264,15 +266,15 @@ describe("R15 两种空态可区分", () => {
     // 空态这一支走同一条投影：同名目录同样给出消歧尾段（否则空态列表里两项看起来一模一样）。
     expect(model.directories.map((row) => row.pathTail)).toEqual(["work", "personal", null]);
 
-    // 对照：未下发路径的同一份目录集里，两个路径键都只能是 null（不猜、不拼）。
-    const withoutPaths = buildDirectoryPageModel({
-      resources: { sessions: [], workspaces: WORKSPACES, agents: [] },
+    // 对照：同一份目录集在 ready 支下也给出同样的展示名与消歧段（空态不是另一套口径）。
+    const withSessions = buildDirectoryPageModel({
+      resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
       connection: "online",
       lastSyncedAtMs: null,
     });
-    if (withoutPaths.kind !== "empty") throw new Error(`期望 empty，实际是 ${withoutPaths.kind}`);
-    expect(withoutPaths.directories.map((row) => row.path)).toEqual([null, null, null]);
-    expect(withoutPaths.directories.map((row) => row.pathTail)).toEqual([null, null, null]);
+    if (withSessions.kind !== "ready") throw new Error(`期望 ready，实际是 ${withSessions.kind}`);
+    expect(withSessions.directories.map((row) => row.displayName)).toEqual(["api", "api", "notes"]);
+    expect(withSessions.directories.map((row) => row.pathTail)).toEqual(["work", "personal", null]);
   });
 
   it("从未同步过 → loading，不冒充任何一种空态", () => {
@@ -310,7 +312,7 @@ describe("R15 目录数据只来自快照", () => {
       },
     });
 
-    const outcome = store.submitCreateSession({ directoryAlias: "work-api", agentId: "claude" });
+    const outcome = store.submitCreateSession({ directoryId: "work-api", agentId: "claude" });
 
     expect(outcome.ok).toBe(true);
     expect(gateway.dispatches).toHaveLength(1);
@@ -318,11 +320,11 @@ describe("R15 目录数据只来自快照", () => {
 });
 
 describe("R15 目录详情", () => {
-  it("只列出该别名下的会话；别名不在快照里是第三种呈现", () => {
+  it("只列出该目录标识下的会话；标识不在快照里是第三种呈现", () => {
     const detail = buildDirectoryDetailModel({
       resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
       connection: "online",
-      alias: "work-api",
+      directoryId: "work-api",
       ownerLabelOf: () => "工作站",
       nowMs: 1_700_000_000_000,
     });
@@ -333,37 +335,37 @@ describe("R15 目录详情", () => {
       "aaaaaaaa-0000-4000-8000-000000000002",
     ]);
 
-    // 反例：别名失效若被当成「目录里没有会话」，这里会是 ready，断言变红。
+    // 反例：标识失效若被当成「目录里没有会话」，这里会是 ready，断言变红。
     expect(
       buildDirectoryDetailModel({
         resources: { sessions: SESSIONS, workspaces: WORKSPACES, agents: [] },
         connection: "online",
-        alias: "not-there",
+        directoryId: "not-there",
         ownerLabelOf: () => "工作站",
         nowMs: 1_700_000_000_000,
       }),
-    ).toMatchObject({ kind: "unknown_directory", alias: "not-there" });
+    ).toMatchObject({ kind: "unknown_directory", directoryId: "not-there" });
   });
 
-  it("目录存在但没有任何会话：仍按别名取到该目录，落到「还没有会话」而不是「链接已失效」", () => {
+  it("目录存在但没有任何会话：仍按标识取到该目录，落到「还没有会话」而不是「链接已失效」", () => {
     // 生产路径：经 ClientStore 读详情模型（与页面取数同一条路），不直调构建函数。
     const { store } = storeWith({ sessions: [], workspaces: WORKSPACES, agents: [] });
 
     // 反例（本条即该反例的回归）：`buildDirectoryViews` 在「有目录但都没有会话」时返回
     // `empty/directories_without_sessions`、不携带目录项；若详情模型据此把目录集取成空数组，
-    // 别名明明在快照里却找不到，这里会退化成 `unknown_directory`，断言变红。
+    // 标识明明在快照里却找不到，这里会退化成 `unknown_directory`，断言变红。
     // 渲染层的对应断言在 `src/components/r15-directory-list.test.ts`（features 层不得 import components）。
     const detail = store.directoryDetail("work-api");
     expect(detail.kind).toBe("ready");
     if (detail.kind !== "ready") return;
-    expect(detail.directory.alias).toBe("work-api");
+    expect(detail.directory.directoryId).toBe("work-api");
     expect(detail.directory.displayName).toBe("api");
     expect(detail.directory.counts).toEqual({ total: 0, active: 0, pending: 0 });
     // 详情页的目录项与列表页空态列出的零汇总项口径一致：没有会话就没有活动时间，也不编造一个。
     expect(detail.directory.latestActivityAt).toBeNull();
     expect(detail.sessions).toEqual([]);
 
-    // 对照：修好上一条不能把失效别名也算成存在的目录——真正不存在的别名仍是第三种呈现。
+    // 对照：修好上一条不能把失效标识也算成存在的目录——真正不存在的标识仍是第三种呈现。
     expect(store.directoryDetail("not-there").kind).toBe("unknown_directory");
   });
 });
@@ -373,12 +375,13 @@ describe("R15 查询与筛选是纯 UI 状态", () => {
     const { store, gateway } = storeWith(RESOURCES);
     const connection = store.state.connection;
 
-    store.setDirectoryQuery("personal-api");
+    store.setDirectoryQuery("api");
     store.setDirectoryFilter("all");
     const page = store.directoryPage();
     expect(page.kind).toBe("ready");
     if (page.kind !== "ready") return;
-    expect(page.directories.map((item) => item.alias)).toEqual(["personal-api"]);
+    // 两个目录的展示名都是路径尾段 `api`，因此都命中。
+    expect(page.directories.map((item) => item.directoryId)).toEqual(["work-api", "personal-api"]);
 
     // 详情页的页码是同一类 UI 状态：它只决定自己的切片，不改目录页的命中集合。
     store.setDirectoryDetailPage("work-api", "2");
@@ -396,7 +399,8 @@ describe("R15 查询与筛选是纯 UI 状态", () => {
     // 两页互不影响：详情页的页码不得改变目录页的命中集合（反向同理，目录页的查询/筛选
     // 不进入详情页——详情页连查询词都没有）。
     const pageAgain = store.directoryPage();
-    expect(pageAgain.kind === "ready" ? pageAgain.directories.map((item) => item.alias) : []).toEqual([
+    expect(pageAgain.kind === "ready" ? pageAgain.directories.map((item) => item.directoryId) : []).toEqual([
+      "work-api",
       "personal-api",
     ]);
 

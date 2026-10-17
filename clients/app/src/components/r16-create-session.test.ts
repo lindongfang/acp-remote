@@ -3,14 +3,14 @@
  *
  * 逐条 MUST NOT 的负向用例：
  *
- * - **载荷恰好三类键集** → 别名、浏览选定的路径、会先新建的路径各一条：键集分别是
+ * - **载荷恰好三类键集** → 目录标识、浏览选定的路径、会先新建的路径各一条：键集分别是
  *   `{agentId, directoryId}`、`{agentId, workspacePath}`、`{agentId, workspacePath, createIfMissing}`；
- *   对越界载荷（`cwd`/`path`/`mcpServers`/`token`）、「目录引用不唯一」与「别名 + createIfMissing」
+ *   对越界载荷（`cwd`/`path`/`mcpServers`/`token`）、「目录引用不唯一」与「目录标识 + createIfMissing」
  *   构造违规输入，断言 `assertCreateSessionRefs` 抛错；并断言实际派发的命令 JSON 里只有那三类键、
  *   不含任何凭据字面量。
  * - **候选只来自本机已配置的 Agent** → 选一个不在快照 `agents` 里的 Agent 提交，
  *   断言被拒绝且**一条命令都没发**。
- * - **目录不由用户手工输入** → 弹层里没有目录输入框；目录与路径逐字来自服务端（别名不出现文本里）。
+ * - **目录不由用户手工输入** → 弹层里没有目录输入框；目录与路径逐字来自服务端（目录标识不出现文本里）。
  * - **服务端不支持浏览时明确说明而不是静默失败** → 顶部入口形态给出说明、控件改名为「选择已登记的
  *   目录」、回退列表列出已登记目录，且**一条浏览命令都不发**（发了必然被 feature 门控拒）。
  * - **不能浏览的原因分岔** → 「还没连上主机」与「已连上但未协商到该能力」是**两条**文案：前者 MUST NOT
@@ -51,7 +51,7 @@ import {
 import type { RecordingGateway } from "../features/testing/fixtures";
 import { WORKSPACES_WITH_PATHS, onlineStore, resources, storeWith } from "../features/testing/fixtures";
 
-const ALIAS = "work-api";
+const DIRECTORY_ID = "work-api";
 const AGENTS = [
   { agentId: "claude", displayName: "Claude", default: true },
   { agentId: "codex", displayName: "codex", default: false },
@@ -59,8 +59,8 @@ const AGENTS = [
 
 /** 只含协议字段的已登记目录（回退列表的输入）。 */
 const REGISTERED: readonly RegisteredDirectoryModel[] = [
-  { alias: "work-api", displayName: "api", path: "D:\\work\\api" },
-  { alias: "personal-api", displayName: "api", path: null },
+  { directoryId: "work-api", displayName: "api", path: "D:\\work\\api" },
+  { directoryId: "personal-api", displayName: "api", path: "D:\\personal\\api" },
 ];
 
 /** 渲染创建弹层。 */
@@ -105,7 +105,7 @@ function renderPicker(input: {
 /**
  * 渲染结果的**可见文本**（剥掉标签）。
  *
- * 「别名不出现在界面上」是文本口径的断言（别名仍作为机器标识留在 `data-*` 上，例如
+ * 「目录标识不出现在界面上」是文本口径的断言（目录标识仍作为机器标识留在 `data-*` 上，例如
  * `data-create-sheet`），因此它必须在文本上判，而不是在整段 HTML 上判。
  */
 function textOfHtml(html: string): string {
@@ -156,7 +156,7 @@ function entryModel(): CreateSessionEntryModel {
   const { store } = storeWith({
     resources: resources({ workspaces: WORKSPACES_WITH_PATHS, agents: [...AGENTS] }),
   });
-  return store.createEntry(ALIAS);
+  return store.createEntry(DIRECTORY_ID);
 }
 
 /** 给一条 `workspace.browse` 请求回一条结果：用例扮演服务端的那一侧。 */
@@ -208,9 +208,9 @@ function browseTo(
 }
 
 describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目录开关", () => {
-  it("别名载荷：键恰好是 agentId 与 directoryId", () => {
+  it("目录标识载荷：键恰好是 agentId 与 directoryId", () => {
     const command = buildCreateSessionCommand({
-      refs: { directoryId: ALIAS, agentId: "claude" },
+      refs: { directoryId: DIRECTORY_ID, agentId: "claude" },
       requestId: "4c4dafda-dd98-442e-8d55-252b75bac72d",
       messageId: "bbbbbbbb-1111-4111-8111-000000000009",
       connectionId: "2de54db7-74ae-4c21-88e3-05df0dc2e637",
@@ -254,19 +254,19 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     expect(payload["createIfMissing"]).toBe(true);
   });
 
-  it("越界载荷、「目录引用不唯一」与「别名 + 建目录开关」一律被拒绝", () => {
+  it("越界载荷、「目录引用不唯一」与「目录标识 + 建目录开关」一律被拒绝", () => {
     const violations: readonly Record<string, unknown>[] = [
-      { directoryId: ALIAS, agentId: "claude", cwd: "D:\\work\\api" },
-      { directoryId: ALIAS, agentId: "claude", path: "/home/dev/api" },
-      { directoryId: ALIAS, agentId: "claude", exportId: "node-1" },
-      { directoryId: ALIAS, agentId: "claude", mcpServers: { fs: {} } },
-      { directoryId: ALIAS, agentId: "claude", token: "sk-xxx" },
-      { directoryId: ALIAS, agentId: "claude", templateParams: { a: 1 } },
+      { directoryId: DIRECTORY_ID, agentId: "claude", cwd: "D:\\work\\api" },
+      { directoryId: DIRECTORY_ID, agentId: "claude", path: "/home/dev/api" },
+      { directoryId: DIRECTORY_ID, agentId: "claude", exportId: "node-1" },
+      { directoryId: DIRECTORY_ID, agentId: "claude", mcpServers: { fs: {} } },
+      { directoryId: DIRECTORY_ID, agentId: "claude", token: "sk-xxx" },
+      { directoryId: DIRECTORY_ID, agentId: "claude", templateParams: { a: 1 } },
       // 目录引用必须**恰好一个**：两个都给，或都不给。
-      { directoryId: ALIAS, workspacePath: "D:\\work\\api", agentId: "claude" },
+      { directoryId: DIRECTORY_ID, workspacePath: "D:\\work\\api", agentId: "claude" },
       { agentId: "claude" },
-      // 别名解析出的目录必然已存在，因此建目录开关与它互斥。
-      { directoryId: ALIAS, agentId: "claude", createIfMissing: true },
+      // 已记录的目录必然已存在，因此建目录开关与它互斥。
+      { directoryId: DIRECTORY_ID, agentId: "claude", createIfMissing: true },
       // 开关不是布尔。
       { workspacePath: "D:\\work\\api", agentId: "claude", createIfMissing: "yes" },
     ];
@@ -276,8 +276,8 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
       expect(() => assertCreateSessionRefs(payload)).toThrow();
     }
     // 对照：三种合法载荷仍然通过（证明断言不是「一律拒绝」）。
-    expect(assertCreateSessionRefs({ directoryId: ALIAS, agentId: "claude" })).toEqual({
-      directoryId: ALIAS,
+    expect(assertCreateSessionRefs({ directoryId: DIRECTORY_ID, agentId: "claude" })).toEqual({
+      directoryId: DIRECTORY_ID,
       agentId: "claude",
     });
     expect(assertCreateSessionRefs({ workspacePath: "D:\\work\\api", agentId: "claude" })).toEqual({
@@ -297,8 +297,8 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
       features: [WORKSPACE_BROWSE_FEATURE],
     });
 
-    // 1) 目录已知（卡片/详情页入口）：别名引用。
-    expect(store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" }).ok).toBe(true);
+    // 1) 目录已知（卡片/详情页入口）：目录标识引用。
+    expect(store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" }).ok).toBe(true);
     expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "directoryId"]);
 
     // 2) 顶部入口浏览到一个**已存在**的目录：路径引用，不带建目录开关。
@@ -314,7 +314,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     });
     expect(
       store.submitCreateSession({
-        directoryAlias: null,
+        directoryId: null,
         agentId: "claude",
         directoryPath: existing.path,
         createIfMissing: false,
@@ -327,7 +327,7 @@ describe("R16 提交载荷只含一个目录引用、Agent 标识与一个建目
     expect(created).toEqual({ ok: true, path: "D:\\work\\new-api" });
     expect(
       store.submitCreateSession({
-        directoryAlias: null,
+        directoryId: null,
         agentId: "claude",
         directoryPath: "D:\\work\\new-api",
         createIfMissing: true,
@@ -359,7 +359,7 @@ describe("R16 候选只来自本机已配置的 Agent", () => {
   it("选一个不在目录里的 Agent 提交：被拒绝且一条命令都不发", () => {
     const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
 
-    const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "not-installed" });
+    const outcome = store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "not-installed" });
 
     expect(outcome.ok).toBe(false);
     // 反例：若客户端不校验就把用户选的 Agent 发出去，这里会出现派发记录，断言变红。
@@ -369,7 +369,7 @@ describe("R16 候选只来自本机已配置的 Agent", () => {
   it("与授权无关：没有任何授权输入也照样能提交（创建入口不再有权限门控）", () => {
     const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
 
-    const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
+    const outcome = store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
 
     // 反例：若门控还在，`ok` 为 false（理由「没有创建会话的权限」）且 `dispatches` 为空 → 两条断言都红。
     expect(outcome.ok).toBe(true);
@@ -396,10 +396,10 @@ describe("R16 入口不因权限不可用", () => {
     // spec「创建入口的副作用说明」：入口旁必须说明会在电脑上启动一个 Agent 进程。
     expect(html).toContain("将在你的电脑上启动一个 Agent 进程");
     expect(html).toContain(CREATE_EFFECT_NOTE);
-    // 目录块：展示名与路径逐字来自服务端，别名不出现在**文本**里（它只作机器标识）。
+    // 目录块：展示名与路径逐字来自服务端，目录标识不出现在**文本**里（它只作机器标识）。
     expect(html).toContain('data-create-directory-name="api"');
     expect(html).toContain("D:\\work\\api");
-    expect(textOfHtml(html)).not.toContain(ALIAS);
+    expect(textOfHtml(html)).not.toContain(DIRECTORY_ID);
     expect(html).not.toContain("服务端会拦截");
   });
 
@@ -470,12 +470,12 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     expect(html).toContain('data-directory-picker="open"');
     expect(html).toContain('data-browse-unsupported="unsupported"');
     expect(html).toContain(BROWSE_UNSUPPORTED_NOTICE);
-    // 已登记目录逐项可点：展示名是文本，别名与（可能缺席的）路径是机器属性。
+    // 已登记目录逐项可点：展示名是文本，目录标识与路径是机器属性。
     expect(html).toContain('data-action="choose-registered-directory"');
-    expect(html).toContain('data-registered-alias="work-api"');
-    expect(html).toContain('data-registered-alias="personal-api"');
-    // 路径未下发的那一项不得用别名或展示名冒充路径。
-    expect(html).toContain("路径未下发");
+    expect(html).toContain('data-registered-directory-id="work-api"');
+    expect(html).toContain('data-registered-directory-id="personal-api"');
+    // 路径逐字来自快照条目（两条都始终在场）。
+    expect(html).toContain("D:\\work\\api");
     // 不支持浏览时不呈现「选择此文件夹」：当前层无从浏览，画出来只会必然失败。
     expect(html).not.toContain('data-action="confirm-directory"');
   });
@@ -525,10 +525,10 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     });
     expect(gateway.dispatches).toEqual([]);
 
-    // 回退列表给出的是**已登记目录**：选定它走别名引用，键集与目录层级入口逐字相同。
+    // 回退列表给出的是**已登记目录**：选定它走目录标识引用，键集与目录层级入口逐字相同。
     const pick: DirectorySelection = {
       kind: "registered",
-      alias: "work-api",
+      directoryId: "work-api",
       displayName: "api",
       path: "D:\\work\\api",
     };
@@ -537,7 +537,7 @@ describe("R16 不能逐层浏览时按原因说明，并保留已登记目录这
     expect(html).toContain('data-create-directory-notice="registered"');
     expect(html).toContain('data-create-selected-name="api"');
 
-    expect(store.submitCreateSession({ directoryAlias: null, agentId: "claude", directoryPath: "", createIfMissing: false }).ok).toBe(
+    expect(store.submitCreateSession({ directoryId: null, agentId: "claude", directoryPath: "", createIfMissing: false }).ok).toBe(
       true,
     );
     expect(Object.keys(createPayloadAt(gateway, 0)).sort()).toEqual(["agentId", "directoryId"]);
@@ -744,9 +744,9 @@ function answerBrowseWithRaw(store: ClientStore, requestId: string, result: Reco
 describe("R16 创建中与终态分别呈现", () => {
   it("提交后呈现「创建中」且不接受重复提交", () => {
     const { store, gateway } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
-    store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
+    store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
 
-    const model = store.createEntry(ALIAS);
+    const model = store.createEntry(DIRECTORY_ID);
     expect(model.submission.kind).toBe("creating");
     const html = renderSheet(model, "claude");
 
@@ -765,7 +765,7 @@ describe("R16 创建中与终态分别呈现", () => {
 
   it("completed 终态进入已创建并带新会话标识", () => {
     const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
-    const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
+    const outcome = store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
     store.apply({
@@ -788,14 +788,14 @@ describe("R16 创建中与终态分别呈现", () => {
       },
     });
 
-    const model = store.createEntry(ALIAS);
+    const model = store.createEntry(DIRECTORY_ID);
     expect(model.submission).toEqual({ kind: "created", sessionId: "5d73cd10-a465-43cd-b3f1-704e2d49e99e" });
     expect(renderSheet(model, "claude")).toContain('data-create-submission="created"');
   });
 
   it("失败终态按参数类与服务端不可用类分开说明", () => {
     const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
-    const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
+    const outcome = store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
     store.apply({
@@ -818,7 +818,7 @@ describe("R16 创建中与终态分别呈现", () => {
       },
     });
 
-    const html = renderSheet(store.createEntry(ALIAS), "claude");
+    const html = renderSheet(store.createEntry(DIRECTORY_ID), "claude");
     expect(html).toContain('data-create-submission="failed"');
     expect(html).toContain('data-failure-code="capability.unsupported_by_agent"');
     expect(html).toContain('data-failure-retryable="false"');
@@ -830,7 +830,7 @@ describe("R16 创建中与终态分别呈现", () => {
 describe("R16 结果不确定显眼且不被自动消解", () => {
   it("服务端确认 uncertain 后呈现显眼区块，并在后续事件后仍然保留", () => {
     const { store } = storeWith({ resources: resources({ agents: [...AGENTS] }) });
-    const outcome = store.submitCreateSession({ directoryAlias: ALIAS, agentId: "claude" });
+    const outcome = store.submitCreateSession({ directoryId: DIRECTORY_ID, agentId: "claude" });
     if (!outcome.ok) throw new Error("提交应当成功");
 
     store.apply({
@@ -854,8 +854,8 @@ describe("R16 结果不确定显眼且不被自动消解", () => {
     });
 
     expect(store.state.uncertainRequestIds).toEqual([outcome.requestId]);
-    expect(store.createEntry(ALIAS).uncertainRequiresUserAction).toBe(true);
-    const html = renderSheet(store.createEntry(ALIAS), "claude");
+    expect(store.createEntry(DIRECTORY_ID).uncertainRequiresUserAction).toBe(true);
+    const html = renderSheet(store.createEntry(DIRECTORY_ID), "claude");
     expect(html).toContain('data-create-submission="uncertain"');
     expect(html).toContain('role="alert"');
 

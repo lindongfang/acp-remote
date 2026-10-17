@@ -17,7 +17,7 @@
  * ## 两条创建路径共用同一份状态
  *
  * - **目录层级入口**（卡片/详情页的 `⊕ 新建`）：目录已知 → 弹层呈现「目录/路径两行」，
- *   载荷用该目录的别名（`openCreateSheet(alias)`）；
+ *   载荷用该目录的标识（`openCreateSheet(directoryId)`）；
  * - **顶部入口**（目录列表工具条右端的 `⊕ 新建`）：目录未知 → 弹层呈现「选择文件夹控件 + 已选路径 + 说明」，
  *   目录由 `DirectoryPicker` 逐层浏览或从已登记目录里选出来（`openCreateSheetToBrowse()`）。
  *
@@ -108,17 +108,19 @@ export default function DirectoriesRoute(): ReactElement {
   /**
    * 要呈现的创建弹层：`null` 表示本页不呈现。
    *
-   * 唯一来源是 store 的两支单份状态——顶部入口（`createSheetBrowses`）或某个**已登记目录**
-   * （`createSheetAlias`）。后者再要求这个别名落在本机已登记的目录里（别名全集取自快照，
+   * 唯一来源是 store 的两支单份状态——顶部入口（`createSheetBrowses`）或某个**已记录目录**
+   * （`createSheetDirectoryId`）。后者再要求这个标识落在本机已记录的目录里（标识全集取自快照，
    * **不**经过查询/筛选）：否则打开弹层后再敲一个查询词，会把正在提交或等待用户处理的弹层卸掉。
    */
   const browseSheet = state.createSheetBrowses;
-  const requestedSheetAlias = state.createSheetAlias;
-  const sheetAlias =
-    state.resources?.workspaces.find((workspace) => workspace.alias === requestedSheetAlias)?.alias ?? null;
-  const entry = browseSheet ? store.createEntry(null) : sheetAlias === null ? null : store.createEntry(sheetAlias);
-  // 提交状态按弹层的机器键读写（已登记目录用别名，顶部入口用 `CREATE_SHEET_BROWSE_KEY`）。
-  const sheetKey = browseSheet ? CREATE_SHEET_BROWSE_KEY : sheetAlias;
+  const requestedSheetDirectoryId = state.createSheetDirectoryId;
+  const sheetDirectoryId =
+    state.resources?.workspaces.find((workspace) => workspace.directoryId === requestedSheetDirectoryId)
+      ?.directoryId ?? null;
+  const entry =
+    browseSheet ? store.createEntry(null) : sheetDirectoryId === null ? null : store.createEntry(sheetDirectoryId);
+  // 提交状态按弹层的机器键读写（已记录目录用目录标识，顶部入口用 `CREATE_SHEET_BROWSE_KEY`）。
+  const sheetKey = browseSheet ? CREATE_SHEET_BROWSE_KEY : sheetDirectoryId;
   const directoryBlock = entry !== null && entry.directory.kind === "browse" ? entry.directory : null;
 
   return (
@@ -126,7 +128,7 @@ export default function DirectoriesRoute(): ReactElement {
       <DirectoryList
         model={page}
         // 内联会话行只依赖快照：与详情页的查询词/页码无关（store 的选择器保证）。
-        sessionsByAlias={store.directoryPageSessions()}
+        sessionsByDirectoryId={store.directoryPageSessions()}
         query={state.directoryQuery}
         onQueryChange={(query) => {
           store.setDirectoryQuery(query);
@@ -138,13 +140,13 @@ export default function DirectoriesRoute(): ReactElement {
         onOpenSession={(sessionId) => {
           router.push(`/session/${encodeURIComponent(sessionId)}`);
         }}
-        onOpenDirectory={(alias) => {
-          router.push(`/dir/${encodeURIComponent(alias)}`);
+        onOpenDirectory={(directoryId) => {
+          router.push(`/dir/${encodeURIComponent(directoryId)}`);
         }}
         // 目录卡片的创建入口与详情页是同一条链路（同一个弹层模型、同一条提交命令）。
         // 入口恒可用：设备不再有创建会话的权限维度，页面因此无条件给出回调。
-        onCreateSession={(alias: string) => {
-          store.openCreateSheet(alias);
+        onCreateSession={(directoryId: string) => {
+          store.openCreateSheet(directoryId);
         }}
         // **顶部**创建入口：目录未知，由用户浏览/选择一层。它画在目录列表工具条的右端（原型的位置），
         // 与卡片上的目录内入口是两条不同的路径。
@@ -163,7 +165,7 @@ export default function DirectoriesRoute(): ReactElement {
           }}
           onSubmit={({ agentId: selected, directoryPath, createIfMissing }) => {
             const outcome = store.submitCreateSession({
-              directoryAlias: browseSheet ? null : sheetAlias,
+              directoryId: browseSheet ? null : sheetDirectoryId,
               agentId: selected,
               directoryPath,
               createIfMissing,

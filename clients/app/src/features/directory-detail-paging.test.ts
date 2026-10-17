@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { SessionSummary, WorkspaceRef } from "../protocol";
+import type { SessionSummary, WorkspaceCatalogEntry } from "../protocol";
 import type { DirectoryDetailModel } from "./directory-model";
 import { DIRECTORY_DETAIL_PAGE_SIZE, buildDirectoryDetailModel, correctPageNumber } from "./directory-model";
 import { WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
@@ -42,14 +42,14 @@ function ready(model: DirectoryDetailModel): Extract<DirectoryDetailModel, { kin
 
 function detail(input: {
   readonly sessions: readonly SessionSummary[];
-  readonly workspaces?: readonly WorkspaceRef[];
-  readonly alias?: string;
+  readonly workspaces?: readonly WorkspaceCatalogEntry[];
+  readonly directoryId?: string;
   readonly pageInput?: string;
 }): DirectoryDetailModel {
   return buildDirectoryDetailModel({
     resources: resources({ sessions: input.sessions, workspaces: input.workspaces ?? WORKSPACES }),
     connection: "online",
-    alias: input.alias ?? "work-api",
+    directoryId: input.directoryId ?? "work-api",
     ownerLabelOf: () => "工作站",
     nowMs: NOW_MS,
     ...(input.pageInput === undefined ? {} : { pageInput: input.pageInput }),

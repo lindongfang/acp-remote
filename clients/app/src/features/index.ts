@@ -103,7 +103,7 @@ export {
   DIRECTORY_EMPTY_COPY,
   buildDirectoryDetailModel,
   buildDirectoryPageModel,
-  buildSessionRowsByAlias,
+  buildSessionRowsByDirectoryId,
   correctPageNumber,
   formatRelativeTime,
 } from "./directory-model";

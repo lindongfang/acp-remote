@@ -7,7 +7,8 @@
  *
  * 判别力来源：
  *
- * - 命中口径：三种命中方式各给一个只有它能命中的查询词，任何漏掉一种匹配的实现都会少一项；
+ * - 命中口径：展示名与会话标题各给一个只有它能命中的查询词；目录标识给一个**只命中标识**的
+ *   查询词，任何把 `directoryId` 纳入匹配的实现都会多留一项；
  * - 筛选：三个取值分别建了只有它能命中的目录，漏掉汇总口径会多留或多删目录；
  * - `no_match`：只在非默认查询/筛选下构造可达用例，并对照「缺省输入永不进入」。
  * - 最近活动时间：夹具里 `work-api` 的三条会话**最新的一条在中间**、`personal-api` 有一条**全局最晚**
@@ -21,7 +22,7 @@
 import { describe, expect, it } from "vitest";
 
 import { UNTITLED_SESSION_LABEL } from "../domain";
-import type { SessionSummary, WorkspaceRef } from "../protocol";
+import type { SessionSummary, WorkspaceCatalogEntry } from "../protocol";
 import type { DirectoryDetailModel, DirectoryFilter, DirectoryPageModel } from "./directory-model";
 import {
   DIRECTORY_DETAIL_PAGE_SIZE,
@@ -30,35 +31,38 @@ import {
 } from "./directory-model";
 import { ACTIVITY_SESSIONS, CROSS_MONTH_SESSIONS, WORKSPACES, resources, session, storeWith } from "./testing/fixtures";
 
-/** 三个目录，展示名、别名、名下会话标题两两不相交，便于把「命中来自哪一处」分离出来。 */
+/**
+ * 三个目录：路径尾段两两不同，展示名因此就是这三个名字。
+ * 目录标识（`directoryId`）与展示名互不相交，便于把「命中来自哪一处」分离出来。
+ */
 const DIRS = [
-  { alias: "core-eu", displayName: "欧洲核心" },
-  { alias: "web-ui", displayName: "界面工程" },
-  { alias: "lab", displayName: "实验台" },
-] as const satisfies readonly WorkspaceRef[];
+  { directoryId: "core-eu", path: "D:\\work\\欧洲核心" },
+  { directoryId: "web-ui", path: "D:\\work\\界面工程" },
+  { directoryId: "lab", path: "/home/dev/实验台" },
+] as const satisfies readonly WorkspaceCatalogEntry[];
 
 const DIR_SESSIONS: readonly SessionSummary[] = [
-  session({ id: "cccccccc-0000-4000-8000-000000000001", title: "订单重构", state: "running", alias: "core-eu" }),
+  session({ id: "cccccccc-0000-4000-8000-000000000001", title: "订单重构", state: "running", directoryId: "core-eu" }),
   // 第二条给 core-eu 添上「运行中 2」，用来证明汇总数字不因筛选变小。
-  session({ id: "cccccccc-0000-4000-8000-000000000002", title: "排队中", state: "queued", alias: "core-eu" }),
+  session({ id: "cccccccc-0000-4000-8000-000000000002", title: "排队中", state: "queued", directoryId: "core-eu" }),
   session({
     id: "cccccccc-0000-4000-8000-000000000003",
     title: "Design Tokens",
     state: "waiting_permission",
-    alias: "web-ui",
+    directoryId: "web-ui",
   }),
-  session({ id: "cccccccc-0000-4000-8000-000000000004", title: null, state: "idle", alias: "lab" }),
+  session({ id: "cccccccc-0000-4000-8000-000000000004", title: null, state: "idle", directoryId: "lab" }),
 ];
 
 /** 全部目录都只有 idle 会话：用来构造「筛选后一个都不命中」。 */
 const QUIET_SESSIONS: readonly SessionSummary[] = [
-  session({ id: "cccccccc-0000-4000-8000-00000000000a", title: "闲着", state: "idle", alias: "core-eu" }),
-  session({ id: "cccccccc-0000-4000-8000-00000000000b", title: "也闲着", state: "idle", alias: "web-ui" }),
+  session({ id: "cccccccc-0000-4000-8000-00000000000a", title: "闲着", state: "idle", directoryId: "core-eu" }),
+  session({ id: "cccccccc-0000-4000-8000-00000000000b", title: "也闲着", state: "idle", directoryId: "web-ui" }),
 ];
 
 function page(input: {
   readonly sessions: readonly SessionSummary[];
-  readonly workspaces?: readonly WorkspaceRef[];
+  readonly workspaces?: readonly WorkspaceCatalogEntry[];
   readonly query?: string;
   readonly filter?: DirectoryFilter;
 }): DirectoryPageModel {
@@ -75,59 +79,61 @@ function page(input: {
 /** 详情模型：注入固定时钟（相对时间与列表顺序无关，但模型要求它作为输入）。 */
 function detail(input: {
   readonly sessions: readonly SessionSummary[];
-  readonly workspaces?: readonly WorkspaceRef[];
-  readonly alias: string;
+  readonly workspaces?: readonly WorkspaceCatalogEntry[];
+  readonly directoryId: string;
 }): DirectoryDetailModel {
   return buildDirectoryDetailModel({
     resources: resources({ sessions: input.sessions, workspaces: input.workspaces ?? WORKSPACES }),
     connection: "online",
-    alias: input.alias,
+    directoryId: input.directoryId,
     ownerLabelOf: () => "工作站",
     nowMs: 1_700_000_000_000,
   });
 }
 
-/** 取 ready 目录页里留下的目录别名；非 ready 直接失败，避免断言在错类型上静默通过。 */
-function aliasesOf(model: DirectoryPageModel): readonly string[] {
+/** 取 ready 目录页里留下的目录标识；非 ready 直接失败，避免断言在错类型上静默通过。 */
+function directoryIdsOf(model: DirectoryPageModel): readonly string[] {
   if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-  return model.directories.map((directory) => directory.alias);
+  return model.directories.map((directory) => directory.directoryId);
 }
 
 /** 取 ready 目录页里某个目录的最近活动时间；目录不在页面里时直接失败。 */
-function activityOf(model: DirectoryPageModel, alias: string): string | null {
+function activityOf(model: DirectoryPageModel, directoryId: string): string | null {
   if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
-  const row = model.directories.find((directory) => directory.alias === alias);
-  if (row === undefined) throw new Error(`目录页里没有 ${alias}`);
+  const row = model.directories.find((directory) => directory.directoryId === directoryId);
+  if (row === undefined) throw new Error(`目录页里没有 ${directoryId}`);
   return row.latestActivityAt;
 }
 
-describe("目录页搜索：展示名 / 别名 / 会话标题三种命中", () => {
-  it("命中展示名", () => {
-    // 反例：若只匹配别名，这里会得到空集合。
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "欧洲" }))).toEqual(["core-eu"]);
+describe("目录页搜索：展示名 / 会话标题，目录标识不参与", () => {
+  it("命中展示名（路径尾段）", () => {
+    // 反例：若仍按旧的服务端展示名匹配，这里会得到空集合。
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "欧洲" }))).toEqual(["core-eu"]);
   });
 
-  it("命中别名", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "web-ui" }))).toEqual(["web-ui"]);
+  it("目录标识本身不命中", () => {
+    // 反例：把 `directoryId` 纳入匹配（旧目录别名分支的残影）时这里会留下这两项。
+    expect(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "web-ui" }).kind).toBe("no_match");
+    expect(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "core-eu" }).kind).toBe("no_match");
   });
 
   it("命中该目录下会话的标题", () => {
-    // 反例：若只看目录的展示名与别名，会话标题「订单重构」就查不到任何目录。
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "订单重构" }))).toEqual(["core-eu"]);
+    // 反例：若只看目录的展示名，会话标题「订单重构」就查不到任何目录。
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "订单重构" }))).toEqual(["core-eu"]);
   });
 
   it("trim 首尾空白并忽略大小写", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "  DESIGN tokens " }))).toEqual(["web-ui"]);
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "CORE-EU" }))).toEqual(["core-eu"]);
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "  DESIGN tokens " }))).toEqual(["web-ui"]);
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "欧洲核心" }))).toEqual(["core-eu"]);
   });
 
   it("空标题按行上呈现的「未命名会话」参与匹配", () => {
     // 匹配的就是看得见的文字：`lab` 的会话没有标题，行上写「未命名会话」。
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "未命名会话" }))).toEqual(["lab"]);
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "未命名会话" }))).toEqual(["lab"]);
   });
 
   it("全空白的查询词等价于不过滤", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "   " }))).toEqual([
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "   " }))).toEqual([
       "core-eu",
       "web-ui",
       "lab",
@@ -137,7 +143,7 @@ describe("目录页搜索：展示名 / 别名 / 会话标题三种命中", () =
 
 describe("目录页状态筛选", () => {
   it("all 不过滤", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "all" }))).toEqual([
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "all" }))).toEqual([
       "core-eu",
       "web-ui",
       "lab",
@@ -145,11 +151,11 @@ describe("目录页状态筛选", () => {
   });
 
   it("running 只留存在排队中或运行中会话的目录", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "running" }))).toEqual(["core-eu"]);
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "running" }))).toEqual(["core-eu"]);
   });
 
   it("pending 只留存在等待输入或等待授权会话的目录", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "pending" }))).toEqual(["web-ui"]);
+    expect(directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, filter: "pending" }))).toEqual(["web-ui"]);
   });
 
   it("汇总数字不因筛选改变", () => {
@@ -161,9 +167,9 @@ describe("目录页状态筛选", () => {
   });
 
   it("查询与筛选可叠加", () => {
-    expect(aliasesOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "核心", filter: "running" }))).toEqual([
-      "core-eu",
-    ]);
+    expect(
+      directoryIdsOf(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "核心", filter: "running" })),
+    ).toEqual(["core-eu"]);
     // 叠加后无命中即 no_match——不是 ready。
     expect(page({ sessions: DIR_SESSIONS, workspaces: DIRS, query: "核心", filter: "pending" }).kind).toBe("no_match");
   });
@@ -198,7 +204,7 @@ describe("目录页最近活动时间：该目录下 updatedAt 的最大值", ()
   });
 
   it("目录详情也带上该目录的最近活动时间（与列表页同一条投影）", () => {
-    const model = detail({ sessions: ACTIVITY_SESSIONS, alias: "work-api" });
+    const model = detail({ sessions: ACTIVITY_SESSIONS, directoryId: "work-api" });
     if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
     expect(model.directory.latestActivityAt).toBe("2026-10-02T08:00:00.000Z");
   });
@@ -249,7 +255,7 @@ describe("目录页 no_match 分支", () => {
 
 describe("目录详情：按时间倒序平铺（一条列表，没有月份档与目录内查询）", () => {
   it("跨月的会话落在同一条列表里，且按时间倒序", () => {
-    const model = detail({ sessions: CROSS_MONTH_SESSIONS, alias: "work-api" });
+    const model = detail({ sessions: CROSS_MONTH_SESSIONS, directoryId: "work-api" });
     if (model.kind !== "ready") throw new Error(`期望 ready，实际是 ${model.kind}`);
 
     // 反例：按月份分档的实现会把两个月的会话切开（每档各只剩一条，甚至列表被空档挡空）。
@@ -265,14 +271,14 @@ describe("目录详情：按时间倒序平铺（一条列表，没有月份档�
     expect(model.pageSize).toBe(DIRECTORY_DETAIL_PAGE_SIZE);
   });
 
-  it("只列该别名下的会话：别的目录的会话既不进列表也不进点数", () => {
+  it("只列该目录下的会话：别的目录的会话既不进列表也不进点数", () => {
     // 反例：把整份快照的会话都列出来时，web-ui 会多出两张不属于它的行。
-    const webUi = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, alias: "web-ui" });
+    const webUi = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, directoryId: "web-ui" });
     if (webUi.kind !== "ready") throw new Error(`期望 ready，实际是 ${webUi.kind}`);
     expect(webUi.total).toBe(1);
     expect(webUi.sessions.map((row) => row.title)).toEqual(["Design Tokens"]);
 
-    const coreEu = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, alias: "core-eu" });
+    const coreEu = detail({ sessions: DIR_SESSIONS, workspaces: DIRS, directoryId: "core-eu" });
     if (coreEu.kind !== "ready") throw new Error(`期望 ready，实际是 ${coreEu.kind}`);
     expect(coreEu.total).toBe(2);
     expect(coreEu.sessions.map((row) => row.id)).toEqual([
@@ -285,10 +291,10 @@ describe("目录详情：按时间倒序平铺（一条列表，没有月份档�
   it("空标题呈现为「未命名会话」（null 与空串都算空）", () => {
     const blank = detail({
       sessions: [
-        session({ id: "cccccccc-0000-4000-8000-00000000001a", title: null, alias: "work-api" }),
-        session({ id: "cccccccc-0000-4000-8000-00000000001b", title: "", alias: "work-api" }),
+        session({ id: "cccccccc-0000-4000-8000-00000000001a", title: null, directoryId: "work-api" }),
+        session({ id: "cccccccc-0000-4000-8000-00000000001b", title: "", directoryId: "work-api" }),
       ],
-      alias: "work-api",
+      directoryId: "work-api",
     });
     if (blank.kind !== "ready") throw new Error(`期望 ready，实际是 ${blank.kind}`);
     expect(blank.sessions.map((row) => row.title)).toEqual([UNTITLED_SESSION_LABEL, UNTITLED_SESSION_LABEL]);
@@ -302,7 +308,7 @@ describe("目录详情：按时间倒序平铺（一条列表，没有月份档�
 
     // 目录页的两个字段都只属于目录页：这个查询词命中的是**别**的目录，筛选又会把 work-api 排除，
     // 于是目录页自己落到 no_match。
-    store.setDirectoryQuery("personal-api");
+    store.setDirectoryQuery("personal");
     store.setDirectoryFilter("running");
     expect(store.directoryPage()).toMatchObject({ kind: "no_match" });
 

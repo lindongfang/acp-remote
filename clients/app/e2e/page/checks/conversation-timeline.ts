@@ -30,6 +30,7 @@
 
 import {
   AGENTS,
+  DIRECTORY_ID_ALPHA,
   DIRS_ROUTE,
   HOSTS_ROUTE,
   SESSION_ALPHA,
@@ -206,7 +207,7 @@ export function sessionScenario(overrides: Partial<ScenarioOptions> = {}): Scena
   return {
     canonicalOrigin: CANONICAL_ORIGIN,
     workspaces: WORKSPACES,
-    sessions: [sessionSummary({ id: SESSION_ALPHA, alias: "alpha", state: "running" })],
+    sessions: [sessionSummary({ id: SESSION_ALPHA, directoryId: DIRECTORY_ID_ALPHA, state: "running" })],
     agents: AGENTS,
     authenticate: true,
     tamperHostProof: false,
@@ -385,7 +386,7 @@ const checks: readonly Check[] = [
         navigate("/");
         await waitFor(() => query(first.container, '[data-route="session"]') === null, "离开对话页");
         await waitFor(
-          () => query(first.container, '[data-directory-alias="alpha"]') !== null,
+          () => query(first.container, `[data-directory-id="${DIRECTORY_ID_ALPHA}"]`) !== null,
           "目录页渲染",
         );
 

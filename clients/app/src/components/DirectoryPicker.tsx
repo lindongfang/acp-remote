@@ -395,19 +395,19 @@ function UnsupportedBranch({
       ) : (
         <View role="list" style={styles.list} dataSet={{ registeredDirectoryChoices: "true" }}>
           {registeredDirectories.map((directory) => (
-            <View key={directory.alias} role="listitem">
+            <View key={directory.directoryId} role="listitem">
               <Pressable
                 role="button"
                 style={styles.entry}
                 dataSet={{
                   action: "choose-registered-directory",
-                  registeredAlias: directory.alias,
-                  registeredPath: directory.path ?? "",
+                  registeredDirectoryId: directory.directoryId,
+                  registeredPath: directory.path,
                 }}
                 onPress={() => {
                   onConfirm({
                     kind: "registered",
-                    alias: directory.alias,
+                    directoryId: directory.directoryId,
                     displayName: directory.displayName,
                     path: directory.path,
                   });
@@ -416,8 +416,8 @@ function UnsupportedBranch({
                 <Text style={styles.entryName} dataSet={{ registeredName: directory.displayName }}>
                   {directory.displayName}
                 </Text>
-                {/* 路径未协商下来时呈现「—」，MUST NOT 用别名或展示名拼一段像路径的文本。 */}
-                <Text style={styles.entryFlag}>{directory.path ?? "路径未下发"}</Text>
+                {/* 路径逐字来自快照条目，始终在场。 */}
+                <Text style={styles.entryFlag}>{directory.path}</Text>
                 <Text style={styles.entryArrow}>›</Text>
               </Pressable>
             </View>

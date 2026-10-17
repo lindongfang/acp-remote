@@ -1,7 +1,7 @@
 /**
  * 对话页左栏：同目录会话与目录上下文（规格「对话页左栏呈现同目录会话」）。
  *
- * 左栏的数据只从**快照资源**来（与目录页共用 `buildSessionRowsByAlias` 这一条行投影），
+ * 左栏的数据只从**快照资源**来（与目录页共用 `buildSessionRowsByDirectoryId` 这一条行投影），
  * 本文件据此断言两件事：
  *
  * 1. **只读快照、不派发新命令**：走完整条 `conversationPage()` 读取路径后 `dispatches` 为空；
@@ -14,8 +14,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { SessionSummary, WorkspaceRef } from "../protocol";
-import { CONVERSATION_NO_DIRECTORY_NOTICE, CONVERSATION_SIDEBAR_BATCH_SIZE } from "./conversation-model";
+import type { SessionSummary, WorkspaceCatalogEntry } from "../protocol";
+import {
+  CONVERSATION_NO_DIRECTORY_NOTICE,
+  CONVERSATION_SIDEBAR_BATCH_SIZE,
+  CONVERSATION_UNKNOWN_DIRECTORY_NOTICE,
+} from "./conversation-model";
 import {
   ONLINE_SESSION_ID,
   WORKSPACES,
@@ -30,9 +34,9 @@ const OTHER_DIR_SESSION_ID = "dddddddd-0000-4000-8000-0000000000b2";
 const SIBLING_SESSION_ID = "dddddddd-0000-4000-8000-0000000000b3";
 
 const SESSIONS: readonly SessionSummary[] = [
-  session({ id: ONLINE_SESSION_ID, title: "当前这条", state: "running", alias: "work-api" }),
-  session({ id: SIBLING_SESSION_ID, title: "同目录的另一条", state: "idle", alias: "work-api" }),
-  session({ id: OTHER_DIR_SESSION_ID, title: "别的目录的一条", state: "idle", alias: "personal-api" }),
+  session({ id: ONLINE_SESSION_ID, title: "当前这条", state: "running", directoryId: "work-api" }),
+  session({ id: SIBLING_SESSION_ID, title: "同目录的另一条", state: "idle", directoryId: "work-api" }),
+  session({ id: OTHER_DIR_SESSION_ID, title: "别的目录的一条", state: "idle", directoryId: "personal-api" }),
 ];
 
 describe("左栏只列同目录会话", () => {
@@ -41,7 +45,7 @@ describe("左栏只列同目录会话", () => {
     const sidebar = store.conversationPage(ONLINE_SESSION_ID)?.sidebar;
     if (sidebar === undefined) throw new Error("会话应在模型里");
 
-    expect(sidebar.directory?.alias).toBe("work-api");
+    expect(sidebar.directory?.directoryId).toBe("work-api");
     expect(sidebar.rows.map((row) => row.id).sort()).toEqual([SIBLING_SESSION_ID, ONLINE_SESSION_ID].sort());
     // 反例：把别的目录的会话也列出来时这里是三行 → 断言变红。
     expect(sidebar.rows.some((row) => row.id === OTHER_DIR_SESSION_ID)).toBe(false);
@@ -60,30 +64,33 @@ describe("左栏只列同目录会话", () => {
     if (sidebar === undefined) throw new Error("会话应在模型里");
 
     expect(sidebar.directory).toEqual({
-      alias: "work-api",
+      directoryId: "work-api",
       displayName: "api",
       path: "D:\\work\\api",
     });
   });
 
-  it("未协商路径时 `path` 为 null（不拿展示名拼一段路径）", () => {
+  it("路径始终在场（逐字来自快照条目，不拿展示名拼一段）", () => {
     const { store } = storeWith({ resources: resources({ sessions: SESSIONS, workspaces: WORKSPACES }) });
     const sidebar = store.conversationPage(ONLINE_SESSION_ID)?.sidebar;
     if (sidebar === undefined) throw new Error("会话应在模型里");
 
-    expect(sidebar.directory?.path).toBeNull();
+    expect(sidebar.directory?.path).toBe("D:\\work\\api");
   });
 
-  it("目录未登记：目录上下文仍在，列表为空（本机快照里没有该目录的会话），不编造", () => {
-    const onlyWorkApi = [{ alias: "work-api", displayName: "api" }] as const satisfies readonly WorkspaceRef[];
+  it("目录不在最近一次快照里：不呈现目录上下文，列表为空且说明原因", () => {
+    const onlyWorkApi = [
+      { directoryId: "work-api", path: "D:\\work\\api" },
+    ] as const satisfies readonly WorkspaceCatalogEntry[];
     const { store } = storeWith({
       resources: resources({ sessions: SESSIONS, workspaces: onlyWorkApi }),
     });
     const sidebar = store.conversationPage(OTHER_DIR_SESSION_ID)?.sidebar;
     if (sidebar === undefined) throw new Error("会话应在模型里");
 
-    // 展示名取自会话自己的目录引用（服务端下发的字符串），不是本地拼的替代品。
-    expect(sidebar.directory).toEqual({ alias: "personal-api", displayName: "personal-api", path: null });
+    // 反例：退回目录标识（或编一段展示名）承担界面文本时这里会非 null → 断言变红。
+    expect(sidebar.directory).toBeNull();
+    expect(sidebar.notice).toBe(CONVERSATION_UNKNOWN_DIRECTORY_NOTICE);
     expect(sidebar.rows).toEqual([]);
     expect(sidebar.total).toBe(0);
     expect(sidebar.canLoadMore).toBe(false);
@@ -92,7 +99,7 @@ describe("左栏只列同目录会话", () => {
 
 describe("没有目录归属的会话", () => {
   it("说明它没有目录归属，而不是隐藏左栏；中栏照常", () => {
-    const homeless: readonly SessionSummary[] = [session({ id: ONLINE_SESSION_ID, title: "没有目录", alias: null })];
+    const homeless: readonly SessionSummary[] = [session({ id: ONLINE_SESSION_ID, title: "没有目录", directoryId: null })];
     const { store } = storeWith({ resources: resources({ sessions: homeless, workspaces: WORKSPACES }) });
     const page = store.conversationPage(ONLINE_SESSION_ID);
     if (page === null) throw new Error("会话应在模型里");
@@ -122,7 +129,7 @@ describe("已呈现数与总数、继续加载", () => {
             ? ONLINE_SESSION_ID
             : `eeeeeeee-0000-4000-8000-${(index + 1).toString().padStart(12, "0")}`,
         title: `会话 ${index + 1}`,
-        alias: "work-api",
+        directoryId: "work-api",
         updatedAt: new Date(base - index * 60_000).toISOString(),
       }),
     );

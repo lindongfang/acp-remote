@@ -338,7 +338,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
         sessions: [
           session({ id: ONLINE_SESSION_ID, title: "当前这条", state: "running" }),
           session({ id: "dddddddd-0000-4000-8000-0000000000b3", title: "同目录的另一条", state: "idle" }),
-          session({ id: "dddddddd-0000-4000-8000-0000000000b2", title: "别的目录的一条", alias: "personal-api" }),
+          session({ id: "dddddddd-0000-4000-8000-0000000000b2", title: "别的目录的一条", directoryId: "personal-api" }),
         ],
         workspaces: options.withPaths === true ? WORKSPACES_WITH_PATHS : WORKSPACES,
       }),
@@ -371,12 +371,12 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
     expect(html).not.toContain('data-action="load-more-sidebar"');
   });
 
-  it("未协商路径时不呈现路径行（不拿展示名拼一段看起来像路径的文本）", () => {
+  it("路径始终在场：逐字来自快照条目（不拿展示名拼一段看起来像路径的文本）", () => {
     const { store } = sidebarStore();
     const html = renderPage(pageOf(store));
 
     expect(html).toContain('data-sidebar-directory-name="api"');
-    expect(html).not.toContain("data-sidebar-directory-path");
+    expect(html).toContain('data-sidebar-directory-path="D:\\work\\api"');
   });
 
   it("超过一批时呈现「已呈现 N / M」与继续加载；加载后分母不变、分子变大", () => {
@@ -423,7 +423,7 @@ describe("对话页左栏：目录上下文与同目录会话", () => {
 
   it("没有目录归属时说明它，而不是隐藏左栏；中栏照常", () => {
     const { store } = onlineStore({
-      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, title: "没有目录", alias: null })] }),
+      resources: resources({ sessions: [session({ id: ONLINE_SESSION_ID, title: "没有目录", directoryId: null })] }),
     });
     const html = renderPage(pageOf(store));
 

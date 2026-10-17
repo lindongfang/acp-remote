@@ -48,7 +48,7 @@ function renderStream(degraded: readonly DegradedEventModel[]): string {
       title: "修复登录超时",
       agentName: "Claude",
       state: "idle",
-      directoryAlias: "work-api",
+      directoryId: "work-api",
       originOfflineLabel: null,
     },
     page: {

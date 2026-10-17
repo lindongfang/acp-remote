@@ -424,7 +424,7 @@ describe("组合根：已配对时接线成立", () => {
 
     // 认证之后：闸门全过（Agent 在快照目录里、载荷恰好一个目录引用）。设备不再有创建权限维度，
     // 因此这里不再需要任何 scope。这条同时证明 `connectionId` 真的取到了值——否则这里会是 `ok: false`。
-    const allowed = context.composition.store.submitCreateSession({ directoryAlias: "work-api", agentId: "codex-a" });
+    const allowed = context.composition.store.submitCreateSession({ directoryId: "0123456789abcdef0123456789abcdef", agentId: "codex-a" });
     expect(allowed.ok).toBe(true);
     expect(socket.last("command")?.["body"]).toMatchObject({ command: "session.create" });
 
@@ -432,7 +432,7 @@ describe("组合根：已配对时接线成立", () => {
     socket.serverClose(4500, "service_unavailable");
     await waitUntil(() => context.composition.store.state.connection.state === "reconnecting", "进入重连中");
     // 反例：若 `ConnectionIdentity` 编造一个固定值，这里仍会是 `ok: true` → 断言变红。
-    expect(context.composition.store.submitCreateSession({ directoryAlias: "work-api", agentId: "codex-a" }).ok).toBe(false);
+    expect(context.composition.store.submitCreateSession({ directoryId: "0123456789abcdef0123456789abcdef", agentId: "codex-a" }).ok).toBe(false);
     context.composition.dispose();
   });
 
