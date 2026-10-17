@@ -8,12 +8,12 @@ mod support;
 use acp_core::model::{NodeKind, PairingState, PeerIdentity};
 use identity_auth::{
     CanonicalOrigin, ClaimKindFields, ClaimOutcome, ClaimRejection, ClaimedPairing, ClientKind,
-    PairingDecision, PairingError, PairingProof, PairingSpec, RequestedCapabilities,
+    PairingDecision, PairingError, PairingProof, PairingSpec,
 };
 
 use support::{
     DEVICE, FakeClock, FakeKeystore, HOST, ORIGIN, OTHER_DEVICE, PAIRING, PeerKey, SequenceEntropy,
-    authority, device, grants, node, nonce_from_hex, pairing, request_id, scopes, ts,
+    authority, device, node, nonce_from_hex, pairing, request_id, ts,
 };
 
 /// 基准时刻之后的若干秒（只用于过期类用例；状态机不读系统时间）。
@@ -24,14 +24,6 @@ const AFTER_WINDOW: &str = "2026-01-01T00:05:00.000Z";
 fn device_spec() -> PairingSpec {
     PairingSpec::Device {
         canonical_origin: CanonicalOrigin::parse(ORIGIN).expect("测试用 origin 必须规范"),
-    }
-}
-
-/// 设备配对的请求集合：**空**（设备不再有授权维度，提交任何集合都被拒）。
-fn device_request() -> RequestedCapabilities {
-    RequestedCapabilities {
-        scopes: scopes(&[]),
-        grants: grants(&[]),
     }
 }
 
@@ -53,7 +45,6 @@ fn create_device_pairing() -> Created {
         .begin_pairing(
             &pairing(PAIRING),
             &device_spec(),
-            &device_request(),
             Some("Test Phone"),
             &ts(CREATED),
             &ts(WITHIN_WINDOW),
@@ -73,7 +64,6 @@ fn device_claim(
     created: &Created,
     peer: &PeerKey,
     client_nonce_hex: &str,
-    requested: RequestedCapabilities,
 ) -> identity_auth::ClaimFields {
     let client_nonce = nonce_from_hex(client_nonce_hex);
     let mut fields = identity_auth::ClaimFields {
@@ -86,7 +76,6 @@ fn device_claim(
         host_binding: ORIGIN.to_owned(),
         public_key: peer.public_key(),
         client_nonce,
-        requested,
         proof: PairingProof::try_from_bytes(&[0u8; 32]).expect("32 字节"),
     };
     let transcript = identity_auth::transcript::SyncPairingProof {
@@ -107,103 +96,7 @@ fn device_claim(
 }
 
 #[test]
-fn device_pairing_rejects_any_capability_set() {
-    // 「设备配对不携带任何授权集合」：三个方向错误都必须被拒，且不产生记录。
-    let cases: [(&str, RequestedCapabilities); 3] = [
-        (
-            "请求 scope",
-            RequestedCapabilities {
-                scopes: scopes(&["session.list"]),
-                grants: grants(&[]),
-            },
-        ),
-        (
-            "请求 grants",
-            RequestedCapabilities {
-                scopes: scopes(&[]),
-                grants: grants(&["grant.observe"]),
-            },
-        ),
-        (
-            "两者都请求",
-            RequestedCapabilities {
-                scopes: scopes(&["session.list"]),
-                grants: grants(&["grant.observe"]),
-            },
-        ),
-    ];
-    for (label, requested) in cases {
-        let keystore = FakeKeystore::new();
-        let entropy = SequenceEntropy::new();
-        let clock = FakeClock::new();
-        let authority = authority(&keystore, &entropy, &clock);
-        assert_eq!(
-            authority.begin_pairing(
-                &pairing(PAIRING),
-                &device_spec(),
-                &requested,
-                None,
-                &ts(CREATED),
-                &ts(WITHIN_WINDOW)
-            ),
-            Err(PairingError::CapabilityKindMismatch),
-            "设备方向提交{label}必须被拒"
-        );
-        assert!(
-            !authority.has_secret(&pairing(PAIRING)),
-            "被拒的创建不留内存状态"
-        );
-    }
-    // 空集合是设备方向唯一合法的请求。
-    let keystore = FakeKeystore::new();
-    let entropy = SequenceEntropy::new();
-    let clock = FakeClock::new();
-    let authority = authority(&keystore, &entropy, &clock);
-    assert!(
-        authority
-            .begin_pairing(
-                &pairing(PAIRING),
-                &device_spec(),
-                &device_request(),
-                None,
-                &ts(CREATED),
-                &ts(WITHIN_WINDOW)
-            )
-            .is_ok()
-    );
-}
-
 #[test]
-fn node_pairing_accepts_only_grants() {
-    // R2 / 场景「节点配对只接受 grant」。
-    let keystore = FakeKeystore::new();
-    let entropy = SequenceEntropy::new();
-    let clock = FakeClock::new();
-    let authority = authority(&keystore, &entropy, &clock);
-    let spec = PairingSpec::Node {
-        endpoint: identity_auth::NodeEndpoint::parse(
-            "wss://owner.example.ts.net:8443/node-link/v1",
-        )
-        .expect("测试用 endpoint 必须规范"),
-        kind: NodeKind::Access,
-    };
-    let both = RequestedCapabilities {
-        scopes: scopes(&["session.list"]),
-        grants: grants(&["grant.observe"]),
-    };
-    assert_eq!(
-        authority.begin_pairing(
-            &pairing(PAIRING),
-            &spec,
-            &both,
-            None,
-            &ts(CREATED),
-            &ts(WITHIN_WINDOW)
-        ),
-        Err(PairingError::CapabilityKindMismatch)
-    );
-}
-
 #[test]
 fn pairing_window_can_only_shrink() {
     // R3 / 场景「有效期只能收窄」。
@@ -215,7 +108,6 @@ fn pairing_window_can_only_shrink() {
         .begin_pairing(
             &pairing(PAIRING),
             &device_spec(),
-            &device_request(),
             None,
             &ts(CREATED),
             &ts("2026-01-01T00:01:00.000Z"),
@@ -229,7 +121,6 @@ fn pairing_window_can_only_shrink() {
         authority.begin_pairing(
             &pairing(PAIRING),
             &device_spec(),
-            &device_request(),
             None,
             &ts(CREATED),
             &ts("2026-01-01T00:06:00.000Z")
@@ -248,7 +139,6 @@ fn status_hides_peer_before_claim() {
     assert_eq!(view.state, PairingState::Created);
     assert!(view.display_name.is_none());
     assert!(view.public_key_fingerprint.is_none());
-    assert!(view.requested.is_none());
     assert!(view.peer.is_none());
 }
 
@@ -258,7 +148,7 @@ fn binding_mismatch_is_rejected() {
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let mut fields = device_claim(&created, &peer, "00", device_request());
+    let mut fields = device_claim(&created, &peer, "00");
     fields.host_binding = "https://evil.example.test".to_owned();
     assert_eq!(
         authority.verify_claim(&created.draft.record, None, &fields),
@@ -274,7 +164,7 @@ fn malformed_claim_is_rejected_before_crypto() {
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let mut fields = device_claim(&created, &peer, "00", device_request());
+    let mut fields = device_claim(&created, &peer, "00");
     fields.kind = ClaimKindFields::Node {
         node_kind: NodeKind::Access,
     };
@@ -301,7 +191,7 @@ fn first_claim_wins_and_second_conflicts() {
     let first = PeerKey::new();
     let second =
         PeerKey::from_seed("0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c");
-    let claim = device_claim(&created, &first, "00", device_request());
+    let claim = device_claim(&created, &first, "00");
     let outcome = authority
         .verify_claim(&created.draft.record, None, &claim)
         .expect("认领校验不返回内部错误");
@@ -311,7 +201,7 @@ fn first_claim_wins_and_second_conflicts() {
     assert_eq!(claimed.peer, PeerIdentity::Device(device(DEVICE)));
 
     // 第二个对端（不同公钥/nonce）带着「已有对端」再次认领 → 冲突，绝不改写首次对端。
-    let mut other = device_claim(&created, &second, "01", device_request());
+    let mut other = device_claim(&created, &second, "01");
     other.peer = PeerIdentity::Device(device(OTHER_DEVICE));
     assert_eq!(
         authority.verify_claim(&created.draft.record, Some(&claimed), &other),
@@ -325,7 +215,7 @@ fn identical_claim_is_idempotent() {
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let claim = device_claim(&created, &peer, "00", device_request());
+    let claim = device_claim(&created, &peer, "00");
     let ClaimOutcome::Claimed(first) = authority
         .verify_claim(&created.draft.record, None, &claim)
         .expect("首次认领必须成功")
@@ -344,7 +234,7 @@ fn claimed_public_key_round_trips_into_core_claim() {
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let claim = device_claim(&created, &peer, "00", device_request());
+    let claim = device_claim(&created, &peer, "00");
     let ClaimOutcome::Claimed(claimed) = authority
         .verify_claim(&created.draft.record, None, &claim)
         .expect("首次认领必须成功")
@@ -359,102 +249,50 @@ fn claimed_public_key_round_trips_into_core_claim() {
     );
 }
 
-#[test]
-fn request_beyond_registered_is_rejected() {
-    // 认领请求集合超出登记值 → 拒绝（不部分接受）。设备方向登记的集合是空的，
-    // 因此**任何**非空请求都落在这条判定上：设备无法通过 claim 自报任何授权。
-    let created = create_device_pairing();
-    let authority = &created.authority;
-    let peer = PeerKey::new();
-    let wider = RequestedCapabilities {
-        scopes: scopes(&["session.list", "session.prompt"]),
-        grants: grants(&["grant.observe"]),
-    };
-    let claim = device_claim(&created, &peer, "00", wider);
-    assert_eq!(
-        authority.verify_claim(&created.draft.record, None, &claim),
-        Ok(ClaimOutcome::Rejected(
-            ClaimRejection::CapabilitiesExceedRegistered
-        ))
-    );
+fn pending_record(record: &acp_core::model::PairingRecord) -> acp_core::model::PairingRecord {
+    acp_core::model::PairingRecord::try_new(
+        record.id().clone(),
+        record.target(),
+        PairingState::PendingConfirmation,
+        record.display_name().map(str::to_owned),
+        record.secret_digest().clone(),
+        record.host_binding(),
+        record.created_at().clone(),
+        record.expires_at().clone(),
+        Some(ts(CREATED)),
+        None,
+        None,
+    )
+    .expect("测试记录必须合法")
 }
 
 #[test]
-fn approve_requires_pending_and_within_requested() {
-    // R10/R16 / 场景「批准后同时存在信任与身份材料」「最终集合不能超出请求集合」。
+#[test]
+fn approve_requires_pending_state() {
+    // R10/R16：批准要求 `pending_confirmation`；批准结果不携带任何授权集合。
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let claim = device_claim(&created, &peer, "00", device_request());
+    let claim = device_claim(&created, &peer, "00");
     let ClaimOutcome::Claimed(claimed) = authority
         .verify_claim(&created.draft.record, None, &claim)
         .expect("首次认领必须成功")
     else {
         panic!("首次认领必须成功");
     };
-    // 尚未推进状态时不能批准（状态检查先于集合检查）。
     assert_eq!(
         authority.settle(
             &created.draft.record,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
+            &PairingDecision::Approve,
             &ts(CREATED)
         ),
         Err(PairingError::WrongState)
     );
     let pending = pending_record(&created.draft.record);
-    // 设备配对提交任何集合 → 拒绝（设备没有授权维度）。
-    for (label, decision) in [
-        (
-            "scope",
-            PairingDecision::Approve {
-                granted_scopes: scopes(&["session.list"]),
-                granted_grants: grants(&[]),
-            },
-        ),
-        (
-            "grant",
-            PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&["grant.observe"]),
-            },
-        ),
-        (
-            "两者都提交",
-            PairingDecision::Approve {
-                granted_scopes: scopes(&["session.list"]),
-                granted_grants: grants(&["grant.observe"]),
-            },
-        ),
-    ] {
-        assert_eq!(
-            authority.settle(&pending, &decision, &ts(CREATED)),
-            Err(PairingError::CapabilityKindMismatch),
-            "设备配对确认时提交{label}必须被拒"
-        );
-    }
     let settlement = authority
-        .settle(
-            &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
-            &ts(CREATED),
-        )
-        .expect("空集合批准必须成功");
-    let acp_core::model::PairingSettlement::Approved {
-        granted_scopes,
-        granted_grants,
-        ..
-    } = settlement
-    else {
-        panic!("必须返回批准结果");
-    };
-    assert!(granted_scopes.is_empty(), "设备方向不产生任何授权集合");
-    assert!(granted_grants.is_empty(), "设备方向不产生任何授权集合");
+        .settle(&pending, &PairingDecision::Approve, &ts(CREATED))
+        .expect("批准必须成功");
+    assert_eq!(settlement, acp_core::model::PairingSettlement::Approved);
     assert!(
         authority.has_secret(&pairing(PAIRING)),
         "批准不提前清除 secret（合同 §4.3）：批准后的状态查询仍要用它做 HMAC 证明；\
@@ -471,83 +309,7 @@ fn approve_requires_pending_and_within_requested() {
     assert_eq!(claimed.display_name, "Test Phone");
 }
 
-#[test]
-fn node_approval_stays_within_requested_grants() {
-    // 「最终集合不能超出请求集合」在仍有授权集合的方向（节点）上照常成立。
-    let created = create_node_pairing();
-    let authority = &created.authority;
-    let pending = pending_record(&created.draft.record);
-    // 超出登记请求值（`node_request()` 只登记了 `grant.observe`/`grant.command`）。
-    assert_eq!(
-        authority.settle(
-            &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&["grant.observe", "grant.remote-work"]),
-            },
-            &ts(CREATED)
-        ),
-        Err(PairingError::CapabilitiesExceedRequested)
-    );
-    // 节点配对提交 scope → 方向错误。
-    assert_eq!(
-        authority.settle(
-            &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&["session.list"]),
-                granted_grants: grants(&["grant.observe"]),
-            },
-            &ts(CREATED)
-        ),
-        Err(PairingError::CapabilityKindMismatch)
-    );
-    let settlement = authority
-        .settle(
-            &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&["grant.observe"]),
-            },
-            &ts(CREATED),
-        )
-        .expect("在请求集合内批准必须成功");
-    let acp_core::model::PairingSettlement::Approved {
-        granted_scopes,
-        granted_grants,
-        ..
-    } = settlement
-    else {
-        panic!("必须返回批准结果");
-    };
-    assert!(granted_scopes.is_empty());
-    assert_eq!(
-        granted_grants.iter().collect::<Vec<_>>(),
-        vec!["grant.observe"],
-        "节点方向的最终 grant 照常落定"
-    );
-}
 
-/// 认领后（`pending_confirmation`）的记录：状态推进由存储层提交，这里按同样形状构造。
-fn pending_record(record: &acp_core::model::PairingRecord) -> acp_core::model::PairingRecord {
-    acp_core::model::PairingRecord::try_new(
-        record.id().clone(),
-        record.target(),
-        PairingState::PendingConfirmation,
-        record.display_name().map(str::to_owned),
-        record.requested_scopes().clone(),
-        record.requested_grants().clone(),
-        record.secret_digest().clone(),
-        record.host_binding(),
-        record.created_at().clone(),
-        record.expires_at().clone(),
-        Some(ts(CREATED)),
-        None,
-        None,
-    )
-    .expect("测试记录必须合法")
-}
-
-#[test]
 fn reject_produces_no_trust() {
     // R11 / 场景「拒绝不产生信任」。
     let created = create_device_pairing();
@@ -590,10 +352,7 @@ fn expiry_blocks_settlement() {
     assert_eq!(
         authority.settle(
             &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
+            &PairingDecision::Approve,
             &ts(AFTER_WINDOW)
         ),
         Err(PairingError::Expired)
@@ -605,7 +364,7 @@ fn restart_terminates_unconfirmed_pairings() {
     // R20/R21 / 场景「摘要不能恢复 secret」：重启后 secret 不在内存，认领只能失败。
     let created = create_device_pairing();
     let peer = PeerKey::new();
-    let claim = device_claim(&created, &peer, "00", device_request());
+    let claim = device_claim(&created, &peer, "00");
     // 旧进程：认领成功（secret 就在这个进程的内存里）。
     let before = &created.authority;
     assert!(matches!(
@@ -637,10 +396,7 @@ fn approved_pairing_is_not_terminated_after_restart() {
     authority
         .settle(
             &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
+            &PairingDecision::Approve,
             &ts(CREATED),
         )
         .expect("批准必须成功");
@@ -660,8 +416,6 @@ fn rejected_record(record: &acp_core::model::PairingRecord) -> acp_core::model::
         record.target(),
         PairingState::Rejected,
         record.display_name().map(str::to_owned),
-        record.requested_scopes().clone(),
-        record.requested_grants().clone(),
         record.secret_digest().clone(),
         record.host_binding(),
         record.created_at().clone(),
@@ -679,8 +433,6 @@ fn approved_record(record: &acp_core::model::PairingRecord) -> acp_core::model::
         record.target(),
         PairingState::Approved,
         record.display_name().map(str::to_owned),
-        record.requested_scopes().clone(),
-        record.requested_grants().clone(),
         record.secret_digest().clone(),
         record.host_binding(),
         record.created_at().clone(),
@@ -702,8 +454,6 @@ fn rejection_survives_until_original_expiry() {
         created.draft.record.target(),
         PairingState::Rejected,
         Some("Test Phone".to_owned()),
-        created.draft.record.requested_scopes().clone(),
-        created.draft.record.requested_grants().clone(),
         created.draft.record.secret_digest().clone(),
         created.draft.record.host_binding(),
         created.draft.record.created_at().clone(),
@@ -745,10 +495,7 @@ fn first_authentication_consumes_the_approved_pairing_once() {
     authority
         .settle(
             &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
+            &PairingDecision::Approve,
             &ts(CREATED),
         )
         .expect("批准必须成功");
@@ -806,10 +553,7 @@ fn approved_pairing_keeps_its_material_until_first_auth() {
     let settlement = authority
         .settle(
             &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
+            &PairingDecision::Approve,
             &ts(CREATED),
         )
         .expect("批准必须成功");
@@ -890,10 +634,7 @@ fn approved_secret_is_cleared_at_expiry_even_if_never_authenticated() {
     authority
         .settle(
             &pending,
-            &PairingDecision::Approve {
-                granted_scopes: scopes(&[]),
-                granted_grants: grants(&[]),
-            },
+            &PairingDecision::Approve,
             &ts(CREATED),
         )
         .expect("批准必须成功");
@@ -933,8 +674,6 @@ fn rejected_secret_is_cleared_at_expiry_too() {
         created.draft.record.target(),
         PairingState::Rejected,
         created.draft.record.display_name().map(str::to_owned),
-        created.draft.record.requested_scopes().clone(),
-        created.draft.record.requested_grants().clone(),
         created.draft.record.secret_digest().clone(),
         created.draft.record.host_binding(),
         created.draft.record.created_at().clone(),
@@ -972,8 +711,6 @@ fn expiry_scan_touches_every_expired_record_regardless_of_terminal_state() {
         created.draft.record.target(),
         PairingState::Rejected,
         None,
-        created.draft.record.requested_scopes().clone(),
-        created.draft.record.requested_grants().clone(),
         created.draft.record.secret_digest().clone(),
         created.draft.record.host_binding(),
         created.draft.record.created_at().clone(),
@@ -989,8 +726,6 @@ fn expiry_scan_touches_every_expired_record_regardless_of_terminal_state() {
         created.draft.record.target(),
         PairingState::Created,
         None,
-        created.draft.record.requested_scopes().clone(),
-        created.draft.record.requested_grants().clone(),
         created.draft.record.secret_digest().clone(),
         created.draft.record.host_binding(),
         created.draft.record.created_at().clone(),
@@ -1030,7 +765,7 @@ fn fifth_failure_invalidates_pairing() {
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let claim = device_claim(&created, &peer, "00", device_request());
+    let claim = device_claim(&created, &peer, "00");
     let mut wrong = claim.clone();
     wrong.proof = PairingProof::try_from_bytes(&[9u8; 32]).expect("32 字节");
     for attempt in 1..=4 {
@@ -1078,7 +813,7 @@ fn claim_never_rebinds_existing_peer() {
     let created = create_device_pairing();
     let authority = &created.authority;
     let peer = PeerKey::new();
-    let claim = device_claim(&created, &peer, "00", device_request());
+    let claim = device_claim(&created, &peer, "00");
     let ClaimOutcome::Claimed(claimed) = authority
         .verify_claim(&created.draft.record, None, &claim)
         .expect("首次认领必须成功")
@@ -1115,12 +850,6 @@ fn node_spec() -> PairingSpec {
     }
 }
 
-fn node_request() -> RequestedCapabilities {
-    RequestedCapabilities {
-        scopes: scopes(&[]),
-        grants: grants(&["grant.observe", "grant.command"]),
-    }
-}
 
 /// 一个已创建的 Node Link 配对（对端将是 Access Node）。
 fn create_node_pairing() -> Created {
@@ -1132,7 +861,6 @@ fn create_node_pairing() -> Created {
         .begin_pairing(
             &pairing(PAIRING),
             &node_spec(),
-            &node_request(),
             Some("Office Access"),
             &ts(CREATED),
             &ts(WITHIN_WINDOW),

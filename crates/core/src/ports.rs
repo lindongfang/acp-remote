@@ -23,8 +23,8 @@ use crate::model::{
     AttachmentId, AuditAction, AuditOutcome, AuditRecord, CapabilitySet, CommandKind,
     CommandRecord, CommandStatus, CommandTerminalRecord, CommittedDelivery, CommittedEvent,
     ConfigOption, ConfigOptionId, ConfigValue, CreateSessionRequest, DeviceId, DeviceRecord,
-    Digest, EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType, ExportId,
-    ExportRecord, GlobalCursor, ImportId, ImportRecord, InteractionId, InteractionResolution,
+    Digest, EndpointEvent, EntityRef, EventId, EventOrigin, EventPayload, EventType,
+    GlobalCursor, InteractionId, InteractionResolution,
     LocalCursor, MessageId, ModeId, ModeRef, ModeState, NodeId, NodeKind, NodeRecord, OriginCursor,
     OriginEpoch, OriginEventRef, PairingClaim, PairingId, PairingPeer, PairingRecord,
     PairingSettlement, PeerIdentity, PeerPublicKey, PendingEvent, PendingInteraction, PortError,
@@ -794,8 +794,6 @@ pub struct ImportedSessionRecord {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportedSessionQuery {
-    /// 只返回这些 import 名下的会话；`None` = 不按 import 过滤。
-    pub imports: Option<Vec<ImportId>>,
     /// 只返回这些远程会话；`None` = 不按会话过滤。
     pub only: Option<Vec<RemoteSessionRef>>,
     /// 返回行数上限；`None` = 不限。
@@ -812,12 +810,6 @@ pub struct RemoteCommandRef {
     pub terminal_at: Option<Timestamp>,
     pub terminal_event: Option<EventId>,
     pub error: Option<PublicError>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct DropReport {
-    pub delivery_index_removed: u64,
-    pub command_refs_removed: u64,
 }
 
 #[async_trait]
@@ -857,9 +849,6 @@ pub trait RemoteDeliveryStore: Send + Sync {
         session: &RemoteSessionRef,
         request: &RequestId,
     ) -> Result<Option<RemoteCommandRef>, PortError>;
-
-    /// 删除该 import 名下的交付索引与命令引用；**不删除审计行**（`SECURITY_DESIGN.md` §11.5）。
-    async fn drop_import(&self, import: &ImportId) -> Result<DropReport, PortError>;
 
     async fn prune(&self, policy: RetentionPolicy, at: Timestamp)
     -> Result<PruneReport, PortError>;
@@ -922,7 +911,7 @@ pub struct StoreHealth {
 }
 
 // ---------------------------------------------------------------------------------------------
-// §5.3 信任、Export、审计与附件
+// §5.3 信任、审计与附件
 // ---------------------------------------------------------------------------------------------
 
 /// 撤销原因。v1 的 `device.revoke`/`node.revoke` 只传 id，因此调用方填 `UserRequested`；
@@ -1017,7 +1006,7 @@ pub struct PairingClaimWrite {
     pub context: WriteContext,
 }
 
-/// 落定配对（§11.6）：单事务完成状态/过期检查、固定 peer 与最终 scopes/grants 校验、创建信任记录、
+/// 落定配对（§11.6）：单事务完成状态/过期检查、固定 peer、创建信任记录、
 /// 更新配对状态并写审计。peer 公钥从配对的对端行读回，不由调用方重复提供。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PairingSettlementWrite {
@@ -1058,40 +1047,6 @@ pub struct PairingConsumption {
 pub struct NodeConnectedWrite {
     pub node: NodeId,
     pub kind: NodeKind,
-    pub context: WriteContext,
-}
-
-/// 写入/更新一个 Export（§11.6）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExportWrite {
-    pub record: ExportRecord,
-    pub context: WriteContext,
-}
-
-/// 撤销一个 Export（§11.6）：先提交再发送 `export.revoked`，发送失败不撤销数据库决定。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExportRevocation {
-    pub export: ExportId,
-    pub context: WriteContext,
-}
-
-/// 添加一个 Import（§11.6）：管理行 + 全部关联行一次提交。
-///
-/// `exports` 是本次写入的关联集合，**必须**等于 `record.export_ids()`（两处不得分歧，否则存储层返回
-/// `InvalidRequest`）；同一 `(owner_node_id, export_id)` 只能属于一个 Import，冲突返回
-/// `PortError::Conflict(DuplicateOwnership)`。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImportWrite {
-    pub record: ImportRecord,
-    pub exports: Vec<ExportId>,
-    pub context: WriteContext,
-}
-
-/// 完整移除一个 Import（§11.6）：同一事务删除管理行、关联行、`imported_session` 及其级联
-/// （交付索引、命令引用），**审计保留**。提交后由组合根停止连接/重连并清空内存正文。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImportRemoval {
-    pub import: ImportId,
     pub context: WriteContext,
 }
 
@@ -1165,29 +1120,6 @@ pub trait TrustStore: Send + Sync {
     async fn record_node_connected(&self, write: NodeConnectedWrite) -> Result<(), PortError>;
 }
 
-/// Export/Import 存储（§5.3/§11.6）：读取面不变，写入面全部走写集。
-#[async_trait]
-pub trait ExportStore: Send + Sync {
-    async fn export(&self, id: &ExportId) -> Result<Option<ExportRecord>, PortError>;
-
-    async fn exports(&self) -> Result<Vec<ExportRecord>, PortError>;
-
-    async fn import(&self, id: &ImportId) -> Result<Option<ImportRecord>, PortError>;
-
-    async fn imports(&self) -> Result<Vec<ImportRecord>, PortError>;
-
-    async fn put_export(&self, write: ExportWrite) -> Result<(), PortError>;
-
-    async fn revoke_export(&self, write: ExportRevocation) -> Result<(), PortError>;
-
-    async fn add_import(&self, write: ImportWrite) -> Result<(), PortError>;
-
-    /// 完整移除（§11.6）：管理行 + 关联行 + 交付索引 + 命令引用；审计保留。
-    ///
-    /// 与 `RemoteDeliveryStore::drop_import`（连接级清空交付索引）不是同一件事，两者不得串联充当完整删除。
-    async fn remove_import(&self, write: ImportRemoval) -> Result<(), PortError>;
-}
-
 /// 本地配置存储（§11.6）：只承载目录记录；Agent 声明来自启动配置。
 #[async_trait]
 pub trait LocalConfigStore: Send + Sync {
@@ -1218,8 +1150,8 @@ pub trait AuditStore: Send + Sync {
     /// 管理写集的变更水位（`docs/NODE_LINK_PROTOCOL.md` §12.3 的 `catalogRevision`）：只增不减的
     /// 审计自增序号。
     ///
-    /// 取值必须是该库**曾经写入过的最大审计序号**，不得随清理回退——Export/信任写集各自追加一行审计，
-    /// 因此它正是「Export 与信任写集的变更点」，且在重启与保留期清理之后仍然单调。
+    /// 取值必须是该库**曾经写入过的最大审计序号**，不得随清理回退——信任写集各自追加一行审计，
+    /// 因此它是写集的变更点，且在重启与保留期清理之后仍然单调。
     async fn watermark(&self) -> Result<u64, PortError>;
 }
 

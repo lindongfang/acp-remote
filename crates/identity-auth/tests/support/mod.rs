@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use acp_core::model::{
-    DeviceId, GrantSet, NodeId, Nonce, PairingId, PeerPublicKey, ScopeSet, Timestamp,
+    DeviceId, NodeId, Nonce, PairingId, PeerPublicKey, Timestamp,
 };
 use acp_core::ports::Clock;
 use async_trait::async_trait;
@@ -172,15 +172,6 @@ pub fn nonce_from_hex(text: &str) -> Nonce {
     Nonce::new(&acpr_transcript::encode_base64url(&bytes)).expect("nonce 文本必须规范")
 }
 
-/// 不可用的 `ScopeSet`/`GrantSet` 快捷构造。
-pub fn scopes(names: &[&str]) -> ScopeSet {
-    ScopeSet::try_from_iter(names.iter().copied()).expect("测试用 scope 名必须规范")
-}
-
-/// 快捷构造 grant 集合。
-pub fn grants(names: &[&str]) -> GrantSet {
-    GrantSet::try_from_iter(names.iter().copied()).expect("测试用 grant 名必须规范")
-}
 
 /// 可推进的注入时钟。
 #[derive(Debug, Default)]

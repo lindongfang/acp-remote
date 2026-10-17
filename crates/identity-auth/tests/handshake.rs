@@ -93,7 +93,6 @@ fn trust(peer: &PeerKey, credential: CredentialStatus) -> PeerTrust {
         credential,
         host_binding: Some(ORIGIN.to_owned()),
         node_kind: None,
-        grants: support::grants(&[]),
     }
 }
 
@@ -573,7 +572,6 @@ fn node_link_challenge_requires_catalog_revision() {
         credential: CredentialStatus::Active,
         host_binding: Some("wss://owner.example.ts.net:8443/node-link/v1".to_owned()),
         node_kind: Some(NodeKind::Access),
-        grants: support::grants(&["grant.observe"]),
     };
     let mut node_request = ChallengeRequest {
         kind: ConnectionKind::NodeLink,

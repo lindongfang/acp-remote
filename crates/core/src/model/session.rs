@@ -24,7 +24,7 @@ use super::elicitation::{ElicitationAction, ElicitationValues};
 use super::error::InvalidValue;
 use super::identity::Actor;
 use super::ids::{
-    AgentRef, ConfigOptionId, EventId, ExportId, InteractionId, ModeId, ModeRef, NodeId,
+    AgentRef, ConfigOptionId, EventId, InteractionId, ModeId, ModeRef, NodeId,
     OriginEpoch, OwnedSessionRef, RemoteSessionRef, RequestId, SessionId, TurnId, WorkspaceRef,
     is_error_code, is_scope_name, require_bounded,
 };
@@ -36,7 +36,6 @@ pub enum ResourceOrigin {
     Local,
     Remote {
         owner_node_id: NodeId,
-        export_id: ExportId,
         origin_epoch: OriginEpoch,
         online: bool,
     },
@@ -60,15 +59,9 @@ impl ResourceOrigin {
     pub fn remote_session(&self, session_id: SessionId) -> Option<RemoteSessionRef> {
         match self {
             Self::Local => None,
-            Self::Remote {
-                owner_node_id,
-                export_id,
-                ..
-            } => Some(RemoteSessionRef::new(
-                owner_node_id.clone(),
-                export_id.clone(),
-                session_id,
-            )),
+            Self::Remote { owner_node_id, .. } => {
+                Some(RemoteSessionRef::new(owner_node_id.clone(), session_id))
+            }
         }
     }
 }
